@@ -71,11 +71,12 @@ KCMD_SHARD="ovmx.shard=$SHARD_INDEX ovmx.shards=$SHARD_TOTAL"
 # disclosed, not silently assumed fixed -- see the comment there.
 ASSERT_TRANSCRIPT=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 
-# Two virtio disks (vms-3e8). The executive enumerates the node's virtio block
-# devices into DK units (DKA0: from vda, DKA100: from vdb) at module init --
-# test_kmod_disk asserts that mapping against a real vms.ko, so the guest must
-# actually HAVE two virtio disks. Cleaned up with the transcript below (ONE trap,
-# all temp files -- see the trap note further down).
+# Four virtio disks (vms-3e8 + vms-3e8e). The executive enumerates the node's
+# virtio block devices into DK units (DKA0: from vda, DKA100: from vdb, DKA200:
+# from vdc, DKA300: from vdd) at module init -- test_kmod_disk asserts the
+# vda/vdb mapping against a real vms.ko, so the guest must actually HAVE the
+# disks. Cleaned up with the transcript below (ONE trap, all temp files -- see
+# the trap note further down).
 #
 #   vda (DKA0:)   -- a GENUINE real-VAX ODS-2 volume: the SYSTEM DISK. The
 #                    Files-11 ACP $MOUNT VALIDATES a real Files-11 structure (home
@@ -94,6 +95,7 @@ ASSERT_TRANSCRIPT=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2;
 OVMX_DISK0=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 OVMX_DISK1=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 OVMX_DISK2=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
+OVMX_DISK3=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 truncate -s 16M "$OVMX_DISK1"
 OVMX_ODS2_SRC=/ods2_real.img
 if [ -f "$OVMX_ODS2_SRC" ]; then
@@ -117,7 +119,21 @@ else
     echo "                the \$SEARCH test (vms-a0b) needs a multi-version ODS-2 volume on DKA200: (vdc)" >&2
     exit 2
 fi
-trap 'rm -f "$ASSERT_TRANSCRIPT" "$OVMX_DISK0" "$OVMX_DISK1" "$OVMX_DISK2"' EXIT
+#   vdd (DKA300:) -- a GENERATED genuine ODS-2 volume carrying [IMGACT]TESTIMG.EXE
+#                    (a real ELF image) from /ods2_imgact.img ==
+#                    tests/qemu/mkimage_ods2_imgact.c. test_syssvc_imgact_acp
+#                    (vms-3e8e) $MOUNTs it and has IMGACT's freestanding ACP
+#                    reader activate the image -- header + PT_LOAD via
+#                    IO$_ACCESS + IO$_READVBLK, byte-exact vs the on-disk bytes.
+OVMX_ODS2_IMGACT_SRC=/ods2_imgact.img
+if [ -f "$OVMX_ODS2_IMGACT_SRC" ]; then
+    cp "$OVMX_ODS2_IMGACT_SRC" "$OVMX_DISK3"
+else
+    echo "run_tests.sh: FATAL: ODS-2 imgact fixture $OVMX_ODS2_IMGACT_SRC missing --" >&2
+    echo "                the IMGACT-over-ACP test (vms-3e8e) needs an ODS-2 image volume on DKA300: (vdd)" >&2
+    exit 2
+fi
+trap 'rm -f "$ASSERT_TRANSCRIPT" "$OVMX_DISK0" "$OVMX_DISK1" "$OVMX_DISK2" "$OVMX_DISK3"' EXIT
 
 # One virtio-net NIC (vms-9d2). Exactly as the two virtio disks above give the
 # executive real block devices to enumerate into DK units, this gives it a real
@@ -187,6 +203,8 @@ OUTPUT=$(timeout "$TIMEOUT" $QEMU \
     -device virtio-blk-pci,drive=ovmxdisk1 \
     -drive if=none,id=ovmxdisk2,file="$OVMX_DISK2",format=raw \
     -device virtio-blk-pci,drive=ovmxdisk2 \
+    -drive if=none,id=ovmxdisk3,file="$OVMX_DISK3",format=raw \
+    -device virtio-blk-pci,drive=ovmxdisk3 \
     2>&1) || QEMU_RC=$?
 
 # Splice the assertion transcript (ttyS1, if this arch has one) back into

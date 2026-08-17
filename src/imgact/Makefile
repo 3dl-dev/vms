@@ -19,6 +19,7 @@ ARCHDIR := arch/$(ARCH)
 IMGACT_CFLAGS := -std=gnu11 -O2 -Wall -Wextra \
                  -I../vmslink/include \
                  -I../libvms/include \
+                 -I../kernel \
                  -fPIC -fvisibility=hidden -ffreestanding \
                  -fno-stack-protector -fno-builtin -fno-asynchronous-unwind-tables
 IMGACT_LDFLAGS := -nostdlib -nostartfiles -shared \
@@ -28,13 +29,13 @@ IMGACT_LDFLAGS := -nostdlib -nostartfiles -shared \
 # translation unit here so IMGACT.EXE can call known_images_lookup() (bead
 # vms-30d wiring); imgact.c provides the open/fstat/mmap/munmap/close/
 # strncpy/strncmp shim its libc calls need under -nostdlib.
-IMGACT_SRC := imgact.c known_images.c $(ARCHDIR)/start.S
+IMGACT_SRC := imgact.c known_images.c imgact_acp.c $(ARCHDIR)/start.S
 
 .PHONY: all clean
 all: IMGACT.EXE
 
-IMGACT.EXE: $(IMGACT_SRC) $(ARCHDIR)/imgact_arch.h known_images.h
-	$(CC) $(IMGACT_CFLAGS) $(IMGACT_LDFLAGS) -o $@ imgact.c known_images.c $(ARCHDIR)/start.S
+IMGACT.EXE: $(IMGACT_SRC) $(ARCHDIR)/imgact_arch.h known_images.h imgact_acp.h
+	$(CC) $(IMGACT_CFLAGS) $(IMGACT_LDFLAGS) -o $@ imgact.c known_images.c imgact_acp.c $(ARCHDIR)/start.S
 
 clean:
 	rm -f IMGACT.EXE test/*.o test/test_prog 'test/LIBTEST$$SHR.EXE'

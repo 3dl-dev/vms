@@ -461,6 +461,22 @@ RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_search \
         /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
     /src/tests/qemu/mkimage_ods2_search /ods2_search.img 1
 
+# GENERATED ODS-2 volume carrying a real ELF image [IMGACT]TESTIMG.EXE for the
+# IMGACT-over-ACP proof (vms-3e8e, epic vms-208). mkimage_ods2_imgact.c lays the
+# deterministic fixture ELF (tests/qemu/imgact_acp_fixture_elf.h) down with the
+# SAME byte-genuine ODS-2 writer the other fixtures use. Staged as
+# /ods2_imgact.img, which run_tests.sh copies onto DKA300: (vdd);
+# test_syssvc_imgact_acp $MOUNTs it and reads the image header + PT_LOAD
+# segments over IO$_ACCESS + IO$_READVBLK.
+COPY tests/qemu/mkimage_ods2_imgact.c /src/tests/qemu/
+COPY tests/qemu/imgact_acp_fixture_elf.h /src/tests/qemu/
+RUN gcc -O2 -Wall -I/src/vmsfs/include -I/src/tests/qemu \
+        -o /src/tests/qemu/mkimage_ods2_imgact \
+        /src/tests/qemu/mkimage_ods2_imgact.c \
+        /src/vmsfs/ods2/ods2_reader.c /src/vmsfs/ods2/ods2_writer.c \
+        /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
+    /src/tests/qemu/mkimage_ods2_imgact /ods2_imgact.img 1
+
 # Locate the kernel image (may already exist as symlink)
 RUN KVER=$(cat /tmp/kver) && \
     if [ ! -e /boot/vmlinuz ]; then \

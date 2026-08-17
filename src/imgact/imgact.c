@@ -46,6 +46,7 @@
 #include "ovmx_symvec.h"  /* shared resolver + GSMATCH (bead vms-8d5)  */
 #include "known_images.h" /* Known Image DB lookup (bead vms-913.5; wired vms-30d) */
 #include "imgact_prodreg.h" /* publish resident producers into LIBVMS$SHR (vms-db2) */
+#include "imgact_acp.h"   /* image reads over the executive Files-11 ACP (vms-3e8e) */
 
 #ifndef AT_EXECFN
 #define AT_EXECFN 31
@@ -53,6 +54,18 @@
 
 #ifndef O_RDONLY
 #define O_RDONLY 0
+#endif
+#ifndef O_RDWR
+#define O_RDWR 2
+#endif
+
+/* The system disk the activator reads images from. On real OpenVMS this is the
+ * discovered SYS$SYSDEVICE; IMGACT hardcodes the boot unit exactly as it used
+ * to hardcode the "/vms" mount point (IMGACT_FALLBACK_SYSLIB). Resolving
+ * SYS$SYSDEVICE dynamically is a follow-up (it is a discovered logical, epic
+ * vms-47d). The QEMU harness maps the boot volume to DKA0:. */
+#ifndef IMGACT_ACP_SYSDEVICE
+#define IMGACT_ACP_SYSDEVICE "DKA0:"
 #endif
 
 /* --------------------------------------------------------------------------
@@ -68,10 +81,10 @@ static long sys_openat(const char *path, int flags)
 	return syscall6(SYS_openat, -100, (long)path, flags, 0, 0, 0);
 }
 static long sys_close(int fd) { return syscall6(SYS_close, fd, 0, 0, 0, 0, 0); }
-static long sys_pread(int fd, void *buf, unsigned long n, long off)
-{
-	return syscall6(SYS_pread64, fd, (long)buf, n, off, 0, 0);
-}
+/* NOTE (vms-3e8e): image-file reads no longer use pread(2) on a /vms POSIX
+ * path -- they ride the executive Files-11 ACP (IO$_READVBLK, imgact_acp.c).
+ * SYS_pread64 stays defined for the arch headers' completeness; there is no
+ * sys_pread() wrapper because nothing in the activator reads a file that way. */
 static long sys_write(int fd, const void *buf, unsigned long n)
 {
 	return syscall6(SYS_write, fd, (long)buf, n, 0, 0, 0);
@@ -93,6 +106,29 @@ static void sys_exit(int code)
 static long sys_munmap(void *addr, unsigned long len)
 {
 	return syscall6(SYS_munmap, (long)addr, len, 0, 0, 0, 0);
+}
+static long sys_ioctl(int fd, unsigned long req, void *arg)
+{
+	return syscall6(SYS_ioctl, fd, (long)req, (long)arg, 0, 0, 0);
+}
+
+/* --------------------------------------------------------------------------
+ * Files-11 ACP host primitives (vms-3e8e). imgact_acp.c reaches /dev/vms
+ * through these three functions; here they are the freestanding syscall
+ * backings (the QEMU test provides libc-backed versions of the same symbols).
+ * -------------------------------------------------------------------------- */
+int imgact_acp_dev_open(void)
+{
+	long fd = sys_openat("/dev/vms", O_RDWR);
+	return fd < 0 ? -1 : (int)fd;
+}
+void imgact_acp_dev_close(int fd)
+{
+	sys_close(fd);
+}
+long imgact_acp_dev_ioctl(int fd, unsigned long req, void *arg)
+{
+	return sys_ioctl(fd, req, arg);
 }
 
 #ifndef PROT_READ
@@ -557,32 +593,59 @@ static void scan_tls(struct obj *o, Elf64_Phdr *phdr, int phnum)
 	}
 }
 
+/* --------------------------------------------------------------------------
+ * Image source (vms-3e8e): every image-file read the activator does now rides
+ * the executive Files-11 (ODS-2) ACP -- IO$_ACCESS + IO$_READVBLK over
+ * /dev/vms (imgact_acp.c) -- NOT open()/pread() on a /vms POSIX path, the
+ * passthrough the ACP pivot retires (docs/design-files11-acp-executive.md
+ * §4.6). Fail-honest: if the boot volume is not ACP-mounted (SS$_NOSUCHDEV) or
+ * the image is not on it (SS$_NOSUCHFILE) the open fails and the activator dies
+ * with an honest %IMGACT message; there is NEVER a silent POSIX fallback
+ * (CLAUDE.md Rule 9 / INV-6). imgsrc_pread() keeps pread(2) semantics so the
+ * existing exact-count read checks below are unchanged.
+ * -------------------------------------------------------------------------- */
+struct imgsrc { struct imgact_acp_file f; };
+
+static int imgsrc_open(struct imgsrc *s, const char *path)
+{
+	uint32_t st = imgact_acp_open(&s->f, IMGACT_ACP_SYSDEVICE, path);
+	return (st & 1u) ? 0 : -1;
+}
+static long imgsrc_pread(struct imgsrc *s, void *buf, unsigned long n, long off)
+{
+	return imgact_acp_pread(&s->f, buf, n, off);
+}
+static void imgsrc_close(struct imgsrc *s)
+{
+	imgact_acp_close(&s->f);
+}
+
 /* Map a shareable image file into memory; fill base/dyn. Returns obj index. */
 static struct obj *load_object(const char *soname, const char *path)
 {
 	if (g_nobjs >= MAX_OBJS)
 		die_mapfail(soname);
 
-	int fd = (int)sys_openat(path, O_RDONLY);
-	if (fd < 0)
+	struct imgsrc src;
+	if (imgsrc_open(&src, path) < 0)
 		return 0;
 
 	Elf64_Ehdr eh;
-	if (sys_pread(fd, &eh, sizeof(eh), 0) != (long)sizeof(eh) ||
+	if (imgsrc_pread(&src, &eh, sizeof(eh), 0) != (long)sizeof(eh) ||
 	    eh.e_ident[0] != 0x7f || eh.e_ident[1] != 'E' ||
 	    eh.e_ident[2] != 'L'  || eh.e_ident[3] != 'F') {
-		sys_close(fd);
+		imgsrc_close(&src);
 		die_imgfmterr(soname);
 	}
 
 	Elf64_Phdr ph[32];
 	if (eh.e_phnum > 32) {
-		sys_close(fd);
+		imgsrc_close(&src);
 		die_imgfmterr(soname);
 	}
-	if (sys_pread(fd, ph, (unsigned long)eh.e_phnum * eh.e_phentsize,
+	if (imgsrc_pread(&src, ph, (unsigned long)eh.e_phnum * eh.e_phentsize,
 		      (long)eh.e_phoff) < 0) {
-		sys_close(fd);
+		imgsrc_close(&src);
 		die_imgfmterr(soname);
 	}
 
@@ -597,17 +660,19 @@ static struct obj *load_object(const char *soname, const char *path)
 			hi = ph[i].p_vaddr + ph[i].p_memsz;
 	}
 	if (lo == ~0UL) {
-		sys_close(fd);
+		imgsrc_close(&src);
 		die_imgfmterr(soname);
 	}
 	unsigned long span = PAGE_UP(hi) - lo;
 
-	/* Reserve the whole span R/W anonymous, then read segments into place.
-	 * Anonymous memory is zero-filled, so .bss needs no explicit clear. */
+	/* Reserve the whole span R/W anonymous, then read segments into place
+	 * via the ACP window (IO$_READVBLK). Anonymous memory is zero-filled,
+	 * so .bss needs no explicit clear. (Read-then-place first cut, vms-3e8e;
+	 * demand-page-through-the-window is the end state.) */
 	void *map = sys_mmap(0, span, PROT_READ | PROT_WRITE,
 			     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (map == MAP_FAILED) {
-		sys_close(fd);
+		imgsrc_close(&src);
 		die_mapfail(soname);
 	}
 	unsigned long base = (unsigned long)map - lo;
@@ -615,13 +680,13 @@ static struct obj *load_object(const char *soname, const char *path)
 	for (int i = 0; i < eh.e_phnum; i++) {
 		if (ph[i].p_type != PT_LOAD || ph[i].p_filesz == 0)
 			continue;
-		if (sys_pread(fd, (void *)(base + ph[i].p_vaddr),
+		if (imgsrc_pread(&src, (void *)(base + ph[i].p_vaddr),
 			      ph[i].p_filesz, (long)ph[i].p_offset) < 0) {
-			sys_close(fd);
+			imgsrc_close(&src);
 			die_mapfail(soname);
 		}
 	}
-	sys_close(fd);
+	imgsrc_close(&src);
 
 	/* Apply final segment protections. */
 	for (int i = 0; i < eh.e_phnum; i++) {
@@ -1026,24 +1091,25 @@ static unsigned long exec_bias(Elf64_Phdr *phdr, int phnum, unsigned long at_phd
  * DT_HASH/DT_NEEDED resolution.
  * -------------------------------------------------------------------------- */
 
-/* Find a section's load vaddr + size by name, via the file's section headers. */
-static int ovmx_find_section(int fd, const char *want,
+/* Find a section's load vaddr + size by name, via the file's section headers
+ * (read over the ACP window, vms-3e8e). */
+static int ovmx_find_section(struct imgsrc *src, const char *want,
 			     unsigned long *addr, unsigned long *size)
 {
 	Elf64_Ehdr eh;
-	if (sys_pread(fd, &eh, sizeof eh, 0) != (long)sizeof eh)
+	if (imgsrc_pread(src, &eh, sizeof eh, 0) != (long)sizeof eh)
 		return 0;
 	if (eh.e_shnum == 0 || eh.e_shnum > 64 || eh.e_shstrndx >= eh.e_shnum)
 		return 0;
 	Elf64_Shdr sh[64];
 	unsigned long ssz = (unsigned long)eh.e_shnum * sizeof(Elf64_Shdr);
-	if (sys_pread(fd, sh, ssz, (long)eh.e_shoff) != (long)ssz)
+	if (imgsrc_pread(src, sh, ssz, (long)eh.e_shoff) != (long)ssz)
 		return 0;
 	static char strtab[2048];
 	unsigned long stsz = sh[eh.e_shstrndx].sh_size;
 	if (stsz > sizeof strtab)
 		return 0;
-	if (sys_pread(fd, strtab, stsz, (long)sh[eh.e_shstrndx].sh_offset) != (long)stsz)
+	if (imgsrc_pread(src, strtab, stsz, (long)sh[eh.e_shstrndx].sh_offset) != (long)stsz)
 		return 0;
 	for (int i = 0; i < eh.e_shnum; i++) {
 		if (xstrcmp(strtab + sh[i].sh_name, want) == 0) {
@@ -1058,12 +1124,12 @@ static int ovmx_find_section(int fd, const char *want,
 /* Apply the .vms$rel self-relative fixups: add the load bias to every
  * image-relative slot LINK.EXE recorded (synthesized GOT cells, pointer data).
  * The VMS-native equivalent of processing R_AARCH64_RELATIVE, without a
- * PT_DYNAMIC. No-op for images with no .vms$rel. `fd` must be open on the image;
- * `base` is its load bias. The target pages must already be writable. */
-static void apply_vms_rel(int fd, unsigned long base)
+ * PT_DYNAMIC. No-op for images with no .vms$rel. `src` must be open on the
+ * image; `base` is its load bias. The target pages must already be writable. */
+static void apply_vms_rel(struct imgsrc *src, unsigned long base)
 {
 	unsigned long rel_addr, rel_size;
-	if (!ovmx_find_section(fd, OVMX_REL_SECTION, &rel_addr, &rel_size))
+	if (!ovmx_find_section(src, OVMX_REL_SECTION, &rel_addr, &rel_size))
 		return;
 	const struct ovmx_rel_header *rh =
 		(const struct ovmx_rel_header *)(base + rel_addr);
@@ -1114,22 +1180,21 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 	if (g_nprods >= 32)
 		return 0;
 
-	/* Search: SYS$SHARE fallback, then the name as given. */
+	/* Search: SYS$SHARE fallback, then the name as given -- both read over
+	 * the executive Files-11 ACP (vms-3e8e), never a /vms POSIX open. */
 	char path[256];
 	xstrcpy(path, IMGACT_FALLBACK_SYSLIB "/");
 	xstrcat(path, soname);
-	int fd = (int)sys_openat(path, O_RDONLY);
-	if (fd < 0)
-		fd = (int)sys_openat(soname, O_RDONLY);
-	if (fd < 0)
+	struct imgsrc src;
+	if (imgsrc_open(&src, path) < 0 && imgsrc_open(&src, soname) < 0)
 		return 0;
 
 	Elf64_Ehdr eh;
-	if (sys_pread(fd, &eh, sizeof eh, 0) != (long)sizeof eh) { sys_close(fd); return 0; }
+	if (imgsrc_pread(&src, &eh, sizeof eh, 0) != (long)sizeof eh) { imgsrc_close(&src); return 0; }
 	Elf64_Phdr ph[16];
-	if (eh.e_phnum > 16) { sys_close(fd); return 0; }
-	if (sys_pread(fd, ph, (unsigned long)eh.e_phnum * sizeof(Elf64_Phdr),
-		      (long)eh.e_phoff) < 0) { sys_close(fd); return 0; }
+	if (eh.e_phnum > 16) { imgsrc_close(&src); return 0; }
+	if (imgsrc_pread(&src, ph, (unsigned long)eh.e_phnum * sizeof(Elf64_Phdr),
+		      (long)eh.e_phoff) < 0) { imgsrc_close(&src); return 0; }
 
 	unsigned long lo = ~0UL, hi = 0;
 	for (int i = 0; i < eh.e_phnum; i++) {
@@ -1137,16 +1202,16 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 		if (PAGE_DOWN(ph[i].p_vaddr) < lo) lo = PAGE_DOWN(ph[i].p_vaddr);
 		if (ph[i].p_vaddr + ph[i].p_memsz > hi) hi = ph[i].p_vaddr + ph[i].p_memsz;
 	}
-	if (lo == ~0UL) { sys_close(fd); return 0; }
+	if (lo == ~0UL) { imgsrc_close(&src); return 0; }
 	unsigned long span = PAGE_UP(hi) - lo;
 	void *map = sys_mmap(0, span, PROT_READ | PROT_WRITE,
 			     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	if (map == MAP_FAILED) { sys_close(fd); return 0; }
+	if (map == MAP_FAILED) { imgsrc_close(&src); return 0; }
 	unsigned long base = (unsigned long)map - lo;
 	for (int i = 0; i < eh.e_phnum; i++) {
 		if (ph[i].p_type != PT_LOAD || ph[i].p_filesz == 0) continue;
-		if (sys_pread(fd, (void *)(base + ph[i].p_vaddr), ph[i].p_filesz,
-			      (long)ph[i].p_offset) < 0) { sys_close(fd); return 0; }
+		if (imgsrc_pread(&src, (void *)(base + ph[i].p_vaddr), ph[i].p_filesz,
+			      (long)ph[i].p_offset) < 0) { imgsrc_close(&src); return 0; }
 	}
 	for (int i = 0; i < eh.e_phnum; i++) {
 		if (ph[i].p_type != PT_LOAD) continue;
@@ -1160,20 +1225,20 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 	}
 
 	unsigned long sv_addr, sv_size;
-	int ok = ovmx_find_section(fd, OVMX_SV_SECTION, &sv_addr, &sv_size);
+	int ok = ovmx_find_section(&src, OVMX_SV_SECTION, &sv_addr, &sv_size);
 	/* Bias this producer's own self-relative slots (GOT cells, pointer data)
 	 * before any of its universal code runs. Pages are RWX at this point. */
 	if (ok)
-		apply_vms_rel(fd, base);
+		apply_vms_rel(&src, base);
 	/* Locate the .vms$tls TLSDESC table (completed after TLS offsets assigned). */
 	unsigned long tls_addr, tls_size;
-	int have_tlsdesc = ovmx_find_section(fd, OVMX_TLS_SECTION, &tls_addr, &tls_size);
+	int have_tlsdesc = ovmx_find_section(&src, OVMX_TLS_SECTION, &tls_addr, &tls_size);
 	/* Locate this producer's OWN .vms$imp: a lib shareable that itself imports
 	 * from another producer (e.g. libc/pthread from DECC$SHR). Resolved
 	 * transitively after registration below. (vms-e65) */
 	unsigned long imp_addr, imp_size;
-	int have_imp = ovmx_find_section(fd, OVMX_IMP_SECTION, &imp_addr, &imp_size);
-	sys_close(fd);
+	int have_imp = ovmx_find_section(&src, OVMX_IMP_SECTION, &imp_addr, &imp_size);
+	imgsrc_close(&src);
 	if (!ok)
 		return 0;
 
@@ -1507,15 +1572,19 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 {
 	if (!execfn)
 		die_imgfmterr("IMAGE.EXE");
-	int fd = (int)sys_openat(execfn, O_RDONLY);
-	if (fd < 0)
+	/* The main image's LOAD segments are already kernel-mapped; its SECTION
+	 * headers (.vms$imp/.vms$rel/.vms$tls) are not, so re-read them off the
+	 * file -- now over the executive Files-11 ACP (vms-3e8e), not a /vms POSIX
+	 * open. Fail-honest: not on the ACP volume -> honest %IMGACT error. */
+	struct imgsrc src;
+	if (imgsrc_open(&src, execfn) < 0)
 		die_imgnotfnd(execfn);
 	unsigned long imp_addr, imp_size;
-	int ok = ovmx_find_section(fd, OVMX_IMP_SECTION, &imp_addr, &imp_size);
+	int ok = ovmx_find_section(&src, OVMX_IMP_SECTION, &imp_addr, &imp_size);
 	/* Bias the executable's own self-relative slots (its GOT/pointer data), if
 	 * any; harmless no-op for the current PLT-only executables. */
 	if (ok)
-		apply_vms_rel(fd, exe_base);
+		apply_vms_rel(&src, exe_base);
 
 	/* Record the executable module's OWN TLS geometry (PT_TLS) + its .vms$tls
 	 * TLSDESC table, so the executable participates in TLS setup exactly like a
@@ -1534,11 +1603,11 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	}
 	if (g_exe.has_tls) {
 		unsigned long tls_addr, tls_size;
-		if (ovmx_find_section(fd, OVMX_TLS_SECTION, &tls_addr, &tls_size))
+		if (ovmx_find_section(&src, OVMX_TLS_SECTION, &tls_addr, &tls_size))
 			g_exe.tlsdesc =
 				(const struct ovmx_tls_header *)(exe_base + tls_addr);
 	}
-	sys_close(fd);
+	imgsrc_close(&src);
 	if (!ok)
 		die_imgfmterr("IMAGE.EXE");
 

@@ -33,6 +33,18 @@
 #define OVMX_SV_SECTION   ".vms$sv"
 /* Section that carries a consumer image's universal-symbol imports. */
 #define OVMX_IMP_SECTION  ".vms$imp"
+/* Section that carries an image's WEAK-by-name imports: references LINK.EXE
+ * could bind to no --use'd producer at link time, but which IMGACT resolves by
+ * NAME against whatever producers happen to be loaded at activation (found ->
+ * bind; absent -> the cell stays 0, ELF weak-undef semantics). This is how a
+ * lower-layer producer (LIBVMS$SHR) reaches a universal exported by a
+ * HIGHER-layer producer it must not --use at build time because that would
+ * invert the layering into a build cycle (LIBVMSRMS$SHR --use's LIBVMS$SHR, so
+ * LIBVMS$SHR cannot --use LIBVMSRMS$SHR to import sys$open/$get/$connect/$close
+ * by index). By-name activation binding is exactly how VMS resolves a
+ * shareable's inter-image references; the fixed (producer,index) `.vms$imp`
+ * path cannot express a cyclic edge. (vms-5f0) */
+#define OVMX_WIMP_SECTION ".vms$wimp"
 /* Section that lists image-relative slots needing +load_bias at activation. */
 #define OVMX_REL_SECTION  ".vms$rel"
 /* Section that lists the image's TLSDESC entries for the activator to complete. */
@@ -40,6 +52,7 @@
 
 #define OVMX_SV_MAGIC     0x31565356u  /* "VSV1" little-endian */
 #define OVMX_IMP_MAGIC    0x31504d49u  /* "IMP1" little-endian */
+#define OVMX_WIMP_MAGIC   0x314d4957u  /* "WIM1" little-endian */
 #define OVMX_REL_MAGIC    0x314c4552u  /* "REL1" little-endian */
 #define OVMX_TLS_MAGIC    0x31534c54u  /* "TLS1" little-endian */
 
@@ -108,6 +121,32 @@ struct ovmx_imp_entry {
                             /* address at activation (a GOT-like cell)        */
     uint32_t req_major;     /* producer GSMATCH major this consumer linked to */
     uint32_t req_minor;     /* producer GSMATCH minor this consumer linked to */
+};
+
+/*
+ * `.vms$wimp` layout (weak-by-name imports): header, then `count` records, then
+ * a symbol-NAME string blob (NOT producer sonames — the producer is unknown at
+ * link time and chosen by IMGACT at activation). Each record names one universal
+ * to resolve by NAME across the loaded producer set; found -> write the resolved
+ * address to `patch_off`; absent -> leave the cell as LINK.EXE left it (0), the
+ * ELF weak-undef result. patch_off is the same import-GOT cell a `.vms$imp`
+ * record would name, so a weak import shares the PLT/import-GOT machinery — only
+ * its binding is deferred to a name lookup instead of a (producer,index) pair.
+ */
+struct ovmx_wimp_header {
+    uint32_t magic;         /* OVMX_WIMP_MAGIC                               */
+    uint32_t count;         /* number of weak-import records                 */
+    uint32_t names_off;     /* offset (from header) to the symbol-name blob  */
+    uint32_t names_size;
+    /* struct ovmx_wimp_entry entries[count]; */
+    /* char names[names_size]; */
+};
+
+struct ovmx_wimp_entry {
+    uint32_t name_off;      /* offset into the name blob: universal name     */
+    uint32_t reserved;      /* 0 (alignment / future flags)                  */
+    uint64_t patch_off;     /* image-relative import-GOT cell to receive the  */
+                            /* by-name-resolved address at activation         */
 };
 
 /*

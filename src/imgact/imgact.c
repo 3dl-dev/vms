@@ -1191,6 +1191,7 @@ struct ovmx_prod {
 	unsigned long                tls_align;
 	unsigned long                tls_offset;   /* assigned offset from TP        */
 	const struct ovmx_tls_header *tlsdesc;     /* .vms$tls header (0 if none)     */
+	unsigned long                wimp_addr;    /* .vms$wimp vaddr (0 if none)     */
 };
 static struct ovmx_prod g_prods[32];
 static int              g_nprods;
@@ -1276,6 +1277,12 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 	 * transitively after registration below. (vms-e65) */
 	unsigned long imp_addr, imp_size;
 	int have_imp = ovmx_find_section(&src, OVMX_IMP_SECTION, &imp_addr, &imp_size);
+	/* Locate this producer's OWN .vms$wimp (weak-by-name imports). Resolved in a
+	 * DEFERRED pass (resolve_weak_imports) only after the ENTIRE producer set is
+	 * loaded -- a weak import may bind to a producer loaded later than this one
+	 * (LIBVMS$SHR's sys$open binds to LIBVMSRMS$SHR, loaded after it). (vms-5f0) */
+	unsigned long wimp_addr, wimp_size;
+	int have_wimp = ovmx_find_section(&src, OVMX_WIMP_SECTION, &wimp_addr, &wimp_size);
 	imgsrc_close(&src);
 	if (!ok)
 		return 0;
@@ -1298,6 +1305,7 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 	}
 	p->tlsdesc = have_tlsdesc
 		? (const struct ovmx_tls_header *)(base + tls_addr) : 0;
+	p->wimp_addr = have_wimp ? (base + wimp_addr) : 0;
 
 	/* Transitively bind this producer's own imports. Done AFTER registration so a
 	 * dependency cycle dedups through find-loaded, and AFTER apply_vms_rel above so
@@ -1602,6 +1610,40 @@ static void drive_crtl_init(struct ovmx_prod *crtl)
 	((void (*)(char **, char *))init_libc)(g_envp, g_argv0);
 }
 
+/* Resolve every loaded producer's .vms$wimp (weak-by-name imports) against the
+ * WHOLE loaded producer set, by NAME. Run ONCE, after bind_imports has loaded
+ * the entire producer closure, so a weak reference in one producer can bind to a
+ * universal exported by any other -- including one loaded later, and across the
+ * layering cycle the fixed (producer,index) .vms$imp path cannot express
+ * (LIBVMS$SHR weak-imports sys$open; LIBVMSRMS$SHR, which --use's LIBVMS$SHR,
+ * exports it). Found -> patch the import-GOT cell; absent -> leave it as LINK
+ * left it (0), the ELF weak-undef result rms_services_present() reads as "RMS
+ * not present" and falls back honestly. (vms-5f0) */
+static void resolve_weak_imports(void)
+{
+	for (int pi = 0; pi < g_nprods; pi++) {
+		unsigned long wa = g_prods[pi].wimp_addr;
+		if (!wa)
+			continue;
+		const struct ovmx_wimp_header *wh =
+			(const struct ovmx_wimp_header *)wa;
+		if (wh->magic != OVMX_WIMP_MAGIC)
+			continue;
+		const struct ovmx_wimp_entry *we =
+			(const struct ovmx_wimp_entry *)((const char *)wh + sizeof *wh);
+		const char *names = (const char *)wh + wh->names_off;
+		for (unsigned k = 0; k < wh->count; k++) {
+			const char *sym = names + we[k].name_off;
+			unsigned long addr = 0;
+			for (int q = 0; q < g_nprods && !addr; q++)
+				addr = sv_find_named(&g_prods[q], sym);
+			if (addr)
+				*(unsigned long *)(g_prods[pi].base + we[k].patch_off) = addr;
+			/* else: no loaded producer exports it -> cell stays 0 (weak-undef) */
+		}
+	}
+}
+
 /* Resolve every .vms$imp import of the executable against producer symbol
  * vectors, patching the consumer's GOT cells. `ephdr`/`ephnum` are the
  * kernel-mapped main image's program headers (for its PT_TLS geometry). */
@@ -1655,6 +1697,12 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	const struct ovmx_imp_header *ih =
 		(const struct ovmx_imp_header *)(exe_base + imp_addr);
 	bind_imports(exe_base, ih, "IMAGE.EXE");
+
+	/* Now that the ENTIRE producer closure is loaded, resolve every producer's
+	 * weak-by-name imports against it (LIBVMS$SHR's sys$open/$get/$connect/$close
+	 * -> LIBVMSRMS$SHR). Must follow bind_imports so all producers are present;
+	 * the bound cells are read only later, at login time. (vms-5f0) */
+	resolve_weak_imports();
 
 	/* TLS ownership. There is exactly one thread pointer (TPIDR_EL0) per
 	 * process, so whoever programs it defines the TLS coordinate system:

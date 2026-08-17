@@ -35,11 +35,20 @@
 #         - lnm_setup_defaults/lnm_get_manager              -> LIBVMSLNM$SHR;
 #         - vms_kif_setident/setprn/getjpi_self (the /dev/vms identity ioctls)
 #                                                           -> LIBVMSSYS$SHR.
-#       LIBVMSRMS$SHR is --use'd for graph parity with DCL.EXE (LOGINOUT does
-#       not itself call an RMS entry point, but IMGACT loads the full producer
-#       set transitively through LIBVMS$SHR/LIBVMSFS$SHR regardless, and a
-#       LOGINOUT-specific graph that silently diverged from DCL's would be
-#       exactly the kind of drift Baron's ruling is trying to close off).
+#       LIBVMSRMS$SHR is --use'd because it is LOAD-BEARING for login, not for
+#       "graph parity": LOGINOUT authenticates by reading SYS$SYSTEM:SYSUAF.DAT,
+#       and sysuaf_lookup() reads it through RMS ($OPEN/$CONNECT/$GET) over the
+#       Files-11 ODS-2 ACP. Those RMS entry points live in LIBVMSRMS$SHR but are
+#       CALLED from rms_textfile.c inside LIBVMS$SHR, which #pragma-weak-references
+#       them: LIBVMS$SHR sits BELOW RMS, so it cannot --use LIBVMSRMS$SHR to
+#       import them by (producer,index) without inverting the layering into a
+#       build cycle (LIBVMSRMS$SHR --use's LIBVMS$SHR). LINK.EXE therefore records
+#       those weak references in LIBVMS$SHR's .vms$wimp, and IMGACT binds them by
+#       NAME at activation against the loaded producer set. --use'ing
+#       LIBVMSRMS$SHR HERE is what puts it in that set: drop it and sys$open et al.
+#       resolve to 0, rms_services_present() reads FALSE, and LOGINOUT cannot open
+#       SYSUAF -- "User authorization failure" with the ACP never even reached.
+#       (vms-5f0; the weak-by-name mechanism is run_weak_import_activation.sh.)
 #       ovmx_banner_welcome/announce and parse_privilege_string are `static
 #       inline` in their headers (ovmx_banner.h / vms/privs.h) -- they compile
 #       straight into vms_login.o and are NOT cross-image imports.

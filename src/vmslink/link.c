@@ -936,11 +936,16 @@ static int find_universal(struct producer *ps, int np, const char *name,
 
 struct import {
     char     name[256];
-    int      pidx;         /* producer index */
+    int      pidx;         /* producer index (-1 for a weak-by-name import) */
     uint32_t svidx;        /* vector index within that producer */
     uint64_t plt_va;       /* PLT stub address (assigned at layout) */
     uint64_t got_va;       /* GOT cell address (assigned at layout) */
     int      is_data;      /* 1 = DATA import (GOT-read), 0 = call import (PLT) */
+    int      is_weak;      /* 1 = resolved by NAME at activation (.vms$wimp): no
+                            * --use producer exports it, but a loaded producer
+                            * MAY (a lower layer reaching a higher one across a
+                            * build cycle). Absent at run time -> cell stays 0.
+                            * (vms-5f0) */
 };
 
 /* Patch a GOT-relative reference to reach `slot` PC-relatively: the aarch64
@@ -959,15 +964,43 @@ static int import_find(struct import *imp, int nimp, const char *nm)
     return -1;
 }
 
-/* Byte size of a .vms$imp section: header + entries + deduped soname blob.
+/* Number of STRONG (by producer+index) vs WEAK (by name) imports in imp[]. Both
+ * kinds share the PLT/import-GOT layout; they split only at section emission —
+ * strong -> .vms$imp, weak -> .vms$wimp. (vms-5f0) */
+static int import_count_strong(struct import *imp, int nimp)
+{
+    int n = 0;
+    for (int i = 0; i < nimp; i++) if (!imp[i].is_weak) n++;
+    return n;
+}
+static int import_count_weak(struct import *imp, int nimp)
+{
+    int n = 0;
+    for (int i = 0; i < nimp; i++) if (imp[i].is_weak) n++;
+    return n;
+}
+
+/* Byte size of a .vms$imp section: header + STRONG entries + deduped soname blob.
  * Shared by the executable and shareable emit paths (a lib
  * shareable's own cross-image imports — vms-e65). */
-static uint64_t vms_imp_size(int nimp, struct producer *ps, int np)
+static uint64_t vms_imp_size(int nimp, struct import *imp, struct producer *ps, int np)
 {
     uint32_t names_sz = 0;
     for (int p = 0; p < np; p++) names_sz += (uint32_t)strlen(ps[p].name) + 1;
     return sizeof(struct ovmx_imp_header)
-         + (uint64_t)nimp * sizeof(struct ovmx_imp_entry) + names_sz;
+         + (uint64_t)import_count_strong(imp, nimp) * sizeof(struct ovmx_imp_entry)
+         + names_sz;
+}
+
+/* Byte size of a .vms$wimp section: header + WEAK entries + symbol-name blob. */
+static uint64_t vms_wimp_size(int nimp, struct import *imp)
+{
+    uint32_t names_sz = 0;
+    for (int i = 0; i < nimp; i++)
+        if (imp[i].is_weak) names_sz += (uint32_t)strlen(imp[i].name) + 1;
+    return sizeof(struct ovmx_wimp_header)
+         + (uint64_t)import_count_weak(imp, nimp) * sizeof(struct ovmx_wimp_entry)
+         + names_sz;
 }
 
 /* Write the .vms$imp section at img+off_imp. Each import's patch_off is its GOT
@@ -977,8 +1010,9 @@ static uint64_t vms_imp_size(int nimp, struct producer *ps, int np)
 static void vms_imp_write(uint8_t *img, uint64_t off_imp, struct import *imp,
                           int nimp, struct producer *ps, int np)
 {
+    int nstrong = import_count_strong(imp, nimp);
     uint64_t imp_hdr = sizeof(struct ovmx_imp_header);
-    uint64_t imp_ents = (uint64_t)nimp * sizeof(struct ovmx_imp_entry);
+    uint64_t imp_ents = (uint64_t)nstrong * sizeof(struct ovmx_imp_entry);
     uint64_t imp_names_o = imp_hdr + imp_ents;
 
     uint32_t *prod_off = calloc((size_t)(np > 0 ? np : 1), sizeof *prod_off);
@@ -992,18 +1026,53 @@ static void vms_imp_write(uint8_t *img, uint64_t off_imp, struct import *imp,
         names_sz += (uint32_t)l;
     }
     struct ovmx_imp_header *ih = (struct ovmx_imp_header *)(img + off_imp);
-    ih->magic = OVMX_IMP_MAGIC; ih->count = (uint32_t)nimp;
+    ih->magic = OVMX_IMP_MAGIC; ih->count = (uint32_t)nstrong;
     ih->names_off = (uint32_t)imp_names_o; ih->names_size = names_sz;
     struct ovmx_imp_entry *ie =
         (struct ovmx_imp_entry *)(img + off_imp + imp_hdr);
+    int o = 0;
     for (int i = 0; i < nimp; i++) {
-        ie[i].producer_off = prod_off[imp[i].pidx];
-        ie[i].sv_index = imp[i].svidx;
-        ie[i].patch_off = imp[i].got_va;
-        ie[i].req_major = ps[imp[i].pidx].sv->gsmatch_major;
-        ie[i].req_minor = ps[imp[i].pidx].sv->gsmatch_minor;
+        if (imp[i].is_weak) continue;   /* -> .vms$wimp, not here */
+        ie[o].producer_off = prod_off[imp[i].pidx];
+        ie[o].sv_index = imp[i].svidx;
+        ie[o].patch_off = imp[i].got_va;
+        ie[o].req_major = ps[imp[i].pidx].sv->gsmatch_major;
+        ie[o].req_minor = ps[imp[i].pidx].sv->gsmatch_minor;
+        o++;
     }
     free(prod_off);
+}
+
+/* Write the .vms$wimp section at img+off_wimp: header, WEAK import entries
+ * (name_off, patch_off = import-GOT cell), then a symbol-name blob. IMGACT
+ * resolves each name against the loaded producer set at activation. (vms-5f0) */
+static void vms_wimp_write(uint8_t *img, uint64_t off_wimp, struct import *imp,
+                           int nimp)
+{
+    int nweak = import_count_weak(imp, nimp);
+    uint64_t hdr = sizeof(struct ovmx_wimp_header);
+    uint64_t ents = (uint64_t)nweak * sizeof(struct ovmx_wimp_entry);
+    uint64_t names_o = hdr + ents;
+
+    struct ovmx_wimp_header *wh = (struct ovmx_wimp_header *)(img + off_wimp);
+    wh->magic = OVMX_WIMP_MAGIC; wh->count = (uint32_t)nweak;
+    wh->names_off = (uint32_t)names_o;
+    struct ovmx_wimp_entry *we =
+        (struct ovmx_wimp_entry *)(img + off_wimp + hdr);
+    char *nb = (char *)(img + off_wimp + names_o);
+    uint32_t names_sz = 0;
+    int o = 0;
+    for (int i = 0; i < nimp; i++) {
+        if (!imp[i].is_weak) continue;
+        we[o].name_off = names_sz;
+        we[o].reserved = 0;
+        we[o].patch_off = imp[i].got_va;
+        size_t l = strlen(imp[i].name) + 1;
+        memcpy(nb + names_sz, imp[i].name, l);
+        names_sz += (uint32_t)l;
+        o++;
+    }
+    wh->names_size = names_sz;
 }
 
 
@@ -1601,6 +1670,60 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             if (is_call) imp[k].is_data = 0;   /* any call use needs a PLT stub */
         }
 
+    /* ---- Weak-by-name imports (vms-5f0). A CALL/GOT reference to a symbol that
+     * is UNDEF in its own object, defined by NO input object, exported by NO
+     * --use'd producer (the strong-import scan above skipped it), but declared
+     * `#pragma weak` in the source (build_symhash recorded it in g_weak) is NOT
+     * a link error and NOT a bake-to-0: it becomes a WEAK import. LINK emits a
+     * PLT stub + import-GOT cell for it exactly like a strong import, but records
+     * it in .vms$wimp for IMGACT to resolve by NAME against the loaded producer
+     * set at activation -- found -> bound, absent -> the cell stays 0 (the ELF
+     * weak-undef result rms_services_present() reads as "service not present").
+     *
+     * This is the ONLY way a lower-layer producer can reach a universal a
+     * HIGHER-layer producer exports: LIBVMS$SHR's rms_textfile.c weak-references
+     * sys$open/$get/$connect/$close, exported by LIBVMSRMS$SHR, which --use's
+     * LIBVMS$SHR -- so LIBVMS$SHR cannot --use LIBVMSRMS$SHR to import them by
+     * (producer,index) without a build cycle. IMGACT's by-name activation bind
+     * closes that cycle, matching how VMS resolves inter-shareable references.
+     *
+     * Linker-defined weak-undef section symbols (__init_array_start/_DYNAMIC on
+     * DECC$SHR) also land here: no producer exports them, so IMGACT leaves them
+     * 0 -- identical to today's bake-to-0, so including them is harmless. */
+    for (int i = 0; i < nobj; i++)
+        for (int r = 0; r < objs[i].nreloc; r++) {
+            uint32_t type = ELF64_R_TYPE(objs[i].relocs[r].info);
+            int is_call = (type == R_AARCH64_CALL26 || type == R_AARCH64_JUMP26 ||
+                           type == R_X86_64_PLT32);
+            int is_gotr = is_got_reloc(type);
+            if (!is_call && !is_gotr) continue;
+            uint32_t si = ELF64_R_SYM(objs[i].relocs[r].info);
+            Elf64_Sym *s = &objs[i].sym[si];
+            if (s->st_shndx != SHN_UNDEF) continue;
+            const char *nm = objs[i].str + s->st_name;
+            if (!nm[0]) continue;
+            if (!weak_has(nm)) continue;                 /* only weak-undef refs */
+            if (defined_placed(objs, nm)) continue;      /* intra-image def      */
+            int pidx; uint32_t svidx;
+            if (find_universal(ps, np, nm, &pidx, &svidx))
+                continue;   /* a --use producer exports it: already a strong import */
+            int k = import_find(imp, nimp, nm);
+            if (k < 0) {
+                if (nimp >= imp_cap) {
+                    imp_cap = imp_cap ? imp_cap * 2 : 32;
+                    imp = realloc(imp, (size_t)imp_cap * sizeof *imp);
+                    if (!imp) die("oom growing import table");
+                }
+                k = nimp++;
+                memset(&imp[k], 0, sizeof imp[k]);
+                snprintf(imp[k].name, sizeof imp[k].name, "%s", nm);
+                imp[k].pidx = -1;          /* producer chosen by IMGACT by name */
+                imp[k].is_weak = 1;
+                imp[k].is_data = is_gotr ? 1 : 0;
+            }
+            if (is_call) imp[k].is_data = 0;   /* any call use needs a PLT stub */
+        }
+
     /* An executable's synthesized crt0 (below) tail-calls exit() to flush the
      * C-RTL and terminate. Bind exit as a call import even when no input object
      * references it directly, so IMGACT resolves it from a --use producer
@@ -1867,14 +1990,24 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
      * producers at activation, like a consumer). Must be in the loaded range so
      * IMGACT can read it by section vaddr. (vms-e65) */
     uint64_t after_tls = ntlsdesc ? off_tls + tls_sec_size : after_rel;
+    int nstrong = import_count_strong(imp, nimp);
+    int nweak   = import_count_weak(imp, nimp);
     uint64_t off_imp = 0, imp_size = 0;
-    if (nimp) {
+    if (nstrong) {
         off_imp = ALIGN_UP(after_tls, 8);
-        imp_size = vms_imp_size(nimp, ps, np);
+        imp_size = vms_imp_size(nimp, imp, ps, np);
+    }
+    /* .vms$wimp: weak-by-name imports, resolved by IMGACT at activation. Placed
+     * right after .vms$imp, also inside the loaded range. (vms-5f0) */
+    uint64_t after_imp = nstrong ? off_imp + imp_size : after_tls;
+    uint64_t off_wimp = 0, wimp_size = 0;
+    if (nweak) {
+        off_wimp = ALIGN_UP(after_imp, 8);
+        wimp_size = vms_wimp_size(nimp, imp);
     }
 
     /* End of file-backed loaded content; .bss (NOBITS) extends memsz beyond it. */
-    uint64_t file_loaded_end = nimp ? off_imp + imp_size : after_tls;
+    uint64_t file_loaded_end = nweak ? off_wimp + wimp_size : after_imp;
     uint64_t bss_beg = file_loaded_end, bss_end = file_loaded_end;
     if (has_bss) {
         int first = 1;
@@ -1904,7 +2037,8 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     int ix_sv = nsec; secn[nsec++] = OVMX_SV_SECTION;
     int ix_rel = -1;  if (nrel)     { ix_rel  = nsec; secn[nsec++] = OVMX_REL_SECTION; }
     int ix_tls = -1;  if (ntlsdesc) { ix_tls  = nsec; secn[nsec++] = OVMX_TLS_SECTION; }
-    int ix_imp = -1;  if (nimp)     { ix_imp  = nsec; secn[nsec++] = OVMX_IMP_SECTION; }
+    int ix_imp = -1;  if (nstrong)  { ix_imp  = nsec; secn[nsec++] = OVMX_IMP_SECTION; }
+    int ix_wimp = -1; if (nweak)    { ix_wimp = nsec; secn[nsec++] = OVMX_WIMP_SECTION; }
     int ix_bss = -1;  if (has_bss)  { ix_bss  = nsec; secn[nsec++] = ".bss"; }
     int ix_tbss = -1; if (has_tls && tbss_sz) { ix_tbss = nsec; secn[nsec++] = ".tbss"; }
     int ix_str = nsec; secn[nsec++] = ".shstrtab";
@@ -2215,8 +2349,12 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 
     /* .vms$imp: this shareable's own cross-image imports (patch_off = import-GOT
      * cell). IMGACT binds each to its --use producer at activation. (vms-e65) */
-    if (nimp)
+    if (nstrong)
         vms_imp_write(img, off_imp, imp, nimp, ps, np);
+    /* .vms$wimp: weak-by-name imports; IMGACT binds each by NAME at activation
+     * against the loaded producer set (absent -> cell stays 0). (vms-5f0) */
+    if (nweak)
+        vms_wimp_write(img, off_wimp, imp, nimp);
 
     char *shstr = (char *)(img + off_shstr);
     for (int i = 0; i < nsec; i++) memcpy(shstr + sn_off[i], secn[i], strlen(secn[i]) + 1);
@@ -2279,10 +2417,18 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         sh[ix_plt].sh_flags = SHF_ALLOC | SHF_EXECINSTR; sh[ix_plt].sh_addr = plt_beg;
         sh[ix_plt].sh_offset = plt_beg; sh[ix_plt].sh_size = plt_end - plt_beg;
         sh[ix_plt].sh_addralign = 4;
+    }
+    if (nstrong) {
         sh[ix_imp].sh_name = sn_off[ix_imp]; sh[ix_imp].sh_type = SHT_PROGBITS;
         sh[ix_imp].sh_flags = SHF_ALLOC; sh[ix_imp].sh_addr = off_imp;
         sh[ix_imp].sh_offset = off_imp; sh[ix_imp].sh_size = imp_size;
         sh[ix_imp].sh_addralign = 8;
+    }
+    if (nweak) {
+        sh[ix_wimp].sh_name = sn_off[ix_wimp]; sh[ix_wimp].sh_type = SHT_PROGBITS;
+        sh[ix_wimp].sh_flags = SHF_ALLOC; sh[ix_wimp].sh_addr = off_wimp;
+        sh[ix_wimp].sh_offset = off_wimp; sh[ix_wimp].sh_size = wimp_size;
+        sh[ix_wimp].sh_addralign = 8;
     }
     if (has_tls && tbss_sz) {
         sh[ix_tbss].sh_name = sn_off[ix_tbss]; sh[ix_tbss].sh_type = SHT_NOBITS;
@@ -2324,12 +2470,17 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         ngot, ntls, abs_applied, nimp, nimp==1?"":"s",
         gk == OVMX_GSMATCH_ALWAYS ? "ALWAYS" :
         gk == OVMX_GSMATCH_EQUAL  ? "EQUAL"  : "LEQUAL", gmaj, gmin);
-    if (nimp)
+    if (nstrong)
         fprintf(stderr, "%%LINK-I-IMPORT, %d cross-image import%s bound to --use "
                 "producer%s (%d PLT stub%s + import GOT; resolved at activation "
                 "via .vms$imp)\n",
-                nimp, nimp==1?"":"s", np==1?"":"s",
-                nimp, nimp==1?"":"s");
+                nstrong, nstrong==1?"":"s", np==1?"":"s",
+                nstrong, nstrong==1?"":"s");
+    if (nweak)
+        fprintf(stderr, "%%LINK-I-WEAKIMP, %d weak-by-name import%s "
+                "(resolved by NAME against the loaded producer set at activation "
+                "via .vms$wimp; absent -> 0, ELF weak-undef)\n",
+                nweak, nweak==1?"":"s");
     if (g_deferred)
         fprintf(stderr, "%%LINK-I-DEFEXT, %ld external reference%s left unresolved "
                 "(deferred imports — satisfied by the C RTL / a companion "

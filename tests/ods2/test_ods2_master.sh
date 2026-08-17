@@ -38,10 +38,17 @@ printf '$ SET NOON\n$ WRITE SYS$OUTPUT "hello"\n' > "$TREE/SYS0/SYSCOMMON/SYSEXE
 printf 'documentation record\n'                    > "$TREE/SYS0/SYSCOMMON/SYSLIB/README.TXT"
 # A binary image: MUST be stored verbatim (create_file_raw), not VAR-reframed.
 head -c 4096 /dev/urandom                          > "$TREE/SYS0/SYSCOMMON/SYSEXE/DCL.EXE"
+# vms-5f0: a >2 MB binary. Its data (10240 blocks) exceeds a single FM2
+# format-1 pointer (256 blocks) AND the writer's WCACHE_CAP working-set cache
+# (4096 blocks / ~2 MB). Before the map-encoder learned format 2/3 and the
+# write-cache learned to flush-and-continue when full, mastering a real system
+# binary (DCL.EXE is 840 KB, the OS kit 3.3 MB) failed MKFILE with
+# ODS2_ERR_ARGS / ODS2_ERR_NOSPACE. This regresses both.
+head -c 5242880 /dev/urandom                       > "$TREE/SYS0/SYSCOMMON/SYSEXE/BIGIMG.EXE"
 
 # ---- 2. master --ods2 ----
 MOUT="$WORK/master.out"
-"$MASTER" --ods2 master "$IMG" OVMXSYS "$TREE" 4 > "$MOUT" 2>&1 \
+"$MASTER" --ods2 master "$IMG" OVMXSYS "$TREE" 16 > "$MOUT" 2>&1 \
     || { cat "$MOUT" >&2; fail "master --ods2 exited non-zero"; }
 grep -q 'MASTER-I-DONE' "$MOUT" || { cat "$MOUT" >&2; fail "no MASTER-I-DONE"; }
 grep -q 'DECFILE11B'    "$MOUT" || { cat "$MOUT" >&2; fail "master did not announce DECFILE11B"; }
@@ -67,6 +74,7 @@ for want in \
     '\[SYS0.SYSCOMMON\]SYSLIB.DIR;1' \
     '\[SYS0.SYSCOMMON.SYSEXE\]LOGIN.COM;1' \
     '\[SYS0.SYSCOMMON.SYSEXE\]DCL.EXE;1' \
+    '\[SYS0.SYSCOMMON.SYSEXE\]BIGIMG.EXE;1' \
     '\[SYS0.SYSCOMMON.SYSLIB\]README.TXT;1'
 do
     grep -Eq "$want" "$LOUT" || { cat "$LOUT" >&2; fail "list missing: $want"; }
@@ -74,7 +82,7 @@ done
 echo "PASS: list --ods2 walked the full tree over the real FID chain"
 
 # ---- 5. FAIL-HONEST: the legacy VMFS master is not a genuine ODS-2 volume. ----
-"$MASTER" --vmfs master "$VMFS_IMG" OVMXSYS "$TREE" 4 > "$WORK/vmfs.master.out" 2>&1 \
+"$MASTER" --vmfs master "$VMFS_IMG" OVMXSYS "$TREE" 16 > "$WORK/vmfs.master.out" 2>&1 \
     || { cat "$WORK/vmfs.master.out" >&2; fail "VMFS master exited non-zero"; }
 # list --ods2 on a VMFS image must FAIL honestly, never fake a listing.
 if "$MASTER" --ods2 list "$VMFS_IMG" > "$WORK/vmfs.list.out" 2>&1; then

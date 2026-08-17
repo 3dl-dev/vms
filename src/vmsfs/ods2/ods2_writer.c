@@ -182,8 +182,28 @@ static uint8_t *wcache_block(ods2_wvolume_t *wvol, uint32_t lbn, int zero_fill)
     }
     e = wcache_slot(c, lbn, &created);
     if (!e) {
-        wvol->io_error = ODS2_ERR_NOSPACE;
-        return wvol->wcache_scratch;
+        /* Cache full and `lbn` not present. This writer's block accesses are
+         * write-FORWARD within one top-level op -- create_file_raw's seed +
+         * data-copy loops, and every header/dir builder, use each returned
+         * pointer immediately and never hold one across the next wblk() -- so
+         * flushing the whole working set to the device here and retrying is
+         * safe, and it bounds the working set instead of capping a single file
+         * at WCACHE_CAP blocks. Without this a multi-MB image on the genuine
+         * ODS-2 boot disk (e.g. SYS$UPDATE:OVMX-OS.KIT, or any static system
+         * binary over ~2 MB) failed create_file_raw with ODS2_ERR_NOSPACE.
+         * A flushed block re-read later comes back through ods2_blk_read (the
+         * zero_fill==0 miss path), so its bytes are exactly what was written.
+         * vms-5f0. */
+        ods2_status_t fst = ods2_wvolume_flush(wvol);
+        if (fst != ODS2_OK) {
+            wvol->io_error = fst;
+            return wvol->wcache_scratch;
+        }
+        e = wcache_slot(c, lbn, &created);
+        if (!e) {
+            wvol->io_error = ODS2_ERR_NOSPACE;
+            return wvol->wcache_scratch;
+        }
     }
     if (created) {
         e->used = 1;

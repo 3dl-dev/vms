@@ -16,6 +16,46 @@ never a runtime.
   built-in initramfs and boots it under `qemu-system-alpha`. Asserts the
   self-test's WORKING line. `./boot-ovmx-qemu.sh` → `PASS`/`FAIL`.
 
+## The bootable OVMX/Alpha system image (rd vms-989, rung A5a)
+
+The front-half of boot-to-DCL: assemble a full Linux/Alpha system image carrying
+the cross-built OVMX userland + the `vms.ko`/`vmsfs.ko` executive, boot PID 1
+(the REAL `ovmx_init`, i.e. `STARTUP.EXE`) under `qemu-system-alpha -M clipper`,
+and drive it to the current executive/ACP frontier — mirroring the x86_64 QEMU
+bootable path (`distro/Dockerfile.bootable`) as far as the Alpha cross-build
+reaches. Build/test tooling only (Rule 9); every `qemu-system-alpha` boot is
+wrapped in a hard `timeout`.
+
+- `build-alpha-bootimage.sh` — assembles the image into `$WORK`
+  (`/tmp/ovmx-alpha-boot`): masters a VMSFS system disk (`ovmx-distrib-alpha.img`)
+  from the Alpha `/vms` tree (STARTUP/PROVISION/JOB_CONTROL/LOGINOUT/DCL + RTL,
+  all EM_ALPHA) with the Alpha `vmsfs_master` run under `qemu-alpha`; assembles
+  the bootstrap initramfs (`/init` = `STARTUP.EXE`, `vms.ko` + `vmsfs.ko`,
+  minimal SYSMGR/SYSUAF config) and bakes it into `vmlinux-boot`; and stages the
+  IMGACT-under-booted-kernel proof (IMGACT.EXE + a VMS-native Alpha image).
+- `boot-alpha-image.sh` — boots two images under a hard timeout: **BOOT A**, the
+  real OVMX/Alpha image (init=`STARTUP.EXE`, VMSFS on `/dev/vda`), and **BOOT B**,
+  the IMGACT capability proof (`alpha-imgact-init` activates a real VMS-native
+  Alpha image under the booted kernel — the Alpha login chain is static, so
+  IMGACT is not in the static boot chain, and this proves the rung-A2 activator
+  in the booted-kernel context).
+- `alpha-imgact-init.c` — PID 1 for BOOT B.
+- `boot-alpha-probe.sh` (`PROBE=provision|contention|exec`) drives the three
+  diagnostic inits that root-caused the frontier stall, each as PID 1 under the
+  booted kernel with the system disk on `/dev/vda`:
+  - `alpha-provision-probe.c` (`PROBE=provision`) — replays each primitive
+    PROVISION uses (vmsfs read / mkdir / write / lchown / establish_system /
+    getjpi); all succeed on Alpha.
+  - `alpha-contention-probe.c` (`PROBE=contention`) — parent holds a `/dev/vms`
+    attachment while a forked child runs the primitives; all still succeed
+    (rules out a concurrency/attachment deadlock).
+  - `alpha-exec-provision-init.c` (`PROBE=exec`) — fork+execl's the **real**
+    PROVISION.EXE off the mounted disk; reproduces the stall.
+
+The frontier reached, the x86_64 comparison, and the root cause (PROVISION.EXE
+hangs before `main()` — a pre-`main` RTL initializer on Alpha) are recorded in
+the rung-A5a PR (vms-989).
+
 ## The proving ground: qemu-system-alpha, and why not AXPbox
 
 The DS10's compute stack is a 21264 (EV6/EV67) CPU + Tsunami (21272) core logic

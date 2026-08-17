@@ -185,11 +185,9 @@ static int rms_resolve_spec(const char *spec, const char *default_spec,
  * (CLAUDE.md Rule 9 / INV-6).
  * ====================================================================== */
 
-/* The boot volume unit RMS $ASSIGNs when the filespec names no device. The
- * discovered-SYS$DISK logical (device-native naming, epic vms-47d) is bound by
- * the boot flip that ACP-mounts the system disk; until then the mounted unit is
- * the boot unit DKA0:, which is also what the QEMU ACP fixtures mount. */
-#define RMS_ACP_DEFAULT_DEV "DKA0:"
+/* RMS_ACP_DEFAULT_DEV (the boot volume unit RMS $ASSIGNs when the filespec
+ * names no device -- DKA0: until the discovered-SYS$DISK logical is bound) is
+ * shared with rms_search.c via rms_internal.h. */
 
 struct rms_acp_spec {
     char     devnam[16];             /* "DKA0:" (mounted unit to $ASSIGN)   */
@@ -296,9 +294,9 @@ static int rms_acp_spec_from_fab(struct FAB *fab, struct rms_acp_spec *s)
 /* Resolve the directory named by s->dirpath to its FID by walking each
  * "COMP" as "COMP.DIR" from the MFD ([000000] == FID 4, addressed by an
  * all-zero DID). Empty/[000000] dirpath => the MFD itself (all-zero DID). */
-static uint32_t rms_acp_resolve_did(uint32_t chan, const char *dirpath,
-                                    uint16_t *dn, uint16_t *ds,
-                                    uint8_t *dr, uint8_t *dx)
+uint32_t rms_acp_resolve_did(uint32_t chan, const char *dirpath,
+                             uint16_t *dn, uint16_t *ds,
+                             uint8_t *dr, uint8_t *dx)
 {
     char work[256];
     char *save = NULL, *tok;
@@ -415,6 +413,86 @@ static void rms_acp_close_handle(rms_file_t *h)
     free(h);
 }
 #endif /* __linux__ ACP lifecycle helpers */
+
+/*
+ * rms_file_attr - genuine ODS-2 header attributes for a filespec (vms-481).
+ * The DCL DIRECTORY /FULL + F$FILE_ATTRIBUTES source of truth: it reaches the
+ * on-disk header through the ACP (IO$_ACCESS reads the ATR list), never stat().
+ */
+uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out)
+{
+    if (!vmsspec || !out)
+        return RMS$_FAB;
+    memset(out, 0, sizeof(*out));
+
+#if defined(__linux__)
+    struct FAB tfab = cc$rms_fab;
+    struct rms_acp_spec sp;
+    struct vms_acp_access_args a;
+    uint32_t chan = 0, st;
+
+    tfab.fab$l_fna = (char *)vmsspec;
+    tfab.fab$b_fns = (uint8_t)strlen(vmsspec);
+    if (rms_acp_spec_from_fab(&tfab, &sp) < 0)
+        return RMS$_SYN;
+
+    st = vms_kif_acp_assign(sp.devnam, &chan);
+    if (!$VMS_STATUS_SUCCESS(st))
+        return rms_acp_open_status(st);
+
+    memset(&a, 0, sizeof(a));
+    a.chan = chan;                       /* read access (acctl 0) */
+    st = rms_acp_resolve_did(chan, sp.dirpath,
+                             &a.did_num, &a.did_seq, &a.did_rvn, &a.did_nmx);
+    if (!$VMS_STATUS_SUCCESS(st)) { vms_kif_dassgn(chan); return rms_acp_open_status(st); }
+    a.version = sp.version;
+    strncpy(a.name, sp.name, VMS_ACP_NAME_SIZE - 1);
+
+    st = vms_kif_acp_access(&a);
+    if (!$VMS_STATUS_SUCCESS(st)) { vms_kif_dassgn(chan); return rms_acp_open_status(st); }
+
+    out->fid_num = a.fid_num; out->fid_seq = a.fid_seq;
+    out->fid_rvn = a.fid_rvn; out->fid_nmx = a.fid_nmx;
+    out->version = a.out_version;
+    out->efblk   = a.attr.efblk;
+    out->hiblk   = a.attr.hiblk;
+    out->ffbyte  = a.attr.ffbyte;
+    out->fileprot   = a.attr.fileprot;
+    out->uic_group  = a.attr.uic_group;
+    out->uic_member = a.attr.uic_member;
+    out->is_directory = (a.attr.filechar & 0x2000u) ? 1 : 0;   /* FCH$V_DIRECTORY */
+    memcpy(out->credate, a.attr.credate, 8);
+    memcpy(out->revdate, a.attr.revdate, 8);
+    /* Record format from the FAT (ATR$C_RECATTR, verbatim). fat_rtype's small
+     * integers ARE the FAB$C_* record-format codes (1=FIX..6=STMCR). */
+    {
+        const struct ods2_recattr *fat = (const struct ods2_recattr *)a.attr.recattr;
+        out->rfm = fat->fat_rtype;
+        out->rat = fat->fat_rattrib;
+        out->mrs = fat->fat_rsize;
+    }
+
+    vms_kif_acp_deaccess(chan);
+    vms_kif_dassgn(chan);
+    return RMS$_NORMAL;
+#else
+    /* netbsd-vax standalone cross: no ACP yet (vms-d5d) -- stat() the resolved
+     * passthrough path. No genuine FID; record format is not on disk here. */
+    char linux_path[1024];
+    struct stat sbuf;
+    if (!$VMS_STATUS_SUCCESS(vmsfs_to_linux_path(vmsspec, linux_path,
+                                                 sizeof(linux_path))))
+        return RMS$_SYN;
+    if (stat(linux_path, &sbuf) != 0)
+        return RMS$_FNF;
+    out->efblk = (uint32_t)((sbuf.st_size + 511) / 512) + 1u;
+    out->hiblk = (uint32_t)((sbuf.st_size + 511) / 512);
+    out->ffbyte = (uint16_t)(sbuf.st_size % 512);
+    out->is_directory = S_ISDIR(sbuf.st_mode) ? 1 : 0;
+    out->rfm = FAB$C_STMLF;
+    return RMS$_NORMAL;
+#endif
+}
 
 struct rms_metadata {
     uint32_t magic;         /* RMS_META_MAGIC */

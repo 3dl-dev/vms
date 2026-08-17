@@ -24,6 +24,7 @@
 #include "dcl/symbol.h"
 #include "dcl/cdu.h"
 #include "dcl/dcl_cmd.h"
+#include "dcl/dcl_rms.h"          /* vms-481: SET DEFAULT verifies the dir via the ACP */
 #include "dcl/vms_messages.h"
 #include "ssdef.h"
 #include "vms/logical.h"
@@ -94,6 +95,64 @@ static uint64_t enforced_privs_held(void)
     return info.cur_privs & VMS_PRV_M_ENFORCED;
 }
 
+/*
+ * set_default_dir_exists - vms-481: verify a SET DEFAULT target directory
+ * through the Files-11 ACP, not stat() on a /vms passthrough. A VMS directory
+ * "DEV:[A.B.C]" is the file "DEV:[A.B]C.DIR" -- so read that .DIR file's header
+ * (rms_file_attr) and confirm it is a directory. The MFD ("[000000]" / no
+ * directory) always exists on a mounted volume; a device/logical-only or bare
+ * name is accepted (resolution is deferred, as on VMS). Returns 1 if the
+ * default may be set, 0 if the directory is genuinely absent.
+ */
+static int set_default_dir_exists(struct dcl_context *ctx, const char *dirspec)
+{
+    char eff[1024];
+    if (dcl_rms_effective_spec(ctx, dirspec, eff, sizeof(eff)) != 0)
+        return 1;
+
+    const char *lb = strchr(eff, '[');
+    const char *rb = lb ? strchr(lb, ']') : NULL;
+    if (!lb || !rb || rb <= lb + 1)
+        return 1;   /* device/logical only, or no bracketed dir -- accept */
+
+    char prefix[128];
+    size_t pl = (size_t)(lb - eff);
+    if (pl >= sizeof(prefix)) pl = sizeof(prefix) - 1;
+    memcpy(prefix, eff, pl); prefix[pl] = '\0';   /* "DEV:" */
+
+    char dir[512];
+    size_t dl = (size_t)(rb - lb - 1);
+    if (dl >= sizeof(dir)) dl = sizeof(dir) - 1;
+    memcpy(dir, lb + 1, dl); dir[dl] = '\0';       /* "A.B.C" */
+
+    if (dir[0] == '\0' || strcmp(dir, "000000") == 0)
+        return 1;   /* the MFD */
+
+    /* Split trailing component: parent "A.B", leaf "C". */
+    char parent[512], leaf[256];
+    char *lastdot = strrchr(dir, '.');
+    if (lastdot) {
+        size_t plp = (size_t)(lastdot - dir);
+        if (plp >= sizeof(parent)) plp = sizeof(parent) - 1;
+        memcpy(parent, dir, plp); parent[plp] = '\0';
+        strncpy(leaf, lastdot + 1, sizeof(leaf) - 1); leaf[sizeof(leaf) - 1] = '\0';
+    } else {
+        parent[0] = '\0';
+        strncpy(leaf, dir, sizeof(leaf) - 1); leaf[sizeof(leaf) - 1] = '\0';
+    }
+
+    char dirfile[1024];
+    if (parent[0])
+        snprintf(dirfile, sizeof(dirfile), "%s[%s]%s.DIR", prefix, parent, leaf);
+    else
+        snprintf(dirfile, sizeof(dirfile), "%s[000000]%s.DIR", prefix, leaf);
+
+    struct rms_fileattr fa;
+    if (rms_file_attr(dirfile, &fa) != RMS$_NORMAL)
+        return 0;                 /* the .DIR file is genuinely absent */
+    return fa.is_directory ? 1 : 0;
+}
+
 static int cmd_set_default(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -104,21 +163,11 @@ static int cmd_set_default(struct dcl_command *cmd)
     }
 
     const char *dirspec = cmd->params[1];
-    char linux_path[1024];
 
-    dcl_resolve_path(ctx, dirspec, linux_path, sizeof(linux_path));
-
-    /* Remove trailing slash for stat */
-    char check_path[1024];
-    strncpy(check_path, linux_path, sizeof(check_path) - 1);
-    check_path[sizeof(check_path) - 1] = '\0';
-    size_t cplen = strlen(check_path);
-    if (cplen > 1 && check_path[cplen - 1] == '/') {
-        check_path[cplen - 1] = '\0';
-    }
-
-    struct stat st;
-    if (stat(check_path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+    /* vms-481: the authoritative existence check is the ACP (the real MFD/ODS-2
+     * directory), not stat() on the /vms passthrough. Fail-honest: an absent
+     * directory (or no ACP-mounted SYS$DISK) => %SET-E-... invalid directory. */
+    if (!set_default_dir_exists(ctx, dirspec)) {
         dcl_error("DCL", 2, "DIRECT", "invalid directory - \\%s\\", dirspec);
         return SS$_NOSUCHFILE;
     }
@@ -162,10 +211,9 @@ static int cmd_set_default(struct dcl_command *cmd)
      * surface. */
     vms_pcb_set_default_dir(ctx->default_dir);
 
-    /* Change the process working directory too */
-    if (chdir(check_path) != 0) {
-        /* Non-fatal - VMS default and Linux CWD diverge */
-    }
+    /* vms-481: the DCL default is now purely a VMS "DEV:[DIR]" spec resolved by
+     * the executive/ACP -- no Linux chdir() into a /vms passthrough (that host
+     * mount is retired with the ACP flip). */
 
     return SS$_NORMAL;
 }

@@ -756,11 +756,10 @@ uint32_t vms_kif_bg_getsockopt(uint32_t exec_chan, int level, int optname,
 
 /* $MOUNT an ODS-2 volume into the executive-global mounted table by unit name
  * (e.g. "DKA0:"). Idempotent. SS$_NOSUCHDEV if /dev/vms is absent.
- * OVMX-UNWIRED: vms_kif_acp_mount (vms-149) -- no product caller yet: PID 1's
- * boot-time $MOUNT of the system disk is a later rung of epic vms-208 (the full
- * $MOUNT that binds the backing device + validates the home block). Exercised
- * now only by tests/qemu/test_syssvc_acp_channel.c, the same footing as
- * vms_kif_get_resmaster. */
+ * WIRED (vms-481, epic vms-208): the DCL MOUNT command mounts a volume through
+ * the ACP -- src/vmsdcl/dcl_cmd_misc.c cmd_mount emits vms_kif_acp_mount instead
+ * of the retired setuid mount(2) helper (the /vms passthrough is gone). Also
+ * exercised by tests/qemu/test_syssvc_acp_channel.c and test_syssvc_dcl_acp.c. */
 uint32_t vms_kif_acp_mount(const char *devnam);
 
 /* $DISMOUNT: remove a volume from the executive-global mounted table.
@@ -818,9 +817,11 @@ uint32_t vms_kif_acp_writevb(struct vms_acp_rw_args *args);
  * file-class channel and return the NEXT matching {name, version, FID}, or
  * SS$_NOMOREFILES when the context is exhausted. See src/kernel/vms_acp.h for
  * the FIB/wildcard interface. Returns SS$_NOSUCHDEV if /dev/vms is absent.
- * OVMX-UNWIRED: vms_kif_acp_acpcontrol (vms-a0b) -- no product caller yet
- * (RMS $SEARCH and the DCL DIRECTORY / F$SEARCH lexical wire to it in a later
- * rung); exercised by tests/qemu/test_syssvc_acp_search.c against real /dev/vms. */
+ * WIRED (vms-481, epic vms-208): RMS $SEARCH emits vms_kif_acp_acpcontrol --
+ * src/vmsrms/rms_search.c drives the executive wildcard directory context, and
+ * the DCL DIRECTORY command + the F$SEARCH lexical reach it through sys$search
+ * (src/vmsdcl/dcl_filespec.c dcl_rms_dir_*). Also exercised by
+ * tests/qemu/test_syssvc_acp_search.c and test_syssvc_dcl_acp.c. */
 uint32_t vms_kif_acp_acpcontrol(struct vms_acp_acpcontrol_args *args);
 
 /*

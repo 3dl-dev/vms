@@ -138,8 +138,11 @@ endif()
 if(VMSDCL_STANDALONE)
     target_compile_options(vmsdcl PRIVATE -Wall -Wextra -O2)
 else()
-    # Core link libraries
-    target_link_libraries(vmsdcl PRIVATE pthread vms vmsfs vmsprocess vmslnm vmsqueue)
+    # Core link libraries. vms-481: DCL file commands + F$ file lexicals now
+    # reach files through RMS ($OPEN/$GET/$CREATE/$PUT/$SEARCH + rms_file_attr,
+    # which route to the Files-11 ODS-2 ACP), so vmsdcl links vmsrms. (The
+    # native-link build already --uses LIBVMSRMS$SHR; mk_dcl.sh.)
+    target_link_libraries(vmsdcl PRIVATE pthread vms vmsrms vmsfs vmsprocess vmslnm vmsqueue)
 
     # Try to find readline for better interactive experience (skip for static
     # builds; and for the netbsd-vax cross, which has no readline in its sysroot

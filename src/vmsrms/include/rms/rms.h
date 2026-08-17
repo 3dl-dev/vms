@@ -51,6 +51,51 @@ uint32_t sys$find(void *rab, void (*err)(void *), void (*suc)(void *));       /*
 uint32_t sys$parse(void *fab, void (*err)(void *), void (*suc)(void *));      /* Parse filespec into NAM block */
 uint32_t sys$search(void *fab, void (*err)(void *), void (*suc)(void *));     /* Search for next wildcard match */
 
+/*
+ * rms_search_fid (OVMX, vms-481) - read the genuine ODS-2 File ID of the most
+ * recent $SEARCH match from a NAM block's active wildcard context. On the
+ * __linux__ ACP backend the FID comes from the executive directory search
+ * (IO$_ACPCONTROL); DCL DIRECTORY /FULL uses it to print the real File ID
+ * "(num,seq,rvn)". Returns 1 (and fills the outputs) when a match FID is
+ * available, 0 otherwise (no context, or the non-__linux__ POSIX passthrough,
+ * which has no executive FID). Not a VMS-authentic service name -- an OVMX
+ * accessor over the NAM the search fills.
+ */
+int rms_search_fid(void *nam, uint16_t *num, uint16_t *seq,
+                   uint8_t *rvn, uint8_t *nmx);
+
+/* rms_search_end (OVMX, vms-481) - release a NAM's wildcard search context and
+ * its executive channel without iterating to RMS$_NMF (early-stop cleanup). */
+void rms_search_end(void *nam);
+
+/*
+ * rms_file_attr (OVMX, vms-481) - read a file's genuine ODS-2 header attributes
+ * through the Files-11 ACP ($ASSIGN + IO$_ACCESS + read the ATR list, then
+ * IO$_DEACCESS). Serves DCL DIRECTORY /FULL (real File ID + size + dates +
+ * protection) and the F$FILE_ATTRIBUTES lexical (EOF/ALQ/RFM/RAT/MRS/dates)
+ * from the on-disk header the ACP decodes -- NOT stat() on a /vms passthrough.
+ * On the non-__linux__ netbsd-vax cross it falls back to stat() (no ACP yet,
+ * vms-d5d). Returns RMS$_NORMAL (out filled), or a fail-honest RMS$_ (FNF/DNF/
+ * ACC) with *out zeroed. Not a VMS-authentic service name -- an OVMX accessor.
+ */
+struct rms_fileattr {
+    uint16_t fid_num, fid_seq;   /* genuine File ID {NUM,SEQ,RVN} from the ACP  */
+    uint8_t  fid_rvn, fid_nmx;
+    uint16_t version;            /* resolved version (0 asked => highest)       */
+    uint32_t efblk;              /* end-of-file VBN (EOF = (efblk-1)*512+ffbyte) */
+    uint32_t hiblk;              /* highest allocated VBN (allocation quantity)  */
+    uint16_t ffbyte;             /* first free byte in the EOF block            */
+    uint16_t fileprot;           /* ODS-2 protection, 4 nibbles S/O/G/W         */
+    uint16_t uic_group, uic_member;
+    uint8_t  rfm;                /* record format (FAT fat_rtype == FAB$C_*)    */
+    uint8_t  rat;                /* record attributes (FAT fat_rattrib)         */
+    uint16_t mrs;               /* max/record size (FAT fat_rsize)              */
+    uint8_t  is_directory;       /* 1 if the file characteristics say directory */
+    uint8_t  credate[8];         /* VMS 64-bit absolute creation time           */
+    uint8_t  revdate[8];         /* VMS 64-bit absolute revision time           */
+};
+uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out);
+
 /* Positioning and I/O control */
 uint32_t sys$rewind(void *rab, void (*err)(void *), void (*suc)(void *));     /* Rewind to beginning of file */
 uint32_t sys$flush(void *rab, void (*err)(void *), void (*suc)(void *));      /* Flush buffers to disk */

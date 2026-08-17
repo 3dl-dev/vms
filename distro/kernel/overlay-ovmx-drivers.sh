@@ -114,7 +114,18 @@ for mod in "${MODS[@]}"; do
             matched=$((matched + 1))
             n=$((n + 1))
         done
-        [ "$matched" -gt 0 ] || echo "  WARN: glob '$glob' for module '$mod' matched nothing"
+        # A sources.conf glob that stages ZERO files is fatal, not a warning: it
+        # silently drops objects the module's Kbuild names, so the kernel build
+        # later dies on "No rule to make target <obj>.o" far from the cause
+        # (rd vms-4a8 -- src/vmsfs was absent from the Dockerfile build context,
+        # so the codec globs matched nothing and the WARN shipped the break).
+        [ "$matched" -gt 0 ] || {
+            echo "FAIL: sources.conf glob '$glob' for module '$mod' matched no files under $REPO"
+            echo "      -- source missing from the build context; the Kbuild would"
+            echo "      later fail 'No rule to make target' for its objects. Ensure the"
+            echo "      Dockerfile/build stage COPYs the tree this glob names."
+            exit 1
+        }
     done < "$SRCDIR/sources.conf"
     [ "$n" -gt 0 ] || { echo "FAIL: module '$mod' flattened 0 source files"; exit 1; }
     echo "  $mod: staged $n source files + Kbuild + Kconfig"

@@ -266,6 +266,50 @@ static struct vms_acp_volume *acp_vol_find_locked(const char *devnam)
     return NULL;
 }
 
+/*
+ * acp_vol_resnam - the per-volume synchronization RESOURCE NAME for the ACP's
+ * DLM write lock (vms-233, design §4.7). Derived from the ODS-2 volume LABEL so
+ * a clustered / MSCP-served volume computes the SAME resource name on every node
+ * that serves it -- the DLM resource is the cluster-wide write sync point. The
+ * namespace prefix follows VMS's public files-lock naming ("F11B$s..."); the
+ * exact resource string is an OVMX design choice, not a claim of VMS byte-wire
+ * fidelity (Rule 8). An unlabelled volume falls back to its backing device
+ * numbers so it still serializes locally. Host-neutral (fixed-width fields, no
+ * long/pointer/sizeof) -- kernel-core portable for the Alpha/VAX cross-check.
+ */
+static void acp_vol_resnam(const struct vms_acp_volume *vol, char *out, size_t outsz)
+{
+    size_t n = 0;
+    static const char pfx[] = "F11B$s";
+    size_t i;
+
+    for (i = 0; pfx[i] != '\0' && n + 1 < outsz; i++)
+        out[n++] = pfx[i];
+
+    if (vol->volname[0]) {
+        for (i = 0; i < sizeof(vol->volname) && vol->volname[i] != '\0' &&
+                    n + 1 < outsz; i++)
+            out[n++] = vol->volname[i];
+    } else {
+        /* Fallback: "<major>:<minor>", formatted host-neutrally. */
+        uint32_t vals[2];
+        unsigned v;
+        vals[0] = vol->backing_major;
+        vals[1] = vol->backing_minor;
+        for (v = 0; v < 2; v++) {
+            char tmp[11];
+            int t = 0;
+            uint32_t x = vals[v];
+            if (v == 1 && n + 1 < outsz)
+                out[n++] = ':';
+            do { tmp[t++] = (char)('0' + (x % 10u)); x /= 10u; } while (x && t < 11);
+            while (t > 0 && n + 1 < outsz)
+                out[n++] = tmp[--t];
+        }
+    }
+    out[n < outsz ? n : outsz - 1] = '\0';
+}
+
 /* Caller holds proc->chan_lock. */
 static struct vms_acp_chan *acp_chan_find_locked(struct vms_proc *proc, uint32_t chan)
 {
@@ -1951,6 +1995,10 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
     uint32_t new_hiblk, new_valid, new_efblk, done_bytes;
     uint16_t new_ffbyte;
     uint32_t extended = 0;
+    uint32_t wr_lkid = 0;               /* vms-233 DLM volume lock (0 = not held) */
+    char     wr_resnam[32];
+
+    wr_resnam[0] = '\0';
 
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
@@ -1977,6 +2025,30 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
         args.status = SS__NOPRIV;           /* channel accessed read-only */
         exec_free(s);
         goto out;
+    }
+
+    /*
+     * Serialize this WRITEVBLK's allocate/read-modify-write/flush span against
+     * every other ACP writer on the same volume with the DLM volume-sync lock
+     * (vms-233, design §4.7): the VMS-authentic XQP mechanism, not a flock.
+     * Resource name is derived from the channel's volume (its label) so it is
+     * the SAME cluster-wide sync point on any node that serves the volume.
+     */
+    {
+        struct vms_acp_chan *lch;
+        exec_lock(&proc->chan_lock);
+        lch = acp_chan_find_locked(proc, args.chan);
+        if (lch && lch->vol)
+            acp_vol_resnam(lch->vol, wr_resnam, sizeof(wr_resnam));
+        exec_unlock(&proc->chan_lock);
+    }
+    if (wr_resnam[0]) {
+        status = vms_lock_acp_vol_ex(proc, wr_resnam, &wr_lkid);   /* vms-233: EX $ENQ, per-volume sync */
+        if (status != SS__NORMAL) {
+            args.status = status;           /* SS$_UNSUPPORTED (remote master) etc. */
+            exec_free(s);
+            goto out;
+        }
     }
 
     /* Local window we can extend for mapping the writes (channel copy + at most
@@ -2148,6 +2220,7 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
     exec_free(s);
 
 out:
+    vms_lock_acp_vol_release(proc, wr_lkid);   /* vms-233: release the volume lock (no-op if 0) */
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
@@ -2555,9 +2628,28 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
     {
         struct acp_fileop_scratch *sc = exec_zalloc(sizeof(*sc));
         uint32_t status;
+        uint32_t fop_lkid = 0;          /* vms-233 DLM volume lock (0 = not held) */
 
         if (!sc)
             return -ENOMEM;
+
+        /*
+         * Serialize this IO$_CREATE/DELETE/MODIFY's whole allocate (FID +
+         * blocks) / read-modify-write (headers, directory) / flush span against
+         * every other ACP writer on the same volume with the DLM volume-sync
+         * lock (vms-233, design §4.7): the VMS-authentic XQP mechanism, not a
+         * flock. Held until free_sc; cluster/MSCP-ready by construction (the
+         * resource is the cluster-wide sync point). NEGCTL-ANCHORED: dropping
+         * the enqueue lets concurrent CREATEs race the shared INDEXF index
+         * bitmap and hand out duplicate FIDs -- clobbered headers, files
+         * unreadable by name (acp-fileop-no-dlm-lock).
+         */
+        {
+            char fop_resnam[32];
+            acp_vol_resnam(vol, fop_resnam, sizeof(fop_resnam));
+            status = vms_lock_acp_vol_ex(proc, fop_resnam, &fop_lkid);   /* vms-233: EX $ENQ, per-volume sync */
+            if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+        }
 
         if (args.func == VMS_ACP_FOP_CREATE) {
             ods2_fid_t did, new_fid, backlink;
@@ -2874,6 +2966,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
         }
 
 free_sc:
+        vms_lock_acp_vol_release(proc, fop_lkid);   /* vms-233: release the volume lock (no-op if 0) */
         exec_free(sc);
     }
 #else

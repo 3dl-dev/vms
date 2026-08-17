@@ -821,15 +821,20 @@ static int enq_wait_sync(struct vms_lock_resource *res,
  * if LCK_M_NOQUEUE is set, fails with SS$_NOTQUEUED. Otherwise,
  * the request is queued (caller blocks in kernel until granted).
  */
-long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
+/*
+ * vms_enq_core - the $ENQ logic, operating on an in-memory args struct (no
+ * copyin/copyout). Reached two ways: (a) the vms_ioctl_enq wrapper marshals a
+ * userspace $ENQ; (b) an in-kernel executive facility running in the caller's
+ * ioctl context enqueues DIRECTLY (no /dev/vms round-trip) -- the Files-11 ACP's
+ * per-volume synchronization lock (vms-233, vms_lock_acp_vol_ex below). The body
+ * is unchanged from the original ioctl handler; only the copy in/out moved to
+ * the callers, so every `goto out` writes the result back through *io.
+ */
+static long vms_enq_core(struct vms_proc *proc, struct vms_enq_args *io)
 {
-    struct vms_enq_args args;
+    struct vms_enq_args args = *io;
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
-
-    memset(&args, 0, sizeof(args));
-    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
-        return -EFAULT;
 
     if (args.lkmode > LCK_K_EXMODE) {
         args.status = SS__BADPARAM;
@@ -1034,6 +1039,18 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
     }
 
 out:
+    *io = args;
+    return 0;
+}
+
+long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_enq_args args;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    vms_enq_core(proc, &args);
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
@@ -1042,15 +1059,11 @@ out:
 /*
  * vms_ioctl_deq - Dequeue (release) a lock ($DEQ equivalent)
  */
-long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg)
+static long vms_deq_core(struct vms_proc *proc, struct vms_deq_args *io)
 {
-    struct vms_deq_args args;
+    struct vms_deq_args args = *io;
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
-
-    memset(&args, 0, sizeof(args));
-    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
-        return -EFAULT;
 
     lock = lock_find_by_id(args.lkid);
     if (!lock || lock->proc != proc) {
@@ -1093,9 +1106,73 @@ long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg)
     args.status = SS__NORMAL;
 
 out:
+    *io = args;
+    return 0;
+}
+
+long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_deq_args args;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    vms_deq_core(proc, &args);
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
+}
+
+/*
+ * ================================================================
+ * In-kernel volume-synchronization lock for the Files-11 ACP (vms-233)
+ * ================================================================
+ *
+ * The ODS-2 XQP serializes on-disk-structure updates through the distributed
+ * lock manager's per-volume "volume synchronization" lock, NOT a userspace
+ * flock (design-files11-acp-executive.md §4.7; OpenVMS I&DS Manual, XQP
+ * execution model). The ACP runs in the caller's ioctl/process context, so it
+ * enqueues DIRECTLY here -- no /dev/vms round-trip -- taking an EX-mode lock on
+ * a per-volume resource across each allocate/read-modify-write/flush span.
+ *
+ * DEADLOCK-FREE BY CONSTRUCTION: an ACP write holds no other DLM lock while it
+ * requests the volume lock and takes exactly one such lock at a time, so no
+ * cross-resource wait cycle can form; the only wait is for another writer's
+ * bounded critical section to end. Cluster/MSCP-ready by construction: the
+ * resource name is the cluster-wide sync point, so a volume served to a second
+ * node serializes through the same resource.
+ */
+uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
+                             uint32_t *lkid_out)
+{
+    struct vms_enq_args a;
+
+    if (lkid_out)
+        *lkid_out = 0;
+    memset(&a, 0, sizeof(a));
+    a.lkmode = LCK_K_EXMODE;
+    a.flags  = LCK_M_SYNC;      /* $ENQW: block in-kernel until granted */
+    strscpy(a.resnam, resnam, sizeof(a.resnam));
+
+    vms_enq_core(proc, &a);
+    if (a.status == SS__NORMAL && lkid_out)
+        *lkid_out = a.lkid;
+    return a.status;
+}
+
+/* Release the volume lock taken by vms_lock_acp_vol_ex. A zero lkid (the lock
+ * was never taken -- acquire failed, or the negctl dropped the enqueue) is a
+ * no-op, so the ACP write path can release unconditionally at its single exit. */
+uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid)
+{
+    struct vms_deq_args d;
+
+    if (lkid == 0)
+        return SS__NORMAL;
+    memset(&d, 0, sizeof(d));
+    d.lkid = lkid;
+    vms_deq_core(proc, &d);
+    return d.status;
 }
 
 /*

@@ -1095,17 +1095,36 @@ static int lex_file_attributes(struct dcl_context *ctx, const char *args,
         static const char cat[4] = { 'S', 'O', 'G', 'W' };
         static const int  shift[4] = { 0, 4, 8, 12 };
         char pb[80]; size_t pi = 0;
-        pi += (size_t)snprintf(pb + pi, sizeof(pb) - pi, "(");
+        /*
+         * Bounded accumulator (vms-5f0 / CodeQL): snprintf() returns the length
+         * it WOULD have written, so a raw `pi += snprintf(pb+pi, sizeof(pb)-pi,
+         * ...)` could drive pi past sizeof(pb); the next `sizeof(pb)-pi` would
+         * then underflow (unsigned) to a huge size and hand snprintf an out-of-
+         * bounds pointer + length. Guard every append with `pi < sizeof(pb)` so
+         * the subtraction is provably positive, and clamp pi to at most
+         * sizeof(pb)-1 on truncation. (The real content is <30 bytes, so this
+         * never truncates in practice -- it removes the theoretical overflow.)
+         */
+        #define PRO_APPEND(...) do {                                        \
+            if (pi < sizeof(pb)) {                                          \
+                size_t _rem = sizeof(pb) - pi;                              \
+                int _n = snprintf(pb + pi, _rem, __VA_ARGS__);             \
+                pi += (_n > 0)                                             \
+                        ? (((size_t)_n < _rem) ? (size_t)_n : (_rem - 1))  \
+                        : 0;                                               \
+            }                                                              \
+        } while (0)
+        PRO_APPEND("(");
         for (int c = 0; c < 4; c++) {
             uint16_t nib = (fa.fileprot >> shift[c]) & 0xF;
-            pi += (size_t)snprintf(pb + pi, sizeof(pb) - pi, "%s%c:",
-                                   c ? "," : "", cat[c]);
-            if (!(nib & 0x01)) pi += (size_t)snprintf(pb + pi, sizeof(pb)-pi, "R");
-            if (!(nib & 0x02)) pi += (size_t)snprintf(pb + pi, sizeof(pb)-pi, "W");
-            if (!(nib & 0x04)) pi += (size_t)snprintf(pb + pi, sizeof(pb)-pi, "E");
-            if (!(nib & 0x08)) pi += (size_t)snprintf(pb + pi, sizeof(pb)-pi, "D");
+            PRO_APPEND("%s%c:", c ? "," : "", cat[c]);
+            if (!(nib & 0x01)) PRO_APPEND("R");
+            if (!(nib & 0x02)) PRO_APPEND("W");
+            if (!(nib & 0x04)) PRO_APPEND("E");
+            if (!(nib & 0x08)) PRO_APPEND("D");
         }
-        snprintf(pb + pi, sizeof(pb) - pi, ")");
+        PRO_APPEND(")");
+        #undef PRO_APPEND
         snprintf(result, result_size, "%s", pb);
     } else {
         snprintf(result, result_size, "0");

@@ -149,6 +149,16 @@
 #define SS__DEVICEFULL  2664       /* SS$_DEVICEFULL (extend cannot allocate) */
 #define SS__DEVALLOC    2112       /* SS$_DEVALLOC (device already allocated to another user) */
 
+/*
+ * IO$_ACPCONTROL / wildcard $SEARCH exhaustion (rd vms-a0b, epic vms-208).
+ * SS__NOMOREFILES copied VERBATIM from src/kernel/vms_internal.h (oracle-
+ * pinned == 2352, vms-a0b) -- same provenance rule as the six codes above:
+ * the Linux and NetBSD builds of the SAME shared facility source
+ * (src/kernel-core/vmsfs_acp.c) must never answer wildcard exhaustion with
+ * two different numbers.
+ */
+#define SS__NOMOREFILES 2352       /* SS$_NOMOREFILES (wildcard $SEARCH exhausted) */
+
 /* ================================================================
  * Mailbox privilege bits (P4-A, rd vms-d7a). PSL_C_* and CMKRNL/CMEXEC/SETPRV
  * come from vms_access_nb.h; the two mailbox-creation privileges the mailbox

@@ -105,14 +105,14 @@
  * (sysuaf_rms.c / mksysuaf) and the reader (sysuaf.c authenticate) -- a split
  * definition would let the two disagree and silently break every login.
  *
- * ⚠ SOURCE-OF-TRUTH CONFLICT, FLAGGED per CLAUDE.md Rule 10 (do NOT silently
- * reconcile): an earlier building-block comment here asserted UAI$C_PURDY_S ==
- * 0x03 as an oracle [PIN]; the public $UAIDEF (uaidef.h) has UAI$C_PURDY_S == 4
- * (AD_II 1, PURDY 2, PURDY_V 3, PURDY_S 4). The public $UAIDEF wins (Rule 10
- * item 1), and it is now the single source. The on-disk algorithm byte OVMX
- * writes/reads is whatever uaidef.h defines, so writer and reader agree
- * regardless. The oracle-vs-$UAIDEF encrypt-byte value is a follow-on to
- * reconcile against a fresh oracle DUMP (rd item to be filed).
+ * SOURCE-OF-TRUTH: RESOLVED (vms-722). The oracle DUMP of a real on-disk
+ * SYSUAF measured UAF$B_ENCRYPT == 0x03 on both VAX 7.3 and Alpha 8.4, and the
+ * public $UAIDEF enumerates AD_II=0, PURDY=1, PURDY_V=2, PURDY_S=3 -- oracle
+ * and $UAIDEF AGREE at 3. An earlier uaidef.h was off-by-one (AD_II 1, PURDY 2,
+ * PURDY_V 3, PURDY_S 4), so OVMX had been stamping 4 on disk and rejecting the
+ * authentic byte 3; uaidef.h is now corrected to the real $UAIDEF and is the
+ * single source, so writer (sysuaf_rms.c / mksysuaf) and reader (sysuaf.c
+ * authenticate) both agree on UAI$C_PURDY_S == 3.
  */
 
 typedef struct {

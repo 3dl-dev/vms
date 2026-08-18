@@ -6880,15 +6880,17 @@ apply_edit() {
         sed -i 's|w1 = (uint16_t)(lbn \& 0xFFFF);|w1 = (uint16_t)((lbn + 1u) \& 0xFFFF); /* NEGCTL acp-writevb-extend-alloc-offbyone */|' "$_file";;
 
     rms-put-wrong-vbn)
-        # The `a.vbn = (cursor/512)+1u` line appears in BOTH rms_io_read and
-        # rms_io_write; scope the mutation to the WRITE function
-        # (/^ssize_t rms_io_write/,/^}$/) so ONLY the $PUT side is shifted -- the
-        # $GET side must stay CORRECT or the round-trip could not catch it (both
-        # shifted would be self-consistent and escape). `+ 1u` -> `+ 2u` writes
-        # every record ONE VBN too high; the untouched read then finds the empty
-        # true VBN on re-$OPEN. A second apply finds no `+ 1u;` left in the range
-        # and is the no-op the idempotency selftest requires.
-        sed -i '/^ssize_t rms_io_write/,/^}$/ s|        a.vbn    = (uint32_t)(f->cursor / RMS_IO_BLK) + 1u;|        a.vbn    = (uint32_t)(f->cursor / RMS_IO_BLK) + 2u; /* NEGCTL rms-put-wrong-vbn */|' "$_file";;
+        # The `a.vbn = (cursor/512)+1u` line appears in BOTH rms_io_read_acp and
+        # rms_io_write_acp (the ACP backends; the public rms_io_write() is now a
+        # thin POSIX/ACP dispatch wrapper with no a.vbn of its own). Scope the
+        # mutation to the WRITE backend (/^static ssize_t rms_io_write_acp/,/^}$/)
+        # so ONLY the $PUT side is shifted -- the $GET side (rms_io_read_acp) must
+        # stay CORRECT or the round-trip could not catch it (both shifted would be
+        # self-consistent and escape). `+ 1u` -> `+ 2u` writes every record ONE
+        # VBN too high; the untouched read then finds the empty true VBN on
+        # re-$OPEN. A second apply finds no `+ 1u;` left in the range and is the
+        # no-op the idempotency selftest requires.
+        sed -i '/^static ssize_t rms_io_write_acp/,/^}$/ s|        a.vbn    = (uint32_t)(f->cursor / RMS_IO_BLK) + 1u;|        a.vbn    = (uint32_t)(f->cursor / RMS_IO_BLK) + 2u; /* NEGCTL rms-put-wrong-vbn */|' "$_file";;
 
     dcl-acp-search-fid-fabricated)
         # ANCHORED to the single match-FID record in rms_impl_search:

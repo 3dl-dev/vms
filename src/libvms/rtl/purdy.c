@@ -3,8 +3,7 @@
  * the algorithm, provenance (public / clean-room, Rule 8), and the oracle bar.
  *
  * Verified byte-exact against the 7 real OpenVMS vectors (4 VAX V7.3 + 3 Alpha
- * V8.4) in docs/oracle/purdy-hash-vectors.md and against the 200 published
- * DecHpwd PURDY_S calibration vectors -- see tests/libvms/test_purdy.c.
+ * V8.4) in docs/oracle/purdy-hash-vectors.md -- see tests/libvms/test_purdy.c.
  *
  * Arithmetic is over GF(P), P = 2^64 - 59 ("cmod P" = conditional reduce: the
  * intermediate ops only fix up on a 2^64 overflow; a final real mod P is done

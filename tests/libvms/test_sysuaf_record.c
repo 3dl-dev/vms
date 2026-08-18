@@ -209,7 +209,12 @@ int main(void)
 
         /* UAF$W_SALT @0x166, UAF$B_ENCRYPT @0x168 */
         check(p3_le16(b + 0x166) == FIX_SALT, "word @0x166 == UAF$W_SALT fixture");
-        check(b[0x168] == UAI$C_PURDY_S, "byte @0x168 == UAF$B_ENCRYPT = 0x03 (PURDY_S)");
+        /* Literal 3, not just the constant: the oracle DUMP measured 0x03 on
+         * real VAX 7.3 + Alpha 8.4 and public $UAIDEF enumerates PURDY_S=3, so
+         * the on-disk byte is pinned to the oracle value -- an off-by-one in
+         * UAI$C_PURDY_S (the historical bug, vms-722) would redden here. */
+        check(UAI$C_PURDY_S == 3, "UAI$C_PURDY_S == 3 (oracle + $UAIDEF)");
+        check(b[0x168] == 3, "byte @0x168 == UAF$B_ENCRYPT = 0x03 (PURDY_S, oracle)");
         check(b[0x16A] == FIX_PWD_LEN, "byte @0x16A == UAF$B_PWD_LENGTH");
     }
 

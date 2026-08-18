@@ -160,11 +160,11 @@ extern "C" {
  * UAI$_ password encryption algorithm codes (UAI$_ENCRYPT field)
  * ================================================================ */
 
-#define UAI$C_AD_II         1   /* AUTODIN II (default VMS hash) */
-#define UAI$C_PURDY         2   /* Purdy polynomial */
-#define UAI$C_PURDY_V       3   /* Purdy with visible characters */
-#define UAI$C_PURDY_S       4   /* Purdy, susceptible (older) */
-#define UAI$C_CUST          5   /* Customer-defined algorithm */
+#define UAI$C_AD_II         0   /* AUTODIN II (early VMS hash)                 */
+#define UAI$C_PURDY         1   /* Purdy polynomial (original)                */
+#define UAI$C_PURDY_V       2   /* Purdy, variable-length ("V")               */
+#define UAI$C_PURDY_S       3   /* Purdy, salted -- the modern VMS default    */
+#define UAI$C_CUST          128 /* customer-algorithm base (UAI$C_CUST, 128..255) */
 
 #ifdef __cplusplus
 }

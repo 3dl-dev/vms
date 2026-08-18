@@ -47,6 +47,7 @@ vmsfs-y := vmsfs_super.o \
            vmsfs_header.o \
            ods2_reader.o \
            ods2_writer.o \
+           ods2_edit.o \
            ods2_bdev.o \
            ods2_path.o \
            ods2_block_kern.o \

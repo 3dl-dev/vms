@@ -399,3 +399,25 @@ vms$$deliver_pending_asts=PROCEDURE
 # at the end per the append-only contract so no existing index shifts.
 sysuaf_interactive_login_permitted=PROCEDURE
 sysuaf_account_captive=PROCEDURE
+
+# vms-5f0 (Files-11 converged program): new universals discovered by nm when the
+# recipe added the rtl/purdy TU and grew rtl/sysuaf, rtl/rms_textfile, and the
+# syssvc/sys_assign channel-class helpers. purdy_s_hash is called intra-image by
+# rtl/sysuaf, but purdy.c exports it non-static, so nm surfaces it as a universal
+# and it must be frozen here (and in .frozen) rather than left in the "appended
+# beyond frozen" set. All APPENDED at the end per the append-only contract so no
+# existing index shifts. Order matches mk_libvms_shr.sh's sorted append order.
+purdy_s_hash=PROCEDURE
+rms_textfile_append_line=PROCEDURE
+rms_textfile_close=PROCEDURE
+rms_textfile_getline=PROCEDURE
+rms_textfile_open=PROCEDURE
+rms_textfile_write_line=PROCEDURE
+sysuaf_format_privileges=PROCEDURE
+sysuaf_raw_to_view=PROCEDURE
+sysuaf_record_set_username=PROCEDURE
+sysuaf_set_password=PROCEDURE
+sysuaf_set_password_salt=PROCEDURE
+sysuaf_view_to_raw=PROCEDURE
+vms$$chan_is_bg=PROCEDURE
+vms$$chan_is_file=PROCEDURE

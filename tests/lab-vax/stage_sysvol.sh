@@ -18,8 +18,12 @@
 #       STARTUP.EXE      the PID-1 image (also installed as /sbin/init off-disk;
 #                        present here so the SYSEXE tree matches an installed
 #                        volume)
-#       SYSUAF.DAT       account database (TEXT, reused verbatim -- arch-neutral)
-#       RIGHTSLIST.DAT   rights database (TEXT, reused verbatim)
+#       SYSUAF.DAT       account database (binary $UAFDEF indexed Files-11 file;
+#                        arch-neutral by construction -- the LE codec serializes
+#                        every on-disk field via le16/le32/le64 over uint8[] byte
+#                        arrays, so the same bytes on ILP32-LE vax and LP64-LE host;
+#                        reused verbatim. NOT text -- do NOT revert the seed to ASCII)
+#       RIGHTSLIST.DAT   rights database (binary $RDBDEF indexed; arch-neutral, reused verbatim)
 #       OVMXVMSSYS.PAR   SYSGEN parameter file (LE, no long/pointer fields in
 #                        struct sysgen_param -> identical layout on ILP32-LE vax
 #                        and LP64-LE host; reused verbatim -- and read_boot_

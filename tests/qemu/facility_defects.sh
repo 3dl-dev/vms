@@ -499,6 +499,7 @@ acp-search-cursor-skips-versions
 acp-create-header-slot-offbyone
 acp-fileop-no-dlm-lock
 rms-put-wrong-vbn
+p3-index-child-pointer-offbyone
 imgact-acp-valid-bytes-offbyone
 p0-map-not-recorded
 p1-map-not-recorded
@@ -4901,6 +4902,34 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    p3-index-child-pointer-offbyone)
+        case "$_f" in
+        facility)     echo "RMS Prolog-3 indexed READ engine's index descent -- p3_descend() picks the data bucket for a keyed \$GET by following each index record's 2-byte child pointer down the on-disk ISAM index (src/vmsrms/rms_prolog3.c, the keyed read path under the Files-11 ODS-2 ACP), vms-045, epic vms-208";;
+        targets)      echo "vmsrms/rms_prolog3.c";;
+        suites_red)   echo "test_syssvc_rms_p3_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "p3_descend() decodes each index record's child pointer as p3_le16(bkt + off) -- the 2-byte VBN of the subtree to follow to the data level. Reading it ONE BYTE too high (bkt + off + 1) yields a mis-aligned, garbage VBN, so rms_p3_get_by_key descends to the wrong data bucket and the keyed read-back cannot resolve the record. test_syssvc_rms_p3_acp authors a genuine Prolog-3 indexed file, \$PUTs NREC records forcing real data-bucket SPLITs, then reads EVERY record back BY KEY across the split -- so the corrupted descent reddens the byte-exact keyed read-back, and the durability re-read (same descent, rebuilt window) reddens with it. The \$PUT/\$CREATE writes and the 'a genuine bucket SPLIT occurred' bucket-count assertion do not descend the index to verify and stay green. Only keyed reads through this descent can tell; test_syssvc_rms_acp is a SEQUENTIAL RMS suite (sys\$put/sys\$get, no P3 index) and never reaches p3_descend, so nothing outside test_syssvc_rms_p3_acp reddens.";;
+        require_fail) cat <<'EOF'
+every record reads back BY KEY over the ACP, byte-exact, across splits
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+records survive DEACCESS+re-ACCESS (durable on the volume)
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME CORRUPTED DESCENT, SEEN AT THE DURABILITY RE-READ. After DEACCESS +
+re-ACCESS the suite rebinds the prologue from the on-disk image and calls
+read_all_by_key() a second time -- the same rms_p3_get_by_key index descent,
+still reading the child pointer one byte too high -- so the durable-volume
+re-read reddens with the first keyed read-back. The re-bind of the prologue and
+the split bucket-count check do not descend the index and stay green.
+EOF
+                      ;;
+        esac;;
+
     acp-search-cursor-skips-versions)
         case "$_f" in
         facility)     echo "Files-11 (ODS-2) ACP IO\$_ACPCONTROL wildcard directory search -- the \$SEARCH primitive (VMS_IOCTL_ACP_ACPCONTROL returns successive matching directory entries in genuine ODS-2 order [name ascending, version descending], maintaining the FIB\$L_WCC continuation cursor on the channel), vms-a0b, epic vms-208";;
@@ -5023,7 +5052,7 @@ EOF
                       ;;
         knock_on_fail) cat <<'EOF'
 the walk FELL THROUGH the empty node member and resolved on the COMMON member (search order)
-$GET/IO$_READVBLK reads SYSUAF.DAT byte-exact off the ODS-2 volume (no vmsfs_to_linux_path)
+$GET/IO$_READVBLK reads SYSUAF.DAT byte-exact off the ODS-2 volume -- VBN 1 begins with the shipped header (no vmsfs_to_linux_path)
 SYS$MANAGER:WELCOME.TXT resolves through the same rooted chain to a file FID
 EOF
                       ;;
@@ -5049,29 +5078,29 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "rms_textfile_open() -- the sequential reader every SYSUAF / RIGHTSLIST / \$GETUAI read now rides -- opens the file declaring the wrong record format (FAB\$C_VAR instead of FAB\$C_STMLF). SYSUAF.DAT is stream-LF (one pipe-delimited row per LF-terminated record); read as VARIABLE, RMS takes the first two data bytes of each row as a binary record-length count, so every \$GET reframes the record into garbage and no row parses to a username. sysuaf_lookup(\"SYSTEM\") therefore returns not-found -- the exact property this reroute exists to provide (the login credential is read byte-faithful from the ODS-2 record through RMS-over-ACP; INV-6: it came off the platter as written). The \$CREATE/\$PUT that built the fixture, the OPERATOR.LOG/LASTLOGIN writers (their own \$PUT path), and the mount/dismount edges are untouched; only assertions that READ SYSUAF/LASTLOGIN back through rms_textfile_open can tell. The wrong-password and absent-account checks want a NEGATIVE result and still get one, so they stay green.";;
+        why)          echo "rms_textfile_open() -- the sequential reader the per-boot LOGINOUT writers' read-backs (OPERATOR.LOG, LASTLOGIN) ride -- opens the file declaring the wrong record format (FAB\$C_VAR instead of FAB\$C_STMLF). Those files are stream-LF (one LF-terminated text record); read as VARIABLE, RMS takes the first two data bytes of each record as a binary record-length count, so every \$GET reframes the record into garbage and no record reads back byte-exact. The OPERATOR.LOG and LASTLOGIN read-backs therefore fail, which trips the suite's whole-suite gate (\"auth + boot writers are sourced from the ODS-2 volume via the ACP\") -- the exact property this reroute exists to provide (INV-6: a per-boot record is read byte-faithful from the ODS-2 platter through RMS-over-ACP, not a POSIX copy). The binary SYSUAF read rides the indexed \$UAFDEF engine (read_binary_sysuaf_system), NOT rms_textfile_open, so it is untouched; so are the \$CREATE/\$PUT that built the fixture, the OPERATOR.LOG/LASTLOGIN writers (their own \$PUT path), and the mount/dismount edges. The wrong-password and absent-account checks want a NEGATIVE result and still get one, so they stay green.";;
         require_fail) cat <<'EOF'
-sysuaf_lookup(SYSTEM) reads the account via RMS-over-ACP
+LOGINOUT auth + boot writers are sourced from the ODS-2 volume via the ACP
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
 OPERATOR.LOG record read back byte-exact from the ODS-2 volume
 LASTLOGIN timestamp read back from the ODS-2 volume
-LOGINOUT auth + boot writers are sourced from the ODS-2 volume via the ACP
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
 THE SAME MISFRAMED READER, SEEN AT EACH READ-BACK THAT RIDES rms_textfile_open().
-Once the reader opens as VARIABLE, every $GET misframes, so the SYSUAF read
-(require_fail) and BOTH writer read-backs -- the OPERATOR.LOG record and the
-LASTLOGIN timestamp, each re-read through rms_textfile_open() -- redden, and the
-whole-suite gate that asserts auth + writers are sourced from the ODS-2 volume
-reddens with them. The guarded UIC / correct-password sub-checks do NOT run once
-the SYSUAF read fails (so they are neither green nor a second red); the
-OPERATOR.LOG APPEND and LASTLOGIN WRITE themselves use $PUT/$CREATE (the writer
-path, untouched, still stream-LF) and stay green; and the dismounted-read,
-absent-file, and product-fail-honest checks all expect a NEGATIVE result (a NULL
-handle / not-found) and stay green regardless of record format.
+Once the reader opens as VARIABLE, every $GET misframes, so BOTH per-boot writer
+read-backs -- the OPERATOR.LOG record and the LASTLOGIN timestamp, each re-read
+through rms_textfile_open() -- redden (knock_on_fail); the whole-suite gate that
+asserts auth + writers are sourced from the ODS-2 volume (require_fail) reddens
+with them because it fires exactly when any earlier check failed. The binary
+SYSUAF read (read_binary_sysuaf_system over the $UAFDEF indexed engine) does NOT
+ride rms_textfile_open and stays green; the OPERATOR.LOG APPEND and LASTLOGIN
+WRITE themselves use $PUT/$CREATE (the writer path, untouched, still stream-LF)
+and stay green; and the dismounted-read, absent-file, and product-fail-honest
+checks all expect a NEGATIVE result (a NULL handle / not-found) and stay green
+regardless of record format.
 EOF
                       ;;
         esac;;
@@ -5544,8 +5573,8 @@ EOF
 
     rightslist-general-hex-as-decimal)
         case "$_f" in
-        facility)     echo "the rights database's GENERAL identifiers (RIGHTSLIST.DAT's %Xnnnnnnnn value notation, parse_value() in src/libvms/rtl/rightslist.c), vms-2f8";;
-        targets)      echo "libvms/rtl/rightslist.c";;
+        facility)     echo "the rights database's GENERAL identifiers -- the binary \$RDBDEF identifier VALUE decoded from RIGHTSLIST.DAT and returned by the executive \$ASCTOID (rightslist_live_asctoid_rf in src/vmsrms/rightslist_live.c), vms-2f8/vms-f15a";;
+        targets)      echo "vmsrms/rightslist_live.c";;
         # test_syssvc_ident.c's own LOCAL assertion (a GENERAL identifier,
         # same reader, same %X notation) is a genuine, measured knock-on --
         # see knock_on_why. Nothing else in this manifest's known suites
@@ -5558,7 +5587,7 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "parse_value()'s %Xnnnnnnnn branch -- the notation every GENERAL identifier in RIGHTSLIST.DAT (BATCH, DIALUP, INTERACTIVE, LOCAL, NETWORK, REMOTE) is written in -- stops reading the digits after %X as hexadecimal and reads them as decimal instead. The row is still FOUND (the colon-delimited scan, the name match and the case-insensitive compare are all untouched); only the value column is misread, so rightslist_name_to_value()/rightslist_value_to_name() answer a wrong number for every general identifier while the UIC branch ([g,m], a few lines below, OCTAL) is a completely different code path and is not reached by this edit at all.";;
+        why)          echo "RE-ANCHORED (vms-f15a flipped RIGHTSLIST to the binary \$RDBDEF; parse_value()'s ASCII %Xnnnnnnnn branch this defect used to mutate was DELETED with the ASCII reader). It now guards the equivalent binary-path invariant: the identifier VALUE the executive \$ASCTOID returns must be the exact 32-bit value stored in the \$RDBDEF record. rightslist_live_asctoid_rf() copies out rdb_ident_value(&rec) after a NAME-key hit; the mutation masks off bit 31 (\`& 0x7FFFFFFFu\`) on that egress, so every GENERAL identifier -- all of which are 0x8000000n (BATCH..REMOTE) -- resolves to a wrong, sign-bit-cleared value (0x80000004 -> 4) while the record is still FOUND (the NAME-key lookup and the case-insensitive upcase are untouched) and the UIC path (derived from SYSUAF, a completely separate reader) is not reached by this edit at all.";;
         require_fail) cat <<'EOF'
 oracle: DCL prints -2147483644
 EOF
@@ -5688,13 +5717,13 @@ EOF
 
     sysuaf-uic-writeback-decimal)
         case "$_f" in
-        facility)     echo "SYSUAF.DAT's UIC WRITE-BACK -- sysuaf_format_record()'s octal (%o) formatting of the UIC_GROUP/UIC_MEMBER columns (src/libvms/rtl/sysuaf.c, vms-e60). The WRITER half, the complement of sysuaf-uic-radix-decimal (which mutates the READER): a record's UIC round-trips only if the writer emits the same base the reader parses.";;
+        facility)     echo "SYSUAF.DAT's UIC WRITE-BACK -- sysuaf_view_to_raw()'s pack of the UIC_GROUP/UIC_MEMBER view fields into the binary \$UAFDEF uaf\$l_uic longword (src/libvms/rtl/sysuaf.c, vms-e60/vms-d92). The WRITER half: a record's UIC round-trips only if the writer packs the same group/member the reader unpacked.";;
         targets)      echo "libvms/rtl/sysuaf.c";;
         suites_red)   echo "test_syssvc_setuai";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "sysuaf_format_record() formats the two UIC fields with %o (octal, from the same SYSUAF_UIC_RADIX the parse uses). The mutation flips both %o to %u, so a rewritten record whose UIC digits differ between octal and decimal is written in DECIMAL. \$SETUAI's scenario 4 (test_syssvc_setuai) rewrites USER1, whose shipped 200|202 parses to struct 128|130 (decimal): with %o the writer emits '200'|'202' (unchanged), with %u it emits '128'|'130'. The suite reads the rewritten row's FIELD TEXT back with row_field() and asserts it still reads 200 / 202 -- so the %u write reddens exactly those two assertions. MEASURED (vms-f57): strtoul(\"200\",8)=128, strtoul(\"202\",8)=130; snprintf %o of 128/130 = '200'/'202', %u = '128'/'130'. This is DISTINCT from sysuaf-uic-radix-decimal: that entry mutates the READER radix (8->10) so the same round-trip corrupts through the read side (read decimal 200, write %o -> '310'); this one holds the reader octal and proves the WRITER's %o is itself load-bearing. No other qemu suite writes a record via sysuaf_format_record() and then reads a UIC field back (test_syssvc_authorize's session only EXITs; scenario 4 is the sole UIC write-back readback in the suite set), so the mutation reddens nothing outside test_syssvc_setuai.";;
+        why)          echo "RE-ANCHORED (vms-d92 flipped SYSUAF to the binary \$UAFDEF; the ASCII sysuaf_format_record() %o UIC formatting this defect used to flip to %u was DELETED with the ASCII writer). It now guards the equivalent binary-path invariant: sysuaf_view_to_raw() must pack the account's own uic_group/uic_member back into uaf\$l_uic as ((group<<16)|member). \$SETUAI folds its text edits into the binary record through sysuaf_view_to_raw() before the ACP write-back (src/libvms/syssvc/sys_uai.c), so scenario 4's rewrite of USER1 rides it. The mutation SWAPS the two fields (packs ((member<<16)|group)), so USER1's struct 128|130 (which the shipped SYSUAF carries as octal 200|202) is written back with group and member exchanged -- the read-back then reports group 202 / member 200, reddening the suite's two field-text assertions (\"still reads 200\" / \"still reads 202\") exactly. Only \$SETUAI's UIC write-back reaches sysuaf_view_to_raw() and reads a UIC field back afterward, so the mutation reddens nothing outside test_syssvc_setuai. NOTE (teeth caveat, for CI/run_facility_negctl.sh): test_syssvc_setuai reads SYSUAF via the /vms passthrough while \$SETUAI now writes the binary record over the ACP -- if that passthrough-vs-ACP convergence is not what the suite fixture exercises, this control's end-to-end bite must be confirmed in CI (see vms-5f0 report).";;
         require_fail) cat <<'EOF'
 4: the rewritten UIC GROUP field still reads 200 (octal, vms-e60)
 4: the rewritten UIC MEMBER field still reads 202 (octal, vms-e60)
@@ -6775,11 +6804,17 @@ apply_edit() {
         sed -i '/^    e->scope_key = scope_key;$/,/^    e->name_length/ s|^    e->num_equiv = a->num_equiv;$|    e->num_equiv = 1; /* NEGCTL lnm-searchlist-equiv-truncated */|' "$_file";;
 
     rightslist-general-hex-as-decimal)
-        # UNIQUE TEXT: this is the only strtoul(..., 16) call in the file --
-        # parse_value()'s %Xnnnnnnnn branch. The UIC branch a few lines below
-        # uses base 8 twice and is untouched. Idempotent: the edit removes
-        # the literal `16)` this pattern matches.
-        sed -i 's|strtoul(s + 2, \&end, 16);|strtoul(s + 2, \&end, 10); /* NEGCTL rightslist-general-hex-as-decimal */|' "$_file";;
+        # RE-ANCHORED (vms-f15a): the ASCII parse_value() %Xnnnnnnnn branch this
+        # used to mutate was DELETED with the ASCII rights reader when RIGHTSLIST
+        # flipped to the binary $RDBDEF. UNIQUE TEXT: the sole
+        # `*value = rdb_ident_value(&rec);` egress of rightslist_live_asctoid_rf()
+        # in rightslist_live.c -- where the executive $ASCTOID hands back the
+        # binary $RDBDEF identifier value after a NAME-key hit. Masking off bit 31
+        # turns every GENERAL identifier (all 0x8000000n) into a wrong value
+        # (0x80000004 -> 4) while the record is still FOUND. Idempotent: after the
+        # edit the `(&rec);` this pattern matches is gone (now
+        # `(&rec) & 0x7FFFFFFFu;`), so a second apply is a no-op.
+        sed -i 's|\*value = rdb_ident_value(&rec);|*value = rdb_ident_value(\&rec) \& 0x7FFFFFFFu; /* NEGCTL rightslist-general-hex-as-decimal */|' "$_file";;
 
     sysuaf-uic-radix-decimal)
         # UNIQUE TEXT: the sole #define. Both strtoul() call sites in
@@ -6789,13 +6824,16 @@ apply_edit() {
         sed -i 's|^#define SYSUAF_UIC_RADIX     8$|#define SYSUAF_UIC_RADIX     10  /* NEGCTL sysuaf-uic-radix-decimal */|' "$_file";;
 
     sysuaf-uic-writeback-decimal)
-        # Flip the WRITER's octal UIC formatting to decimal. UNIQUE TEXT: the
-        # two sysuaf_format_record() snprintf format strings are the only
-        # `%o|%o` in the file (the with-LGICMD and without-LGICMD variants).
-        # Idempotent: the edit removes the `%o|%o` each pattern matches, so a
-        # second apply finds nothing.
-        sed -i 's@"%s|%s|%o|%o|%s|%s|%s|%s"@"%s|%s|%u|%u|%s|%s|%s|%s" /* NEGCTL sysuaf-uic-writeback-decimal */@' "$_file"
-        sed -i 's@"%s|%s|%o|%o|%s|%s|%s"@"%s|%s|%u|%u|%s|%s|%s" /* NEGCTL sysuaf-uic-writeback-decimal */@' "$_file";;
+        # RE-ANCHORED (vms-d92): the ASCII sysuaf_format_record() %o UIC writer
+        # this used to flip to %u was DELETED with the ASCII writer when SYSUAF
+        # flipped to the binary $UAFDEF. UNIQUE TEXT: the sole UIC pack in
+        # sysuaf_view_to_raw() -- `((rec->uic_group & 0xffffu) << 16) |
+        # (rec->uic_member & 0xffffu))` occurs once in the file. Swapping the two
+        # fields writes the account's UIC back with group and member exchanged,
+        # so USER1's 200|202 read-back reports 202|200. Idempotent: after the edit
+        # the group-first pattern is gone (member is now the high half), so a
+        # second apply matches nothing -- BROKEN FIXTURE, as selftest requires.
+        sed -i 's@((rec->uic_group & 0xffffu) << 16) | (rec->uic_member & 0xffffu));@((rec->uic_member \& 0xffffu) << 16) | (rec->uic_group \& 0xffffu)); /* NEGCTL sysuaf-uic-writeback-decimal */@' "$_file";;
 
     bg-recv-length-zeroed)
         # RANGE-ANCHORED to vms_ioctl_bg_recv's own body: the 8-space
@@ -6891,6 +6929,15 @@ apply_edit() {
         # re-$OPEN. A second apply finds no `+ 1u;` left in the range and is the
         # no-op the idempotency selftest requires.
         sed -i '/^static ssize_t rms_io_write_acp/,/^}$/ s|        a.vbn    = (uint32_t)(f->cursor / RMS_IO_BLK) + 1u;|        a.vbn    = (uint32_t)(f->cursor / RMS_IO_BLK) + 2u; /* NEGCTL rms-put-wrong-vbn */|' "$_file";;
+
+    p3-index-child-pointer-offbyone)
+        # UNIQUE TEXT: `p3_le16(bkt + off);` is the index-descent child-pointer
+        # decode in p3_descend() -- the only bare `p3_le16(bkt + off)` (all other
+        # sites carry a `+ P3_...` field offset). Reading `bkt + off + 1` mis-aligns
+        # the 2-byte child VBN, so the descent follows a garbage pointer and keyed
+        # reads miss. After substitution no `p3_le16(bkt + off);` is left (now
+        # `p3_le16(bkt + off + 1);`) -- the no-op the idempotency selftest requires.
+        sed -i 's|uint32_t child = p3_le16(bkt + off);|uint32_t child = p3_le16(bkt + off + 1); /* NEGCTL p3-index-child-pointer-offbyone */|' "$_file";;
 
     dcl-acp-search-fid-fabricated)
         # ANCHORED to the single match-FID record in rms_impl_search:

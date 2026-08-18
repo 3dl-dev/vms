@@ -392,9 +392,10 @@ int main(void)
            ctx->alloc_next - alloc_after_create);
 
     /* ---- read every record back BY KEY over IO$_READVBLK ---- */
-    /* negctl: rms-put-wrong-vbn -- this suite rides rms_io.c's write substrate
-     * (rms_io_write -> IO$_WRITEVBLK), so a $PUT that lands one VBN too high
-     * leaves the keyed read-back unable to find the record. */
+    /* A corrupted index descent (wrong child pointer) sends the keyed read to
+     * the wrong data bucket, so the byte-exact read-back below cannot resolve
+     * the record it just wrote across the split. */
+    /* negctl: p3-index-child-pointer-offbyone */
     check(read_all_by_key(ctx),
           "every record reads back BY KEY over the ACP, byte-exact, across splits");
 

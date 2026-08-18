@@ -183,6 +183,7 @@ static uint32_t rms_posix_open(struct FAB *fab);
 static uint32_t rms_posix_create(struct FAB *fab);
 static uint32_t rms_posix_erase(struct FAB *fab);
 static void rms_posix_close(struct FAB *fab, int deleting, uint32_t *close_sts);
+static int rms_resolve_version(const char *path, char *out, size_t outlen);
 /* rms_resolve_spec (filespec + default merge) is defined further down; the ACP
  * lifecycle helpers below use it to apply fab$l_dna defaults. */
 static int rms_resolve_spec(const char *spec, const char *default_spec,
@@ -531,6 +532,25 @@ static int rms_acp_absent(void)
 #endif /* __linux__ ACP lifecycle helpers */
 
 /*
+ * rms_executive_absent - PUBLIC executive-presence probe (vms-5f0), the single
+ * source DCL's host-defer shares with RMS's own $OPEN/$SEARCH defers. Returns 1
+ * when /dev/vms / the Files-11 ACP is unreachable (host ctest, plain-container
+ * self-host/link gates) -- DCL file commands then run their LEGACY resolver, the
+ * same fall-back RMS (rms_acp_absent) and IMGACT (imgsrc_open) already take.
+ * Returns 0 when the executive is present, so DCL stays ACP-only (Rule 9/INV-6).
+ * On the netbsd-vax cross there is no ACP yet (vms-d5d): report absent so DCL
+ * keeps its POSIX legacy path, matching RMS's own #else branches.
+ */
+int rms_executive_absent(void)
+{
+#if defined(__linux__)
+    return rms_acp_absent();
+#else
+    return 1;
+#endif
+}
+
+/*
  * rms_open_named_handle / rms_close_named_handle (vms-5f0) -- see rms_io.h.
  * RAW handle open for the binary indexed engines: ACP window when the executive
  * is present, POSIX-wrap of the resolved on-volume path when it is absent. The
@@ -682,6 +702,32 @@ static uint32_t rms_posix_file_attr(const char *vmsspec, struct rms_fileattr *ou
     if (!$VMS_STATUS_SUCCESS(vmsfs_to_linux_path(vmsspec, linux_path,
                                                  sizeof(linux_path))))
         return RMS$_SYN;
+
+    /* Resolve the VMS version against what is on disk (vms-5f0). The /vms
+     * passthrough stores each version as a literal "name.type;N" file, so a
+     * version-less spec (e.g. RUN's HELLO.EXE probe) maps via vmsfs_to_linux_path
+     * to a bare "name.type" that does NOT exist -- the real file is
+     * "name.type;1". Without this, RUN of a freshly LINKed image failed
+     * %DCL-E-IVIMAGE even though the image was right there under its ";1" name
+     * (BUILD.COM S3.2). Only as a FALLBACK when the exact path is absent, and
+     * never for a "name.dir" directory probe (whose own suffix-strip retry runs
+     * below): find the highest existing "name.type;N" and stat that instead.
+     * rms_resolve_version() honours an explicit ";N" and otherwise picks the
+     * highest. */
+    if (stat(linux_path, &sbuf) != 0) {
+        size_t ln = strlen(linux_path);
+        int is_dirfile = (ln > 4 && (strcmp(linux_path + ln - 4, ".dir") == 0 ||
+                                     strcmp(linux_path + ln - 4, ".DIR") == 0));
+        if (!is_dirfile) {
+            char vresolved[1024];
+            if (rms_resolve_version(linux_path, vresolved, sizeof(vresolved)) == 0 &&
+                stat(vresolved, &sbuf) == 0) {
+                strncpy(linux_path, vresolved, sizeof(linux_path) - 1);
+                linux_path[sizeof(linux_path) - 1] = '\0';
+            }
+        }
+    }
+
     if (stat(linux_path, &sbuf) != 0) {
         /*
          * A VMS directory "DEV:[p]C.DIR" translates to the FILENAME
@@ -954,6 +1000,30 @@ static int rms_resolve_version(const char *path, char *out, size_t outlen)
         strncpy(base, path, sizeof(base) - 1);
         base[sizeof(base) - 1] = '\0';
     }
+
+    /* Honor an EXPLICIT positive version ";N" (vms-5f0). The caller asked for a
+     * specific version -- e.g. TYPE FOO.TXT;1 -- so it must NOT be overridden
+     * with the highest existing version below. Only a bare name, ";", or ";0"
+     * means "highest". Strictly additive: fires only when a positive ";N" is
+     * present AND that exact on-disk file exists (the /vms passthrough stores
+     * each version as a literal "name;N" file); otherwise the highest-version
+     * resolution runs unchanged. */
+    {
+        const char *semi = strrchr(base, ';');
+        if (semi && semi[1]) {
+            char *endp = NULL;
+            long ev = strtol(semi + 1, &endp, 10);
+            if (endp && *endp == '\0' && ev >= 1) {
+                struct stat est;
+                if (stat(path, &est) == 0) {
+                    strncpy(out, path, outlen - 1);
+                    out[outlen - 1] = '\0';
+                    return 0;
+                }
+            }
+        }
+    }
+
     /* Strip existing version to get name.ext */
     char noversion[256];
     rms_strip_version(base, noversion, sizeof(noversion));

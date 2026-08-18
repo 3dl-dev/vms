@@ -96,6 +96,13 @@ struct rms_fileattr {
 };
 uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out);
 
+/* rms_executive_absent (OVMX, vms-5f0) - 1 when /dev/vms / the Files-11 ACP is
+ * unreachable (host ctest, plain-container gates, netbsd-vax cross), 0 when the
+ * executive is present. The single source DCL's host-defer shares with RMS's own
+ * $OPEN/$SEARCH defers so DCL runs its legacy resolver ONLY when RMS also would
+ * (Rule 9 / INV-6: executive present => no legacy /vms fall-back). */
+int rms_executive_absent(void);
+
 /* Positioning and I/O control */
 uint32_t sys$rewind(void *rab, void (*err)(void *), void (*suc)(void *));     /* Rewind to beginning of file */
 uint32_t sys$flush(void *rab, void (*err)(void *), void (*suc)(void *));      /* Flush buffers to disk */

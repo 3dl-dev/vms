@@ -416,6 +416,41 @@ static int dir_collect(const char *linux_dir, const char *pattern,
 }
 
 /*
+ * dir_collect_host - vms-5f0 executive-absent DIRECTORY defer. When /dev/vms /
+ * the Files-11 ACP is unreachable (host ctest, plain-container self-host/link
+ * gates -- rms_executive_absent()), DCL cannot list through the ACP, so it
+ * defers to the SAME legacy resolver RMS ($OPEN/$SEARCH) and IMGACT already fall
+ * back to: dcl_resolve_path() (the proven translator for logicals, the volume
+ * root "[000000]" and on-disk case) + the opendir()-based dir_collect() above,
+ * which synthesizes "NAME.DIR;1" for subdirectories and ";1" versions exactly as
+ * the pre-flip DIRECTORY did. `dirspec` names the directory (VMS "DEV:[DIR]" or
+ * default); `filepat` is the VMS file pattern to match, or NULL to list the
+ * whole directory (files AND subdirectories). This runs ONLY when the executive
+ * is absent; with /dev/vms present DIRECTORY stays on dir_collect_acp (INV-6).
+ */
+static int dir_collect_host(struct dcl_context *ctx, const char *dirspec,
+                            const char *filepat, char **excl_pats,
+                            int excl_count, struct dir_entry **out_entries,
+                            int *out_count)
+{
+    char linux_dir[1024];
+    if (dcl_resolve_path(ctx, (dirspec && dirspec[0]) ? dirspec : ctx->default_dir,
+                         linux_dir, sizeof(linux_dir)) != 0)
+        return SS$_NOSUCHFILE;
+
+    size_t dl = strlen(linux_dir);
+    if (dl > 0 && linux_dir[dl - 1] != '/' && dl < sizeof(linux_dir) - 1) {
+        linux_dir[dl] = '/';
+        linux_dir[dl + 1] = '\0';
+    }
+
+    /* An empty or version-only pattern lists the whole directory. */
+    const char *pat = (filepat && filepat[0]) ? filepat : NULL;
+    return dir_collect(linux_dir, pat, excl_pats, excl_count,
+                       out_entries, out_count);
+}
+
+/*
  * dir_collect_acp - vms-481: collect one directory's matching entries through
  * the Files-11 ODS-2 ACP (sys$parse + sys$search wildcard directory context)
  * instead of opendir()/readdir()/stat() on a /vms passthrough. Each entry
@@ -823,6 +858,57 @@ static void dir_gather_acp(struct dcl_context *ctx, const char *dirspec,
 }
 
 /*
+ * dir_gather_host - vms-5f0 executive-absent counterpart to dir_gather_acp: the
+ * ellipsis "..." subtree walk when /dev/vms is unreachable. dir_gather_acp finds
+ * subdirectories by searching "*.DIR;*" through the ACP, but the /vms passthrough
+ * stores a subdirectory as a real POSIX directory (no "NAME.DIR" file), so that
+ * search returns nothing on host. Walk the real directory with opendir()/stat()
+ * instead -- the same on-disk depth-first traversal the pre-flip DIRECTORY used
+ * -- composing each child's VMS spec via dir_spec_child(). Runs ONLY when the
+ * executive is absent; with /dev/vms present the ACP walk is authoritative.
+ */
+static void dir_gather_host(struct dcl_context *ctx, const char *dirspec,
+                            char ***list, int *count, int *cap, int depth)
+{
+    if (depth > 32) return;   /* guard against a pathological / cyclic tree */
+
+    if (*count >= *cap) {
+        int nc = *cap ? *cap * 2 : 16;
+        char **tmp = realloc(*list, (size_t)nc * sizeof(char *));
+        if (!tmp) return;
+        *list = tmp; *cap = nc;
+    }
+    (*list)[(*count)++] = strdup(dirspec);
+
+    char linux_dir[1024];
+    if (dcl_resolve_path(ctx, dirspec, linux_dir, sizeof(linux_dir)) != 0)
+        return;
+    DIR *d = opendir(linux_dir);
+    if (!d) return;
+
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+        char full[2048];
+        snprintf(full, sizeof(full), "%s/%s", linux_dir, de->d_name);
+        struct stat st;
+        if (stat(full, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+
+        char sub[256];
+        size_t i = 0;
+        for (; de->d_name[i] && i < sizeof(sub) - 1; i++)
+            sub[i] = (char)toupper((unsigned char)de->d_name[i]);
+        sub[i] = '\0';
+        if (sub[0] == '\0' || strcasecmp(sub, "000000") == 0) continue;
+
+        char child[1024];
+        if (dir_spec_child(dirspec, sub, child, sizeof(child)) == 0)
+            dir_gather_host(ctx, child, list, count, cap, depth + 1);
+    }
+    closedir(d);
+}
+
+/*
  * dir_deellipsize - Rewrite a VMS directory spec that contains the "..."
  * ellipsis wildcard into a plain, resolvable directory spec naming the START
  * of the tree (the ellipsis and everything from it is dropped), and report
@@ -1049,8 +1135,28 @@ int cmd_directory(struct dcl_command *cmd)
         /* ---------------- Single-directory listing ---------------- */
         struct dir_entry *entries = NULL;
         int entry_count = 0;
-        int cst = dir_collect_acp(ctx, vms_pattern, excl_pats, excl_count,
+        int cst;
+        if (rms_executive_absent()) {
+            /* Executive absent (host ctest / self-host container): defer to the
+             * legacy opendir resolver (vms-5f0). A spec that names only a
+             * directory ("DEV:[DIR]", "[SUB]", empty=default) lists the WHOLE
+             * directory -- files AND "NAME.DIR;1" subdirectories -- so pass a
+             * NULL file pattern; an explicit file pattern is matched as given. */
+            int dir_target = (!use_spec || !use_spec[0]);
+            if (use_spec && use_spec[0]) {
+                size_t L = strlen(use_spec);
+                char lc = use_spec[L - 1];
+                dir_target = (lc == ']' || lc == '>' || lc == ':');
+            }
+            cst = dir_collect_host(ctx,
+                                   vms_base[0] ? vms_base : NULL,
+                                   dir_target ? NULL : vms_filepat,
+                                   excl_pats, excl_count,
+                                   &entries, &entry_count);
+        } else {
+            cst = dir_collect_acp(ctx, vms_pattern, excl_pats, excl_count,
                                   &entries, &entry_count);
+        }
         if (cst == SS$_NOSUCHFILE) {
             dcl_error("RMS", 2, "DNF", "directory not found - %s", vms_pattern);
             return SS$_NOSUCHFILE;
@@ -1133,7 +1239,11 @@ int cmd_directory(struct dcl_command *cmd)
 
     char **dirs = NULL;
     int ndirs = 0, dcap = 0;
-    dir_gather_acp(ctx, ell_base, &dirs, &ndirs, &dcap, 0);
+    int exec_absent = rms_executive_absent();   /* vms-5f0 host defer */
+    if (exec_absent)
+        dir_gather_host(ctx, ell_base, &dirs, &ndirs, &dcap, 0);
+    else
+        dir_gather_acp(ctx, ell_base, &dirs, &ndirs, &dcap, 0);
 
     long grand_used = 0, grand_alloc = 0, grand_files = 0;
     int  grand_dirs = 0;
@@ -1143,7 +1253,12 @@ int cmd_directory(struct dcl_command *cmd)
         int entry_count = 0;
         char dpat[1200];
         snprintf(dpat, sizeof(dpat), "%s%s", dirs[di], vms_filepat);
-        int cst = dir_collect_acp(ctx, dpat, excl_pats, excl_count,
+        int cst;
+        if (exec_absent)
+            cst = dir_collect_host(ctx, dirs[di], vms_filepat, excl_pats,
+                                   excl_count, &entries, &entry_count);
+        else
+            cst = dir_collect_acp(ctx, dpat, excl_pats, excl_count,
                                   &entries, &entry_count);
         if (cst != SS$_NORMAL) { free(entries); continue; }
         if (entry_count == 0) { free(entries); continue; }
@@ -1217,6 +1332,39 @@ int cmd_type(struct dcl_command *cmd)
     uint32_t rst = 0;
     struct dcl_rms_reader *r = dcl_rms_read_open(ctx, cmd->params[0], &rst);
     if (!r) {
+        /* -------- Executive-absent TYPE defer (vms-5f0) --------
+         * RMS could not open it. When the executive is absent that includes the
+         * case of a DEFINEd logical resolving OUTSIDE the SYSDISK root (the
+         * mkdtemp-volume test convention), which RMS's $OPEN boundary refuses
+         * even though the file is right there. Read it the legacy way --
+         * dcl_resolve_path() (honours the logical and an explicit ";N") +
+         * fopen()/fgets(), exactly as the pre-flip TYPE did. RMS stays the
+         * primary path so a genuine record-formatted /vms file is still decoded
+         * by $GET; this is a fall-back for the file RMS structurally cannot
+         * reach on host, never a silent bypass when /dev/vms is present (INV-6). */
+        if (rms_executive_absent()) {
+            char linux_path[1024];
+            dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
+            FILE *fp = fopen(linux_path, "r");
+            if (fp) {
+                int paged = dcl_has_qualifier(cmd, "PAGE");
+                int line_count = 0, page_size = 24;
+                char line[4096];
+                while (fgets(line, sizeof(line), fp)) {
+                    fputs(line, stdout);
+                    line_count++;
+                    if (paged && line_count >= page_size) {
+                        printf("Press RETURN to continue...");
+                        fflush(stdout);
+                        char buf[64];
+                        if (!fgets(buf, sizeof(buf), stdin)) break;
+                        line_count = 0;
+                    }
+                }
+                fclose(fp);
+                return SS$_NORMAL;
+            }
+        }
         dcl_error("RMS", 2, "FNF",
                   "file not found - %s", cmd->params[0]);
         return SS$_NOSUCHFILE;
@@ -1533,6 +1681,34 @@ static int copy_one_rms(struct dcl_context *ctx,
 }
 
 /*
+ * copy_one_host - vms-5f0 executive-absent byte copy between two RESOLVED Linux
+ * paths. The COPY host defer (see cmd_copy) resolves source and destination via
+ * dcl_resolve_path() -- the same legacy resolver DELETE/RENAME use, which honours
+ * a DEFINEd logical to any directory (the test convention of a mkdtemp volume) --
+ * and copies the bytes directly, never re-parsing a VMS spec through RMS (whose
+ * SYSDISK-root boundary would reject an out-of-/vms logical target). Runs ONLY
+ * when the executive is absent; with /dev/vms present COPY goes through the ACP.
+ */
+static int copy_one_host(const char *src_full, const char *dst_full)
+{
+    FILE *in = fopen(src_full, "rb");
+    if (!in) return SS$_NOSUCHFILE;
+    FILE *out = fopen(dst_full, "wb");
+    if (!out) { fclose(in); return SS$_FILACCERR; }
+
+    char buf[65536];
+    size_t n;
+    int rc = SS$_NORMAL;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) { rc = SS$_ABORT; break; }
+    }
+    if (ferror(in)) rc = SS$_ABORT;
+    fclose(in);
+    if (fclose(out) != 0 && rc == SS$_NORMAL) rc = SS$_ABORT;
+    return rc;
+}
+
+/*
  * resolve_out_version - Decide the destination version number for a COPY/RENAME
  * output file, and whether the write must be refused as a collision.
  *
@@ -1602,6 +1778,140 @@ int cmd_copy(struct dcl_command *cmd)
     int new_version = dcl_has_qualifier(cmd, "NEW_VERSION");
 
     (void)new_version;   /* RMS $CREATE mints a new highest version by default */
+
+    /* -------- Executive-absent COPY defer (vms-5f0) --------
+     * With no /dev/vms, COPY cannot route through the ACP; and the RMS $OPEN/
+     * $CREATE path enforces the SYSDISK-root boundary, which rejects a DEFINEd
+     * logical that resolves outside /vms (the test convention of a mkdtemp
+     * volume). DELETE and RENAME already avoid this by resolving through
+     * dcl_resolve_path() + fm_collect() and operating on the on-disk files
+     * directly; COPY mirrors them here -- same source enumeration, the shared
+     * resolve_out_version() version defaulting, and a direct byte copy. With
+     * /dev/vms present the ACP path below runs unchanged (INV-6). */
+    if (rms_executive_absent()) {
+        char src_dir[1024], src_pat[512], src_vspec[64];
+        int  src_hasver;
+        split_file_spec(ctx, cmd->params[0], src_dir, sizeof(src_dir),
+                        src_pat, sizeof(src_pat),
+                        src_vspec, sizeof(src_vspec), &src_hasver);
+
+        /* Destination: an existing directory keeps each source name/type
+         * (fields "*"); otherwise parse the destination name.type;ver fields. */
+        char hdst_dir[1024];
+        char hdname_pat[256] = "*", hdtype_pat[256] = "*", hdst_vspec[64] = "";
+        int  hdst_hasver = 0;
+
+        char hdst_resolved[1024];
+        dcl_resolve_path(ctx, cmd->params[1], hdst_resolved, sizeof(hdst_resolved));
+        struct stat hdst_st;
+        int hdst_is_dir = (stat(hdst_resolved, &hdst_st) == 0 &&
+                           S_ISDIR(hdst_st.st_mode));
+        if (hdst_is_dir) {
+            size_t dl = strlen(hdst_resolved);
+            strncpy(hdst_dir, hdst_resolved, sizeof(hdst_dir) - 1);
+            hdst_dir[sizeof(hdst_dir) - 1] = '\0';
+            if (dl && hdst_dir[dl - 1] != '/' && dl < sizeof(hdst_dir) - 1) {
+                hdst_dir[dl] = '/';
+                hdst_dir[dl + 1] = '\0';
+            }
+        } else {
+            char dnamepat[256];
+            split_file_spec(ctx, cmd->params[1], hdst_dir, sizeof(hdst_dir),
+                            dnamepat, sizeof(dnamepat),
+                            hdst_vspec, sizeof(hdst_vspec), &hdst_hasver);
+            split_name_type(dnamepat, hdname_pat, sizeof(hdname_pat),
+                            hdtype_pat, sizeof(hdtype_pat));
+        }
+
+        struct file_match *m = NULL;
+        int count = 0;
+        int st = fm_collect(src_dir, src_pat, &m, &count);
+        if (st != SS$_NORMAL) {
+            free(m);
+            dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
+            return SS$_NOSUCHFILE;
+        }
+
+        int copied = 0, matched = 0;
+        for (int i = 0; i < count; i++) {
+            if (!version_selected(m, i, count, src_hasver, src_vspec)) continue;
+            matched++;
+
+            char in_name[256], in_type[256];
+            split_name_type(m[i].base, in_name, sizeof(in_name),
+                            in_type, sizeof(in_type));
+            char out_name[256], out_type[256];
+            map_out_field(hdname_pat, in_name, out_name, sizeof(out_name));
+            map_out_field(hdtype_pat, in_type, out_type, sizeof(out_type));
+
+            int out_ver = 0;
+            if (!resolve_out_version(hdst_dir, out_name, out_type,
+                                     hdst_hasver, hdst_vspec, new_version,
+                                     &out_ver)) {
+                dcl_error("RMS", 2, "FEX",
+                          "file already exists, not superseded - %s.%s;%d",
+                          out_name, out_type, out_ver);
+                continue;
+            }
+
+            char dfile[600];
+            if (out_ver > 0) {
+                if (out_type[0])
+                    snprintf(dfile, sizeof(dfile), "%s.%s;%d",
+                             out_name, out_type, out_ver);
+                else
+                    snprintf(dfile, sizeof(dfile), "%s;%d", out_name, out_ver);
+            } else if (out_type[0]) {
+                snprintf(dfile, sizeof(dfile), "%s.%s", out_name, out_type);
+            } else {
+                snprintf(dfile, sizeof(dfile), "%s", out_name);
+            }
+
+            char src_full[2600], dst_full[2600];
+            snprintf(src_full, sizeof(src_full), "%s%s", src_dir, m[i].dname);
+            snprintf(dst_full, sizeof(dst_full), "%s%s", hdst_dir, dfile);
+
+            if (do_confirm) {
+                char vsrc[256], vdst[256];
+                dcl_format_filespec(src_full, vsrc, sizeof(vsrc));
+                dcl_format_filespec(dst_full, vdst, sizeof(vdst));
+                printf("COPY %s to %s ? [N]: ", vsrc, vdst);
+                fflush(stdout);
+                char resp[64];
+                if (!fgets(resp, sizeof(resp), stdin)) break;
+                if (toupper((unsigned char)resp[0]) != 'Y') continue;
+            }
+
+            int cst = copy_one_host(src_full, dst_full);
+            if (cst == SS$_NOSUCHFILE) {
+                dcl_error("RMS", 2, "FNF", "file not found - %s", src_full);
+                continue;
+            }
+            if (cst != SS$_NORMAL) {
+                dcl_error("RMS", 2, "WER", "write error - %s", dst_full);
+                continue;
+            }
+
+            copied++;
+            if (do_log) {
+                char vsrc[256], vdst[256];
+                dcl_format_filespec(src_full, vsrc, sizeof(vsrc));
+                dcl_format_filespec(dst_full, vdst, sizeof(vdst));
+                dcl_error("COPY", 1, "COPIED", "%s copied to %s", vsrc, vdst);
+            }
+        }
+        free(m);
+
+        if (matched == 0) {
+            dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
+            return SS$_NOSUCHFILE;
+        }
+        if (copied == 0)
+            return SS$_ABORT;
+        if (copied > 1)
+            dcl_error("COPY", 1, "NEWFILES", "%d files created", copied);
+        return SS$_NORMAL;
+    }
 
     /*
      * vms-481: COPY reaches files through RMS/$QIO-ACP. The source is enumerated

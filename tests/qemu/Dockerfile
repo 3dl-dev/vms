@@ -458,6 +458,7 @@ COPY tests/qemu/mkimage_ods2_search.c /src/tests/qemu/
 RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_search \
         /src/tests/qemu/mkimage_ods2_search.c \
         /src/vmsfs/ods2/ods2_reader.c /src/vmsfs/ods2/ods2_writer.c \
+        /src/vmsfs/ods2/ods2_edit.c \
         /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
     /src/tests/qemu/mkimage_ods2_search /ods2_search.img 1
 
@@ -476,6 +477,7 @@ COPY tests/qemu/mkimage_ods2_sysvol.c /src/tests/qemu/
 RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_sysvol \
         /src/tests/qemu/mkimage_ods2_sysvol.c \
         /src/vmsfs/ods2/ods2_reader.c /src/vmsfs/ods2/ods2_writer.c \
+        /src/vmsfs/ods2/ods2_edit.c \
         /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
     /src/tests/qemu/mkimage_ods2_sysvol /ods2_sysvol.img 2 \
         /src/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT \
@@ -494,6 +496,7 @@ RUN gcc -O2 -Wall -I/src/vmsfs/include -I/src/tests/qemu \
         -o /src/tests/qemu/mkimage_ods2_imgact \
         /src/tests/qemu/mkimage_ods2_imgact.c \
         /src/vmsfs/ods2/ods2_reader.c /src/vmsfs/ods2/ods2_writer.c \
+        /src/vmsfs/ods2/ods2_edit.c \
         /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
     /src/tests/qemu/mkimage_ods2_imgact /ods2_imgact.img 1
 # Locate the kernel image (may already exist as symlink)

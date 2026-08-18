@@ -412,24 +412,75 @@ static uint32_t rms_posix_search(void *fab_ptr)
         }
 
         char linux_path[1024];
-        /* vmsfs_to_linux_path returns a VMS status code (odd == success), NOT
-         * 0-on-success -- the old `< 0` check never fired (see the project's
-         * vmsfs_to_linux_path gotcha). */
-        if (!(vmsfs_to_linux_path(expanded, linux_path, sizeof(linux_path)) & 1u)) {
-            strncpy(linux_path, expanded, sizeof(linux_path) - 1);
-            linux_path[sizeof(linux_path) - 1] = '\0';
+        int split_done = 0;
+        /* The file part after the directory terminator ']' (empty if none). */
+        const char *filepart = strchr(expanded, ']');
+        filepart = filepart ? filepart + 1 : "";
+        int file_wild = (strchr(filepart, '*') || strchr(filepart, '%'));
+
+        /* vms-5f0 executive-absent WILDCARD defer: for a wildcard file part,
+         * translate the DIRECTORY component ALONE, then glob the file part
+         * separately. vmsfs_to_linux_path case-folds "DEV:[DIR]" and
+         * "DEV:[DIR]NAME.TYP" against the real on-disk directory, but does NOT
+         * case-fold the directory when the spec carries a WILDCARD file part
+         * ("DEV:[DIR]*.*;*" -> "/vms/DIR/*.*", directory left upper-cased).
+         * Passing the whole wildcard spec would then opendir an upper-cased
+         * "/vms/DIR" that ENOENTs against a lower-case POSIX dir. A CONCRETE
+         * (non-wildcard) spec is left to the whole-spec translate below, which
+         * case-folds the whole path (directory AND name) and correctly resolves
+         * rooted "[000000]" logicals. The pre-flip DCL DIRECTORY path
+         * (dcl_resolve_path) listed the real dir either way; reproduce that so
+         * the defer lists the SAME files. (Only the executive-absent POSIX
+         * backend runs this; the /dev/vms-present path is rms_acp_search,
+         * untouched -- INV-6.) */
+        if (file_wild && ctx->vms_prefix[0] &&
+            (vmsfs_to_linux_path(ctx->vms_prefix, linux_path,
+                                 sizeof(linux_path)) & 1u)) {
+            size_t dl = strlen(linux_path);
+            while (dl > 1 && linux_path[dl - 1] == '/') linux_path[--dl] = '\0';
+            if (dl >= sizeof(ctx->directory)) dl = sizeof(ctx->directory) - 1;
+            memcpy(ctx->directory, linux_path, dl);
+            ctx->directory[dl] = '\0';
+            /* File pattern = the text after the directory terminator ']', with
+             * the ";version" dropped (the /vms passthrough stores plain names,
+             * no version field -- the classic path dropped it via
+             * vmsfs_to_linux_path). vms_to_glob only maps '%'->'?', so strip the
+             * version here or a trailing ";*" would never fnmatch a bare name. */
+            const char *fp = strchr(expanded, ']');
+            fp = fp ? fp + 1 : expanded;
+            char filepat[256];
+            size_t fi = 0;
+            for (; fp[fi] && fp[fi] != ';' && fi < sizeof(filepat) - 1; fi++)
+                filepat[fi] = fp[fi];
+            filepat[fi] = '\0';
+            if (filepat[0] == '\0')
+                strncpy(filepat, "*.*", sizeof(filepat) - 1);
+            vms_to_glob(filepat, ctx->pattern, sizeof(ctx->pattern));
+            split_done = 1;
         }
 
-        const char *last_slash = strrchr(linux_path, '/');
-        if (last_slash) {
-            size_t dlen = (size_t)(last_slash - linux_path);
-            if (dlen >= sizeof(ctx->directory)) dlen = sizeof(ctx->directory) - 1;
-            memcpy(ctx->directory, linux_path, dlen);
-            ctx->directory[dlen] = '\0';
-            vms_to_glob(last_slash + 1, ctx->pattern, sizeof(ctx->pattern));
-        } else {
-            strcpy(ctx->directory, ".");
-            vms_to_glob(linux_path, ctx->pattern, sizeof(ctx->pattern));
+        if (!split_done) {
+            /* No "DEV:[DIR]" prefix (device-only or bare spec): translate the
+             * whole spec and split on the last slash, as before. vmsfs_to_linux_path
+             * returns a VMS status code (odd == success), NOT 0-on-success -- the
+             * old `< 0` check never fired (the project's vmsfs_to_linux_path
+             * gotcha). */
+            if (!(vmsfs_to_linux_path(expanded, linux_path,
+                                      sizeof(linux_path)) & 1u)) {
+                strncpy(linux_path, expanded, sizeof(linux_path) - 1);
+                linux_path[sizeof(linux_path) - 1] = '\0';
+            }
+            const char *last_slash = strrchr(linux_path, '/');
+            if (last_slash) {
+                size_t dlen = (size_t)(last_slash - linux_path);
+                if (dlen >= sizeof(ctx->directory)) dlen = sizeof(ctx->directory) - 1;
+                memcpy(ctx->directory, linux_path, dlen);
+                ctx->directory[dlen] = '\0';
+                vms_to_glob(last_slash + 1, ctx->pattern, sizeof(ctx->pattern));
+            } else {
+                strcpy(ctx->directory, ".");
+                vms_to_glob(linux_path, ctx->pattern, sizeof(ctx->pattern));
+            }
         }
 
         ctx->dir = opendir(ctx->directory);

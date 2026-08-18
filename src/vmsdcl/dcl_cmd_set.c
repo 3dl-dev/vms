@@ -105,6 +105,21 @@ static uint64_t enforced_privs_held(void)
  */
 static int set_default_dir_exists(struct dcl_context *ctx, const char *dirspec)
 {
+    /* Executive-absent defer (vms-5f0): with no /dev/vms (host ctest / self-host
+     * container) the ".DIR-file" ACP model below cannot see a directory that
+     * lives as a real POSIX directory on the /vms passthrough. Verify it the
+     * legacy way -- dcl_resolve_path() + stat() for S_ISDIR -- exactly as the
+     * pre-flip SET DEFAULT did. Only runs when RMS itself would defer (INV-6). */
+    if (rms_executive_absent()) {
+        char linux_path[1024];
+        if (dcl_resolve_path(ctx, dirspec, linux_path, sizeof(linux_path)) != 0)
+            return 1;   /* unresolvable -> accept, as VMS defers resolution */
+        size_t n = strlen(linux_path);
+        while (n > 1 && linux_path[n - 1] == '/') linux_path[--n] = '\0';
+        struct stat st;
+        return (stat(linux_path, &st) == 0 && S_ISDIR(st.st_mode)) ? 1 : 0;
+    }
+
     char eff[1024];
     if (dcl_rms_effective_spec(ctx, dirspec, eff, sizeof(eff)) != 0)
         return 1;

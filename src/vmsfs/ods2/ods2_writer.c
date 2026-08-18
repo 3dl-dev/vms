@@ -2621,10 +2621,12 @@ static ods2_status_t wvol_dir_remove(ods2_wvolume_t *wvol, ods2_fid_t dir_fid,
                                      const char *name, uint16_t version,
                                      int *removed)
 {
-    uint32_t dir_fidnum, lbns[ODS2_WDIR_MAX_BLOCKS];
+    uint32_t dir_fidnum;
+    uint32_t *lbns = NULL;      /* heaped: ODS2_WDIR_MAX_BLOCKS entries -- keep
+                                 * the kernel frame under 2048 (rd vms-5f0) */
     unsigned nlbn = 0, e, k, out_nblk = 0, i, namecount;
     struct wdir_extents ex;
-    uint8_t hdr_copy[ODS2_BLOCK_SIZE];
+    uint8_t *hdr_copy = NULL;   /* heaped: one ODS2_BLOCK_SIZE header block */
     ods2_fh2_t parsed;
     uint8_t *inbuf = NULL, *outbuf = NULL, *flat = NULL;
     size_t flatcap;
@@ -2641,23 +2643,35 @@ static ods2_status_t wvol_dir_remove(ods2_wvolume_t *wvol, ods2_fid_t dir_fid,
     if (dir_fidnum < 1 || dir_fidnum > wvol->maxfiles)
         return ODS2_ERR_ARGS;
 
+    hdr_copy = (uint8_t *)ods2_kalloc(ODS2_BLOCK_SIZE);
+    lbns     = (uint32_t *)ods2_kalloc((size_t)ODS2_WDIR_MAX_BLOCKS *
+                                       sizeof(uint32_t));
+    if (!hdr_copy || !lbns) {
+        st = ODS2_ERR_NOSPACE;      /* honest failure -- never a silent fake */
+        goto done;
+    }
+
     memcpy(hdr_copy, wblk(wvol, wvol->hdr_base_lbn + (dir_fidnum - 1)),
            ODS2_BLOCK_SIZE);
-    st = ods2_fh2_parse(hdr_copy, sizeof(hdr_copy), &parsed);
+    st = ods2_fh2_parse(hdr_copy, ODS2_BLOCK_SIZE, &parsed);
     if (st != ODS2_OK)
-        return st;
+        goto done;
 
     ex.n = 0;
     ex.overflow = 0;
     st = ods2_fh2_map_walk(hdr_copy, wdir_extent_collect, &ex, NULL);
     if (st != ODS2_OK)
-        return st;
-    if (ex.n == 0 || ex.overflow)
-        return ODS2_ERR_NOSPACE;
+        goto done;
+    if (ex.n == 0 || ex.overflow) {
+        st = ODS2_ERR_NOSPACE;
+        goto done;
+    }
     for (e = 0; e < ex.n; e++)
         for (k = 0; k < ex.ext[e].count; k++) {
-            if (nlbn >= ODS2_WDIR_MAX_BLOCKS)
-                return ODS2_ERR_NOSPACE;
+            if (nlbn >= ODS2_WDIR_MAX_BLOCKS) {
+                st = ODS2_ERR_NOSPACE;
+                goto done;
+            }
             lbns[nlbn++] = ex.ext[e].lbn + k;
         }
 
@@ -2685,6 +2699,8 @@ static ods2_status_t wvol_dir_remove(ods2_wvolume_t *wvol, ods2_fid_t dir_fid,
 
     st = wvol_commit(wvol, ODS2_OK);
 done:
+    if (hdr_copy) ods2_kfree(hdr_copy);
+    if (lbns)     ods2_kfree(lbns);
     if (inbuf)  ods2_kfree(inbuf);
     if (outbuf) ods2_kfree(outbuf);
     if (flat)   ods2_kfree(flat);
@@ -2698,7 +2714,9 @@ ods2_status_t ods2_wvolume_rename(ods2_wvolume_t *wvol,
                                   uint16_t newver, ods2_fid_t file_fid)
 {
     uint32_t fidnum, src_num, dst_num;
-    uint8_t hdr_copy[ODS2_BLOCK_SIZE];
+    uint8_t *hdr_copy = NULL;   /* heaped header blocks -- keep the kernel frame
+                                 * under 2048 (rd vms-5f0) */
+    uint8_t *dhdr = NULL;
     ods2_fh2_t parsed;
     ods2_fid_t dst_backlink;
     int cross_dir, removed = 0;
@@ -2715,29 +2733,43 @@ ods2_status_t ods2_wvolume_rename(ods2_wvolume_t *wvol,
         return ODS2_ERR_ARGS;
     cross_dir = (src_num != dst_num);
 
+    hdr_copy = (uint8_t *)ods2_kalloc(ODS2_BLOCK_SIZE);
+    if (!hdr_copy) {
+        st = ODS2_ERR_NOSPACE;      /* honest failure -- never a silent fake */
+        goto done;
+    }
+
     /* The header at the file's FID slot must self-report this FID -- never
      * rename a stale/garbage block. */
     memcpy(hdr_copy, wblk(wvol, wvol->hdr_base_lbn + (fidnum - 1)),
            ODS2_BLOCK_SIZE);
-    st = ods2_fh2_parse(hdr_copy, sizeof(hdr_copy), &parsed);
+    st = ods2_fh2_parse(hdr_copy, ODS2_BLOCK_SIZE, &parsed);
     if (st != ODS2_OK)
-        return st;
-    if (ods2_fid_number(&parsed.fh2_fid) != fidnum)
-        return ODS2_ERR_NOTFOUND;
+        goto done;
+    if (ods2_fid_number(&parsed.fh2_fid) != fidnum) {
+        st = ODS2_ERR_NOTFOUND;
+        goto done;
+    }
 
     /* Resolve the destination directory's true FID (for a cross-dir backlink)
      * from its own header, so the moved file's fh2_backlink is byte-correct. */
     memset(&dst_backlink, 0, sizeof(dst_backlink));
     if (cross_dir) {
-        uint8_t dhdr[ODS2_BLOCK_SIZE];
         ods2_fh2_t dparsed;
+        dhdr = (uint8_t *)ods2_kalloc(ODS2_BLOCK_SIZE);
+        if (!dhdr) {
+            st = ODS2_ERR_NOSPACE;
+            goto done;
+        }
         memcpy(dhdr, wblk(wvol, wvol->hdr_base_lbn + (dst_num - 1)),
                ODS2_BLOCK_SIZE);
-        st = ods2_fh2_parse(dhdr, sizeof(dhdr), &dparsed);
+        st = ods2_fh2_parse(dhdr, ODS2_BLOCK_SIZE, &dparsed);
         if (st != ODS2_OK)
-            return st;
-        if (!(dparsed.fh2_filechar & ODS2_FH2_M_DIRECTORY))
-            return ODS2_ERR_ARGS;       /* destination is not a directory */
+            goto done;
+        if (!(dparsed.fh2_filechar & ODS2_FH2_M_DIRECTORY)) {
+            st = ODS2_ERR_ARGS;         /* destination is not a directory */
+            goto done;
+        }
         dst_backlink = dparsed.fh2_fid;
     }
 
@@ -2745,19 +2777,25 @@ ods2_status_t ods2_wvolume_rename(ods2_wvolume_t *wvol,
      * then remove the OLD one -- the crash-safe order the XQP uses. */
     st = ods2_wvolume_dir_insert(wvol, dst_dir, newname, newver, file_fid);
     if (st != ODS2_OK)
-        return st;
+        goto done;
     st = wvol_dir_remove(wvol, src_dir, oldname, oldver, &removed);
     if (st != ODS2_OK)
-        return st;
-    if (!removed)
-        return ODS2_ERR_NOTFOUND;       /* old {name,version} was not present */
+        goto done;
+    if (!removed) {
+        st = ODS2_ERR_NOTFOUND;         /* old {name,version} was not present */
+        goto done;
+    }
 
     /* Rewrite the file header's ident name (+ backlink on a cross-dir move);
      * the FID, allocation map and RECATTR/EOF are untouched. */
     h = wblk(wvol, wvol->hdr_base_lbn + (fidnum - 1));
     st = ods2_fh2_rename(h, newname, newver, cross_dir ? &dst_backlink : NULL);
     if (st != ODS2_OK)
-        return st;
+        goto done;
     ods2_fh2_reseal(h);
-    return wvol_commit(wvol, ODS2_OK);
+    st = wvol_commit(wvol, ODS2_OK);
+done:
+    if (hdr_copy) ods2_kfree(hdr_copy);
+    if (dhdr)     ods2_kfree(dhdr);
+    return st;
 }

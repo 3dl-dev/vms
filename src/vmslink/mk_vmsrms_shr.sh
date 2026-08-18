@@ -101,7 +101,13 @@ echo "mk_vmsrms_shr: --use $DECC_SHR $VMS_SHR $FS_SHR $SYS_SHR"
 
 # The translation units of the vmsrms library (== src/vmsrms/CMakeLists.txt).
 # vms-bc7 added rms_io.c (the ACP block-I/O substrate) -- keep in lockstep.
-LIST="rms_core rms_io rms_seq rms_rel rms_idx rms_record rms_parse rms_search rms_util"
+# vms-d92 SYSUAF atomic flip: rms_prolog3 (the Prolog-3 indexed engine rms_idx
+# already calls), sysuaf_rms + sysuaf_live (the binary $UAFDEF reader/writer +
+# runtime entry points LOGINOUT/DCL/AUTHORIZE reach through the weak seam) and
+# rightslist_rms must be in LIBVMSRMS$SHR, or the native-link LOGINOUT cannot
+# resolve ovmx_sysuaf_* and login fails. (rms_prolog3/sysuaf_rms/rightslist_rms
+# were already CMake sources but had drifted out of this LIST.)
+LIST="rms_core rms_io rms_seq rms_rel rms_idx rms_prolog3 sysuaf_rms sysuaf_live rightslist_rms rms_record rms_parse rms_search rms_util"
 
 OBJS=""
 for c in $LIST; do

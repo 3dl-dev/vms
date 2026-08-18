@@ -273,14 +273,15 @@ void sysuaf_view_to_raw(sysuaf_record_t *rec)
 static uint16_t fresh_salt(void)
 {
     /* The salt is stored with the record and reused for verification, so any
-     * value is functionally correct; VMS randomizes it per account. */
-    static int seeded = 0;
-    if (!seeded) {
-        unsigned s = (unsigned)time(NULL) ^ ((unsigned)getpid() << 16);
-        srand(s);
-        seeded = 1;
-    }
-    return (uint16_t)(rand() & 0xffff);
+     * value is functionally correct; VMS randomizes it per account. A private
+     * LCG mixed with time()+getpid() (both already DECC$SHR universals -- NO
+     * rand()/srand(), which the native-link C-RTL vector does not export)
+     * varies the salt per call without a new cross-shareable dependency. */
+    static uint32_t ctr = 0;
+    uint32_t t = (uint32_t)time(NULL) ^ ((uint32_t)getpid() << 16);
+    ctr = ctr * 1103515245u + 12345u;        /* Numerical-Recipes LCG step */
+    uint32_t x = t ^ ctr ^ (ctr >> 13) ^ (t << 7);
+    return (uint16_t)(x & 0xffffu);
 }
 
 int sysuaf_set_password_salt(sysuaf_record_t *rec, const char *password,

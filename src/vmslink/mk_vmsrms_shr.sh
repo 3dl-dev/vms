@@ -107,7 +107,10 @@ echo "mk_vmsrms_shr: --use $DECC_SHR $VMS_SHR $FS_SHR $SYS_SHR"
 # rightslist_rms must be in LIBVMSRMS$SHR, or the native-link LOGINOUT cannot
 # resolve ovmx_sysuaf_* and login fails. (rms_prolog3/sysuaf_rms/rightslist_rms
 # were already CMake sources but had drifted out of this LIST.)
-LIST="rms_core rms_io rms_seq rms_rel rms_idx rms_prolog3 sysuaf_rms sysuaf_live rightslist_rms rms_record rms_parse rms_search rms_util"
+# vms-f15a RIGHTSLIST atomic flip: rightslist_live (the $ASCTOID/$IDTOASC
+# executive-context reads) must be in LIBVMSRMS$SHR too, or the native-link DCL
+# cannot resolve the weak ovmx_rightslist_* and F$IDENTIFIER goes dead.
+LIST="rms_core rms_io rms_seq rms_rel rms_idx rms_prolog3 sysuaf_rms sysuaf_live rightslist_rms rightslist_live rms_record rms_parse rms_search rms_util"
 
 OBJS=""
 for c in $LIST; do

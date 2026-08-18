@@ -233,6 +233,29 @@ set_tests_properties(vmsrms_rightslist_rms PROPERTIES
     TIMEOUT 30
 )
 
+# vms-f15a: the RIGHTSLIST ATOMIC FLIP proof. Authors a binary $RDBDEF
+# RIGHTSLIST with the seed/runtime engine and resolves identifiers through the
+# LIVE $ASCTOID/$IDTOASC seam (rightslist_live_*_rf, the testable core the
+# runtime executive entry points delegate to): name->value and value->name for
+# every seeded identifier read from the real binary record, case folding, and
+# fail-honest SS$_NOSUCHID on an absent id -- no ASCII, no /vms. The /dev/vms
+# ACP end-to-end (unprivileged resolve out of the WORLD:none rights database
+# over the executive channel) is the qemu e2e gate (test_syssvc_ident).
+add_executable(test_rightslist_live test_rightslist_live.c)
+target_include_directories(test_rightslist_live PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsrms
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_rightslist_live PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_rightslist_live COMMAND test_rightslist_live)
+set_tests_properties(vmsrms_rightslist_live PROPERTIES
+    LABELS "unit;rms;ods2"
+    TIMEOUT 30
+)
+
 # test_sysuaf_live (vms-d92): the SYSUAF ATOMIC FLIP proof. Authors a binary
 # $UAFDEF SYSUAF with the seed/runtime code path (sysuaf_view_to_raw +
 # sysuaf_set_password Purdy hash + sysuaf_put_record) and authenticates SYSTEM/

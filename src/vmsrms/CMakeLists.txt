@@ -58,6 +58,7 @@ add_library(vmsrms ${OVMX_LIB_TYPE}
     sysuaf_rms.c
     sysuaf_live.c
     rightslist_rms.c
+    rightslist_live.c
     rms_record.c
     rms_parse.c
     rms_search.c

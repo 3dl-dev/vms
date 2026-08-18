@@ -129,6 +129,34 @@ set_target_properties(mksysuaf PROPERTIES
     OUTPUT_NAME "mksysuaf"
 )
 
+# mkrightslist - build-host SEED generator (vms-f15a). Writes a binary $RDBDEF
+# RIGHTSLIST.DAT that the distro ships in place of the retired ASCII file.
+# Factory tooling: plain host name, no .EXE, never installed onto the media.
+add_executable(mkrightslist
+    mkrightslist.c
+)
+
+target_include_directories(mkrightslist PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${VMS_PROCESS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/vmsrms   # rightslist_rms.h / rms_io.h
+)
+
+target_compile_definitions(mkrightslist PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+target_compile_options(mkrightslist PRIVATE -Wall -Wextra)
+
+target_link_libraries(mkrightslist PRIVATE vms vmsrms vmsfs vmslnm vmsprocess)
+
+set_target_properties(mkrightslist PROPERTIES
+    OUTPUT_NAME "mkrightslist"
+)
+
 add_executable(vms_mail
     vms_mail.c
     mail_notify.c        # shared maildir/count helpers (vms-417)

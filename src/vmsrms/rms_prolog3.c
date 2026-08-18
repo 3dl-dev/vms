@@ -471,6 +471,82 @@ uint32_t rms_p3_find_by_key(p3_ctx_t *ctx, uint8_t krf,
 }
 
 /*
+ * rms_p3_enum_primary - walk the PRIMARY key's data buckets in key order,
+ * invoking cb() with each live record. Mirrors p3_scan_data_bucket's record
+ * layout (control byte, datalen, data), skipping IRC$V_DELETED / IRC$V_RRV,
+ * and follows the P3_BH_OFF_NEXT_VBN horizontal chain from first_data_vbn.
+ */
+uint32_t rms_p3_enum_primary(p3_ctx_t *ctx, p3_enum_cb cb, void *arg)
+{
+    const p3_keydesc_t *kd;
+    uint8_t *bkt;
+    uint32_t dbs, vbn;
+    int guard;
+
+    if (!ctx || ctx->magic != P3_CTX_MAGIC || !cb)
+        return RMS$_PLG;
+    kd = p3_find_key(ctx, 0);
+    if (!kd)
+        return RMS$_KEY;
+    if (kd->flags & P3_KEYM_ANY_COMPR)
+        return RMS$_PLG;                 /* compression: fail honest (INV-6) */
+    dbs = kd->dbs ? kd->dbs : 1u;
+    if (dbs > P3_MAX_BKT_BLOCKS)
+        return RMS$_PLG;
+
+    bkt = (uint8_t *)malloc((size_t)dbs * P3_BLK);
+    if (!bkt)
+        return RMS$_DME;
+
+    vbn = kd->first_data_vbn;
+    for (guard = 0; guard < (1 << 20) && vbn != 0; guard++) {
+        uint16_t fo, off;
+        uint32_t next_vbn;
+
+        if (p3_read_blocks(ctx->f, vbn, dbs, bkt) != 0) {
+            free(bkt);
+            return RMS$_RER;
+        }
+        if (bkt[P3_BH_OFF_LEVEL] != 0) {
+            free(bkt);
+            return RMS$_PLG;             /* not a data bucket */
+        }
+        fo = p3_le16(bkt + P3_BH_OFF_FREESPACE);
+        if (fo < P3_BKT_HDR_SIZE || fo > dbs * P3_BLK) {
+            free(bkt);
+            return RMS$_PLG;
+        }
+
+        off = P3_BKT_HDR_SIZE;
+        while ((uint16_t)(off + P3_DR_HDR_SIZE) <= fo) {
+            uint8_t  ctrl = bkt[off + P3_DR_OFF_CTRL];
+            uint16_t dlen = p3_le16(bkt + off + P3_DR_OFF_DATALEN);
+            uint16_t rec_next = (uint16_t)(off + P3_DR_HDR_SIZE + dlen);
+            int deleted = (ctrl >> P3_IRCV_DELETED) & 1u;
+            int is_rrv  = (ctrl >> P3_IRCV_RRV) & 1u;
+
+            if (rec_next > fo)
+                break;                    /* malformed / truncated */
+            if (!deleted && !is_rrv && dlen > 0) {
+                if (cb(bkt + off + P3_DR_HDR_SIZE, dlen, arg) != 0) {
+                    free(bkt);
+                    return RMS$_NORMAL;   /* callback asked to stop */
+                }
+            }
+            off = rec_next;
+        }
+
+        next_vbn = p3_le32(bkt + P3_BH_OFF_NEXT_VBN);
+        if (next_vbn == vbn)
+            break;                        /* self-loop guard */
+        vbn = next_vbn;
+    }
+
+    free(bkt);
+    return RMS$_NORMAL;
+}
+
+/*
  * ============================================================================
  * WRITE ENGINE (vms-045) -- $CREATE / $PUT (insert + bucket SPLIT + RRV) /
  * $UPDATE. Authors the genuine Files-11 Prolog-3 index over the ACP window via

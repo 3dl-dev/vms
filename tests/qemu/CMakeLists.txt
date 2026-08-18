@@ -146,6 +146,14 @@ if(TARGET test_syssvc_rms_p3_acp)
         ${CMAKE_SOURCE_DIR}/src/kernel)
 endif()
 
+# test_syssvc_loginout_acp (vms-d92 atomic flip): authors + reads a BINARY
+# $UAFDEF SYSUAF over the ACP through the sysuaf_rms engine, so it needs the
+# engine's private headers (sysuaf_rms.h / rms_io.h) on its include path.
+if(TARGET test_syssvc_loginout_acp)
+    target_include_directories(test_syssvc_loginout_acp PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms)
+endif()
+
 # test_syssvc_imgact_acp (vms-3e8e) drives the EXACT freestanding ACP reader
 # IMGACT.EXE runs (src/imgact/imgact_acp.c) against a real /dev/vms: the generic
 # function above already registered the target off the glob, so augment it with

@@ -531,6 +531,144 @@ static int rms_acp_absent(void)
 #endif /* __linux__ ACP lifecycle helpers */
 
 /*
+ * rms_open_named_handle / rms_close_named_handle (vms-5f0) -- see rms_io.h.
+ * RAW handle open for the binary indexed engines: ACP window when the executive
+ * is present, POSIX-wrap of the resolved on-volume path when it is absent. The
+ * standard FAB/RAB $OPEN cannot serve this because its host defer routes an
+ * indexed org to the legacy .rms_idx sidecar (rms_impl_open), not the Prolog-3
+ * file; this helper binds the genuine Prolog-3 substrate on BOTH paths.
+ */
+rms_file_t *rms_open_named_handle(const char *vms_spec, int want_write,
+                                  int create, uint32_t *st_out)
+{
+    uint32_t st;
+    if (st_out) *st_out = RMS$_FAB;
+    if (!vms_spec || !*vms_spec)
+        return NULL;
+
+#if defined(__linux__)
+    if (!rms_acp_absent()) {
+        struct FAB fab;
+        struct rms_acp_spec specs[RMS_ACP_MAX_CANDS];
+        rms_file_t *h = NULL;
+        int ncand, i;
+
+        memset(&fab, 0, sizeof(fab));
+        fab.fab$b_bid = FAB$C_BID;
+        fab.fab$l_fna = (char *)vms_spec;
+        fab.fab$b_fns = (uint8_t)strlen(vms_spec);
+        ncand = rms_acp_specs_from_fab(&fab, specs, RMS_ACP_MAX_CANDS);
+        if (ncand < 0) { if (st_out) *st_out = RMS$_SYN; return NULL; }
+
+        if (!create) {
+            st = SS$_NOSUCHFILE;
+            for (i = 0; i < ncand; i++) {
+                st = rms_acp_open_file(&specs[i], want_write, &h);
+                if ($VMS_STATUS_SUCCESS(st))
+                    break;
+            }
+            if (!$VMS_STATUS_SUCCESS(st)) {
+                if (st_out) *st_out = rms_acp_open_status(st);
+                return NULL;
+            }
+            if (st_out) *st_out = RMS$_NORMAL;
+            return h;
+        }
+
+        /* create/supersede: IO$_CREATE(+ACCESS) a fresh versioned data file over
+         * the ACP; the caller (sysuaf_rms_create) authors the Prolog-3 image on
+         * top. (rms_impl_create rejects org==IDX up front, but a plain-data
+         * IO$_CREATE + an on-top Prolog-3 author is exactly how a keyed file is
+         * born on real RMS.) */
+        {
+            struct rms_acp_spec *sp = &specs[0];
+            struct vms_acp_fileop_args fop;
+            uint32_t chan = 0;
+
+            st = vms_kif_acp_assign(sp->devnam, &chan);
+            if (!$VMS_STATUS_SUCCESS(st)) {
+                if (st_out) *st_out = rms_acp_open_status(st);
+                return NULL;
+            }
+            h = calloc(1, sizeof(*h));
+            if (!h) { vms_kif_dassgn(chan); if (st_out) *st_out = RMS$_DME; return NULL; }
+            h->chan = chan; h->assigned = 1; h->fd = -1;
+
+            memset(&fop, 0, sizeof(fop));
+            fop.chan      = chan;
+            fop.func      = VMS_ACP_FOP_CREATE;
+            fop.modifiers = VMS_ACP_M_CREATE | VMS_ACP_M_ACCESS;
+            fop.acctl     = VMS_ACP_ACCTL_WRITE;
+            fop.kind      = ODS2_FK_DATA;
+            st = rms_acp_resolve_did(chan, sp->dirpath, &fop.did_num,
+                                     &fop.did_seq, &fop.did_rvn, &fop.did_nmx);
+            if (!$VMS_STATUS_SUCCESS(st)) {
+                free(h); vms_kif_dassgn(chan);
+                if (st_out) *st_out = RMS$_DNF;
+                return NULL;
+            }
+            fop.version = 0;                    /* highest existing + 1 */
+            strncpy(fop.name, sp->name, VMS_ACP_NAME_SIZE - 1);
+
+            st = vms_kif_acp_fileop(&fop);
+            if (!$VMS_STATUS_SUCCESS(st)) {
+                free(h); vms_kif_dassgn(chan);
+                if (st_out) *st_out = RMS$_CRE;
+                return NULL;
+            }
+            h->accessed = 1; h->writable = 1;
+            h->fid_num = fop.fid_num; h->fid_seq = fop.fid_seq;
+            h->fid_rvn = fop.fid_rvn; h->fid_nmx = fop.fid_nmx;
+            h->eof   = (uint64_t)(fop.new_efblk ? (fop.new_efblk - 1u) : 0) * 512u
+                       + fop.new_ffbyte;
+            h->hiblk = fop.new_hiblk;
+            if (st_out) *st_out = RMS$_CREATED;
+            return h;
+        }
+    }
+#endif /* __linux__ */
+
+    /* POSIX defer (executive absent / non-linux). NOT the runtime path
+     * (Rule 9/INV-6): reached only when /dev/vms is unreachable. */
+    {
+        char linux_path[1024];
+        int flags, fd;
+        rms_file_t *h;
+
+        if (!$VMS_STATUS_SUCCESS(vmsfs_to_linux_path(vms_spec, linux_path,
+                                                     sizeof(linux_path)))) {
+            if (st_out) *st_out = RMS$_SYN;
+            return NULL;
+        }
+        if (create)          flags = O_RDWR | O_CREAT | O_TRUNC;
+        else if (want_write) flags = O_RDWR;
+        else                 flags = O_RDONLY;
+        fd = open(linux_path, flags, 0600);
+        if (fd < 0) {
+            if (st_out) *st_out = (errno == ENOENT) ? RMS$_FNF : RMS$_ACC;
+            return NULL;
+        }
+        h = rms_io_posix_wrap(fd);
+        if (!h) { close(fd); if (st_out) *st_out = RMS$_DME; return NULL; }
+        if (st_out) *st_out = create ? RMS$_CREATED : RMS$_NORMAL;
+        return h;
+    }
+}
+
+void rms_close_named_handle(rms_file_t *h)
+{
+    if (!h)
+        return;
+#if defined(__linux__)
+    if (h->fd < 0) {              /* ACP handle: deaccess + dassgn + free */
+        rms_acp_close_handle(h);
+        return;
+    }
+#endif
+    rms_io_posix_unwrap(h);       /* POSIX handle: close(fd) + free */
+}
+
+/*
  * rms_posix_file_attr - legacy passthrough attribute lookup (vms-5f0): stat()
  * the resolved Linux path. The netbsd-vax cross's sole implementation, and the
  * __linux__ executive-absent defer. No genuine FID; record format is not on

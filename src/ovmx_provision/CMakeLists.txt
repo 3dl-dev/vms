@@ -56,7 +56,10 @@ else()
     )
 endif()
 
-target_link_libraries(ovmx_provision PRIVATE vms vmsfs vmslnm vmsprocess pthread)
+# vms-d92: PROVISION enumerates the binary $UAFDEF SYSUAF through the RMS
+# Prolog-3 engine over the ODS-2 ACP (ovmx_sysuaf_enum, src/vmsrms/
+# sysuaf_live.c), so it links LIBVMSRMS.
+target_link_libraries(ovmx_provision PRIVATE vms vmsrms vmsfs vmslnm vmsprocess pthread)
 
 set_target_properties(ovmx_provision PROPERTIES
     OUTPUT_NAME "PROVISION"

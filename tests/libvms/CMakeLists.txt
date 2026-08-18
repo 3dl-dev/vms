@@ -254,11 +254,11 @@ target_include_directories(test_libvms_priv_render_bounds PRIVATE
 add_test(NAME test_libvms_priv_render_bounds
          COMMAND test_libvms_priv_render_bounds)
 
-# Test 14: vms-08f — every SYSUAF row with an unset password hash refuses
-# EVERY password, derived from the actual shipped SYSUAF.DAT rather than a
-# hand-enumerated account list (see the file's own header comment). Takes
-# the real shipped file as argv[1] so the assertion always runs against
-# what actually boots, not a fixture that can drift from it.
+# Test 14: vms-08f (flipped to binary by vms-d92) — an account with no Purdy
+# password refuses EVERY password; a Purdy-passworded account accepts only the
+# right one. The property is now STRUCTURAL (sysuaf_authenticate keys off
+# UAF$B_ENCRYPT), so the test builds binary $UAFDEF records in memory (no ASCII
+# file, no argv) and proves both sides plus a synthetic extra account.
 add_executable(test_libvms_sysuaf_auth
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_auth.c)
 target_include_directories(test_libvms_sysuaf_auth PRIVATE
@@ -269,9 +269,7 @@ target_link_libraries(test_libvms_sysuaf_auth PRIVATE
     pthread
     m
 )
-add_test(NAME test_libvms_sysuaf_auth
-         COMMAND test_libvms_sysuaf_auth
-         "${CMAKE_SOURCE_DIR}/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT")
+add_test(NAME test_libvms_sysuaf_auth COMMAND test_libvms_sysuaf_auth)
 
 # Tests vms-e60 (SYSUAF.DAT UIC fields are OCTAL) and vms-2f8 (F$IDENTIFIER
 # READS the rights database) MIGRATED to the QEMU kernel-executive harness by
@@ -284,16 +282,12 @@ add_test(NAME test_libvms_sysuaf_auth
 # deletes. So the assertions now run against a real /dev/vms (reading the actual
 # shipped files at SYS$SYSTEM:) and honest-skip 77 without it.
 
-# The SYSUAF record limit, at the boundary (vms-9b7).
-#
-# Guards the defect that let a boot halt with "%OVMX-F-EXECINIT, no SYSTEM
-# record in SYS$SYSTEM:SYSUAF.DAT": five parsers of one format with three
-# different line limits between them, so a row one wrote was a row another
-# silently truncated. Drives real files through the real writer and the real
-# reader at 511/512/513/1022/1023/1024/1025 bytes -- the sizes the deleted
-# implementations disagreed on.
-libvms_add_test(test_libvms_sysuaf_line_limit
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_line_limit.c)
+# test_libvms_sysuaf_line_limit RETIRED by the vms-d92 atomic flip: it guarded
+# the ASCII SYSUAF text line-limit (sysuaf_read_line truncation), a format that
+# no longer exists -- the binary $UAFDEF record is fixed 644 bytes with no text
+# line and no per-parser limit to disagree on. Its property (one reader, one
+# writer, no silent truncation) is now structural: there is a single binary
+# engine (sysuaf_rms / rms_prolog3).
 
 # vms-c8fa — SYSUAF login-flag enforcement. Authenticating the password is not
 # authorizing the login: a DISUSER (disabled) account with the right password
@@ -335,6 +329,7 @@ add_executable(test_libvms_sysuaf_write_veracity
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_write_veracity.c)
 target_include_directories(test_libvms_sysuaf_write_veracity PRIVATE
     ${VMS_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/vmsrms   # sysuaf_live.h (binary seed via write_all)
     ${VMS_FS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
 )

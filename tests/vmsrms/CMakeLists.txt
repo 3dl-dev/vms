@@ -232,3 +232,24 @@ set_tests_properties(vmsrms_rightslist_rms PROPERTIES
     LABELS "unit;rms;ods2"
     TIMEOUT 30
 )
+
+# test_sysuaf_live (vms-d92): the SYSUAF ATOMIC FLIP proof. Authors a binary
+# $UAFDEF SYSUAF with the seed/runtime code path (sysuaf_view_to_raw +
+# sysuaf_set_password Purdy hash + sysuaf_put_record) and authenticates SYSTEM/
+# MANAGER and GUEST/GUEST by reading the real binary record back through the
+# indexed engine + Purdy-verifying -- no ASCII, no SHA-256. Links vms
+# (sysuaf.c view API) transitively through vmsrms.
+add_executable(test_sysuaf_live test_sysuaf_live.c)
+target_include_directories(test_sysuaf_live PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsrms
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_sysuaf_live PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_sysuaf_live COMMAND test_sysuaf_live)
+set_tests_properties(vmsrms_sysuaf_live PROPERTIES
+    LABELS "unit;rms;ods2;sysuaf"
+    TIMEOUT 30
+)

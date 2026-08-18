@@ -4,7 +4,9 @@
  * Implements the OpenVMS AUTHORIZE utility interface for managing
  * the System User Authorization File (SYSUAF) at /etc/ovmx/sysuaf.dat
  *
- * SHA256 is provided by libvms (src/libvms/rtl/sha256.c).
+ * Passwords are the real VMS Purdy hash (UAI$C_PURDY_S), computed and stored
+ * through the binary $UAFDEF engine (sysuaf_set_password / sysuaf_rms). The
+ * ASCII+SHA-256 SYSUAF is retired (vms-d92 atomic flip).
  * Build: part of tools/ CMakeLists.txt (links vms library)
  *
  * Feature-test macros (_POSIX_C_SOURCE/_DEFAULT_SOURCE on Linux, or
@@ -25,8 +27,9 @@
 #include <errno.h>
 #include <stdint.h>
 
-#include "sha256.h"
 #include "sysuaf.h"
+#include "sysuaf_live.h"   /* binary $UAFDEF enum + write_all (vms-d92) */
+#include "rmsdef.h"        /* RMS$_FNF / RMS$_NORMAL */
 #include "str_util.h"
 
 /* ------------------------------------------------------------------ */
@@ -56,7 +59,6 @@
 static sysuaf_record_t g_users[MAX_USERS];
 static int             g_nusers = 0;
 static int             g_dirty  = 0;   /* set when in-memory data modified */
-static int             g_load_errors = 0; /* records refused at load time */
 
 /* str_upcase() and str_trim() replaced by str_str_upcase()/str_trim() from str_util.h */
 
@@ -92,153 +94,59 @@ static int matches_abbrev(const char *input, const char *full, size_t min_len)
 /* SYSUAF file I/O                                                     */
 /* ------------------------------------------------------------------ */
 
-/* Load all users from SYSUAF_PATH into g_users[] */
+/* Enumeration callback: append one binary $UAFDEF record to g_users[]. */
+static int load_cb(const sysuaf_rms_record_t *raw, void *arg)
+{
+    (void)arg;
+    if (g_nusers >= MAX_USERS) {
+        fprintf(stderr, "%%UAF-W-OVERFLOW, too many users (max %d) -- "
+                "remaining accounts ignored\n", MAX_USERS);
+        return 1;   /* stop enumeration */
+    }
+    sysuaf_raw_to_view(raw, &g_users[g_nusers]);
+    g_nusers++;
+    return 0;
+}
+
+/* Load all users from the binary SYSUAF into g_users[] (vms-d92 atomic flip).
+ * Reads the genuine $UAFDEF indexed file through the RMS Prolog-3 engine
+ * (ovmx_sysuaf_enum over the ACP, or the POSIX defer when /dev/vms is absent) --
+ * no ASCII parse, no SHA-256. A not-yet-created file (RMS$_FNF) is non-fatal. */
 static int load_sysuaf(void)
 {
     g_nusers = 0;
 
-    char sysuaf_linux[1024];
-    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux, sizeof(sysuaf_linux));
-    FILE *fp = fopen(sysuaf_linux, "r");
-    if (!fp) {
-        /* Non-fatal if file doesn't exist yet */
-        if (errno == ENOENT)
-            return 0;
-        fprintf(stderr, "%%UAF-E-OPENIN, error opening %s: %s\n",
-                sysuaf_linux, strerror(errno));
+    uint32_t st = ovmx_sysuaf_enum(load_cb, NULL);
+    if (!(st & 1)) {
+        if (st == RMS$_FNF)
+            return 0;   /* file does not exist yet -- start empty */
+        fprintf(stderr, "%%UAF-E-OPENIN, cannot read SYSUAF (0x%08x)\n", st);
         return -1;
     }
-
-    /* ONE READER (vms-9b7): sysuaf_read_line() + sysuaf_parse_line() from
-     * libvms. AUTHORIZE used to carry its own 1024-byte fgets loop and its
-     * own field split, one of five independent implementations of this
-     * format with three different buffer sizes between them. */
-    char line[SYSUAF_LINE_MAX];
-    int lineno = 0;
-    int too_long = 0;
-    while (sysuaf_read_line(fp, line, sizeof(line), &too_long)) {
-        lineno++;
-
-        /* A record that does not fit is REFUSED, not silently shortened.
-         * AUTHORIZE must not load a row it cannot faithfully write back:
-         * saving the truncated form would destroy the operator's data. */
-        if (too_long) {
-            fprintf(stderr, "%%UAF-E-RECTOOLONG, record at line %d exceeds "
-                    "%d bytes -- not loaded\n", lineno, SYSUAF_LINE_MAX - 1);
-            g_load_errors++;
-            continue;
-        }
-
-        if (g_nusers >= MAX_USERS) {
-            fprintf(stderr, "%%UAF-W-OVERFLOW, too many users (max %d), "
-                    "line %d ignored\n", MAX_USERS, lineno);
-            continue;
-        }
-
-        int rc = sysuaf_parse_line(line, &g_users[g_nusers]);
-        if (rc == 0)
-            continue;   /* comment or blank */
-        if (rc < 0) {
-            fprintf(stderr, "%%UAF-W-BADFORMAT, malformed record at line %d\n",
-                    lineno);
-            continue;
-        }
-
-        g_nusers++;
-    }
-
-    fclose(fp);
     return 0;
 }
 
-/* Write all users back to SYSUAF_PATH, with flock() for safety */
+/*
+ * Write all users back to the binary SYSUAF (vms-d92 atomic flip). Authors a
+ * fresh $UAFDEF Prolog-3 indexed file and $PUTs every record through the binary
+ * engine (ovmx_sysuaf_write_all: create-and-supersede over the ACP, or a POSIX
+ * create on the executive-absent defer). No ASCII, no SHA-256, no fopen.
+ *
+ * Each g_users[i].raw was already synced from its view fields when the record
+ * was loaded (sysuaf_raw_to_view) or edited (cmd_add/cmd_modify call
+ * sysuaf_view_to_raw + sysuaf_set_password), so the raw records written here
+ * are authoritative.
+ */
 static int save_sysuaf(void)
 {
-    /*
-     * REFUSE TO SAVE OVER RECORDS WE COULD NOT LOAD. save_sysuaf() rewrites
-     * the WHOLE file from g_users[], so if load_sysuaf() dropped a row --
-     * because it was longer than the record limit and reading its prefix
-     * would have corrupted it -- committing this save would DELETE that
-     * account. Losing an account silently is the same class of defect as
-     * losing the SYSTEM record silently, which is what this item exists to
-     * kill (vms-9b7).
-     */
-    if (g_load_errors) {
-        fprintf(stderr, "%%UAF-E-SAVEABORT, %d record(s) could not be read at "
-                "load time; refusing to rewrite SYSUAF and lose them\n",
-                g_load_errors);
-        return -1;
-    }
+    static sysuaf_rms_record_t recs[MAX_USERS];
+    for (int i = 0; i < g_nusers; i++)
+        recs[i] = g_users[i].raw;
 
-    /* Write to a temp file then rename for atomicity */
-    char sysuaf_linux2[1024];
-    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux2, sizeof(sysuaf_linux2));
-    char tmppath[1024];
-    snprintf(tmppath, sizeof(tmppath), "%s.tmp.%d", sysuaf_linux2, (int)getpid());
-
-    FILE *fp = fopen(tmppath, "w");
-    if (!fp) {
-        fprintf(stderr, "%%UAF-E-OPENOUT, error creating %s: %s\n",
-                tmppath, strerror(errno));
-        return -1;
-    }
-
-    /* Lock the temp file during write */
-    if (flock(fileno(fp), LOCK_EX) != 0) {
-        fprintf(stderr, "%%UAF-W-LOCKFAIL, could not lock file: %s\n",
-                strerror(errno));
-        /* Proceed anyway — best effort */
-    }
-
-    fprintf(fp, "# System User Authorization File\n");
-    fprintf(fp, "# Format: USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|"
-                "DEFAULT_DIR|FLAGS|PRIVILEGES\n");
-    fprintf(fp, "# Password hash is SHA256 hex. Empty = account CANNOT AUTHENTICATE\n");
-    fprintf(fp, "# (no password, right or wrong, is accepted) -- see vms-08f and the\n");
-    fprintf(fp, "# disposition comment on sysuaf_authenticate() in src/libvms/rtl/sysuaf.c.\n");
-
-    /*
-     * ONE WRITER (vms-9b7). The format string lived here AND in
-     * src/libvms/syssvc/sys_uai.c, and the two disagreed on the FLAGS field
-     * ("%s" here, "%u" there). It now lives in exactly one place --
-     * sysuaf_format_record() -- and that function REFUSES a record too long
-     * to be read back, rather than emitting one that a reader will silently
-     * truncate. Refusing is the whole point: a row this process cannot read
-     * back is a row that can leave the system with no SYSTEM record and no
-     * boot (measured, vms-9b7).
-     */
-    int refused = 0;
-    for (int i = 0; i < g_nusers; i++) {
-        const sysuaf_record_t *r = &g_users[i];
-        char row[SYSUAF_LINE_MAX];
-        if (sysuaf_format_record(r, row, sizeof(row)) < 0) {
-            fprintf(stderr, "%%UAF-E-RECTOOLONG, record for %s exceeds the "
-                    "%d-byte SYSUAF record limit -- NOT WRITTEN\n",
-                    r->username, SYSUAF_LINE_MAX - 1);
-            refused++;
-            continue;
-        }
-        fprintf(fp, "%s\n", row);
-    }
-
-    fflush(fp);
-    flock(fileno(fp), LOCK_UN);
-    fclose(fp);
-
-    /* A refused record means the file on disk would not be what the operator
-     * asked for. Abandon the whole save rather than commit a partial one. */
-    if (refused) {
-        fprintf(stderr, "%%UAF-E-SAVEABORT, %d record(s) refused; SYSUAF not "
-                "updated\n", refused);
-        unlink(tmppath);
-        return -1;
-    }
-
-    /* Atomic rename */
-    if (rename(tmppath, sysuaf_linux2) != 0) {
-        fprintf(stderr, "%%UAF-E-RENAMEFAIL, error saving %s: %s\n",
-                sysuaf_linux2, strerror(errno));
-        unlink(tmppath);
+    uint32_t st = ovmx_sysuaf_write_all(recs, (unsigned)g_nusers);
+    if (!(st & 1)) {
+        fprintf(stderr, "%%UAF-E-WRITEERR, unable to write SYSUAF (0x%08x)\n",
+                st);
         return -1;
     }
 
@@ -339,16 +247,6 @@ static const char *find_qualifier(const char *line, const char *qual_name)
     return NULL;  /* Qualifier not present */
 }
 
-/* Hash a password string to SHA256 hex; returns empty string for empty pw */
-static void hash_password(const char *pw, char hex[128])
-{
-    if (!pw || pw[0] == '\0') {
-        hex[0] = '\0';
-        return;
-    }
-    sha256_hex((const uint8_t *)pw, strlen(pw), hex);
-}
-
 /* ------------------------------------------------------------------ */
 /* UAF> Commands                                                       */
 /* ------------------------------------------------------------------ */
@@ -398,10 +296,7 @@ static void cmd_add(const char *args)
 
     /* Parse qualifiers from rest of line */
     const char *val;
-
-    val = find_qualifier(args, "PASSWORD");
-    if (val)
-        hash_password(val, rec.password_hash);
+    const char *pw_arg = find_qualifier(args, "PASSWORD");  /* applied at end */
 
     val = find_qualifier(args, "UIC");
     if (val) {
@@ -446,6 +341,15 @@ static void cmd_add(const char *args)
     if (val)
         strncpy(rec.flags, val, sizeof(rec.flags) - 1);
 
+    /* Sync the view fields into the binary $UAFDEF record, then set the Purdy
+     * password if one was given (view_to_raw sets the username the Purdy hash
+     * folds in; it must run first). An account added without /PASSWORD has no
+     * PURDY_S credential, so it cannot authenticate -- the binary equivalent of
+     * the old empty-hash rule. */
+    sysuaf_view_to_raw(&rec);
+    if (pw_arg && pw_arg[0])
+        sysuaf_set_password(&rec, pw_arg);
+
     /* Append to database */
     g_users[g_nusers++] = rec;
     g_dirty = 1;
@@ -477,10 +381,7 @@ static void cmd_modify(const char *args)
 
     sysuaf_record_t *r = &g_users[idx];
     const char *val;
-
-    val = find_qualifier(args, "PASSWORD");
-    if (val)
-        hash_password(val, r->password_hash);
+    const char *pw_arg = find_qualifier(args, "PASSWORD");  /* applied at end */
 
     val = find_qualifier(args, "FLAGS");
     if (val) {
@@ -527,6 +428,12 @@ static void cmd_modify(const char *args)
             r->uic_member = (uint32_t)m;
         }
     }
+
+    /* Fold the edited view fields into the binary $UAFDEF record (preserving
+     * the existing password area), then apply a new Purdy password if given. */
+    sysuaf_view_to_raw(r);
+    if (pw_arg && pw_arg[0])
+        sysuaf_set_password(r, pw_arg);
 
     g_dirty = 1;
     printf("%%UAF-S-MDFYMSG, user record(s) updated\n");
@@ -646,9 +553,10 @@ static void cmd_show(const char *args)
         printf("  %s\n", r->privileges);
     else
         printf("  (none)\n");
-    printf("Password hash: %s\n",
-           r->password_hash[0] ? r->password_hash
-                                : "(none — account cannot authenticate)");
+    printf("Password:  %s\n",
+           (r->raw.uaf$b_encrypt == UAI$C_PURDY_S)
+               ? "(set, Purdy hashed)"
+               : "(none — account cannot authenticate)");
     printf("\n");
 }
 

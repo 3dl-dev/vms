@@ -38,7 +38,6 @@
 #include "vms_kif.h"
 #include "sysuaf.h"
 #include "uaidef.h"    /* UAI$M_LOCKPWD (vms-c8fa) */
-#include "sha256.h"
 #include "ovmx_accounting.h"
 
 /* Forward declarations for queue subcommands (dcl_cmd_process.c) */
@@ -619,10 +618,10 @@ static int dcl_read_noecho_line(char *buf, size_t bufsz)
  * INV-DCL (docs/design-dcl-fidelity.md sec 3): this used to print
  * "%SET-I-PASSWORD, password change not fully implemented" and return
  * SS$_NORMAL without touching SYSUAF -- a success-toned lie for a no-op.
- * It now verifies the old password against the real SYSUAF hash
- * (sysuaf_authenticate()) and, on match, writes a real new hash back through
- * the ONE shared writer (sysuaf_write_record() -> sysuaf_format_record(),
- * vms-9b7/INV-1) -- the same record format AUTHORIZE and $SETUAI use.
+ * It now verifies the old password against the real SYSUAF record
+ * (sysuaf_authenticate(), binary + Purdy) and, on match, writes a real new
+ * Purdy hash back through the ONE shared binary writer (sysuaf_set_password ->
+ * sysuaf_write_record, vms-d92) -- the same record AUTHORIZE and $SETUAI use.
  *
  * /SECONDARY and /SYSTEM are real VMS features OVMX does not implement
  * (no secondary-password field in sysuaf_record_t; no per-node system-
@@ -784,14 +783,18 @@ static int cmd_set_password(struct dcl_command *cmd)
     }
 #undef OVMX_PWDMINIMUM_DEFAULT
 
-    /* Real hash, real rewrite -- the same SHA256 scheme sysuaf_authenticate()
-     * checks against and the same shared writer AUTHORIZE/$SETUAI use
-     * (sysuaf_write_record() -> sysuaf_format_record(), INV-1: one format,
-     * one writer). */
-    char new_hash[65];
-    sha256_hex((const uint8_t *)new_pw, new_len, new_hash);
-    strncpy(rec.password_hash, new_hash, sizeof(rec.password_hash) - 1);
-    rec.password_hash[sizeof(rec.password_hash) - 1] = '\0';
+    /* Real Purdy hash, real rewrite (vms-d92 atomic flip). sysuaf_set_password
+     * computes the genuine UAI$C_PURDY_S quadword from (new_pw, this account's
+     * username, a fresh salt) into rec.raw's password area; sysuaf_write_record
+     * persists the binary $UAFDEF record in place through the ONE binary writer
+     * AUTHORIZE/$SETUAI use (ovmx_sysuaf_store_user -> $UPDATE over the ACP).
+     * No SHA-256, no ASCII. rec was read by sysuaf_lookup, so every other field
+     * of the record is already present -- only the password changes. */
+    if (sysuaf_set_password(&rec, new_pw) != 0) {
+        dcl_error("UAF", 2, "WRITEFAIL",
+                  "unable to hash new password - password not changed");
+        return SS$_FILACCERR;
+    }
 
     if (sysuaf_write_record(&rec) != 0) {
         dcl_error("UAF", 2, "WRITEFAIL",

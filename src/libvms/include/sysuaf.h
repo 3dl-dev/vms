@@ -1,12 +1,24 @@
 /*
  * sysuaf.h - SYSUAF (System User Authorization File) library
  *
- * Shared interface for looking up users and authenticating passwords
- * against SYS$SYSTEM:SYSUAF.DAT. Used by vms_login, vms_ssh_auth,
- * and vmssshd.
+ * Shared interface for looking up users and authenticating passwords against
+ * SYS$SYSTEM:SYSUAF.DAT. Used by vms_login, vmssshd, MAIL, DCL SET PASSWORD,
+ * $GETUAI/$SETUAI and PROVISION.
  *
- * The library is usable without any VMS runtime being initialized —
- * it is pure file parsing and SHA256 hashing.
+ * ATOMIC FLIP (vms-d92, epic vms-d0c). The runtime SYSUAF is now the GENUINE
+ * binary $UAFDEF RMS Prolog-3 indexed file (sysuaf_rms_record_t below), read
+ * and written through the binary engine (src/vmsrms/sysuaf_rms.c) over the
+ * Files-11 ACP, and passwords are the real VMS Purdy one-way hash
+ * (UAI$C_PURDY_S, src/libvms/rtl/purdy.c). The ASCII pipe-delimited +
+ * SHA-256-hex facade this file used to define -- one text format with five
+ * hand-rolled parsers -- is RETIRED. There is no ASCII SYSUAF and no SHA-256
+ * on any path.
+ *
+ * `sysuaf_record_t` remains the in-memory presentation shape the consumers
+ * read (username / UIC / default directory / flag + privilege NAMES), but it is
+ * now a DERIVED VIEW over the binary record it carries in `raw`: sysuaf_lookup
+ * fills the text fields FROM the $UAFDEF record, and authentication verifies the
+ * typed password against `raw`'s Purdy quadword -- never against a text hash.
  */
 
 #ifndef SYSUAF_H
@@ -17,160 +29,37 @@
 #include <stdio.h>
 #include "ovmx_layout.h"
 #include "rms/xab.h"
+#include "uaidef.h"   /* $UAIDEF: UAI$C_* algorithm codes + UAI$M_* flags */
 
 #define SYSUAF_PATH VMS_SYSUAF_PATH
 
-/* =========================================================================
- * THE SYSUAF.DAT TEXT FORMAT — ONE DEFINITION, ONE READER, ONE WRITER
- * (vms-9b7)
- *
- * WHAT THIS REPLACES, so it is never put back: five independent hand-rolled
- * parsers of one file format, with THREE different line-buffer sizes and TWO
- * different writer format strings.
- *
- *   src/ovmx_init/ovmx_init.c  sysuaf_split()   char line[512]   DELETED
- *   src/ovmx_init/ovmx_init.c  sysuaf_field()   char line[512]   DELETED
- *   src/libvms/rtl/sysuaf.c    sysuaf_scan()    char line[1024]  -> this
- *   src/libvms/syssvc/sys_uai.c parse_uaf_line  512              -> this
- *   tools/vms_authorize.c      load_sysuaf()    1024             -> this
- *
- * MEASURED, on a real QEMU boot of the unfixed tree (three boots, each with
- * a control): a SYSTEM row long enough that its SIXTH '|' falls past byte
- * 511 is read by the 512-byte readers as a record with only five fields.
- * PID 1's establish_system_identity() then reported
- *
- *     %OVMX-F-EXECINIT, no SYSTEM record in SYS$SYSTEM:SYSUAF.DAT
- *
- * and powered the machine off, while the 1024-byte readers accepted the same
- * row without complaint. That is a writer and a reader disagreeing about one
- * file, and the disagreement is fatal by design (Rule 10) -- so the format
- * gets exactly one definition and every accessor is derived from it.
- *
- * SYSUAF_LINE_MAX is the ONE limit. It bounds the writer (an over-length
- * record is REFUSED, loudly, by sysuaf_format_record() -- never silently
- * clipped) and it bounds the reader (an over-length line is REPORTED by
- * sysuaf_read_line() -- never silently truncated into a short record).
- * ========================================================================= */
-
-/* The record separator. Chosen over ':' because VMS device names contain
-   colons and DEFAULT_DIR is a filespec. */
-#define SYSUAF_SEP_CHAR      '|'
-#define SYSUAF_SEP_STR       "|"
-
-/* Field order and count. Rows carrying fewer than SYSUAF_MIN_FIELDS are
-   malformed; FLAGS, PRIVILEGES and LGICMD may be absent on a legacy row.
-   LGICMD (field 8, vms-e48) is a trailing OPTIONAL field: a row that omits it
-   parses exactly as before (empty LGICMD), and the writer omits it when empty,
-   so pre-vms-e48 SYSUAF.DAT rows round-trip byte-identically. */
-#define SYSUAF_FIELD_COUNT   8
-#define SYSUAF_MIN_FIELDS    5
-
-enum {
-    SYSUAF_F_USERNAME   = 0,
-    SYSUAF_F_PWHASH     = 1,
-    SYSUAF_F_UIC_GROUP  = 2,
-    SYSUAF_F_UIC_MEMBER = 3,
-    SYSUAF_F_DEFDIR     = 4,
-    SYSUAF_F_FLAGS      = 5,
-    SYSUAF_F_PRIVILEGES = 6,
-    SYSUAF_F_LGICMD     = 7
-};
+/*
+ * THE UIC FIELDS ARE OCTAL (vms-e60). VMS writes UICs in octal; every /UIC=[g,m]
+ * parse and UIC display in the tree reads this radix so they cannot drift.
+ * (Still consumed by AUTHORIZE's /UIC parse and next-member allocation.)
+ */
+#define SYSUAF_UIC_RADIX     8
 
 /*
  * The login command file run at login when the account's LGICMD field is
  * empty (vms-e48). VSI OpenVMS System Manager's Manual, AUTHORIZE /LGICMD:
  * "If you omit this qualifier, the OpenVMS operating system uses the default,
- * SYS$LOGIN:LOGIN.COM." SYS$LOGIN is the per-user login logical this same
- * item establishes, so the default resolves through it to the user's own
- * home -- one definition, used by LOGINOUT (tools/vms_login.c) and by DCL's
- * login-mode fallback (src/vmsdcl/dcl_main.c).
+ * SYS$LOGIN:LOGIN.COM."
  */
 #define SYSUAF_DEFAULT_LGICMD  "SYS$LOGIN:LOGIN.COM"
-
-/*
- * THE UIC FIELDS ARE OCTAL (vms-e60). Derivation -- from the oracle, not
- * chosen -- is in the block comment on sysuaf_parse_line() in
- * src/libvms/rtl/sysuaf.c. Every read, write, display and /UIC=[g,m] parse
- * in the tree goes through this constant so they cannot drift apart again.
- */
-#define SYSUAF_UIC_RADIX     8
-
-/* The one line limit, shared by the writer's refusal and the reader's
-   truncation report. Includes the terminating newline. */
-#define SYSUAF_LINE_MAX      1024
-
-/* -------------------------------------------------------------------------
- * In-memory (parsed) SYSUAF record.
- *
- * Legacy representation produced by sysuaf_lookup() from the current
- * pipe-delimited text SYSUAF.DAT. Fields are text/string-oriented. This is
- * the interface consumed today by vms_login, vms_ssh_auth, and vmssshd.
- * ------------------------------------------------------------------------- */
-typedef struct {
-    char     username[64];
-    char     password_hash[128];
-    uint32_t uic_group;
-    uint32_t uic_member;
-    char     default_dir[256];
-    char     flags[64];
-    char     privileges[256];
-    char     lgicmd[256];       /* login command file (SYSUAF LGICMD); empty
-                                   means the SYSUAF_DEFAULT_LGICMD default */
-} sysuaf_record_t;
-
-/*
- * Parse one SYSUAF line into a record. 'line' is MODIFIED IN PLACE.
- * Returns  1 if a record was parsed,
- *          0 if the line is a comment or blank (not an error),
- *         -1 if the line is malformed (fewer than SYSUAF_MIN_FIELDS fields).
- */
-int sysuaf_parse_line(char *line, sysuaf_record_t *rec);
-
-/*
- * Render one record as the SYSUAF line that represents it, WITHOUT the
- * trailing newline.
- *
- * Returns the length written on success, or -1 if the record does not fit in
- * SYSUAF_LINE_MAX (counting the newline a writer will append). AN OVER-LENGTH
- * RECORD IS REFUSED, NEVER CLIPPED: a reader that silently truncates is how
- * the SYSTEM record went missing and the boot halted, and clipping here would
- * simply move that same silent data loss one process earlier.
- */
-int sysuaf_format_record(const sysuaf_record_t *rec, char *out, size_t outsz);
-
-/*
- * Read one line, reporting truncation instead of hiding it.
- *
- * Returns 1 when a line was read, 0 at end of file. When the line did not fit
- * in 'bufsz', *too_long is set to 1, the REST OF THE LINE IS CONSUMED (so the
- * caller's next read starts at a real record boundary and never at a
- * fragment), and the caller decides what to do -- which is never "carry on
- * with the prefix".
- */
-int sysuaf_read_line(FILE *fp, char *buf, size_t bufsz, int *too_long);
-
-/* FLAGS is stored in the file as a comma-separated list of UAI flag NAMES
-   (what a system manager types at AUTHORIZE's /FLAGS=), and exposed through
-   $GETUAI/$SETUAI as the UAI$M_* longword. These two functions are the only
-   conversion between the two, so the file format has one answer and the API
-   has one answer and neither invents the other's. An unrecognized name is
-   ignored; an empty string is mask 0 and round-trips back to empty. */
-uint32_t sysuaf_flags_to_mask(const char *flags);
-void     sysuaf_mask_to_flags(uint32_t mask, char *out, size_t outsz);
-
 
 /* =========================================================================
  * THE REAL BINARY $UAFDEF SYSUAF RECORD — vms-f88 / epic vms-d0c
  *
  * Real OpenVMS stores users in SYS$SYSTEM:SYSUAF.DAT as an RMS PROLOG-3
  * INDEXED file of fixed-length BINARY records ($UAFDEF) — NOT a flat text
- * file, and NOT the ASCII+SHA-256 stand-in this record replaces.
- * sysuaf_rms_record_t is that on-disk record; the indexed file that carries
- * it is authored/read through the genuine Files-11 Prolog-3 engine
+ * file. sysuaf_rms_record_t is that on-disk record; the indexed file that
+ * carries it is authored/read through the genuine Files-11 Prolog-3 engine
  * (src/vmsrms/rms_prolog3.{c,h}) over the executive ACP window (or the rms_io
  * POSIX backend when /dev/vms is absent), with primary key = 32-byte USERNAME
  * (key of reference 0) and secondary key = the UIC longword (key 1). The small
- * create/put/get-by-username/get-by-uic API lives in src/vmsrms/sysuaf_rms.h.
+ * create/put/get-by-username/get-by-uic API lives in src/vmsrms/sysuaf_rms.h;
+ * the runtime read/enumerate/store entry points live in src/vmsrms/sysuaf_live.h.
  *
  * ORACLE GROUNDING (docs/oracle/vax73-alpha84-uafdef.md, vms-db8): the record
  * is 644 bytes on BOTH VAX V7.3 and Alpha V8.4 (no architecture divergence),
@@ -180,30 +69,21 @@ void     sysuaf_mask_to_flags(uint32_t mask, char *out, size_t outsz);
  *   [PIN] UAF$T_USERNAME   @0x004  32   primary key, blank-padded, upcased
  *   [PIN] UAF$L_UIC        @0x024   4   (group<<16)|member, LE longword
  *   [PIN] owner identifier @0x02C   8   (key 3)
- *   [PIN] UAF$Q_PWD        @0x154   8   hashed-password quadword
+ *   [PIN] UAF$Q_PWD        @0x154   8   hashed-password quadword (Purdy)
  *   [PIN] UAF$W_SALT       @0x166   2   per-account salt word
- *   [PIN] UAF$B_ENCRYPT    @0x168   1   algorithm (0x03 = UAI$C_PURDY_S)
+ *   [PIN] UAF$B_ENCRYPT    @0x168   1   algorithm byte (UAI$C_PURDY_S)
  *   [PIN] UAF$B_PWD_LENGTH @0x16A   1   minimum password length
  *   [PIN] UAF$Q_PWD2       @0x16C   8   secondary password quadword
  *
  * Where the oracle does NOT publish a field's byte offset (the account string
  * area, the password-change date, the flags/priv/quota region), OVMX defines
- * its own offset and LABELS it [OVMX] per Rule 8 — those are NOT presented as
- * VMS-authentic sub-offsets. The [PIN] offsets above are exact and asserted.
+ * its own offset and LABELS it [OVMX] per Rule 8. The [PIN] offsets are exact.
  *
- * SUBSTRATE-AGNOSTIC ON-DISK ENCODING (vms-5f0 thin-seam): every multi-byte
- * on-disk field is a fixed-width BYTE ARRAY read/written through the
- * p3_le16/le32/le64 accessors — never a native long/size_t/pointer. The whole
- * struct is uint8_t/char members (alignment 1) so it has NO implicit padding
- * and is byte-identical on x86_64/aarch64 LP64 and VAX ILP32. There is no
- * substrate #ifdef. Field-access helpers (UIC, password quadword/salt/encrypt)
- * live in src/vmsrms/sysuaf_rms.h.
- *
- * ⚠ THE PASSWORD IS NOT COMPUTED HERE. This record STORES the password
- * quadword + salt + algorithm byte AS BYTES (the record FIELD only). Computing
- * the Purdy hash from (password, username, salt) is the NEXT rung (vms-631e);
- * the seam is marked on uaf$q_pwd below. Nothing here hashes a password, and
- * nothing stores a SHA-256 (the facade this record replaces).
+ * SUBSTRATE-AGNOSTIC (vms-5f0 thin-seam): every multi-byte on-disk field is a
+ * fixed-width BYTE ARRAY read/written through the p3_le16/le32/le64 accessors
+ * — never a native long/size_t/pointer. The struct is uint8_t/char (alignment
+ * 1) so it has NO implicit padding and is byte-identical on x86_64/aarch64 LP64
+ * and VAX ILP32.
  * ========================================================================= */
 
 #define SYSUAF_USERNAME_LEN    32   /* UAF$T_USERNAME width, primary key [PIN] */
@@ -219,11 +99,21 @@ void     sysuaf_mask_to_flags(uint32_t mask, char *out, size_t outsz);
 #define UAF$K_PWD_LENGTH_OFF 0x16A
 #define UAF$K_PWD2_OFF       0x16C
 
-/* UAF$B_ENCRYPT algorithm byte values (public $UAIDEF). */
-#define UAI$C_AD_II    0
-#define UAI$C_PURDY    1
-#define UAI$C_PURDY_V  2
-#define UAI$C_PURDY_S  3   /* [PIN] the modern default the oracle observed */
+/*
+ * UAF$B_ENCRYPT algorithm byte values come from $UAIDEF (uaidef.h, included
+ * above) so there is ONE definition of UAI$C_PURDY_S across the writer
+ * (sysuaf_rms.c / mksysuaf) and the reader (sysuaf.c authenticate) -- a split
+ * definition would let the two disagree and silently break every login.
+ *
+ * ⚠ SOURCE-OF-TRUTH CONFLICT, FLAGGED per CLAUDE.md Rule 10 (do NOT silently
+ * reconcile): an earlier building-block comment here asserted UAI$C_PURDY_S ==
+ * 0x03 as an oracle [PIN]; the public $UAIDEF (uaidef.h) has UAI$C_PURDY_S == 4
+ * (AD_II 1, PURDY 2, PURDY_V 3, PURDY_S 4). The public $UAIDEF wins (Rule 10
+ * item 1), and it is now the single source. The on-disk algorithm byte OVMX
+ * writes/reads is whatever uaidef.h defines, so writer and reader agree
+ * regardless. The oracle-vs-$UAIDEF encrypt-byte value is a follow-on to
+ * reconcile against a fresh oracle DUMP (rd item to be filed).
+ */
 
 typedef struct {
     /* -- record head -- */
@@ -244,8 +134,7 @@ typedef struct {
     char     uaf$t_defcli[32];    /* @0x114 [OVMX] CLI (e.g. "DCL")            */
     char     uaf$t_clitables[32]; /* @0x134 [OVMX] command tables             */
     /* -- password area (offsets [PIN]) -- */
-    /* Purdy hash filled by vms-631e; this rung stores the quadword AS BYTES.  */
-    uint8_t  uaf$q_pwd[8];        /* @0x154 [PIN] password hash quadword       */
+    uint8_t  uaf$q_pwd[8];        /* @0x154 [PIN] Purdy password hash quadword */
     uint8_t  uaf$q_pwd_date[8];   /* @0x15C [OVMX] password change date        */
     uint8_t  uaf$w_reserved1[2];  /* @0x164 [OVMX] pad to the salt word        */
     uint8_t  uaf$w_salt[2];       /* @0x166 [PIN] per-account salt word        */
@@ -263,9 +152,8 @@ typedef struct {
     uint8_t  uaf$r_quota[132];    /* @0x200 [OVMX] quota region -> 0x284       */
 } sysuaf_rms_record_t;            /* total: 644 bytes ($UAFDEF) */
 
-/* Compile-time layout lock: 644-byte record with NO implicit padding, and
-   every [PIN] field at the exact oracle offset. Adding/reordering a field is a
-   design change (run the vms-d0c cascade) and must keep the [PIN] offsets. */
+/* Compile-time layout lock: 644-byte record, NO implicit padding, every [PIN]
+   field at the exact oracle offset. */
 _Static_assert(sizeof(sysuaf_rms_record_t) == SYSUAF_UAF_RECORD_SIZE,
                "sysuaf_rms_record_t must be exactly 644 bytes ($UAFDEF)");
 _Static_assert(offsetof(sysuaf_rms_record_t, uaf$t_username) == UAF$K_USERNAME_OFF,
@@ -285,86 +173,115 @@ _Static_assert(offsetof(sysuaf_rms_record_t, uaf$b_pwd_length) == UAF$K_PWD_LENG
 _Static_assert(offsetof(sysuaf_rms_record_t, uaf$q_pwd2) == UAF$K_PWD2_OFF,
                "UAF$Q_PWD2 must be at 0x16C (oracle [PIN])");
 
-/* Primary key geometry (key of reference 0): the 32-byte username at [PIN]
-   offset 0x04. UIC secondary key (key of reference 1) is the LE longword at
-   [PIN] offset 0x24. Both are consumed by src/vmsrms/sysuaf_rms.c when it
-   authors the Prolog-3 indexed file (p3_create_params seg0_pos/seg0_siz). */
+/* Primary key = 32-byte username @0x04; secondary key = UIC longword @0x24. */
 #define SYSUAF_KEY_USERNAME_POS  UAF$K_USERNAME_OFF
 #define SYSUAF_KEY_USERNAME_SIZ  SYSUAF_USERNAME_LEN
 #define SYSUAF_KEY_UIC_POS       UAF$K_UIC_OFF
 #define SYSUAF_KEY_UIC_SIZ       4
 
-/* Look up a user in sysuaf.dat. Returns 0 on success, -1 if not found. */
+/* -------------------------------------------------------------------------
+ * In-memory (parsed) SYSUAF record -- a DERIVED VIEW over the binary record.
+ *
+ * sysuaf_lookup() fills the text fields FROM the 644-byte $UAFDEF record it
+ * reads, and keeps that record in `raw` so authentication verifies the typed
+ * password against the real Purdy quadword. There is no password_hash field:
+ * the credential lives in `raw` (uaf$q_pwd / uaf$w_salt / uaf$b_encrypt), not
+ * in a text hash.
+ * ------------------------------------------------------------------------- */
+typedef struct {
+    char     username[64];
+    uint32_t uic_group;
+    uint32_t uic_member;
+    char     default_dir[256];
+    char     flags[64];          /* UAI flag NAMES, from raw.uaf$l_flags       */
+    char     privileges[256];    /* privilege NAMES, from raw.uaf$q_priv       */
+    char     lgicmd[256];        /* login command file; empty => the default   */
+    sysuaf_rms_record_t raw;     /* the on-disk $UAFDEF record (auth material)  */
+} sysuaf_record_t;
+
+/* FLAGS <-> mask: names in the file, a UAI$M_* longword in the API. These two
+   are the only conversion between the two representations. */
+uint32_t sysuaf_flags_to_mask(const char *flags);
+void     sysuaf_mask_to_flags(uint32_t mask, char *out, size_t outsz);
+
+/* Privilege mask -> comma-separated NAME string (inverse of
+   parse_privilege_string / sysuaf_parse_privileges). Used to render the view's
+   `privileges` field from the binary record's uaf$q_priv mask. */
+void     sysuaf_format_privileges(uint64_t mask, char *out, size_t outsz);
+
+/* ---- binary <-> view mapping (atomic flip) ------------------------------- */
+
+/* Fill the text view fields FROM the binary $UAFDEF record `raw` and copy `raw`
+ * into rec->raw. This is how sysuaf_lookup presents a record. */
+void sysuaf_raw_to_view(const sysuaf_rms_record_t *raw, sysuaf_record_t *rec);
+
+/* Sync the text view fields (username/uic/default_dir/flags/privileges/lgicmd)
+ * INTO rec->raw's binary fields, PRESERVING the password area (uaf$q_pwd/salt/
+ * encrypt -- set those with sysuaf_set_password). Used by AUTHORIZE / the seed
+ * to build a record, and by $SETUAI after editing view fields. */
+void sysuaf_view_to_raw(sysuaf_record_t *rec);
+
+/* Compute the genuine Purdy (UAI$C_PURDY_S) hash of `password` for rec's
+ * username and store it, a fresh salt, the algorithm byte and pwd length into
+ * rec->raw's password area. rec->raw.uaf$t_username must be set first
+ * (sysuaf_view_to_raw or sysuaf_record_set_username). Returns 0 on success. */
+int  sysuaf_set_password(sysuaf_record_t *rec, const char *password);
+
+/* As sysuaf_set_password but with an EXPLICIT salt word, for a reproducible
+ * seed (mksysuaf) where a random salt would make the shipped SYSUAF differ
+ * byte-for-byte between builds. Verification uses the stored salt either way. */
+int  sysuaf_set_password_salt(sysuaf_record_t *rec, const char *password,
+                              uint16_t salt);
+
+/* Upcase/blank-pad `username` into rec->raw.uaf$t_username and rec->username. */
+void sysuaf_record_set_username(sysuaf_record_t *rec, const char *username);
+
+/* ---- lookup / authenticate ----------------------------------------------- */
+
+/* Look up a user by name in the binary SYSUAF. Returns 0 on success (rec filled
+   from the $UAFDEF record), -1 if not found or the binary engine is absent from
+   this image (fail-honest -- an image that does not link LIBVMSRMS, or has no
+   /dev/vms, gets -1, never a fabricated record). Case-insensitive. */
 int sysuaf_lookup(const char *username, sysuaf_record_t *rec);
 
-/* Look up the account holding UIC 'uic' ((group << 16) | member).
-   Returns 0 on success, -1 if no account holds it (vms-2f8: the rights
-   database derives UIC identifiers from SYSUAF rather than keeping a second
-   copy of every account's UIC that is free to disagree with this one). */
+/* Look up the account holding UIC 'uic' ((group << 16) | member) by the
+   secondary UIC key. Returns 0 on success, -1 if none holds it / engine absent.*/
 int sysuaf_lookup_by_uic(uint32_t uic, sysuaf_record_t *rec);
 
-/* Authenticate: returns 1 if password matches, 0 if not.
-   An empty/unset hash NEVER authenticates -- returns 0 for every password,
-   including the empty string (vms-08f; see the Rule 10 disposition in
-   sysuaf.c). OpenVMS has no state where an absent password field is a
-   green light; the one documented passwordless state (UAI$M_AUTOLOGIN)
-   is an explicit per-account flag OVMX does not implement, so an unset
-   hash must mean "cannot authenticate", not "no password required". */
+/* Authenticate: 1 if `password` Purdy-verifies against rec->raw's stored
+   quadword, else 0. A record whose UAF$B_ENCRYPT is not UAI$C_PURDY_S (an
+   account with no Purdy password on file) authenticates NOTHING -- every
+   password, right or wrong, is refused (the binary equivalent of the retired
+   "empty hash => cannot authenticate" rule, vms-08f). NO SHA-256. */
 int sysuaf_authenticate(const sysuaf_record_t *rec, const char *password);
 
 /*
- * LOGIN-FLAG ENFORCEMENT (vms-c8fa), separate from the password check above.
- * Authenticating proves the credential; these prove the account may log in
- * and how the session is constrained. Both read the parsed FLAGS field
- * through the one converter (sysuaf_flags_to_mask), never a second parse.
- *
- * sysuaf_interactive_login_permitted: 0 if a DISABLING flag (DISUSER or
- *   DISACNT) forbids login, else 1. A NULL record fails closed (returns 0).
- *   A correct password on a disabled account MUST still be refused.
- * sysuaf_account_captive: 1 if the account is CAPTIVE (confined to its login
- *   command procedure, no escape to the "$" DCL prompt), else 0.
- * See the doc comments in src/libvms/rtl/sysuaf.c for the public-doc
- * (OpenVMS Guide to System Security) grounding of each flag's behavior.
+ * LOGIN-FLAG ENFORCEMENT (vms-c8fa), separate from the password check.
+ * sysuaf_interactive_login_permitted: 0 if a DISABLING flag (DISUSER/DISACNT)
+ *   forbids login, else 1. NULL fails closed.
+ * sysuaf_account_captive: 1 if CAPTIVE, else 0.
+ * Both read the view's FLAGS names through sysuaf_flags_to_mask.
  */
 int sysuaf_interactive_login_permitted(const sysuaf_record_t *rec);
 int sysuaf_account_captive(const sysuaf_record_t *rec);
 
-/* Parse VMS privilege string (e.g. "TMPMBX,NETMBX,OPER") into bitmask */
+/* Parse VMS privilege string (e.g. "TMPMBX,NETMBX,OPER") into bitmask. */
 uint64_t sysuaf_parse_privileges(const char *priv_string);
 
 /*
  * Resolve the login command file for an account (vms-e48): the SYSUAF LGICMD
- * field when it is set, otherwise SYSUAF_DEFAULT_LGICMD. This is the ONE place
- * the "field empty -> documented default" rule is applied, so LOGINOUT
- * (tools/vms_login.c) and any other caller cannot disagree about the default.
- * The result is a VMS filespec (e.g. "DKA100:[SMITH]LOGIN.COM" or
- * "SYS$LOGIN:LOGIN.COM"); the caller translates it through the logical-name /
- * device tables like any other filespec. 'out' is always NUL-terminated.
+ * field when set, otherwise SYSUAF_DEFAULT_LGICMD. 'out' is NUL-terminated.
  */
 void sysuaf_login_command_file(const sysuaf_record_t *rec,
                                char *out, size_t outsz);
 
 /*
- * Rewrite ONE existing row of SYSUAF_PATH in place with the record given
- * (the row matched is the one whose username equals rec->username,
- * case-insensitive). Every OTHER row -- parsed or not -- is copied through
- * VERBATIM, mirroring sys$setuai's targeted rewrite (src/libvms/syssvc/
- * sys_uai.c): a caller updating one account has no business touching, or
- * being defeated by, a row it does not understand.
- *
- * ONE WRITER (vms-9b7): the replaced line comes from sysuaf_format_record(),
- * the SAME function AUTHORIZE (tools/vms_authorize.c) and $SETUAI call --
- * this is a second CALLER of the one writer, never a second format.
- *
- * Returns 0 on success. Returns -1, leaving the file on disk UNCHANGED, if:
- *   - SYSUAF_PATH cannot be opened for read or the temp file cannot be
- *     created,
- *   - an existing row is longer than SYSUAF_LINE_MAX and cannot be safely
- *     carried forward (copying its prefix would corrupt that account,
- *     dropping it would delete it -- the same case sysuaf_read_line()
- *     reports at read time everywhere else in this file),
- *   - rec does not fit in SYSUAF_LINE_MAX (sysuaf_format_record() refuses),
- *   - or rec->username matches no row in the file.
+ * Persist rec into the binary SYSUAF: in-place $UPDATE if the account exists,
+ * else $PUT. Writes rec->raw through the binary engine over the ACP (or the
+ * POSIX defer when /dev/vms is absent). Returns 0 on success, -1 on failure or
+ * when the binary engine is absent from this image (fail-honest). Callers that
+ * edited view fields must call sysuaf_view_to_raw(rec) first; callers that
+ * changed the password use sysuaf_set_password(rec, ...).
  */
 int sysuaf_write_record(const sysuaf_record_t *rec);
 

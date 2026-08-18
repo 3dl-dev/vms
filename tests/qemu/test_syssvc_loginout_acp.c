@@ -48,11 +48,13 @@
 #include "starlet.h"
 #include "descrip.h"
 #include "ssdef.h"
+#include "rmsdef.h"
 #include "vms_kif.h"
 #include "rms/rms.h"
 #include "sysuaf.h"
-#include "sha256.h"
-#include "rms_textfile.h"
+#include "sysuaf_rms.h"    /* binary $UAFDEF engine (vms-d92 atomic flip) */
+#include "rms_io.h"        /* rms_open_named_handle over the ACP           */
+#include "rms_textfile.h"  /* still used for the genuine text log files    */
 
 #define EXIT_SKIP  77
 #define ODS2_UNIT  "DKA0:"
@@ -75,35 +77,6 @@ static int executive_present(void)
     return 1;
 }
 
-/* Create a stream-LF file at `spec` and $PUT each line as one record. Returns
- * 1 on success. Mirrors test_syssvc_rms_acp.c's create discipline. */
-static int create_stmlf_file(const char *spec, const char *const *lines, int n)
-{
-    struct FAB fab = cc$rms_fab;
-    struct RAB rab;
-    fab.fab$l_fna = (char *)spec;
-    fab.fab$b_fns = (uint8_t)strlen(spec);
-    fab.fab$b_org = FAB$C_SEQ;
-    fab.fab$b_rfm = FAB$C_STMLF;
-    fab.fab$b_fac = FAB$M_PUT;
-    if (sys$create(&fab, 0, 0) != RMS$_NORMAL)
-        return 0;
-
-    rab = cc$rms_rab;
-    rab.rab$l_fab = &fab;
-    if (sys$connect(&rab, 0, 0) != RMS$_NORMAL) { sys$close(&fab, 0, 0); return 0; }
-
-    int ok = 1;
-    for (int i = 0; i < n; i++) {
-        rab.rab$l_rbf = (char *)lines[i];
-        rab.rab$w_rsz = (uint16_t)strlen(lines[i]);
-        if (sys$put(&rab, 0, 0) != RMS$_NORMAL) { ok = 0; break; }
-    }
-    sys$disconnect(&rab, 0, 0);
-    sys$close(&fab, 0, 0);
-    return ok;
-}
-
 static void erase_file(const char *spec)
 {
     struct FAB fab = cc$rms_fab;
@@ -112,11 +85,65 @@ static void erase_file(const char *spec)
     sys$erase(&fab, 0, 0);
 }
 
+/* Author a genuine binary $UAFDEF SYSUAF at `spec` over the ODS-2 ACP (vms-d92
+ * atomic flip): create the indexed file and $PUT the SYSTEM record with a real
+ * Purdy password -- the SAME path the seed (mksysuaf) and AUTHORIZE use. No
+ * ASCII, no SHA-256. Returns 1 on success. */
+static int author_binary_sysuaf(const char *spec)
+{
+    uint32_t st = RMS$_FAB;
+    rms_file_t *h = rms_open_named_handle(spec, 1, 1, &st);
+    if (!h)
+        return 0;
+
+    sysuaf_rms_file_t sf;
+    if (sysuaf_rms_create(h, &sf) != RMS$_CREATED) {
+        rms_close_named_handle(h);
+        return 0;
+    }
+
+    sysuaf_record_t v;
+    memset(&v, 0, sizeof(v));
+    strncpy(v.username, "SYSTEM", sizeof(v.username) - 1);
+    v.uic_group = 1; v.uic_member = 4;                    /* [1,4] */
+    strncpy(v.default_dir, "SYS$SYSROOT:[SYSMGR]", sizeof(v.default_dir) - 1);
+    strncpy(v.privileges, "TMPMBX,NETMBX", sizeof(v.privileges) - 1);
+    sysuaf_view_to_raw(&v);
+    sysuaf_set_password(&v, "SECRET");                    /* real Purdy hash */
+
+    int ok = (sysuaf_put_record(&sf, &v.raw) == RMS$_NORMAL);
+    sysuaf_rms_close(&sf);
+    rms_close_named_handle(h);
+    return ok;
+}
+
+/* Read SYSTEM back from the binary SYSUAF at `spec` over the ACP into *out.
+ * Returns 0 on success, -1 fail-honest (no such file / no such account). */
+static int read_binary_sysuaf_system(const char *spec, sysuaf_record_t *out)
+{
+    uint32_t st = RMS$_FAB;
+    rms_file_t *h = rms_open_named_handle(spec, 0, 0, &st);
+    if (!h)
+        return -1;
+
+    sysuaf_rms_file_t sf;
+    if (!$VMS_STATUS_SUCCESS(sysuaf_rms_open(h, &sf))) {
+        rms_close_named_handle(h);
+        return -1;
+    }
+    sysuaf_rms_record_t raw;
+    uint32_t g = sysuaf_get_by_username(&sf, "SYSTEM", &raw);
+    sysuaf_rms_close(&sf);
+    rms_close_named_handle(h);
+    if (g != RMS$_NORMAL)
+        return -1;
+    sysuaf_raw_to_view(&raw, out);
+    return 0;
+}
+
 int main(void)
 {
     uint32_t st;
-    char pwhash[65];
-    char row[SYSUAF_LINE_MAX];
     sysuaf_record_t rec;
 
     printf("=== test_syssvc_loginout_acp (LOGINOUT authenticates from SYSUAF via "
@@ -147,44 +174,23 @@ int main(void)
      * until that resolution lands (no POSIX fallback, INV-6). */
 #define UAF_SPEC "DKA0:[OVMXDIR]SYSUAF.DAT"
 
-    /* Build a faithful SYSUAF row through the shared writer, so the reader parses
-     * exactly what a real SYSUAF carries (vms-9b7 one-format). */
-    sha256_hex((const uint8_t *)"SECRET", 6, pwhash);
-    memset(&rec, 0, sizeof(rec));
-    strncpy(rec.username, "SYSTEM", sizeof(rec.username) - 1);
-    strncpy(rec.password_hash, pwhash, sizeof(rec.password_hash) - 1);
-    rec.uic_group = 1; rec.uic_member = 4;             /* [1,4], octal */
-    strncpy(rec.default_dir, "SYS$SYSROOT:[SYSMGR]", sizeof(rec.default_dir) - 1);
-    strncpy(rec.privileges, "ALL", sizeof(rec.privileges) - 1);
-    check(sysuaf_format_record(&rec, row, sizeof(row)) > 0, "SYSTEM row formatted");
+    /* Author a genuine BINARY $UAFDEF SYSUAF over the ACP (vms-d92 atomic flip):
+     * the same create+$PUT+Purdy path the seed and AUTHORIZE use -- no ASCII row,
+     * no SHA-256. */
+    check(author_binary_sysuaf(UAF_SPEC),
+          "binary $UAFDEF SYSUAF authored on the ODS-2 volume (Prolog-3 $CREATE/$PUT via ACP)");
 
-    const char *rows[1] = { row };
-    check(create_stmlf_file(UAF_SPEC, rows, 1),
-          "SYSUAF.DAT created on the ODS-2 volume (RMS $CREATE/$PUT via ACP)");
-
-    /* ---- (1) the auth read MECHANISM: exactly sysuaf_scan's body -- RMS $OPEN
-     *          the SYSUAF file, $GET each record through the ACP window, and
-     *          parse+authenticate the SYSTEM row read off the ODS-2 platter. */
+    /* ---- (1) the auth read MECHANISM: RMS-over-ACP opens the binary SYSUAF,
+     *          reads the SYSTEM record by the USERNAME primary key through the
+     *          indexed engine, and Purdy-verifies -- no ASCII, no SHA-256. */
     {
-        rms_textfile_t *tf = rms_textfile_open(UAF_SPEC);
-        int found = -1;
-        if (tf) {
-            char line[SYSUAF_LINE_MAX];
-            int too_long = 0;
-            while (rms_textfile_getline(tf, line, sizeof(line), &too_long)) {
-                if (too_long) continue;
-                sysuaf_record_t r;
-                if (sysuaf_parse_line(line, &r) == 1 &&
-                    strcasecmp(r.username, "SYSTEM") == 0) { rec = r; found = 0; break; }
-            }
-            rms_textfile_close(tf);
-        }
-        check(found == 0, "sysuaf_lookup(SYSTEM) reads the account via RMS-over-ACP");
+        int found = read_binary_sysuaf_system(UAF_SPEC, &rec);
+        check(found == 0, "SYSTEM read via the binary $UAFDEF indexed engine over the ACP");
         if (found == 0) {
             check(rec.uic_group == 1 && rec.uic_member == 4,
-                  "SYSTEM UIC [1,4] read back from the ODS-2 record");
+                  "SYSTEM UIC [1,4] read back from the ODS-2 binary record");
             check(sysuaf_authenticate(&rec, "SECRET") == 1,
-                  "correct password authenticates (SYSUAF read from ODS-2)");
+                  "correct password Purdy-authenticates (SYSUAF read from ODS-2)");
             check(sysuaf_authenticate(&rec, "WRONG") == 0,
                   "wrong password does not authenticate");
         }
@@ -193,27 +199,27 @@ int main(void)
     /* ---- (2) it is the ODS-2 volume: dismount => the read fails honestly ---- */
     vms_kif_acp_dmount(ODS2_UNIT);
     {
-        rms_textfile_t *tf = rms_textfile_open(UAF_SPEC);
-        check(tf == NULL, "with the volume DISMOUNTED, the SYSUAF read fails-honest (no POSIX copy)");
-        if (tf) rms_textfile_close(tf);
+        sysuaf_record_t drec;
+        check(read_binary_sysuaf_system(UAF_SPEC, &drec) != 0,
+              "with the volume DISMOUNTED, the SYSUAF read fails-honest (no POSIX copy)");
     }
     st = vms_kif_acp_mount(ODS2_UNIT);   /* remount for the remaining proofs + cleanup */
     check($VMS_STATUS_SUCCESS(st), "DKA0: remounted");
 
     /* ---- (3) absent file / account fails honestly (no fabricated record) ---- */
     {
-        rms_textfile_t *tf = rms_textfile_open("DKA0:[OVMXDIR]NOSUCH.DAT");
-        check(tf == NULL, "opening an absent SYSUAF fails-honest (RMS$_FNF, no fallback)");
-        if (tf) rms_textfile_close(tf);
+        sysuaf_record_t nrec;
+        check(read_binary_sysuaf_system("DKA0:[OVMXDIR]NOSUCH.DAT", &nrec) != 0,
+              "opening an absent SYSUAF fails-honest (RMS$_FNF, no fallback)");
     }
 
-    /* ---- (4) the product SYS$SYSTEM:/SYS$MANAGER: paths fail HONESTLY today,
-     *          pending directory-logical resolution -- never a silent POSIX
-     *          success (INV-6). This pins the substrate gap as a checked fact. */
+    /* ---- (4) the product SYS$SYSTEM: path has no SYSUAF in this fixture, so a
+     *          product sysuaf_lookup fails HONESTLY (RMS$_FNF) -- never a silent
+     *          POSIX/ASCII success (INV-6). */
     {
         sysuaf_record_t prec;
         check(sysuaf_lookup("SYSTEM", &prec) != 0,
-              "product sysuaf_lookup(SYS$SYSTEM:) fails-honest pending directory-logical resolution");
+              "product sysuaf_lookup(SYS$SYSTEM:) fails-honest with no SYSUAF in this fixture");
     }
 
     /* ---- (5a) OPERATOR.LOG append lands a genuine ODS-2 record, read back

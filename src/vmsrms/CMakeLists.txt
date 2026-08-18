@@ -56,6 +56,7 @@ add_library(vmsrms ${OVMX_LIB_TYPE}
     rms_idx.c
     rms_prolog3.c
     sysuaf_rms.c
+    sysuaf_live.c
     rightslist_rms.c
     rms_record.c
     rms_parse.c

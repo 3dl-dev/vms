@@ -114,4 +114,29 @@ rms_file_t *rms_io_posix_wrap(int fd);
 void        rms_io_posix_unwrap(rms_file_t *f);   /* close(fd) + free(handle) */
 int         rms_io_posix_fd(rms_file_t *f);
 
+/*
+ * Open a VMS file spec as a RAW rms_file_t handle for the binary indexed engines
+ * (sysuaf_rms / rightslist_rms), which the standard FAB/RAB path cannot serve on
+ * the executive-absent host defer (that path routes an indexed $OPEN to the
+ * legacy .rms_idx sidecar, not the Prolog-3 file). This helper ALWAYS binds the
+ * genuine Prolog-3 substrate: an ACP channel+window when /dev/vms is present
+ * (Rule 9 / INV-6), or a POSIX-wrap of the resolved on-volume path when the
+ * executive is absent (host ctest / plain-container link & self-host gates /
+ * netbsd-vax cross) -- the SAME atomic-flip defer rms_impl_open/create use.
+ *
+ * There is NO /vms passthrough on the runtime path: when the executive is
+ * present the handle is the ACP window; the POSIX branch is reached only when
+ * rms_acp_absent() (== /dev/vms unreachable), which is not a runtime state.
+ *
+ *   want_write : 0 read-only, 1 read/write.
+ *   create     : 0 open existing (SS$_NOSUCHFILE -> NULL); 1 create/supersede
+ *                a fresh file (versioned on the ACP, O_CREAT|O_TRUNC on POSIX).
+ *
+ * Fail-honest: returns NULL and sets *st_out to the RMS/SS$ status on failure.
+ * The handle is released with rms_close_named_handle (ACP deaccess+dassgn, or
+ * POSIX close+free) -- NEVER passed to sys$close. */
+rms_file_t *rms_open_named_handle(const char *vms_spec, int want_write,
+                                  int create, uint32_t *st_out);
+void        rms_close_named_handle(rms_file_t *h);
+
 #endif /* RMS_IO_H */

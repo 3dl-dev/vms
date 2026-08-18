@@ -299,6 +299,19 @@ uint32_t rms_p3_find_by_key(p3_ctx_t *ctx, uint8_t krf,
                             const uint8_t *key, uint16_t key_len,
                             int rop_kge, int rop_kgt, uint16_t *rec_len);
 
+/* Sequential PRIMARY-key enumeration (vms-5f0): walk the primary key's data
+ * buckets in key order (from First Data Bucket VBN, following the horizontal
+ * next-bucket chain), invoking `cb` with each LIVE record (deleted records and
+ * RRV stubs skipped). This is the smallest genuine "read every record" the
+ * atomic-flip consumers need (SYSUAF home-directory provisioning, AUTHORIZE
+ * LIST) without a general RAB$C_SEQ engine. `cb` returns 0 to continue, non-0
+ * to stop early (enumeration then returns RMS$_NORMAL). Returns RMS$_NORMAL,
+ * RMS$_KEY (no primary key), RMS$_PLG (compression / malformed bucket),
+ * RMS$_RER (read error), RMS$_DME. The record pointer passed to `cb` is only
+ * valid for the duration of the call. */
+typedef int (*p3_enum_cb)(const uint8_t *rec, uint16_t rec_len, void *arg);
+uint32_t rms_p3_enum_primary(p3_ctx_t *ctx, p3_enum_cb cb, void *arg);
+
 /* ====================================================================
  * WRITE engine (vms-045): $CREATE / $PUT (insert + bucket SPLIT + RRV) /
  * $UPDATE, authoring the genuine Files-11 Prolog-3 index over the ACP

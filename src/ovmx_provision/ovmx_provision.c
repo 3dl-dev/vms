@@ -80,9 +80,9 @@
  * The one SYSUAF read that remains here is provision_home_directories()'s
  * walk of every account for home-directory provisioning -- a distinct
  * concern (VMS's own account provisioning, not identity establishment) that
- * goes through the same sysuaf_read_line()/sysuaf_parse_line() pair every
- * other reader in the tree uses. There is still no second parser of SYSUAF
- * anywhere in the boot path.
+ * goes through the binary $UAFDEF engine (ovmx_sysuaf_enum) every other reader
+ * in the tree uses now. There is still no second parser of SYSUAF anywhere in
+ * the boot path.
  */
 
 #include <stdio.h>
@@ -290,10 +290,9 @@ static void provision_ownership(uint32_t sys_grp, uint32_t sys_mem)
  * re-own it. OVMX does the same, here -- in an ordinary image on the startup
  * path, which is where account provisioning belongs, rather than in PID 1.
  *
- * ONE READ, ONE PARSER. This walk goes through sysuaf_read_line() and
- * sysuaf_parse_line(), the same pair every other reader in the tree uses, so
- * an over-length row is REPORTED here and not silently downgraded into a
- * different account (vms-9b7).
+ * ONE READER (vms-d92 atomic flip). This walk goes through ovmx_sysuaf_enum()
+ * -- the binary $UAFDEF indexed engine over the ACP -- the same reader the rest
+ * of the tree uses now; there is no ASCII parse and no /vms fopen.
  *
  * ALSO THE SYSTEM-ACCOUNT CONTINUITY CHECK (vms-a17e). Identity
  * establishment no longer reads SYSUAF -- vms_kif_establish_system()
@@ -307,44 +306,45 @@ static void provision_ownership(uint32_t sys_grp, uint32_t sys_mem)
  * when the file could not be opened at all, which is the same "no SYSTEM
  * account" condition by a different route.
  */
-static int provision_home_directories(void)
+/*
+ * BINARY SYSUAF ENUMERATION (vms-d92 atomic flip). PROVISION reads every
+ * account from the genuine $UAFDEF indexed file through the binary engine
+ * (ovmx_sysuaf_enum, src/vmsrms/sysuaf_live.c over the ACP) -- no fopen on a
+ * /vms passthrough, no ASCII parse. PROVISION links LIBVMSRMS and runs at boot
+ * with the executive present, so the enumeration rides the ODS-2 ACP.
+ */
+typedef int (*ovmx_sysuaf_enum_cb)(const sysuaf_rms_record_t *rec, void *arg);
+uint32_t ovmx_sysuaf_enum(ovmx_sysuaf_enum_cb cb, void *arg);
+
+static int prov_home_cb(const sysuaf_rms_record_t *raw, void *arg)
 {
-    char sysuaf_path[512];
-    vms_to_linux(VMS_SYSUAF_PATH, sysuaf_path, sizeof(sysuaf_path));
-    FILE *fp = fopen(sysuaf_path, "r");
-    if (!fp)
+    int *saw_system = (int *)arg;
+    sysuaf_record_t rec;
+    sysuaf_raw_to_view(raw, &rec);
+
+    if (strcmp(rec.username, "SYSTEM") == 0)
+        *saw_system = 1;
+    if (rec.default_dir[0] == '\0')
         return 0;
 
+    /* default_dir may be a VMS spec (DKA0:[USERS.name]) -- translate. */
+    char home_linux[512];
+    if (strchr(rec.default_dir, '[') || strchr(rec.default_dir, ':'))
+        vms_to_linux(rec.default_dir, home_linux, sizeof(home_linux));
+    else
+        snprintf(home_linux, sizeof(home_linux), "%s", rec.default_dir);
+
+    mkdir(home_linux, 0755);
+    own_object(home_linux, rec.uic_group, rec.uic_member);
+    return 0;
+}
+
+static int provision_home_directories(void)
+{
     int saw_system = 0;
-    char line[SYSUAF_LINE_MAX];
-    int too_long = 0;
-    while (sysuaf_read_line(fp, line, sizeof(line), &too_long)) {
-        if (too_long) {
-            fprintf(stderr, "%%OVMX-W-RECTOOLONG, SYSUAF record longer than "
-                    "%d bytes -- account not provisioned\n",
-                    SYSUAF_LINE_MAX - 1);
-            continue;
-        }
-
-        sysuaf_record_t rec;
-        if (sysuaf_parse_line(line, &rec) != 1)
-            continue;
-        if (strcmp(rec.username, "SYSTEM") == 0)
-            saw_system = 1;
-        if (rec.default_dir[0] == '\0')
-            continue;
-
-        /* default_dir may be a VMS spec (DKA0:[USERS.name]) -- translate. */
-        char home_linux[512];
-        if (strchr(rec.default_dir, '[') || strchr(rec.default_dir, ':'))
-            vms_to_linux(rec.default_dir, home_linux, sizeof(home_linux));
-        else
-            snprintf(home_linux, sizeof(home_linux), "%s", rec.default_dir);
-
-        mkdir(home_linux, 0755);
-        own_object(home_linux, rec.uic_group, rec.uic_member);
-    }
-    fclose(fp);
+    uint32_t st = ovmx_sysuaf_enum(prov_home_cb, &saw_system);
+    if (!(st & 1))
+        return 0;   /* enumeration failed (no file / no executive) == no SYSTEM */
     return saw_system;
 }
 

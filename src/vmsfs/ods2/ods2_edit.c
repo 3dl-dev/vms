@@ -421,6 +421,74 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
     return ODS2_OK;
 }
 
+/*
+ * ods2_fh2_rename - rewrite an EXISTING file header's identification area (file
+ * name + version), and -- when `new_backlink` is non-NULL -- its directory
+ * back-link FID, for an IO$_MODIFY!IO$M_MOVE (rename/move) of the file
+ * (vms-de7, epic vms-208). PURE: edits the caller's 512-byte header block in
+ * place, touching ONLY the ident name / revision word / filename-extension and
+ * (optionally) fh2_backlink -- every other FH2 field (FID, RECATTR/EOF, map,
+ * owner/prot, create/revise dates) is left byte-for-byte unchanged, so the file
+ * KEEPS its identity and allocation and only its NAME (and parent) moves. The
+ * caller reseals with ods2_fh2_reseal() and writes the block back, exactly as
+ * for ods2_fh2_map_append()/ods2_fh2_set_eof().
+ *
+ * Every byte written is ods2_fh2_build()'s own ident-area / backlink layout
+ * (see its [F2]/[F11] provenance and lines 397-411): fi2_filename[20] holds the
+ * space-padded "NAME.TYPE;VERSION" head, fi2_revision the version word, and
+ * fi2_filenamext[66] the >20-char overflow. fh2_idoffset is read from the header
+ * itself (not the build-time constant) so a header laid down with a different
+ * ident offset still renames correctly. ODS2_ERR_ARGS on a bad block/name,
+ * ODS2_ERR_FORMAT if the header's ident offset does not fit a 512-byte block.
+ */
+ods2_status_t ods2_fh2_rename(void *header_block, const char *name,
+                              uint16_t version, const ods2_fid_t *new_backlink)
+{
+    uint8_t *h = (uint8_t *)header_block;
+    unsigned idoff_words;
+    uint8_t *id;
+    char idbuf[20 + 66 + 1];
+    size_t n, first_len, ext_len;
+
+    if (!h || !name || name[0] == '\0')
+        return ODS2_ERR_ARGS;
+
+    n = (size_t)snprintf(idbuf, sizeof(idbuf), "%s;%u", name, (unsigned)version);
+    if (n >= sizeof(idbuf))
+        return ODS2_ERR_ARGS;
+
+    idoff_words = h[offsetof(ods2_fh2_t, fh2_idoffset)];
+    if (idoff_words == 0 ||
+        (size_t)idoff_words * 2u + sizeof(ods2_ident_t) > ODS2_BLOCK_SIZE)
+        return ODS2_ERR_FORMAT;
+    id = h + (size_t)idoff_words * 2u;
+
+    /* ident name: "NAME.TYPE;VERSION", space-padded (ods2_fh2_build lines
+     * 397-411). Touch only fi2_filename[20] / fi2_revision / fi2_filenamext[66];
+     * fi2_credate / fi2_revdate etc. (bytes 22..53) are left as they are. */
+    first_len = (n < 20) ? n : 20;
+    ext_len   = (n > 20) ? (n - 20) : 0;
+    memset(id, ' ', 20);
+    memcpy(id, idbuf, first_len);
+    ed_put16(id + offsetof(ods2_ident_t, fi2_revision), version);
+    {
+        uint8_t *ext = id + offsetof(ods2_ident_t, fi2_filenamext);
+        memset(ext, ' ', sizeof(((ods2_ident_t *)0)->fi2_filenamext));
+        if (ext_len > 0)
+            memcpy(ext, idbuf + 20, ext_len);
+    }
+
+    /* fh2_backlink: the parent-directory FID ([F2]). Rewritten only on a MOVE
+     * across directories; a same-directory rename passes NULL and keeps it. */
+    if (new_backlink) {
+        ed_put16(h + offsetof(ods2_fh2_t, fh2_backlink) + 0, new_backlink->fid_num);
+        ed_put16(h + offsetof(ods2_fh2_t, fh2_backlink) + 2, new_backlink->fid_seq);
+        h[offsetof(ods2_fh2_t, fh2_backlink) + 4] = new_backlink->fid_rvn;
+        h[offsetof(ods2_fh2_t, fh2_backlink) + 5] = new_backlink->fid_nmx;
+    }
+    return ODS2_OK;
+}
+
 /* ================================================================
  * DIRECTORY-RECORD build + rebuild (vms-5303). PURE write-side twins of
  * ods2_writer.c's ods2_wvolume_dir_insert() / merge_dir_record(): the SAME

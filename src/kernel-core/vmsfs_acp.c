@@ -2274,8 +2274,10 @@ struct acp_fileop_scratch {
     uint8_t    dirhdr[ACP_BLOCK_SIZE];
     uint8_t    filehdr[ACP_BLOCK_SIZE];
     uint8_t    ibblk[ACP_BLOCK_SIZE];  /* index-bitmap block RMW */
+    uint8_t    tdirhdr[ACP_BLOCK_SIZE];/* MODIFY!M_MOVE cross-dir target header (vms-de7) */
     ods2_fh2_t dfh;
     ods2_fh2_t fh;
+    ods2_fh2_t tfh;                    /* MODIFY!M_MOVE cross-dir target parse */
 };
 
 /* Little-endian 16-bit store into a raw FH2 field (fileprot/fileowner edits).
@@ -2875,6 +2877,104 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 args.fid_num = file_fid.fid_num;
                 args.fid_nmx = file_fid.fid_nmx;
                 args.out_version = rver;
+                args.status = SS__NORMAL;
+                goto free_sc;
+            }
+
+            /* ---- IO$_MODIFY!IO$M_MOVE: rename / move the file (vms-de7) ----
+             * By NAME only: the source directory + name + version identify the
+             * entry to move (fidmode is refused -- without the source entry the
+             * old directory record cannot be located). Insert the NEW entry
+             * first (the file is never unreferenced), remove the OLD, then
+             * rewrite the file header's ident name (+ backlink on a cross-dir
+             * move). The file KEEPS its FID + allocation. This is the primitive
+             * $SETUAI / AUTHORIZE-seed use for create-tmp -> rename replace. */
+            if (args.modifiers & VMS_ACP_M_MOVE) {
+                ods2_fid_t tdid, backlink;
+                uint32_t tdid_num;
+                uint16_t new_version;
+                uint8_t *tdirhdr;
+                ods2_fh2_t *tfh;
+                int cross_dir, removed = 0;
+
+                if (args.fidmode || !have_dir || args.new_name[0] == '\0') {
+                    args.status = SS__BADPARAM;   /* rename is by-name; needs a target */
+                    goto free_sc;
+                }
+                /* Source directory write access (removing an entry). */
+                status = acp_check_access(proc, &sc->dfh, 1);
+                if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+
+                /* Target directory (new_did 0 => the same directory). */
+                memset(&tdid, 0, sizeof(tdid));
+                tdid.fid_num = args.new_did_num;
+                tdid.fid_nmx = args.new_did_nmx;
+                tdid_num = ods2_fid_number(&tdid);
+                if (tdid_num == 0)
+                    tdid_num = did_num;
+                cross_dir = (tdid_num != did_num);
+
+                if (cross_dir) {
+                    status = acp_read_header(vol, tdid_num, sc->tdirhdr, &sc->tfh);
+                    if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+                    if (!(sc->tfh.fh2_filechar & ODS2_FH2_M_DIRECTORY)) {
+                        args.status = SS__NOSUCHFILE;   /* target DID not a directory */
+                        goto free_sc;
+                    }
+                    status = acp_check_access(proc, &sc->tfh, 1);
+                    if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+                    tdirhdr = sc->tdirhdr;
+                    tfh = &sc->tfh;
+                } else {
+                    tdirhdr = sc->dirhdr;
+                    tfh = &sc->dfh;
+                }
+
+                /* New version: caller-given, else highest of new_name + 1. */
+                if (args.new_version != 0) {
+                    new_version = args.new_version;
+                } else {
+                    ods2_fid_t cur; uint16_t curver = 0;
+                    uint32_t fst = acp_dir_find(vol, tdirhdr, sc->rw.blk,
+                                                args.new_name, 0, &cur, &curver);
+                    new_version = (fst == SS__NORMAL) ? (uint16_t)(curver + 1u) : 1u;
+                }
+
+                /* Insert the NEW entry, then remove the OLD (crash-safe order). */
+                status = acp_dir_mutate(vol, sc, tdirhdr, tdid_num, /*insert*/1,
+                                        args.new_name,
+                                        (unsigned)strlen(args.new_name),
+                                        new_version, file_fid,
+                                        file_fidnum <= ODS2_RESFILES, NULL);
+                if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+
+                status = acp_dir_mutate(vol, sc, sc->dirhdr, did_num, /*remove*/0,
+                                        args.name, (unsigned)strlen(args.name),
+                                        rver, file_fid, 0, &removed);
+                if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+                if (!removed) { args.status = SS__NOSUCHFILE; goto free_sc; }
+
+                /* Rewrite the file header's ident name (+ cross-dir backlink). */
+                memset(&backlink, 0, sizeof(backlink));
+                backlink.fid_num = (uint16_t)(tdid_num & 0xFFFF);
+                backlink.fid_seq = tfh->fh2_fid.fid_seq;
+                backlink.fid_nmx = (uint8_t)(tdid_num >> 16);
+                if (ods2_fh2_rename(sc->filehdr, args.new_name, new_version,
+                                    cross_dir ? &backlink : NULL) != ODS2_OK) {
+                    args.status = SS__BADPARAM;
+                    goto free_sc;
+                }
+                ods2_fh2_reseal(sc->filehdr);
+                if (exec_blockdev_write_block(vol->backing_major, vol->backing_minor,
+                                              vol->idx_lbn + (file_fidnum - 1u),
+                                              sc->filehdr, ACP_BLOCK_SIZE) != 0) {
+                    args.status = SS__DEVNOTMOUNT;
+                    goto free_sc;
+                }
+
+                args.fid_num = file_fid.fid_num;
+                args.fid_nmx = file_fid.fid_nmx;
+                args.out_version = new_version;
                 args.status = SS__NORMAL;
                 goto free_sc;
             }

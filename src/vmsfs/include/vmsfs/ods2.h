@@ -1545,6 +1545,16 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
                              ods2_fid_t backlink, ods2_uic_t owner,
                              uint16_t fileprot, uint32_t maxfiles);
 
+/* Rewrite an EXISTING file header's ident area (file name + version), and --
+ * when `new_backlink` != NULL -- its fh2_backlink (parent-directory FID), for an
+ * IO$_MODIFY!IO$M_MOVE rename/move (vms-de7). Touches ONLY the name/revision/
+ * filename-extension (+ optional backlink); the FID, RECATTR/EOF, retrieval map,
+ * owner/prot and dates are left byte-for-byte unchanged, so the file keeps its
+ * identity + allocation. Reseal (ods2_fh2_reseal) after. ODS2_ERR_ARGS on a bad
+ * block/name, ODS2_ERR_FORMAT if the header's ident offset is out of range. */
+ods2_status_t ods2_fh2_rename(void *header_block, const char *name,
+                              uint16_t version, const ods2_fid_t *new_backlink);
+
 /* Insert a {name, version, entry_fid} directory record into a directory's
  * data blocks (in_blocks = in_nblk contiguous 512-byte blocks), producing the
  * repacked result in out_blocks (up to out_nblk_cap blocks) and its block
@@ -1739,6 +1749,29 @@ ods2_status_t ods2_wvolume_open_bdev(int fd, uint64_t span_bytes,
 ods2_status_t ods2_wvolume_append_file(ods2_wvolume_t *wvol,
                                        ods2_fid_t file_fid,
                                        const void *data, size_t data_len);
+
+/*
+ * RENAME/MOVE an existing file (vms-de7, epic vms-208 -- the userspace-writer
+ * twin of the executive ACP's IO$_MODIFY!IO$M_MOVE). Removes {oldname, oldver}
+ * (oldver 0 => every version) from `src_dir`, inserts {newname, newver} in
+ * `dst_dir` (may equal src_dir), and rewrites the file header's ident name (+
+ * fh2_backlink on a cross-directory move). The file KEEPS its FID, allocation
+ * and data -- only its name (and parent) change. Insert-new-then-remove-old
+ * order (the file is never unreferenced, the crash-safe XQP order). `file_fid`
+ * must be the file's real FID; the header at its slot must self-report it.
+ *
+ * Rule 8: every on-disk fact is the codec's (ods2_dir_insert_blocks /
+ * ods2_dir_remove_blocks / ods2_fh2_rename) -- no new format fact. Returns
+ * ODS2_OK, ODS2_ERR_ARGS (bad args / dst not a directory), ODS2_ERR_NOTFOUND
+ * (header does not self-report file_fid, or old {name,version} absent),
+ * ODS2_ERR_NOSPACE (dir growth needs blocks and none free), or the underlying
+ * checksum/format/IO error.
+ */
+ods2_status_t ods2_wvolume_rename(ods2_wvolume_t *wvol,
+                                  ods2_fid_t src_dir, const char *oldname,
+                                  uint16_t oldver,
+                                  ods2_fid_t dst_dir, const char *newname,
+                                  uint16_t newver, ods2_fid_t file_fid);
 
 #ifdef __cplusplus
 }

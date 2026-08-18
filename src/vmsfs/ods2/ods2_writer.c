@@ -2599,3 +2599,165 @@ ods2_status_t ods2_wvolume_append_file(ods2_wvolume_t *wvol,
 
     return wvol_commit(wvol, ODS2_OK);
 }
+
+/* ================================================================
+ * RENAME an existing file (vms-de7, epic vms-208 -- the userspace-writer twin
+ * of the executive ACP's IO$_MODIFY!IO$M_MOVE). Removes the file's OLD
+ * directory entry, inserts a NEW one (possibly in a different directory), and
+ * rewrites the file header's ident name (+ backlink on a cross-directory move)
+ * -- the file KEEPS its FID, allocation and data. Every on-disk fact is the
+ * codec's (ods2_dir_insert_blocks / ods2_dir_remove_blocks / ods2_fh2_rename);
+ * this only sequences wblk() reads/writes around them, exactly as the ACP
+ * sequences exec_blockdev_*.  Used by test_ods2_rename.c and available to the
+ * userspace ODS-2 writer.
+ * ================================================================ */
+
+/* Remove {name, version} (version 0 => every version) from a directory at
+ * wvolume level: read its data blocks (VBN order) into one contiguous buffer,
+ * run the pure codec repack (ods2_dir_remove_blocks -- never grows/deallocates,
+ * *out_nblk == in_nblk), and write the blocks back through wblk(). *removed set
+ * iff a matching entry was dropped. */
+static ods2_status_t wvol_dir_remove(ods2_wvolume_t *wvol, ods2_fid_t dir_fid,
+                                     const char *name, uint16_t version,
+                                     int *removed)
+{
+    uint32_t dir_fidnum, lbns[ODS2_WDIR_MAX_BLOCKS];
+    unsigned nlbn = 0, e, k, out_nblk = 0, i, namecount;
+    struct wdir_extents ex;
+    uint8_t hdr_copy[ODS2_BLOCK_SIZE];
+    ods2_fh2_t parsed;
+    uint8_t *inbuf = NULL, *outbuf = NULL, *flat = NULL;
+    size_t flatcap;
+    ods2_status_t st;
+
+    if (!wvol || !name || !removed)
+        return ODS2_ERR_ARGS;
+    namecount = (unsigned)strlen(name);
+    if (namecount == 0 || namecount > 255)
+        return ODS2_ERR_ARGS;
+    *removed = 0;
+
+    dir_fidnum = ods2_fid_number(&dir_fid);
+    if (dir_fidnum < 1 || dir_fidnum > wvol->maxfiles)
+        return ODS2_ERR_ARGS;
+
+    memcpy(hdr_copy, wblk(wvol, wvol->hdr_base_lbn + (dir_fidnum - 1)),
+           ODS2_BLOCK_SIZE);
+    st = ods2_fh2_parse(hdr_copy, sizeof(hdr_copy), &parsed);
+    if (st != ODS2_OK)
+        return st;
+
+    ex.n = 0;
+    ex.overflow = 0;
+    st = ods2_fh2_map_walk(hdr_copy, wdir_extent_collect, &ex, NULL);
+    if (st != ODS2_OK)
+        return st;
+    if (ex.n == 0 || ex.overflow)
+        return ODS2_ERR_NOSPACE;
+    for (e = 0; e < ex.n; e++)
+        for (k = 0; k < ex.ext[e].count; k++) {
+            if (nlbn >= ODS2_WDIR_MAX_BLOCKS)
+                return ODS2_ERR_NOSPACE;
+            lbns[nlbn++] = ex.ext[e].lbn + k;
+        }
+
+    inbuf   = (uint8_t *)ods2_kalloc((size_t)nlbn * ODS2_BLOCK_SIZE);
+    outbuf  = (uint8_t *)ods2_kalloc((size_t)nlbn * ODS2_BLOCK_SIZE);
+    flatcap = (size_t)nlbn * ODS2_BLOCK_SIZE + 32;
+    flat    = (uint8_t *)ods2_kalloc(flatcap);
+    if (!inbuf || !outbuf || !flat) {
+        st = ODS2_ERR_NOSPACE;      /* honest failure -- never a silent fake */
+        goto done;
+    }
+
+    for (i = 0; i < nlbn; i++)
+        memcpy(inbuf + (size_t)i * ODS2_BLOCK_SIZE, wblk(wvol, lbns[i]),
+               ODS2_BLOCK_SIZE);
+
+    st = ods2_dir_remove_blocks(inbuf, nlbn, name, namecount, version,
+                                flat, flatcap, outbuf, nlbn, &out_nblk, removed);
+    if (st != ODS2_OK)
+        goto done;
+
+    for (i = 0; i < nlbn; i++)      /* out_nblk == nlbn (trailing emptied) */
+        memcpy(wblk(wvol, lbns[i]), outbuf + (size_t)i * ODS2_BLOCK_SIZE,
+               ODS2_BLOCK_SIZE);
+
+    st = wvol_commit(wvol, ODS2_OK);
+done:
+    if (inbuf)  ods2_kfree(inbuf);
+    if (outbuf) ods2_kfree(outbuf);
+    if (flat)   ods2_kfree(flat);
+    return st;
+}
+
+ods2_status_t ods2_wvolume_rename(ods2_wvolume_t *wvol,
+                                  ods2_fid_t src_dir, const char *oldname,
+                                  uint16_t oldver,
+                                  ods2_fid_t dst_dir, const char *newname,
+                                  uint16_t newver, ods2_fid_t file_fid)
+{
+    uint32_t fidnum, src_num, dst_num;
+    uint8_t hdr_copy[ODS2_BLOCK_SIZE];
+    ods2_fh2_t parsed;
+    ods2_fid_t dst_backlink;
+    int cross_dir, removed = 0;
+    ods2_status_t st;
+    uint8_t *h;
+
+    if (!wvol || !oldname || !newname || oldname[0] == '\0' || newname[0] == '\0')
+        return ODS2_ERR_ARGS;
+
+    fidnum  = ods2_fid_number(&file_fid);
+    src_num = ods2_fid_number(&src_dir);
+    dst_num = ods2_fid_number(&dst_dir);
+    if (fidnum < 1 || fidnum > wvol->maxfiles || src_num < 1 || dst_num < 1)
+        return ODS2_ERR_ARGS;
+    cross_dir = (src_num != dst_num);
+
+    /* The header at the file's FID slot must self-report this FID -- never
+     * rename a stale/garbage block. */
+    memcpy(hdr_copy, wblk(wvol, wvol->hdr_base_lbn + (fidnum - 1)),
+           ODS2_BLOCK_SIZE);
+    st = ods2_fh2_parse(hdr_copy, sizeof(hdr_copy), &parsed);
+    if (st != ODS2_OK)
+        return st;
+    if (ods2_fid_number(&parsed.fh2_fid) != fidnum)
+        return ODS2_ERR_NOTFOUND;
+
+    /* Resolve the destination directory's true FID (for a cross-dir backlink)
+     * from its own header, so the moved file's fh2_backlink is byte-correct. */
+    memset(&dst_backlink, 0, sizeof(dst_backlink));
+    if (cross_dir) {
+        uint8_t dhdr[ODS2_BLOCK_SIZE];
+        ods2_fh2_t dparsed;
+        memcpy(dhdr, wblk(wvol, wvol->hdr_base_lbn + (dst_num - 1)),
+               ODS2_BLOCK_SIZE);
+        st = ods2_fh2_parse(dhdr, sizeof(dhdr), &dparsed);
+        if (st != ODS2_OK)
+            return st;
+        if (!(dparsed.fh2_filechar & ODS2_FH2_M_DIRECTORY))
+            return ODS2_ERR_ARGS;       /* destination is not a directory */
+        dst_backlink = dparsed.fh2_fid;
+    }
+
+    /* Insert the NEW directory entry FIRST (so the file is never unreferenced),
+     * then remove the OLD one -- the crash-safe order the XQP uses. */
+    st = ods2_wvolume_dir_insert(wvol, dst_dir, newname, newver, file_fid);
+    if (st != ODS2_OK)
+        return st;
+    st = wvol_dir_remove(wvol, src_dir, oldname, oldver, &removed);
+    if (st != ODS2_OK)
+        return st;
+    if (!removed)
+        return ODS2_ERR_NOTFOUND;       /* old {name,version} was not present */
+
+    /* Rewrite the file header's ident name (+ backlink on a cross-dir move);
+     * the FID, allocation map and RECATTR/EOF are untouched. */
+    h = wblk(wvol, wvol->hdr_base_lbn + (fidnum - 1));
+    st = ods2_fh2_rename(h, newname, newver, cross_dir ? &dst_backlink : NULL);
+    if (st != ODS2_OK)
+        return st;
+    ods2_fh2_reseal(h);
+    return wvol_commit(wvol, ODS2_OK);
+}

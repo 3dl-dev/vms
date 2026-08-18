@@ -205,3 +205,30 @@ set_tests_properties(vmsrms_iterative_translation PROPERTIES
     LABELS "unit;rms;lnm"
     TIMEOUT 30
 )
+
+# vms-3e0: genuine binary $RDBDEF RIGHTSLIST over the Files-11 Prolog-3 indexed
+# engine (the binary sibling of the SYSUAF rung). Authors a real 2-key Prolog-3
+# RIGHTSLIST (primary key = identifier VALUE @0x00, secondary key = identifier
+# NAME @0x10) with the ORACLE's real identifiers (environmental IDs at
+# %X8000000x, the SYSTEM/DEFAULT UIC identifiers, plus the RESOURCE identifier
+# OVMXRES), re-binds the on-disk prologue, then reads every identifier BACK BY
+# NAME (secondary key -> SIDR -> RFA) AND BY VALUE (primary key), asserting the
+# record fields land at the exact oracle offsets (value@0x00, attr@0x04,
+# holder@0x08==0, name@0x10) byte-exact, plus a value->name resolution. 48-byte
+# records + 1-block buckets force a genuine data-bucket + SIDR split (a real
+# index, NOT a flat scan). No ASCII colon format, no flat file, no /vms. The
+# holder records + HOLDER key are a labelled deferred seam (rightslist_rms.c).
+add_executable(test_rightslist_rms test_rightslist_rms.c)
+target_include_directories(test_rightslist_rms PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsrms
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_rightslist_rms PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_rightslist_rms COMMAND test_rightslist_rms)
+set_tests_properties(vmsrms_rightslist_rms PROPERTIES
+    LABELS "unit;rms;ods2"
+    TIMEOUT 30
+)

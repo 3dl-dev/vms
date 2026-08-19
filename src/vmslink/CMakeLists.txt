@@ -183,6 +183,11 @@ if(OVMX_LINK_NATIVE)
             ${CMAKE_CURRENT_SOURCE_DIR}/mk_vmsrms_shr.sh
             ${CMAKE_CURRENT_SOURCE_DIR}/mk_dcl.sh
             ${CMAKE_CURRENT_SOURCE_DIR}/mk_loginout.sh
+            # RMS force-bind anchor TUs linked into DCL.EXE / LOGINOUT.EXE by the
+            # recipes above (vms-5f0). They live under src/vmslink and so are not
+            # in OVMX_NATIVE_GRAPH_SOURCES; list them so a rebuild retriggers.
+            ${CMAKE_CURRENT_SOURCE_DIR}/dcl_rms_bind.c
+            ${CMAKE_CURRENT_SOURCE_DIR}/loginout_rms_bind.c
             ${OVMX_NATIVE_GRAPH_SOURCES}
         COMMENT "LINK.EXE: building the VMS-native shareable graph (5 libs + DECC\$SHR + DCL.EXE + LOGINOUT.EXE, ${OVMX_LINK_NATIVE_ARCH} musl, no ld/ld.so)"
         VERBATIM

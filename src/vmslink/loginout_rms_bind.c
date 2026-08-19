@@ -61,6 +61,18 @@ extern unsigned int sys$get(void *rab, void (*err)(void *), void (*suc)(void *))
 extern unsigned int sys$put(void *rab, void (*err)(void *), void (*suc)(void *));
 extern unsigned int sys$create(void *fab, void (*err)(void *), void (*suc)(void *));
 
+/* THE ENGINE SEAM (vms-5f0 flip). The atomic flip moved SYSUAF authentication
+ * itself onto the binary Prolog-3 engine: sysuaf_lookup() in LIBVMS$SHR no longer
+ * scans an ASCII file, it `#pragma weak`-references ovmx_sysuaf_read_user/_uic
+ * (LIBVMSRMS$SHR universals, from sysuaf_live.o) and returns "miss" when the cell
+ * is NULL. sys$open above already forces LIBVMSRMS$SHR into LOGINOUT's strong
+ * .vms$imp closure (so IMGACT loads it and resolve_weak_imports binds the whole
+ * weak seam by name), but the engine entries are the universals LOGINOUT's
+ * authentication path ACTUALLY depends on -- anchor them directly so the strong
+ * import naming LIBVMSRMS$SHR does not hinge on rms_textfile.c's own sys$ use. */
+extern unsigned int ovmx_sysuaf_read_user(const char *username, void *out);
+extern unsigned int ovmx_sysuaf_read_uic(unsigned int uic, void *out);
+
 __attribute__((used, noinline))
 unsigned int rms_bind_never(void)
 {
@@ -71,5 +83,6 @@ unsigned int rms_bind_never(void)
     if (!never)
         return 0;
     return sys$open(0, 0, 0)    | sys$close(0, 0, 0)  | sys$connect(0, 0, 0)
-         | sys$get(0, 0, 0)     | sys$put(0, 0, 0)    | sys$create(0, 0, 0);
+         | sys$get(0, 0, 0)     | sys$put(0, 0, 0)    | sys$create(0, 0, 0)
+         | ovmx_sysuaf_read_user(0, 0)                | ovmx_sysuaf_read_uic(0, 0);
 }

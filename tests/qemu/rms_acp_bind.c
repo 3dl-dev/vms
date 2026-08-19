@@ -39,12 +39,28 @@
  * so applying it to ALL syssvc suites bloated the shared kernel-test initramfs
  * 31M->36M and overflowed the QEMU boot -- hence opt-in, not the blanket recipe.
  *
+ * SECOND SEAM -- THE ENGINE ENTRY POINTS (vms-5f0 flip). The atomic flip moved
+ * the SYSUAF / RIGHTSLIST readers themselves onto a binary Prolog-3 engine seam:
+ * src/libvms/rtl/sysuaf.c and rightslist.c no longer scan an ASCII file -- they
+ * `#pragma weak`-reference ovmx_sysuaf_read_user/_uic (src/vmsrms/sysuaf_live.c)
+ * and ovmx_rightslist_asctoid/_idtoasc (src/vmsrms/rightslist_live.c) and, when
+ * that cell is NULL, return "miss" unconditionally (`if (!ovmx_sysuaf_read_user)
+ * return -1;`). Those engine entry points live in DISTINCT archive members
+ * (sysuaf_live.o / rightslist_live.o) that the sys$open-family anchors above do
+ * NOT pull: a strong ref to sys$open extracts the RMS record services, never the
+ * leaf reader objects. So even with the sys$ anchors the weak engine cells stayed
+ * NULL and every should-resolve identity read failed (test_syssvc_rightslist ran
+ * 13/12). The four extern refs below extract sysuaf_live.o / rightslist_live.o so
+ * their ovmx_* definitions satisfy the libvms weak seam -- the same member-pull
+ * mechanism, applied to the second (engine) seam the flip introduced.
+ *
  * NOTE: this binds the TEST surface. Production OVMX images that read SYSUAF via
  * the ACP after IMGACT activation (LOGINOUT.EXE, the spawned DCL that answers
  * F$IDENTIFIER, MMK.EXE) hit the SAME weak seam through a DIFFERENT mechanism --
  * symbol-vector import binding of a `--use`'d LIBVMSRMS$SHR at activation -- and
- * need the analogous force-bind in their link scripts (mk_loginout.sh, mk_dcl.sh,
- * ...). That is tracked follow-on work; see the vms-058 report.
+ * carry the analogous force-bind in their link scripts (mk_loginout.sh via
+ * loginout_rms_bind.c, mk_dcl.sh via dcl_rms_bind.c). See the vms-058/vms-5f0
+ * report.
  */
 
 /* The seven RMS three-argument services rms_textfile.c references. Declared with
@@ -59,6 +75,16 @@ extern unsigned int sys$get(void *rab, void (*err)(void *), void (*suc)(void *))
 extern unsigned int sys$put(void *rab, void (*err)(void *), void (*suc)(void *));
 extern unsigned int sys$create(void *fab, void (*err)(void *), void (*suc)(void *));
 
+/* The four engine entry points the flip's libvms readers weak-reference. Declared
+ * only to take their address -- the reference is by NAME, so the exact prototype
+ * is immaterial (no vmsrms header needed here). Pulling these extracts
+ * sysuaf_live.o / rightslist_live.o so the ovmx_* weak cells in libvms bind. */
+extern unsigned int ovmx_sysuaf_read_user(const char *username, void *out);
+extern unsigned int ovmx_sysuaf_read_uic(unsigned int uic, void *out);
+extern unsigned int ovmx_rightslist_asctoid(const char *name, unsigned int *value);
+extern unsigned int ovmx_rightslist_idtoasc(unsigned int value, char *name,
+                                            unsigned long bufsz);
+
 /* A table of the addresses. `used` keeps the compiler from discarding it and
  * `volatile` keeps the linker from folding the references away, so each symbol
  * stays a genuine strong undefined reference that pulls its RMS producer in. */
@@ -70,4 +96,9 @@ void *const rms_acp_bind_anchor[] __attribute__((used)) = {
     (void *)&sys$get,
     (void *)&sys$put,
     (void *)&sys$create,
+    /* the flip's engine seam -- pull the leaf reader objects too */
+    (void *)&ovmx_sysuaf_read_user,
+    (void *)&ovmx_sysuaf_read_uic,
+    (void *)&ovmx_rightslist_asctoid,
+    (void *)&ovmx_rightslist_idtoasc,
 };

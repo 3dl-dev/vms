@@ -24,9 +24,20 @@ else()
     set(OVMX_PROVISION_BOOT_BACKEND_SRC ${CMAKE_SOURCE_DIR}/src/ovmx_init/ovmx_boot_linux.c ${CMAKE_SOURCE_DIR}/src/ovmx_init/opcom_kmsg.c)
 endif()
 
+# vms-aac: force the RMS record services (sys$open/$create/$put/...) into
+# PROVISION.EXE's static link closure so rms_textfile.c's weak seam binds and
+# opcom_kmsg_drain_ringbuffer() can $CREATE/$PUT SYS$MANAGER:OPERATOR.LOG over
+# the ACP. Linux only -- opcom_kmsg.c (and the drain) compile in only there.
+if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+    set(OVMX_PROVISION_RMS_BIND_SRC)
+else()
+    set(OVMX_PROVISION_RMS_BIND_SRC provision_rms_bind.c)
+endif()
+
 add_executable(ovmx_provision
     ovmx_provision.c
     ${OVMX_PROVISION_BOOT_BACKEND_SRC}
+    ${OVMX_PROVISION_RMS_BIND_SRC}
 )
 
 target_include_directories(ovmx_provision PRIVATE

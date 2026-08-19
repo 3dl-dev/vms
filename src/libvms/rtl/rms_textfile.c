@@ -17,6 +17,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>   /* AACDBG temporary */
 
 #include "rms_textfile.h"
 
@@ -181,8 +182,11 @@ int rms_textfile_append_line(const char *vms_spec, const char *line)
 {
     if (!vms_spec || !*vms_spec || !line)
         return -1;
-    if (!rms_services_present() || !sys$create || !sys$put)
+    if (!rms_services_present() || !sys$create || !sys$put) {
+        fprintf(stderr, "AACDBG append '%s': services present=%d create=%p put=%p\n",
+                vms_spec, rms_services_present(), (void*)sys$create, (void*)sys$put);
         return -1;   /* no LIBVMSRMS -> fail honest, no POSIX write */
+    }
 
     char spec[512];
     rmstf_resolve(vms_spec, spec, sizeof(spec));
@@ -196,15 +200,24 @@ int rms_textfile_append_line(const char *vms_spec, const char *line)
 
     /* Append to the existing OPERATOR.LOG, or create it on first write. */
     uint32_t st = sys$open(&fab, 0, 0);
+    uint32_t open_st = st;
+    uint32_t create_st = 0;
     if (st != RMS$_NORMAL) {
         st = sys$create(&fab, 0, 0);
-        if (st != RMS$_NORMAL)
+        create_st = st;
+        if (st != RMS$_NORMAL) {
+            fprintf(stderr, "AACDBG append '%s' -> '%s': open=%u create=%u\n",
+                    vms_spec, spec, open_st, create_st);
             return -1;
+        }
     }
 
     /* RAB$M_EOF positions the record context at end-of-file so the $PUT lands
      * as an append (IO$_WRITEVBLK past EOF with implicit extend). */
     int rc = rmstf_put(&fab, line, RAB$M_EOF);
+    if (rc != 0)
+        fprintf(stderr, "AACDBG append '%s' -> '%s': open=%u create=%u PUT rc=%d\n",
+                vms_spec, spec, open_st, create_st, rc);
     sys$close(&fab, 0, 0);
     return rc;
 }

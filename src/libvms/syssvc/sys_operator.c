@@ -83,7 +83,14 @@
 
 /* Operator log file path */
 #include "ovmx_layout.h"
-#include "vmsfs/filespec.h"
+/*
+ * OPERATOR.LOG is written the VMS way now (vms-aac, epic vms-208 atomic flip):
+ * one RMS $PUT-at-EOF record per line over the Files-11 ODS-2 ACP, NOT
+ * fopen(vmsfs_to_linux_path()) on the retired /vms passthrough. rms_textfile.c
+ * carries the RMS-over-ACP writer and the fail-honest contract (Rule 9 / INV-6:
+ * no mounted ACP volume / no /dev/vms -> -1, never a private POSIX log).
+ */
+#include "rms_textfile.h"
 #define OPERATOR_LOG_PATH VMS_OPERATOR_LOG
 
 /*
@@ -94,9 +101,6 @@
  * (rd vms-32a) -- see format_opcom_header() below.
  */
 #include "ovmx_identity.h"
-
-/* Fallback operator log (writable in container environments) */
-#define OPERATOR_LOG_FALLBACK "/tmp/OPERATOR.LOG"
 
 /* Month names for VMS-style timestamp */
 static const char * const month_names[] = {
@@ -215,20 +219,6 @@ static void get_current_username(char *buf, size_t bufsz)
 }
 
 /*
- * Open the operator log file, trying primary then fallback path.
- * Returns FILE* opened in append mode, or NULL on failure.
- */
-static FILE *open_operator_log(void)
-{
-    char oplog_linux[1024];
-    vmsfs_to_linux_path(OPERATOR_LOG_PATH, oplog_linux, sizeof(oplog_linux));
-    FILE *f = fopen(oplog_linux, "a");
-    if (!f)
-        f = fopen(OPERATOR_LOG_FALLBACK, "a");
-    return f;
-}
-
-/*
  * sys$sndopr - Send message to operator.
  *
  * Writes a formatted OPCOM-style entry to OPERATOR.LOG.
@@ -305,13 +295,8 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
     static volatile unsigned int req_count = 0;
     unsigned int this_req = __atomic_add_fetch(&req_count, 1, __ATOMIC_SEQ_CST);
 
-    /* Open log */
-    FILE *log = open_operator_log();
-    if (!log)
-        return SS$_FILACCERR;
-
     /*
-     * Write the OPCOM header, oracle-exact (see format_opcom_banner()
+     * Build the OPCOM header, oracle-exact (see format_opcom_banner()
      * above): the boxed banner line, then "Request N, from user U on N" --
      * the numbered-request body-line-2 variant, preserved rather than
      * replaced with the bare "Message from user U on N" form, because
@@ -320,10 +305,12 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
      */
     char banner[64];
     format_opcom_banner(banner, sizeof(banner), timestamp);
-    fprintf(log, "%s\n", banner);
-    fprintf(log, "Request %u, from user %s on %s\n", this_req, username, node);
 
-    /* Write message body (strip trailing whitespace) */
+    char reqline[128];
+    snprintf(reqline, sizeof(reqline), "Request %u, from user %s on %s",
+             this_req, username, node);
+
+    /* Trim trailing whitespace from the message body */
     size_t msglen = strlen(msgtext);
     while (msglen > 0 &&
            (msgtext[msglen - 1] == '\n' || msgtext[msglen - 1] == '\r' ||
@@ -331,9 +318,23 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
         msglen--;
     msgtext[msglen] = '\0';
 
-    fprintf(log, "%s\n\n", msgtext);
-    fflush(log);
-    fclose(log);
+    /*
+     * Append the record to SYS$MANAGER:OPERATOR.LOG over the Files-11 ODS-2
+     * ACP via RMS $PUT-at-EOF, one stream-LF record per line (vms-aac). The
+     * first append $CREATEs the log if it does not yet exist; each is
+     * re-resolved and positioned at EOF, so it accumulates the way OPCOM's
+     * append-mode log does. A trailing empty record reproduces the blank
+     * line the old fprintf("%s\n\n") separator wrote between records.
+     *
+     * FAIL-HONEST (Rule 9 / INV-6): with no mounted ACP volume / no /dev/vms
+     * the first append returns -1 and this reports SS$_FILACCERR -- it never
+     * falls back to a private POSIX file on the retired /vms passthrough.
+     */
+    if (rms_textfile_append_line(OPERATOR_LOG_PATH, banner) != 0)
+        return SS$_FILACCERR;
+    rms_textfile_append_line(OPERATOR_LOG_PATH, reqline);
+    rms_textfile_append_line(OPERATOR_LOG_PATH, msgtext);
+    rms_textfile_append_line(OPERATOR_LOG_PATH, "");
 
     return SS$_NORMAL;
 }
@@ -474,23 +475,28 @@ uint32_t sys$brkthruw(uint32_t efn,
          * target terminal (which the OLD line here wrote into the user
          * field by mistake).
          */
-        FILE *log = open_operator_log();
-        if (log) {
-            char btimestamp[32];
-            char buser[VMS_USERNAME_SIZE];
-            char bnode[OVMX_IDENTITY_MAXLEN];
-            char bbanner[64];
+        char btimestamp[32];
+        char buser[VMS_USERNAME_SIZE];
+        char bnode[OVMX_IDENTITY_MAXLEN];
+        char bbanner[64];
+        char bmsgline[128];
 
-            format_vms_timestamp(btimestamp, sizeof(btimestamp));
-            get_current_username(buser, sizeof(buser));
-            ovmx_node_name(bnode, sizeof(bnode));
-            format_opcom_banner(bbanner, sizeof(bbanner), btimestamp);
+        format_vms_timestamp(btimestamp, sizeof(btimestamp));
+        get_current_username(buser, sizeof(buser));
+        ovmx_node_name(bnode, sizeof(bnode));
+        format_opcom_banner(bbanner, sizeof(bbanner), btimestamp);
+        snprintf(bmsgline, sizeof(bmsgline), "Message from user %s on %s",
+                 buser, bnode);
 
-            fprintf(log, "%s\n", bbanner);
-            fprintf(log, "Message from user %s on %s\n", buser, bnode);
-            fprintf(log, "%s\n\n", msgtext);
-            fclose(log);
-        }
+        /* Same RMS $PUT-at-EOF-over-the-ACP writer sys$sndopr uses (vms-aac):
+         * one file, one OPCOM record format. Best-effort/fail-honest -- a
+         * broadcast that reached its terminal is not failed just because the
+         * ACP log is unreachable (no /dev/vms), and there is no /vms/POSIX
+         * fallback (Rule 9 / INV-6). */
+        rms_textfile_append_line(OPERATOR_LOG_PATH, bbanner);
+        rms_textfile_append_line(OPERATOR_LOG_PATH, bmsgline);
+        rms_textfile_append_line(OPERATOR_LOG_PATH, msgtext);
+        rms_textfile_append_line(OPERATOR_LOG_PATH, "");
     } else {
         status = SS$_NOSUCHDEV;
     }

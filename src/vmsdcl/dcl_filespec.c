@@ -773,6 +773,26 @@ void dcl_rms_dir_close(struct dcl_rms_dir *d)
     free(d);
 }
 
+/* ---- File erase (DELETE) ---- */
+
+uint32_t dcl_rms_erase(struct dcl_context *ctx, const char *spec)
+{
+    char vspec[1024];
+    struct FAB fab;
+    if (!spec || !spec[0]) return RMS$_FAB;
+    if (dcl_rms_effective_spec(ctx, spec, vspec, sizeof(vspec)) != 0)
+        return RMS$_SYN;
+
+    fab = cc$rms_fab;
+    fab.fab$l_fna = vspec;
+    fab.fab$b_fns = (uint8_t)strlen(vspec);
+    /* $ERASE routes to rms_impl_erase: $ASSIGN + IO$_DELETE over the ACP when
+     * the executive is present, POSIX unlink on the executive-absent defer. The
+     * explicit version in `vspec` selects exactly that version (a ";*" tail
+     * would delete every version in one op). */
+    return sys$erase(&fab, 0, 0);
+}
+
 /* ---- One file's genuine ODS-2 attributes (DIRECTORY /FULL, F$FILE_ATTRIBUTES) ---- */
 
 uint32_t dcl_rms_attr(struct dcl_context *ctx, const char *spec,

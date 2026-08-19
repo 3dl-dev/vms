@@ -2040,6 +2040,130 @@ int cmd_copy(struct dcl_command *cmd)
 /*
  * DELETE - Delete a file, or (with /SYMBOL) delete a symbol.
  */
+/*
+ * delete_files_acp - vms-0a5: the DELETE file path over the Files-11 ODS-2 ACP
+ * (the product runtime, Rule 9/INV-6). It enumerates every version of the named
+ * file through the executive directory search ($PARSE/$SEARCH), applies the SAME
+ * version selection the POSIX path uses (version_selected), and $ERASEs each
+ * selected file over the ACP (IO$_DELETE, dcl_rms_erase) -- no unlink() on a
+ * /vms passthrough. This is what makes DELETE SYS$SYSTEM:PROVISION.EXE;*
+ * actually remove the image off the mounted ODS-2 volume -- the volume PID 1
+ * stages the boot images from (vms-5f0) -- rather than the passthrough copy the
+ * booted system never reads. `param` is the user's VMS filespec; the caller has
+ * already enforced the explicit-version guard.
+ */
+static int delete_files_acp(struct dcl_context *ctx, const char *param,
+                            int do_confirm, int do_log)
+{
+    /* Version spec the user typed (guaranteed present by the DELVER guard). */
+    char vspec[64];
+    int  has_version = 0;
+    {
+        const char *comp = dcl_filename_component(param);
+        const char *fcheck = (comp && comp[0]) ? comp : param;
+        const char *semi = strrchr(fcheck, ';');
+        if (semi) {
+            has_version = 1;
+            strncpy(vspec, semi + 1, sizeof(vspec) - 1);
+            vspec[sizeof(vspec) - 1] = '\0';
+        } else {
+            vspec[0] = '\0';
+        }
+    }
+
+    /* Search pattern: the user's spec with the version replaced by ";*" so the
+     * executive returns ALL versions and version_selected can pick the set. */
+    char searchpat[1024];
+    strncpy(searchpat, param, sizeof(searchpat) - 1);
+    searchpat[sizeof(searchpat) - 1] = '\0';
+    {
+        const char *comp = dcl_filename_component(param);
+        if (comp && comp[0]) {
+            const char *semi = strrchr(comp, ';');
+            if (semi) {
+                size_t off = (size_t)(semi - param);
+                if (off < sizeof(searchpat)) searchpat[off] = '\0';
+            }
+        }
+        size_t L = strlen(searchpat);
+        snprintf(searchpat + L, sizeof(searchpat) - L, ";*");
+    }
+
+    struct dcl_rms_dir *d = dcl_rms_dir_open(ctx, searchpat);
+    if (!d) {
+        dcl_error("RMS", 2, "FNF", "file not found - %s", param);
+        return SS$_NOSUCHFILE;
+    }
+
+    struct acp_del { char spec[1024]; struct file_match fm; };
+    int cap = 32, n = 0;
+    struct acp_del *arr = malloc((size_t)cap * sizeof(*arr));
+    if (!arr) { dcl_rms_dir_close(d); return SS$_INSFMEM; }
+
+    char rspec[1024];
+    while (dcl_rms_dir_next(d, rspec, sizeof(rspec), NULL, NULL, NULL)) {
+        if (n >= cap) {
+            cap *= 2;
+            struct acp_del *t = realloc(arr, (size_t)cap * sizeof(*arr));
+            if (!t) { free(arr); dcl_rms_dir_close(d); return SS$_INSFMEM; }
+            arr = t;
+        }
+        /* the full resultant "DEV:[DIR]NAME.TYP;VER" is the $ERASE target. */
+        strncpy(arr[n].spec, rspec, sizeof(arr[n].spec) - 1);
+        arr[n].spec[sizeof(arr[n].spec) - 1] = '\0';
+        /* name.type;ver tail for grouping + version selection. */
+        const char *nt = rspec;
+        const char *rb = strrchr(rspec, ']');
+        if (!rb) rb = strrchr(rspec, '>');
+        if (rb) nt = rb + 1;
+        strncpy(arr[n].fm.dname, nt, sizeof(arr[n].fm.dname) - 1);
+        arr[n].fm.dname[sizeof(arr[n].fm.dname) - 1] = '\0';
+        fm_split(nt, arr[n].fm.base, sizeof(arr[n].fm.base), &arr[n].fm.version);
+        n++;
+    }
+    dcl_rms_dir_close(d);
+
+    /* version_selected wants a contiguous file_match array. */
+    struct file_match *fms = malloc((size_t)(n > 0 ? n : 1) * sizeof(*fms));
+    if (!fms) { free(arr); return SS$_INSFMEM; }
+    for (int i = 0; i < n; i++) fms[i] = arr[i].fm;
+
+    int deleted = 0;
+    for (int i = 0; i < n; i++) {
+        if (!version_selected(fms, i, n, has_version, vspec)) continue;
+
+        if (do_confirm) {
+            printf("DELETE %s ? [N]: ", arr[i].spec);
+            fflush(stdout);
+            char resp[64];
+            if (!fgets(resp, sizeof(resp), stdin)) break;
+            if (toupper((unsigned char)resp[0]) != 'Y') continue;
+        }
+
+        uint32_t est = dcl_rms_erase(ctx, arr[i].spec);
+        if (est & 1) {
+            deleted++;
+            if (do_log)
+                dcl_error("DELETE", 3, "FILDEL", "%s deleted", arr[i].spec);
+        } else if (est == RMS$_PRV) {
+            /* Protection/privilege refusal: report per file, keep going -- the
+             * same shape a POSIX EACCES took (RMS$_PRV) before the flip. */
+            dcl_error("DELETE", 2, "PRV",
+                      "insufficient privilege or file protection violation for %s",
+                      arr[i].spec);
+        }
+    }
+
+    free(fms);
+    free(arr);
+
+    if (deleted == 0) {
+        dcl_error("RMS", 2, "FNF", "file not found - %s", param);
+        return SS$_NOSUCHFILE;
+    }
+    return SS$_NORMAL;
+}
+
 int cmd_delete(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -2134,6 +2258,18 @@ int cmd_delete(struct dcl_command *cmd)
                   cmd->params[0]);
         return SS$_BADPARAM;
     }
+
+    /*
+     * Product runtime (vms-0a5): DELETE removes files over the Files-11 ODS-2
+     * ACP -- $SEARCH to enumerate, $ERASE (IO$_DELETE) to remove. Only the
+     * executive-absent defer (host ctest / self-host container, where the ACP
+     * is unreachable) uses the legacy opendir()+unlink() path below. Mirrors
+     * exactly how DIRECTORY branches (dir_collect_acp vs dir_collect_host) and
+     * how RMS $ERASE itself branches (rms_impl_erase vs rms_posix_erase) --
+     * fail-honest on an absent executive, no silent passthrough (INV-6/Rule 9).
+     */
+    if (!rms_executive_absent())
+        return delete_files_acp(ctx, cmd->params[0], do_confirm, do_log);
 
     /* Directory + name.type pattern + version spec (the text after ';'). */
     char linux_dir[1024], name_pat[512], vspec[64];

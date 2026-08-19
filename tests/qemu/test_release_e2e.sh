@@ -367,19 +367,24 @@ run_case() {
 # ---------------------------------------------------------------------------
 # NEGATIVE CONTROL 2: the startup process itself goes missing (vms-56c).
 #
-# PROVISION.EXE is now boot-critical -- PID 1 execs it where it used to exec
-# DCL.EXE, and it is what acquires SYSTEM's identity. If the image is absent the
-# system has no way to acquire an identity, so PID 1 must FAIL-STOP, exactly as
-# it does for a missing SYSTEM record -- never fall through to a login prompt on
-# a system with no identity. ovmx_init.c run_startup() stat()s the image and
-# calls ovmx_exec_halt() with a DIFFERENT message than the no-SYSTEM-record
-# halt; asserting that specific message proves this specific guard fires and is
-# not the SYSUAF halt in disguise.
+# PROVISION.EXE is boot-critical -- PID 1 stages it off the ODS-2 volume over
+# the ACP and forks it as the startup process. If the image is absent the system
+# has no way to acquire an identity, so PID 1 must FAIL-STOP -- never fall
+# through to a login prompt on a system with no identity.
+#
+# vms-0a5: with DELETE now $ERASEing on the volume over the ACP (IO$_DELETE), the
+# absent image is caught at boot-image staging (ovmx_init.c stage_boot_images(),
+# SYSINIT) -- the earliest honest point, before the startup process is even
+# forked -- and halts with the SYSINIT staging message. Asserting that specific
+# message proves the mandatory-image staging guard fires and is not some other
+# halt in disguise. (run_startup()'s later stat() guard remains the backstop for
+# a staged copy that vanishes, and for the NetBSD-vax substrate that does not
+# stage; it just is not the one that fires when the volume file is gone.)
 #
 # Injected THROUGH THE FILE, like every other case: a real SYSTEM session
 # deletes the real image off the installed disk with DCL DELETE. No source is
-# edited. If the delete did not land, boot 2 comes up and the halt assertion
-# below fails -- so this case cannot false-pass.
+# edited. If the delete did not land on the volume, boot 2 comes up and the halt
+# assertion below fails -- so this case cannot false-pass.
 #
 # (The other fatal run_startup() path -- PROVISION.EXE activates but the
 # executive REFUSES setident -- is caught by the same function at its waitpid
@@ -486,24 +491,177 @@ run_provision_missing_case() {
 
     # Whole-log grep is safe: a boot-time diagnostic printed before any prompt
     # exists, so nothing this script typed can have produced it.
-    if waitfor '%OVMX-F-EXECINIT, SYS$SYSTEM:PROVISION.EXE is missing' 120 "$log2"; then
+    #
+    # vms-0a5: DELETE now $ERASEs PROVISION.EXE off the ODS-2 VOLUME over the ACP
+    # (IO$_DELETE), not a /vms passthrough copy the booted system never reads. So
+    # the missing image is caught at the EARLIER, more honest point: PID 1 stages
+    # the mandatory boot images off the volume over the ACP in SYSINIT
+    # (stage_boot_images) BEFORE it ever forks the startup process, so the read
+    # of the now-absent PROVISION.EXE fails there and fail-stops with the SYSINIT
+    # staging halt rather than run_startup()'s later stat() guard. Both are honest
+    # fail-stops before any login; landing the delete at the ACP layer is exactly
+    # what moves the catch earlier.
+    if waitfor '%OVMX-F-SYSINIT, boot-image staging failed' 120 "$log2"; then
         rc=0
     else
         rc=1
     fi
     kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
-    record "$tag boot 2: HALTS with 'PROVISION.EXE is missing'" "$rc"
+    record "$tag boot 2: HALTS at boot-image staging (PROVISION.EXE gone off the volume)" "$rc"
 
-    if grep -qF '%OVMX-I-EXECINIT, the system process has no authorized identity' "$log2"; then
+    if grep -qF 'SYS$SYSTEM:PROVISION.EXE could not be read from the ODS-2 volume over the ACP' "$log2"; then
         rc=0
     else
         rc=1
     fi
-    record "$tag boot 2: the detail line names the missing identity" "$rc"
+    record "$tag boot 2: the detail line names PROVISION.EXE unreadable over the ACP" "$rc"
 
     # ...and it must NOT reach a login prompt.
     if grep -qF 'Username:' "$log2"; then rc=1; else rc=0; fi
     record "$tag boot 2: no login prompt on a system with no startup image" "$rc"
+
+    if [ "$FAIL" -ne 0 ]; then echo "--- $tag boot 2 log ---"; cat "$log2"; fi
+}
+
+# ---------------------------------------------------------------------------
+# NEGATIVE CONTROL: SYSUAF loses its SYSTEM account (vms-0a5).
+#
+# THE AUTHENTIC MECHANISM. SYSUAF.DAT is an RMS INDEXED file of binary $UAFDEF
+# records, and the AUTHORIZE utility is the supported interface that removes an
+# account from it -- it $DELETEs the record and writes the indexed file back
+# (VSI OpenVMS Guide to System Security; AUTHORIZE). DCL OPEN/WRITE cannot edit
+# SYSUAF: OPEN/WRITE CREATES A NEW SEQUENTIAL VERSION and never rewrites the
+# indexed file LOGINOUT / PROVISION read, so an OPEN/WRITE "edit" of SYSUAF is
+# not a VMS operation that persists to the account database. That is exactly why
+# the write->read round-trip was never exercised before this item: the earlier
+# form of this case wrote a sequential text version that the next boot's binary
+# reader ($UAFDEF, ovmx_sysuaf_enum over the ACP) never read, so removing the
+# SYSTEM row "in the file" changed nothing PROVISION saw and the system did not
+# halt (the false pass this item closes).
+#
+# So this case mutates through AUTHORIZE: RUN SYS$SYSTEM:AUTHORIZE, REMOVE
+# SYSTEM. On EXIT, AUTHORIZE authors a fresh versioned $UAFDEF indexed file over
+# the Files-11 ODS-2 ACP (ovmx_sysuaf_write_all -> IO$_CREATE), which is EXACTLY
+# the file PROVISION.EXE reads on the next boot (ovmx_sysuaf_enum over the same
+# ACP). The removal therefore GENUINELY persists and is read back -- a real
+# write->read round-trip, no executive-constant shortcut. With no SYSTEM row
+# anywhere in SYSUAF, no session could ever authenticate as SYSTEM, so
+# PROVISION.EXE fail-stops (provision_home_directories()'s account-provisioning
+# walk recognises it never saw a SYSTEM row) and the system never reaches a
+# login prompt.
+# ---------------------------------------------------------------------------
+run_norecord_case() {
+    local tag="norecord"
+    local disk="/tmp/e2e-$tag.img"
+    local log1="/tmp/e2e-$tag-boot1.log"
+    local log2="/tmp/e2e-$tag-boot2.log"
+    local fifo="/tmp/e2e-$tag.in"
+    local qp=""
+
+    echo ""
+    echo "=========================================================="
+    echo "CASE $tag: AUTHORIZE REMOVE SYSTEM (binary indexed SYSUAF), expect=halt"
+    echo "=========================================================="
+
+    rm -f "$disk" "$log1" "$log2" "$fifo"
+    cp "$DISTRIB_IMG" "$disk"
+    mkfifo "$fifo"
+
+    # shellcheck disable=SC2086
+    timeout "$BOOT_TIMEOUT" $QEMU $MACHINE \
+        -kernel "$KERNEL" -initrd "$INITRD" \
+        -nographic -append "$CONSOLE loglevel=3 quiet" \
+        -m 512M -smp 1 -nic none -nodefaults -serial stdio \
+        -drive file="$disk",format=raw,if=virtio,cache=writethrough \
+        -no-reboot <"$fifo" >"$log1" 2>&1 &
+    qp=$!
+    exec 4>"$fifo"
+
+    send() { printf '%s\r' "$1" >&4; }
+    wake_login() {
+        local logf="$1" w=0
+        until grep -qaF 'Username:' "$logf" 2>/dev/null || [ "$w" -ge 120 ]; do
+            send ''; sleep 1; w=$((w + 1))
+        done
+    }
+    waitfor() {
+        local pat="$1" lim="${2:-60}" log="$3" w=0
+        while [ $w -lt $((lim * 4)) ]; do
+            grep -qF "$pat" "$log" 2>/dev/null && return 0
+            kill -0 "$qp" 2>/dev/null || return 1
+            sleep 0.25; w=$((w + 1))
+        done
+        return 1
+    }
+
+    # --- Boot 1: log in as SYSTEM, REMOVE the SYSTEM account via AUTHORIZE ---
+    wake_login "$log1"
+    if waitfor 'Username:' 120 "$log1"; then rc=0; else rc=1; fi
+    record "$tag boot 1: pre-installed disk boots and reaches the login prompt" "$rc"
+    if [ "$rc" -ne 0 ]; then
+        kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&-
+        echo "--- boot 1 log ---"; cat "$log1"
+        return
+    fi
+
+    send 'SYSTEM'; sleep 1
+    send 'MANAGER'; sleep 3
+    if waitfor 'Welcome to OpenVMX' 60 "$log1"; then rc=0; else rc=1; fi
+    record "$tag boot 1: SYSTEM logs in" "$rc"
+
+    # AUTHORIZE over the interactive terminal: a RUN'd image's SYS$INPUT is the
+    # terminal here (not a procedure data block), so UAF> reads what we type.
+    # This is the "operator types at UAF>" shape, which works interactively even
+    # though it cannot work inside a command procedure (OVMX$INSTALL.COM's note).
+    send 'RUN SYS$SYSTEM:AUTHORIZE.EXE'; sleep 3
+    if waitfor 'UAF>' 30 "$log1"; then rc=0; else rc=1; fi
+    record "$tag boot 1: AUTHORIZE starts (UAF> prompt)" "$rc"
+    send 'REMOVE SYSTEM'; sleep 2
+    send 'Y'; sleep 2                 # confirm the REMOVE prompt
+    send 'EXIT'; sleep 3              # EXIT triggers save_sysuaf -> binary write
+    send 'SHOW TIME'; sleep 2         # back at DCL: a marker the RUN returned
+
+    # The REMOVE and the on-exit binary write must both have reported success
+    # in-session, or the rest of the case is measuring nothing.
+    if grep -qF '%UAF-S-REMMSG' "$log1"; then rc=0; else rc=1; fi
+    record "$tag boot 1: AUTHORIZE reports the SYSTEM record removed" "$rc"
+    if grep -qF '%UAF-I-SAVED' "$log1"; then rc=0; else rc=1; fi
+    record "$tag boot 1: AUTHORIZE writes the binary SYSUAF back on exit" "$rc"
+
+    # See THE WRITEBACK TRAP at the top of this file.
+    echo "  (settling ${SETTLE_SECS}s for guest writeback)"
+    sleep "$SETTLE_SECS"
+    kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
+
+    # --- Boot 2: PROVISION reads the binary SYSUAF; no SYSTEM row -> fail-stop ---
+    rm -f "$fifo"; mkfifo "$fifo"
+    # shellcheck disable=SC2086
+    timeout "$BOOT_TIMEOUT" $QEMU $MACHINE \
+        -kernel "$KERNEL" -initrd "$INITRD" \
+        -nographic -append "$CONSOLE loglevel=3 quiet" \
+        -m 512M -smp 1 -nic none -nodefaults -serial stdio \
+        -drive file="$disk",format=raw,if=virtio,cache=writethrough \
+        -no-reboot <"$fifo" >"$log2" 2>&1 &
+    qp=$!
+    exec 4>"$fifo"
+
+    # Whole-log grep is safe: a boot-time diagnostic printed before any prompt
+    # exists, so nothing this script typed can have produced it.
+    if waitfor '%OVMX-F-EXECINIT, no SYSTEM account' 120 "$log2"; then rc=0; else rc=1; fi
+    kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
+    record "$tag boot 2: HALTS with '%OVMX-F-EXECINIT, no SYSTEM account'" "$rc"
+
+    if grep -qF '%OVMX-I-EXECINIT, no session could ever authenticate as SYSTEM' "$log2"; then
+        rc=0
+    else
+        rc=1
+    fi
+    record "$tag boot 2: the detail line is PROVISION.EXE's SYSTEM-account continuity check" "$rc"
+
+    # ...and it must NOT reach a login prompt. A system with no SYSTEM account
+    # that hands out a console is the exact thing the halt exists to stop.
+    if grep -qF 'Username:' "$log2"; then rc=1; else rc=0; fi
+    record "$tag boot 2: no login prompt on a system with no SYSTEM account" "$rc"
 
     if [ "$FAIL" -ne 0 ]; then echo "--- $tag boot 2 log ---"; cat "$log2"; fi
 }
@@ -566,21 +724,23 @@ run_case poisoned_uic "SYSTEM|$HASH|50|50|SYS\$SYSDEVICE:[SYSMGR]||NONE" up "50|
 
 # NEGATIVE CONTROL. SYSUAF with NO SYSTEM row at all -- a condition VMS is never
 # in, which OVMX therefore makes unreachable rather than handles (Rule 10). This
-# must still stop the system, from its new home in PROVISION.EXE. Without this
-# case the three above are all "did not halt" assertions with nothing showing
-# they could ever have halted.
+# must still stop the system, from its home in PROVISION.EXE. Without this case
+# the four "up" cases above are all "did not halt" assertions with nothing
+# showing they could ever have halted.
 #
-# vms-a17e moved WHERE this check lives (see run_case's "expect=halt" branch):
-# identity establishment no longer reads SYSUAF at all, so the halt now comes
-# from provision_home_directories()'s pre-existing account-provisioning walk
-# recognizing it never saw a SYSTEM row, not from a failed identity lookup.
-# The functional guarantee this case exists to prove -- no SYSTEM account
-# means no login prompt, ever -- is unchanged.
-run_case norecord "" halt
+# vms-0a5: this case now removes the SYSTEM account through AUTHORIZE (which
+# writes the binary indexed SYSUAF back over the ACP), the authentic mechanism,
+# so the halt is driven by a write that GENUINELY persisted to the file
+# PROVISION reads -- see run_norecord_case's header. The functional guarantee it
+# proves -- no SYSTEM account means no login prompt, ever -- is unchanged; the
+# path to it is now a real write->read round-trip rather than a text write the
+# reader ignored.
+run_norecord_case
 
-# NEGATIVE CONTROL 2 (vms-56c). The startup process image itself is deleted off
-# the disk from a SYSTEM session. PID 1 must fail-stop with the PROVISION-missing
-# halt, proving run_startup()'s stat() guard fires and that the new boot-critical
+# NEGATIVE CONTROL 2 (vms-56c, vms-0a5). The startup process image itself is
+# deleted off the disk from a SYSTEM session -- over the ACP, so it leaves the
+# ODS-2 volume, not just a passthrough copy. PID 1 must fail-stop at boot-image
+# staging, proving the mandatory-image guard fires and that the boot-critical
 # image is not a silently-skippable step.
 run_provision_missing_case
 

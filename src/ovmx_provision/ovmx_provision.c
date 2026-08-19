@@ -101,6 +101,10 @@
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
 #include "vms_kif.h"
+/* vms-aac: PROVISION seeds the on-volume OPERATOR.LOG from the kmsg ring buffer
+ * over the ACP -- PID 1's bridge cannot (no RMS in the static PID-1 image). */
+#include "opcom_kmsg.h"
+#include "rms_textfile.h"
 /* ovmx_boot_power_off(): the boot-plumbing substrate seam (vms-28f) PID 1
  * already uses for the exact same power-off-on-fatal-condition need --
  * Linux: sync(); reboot(RB_POWER_OFF). NetBSD: sync();
@@ -352,12 +356,40 @@ static int provision_home_directories(void)
 /* main                                                                */
 /* ------------------------------------------------------------------ */
 
+#ifndef __NetBSD__
+/*
+ * emit one already-classified kmsg line into the genuine Files-11
+ * SYS$MANAGER:OPERATOR.LOG over the ACP, via RMS $PUT-at-EOF (vms-aac). The
+ * first append $CREATEs the log. Fail-honest: rms_textfile_append_line returns
+ * -1 with no mounted ACP volume / no /dev/vms and no line is lost to a POSIX
+ * substitute -- there just is no operator log to seed then (Rule 9 / INV-6).
+ */
+static void provision_oplog_emit(const char *line)
+{
+    (void)rms_textfile_append_line(VMS_OPERATOR_LOG, line);
+}
+#endif
+
 int main(void)
 {
     /* Bootstrap the VMS namespace so filespecs translate. Same two calls
      * every OVMX image makes; PID 1 has already mounted the disk. */
     vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
     lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
+
+#ifndef __NetBSD__
+    /*
+     * SEED THE OPERATOR LOG (vms-aac, epic vms-208 atomic flip). PID 1's
+     * /dev/kmsg bridge routed vms.ko/vmsfs.ko's boot lifecycle events, but PID 1
+     * is static and has no RMS to write the on-volume OPERATOR.LOG. We do -- and
+     * the SYS$DISK is mounted (PID 1 mounted it before exec'ing us) and the
+     * namespace is up (the two calls just above), so this replays the ring
+     * buffer's boot records into SYS$MANAGER:OPERATOR.LOG over the ACP now,
+     * race-free, before STARTUP.COM runs. sys$sndopr appends live records to the
+     * same file thereafter.
+     */
+    opcom_kmsg_drain_ringbuffer(provision_oplog_emit);
+#endif
 
     /*
      * ACCOUNT-PROVISIONING AND THE ONE REMAINING SYSUAF READ, FIRST

@@ -4971,6 +4971,40 @@ jobs:
             '
 
   # -----------------------------------------------------------------------
+  # olb-symvec-native-x86_64 — Rung 1 of the VMS-native shareable-build
+  # migration (rd vms-bf8, epic vms-a90; design-vms-native-shareable-build.md
+  # C.4.1). LINK.EXE --shareable ROOTS its selective .OLB search at the
+  # --symbol-vector universals: a /SHAREABLE built from MATH.OLB with NO explicit
+  # object TU list (the VMS way) pulls exactly the module defining the universal
+  # PLUS its transitive dependency (2 of 3), leaves the unreferenced member out,
+  # carries a symbol vector, and IMGACT-activates through a consumer that reaches
+  # mul3(14)==42. Before this rung a symbol-vector-only shareable seeded an empty
+  # root set and pulled zero members. Runner is x86_64 so alpine:3.20/amd64 runs
+  # natively — no QEMU.
+  # -----------------------------------------------------------------------
+  olb-symvec-native-x86_64:
+    name: LINK.EXE --shareable seeds selective .OLB pull from --symbol-vector + Activate (VMS-native shareable Rung 1, x86_64)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: LINK.EXE --shareable rooted at --symbol-vector selectively pulls from the .OLB (2 of 3), IMGACT activates a consumer (x86_64)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc ARCH=x86_64 WORK=/tmp/olb-symvec-native SV_EXPECT=1
+              sh /src/src/imgact/test/run_olb_symvec_native.sh
+            '
+
+  # -----------------------------------------------------------------------
   # build-com-native — self-host S3.2 (bead vms-615): a DCL command procedure
   # (BUILD.COM) drives compile -> link -> run of a C program from inside an
   # OVMX DCL session using the OVMX-native TCC.EXE + LINK.EXE as foreign

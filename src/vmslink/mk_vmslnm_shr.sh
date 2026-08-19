@@ -28,8 +28,18 @@
 # import MUST bind, so the vms_kif_lnm_* imports fail the link loudly if the
 # LIBVMSSYS$SHR vector ever drops them.
 #
-# Composition: the 4 vmslnm library translation units, compiled -fPIC musl:
-#   lnm_table.c lnm_translate.c lnm_client.c lnm_defaults.c
+# Composition (VMS-native, no hand TU-list — vms-9d0, epic vms-a90, Rung 2 PILOT of
+# docs/design-vms-native-shareable-build.md): the vmslnm translation units are NOT
+# re-typed here. They are DERIVED from the ONE CMake source set — the
+# set(VMSLNM_SOURCES ...) list that add_library(vmslnm ...) compiles in
+# src/vmslnm/CMakeLists.txt — so this recipe can no longer drift from the dev build.
+# Those TUs are compiled -fPIC musl into .OBJ, packed into an .OLB by LIBRARIAN.EXE,
+# and LINK.EXE --shareable pulls exactly the members its --symbol-vector universals
+# (+ transitive refs) require via selective library search (the Rung-1 capability,
+# #659/vms-bf8): resolve_olbs seeds its unresolved set from the symbol vector, so a
+# /SHAREABLE links from the .OLB ALONE with no explicit object TU list — the VMS way
+# (Linker Utility Manual §1.2.3 selective search rooted at SYMBOL_VECTOR). "Which
+# modules go in" is now DERIVED by LINK from the reference graph, not hand-listed.
 # Compile flags mirror the proven lib-shareable pattern (mk_vmsprocess_shr.sh):
 #   -fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics
 #   -fno-builtin        : keep memcpy/strncpy/... as real CALL26 imports to DECC$SHR
@@ -71,12 +81,45 @@ INCS="-I$SRC/include -I$LIBVMS_INC -I$VMSSYS_INC"
 echo "mk_vmslnm_shr: LINK.EXE=$LINK_EXE  CC=$CC  GSMATCH=$GSMATCH"
 echo "mk_vmslnm_shr: src=$SRC  DECC\$SHR=$DECC_SHR"
 
+# ---------------------------------------------------------------------------
+# TU set: DERIVED from the ONE CMake source list, never re-typed here (vms-9d0).
+# Read set(VMSLNM_SOURCES ...) straight out of src/vmslnm/CMakeLists.txt — the
+# same list add_library(vmslnm ...) compiles for the dev build — so the recipe
+# and CMake cannot disagree. (Rung C.2's file(GENERATE) srclist is not yet in
+# tree; reading the add_library list directly is the task's preferred option and
+# keeps this migration to a single file.)
+# ---------------------------------------------------------------------------
+CMAKELISTS="$SRC/CMakeLists.txt"
+[ -f "$CMAKELISTS" ] || { echo "mk_vmslnm_shr: CMake source list not found: $CMAKELISTS"; exit 1; }
+UNITS=$(awk '/set\(VMSLNM_SOURCES/{f=1} f{print} /\)/{if(f)exit}' "$CMAKELISTS" \
+        | grep -oE '[A-Za-z0-9_/]+\.c')
+[ -n "$UNITS" ] || { echo "mk_vmslnm_shr: could not derive VMSLNM_SOURCES from $CMAKELISTS"; exit 1; }
+NUNITS=$(printf '%s\n' $UNITS | grep -c '.')
+echo "mk_vmslnm_shr: derived $NUNITS TU(s) from CMake VMSLNM_SOURCES: $(printf '%s ' $UNITS)"
+
+# Build LIBRARIAN.EXE (the OVMX object-library utility, src/vmslink/librarian.c) —
+# an ordinary host tool, same convention as the bootstrap LINK.EXE. It packs the
+# .OBJ members into the .OLB that LINK.EXE then selectively searches.
+echo "  cc LIBRARIAN.EXE"
+$CC -std=gnu11 -O2 -I"$HERE/include" -I"$LIBVMS_INC" \
+    -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+    -o "$WORK/LIBRARIAN.EXE" "$HERE/librarian.c"
+
+# Compile each derived TU to a .OBJ.
 OBJS=""
-for u in lnm_table lnm_translate lnm_client lnm_defaults; do
-    echo "  cc $u.c"
-    $CC $CFLAGS $INCS -c -o "$WORK/$u.o" "$SRC/$u.c"
-    OBJS="$OBJS $WORK/$u.o"
+for c in $UNITS; do
+    u=$(basename "$c" .c)
+    echo "  cc $c"
+    $CC $CFLAGS $INCS -c -o "$WORK/$u.OBJ" "$SRC/$c"
+    OBJS="$OBJS $WORK/$u.OBJ"
 done
+
+# LIBRARIAN /CREATE the vmslnm object library from every derived .OBJ member.
+OLB="$WORK/VMSLNM.OLB"
+rm -f "$OLB"
+echo "mk_vmslnm_shr: LIBRARIAN /CREATE $OLB from $NUNITS member(s)"
+# shellcheck disable=SC2086
+"$WORK/LIBRARIAN.EXE" /CREATE "$OLB" $OBJS
 
 # The logical-name universals LIBVMSLNM$SHR exports (every name is a non-static
 # function defined in the 4 objects above). Each becomes a PROCEDURE universal in
@@ -114,13 +157,43 @@ lnm_translate_searchlist=PROCEDURE,\
 lnm_translate_filespec=PROCEDURE,\
 lnm_define_login_logicals=PROCEDURE"
 
-echo "mk_vmslnm_shr: LINK.EXE --shareable --use {DECC\$SHR,LIBVMSSYS\$SHR} -> $OUT"
-# STRICT (no --allow-undefined): every libc/pthread import MUST bind to DECC$SHR,
-# and every vms_kif_lnm_* import MUST bind to LIBVMSSYS$SHR (vms-96e2).
-# shellcheck disable=SC2086
+echo "mk_vmslnm_shr: LINK.EXE --shareable --use {DECC\$SHR,LIBVMSSYS\$SHR} \\"
+echo "               --symbol-vector ... SELECTIVE $OLB -> $OUT"
+# VMS-native link: NO explicit object TU list. The .OLB is the pool; the
+# --symbol-vector universals root the selective search (Rung-1 capability
+# #659/vms-bf8) so LINK pulls exactly the members that define the universals +
+# their transitive refs. STRICT (no --allow-undefined): every libc/pthread import
+# MUST bind to DECC$SHR, every vms_kif_lnm_* import MUST bind to LIBVMSSYS$SHR
+# (vms-96e2). Output captured so the Rung-0 reconcile can read the pull count.
+set +e
 "$LINK_EXE" --shareable --use "$DECC_SHR" --use "$SYS_SHR" \
     --symbol-vector "$VEC" \
     --gsmatch "$GSMATCH" \
-    -o "$OUT" $OBJS
+    -o "$OUT" "$OLB" > "$WORK/link.out" 2>&1
+LRC=$?
+set -e
+sed 's/^/   /' "$WORK/link.out"
+[ "$LRC" -eq 0 ] || { echo "mk_vmslnm_shr: FAIL: LINK.EXE selective-pull link exited $LRC"; exit 1; }
+
+# ---------------------------------------------------------------------------
+# Rung-0 reconcile (vms-9d0): the .OLB + selective pull must produce the SAME
+# module set the deleted hand-list linked whole. Every vmslnm TU defines at least
+# one exported universal, so the correct result is "N of N members pulled": all
+# members are pulled, none dropped. A DIFFERENT count means a module defines no
+# universal and is not transitively referenced (a missing transitive ref or a
+# genuinely dead TU) — investigate before trusting the migration, do NOT silently
+# ship a smaller image than the hand-list did.
+# ---------------------------------------------------------------------------
+PULL=$(grep -oE "$OLB: [0-9]+ of [0-9]+ member" "$WORK/link.out" | grep -oE '[0-9]+ of [0-9]+' | head -1)
+[ -n "$PULL" ] || { echo "mk_vmslnm_shr: FAIL: no selective-pull report for $OLB (is it an .OLB? did LINK search it?)"; exit 1; }
+GOT=${PULL%% of *}
+TOT=${PULL##* of }
+if [ "$GOT" != "$TOT" ] || [ "$TOT" != "$NUNITS" ]; then
+    echo "mk_vmslnm_shr: FAIL: Rung-0 reconcile: selective pull = '$PULL', expected '$NUNITS of $NUNITS'."
+    echo "               The .OLB+symbol-vector pull differs from the hand-list (all $NUNITS TUs)."
+    echo "               A vmslnm TU exports no universal and no other member references it — investigate."
+    exit 1
+fi
+echo "mk_vmslnm_shr: Rung-0 reconcile OK: selective pull $PULL member(s) == the hand-list's whole set"
 
 echo "mk_vmslnm_shr: created $OUT"

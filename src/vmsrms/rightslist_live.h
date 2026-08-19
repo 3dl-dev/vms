@@ -1,25 +1,25 @@
 /*
  * rightslist_live.h - LIVE identifier resolution over the binary $RDBDEF
  * RIGHTSLIST (vms-f15a, epic vms-d0c). The $ASCTOID (name->value) / $IDTOASC
- * (value->name) executive-context reads of SYS$SYSTEM:RIGHTSLIST.DAT as a
- * genuine RMS Prolog-3 indexed file of 48-byte $RDBDEF records -- NOT the
- * retired ASCII colon-delimited facade.
+ * (value->name) reads of SYS$SYSTEM:RIGHTSLIST.DAT as a genuine RMS Prolog-3
+ * indexed file of 48-byte $RDBDEF records -- NOT the retired ASCII
+ * colon-delimited facade.
  *
  * ====================================================================
- * WHY THESE ARE EXECUTIVE-CONTEXT READS (the protection fix)
+ * WHY AN UNPRIVILEGED CALLER CAN READ THE RIGHTS DATABASE
  * ====================================================================
- * RIGHTSLIST.DAT is protected WORLD:none, like SYSUAF.DAT. The earlier
- * F$IDENTIFIER backend opened it in the CALLER's context (rms_textfile ->
- * RMS $OPEN as the unprivileged process), which on the runtime ACP path is a
- * protection violation: an ordinary process cannot read the rights database
- * directly. On real VMS the identifier<->value conversion is done by the
- * executive services $ASCTOID / $IDTOASC, which read the rights database in
- * PRIVILEGED (SYSPRV/READALL) context on the caller's behalf -- so an
- * unprivileged image resolves an identifier WITHOUT holding read access to the
- * file. These entry points model exactly that: they open the file through
- * rms_open_named_handle, whose ACP window is the executive channel ($ASSIGN of
- * the mounted volume) -- the read is performed by the executive, not the
- * caller, so WORLD:none does not bar it.
+ * RIGHTSLIST.DAT is WORLD-READABLE (World:R, vms-109), exactly as on real VMS,
+ * where the rights database must be readable by every process so an ordinary
+ * F$IDENTIFIER / $ASCTOID resolves an identifier without privilege. These
+ * entry points open it in the CALLER's context through rms_open_named_handle
+ * over the runtime ACP; the file's World:R protection is what makes that open
+ * SUCCEED for an unprivileged process (acp_check_access grants World read,
+ * vms-548b). This is the correct model -- SYSUAF stays World:none (protected,
+ * its Purdy hashes), and UIC identifiers live here in the world-readable
+ * RIGHTSLIST, NOT in the protected SYSUAF (vms-930). An earlier revision
+ * wrongly assumed RIGHTSLIST was World:none and read in privileged context;
+ * the caller-context ACP read actually honors the file's protection, so the
+ * fix is the file's protection, not a privilege claim.
  *
  * ====================================================================
  * WHY THESE LIVE IN VMSRMS (the library-layering seam)

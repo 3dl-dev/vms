@@ -826,8 +826,9 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # F$IDENTIFIER used to answer from a hardcoded pair of names inside
     # lex_identifier(), so the ident suite's SYSTEM/DEFAULT assertions passed
     # in an initramfs that had no system disk at all. It now READS the rights
-    # database -- SYS$SYSTEM:RIGHTSLIST.DAT for general identifiers, SYSUAF
-    # for UIC identifiers -- which means those assertions are only meaningful
+    # database -- SYS$SYSTEM:RIGHTSLIST.DAT for BOTH general AND UIC identifiers
+    # (vms-930; SYSUAF is protected World:none and no longer the UIC source) --
+    # which means those assertions are only meaningful
     # if the guest has the files. Staged at the product's own layout, from
     # the product's own distro/rootfs, so the suite asserts against what
     # actually boots rather than a fixture invented for the harness.

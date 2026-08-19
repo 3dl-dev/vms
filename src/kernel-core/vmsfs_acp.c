@@ -768,6 +768,21 @@ static uint32_t acp_check_access(struct vms_proc *proc, const ods2_fh2_t *fh,
     if (want_write)
         want |= 0x2u;                   /* write */
 
+    /*
+     * DIRECTORY TRAVERSAL vs READ (vms-548b). The ACP opens a directory only to
+     * SEARCH it -- resolve the next path component's FID (rms_acp_resolve_did
+     * walks [SYS0.SYSCOMMON.SYSEXE] this way) -- which on VMS is an EXECUTE
+     * operation, not a READ: a World:E directory (the 0xBA00 the writer masters)
+     * lets an unprivileged process look up a KNOWN name without granting a
+     * listing. So for a read-only open of a directory the wanted right is
+     * EXECUTE (bit 2), not READ (bit 0) -- which is what lets an unprivileged
+     * F$IDENTIFIER traverse the concealed-rooted path to the world-readable
+     * RIGHTSLIST.DAT. A directory WRITE (create/rename enters a record) still
+     * needs write and is unaffected.
+     */
+    if (!want_write && (fh->fh2_filechar & ODS2_FH2_M_DIRECTORY))
+        want = 0x4u;                    /* execute (traversal) */
+
     /* BYPASS lifts every access control. READALL grants the read bit. */
     if (privs & ACP_PRV_M_BYPASS)
         return SS__NORMAL;

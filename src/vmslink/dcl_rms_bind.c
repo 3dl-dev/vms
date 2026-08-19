@@ -46,11 +46,13 @@
  * is immaterial (no vmsrms header needed; this is a link-anchor TU, not part of
  * any library's include graph).
  *
- * F$IDENTIFIER (dcl_lexical.c) resolves BOTH a general identifier -- via
- * ovmx_rightslist_asctoid/_idtoasc (rightslist_live.o) -- AND a UIC identifier:
- * rightslist_name_to_value() falls through to sysuaf_lookup(), which weak-calls
- * ovmx_sysuaf_read_user/_uic (sysuaf_live.o), for names like SYSTEM/DEFAULT whose
- * value is that account's UIC. So BOTH engine leaf objects must be anchored.
+ * F$IDENTIFIER (dcl_lexical.c) resolves BOTH general AND UIC identifiers from
+ * the world-readable RIGHTSLIST.DAT via ovmx_rightslist_asctoid/_idtoasc
+ * (rightslist_live.o) -- since vms-930 it no longer sources UIC identifiers from
+ * SYSUAF. SYSUAF (ovmx_sysuaf_read_user/_uic, sysuaf_live.o) is STILL anchored
+ * for the OTHER DCL surface that reads/writes it: SET PASSWORD
+ * (src/vmsdcl/dcl_cmd_set.c calls sysuaf_lookup/_authenticate/_write_record). So
+ * BOTH engine leaf objects must be anchored.
  *
  * This matters differently on the two DCL link paths:
  *   - LINK.EXE shareable DCL.EXE (mk_dcl.sh): ANY one strong LIBVMSRMS$SHR import
@@ -58,8 +60,8 @@
  *     WHOLE weak seam by name -- rightslist alone would suffice, sysuaf is free.
  *   - static-musl cmake DCL.EXE (target vmsdcl, the KE test harness's /bin/DCL.EXE):
  *     archive member-pull is per-object -- a strong ref to rightslist_live.o does
- *     NOT pull sysuaf_live.o. Anchoring BOTH is REQUIRED there, or the UIC-side
- *     F$IDENTIFIER answers go dead (test_syssvc_ident, vms-586). */
+ *     NOT pull sysuaf_live.o. Anchoring BOTH is REQUIRED there, or SET PASSWORD's
+ *     SYSUAF read/write goes dead (dcl_cmd_set.c). */
 extern unsigned int ovmx_rightslist_asctoid(const char *name, unsigned int *value);
 extern unsigned int ovmx_rightslist_idtoasc(unsigned int value, char *name,
                                             unsigned long bufsz);

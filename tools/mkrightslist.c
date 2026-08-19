@@ -27,10 +27,18 @@
  *   LOCAL        %X80000004
  *   NETWORK      %X80000005
  *   REMOTE       %X80000006
- * NO UIC identifiers are shipped here: on OVMX the UIC identifiers are DERIVED
- * from SYSUAF.DAT at lookup time (src/libvms/rtl/rightslist.c), so that one
- * account has exactly one UIC in the whole system (rightslist.h / vms-e60).
- * The ASCII file this replaces carried no UIC rows either.
+ *
+ * PLUS one UIC IDENTIFIER per shipped account (vms-930). On real VMS AUTHORIZE
+ * maintains an account and its UIC identifier together in RIGHTSLIST -- the
+ * oracle's own SHOW/IDENTIFIER/FULL (docs/oracle/vax73-rights-database.md §4)
+ * lists SYSTEM=[1,4], DEFAULT=[200,200] and every account's UIC as RIGHTSLIST
+ * rows -- and RIGHTSLIST is WORLD-READABLE, so an unprivileged F$IDENTIFIER
+ * resolves them WITHOUT reading the protected SYSUAF. Values are the accounts'
+ * own UICs from the SYSUAF seed (tools/mksysuaf.c g_seed, the single source of
+ * account UICs); SYSTEM/DEFAULT are additionally oracle-pinned (§1: 65540 /
+ * 8388736). This is why UIC identifiers no longer come from SYSUAF at lookup
+ * time (src/libvms/rtl/rightslist.c): SYSUAF is protected (World:none, vms-109)
+ * and an unprivileged caller cannot read it.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -53,7 +61,12 @@ struct seed_id {
     uint32_t    attr;
 };
 
-/* The six environmental identifiers, oracle-measured, no attributes. */
+/*
+ * The six environmental (general) identifiers, oracle-measured, no attributes,
+ * FOLLOWED BY one UIC identifier per shipped account (value = (group<<16)|member,
+ * mirroring tools/mksysuaf.c g_seed). No attributes: the oracle's environmental
+ * AND UIC rows all carry an empty Attributes column (§4).
+ */
 static const struct seed_id g_seed[] = {
     { "BATCH",       0x80000001u, 0 },
     { "DIALUP",      0x80000002u, 0 },
@@ -61,6 +74,13 @@ static const struct seed_id g_seed[] = {
     { "LOCAL",       0x80000004u, 0 },
     { "NETWORK",     0x80000005u, 0 },
     { "REMOTE",      0x80000006u, 0 },
+    /* UIC identifiers -- one per SYSUAF seed account (tools/mksysuaf.c). */
+    { "SYSTEM",      (1u   << 16) | 4u,   0 },  /* [1,4]      oracle §1: 65540   */
+    { "OPERATOR",    (1u   << 16) | 6u,   0 },  /* [1,6]                         */
+    { "DEFAULT",     (128u << 16) | 128u, 0 },  /* [128,128]  oracle §1: 8388736 */
+    { "GUEST",       (128u << 16) | 129u, 0 },  /* [128,129]                     */
+    { "USER1",       (128u << 16) | 130u, 0 },  /* [128,130]                     */
+    { "USER2",       (128u << 16) | 131u, 0 },  /* [128,131]                     */
 };
 
 static void build_record(const struct seed_id *s, rdb_identifier_record_t *out)

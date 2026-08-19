@@ -190,6 +190,73 @@ static inline uint32_t ods2_fid_number(const ods2_fid_t *f)
 }
 
 /*
+ * ods2_name_eq_ci - case-insensitive exact match of two file-spec names
+ * ("NAME.TYPE", no version). Freestanding: a self-contained A-Z upcase, no
+ * libc/libkern <ctype.h> dependency, so it is identical on the userspace
+ * writer path and the kernel-resident (ods2_edit.c) ACP-create path.
+ */
+static inline int ods2_name_eq_ci(const char *a, const char *b)
+{
+    size_t i = 0;
+    for (;;) {
+        int ca = (unsigned char)a[i];
+        int cb = (unsigned char)b[i];
+        if (ca >= 'a' && ca <= 'z') ca -= 32;
+        if (cb >= 'a' && cb <= 'z') cb -= 32;
+        if (ca != cb) return 0;
+        if (ca == 0)  return 1;
+        i++;
+    }
+}
+
+/*
+ * ods2_class_fileprot - the PER-FILE-CLASS default fh2_fileprot (vms-109).
+ *
+ * Files-11 protection is per-file on real VMS; a single "every ordinary file
+ * is World:RE" default (vms-37e) mastered SYSUAF.DAT -- whose Purdy password
+ * hashes must be UNREADABLE by the World category -- as World:RE, a hole. The
+ * shared writer (ods2_writer.c) AND the kernel ACP-create path (ods2_edit.c)
+ * both take this default when the caller passes fileprot == 0, so the class
+ * mapping lives here, once, keyed on the file's own name/kind:
+ *
+ *   directory                      -> 0xBA00  S:RWED,O:RWED,G:RWE,W:E  (fixture
+ *                                             directory-shaped mask, [F11])
+ *   reserved metadata (FID<=RESF)  -> 0xFA00  S:RWED,O:RWED,G:RE,W:none (fixture)
+ *   SYSUAF.DAT                     -> 0xFF88  S:RWE, O:RWE, G:none,W:none
+ *                                             -- oracle docs/oracle/
+ *                                             vax73-authorize-privilege.md:
+ *                                             SYSUAF.DAT (RWE,RWE,,), no WORLD
+ *                                             access; protects the hashes.
+ *   RIGHTSLIST.DAT                 -> 0xEE00  S:RWED,O:RWED,G:R,W:R
+ *                                             -- WORLD-READABLE on real VMS so an
+ *                                             unprivileged process can resolve
+ *                                             identifiers (F$IDENTIFIER) without
+ *                                             SYSPRV; the world-readable half of
+ *                                             the rights database (vms-930).
+ *   any other ordinary file        -> 0xAA00  S:RWED,O:RWED,G:RE,W:RE  -- the
+ *                                             documented OpenVMS DEFAULT file
+ *                                             protection (World Read+Execute);
+ *                                             every shipped SYS$SYSTEM image
+ *                                             (DCL.EXE, LOGINOUT.EXE, ...) must
+ *                                             be World-activatable (vms-37e).
+ *
+ * Within each 4-bit field a SET bit DENIES (bit0=R,1=W,2=E,3=D); fields are
+ * System, Owner, Group, World from low to high nibble (ovmx_fileprot.h).
+ * Clean-room: the two grounded constants are the real-VAX fixture / oracle
+ * captures cited above; the World:R and default values are the documented
+ * public OpenVMS protections (Rule 8).
+ */
+static inline uint16_t ods2_class_fileprot(const char *name, int is_dir,
+                                           uint32_t fidnum)
+{
+    if (is_dir)                  return 0xBA00u;
+    if (fidnum <= ODS2_RESFILES) return 0xFA00u;
+    if (name && ods2_name_eq_ci(name, "SYSUAF.DAT"))     return 0xFF88u;
+    if (name && ods2_name_eq_ci(name, "RIGHTSLIST.DAT")) return 0xEE00u;
+    return 0xAA00u;
+}
+
+/*
  * Record attributes area (FAT). 32 bytes. [N] access.h struct RECATTR.
  *
  * hiblk/efblk are stored as two 16-bit halves. CORRECTED in increment 3

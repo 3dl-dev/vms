@@ -812,6 +812,17 @@ static void stage_boot_images(void)
         "INSTALL.EXE", "SYSGEN.EXE", "AUTHORIZE.EXE", "MAIL.EXE",
         "MONITOR.EXE", "INITIALIZE.EXE", "PRODUCT.EXE", "LIBRARIAN.EXE",
         "HELP.EXE", "SCSD.EXE",
+        /* OVMX-native toolchain (vms-104). BUILD.COM's self-host path defines
+         * TCC :== $SYS$SYSTEM:TCC.EXE and LNK :== $SYS$SYSTEM:LINK.EXE and
+         * fork()+execve()s each (a plain static image is not in-process-eligible,
+         * so dcl_activate_image forks it) -- exactly the SYSEXE-utility class
+         * above, so they stage the SAME way: bytes off the genuine ODS-2 volume
+         * through the ACP (INV-6), rewritten to the staged copy by
+         * dcl_resolve_activatable_acp / dcl_exec_utility when /vms is absent.
+         * BEST-EFFORT like the rest: a system disk that does not ship the
+         * toolchain (a minimal, non-self-hosting install) skips them honestly.
+         * LIBRARIAN.EXE is already staged above (it is also a SYSEXE utility). */
+        "TCC.EXE", "LINK.EXE",
     };
     for (size_t i = 0; i < sizeof(utils) / sizeof(utils[0]); i++) {
         char acp_path[512], dest[512];

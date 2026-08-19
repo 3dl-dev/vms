@@ -273,6 +273,95 @@ here as it is discovered:
   OVMX kernel (socket layer, netdev registration, `proc`/`sysctl`, memory/skb APIs) — one row per
   bridged API, with the upstream call and the OVMX adaptation. Populate during Phase 1.
 
+### 4.6 Phase 0 capture — first oracle observation (`vms-3be`, 2026-08-19)
+
+**Oracle used:** lab-2 (`tests/lab/`), a fresh k3s StatefulSet replica (`vaxlab-0`, `NODES="vax1
+vax2"`, image `ovmx-vaxlab:3`), driven per `tests/lab/README.md`'s console protocol
+(prompt-synchronised login, `SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST`). Observation only —
+no crafted frames injected; `tcpdump -i br0` run inside the pod netns. Lab-Alpha was **not**
+used for this capture — see the note at the end of this section.
+
+**Oracle confirmation.** DECnet Phase IV starts automatically during VAX1's `SYSTARTUP` (OPCOM:
+`Message from user DECNET on VAX1 / DECnet event 4.10, circuit up / From node 1.1 (VAX1) /
+Circuit QNA-0`, 19-AUG-2026 15:45:09). Confirmed interactively:
+
+```
+$ MCR NCP SHOW EXECUTOR
+Node Volatile Summary as of 19-AUG-2026 15:46:43
+Executor node = 1.1 (VAX1)
+State                    = on
+Identification           = DECnet for OpenVMS VAX V7.3
+
+$ MCR NCP SHOW KNOWN NODES
+Known Node Volatile Summary as of 19-AUG-2026 15:46:51
+Executor node = 1.1 (VAX1)
+State                    = on
+Identification           = DECnet for OpenVMS VAX V7.3
+    Node           State      Active  Delay   Circuit     Next node
+                              Links
+ 1.2 (VAX2)                                   QNA-0          0
+```
+
+**Wire specimens** (`tcpdump -i br0 -w decnet_oracle.pcap -U -s 0` inside pod `vaxlab-0`, filter
+`ether proto 0x6003`; capture window 15:46:40–15:49:55 UTC, 268476 bytes, host path below):
+
+| # | Layer | Timestamp | Src MAC → Dst MAC | Decode | Notes |
+|---|---|---|---|---|---|
+| 1 | Datalink/routing | 15:46:40.469728 | `aa:00:04:00:01:04` → `ab:00:00:03:00:00` | `endnode-hello endnode vers 2 eco 0 ueco 0 src 1.1 blksize 1498 rtr 0.0 hello 15 data 2` | First of **16** endnode-HELLO frames captured, one per ~15s cycle |
+| 2 | Datalink/routing | 15:47:10.504441 | `aa:00:04:00:01:04` → `ab:00:00:03:00:00` | identical decode to #1 | Second specimen, confirms periodicity |
+| 3 | NSP | 15:47:39.042253 | `aa:00:04:00:01:04` → `aa:00:04:00:02:04` | `1.1 > 1.2 51 conn-initiate 8193>0 ver 4.1 segsize 1459`; payload includes plaintext access-control string `SYSTEM` (Session Control default-username field) | First of **10** NSP Connect-Initiate/Retransmit-Connect-Initiate frames — VAX1 originating `SET HOST VAX2` |
+| 4 | NSP | 15:47:44.546400 | `aa:00:04:00:01:04` → `aa:00:04:00:02:04` | `1.1 > 1.2 51 retrans-conn-initiate 8193>0 ver 4.1 segsize 1459` | Second specimen, RQR/retransmit behavior on an unanswered Connect Initiate |
+
+Ethertype `DN (0x6003)` on every frame; source MAC `aa:00:04:00:01:04` matches the documented
+`AA-00-04-00-xx-yy` derivation for area.node 1.1; HELLO multicast destination
+`ab:00:00:03:00:00` matches the documented Phase IV endnode multicast — **both §4.3 datalink
+assertions observed and match the design doc's cited addressing**, satisfying the two-specimen
+minimum independently for HELLO and for NSP.
+
+Hex dump, specimen #1 (HELLO):
+```
+0x0000:  2200 0d02 0000 aa00 0400 0104 03da 0500
+0x0010:  0000 0000 0000 0000 aa00 0400 0000 0f00
+0x0020:  0002 aaaa 0000 0000 0000 0000 0000
+```
+Hex dump, specimen #3 (NSP Connect Initiate):
+```
+0x0000:  3300 812e 0000 aa00 0400 0204 0000 aa00
+0x0010:  0400 0104 0000 0000 1800 0001 2001 03b3
+0x0020:  0500 2a02 001a 0220 2006 5359 5354 454d
+0x0030:  2700 0000 00
+```
+
+**What this does not establish (honest observation, not a defect to fix here).** VAX1's Connect
+Initiate never reached completion — no Connect Confirm, data segment, or disconnect was observed,
+because **VAX2's DECnet permanent database was never configured** in this golden image: VAX2's
+`SYSTARTUP` hit a `%DCL-W-PARMDEL` parse error against a `NODENAME`/`NODEMAME`-keyed template
+value, printed `You have not yet configured your DECnet permanent database...`, and left VAX2's
+own `MCR NCP SHOW EXECUTOR` failing `%NCP-W-OPEFAI` / `%SYSTEM-W-NOSUCHDEV`. `SET HOST VAX2` from
+VAX1 correspondingly failed `%SYSTEM-F-UNREACHABLE, remote node is not currently reachable` after
+8 retransmits. This is a **golden-image asymmetry** (VAX1's permanent DB is configured, VAX2's is
+not) — not a wire-protocol question, and out of scope for this observation-only capture to repair
+(no golden-image edit was made; `NETCONFIG.COM`/`NCP DEFINE` on VAX2 would fix it for a future
+session, per the design doc §6's config-is-allowed carve-out). Recorded here as a **capture
+condition**, not an inferred protocol fact: the retransmit cadence and RQR/IE flags observed above
+are genuine unanswered-Connect-Initiate behavior, not a confound with the addressing/HELLO facts.
+
+**Retention.** The pcap and console logs are lab artifacts, **not committed** (Rule 8 practice
+mirrors `docs/clean-room/PROVENANCE.md` — retain on the lab volume, cite in-doc). Host path
+(tank volume, readable from `workshop`):
+`/data/training/vax/k8s-labs/vaxlab-0/logs/decnet_oracle.pcap` (also
+`.../vaxlab-0/logs/vax1.log`, `vax2.log` for the full console transcripts). The lab-2 replica was
+scaled back to 0 after capture (`kubectl -n ovmx-lab scale sts/vaxlab --replicas=0`); no host taps
+or processes were left running.
+
+**Why lab-Alpha was not used.** `tests/lab-alpha/README.md` §"Why no DECnet" records that
+DECnet Phase IV is **not installed** on the lab-Alpha V8.4 golden image, deliberately: AXPbox has
+two open emulator bugs (#39, #84) where starting DECnet Phase IV machine-checks OpenVMS Alpha 8.4
+(`MACHINECHK`, bugcheck 0x215). Installing it would put a known crash in the golden image for no
+benefit to this capture. The VAX oracle alone satisfies the done-condition (a VAX **or** Alpha node
+confirmed running Phase IV); Alpha-side DECnet observation is deferred, tracked by this note, not
+a new item — pursue only if a future need specifically requires the 64-bit answer.
+
 ---
 
 ## 5. Fallback provenance regime (if NO-GO)
@@ -301,7 +390,7 @@ The L3–L6 userspace surface (NCP, session, FAL, DCL/RMS integration) is stream
 | V4 | Upstream author/maintainer attribution | §1.1 lineage narrative | `net/decnet/` headers + `MAINTAINERS` |
 | V5 | DNA Phase IV spec editions the upstream code cites | §1.1 / §5 fallback citations | upstream source comments |
 | V6 | `vms.ko`/`vmsfs.ko` `MODULE_LICENSE` convention (to class the DECnet module the same way) | §1.3 coexistence-as-same-class | OVMX kernel sources |
-| V7 | Lab VAX/Alpha have DECnet Phase IV configured + licensed | §4.1 oracle exists | Phase 0 lab check |
+| V7 | **RESOLVED 2026-08-19 (`vms-3be`, §4.6).** Lab-2 VAX1 runs DECnet Phase IV unlicensed-but-functional (`SHOW EXECUTOR` reports `State = on`; no `%LICENSE-` error observed on the executor/HELLO path). VAX2's *permanent database* is unconfigured (golden-image asymmetry, §4.6) — a config gap, not a licensing gap. Lab-Alpha does **not** have DECnet installed (AXPbox bugs #39/#84 crash it) — VAX is the oracle for Phase IV. | §4.1 oracle exists | Phase 0 lab check, `tests/lab/README.md`, `tests/lab-alpha/README.md` |
 | V8 | Final INV-0 product mark wording | §3 branding | operator call (`design-decnet-ovmx.md §9.3`) |
 | V9 | Kernel-API drift table (base → OVMX kernel) | §4.5 forward-port surface | Phase 1 forward-port work |
 

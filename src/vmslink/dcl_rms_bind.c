@@ -41,13 +41,30 @@
  * executable-local TUs.
  */
 
-/* The RIGHTSLIST engine entry points dcl_lexical.c reaches through LIBVMS$SHR's
- * weak seam, declared only to take their address -- the reference is by NAME, so
- * the exact prototype is immaterial (no vmsrms header needed; this is a
- * link-anchor TU, not part of any library's include graph). */
+/* The engine entry points DCL reaches through LIBVMS$SHR's weak seam, declared
+ * only to take their address -- the reference is by NAME, so the exact prototype
+ * is immaterial (no vmsrms header needed; this is a link-anchor TU, not part of
+ * any library's include graph).
+ *
+ * F$IDENTIFIER (dcl_lexical.c) resolves BOTH a general identifier -- via
+ * ovmx_rightslist_asctoid/_idtoasc (rightslist_live.o) -- AND a UIC identifier:
+ * rightslist_name_to_value() falls through to sysuaf_lookup(), which weak-calls
+ * ovmx_sysuaf_read_user/_uic (sysuaf_live.o), for names like SYSTEM/DEFAULT whose
+ * value is that account's UIC. So BOTH engine leaf objects must be anchored.
+ *
+ * This matters differently on the two DCL link paths:
+ *   - LINK.EXE shareable DCL.EXE (mk_dcl.sh): ANY one strong LIBVMSRMS$SHR import
+ *     loads the producer, after which IMGACT's resolve_weak_imports() binds the
+ *     WHOLE weak seam by name -- rightslist alone would suffice, sysuaf is free.
+ *   - static-musl cmake DCL.EXE (target vmsdcl, the KE test harness's /bin/DCL.EXE):
+ *     archive member-pull is per-object -- a strong ref to rightslist_live.o does
+ *     NOT pull sysuaf_live.o. Anchoring BOTH is REQUIRED there, or the UIC-side
+ *     F$IDENTIFIER answers go dead (test_syssvc_ident, vms-586). */
 extern unsigned int ovmx_rightslist_asctoid(const char *name, unsigned int *value);
 extern unsigned int ovmx_rightslist_idtoasc(unsigned int value, char *name,
                                             unsigned long bufsz);
+extern unsigned int ovmx_sysuaf_read_user(const char *username, void *out);
+extern unsigned int ovmx_sysuaf_read_uic(unsigned int uic, void *out);
 
 __attribute__((used, noinline))
 unsigned int dcl_rms_bind_never(void)
@@ -58,5 +75,6 @@ unsigned int dcl_rms_bind_never(void)
     static volatile int never = 0;
     if (!never)
         return 0;
-    return ovmx_rightslist_asctoid(0, 0) | ovmx_rightslist_idtoasc(0, 0, 0);
+    return ovmx_rightslist_asctoid(0, 0) | ovmx_rightslist_idtoasc(0, 0, 0)
+         | ovmx_sysuaf_read_user(0, 0)   | ovmx_sysuaf_read_uic(0, 0);
 }

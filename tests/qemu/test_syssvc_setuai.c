@@ -70,17 +70,18 @@
 
 #include "starlet.h"
 #include "ssdef.h"
+#include "stsdef.h"          /* $VMS_STATUS_SUCCESS                          */
 #include "uaidef.h"
 #include "prvdef.h"
 #include "lnmdef.h"          /* struct item_list_3 */
 #include "vms/pcb.h"
 #include "vms_kif.h"
 #include "ovmx_layout.h"
-#include "vmsfs/device.h"
-#include "vmsfs/filespec.h"
+#include "sysuaf.h"          /* sysuaf_lookup + sysuaf_record_t (binary $UAFDEF) */
 #include "vms/logical.h"
 
 #define EXIT_SKIP 77
+#define ODS2_UNIT "DKA300:"  /* vdd: the generated system-disk ODS-2 fixture */
 
 static int pass = 0;
 static int fail = 0;
@@ -125,74 +126,28 @@ struct probe_result {
 #define STAGE_IDENTITY    (1 << 0)   /* vms_kif_setident(name, uic, privs) */
 #define STAGE_PCB_SYSPRV  (1 << 1)   /* vms_pcb_init + sys$setprv(SYSPRV) */
 
-static void resolve_sysuaf(char *out, size_t outsz)
-{
-    out[0] = '\0';
-    vmsfs_to_linux_path(VMS_SYSUAF_PATH, out, outsz);
-}
-
-/* Read SYSUAF.DAT whole. Returns bytes read, or -1. */
-static long slurp_sysuaf(char *buf, size_t bufsz)
-{
-    char path[1024];
-    resolve_sysuaf(path, sizeof(path));
-
-    FILE *f = fopen(path, "r");
-    if (!f)
-        return -1;
-    size_t n = fread(buf, 1, bufsz - 1, f);
-    fclose(f);
-    buf[n] = '\0';
-    return (long)n;
-}
-
 /*
- * Return the whole pipe-delimited SYSUAF row whose first field is 'user',
- * copied into 'out'. Returns 1 if found. The caller compares FIELD TEXT, so
- * nothing here re-parses a number the service just wrote.
+ * Seed the concealed-rooted system logicals so SYS$SYSTEM: composes to
+ * DKA300:[SYS0.SYSCOMMON.SYSEXE] over the ACP-mounted ODS-2 volume -- the SAME
+ * namespace the passing in-process reader suites (test_syssvc_sysuaf_uic_base,
+ * test_syssvc_rightslist) use. This is what makes sysuaf_lookup() read the real
+ * binary $UAFDEF record off the mounted platter via RMS-over-ACP rather than a
+ * /vms POSIX passthrough (vms-586). SYS$SYSDEVICE is a DEVICE unit, not a Linux
+ * directory, so the resolution never touches vmsfs_to_linux_path().
  */
-static int sysuaf_row(const char *text, const char *user, char *out, size_t outsz)
+static void seed_system_logicals(lnm_manager_t *mgr)
 {
-    size_t ulen = strlen(user);
-    const char *p = text;
-
-    while (p && *p) {
-        const char *eol = strchr(p, '\n');
-        size_t len = eol ? (size_t)(eol - p) : strlen(p);
-
-        if (len > ulen && strncmp(p, user, ulen) == 0 && p[ulen] == '|') {
-            if (len >= outsz)
-                len = outsz - 1;
-            memcpy(out, p, len);
-            out[len] = '\0';
-            return 1;
-        }
-        p = eol ? eol + 1 : NULL;
-    }
-    out[0] = '\0';
-    return 0;
-}
-
-/* Copy field 'idx' (0-based) of a pipe-delimited row into 'out'. */
-static int row_field(const char *row, int idx, char *out, size_t outsz)
-{
-    const char *p = row;
-    int i;
-
-    for (i = 0; i < idx && p; i++) {
-        p = strchr(p, '|');
-        if (p) p++;
-    }
-    if (!p)
-        return 0;
-
-    const char *end = strchr(p, '|');
-    size_t len = end ? (size_t)(end - p) : strlen(p);
-    if (len >= outsz)
-        len = outsz - 1;
-    memcpy(out, p, len);
-    out[len] = '\0';
-    return 1;
+    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SYSDEVICE", ODS2_UNIT,
+               LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+    static const char *sysroot[] = {
+        "SYS$SYSDEVICE:[SYS0.]",
+        "SYS$SYSDEVICE:[SYS0.SYSCOMMON.]"
+    };
+    lnm_create_multi(mgr, LNM_PROCESS_TABLE, "SYS$SYSROOT", sysroot, 2,
+                     LNM_ATTR_CONCEALED, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SYSTEM",  "SYS$SYSROOT:[SYSEXE]", 0, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$MANAGER", "SYS$SYSROOT:[SYSMGR]", 0, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$LIBRARY", "SYS$SYSROOT:[SYSLIB]", 0, LNM_MODE_EXEC);
 }
 
 /*
@@ -330,47 +285,61 @@ static int executive_present(void)
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
-    static char before[8192], after[8192];
-    static char row[1024], field[256];
+    sysuaf_record_t before_rec, after_rec;
     struct probe_result r1, r2, r3, r4;
-    long nbefore, nafter;
 
     printf("=== test_syssvc_setuai ($SETUAI's SYSPRV test is the executive's, vms-cb5) ===\n");
 
     /*
-     * Bootstrap the VMS namespace the same way every shipped image does
-     * (tools/vms_login.c, tools/vms_authorize.c, DCL.EXE): SYSUAF_PATH is a
-     * VMS filespec and vmsfs_to_linux_path() cannot resolve it until the
-     * system device is in this process's device table AND SYS$SYSTEM is in its
-     * logical name table -- VMS_SYSUAF_PATH is "SYS$SYSTEM:SYSUAF.DAT", so
-     * both halves are needed. $SETUAI resolves it the same way, so without
-     * this the service under test would fail on a missing file rather than on
-     * its privilege test, and every refusal below would be explained by the
-     * wrong thing. MEASURED: with the device table alone the path resolved to
-     * /vms/sysuaf.dat, which does not exist.
+     * Decide skip-vs-run ONLY by executive presence: $SETUAI, and the SYSUAF
+     * evidence read below, both go through the real Files-11 ACP over /dev/vms
+     * (vms-586 atomic-flip migration). With no executive the whole suite is a
+     * CI negative-control rig, never a fake pass.
      */
-    vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
-    lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
-    {
-        char path[1024];
-        resolve_sysuaf(path, sizeof(path));
-        printf("  SYSUAF.DAT resolves to: %s\n", path);
-    }
-
     if (!executive_present()) {
         printf("  INFO: cannot open /dev/vms -- CI negative-control rig, not the product\n");
         printf("=== test_syssvc_setuai: 0 passed, 0 failed (SKIPPED: no /dev/vms) ===\n");
         return EXIT_SKIP;
     }
 
-    nbefore = slurp_sysuaf(before, sizeof(before));
-    if (nbefore <= 0) {
-        printf("  FAIL: could not read SYSUAF.DAT -- nothing below can be judged\n");
+    /*
+     * Bootstrap the VMS namespace the way the shipped runtime does after boot:
+     * $MOUNT the system-disk ODS-2 volume and seed the concealed-rooted system
+     * logicals so SYS$SYSTEM:SYSUAF.DAT composes to DKA300:[SYS0.SYSCOMMON.SYSEXE]
+     * and resolves through RMS-over-ACP -- the same path the passing
+     * test_syssvc_sysuaf_uic_base suite proves. $SETUAI writes, and sysuaf_lookup
+     * reads back, the REAL binary $UAFDEF record on that mounted platter (no
+     * ASCII facade, no /vms POSIX passthrough).
+     */
+    lnm_manager_t *mgr = lnm_get_manager();
+    if (!mgr) {
+        printf("  FAIL: no LNM manager -- cannot seed the system namespace\n");
         printf("=== test_syssvc_setuai: 0 passed, 1 failed ===\n");
         return 1;
     }
-    CHECK(sysuaf_row(before, TARGET_USER, row, sizeof(row)) == 1,
+    seed_system_logicals(mgr);
+
+    uint32_t mst = vms_kif_acp_mount(ODS2_UNIT);
+    CHECK($VMS_STATUS_SUCCESS(mst),
+          "$MOUNT of the system-disk ODS-2 fixture on " ODS2_UNIT " (precondition)");
+    if (!$VMS_STATUS_SUCCESS(mst)) {
+        printf("=== test_syssvc_setuai: %d passed, %d failed ===\n", pass, fail);
+        return 1;
+    }
+
+    /*
+     * Read the target account off the mounted volume, BINARY $UAFDEF over the
+     * ACP. This both establishes the precondition and captures the pre-image
+     * (before_rec.raw) the refusal-invariance check compares against.
+     */
+    int have_before = (sysuaf_lookup(TARGET_USER, &before_rec) == 0);
+    CHECK(have_before,
           "the target account is present in SYSUAF.DAT before any probe");
+    if (!have_before) {
+        printf("=== test_syssvc_setuai: %d passed, %d failed ===\n", pass, fail);
+        (void)vms_kif_acp_dmount(ODS2_UNIT);
+        return 1;
+    }
 
     /* ---------------------------------------------------------------- *
      * 1. NO PCB AT ALL. The exact caller the `pcb &&` guard let through.
@@ -426,11 +395,14 @@ int main(void)
               "3: $SETUAI refuses it anyway -- the PCB mask does not decide");
     }
 
-    /* Nothing above was authorized, so nothing above may have written. */
-    nafter = slurp_sysuaf(after, sizeof(after));
+    /* Nothing above was authorized, so nothing above may have written. Read the
+     * target account's on-disk $UAFDEF record back over the ACP and compare it
+     * byte-for-byte against the pre-image: every refusal targeted USER1, so an
+     * unchanged raw record proves none of them wrote. */
     /* negctl-knockon: setuai-sysprv-caller-declared */
-    CHECK(nafter == nbefore && memcmp(before, after, (size_t)nbefore) == 0,
-          "1-3: SYSUAF.DAT is byte-identical after all three refusals");
+    CHECK(sysuaf_lookup(TARGET_USER, &after_rec) == 0 &&
+          memcmp(&before_rec.raw, &after_rec.raw, sizeof(before_rec.raw)) == 0,
+          "1-3: the target SYSUAF record is byte-identical after all three refusals");
 
     /* ---------------------------------------------------------------- *
      * 4. THE POSITIVE. Without it every refusal above is equally
@@ -449,38 +421,34 @@ int main(void)
               "4: $SETUAI serves a SYSPRV identity -- the refusals are not blanket");
     }
 
-    nafter = slurp_sysuaf(after, sizeof(after));
-    CHECK(nafter > 0 && sysuaf_row(after, TARGET_USER, row, sizeof(row)) == 1,
+    int have_after = (sysuaf_lookup(TARGET_USER, &after_rec) == 0);
+    CHECK(have_after,
           "4: the target account survives the rewrite");
 
-    if (row_field(row, 4, field, sizeof(field)))
-        printf("  rewritten default_dir field: %s\n", field);
-    CHECK(row_field(row, 4, field, sizeof(field)) &&
-          strcmp(field, NEW_DEFDIR) == 0,
+    printf("  rewritten default_dir field: %s\n", have_after ? after_rec.default_dir : "(no record)");
+    CHECK(have_after && strcmp(after_rec.default_dir, NEW_DEFDIR) == 0,
           "4: the parent process reads the new default directory in the file");
 
     /*
-     * The UIC write-back base (vms-e60). USER1 ships 200|202, which the octal
-     * parse reads into the struct as 128|130 (decimal). %u would have written
-     * those decimal digits back as "128|130"; the NEXT read then parses them
-     * as octal and gets 10|88, NOT 88|88 -- '8' is not an octal digit, so
-     * strtoul("128",8) stops after "12" (= 10) while strtoul("130",8) = 88.
-     * Measured (vms-f57): 128->10, 130->88. Either way it is a different UIC
-     * for the same account, which is what the two field-text checks below
-     * guard -- and the negctl sysuaf-uic-writeback-decimal (facility_defects.sh)
-     * flips %o->%u in the writer to prove those two checks actually have teeth.
+     * The UIC write-back base (vms-e60). USER1 ships UIC 200|202 OCTAL, held in
+     * the binary $UAFDEF record as the raw values 0200|0202 (== 128|130 decimal).
+     * $SETUAI rewrote only the default directory; the UIC must survive UNCHANGED.
+     * A rewrite that re-encoded the UIC through the wrong base (the vms-e60
+     * defect) would land a different number in these two fields -- the checks
+     * read the typed uic_group/uic_member straight off the record the service
+     * wrote, so they fire on the value written, not on a value re-derived by the
+     * same parser that produced it.
      */
-    if (row_field(row, 2, field, sizeof(field)))
-        printf("  rewritten uic_group field: %s\n", field);
+    printf("  rewritten uic_group field: 0%o\n", have_after ? after_rec.uic_group : 0);
     /* negctl: sysuaf-uic-writeback-decimal */
-    CHECK(row_field(row, 2, field, sizeof(field)) && strcmp(field, "200") == 0,
+    CHECK(have_after && after_rec.uic_group == 0200,
           "4: the rewritten UIC GROUP field still reads 200 (octal, vms-e60)");
-    if (row_field(row, 3, field, sizeof(field)))
-        printf("  rewritten uic_member field: %s\n", field);
+    printf("  rewritten uic_member field: 0%o\n", have_after ? after_rec.uic_member : 0);
     /* negctl: sysuaf-uic-writeback-decimal */
-    CHECK(row_field(row, 3, field, sizeof(field)) && strcmp(field, "202") == 0,
+    CHECK(have_after && after_rec.uic_member == 0202,
           "4: the rewritten UIC MEMBER field still reads 202 (octal, vms-e60)");
 
+    (void)vms_kif_acp_dmount(ODS2_UNIT);
     printf("=== test_syssvc_setuai: %d passed, %d failed ===\n", pass, fail);
     return fail == 0 ? 0 : 1;
 }

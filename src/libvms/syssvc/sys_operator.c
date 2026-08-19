@@ -85,13 +85,67 @@
 #include "ovmx_layout.h"
 /*
  * OPERATOR.LOG is written the VMS way now (vms-aac, epic vms-208 atomic flip):
- * one RMS $PUT-at-EOF record per line over the Files-11 ODS-2 ACP, NOT
- * fopen(vmsfs_to_linux_path()) on the retired /vms passthrough. rms_textfile.c
- * carries the RMS-over-ACP writer and the fail-honest contract (Rule 9 / INV-6:
- * no mounted ACP volume / no /dev/vms -> -1, never a private POSIX log).
+ * one RMS $PUT-at-EOF record per line over the Files-11 ODS-2 ACP when the
+ * executive is PRESENT (rms_textfile.c carries the RMS-over-ACP writer). When
+ * the executive is ABSENT -- host ctest / plain container / netbsd-vax cross,
+ * no /dev/vms -- there is no ACP, so the record defers to the legacy host
+ * writer (open_operator_log_host() below), the SAME executive-absent defer RMS
+ * and IMGACT take (rms_executive_absent()). With the executive PRESENT the ACP
+ * is the only path and an ACP write that fails fails honestly -- never a
+ * private POSIX log on the retired /vms passthrough (Rule 9 / INV-6).
  */
 #include "rms_textfile.h"
+#include "vmsfs/filespec.h"
 #define OPERATOR_LOG_PATH VMS_OPERATOR_LOG
+
+/* Fallback operator log, writable when SYS$MANAGER: does not resolve to a
+ * populated tree (dev seat / plain container). */
+#define OPERATOR_LOG_FALLBACK "/tmp/OPERATOR.LOG"
+
+/*
+ * EXECUTIVE-PRESENCE DEFER (vms-aac, epic vms-208 atomic flip; Rule 9 / INV-6).
+ *
+ * OPERATOR.LOG is written over the Files-11 ODS-2 ACP whenever the executive is
+ * PRESENT (the flip's genuine path -- rms_textfile_append_line -> RMS $PUT-at-
+ * EOF on the mounted on-volume log). When the executive is ABSENT -- a host
+ * ctest, a plain-container gate, the netbsd-vax cross: no /dev/vms -- there is
+ * no ACP to write, so the record is written the LEGACY host way instead, the
+ * SAME defer RMS's own $OPEN/$CREATE and IMGACT's imgsrc_open() already take
+ * (rms_executive_absent(), src/vmsrms/rms_core.c). This is NOT a /vms fall-back
+ * when the executive IS present: with /dev/vms up the ACP path is the only one
+ * taken, and an ACP write that then fails fails honestly (INV-6).
+ *
+ * rms_executive_absent() lives in LIBVMSRMS, which links LIBVMS (this file), so
+ * it is referenced WEAKLY -- the same library-layering seam rms_textfile.c uses
+ * for the RMS services. An image that links vmsrms (DCL, LOGINOUT, VMSSSHD,
+ * PROVISION) binds the real probe; an image that does not has no ACP at all, so
+ * "absent" is the correct reading and the legacy writer is used.
+ */
+#pragma weak rms_executive_absent
+extern int rms_executive_absent(void);
+
+static int operator_log_executive_absent(void)
+{
+    if (rms_executive_absent)
+        return rms_executive_absent();
+    return 1;   /* no RMS engine in this image -> no ACP reachable */
+}
+
+/*
+ * Open OPERATOR.LOG the legacy host way (executive absent): translate
+ * SYS$MANAGER:OPERATOR.LOG through vmsfs and append, falling back to
+ * /tmp/OPERATOR.LOG when that path is not writable. Returns an append-mode
+ * FILE* or NULL.
+ */
+static FILE *open_operator_log_host(void)
+{
+    char oplog_linux[1024];
+    vmsfs_to_linux_path(OPERATOR_LOG_PATH, oplog_linux, sizeof(oplog_linux));
+    FILE *f = fopen(oplog_linux, "a");
+    if (!f)
+        f = fopen(OPERATOR_LOG_FALLBACK, "a");
+    return f;
+}
 
 /*
  * ovmx_node_name() -- the real SCSNODE-configured node identity (falling
@@ -326,9 +380,27 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
      * append-mode log does. A trailing empty record reproduces the blank
      * line the old fprintf("%s\n\n") separator wrote between records.
      *
-     * FAIL-HONEST (Rule 9 / INV-6): with no mounted ACP volume / no /dev/vms
-     * the first append returns -1 and this reports SS$_FILACCERR -- it never
-     * falls back to a private POSIX file on the retired /vms passthrough.
+     * EXECUTIVE-ABSENT (host ctest / plain container / netbsd-vax cross): there
+     * is no ACP, so the record is written the legacy host way instead -- the
+     * same defer RMS and IMGACT take (operator_log_executive_absent() above).
+     * This is NOT a /vms fall-back with the executive present (Rule 9 / INV-6).
+     */
+    if (operator_log_executive_absent()) {
+        FILE *log = open_operator_log_host();
+        if (!log)
+            return SS$_FILACCERR;
+        fprintf(log, "%s\n", banner);
+        fprintf(log, "%s\n", reqline);
+        fprintf(log, "%s\n\n", msgtext);
+        fclose(log);
+        return SS$_NORMAL;
+    }
+
+    /*
+     * FAIL-HONEST (Rule 9 / INV-6): the executive is present, so the ACP is the
+     * only path. A first append that returns -1 (no mounted ACP volume) reports
+     * SS$_FILACCERR -- it never falls back to a private POSIX file on the
+     * retired /vms passthrough.
      */
     if (rms_textfile_append_line(OPERATOR_LOG_PATH, banner) != 0)
         return SS$_FILACCERR;
@@ -488,15 +560,26 @@ uint32_t sys$brkthruw(uint32_t efn,
         snprintf(bmsgline, sizeof(bmsgline), "Message from user %s on %s",
                  buser, bnode);
 
-        /* Same RMS $PUT-at-EOF-over-the-ACP writer sys$sndopr uses (vms-aac):
-         * one file, one OPCOM record format. Best-effort/fail-honest -- a
-         * broadcast that reached its terminal is not failed just because the
-         * ACP log is unreachable (no /dev/vms), and there is no /vms/POSIX
-         * fallback (Rule 9 / INV-6). */
-        rms_textfile_append_line(OPERATOR_LOG_PATH, bbanner);
-        rms_textfile_append_line(OPERATOR_LOG_PATH, bmsgline);
-        rms_textfile_append_line(OPERATOR_LOG_PATH, msgtext);
-        rms_textfile_append_line(OPERATOR_LOG_PATH, "");
+        /* Same one-file, one-OPCOM-record path sys$sndopr uses (vms-aac):
+         * the ACP $PUT-at-EOF writer when the executive is present, the legacy
+         * host writer when it is absent (host ctest / container / vax cross).
+         * Best-effort -- a broadcast that reached its terminal is not failed
+         * because the log is unreachable; and with the executive present there
+         * is no /vms POSIX fall-back (Rule 9 / INV-6). */
+        if (operator_log_executive_absent()) {
+            FILE *log = open_operator_log_host();
+            if (log) {
+                fprintf(log, "%s\n", bbanner);
+                fprintf(log, "%s\n", bmsgline);
+                fprintf(log, "%s\n\n", msgtext);
+                fclose(log);
+            }
+        } else {
+            rms_textfile_append_line(OPERATOR_LOG_PATH, bbanner);
+            rms_textfile_append_line(OPERATOR_LOG_PATH, bmsgline);
+            rms_textfile_append_line(OPERATOR_LOG_PATH, msgtext);
+            rms_textfile_append_line(OPERATOR_LOG_PATH, "");
+        }
     } else {
         status = SS$_NOSUCHDEV;
     }

@@ -378,7 +378,7 @@ unsetenv=PROCEDURE,\
 \
 pthread_create=PROCEDURE,pthread_detach=PROCEDURE,pthread_join=PROCEDURE,\
 \
-pread=PROCEDURE,pwrite=PROCEDURE"
+pread=PROCEDURE,pwrite=PROCEDURE,ferror=PROCEDURE"
 
 # fcntl APPENDED for vms-8019 (append-only -> prior consumers' vector indices
 # unchanged, GSMATCH LEQUAL-compatible). $CREPRC's creation handshake sets

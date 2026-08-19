@@ -104,10 +104,31 @@
 #include "starlet.h"
 #include "descrip.h"
 #include "ssdef.h"
+#include "rmsdef.h"
+#include "rms/rms.h"
 #include "vms_kif.h"
 #include "vms/pcb.h"
 
 #define EXIT_SKIP 77
+
+/* THE BUILD VOLUME (vms-dff). The atomic flip (epic vms-208) made OVMX RMS
+ * ACP-ONLY when /dev/vms is present -- sys$open rides the Files-11 ODS-2 ACP over
+ * /dev/vms with NO /vms POSIX passthrough (Rule 9 / INV-6; src/vmsrms/rms_core.c
+ * rms_acp_absent()). MMK.EXE opens its description / rules through that SAME RMS
+ * (readdesc.c file_open -> sys$open), so those files must live on a genuine
+ * mounted ODS-2 volume, not a Linux /tmp tmpfs (MMK's $OPEN would walk the volume
+ * and honestly miss them -> RMS$_FNF -> MMK__NOOPNDSC). This suite authors the
+ * description + rules on the harness's writable DKA0: fixture (the same volume
+ * test_syssvc_rms_acp.c uses) through the public RMS services, and hands MMK a
+ * full ODS-2 /DESCRIPTION= spec. The DRIVEN TOOLCHAIN is unaffected: TCC.EXE /
+ * LIBRARIAN.EXE / LINK.EXE are fork()+execve()'d native images doing their own
+ * POSIX file I/O in the Linux work directory, exactly as before -- only MMK's own
+ * RMS reach into its description moved onto the volume. The rule is dependency-
+ * free and its target is a BARE name (all MMK's lib$tparse accepts; a device or
+ * directory token reddens MMK__PARSERR), so MMK just builds it -- its MFD stat
+ * misses (the MFD is read-only, but a stat is a READ) -> it runs the action. */
+#define ODS2_UNIT  "DKA0:"
+#define ODS2_DIR   "DKA0:[OVMXDIR]"
 
 /* MMK.EXE + TCC.EXE + LIBRARIAN.EXE are staged at SYS$SYSTEM (tests/qemu/Dockerfile). */
 #define MMK_PATH_DEFAULT  "/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE"
@@ -258,14 +279,76 @@ static int executive_present(void)
     return 1;
 }
 
-static int write_file(const char *path, const char *contents)
+/* Author a STMLF text file on the mounted ODS-2 volume through the public RMS
+ * services ($CREATE + $PUT one record per line -> the Files-11 ACP). STMLF is the
+ * flip's text convention (matches the stream-LF file MMK read pre-flip); a VAR
+ * file reddens MMK's lib$tparse. Used for MMK's description + rules, which MMK
+ * opens through RMS. Returns 0 on success. */
+static int create_ods2_text(const char *spec, const char *const *lines)
 {
-    FILE *f = fopen(path, "w");
-    if (!f) return -1;
-    size_t n = strlen(contents);
-    int ok = (fwrite(contents, 1, n, f) == n);
-    if (fclose(f) != 0) ok = 0;
-    return ok ? 0 : -1;
+    struct FAB fab = cc$rms_fab;
+    struct RAB rab;
+    uint32_t st;
+
+    fab.fab$l_fna = (char *)spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    fab.fab$b_org = FAB$C_SEQ;
+    fab.fab$b_rfm = FAB$C_STMLF;   /* the flip's text convention */
+    fab.fab$b_rat = FAB$M_CR;
+    fab.fab$w_mrs = 0;
+    fab.fab$b_fac = FAB$M_PUT | FAB$M_GET;
+
+    st = sys$create(&fab, 0, 0);
+    if (st != RMS$_NORMAL)
+        return -1;
+
+    rab = cc$rms_rab;
+    rab.rab$l_fab = &fab;
+    st = sys$connect(&rab, 0, 0);
+    if (st != RMS$_NORMAL) { sys$close(&fab, 0, 0); return -1; }
+
+    for (int i = 0; lines[i]; i++) {
+        rab.rab$l_rbf = (char *)lines[i];
+        rab.rab$w_rsz = (uint16_t)strlen(lines[i]);
+        st = sys$put(&rab, 0, 0);
+        if (st != RMS$_NORMAL) { sys$close(&fab, 0, 0); return -1; }
+    }
+
+    st = sys$close(&fab, 0, 0);
+    return (st == RMS$_NORMAL) ? 0 : -1;
+}
+
+/* $ERASE (IO$_DELETE) a file off the ODS-2 volume; best-effort cleanup. */
+static void erase_ods2(const char *spec)
+{
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = (char *)spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    (void)sys$erase(&fab, 0, 0);
+}
+
+/* Author a text file on the ODS-2 volume from a '\n'-delimited BLOB (each line
+ * becomes one VAR record). A trailing '\n' does not emit an empty final record.
+ * Returns 0 on success. */
+static int create_ods2_blob(const char *spec, const char *blob)
+{
+    const char *lines[64];
+    static char buf[4096];
+    size_t bl = strlen(blob);
+    if (bl >= sizeof(buf)) return -1;
+    memcpy(buf, blob, bl + 1);
+
+    int n = 0;
+    char *p = buf;
+    while (*p && n < (int)(sizeof(lines) / sizeof(lines[0])) - 1) {
+        lines[n++] = p;
+        char *nl = strchr(p, '\n');
+        if (!nl) break;
+        *nl = '\0';
+        p = nl + 1;
+    }
+    lines[n] = NULL;
+    return create_ods2_text(spec, lines);
 }
 
 /* Copy a file (source staging). Returns 0 on success. */
@@ -494,6 +577,11 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
     char workdir[] = "/tmp/mmk725_XXXXXX";
     if (!mkdtemp(workdir)) return;
 
+    /* Mount the writable ODS-2 fixture on DKA0: executive-global so MMK reaches
+     * its description through the ACP (idempotent). */
+    if (!$VMS_STATUS_SUCCESS(vms_kif_acp_mount(ODS2_UNIT)))
+        return;
+
     char path[512], src[512];
 
     /* Stage the REAL component source (VMS-style upper-case .C) + its headers.
@@ -558,10 +646,17 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
      * LINK's --executable/--use flags + the absolute DECC$SHR.EXE path (the `$` is
      * an ordinary VMS filename character here, not an apostrophe substitution)
      * survive as-is -- the same whole-line-raw delivery native LINK relies on. */
+    /* The MMS RULE line is DEPENDENCY-FREE with a BARE target (all MMK's
+     * lib$tparse accepts). The TAB-indented ACTION lines are unchanged and keep
+     * BARE toolchain names: TCC/LIBRARIAN/LINK are fork()+execve()'d natives that
+     * resolve those names against the Linux work directory (their cwd) via POSIX,
+     * exactly as before -- only MMK's own reach into its description moved onto
+     * the ODS-2 volume. MMK builds the (never-present, MFD-stat-missing) bare
+     * target unconditionally, running the action chain. */
     char mms[2560];
     if (do_link)
         snprintf(mms, sizeof(mms),
-            "OVMXRT.EXE : VMS_STRING.C OVMXRTRUN.C\n"
+            "OVMXRT.EXE :\n"
             "\tTCC :== \"$%s\"\n"
             "\tLIBRARIAN :== \"$%s\"\n"
             "\tLNK :== \"$%s\"\n"
@@ -573,18 +668,20 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
             tcc, libr, lnk, tccinc, tccinc, deccshr, EXPECT_MARKER);
     else
         snprintf(mms, sizeof(mms),
-            "OVMXRT.OLB : VMS_STRING.C\n"
+            "OVMXRT.OLB :\n"
             "\tTCC :== \"$%s\"\n"
             "\tLIBRARIAN :== \"$%s\"\n"
             "\tTCC -x c -c -ffreestanding -fno-builtin -I %s -I . VMS_STRING.C -o VMS_STRING.OBJ\n"
             "\tLIBRARIAN /CREATE OVMXRT.OLB VMS_STRING.OBJ\n"
             "\tWRITE SYS$OUTPUT \"%s\"\n",
             tcc, libr, tccinc, EXPECT_MARKER);
-    snprintf(path, sizeof(path), "%s/725.MMS", workdir);
-    if (write_file(path, mms) != 0) return;
-    /* /RULES defaults to MMS$RULES; an empty one keeps the run's status clean. */
-    snprintf(path, sizeof(path), "%s/MMS$RULES", workdir);
-    if (write_file(path, "! empty default rules (vms-725 build drive)\n") != 0) return;
+    /* Author the description + empty rules file on the ODS-2 volume (MMK opens
+     * them through RMS); start clean in case a prior drive in this VM left them. */
+    erase_ods2(ODS2_DIR "725.MMS");
+    erase_ods2(ODS2_DIR "MMS$RULES");
+    if (create_ods2_blob(ODS2_DIR "725.MMS", mms) != 0) return;
+    if (create_ods2_blob(ODS2_DIR "MMS$RULES",
+                         "! empty default rules (vms-725 build drive)\n") != 0) return;
 
     int outpipe[2];
     if (pipe(outpipe) < 0) return;
@@ -598,9 +695,14 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
         close(outpipe[0]); close(outpipe[1]);
         int devnull = open("/dev/null", O_RDONLY);
         if (devnull >= 0) { dup2(devnull, STDIN_FILENO); close(devnull); }
+        /* /DESCRIPTION + /RULES_FILE are qualifier VALUES (full ODS-2 specs, not
+         * rule-parsed); the P1 target is BARE (like the rule). The child keeps
+         * cwd = the Linux workdir so the forked toolchain writes its artifacts
+         * there, where the asserts below read them. */
         setenv("VMS_FOREIGN_CMD",
-               do_link ? "/DESCRIPTION=725.MMS OVMXRT.EXE"
-                       : "/DESCRIPTION=725.MMS OVMXRT.OLB", 1);
+               do_link
+                 ? "/DESCRIPTION=" ODS2_DIR "725.MMS /RULES_FILE=" ODS2_DIR "MMS$RULES OVMXRT.EXE"
+                 : "/DESCRIPTION=" ODS2_DIR "725.MMS /RULES_FILE=" ODS2_DIR "MMS$RULES OVMXRT.OLB", 1);
         execl(mmk, mmk, (char *)NULL);
         _exit(127);
     }
@@ -695,17 +797,20 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
         printf("----8<----\n%s\n---->8----\n", acc);
     }
 
-    /* Cleanup. */
+    /* Cleanup: the toolchain's Linux work files, plus the description/rules
+     * authored on the ODS-2 volume (DKA0: is left mounted for sibling suites). */
     const char *rm[] = { "VMS_STRING.C", "OVMXRTRUN.C",
                          "VMS_STRING.OBJ", "OVMXRTRUN.OBJ",
                          "OVMXRT.OLB", "OVMXRT.EXE", "vms_string.h",
-                         "vms_types.h", "725.MMS", "MMS$RULES",
+                         "vms_types.h",
                          NULL };
     for (int i = 0; rm[i]; i++) {
         snprintf(path, sizeof(path), "%s/%s", workdir, rm[i]);
         unlink(path);
     }
     rmdir(workdir);
+    erase_ods2(ODS2_DIR "725.MMS");
+    erase_ods2(ODS2_DIR "MMS$RULES");
 }
 
 int main(int argc, char **argv)

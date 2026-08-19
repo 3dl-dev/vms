@@ -70,6 +70,17 @@ target_compile_definitions(mmk_native PRIVATE OVMX_MMK __CRTL_VER=80400000
     _POSIX_C_SOURCE=200809L _DEFAULT_SOURCE)
 target_compile_options(mmk_native PRIVATE
     -fno-builtin -fno-stack-protector -Wno-unused -Wno-implicit-fallthrough
+    # The tier3-mmk corpus is imported real-VMS C (DEC C dialect): loose pointer
+    # types on the str$/cli$/lib$ descriptor calls and a prototype-less _INSQUE
+    # shim call in the non-__ALPHA queue macro. GCC 13 (the x86_64 musl staging
+    # compiler) diagnoses these as WARNINGS; GCC 14 (the alpha-linux-gnu cross
+    # image) promoted them to default ERRORS, breaking the Alpha staging build
+    # (vms-341) even though _INSQUE/_REMQUE resolve fine via ovmx_mmk_builtins.c.
+    # Keep the corpus unmodified and tolerate its looseness on this ONE target,
+    # exactly as -Wno-unused/-Wno-implicit-fallthrough already do.
+    -Wno-error=implicit-function-declaration
+    -Wno-error=incompatible-pointer-types
+    -Wno-error=int-conversion
     -include ${MMK_COMPAT})
 # The vms-486 grammar is compiled in PRODUCTION mode here: its transitions fire
 # MMK's real parse_store / parse_obj_store (see mmk_parse_tables.c).

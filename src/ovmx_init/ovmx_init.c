@@ -102,6 +102,7 @@
  * off to STARTUP.COM.
  */
 static char sysexe_linux[512];
+static char syslib_linux[512];
 
 static const char *vms_months[] = {
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
@@ -153,6 +154,7 @@ static const char *vms_to_linux(const char *vms_spec, char *buf, size_t bufsz)
 static void init_search_paths(void)
 {
     vms_to_linux(VMS_SYSEXE, sysexe_linux, sizeof(sysexe_linux));
+    vms_to_linux(VMS_SYSLIB, syslib_linux, sizeof(syslib_linux));
 }
 
 static void sigterm_handler(int sig)
@@ -826,6 +828,69 @@ static void stage_boot_images(void)
             ovmx_sysinit_halt("utility-image staging failed", detail);
         }
     }
+
+    /*
+     * SYS$SHARE SHAREABLE IMAGES (vms-0cb). SYSTARTUP_VMS.COM runs
+     * `INSTALL ADD SYS$SHARE:*$SHR.EXE` to register the shareables every
+     * dynamically-activated OVMX image depends on. INSTALL stat()s each one
+     * to record its path in the Known Image DB -- but with the /vms
+     * passthrough retired the SYS$SHARE shareables have no POSIX home, so
+     * INSTALL failed %INSTALL-E-FILNOTFND for every one (image activation
+     * itself still worked, via IMGACT's Priority-2 ACP fallback, but the
+     * boot printed seven honest errors and the Known Image DB stayed empty).
+     *
+     * Same reroute class as the SYSEXE utilities above: PID 1 stages each
+     * shareable off the genuine ODS-2 volume THROUGH THE ACP into the tmpfs
+     * so INSTALL.EXE (which cannot ride the in-process ACP path -- it needs a
+     * POSIX file to stat) resolves SYS$SHARE:<name> to the staged copy. The
+     * bytes come from the ACP, never a /vms read (INV-6). BEST-EFFORT, like
+     * the utilities: a shareable absent from the volume is skipped honestly
+     * (INSTALL then reports its own %INSTALL-E-FILNOTFND for that one) rather
+     * than masking a broken volume -- ovmx_boot_acp_present() distinguishes
+     * "absent" from a genuine read fault. This list is exactly the shareable
+     * set the distro SYSTARTUP_VMS.COM procedures INSTALL-ADD, and the
+     * Dockerfile.bootable "9 VMS-native artifacts" gate ships.
+     */
+    static const char *const shareables[] = {
+        "DECC$SHR.EXE", "LIBVMSSYS$SHR.EXE", "LIBVMS$SHR.EXE",
+        "LIBVMSPROCESS$SHR.EXE", "LIBVMSLNM$SHR.EXE", "LIBVMSFS$SHR.EXE",
+        "LIBVMSRMS$SHR.EXE",
+    };
+    for (size_t i = 0; i < sizeof(shareables) / sizeof(shareables[0]); i++) {
+        char acp_path[512], dest[512];
+        snprintf(acp_path, sizeof(acp_path), "%s/%s", syslib_linux, shareables[i]);
+        if (!ovmx_boot_acp_present(acp_path))
+            continue;                 /* optional shareable not installed: skip */
+        snprintf(dest, sizeof(dest), "%s/%s", OVMX_BOOT_STAGE_DIR, shareables[i]);
+        uint32_t st = ovmx_boot_acp_stage(acp_path, dest);
+        if (!$VMS_STATUS_SUCCESS(st)) {
+            char detail[256];
+            snprintf(detail, sizeof(detail),
+                     "SYS$SHARE:%s is present on the ODS-2 volume but could "
+                     "not be read over the ACP (status %#x)", shareables[i], st);
+            ovmx_sysinit_halt("shareable-image staging failed", detail);
+        }
+    }
+
+    /*
+     * SYS$SYSTEM:OVMXVMSSYS.PAR (vms-0cb). read_boot_parameters() reads the
+     * SCSNODE SYSGEN parameter from this file through the shared sysgen_params.h
+     * reader, which fopen()s a /vms path retired by the flip -- so the boot
+     * fell back to the default node name with %OVMX-W-NOPARAMS where the
+     * boot-console oracle expects %OVMX-I-SCSNODE. Stage the file off the ODS-2
+     * volume over the ACP (bytes from the ACP, INV-6) so read_boot_parameters()
+     * can point the reader at it (OVMX_SYSGEN_PATH). BEST-EFFORT: an absent or
+     * unreadable .PAR keeps the honest NOPARAMS fallback (an already-installed
+     * volume may legitimately lack it -- read_boot_parameters()'s header).
+     */
+    {
+        char acp_path[512], dest[512];
+        snprintf(acp_path, sizeof(acp_path), "%s/OVMXVMSSYS.PAR", sysexe_linux);
+        if (ovmx_boot_acp_present(acp_path)) {
+            snprintf(dest, sizeof(dest), "%s/OVMXVMSSYS.PAR", OVMX_BOOT_STAGE_DIR);
+            (void)ovmx_boot_acp_stage(acp_path, dest);  /* NOPARAMS on failure */
+        }
+    }
 }
 #else  /* !OVMX_BOOT_LINUX */
 /* NetBSD-vax backend keeps its current boot model (no ACP-staging tmpfs);
@@ -903,7 +968,36 @@ static void read_boot_parameters(void)
 
     char node[SYSGEN_STRVAL_LEN];
 
-    if (sysgen_read_string("SCSNODE", node, sizeof(node)) == 0 && node[0] != '\0') {
+#if defined(OVMX_BOOT_LINUX)
+    /*
+     * ATOMIC FLIP (vms-0cb): the shared SYSGEN reader (sysgen_params.h
+     * sysgen_current_path) resolves SYS$SYSTEM:OVMXVMSSYS.PAR through
+     * vmsfs_to_linux_path and fopen()s the resulting /vms path -- retired by
+     * the flip, so the read failed and every boot fell to the default node
+     * name with %OVMX-W-NOPARAMS (the boot-console conformance oracle expects
+     * %OVMX-I-SCSNODE). PID 1 staged the file off the genuine ODS-2 volume
+     * over the ACP (stage_boot_images; INV-6, bytes from the ACP); point the
+     * reader at that staged copy via OVMX_SYSGEN_PATH. SCOPED TO THIS CALL and
+     * unset immediately below -- read_boot_parameters() runs before
+     * run_startup() forks PROVISION, so no child inherits a frozen params path
+     * (which would defeat SYSGEN's on-disk versioning). A genuinely absent
+     * staged file leaves the env unset and the honest NOPARAMS fallback
+     * intact. The NetBSD-vax backend keeps its /vms read (its flip is vms-d5d).
+     */
+    int staged_params = (access(OVMX_BOOT_STAGE_DIR "/OVMXVMSSYS.PAR", R_OK) == 0);
+    if (staged_params)
+        setenv("OVMX_SYSGEN_PATH", OVMX_BOOT_STAGE_DIR "/OVMXVMSSYS.PAR", 1);
+#endif
+
+    int have_node =
+        (sysgen_read_string("SCSNODE", node, sizeof(node)) == 0 && node[0] != '\0');
+
+#if defined(OVMX_BOOT_LINUX)
+    if (staged_params)
+        unsetenv("OVMX_SYSGEN_PATH");
+#endif
+
+    if (have_node) {
         sethostname(node, strlen(node));
         printf("%%OVMX-I-SCSNODE, node name %s set from SYS$SYSTEM:OVMXVMSSYS.PAR\n",
                node);

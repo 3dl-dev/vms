@@ -714,9 +714,20 @@ static int member_satisfies(struct obj *o, struct symset *U)
 }
 
 /* Iterate the .OLB pools, pulling members that resolve currently-undefined
- * strong references, to a fixpoint. Pulled members are moved into objs[]. */
+ * strong references, to a fixpoint. Pulled members are moved into objs[].
+ *
+ * `uv`/`nuniv` are the --symbol-vector universals (may be NULL/0). In real VMS
+ * a SYMBOL_VECTOR entry is an unresolved reference that the library search must
+ * satisfy: the vector roots the selective pull. So the universal names seed the
+ * initial unresolved set U alongside the root objects' own undefined refs. This
+ * is what lets a /SHAREABLE link from an .OLB alone (no explicit object TU list)
+ * pull exactly the modules that define the universals + their transitive refs
+ * (design-vms-native-shareable-build.md Part C, C.4.1). A retired slot
+ * (OVMX_SV_RETIRED) names no symbol that still exists, so it never roots a
+ * search. Seeding an empty vector (nuniv==0) leaves current behavior unchanged. */
 static void resolve_olbs(struct obj **objs, int *nobj, int *cap,
-                         struct olb_pool *pools, int npool)
+                         struct olb_pool *pools, int npool,
+                         const struct univ *uv, int nuniv)
 {
     for (;;) {
         struct symset D, U;
@@ -732,6 +743,15 @@ static void resolve_olbs(struct obj **objs, int *nobj, int *cap,
                 const char *nm = o->str + s->st_name;
                 if (nm[0] && !symset_has(&D, nm)) symset_add(&U, nm);
             }
+        }
+        /* Root the search at the symbol vector: each still-undefined universal
+         * is a reference the .OLB must satisfy (VMS §1.2.3.2 default library
+         * search rooted at the SYMBOL_VECTOR). Once its defining member is
+         * pulled, the name enters D and drops out on the next iteration. */
+        for (int i = 0; i < nuniv; i++) {
+            if (uv[i].kind == OVMX_SV_RETIRED) continue;
+            const char *nm = uv[i].name;
+            if (nm[0] && !symset_has(&D, nm)) symset_add(&U, nm);
         }
 
         int pulled = 0;
@@ -2399,9 +2419,13 @@ int main(int argc, char **argv)
             load_obj(ins[i], push_obj(&objs, &nobj, &cap));
     }
     /* Search object libraries after the mandatory objects/archives, pulling only
-     * the members that resolve outstanding references (vms-ca9). */
+     * the members that resolve outstanding references (vms-ca9). The selective
+     * search is rooted at both the root objects' undefined refs AND the
+     * --symbol-vector universals, so a /SHAREABLE link whose only roots are its
+     * symbol vector (the VMS way — no explicit TU list) pulls the defining
+     * modules from the .OLB alone (design-vms-native-shareable-build.md C.4.1). */
     if (npool)
-        resolve_olbs(&objs, &nobj, &cap, pools, npool);
+        resolve_olbs(&objs, &nobj, &cap, pools, npool, uv, nuniv);
     free(pools);
     if (nobj == 0) die("no object members found in inputs");
     emit_shareable(objs, nobj, uv, nuniv, gk, gmaj, gmin, allow_undef,

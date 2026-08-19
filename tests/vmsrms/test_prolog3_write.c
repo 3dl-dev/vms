@@ -277,6 +277,185 @@ int main(void)
         unlink(p2);
     }
 
+    /* ---- MULTI-LEVEL INDEX GROWTH (vms-5a3): $PUT enough records into small
+     * (1-block) buckets to overflow the single ROOT index bucket, forcing it to
+     * SPLIT and the tree to grow a SECOND index level (Root Level 1 -> >= 2). A
+     * one-block index bucket holds (512-14)/(2+8) = 49 entries, so ~49 data
+     * buckets (each a data-bucket split) overflow the root; ML_N records with
+     * ~34-byte bodies fills far past that. Then read EVERY record back by key,
+     * KGT-walk them all in order, and RE-BIND a fresh read context to prove the
+     * promoted root VBN/level were persisted to the on-disk key descriptor. ---- */
+    {
+        char p3[] = "/tmp/ovmx_p3wml_XXXXXX";
+        int fd3 = mkstemp(p3);
+        rms_file_t *f3 = (fd3 >= 0) ? rms_io_posix_wrap(fd3) : NULL;
+        p3_create_params_t c3;
+        p3_ctx_t *cx = NULL;
+        const int ML_N = 1500;
+        int n, ok = 1;
+        uint32_t cs;
+
+        check(f3 != NULL, "ML: wrap fd");
+        memset(&c3, 0, sizeof(c3));
+        c3.key_size = KEY_SIZE; c3.seg0_pos = 0; c3.seg0_siz = KEY_SIZE;
+        c3.bkt_blocks = 1;                       /* tiny buckets -> fast overflow */
+        cs = (f3) ? rms_p3_create(f3, &c3, &cx) : RMS$_DME;
+        check(cs == RMS$_CREATED && cx, "ML: create 1-block-bucket indexed file");
+        check(cx && cx->keys[0].root_level == 1, "ML: fresh file starts single-level (Root Level 1)");
+
+        /* shuffled insert order (not sorted) to exercise interior splits too */
+        for (n = 0; cx && n < ML_N; n++) {
+            uint8_t rec[64]; uint16_t rl;
+            int j = (int)(((unsigned)(n * 2654435761u)) % (unsigned)ML_N);
+            /* deterministic pseudo-permutation via a coprime stride */
+            int key_n = (int)(((unsigned)n * 1103515245u + 12345u) % (unsigned)ML_N);
+            (void)j;
+            make_record(key_n, rec, &rl);
+            if (!$VMS_STATUS_SUCCESS(rms_p3_put(cx, 0, rec, rl))) {
+                /* a duplicate from the pseudo-permutation is fine; only a hard
+                 * failure (not RMS$_DUP) is a real error */
+                uint32_t s = rms_p3_put(cx, 0, rec, rl);
+                if (s != RMS$_DUP) ok = 0;
+            }
+        }
+        check(ok, "ML: bulk $PUT across many bucket splits succeeded");
+        check(cx && cx->keys[0].root_level >= 2,
+              "ML: the index GREW A SECOND LEVEL (root promotion, Root Level >= 2)");
+        if (cx)
+            printf("    ML: root_level=%u root_vbn=%u alloc_next=%u\n",
+                   cx->keys[0].root_level, cx->keys[0].root_vbn, cx->alloc_next);
+
+        /* every DISTINCT key that was inserted reads back byte-exact by key */
+        {
+            int miss = 0, distinct = 0;
+            /* mark which key_n values were actually produced */
+            unsigned char *present = calloc((size_t)ML_N, 1);
+            for (n = 0; n < ML_N; n++) {
+                int key_n = (int)(((unsigned)n * 1103515245u + 12345u) % (unsigned)ML_N);
+                present[key_n] = 1;
+            }
+            for (n = 0; cx && n < ML_N; n++) {
+                uint8_t key[KEY_SIZE], buf[128], want[64]; uint16_t rl = 0, wl = 0;
+                if (!present[n]) continue;
+                distinct++;
+                key_of(n, key);
+                make_record(n, want, &wl);
+                if (!($VMS_STATUS_SUCCESS(rms_p3_get_by_key(cx, 0, key, KEY_SIZE,
+                        0, 0, buf, sizeof(buf), &rl)) && rl == wl &&
+                      memcmp(buf, want, wl) == 0))
+                    miss++;
+            }
+            check(miss == 0,
+                  "ML: every record reads back BY KEY through the multi-level index");
+            printf("    ML: %d distinct keys, %d read-back misses\n", distinct, miss);
+
+            /* KGT walk visits them all, strictly ascending */
+            {
+                uint8_t cur[KEY_SIZE], prev[KEY_SIZE];
+                int seen = 0, ordered = 1, have_prev = 0;
+                memset(cur, 0, sizeof(cur));
+                for (;;) {
+                    uint8_t buf[128]; uint16_t rl = 0;
+                    uint32_t gs = rms_p3_get_by_key(cx, 0, cur, KEY_SIZE, 0, 1,
+                                                    buf, sizeof(buf), &rl);
+                    if (gs == RMS$_RNF) break;
+                    if (!$VMS_STATUS_SUCCESS(gs)) { ordered = 0; break; }
+                    if (have_prev && memcmp(buf, prev, KEY_SIZE) <= 0) ordered = 0;
+                    memcpy(prev, buf, KEY_SIZE); memcpy(cur, buf, KEY_SIZE);
+                    have_prev = 1;
+                    if (++seen > distinct + 4) { ordered = 0; break; }
+                }
+                check(ordered, "ML: KGT walk ascends strictly across the tall tree");
+                check(seen == distinct,
+                      "ML: KGT walk visits exactly the distinct-key count");
+            }
+            free(present);
+        }
+
+        /* RE-BIND: a fresh read context must descend the PERSISTED taller tree */
+        if (cx) {
+            p3_ctx_t *rc = NULL;
+            uint32_t bs = rms_p3_bind(f3, &rc);
+            check($VMS_STATUS_SUCCESS(bs) && rc &&
+                  rc->keys[0].root_level == cx->keys[0].root_level &&
+                  rc->keys[0].root_vbn == cx->keys[0].root_vbn,
+                  "ML: reopened file re-binds the promoted root (VBN/level persisted)");
+            if (rc) {
+                uint8_t key[KEY_SIZE], buf[128], want[64]; uint16_t rl = 0, wl = 0;
+                key_of(0, key); make_record(0, want, &wl);
+                check($VMS_STATUS_SUCCESS(rms_p3_get_by_key(rc, 0, key, KEY_SIZE,
+                        0, 0, buf, sizeof(buf), &rl)) && rl == wl &&
+                      memcmp(buf, want, wl) == 0,
+                      "ML: reopened multi-level index still reads a record by key");
+            }
+            rms_p3_free(rc);
+        }
+        rms_p3_free(cx);
+        if (f3) rms_io_posix_unwrap(f3);
+        unlink(p3);
+    }
+
+    /* ---- DEEP INDEX (>= 3 levels): a WIDE index key (key_size 120) makes an
+     * index bucket hold only (512-14)/(2+120) = 4 entries, so the index tree
+     * grows to THREE levels on a modest record count and a NON-ROOT index bucket
+     * must split (the p3_index_insert lvl>0 propagation branch, not just the root
+     * promotion the ML case exercises). Shuffled inserts keep the tree balanced.
+     * seg0 is 8 real bytes at offset 0, zero-padded to the 120-byte stored index
+     * key. Prove Root Level >= 3 and that every key still round-trips. ---- */
+    {
+        char p4[] = "/tmp/ovmx_p3wdl_XXXXXX";
+        int fd4 = mkstemp(p4);
+        rms_file_t *f4 = (fd4 >= 0) ? rms_io_posix_wrap(fd4) : NULL;
+        p3_create_params_t c4;
+        p3_ctx_t *cx = NULL;
+        const int DL_N = 1200;
+        int n, ok = 1;
+        uint32_t cs;
+        int *ord = (int *)malloc(sizeof(int) * DL_N);
+
+        check(f4 != NULL && ord != NULL, "DL: wrap fd");
+        memset(&c4, 0, sizeof(c4));
+        c4.key_size = 120; c4.seg0_pos = 0; c4.seg0_siz = KEY_SIZE;  /* 8-byte key */
+        c4.bkt_blocks = 1;
+        cs = (f4) ? rms_p3_create(f4, &c4, &cx) : RMS$_DME;
+        check(cs == RMS$_CREATED && cx, "DL: create wide-key (fanout-4) indexed file");
+
+        for (n = 0; n < DL_N; n++) ord[n] = n;
+        for (n = DL_N - 1; n > 0; n--) {   /* deterministic shuffle for balance */
+            int j = (int)(((unsigned)(n * 2654435761u)) % (unsigned)(n + 1));
+            int t = ord[n]; ord[n] = ord[j]; ord[j] = t;
+        }
+        for (n = 0; cx && n < DL_N; n++) {
+            uint8_t rec[64]; uint16_t rl;
+            make_record(ord[n], rec, &rl);
+            if (!$VMS_STATUS_SUCCESS(rms_p3_put(cx, 0, rec, rl))) ok = 0;
+        }
+        check(ok, "DL: bulk $PUT into the tall tree succeeded");
+        check(cx && cx->keys[0].root_level >= 3,
+              "DL: index reached Root Level >= 3 (non-root index-bucket split)");
+        if (cx)
+            printf("    DL: root_level=%u root_vbn=%u alloc_next=%u\n",
+                   cx->keys[0].root_level, cx->keys[0].root_vbn, cx->alloc_next);
+
+        {
+            int miss = 0;
+            for (n = 0; cx && n < DL_N; n++) {
+                uint8_t key[KEY_SIZE], buf[128], want[64]; uint16_t rl = 0, wl = 0;
+                key_of(n, key); make_record(n, want, &wl);
+                if (!($VMS_STATUS_SUCCESS(rms_p3_get_by_key(cx, 0, key, KEY_SIZE,
+                        0, 0, buf, sizeof(buf), &rl)) && rl == wl &&
+                      memcmp(buf, want, wl) == 0))
+                    miss++;
+            }
+            check(miss == 0,
+                  "DL: every record reads back by key through the >=3-level index");
+        }
+        rms_p3_free(cx);
+        if (f4) rms_io_posix_unwrap(f4);
+        free(ord);
+        unlink(p4);
+    }
+
     printf("%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;
 }

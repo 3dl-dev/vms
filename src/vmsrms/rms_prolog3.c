@@ -38,12 +38,14 @@
 static uint32_t p3_maintain_secondaries_put(p3_ctx_t *ctx, const uint8_t *rec,
                                             uint16_t rec_len, uint32_t home_vbn,
                                             uint16_t home_recid);
-static uint32_t p3_sidr_put(p3_ctx_t *ctx, const p3_keydesc_t *sk,
+static uint32_t p3_sidr_put(p3_ctx_t *ctx, p3_keydesc_t *sk,
                             const uint8_t *keyval, p3_rfa_t rfa);
 static uint32_t p3_sidr_remove(p3_ctx_t *ctx, const p3_keydesc_t *sk,
                                const uint8_t *keyval, p3_rfa_t rfa);
-static uint32_t p3_split_sidr_bucket(p3_ctx_t *ctx, const p3_keydesc_t *sk,
-                                     uint8_t *root, uint16_t entry_off,
+/* p3_ipath_t is defined below (multi-level index growth, vms-5a3). */
+struct p3_ipath;
+static uint32_t p3_split_sidr_bucket(p3_ctx_t *ctx, p3_keydesc_t *sk,
+                                     const struct p3_ipath *path, int depth,
                                      uint32_t data_vbn, const uint8_t *xold);
 static uint32_t p3_resolve_rfa(p3_ctx_t *ctx, const p3_keydesc_t *pk,
                                uint32_t vbn, uint16_t id,
@@ -754,59 +756,296 @@ static uint16_t p3_rec_size(const uint8_t *bkt, uint16_t off)
     return (uint16_t)(P3_DR_HDR_SIZE + p3_le16(bkt + off + P3_DR_OFF_DATALEN));
 }
 
-/* Locate, in the (already read) single-level root index bucket `root`, the
- * entry that routes `key`: the first entry whose high-key >= key, else the last
- * entry (key is above every separator -> rightmost bucket). Returns the entry
- * byte offset in *entry_off and its 2-byte child VBN in *child. */
-static uint32_t p3_index_locate(const p3_keydesc_t *kd, const uint8_t *root,
-                                const uint8_t *key, uint16_t key_len,
-                                uint16_t *entry_off, uint32_t *child)
+
+/* ============================================================================
+ * MULTI-LEVEL INDEX GROWTH (vms-5a3)
+ *
+ * The primary/secondary index is a genuine B-tree of {u16 child, key_size
+ * high-key} entries where each entry's high-key is the MAXIMUM key in the subtree
+ * it points at, and the reader (p3_descend) routes a search to the first entry
+ * whose high-key >= the search key (else the rightmost). When a leaf (data/SIDR)
+ * bucket splits, the new sibling's {child, high-key} is inserted into the leaf's
+ * PARENT index bucket; a full parent splits too and the split PROPAGATES up, and
+ * when the ROOT index bucket splits a fresh root is grown one level higher (Root
+ * Level++). A key fact keeps this simple and correct: a split moves the largest
+ * key of a bucket into the NEW right sibling, so the subtree's maximum is
+ * unchanged -- the parent's coverage never grows on a split, only the left
+ * sibling's separator shrinks and one new entry (high-key == the unchanged
+ * subtree max) is inserted. The root VBN/level move is persisted to the on-disk
+ * key descriptor (VBN 1) so a reopened file (rms_p3_bind) descends the taller
+ * tree. Substrate-agnostic: fixed-width le fields over uint8[], no #ifdef.
+ * ========================================================================== */
+
+#define P3_MAX_INDEX_DEPTH 16u   /* index levels the write descent will track */
+
+/* One step of the write descent: the index bucket visited and the byte offset of
+ * the entry chosen inside it (the entry that routes the target key). */
+typedef struct p3_ipath { uint32_t vbn; uint16_t entry_off; } p3_ipath_t;
+
+/* Mutable key-descriptor lookup (a root promotion updates root_vbn/root_level). */
+static p3_keydesc_t *p3_find_key_mut(p3_ctx_t *ctx, uint8_t krf)
 {
-    uint16_t ibs_cap = (uint16_t)((kd->ibs ? kd->ibs : 1u) * P3_BLK);
-    uint16_t stride  = (uint16_t)(P3_IDXREC_PTR_SIZE + kd->key_size);
-    uint16_t free_off = p3_le16(root + P3_BH_OFF_FREESPACE);
-    uint16_t off, last_off = 0;
-    uint32_t last_child = 0;
-    int have = 0;
+    uint16_t i;
+    for (i = 0; i < ctx->num_keys; i++)
+        if (ctx->keys[i].ref == krf)
+            return &ctx->keys[i];
+    if (krf < ctx->num_keys)
+        return &ctx->keys[krf];
+    return NULL;
+}
 
-    if (root[P3_BH_OFF_LEVEL] != 1)
-        return RMS$_ORG;                 /* not a single-level index (deferred) */
-    if (free_off < P3_BKT_HDR_SIZE || free_off > ibs_cap)
-        return RMS$_PLG;
+/* Persist a key's root VBN + root level (and the file allocation high-water) to
+ * its on-disk key descriptor in VBN 1. The descriptor for key of reference `ref`
+ * sits at offset P3_FP_HDR_SIZE + ref*P3_KEYDESC_SIZE (this engine authors keys
+ * with ref == positional index; rms_p3_create / rms_p3_add_secondary_key). */
+static int p3_persist_root(p3_ctx_t *ctx, const p3_keydesc_t *kd)
+{
+    uint8_t vbn1[P3_BLK];
+    uint16_t koff = (uint16_t)(P3_FP_HDR_SIZE + (uint16_t)kd->ref * P3_KEYDESC_SIZE);
+    if ((uint32_t)koff + P3_KEYDESC_SIZE > P3_BLK)
+        return -1;
+    if (p3_read_blocks(ctx->f, P3_VBN_FIXED_PROLOG, 1u, vbn1) != 0)
+        return -1;
+    p3_put_le32(vbn1 + koff + P3_KD_OFF_ROOT_VBN, kd->root_vbn);
+    vbn1[koff + P3_KD_OFF_ROOT_LEVEL] = kd->root_level;
+    p3_put_le32(vbn1 + P3_FP_OFF_ALLOC_NEXT, ctx->alloc_next);
+    return p3_write_blocks(ctx->f, P3_VBN_FIXED_PROLOG, 1u, vbn1);
+}
 
-    for (off = P3_BKT_HDR_SIZE; (uint16_t)(off + stride) <= free_off;
-         off = (uint16_t)(off + stride)) {
-        uint32_t c = p3_le16(root + off);
-        const uint8_t *hk = root + off + P3_IDXREC_PTR_SIZE;
-        last_off = off; last_child = c; have = 1;
-        if (p3_keycmp(hk, kd->key_size, key, key_len) >= 0) {
-            *entry_off = off; *child = c;
+/* Write-side index descent: from the root, at each index level pick the entry
+ * routing `key` (first high-key >= key, else the rightmost) and RECORD it in
+ * path[]. Stops at the level-0 (data / SIDR) bucket, returning its VBN and the
+ * number of index levels walked. Mirrors p3_descend's routing exactly, so the
+ * read and write paths agree on which leaf holds the key at any tree height. */
+static uint32_t p3_descend_write(p3_ctx_t *ctx, const p3_keydesc_t *kd,
+                                 const uint8_t *key, uint16_t key_len,
+                                 p3_ipath_t *path, int *depth_out,
+                                 uint32_t *data_vbn_out)
+{
+    uint32_t vbn = kd->root_vbn;
+    uint16_t ibs = kd->ibs ? kd->ibs : 1u;
+    uint16_t icap = (uint16_t)(ibs * P3_BLK);
+    uint16_t stride = (uint16_t)(P3_IDXREC_PTR_SIZE + kd->key_size);
+    uint8_t *b;
+    int depth = 0, guard;
+
+    b = (uint8_t *)malloc((size_t)icap);
+    if (!b)
+        return RMS$_DME;
+
+    for (guard = 0; guard <= (int)P3_MAX_INDEX_DEPTH; guard++) {
+        uint8_t level;
+        uint16_t free_off, off, chosen = 0;
+        uint32_t child = 0;
+        int chose = 0;
+
+        if (p3_read_blocks(ctx->f, vbn, ibs, b) != 0) { free(b); return RMS$_RER; }
+        level = b[P3_BH_OFF_LEVEL];
+        if (level == 0) {
+            *data_vbn_out = vbn;
+            *depth_out = depth;
+            free(b);
             return RMS$_NORMAL;
         }
+        free_off = p3_le16(b + P3_BH_OFF_FREESPACE);
+        if (free_off < P3_BKT_HDR_SIZE || free_off > icap) { free(b); return RMS$_PLG; }
+        for (off = P3_BKT_HDR_SIZE; (uint16_t)(off + stride) <= free_off;
+             off = (uint16_t)(off + stride)) {
+            const uint8_t *hk = b + off + P3_IDXREC_PTR_SIZE;
+            chosen = off; child = p3_le16(b + off); chose = 1;
+            if (p3_keycmp(hk, kd->key_size, key, key_len) >= 0)
+                break;
+        }
+        if (!chose) { free(b); return RMS$_PLG; }
+        if (depth >= (int)P3_MAX_INDEX_DEPTH) { free(b); return RMS$_PLG; }
+        path[depth].vbn = vbn;
+        path[depth].entry_off = chosen;
+        depth++;
+        vbn = child;
     }
-    if (!have)
-        return RMS$_PLG;                 /* empty index bucket: corrupt */
-    *entry_off = last_off; *child = last_child;   /* above all -> rightmost */
+    free(b);
+    return RMS$_PLG;                      /* descent overran (cyclic / too deep) */
+}
+
+/* After a plain in-place insert of a key (klen valid bytes, zero-padded to
+ * key_size) that landed in the RIGHTMOST leaf, grow the covering high-key at
+ * every ancestor whose routed entry no longer covers it. Walks the recorded path
+ * bottom-up, stopping at the first level whose high-key already covers `key`. */
+static uint32_t p3_index_grow_high(p3_ctx_t *ctx, const p3_keydesc_t *kd,
+                                   const p3_ipath_t *path, int depth,
+                                   const uint8_t *key, uint16_t klen)
+{
+    uint16_t ibs = kd->ibs ? kd->ibs : 1u;
+    uint16_t ksz = kd->key_size;
+    uint8_t *b;
+    int lvl;
+
+    b = (uint8_t *)malloc((size_t)ibs * P3_BLK);
+    if (!b)
+        return RMS$_DME;
+    for (lvl = depth - 1; lvl >= 0; lvl--) {
+        uint8_t *hk;
+        if (p3_read_blocks(ctx->f, path[lvl].vbn, ibs, b) != 0) { free(b); return RMS$_RER; }
+        hk = b + path[lvl].entry_off + P3_IDXREC_PTR_SIZE;
+        if (p3_keycmp(key, klen, hk, ksz) <= 0)
+            break;                        /* this level already covers the key */
+        memcpy(hk, key, klen);
+        if (ksz > klen) memset(hk + klen, 0, ksz - klen);
+        if (p3_write_blocks(ctx->f, path[lvl].vbn, ibs, b) != 0) { free(b); return RMS$_WPL; }
+    }
+    free(b);
     return RMS$_NORMAL;
 }
 
+/* Insert one index entry {child, high} into key `kd`'s index at the parent given
+ * by the recorded descent path (path[depth-1] is the leaf's direct parent), and
+ * set that routed left-sibling entry's high-key to `left_high` (the left leaf's
+ * new max after a leaf split). If the parent index bucket overflows it splits and
+ * the {new-sibling, high-key} insert PROPAGATES up; a root-index split grows a
+ * new root one level higher and persists the new root VBN/level. `kd` is mutable
+ * for that promotion. left_high/high are key_size-wide (already zero-padded).
+ * Returns RMS$_NORMAL, RMS$_ORG (pathological small bucket that cannot hold two
+ * entries -> fail honest, no mis-write), RMS$_WPL/RMS$_RER (I/O), RMS$_DME. */
+static uint32_t p3_index_insert(p3_ctx_t *ctx, p3_keydesc_t *kd,
+                                const p3_ipath_t *path, int depth,
+                                const uint8_t *left_high,
+                                uint32_t child, const uint8_t *high)
+{
+    uint16_t ibs  = kd->ibs ? kd->ibs : 1u;
+    uint16_t icap = (uint16_t)(ibs * P3_BLK);
+    uint16_t ksz  = kd->key_size;
+    uint16_t istr = (uint16_t)(P3_IDXREC_PTR_SIZE + ksz);
+    uint8_t *B = NULL, *Q = NULL, *R = NULL;
+    uint8_t  lbuf[256], hbuf[256];
+    uint32_t cur_child = child;
+    uint32_t st = RMS$_NORMAL;
+    int lvl;
+
+    if (ksz > 255) return RMS$_PLG;
+    memcpy(lbuf, left_high, ksz);
+    memcpy(hbuf, high, ksz);
+
+    /* B is over-sized by one entry so an insert always fits before we split. */
+    B = (uint8_t *)malloc((size_t)icap + istr);
+    Q = (uint8_t *)malloc((size_t)icap);
+    if (!B || !Q) { st = RMS$_DME; goto done; }
+
+    for (lvl = depth - 1; lvl >= 0; lvl--) {
+        uint32_t bvbn = path[lvl].vbn;
+        uint16_t ent  = path[lvl].entry_off;
+        uint16_t bfree, pos, nent, half, i, xo, yo;
+        uint8_t  blevel, bflags;
+        uint32_t bnext, vq;
+        const uint8_t *bmax, *qmax;
+
+        if (p3_read_blocks(ctx->f, bvbn, ibs, B) != 0) { st = RMS$_RER; goto done; }
+        blevel = B[P3_BH_OFF_LEVEL];
+        bflags = B[P3_BH_OFF_FLAGS];
+        bnext  = p3_le32(B + P3_BH_OFF_NEXT_VBN);
+        bfree  = p3_le16(B + P3_BH_OFF_FREESPACE);
+        if (bfree < P3_BKT_HDR_SIZE || bfree > icap ||
+            (uint16_t)(ent + istr) > bfree) { st = RMS$_PLG; goto done; }
+
+        /* update the left sibling's separator (in place, fixed width) ... */
+        memcpy(B + ent + P3_IDXREC_PTR_SIZE, lbuf, ksz);
+        /* ... then insert {cur_child, hbuf} just after it. */
+        pos = (uint16_t)(ent + istr);
+        memmove(B + pos + istr, B + pos, (size_t)(bfree - pos));
+        p3_put_le16(B + pos, (uint16_t)cur_child);
+        memcpy(B + pos + P3_IDXREC_PTR_SIZE, hbuf, ksz);
+        bfree = (uint16_t)(bfree + istr);
+
+        if (bfree <= icap) {
+            p3_put_le16(B + P3_BH_OFF_FREESPACE, bfree);
+            if (p3_write_blocks(ctx->f, bvbn, ibs, B) != 0) { st = RMS$_WPL; goto done; }
+            st = RMS$_NORMAL; goto done;
+        }
+
+        /* ---- overflow: split B (lower half stays at bvbn) + Q (upper half) ---
+         * ceil-biased to the LEFT so the new right sibling Q is the smaller half:
+         * index growth is append-heavy (rightmost inserts), and keeping Q emptier
+         * lets the next append land without an immediate re-split, holding the
+         * tree height near log(fanout) instead of degenerating under sorted load. */
+        nent = (uint16_t)((bfree - P3_BKT_HDR_SIZE) / istr);
+        half = (uint16_t)((nent + 1u) / 2u);
+        if (nent < 2 || half == 0 || half >= nent) { st = RMS$_ORG; goto done; }
+
+        vq = ctx->alloc_next; ctx->alloc_next += ibs;
+
+        memset(Q, 0, (size_t)icap);
+        yo = P3_BKT_HDR_SIZE;
+        for (i = half; i < nent; i++) {
+            memcpy(Q + yo, B + P3_BKT_HDR_SIZE + (size_t)i * istr, istr);
+            yo = (uint16_t)(yo + istr);
+        }
+        xo = (uint16_t)(P3_BKT_HDR_SIZE + (size_t)half * istr);
+        bmax = B + P3_BKT_HDR_SIZE + (size_t)(half - 1) * istr + P3_IDXREC_PTR_SIZE;
+        qmax = Q + P3_BKT_HDR_SIZE + (size_t)(nent - half - 1) * istr + P3_IDXREC_PTR_SIZE;
+
+        {
+            uint8_t bf = (uint8_t)(bflags & ~(1u << P3_BKTV_ROOTBKT) &
+                                            ~(1u << P3_BKTV_LASTBKT));
+            uint8_t qf = (uint8_t)(bflags & ~(1u << P3_BKTV_ROOTBKT));
+            uint32_t qnext = (bnext == bvbn) ? 0u : bnext;
+            /* B header must be laid AFTER reading bmax (bmax points into B). */
+            memcpy(lbuf, bmax, ksz);            /* left sep for B in the parent */
+            memcpy(hbuf, qmax, ksz);            /* high-key for the new Q entry */
+            p3_set_bkt_header(B, blevel, bf, xo, 1, vq);
+            p3_set_bkt_header(Q, blevel, qf, yo, 1, qnext);
+        }
+        if (p3_write_blocks(ctx->f, bvbn, ibs, B) != 0 ||
+            p3_write_blocks(ctx->f, vq, ibs, Q) != 0) { st = RMS$_WPL; goto done; }
+        cur_child = vq;
+
+        if (lvl == 0) {
+            /* B was the ROOT -> grow a new root one level higher. */
+            uint32_t vr = ctx->alloc_next; ctx->alloc_next += ibs;
+            uint16_t ro = P3_BKT_HDR_SIZE;
+            if (!R) { R = (uint8_t *)malloc((size_t)icap);
+                      if (!R) { st = RMS$_DME; goto done; } }
+            memset(R, 0, (size_t)icap);
+            p3_put_le16(R + ro, (uint16_t)bvbn);                 /* {B, bmax} */
+            memcpy(R + ro + P3_IDXREC_PTR_SIZE, lbuf, ksz);
+            ro = (uint16_t)(ro + istr);
+            p3_put_le16(R + ro, (uint16_t)vq);                   /* {Q, qmax} */
+            memcpy(R + ro + P3_IDXREC_PTR_SIZE, hbuf, ksz);
+            ro = (uint16_t)(ro + istr);
+            p3_set_bkt_header(R, (uint8_t)(blevel + 1),
+                              (uint8_t)((1u << P3_BKTV_ROOTBKT) |
+                                        (1u << P3_BKTV_LASTBKT)),
+                              ro, 1, vr);
+            if (p3_write_blocks(ctx->f, vr, ibs, R) != 0) { st = RMS$_WPL; goto done; }
+            kd->root_vbn   = vr;
+            kd->root_level = (uint8_t)(blevel + 1);
+            if (p3_persist_root(ctx, kd) != 0) { st = RMS$_WPL; goto done; }
+            st = RMS$_NORMAL; goto done;
+        }
+        /* else: loop up to insert {vq, qmax} into path[lvl-1], separator lbuf. */
+    }
+    st = RMS$_ORG;                        /* ran past the root without settling */
+
+done:
+    free(B); free(Q); free(R);
+    if ($VMS_STATUS_SUCCESS(st))
+        (void)p3_flush_alloc_next(ctx);   /* persist the allocation high-water */
+    return st;
+}
+
 /*
- * Split the FULL data bucket X (VBN `data_vbn`, image in `xold`, its routing
- * index entry at `entry_off` in `root`) into X + a freshly allocated bucket Y.
+ * Split the FULL data bucket X (VBN `data_vbn`, image in `xold`, routed by the
+ * descent `path`) into X + a freshly allocated bucket Y.
  * Redistributes the sorted live records by key, leaves an RRV stub in X for each
- * moved record, and inserts Y's {child, high-key} entry into `root`. Writes X,
- * Y and the root back. `root` is updated in place (caller re-reads next pass).
- * Returns RMS$_NORMAL, RMS$_ORG (index bucket full -> would need a 2nd level),
- * RMS$_RSZ (bucket held < 2 live records -> unsplittable), or an I/O status.
+ * moved record, and inserts Y's {child, high-key} entry into the parent index
+ * bucket via p3_index_insert (which SPLITS the index and grows a new root when
+ * needed -- multi-level, vms-5a3). Writes X and Y back. Returns RMS$_NORMAL,
+ * RMS$_RSZ (bucket held < 2 live records -> unsplittable), RMS$_ORG (pathological
+ * index geometry that cannot hold two entries -> fail honest), or an I/O status.
  */
-static uint32_t p3_split_data_bucket(p3_ctx_t *ctx, const p3_keydesc_t *kd,
-                                     uint8_t *root, uint16_t entry_off,
+static uint32_t p3_split_data_bucket(p3_ctx_t *ctx, p3_keydesc_t *kd,
+                                     const p3_ipath_t *path, int depth,
                                      uint32_t data_vbn, const uint8_t *xold)
 {
     uint32_t cap    = (kd->dbs ? kd->dbs : 1u) * P3_BLK;
-    uint16_t istr   = (uint16_t)(P3_IDXREC_PTR_SIZE + kd->key_size);
-    uint16_t icap   = (uint16_t)((kd->ibs ? kd->ibs : 1u) * P3_BLK);
-    uint16_t rfree  = p3_le16(root + P3_BH_OFF_FREESPACE);
     uint16_t xfree  = p3_le16(xold + P3_BH_OFF_FREESPACE);
     uint8_t  xflags = xold[P3_BH_OFF_FLAGS];
     uint32_t xnext  = p3_le32(xold + P3_BH_OFF_NEXT_VBN);
@@ -818,10 +1057,6 @@ static uint32_t p3_split_data_bucket(p3_ctx_t *ctx, const p3_keydesc_t *kd,
     uint8_t  *xbuf = NULL, *ybuf = NULL;
     uint16_t split_idx, xo, yo, yid;
     uint32_t st = RMS$_NORMAL;
-
-    /* Index room for one more entry FIRST -- fail honest before any mutation. */
-    if ((uint32_t)rfree + istr > icap)
-        return RMS$_ORG;                 /* 2-level index growth: deferred rung */
 
     live = (uint16_t *)malloc((size_t)maxrec * sizeof(uint16_t));
     stub = (uint16_t *)malloc((size_t)maxrec * sizeof(uint16_t));
@@ -900,36 +1135,23 @@ static uint32_t p3_split_data_bucket(p3_ctx_t *ctx, const p3_keydesc_t *kd,
                       (uint8_t)(xflags & ~(1u << P3_BKTV_LASTBKT)),
                       xo, xrecid, vy);      /* X now chains horizontally to Y */
 
-    /* ---- index maintenance: X's entry high-key = X's new max; insert Y ---- */
-    {
-        const uint8_t *xhigh = xold + live[split_idx - 1] + P3_DR_HDR_SIZE +
-                               kd->seg0_pos;               /* new max in X */
-        const uint8_t *yhigh = xold + live[nlive - 1] + P3_DR_HDR_SIZE +
-                               kd->seg0_pos;               /* max overall -> Y */
-        uint16_t pos = (uint16_t)(entry_off + istr);       /* just after X's */
-        uint8_t *xe = root + entry_off + P3_IDXREC_PTR_SIZE;
-        uint8_t *ye = root + pos + P3_IDXREC_PTR_SIZE;
-        uint16_t padlo = (uint16_t)(kd->key_size - kd->seg0_siz);
-        /* shift the tail up to open a slot, then write {vy, yhigh}. The high-key
-         * is the record's seg-0 key (seg0_siz bytes), zero-padded to key_size --
-         * the same encoding the insert path writes (a full-width index key). */
-        memmove(root + pos + istr, root + pos, (size_t)(rfree - pos));
-        memcpy(xe, xhigh, kd->seg0_siz);
-        if (padlo) memset(xe + kd->seg0_siz, 0, padlo);
-        p3_put_le16(root + pos, (uint16_t)vy);
-        memcpy(ye, yhigh, kd->seg0_siz);
-        if (padlo) memset(ye + kd->seg0_siz, 0, padlo);
-        rfree = (uint16_t)(rfree + istr);
-        p3_put_le16(root + P3_BH_OFF_FREESPACE, rfree);
-    }
-
-    /* ---- commit: Y, X, root, and the allocation high-water ---- */
+    /* ---- commit X and Y, THEN insert Y into the parent index (may split the
+     * index and grow a new root -- multi-level, vms-5a3) ---- */
     if (p3_write_blocks(ctx->f, vy, kd->dbs ? kd->dbs : 1u, ybuf) != 0 ||
-        p3_write_blocks(ctx->f, data_vbn, kd->dbs ? kd->dbs : 1u, xbuf) != 0 ||
-        p3_write_blocks(ctx->f, kd->root_vbn, kd->ibs ? kd->ibs : 1u, root) != 0 ||
-        p3_flush_alloc_next(ctx) != 0) {
+        p3_write_blocks(ctx->f, data_vbn, kd->dbs ? kd->dbs : 1u, xbuf) != 0) {
         st = RMS$_WPL;
         goto done;
+    }
+    {
+        /* X's new max (seg-0 key of the last retained record) and Y's max (the
+         * overall max, moved into Y), each zero-padded to key_size -- the same
+         * full-width index-key encoding the plain insert path writes. */
+        uint8_t xhigh[256], yhigh[256];
+        uint16_t ksz = kd->key_size, ss = kd->seg0_siz;
+        memset(xhigh, 0, ksz); memset(yhigh, 0, ksz);
+        memcpy(xhigh, xold + live[split_idx - 1] + P3_DR_HDR_SIZE + kd->seg0_pos, ss);
+        memcpy(yhigh, xold + live[nlive - 1]     + P3_DR_HDR_SIZE + kd->seg0_pos, ss);
+        st = p3_index_insert(ctx, kd, path, depth, xhigh, vy, yhigh);
     }
 
 done:
@@ -940,15 +1162,15 @@ done:
 uint32_t rms_p3_put(p3_ctx_t *ctx, uint8_t krf,
                     const uint8_t *rec, uint16_t rec_len)
 {
-    const p3_keydesc_t *kd;
-    uint8_t *root = NULL, *data = NULL;
-    uint32_t cap, icap, st = RMS$_NORMAL;
+    p3_keydesc_t *kd;
+    uint8_t *data = NULL;
+    uint32_t cap, st = RMS$_NORMAL;
     const uint8_t *nkey;
     int attempt;
 
     if (!ctx || ctx->magic != P3_CTX_MAGIC || !ctx->writable || !rec)
         return RMS$_PLG;
-    kd = p3_find_key(ctx, krf);
+    kd = p3_find_key_mut(ctx, krf);
     if (!kd)
         return RMS$_KEY;
     if (kd->flags & P3_KEYM_ANY_COMPR)
@@ -960,22 +1182,20 @@ uint32_t rms_p3_put(p3_ctx_t *ctx, uint8_t krf,
     nkey = rec + kd->seg0_pos;
 
     cap  = (kd->dbs ? kd->dbs : 1u) * P3_BLK;
-    icap = (kd->ibs ? kd->ibs : 1u) * P3_BLK;
-    root = (uint8_t *)malloc((size_t)icap);
     data = (uint8_t *)malloc((size_t)cap);
-    if (!root || !data) { st = RMS$_DME; goto done; }
+    if (!data) { st = RMS$_DME; goto done; }
 
-    /* At most one split is needed to make room for one record; loop with a
-     * small guard so a second split (rightmost cascade) is still handled. */
-    for (attempt = 0; attempt < 4; attempt++) {
-        uint16_t entry_off = 0, dfree, ins_off, need;
+    /* Each attempt descends fresh (the tree may have grown a level on the prior
+     * attempt's split), tries an in-place insert, and splits on a full bucket;
+     * one split makes room, the guard covers a rightmost cascade. */
+    for (attempt = 0; attempt < 8; attempt++) {
+        p3_ipath_t path[P3_MAX_INDEX_DEPTH];
+        int depth = 0;
+        uint16_t dfree, ins_off, need;
         uint32_t data_vbn = 0;
         uint16_t off, recid;
 
-        if (p3_read_blocks(ctx->f, kd->root_vbn, kd->ibs ? kd->ibs : 1u, root) != 0) {
-            st = RMS$_RER; goto done;
-        }
-        st = p3_index_locate(kd, root, nkey, kd->seg0_siz, &entry_off, &data_vbn);
+        st = p3_descend_write(ctx, kd, nkey, kd->seg0_siz, path, &depth, &data_vbn);
         if (!$VMS_STATUS_SUCCESS(st)) goto done;
 
         if (p3_read_blocks(ctx->f, data_vbn, kd->dbs ? kd->dbs : 1u, data) != 0) {
@@ -1023,18 +1243,12 @@ uint32_t rms_p3_put(p3_ctx_t *ctx, uint8_t krf,
             if (p3_write_blocks(ctx->f, data_vbn, kd->dbs ? kd->dbs : 1u,
                                 data) != 0) { st = RMS$_WPL; goto done; }
 
-            /* index high-key must cover the bucket's new max: only grows when
-             * the located entry was the rightmost fallthrough (nkey > its key) */
-            if (p3_keycmp(nkey, kd->seg0_siz,
-                          root + entry_off + P3_IDXREC_PTR_SIZE,
-                          kd->key_size) > 0) {
-                memcpy(root + entry_off + P3_IDXREC_PTR_SIZE, nkey, kd->seg0_siz);
-                if (kd->key_size > kd->seg0_siz)
-                    memset(root + entry_off + P3_IDXREC_PTR_SIZE + kd->seg0_siz,
-                           0, kd->key_size - kd->seg0_siz);
-                if (p3_write_blocks(ctx->f, kd->root_vbn, kd->ibs ? kd->ibs : 1u,
-                                    root) != 0) { st = RMS$_WPL; goto done; }
-            }
+            /* index high-keys must cover the bucket's new max: grow every
+             * ancestor's routed high-key up the descent path (walks up only
+             * while the inserted key exceeds the covering high-key). Multi-level
+             * safe -- a single-level index touches just the root (vms-5a3). */
+            st = p3_index_grow_high(ctx, kd, path, depth, nkey, kd->seg0_siz);
+            if (!$VMS_STATUS_SUCCESS(st)) goto done;
             /* Maintain every secondary index: insert a SIDR pointer from each
              * secondary key VALUE to this record's stable RFA {home bucket,
              * record id}. The RFA stays resolvable across later primary splits
@@ -1048,14 +1262,13 @@ uint32_t rms_p3_put(p3_ctx_t *ctx, uint8_t krf,
         }
 
         /* ---- no room: split this bucket, then loop to reinsert ---- */
-        st = p3_split_data_bucket(ctx, kd, root, entry_off, data_vbn, data);
+        st = p3_split_data_bucket(ctx, kd, path, depth, data_vbn, data);
         if (!$VMS_STATUS_SUCCESS(st)) goto done;
-        /* loop: re-read root/data, the record now fits one of the two halves */
+        /* loop: re-descend, the record now fits one of the two halves */
     }
     st = RMS$_ORG;      /* did not converge (should not happen this rung) */
 
 done:
-    free(root);
     free(data);
     return st;
 }
@@ -1065,9 +1278,9 @@ uint32_t rms_p3_update(p3_ctx_t *ctx, uint8_t krf,
                        const uint8_t *rec, uint16_t rec_len)
 {
     const p3_keydesc_t *kd;
-    uint8_t *root = NULL, *data = NULL;
-    uint32_t cap, icap, st = RMS$_NORMAL;
-    uint16_t entry_off = 0, dfree, off, rec_off = 0xFFFF, oldlen = 0;
+    uint8_t *data = NULL;
+    uint32_t cap, st = RMS$_NORMAL;
+    uint16_t dfree, off, rec_off = 0xFFFF, oldlen = 0;
     uint32_t data_vbn = 0;
 
     if (!ctx || ctx->magic != P3_CTX_MAGIC || !ctx->writable || !key || !rec)
@@ -1084,15 +1297,21 @@ uint32_t rms_p3_update(p3_ctx_t *ctx, uint8_t krf,
         return RMS$_KEY;
 
     cap  = (kd->dbs ? kd->dbs : 1u) * P3_BLK;
-    icap = (kd->ibs ? kd->ibs : 1u) * P3_BLK;
-    root = (uint8_t *)malloc((size_t)icap);
     data = (uint8_t *)malloc((size_t)cap);
-    if (!root || !data) { st = RMS$_DME; goto done; }
+    if (!data) { st = RMS$_DME; goto done; }
 
-    if (p3_read_blocks(ctx->f, kd->root_vbn, kd->ibs ? kd->ibs : 1u, root) != 0) {
-        st = RMS$_RER; goto done;
+    /* Locate the data bucket holding the key (multi-level descent, vms-5a3).
+     * $UPDATE touches only the data bucket -- same-size overwrites in place, a
+     * size change compacts + reinserts via rms_p3_put, which maintains the
+     * index -- so the read-only descend (no path needed) is sufficient. */
+    {
+        uint16_t ib = kd->ibs ? kd->ibs : 1u, db = kd->dbs ? kd->dbs : 1u;
+        uint16_t mb = ib > db ? ib : db;
+        uint8_t *idxbuf = (uint8_t *)malloc((size_t)mb * P3_BLK);
+        if (!idxbuf) { st = RMS$_DME; goto done; }
+        st = p3_descend(ctx, kd, key, key_len, idxbuf, &data_vbn);
+        free(idxbuf);
     }
-    st = p3_index_locate(kd, root, key, key_len, &entry_off, &data_vbn);
     if (!$VMS_STATUS_SUCCESS(st)) goto done;
     if (p3_read_blocks(ctx->f, data_vbn, kd->dbs ? kd->dbs : 1u, data) != 0) {
         st = RMS$_RER; goto done;
@@ -1143,7 +1362,6 @@ uint32_t rms_p3_update(p3_ctx_t *ctx, uint8_t krf,
     st = rms_p3_put(ctx, krf, rec, rec_len);
 
 done:
-    free(root);
     free(data);
     return st;
 }
@@ -1252,14 +1470,11 @@ uint32_t rms_p3_get_by_rfa(p3_ctx_t *ctx, uint32_t home_vbn, uint16_t home_recid
  * into the secondary root. SIDR records carry NO RRV stub (nothing references a
  * SIDR by RFA). Returns RMS$_NORMAL, RMS$_ORG (secondary index would need a 2nd
  * level -- deferred), RMS$_RSZ (< 2 records -> unsplittable), or an I/O status. */
-static uint32_t p3_split_sidr_bucket(p3_ctx_t *ctx, const p3_keydesc_t *sk,
-                                     uint8_t *root, uint16_t entry_off,
+static uint32_t p3_split_sidr_bucket(p3_ctx_t *ctx, p3_keydesc_t *sk,
+                                     const struct p3_ipath *path, int depth,
                                      uint32_t data_vbn, const uint8_t *xold)
 {
     uint32_t cap   = (sk->dbs ? sk->dbs : 1u) * P3_BLK;
-    uint16_t istr  = (uint16_t)(P3_IDXREC_PTR_SIZE + sk->key_size);
-    uint16_t icap  = (uint16_t)((sk->ibs ? sk->ibs : 1u) * P3_BLK);
-    uint16_t rfree = p3_le16(root + P3_BH_OFF_FREESPACE);
     uint16_t xfree = p3_le16(xold + P3_BH_OFF_FREESPACE);
     uint8_t  xflags = xold[P3_BH_OFF_FLAGS];
     uint32_t xnext  = p3_le32(xold + P3_BH_OFF_NEXT_VBN);
@@ -1268,9 +1483,6 @@ static uint32_t p3_split_sidr_bucket(p3_ctx_t *ctx, const p3_keydesc_t *sk,
     uint16_t *ent = NULL, nent = 0, i, off, split_idx, xo, yo;
     uint8_t  *xbuf = NULL, *ybuf = NULL;
     uint32_t vy, st = RMS$_NORMAL;
-
-    if ((uint32_t)rfree + istr > icap)
-        return RMS$_ORG;                 /* 2-level secondary index: deferred */
 
     ent  = (uint16_t *)malloc((size_t)maxrec * sizeof(uint16_t));
     xbuf = (uint8_t  *)malloc((size_t)cap);
@@ -1317,26 +1529,21 @@ static uint32_t p3_split_sidr_bucket(p3_ctx_t *ctx, const p3_keydesc_t *sk,
     p3_set_bkt_header(xbuf, 0, (uint8_t)(xflags & ~(1u << P3_BKTV_LASTBKT)),
                       xo, 1, vy);
 
-    {
-        const uint8_t *xhigh = xold + ent[split_idx - 1] + P3_SIDR_HDR_SIZE;
-        const uint8_t *yhigh = xold + ent[nent - 1] + P3_SIDR_HDR_SIZE;
-        uint16_t pos = (uint16_t)(entry_off + istr);
-        uint8_t *xe = root + entry_off + P3_IDXREC_PTR_SIZE;
-        uint8_t *ye = root + pos + P3_IDXREC_PTR_SIZE;
-        memmove(root + pos + istr, root + pos, (size_t)(rfree - pos));
-        memcpy(xe, xhigh, ksz);
-        p3_put_le16(root + pos, (uint16_t)vy);
-        memcpy(ye, yhigh, ksz);
-        rfree = (uint16_t)(rfree + istr);
-        p3_put_le16(root + P3_BH_OFF_FREESPACE, rfree);
-    }
-
+    /* commit X and Y, then insert Y into the parent index (splits + grows a new
+     * secondary root as needed -- multi-level, vms-5a3). SIDR keys are stored
+     * already zero-padded to key_size, so the high-keys pass through directly. */
     if (p3_write_blocks(ctx->f, vy, sk->dbs ? sk->dbs : 1u, ybuf) != 0 ||
-        p3_write_blocks(ctx->f, data_vbn, sk->dbs ? sk->dbs : 1u, xbuf) != 0 ||
-        p3_write_blocks(ctx->f, sk->root_vbn, sk->ibs ? sk->ibs : 1u, root) != 0 ||
-        p3_flush_alloc_next(ctx) != 0) {
+        p3_write_blocks(ctx->f, data_vbn, sk->dbs ? sk->dbs : 1u, xbuf) != 0) {
         st = RMS$_WPL;
         goto done;
+    }
+    {
+        uint8_t xhigh[256], yhigh[256];
+        memset(xhigh, 0, ksz); memset(yhigh, 0, ksz);
+        memcpy(xhigh, xold + ent[split_idx - 1] + P3_SIDR_HDR_SIZE, ksz);
+        memcpy(yhigh, xold + ent[nent - 1]     + P3_SIDR_HDR_SIZE, ksz);
+        st = p3_index_insert(ctx, sk, (const p3_ipath_t *)path, depth,
+                             xhigh, vy, yhigh);
     }
 
 done:
@@ -1347,27 +1554,25 @@ done:
 /* Insert (secondary value -> primary RFA) into secondary key `sk`. If a SIDR for
  * `keyval` exists, APPENDS the RFA (duplicate secondary value, dup allowed);
  * else inserts a new key-sorted SIDR. Splits the SIDR bucket when it fills. */
-static uint32_t p3_sidr_put(p3_ctx_t *ctx, const p3_keydesc_t *sk,
+static uint32_t p3_sidr_put(p3_ctx_t *ctx, p3_keydesc_t *sk,
                             const uint8_t *keyval, p3_rfa_t rfa)
 {
-    uint32_t icap = (sk->ibs ? sk->ibs : 1u) * P3_BLK;
     uint32_t cap  = (sk->dbs ? sk->dbs : 1u) * P3_BLK;
     uint16_t ksz  = sk->key_size;
-    uint8_t *root = NULL, *data = NULL;
+    uint8_t *data = NULL;
     uint32_t st = RMS$_NORMAL;
     int attempt;
 
-    root = (uint8_t *)malloc((size_t)icap);
     data = (uint8_t *)malloc((size_t)cap);
-    if (!root || !data) { st = RMS$_DME; goto done; }
+    if (!data) { st = RMS$_DME; goto done; }
 
-    for (attempt = 0; attempt < 4; attempt++) {
-        uint16_t entry_off = 0, dfree, off, ins_off, found = 0xFFFF;
+    for (attempt = 0; attempt < 8; attempt++) {
+        p3_ipath_t path[P3_MAX_INDEX_DEPTH];
+        int depth = 0;
+        uint16_t dfree, off, ins_off, found = 0xFFFF;
         uint32_t data_vbn = 0;
 
-        if (p3_read_blocks(ctx->f, sk->root_vbn, sk->ibs ? sk->ibs : 1u,
-                           root) != 0) { st = RMS$_RER; goto done; }
-        st = p3_index_locate(sk, root, keyval, ksz, &entry_off, &data_vbn);
+        st = p3_descend_write(ctx, sk, keyval, ksz, path, &depth, &data_vbn);
         if (!$VMS_STATUS_SUCCESS(st)) goto done;
         if (p3_read_blocks(ctx->f, data_vbn, sk->dbs ? sk->dbs : 1u,
                            data) != 0) { st = RMS$_RER; goto done; }
@@ -1433,28 +1638,22 @@ static uint32_t p3_sidr_put(p3_ctx_t *ctx, const p3_keydesc_t *sk,
                 p3_put_le16(data + P3_BH_OFF_FREESPACE, dfree);
                 if (p3_write_blocks(ctx->f, data_vbn, sk->dbs ? sk->dbs : 1u,
                                     data) != 0) { st = RMS$_WPL; goto done; }
-                /* grow the index high-key if this value routed to the rightmost
-                 * entry and exceeds its separator (same as the primary path) */
-                if (p3_keycmp(keyval, ksz,
-                              root + entry_off + P3_IDXREC_PTR_SIZE, ksz) > 0) {
-                    memcpy(root + entry_off + P3_IDXREC_PTR_SIZE, keyval, ksz);
-                    if (p3_write_blocks(ctx->f, sk->root_vbn,
-                                        sk->ibs ? sk->ibs : 1u, root) != 0) {
-                        st = RMS$_WPL; goto done;
-                    }
-                }
+                /* grow every ancestor's covering high-key up the descent path
+                 * when this value is a new rightmost max (multi-level safe). */
+                st = p3_index_grow_high(ctx, sk, path, depth, keyval, ksz);
+                if (!$VMS_STATUS_SUCCESS(st)) goto done;
                 st = RMS$_NORMAL; goto done;
             }
         }
 
         /* no room: split the SIDR bucket, then loop to retry the insert */
-        st = p3_split_sidr_bucket(ctx, sk, root, entry_off, data_vbn, data);
+        st = p3_split_sidr_bucket(ctx, sk, (const struct p3_ipath *)path, depth,
+                                  data_vbn, data);
         if (!$VMS_STATUS_SUCCESS(st)) goto done;
     }
     st = RMS$_ORG;
 
 done:
-    free(root);
     free(data);
     return st;
 }
@@ -1464,21 +1663,21 @@ done:
 static uint32_t p3_sidr_remove(p3_ctx_t *ctx, const p3_keydesc_t *sk,
                                const uint8_t *keyval, p3_rfa_t rfa)
 {
-    uint32_t icap = (sk->ibs ? sk->ibs : 1u) * P3_BLK;
-    uint32_t cap  = (sk->dbs ? sk->dbs : 1u) * P3_BLK;
+    uint16_t ib = sk->ibs ? sk->ibs : 1u, db = sk->dbs ? sk->dbs : 1u;
+    uint16_t mb = ib > db ? ib : db;
+    uint32_t cap  = (uint32_t)db * P3_BLK;
     uint16_t ksz  = sk->key_size;
     uint8_t *root = NULL, *data = NULL;
     uint32_t data_vbn = 0, st = RMS$_NORMAL;
-    uint16_t entry_off = 0, dfree, off;
+    uint16_t dfree, off;
 
-    root = (uint8_t *)malloc((size_t)icap);
+    root = (uint8_t *)malloc((size_t)mb * P3_BLK);   /* descent scratch */
     data = (uint8_t *)malloc((size_t)cap);
     if (!root || !data) { st = RMS$_DME; goto done; }
 
-    if (p3_read_blocks(ctx->f, sk->root_vbn, sk->ibs ? sk->ibs : 1u, root) != 0) {
-        st = RMS$_RER; goto done;
-    }
-    st = p3_index_locate(sk, root, keyval, ksz, &entry_off, &data_vbn);
+    /* multi-level descent to the SIDR bucket (vms-5a3); remove touches only the
+     * SIDR bucket, never the index, so a read-only descend is sufficient. */
+    st = p3_descend(ctx, sk, keyval, ksz, root, &data_vbn);
     if (!$VMS_STATUS_SUCCESS(st)) goto done;
     if (p3_read_blocks(ctx->f, data_vbn, sk->dbs ? sk->dbs : 1u, data) != 0) {
         st = RMS$_RER; goto done;
@@ -1549,7 +1748,7 @@ static uint32_t p3_maintain_secondaries_put(p3_ctx_t *ctx, const uint8_t *rec,
     rfa.home_recid = home_recid;
 
     for (i = 0; i < ctx->num_keys; i++) {
-        const p3_keydesc_t *sk = &ctx->keys[i];
+        p3_keydesc_t *sk = &ctx->keys[i];
         uint8_t kv[256];
         uint32_t st;
         if (sk->ref == 0)
@@ -1763,8 +1962,8 @@ uint32_t rms_p3_delete(p3_ctx_t *ctx, uint8_t krf,
 {
     const p3_keydesc_t *pk;
     uint8_t *root = NULL, *data = NULL;
-    uint32_t cap, icap, st = RMS$_NORMAL;
-    uint16_t entry_off = 0, dfree, off, rec_off = 0xFFFF, dlen = 0, i;
+    uint32_t cap, st = RMS$_NORMAL;
+    uint16_t dfree, off, rec_off = 0xFFFF, dlen = 0, i, mb;
     uint32_t data_vbn = 0;
     p3_rfa_t rfa;
 
@@ -1779,15 +1978,14 @@ uint32_t rms_p3_delete(p3_ctx_t *ctx, uint8_t krf,
         return RMS$_PLG;
 
     cap  = (pk->dbs ? pk->dbs : 1u) * P3_BLK;
-    icap = (pk->ibs ? pk->ibs : 1u) * P3_BLK;
-    root = (uint8_t *)malloc((size_t)icap);
+    { uint16_t ib = pk->ibs ? pk->ibs : 1u, db = pk->dbs ? pk->dbs : 1u;
+      mb = ib > db ? ib : db; }
+    root = (uint8_t *)malloc((size_t)mb * P3_BLK);    /* descent scratch */
     data = (uint8_t *)malloc((size_t)cap);
     if (!root || !data) { st = RMS$_DME; goto done; }
 
-    if (p3_read_blocks(ctx->f, pk->root_vbn, pk->ibs ? pk->ibs : 1u, root) != 0) {
-        st = RMS$_RER; goto done;
-    }
-    st = p3_index_locate(pk, root, key, key_len, &entry_off, &data_vbn);
+    /* multi-level descent to the primary data bucket (vms-5a3). */
+    st = p3_descend(ctx, pk, key, key_len, root, &data_vbn);
     if (!$VMS_STATUS_SUCCESS(st)) goto done;
     if (p3_read_blocks(ctx->f, data_vbn, pk->dbs ? pk->dbs : 1u, data) != 0) {
         st = RMS$_RER; goto done;

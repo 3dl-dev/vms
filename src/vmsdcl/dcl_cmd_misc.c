@@ -398,9 +398,12 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
     struct dcl_context *ctx = dcl_get_context();
 
     const char *bin = NULL;
-    if (ctx &&
-        dcl_resolve_path(ctx, vms_spec, sys_path, sizeof(sys_path)) == 0 &&
-        access(sys_path, X_OK) == 0)
+    sys_path[0] = '\0';                /* stays empty unless resolve fills it */
+    int resolved_ok = (ctx &&
+        dcl_resolve_path(ctx, vms_spec, sys_path, sizeof(sys_path)) == 0);
+    if (!resolved_ok)
+        sys_path[0] = '\0';           /* a failed resolve leaves no valid path */
+    if (resolved_ok && access(sys_path, X_OK) == 0)
         bin = sys_path;
 
     /*
@@ -416,6 +419,28 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
         snprintf(def_path, sizeof(def_path), "%s/%s", VMS_SYSTEM_DIR, exe_name);
         if (access(def_path, X_OK) == 0)
             bin = def_path;
+    }
+
+    /*
+     * ATOMIC FLIP (vms-37e): with the /vms POSIX passthrough retired, the
+     * SYS$SYSTEM utility images have no /vms home -- both access() probes above
+     * fail on the real runtime. PID 1 stages the shipped utilities off the
+     * genuine ODS-2 volume THROUGH THE ACP into OVMX_BOOT_STAGE_DIR (a tmpfs)
+     * exactly as it stages the first-hop boot images (stage_boot_images(),
+     * src/ovmx_init/ovmx_init.c); the bytes came from the ACP, never /vms
+     * (INV-6). A utility is fork()+execve()d (not in-process activated) because
+     * it must receive P1-P8 argv, so it needs that POSIX handoff. Rewrite the
+     * resolved SYS$SYSTEM:<exe> path to its staged location and use it if the
+     * stage exists. If the utility was never staged (not installed), fall
+     * through -- the child's execvp() then fails HONESTLY with %-F-NOIMG, never
+     * a /vms read. Host ctest / plain-container tooling keeps /vms, so `bin` is
+     * already set there and this is never reached (behaviour unchanged). */
+    char staged_path[PATH_MAX];
+    if (!bin) {
+        const char *resolved = (sys_path[0] ? sys_path : def_path);
+        if (ovmx_boot_stage_exec_path(resolved, staged_path, sizeof(staged_path)) &&
+            access(staged_path, X_OK) == 0)
+            bin = staged_path;
     }
 
     /* Set argv[0] to resolved path or exe_name for PATH search */

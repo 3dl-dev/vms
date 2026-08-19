@@ -386,7 +386,17 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
         eff_owner.uic_member = 4; eff_owner.uic_group = 1;         /* SYSTEM [1,4] */
     }
     if (eff_prot == 0)
-        eff_prot = (kind == ODS2_FK_DIR) ? 0xBA00u : 0xFA00u;
+        eff_prot = (kind == ODS2_FK_DIR) ? 0xBA00u
+                 : (fidnum <= ODS2_RESFILES ? 0xFA00u : 0xAA00u);
+    /*
+     * The default for an ordinary (FID > ODS2_RESFILES) file is 0xAA00 -- the
+     * documented OpenVMS default protection (S:RWED,O:RWED,G:RE,W:RE), World
+     * Read+Execute -- not the reserved-metadata 0xFA00 (World fully denied).
+     * A runtime-created SYS$SYSTEM image (e.g. a freshly LINKed image) must be
+     * World-activatable exactly like the mastered ones; leaving it World-none
+     * reproduced the vms-37e %IMGACT-F-IMGNOTFND a non-privileged login hit.
+     * Kept identical to ods2_writer.c's write_header default.
+     */
     ed_put16(h + offsetof(ods2_fh2_t, fh2_reserved1),
              (fidnum <= ODS2_RESFILES) ? 0xFE00u : 0u);
     ed_put16(h + offsetof(ods2_fh2_t, fh2_fileowner) + 0, eff_owner.uic_member);

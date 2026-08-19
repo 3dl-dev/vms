@@ -787,6 +787,45 @@ static void stage_boot_images(void)
             ovmx_sysinit_halt("boot-image staging failed", detail);
         }
     }
+
+    /*
+     * SYS$SYSTEM UTILITY IMAGES (vms-37e). The five mandatory images above are
+     * the boot chain's own first hop. But DCL activates a SYS$SYSTEM utility
+     * (INSTALL, SYSGEN, AUTHORIZE, MAIL, ...) via dcl_exec_utility(), which
+     * fork()+execve()s the image so it can pass P1-P8 argv -- and in-process
+     * ACP activation (imgact_activate) carries NO argv, so those utilities
+     * cannot ride the in-process path and, exactly like the first hop, need a
+     * POSIX home the kernel can execve now that the /vms passthrough is retired.
+     * The bytes still come off the genuine ODS-2 volume THROUGH THE ACP (INV-6);
+     * only the Linux-exec handoff lives in tmpfs. dcl_exec_utility() rewrites its
+     * SYS$SYSTEM path here via ovmx_boot_stage_exec_path() when /vms is absent.
+     *
+     * BEST-EFFORT: unlike the first hop, a missing utility is NOT a boot-fatal
+     * condition (the OS kit stages several of these with `2>/dev/null` -- an
+     * install can legitimately omit one). ovmx_boot_acp_present() distinguishes
+     * "absent" (skip, honest) from a genuine read fault (halt) so an absent
+     * optional never masks a broken volume.
+     */
+    static const char *const utils[] = {
+        "INSTALL.EXE", "SYSGEN.EXE", "AUTHORIZE.EXE", "MAIL.EXE",
+        "MONITOR.EXE", "INITIALIZE.EXE", "PRODUCT.EXE", "LIBRARIAN.EXE",
+        "HELP.EXE", "SCSD.EXE",
+    };
+    for (size_t i = 0; i < sizeof(utils) / sizeof(utils[0]); i++) {
+        char acp_path[512], dest[512];
+        snprintf(acp_path, sizeof(acp_path), "%s/%s", sysexe_linux, utils[i]);
+        if (!ovmx_boot_acp_present(acp_path))
+            continue;                 /* optional utility not installed: skip */
+        snprintf(dest, sizeof(dest), "%s/%s", OVMX_BOOT_STAGE_DIR, utils[i]);
+        uint32_t st = ovmx_boot_acp_stage(acp_path, dest);
+        if (!$VMS_STATUS_SUCCESS(st)) {
+            char detail[256];
+            snprintf(detail, sizeof(detail),
+                     "SYS$SYSTEM:%s is present on the ODS-2 volume but could "
+                     "not be read over the ACP (status %#x)", utils[i], st);
+            ovmx_sysinit_halt("utility-image staging failed", detail);
+        }
+    }
 }
 #else  /* !OVMX_BOOT_LINUX */
 /* NetBSD-vax backend keeps its current boot model (no ACP-staging tmpfs);

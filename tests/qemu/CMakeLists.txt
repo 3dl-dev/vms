@@ -119,16 +119,29 @@ endforeach()
 # ("Initramfs unpacking failed: write error", every shard died before shard
 # selection). So it is applied ONLY to the suites that (a) read an identity
 # file IN-PROCESS through the libvms reader AND (b) do NOT already carry a
-# strong sys$ RMS call of their own -- the exact three below. Suites that call
-# sys$create/$open directly (loginout_acp, rms_acp, dcl_acp, scratch_writable,
-# acp_*) already pull vmsrms with no anchor; suites that read SYSUAF via a
-# spawned external image (ident->DCL.EXE, authorize/identcont->AUTHORIZE.EXE)
-# need the bind in that IMAGE's link script (mk_dcl.sh / mk_loginout.sh, the
-# production seam, vms-5f0 Fix 2), not in the test binary.
+# strong sys$ RMS call of their own -- the four below. Suites that call
+# sys$create/$open directly (rms_acp, dcl_acp, scratch_writable, acp_*) already
+# pull vmsrms with no anchor; suites that read SYSUAF via a spawned external
+# image (ident->DCL.EXE, authorize/identcont->AUTHORIZE.EXE) need the bind in
+# that IMAGE's link script (mk_dcl.sh / mk_loginout.sh, the production seam,
+# vms-5f0 Fix 2), not in the test binary.
+#
+# test_syssvc_loginout_acp JOINED this list at vms-1df1. It USED to carry a
+# strong sys$create call (which pulled the RMS record services in for free), but
+# the vms-d92 atomic flip rewrote its SYSUAF authoring onto the binary $UAFDEF
+# engine (rms_open_named_handle + sysuaf_rms_*), so its ONLY remaining reach into
+# sys$create/$put/$open/$get/$connect is now the `#pragma weak` seam in
+# rms_textfile.c, used by the OPERATOR.LOG ($PUT-at-EOF) and LASTLOGIN
+# ($CREATE/$PUT) boot writers. Without the anchor those weak cells stay NULL,
+# rms_services_present() is FALSE, and both writers return -1 BEFORE any ACP call
+# -- the write assertions fail with no honest RMS status (the exact defect
+# rms_acp_bind.c closes). It already pulls the vmsrms archive + ODS-2 codec via
+# the $UAFDEF engine, so the anchor only adds the RMS record members (small).
 foreach(_anchored
         test_syssvc_sysuaf_uic_base
         test_syssvc_rightslist
-        test_syssvc_setuai)
+        test_syssvc_setuai
+        test_syssvc_loginout_acp)
     if(TARGET ${_anchored})
         target_sources(${_anchored} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/rms_acp_bind.c)

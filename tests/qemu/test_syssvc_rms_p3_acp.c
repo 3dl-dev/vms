@@ -323,6 +323,19 @@ int main(void)
         return EXIT_SKIP;
     }
 
+    /* Provision the writable ACP volume the WRITE engine needs (vms-757). DKA0:
+     * is a genuine real-VAX ODS-2 fixture the harness stages WRITABLE per boot
+     * (run_tests.sh), but the executive-global mounted-volume table is per-boot
+     * state a sibling suite may have left DISMOUNTED (each ACP suite $DMOUNTs on
+     * exit). $ASSIGN of an unmounted unit fails-honest SS$_DEVNOTMOUNT
+     * (vmsfs_acp.c vms_ioctl_acp_assign), which reddened the first assertion
+     * before the engine ever ran. $MOUNT is idempotent (rms_acp / acp_rw /
+     * acp_create all self-mount the same way) -- it VALIDATES the real Files-11
+     * home block + SCB and records the volume executive-global, so the $ASSIGN
+     * below reaches a genuine writable volume (never a fabricated channel). */
+    st = vms_kif_acp_mount(ODS2_UNIT);
+    check($VMS_STATUS_SUCCESS(st), "DKA0: mounted writable for the ACP (executive-global)");
+
     st = vms_kif_acp_assign(ODS2_UNIT, &chan);
     check($VMS_STATUS_SUCCESS(st), "$ASSIGN DKA0:");
     if (!$VMS_STATUS_SUCCESS(st)) { printf("  abort\n"); return 1; }
@@ -446,6 +459,7 @@ int main(void)
     run_secondary_scenario(chan);
 
     vms_kif_dassgn(chan);
+    vms_kif_acp_dmount(ODS2_UNIT);   /* leave the per-boot mount table clean (vms-757) */
 
     printf("=== %s: %d pass, %d fail ===\n",
            fail ? "FAILED" : "PASSED", pass, fail);

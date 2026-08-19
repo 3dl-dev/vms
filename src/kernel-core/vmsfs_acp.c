@@ -2022,6 +2022,7 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
     uint32_t new_hiblk, new_valid, new_efblk, done_bytes;
     uint16_t new_ffbyte;
     uint32_t extended = 0;
+    uint32_t ext_lbn = 0, ext_count = 0; /* the run newly allocated by an extend */
     uint32_t wr_lkid = 0;               /* vms-233 DLM volume lock (0 = not held) */
     char     wr_resnam[32];
 
@@ -2096,25 +2097,43 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
         uint32_t need = last_vbn - old_hiblk;
         uint32_t alloc_lbn = 0;
 
-        if (lwin_n >= ACP_WINDOW_MAX) {
-            args.status = SS__DEVICEFULL;   /* window full -- cannot map more */
-            exec_free(s);
-            goto out;
-        }
         status = acp_bitmap_alloc(snap, s, need, &alloc_lbn);
         if (status != SS__NORMAL) {
             args.status = status;           /* SS$_DEVICEFULL / SS$_DEVNOTMOUNT */
             exec_free(s);
             goto out;
         }
-        /* Append the new extent to the local window (contiguous with the file's
-         * VBN space at old_hiblk+1). */
-        lwin[lwin_n].start_vbn = old_hiblk + 1u;
-        lwin[lwin_n].lbn       = alloc_lbn;
-        lwin[lwin_n].count     = need;
-        lwin_n++;
+        /* COALESCE (vms-401): the new run always begins at VBN old_hiblk+1, so
+         * the file's last window extent is VBN-contiguous by construction. When
+         * the freshly allocated LBNs are ALSO physically contiguous with that
+         * extent, grow it in place -- a file grown one bucket at a time is
+         * physically contiguous and VMS maps it with ONE retrieval pointer, not
+         * one window entry per block. Without this a block-at-a-time grower
+         * exhausts the fixed 24-entry window (ch->win) after 24 blocks and every
+         * further $PUT fails SS$_DEVICEFULL (measured: RMS$_WPL at record 65,
+         * the file capped at 24 blocks). Only a non-contiguous run needs a fresh
+         * window slot; a file with more than ACP_WINDOW_MAX real fragments is
+         * still an honest SS$_DEVICEFULL (extension-header retrieval is a
+         * separate rung). */
+        if (lwin_n > 0 &&
+            lwin[lwin_n - 1].lbn + lwin[lwin_n - 1].count == alloc_lbn &&
+            lwin[lwin_n - 1].start_vbn + lwin[lwin_n - 1].count == old_hiblk + 1u) {
+            lwin[lwin_n - 1].count += need;
+        } else {
+            if (lwin_n >= ACP_WINDOW_MAX) {
+                args.status = SS__DEVICEFULL;   /* window full -- cannot map more */
+                exec_free(s);
+                goto out;
+            }
+            lwin[lwin_n].start_vbn = old_hiblk + 1u;
+            lwin[lwin_n].lbn       = alloc_lbn;
+            lwin[lwin_n].count     = need;
+            lwin_n++;
+        }
         new_hiblk = last_vbn;
         extended  = need;
+        ext_lbn   = alloc_lbn;              /* the newly allocated run, for the */
+        ext_count = need;                   /* on-disk FH2 map + channel window */
 #else
         /* Codec-free overlay: no accessed file ever reaches here (ACCESS
          * refuses without the codec), so an extend is unreachable. Refuse. */
@@ -2201,8 +2220,7 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
             goto out;
         }
         if (extended &&
-            ods2_fh2_map_append(s->hdr, lwin[lwin_n - 1].lbn,
-                                lwin[lwin_n - 1].count) != ODS2_OK) {
+            ods2_fh2_map_append(s->hdr, ext_lbn, ext_count) != ODS2_OK) {
             args.status = SS__DEVICEFULL;   /* FH2 map area full */
             args.xferred = done_bytes;
             exec_free(s);
@@ -2229,9 +2247,23 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
         if (ch && ch->file_accessed &&
             ((uint32_t)ch->acc_fid_num | ((uint32_t)ch->acc_fid_nmx << 16))
                 == snap->fid_num) {
-            if (extended && ch->win_n < ACP_WINDOW_MAX) {
-                ch->win[ch->win_n] = lwin[lwin_n - 1];
-                ch->win_n++;
+            if (extended) {
+                /* Coalesce the new run into the channel's last extent when
+                 * physically contiguous (mirrors the lwin + FH2-map coalesce
+                 * above), so a contiguous grower keeps ONE window entry instead
+                 * of one per block. */
+                if (ch->win_n > 0 &&
+                    ch->win[ch->win_n - 1].lbn + ch->win[ch->win_n - 1].count
+                        == ext_lbn &&
+                    ch->win[ch->win_n - 1].start_vbn + ch->win[ch->win_n - 1].count
+                        == old_hiblk + 1u) {
+                    ch->win[ch->win_n - 1].count += ext_count;
+                } else if (ch->win_n < ACP_WINDOW_MAX) {
+                    ch->win[ch->win_n].start_vbn = old_hiblk + 1u;
+                    ch->win[ch->win_n].lbn       = ext_lbn;
+                    ch->win[ch->win_n].count     = ext_count;
+                    ch->win_n++;
+                }
             }
             ch->acc_efblk  = new_efblk;
             ch->acc_ffbyte = new_ffbyte;

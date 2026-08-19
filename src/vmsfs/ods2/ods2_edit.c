@@ -96,6 +96,33 @@ ods2_status_t ods2_fh2_map_append(void *header_block, uint32_t lbn, uint32_t cou
     mpoffset  = h[offsetof(ods2_fh2_t, fh2_mpoffset)];
     map_inuse = h[offsetof(ods2_fh2_t, fh2_map_inuse)];
 
+    /* COALESCE (vms-401): a file grown one bucket at a time issues a run of
+     * single-block extends whose LBNs are physically contiguous. VMS stores a
+     * contiguous file as ONE retrieval pointer, not one-per-block; appending a
+     * fresh pointer each time instead exhausts the fixed 255-word map area (and,
+     * upstream, the channel's 24-entry window) after a few dozen blocks. So if
+     * the LAST existing format-1 pointer ends exactly where this run begins and
+     * the combined count still fits format-1's 256-block field, grow that
+     * pointer in place rather than appending a new one. */
+    if (map_inuse >= 2u) {
+        unsigned last_byte = mpoffset * 2u + (map_inuse - 2u) * 2u;
+        uint16_t lw0 = ed_rd16(h + last_byte + 0);
+        uint16_t lw1 = ed_rd16(h + last_byte + 2);
+        if ((lw0 & 0xC000u) == 0x4000u) {            /* format 1 */
+            uint32_t last_count = (uint32_t)(lw0 & 0xFFu) + 1u;
+            uint32_t last_lbn   = ((uint32_t)(lw0 & 0x3F00u) << 8) | lw1;
+            if (last_lbn + last_count == lbn &&
+                last_count + count <= 256u) {
+                uint32_t nc = last_count + count;
+                uint32_t hi = (last_lbn >> 16) & 0x3F;
+                ed_put16(h + last_byte + 0,
+                         (uint16_t)(0x4000u | ((nc - 1u) & 0xFF) | (hi << 8)));
+                /* word1 (low-16 LBN) unchanged: the run still starts at last_lbn */
+                return ODS2_OK;
+            }
+        }
+    }
+
     entry_byte = mpoffset * 2u + map_inuse * 2u;
     /* Need 4 bytes (2 words) and must stay clear of the checksum word (510). */
     if (entry_byte + 4u > offsetof(ods2_fh2_t, fh2_checksum))

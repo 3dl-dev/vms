@@ -595,10 +595,24 @@ static btree_t *btree_load(const char *data_path, struct FAB *fab)
 /*
  * get_tree - Get or create the B-tree index for a FAB.
  * The tree is stored in fab->_rms_state.
+ *
+ * TYPE-CONFUSION GUARD (vms-d07): fab->_rms_state is a UNION over two unrelated
+ * types -- the legacy in-memory btree_t (executive-absent defer) and the genuine
+ * on-disk Prolog-3 write/read context p3_ctx_t (the /dev/vms runtime path, tagged
+ * P3_CTX_MAGIC in its first field). Since indexed CREATE over the ACP now binds a
+ * p3_ctx here (rms_impl_create, vms-401), a blind (btree_t *) cast would reinterpret
+ * a p3_ctx as a B-tree -- reading p3_ctx->magic/f/version as btree root pointer /
+ * counts and dereferencing garbage. This helper therefore validates the magic
+ * before ever treating the slot as a B-tree: a P3_CTX_MAGIC slot is NOT a btree,
+ * so return NULL and let the caller route to the Prolog-3 engine (or fail honest)
+ * instead of casting. NULL is also returned on allocation failure, exactly as
+ * before, so existing "if (!tree) return RMS$_DME" callers stay correct.
  */
 static btree_t *get_tree(struct FAB *fab)
 {
     if (fab->_rms_state) {
+        if (*(const uint32_t *)fab->_rms_state == P3_CTX_MAGIC)
+            return NULL;                 /* a Prolog-3 ctx, never a btree_t */
         return (btree_t *)fab->_rms_state;
     }
 
@@ -684,6 +698,96 @@ static uint32_t rms_idx_find_p3(struct FAB *fab, struct RAB *rab, p3_ctx_t *ctx)
 
     rab->_last_rec_size = rec_len;
     return RMS$_NORMAL;
+}
+
+/*
+ * p3_primary_key_of - extract the primary(-of-reference) key from a record
+ * buffer using the bound Prolog-3 context's key-0 descriptor (seg-0 position and
+ * size). Returns the key length, or 0 if the record is too short to carry it.
+ * Substrate-agnostic: reads only p3_ctx fields, no host layout assumption.
+ */
+static uint16_t p3_primary_key_of(const p3_ctx_t *ctx, const uint8_t *rec,
+                                  uint16_t rec_len, const uint8_t **key_out)
+{
+    const p3_keydesc_t *kd = &ctx->keys[0];
+    if (ctx->num_keys == 0)
+        return 0;
+    if ((uint32_t)kd->seg0_pos + kd->seg0_siz > rec_len)
+        return 0;
+    *key_out = rec + kd->seg0_pos;
+    return kd->seg0_siz;
+}
+
+/*
+ * rms_idx_put_p3 - keyed $PUT over the genuine on-disk Prolog-3 index
+ * (rms_prolog3.c), the /dev/vms-present runtime path (vms-401). Inserts the
+ * record by its embedded PRIMARY key -- the Prolog-3 write engine authors the
+ * real bucket/RRV/index geometry and maintains every secondary SIDR itself;
+ * there is NO .rms_idx sidecar on this path.
+ */
+static uint32_t rms_idx_put_p3(struct FAB *fab, struct RAB *rab, p3_ctx_t *ctx)
+{
+    (void)fab;
+    char *buf = rab->rab$l_rbf ? rab->rab$l_rbf : rab->rab$l_ubf;
+    if (!buf)
+        return RMS$_RAB;
+    uint16_t len = rab->rab$w_rsz;
+
+    uint32_t st = rms_p3_put(ctx, 0, (const uint8_t *)buf, len);
+    if (!(st & 1u))
+        return st;
+
+    rab->rab$w_rsz = len;
+    rab->rab$l_rbf = buf;
+    return RMS$_NORMAL;
+}
+
+/*
+ * rms_idx_update_p3 - keyed $UPDATE over the on-disk Prolog-3 index. RMS
+ * positions $UPDATE at the current record; the primary key may not change, so
+ * the new image's embedded primary key IS the record to modify. The Prolog-3
+ * engine rewrites in place when the length is unchanged, else delete+reinsert.
+ */
+static uint32_t rms_idx_update_p3(struct FAB *fab, struct RAB *rab, p3_ctx_t *ctx)
+{
+    (void)fab;
+    char *buf = rab->rab$l_rbf ? rab->rab$l_rbf : rab->rab$l_ubf;
+    if (!buf)
+        return RMS$_RAB;
+    uint16_t len = rab->rab$w_rsz;
+
+    const uint8_t *key = NULL;
+    uint16_t klen = p3_primary_key_of(ctx, (const uint8_t *)buf, len, &key);
+    if (klen == 0)
+        return RMS$_RSZ;
+
+    uint32_t st = rms_p3_update(ctx, 0, key, klen, (const uint8_t *)buf, len);
+    if (!(st & 1u))
+        return st;
+    rab->rab$w_rsz = len;
+    return RMS$_NORMAL;
+}
+
+/*
+ * rms_idx_delete_p3 - keyed $DELETE over the on-disk Prolog-3 index. The record
+ * to delete is the CURRENT one; after a $GET/$FIND the RAB's user buffer holds
+ * that record, from which the primary key is recovered. The engine purges the
+ * record from its data bucket AND every secondary SIDR (by stable RFA).
+ */
+static uint32_t rms_idx_delete_p3(struct FAB *fab, struct RAB *rab, p3_ctx_t *ctx)
+{
+    (void)fab;
+    const uint8_t *rec = (const uint8_t *)(rab->rab$l_rbf ? rab->rab$l_rbf
+                                                          : rab->rab$l_ubf);
+    if (!rec)
+        return RMS$_CUR;
+    uint16_t reclen = rab->rab$w_rsz ? rab->rab$w_rsz
+                                     : (uint16_t)rab->_last_rec_size;
+    const uint8_t *key = NULL;
+    uint16_t klen = p3_primary_key_of(ctx, rec, reclen, &key);
+    if (klen == 0)
+        return RMS$_CUR;
+    return rms_p3_delete(ctx, 0, key, klen);
 }
 
 /*
@@ -844,6 +948,11 @@ uint32_t rms_idx_put(struct FAB *fab, struct RAB *rab)
     struct rms_file *fd = fab->_rms_file;
     if (!fd) return RMS$_ACC;
 
+    /* vms-401: genuine on-disk Prolog-3 index over the ACP (runtime path). The
+     * P3_CTX_MAGIC guard (vms-d07) keeps this off the blind (btree_t *) cast. */
+    p3_ctx_t *p3 = rms_idx_p3(fab);
+    if (p3) return rms_idx_put_p3(fab, rab, p3);
+
     char *buf = rab->rab$l_rbf ? rab->rab$l_rbf : rab->rab$l_ubf;
     if (!buf) return RMS$_RAB;
     uint16_t len = rab->rab$w_rsz;
@@ -918,6 +1027,10 @@ uint32_t rms_idx_delete(struct FAB *fab, struct RAB *rab)
     struct rms_file *fd = fab->_rms_file;
     if (!fd) return RMS$_ACC;
 
+    /* vms-401/d07: Prolog-3 ctx over the ACP -> genuine engine, never a cast. */
+    p3_ctx_t *p3 = rms_idx_p3(fab);
+    if (p3) return rms_idx_delete_p3(fab, rab, p3);
+
     if (rab->_last_rec_offset == 0 && rab->_last_rec_size == 0) {
         return RMS$_CUR;
     }
@@ -980,6 +1093,10 @@ uint32_t rms_idx_update(struct FAB *fab, struct RAB *rab)
 {
     struct rms_file *fd = fab->_rms_file;
     if (!fd) return RMS$_ACC;
+
+    /* vms-401/d07: Prolog-3 ctx over the ACP -> genuine engine, never a cast. */
+    p3_ctx_t *p3 = rms_idx_p3(fab);
+    if (p3) return rms_idx_update_p3(fab, rab, p3);
 
     char *buf = rab->rab$l_rbf ? rab->rab$l_rbf : rab->rab$l_ubf;
     if (!buf) return RMS$_RAB;
@@ -1152,6 +1269,12 @@ uint32_t rms_idx_find(struct FAB *fab, struct RAB *rab)
  */
 uint32_t rms_idx_flush(struct FAB *fab)
 {
+    /* vms-d07: a Prolog-3 write ctx commits every $PUT to disk immediately over
+     * IO$_WRITEVBLK -- there is no in-memory index to persist, so flush is a
+     * no-op. Guard the magic so the btree_save() cast below never sees a p3_ctx. */
+    if (rms_idx_p3(fab))
+        return RMS$_NORMAL;
+
     if (fab->_rms_state) {
         if (btree_save((btree_t *)fab->_rms_state) != 0) {
             return RMS$_WER;

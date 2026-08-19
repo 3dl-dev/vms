@@ -27,6 +27,7 @@
 #include "rmsdef.h"
 #include "vmsfs/filespec.h"
 #include "vmsfs/version.h"
+#include "vmsfs/device.h"        /* vms-b3e: vmsfs_device_spec_kernel_mounted */
 #include "vmsqueue.h"
 
 /* Directory entry for sorting in DIRECTORY command */
@@ -1332,17 +1333,35 @@ int cmd_type(struct dcl_command *cmd)
     uint32_t rst = 0;
     struct dcl_rms_reader *r = dcl_rms_read_open(ctx, cmd->params[0], &rst);
     if (!r) {
-        /* -------- Executive-absent TYPE defer (vms-5f0) --------
-         * RMS could not open it. When the executive is absent that includes the
-         * case of a DEFINEd logical resolving OUTSIDE the SYSDISK root (the
-         * mkdtemp-volume test convention), which RMS's $OPEN boundary refuses
-         * even though the file is right there. Read it the legacy way --
-         * dcl_resolve_path() (honours the logical and an explicit ";N") +
-         * fopen()/fgets(), exactly as the pre-flip TYPE did. RMS stays the
-         * primary path so a genuine record-formatted /vms file is still decoded
-         * by $GET; this is a fall-back for the file RMS structurally cannot
-         * reach on host, never a silent bypass when /dev/vms is present (INV-6). */
-        if (rms_executive_absent()) {
+        /* -------- Legacy TYPE defer (vms-5f0, extended vms-b3e) --------
+         * RMS could not open it through the Files-11 ODS-2 ACP. Two honest
+         * fall-backs, BOTH reading only kernel mount truth, NEVER the /vms
+         * SYS$DISK passthrough the atomic flip forbids (INV-6):
+         *
+         *  (a) rms_executive_absent(): /dev/vms is unreachable (host ctest,
+         *      plain-container self-host/link gates), which also covers a
+         *      DEFINEd logical resolving OUTSIDE the SYSDISK root (the mkdtemp-
+         *      volume test convention) that RMS's $OPEN boundary refuses even
+         *      though the file is right there. Read it the pre-flip way.
+         *
+         *  (b) vmsfs_device_spec_kernel_mounted(): the executive IS present but
+         *      the named unit is a GENUINE cross-process vmsfs volume in
+         *      /proc/mounts (a raw `mount -t vmsfs`, e.g. the install target
+         *      vms-718 MOUNTs then RUNs AUTHORIZE against, or a loop-mounted
+         *      DKA100:) that the ACP does not own. A mounted unit is node-wide
+         *      executive state on VMS: every process must resolve it (vms-8b6 /
+         *      vms-b3e). The ACP only manages ODS-2 volumes IT mounted, so read
+         *      this one through its /mnt/<dev> mount. The gate matches ONLY a
+         *      real /proc/mounts entry -- the system disk (DKA0: -> ACP, or the
+         *      /vms passthrough) is never a /mnt/<dev> mount, so this can never
+         *      reopen the masquerade; an unmounted unit yields no fall-back and
+         *      the honest RMS$_FNF stands.
+         *
+         * In both cases dcl_resolve_path() honours the logical and an explicit
+         * ";N"; RMS stays the primary path so a genuine record-formatted /vms
+         * file is still decoded by $GET. */
+        if (rms_executive_absent() ||
+            vmsfs_device_spec_kernel_mounted(cmd->params[0])) {
             char linux_path[1024];
             dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
             FILE *fp = fopen(linux_path, "r");

@@ -12,28 +12,26 @@
  * that owns the answer instead.
  *
  * ===================================================================
- * BINARY $RDBDEF, READ IN EXECUTIVE CONTEXT (vms-f15a).
+ * BINARY $RDBDEF, READ OVER THE ACP FROM THE WORLD-READABLE RIGHTS DB.
  * ===================================================================
- * The general-identifier half no longer scans an ASCII colon-delimited
- * RIGHTSLIST.DAT in the CALLER's context. RIGHTSLIST.DAT is protected
- * WORLD:none (like SYSUAF.DAT); a caller-context RMS $OPEN of it on the
- * runtime ACP path is a protection violation, which is why F$IDENTIFIER used
- * to fail there. It now resolves identifiers the VMS way: through the
- * executive services $ASCTOID (name->value) / $IDTOASC (value->name), which
- * read the genuine binary $RDBDEF indexed file in PRIVILEGED context on the
- * caller's behalf -- so an unprivileged process resolves an identifier without
- * holding read access to the file.
+ * BOTH general AND UIC identifiers are resolved from SYS$SYSTEM:RIGHTSLIST.DAT
+ * (vms-930), the way real VMS does it: RIGHTSLIST holds a row for every general
+ * identifier AND a UIC identifier for every account (oracle
+ * docs/oracle/vax73-rights-database.md §4), and the file is WORLD-READABLE
+ * (World:R, vms-109). So a caller-context RMS $OPEN of it over the runtime ACP
+ * SUCCEEDS for an unprivileged process -- an unprivileged F$IDENTIFIER resolves
+ * an identifier by reading the world-readable rights database directly, without
+ * SYSPRV and WITHOUT touching the protected (World:none) SYSUAF. UIC
+ * identifiers are NO LONGER derived from SYSUAF: an unprivileged caller cannot
+ * read SYSUAF, and sourcing identifier resolution from a protected file was the
+ * gap that left scenario-G's unprivileged F$IDENTIFIER failing.
  *
- * Those services live in LIBVMSRMS (ovmx_rightslist_asctoid / _idtoasc in
- * src/vmsrms/rightslist_live.c) and are reached through a WEAK reference, the
- * same layering seam sysuaf.c uses to reach sysuaf_live: an image that links
- * LIBVMSRMS (DCL, LOGINOUT) binds them; a bare LIBVMS unit test that does not
- * sees them NULL and takes the fail-honest miss. There is NO ASCII reader and
- * NO /vms passthrough left on this path (Rule 9 / INV-6).
- *
- * UIC identifiers are still DERIVED from SYSUAF (itself now the binary
- * $UAFDEF file, vms-d92), so an account has exactly one UIC in the whole
- * system (rightslist.h).
+ * The resolvers live in LIBVMSRMS (ovmx_rightslist_asctoid / _idtoasc in
+ * src/vmsrms/rightslist_live.c) and are reached through a WEAK reference: an
+ * image that links LIBVMSRMS (DCL, LOGINOUT) binds them; a bare LIBVMS unit
+ * test that does not sees them NULL and takes the fail-honest miss. There is
+ * NO ASCII reader, NO SYSUAF fallback and NO /vms passthrough left on this
+ * path (Rule 9 / INV-6).
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -44,7 +42,6 @@
 #include <stdio.h>
 
 #include "rightslist.h"
-#include "sysuaf.h"
 #include "ssdef.h"
 #include "stsdef.h"          /* $VMS_STATUS_SUCCESS */
 
@@ -70,12 +67,11 @@ int rightslist_name_to_value(const char *name, uint32_t *value)
     if (!name || !*name || !value)
         return -1;
 
-    /* General identifiers first: the rights database proper, read by the
-     * executive $ASCTOID over the binary $RDBDEF. Order does not matter for
-     * correctness -- a name cannot be both a general identifier and an
-     * account -- but it puts the file this reader owns on the primary path.
-     * A missing LIBVMSRMS (weak symbol NULL) or an unreachable rights
-     * database is a MISS, never a fall-back to a built-in table (Rule 9). */
+    /* Both general and UIC identifiers come from the world-readable
+     * RIGHTSLIST.DAT, resolved by the executive $ASCTOID over the binary
+     * $RDBDEF (the NAME key finds either kind). A missing LIBVMSRMS (weak
+     * symbol NULL) or an unreachable rights database is a MISS, never a
+     * fall-back to SYSUAF or a built-in table (Rule 9 / vms-930). */
     if (ovmx_rightslist_asctoid) {
         uint32_t v = 0;
         uint32_t st = ovmx_rightslist_asctoid(name, &v);
@@ -83,15 +79,6 @@ int rightslist_name_to_value(const char *name, uint32_t *value)
             *value = v;
             return 0;
         }
-        /* SS$_NOSUCHID: not a general identifier -- try the UIC path below. */
-    }
-
-    /* UIC identifiers, derived from SYSUAF (the binary $UAFDEF file) so an
-     * account has exactly one UIC in the whole system (rightslist.h). */
-    sysuaf_record_t rec;
-    if (sysuaf_lookup(name, &rec) == 0) {
-        *value = (rec.uic_group << 16) | rec.uic_member;
-        return 0;
     }
 
     return -1;
@@ -102,17 +89,13 @@ int rightslist_value_to_name(uint32_t value, char *buf, size_t bufsz)
     if (!buf || !bufsz)
         return -1;
 
-    /* General identifiers via the executive $IDTOASC over the binary $RDBDEF. */
+    /* Both general and UIC identifiers via the executive $IDTOASC over the
+     * binary $RDBDEF (the VALUE key finds either kind); no SYSUAF fallback
+     * (vms-930). */
     if (ovmx_rightslist_idtoasc) {
         uint32_t st = ovmx_rightslist_idtoasc(value, buf, bufsz);
         if ($VMS_STATUS_SUCCESS(st))
             return 0;
-    }
-
-    sysuaf_record_t rec;
-    if (sysuaf_lookup_by_uic(value, &rec) == 0) {
-        snprintf(buf, bufsz, "%s", rec.username);
-        return 0;
     }
 
     return -1;

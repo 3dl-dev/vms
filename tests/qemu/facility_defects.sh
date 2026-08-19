@@ -5638,19 +5638,17 @@ EOF
         case "$_f" in
         facility)     echo "SYSUAF.DAT's UIC fields -- the shared read radix (SYSUAF_UIC_RADIX, src/libvms/include/sysuaf.h, consulted only by sysuaf_lookup()'s field parse in src/libvms/rtl/sysuaf.c), vms-e60";;
         targets)      echo "libvms/include/sysuaf.h";;
-        # test_syssvc_rightslist.c's OWN UIC checks (DEFAULT/GUEST, via
-        # sysuaf_lookup()), test_syssvc_ident.c's DEFAULT checks (via the
-        # same reader, one layer up through F$IDENTIFIER) and
-        # test_syssvc_setuai.c's UIC-write-back readback (scenario 4) are
-        # genuine, MEASURED knock-on -- see knock_on_why. This suites_red set
-        # was corrected after running run_facility_negctl.sh for real: an
-        # earlier draft predicted setuai would be untouched (sysuaf_format_
-        # record(), the WRITER, uses a literal %o and does not consult this
-        # constant) -- true for the WRITE, but scenario 4 also READS the row
-        # back afterward through the same mutated sysuaf_lookup(), and the
-        # real run reddened it. Declared here rather than left as an
-        # unattributed stray, per this manifest's own method rule.
-        suites_red)   echo "test_syssvc_sysuaf_uic_base test_syssvc_rightslist test_syssvc_ident test_syssvc_setuai";;
+        # test_syssvc_sysuaf_uic_base.c's OWN UIC checks (DEFAULT/GUEST, via
+        # sysuaf_lookup()) and test_syssvc_setuai.c's UIC-write-back readback
+        # (scenario 4, which reads USER1's row back through sysuaf_lookup())
+        # are the ONLY suites this mutation reddens. Since vms-930 the
+        # identifier-resolution suites test_syssvc_rightslist and
+        # test_syssvc_ident source UIC identifiers from the world-readable
+        # RIGHTSLIST.DAT (a binary $RDBDEF longword, no text radix), NOT from
+        # SYSUAF -- so mutating SYSUAF_UIC_RADIX no longer reaches them. They
+        # were dropped from this red set when rightslist.c's SYSUAF fallback
+        # was removed; see knock_on_why.
+        suites_red)   echo "test_syssvc_sysuaf_uic_base test_syssvc_setuai";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -5662,55 +5660,39 @@ EOF
         knock_on_fail) cat <<'EOF'
 the oracle's 8388736; decimal parsing gives 13107400
 DEFAULT is NOT 13107400 (the decimal misreading vms-e60 filed)
-oracle %X00800080 = [200,200] OCTAL; decimal gives 13107400
-a shipped account that was never in any hardcoded table
-reverse resolves (oracle round-trips it)
-OVMX answered 13107201, having read VMS's octal UIC as decimal group 200 member 1
-the direction an earlier round deliberately left unmapped rather than add on the strength of symmetry
 the rewritten UIC GROUP field still reads 200 (octal, vms-e60)
 the rewritten UIC MEMBER field still reads 202 (octal, vms-e60)
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
-SAME CONSTANT, OBSERVED AT EVERY UIC READER -- FOUR OF THEM, ONE FOUND BY
-RUNNING IT. test_syssvc_sysuaf_uic_base.c drives sysuaf_lookup() directly
-for DEFAULT and GUEST (require_fail names GUEST's own check; knock_on_fail's
-first two lines are DEFAULT's check and its own regression-naming assertion,
-which now reads exactly the decimal value it exists to rule out).
-test_syssvc_rightslist.c reaches the SAME sysuaf_lookup() one layer up,
-through rightslist_name_to_value()'s UIC branch, for the SAME two accounts --
-both directions of its check_roundtrip("DEFAULT", ...) and
-check_roundtrip("GUEST", ...): each account still RESOLVES (sysuaf_lookup
-still finds the record; only the value is wrong), so it is the value-match
-and reverse-lookup halves of check_roundtrip that redden, not the "resolved
-at all" branch (that one requires resolution to fail outright, which this
-mutation does not cause). test_syssvc_ident.c reaches it a THIRD time,
-through F$IDENTIFIER's live DCL.EXE path, for DEFAULT only (ident.c never
-probes GUEST).
+SAME CONSTANT, OBSERVED AT THE TWO SUITES THAT STILL READ SYSUAF's UIC TEXT
+FIELDS. test_syssvc_sysuaf_uic_base.c drives sysuaf_lookup() directly for
+DEFAULT and GUEST (require_fail names GUEST's own check; knock_on_fail's first
+two lines are DEFAULT's check and its own regression-naming assertion, which
+now reads exactly the decimal value it exists to rule out).
 
-test_syssvc_setuai.c's scenario 4 is the FOURTH, and it was NOT predicted --
-an earlier draft of this entry reasoned "the writer uses a literal %o, so
-nothing that only writes SYSUAF.DAT is reached" and left setuai out of
-suites_red entirely. Running run_facility_negctl.sh for real reddened it
-anyway: scenario 4 does not just $SETUAI a new UIC, it reads USER1's rewritten
-row BACK afterward (row_field() against the same sysuaf_lookup()-backed
-record the read side of this mutation touches) to prove the write landed --
-so its readback, not its write, hits the mutated radix. Two assertions
-redden ("4: the rewritten UIC GROUP field still reads 200" and its MEMBER
-sibling), because USER1 ships 200|202, and decimal-reading those digits
-produces a different string than octal does. This is exactly the discipline
-this manifest's own header describes: an unpredicted red is declared here,
-not narrowed away or left as an unattributed stray.
+test_syssvc_setuai.c's scenario 4 is the second: it does not just $SETUAI a
+new UIC, it reads USER1's rewritten row BACK afterward (row_field() against the
+same sysuaf_lookup()-backed record the read side of this mutation touches) to
+prove the write landed -- so its readback, not its write, hits the mutated
+radix. Two assertions redden ("4: the rewritten UIC GROUP field still reads
+200" and its MEMBER sibling), because USER1 ships 200|202, and decimal-reading
+those digits produces a different string than octal does.
 
-WHAT STAYS GREEN, AND WHY. SYSTEM's UIC ([1,4]) is identical in both bases
-in every suite that checks it -- explicitly labelled LIVENESS ONLY in each
-of their own comments, for exactly this reason. rightslist.c's GENERAL
-identifiers (BATCH/DIALUP/INTERACTIVE/LOCAL/NETWORK/REMOTE) and its
-check_miss_value() calls never reach sysuaf_lookup() at all.
-test_syssvc_ident.c's LOCAL checks are the general-identifier path,
-untouched here (see rightslist-general-hex-as-decimal, the sibling defect
-for that branch). test_syssvc_setuai's OTHER scenarios (1-3, the SYSPRV
-refusal/grant checks) never read a UIC field back and stay green.
+WHAT STAYS GREEN, AND WHY. SYSTEM's UIC ([1,4]) is identical in both bases in
+every suite that checks it -- explicitly labelled LIVENESS ONLY in each of
+their own comments, for exactly this reason. THE IDENTIFIER-RESOLUTION SUITES
+NO LONGER REACH THIS CONSTANT (vms-930): test_syssvc_rightslist.c and
+test_syssvc_ident.c source BOTH general and UIC identifiers from the
+world-readable RIGHTSLIST.DAT ($RDBDEF binary longword, no text radix) after
+rightslist.c's SYSUAF fallback was removed, so mutating SYSUAF_UIC_RADIX does
+not touch their DEFAULT/GUEST resolutions at all -- they were in this red set
+only while rightslist_name_to_value() fell through to sysuaf_lookup(), and were
+dropped with that fallback. rightslist.c's GENERAL identifiers
+(BATCH/DIALUP/INTERACTIVE/LOCAL/NETWORK/REMOTE) and its check_miss_value()
+calls never reached sysuaf_lookup() to begin with. test_syssvc_setuai's OTHER
+scenarios (1-3, the SYSPRV refusal/grant checks) never read a UIC field back
+and stay green.
 EOF
                       ;;
         esac;;

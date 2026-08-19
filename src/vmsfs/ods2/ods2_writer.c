@@ -713,26 +713,21 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
     put16(h + offsetof(ods2_fh2_t, fh2_fileowner) + 0, system_owner_uic.uic_member);
     put16(h + offsetof(ods2_fh2_t, fh2_fileowner) + 2, system_owner_uic.uic_group);
     /*
-     * fh2_fileprot. Directories: 0xBA00 (the fixture's directory-shaped mask,
-     * [F11]). The TEN reserved metadata files (INDEXF/BITMAP/.../SECURITY.SYS,
-     * FID <= ODS2_RESFILES): 0xFA00 -- World fully denied, byte-identical to
-     * the real-VAX fixture's reserved headers and correct for volume metadata.
-     *
-     * ORDINARY (caller-created) files, FID > ODS2_RESFILES: 0xAA00 -- the
-     * documented OpenVMS DEFAULT file protection (S:RWED,O:RWED,G:RE,W:RE),
-     * which grants WORLD Read+Execute. This is what every shipped SYS$SYSTEM
-     * image (DCL.EXE, LOGINOUT.EXE, ...) MUST carry: on real VMS an ordinary
-     * interactive user activates those images, so World:RE is not optional.
-     * The fixture only ever sampled reserved + two plain DATA files (all
-     * 0xFA00); it had no user-activatable image to sample, so 0xFA00 was never
-     * the right DEFAULT for the general case -- it left GUEST (World category)
-     * with NO access to DCL.EXE and the login died %IMGACT-F-IMGNOTFND while a
-     * privileged/owning SYSTEM login worked (vms-37e). Grounded in public VMS
-     * docs (the default protection value), Rule 8 clean-room.
+     * fh2_fileprot is per-file CLASS, not one flat "ordinary -> World:RE"
+     * default (vms-109). Directories 0xBA00 and the ten reserved metadata
+     * files 0xFA00 are byte-identical to the real-VAX fixture; SYSUAF.DAT is
+     * World-DENIED (its Purdy hashes must not be World-readable) and
+     * RIGHTSLIST.DAT is World:R (the world-readable half of the rights
+     * database an unprivileged F$IDENTIFIER reads); every other ordinary file
+     * -- notably a shipped SYS$SYSTEM image (DCL.EXE, LOGINOUT.EXE, ...) an
+     * interactive user must activate -- keeps the documented OpenVMS default
+     * World:RE (0xAA00, vms-37e). The single class->prot mapping, grounded and
+     * cited, is ods2_class_fileprot() in ods2.h; this writer and the kernel
+     * ACP-create path (ods2_edit.c) share it so a runtime-created SYSUAF is
+     * protected on both.
      */
     put16(h + offsetof(ods2_fh2_t, fh2_fileprot),
-          (kind == FH2_KIND_DIR) ? 0xBA00u
-                                 : (fidnum <= ODS2_RESFILES ? 0xFA00u : 0xAA00u));
+          ods2_class_fileprot(name, kind == FH2_KIND_DIR, fidnum));
     put32(h + offsetof(ods2_fh2_t, fh2_highwater), hiblk + 1);
 
     /* ident area: fi2_filename, space-padded, "NAME.TYPE;VERSION".

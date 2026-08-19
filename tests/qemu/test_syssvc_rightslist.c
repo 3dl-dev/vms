@@ -194,8 +194,12 @@ int main(void)
     check_roundtrip("NETWORK",     0x80000005u, "oracle: DCL prints -2147483643");
     check_roundtrip("REMOTE",      0x80000006u, "oracle: DCL prints -2147483642");
 
-    /* --- UIC identifiers, derived from SYSUAF ------------------------- */
-    printf("\n UIC identifiers (derived from SYSUAF.DAT)\n");
+    /* --- UIC identifiers, from RIGHTSLIST (vms-930) ------------------- *
+     * These now resolve from the world-readable RIGHTSLIST.DAT (one UIC
+     * identifier per account, mkrightslist.c), NOT from the protected SYSUAF:
+     * the values are unchanged, the SOURCE moved so an unprivileged caller can
+     * resolve them without reading SYSUAF. */
+    printf("\n UIC identifiers (from RIGHTSLIST.DAT)\n");
 
     /* DEFAULT DISCRIMINATES THE BASE as well as the source: [200,200] read
      * as octal is 8388736, the oracle's answer; read as decimal it is

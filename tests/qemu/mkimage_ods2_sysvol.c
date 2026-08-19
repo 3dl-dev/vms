@@ -92,6 +92,18 @@ static void fill_starlet(uint8_t *b)
         b[i] = (uint8_t)(0xA5 ^ (i * 11u));
 }
 
+/* A stand-in SYS$SYSTEM image so test_syssvc_acp_access can prove the
+ * per-file-class protection (vms-109): mastered by NAME "DCL.EXE" it takes the
+ * World:RE (0xAA00) image default, distinct from RIGHTSLIST.DAT (World:R) and
+ * SYSUAF.DAT (World:none). Content is arbitrary -- protection is keyed on the
+ * file class (name/kind), not the bytes. */
+#define DCLEXE_LEN 512
+static void fill_dclexe(uint8_t *b)
+{
+    for (int i = 0; i < DCLEXE_LEN; i++)
+        b[i] = (uint8_t)(0x5A ^ (i * 7u));
+}
+
 static int write_block(int fd, uint32_t lbn, const void *buf)
 {
     off_t offset = (off_t)lbn * ODS2_BLOCK_SIZE;
@@ -227,9 +239,13 @@ int main(int argc, char *argv[])
     uint8_t *sysuaf = read_whole_file(sysuaf_p, &sysuaf_len);
     uint8_t *rights = read_whole_file(rights_p, &rights_len);
     uint8_t starlet[STARLET_LEN]; fill_starlet(starlet);
+    uint8_t dclexe[DCLEXE_LEN];   fill_dclexe(dclexe);
 
     add_stmlf(&wvol, sysexe, "SYSUAF.DAT",     sysuaf, sysuaf_len);
     add_stmlf(&wvol, sysexe, "RIGHTSLIST.DAT", rights, rights_len);
+    /* An image so the protection proof has a World:RE (0xAA00) file to test
+     * alongside RIGHTSLIST.DAT (World:R) and SYSUAF.DAT (World:none), vms-109. */
+    add_raw (&wvol, sysexe, "DCL.EXE",         dclexe, DCLEXE_LEN);
     add_text(&wvol, sysmgr, "STARTUP.COM", "$ WRITE SYS$OUTPUT \"OVMX boot\"\n");
     add_text(&wvol, sysmgr, "WELCOME.TXT", "Welcome to OVMX.\n");
     add_raw (&wvol, syslib, "STARLET.OLB", starlet, STARLET_LEN);

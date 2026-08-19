@@ -131,7 +131,10 @@ WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
 
 echo "--- formatting the blank upgrade target (DKA100:, label WORK) with $INIT_EXE ---"
-"$INIT_EXE" "$WORKDIR/dka100.img" WORK 16 || { echo "FAIL: INITIALIZE of the target disk"; exit 1; }
+# --ods2: the runtime MOUNTs a GENUINE ODS-2 volume over the ACP (atomic flip,
+# vms-208); INITIALIZE's default legacy vmsfs layout is refused (%OVMX-F-
+# MOUNTFAIL). A real upgrade target is an ODS-2 volume -- format one (vms-37e).
+"$INIT_EXE" --ods2 "$WORKDIR/dka100.img" WORK 16 || { echo "FAIL: INITIALIZE of the target disk"; exit 1; }
 
 echo "--- mastering the kit-carrier disk (DKA200:, label KITS) with $MASTER_EXE ---"
 KITSTAGE="$WORKDIR/kitstage/SYSUPD"

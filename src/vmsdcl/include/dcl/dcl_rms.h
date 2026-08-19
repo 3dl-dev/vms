@@ -74,6 +74,16 @@ int dcl_rms_dir_next(struct dcl_rms_dir *d, char *spec, size_t specsz,
                      uint16_t *fid_num, uint16_t *fid_seq, uint8_t *fid_rvn);
 void dcl_rms_dir_close(struct dcl_rms_dir *d);
 
+/* ---- File erase (DELETE) ---- */
+/* $ERASE `spec` (a VMS filespec with an explicit version) over the Files-11
+ * ODS-2 ACP -- $ASSIGN + IO$_DELETE removes the directory entry and deallocates
+ * the file (src/vmsrms/rms_core.c rms_impl_erase). Device/dir-defaults `spec`
+ * from the context. Returns the RMS status (RMS$_NORMAL on success, RMS$_FNF /
+ * RMS$_PRV / RMS$_ACC on failure). Fail-honest on an absent ACP (INV-6): the
+ * underlying RMS $ERASE defers to the legacy POSIX unlink only when /dev/vms is
+ * unreachable, exactly like every other RMS path here. */
+uint32_t dcl_rms_erase(struct dcl_context *ctx, const char *spec);
+
 /* ---- One file's genuine ODS-2 attributes (DIRECTORY /FULL, F$FILE_ATTRIBUTES) ---- */
 /* Device/dir-defaults `spec` from the context, then reads the header via
  * rms_file_attr (IO$_ACCESS ATR list). Returns RMS$_NORMAL (out filled) or a

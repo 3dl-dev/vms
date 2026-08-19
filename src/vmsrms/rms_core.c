@@ -1557,6 +1557,87 @@ static uint32_t rms_posix_open(struct FAB *fab)
 }
 
 /*
+ * rms_p3_params_from_xab - derive Prolog-3 key/bucket geometry from one XABKEY
+ * (vms-401). key_size = total key size (all segments), seg-0 position/size locate
+ * the embedded key within the record, and the bucket size is chosen to hold at
+ * least two max-size records (so a data-bucket split always makes progress) and
+ * the widest index entry. Returns RMS$_NORMAL, or RMS$_KEY on a missing/invalid
+ * key definition.
+ */
+static uint32_t rms_p3_params_from_xab(const struct XABKEY *xab, uint16_t mrs,
+                                       p3_create_params_t *p)
+{
+    uint16_t ksz;
+    uint32_t need, ineed;
+    uint8_t  blocks;
+
+    if (!xab || xab->xab$b_cod != XAB$C_KEY)
+        return RMS$_KEY;
+    ksz = xab->xab$w_tks ? xab->xab$w_tks : xab->xab$b_siz0;
+    if (ksz == 0 || ksz > 255)
+        return RMS$_KEY;
+    if (xab->xab$b_siz0 == 0 || xab->xab$b_siz0 > ksz)
+        return RMS$_KEY;
+
+    memset(p, 0, sizeof(*p));
+    p->key_size  = ksz;
+    p->seg0_pos  = xab->xab$w_pos0;
+    p->seg0_siz  = xab->xab$b_siz0;
+    p->dtp       = xab->xab$b_dtp;
+    p->allow_dup = (xab->xab$w_flg & XAB$M_DUP) ? 1u : 0u;
+
+    if (mrs == 0) mrs = 512u;
+    need  = (uint32_t)P3_BKT_HDR_SIZE + 2u * ((uint32_t)P3_DR_HDR_SIZE + mrs);
+    ineed = (uint32_t)P3_BKT_HDR_SIZE + P3_IDXREC_PTR_SIZE + ksz;
+    if (ineed > need) need = ineed;
+    blocks = (uint8_t)((need + P3_BLK - 1u) / P3_BLK);
+    if (blocks < 1u) blocks = 1u;
+    if (blocks > P3_MAX_BKT_BLOCKS) blocks = P3_MAX_BKT_BLOCKS;
+    p->bkt_blocks = blocks;
+    return RMS$_NORMAL;
+}
+
+/*
+ * rms_idx_author_p3 - author a genuine, EMPTY Files-11 Prolog-3 indexed file over
+ * the just-CREATEd/ACCESSed ACP write window `h` (vms-401). Writes the prologue,
+ * the primary key's root index + first data bucket, and every secondary key from
+ * the XABKEY chain (defined on the still-empty file). The returned WRITABLE ctx
+ * is stored on fab->_rms_state (tagged P3_CTX_MAGIC) so rms_idx_put/update/delete
+ * route to the real engine instead of the retired .rms_idx B-tree sidecar. On any
+ * failure the partially-authored ctx is freed and the VMS status returned.
+ */
+static uint32_t rms_idx_author_p3(struct FAB *fab, rms_file_t *h, p3_ctx_t **out)
+{
+    p3_create_params_t p;
+    p3_ctx_t *ctx = NULL;
+    const struct XABKEY *xab = (const struct XABKEY *)fab->fab$l_xab;
+    uint32_t st;
+
+    *out = NULL;
+    st = rms_p3_params_from_xab(xab, fab->fab$w_mrs, &p);
+    if (!$VMS_STATUS_SUCCESS(st))
+        return st;
+    st = rms_p3_create(h, &p, &ctx);
+    if (st != RMS$_CREATED)
+        return st;
+
+    /* Secondary keys from the XABKEY chain, defined on the empty file. */
+    for (xab = (const struct XABKEY *)xab->xab$l_nxt; xab;
+         xab = (const struct XABKEY *)xab->xab$l_nxt) {
+        p3_create_params_t sp;
+        if (xab->xab$b_cod != XAB$C_KEY)
+            continue;
+        st = rms_p3_params_from_xab(xab, fab->fab$w_mrs, &sp);
+        if (!$VMS_STATUS_SUCCESS(st)) { rms_p3_free(ctx); return st; }
+        st = rms_p3_add_secondary_key(ctx, &sp);
+        if (!$VMS_STATUS_SUCCESS(st)) { rms_p3_free(ctx); return st; }
+    }
+
+    *out = ctx;
+    return RMS$_CREATED;
+}
+
+/*
  * sys$create - Create a new file.
  *
  * Creates the file with automatic version numbering. Writes
@@ -1597,10 +1678,6 @@ static uint32_t rms_impl_create(void *fab_ptr)
         strncpy(fab->_resolved_path, sp.name, sizeof(fab->_resolved_path) - 1);
         fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';
 
-        if (fab->fab$b_org == FAB$C_IDX) {   /* deferred: see rms_impl_open */
-            fab->fab$l_sts = RMS$_ORG;
-            return RMS$_ORG;
-        }
         st = vms_kif_acp_assign(sp.devnam, &chan);
         if (!$VMS_STATUS_SUCCESS(st)) {
             fab->fab$l_stv = st;
@@ -1618,7 +1695,10 @@ static uint32_t rms_impl_create(void *fab_ptr)
          * the write window on this channel so record $PUTs ride it directly. */
         fop.modifiers = VMS_ACP_M_CREATE | VMS_ACP_M_ACCESS;
         fop.acctl     = VMS_ACP_ACCTL_WRITE;
-        fop.kind      = (fab->fab$b_rfm == FAB$C_FIX) ? ODS2_FK_DATA_FIX
+        /* Indexed files carry a variable-length Prolog-3 block structure, never
+         * a fixed-record ODS-2 kind, even when the user records are fixed. */
+        fop.kind      = (fab->fab$b_org != FAB$C_IDX &&
+                         fab->fab$b_rfm == FAB$C_FIX) ? ODS2_FK_DATA_FIX
                                                       : ODS2_FK_DATA;
         st = rms_acp_resolve_did(chan, sp.dirpath, &fop.did_num, &fop.did_seq,
                                  &fop.did_rvn, &fop.did_nmx);
@@ -1643,6 +1723,25 @@ static uint32_t rms_impl_create(void *fab_ptr)
                    + fop.new_ffbyte;
         h->hiblk = fop.new_hiblk;
         fab->_rms_file = h;
+
+        /* Indexed-over-ACP (vms-401, epic vms-d0c): author the genuine Files-11
+         * Prolog-3 image on the fresh data fork -- real prologue, root index +
+         * data buckets over IO$_WRITEVBLK -- and bind the WRITABLE ctx into
+         * _rms_state so record $PUTs ride rms_p3_put (rms_idx.c), NOT the retired
+         * .rms_idx B-tree sidecar. A bad key definition / write failure fails
+         * honestly (RMS$_KEY/RMS$_WPL), deaccessing the just-created file. */
+        if (fab->fab$b_org == FAB$C_IDX) {
+            p3_ctx_t *p3 = NULL;
+            uint32_t pst = rms_idx_author_p3(fab, h, &p3);
+            if (pst != RMS$_CREATED) {
+                rms_acp_close_handle(h);
+                fab->_rms_file = NULL;
+                fab->fab$l_stv = 0;
+                fab->fab$l_sts = pst;
+                return pst;
+            }
+            fab->_rms_state = p3;
+        }
 
         /* Relative files pre-allocate their fixed cells (IO$_MODIFY extend via
          * rms_io_ftruncate); best-effort, exactly as the old POSIX path. */

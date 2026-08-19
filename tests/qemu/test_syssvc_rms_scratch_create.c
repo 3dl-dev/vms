@@ -265,6 +265,42 @@ static void child_main(int wfd, const char *vms_spec)
         (void)!write(wfd, msg, strlen(msg));
     }
 
+    /* ROUND-TRIP (vms-401): the records were $PUT into the genuine on-disk
+     * Prolog-3 index over the ACP (no .rms_idx sidecar). Read every one BACK BY
+     * KEY through the same open file and verify the body byte-for-byte -- proof
+     * the created indexed file is a real, re-readable Prolog-3 image, not a
+     * write-only success. */
+    {
+        char rdbuf[REC_SIZE + 8];
+        unsigned readback_ok = 0, readback_fail = 0;
+        for (unsigned k = 1; k <= PUT_COUNT; k++) {
+            char keybuf[REC_KEY_SIZE + 1], want[REC_SIZE];
+            snprintf(keybuf, sizeof(keybuf), "PN%06u", k);
+            memset(want, 'X', sizeof(want));
+            memcpy(want, keybuf, REC_KEY_SIZE);
+
+            memset(rdbuf, 0, sizeof(rdbuf));
+            rab.rab$b_rac = RAB$C_KEY;
+            rab.rab$l_kbf = keybuf;
+            rab.rab$b_ksz = REC_KEY_SIZE;
+            rab.rab$b_krf = 0;
+            rab.rab$l_rop = 0;
+            rab.rab$l_ubf = rdbuf;
+            rab.rab$w_usz = REC_SIZE;
+            rab.rab$w_rsz = 0;
+            uint32_t gs = sys$get(&rab, 0, 0);
+            if ($VMS_STATUS_SUCCESS(gs) && rab.rab$w_rsz == REC_SIZE &&
+                memcmp(rdbuf, want, REC_SIZE) == 0)
+                readback_ok++;
+            else
+                readback_fail++;
+        }
+        snprintf(msg, sizeof(msg),
+                 "READBACK_BY_KEY_OK=%u READBACK_BY_KEY_FAIL=%u OF=%u\n",
+                 readback_ok, readback_fail, PUT_COUNT);
+        (void)!write(wfd, msg, strlen(msg));
+    }
+
     sys$disconnect(&rab, 0, 0);
     uint32_t cst = sys$close(&fab, 0, 0);
     snprintf(msg, sizeof(msg), "CLOSE_STATUS=%u (%s)\n", (unsigned)cst,
@@ -395,21 +431,24 @@ int main(void)
     CHECK(field_is_ok(out, "CONNECT_STATUS="),
           "sys$connect() on the freshly created file succeeded");
     CHECK(field_is_ok(out, "PUT_AT_100_STATUS="),
-          "sys$put() #100 (first periodic index save, fresh .rms_idx create) "
-          "succeeded");
+          "sys$put() #100 into the genuine on-disk Prolog-3 index over the ACP "
+          "succeeded (vms-401 retired the faked .rms_idx sidecar)");
     CHECK(field_is_ok(out, "PUT_AT_200_STATUS="),
-          "sys$put() #200 (SECOND periodic index save -- reopens the .rms_idx "
-          "sidecar) succeeded");
+          "sys$put() #200 succeeded (records ride real Prolog-3 bucket writes "
+          "over IO$_WRITEVBLK, no sidecar reopen)");
     {
         char want[64];
         snprintf(want, sizeof(want), "ALL_%u_PUTS_SUCCEEDED\n", PUT_COUNT);
         CHECK(strstr(out, want) != NULL,
-              "every sys$put() across two periodic index-save reopens "
-              "succeeded -- no silent mid-run EACCES");
+              "every sys$put() succeeded -- no silent mid-run EACCES");
     }
     CHECK(field_is_ok(out, "CLOSE_STATUS="),
-          "sys$close() (final index flush, a THIRD reopen of .rms_idx) "
-          "succeeded");
+          "sys$close() of the created indexed file succeeded");
+    /* vms-401: the created indexed file is a real, re-readable Prolog-3 image. */
+    CHECK(strstr(out, "READBACK_BY_KEY_FAIL=0 ") != NULL &&
+          strstr(out, "READBACK_BY_KEY_OK=0 ") == NULL,
+          "ROUND-TRIP: every record $PUT into SYS$SCRATCH:VMS221.DAT reads back "
+          "BY KEY byte-for-byte through the genuine Prolog-3 index (no sidecar)");
 
     printf("=== test_syssvc_rms_scratch_create: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

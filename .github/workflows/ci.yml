@@ -5266,7 +5266,11 @@ jobs:
   netbsd-vax-simh:
     name: NetBSD/vax boots under SIMH (vms-0041)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    # vms-fb8: SIMH boots STOCK NetBSD/vax (TCG, no OVMX source in the
+    # smoke) and VAX has no KVM -- 312s of un-accelerable emulation. Like
+    # the heavy QEMU e2e, run it on NON-PR events only; the ILP32 width
+    # proof stays per-PR via the elf32-vax cross-compile jobs.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 

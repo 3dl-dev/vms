@@ -769,7 +769,13 @@ if(BUILD_TESTS)
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_opcom_record_body.sh
                 $<TARGET_FILE:vmsdcl>)
     set_tests_properties(opcom_record_body_gate PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 60)
+        LABELS "integration;authenticity" TIMEOUT 60
+        # vms-ed4: reads a GLOBAL recency-ordered OPERATOR.LOG view across all of
+        # /vms and /tmp (find /vms /tmp -iname OPERATOR.LOG -newer $STAMP). Any
+        # other test emitting an OPERATOR.LOG concurrently could poison that
+        # scan, so under ctest --parallel it must run alone. RUN_SERIAL, not a
+        # sysdisk lock, because the shared surface includes /tmp too (Rule 8).
+        RUN_SERIAL TRUE)
 
     # MONITOR PROCESS and SHOW SYSTEM list the SAME process set because they
     # read the SAME single source -- the executive process table via

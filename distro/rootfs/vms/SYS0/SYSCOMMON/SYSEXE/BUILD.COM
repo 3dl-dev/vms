@@ -69,13 +69,19 @@ $ OBJLIST = P1 + ".OBJ"
 $ !
 $ LINK_STEP:
 $ WRITE SYS$OUTPUT "%BUILD-I-LINK, linking ''OUTNAME'.EXE with the OVMX-native LINK.EXE"
+$ ! The C run-time + OVMX shareables the executable binds are named by VMS
+$ ! logical spec (SYS$SHARE:, the OpenVMS home of installed shareable images) --
+$ ! NOT a /vms POSIX path (the atomic-flip-retired passthrough, vms-104). The
+$ ! OVMX-native LINK.EXE translates a SYS$SHARE:/SYS$LIBRARY:/SYS$SYSTEM: --use
+$ ! producer to the boot-staged copy ovmx_init read off the ODS-2 volume over the
+$ ! Files-11 ACP -- so the producer bytes come from the volume, never /vms.
 $ LNK --executable -
-	--use /vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE -
-	--use /vms/SYS0/SYSCOMMON/SYSLIB/LIBVMS$SHR.EXE -
-	--use /vms/SYS0/SYSCOMMON/SYSLIB/LIBVMSPROCESS$SHR.EXE -
-	--use /vms/SYS0/SYSCOMMON/SYSLIB/LIBVMSFS$SHR.EXE -
-	--use /vms/SYS0/SYSCOMMON/SYSLIB/LIBVMSLNM$SHR.EXE -
-	--use /vms/SYS0/SYSCOMMON/SYSLIB/LIBVMSRMS$SHR.EXE -
+	--use SYS$SHARE:DECC$SHR.EXE -
+	--use SYS$SHARE:LIBVMS$SHR.EXE -
+	--use SYS$SHARE:LIBVMSPROCESS$SHR.EXE -
+	--use SYS$SHARE:LIBVMSFS$SHR.EXE -
+	--use SYS$SHARE:LIBVMSLNM$SHR.EXE -
+	--use SYS$SHARE:LIBVMSRMS$SHR.EXE -
 	-o 'OUTNAME'.EXE 'OBJLIST'
 $ !
 $ IF NORUN .NES. "" THEN GOTO SKIP_RUN

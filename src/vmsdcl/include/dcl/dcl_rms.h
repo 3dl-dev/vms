@@ -91,4 +91,14 @@ uint32_t dcl_rms_erase(struct dcl_context *ctx, const char *spec);
 uint32_t dcl_rms_attr(struct dcl_context *ctx, const char *spec,
                       struct rms_fileattr *out);
 
+/* ---- Stage an image's genuine bytes off the ODS-2 volume over the ACP (vms-104) ----
+ * Device/dir-defaults `spec` from the context, then reads its bytes THROUGH the
+ * Files-11 ACP (IO$_READVBLK, rms_stage_over_acp) into the Linux path `dest`
+ * (mode 0755) -- NEVER a /vms POSIX read (Rule 9 / INV-6). Used by the foreign-
+ * command resolver to give a native bootstrap tool a POSIX home sourced from the
+ * volume. Returns RMS$_NORMAL, a fail-honest RMS$_ when absent, or RMS$_ACC when
+ * no ACP-mounted volume is reachable (caller must fail honestly, not /vms-fall). */
+uint32_t dcl_rms_stage(struct dcl_context *ctx, const char *spec,
+                       const char *dest);
+
 #endif /* DCL_RMS_H */

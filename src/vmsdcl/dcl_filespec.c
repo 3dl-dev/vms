@@ -804,3 +804,15 @@ uint32_t dcl_rms_attr(struct dcl_context *ctx, const char *spec,
         return RMS$_SYN;
     return rms_file_attr(vspec, out);
 }
+
+/* ---- Stage an image's genuine bytes off the ODS-2 volume over the ACP (vms-104) ---- */
+uint32_t dcl_rms_stage(struct dcl_context *ctx, const char *spec,
+                       const char *dest)
+{
+    char vspec[1024];
+    if (!spec || !dest)
+        return RMS$_FAB;
+    if (dcl_rms_effective_spec(ctx, spec, vspec, sizeof(vspec)) != 0)
+        return RMS$_SYN;
+    return rms_stage_over_acp(vspec, dest);
+}

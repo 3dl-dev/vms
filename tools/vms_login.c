@@ -185,7 +185,12 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
      */
     {
         uint32_t login_uic = (rec->uic_group << 16) | rec->uic_member;
-        uint64_t login_privs = parse_privilege_string(rec->privileges);
+        /* vms-26a: build the persona mask from the binary $UAFDEF quadword,
+         * NOT by re-parsing rec->privileges. The name-string re-parser drops
+         * MOUNT (and other privileges outside its 17-name subset), which is
+         * what produced %SYSTEM-F-NOPRIV on MOUNT after the SYSUAF flip.
+         * See sysuaf_record_privileges() in sysuaf.h. */
+        uint64_t login_privs = sysuaf_record_privileges(rec);
         uint32_t ist = vms_kif_setident(rec->username, login_uic, login_privs);
         if (!(ist & 1)) {
             printf("%%OVMX-F-NOIDENT, the executive refused the "

@@ -209,6 +209,33 @@ void     sysuaf_mask_to_flags(uint32_t mask, char *out, size_t outsz);
    `privileges` field from the binary record's uaf$q_priv mask. */
 void     sysuaf_format_privileges(uint64_t mask, char *out, size_t outsz);
 
+/* Authorized privilege quadword straight from the binary $UAFDEF record --
+ * the AUTHORITATIVE mask a login must stamp on the persona.
+ *
+ * DO NOT re-parse rec->privileges (the rendered NAME string) to build the
+ * login/persona mask. That round-trip is LOSSY: sysuaf_format_privileges()
+ * emits every bit from the full 37-name table (VMS_PRIV_NAME_LIST), but the
+ * string re-parser (parse_privilege_string in vms/privs.h) only knows a
+ * 17-name subset -- so MOUNT (and ~19 other privileges) silently vanish
+ * unless the string happened to be the literal "ALL". That divergence is
+ * exactly what put %SYSTEM-F-NOPRIV on `MOUNT DKA100:` after the atomic flip
+ * moved SYSUAF to a binary $UAFDEF record whose priv field renders as the
+ * expanded name list, never "ALL" (vms-26a). Read the quadword directly.
+ *
+ * Header-inline so no new shared-image export / symbol-vector entry is
+ * required. LE byte order matches the on-disk $UAFDEF layout (uaf$q_priv is a
+ * fixed-width little-endian byte array; see sysuaf_rms_record_t). */
+static inline uint64_t sysuaf_record_privileges(const sysuaf_record_t *rec)
+{
+    if (!rec)
+        return 0;
+    const uint8_t *p = rec->raw.uaf$q_priv;
+    return  (uint64_t)p[0]        | ((uint64_t)p[1] << 8)  |
+           ((uint64_t)p[2] << 16) | ((uint64_t)p[3] << 24) |
+           ((uint64_t)p[4] << 32) | ((uint64_t)p[5] << 40) |
+           ((uint64_t)p[6] << 48) | ((uint64_t)p[7] << 56);
+}
+
 /* ---- binary <-> view mapping (atomic flip) ------------------------------- */
 
 /* Fill the text view fields FROM the binary $UAFDEF record `raw` and copy `raw`

@@ -614,52 +614,73 @@ rms_file_t *rms_open_named_handle_kind(const char *vms_spec, int want_write,
          * the ACP; the caller (sysuaf_rms_create) authors the Prolog-3 image on
          * top. (rms_impl_create rejects org==IDX up front, but a plain-data
          * IO$_CREATE + an on-top Prolog-3 author is exactly how a keyed file is
-         * born on real RMS.) */
+         * born on real RMS.)
+         *
+         * vms-5f0: try EACH ODS-2 candidate directory, exactly as the read loop
+         * above does -- a concealed-rooted logical (SYS$SYSTEM:, SYS$STARTUP:,
+         * ...) expands to several {device, dirpath} candidates, and only one
+         * resolves on the mounted volume. The old code tried only specs[0], so
+         * SYSGEN WRITE CURRENT of SYS$SYSTEM:OVMXVMSSYS.PAR failed RMS$_DNF even
+         * though the read of the same spec resolved. Create in the FIRST
+         * candidate whose directory resolves -- the same order the read walks,
+         * so a new version lands in the directory the existing versions live in. */
         {
-            struct rms_acp_spec *sp = &specs[0];
             struct vms_acp_fileop_args fop;
             uint32_t chan = 0;
+            uint32_t last = SS$_NOSUCHFILE;
+            int ci;
 
-            st = vms_kif_acp_assign(sp->devnam, &chan);
-            if (!$VMS_STATUS_SUCCESS(st)) {
-                if (st_out) *st_out = rms_acp_open_status(st);
-                return NULL;
-            }
-            h = calloc(1, sizeof(*h));
-            if (!h) { vms_kif_dassgn(chan); if (st_out) *st_out = RMS$_DME; return NULL; }
-            h->chan = chan; h->assigned = 1; h->fd = -1;
+            h = NULL;
+            for (ci = 0; ci < ncand; ci++) {
+                struct rms_acp_spec *sp = &specs[ci];
+                uint32_t d_num = 0, d_seq = 0;
+                uint8_t  d_rvn = 0, d_nmx = 0;
 
-            memset(&fop, 0, sizeof(fop));
-            fop.chan      = chan;
-            fop.func      = VMS_ACP_FOP_CREATE;
-            fop.modifiers = VMS_ACP_M_CREATE | VMS_ACP_M_ACCESS;
-            fop.acctl     = VMS_ACP_ACCTL_WRITE;
-            fop.kind      = kind;           /* vms-3a8: caller-chosen RFM (VAR default) */
-            st = rms_acp_resolve_did(chan, sp->dirpath, &fop.did_num,
-                                     &fop.did_seq, &fop.did_rvn, &fop.did_nmx);
-            if (!$VMS_STATUS_SUCCESS(st)) {
-                free(h); vms_kif_dassgn(chan);
-                if (st_out) *st_out = RMS$_DNF;
-                return NULL;
-            }
-            fop.version = 0;                    /* highest existing + 1 */
-            strncpy(fop.name, sp->name, VMS_ACP_NAME_SIZE - 1);
+                st = vms_kif_acp_assign(sp->devnam, &chan);
+                if (!$VMS_STATUS_SUCCESS(st)) { last = st; chan = 0; continue; }
 
-            st = vms_kif_acp_fileop(&fop);
-            if (!$VMS_STATUS_SUCCESS(st)) {
-                free(h); vms_kif_dassgn(chan);
-                if (st_out) *st_out = RMS$_CRE;
-                return NULL;
+                st = rms_acp_resolve_did(chan, sp->dirpath, &d_num, &d_seq,
+                                         &d_rvn, &d_nmx);
+                if (!$VMS_STATUS_SUCCESS(st)) {
+                    vms_kif_dassgn(chan); chan = 0; last = st; continue;
+                }
+
+                h = calloc(1, sizeof(*h));
+                if (!h) { vms_kif_dassgn(chan); if (st_out) *st_out = RMS$_DME; return NULL; }
+                h->chan = chan; h->assigned = 1; h->fd = -1;
+
+                memset(&fop, 0, sizeof(fop));
+                fop.chan      = chan;
+                fop.func      = VMS_ACP_FOP_CREATE;
+                fop.modifiers = VMS_ACP_M_CREATE | VMS_ACP_M_ACCESS;
+                fop.acctl     = VMS_ACP_ACCTL_WRITE;
+                fop.kind      = kind;       /* vms-3a8: caller-chosen RFM (VAR default) */
+                fop.did_num = d_num; fop.did_seq = d_seq;
+                fop.did_rvn = d_rvn; fop.did_nmx = d_nmx;
+                fop.version = 0;            /* highest existing + 1 */
+                strncpy(fop.name, sp->name, VMS_ACP_NAME_SIZE - 1);
+
+                st = vms_kif_acp_fileop(&fop);
+                if (!$VMS_STATUS_SUCCESS(st)) {
+                    free(h); h = NULL; vms_kif_dassgn(chan); chan = 0; last = st;
+                    continue;
+                }
+
+                h->accessed = 1; h->writable = 1;
+                h->fid_num = fop.fid_num; h->fid_seq = fop.fid_seq;
+                h->fid_rvn = fop.fid_rvn; h->fid_nmx = fop.fid_nmx;
+                h->version = fop.out_version;   /* the version the ACP minted */
+                h->eof   = (uint64_t)(fop.new_efblk ? (fop.new_efblk - 1u) : 0) * 512u
+                           + fop.new_ffbyte;
+                h->hiblk = fop.new_hiblk;
+                if (st_out) *st_out = RMS$_CREATED;
+                return h;
             }
-            h->accessed = 1; h->writable = 1;
-            h->fid_num = fop.fid_num; h->fid_seq = fop.fid_seq;
-            h->fid_rvn = fop.fid_rvn; h->fid_nmx = fop.fid_nmx;
-            h->version = fop.out_version;   /* the version the ACP minted */
-            h->eof   = (uint64_t)(fop.new_efblk ? (fop.new_efblk - 1u) : 0) * 512u
-                       + fop.new_ffbyte;
-            h->hiblk = fop.new_hiblk;
-            if (st_out) *st_out = RMS$_CREATED;
-            return h;
+
+            if (st_out)
+                *st_out = $VMS_STATUS_SUCCESS(last) ? RMS$_DNF
+                                                   : rms_acp_open_status(last);
+            return NULL;
         }
     }
 #endif /* __linux__ */

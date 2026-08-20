@@ -93,7 +93,23 @@ struct sysgen_file {
 uint32_t ovmx_sysgen_acp_read(struct sysgen_file *out);
 uint32_t ovmx_sysgen_acp_write(const struct sysgen_file *db, int new_version,
                                int *out_version);
-#if defined(__GNUC__)
+/*
+ * OVMX_SYSGEN_ACP_STRONG marks a TU that DEFINES (src/vmsrms/sysgen_acp.c) or
+ * definitely LINKS (SYSGEN.EXE / SCSD.EXE / SYSMAN.EXE, via
+ * target_compile_definitions) the ACP seam: there the references/definitions
+ * stay STRONG. This matters two ways:
+ *   - the defining TU's symbols must be 'T', not 'W' -- LIBVMSRMS$SHR's
+ *     native-link symbol vector is generated from `nm ... type T`, so a weak
+ *     definition would be dropped from the vector and DCL could not resolve it;
+ *   - a consumer's reference must be strong, or `ld --as-needed` DROPS
+ *     LIBVMSRMS$SHR (a weak reference does not mark a shared lib "needed") and
+ *     the link fails %undefined -- and in a static link a weak reference does
+ *     not pull the archive member either.
+ * Everywhere else (libvms's own inline callers, which cannot link vmsrms) the
+ * references are #pragma weak, so they see NULL and fail honest (Rule 9/INV-6)
+ * instead of failing to link.
+ */
+#if defined(__GNUC__) && !defined(OVMX_SYSGEN_ACP_STRONG)
 #pragma weak ovmx_sysgen_acp_read
 #pragma weak ovmx_sysgen_acp_write
 #endif
@@ -122,10 +138,13 @@ static inline int sysgen_load_current_db(struct sysgen_file *db)
         return 0;
     }
 
+#if defined(OVMX_SYSGEN_ACP_STRONG)
+    return $VMS_STATUS_SUCCESS(ovmx_sysgen_acp_read(db)) ? 0 : -1;
+#else
     if (ovmx_sysgen_acp_read)
         return $VMS_STATUS_SUCCESS(ovmx_sysgen_acp_read(db)) ? 0 : -1;
-
     return -1;   /* no override and no ACP linked: fail honest (Rule 9) */
+#endif
 }
 
 /*
@@ -331,8 +350,10 @@ static inline int sysgen_commit_working(const struct sysgen_file *db,
      * Fail honest if RMS is not linked into this image (Rule 9/INV-6): there is
      * no /vms fallback.
      */
+#if !defined(OVMX_SYSGEN_ACP_STRONG)
     if (!ovmx_sysgen_acp_write)
         return SS$_NOSUCHDEV;
+#endif
 
     int version = 0;
     uint32_t st = ovmx_sysgen_acp_write(db, new_version, &version);

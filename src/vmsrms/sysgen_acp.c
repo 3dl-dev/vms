@@ -39,6 +39,11 @@
 
 #define _POSIX_C_SOURCE 200809L
 
+/* This is the DEFINING TU: keep ovmx_sysgen_acp_read/write STRONG so they land
+ * in LIBVMSRMS$SHR's native symbol vector (generated from nm type 'T'). Must be
+ * set BEFORE sysgen_params.h, which #pragma-weaks them otherwise. */
+#define OVMX_SYSGEN_ACP_STRONG 1
+
 #include <stdint.h>
 #include <string.h>
 

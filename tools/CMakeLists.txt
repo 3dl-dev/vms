@@ -299,7 +299,10 @@ target_compile_options(vms_sysgen PRIVATE
 # references to ovmx_sysgen_acp_* are #pragma weak (the libvms-layer seam), and a
 # weak reference alone does not pull an archive member (build-static / OVMX_STATIC).
 target_link_libraries(vms_sysgen PRIVATE vmsrms vmsfs vmslnm)
-target_link_options(vms_sysgen PRIVATE "LINKER:--undefined=ovmx_sysgen_acp_write")
+# Strong references to the ACP seam (OVMX_SYSGEN_ACP_STRONG): keeps LIBVMSRMS$SHR
+# from being dropped by `ld --as-needed` (weak refs do not mark a shared lib
+# needed) and pulls sysgen_acp.o from the static archive (build-static).
+target_compile_definitions(vms_sysgen PRIVATE OVMX_SYSGEN_ACP_STRONG)
 
 set_target_properties(vms_sysgen PROPERTIES
     OUTPUT_NAME "SYSGEN"
@@ -330,7 +333,7 @@ target_compile_options(vms_sysman PRIVATE
 # vms-5f0: PARAMETERS USE/WRITE now ride the executive Files-11 ACP (RMS-over-ACP)
 # instead of a /vms fopen -- link vmsrms + force sysgen_acp.o (weak-ref pull).
 target_link_libraries(vms_sysman PRIVATE vmsrms vmsfs vmslnm)
-target_link_options(vms_sysman PRIVATE "LINKER:--undefined=ovmx_sysgen_acp_write")
+target_compile_definitions(vms_sysman PRIVATE OVMX_SYSGEN_ACP_STRONG)
 
 set_target_properties(vms_sysman PROPERTIES
     OUTPUT_NAME "SYSMAN"

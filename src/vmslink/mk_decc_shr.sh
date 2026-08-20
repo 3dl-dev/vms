@@ -378,7 +378,23 @@ unsetenv=PROCEDURE,\
 \
 pthread_create=PROCEDURE,pthread_detach=PROCEDURE,pthread_join=PROCEDURE,\
 \
-getpagesize=PROCEDURE"
+getpagesize=PROCEDURE,\
+\
+setlocale=PROCEDURE,signal=PROCEDURE,strsignal=PROCEDURE,\
+__fsetlocking=PROCEDURE,dlerror=PROCEDURE,\
+feof=PROCEDURE,ferror=PROCEDURE,getc=PROCEDURE,putc=PROCEDURE,ungetc=PROCEDURE,\
+fseeko=PROCEDURE,ftello=PROCEDURE,\
+vprintf=PROCEDURE,asprintf=PROCEDURE,vasprintf=PROCEDURE,\
+ffs=PROCEDURE,iscntrl=PROCEDURE,ispunct=PROCEDURE,mbstowcs=PROCEDURE,\
+frexp=PROCEDURE,ldexp=PROCEDURE,\
+stpcpy=PROCEDURE,mempcpy=PROCEDURE,\
+lstat=PROCEDURE,umask=PROCEDURE,sbrk=PROCEDURE,prctl=PROCEDURE,wait4=PROCEDURE,\
+mktemp=PROCEDURE,mkstemps=PROCEDURE,\
+posix_spawn=PROCEDURE,posix_spawnp=PROCEDURE,\
+posix_spawn_file_actions_init=PROCEDURE,posix_spawn_file_actions_destroy=PROCEDURE,\
+posix_spawn_file_actions_addclose=PROCEDURE,posix_spawn_file_actions_adddup2=PROCEDURE,\
+posix_spawnattr_init=PROCEDURE,posix_spawnattr_destroy=PROCEDURE,\
+posix_spawnattr_setflags=PROCEDURE"
 
 # getpagesize APPENDED for vms-ee2 (append-only -> prior consumers' vector
 # indices unchanged, GSMATCH LEQUAL-compatible). AS.EXE's bfd/bfd.c carries a
@@ -472,6 +488,32 @@ getpagesize=PROCEDURE"
 # pthread_create/detach/join yet). All three are POSIX threading entry points
 # real OpenVMS DECC$SHR exports (DECthreads) and musl's libc.a defines, so
 # DECC$SHR is the right producer.
+#
+# 39 PROCEDURE universals APPENDED for vms-d697 (append-only -> prior consumers'
+# vector indices unchanged, GSMATCH LEQUAL-compatible). AS.EXE (GNU as, F1 of
+# epic vms-da0) is the first consumer whose gas/bfd/opcodes/libiberty body calls
+# these musl libc.a entry points; none was exported before, so LINK.EXE left
+# every call site a deferred external (`call rel32=0`). Unlike getpagesize
+# (a .init_array ctor, which faults unconditionally), these sit on ordinary
+# code paths -- but `as --version` alone reaches enough of them (gas's startup +
+# error-reporting path: setlocale/signal/strsignal, the getc/putc/ungetc/feof/
+# ferror stdio-macro out-of-line fallbacks, vprintf/asprintf) that the first
+# executed `call next-instruction` corrupts control flow and feeds a wild
+# pointer (0x8) into a printf `%s` -> SIGSEGV in musl memchr/strnlen. Confirmed
+# empirically: gdb on the activated AS.EXE faulted in memchr with rcx=0x8, the
+# caller strnlen(0x8, INT_MAX) from musl vfprintf's %s path, and AS.EXE's .text
+# carried 237 `e8 00000000` call sites; exporting these dropped LINK-I-DEFEXT
+# from 244 to 11 and `as --version` + a trivial .s->ELF64 .o assemble now pass.
+# Every name here is a strong T (or weak W: fseeko/ftello/stpcpy) symbol defined
+# in musl's libc.a and whole-archived into DECC$SHR, and each is a plain C-RTL
+# entry point real OpenVMS DECC$SHR also exports. NOT exported here: `environ`
+# (musl BSS 'V' global -- exporting a BSS-bucket DATA universal hits the known
+# LINK.EXE placement gap documented in the vms-4ba.4 block above, and gas only
+# touches it on the libiberty pex/make_temp_file path, dead for --version and a
+# trivial assemble) and zlib's deflate/inflate/compress family (NOT in musl
+# libc.a at all -- bfd's compressed-section path, which a trivial .s->.o never
+# exercises; libz is not on AS.EXE's link line, a separate mk_as.sh concern if
+# compression is ever needed).
 #
 # THE GENERAL RULE, because this is the commonest way to break the VMS-native
 # toolchain jobs: EVERY libc call added to an OVMX library is a claim that

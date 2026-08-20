@@ -146,12 +146,20 @@ sed 's/^/   /' "$WORK/as-compile.out"
 grep -q 'OVMX-RMS: sys\$open' "$WORK/as-compile.out" && echo "-- confirmed: RMS sys\$open used for test.s (not raw fopen) --"
 grep -q 'OVMX-RMS: sys\$create' "$WORK/as-compile.out" && echo "-- confirmed: RMS sys\$create used for test.o delivery (not raw fopen/write) --"
 [ "$ACRC" -eq 0 ] || { echo "FAIL: activated AS.EXE failed to assemble test.s (exit $ACRC — THE WALL, see output above)"; exit 1; }
-[ -f "$WORK/test.o" ] || { echo "FAIL: activated AS.EXE did not produce $WORK/test.o"; exit 1; }
-readelf -h "$WORK/test.o" | tee "$WORK/test.readelf.h" >/dev/null
+# sys$create ALWAYS mints a real VMS version suffix on disk (rms_core.c
+# sys$create: "%s/%s;%d") — as was told "-o test.o" (unversioned), so the
+# actual delivered artifact is "test.o;1", not a bare "test.o". This is correct
+# VMS behavior (every RMS-created file is versioned), not a defect — mirrors
+# run_tcc_rms.sh's HELLO_O=";1" handling. (The bare-name check here was a latent
+# harness bug, invisible until vms-d697 fixed the --version activation wall and
+# AS.EXE first reached the RMS-delivered output step.)
+TEST_O="$WORK/test.o;1"
+[ -f "$TEST_O" ] || { echo "FAIL: activated AS.EXE did not produce $TEST_O (RMS-versioned test.o)"; exit 1; }
+readelf -h "$TEST_O" | tee "$WORK/test.readelf.h" >/dev/null
 grep -q 'Class:.*ELF64' "$WORK/test.readelf.h" || { echo "FAIL: test.o is not ELF64"; exit 1; }
 grep -q 'Type:.*REL (Relocatable file)' "$WORK/test.readelf.h" || { echo "FAIL: test.o is not ET_REL"; exit 1; }
 grep -qi 'Machine:.*X86-64\|Machine:.*AArch64' "$WORK/test.readelf.h" || { echo "FAIL: test.o is not the expected machine"; exit 1; }
-echo "-- confirmed: test.o is a real ELF64/REL object, assembled by the ACTIVATED as --"
+echo "-- confirmed: test.o;1 is a real ELF64/REL object, assembled by the ACTIVATED as --"
 
 echo
 echo "================================================================================"

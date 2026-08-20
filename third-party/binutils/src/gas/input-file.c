@@ -27,6 +27,13 @@
 #include "input-file.h"
 #include "safe-ctype.h"
 
+#ifdef OVMX_RMS_IO
+/* OVMX (vms-0b6b): route the PRIMARY .s source read through OVMX's RMS
+ * system services instead of raw fopen()/fread()/fclose() — see
+ * third-party/binutils/ovmx/ovmx_rms_io.h for scope/rationale. */
+#include "ovmx_rms_io.h"
+#endif
+
 /* This variable is non-zero if the file currently being read should be
    preprocessed by app.  It is zero if the file can be read straight in.  */
 int preprocess = 0;
@@ -43,6 +50,14 @@ int preprocess = 0;
 
 static FILE *f_in;
 static const char *file_name;
+#ifdef OVMX_RMS_IO
+/* OVMX (vms-0b6b): >= 0 while the primary .s source is open via RMS
+ * (ovmx_rms_open_read); -1 otherwise (stdin, or the stock fopen() path
+ * never taken when this file is compiled with OVMX_RMS_IO). f_in is set to
+ * a non-NULL sentinel (never dereferenced as a real FILE*) whenever this is
+ * >= 0, so the existing "is a file open" checks below keep working. */
+static int ovmx_rms_fd = -1;
+#endif
 
 /* Struct for saving the state of this module for file includes.  */
 struct saved_file
@@ -123,6 +138,45 @@ input_file_open (const char *filename,
   preprocess = pre;
 
   gas_assert (filename != 0);	/* Filename may not be NULL.  */
+#ifdef OVMX_RMS_IO
+  if (filename[0])
+    {
+      /* OVMX (vms-0b6b): the primary .s source, opened via RMS instead of
+       * fopen(). f_in gets a non-NULL sentinel so the "is a file open"
+       * checks in input_file_give_next_buffer/input_file_close still work;
+       * it is never dereferenced as a real FILE* on this path. */
+      ovmx_rms_fd = ovmx_rms_open_read (filename);
+      f_in = (ovmx_rms_fd >= 0) ? (FILE *) (intptr_t) 1 : NULL;
+      file_name = filename;
+    }
+  else
+    {
+      /* Use stdin for the input file — OVMX RMS routing applies only to
+       * the named primary source (see ovmx_rms_io.h SCOPE); stdin stays on
+       * the stock path. */
+      ovmx_rms_fd = -1;
+      f_in = stdin;
+      file_name = _("{standard input}");
+    }
+
+  if (f_in == NULL)
+    {
+      as_bad (_("can't open %s for reading: %s"),
+	      file_name, xstrerror (errno));
+      return;
+    }
+
+  /* OVMX (vms-0b6b): the stock #NO_APP/#APP leading-comment sniff below
+   * (a single-character stdio getc()/ungetc() peek) is deliberately SKIPPED
+   * for an RMS-opened file — see ovmx_rms_io.h SCOPE for why. `preprocess`
+   * keeps whatever the caller passed via `pre`. This only affects the
+   * heuristic that recognizes cpp/gcc-emitted "#NO_APP"/"#APP" markers at
+   * the very start of a .s file; hand-written test assembly (no leading
+   * '#' line) is unaffected. */
+  if (ovmx_rms_fd >= 0)
+    return;
+  c = getc (f_in);
+#else
   if (filename[0])
     {
       f_in = fopen (filename, FOPEN_RT);
@@ -144,6 +198,7 @@ input_file_open (const char *filename,
     }
 
   c = getc (f_in);
+#endif
 
   if (ferror (f_in))
     {
@@ -202,6 +257,17 @@ input_file_open (const char *filename,
 void
 input_file_close (void)
 {
+#ifdef OVMX_RMS_IO
+  /* OVMX (vms-0b6b): close the RMS-backed primary source, if that's what's
+   * open; the stdin fallback stays on the stock fclose() path. */
+  if (ovmx_rms_fd >= 0)
+    {
+      ovmx_rms_close_read (ovmx_rms_fd);
+      ovmx_rms_fd = -1;
+      f_in = 0;
+      return;
+    }
+#endif
   /* Don't close a null file pointer.  */
   if (f_in != NULL)
     fclose (f_in);
@@ -215,6 +281,21 @@ static size_t
 input_file_get (char *buf, size_t buflen)
 {
   size_t size;
+
+#ifdef OVMX_RMS_IO
+  /* OVMX (vms-0b6b): the RMS-backed primary source read — ovmx_rms_read
+   * mirrors fread()'s contract (bytes copied, 0 at EOF, <0 on error). */
+  if (ovmx_rms_fd >= 0)
+    {
+      int r = ovmx_rms_read (ovmx_rms_fd, buf, (int) buflen);
+      if (r < 0)
+	{
+	  as_bad (_("can't read from %s (OVMX RMS)"), file_name);
+	  return 0;
+	}
+      return (size_t) r;
+    }
+#endif
 
   if (feof (f_in))
     return 0;
@@ -259,6 +340,18 @@ input_file_give_next_buffer (char *where /* Where to place 1st character of new 
     return_value = where + size;
   else
     {
+#ifdef OVMX_RMS_IO
+      /* OVMX (vms-0b6b): auto-close-on-EOF for the RMS-backed primary
+       * source; the stdin fallback keeps the stock fclose(). */
+      if (ovmx_rms_fd >= 0)
+	{
+	  if (ovmx_rms_close_read (ovmx_rms_fd))
+	    as_warn (_("can't close %s (OVMX RMS)"), file_name);
+	  ovmx_rms_fd = -1;
+	  f_in = (FILE *) 0;
+	  return 0;
+	}
+#endif
       if (fclose (f_in))
 	as_warn (_("can't close %s: %s"), file_name, xstrerror (errno));
 

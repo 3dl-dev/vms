@@ -24,6 +24,20 @@
 #include "macro.h"
 #include "output-file.h"
 
+#ifdef OVMX_RMS_IO
+/* OVMX (vms-0b6b): route the FINAL delivery of the output .o through OVMX's
+ * RMS system services instead of letting BFD open/write the caller's
+ * requested path directly — see third-party/binutils/ovmx/ovmx_rms_io.h for
+ * scope/rationale. BFD's own ELF writer is untouched: it still writes a
+ * private scratch file via its normal bfd_openw()/bfd_close() sequence;
+ * only the completed scratch file's delivery to the real destination is
+ * RMS-routed (same scratch-then-deliver shape as
+ * third-party/tcc/ovmx/ovmx_rms_io.c's write side). */
+#include "ovmx_rms_io.h"
+#define OVMX_AS_SCRATCH_OBJ "/tmp/.ovmx_as_scratch.o"
+static const char *ovmx_out_dest;
+#endif
+
 #ifndef TARGET_MACH
 #define TARGET_MACH 0
 #endif
@@ -36,6 +50,21 @@ output_file_create (const char *name)
   if (name[0] == '-' && name[1] == '\0')
     as_fatal (_("can't open a bfd on stdout %s"), name);
 
+#ifdef OVMX_RMS_IO
+  else
+    {
+      ovmx_out_dest = name;
+      if (!(stdoutput = bfd_openw (OVMX_AS_SCRATCH_OBJ, TARGET_FORMAT)))
+	{
+	  bfd_error_type err = bfd_get_error ();
+
+	  if (err == bfd_error_invalid_target)
+	    as_fatal (_("selected target format '%s' unknown"), TARGET_FORMAT);
+	  else
+	    as_fatal (_("can't create %s: %s"), name, bfd_errmsg (err));
+	}
+    }
+#else
   else if (!(stdoutput = bfd_openw (name, TARGET_FORMAT)))
     {
       bfd_error_type err = bfd_get_error ();
@@ -45,6 +74,7 @@ output_file_create (const char *name)
       else
 	as_fatal (_("can't create %s: %s"), name, bfd_errmsg (err));
     }
+#endif
 
   bfd_set_format (stdoutput, bfd_object);
   bfd_set_arch_mach (stdoutput, TARGET_ARCH, TARGET_MACH);
@@ -99,6 +129,22 @@ output_file_close (void)
     res = bfd_close_all_done (obfd);
   else
     res = bfd_close (obfd);
+
+#ifdef OVMX_RMS_IO
+  /* OVMX (vms-0b6b): BFD just finished writing the scratch file above;
+   * deliver it to the real destination via RMS and remove the scratch
+   * copy. A delivery failure demotes `res` to failure too, so the
+   * as_fatal() below still fires on an RMS delivery error exactly like a
+   * BFD close error. */
+  if (ovmx_out_dest)
+    {
+      if (res && ovmx_rms_deliver_file (OVMX_AS_SCRATCH_OBJ, ovmx_out_dest) != 0)
+	res = false;
+      remove (OVMX_AS_SCRATCH_OBJ);
+      ovmx_out_dest = NULL;
+    }
+#endif
+
   now_seg = NULL;
   now_subseg = 0;
 

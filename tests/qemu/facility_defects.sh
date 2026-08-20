@@ -6890,14 +6890,16 @@ apply_edit() {
 
     acp-writevb-extend-alloc-offbyone)
         # UNIQUE TEXT: ods2_fh2_map_append()'s format-1 low-LBN word encode
-        # (`w1 = (uint16_t)(lbn & 0xFFFF);`) occurs once in ods2_edit.c. Encoding
-        # (lbn + 1) records the newly allocated extent ONE LBN too high in the
+        # (`w1 = (uint16_t)(cur_lbn & 0xFFFF);`) occurs once in ods2_edit.c. (The
+        # append loop splits a run into <=256-block format-1 pointers and advances
+        # cur_lbn per pointer; this is the per-pointer LBN low word.) Encoding
+        # (cur_lbn + 1) records the newly allocated extent ONE LBN too high in the
         # on-disk FH2 map, while the IO$_WRITEVBLK path writes the data (and its
         # in-memory channel window) at the correct LBN -- so only the re-ACCESS
         # read-back (window rebuilt from the corrupted on-disk map) reads the
-        # wrong block. After substitution no `(lbn & 0xFFFF)` is left (now
-        # `((lbn + 1u) & 0xFFFF)`) -- the no-op the idempotency selftest requires.
-        sed -i 's|w1 = (uint16_t)(lbn \& 0xFFFF);|w1 = (uint16_t)((lbn + 1u) \& 0xFFFF); /* NEGCTL acp-writevb-extend-alloc-offbyone */|' "$_file";;
+        # wrong block. After substitution no `(cur_lbn & 0xFFFF)` is left (now
+        # `((cur_lbn + 1u) & 0xFFFF)`) -- the no-op the idempotency selftest requires.
+        sed -i 's|w1 = (uint16_t)(cur_lbn \& 0xFFFF);|w1 = (uint16_t)((cur_lbn + 1u) \& 0xFFFF); /* NEGCTL acp-writevb-extend-alloc-offbyone */|' "$_file";;
 
     rms-put-wrong-vbn)
         # The `a.vbn = (cursor/512)+1u` line appears in BOTH rms_io_read_acp and

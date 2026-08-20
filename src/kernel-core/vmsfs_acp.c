@@ -955,6 +955,22 @@ static int acp_winbuild_cb(const ods2_extent_t *ext, void *ctx)
 
     if (!ext || ext->count == 0)
         return 0;                       /* skip empty run */
+
+    /* COALESCE abutting runs (vms-3a8): a large contiguous file is stored on
+     * disk as back-to-back format-1 retrieval pointers (each <= 256 blocks --
+     * see ods2_fh2_map_append), so a multi-MB file yields many pointers whose
+     * LBNs abut. VMS maps such a file with ONE window turn, not one per pointer;
+     * fold each pointer that continues the previous run (physically AND
+     * VBN-contiguous) into the last window entry so the fixed 24-entry window
+     * never overflows on a file that is genuinely contiguous. */
+    if (w->n > 0 &&
+        w->win[w->n - 1].lbn + w->win[w->n - 1].count == ext->lbn &&
+        w->win[w->n - 1].start_vbn + w->win[w->n - 1].count == w->next_vbn) {
+        w->win[w->n - 1].count += ext->count;
+        w->next_vbn += ext->count;
+        return 0;
+    }
+
     if (w->n >= w->max) {
         w->overflow = 1;
         return 1;                       /* stop -- window is full */

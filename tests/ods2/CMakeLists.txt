@@ -227,6 +227,24 @@ set_tests_properties(ods2_longname PROPERTIES
     TIMEOUT 30
 )
 
+# vms-3a8 (R1 install large-file write): ods2_fh2_map_append() records a
+# contiguous run LONGER than a single FM2 format-1 pointer's 256-block ceiling
+# as several consecutive format-1 pointers, instead of the pre-fix ODS2_ERR_ARGS
+# that the ACP surfaced as SS$_DEVICEFULL (%PCSI-E-WRITE on AUTHORIZE.EXE). Drives
+# map_append() directly against a header built by ods2_fh2_build and reads the
+# split back with the reader's own ods2_fh2_map_walk, proving the large run
+# reconstructs to one contiguous span, coalesces across the split, and refuses an
+# over-full map area with an honest ODS2_ERR_NOSPACE.
+add_executable(test_ods2_map_append_large test_ods2_map_append_large.c)
+target_include_directories(test_ods2_map_append_large PRIVATE ${VMS_FS_INCLUDE_DIR})
+target_link_libraries(test_ods2_map_append_large PRIVATE ods2)
+
+add_test(NAME ods2_map_append_large COMMAND test_ods2_map_append_large)
+set_tests_properties(ods2_map_append_large PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)
+
 # vms-5eb R6-build: the vmsfs_master BINARY masters a host source tree onto a
 # GENUINE ODS-2 (DECFILE11B) volume via --ods2 and reads it back over a real
 # block device (ods2_bdev_*). Exercises the actual shipped boot-master tool

@@ -765,9 +765,11 @@ uint32_t vms_kif_acp_mount(const char *devnam);
 /* $DISMOUNT: remove a volume from the executive-global mounted table.
  * SS$_NOSUCHDEV if it is not mounted, SS$_DEVALLOC while channels remain
  * assigned to it, SS$_NOSUCHDEV if /dev/vms is absent.
- * OVMX-UNWIRED: vms_kif_acp_dmount (vms-149) -- the dismount counterpart of
- * vms_kif_acp_mount above, exercised only by tests/qemu/test_syssvc_acp_channel.c
- * until PID 1's mount/dismount lifecycle lands in a later vms-208 rung. */
+ * WIRED (vms-149, epic vms-208): the DCL DISMOUNT command removes a volume
+ * through the ACP -- src/vmsdcl/dcl_cmd_misc.c cmd_dismount emits
+ * vms_kif_acp_dmount, mirroring cmd_mount's vms-481 switch to vms_kif_acp_mount
+ * (the /proc/mounts scan is gone). Also exercised by
+ * tests/qemu/test_syssvc_acp_channel.c. */
 uint32_t vms_kif_acp_dmount(const char *devnam);
 
 /* $ASSIGN a FILE-CLASS channel to a mounted ODS-2 volume by unit name; the

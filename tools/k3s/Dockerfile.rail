@@ -27,6 +27,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # One apt layer, one index fetch (same discipline as tests/qemu/Dockerfile).
 # The QEMU package name is arch-conditional; everything else is arch-neutral.
+# docker.io/iptables are for run-on-rail.sh --dind mode (dockerd runs INSIDE
+# this container so the docker-wrapped e2e gates -- which `docker build
+# distro/Dockerfile.bootable` then `docker run -v $REPO_ROOT/...` -- resolve
+# their bind mounts against the same filesystem the repo is cloned into. A
+# separate dind sidecar would resolve those mounts on the wrong host.
 RUN apt-get update && \
     ARCH=$(dpkg --print-architecture) && \
     if [ "$ARCH" = "arm64" ]; then QEMU_PKG=qemu-system-arm; else QEMU_PKG=qemu-system-x86; fi && \
@@ -44,6 +49,7 @@ RUN apt-get update && \
         python3 file bsdmainutils \
         binutils gawk strace ccache clang \
         libssh-dev libreadline-dev \
+        docker.io iptables uidmap \
         genisoimage xorriso \
         "$QEMU_PKG" qemu-utils \
     && rm -rf /var/lib/apt/lists/*

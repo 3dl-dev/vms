@@ -6,7 +6,7 @@
 # host onto cluster hardware (k3s-worker). It is NOT an OVMX runtime.
 #
 # Usage:
-#   tools/k3s/run-on-rail.sh [--keep] [--name NAME] <git-ref> <command...>
+#   tools/k3s/run-on-rail.sh [--keep] [--dind] [--name NAME] <git-ref> <command...>
 #
 #   <git-ref>    branch, tag, or full SHA of https://github.com/3dl-dev/vms
 #   <command>    shell run in the repo root inside the pod; its exit code
@@ -14,6 +14,12 @@
 #
 # Flags:
 #   --keep       do not delete the Job when it finishes (for debugging)
+#   --dind       start an in-container dockerd first, so the command can use
+#                `docker build`/`docker run` -- required for the docker-wrapped
+#                QEMU e2e gates (run_install_boot_e2e.sh, sysboot-cluster-params,
+#                etc.) that otherwise SKIP(77) for lack of docker. /dev/kvm is
+#                present so an inner `docker run --device /dev/kvm ... -accel kvm`
+#                is KVM-accelerated (nested KVM).
 #   --name NAME  base name for the Job (default: ovmx-ci)
 #
 # Examples:
@@ -51,10 +57,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --- args -------------------------------------------------------------------
 KEEP=0
+DIND=0
 NAME_BASE=ovmx-ci
 while [ $# -gt 0 ]; do
   case "$1" in
     --keep) KEEP=1; shift ;;
+    --dind) DIND=1; shift ;;
     --name) NAME_BASE="$2"; shift 2 ;;
     --)     shift; break ;;
     -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
@@ -83,9 +91,9 @@ OVMX_CMD_B64="$(printf '%s' "$CMD" | base64 | tr -d '\n')"
 JOB_NAME="${NAME_BASE}-$(date +%s)-${RANDOM}"
 
 export JOB_NAME IMAGE GIT_REF REPO_URL OVMX_CMD_B64 DEADLINE \
-       REQ_CPU REQ_MEM LIM_CPU LIM_MEM
+       REQ_CPU REQ_MEM LIM_CPU LIM_MEM DIND
 MANIFEST="$(envsubst \
-  '$JOB_NAME $IMAGE $GIT_REF $REPO_URL $OVMX_CMD_B64 $DEADLINE $REQ_CPU $REQ_MEM $LIM_CPU $LIM_MEM' \
+  '$JOB_NAME $IMAGE $GIT_REF $REPO_URL $OVMX_CMD_B64 $DEADLINE $REQ_CPU $REQ_MEM $LIM_CPU $LIM_MEM $DIND' \
   < "$SCRIPT_DIR/job-template.yaml")"
 
 cleanup() {

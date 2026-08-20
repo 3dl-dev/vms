@@ -922,6 +922,15 @@ uint32_t rms_stage_over_acp(const char *vmsspec, const char *destpath)
     uint32_t efblk = a.attr.efblk;
     uint64_t total = efblk ? (uint64_t)(efblk - 1u) * 512u + a.attr.ffbyte : 0;
 
+    /* Create the staged copy already-executable (0755, subject to umask): a tool
+     * the kernel execve()s needs the owner-exec bit and the interpreter needs to
+     * be readable, both of which 0755 gives under any sane umask. Setting the
+     * mode at open() avoids an fchmod() call here -- fchmod is NOT a universal in
+     * DECC$SHR's C RTL symbol vector, so referencing it from this shareable
+     * (LIBVMSRMS$SHR) would leave a VMS-native LINK --use unable to resolve it
+     * (%LINK-F-ERROR unresolved external 'fchmod', vms-61f). The staged path is
+     * only reached when the boot bridge has NOT already staged the image, so the
+     * file is freshly created here with this mode. */
     int fd = open(destpath, O_WRONLY | O_CREAT | O_TRUNC, 0755);
     if (fd < 0) {
         vms_kif_acp_deaccess(chan);
@@ -960,7 +969,6 @@ uint32_t rms_stage_over_acp(const char *vmsspec, const char *destpath)
         vbn++;
     }
 
-    (void)fchmod(fd, 0755);
     close(fd);
     vms_kif_acp_deaccess(chan);
     vms_kif_dassgn(chan);

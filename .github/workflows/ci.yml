@@ -1,5 +1,33 @@
 name: CI
 
+# =====================================================================
+# TIER SPLIT (vms-fb8) -- why a PR does not run the heavy e2e gates
+# =====================================================================
+# The per-PR path used to run the full suite when a core path changed,
+# and its wall was one job: the release/install/upgrade/boot-scenario
+# QEMU e2e gates (14-46 min each, TCG-emulated). That made the 5-wide
+# peer iteration loop pay ~46 min per push.
+#
+# Those heavy gates now run on every NON-pull_request event only --
+# push(main), merge_group, workflow_dispatch, schedule -- via
+# `if: github.event_name != 'pull_request'`. A pull_request runs the
+# FAST tier (build+test, link/activate, kernel-executive shards,
+# static analysis, conformance, cross-compiles). No coverage is
+# deleted; the heavy tier MOVES off the per-PR critical path.
+#
+# COVERAGE-BEFORE-MERGE IS PRESERVED, two ways:
+#   * merge_group -- when a merge queue is enabled, the full suite runs
+#     on the batched result before it lands (nothing enqueues it until
+#     then; see below).
+#   * PRE-MERGE FULL RUN -- until a merge queue exists, the reap gate
+#     MUST fire a `workflow_dispatch` run on the candidate branch/SHA
+#     (`gh workflow run ci.yml --ref <branch>`) and verify it GREEN
+#     before squash-merge. workflow_dispatch forces every output true
+#     (full suite). KVM-accelerated, this is ~single-digit minutes, not
+#     46. This replaces "the PR's own run was the full suite" -- the
+#     by-SHA proof still exists, just fired deliberately at reap time.
+# Do NOT merge a core change on the fast-tier PR run alone.
+
 on:
   push:
     branches: [main]
@@ -708,7 +736,10 @@ jobs:
   persistent-boot:
     name: Persistent Boot Smoke Test
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     # 40 (was 30): the SYSBOOT> conversational proof (vms-b81, wired in by
     # vms-46c) adds a three-boot expect-driven step to this job; the extra
@@ -923,7 +954,10 @@ jobs:
   cut-release-reproducible:
     name: cut-release is byte-reproducible + boots (vms-d73)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1086,7 +1120,10 @@ jobs:
   upgrade-e2e:
     name: install -> UPGRADE -> boot e2e (vms-f05)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1162,7 +1199,10 @@ jobs:
   install-boot-e2e:
     name: install /DESTINATION -> boot the installed target -> login (vms-96ec)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1241,7 +1281,10 @@ jobs:
   release-install-e2e:
     name: R1 release e2e — media→menu install→separate container→login→PRODUCT SHOW (vms-37f)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1322,7 +1365,10 @@ jobs:
   release-acceptance-e2e:
     name: Release-acceptance gate — boot the CUT artifact, verify shipped version (vms-a86f)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1424,7 +1470,11 @@ jobs:
   cut-release-vax-gate:
     name: VAX co-release gate — artifacts build + a failed VAX build reds the cut (vms-ca5)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' || needs.changes.outputs.netbsd_vax == 'true' }}
+    # vms-fb8 tier-split: heavy VAX co-release gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request;
+    # cross-arch parity still enforced pre-merge (image-parity-gate stays on PR;
+    # the full VAX build runs in the pre-merge full run).
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -1537,7 +1587,10 @@ jobs:
   parts-demo-e2e:
     name: PARTS 0.2 Demo E2E (real boot, RMS load, DIRECTORY corroboration)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.core == 'true' || needs.changes.outputs.boot == 'true' }}
+    # vms-fb8 tier-split: heavy PARTS demo e2e runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 50
 
@@ -1591,7 +1644,10 @@ jobs:
   boot-scsnode-hostname-e2e:
     name: SCSNODE -> real hostname across reboot (vms-b6a7)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -1647,7 +1703,10 @@ jobs:
   sysboot-cluster-params-e2e:
     name: SYSBOOT> authors cluster params (vms-46c gap #2)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -1702,7 +1761,10 @@ jobs:
   cluster-params-recnx-e2e:
     name: SYSGEN authors cluster params, SCSD adopts RECNXINTERVAL (vms-c3b)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -3594,7 +3656,10 @@ jobs:
   uat-session:
     name: VMS User Acceptance Test
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 

@@ -551,40 +551,6 @@ int rms_executive_absent(void)
 }
 
 /*
- * rms_operator_log_absent - OPERATOR.LOG-specific ACP-availability probe
- * (vms-aac / vms-5f0). SYS$MANAGER:OPERATOR.LOG lives on SYS$SYSDEVICE, so OPCOM
- * can only $PUT it over the Files-11 ACP once that SYSTEM DISK is MOUNTED. This
- * is a STRICTER question than rms_executive_absent()/rms_acp_absent(), which
- * deliberately report "present" for an unmounted unit (SS$_DEVNOTMOUNT !=
- * SS$_NOSUCHDEV) so RMS's own $OPEN can tell an unmounted volume from an absent
- * device (vms-03b). For the operator log there is no such distinction to keep:
- * with no mounted volume there is no on-volume OPERATOR.LOG to write, so OPCOM
- * writes the host log/console instead -- the same place real VMS OPCOM writes
- * before SYS$MANAGER:OPERATOR.LOG is opened at startup, and the same host defer
- * the executive-absent case already takes.
- *
- * Returns 1 when there is no mounted boot volume to hold the log -- SS$_NOSUCHDEV
- * (no /dev/vms) OR SS$_DEVNOTMOUNT (present but the volume not yet mounted).
- * Returns 0 ONLY when the volume is mounted, so a $PUT that then fails on a
- * MOUNTED volume still fails honestly (Rule 9 / INV-6) -- this defer covers the
- * "no volume" case, never masks a real write error on a mounted one.
- */
-int rms_operator_log_absent(void)
-{
-#if defined(__linux__)
-    uint32_t chan = 0;
-    uint32_t st = vms_kif_acp_assign(RMS_ACP_DEFAULT_DEV, &chan);
-    if ($VMS_STATUS_SUCCESS(st)) {
-        vms_kif_dassgn(chan);
-        return 0;   /* boot volume MOUNTED -> OPERATOR.LOG goes over the ACP */
-    }
-    return 1;       /* SS$_NOSUCHDEV / SS$_DEVNOTMOUNT -> host log/console */
-#else
-    return 1;       /* netbsd-vax cross: no ACP yet (vms-d5d) */
-#endif
-}
-
-/*
  * rms_open_named_handle / rms_close_named_handle (vms-5f0) -- see rms_io.h.
  * RAW handle open for the binary indexed engines: ACP window when the executive
  * is present, POSIX-wrap of the resolved on-volume path when it is absent. The

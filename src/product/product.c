@@ -248,19 +248,18 @@ static int pd_vms_paths(const struct pd_dest *dest, const char *relpath,
     char work[4096];
     snprintf(work, sizeof(work), "%s", relpath);
 
-    /* Split off the trailing filename; the rest are directory components. */
+    /* Split off the trailing filename; the leading portion (in-place, with
+     * '/'-separated components rewritten to the ODS-2 '.' separator) is the
+     * directory path relative to the common root. */
     char *slash = strrchr(work, '/');
     const char *fname;
-    char dircomp[3072];
-    dircomp[0] = '\0';
+    const char *dircomp = "";
     if (slash) {
         *slash = '\0';
         fname = slash + 1;
-        /* Turn the '/'-separated directory portion into '.'-separated ODS-2
-         * bracket components. */
         for (char *p = work; *p; p++)
             if (*p == '/') *p = '.';
-        snprintf(dircomp, sizeof(dircomp), "%s", work);
+        dircomp = work;
     } else {
         fname = work;               /* bare basename ([000000] entry) */
     }

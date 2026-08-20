@@ -951,20 +951,34 @@ static int leading_ci(const char *s, const char *pfx)
  */
 static const char *resolve_producer_path(const char *path, char *out, size_t sz)
 {
-    static const char *const logs[] = {
-        "SYS$SHARE:", "SYS$LIBRARY:", "SYS$SYSTEM:", NULL
+    /* Each installed-image logical -> the SYS$SYSROOT subdirectory it lives in. */
+    static const struct { const char *log; const char *sub; } maps[] = {
+        { "SYS$SHARE:",   "SYSLIB" },
+        { "SYS$LIBRARY:", "SYSLIB" },
+        { "SYS$SYSTEM:",  "SYSEXE" },
     };
-    for (int i = 0; logs[i]; i++) {
-        size_t l = strlen(logs[i]);
-        if (leading_ci(path, logs[i])) {
-            const char *leaf = path + l;
-            /* Defend against an embedded directory in the logical value; a
-             * shareable spec is SYS$SHARE:NAME.EXE, so take the final leaf. */
-            const char *slash = strrchr(leaf, '/');
-            if (slash) leaf = slash + 1;
-            snprintf(out, sz, "%s/%s", "/run/ovmx-boot", leaf);
+    for (unsigned i = 0; i < sizeof(maps) / sizeof(maps[0]); i++) {
+        if (!leading_ci(path, maps[i].log))
+            continue;
+        const char *leaf = path + strlen(maps[i].log);
+        /* Defend against an embedded directory: a spec is SYS$SHARE:NAME.EXE. */
+        const char *slash = strrchr(leaf, '/');
+        if (slash) leaf = slash + 1;
+
+        /* (1) RUNTIME: the boot bridge read the installed image off the ODS-2
+         * volume THROUGH the ACP and staged it here (the /vms passthrough is
+         * retired on the runtime path). Prefer it when present. */
+        snprintf(out, sz, "/run/ovmx-boot/%s", leaf);
+        if (access(out, R_OK) == 0)
             return out;
-        }
+
+        /* (2) HOST CTEST (no /dev/vms, no boot bridge -- e.g. the BUILD.COM S3.2
+         * DCL driver): the installed images live at their legacy POSIX
+         * SYS$SYSROOT location. This /vms read is the sanctioned legacy path for
+         * the no-executive case (the flip only retires /vms when the ACP is
+         * live), NEVER reached on the runtime where (1) resolves first. */
+        snprintf(out, sz, "/vms/SYS0/SYSCOMMON/%s/%s", maps[i].sub, leaf);
+        return out;
     }
     return path;
 }

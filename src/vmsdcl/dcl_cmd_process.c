@@ -1347,6 +1347,22 @@ static int dcl_resolve_activatable_acp(struct dcl_context *ctx,
                                        int *acp_usable)
 {
     *acp_usable = 0;
+
+    /* NO EXECUTIVE => this ACP path does not apply: defer to the legacy resolver
+     * (vms-104). With /dev/vms absent (the plain host ctest / the BUILD.COM S3.2
+     * host DCL driver), rms_file_attr answers from a POSIX stat, NOT the ACP --
+     * so dcl_rms_attr would report RMS$_NORMAL for SYS$SYSTEM:TCC.EXE and this
+     * function would then try to stage it OVER an ACP that isn't there and fail,
+     * turning a resolvable host-path image into a false %DCL-E-IVIMAGE. The flip
+     * only retires /vms on the RUNTIME path (real /dev/vms); the legacy
+     * SYS$SYSTEM:/SYS$SHARE: -> /vms POSIX resolution below is CORRECT and
+     * expected when no executive is present (INV-6 governs the ACP-live path,
+     * enforced by the ACP branch, not this host-defer). */
+    if (rms_executive_absent()) {
+        *acp_usable = 0;
+        return 0;
+    }
+
     const char *exts[2] = { "", ".EXE" };
     int nexts = dcl_spec_has_type(vms_spec) ? 1 : 2;
 

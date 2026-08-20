@@ -103,6 +103,16 @@ uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out);
  * (Rule 9 / INV-6: executive present => no legacy /vms fall-back). */
 int rms_executive_absent(void);
 
+/* rms_operator_log_absent (OVMX, vms-aac) - 1 when there is no MOUNTED boot
+ * volume to hold SYS$MANAGER:OPERATOR.LOG (no /dev/vms, OR /dev/vms present but
+ * the system disk not yet mounted), 0 only when it is mounted. STRICTER than
+ * rms_executive_absent(): OPCOM can only $PUT the log over the ACP once the
+ * SYSTEM DISK is mounted, so before that (early boot / an isolated executive)
+ * the record goes to the host log/console, exactly as real VMS OPCOM does until
+ * OPERATOR.LOG opens. Returning 0 only for a mounted volume keeps a $PUT that
+ * fails on a mounted volume fail-honest (Rule 9 / INV-6). */
+int rms_operator_log_absent(void);
+
 /* Positioning and I/O control */
 uint32_t sys$rewind(void *rab, void (*err)(void *), void (*suc)(void *));     /* Rewind to beginning of file */
 uint32_t sys$flush(void *rab, void (*err)(void *), void (*suc)(void *));      /* Flush buffers to disk */

@@ -86,13 +86,17 @@
 /*
  * OPERATOR.LOG is written the VMS way now (vms-aac, epic vms-208 atomic flip):
  * one RMS $PUT-at-EOF record per line over the Files-11 ODS-2 ACP when the
- * executive is PRESENT (rms_textfile.c carries the RMS-over-ACP writer). When
- * the executive is ABSENT -- host ctest / plain container / netbsd-vax cross,
- * no /dev/vms -- there is no ACP, so the record defers to the legacy host
- * writer (open_operator_log_host() below), the SAME executive-absent defer RMS
- * and IMGACT take (rms_executive_absent()). With the executive PRESENT the ACP
- * is the only path and an ACP write that fails fails honestly -- never a
- * private POSIX log on the retired /vms passthrough (Rule 9 / INV-6).
+ * SYSTEM DISK holding SYS$MANAGER is MOUNTED (rms_textfile.c carries the
+ * RMS-over-ACP writer). When there is no mounted volume for the log -- no
+ * /dev/vms (host ctest / plain container / netbsd-vax cross), OR /dev/vms
+ * present but the system disk not yet mounted (early boot / an isolated
+ * executive, as in the test_syssvc_* harness) -- there is no on-volume log, so
+ * the record defers to the legacy host/console writer (open_operator_log_host()
+ * below), where real VMS OPCOM writes before OPERATOR.LOG opens and the SAME
+ * defer RMS and IMGACT take (rms_operator_log_absent() / rms_executive_absent()).
+ * Once the log's volume IS mounted the ACP is the only path and an ACP write
+ * that fails fails honestly -- never a private POSIX log on the retired /vms
+ * passthrough (Rule 9 / INV-6).
  */
 #include "rms_textfile.h"
 #include "vmsfs/filespec.h"
@@ -103,29 +107,58 @@
 #define OPERATOR_LOG_FALLBACK "/tmp/OPERATOR.LOG"
 
 /*
- * EXECUTIVE-PRESENCE DEFER (vms-aac, epic vms-208 atomic flip; Rule 9 / INV-6).
+ * MOUNTED-VOLUME DEFER (vms-aac, epic vms-208 atomic flip; Rule 9 / INV-6).
  *
- * OPERATOR.LOG is written over the Files-11 ODS-2 ACP whenever the executive is
- * PRESENT (the flip's genuine path -- rms_textfile_append_line -> RMS $PUT-at-
- * EOF on the mounted on-volume log). When the executive is ABSENT -- a host
- * ctest, a plain-container gate, the netbsd-vax cross: no /dev/vms -- there is
- * no ACP to write, so the record is written the LEGACY host way instead, the
- * SAME defer RMS's own $OPEN/$CREATE and IMGACT's imgsrc_open() already take
- * (rms_executive_absent(), src/vmsrms/rms_core.c). This is NOT a /vms fall-back
- * when the executive IS present: with /dev/vms up the ACP path is the only one
- * taken, and an ACP write that then fails fails honestly (INV-6).
+ * OPERATOR.LOG is written over the Files-11 ODS-2 ACP whenever the SYSTEM DISK
+ * holding SYS$MANAGER is MOUNTED (the flip's genuine path --
+ * rms_textfile_append_line -> RMS $PUT-at-EOF on the on-volume log). When there
+ * is no such mounted volume -- no /dev/vms (host ctest, plain-container gate,
+ * netbsd-vax cross), OR /dev/vms present but the system disk not yet mounted
+ * (early boot, or an isolated executive with no mounted volume, as in the
+ * test_syssvc_* harness) -- there is no on-volume OPERATOR.LOG to write, so the
+ * record is written the LEGACY host way instead: the console/host log, exactly
+ * where real VMS OPCOM writes before SYS$MANAGER:OPERATOR.LOG opens at startup,
+ * and the SAME defer RMS's own $OPEN/$CREATE and IMGACT's imgsrc_open() take
+ * when /dev/vms is absent (rms_operator_log_absent() / rms_executive_absent(),
+ * src/vmsrms/rms_core.c). This is NOT a /vms masquerade with a mounted volume:
+ * once the log's volume is mounted the ACP is the only path taken, and an ACP
+ * write that then fails fails honestly (INV-6) -- the defer covers "no mounted
+ * volume", never masks a real write error on a mounted one.
  *
- * rms_executive_absent() lives in LIBVMSRMS, which links LIBVMS (this file), so
- * it is referenced WEAKLY -- the same library-layering seam rms_textfile.c uses
- * for the RMS services. An image that links vmsrms (DCL, LOGINOUT, VMSSSHD,
- * PROVISION) binds the real probe; an image that does not has no ACP at all, so
- * "absent" is the correct reading and the legacy writer is used.
+ * rms_operator_log_absent()/rms_executive_absent() live in LIBVMSRMS, which
+ * links LIBVMS (this file), so they are referenced WEAKLY -- the same
+ * library-layering seam rms_textfile.c uses for the RMS services. An image that
+ * links vmsrms (DCL, LOGINOUT, VMSSSHD, PROVISION) binds the real probe; an
+ * image that does not has no ACP at all, so "absent" is the correct reading and
+ * the legacy writer is used.
  */
 #pragma weak rms_executive_absent
 extern int rms_executive_absent(void);
+#pragma weak rms_operator_log_absent
+extern int rms_operator_log_absent(void);
 
+/*
+ * Should OPERATOR.LOG be written the LEGACY host way rather than over the ACP?
+ *
+ * OPERATOR.LOG lives on SYS$MANAGER (== SYS$SYSDEVICE), so it can only be $PUT
+ * over the Files-11 ODS-2 ACP once that SYSTEM DISK is MOUNTED. The right
+ * question is therefore MOUNT state, not mere /dev/vms presence:
+ * rms_operator_log_absent() (vms-aac) reports 1 when there is no mounted boot
+ * volume to hold the log -- no /dev/vms, OR /dev/vms present but the volume not
+ * yet mounted (early boot; or an isolated executive with no mounted volume, as
+ * in the test_syssvc_* harness). In that state OPCOM writes the host
+ * log/console, exactly as real VMS OPCOM does before OPERATOR.LOG opens at
+ * startup. It returns 0 ONLY for a mounted volume, so an ACP $PUT that then
+ * fails on a mounted volume still fails honestly below (Rule 9 / INV-6) -- this
+ * defer is for "no volume", never a mask over a real on-volume write error.
+ *
+ * Falls back to the /dev/vms-presence probe (rms_executive_absent), then to
+ * "absent", for an image that links neither (no LIBVMSRMS -> no ACP at all).
+ */
 static int operator_log_executive_absent(void)
 {
+    if (rms_operator_log_absent)
+        return rms_operator_log_absent();
     if (rms_executive_absent)
         return rms_executive_absent();
     return 1;   /* no RMS engine in this image -> no ACP reachable */
@@ -380,10 +413,13 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
      * append-mode log does. A trailing empty record reproduces the blank
      * line the old fprintf("%s\n\n") separator wrote between records.
      *
-     * EXECUTIVE-ABSENT (host ctest / plain container / netbsd-vax cross): there
-     * is no ACP, so the record is written the legacy host way instead -- the
-     * same defer RMS and IMGACT take (operator_log_executive_absent() above).
-     * This is NOT a /vms fall-back with the executive present (Rule 9 / INV-6).
+     * NO MOUNTED VOLUME (host ctest / plain container / netbsd-vax cross; or an
+     * executive with no system disk mounted yet -- early boot / the isolated
+     * test_syssvc_* harness): there is no on-volume OPERATOR.LOG, so the record
+     * is written the legacy host/console way instead -- the same defer RMS and
+     * IMGACT take, and where real VMS OPCOM writes before the log opens
+     * (operator_log_executive_absent() above). This is NOT a /vms fall-back once
+     * the log's volume is mounted (Rule 9 / INV-6).
      */
     if (operator_log_executive_absent()) {
         FILE *log = open_operator_log_host();
@@ -397,10 +433,10 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
     }
 
     /*
-     * FAIL-HONEST (Rule 9 / INV-6): the executive is present, so the ACP is the
-     * only path. A first append that returns -1 (no mounted ACP volume) reports
-     * SS$_FILACCERR -- it never falls back to a private POSIX file on the
-     * retired /vms passthrough.
+     * FAIL-HONEST (Rule 9 / INV-6): the log's volume IS mounted, so the ACP is
+     * the only path. A first append that returns -1 (write error on the mounted
+     * volume) reports SS$_FILACCERR -- it never falls back to a private POSIX
+     * file on the retired /vms passthrough.
      */
     if (rms_textfile_append_line(OPERATOR_LOG_PATH, banner) != 0)
         return SS$_FILACCERR;
@@ -560,12 +596,13 @@ uint32_t sys$brkthruw(uint32_t efn,
         snprintf(bmsgline, sizeof(bmsgline), "Message from user %s on %s",
                  buser, bnode);
 
-        /* Same one-file, one-OPCOM-record path sys$sndopr uses (vms-aac):
-         * the ACP $PUT-at-EOF writer when the executive is present, the legacy
-         * host writer when it is absent (host ctest / container / vax cross).
-         * Best-effort -- a broadcast that reached its terminal is not failed
-         * because the log is unreachable; and with the executive present there
-         * is no /vms POSIX fall-back (Rule 9 / INV-6). */
+        /* Same one-file, one-OPCOM-record path sys$sndopr uses (vms-aac): the
+         * ACP $PUT-at-EOF writer when the log's system disk is MOUNTED, the
+         * legacy host/console writer when there is no mounted volume (host
+         * ctest / container / vax cross, or an executive with no system disk
+         * mounted yet). Best-effort -- a broadcast that reached its terminal is
+         * not failed because the log is unreachable; and once the log's volume
+         * is mounted there is no /vms POSIX fall-back (Rule 9 / INV-6). */
         if (operator_log_executive_absent()) {
             FILE *log = open_operator_log_host();
             if (log) {

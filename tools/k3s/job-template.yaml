@@ -1,0 +1,80 @@
+# tools/k3s/job-template.yaml -- one-shot CI Job template for run-on-rail.sh.
+#
+# BUILD/TEST TOOLING ONLY (CLAUDE.md Rule 9). run-on-rail.sh fills the ${...}
+# placeholders via envsubst and applies the result. The pod clones the OVMX
+# repo at ${GIT_REF}, then runs the caller's command (passed base64-encoded in
+# OVMX_CMD_B64, so arbitrary shell never has to be escaped into YAML). The
+# pod's exit code IS the command's exit code -- see run-on-rail.sh.
+#
+# Pinned to k3s-worker (8 CPU / 53 GB); privileged with hostPath /dev/kvm so
+# QEMU can use `-accel kvm` on this KVM-capable bare-metal node. The GPU node
+# and k3s-cp are deliberately never targeted.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  namespace: ovmx-ci
+  labels:
+    app.kubernetes.io/managed-by: ovmx-run-on-rail
+spec:
+  backoffLimit: 0            # a failed command must NOT be retried -- exit code is the verdict
+  ttlSecondsAfterFinished: 3600
+  activeDeadlineSeconds: ${DEADLINE}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: ovmx-run-on-rail
+        ovmx.dev/job: ${JOB_NAME}
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: k3s-worker
+      containers:
+        - name: rail
+          image: ${IMAGE}
+          imagePullPolicy: Always
+          securityContext:
+            privileged: true       # needed for /dev/kvm + QEMU acceleration on this trusted homelab node
+          workingDir: /work
+          env:
+            - name: GIT_REF
+              value: "${GIT_REF}"
+            - name: REPO_URL
+              value: "${REPO_URL}"
+            - name: OVMX_CMD_B64
+              value: "${OVMX_CMD_B64}"
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          resources:
+            requests:
+              cpu: "${REQ_CPU}"
+              memory: "${REQ_MEM}"
+            limits:
+              cpu: "${LIM_CPU}"
+              memory: "${LIM_MEM}"
+          volumeMounts:
+            - name: kvm
+              mountPath: /dev/kvm
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              echo "[rail] node=${NODE_NAME} pod=$(hostname) ref=${GIT_REF}"
+              echo "[rail] cloning ${REPO_URL}"
+              git clone --filter=blob:none "${REPO_URL}" repo
+              cd repo
+              git checkout "${GIT_REF}" 2>/dev/null \
+                || { git fetch --tags origin "${GIT_REF}" && git checkout FETCH_HEAD; }
+              echo "[rail] HEAD=$(git rev-parse HEAD)  ($(git log -1 --pretty=%s))"
+              echo "${OVMX_CMD_B64}" | base64 -d > /tmp/ovmx-cmd.sh
+              echo "[rail] --- command start ---"
+              # The command's exit status becomes the container's exit status,
+              # which run-on-rail.sh reads back and re-exits with.
+              bash /tmp/ovmx-cmd.sh
+      volumes:
+        - name: kvm
+          hostPath:
+            path: /dev/kvm
+            type: CharDevice

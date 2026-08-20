@@ -2738,9 +2738,11 @@ int cmd_phone(struct dcl_command *cmd)
  * PRODUCT SHOW PRODUCT/HISTORY directly here (a fat builtin) and had no
  * PRODUCT.EXE at all; every other operation was a bare %PCSI-E-NOTIMPL.
  *
- * /SOURCE is resolved through dcl_resolve_path() before being handed to
- * PRODUCT.EXE (same as COPY/LINK's own input-file resolution), so it
- * accepts both an ordinary VMS filespec and a quoted literal Linux path.
+ * /SOURCE is passed through UNCOOKED (vms-3a8), NOT dcl_resolve_path()'d to a
+ * Linux path: the kit lives on a MOUNTed distribution volume and PRODUCT.EXE
+ * reads it by VMS filespec over the executive Files-11 ACP (do_install ->
+ * rms_open_named_handle), the VMS way -- never a /vms POSIX passthrough, which
+ * the atomic flip (vms-208) no longer materializes for a MOUNTed volume.
  * /DESTINATION is a bare device name (canonicalized upper-case with a
  * trailing colon, like cmd_mount's own device-name handling) -- not a
  * filespec, so it is passed through uncooked; PRODUCT.EXE resolves it to
@@ -2751,8 +2753,6 @@ int cmd_phone(struct dcl_command *cmd)
  */
 int cmd_product(struct dcl_command *cmd)
 {
-    struct dcl_context *ctx = dcl_get_context();
-
     if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
         dcl_error("PCSI", 0, "NOTIMPL", "operation not implemented");
         return SS$_NORMAL;
@@ -2790,9 +2790,16 @@ int cmd_product(struct dcl_command *cmd)
             dcl_error("PCSI", 2, "NOSOURCE", "missing /SOURCE kit filespec");
             return SS$_BADPARAM;
         }
-        char linuxpath[1024];
-        dcl_resolve_path(ctx, src, linuxpath, sizeof(linuxpath));
-        snprintf(source_arg, sizeof(source_arg), "/SOURCE=%s", linuxpath);
+        /* vms-3a8: pass the /SOURCE VMS filespec through UNCOOKED, exactly like
+         * /DESTINATION below. The kit lives on a MOUNTed distribution volume;
+         * PRODUCT.EXE opens it by filespec over the executive Files-11 ACP
+         * (do_install -> pd_kit_open_over_acp -> rms_open_named_handle), the
+         * VMS way. It must NOT be dcl_resolve_path()'d to a /vms POSIX
+         * passthrough: since the atomic flip (vms-208) a MOUNTed volume has no
+         * /vms Linux mirror, so the resolved path named a file that does not
+         * exist (%PCSI-E-OPENIN /vms/.../ovmx-os.kit) -- the exact Rule 9/INV-6
+         * passthrough this converged flip excises. */
+        snprintf(source_arg, sizeof(source_arg), "/SOURCE=%s", src);
         argv[argc++] = source_arg;
 
         const char *dst = dcl_qualifier_value(cmd, "DESTINATION");

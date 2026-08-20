@@ -495,6 +495,49 @@ static struct ovmx_product_record *pd_db_find_or_add(struct ovmx_product_db *db,
 }
 
 /* ================================================================
+ * Source kit reader over the executive Files-11 ACP.
+ *
+ * vms-3a8: the /SOURCE kit is a file on a MOUNTed distribution volume, so
+ * PRODUCT INSTALL reads it by VMS filespec over the ACP-routed RMS positioned
+ * I/O (rms_open_named_handle + rms_io_lseek/read_exact) -- exactly the way it
+ * WRITES the destination -- never a POSIX open() of a /vms passthrough path
+ * (Rule 9 / INV-6). ovmx_kit_reader stays RMS-free (host packer link); this is
+ * the RMS backend it consumes through ovmx_kit_source_t. On the executive-absent
+ * host defer, rms_open_named_handle transparently POSIX-wraps the resolved
+ * on-volume path, so a bare `ctest` still reads a default-system kit; the
+ * runtime never reaches that defer.
+ * ================================================================ */
+
+static int pd_kit_rms_pread(void *ctx, void *buf, size_t n, uint64_t off)
+{
+    rms_file_t *h = (rms_file_t *)ctx;
+    if (rms_io_lseek(h, (off_t)off, SEEK_SET) == (off_t)-1)
+        return -1;
+    return (rms_io_read_exact(h, buf, n) == (ssize_t)n) ? 0 : -1;
+}
+
+static void pd_kit_rms_close(void *ctx)
+{
+    rms_close_named_handle((rms_file_t *)ctx);
+}
+
+/* Open @source (a VMS filespec on a mounted volume) as a kit over the ACP.
+ * Returns OVMX_KIT_READER_OK or the negative ovmx_kit_reader_err_t; on the
+ * open-of-the-kit-file failure it sets *acp_st to the RMS/SS$ status so the
+ * caller can print an honest %PCSI-E-OPENIN. */
+static int pd_kit_open_over_acp(ovmx_kit_reader_t *r, const char *source,
+                                uint32_t *acp_st)
+{
+    *acp_st = 0;
+    rms_file_t *h = rms_open_named_handle(source, /*want_write*/0, /*create*/0, acp_st);
+    if (!h)
+        return OVMX_KIT_READER_ERR_OPEN;
+
+    ovmx_kit_source_t src = { h, pd_kit_rms_pread, pd_kit_rms_close };
+    return ovmx_kit_reader_open_source(r, &src);
+}
+
+/* ================================================================
  * PRODUCT INSTALL
  * ================================================================ */
 
@@ -528,11 +571,12 @@ static int do_install(int argc, char *argv[])
         return 1;
 
     ovmx_kit_reader_t r;
-    int rc = ovmx_kit_reader_open(&r, source);
+    uint32_t kit_st = 0;
+    int rc = pd_kit_open_over_acp(&r, source, &kit_st);
     if (rc != OVMX_KIT_READER_OK) {
         switch (rc) {
         case OVMX_KIT_READER_ERR_OPEN:
-            fprintf(stderr, "%%PCSI-E-OPENIN, cannot open %s: %s\n", source, strerror(errno));
+            fprintf(stderr, "%%PCSI-E-OPENIN, cannot open %s (0x%08X)\n", source, kit_st);
             break;
         case OVMX_KIT_READER_ERR_NOTKIT:
             fprintf(stderr, "%%PCSI-E-BADKIT, %s is not an OVMX kit file\n", source);

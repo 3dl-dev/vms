@@ -46,18 +46,53 @@ typedef enum {
     OVMX_KIT_READER_ERR_BADSPEC = -6,  /* malformed target filespec (see relpath below) */
 } ovmx_kit_reader_err_t;
 
+/*
+ * The byte source a kit is pulled from. Two backends exist, and the reader
+ * body (index + per-file reads, checksum verification) is identical over both:
+ *
+ *   - POSIX fd (ovmx_kit_reader_open) -- factory build tooling
+ *     (tools/ovmx_kit_pack.c) and the executive-absent host ctest defer, where
+ *     a kit is a plain Linux file.
+ *   - An ACP-routed RMS handle (ovmx_kit_reader_open_source, caller-supplied)
+ *     -- PRODUCT.EXE at RUNTIME reads its /SOURCE kit off the MOUNTed
+ *     distribution volume by VMS filespec over the Files-11 ACP (vms-3a8),
+ *     never a /vms POSIX passthrough (Rule 9 / INV-6). The RMS backend lives in
+ *     src/product/product.c so this module keeps its minimal, RMS-free
+ *     dependency graph (the host packer must not drag in libvmsrms).
+ *
+ * @pread reads EXACTLY @n bytes at absolute byte offset @off into @buf,
+ * returning 0 on success or -1 on any short read/error (positioned I/O, no
+ * cursor state shared with the reader). @close releases @ctx and is called
+ * once by ovmx_kit_reader_close(); either may be NULL.
+ */
+typedef struct ovmx_kit_source {
+    void *ctx;
+    int  (*pread)(void *ctx, void *buf, size_t n, uint64_t off);
+    void (*close)(void *ctx);
+} ovmx_kit_source_t;
+
 typedef struct {
-    int fd;
+    ovmx_kit_source_t src;
     struct ovmx_kit_header hdr;
 } ovmx_kit_reader_t;
 
 /*
- * Open @kitfile, validate the magic and header checksum, and cache the
- * header in *r. Returns OVMX_KIT_READER_OK or a negative
- * ovmx_kit_reader_err_t. On error, *r is left with fd == -1 (safe to call
+ * Open @kitfile as a plain POSIX file, validate the magic and header checksum,
+ * and cache the header in *r. Returns OVMX_KIT_READER_OK or a negative
+ * ovmx_kit_reader_err_t. On error, *r is left with a NULL source (safe to call
  * ovmx_kit_reader_close() unconditionally).
  */
 int ovmx_kit_reader_open(ovmx_kit_reader_t *r, const char *kitfile);
+
+/*
+ * Bind an already-opened, caller-supplied byte @source (e.g. an ACP-routed RMS
+ * handle), validate the magic and header checksum, and cache the header in *r.
+ * The reader takes ownership of @source->ctx: on success ovmx_kit_reader_close()
+ * will call @source->close; on failure this function calls it before returning,
+ * so the caller never double-frees. Returns OVMX_KIT_READER_OK or a negative
+ * ovmx_kit_reader_err_t.
+ */
+int ovmx_kit_reader_open_source(ovmx_kit_reader_t *r, const ovmx_kit_source_t *source);
 
 /*
  * Read the r->hdr.kh_file_count-entry index into a freshly calloc'd array.

@@ -89,6 +89,16 @@
 #ifndef offsetof
 #define offsetof(type, member) __builtin_offsetof(type, member)
 #endif
+/*
+ * NULL is likewise not guaranteed when ods2_edit.c compiles as its own
+ * standalone TU (it never pulls the <sys/systm.h> -> libkern chain that would
+ * otherwise define it). ods2_kind_for_filespec() and other inline surfaces in
+ * this header use NULL, so define it self-sufficiently here too, guarded so it
+ * is a no-op if a real <stddef.h>/libkern already landed first.
+ */
+#ifndef NULL
+#define NULL ((void *)0)
+#endif
 #else
 #include <stdint.h>
 #include <stddef.h>

@@ -92,9 +92,14 @@
 #include "ovmx_layout.h"
 #include "ssdef.h"
 #include "lib$routines.h"   /* lib$cvt_vectim: Unix->VMS binary time (vms-3dd) */
+/* ODS2_FK_* file-kind selectors: needed on EVERY target, not just Linux --
+ * rms_open_named_handle() passes ODS2_FK_DATA (the RFM=VAR back-compat default)
+ * unconditionally, and this header cross-compiles cleanly (it is the same
+ * vmsfs/ods2.h the netbsd-vax module build already consumes). Keeping the
+ * include Linux-only left ODS2_FK_DATA undeclared on the VAX cross-build. */
+#include "vmsfs/ods2.h"     /* ODS2_FK_* file-kind selectors for IO$_CREATE    */
 #if defined(__linux__)
 #include "vms_kif.h"        /* vms-bc7: the Files-11 ODS-2 ACP over /dev/vms   */
-#include "vmsfs/ods2.h"     /* ODS2_FK_* file-kind selectors for IO$_CREATE    */
 #endif
 
 /*

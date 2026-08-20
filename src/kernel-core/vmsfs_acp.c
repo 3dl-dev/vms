@@ -2723,6 +2723,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             ods2_uic_t owner;
             uint16_t fileprot = 0;
             int is_dir = (args.attr.filechar & ODS2_FH2_M_DIRECTORY) != 0;
+            uint32_t alloc_count;
 
             /* Resolve the directory (for the entry + version selection). */
             memset(&did, 0, sizeof(did));
@@ -2756,16 +2757,23 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             status = acp_fid_alloc(vol, sc->ibblk, &new_fidnum);
             if (status != SS__NORMAL) { args.status = status; goto free_sc; }
 
-            /* Optional initial allocation (FIB$L_EXSZ). */
-            if (args.exsz > 0) {
+            /* Optional initial allocation (FIB$L_EXSZ). A NEW DIRECTORY is
+             * always born as exactly one block (vms-3a8): the ODS-2 writer's
+             * ods2_wvolume_create_dir() does the same, and acp_dir_mutate --
+             * which the FIRST IO$M_CREATE into this directory drives -- requires
+             * at least one mapped data block (dl.n != 0) to insert into. Without
+             * this a directory created over the ACP had zero blocks and every
+             * create inside it failed SS$_DEVICEFULL. */
+            alloc_count = is_dir ? 1u : args.exsz;
+            if (alloc_count > 0) {
                 acp_snap_from_vol(&sc->snap, vol);
-                status = acp_bitmap_alloc(&sc->snap, &sc->rw, args.exsz, &alloc_lbn);
+                status = acp_bitmap_alloc(&sc->snap, &sc->rw, alloc_count, &alloc_lbn);
                 if (status != SS__NORMAL) {
                     (void)acp_fid_free(vol, new_fidnum, sc->ibblk);  /* roll back the FID */
                     args.status = status;
                     goto free_sc;
                 }
-                ext.lbn = alloc_lbn; ext.count = args.exsz; n_ext = 1;
+                ext.lbn = alloc_lbn; ext.count = alloc_count; n_ext = 1;
             }
 
             /* Build the FH2. Owner = the creating process's UIC (INV-6). */
@@ -2800,6 +2808,25 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
              * EOF to the empty position so a later $PUT/WRITEVBLK extends from 0. */
             if (n_ext > 0 && !is_dir) {
                 (void)ods2_fh2_set_eof(sc->filehdr, args.exsz, 1, 0);
+                ods2_fh2_reseal(sc->filehdr);
+            } else if (is_dir) {
+                /* A new directory's single block is an EMPTY ODS-2 directory:
+                 * all-0xFF (ODS2_DIR_END at offset 0), exactly as the writer's
+                 * ods2_wvolume_create_dir does -- without the fill the first
+                 * IO$M_CREATE into it would misparse the uninitialised block.
+                 * EOF = one full block used (hiblk=1, efblk=2, ffbyte=0).
+                 * (vms-3a8; sc->tdirhdr is the MODIFY!M_MOVE scratch, unused on
+                 * the CREATE path, so borrowing it here clobbers nothing.) */
+                memset(sc->tdirhdr, 0xFF, ACP_BLOCK_SIZE);
+                if (exec_blockdev_write_block(vol->backing_major, vol->backing_minor,
+                                              alloc_lbn, sc->tdirhdr, ACP_BLOCK_SIZE) != 0) {
+                    (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
+                    if (n_ext > 0)
+                        (void)acp_free_file_blocks(vol, sc->filehdr, sc, 1);
+                    args.status = SS__DEVNOTMOUNT;
+                    goto free_sc;
+                }
+                (void)ods2_fh2_set_eof(sc->filehdr, 1, 2, 0);
                 ods2_fh2_reseal(sc->filehdr);
             }
 

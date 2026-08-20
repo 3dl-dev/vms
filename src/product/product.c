@@ -104,13 +104,38 @@
 #include "ovmx_product_db.h"
 
 /*
- * vmsfs_protection_to_mode() lives in libvmsfs (src/vmsfs/vmsfs_protect.c).
- * Its canonical prototype is declared in DCL's own internal header
- * (src/vmsdcl/include/dcl/dcl_cmd.h) rather than a public vmsfs header --
- * declared locally here since this standalone utility has no reason to
- * pull in the rest of DCL just for one function.
+ * vms-3a8 (converged flip, Wall 1): route PRODUCT INSTALL through the executive
+ * Files-11 ACP, exactly as RMS and AUTHORIZE already do -- never a POSIX
+ * open()/write()/mkdir() on a /mnt/<dev> passthrough (Rule 9 / INV-6). The flip
+ * (vms-481, epic vms-208) moved MOUNT to the executive-global ACP: a MOUNTed
+ * volume has NO /proc/mounts row and NO /mnt/<dev> Linux mount, so the old
+ * pd_mount_point_is_mounted("/mnt/<dev>") probe reported %PCSI-E-NOTMOUNTED for a
+ * unit the ACP had just mounted, and -- even bypassed -- do_install's raw
+ * open()/write() landed the kit on the CONTAINER filesystem, never on the target
+ * volume's backing disk, so a separate boot of that disk (R1 e2e vms-37f
+ * container 2) found nothing installed.
+ *
+ *   - Destination detection: $ASSIGN a channel to the named unit through the ACP
+ *     (vms_kif_acp_assign). Success => the executive has it mounted; SS$_NOSUCHDEV
+ *     => genuinely not mounted => %PCSI-E-NOTMOUNTED (fail-honest).
+ *   - Directory tree: create SYS0/SYSCOMMON/<bracket> on the target volume over
+ *     the ACP (IO$_CREATE of NAME.DIR files, vms_kif_acp_fileop), the VMS way.
+ *   - File + database writes: a fresh versioned file per kit entry through RMS
+ *     (rms_open_named_handle create + rms_io_write_exact = $CREATE + block $PUT),
+ *     which is itself ACP-routed and write-through synchronous -- durable across
+ *     the install's DISMOUNT and the container boundary.
+ *
+ * When /dev/vms is unreachable (host ctest, plain-container gates) RMS's own
+ * atomic-flip defer (rms_acp_absent) transparently POSIX-wraps the resolved
+ * on-volume path, so a bare `ctest` still exercises the default-system paths;
+ * the runtime never reaches that defer (Rule 9). Directory creation mirrors the
+ * same split (ACP IO$_CREATE when present, mkdir -p on the defer).
  */
-extern mode_t vmsfs_protection_to_mode(uint16_t vms_prot);
+#include "ssdef.h"          /* $VMS_STATUS_SUCCESS, SS$_NOSUCHFILE/_NOSUCHDEV */
+#include "vmsfs/ods2.h"     /* ODS2_FH2_M_DIRECTORY */
+#include "vms_kif.h"        /* vms_kif_acp_assign/_access/_deaccess/_fileop, _dassgn */
+#include "rms_io.h"         /* rms_open_named_handle / rms_io_write_exact / ... */
+#include "rms/rms.h"        /* rms_executive_absent */
 
 #define PRODUCT_DB_NAME "VMS$PRODUCT_DATABASE.DAT"
 
@@ -118,52 +143,10 @@ static const char *pd_months[] = {
     "JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"
 };
 
-/* ================================================================
- * Small pure helpers duplicated from src/vmsdcl/dcl_cmd_misc.c's
- * cmd_mount()/cmd_dismount() (vms-651). Both are documented there as
- * "a PURE FUNCTION of the name -- any process can compute it without
- * asking anyone", which is exactly what lets a SEPARATE process
- * (PRODUCT.EXE, exec'd fresh by dcl_exec_utility) determine where a
- * device MOUNTed by an earlier DCL command landed, with no shared
- * per-process state to inherit across the fork+exec boundary.
- * ================================================================ */
-
-static void pd_mount_point_for_device(const char *log_name, char *buf, size_t sz)
-{
-    char lower[16];
-    size_t i;
-    for (i = 0; log_name[i] && i < sizeof(lower) - 1; i++)
-        lower[i] = (char)tolower((unsigned char)log_name[i]);
-    lower[i] = '\0';
-    snprintf(buf, sz, "/mnt/%s", lower);
-}
-
-static int pd_mount_point_is_mounted(const char *mount_point)
-{
-    FILE *fp = fopen("/proc/mounts", "r");
-    if (!fp)
-        return 0;
-
-    char line[512];
-    size_t mp_len = strlen(mount_point);
-    int found = 0;
-    while (fgets(line, sizeof(line), fp)) {
-        char *field2 = strchr(line, ' ');
-        if (!field2) continue;
-        field2++;
-        char *after = strchr(field2, ' ');
-        if (!after) continue;
-        size_t flen = (size_t)(after - field2);
-        if (flen == mp_len && strncmp(field2, mount_point, flen) == 0) {
-            found = 1;
-            break;
-        }
-    }
-    fclose(fp);
-    return found;
-}
-
-/* mkdir -p, ignoring EEXIST, over every '/'-separated component of @path. */
+/* mkdir -p, ignoring EEXIST, over every '/'-separated component of @path.
+ * Used ONLY on the executive-absent (host ctest / plain-container) defer, where
+ * RMS itself falls back to POSIX; the runtime creates directories over the ACP
+ * (pd_acp_mkdir_tree) and never reaches this. */
 static int pd_mkdir_parents(const char *path)
 {
     char accum[4096] = "";
@@ -180,41 +163,36 @@ static int pd_mkdir_parents(const char *path)
     return 0;
 }
 
-static int pd_mkdir_parent_of_file(const char *filepath)
-{
-    char parent[4096];
-    snprintf(parent, sizeof(parent), "%s", filepath);
-    char *slash = strrchr(parent, '/');
-    if (!slash)
-        return 0;
-    *slash = '\0';
-    if (parent[0] == '\0')
-        return 0;
-    return pd_mkdir_parents(parent);
-}
-
 /* ================================================================
  * Destination resolution: where a /DESTINATION device (or the default,
- * currently-running system) actually lands files. See the file header
- * comment for the two-shape policy this implements.
+ * currently-running system) actually lands files, and how a kit entry's
+ * relative path becomes a VMS filespec on that volume. See the file header
+ * comment for the ACP-routed policy this implements.
  * ================================================================ */
 
 struct pd_dest {
-    int  is_default;              /* no /DESTINATION given */
-    char devname[16];             /* canonical "DKA100:" form, "" if default */
-    char mount_root[256];         /* Linux path files land under */
+    int  is_default;              /* no /DESTINATION given                     */
+    char devname[16];             /* canonical "DKA100:" form (default: DKA0:) */
 };
 
-/* @destarg is the raw qualifier value (may be NULL/empty) with or without
- * a trailing colon, any case. Returns 0 and fills *dest, or -1 with an
- * honest message already printed (destination named but not mounted). */
+/* @destarg is the raw qualifier value (may be NULL/empty) with or without a
+ * trailing colon, any case. Returns 0 and fills *dest, or -1 with an honest
+ * message already printed (destination named but not mounted in the executive).
+ *
+ * The DEFAULT (currently-running system) needs no mount check -- its own system
+ * disk is by definition mounted -- so it is never probed. An explicit
+ * /DESTINATION is verified through the executive Files-11 ACP: $ASSIGN a channel
+ * to the unit (vms_kif_acp_assign). SS$_NOSUCHDEV -- the ONLY "not a mounted
+ * volume" status -- yields %PCSI-E-NOTMOUNTED (fail-honest, INV-6); this is also
+ * what an executive-absent host returns, correctly refusing a /DESTINATION
+ * install with no /dev/vms. */
 static int pd_resolve_destination(const char *destarg, struct pd_dest *dest)
 {
     memset(dest, 0, sizeof(*dest));
 
     if (!destarg || !destarg[0]) {
         dest->is_default = 1;
-        snprintf(dest->mount_root, sizeof(dest->mount_root), "%s", SYSDISK_MOUNT);
+        snprintf(dest->devname, sizeof(dest->devname), "%s:", SYSDISK_DEVICE);
         return 0;
     }
 
@@ -229,129 +207,278 @@ static int pd_resolve_destination(const char *destarg, struct pd_dest *dest)
         dest->devname[i + 1] = '\0';
     }
 
-    char log_name[16];
-    snprintf(log_name, sizeof(log_name), "%s", dest->devname);
-    size_t ln = strlen(log_name);
-    if (ln > 0 && log_name[ln - 1] == ':')
-        log_name[ln - 1] = '\0';
-
-    pd_mount_point_for_device(log_name, dest->mount_root, sizeof(dest->mount_root));
-
-    if (!pd_mount_point_is_mounted(dest->mount_root)) {
+    uint32_t chan = 0;
+    uint32_t st = vms_kif_acp_assign(dest->devname, &chan);
+    if (!$VMS_STATUS_SUCCESS(st)) {
         fprintf(stderr, "%%PCSI-E-NOTMOUNTED, destination device %s is not mounted\n",
                 dest->devname);
         return -1;
     }
+    vms_kif_dassgn(chan);   /* only wanted to confirm it is a mounted volume */
     dest->is_default = 0;
     return 0;
 }
 
 /*
- * Where a kit entry's relative path ("SYSEXE/DCL.EXE") lands.
+ * Turn a kit entry's relative path ("SYSEXE/DCL.EXE", "SYSEXE/SUB/FOO.DAT", or a
+ * bare "FOO.DAT" for a [000000] entry) into (a) the on-volume rooted directory
+ * path in ODS-2 "A.B.C" form and (b) the full VMS filespec on the destination
+ * device.
  *
- * BOTH the default (currently-running system) and an explicit /DESTINATION
- * lay the kit into the SAME rooted, concealed system-disk structure a
- * mastered ovmx-distrib.img already has (vms-96ec, vms-649,
- * docs/design-vms-faithful-install.md §3.5): SYS0/ is the boot root and
- * SYS0/SYSCOMMON/ the shared common tree, so an entry's own bracket
- * ("SYSEXE", "SYSLIB", ...) hangs off SYS0/SYSCOMMON/, exactly matching
+ * BOTH the default and an explicit /DESTINATION lay the kit into the SAME
+ * rooted, concealed system-disk structure a mastered ovmx-distrib.img already
+ * has (vms-96ec, vms-649, docs/design-vms-faithful-install.md §3.5): SYS0 is the
+ * boot root and SYS0.SYSCOMMON the shared common tree, so an entry's own bracket
+ * ("SYSEXE", "SYSLIB", ...) hangs off SYS0.SYSCOMMON, exactly matching
  * ovmx_layout.h's VMS_SYSEXE == DEV:[SYS0.SYSCOMMON.SYSEXE] and the tree
- * distro/Dockerfile.bootable masters DKA0: from (/vms/SYS0/SYSCOMMON/...).
+ * distro/Dockerfile.bootable masters DKA0: from. This is what makes a
+ * /DESTINATION-installed volume BOOTABLE AS ITS OWN system disk: booting mounts
+ * the target as DKA0: and STARTUP resolves SYS$SYSROOT:[SYSEXE]DCL.EXE through
+ * the rooted structure -- precisely where these bytes land, because the
+ * SYS0.SYSCOMMON prefix lives ON the volume and is mount-point-independent. Do
+ * not reintroduce a flat branch -- a flat target is not a system disk (Rule 1:
+ * match VMS; INV-6: really bootable, not a flag).
  *
- * This is what makes a /DESTINATION-installed volume BOOTABLE AS ITS OWN
- * system disk: booting mounts the target as DKA0: -> /vms and STARTUP
- * resolves SYS$SYSROOT:[SYSEXE]DCL.EXE through VMS_SYSTEM_DIR
- * (/vms/SYS0/SYSCOMMON/SYSEXE) -- which is precisely where these bytes now
- * land, because the SYS0/SYSCOMMON prefix lives ON the volume and is
- * therefore mount-point-independent. Before this fix the /DESTINATION path
- * wrote a FLAT <mount>/SYSEXE/... with no SYS0/SYSCOMMON root, so the
- * installed target halted at boot with %OVMX-F-SYSINIT (DCL.EXE absent):
- * the boot path looked under the rooted structure and found nothing.
- * Do not reintroduce a flat branch here -- a flat target is not a system
- * disk (Rule 1: match VMS; INV-6: really bootable, not a flag).
+ * Returns 0, or -1 on overflow / a malformed relpath.
  */
-static void pd_kit_target_path(const struct pd_dest *dest, const char *relpath,
-                               char *out, size_t outsz)
+static int pd_vms_paths(const struct pd_dest *dest, const char *relpath,
+                        char *dirpath, size_t dpsz,     /* "SYS0.SYSCOMMON.SYSEXE" */
+                        char *filespec, size_t fssz)    /* "DKA100:[<dir>]DCL.EXE" */
 {
-    if (dest->is_default)
-        snprintf(out, outsz, "%s/SYS0/SYSCOMMON/%s", SYSDISK_MOUNT, relpath);
+    char work[4096];
+    snprintf(work, sizeof(work), "%s", relpath);
+
+    /* Split off the trailing filename; the rest are directory components. */
+    char *slash = strrchr(work, '/');
+    const char *fname;
+    char dircomp[3072];
+    dircomp[0] = '\0';
+    if (slash) {
+        *slash = '\0';
+        fname = slash + 1;
+        /* Turn the '/'-separated directory portion into '.'-separated ODS-2
+         * bracket components. */
+        for (char *p = work; *p; p++)
+            if (*p == '/') *p = '.';
+        snprintf(dircomp, sizeof(dircomp), "%s", work);
+    } else {
+        fname = work;               /* bare basename ([000000] entry) */
+    }
+    if (!fname[0])
+        return -1;
+
+    if (dircomp[0])
+        snprintf(dirpath, dpsz, "SYS0.SYSCOMMON.%s", dircomp);
     else
-        snprintf(out, outsz, "%s/SYS0/SYSCOMMON/%s", dest->mount_root, relpath);
+        snprintf(dirpath, dpsz, "SYS0.SYSCOMMON");
+
+    snprintf(filespec, fssz, "%s[%s]%s", dest->devname, dirpath, fname);
+    return 0;
 }
 
-/*
- * Where SYS$SYSTEM:VMS$PRODUCT_DATABASE.DAT lives for this destination.
- * SYS$SYSTEM: is SYSEXE under the common root, so the database sits inside
- * the SAME rooted structure as every installed file (vms-96ec) -- on the
- * default target that is VMS_SYSTEM_DIR (/vms/SYS0/SYSCOMMON/SYSEXE), and
- * on a /DESTINATION target the identical SYS0/SYSCOMMON/SYSEXE off the
- * target's own mount root, so PRODUCT SHOW PRODUCT /DESTINATION reads it
- * back from where INSTALL wrote it.
- */
+/* The VMS filespec of SYS$SYSTEM:VMS$PRODUCT_DATABASE.DAT on this destination:
+ * SYS$SYSTEM: is SYSEXE under the common root, so the database sits inside the
+ * SAME rooted structure as every installed file (vms-96ec), read back from where
+ * INSTALL wrote it by PRODUCT SHOW PRODUCT /DESTINATION. */
 static void pd_db_path(const struct pd_dest *dest, char *out, size_t outsz)
 {
-    if (dest->is_default)
-        snprintf(out, outsz, "%s/%s", VMS_SYSTEM_DIR, PRODUCT_DB_NAME);
-    else
-        snprintf(out, outsz, "%s/SYS0/SYSCOMMON/SYSEXE/%s",
-                 dest->mount_root, PRODUCT_DB_NAME);
+    snprintf(out, outsz, "%s[SYS0.SYSCOMMON.SYSEXE]%s", dest->devname, PRODUCT_DB_NAME);
 }
 
 /* ================================================================
- * Product database: whole-file struct fread()/fwrite(), same idiom as
- * src/imgact/known_images.h's KFE database (see ovmx_product_db.h).
+ * Directory tree creation over the executive Files-11 ACP.
+ *
+ * A fresh INITIALIZEd ODS-2 target has only an empty MFD ([000000]); PRODUCT
+ * INSTALL must create SYS0/SYSCOMMON/<bracket> before RMS $CREATE can enter a
+ * file there. This walks the "A.B.C" path component by component, IO$_ACCESSing
+ * each "<COMP>.DIR;1" under the running parent DID and, when absent
+ * (SS$_NOSUCHFILE), IO$_CREATEing a directory file (attr.filechar =
+ * ODS2_FH2_M_DIRECTORY) -- the VMS way DCL CREATE/DIRECTORY reaches the ACP.
+ * Fail-honest: any non-SS$_NOSUCHFILE access failure is returned as-is (INV-6).
+ * ================================================================ */
+
+/* Uppercase @comp and append ".DIR" into @out ("SYSEXE" -> "SYSEXE.DIR"). */
+static void pd_dir_filename(const char *comp, char *out, size_t outsz)
+{
+    size_t i = 0;
+    for (; comp[i] && i + 5 < outsz; i++)
+        out[i] = (char)toupper((unsigned char)comp[i]);
+    out[i] = '\0';
+    strncat(out, ".DIR", outsz - strlen(out) - 1);
+}
+
+static uint32_t pd_acp_mkdir_tree(const char *devname, const char *dirpath)
+{
+    uint32_t chan = 0;
+    uint32_t st = vms_kif_acp_assign(devname, &chan);
+    if (!$VMS_STATUS_SUCCESS(st))
+        return st;
+
+    /* Parent DID, starting at the MFD (all-zero DID). */
+    uint16_t pdn = 0, pds = 0;
+    uint8_t  pdr = 0, pdx = 0;
+
+    char work[256];
+    snprintf(work, sizeof(work), "%s", dirpath);
+    char *save = NULL, *tok;
+    for (tok = strtok_r(work, ".", &save); tok; tok = strtok_r(NULL, ".", &save)) {
+        char nm[VMS_ACP_NAME_SIZE];
+        pd_dir_filename(tok, nm, sizeof(nm));
+
+        struct vms_acp_access_args a;
+        memset(&a, 0, sizeof(a));
+        a.chan = chan;
+        a.did_num = pdn; a.did_seq = pds; a.did_rvn = pdr; a.did_nmx = pdx;
+        a.version = 1;                          /* directories are version ;1 */
+        strncpy(a.name, nm, VMS_ACP_NAME_SIZE - 1);
+
+        st = vms_kif_acp_access(&a);
+        if ($VMS_STATUS_SUCCESS(st)) {
+            pdn = a.fid_num; pds = a.fid_seq; pdr = a.fid_rvn; pdx = a.fid_nmx;
+            vms_kif_acp_deaccess(chan);         /* only wanted its FID */
+            continue;
+        }
+        if (st != SS$_NOSUCHFILE) {             /* honest error, not "absent" */
+            vms_kif_dassgn(chan);
+            return st;
+        }
+
+        struct vms_acp_fileop_args fop;
+        memset(&fop, 0, sizeof(fop));
+        fop.chan      = chan;
+        fop.func      = VMS_ACP_FOP_CREATE;
+        fop.modifiers = VMS_ACP_M_CREATE;       /* enter it in the parent dir */
+        fop.did_num = pdn; fop.did_seq = pds; fop.did_rvn = pdr; fop.did_nmx = pdx;
+        fop.version   = 1;
+        fop.attr.filechar = ODS2_FH2_M_DIRECTORY;   /* => is_dir in the ACP */
+        strncpy(fop.name, nm, VMS_ACP_NAME_SIZE - 1);
+
+        st = vms_kif_acp_fileop(&fop);
+        if (!$VMS_STATUS_SUCCESS(st)) {
+            vms_kif_dassgn(chan);
+            return st;
+        }
+        pdn = fop.fid_num; pds = fop.fid_seq; pdr = fop.fid_rvn; pdx = fop.fid_nmx;
+    }
+
+    vms_kif_dassgn(chan);
+    return SS$_NORMAL;
+}
+
+/* Ensure @dirpath ("SYS0.SYSCOMMON.SYSEXE") exists on @dest. On the runtime the
+ * ACP creates it (pd_acp_mkdir_tree); on the executive-absent host defer -- where
+ * RMS itself POSIX-wraps the on-volume path under SYSDISK_MOUNT -- mkdir -p the
+ * corresponding Linux directory (default destination only; a /DESTINATION target
+ * has no host mount and is refused honestly by pd_resolve_destination). Returns 0
+ * on success, -1 with a message printed. */
+static int pd_ensure_tree(const struct pd_dest *dest, const char *dirpath)
+{
+    if (rms_executive_absent()) {
+        if (!dest->is_default) {
+            fprintf(stderr, "%%PCSI-E-NOTMOUNTED, %s has no executive Files-11 ACP\n",
+                    dest->devname);
+            return -1;
+        }
+        char linux_dir[4096], slashed[256];
+        snprintf(slashed, sizeof(slashed), "%s", dirpath);
+        for (char *p = slashed; *p; p++)
+            if (*p == '.') *p = '/';
+        snprintf(linux_dir, sizeof(linux_dir), "%s/%s", SYSDISK_MOUNT, slashed);
+        if (pd_mkdir_parents(linux_dir) != 0) {
+            fprintf(stderr, "%%PCSI-E-MKDIR, cannot create directory %s: %s\n",
+                    linux_dir, strerror(errno));
+            return -1;
+        }
+        return 0;
+    }
+
+    uint32_t st = pd_acp_mkdir_tree(dest->devname, dirpath);
+    if (!$VMS_STATUS_SUCCESS(st)) {
+        fprintf(stderr, "%%PCSI-E-MKDIR, cannot create directory [%s] on %s (0x%08X)\n",
+                dirpath, dest->devname, st);
+        return -1;
+    }
+    return 0;
+}
+
+/* ================================================================
+ * File + product-database writes through RMS ($CREATE + block $PUT), which is
+ * itself ACP-routed and write-through synchronous on the runtime, POSIX-wrapped
+ * on the executive-absent defer -- src/vmsrms/rms_io.h rms_open_named_handle.
+ * ================================================================ */
+
+/* Write @len bytes of @buf to VMS filespec @spec as a fresh versioned file.
+ * Returns 0 on success, -1 with a %PCSI- message printed. */
+static int pd_write_file(const char *spec, const uint8_t *buf, size_t len)
+{
+    uint32_t st = 0;
+    rms_file_t *h = rms_open_named_handle(spec, /*want_write*/1, /*create*/1, &st);
+    if (!h) {
+        fprintf(stderr, "%%PCSI-E-CREATE, cannot create %s (0x%08X)\n", spec, st);
+        return -1;
+    }
+    int rc = 0;
+    if (len > 0 && rms_io_write_exact(h, buf, len) != 0) {
+        fprintf(stderr, "%%PCSI-E-WRITE, write failed for %s\n", spec);
+        rc = -1;
+    }
+    if (rc == 0)
+        rms_io_fsync(h);
+    rms_close_named_handle(h);
+    return rc;
+}
+
+/* 1 if VMS filespec @spec names a file that already exists on its volume
+ * (IO$_ACCESS by name over the ACP), 0 otherwise. */
+static int pd_file_exists(const char *spec)
+{
+    uint32_t st = 0;
+    rms_file_t *h = rms_open_named_handle(spec, /*want_write*/0, /*create*/0, &st);
+    if (h) {
+        rms_close_named_handle(h);
+        return 1;
+    }
+    return 0;
+}
+
+/* ================================================================
+ * Product database: whole-struct read/write through the same ACP-routed RMS
+ * handle (same idiom as src/imgact/known_images.h's KFE database).
  * ================================================================ */
 
 /* Always yields a valid (possibly empty) database -- there is nothing to
  * roll back to on a target that has never had a product installed. */
-static void pd_db_load(const char *path, struct ovmx_product_db *db)
+static void pd_db_load(const char *spec, struct ovmx_product_db *db)
 {
     memset(db, 0, sizeof(*db));
     memcpy(db->db_magic, OVMX_PRODDB_MAGIC, OVMX_PRODDB_MAGIC_LEN);
     db->db_format_version = OVMX_PRODDB_FORMAT_VERSION;
     db->db_record_count = 0;
 
-    FILE *fp = fopen(path, "rb");
-    if (!fp)
+    uint32_t st = 0;
+    rms_file_t *h = rms_open_named_handle(spec, /*want_write*/0, /*create*/0, &st);
+    if (!h)
         return;
 
     struct ovmx_product_db tmp;
-    if (fread(&tmp, sizeof(tmp), 1, fp) == 1 &&
+    ssize_t got = rms_io_read_exact(h, &tmp, sizeof(tmp));
+    if (got == (ssize_t)sizeof(tmp) &&
         memcmp(tmp.db_magic, OVMX_PRODDB_MAGIC, OVMX_PRODDB_MAGIC_LEN) == 0 &&
         tmp.db_format_version == OVMX_PRODDB_FORMAT_VERSION &&
         tmp.db_record_count <= OVMX_PRODDB_MAX_PRODUCTS) {
         *db = tmp;
     }
-    fclose(fp);
+    rms_close_named_handle(h);
 }
 
-/* Writes the whole struct, then applies a real, non-world-writable
- * protection (never the create()-default left as-is by accident, and
- * never 777) -- the database is itself a system file. Owner UIC is
- * whatever this process (PRODUCT INSTALL, expected to run as SYSTEM)
- * already creates it as; no chown needed for the account that made it. */
-static int pd_db_save(const char *path, const struct ovmx_product_db *db)
+/* Writes the whole struct as a fresh versioned SYS$SYSTEM: file through the ACP.
+ * Protection/owner follow the executive's create-time defaults (SYSTEM's UIC +
+ * VMSFS_PROT_DEFAULT) -- a system file, never world-writable -- the same policy
+ * every installed kit file now takes (see the do_install note; the fchmod/fchown
+ * that once ran on a raw POSIX fd governed only the retired passthrough path). */
+static int pd_db_save(const char *spec, const struct ovmx_product_db *db)
 {
-    if (pd_mkdir_parent_of_file(path) != 0)
-        return -1;
-
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0)
-        return -1;
-
-    FILE *fp = fdopen(fd, "wb");
-    if (!fp) {
-        close(fd);
-        return -1;
-    }
-    size_t wrote = fwrite(db, sizeof(*db), 1, fp);
-    fflush(fp);
-    int ffd = fileno(fp);
-    fchmod(ffd, vmsfs_protection_to_mode(OVMX_KIT_PROT_DEFAULT));
-    fsync(ffd);
-    fclose(fp);
-
-    return (wrote == 1) ? 0 : -1;
+    return pd_write_file(spec, (const uint8_t *)db, sizeof(*db));
 }
 
 static struct ovmx_product_record *pd_db_find_or_add(struct ovmx_product_db *db,
@@ -451,37 +578,36 @@ static int do_install(int argc, char *argv[])
             failed = 1; break;
         }
 
-        char target[8192];
-        pd_kit_target_path(&dest, rel, target, sizeof(target));
+        char dirpath[512], spec[8192];
+        if (pd_vms_paths(&dest, rel, dirpath, sizeof(dirpath),
+                         spec, sizeof(spec)) != 0) {
+            fprintf(stderr, "%%PCSI-E-BADSPEC, malformed target filespec: %s\n",
+                    e->ke_filespec);
+            failed = 1; break;
+        }
 
         /*
          * vms-2c9: a seed-once entry (a site-customizable template the kit
          * ships, e.g. SYS$MANAGER:SYSTARTUP_VMS.COM -- ovmx_kit_format.h's
          * OVMX_KIT_ENTRY_FLAG_SEED_ONCE) is written only when the target
-         * does not already exist. Absent means either a fresh install or a
-         * destination that has never had this file: write it below like
-         * any other entry. Present means an UPGRADE over an
-         * already-populated destination -- that copy is the SITE'S, not
-         * the kit's, so PRESERVE it: skip the write entirely, leaving its
-         * content, protection, and owner UIC untouched, rather than
-         * clobbering a site customization the way real OpenVMS never
-         * reprovisions SYS$MANAGER: startup procedures once seeded (the
-         * failure vms-f05's upgrade-e2e gate measured). A kit with no flag
-         * on this entry (every kit built before vms-2c9, ke_flags == 0)
-         * never takes this branch, so install behavior for such kits is
-         * unchanged (API/format backward compat).
+         * does not already exist ON THE VOLUME (an IO$_ACCESS by name over the
+         * ACP, not a POSIX stat). Present means an UPGRADE over an
+         * already-populated destination -- that copy is the SITE'S, not the
+         * kit's, so PRESERVE it, matching the way real OpenVMS never
+         * reprovisions SYS$MANAGER: startup procedures once seeded (vms-f05).
+         * A kit with no flag on this entry (ke_flags == 0) never takes this
+         * branch, so install behavior for such kits is unchanged.
          */
         if (e->ke_flags & OVMX_KIT_ENTRY_FLAG_SEED_ONCE) {
-            struct stat st;
-            if (stat(target, &st) == 0) {
+            if (pd_file_exists(spec)) {
                 preserved++;
                 continue;
             }
         }
 
-        if (pd_mkdir_parent_of_file(target) != 0) {
-            fprintf(stderr, "%%PCSI-E-MKDIR, cannot create directory for %s: %s\n",
-                    target, strerror(errno));
+        /* Create SYS0/SYSCOMMON/<bracket> on the target volume over the ACP
+         * before RMS $CREATE enters the file there. */
+        if (pd_ensure_tree(&dest, dirpath) != 0) {
             failed = 1; break;
         }
 
@@ -493,44 +619,22 @@ static int do_install(int argc, char *argv[])
             failed = 1; break;
         }
 
-        /* Restrictive placeholder mode until the real kit-metadata
-         * protection is applied below -- never left at this value, and
-         * never opened with a permissive create mode (vms-df9 constraint
-         * #2: protection/UIC come from the kit, not a default). */
-        int fd = open(target, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-        if (fd < 0) {
-            fprintf(stderr, "%%PCSI-E-CREATE, cannot create %s: %s\n",
-                    target, strerror(errno));
+        /*
+         * Write the entry to the target volume by VMS filespec through RMS
+         * ($CREATE + block $PUT) -- an ACP write to the volume's backing disk,
+         * write-through synchronous, durable across the install's DISMOUNT
+         * (vms-3a8). Protection/owner UIC follow the executive's create-time
+         * defaults (SYSTEM's UIC + VMSFS_PROT_DEFAULT); the kit's own metadata
+         * is numerically identical to those for every kit shipped today, and
+         * the old fchmod/fchown on a raw POSIX fd governed only the retired
+         * /mnt passthrough (a divergent per-file protection remains the
+         * vms-738 follow-up, unchanged by this fix -- never more permissive
+         * than the create default, so not a security regression).
+         */
+        if (pd_write_file(spec, buf, (size_t)e->ke_size) != 0) {
             free(buf); failed = 1; break;
         }
-        if (buf && write(fd, buf, e->ke_size) != (ssize_t)e->ke_size) {
-            fprintf(stderr, "%%PCSI-E-WRITE, write failed for %s: %s\n",
-                    target, strerror(errno));
-            free(buf); close(fd); failed = 1; break;
-        }
         free(buf);
-
-        /* Protection + owner UIC FROM THE KIT METADATA, never a default --
-         * see the file header comment (vms-79b/vms-738) for why this does
-         * not yet durably persist a value that DIFFERS from vmsfs_blkdev_
-         * create()'s own defaults (a kernel-side gap, not a security hole:
-         * a new file can never land more permissive than create()'s own
-         * VMSFS_PROT_DEFAULT). The calls still run and still fail loudly
-         * on a real error -- they are correct for every kit shipped today,
-         * where the kit's own metadata already matches those defaults. */
-        mode_t mode = vmsfs_protection_to_mode(e->ke_protection);
-        if (fchmod(fd, mode) != 0) {
-            fprintf(stderr, "%%PCSI-E-SETPROT, cannot set protection on %s: %s\n",
-                    target, strerror(errno));
-            close(fd); failed = 1; break;
-        }
-        if (fchown(fd, e->ke_uic_member, e->ke_uic_group) != 0) {
-            fprintf(stderr, "%%PCSI-E-SETOWNER, cannot set owner UIC [%u,%u] on %s: %s\n",
-                    e->ke_uic_group, e->ke_uic_member, target, strerror(errno));
-            close(fd); failed = 1; break;
-        }
-        fsync(fd);
-        close(fd);
         installed++;
     }
 
@@ -541,7 +645,7 @@ static int do_install(int argc, char *argv[])
         return 1;
     }
 
-    /* Record the installation in the product database. */
+    /* Record the installation in the target volume's own product database. */
     char dbpath[8192];
     pd_db_path(&dest, dbpath, sizeof(dbpath));
 
@@ -562,8 +666,7 @@ static int do_install(int argc, char *argv[])
     pr->pr_state = OVMX_PRODUCT_STATE_INSTALLED;
 
     if (pd_db_save(dbpath, &db) != 0) {
-        fprintf(stderr, "%%PCSI-E-DBWRITE, cannot write product database %s: %s\n",
-                dbpath, strerror(errno));
+        /* pd_db_save already printed the specific %PCSI-E-CREATE/WRITE. */
         ovmx_kit_reader_close(&r);
         return 1;
     }

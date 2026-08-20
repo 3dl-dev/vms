@@ -42,6 +42,13 @@
 #   6. QEMU is KILLED and a FRESH process boots against the SAME disk
 #      files -- the product database AND the installed files persist
 #      (same anti-tmpfs proof as test_mount_e2e.sh's MOUNTTST.TXT).
+#   7. PER-FILE PROTECTION FIDELITY (vms-738): install a second kit whose one
+#      file carries a DIVERGENT ke_protection (0xFF00, not the ordinary-file
+#      class default 0xAA00), then DIRECTORY/FULL the installed file and read
+#      its genuine ODS-2 fh2_fileprot back over the ACP. It must be the kit's
+#      0xFF00 (S:RWED,O:RWED,G:,W:), not the create-time class default World:RE
+#      -- proof each installed file lands with its OWN VMS protection from the
+#      kit metadata, stamped into the file header over the ACP (not a chmod).
 #
 # Usage (run INSIDE the bootable image, like test_mount_e2e.sh):
 #   docker build -f distro/Dockerfile.bootable -t ovmx-boot .
@@ -107,7 +114,7 @@ boot_qemu() {  # boot_qemu <log-file> <fifo-path>
     # SYS$UPDATE:OVMX-OS.KIT by distro/Dockerfile.bootable (see the file
     # header for why not a raw third virtio disk).
     # shellcheck disable=SC2086
-    timeout "$((BOOT_TIMEOUT + RUN_TIMEOUT * 14 + 60))" $QEMU $MACHINE \
+    timeout "$((BOOT_TIMEOUT + RUN_TIMEOUT * 17 + 60))" $QEMU $MACHINE \
         -kernel "$KERNEL" -initrd "$INITRD" \
         -nographic -append "$CONSOLE loglevel=3 quiet" \
         -m 512M -smp 1 -nic none -nodefaults -serial stdio \
@@ -273,6 +280,55 @@ if printf '%s\n' "$SHOW_SEG_BEFORE" | grep -qiE 'X86VMS VMS' \
 else
     bad "PRODUCT SHOW PRODUCT /DESTINATION=DKA100: does not list the installed kit"
     echo "$SHOW_SEG_BEFORE"
+fi
+
+# --- 7. PER-FILE PROTECTION FIDELITY (vms-738): install a kit whose one file
+#        carries a DIVERGENT ke_protection (0xFF00 = S:RWED,O:RWED,G:,W: --
+#        system+owner only), then read the INSTALLED file's genuine ODS-2
+#        fh2_fileprot back over the ACP (DIRECTORY/FULL -> rms_file_attr ->
+#        IO$_ACCESS ATR list). The proof kit (SYS$UPDATE:PROOF-PROT.KIT, staged
+#        by distro/Dockerfile.bootable) authors an ORDINARY filename whose
+#        per-file CLASS default would be 0xAA00 (G:RE,W:RE); if the installer
+#        took that create-time default instead of the kit's ke_protection the
+#        header would read World:RE. It must read the kit's 0xFF00 (G:,W: empty)
+#        -- proof the file's protection came from the kit metadata and was
+#        stamped into the ODS-2 header over the ACP, NOT a chmod / class default.
+OFF=$(wc -c <"$LOG")
+send 'PRODUCT INSTALL PROOFPROT /SOURCE=SYS$UPDATE:PROOF-PROT.KIT /DESTINATION=DKA100:'
+if wait_for '%PCSI-I-DONE' "$RUN_TIMEOUT" "$OFF"; then
+    ok "PRODUCT INSTALL of the per-file-protection proof kit reports %PCSI-I-DONE"
+else
+    dump_and_die "PRODUCT INSTALL of PROOF-PROT.KIT did not reach %PCSI-I-DONE"
+fi
+
+OFF=$(wc -c <"$LOG")
+send 'DIRECTORY DKA100:[SYS0.SYSCOMMON.SYSEXE]PROOFPROT.DAT /FULL'
+wait_for 'File protection' "$RUN_TIMEOUT" "$OFF"
+PROT_SEG=$(segment_since "$OFF")
+PROT_LINE=$(printf '%s\n' "$PROT_SEG" | grep 'File protection')
+echo "installed PROOFPROT.DAT header protection: $PROT_LINE"
+if printf '%s\n' "$PROT_LINE" | grep -qF 'Group:, World:' \
+    && ! printf '%s\n' "$PROT_LINE" | grep -qF 'World:RE'; then
+    ok "installed file's ODS-2 fh2_fileprot is the kit's divergent 0xFF00 (S:RWED,O:RWED,G:,W:), NOT the class default World:RE"
+else
+    bad "installed file's protection did not match the kit's ke_protection (expected G:,W: empty; got: $PROT_LINE)"
+    echo "$PROT_SEG"
+fi
+
+# The "matches" half for an ORDINARY file: a real-kit image (HELP.EXE) whose
+# ke_protection is the class default must read back World:RE -- the installer
+# writes each file's own ke_protection into the header, ordinary or divergent.
+OFF=$(wc -c <"$LOG")
+send 'DIRECTORY DKA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE /FULL'
+wait_for 'File protection' "$RUN_TIMEOUT" "$OFF"
+HPROT_SEG=$(segment_since "$OFF")
+HPROT_LINE=$(printf '%s\n' "$HPROT_SEG" | grep 'File protection')
+echo "installed HELP.EXE header protection: $HPROT_LINE"
+if printf '%s\n' "$HPROT_LINE" | grep -qF 'World:RE'; then
+    ok "installed ordinary image HELP.EXE reads back its kit ke_protection (World:RE), never world-writable"
+else
+    bad "installed HELP.EXE protection unexpected (expected World:RE; got: $HPROT_LINE)"
+    echo "$HPROT_SEG"
 fi
 
 # DISMOUNT before killing QEMU so umount(2) flushes the volume cleanly

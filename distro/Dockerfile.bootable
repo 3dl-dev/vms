@@ -722,6 +722,30 @@ RUN mkdir -p /kit-stage/SYSEXE /kit-stage/SYSLIB /kit-stage/SYSMGR /kit-stage/SY
     cp /boot/ovmx-os.kit /system-stage/vms/SYS0/SYSCOMMON/SYSUPD/OVMX-OS.KIT && \
     echo "OK: ovmx-os.kit staged at SYS\$UPDATE:OVMX-OS.KIT for the distrib image"
 
+# vms-738 per-file protection PROOF fixture. Build a tiny second kit whose one
+# file (PROOFPROT.DAT, an ORDINARY name -> per-file CLASS default 0xAA00 =
+# G:RE,W:RE) is then OVERWRITTEN in the kit index to a DIVERGENT protection
+# 0xFF00 (S:RWED,O:RWED,G:,W: -- system+owner only), the case a real PCSI kit
+# authors and the case that DISTINGUISHES "installer honoured the kit's
+# ke_protection" from "installer took the create-time class default" (the two
+# coincide for every ordinary file, so only a divergent entry proves the fix).
+# ke_protection sits at byte 128 of the 160-byte entry; the index starts at the
+# 128-byte header end -> absolute offset 256 for a single-file kit. The `list`
+# re-read below is a FAIL-CLOSED guard: if that layout ever drifts, the image
+# build breaks here (loudly) rather than the e2e silently proving nothing.
+# tests/qemu/test_product_install_e2e.sh installs this over the ACP and asserts
+# the installed file's ODS-2 fh2_fileprot reads back 0xFF00, not the default.
+RUN mkdir -p /proof-stage/SYSEXE && \
+    printf 'vms-738 per-file protection proof fixture\n' > /proof-stage/SYSEXE/PROOFPROT.DAT && \
+    /src/build-static/bin/ovmx_kit_pack pack /boot/proof-prot.kit /proof-stage "PROOFPROT" && \
+    printf '\000\377' | dd of=/boot/proof-prot.kit bs=1 seek=256 count=2 conv=notrunc status=none && \
+    PROOFLINE=$(/src/build-static/bin/ovmx_kit_pack list /boot/proof-prot.kit | grep 'PROOFPROT.DAT') && \
+    echo "proof kit entry after patch: $PROOFLINE" && \
+    echo "$PROOFLINE" | grep -qF '(S:RWED,O:RWED,G:,W:)' \
+        || { echo "FAIL: proof-prot.kit patch did not yield the divergent 0xFF00 protection (kit layout drift?)"; exit 1; } && \
+    cp /boot/proof-prot.kit /system-stage/vms/SYS0/SYSCOMMON/SYSUPD/PROOF-PROT.KIT && \
+    echo "OK: proof-prot.kit staged at SYS\$UPDATE:PROOF-PROT.KIT (divergent 0xFF00, vms-738 proof)"
+
 # -- Distribution system-disk image (vms-8ab) ----------------------------------
 # Master a PRE-INSTALLED, bootable VMSFS system disk from the SAME populated
 # /vms system tree the system-tree staging stage just assembled above (/system-stage/vms:

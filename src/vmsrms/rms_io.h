@@ -154,6 +154,23 @@ rms_file_t *rms_open_named_handle(const char *vms_spec, int want_write,
 rms_file_t *rms_open_named_handle_kind(const char *vms_spec, int want_write,
                                        int create, unsigned kind,
                                        uint32_t *st_out);
+
+/* rms_open_named_handle_kind_prot (vms-738): identical to _kind, but a create
+ * (create==1) stamps the new file's ODS-2 fh2_fileprot from `fileprot` -- a VMS
+ * SOGW protection mask in ovmx_fileprot.h encoding (== the on-disk fh2_fileprot
+ * layout, set nibble bit = access DENIED) -- carried into the ACP IO$_CREATE as
+ * attr.fileprot with VMS_ACP_ATTR_PROT set, exactly the header path SYSUAF/
+ * RIGHTSLIST/images take. PRODUCT INSTALL passes each kit entry's ke_protection
+ * so an installed file carries its OWN VMS protection in the file header,
+ * enforced by the executive ACP -- never a POSIX chmod. `fileprot == 0` means
+ * "no explicit protection": the ACP/ods2_fh2_build then applies the per-file
+ * CLASS default (ods2_class_fileprot), so rms_open_named_handle_kind() is
+ * exactly this with fileprot==0 (behaviour unchanged). Like `kind`, `fileprot`
+ * is ignored when create==0 and on the executive-absent POSIX defer (no on-disk
+ * FH2 there -- that path is host build/test tooling, not the runtime, INV-6). */
+rms_file_t *rms_open_named_handle_kind_prot(const char *vms_spec, int want_write,
+                                            int create, unsigned kind,
+                                            uint16_t fileprot, uint32_t *st_out);
 void        rms_close_named_handle(rms_file_t *h);
 
 #endif /* RMS_IO_H */

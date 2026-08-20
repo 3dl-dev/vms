@@ -69,10 +69,13 @@
  * in OVMX_IMGACT mode), which is all this header-only reader needs. */
 #include "sysgen_params.h"
 /* SYSBOOT> conversational-boot prompt (vms-b81) -- operates on the SAME
- * SYS$SYSTEM:OVMXVMSSYS.PAR, just resolved to a raw Linux directory
- * (VMS_SYSTEM_DIR) instead of through vmsfs_to_linux_path(), because it has
- * to run before the device table exists -- see sysboot.h and
- * bare_metal_init() below. */
+ * SYS$SYSTEM:OVMXVMSSYS.PAR every other consumer uses. On the Linux atomic-flip
+ * runtime (vms-46c) it reaches that file over the executive Files-11 ACP, the
+ * same genuine ODS-2 volume the flagless path mounts -- NO /vms passthrough. The
+ * NetBSD-vax backend still resolves it to a raw Linux directory (VMS_SYSTEM_DIR)
+ * until its own flip (vms-d5d). Either way SYSBOOT runs before the device table
+ * exists, which is why it takes the physical path, not vmsfs_to_linux_path() --
+ * see sysboot.h and bare_metal_init() below. */
 #include "sysboot.h"
 /* Boot-plumbing substrate seam (vms-28f, epic vms-8e8): the ONE header PID 1
  * includes for the host-OS boot primitives it needs -- load-executive-module,
@@ -383,7 +386,15 @@ static void provision_disk_mount_points(void)
  */
 static int executive_fd = -1;
 
-static void executive_attach(void)
+/*
+ * executive_attach_silent - load vms.ko and open /dev/vms, WITHOUT emitting the
+ * %OVMX-I-EXEC console line. Idempotent. Split out for the conversational boot
+ * path (vms-46c): that path must attach the executive BEFORE the SYSBOOT> prompt
+ * (the Files-11 ACP $MOUNT of the system disk needs it) but must emit NOTHING
+ * before "SYSBOOT> " (docs/design-boot-faithful.md §3.1). The announce is
+ * deferred there to executive_announce(), after the prompt.
+ */
+static void executive_attach_silent(void)
 {
     if (executive_fd >= 0)
         return;                 /* already attached; idempotent by design */
@@ -408,7 +419,22 @@ static void executive_attach(void)
          * facility (Rule 10). */
         ovmx_exec_halt("VMS executive device /dev/vms did not open", strerror(errno));
     }
+}
+
+/* Emit the %OVMX-I-EXEC line for an executive already attached (silently) by
+ * executive_attach_silent(). The conversational path calls this after the
+ * SYSBOOT> prompt returns; every other path gets it via executive_attach(). */
+static void executive_announce(void)
+{
     printf("%%OVMX-I-EXEC, VMS executive attached on /dev/vms\n");
+}
+
+static void executive_attach(void)
+{
+    if (executive_fd >= 0)
+        return;                 /* already attached; idempotent by design */
+    executive_attach_silent();
+    executive_announce();
 }
 
 /*
@@ -610,21 +636,76 @@ static void bare_metal_init(void)
     /*
      * ---- Conversational boot path (vms-b81) ----
      *
-     * SYSBOOT needs the system disk mounted to read/write the real
-     * SYS$SYSTEM:OVMXVMSSYS.PAR (sysboot.h's header comment explains why it
-     * cannot go through the normal filespec translator this early). Mounting
-     * it needs only vmsfs.ko, not the executive -- unlike the flagless
-     * branch above, executive_attach() is deliberately NOT called until
-     * after the prompt returns.
-     *
-     * The diagnostic lines the flagless branch prints INLINE, as each step
-     * happens, are DEFERRED here to after the (optional) prompt instead:
-     * same text, same order relative to each other, just moved as a whole
-     * block -- because on this path they would otherwise print before
-     * SYSBOOT>, which the oracle capture (§3.1) shows nothing does. The
-     * banner (vms-1fb) is deferred the same way and for the same reason:
-     * §3.1 shows NOTHING preceding "SYSBOOT> ", not even the banner.
+     * SYSBOOT reads/writes the real SYS$SYSTEM:OVMXVMSSYS.PAR (sysboot.h's
+     * header explains why it cannot go through the normal filespec translator
+     * this early). The diagnostic lines the flagless branch prints INLINE are
+     * DEFERRED here to after the (optional) prompt -- same text, same order
+     * relative to each other, moved as a whole block -- because on this path
+     * they would otherwise print before "SYSBOOT> ", which the oracle capture
+     * (§3.1) shows nothing does. The banner (vms-1fb) and the %OVMX-I-EXEC line
+     * are deferred the same way and for the same reason.
      */
+#if defined(OVMX_BOOT_LINUX)
+    /*
+     * ATOMIC FLIP (vms-46c): SYSBOOT reaches OVMXVMSSYS.PAR over the executive
+     * Files-11 (ODS-2) ACP -- the SAME genuine volume the flagless path mounts,
+     * with NO /vms passthrough (that residual is exactly what vms-46c excises).
+     * The ACP $MOUNT requires the executive, so it is attached HERE, before the
+     * prompt -- but SILENTLY (executive_attach_silent): §3.1 shows NOTHING
+     * precedes "SYSBOOT> ", not even %OVMX-I-EXEC. A disk that is absent or will
+     * not ACP-mount is a fail-honest halt, exactly as on the flagless path --
+     * OVMX finds its installed system disk or does not boot (design-init-scope.md
+     * §1); it never legacy-mounts vmsfs or installs.
+     */
+    executive_attach_silent();
+
+    if (!ovmx_boot_system_disk_present()) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "no system disk %s (DKA0:)",
+                 ovmx_boot_system_disk_dev());
+        ovmx_sysinit_halt(
+            msg,
+            "the system disk is not present; OVMX does not install one at boot");
+    }
+    if (ovmx_boot_mount_system_disk_native() != 0) {
+        char msg[128];
+        snprintf(msg, sizeof(msg),
+                 "system disk %s (%s) would not mount",
+                 ovmx_boot_system_disk_unit(), ovmx_boot_system_disk_dev());
+        ovmx_sysinit_halt(
+            msg,
+            "the volume is not an installed genuine system disk; "
+            "OVMX does not initialize or install it at boot");
+    }
+
+    /* The system disk is ACP-mounted. Load the real parameter set over the ACP
+     * (or factory defaults if the volume has none yet), run the prompt, and
+     * stash the result for read_boot_parameters(). sysboot's ACP reader/writer
+     * is silent -- no output precedes "SYSBOOT> ". */
+    sysboot_load_working_set(&conversational_boot_params, VMS_SYSTEM_DIR,
+                              "OVMXVMSSYS", "PAR");
+    sysboot_run_prompt(&conversational_boot_params, VMS_SYSTEM_DIR,
+                        "OVMXVMSSYS", "PAR", VMS_STARTUP_PATH);
+    conversational_boot_result_valid = 1;
+
+    /* SYSBOOT has handed over -- emit the deferred narration in the flagless
+     * branch's order (vms-1fb): the executive-attach line (already attached
+     * above, announced now), the banner, then the mount lines. */
+    executive_announce();
+    print_banner_once();
+    printf("%%OVMX-I-SYSDISK, mounting system disk DKA0:\n");
+    printf("%%OVMX-I-MOUNTED, system disk DKA0: mounted\n");
+
+    /* vms.ko is loaded (executive_attach_silent() above); emit the taint mask
+     * readout, gated on the ovmx.taintreport boot flag (vms-566). */
+    report_kernel_taint();
+
+    provision_disk_mount_points();
+    return;
+#else
+    /* ---- NetBSD-vax backend: its pre-flip parameter I/O (its own ACP flip is
+     * vms-d5d). Mounting needs only vmsfs.ko, not the executive, so the
+     * executive is NOT attached until after the prompt returns. ---- */
     int vmsfs_load_failed =
         (ovmx_boot_load_module("vmsfs") != 0 && errno != EEXIST);
     int vmsfs_errno = errno;
@@ -687,6 +768,7 @@ static void bare_metal_init(void)
     executive_attach();
     print_banner_once();
     provision_disk_mount_points();
+#endif /* OVMX_BOOT_LINUX */
 }
 
 /* ------------------------------------------------------------------ */

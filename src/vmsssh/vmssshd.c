@@ -405,7 +405,12 @@ static void handle_connection(ssh_session session)
             close(slave_fd);
 
         /* ---- Step 1: Initialize PCB with user identity ---- */
-        uint64_t user_privs = parse_privilege_string(sysuaf_rec.privileges);
+        /* vms-26a: take the persona mask from the binary $UAFDEF quadword,
+         * mirroring LOGINOUT (tools/vms_login.c). Re-parsing the rendered
+         * name string drops MOUNT and other privileges outside the string
+         * parser's 17-name subset. See sysuaf_record_privileges() in
+         * sysuaf.h. */
+        uint64_t user_privs = sysuaf_record_privileges(&sysuaf_rec);
 
         /*
          * ESTABLISH THE AUTHENTICATED IDENTITY IN THE EXECUTIVE (vms-2b8),

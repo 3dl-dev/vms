@@ -3772,7 +3772,9 @@ jobs:
     name: IMGACT.EXE Activation Proof (musl)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
 
     steps:
@@ -3820,7 +3822,9 @@ jobs:
     # Fixed by linking the vmslink host tools statically in IMGACT mode
     # (src/vmslink/CMakeLists.txt) + adding src/libvms/include to the imgact
     # target's include path (src/imgact/CMakeLists.txt, for imgact_prodreg.h).
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
 
     steps:
@@ -3903,7 +3907,9 @@ jobs:
     name: LINK.EXE VMS-native Linker (MVP)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -3987,7 +3993,9 @@ jobs:
     name: DECC$SHR VMS-native C-RTL Shareable
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4029,7 +4037,9 @@ jobs:
     name: VMS-native LINK.EXE Graph via CMake (OVMX_LINK_NATIVE)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
 
     steps:
@@ -4124,7 +4134,9 @@ jobs:
     name: IMGACT.EXE Symbol-Vector Activation
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4161,7 +4173,9 @@ jobs:
     name: libvmssys VMS-native Link + Activate
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4202,7 +4216,9 @@ jobs:
     name: DECC$SHR C-RTL Activation (musl init)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4243,7 +4259,9 @@ jobs:
     name: Lib-Shareable Transitive Import Activation
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4270,7 +4288,9 @@ jobs:
     name: TLS Producer / C-RTL Coexistence Activation
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4297,7 +4317,9 @@ jobs:
     name: vmsprocess VMS-native Migration (LIBVMSPROCESS$SHR)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4324,7 +4346,9 @@ jobs:
     name: vmslnm VMS-native Migration (LIBVMSLNM$SHR)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4351,7 +4375,9 @@ jobs:
     name: vmsfs VMS-native Migration (LIBVMSFS$SHR)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4378,7 +4404,9 @@ jobs:
     name: libvms VMS-native Migration (LIBVMS$SHR)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
 
     steps:
@@ -4405,7 +4433,9 @@ jobs:
     name: vmsrms VMS-native Migration (LIBVMSRMS$SHR)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
 
     steps:
@@ -4443,7 +4473,9 @@ jobs:
     name: Multi-Object main() Executable Link + Activate
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4552,7 +4584,9 @@ jobs:
     name: Executable-Own TLS Link + Activate
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4589,7 +4623,9 @@ jobs:
     name: DCL.EXE VMS-native Link + Activate (self-hosting S1)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
 
     steps:
@@ -4666,7 +4702,9 @@ jobs:
     name: LOGINOUT.EXE VMS-native Link + Activate (login chain)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
 
     steps:
@@ -4789,7 +4827,9 @@ jobs:
     name: tcc Object LINK.EXE Compatibility (S2 crux, musl)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
 
     steps:
@@ -4841,7 +4881,9 @@ jobs:
     name: TCC.EXE VMS-native Link + Activate (self-hosting S2 endpoint)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
 
     steps:
@@ -4880,7 +4922,9 @@ jobs:
     name: TCC.EXE RMS File I/O (sys$open/$get read, sys$create/$put write)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
 
     steps:
@@ -4936,7 +4980,9 @@ jobs:
     name: TCC.EXE Self-Host Fixpoint (tcc compiles tcc inside OVMX, S2 summit)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
 
     steps:
@@ -4986,7 +5032,9 @@ jobs:
     name: LINK.EXE VMS-native Self-Link + Activate (self-hosting S3.1, arm64)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
 
     steps:
@@ -5115,7 +5163,9 @@ jobs:
     name: BUILD.COM DCL driver — compile+link+run, no bash (self-hosting S3.2)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
 
     steps:
@@ -5155,7 +5205,9 @@ jobs:
     name: LINK.EXE self-host fixpoint — OVMX builds LINK.EXE, gen2==gen3, no bash (self-hosting S4)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
 
     steps:

@@ -69,10 +69,13 @@
  * in OVMX_IMGACT mode), which is all this header-only reader needs. */
 #include "sysgen_params.h"
 /* SYSBOOT> conversational-boot prompt (vms-b81) -- operates on the SAME
- * SYS$SYSTEM:OVMXVMSSYS.PAR, just resolved to a raw Linux directory
- * (VMS_SYSTEM_DIR) instead of through vmsfs_to_linux_path(), because it has
- * to run before the device table exists -- see sysboot.h and
- * bare_metal_init() below. */
+ * SYS$SYSTEM:OVMXVMSSYS.PAR every other consumer uses. On the Linux atomic-flip
+ * runtime (vms-46c) it reaches that file over the executive Files-11 ACP, the
+ * same genuine ODS-2 volume the flagless path mounts -- NO /vms passthrough. The
+ * NetBSD-vax backend still resolves it to a raw Linux directory (VMS_SYSTEM_DIR)
+ * until its own flip (vms-d5d). Either way SYSBOOT runs before the device table
+ * exists, which is why it takes the physical path, not vmsfs_to_linux_path() --
+ * see sysboot.h and bare_metal_init() below. */
 #include "sysboot.h"
 /* Boot-plumbing substrate seam (vms-28f, epic vms-8e8): the ONE header PID 1
  * includes for the host-OS boot primitives it needs -- load-executive-module,

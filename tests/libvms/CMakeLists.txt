@@ -271,6 +271,28 @@ target_link_libraries(test_libvms_sysuaf_auth PRIVATE
 )
 add_test(NAME test_libvms_sysuaf_auth COMMAND test_libvms_sysuaf_auth)
 
+# vms-26a — the login persona privilege mask must come from the BINARY $UAFDEF
+# quadword (sysuaf_record_privileges), NOT a re-parse of the rendered name
+# string. The atomic flip's expanded name string, fed back through the
+# 17-name parse_privilege_string() table (no MOUNT row), silently dropped
+# MOUNT so SYSTEM logged in without it and `MOUNT DKA100:` returned NOPRIV.
+# Builds the seed SYSTEM record exactly as tools/mksysuaf.c does and asserts
+# the persona mask carries MOUNT while the old string path does not. Needs the
+# vmsprocess include for the OLD path (vms/privs.h) it contrasts against.
+add_executable(test_libvms_sysuaf_priv_persona
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_priv_persona.c)
+target_include_directories(test_libvms_sysuaf_priv_persona PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/vmsprocess/include
+)
+target_link_libraries(test_libvms_sysuaf_priv_persona PRIVATE
+    vms
+    pthread
+    m
+)
+add_test(NAME test_libvms_sysuaf_priv_persona
+         COMMAND test_libvms_sysuaf_priv_persona)
+
 # Tests vms-e60 (SYSUAF.DAT UIC fields are OCTAL) and vms-2f8 (F$IDENTIFIER
 # READS the rights database) MIGRATED to the QEMU kernel-executive harness by
 # vms-d37: tests/qemu/test_syssvc_sysuaf_uic_base.c and

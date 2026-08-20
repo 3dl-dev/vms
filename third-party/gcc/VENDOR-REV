@@ -1,0 +1,111 @@
+Vendored package:  GNU GCC (compiler proper, C front end scope only: cc1)
+Upstream URL:      https://ftp.gnu.org/gnu/gcc/gcc-14.2.0/gcc-14.2.0.tar.xz
+                    (official GNU FTP release tarball)
+Pinned release:    gcc-14.2.0 (2024-08-01 upstream release)
+Tarball SHA256:    a7b39bc69cbf9e25826c5a60ab26477001f7c08d85cec04bc0e29cabed6f3cc9
+Vendored:          2026-08-20
+License:           GPLv3+ (with the GCC Runtime Library Exception on runtime
+                    pieces we did NOT vendor — see PRUNED). GPL vendoring is
+                    IN-BOUNDS to OVMX's clean-room HARD INVARIANT (CLAUDE.md
+                    Rule 8): Rule 8 covers VMS *formats/protocols* derived
+                    only from public docs + observation, not upstream
+                    open-source *tool* source. Same basis as
+                    third-party/tcc, third-party/openssh, third-party/binutils.
+
+SCOPE (epic vms-da0, F2 "GCC-as-VMS-oracle" — the compiler-proper forcing
+function, following F1's GNU as): this vendoring needs GCC's C front end
+(cc1) plus the middle end/backend it shares with every language, and the
+host-side build support libraries (libcpp, libiberty, libdecnumber,
+libbacktrace) that `make all-gcc` links into cc1/cc1's driver. It explicitly
+does NOT need: gdb (never shipped in GCC's own tarball), any OTHER language
+front end (ada/c++/d/fortran/go/jit/m2/rust/objc++), the target runtime
+libraries (libgcc/libstdc++-v3/libgomp/libitm/libatomic/libquadmath/
+libsanitizer/libvtv/libobjc/libssp/libphobos/libgo/libgm2/libgrust/libcc1/
+libffi — none are needed to build the HOST tool cc1 itself, only to build
+target code with it, which this bead does not reach), the maintainer/
+translation trees (po/, contrib/, maintainer-scripts/), or the DejaGNU test
+fixtures (gcc/testsuite/ alone is 469M — never a build dependency of
+`make all-gcc`).
+
+PRUNED from the stock 14.2.0 release tree (largest first):
+  - gcc/testsuite/            469M  DejaGNU test fixtures, not a build dep
+  - libstdc++-v3/             117M  target C++ runtime — THIS IS THE NAMED F2
+                                     WALL ITSELF (see report); intentionally
+                                     NOT vendored here since this bead's job
+                                     is to CATALOG the gap, not backfill it.
+                                     A future libstdc++-port bead should
+                                     vendor this tree fresh (or reuse this
+                                     tarball's SHA) rather than assume this
+                                     copy is still current.
+  - libgo/                     57M  Go runtime — go/ FE not vendored
+  - gcc/po/                    74M  translations, --disable-nls anyway
+  - gcc/ada/                   61M  Ada FE, not vendored (ada/ dir removed)
+  - libphobos/                 22M  D runtime — d/ FE not vendored
+  - libgcc/                    19M  target C runtime — `make all-gcc` (host
+                                     tools only) does not build this; needed
+                                     only for `make all`/a working target
+                                     compiler, out of scope for wall-catalog
+  - libgomp/                   16M  OpenMP runtime, target lib
+  - gcc/m2/                    15M  Modula-2 FE
+  - gcc/cp/                    14M  C++ FE (cc1plus) — explicitly OUT of
+                                     scope; this bead is the *C* front end
+                                     (cc1), which is what F2's "compiler
+                                     proper" line item names. cc1 is itself
+                                     compiled AS C++ regardless (GCC's own
+                                     implementation language since 4.7), so
+                                     the libstdc++ wall applies with or
+                                     without gcc/cp/ present.
+  - gcc/doc/ KEPT (17M, low risk to configure/build, left in)
+  - gcc/fortran/               11M  Fortran FE
+  - libsanitizer/            6.8M  target runtime (asan/ubsan/tsan)
+  - contrib/                 6.6M  maintainer scripts, not a build dep
+  - gcc/rust/                6.5M  Rust FE (gccrs)
+  - gcc/d/                     8M  D FE
+  - gcc/go/                    3M  Go FE
+  - gcc/jit/                 2.9M  libgccjit FE
+  - libitm/                  1.7M  transactional memory runtime
+  - libquadmath/             1.9M  target runtime
+  - libatomic/                1.2M  target runtime
+  - libvtv/                  1.2M  vtable verification runtime
+  - libobjc/                 1.1M  Objective-C runtime — objc/ FE headers
+                                     KEPT under gcc/objc (920K) since C
+                                     front-end + c-family share some
+                                     Objective-C-adjacent common code paths;
+                                     the RUNTIME (libobjc/) is not needed.
+  - fixincludes/             1.6M  system-header fixups, `all-target-libgcc`
+                                     dependency only
+  - libssp/                   616K  target stack-protector runtime
+  - libcc1/gnattools/gotools/c++tools/libcody/libffi/libgrust/libgm2
+                                     ~2.7M combined — plugin/other-FE support,
+                                     not needed for `make all-gcc` C-only
+  - top-level ChangeLog, ChangeLog.jit, ChangeLog.tree-ssa, NEWS, MD5SUMS,
+    maintainer-scripts/                    release housekeeping, not a build
+                                            dependency
+  - gcc/ChangeLog-YYYY (per-year archives, ~20M combined)
+
+KEPT (what `make all-gcc --enable-languages=c` actually needs):
+  gcc/{c,c-family,common,config,objc,objcp,lto,text-art,rtl-ssa,ginclude,*.cc,*.h}
+    (config/ is 52M — per-target backend code, e.g. gcc/config/i386/*.md for
+    the x86_64 codegen target; this IS load-bearing, not pruned)
+  libcpp/ (5.0M, the C preprocessor library cc1 links)
+  libiberty/ (2.8M, GCC's own copy — distinct from third-party/binutils's
+    copy; different revision, not shared/symlinked)
+  libdecnumber/ (1.5M, decimal-float support real.cc depends on)
+  libbacktrace/ (1.4M, diagnostic backtrace support)
+  include/, config/ (top-level, build machinery), zlib/ (4.1M, in-tree
+    fallback if --with-system-zlib is not used)
+  top-level configure/Makefile.def/Makefile.tpl/Makefile.in, config.guess,
+  config.sub, move-if-change, COPYING*, lto-plugin/ (612K)
+
+Result: 1.2G stock tarball -> 165M vendored (post-prune), gcc/ subtree alone
+821M -> 125M.
+
+Nothing here is modified from upstream (no OVMX seams yet, unlike
+third-party/tcc's ovmx/ovmx_rms_io.c or third-party/binutils's ovmx/ dir) —
+this bead's mk_gcc_cc1.sh build recipe does not reach the point where an RMS
+I/O shim would be wired in (see the vms-da0 F2 wall-catalog report for why:
+the C++ compile/link walls come first). A later bead adds an ovmx/ dir here
+if/when cc1 reaches native RMS I/O plumbing.
+
+NEVER disassemble/decompile/paste VSI or HPE source here (CLAUDE.md Rule 8).
+This is 100% clean-room: public GNU FTP release tarball only.

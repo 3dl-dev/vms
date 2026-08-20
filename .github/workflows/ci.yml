@@ -27,6 +27,13 @@ name: CI
 #     46. This replaces "the PR's own run was the full suite" -- the
 #     by-SHA proof still exists, just fired deliberately at reap time.
 # Do NOT merge a core change on the fast-tier PR run alone.
+#
+# WIDENS the "invisible-on-PR, red-on-push" class: gates that only run on
+# non-PR events (these heavy e2e jobs, plus the pre-existing negative-control
+# meta-checks in facility_defects.sh) will NOT redden a PR — only the
+# pre-merge full run / push / nightly. A lane that reaps on fast-tier-green
+# alone WILL get bitten. The pre-merge `workflow_dispatch` full run is the
+# backstop; read it, do not skip it.
 
 on:
   push:

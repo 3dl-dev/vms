@@ -183,6 +183,31 @@
 #define COMPONENT_DEFAULT "/tests/component"
 
 /*
+ * THE VMS FILESPECS THE DRIVEN DCL RESOLVES OVER THE ACP (vms-104, final rung).
+ *
+ * The descrip.mms names the toolchain + the C run-time shareable by VMS logical
+ * spec -- NOT the /vms POSIX passthrough the atomic flip retired. SYS$SYSTEM: /
+ * SYS$SHARE: resolve to the mounted ODS-2 system volume (OVMX_SYSDEVICE=DKA300:,
+ * where rung ii mastered them), and:
+ *   - a foreign-command TOOL (TCC/LIBRARIAN/LINK.EXE) is resolved by the DCL
+ *     foreign-command resolver, which reads its GENUINE bytes off the volume
+ *     THROUGH the Files-11 ACP (IO$_READVBLK) and stages them to a POSIX home
+ *     the kernel execve()s -- dcl_cmd_process.c dcl_resolve_activatable_acp;
+ *   - the --use DECC$SHR.EXE producer is resolved by native LINK.EXE to its
+ *     boot-staged (ACP-read) copy in /run/ovmx-boot (staged below by
+ *     stage_shareable_over_acp), so its bytes also come off the volume, not /vms.
+ *
+ * The POSIX *_PATH_DEFAULT paths above stay for the harness's OWN first-hop
+ * execs (execl(MMK), the calibration TCC compile) and presence checks -- that is
+ * the harness bootstrapping, like the kernel execve'ing PID 1, not the drive's
+ * ACP-resolved path under test.
+ */
+#define TCC_VMSSPEC     "SYS$SYSTEM:TCC.EXE"
+#define LIBR_VMSSPEC    "SYS$SYSTEM:LIBRARIAN.EXE"
+#define LNK_VMSSPEC     "SYS$SYSTEM:LINK.EXE"
+#define DECCSHR_VMSSPEC "SYS$SHARE:DECC$SHR.EXE"
+
+/*
  * DRIVE BUDGET (vms-9d4f: machine-relative, NOT a wall bump).
  *
  * This USED to be one fixed host-wall constant (DRIVE_TIMEOUT_MS = 60000,
@@ -511,6 +536,68 @@ static int write_produced_image(const uint8_t *bytes, long len)
     return ok ? 0 : -1;
 }
 
+/*
+ * stage_from_sysvol_over_acp (vms-104) - read `name` off SYSVOL_UNIT under the
+ * directory tree `tree` (e.g. {SYS0,SYSCOMMON,SYSLIB}) THROUGH the executive
+ * Files-11 ACP (IO$_ACCESS + IO$_READVBLK) and write it to STAGE_DIR/`name`
+ * (mode 0755). Two producers the MMK-driven LINK / the produced image bind by
+ * VMS spec resolve to these boot-staged copies:
+ *   - SYS$SHARE:DECC$SHR.EXE  -> STAGE_DIR/DECC$SHR.EXE   (LINK's --use producer)
+ *   - the produced image's PT_INTERP=/run/ovmx-boot/IMGACT.EXE -> STAGE_DIR/IMGACT.EXE
+ * so their bytes come off the ODS-2 volume over the ACP, NEVER a /vms POSIX read
+ * (Rule 9 / INV-6). This is the harness half of ovmx_init's boot bridge.
+ * Returns 0 on success.
+ */
+static int stage_from_sysvol_over_acp(const char *const *tree, const char *name)
+{
+    uint32_t chan = 0;
+    if (!$VMS_STATUS_SUCCESS(vms_kif_acp_mount(SYSVOL_UNIT)))
+        return -1;
+    if (!$VMS_STATUS_SUCCESS(vms_kif_acp_assign(SYSVOL_UNIT, &chan)) || chan == 0)
+        return -1;
+    uint16_t dnum = 0, dseq = 0; uint8_t drvn = 0, dnmx = 0;
+    uint32_t st = resolve_dir_fid(chan, tree, &dnum, &dseq, &drvn, &dnmx);
+    if (!$VMS_STATUS_SUCCESS(st) || dnum == 0) { vms_kif_dassgn(chan); return -1; }
+
+    struct vms_acp_access_args a;
+    memset(&a, 0, sizeof(a));
+    a.chan = chan;
+    a.did_num = dnum; a.did_seq = dseq; a.did_rvn = drvn; a.did_nmx = dnmx;
+    a.version = 0;   /* highest */
+    strncpy(a.name, name, VMS_ACP_NAME_SIZE - 1);
+    st = vms_kif_acp_access(&a);
+    if (!$VMS_STATUS_SUCCESS(st)) { vms_kif_dassgn(chan); return -1; }
+
+    uint64_t total = a.attr.efblk
+        ? (uint64_t)(a.attr.efblk - 1u) * 512u + a.attr.ffbyte : 0;
+
+    char dest[256];
+    snprintf(dest, sizeof(dest), "%s/%s", STAGE_DIR, name);
+    int fd = open(dest, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    if (fd < 0) { vms_kif_acp_deaccess(chan); vms_kif_dassgn(chan); return -1; }
+
+    uint8_t blk[512];
+    uint64_t written = 0; uint32_t vbn = 1; int ok = 1;
+    while (written < total) {
+        struct vms_acp_rw_args r;
+        memset(&r, 0, sizeof(r));
+        r.chan = chan; r.vbn = vbn; r.offset = 0; r.length = 512;
+        r.buffer = (uint64_t)(uintptr_t)blk;
+        if (!$VMS_STATUS_SUCCESS(vms_kif_acp_readvb(&r)) || r.xferred == 0) { ok = 0; break; }
+        uint64_t chunk = total - written;
+        if (chunk > r.xferred) chunk = r.xferred;
+        if (chunk > sizeof(blk)) chunk = sizeof(blk);
+        if (write(fd, blk, (size_t)chunk) != (ssize_t)chunk) { ok = 0; break; }
+        written += chunk; vbn++;
+    }
+    (void)fchmod(fd, 0755);
+    close(fd);
+    vms_kif_acp_deaccess(chan);
+    vms_kif_dassgn(chan);
+    if (!ok) unlink(dest);
+    return ok ? 0 : -1;
+}
+
 /* Copy a file (source staging). Returns 0 on success. */
 static int copy_file(const char *src, const char *dst)
 {
@@ -813,6 +900,13 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
      * exactly as before -- only MMK's own reach into its description moved onto
      * the ODS-2 volume. MMK builds the (never-present, MFD-stat-missing) bare
      * target unconditionally, running the action chain. */
+    /* The toolchain + shareable are named by VMS logical spec (SYS$SYSTEM:/
+     * SYS$SHARE:), resolved over the ACP -- NOT the retired /vms passthrough
+     * (vms-104). tccinc stays a POSIX include dir: it is a native-TCC -I
+     * argument, not a DCL-resolved image. The POSIX tool paths passed in are used
+     * only by the harness's own execs (calibration / execl(MMK)); the drive
+     * resolves the tools the VMS way. */
+    (void)tcc; (void)libr; (void)lnk; (void)deccshr;
     char mms[2560];
     if (do_link)
         snprintf(mms, sizeof(mms),
@@ -825,7 +919,8 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
             "\tLIBRARIAN /CREATE OVMXRT.OLB VMS_STRING.OBJ\n"
             "\tLNK --executable --use %s -o OVMXRT.EXE OVMXRTRUN.OBJ OVMXRT.OLB\n"
             "\tWRITE SYS$OUTPUT \"%s\"\n",
-            tcc, libr, lnk, tccinc, tccinc, deccshr, EXPECT_MARKER);
+            TCC_VMSSPEC, LIBR_VMSSPEC, LNK_VMSSPEC, tccinc, tccinc,
+            DECCSHR_VMSSPEC, EXPECT_MARKER);
     else
         snprintf(mms, sizeof(mms),
             "OVMXRT.OLB :\n"
@@ -834,7 +929,7 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
             "\tTCC -x c -c -ffreestanding -fno-builtin -I %s -I . VMS_STRING.C -o VMS_STRING.OBJ\n"
             "\tLIBRARIAN /CREATE OVMXRT.OLB VMS_STRING.OBJ\n"
             "\tWRITE SYS$OUTPUT \"%s\"\n",
-            tcc, libr, tccinc, EXPECT_MARKER);
+            TCC_VMSSPEC, LIBR_VMSSPEC, tccinc, EXPECT_MARKER);
     /* Author the description + empty rules file on the ODS-2 volume (MMK opens
      * them through RMS); start clean in case a prior drive in this VM left them. */
     erase_ods2(ODS2_DIR "725.MMS");
@@ -1044,6 +1139,24 @@ int main(int argc, char **argv)
           "$MOUNT " SYSVOL_UNIT " + resolve [SYS0.SYSCOMMON.SYSEXE] over the ACP "
           "(the system volume the produced image is activated off, vms-104)");
 
+    /* Stage the two producers the drive binds by VMS spec off the ODS-2 volume
+     * THROUGH the ACP into /run/ovmx-boot (vms-104): the C run-time shareable
+     * (LINK's --use SYS$SHARE:DECC$SHR.EXE) and the OVMX image activator (the
+     * produced OVMXRT.EXE's PT_INTERP=/run/ovmx-boot/IMGACT.EXE, baked by the
+     * vmslink build). Both bytes come off the volume over the ACP, never a /vms
+     * read. The DCL foreign-command resolver stages the TCC/LIBRARIAN/LINK tools
+     * itself the same way (dcl_resolve_activatable_acp). */
+    (void)mkdir("/run", 0755);
+    (void)mkdir(STAGE_DIR, 0755);
+    static const char *const syslib_tree[] = { "SYS0", "SYSCOMMON", "SYSLIB", NULL };
+    static const char *const sysexe_tree[] = { "SYS0", "SYSCOMMON", "SYSEXE", NULL };
+    CHECK(stage_from_sysvol_over_acp(syslib_tree, "DECC$SHR.EXE") == 0,
+          "staged SYS$SHARE:DECC$SHR.EXE off " SYSVOL_UNIT " over the ACP into "
+          STAGE_DIR " (LINK's --use producer, read over the ACP -- no /vms)");
+    CHECK(stage_from_sysvol_over_acp(sysexe_tree, "IMGACT.EXE") == 0,
+          "staged IMGACT.EXE off " SYSVOL_UNIT " over the ACP into " STAGE_DIR
+          " (the produced image's PT_INTERP, read over the ACP -- no /vms)");
+
     /* CALIBRATE (vms-9d4f): measure this run's own in-guest TCC compile
      * speed once, before either drive, and derive both drives' host-wall
      * budgets from it -- see the DRIVE BUDGET comment above
@@ -1151,8 +1264,13 @@ int main(int argc, char **argv)
           "the MMK-driven LINK.EXE produced OVMXRT.EXE in the guest");
     CHECK(exe2_valid,
           "OVMXRT.EXE is a valid OVMX image (ELF ET_DYN) -- LINK really linked it in QEMU");
-    CHECK(exelen2 > 0 && exe2 != NULL && contains(exe2, exelen2, "/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE"),
-          "OVMXRT.EXE carries PT_INTERP=IMGACT.EXE -- it is an image the kernel activates through IMGACT, not a bare ELF");
+    /* The vmslink build bakes PT_INTERP=/run/ovmx-boot/IMGACT.EXE -- the OVMX
+     * image activator's boot-staged (ACP-read) POSIX home, NOT the retired /vms
+     * passthrough (vms-104; src/vmslink/CMakeLists.txt IMGACT_INTERP_PATH). The
+     * kernel opens that interp at activation; the harness staged IMGACT.EXE there
+     * off the volume over the ACP above. */
+    CHECK(exelen2 > 0 && exe2 != NULL && contains(exe2, exelen2, "/run/ovmx-boot/IMGACT.EXE"),
+          "OVMXRT.EXE carries PT_INTERP=IMGACT.EXE (/run/ovmx-boot, ACP-staged) -- it is an image the kernel activates through IMGACT, not a bare ELF");
     CHECK(act2 == EXPECT_EXIT,
           "IMGACT activated the MMK-driven OVMXRT.EXE and it RAN to exit 216 (vms_strlen(\"OVMXRT\")*36) -- the LINK pulled VMS_STRING from the .OLB and the image really runs");
 

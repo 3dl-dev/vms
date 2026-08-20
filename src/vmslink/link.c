@@ -925,9 +925,69 @@ struct producer {
     struct ovmx_sv_header  *sv;
 };
 
-static void load_producer(const char *path, struct producer *p)
+/* A leading VMS logical the caller may name a --use producer by (vms-104). */
+static int leading_ci(const char *s, const char *pfx)
+{
+    for (; *pfx; s++, pfx++) {
+        char a = *s, b = *pfx;
+        if (a >= 'a' && a <= 'z') a = (char)(a - 'a' + 'A');
+        if (b >= 'a' && b <= 'z') b = (char)(b - 'a' + 'A');
+        if (a != b) return 0;
+    }
+    return 1;
+}
+
+/*
+ * resolve_producer_path (vms-104) - map a --use producer named by VMS logical
+ * spec to the POSIX file that carries its bytes. A shareable installed on the
+ * ODS-2 system volume is named SYS$SHARE:/SYS$LIBRARY:/SYS$SYSTEM:<NAME.EXE> --
+ * NOT a /vms POSIX path (the atomic-flip-retired passthrough). ovmx_init read
+ * each installed shareable off the volume THROUGH the Files-11 ACP and staged it
+ * to OVMX_BOOT_STAGE_DIR ("/run/ovmx-boot"); LINK.EXE, a native musl tool that
+ * opens the producer with POSIX open(), resolves the logical to that staged copy
+ * -- so the producer bytes come from the volume over the ACP, never /vms
+ * (Rule 9 / INV-6). Any other spec (a bare name, an absolute POSIX path from a
+ * host bootstrap build) is returned unchanged. `out` is a caller buffer.
+ */
+static const char *resolve_producer_path(const char *path, char *out, size_t sz)
+{
+    /* Each installed-image logical -> the SYS$SYSROOT subdirectory it lives in. */
+    static const struct { const char *log; const char *sub; } maps[] = {
+        { "SYS$SHARE:",   "SYSLIB" },
+        { "SYS$LIBRARY:", "SYSLIB" },
+        { "SYS$SYSTEM:",  "SYSEXE" },
+    };
+    for (unsigned i = 0; i < sizeof(maps) / sizeof(maps[0]); i++) {
+        if (!leading_ci(path, maps[i].log))
+            continue;
+        const char *leaf = path + strlen(maps[i].log);
+        /* Defend against an embedded directory: a spec is SYS$SHARE:NAME.EXE. */
+        const char *slash = strrchr(leaf, '/');
+        if (slash) leaf = slash + 1;
+
+        /* (1) RUNTIME: the boot bridge read the installed image off the ODS-2
+         * volume THROUGH the ACP and staged it here (the /vms passthrough is
+         * retired on the runtime path). Prefer it when present. */
+        snprintf(out, sz, "/run/ovmx-boot/%s", leaf);
+        if (access(out, R_OK) == 0)
+            return out;
+
+        /* (2) HOST CTEST (no /dev/vms, no boot bridge -- e.g. the BUILD.COM S3.2
+         * DCL driver): the installed images live at their legacy POSIX
+         * SYS$SYSROOT location. This /vms read is the sanctioned legacy path for
+         * the no-executive case (the flip only retires /vms when the ACP is
+         * live), NEVER reached on the runtime where (1) resolves first. */
+        snprintf(out, sz, "/vms/SYS0/SYSCOMMON/%s/%s", maps[i].sub, leaf);
+        return out;
+    }
+    return path;
+}
+
+static void load_producer(const char *path_in, struct producer *p)
 {
     memset(p, 0, sizeof *p);
+    char pbuf[512];
+    const char *path = resolve_producer_path(path_in, pbuf, sizeof pbuf);
     const char *base = strrchr(path, '/');
     snprintf(p->name, sizeof p->name, "%s", base ? base + 1 : path);
 

@@ -1347,6 +1347,22 @@ static int dcl_resolve_activatable_acp(struct dcl_context *ctx,
                                        int *acp_usable)
 {
     *acp_usable = 0;
+
+    /* NO EXECUTIVE => this ACP path does not apply: defer to the legacy resolver
+     * (vms-104). With /dev/vms absent (the plain host ctest / the BUILD.COM S3.2
+     * host DCL driver), rms_file_attr answers from a POSIX stat, NOT the ACP --
+     * so dcl_rms_attr would report RMS$_NORMAL for SYS$SYSTEM:TCC.EXE and this
+     * function would then try to stage it OVER an ACP that isn't there and fail,
+     * turning a resolvable host-path image into a false %DCL-E-IVIMAGE. The flip
+     * only retires /vms on the RUNTIME path (real /dev/vms); the legacy
+     * SYS$SYSTEM:/SYS$SHARE: -> /vms POSIX resolution below is CORRECT and
+     * expected when no executive is present (INV-6 governs the ACP-live path,
+     * enforced by the ACP branch, not this host-defer). */
+    if (rms_executive_absent()) {
+        *acp_usable = 0;
+        return 0;
+    }
+
     const char *exts[2] = { "", ".EXE" };
     int nexts = dcl_spec_has_type(vms_spec) ? 1 : 2;
 
@@ -1362,17 +1378,41 @@ static int dcl_resolve_activatable_acp(struct dcl_context *ctx,
             /* on-volume Linux path carrying the type we matched with */
             char lp[1024];
             snprintf(lp, sizeof(lp), "%s%s", linux_path, exts[e]);
-            /* Prefer the boot-staged copy of a first-hop SYS$SYSTEM image: a
-             * real POSIX file the Linux kernel can map + execve. */
             char staged[1024];
+            /* (1) Booted runtime: the first-hop SYS$SYSTEM image was already
+             * read off the volume over the ACP and staged to a POSIX file by
+             * ovmx_init's boot bridge -- use it directly. */
             if (ovmx_boot_stage_exec_path(lp, staged, sizeof(staged)) &&
                 access(staged, X_OK) == 0) {
                 strncpy(resolved, staged, sz - 1);
-            } else {
-                strncpy(resolved, lp, sz - 1);
+                resolved[sz - 1] = '\0';
+                return 1;
             }
-            resolved[sz - 1] = '\0';
-            return 1;
+            /* (2) Not boot-staged (a test harness, or a tool outside the boot
+             * set such as the self-host TCC/LIBRARIAN/LINK.EXE): read the
+             * GENUINE bytes off the ODS-2 volume THROUGH THE ACP now and stage
+             * them to that POSIX home (the same read the boot bridge does, done
+             * lazily). The bytes come from IO$_READVBLK over /dev/vms, NEVER a
+             * /vms passthrough read (vms-104, Rule 9 / INV-6). A native musl
+             * bootstrap tool (no OVMX symbol vector) is then execve()d off this
+             * staged copy by dcl_activate_image's fork fallback; a real OVMX
+             * symbol-vector image staged the same way is IMGACT-activated (its
+             * PT_INTERP is opened by the kernel, imgsrc_map_staged re-reads it
+             * over the ACP) -- imgact_activate makes that native-vs-image call
+             * from the ELF, so ONE genuine ACP-sourced copy serves both. */
+            if (ovmx_boot_stage_exec_path(lp, staged, sizeof(staged))) {
+                (void)mkdir(OVMX_BOOT_STAGE_DIR, 0755);   /* EEXIST is fine */
+                if (dcl_rms_stage(ctx, trial, staged) == RMS$_NORMAL &&
+                    access(staged, X_OK) == 0) {
+                    strncpy(resolved, staged, sz - 1);
+                    resolved[sz - 1] = '\0';
+                    return 1;
+                }
+            }
+            /* ACP confirmed the image is present but it could not be staged off
+             * the volume. Fail HONESTLY -- do NOT read it off /vms (INV-6). The
+             * caller reports %DCL-E-IVIMAGE. */
+            return 0;
         }
         if (st == RMS$_ACC) {
             /* The ACP could not answer at all (no /dev/vms, no ACP-mounted

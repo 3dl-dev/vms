@@ -878,6 +878,132 @@ uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out)
 #endif
 }
 
+/*
+ * rms_stage_over_acp - read a file's GENUINE bytes off the mounted ODS-2 volume
+ * THROUGH the executive Files-11 ACP and write them to a Linux path `destpath`
+ * (mode 0755), so a native musl bootstrap tool (TCC/LIBRARIAN/LINK.EXE) or a
+ * first-hop image the Linux kernel must execve() has a POSIX home whose bytes
+ * came from the volume over the ACP -- NEVER a /vms POSIX read (vms-104, Rule 9
+ * / INV-6). This is the same read ovmx_init's boot bridge (ovmx_boot_acp_read.c)
+ * does at boot, exposed to RMS so the DCL foreign-command resolver can stage a
+ * tool on demand when the boot bridge has not (a harness, or a tool outside the
+ * boot set).
+ *
+ * `vmsspec` is an ALREADY-EFFECTIVE VMS filespec (device/dir defaulted by the
+ * caller, e.g. dcl_rms_stage) -- it is resolved over the ACP EXACTLY as
+ * rms_file_attr resolves it (rms_acp_specs_from_fab search-list fan-out +
+ * rms_acp_resolve_did), so a concealed-rooted SYS$SYSTEM: lands on the right
+ * mounted unit. Returns RMS$_NORMAL on success; rms_acp_open_status() (RMS$_FNF,
+ * ...) when the ACP answered but the file is absent; RMS$_ACC when no
+ * ACP-mounted volume is reachable (no /dev/vms -- the caller must fail honestly,
+ * NOT fall back to /vms); SS$_ABORT on a destination-file write failure.
+ */
+uint32_t rms_stage_over_acp(const char *vmsspec, const char *destpath)
+{
+    if (!vmsspec || !destpath)
+        return RMS$_FAB;
+#if defined(__linux__)
+    /* No ACP-mounted volume (no /dev/vms): defer honestly. There is DELIBERATELY
+     * no /vms POSIX-copy fallback here -- INV-6 / Rule 9. */
+    if (rms_acp_absent())
+        return RMS$_ACC;
+
+    struct FAB tfab = cc$rms_fab;
+    struct rms_acp_spec specs[RMS_ACP_MAX_CANDS];
+    struct vms_acp_access_args a;
+    uint32_t chan = 0, st = SS$_NOSUCHFILE;
+    int ncand, got = 0;
+
+    tfab.fab$l_fna = (char *)vmsspec;
+    tfab.fab$b_fns = (uint8_t)strlen(vmsspec);
+    ncand = rms_acp_specs_from_fab(&tfab, specs, RMS_ACP_MAX_CANDS);
+    if (ncand < 0)
+        return RMS$_SYN;
+
+    for (int i = 0; i < ncand && !got; i++) {
+        struct rms_acp_spec *sp = &specs[i];
+        chan = 0;
+        st = vms_kif_acp_assign(sp->devnam, &chan);
+        if (!$VMS_STATUS_SUCCESS(st))
+            continue;
+        memset(&a, 0, sizeof(a));
+        a.chan = chan;                   /* read access (acctl 0) */
+        st = rms_acp_resolve_did(chan, sp->dirpath,
+                                 &a.did_num, &a.did_seq, &a.did_rvn, &a.did_nmx);
+        if (!$VMS_STATUS_SUCCESS(st)) { vms_kif_dassgn(chan); continue; }
+        a.version = sp->version;
+        strncpy(a.name, sp->name, VMS_ACP_NAME_SIZE - 1);
+        st = vms_kif_acp_access(&a);
+        if (!$VMS_STATUS_SUCCESS(st)) { vms_kif_dassgn(chan); continue; }
+        got = 1;
+    }
+    if (!got)
+        return rms_acp_open_status(st);
+
+    /* Logical EOF in bytes, the SAME FAT convention imgact_acp.c uses:
+     * (efblk-1)*512 + ffbyte. */
+    uint32_t efblk = a.attr.efblk;
+    uint64_t total = efblk ? (uint64_t)(efblk - 1u) * 512u + a.attr.ffbyte : 0;
+
+    /* Create the staged copy already-executable (0755, subject to umask): a tool
+     * the kernel execve()s needs the owner-exec bit and the interpreter needs to
+     * be readable, both of which 0755 gives under any sane umask. Setting the
+     * mode at open() avoids an fchmod() call here -- fchmod is NOT a universal in
+     * DECC$SHR's C RTL symbol vector, so referencing it from this shareable
+     * (LIBVMSRMS$SHR) would leave a VMS-native LINK --use unable to resolve it
+     * (%LINK-F-ERROR unresolved external 'fchmod', vms-61f). The staged path is
+     * only reached when the boot bridge has NOT already staged the image, so the
+     * file is freshly created here with this mode. */
+    int fd = open(destpath, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    if (fd < 0) {
+        vms_kif_acp_deaccess(chan);
+        vms_kif_dassgn(chan);
+        return SS$_ABORT;
+    }
+
+    uint32_t rc = RMS$_NORMAL;
+    uint8_t  blk[512];
+    uint64_t written = 0;
+    uint32_t vbn = 1;
+    while (written < total) {
+        struct vms_acp_rw_args r;
+        memset(&r, 0, sizeof(r));
+        r.chan = chan; r.vbn = vbn; r.offset = 0; r.length = 512;
+        r.buffer = (uint64_t)(uintptr_t)blk;
+        st = vms_kif_acp_readvb(&r);
+        if (!$VMS_STATUS_SUCCESS(st) || r.xferred == 0) {
+            rc = $VMS_STATUS_SUCCESS(st) ? SS$_ABORT : rms_acp_open_status(st);
+            break;
+        }
+        uint64_t chunk = total - written;
+        if (chunk > r.xferred) chunk = r.xferred;
+        if (chunk > sizeof(blk)) chunk = sizeof(blk);
+        uint8_t *p = blk;
+        uint64_t left = chunk;
+        while (left > 0) {
+            ssize_t w = write(fd, p, (size_t)left);
+            if (w <= 0) { rc = SS$_ABORT; break; }
+            p += w;
+            left -= (uint64_t)w;
+        }
+        if (rc != RMS$_NORMAL)
+            break;
+        written += chunk;
+        vbn++;
+    }
+
+    close(fd);
+    vms_kif_acp_deaccess(chan);
+    vms_kif_dassgn(chan);
+    if (rc != RMS$_NORMAL)
+        (void)unlink(destpath);
+    return rc;
+#else
+    (void)vmsspec; (void)destpath;
+    return RMS$_ACC;
+#endif
+}
+
 struct rms_metadata {
     uint32_t magic;         /* RMS_META_MAGIC */
     uint8_t  version;       /* Metadata format version */

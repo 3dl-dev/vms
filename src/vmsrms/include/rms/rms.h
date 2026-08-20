@@ -96,6 +96,19 @@ struct rms_fileattr {
 };
 uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out);
 
+/*
+ * rms_stage_over_acp (OVMX, vms-104) - read `vmsspec`'s GENUINE bytes off the
+ * mounted ODS-2 volume THROUGH the executive Files-11 ACP and write them to the
+ * Linux path `destpath` (mode 0755). The bytes come from IO$_READVBLK over
+ * /dev/vms -- NEVER a /vms POSIX read (Rule 9 / INV-6) -- so a native bootstrap
+ * tool the kernel execve()s (TCC/LIBRARIAN/LINK.EXE) or a first-hop image gets a
+ * POSIX home sourced from the volume. `vmsspec` is an already-effective filespec
+ * (device/dir defaulted). Returns RMS$_NORMAL; a fail-honest RMS$_ (FNF/...) when
+ * the ACP answered but the file is absent; RMS$_ACC when no ACP-mounted volume is
+ * reachable (caller must NOT fall back to /vms); SS$_ABORT on a dest write error.
+ */
+uint32_t rms_stage_over_acp(const char *vmsspec, const char *destpath);
+
 /* rms_executive_absent (OVMX, vms-5f0) - 1 when /dev/vms / the Files-11 ACP is
  * unreachable (host ctest, plain-container gates, netbsd-vax cross), 0 when the
  * executive is present. The single source DCL's host-defer shares with RMS's own

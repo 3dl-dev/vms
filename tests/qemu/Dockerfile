@@ -485,6 +485,7 @@ RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_sysvol \
         SYSEXE:TCC.EXE=/src/repo/build-static/bin/TCC.EXE \
         SYSEXE:LIBRARIAN.EXE=/src/repo/build-static/bin/LIBRARIAN.EXE \
         SYSEXE:LINK.EXE=/src/repo/build-static/bin/LINK.EXE \
+        SYSEXE:IMGACT.EXE=/src/repo/src/imgact/IMGACT.EXE \
         'SYSLIB:DECC$SHR.EXE=/src/repo/build-static/bin/DECC$SHR.EXE'
 
 # GENERATED ODS-2 volume carrying a real ELF image [IMGACT]TESTIMG.EXE for the

@@ -575,6 +575,15 @@ rms_file_t *rms_open_named_handle_kind(const char *vms_spec, int want_write,
                                        int create, unsigned kind,
                                        uint32_t *st_out)
 {
+    /* fileprot==0 => the ACP applies the per-file CLASS default (unchanged). */
+    return rms_open_named_handle_kind_prot(vms_spec, want_write, create, kind,
+                                           0, st_out);
+}
+
+rms_file_t *rms_open_named_handle_kind_prot(const char *vms_spec, int want_write,
+                                            int create, unsigned kind,
+                                            uint16_t fileprot, uint32_t *st_out)
+{
     uint32_t st;
     if (st_out) *st_out = RMS$_FAB;
     if (!vms_spec || !*vms_spec)
@@ -634,6 +643,15 @@ rms_file_t *rms_open_named_handle_kind(const char *vms_spec, int want_write,
             fop.modifiers = VMS_ACP_M_CREATE | VMS_ACP_M_ACCESS;
             fop.acctl     = VMS_ACP_ACCTL_WRITE;
             fop.kind      = kind;           /* vms-3a8: caller-chosen RFM (VAR default) */
+            /* vms-738: stamp the caller's explicit per-file VMS protection into
+             * the new file's ODS-2 fh2_fileprot at CREATE time (attr.fileprot +
+             * VMS_ACP_ATTR_PROT), the same header path SYSUAF/RIGHTSLIST/images
+             * use. fileprot==0 leaves attr_ctl clear so the ACP falls to the
+             * per-file CLASS default (ods2_class_fileprot) -- the prior behaviour. */
+            if (fileprot != 0) {
+                fop.attr_ctl   |= VMS_ACP_ATTR_PROT;
+                fop.attr.fileprot = fileprot;
+            }
             st = rms_acp_resolve_did(chan, sp->dirpath, &fop.did_num,
                                      &fop.did_seq, &fop.did_rvn, &fop.did_nmx);
             if (!$VMS_STATUS_SUCCESS(st)) {

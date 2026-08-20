@@ -46,6 +46,11 @@ mkdir -p "$STAGE/SYSEXE" "$STAGE/SYSLIB" "$STAGE/SYSMGR" "$STAGE/SYSHLP" \
 printf 'fake DCL image\n'      > "$STAGE/SYSEXE/DCL.EXE"
 printf 'fake LOGINOUT image\n' > "$STAGE/SYSEXE/LOGINOUT.EXE"
 printf '$ WRITE SYS$OUTPUT "hi"\n' > "$STAGE/SYSMGR/STARTUP.COM"
+# vms-738: files whose per-file-class VMS protection is NON-default, so the
+# protection assertion below can prove the packer records genuine per-file
+# protection (ods2_class_fileprot, name-keyed) rather than one flat default.
+printf 'fake SYSUAF\n'         > "$STAGE/SYSEXE/SYSUAF.DAT"
+printf 'fake RIGHTSLIST\n'     > "$STAGE/SYSEXE/RIGHTSLIST.DAT"
 printf 'nested lib\n'          > "$STAGE/SYSEXE/SUBDIR/HELPER.EXE"
 printf 'README, no extension\n' > "$STAGE/SYSLIB/README"
 : > "$STAGE/SYSLIB/EMPTY.EXE"                    # 0-byte file
@@ -77,6 +82,25 @@ done
 grep -q "STARTUP.COM" "$MANIFEST" || fail "manifest missing STARTUP.COM"
 grep -q "^Product:" "$MANIFEST" || fail "manifest missing product identification"
 echo "PASS: manifest names every staged file"
+
+# ---------------------------------------------------------------------------
+# vms-738: the packer records GENUINE PER-FILE VMS protection (ke_protection),
+# keyed on each file's name/class (ods2_class_fileprot), NOT one flat default.
+# An ordinary image is World:RE; a SYSUAF.DAT is World-DENIED (protects the
+# password hashes); a RIGHTSLIST.DAT is World:R. PRODUCT INSTALL (product.c)
+# stamps THIS per-file value into each installed file's ODS-2 fh2_fileprot over
+# the ACP, so a flat default here would silently leak a special-class file.
+prot_line() { grep -F "$1" "$MANIFEST" | head -1; }
+DCL_PROT="$(prot_line 'DCL.EXE')"
+UAF_PROT="$(prot_line 'SYSUAF.DAT')"
+RL_PROT="$(prot_line 'RIGHTSLIST.DAT')"
+printf '%s\n' "$DCL_PROT" | grep -qF '(S:RWED,O:RWED,G:RE,W:RE)' \
+    || fail "ordinary image DCL.EXE not World:RE per-file protection: $DCL_PROT"
+printf '%s\n' "$UAF_PROT" | grep -qF '(S:RWE,O:RWE,G:,W:)' \
+    || fail "SYSUAF.DAT not World-denied per-file protection (flat default leak?): $UAF_PROT"
+printf '%s\n' "$RL_PROT" | grep -qF '(S:RWED,O:RWED,G:R,W:R)' \
+    || fail "RIGHTSLIST.DAT not World:R per-file protection: $RL_PROT"
+echo "PASS: packer records genuine per-file protection (World:RE / World-denied / World:R), not a flat default"
 
 # ---------------------------------------------------------------------------
 # Extract and byte-compare EVERY payload file against the staged tree.

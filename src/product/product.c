@@ -54,33 +54,29 @@
  * SYS$SYSTEM: the installed files use), so PRODUCT SHOW PRODUCT
  * /DESTINATION reads the database back from where INSTALL wrote it.
  *
- * SECURITY (vms-df9 constraint #2): every file's protection/owner-UIC
- * comes from its `ovmx_kit_entry` (kit metadata written by
- * tools/ovmx_kit_pack.c from the packed tree), applied via fchmod(2)/
- * fchown(2) -- never a hardcoded 0777/world-writable default.
+ * SECURITY (vms-df9 constraint #2, closed by vms-738): every installed
+ * file's protection comes from its `ovmx_kit_entry.ke_protection` (a VMS
+ * SOGW mask, kit metadata written by tools/ovmx_kit_pack.c), stamped into
+ * the installed file's ODS-2 fh2_fileprot header field AT $CREATE TIME over
+ * the executive Files-11 ACP (rms_open_named_handle_kind_prot -> IO$_CREATE
+ * attr.fileprot + VMS_ACP_ATTR_PROT -> ods2_fh2_build) -- exactly what real
+ * VMS PCSI does (each file lands with its own exact protection) and exactly
+ * the header path SYSUAF/RIGHTSLIST/images already take. NOT a POSIX
+ * fchmod(2)/chmod(2), NOT a ugo*rwx flatten (Rule 9 / INV-6).
  *
- * A vmsfs.ko `.setattr` hook was tried and REVERTED (vms-79b): it broke
- * tests/qemu/test_release_e2e.sh's `norecord` case (a SYSUAF rewritten
- * with no SYSTEM row must HALT at boot; with the hook present it silently
- * booted to a login prompt instead -- confirmed by bisect, root cause not
- * fully isolated, blast radius too large to carry for what it bought).
- * What it bought was very little: vmsfs_blkdev_create() already assigns
- * every NEW file VMSFS_PROT_DEFAULT and the creating process's own UIC,
- * and ovmx_kit_pack.c's OVMX_KIT_PROT_DEFAULT / OVMX_KIT_UIC_*_DEFAULT are
- * numerically IDENTICAL to those (both 0xAA00, both SYSTEM [1,4] when
- * PRODUCT INSTALL runs as SYSTEM, which it is expected to) -- so for every
- * kit ovmx_kit_pack produces today, the value the kernel assigns AT
- * CREATION already matches the kit's own metadata before fchmod/fchown
- * below ever runs. Without the hook, chmod(2)/chown(2) against a real
- * blkdev-mode vmsfs mount still return success (the kernel's generic
- * simple_setattr() fallback, not a no-op or an error) but do not durably
- * change vi->vms_prot / the on-disk owner UIC if the requested value
- * actually DIFFERS from what create() already set -- a real limitation for
- * a kit that ever ships a divergent per-file protection or owner, but not
- * one any current kit hits, and NOT a security regression: a newly
- * created file can never land more permissive than VMSFS_PROT_DEFAULT
- * (never world-writable) regardless of this gap. Tracked as a follow-up
- * (vms-738) rather than solved by reintroducing kernel surface here.
+ * This replaces the earlier design that relied on the kernel's create-time
+ * per-file CLASS default (ods2_class_fileprot) matching the kit for every
+ * file ovmx_kit_pack produces today -- true only while every kit entry
+ * carried the flat OVMX_KIT_PROT_DEFAULT. A vmsfs.ko `.setattr` hook (an
+ * fchmod/fchown route) was tried for this and REVERTED (vms-79b) because it
+ * broke tests/qemu/test_release_e2e.sh's `norecord` boot-halt case; setting
+ * fh2_fileprot at CREATE over the ACP -- not with a post-hoc chmod -- is
+ * both the faithful mechanism and the one that avoids that kernel surface.
+ * A kit that ships a divergent per-file protection now installs with THAT
+ * protection, not the class default (proven in
+ * tests/qemu/test_product_install_e2e.sh). Owner UIC still follows the
+ * creating process's UIC (SYSTEM [1,4] when PRODUCT INSTALL runs as SYSTEM,
+ * which it is expected to) -- the same UIC current kits record.
  *
  * PRODUCT DATABASE: src/product/ovmx_product_db.h, OVMX-defined and
  * labeled (Rule 8) -- see that header. This file is the only reader and
@@ -406,9 +402,15 @@ static int pd_ensure_tree(const struct pd_dest *dest, const char *dirpath)
  * on the executive-absent defer -- src/vmsrms/rms_io.h rms_open_named_handle.
  * ================================================================ */
 
-/* Write @len bytes of @buf to VMS filespec @spec as a fresh versioned file.
- * Returns 0 on success, -1 with a %PCSI- message printed. */
-static int pd_write_file(const char *spec, const uint8_t *buf, size_t len)
+/* Write @len bytes of @buf to VMS filespec @spec as a fresh versioned file,
+ * stamping the new file's ODS-2 fh2_fileprot from @fileprot -- a VMS SOGW
+ * protection mask (ovmx_fileprot.h encoding) written into the file header over
+ * the executive ACP at $CREATE time, NOT a POSIX chmod (vms-738, Rule 9/INV-6).
+ * @fileprot==0 means "no explicit protection": the ACP applies the per-file
+ * CLASS default (ods2_class_fileprot). Returns 0 on success, -1 with a %PCSI-
+ * message printed. */
+static int pd_write_file(const char *spec, const uint8_t *buf, size_t len,
+                         uint16_t fileprot)
 {
     uint32_t st = 0;
     /* vms-3a8: create each target file with the record format a byte-stream copy
@@ -420,8 +422,8 @@ static int pd_write_file(const char *spec, const uint8_t *buf, size_t len)
      * verb (%DCL-E-IVVERB \STARTUP.COM\) and the installed target never booted to
      * login across the container boundary (tests/qemu/test_release_install.sh). */
     unsigned kind = ods2_kind_for_filespec(spec);
-    rms_file_t *h = rms_open_named_handle_kind(spec, /*want_write*/1, /*create*/1,
-                                               kind, &st);
+    rms_file_t *h = rms_open_named_handle_kind_prot(spec, /*want_write*/1, /*create*/1,
+                                                    kind, fileprot, &st);
     if (!h) {
         fprintf(stderr, "%%PCSI-E-CREATE, cannot create %s (0x%08X)\n", spec, st);
         return -1;
@@ -481,13 +483,13 @@ static void pd_db_load(const char *spec, struct ovmx_product_db *db)
 }
 
 /* Writes the whole struct as a fresh versioned SYS$SYSTEM: file through the ACP.
- * Protection/owner follow the executive's create-time defaults (SYSTEM's UIC +
- * VMSFS_PROT_DEFAULT) -- a system file, never world-writable -- the same policy
- * every installed kit file now takes (see the do_install note; the fchmod/fchown
- * that once ran on a raw POSIX fd governed only the retired passthrough path). */
+ * The product database is not a kit entry, so it carries no per-file protection
+ * of its own: fileprot==0 lets the ACP apply the per-file CLASS default
+ * (ods2_class_fileprot -- an ordinary SYS$SYSTEM data file, owner SYSTEM, never
+ * world-writable), exactly as it did before vms-738. */
 static int pd_db_save(const char *spec, const struct ovmx_product_db *db)
 {
-    return pd_write_file(spec, (const uint8_t *)db, sizeof(*db));
+    return pd_write_file(spec, (const uint8_t *)db, sizeof(*db), /*fileprot*/0);
 }
 
 static struct ovmx_product_record *pd_db_find_or_add(struct ovmx_product_db *db,
@@ -676,15 +678,17 @@ static int do_install(int argc, char *argv[])
          * Write the entry to the target volume by VMS filespec through RMS
          * ($CREATE + block $PUT) -- an ACP write to the volume's backing disk,
          * write-through synchronous, durable across the install's DISMOUNT
-         * (vms-3a8). Protection/owner UIC follow the executive's create-time
-         * defaults (SYSTEM's UIC + VMSFS_PROT_DEFAULT); the kit's own metadata
-         * is numerically identical to those for every kit shipped today, and
-         * the old fchmod/fchown on a raw POSIX fd governed only the retired
-         * /mnt passthrough (a divergent per-file protection remains the
-         * vms-738 follow-up, unchanged by this fix -- never more permissive
-         * than the create default, so not a security regression).
+         * (vms-3a8). vms-738: each file takes its OWN protection from the kit
+         * entry's ke_protection (a VMS SOGW mask, ovmx_kit_format.h), stamped
+         * into the installed file's ODS-2 fh2_fileprot at $CREATE time over the
+         * executive ACP -- exactly what real VMS PCSI does (each file's exact
+         * protection), and exactly the header path SYSUAF/RIGHTSLIST/images
+         * take. NOT a POSIX chmod, NOT a ugo*rwx flatten (Rule 9/INV-6): the
+         * old fchmod/fchown on a raw POSIX fd governed only the retired /mnt
+         * passthrough and is gone. Owner UIC still follows the creating
+         * process's UIC (SYSTEM) -- the same UIC the kit records for its files.
          */
-        if (pd_write_file(spec, buf, (size_t)e->ke_size) != 0) {
+        if (pd_write_file(spec, buf, (size_t)e->ke_size, e->ke_protection) != 0) {
             free(buf); failed = 1; break;
         }
         free(buf);

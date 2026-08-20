@@ -68,6 +68,20 @@ for f in "$KERNEL" "$FAT_INITRD" "$SLIM_INITRD" "$DISTRIB_IMG" "$DKA100_SRC"; do
 done
 command -v "$QEMU" >/dev/null 2>&1 || { echo "FATAL: $QEMU not available"; exit 1; }
 
+# Use hardware acceleration when /dev/kvm is present AND this QEMU build lists
+# the kvm accelerator; otherwise fall back to TCG software emulation. This lets
+# the install+double-boot run under KVM on a /dev/kvm-capable host (e.g. the
+# k3s rail via run-on-rail.sh --dind, which forwards --device /dev/kvm) and
+# still run anywhere without one. -cpu host is only meaningful (and only safe)
+# under KVM.
+if [ -e /dev/kvm ] && "$QEMU" -accel help 2>/dev/null | grep -qw kvm; then
+    ACCEL="-accel kvm -cpu host"
+    echo "accel: KVM (/dev/kvm present, boots hardware-accelerated)"
+else
+    ACCEL="-accel tcg"
+    echo "accel: TCG (no /dev/kvm -- software emulation)"
+fi
+
 PASS=0
 FAIL=0
 ok()  { echo "  PASS: $1"; PASS=$((PASS + 1)); }
@@ -159,7 +173,7 @@ LOG="$WORKDIR/boot1.log"
 FIFO="$WORKDIR/boot1.in"
 rm -f "$LOG" "$FIFO"; mkfifo "$FIFO"
 # shellcheck disable=SC2086
-timeout "$((BOOT_TIMEOUT + RUN_TIMEOUT * 8 + 60))" $QEMU $MACHINE \
+timeout "$((BOOT_TIMEOUT + RUN_TIMEOUT * 8 + 60))" $QEMU $MACHINE $ACCEL \
     -kernel "$KERNEL" -initrd "$FAT_INITRD" \
     -nographic -append "$CONSOLE loglevel=3 quiet" \
     -m 512M -smp 1 -nic none -nodefaults -serial stdio \
@@ -250,7 +264,7 @@ LOG="$WORKDIR/boot2.log"
 FIFO="$WORKDIR/boot2.in"
 rm -f "$LOG" "$FIFO"; mkfifo "$FIFO"
 # shellcheck disable=SC2086
-timeout "$((BOOT_TIMEOUT + RUN_TIMEOUT * 4 + 60))" $QEMU $MACHINE \
+timeout "$((BOOT_TIMEOUT + RUN_TIMEOUT * 4 + 60))" $QEMU $MACHINE $ACCEL \
     -kernel "$KERNEL" -initrd "$SLIM_INITRD" \
     -nographic -append "$CONSOLE loglevel=3 quiet" \
     -m 512M -smp 1 -nic none -nodefaults -serial stdio \

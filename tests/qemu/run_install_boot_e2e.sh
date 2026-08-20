@@ -77,7 +77,16 @@ echo "--- formatting the blank install target (label WORK, 64 MB) with $INIT_EXE
 # MOUNTFAIL). A real install target is an ODS-2 volume -- format one (vms-37e).
 "$INIT_EXE" --ods2 "$WORKDIR/dka100.img" WORK 64 || { echo "FAIL: INITIALIZE of the target disk"; exit 1; }
 
-exec docker run --rm \
+# Forward /dev/kvm into the inner container when the host exposes it, so the
+# QEMU boots inside test_install_boot_e2e.sh are KVM-accelerated instead of
+# TCG. Harmless when absent (e.g. a laptop without /dev/kvm): the inner script
+# falls back to TCG on its own. On the k3s rail (tools/k3s/run-on-rail.sh
+# --dind) the pod carries /dev/kvm, so this makes the install+double-boot run
+# under nested KVM rather than software emulation.
+KVM_ARGS=()
+if [ -e /dev/kvm ]; then KVM_ARGS=(--device /dev/kvm); fi
+
+exec docker run --rm "${KVM_ARGS[@]}" \
     -e "BOOT_TIMEOUT=${BOOT_TIMEOUT:-90}" \
     -e "RUN_TIMEOUT=${RUN_TIMEOUT:-90}" \
     -v "$REPO_ROOT/tests/qemu/test_install_boot_e2e.sh:/test.sh:ro" \

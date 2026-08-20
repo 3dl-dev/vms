@@ -78,7 +78,13 @@ spec:
               # is KVM-accelerated (nested KVM verified).
               if [ "${OVMX_DIND:-0}" = "1" ]; then
                 echo "[rail] starting in-container dockerd..."
-                _start_dockerd() { dockerd "$@" >/var/log/dockerd.log 2>&1 & DOCKERD_PID=$!; }
+                # The in-pod dockerd must trust the same plain-HTTP registry the
+                # nodes' containerd does (192.168.2.43:30500) so an inner
+                # `docker pull`/`docker run <registry-image>` works in --dind --
+                # e.g. the nested-KVM proof that runs the builder image under
+                # `docker run --device /dev/kvm ... -accel kvm`.
+                DOCKERD_INSECURE="--insecure-registry 192.168.2.43:30500"
+                _start_dockerd() { dockerd $DOCKERD_INSECURE "$@" >/var/log/dockerd.log 2>&1 & DOCKERD_PID=$!; }
                 _wait_dockerd() {
                   for _ in $(seq 1 60); do
                     docker info >/dev/null 2>&1 && return 0

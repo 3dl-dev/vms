@@ -67,16 +67,23 @@ static inline uint32_t ed_rd32(const uint8_t *p)
 }
 
 /*
- * ods2_fh2_map_append - append ONE format-1 FM2 retrieval pointer covering
- * [lbn, lbn+count) to the END of the file header's map area, bumping
- * fh2_map_inuse by 2 words. The map area begins at (fh2_mpoffset * 2) bytes and
- * the currently-used words are fh2_map_inuse; the new 2-word entry is written at
- * (mpoffset*2 + map_inuse*2). The whole 255-word header is checksummed, so the
- * entry must land before the checksum word at byte 510 -- if it would not fit,
- * ODS2_ERR_NOSPACE (the file's extent map is full; the ACP surfaces this as an
- * honest device-full rather than a silent partial map). count in 1..256 and
- * lbn < 2^22 are the format-1 range (larger runs need FM2 format 2/3, which this
- * rung's small-volume corpus never needs -- ODS2_ERR_ARGS, fail-honest).
+ * ods2_fh2_map_append - record the contiguous run [lbn, lbn+count) in the file
+ * header's map area, as ONE OR MORE format-1 FM2 retrieval pointers. Each
+ * format-1 pointer's count field is 8 bits (1..256 blocks), so a run longer than
+ * 256 blocks is stored as several consecutive format-1 pointers -- exactly how
+ * ODS-2 records a large contiguous allocation (a single physically-contiguous
+ * file still maps with back-to-back pointers whose LBNs abut). The map builder
+ * (ods2_fh2_map_walk) and the ACP's window builder read them back and coalesce
+ * abutting runs, so the file remains ONE VBN->LBN window turn.
+ *
+ * Each 2-word pointer is written at (mpoffset*2 + map_inuse*2), bumping
+ * fh2_map_inuse by 2 words per pointer. The whole 255-word header is checksummed,
+ * so every entry must land before the checksum word at byte 510; if the run does
+ * not fit in the remaining map words, ODS2_ERR_NOSPACE (the file's extent map is
+ * full -- an extension header is a later rung; the ACP surfaces this as an honest
+ * device-full rather than a silent partial map). count >= 1 and the run must stay
+ * within the format-1 LBN range (lbn+count-1 < 2^22); a larger volume needs FM2
+ * format 2/3, which this rung's corpus never reaches -- ODS2_ERR_ARGS.
  *
  * `header_block` is the file's already-parsed FH2 primary header (>= 512 bytes);
  * the caller reseals the checksum with ods2_fh2_reseal() after all edits.
@@ -84,13 +91,16 @@ static inline uint32_t ed_rd32(const uint8_t *p)
 ods2_status_t ods2_fh2_map_append(void *header_block, uint32_t lbn, uint32_t count)
 {
     uint8_t *h = (uint8_t *)header_block;
-    unsigned mpoffset, map_inuse, entry_byte;
-    uint16_t w0, w1;
-    uint32_t high6;
+    unsigned mpoffset, map_inuse;
+    uint32_t cur_lbn = lbn, remaining = count;
 
     if (!h)
         return ODS2_ERR_ARGS;
-    if (count < 1 || count > 256 || lbn >= (1u << 22))
+    /* Whole run must lie in the format-1 LBN window (each sub-pointer's own LBN
+     * is checked again below as it advances). count 0 is a no-op success. */
+    if (count == 0)
+        return ODS2_OK;
+    if ((uint64_t)lbn + count - 1u >= (1u << 22))
         return ODS2_ERR_ARGS;
 
     mpoffset  = h[offsetof(ods2_fh2_t, fh2_mpoffset)];
@@ -98,12 +108,11 @@ ods2_status_t ods2_fh2_map_append(void *header_block, uint32_t lbn, uint32_t cou
 
     /* COALESCE (vms-401): a file grown one bucket at a time issues a run of
      * single-block extends whose LBNs are physically contiguous. VMS stores a
-     * contiguous file as ONE retrieval pointer, not one-per-block; appending a
-     * fresh pointer each time instead exhausts the fixed 255-word map area (and,
+     * contiguous file as back-to-back retrieval pointers, not one-per-block; a
+     * fresh pointer per block would exhaust the fixed 255-word map area (and,
      * upstream, the channel's 24-entry window) after a few dozen blocks. So if
-     * the LAST existing format-1 pointer ends exactly where this run begins and
-     * the combined count still fits format-1's 256-block field, grow that
-     * pointer in place rather than appending a new one. */
+     * the LAST existing format-1 pointer ends exactly where this run begins,
+     * grow it up to format-1's 256-block ceiling first, then append the rest. */
     if (map_inuse >= 2u) {
         unsigned last_byte = mpoffset * 2u + (map_inuse - 2u) * 2u;
         uint16_t lw0 = ed_rd16(h + last_byte + 0);
@@ -111,33 +120,47 @@ ods2_status_t ods2_fh2_map_append(void *header_block, uint32_t lbn, uint32_t cou
         if ((lw0 & 0xC000u) == 0x4000u) {            /* format 1 */
             uint32_t last_count = (uint32_t)(lw0 & 0xFFu) + 1u;
             uint32_t last_lbn   = ((uint32_t)(lw0 & 0x3F00u) << 8) | lw1;
-            if (last_lbn + last_count == lbn &&
-                last_count + count <= 256u) {
-                uint32_t nc = last_count + count;
+            if (last_lbn + last_count == cur_lbn && last_count < 256u) {
+                uint32_t grow = 256u - last_count;
+                if (grow > remaining)
+                    grow = remaining;
+                uint32_t nc = last_count + grow;
                 uint32_t hi = (last_lbn >> 16) & 0x3F;
                 ed_put16(h + last_byte + 0,
                          (uint16_t)(0x4000u | ((nc - 1u) & 0xFF) | (hi << 8)));
                 /* word1 (low-16 LBN) unchanged: the run still starts at last_lbn */
-                return ODS2_OK;
+                cur_lbn   += grow;
+                remaining -= grow;
             }
         }
     }
 
-    entry_byte = mpoffset * 2u + map_inuse * 2u;
-    /* Need 4 bytes (2 words) and must stay clear of the checksum word (510). */
-    if (entry_byte + 4u > offsetof(ods2_fh2_t, fh2_checksum))
-        return ODS2_ERR_NOSPACE;
+    /* Append the remainder as consecutive format-1 pointers, <= 256 blocks each. */
+    while (remaining > 0) {
+        unsigned entry_byte = mpoffset * 2u + map_inuse * 2u;
+        uint32_t chunk = remaining > 256u ? 256u : remaining;
+        uint32_t high6;
+        uint16_t w0, w1;
 
-    /* FM2 format 1: word0 = 0x4000 | (count-1) | (high-6 LBN bits << 8),
-     * word1 = low 16 LBN bits. Inverse of ods2_fh2_map_walk()'s format-1
-     * decode; identical to ods2_writer.c's encode_map_extent(). */
-    high6 = (lbn >> 16) & 0x3F;
-    w0 = (uint16_t)(0x4000u | ((count - 1u) & 0xFF) | (high6 << 8));
-    w1 = (uint16_t)(lbn & 0xFFFF);
-    ed_put16(h + entry_byte + 0, w0);
-    ed_put16(h + entry_byte + 2, w1);
+        /* Need 4 bytes (2 words) and must stay clear of the checksum word (510). */
+        if (entry_byte + 4u > offsetof(ods2_fh2_t, fh2_checksum))
+            return ODS2_ERR_NOSPACE;
 
-    h[offsetof(ods2_fh2_t, fh2_map_inuse)] = (uint8_t)(map_inuse + 2u);
+        /* FM2 format 1: word0 = 0x4000 | (count-1) | (high-6 LBN bits << 8),
+         * word1 = low 16 LBN bits. Inverse of ods2_fh2_map_walk()'s format-1
+         * decode; identical to ods2_writer.c's encode_map_extent(). */
+        high6 = (cur_lbn >> 16) & 0x3F;
+        w0 = (uint16_t)(0x4000u | ((chunk - 1u) & 0xFF) | (high6 << 8));
+        w1 = (uint16_t)(cur_lbn & 0xFFFF);
+        ed_put16(h + entry_byte + 0, w0);
+        ed_put16(h + entry_byte + 2, w1);
+
+        map_inuse += 2u;
+        h[offsetof(ods2_fh2_t, fh2_map_inuse)] = (uint8_t)map_inuse;
+        cur_lbn   += chunk;
+        remaining -= chunk;
+    }
+
     return ODS2_OK;
 }
 

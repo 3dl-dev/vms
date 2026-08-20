@@ -376,7 +376,9 @@ tmpfile=PROCEDURE,clearerr=PROCEDURE,\
 \
 unsetenv=PROCEDURE,\
 \
-pthread_create=PROCEDURE,pthread_detach=PROCEDURE,pthread_join=PROCEDURE"
+pthread_create=PROCEDURE,pthread_detach=PROCEDURE,pthread_join=PROCEDURE,\
+\
+getpagesize=PROCEDURE"
 
 # fcntl APPENDED for vms-8019 (append-only -> prior consumers' vector indices
 # unchanged, GSMATCH LEQUAL-compatible). $CREPRC's creation handshake sets
@@ -453,6 +455,21 @@ pthread_create=PROCEDURE,pthread_detach=PROCEDURE,pthread_join=PROCEDURE"
 # pthread_create/detach/join yet). All three are POSIX threading entry points
 # real OpenVMS DECC$SHR exports (DECthreads) and musl's libc.a defines, so
 # DECC$SHR is the right producer.
+#
+# getpagesize APPENDED for vms-ee2 (append-only -> prior consumers' vector
+# indices unchanged, GSMATCH LEQUAL-compatible). bfd/libbfd.c carries a real
+# GNU-C `.init_array` static constructor (bfd_init_pagesize) that ALWAYS runs at
+# activation once LINK.EXE places .init_array and IMGACT runs the symbol-vector
+# ctors (this bead) -- and its very first act is `_bfd_pagesize = getpagesize()`.
+# getpagesize was not previously exported, so that call resolved to nothing and
+# LINK.EXE left it a deferred external (call rel32=0); a NORMAL deferred external
+# is harmless only while nothing executes its unpatched call site, but a
+# constructor executes unconditionally -- the e8 00000000 corrupted the ctor's
+# return and jumped wild (SIGSEGV/SIGILL in producer text). getpagesize is a
+# plain C-RTL entry point (returns the page size) that real OpenVMS DECC$SHR
+# exports and musl's libc.a defines (a strong T symbol, whole-archived into
+# DECC$SHR), so exporting it as a universal binds AS.EXE's ctor call to a real
+# PLT stub resolved at activation. AS.EXE (F1 GNU as) is the first consumer.
 #
 # THE GENERAL RULE, because this is the commonest way to break the VMS-native
 # toolchain jobs: EVERY libc call added to an OVMX library is a claim that

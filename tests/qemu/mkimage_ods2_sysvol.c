@@ -49,7 +49,20 @@
  * no new ODS-2 knowledge (CLAUDE.md Rule 8; see vmsfs/ods2.h's provenance).
  *
  * Usage: mkimage_ods2_sysvol <output-file> <size-in-MB> \
- *                            <sysuaf-path> <rightslist-path>
+ *                            <sysuaf-path> <rightslist-path> \
+ *                            [SUBDIR:NAME=host-path]...
+ *
+ * OPTIONAL TRAILING ARGS (vms-3f5, rung of vms-104). Each extra arg masters one
+ * verbatim binary file into a named system directory:
+ *   SYSEXE:TCC.EXE=/path/to/TCC.EXE      -> [SYS0.SYSCOMMON.SYSEXE]TCC.EXE
+ *   SYSLIB:DECC$SHR.EXE=/path/to/it      -> [SYS0.SYSCOMMON.SYSLIB]DECC$SHR.EXE
+ * so the KE toolchain harness (tests/qemu/test_syssvc_mmk_build.c) can activate
+ * the MMK-driven image THROUGH THE ACP off this generated system volume -- the
+ * OVMX-native toolchain (TCC/LIBRARIAN/LINK.EXE) and the C run-time shareable
+ * (DECC$SHR.EXE) IMGACT binds -- WITHOUT ever mastering OVMX images onto the
+ * clean-room real-VAX DKA0: fixture (vms-29ff). Multi-MB binaries are handled by
+ * the same byte-genuine ODS-2 writer (its >256-block retrieval-map split landed
+ * in ods2_edit.c, vms-3a8); raise <size-in-MB> to fit them.
  */
 
 #include <stdio.h>
@@ -187,9 +200,9 @@ static void add_stmlf(ods2_wvolume_t *wvol, ods2_fid_t dir, const char *name,
 
 int main(int argc, char *argv[])
 {
-    if (argc != 5) {
+    if (argc < 5) {
         fprintf(stderr, "Usage: mkimage_ods2_sysvol <output-file> <size-in-MB> "
-                        "<sysuaf-path> <rightslist-path>\n");
+                        "<sysuaf-path> <rightslist-path> [SUBDIR:NAME=host-path]...\n");
         return 1;
     }
     const char *outpath   = argv[1];
@@ -252,6 +265,40 @@ int main(int argc, char *argv[])
 
     free(sysuaf);
     free(rights);
+
+    /* OPTIONAL: master extra verbatim binaries into SYSEXE / SYSLIB (vms-3f5).
+     * Each trailing arg is "SUBDIR:NAME=host-path". add_raw lays the bytes down
+     * verbatim (FIXED), so an IMGACT IO$_READVBLK reads the image byte-exact. */
+    for (int ai = 5; ai < argc; ai++) {
+        char spec[1024];
+        strncpy(spec, argv[ai], sizeof(spec) - 1);
+        spec[sizeof(spec) - 1] = '\0';
+        char *colon = strchr(spec, ':');
+        char *eq    = strchr(spec, '=');
+        if (!colon || !eq || colon > eq) {
+            fprintf(stderr, "mkimage_ods2_sysvol: malformed extra arg '%s' "
+                            "(want SUBDIR:NAME=host-path)\n", argv[ai]);
+            return 1;
+        }
+        *colon = '\0';
+        *eq    = '\0';
+        const char *subdir = spec;
+        const char *name   = colon + 1;
+        const char *hpath  = eq + 1;
+        ods2_fid_t  target;
+        if (strcmp(subdir, "SYSEXE") == 0)      target = sysexe;
+        else if (strcmp(subdir, "SYSLIB") == 0) target = syslib;
+        else if (strcmp(subdir, "SYSMGR") == 0) target = sysmgr;
+        else {
+            fprintf(stderr, "mkimage_ods2_sysvol: unknown SUBDIR '%s' "
+                            "(SYSEXE|SYSLIB|SYSMGR)\n", subdir);
+            return 1;
+        }
+        size_t   flen = 0;
+        uint8_t *fbuf = read_whole_file(hpath, &flen);
+        add_raw(&wvol, target, name, fbuf, flen);
+        free(fbuf);
+    }
 
     int fd = open(outpath, O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) { perror(outpath); free(image); return 1; }

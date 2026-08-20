@@ -479,9 +479,13 @@ RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_sysvol \
         /src/vmsfs/ods2/ods2_reader.c /src/vmsfs/ods2/ods2_writer.c \
         /src/vmsfs/ods2/ods2_edit.c \
         /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
-    /src/tests/qemu/mkimage_ods2_sysvol /ods2_sysvol.img 2 \
+    /src/tests/qemu/mkimage_ods2_sysvol /ods2_sysvol.img 48 \
         /src/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT \
-        /src/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT
+        /src/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT \
+        SYSEXE:TCC.EXE=/src/repo/build-static/bin/TCC.EXE \
+        SYSEXE:LIBRARIAN.EXE=/src/repo/build-static/bin/LIBRARIAN.EXE \
+        SYSEXE:LINK.EXE=/src/repo/build-static/bin/LINK.EXE \
+        'SYSLIB:DECC$SHR.EXE=/src/repo/build-static/bin/DECC$SHR.EXE'
 
 # GENERATED ODS-2 volume carrying a real ELF image [IMGACT]TESTIMG.EXE for the
 # IMGACT-over-ACP proof (vms-3e8e, epic vms-208). mkimage_ods2_imgact.c lays the

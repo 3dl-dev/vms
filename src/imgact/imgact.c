@@ -61,13 +61,26 @@
 #endif
 
 /* The system disk the activator reads images from. On real OpenVMS this is the
- * discovered SYS$SYSDEVICE; IMGACT hardcodes the boot unit exactly as it used
- * to hardcode the "/vms" mount point (IMGACT_FALLBACK_SYSLIB). Resolving
- * SYS$SYSDEVICE dynamically is a follow-up (it is a discovered logical, epic
- * vms-47d). The QEMU harness maps the boot volume to DKA0:. */
-#ifndef IMGACT_ACP_SYSDEVICE
-#define IMGACT_ACP_SYSDEVICE "DKA0:"
+ * discovered SYS$SYSDEVICE, not a compile-time constant. IMGACT no longer bakes
+ * the boot unit as a literal (that was the last compile-time disk name, exactly
+ * like the retired "/vms" IMGACT_FALLBACK_SYSLIB mount point): the activator now
+ * DISCOVERS it at runtime from the OVMX_SYSDEVICE environment variable the boot
+ * chain publishes (ovmx_init sets it to the mounted boot unit; a produced-image
+ * activation, e.g. the KE harness, sets it to whatever volume carries the image
+ * + its shareables), and falls back to this default only when it is unset. This
+ * kills the compile-time disk literal and advances device-native naming (epic
+ * vms-47d). The QEMU boot maps the system disk to DKA0:; the KE toolchain
+ * harness (tests/qemu/test_syssvc_mmk_build.c) points it at the generated
+ * ODS-2 system volume so the clean-room real-VAX DKA0: fixture is never mutated
+ * with OVMX toolchain images (vms-104/vms-29ff). */
+#ifndef IMGACT_ACP_SYSDEVICE_DEFAULT
+#define IMGACT_ACP_SYSDEVICE_DEFAULT "DKA0:"
 #endif
+
+/* Runtime-discovered system device (OVMX_SYSDEVICE or the default above).
+ * Filled once in imgact_bootstrap() before any image read; used by imgsrc_open()
+ * as the ACP unit every image read $ASSIGNs to. */
+static char g_acp_sysdevice[32] = IMGACT_ACP_SYSDEVICE_DEFAULT;
 
 /* --------------------------------------------------------------------------
  * Freestanding syscall layer (no libc; IMGACT.EXE is -nostdlib).
@@ -657,7 +670,7 @@ static int imgsrc_open(struct imgsrc *s, const char *path)
 	char mapped[256];
 	const char *p = imgsrc_map_staged(path, mapped, sizeof mapped);
 	s->posix_fd = -1;
-	uint32_t st = imgact_acp_open(&s->f, IMGACT_ACP_SYSDEVICE, p);
+	uint32_t st = imgact_acp_open(&s->f, g_acp_sysdevice, p);
 	if (st & 1u)
 		return 0;
 	/*
@@ -1779,6 +1792,35 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	publish_resident_producers();
 }
 
+/* Discover the ACP system device (rung vms-29ff / vms-104). Walk the process
+ * environment for OVMX_SYSDEVICE=<unit> (e.g. "DKA300:") and copy its value into
+ * g_acp_sysdevice; leave the compile-time default in place when it is unset or
+ * empty. Freestanding: no libc getenv, just a scan of the raw envp vector. */
+static void imgact_discover_sysdevice(char **envp)
+{
+	static const char key[] = "OVMX_SYSDEVICE=";
+	const unsigned long klen = sizeof(key) - 1;
+	for (char **e = envp; e && *e; e++) {
+		const char *s = *e;
+		unsigned long i = 0;
+		while (i < klen && s[i] && s[i] == key[i])
+			i++;
+		if (i != klen)
+			continue;
+		const char *val = s + klen;
+		if (!*val)
+			return;                 /* empty: keep the default */
+		unsigned long n = xstrlen(val);
+		if (n >= sizeof(g_acp_sysdevice))
+			n = sizeof(g_acp_sysdevice) - 1;
+		unsigned long j = 0;
+		for (; j < n; j++)
+			g_acp_sysdevice[j] = val[j];
+		g_acp_sysdevice[j] = '\0';
+		return;
+	}
+}
+
 unsigned long imgact_bootstrap(unsigned long *sp)
 {
 	/* ---- Parse the initial process stack (no globals yet). ---- */
@@ -1809,6 +1851,11 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	g_auxv  = auxv;
 	g_envp  = envp;                         /* for the C-RTL __init_libc bootstrap */
 	g_argv0 = argc > 0 ? argv[0] : 0;
+
+	/* Discover the ACP system device before any image read (imgsrc_open uses
+	 * g_acp_sysdevice). Runtime-discovered, not a compile-time literal
+	 * (vms-29ff/vms-47d). */
+	imgact_discover_sysdevice(envp);
 
 	/* ---- Build the executable object from the kernel-provided phdrs. ----
 	 * The kernel has already mapped the main executable's LOAD segments;

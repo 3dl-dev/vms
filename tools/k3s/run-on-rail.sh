@@ -30,10 +30,20 @@ set -euo pipefail
 # --- config -----------------------------------------------------------------
 NS=ovmx-ci
 REPO_URL="${OVMX_REPO_URL:-https://github.com/3dl-dev/vms}"
-IMAGE="${OVMX_RAIL_IMAGE:-gpu-rail-registry.default.svc.cluster.local:5000/ovmx-builder:latest}"
+# The working image ref for BOTH push and pull is the k3s-cp registry NodePort
+# (192.168.2.43:30500): the nodes' containerd trusts it as insecure HTTP and it
+# is a bare IP so it needs no cluster-DNS resolution (kubelet/containerd resolve
+# image hosts via the NODE's resolv.conf, not CoreDNS -- the in-cluster Service
+# DNS name does NOT work for image pulls). See README "Registry notes".
+IMAGE="${OVMX_RAIL_IMAGE:-192.168.2.43:30500/ovmx-builder:latest}"
 DEADLINE="${OVMX_RAIL_DEADLINE:-3600}"    # activeDeadlineSeconds (wall cap)
-REQ_CPU="${OVMX_RAIL_REQ_CPU:-4}"
-REQ_MEM="${OVMX_RAIL_REQ_MEM:-8Gi}"
+# Requests are kept modest so the pod actually SCHEDULES on k3s-worker, which
+# runs shared tenants (~5 of its 8 CPU are already requested). The limit still
+# lets the build burst wide (cmake -j$(nproc)); CFS hands it spare CPU when the
+# node has it. Bump OVMX_RAIL_REQ_CPU if you want a guaranteed-wide build and
+# the node has headroom.
+REQ_CPU="${OVMX_RAIL_REQ_CPU:-1}"
+REQ_MEM="${OVMX_RAIL_REQ_MEM:-4Gi}"
 LIM_CPU="${OVMX_RAIL_LIM_CPU:-6}"
 LIM_MEM="${OVMX_RAIL_LIM_MEM:-24Gi}"
 
@@ -103,23 +113,32 @@ done
 [ -n "$POD" ] || { echo "[run-on-rail] pod never appeared" >&2; exit 1; }
 
 # Wait until the pod is out of Pending (Running or already terminated), so
-# `logs -f` has something to stream. Surface scheduling failures early.
-for _ in $(seq 1 300); do
+# `logs -f` has something to stream. Surface pull/schedule failures instead of
+# hanging silently, and never fall through to `logs -f` on a still-Pending pod.
+PHASE=""
+for _ in $(seq 1 600); do
   PHASE="$(kubectl -n "$NS" get pod "$POD" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
   case "$PHASE" in
     Running|Succeeded|Failed) break ;;
   esac
-  # Show pull/schedule trouble instead of hanging silently.
   WAITMSG="$(kubectl -n "$NS" get pod "$POD" \
     -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || true)"
   case "$WAITMSG" in
-    ErrImagePull|ImagePullBackOff|CreateContainerError|InvalidImageName)
+    ErrImagePull|ImagePullBackOff|CreateContainerError|InvalidImageName|RunContainerError)
       echo "[run-on-rail] pod stuck: $WAITMSG" >&2
       kubectl -n "$NS" describe pod "$POD" 2>&1 | sed -n '/Events:/,$p' >&2
       exit 1 ;;
   esac
   sleep 1
 done
+
+case "$PHASE" in
+  Running|Succeeded|Failed) ;;
+  *)
+    echo "[run-on-rail] pod still $PHASE after wait -- not started. Recent events:" >&2
+    kubectl -n "$NS" describe pod "$POD" 2>&1 | sed -n '/Events:/,$p' >&2
+    exit 1 ;;
+esac
 
 # --- stream logs ------------------------------------------------------------
 echo "[run-on-rail] pod=$POD phase=$PHASE -- streaming logs:" >&2

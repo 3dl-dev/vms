@@ -13,9 +13,13 @@
 #
 # Build + push (one-time, from workshop -- this local docker build is the only
 # local-heavy step, and it is acceptable):
-#   docker build -f tools/k3s/Dockerfile.rail -t 192.168.2.44:30500/ovmx-builder:latest .
-#   docker push 192.168.2.44:30500/ovmx-builder:latest
-# (192.168.2.44:30500 = the in-cluster registry's NodePort on k3s-worker.)
+#   docker build -f tools/k3s/Dockerfile.rail -t 192.168.2.43:30500/ovmx-builder:latest .
+#   docker push 192.168.2.43:30500/ovmx-builder:latest
+# 192.168.2.43:30500 = the registry NodePort on k3s-cp, which workshop's Docker
+# daemon already lists in insecure-registries (the registry is plain HTTP, so
+# the .44/k3s-worker NodePort would need a daemon.json edit -- the .43 one is
+# already trusted). Same registry storage either way; pods pull by the
+# in-cluster Service name (see README "Registry notes").
 
 FROM ubuntu:24.04
 

@@ -48,12 +48,17 @@ a shell `&&` chain.
 ## Cluster facts (verified)
 
 - **Registry:** `gpu-rail-registry` (default ns), NodePort **30500** → 5000,
-  ClusterIP `10.43.10.176`. Insecure HTTP registry, trusted cluster-wide.
-  - **Push from workshop:** via a node NodePort, e.g.
-    `192.168.2.44:30500` (k3s-worker) or `192.168.2.43:30500` (k3s-cp).
-  - **Pull in-cluster:** the working ref is
-    **`gpu-rail-registry.default.svc.cluster.local:5000/ovmx-builder:latest`**
-    (see "Registry notes" below for why this one and not the NodePort).
+  ClusterIP `10.43.10.176`. Insecure **HTTP** registry.
+  - **Working ref for BOTH push and pull:**
+    **`192.168.2.43:30500/ovmx-builder:latest`** (the k3s-cp NodePort). This is
+    the exact pattern the existing ovmx-lab StatefulSets use
+    (`192.168.2.43:30500/ovmx-vaxlab:3`), i.e. the proven-trusted address.
+  - The in-cluster Service DNS name
+    (`gpu-rail-registry.default.svc.cluster.local:5000`) does **not** work for
+    image pulls — the node's containerd/kubelet resolve image hosts via the
+    *node's* resolv.conf, not CoreDNS, so it fails with
+    `lookup ...svc.cluster.local: Try again`. Use the NodePort IP. See
+    "Registry notes" below.
 - **Target node:** `k3s-worker` (192.168.2.44, 8 CPU / 53 GB, KVM-capable bare
   metal). The Job pins `nodeSelector kubernetes.io/hostname=k3s-worker`. It
   never targets k3s-cp (small), k3s-mini (NotReady), or the GPU node.
@@ -69,25 +74,32 @@ acceptable as a one-time bootstrap.
 
 ```bash
 # from the repo root on workshop:
-docker build -f tools/k3s/Dockerfile.rail -t 192.168.2.44:30500/ovmx-builder:latest .
-docker push 192.168.2.44:30500/ovmx-builder:latest
+docker build -f tools/k3s/Dockerfile.rail -t 192.168.2.43:30500/ovmx-builder:latest .
+docker push 192.168.2.43:30500/ovmx-builder:latest
 ```
 
 ### Registry notes (the parts that fight you)
 
-- The registry serves **HTTP** (insecure). Workshop's Docker already pushes to
-  it (other tenants do), and the k3s nodes' containerd already trusts it (they
-  pull other tenants' images from it), so **no per-node TLS/insecure config was
-  needed** for either push or pull.
-- **Push tag vs. pull ref differ on purpose.** You push to a *NodePort*
-  (`192.168.2.44:30500`) because that's reachable from workshop. Pods pull with
-  the *in-cluster* Service DNS name
-  (`gpu-rail-registry.default.svc.cluster.local:5000`), which resolves to the
-  Service ClusterIP `10.43.10.176:5000`. Both names address the same registry
-  storage, so an image pushed at the NodePort tag is pullable at the in-cluster
-  tag — they are the same blob under two names. If DNS ever misbehaves, the
-  ClusterIP form `10.43.10.176:5000/ovmx-builder:latest` works identically
-  (set `OVMX_RAIL_IMAGE`).
+- The registry serves **HTTP** (insecure). The k3s nodes' containerd already
+  trusts it (they pull other tenants' images from it), so **no per-node config
+  was needed for pull**.
+- **Push must use the NodePort workshop's Docker daemon already trusts.** The
+  registry is plain HTTP, so `docker push` needs the target in
+  `/etc/docker/daemon.json` `insecure-registries`. Workshop already lists
+  **`192.168.2.43:30500`** (k3s-cp) there but *not* `192.168.2.44:30500`
+  (k3s-worker) — pushing to `.44` fails with
+  `http: server gave HTTP response to HTTPS client`. Push to **`.43`** (no
+  shared-host config change) — it's the same registry storage as `.44`.
+- **Same ref for push and pull: `192.168.2.43:30500/ovmx-builder:latest`.**
+  Push goes there because workshop's daemon trusts it; pods pull the same tag
+  because the nodes' containerd trusts that address too *and* it is a bare IP
+  needing no DNS. Do **not** use the Service DNS name for the image ref — the
+  node resolves image hosts via its own resolv.conf, not CoreDNS, so
+  `gpu-rail-registry.default.svc.cluster.local:5000` ImagePullBackOffs with
+  `lookup ...: Try again` (verified). The ClusterIP form
+  `10.43.10.176:5000/...` avoids DNS but is only pullable if the nodes'
+  containerd trusts that IP as insecure too — the NodePort IP is the known-good
+  path, so that is the default (`OVMX_RAIL_IMAGE` to override).
 - `imagePullPolicy: Always` — the tag is `:latest` and mutable; always re-pull
   so a rebuilt builder image is picked up.
 

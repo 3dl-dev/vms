@@ -1394,12 +1394,34 @@ int dcl_resolve_activatable(struct dcl_context *ctx, const char *vms_spec,
                             const char *linux_path, char *resolved, size_t sz)
 {
 #if defined(__linux__)
-    /* ATOMIC FLIP (vms-5f0): the image lives on the genuine ODS-2 SYS$DISK, not
-     * the retired /vms passthrough. When the executive Files-11 ACP is present,
-     * resolve THROUGH it and NEVER fall back to a /vms opendir()/access() probe
-     * (INV-6). Only when no ACP-mounted SYS$DISK is reachable (no /dev/vms, the
-     * plain host ctest) does the legacy resolver below run. */
-    {
+    /* NATIVE-TOOL ABSOLUTE POSIX PATH (self-host toolchain, vms-104).
+     *
+     * A foreign command whose image-spec is an ABSOLUTE POSIX path -- e.g. the
+     * self-host toolchain "TCC :== \"$/vms/SYS0/SYSCOMMON/SYSEXE/TCC.EXE\"" that
+     * MMK drives (design-self-host-spine5-mmk-component.md; the static musl
+     * TCC/LIBRARIAN/LINK.EXE) -- explicitly names a NATIVE Linux executable the
+     * kernel execve's directly. It is NOT an OVMX image read over the ACP and NOT
+     * an ODS-2 file spec, so it is resolved on its own POSIX terms below.
+     *
+     * This is NOT the /vms executive-facility fallback INV-6/Rule 9 forbids: a
+     * native build tool never rides the Files-11 ACP in ANY design (there are no
+     * ODS-2 image bytes to read -- Linux execve loads the static binary), and the
+     * caller (dcl_resolve_path) already returned this exact /-rooted path
+     * verbatim as the Linux passthrough, exactly as dcl_rms_effective_spec passes
+     * a /-rooted spec through unchanged. The atomic flip's ACP-only resolution
+     * governs VMS specs (SYS$SYSTEM:X.EXE); it must not swallow a /-rooted
+     * native-tool path. The OVMX artifacts this drive produces stay authentic:
+     * the linked OVMXRT.EXE is IMGACT-activated over the ACP off the discovered
+     * system volume and its DECC$SHR is bound over the ACP (vms-104 rungs
+     * ii/iii/iv, harness side) -- only the native compiler/librarian/linker
+     * fork+exec on their own POSIX terms, which is what they have always done.
+     *
+     * ATOMIC FLIP (vms-5f0), VMS specs: the image lives on the genuine ODS-2
+     * SYS$DISK, not the retired /vms passthrough. When the executive Files-11 ACP
+     * is present, resolve THROUGH it and NEVER fall back to a /vms opendir()/
+     * access() probe (INV-6). Only when no ACP-mounted SYS$DISK is reachable (no
+     * /dev/vms, the plain host ctest) does the legacy resolver below run. */
+    if (!(vms_spec && vms_spec[0] == '/')) {
         int acp_usable = 0;
         if (dcl_resolve_activatable_acp(ctx, vms_spec, linux_path,
                                         resolved, sz, &acp_usable))

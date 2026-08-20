@@ -28,6 +28,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
 else()
     set(OVMX_BOOT_BRIDGE_SRC
         ovmx_boot_acp_read.c
+        # vms-46c: the conversational SYSBOOT> path's OVMXVMSSYS.PAR read/write
+        # over the executive Files-11 ACP (the strong ovmx_sysgen_acp_* seam for
+        # PID 1, backed by imgact_acp.c -- no RMS pulled into the static image).
+        # Linux-only, exactly like the rest of the ACP bridge.
+        ovmx_boot_sysgen_acp.c
         ${CMAKE_SOURCE_DIR}/src/imgact/imgact_acp.c)
 endif()
 

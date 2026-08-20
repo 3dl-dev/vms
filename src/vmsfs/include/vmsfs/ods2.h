@@ -1594,11 +1594,74 @@ void ods2_ifbm_block_free(void *bitmap_block, unsigned bit_in_block);
 /* FH2 file "kind" -- the RECATTR (FAT) / efblk preset, matching
  * ods2_writer.c's internal enum fh2_kind values byte-for-byte. */
 enum ods2_fh2_kind {
-    ODS2_FK_SYSTEM   = 0,   /* reserved-file stub (rtype 1)                   */
-    ODS2_FK_DIR      = 1,   /* directory (rtype 2, rattrib 0x08)              */
-    ODS2_FK_DATA     = 2,   /* RFM=VAR data file (rtype 2, rattrib CR)        */
-    ODS2_FK_DATA_FIX = 3    /* RFM=FIXED 512-byte data file (rtype 1)         */
+    ODS2_FK_SYSTEM     = 0, /* reserved-file stub (rtype 1)                   */
+    ODS2_FK_DIR        = 1, /* directory (rtype 2, rattrib 0x08)              */
+    ODS2_FK_DATA       = 2, /* RFM=VAR data file (rtype 2, rattrib CR)        */
+    ODS2_FK_DATA_FIX   = 3, /* RFM=FIXED 512-byte data file (rtype 1)         */
+    ODS2_FK_DATA_STMLF = 4  /* RFM=STMLF (stream, LF) text file (rtype 5, CR) */
 };
+
+/*
+ * ods2_type_is_binary_image - is a file TYPE (extension, no dot) a binary image
+ * that must be stored RFM=FIXED verbatim rather than RFM=STMLF? The single
+ * source of truth for the master (tools/vmsfs_master.c) AND the live installer
+ * (PRODUCT INSTALL, src/product/product.c): a byte-stream copy of an .EXE must
+ * keep RFM=FIXED (a line-oriented STMLF reframing would corrupt block-read
+ * image activation), while a .COM/.DAT text file must be RFM=STMLF so DCL/RMS
+ * read it one LF-record at a time. Before this helper the two writers diverged:
+ * the master chose per-type, the ACP installer created EVERYTHING RFM=VAR, so a
+ * live-installed STARTUP.COM read back as one bogus VAR record and DCL saw the
+ * file name itself as a command verb (%DCL-E-IVVERB, vms-3a8). Kept inline and
+ * dependency-free so both writers link the identical list.
+ */
+static inline int ods2_type_is_binary_image(const char *type)
+{
+    static const char *const bin[] = {
+        "EXE", "OLB", "OBJ", "STB", "DMP", "KIT", "GZ", "IMG", "ISO",
+        "BIN", "ELF", "TLB", "MLB", "SYS", "KO",
+    };
+    size_t i;
+    if (!type)
+        return 0;
+    for (i = 0; i < sizeof(bin) / sizeof(bin[0]); i++) {
+        const char *a = type, *b = bin[i];
+        while (*a && *a != ';' && *b) {         /* ';version' terminates the type */
+            unsigned char ca = (unsigned char)*a, cb = (unsigned char)*b;
+            if (ca >= 'a' && ca <= 'z') ca = (unsigned char)(ca - 32);
+            if (ca != cb) break;
+            a++; b++;
+        }
+        if ((*a == '\0' || *a == ';') && *b == '\0')
+            return 1;
+    }
+    return 0;
+}
+
+/*
+ * ods2_kind_for_filespec - the RFM `kind` a byte-stream copy of a file named by
+ * VMS filespec (or bare "NAME.TYPE") should be created with: RFM=FIXED for a
+ * binary image, RFM=STMLF for everything else. Mirrors tools/vmsfs_master.c's
+ * per-file choice so a live PRODUCT INSTALL lays the target volume down with the
+ * SAME record formats the mastered distribution disk carries (vms-3a8).
+ */
+static inline unsigned ods2_kind_for_filespec(const char *filespec)
+{
+    const char *name = filespec, *dot = NULL, *p;
+    if (!filespec)
+        return ODS2_FK_DATA_STMLF;
+    /* Isolate the filename: it begins after the last directory/device delimiter,
+     * so dots WITHIN a rooted directory ("[SYS0.SYSCOMMON.SYSEXE]") never look
+     * like a file type. */
+    for (p = filespec; *p; p++)
+        if (*p == ']' || *p == ':' || *p == '/' || *p == '>')
+            name = p + 1;
+    for (p = name; *p && *p != ';'; p++)
+        if (*p == '.')
+            dot = p + 1;                        /* the file type (post-last-dot) */
+    if (dot && ods2_type_is_binary_image(dot))
+        return ODS2_FK_DATA_FIX;
+    return ODS2_FK_DATA_STMLF;
+}
 
 /* Build a complete FH2 file header into a caller-supplied 512-byte block.
  * `owner`={0,0} + `fileprot`=0 => the writer's kind default (SYSTEM [1,4],

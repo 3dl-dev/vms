@@ -1069,24 +1069,13 @@ static int read_host_file(const char *path, uint64_t size,
     return 0;
 }
 
-/* Is this file type a BINARY image whose bytes must NOT be framed as text
- * records? These stay RFM=FIXED (create_file_raw) -- IMGACT/loaders read their
- * raw blocks, never line records. Everything else is treated as a STREAM-LF
- * text file (create_file_stmlf) so a line-oriented RMS/DCL reader gets one
- * record per LF instead of the whole file as one 512-byte record. `type` is
- * the upcased file type (extension), no dot. Content bytes are verbatim in
- * BOTH cases; only the FH2 record format differs. */
-static int ods2_type_is_binary_image(const char *type)
-{
-    static const char *bin[] = {
-        "EXE", "OLB", "OBJ", "STB", "DMP", "KIT", "GZ", "IMG", "ISO",
-        "BIN", "ELF", "TLB", "MLB", "SYS", "KO",
-    };
-    for (size_t i = 0; i < sizeof(bin)/sizeof(bin[0]); i++)
-        if (strcasecmp(type, bin[i]) == 0)
-            return 1;
-    return 0;
-}
+/* ods2_type_is_binary_image() -- which file types stay RFM=FIXED (binary images:
+ * IMGACT/loaders read raw blocks, never line records) vs RFM=STMLF (everything
+ * else, a line-oriented text file). MOVED to vmsfs/ods2.h (vms-3a8) so the live
+ * PRODUCT INSTALL path (src/product/product.c) classifies files with the SAME
+ * list this master does -- the mastered distro disk and a live-installed target
+ * must carry identical per-file record formats. `type` is the file type
+ * (extension), no dot; content bytes are verbatim in BOTH cases. */
 
 /* Construct a node's on-disk directory-entry name: "NAME.DIR" for a directory,
  * "NAME.TYPE" (or bare "NAME" when the type is empty) for a file -- exactly the

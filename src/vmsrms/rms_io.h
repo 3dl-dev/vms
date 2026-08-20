@@ -137,6 +137,19 @@ int         rms_io_posix_fd(rms_file_t *f);
  * POSIX close+free) -- NEVER passed to sys$close. */
 rms_file_t *rms_open_named_handle(const char *vms_spec, int want_write,
                                   int create, uint32_t *st_out);
+
+/* rms_open_named_handle_kind (vms-3a8): identical to rms_open_named_handle, but
+ * a create (create==1) lays the new data file down with the caller-chosen FH2
+ * record-format `kind` (enum ods2_fh2_kind) instead of the RFM=VAR default.
+ * PRODUCT INSTALL uses this so a byte-stream copy of a .COM/.DAT lands RFM=STMLF
+ * and an .EXE lands RFM=FIXED -- the SAME per-file formats the mastered distro
+ * disk carries -- rather than RFM=VAR, which a line-oriented reader misparses
+ * (a live-installed STARTUP.COM read back as one bogus record -> %DCL-E-IVVERB).
+ * `kind` is ignored when create==0 and on the POSIX defer (no on-disk FH2 there).
+ * rms_open_named_handle() is exactly this with kind==ODS2_FK_DATA (unchanged). */
+rms_file_t *rms_open_named_handle_kind(const char *vms_spec, int want_write,
+                                       int create, unsigned kind,
+                                       uint32_t *st_out);
 void        rms_close_named_handle(rms_file_t *h);
 
 #endif /* RMS_IO_H */

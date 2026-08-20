@@ -187,50 +187,6 @@ static inline void sysgen_split_dir_base(const char *linux_path, char *dir,
 }
 
 /*
- * sysgen_current_path - Resolve the Linux path to READ the current SYSGEN
- * parameter database (USE CURRENT's semantics: highest existing version).
- *
- * Honors OVMX_SYSGEN_PATH when set: tests and tools point the readers at a
- * private, literal, unversioned temp file (no /vms mount needed). Production
- * code paths never set this env var: the store resolves through vmsfs to
- * SYS$SYSTEM:OVMXVMSSYS.PAR's directory (ovmx_layout.h's VMS_PARAMS_PATH)
- * and reads the HIGHEST version on disk there, matching the oracle's
- * ALPHAVMSSYS.PAR behavior (docs/design-boot-faithful.md §3.4).
- *
- * Returns 0 on success (path written to buf), -1 if no version of the file
- * exists yet or the filespec cannot be translated.
- */
-static inline int sysgen_current_path(char *buf, size_t buflen)
-{
-    if (!buf || buflen == 0) return -1;
-
-    const char *override = getenv("OVMX_SYSGEN_PATH");
-    if (override && *override) {
-        strncpy(buf, override, buflen - 1);
-        buf[buflen - 1] = '\0';
-        return 0;
-    }
-
-    char linux_path[VMSFS_MAX_PATH];
-    if (!$VMS_STATUS_SUCCESS(vmsfs_to_linux_path(VMS_PARAMS_PATH, linux_path,
-                                                  sizeof(linux_path)))) {
-        return -1;
-    }
-
-    char dir[VMSFS_MAX_PATH];
-    char name[VMSFS_MAX_NAME + 1];
-    char ext[VMSFS_MAX_TYPE + 1];
-    sysgen_split_dir_base(linux_path, dir, sizeof(dir), name, sizeof(name),
-                          ext, sizeof(ext));
-
-    int highest = vmsfs_get_highest_version(dir[0] ? dir : ".", name, ext);
-    if (highest < 1) return -1;
-
-    int n = snprintf(buf, buflen, "%s/%s.%s;%d", dir, name, ext, highest);
-    return (n > 0 && (size_t)n < buflen) ? 0 : -1;
-}
-
-/*
  * sysgen_read_param - Read a single numeric parameter value from the
  * current database.
  *

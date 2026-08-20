@@ -740,10 +740,18 @@ jobs:
           # parts_demo_e2e). Every PRODUCT gate -- unit tests, the positive
           # census/register authenticity gates, all integration gates --
           # still runs on every PR.
+          # vms-ed4: run tests in parallel. ctest --parallel honors per-test
+          # RESOURCE_LOCK properties, so tests that share mutable global state
+          # (the /vms SYSDISK, /dev/vms, fixed ports) serialize among themselves
+          # via their lock while independent tests run concurrently. The locks
+          # are declared in CMake (see set_tests_properties ... RESOURCE_LOCK).
+          # NEVER drop a lock to speed a run -- an unlocked shared-state test is
+          # a flaky test (Rule 8).
+          JOBS="$(nproc)"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            ctest --output-on-failure -LE slow
+            ctest --output-on-failure --parallel "$JOBS" -LE slow
           else
-            ctest --output-on-failure
+            ctest --output-on-failure --parallel "$JOBS"
           fi
 
   # -----------------------------------------------------------------------

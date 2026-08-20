@@ -76,6 +76,59 @@ struct sysgen_file {
 };
 
 /*
+ * ACP-backed parameter I/O (vms-5f0 residual, epic vms-208).
+ *
+ * SYS$SYSTEM:OVMXVMSSYS.PAR lives on the genuine Files-11 (ODS-2) system volume
+ * the executive ACP owns. The atomic flip retired the /vms POSIX passthrough, so
+ * the vmsfs_to_linux_path()+fopen() reads/writes below (kept ONLY for the
+ * OVMX_SYSGEN_PATH test/staging override) no longer reach the runtime volume.
+ * These two functions read/write the file over the ACP instead
+ * (src/vmsrms/sysgen_acp.c, RMS-over-ACP).
+ *
+ * WEAK, exactly like sysuaf.c's ovmx_sysuaf_* seam: resolved in any image that
+ * links LIBVMSRMS$SHR (SYSGEN.EXE, SCSD.EXE, SYSMAN.EXE, DCL.EXE, ...), NULL in
+ * an image that does not (libvms's own inline callers) -- which then fails
+ * honest, NEVER falling through to /vms (CLAUDE.md Rule 9 / INV-6).
+ */
+uint32_t ovmx_sysgen_acp_read(struct sysgen_file *out);
+uint32_t ovmx_sysgen_acp_write(const struct sysgen_file *db, int new_version,
+                               int *out_version);
+#if defined(__GNUC__)
+#pragma weak ovmx_sysgen_acp_read
+#pragma weak ovmx_sysgen_acp_write
+#endif
+
+/*
+ * sysgen_load_current_db - load the current parameter database (USE CURRENT
+ * semantics) into *db. Honors the OVMX_SYSGEN_PATH literal-file override (tests,
+ * and PID 1's staged-copy boot read); otherwise reads the HIGHEST version off
+ * the ACP-mounted system volume through ovmx_sysgen_acp_read. Returns 0 on
+ * success, -1 on any failure (missing file, no executive, bad magic/version) --
+ * there is no /vms fallback.
+ */
+static inline int sysgen_load_current_db(struct sysgen_file *db)
+{
+    if (!db) return -1;
+
+    const char *override = getenv("OVMX_SYSGEN_PATH");
+    if (override && *override) {
+        FILE *fp = fopen(override, "rb");
+        if (!fp) return -1;
+        int ok = (fread(db, sizeof(*db), 1, fp) == 1);
+        fclose(fp);
+        if (!ok || db->magic != SYSGEN_MAGIC || db->version != SYSGEN_VERSION)
+            return -1;
+        if (db->count > SYSGEN_MAX_PARAMS) db->count = SYSGEN_MAX_PARAMS;
+        return 0;
+    }
+
+    if (ovmx_sysgen_acp_read)
+        return $VMS_STATUS_SUCCESS(ovmx_sysgen_acp_read(db)) ? 0 : -1;
+
+    return -1;   /* no override and no ACP linked: fail honest (Rule 9) */
+}
+
+/*
  * sysgen_split_dir_base - Split a Linux path into its directory and its
  * name/ext parts (the shape vmsfs_get_highest_version() wants). Mirrors the
  * pattern already used at the RMS/DCL layer (rms_core.c's rms_next_version,
@@ -169,21 +222,8 @@ static inline int sysgen_read_param(const char *name, uint32_t *value)
 {
     if (!name || !value) return -1;
 
-    char path[VMSFS_MAX_PATH];
-    if (sysgen_current_path(path, sizeof(path)) != 0) return -1;
-
-    FILE *fp = fopen(path, "rb");
-    if (!fp) return -1;
-
     struct sysgen_file db;
-    if (fread(&db, sizeof(db), 1, fp) != 1) {
-        fclose(fp);
-        return -1;
-    }
-    fclose(fp);
-
-    if (db.magic != SYSGEN_MAGIC || db.version != SYSGEN_VERSION)
-        return -1;
+    if (sysgen_load_current_db(&db) != 0) return -1;
 
     for (uint32_t i = 0; i < db.count && i < SYSGEN_MAX_PARAMS; i++) {
         if (strncasecmp(db.params[i].name, name, 32) == 0) {
@@ -206,21 +246,8 @@ static inline int sysgen_read_string(const char *name, char *buf, size_t buflen)
 {
     if (!name || !buf || buflen == 0) return -1;
 
-    char path[VMSFS_MAX_PATH];
-    if (sysgen_current_path(path, sizeof(path)) != 0) return -1;
-
-    FILE *fp = fopen(path, "rb");
-    if (!fp) return -1;
-
     struct sysgen_file db;
-    if (fread(&db, sizeof(db), 1, fp) != 1) {
-        fclose(fp);
-        return -1;
-    }
-    fclose(fp);
-
-    if (db.magic != SYSGEN_MAGIC || db.version != SYSGEN_VERSION)
-        return -1;
+    if (sysgen_load_current_db(&db) != 0) return -1;
 
     for (uint32_t i = 0; i < db.count && i < SYSGEN_MAX_PARAMS; i++) {
         if (strncasecmp(db.params[i].name, name, 32) == 0) {
@@ -247,29 +274,7 @@ static inline int sysgen_read_string(const char *name, char *buf, size_t buflen)
  */
 static inline int sysgen_load_working(struct sysgen_file *out)
 {
-    if (!out) return -1;
-
-    char path[VMSFS_MAX_PATH];
-    if (sysgen_current_path(path, sizeof(path)) != 0) return -1;
-
-    FILE *fp = fopen(path, "rb");
-    if (!fp) return -1;
-
-    struct sysgen_file db;
-    if (fread(&db, sizeof(db), 1, fp) != 1) {
-        fclose(fp);
-        return -1;
-    }
-    fclose(fp);
-
-    if (db.magic != SYSGEN_MAGIC || db.version != SYSGEN_VERSION)
-        return -1;
-
-    if (db.count > SYSGEN_MAX_PARAMS)
-        db.count = SYSGEN_MAX_PARAMS;
-
-    *out = db;
-    return 0;
+    return sysgen_load_current_db(out);
 }
 
 /*
@@ -319,44 +324,23 @@ static inline int sysgen_commit_working(const struct sysgen_file *db,
         return SS$_NORMAL;
     }
 
-    char linux_path[VMSFS_MAX_PATH];
-    if (!$VMS_STATUS_SUCCESS(vmsfs_to_linux_path(VMS_PARAMS_PATH, linux_path,
-                                                  sizeof(linux_path)))) {
-        return SS$_NOSUCHFILE;
-    }
+    /*
+     * ATOMIC FLIP (vms-5f0): persist to the genuine ODS-2 system volume over the
+     * executive ACP, not a /vms fopen. CURRENT mints a new highest version,
+     * ACTIVE overwrites the highest in place -- both in ovmx_sysgen_acp_write.
+     * Fail honest if RMS is not linked into this image (Rule 9/INV-6): there is
+     * no /vms fallback.
+     */
+    if (!ovmx_sysgen_acp_write)
+        return SS$_NOSUCHDEV;
 
-    char dir[VMSFS_MAX_PATH];
-    char name[VMSFS_MAX_NAME + 1];
-    char ext[VMSFS_MAX_TYPE + 1];
-    sysgen_split_dir_base(linux_path, dir, sizeof(dir), name, sizeof(name),
-                          ext, sizeof(ext));
-    if (!dir[0]) { dir[0] = '.'; dir[1] = '\0'; }
-
-    char path[VMSFS_MAX_PATH];
     int version = 0;
-
-    int highest = vmsfs_get_highest_version(dir, name, ext);
-    if (new_version || highest < 1) {
-        /* CURRENT (mint new), or ACTIVE with no file yet (create version 1). */
-        int status = vmsfs_create_new_version(dir, name, ext, path,
-                                              sizeof(path), &version);
-        if (!$VMS_STATUS_SUCCESS(status)) return status;
-    } else {
-        /* ACTIVE: overwrite the highest existing version in place. */
-        version = highest;
-        int n = snprintf(path, sizeof(path), "%s/%s.%s;%d",
-                         dir, name, ext, version);
-        if (n <= 0 || (size_t)n >= sizeof(path)) return SS$_ABORT;
-    }
-
-    FILE *fp = fopen(path, "wb");
-    if (!fp) return SS$_NOSUCHFILE;
-    if (fwrite(db, sizeof(*db), 1, fp) != 1) { fclose(fp); return SS$_ABORT; }
-    fclose(fp);
+    uint32_t st = ovmx_sysgen_acp_write(db, new_version, &version);
+    if (!$VMS_STATUS_SUCCESS(st)) return st;
 
     if (outpath && outlen) {
-        strncpy(outpath, path, outlen - 1);
-        outpath[outlen - 1] = '\0';
+        int n = snprintf(outpath, outlen, "%s;%d", VMS_PARAMS_PATH, version);
+        if (n <= 0 || (size_t)n >= outlen) outpath[0] = '\0';
     }
     if (outver) *outver = version;
     return SS$_NORMAL;

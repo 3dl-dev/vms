@@ -292,10 +292,14 @@ target_compile_options(vms_sysgen PRIVATE
     -Wall -Wextra
 )
 
-# vms-d34: USE/WRITE CURRENT now resolve SYS$SYSTEM:OVMXVMSSYS.PAR through
-# vmsfs (device/logical translation + real file-version creation), so the
-# tool needs the vmsfs link it didn't before.
-target_link_libraries(vms_sysgen PRIVATE vmsfs vmslnm)
+# vms-d34: USE/WRITE CURRENT resolve SYS$SYSTEM:OVMXVMSSYS.PAR through vmsfs.
+# vms-5f0: they now PERSIST it over the executive Files-11 ACP (RMS-over-ACP,
+# src/vmsrms/sysgen_acp.c) instead of a retired /vms fopen, so the tool links
+# vmsrms. --undefined forces sysgen_acp.o out of the static archive: SYSGEN's
+# references to ovmx_sysgen_acp_* are #pragma weak (the libvms-layer seam), and a
+# weak reference alone does not pull an archive member (build-static / OVMX_STATIC).
+target_link_libraries(vms_sysgen PRIVATE vmsrms vmsfs vmslnm)
+target_link_options(vms_sysgen PRIVATE "LINKER:--undefined=ovmx_sysgen_acp_write")
 
 set_target_properties(vms_sysgen PROPERTIES
     OUTPUT_NAME "SYSGEN"
@@ -322,9 +326,11 @@ target_compile_options(vms_sysman PRIVATE
     -Wall -Wextra
 )
 
-# vms-d34: includes sysgen_params.h directly, which now calls through to
-# vmsfs for SYS$SYSTEM:OVMXVMSSYS.PAR version resolution.
-target_link_libraries(vms_sysman PRIVATE vmsfs vmslnm)
+# vms-d34: includes sysgen_params.h directly for SYS$SYSTEM:OVMXVMSSYS.PAR.
+# vms-5f0: PARAMETERS USE/WRITE now ride the executive Files-11 ACP (RMS-over-ACP)
+# instead of a /vms fopen -- link vmsrms + force sysgen_acp.o (weak-ref pull).
+target_link_libraries(vms_sysman PRIVATE vmsrms vmsfs vmslnm)
+target_link_options(vms_sysman PRIVATE "LINKER:--undefined=ovmx_sysgen_acp_write")
 
 set_target_properties(vms_sysman PROPERTIES
     OUTPUT_NAME "SYSMAN"

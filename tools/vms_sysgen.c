@@ -180,53 +180,6 @@ static char *str_trim(char *s)
 /*                    Database I/O Functions                           */
 /* ================================================================== */
 
-/*
- * resolve_params_location - Translate VMS_PARAMS_PATH (SYS$SYSTEM:
- * OVMXVMSSYS.PAR) through vmsfs and split the result into the directory
- * plus name/ext vmsfs_get_highest_version()/vmsfs_create_new_version()
- * want. Mirrors the split already done at the RMS/DCL layer (rms_core.c's
- * rms_next_version, dcl_filespec.c's resolve_version_suffix).
- *
- * Returns 0 on success, -1 if the filespec cannot be translated.
- */
-static int resolve_params_location(char *dir, size_t dirlen, char *name,
-                                    size_t namelen, char *ext, size_t extlen)
-{
-    char linux_path[VMSFS_MAX_PATH];
-    if (!$VMS_STATUS_SUCCESS(vmsfs_to_linux_path(VMS_PARAMS_PATH, linux_path,
-                                                  sizeof(linux_path)))) {
-        return -1;
-    }
-
-    const char *slash = strrchr(linux_path, '/');
-    const char *base = slash ? slash + 1 : linux_path;
-
-    if (slash) {
-        size_t dlen = (size_t)(slash - linux_path);
-        if (dlen >= dirlen) dlen = dirlen - 1;
-        memcpy(dir, linux_path, dlen);
-        dir[dlen] = '\0';
-    } else {
-        dir[0] = '\0';
-    }
-
-    char basebuf[VMSFS_MAX_NAME + VMSFS_MAX_TYPE + 2];
-    strncpy(basebuf, base, sizeof(basebuf) - 1);
-    basebuf[sizeof(basebuf) - 1] = '\0';
-
-    char *dot = strrchr(basebuf, '.');
-    if (dot) {
-        *dot = '\0';
-        strncpy(ext, dot + 1, extlen - 1);
-        ext[extlen - 1] = '\0';
-    } else {
-        ext[0] = '\0';
-    }
-    strncpy(name, basebuf, namelen - 1);
-    name[namelen - 1] = '\0';
-    return 0;
-}
-
 static void load_defaults(void)
 {
     memset(&working_set, 0, sizeof(working_set));
@@ -327,43 +280,35 @@ static int write_new_version(void)
         return -1;
     }
 
-    char dir[VMSFS_MAX_PATH], name[VMSFS_MAX_NAME + 1], ext[VMSFS_MAX_TYPE + 1];
-    if (resolve_params_location(dir, sizeof(dir), name, sizeof(name),
-                                 ext, sizeof(ext)) != 0) {
+    /* Test/staging override writes a literal unversioned file. */
+    const char *override = getenv("OVMX_SYSGEN_PATH");
+    if (override && *override)
+        return write_to_file(override);
+
+    /*
+     * ATOMIC FLIP (vms-5f0): mint a NEW highest version of
+     * SYS$SYSTEM:OVMXVMSSYS.PAR on the genuine ODS-2 system volume THROUGH THE
+     * EXECUTIVE ACP (IO$_CREATE version=0 => highest+1 + IO$_WRITEVBLK), not a
+     * /vms fopen -- so the authored parameters PERSIST across a reboot
+     * (vms-b6a7) and a separate SCSD reads them back off the real volume
+     * (vms-c3b). Fail honest if the executive is unreachable (Rule 9/INV-6).
+     */
+    if (!ovmx_sysgen_acp_write) {
         fprintf(stderr,
-                "%%SYSGEN-E-OPENOUT, error resolving " "SYS$SYSTEM:OVMXVMSSYS.PAR\n");
+                "%%SYSGEN-E-OPENOUT, the executive Files-11 ACP is not "
+                "available to persist SYS$SYSTEM:OVMXVMSSYS.PAR\n");
         return -1;
     }
-    /* vmsfs_create_new_version() needs a real directory to scan/create in;
-     * an empty dir (relative filespec with no device) means "here". */
-    if (!dir[0]) strncpy(dir, ".", sizeof(dir) - 1);
 
-    char path[VMSFS_MAX_PATH];
     int new_version = 0;
-    int status = vmsfs_create_new_version(dir, name, ext, path, sizeof(path),
-                                           &new_version);
+    uint32_t status = ovmx_sysgen_acp_write(&working_set, /*new_version=*/1,
+                                            &new_version);
     if (!$VMS_STATUS_SUCCESS(status)) {
         fprintf(stderr,
                 "%%SYSGEN-E-OPENOUT, error creating a new version of "
-                "SYS$SYSTEM:OVMXVMSSYS.PAR\n");
+                "SYS$SYSTEM:OVMXVMSSYS.PAR over the ACP (status %#x)\n", status);
         return -1;
     }
-
-    /* vmsfs_create_new_version() already created the file (O_CREAT|O_EXCL,
-     * empty) to claim the version number race-free; reopen it to write the
-     * actual bytes. */
-    FILE *fp = fopen(path, "wb");
-    if (!fp) {
-        fprintf(stderr, "%%SYSGEN-E-OPENOUT, error opening %s for output - %s\n",
-                path, strerror(errno));
-        return -1;
-    }
-    if (fwrite(&working_set, sizeof(working_set), 1, fp) != 1) {
-        fclose(fp);
-        fprintf(stderr, "%%SYSGEN-E-WRITEERR, error writing %s\n", path);
-        return -1;
-    }
-    fclose(fp);
 
     working_set_modified = 0;
     printf("%%SYSGEN-I-WRITTEN, %u parameters written to "
@@ -390,22 +335,27 @@ static void cmd_use(const char *arg)
     }
 
     if (strcasecmp(target, "CURRENT") == 0) {
-        char dir[VMSFS_MAX_PATH], name[VMSFS_MAX_NAME + 1], ext[VMSFS_MAX_TYPE + 1];
-        char path[VMSFS_MAX_PATH];
         int loaded = 0;
 
-        if (resolve_params_location(dir, sizeof(dir), name, sizeof(name),
-                                     ext, sizeof(ext)) == 0) {
-            int highest = vmsfs_get_highest_version(dir[0] ? dir : ".", name, ext);
-            if (highest >= 1) {
-                int n = snprintf(path, sizeof(path), "%s/%s.%s;%d",
-                                  dir, name, ext, highest);
-                if (n > 0 && (size_t)n < sizeof(path) &&
-                    load_from_file(path) == 0) {
-                    printf("%%SYSGEN-I-LOADED, %u parameters loaded from %s\n",
-                           working_set.count, path);
-                    loaded = 1;
-                }
+        /* Test/staging override reads a literal unversioned file; production
+         * reads the HIGHEST version off the ODS-2 system volume over the ACP
+         * (vms-5f0 -- the /vms passthrough is retired). */
+        const char *override = getenv("OVMX_SYSGEN_PATH");
+        if (override && *override) {
+            if (load_from_file(override) == 0) {
+                printf("%%SYSGEN-I-LOADED, %u parameters loaded from %s\n",
+                       working_set.count, override);
+                loaded = 1;
+            }
+        } else if (ovmx_sysgen_acp_read) {
+            struct sysgen_file db;
+            if ($VMS_STATUS_SUCCESS(ovmx_sysgen_acp_read(&db))) {
+                working_set = db;
+                working_set_loaded = 1;
+                working_set_modified = 0;
+                printf("%%SYSGEN-I-LOADED, %u parameters loaded from "
+                       "SYS$SYSTEM:OVMXVMSSYS.PAR\n", working_set.count);
+                loaded = 1;
             }
         }
 

@@ -63,6 +63,7 @@ add_library(vmsrms ${OVMX_LIB_TYPE}
     rms_parse.c
     rms_search.c
     rms_util.c
+    sysgen_acp.c
 )
 
 target_include_directories(vmsrms PUBLIC

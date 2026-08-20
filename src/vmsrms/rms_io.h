@@ -53,6 +53,10 @@ typedef struct rms_file {
     uint16_t fid_seq;
     uint8_t  fid_rvn;
     uint8_t  fid_nmx;
+    /* Resolved ODS-2 file version. On a create (IO$_CREATE version=0 =>
+     * highest+1) this is the version the ACP minted (fop.out_version), which
+     * SYSGEN WRITE CURRENT reports as "...OVMXVMSSYS.PAR;N". 0 when unset. */
+    uint16_t version;
     /* POSIX backend (non-__linux__ / netbsd-vax standalone cross) only: the
      * bare fd the handle now owns in place of the retired FAB._linux_fd. Unused
      * by the ACP backend. */

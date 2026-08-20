@@ -485,6 +485,7 @@ static uint32_t rms_acp_open_file(struct rms_acp_spec *s, int want_write,
     h->accessed = 1; h->writable = want_write ? 1 : 0;
     h->fid_num = a.fid_num; h->fid_seq = a.fid_seq;
     h->fid_rvn = a.fid_rvn; h->fid_nmx = a.fid_nmx;
+    h->version = a.out_version;    /* resolved version (WRITE ACTIVE reports it) */
     rms_acp_seed_handle(h, &a.attr);
     *hp = h;
     return SS$_NORMAL;
@@ -653,6 +654,7 @@ rms_file_t *rms_open_named_handle_kind(const char *vms_spec, int want_write,
             h->accessed = 1; h->writable = 1;
             h->fid_num = fop.fid_num; h->fid_seq = fop.fid_seq;
             h->fid_rvn = fop.fid_rvn; h->fid_nmx = fop.fid_nmx;
+            h->version = fop.out_version;   /* the version the ACP minted */
             h->eof   = (uint64_t)(fop.new_efblk ? (fop.new_efblk - 1u) : 0) * 512u
                        + fop.new_ffbyte;
             h->hiblk = fop.new_hiblk;

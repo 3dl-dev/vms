@@ -110,7 +110,11 @@ echo "mk_vmsrms_shr: --use $DECC_SHR $VMS_SHR $FS_SHR $SYS_SHR"
 # vms-f15a RIGHTSLIST atomic flip: rightslist_live (the $ASCTOID/$IDTOASC
 # executive-context reads) must be in LIBVMSRMS$SHR too, or the native-link DCL
 # cannot resolve the weak ovmx_rightslist_* and F$IDENTIFIER goes dead.
-LIST="rms_core rms_io rms_seq rms_rel rms_idx rms_prolog3 sysuaf_rms sysuaf_live rightslist_rms rightslist_live rms_record rms_parse rms_search rms_util"
+# vms-5f0 SYSGEN atomic flip: sysgen_acp (SYS$SYSTEM:OVMXVMSSYS.PAR read/write
+# over the executive Files-11 ACP) must be in LIBVMSRMS$SHR too, or the
+# native-link DCL/SCSD cannot resolve the weak ovmx_sysgen_acp_* and SYSGEN
+# authoring / F$GETSYI(SCSNODE) fall to the retired /vms path.
+LIST="rms_core rms_io rms_seq rms_rel rms_idx rms_prolog3 sysuaf_rms sysuaf_live rightslist_rms rightslist_live rms_record rms_parse rms_search rms_util sysgen_acp"
 
 OBJS=""
 for c in $LIST; do

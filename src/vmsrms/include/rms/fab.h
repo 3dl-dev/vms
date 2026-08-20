@@ -73,6 +73,7 @@
 struct RAB;
 struct NAM;
 struct XABKEY;
+struct rms_file;   /* rms_io.h -- the ACP channel+window (or POSIX fd) handle */
 
 struct FAB {
     uint8_t  fab$b_bid;         /* Block ID (must be 3) */
@@ -98,9 +99,17 @@ struct FAB {
     struct NAM *fab$l_nam;      /* Name block address */
     struct XABKEY *fab$l_xab;   /* XAB chain address */
     uint8_t  fab$b_fsz;         /* Fixed header size (VFC) */
-    /* Internal state - not part of VMS FAB, used by our implementation */
-    int      _linux_fd;         /* Underlying Linux file descriptor */
-    char     _resolved_path[1024]; /* Resolved Linux path */
+    /* Internal state - not part of VMS FAB, used by our implementation.
+     *
+     * vms-bc7: the old `int _linux_fd` (a per-process POSIX file descriptor +
+     * positioned POSIX I/O) is RETIRED. RMS now reaches file data through the
+     * Files-11 ODS-2 ACP: _rms_file holds the executive channel $ASSIGNed to the
+     * mounted volume plus the ACCESSed file's VBN->LBN window (rms_io.h); record
+     * I/O rides IO$_READVBLK/IO$_WRITEVBLK over /dev/vms. (On the netbsd-vax
+     * standalone cross the same handle carries a POSIX fd until VAX's own ACP
+     * re-target, vms-d5d.) */
+    struct rms_file *_rms_file; /* ACP channel+window handle (was _linux_fd) */
+    char     _resolved_path[1024]; /* Resolved VMS filespec (name.type;ver) */
     void    *_rms_state;        /* Internal RMS state */
 };
 
@@ -112,7 +121,7 @@ struct FAB {
     .fab$b_rfm = FAB$C_STMLF, \
     .fab$b_rat = FAB$M_CR, \
     .fab$b_fac = FAB$M_GET, \
-    ._linux_fd = -1 \
+    ._rms_file = 0 \
 }
 
 #endif /* __RMS_FAB_H */

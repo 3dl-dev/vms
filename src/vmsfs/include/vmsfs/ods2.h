@@ -89,6 +89,16 @@
 #ifndef offsetof
 #define offsetof(type, member) __builtin_offsetof(type, member)
 #endif
+/*
+ * NULL is likewise not guaranteed when ods2_edit.c compiles as its own
+ * standalone TU (it never pulls the <sys/systm.h> -> libkern chain that would
+ * otherwise define it). ods2_kind_for_filespec() and other inline surfaces in
+ * this header use NULL, so define it self-sufficiently here too, guarded so it
+ * is a no-op if a real <stddef.h>/libkern already landed first.
+ */
+#ifndef NULL
+#define NULL ((void *)0)
+#endif
 #else
 #include <stdint.h>
 #include <stddef.h>
@@ -190,6 +200,73 @@ static inline uint32_t ods2_fid_number(const ods2_fid_t *f)
 }
 
 /*
+ * ods2_name_eq_ci - case-insensitive exact match of two file-spec names
+ * ("NAME.TYPE", no version). Freestanding: a self-contained A-Z upcase, no
+ * libc/libkern <ctype.h> dependency, so it is identical on the userspace
+ * writer path and the kernel-resident (ods2_edit.c) ACP-create path.
+ */
+static inline int ods2_name_eq_ci(const char *a, const char *b)
+{
+    size_t i = 0;
+    for (;;) {
+        int ca = (unsigned char)a[i];
+        int cb = (unsigned char)b[i];
+        if (ca >= 'a' && ca <= 'z') ca -= 32;
+        if (cb >= 'a' && cb <= 'z') cb -= 32;
+        if (ca != cb) return 0;
+        if (ca == 0)  return 1;
+        i++;
+    }
+}
+
+/*
+ * ods2_class_fileprot - the PER-FILE-CLASS default fh2_fileprot (vms-109).
+ *
+ * Files-11 protection is per-file on real VMS; a single "every ordinary file
+ * is World:RE" default (vms-37e) mastered SYSUAF.DAT -- whose Purdy password
+ * hashes must be UNREADABLE by the World category -- as World:RE, a hole. The
+ * shared writer (ods2_writer.c) AND the kernel ACP-create path (ods2_edit.c)
+ * both take this default when the caller passes fileprot == 0, so the class
+ * mapping lives here, once, keyed on the file's own name/kind:
+ *
+ *   directory                      -> 0xBA00  S:RWED,O:RWED,G:RWE,W:E  (fixture
+ *                                             directory-shaped mask, [F11])
+ *   reserved metadata (FID<=RESF)  -> 0xFA00  S:RWED,O:RWED,G:RE,W:none (fixture)
+ *   SYSUAF.DAT                     -> 0xFF88  S:RWE, O:RWE, G:none,W:none
+ *                                             -- oracle docs/oracle/
+ *                                             vax73-authorize-privilege.md:
+ *                                             SYSUAF.DAT (RWE,RWE,,), no WORLD
+ *                                             access; protects the hashes.
+ *   RIGHTSLIST.DAT                 -> 0xEE00  S:RWED,O:RWED,G:R,W:R
+ *                                             -- WORLD-READABLE on real VMS so an
+ *                                             unprivileged process can resolve
+ *                                             identifiers (F$IDENTIFIER) without
+ *                                             SYSPRV; the world-readable half of
+ *                                             the rights database (vms-930).
+ *   any other ordinary file        -> 0xAA00  S:RWED,O:RWED,G:RE,W:RE  -- the
+ *                                             documented OpenVMS DEFAULT file
+ *                                             protection (World Read+Execute);
+ *                                             every shipped SYS$SYSTEM image
+ *                                             (DCL.EXE, LOGINOUT.EXE, ...) must
+ *                                             be World-activatable (vms-37e).
+ *
+ * Within each 4-bit field a SET bit DENIES (bit0=R,1=W,2=E,3=D); fields are
+ * System, Owner, Group, World from low to high nibble (ovmx_fileprot.h).
+ * Clean-room: the two grounded constants are the real-VAX fixture / oracle
+ * captures cited above; the World:R and default values are the documented
+ * public OpenVMS protections (Rule 8).
+ */
+static inline uint16_t ods2_class_fileprot(const char *name, int is_dir,
+                                           uint32_t fidnum)
+{
+    if (is_dir)                  return 0xBA00u;
+    if (fidnum <= ODS2_RESFILES) return 0xFA00u;
+    if (name && ods2_name_eq_ci(name, "SYSUAF.DAT"))     return 0xFF88u;
+    if (name && ods2_name_eq_ci(name, "RIGHTSLIST.DAT")) return 0xEE00u;
+    return 0xAA00u;
+}
+
+/*
  * Record attributes area (FAT). 32 bytes. [N] access.h struct RECATTR.
  *
  * hiblk/efblk are stored as two 16-bit halves. CORRECTED in increment 3
@@ -221,8 +298,9 @@ static inline uint32_t ods2_fid_number(const ods2_fid_t *f)
 #define ODS2_RAT_CR    0x02u
 #define ODS2_RAT_PRN   0x04u
 #define ODS2_RAT_BLK   0x08u
-#define ODS2_RTYPE_FIX 1u
-#define ODS2_RTYPE_VAR 2u
+#define ODS2_RTYPE_FIX   1u
+#define ODS2_RTYPE_VAR   2u
+#define ODS2_RTYPE_STMLF 5u  /* stream, LF-terminated (FAB$C_STMLF) */
 
 typedef struct ods2_recattr {
     uint8_t  fat_rtype;         /*  0: record type / file organization */
@@ -1379,6 +1457,35 @@ ods2_status_t ods2_wvolume_create_file_raw(ods2_wvolume_t *wvol,
                                            ods2_fid_t *fid_out);
 
 /*
+ * ods2_wvolume_create_file_stmlf() (vms-5f0, epic vms-208): the TEXT twin of
+ * ods2_wvolume_create_file_raw(). Writes `data` VERBATIM (byte-for-byte, no
+ * re-framing -- the same contiguous block layout create_file_raw() uses, so
+ * the on-disk content bytes are identical to the host file) but stamps the
+ * header RFM=STMLF (fat_rtype == ODS2_RTYPE_STMLF, the FAB$C_STMLF on-disk
+ * analog [S]) with implied-CR record attributes.
+ *
+ * WHY THIS EXISTS: a genuine VMS text file (.COM, .DAT, SYSUAF, ...) is a
+ * STREAM of LF-terminated records, NOT one giant fixed 512-byte record.
+ * create_file_raw()'s RFM=FIXED/512 makes RMS/DCL read the WHOLE file as a
+ * single 512-byte padded record, so a line-oriented reader (STARTUP.COM's
+ * phase driver, LOGINOUT's SYSUAF scan) sees one bogus record then EOF. STMLF
+ * keeps the bytes verbatim (so the byte-identical-to-/vms property the master
+ * relies on holds) AND frames records on the LF the reader already expects, so
+ * a $GET returns one line per call. Binary images (.EXE) stay on
+ * create_file_raw() (FIXED) -- IMGACT reads their blocks, not records.
+ *
+ * Rule 8: fat_rtype==5 (STREAM-LF) and implied-CR (ODS2_RAT_CR) are public
+ * Files-11 / RMS FAB$B_RFM / FAB$B_RAT facts; the verbatim block layout adds
+ * no new on-disk format fact. Same allocation / FID / dir_insert contract as
+ * create_file_raw().
+ */
+ods2_status_t ods2_wvolume_create_file_stmlf(ods2_wvolume_t *wvol,
+                                             const char *name, uint16_t version,
+                                             const uint8_t *data, size_t data_len,
+                                             ods2_fid_t parent_dir,
+                                             ods2_fid_t *fid_out);
+
+/*
  * Create a new, empty directory file: one contiguous data block
  * initialized to "no records" (all 0xFF, matching ODS2_DIR_END sentinel
  * at offset 0), FH2 header with FH2$M_DIRECTORY | FH2$M_CONTIG set and
@@ -1497,11 +1604,74 @@ void ods2_ifbm_block_free(void *bitmap_block, unsigned bit_in_block);
 /* FH2 file "kind" -- the RECATTR (FAT) / efblk preset, matching
  * ods2_writer.c's internal enum fh2_kind values byte-for-byte. */
 enum ods2_fh2_kind {
-    ODS2_FK_SYSTEM   = 0,   /* reserved-file stub (rtype 1)                   */
-    ODS2_FK_DIR      = 1,   /* directory (rtype 2, rattrib 0x08)              */
-    ODS2_FK_DATA     = 2,   /* RFM=VAR data file (rtype 2, rattrib CR)        */
-    ODS2_FK_DATA_FIX = 3    /* RFM=FIXED 512-byte data file (rtype 1)         */
+    ODS2_FK_SYSTEM     = 0, /* reserved-file stub (rtype 1)                   */
+    ODS2_FK_DIR        = 1, /* directory (rtype 2, rattrib 0x08)              */
+    ODS2_FK_DATA       = 2, /* RFM=VAR data file (rtype 2, rattrib CR)        */
+    ODS2_FK_DATA_FIX   = 3, /* RFM=FIXED 512-byte data file (rtype 1)         */
+    ODS2_FK_DATA_STMLF = 4  /* RFM=STMLF (stream, LF) text file (rtype 5, CR) */
 };
+
+/*
+ * ods2_type_is_binary_image - is a file TYPE (extension, no dot) a binary image
+ * that must be stored RFM=FIXED verbatim rather than RFM=STMLF? The single
+ * source of truth for the master (tools/vmsfs_master.c) AND the live installer
+ * (PRODUCT INSTALL, src/product/product.c): a byte-stream copy of an .EXE must
+ * keep RFM=FIXED (a line-oriented STMLF reframing would corrupt block-read
+ * image activation), while a .COM/.DAT text file must be RFM=STMLF so DCL/RMS
+ * read it one LF-record at a time. Before this helper the two writers diverged:
+ * the master chose per-type, the ACP installer created EVERYTHING RFM=VAR, so a
+ * live-installed STARTUP.COM read back as one bogus VAR record and DCL saw the
+ * file name itself as a command verb (%DCL-E-IVVERB, vms-3a8). Kept inline and
+ * dependency-free so both writers link the identical list.
+ */
+static inline int ods2_type_is_binary_image(const char *type)
+{
+    static const char *const bin[] = {
+        "EXE", "OLB", "OBJ", "STB", "DMP", "KIT", "GZ", "IMG", "ISO",
+        "BIN", "ELF", "TLB", "MLB", "SYS", "KO",
+    };
+    size_t i;
+    if (!type)
+        return 0;
+    for (i = 0; i < sizeof(bin) / sizeof(bin[0]); i++) {
+        const char *a = type, *b = bin[i];
+        while (*a && *a != ';' && *b) {         /* ';version' terminates the type */
+            unsigned char ca = (unsigned char)*a, cb = (unsigned char)*b;
+            if (ca >= 'a' && ca <= 'z') ca = (unsigned char)(ca - 32);
+            if (ca != cb) break;
+            a++; b++;
+        }
+        if ((*a == '\0' || *a == ';') && *b == '\0')
+            return 1;
+    }
+    return 0;
+}
+
+/*
+ * ods2_kind_for_filespec - the RFM `kind` a byte-stream copy of a file named by
+ * VMS filespec (or bare "NAME.TYPE") should be created with: RFM=FIXED for a
+ * binary image, RFM=STMLF for everything else. Mirrors tools/vmsfs_master.c's
+ * per-file choice so a live PRODUCT INSTALL lays the target volume down with the
+ * SAME record formats the mastered distribution disk carries (vms-3a8).
+ */
+static inline unsigned ods2_kind_for_filespec(const char *filespec)
+{
+    const char *name = filespec, *dot = NULL, *p;
+    if (!filespec)
+        return ODS2_FK_DATA_STMLF;
+    /* Isolate the filename: it begins after the last directory/device delimiter,
+     * so dots WITHIN a rooted directory ("[SYS0.SYSCOMMON.SYSEXE]") never look
+     * like a file type. */
+    for (p = filespec; *p; p++)
+        if (*p == ']' || *p == ':' || *p == '/' || *p == '>')
+            name = p + 1;
+    for (p = name; *p && *p != ';'; p++)
+        if (*p == '.')
+            dot = p + 1;                        /* the file type (post-last-dot) */
+    if (dot && ods2_type_is_binary_image(dot))
+        return ODS2_FK_DATA_FIX;
+    return ODS2_FK_DATA_STMLF;
+}
 
 /* Build a complete FH2 file header into a caller-supplied 512-byte block.
  * `owner`={0,0} + `fileprot`=0 => the writer's kind default (SYSTEM [1,4],
@@ -1514,6 +1684,16 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
                              unsigned n_extents, size_t data_len,
                              ods2_fid_t backlink, ods2_uic_t owner,
                              uint16_t fileprot, uint32_t maxfiles);
+
+/* Rewrite an EXISTING file header's ident area (file name + version), and --
+ * when `new_backlink` != NULL -- its fh2_backlink (parent-directory FID), for an
+ * IO$_MODIFY!IO$M_MOVE rename/move (vms-de7). Touches ONLY the name/revision/
+ * filename-extension (+ optional backlink); the FID, RECATTR/EOF, retrieval map,
+ * owner/prot and dates are left byte-for-byte unchanged, so the file keeps its
+ * identity + allocation. Reseal (ods2_fh2_reseal) after. ODS2_ERR_ARGS on a bad
+ * block/name, ODS2_ERR_FORMAT if the header's ident offset is out of range. */
+ods2_status_t ods2_fh2_rename(void *header_block, const char *name,
+                              uint16_t version, const ods2_fid_t *new_backlink);
 
 /* Insert a {name, version, entry_fid} directory record into a directory's
  * data blocks (in_blocks = in_nblk contiguous 512-byte blocks), producing the
@@ -1709,6 +1889,29 @@ ods2_status_t ods2_wvolume_open_bdev(int fd, uint64_t span_bytes,
 ods2_status_t ods2_wvolume_append_file(ods2_wvolume_t *wvol,
                                        ods2_fid_t file_fid,
                                        const void *data, size_t data_len);
+
+/*
+ * RENAME/MOVE an existing file (vms-de7, epic vms-208 -- the userspace-writer
+ * twin of the executive ACP's IO$_MODIFY!IO$M_MOVE). Removes {oldname, oldver}
+ * (oldver 0 => every version) from `src_dir`, inserts {newname, newver} in
+ * `dst_dir` (may equal src_dir), and rewrites the file header's ident name (+
+ * fh2_backlink on a cross-directory move). The file KEEPS its FID, allocation
+ * and data -- only its name (and parent) change. Insert-new-then-remove-old
+ * order (the file is never unreferenced, the crash-safe XQP order). `file_fid`
+ * must be the file's real FID; the header at its slot must self-report it.
+ *
+ * Rule 8: every on-disk fact is the codec's (ods2_dir_insert_blocks /
+ * ods2_dir_remove_blocks / ods2_fh2_rename) -- no new format fact. Returns
+ * ODS2_OK, ODS2_ERR_ARGS (bad args / dst not a directory), ODS2_ERR_NOTFOUND
+ * (header does not self-report file_fid, or old {name,version} absent),
+ * ODS2_ERR_NOSPACE (dir growth needs blocks and none free), or the underlying
+ * checksum/format/IO error.
+ */
+ods2_status_t ods2_wvolume_rename(ods2_wvolume_t *wvol,
+                                  ods2_fid_t src_dir, const char *oldname,
+                                  uint16_t oldver,
+                                  ods2_fid_t dst_dir, const char *newname,
+                                  uint16_t newver, ods2_fid_t file_fid);
 
 #ifdef __cplusplus
 }

@@ -19,7 +19,9 @@ target_compile_definitions(vms_login PRIVATE
     _DEFAULT_SOURCE
 )
 
-target_link_libraries(vms_login PRIVATE vms vmsfs vmslnm vmsprocess pthread)
+# vmsrms: SYSUAF/RIGHTSLIST authentication reads go through RMS $OPEN/$GET over
+# the Files-11 ODS-2 ACP now (vms-274) -- LOGINOUT must resolve sys$open/$get.
+target_link_libraries(vms_login PRIVATE vms vmsrms vmsfs vmslnm vmsprocess pthread)
 
 set_target_properties(vms_login PROPERTIES
     OUTPUT_NAME "LOGINOUT"
@@ -67,6 +69,7 @@ target_include_directories(vms_authorize PRIVATE
     ${VMS_PROCESS_INCLUDE_DIR}
     ${VMS_FS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/vmsrms   # sysuaf_rms.h / sysuaf_live.h (binary UAF)
 )
 
 # Feature-test macros. AUTHORIZE.EXE's SYSUAF file locking uses flock()/
@@ -87,13 +90,72 @@ target_compile_options(vms_authorize PRIVATE
     -Wall -Wextra
 )
 
-target_link_libraries(vms_authorize PRIVATE vms vmsfs vmslnm)
+# vms-d92: AUTHORIZE reads/writes the binary $UAFDEF SYSUAF through the RMS
+# Prolog-3 engine (sysuaf_rms / sysuaf_live over the ODS-2 ACP), so it links
+# LIBVMSRMS.
+target_link_libraries(vms_authorize PRIVATE vms vmsrms vmsfs vmslnm vmsprocess)
 
 set_target_properties(vms_authorize PROPERTIES
     OUTPUT_NAME "AUTHORIZE"
     SUFFIX ".EXE"
 )
 install(TARGETS vms_authorize RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+
+# mksysuaf - build-host SEED generator (vms-d92). Writes a binary $UAFDEF
+# SYSUAF.DAT that the distro ships in place of the retired ASCII file. Factory
+# tooling: plain host name, no .EXE, never installed onto the media.
+add_executable(mksysuaf
+    mksysuaf.c
+)
+
+target_include_directories(mksysuaf PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${VMS_PROCESS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/vmsrms   # sysuaf_rms.h / rms_io.h
+)
+
+target_compile_definitions(mksysuaf PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+target_compile_options(mksysuaf PRIVATE -Wall -Wextra)
+
+target_link_libraries(mksysuaf PRIVATE vms vmsrms vmsfs vmslnm vmsprocess)
+
+set_target_properties(mksysuaf PROPERTIES
+    OUTPUT_NAME "mksysuaf"
+)
+
+# mkrightslist - build-host SEED generator (vms-f15a). Writes a binary $RDBDEF
+# RIGHTSLIST.DAT that the distro ships in place of the retired ASCII file.
+# Factory tooling: plain host name, no .EXE, never installed onto the media.
+add_executable(mkrightslist
+    mkrightslist.c
+)
+
+target_include_directories(mkrightslist PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${VMS_PROCESS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/vmsrms   # rightslist_rms.h / rms_io.h
+)
+
+target_compile_definitions(mkrightslist PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+target_compile_options(mkrightslist PRIVATE -Wall -Wextra)
+
+target_link_libraries(mkrightslist PRIVATE vms vmsrms vmsfs vmslnm vmsprocess)
+
+set_target_properties(mkrightslist PROPERTIES
+    OUTPUT_NAME "mkrightslist"
+)
 
 add_executable(vms_mail
     vms_mail.c
@@ -112,7 +174,9 @@ target_compile_definitions(vms_mail PRIVATE
     _DEFAULT_SOURCE
 )
 
-target_link_libraries(vms_mail PRIVATE vms vmsfs vmslnm)
+# vms-d92: MAIL verifies recipients and resolves home directories through the
+# binary SYSUAF (sysuaf_lookup -> LIBVMSRMS), so it links vmsrms.
+target_link_libraries(vms_mail PRIVATE vms vmsrms vmsfs vmslnm vmsprocess)
 
 set_target_properties(vms_mail PROPERTIES
     OUTPUT_NAME "MAIL"

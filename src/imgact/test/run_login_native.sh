@@ -140,9 +140,17 @@ readelf -hW "$SYSEXE/LOGINOUT.EXE" | grep -q 'DYN (' || { echo "FAIL: LOGINOUT.E
 echo "-- LOGINOUT.EXE: VMS-native ET_DYN, PT_INTERP=IMGACT.EXE --"
 
 echo
-echo "== seed a REAL SYSUAF.DAT (the one distro/rootfs ships -- SYSTEM/MANAGER, real SHA256 hash) =="
+echo "== seed the REAL SYSUAF.DAT (the one distro/rootfs ships -- binary \$UAFDEF, SYSTEM/MANAGER with a real Purdy hash, vms-d92 atomic flip) =="
 cp "$REPO/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT" "$SYSEXE/SYSUAF.DAT"
-grep -q '^SYSTEM|' "$SYSEXE/SYSUAF.DAT" || { echo "FAIL: shipped SYSUAF.DAT has no SYSTEM row"; exit 1; }
+# The seed is a binary RMS Prolog-3 indexed file now (NOT an ASCII pipe file), so
+# assert the Prolog-3 prologue version word (VBN 1 offset 0 == 0x0003) rather
+# than grepping for a text 'SYSTEM|' row. LOGINOUT authenticates SYSTEM/MANAGER
+# by reading this binary record + Purdy-verifying below -- that is the real proof.
+head -c 2 "$SYSEXE/SYSUAF.DAT" | od -An -tx1 | tr -d ' \n' | grep -q '^0300' \
+    || { echo "FAIL: shipped SYSUAF.DAT is not a binary Prolog-3 \$UAFDEF file"; exit 1; }
+if grep -aq '^SYSTEM|' "$SYSEXE/SYSUAF.DAT"; then
+    echo "FAIL: shipped SYSUAF.DAT still contains an ASCII pipe row (must be binary)"; exit 1
+fi
 
 echo
 echo "== activate LOGINOUT.EXE through IMGACT.EXE, authenticate SYSTEM/MANAGER =="

@@ -125,49 +125,40 @@ int main(void)
           "SYS$SCRATCH stays the system-wide [SYSTMP] scratch");
 
     /* --- LGICMD is a real, sourced-from-SYSUAF field, honoured over the
-     *     hardcoded default. --- */
+     *     hardcoded default. (vms-d92: the record is the binary $UAFDEF view;
+     *     the LGICMD field is set directly rather than parsed from an ASCII
+     *     row, but the decision under test -- sysuaf_login_command_file honours
+     *     the field, empty falls back to the documented default -- is
+     *     unchanged.) --- */
 
-    /* An 8-field SYSUAF row carries LGICMD. */
-    char line8[] =
-        "SMITH|deadbeef|200|10|DKA100:[SMITH]|DISCTLY|TMPMBX,NETMBX|"
-        "DKA100:[SMITH]LOGIN_CUSTOM.COM";
+    /* An account WITH an LGICMD field. */
     sysuaf_record_t rec;
-    check(sysuaf_parse_line(line8, &rec) == 1, "8-field SYSUAF row parses");
-    check(strcmp(rec.default_dir, "DKA100:[SMITH]") == 0,
-          "parsed default_dir");
+    memset(&rec, 0, sizeof(rec));
+    strncpy(rec.username, "SMITH", sizeof(rec.username) - 1);
+    strncpy(rec.default_dir, "DKA100:[SMITH]", sizeof(rec.default_dir) - 1);
+    strncpy(rec.lgicmd, "DKA100:[SMITH]LOGIN_CUSTOM.COM",
+            sizeof(rec.lgicmd) - 1);
+    check(strcmp(rec.default_dir, "DKA100:[SMITH]") == 0, "default_dir set");
     check(strcmp(rec.lgicmd, "DKA100:[SMITH]LOGIN_CUSTOM.COM") == 0,
-          "parsed LGICMD (field 8)");
+          "LGICMD field set");
 
     char cmdfile[256];
     sysuaf_login_command_file(&rec, cmdfile, sizeof(cmdfile));
     check(strcmp(cmdfile, "DKA100:[SMITH]LOGIN_CUSTOM.COM") == 0,
           "login command file honours the SYSUAF LGICMD field");
 
-    /* A legacy 7-field row parses with empty LGICMD and falls back to the
-     * documented default (SYS$LOGIN:LOGIN.COM), NOT a hardcoded /LOGIN.COM. */
-    char line7[] =
-        "JONES|feedface|200|11|DKA100:[JONES]|DISCTLY|TMPMBX";
+    /* An account with an EMPTY LGICMD falls back to the documented default
+     * (SYS$LOGIN:LOGIN.COM), NOT a hardcoded /LOGIN.COM. */
     sysuaf_record_t rec7;
-    check(sysuaf_parse_line(line7, &rec7) == 1, "7-field legacy row parses");
-    check(rec7.lgicmd[0] == '\0', "legacy row has empty LGICMD");
+    memset(&rec7, 0, sizeof(rec7));
+    strncpy(rec7.username, "JONES", sizeof(rec7.username) - 1);
+    strncpy(rec7.default_dir, "DKA100:[JONES]", sizeof(rec7.default_dir) - 1);
+    check(rec7.lgicmd[0] == '\0', "record with no LGICMD has empty field");
     sysuaf_login_command_file(&rec7, cmdfile, sizeof(cmdfile));
     check(strcmp(cmdfile, "SYS$LOGIN:LOGIN.COM") == 0,
           "empty LGICMD falls back to documented SYS$LOGIN:LOGIN.COM");
     check(strcmp(cmdfile, "/LOGIN.COM") != 0,
           "fallback is NOT the old hardcoded /LOGIN.COM");
-
-    /* --- Backward compatibility: a row with empty LGICMD formats back to the
-     *     exact 7-field line (no trailing separator), so pre-vms-e48
-     *     SYSUAF.DAT rows round-trip byte-identically. --- */
-    sysuaf_record_t recbc;
-    char linebc[] = "SYSTEM|abc123|1|4|SYS$SYSDEVICE:[SYSMGR]||ALL";
-    char expect[]  = "SYSTEM|abc123|1|4|SYS$SYSDEVICE:[SYSMGR]||ALL";
-    check(sysuaf_parse_line(linebc, &recbc) == 1, "empty-LGICMD row parses");
-    char out[SYSUAF_LINE_MAX];
-    int n = sysuaf_format_record(&recbc, out, sizeof(out));
-    check(n > 0, "empty-LGICMD row formats");
-    check(strcmp(out, expect) == 0,
-          "empty LGICMD round-trips to the exact 7-field line");
 
     printf("\n%s: %d failure(s)\n",
            failures == 0 ? "PASS" : "FAIL", failures);

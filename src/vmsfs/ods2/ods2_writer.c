@@ -182,8 +182,28 @@ static uint8_t *wcache_block(ods2_wvolume_t *wvol, uint32_t lbn, int zero_fill)
     }
     e = wcache_slot(c, lbn, &created);
     if (!e) {
-        wvol->io_error = ODS2_ERR_NOSPACE;
-        return wvol->wcache_scratch;
+        /* Cache full and `lbn` not present. This writer's block accesses are
+         * write-FORWARD within one top-level op -- create_file_raw's seed +
+         * data-copy loops, and every header/dir builder, use each returned
+         * pointer immediately and never hold one across the next wblk() -- so
+         * flushing the whole working set to the device here and retrying is
+         * safe, and it bounds the working set instead of capping a single file
+         * at WCACHE_CAP blocks. Without this a multi-MB image on the genuine
+         * ODS-2 boot disk (e.g. SYS$UPDATE:OVMX-OS.KIT, or any static system
+         * binary over ~2 MB) failed create_file_raw with ODS2_ERR_NOSPACE.
+         * A flushed block re-read later comes back through ods2_blk_read (the
+         * zero_fill==0 miss path), so its bytes are exactly what was written.
+         * vms-5f0. */
+        ods2_status_t fst = ods2_wvolume_flush(wvol);
+        if (fst != ODS2_OK) {
+            wvol->io_error = fst;
+            return wvol->wcache_scratch;
+        }
+        e = wcache_slot(c, lbn, &created);
+        if (!e) {
+            wvol->io_error = ODS2_ERR_NOSPACE;
+            return wvol->wcache_scratch;
+        }
     }
     if (created) {
         e->used = 1;
@@ -359,24 +379,49 @@ static void ifile_bitmap_mark_used(ods2_wvolume_t *wvol, uint32_t fidnum)
 }
 
 /* ================================================================
- * FM2 retrieval-pointer encoder (format 1: <= 256 blocks, <= 22-bit LBN).
- * Inverse of ods2_fh2_map_walk()'s format-1 decode in ods2_reader.c. [N]
- * ================================================================ */
-static ods2_status_t encode_map_extent(uint8_t *mp, uint32_t lbn, uint32_t count)
+ * FM2 retrieval-pointer encoder. Chooses the smallest FM2 format that
+ * covers `count` blocks (the inverse of ods2_fh2_map_walk()'s decode in
+ * ods2_reader.c [N]):
+ *   format 1 (2 words): count <= 256,   lbn < 2^22
+ *   format 2 (3 words): count <= 16384, lbn < 2^32
+ *   format 3 (4 words): count <= 2^30,  lbn < 2^32
+ * A large CONTIGUOUS file (an image like AUTHORIZE.EXE / LIBVMS$SHR.EXE)
+ * is thus one pointer, exactly as real VMS records a contiguous file --
+ * NOT a fan of 256-block format-1 pointers, which would blow the runtime
+ * ACP file-window slot budget (ACP_WINDOW_MAX). vms-5f0: before this the
+ * encoder was format-1-only and any file over 128 KB (256 blocks) failed
+ * ODS2_ERR_ARGS, so a genuine ODS-2 system disk could not hold real
+ * binaries. On success *words_out gets the pointer size in 16-bit words. */
+static ods2_status_t encode_map_extent(uint8_t *mp, uint32_t lbn,
+                                       uint32_t count, unsigned *words_out)
 {
-    uint16_t w0, w1;
-    uint32_t high6;
-
-    if (count < 1 || count > 256 || lbn >= (1u << 22))
+    if (count < 1)
         return ODS2_ERR_ARGS;
 
-    high6 = (lbn >> 16) & 0x3F;
-    w0 = (uint16_t)(0x4000u | ((count - 1) & 0xFF) | (high6 << 8));
-    w1 = (uint16_t)(lbn & 0xFFFF);
-
-    put16(mp + 0, w0);
-    put16(mp + 2, w1);
-    return ODS2_OK;
+    if (count <= 256 && lbn < (1u << 22)) {
+        uint32_t high6 = (lbn >> 16) & 0x3F;
+        put16(mp + 0, (uint16_t)(0x4000u | ((count - 1) & 0xFF) | (high6 << 8)));
+        put16(mp + 2, (uint16_t)(lbn & 0xFFFF));
+        if (words_out) *words_out = 2;
+        return ODS2_OK;
+    }
+    if (count <= (1u << 14)) {                       /* format 2: 3 words */
+        put16(mp + 0, (uint16_t)(0x8000u | ((count - 1) & 0x3FFF)));
+        put16(mp + 2, (uint16_t)(lbn & 0xFFFF));
+        put16(mp + 4, (uint16_t)((lbn >> 16) & 0xFFFF));
+        if (words_out) *words_out = 3;
+        return ODS2_OK;
+    }
+    if (count <= (1u << 30)) {                       /* format 3: 4 words */
+        uint32_t cm1 = count - 1;
+        put16(mp + 0, (uint16_t)(0xC000u | ((cm1 >> 16) & 0x3FFF)));
+        put16(mp + 2, (uint16_t)(cm1 & 0xFFFF));
+        put16(mp + 4, (uint16_t)(lbn & 0xFFFF));
+        put16(mp + 6, (uint16_t)((lbn >> 16) & 0xFFFF));
+        if (words_out) *words_out = 4;
+        return ODS2_OK;
+    }
+    return ODS2_ERR_ARGS;
 }
 
 /* ================================================================
@@ -413,7 +458,7 @@ static ods2_status_t encode_map_extent(uint8_t *mp, uint32_t lbn, uint32_t count
  * ods2_recattr_data_bytes() returns the true byte length.
  */
 enum fh2_kind { FH2_KIND_SYSTEM = 0, FH2_KIND_DIR, FH2_KIND_DATA,
-                FH2_KIND_DATA_FIX };
+                FH2_KIND_DATA_FIX, FH2_KIND_DATA_STMLF };
 
 /*
  * Write a complete FH2 header for FID `fidnum` at that FID's slot
@@ -527,6 +572,14 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
          * record framing. */
         rtype = ODS2_RTYPE_FIX; rattrib = 0x00; rsize = 512; maxrec = 512;
         break;
+    case FH2_KIND_DATA_STMLF:
+        /* RFM=STMLF (stream, LF-terminated), implied-CR -- the shape a real
+         * VMS text file (.COM/.DAT/SYSUAF) carries [S]. Verbatim bytes (no
+         * VAR re-framing, so byte-identical to the host file), but the reader
+         * frames one record per LF. rsize/maxrec are 0 for a stream file;
+         * efblk/ffbyte below give the exact valid byte length. */
+        rtype = ODS2_RTYPE_STMLF; rattrib = ODS2_RAT_CR; rsize = 0; maxrec = 0;
+        break;
     default: /* FH2_KIND_SYSTEM */
         rtype = 1; rattrib = 0x00; rsize = 512; maxrec = 512;
         break;
@@ -575,7 +628,8 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
             ffbyte = 0;
         } else {
             efblk = total_count;
-            if ((kind == FH2_KIND_DATA || kind == FH2_KIND_DATA_FIX) &&
+            if ((kind == FH2_KIND_DATA || kind == FH2_KIND_DATA_FIX ||
+                 kind == FH2_KIND_DATA_STMLF) &&
                 data_len > 0) {
                 size_t last_block_bytes = data_len - (size_t)(total_count - 1) * ODS2_BLOCK_SIZE;
                 ffbyte = (uint16_t)last_block_bytes; /* 1..512 */
@@ -658,8 +712,22 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
           (fidnum <= ODS2_RESFILES) ? 0xFE00u : 0u);
     put16(h + offsetof(ods2_fh2_t, fh2_fileowner) + 0, system_owner_uic.uic_member);
     put16(h + offsetof(ods2_fh2_t, fh2_fileowner) + 2, system_owner_uic.uic_group);
+    /*
+     * fh2_fileprot is per-file CLASS, not one flat "ordinary -> World:RE"
+     * default (vms-109). Directories 0xBA00 and the ten reserved metadata
+     * files 0xFA00 are byte-identical to the real-VAX fixture; SYSUAF.DAT is
+     * World-DENIED (its Purdy hashes must not be World-readable) and
+     * RIGHTSLIST.DAT is World:R (the world-readable half of the rights
+     * database an unprivileged F$IDENTIFIER reads); every other ordinary file
+     * -- notably a shipped SYS$SYSTEM image (DCL.EXE, LOGINOUT.EXE, ...) an
+     * interactive user must activate -- keeps the documented OpenVMS default
+     * World:RE (0xAA00, vms-37e). The single class->prot mapping, grounded and
+     * cited, is ods2_class_fileprot() in ods2.h; this writer and the kernel
+     * ACP-create path (ods2_edit.c) share it so a runtime-created SYSUAF is
+     * protected on both.
+     */
     put16(h + offsetof(ods2_fh2_t, fh2_fileprot),
-          (kind == FH2_KIND_DIR) ? 0xBA00u : 0xFA00u);
+          ods2_class_fileprot(name, kind == FH2_KIND_DIR, fidnum));
     put32(h + offsetof(ods2_fh2_t, fh2_highwater), hiblk + 1);
 
     /* ident area: fi2_filename, space-padded, "NAME.TYPE;VERSION".
@@ -696,16 +764,26 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
         }
     }
 
-    /* map area: one FM2 format-1 retrieval pointer per extent. Real
-     * INDEXF.SYS uses 3 (see write_indexf_header() below); every other
-     * file this writer emits uses exactly 1. */
-    for (ei = 0; ei < n_extents; ei++) {
-        uint8_t *mp = h + (size_t)MP_OFF_WORDS * 2 + (size_t)ei * 4;
-        st = encode_map_extent(mp, extents[ei].lbn, extents[ei].count);
-        if (st != ODS2_OK)
-            return st;
+    /* map area: one FM2 retrieval pointer per extent, each sized by
+     * encode_map_extent (format 1/2/3 by block count). A large contiguous
+     * file is a single format-2/3 pointer. The map area runs from
+     * MP_OFF_WORDS*2 to the checksum at byte 510, so bound-check each
+     * pointer against that ceiling (vms-5f0). */
+    {
+        const size_t map_cap = ODS2_BLOCK_SIZE - (size_t)MP_OFF_WORDS * 2 - 2;
+        size_t mp_bytes = 0;
+        for (ei = 0; ei < n_extents; ei++) {
+            unsigned words = 0;
+            uint8_t *mp = h + (size_t)MP_OFF_WORDS * 2 + mp_bytes;
+            if (mp_bytes + 8 > map_cap)          /* worst-case pointer = 4 words */
+                return ODS2_ERR_ARGS;
+            st = encode_map_extent(mp, extents[ei].lbn, extents[ei].count, &words);
+            if (st != ODS2_OK)
+                return st;
+            mp_bytes += (size_t)words * 2;
+        }
+        h[offsetof(ods2_fh2_t, fh2_map_inuse)] = (uint8_t)(mp_bytes / 2);
     }
-    h[offsetof(ods2_fh2_t, fh2_map_inuse)] = (uint8_t)(n_extents * 2);
 
     /* checksum over first 255 words -> offset 510 */
     put16(h + offsetof(ods2_fh2_t, fh2_checksum), ods2_block_checksum(h));
@@ -1747,11 +1825,19 @@ ods2_status_t ods2_wvolume_create_file(ods2_wvolume_t *wvol,
     return wvol_commit(wvol, ODS2_OK);
 }
 
-ods2_status_t ods2_wvolume_create_file_raw(ods2_wvolume_t *wvol,
-                                           const char *name, uint16_t version,
-                                           const uint8_t *data, size_t data_len,
-                                           ods2_fid_t parent_dir,
-                                           ods2_fid_t *fid_out)
+/* Shared body for the two verbatim (byte-for-byte) create paths: the only
+ * difference between create_file_raw (RFM=FIXED, binary images) and
+ * create_file_stmlf (RFM=STMLF, text) is the FH2 record-attribute `kind`
+ * stamped into the header -- the block allocation and verbatim copy below are
+ * identical. */
+static ods2_status_t wvolume_create_file_verbatim(ods2_wvolume_t *wvol,
+                                                  const char *name,
+                                                  uint16_t version,
+                                                  const uint8_t *data,
+                                                  size_t data_len,
+                                                  ods2_fid_t parent_dir,
+                                                  enum fh2_kind kind,
+                                                  ods2_fid_t *fid_out)
 {
     uint32_t fidnum, lbn, nblocks, b;
     ods2_status_t st;
@@ -1793,15 +1879,35 @@ ods2_status_t ods2_wvolume_create_file_raw(ods2_wvolume_t *wvol,
         return st;
 
     /* seq == 1 (first generation); backlink == parent_dir. `data_len` (the
-     * verbatim byte count) drives write_fh2_header_ext's FH2_KIND_DATA_FIX
-     * efblk/ffbyte, so ods2_recattr_data_bytes() reports exactly data_len. */
-    st = write_fh2_header(wvol, fidnum, 1, name, version, 0, FH2_KIND_DATA_FIX,
+     * verbatim byte count) drives write_fh2_header_ext's efblk/ffbyte, so
+     * ods2_recattr_data_bytes() reports exactly data_len. */
+    st = write_fh2_header(wvol, fidnum, 1, name, version, 0, kind,
                           lbn, nblocks, data_len, parent_dir);
     if (st != ODS2_OK)
         return st;
 
     fid_from_num(fidnum, fid_out);
     return wvol_commit(wvol, ODS2_OK);
+}
+
+ods2_status_t ods2_wvolume_create_file_raw(ods2_wvolume_t *wvol,
+                                           const char *name, uint16_t version,
+                                           const uint8_t *data, size_t data_len,
+                                           ods2_fid_t parent_dir,
+                                           ods2_fid_t *fid_out)
+{
+    return wvolume_create_file_verbatim(wvol, name, version, data, data_len,
+                                        parent_dir, FH2_KIND_DATA_FIX, fid_out);
+}
+
+ods2_status_t ods2_wvolume_create_file_stmlf(ods2_wvolume_t *wvol,
+                                             const char *name, uint16_t version,
+                                             const uint8_t *data, size_t data_len,
+                                             ods2_fid_t parent_dir,
+                                             ods2_fid_t *fid_out)
+{
+    return wvolume_create_file_verbatim(wvol, name, version, data, data_len,
+                                        parent_dir, FH2_KIND_DATA_STMLF, fid_out);
 }
 
 ods2_status_t ods2_wvolume_create_dir(ods2_wvolume_t *wvol,
@@ -2292,7 +2398,7 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
                 st = ODS2_ERR_NOSPACE;   /* map area full */
                 goto done;
             }
-            st = encode_map_extent(mp_base + (size_t)nx * 4, run_lbn, run);
+            st = encode_map_extent(mp_base + (size_t)nx * 4, run_lbn, run, NULL);
             if (st != ODS2_OK)
                 goto done;
             nx++;
@@ -2481,7 +2587,7 @@ ods2_status_t ods2_wvolume_append_file(ods2_wvolume_t *wvol,
         memset(mp_base, 0, map_cap);    /* clear any stale FM2 pointers */
         for (ei = 0; ei < ex.n; ei++) {
             st = encode_map_extent(mp_base + (size_t)ei * 4,
-                                   ex.ext[ei].lbn, ex.ext[ei].count);
+                                   ex.ext[ei].lbn, ex.ext[ei].count, NULL);
             if (st != ODS2_OK)
                 return st;
         }
@@ -2506,4 +2612,204 @@ ods2_status_t ods2_wvolume_append_file(ods2_wvolume_t *wvol,
     put16(h + offsetof(ods2_fh2_t, fh2_checksum), ods2_block_checksum(h));
 
     return wvol_commit(wvol, ODS2_OK);
+}
+
+/* ================================================================
+ * RENAME an existing file (vms-de7, epic vms-208 -- the userspace-writer twin
+ * of the executive ACP's IO$_MODIFY!IO$M_MOVE). Removes the file's OLD
+ * directory entry, inserts a NEW one (possibly in a different directory), and
+ * rewrites the file header's ident name (+ backlink on a cross-directory move)
+ * -- the file KEEPS its FID, allocation and data. Every on-disk fact is the
+ * codec's (ods2_dir_insert_blocks / ods2_dir_remove_blocks / ods2_fh2_rename);
+ * this only sequences wblk() reads/writes around them, exactly as the ACP
+ * sequences exec_blockdev_*.  Used by test_ods2_rename.c and available to the
+ * userspace ODS-2 writer.
+ * ================================================================ */
+
+/* Remove {name, version} (version 0 => every version) from a directory at
+ * wvolume level: read its data blocks (VBN order) into one contiguous buffer,
+ * run the pure codec repack (ods2_dir_remove_blocks -- never grows/deallocates,
+ * *out_nblk == in_nblk), and write the blocks back through wblk(). *removed set
+ * iff a matching entry was dropped. */
+static ods2_status_t wvol_dir_remove(ods2_wvolume_t *wvol, ods2_fid_t dir_fid,
+                                     const char *name, uint16_t version,
+                                     int *removed)
+{
+    uint32_t dir_fidnum;
+    uint32_t *lbns = NULL;      /* heaped: ODS2_WDIR_MAX_BLOCKS entries -- keep
+                                 * the kernel frame under 2048 (rd vms-5f0) */
+    unsigned nlbn = 0, e, k, out_nblk = 0, i, namecount;
+    struct wdir_extents ex;
+    uint8_t *hdr_copy = NULL;   /* heaped: one ODS2_BLOCK_SIZE header block */
+    ods2_fh2_t parsed;
+    uint8_t *inbuf = NULL, *outbuf = NULL, *flat = NULL;
+    size_t flatcap;
+    ods2_status_t st;
+
+    if (!wvol || !name || !removed)
+        return ODS2_ERR_ARGS;
+    namecount = (unsigned)strlen(name);
+    if (namecount == 0 || namecount > 255)
+        return ODS2_ERR_ARGS;
+    *removed = 0;
+
+    dir_fidnum = ods2_fid_number(&dir_fid);
+    if (dir_fidnum < 1 || dir_fidnum > wvol->maxfiles)
+        return ODS2_ERR_ARGS;
+
+    hdr_copy = (uint8_t *)ods2_kalloc(ODS2_BLOCK_SIZE);
+    lbns     = (uint32_t *)ods2_kalloc((size_t)ODS2_WDIR_MAX_BLOCKS *
+                                       sizeof(uint32_t));
+    if (!hdr_copy || !lbns) {
+        st = ODS2_ERR_NOSPACE;      /* honest failure -- never a silent fake */
+        goto done;
+    }
+
+    memcpy(hdr_copy, wblk(wvol, wvol->hdr_base_lbn + (dir_fidnum - 1)),
+           ODS2_BLOCK_SIZE);
+    st = ods2_fh2_parse(hdr_copy, ODS2_BLOCK_SIZE, &parsed);
+    if (st != ODS2_OK)
+        goto done;
+
+    ex.n = 0;
+    ex.overflow = 0;
+    st = ods2_fh2_map_walk(hdr_copy, wdir_extent_collect, &ex, NULL);
+    if (st != ODS2_OK)
+        goto done;
+    if (ex.n == 0 || ex.overflow) {
+        st = ODS2_ERR_NOSPACE;
+        goto done;
+    }
+    for (e = 0; e < ex.n; e++)
+        for (k = 0; k < ex.ext[e].count; k++) {
+            if (nlbn >= ODS2_WDIR_MAX_BLOCKS) {
+                st = ODS2_ERR_NOSPACE;
+                goto done;
+            }
+            lbns[nlbn++] = ex.ext[e].lbn + k;
+        }
+
+    inbuf   = (uint8_t *)ods2_kalloc((size_t)nlbn * ODS2_BLOCK_SIZE);
+    outbuf  = (uint8_t *)ods2_kalloc((size_t)nlbn * ODS2_BLOCK_SIZE);
+    flatcap = (size_t)nlbn * ODS2_BLOCK_SIZE + 32;
+    flat    = (uint8_t *)ods2_kalloc(flatcap);
+    if (!inbuf || !outbuf || !flat) {
+        st = ODS2_ERR_NOSPACE;      /* honest failure -- never a silent fake */
+        goto done;
+    }
+
+    for (i = 0; i < nlbn; i++)
+        memcpy(inbuf + (size_t)i * ODS2_BLOCK_SIZE, wblk(wvol, lbns[i]),
+               ODS2_BLOCK_SIZE);
+
+    st = ods2_dir_remove_blocks(inbuf, nlbn, name, namecount, version,
+                                flat, flatcap, outbuf, nlbn, &out_nblk, removed);
+    if (st != ODS2_OK)
+        goto done;
+
+    for (i = 0; i < nlbn; i++)      /* out_nblk == nlbn (trailing emptied) */
+        memcpy(wblk(wvol, lbns[i]), outbuf + (size_t)i * ODS2_BLOCK_SIZE,
+               ODS2_BLOCK_SIZE);
+
+    st = wvol_commit(wvol, ODS2_OK);
+done:
+    if (hdr_copy) ods2_kfree(hdr_copy);
+    if (lbns)     ods2_kfree(lbns);
+    if (inbuf)  ods2_kfree(inbuf);
+    if (outbuf) ods2_kfree(outbuf);
+    if (flat)   ods2_kfree(flat);
+    return st;
+}
+
+ods2_status_t ods2_wvolume_rename(ods2_wvolume_t *wvol,
+                                  ods2_fid_t src_dir, const char *oldname,
+                                  uint16_t oldver,
+                                  ods2_fid_t dst_dir, const char *newname,
+                                  uint16_t newver, ods2_fid_t file_fid)
+{
+    uint32_t fidnum, src_num, dst_num;
+    uint8_t *hdr_copy = NULL;   /* heaped header blocks -- keep the kernel frame
+                                 * under 2048 (rd vms-5f0) */
+    uint8_t *dhdr = NULL;
+    ods2_fh2_t parsed;
+    ods2_fid_t dst_backlink;
+    int cross_dir, removed = 0;
+    ods2_status_t st;
+    uint8_t *h;
+
+    if (!wvol || !oldname || !newname || oldname[0] == '\0' || newname[0] == '\0')
+        return ODS2_ERR_ARGS;
+
+    fidnum  = ods2_fid_number(&file_fid);
+    src_num = ods2_fid_number(&src_dir);
+    dst_num = ods2_fid_number(&dst_dir);
+    if (fidnum < 1 || fidnum > wvol->maxfiles || src_num < 1 || dst_num < 1)
+        return ODS2_ERR_ARGS;
+    cross_dir = (src_num != dst_num);
+
+    hdr_copy = (uint8_t *)ods2_kalloc(ODS2_BLOCK_SIZE);
+    if (!hdr_copy) {
+        st = ODS2_ERR_NOSPACE;      /* honest failure -- never a silent fake */
+        goto done;
+    }
+
+    /* The header at the file's FID slot must self-report this FID -- never
+     * rename a stale/garbage block. */
+    memcpy(hdr_copy, wblk(wvol, wvol->hdr_base_lbn + (fidnum - 1)),
+           ODS2_BLOCK_SIZE);
+    st = ods2_fh2_parse(hdr_copy, ODS2_BLOCK_SIZE, &parsed);
+    if (st != ODS2_OK)
+        goto done;
+    if (ods2_fid_number(&parsed.fh2_fid) != fidnum) {
+        st = ODS2_ERR_NOTFOUND;
+        goto done;
+    }
+
+    /* Resolve the destination directory's true FID (for a cross-dir backlink)
+     * from its own header, so the moved file's fh2_backlink is byte-correct. */
+    memset(&dst_backlink, 0, sizeof(dst_backlink));
+    if (cross_dir) {
+        ods2_fh2_t dparsed;
+        dhdr = (uint8_t *)ods2_kalloc(ODS2_BLOCK_SIZE);
+        if (!dhdr) {
+            st = ODS2_ERR_NOSPACE;
+            goto done;
+        }
+        memcpy(dhdr, wblk(wvol, wvol->hdr_base_lbn + (dst_num - 1)),
+               ODS2_BLOCK_SIZE);
+        st = ods2_fh2_parse(dhdr, ODS2_BLOCK_SIZE, &dparsed);
+        if (st != ODS2_OK)
+            goto done;
+        if (!(dparsed.fh2_filechar & ODS2_FH2_M_DIRECTORY)) {
+            st = ODS2_ERR_ARGS;         /* destination is not a directory */
+            goto done;
+        }
+        dst_backlink = dparsed.fh2_fid;
+    }
+
+    /* Insert the NEW directory entry FIRST (so the file is never unreferenced),
+     * then remove the OLD one -- the crash-safe order the XQP uses. */
+    st = ods2_wvolume_dir_insert(wvol, dst_dir, newname, newver, file_fid);
+    if (st != ODS2_OK)
+        goto done;
+    st = wvol_dir_remove(wvol, src_dir, oldname, oldver, &removed);
+    if (st != ODS2_OK)
+        goto done;
+    if (!removed) {
+        st = ODS2_ERR_NOTFOUND;         /* old {name,version} was not present */
+        goto done;
+    }
+
+    /* Rewrite the file header's ident name (+ backlink on a cross-dir move);
+     * the FID, allocation map and RECATTR/EOF are untouched. */
+    h = wblk(wvol, wvol->hdr_base_lbn + (fidnum - 1));
+    st = ods2_fh2_rename(h, newname, newver, cross_dir ? &dst_backlink : NULL);
+    if (st != ODS2_OK)
+        goto done;
+    ods2_fh2_reseal(h);
+    st = wvol_commit(wvol, ODS2_OK);
+done:
+    if (hdr_copy) ods2_kfree(hdr_copy);
+    if (dhdr)     ods2_kfree(dhdr);
+    return st;
 }

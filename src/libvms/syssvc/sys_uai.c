@@ -77,48 +77,21 @@
 #include "sysuaf.h"
 
 /*
- * Find a user record in sysuaf.dat by username.
- * username_str is a null-terminated C string (already extracted from descriptor).
- * Returns 1 if found, 0 if not found, -1 on I/O error.
+ * Find a user record in the binary SYSUAF by username (vms-d92 atomic flip).
+ * $GETUAI/$SETUAI now read the genuine $UAFDEF record through the binary engine
+ * (sysuaf_lookup -> ovmx_sysuaf_read_user over the ACP, or the POSIX defer when
+ * /dev/vms is absent) -- no ASCII parse, no SHA-256. Fail-honest: a missing
+ * account or an image without LIBVMSRMS returns 0/-1, never a fabricated record.
+ * Returns 1 if found, 0 if not found.
  */
-static int find_uaf_record(const char *username_str,
-                            sysuaf_record_t *out_rec,
-                            long *out_offset)
+static int find_uaf_record(const char *username_str, sysuaf_record_t *out_rec)
 {
-    char sysuaf_linux[1024];
-    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux, sizeof(sysuaf_linux));
-    FILE *f = fopen(sysuaf_linux, "r");
-    if (!f)
-        return -1;
-
-    char line[SYSUAF_LINE_MAX];
-    long offset = 0;
-    int found = 0;
-    int too_long = 0;
-
-    while (sysuaf_read_line(f, line, sizeof(line), &too_long)) {
-        sysuaf_record_t rec;
-        /* An over-length line is not a short record. Reporting and skipping
-         * it is the whole fix (vms-9b7): parsing its prefix is how a
-         * seven-field row became a five-field one. */
-        if (too_long) {
-            offset = ftell(f);
-            continue;
-        }
-        int rc = sysuaf_parse_line(line, &rec);
-        if (rc == 1) {
-            if (strcasecmp(rec.username, username_str) == 0) {
-                if (out_rec)    *out_rec    = rec;
-                if (out_offset) *out_offset = offset;
-                found = 1;
-                break;
-            }
-        }
-        offset = ftell(f);
-    }
-
-    fclose(f);
-    return found;
+    sysuaf_record_t rec;
+    if (sysuaf_lookup(username_str, &rec) != 0)
+        return 0;
+    if (out_rec)
+        *out_rec = rec;
+    return 1;
 }
 
 /*
@@ -191,21 +164,27 @@ static uint32_t fill_uai_item(const struct item_list_3 *item,
         }
 
         case UAI$_PWD: {
-            /* Return raw hash bytes (up to 8 bytes / 64-bit quadword) */
-            if (item->bufaddr && item->buflen >= 8) {
-                memset(item->bufaddr, 0, 8);
-                /* Copy hex string as raw bytes if present */
-                const char *hash = rec->password_hash;
-                size_t hlen = strlen(hash);
-                size_t copy = (hlen < 16) ? hlen : 16;  /* up to 8 bytes */
-                size_t i;
-                for (i = 0; i + 1 < copy && i / 2 < 8; i += 2) {
-                    char byte_str[3] = { hash[i], hash[i+1], '\0' };
-                    ((uint8_t *)item->bufaddr)[i / 2] =
-                        (uint8_t)strtoul(byte_str, NULL, 16);
-                }
-            }
+            /* The REAL Purdy password quadword (uaf$q_pwd), 8 bytes verbatim
+             * from the $UAFDEF record -- not decoded from a hex string. */
+            if (item->bufaddr && item->buflen >= 8)
+                memcpy(item->bufaddr, rec->raw.uaf$q_pwd, 8);
             if (item->retlen) *item->retlen = 8;
+            break;
+        }
+
+        case UAI$_SALT: {
+            /* The real per-account salt word (uaf$w_salt), 2 bytes. */
+            if (item->bufaddr && item->buflen >= 2)
+                memcpy(item->bufaddr, rec->raw.uaf$w_salt, 2);
+            if (item->retlen) *item->retlen = 2;
+            break;
+        }
+
+        case UAI$_ENCRYPT: {
+            /* The algorithm byte (uaf$b_encrypt; UAI$C_PURDY_S == 3). */
+            if (item->bufaddr && item->buflen >= 1)
+                *(uint8_t *)item->bufaddr = rec->raw.uaf$b_encrypt;
+            if (item->retlen) *item->retlen = 1;
             break;
         }
 
@@ -257,7 +236,7 @@ uint32_t sys$getuai(uint32_t efn, uint32_t *context,
 
     /* Look up the user record */
     sysuaf_record_t rec;
-    int found = find_uaf_record(username, &rec, NULL);
+    int found = find_uaf_record(username, &rec);
 
     uint32_t status;
     if (found <= 0) {
@@ -352,14 +331,22 @@ uint32_t sys$setuai(uint32_t efn, uint32_t *context,
     char username[32];
     dsc$strncpy(username, usrnam, sizeof(username));
 
-    /* Read current record */
+    /* Read current record (binary $UAFDEF via the ACP; vms-d92). */
     sysuaf_record_t rec;
-    int found = find_uaf_record(username, &rec, NULL);
+    int found = find_uaf_record(username, &rec);
     if (found <= 0) {
         return SS$_NOSUCHID;
     }
 
-    /* Apply item list updates to the in-memory record */
+    /*
+     * Apply item-list updates to the in-memory record, then write the BINARY
+     * record back in place via the one binary writer (sysuaf_write_record ->
+     * ovmx_sysuaf_store_user -> $UPDATE over the ACP). No ASCII, no fopen, no
+     * whole-file rewrite: the username and UIC keys are unchanged, so the
+     * update is a same-length in-place record modify (Rule 9 / INV-6).
+     */
+    int wrote_pwd = 0;
+    uint8_t new_pwd[8];
     if (itmlst) {
         const struct item_list_3 *items = (const struct item_list_3 *)itmlst;
         for (; items->buflen != 0 || items->item_code != 0; items++) {
@@ -379,13 +366,12 @@ uint32_t sys$setuai(uint32_t efn, uint32_t *context,
                     }
                     break;
                 case UAI$_PWD:
-                    /* Update password hash — encode bytes back to hex */
+                    /* The caller supplies the already-hashed quadword; store
+                     * those 8 bytes verbatim into uaf$q_pwd (matching VMS,
+                     * which writes the hashed value $SETUAI is handed). */
                     if (items->bufaddr && items->buflen >= 8) {
-                        const uint8_t *bytes = (const uint8_t *)items->bufaddr;
-                        snprintf(rec.password_hash, sizeof(rec.password_hash),
-                                 "%02x%02x%02x%02x%02x%02x%02x%02x",
-                                 bytes[0], bytes[1], bytes[2], bytes[3],
-                                 bytes[4], bytes[5], bytes[6], bytes[7]);
+                        memcpy(new_pwd, items->bufaddr, 8);
+                        wrote_pwd = 1;
                     }
                     break;
                 default:
@@ -394,85 +380,19 @@ uint32_t sys$setuai(uint32_t efn, uint32_t *context,
         }
     }
 
-    /* Rewrite sysuaf.dat with the updated record */
-    char sysuaf_linux2[1024];
-    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux2, sizeof(sysuaf_linux2));
-    char tmp_path[1024];
-    snprintf(tmp_path, sizeof(tmp_path), "%s.TMP", sysuaf_linux2);
-    FILE *in  = fopen(sysuaf_linux2, "r");
-    FILE *out = fopen(tmp_path, "w");
-    if (!in || !out) {
-        if (in)  fclose(in);
-        if (out) fclose(out);
+    /* Fold the text edits (FLAGS/DEFDIR) into the binary record; this preserves
+     * the password area, so a UAI$_PWD written below survives. */
+    sysuaf_view_to_raw(&rec);
+    if (wrote_pwd)
+        memcpy(rec.raw.uaf$q_pwd, new_pwd, 8);
+
+    if (sysuaf_write_record(&rec) != 0) {
+        if (iosb) {
+            iosb->iosb$w_status = (uint16_t)SS$_FILACCERR;
+            iosb->iosb$w_bcnt   = 0;
+        }
         return SS$_FILACCERR;
     }
-
-    /*
-     * REWRITE THROUGH THE ONE WRITER (vms-9b7).
-     *
-     * The line this loop used to emit came from a SECOND fprintf format
-     * string that disagreed with tools/vms_authorize.c's on the FLAGS field
-     * ("%u" here, "%s" there). It now calls sysuaf_format_record(), which is
-     * the only place in the tree that turns a record into a line -- and which
-     * REFUSES a record too long to be read back rather than writing one that
-     * a reader will silently truncate.
-     *
-     * Non-matching rows are still copied VERBATIM, including any that this
-     * process could not parse: $SETUAI is asked to change ONE account, and a
-     * row it does not understand is not its to rewrite or to drop.
-     */
-    char line[SYSUAF_LINE_MAX];
-    int too_long_w = 0;
-    while (sysuaf_read_line(in, line, sizeof(line), &too_long_w)) {
-        if (too_long_w) {
-            /*
-             * An over-length row cannot be copied verbatim (this process only
-             * ever saw its prefix) and cannot be parsed. Copying the prefix
-             * would DESTROY that account; dropping it would delete it. So the
-             * rewrite is abandoned and the original file is left untouched --
-             * the only answer that loses nothing.
-             */
-            fclose(in);
-            fclose(out);
-            unlink(tmp_path);
-            if (iosb) {
-                iosb->iosb$w_status = (uint16_t)SS$_FILACCERR;
-                iosb->iosb$w_bcnt   = 0;
-            }
-            return SS$_FILACCERR;
-        }
-
-        /* sysuaf_parse_line() modifies its argument, so the verbatim copy
-         * has to be taken BEFORE the parse, not after it. */
-        char verbatim[SYSUAF_LINE_MAX];
-        strncpy(verbatim, line, sizeof(verbatim) - 1);
-        verbatim[sizeof(verbatim) - 1] = '\0';
-
-        sysuaf_record_t tmp;
-        int rc = sysuaf_parse_line(line, &tmp);
-        if (rc == 1 && strcasecmp(tmp.username, username) == 0) {
-            char row[SYSUAF_LINE_MAX];
-            if (sysuaf_format_record(&rec, row, sizeof(row)) < 0) {
-                /* Loud writer-side refusal. The update does not happen and
-                 * the caller is told, rather than a truncated identity being
-                 * committed to the authorization database. */
-                fclose(in);
-                fclose(out);
-                unlink(tmp_path);
-                if (iosb) {
-                    iosb->iosb$w_status = (uint16_t)SS$_BADPARAM;
-                    iosb->iosb$w_bcnt   = 0;
-                }
-                return SS$_BADPARAM;
-            }
-            fprintf(out, "%s\n", row);
-        } else {
-            fputs(verbatim, out);
-        }
-    }
-    fclose(in);
-    fclose(out);
-    rename(tmp_path, sysuaf_linux2);
 
     uint32_t status = SS$_NORMAL;
     if (iosb) {

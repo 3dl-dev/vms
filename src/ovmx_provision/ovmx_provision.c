@@ -80,9 +80,9 @@
  * The one SYSUAF read that remains here is provision_home_directories()'s
  * walk of every account for home-directory provisioning -- a distinct
  * concern (VMS's own account provisioning, not identity establishment) that
- * goes through the same sysuaf_read_line()/sysuaf_parse_line() pair every
- * other reader in the tree uses. There is still no second parser of SYSUAF
- * anywhere in the boot path.
+ * goes through the binary $UAFDEF engine (ovmx_sysuaf_enum) every other reader
+ * in the tree uses now. There is still no second parser of SYSUAF anywhere in
+ * the boot path.
  */
 
 #include <stdio.h>
@@ -101,6 +101,10 @@
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
 #include "vms_kif.h"
+/* vms-aac: PROVISION seeds the on-volume OPERATOR.LOG from the kmsg ring buffer
+ * over the ACP -- PID 1's bridge cannot (no RMS in the static PID-1 image). */
+#include "opcom_kmsg.h"
+#include "rms_textfile.h"
 /* ovmx_boot_power_off(): the boot-plumbing substrate seam (vms-28f) PID 1
  * already uses for the exact same power-off-on-fatal-condition need --
  * Linux: sync(); reboot(RB_POWER_OFF). NetBSD: sync();
@@ -290,10 +294,9 @@ static void provision_ownership(uint32_t sys_grp, uint32_t sys_mem)
  * re-own it. OVMX does the same, here -- in an ordinary image on the startup
  * path, which is where account provisioning belongs, rather than in PID 1.
  *
- * ONE READ, ONE PARSER. This walk goes through sysuaf_read_line() and
- * sysuaf_parse_line(), the same pair every other reader in the tree uses, so
- * an over-length row is REPORTED here and not silently downgraded into a
- * different account (vms-9b7).
+ * ONE READER (vms-d92 atomic flip). This walk goes through ovmx_sysuaf_enum()
+ * -- the binary $UAFDEF indexed engine over the ACP -- the same reader the rest
+ * of the tree uses now; there is no ASCII parse and no /vms fopen.
  *
  * ALSO THE SYSTEM-ACCOUNT CONTINUITY CHECK (vms-a17e). Identity
  * establishment no longer reads SYSUAF -- vms_kif_establish_system()
@@ -307,44 +310,45 @@ static void provision_ownership(uint32_t sys_grp, uint32_t sys_mem)
  * when the file could not be opened at all, which is the same "no SYSTEM
  * account" condition by a different route.
  */
-static int provision_home_directories(void)
+/*
+ * BINARY SYSUAF ENUMERATION (vms-d92 atomic flip). PROVISION reads every
+ * account from the genuine $UAFDEF indexed file through the binary engine
+ * (ovmx_sysuaf_enum, src/vmsrms/sysuaf_live.c over the ACP) -- no fopen on a
+ * /vms passthrough, no ASCII parse. PROVISION links LIBVMSRMS and runs at boot
+ * with the executive present, so the enumeration rides the ODS-2 ACP.
+ */
+typedef int (*ovmx_sysuaf_enum_cb)(const sysuaf_rms_record_t *rec, void *arg);
+uint32_t ovmx_sysuaf_enum(ovmx_sysuaf_enum_cb cb, void *arg);
+
+static int prov_home_cb(const sysuaf_rms_record_t *raw, void *arg)
 {
-    char sysuaf_path[512];
-    vms_to_linux(VMS_SYSUAF_PATH, sysuaf_path, sizeof(sysuaf_path));
-    FILE *fp = fopen(sysuaf_path, "r");
-    if (!fp)
+    int *saw_system = (int *)arg;
+    sysuaf_record_t rec;
+    sysuaf_raw_to_view(raw, &rec);
+
+    if (strcmp(rec.username, "SYSTEM") == 0)
+        *saw_system = 1;
+    if (rec.default_dir[0] == '\0')
         return 0;
 
+    /* default_dir may be a VMS spec (DKA0:[USERS.name]) -- translate. */
+    char home_linux[512];
+    if (strchr(rec.default_dir, '[') || strchr(rec.default_dir, ':'))
+        vms_to_linux(rec.default_dir, home_linux, sizeof(home_linux));
+    else
+        snprintf(home_linux, sizeof(home_linux), "%s", rec.default_dir);
+
+    mkdir(home_linux, 0755);
+    own_object(home_linux, rec.uic_group, rec.uic_member);
+    return 0;
+}
+
+static int provision_home_directories(void)
+{
     int saw_system = 0;
-    char line[SYSUAF_LINE_MAX];
-    int too_long = 0;
-    while (sysuaf_read_line(fp, line, sizeof(line), &too_long)) {
-        if (too_long) {
-            fprintf(stderr, "%%OVMX-W-RECTOOLONG, SYSUAF record longer than "
-                    "%d bytes -- account not provisioned\n",
-                    SYSUAF_LINE_MAX - 1);
-            continue;
-        }
-
-        sysuaf_record_t rec;
-        if (sysuaf_parse_line(line, &rec) != 1)
-            continue;
-        if (strcmp(rec.username, "SYSTEM") == 0)
-            saw_system = 1;
-        if (rec.default_dir[0] == '\0')
-            continue;
-
-        /* default_dir may be a VMS spec (DKA0:[USERS.name]) -- translate. */
-        char home_linux[512];
-        if (strchr(rec.default_dir, '[') || strchr(rec.default_dir, ':'))
-            vms_to_linux(rec.default_dir, home_linux, sizeof(home_linux));
-        else
-            snprintf(home_linux, sizeof(home_linux), "%s", rec.default_dir);
-
-        mkdir(home_linux, 0755);
-        own_object(home_linux, rec.uic_group, rec.uic_member);
-    }
-    fclose(fp);
+    uint32_t st = ovmx_sysuaf_enum(prov_home_cb, &saw_system);
+    if (!(st & 1))
+        return 0;   /* enumeration failed (no file / no executive) == no SYSTEM */
     return saw_system;
 }
 
@@ -352,12 +356,40 @@ static int provision_home_directories(void)
 /* main                                                                */
 /* ------------------------------------------------------------------ */
 
+#ifndef __NetBSD__
+/*
+ * emit one already-classified kmsg line into the genuine Files-11
+ * SYS$MANAGER:OPERATOR.LOG over the ACP, via RMS $PUT-at-EOF (vms-aac). The
+ * first append $CREATEs the log. Fail-honest: rms_textfile_append_line returns
+ * -1 with no mounted ACP volume / no /dev/vms and no line is lost to a POSIX
+ * substitute -- there just is no operator log to seed then (Rule 9 / INV-6).
+ */
+static void provision_oplog_emit(const char *line)
+{
+    (void)rms_textfile_append_line(VMS_OPERATOR_LOG, line);
+}
+#endif
+
 int main(void)
 {
     /* Bootstrap the VMS namespace so filespecs translate. Same two calls
      * every OVMX image makes; PID 1 has already mounted the disk. */
     vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
     lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
+
+#ifndef __NetBSD__
+    /*
+     * SEED THE OPERATOR LOG (vms-aac, epic vms-208 atomic flip). PID 1's
+     * /dev/kmsg bridge routed vms.ko/vmsfs.ko's boot lifecycle events, but PID 1
+     * is static and has no RMS to write the on-volume OPERATOR.LOG. We do -- and
+     * the SYS$DISK is mounted (PID 1 mounted it before exec'ing us) and the
+     * namespace is up (the two calls just above), so this replays the ring
+     * buffer's boot records into SYS$MANAGER:OPERATOR.LOG over the ACP now,
+     * race-free, before STARTUP.COM runs. sys$sndopr appends live records to the
+     * same file thereafter.
+     */
+    opcom_kmsg_drain_ringbuffer(provision_oplog_emit);
+#endif
 
     /*
      * ACCOUNT-PROVISIONING AND THE ONE REMAINING SYSUAF READ, FIRST
@@ -436,23 +468,33 @@ int main(void)
     vms_to_linux(VMS_STARTUP_PATH, startup_path, sizeof(startup_path));
     vms_to_linux(VMS_DCL_PATH, dcl_path, sizeof(dcl_path));
 
-    struct stat st_buf;
-    if (stat(startup_path, &st_buf) != 0) {
-        /*
-         * NOT A SILENT SKIP. A missing startup procedure used to be a bare
-         * `return` in PID 1 -- the same shape that let VMSSSHD.EXE vanish
-         * while the boot banner still announced SSH (see the NOTE ON SERVICES
-         * in src/ovmx_init/ovmx_init.c). It is reported, and the boot goes on
-         * to the login prompt with the identity established: a system with no
-         * SYS$MANAGER:STARTUP.COM is a system with no site startup, which is
-         * survivable; a system with no identity is not.
-         */
-        fprintf(stderr, "%%OVMX-W-NOSTARTUP, %s not found -- no site startup\n",
-                VMS_STARTUP_PATH);
-        return 0;
+    /* ATOMIC FLIP (vms-5f0): execve the DCL.EXE copy PID 1 staged off the
+     * ODS-2 volume over the ACP into OVMX_BOOT_STAGE_DIR -- the /vms POSIX
+     * path no longer exists for the kernel to map. Self-guarding: use the
+     * staged copy only if it is present, so a substrate that did not stage
+     * (NetBSD-vax, vms-d5d) keeps the original path. */
+    {
+        char staged[512];
+        if (ovmx_boot_stage_exec_path(dcl_path, staged, sizeof(staged)) &&
+            access(staged, X_OK) == 0)
+            snprintf(dcl_path, sizeof(dcl_path), "%s", staged);
     }
 
-    execl(dcl_path, "vmsdcl", startup_path, (char *)NULL);
+    /* STARTUP.COM presence is DCL's to resolve. With the /vms passthrough
+     * retired it is read through the executive ACP (RMS/$QIO), not a POSIX
+     * stat here -- a stat() of the retired /vms path would spuriously report
+     * "no site startup" on a volume that in fact carries it. DCL reports an
+     * absent procedure itself. On a substrate that still exposes the POSIX
+     * tree the stat is a harmless best-effort warning, not a gate. */
+    struct stat st_buf;
+    if (stat(startup_path, &st_buf) != 0)
+        fprintf(stderr,
+                "%%OVMX-I-STARTUP, handing %s to DCL for ACP resolution\n",
+                VMS_STARTUP_PATH);
+
+    /* Hand DCL the VMS filespec (not the retired /vms path) so it opens the
+     * procedure through its own ACP-routed RMS path. */
+    execl(dcl_path, "vmsdcl", VMS_STARTUP_PATH, (char *)NULL);
     fprintf(stderr, "%%OVMX-E-NOIMG, cannot activate %s: %s\n",
             VMS_DCL_PATH, strerror(errno));
     return 1;

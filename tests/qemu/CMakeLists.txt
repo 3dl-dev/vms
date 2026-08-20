@@ -104,6 +104,85 @@ foreach(_src ${QEMU_SYSSVC_SOURCES})
 endforeach()
 
 # ---------------------------------------------------------------------------
+# RMS-over-ACP force-bind (rms_acp_bind.c) -- OPT-IN, not blanket (vms-5f0).
+#
+# rms_acp_bind.c makes a STRONG reference to sys$open/$get/... so a suite that
+# reaches SYSUAF/RIGHTSLIST ONLY through the `#pragma weak` seam in
+# src/libvms/rtl/rms_textfile.c still pulls LIBVMSRMS in and reaches the real
+# ACP, instead of getting sys$open == NULL and failing every read as "not
+# found" (vms-058). See tests/qemu/rms_acp_bind.c for the full mechanism.
+#
+# WHY OPT-IN: a strong reference to the seven RMS entry points EXTRACTS the
+# whole vmsrms archive (RMS + the ODS-2 codec) into the static musl binary.
+# Applying it to ALL 31 syssvc suites via the shared recipe bloated the shared
+# kernel-test initramfs 31M->36M and overflowed the QEMU test-VM boot
+# ("Initramfs unpacking failed: write error", every shard died before shard
+# selection). So it is applied ONLY to the suites that (a) read an identity
+# file IN-PROCESS through the libvms reader AND (b) do NOT already carry a
+# strong sys$ RMS call of their own -- the four below. Suites that call
+# sys$create/$open directly (rms_acp, dcl_acp, scratch_writable, acp_*) already
+# pull vmsrms with no anchor; suites that read SYSUAF via a spawned external
+# image (ident->DCL.EXE, authorize/identcont->AUTHORIZE.EXE) need the bind in
+# that IMAGE's link script (mk_dcl.sh / mk_loginout.sh, the production seam,
+# vms-5f0 Fix 2), not in the test binary.
+#
+# test_syssvc_loginout_acp JOINED this list at vms-1df1. It USED to carry a
+# strong sys$create call (which pulled the RMS record services in for free), but
+# the vms-d92 atomic flip rewrote its SYSUAF authoring onto the binary $UAFDEF
+# engine (rms_open_named_handle + sysuaf_rms_*), so its ONLY remaining reach into
+# sys$create/$put/$open/$get/$connect is now the `#pragma weak` seam in
+# rms_textfile.c, used by the OPERATOR.LOG ($PUT-at-EOF) and LASTLOGIN
+# ($CREATE/$PUT) boot writers. Without the anchor those weak cells stay NULL,
+# rms_services_present() is FALSE, and both writers return -1 BEFORE any ACP call
+# -- the write assertions fail with no honest RMS status (the exact defect
+# rms_acp_bind.c closes). It already pulls the vmsrms archive + ODS-2 codec via
+# the $UAFDEF engine, so the anchor only adds the RMS record members (small).
+foreach(_anchored
+        test_syssvc_sysuaf_uic_base
+        test_syssvc_rightslist
+        test_syssvc_setuai
+        test_syssvc_loginout_acp)
+    if(TARGET ${_anchored})
+        target_sources(${_anchored} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/rms_acp_bind.c)
+    endif()
+endforeach()
+
+# test_syssvc_rms_p3_acp (vms-045) drives the runtime Prolog-3 indexed WRITE+READ
+# engine (src/vmsrms/rms_prolog3.c) over a real /dev/vms: it needs the engine's
+# private headers (rms_prolog3.h + rms_io.h, which define rms_file_t and the
+# create/put API) on its include path. The generic recipe links vmsrms already;
+# this only adds the src/vmsrms directory so the header resolves.
+if(TARGET test_syssvc_rms_p3_acp)
+    target_include_directories(test_syssvc_rms_p3_acp PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms
+        ${CMAKE_SOURCE_DIR}/src/kernel)
+endif()
+
+# test_syssvc_loginout_acp (vms-d92 atomic flip): authors + reads a BINARY
+# $UAFDEF SYSUAF over the ACP through the sysuaf_rms engine, so it needs the
+# engine's private headers (sysuaf_rms.h / rms_io.h) on its include path.
+if(TARGET test_syssvc_loginout_acp)
+    target_include_directories(test_syssvc_loginout_acp PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms)
+endif()
+
+# test_syssvc_imgact_acp (vms-3e8e) drives the EXACT freestanding ACP reader
+# IMGACT.EXE runs (src/imgact/imgact_acp.c) against a real /dev/vms: the generic
+# function above already registered the target off the glob, so augment it with
+# that one extra source and the imgact/kernel/qemu headers it needs
+# (imgact_acp.h, vms_ioctl.h + vms_acp.h, imgact_acp_fixture_elf.h). The test
+# provides the three host primitives imgact_acp.c calls on libc.
+if(TARGET test_syssvc_imgact_acp)
+    target_sources(test_syssvc_imgact_acp PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/imgact/imgact_acp.c)
+    target_include_directories(test_syssvc_imgact_acp PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/imgact
+        ${CMAKE_SOURCE_DIR}/src/kernel
+        ${CMAKE_CURRENT_SOURCE_DIR})
+endif()
+
+# ---------------------------------------------------------------------------
 # DEVICE-CORPUS PROGRAMS UNDER A REAL /dev/vms (vms-08c).
 #
 # #258 (vms-dv1) correctly converted sys$getdvi/sys$device_scan from a

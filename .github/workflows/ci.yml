@@ -4321,6 +4321,35 @@ jobs:
               sh /src/src/imgact/test/run_tls_producer_over_crtl.sh
             '
 
+  weak-import-activate:
+    name: Weak-by-name Import (.vms$wimp) — LOGINOUT reaches RMS across the layer cycle
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Native x86_64 (no emulation): the LINK-level assertions are the gate here
+      # — a #pragma-weak reference no --use'd producer exports lands in .vms$wimp
+      # (NOT baked to 0, NOT a link error), and binds STRONG (.vms$imp) when an
+      # exporter IS --use'd. The by-name ACTIVATION half needs a real /dev/vms
+      # ACP (INV-6: IMGACT has no POSIX image-read fallback), which this container
+      # lacks by construction — that half is proven by the boot-to-DCL login
+      # (uat-session), so the script runs the LINK assertions and notes the split.
+      - name: Record + bind a weak cross-image reference through LINK.EXE/.vms$wimp (x86_64)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make python3 >/dev/null
+              export CC=gcc WORK=/tmp/weak-import-act
+              sh /src/src/imgact/test/run_weak_import_activation.sh
+            '
+
   vmsprocess-native:
     name: vmsprocess VMS-native Migration (LIBVMSPROCESS$SHR)
     needs: changes

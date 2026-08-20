@@ -24,6 +24,20 @@ add_executable(vmslink link.c)
 target_include_directories(vmslink PRIVATE include)
 target_link_options(vmslink PRIVATE ${OVMX_HOST_TOOL_LINK_OPTS})
 set_target_properties(vmslink PROPERTIES OUTPUT_NAME "LINK" SUFFIX ".EXE")
+# ATOMIC FLIP (vms-5f0), spot #3: the CMake vmslink LINK.EXE builds the BOOTABLE
+# DCL.EXE/LOGINOUT.EXE (link_native_graph, below, via build_link_native.sh with
+# $<TARGET_FILE:vmslink>). With the /vms POSIX passthrough retired, their
+# PT_INTERP must name the boot-staging tmpfs where PID 1 stages IMGACT.EXE off
+# the genuine ODS-2 volume over the ACP -- NOT the /vms path, which no longer
+# resolves at boot. Kept in sync with OVMX_BOOT_STAGE_DIR in
+# src/libvms/include/ovmx_layout.h. The default in link.c stays the /vms path so
+# the standalone native activation tests (which build their own LINK.EXE from
+# source and stage IMGACT.EXE under /vms) are untouched.
+# Bare (unquoted) token, stringified in link.c -- a quoted string macro would
+# land in compile_commands.json as \"...\" and trip the kif_caller_census gate's
+# line reader (vms-5f0). Kept in sync with OVMX_BOOT_STAGE_DIR / OVMX_LAYOUT.
+target_compile_definitions(vmslink PRIVATE
+    IMGACT_INTERP_PATH=/run/ovmx-boot/IMGACT.EXE)
 install(TARGETS vmslink RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 
 add_executable(vmsdump dump_image.c)
@@ -169,6 +183,11 @@ if(OVMX_LINK_NATIVE)
             ${CMAKE_CURRENT_SOURCE_DIR}/mk_vmsrms_shr.sh
             ${CMAKE_CURRENT_SOURCE_DIR}/mk_dcl.sh
             ${CMAKE_CURRENT_SOURCE_DIR}/mk_loginout.sh
+            # RMS force-bind anchor TUs linked into DCL.EXE / LOGINOUT.EXE by the
+            # recipes above (vms-5f0). They live under src/vmslink and so are not
+            # in OVMX_NATIVE_GRAPH_SOURCES; list them so a rebuild retriggers.
+            ${CMAKE_CURRENT_SOURCE_DIR}/dcl_rms_bind.c
+            ${CMAKE_CURRENT_SOURCE_DIR}/loginout_rms_bind.c
             ${OVMX_NATIVE_GRAPH_SOURCES}
         COMMENT "LINK.EXE: building the VMS-native shareable graph (5 libs + DECC\$SHR + DCL.EXE + LOGINOUT.EXE, ${OVMX_LINK_NATIVE_ARCH} musl, no ld/ld.so)"
         VERBATIM

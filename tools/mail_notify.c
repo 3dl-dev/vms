@@ -18,53 +18,23 @@
 #include "vms_mail_notify.h"
 #include "ovmx_layout.h"
 #include "str_util.h"
-#include "vmsfs/filespec.h"
-
-#define SYSUAF_PATH     VMS_SYSUAF_PATH
-#define MAX_USERNAME    64
+/* SYSUAF is the sole VMS account database — binary indexed lookup (vms-d92). */
+#include "sysuaf.h"
 
 /* Get home directory for a VMS username (its SYSUAF default-directory field).
+ *
+ * The lookup is a binary indexed read (vms-d92) -- no ASCII pipe-parse.
  *
  * DELETED, NOT REPLACED (vms-a30): the /etc/passwd fallback that once stood
  * here handed back a Linux home directory as a VMS account's default
  * directory. SYSUAF answers this or nothing does. */
 int get_user_homedir(const char *username, char *homedir, size_t sz)
 {
-    char sysuaf_linux2[1024];
-    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux2, sizeof(sysuaf_linux2));
-    FILE *fp = fopen(sysuaf_linux2, "r");
-    if (fp) {
-        char line[512];
-        while (fgets(line, sizeof(line), fp)) {
-            if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
-                continue;
-            str_trim(line);
-            char *fields[7];
-            char *p = line;
-            int nf = 0;
-            for (nf = 0; nf < 7 && p; nf++) {
-                fields[nf] = p;
-                char *delim = strchr(p, '|');
-                if (delim) { *delim = '\0'; p = delim + 1; }
-                else p = NULL;
-            }
-            if (nf < 5) continue;
-            char uname[MAX_USERNAME];
-            strncpy(uname, fields[0], sizeof(uname) - 1);
-            uname[sizeof(uname) - 1] = '\0';
-            str_upcase(uname);
-            char search[MAX_USERNAME];
-            strncpy(search, username, sizeof(search) - 1);
-            search[sizeof(search) - 1] = '\0';
-            str_upcase(search);
-            if (strcmp(uname, search) == 0) {
-                strncpy(homedir, fields[4], sz - 1);
-                homedir[sz - 1] = '\0';
-                fclose(fp);
-                return 0;
-            }
-        }
-        fclose(fp);
+    sysuaf_record_t rec;
+    if (sysuaf_lookup(username, &rec) == 0) {
+        strncpy(homedir, rec.default_dir, sz - 1);
+        homedir[sz - 1] = '\0';
+        return 0;
     }
     return -1;
 }

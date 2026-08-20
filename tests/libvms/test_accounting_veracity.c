@@ -44,8 +44,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <dirent.h>
 
 #include "ovmx_accounting.h"
 #include "vmsfs/device.h"
@@ -53,6 +55,41 @@
 #include "ovmx_layout.h"
 
 static int g_failures = 0;
+
+/*
+ * ovmx_accounting writes the per-user record as the flat file
+ * SYS$MANAGER:LASTLOGIN_<USER>.DAT (lastlogin_spec, ovmx_accounting.c). Reached
+ * over RMS $CREATE it lands in SYS0/SYSCOMMON/SYSMGR as lastlogin_<user>.dat
+ * (vmsfs lower-cases the filename) with an RMS version suffix (";1", ...). This
+ * checks the record's on-disk PRESENCE version-agnostically -- a prefix match
+ * on the SYSMGR directory -- so the assertion is "a record file exists", not a
+ * brittle exact-name/exact-version stat. Returns 1 if present, 0 if not. */
+static int lastlogin_record_exists(const char *root, const char *user)
+{
+    char dirpath[1300];
+    snprintf(dirpath, sizeof(dirpath),
+             "%s/SYS0/SYSCOMMON/SYSMGR", root);
+
+    char prefix[128];
+    snprintf(prefix, sizeof(prefix), "lastlogin_%s.dat", user);
+    for (char *p = prefix; *p; p++)
+        *p = (char)tolower((unsigned char)*p);
+
+    DIR *d = opendir(dirpath);
+    if (!d)
+        return 0;
+    int found = 0;
+    struct dirent *e;
+    size_t plen = strlen(prefix);
+    while ((e = readdir(d)) != NULL) {
+        if (strncmp(e->d_name, prefix, plen) == 0) {   /* name or name;VER */
+            found = 1;
+            break;
+        }
+    }
+    closedir(d);
+    return found;
+}
 
 static void check(int cond, const char *name)
 {
@@ -123,17 +160,9 @@ int main(void)
           "record_login() while disabled reports success (never fails "
           "the caller's login just because accounting is off)");
 
-    /* vmsfs_to_linux_path() lower-cases the "LASTLOGIN" component (it is
-     * parsed as a bare filename -- OVMX_LASTLOGIN_DIR has no [brackets] --
-     * so it goes through the same name-lowering step as any other VMS
-     * filename), while the SYS0/SYSCOMMON/SYSMGR directory components and
-     * the username leaf (uppercased explicitly by lastlogin_path()) do
-     * not. Confirmed against the actual on-disk layout, not guessed. */
-    char lastlogin_path[1300];
-    snprintf(lastlogin_path, sizeof(lastlogin_path),
-              "%s/SYS0/SYSCOMMON/SYSMGR/lastlogin/%s", root, user);
-    struct stat st;
-    check(stat(lastlogin_path, &st) != 0,
+    /* The record lands as SYS0/SYSCOMMON/SYSMGR/lastlogin_<user>.dat;VER
+     * (lastlogin_spec -> RMS $CREATE; see lastlogin_record_exists). */
+    check(lastlogin_record_exists(root, user) == 0,
           "POST-CHECK: no lastlogin record was written while accounting "
           "is DISABLED -- the exact property the old per-process bool "
           "could never deliver, because record_login() ran unconditionally");
@@ -151,7 +180,7 @@ int main(void)
 
     check(ovmx_accounting_record_login(user) == 0,
           "record_login() while enabled reports success");
-    check(stat(lastlogin_path, &st) == 0,
+    check(lastlogin_record_exists(root, user) == 1,
           "POST-CHECK: a lastlogin record WAS written now that accounting "
           "is ENABLED -- same call, only the flag changed");
 

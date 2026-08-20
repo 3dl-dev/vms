@@ -498,6 +498,9 @@ acp-writevb-extend-alloc-offbyone
 acp-search-cursor-skips-versions
 acp-create-header-slot-offbyone
 acp-fileop-no-dlm-lock
+rms-put-wrong-vbn
+p3-index-child-pointer-offbyone
+imgact-acp-valid-bytes-offbyone
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -524,7 +527,9 @@ bgsock-getname-addr-zeroed
 vmsfs-mountvis-crossproc-resolve-disabled
 initialize-home-magic-not-written
 ods2-read-content-vbn
-dirlogical-compose-drops-common-member"
+dirlogical-compose-drops-common-member
+dcl-acp-search-fid-fabricated
+loginout-acp-auth-from-ods2"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -4769,13 +4774,13 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_ioctl_acp_assign() stops FAILING when the named unit is not a mounted volume: the SS\$_NOSUCHDEV on the not-found (!vol) path becomes SS\$_NORMAL, so \$ASSIGN of the boot unit hands back a 'success' (and libvmssys then stores a PCB_CHAN_FILE slot) for a volume the executive does not have. That is the exact INV-6 facade the ACP exists to refuse -- a channel to nothing reported as an executive channel to something. The MOUNTED-volume \$ASSIGN is untouched (vol is found, so the mutated line never runs), so only the two fail-honest assertions -- \$ASSIGN before any \$MOUNT and \$ASSIGN after \$DISMOUNT -- can tell the difference, which is precisely the 'report success while sharing nothing' shape CLAUDE.md Rule 9 exists to catch.";;
+        why)          echo "vms_ioctl_acp_assign() stops FAILING when the named unit is not a mounted volume: the SS\$_DEVNOTMOUNT on the not-found (!vol) path becomes SS\$_NORMAL, so \$ASSIGN of the boot unit hands back a 'success' (and libvmssys then stores a PCB_CHAN_FILE slot) for a volume the executive does not have. That is the exact INV-6 facade the ACP exists to refuse -- a channel to nothing reported as an executive channel to something. The MOUNTED-volume \$ASSIGN is untouched (vol is found, so the mutated line never runs), so only the two fail-honest assertions -- \$ASSIGN before any \$MOUNT and \$ASSIGN after \$DISMOUNT -- can tell the difference, which is precisely the 'report success while sharing nothing' shape CLAUDE.md Rule 9 exists to catch.";;
         require_fail) cat <<'EOF'
-$ASSIGN of an UNMOUNTED boot unit returns SS$_NOSUCHDEV -- fail-honest, no fabricated channel
+$ASSIGN of an UNMOUNTED boot unit returns SS$_DEVNOTMOUNT -- fail-honest, no fabricated channel
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-after $DISMOUNT, $ASSIGN of the boot unit is SS$_NOSUCHDEV again (volume gone)
+after $DISMOUNT, $ASSIGN of the boot unit is SS$_DEVNOTMOUNT again (volume gone)
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
@@ -4874,6 +4879,55 @@ EOF
                       ;;
         knock_on_fail) echo "";;
         knock_on_why)  echo "";;
+        esac;;
+
+    rms-put-wrong-vbn)
+        case "$_f" in
+        facility)     echo "RMS reaches file data through the Files-11 (ODS-2) ACP: a record \$PUT is IO\$_WRITEVBLK at the record's {VBN, byte-offset} on the file's channel window, and a \$GET is IO\$_READVBLK at the same coordinate (src/vmsrms/rms_io.c, the block-I/O substrate under rms_seq/rel/idx; RMS \$OPEN/\$CREATE/\$CLOSE ride the ACP in rms_core.c), vms-bc7, epic vms-208";;
+        targets)      echo "vmsrms/rms_io.c";;
+        # test_syssvc_rms_p3_acp (vms-045) also rides rms_io_write() -- it authors
+        # a genuine Prolog-3 indexed file over the SAME IO$_WRITEVBLK substrate,
+        # so a $PUT that lands one VBN too high desynchronizes the on-disk index
+        # from the untouched read path and its keyed read-back cannot resolve.
+        suites_red)   echo "test_syssvc_rms_acp test_syssvc_rms_p3_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "rms_io_write() -- the \$PUT side of the substrate -- computes the transfer's starting virtual block as (cursor / 512) + 2 instead of + 1, so every record RMS writes lands ONE VBN too high on disk (IO\$_WRITEVBLK persists it there, and grows the file's EOF to cover the gap). The \$GET side, rms_io_read(), is untouched and still computes the correct VBN, so after \$CLOSE + re-\$OPEN a record read back at its true VBN finds the empty (never-written) block instead of the data. This is exactly the property RMS-over-\$QIO exists to provide -- that a record written through the window is the record read back through it (INV-6: it hit the disk WHERE RMS says it did, not a block off) -- so the byte-exact readback assertions redden while \$CREATE/\$CONNECT/\$PUT (which still 'succeed', just to the wrong block) stay green. The read path being the untouched half is what lets the round-trip catch the write-side fault.";;
+        require_fail) cat <<'EOF'
+RMS-over-ACP: all records round-tripped byte-exact through the ACP window
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    p3-index-child-pointer-offbyone)
+        case "$_f" in
+        facility)     echo "RMS Prolog-3 indexed READ engine's index descent -- p3_descend() picks the data bucket for a keyed \$GET by following each index record's 2-byte child pointer down the on-disk ISAM index (src/vmsrms/rms_prolog3.c, the keyed read path under the Files-11 ODS-2 ACP), vms-045, epic vms-208";;
+        targets)      echo "vmsrms/rms_prolog3.c";;
+        suites_red)   echo "test_syssvc_rms_p3_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "p3_descend() decodes each index record's child pointer as p3_le16(bkt + off) -- the 2-byte VBN of the subtree to follow to the data level. Reading it ONE BYTE too high (bkt + off + 1) yields a mis-aligned, garbage VBN, so rms_p3_get_by_key descends to the wrong data bucket and the keyed read-back cannot resolve the record. test_syssvc_rms_p3_acp authors a genuine Prolog-3 indexed file, \$PUTs NREC records forcing real data-bucket SPLITs, then reads EVERY record back BY KEY across the split -- so the corrupted descent reddens the byte-exact keyed read-back, and the durability re-read (same descent, rebuilt window) reddens with it. The \$PUT/\$CREATE writes and the 'a genuine bucket SPLIT occurred' bucket-count assertion do not descend the index to verify and stay green. Only keyed reads through this descent can tell; test_syssvc_rms_acp is a SEQUENTIAL RMS suite (sys\$put/sys\$get, no P3 index) and never reaches p3_descend, so nothing outside test_syssvc_rms_p3_acp reddens.";;
+        require_fail) cat <<'EOF'
+every record reads back BY KEY over the ACP, byte-exact, across splits
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+records survive DEACCESS+re-ACCESS (durable on the volume)
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME CORRUPTED DESCENT, SEEN AT THE DURABILITY RE-READ. After DEACCESS +
+re-ACCESS the suite rebinds the prologue from the on-disk image and calls
+read_all_by_key() a second time -- the same rms_p3_get_by_key index descent,
+still reading the child pointer one byte too high -- so the durable-volume
+re-read reddens with the first keyed read-back. The re-bind of the prologue and
+the split bucket-count check do not descend the index and stay green.
+EOF
+                      ;;
         esac;;
 
     acp-search-cursor-skips-versions)
@@ -4998,7 +5052,7 @@ EOF
                       ;;
         knock_on_fail) cat <<'EOF'
 the walk FELL THROUGH the empty node member and resolved on the COMMON member (search order)
-$GET/IO$_READVBLK reads SYSUAF.DAT byte-exact off the ODS-2 volume (no vmsfs_to_linux_path)
+$GET/IO$_READVBLK reads SYSUAF.DAT byte-exact off the ODS-2 volume -- VBN 1 begins with the shipped header (no vmsfs_to_linux_path)
 SYS$MANAGER:WELCOME.TXT resolves through the same rooted chain to a file FID
 EOF
                       ;;
@@ -5014,6 +5068,58 @@ DOES resolve (RMS$_FNF) and a concrete spec with a missing directory level
 (RMS$_DNF) -- never depend on the common member being present and stay green.
 EOF
                       ;;
+        esac;;
+
+    loginout-acp-auth-from-ods2)
+        case "$_f" in
+        facility)     echo "LOGINOUT authenticates from SYSUAF via the Files-11 (ODS-2) ACP: the SYSUAF / RIGHTSLIST / \$GETUAI readers open their file with RMS \$OPEN/\$GET over the mounted ODS-2 volume (rms_textfile_open -> sys\$open/sys\$get, routed by rms_impl_open to \$ASSIGN + IO\$_ACCESS + IO\$_READVBLK), NOT fopen on a /vms passthrough -- so a login reads its SYSUAF credential off the genuine ODS-2 SYS\$DISK (src/libvms/rtl/rms_textfile.c, vms-274, epic vms-208). A userspace consumer of the ACP facility, the same product-half class as the RMS/devtab reroutes.";;
+        targets)      echo "libvms/rtl/rms_textfile.c";;
+        suites_red)   echo "test_syssvc_loginout_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "rms_textfile_open() -- the sequential reader the per-boot LOGINOUT writers' read-backs (OPERATOR.LOG, LASTLOGIN) ride -- opens the file declaring the wrong record format (FAB\$C_VAR instead of FAB\$C_STMLF). Those files are stream-LF (one LF-terminated text record); read as VARIABLE, RMS takes the first two data bytes of each record as a binary record-length count, so every \$GET reframes the record into garbage and no record reads back byte-exact. The OPERATOR.LOG and LASTLOGIN read-backs therefore fail, which trips the suite's whole-suite gate (\"auth + boot writers are sourced from the ODS-2 volume via the ACP\") -- the exact property this reroute exists to provide (INV-6: a per-boot record is read byte-faithful from the ODS-2 platter through RMS-over-ACP, not a POSIX copy). The binary SYSUAF read rides the indexed \$UAFDEF engine (read_binary_sysuaf_system), NOT rms_textfile_open, so it is untouched; so are the \$CREATE/\$PUT that built the fixture, the OPERATOR.LOG/LASTLOGIN writers (their own \$PUT path), and the mount/dismount edges. The wrong-password and absent-account checks want a NEGATIVE result and still get one, so they stay green.";;
+        require_fail) cat <<'EOF'
+LOGINOUT auth + boot writers are sourced from the ODS-2 volume via the ACP
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+OPERATOR.LOG record read back byte-exact from the ODS-2 volume
+LASTLOGIN timestamp read back from the ODS-2 volume
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME MISFRAMED READER, SEEN AT EACH READ-BACK THAT RIDES rms_textfile_open().
+Once the reader opens as VARIABLE, every $GET misframes, so BOTH per-boot writer
+read-backs -- the OPERATOR.LOG record and the LASTLOGIN timestamp, each re-read
+through rms_textfile_open() -- redden (knock_on_fail); the whole-suite gate that
+asserts auth + writers are sourced from the ODS-2 volume (require_fail) reddens
+with them because it fires exactly when any earlier check failed. The binary
+SYSUAF read (read_binary_sysuaf_system over the $UAFDEF indexed engine) does NOT
+ride rms_textfile_open and stays green; the OPERATOR.LOG APPEND and LASTLOGIN
+WRITE themselves use $PUT/$CREATE (the writer path, untouched, still stream-LF)
+and stay green; and the dismounted-read, absent-file, and product-fail-honest
+checks all expect a NEGATIVE result (a NULL handle / not-found) and stay green
+regardless of record format.
+EOF
+                      ;;
+        esac;;
+
+    imgact-acp-valid-bytes-offbyone)
+        case "$_f" in
+        facility)     echo "IMGACT image reads over the Files-11 (ODS-2) ACP -- the freestanding activator opens an image by IO\$_ACCESS (walking its directory chain) and reads its header + PT_LOAD segments by IO\$_READVBLK, decoding the accessed file's valid-byte count from its on-disk FH2 (efblk/ffbyte) so a read never over-reads past end-of-file, vms-3e8e, epic vms-208";;
+        targets)      echo "imgact/imgact_acp.c";;
+        suites_red)   echo "test_syssvc_imgact_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_access_name() -- the IO\$_ACCESS helper that decodes the accessed image file's total valid-byte count from its FH2 -- computes (efblk - 1) * 512 + ffbyte + 1, one byte too many. That count is the file window's extent the reader clamps every IO\$_READVBLK to, so IMGACT would believe the image is one byte longer than it is. The over-count is HARMLESS to every in-bounds read -- the ELF header, the program-header table and each PT_LOAD segment all lie well inside the real file, so each imgact_acp_pread still clamps to their own lengths and returns byte-exact data -- which is exactly why only the assertion that reads the valid count BACK off the accessed file can tell the difference: the byte-exact header/phdr/segment/whole-image reads, the directory-walk open, and the fail-honest NOSUCHFILE/NOSUCHDEV checks all stay green, and only the on-disk-geometry assertion reddens. INV-6's shape: the accessed file's real size is a fact the executive holds on disk, not a value the reader may inflate.";;
+        require_fail) cat <<'EOF'
+the accessed image's valid-byte count (1424) matches the on-disk FH2
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
         esac;;
 
     p0-map-not-recorded)
@@ -5467,8 +5573,8 @@ EOF
 
     rightslist-general-hex-as-decimal)
         case "$_f" in
-        facility)     echo "the rights database's GENERAL identifiers (RIGHTSLIST.DAT's %Xnnnnnnnn value notation, parse_value() in src/libvms/rtl/rightslist.c), vms-2f8";;
-        targets)      echo "libvms/rtl/rightslist.c";;
+        facility)     echo "the rights database's GENERAL identifiers -- the binary \$RDBDEF identifier VALUE decoded from RIGHTSLIST.DAT and returned by the executive \$ASCTOID (rightslist_live_asctoid_rf in src/vmsrms/rightslist_live.c), vms-2f8/vms-f15a";;
+        targets)      echo "vmsrms/rightslist_live.c";;
         # test_syssvc_ident.c's own LOCAL assertion (a GENERAL identifier,
         # same reader, same %X notation) is a genuine, measured knock-on --
         # see knock_on_why. Nothing else in this manifest's known suites
@@ -5481,7 +5587,7 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "parse_value()'s %Xnnnnnnnn branch -- the notation every GENERAL identifier in RIGHTSLIST.DAT (BATCH, DIALUP, INTERACTIVE, LOCAL, NETWORK, REMOTE) is written in -- stops reading the digits after %X as hexadecimal and reads them as decimal instead. The row is still FOUND (the colon-delimited scan, the name match and the case-insensitive compare are all untouched); only the value column is misread, so rightslist_name_to_value()/rightslist_value_to_name() answer a wrong number for every general identifier while the UIC branch ([g,m], a few lines below, OCTAL) is a completely different code path and is not reached by this edit at all.";;
+        why)          echo "RE-ANCHORED (vms-f15a flipped RIGHTSLIST to the binary \$RDBDEF; parse_value()'s ASCII %Xnnnnnnnn branch this defect used to mutate was DELETED with the ASCII reader). It now guards the equivalent binary-path invariant: the identifier VALUE the executive \$ASCTOID returns must be the exact 32-bit value stored in the \$RDBDEF record. rightslist_live_asctoid_rf() copies out rdb_ident_value(&rec) after a NAME-key hit; the mutation masks off bit 31 (\`& 0x7FFFFFFFu\`) on that egress, so every GENERAL identifier -- all of which are 0x8000000n (BATCH..REMOTE) -- resolves to a wrong, sign-bit-cleared value (0x80000004 -> 4) while the record is still FOUND (the NAME-key lookup and the case-insensitive upcase are untouched) and the UIC path (derived from SYSUAF, a completely separate reader) is not reached by this edit at all.";;
         require_fail) cat <<'EOF'
 oracle: DCL prints -2147483644
 EOF
@@ -5532,19 +5638,17 @@ EOF
         case "$_f" in
         facility)     echo "SYSUAF.DAT's UIC fields -- the shared read radix (SYSUAF_UIC_RADIX, src/libvms/include/sysuaf.h, consulted only by sysuaf_lookup()'s field parse in src/libvms/rtl/sysuaf.c), vms-e60";;
         targets)      echo "libvms/include/sysuaf.h";;
-        # test_syssvc_rightslist.c's OWN UIC checks (DEFAULT/GUEST, via
-        # sysuaf_lookup()), test_syssvc_ident.c's DEFAULT checks (via the
-        # same reader, one layer up through F$IDENTIFIER) and
-        # test_syssvc_setuai.c's UIC-write-back readback (scenario 4) are
-        # genuine, MEASURED knock-on -- see knock_on_why. This suites_red set
-        # was corrected after running run_facility_negctl.sh for real: an
-        # earlier draft predicted setuai would be untouched (sysuaf_format_
-        # record(), the WRITER, uses a literal %o and does not consult this
-        # constant) -- true for the WRITE, but scenario 4 also READS the row
-        # back afterward through the same mutated sysuaf_lookup(), and the
-        # real run reddened it. Declared here rather than left as an
-        # unattributed stray, per this manifest's own method rule.
-        suites_red)   echo "test_syssvc_sysuaf_uic_base test_syssvc_rightslist test_syssvc_ident test_syssvc_setuai";;
+        # test_syssvc_sysuaf_uic_base.c's OWN UIC checks (DEFAULT/GUEST, via
+        # sysuaf_lookup()) and test_syssvc_setuai.c's UIC-write-back readback
+        # (scenario 4, which reads USER1's row back through sysuaf_lookup())
+        # are the ONLY suites this mutation reddens. Since vms-930 the
+        # identifier-resolution suites test_syssvc_rightslist and
+        # test_syssvc_ident source UIC identifiers from the world-readable
+        # RIGHTSLIST.DAT (a binary $RDBDEF longword, no text radix), NOT from
+        # SYSUAF -- so mutating SYSUAF_UIC_RADIX no longer reaches them. They
+        # were dropped from this red set when rightslist.c's SYSUAF fallback
+        # was removed; see knock_on_why.
+        suites_red)   echo "test_syssvc_sysuaf_uic_base test_syssvc_setuai";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -5556,68 +5660,52 @@ EOF
         knock_on_fail) cat <<'EOF'
 the oracle's 8388736; decimal parsing gives 13107400
 DEFAULT is NOT 13107400 (the decimal misreading vms-e60 filed)
-oracle %X00800080 = [200,200] OCTAL; decimal gives 13107400
-a shipped account that was never in any hardcoded table
-reverse resolves (oracle round-trips it)
-OVMX answered 13107201, having read VMS's octal UIC as decimal group 200 member 1
-the direction an earlier round deliberately left unmapped rather than add on the strength of symmetry
 the rewritten UIC GROUP field still reads 200 (octal, vms-e60)
 the rewritten UIC MEMBER field still reads 202 (octal, vms-e60)
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
-SAME CONSTANT, OBSERVED AT EVERY UIC READER -- FOUR OF THEM, ONE FOUND BY
-RUNNING IT. test_syssvc_sysuaf_uic_base.c drives sysuaf_lookup() directly
-for DEFAULT and GUEST (require_fail names GUEST's own check; knock_on_fail's
-first two lines are DEFAULT's check and its own regression-naming assertion,
-which now reads exactly the decimal value it exists to rule out).
-test_syssvc_rightslist.c reaches the SAME sysuaf_lookup() one layer up,
-through rightslist_name_to_value()'s UIC branch, for the SAME two accounts --
-both directions of its check_roundtrip("DEFAULT", ...) and
-check_roundtrip("GUEST", ...): each account still RESOLVES (sysuaf_lookup
-still finds the record; only the value is wrong), so it is the value-match
-and reverse-lookup halves of check_roundtrip that redden, not the "resolved
-at all" branch (that one requires resolution to fail outright, which this
-mutation does not cause). test_syssvc_ident.c reaches it a THIRD time,
-through F$IDENTIFIER's live DCL.EXE path, for DEFAULT only (ident.c never
-probes GUEST).
+SAME CONSTANT, OBSERVED AT THE TWO SUITES THAT STILL READ SYSUAF's UIC TEXT
+FIELDS. test_syssvc_sysuaf_uic_base.c drives sysuaf_lookup() directly for
+DEFAULT and GUEST (require_fail names GUEST's own check; knock_on_fail's first
+two lines are DEFAULT's check and its own regression-naming assertion, which
+now reads exactly the decimal value it exists to rule out).
 
-test_syssvc_setuai.c's scenario 4 is the FOURTH, and it was NOT predicted --
-an earlier draft of this entry reasoned "the writer uses a literal %o, so
-nothing that only writes SYSUAF.DAT is reached" and left setuai out of
-suites_red entirely. Running run_facility_negctl.sh for real reddened it
-anyway: scenario 4 does not just $SETUAI a new UIC, it reads USER1's rewritten
-row BACK afterward (row_field() against the same sysuaf_lookup()-backed
-record the read side of this mutation touches) to prove the write landed --
-so its readback, not its write, hits the mutated radix. Two assertions
-redden ("4: the rewritten UIC GROUP field still reads 200" and its MEMBER
-sibling), because USER1 ships 200|202, and decimal-reading those digits
-produces a different string than octal does. This is exactly the discipline
-this manifest's own header describes: an unpredicted red is declared here,
-not narrowed away or left as an unattributed stray.
+test_syssvc_setuai.c's scenario 4 is the second: it does not just $SETUAI a
+new UIC, it reads USER1's rewritten row BACK afterward (row_field() against the
+same sysuaf_lookup()-backed record the read side of this mutation touches) to
+prove the write landed -- so its readback, not its write, hits the mutated
+radix. Two assertions redden ("4: the rewritten UIC GROUP field still reads
+200" and its MEMBER sibling), because USER1 ships 200|202, and decimal-reading
+those digits produces a different string than octal does.
 
-WHAT STAYS GREEN, AND WHY. SYSTEM's UIC ([1,4]) is identical in both bases
-in every suite that checks it -- explicitly labelled LIVENESS ONLY in each
-of their own comments, for exactly this reason. rightslist.c's GENERAL
-identifiers (BATCH/DIALUP/INTERACTIVE/LOCAL/NETWORK/REMOTE) and its
-check_miss_value() calls never reach sysuaf_lookup() at all.
-test_syssvc_ident.c's LOCAL checks are the general-identifier path,
-untouched here (see rightslist-general-hex-as-decimal, the sibling defect
-for that branch). test_syssvc_setuai's OTHER scenarios (1-3, the SYSPRV
-refusal/grant checks) never read a UIC field back and stay green.
+WHAT STAYS GREEN, AND WHY. SYSTEM's UIC ([1,4]) is identical in both bases in
+every suite that checks it -- explicitly labelled LIVENESS ONLY in each of
+their own comments, for exactly this reason. THE IDENTIFIER-RESOLUTION SUITES
+NO LONGER REACH THIS CONSTANT (vms-930): test_syssvc_rightslist.c and
+test_syssvc_ident.c source BOTH general and UIC identifiers from the
+world-readable RIGHTSLIST.DAT ($RDBDEF binary longword, no text radix) after
+rightslist.c's SYSUAF fallback was removed, so mutating SYSUAF_UIC_RADIX does
+not touch their DEFAULT/GUEST resolutions at all -- they were in this red set
+only while rightslist_name_to_value() fell through to sysuaf_lookup(), and were
+dropped with that fallback. rightslist.c's GENERAL identifiers
+(BATCH/DIALUP/INTERACTIVE/LOCAL/NETWORK/REMOTE) and its check_miss_value()
+calls never reached sysuaf_lookup() to begin with. test_syssvc_setuai's OTHER
+scenarios (1-3, the SYSPRV refusal/grant checks) never read a UIC field back
+and stay green.
 EOF
                       ;;
         esac;;
 
     sysuaf-uic-writeback-decimal)
         case "$_f" in
-        facility)     echo "SYSUAF.DAT's UIC WRITE-BACK -- sysuaf_format_record()'s octal (%o) formatting of the UIC_GROUP/UIC_MEMBER columns (src/libvms/rtl/sysuaf.c, vms-e60). The WRITER half, the complement of sysuaf-uic-radix-decimal (which mutates the READER): a record's UIC round-trips only if the writer emits the same base the reader parses.";;
+        facility)     echo "SYSUAF.DAT's UIC WRITE-BACK -- sysuaf_view_to_raw()'s pack of the UIC_GROUP/UIC_MEMBER view fields into the binary \$UAFDEF uaf\$l_uic longword (src/libvms/rtl/sysuaf.c, vms-e60/vms-d92). The WRITER half: a record's UIC round-trips only if the writer packs the same group/member the reader unpacked.";;
         targets)      echo "libvms/rtl/sysuaf.c";;
         suites_red)   echo "test_syssvc_setuai";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "sysuaf_format_record() formats the two UIC fields with %o (octal, from the same SYSUAF_UIC_RADIX the parse uses). The mutation flips both %o to %u, so a rewritten record whose UIC digits differ between octal and decimal is written in DECIMAL. \$SETUAI's scenario 4 (test_syssvc_setuai) rewrites USER1, whose shipped 200|202 parses to struct 128|130 (decimal): with %o the writer emits '200'|'202' (unchanged), with %u it emits '128'|'130'. The suite reads the rewritten row's FIELD TEXT back with row_field() and asserts it still reads 200 / 202 -- so the %u write reddens exactly those two assertions. MEASURED (vms-f57): strtoul(\"200\",8)=128, strtoul(\"202\",8)=130; snprintf %o of 128/130 = '200'/'202', %u = '128'/'130'. This is DISTINCT from sysuaf-uic-radix-decimal: that entry mutates the READER radix (8->10) so the same round-trip corrupts through the read side (read decimal 200, write %o -> '310'); this one holds the reader octal and proves the WRITER's %o is itself load-bearing. No other qemu suite writes a record via sysuaf_format_record() and then reads a UIC field back (test_syssvc_authorize's session only EXITs; scenario 4 is the sole UIC write-back readback in the suite set), so the mutation reddens nothing outside test_syssvc_setuai.";;
+        why)          echo "RE-ANCHORED (vms-d92 flipped SYSUAF to the binary \$UAFDEF; the ASCII sysuaf_format_record() %o UIC formatting this defect used to flip to %u was DELETED with the ASCII writer). It now guards the equivalent binary-path invariant: sysuaf_view_to_raw() must pack the account's own uic_group/uic_member back into uaf\$l_uic as ((group<<16)|member). \$SETUAI folds its text edits into the binary record through sysuaf_view_to_raw() before the ACP write-back (src/libvms/syssvc/sys_uai.c), so scenario 4's rewrite of USER1 rides it. The mutation SWAPS the two fields (packs ((member<<16)|group)), so USER1's struct 128|130 (which the shipped SYSUAF carries as octal 200|202) is written back with group and member exchanged -- the read-back then reports group 202 / member 200, reddening the suite's two field-text assertions (\"still reads 200\" / \"still reads 202\") exactly. Only \$SETUAI's UIC write-back reaches sysuaf_view_to_raw() and reads a UIC field back afterward, so the mutation reddens nothing outside test_syssvc_setuai. NOTE (teeth caveat, for CI/run_facility_negctl.sh): test_syssvc_setuai reads SYSUAF via the /vms passthrough while \$SETUAI now writes the binary record over the ACP -- if that passthrough-vs-ACP convergence is not what the suite fixture exercises, this control's end-to-end bite must be confirmed in CI (see vms-5f0 report).";;
         require_fail) cat <<'EOF'
 4: the rewritten UIC GROUP field still reads 200 (octal, vms-e60)
 4: the rewritten UIC MEMBER field still reads 202 (octal, vms-e60)
@@ -5778,6 +5866,28 @@ EOF
                       ;;
         knock_on_fail) echo "";;
         knock_on_why)  echo "";;
+        esac;;
+
+    dcl-acp-search-fid-fabricated)
+        case "$_f" in
+        facility)     echo "DCL file access via RMS/\$QIO-to-ACP: DCL DIRECTORY /FULL and the F\$SEARCH lexical reach files through RMS \$SEARCH, which returns each wildcard match's GENUINE ODS-2 File ID from the executive directory context (rms_search_fid over vms_kif_acp_acpcontrol; src/vmsrms/rms_search.c, consumed by src/vmsdcl/dcl_filespec.c dcl_rms_dir_*), vms-481, epic vms-208";;
+        targets)      echo "vmsrms/rms_search.c";;
+        suites_red)   echo "test_syssvc_dcl_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "rms_impl_search() records the match's File ID number the ACP directory search returned (\`ctx->fid_num = a.fid_num;\`) so rms_search_fid() can hand DIRECTORY /FULL the REAL id. The mutation adds one (\`ctx->fid_num = a.fid_num + 1;\`), so every File ID F\$SEARCH/DIRECTORY reports is fabricated one too high while the match NAME, VERSION and iteration ORDER (from the resultant name + out_version, untouched) stay correct. Only the assertions that check the File ID against the codec-deterministic fixture (A.TXT;3=14, ;2=13, ;1=12, B.TXT;1=16) redden; the RMS\$_NMF exhaustion, the SET DEFAULT directory check and the byte-exact TYPE/COPY/CREATE round-trips all read a DIFFERENT source (rms_file_attr / rms_io) and stay green -- which is exactly the point: the search FID is not synthesized, it is the on-disk one (INV-6). After substitution the original text is gone, so a second apply matches nothing (the no-op selftest requires).";;
+        require_fail) cat <<'EOF'
+F$SEARCH/DIRECTORY match 1 = A.TXT version 3, real File ID 14 (highest first)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+F$SEARCH match 2 = A.TXT version 2, real File ID 13 (versions descending)
+F$SEARCH match 3 = A.TXT version 1, real File ID 12
+F$SEARCH match 4 = B.TXT version 1, real File ID 16 (B.LOG excluded by .TXT)
+EOF
+                      ;;
+        knock_on_why)  echo "the same fabricated-FID mutation shifts every match's reported File ID, so all four *.TXT matches read one too high; match 1 is the require_fail, the rest are its knock-ons.";;
         esac;;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
@@ -6377,10 +6487,11 @@ apply_edit() {
 
     acp-assign-unmounted-fabricates-channel)
         # RANGE-ANCHORED to vms_ioctl_acp_assign's own body: the comment-bearing
-        # `args.status = SS__NOSUCHDEV;    /* not a mounted volume -- fail honest
-        # */` occurs exactly once, on the !vol (not-a-mounted-volume) path. The
-        # file's OTHER SS__NOSUCHDEV is in vms_ioctl_acp_dmount, a different
-        # handler, so the /^long vms_ioctl_acp_assign/,/^}$/ range confines the
+        # `args.status = SS__DEVNOTMOUNT;  /* device present, not a mounted volume
+        # -- fail honest (vms-03b: NOT executive-absent NOSUCHDEV) */` occurs
+        # exactly once, on the !vol (not-a-mounted-volume) path. The file's OTHER
+        # SS__DEVNOTMOUNT uses are in different handlers ($MOUNT/IO$_ACCESS/...),
+        # so the /^long vms_ioctl_acp_assign/,/^}$/ range confines the
         # substitution to $ASSIGN's own fail-honest answer. Flipping it to
         # SS__NORMAL makes $ASSIGN report success for a unit that is not a
         # mounted volume -- the INV-6 facade (a channel to a volume the executive
@@ -6388,7 +6499,7 @@ apply_edit() {
         # never runs), so only the two fail-honest assertions redden. The
         # replacement does not contain the original comment text, so a second
         # apply matches nothing (the no-op selftest requires).
-        sed -i '/^long vms_ioctl_acp_assign/,/^}$/ s|args.status = SS__NOSUCHDEV;    /\* not a mounted volume -- fail honest \*/|args.status = SS__NORMAL; /* NEGCTL acp-assign-unmounted-fabricates-channel (was SS__NOSUCHDEV) */|' "$_file";;
+        sed -i '/^long vms_ioctl_acp_assign/,/^}$/ s|args.status = SS__DEVNOTMOUNT;  /\* device present, not a mounted volume -- fail honest (vms-03b: NOT executive-absent NOSUCHDEV) \*/|args.status = SS__NORMAL; /* NEGCTL acp-assign-unmounted-fabricates-channel (was SS__DEVNOTMOUNT) */|' "$_file";;
 
     acp-mount-nonods2-accepted)
         # ANCHORED to the single acp_validate_ods2() call in vms_ioctl_acp_mount:
@@ -6465,6 +6576,18 @@ apply_edit() {
         # resolution assertions redden. After substitution the original text is
         # gone, so a second apply matches nothing (the no-op selftest requires).
         sed -i 's|for (uint8_t i = 0; i < n \&\& \*count < max_out; i++) {|for (uint8_t i = 0; i < 1 \&\& *count < max_out; i++) { /* NEGCTL dirlogical-compose-drops-common-member */|' "$_file";;
+
+    imgact-acp-valid-bytes-offbyone)
+        # UNIQUE TEXT, no range anchor needed: `(efblk - 1u) * 512u` is the only
+        # valid-byte-count decode in imgact_acp.c (acp_access_name). Dropping the
+        # `- 1u` makes the accessed file's valid count one block too high, so the
+        # reader believes the image is 512 bytes longer than it is. Every in-bounds
+        # read (header, phdr table, each PT_LOAD, the whole 1424-byte image) still
+        # clamps to its own length and returns byte-exact data, so only the suite's
+        # on-disk-geometry assertion (valid == 1424) reddens. After substitution
+        # the `(efblk - 1u)` text is gone, so a second apply matches nothing (the
+        # no-op selftest requires).
+        sed -i 's|(efblk - 1u) \* 512u|efblk * 512u /* NEGCTL imgact-acp-valid-bytes-offbyone: valid overcounts by a block */|' "$_file";;
 
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =
@@ -6663,11 +6786,17 @@ apply_edit() {
         sed -i '/^    e->scope_key = scope_key;$/,/^    e->name_length/ s|^    e->num_equiv = a->num_equiv;$|    e->num_equiv = 1; /* NEGCTL lnm-searchlist-equiv-truncated */|' "$_file";;
 
     rightslist-general-hex-as-decimal)
-        # UNIQUE TEXT: this is the only strtoul(..., 16) call in the file --
-        # parse_value()'s %Xnnnnnnnn branch. The UIC branch a few lines below
-        # uses base 8 twice and is untouched. Idempotent: the edit removes
-        # the literal `16)` this pattern matches.
-        sed -i 's|strtoul(s + 2, \&end, 16);|strtoul(s + 2, \&end, 10); /* NEGCTL rightslist-general-hex-as-decimal */|' "$_file";;
+        # RE-ANCHORED (vms-f15a): the ASCII parse_value() %Xnnnnnnnn branch this
+        # used to mutate was DELETED with the ASCII rights reader when RIGHTSLIST
+        # flipped to the binary $RDBDEF. UNIQUE TEXT: the sole
+        # `*value = rdb_ident_value(&rec);` egress of rightslist_live_asctoid_rf()
+        # in rightslist_live.c -- where the executive $ASCTOID hands back the
+        # binary $RDBDEF identifier value after a NAME-key hit. Masking off bit 31
+        # turns every GENERAL identifier (all 0x8000000n) into a wrong value
+        # (0x80000004 -> 4) while the record is still FOUND. Idempotent: after the
+        # edit the `(&rec);` this pattern matches is gone (now
+        # `(&rec) & 0x7FFFFFFFu;`), so a second apply is a no-op.
+        sed -i 's|\*value = rdb_ident_value(&rec);|*value = rdb_ident_value(\&rec) \& 0x7FFFFFFFu; /* NEGCTL rightslist-general-hex-as-decimal */|' "$_file";;
 
     sysuaf-uic-radix-decimal)
         # UNIQUE TEXT: the sole #define. Both strtoul() call sites in
@@ -6677,13 +6806,16 @@ apply_edit() {
         sed -i 's|^#define SYSUAF_UIC_RADIX     8$|#define SYSUAF_UIC_RADIX     10  /* NEGCTL sysuaf-uic-radix-decimal */|' "$_file";;
 
     sysuaf-uic-writeback-decimal)
-        # Flip the WRITER's octal UIC formatting to decimal. UNIQUE TEXT: the
-        # two sysuaf_format_record() snprintf format strings are the only
-        # `%o|%o` in the file (the with-LGICMD and without-LGICMD variants).
-        # Idempotent: the edit removes the `%o|%o` each pattern matches, so a
-        # second apply finds nothing.
-        sed -i 's@"%s|%s|%o|%o|%s|%s|%s|%s"@"%s|%s|%u|%u|%s|%s|%s|%s" /* NEGCTL sysuaf-uic-writeback-decimal */@' "$_file"
-        sed -i 's@"%s|%s|%o|%o|%s|%s|%s"@"%s|%s|%u|%u|%s|%s|%s" /* NEGCTL sysuaf-uic-writeback-decimal */@' "$_file";;
+        # RE-ANCHORED (vms-d92): the ASCII sysuaf_format_record() %o UIC writer
+        # this used to flip to %u was DELETED with the ASCII writer when SYSUAF
+        # flipped to the binary $UAFDEF. UNIQUE TEXT: the sole UIC pack in
+        # sysuaf_view_to_raw() -- `((rec->uic_group & 0xffffu) << 16) |
+        # (rec->uic_member & 0xffffu))` occurs once in the file. Swapping the two
+        # fields writes the account's UIC back with group and member exchanged,
+        # so USER1's 200|202 read-back reports 202|200. Idempotent: after the edit
+        # the group-first pattern is gone (member is now the high half), so a
+        # second apply matches nothing -- BROKEN FIXTURE, as selftest requires.
+        sed -i 's@((rec->uic_group & 0xffffu) << 16) | (rec->uic_member & 0xffffu));@((rec->uic_member \& 0xffffu) << 16) | (rec->uic_group \& 0xffffu)); /* NEGCTL sysuaf-uic-writeback-decimal */@' "$_file";;
 
     bg-recv-length-zeroed)
         # RANGE-ANCHORED to vms_ioctl_bg_recv's own body: the 8-space
@@ -6758,14 +6890,62 @@ apply_edit() {
 
     acp-writevb-extend-alloc-offbyone)
         # UNIQUE TEXT: ods2_fh2_map_append()'s format-1 low-LBN word encode
-        # (`w1 = (uint16_t)(lbn & 0xFFFF);`) occurs once in ods2_edit.c. Encoding
-        # (lbn + 1) records the newly allocated extent ONE LBN too high in the
+        # (`w1 = (uint16_t)(cur_lbn & 0xFFFF);`) occurs once in ods2_edit.c. (The
+        # append loop splits a run into <=256-block format-1 pointers and advances
+        # cur_lbn per pointer; this is the per-pointer LBN low word.) Encoding
+        # (cur_lbn + 1) records the newly allocated extent ONE LBN too high in the
         # on-disk FH2 map, while the IO$_WRITEVBLK path writes the data (and its
         # in-memory channel window) at the correct LBN -- so only the re-ACCESS
         # read-back (window rebuilt from the corrupted on-disk map) reads the
-        # wrong block. After substitution no `(lbn & 0xFFFF)` is left (now
-        # `((lbn + 1u) & 0xFFFF)`) -- the no-op the idempotency selftest requires.
-        sed -i 's|w1 = (uint16_t)(lbn \& 0xFFFF);|w1 = (uint16_t)((lbn + 1u) \& 0xFFFF); /* NEGCTL acp-writevb-extend-alloc-offbyone */|' "$_file";;
+        # wrong block. After substitution no `(cur_lbn & 0xFFFF)` is left (now
+        # `((cur_lbn + 1u) & 0xFFFF)`) -- the no-op the idempotency selftest requires.
+        sed -i 's|w1 = (uint16_t)(cur_lbn \& 0xFFFF);|w1 = (uint16_t)((cur_lbn + 1u) \& 0xFFFF); /* NEGCTL acp-writevb-extend-alloc-offbyone */|' "$_file";;
+
+    rms-put-wrong-vbn)
+        # The `a.vbn = (cursor/512)+1u` line appears in BOTH rms_io_read_acp and
+        # rms_io_write_acp (the ACP backends; the public rms_io_write() is now a
+        # thin POSIX/ACP dispatch wrapper with no a.vbn of its own). Scope the
+        # mutation to the WRITE backend (/^static ssize_t rms_io_write_acp/,/^}$/)
+        # so ONLY the $PUT side is shifted -- the $GET side (rms_io_read_acp) must
+        # stay CORRECT or the round-trip could not catch it (both shifted would be
+        # self-consistent and escape). `+ 1u` -> `+ 2u` writes every record ONE
+        # VBN too high; the untouched read then finds the empty true VBN on
+        # re-$OPEN. A second apply finds no `+ 1u;` left in the range and is the
+        # no-op the idempotency selftest requires.
+        sed -i '/^static ssize_t rms_io_write_acp/,/^}$/ s|        a.vbn    = (uint32_t)(f->cursor / RMS_IO_BLK) + 1u;|        a.vbn    = (uint32_t)(f->cursor / RMS_IO_BLK) + 2u; /* NEGCTL rms-put-wrong-vbn */|' "$_file";;
+
+    p3-index-child-pointer-offbyone)
+        # UNIQUE TEXT: `p3_le16(bkt + off);` is the index-descent child-pointer
+        # decode in p3_descend() -- the only bare `p3_le16(bkt + off)` (all other
+        # sites carry a `+ P3_...` field offset). Reading `bkt + off + 1` mis-aligns
+        # the 2-byte child VBN, so the descent follows a garbage pointer and keyed
+        # reads miss. After substitution no `p3_le16(bkt + off);` is left (now
+        # `p3_le16(bkt + off + 1);`) -- the no-op the idempotency selftest requires.
+        sed -i 's|uint32_t child = p3_le16(bkt + off);|uint32_t child = p3_le16(bkt + off + 1); /* NEGCTL p3-index-child-pointer-offbyone */|' "$_file";;
+
+    dcl-acp-search-fid-fabricated)
+        # ANCHORED to the single match-FID record in rms_impl_search:
+        # `ctx->fid_num = a.fid_num;` occurs exactly once in rms_search.c.
+        # Adding one fabricates every File ID F$SEARCH/DIRECTORY reports (one too
+        # high), while the match name/version/order (resultant name + out_version,
+        # untouched) stay correct -- so only the fixture-FID assertions in
+        # test_syssvc_dcl_acp redden, and rms_file_attr / the byte-exact
+        # round-trips (a different source) stay green. After substitution no
+        # `= a.fid_num;` is left (now `= a.fid_num + 1;`) -- the no-op the
+        # idempotency selftest requires.
+        sed -i 's|ctx->fid_num = a.fid_num; ctx->fid_seq = a.fid_seq;|ctx->fid_num = a.fid_num + 1; ctx->fid_seq = a.fid_seq; /* NEGCTL dcl-acp-search-fid-fabricated */|' "$_file";;
+
+    loginout-acp-auth-from-ods2)
+        # `fab$b_rfm = FAB$C_STMLF;` appears in rms_textfile_open, _append_line
+        # and _write_line; scope the mutation to the READER (rms_textfile_open,
+        # /^rms_textfile_t \*rms_textfile_open/,/^}$/) so ONLY the read path
+        # misframes -- the writers must keep writing stream-LF or the record they
+        # store would not be the one a correct reader reads back. STMLF -> VAR
+        # makes RMS take each row's first two bytes as a length count, so the
+        # SYSUAF/LASTLOGIN read-backs reframe into garbage while the $PUT/$CREATE
+        # writers are untouched. After substitution no `FAB$C_STMLF` is left in
+        # the reader's range -- the no-op the idempotency selftest requires.
+        sed -i '/^rms_textfile_t \*rms_textfile_open/,/^}$/ s|    tf->fab.fab$b_rfm = FAB$C_STMLF;|    tf->fab.fab$b_rfm = FAB$C_VAR; /* NEGCTL loginout-acp-auth-from-ods2 */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
@@ -7452,9 +7632,9 @@ cmd_selftest() {
         if ! cp -a "$_st_root/kernel" "$_st_root/kernel-core" \
                    "$_st_root/libvmssys" "$_st_root/libvms" \
                    "$_st_root/vmsdcl" "$_st_root/vmsrms" "$_st_root/vmslnm" \
-                   "$_st_root/vmsfs" "$_st_root/vmstcpip" \
+                   "$_st_root/vmsfs" "$_st_root/vmstcpip" "$_st_root/imgact" \
                    "$_st_tmp/tree/" 2>/dev/null; then
-            echo "FAIL: cannot copy $_st_root/{kernel,kernel-core,libvmssys,libvms,vmsdcl,vmsrms,vmslnm,vmsfs,vmstcpip} for the self-test"
+            echo "FAIL: cannot copy $_st_root/{kernel,kernel-core,libvmssys,libvms,vmsdcl,vmsrms,vmslnm,vmsfs,vmstcpip,imgact} for the self-test"
             rm -rf "$_st_tmp"
             return 2
         fi

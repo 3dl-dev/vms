@@ -55,10 +55,13 @@
 #include <sys/wait.h>
 
 #include "ssdef.h"
+#include "stsdef.h"          /* $VMS_STATUS_SUCCESS                          */
 #include "prvdef.h"
 #include "vms_kif.h"
+#include "vms/logical.h"     /* lnm_create + LNM$JOB (vms-586 ACP mount)     */
 
 #define EXIT_SKIP 77
+#define ODS2_UNIT "DKA300:"  /* vdd: the generated system-disk ODS-2 fixture */
 
 static int pass = 0;
 static int fail = 0;
@@ -208,6 +211,35 @@ int main(void)
         printf("  INFO: cannot open /dev/vms -- CI negative-control rig, not the product\n");
         printf("=== test_syssvc_authorize: 0 passed, 0 failed (SKIPPED: no /dev/vms) ===\n");
         return EXIT_SKIP;
+    }
+
+    /*
+     * vms-586 atomic-flip migration: AUTHORIZE.EXE reads SYS$SYSTEM:SYSUAF.DAT
+     * as a BINARY $UAFDEF file over the Files-11 ACP now, not a /vms POSIX
+     * passthrough. Reproduce the boot-time namespace a spawned image inherits:
+     *   1. register this parent as a VMS process, so the fork+execle child
+     *      inherits its job_id (the LNM$JOB scope key);
+     *   2. $MOUNT the system-disk ODS-2 fixture (executive-global, reachable by
+     *      an $ASSIGN of the unit from the child);
+     *   3. define SYS$SYSDEVICE=DKA300: in LNM$JOB. The child's own
+     *      lnm_setup_defaults re-seeds SYS$SYSDEVICE=DKA0: only into LNM$SYSTEM,
+     *      but LNM$JOB is searched BEFORE LNM$SYSTEM (first match wins), so the
+     *      job entry shadows it and the whole SYS$SYSTEM->SYS$SYSROOT->
+     *      SYS$SYSDEVICE chain composes onto DKA300: over the ACP.
+     * With no mounted SYSUAF the admitted (SYSPRV) session's ovmx_sysuaf_enum
+     * failed and AUTHORIZE exited 1; the non-SYSPRV refusal is decided earlier by
+     * AUTHORIZE's executive SYSPRV gate and is unaffected by the mount.
+     */
+    {
+        uint32_t vpid = 0;
+        (void)vms_kif_register(&vpid);       /* job_id for the LNM$JOB scope   */
+        lnm_manager_t *mgr = lnm_get_manager();
+        uint32_t mst = vms_kif_acp_mount(ODS2_UNIT);
+        CHECK($VMS_STATUS_SUCCESS(mst),
+              "$MOUNT of the system-disk ODS-2 fixture on " ODS2_UNIT " (precondition)");
+        if (mgr)
+            lnm_create(mgr, LNM_JOB_TABLE, "SYS$SYSDEVICE", ODS2_UNIT,
+                       LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
     }
 
     static char outA[8192], outB[8192];

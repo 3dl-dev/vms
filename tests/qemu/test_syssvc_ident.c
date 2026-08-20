@@ -59,8 +59,12 @@
 #include <sys/stat.h>
 
 #include "ssdef.h"
+#include "stsdef.h"          /* $VMS_STATUS_SUCCESS                          */
 #include "prvdef.h"
 #include "vms_kif.h"
+#include "vms/logical.h"     /* lnm_create + LNM$JOB (vms-586 ACP mount)     */
+
+#define ODS2_UNIT "DKA300:"  /* vdd: the generated system-disk ODS-2 fixture */
 
 #define EXIT_SKIP 77
 
@@ -900,6 +904,15 @@ static int run_g_subprocess(const char *script, char *out, size_t outsz)
             struct passwd *pw;
             printf("G_SUB_REGISTER=%u\n",
                    (unsigned)vms_kif_register(&vpid));
+            /* vms-586: point SYS$SYSDEVICE at the $MOUNTed ODS-2 fixture in
+             * LNM$JOB, keyed to THIS subprocess's job_id. The DCL.EXE this
+             * process execve's into is the SAME process (same job_id), and its
+             * own lnm_setup_defaults re-seeds SYS$SYSDEVICE=DKA0: only into
+             * LNM$SYSTEM -- searched AFTER LNM$JOB -- so this job entry shadows
+             * it and F$IDENTIFIER composes SYS$SYSTEM:{RIGHTSLIST,SYSUAF}.DAT
+             * onto DKA300: over the ACP. */
+            lnm_create(lnm_get_manager(), LNM_JOB_TABLE, "SYS$SYSDEVICE",
+                       ODS2_UNIT, LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
             /* The Linux account name the deleted getpwuid() branch would
              * have answered with, resolved in THIS process at THIS moment.
              * Without it, "the Linux name is absent" is a claim about a
@@ -1482,6 +1495,36 @@ int main(void)
         printf("  FAIL: VMS_IOCTL_REGISTER rejected\n");
         printf("=== test_syssvc_ident: 0 passed, 1 failed ===\n");
         return 1;
+    }
+
+    /*
+     * vms-586 atomic-flip migration. Scenario G's F$IDENTIFIER reads
+     * SYS$SYSTEM:RIGHTSLIST.DAT and SYSUAF.DAT as BINARY files over the Files-11
+     * ACP now, not a /vms POSIX passthrough. The spawned DCL.EXE is a fork+execle
+     * descendant of THIS registered process, so it inherits this job_id -- define
+     * SYS$SYSDEVICE=DKA300: in LNM$JOB, which the child cannot re-seed (its own
+     * lnm_setup_defaults writes SYS$SYSDEVICE=DKA0: only into LNM$SYSTEM, and
+     * LNM$JOB is searched first). That moves the whole SYS$SYSTEM->SYS$SYSROOT->
+     * SYS$SYSDEVICE chain onto the $MOUNTed ODS-2 volume, so the DCL child's
+     * rights/UIC lookups compose DKA300:[SYS0.SYSCOMMON.SYSEXE]{RIGHTSLIST,SYSUAF}
+     * .DAT and $ASSIGN the unit over the ACP. Without this the engine (now
+     * anchored into DCL.EXE) has no mounted volume to read and every
+     * F$IDENTIFIER answers empty.
+     */
+    {
+        uint32_t mst = vms_kif_acp_mount(ODS2_UNIT);
+        if (!$VMS_STATUS_SUCCESS(mst)) {
+            printf("  FAIL: $MOUNT of the system-disk ODS-2 fixture on %s (status %u)\n",
+                   ODS2_UNIT, (unsigned)mst);
+            printf("=== test_syssvc_ident: 0 passed, 1 failed ===\n");
+            return 1;
+        }
+        /* The LNM$JOB SYS$SYSDEVICE=DKA300: override is defined by scenario G's
+         * OWN subprocess right before it execs DCL.EXE (run_g_subprocess), keyed
+         * to that subprocess's job_id -- which the execve'd DCL shares as the
+         * same process -- so it does not depend on job_id inheritance surviving
+         * two forks + a re-register. The $MOUNT above is executive-global and
+         * needs doing only once, here. */
     }
 
     /*

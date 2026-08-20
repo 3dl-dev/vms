@@ -64,14 +64,27 @@ OUT=${2:?usage: mk_vmsrms_shr.sh <LINK.EXE> <out> <DECC$SHR> <LIBVMS$SHR> <LIBVM
 DECC_SHR=${3:?need path to DECC\$SHR.EXE (the C run-time producer)}
 VMS_SHR=${4:?need path to LIBVMS\$SHR.EXE (vms\$check_access producer)}
 FS_SHR=${5:?need path to LIBVMSFS\$SHR.EXE (vmsfs_* producer)}
+# vms-5f0 (atomic flip): rms_core.c / rms_io.c now IMPORT the Files-11 ODS-2 ACP
+# wrappers vms_kif_acp_* (assign/access/readvb/writevb/create/deaccess/...),
+# whose producer is LIBVMSSYS$SHR (libvmssys_shr.vec). The native LINK.EXE does
+# NOT resolve a --use'd shareable's imports transitively through another --use'd
+# shareable (LIBVMS$SHR --use's LIBVMSSYS$SHR, but that does not re-export it to
+# LIBVMSRMS), so vmsrms must --use LIBVMSSYS$SHR DIRECTLY -- correcting the
+# assumption in the vms-bc7 comment below, whose native-link edge was
+# red-by-design until this flip.
+SYS_SHR=${6:?need path to LIBVMSSYS\$SHR.EXE (vms_kif_acp_* producer)}
 HERE=$(cd "$(dirname "$0")" && pwd)                          # src/vmslink
-SRC=${6:-$(cd "$HERE/../vmsrms" && pwd)}                     # src/vmsrms
-LIBVMS_INC=${7:-$(cd "$HERE/../libvms/include" && pwd)}      # ovmx_layout.h/ssdef.h/rmsdef.h
-VMSFS_INC=${8:-$(cd "$HERE/../vmsfs/include" && pwd)}        # vmsfs/filespec.h, version.h
+SRC=${7:-$(cd "$HERE/../vmsrms" && pwd)}                     # src/vmsrms
+LIBVMS_INC=${8:-$(cd "$HERE/../libvms/include" && pwd)}      # ovmx_layout.h/ssdef.h/rmsdef.h
+VMSFS_INC=${9:-$(cd "$HERE/../vmsfs/include" && pwd)}        # vmsfs/filespec.h, version.h
+# vms-bc7: rms_io.c / rms_core.c include vms_kif.h (the /dev/vms ACP wrappers);
+# vms_kif.h pulls ../kernel/vms_ioctl.h -> vms_acp.h. The vms_kif_acp_* symbols
+# are producers in libvmssys_shr.vec, bound via the --use LIBVMSSYS$SHR above.
+LIBVMSSYS_INC=${10:-$(cd "$HERE/../libvmssys" && pwd)}       # vms_kif.h
 CC=${CC:-gcc}
 GSMATCH=${GSMATCH:-LEQUAL,1,0}
 
-for f in "$DECC_SHR" "$VMS_SHR" "$FS_SHR"; do
+for f in "$DECC_SHR" "$VMS_SHR" "$FS_SHR" "$SYS_SHR"; do
     [ -f "$f" ] || { echo "mk_vmsrms_shr: producer image not found: $f"; exit 1; }
 done
 [ -d "$SRC" ] || { echo "mk_vmsrms_shr: vmsrms src dir not found: $SRC"; exit 1; }
@@ -80,14 +93,24 @@ WORK=${WORK:-/tmp/mk-vmsrms-shr}
 mkdir -p "$WORK"
 
 CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics -U_FORTIFY_SOURCE}"
-INCS="-I$SRC/include -I$LIBVMS_INC -I$VMSFS_INC"
+INCS="-I$SRC/include -I$LIBVMS_INC -I$VMSFS_INC -I$LIBVMSSYS_INC"
 
 echo "mk_vmsrms_shr: LINK.EXE=$LINK_EXE  CC=$CC  GSMATCH=$GSMATCH"
 echo "mk_vmsrms_shr: src=$SRC"
-echo "mk_vmsrms_shr: --use $DECC_SHR $VMS_SHR $FS_SHR"
+echo "mk_vmsrms_shr: --use $DECC_SHR $VMS_SHR $FS_SHR $SYS_SHR"
 
-# The 8 translation units of the vmsrms library (== src/vmsrms/CMakeLists.txt).
-LIST="rms_core rms_seq rms_rel rms_idx rms_record rms_parse rms_search rms_util"
+# The translation units of the vmsrms library (== src/vmsrms/CMakeLists.txt).
+# vms-bc7 added rms_io.c (the ACP block-I/O substrate) -- keep in lockstep.
+# vms-d92 SYSUAF atomic flip: rms_prolog3 (the Prolog-3 indexed engine rms_idx
+# already calls), sysuaf_rms + sysuaf_live (the binary $UAFDEF reader/writer +
+# runtime entry points LOGINOUT/DCL/AUTHORIZE reach through the weak seam) and
+# rightslist_rms must be in LIBVMSRMS$SHR, or the native-link LOGINOUT cannot
+# resolve ovmx_sysuaf_* and login fails. (rms_prolog3/sysuaf_rms/rightslist_rms
+# were already CMake sources but had drifted out of this LIST.)
+# vms-f15a RIGHTSLIST atomic flip: rightslist_live (the $ASCTOID/$IDTOASC
+# executive-context reads) must be in LIBVMSRMS$SHR too, or the native-link DCL
+# cannot resolve the weak ovmx_rightslist_* and F$IDENTIFIER goes dead.
+LIST="rms_core rms_io rms_seq rms_rel rms_idx rms_prolog3 sysuaf_rms sysuaf_live rightslist_rms rightslist_live rms_record rms_parse rms_search rms_util"
 
 OBJS=""
 for c in $LIST; do
@@ -106,12 +129,13 @@ VEC=$(nm $OBJS 2>/dev/null | awk 'NF==3 && $2=="T"{print $3}' | sort -u \
 NVEC=$(printf '%s' "$VEC" | tr ',' '\n' | grep -c '=PROCEDURE' || true)
 echo "mk_vmsrms_shr: symbol vector has $NVEC PROCEDURE universals"
 
-echo "mk_vmsrms_shr: LINK.EXE --shareable --use {DECC\$SHR,LIBVMS\$SHR,LIBVMSFS\$SHR} -> $OUT"
+echo "mk_vmsrms_shr: LINK.EXE --shareable --use {DECC\$SHR,LIBVMS\$SHR,LIBVMSFS\$SHR,LIBVMSSYS\$SHR} -> $OUT"
 # STRICT (no --allow-undefined): every libc import MUST bind to DECC$SHR,
-# vms$check_access to LIBVMS$SHR, every vmsfs_* to LIBVMSFS$SHR.
+# vms$check_access to LIBVMS$SHR, every vmsfs_* to LIBVMSFS$SHR, every
+# vms_kif_acp_* (the Files-11 ODS-2 ACP) to LIBVMSSYS$SHR (vms-5f0).
 # shellcheck disable=SC2086
 "$LINK_EXE" --shareable \
-    --use "$DECC_SHR" --use "$VMS_SHR" --use "$FS_SHR" \
+    --use "$DECC_SHR" --use "$VMS_SHR" --use "$FS_SHR" --use "$SYS_SHR" \
     --symbol-vector "$VEC" \
     --gsmatch "$GSMATCH" \
     -o "$OUT" $OBJS

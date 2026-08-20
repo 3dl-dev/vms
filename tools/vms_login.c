@@ -429,6 +429,17 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
     /* Exec the DCL shell with --login flag */
     char dcl_linux[1024];
     vmsfs_to_linux_path(DCL_SHELL_PATH, dcl_linux, sizeof(dcl_linux));
+    /* ATOMIC FLIP (vms-5f0): LOGINOUT execve's DCL.EXE for the session; the
+     * Linux kernel maps its PT_LOAD + PT_INTERP by POSIX path. With the /vms
+     * passthrough retired, DCL.EXE is execve'd from the boot-staging tmpfs
+     * PID 1 filled off the ODS-2 volume THROUGH the executive ACP. Self-
+     * guarding: use the staged copy only if present. */
+    {
+        char staged[1024];
+        if (ovmx_boot_stage_exec_path(dcl_linux, staged, sizeof(staged)) &&
+            access(staged, X_OK) == 0)
+            snprintf(dcl_linux, sizeof(dcl_linux), "%s", staged);
+    }
     if (captive)
         execl(dcl_linux, "vmsdcl", "--login", "--captive",
               "--lgicmd", login_lgicmd, (char *)NULL);

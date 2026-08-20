@@ -123,6 +123,19 @@ int main(void)
     vms_to_linux(VMS_LOGINOUT_PATH, loginout_path, sizeof(loginout_path));
     vms_to_linux(VMS_DCL_PATH, dcl_path, sizeof(dcl_path));
 
+    /* ATOMIC FLIP (vms-5f0): JOB_CONTROL execve's LOGINOUT.EXE for the console
+     * login; the Linux kernel maps its PT_LOAD + PT_INTERP by POSIX path. With
+     * the /vms passthrough retired, LOGINOUT.EXE is execve'd from the boot-
+     * staging tmpfs PID 1 filled off the ODS-2 volume THROUGH the executive
+     * ACP. Self-guarding: use the staged copy only if present, so a substrate
+     * that did not stage (NetBSD-vax, vms-d5d) keeps the original path. */
+    {
+        char staged[512];
+        if (ovmx_boot_stage_exec_path(loginout_path, staged, sizeof(staged)) &&
+            access(staged, X_OK) == 0)
+            snprintf(loginout_path, sizeof(loginout_path), "%s", staged);
+    }
+
     int console_interactive = isatty(STDIN_FILENO);
     int consecutive_failures = 0;
 

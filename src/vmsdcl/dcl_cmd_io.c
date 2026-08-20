@@ -17,9 +17,29 @@
 #include "dcl/parser.h"
 #include "dcl/symbol.h"
 #include "dcl/dcl_cmd.h"
+#include "dcl/dcl_rms.h"   /* vms-5f0: OPEN/READ/WRITE/CLOSE ride RMS (ACP), not fopen */
 #include "ssdef.h"
+#include "rmsdef.h"
 #include "vms/logical.h"
 #include "vmsfs/filespec.h"
+
+/* vms-5f0: a channel slot is free when it holds no stream and no RMS handle. */
+static int dcl_chan_free(const struct dcl_context *ctx, int i)
+{
+    return ctx->channels[i].fp == NULL &&
+           ctx->channels[i].reader == NULL &&
+           ctx->channels[i].writer == NULL;
+}
+
+/* vms-5f0: tear down whatever a channel slot holds (stdio stream OR RMS
+ * reader/writer) and clear it. */
+static void dcl_chan_release(struct dcl_context *ctx, int i)
+{
+    if (ctx->channels[i].fp)     { fclose(ctx->channels[i].fp); ctx->channels[i].fp = NULL; }
+    if (ctx->channels[i].reader) { dcl_rms_read_close(ctx->channels[i].reader); ctx->channels[i].reader = NULL; }
+    if (ctx->channels[i].writer) { (void)dcl_rms_write_close(ctx->channels[i].writer); ctx->channels[i].writer = NULL; }
+    ctx->channels[i].name[0] = '\0';
+}
 
 /*
  * ci_word_present - case-insensitive test for keyword `word` inside the
@@ -370,19 +390,20 @@ int cmd_open(struct dcl_command *cmd)
     else if (dcl_has_qualifier(cmd, "APPEND")) mode = 2;
     else if (dcl_has_qualifier(cmd, "READ")) mode = 0;
 
-    /* Find a free channel slot */
+    /* Find a free channel slot (or reuse one already bound to this name). */
     int slot = -1;
     for (int i = 0; i < 16; i++) {
-        if (ctx->channels[i].fp == NULL) {
+        if (!dcl_chan_free(ctx, i) &&
+            strcasecmp(ctx->channels[i].name, channel_name) == 0) {
+            /* Already open - close and reuse */
+            dcl_chan_release(ctx, i);
             slot = i;
             break;
         }
-        if (strcasecmp(ctx->channels[i].name, channel_name) == 0) {
-            /* Already open - close and reuse */
-            fclose(ctx->channels[i].fp);
-            ctx->channels[i].fp = NULL;
-            slot = i;
-            break;
+    }
+    if (slot < 0) {
+        for (int i = 0; i < 16; i++) {
+            if (dcl_chan_free(ctx, i)) { slot = i; break; }
         }
     }
 
@@ -390,10 +411,6 @@ int cmd_open(struct dcl_command *cmd)
         dcl_error("DCL", 2, "MAXCHAN", "maximum channels exceeded");
         return SS$_BADPARAM;
     }
-
-    /* Resolve filespec */
-    char linux_path[1024];
-    dcl_resolve_path(ctx, filespec, linux_path, sizeof(linux_path));
 
     const char *fmode;
     switch (mode) {
@@ -442,14 +459,34 @@ int cmd_open(struct dcl_command *cmd)
         }
     }
 
-    FILE *fp = fopen(linux_path, fmode);
-    if (!fp) {
-        dcl_error("RMS", 2, "FNF",
-                  "error opening %s", filespec);
-        return SS$_NOSUCHFILE;
+    /*
+     * A REAL file: reach it through RMS so it rides the Files-11 ODS-2 ACP
+     * (vms-5f0, epic vms-208). fopen() on a vmsfs_to_linux_path passthrough is
+     * gone -- it cannot see files that live only on the genuine ODS-2 SYS$DISK
+     * (SYS$STARTUP:VMS$PHASES.DAT et al). The dcl_rms_* helpers translate the
+     * device/directory logicals (SYS$STARTUP:, SYS$SYSTEM:) the VMS way and
+     * fail-honest with the real RMS status -- no silent local fallback (INV-6).
+     */
+    uint32_t rms_st = RMS$_NORMAL;
+    if (mode == 0) {
+        struct dcl_rms_reader *r = dcl_rms_read_open(ctx, filespec, &rms_st);
+        if (!r) {
+            dcl_error("RMS", 2, "FNF", "error opening %s", filespec);
+            return SS$_NOSUCHFILE;
+        }
+        ctx->channels[slot].reader = r;
+    } else {
+        /* WRITE / APPEND create the file through RMS ($CREATE writes a new
+         * version onto the ODS-2 volume): variable-length carriage-return
+         * records, the text-file shape DCL WRITE appends lines to. */
+        struct dcl_rms_writer *w =
+            dcl_rms_write_create(ctx, filespec, FAB$C_VAR, FAB$M_CR, 0, &rms_st);
+        if (!w) {
+            dcl_error("RMS", 2, "FNF", "error opening %s", filespec);
+            return SS$_NOSUCHFILE;
+        }
+        ctx->channels[slot].writer = w;
     }
-
-    ctx->channels[slot].fp = fp;
     ctx->channels[slot].mode = mode;
     strncpy(ctx->channels[slot].name, channel_name,
             sizeof(ctx->channels[0].name) - 1);
@@ -477,11 +514,9 @@ int cmd_close(struct dcl_command *cmd)
     }
 
     for (int i = 0; i < 16; i++) {
-        if (ctx->channels[i].fp &&
+        if (!dcl_chan_free(ctx, i) &&
             strcasecmp(ctx->channels[i].name, cmd->params[0]) == 0) {
-            fclose(ctx->channels[i].fp);
-            ctx->channels[i].fp = NULL;
-            ctx->channels[i].name[0] = '\0';
+            dcl_chan_release(ctx, i);
             return SS$_NORMAL;
         }
     }
@@ -508,15 +543,16 @@ int cmd_read(struct dcl_command *cmd)
     const char *channel_name = cmd->params[0];
     const char *symbol_name = cmd->params[1];
 
-    /* Find the channel */
-    FILE *fp = NULL;
+    /* Find the channel (stdio stream OR RMS reader). */
+    int ch = -1;
     for (int i = 0; i < 16; i++) {
-        if (ctx->channels[i].fp &&
+        if (!dcl_chan_free(ctx, i) &&
             strcasecmp(ctx->channels[i].name, channel_name) == 0) {
-            fp = ctx->channels[i].fp;
+            ch = i;
             break;
         }
     }
+    FILE *fp = (ch >= 0) ? ctx->channels[ch].fp : NULL;
 
     /* Check for /PROMPT qualifier (read from SYS$INPUT) */
     const char *prompt = dcl_qualifier_value(cmd, "PROMPT");
@@ -585,6 +621,21 @@ int cmd_read(struct dcl_command *cmd)
         size_t tl = strlen(tbuf);
         if (tl > 0 && tbuf[tl - 1] == '\n') tbuf[tl - 1] = '\0';
         dcl_sym_set(symbol_name, tbuf, DCL_SYM_LOCAL);
+        return SS$_NORMAL;
+    }
+
+    /* An RMS read channel (vms-5f0): one $GET returns one record off the ODS-2
+     * volume through the ACP. EOF sets the symbol empty and returns ENDOFFILE,
+     * matching the stdio path below (and DCL's own no-END_OF_FILE= behaviour). */
+    if (ch >= 0 && ctx->channels[ch].reader) {
+        char rec[4096];
+        int eof = 0;
+        int n = dcl_rms_read_record(ctx->channels[ch].reader, rec, sizeof(rec), &eof);
+        if (n < 0) {
+            dcl_sym_set(symbol_name, "", DCL_SYM_LOCAL);
+            return SS$_ENDOFFILE;
+        }
+        dcl_sym_set(symbol_name, rec, DCL_SYM_LOCAL);
         return SS$_NORMAL;
     }
 
@@ -665,17 +716,17 @@ int cmd_write(struct dcl_command *cmd)
         return SS$_NORMAL;
     }
 
-    /* Find the channel */
-    FILE *fp = NULL;
+    /* Find the channel (stdio stream OR RMS writer). */
+    int ch = -1;
     for (int i = 0; i < 16; i++) {
-        if (ctx->channels[i].fp &&
+        if (!dcl_chan_free(ctx, i) &&
             strcasecmp(ctx->channels[i].name, channel_name) == 0) {
-            fp = ctx->channels[i].fp;
+            ch = i;
             break;
         }
     }
 
-    if (!fp) {
+    if (ch < 0) {
         dcl_error("DCL", 2, "IVLOGNAM",
                   "channel %s is not open", channel_name);
         return SS$_BADPARAM;
@@ -688,6 +739,35 @@ int cmd_write(struct dcl_command *cmd)
      * defined symbol is substituted (MMK's marker
      * WRITE MMK___OUTPUT "MMK____status=",MMK____status must emit the STATUS
      * VALUE, not the literal name); anything else is written verbatim. */
+
+    /* An RMS write channel (vms-5f0): assemble the record and $PUT it onto the
+     * ODS-2 volume through the ACP. RMS records carry no line terminator (the CR
+     * record attribute supplies it), so no trailing '\n' here. */
+    if (ctx->channels[ch].writer) {
+        char rec[8192];
+        size_t rl = 0;
+        for (int i = 1; i < cmd->param_count && rl < sizeof(rec) - 1; i++) {
+            const char *sv = dcl_sym_get(cmd->params[i]);
+            const char *s = sv ? sv : cmd->params[i];
+            size_t sl = strlen(s);
+            if (rl + sl > sizeof(rec) - 1) sl = sizeof(rec) - 1 - rl;
+            memcpy(rec + rl, s, sl);
+            rl += sl;
+        }
+        rec[rl] = '\0';
+        if (dcl_rms_write_record(ctx->channels[ch].writer, rec, rl) != 0) {
+            dcl_error("RMS", 2, "WER", "error writing to channel %s", channel_name);
+            return SS$_ABORT;
+        }
+        return SS$_NORMAL;
+    }
+
+    FILE *fp = ctx->channels[ch].fp;
+    if (!fp) {
+        dcl_error("DCL", 2, "IVLOGNAM",
+                  "channel %s is not open", channel_name);
+        return SS$_BADPARAM;
+    }
     for (int i = 1; i < cmd->param_count; i++) {
         const char *sv = dcl_sym_get(cmd->params[i]);
         fprintf(fp, "%s", sv ? sv : cmd->params[i]);

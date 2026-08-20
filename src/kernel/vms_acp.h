@@ -471,6 +471,7 @@ _Static_assert(VMS_IOCTL_ACP_ACPCONTROL == 0xC0C8566Fu,
 #define VMS_ACP_M_CREATE     0x0001u  /* IO$M_CREATE: enter the file in a directory */
 #define VMS_ACP_M_ACCESS     0x0002u  /* IO$M_ACCESS: also access it (build a window) */
 #define VMS_ACP_M_DELETE     0x0004u  /* IO$M_DELETE: also delete the file (dealloc)  */
+#define VMS_ACP_M_MOVE       0x0008u  /* IO$M_MOVE: MODIFY renames/moves the file     */
 
 /* `attr_ctl` bits: which ATR fields to apply (CREATE/MODIFY write-attributes). */
 #define VMS_ACP_ATTR_PROT    0x01u    /* apply attr.fileprot */
@@ -495,6 +496,15 @@ _Static_assert(VMS_IOCTL_ACP_ACPCONTROL == 0xC0C8566Fu,
  *    and/or truncate to `trunc_efblk`/`trunc_ffbyte` (free the blocks past it);
  *    and/or write attributes (fileprot/owner per attr_ctl). Returns the new
  *    HIBLK/EOF. By FID (fidmode) or by name in FIB$W_DID.
+ *  - MODIFY!VMS_ACP_M_MOVE (rename/move, vms-de7): by NAME only (the source
+ *    directory + name + version identify the entry to move; fidmode is rejected
+ *    SS$_BADPARAM). Removes the {name, version} entry from FIB$W_DID, inserts
+ *    {new_name, new_version} into `new_did_*` (0 => same as FIB$W_DID; 0
+ *    new_version => highest existing of new_name + 1), and rewrites the file's
+ *    ident name (+ backlink on a cross-directory move). The file KEEPS its FID
+ *    and allocation. Returns the assigned new version in `out_version`. This is
+ *    the primitive $SETUAI / AUTHORIZE-seed use for create-tmp -> rename
+ *    atomic-replace (write NAME.DAT;n+1, then rename over the live copy).
  */
 struct vms_acp_fileop_args {
     uint32_t chan;              /* in: file-class channel */
@@ -530,14 +540,23 @@ struct vms_acp_fileop_args {
     struct vms_acp_fileattr attr;      /* in (P5): CREATE/MODIFY attrs / out */
     uint32_t status;           /* out: SS$_ */
     uint32_t pad3;
+    /* --- MODIFY!VMS_ACP_M_MOVE (rename/move) target, vms-de7 --------------- */
+    uint16_t new_did_num;      /* in: target directory FID (0 => same as did_*) */
+    uint16_t new_did_seq;
+    uint8_t  new_did_rvn;
+    uint8_t  new_did_nmx;
+    uint16_t new_version;      /* in: new version (0 => highest+1); out: assigned */
+    uint16_t pad4;
+    uint16_t pad5;
+    char     new_name[VMS_ACP_NAME_SIZE];  /* in: new "NAME.TYPE" */
 };
 
 #define VMS_IOCTL_ACP_FILEOP \
     _IOWR(VMS_IOC_MAGIC, 0x6F, struct vms_acp_fileop_args)
 
-_Static_assert(sizeof(struct vms_acp_fileop_args) == 252,
+_Static_assert(sizeof(struct vms_acp_fileop_args) == 344,
                "vms_acp_fileop_args changed size -- VMS_IOCTL_ACP_FILEOP ABI break");
-_Static_assert(VMS_IOCTL_ACP_FILEOP == 0xC0FC566Fu,
+_Static_assert(VMS_IOCTL_ACP_FILEOP == 0xC158566Fu,
                "VMS_IOCTL_ACP_FILEOP encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_ACP_FILEOP != VMS_IOCTL_ACP_ACPCONTROL,
                "FILEOP and ACPCONTROL must stay DISTINCT 32-bit commands on the shared nr 0x6F");

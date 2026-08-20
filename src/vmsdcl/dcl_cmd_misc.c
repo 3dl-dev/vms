@@ -398,9 +398,12 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
     struct dcl_context *ctx = dcl_get_context();
 
     const char *bin = NULL;
-    if (ctx &&
-        dcl_resolve_path(ctx, vms_spec, sys_path, sizeof(sys_path)) == 0 &&
-        access(sys_path, X_OK) == 0)
+    sys_path[0] = '\0';                /* stays empty unless resolve fills it */
+    int resolved_ok = (ctx &&
+        dcl_resolve_path(ctx, vms_spec, sys_path, sizeof(sys_path)) == 0);
+    if (!resolved_ok)
+        sys_path[0] = '\0';           /* a failed resolve leaves no valid path */
+    if (resolved_ok && access(sys_path, X_OK) == 0)
         bin = sys_path;
 
     /*
@@ -416,6 +419,28 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
         snprintf(def_path, sizeof(def_path), "%s/%s", VMS_SYSTEM_DIR, exe_name);
         if (access(def_path, X_OK) == 0)
             bin = def_path;
+    }
+
+    /*
+     * ATOMIC FLIP (vms-37e): with the /vms POSIX passthrough retired, the
+     * SYS$SYSTEM utility images have no /vms home -- both access() probes above
+     * fail on the real runtime. PID 1 stages the shipped utilities off the
+     * genuine ODS-2 volume THROUGH THE ACP into OVMX_BOOT_STAGE_DIR (a tmpfs)
+     * exactly as it stages the first-hop boot images (stage_boot_images(),
+     * src/ovmx_init/ovmx_init.c); the bytes came from the ACP, never /vms
+     * (INV-6). A utility is fork()+execve()d (not in-process activated) because
+     * it must receive P1-P8 argv, so it needs that POSIX handoff. Rewrite the
+     * resolved SYS$SYSTEM:<exe> path to its staged location and use it if the
+     * stage exists. If the utility was never staged (not installed), fall
+     * through -- the child's execvp() then fails HONESTLY with %-F-NOIMG, never
+     * a /vms read. Host ctest / plain-container tooling keeps /vms, so `bin` is
+     * already set there and this is never reached (behaviour unchanged). */
+    char staged_path[PATH_MAX];
+    if (!bin) {
+        const char *resolved = (sys_path[0] ? sys_path : def_path);
+        if (ovmx_boot_stage_exec_path(resolved, staged_path, sizeof(staged_path)) &&
+            access(staged_path, X_OK) == 0)
+            bin = staged_path;
     }
 
     /* Set argv[0] to resolved path or exe_name for PATH search */
@@ -2045,135 +2070,6 @@ int mount_point_is_mounted(const char *mount_point)
 }
 
 /*
- * Fork, continue THIS session's VMS identity onto the child, and exec the
- * setuid-root mount helper (tools/vms_mount_helper.c, vms-651) -- the one
- * thing on the node still able to mount(2)/umount(2) once LOGINOUT has
- * setuid()/setgid()'d the session onto its SYSUAF UIC. See that file's
- * header comment for the full reasoning (including why a kernel-mediated
- * mount does not work on this platform) and for why the helper re-derives
- * its own authorization rather than trusting argv.
- *
- * vms_kif_register_continue() is called in the CHILD, before execv() --
- * the SAME "forked child before doing privileged work inherits the
- * parent's authenticated identity" shape image activation already uses
- * (its own doc comment in src/libvmssys/vms_kif.h says so explicitly) --
- * so the helper's PRV$M_MOUNT check sees THIS session, not a fresh,
- * unauthenticated registration: pid/tgid survive exec(), uid/gid/
- * capabilities do not, and vms.ko's registration is keyed on the former.
- *
- * Returns the helper's exit code (0 success, 1 mount/umount itself failed,
- * 2 usage error, 3 PRV$M_MOUNT not held), or -1 if the helper could not be
- * forked/exec'd/waited at all. On exit code 1, *helper_errno receives the
- * errno the helper's mount(2)/umount(2) call failed with.
- */
-static int run_mount_helper(char *const argv[], int *helper_errno)
-{
-    if (helper_errno)
-        *helper_errno = 0;
-
-    int pipefd[2];
-    if (pipe(pipefd) != 0)
-        return -1;
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        close(pipefd[0]);
-        close(pipefd[1]);
-        return -1;
-    }
-    if (pid == 0) {
-        close(pipefd[0]);
-        dup2(pipefd[1], STDERR_FILENO);
-        close(pipefd[1]);
-        (void)vms_kif_open();
-        (void)vms_kif_register_continue();
-        execv(VMS_MOUNT_HELPER_PATH, argv);
-        _exit(127);
-    }
-
-    close(pipefd[1]);
-    char errbuf[256];
-    ssize_t n = read(pipefd[0], errbuf, sizeof(errbuf) - 1);
-    close(pipefd[0]);
-    errbuf[n > 0 ? n : 0] = '\0';
-
-    int wstatus;
-    if (waitpid(pid, &wstatus, 0) < 0 || !WIFEXITED(wstatus))
-        return -1;
-
-    int rc = WEXITSTATUS(wstatus);
-    if (rc == 1 && helper_errno) {
-        int e = 0;
-        if (sscanf(errbuf, "ERRNO %d", &e) == 1)
-            *helper_errno = e;
-    }
-    return rc;
-}
-
-/*
- * Read the volume label off `backing`'s vmsfs home block through the setuid-
- * root helper's `readlabel` mode (vms-f83) -- the session dropped its Linux
- * capability at LOGINOUT and cannot read the raw block device itself, exactly
- * the reason mount(2) is delegated to the helper. Captures the helper's stdout
- * ("LABEL <name>") the same fork/continue-identity/exec shape run_mount_helper
- * uses, but reads STDOUT rather than STDERR. On success copies the label to
- * `label` and returns 1; returns 0 if the label could not be read (the helper
- * failed, was not authorized, or the device is not a vmsfs volume) -- in which
- * case MOUNT defines no DISK$ logical rather than fabricating one (INV-DCL).
- */
-static int mount_helper_readlabel(const char *backing, char *label,
-                                  size_t label_size)
-{
-    if (!backing || !label || label_size == 0)
-        return 0;
-    label[0] = '\0';
-
-    int pipefd[2];
-    if (pipe(pipefd) != 0)
-        return 0;
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        close(pipefd[0]);
-        close(pipefd[1]);
-        return 0;
-    }
-    if (pid == 0) {
-        close(pipefd[0]);
-        dup2(pipefd[1], STDOUT_FILENO);
-        close(pipefd[1]);
-        (void)vms_kif_open();
-        (void)vms_kif_register_continue();
-        char *argv[] = {
-            (char *)VMS_MOUNT_HELPER_PATH, (char *)"readlabel",
-            (char *)backing, NULL
-        };
-        execv(VMS_MOUNT_HELPER_PATH, argv);
-        _exit(127);
-    }
-
-    close(pipefd[1]);
-    char outbuf[64];
-    ssize_t n = read(pipefd[0], outbuf, sizeof(outbuf) - 1);
-    close(pipefd[0]);
-    outbuf[n > 0 ? n : 0] = '\0';
-
-    int wstatus;
-    if (waitpid(pid, &wstatus, 0) < 0 || !WIFEXITED(wstatus) ||
-        WEXITSTATUS(wstatus) != 0)
-        return 0;
-
-    /* "LABEL <name>\n" -- take the token after the first space, stop at
-     * whitespace. */
-    char parsed[32];
-    if (sscanf(outbuf, "LABEL %31s", parsed) != 1)
-        return 0;
-    strncpy(label, parsed, label_size - 1);
-    label[label_size - 1] = '\0';
-    return 1;
-}
-
-/*
  * MOUNT - mount(2) a VMS disk unit's backing block device as vmsfs (vms-651).
  *
  * Syntax: MOUNT device: label [/SYSTEM]
@@ -2265,31 +2161,10 @@ int cmd_mount(struct dcl_command *cmd)
         return pst;
     }
 
-    /* Resolve the unit to its backing block device through the executive
-     * (vms_kif_disk_resolve, vms-3e8) -- the process never scans /sys/block
-     * itself (Rule 11). */
-    char backing[VMS_BACKING_SIZE];
-    memset(backing, 0, sizeof(backing));
-    uint32_t rst = vms_kif_disk_resolve(dev_name, backing, sizeof(backing),
-                                         NULL, NULL);
-    switch (rst) {
-    case SS$_NORMAL:
-        break;
-    case SS$_NOSUCHDEV:
-        dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available");
-        return SS$_NOSUCHDEV;
-    case SS$_IVDEVNAM:
-        dcl_error("SYSTEM", 0, "IVDEVNAM", "invalid device name");
-        return SS$_IVDEVNAM;
-    default:
-        return rst;
-    }
-
-    if (mount_point_is_mounted(mount_point)) {
-        dcl_error("MOUNT", 2, "DEVMOUNT",
-                  "device already mounted - _%s", dev_name);
-        return SS$_DEVMOUNT;
-    }
+    /* vms-481: the unit is resolved and its ODS-2 home block validated by the
+     * executive ACP $MOUNT below (vms_kif_acp_mount / vms-127) -- the process no
+     * longer resolves a backing block device or scans /proc/mounts for a /vms
+     * passthrough. */
 
     /* Claim the unit in the executive's device table (vms-651 wires
      * vms_kif_alloc for the first time). */
@@ -2314,75 +2189,34 @@ int cmd_mount(struct dcl_command *cmd)
     }
 
     /*
-     * The actual mount(2), performed by the setuid-root helper
-     * (tools/vms_mount_helper.c, vms-651): LOGINOUT setuid()/setgid()'s
-     * every VMS session onto its SYSUAF UIC (tools/vms_login.c), so THIS
-     * process holds no Linux capability regardless of the PRV$M_MOUNT it
-     * was just found to hold -- mount(2) itself requires CAP_SYS_ADMIN
-     * unconditionally. The helper re-derives PRV$M_MOUNT from the
-     * executive itself (it does not trust this process's claim) before
-     * doing anything privileged -- see its header comment for why a
-     * kernel-mediated mount is not available on this platform and for the
-     * full security reasoning. The mount point already exists --
-     * src/ovmx_init/ovmx_init.c's provision_disk_mount_points() created it,
-     * as root, before any session dropped privilege.
+     * vms-481: MOUNT the ODS-2 volume EXECUTIVE-GLOBAL through the Files-11 ACP
+     * ($MOUNT over /dev/vms, vms_kif_acp_mount / vms-127) -- not a setuid-root
+     * mount(2) of a vmsfs passthrough. The executive reads and validates the
+     * volume's ODS-2 home block + SCB and records it in the executive-global
+     * mounted-volume table, so EVERY process that $ASSIGNs the unit sees the
+     * same mounted volume (design §4.3). This retires the setuid mount(2)
+     * helper, the /vms mount point, the per-process vmsfs_device_add filespec
+     * translator, and the DISK$-label-via-helper path -- filespecs against the
+     * unit now resolve by $ASSIGNing it through the ACP. Fail-honest (INV-6): no
+     * ACP / no such device => the real SS$_ status, never a passthrough mount.
      */
-    char backing_path[VMS_BACKING_SIZE + 8];
-    snprintf(backing_path, sizeof(backing_path), "/dev/%s", backing);
-    char *helper_argv[] = {
-        (char *)VMS_MOUNT_HELPER_PATH, (char *)"mount",
-        backing_path, mount_point, NULL
-    };
-    int helper_errno = 0;
-    int hrc = run_mount_helper(helper_argv, &helper_errno);
-    if (hrc == 3) {
+    uint32_t mst = vms_kif_acp_mount(dev_name);
+    if (mst == SS$_NOSUCHDEV) {
         vms_kif_dalloc(dev_name);
-        dcl_error("SYSTEM", 4, "NOPRIV",
-                  "insufficient privilege or object protection violation");
-        return SS$_NOPRIV;
+        dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available");
+        return SS$_NOSUCHDEV;
     }
-    if (hrc != 0) {
+    if (mst == SS$_DEVMOUNT) {
+        vms_kif_dalloc(dev_name);
+        dcl_error("MOUNT", 2, "DEVMOUNT",
+                  "device already mounted - _%s", dev_name);
+        return SS$_DEVMOUNT;
+    }
+    if (!(mst & 1)) {
         vms_kif_dalloc(dev_name);
         dcl_error("OVMX", 4, "MOUNTFAIL",
-                  "%s would not mount as vmsfs: %s", dev_name,
-                  hrc == 1 ? strerror(helper_errno) : "mount helper did not run");
-        return SS$_BUGCHECK;
-    }
-
-    /* Tell the per-process VMS-filespec translator (the same mechanism
-     * DKA0:/SYSDISK_MOUNT already uses) so filespecs against this device
-     * resolve for the rest of this session. */
-    vmsfs_device_add(log_name, mount_point);
-
-    /* Create logical name for device -> linux path */
-    const char *table = LNM_PROCESS_TABLE;
-    if (dcl_has_qualifier(cmd, "SYSTEM"))
-        table = LNM_SYSTEM_TABLE;
-
-    lnm_manager_t *mgr = lnm_get_manager();
-    if (mgr) {
-        lnm_create(mgr, table, log_name, mount_point,
-                   LNM_ATTR_TERMINAL, LNM_MODE_USER);
-    }
-
-    /*
-     * DISK$<volume-label> (vms-f83): VMS MOUNT defines a logical name from the
-     * volume's own label so the disk can be addressed by label independent of
-     * the physical unit -- DISK$MYVOL:[DIR]FILE resolves wherever MYVOL is
-     * mounted (VSI OpenVMS System Manager's Manual, Vol. 1, "Mounting
-     * Volumes"; VSI OpenVMS DCL Dictionary, MOUNT). The label is READ FROM THE
-     * VOLUME (its vmsfs home block, via the setuid helper), not the command-
-     * line token, so the DISK$ name always reflects the disk actually mounted;
-     * if it cannot be read, no DISK$ logical is defined rather than
-     * fabricating one (INV-DCL). The equivalence is the device (DKA100:), so
-     * DISK$<label>:[dir]file translates through the device the mount just
-     * established. DISMOUNT removes it. Placed in the same table as the device
-     * logical above so it is resolvable in exactly the same scope.
-     */
-    char vol_label[16] = "";
-    if (mgr && mount_helper_readlabel(backing_path, vol_label,
-                                      sizeof(vol_label))) {
-        (void)dcl_mount_define_disk(mgr, table, vol_label, dev_name);
+                  "%s would not mount as ODS-2", dev_name);
+        return mst;
     }
 
     printf("%%MOUNT-I-MOUNTED, %s mounted on _%s\n", label, dev_name);
@@ -2428,9 +2262,6 @@ int cmd_dismount(struct dcl_command *cmd)
     if (lnlen > 0 && log_name[lnlen - 1] == ':')
         log_name[lnlen - 1] = '\0';
 
-    char mount_point[64];
-    mount_point_for_device(log_name, mount_point, sizeof(mount_point));
-
     (void)vms_kif_open();
 
     uint32_t pst = vms_kif_chkpriv(PRV$M_MOUNT);
@@ -2442,67 +2273,49 @@ int cmd_dismount(struct dcl_command *cmd)
     if (!(pst & 1))
         return pst;
 
-    if (!mount_point_is_mounted(mount_point)) {
+    /*
+     * vms-3a8: DISMOUNT the ODS-2 volume through the executive Files-11 ACP
+     * ($DISMOUNT over /dev/vms, vms_kif_acp_dmount), MIRRORING cmd_mount()'s
+     * vms-481 switch to vms_kif_acp_mount. The executive-global $MOUNT records
+     * NO Linux VFS mount and NO /proc/mounts entry, so the retired
+     * mount_point_is_mounted()/setuid-umount-helper path could never see an
+     * ACP-mounted volume: it reported %DISMOUNT-E-DEVNOTMNT for a unit MOUNT had
+     * just placed in the executive table, so the install's own DISMOUNT (after
+     * PRODUCT INSTALL onto DKA100:) failed and the target volume was never
+     * released. The ACP $DISMOUNT removes the executive-global volume entry;
+     * because IO$_WRITEVBLK writes are synchronous (submit_bio_wait) and the
+     * install rides cache=writethrough drives, the volume is already durable on
+     * its backing device across the dismount (the kept vms-9b7 lesson).
+     */
+    uint32_t dst = vms_kif_acp_dmount(dev_name);
+    if (dst == SS$_NOSUCHDEV) {
+        /* No executive-global volume mounted on this unit -- fail-honest, the
+         * ACP's own SS$_NOSUCHDEV for an unmounted unit (vms_ioctl_acp_dmount). */
         dcl_error("DISMOUNT", 2, "DEVNOTMNT",
                   "device is not mounted - _%s", dev_name);
         return SS$_DEVNOTMOUNT;
     }
-
-    /*
-     * Read the volume label WHILE STILL MOUNTED (vms-f83), so the DISK$<label>
-     * logical MOUNT defined can be removed after umount. The label is read
-     * from the volume, the same source MOUNT built the DISK$ name from, rather
-     * than tracked in per-session state (there is none to trust). Best-effort:
-     * if the label cannot be read there is no DISK$ logical to remove either.
-     */
-    char vol_label[16] = "";
-    {
-        char dbacking[VMS_BACKING_SIZE];
-        memset(dbacking, 0, sizeof(dbacking));
-        if (vms_kif_disk_resolve(dev_name, dbacking, sizeof(dbacking),
-                                 NULL, NULL) == SS$_NORMAL) {
-            char dbacking_path[VMS_BACKING_SIZE + 8];
-            snprintf(dbacking_path, sizeof(dbacking_path), "/dev/%s", dbacking);
-            (void)mount_helper_readlabel(dbacking_path, vol_label,
-                                         sizeof(vol_label));
-        }
+    if (dst == SS$_DEVALLOC) {
+        /* File-class channels are still $ASSIGNed to the volume (refcnt > 0):
+         * an open file blocks the dismount, as VMS refuses to dismount a volume
+         * with open files. */
+        dcl_error("DISMOUNT", 2, "DEVNOTDISM",
+                  "device cannot be dismounted -- files are still open on - _%s",
+                  dev_name);
+        return SS$_DEVALLOC;
     }
+    if (!(dst & 1))
+        return dst;
 
-    /* The actual umount(2), performed by the setuid-root helper -- see the
-     * matching comment on the mount(2) call in cmd_mount(). */
-    char *helper_argv[] = {
-        (char *)VMS_MOUNT_HELPER_PATH, (char *)"umount", mount_point, NULL
-    };
-    int helper_errno = 0;
-    int hrc = run_mount_helper(helper_argv, &helper_errno);
-    if (hrc == 3) {
-        dcl_error("SYSTEM", 4, "NOPRIV",
-                  "insufficient privilege or object protection violation");
-        return SS$_NOPRIV;
-    }
-    if (hrc != 0) {
-        dcl_error("OVMX", 4, "DISMOUNTFAIL",
-                  "%s would not unmount: %s", dev_name,
-                  hrc == 1 ? strerror(helper_errno) : "mount helper did not run");
-        return SS$_BUGCHECK;
-    }
-
+    /* Release the executive device-table claim MOUNT took (vms_kif_alloc). */
     vms_kif_dalloc(dev_name);
-    vmsfs_device_remove(log_name);
 
-    /* Remove logical name */
+    /* Best-effort: drop any per-process / system device logical. The ACP MOUNT
+     * defines none, so this is a no-op on the current path, kept idempotent. */
     lnm_manager_t *mgr = lnm_get_manager();
     if (mgr) {
         lnm_delete(mgr, LNM_PROCESS_TABLE, log_name, LNM_MODE_USER);
         lnm_delete(mgr, LNM_SYSTEM_TABLE, log_name, LNM_MODE_USER);
-        /* Remove the DISK$<label> logical MOUNT defined (vms-f83). Both
-         * tables, mirroring the device-logical removal above -- MOUNT places
-         * DISK$ in the process table by default and the system table under
-         * /SYSTEM. */
-        if (vol_label[0]) {
-            (void)dcl_mount_remove_disk(mgr, LNM_PROCESS_TABLE, vol_label);
-            (void)dcl_mount_remove_disk(mgr, LNM_SYSTEM_TABLE, vol_label);
-        }
     }
 
     printf("%%DISMOUNT-I-DISMOUNTED, _%s dismounted\n", dev_name);
@@ -2925,9 +2738,11 @@ int cmd_phone(struct dcl_command *cmd)
  * PRODUCT SHOW PRODUCT/HISTORY directly here (a fat builtin) and had no
  * PRODUCT.EXE at all; every other operation was a bare %PCSI-E-NOTIMPL.
  *
- * /SOURCE is resolved through dcl_resolve_path() before being handed to
- * PRODUCT.EXE (same as COPY/LINK's own input-file resolution), so it
- * accepts both an ordinary VMS filespec and a quoted literal Linux path.
+ * /SOURCE is passed through UNCOOKED (vms-3a8), NOT dcl_resolve_path()'d to a
+ * Linux path: the kit lives on a MOUNTed distribution volume and PRODUCT.EXE
+ * reads it by VMS filespec over the executive Files-11 ACP (do_install ->
+ * rms_open_named_handle), the VMS way -- never a /vms POSIX passthrough, which
+ * the atomic flip (vms-208) no longer materializes for a MOUNTed volume.
  * /DESTINATION is a bare device name (canonicalized upper-case with a
  * trailing colon, like cmd_mount's own device-name handling) -- not a
  * filespec, so it is passed through uncooked; PRODUCT.EXE resolves it to
@@ -2938,8 +2753,6 @@ int cmd_phone(struct dcl_command *cmd)
  */
 int cmd_product(struct dcl_command *cmd)
 {
-    struct dcl_context *ctx = dcl_get_context();
-
     if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
         dcl_error("PCSI", 0, "NOTIMPL", "operation not implemented");
         return SS$_NORMAL;
@@ -2977,9 +2790,16 @@ int cmd_product(struct dcl_command *cmd)
             dcl_error("PCSI", 2, "NOSOURCE", "missing /SOURCE kit filespec");
             return SS$_BADPARAM;
         }
-        char linuxpath[1024];
-        dcl_resolve_path(ctx, src, linuxpath, sizeof(linuxpath));
-        snprintf(source_arg, sizeof(source_arg), "/SOURCE=%s", linuxpath);
+        /* vms-3a8: pass the /SOURCE VMS filespec through UNCOOKED, exactly like
+         * /DESTINATION below. The kit lives on a MOUNTed distribution volume;
+         * PRODUCT.EXE opens it by filespec over the executive Files-11 ACP
+         * (do_install -> pd_kit_open_over_acp -> rms_open_named_handle), the
+         * VMS way. It must NOT be dcl_resolve_path()'d to a /vms POSIX
+         * passthrough: since the atomic flip (vms-208) a MOUNTed volume has no
+         * /vms Linux mirror, so the resolved path named a file that does not
+         * exist (%PCSI-E-OPENIN /vms/.../ovmx-os.kit) -- the exact Rule 9/INV-6
+         * passthrough this converged flip excises. */
+        snprintf(source_arg, sizeof(source_arg), "/SOURCE=%s", src);
         argv[argc++] = source_arg;
 
         const char *dst = dcl_qualifier_value(cmd, "DESTINATION");

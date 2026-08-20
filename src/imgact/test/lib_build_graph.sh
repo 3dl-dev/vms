@@ -98,7 +98,7 @@ build_producer_graph() {
     echo "== LIBVMSRMS\$SHR.EXE =="
     CC="$CC" CFLAGS="$LIBCFLAGS" sh "$LINK_DIR/mk_vmsrms_shr.sh" \
         "$WORK/LINK.EXE" "$SYSLIB/LIBVMSRMS\$SHR.EXE" \
-        "$SYSLIB/DECC\$SHR.EXE" "$SYSLIB/LIBVMS\$SHR.EXE" "$SYSLIB/LIBVMSFS\$SHR.EXE" \
+        "$SYSLIB/DECC\$SHR.EXE" "$SYSLIB/LIBVMS\$SHR.EXE" "$SYSLIB/LIBVMSFS\$SHR.EXE" "$SYSLIB/LIBVMSSYS\$SHR.EXE" \
         "$VMSRMS_DIR" "$LIBVMS_INC" "$VMSFS_INC"
     echo "-- full six-library producer graph linked VMS-native ($ARCH) --"
 }

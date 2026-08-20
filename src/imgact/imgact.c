@@ -46,6 +46,8 @@
 #include "ovmx_symvec.h"  /* shared resolver + GSMATCH (bead vms-8d5)  */
 #include "known_images.h" /* Known Image DB lookup (bead vms-913.5; wired vms-30d) */
 #include "imgact_prodreg.h" /* publish resident producers into LIBVMS$SHR (vms-db2) */
+#include "imgact_acp.h"   /* image reads over the executive Files-11 ACP (vms-3e8e) */
+#include "ssdef.h"        /* SS$_NOSUCHDEV -- the "executive absent" defer signal */
 
 #ifndef AT_EXECFN
 #define AT_EXECFN 31
@@ -54,6 +56,31 @@
 #ifndef O_RDONLY
 #define O_RDONLY 0
 #endif
+#ifndef O_RDWR
+#define O_RDWR 2
+#endif
+
+/* The system disk the activator reads images from. On real OpenVMS this is the
+ * discovered SYS$SYSDEVICE, not a compile-time constant. IMGACT no longer bakes
+ * the boot unit as a literal (that was the last compile-time disk name, exactly
+ * like the retired "/vms" IMGACT_FALLBACK_SYSLIB mount point): the activator now
+ * DISCOVERS it at runtime from the OVMX_SYSDEVICE environment variable the boot
+ * chain publishes (ovmx_init sets it to the mounted boot unit; a produced-image
+ * activation, e.g. the KE harness, sets it to whatever volume carries the image
+ * + its shareables), and falls back to this default only when it is unset. This
+ * kills the compile-time disk literal and advances device-native naming (epic
+ * vms-47d). The QEMU boot maps the system disk to DKA0:; the KE toolchain
+ * harness (tests/qemu/test_syssvc_mmk_build.c) points it at the generated
+ * ODS-2 system volume so the clean-room real-VAX DKA0: fixture is never mutated
+ * with OVMX toolchain images (vms-104/vms-29ff). */
+#ifndef IMGACT_ACP_SYSDEVICE_DEFAULT
+#define IMGACT_ACP_SYSDEVICE_DEFAULT "DKA0:"
+#endif
+
+/* Runtime-discovered system device (OVMX_SYSDEVICE or the default above).
+ * Filled once in imgact_bootstrap() before any image read; used by imgsrc_open()
+ * as the ACP unit every image read $ASSIGNs to. */
+static char g_acp_sysdevice[32] = IMGACT_ACP_SYSDEVICE_DEFAULT;
 
 /* --------------------------------------------------------------------------
  * Freestanding syscall layer (no libc; IMGACT.EXE is -nostdlib).
@@ -68,6 +95,13 @@ static long sys_openat(const char *path, int flags)
 	return syscall6(SYS_openat, -100, (long)path, flags, 0, 0, 0);
 }
 static long sys_close(int fd) { return syscall6(SYS_close, fd, 0, 0, 0, 0, 0); }
+/* NOTE (vms-3e8e): image-file reads normally ride the executive Files-11 ACP
+ * (IO$_READVBLK, imgact_acp.c) and never touch a /vms POSIX path. The one
+ * exception is the vms-5f0 legacy defer in imgsrc_open(): when /dev/vms is
+ * absent (host ctest / plain-container self-host & link gates) the ACP open
+ * returns SS$_NOSUCHDEV and the activator falls back to a POSIX read of the
+ * image, matching the RMS rung's RMS$_ACC defer. sys_pread() backs that path;
+ * the runtime boot path (with /dev/vms present) never reaches it (INV-6). */
 static long sys_pread(int fd, void *buf, unsigned long n, long off)
 {
 	return syscall6(SYS_pread64, fd, (long)buf, n, off, 0, 0);
@@ -93,6 +127,29 @@ static void sys_exit(int code)
 static long sys_munmap(void *addr, unsigned long len)
 {
 	return syscall6(SYS_munmap, (long)addr, len, 0, 0, 0, 0);
+}
+static long sys_ioctl(int fd, unsigned long req, void *arg)
+{
+	return syscall6(SYS_ioctl, fd, (long)req, (long)arg, 0, 0, 0);
+}
+
+/* --------------------------------------------------------------------------
+ * Files-11 ACP host primitives (vms-3e8e). imgact_acp.c reaches /dev/vms
+ * through these three functions; here they are the freestanding syscall
+ * backings (the QEMU test provides libc-backed versions of the same symbols).
+ * -------------------------------------------------------------------------- */
+int imgact_acp_dev_open(void)
+{
+	long fd = sys_openat("/dev/vms", O_RDWR);
+	return fd < 0 ? -1 : (int)fd;
+}
+void imgact_acp_dev_close(int fd)
+{
+	sys_close(fd);
+}
+long imgact_acp_dev_ioctl(int fd, unsigned long req, void *arg)
+{
+	return sys_ioctl(fd, req, arg);
 }
 
 #ifndef PROT_READ
@@ -557,32 +614,132 @@ static void scan_tls(struct obj *o, Elf64_Phdr *phdr, int phnum)
 	}
 }
 
+/* --------------------------------------------------------------------------
+ * Image source (vms-3e8e): every image-file read the activator does now rides
+ * the executive Files-11 (ODS-2) ACP -- IO$_ACCESS + IO$_READVBLK over
+ * /dev/vms (imgact_acp.c) -- NOT open()/pread() on a /vms POSIX path, the
+ * passthrough the ACP pivot retires (docs/design-files11-acp-executive.md
+ * §4.6). Fail-honest: if the boot volume is not ACP-mounted (SS$_NOSUCHDEV) or
+ * the image is not on it (SS$_NOSUCHFILE) the open fails and the activator dies
+ * with an honest %IMGACT message; there is NEVER a silent POSIX fallback
+ * (CLAUDE.md Rule 9 / INV-6). imgsrc_pread() keeps pread(2) semantics so the
+ * existing exact-count read checks below are unchanged.
+ * -------------------------------------------------------------------------- */
+/* posix_fd >= 0 selects the vms-5f0 legacy POSIX defer (executive absent);
+ * otherwise reads ride the ACP handle f. */
+struct imgsrc { struct imgact_acp_file f; int posix_fd; };
+
+/*
+ * ATOMIC FLIP (vms-5f0): the first-hop boot images (DCL.EXE, LOGINOUT.EXE, ...)
+ * are execve'd from the boot-staging tmpfs (OVMX_BOOT_STAGE_DIR, "/run/ovmx-
+ * boot"), because the Linux kernel maps a main image's PT_LOAD and opens its
+ * PT_INTERP (this IMGACT.EXE) by POSIX path and the /vms passthrough is retired.
+ * So the kernel hands IMGACT that tmpfs path as the image to activate. IMGACT
+ * still reads the GENUINE image bytes from the ODS-2 volume THROUGH THE ACP --
+ * it never reads the tmpfs copy (no POSIX image read; CLAUDE.md Rule 9 / INV-6)
+ * -- so a staged path is mapped back to its SYS$SYSTEM volume location here
+ * before the ACP open. Non-staged paths (downstream shareables, which are
+ * already volume paths or bare SONAMEs) pass through unchanged. Self-contained
+ * (no libc), like the rest of the freestanding activator.
+ */
+#define IMGACT_BOOT_STAGE_PREFIX "/run/ovmx-boot/"
+#define IMGACT_SYSEXE_VOLPATH    "/vms/SYS0/SYSCOMMON/SYSEXE/"
+static const char *imgsrc_map_staged(const char *path, char *buf, unsigned long sz)
+{
+	const char *sp = IMGACT_BOOT_STAGE_PREFIX;
+	unsigned long i = 0;
+	while (sp[i] && path[i] == sp[i])
+		i++;
+	if (sp[i] != '\0')
+		return path;                  /* not a staged path: use as-is */
+
+	const char *base = path + i;          /* basename after the stage prefix */
+	const char *vp = IMGACT_SYSEXE_VOLPATH;
+	unsigned long o = 0, j = 0;
+	while (vp[j] && o + 1 < sz)
+		buf[o++] = vp[j++];
+	j = 0;
+	while (base[j] && o + 1 < sz)
+		buf[o++] = base[j++];
+	buf[o < sz ? o : sz - 1] = '\0';
+	return buf;
+}
+
+static int imgsrc_open(struct imgsrc *s, const char *path)
+{
+	char mapped[256];
+	const char *p = imgsrc_map_staged(path, mapped, sizeof mapped);
+	s->posix_fd = -1;
+	uint32_t st = imgact_acp_open(&s->f, g_acp_sysdevice, p);
+	if (st & 1u)
+		return 0;
+	/*
+	 * ATOMIC-FLIP DEFER (vms-5f0): the ACP is unavailable only when
+	 * /dev/vms / the executive is absent -- imgact_acp_open() renders that
+	 * as SS$_NOSUCHDEV (its imgact_acp_dev_open() fd < 0 path). In that
+	 * environment (host ctest and the plain-container self-host / link /
+	 * activation gates) there is no runtime to be authentic against, so we
+	 * defer to the legacy POSIX open() on the pre-flip /vms path, exactly as
+	 * the RMS rung defers RMS$_ACC to its legacy resolver (host ctest
+	 * byte-identical). When /dev/vms IS present the ACP open would have
+	 * succeeded or failed for a real reason -- SS$_NOSUCHFILE for a missing
+	 * file, or SS$_DEVNOTMOUNT for an unmounted unit (vms-03b: DISTINCT from
+	 * the executive-absent NOSUCHDEV, so an unmounted SYSDEVICE never falls
+	 * through to POSIX) -- and we never fall through here, so the runtime
+	 * boot path stays ACP-only with NO POSIX image-read fallback (CLAUDE.md
+	 * Rule 9 / INV-6).
+	 */
+	if (st == SS$_NOSUCHDEV) {
+		long fd = sys_openat(path, O_RDONLY);
+		if (fd >= 0) {
+			s->posix_fd = (int)fd;
+			return 0;
+		}
+	}
+	return -1;
+}
+static long imgsrc_pread(struct imgsrc *s, void *buf, unsigned long n, long off)
+{
+	if (s->posix_fd >= 0)
+		return sys_pread(s->posix_fd, buf, n, off);
+	return imgact_acp_pread(&s->f, buf, n, off);
+}
+static void imgsrc_close(struct imgsrc *s)
+{
+	if (s->posix_fd >= 0) {
+		sys_close(s->posix_fd);
+		s->posix_fd = -1;
+		return;
+	}
+	imgact_acp_close(&s->f);
+}
+
 /* Map a shareable image file into memory; fill base/dyn. Returns obj index. */
 static struct obj *load_object(const char *soname, const char *path)
 {
 	if (g_nobjs >= MAX_OBJS)
 		die_mapfail(soname);
 
-	int fd = (int)sys_openat(path, O_RDONLY);
-	if (fd < 0)
+	struct imgsrc src;
+	if (imgsrc_open(&src, path) < 0)
 		return 0;
 
 	Elf64_Ehdr eh;
-	if (sys_pread(fd, &eh, sizeof(eh), 0) != (long)sizeof(eh) ||
+	if (imgsrc_pread(&src, &eh, sizeof(eh), 0) != (long)sizeof(eh) ||
 	    eh.e_ident[0] != 0x7f || eh.e_ident[1] != 'E' ||
 	    eh.e_ident[2] != 'L'  || eh.e_ident[3] != 'F') {
-		sys_close(fd);
+		imgsrc_close(&src);
 		die_imgfmterr(soname);
 	}
 
 	Elf64_Phdr ph[32];
 	if (eh.e_phnum > 32) {
-		sys_close(fd);
+		imgsrc_close(&src);
 		die_imgfmterr(soname);
 	}
-	if (sys_pread(fd, ph, (unsigned long)eh.e_phnum * eh.e_phentsize,
+	if (imgsrc_pread(&src, ph, (unsigned long)eh.e_phnum * eh.e_phentsize,
 		      (long)eh.e_phoff) < 0) {
-		sys_close(fd);
+		imgsrc_close(&src);
 		die_imgfmterr(soname);
 	}
 
@@ -597,17 +754,19 @@ static struct obj *load_object(const char *soname, const char *path)
 			hi = ph[i].p_vaddr + ph[i].p_memsz;
 	}
 	if (lo == ~0UL) {
-		sys_close(fd);
+		imgsrc_close(&src);
 		die_imgfmterr(soname);
 	}
 	unsigned long span = PAGE_UP(hi) - lo;
 
-	/* Reserve the whole span R/W anonymous, then read segments into place.
-	 * Anonymous memory is zero-filled, so .bss needs no explicit clear. */
+	/* Reserve the whole span R/W anonymous, then read segments into place
+	 * via the ACP window (IO$_READVBLK). Anonymous memory is zero-filled,
+	 * so .bss needs no explicit clear. (Read-then-place first cut, vms-3e8e;
+	 * demand-page-through-the-window is the end state.) */
 	void *map = sys_mmap(0, span, PROT_READ | PROT_WRITE,
 			     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (map == MAP_FAILED) {
-		sys_close(fd);
+		imgsrc_close(&src);
 		die_mapfail(soname);
 	}
 	unsigned long base = (unsigned long)map - lo;
@@ -615,13 +774,13 @@ static struct obj *load_object(const char *soname, const char *path)
 	for (int i = 0; i < eh.e_phnum; i++) {
 		if (ph[i].p_type != PT_LOAD || ph[i].p_filesz == 0)
 			continue;
-		if (sys_pread(fd, (void *)(base + ph[i].p_vaddr),
+		if (imgsrc_pread(&src, (void *)(base + ph[i].p_vaddr),
 			      ph[i].p_filesz, (long)ph[i].p_offset) < 0) {
-			sys_close(fd);
+			imgsrc_close(&src);
 			die_mapfail(soname);
 		}
 	}
-	sys_close(fd);
+	imgsrc_close(&src);
 
 	/* Apply final segment protections. */
 	for (int i = 0; i < eh.e_phnum; i++) {
@@ -1026,24 +1185,25 @@ static unsigned long exec_bias(Elf64_Phdr *phdr, int phnum, unsigned long at_phd
  * DT_HASH/DT_NEEDED resolution.
  * -------------------------------------------------------------------------- */
 
-/* Find a section's load vaddr + size by name, via the file's section headers. */
-static int ovmx_find_section(int fd, const char *want,
+/* Find a section's load vaddr + size by name, via the file's section headers
+ * (read over the ACP window, vms-3e8e). */
+static int ovmx_find_section(struct imgsrc *src, const char *want,
 			     unsigned long *addr, unsigned long *size)
 {
 	Elf64_Ehdr eh;
-	if (sys_pread(fd, &eh, sizeof eh, 0) != (long)sizeof eh)
+	if (imgsrc_pread(src, &eh, sizeof eh, 0) != (long)sizeof eh)
 		return 0;
 	if (eh.e_shnum == 0 || eh.e_shnum > 64 || eh.e_shstrndx >= eh.e_shnum)
 		return 0;
 	Elf64_Shdr sh[64];
 	unsigned long ssz = (unsigned long)eh.e_shnum * sizeof(Elf64_Shdr);
-	if (sys_pread(fd, sh, ssz, (long)eh.e_shoff) != (long)ssz)
+	if (imgsrc_pread(src, sh, ssz, (long)eh.e_shoff) != (long)ssz)
 		return 0;
 	static char strtab[2048];
 	unsigned long stsz = sh[eh.e_shstrndx].sh_size;
 	if (stsz > sizeof strtab)
 		return 0;
-	if (sys_pread(fd, strtab, stsz, (long)sh[eh.e_shstrndx].sh_offset) != (long)stsz)
+	if (imgsrc_pread(src, strtab, stsz, (long)sh[eh.e_shstrndx].sh_offset) != (long)stsz)
 		return 0;
 	for (int i = 0; i < eh.e_shnum; i++) {
 		if (xstrcmp(strtab + sh[i].sh_name, want) == 0) {
@@ -1058,12 +1218,12 @@ static int ovmx_find_section(int fd, const char *want,
 /* Apply the .vms$rel self-relative fixups: add the load bias to every
  * image-relative slot LINK.EXE recorded (synthesized GOT cells, pointer data).
  * The VMS-native equivalent of processing R_AARCH64_RELATIVE, without a
- * PT_DYNAMIC. No-op for images with no .vms$rel. `fd` must be open on the image;
- * `base` is its load bias. The target pages must already be writable. */
-static void apply_vms_rel(int fd, unsigned long base)
+ * PT_DYNAMIC. No-op for images with no .vms$rel. `src` must be open on the
+ * image; `base` is its load bias. The target pages must already be writable. */
+static void apply_vms_rel(struct imgsrc *src, unsigned long base)
 {
 	unsigned long rel_addr, rel_size;
-	if (!ovmx_find_section(fd, OVMX_REL_SECTION, &rel_addr, &rel_size))
+	if (!ovmx_find_section(src, OVMX_REL_SECTION, &rel_addr, &rel_size))
 		return;
 	const struct ovmx_rel_header *rh =
 		(const struct ovmx_rel_header *)(base + rel_addr);
@@ -1087,6 +1247,7 @@ struct ovmx_prod {
 	unsigned long                tls_align;
 	unsigned long                tls_offset;   /* assigned offset from TP        */
 	const struct ovmx_tls_header *tlsdesc;     /* .vms$tls header (0 if none)     */
+	unsigned long                wimp_addr;    /* .vms$wimp vaddr (0 if none)     */
 };
 static struct ovmx_prod g_prods[32];
 static int              g_nprods;
@@ -1114,22 +1275,21 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 	if (g_nprods >= 32)
 		return 0;
 
-	/* Search: SYS$SHARE fallback, then the name as given. */
+	/* Search: SYS$SHARE fallback, then the name as given -- both read over
+	 * the executive Files-11 ACP (vms-3e8e), never a /vms POSIX open. */
 	char path[256];
 	xstrcpy(path, IMGACT_FALLBACK_SYSLIB "/");
 	xstrcat(path, soname);
-	int fd = (int)sys_openat(path, O_RDONLY);
-	if (fd < 0)
-		fd = (int)sys_openat(soname, O_RDONLY);
-	if (fd < 0)
+	struct imgsrc src;
+	if (imgsrc_open(&src, path) < 0 && imgsrc_open(&src, soname) < 0)
 		return 0;
 
 	Elf64_Ehdr eh;
-	if (sys_pread(fd, &eh, sizeof eh, 0) != (long)sizeof eh) { sys_close(fd); return 0; }
+	if (imgsrc_pread(&src, &eh, sizeof eh, 0) != (long)sizeof eh) { imgsrc_close(&src); return 0; }
 	Elf64_Phdr ph[16];
-	if (eh.e_phnum > 16) { sys_close(fd); return 0; }
-	if (sys_pread(fd, ph, (unsigned long)eh.e_phnum * sizeof(Elf64_Phdr),
-		      (long)eh.e_phoff) < 0) { sys_close(fd); return 0; }
+	if (eh.e_phnum > 16) { imgsrc_close(&src); return 0; }
+	if (imgsrc_pread(&src, ph, (unsigned long)eh.e_phnum * sizeof(Elf64_Phdr),
+		      (long)eh.e_phoff) < 0) { imgsrc_close(&src); return 0; }
 
 	unsigned long lo = ~0UL, hi = 0;
 	for (int i = 0; i < eh.e_phnum; i++) {
@@ -1137,16 +1297,16 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 		if (PAGE_DOWN(ph[i].p_vaddr) < lo) lo = PAGE_DOWN(ph[i].p_vaddr);
 		if (ph[i].p_vaddr + ph[i].p_memsz > hi) hi = ph[i].p_vaddr + ph[i].p_memsz;
 	}
-	if (lo == ~0UL) { sys_close(fd); return 0; }
+	if (lo == ~0UL) { imgsrc_close(&src); return 0; }
 	unsigned long span = PAGE_UP(hi) - lo;
 	void *map = sys_mmap(0, span, PROT_READ | PROT_WRITE,
 			     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	if (map == MAP_FAILED) { sys_close(fd); return 0; }
+	if (map == MAP_FAILED) { imgsrc_close(&src); return 0; }
 	unsigned long base = (unsigned long)map - lo;
 	for (int i = 0; i < eh.e_phnum; i++) {
 		if (ph[i].p_type != PT_LOAD || ph[i].p_filesz == 0) continue;
-		if (sys_pread(fd, (void *)(base + ph[i].p_vaddr), ph[i].p_filesz,
-			      (long)ph[i].p_offset) < 0) { sys_close(fd); return 0; }
+		if (imgsrc_pread(&src, (void *)(base + ph[i].p_vaddr), ph[i].p_filesz,
+			      (long)ph[i].p_offset) < 0) { imgsrc_close(&src); return 0; }
 	}
 	for (int i = 0; i < eh.e_phnum; i++) {
 		if (ph[i].p_type != PT_LOAD) continue;
@@ -1160,20 +1320,26 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 	}
 
 	unsigned long sv_addr, sv_size;
-	int ok = ovmx_find_section(fd, OVMX_SV_SECTION, &sv_addr, &sv_size);
+	int ok = ovmx_find_section(&src, OVMX_SV_SECTION, &sv_addr, &sv_size);
 	/* Bias this producer's own self-relative slots (GOT cells, pointer data)
 	 * before any of its universal code runs. Pages are RWX at this point. */
 	if (ok)
-		apply_vms_rel(fd, base);
+		apply_vms_rel(&src, base);
 	/* Locate the .vms$tls TLSDESC table (completed after TLS offsets assigned). */
 	unsigned long tls_addr, tls_size;
-	int have_tlsdesc = ovmx_find_section(fd, OVMX_TLS_SECTION, &tls_addr, &tls_size);
+	int have_tlsdesc = ovmx_find_section(&src, OVMX_TLS_SECTION, &tls_addr, &tls_size);
 	/* Locate this producer's OWN .vms$imp: a lib shareable that itself imports
 	 * from another producer (e.g. libc/pthread from DECC$SHR). Resolved
 	 * transitively after registration below. (vms-e65) */
 	unsigned long imp_addr, imp_size;
-	int have_imp = ovmx_find_section(fd, OVMX_IMP_SECTION, &imp_addr, &imp_size);
-	sys_close(fd);
+	int have_imp = ovmx_find_section(&src, OVMX_IMP_SECTION, &imp_addr, &imp_size);
+	/* Locate this producer's OWN .vms$wimp (weak-by-name imports). Resolved in a
+	 * DEFERRED pass (resolve_weak_imports) only after the ENTIRE producer set is
+	 * loaded -- a weak import may bind to a producer loaded later than this one
+	 * (LIBVMS$SHR's sys$open binds to LIBVMSRMS$SHR, loaded after it). (vms-5f0) */
+	unsigned long wimp_addr, wimp_size;
+	int have_wimp = ovmx_find_section(&src, OVMX_WIMP_SECTION, &wimp_addr, &wimp_size);
+	imgsrc_close(&src);
 	if (!ok)
 		return 0;
 
@@ -1195,6 +1361,7 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 	}
 	p->tlsdesc = have_tlsdesc
 		? (const struct ovmx_tls_header *)(base + tls_addr) : 0;
+	p->wimp_addr = have_wimp ? (base + wimp_addr) : 0;
 
 	/* Transitively bind this producer's own imports. Done AFTER registration so a
 	 * dependency cycle dedups through find-loaded, and AFTER apply_vms_rel above so
@@ -1499,6 +1666,40 @@ static void drive_crtl_init(struct ovmx_prod *crtl)
 	((void (*)(char **, char *))init_libc)(g_envp, g_argv0);
 }
 
+/* Resolve every loaded producer's .vms$wimp (weak-by-name imports) against the
+ * WHOLE loaded producer set, by NAME. Run ONCE, after bind_imports has loaded
+ * the entire producer closure, so a weak reference in one producer can bind to a
+ * universal exported by any other -- including one loaded later, and across the
+ * layering cycle the fixed (producer,index) .vms$imp path cannot express
+ * (LIBVMS$SHR weak-imports sys$open; LIBVMSRMS$SHR, which --use's LIBVMS$SHR,
+ * exports it). Found -> patch the import-GOT cell; absent -> leave it as LINK
+ * left it (0), the ELF weak-undef result rms_services_present() reads as "RMS
+ * not present" and falls back honestly. (vms-5f0) */
+static void resolve_weak_imports(void)
+{
+	for (int pi = 0; pi < g_nprods; pi++) {
+		unsigned long wa = g_prods[pi].wimp_addr;
+		if (!wa)
+			continue;
+		const struct ovmx_wimp_header *wh =
+			(const struct ovmx_wimp_header *)wa;
+		if (wh->magic != OVMX_WIMP_MAGIC)
+			continue;
+		const struct ovmx_wimp_entry *we =
+			(const struct ovmx_wimp_entry *)((const char *)wh + sizeof *wh);
+		const char *names = (const char *)wh + wh->names_off;
+		for (unsigned k = 0; k < wh->count; k++) {
+			const char *sym = names + we[k].name_off;
+			unsigned long addr = 0;
+			for (int q = 0; q < g_nprods && !addr; q++)
+				addr = sv_find_named(&g_prods[q], sym);
+			if (addr)
+				*(unsigned long *)(g_prods[pi].base + we[k].patch_off) = addr;
+			/* else: no loaded producer exports it -> cell stays 0 (weak-undef) */
+		}
+	}
+}
+
 /* Resolve every .vms$imp import of the executable against producer symbol
  * vectors, patching the consumer's GOT cells. `ephdr`/`ephnum` are the
  * kernel-mapped main image's program headers (for its PT_TLS geometry). */
@@ -1507,15 +1708,19 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 {
 	if (!execfn)
 		die_imgfmterr("IMAGE.EXE");
-	int fd = (int)sys_openat(execfn, O_RDONLY);
-	if (fd < 0)
+	/* The main image's LOAD segments are already kernel-mapped; its SECTION
+	 * headers (.vms$imp/.vms$rel/.vms$tls) are not, so re-read them off the
+	 * file -- now over the executive Files-11 ACP (vms-3e8e), not a /vms POSIX
+	 * open. Fail-honest: not on the ACP volume -> honest %IMGACT error. */
+	struct imgsrc src;
+	if (imgsrc_open(&src, execfn) < 0)
 		die_imgnotfnd(execfn);
 	unsigned long imp_addr, imp_size;
-	int ok = ovmx_find_section(fd, OVMX_IMP_SECTION, &imp_addr, &imp_size);
+	int ok = ovmx_find_section(&src, OVMX_IMP_SECTION, &imp_addr, &imp_size);
 	/* Bias the executable's own self-relative slots (its GOT/pointer data), if
 	 * any; harmless no-op for the current PLT-only executables. */
 	if (ok)
-		apply_vms_rel(fd, exe_base);
+		apply_vms_rel(&src, exe_base);
 
 	/* Record the executable module's OWN TLS geometry (PT_TLS) + its .vms$tls
 	 * TLSDESC table, so the executable participates in TLS setup exactly like a
@@ -1534,11 +1739,11 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	}
 	if (g_exe.has_tls) {
 		unsigned long tls_addr, tls_size;
-		if (ovmx_find_section(fd, OVMX_TLS_SECTION, &tls_addr, &tls_size))
+		if (ovmx_find_section(&src, OVMX_TLS_SECTION, &tls_addr, &tls_size))
 			g_exe.tlsdesc =
 				(const struct ovmx_tls_header *)(exe_base + tls_addr);
 	}
-	sys_close(fd);
+	imgsrc_close(&src);
 	if (!ok)
 		die_imgfmterr("IMAGE.EXE");
 
@@ -1548,6 +1753,12 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	const struct ovmx_imp_header *ih =
 		(const struct ovmx_imp_header *)(exe_base + imp_addr);
 	bind_imports(exe_base, ih, "IMAGE.EXE");
+
+	/* Now that the ENTIRE producer closure is loaded, resolve every producer's
+	 * weak-by-name imports against it (LIBVMS$SHR's sys$open/$get/$connect/$close
+	 * -> LIBVMSRMS$SHR). Must follow bind_imports so all producers are present;
+	 * the bound cells are read only later, at login time. (vms-5f0) */
+	resolve_weak_imports();
 
 	/* TLS ownership. There is exactly one thread pointer (TPIDR_EL0) per
 	 * process, so whoever programs it defines the TLS coordinate system:
@@ -1581,6 +1792,35 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	publish_resident_producers();
 }
 
+/* Discover the ACP system device (rung vms-29ff / vms-104). Walk the process
+ * environment for OVMX_SYSDEVICE=<unit> (e.g. "DKA300:") and copy its value into
+ * g_acp_sysdevice; leave the compile-time default in place when it is unset or
+ * empty. Freestanding: no libc getenv, just a scan of the raw envp vector. */
+static void imgact_discover_sysdevice(char **envp)
+{
+	static const char key[] = "OVMX_SYSDEVICE=";
+	const unsigned long klen = sizeof(key) - 1;
+	for (char **e = envp; e && *e; e++) {
+		const char *s = *e;
+		unsigned long i = 0;
+		while (i < klen && s[i] && s[i] == key[i])
+			i++;
+		if (i != klen)
+			continue;
+		const char *val = s + klen;
+		if (!*val)
+			return;                 /* empty: keep the default */
+		unsigned long n = xstrlen(val);
+		if (n >= sizeof(g_acp_sysdevice))
+			n = sizeof(g_acp_sysdevice) - 1;
+		unsigned long j = 0;
+		for (; j < n; j++)
+			g_acp_sysdevice[j] = val[j];
+		g_acp_sysdevice[j] = '\0';
+		return;
+	}
+}
+
 unsigned long imgact_bootstrap(unsigned long *sp)
 {
 	/* ---- Parse the initial process stack (no globals yet). ---- */
@@ -1611,6 +1851,11 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	g_auxv  = auxv;
 	g_envp  = envp;                         /* for the C-RTL __init_libc bootstrap */
 	g_argv0 = argc > 0 ? argv[0] : 0;
+
+	/* Discover the ACP system device before any image read (imgsrc_open uses
+	 * g_acp_sysdevice). Runtime-discovered, not a compile-time literal
+	 * (vms-29ff/vms-47d). */
+	imgact_discover_sysdevice(envp);
 
 	/* ---- Build the executable object from the kernel-provided phdrs. ----
 	 * The kernel has already mapped the main executable's LOAD segments;

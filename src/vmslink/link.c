@@ -209,17 +209,30 @@ static void die(const char *msg)
 /* Section bucket: input sections are classified + merged by ELF flags, not by
  * exact name, so gcc's split sections (.text.unlikely, .rodata.str1.8,
  * .rodata.cst8, .data.rel.ro, ...) all land in the right output region. (vms-fa1) */
-enum { B_NONE = 0, B_TEXT, B_RODATA, B_DATA, B_BSS, B_TDATA, B_TBSS };
+enum { B_NONE = 0, B_TEXT, B_RODATA, B_DATA, B_INIT_ARRAY, B_BSS, B_TDATA, B_TBSS };
 
 /* The buckets LINK.EXE places FLAT (a real image vaddr per input section) and
  * can therefore apply relocations into. B_BSS/B_TBSS are NOBITS (no bytes to
  * patch); B_TDATA is reached through TLSDESC, not a flat address; B_NONE is an
  * allocatable section type this linker does not place at all. Anything outside
  * this set that still carries relocations is REPORTED, never dropped in
- * silence. (vms-a66) */
+ * silence. (vms-a66)
+ *
+ * B_INIT_ARRAY (vms-ee2) is SHT_INIT_ARRAY: the ELF ctor-pointer table gcc
+ * emits for a real GNU-C static constructor (__attribute__((constructor)),
+ * a C++ static object, ...). It is placed in its OWN writable, dedicated
+ * output region (never merged into plain .data) precisely so its start/end
+ * can be reported as a clean range -- see the .init_array output-section
+ * block in emit_shareable() and its use in imgact.c's symbol-vector ctor
+ * runner. Each entry is a plain ABS64 pointer initializer, patched by the
+ * SAME reloc-apply loop as B_DATA (no special-casing needed there). This is
+ * OVMX's ELF-native carrier for "run these before the image starts" -- the
+ * functional equivalent of VMS's LIB$INITIALIZE constructor pass, NOT a
+ * reproduction of VMS's PSECT-collection layout (see docs/design-link-native-
+ * toolchain.md). */
 static int bucket_is_patchable(int b)
 {
-    return b == B_TEXT || b == B_RODATA || b == B_DATA;
+    return b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_INIT_ARRAY;
 }
 
 /* One relocation, tagged with the section it patches (site = sec_va + off). */
@@ -374,12 +387,18 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
             o->sec_bucket[i] = (s->sh_type == SHT_NOBITS) ? B_TBSS : B_TDATA;
         else if (s->sh_type == SHT_NOBITS)
             o->sec_bucket[i] = B_BSS;
+        else if (s->sh_type == SHT_INIT_ARRAY)
+            o->sec_bucket[i] = B_INIT_ARRAY;   /* ctor pointer table (vms-ee2) */
         else if (s->sh_type == SHT_PROGBITS)
             o->sec_bucket[i] = (s->sh_flags & SHF_EXECINSTR) ? B_TEXT
                              : (s->sh_flags & SHF_WRITE)     ? B_DATA
                              :                                 B_RODATA;
-        /* Other allocatable types (SHT_INIT_ARRAY, SHT_NOTE, ...) stay B_NONE;
-         * a relocation into one dies loudly rather than silently misplacing. */
+        /* Other allocatable types (SHT_NOTE, SHT_FINI_ARRAY, ...) stay B_NONE;
+         * a relocation into one dies loudly rather than silently misplacing.
+         * SHT_FINI_ARRAY (image-teardown destructors) is out of scope here:
+         * IMGACT.EXE symbol-vector images never return to an "unload" path --
+         * see docs/design-image-activation.md -- so there is nothing for a
+         * fini-array runner to be called from. */
     }
 
     /* Collect relocations against every FLAT-PLACED allocatable section into one
@@ -1196,7 +1215,7 @@ static uint64_t placed_addr(struct obj *d, Elf64_Sym *s)
     int sh = (int)s->st_shndx;
     if (sh <= 0 || sh >= d->nsh) return 0;
     switch (d->sec_bucket[sh]) {
-    case B_TEXT: case B_RODATA: case B_DATA: case B_BSS:
+    case B_TEXT: case B_RODATA: case B_DATA: case B_INIT_ARRAY: case B_BSS:
         return d->sec_va[sh] + s->st_value;
     default:
         return 0;
@@ -1266,8 +1285,9 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx)
     }
     (void)nobj;
     /* Defined, but in a section this linker doesn't place flat (TLS, or an
-     * allocatable type like SHT_INIT_ARRAY): a pointer into it is deferred
-     * under --allow-undefined, otherwise a hard error. */
+     * allocatable type like SHT_NOTE): a pointer into it is deferred under
+     * --allow-undefined, otherwise a hard error. (SHT_INIT_ARRAY is placed
+     * flat as B_INIT_ARRAY as of vms-ee2 and no longer reaches this branch.) */
     if (g_allow_undef) { g_deferred++; return 0; }
     die("relocation against an unsupported section");
     return 0;
@@ -1501,7 +1521,7 @@ static int defined_placed(struct obj *objs, const char *name)
     int shx = (int)s->st_shndx;
     if (shx <= 0 || shx >= objs[doi].nsh) return 0;
     int b = objs[doi].sec_bucket[shx];
-    return b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_BSS;
+    return b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_INIT_ARRAY || b == B_BSS;
 }
 
 /* Emit an OVMX shareable image from N objects: merge .text/.rodata/.data/.bss,
@@ -1617,13 +1637,14 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         imp[exit_imp].is_data = 0;   /* always a call import */
     }
 
-    int has_ro = 0, has_data = 0, has_bss = 0;
+    int has_ro = 0, has_data = 0, has_init_array = 0, has_bss = 0;
     for (int i = 0; i < nobj; i++)
         for (int s = 0; s < objs[i].nsh; s++) {
             if (objs[i].sh[s].sh_size == 0) continue;
-            if (objs[i].sec_bucket[s] == B_RODATA) has_ro = 1;
-            if (objs[i].sec_bucket[s] == B_DATA)   has_data = 1;
-            if (objs[i].sec_bucket[s] == B_BSS)    has_bss = 1;
+            if (objs[i].sec_bucket[s] == B_RODATA)     has_ro = 1;
+            if (objs[i].sec_bucket[s] == B_DATA)       has_data = 1;
+            if (objs[i].sec_bucket[s] == B_INIT_ARRAY) has_init_array = 1;
+            if (objs[i].sec_bucket[s] == B_BSS)        has_bss = 1;
         }
 
     /* TLS geometry (single TLS-bearing object per image for now). */
@@ -1717,7 +1738,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             if (is_abs64_reloc(ELF64_R_TYPE(objs[i].relocs[r].info)))
                 nabs++;
 
-    /* ---- Layout: [ehdr][phdr] text|rodata|got|tlsdesc|data|tdata|sv|rel|tls|bss --- */
+    /* ---- Layout: [ehdr][phdr] text|rodata|got|tlsdesc|data|init_array|tdata|sv|rel|tls|bss --- */
     uint64_t off_ph   = sizeof(Elf64_Ehdr);
     /* shareable: PT_LOAD (+ PT_TLS). executable: PT_PHDR, PT_INTERP, PT_LOAD
      * (+ PT_TLS) — the kernel maps the executable and reads PT_INTERP=IMGACT. */
@@ -1791,9 +1812,32 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             }
     uint64_t data_end = cur;
 
+    /* .init_array (writable, ABS64-relocated ctor function-pointer table,
+     * vms-ee2). A DEDICATED region -- deliberately not merged into .data --
+     * so the placed range is exactly the ctor table, nothing else: IMGACT's
+     * symbol-vector activator (imgact.c) reads this section's own sh_addr/
+     * sh_size (via the same generic by-name section lookup it already uses
+     * for .vms$imp/.vms$rel/.vms$tls/.vms$sv) to bound its constructor-call
+     * loop. Each entry is patched by the ordinary ABS64 reloc-apply loop
+     * below (bucket_is_patchable() now includes B_INIT_ARRAY) -- no special
+     * casing needed there. Most images (TCC.EXE, DECC$SHR, every pure musl+
+     * libgcc image) carry no SHT_INIT_ARRAY input section at all, so
+     * has_init_array is 0 and this region is simply empty (initarr_beg ==
+     * initarr_end): the correct, unaffected case. */
+    uint64_t initarr_beg = cur;
+    for (int i = 0; i < nobj; i++)
+        for (int s = 0; s < objs[i].nsh; s++)
+            if (objs[i].sec_bucket[s] == B_INIT_ARRAY && objs[i].sh[s].sh_size) {
+                uint64_t al = objs[i].sh[s].sh_addralign ? objs[i].sh[s].sh_addralign : 8;
+                cur = ALIGN_UP(cur, al);
+                objs[i].sec_va[s] = cur;
+                cur += objs[i].sh[s].sh_size;
+            }
+    uint64_t initarr_end = cur;
+
     /* .tdata (TLS init image, file-backed). PT_TLS references it; a reserved
      * vaddr is assigned even for a pure-.tbss image (tdata_sz == 0). */
-    uint64_t tdata_va = 0, tdata_end = data_end;
+    uint64_t tdata_va = 0, tdata_end = initarr_end;
     if (has_tls) {
         cur = ALIGN_UP(cur, tls_align);
         tdata_va = cur;
@@ -1890,6 +1934,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     int ix_got = -1;  if (ngot)     { ix_got  = nsec; secn[nsec++] = ".got"; }
     int ix_tlsd = -1; if (ntls)     { ix_tlsd = nsec; secn[nsec++] = ".tlsdesc"; }
     int ix_data = -1; if (has_data) { ix_data = nsec; secn[nsec++] = ".data"; }
+    int ix_initarr = -1; if (has_init_array) { ix_initarr = nsec; secn[nsec++] = ".init_array"; }
     int ix_tdata = -1; if (has_tls && tdata_sz) { ix_tdata = nsec; secn[nsec++] = ".tdata"; }
     int ix_igot = -1; if (nimp)     { ix_igot = nsec; secn[nsec++] = ".igot"; }
     int ix_plt = -1;  if (nimp)     { ix_plt  = nsec; secn[nsec++] = ".plt"; }
@@ -1932,7 +1977,8 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
      * A PT_TLS follows when the image has thread-local storage. An executable
      * adds PT_PHDR (so IMGACT derives the load bias) + PT_INTERP=IMGACT.EXE, and
      * its GOT/import cells are written at activation so it is always writable. */
-    int writable = (ngot || ntls || has_data || has_bss || has_tls || nimp || is_exec);
+    int writable = (ngot || ntls || has_data || has_init_array || has_bss ||
+                    has_tls || nimp || is_exec);
     Elf64_Phdr *ph = (Elf64_Phdr *)(img + off_ph);
     int li;   /* index of the PT_LOAD phdr */
     if (is_exec) {
@@ -1958,11 +2004,14 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     }
     if (is_exec) memcpy(img + off_interp, IMGACT_INTERP, interp_sz);
 
-    /* Copy each placed PROGBITS section (text/rodata/data) to its vaddr. */
+    /* Copy each placed PROGBITS section (text/rodata/data/init_array) to its
+     * vaddr. SHT_INIT_ARRAY's file-resident bytes are the pre-relocation
+     * addends; the ABS64 reloc-apply loop below overwrites each entry with
+     * the real placed pointer value. */
     for (int i = 0; i < nobj; i++)
         for (int s = 0; s < objs[i].nsh; s++) {
             int b = objs[i].sec_bucket[s];
-            if ((b == B_TEXT || b == B_RODATA || b == B_DATA) &&
+            if ((b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_INIT_ARRAY) &&
                 objs[i].sh[s].sh_size)
                 memcpy(img + objs[i].sec_va[s],
                        objs[i].buf + objs[i].sh[s].sh_offset, objs[i].sh[s].sh_size);
@@ -2240,6 +2289,15 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         sh[ix_data].sh_flags = SHF_ALLOC | SHF_WRITE; sh[ix_data].sh_addr = data_beg;
         sh[ix_data].sh_offset = data_beg; sh[ix_data].sh_size = data_end - data_beg;
         sh[ix_data].sh_addralign = 8;
+    }
+    if (has_init_array) {
+        /* Real SHT_INIT_ARRAY output section: preserves the type so a reader
+         * (readelf, IMGACT's ovmx_find_section by name) sees exactly what it
+         * is -- the placed ctor-pointer range, not generic writable data. */
+        sh[ix_initarr].sh_name = sn_off[ix_initarr]; sh[ix_initarr].sh_type = SHT_INIT_ARRAY;
+        sh[ix_initarr].sh_flags = SHF_ALLOC | SHF_WRITE; sh[ix_initarr].sh_addr = initarr_beg;
+        sh[ix_initarr].sh_offset = initarr_beg; sh[ix_initarr].sh_size = initarr_end - initarr_beg;
+        sh[ix_initarr].sh_addralign = 8;
     }
     if (has_tls && tdata_sz) {
         sh[ix_tdata].sh_name = sn_off[ix_tdata]; sh[ix_tdata].sh_type = SHT_PROGBITS;

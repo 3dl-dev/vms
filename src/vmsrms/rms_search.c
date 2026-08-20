@@ -64,6 +64,7 @@
 #include <dirent.h>
 #include <fnmatch.h>
 #include "vmsfs/filespec.h"
+#include "vmsfs/device.h"   /* vms-3a8: vmsfs_compose_ods2_candidates for $SEARCH */
 
 /* First member of BOTH $SEARCH context layouts, so the rms_impl_search /
  * rms_search_fid / rms_search_end dispatchers can route a continuation call to
@@ -213,27 +214,71 @@ static uint32_t rms_acp_search(void *fab_ptr)
         ctx = calloc(1, sizeof(struct acp_search_context));
         if (!ctx) { fab->fab$l_sts = RMS$_DME; return RMS$_DME; }
 
-        search_split(expanded, ctx->devnam, sizeof(ctx->devnam),
-                     ctx->dirpath, sizeof(ctx->dirpath),
-                     pattern, sizeof(pattern));
-        if (ctx->devnam[0] == '\0')
-            strncpy(ctx->devnam, RMS_ACP_DEFAULT_DEV, sizeof(ctx->devnam) - 1);
-        if (pattern[0] == '\0') { search_ctx_free(ctx); fab->fab$l_sts = RMS$_SYN;
-                                  nam->nam$$l_context = NULL; return RMS$_SYN; }
+        /* Resolve any concealed / rooted / directory device logical
+         * (SYS$SYSTEM:, SYS$COMMON:[SYSEXE], SYS$SYSROOT: ...) in the expanded
+         * spec into FULLY-COMPOSED physical ODS-2 candidate specs, EXACTLY as
+         * the $OPEN/$CREATE path does (rms_acp_specs_from_fab ->
+         * vmsfs_compose_ods2_candidates), instead of handing the still-concealed
+         * device to the ACP. sys$parse KEEPS a concealed device concealed
+         * (rms_parse.c), so before this DIRECTORY / F$SEARCH / $SEARCH on
+         * SYS$SYSTEM:DCL.EXE $ASSIGNed a channel to the non-physical unit
+         * "SYS$SYSTEM", resolved no directory, and matched nothing
+         * (%DIRECT-W-NOFILES) -- while the very same file opened fine BY NAME
+         * (boot activation, PRODUCT, @STARTUP.COM all worked). vms-3a8.
+         * Candidates come back in search-list order (node member, then
+         * SYSCOMMON); use the first whose directory the ACP resolves. */
+        {
+            #define VMS_SEARCH_MAX_CANDS 4
+            char cands[VMS_SEARCH_MAX_CANDS][VMSFS_MAX_FILESPEC];
+            int ncand = vmsfs_compose_ods2_candidates(expanded, cands,
+                                                      VMS_SEARCH_MAX_CANDS);
+            int chosen = 0;
 
-        st = vms_kif_acp_assign(ctx->devnam, &ctx->chan);
-        if (!$VMS_STATUS_SUCCESS(st)) {
-            uint32_t rs = rms_acp_search_status(st);
-            search_ctx_free(ctx); nam->nam$$l_context = NULL;
-            fab->fab$l_sts = rs; nam->nam$l_sts = rs; return rs;
-        }
-        ctx->assigned = 1;
+            if (ncand <= 0) {
+                /* No device logical to compose (device-less / plain physical
+                 * spec): keep the pre-vms-3a8 behaviour on the expanded spec. */
+                strncpy(cands[0], expanded, sizeof(cands[0]) - 1);
+                cands[0][sizeof(cands[0]) - 1] = '\0';
+                ncand = 1;
+            }
 
-        st = rms_acp_resolve_did(ctx->chan, ctx->dirpath, &dn, &ds, &dr, &dx);
-        if (!$VMS_STATUS_SUCCESS(st)) {
-            uint32_t rs = rms_acp_search_status(st);
-            search_ctx_free(ctx); nam->nam$$l_context = NULL;
-            fab->fab$l_sts = rs; nam->nam$l_sts = rs; return rs;
+            st = SS$_NOSUCHFILE;
+            for (int ci = 0; ci < ncand; ci++) {
+                char cdev[16], cdir[256], cpat[VMS_ACP_NAME_SIZE];
+                search_split(cands[ci], cdev, sizeof(cdev), cdir, sizeof(cdir),
+                             cpat, sizeof(cpat));
+                if (cdev[0] == '\0')
+                    strncpy(cdev, RMS_ACP_DEFAULT_DEV, sizeof(cdev) - 1);
+                if (cpat[0] == '\0')
+                    continue;
+
+                st = vms_kif_acp_assign(cdev, &ctx->chan);
+                if (!$VMS_STATUS_SUCCESS(st))
+                    continue;                 /* try the next candidate */
+                ctx->assigned = 1;
+
+                st = rms_acp_resolve_did(ctx->chan, cdir, &dn, &ds, &dr, &dx);
+                if ($VMS_STATUS_SUCCESS(st)) {
+                    strncpy(ctx->devnam, cdev, sizeof(ctx->devnam) - 1);
+                    ctx->devnam[sizeof(ctx->devnam) - 1] = '\0';
+                    strncpy(ctx->dirpath, cdir, sizeof(ctx->dirpath) - 1);
+                    ctx->dirpath[sizeof(ctx->dirpath) - 1] = '\0';
+                    strncpy(pattern, cpat, sizeof(pattern) - 1);
+                    pattern[sizeof(pattern) - 1] = '\0';
+                    chosen = 1;
+                    break;
+                }
+                /* Directory did not resolve on this member: release and retry. */
+                vms_kif_dassgn(ctx->chan);
+                ctx->assigned = 0; ctx->chan = 0;
+            }
+
+            if (!chosen) {
+                uint32_t rs = rms_acp_search_status(st);
+                search_ctx_free(ctx); nam->nam$$l_context = NULL;
+                fab->fab$l_sts = rs; nam->nam$l_sts = rs; return rs;
+            }
+            #undef VMS_SEARCH_MAX_CANDS
         }
 
         memset(&a, 0, sizeof(a));

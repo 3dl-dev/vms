@@ -391,6 +391,13 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
     case ODS2_FK_DATA:
         rtype = ODS2_RTYPE_VAR; rattrib = ODS2_RAT_CR; rsize = 0; maxrec = 0;
         break;
+    case ODS2_FK_DATA_STMLF:
+        /* RFM=STMLF (stream, LF-terminated), implied-CR -- the shape a live
+         * PRODUCT INSTALL must give a byte-stream text file (.COM/.DAT) so
+         * DCL/RMS read it one LF-record at a time (vms-3a8). Byte-for-byte the
+         * same preset ods2_writer.c's FH2_KIND_DATA_STMLF uses for the master. */
+        rtype = ODS2_RTYPE_STMLF; rattrib = ODS2_RAT_CR; rsize = 0; maxrec = 0;
+        break;
     case ODS2_FK_DATA_FIX:
         rtype = ODS2_RTYPE_FIX; rattrib = 0x00; rsize = 512; maxrec = 512;
         break;
@@ -407,7 +414,8 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
             ffbyte = 0;
         } else {
             efblk = total_count;
-            if ((kind == ODS2_FK_DATA || kind == ODS2_FK_DATA_FIX) && data_len > 0) {
+            if ((kind == ODS2_FK_DATA || kind == ODS2_FK_DATA_FIX ||
+                 kind == ODS2_FK_DATA_STMLF) && data_len > 0) {
                 size_t last = data_len - (size_t)(total_count - 1) * ODS2_BLOCK_SIZE;
                 ffbyte = (uint16_t)last;
             } else {

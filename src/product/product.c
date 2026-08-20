@@ -411,7 +411,17 @@ static int pd_ensure_tree(const struct pd_dest *dest, const char *dirpath)
 static int pd_write_file(const char *spec, const uint8_t *buf, size_t len)
 {
     uint32_t st = 0;
-    rms_file_t *h = rms_open_named_handle(spec, /*want_write*/1, /*create*/1, &st);
+    /* vms-3a8: create each target file with the record format a byte-stream copy
+     * must carry -- RFM=FIXED for a binary image (.EXE ...), RFM=STMLF for a
+     * .COM/.DAT text file -- the SAME per-file choice the mastered distribution
+     * disk uses (ods2_kind_for_filespec / tools/vmsfs_master.c). The old
+     * rms_open_named_handle() default (RFM=VAR) made a live-installed STARTUP.COM
+     * read back as one bogus VAR record, so DCL saw the file NAME as a command
+     * verb (%DCL-E-IVVERB \STARTUP.COM\) and the installed target never booted to
+     * login across the container boundary (tests/qemu/test_release_install.sh). */
+    unsigned kind = ods2_kind_for_filespec(spec);
+    rms_file_t *h = rms_open_named_handle_kind(spec, /*want_write*/1, /*create*/1,
+                                               kind, &st);
     if (!h) {
         fprintf(stderr, "%%PCSI-E-CREATE, cannot create %s (0x%08X)\n", spec, st);
         return -1;

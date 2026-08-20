@@ -2797,7 +2797,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 kind = ODS2_FK_DIR;
                 filechar = ODS2_FH2_M_DIRECTORY | ODS2_FH2_M_CONTIG;
             } else if (kind != ODS2_FK_DATA && kind != ODS2_FK_DATA_FIX &&
-                       kind != ODS2_FK_SYSTEM) {
+                       kind != ODS2_FK_DATA_STMLF && kind != ODS2_FK_SYSTEM) {
                 kind = ODS2_FK_DATA_FIX;    /* default: a fixed-record data file */
             }
             owner.uic_group  = (uint16_t)((proc->uic >> 16) & 0xFFFFu);

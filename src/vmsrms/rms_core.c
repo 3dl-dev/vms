@@ -561,6 +561,15 @@ int rms_executive_absent(void)
 rms_file_t *rms_open_named_handle(const char *vms_spec, int want_write,
                                   int create, uint32_t *st_out)
 {
+    /* Back-compat default: RFM=VAR, the format every pre-vms-3a8 create used. */
+    return rms_open_named_handle_kind(vms_spec, want_write, create,
+                                      ODS2_FK_DATA, st_out);
+}
+
+rms_file_t *rms_open_named_handle_kind(const char *vms_spec, int want_write,
+                                       int create, unsigned kind,
+                                       uint32_t *st_out)
+{
     uint32_t st;
     if (st_out) *st_out = RMS$_FAB;
     if (!vms_spec || !*vms_spec)
@@ -619,7 +628,7 @@ rms_file_t *rms_open_named_handle(const char *vms_spec, int want_write,
             fop.func      = VMS_ACP_FOP_CREATE;
             fop.modifiers = VMS_ACP_M_CREATE | VMS_ACP_M_ACCESS;
             fop.acctl     = VMS_ACP_ACCTL_WRITE;
-            fop.kind      = ODS2_FK_DATA;
+            fop.kind      = kind;           /* vms-3a8: caller-chosen RFM (VAR default) */
             st = rms_acp_resolve_did(chan, sp->dirpath, &fop.did_num,
                                      &fop.did_seq, &fop.did_rvn, &fop.did_nmx);
             if (!$VMS_STATUS_SUCCESS(st)) {

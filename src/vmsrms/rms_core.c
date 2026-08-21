@@ -1903,11 +1903,24 @@ static uint32_t rms_impl_create(void *fab_ptr)
          * the write window on this channel so record $PUTs ride it directly. */
         fop.modifiers = VMS_ACP_M_CREATE | VMS_ACP_M_ACCESS;
         fop.acctl     = VMS_ACP_ACCTL_WRITE;
-        /* Indexed files carry a variable-length Prolog-3 block structure, never
-         * a fixed-record ODS-2 kind, even when the user records are fixed. */
-        fop.kind      = (fab->fab$b_org != FAB$C_IDX &&
-                         fab->fab$b_rfm == FAB$C_FIX) ? ODS2_FK_DATA_FIX
-                                                      : ODS2_FK_DATA;
+        /* Create the file with the ODS-2 record kind that MATCHES the RFM the
+         * records are written in, so the on-disk FAT rtype the reader frames by
+         * (rms_file_attr -> fat_rtype) agrees with the bytes on disk (vms-4ac).
+         * The previous mapping used ODS2_FK_DATA (RFM=VAR, rtype 2) for every
+         * non-FIXED file INCLUDING FAB$C_STMLF: a COPY of a stream-LF text file
+         * (LOGIN.COM et al) was written stream-LF but stamped RFM=VAR, so TYPE
+         * reframed the LF stream as variable-length records -- a bogus length
+         * prefix, then EOF -- and read back EMPTY. Honor STMLF (and FIXED)
+         * explicitly; VAR remains the default. Indexed files always carry the
+         * Prolog-3 block structure (ODS2_FK_DATA), authored on top below. */
+        if (fab->fab$b_org == FAB$C_IDX)
+            fop.kind = ODS2_FK_DATA;
+        else if (fab->fab$b_rfm == FAB$C_FIX)
+            fop.kind = ODS2_FK_DATA_FIX;
+        else if (fab->fab$b_rfm == FAB$C_STMLF)
+            fop.kind = ODS2_FK_DATA_STMLF;
+        else
+            fop.kind = ODS2_FK_DATA;             /* RFM=VAR (the default) */
         fop.version = 0;                     /* highest existing + 1 */
         strncpy(fop.name, sp.name, VMS_ACP_NAME_SIZE - 1);
 

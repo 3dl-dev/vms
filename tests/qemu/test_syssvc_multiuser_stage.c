@@ -109,12 +109,25 @@ static int run_as_nonroot(void)
 
     printf("  (running as uid=%u gid=%u)\n", (unsigned)getuid(), (unsigned)getgid());
 
-    /* 1. ACP read works for a non-root session: stage to a path the uid owns. */
-    const char *probe = "/tmp/mu_stage_probe.EXE";
+    /* The per-user private staging directory the privileged LOGINOUT window
+     * created (0700, owned by this uid) BEFORE the credential drop -- exactly
+     * what tools/vms_login.c does before setuid, and what the parent below
+     * mimics for this rig. The session cannot create it itself (the root-owned
+     * shared parent is not writable by a non-root uid -- the whole point). */
+    char user_dir[512], user_dest[512], probe[512];
+    snprintf(user_dir, sizeof(user_dir), "%s/%u", OVMX_BOOT_STAGE_DIR,
+             (unsigned)getuid());
+    snprintf(user_dest, sizeof(user_dest), "%s/TESTIMG.EXE", user_dir);
+    snprintf(probe, sizeof(probe), "%s/PROBE.EXE", user_dir);
+
+    /* 1. ACP read works for a non-root session: stage into the per-user dir it
+     *    owns. TESTIMG.EXE is a World:RE image (ods2_class_fileprot), so the
+     *    non-root UIC reads it over the ACP; a failure here would mean the
+     *    diagnosis is a READ problem, not a destination-permission one. */
     unlink(probe);
     st = rms_stage_over_acp(IMG_SPEC, probe);
     check(st == RMS$_NORMAL,
-          "non-root session reads " IMG_SPEC " over the ACP (stage to owned /tmp)");
+          "non-root session reads " IMG_SPEC " over the ACP into an owned dir");
     if (st != RMS$_NORMAL)
         printf("    (rms_stage_over_acp -> %#x; non-root cannot even READ the "
                "volume, diagnosis differs)\n", st);
@@ -125,7 +138,6 @@ static int run_as_nonroot(void)
      *    `$ PARTS` fail for the SYSTEM session. */
     char shared_dest[512];
     snprintf(shared_dest, sizeof(shared_dest), "%s/TESTIMG.EXE", OVMX_BOOT_STAGE_DIR);
-    unlink(shared_dest);                 /* no-op for non-root; keeps intent clear */
     errno = 0;
     st = rms_stage_over_acp(IMG_SPEC, shared_dest);
     int shared_errno = errno;
@@ -136,28 +148,24 @@ static int run_as_nonroot(void)
            "EACCES the SYSTEM session hits)\n",
            st, shared_errno, strerror(shared_errno));
 
-    /* 3. THE FIX: per-user private staging into /run/ovmx-boot/<uid>/ succeeds
-     *    and yields a securely-owned, activatable image. */
-    char user_dir[512], user_dest[512];
-    snprintf(user_dir, sizeof(user_dir), "%s/%u", OVMX_BOOT_STAGE_DIR,
-             (unsigned)getuid());
-    snprintf(user_dest, sizeof(user_dest), "%s/TESTIMG.EXE", user_dir);
-    (void)mkdir(user_dir, 0700);         /* owned by the activating uid */
+    /* 3. THE FIX: per-user private staging into /run/ovmx-boot/<uid>/ (the dir
+     *    LOGINOUT created and this uid owns) succeeds and yields a securely-
+     *    owned, activatable image. */
     st = rms_stage_over_acp(IMG_SPEC, user_dest);
-    check(st == RMS$_NORMAL,
-          "non-root staging into PER-USER private " OVMX_BOOT_STAGE_DIR
-          "/<uid>/ SUCCEEDS (the faithful fix)");
     if (st != RMS$_NORMAL)
         printf("    (per-user stage -> %#x)\n", st);
+    /* negctl: multiuser-stage-shared-not-peruser */
+    check(st == RMS$_NORMAL,
+          "non-root staging into per-user private /run/ovmx-boot/<uid>/ SUCCEEDS");
 
     if (stat(user_dest, &sb) == 0) {
         check(sb.st_uid == (uid_t)getuid(),
-              "the staged image is OWNED by the activating (non-root) uid");
+              "the per-user staged image is owned by the activating non-root uid");
         check((sb.st_mode & S_IXUSR) != 0,
-              "the staged image is owner-executable (activatable)");
+              "the per-user staged image is owner-executable");
     } else {
-        check(0, "the staged image is OWNED by the activating (non-root) uid");
-        check(0, "the staged image is owner-executable (activatable)");
+        check(0, "the per-user staged image is owned by the activating non-root uid");
+        check(0, "the per-user staged image is owner-executable");
     }
 
     /* The per-user directory must not be world-writable (no shared plant hole). */
@@ -200,6 +208,23 @@ int main(void)
     (void)mkdir(OVMX_BOOT_STAGE_DIR, 0755);
     if (chmod(OVMX_BOOT_STAGE_DIR, 0755) != 0)
         printf("  note: chmod %s 0755: %s\n", OVMX_BOOT_STAGE_DIR, strerror(errno));
+
+    /* Create the session's per-user staging dir 0700, owned by the target UIC,
+     * EXACTLY as the privileged LOGINOUT window does (tools/vms_login.c) before
+     * dropping credentials -- a non-root session cannot create it under the
+     * root-owned shared parent, so a privileged actor must. */
+    {
+        char udir[512];
+        if (ovmx_boot_stage_user_dir(udir, sizeof(udir), (unsigned long)NONROOT_UID)) {
+            if (mkdir(udir, 0700) == 0 || errno == EEXIST) {
+                if (chown(udir, (uid_t)NONROOT_UID, (gid_t)NONROOT_GID) != 0)
+                    printf("  note: chown %s: %s\n", udir, strerror(errno));
+                (void)chmod(udir, 0700);   /* clear any EEXIST leftover mode */
+            } else {
+                printf("  note: mkdir %s: %s\n", udir, strerror(errno));
+            }
+        }
+    }
 
     pid_t pid = fork();
     if (pid < 0) {

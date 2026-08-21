@@ -83,7 +83,6 @@ set(VMSDCL_SOURCES
     dcl_messages.c
     dcl_library.c
     dcl_help.c
-    dcl_help_acp.c
     dcl_mbx.c
 )
 

@@ -82,7 +82,13 @@
 #include "vms/logical.h"
 
 #define EXIT_SKIP 77
-#define PEER_TIMEOUT_MS 20000
+/* env-tunable so the negctl full-suite run can bound a broken peer's wait
+ * (tests/qemu/inject_and_run.sh sets OVMX_KE_PEER_TIMEOUT_MS); default 20000
+ * unchanged. Only a peer that FAILS to deliver ever reaches this bound -- a
+ * pristine read returns on its poll the instant the peer writes -- so
+ * shortening it bounds a mutation-broken run without touching legit timing. */
+static int ke_peer_timeout_ms(void){const char*e=getenv("OVMX_KE_PEER_TIMEOUT_MS");int v=(e&&*e)?atoi(e):0;return v>0?v:20000;}
+#define PEER_TIMEOUT_MS ke_peer_timeout_ms()
 
 /* A UIC group distinct from the default (root's, [0,0]) that C moves into.
  * Chosen away from tests/qemu/test_kmod_procnam.c's ALT_UIC_GROUP (300) and

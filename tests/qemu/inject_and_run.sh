@@ -246,14 +246,31 @@ echo "Re-staged initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')"
 # Per-facility negative controls run the ENTIRE suite set in ONE VM per defect
 # (check 5's isolation attribution must see every suite, so suites cannot be
 # sharded across VMs the way the positive kernel-executive job does). The 0.5
-# flip grew that set ~76 -> ~97 suites, and a mutation that makes event-flag
-# $WAITFRs wait out their timeouts pushes the full run past run_tests.sh's
-# default 600s wall under CI contention -- the run truncates at ~75/97 suites
-# ("harness never reached FINAL RESULTS"), a gate FAIL even though the control
-# reddened correctly. Give this full-suite path a bigger wall (1800s) (the sanctioned
-# "raise TIMEOUT, never drop a suite" fix; run_tests.sh honours KE_WALL_TIMEOUT
-# and documents the ~776s extrapolation). The positive job keeps the 600s
-# default -- it shards suites, so its per-VM run is a small fraction of this.
+# flip grew that set ~76 -> ~97 suites, and a mutation that breaks a
+# multi-process suite's inter-process signalling (eflag-readef/eflag-dacefc/
+# lnm-manager-delete/...) makes that suite's peer never deliver, so the parent
+# blocks the FULL per-suite safety timeout in several suites, ballooning the
+# run past the wall -- it truncates at ~75/97 suites ("harness never reached
+# FINAL RESULTS"), a gate FAIL even though the control reddened correctly.
+#
+# STRUCTURAL FIX (the robust one): bound that per-suite safety timeout for the
+# negctl run. The nine multi-process suites read peer tokens with
+# read_bounded(fd, ..., PEER_TIMEOUT_MS), a poll() that returns THE INSTANT the
+# peer writes -- so a pristine run never approaches the bound (it is a
+# hung-peer safety net, not legit timing), and shortening it only bounds the
+# mutation-broken case. 20000 -> 4000ms cuts the broken-peer balloon ~5x and
+# is TCG-independent (a 20s poll is 20s of wall-clock on any runner, which is
+# exactly why a bigger wall was fragile against GitHub TCG's 2-4x variance).
+# The control still reddens -- just fast. Every suite defaults to 20000 when
+# the var is unset (host ctest, the positive job), so only this path changes.
+export OVMX_KE_PEER_TIMEOUT_MS="${OVMX_KE_PEER_TIMEOUT_MS:-4000}"
+
+# Belt-and-suspenders wall for the full-suite run (the sanctioned "raise
+# TIMEOUT, never drop a suite" fix; run_tests.sh honours KE_WALL_TIMEOUT). With
+# the peer-timeout balloon bounded above, the boot fits well inside this; it is
+# kept as margin for the TCG-dependent BASE run, not as the primary fix. The
+# positive job keeps the 600s default -- it shards suites, so its per-VM run is
+# a small fraction of this.
 export KE_WALL_TIMEOUT="${KE_WALL_TIMEOUT:-1800}"
 
 exec /run_tests.sh

@@ -61,7 +61,13 @@
 /* Bound on each wait for the peer's next handshake byte. Well under
  * run_tests.sh's 120s QEMU TIMEOUT so this suite fails by name rather than
  * killing the harness. Every step completes in milliseconds when healthy. */
-#define PEER_TIMEOUT_MS 20000
+/* env-tunable so the negctl full-suite run can bound a broken peer's wait
+ * (tests/qemu/inject_and_run.sh sets OVMX_KE_PEER_TIMEOUT_MS); default 20000
+ * unchanged. Only a peer that FAILS to deliver ever reaches this bound -- a
+ * pristine read returns on its poll the instant the peer writes -- so
+ * shortening it bounds a mutation-broken run without touching legit timing. */
+static int ke_peer_timeout_ms(void){const char*e=getenv("OVMX_KE_PEER_TIMEOUT_MS");int v=(e&&*e)?atoi(e):0;return v>0?v:20000;}
+#define PEER_TIMEOUT_MS ke_peer_timeout_ms()
 
 /* Cluster 2 (flags 64-95). CLUSTER_EFN_A is bit 6, CLUSTER_EFN_B is bit 11. */
 #define COMMON_BASE     64

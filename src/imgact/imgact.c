@@ -1197,6 +1197,11 @@ static unsigned long exec_bias(Elf64_Phdr *phdr, int phnum, unsigned long at_phd
  * DT_HASH/DT_NEEDED resolution.
  * -------------------------------------------------------------------------- */
 
+/* Standard ELF section name for SHT_INIT_ARRAY -- not an OVMX-defined `.vms$*`
+ * carrier (see ovmx_image.h), so it has no OVMX_*_SECTION macro there; found
+ * by the same generic by-name section lookup below (bead vms-ee2). */
+#define ELF_INIT_ARRAY_SECTION ".init_array"
+
 /* Find a section's load vaddr + size by name, via the file's section headers
  * (read over the ACP window, vms-3e8e). */
 static int ovmx_find_section(struct imgsrc *src, const char *want,
@@ -1731,6 +1736,40 @@ static void resolve_weak_imports(void)
 /* Resolve every .vms$imp import of the executable against producer symbol
  * vectors, patching the consumer's GOT cells. `ephdr`/`ephnum` are the
  * kernel-mapped main image's program headers (for its PT_TLS geometry). */
+/* Run every constructor pointer in a symbol-vector image's placed
+ * .init_array, in file order -- mirrors run_init()'s SHT_INIT_ARRAY loop
+ * above, just driven from a (base, addr, size) triple read off the OUTPUT
+ * section header table instead of a PT_DYNAMIC DT_INIT_ARRAY tag (bead
+ * vms-ee2, epic vms-da0). A symbol-vector image has no PT_DYNAMIC, so
+ * run_init() is never reached for it (see activate_symbol_vector's header
+ * comment) -- this is the only place left that CAN run them.
+ *
+ * `size == 0` -- no real SHT_INIT_ARRAY section, LINK.EXE's normal output for
+ * every image built from pure musl+libgcc (TCC.EXE, DECC$SHR, every image
+ * before bfd.c) -- must fall straight through with zero calls: the correct,
+ * pre-existing behavior for every image this toolchain has ever produced.
+ *
+ * FRAMING (CLAUDE.md rule 8 / INV-0): this is ELF .init_array constructor
+ * execution -- OVMX's own, ELF-native FUNCTIONAL EQUIVALENT of what VMS's
+ * LIB$INITIALIZE facility achieves (running an image's initialization
+ * routines at activation). It is NOT a reproduction of VMS's LIB$INITIALIZE,
+ * which orders constructors via a linker-collected PSECT -- a layout this
+ * linker does not implement. See docs/design-link-native-toolchain.md and
+ * docs/design-image-activation.md. */
+static void run_init_array_symvec(unsigned long base, unsigned long addr,
+				  unsigned long size)
+{
+	if (!size)
+		return;
+	Elf64_Addr *arr = (Elf64_Addr *)(base + addr);
+	unsigned long n = size / sizeof(Elf64_Addr);
+	for (unsigned long i = 0; i < n; i++) {
+		void (*fn)(void) = (void (*)(void))arr[i];
+		if (fn)
+			fn();
+	}
+}
+
 static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 				   Elf64_Phdr *ephdr, int ephnum)
 {
@@ -1749,6 +1788,14 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	 * any; harmless no-op for the current PLT-only executables. */
 	if (ok)
 		apply_vms_rel(&src, exe_base);
+
+	/* Locate this executable's own .init_array range (if any) while `src` is
+	 * still open -- ovmx_find_section reads the file's raw section headers over
+	 * the ACP window (vms-3e8e), same mechanism as OVMX_IMP_SECTION/
+	 * OVMX_TLS_SECTION above. Zeroed when absent, which is the correct empty
+	 * range (vms-ee2). */
+	unsigned long initarr_addr = 0, initarr_size = 0;
+	ovmx_find_section(&src, ELF_INIT_ARRAY_SECTION, &initarr_addr, &initarr_size);
 
 	/* Record the executable module's OWN TLS geometry (PT_TLS) + its .vms$tls
 	 * TLSDESC table, so the executable participates in TLS setup exactly like a
@@ -1829,6 +1876,12 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	 * calls strlen/strncmp/strncpy, DECC$SHR universals that are only usable once
 	 * musl (drive_crtl_init) has run and LIBVMS$SHR's own imports are bound. */
 	publish_resident_producers();
+
+	/* Run this executable's own .init_array constructors (vms-ee2), now that
+	 * binding/relocation is complete and every producer's C-RTL calls (e.g.
+	 * bfd's ctor, which touches getrusage() via DECC$SHR) resolve. No-op
+	 * (initarr_size == 0) for every image with no real .init_array. */
+	run_init_array_symvec(exe_base, initarr_addr, initarr_size);
 }
 
 /* Discover the ACP system device (rung vms-29ff / vms-104). Walk the process

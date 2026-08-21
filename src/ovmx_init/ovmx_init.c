@@ -386,15 +386,46 @@ static void provision_disk_mount_points(void)
  */
 static int executive_fd = -1;
 
+/* When set before executive_attach(), the executive is attached SILENTLY: the
+ * %OVMX-I-EXEC console line is suppressed and executive_announce() emits it
+ * later. The conversational boot path (vms-46c) must attach the executive BEFORE
+ * the SYSBOOT> prompt -- the Files-11 ACP $MOUNT of the system disk needs it --
+ * but must emit NOTHING before "SYSBOOT> " (docs/design-boot-faithful.md §3.1),
+ * so it sets this, calls executive_attach(), and announces after the prompt.
+ * Every other path leaves it 0 and gets the announce inline from
+ * executive_attach(). It is a deferral of the ANNOUNCE only -- the executive
+ * guarantee (capture + halt-on-failure + pin) is unconditional either way. */
+static int executive_announce_deferred = 0;
+
+/* Emit the %OVMX-I-EXEC line for an executive executive_attach() opened while
+ * executive_announce_deferred was set (the conversational path, after SYSBOOT>). */
+static void executive_announce(void)
+{
+    printf("%%OVMX-I-EXEC, VMS executive attached on /dev/vms\n");
+}
+
 /*
- * executive_attach_silent - load vms.ko and open /dev/vms, WITHOUT emitting the
- * %OVMX-I-EXEC console line. Idempotent. Split out for the conversational boot
- * path (vms-46c): that path must attach the executive BEFORE the SYSBOOT> prompt
- * (the Files-11 ACP $MOUNT of the system disk needs it) but must emit NOTHING
- * before "SYSBOOT> " (docs/design-boot-faithful.md §3.1). The announce is
- * deferred there to executive_announce(), after the prompt.
+ * executive_attach - THE boot-time executive guarantee (Rule 9 / INV-6). PID 1
+ * loads vms.ko, opens /dev/vms through the boot seam, CAPTURES the descriptor,
+ * and HALTS if it cannot: OVMX refuses to run without its executive. executive_fd
+ * (file-static) is then pinned for the life of the system and never closed here,
+ * so vms.ko cannot be rmmod'd out from under a running OVMX.
+ *
+ * The guarantee lives in executive_attach() ITSELF, not in a helper it delegates
+ * to: tests/integration/test_runtime_target.sh inspects the body of the function
+ * literally named executive_attach() for the capture, the terminal-halt failure
+ * branch, and the pin. (vms-46c had split the capture+halt into a separate
+ * executive_attach_silent() to serve the conversational boot path, which moved
+ * the guarantee out of the function the gate reads and reddened it; the announce
+ * is deferred here with executive_announce_deferred instead, keeping the whole
+ * guarantee -- and the %OVMX-I-EXEC line the gate's close-pin control mutates --
+ * inside executive_attach().)
+ *
+ * Idempotent. With executive_announce_deferred set the attach is SILENT (the
+ * conversational path prints the %OVMX-I-EXEC line later via executive_announce());
+ * otherwise it is emitted inline here.
  */
-static void executive_attach_silent(void)
+static void executive_attach(void)
 {
     if (executive_fd >= 0)
         return;                 /* already attached; idempotent by design */
@@ -419,22 +450,11 @@ static void executive_attach_silent(void)
          * facility (Rule 10). */
         ovmx_exec_halt("VMS executive device /dev/vms did not open", strerror(errno));
     }
-}
 
-/* Emit the %OVMX-I-EXEC line for an executive already attached (silently) by
- * executive_attach_silent(). The conversational path calls this after the
- * SYSBOOT> prompt returns; every other path gets it via executive_attach(). */
-static void executive_announce(void)
-{
+    if (executive_announce_deferred)
+        return;                 /* conversational path: %OVMX-I-EXEC deferred to
+                                 * executive_announce() after the SYSBOOT> prompt */
     printf("%%OVMX-I-EXEC, VMS executive attached on /dev/vms\n");
-}
-
-static void executive_attach(void)
-{
-    if (executive_fd >= 0)
-        return;                 /* already attached; idempotent by design */
-    executive_attach_silent();
-    executive_announce();
 }
 
 /*
@@ -651,13 +671,14 @@ static void bare_metal_init(void)
      * Files-11 (ODS-2) ACP -- the SAME genuine volume the flagless path mounts,
      * with NO /vms passthrough (that residual is exactly what vms-46c excises).
      * The ACP $MOUNT requires the executive, so it is attached HERE, before the
-     * prompt -- but SILENTLY (executive_attach_silent): §3.1 shows NOTHING
+     * prompt -- but SILENTLY (executive_announce_deferred): §3.1 shows NOTHING
      * precedes "SYSBOOT> ", not even %OVMX-I-EXEC. A disk that is absent or will
      * not ACP-mount is a fail-honest halt, exactly as on the flagless path --
      * OVMX finds its installed system disk or does not boot (design-init-scope.md
      * §1); it never legacy-mounts vmsfs or installs.
      */
-    executive_attach_silent();
+    executive_announce_deferred = 1;   /* attach silently; announce after SYSBOOT> */
+    executive_attach();
 
     if (!ovmx_boot_system_disk_present()) {
         char msg[128];
@@ -696,7 +717,7 @@ static void bare_metal_init(void)
     printf("%%OVMX-I-SYSDISK, mounting system disk DKA0:\n");
     printf("%%OVMX-I-MOUNTED, system disk DKA0: mounted\n");
 
-    /* vms.ko is loaded (executive_attach_silent() above); emit the taint mask
+    /* vms.ko is loaded (executive_attach() above, silent); emit the taint mask
      * readout, gated on the ovmx.taintreport boot flag (vms-566). */
     report_kernel_taint();
 

@@ -202,6 +202,16 @@ run_login_boot() {
           done
           return 1
       }
+      # waitpat_re <ERE> <seconds-limit> <since-byte> -- like waitpat but regex.
+      waitpat_re() {
+          local pat="$1" lim="$2" since="${3:-0}" w=0
+          while [ "$w" -lt "$lim" ]; do
+              tail -c "+$((since + 1))" "$RAW" 2>/dev/null | grep -qaE "$pat" && return 0
+              kill -0 "$QP" 2>/dev/null || return 1
+              sleep 1; w=$((w + 1))
+          done
+          return 1
+      }
       # 1. Wake LOGINOUT to the Username: prompt (CR every 2s, vms-3f6/vms-2213).
       W=0
       while kill -0 "$QP" 2>/dev/null; do
@@ -218,11 +228,17 @@ run_login_boot() {
           waitpat "Password:" 20 "$OFF" && send "$LOGIN_PASS"
           # 3. Login success == the real LOGINOUT banner (not a printf).
           waitpat "$BANNER" 30 "$OFF" && LOGIN_OK=1
-          # 4. Interactive DCL: run SHOW TIME, assert it executed (year in output).
+          # 4. Interactive DCL: run SHOW TIME, assert it executed by matching a
+          #    VMS date-time stamp (DD-MON-YYYY HH:MM:SS) in the output AFTER the
+          #    command (OFF2) -- proves a real DCL ran SHOW TIME.  We do NOT pin
+          #    the host year here: the AXPbox/qemu-alpha RTC runs on an epoch-1980
+          #    register so the guest clock reads ~20 years behind the host, and
+          #    pinning date +%Y would fail a correct login (the check is "DCL
+          #    executed the command", not "the emulated clock is correct").
           waitpat "\$" 20 "$OFF" || true          # settle at the DCL prompt
           OFF2=$(wc -c < "$RAW")
           send "SHOW TIME"
-          waitpat "$CURYEAR" 20 "$OFF2" && CMD_OK=1
+          waitpat_re "[0-9]+-[A-Z][A-Z][A-Z]-[0-9][0-9][0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9]" 20 "$OFF2" && CMD_OK=1
       fi
       exec 6>&-
       sleep 2

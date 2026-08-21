@@ -864,24 +864,37 @@ static void help_add_library(struct dcl_context *ctx,
     if (*count >= HELP_MAX_LIBS)
         return;
 
+    /*
+     * vms-4ac: keep a VMS filespec AS A VMS SPEC here -- do NOT translate it to
+     * a /vms Linux path. library_source_text() (dcl_help.c) reads it over the
+     * Files-11 ACP on the product runtime (falling back to a POSIX read of the
+     * /vms tree only where /dev/vms is absent -- host tooling / netbsd cross).
+     * The old dcl_resolve_path() translation produced a /vms path that no longer
+     * exists on the flip runtime, so HELP answered %HELP-E-OPENIN even though
+     * SYS$HELP:HELPLIB.HLP is mastered on the volume. The $OVMX_HELPLIB locator
+     * (linux_in) is already a Linux path and is kept as one.
+     */
     char resolved[1024];
-    if (linux_in) {
-        snprintf(resolved, sizeof(resolved), "%s", spec);
-    } else if (dcl_resolve_path(ctx, spec, resolved, sizeof(resolved)) != 0) {
-        return;
-    }
+    snprintf(resolved, sizeof(resolved), "%s", spec);
 
     for (int i = 0; i < *count; i++)
         if (strcmp(list[i], resolved) == 0)
             return; /* already present */
 
-    FILE *fp = fopen(resolved, "rb");
-    if (!fp)
-        return;
-    fclose(fp);
+    if (linux_in) {
+        /* Locator override: a Linux path -- confirm it opens before adding. */
+        FILE *fp = fopen(resolved, "rb");
+        if (!fp)
+            return;
+        fclose(fp);
+    }
+    /* A VMS spec is added unconditionally; help_open_libraries() skips any that
+     * cannot be read (ACP miss and POSIX-fallback miss both), and cmd_help
+     * reports the honest %HELP-E-OPENIN when NONE resolve. */
 
     snprintf(list[*count], 1024, "%s", resolved);
     (*count)++;
+    (void)ctx;
 }
 
 /* Give a VMS spec a default .HLB file type if it names no type (the last

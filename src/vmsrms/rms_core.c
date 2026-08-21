@@ -642,7 +642,7 @@ rms_file_t *rms_open_named_handle_kind_prot(const char *vms_spec, int want_write
             h = NULL;
             for (ci = 0; ci < ncand; ci++) {
                 struct rms_acp_spec *sp = &specs[ci];
-                uint32_t d_num = 0, d_seq = 0;
+                uint16_t d_num = 0, d_seq = 0;
                 uint8_t  d_rvn = 0, d_nmx = 0;
 
                 st = vms_kif_acp_assign(sp->devnam, &chan);

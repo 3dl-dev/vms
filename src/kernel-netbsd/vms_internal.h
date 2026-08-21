@@ -649,6 +649,8 @@ long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_readvb(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_acp_acpcontrol(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg);
 int  vms_acp_dassgn(struct vms_proc *proc, uint32_t chan);
 void vms_acp_release_all(struct vms_proc *proc);
 /*
@@ -659,14 +661,21 @@ void vms_acp_release_all(struct vms_proc *proc);
  * substrate has NOT ported the device table yet (no src/kernel-core/
  * vms_devtab.c in either Makefile's SRCS -- a separate, larger facility port,
  * not this rung); vmsfs_acp.c's $MOUNT path calls it, so the prototype is
- * declared here for the compile-coverage proof even though no definition is
- * built into this module yet. The call therefore remains an unresolved
- * symbol in the relocatable object -- the SAME "not-yet-ported NetBSD KPI"
- * shape every other undefined symbol in this build already carries; it is
- * NOT reached by any live path in this compile-only gate (Rule 9).
+ * declared here. vms-d5d DEFINES it -- a single-unit, device-native resolve --
+ * in vms_blockdev_netbsd.c (NOT the full vms_devtab.c enumeration, which stays
+ * unported per the conductor's YAGNI call), so vmsfs_acp.c's $MOUNT path now
+ * resolves + reads a REAL ODS-2 volume here: a LIVE path, not a compile-only
+ * stub.
  */
 uint32_t vms_devtab_disk_backing(const char *devnam,
                                  uint32_t *major_out, uint32_t *minor_out);
+
+/*
+ * Close every backing device vnode the ACP $MOUNT opened + cached
+ * (vms_blockdev_netbsd.c). Called at module detach (vms-d5d) -- see
+ * vms_netbsd.c's MODULE_CMD_FINI.
+ */
+void vms_blockdev_netbsd_release_all(void);
 
 /* ----------------------------------------------------------------
  * Cross-facility image-rundown release helpers. vms_ioctl_image_rundown()

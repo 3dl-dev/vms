@@ -98,7 +98,7 @@
  * vmsfs/ods2.h the netbsd-vax module build already consumes). Keeping the
  * include Linux-only left ODS2_FK_DATA undeclared on the VAX cross-build. */
 #include "vmsfs/ods2.h"     /* ODS2_FK_* file-kind selectors for IO$_CREATE    */
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
 #include "vms_kif.h"        /* vms-bc7: the Files-11 ODS-2 ACP over /dev/vms   */
 #endif
 
@@ -194,7 +194,7 @@ static int rms_resolve_version(const char *path, char *out, size_t outlen);
 static int rms_resolve_spec(const char *spec, const char *default_spec,
                             char *out, size_t outlen);
 
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
 /* ======================================================================
  * vms-bc7: Files-11 (ODS-2) ACP file lifecycle -- the product runtime.
  *
@@ -549,7 +549,7 @@ static int rms_acp_absent(void)
  */
 int rms_executive_absent(void)
 {
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     return rms_acp_absent();
 #else
     return 1;
@@ -590,7 +590,7 @@ rms_file_t *rms_open_named_handle_kind_prot(const char *vms_spec, int want_write
     if (!vms_spec || !*vms_spec)
         return NULL;
 
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     if (!rms_acp_absent()) {
         struct FAB fab;
         struct rms_acp_spec specs[RMS_ACP_MAX_CANDS];
@@ -734,7 +734,7 @@ void rms_close_named_handle(rms_file_t *h)
 {
     if (!h)
         return;
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     if (h->fd < 0) {              /* ACP handle: deaccess + dassgn + free */
         rms_acp_close_handle(h);
         return;
@@ -825,7 +825,7 @@ uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out)
         return RMS$_FAB;
     memset(out, 0, sizeof(*out));
 
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     /* ATOMIC-FLIP DEFER (vms-5f0): executive absent => legacy POSIX stat. */
     if (rms_acp_absent())
         return rms_posix_file_attr(vmsspec, out);
@@ -920,7 +920,7 @@ uint32_t rms_stage_over_acp(const char *vmsspec, const char *destpath)
 {
     if (!vmsspec || !destpath)
         return RMS$_FAB;
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     /* No ACP-mounted volume (no /dev/vms): defer honestly. There is DELIBERATELY
      * no /vms POSIX-copy fallback here -- INV-6 / Rule 9. */
     if (rms_acp_absent())
@@ -1593,7 +1593,7 @@ static uint32_t rms_impl_open(void *fab_ptr)
         return RMS$_FAB;
     }
 
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     /* --- Files-11 ODS-2 ACP path (vms-bc7): $ASSIGN + IO$_ACCESS --- */
     {
         struct rms_acp_spec specs[RMS_ACP_MAX_CANDS];
@@ -1832,7 +1832,7 @@ static uint32_t rms_impl_create(void *fab_ptr)
         return RMS$_FAB;
     }
 
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     /* --- Files-11 ODS-2 ACP path (vms-bc7): $ASSIGN + IO$_CREATE(+ACCESS) --- */
     {
         struct rms_acp_spec sp;
@@ -2131,7 +2131,7 @@ static uint32_t rms_impl_close(void *fab_ptr)
     uint32_t close_sts = RMS$_NORMAL;
     int deleting = (fab->fab$l_fop & FAB$M_DLT) || (fab->fab$l_fop & FAB$M_TMD);
 
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     if (fab->_rms_file && ((rms_file_t *)fab->_rms_file)->fd >= 0) {
         /* vms-5f0 legacy-defer handle: POSIX teardown (fd close + sidecar
          * unlink on DLT/TMD), identical to the netbsd-vax path below. */
@@ -2207,7 +2207,7 @@ static uint32_t rms_impl_erase(void *fab_ptr)
         return RMS$_FAB;
     }
 
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     /* --- ACP path (vms-bc7): $ASSIGN + IO$_DELETE (remove entry + dealloc) --- */
     {
         struct rms_acp_spec specs[RMS_ACP_MAX_CANDS];
@@ -2527,7 +2527,7 @@ static uint32_t rms_impl_extend(void *fab_ptr)
         return RMS$_IFI;
     }
 
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     /* $EXTEND -> IO$_MODIFY (vms-bc7): allocate fab$l_alq more blocks to the
      * file WITHOUT moving EOF -- a real ODS-2 allocation (BITMAP.SYS +
      * retrieval-pointer append), by FID on the accessed channel. A zero request

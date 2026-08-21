@@ -83,6 +83,9 @@ if(VMSRMS_STANDALONE)
 else()
     target_link_libraries(vmsrms PUBLIC vms vmsfs vmslnm)
 
+    # vms-d5d: RMS reaches SYS$DISK via the executive ACP (vms_kif_acp_*) on every runtime substrate; the standalone unit build (no OVMX_HAVE_ACP) keeps the POSIX arm.
+    target_compile_definitions(vmsrms PRIVATE OVMX_HAVE_ACP)
+
     # vms-bc7: rms_io.c / rms_core.c reach the Files-11 ODS-2 ACP through the
     # libvmssys /dev/vms wrappers (vms_kif_acp_*). vms_kif.h lives in libvmssys
     # and pulls ../kernel/vms_ioctl.h -> vms_acp.h. Header-only compile dep --

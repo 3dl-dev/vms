@@ -80,6 +80,12 @@ else()
     )
 endif()
 
+# vms-d5d: the boot code reaches SYS$DISK via the executive ACP (vms_kif_acp_*)
+# on every runtime substrate. ovmx_init has no standalone/unit build (only a
+# substrate split), so the capability macro is defined unconditionally on the
+# runtime target -- both the Linux and the NetBSD-vax backends ride the ACP arm.
+target_compile_definitions(ovmx_init PRIVATE OVMX_HAVE_ACP)
+
 if(OVMX_IMGACT)
     # Static PID-1 bootstrap: link the static twins, not the shareable images.
     target_link_libraries(ovmx_init PRIVATE vmsprocess_static vmsfs_static vmslnm_static vmssys pthread)

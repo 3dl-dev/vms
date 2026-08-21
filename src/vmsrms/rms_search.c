@@ -75,14 +75,14 @@ static uint32_t rms_posix_search(void *fab_ptr);
 static int      rms_posix_search_fid(void *nam_ptr, uint16_t *num, uint16_t *seq,
                                      uint8_t *rvn, uint8_t *nmx);
 static void     rms_posix_search_end(void *nam_ptr);
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
 static uint32_t rms_acp_search(void *fab_ptr);
 static int      rms_acp_search_fid(void *nam_ptr, uint16_t *num, uint16_t *seq,
                                    uint8_t *rvn, uint8_t *nmx);
 static void     rms_acp_search_end(void *nam_ptr);
 #endif
 
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
 
 #include "vms_kif.h"     /* Files-11 ODS-2 ACP over /dev/vms (vms_kif_acp_*) */
 #include "ssdef.h"
@@ -629,7 +629,7 @@ static void rms_posix_search_end(void *nam_ptr)
 static uint32_t rms_impl_search(void *fab_ptr)
 {
     struct FAB *fab = (struct FAB *)fab_ptr;
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     if (fab && fab->fab$b_bid == FAB$C_BID) {
         struct NAM *nam = fab->fab$l_nam;
         if (nam && nam->nam$b_bid == NAM$C_BID && nam->nam$$l_context) {
@@ -660,7 +660,7 @@ static uint32_t rms_impl_search(void *fab_ptr)
 int rms_search_fid(void *nam_ptr, uint16_t *num, uint16_t *seq,
                    uint8_t *rvn, uint8_t *nmx)
 {
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     struct NAM *nam = (struct NAM *)nam_ptr;
     if (nam && nam->nam$b_bid == NAM$C_BID && nam->nam$$l_context &&
         ((struct search_ctx_hdr *)nam->nam$$l_context)->is_posix == 0)
@@ -671,7 +671,7 @@ int rms_search_fid(void *nam_ptr, uint16_t *num, uint16_t *seq,
 
 void rms_search_end(void *nam_ptr)
 {
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     struct NAM *nam = (struct NAM *)nam_ptr;
     if (nam && nam->nam$b_bid == NAM$C_BID && nam->nam$$l_context &&
         ((struct search_ctx_hdr *)nam->nam$$l_context)->is_posix == 0) {

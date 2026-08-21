@@ -519,13 +519,25 @@ const char *ovmx_boot_system_disk_unit(void)
     return "DKA0:";
 }
 
-/* NetBSD keeps the vmsfs VFS mount for SYS$DISK (the VAX runtime re-target,
- * vms-d5d, is driven separately); the Files-11 ACP $MOUNT flip (vms-5f0) is the
- * Linux path only for now. ovmx_init.c calls this only under __linux__, so this
- * is a never-reached seam completion -- fail-honest rather than fake a mount. */
+#if defined(OVMX_HAVE_ACP)
+#include "vms_kif.h"   /* vms_kif_acp_mount: $MOUNT over the executive ACP */
+#endif
+
+/* vms-d5d: $MOUNT SYS$DISK over the executive Files-11 ODS-2 ACP -- the VAX
+ * runtime re-target of the vms-5f0 flip. Mirrors ovmx_boot_linux.c's twin:
+ * vms_kif_acp_mount() the boot unit; an odd VMS status is success. On a non-ACP
+ * build there is no executive to mount against, so fail-honest (and never
+ * reached -- ovmx_init only takes the ACP mount when OVMX_HAVE_ACP). */
 int ovmx_boot_acp_mount_system_disk(void)
 {
+#if defined(OVMX_HAVE_ACP)
+    uint32_t st = vms_kif_acp_mount(ovmx_boot_system_disk_unit());
+    if (st & 1)          /* odd VMS status == success */
+        return 0;
     return -1;
+#else
+    return -1;
+#endif
 }
 
 /* The flagless boot path's whole system-disk mount, NetBSD side (vms-5f0):
@@ -539,11 +551,17 @@ int ovmx_boot_acp_mount_system_disk(void)
  * narrates a kernel module load (vms-1fb facility audit). */
 int ovmx_boot_mount_system_disk_native(void)
 {
+#if defined(OVMX_HAVE_ACP)
+    /* vms-d5d FLIP: mount SYS$DISK over the executive ACP (same as Linux) -- no
+     * vmsfs.ko, no VFS mount; the /vms + POSIX bypass is retired on VAX. */
+    return ovmx_boot_acp_mount_system_disk();
+#else
     if (ovmx_boot_load_module("vmsfs") != 0 && errno != EEXIST) {
         fprintf(stderr, "%%OVMX-W-MODFAIL, failed to load vmsfs.ko: %s\n",
                 strerror(errno));
     }
     return ovmx_boot_mount_system_disk(SYSDISK_MOUNT);
+#endif
 }
 
 void ovmx_boot_power_off(void)

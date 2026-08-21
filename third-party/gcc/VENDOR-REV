@@ -39,6 +39,21 @@ fixtures (gcc/testsuite/ alone is 469M — never a build dependency of
 
 PRUNED from the stock 14.2.0 release tree (largest first):
   - gcc/testsuite/            469M  DejaGNU test fixtures, not a build dep
+                                     for `make all-gcc` -- EXCEPT
+                                     gcc/testsuite/selftests/ (104K, 26
+                                     files), ADDED 2026-08-21/vms-796: GCC's
+                                     own build runs its freshly-built
+                                     cc1/cc1plus with `-fself-test=$(srcdir)/
+                                     testsuite/selftests` as an in-build
+                                     self-check (gcc/Makefile.in's
+                                     SELFTEST_DEPS / s-selftest-c rule).
+                                     Confirmed empirically: build failed
+                                     with "No rule to make target
+                                     .../testsuite/selftests, needed by
+                                     s-selftest-c" without it. The other
+                                     469M of testsuite/ (DejaGNU .exp/.dg
+                                     fixtures) is NOT referenced by this
+                                     rule and stays pruned.
   - libstdc++-v3/             117M  target C++ runtime — THIS IS THE NAMED F2
                                      WALL ITSELF (see report); intentionally
                                      NOT vendored here since this bead's job

@@ -61,6 +61,16 @@ typedef struct rms_file {
      * bare fd the handle now owns in place of the retired FAB._linux_fd. Unused
      * by the ACP backend. */
     int      fd;
+    /* ACP read-ahead buffer (vms-4ac). Sequential text records are read
+     * BYTE-BY-BYTE (rms_seq.c STMLF scan), which without buffering was one
+     * IO$_READVBLK per byte -- ~69000 QIOs to read a 69 KB HELP library, slow
+     * enough to blow a 10s command timeout. rms_io_read_acp serves small reads
+     * from one cached block, refilling with a single QIO per 512 bytes.
+     * rbuf_len == 0 means "empty/invalid"; any write on the handle invalidates
+     * it. Not used by the POSIX backend. */
+    uint64_t rbuf_base;   /* file byte offset of rbuf[0] */
+    uint32_t rbuf_len;    /* valid bytes in rbuf (0 == invalid) */
+    uint8_t  rbuf[512];
 } rms_file_t;
 
 /*

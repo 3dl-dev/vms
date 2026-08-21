@@ -1109,16 +1109,14 @@ char *help_acp_library_text(const char *vms_spec)
 {
     struct dcl_context *ctx = dcl_get_context();
     uint32_t st = 0;
-    fprintf(stderr, "DBGH open '%s'\n", vms_spec); fflush(stderr);
     struct dcl_rms_reader *r = dcl_rms_read_open(ctx, vms_spec, &st);
-    if (!r) { fprintf(stderr, "DBGH open FAIL st=%u\n", (unsigned)st); fflush(stderr); return NULL; }
-    fprintf(stderr, "DBGH opened '%s'\n", vms_spec); fflush(stderr);
+    if (!r)
+        return NULL;
 
     char *text = NULL;
     size_t len = 0, cap = 0;
     char rec[4096];
     int eof = 0, n;
-    unsigned long recs = 0;
 
     /* Non-NULL "" for a readable-but-empty library. */
     { char *nb = malloc(1); if (!nb) { dcl_rms_read_close(r); return NULL; }
@@ -1137,10 +1135,7 @@ char *help_acp_library_text(const char *vms_spec)
         text[len++] = '\n';
         text[len] = '\0';
         if (eof) break;
-        if ((++recs % 200UL) == 0) { fprintf(stderr, "DBGH recs=%lu len=%zu\n", recs, len); fflush(stderr); }
-        if (recs > 500000UL) { fprintf(stderr, "DBGH CAP hit recs=%lu len=%zu -- breaking\n", recs, len); fflush(stderr); break; }
     }
-    fprintf(stderr, "DBGH done '%s' recs=%lu len=%zu eof=%d\n", vms_spec, recs, len, eof); fflush(stderr);
     dcl_rms_read_close(r);
     return text;
 }

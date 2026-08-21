@@ -1956,16 +1956,73 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
      * casing needed there. Most images (TCC.EXE, DECC$SHR, every pure musl+
      * libgcc image) carry no SHT_INIT_ARRAY input section at all, so
      * has_init_array is 0 and this region is simply empty (initarr_beg ==
-     * initarr_end): the correct, unaffected case. */
+     * initarr_end): the correct, unaffected case.
+     *
+     * ORDERING (vms-0962): the input SHT_INIT_ARRAY sections MUST be laid down
+     * in GNU-ld order, not object-encounter order. gcc emits a priority-tagged
+     * constructor into its own section `.init_array.NNNNN` (NNNNN = the numeric
+     * init_priority, zero-padded); untagged (default-priority) ctors land in
+     * plain `.init_array`. GNU ld's default script places
+     *   KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*)))   -- numbered, ASCENDING
+     *   KEEP(*(.init_array))                             -- plain, AFTER those
+     * Because .init_array entries execute front-to-back at activation, a lower
+     * NNNNN (higher priority) must be placed EARLIER so it runs EARLIER. libstdc++
+     * has hundreds of priority-ordered ctors (std::ios_base::Init, locale facets,
+     * ...); concatenated in object order a later-priority ctor can run before the
+     * earlier-priority ctor that establishes the state it reads -> garbage ptr ->
+     * SIGSEGV in static init. Sort a flat (obj,sec) index list by the parsed
+     * priority (plain = sentinel MAX, so it sorts last), ties broken by encounter
+     * order (stable, matching ld's input order), then assign sec_va in that order.
+     * The copy + ABS64 reloc-apply loops below are keyed on sec_va, so they follow
+     * this ordering with no further change. */
     uint64_t initarr_beg = cur;
-    for (int i = 0; i < nobj; i++)
-        for (int s = 0; s < objs[i].nsh; s++)
-            if (objs[i].sec_bucket[s] == B_INIT_ARRAY && objs[i].sh[s].sh_size) {
-                uint64_t al = objs[i].sh[s].sh_addralign ? objs[i].sh[s].sh_addralign : 8;
-                cur = ALIGN_UP(cur, al);
-                objs[i].sec_va[s] = cur;
-                cur += objs[i].sh[s].sh_size;
+    if (has_init_array) {
+        /* Flat list of every non-empty B_INIT_ARRAY input section. */
+        int nia_cap = 0;
+        for (int i = 0; i < nobj; i++)
+            for (int s = 0; s < objs[i].nsh; s++)
+                if (objs[i].sec_bucket[s] == B_INIT_ARRAY && objs[i].sh[s].sh_size)
+                    nia_cap++;
+        struct ia_ent { int i, s; uint64_t prio; int order; } *ia =
+            nia_cap ? malloc((size_t)nia_cap * sizeof *ia) : NULL;
+        int nia = 0;
+        for (int i = 0; i < nobj; i++)
+            for (int s = 0; s < objs[i].nsh; s++)
+                if (objs[i].sec_bucket[s] == B_INIT_ARRAY && objs[i].sh[s].sh_size) {
+                    const char *nm = objs[i].shstr + objs[i].sh[s].sh_name;
+                    /* `.init_array.NNNNN` -> prio = NNNNN (ascending). Plain
+                     * `.init_array` (no numeric suffix) -> sentinel MAX = last. */
+                    uint64_t prio = UINT64_MAX;
+                    const char *pfx = ".init_array.";
+                    size_t pl = strlen(pfx);
+                    if (strncmp(nm, pfx, pl) == 0 && nm[pl] >= '0' && nm[pl] <= '9')
+                        prio = strtoull(nm + pl, NULL, 10);
+                    ia[nia].i = i; ia[nia].s = s; ia[nia].prio = prio;
+                    ia[nia].order = nia;
+                    nia++;
+                }
+        /* Stable ascending sort by (prio, encounter order). Section counts are
+         * modest (hundreds); an in-place insertion sort is clearer than qsort_r
+         * and preserves ld's stable input-order tiebreak trivially. */
+        for (int a = 1; a < nia; a++) {
+            struct ia_ent key = ia[a];
+            int b = a - 1;
+            while (b >= 0 && (ia[b].prio > key.prio ||
+                             (ia[b].prio == key.prio && ia[b].order > key.order))) {
+                ia[b + 1] = ia[b];
+                b--;
             }
+            ia[b + 1] = key;
+        }
+        for (int k = 0; k < nia; k++) {
+            int i = ia[k].i, s = ia[k].s;
+            uint64_t al = objs[i].sh[s].sh_addralign ? objs[i].sh[s].sh_addralign : 8;
+            cur = ALIGN_UP(cur, al);
+            objs[i].sec_va[s] = cur;
+            cur += objs[i].sh[s].sh_size;
+        }
+        free(ia);
+    }
     uint64_t initarr_end = cur;
 
     /* .tdata (TLS init image, file-backed). PT_TLS references it; a reserved

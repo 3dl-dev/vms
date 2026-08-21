@@ -475,6 +475,12 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
              /system-stage/vms/SYS0/SYSCOMMON/SYSHLP \
              /system-stage/vms/SYS0/SYSCOMMON/SYSUPD \
              "/system-stage/vms/SYS0/SYSCOMMON/SYS\$STARTUP" \
+             /system-stage/vms/SYS0/SYSEXE \
+             /system-stage/vms/SYS0/SYSLIB \
+             /system-stage/vms/SYS0/SYSMGR \
+             /system-stage/vms/SYS0/SYSHLP \
+             /system-stage/vms/SYS0/SYSUPD \
+             "/system-stage/vms/SYS0/SYS\$STARTUP" \
              /system-stage/vms/USERS \
              /system-stage/vms/SYSTMP && \
     # OVMX binaries → SYSEXE (STARTUP.EXE is also /init).

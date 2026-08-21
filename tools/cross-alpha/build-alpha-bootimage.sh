@@ -53,15 +53,28 @@ WORK="${WORK:-/tmp/ovmx-alpha-boot}"
 echo "== build cross/emulation image ($IMG) =="
 docker build -t "$IMG" "$HERE" >/dev/null
 
+# FORCE_BUILD=1 must force a FULL rebuild (kernel modules + userland), not just
+# the boot-artifact re-assembly: run-boot-alpha.sh's ensure_artifacts checks
+# FORCE_BUILD only for the disk/kernel-bake step, but the vms.ko and userland
+# cross-builds below are otherwise guarded solely by "is the cached output
+# present". A stale cache (e.g. a userland built from an earlier checkout) would
+# then be silently reused under FORCE_BUILD=1, booting old binaries on a fresh
+# disk and giving a false "green on this tree" (caught once: a V0.4-6 login
+# banner on a V0.5 tree). So OR FORCE_BUILD into both guards below -- the caches
+# are root-owned (built by the in-container docker user), so we cannot rm them
+# host-side; instead we re-enter the build, whose cmake/make run as root in the
+# container and overwrite the root-owned outputs from THIS tree.
+_force="${FORCE_BUILD:-0}"
+
 # ---- 0. prerequisites: executive modules + kernel tree ----
-if [ ! -f "$VMSKO_WORK/vms.ko" ] || [ ! -f "$VMSKO_WORK/vmsfs.ko" ] || [ ! -d "$VMSKO_WORK/linux-$KV" ]; then
-    echo "== executive modules/kernel not cached -- running build-vmsko-alpha.sh =="
-    WORK="$VMSKO_WORK" KV="$KV" "$HERE/build-vmsko-alpha.sh"
+if [ "$_force" = "1" ] || [ ! -f "$VMSKO_WORK/vms.ko" ] || [ ! -f "$VMSKO_WORK/vmsfs.ko" ] || [ ! -d "$VMSKO_WORK/linux-$KV" ]; then
+    echo "== executive modules/kernel not cached (or FORCE_BUILD) -- running build-vmsko-alpha.sh =="
+    FORCE_BUILD="$_force" WORK="$VMSKO_WORK" KV="$KV" "$HERE/build-vmsko-alpha.sh"
 fi
 
 # ---- 1. Alpha userland (STARTUP/PROVISION/JOB_CONTROL/LOGINOUT/DCL + RTL) ----
-if [ ! -x "$USERLAND/bin/STARTUP.EXE" ]; then
-    echo "== Alpha userland not cached -- cross-building (static, tools ON) =="
+if [ "$_force" = "1" ] || [ ! -x "$USERLAND/bin/STARTUP.EXE" ]; then
+    echo "== Alpha userland not cached (or FORCE_BUILD) -- cross-building (static, tools ON) =="
     mkdir -p "$USERLAND"
     docker run --rm -v "$REPO":/src:ro -v "$USERLAND":/b "$IMG" bash -euo pipefail -c '
         cmake -S /src -B /b \

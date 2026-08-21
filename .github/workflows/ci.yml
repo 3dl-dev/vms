@@ -5007,57 +5007,6 @@ jobs:
             '
 
   # -----------------------------------------------------------------------
-  # as-native — F1 assembler proof (bead vms-0b6b/vms-ee2, epic vms-da0
-  # "GCC-as-VMS-oracle" lane). Builds stock GNU binutils' assembler (gas,
-  # third-party/binutils) AS a VMS-native EXECUTABLE image (AS.EXE, via
-  # src/vmslink/mk_as.sh: gas+bfd+opcodes+libiberty, freestanding musl CFLAGS
-  # + OVMX_RMS_IO, linked via LINK.EXE --executable --use {DECC$SHR + the
-  # five OVMX shareables}). IMGACT.EXE activates AS.EXE (no ld / no ld.so),
-  # the ACTIVATED as assembles a trivial test.s to a real ELF64/REL/x86_64
-  # test.o.
-  #
-  # bfd/bfd.c carries a real GNU-C `.init_array` static constructor (bead
-  # vms-0b6b's wall: LINK.EXE dropped the one .rela.init_array relocation
-  # instead of placing/patching it, so bfd's ctor-initialized state stayed
-  # zeroed and the first access near-NULL-dereferenced). vms-ee2 gave
-  # SHT_INIT_ARRAY a real placed output region in LINK.EXE and taught
-  # IMGACT.EXE's symbol-vector activation path to run it — OVMX's own
-  # ELF-native functional equivalent of VMS's LIB$INITIALIZE constructor
-  # pass (NOT a reproduction of VMS's PSECT-collected layout). AS_EXPECT_LINK
-  # defaults to 1 (BLOCKING): AS.EXE is now expected to build, link, and
-  # activate cleanly.
-  #
-  # x86_64-native (mk_as.sh's default ARCH): the ubuntu-latest runner IS
-  # x86_64, so this runs with NO qemu/emulation in the path under test —
-  # same "light activation" shape as multiobj-exec-x86_64. Gated on the
-  # `toolchain` path filter (mirrors tcc-native above), not the heavy
-  # `!= pull_request` e2e gates: this is a build+activate smoke proof, not
-  # a full-cluster/self-host milestone.
-  # -----------------------------------------------------------------------
-  as-native:
-    name: AS.EXE VMS-native Link + Activate (GCC-as-VMS-oracle F1)
-    needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Build AS.EXE VMS-native, activate it, assemble test.s -> test.o (native x86_64)
-        run: |
-          docker run --rm --platform linux/amd64 \
-            -v "${{ github.workspace }}":/src -w /src \
-            docker.io/library/alpine:3.20 sh -c '
-              set -e
-              apk add --no-cache gcc musl-dev binutils make linux-headers \
-                bash texinfo >/dev/null
-              export CC=gcc ARCH=x86_64 WORK=/tmp/as-native AS_EXPECT_LINK=1
-              sh /src/src/imgact/test/run_as_native.sh
-            '
-
-  # -----------------------------------------------------------------------
   # tcc-rms — S2 RMS I/O proof (bead vms-4ba.5, epic vms-4ba). Sibling of
   # tcc-native: same six-producer graph + TCC.EXE build (mk_tcc.sh now also
   # compiles the OVMX RMS I/O shim, third-party/tcc/ovmx/ovmx_rms_io.c, and

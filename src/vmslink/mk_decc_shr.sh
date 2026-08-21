@@ -394,7 +394,29 @@ posix_spawn=PROCEDURE,posix_spawnp=PROCEDURE,\
 posix_spawn_file_actions_init=PROCEDURE,posix_spawn_file_actions_destroy=PROCEDURE,\
 posix_spawn_file_actions_addclose=PROCEDURE,posix_spawn_file_actions_adddup2=PROCEDURE,\
 posix_spawnattr_init=PROCEDURE,posix_spawnattr_destroy=PROCEDURE,\
-posix_spawnattr_setflags=PROCEDURE"
+posix_spawnattr_setflags=PROCEDURE,\
+\
+__ctype_get_mb_cur_max=PROCEDURE,__cxa_atexit=PROCEDURE,__stack_chk_fail=PROCEDURE,\
+__tls_get_addr=PROCEDURE,\
+btowc=PROCEDURE,dirfd=PROCEDURE,dl_iterate_phdr=PROCEDURE,fchmod=PROCEDURE,\
+fchmodat=PROCEDURE,fdopendir=PROCEDURE,fegetround=PROCEDURE,fesetround=PROCEDURE,\
+freelocale=PROCEDURE,frexpl=PROCEDURE,get_nprocs=PROCEDURE,getentropy=PROCEDURE,\
+getwc=PROCEDURE,isalpha=PROCEDURE,isblank=PROCEDURE,islower=PROCEDURE,isprint=PROCEDURE,\
+isspace=PROCEDURE,isupper=PROCEDURE,iswctype=PROCEDURE,link=PROCEDURE,\
+mbrtowc=PROCEDURE,newlocale=PROCEDURE,nl_langinfo=PROCEDURE,openat=PROCEDURE,\
+pathconf=PROCEDURE,poll=PROCEDURE,pthread_cond_signal=PROCEDURE,\
+pthread_getspecific=PROCEDURE,pthread_key_create=PROCEDURE,pthread_key_delete=PROCEDURE,\
+pthread_rwlock_rdlock=PROCEDURE,pthread_rwlock_unlock=PROCEDURE,\
+pthread_rwlock_wrlock=PROCEDURE,pthread_setspecific=PROCEDURE,\
+putwc=PROCEDURE,sched_yield=PROCEDURE,secure_getenv=PROCEDURE,sendfile=PROCEDURE,\
+sigfillset=PROCEDURE,strcoll=PROCEDURE,strerror_r=PROCEDURE,strspn=PROCEDURE,\
+strxfrm=PROCEDURE,symlink=PROCEDURE,towlower=PROCEDURE,towupper=PROCEDURE,\
+truncate=PROCEDURE,ungetwc=PROCEDURE,unlinkat=PROCEDURE,uselocale=PROCEDURE,\
+utimensat=PROCEDURE,\
+wcrtomb=PROCEDURE,wcscoll=PROCEDURE,wcsftime=PROCEDURE,wcslen=PROCEDURE,\
+wcsxfrm=PROCEDURE,wctob=PROCEDURE,wctype=PROCEDURE,wmemchr=PROCEDURE,\
+wmemcmp=PROCEDURE,wmemcpy=PROCEDURE,wmemmove=PROCEDURE,wmemset=PROCEDURE,\
+writev=PROCEDURE"
 
 # getpagesize APPENDED for vms-ee2 (append-only -> prior consumers' vector
 # indices unchanged, GSMATCH LEQUAL-compatible). AS.EXE's bfd/bfd.c carries a
@@ -521,6 +543,85 @@ posix_spawnattr_setflags=PROCEDURE"
 # STRICT (no --allow-undefined) libvms/vmsrms/DCL/tcc links fail if it is
 # false. --allow-undefined is NOT the fix; it records the symbol as a deferred
 # import and hides the breakage.
+#
+# 69 PROCEDURE universals APPENDED for vms-ad70 (epic vms-da0 F2b, the DECC$SHR
+# export delta that follows vms-4baf's triage of CPPTEST.EXE's 949 deferred
+# externals): CPPTEST.EXE (mk_cpptest_ovmx.sh) links cpptest.o whole-archived
+# against the host g++ toolchain's own libstdc++.a/libsupc++.a/libgcc.a/
+# libgcc_eh.a. Enumerated empirically, same method as the vms-d697/vms-b65.6
+# blocks above: `nm` those four archives + cpptest.o for undefined symbols,
+# subtract everything the C++-ABI/libstdc++ whole-archive set itself DEFINES
+# (9949 intra-image defs — every __cxa_*/__gxx_personality*/operator-new
+# C++-runtime symbol resolves from the whole-archived C++ libs, confirmed by
+# vms-4baf's triage; this bead is NOT about the C++ ABI), leaving exactly 167
+# genuinely-undefined names with no definition anywhere in the link's inputs.
+# 96 of the 167 were already exported (getpagesize/setlocale/isalnum/etc.,
+# earlier batches); this comm() left 71. Two of those 71 are NOT musl library
+# calls and are explicitly NOT added below: `_GLOBAL_OFFSET_TABLE_` (a
+# per-object linker-synthesized symbol — every ELF object gets its OWN GOT
+# and its own local `_GLOBAL_OFFSET_TABLE_`; no libc or shareable image can
+# "export" it as a shared universal, and `nm` confirms neither musl's libc.a
+# nor libgcc.a defines it anywhere) and `__dso_handle` (also absent from both
+# archives — normally synthesized per-image by crt1.o/Scrt1.o or crtbegin.o,
+# neither of which is on CPPTEST.EXE's LINK.EXE line the way OVMX activates
+# images). Both are LINK.EXE/IMGACT.EXE per-image-synthesis gaps, not a
+# DECC$SHR export gap — link.c/imgact.c are out of this bead's file-domain
+# (see the header comment on mk_cpptest_ovmx.sh), so they are reported here,
+# NOT patched: a LINK.EXE follow-up (synthesize a local `_GLOBAL_OFFSET_TABLE_`
+# per producer image; decide what defines `__dso_handle` for an
+# IMGACT.EXE-activated main image) is the next-wall item, filed separately.
+# The remaining 69 are confirmed (via `nm -A --defined-only` against the same
+# arm64/x86_64 musl libc.a + libgcc.a this recipe whole-archives) to be real
+# T/W/B-defined musl symbols — DECC$SHR is the right producer for all of them,
+# same as every prior batch.
+#
+# CROSS-ARCH NOTE (this recipe is arch-neutral — see the header comment — so
+# whatever libc.a/libgcc.a $3/$4 point at decides the producer architecture;
+# x86_64/aarch64 point at musl and are fine). VAX uses NetBSD's libc, not
+# musl, and no arch-conditional mechanism exists in this script to gate
+# individual vector entries per architecture (VAX does not currently build
+# through this recipe at all — see docs/design-vax-mainstream-release.md).
+# Per-symbol cross-arch classification for the conductor's VAX gate leg
+# (x86_64 is the proving arch; NOT a blocker here):
+#   Standard POSIX/ISO-C (safe cross-arch — present in NetBSD's libc under
+#   the same name and signature): btowc, dirfd, fchmod, fchmodat, fdopendir,
+#   fegetround, fesetround, freelocale, frexpl, isalpha, isblank, islower,
+#   isprint, isspace, isupper, iswctype, link, mbrtowc, newlocale,
+#   nl_langinfo, openat, pathconf, poll, pthread_cond_signal,
+#   pthread_getspecific, pthread_key_create, pthread_key_delete,
+#   pthread_rwlock_rdlock, pthread_rwlock_unlock, pthread_rwlock_wrlock,
+#   pthread_setspecific, putwc, sched_yield, sigfillset, strcoll,
+#   strerror_r, strspn, strxfrm, symlink, towlower, towupper, truncate,
+#   ungetwc, unlinkat, uselocale, utimensat, wcrtomb, wcscoll, wcsftime,
+#   wcslen, wcsxfrm, wctob, wctype, wmemchr, wmemcmp, wmemcpy, wmemmove,
+#   wmemset, writev.
+#   Linux/GNU/musl-specific or internal-ABI (VAX-QUESTIONABLE — not verified
+#   against NetBSD's libc, likely absent, differently-named, or ABI-mismatched):
+#     - __ctype_get_mb_cur_max: a glibc/musl-internal name backing the
+#       MB_CUR_MAX macro; BSD libcs typically implement MB_CUR_MAX without
+#       this exact exported symbol.
+#     - __cxa_atexit: Itanium C++ ABI runtime hook, not POSIX; present on
+#       most ELF platforms with C++ support but not confirmed for NetBSD/VAX.
+#     - __stack_chk_fail: usually present (stack-protector support), but may
+#       live in a different library (e.g. libssp) than libc on some BSDs.
+#     - __tls_get_addr: the ELF general-dynamic TLS resolver; VAX's TLS
+#       model/object-format history differs enough from modern ELF TLS that
+#       this needs explicit verification, not an assumption.
+#     - dl_iterate_phdr: ELF dynamic-loader introspection extension; behavior
+#       (or presence) depends on the dynamic linker in use, not guaranteed
+#       for a NetBSD-vax build.
+#     - get_nprocs: a GNU/glibc+musl extension (sys/sysinfo.h) with no NetBSD
+#       equivalent — NetBSD gets CPU count via sysconf(_SC_NPROCESSORS_ONLN)
+#       or sysctl(HW_NCPU) instead.
+#     - getentropy: BSD-origin, later adopted by glibc/musl; NetBSD has
+#       carried it since ~7.0, but not verified against OVMX's target vintage.
+#     - secure_getenv: a GNU/glibc extension with no NetBSD equivalent under
+#       this name.
+#     - sendfile: Linux sendfile(2) semantics/argument order differ from
+#       NetBSD's sendfile(2) (a genuine ABI/signature mismatch, not just a
+#       presence question).
+# All appended at the END -> prior consumers' vector indices unchanged
+# (GSMATCH LEQUAL-compatible).
 echo "mk_decc_shr: LINK.EXE=$LINK_EXE"
 echo "mk_decc_shr: libc.a=$LIBC  libgcc.a=$LIBGCC  GSMATCH=$GSMATCH"
 

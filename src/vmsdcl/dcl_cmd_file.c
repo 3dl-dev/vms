@@ -28,6 +28,8 @@
 #include "vmsfs/filespec.h"
 #include "vmsfs/version.h"
 #include "vmsfs/device.h"        /* vms-b3e: vmsfs_device_spec_kernel_mounted */
+#include "vmsfs/ods2.h"          /* vms-f05: ODS2_FH2_M_DIRECTORY (CREATE/DIRECTORY over ACP) */
+#include "vms_kif.h"             /* vms-f05: vms_kif_acp_* for CREATE/DIRECTORY over the ACP */
 #include "vmsqueue.h"
 
 /* Directory entry for sorting in DIRECTORY command */
@@ -2485,6 +2487,107 @@ int cmd_rename(struct dcl_command *cmd)
 }
 
 /*
+ * dcl_mkdir_acp - CREATE/DIRECTORY over the executive Files-11 ACP (vms-f05).
+ *
+ * Parse a resolved VMS spec "DEV:[A.B.C]" and create each NAME.DIR component
+ * under its parent over the ACP (IO$_CREATE with the FH2 directory bit), the
+ * same primitive PRODUCT INSTALL's tree creation uses (product.c
+ * pd_acp_mkdir_tree). Components that already exist are stepped over (their FID
+ * becomes the next parent DID); a genuinely-new leaf is created. Returns a VMS
+ * status: SS$_NORMAL on success, SS$_DUPLNAM if the target already exists (the
+ * ACP's honest duplicate-name answer), else the ACP's fail-honest status. Only
+ * called with the executive present (INV-6); no POSIX fallback here.
+ */
+static uint32_t dcl_mkdir_acp(const char *vspec)
+{
+    char dev[128] = "", dirtree[512] = "";
+    const char *colon = strchr(vspec, ':');
+    const char *lb    = strchr(vspec, '[');
+    const char *rb    = lb ? strchr(lb, ']') : NULL;
+
+    if (colon) {
+        size_t n = (size_t)(colon - vspec) + 1;   /* keep the ':' */
+        if (n > 0 && n < sizeof(dev)) { memcpy(dev, vspec, n); dev[n] = '\0'; }
+    }
+    if (lb && rb && rb > lb + 1) {
+        size_t n = (size_t)(rb - lb - 1);
+        if (n < sizeof(dirtree)) { memcpy(dirtree, lb + 1, n); dirtree[n] = '\0'; }
+    }
+    /* A rooted "[SYS0.]" or trailing dot leaves nothing to create. */
+    { size_t dl = strlen(dirtree); while (dl && dirtree[dl - 1] == '.') dirtree[--dl] = '\0'; }
+    if (!dev[0] || !dirtree[0])
+        return RMS$_SYN;
+
+    uint32_t chan = 0;
+    uint32_t st = vms_kif_acp_assign(dev, &chan);
+    if (!$VMS_STATUS_SUCCESS(st))
+        return st;
+
+    uint16_t pdn = 0, pds = 0;                  /* parent DID: start at the MFD */
+    uint8_t  pdr = 0, pdx = 0;
+    int created_leaf = 0;
+
+    char work[512];
+    snprintf(work, sizeof(work), "%s", dirtree);
+    char *save = NULL, *tok;
+    for (tok = strtok_r(work, ".", &save); tok; tok = strtok_r(NULL, ".", &save)) {
+        if (!tok[0]) continue;
+
+        char nm[VMS_ACP_NAME_SIZE];
+        size_t tl = strlen(tok);
+        if (tl > VMS_ACP_NAME_SIZE - 5) tl = VMS_ACP_NAME_SIZE - 5;
+        for (size_t i = 0; i < tl; i++) {
+            char c = tok[i];
+            if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+            nm[i] = c;
+        }
+        nm[tl] = '\0';
+        strncat(nm, ".DIR", sizeof(nm) - strlen(nm) - 1);
+
+        struct vms_acp_access_args a;
+        memset(&a, 0, sizeof(a));
+        a.chan = chan;
+        a.did_num = pdn; a.did_seq = pds; a.did_rvn = pdr; a.did_nmx = pdx;
+        a.version = 1;                          /* directories are version ;1 */
+        strncpy(a.name, nm, VMS_ACP_NAME_SIZE - 1);
+
+        st = vms_kif_acp_access(&a);
+        if ($VMS_STATUS_SUCCESS(st)) {
+            pdn = a.fid_num; pds = a.fid_seq; pdr = a.fid_rvn; pdx = a.fid_nmx;
+            vms_kif_acp_deaccess(chan);         /* only wanted its FID */
+            created_leaf = 0;
+            continue;
+        }
+        if (st != SS$_NOSUCHFILE) {             /* honest error, not "absent" */
+            vms_kif_dassgn(chan);
+            return st;
+        }
+
+        struct vms_acp_fileop_args fop;
+        memset(&fop, 0, sizeof(fop));
+        fop.chan      = chan;
+        fop.func      = VMS_ACP_FOP_CREATE;
+        fop.modifiers = VMS_ACP_M_CREATE;       /* enter it in the parent dir */
+        fop.did_num = pdn; fop.did_seq = pds; fop.did_rvn = pdr; fop.did_nmx = pdx;
+        fop.version   = 1;
+        fop.attr.filechar = ODS2_FH2_M_DIRECTORY;   /* => is_dir in the ACP */
+        strncpy(fop.name, nm, VMS_ACP_NAME_SIZE - 1);
+
+        st = vms_kif_acp_fileop(&fop);
+        if (!$VMS_STATUS_SUCCESS(st)) {
+            vms_kif_dassgn(chan);
+            return st;
+        }
+        pdn = fop.fid_num; pds = fop.fid_seq; pdr = fop.fid_rvn; pdx = fop.fid_nmx;
+        created_leaf = 1;
+    }
+
+    vms_kif_dassgn(chan);
+    /* Every component already existed => the directory is already there. */
+    return created_leaf ? SS$_NORMAL : SS$_DUPLNAM;
+}
+
+/*
  * CREATE - Create a new file, or (with /DIRECTORY) create a directory.
  */
 int cmd_create(struct dcl_command *cmd)
@@ -2496,6 +2599,35 @@ int cmd_create(struct dcl_command *cmd)
         if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
             dcl_error("DCL", 2, "NODIR", "missing directory specification");
             return SS$_BADPARAM;
+        }
+
+        /* vms-f05: with the executive present, MOUNT is pure ACP ($MOUNT over
+         * /dev/vms, vms-127) -- there is NO POSIX /mnt view of a mounted ODS-2
+         * volume -- so a mkdir(2) on a resolved host path never reaches the
+         * volume. Create the directory the VMS way: IO$_CREATE of each NAME.DIR
+         * component under its parent over the ACP, exactly as PRODUCT INSTALL's
+         * tree creation does (product.c pd_acp_mkdir_tree). The legacy POSIX
+         * mkdir below is the executive-absent host defer (plain ctest, INV-6). */
+        if (!rms_executive_absent()) {
+            char vspec[1024];
+            if (dcl_rms_effective_spec(ctx, cmd->params[0], vspec,
+                                       sizeof(vspec)) != 0) {
+                dcl_error("RMS", 2, "SYN", "file specification syntax error - %s",
+                          cmd->params[0]);
+                return SS$_BADPARAM;
+            }
+            uint32_t st = dcl_mkdir_acp(vspec);
+            if ($VMS_STATUS_SUCCESS(st))
+                return SS$_NORMAL;
+            if (st == SS$_DUPLNAM) {   /* already exists -- informational, not fatal */
+                dcl_error("DCL", 0, "CREATED",
+                          "directory already exists - %s", cmd->params[0]);
+                return SS$_NORMAL;
+            }
+            dcl_error("RMS", 2, "CRE",
+                      "cannot create directory - %s (0x%08X)",
+                      cmd->params[0], st);
+            return SS$_FILACCERR;
         }
 
         char linux_path[1024];

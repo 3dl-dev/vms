@@ -175,6 +175,20 @@
 #ifndef R_X86_64_DTPOFF32
 #define R_X86_64_DTPOFF32        21
 #endif
+/* Classic (non-TLSDESC "gnu"/"gnu2"-less) general-/local-dynamic TLS relocs the
+ * x86_64 psABI defines for the __tls_get_addr access model. STOCK upstream
+ * archives (Alpine libstdc++/libsupc++/libgcc) are compiled with the classic
+ * dialect and emit these; the OVMX producer graph uses -mtls-dialect=gnu2
+ * (TLSDESC, handled above). For a SINGLE static image (no dlopen) both relax to
+ * Local-Exec — read TP from %fs:0 and add a link-time-final TP-relative offset
+ * (vms-76a). TLSGD names the accessed TLS variable; TLSLD names an arbitrary
+ * placeholder and its per-variable offsets ride paired R_X86_64_DTPOFF32. */
+#ifndef R_X86_64_TLSGD
+#define R_X86_64_TLSGD           19
+#endif
+#ifndef R_X86_64_TLSLD
+#define R_X86_64_TLSLD           20
+#endif
 #ifndef R_X86_64_GOTPC32_TLSDESC
 #define R_X86_64_GOTPC32_TLSDESC 34
 #endif
@@ -252,17 +266,32 @@ static void die(const char *msg)
 /* Section bucket: input sections are classified + merged by ELF flags, not by
  * exact name, so gcc's split sections (.text.unlikely, .rodata.str1.8,
  * .rodata.cst8, .data.rel.ro, ...) all land in the right output region. (vms-fa1) */
-enum { B_NONE = 0, B_TEXT, B_RODATA, B_DATA, B_BSS, B_TDATA, B_TBSS };
+enum { B_NONE = 0, B_TEXT, B_RODATA, B_DATA, B_INIT_ARRAY, B_BSS, B_TDATA, B_TBSS,
+       B_EH_FRAME };
 
 /* The buckets LINK.EXE places FLAT (a real image vaddr per input section) and
  * can therefore apply relocations into. B_BSS/B_TBSS are NOBITS (no bytes to
  * patch); B_TDATA is reached through TLSDESC, not a flat address; B_NONE is an
  * allocatable section type this linker does not place at all. Anything outside
  * this set that still carries relocations is REPORTED, never dropped in
- * silence. (vms-a66) */
+ * silence. (vms-a66)
+ *
+ * B_INIT_ARRAY (vms-ee2) is SHT_INIT_ARRAY: the ELF ctor-pointer table gcc
+ * emits for a real GNU-C static constructor (__attribute__((constructor)),
+ * a C++ static object, ...). It is placed in its OWN writable, dedicated
+ * output region (never merged into plain .data) precisely so its start/end
+ * can be reported as a clean range -- see the .init_array output-section
+ * block in emit_shareable() and its use in imgact.c's symbol-vector ctor
+ * runner. Each entry is a plain ABS64 pointer initializer, patched by the
+ * SAME reloc-apply loop as B_DATA (no special-casing needed there). This is
+ * OVMX's ELF-native carrier for "run these before the image starts" -- the
+ * functional equivalent of VMS's LIB$INITIALIZE constructor pass, NOT a
+ * reproduction of VMS's PSECT-collection layout (see docs/design-link-native-
+ * toolchain.md). */
 static int bucket_is_patchable(int b)
 {
-    return b == B_TEXT || b == B_RODATA || b == B_DATA;
+    return b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_INIT_ARRAY ||
+           b == B_EH_FRAME;
 }
 
 /* One relocation, tagged with the section it patches (site = sec_va + off). */
@@ -417,12 +446,28 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
             o->sec_bucket[i] = (s->sh_type == SHT_NOBITS) ? B_TBSS : B_TDATA;
         else if (s->sh_type == SHT_NOBITS)
             o->sec_bucket[i] = B_BSS;
+        else if (s->sh_type == SHT_INIT_ARRAY)
+            o->sec_bucket[i] = B_INIT_ARRAY;   /* ctor pointer table (vms-ee2) */
+        else if (s->sh_type == SHT_PROGBITS &&
+                 strcmp(o->shstr + s->sh_name, ".eh_frame") == 0)
+            /* DWARF unwinder frame table (vms-70d). Read-only PROGBITS that
+             * would otherwise fall into B_RODATA, but it needs its OWN
+             * contiguous output region (like .init_array) so the whole block
+             * is one [begin .. 0-terminator] range libgcc's __register_frame
+             * can register -- see the .eh_frame layout + .vms$ehf below. Its
+             * CIE/FDE PC32 relocs are collected/applied exactly as when it was
+             * B_RODATA (bucket_is_patchable includes B_EH_FRAME). */
+            o->sec_bucket[i] = B_EH_FRAME;
         else if (s->sh_type == SHT_PROGBITS)
             o->sec_bucket[i] = (s->sh_flags & SHF_EXECINSTR) ? B_TEXT
                              : (s->sh_flags & SHF_WRITE)     ? B_DATA
                              :                                 B_RODATA;
-        /* Other allocatable types (SHT_INIT_ARRAY, SHT_NOTE, ...) stay B_NONE;
-         * a relocation into one dies loudly rather than silently misplacing. */
+        /* Other allocatable types (SHT_NOTE, SHT_FINI_ARRAY, ...) stay B_NONE;
+         * a relocation into one dies loudly rather than silently misplacing.
+         * SHT_FINI_ARRAY (image-teardown destructors) is out of scope here:
+         * IMGACT.EXE symbol-vector images never return to an "unload" path --
+         * see docs/design-image-activation.md -- so there is nothing for a
+         * fini-array runner to be called from. */
     }
 
     /* Collect relocations against every FLAT-PLACED allocatable section into one
@@ -1368,7 +1413,8 @@ static uint64_t placed_addr(struct obj *d, Elf64_Sym *s)
     int sh = (int)s->st_shndx;
     if (sh <= 0 || sh >= d->nsh) return 0;
     switch (d->sec_bucket[sh]) {
-    case B_TEXT: case B_RODATA: case B_DATA: case B_BSS:
+    case B_TEXT: case B_RODATA: case B_DATA: case B_INIT_ARRAY: case B_BSS:
+    case B_EH_FRAME:
         return d->sec_va[sh] + s->st_value;
     default:
         return 0;
@@ -1438,8 +1484,9 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx)
     }
     (void)nobj;
     /* Defined, but in a section this linker doesn't place flat (TLS, or an
-     * allocatable type like SHT_INIT_ARRAY): a pointer into it is deferred
-     * under --allow-undefined, otherwise a hard error. */
+     * allocatable type like SHT_NOTE): a pointer into it is deferred under
+     * --allow-undefined, otherwise a hard error. (SHT_INIT_ARRAY is placed
+     * flat as B_INIT_ARRAY as of vms-ee2 and no longer reaches this branch.) */
     if (g_allow_undef) { g_deferred++; return 0; }
     die("relocation against an unsupported section");
     return 0;
@@ -1476,7 +1523,15 @@ static uint64_t resolve_named(struct obj *objs, int nobj,
  * for non-GOT relocations against locals — so cross-TU name collisions are
  * impossible and each local resolves to its own definition. (vms-9c1) */
 struct gotslot {
-    char     name[256];  /* diagnostic label; the dedup key only for globals */
+    /* Global dedup key + diagnostic label: a pointer into the defining object's
+     * .strtab (live for the whole run), NOT a fixed buffer. A truncating copy
+     * would (a) miss at apply time — find_got does an exact strcmp against the
+     * FULL reference name, so a >255-char mangled C++ template symbol stored
+     * truncated never matches and dies "GOT slot missing" — and (b) silently
+     * alias two distinct symbols that share a 255-char prefix (routine with
+     * deeply-nested template instantiations). The pointer key has neither
+     * failure and no arbitrary length cap. (vms-da2) */
+    const char *name;
     uint64_t va;
     uint64_t value;
     int      is_local;   /* 1 = per-object local slot keyed by (oi, sym) */
@@ -1542,7 +1597,10 @@ static int is_got_reloc(uint32_t type)
 /* A synthesized TLSDESC entry (two quadwords): [0]=resolver (IMGACT fills with
  * __tlsdesc_static), [1]=TP-relative offset (LINK pre-fills the module-relative
  * part; IMGACT adds the module's assigned TLS block offset). */
-struct tlsslot { char name[256]; int64_t addend; uint64_t va; uint64_t modoff; };
+/* name: a pointer into the defining object's live .strtab, not a fixed buffer
+ * — same truncation/prefix-collision hazard as gotslot for long mangled C++
+ * thread_local template names. (vms-da2) */
+struct tlsslot { const char *name; int64_t addend; uint64_t va; uint64_t modoff; };
 
 static int find_tls(struct tlsslot *t, int nt, const char *name)
 {
@@ -1585,6 +1643,63 @@ static int is_dtpoff_reloc(uint32_t type)
     return type == R_X86_64_DTPOFF32;
 }
 
+/* True for a classic x86_64 general-/local-dynamic TLS lea reloc (vms-76a). Its
+ * paired `call __tls_get_addr` (an R_X86_64_PLT32/GOTPCREL against the symbol
+ * `__tls_get_addr`) is subsumed by the LE relaxation of this lea and must not be
+ * patched separately — its bytes are overwritten by patch_tls_le(). */
+static int is_classic_gdld_reloc(uint32_t type)
+{
+    return type == R_X86_64_TLSGD || type == R_X86_64_TLSLD;
+}
+
+/* GD/LD -> Local-Exec relaxation (x86_64 psABI). Valid for a SINGLE static image
+ * (no dlopen): every classic general-/local-dynamic access becomes a local-exec
+ * read of TP (%fs:0) plus a link-time-final TP-relative offset — the same value
+ * the proven gnu2/TLSDESC path resolves at run time (the executable's TLS block
+ * base sits at TP - ALIGN_UP(tls_memsz, tls_align), matching IMGACT's
+ * assign_tls_offsets()). `site` is the VA of the TLSGD/TLSLD reloc field (the
+ * lea's disp32); the fixed-size instruction window the psABI mandates begins 4
+ * bytes (GD, 16-byte window) or 3 bytes (LD, 12-byte window) before it.
+ *
+ *   GD:  66 48 8d 3d <d32>          lea x@tlsgd(%rip),%rdi
+ *        66 66 48 e8 <d32>          call __tls_get_addr@plt
+ *     -> 64 48 8b 04 25 00 00 00 00 mov %fs:0,%rax
+ *        48 8d 80 <tpoff32>         lea x@tpoff(%rax),%rax     (tpoff embedded)
+ *
+ *   LD:  48 8d 3d <d32>             lea x@tlsld(%rip),%rdi
+ *        e8 <d32> | ff 15 <d32>     call __tls_get_addr@plt | *..@gotpcrel(%rip)
+ *     -> 66 [66] 66 66              (3- or 4-byte 0x66 padding)
+ *        64 48 8b 04 25 00 00 00 00 mov %fs:0,%rax             (leaves %rax = TP)
+ * For LD the paired R_X86_64_DTPOFF32 operands carry each variable's TP-relative
+ * offset (moff - aligned_tls_size), written by the DTPOFF32 arm below.
+ *
+ * BOTH call dialects occur in the wild: -fplt emits a 5-byte direct `e8` call,
+ * -fno-plt (Alpine's libstdc++/libgcc, GOTPCRELX) a 6-byte indirect `ff 15`.
+ * The GD lea+call window is 16 bytes for both (the direct call carries an extra
+ * 0x66 prefix). The LD window is 12 bytes for the direct call, 13 for the
+ * indirect, so its 0x66 padding is sized from the actual call opcode. */
+static void patch_tls_le(uint32_t type, uint8_t *img, uint64_t site, int32_t tpoff)
+{
+    static const uint8_t movfs[9] = /* mov %fs:0, %rax */
+        { 0x64, 0x48, 0x8b, 0x04, 0x25, 0x00, 0x00, 0x00, 0x00 };
+    if (type == R_X86_64_TLSGD) {
+        uint8_t *w = img + site - 4;           /* 16-byte GD window */
+        memcpy(w, movfs, 9);
+        w[9] = 0x48; w[10] = 0x8d; w[11] = 0x80;  /* lea tpoff(%rax), %rax */
+        memcpy(w + 12, &tpoff, 4);
+    } else {                                   /* R_X86_64_TLSLD */
+        /* lea is a fixed 7 bytes (48 8d 3d <d32>) starting 3 before the reloc
+         * field, so the paired call begins at site+4. Its first opcode byte
+         * selects the window length: 0xff (ff 15, indirect) -> 13-byte window
+         * with 4-byte padding; anything else (0xe8, direct) -> 12-byte, 3-byte
+         * padding. The extra 0x66 prefixes are ignored at execution. */
+        uint8_t *w   = img + site - 3;
+        int      pad = (img[site + 4] == 0xff) ? 4 : 3;
+        for (int k = 0; k < pad; k++) w[k] = 0x66;
+        memcpy(w + pad, movfs, 9);
+    }
+}
+
 /* Patch a TLSDESC ADR_PAGE21 / LD64_LO12 / ADD_LO12 to reach the 2-word TLSDESC
  * entry PC-relatively (same encodings as ADRP / LDR64 / ADD-imm12). TLSDESC_CALL
  * is a marker at the blr and needs no patch.
@@ -1613,15 +1728,31 @@ static void patch_tlsdesc(uint32_t type, uint32_t *insn, uint64_t site,
     /* R_AARCH64_TLSDESC_CALL / R_X86_64_TLSDESC_CALL: no-op markers. */
 }
 
-/* Module-relative TLS offset of a TLS symbol: 0-based within the module's
- * [.tdata | .tbss] block. tbss_base is where .tbss begins (aligned .tdata size). */
-static uint64_t tls_module_offset(struct obj *objs, int nobj, uint64_t tbss_base,
+/* True if section index `sh` of object `o` is a thread-local section (.tdata /
+ * .tbss, INCLUDING gcc's per-variable .tdata.<sym> / .tbss.<sym> split sections
+ * that a function-local or COMDAT `thread_local` lands in). Classified by the
+ * SHF_TLS flag in parse_obj, so the exact section name does not matter. */
+static int is_tls_section(struct obj *o, int sh)
+{
+    return sh > 0 && sh < o->nsh &&
+           (o->sec_bucket[sh] == B_TDATA || o->sec_bucket[sh] == B_TBSS);
+}
+
+/* Module-relative TLS offset of a TLS symbol: its byte offset within the image's
+ * single combined TLS block. With multi-module TLS (vms-da2) the block holds
+ * every input object's TLS sections — .tdata (and .tdata.*) concatenated, then
+ * .tbss (and .tbss.*). Each such section was assigned its own base offset within
+ * the block (stored in sec_va[] during emit_shareable's TLS-layout pass, which
+ * placed_addr leaves untouched for TLS buckets), so a TLS symbol resolves to
+ * (its defining section's block base + st_value). */
+static uint64_t tls_module_offset(struct obj *objs, int nobj,
                                   const char *name, int64_t addend)
 {
     /* x86_64 local-dynamic (vms-2e4): `_TLS_MODULE_BASE_` is a synthetic UND
-     * symbol naming the module's TLS block base, defined by no object — its
-     * module offset is 0 by definition. Each `static _Thread_local` access then
-     * adds its own R_X86_64_DTPOFF32 operand offset on top. */
+     * symbol naming the combined block's base, defined by no object — offset 0
+     * by definition. Each `static _Thread_local` access then adds its own
+     * R_X86_64_DTPOFF32 operand offset (the symbol's combined-block offset) on
+     * top, so the whole image is treated as one module with base 0. */
     if (strcmp(name, TLS_MODULE_BASE_SYM) == 0)
         return (uint64_t)addend;
     for (int j = 0; j < nobj; j++) {
@@ -1629,13 +1760,13 @@ static uint64_t tls_module_offset(struct obj *objs, int nobj, uint64_t tbss_base
         for (int k = 0; k < d->nsym; k++) {
             Elf64_Sym *s = &d->sym[k];
             if (strcmp(d->str + s->st_name, name) != 0) continue;
-            if (d->tdata && s->st_shndx == (Elf64_Section)d->tdata_ndx)
-                return s->st_value + (uint64_t)addend;
-            if (d->tbss && s->st_shndx == (Elf64_Section)d->tbss_ndx)
-                return tbss_base + s->st_value + (uint64_t)addend;
+            if (is_tls_section(d, (int)s->st_shndx))
+                return d->sec_va[s->st_shndx] + s->st_value + (uint64_t)addend;
         }
     }
-    die("TLS symbol not defined in any input .tdata/.tbss");
+    fprintf(stderr, "%%LINK-F-ERROR, TLS symbol not defined in any input "
+                    ".tdata/.tbss: %s\n", name);
+    exit(1);
     return 0;
 }
 
@@ -1647,17 +1778,13 @@ static uint64_t tls_module_offset(struct obj *objs, int nobj, uint64_t tbss_base
  * its own object, and fall back to the cross-object name lookup only for a
  * genuinely undefined (external / _TLS_MODULE_BASE_) reference. */
 static uint64_t tls_ref_offset(struct obj *objs, int nobj, int oi, uint32_t si,
-                               uint64_t tbss_base, int64_t addend)
+                               int64_t addend)
 {
     struct obj *o = &objs[oi];
     Elf64_Sym  *s = &o->sym[si];
-    if (s->st_shndx != SHN_UNDEF && s->st_shndx < (Elf64_Section)o->nsh) {
-        if (o->tdata && s->st_shndx == (Elf64_Section)o->tdata_ndx)
-            return s->st_value + (uint64_t)addend;
-        if (o->tbss && s->st_shndx == (Elf64_Section)o->tbss_ndx)
-            return tbss_base + s->st_value + (uint64_t)addend;
-    }
-    return tls_module_offset(objs, nobj, tbss_base, o->str + s->st_name, addend);
+    if (s->st_shndx != SHN_UNDEF && is_tls_section(o, (int)s->st_shndx))
+        return o->sec_va[s->st_shndx] + s->st_value + (uint64_t)addend;
+    return tls_module_offset(objs, nobj, o->str + s->st_name, addend);
 }
 
 /* True if `name` is defined by some input object in a section this linker places
@@ -1673,7 +1800,8 @@ static int defined_placed(struct obj *objs, const char *name)
     int shx = (int)s->st_shndx;
     if (shx <= 0 || shx >= objs[doi].nsh) return 0;
     int b = objs[doi].sec_bucket[shx];
-    return b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_BSS;
+    return b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_INIT_ARRAY ||
+           b == B_BSS || b == B_EH_FRAME;
 }
 
 /* Emit an OVMX shareable image from N objects: merge .text/.rodata/.data/.bss,
@@ -1745,6 +1873,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             if (s->st_shndx != SHN_UNDEF) continue;      /* locally defined     */
             const char *nm = objs[i].str + s->st_name;
             if (!nm[0]) continue;
+            /* __tls_get_addr calls are the classic-GD/LD access model; LINK
+             * relaxes every one to Local-Exec (patch_tls_le), overwriting the
+             * call site, so the symbol is never actually referenced at run time.
+             * Do NOT create an import/PLT stub for it. (vms-76a) */
+            if (strcmp(nm, "__tls_get_addr") == 0) continue;
             if (defined_placed(objs, nm)) continue;      /* intra-image def     */
             int pidx; uint32_t svidx;
             if (!find_universal(ps, np, nm, &pidx, &svidx))
@@ -1843,36 +1976,61 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         imp[exit_imp].is_data = 0;   /* always a call import */
     }
 
-    int has_ro = 0, has_data = 0, has_bss = 0;
+    int has_ro = 0, has_data = 0, has_init_array = 0, has_bss = 0, has_eh_frame = 0;
     for (int i = 0; i < nobj; i++)
         for (int s = 0; s < objs[i].nsh; s++) {
             if (objs[i].sh[s].sh_size == 0) continue;
-            if (objs[i].sec_bucket[s] == B_RODATA) has_ro = 1;
-            if (objs[i].sec_bucket[s] == B_DATA)   has_data = 1;
-            if (objs[i].sec_bucket[s] == B_BSS)    has_bss = 1;
+            if (objs[i].sec_bucket[s] == B_RODATA)     has_ro = 1;
+            if (objs[i].sec_bucket[s] == B_DATA)       has_data = 1;
+            if (objs[i].sec_bucket[s] == B_INIT_ARRAY) has_init_array = 1;
+            if (objs[i].sec_bucket[s] == B_BSS)        has_bss = 1;
+            if (objs[i].sec_bucket[s] == B_EH_FRAME)   has_eh_frame = 1;
         }
 
-    /* TLS geometry (single TLS-bearing object per image for now). */
-    int tls_obj = -1;
-    for (int i = 0; i < nobj; i++) {
-        if ((objs[i].tdata && objs[i].tdata->sh_size) ||
-            (objs[i].tbss && objs[i].tbss->sh_size)) {
-            if (tls_obj >= 0)
-                die("multi-module TLS not supported yet (one TLS object per image)");
-            tls_obj = i;
+    /* TLS geometry: COMBINED multi-module TLS block (vms-da2). A C++ image
+     * whole-archives libstdc++/libsupc++/libgcc, each of which can contribute
+     * its own .tdata/.tbss; a single image therefore has MANY TLS-bearing
+     * objects, not one. LINK builds ONE combined per-thread TLS block for the
+     * whole image and emits a SINGLE PT_TLS over it — matching what a real
+     * linker (ld) does when it statically combines a program with its runtime.
+     *
+     * Layout (the ELF-standard TLS block shape): every module's .tdata is
+     * concatenated first (the file-backed init image = PT_TLS p_filesz), then
+     * every module's .tbss (zero-fill = the p_memsz tail). Each section is
+     * placed at its own alignment; each object records the base offset it was
+     * assigned (tls_tdata_off / tls_tbss_off) so a TLS symbol resolves to
+     * (its module's base + st_value). No per-image cap and no one-object
+     * limitation — the count of TLS-bearing objects is unbounded. */
+    uint64_t tls_align = 1;   /* max alignment over all TLS sections (>=1) */
+    /* Pass 1: place every .tdata / .tdata.* (initialized image) contiguously.
+     * Each section's block-relative base offset is recorded in sec_va[] (which
+     * placed_addr ignores for TLS buckets), so a TLS symbol later resolves to
+     * (its section's base + st_value) regardless of which object or which split
+     * per-variable section it came from. */
+    uint64_t tls_cursor = 0;
+    for (int i = 0; i < nobj; i++)
+        for (int s = 0; s < objs[i].nsh; s++) {
+            if (objs[i].sec_bucket[s] != B_TDATA || !objs[i].sh[s].sh_size) continue;
+            uint64_t al = objs[i].sh[s].sh_addralign ? objs[i].sh[s].sh_addralign : 8;
+            if (al > tls_align) tls_align = al;
+            tls_cursor = ALIGN_UP(tls_cursor, al);
+            objs[i].sec_va[s] = tls_cursor;
+            tls_cursor += objs[i].sh[s].sh_size;
         }
-    }
-    int has_tls = (tls_obj >= 0);
-    uint64_t tdata_sz = (has_tls && objs[tls_obj].tdata) ? objs[tls_obj].tdata->sh_size : 0;
-    uint64_t tbss_sz  = (has_tls && objs[tls_obj].tbss)  ? objs[tls_obj].tbss->sh_size  : 0;
-    uint64_t tdata_al = (has_tls && objs[tls_obj].tdata && objs[tls_obj].tdata->sh_addralign)
-                        ? objs[tls_obj].tdata->sh_addralign : 8;
-    uint64_t tbss_al  = (has_tls && objs[tls_obj].tbss && objs[tls_obj].tbss->sh_addralign)
-                        ? objs[tls_obj].tbss->sh_addralign : 1;
-    uint64_t tls_align = tdata_al > tbss_al ? tdata_al : tbss_al;
-    if (tls_align == 0) tls_align = 1;
-    uint64_t tbss_base = tbss_sz ? ALIGN_UP(tdata_sz, tbss_al) : tdata_sz;
-    uint64_t tls_memsz = tbss_base + tbss_sz;
+    uint64_t tdata_sz = tls_cursor;   /* total .tdata = PT_TLS p_filesz */
+    /* Pass 2: place every .tbss / .tbss.* (zero image) after all .tdata. */
+    for (int i = 0; i < nobj; i++)
+        for (int s = 0; s < objs[i].nsh; s++) {
+            if (objs[i].sec_bucket[s] != B_TBSS || !objs[i].sh[s].sh_size) continue;
+            uint64_t al = objs[i].sh[s].sh_addralign ? objs[i].sh[s].sh_addralign : 1;
+            if (al > tls_align) tls_align = al;
+            tls_cursor = ALIGN_UP(tls_cursor, al);
+            objs[i].sec_va[s] = tls_cursor;
+            tls_cursor += objs[i].sh[s].sh_size;
+        }
+    uint64_t tls_memsz = tls_cursor;  /* total block = PT_TLS p_memsz */
+    uint64_t tbss_sz   = tls_memsz - tdata_sz; /* zero-tail size (diagnostic/hdr) */
+    int has_tls = (tls_memsz > 0);
 
     /* Collect the distinct GOT-referenced symbols (across all code sections).
      * Growable — musl references hundreds of globals GOT-indirectly. (vms-004) */
@@ -1903,7 +2061,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                 got = realloc(got, (size_t)got_cap * sizeof *got);
                 if (!got) die("oom growing GOT table");
             }
-            snprintf(got[ngot].name, sizeof got[ngot].name, "%s", nm);
+            got[ngot].name = nm;   /* strtab pointer, live for the run */
             got[ngot].is_local = is_local;
             got[ngot].oi  = is_local ? i : 0;
             got[ngot].sym = is_local ? (int)si : 0;
@@ -1924,7 +2082,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                     tls = realloc(tls, (size_t)tls_cap * sizeof *tls);
                     if (!tls) die("oom growing TLSDESC table");
                 }
-                snprintf(tls[ntls].name, sizeof tls[ntls].name, "%s", nm);
+                tls[ntls].name = nm;   /* strtab pointer, live for the run */
                 /* aarch64's TLSDESC addend is a symbol offset and belongs in the
                  * descriptor's module offset; x86_64's is a disp32 FIELD addend
                  * (-4) that belongs only in the PC-relative write. (vms-2e4) */
@@ -1943,7 +2101,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             if (is_abs64_reloc(ELF64_R_TYPE(objs[i].relocs[r].info)))
                 nabs++;
 
-    /* ---- Layout: [ehdr][phdr] text|rodata|got|tlsdesc|data|tdata|sv|rel|tls|bss --- */
+    /* ---- Layout: [ehdr][phdr] text|rodata|got|tlsdesc|data|init_array|tdata|sv|rel|tls|bss --- */
     uint64_t off_ph   = sizeof(Elf64_Ehdr);
     /* shareable: PT_LOAD (+ PT_TLS). executable: PT_PHDR, PT_INTERP, PT_LOAD
      * (+ PT_TLS) — the kernel maps the executable and reads PT_INTERP=IMGACT. */
@@ -1993,14 +2151,46 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             }
     uint64_t ro_end = cur;
 
+    /* .eh_frame (vms-70d): the DWARF unwinder CIE/FDE table, placed in ONE
+     * contiguous region (like .init_array) so the whole block can be handed to
+     * libgcc's __register_frame as a single [begin .. 0-terminator] range. gcc
+     * emits exactly one `.eh_frame` per object; whole-archiving libstdc++/libgcc
+     * yields many, concatenated here in object order. A 4-byte-zero FDE
+     * terminator is appended after the last one (the image is calloc'd, so the
+     * reserved word is already zero) -- the terminating null crtbegin/crtend
+     * would otherwise supply. Read-only; lives in the single PT_LOAD. */
+    uint64_t ehf_beg = cur, ehf_end = cur;
+    if (has_eh_frame) {
+        int first = 1;
+        for (int i = 0; i < nobj; i++)
+            for (int s = 0; s < objs[i].nsh; s++)
+                if (objs[i].sec_bucket[s] == B_EH_FRAME && objs[i].sh[s].sh_size) {
+                    uint64_t al = objs[i].sh[s].sh_addralign ? objs[i].sh[s].sh_addralign : 8;
+                    cur = ALIGN_UP(cur, al);
+                    if (first) { ehf_beg = cur; first = 0; }
+                    objs[i].sec_va[s] = cur;
+                    cur += objs[i].sh[s].sh_size;
+                }
+        cur = ALIGN_UP(cur, 4);   /* 4-byte-zero terminator after the last FDE */
+        cur += 4;
+        ehf_end = cur;
+    }
+
     /* GOT cells (writable, 8-aligned). */
     uint64_t got_beg = ALIGN_UP(cur, 8);
     for (int i = 0; i < ngot; i++) got[i].va = got_beg + (uint64_t)i * 8;
     uint64_t got_end = got_beg + (uint64_t)ngot * 8;
     cur = got_end;
 
-    /* TLSDESC entries (writable, 2 quadwords each, 8-aligned). */
-    uint64_t tlsdesc_beg = ALIGN_UP(cur, 8);
+    /* TLSDESC entries (writable, 2 quadwords = 16 bytes each). The x86_64
+     * TLSDESC ABI requires each descriptor 16-byte ALIGNED: a
+     * `lea sym@TLSDESC(%rip),%rax` must resolve to a descriptor boundary, and
+     * the resolver treats %rax as a 16-byte-aligned [resolver,offset] pair.
+     * Align the TABLE BASE to 16 (was 8, vms-da2's combined-TLS-block reorg
+     * shifted `cur` so an 8-aligned base landed at 8 mod 16 -> descriptors off
+     * boundary; caught by the x86_64 TLSX86.EXE reloc test). i*16 then keeps
+     * every entry ≡0 mod 16. */
+    uint64_t tlsdesc_beg = ALIGN_UP(cur, 16);
     for (int i = 0; i < ntls; i++) tls[i].va = tlsdesc_beg + (uint64_t)i * 16;
     uint64_t tlsdesc_end = tlsdesc_beg + (uint64_t)ntls * 16;
     cur = tlsdesc_end;
@@ -2017,9 +2207,89 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             }
     uint64_t data_end = cur;
 
+    /* .init_array (writable, ABS64-relocated ctor function-pointer table,
+     * vms-ee2). A DEDICATED region -- deliberately not merged into .data --
+     * so the placed range is exactly the ctor table, nothing else: IMGACT's
+     * symbol-vector activator (imgact.c) reads this section's own sh_addr/
+     * sh_size (via the same generic by-name section lookup it already uses
+     * for .vms$imp/.vms$rel/.vms$tls/.vms$sv) to bound its constructor-call
+     * loop. Each entry is patched by the ordinary ABS64 reloc-apply loop
+     * below (bucket_is_patchable() now includes B_INIT_ARRAY) -- no special
+     * casing needed there. Most images (TCC.EXE, DECC$SHR, every pure musl+
+     * libgcc image) carry no SHT_INIT_ARRAY input section at all, so
+     * has_init_array is 0 and this region is simply empty (initarr_beg ==
+     * initarr_end): the correct, unaffected case.
+     *
+     * ORDERING (vms-0962): the input SHT_INIT_ARRAY sections MUST be laid down
+     * in GNU-ld order, not object-encounter order. gcc emits a priority-tagged
+     * constructor into its own section `.init_array.NNNNN` (NNNNN = the numeric
+     * init_priority, zero-padded); untagged (default-priority) ctors land in
+     * plain `.init_array`. GNU ld's default script places
+     *   KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*)))   -- numbered, ASCENDING
+     *   KEEP(*(.init_array))                             -- plain, AFTER those
+     * Because .init_array entries execute front-to-back at activation, a lower
+     * NNNNN (higher priority) must be placed EARLIER so it runs EARLIER. libstdc++
+     * has hundreds of priority-ordered ctors (std::ios_base::Init, locale facets,
+     * ...); concatenated in object order a later-priority ctor can run before the
+     * earlier-priority ctor that establishes the state it reads -> garbage ptr ->
+     * SIGSEGV in static init. Sort a flat (obj,sec) index list by the parsed
+     * priority (plain = sentinel MAX, so it sorts last), ties broken by encounter
+     * order (stable, matching ld's input order), then assign sec_va in that order.
+     * The copy + ABS64 reloc-apply loops below are keyed on sec_va, so they follow
+     * this ordering with no further change. */
+    uint64_t initarr_beg = cur;
+    if (has_init_array) {
+        /* Flat list of every non-empty B_INIT_ARRAY input section. */
+        int nia_cap = 0;
+        for (int i = 0; i < nobj; i++)
+            for (int s = 0; s < objs[i].nsh; s++)
+                if (objs[i].sec_bucket[s] == B_INIT_ARRAY && objs[i].sh[s].sh_size)
+                    nia_cap++;
+        struct ia_ent { int i, s; uint64_t prio; int order; } *ia =
+            nia_cap ? malloc((size_t)nia_cap * sizeof *ia) : NULL;
+        int nia = 0;
+        for (int i = 0; i < nobj; i++)
+            for (int s = 0; s < objs[i].nsh; s++)
+                if (objs[i].sec_bucket[s] == B_INIT_ARRAY && objs[i].sh[s].sh_size) {
+                    const char *nm = objs[i].shstr + objs[i].sh[s].sh_name;
+                    /* `.init_array.NNNNN` -> prio = NNNNN (ascending). Plain
+                     * `.init_array` (no numeric suffix) -> sentinel MAX = last. */
+                    uint64_t prio = UINT64_MAX;
+                    const char *pfx = ".init_array.";
+                    size_t pl = strlen(pfx);
+                    if (strncmp(nm, pfx, pl) == 0 && nm[pl] >= '0' && nm[pl] <= '9')
+                        prio = strtoull(nm + pl, NULL, 10);
+                    ia[nia].i = i; ia[nia].s = s; ia[nia].prio = prio;
+                    ia[nia].order = nia;
+                    nia++;
+                }
+        /* Stable ascending sort by (prio, encounter order). Section counts are
+         * modest (hundreds); an in-place insertion sort is clearer than qsort_r
+         * and preserves ld's stable input-order tiebreak trivially. */
+        for (int a = 1; a < nia; a++) {
+            struct ia_ent key = ia[a];
+            int b = a - 1;
+            while (b >= 0 && (ia[b].prio > key.prio ||
+                             (ia[b].prio == key.prio && ia[b].order > key.order))) {
+                ia[b + 1] = ia[b];
+                b--;
+            }
+            ia[b + 1] = key;
+        }
+        for (int k = 0; k < nia; k++) {
+            int i = ia[k].i, s = ia[k].s;
+            uint64_t al = objs[i].sh[s].sh_addralign ? objs[i].sh[s].sh_addralign : 8;
+            cur = ALIGN_UP(cur, al);
+            objs[i].sec_va[s] = cur;
+            cur += objs[i].sh[s].sh_size;
+        }
+        free(ia);
+    }
+    uint64_t initarr_end = cur;
+
     /* .tdata (TLS init image, file-backed). PT_TLS references it; a reserved
      * vaddr is assigned even for a pure-.tbss image (tdata_sz == 0). */
-    uint64_t tdata_va = 0, tdata_end = data_end;
+    uint64_t tdata_va = 0, tdata_end = initarr_end;
     if (has_tls) {
         cur = ALIGN_UP(cur, tls_align);
         tdata_va = cur;
@@ -2101,8 +2371,26 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         wimp_size = vms_wimp_size(nimp, imp);
     }
 
+    /* .vms$ehf: the DWARF frame-registration descriptor (vms-70d). Emitted only
+     * when the image both has a non-empty .eh_frame region AND whole-archived
+     * libgcc's __register_frame (a pure-C image has neither the registration
+     * machinery nor a need for it). IMGACT reads it and registers the frames
+     * before .init_array runs; absent -> IMGACT skips registration. Must be in
+     * the loaded range so IMGACT can read it by section vaddr. */
+    /* .vms$ehf sits after .vms$wimp (which sits after .vms$imp), so bias it off
+     * the end of the weak-import block. after_wimp == after_imp when there are
+     * no weak imports. (reconciles vms-70d's ehf placement with vms-5f0's wimp.) */
+    uint64_t after_wimp = nweak ? off_wimp + wimp_size : after_imp;
+    uint64_t register_frame_va =
+        has_eh_frame ? resolve_named(objs, nobj, "__register_frame", NULL) : 0;
+    uint64_t off_ehf = 0, ehf_desc_size = 0;
+    if (has_eh_frame && register_frame_va && ehf_end > ehf_beg) {
+        off_ehf = ALIGN_UP(after_wimp, 8);
+        ehf_desc_size = sizeof(struct ovmx_ehf_desc);
+    }
+
     /* End of file-backed loaded content; .bss (NOBITS) extends memsz beyond it. */
-    uint64_t file_loaded_end = nweak ? off_wimp + wimp_size : after_imp;
+    uint64_t file_loaded_end = off_ehf ? off_ehf + ehf_desc_size : after_wimp;
     uint64_t bss_beg = file_loaded_end, bss_end = file_loaded_end;
     if (has_bss) {
         int first = 1;
@@ -2119,13 +2407,15 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 
     uint64_t off_shstr = ALIGN_UP(file_loaded_end, 4);
 
-    const char *secn[24]; int nsec = 0;
+    const char *secn[26]; int nsec = 0;
     secn[nsec++] = "";
     int ix_text = nsec; secn[nsec++] = ".text";
     int ix_ro = -1;   if (has_ro)   { ix_ro   = nsec; secn[nsec++] = ".rodata"; }
+    int ix_ehf_sec = -1; if (ehf_end > ehf_beg) { ix_ehf_sec = nsec; secn[nsec++] = ".eh_frame"; }
     int ix_got = -1;  if (ngot)     { ix_got  = nsec; secn[nsec++] = ".got"; }
     int ix_tlsd = -1; if (ntls)     { ix_tlsd = nsec; secn[nsec++] = ".tlsdesc"; }
     int ix_data = -1; if (has_data) { ix_data = nsec; secn[nsec++] = ".data"; }
+    int ix_initarr = -1; if (has_init_array) { ix_initarr = nsec; secn[nsec++] = ".init_array"; }
     int ix_tdata = -1; if (has_tls && tdata_sz) { ix_tdata = nsec; secn[nsec++] = ".tdata"; }
     int ix_igot = -1; if (nimp)     { ix_igot = nsec; secn[nsec++] = ".igot"; }
     int ix_plt = -1;  if (nimp)     { ix_plt  = nsec; secn[nsec++] = ".plt"; }
@@ -2134,10 +2424,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     int ix_tls = -1;  if (ntlsdesc) { ix_tls  = nsec; secn[nsec++] = OVMX_TLS_SECTION; }
     int ix_imp = -1;  if (nstrong)  { ix_imp  = nsec; secn[nsec++] = OVMX_IMP_SECTION; }
     int ix_wimp = -1; if (nweak)    { ix_wimp = nsec; secn[nsec++] = OVMX_WIMP_SECTION; }
+    int ix_ehf = -1;  if (off_ehf)  { ix_ehf  = nsec; secn[nsec++] = OVMX_EHF_SECTION; }
     int ix_bss = -1;  if (has_bss)  { ix_bss  = nsec; secn[nsec++] = ".bss"; }
     int ix_tbss = -1; if (has_tls && tbss_sz) { ix_tbss = nsec; secn[nsec++] = ".tbss"; }
     int ix_str = nsec; secn[nsec++] = ".shstrtab";
-    uint64_t sn_off[24]; uint64_t sn_sz = 0;
+    uint64_t sn_off[26]; uint64_t sn_sz = 0;
     for (int i = 0; i < nsec; i++) { sn_off[i] = sn_sz; sn_sz += strlen(secn[i]) + 1; }
     uint64_t off_shdr = ALIGN_UP(off_shstr + sn_sz, 8);
     uint64_t file_sz = off_shdr + (uint64_t)nsec * sizeof(Elf64_Shdr);
@@ -2169,7 +2460,8 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
      * A PT_TLS follows when the image has thread-local storage. An executable
      * adds PT_PHDR (so IMGACT derives the load bias) + PT_INTERP=IMGACT.EXE, and
      * its GOT/import cells are written at activation so it is always writable. */
-    int writable = (ngot || ntls || has_data || has_bss || has_tls || nimp || is_exec);
+    int writable = (ngot || ntls || has_data || has_init_array || has_bss ||
+                    has_tls || nimp || is_exec);
     Elf64_Phdr *ph = (Elf64_Phdr *)(img + off_ph);
     int li;   /* index of the PT_LOAD phdr */
     if (is_exec) {
@@ -2195,19 +2487,32 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     }
     if (is_exec) memcpy(img + off_interp, IMGACT_INTERP, interp_sz);
 
-    /* Copy each placed PROGBITS section (text/rodata/data) to its vaddr. */
+    /* Copy each placed PROGBITS section (text/rodata/data/init_array) to its
+     * vaddr. SHT_INIT_ARRAY's file-resident bytes are the pre-relocation
+     * addends; the ABS64 reloc-apply loop below overwrites each entry with
+     * the real placed pointer value. */
     for (int i = 0; i < nobj; i++)
         for (int s = 0; s < objs[i].nsh; s++) {
             int b = objs[i].sec_bucket[s];
-            if ((b == B_TEXT || b == B_RODATA || b == B_DATA) &&
+            if ((b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_INIT_ARRAY ||
+                 b == B_EH_FRAME) &&
                 objs[i].sh[s].sh_size)
                 memcpy(img + objs[i].sec_va[s],
                        objs[i].buf + objs[i].sh[s].sh_offset, objs[i].sh[s].sh_size);
         }
 
-    /* Copy the TLS init image (.tdata); .tbss is zero-filled per thread. */
-    if (has_tls && tdata_sz)
-        memcpy(img + tdata_va, objs[tls_obj].buf + objs[tls_obj].tdata->sh_offset, tdata_sz);
+    /* Copy the combined TLS init image: every .tdata / .tdata.* section into its
+     * assigned slot within the block's [tdata_va, tdata_va+tdata_sz) init region
+     * (vms-da2). sec_va[s] holds the section's block-relative base. .tbss is
+     * zero-filled per thread (already zero in the calloc'd image, and re-zeroed
+     * by the activator's anonymous TLS mapping). */
+    if (has_tls)
+        for (int i = 0; i < nobj; i++)
+            for (int s = 0; s < objs[i].nsh; s++)
+                if (objs[i].sec_bucket[s] == B_TDATA && objs[i].sh[s].sh_size)
+                    memcpy(img + tdata_va + objs[i].sec_va[s],
+                           objs[i].buf + objs[i].sh[s].sh_offset,
+                           objs[i].sh[s].sh_size);
 
     /* Image-relative slots (GOT cells + ABS64 data pointers) to bias at
      * activation; filled as they resolve, header count set at the end. */
@@ -2253,7 +2558,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 
     /* Fill TLSDESC entries: [0]=0 (IMGACT sets the resolver), [1]=module offset. */
     for (int i = 0; i < ntls; i++) {
-        tls[i].modoff = tls_module_offset(objs, nobj, tbss_base,
+        tls[i].modoff = tls_module_offset(objs, nobj,
                                           tls[i].name, tls[i].addend);
         uint64_t *e = (uint64_t *)(img + tls[i].va);
         e[0] = 0;
@@ -2262,7 +2567,23 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 
     /* Apply relocations across every code section: GOT-indirect pairs -> GOT
      * slot; TLSDESC -> TLSDESC entry; the rest PC-relative (with addend). */
+    /* Aligned size of the combined TLS block. In x86_64 Variant II the block
+     * base sits at TP - tls_tp_size, so a variable at combined-block offset moff
+     * is at TP-relative offset (moff - tls_tp_size) — the Local-Exec offset the
+     * GD/LD relaxation embeds, matching IMGACT assign_tls_offsets(). (vms-76a) */
+    uint64_t tls_tp_size = has_tls ? ALIGN_UP(tls_memsz, tls_align) : 0;
     for (int i = 0; i < nobj; i++) {
+        /* Per-object TLS dialect: an object carrying any classic GD/LD reloc was
+         * compiled without -mtls-dialect=gnu2, so after LD->LE relaxation its
+         * %rax holds TP (not the module base the gnu2/TLSDESC path leaves), and
+         * its paired R_X86_64_DTPOFF32 operands must be TP-relative rather than
+         * module-relative. A single object uses one dialect throughout. */
+        int classic_tls = 0;
+        for (int r = 0; r < objs[i].nreloc; r++)
+            if (is_classic_gdld_reloc(ELF64_R_TYPE(objs[i].relocs[r].info))) {
+                classic_tls = 1;
+                break;
+            }
         for (int r = 0; r < objs[i].nreloc; r++) {
             struct reloc *rl = &objs[i].relocs[r];
             uint32_t type = ELF64_R_TYPE(rl->info);
@@ -2270,12 +2591,20 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             uint32_t *insn = (uint32_t *)(img + site);
             const char *nm = objs[i].str +
                              objs[i].sym[ELF64_R_SYM(rl->info)].st_name;
+            /* The classic GD/LD call to __tls_get_addr is subsumed by the LE
+             * relaxation of its paired lea; its site bytes were overwritten by
+             * patch_tls_le(), so never patch it separately. (vms-76a) */
+            if (strcmp(nm, "__tls_get_addr") == 0) continue;
             if (is_got_reloc(type)) {
                 uint32_t si = ELF64_R_SYM(rl->info);
                 if (ELF64_ST_BIND(objs[i].sym[si].st_info) == STB_LOCAL) {
                     /* LOCAL GOT reference -> its per-object (oi, sym) slot. */
                     int gi = find_got_local(got, ngot, i, (int)si);
-                    if (gi < 0) die("internal: local GOT slot missing for symbol");
+                    if (gi < 0) {
+                        fprintf(stderr, "%%LINK-F-ERROR, internal: local GOT slot "
+                                "missing for symbol '%s' (reloc type %u)\n", nm, type);
+                        exit(1);
+                    }
                     patch_got(type, insn, site, got[gi].va, rl->add);
                 } else {
                     int ii = import_find(imp, nimp, nm);
@@ -2284,7 +2613,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                         patch_got(type, insn, site, imp[ii].got_va, rl->add);
                     } else {
                         int gi = find_got(got, ngot, nm);
-                        if (gi < 0) die("internal: GOT slot missing for symbol");
+                        if (gi < 0) {
+                            fprintf(stderr, "%%LINK-F-ERROR, internal: GOT slot "
+                                    "missing for symbol '%s' (reloc type %u)\n", nm, type);
+                            exit(1);
+                        }
                         patch_got(type, insn, site, got[gi].va, rl->add);
                     }
                 }
@@ -2292,15 +2625,28 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                 int ti = find_tls(tls, ntls, nm);
                 if (ti < 0) die("internal: TLSDESC slot missing for symbol");
                 patch_tlsdesc(type, insn, site, tls[ti].va, rl->add);
+            } else if (is_classic_gdld_reloc(type)) {
+                /* Classic GD/LD -> Local-Exec relaxation (vms-76a). Rewrite the
+                 * psABI-fixed lea+call window to read TP and (for GD) add the
+                 * variable's TP-relative offset in place. For LD the offsets ride
+                 * the paired DTPOFF32 operands, so tpoff here is unused. */
+                uint64_t moff = tls_ref_offset(objs, nobj, i,
+                                               ELF64_R_SYM(rl->info), 0);
+                int32_t tpoff = (int32_t)(int64_t)(moff - tls_tp_size);
+                patch_tls_le(type, (uint8_t *)img, site, tpoff);
             } else if (is_dtpoff_reloc(type)) {
-                /* x86_64 local-dynamic operand: the variable's module-relative
-                 * TLS offset, written as a flat absolute 32-bit constant. Added
-                 * at run time to the module base the TLSDESC pair returned, so
-                 * it is link-time-final — NOT load-biased, NOT in .vms$rel. */
+                /* x86_64 dynamic TLS operand: the variable's TLS offset written
+                 * as a flat absolute 32-bit constant, link-time-final — NOT
+                 * load-biased, NOT in .vms$rel. In a gnu2/TLSDESC object this is
+                 * MODULE-relative (added at run time to the module base the
+                 * TLSDESC pair resolves). In a classic object whose TLSLD was
+                 * relaxed to LE, %rax already holds TP, so the operand must be
+                 * TP-relative (moff - aligned block size). (vms-76a) */
                 uint64_t moff = tls_ref_offset(objs, nobj, i,
                                                ELF64_R_SYM(rl->info),
-                                               tbss_base, rl->add);
-                *insn = (uint32_t)moff;
+                                               rl->add);
+                *insn = classic_tls ? (uint32_t)(moff - tls_tp_size)
+                                    : (uint32_t)moff;
             } else if (is_abs64_reloc(type)) {
                 /* Pointer initializer (.rela.data): write S+A as a 64-bit
                  * image-relative address and record the slot in .vms$rel so
@@ -2451,6 +2797,16 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     if (nweak)
         vms_wimp_write(img, off_wimp, imp, nimp);
 
+    /* .vms$ehf descriptor: image-relative .eh_frame start + __register_frame
+     * addr (both biased by IMGACT). Only emitted when register_frame_va != 0. */
+    if (off_ehf) {
+        struct ovmx_ehf_desc *ed = (struct ovmx_ehf_desc *)(img + off_ehf);
+        ed->magic = OVMX_EHF_MAGIC;
+        ed->reserved = 0;
+        ed->eh_frame_begin = ehf_beg;
+        ed->register_frame = register_frame_va;
+    }
+
     char *shstr = (char *)(img + off_shstr);
     for (int i = 0; i < nsec; i++) memcpy(shstr + sn_off[i], secn[i], strlen(secn[i]) + 1);
     Elf64_Shdr *sh = (Elf64_Shdr *)(img + off_shdr);
@@ -2463,6 +2819,15 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         sh[ix_ro].sh_flags = SHF_ALLOC; sh[ix_ro].sh_addr = ro_beg;
         sh[ix_ro].sh_offset = ro_beg; sh[ix_ro].sh_size = ro_end - ro_beg;
         sh[ix_ro].sh_addralign = 16;
+    }
+    if (ix_ehf_sec >= 0) {
+        /* .eh_frame output section spans the whole contiguous block INCLUDING
+         * the 4-byte-zero terminator (ehf_end), so a reader/registrar that
+         * bounds by sh_size sees the terminated FDE list. */
+        sh[ix_ehf_sec].sh_name = sn_off[ix_ehf_sec]; sh[ix_ehf_sec].sh_type = SHT_PROGBITS;
+        sh[ix_ehf_sec].sh_flags = SHF_ALLOC; sh[ix_ehf_sec].sh_addr = ehf_beg;
+        sh[ix_ehf_sec].sh_offset = ehf_beg; sh[ix_ehf_sec].sh_size = ehf_end - ehf_beg;
+        sh[ix_ehf_sec].sh_addralign = 8;
     }
     if (ngot) {
         sh[ix_got].sh_name = sn_off[ix_got]; sh[ix_got].sh_type = SHT_PROGBITS;
@@ -2482,11 +2847,20 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         sh[ix_data].sh_offset = data_beg; sh[ix_data].sh_size = data_end - data_beg;
         sh[ix_data].sh_addralign = 8;
     }
+    if (has_init_array) {
+        /* Real SHT_INIT_ARRAY output section: preserves the type so a reader
+         * (readelf, IMGACT's ovmx_find_section by name) sees exactly what it
+         * is -- the placed ctor-pointer range, not generic writable data. */
+        sh[ix_initarr].sh_name = sn_off[ix_initarr]; sh[ix_initarr].sh_type = SHT_INIT_ARRAY;
+        sh[ix_initarr].sh_flags = SHF_ALLOC | SHF_WRITE; sh[ix_initarr].sh_addr = initarr_beg;
+        sh[ix_initarr].sh_offset = initarr_beg; sh[ix_initarr].sh_size = initarr_end - initarr_beg;
+        sh[ix_initarr].sh_addralign = 8;
+    }
     if (has_tls && tdata_sz) {
         sh[ix_tdata].sh_name = sn_off[ix_tdata]; sh[ix_tdata].sh_type = SHT_PROGBITS;
         sh[ix_tdata].sh_flags = SHF_ALLOC | SHF_WRITE | SHF_TLS;
         sh[ix_tdata].sh_addr = tdata_va; sh[ix_tdata].sh_offset = tdata_va;
-        sh[ix_tdata].sh_size = tdata_sz; sh[ix_tdata].sh_addralign = tdata_al;
+        sh[ix_tdata].sh_size = tdata_sz; sh[ix_tdata].sh_addralign = tls_align;
     }
     sh[ix_sv].sh_name = sn_off[ix_sv]; sh[ix_sv].sh_type = SHT_PROGBITS;
     sh[ix_sv].sh_flags = SHF_ALLOC; sh[ix_sv].sh_addr = off_sv;
@@ -2525,11 +2899,17 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         sh[ix_wimp].sh_offset = off_wimp; sh[ix_wimp].sh_size = wimp_size;
         sh[ix_wimp].sh_addralign = 8;
     }
+    if (ix_ehf >= 0) {
+        sh[ix_ehf].sh_name = sn_off[ix_ehf]; sh[ix_ehf].sh_type = SHT_PROGBITS;
+        sh[ix_ehf].sh_flags = SHF_ALLOC; sh[ix_ehf].sh_addr = off_ehf;
+        sh[ix_ehf].sh_offset = off_ehf; sh[ix_ehf].sh_size = ehf_desc_size;
+        sh[ix_ehf].sh_addralign = 8;
+    }
     if (has_tls && tbss_sz) {
         sh[ix_tbss].sh_name = sn_off[ix_tbss]; sh[ix_tbss].sh_type = SHT_NOBITS;
         sh[ix_tbss].sh_flags = SHF_ALLOC | SHF_WRITE | SHF_TLS;
-        sh[ix_tbss].sh_addr = tdata_va + tbss_base; sh[ix_tbss].sh_offset = tdata_end;
-        sh[ix_tbss].sh_size = tbss_sz; sh[ix_tbss].sh_addralign = tbss_al;
+        sh[ix_tbss].sh_addr = tdata_va + tdata_sz; sh[ix_tbss].sh_offset = tdata_end;
+        sh[ix_tbss].sh_size = tbss_sz; sh[ix_tbss].sh_addralign = tls_align;
     }
     if (has_bss) {
         sh[ix_bss].sh_name = sn_off[ix_bss]; sh[ix_bss].sh_type = SHT_NOBITS;

@@ -49,12 +49,16 @@
 #define OVMX_REL_SECTION  ".vms$rel"
 /* Section that lists the image's TLSDESC entries for the activator to complete. */
 #define OVMX_TLS_SECTION  ".vms$tls"
+/* Section that names the image's DWARF .eh_frame block + libgcc __register_frame
+ * so the activator can register the frames before .init_array runs (vms-70d). */
+#define OVMX_EHF_SECTION  ".vms$ehf"
 
 #define OVMX_SV_MAGIC     0x31565356u  /* "VSV1" little-endian */
 #define OVMX_IMP_MAGIC    0x31504d49u  /* "IMP1" little-endian */
 #define OVMX_WIMP_MAGIC   0x314d4957u  /* "WIM1" little-endian */
 #define OVMX_REL_MAGIC    0x314c4552u  /* "REL1" little-endian */
 #define OVMX_TLS_MAGIC    0x31534c54u  /* "TLS1" little-endian */
+#define OVMX_EHF_MAGIC    0x31464845u  /* "EHF1" little-endian */
 
 /* GSMATCH match-control (public VMS semantics; values are OVMX-internal). */
 enum ovmx_gsmatch {
@@ -181,6 +185,36 @@ struct ovmx_tls_header {
     uint32_t magic;         /* OVMX_TLS_MAGIC                                 */
     uint32_t count;         /* number of TLSDESC entries                     */
     /* uint64_t entry_off[count]; image-relative offset of each 2-word entry  */
+};
+
+/*
+ * `.vms$ehf` layout (vms-70d): a single descriptor naming the image's
+ * DWARF unwinder frame table and the libgcc entry that registers it.
+ *
+ * A normal static C++ link relies on crtbeginT.o's frame_dummy() ctor calling
+ * __register_frame_info(__EH_FRAME_BEGIN__) to register the TU's .eh_frame with
+ * libgcc's registered-object list, so _Unwind_Find_FDE finds FDEs there and
+ * never falls to its dl_iterate_phdr path. An OVMX symbol-vector image has no
+ * working dl_iterate_phdr (IMGACT's custom activation never populates musl's
+ * link_map), and LINK.EXE lays .eh_frame out from concatenated whole-archive
+ * members that DON'T carry a single contiguous begin/terminator crtbegin/crtend
+ * pair would provide. So LINK.EXE instead places all .eh_frame input sections
+ * CONTIGUOUSLY, appends its own 4-byte-zero FDE terminator, and records here
+ * the image-relative address of that block's start and of the image's own
+ * whole-archived __register_frame. IMGACT reads this, biases both by the load
+ * base, and calls __register_frame(eh_frame_begin) BEFORE running .init_array
+ * (so libstdc++'s eh_alloc emergency-pool ctor and any later throw find their
+ * FDEs in the registry). Emitted ONLY when the image both has a non-empty
+ * .eh_frame and defines __register_frame (i.e. it whole-archived libgcc_eh /
+ * libstdc++); absent for a pure-C image, where IMGACT skips registration.
+ * OVMX-original carrier (CLAUDE.md rule 8): the __register_frame semantics are
+ * libgcc's public unwinder ABI; this section is OVMX's activator hook for them.
+ */
+struct ovmx_ehf_desc {
+    uint32_t magic;             /* OVMX_EHF_MAGIC                             */
+    uint32_t reserved;
+    uint64_t eh_frame_begin;    /* image-relative start of the .eh_frame block */
+    uint64_t register_frame;    /* image-relative addr of libgcc __register_frame */
 };
 
 #endif /* OVMX_IMAGE_H */

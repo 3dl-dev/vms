@@ -111,8 +111,21 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
              SYSMAN.EXE; do
         [ -f "$BIN/$e" ] && cp "$BIN/$e" "$SYSEXE/" || echo "   (no $e)"
     done
-    # IMGACT.EXE (alpha) -- built below into imgact-proof; also stage on disk
-    # so a future VMS-native login chain can resolve its interpreter here.
+    # IMGACT.EXE (alpha) is the FIRST of the five mandatory first-hop images the
+    # boot-image staging bridge reads off the ODS-2 volume over the ACP
+    # (ovmx_init.c stage_boot_images(): "the PT_INTERP the kernel opens for each
+    # execve").  Absent it, PID 1 halts %OVMX-F-SYSINIT boot-image staging failed
+    # / SS$_NOSUCHFILE right after the mount.  IMGACT.EXE is NOT in $BIN --
+    # OVMX_LINK_NATIVE is off for alpha-linux-gnu, so the userland cmake build
+    # omits the VMS-native toolchain graph -- so build it here from the standalone
+    # src/imgact Makefile (a SEPARATE src copy from the step-5 imgact-proof, so the
+    # two do not collide) and stage it on the volume.  NOTE: no apostrophes in this
+    # block -- it lives inside the assemble docker `bash -c '...'` single-quote.
+    cp -a /repo/src /work/imgact-boot-src
+    ( cd /work/imgact-boot-src/imgact && make ARCH=alpha CC=alpha-linux-gnu-gcc >/work/imgact-boot-build.log 2>&1 )
+    [ -f /work/imgact-boot-src/imgact/IMGACT.EXE ] \
+        || { echo "FAIL: IMGACT.EXE(alpha) did not build -- see /work/imgact-boot-build.log"; tail -20 /work/imgact-boot-build.log; exit 1; }
+    cp /work/imgact-boot-src/imgact/IMGACT.EXE "$SYSEXE/IMGACT.EXE"
     cp "$BIN/STARTUP.EXE" "$SYSEXE/"   # STARTUP is also /init, but keep on disk
     # Config: SYSUAF/RIGHTSLIST + SYSMGR command files + SYS$STARTUP data
     cp /repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT "$SYSEXE/"
@@ -157,7 +170,10 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     echo "-- verify: --ods2 list carries the login chain --"
     timeout 300 qemu-alpha "$BIN/vmsfs_master" --ods2 list /work/ovmx-distrib-alpha.img > /work/distrib-list.txt
     head -40 /work/distrib-list.txt
-    for name in DCL.EXE LOGINOUT.EXE PROVISION.EXE SYSUAF.DAT; do
+    # IMGACT.EXE + JOB_CONTROL.EXE included: the boot-image staging bridge
+    # (ovmx_init.c stage_boot_images) requires all five first-hop images on the
+    # volume, so verify them here rather than discover a miss only at boot.
+    for name in IMGACT.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE SYSUAF.DAT; do
         grep -qi "$name" /work/distrib-list.txt \
             || { echo "FAIL: mastered ODS-2 image missing SYS\$SYSTEM:$name"; exit 1; }
         echo "   OK: ovmx-distrib-alpha.img (ODS-2) carries SYS\$SYSTEM:$name"

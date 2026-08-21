@@ -394,6 +394,41 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
         uid_t want_uid = (uid_t)rec->uic_member;
         gid_t want_gid = (gid_t)rec->uic_group;
 
+        /*
+         * PER-USER PRIVATE IMAGE-STAGING DIRECTORY (vms-a86f).
+         *
+         * The atomic flip (vms-5f0) stages an image the Linux kernel must
+         * execve() into OVMX_BOOT_STAGE_DIR ("/run/ovmx-boot"), which PID 1
+         * creates root-owned 0755 and pre-fills with the boot images + a fixed
+         * utility set. An image the boot bridge did NOT pre-stage (e.g.
+         * SYS$SYSTEM:PARTS.EXE the first time `$ PARTS` runs) is staged lazily
+         * by DCL's activation resolver -- but that resolver runs as THIS
+         * session's UIC after the credential drop below, and a non-root session
+         * cannot create a file in the root-owned shared directory (the PARTS
+         * demo's EACCES). Making the shared directory world-writable would be a
+         * plant hole (any user could drop an image others activate) and is
+         * forbidden.
+         *
+         * So LOGINOUT -- still privileged here, the same window that stamped the
+         * SYSUAF identity -- creates the session's OWN staging directory,
+         * OVMX_BOOT_STAGE_DIR "/<uid>/", 0700 and owned by the authenticated
+         * UIC. The resolver then stages the session's images into a directory
+         * it owns; the genuine bytes still come off the ODS-2 volume over the
+         * executive ACP (INV-6), only the Linux-exec handoff is per-user-owned.
+         * Best-effort: PID 1 already made the parent, and a failure here is not
+         * fatal -- an image that then cannot be staged fails honestly at
+         * activation with %DCL-E-IVIMAGE, never a fabricated success.
+         */
+        {
+            char stage_user_dir[512];
+            (void)mkdir(OVMX_BOOT_STAGE_DIR, 0755);   /* PID 1 makes it; EEXIST fine */
+            if (ovmx_boot_stage_user_dir(stage_user_dir, sizeof(stage_user_dir),
+                                         (unsigned long)want_uid)) {
+                if (mkdir(stage_user_dir, 0700) == 0 || errno == EEXIST)
+                    (void)chown(stage_user_dir, want_uid, want_gid);
+            }
+        }
+
         if (setgroups(0, NULL) != 0 ||
             setgid(want_gid) != 0 ||
             setuid(want_uid) != 0 ||

@@ -653,7 +653,19 @@ static const char *imgsrc_map_staged(const char *path, char *buf, unsigned long 
 	if (sp[i] != '\0')
 		return path;                  /* not a staged path: use as-is */
 
-	const char *base = path + i;          /* basename after the stage prefix */
+	/*
+	 * basename = the LAST path component. This maps BOTH staged shapes back to
+	 * the on-volume SYSEXE path: the shared root-staged copy
+	 * ("/run/ovmx-boot/NAME.EXE") and the PER-USER private copy a non-root
+	 * session lazily stages ("/run/ovmx-boot/<uid>/NAME.EXE", vms-a86f). The
+	 * kernel hands IMGACT the execve'd path as AT_EXECFN, so a per-user staged
+	 * main image's genuine bytes are still read off the ODS-2 volume over the
+	 * ACP (INV-6), never from the tmpfs copy.
+	 */
+	const char *base = path + i;
+	for (const char *q = base; *q; q++)
+		if (*q == '/')
+			base = q + 1;
 	const char *vp = IMGACT_SYSEXE_VOLPATH;
 	unsigned long o = 0, j = 0;
 	while (vp[j] && o + 1 < sz)

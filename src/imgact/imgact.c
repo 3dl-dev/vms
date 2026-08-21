@@ -1678,38 +1678,54 @@ static void drive_crtl_init(struct ovmx_prod *crtl)
 	((void (*)(char **, char *))init_libc)(g_envp, g_argv0);
 }
 
-/* Resolve every loaded producer's .vms$wimp (weak-by-name imports) against the
- * WHOLE loaded producer set, by NAME. Run ONCE, after bind_imports has loaded
- * the entire producer closure, so a weak reference in one producer can bind to a
- * universal exported by any other -- including one loaded later, and across the
- * layering cycle the fixed (producer,index) .vms$imp path cannot express
- * (LIBVMS$SHR weak-imports sys$open; LIBVMSRMS$SHR, which --use's LIBVMS$SHR,
- * exports it). Found -> patch the import-GOT cell; absent -> leave it as LINK
- * left it (0), the ELF weak-undef result rms_services_present() reads as "RMS
- * not present" and falls back honestly. (vms-5f0) */
+/* Resolve one image's .vms$wimp (mapped at `wimp_addr`, cells inside the image
+ * at `img_base`) against the WHOLE loaded producer set, by NAME. Found -> patch
+ * the import-GOT cell; absent -> leave it as LINK left it (0), the ELF weak-undef
+ * result. The binding rule is identical for every image that carries weak-by-name
+ * imports; only which image's cells get patched differs, so a producer AND the
+ * main executable both route through here. (vms-5f0, vms-4a6) */
+static void resolve_wimp_for(unsigned long img_base, unsigned long wimp_addr)
+{
+	if (!wimp_addr)
+		return;
+	const struct ovmx_wimp_header *wh =
+		(const struct ovmx_wimp_header *)wimp_addr;
+	if (wh->magic != OVMX_WIMP_MAGIC)
+		return;
+	const struct ovmx_wimp_entry *we =
+		(const struct ovmx_wimp_entry *)((const char *)wh + sizeof *wh);
+	const char *names = (const char *)wh + wh->names_off;
+	for (unsigned k = 0; k < wh->count; k++) {
+		const char *sym = names + we[k].name_off;
+		unsigned long addr = 0;
+		for (int q = 0; q < g_nprods && !addr; q++)
+			addr = sv_find_named(&g_prods[q], sym);
+		if (addr)
+			*(unsigned long *)(img_base + we[k].patch_off) = addr;
+		/* else: no loaded producer exports it -> cell stays 0 (weak-undef) */
+	}
+}
+
+/* Resolve every loaded image's .vms$wimp (weak-by-name imports) against the WHOLE
+ * loaded producer set, by NAME. Run ONCE, after bind_imports has loaded the
+ * entire producer closure, so a weak reference can bind to a universal exported
+ * by any producer -- including one loaded later, and across the layering cycle
+ * the fixed (producer,index) .vms$imp path cannot express (LIBVMS$SHR weak-imports
+ * sys$open; LIBVMSRMS$SHR, which --use's LIBVMS$SHR, exports it). Absent -> the
+ * cell stays 0, the ELF weak-undef result rms_services_present() reads as "not
+ * present" and falls back honestly. (vms-5f0, vms-4a6) */
 static void resolve_weak_imports(void)
 {
-	for (int pi = 0; pi < g_nprods; pi++) {
-		unsigned long wa = g_prods[pi].wimp_addr;
-		if (!wa)
-			continue;
-		const struct ovmx_wimp_header *wh =
-			(const struct ovmx_wimp_header *)wa;
-		if (wh->magic != OVMX_WIMP_MAGIC)
-			continue;
-		const struct ovmx_wimp_entry *we =
-			(const struct ovmx_wimp_entry *)((const char *)wh + sizeof *wh);
-		const char *names = (const char *)wh + wh->names_off;
-		for (unsigned k = 0; k < wh->count; k++) {
-			const char *sym = names + we[k].name_off;
-			unsigned long addr = 0;
-			for (int q = 0; q < g_nprods && !addr; q++)
-				addr = sv_find_named(&g_prods[q], sym);
-			if (addr)
-				*(unsigned long *)(g_prods[pi].base + we[k].patch_off) = addr;
-			/* else: no loaded producer exports it -> cell stays 0 (weak-undef) */
-		}
-	}
+	for (int pi = 0; pi < g_nprods; pi++)
+		resolve_wimp_for(g_prods[pi].base, g_prods[pi].wimp_addr);
+	/* The main executable participates in weak-by-name binding exactly like a
+	 * producer: a whole-archived executable (libstdc++/libgcc pulled flat into
+	 * IMAGE.EXE) can weak-reference a universal that a loaded producer exports.
+	 * g_exe is NOT in g_prods[], so resolve its .vms$wimp explicitly -- otherwise
+	 * an executable's resolvable weak import is left unbound at activation and its
+	 * first call jumps through a 0 cell to address 0. Fail-honest is preserved: a
+	 * weak import no loaded producer exports still resolves to 0. (vms-4a6) */
+	resolve_wimp_for(g_exe.base, g_exe.wimp_addr);
 }
 
 /* Resolve every .vms$imp import of the executable against producer symbol
@@ -1754,6 +1770,17 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 		if (ovmx_find_section(&src, OVMX_TLS_SECTION, &tls_addr, &tls_size))
 			g_exe.tlsdesc =
 				(const struct ovmx_tls_header *)(exe_base + tls_addr);
+	}
+	/* Record the executable's OWN .vms$wimp (weak-by-name imports) while the
+	 * section headers are still readable. Resolved in the deferred pass
+	 * (resolve_weak_imports) after the entire producer closure is loaded, exactly
+	 * like a producer's. g_exe is not in g_prods[], so this is the only place its
+	 * weak imports are registered for that pass. (vms-4a6) */
+	{
+		unsigned long exe_wimp_addr, exe_wimp_size;
+		g_exe.wimp_addr = ovmx_find_section(&src, OVMX_WIMP_SECTION,
+						    &exe_wimp_addr, &exe_wimp_size)
+			? (exe_base + exe_wimp_addr) : 0;
 	}
 	imgsrc_close(&src);
 	if (!ok)

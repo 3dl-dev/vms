@@ -4,6 +4,17 @@ add_executable(vms_login
     vms_login.c
     loginout_display.c   # OpenVMS-faithful login-info block (vms-417)
     mail_notify.c        # shared new-mail counter (vms-417)
+    # SYSUAF-engine anchor (vms-341, Alpha): sysuaf_lookup() reaches the binary
+    # $UAFDEF engine (ovmx_sysuaf_read_user) and the RMS $OPEN/$GET-over-ACP seam
+    # ONLY through #pragma weak cells, and under OVMX_STATIC a weak reference does
+    # not pull an archive member -- so on the Alpha build (which cannot use the
+    # LINK.EXE path that adds this same TU: src/vmslink/link.c rejects non-x86/arm
+    # objects, and mk_loginout.sh compiles it there) sysuaf_live.o was dropped from
+    # LOGINOUT.EXE, sysuaf_lookup returned -1 BEFORE any ACP read, and every login
+    # printed "User authorization failure". This is the SAME strong-anchor TU
+    # x86_64's LINK.EXE uses; compiling it here force-extracts the engine + RMS
+    # seam on the static CMake path too, mirroring the HELP.EXE anchor below.
+    ${CMAKE_SOURCE_DIR}/src/vmslink/loginout_rms_bind.c
 )
 
 target_include_directories(vms_login PRIVATE

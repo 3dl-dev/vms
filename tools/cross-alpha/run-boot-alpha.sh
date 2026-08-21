@@ -58,6 +58,9 @@
 #   tools/cross-alpha/run-boot-alpha.sh gate          # same, explicit
 #   tools/cross-alpha/run-boot-alpha.sh build          # just (re)build the cache
 #   tools/cross-alpha/run-boot-alpha.sh boot           # one real boot, verbose verdict
+#   tools/cross-alpha/run-boot-alpha.sh login          # boot + authenticate SYSTEM/
+#                                                       # MANAGER to an interactive DCL $
+#                                                       # (end-to-end boot-login gate)
 #   tools/cross-alpha/run-boot-alpha.sh validate [N]   # N consecutive real boots
 #                                                       # (reliability validation; default N=5)
 set -euo pipefail
@@ -151,6 +154,108 @@ run_one_boot() {
   return "$rc"
 }
 
+# run_login_boot <tag> -- ONE real boot driven PAST the Username: prompt to an
+# authenticated, interactive DCL "$" prompt, the Alpha analog of the x86_64
+# login-to-$ gate (tests/qemu/test_install_boot_e2e.sh's login() + SHOW TIME
+# assertion). It exercises the SAME LOGINOUT.EXE C path cross-built EM_ALPHA:
+# SYSTEM at "Username:", MANAGER at "Password:", the "Welcome to OpenVMX" login
+# banner, then "SHOW TIME" and the assertion that a real DCL activated and
+# executed the command (its output carries the current year). This is where the
+# authentic binary-$UAFDEF SYSUAF + Purdy authentication is proven end-to-end on
+# Alpha, not just boot-to-Username. Verdict = login banner reached AND SHOW TIME
+# returned the year. Returns 0/1; never `exit`s (composable). The "$" and banner
+# assertions are never weakened to make this pass (Rule 8 / INV-6).
+#
+# Credentials/marker are the shipped SYSTEM=MANAGER defaults; override via
+# LOGIN_USER / LOGIN_PASS if a fixture ever seeds a different SYSUAF.
+run_login_boot() {
+  local tag="$1"
+  rm -f "$WORK/gate-${tag}.img" "$WORK/gate-${tag}.raw" "$WORK/gate-${tag}.log" "$WORK/gate-${tag}.fifo"
+  local cname="ovmx-alpha-login-${tag}-$$"
+  local rc=0
+  set +e
+  timeout --kill-after="$TIMEOUT_GRACE" "$DOCKER_TIMEOUT" docker run --rm \
+    --name "$cname" --memory=8g --cpus="$(nproc)" \
+    -v "$WORK":/work "$IMG" bash -euo pipefail -c '
+      BT="'"$BOOT_TIMEOUT"'"; TAG="'"$tag"'"
+      LOGIN_USER="'"${LOGIN_USER:-SYSTEM}"'"; LOGIN_PASS="'"${LOGIN_PASS:-MANAGER}"'"
+      BANNER="Welcome to OpenVMX"; CURYEAR="$(date +%Y)"
+      cd /work
+      cp ovmx-distrib-alpha.img "gate-${TAG}.img"
+      RAW="gate-${TAG}.raw"
+      FIFO="/work/gate-${TAG}.fifo"; mkfifo "$FIFO"
+      timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 1024 -vga none -nic none \
+          -kernel vmlinux-boot -append "console=ttyS0 panic=-1" \
+          -drive file="gate-${TAG}.img",format=raw,if=virtio \
+          -nographic -no-reboot <"$FIFO" > "$RAW" 2>&1 &
+      QP=$!
+      exec 6>"$FIFO"
+      trap "" PIPE   # a CR fed just as the guest exits must not kill this shell
+      send()    { printf "%s\r" "$1" >&6 2>/dev/null || true; }
+      # waitpat <pattern> <seconds-limit> <since-byte> -- fixed-string, bounded.
+      waitpat() {
+          local pat="$1" lim="$2" since="${3:-0}" w=0
+          while [ "$w" -lt "$lim" ]; do
+              tail -c "+$((since + 1))" "$RAW" 2>/dev/null | grep -qaF "$pat" && return 0
+              kill -0 "$QP" 2>/dev/null || return 1
+              sleep 1; w=$((w + 1))
+          done
+          return 1
+      }
+      # waitpat_re <ERE> <seconds-limit> <since-byte> -- like waitpat but regex.
+      waitpat_re() {
+          local pat="$1" lim="$2" since="${3:-0}" w=0
+          while [ "$w" -lt "$lim" ]; do
+              tail -c "+$((since + 1))" "$RAW" 2>/dev/null | grep -qaE "$pat" && return 0
+              kill -0 "$QP" 2>/dev/null || return 1
+              sleep 1; w=$((w + 1))
+          done
+          return 1
+      }
+      # 1. Wake LOGINOUT to the Username: prompt (CR every 2s, vms-3f6/vms-2213).
+      W=0
+      while kill -0 "$QP" 2>/dev/null; do
+          grep -qaF "Username:" "$RAW" 2>/dev/null && break
+          printf "\r" >&6 2>/dev/null || true
+          sleep 2; W=$((W + 2))
+          [ "$W" -ge "$BT" ] && break
+      done
+      LOGIN_OK=0; CMD_OK=0
+      if grep -qaF "Username:" "$RAW" 2>/dev/null; then
+          OFF=$(wc -c < "$RAW")
+          # 2. Authenticate: SYSTEM / MANAGER against the on-disk SYSUAF.
+          send "$LOGIN_USER"
+          waitpat "Password:" 20 "$OFF" && send "$LOGIN_PASS"
+          # 3. Login success == the real LOGINOUT banner (not a printf).
+          waitpat "$BANNER" 30 "$OFF" && LOGIN_OK=1
+          # 4. Interactive DCL: run SHOW TIME, assert it executed by matching a
+          #    VMS date-time stamp (DD-MON-YYYY HH:MM:SS) in the output AFTER the
+          #    command (OFF2) -- proves a real DCL ran SHOW TIME.  We do NOT pin
+          #    the host year here: the AXPbox/qemu-alpha RTC runs on an epoch-1980
+          #    register so the guest clock reads ~20 years behind the host, and
+          #    pinning date +%Y would fail a correct login (the check is "DCL
+          #    executed the command", not "the emulated clock is correct").
+          waitpat "\$" 20 "$OFF" || true          # settle at the DCL prompt
+          OFF2=$(wc -c < "$RAW")
+          send "SHOW TIME"
+          waitpat_re "[0-9]+-[A-Z][A-Z][A-Z]-[0-9][0-9][0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9]" 20 "$OFF2" && CMD_OK=1
+      fi
+      exec 6>&-
+      sleep 2
+      kill "$QP" 2>/dev/null || true
+      wait "$QP" 2>/dev/null || true
+      rm -f "$FIFO"
+      grep -avE "TSUNAMI machine check|tsunami_(read|write)" "$RAW" > "gate-${TAG}.log" || true
+      echo "LOGIN_OK=${LOGIN_OK} CMD_OK=${CMD_OK}" >> "gate-${TAG}.log"
+      [ "$LOGIN_OK" -eq 1 ] && [ "$CMD_OK" -eq 1 ]
+    '
+  rc=$?
+  set -e
+  docker rm -f "$cname" >/dev/null 2>&1 || true
+  rm -f "$WORK/gate-${tag}.img"
+  return "$rc"
+}
+
 case "$MODE" in
   build)
     ensure_artifacts
@@ -188,6 +293,26 @@ case "$MODE" in
     tail -40 "$WORK/gate-gate.log" 2>/dev/null || true
     die "GATE FAILED (vms-359) -- Username: prompt not reached, see $WORK/gate-gate.log"
     ;;
+  login)
+    # END-TO-END BOOT-LOGIN gate -- boots, then authenticates SYSTEM/MANAGER
+    # against the on-disk SYSUAF and lands on an interactive DCL "$" prompt,
+    # running SHOW TIME to prove a real DCL executed (the Alpha analog of the
+    # x86_64 login-to-$ e2e, tests/qemu/test_install_boot_e2e.sh). Exit 0 IFF
+    # the login banner is reached AND SHOW TIME returns the year.
+    ensure_artifacts
+    ts0=$(date +%s)
+    if run_login_boot "login"; then
+      dur=$(( $(date +%s) - ts0 ))
+      log "======================================================================"
+      log "  LOGIN GATE PASSED: OVMX/Alpha booted -> LOGINOUT -> SYSTEM/MANAGER"
+      log "  authenticated against SYSUAF -> interactive DCL \$ prompt -> SHOW TIME"
+      log "  executed (real DCL, INV-6-clean), under qemu-system-alpha, in ${dur}s."
+      log "======================================================================"
+      exit 0
+    fi
+    tail -40 "$WORK/gate-login.log" 2>/dev/null || true
+    die "LOGIN GATE FAILED -- did not authenticate to a DCL \$ prompt, see $WORK/gate-login.log"
+    ;;
   validate)
     N="${2:-5}"
     ensure_artifacts
@@ -207,6 +332,6 @@ case "$MODE" in
     [ "$fail" -eq 0 ] || die "validation found $fail flake(s) out of $N runs -- NOT gate-grade"
     ;;
   *)
-    die "unknown mode '$MODE' (want: build | boot | gate | validate [N])"
+    die "unknown mode '$MODE' (want: build | boot | gate | login | validate [N])"
     ;;
 esac

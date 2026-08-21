@@ -675,13 +675,7 @@ struct dcl_rms_writer *dcl_rms_write_create(struct dcl_context *ctx, const char 
     w->fab.fab$w_mrs = mrs;
     w->fab.fab$b_fac = FAB$M_PUT;
     st = sys$create(&w->fab, 0, 0);
-    if (st != RMS$_NORMAL) {
-        fprintf(stderr, "DBG4AC sys$create '%s' rfm=%u -> st=%u (0x%08x)\n",
-                w->spec, (unsigned)w->fab.fab$b_rfm, (unsigned)st, (unsigned)st);
-        if (rms_status) *rms_status = st;
-        free(w);
-        return NULL;
-    }
+    if (st != RMS$_NORMAL) { if (rms_status) *rms_status = st; free(w); return NULL; }
 
     w->rab = cc$rms_rab;
     w->rab.rab$l_fab = &w->fab;

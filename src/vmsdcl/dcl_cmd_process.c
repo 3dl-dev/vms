@@ -1389,9 +1389,10 @@ static int dcl_resolve_activatable_acp(struct dcl_context *ctx,
                 return 1;
             }
             /* (2) Not boot-staged (a test harness, or a tool outside the boot
-             * set such as the self-host TCC/LIBRARIAN/LINK.EXE): read the
+             * set such as the self-host TCC/LIBRARIAN/LINK.EXE, or an app like
+             * SYS$SYSTEM:PARTS.EXE the first time `$ PARTS` runs): read the
              * GENUINE bytes off the ODS-2 volume THROUGH THE ACP now and stage
-             * them to that POSIX home (the same read the boot bridge does, done
+             * them to a POSIX home (the same read the boot bridge does, done
              * lazily). The bytes come from IO$_READVBLK over /dev/vms, NEVER a
              * /vms passthrough read (vms-104, Rule 9 / INV-6). A native musl
              * bootstrap tool (no OVMX symbol vector) is then execve()d off this
@@ -1399,9 +1400,34 @@ static int dcl_resolve_activatable_acp(struct dcl_context *ctx,
              * symbol-vector image staged the same way is IMGACT-activated (its
              * PT_INTERP is opened by the kernel, imgsrc_map_staged re-reads it
              * over the ACP) -- imgact_activate makes that native-vs-image call
-             * from the ELF, so ONE genuine ACP-sourced copy serves both. */
-            if (ovmx_boot_stage_exec_path(lp, staged, sizeof(staged))) {
-                (void)mkdir(OVMX_BOOT_STAGE_DIR, 0755);   /* EEXIST is fine */
+             * from the ELF, so ONE genuine ACP-sourced copy serves both.
+             *
+             * PER-USER PRIVATE STAGING (vms-a86f). LOGINOUT setuid()s a session
+             * onto its SYSUAF UIC, so this runs as a NON-ROOT process (SYSTEM is
+             * uid 4). The shared OVMX_BOOT_STAGE_DIR is root-owned 0755, so a
+             * non-root session cannot create a file in it -- lazily staging into
+             * the shared directory failed EACCES, which is exactly why the PARTS
+             * demo went red. Stage instead into OVMX_BOOT_STAGE_DIR "/<uid>/", a
+             * directory the activating process OWNS (created 0700): secure (no
+             * world-writable plant hole) and writable by the session. A copy a
+             * prior invocation already staged there is reused. (The deeper end
+             * state is executive-mediated staging, vms-040; per-user-private is
+             * the faithful, secure, in-scope fix.) */
+            char user_dir[1024];
+            if (ovmx_boot_stage_user_path(lp, staged, sizeof(staged),
+                                          (unsigned long)getuid())) {
+                /* Reuse an already-staged per-user copy (repeat activation). */
+                if (access(staged, X_OK) == 0) {
+                    strncpy(resolved, staged, sz - 1);
+                    resolved[sz - 1] = '\0';
+                    return 1;
+                }
+                /* Ensure the shared root (best-effort; PID 1 makes it) and the
+                 * per-user private subdirectory (0700, owned by this uid). */
+                (void)mkdir(OVMX_BOOT_STAGE_DIR, 0755);   /* EEXIST/EACCES fine */
+                if (ovmx_boot_stage_user_dir(user_dir, sizeof(user_dir),
+                                             (unsigned long)getuid()))
+                    (void)mkdir(user_dir, 0700);          /* EEXIST is fine */
                 if (dcl_rms_stage(ctx, trial, staged) == RMS$_NORMAL &&
                     access(staged, X_OK) == 0) {
                     strncpy(resolved, staged, sz - 1);

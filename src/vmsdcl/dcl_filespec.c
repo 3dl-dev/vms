@@ -766,6 +766,15 @@ int dcl_rms_dir_next(struct dcl_rms_dir *d, char *spec, size_t specsz,
     return 1;
 }
 
+uint32_t dcl_rms_dir_status(const struct dcl_rms_dir *d)
+{
+    /* $SEARCH records its status on the FAB (rms_acp_search / the passthrough
+     * both set fab$l_sts == the returned status). After dcl_rms_dir_next returns
+     * 0 this is RMS$_NMF (exhausted an existing directory) or RMS$_DNF (the
+     * directory did not exist at all) -- the distinction DIRECTORY needs. */
+    return d ? d->fab.fab$l_sts : (uint32_t)RMS$_DNF;
+}
+
 void dcl_rms_dir_close(struct dcl_rms_dir *d)
 {
     if (!d) return;

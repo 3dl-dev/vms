@@ -3847,6 +3847,18 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" /vms
           sh src/vmslink/test/run_test_x86_64_tls.sh
 
+      # vms-83e8: the OTHER x86_64 TLS access model — the CLASSIC general-/
+      # local-dynamic sequence that calls __tls_get_addr (what upstream
+      # libstdc++/libgcc emit; the gnu2 step above never emits a
+      # TLSGD/TLSLD/__tls_get_addr). LINK relaxes every one to Local-Exec;
+      # this proves at byte level that none survives AND activates the image
+      # so the relaxed TP-relative offsets read/write correctly. Native x86_64.
+      - name: Prove the x86_64 CLASSIC GD/LD TLS relaxation links AND activates (vms-83e8)
+        run: |
+          sudo mkdir -p /vms/SYS0/SYSCOMMON/SYSEXE /vms/SYS0/SYSCOMMON/SYSLIB
+          sudo chown -R "$(id -u):$(id -g)" /vms
+          sh src/vmslink/test/run_test_x86_64_classic_tls.sh
+
   # -----------------------------------------------------------------------
   # Job 10b: DECC$SHR.EXE — the OVMX C run-time library shareable (aarch64)
   #

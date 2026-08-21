@@ -381,7 +381,7 @@ pthread_create=PROCEDURE,pthread_detach=PROCEDURE,pthread_join=PROCEDURE,\
 pread=PROCEDURE,pwrite=PROCEDURE,ferror=PROCEDURE,\
 \
 chown=PROCEDURE,\
-__ctype_get_mb_cur_max=PROCEDURE,__cxa_atexit=PROCEDURE,__fsetlocking=PROCEDURE,__stack_chk_fail=PROCEDURE,__tls_get_addr=PROCEDURE,\
+__ctype_get_mb_cur_max=PROCEDURE,__cxa_atexit=PROCEDURE,__fsetlocking=PROCEDURE,__stack_chk_fail=PROCEDURE,\
 asprintf=PROCEDURE,btowc=PROCEDURE,dirfd=PROCEDURE,dl_iterate_phdr=PROCEDURE,dlerror=PROCEDURE,\
 fchmod=PROCEDURE,fchmodat=PROCEDURE,fdopendir=PROCEDURE,fegetround=PROCEDURE,feof=PROCEDURE,\
 fesetround=PROCEDURE,ffs=PROCEDURE,freelocale=PROCEDURE,frexp=PROCEDURE,frexpl=PROCEDURE,\

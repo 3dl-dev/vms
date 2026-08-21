@@ -65,7 +65,13 @@ command -v "$ENGINE" >/dev/null 2>&1 || { echo "run-cc1-ovmx: neither podman nor
     echo "== step 2: build the OVMX producer graph (IMGACT.EXE, LINK.EXE, DECC\$SHR, 5 shareables) =="
     WORK=/tmp/mk-cc1-graph
     rm -rf "$WORK"; mkdir -p "$WORK"
-    SYSEXE="$WORK/SYSEXE"; SYSLIB="$WORK/SYSLIB"
+    # SYSEXE/SYSLIB MUST be the canonical INTERP path: LINK.EXE stamps every
+    # image PT_INTERP=/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE (link.c IMGACT_INTERP),
+    # so IMGACT.EXE and the --use producers have to live there at activation or
+    # the kernel reports "not found" (exit 127) on an otherwise-valid image.
+    # The working vmslink/imgact activation tests (run_test_x86_64_tls.sh et al.)
+    # build the graph straight into these paths — mirror them.
+    SYSEXE=/vms/SYS0/SYSCOMMON/SYSEXE; SYSLIB=/vms/SYS0/SYSCOMMON/SYSLIB
     mkdir -p "$SYSEXE" "$SYSLIB"
     SRC=/src/src
     IMGACT_DIR="$SRC/imgact"

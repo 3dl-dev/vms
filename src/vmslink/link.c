@@ -1667,11 +1667,17 @@ static int is_classic_gdld_reloc(uint32_t type)
  *        48 8d 80 <tpoff32>         lea x@tpoff(%rax),%rax     (tpoff embedded)
  *
  *   LD:  48 8d 3d <d32>             lea x@tlsld(%rip),%rdi
- *        e8 <d32>                   call __tls_get_addr@plt
- *     -> 66 66 66                   (padding)
+ *        e8 <d32> | ff 15 <d32>     call __tls_get_addr@plt | *..@gotpcrel(%rip)
+ *     -> 66 [66] 66 66              (3- or 4-byte 0x66 padding)
  *        64 48 8b 04 25 00 00 00 00 mov %fs:0,%rax             (leaves %rax = TP)
  * For LD the paired R_X86_64_DTPOFF32 operands carry each variable's TP-relative
- * offset (moff - aligned_tls_size), written by the DTPOFF32 arm below. */
+ * offset (moff - aligned_tls_size), written by the DTPOFF32 arm below.
+ *
+ * BOTH call dialects occur in the wild: -fplt emits a 5-byte direct `e8` call,
+ * -fno-plt (Alpine's libstdc++/libgcc, GOTPCRELX) a 6-byte indirect `ff 15`.
+ * The GD lea+call window is 16 bytes for both (the direct call carries an extra
+ * 0x66 prefix). The LD window is 12 bytes for the direct call, 13 for the
+ * indirect, so its 0x66 padding is sized from the actual call opcode. */
 static void patch_tls_le(uint32_t type, uint8_t *img, uint64_t site, int32_t tpoff)
 {
     static const uint8_t movfs[9] = /* mov %fs:0, %rax */
@@ -1681,10 +1687,16 @@ static void patch_tls_le(uint32_t type, uint8_t *img, uint64_t site, int32_t tpo
         memcpy(w, movfs, 9);
         w[9] = 0x48; w[10] = 0x8d; w[11] = 0x80;  /* lea tpoff(%rax), %rax */
         memcpy(w + 12, &tpoff, 4);
-    } else {                                   /* R_X86_64_TLSLD, 12-byte window */
-        uint8_t *w = img + site - 3;
-        w[0] = w[1] = w[2] = 0x66;             /* 3-byte prefix padding */
-        memcpy(w + 3, movfs, 9);
+    } else {                                   /* R_X86_64_TLSLD */
+        /* lea is a fixed 7 bytes (48 8d 3d <d32>) starting 3 before the reloc
+         * field, so the paired call begins at site+4. Its first opcode byte
+         * selects the window length: 0xff (ff 15, indirect) -> 13-byte window
+         * with 4-byte padding; anything else (0xe8, direct) -> 12-byte, 3-byte
+         * padding. The extra 0x66 prefixes are ignored at execution. */
+        uint8_t *w   = img + site - 3;
+        int      pad = (img[site + 4] == 0xff) ? 4 : 3;
+        for (int k = 0; k < pad; k++) w[k] = 0x66;
+        memcpy(w + pad, movfs, 9);
     }
 }
 

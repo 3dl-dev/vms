@@ -1856,11 +1856,15 @@ static uint32_t rms_impl_create(void *fab_ptr)
             return RMS$_SYN;
         }
         sp = specs[0];
+        fprintf(stderr, "OVMX-DIAG rms_create ENTRY ncand=%d dev='%s' dir='%s' name='%s'\n",
+                ncand, sp.devnam, sp.dirpath, sp.name);
         strncpy(fab->_resolved_path, sp.name, sizeof(fab->_resolved_path) - 1);
         fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';
 
         st = vms_kif_acp_assign(sp.devnam, &chan);
         if (!$VMS_STATUS_SUCCESS(st)) {
+            fprintf(stderr, "OVMX-DIAG rms_create ASSIGN-FAIL dev='%s' st=0x%08x\n",
+                    sp.devnam, st);
             fab->fab$l_stv = st;
             fab->fab$l_sts = rms_acp_open_status(st);
             return fab->fab$l_sts;
@@ -1884,15 +1888,21 @@ static uint32_t rms_impl_create(void *fab_ptr)
         st = rms_acp_resolve_did(chan, sp.dirpath, &fop.did_num, &fop.did_seq,
                                  &fop.did_rvn, &fop.did_nmx);
         if (!$VMS_STATUS_SUCCESS(st)) {
+            fprintf(stderr, "OVMX-DIAG rms_create RESOLVE_DID-FAIL dev='%s' dir='%s' st=0x%08x\n",
+                    sp.devnam, sp.dirpath, st);
             free(h); vms_kif_dassgn(chan);
             fab->fab$l_stv = st; fab->fab$l_sts = RMS$_DNF;
             return RMS$_DNF;
         }
+        fprintf(stderr, "OVMX-DIAG rms_create RESOLVE_DID-OK dir='%s' did_num=%u did_nmx=%u\n",
+                sp.dirpath, (unsigned)fop.did_num, (unsigned)fop.did_nmx);
         fop.version = 0;                     /* highest existing + 1 */
         strncpy(fop.name, sp.name, VMS_ACP_NAME_SIZE - 1);
 
         st = vms_kif_acp_fileop(&fop);
         if (!$VMS_STATUS_SUCCESS(st)) {
+            fprintf(stderr, "OVMX-DIAG rms_create FILEOP-FAIL name='%s' did_num=%u st=0x%08x\n",
+                    fop.name, (unsigned)fop.did_num, st);
             free(h); vms_kif_dassgn(chan);
             fab->fab$l_stv = st; fab->fab$l_sts = RMS$_CRE;
             return RMS$_CRE;

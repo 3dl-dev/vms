@@ -675,7 +675,13 @@ struct dcl_rms_writer *dcl_rms_write_create(struct dcl_context *ctx, const char 
     w->fab.fab$w_mrs = mrs;
     w->fab.fab$b_fac = FAB$M_PUT;
     st = sys$create(&w->fab, 0, 0);
-    if (st != RMS$_NORMAL) { if (rms_status) *rms_status = st; free(w); return NULL; }
+    if (st != RMS$_NORMAL) {
+        /* OVMX-DIAG (vms-parts-release-fix): surface the RMS secondary status so
+         * a create failure names the underlying executive SS$ code. */
+        fprintf(stderr, "%%OVMX-DIAG-CRE, sts=%08X stv=%u spec=%s\n",
+                (unsigned)w->fab.fab$l_sts, (unsigned)w->fab.fab$l_stv, w->spec);
+        if (rms_status) *rms_status = st; free(w); return NULL;
+    }
 
     w->rab = cc$rms_rab;
     w->rab.rab$l_fab = &w->fab;

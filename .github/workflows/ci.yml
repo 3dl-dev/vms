@@ -1,5 +1,40 @@
 name: CI
 
+# =====================================================================
+# TIER SPLIT (vms-fb8) -- why a PR does not run the heavy e2e gates
+# =====================================================================
+# The per-PR path used to run the full suite when a core path changed,
+# and its wall was one job: the release/install/upgrade/boot-scenario
+# QEMU e2e gates (14-46 min each, TCG-emulated). That made the 5-wide
+# peer iteration loop pay ~46 min per push.
+#
+# Those heavy gates now run on every NON-pull_request event only --
+# push(main), merge_group, workflow_dispatch, schedule -- via
+# `if: github.event_name != 'pull_request'`. A pull_request runs the
+# FAST tier (build+test, link/activate, kernel-executive shards,
+# static analysis, conformance, cross-compiles). No coverage is
+# deleted; the heavy tier MOVES off the per-PR critical path.
+#
+# COVERAGE-BEFORE-MERGE IS PRESERVED, two ways:
+#   * merge_group -- when a merge queue is enabled, the full suite runs
+#     on the batched result before it lands (nothing enqueues it until
+#     then; see below).
+#   * PRE-MERGE FULL RUN -- until a merge queue exists, the reap gate
+#     MUST fire a `workflow_dispatch` run on the candidate branch/SHA
+#     (`gh workflow run ci.yml --ref <branch>`) and verify it GREEN
+#     before squash-merge. workflow_dispatch forces every output true
+#     (full suite). KVM-accelerated, this is ~single-digit minutes, not
+#     46. This replaces "the PR's own run was the full suite" -- the
+#     by-SHA proof still exists, just fired deliberately at reap time.
+# Do NOT merge a core change on the fast-tier PR run alone.
+#
+# WIDENS the "invisible-on-PR, red-on-push" class: gates that only run on
+# non-PR events (these heavy e2e jobs, plus the pre-existing negative-control
+# meta-checks in facility_defects.sh) will NOT redden a PR — only the
+# pre-merge full run / push / nightly. A lane that reaps on fast-tier-green
+# alone WILL get bitten. The pre-merge `workflow_dispatch` full run is the
+# backstop; read it, do not skip it.
+
 on:
   push:
     branches: [main]
@@ -624,7 +659,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             cmake gcc make libc6-dev libreadline-dev strace libcap2-bin \
-            libssh-dev musl-tools
+            libssh-dev musl-tools ccache
 
       - name: Cache CMake build
         uses: actions/cache@v4
@@ -633,12 +668,26 @@ jobs:
           key: cmake-build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**/CMakeLists.txt', 'src/**/*.c', 'src/**/*.h', 'src/**/*.S') }}
           restore-keys: cmake-build-${{ runner.os }}-
 
+      # ccache (vms-fb8): every build job here is otherwise a cold recompile of
+      # the same tree. ccache keys on preprocessed content, so across runs the
+      # unchanged TUs are served from cache and only genuinely-changed files
+      # recompile. Populates on the first run, hits on subsequent ones. Keyed
+      # per job-family with a sha suffix so each run saves a fresh layer that
+      # the next run restores via the prefix.
+      - name: Cache ccache (compiler object cache)
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-buildtest-${{ runner.os }}-${{ github.sha }}
+          restore-keys: ccache-buildtest-${{ runner.os }}-
+
       - name: Configure
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Debug \
             -DBUILD_TESTS=ON \
-            -DBUILD_TOOLS=ON
+            -DBUILD_TOOLS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -691,10 +740,18 @@ jobs:
           # parts_demo_e2e). Every PRODUCT gate -- unit tests, the positive
           # census/register authenticity gates, all integration gates --
           # still runs on every PR.
+          # vms-ed4: run tests in parallel. ctest --parallel honors per-test
+          # RESOURCE_LOCK properties, so tests that share mutable global state
+          # (the /vms SYSDISK, /dev/vms, fixed ports) serialize among themselves
+          # via their lock while independent tests run concurrently. The locks
+          # are declared in CMake (see set_tests_properties ... RESOURCE_LOCK).
+          # NEVER drop a lock to speed a run -- an unlocked shared-state test is
+          # a flaky test (Rule 8).
+          JOBS="$(nproc)"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            ctest --output-on-failure -LE slow
+            ctest --output-on-failure --parallel "$JOBS" -LE slow
           else
-            ctest --output-on-failure
+            ctest --output-on-failure --parallel "$JOBS"
           fi
 
   # -----------------------------------------------------------------------
@@ -708,7 +765,10 @@ jobs:
   persistent-boot:
     name: Persistent Boot Smoke Test
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     # 40 (was 30): the SYSBOOT> conversational proof (vms-b81, wired in by
     # vms-46c) adds a three-boot expect-driven step to this job; the extra
@@ -923,7 +983,10 @@ jobs:
   cut-release-reproducible:
     name: cut-release is byte-reproducible + boots (vms-d73)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1086,7 +1149,10 @@ jobs:
   upgrade-e2e:
     name: install -> UPGRADE -> boot e2e (vms-f05)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1162,7 +1228,10 @@ jobs:
   install-boot-e2e:
     name: install /DESTINATION -> boot the installed target -> login (vms-96ec)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1241,7 +1310,10 @@ jobs:
   release-install-e2e:
     name: R1 release e2e — media→menu install→separate container→login→PRODUCT SHOW (vms-37f)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1322,7 +1394,10 @@ jobs:
   release-acceptance-e2e:
     name: Release-acceptance gate — boot the CUT artifact, verify shipped version (vms-a86f)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1424,7 +1499,11 @@ jobs:
   cut-release-vax-gate:
     name: VAX co-release gate — artifacts build + a failed VAX build reds the cut (vms-ca5)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' || needs.changes.outputs.netbsd_vax == 'true' }}
+    # vms-fb8 tier-split: heavy VAX co-release gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request;
+    # cross-arch parity still enforced pre-merge (image-parity-gate stays on PR;
+    # the full VAX build runs in the pre-merge full run).
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -1537,7 +1616,10 @@ jobs:
   parts-demo-e2e:
     name: PARTS 0.2 Demo E2E (real boot, RMS load, DIRECTORY corroboration)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.core == 'true' || needs.changes.outputs.boot == 'true' }}
+    # vms-fb8 tier-split: heavy PARTS demo e2e runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 50
 
@@ -1591,7 +1673,10 @@ jobs:
   boot-scsnode-hostname-e2e:
     name: SCSNODE -> real hostname across reboot (vms-b6a7)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -1647,7 +1732,10 @@ jobs:
   sysboot-cluster-params-e2e:
     name: SYSBOOT> authors cluster params (vms-46c gap #2)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -1702,7 +1790,10 @@ jobs:
   cluster-params-recnx-e2e:
     name: SYSGEN authors cluster params, SCSD adopts RECNXINTERVAL (vms-c3b)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -3527,7 +3618,18 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             cmake gcc make libc6-dev libreadline-dev \
-            clang-tidy cppcheck
+            clang-tidy cppcheck ccache
+
+      # ccache (vms-fb8): this job's build (below, for generated headers +
+      # compile_commands) is otherwise a full cold recompile of the tree --
+      # the single biggest chunk of its wall. ccache serves unchanged TUs from
+      # cache across runs. See build-and-test for the rationale.
+      - name: Cache ccache (compiler object cache)
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-staticanalysis-${{ runner.os }}-${{ github.sha }}
+          restore-keys: ccache-staticanalysis-${{ runner.os }}-
 
       - name: Configure (generate compile_commands.json)
         run: |
@@ -3535,15 +3637,34 @@ jobs:
             -DCMAKE_BUILD_TYPE=Debug \
             -DBUILD_TESTS=ON \
             -DBUILD_TOOLS=ON \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
       - name: Build (required for generated headers)
         run: cmake --build build -j$(nproc)
 
+      # vms-fb8: on a PR, lint only files changed vs the base branch -- the
+      # whole-tree sweep (~hundreds of files) was the bulk of clang-tidy's
+      # cost and it re-flags code the PR never touched. On non-PR events
+      # (push/merge_group/schedule) still sweep the whole tree so nothing is
+      # lost from the coverage that gates main. This job is informational-only
+      # (always exits 0), so narrowing the PR view changes latency, not a gate.
+      - name: Compute changed-file filter (PR only)
+        id: changed
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" || true
+          git diff --name-only "origin/${{ github.base_ref }}" HEAD -- '*.c' '*.h' > /tmp/changed_files.txt || true
+          echo "count=$(wc -l < /tmp/changed_files.txt)" >> "$GITHUB_OUTPUT"
+          echo "Changed C/H files vs origin/${{ github.base_ref }}:"; cat /tmp/changed_files.txt || true
+
       - name: Run clang-tidy
+        env:
+          OVMX_CHANGED_ONLY: ${{ github.event_name == 'pull_request' && '1' || '' }}
         run: |
           # Collect source files from compile_commands.json,
           # excluding freestanding (libvmssys) and kernel directories.
+          # On a PR (OVMX_CHANGED_ONLY=1) intersect with the changed-file set.
           python3 - <<'PYEOF'
           import json, subprocess, sys, os
 
@@ -3557,14 +3678,24 @@ jobs:
 
           cwd = os.getcwd()
           excluded = ("src/libvmssys/", "src/kernel/")
+
+          changed = None
+          if os.environ.get("OVMX_CHANGED_ONLY") and os.path.exists("/tmp/changed_files.txt"):
+              with open("/tmp/changed_files.txt") as cf:
+                  changed = {line.strip() for line in cf if line.strip()}
+              print(f"PR mode: {len(changed)} changed C/H file(s) drive the filter")
+
           files = []
           for entry in db:
               rel = entry["file"].replace(cwd + "/", "")
-              if not any(rel.startswith(ex) for ex in excluded):
-                  files.append(entry["file"])
+              if any(rel.startswith(ex) for ex in excluded):
+                  continue
+              if changed is not None and rel not in changed:
+                  continue
+              files.append(entry["file"])
 
           if not files:
-              print("No files to analyze after exclusions.")
+              print("No files to analyze (no changed non-excluded C files on this PR).")
               sys.exit(0)
 
           print(f"Running clang-tidy on {len(files)} files...")
@@ -3640,7 +3771,10 @@ jobs:
   uat-session:
     name: VMS User Acceptance Test
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -3692,7 +3826,9 @@ jobs:
     name: IMGACT.EXE Activation Proof (musl)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
 
     steps:
@@ -3740,7 +3876,9 @@ jobs:
     # Fixed by linking the vmslink host tools statically in IMGACT mode
     # (src/vmslink/CMakeLists.txt) + adding src/libvms/include to the imgact
     # target's include path (src/imgact/CMakeLists.txt, for imgact_prodreg.h).
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
 
     steps:
@@ -3823,7 +3961,9 @@ jobs:
     name: LINK.EXE VMS-native Linker (MVP)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -3907,7 +4047,9 @@ jobs:
     name: DECC$SHR VMS-native C-RTL Shareable
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -3949,7 +4091,9 @@ jobs:
     name: VMS-native LINK.EXE Graph via CMake (OVMX_LINK_NATIVE)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
 
     steps:
@@ -4044,7 +4188,9 @@ jobs:
     name: IMGACT.EXE Symbol-Vector Activation
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4081,7 +4227,9 @@ jobs:
     name: libvmssys VMS-native Link + Activate
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4122,7 +4270,9 @@ jobs:
     name: DECC$SHR C-RTL Activation (musl init)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4163,7 +4313,9 @@ jobs:
     name: Lib-Shareable Transitive Import Activation
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4190,7 +4342,9 @@ jobs:
     name: TLS Producer / C-RTL Coexistence Activation
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4246,7 +4400,9 @@ jobs:
     name: vmsprocess VMS-native Migration (LIBVMSPROCESS$SHR)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4273,7 +4429,9 @@ jobs:
     name: vmslnm VMS-native Migration (LIBVMSLNM$SHR)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4300,7 +4458,9 @@ jobs:
     name: vmsfs VMS-native Migration (LIBVMSFS$SHR)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4327,7 +4487,9 @@ jobs:
     name: libvms VMS-native Migration (LIBVMS$SHR)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
 
     steps:
@@ -4354,7 +4516,9 @@ jobs:
     name: vmsrms VMS-native Migration (LIBVMSRMS$SHR)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
 
     steps:
@@ -4392,7 +4556,9 @@ jobs:
     name: Multi-Object main() Executable Link + Activate
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4501,7 +4667,9 @@ jobs:
     name: Executable-Own TLS Link + Activate
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4538,7 +4706,9 @@ jobs:
     name: DCL.EXE VMS-native Link + Activate (self-hosting S1)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
 
     steps:
@@ -4615,7 +4785,9 @@ jobs:
     name: LOGINOUT.EXE VMS-native Link + Activate (login chain)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
 
     steps:
@@ -4738,7 +4910,9 @@ jobs:
     name: tcc Object LINK.EXE Compatibility (S2 crux, musl)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
 
     steps:
@@ -4790,7 +4964,9 @@ jobs:
     name: TCC.EXE VMS-native Link + Activate (self-hosting S2 endpoint)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
 
     steps:
@@ -4829,7 +5005,9 @@ jobs:
     name: TCC.EXE RMS File I/O (sys$open/$get read, sys$create/$put write)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
 
     steps:
@@ -4885,7 +5063,9 @@ jobs:
     name: TCC.EXE Self-Host Fixpoint (tcc compiles tcc inside OVMX, S2 summit)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
 
     steps:
@@ -4935,7 +5115,9 @@ jobs:
     name: LINK.EXE VMS-native Self-Link + Activate (self-hosting S3.1, arm64)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
 
     steps:
@@ -5064,7 +5246,9 @@ jobs:
     name: BUILD.COM DCL driver — compile+link+run, no bash (self-hosting S3.2)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
 
     steps:
@@ -5104,7 +5288,9 @@ jobs:
     name: LINK.EXE self-host fixpoint — OVMX builds LINK.EXE, gen2==gen3, no bash (self-hosting S4)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
 
     steps:
@@ -5163,7 +5349,11 @@ jobs:
   netbsd-vax-simh:
     name: NetBSD/vax boots under SIMH (vms-0041)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    # vms-fb8: SIMH boots STOCK NetBSD/vax (TCG, no OVMX source in the
+    # smoke) and VAX has no KVM -- 312s of un-accelerable emulation. Like
+    # the heavy QEMU e2e, run it on NON-PR events only; the ILP32 width
+    # proof stays per-PR via the elf32-vax cross-compile jobs.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 

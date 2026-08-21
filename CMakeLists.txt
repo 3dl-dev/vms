@@ -506,6 +506,20 @@ if(BUILD_TESTS)
                     $<TARGET_FILE:ovmx_kit_pack>)
         set_tests_properties(ovmx_kit_pack_roundtrip PROPERTIES
             LABELS "integration;tools" TIMEOUT 60)
+
+        # vms-c2c: the same packer, pointed at a synthetic VAX kit payload
+        # (docs/design-vax-installer.md §4 -- five boot images + four utility
+        # images + SYSUAF/RIGHTSLIST/OVMXVMSSYS.PAR + STARTUP.COM + the
+        # Decision-A SYSTARTUP_VMS.COM), must round-trip byte-exact and carry
+        # the "OVMX VAXVMS VMS" product identity. No vax cross-build toolchain
+        # needed -- ovmx_kit_pack is a host tool and this proves the
+        # packaging PATH, not the real vax images (tools/cross-vax/
+        # build-os-kit-vax.sh drives the real cross-built payload).
+        add_test(NAME ovmx_kit_pack_vax_roundtrip
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_ovmx_kit_pack_vax_roundtrip.sh
+                    $<TARGET_FILE:ovmx_kit_pack>)
+        set_tests_properties(ovmx_kit_pack_vax_roundtrip PROPERTIES
+            LABELS "integration;tools;netbsd-vax" TIMEOUT 60)
     endif()
 
     # vms_kif caller census (vms-7fb): every kernel-interface entry point is
@@ -755,7 +769,13 @@ if(BUILD_TESTS)
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_opcom_record_body.sh
                 $<TARGET_FILE:vmsdcl>)
     set_tests_properties(opcom_record_body_gate PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 60)
+        LABELS "integration;authenticity" TIMEOUT 60
+        # vms-ed4: reads a GLOBAL recency-ordered OPERATOR.LOG view across all of
+        # /vms and /tmp (find /vms /tmp -iname OPERATOR.LOG -newer $STAMP). Any
+        # other test emitting an OPERATOR.LOG concurrently could poison that
+        # scan, so under ctest --parallel it must run alone. RUN_SERIAL, not a
+        # sysdisk lock, because the shared surface includes /tmp too (Rule 8).
+        RUN_SERIAL TRUE)
 
     # MONITOR PROCESS and SHOW SYSTEM list the SAME process set because they
     # read the SAME single source -- the executive process table via

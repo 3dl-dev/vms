@@ -10,6 +10,10 @@ set_tests_properties(dcl-integration PROPERTIES
     ENVIRONMENT "VMSDCL=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/DCL.EXE;PATH=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}:$ENV{PATH};OVMX_HELPLIB=${CMAKE_SOURCE_DIR}/distro/rootfs/vms/SYS0/SYSCOMMON/SYSHLP/HELPLIB.HLP"
     TIMEOUT 120
     LABELS "dcl;integration"
+    # vms-ed4: run_dcl_tests.sh loops ~20 DCL scripts internally, several of
+    # which (INSTALL/SYSMAN) write the real /vms/SYS0/SYSCOMMON SYSDISK shared
+    # with install_utility -> same lock so ctest --parallel serializes the two.
+    RESOURCE_LOCK "sysdisk"
 )
 
 # Hermetic unit test for the hierarchical HELP engine (vms-01b). Compiles the

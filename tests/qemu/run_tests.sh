@@ -202,7 +202,15 @@ if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
     SECOND_SERIAL=()
 else
     QEMU=qemu-system-x86_64
-    MACHINE=""
+    # KVM acceleration (vms-fb8): hardware virt when /dev/kvm is writable, else
+    # TCG software emulation (identical behavior, ~10x slower). This is the path
+    # the kernel-executive shards boot on every PR, so KVM here is the direct
+    # per-PR-loop accelerant. See distro/boot/run-qemu.sh for the full rationale.
+    if [ -w /dev/kvm ]; then
+        MACHINE="-accel kvm -cpu host"
+    else
+        MACHINE="-accel tcg"
+    fi
     CONSOLE="console=ttyS0"
     # The PC machine wires an Nth -serial to COM(N+1) automatically -- no
     # -device needed, the same convenience the existing ttyS0 stdio backend

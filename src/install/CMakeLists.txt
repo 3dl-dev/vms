@@ -46,5 +46,9 @@ if(BUILD_TESTS)
         LABELS "unit;install"
         TIMEOUT 30
         ENVIRONMENT "INSTALL_EXE=$<TARGET_FILE:vms_install>;LOOKUP_HELPER=$<TARGET_FILE:test_lookup_integration>"
+        # vms-ed4: writes the real /vms/SYS0/SYSCOMMON/SYSEXE tree (VMS$KNOWN_
+        # IMAGES.DAT). Shares that SYSDISK with dcl-integration -> same lock so
+        # ctest --parallel never runs them concurrently. Do not remove (Rule 8).
+        RESOURCE_LOCK "sysdisk"
     )
 endif()

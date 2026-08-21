@@ -113,7 +113,14 @@ if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
     CONSOLE="console=ttyAMA0"
 else
     QEMU=qemu-system-x86_64
-    MACHINE=""
+    # KVM acceleration (vms-fb8): hardware virt when /dev/kvm is writable,
+    # else TCG software emulation (identical behavior, ~10x slower). See
+    # distro/boot/run-qemu.sh for the full rationale.
+    if [ -w /dev/kvm ]; then
+        MACHINE="-accel kvm -cpu host"
+    else
+        MACHINE="-accel tcg"
+    fi
     CONSOLE="console=ttyS0"
 fi
 

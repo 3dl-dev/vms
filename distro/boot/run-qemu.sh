@@ -78,7 +78,17 @@ if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
     CONSOLE="console=ttyAMA0"
 else
     QEMU=qemu-system-x86_64
-    MACHINE=""
+    # KVM acceleration (vms-fb8): use hardware virt when the runner exposes a
+    # writable /dev/kvm -- GitHub-hosted Linux runners do, and self-hosted
+    # bare-metal does. Without it QEMU falls back to TCG software emulation:
+    # identical behavior, ~10x slower (the boot/e2e wall this change exists to
+    # cut). Only x86_64-on-x86_64 can use KVM; the aarch64 guest above is always
+    # cross-emulated on our x86_64 runners, so it stays TCG.
+    if [ -w /dev/kvm ]; then
+        MACHINE="-accel kvm -cpu host"
+    else
+        MACHINE="-accel tcg"
+    fi
     CONSOLE="console=ttyS0"
 fi
 

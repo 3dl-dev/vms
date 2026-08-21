@@ -173,5 +173,22 @@ command -v "$ENGINE" >/dev/null 2>&1 || { echo "run-cc1-ovmx: neither podman nor
             fi
         fi
     fi
+    echo "== step 7: isolate the fault — argv delivery + stdin->stdout compile (no file write) =="
+    # (7a) argv delivery: real cc1 rejects a bogus flag (exit 1 + message). If
+    # CC1.EXE exits 0 silently, IMGACT is not delivering argv to the image.
+    set +e
+    "$SYSEXE/CC1.EXE" --ovmx-bogus-flag > /result/07a-argv.out 2>&1
+    R7A=$?
+    echo "-- (7a) cc1 --ovmx-bogus-flag: exit=$R7A, output: --"; sed "s/^/   /" /result/07a-argv.out
+    # (7b) compile from STDIN to STDOUT — exercises parse->RTL->asm WITHOUT the
+    # RMS output-file-create path. If asm appears here but the -o probe.s run
+    # faulted, the wall is the executive file WRITE, not the compile pipeline.
+    printf "int seven(void){ return 7; }\n" | "$SYSEXE/CC1.EXE" -quiet - > /result/07b-stdin.out 2>&1
+    R7B=$?
+    set -e
+    echo "-- (7b) cc1 -quiet - (stdin->stdout): exit=$R7B, output: --"; sed "s/^/   /" /result/07b-stdin.out | head -20
+    if grep -qiE "seven|ret|mov" /result/07b-stdin.out; then
+        echo "run-cc1-ovmx: cc1 COMPILES from stdin->stdout — the fault is the file-write (RMS) path, not the compiler."
+    fi
     echo "run-cc1-ovmx: DONE (activation exit=$R4, compile exit=$R5)"
 ' 2>&1 | tee "$RESULT_DIR/00-full.log"

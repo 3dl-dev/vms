@@ -651,6 +651,13 @@ long vms_ioctl_acp_readvb(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_acpcontrol(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg);
+/*
+ * VMS_IOCTL_DISK_RESOLVE handler (rd vms-f60) -- DEFINED in the quarantined
+ * vms_blockdev_netbsd.c (not the shared kernel-core, which keeps the full
+ * device-table resolver the VAX substrate has not ported). Lets INITIALIZE.EXE
+ * name a VMS disk unit and get back the real backing block device.
+ */
+long vms_ioctl_disk_resolve(struct vms_proc *proc, unsigned long arg);
 int  vms_acp_dassgn(struct vms_proc *proc, uint32_t chan);
 void vms_acp_release_all(struct vms_proc *proc);
 /*
@@ -669,6 +676,16 @@ void vms_acp_release_all(struct vms_proc *proc);
  */
 uint32_t vms_devtab_disk_backing(const char *devnam,
                                  uint32_t *major_out, uint32_t *minor_out);
+
+/*
+ * Transient twin of the above for INITIALIZE.EXE (rd vms-f60, vms_blockdev_
+ * netbsd.c): resolves a VMS disk-unit name to the backing block-device NAME +
+ * (major,minor) WITHOUT caching the vnode. Unlike $MOUNT's disk_backing, the
+ * executive here only names the device; INITIALIZE opens and writes it itself.
+ */
+uint32_t vms_devtab_disk_resolve(const char *devnam, char *backing,
+                                 size_t backing_sz, uint32_t *major_out,
+                                 uint32_t *minor_out);
 
 /*
  * Close every backing device vnode the ACP $MOUNT opened + cached

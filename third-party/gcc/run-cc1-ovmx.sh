@@ -36,7 +36,7 @@ command -v "$ENGINE" >/dev/null 2>&1 || { echo "run-cc1-ovmx: neither podman nor
 
 [ -d "$GCC_WORK" ] || { echo "run-cc1-ovmx: FAIL: $GCC_WORK not found -- run third-party/gcc/run-host-probe-cc1.sh (F2a) first"; exit 1; }
 
-"$ENGINE" run --rm -v "$REPO":/src:Z -v "$GCC_WORK":/gccwork:Z -v "$RESULT_DIR":/result:Z -w /src "$IMG" sh -c '
+"$ENGINE" run --rm -e JOBS="${JOBS:-}" -v "$REPO":/src:Z -v "$GCC_WORK":/gccwork:Z -v "$RESULT_DIR":/result:Z -w /src "$IMG" sh -c '
     set -e
     echo "== apk add build deps =="
     apk add --no-cache g++ gmp-dev mpfr-dev mpc1-dev zlib-dev make musl-dev binutils readelf >/dev/null 2>&1 \

@@ -46,6 +46,7 @@ CXX=${CXX:-g++}
 JOBS=${JOBS:-$(nproc)}
 
 [ -f "$WORK/Makefile" ] || { echo "rebuild-cc1-fpic: FAIL: no $WORK/Makefile -- run host-probe-cc1.sh first (F2a)"; exit 1; }
+[ -f "$WORK/gcc/Makefile" ] || { echo "rebuild-cc1-fpic: FAIL: no $WORK/gcc/Makefile -- run host-probe-cc1.sh first (F2a)"; exit 1; }
 
 echo "rebuild-cc1-fpic: purging non-PIC objects/archives under $WORK (gcc/, libcpp/, libiberty/, libdecnumber/, libbacktrace/, libcody/, zlib/)"
 for d in gcc libcpp libiberty libdecnumber libbacktrace libcody zlib; do
@@ -56,10 +57,36 @@ done
 # checksum embeds an options/object list that changes across this rebuild).
 rm -f "$WORK/gcc/cc1" "$WORK/gcc/cc1-checksum.cc" "$WORK/gcc/cc1-checksum.cc.tmp"
 
-MAKE_LOG="$WORK/make-cc1-fpic.log"
-echo "rebuild-cc1-fpic: make cc1 CFLAGS='-g -fPIC' CXXFLAGS='-g -fPIC' -j$JOBS (reusing configured tree, no re-configure)"
+# The support libs (libcpp/libiberty/libdecnumber/libbacktrace/libcody/
+# zlib) are each a SEPARATE top-level Makefile.def module ("all-<module>"),
+# recursed into from $WORK's OWN top-level Makefile via HOST_EXPORTS/
+# FLAGS_TO_PASS (which itself forwards CFLAGS/CXXFLAGS) -- gcc/Makefile has
+# NO rule of its own to rebuild e.g. ../libcpp/libcpp.a from scratch, only a
+# dependency ON it (confirmed empirically: running 'make cc1' from $WORK/gcc
+# alone after purging ../libcpp/libcpp.a fails "No rule to make target
+# '../libcpp/libcpp.a'"). So the support libs are rebuilt from $WORK (top
+# level); gcc/'s own ~700 objects + cc1 itself are then rebuilt via gcc/
+# Makefile's OWN 'cc1' target (also confirmed empirically: 'make cc1' run
+# from $WORK itself -- the top-level Makefile -- has no such target at all
+# and fails "No rule to make target 'cc1'").
+SUPPORT_LOG="$WORK/make-cc1-fpic-support.log"
+echo "rebuild-cc1-fpic: make all-libcpp all-libiberty all-libdecnumber all-libbacktrace all-libcody all-zlib CFLAGS='-g -fPIC' CXXFLAGS='-g -fPIC' -j$JOBS (from \$WORK, top-level Makefile.def modules)"
 set +e
-( cd "$WORK" && make cc1 -j"$JOBS" CC="$CC" CXX="$CXX" CFLAGS="-g -fPIC" CXXFLAGS="-g -fPIC" ) >"$MAKE_LOG" 2>&1
+( cd "$WORK" && make all-libcpp all-libiberty all-libdecnumber all-libbacktrace all-libcody all-zlib \
+      -j"$JOBS" CC="$CC" CXX="$CXX" CFLAGS="-g -fPIC" CXXFLAGS="-g -fPIC" ) >"$SUPPORT_LOG" 2>&1
+SRC_RC=$?
+set -e
+echo "-- support-libs (-fPIC) exit=$SRC_RC; tail: --"
+tail -60 "$SUPPORT_LOG" | sed 's/^/   /'
+if [ "$SRC_RC" -ne 0 ]; then
+    echo "rebuild-cc1-fpic: FAIL: support-lib -fPIC rebuild did not complete -- see $SUPPORT_LOG"
+    exit 1
+fi
+
+MAKE_LOG="$WORK/make-cc1-fpic.log"
+echo "rebuild-cc1-fpic: make cc1 CFLAGS='-g -fPIC' CXXFLAGS='-g -fPIC' -j$JOBS (from \$WORK/gcc -- 'cc1' is a gcc/Makefile target, NOT a top-level Makefile.def module)"
+set +e
+( cd "$WORK/gcc" && make cc1 -j"$JOBS" CC="$CC" CXX="$CXX" CFLAGS="-g -fPIC" CXXFLAGS="-g -fPIC" ) >"$MAKE_LOG" 2>&1
 MRC=$?
 set -e
 echo "-- make cc1 (-fPIC) exit=$MRC; tail: --"

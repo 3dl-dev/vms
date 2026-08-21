@@ -127,5 +127,51 @@ command -v "$ENGINE" >/dev/null 2>&1 || { echo "run-cc1-ovmx: neither podman nor
     set -e
     echo "-- CC1.EXE --version output (exit=$R4): --"
     sed "s/^/   /" /result/04-cc1-activate.out
-    echo "run-cc1-ovmx: DONE (activation exit=$R4)"
+
+    # DEFINITIVE probe: cc1 is the compiler PROPER (not the gcc driver), so make
+    # it actually COMPILE. This exercises the whole pipeline as an OVMX image —
+    # integrated preprocess -> parse -> gimple -> RTL -> x86_64 asm emission ->
+    # and the OUTPUT FILE WRITE through the executive (RMS/$QIO). If probe.s
+    # comes out with real assembly, cc1 genuinely runs; a clean --version alone
+    # could be a trivial early-exit.
+    echo "== step 5: DEFINITIVE — cc1 compiles a real TU (parse->RTL->asm->file write over the executive) =="
+    printf "int square(int x){ return x*x; }\nint cube(int x){ return x*square(x); }\n" > /tmp/probe.c
+    rm -f /tmp/probe.s
+    set +e
+    "$SYSEXE/CC1.EXE" -quiet -O1 /tmp/probe.c -o /tmp/probe.s > /result/05-cc1-compile.out 2>&1
+    R5=$?
+    set -e
+    echo "-- cc1 compile exit=$R5; /result/05 log: --"; sed "s/^/   /" /result/05-cc1-compile.out
+    if [ -s /tmp/probe.s ]; then
+        echo "-- probe.s emitted ($(wc -l < /tmp/probe.s) lines) — head: --"
+        sed "s/^/   /" /tmp/probe.s | head -30
+        if grep -qE "square:" /tmp/probe.s && grep -qiE "imul|mul" /tmp/probe.s; then
+            echo "run-cc1-ovmx: PROVEN — cc1 compiled C to x86_64 assembly as an OVMX image (square/cube present, multiply emitted)."
+        else
+            echo "run-cc1-ovmx: PARTIAL — probe.s emitted but expected symbols/insns not found; inspect above."
+        fi
+        cp /tmp/probe.s /result/probe.s 2>/dev/null || true
+    else
+        echo "run-cc1-ovmx: cc1 produced NO probe.s (exit=$R5) — activation runs but compile pipeline did not emit output; THIS is the next executive wall."
+        # cc1 is built -g, so a backtrace NAMES the faulting frame — turn
+        # "segfault" into an actionable location (cc1 fn vs IMGACT vs a null
+        # deferred-import stub). gdb runs CC1.EXE through its IMGACT INTERP.
+        if [ "$R5" -ge 128 ]; then
+            echo "== step 6: gdb backtrace of the compile-time fault (cc1 has -g symbols) =="
+            apk add --no-cache gdb >/dev/null 2>&1 || echo "  (gdb install failed — skipping backtrace)"
+            if command -v gdb >/dev/null 2>&1; then
+                gdb -batch -nx \
+                    -ex "set pagination off" \
+                    -ex "run" \
+                    -ex "echo \n==FAULT==\n" \
+                    -ex "bt 40" \
+                    -ex "info registers rip rsp" \
+                    --args "$SYSEXE/CC1.EXE" -quiet -O1 /tmp/probe.c -o /tmp/probe.s \
+                    > /result/06-cc1-gdb-bt.txt 2>&1
+                echo "-- gdb backtrace (tail): --"
+                sed "s/^/   /" /result/06-cc1-gdb-bt.txt | tail -45
+            fi
+        fi
+    fi
+    echo "run-cc1-ovmx: DONE (activation exit=$R4, compile exit=$R5)"
 ' 2>&1 | tee "$RESULT_DIR/00-full.log"

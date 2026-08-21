@@ -4132,7 +4132,7 @@ EOF
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-1-3: SYSUAF.DAT is byte-identical after all three refusals
+1-3: the target SYSUAF record is byte-identical after all three refusals
 EOF
                       ;;
         knock_on_why)  echo "Each of the three calls the mutation turns from a refusal into a grant WRITES -- they all carry the same UAI\$_DEFDIR item -- so the file-unchanged check is the same single defect observed in the artifact instead of in the returned status. It is listed rather than dropped because it is the assertion that shows the refusals were refusals and not merely a status the service returned after doing the work anyway.";;
@@ -4197,40 +4197,34 @@ EOF
 
     rms-create-filespec-not-translated)
         case "$_f" in
-        facility)     echo "RMS filespec-to-Linux-path translation on create (src/vmsrms/rms_core.c resolve_filename(), called by both sys\$open() and sys\$create()) -- a userspace consumer of vmsfs's translation, the same class as the dcl-fident-*/dcl-fuser-* entries above, not a vms.ko-dispatched ioctl";;
+        facility)     echo "RMS VMS-filespec translation on create -- rms_acp_spec_parse() (src/vmsrms/rms_core.c), which splits a filespec (DKA0:[OVMXDIR]VMS221.DAT) into device / directory / ODS-2 name before the Files-11 ACP \$CREATE. RE-ANCHORED from resolve_filename() (retired with the POSIX \$CREATE by the vms-401/vms-5f0 flip); the Rule-9 ACP create path is the live consumer of this translation, the same product-half class as the dcl-fident-*/dcl-fuser-* entries above, not a vms.ko-dispatched ioctl";;
         targets)      echo "vmsrms/rms_core.c";;
         suites_red)   echo "test_syssvc_rms_scratch_create";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "resolve_filename() checked vmsfs_to_linux_path()'s return value with \`== 0\`, but that function returns a VMS status code (SS\$_NORMAL == 1 on success, odd = success -- \$VMS_STATUS_SUCCESS is the project-wide convention, never 0). The check never matched, so a VMS filespec (SYS\$SCRATCH:FOO.DAT) was never recognized as translated and silently fell through to being treated as a literal, relative Linux path -- resolving against the calling process's cwd instead of /vms/... This is the exact vms-221 regression: PARTS's sys\$create() under SYS\$SCRATCH: returned EACCES for a reason that had nothing to do with directory ownership, because it was never really looking at SYS\$SCRATCH: at all.";;
+        why)          echo "rms_acp_spec_parse() stops taking the ODS-2 NAME.TYP component from the post-split remainder \`p\` (device and [directory] already stripped) and takes the whole undivided filespec \`spec\` instead -- so DKA0:[OVMXDIR]VMS221.DAT resolves to a name of \"DKA0:[OVMXDIR]VMS221.DAT\" rather than \"VMS221.DAT\". This is the live-ACP shape of the exact vms-221 regression: a VMS filespec treated as a LITERAL instead of being translated/split. rms_impl_create copies that name into BOTH fab->_resolved_path (the RESOLVED_PATH the suite reads back) AND fop.name (the actual IO\$_CREATE target), so it is a genuine create-path defect, not a decorative echo. The old mutation reverted resolve_filename()'s \`== 0\` check, but with /dev/vms present and DKA0: mounted the create path is ACP-only (rms_acp_absent()==0) and never reaches resolve_filename(), so it could no longer redden the flip-rewritten suite.";;
         require_fail) cat <<'EOF'
-sys$create() of the RMS indexed file under SYS$SCRATCH: succeeded (the vms-221 EACCES is gone)
+sys$create() did NOT fall back to treating the raw VMS spec string as a literal path (no './' prefix, no undivided 'DKA0:...' device left glued to the name)
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-sys$create() resolved the VMS filespec SYS$SCRATCH:VMS221.DAT to its REAL translated Linux path under /vms/SYSTMP -- pins the vms-221 regression directly: resolve_filename() (src/vmsrms/rms_core.c) used to check vmsfs_to_linux_path()'s return value with `== 0`, but that function returns a VMS status code (SS$_NORMAL == 1 on success, odd = success); the check never matched, so EVERY VMS-spec candidate silently fell through to being treated as a literal (relative) Linux path instead of a translated one
-sys$create() did NOT fall back to treating the raw VMS spec string as a literal relative Linux path (the exact vms-221 regression shape)
-sys$connect() on the freshly created file succeeded
-sys$put() #100 (first periodic index save, fresh .rms_idx create) succeeded
-sys$put() #200 (SECOND periodic index save -- reopens the .rms_idx sidecar) succeeded
-every sys$put() across two periodic index-save reopens succeeded -- no silent mid-run EACCES
-sys$close() (final index flush, a THIRD reopen of .rms_idx) succeeded
+sys$create() parsed the filespec through the Files-11 ACP path (rms_acp_specs_from_fab): the device (DKA0:) and directory ([OVMXDIR]) were split off and the ODS-2 file name resolved to VMS221.DAT -- NOT treated as a literal Linux/relative path. The vms-221 regression (resolve_filename() checking vmsfs_to_linux_path()'s VMS status code with `== 0`, so odd=success never matched and every VMS spec fell through to a literal path) belongs to the retired POSIX $CREATE (rms_posix_create); the Rule-9 runtime creates on the mounted volume over the ACP, which is what this proves.
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
-ONE LINE, ONE EARLY RETURN, EVERY LATER STAGE FOLLOWS MECHANICALLY -- not a
-second property. With the check reverted, sys$create()'s open() targets an
-unwritable relative path and returns non-success; test_syssvc_rms_scratch_
-create.c's child_main() checks $VMS_STATUS_SUCCESS(st) immediately after and
-_exit(0)s right there (see the file: "if (!$VMS_STATUS_SUCCESS(st)) { _exit(0);
-}"), before sys$connect(), any sys$put(), or sys$close() ever run. Each of
-those stages' status line is therefore simply ABSENT from the child's
-transcript, which field_is_ok() reports as not-OK for every one of them, and
-the "ALL_205_PUTS_SUCCEEDED" line is never printed either since the put loop
-never executes. The two RESOLVED_PATH knock-ons are the same single symptom
-observed a second way -- through the path string sys$create() computed,
-rather than through the status it returned -- not an independent defect.
+ONE PROPERTY -- "the VMS filespec is TRANSLATED (device/dir/name split off),
+not treated as a raw literal" -- read through BOTH of the suite's RESOLVED_PATH
+echoes. require_fail reads it one way: the resolved path must NOT be the
+undivided "DKA0:..." literal. This knock-on reads the SAME corrupted
+fab->_resolved_path the other way: it must positively equal "VMS221.DAT", the
+split-off ODS-2 name. With rms_acp_spec_parse() taking the whole spec as the
+name, _resolved_path becomes "DKA0:[OVMXDIR]VMS221.DAT" -- so the "== VMS221.DAT"
+check fails at the same instant the "no DKA0: literal" check does. It is one
+mis-split observed twice, not a second defect. (The downstream create/connect/
+put/close/readback stages may also redden if the ACP rejects the malformed
+name; per vms-49f the exact red-set equality is a non-gating lint and the
+runtime teeth are check 4 -- this facility's own suite reddened.)
 EOF
                       ;;
         esac;;
@@ -6398,14 +6392,28 @@ apply_edit() {
         sed -i 's|    if (chown(path, (uid_t)SYSTEM_UIC_MEMBER, (gid_t)SYSTEM_UIC_GROUP) != 0)|    if (chown(path, (uid_t)0, (gid_t)SYSTEM_UIC_GROUP) != 0) /* NEGCTL scratch-dir-owner-not-system: SYSTEM no longer owns [SYSTMP]/[USERS], only shares their group */|' "$_file";;
 
     rms-create-filespec-not-translated)
-        # Unique text in the file -- resolve_filename()'s own
-        # vmsfs_to_linux_path() success check, the exact line vms-221 fixed.
-        # Reverting $VMS_STATUS_SUCCESS(...) back to `== 0` (the original
-        # bug: vmsfs_to_linux_path() returns a VMS status code, SS$_NORMAL
-        # == 1 on success, never 0) makes the check never match again, so a
-        # second apply finds no $VMS_STATUS_SUCCESS(...) text left inside
-        # the `if (` and is the no-op selftest requires.
-        sed -i 's|if (\$VMS_STATUS_SUCCESS(vmsfs_to_linux_path(spec, linux_path, sizeof(linux_path)))) {|if (vmsfs_to_linux_path(spec, linux_path, sizeof(linux_path)) == 0) { /* NEGCTL rms-create-filespec-not-translated */|' "$_file";;
+        # RE-ANCHORED (vms-401/vms-5f0 atomic flip retired the POSIX $CREATE
+        # this defect used to mutate). The old mutation reverted
+        # resolve_filename()'s vmsfs_to_linux_path() `== 0` check in
+        # rms_posix_create() -- but the Rule-9 runtime, with /dev/vms present
+        # and DKA0: mounted, ALWAYS takes the Files-11 ACP create path
+        # (rms_impl_create, rms_acp_absent()==0), which never calls
+        # resolve_filename() at all, so the mutation could no longer redden
+        # the rewritten suite. It now mutates the EQUIVALENT live invariant:
+        # rms_acp_spec_parse()'s NAME component (rms_core.c) must be the
+        # post-split remainder of the filespec -- the device (DKA0:) and
+        # directory ([OVMXDIR]) split off, only the ODS-2 file name left --
+        # NOT the raw undivided literal. Taking the whole `spec` as the name
+        # instead of the split `p` is the exact vms-221 shape on the live
+        # ACP path: the VMS filespec treated as a literal, never translated.
+        # rms_impl_create copies sp.name into both fab->_resolved_path (the
+        # RESOLVED_PATH the suite asserts on) AND fop.name (the ACP create
+        # target), so the corruption is a genuine create-path defect, not a
+        # decorative echo. UNIQUE TEXT: `strncpy(rest, p, sizeof(rest) - 1);`
+        # occurs once, in rms_acp_spec_parse()'s NAME.TYP;VER split; a second
+        # apply finds no `strncpy(rest, p, ...)` left and is the no-op selftest
+        # requires.
+        sed -i 's|strncpy(rest, p, sizeof(rest) - 1);|strncpy(rest, spec, sizeof(rest) - 1); /* NEGCTL rms-create-filespec-not-translated: filespec taken undivided, not split/translated */|' "$_file";;
 
     lnm-delete-noop)
         # UNIQUE TEXT: `e->in_use = 0;` occurs only in vms_ioctl_lnm_delete.

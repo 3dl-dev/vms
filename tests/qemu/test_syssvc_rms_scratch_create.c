@@ -429,12 +429,12 @@ int main(void)
           "VMS spec fell through to a literal path) belongs to the retired POSIX "
           "$CREATE (rms_posix_create); the Rule-9 runtime creates on the mounted "
           "volume over the ACP, which is what this proves.");
+    /* negctl: rms-create-filespec-not-translated */
     CHECK(strstr(out, "RESOLVED_PATH=./") == NULL &&
           strstr(out, "RESOLVED_PATH=DKA0") == NULL,
           "sys$create() did NOT fall back to treating the raw VMS spec "
           "string as a literal path (no './' prefix, no undivided 'DKA0:...' "
           "device left glued to the name)");
-    /* negctl: rms-create-filespec-not-translated */
     CHECK(field_is_ok(out, "CREATE_STATUS="),
           "sys$create() of the RMS indexed file on the mounted ODS-2 volume "
           "succeeded (a real IO$_CREATE FID + ACP write window, no EACCES)");

@@ -1801,6 +1801,17 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             uint32_t si = ELF64_R_SYM(objs[i].relocs[r].info);
             Elf64_Sym *sym = &objs[i].sym[si];
             const char *nm = objs[i].str + sym->st_name;
+            /* The classic GD/LD call to __tls_get_addr reaches its target via a
+             * GOTPCRELX cell when the object was built -fno-plt (Alpine's
+             * libstdc++/libgcc). But LINK relaxes every classic GD/LD access to
+             * Local-Exec (patch_tls_le), overwriting that call, so the cell is
+             * DEAD — no patched instruction ever reads it. Do NOT collect a GOT
+             * slot for it: an unreferenced slot only forces a bogus "undefined
+             * symbol" resolution (__tls_get_addr is defined nowhere in a static
+             * image), which needlessly required --allow-undefined for an
+             * otherwise clean classic-GD/LD link. Same guard the import loop and
+             * the datum loop already carry. (vms-83e8, extends vms-76a) */
+            if (strcmp(nm, "__tls_get_addr") == 0) continue;
             int is_local = (ELF64_ST_BIND(sym->st_info) == STB_LOCAL);
             /* A LOCAL-bind GOT reference (tcc's per-TU statics / `L.n` string
              * labels) is resolved per-object by (oi, symidx), never by the

@@ -2131,7 +2131,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                 if (ELF64_ST_BIND(objs[i].sym[si].st_info) == STB_LOCAL) {
                     /* LOCAL GOT reference -> its per-object (oi, sym) slot. */
                     int gi = find_got_local(got, ngot, i, (int)si);
-                    if (gi < 0) die("internal: local GOT slot missing for symbol");
+                    if (gi < 0) {
+                        fprintf(stderr, "%%LINK-F-ERROR, internal: local GOT slot "
+                                "missing for symbol '%s' (reloc type %u)\n", nm, type);
+                        exit(1);
+                    }
                     patch_got(type, insn, site, got[gi].va, rl->add);
                 } else {
                     int ii = import_find(imp, nimp, nm);
@@ -2140,7 +2144,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                         patch_got(type, insn, site, imp[ii].got_va, rl->add);
                     } else {
                         int gi = find_got(got, ngot, nm);
-                        if (gi < 0) die("internal: GOT slot missing for symbol");
+                        if (gi < 0) {
+                            fprintf(stderr, "%%LINK-F-ERROR, internal: GOT slot "
+                                    "missing for symbol '%s' (reloc type %u)\n", nm, type);
+                            exit(1);
+                        }
                         patch_got(type, insn, site, got[gi].va, rl->add);
                     }
                 }

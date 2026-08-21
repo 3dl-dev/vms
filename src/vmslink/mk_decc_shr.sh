@@ -380,7 +380,29 @@ pthread_create=PROCEDURE,pthread_detach=PROCEDURE,pthread_join=PROCEDURE,\
 \
 pread=PROCEDURE,pwrite=PROCEDURE,ferror=PROCEDURE,\
 \
-chown=PROCEDURE"
+chown=PROCEDURE,\
+__ctype_get_mb_cur_max=PROCEDURE,__cxa_atexit=PROCEDURE,__fsetlocking=PROCEDURE,__stack_chk_fail=PROCEDURE,__tls_get_addr=PROCEDURE,\
+asprintf=PROCEDURE,btowc=PROCEDURE,dirfd=PROCEDURE,dl_iterate_phdr=PROCEDURE,dlerror=PROCEDURE,\
+fchmod=PROCEDURE,fchmodat=PROCEDURE,fdopendir=PROCEDURE,fegetround=PROCEDURE,feof=PROCEDURE,\
+fesetround=PROCEDURE,ffs=PROCEDURE,freelocale=PROCEDURE,frexp=PROCEDURE,frexpl=PROCEDURE,\
+fseeko=PROCEDURE,ftello=PROCEDURE,get_nprocs=PROCEDURE,getc=PROCEDURE,getentropy=PROCEDURE,\
+getpagesize=PROCEDURE,getwc=PROCEDURE,isalpha=PROCEDURE,isblank=PROCEDURE,iscntrl=PROCEDURE,\
+islower=PROCEDURE,isprint=PROCEDURE,ispunct=PROCEDURE,isspace=PROCEDURE,isupper=PROCEDURE,\
+iswctype=PROCEDURE,ldexp=PROCEDURE,link=PROCEDURE,lstat=PROCEDURE,mbrtowc=PROCEDURE,\
+mbstowcs=PROCEDURE,mempcpy=PROCEDURE,mkstemps=PROCEDURE,mktemp=PROCEDURE,newlocale=PROCEDURE,\
+nl_langinfo=PROCEDURE,openat=PROCEDURE,pathconf=PROCEDURE,poll=PROCEDURE,posix_spawn=PROCEDURE,\
+posix_spawn_file_actions_addclose=PROCEDURE,posix_spawn_file_actions_adddup2=PROCEDURE,posix_spawn_file_actions_destroy=PROCEDURE,posix_spawn_file_actions_init=PROCEDURE,posix_spawnattr_destroy=PROCEDURE,\
+posix_spawnattr_init=PROCEDURE,posix_spawnattr_setflags=PROCEDURE,posix_spawnp=PROCEDURE,prctl=PROCEDURE,pthread_cond_signal=PROCEDURE,\
+pthread_getspecific=PROCEDURE,pthread_key_create=PROCEDURE,pthread_key_delete=PROCEDURE,pthread_rwlock_rdlock=PROCEDURE,pthread_rwlock_unlock=PROCEDURE,\
+pthread_rwlock_wrlock=PROCEDURE,pthread_setspecific=PROCEDURE,putc=PROCEDURE,putwc=PROCEDURE,sbrk=PROCEDURE,\
+sched_yield=PROCEDURE,secure_getenv=PROCEDURE,sendfile=PROCEDURE,setlocale=PROCEDURE,sigfillset=PROCEDURE,\
+signal=PROCEDURE,stpcpy=PROCEDURE,strcoll=PROCEDURE,strerror_r=PROCEDURE,strsignal=PROCEDURE,\
+strspn=PROCEDURE,strxfrm=PROCEDURE,symlink=PROCEDURE,towlower=PROCEDURE,towupper=PROCEDURE,\
+truncate=PROCEDURE,umask=PROCEDURE,ungetc=PROCEDURE,ungetwc=PROCEDURE,unlinkat=PROCEDURE,\
+uselocale=PROCEDURE,utimensat=PROCEDURE,vasprintf=PROCEDURE,vprintf=PROCEDURE,wait4=PROCEDURE,\
+wcrtomb=PROCEDURE,wcscoll=PROCEDURE,wcsftime=PROCEDURE,wcslen=PROCEDURE,wcsxfrm=PROCEDURE,\
+wctob=PROCEDURE,wctype=PROCEDURE,wmemchr=PROCEDURE,wmemcmp=PROCEDURE,wmemcpy=PROCEDURE,\
+wmemmove=PROCEDURE,wmemset=PROCEDURE,writev=PROCEDURE"
 
 # fcntl APPENDED for vms-8019 (append-only -> prior consumers' vector indices
 # unchanged, GSMATCH LEQUAL-compatible). $CREPRC's creation handshake sets

@@ -114,13 +114,24 @@ echo "  libstdc++.a : $LIBSTDCXX"
 echo "  libgcc.a    : $LIBGCC"
 if [ -f "$LIBGCC_EH" ]; then echo "  libgcc_eh.a : $LIBGCC_EH (found, unwinder support routines)"; else echo "  libgcc_eh.a : NOT FOUND (got '$LIBGCC_EH') -- unwind-dw2.c support may already be folded into libgcc.a; proceeding without it"; LIBGCC_EH=""; fi
 if [ -f "$LIBSUPCXX" ]; then echo "  libsupc++.a : $LIBSUPCXX (found, separate from libstdc++.a)"; else echo "  libsupc++.a : NOT FOUND (got '$LIBSUPCXX') -- likely already folded into libstdc++.a on this toolchain; proceeding without it"; LIBSUPCXX=""; fi
+# crtbeginT.o/crtendT.o are DELIBERATELY NOT passed to LINK.EXE (vms-70d).
+# Their purpose in a normal static link is EH-frame registration:
+# crtbeginT provides frame_dummy() (an .init_array ctor calling
+# __register_frame_info(__EH_FRAME_BEGIN__)) and crtendT provides the
+# terminating 0-length FDE (__FRAME_END__). LINK.EXE now does BOTH jobs
+# natively and more robustly: it lays every .eh_frame input section out
+# contiguously, appends its OWN 0-terminator after the LAST one, and records
+# the block start + __register_frame in .vms$ehf so IMGACT registers the frames
+# before .init_array runs. Passing crtendT.o here would insert its __FRAME_END__
+# ZERO in the MIDDLE of that contiguous block (crtend is linked before the
+# libstdc++/libgcc archives), prematurely terminating the registry's FDE walk
+# so libstdc++/libgcc frames are never seen -> the unwinder misses them. So we
+# rely solely on LINK.EXE's synthesized begin/terminator/registration.
 CRT_OBJS=""
 if [ -f "$CRTBEGIN" ] && [ -f "$CRTEND" ]; then
-    echo "  crtbeginT.o : $CRTBEGIN (found -- carries frame_dummy()'s .init_array __register_frame_info() ctor)"
-    echo "  crtendT.o   : $CRTEND (found)"
-    CRT_OBJS="$CRTBEGIN $CRTEND"
+    echo "  crtbeginT.o/crtendT.o : found but INTENTIONALLY NOT linked (LINK.EXE synthesizes .eh_frame begin/terminator + registration natively -- vms-70d)"
 else
-    echo "  crtbeginT.o/crtendT.o : NOT FOUND (got '$CRTBEGIN' / '$CRTEND') -- linking WITHOUT them; static-EH frame registration may be absent"
+    echo "  crtbeginT.o/crtendT.o : not found -- not needed (LINK.EXE handles EH-frame registration natively, vms-70d)"
 fi
 
 echo

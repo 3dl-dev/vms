@@ -2182,8 +2182,15 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     uint64_t got_end = got_beg + (uint64_t)ngot * 8;
     cur = got_end;
 
-    /* TLSDESC entries (writable, 2 quadwords each, 8-aligned). */
-    uint64_t tlsdesc_beg = ALIGN_UP(cur, 8);
+    /* TLSDESC entries (writable, 2 quadwords = 16 bytes each). The x86_64
+     * TLSDESC ABI requires each descriptor 16-byte ALIGNED: a
+     * `lea sym@TLSDESC(%rip),%rax` must resolve to a descriptor boundary, and
+     * the resolver treats %rax as a 16-byte-aligned [resolver,offset] pair.
+     * Align the TABLE BASE to 16 (was 8, vms-da2's combined-TLS-block reorg
+     * shifted `cur` so an 8-aligned base landed at 8 mod 16 -> descriptors off
+     * boundary; caught by the x86_64 TLSX86.EXE reloc test). i*16 then keeps
+     * every entry ≡0 mod 16. */
+    uint64_t tlsdesc_beg = ALIGN_UP(cur, 16);
     for (int i = 0; i < ntls; i++) tls[i].va = tlsdesc_beg + (uint64_t)i * 16;
     uint64_t tlsdesc_end = tlsdesc_beg + (uint64_t)ntls * 16;
     cur = tlsdesc_end;

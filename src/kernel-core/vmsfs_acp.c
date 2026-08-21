@@ -3168,12 +3168,6 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
         }
 
 free_sc:
-        if (args.status != SS__NORMAL)
-            pr_crit("OVMX-DIAG acp fileop func=%u name='%s' did=%u status=0x%08x "
-                    "proc_uic=0x%08x privs=0x%llx\n",
-                    (unsigned)args.func, args.name, (unsigned)args.did_num,
-                    (unsigned)args.status, (unsigned)proc->uic,
-                    (unsigned long long)proc->cur_privs);
         vms_lock_acp_vol_release(proc, fop_lkid);   /* vms-233: release the volume lock (no-op if 0) */
         exec_free(sc);
     }

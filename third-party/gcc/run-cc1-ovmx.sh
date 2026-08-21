@@ -39,8 +39,8 @@ command -v "$ENGINE" >/dev/null 2>&1 || { echo "run-cc1-ovmx: neither podman nor
 "$ENGINE" run --rm -e JOBS="${JOBS:-}" -v "$REPO":/src:Z -v "$GCC_WORK":/gccwork:Z -v "$RESULT_DIR":/result:Z -w /src "$IMG" sh -c '
     set -e
     echo "== apk add build deps =="
-    apk add --no-cache g++ gmp-dev mpfr-dev mpc1-dev zlib-dev make musl-dev binutils readelf >/dev/null 2>&1 \
-      || apk add --no-cache g++ gmp-dev mpfr-dev mpc1-dev zlib-dev make musl-dev binutils >/dev/null 2>&1
+    apk add --no-cache g++ gmp-dev mpfr-dev mpc1-dev zlib-dev make musl-dev binutils flex bison readelf >/dev/null 2>&1 \
+      || apk add --no-cache g++ gmp-dev mpfr-dev mpc1-dev zlib-dev make musl-dev binutils flex bison >/dev/null 2>&1
     ARCH=x86_64
     CC=gcc
     CXX=g++

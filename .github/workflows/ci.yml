@@ -2187,13 +2187,27 @@ jobs:
           #        vms-pv1): the suite MUST require a real /dev/vms and MUST
           #        exit 77 when it is absent, never 0.
           #
-          #   test_kmod_vmsfs*   -> rc MUST be 0.
-          #        POSITIVE control paired with the negatives: vmsfs has no
-          #        dependency on vms.ko, so it must still fully pass with the
-          #        executive absent. If the harness were failing
-          #        indiscriminately (gutted, always-fail, boot broken), this
+          #   test_kmod_vmsfs* | test_kmod_ods2_codec -> rc MUST be 0.
+          #        POSITIVE control paired with the negatives: these depend on
+          #        vmsfs.ko (which init.sh insmods even in NEGATIVE_CONTROL),
+          #        NOT on vms.ko / the executive, so they must still fully pass
+          #        with the executive absent. If the harness were failing
+          #        indiscriminately (gutted, always-fail, boot broken), these
           #        would fail too and every negative assertion here would be
           #        proving nothing about the executive specifically.
+          #        test_kmod_ods2_codec (vms-dcd) is here for the same reason as
+          #        the vmsfs suites and by its own design: it mounts the real-VAX
+          #        ODS-2 fixture through the "ods2ro" filesystem IN vmsfs.ko and
+          #        byte-compares a kernel-resident-codec read against a committed
+          #        golden -- it opens no /dev/vms and reaches no vms_kif entry
+          #        point (its only ioctl is LOOP_SET_FD), and its own header
+          #        states it follows test_kmod_vmsfs_blkdev's skip convention.
+          #        Leaving it in the catch-all below (rc MUST be nonzero) was the
+          #        vms-1d9-documented miscategorisation: a legitimately
+          #        executive-INDEPENDENT suite the gate wrongly demanded fail.
+          #        Its executive-facing teeth live in the OTHER gate -- the
+          #        per-facility negative control's ods2-read-content-vbn defect,
+          #        which reddens THIS suite against a real codec mutation.
           #
           #   every other test_kmod_* -> rc MUST be nonzero.
           #        Raw-ioctl executive tests; they cannot pass without
@@ -2292,10 +2306,10 @@ jobs:
             $suite_fails"
                 fi
                 ;;
-              test_kmod_vmsfs*)
+              test_kmod_vmsfs*|test_kmod_ods2_codec)
                 if [ "$rc" != "0" ]; then
                   BAD="$BAD
-            $suite: rc=$rc -- expected 0. vmsfs does not depend on vms.ko, so it must still pass with the executive absent; if it fails, the harness is failing indiscriminately and the negative assertions prove nothing."
+            $suite: rc=$rc -- expected 0. This suite depends on vmsfs.ko (not vms.ko/the executive), so it must still pass with the executive absent; if it fails, the harness is failing indiscriminately and the negative assertions prove nothing."
                 fi
                 ;;
               *)

@@ -6186,6 +6186,68 @@ jobs:
         run: tests/lab-vax/run-boot.sh sysboot-negctl
 
   # -----------------------------------------------------------------------
+  # alpha-boot-login (rd vms-341, epic vms-8954). The Alpha member of the
+  # cut-time release-acceptance set: proves the OVMX/Linux-Alpha (LP64) runtime
+  # boots to an AUTHENTICATED interactive DCL "$" over the genuine Files-11
+  # ODS-2 executive ACP -- SYSTEM/MANAGER authenticated by Purdy against the
+  # binary $UAFDEF SYSUAF (not just boot-to-Username). This is the 4th-arch
+  # authenticity dimension: the SAME authenticity flip x86_64 ships (the 0.5
+  # release-acceptance-e2e job proves x86_64), proven green-by-SHA on a second
+  # 64-bit width.
+  #
+  # HEAVY-EMULATOR TIER (schedule || workflow_dispatch), exactly like the
+  # netbsd-vax-boot SIMH gate above -- deliberately NOT the per-PR path (a full
+  # Alpha cross-build + qemu-system-alpha boot is ~25-30 min; keeping it off the
+  # PR path preserves the fast PR wall). qemu-system-alpha is pure TCG (no KVM /
+  # nested virt), so it runs on a stock ubuntu-latest runner. The conductor
+  # fires it via workflow_dispatch on the frozen SHA at cut time for a
+  # machine-observable green-by-SHA Alpha authenticity proof; the nightly
+  # schedule catches drift between cuts.
+  #
+  # NO persistent .boot-cache: on a fresh runner run-boot-alpha.sh cross-builds
+  # the FULL Alpha userland + vms.ko + ODS-2 disk from the checked-out SHA, so
+  # the gate can never pass on a stale artifact (the V0.4-6-on-a-V0.5-tree
+  # false-green class, vms-46f5). Only the cross toolchain docker layers are
+  # gha-cached (the compiler, not the product).
+  # -----------------------------------------------------------------------
+  alpha-boot-login:
+    name: OVMX/Alpha boots to an authenticated DCL $ over the ODS-2 ACP (vms-341)
+    needs: changes
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # A full Alpha cross-build + a 128 MB ODS-2 disk + docker images is tight
+      # on a stock runner's ~14 GB root; reclaim the large unused toolchains up
+      # front so the boot build can't die on ENOSPC at minute 25.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: "Login gate — boot qemu-system-alpha, authenticate SYSTEM/MANAGER against the binary SYSUAF over the ACP, land on an interactive DCL $, run SHOW TIME"
+        run: tools/cross-alpha/run-boot-alpha.sh login
+
+  # -----------------------------------------------------------------------
   # vmsfs-core-elf32-vax (rd vms-bb8, epic vms-8e8; P4-VFS V3).
   #
   # BUILD-ONLY cross-compile gate for the substrate-neutral ODS-2 core

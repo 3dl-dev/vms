@@ -3271,6 +3271,23 @@ jobs:
     # 2026-08-04); a shard's sequential work is a small fraction of that, so
     # 30m leaves headroom against the SAME per-defect variance without
     # resurrecting a 60m+ job.
+    #
+    # SHARD-COUNT BUMP 6 -> 10 (0.5 integration). MEASURED on CI run
+    # 32447601184 (work/vms-0.5-final-dryrun): with 6 shards (~20 defects
+    # each) FIVE of six shards were KILLED at exactly 30.2m -- they hit THIS
+    # timeout-minutes, they did not fail (conclusion "cancelled", not
+    # "failure"). Shard 3 alone COMPLETED, at 24.5m, and passed -- so the
+    # manifest/gate is sound; what changed is that the flip + cascade grew the
+    # suite set (~76 -> ~97 suites), so every per-defect harness boot runs more
+    # suites and 20 defects/shard no longer fit in 30m under the 95-job run's
+    # runner contention. This is a capacity fact, NOT a facility_defects.sh
+    # inconsistency (coverage/selftest pass; shard 3 proved the defects redden).
+    # 120 defects / 10 shards = ~12/shard: at shard 3's measured ~1min/defect +
+    # ~5m fixed build+positive-control cost that is ~17m, comfortably inside 30m
+    # even at the first-batch contention that killed the 20-defect shards. The
+    # partition below is `NR % job-total`, so this is the ONLY line to touch --
+    # nothing is hand-maintained. Revisit as the manifest grows (raise the
+    # shard count, never delete a defect to fit).
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -3278,17 +3295,17 @@ jobs:
       # d2d76fc failed on THREE shards AT ONCE (0/6, 1/6, 5/6) -- every shard
       # runs QEMU + fork/pipe/multi-process tests, and with all 6 unbounded
       # (GitHub's default matrix concurrency), they compete for host
-      # resources (CPU for 6 concurrent QEMU guests, IPC timing) alongside
+      # resources (CPU for concurrent QEMU guests, IPC timing) alongside
       # whatever else this workflow is already running. That's resource
       # starvation, not a per-defect logic bug -- the same shard slice that
       # fails under load passes standalone. Capping how many run AT ONCE
-      # (not how many run in total -- all 6 still execute, sequenced in
+      # (not how many run in total -- all shards still execute, sequenced in
       # batches) gives each shard the headroom it needs without trading away
       # coverage or resurrecting the pre-#158 single-job wall-time problem.
       # Revisit the number empirically if shards still balloon at 3.
       max-parallel: 3
       matrix:
-        shard: [0, 1, 2, 3, 4, 5]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
     steps:
       - name: Checkout

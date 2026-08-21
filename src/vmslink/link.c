@@ -265,6 +265,14 @@ struct obj {
     Elf64_Shdr   *tdata;    /* .tdata section header (0 if none) */
     int           tbss_ndx; /* .tbss (TLS zero data) index (0 if none) */
     Elf64_Shdr   *tbss;     /* .tbss section header (0 if none) */
+    /* Multi-module TLS (vms-da2): base offset of THIS object's .tdata / .tbss
+     * within the image's single combined TLS block. A C++ image whole-archives
+     * libstdc++/libsupc++/libgcc, each contributing its own .tdata/.tbss; LINK
+     * concatenates them all into one PT_TLS and records each module's base here
+     * so a TLS symbol resolves to (its module's base + st_value). Assigned in
+     * emit_shareable's TLS-layout pass; 0 when this object has no such section. */
+    uint64_t      tls_tdata_off; /* .tdata base within the combined block */
+    uint64_t      tls_tbss_off;  /* .tbss  base within the combined block */
     Elf64_Rela   *rela;     /* relocations against the first .text (SHT_RELA) */
     int           nrela;
     /* Per-section classification + placement (the shareable path, vms-fa1).
@@ -1461,15 +1469,20 @@ static void patch_tlsdesc(uint32_t type, uint32_t *insn, uint64_t site,
     /* R_AARCH64_TLSDESC_CALL / R_X86_64_TLSDESC_CALL: no-op markers. */
 }
 
-/* Module-relative TLS offset of a TLS symbol: 0-based within the module's
- * [.tdata | .tbss] block. tbss_base is where .tbss begins (aligned .tdata size). */
-static uint64_t tls_module_offset(struct obj *objs, int nobj, uint64_t tbss_base,
+/* Module-relative TLS offset of a TLS symbol: its byte offset within the image's
+ * single combined TLS block. With multi-module TLS (vms-da2) the block holds
+ * every input object's [.tdata] concatenated, then every object's [.tbss], so
+ * the offset is (defining object's assigned base + st_value): tls_tdata_off for
+ * a .tdata symbol, tls_tbss_off for a .tbss symbol. Both bases are assigned in
+ * emit_shareable's TLS-layout pass before this runs. */
+static uint64_t tls_module_offset(struct obj *objs, int nobj,
                                   const char *name, int64_t addend)
 {
     /* x86_64 local-dynamic (vms-2e4): `_TLS_MODULE_BASE_` is a synthetic UND
-     * symbol naming the module's TLS block base, defined by no object — its
-     * module offset is 0 by definition. Each `static _Thread_local` access then
-     * adds its own R_X86_64_DTPOFF32 operand offset on top. */
+     * symbol naming the combined block's base, defined by no object — offset 0
+     * by definition. Each `static _Thread_local` access then adds its own
+     * R_X86_64_DTPOFF32 operand offset (the symbol's combined-block offset) on
+     * top, so the whole image is treated as one module with base 0. */
     if (strcmp(name, TLS_MODULE_BASE_SYM) == 0)
         return (uint64_t)addend;
     for (int j = 0; j < nobj; j++) {
@@ -1478,9 +1491,9 @@ static uint64_t tls_module_offset(struct obj *objs, int nobj, uint64_t tbss_base
             Elf64_Sym *s = &d->sym[k];
             if (strcmp(d->str + s->st_name, name) != 0) continue;
             if (d->tdata && s->st_shndx == (Elf64_Section)d->tdata_ndx)
-                return s->st_value + (uint64_t)addend;
+                return d->tls_tdata_off + s->st_value + (uint64_t)addend;
             if (d->tbss && s->st_shndx == (Elf64_Section)d->tbss_ndx)
-                return tbss_base + s->st_value + (uint64_t)addend;
+                return d->tls_tbss_off + s->st_value + (uint64_t)addend;
         }
     }
     die("TLS symbol not defined in any input .tdata/.tbss");
@@ -1495,17 +1508,17 @@ static uint64_t tls_module_offset(struct obj *objs, int nobj, uint64_t tbss_base
  * its own object, and fall back to the cross-object name lookup only for a
  * genuinely undefined (external / _TLS_MODULE_BASE_) reference. */
 static uint64_t tls_ref_offset(struct obj *objs, int nobj, int oi, uint32_t si,
-                               uint64_t tbss_base, int64_t addend)
+                               int64_t addend)
 {
     struct obj *o = &objs[oi];
     Elf64_Sym  *s = &o->sym[si];
     if (s->st_shndx != SHN_UNDEF && s->st_shndx < (Elf64_Section)o->nsh) {
         if (o->tdata && s->st_shndx == (Elf64_Section)o->tdata_ndx)
-            return s->st_value + (uint64_t)addend;
+            return o->tls_tdata_off + s->st_value + (uint64_t)addend;
         if (o->tbss && s->st_shndx == (Elf64_Section)o->tbss_ndx)
-            return tbss_base + s->st_value + (uint64_t)addend;
+            return o->tls_tbss_off + s->st_value + (uint64_t)addend;
     }
-    return tls_module_offset(objs, nobj, tbss_base, o->str + s->st_name, addend);
+    return tls_module_offset(objs, nobj, o->str + s->st_name, addend);
 }
 
 /* True if `name` is defined by some input object in a section this linker places
@@ -1647,27 +1660,44 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             if (objs[i].sec_bucket[s] == B_BSS)        has_bss = 1;
         }
 
-    /* TLS geometry (single TLS-bearing object per image for now). */
-    int tls_obj = -1;
+    /* TLS geometry: COMBINED multi-module TLS block (vms-da2). A C++ image
+     * whole-archives libstdc++/libsupc++/libgcc, each of which can contribute
+     * its own .tdata/.tbss; a single image therefore has MANY TLS-bearing
+     * objects, not one. LINK builds ONE combined per-thread TLS block for the
+     * whole image and emits a SINGLE PT_TLS over it — matching what a real
+     * linker (ld) does when it statically combines a program with its runtime.
+     *
+     * Layout (the ELF-standard TLS block shape): every module's .tdata is
+     * concatenated first (the file-backed init image = PT_TLS p_filesz), then
+     * every module's .tbss (zero-fill = the p_memsz tail). Each section is
+     * placed at its own alignment; each object records the base offset it was
+     * assigned (tls_tdata_off / tls_tbss_off) so a TLS symbol resolves to
+     * (its module's base + st_value). No per-image cap and no one-object
+     * limitation — the count of TLS-bearing objects is unbounded. */
+    uint64_t tls_align = 1;   /* max alignment over all TLS sections (>=1) */
+    /* Pass 1: place every .tdata (initialized image) contiguously. */
+    uint64_t tls_cursor = 0;
     for (int i = 0; i < nobj; i++) {
-        if ((objs[i].tdata && objs[i].tdata->sh_size) ||
-            (objs[i].tbss && objs[i].tbss->sh_size)) {
-            if (tls_obj >= 0)
-                die("multi-module TLS not supported yet (one TLS object per image)");
-            tls_obj = i;
-        }
+        if (!(objs[i].tdata && objs[i].tdata->sh_size)) continue;
+        uint64_t al = objs[i].tdata->sh_addralign ? objs[i].tdata->sh_addralign : 8;
+        if (al > tls_align) tls_align = al;
+        tls_cursor = ALIGN_UP(tls_cursor, al);
+        objs[i].tls_tdata_off = tls_cursor;
+        tls_cursor += objs[i].tdata->sh_size;
     }
-    int has_tls = (tls_obj >= 0);
-    uint64_t tdata_sz = (has_tls && objs[tls_obj].tdata) ? objs[tls_obj].tdata->sh_size : 0;
-    uint64_t tbss_sz  = (has_tls && objs[tls_obj].tbss)  ? objs[tls_obj].tbss->sh_size  : 0;
-    uint64_t tdata_al = (has_tls && objs[tls_obj].tdata && objs[tls_obj].tdata->sh_addralign)
-                        ? objs[tls_obj].tdata->sh_addralign : 8;
-    uint64_t tbss_al  = (has_tls && objs[tls_obj].tbss && objs[tls_obj].tbss->sh_addralign)
-                        ? objs[tls_obj].tbss->sh_addralign : 1;
-    uint64_t tls_align = tdata_al > tbss_al ? tdata_al : tbss_al;
-    if (tls_align == 0) tls_align = 1;
-    uint64_t tbss_base = tbss_sz ? ALIGN_UP(tdata_sz, tbss_al) : tdata_sz;
-    uint64_t tls_memsz = tbss_base + tbss_sz;
+    uint64_t tdata_sz = tls_cursor;   /* total .tdata = PT_TLS p_filesz */
+    /* Pass 2: place every .tbss (zero image) after all .tdata. */
+    for (int i = 0; i < nobj; i++) {
+        if (!(objs[i].tbss && objs[i].tbss->sh_size)) continue;
+        uint64_t al = objs[i].tbss->sh_addralign ? objs[i].tbss->sh_addralign : 1;
+        if (al > tls_align) tls_align = al;
+        tls_cursor = ALIGN_UP(tls_cursor, al);
+        objs[i].tls_tbss_off = tls_cursor;
+        tls_cursor += objs[i].tbss->sh_size;
+    }
+    uint64_t tls_memsz = tls_cursor;  /* total block = PT_TLS p_memsz */
+    uint64_t tbss_sz   = tls_memsz - tdata_sz; /* zero-tail size (diagnostic/hdr) */
+    int has_tls = (tls_memsz > 0);
 
     /* Collect the distinct GOT-referenced symbols (across all code sections).
      * Growable — musl references hundreds of globals GOT-indirectly. (vms-004) */
@@ -2017,9 +2047,16 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                        objs[i].buf + objs[i].sh[s].sh_offset, objs[i].sh[s].sh_size);
         }
 
-    /* Copy the TLS init image (.tdata); .tbss is zero-filled per thread. */
-    if (has_tls && tdata_sz)
-        memcpy(img + tdata_va, objs[tls_obj].buf + objs[tls_obj].tdata->sh_offset, tdata_sz);
+    /* Copy the combined TLS init image: every module's .tdata into its assigned
+     * slot within the block's [tdata_va, tdata_va+tdata_sz) init region (vms-da2).
+     * .tbss is zero-filled per thread (already zero in the calloc'd image, and
+     * re-zeroed by the activator's anonymous TLS mapping). */
+    if (has_tls)
+        for (int i = 0; i < nobj; i++)
+            if (objs[i].tdata && objs[i].tdata->sh_size)
+                memcpy(img + tdata_va + objs[i].tls_tdata_off,
+                       objs[i].buf + objs[i].tdata->sh_offset,
+                       objs[i].tdata->sh_size);
 
     /* Image-relative slots (GOT cells + ABS64 data pointers) to bias at
      * activation; filled as they resolve, header count set at the end. */
@@ -2065,7 +2102,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 
     /* Fill TLSDESC entries: [0]=0 (IMGACT sets the resolver), [1]=module offset. */
     for (int i = 0; i < ntls; i++) {
-        tls[i].modoff = tls_module_offset(objs, nobj, tbss_base,
+        tls[i].modoff = tls_module_offset(objs, nobj,
                                           tls[i].name, tls[i].addend);
         uint64_t *e = (uint64_t *)(img + tls[i].va);
         e[0] = 0;
@@ -2111,7 +2148,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                  * it is link-time-final — NOT load-biased, NOT in .vms$rel. */
                 uint64_t moff = tls_ref_offset(objs, nobj, i,
                                                ELF64_R_SYM(rl->info),
-                                               tbss_base, rl->add);
+                                               rl->add);
                 *insn = (uint32_t)moff;
             } else if (is_abs64_reloc(type)) {
                 /* Pointer initializer (.rela.data): write S+A as a 64-bit
@@ -2303,7 +2340,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         sh[ix_tdata].sh_name = sn_off[ix_tdata]; sh[ix_tdata].sh_type = SHT_PROGBITS;
         sh[ix_tdata].sh_flags = SHF_ALLOC | SHF_WRITE | SHF_TLS;
         sh[ix_tdata].sh_addr = tdata_va; sh[ix_tdata].sh_offset = tdata_va;
-        sh[ix_tdata].sh_size = tdata_sz; sh[ix_tdata].sh_addralign = tdata_al;
+        sh[ix_tdata].sh_size = tdata_sz; sh[ix_tdata].sh_addralign = tls_align;
     }
     sh[ix_sv].sh_name = sn_off[ix_sv]; sh[ix_sv].sh_type = SHT_PROGBITS;
     sh[ix_sv].sh_flags = SHF_ALLOC; sh[ix_sv].sh_addr = off_sv;
@@ -2337,8 +2374,8 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     if (has_tls && tbss_sz) {
         sh[ix_tbss].sh_name = sn_off[ix_tbss]; sh[ix_tbss].sh_type = SHT_NOBITS;
         sh[ix_tbss].sh_flags = SHF_ALLOC | SHF_WRITE | SHF_TLS;
-        sh[ix_tbss].sh_addr = tdata_va + tbss_base; sh[ix_tbss].sh_offset = tdata_end;
-        sh[ix_tbss].sh_size = tbss_sz; sh[ix_tbss].sh_addralign = tbss_al;
+        sh[ix_tbss].sh_addr = tdata_va + tdata_sz; sh[ix_tbss].sh_offset = tdata_end;
+        sh[ix_tbss].sh_size = tbss_sz; sh[ix_tbss].sh_addralign = tls_align;
     }
     if (has_bss) {
         sh[ix_bss].sh_name = sn_off[ix_bss]; sh[ix_bss].sh_type = SHT_NOBITS;

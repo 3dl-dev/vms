@@ -529,7 +529,8 @@ initialize-home-magic-not-written
 ods2-read-content-vbn
 dirlogical-compose-drops-common-member
 dcl-acp-search-fid-fabricated
-loginout-acp-auth-from-ods2"
+loginout-acp-auth-from-ods2
+multiuser-stage-shared-not-peruser"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -5105,6 +5106,50 @@ EOF
                       ;;
         esac;;
 
+    multiuser-stage-shared-not-peruser)
+        case "$_f" in
+        facility)     echo "per-user private image staging for a NON-ROOT VMS session (vms-a86f). LOGINOUT setuid()s a session onto its SYSUAF UIC (SYSTEM = uid 4), so a session is non-root; the atomic flip stages an image the kernel must execve() into OVMX_BOOT_STAGE_DIR, root-owned 0755. A non-root session cannot write that shared directory, so DCL's resolver stages a not-pre-staged image (SYS\$SYSTEM:PARTS.EXE the first \$ PARTS) into a PER-USER-owned /run/ovmx-boot/<uid>/ (0700) instead -- genuine ACP bytes, no world-writable dir. This is a userspace staging behaviour (the same product-half class as scratch-dir-owner-not-system), not a vms.ko facility, admitted here because tests/qemu/test_syssvc_multiuser_stage.c is discovered by the same test_syssvc_* glob cmd_coverage floors.";;
+        # NOT a src/kernel executive facility -- the QEMU KE rig never boots
+        # PID 1 / DCL, so dcl_resolve_activatable_acp is not linked into this
+        # suite's binary and a mutation to it cannot reach the suite (the same
+        # reason scratch-dir-owner-not-system targets its own test source). The
+        # suite carries the staging recipe itself (its own mkdir(0700) +
+        # rms_stage_over_acp to a per-user path), so THAT is the copy the
+        # mutation edits: it redirects the per-user stage back into the shared
+        # root-owned directory -- exactly the pre-fix behaviour -- and a non-root
+        # rms_stage_over_acp into a root-owned 0755 dir fails EACCES.
+        # ../ is relative to the src-root cmd_apply is given (src/), a sibling of
+        # tests/ in every checkout this runs against.
+        targets)      echo "../tests/qemu/test_syssvc_multiuser_stage.c";;
+        suites_red)   echo "test_syssvc_multiuser_stage";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "the suite stages the image into the shared root-owned OVMX_BOOT_STAGE_DIR instead of the per-user /run/ovmx-boot/<uid>/ it owns. As the non-root SYSTEM UIC, open(O_CREAT) in that root-owned 0755 directory is EACCES, so rms_stage_over_acp returns non-success and the per-user-staging-succeeds assertion reddens; the image never lands at the per-user path, so its owner and owner-exec read-backs redden too. The ACP READ probe (to owned /tmp) and the assertion that the shared-dir stage FAILS both want their existing outcomes and stay green; the per-user directory is still created 0700, so the not-world-writable assertion stays green.";;
+        require_fail) cat <<'EOF'
+non-root staging into per-user private /run/ovmx-boot/<uid>/ SUCCEEDS
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the per-user staged image is owned by the activating non-root uid
+the per-user staged image is owner-executable
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME MISDIRECTED STAGE, SEEN AT EACH READ-BACK OF THE PER-USER FILE. Once
+the per-user stage is redirected into the shared root-owned directory, the
+non-root open(O_CREAT) fails EACCES: the per-user-staging-succeeds check reddens
+(require_fail), and because nothing was written at the per-user path, the two
+stat()-based read-backs of that file -- its owner and its owner-exec bit
+(knock_on_fail) -- redden with it. The ACP read probe to /tmp still succeeds
+(non-root CAN read the volume), the shared-dir-stage-FAILS check still gets its
+negative outcome, and the per-user directory is still mkdir(0700)'d before the
+stage, so its not-world-writable check stays green -- so exactly these three
+assertions move, no more.
+EOF
+                      ;;
+        esac;;
+
     imgact-acp-valid-bytes-offbyone)
         case "$_f" in
         facility)     echo "IMGACT image reads over the Files-11 (ODS-2) ACP -- the freestanding activator opens an image by IO\$_ACCESS (walking its directory chain) and reads its header + PT_LOAD segments by IO\$_READVBLK, decoding the accessed file's valid-byte count from its on-disk FH2 (efblk/ffbyte) so a read never over-reads past end-of-file, vms-3e8e, epic vms-208";;
@@ -6946,6 +6991,17 @@ apply_edit() {
         # writers are untouched. After substitution no `FAB$C_STMLF` is left in
         # the reader's range -- the no-op the idempotency selftest requires.
         sed -i '/^rms_textfile_t \*rms_textfile_open/,/^}$/ s|    tf->fab.fab$b_rfm = FAB$C_STMLF;|    tf->fab.fab$b_rfm = FAB$C_VAR; /* NEGCTL loginout-acp-auth-from-ods2 */|' "$_file";;
+
+    multiuser-stage-shared-not-peruser)
+        # UNIQUE TEXT: `rms_stage_over_acp(IMG_SPEC, user_dest)` occurs once (the
+        # probe and shared-dir calls take `probe` / `shared_dest`). Redirecting
+        # the per-user stage back into the shared root-owned directory reproduces
+        # the pre-fix behaviour: as the non-root SYSTEM UIC, open(O_CREAT) in the
+        # root-owned 0755 dir is EACCES, so the per-user-succeeds assertion (and
+        # the two read-backs of the file that never landed) redden. After the
+        # substitution `, user_dest)` is gone -- a second apply is the no-op the
+        # idempotency selftest requires.
+        sed -i 's|st = rms_stage_over_acp(IMG_SPEC, user_dest);|st = rms_stage_over_acp(IMG_SPEC, shared_dest); /* NEGCTL multiuser-stage-shared-not-peruser */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

@@ -157,19 +157,37 @@ command -v "$ENGINE" >/dev/null 2>&1 || { echo "run-cc1-ovmx: neither podman nor
         # "segfault" into an actionable location (cc1 fn vs IMGACT vs a null
         # deferred-import stub). gdb runs CC1.EXE through its IMGACT INTERP.
         if [ "$R5" -ge 128 ]; then
-            echo "== step 6: gdb backtrace of the compile-time fault (cc1 has -g symbols) =="
-            apk add --no-cache gdb >/dev/null 2>&1 || echo "  (gdb install failed — skipping backtrace)"
+            echo "== step 6: gdb rip + proc mappings dump (+ copy CC1.EXE out) — host does addr2line =="
+            apk add --no-cache gdb >/dev/null 2>&1 || echo "  (gdb install failed)"
             if command -v gdb >/dev/null 2>&1; then
+                # Keep the in-container part MINIMAL and quote-safe (info registers
+                # / info proc mappings — the forms proven in run 10). The rip->file
+                # ->addr2line arithmetic is done on the HOST afterward, against the
+                # CC1.EXE copied here (the container is --rm and /vms vanishes).
                 gdb -batch -nx \
                     -ex "set pagination off" \
                     -ex "run" \
-                    -ex "echo \n==FAULT==\n" \
-                    -ex "bt 40" \
-                    -ex "info registers rip rsp" \
+                    -ex "info registers rip rbp rsp" \
+                    -ex "print/x \$fs_base" \
+                    -ex "x/i \$rip" \
+                    -ex "x/4xg \$fs_base" \
+                    -ex "info proc mappings" \
                     --args "$SYSEXE/CC1.EXE" -quiet -O1 /tmp/probe.c -o /tmp/probe.s \
                     > /result/06-cc1-gdb-bt.txt 2>&1
-                echo "-- gdb backtrace (tail): --"
-                sed "s/^/   /" /result/06-cc1-gdb-bt.txt | tail -45
+                cp "$SYSEXE/CC1.EXE" /result/CC1.EXE 2>/dev/null || true
+                echo "-- gdb rip + mappings (tail): --"
+                sed "s/^/   /" /result/06-cc1-gdb-bt.txt | tail -35
+            fi
+            echo "== step 6b: strace the compile — the syscalls right before SIGSEGV are the culprit =="
+            apk add --no-cache strace >/dev/null 2>&1 || echo "  (strace install failed)"
+            if command -v strace >/dev/null 2>&1; then
+                # Full syscall trace; the fault appears as --- SIGSEGV --- and the
+                # last mmap/brk/getrusage before it is the executive-boundary lead.
+                strace -f -tt "$SYSEXE/CC1.EXE" -quiet -O1 /tmp/probe.c -o /tmp/probe.s > /result/06b-strace.txt 2>&1
+                echo "-- strace tail (last 40 syscalls before the fault): --"
+                sed "s/^/   /" /result/06b-strace.txt | tail -40
+                echo "-- mmap/brk/rusage/mprotect calls (executive memory-mgmt surface): --"
+                grep -nE "mmap|munmap|mprotect|brk|getrusage|times\(|ENOSYS|EINVAL|ENOMEM" /result/06b-strace.txt | tail -30 | sed "s/^/   /"
             fi
         fi
     fi

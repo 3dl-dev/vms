@@ -161,6 +161,40 @@ int rms_io_posix_fd(rms_file_t *f)
 
 #define RMS_IO_MAX_XFER  (1u << 20)   /* mirror ACP_RW_MAX_XFER (1 MiB) */
 
+/* One IO$_READVBLK of up to `chunk` bytes at the byte cursor. Returns bytes
+ * transferred (0 at/after EOF), or -1 on an executive/channel failure. */
+static ssize_t rms_io_readvb_at(rms_file_t *f, uint64_t at, void *buf, uint32_t chunk)
+{
+    struct vms_acp_rw_args a;
+    uint32_t st;
+
+    memset(&a, 0, sizeof(a));
+    a.chan   = f->chan;
+    a.vbn    = (uint32_t)(at / RMS_IO_BLK) + 1u;
+    a.offset = (uint32_t)(at % RMS_IO_BLK);
+    a.length = chunk;
+    a.buffer = (uint64_t)(uintptr_t)buf;
+
+    st = vms_kif_acp_readvb(&a);
+    if (st == SS$_ENDOFFILE) {
+        f->eof = (uint64_t)(a.new_efblk ? (a.new_efblk - 1u) : 0) * RMS_IO_BLK;
+        return 0;
+    }
+    if (!$VMS_STATUS_SUCCESS(st))
+        return -1;
+    if (a.new_hiblk)
+        f->hiblk = a.new_hiblk;
+    return (ssize_t)a.xferred;
+}
+
+/*
+ * read(2) emulation over the ACP, with a one-block read-ahead cache (vms-4ac).
+ * Sequential text (STMLF) records are read byte-by-byte by rms_seq.c; without a
+ * cache that was one IO$_READVBLK per byte. Small reads are now served from a
+ * single cached 512-byte block, refilled with one QIO per block; a large read
+ * (>= a block) bypasses the cache and transfers directly. The cache is keyed by
+ * absolute file offset, so an lseek that lands inside it still hits.
+ */
 static ssize_t rms_io_read_acp(rms_file_t *f, void *buf, size_t n)
 {
     uint8_t *p = (uint8_t *)buf;
@@ -172,34 +206,53 @@ static ssize_t rms_io_read_acp(rms_file_t *f, void *buf, size_t n)
         return 0;
 
     while (done < n) {
-        struct vms_acp_rw_args a;
-        uint32_t chunk = (n - done) > RMS_IO_MAX_XFER
-                             ? RMS_IO_MAX_XFER : (uint32_t)(n - done);
-        uint32_t st;
+        size_t want = n - done;
 
-        memset(&a, 0, sizeof(a));
-        a.chan   = f->chan;
-        a.vbn    = (uint32_t)(f->cursor / RMS_IO_BLK) + 1u;
-        a.offset = (uint32_t)(f->cursor % RMS_IO_BLK);
-        a.length = chunk;
-        a.buffer = (uint64_t)(uintptr_t)(p + done);
-
-        st = vms_kif_acp_readvb(&a);
-        if (st == SS$_ENDOFFILE) {
-            f->eof = (uint64_t)(a.new_efblk ? (a.new_efblk - 1u) : 0) * RMS_IO_BLK;
-            break;                       /* at/after EOF: return what we have */
+        /* Serve from the cached block when the cursor lands inside it. */
+        if (f->rbuf_len > 0 &&
+            f->cursor >= f->rbuf_base &&
+            f->cursor < f->rbuf_base + f->rbuf_len) {
+            uint32_t off = (uint32_t)(f->cursor - f->rbuf_base);
+            uint32_t avail = f->rbuf_len - off;
+            uint32_t take = (want < avail) ? (uint32_t)want : avail;
+            memcpy(p + done, f->rbuf + off, take);
+            f->cursor += take;
+            done      += take;
+            continue;
         }
-        if (!$VMS_STATUS_SUCCESS(st))
-            return -1;
-        if (a.xferred == 0)
-            break;
 
-        f->cursor += a.xferred;
-        done      += a.xferred;
-        if (a.new_hiblk)
-            f->hiblk = a.new_hiblk;
-        if (a.xferred < chunk)
-            break;                       /* short read == hit EOF this chunk */
+        /* Large read: transfer directly, bypassing the cache. */
+        if (want >= RMS_IO_BLK) {
+            uint32_t chunk = want > RMS_IO_MAX_XFER ? RMS_IO_MAX_XFER
+                                                    : (uint32_t)want;
+            ssize_t got = rms_io_readvb_at(f, f->cursor, p + done, chunk);
+            if (got < 0)
+                return -1;
+            if (got == 0)
+                break;                   /* EOF */
+            f->cursor += (uint64_t)got;
+            done      += (size_t)got;
+            if ((uint32_t)got < chunk)
+                break;                   /* short read == EOF this chunk */
+            continue;
+        }
+
+        /* Small read: refill the cache with one block at the cursor's block
+         * boundary, then loop to serve from it. */
+        {
+            uint64_t base = (f->cursor / RMS_IO_BLK) * RMS_IO_BLK;
+            ssize_t got = rms_io_readvb_at(f, base, f->rbuf, RMS_IO_BLK);
+            if (got < 0)
+                return -1;
+            if (got == 0)
+                break;                   /* EOF */
+            f->rbuf_base = base;
+            f->rbuf_len  = (uint32_t)got;
+            /* cursor is within [base, base+got) by construction unless got fell
+             * short before reaching the cursor (EOF mid-block) -- guard it. */
+            if (f->cursor >= f->rbuf_base + f->rbuf_len)
+                break;                   /* EOF between block start and cursor */
+        }
     }
 
     return (ssize_t)done;
@@ -207,6 +260,8 @@ static ssize_t rms_io_read_acp(rms_file_t *f, void *buf, size_t n)
 
 static ssize_t rms_io_write_acp(rms_file_t *f, const void *buf, size_t n)
 {
+    if (f)
+        f->rbuf_len = 0;   /* vms-4ac: a write invalidates the read-ahead cache */
     const uint8_t *p = (const uint8_t *)buf;
     size_t done = 0;
 

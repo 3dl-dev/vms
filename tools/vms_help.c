@@ -34,47 +34,28 @@
 #include "dcl/help.h"
 
 /*
- * Locate the HELP library on disk. Order (first hit wins):
+ * Which HELP library to open. Order (first wins):
  *   1. $OVMX_HELPLIB -- an explicit Linux path (locator override; content still
  *      comes from the real file). The OVMX analogue of VMS "HELP /LIBRARY=".
- *   2. SYS$HELP:HELPLIB.HLP translated through the logical-name tables.
- * Returns 1 and fills buf on success, 0 if no readable library was found.
+ *   2. SYS$HELP:HELPLIB.HLP -- the VMS filespec, opened over the Files-11 ACP.
+ * help_open_any() (dcl_help.c) routes a VMS spec to the ACP (with a POSIX /vms
+ * fallback for host tooling) and a Linux path to a direct read (vms-4ac); the
+ * pre-flip fopen(vmsfs_to_linux_path()) here read the retired /vms passthrough
+ * and so answered %HELP-E-OPENIN on the runtime even though HELPLIB.HLP is
+ * mastered on the volume.
  */
-static int locate_library(char *buf, size_t bufsz)
-{
-    const char *env = getenv("OVMX_HELPLIB");
-    if (env && env[0]) {
-        FILE *fp = fopen(env, "r");
-        if (fp) { fclose(fp); snprintf(buf, bufsz, "%s", env); return 1; }
-    }
-
-    char linux_path[1024];
-    uint32_t st = vmsfs_to_linux_path(VMS_HELPLIB_PATH, linux_path,
-                                      sizeof(linux_path));
-    if ($VMS_STATUS_SUCCESS(st)) {
-        FILE *fp = fopen(linux_path, "r");
-        if (fp) { fclose(fp); snprintf(buf, bufsz, "%s", linux_path); return 1; }
-    }
-    return 0;
-}
-
 int main(int argc, char *argv[])
 {
     /* Bootstrap the VMS namespace so SYS$HELP resolves. */
     vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
     lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
 
-    char lib_path[1024];
-    if (!locate_library(lib_path, sizeof(lib_path))) {
-        /* Honest failure -- no compiled-in fallback (Rule 9 / INV-DCL). */
-        fprintf(stderr,
-                "%%HELP-E-OPENIN, error opening help library %s\n",
-                VMS_HELPLIB_PATH);
-        return 1;
-    }
+    const char *env = getenv("OVMX_HELPLIB");
+    const char *lib_spec = (env && env[0]) ? env : VMS_HELPLIB_PATH;
 
-    help_lib_t *lib = help_open_file(lib_path);
+    help_lib_t *lib = help_open_any(lib_spec);
     if (!lib) {
+        /* Honest failure -- no compiled-in fallback (Rule 9 / INV-DCL). */
         fprintf(stderr,
                 "%%HELP-E-OPENIN, error opening help library %s\n",
                 VMS_HELPLIB_PATH);

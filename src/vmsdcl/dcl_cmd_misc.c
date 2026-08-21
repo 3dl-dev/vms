@@ -41,6 +41,7 @@
 #include "dcl/dcl_cmd.h"
 #include "dcl/disk_logical.h"
 #include "dcl/help.h"
+#include "dcl/dcl_rms.h"     /* dcl_rms_read_* -- the HELP ACP read seam (vms-4ac) */
 #include "ssdef.h"
 #include "ovmx_layout.h"
 #include "vms/logical.h"
@@ -864,24 +865,37 @@ static void help_add_library(struct dcl_context *ctx,
     if (*count >= HELP_MAX_LIBS)
         return;
 
+    /*
+     * vms-4ac: keep a VMS filespec AS A VMS SPEC here -- do NOT translate it to
+     * a /vms Linux path. library_source_text() (dcl_help.c) reads it over the
+     * Files-11 ACP on the product runtime (falling back to a POSIX read of the
+     * /vms tree only where /dev/vms is absent -- host tooling / netbsd cross).
+     * The old dcl_resolve_path() translation produced a /vms path that no longer
+     * exists on the flip runtime, so HELP answered %HELP-E-OPENIN even though
+     * SYS$HELP:HELPLIB.HLP is mastered on the volume. The $OVMX_HELPLIB locator
+     * (linux_in) is already a Linux path and is kept as one.
+     */
     char resolved[1024];
-    if (linux_in) {
-        snprintf(resolved, sizeof(resolved), "%s", spec);
-    } else if (dcl_resolve_path(ctx, spec, resolved, sizeof(resolved)) != 0) {
-        return;
-    }
+    snprintf(resolved, sizeof(resolved), "%s", spec);
 
     for (int i = 0; i < *count; i++)
         if (strcmp(list[i], resolved) == 0)
             return; /* already present */
 
-    FILE *fp = fopen(resolved, "rb");
-    if (!fp)
-        return;
-    fclose(fp);
+    if (linux_in) {
+        /* Locator override: a Linux path -- confirm it opens before adding. */
+        FILE *fp = fopen(resolved, "rb");
+        if (!fp)
+            return;
+        fclose(fp);
+    }
+    /* A VMS spec is added unconditionally; help_open_libraries() skips any that
+     * cannot be read (ACP miss and POSIX-fallback miss both), and cmd_help
+     * reports the honest %HELP-E-OPENIN when NONE resolve. */
 
     snprintf(list[*count], 1024, "%s", resolved);
     (*count)++;
+    (void)ctx;
 }
 
 /* Give a VMS spec a default .HLB file type if it names no type (the last
@@ -1072,6 +1086,63 @@ static void dcl_help_apply_cdu(help_lib_t *lib)
             help_node_set_text(qn, body);
         }
     }
+}
+
+/*
+ * THE HELP-LIBRARY ACP READ SEAM (vms-4ac). dcl_help.c is the pure HELP engine
+ * and reaches these two functions through WEAK references, so the hermetic
+ * engine unit test can link dcl_help.c alone. They live HERE -- in a TU already
+ * part of DCL.EXE (native LINK.EXE build + cmake) -- and read the library
+ * through DCL's OWN RMS reader (dcl_rms_read_*, the same path TYPE/COPY use over
+ * the Files-11 ACP), so the runtime HELP reads SYS$HELP:HELPLIB.HLP over the
+ * executive ACP instead of the fopen() of the retired /vms passthrough that
+ * answered %HELP-E-OPENIN. No new native TU and no new shareable import (DCL
+ * already imports sys$open/$get and vmsfs_to_linux_path), so the native DCL.EXE
+ * image is unchanged in shape. HELP.EXE (the standalone image) carries its own
+ * copy of this seam in dcl_help_acp.c (rms_textfile), since it is not DCL.
+ *
+ * A raw .HLP is line-oriented, so a record-by-record read reconstructs it; a
+ * binary .HLB is taken through the POSIX/.HLB-reconstruct path by dcl_help.c
+ * (help_type_is_hlb), never this text reader.
+ */
+char *help_acp_library_text(const char *vms_spec)
+{
+    struct dcl_context *ctx = dcl_get_context();
+    uint32_t st = 0;
+    struct dcl_rms_reader *r = dcl_rms_read_open(ctx, vms_spec, &st);
+    if (!r)
+        return NULL;
+
+    char *text = NULL;
+    size_t len = 0, cap = 0;
+    char rec[4096];
+    int eof = 0, n;
+
+    /* Non-NULL "" for a readable-but-empty library. */
+    { char *nb = malloc(1); if (!nb) { dcl_rms_read_close(r); return NULL; }
+      nb[0] = '\0'; text = nb; cap = 1; }
+
+    while ((n = dcl_rms_read_record(r, rec, sizeof(rec), &eof)) >= 0) {
+        size_t need = len + (size_t)n + 2;
+        if (need > cap) {
+            size_t nc = cap ? cap : 256;
+            while (need > nc) nc *= 2;
+            char *nb = realloc(text, nc);
+            if (!nb) { free(text); dcl_rms_read_close(r); return NULL; }
+            text = nb; cap = nc;
+        }
+        if (n > 0) { memcpy(text + len, rec, (size_t)n); len += (size_t)n; }
+        text[len++] = '\n';
+        text[len] = '\0';
+        if (eof) break;
+    }
+    dcl_rms_read_close(r);
+    return text;
+}
+
+int help_acp_vms_to_linux(const char *vms_spec, char *buf, size_t bufsz)
+{
+    return $VMS_STATUS_SUCCESS(vmsfs_to_linux_path(vms_spec, buf, bufsz)) ? 1 : 0;
 }
 
 /*

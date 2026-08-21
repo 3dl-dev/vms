@@ -55,8 +55,10 @@ CXX=${CXX:-g++}
     exit 1
 }
 
-rm -rf "$WORK"
 mkdir -p "$WORK"
+# Clean CONTENTS, not the directory itself: WORK may be a bind-mounted
+# volume (a mount point can't be rm'd, only emptied — "Resource busy").
+find "$WORK" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 
 # Known configure knob (vms-0d2 catalog): fixincludes/ is pruned (target-lib
 # dependency only, see VENDOR-REV PRUNED), so the top-level configure must

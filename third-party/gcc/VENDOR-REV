@@ -77,9 +77,9 @@ PRUNED from the stock 14.2.0 release tree (largest first):
   - fixincludes/             1.6M  system-header fixups, `all-target-libgcc`
                                      dependency only
   - libssp/                   616K  target stack-protector runtime
-  - libcc1/gnattools/gotools/c++tools/libcody/libffi/libgrust/libgm2
-                                     ~2.7M combined — plugin/other-FE support,
-                                     not needed for `make all-gcc` C-only
+  - libcc1/gnattools/gotools/c++tools/libffi/libgrust/libgm2
+                                     ~2.4M combined — plugin/other-FE support,
+                                     not needed for `make all-gcc`
   - top-level ChangeLog, ChangeLog.jit, ChangeLog.tree-ssa, NEWS, MD5SUMS,
     maintainer-scripts/                    release housekeeping, not a build
                                             dependency
@@ -98,13 +98,22 @@ KEPT (what `make all-gcc --enable-languages=c,c++` actually needs):
     copy; different revision, not shared/symlinked)
   libdecnumber/ (1.5M, decimal-float support real.cc depends on)
   libbacktrace/ (1.4M, diagnostic backtrace support)
+  libcody/ (280K, ADDED 2026-08-21/vms-796 — C++20 modules mapper-protocol
+    library. Top-level Makefile.def hard-depends all-gcc on all-libcody
+    (`dependencies = { module=all-gcc; on=all-libcody; hard=true; };`,
+    confirmed empirically: `make all-gcc --enable-languages=c,c++` failed
+    with "No rule to make target '../libcody/libcody.a', needed by
+    'cc1plus-checksum.cc'" before this was vendored — NOT optional once C++
+    is a configured language, regardless of whether module support is
+    actually exercised)
   include/, config/ (top-level, build machinery), zlib/ (4.1M, in-tree
     fallback if --with-system-zlib is not used)
   top-level configure/Makefile.def/Makefile.tpl/Makefile.in, config.guess,
   config.sub, move-if-change, COPYING*, lto-plugin/ (612K)
 
 Result: 1.2G stock tarball -> ~174M vendored (post-prune, C+C++ scope),
-gcc/ subtree alone 821M -> ~134M (125M C-only + gcc/cp/'s 8.6M post-prune).
+gcc/ subtree alone 821M -> ~134M (125M C-only + gcc/cp/'s 8.6M post-prune),
+plus libcody/ 280K at top level.
 
 Nothing here is modified from upstream (no OVMX seams yet, unlike
 third-party/tcc's ovmx/ovmx_rms_io.c or third-party/binutils's ovmx/ dir) —

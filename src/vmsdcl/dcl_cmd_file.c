@@ -541,7 +541,22 @@ static int dir_collect_acp(struct dcl_context *ctx, const char *vms_pattern,
 
         entry_count++;
     }
+    /* Terminating $SEARCH status BEFORE close (close frees the context). VMS
+     * distinguishes a directory that does not exist (%RMS-E-DNF) from one that
+     * exists but matched nothing (%DIRECT-W-NOFILES); the ACP $SEARCH already
+     * returns RMS$_DNF vs RMS$_NMF for the two (src/vmsrms/rms_search.c), but
+     * dcl_rms_dir_next collapses both to a bare 0. When NO entry was collected,
+     * a DNF terminator means the directory itself is absent -- surface it as
+     * SS$_NOSUCHFILE so the caller prints %RMS-E-DNF, matching VMS (vms-96ec:
+     * DIRECTORY DKA100:[SYSEXE] on a rooted install, where [SYSEXE] does not
+     * exist, must say "directory not found", not "no files found"). */
+    uint32_t end_status = dcl_rms_dir_status(d);
     dcl_rms_dir_close(d);
+
+    if (entry_count == 0 && end_status == (uint32_t)RMS$_DNF) {
+        free(entries);
+        return SS$_NOSUCHFILE;
+    }
 
     qsort(entries, (size_t)entry_count, sizeof(struct dir_entry), dir_entry_cmp);
     *out_entries = entries;

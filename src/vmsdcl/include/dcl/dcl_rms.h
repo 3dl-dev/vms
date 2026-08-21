@@ -72,6 +72,12 @@ struct dcl_rms_dir *dcl_rms_dir_open(struct dcl_context *ctx, const char *patter
  * (RMS$_NMF) or on error. */
 int dcl_rms_dir_next(struct dcl_rms_dir *d, char *spec, size_t specsz,
                      uint16_t *fid_num, uint16_t *fid_seq, uint8_t *fid_rvn);
+/* The RMS status of the LAST $SEARCH on this context (the value dcl_rms_dir_next
+ * saw when it returned 0). Lets a caller tell RMS$_NMF (the directory exists and
+ * iteration is exhausted -- 0 matches means %DIRECT-W-NOFILES) apart from
+ * RMS$_DNF (the directory itself does not exist -- %RMS-E-DNF). VMS distinguishes
+ * the two; DIRECTORY must too. Valid only after dcl_rms_dir_next has returned 0. */
+uint32_t dcl_rms_dir_status(const struct dcl_rms_dir *d);
 void dcl_rms_dir_close(struct dcl_rms_dir *d);
 
 /* ---- File erase (DELETE) ---- */

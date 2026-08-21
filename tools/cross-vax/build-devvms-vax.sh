@@ -47,6 +47,8 @@ OBJDUMP="${TARGET}-objdump"
 SRC="$(pwd)"
 KMOD="$SRC/src/kernel-netbsd"
 CORE="$SRC/src/kernel-core"
+ODS2="$SRC/src/vmsfs/ods2"             # ACP on-disk EDIT helpers (vms-d5d)
+ODS2_INC="$SRC/src/vmsfs/include"      # the genuine ODS-2 codec header vmsfs/ods2.h
 LIBVMSSYS="$SRC/src/libvmssys"
 PROBE="$SRC/tests/netbsd/guest"
 NBSRC="${NBSRC:-/nbsrc}"
@@ -74,7 +76,7 @@ ln -sf "$SYS/arch/vax/include" "$KL/vax"
 # bsd.kmodule.mk adds -fno-pic for exactly this reason (share/mk/bsd.kmodule.mk),
 # and the vax kernel Makefile builds -fno-pic. -Werror so a warning is fatal.
 CFLAGS="-std=gnu99 -O2 -fno-pic -Werror -Wall -ffreestanding -fno-strict-aliasing -fno-omit-frame-pointer"
-CPPFLAGS="-DOVMX_KBACKEND_NETBSD -nostdinc -isystem $KL -isystem $SYS -isystem $SYS/arch -isystem $SYS/../common/include -D_KERNEL -D_MODULE -I$KMOD -I$CORE"
+CPPFLAGS="-DOVMX_KBACKEND_NETBSD -DOVMX_ODS2_KERNEL -nostdinc -isystem $KL -isystem $SYS -isystem $SYS/arch -isystem $SYS/../common/include -D_KERNEL -D_MODULE -I$KMOD -I$CORE -I$ODS2_INC"
 
 # EXACTLY src/kernel-netbsd/Makefile's SRCS (= B1's SRCS): the NetBSD backend
 # glue + OVMX intrusive containers + the SHARED executive facility sources.
@@ -89,7 +91,11 @@ SRCS="$KMOD/vms_netbsd.c \
       $CORE/vms_mbx.c \
       $CORE/vms_proctab.c \
       $CORE/vms_lock.c \
-      $CORE/vms_lnm.c"
+      $CORE/vms_lnm.c \
+      $CORE/vmsfs_acp.c \
+      $ODS2/ods2_reader.c \
+      $ODS2/ods2_edit.c \
+      $KMOD/vms_blockdev_netbsd.c"
 
 echo "=== toolchain ==="; "$CC" --version | head -1; "$CC" -dumpmachine; echo
 

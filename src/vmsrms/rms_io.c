@@ -151,7 +151,7 @@ int rms_io_posix_fd(rms_file_t *f)
     return f ? f->fd : -1;
 }
 
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
 /* ==========================================================================
  * Backend A: Files-11 ODS-2 ACP (the product runtime, Rule 9).
  * ========================================================================== */
@@ -360,7 +360,7 @@ static int rms_io_ftruncate_acp(rms_file_t *f, off_t length)
 
 ssize_t rms_io_read(rms_file_t *f, void *buf, size_t n)
 {
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     if (f && f->fd >= 0)
         return rms_io_read_posix(f, buf, n);
     return rms_io_read_acp(f, buf, n);
@@ -371,7 +371,7 @@ ssize_t rms_io_read(rms_file_t *f, void *buf, size_t n)
 
 ssize_t rms_io_write(rms_file_t *f, const void *buf, size_t n)
 {
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     if (f && f->fd >= 0)
         return rms_io_write_posix(f, buf, n);
     return rms_io_write_acp(f, buf, n);
@@ -382,7 +382,7 @@ ssize_t rms_io_write(rms_file_t *f, const void *buf, size_t n)
 
 int rms_io_ftruncate(rms_file_t *f, off_t length)
 {
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     if (f && f->fd >= 0)
         return rms_io_ftruncate_posix(f, length);
     return rms_io_ftruncate_acp(f, length);
@@ -393,7 +393,7 @@ int rms_io_ftruncate(rms_file_t *f, off_t length)
 
 int rms_io_fsync(rms_file_t *f)
 {
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     if (f && f->fd >= 0)
         return rms_io_fsync_posix(f);
     /* ACP handle: IO$_WRITEVBLK is write-through (the ACP writes each block

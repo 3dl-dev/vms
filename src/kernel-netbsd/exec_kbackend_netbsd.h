@@ -482,6 +482,20 @@ exec_blockdev_lookup(const char *path, exec_dev_t *out)
 static __inline unsigned int exec_blockdev_major(exec_dev_t dev) { return (unsigned int)major(dev); }
 static __inline unsigned int exec_blockdev_minor(exec_dev_t dev) { return (unsigned int)minor(dev); }
 
+/* Block I/O seam (exec_kbackend.h S8). Under OVMX_ODS2_KERNEL -- the build that
+ * links the Files-11 ODS-2 ACP (kernel-core/vmsfs_acp.c) into this module
+ * (vms-d5d) -- the REAL NetBSD binding lives in vms_blockdev_netbsd.c
+ * (vn_bdev_openpath-cached device vnode + bread(9) / getblk(9)+bwrite(9), the
+ * same primitives the sibling vmsfs.kmod uses). Declared here so the ACP core
+ * links against them. Without OVMX_ODS2_KERNEL the ACP is not built in and
+ * nothing calls these, so the contract-only stub below stands (INV-6 / Rule 11:
+ * it reads/writes nothing and fabricates nothing). */
+#if defined(OVMX_ODS2_KERNEL)
+int exec_blockdev_read_block(unsigned int major_, unsigned int minor_,
+			     uint64_t lbn, void *buf, size_t buflen);
+int exec_blockdev_write_block(unsigned int major_, unsigned int minor_,
+			      uint64_t lbn, const void *buf, size_t buflen);
+#else
 /* READ one 512-byte block off a backing block device (vms-127; see
  * exec_kbackend.h). CONTRACT-ONLY TWIN, the exec_blockdev_lookup precedent
  * above: the only caller (the Files-11 ODS-2 ACP $MOUNT in kernel-core/
@@ -527,6 +541,8 @@ exec_blockdev_write_block(unsigned int major_, unsigned int minor_,
 	(void)buflen;
 	return -1;   /* not writable (contract-only twin) */
 }
+
+#endif /* !OVMX_ODS2_KERNEL (block I/O seam) */
 
 /* ---- 11. primary Ethernet net device (vms-9d2; see exec_kbackend.h) ----
  *

@@ -48,7 +48,7 @@ ssize_t rms_read_exact(int fd, void *buf, size_t count);
  */
 int rms_write_exact(int fd, const void *buf, size_t count);
 
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
 /*
  * Files-11 (ODS-2) ACP directory-FID resolver (defined in rms_core.c, epic
  * vms-208). Walks each "COMP" of a "A.B.C" directory path as "COMP.DIR" from
@@ -65,6 +65,6 @@ uint32_t rms_acp_resolve_did(uint32_t chan, const char *dirpath,
 /* The boot volume unit RMS $ASSIGNs when a filespec names no device (the
  * mounted SYS$DISK; DKA0: until the discovered-SYS$DISK logical is bound). */
 #define RMS_ACP_DEFAULT_DEV "DKA0:"
-#endif /* __linux__ */
+#endif /* OVMX_HAVE_ACP */
 
 #endif /* RMS_INTERNAL_H */

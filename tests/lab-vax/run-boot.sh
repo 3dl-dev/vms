@@ -255,7 +255,11 @@ master_system_volume() {
     -v "$(dirname "${SYSVOL_IMG}"):/out" --entrypoint sh "${CROSS_IMAGE}" -c '
       set -e
       cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
-         -I /src/src/kernel/vmsfs -o /tmp/vmsfs_master /src/tools/vmsfs_master.c
+         -I /src/src/kernel/vmsfs -I /src/src/vmsfs/include \
+         -o /tmp/vmsfs_master /src/tools/vmsfs_master.c \
+         /src/src/vmsfs/ods2/ods2_reader.c /src/src/vmsfs/ods2/ods2_writer.c \
+         /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
+         /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
       bash /src/tests/lab-vax/stage_sysvol.sh /images /src /tmp/stage
       /tmp/vmsfs_master master /out/'"$(basename "${SYSVOL_IMG}")"' OVMXSYS /tmp/stage 64
       /tmp/vmsfs_master list /out/'"$(basename "${SYSVOL_IMG}")")"

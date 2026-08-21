@@ -130,6 +130,19 @@ COPY src/kernel-core/vms_lock.c              /netbsd/guest-src/kernel-core/vms_l
 COPY src/kernel-core/vms_lnm.c               /netbsd/guest-src/kernel-core/vms_lnm.c
 COPY src/kernel-core/exec_hash.h             /netbsd/guest-src/kernel-core/exec_hash.h
 COPY src/kernel-core/exec_rbtree.h           /netbsd/guest-src/kernel-core/exec_rbtree.h
+# --- Files-11 ODS-2 ACP (vms-d5d): the ACP handlers + the NetBSD block-device
+# seam + the genuine ODS-2 codec (ods2_reader/edit, built under -DOVMX_ODS2_KERNEL).
+# These joined the module SRCS (src/kernel-netbsd/Makefile) with the ACP flip, so
+# the in-guest module build needs them staged. ods2_reader.c/ods2_edit.c live in
+# src/vmsfs/ods2 (Makefile .PATH ../vmsfs/ods2) and include "ods2_kcompat.h" +
+# "vmsfs/ods2.h" (-I../vmsfs/include). ---
+COPY src/kernel-core/vmsfs_acp.c             /netbsd/guest-src/kernel-core/vmsfs_acp.c
+COPY src/kernel-netbsd/vms_blockdev_netbsd.c /netbsd/guest-src/kmod/vms_blockdev_netbsd.c
+COPY src/vmsfs/ods2/ods2_reader.c            /netbsd/guest-src/vmsfs/ods2/ods2_reader.c
+COPY src/vmsfs/ods2/ods2_edit.c              /netbsd/guest-src/vmsfs/ods2/ods2_edit.c
+COPY src/vmsfs/ods2/ods2_kcompat.h           /netbsd/guest-src/vmsfs/ods2/ods2_kcompat.h
+COPY src/vmsfs/ods2/ods2_block.h             /netbsd/guest-src/vmsfs/ods2/ods2_block.h
+COPY src/vmsfs/include/vmsfs/ods2.h          /netbsd/guest-src/vmsfs/include/vmsfs/ods2.h
 # --- probe/: the userspace tools + the NetBSD transport seam ---
 COPY tests/netbsd/guest/vmsprobe.c           /netbsd/guest-src/probe/vmsprobe.c
 COPY tests/netbsd/guest/vmseflag.c           /netbsd/guest-src/probe/vmseflag.c

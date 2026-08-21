@@ -227,11 +227,10 @@ vms_proc_get(pid_t pid)
 	 * Files-11 (ODS-2) ACP file-class channels (rd vms-6a7f, epic vms-208) --
 	 * this process's (initially empty) file-channel ring, same chan_lock/
 	 * next_chan space as mbx_channels above. Only the list head is
-	 * initialized here: vmsfs_acp.c is not yet a TU of THIS module build
-	 * (tools/cross-vax/build-vms-module-vax.sh's SRCS), so its release-all
-	 * teardown call is deliberately NOT wired below (that link-in is the
-	 * later NetBSD-VAX ACP re-target, vms-d5d) -- an always-empty list is
-	 * harmless to drain-skip.
+	 * initialized here; vmsfs_acp.c is now a TU of this module (vms-d5d), so its
+	 * release-all teardown IS wired below: vms_proc_free_claimed() calls
+	 * vms_acp_release_all(proc) to $DASSGN every file channel at process death,
+	 * beside the mailbox release.
 	 */
 	exec_list_head_init(&np->file_channels);
 
@@ -312,6 +311,11 @@ vms_proc_free_claimed(struct vms_proc *proc)
 	int m;
 
 	vms_mbx_release_all(proc);
+	/* Release every Files-11 ACP file-class channel this process still held
+	 * ($DASSGN-all at process death, vms-d5d) -- the file_channels twin of the
+	 * mailbox release above, mirroring the Linux vms.ko's vms_acp_release_all in
+	 * vms_module.c's proc free. */
+	vms_acp_release_all(proc);
 	/* Release every lock this process still held ($DEQ-all at process death, P4-A
 	 * rd vms-ff7). Runs while lock_list_lock is still alive, before it is
 	 * destroyed below -- mirrors the Linux vms.ko's vms_proc_release_locks call
@@ -536,6 +540,68 @@ vms_mbx_bigio(struct lwp *l, void *data, size_t argsz,
 	return vms_facility_errno(r);
 }
 
+/*
+ * vms_acp_rw_bounce - dispatch the Files-11 ACP READVBLK/WRITEVBLK, whose arg
+ * (vms_acp_rw_args) carries a SEPARATE user data-buffer POINTER (.buffer), not
+ * an inline payload like every other facility. NetBSD's cdevsw framework does
+ * exactly ONE user<->kernel boundary crossing -- for the _IOWR arg struct
+ * itself -- so the SHARED handler's exec_copyout(args.buffer, ...), an in-kernel
+ * memcpy on this backend, cannot reach that user address. We bounce the payload
+ * here with the SAME manual-copy technique vms_mbx_bigio() uses for the mailbox
+ * transfer ops: kmem a kernel buffer, rewrite args.buffer to it so the shared
+ * (BYTE-UNCHANGED) handler memcpys against the bounce, then copyout the result
+ * to the caller. DO NOT "simplify" this into the shared path: the shared handler
+ * is platform-agnostic by design, and this user-copy glue belongs in the
+ * platform dispatch, exactly where mbx's lives (vms-d5d).
+ */
+static int
+vms_acp_rw_bounce(struct lwp *l, void *data, int for_write)
+{
+	struct vms_acp_rw_args *a = (struct vms_acp_rw_args *)data;
+	void *ubuf = (void *)(uintptr_t)a->buffer;   /* caller's separate data buffer */
+	uint32_t len = a->length;
+	struct vms_proc *proc;
+	void *bounce = NULL;
+	long r;
+
+	proc = vms_proc_get(l->l_proc->p_pid);
+	if (proc == NULL)
+		return ENOMEM;
+
+	/*
+	 * Bounce only an in-range transfer. len == 0 moves nothing; len > 1 MiB
+	 * (ACP_RW_MAX_XFER) the shared handler rejects with SS$_BADPARAM BEFORE it
+	 * touches .buffer -- so both fall through with .buffer left as the user
+	 * pointer, and we never kmem an attacker-sized bounce.
+	 */
+	if (len > 0 && len <= (1u << 20)) {
+		bounce = exec_alloc(len);
+		if (bounce == NULL)
+			return ENOMEM;
+		if (for_write && ubuf != NULL && copyin(ubuf, bounce, len)) {
+			exec_free(bounce);
+			return EFAULT;
+		}
+		a->buffer = (uint64_t)(uintptr_t)bounce;   /* handler memcpys the bounce */
+	}
+
+	r = for_write ? vms_ioctl_acp_writevb(proc, (unsigned long)data)
+	              : vms_ioctl_acp_readvb(proc, (unsigned long)data);
+
+	if (!for_write && bounce != NULL && r == 0 && a->xferred > 0) {
+		uint32_t n = a->xferred > len ? len : a->xferred;
+		if (copyout(bounce, ubuf, n))
+			r = -EFAULT;
+	}
+	if (bounce != NULL) {
+		/* Restore the caller's pointer so the framework's arg copyout does not
+		 * leak the kernel bounce address back to userspace. */
+		a->buffer = (uint64_t)(uintptr_t)ubuf;
+		exec_free(bounce);
+	}
+	return vms_facility_errno(r);
+}
+
 static int
 vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
     struct lwp *l)
@@ -710,6 +776,52 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_MBX_READ:
 		return vms_mbx_bigio(l, data, sizeof(struct vms_mbx_read_args),
 		    vms_ioctl_mbx_read);
+
+	/*
+	 * Files-11 (ODS-2) ACP file operations (vms-d5d, epic vms-208): the VAX
+	 * runtime reaches SYS$DISK over the executive ACP, not the vmsfs.ko VFS
+	 * mount. These are _IOWR and <= 344 bytes (fileop_args), so they ride the
+	 * framework pre-copy path -- hand `data' straight to the shared handler
+	 * (src/kernel-core/vmsfs_acp.c), identical to the Linux vms.ko dispatch
+	 * (vms_module.c). READVBLK/WRITEVBLK are the EXCEPTION: their arg carries a
+	 * separate user data-buffer pointer, so they route through vms_acp_rw_bounce.
+	 */
+	case VMS_IOCTL_ACP_MOUNT:
+	case VMS_IOCTL_ACP_DMOUNT:
+	case VMS_IOCTL_ACP_ASSIGN:
+	case VMS_IOCTL_ACP_ACCESS:
+	case VMS_IOCTL_ACP_DEACCESS:
+	case VMS_IOCTL_ACP_ACPCONTROL:
+	case VMS_IOCTL_ACP_FILEOP:
+		uarg = data;
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+
+		switch (cmd) {
+		case VMS_IOCTL_ACP_MOUNT:
+			r = vms_ioctl_acp_mount(proc, (unsigned long)uarg);      break;
+		case VMS_IOCTL_ACP_DMOUNT:
+			r = vms_ioctl_acp_dmount(proc, (unsigned long)uarg);     break;
+		case VMS_IOCTL_ACP_ASSIGN:
+			r = vms_ioctl_acp_assign(proc, (unsigned long)uarg);     break;
+		case VMS_IOCTL_ACP_ACCESS:
+			r = vms_ioctl_acp_access(proc, (unsigned long)uarg);     break;
+		case VMS_IOCTL_ACP_DEACCESS:
+			r = vms_ioctl_acp_deaccess(proc, (unsigned long)uarg);   break;
+		case VMS_IOCTL_ACP_ACPCONTROL:
+			r = vms_ioctl_acp_acpcontrol(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_ACP_FILEOP:
+			r = vms_ioctl_acp_fileop(proc, (unsigned long)uarg);     break;
+		default:
+			return ENOTTY;   /* unreachable */
+		}
+		return vms_facility_errno(r);
+
+	case VMS_IOCTL_ACP_READVBLK:
+		return vms_acp_rw_bounce(l, data, 0);
+	case VMS_IOCTL_ACP_WRITEVBLK:
+		return vms_acp_rw_bounce(l, data, 1);
 
 	/*
 	 * Process-table facility (src/kernel-core/vms_proctab.c) -- P4-A, rd
@@ -915,6 +1027,11 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		/* The harness reads this line back from dmesg to mknod /dev/vms with
 		 * the dynamically assigned major. */
 		printf("vms: registered, char major %d\n", cmajor);
+		/* Bring up the Files-11 ODS-2 ACP global state (vms-d5d) AFTER the device
+		 * is attached: no ioctl can arrive until userspace opens /dev/vms, which
+		 * is after INIT returns, and vms_acp_init cannot fail (vmsfs_acp.c), so it
+		 * needs no unwind. Mirrors the Linux vms.ko init. */
+		vms_acp_init();
 		return 0;
 
 	case MODULE_CMD_FINI:
@@ -938,6 +1055,12 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		vms_lock_cleanup();
 		vms_proctab_teardown();
 		vms_mbx_cleanup();
+		/* Tear down the Files-11 ODS-2 ACP (vms-d5d): free its global volume/
+		 * channel state (each proc already gave back its file channels via
+		 * vms_proc_free_claimed above), then close the cached backing device
+		 * vnode the ACP $MOUNT opened. Mirrors the Linux vms.ko FINI. */
+		vms_acp_cleanup();
+		vms_blockdev_netbsd_release_all();
 		/* Free the logical-name arena LAST (rd vms-72da): no process can reach it
 		 * anymore (the device is detached) and no facility above references it. */
 		vms_lnm_cleanup();

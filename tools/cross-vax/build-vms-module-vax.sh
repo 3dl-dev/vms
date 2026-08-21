@@ -141,7 +141,13 @@ SRCS="$KMOD/vms_netbsd.c \
       $CORE/vms_lock.c \
       $CORE/vms_lnm.c \
       $CORE/vmsfs_acp.c \
-      $ODS2/ods2_edit.c"
+      $ODS2/ods2_reader.c \
+      $ODS2/ods2_edit.c \
+      $KMOD/vms_blockdev_netbsd.c"
+#   vms_blockdev_netbsd.c - the NetBSD exec_blockdev_* seam (bread/bwrite on a
+#                         vn_bdev_openpath device vnode) + the single-unit ODS-2
+#                         disk resolve (vms_devtab_disk_backing) the ACP $MOUNT
+#                         calls -- vms-d5d, mirrors Makefile SRCS.
 
 # ---- teeth check ---------------------------------------------------------
 # A deliberately-broken TU MUST fail the cross-compile, or a real break slips by.

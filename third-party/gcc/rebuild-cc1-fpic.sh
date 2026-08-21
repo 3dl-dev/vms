@@ -82,7 +82,7 @@ SUPPORT_LOG="$WORK/make-cc1-fpic-support.log"
 echo "rebuild-cc1-fpic: make all-libcpp all-libiberty all-libdecnumber all-libbacktrace all-libcody all-zlib CFLAGS='-g -fPIC' CXXFLAGS='-g -fPIC' -j$JOBS (from \$WORK, top-level Makefile.def modules)"
 set +e
 ( cd "$WORK" && make all-libcpp all-libiberty all-libdecnumber all-libbacktrace all-libcody all-zlib \
-      -j"$JOBS" CC="$CC" CXX="$CXX" CFLAGS="-g -fPIC" CXXFLAGS="-g -fPIC" ) >"$SUPPORT_LOG" 2>&1
+      -j"$JOBS" CC="$CC" CXX="$CXX" CFLAGS="-g -fPIC" CXXFLAGS="-g -fPIC" PICFLAG="-fPIC" ) >"$SUPPORT_LOG" 2>&1
 SRC_RC=$?
 set -e
 echo "-- support-libs (-fPIC) exit=$SRC_RC; tail: --"
@@ -93,9 +93,21 @@ if [ "$SRC_RC" -ne 0 ]; then
 fi
 
 MAKE_LOG="$WORK/make-cc1-fpic.log"
-echo "rebuild-cc1-fpic: make cc1 CFLAGS='-g -fPIC' CXXFLAGS='-g -fPIC' -j$JOBS (from \$WORK/gcc -- 'cc1' is a gcc/Makefile target, NOT a top-level Makefile.def module)"
+# CRITICAL: PICFLAG="-fPIC" is the load-bearing override, NOT CFLAGS/CXXFLAGS.
+# GCC's compiler-proper compile rule ends with `... $(PICFLAG)`, and configure
+# BAKES `PICFLAG = -fno-PIE` into gcc/Makefile (GCC builds itself non-PIE by
+# default). -fno-PIE is appended AFTER any -fPIC we put in CXXFLAGS, so it WINS
+# and every gcc/ object comes out non-PIC (R_X86_64_32/32S absolute .text
+# relocs) — which LINK.EXE then rejects for a position-independent OVMX image
+# with "%LINK-F-ERROR, unsupported .text relocation (need a PC-relative type)".
+# `make PICFLAG=-fPIC` (a make command-line assignment) overrides the baked
+# value for every recursive sub-make — this is exactly GCC's own
+# --enable-host-shared mechanism (which sets PICFLAG=-fPIC to build the host
+# compiler position-independent, e.g. for libgccjit). Keep CFLAGS/CXXFLAGS=-fPIC
+# too for any TU that predates PICFLAG.
+echo "rebuild-cc1-fpic: make cc1 PICFLAG='-fPIC' CFLAGS='-g -fPIC' CXXFLAGS='-g -fPIC' -j$JOBS (from \$WORK/gcc -- 'cc1' is a gcc/Makefile target, NOT a top-level Makefile.def module)"
 set +e
-( cd "$WORK/gcc" && make cc1 -j"$JOBS" CC="$CC" CXX="$CXX" CFLAGS="-g -fPIC" CXXFLAGS="-g -fPIC" ) >"$MAKE_LOG" 2>&1
+( cd "$WORK/gcc" && make cc1 -j"$JOBS" CC="$CC" CXX="$CXX" CFLAGS="-g -fPIC" CXXFLAGS="-g -fPIC" PICFLAG="-fPIC" ) >"$MAKE_LOG" 2>&1
 MRC=$?
 set -e
 echo "-- make cc1 (-fPIC) exit=$MRC; tail: --"
@@ -107,18 +119,24 @@ if [ "$MRC" -ne 0 ]; then
 fi
 
 echo
-echo "rebuild-cc1-fpic: PIC sanity scan (spot-check: no R_X86_64_32/32S absolute relocs in a sample of large objects)"
-SAMPLE=$(find "$WORK/gcc" -maxdepth 1 -name '*.o' | head -20)
+echo "rebuild-cc1-fpic: PIC sanity scan (ALLOCATABLE-section R_X86_64_32/32S only — a -g object carries thousands of HARMLESS 32/32S relocs in .debug_*; a whole-object grep false-flags every one and is worthless. Count only .text/.data/.rodata relocs, which are the genuine non-PIC signal.)"
+SAMPLE=$(find "$WORK/gcc" -maxdepth 2 \( -path '*/c/*.o' -o -path '*/c-family/*.o' -o -name '*.o' \) | head -30)
 BAD=0
 for o in $SAMPLE; do
-    if readelf -r "$o" 2>/dev/null | grep -qE 'R_X86_64_32( |S)'; then
-        echo "  NON-PIC: $o"
+    n=$(readelf -r "$o" 2>/dev/null | awk '
+        /^Relocation section/ { drop = ($0 ~ /\.rela?\.(debug|comment|note)/) ? 1 : 0 }
+        !drop && /R_X86_64_32( |S)/ { c++ }
+        END { print c+0 }')
+    if [ "${n:-0}" -gt 0 ]; then
+        echo "  NON-PIC: $(basename "$o") — $n allocatable R_X86_64_32/32S reloc(s)"
         BAD=$((BAD + 1))
     fi
 done
-echo "  sampled $(echo "$SAMPLE" | wc -l) objects, $BAD flagged non-PIC"
+echo "  sampled $(echo "$SAMPLE" | wc -w) objects, $BAD with allocatable R_X86_64_32/32S"
 if [ "$BAD" -gt 0 ]; then
-    echo "rebuild-cc1-fpic: WARNING: CFLAGS/CXXFLAGS override did NOT take effect on every translation unit -- mk_cc1_ovmx.sh's own full-list PIC scan is authoritative, this is only a quick spot-check"
+    echo "rebuild-cc1-fpic: FAIL: PICFLAG=-fPIC did NOT eliminate absolute .text relocs on $BAD object(s) — cc1 will not link as a position-independent OVMX image. (Check that PICFLAG propagated; some config/<arch> or generated TUs may need it too.)"
+    exit 1
 fi
+echo "  PIC scan clean: all sampled objects use PC-relative/GOT addressing (no absolute .text relocs)."
 
 echo "rebuild-cc1-fpic: done. cc1 objects/archives under $WORK are now -fPIC (see $MAKE_LOG); re-run host-probe-cc1.sh's OWN cc1 host binary is STALE (removed above, not rebuilt -- this bead needs the .o/.a set, not a working host cc1)"

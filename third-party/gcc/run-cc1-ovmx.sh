@@ -36,21 +36,26 @@ command -v "$ENGINE" >/dev/null 2>&1 || { echo "run-cc1-ovmx: neither podman nor
 
 [ -d "$GCC_WORK" ] || { echo "run-cc1-ovmx: FAIL: $GCC_WORK not found -- run third-party/gcc/run-host-probe-cc1.sh (F2a) first"; exit 1; }
 
-"$ENGINE" run --rm -e JOBS="${JOBS:-}" -v "$REPO":/src:Z -v "$GCC_WORK":/gccwork:Z -v "$RESULT_DIR":/result:Z -w /src "$IMG" sh -c '
+"$ENGINE" run --rm -e JOBS="${JOBS:-}" -e SKIP_FPIC="${SKIP_FPIC:-}" -v "$REPO":/src:Z -v "$GCC_WORK":/gccwork:Z -v "$RESULT_DIR":/result:Z -w /src "$IMG" sh -c '
     set -e
     echo "== apk add build deps =="
-    apk add --no-cache g++ gmp-dev mpfr-dev mpc1-dev zlib-dev make musl-dev binutils flex bison readelf >/dev/null 2>&1 \
-      || apk add --no-cache g++ gmp-dev mpfr-dev mpc1-dev zlib-dev make musl-dev binutils flex bison >/dev/null 2>&1
+    apk add --no-cache g++ gmp-dev mpfr-dev mpc1-dev zlib-dev make musl-dev binutils flex bison linux-headers readelf >/dev/null 2>&1 \
+      || apk add --no-cache g++ gmp-dev mpfr-dev mpc1-dev zlib-dev make musl-dev binutils flex bison linux-headers >/dev/null 2>&1
     ARCH=x86_64
     CC=gcc
     CXX=g++
 
     echo "== step 1: rebuild-cc1-fpic.sh (-fPIC over the F2a tree) =="
-    set +e
-    sh /src/third-party/gcc/rebuild-cc1-fpic.sh /gccwork > /result/01-rebuild-fpic.log 2>&1
-    R1=$?
-    set -e
-    tail -80 /result/01-rebuild-fpic.log
+    if [ -n "$SKIP_FPIC" ]; then
+        echo "SKIP_FPIC set -- reusing the already-fPIC /gccwork tree (step 1 skipped)"
+        R1=0
+    else
+        set +e
+        sh /src/third-party/gcc/rebuild-cc1-fpic.sh /gccwork > /result/01-rebuild-fpic.log 2>&1
+        R1=$?
+        set -e
+        tail -80 /result/01-rebuild-fpic.log
+    fi
     echo "rebuild-cc1-fpic.sh exit=$R1"
     if [ "$R1" -ne 0 ]; then
         echo "STOP: -fPIC rebuild did not complete -- see /result/01-rebuild-fpic.log (THE WALL)"

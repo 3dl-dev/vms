@@ -38,12 +38,22 @@ install(TARGETS vms_login RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 add_executable(vms_help
     vms_help.c
     ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_help.c
+    # vms-4ac: the ACP read seam dcl_help.c reaches through weak hooks -- reads
+    # SYS$HELP:HELPLIB.HLP over the Files-11 ACP (rms_textfile_*, LIBVMS) with a
+    # POSIX /vms fallback. Compiled in directly (not archive-gated) so the weak
+    # references resolve.
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_help_acp.c
+    # HELP.EXE is static, so this anchor force-extracts the RMS record services
+    # from vmsrms -- otherwise rms_textfile.c's weak sys$* cells stay NULL and
+    # HELP answers %HELP-E-OPENIN.
+    vms_help_rms_bind.c
 )
 
 target_include_directories(vms_help PRIVATE
     ${VMS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
     ${VMS_FS_INCLUDE_DIR}
+    ${VMS_RMS_INCLUDE_DIR}
     ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
 )
 
@@ -52,7 +62,10 @@ target_compile_definitions(vms_help PRIVATE
     _DEFAULT_SOURCE
 )
 
-target_link_libraries(vms_help PRIVATE vmsfs vmslnm)
+# vms-4ac: HELP now reads its library over the ACP, so it links the RMS stack
+# (rms_textfile.c lives in LIBVMS; the record engine in vmsrms) -- the same
+# closure PROVISION.EXE links for the same reason.
+target_link_libraries(vms_help PRIVATE vms vmsrms vmsfs vmslnm vmsprocess pthread)
 
 set_target_properties(vms_help PROPERTIES
     OUTPUT_NAME "HELP"

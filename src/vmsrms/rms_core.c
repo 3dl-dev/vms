@@ -1867,6 +1867,17 @@ static uint32_t rms_impl_create(void *fab_ptr)
             return RMS$_SYN;
         }
 
+        /* vms-4ac: try EACH ODS-2 candidate directory, exactly as the $OPEN read
+         * loop (rms_impl_open) already does. A concealed-rooted logical
+         * (SYS$SYSTEM:, SYS$MANAGER:, ...) expands to several {device, dirpath}
+         * candidates in search-list order (node member, then SYSCOMMON), and only
+         * the member that EXISTS on the mounted volume resolves -- for the system
+         * tree that is the SYSCOMMON candidate, NOT specs[0]. Creating in specs[0]
+         * ALONE failed RMS$_DNF for SYS$SYSTEM:/SYS$MANAGER: even though the
+         * identical spec OPENED fine for read, because $OPEN walked the candidates
+         * and $CREATE did not. Resolve the DID against each candidate and create
+         * in the FIRST that resolves -- the same directory the read path lands in,
+         * and the same fix vms-5f0 already applied to rms_open_named_handle_kind. */
         memset(&fop, 0, sizeof(fop));
         {
             uint32_t last = SS$_NOSUCHFILE;
@@ -1875,25 +1886,21 @@ static uint32_t rms_impl_create(void *fab_ptr)
                 sp = specs[ci];
                 st = vms_kif_acp_assign(sp.devnam, &chan);
                 if (!$VMS_STATUS_SUCCESS(st)) { last = st; chan = 0; continue; }
-                fop.chan = chan;
-                st = rms_acp_resolve_did(chan, sp.dirpath,
-                                         &fop.did_num, &fop.did_seq,
-                                         &fop.did_rvn, &fop.did_nmx);
+                st = rms_acp_resolve_did(chan, sp.dirpath, &fop.did_num,
+                                         &fop.did_seq, &fop.did_rvn, &fop.did_nmx);
                 if ($VMS_STATUS_SUCCESS(st)) { resolved = 1; break; }
-                last = st;
-                vms_kif_dassgn(chan); chan = 0;
+                vms_kif_dassgn(chan); chan = 0; last = st;
             }
             if (!resolved) {
-                /* No search-list member's directory resolves: honest error
-                 * (INV-6), never a fabricated path or POSIX fallback. */
+                /* No candidate directory resolved: a real no-device / not-mounted
+                 * status stays itself; anything else is "directory not found". */
                 fab->fab$l_stv = last;
-                fab->fab$l_sts = (last == SS$_NOSUCHDEV ||
-                                  last == SS$_DEVNOTMOUNT)
-                                     ? rms_acp_open_status(last) : RMS$_DNF;
+                fab->fab$l_sts = (last == SS$_NOSUCHDEV || last == SS$_DEVNOTMOUNT)
+                                 ? rms_acp_open_status(last) : RMS$_DNF;
                 return fab->fab$l_sts;
             }
         }
-
+        /* sp == the resolved candidate; chan is $ASSIGNed; fop.did_* is set. */
         strncpy(fab->_resolved_path, sp.name, sizeof(fab->_resolved_path) - 1);
         fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';
 
@@ -1901,17 +1908,30 @@ static uint32_t rms_impl_create(void *fab_ptr)
         if (!h) { vms_kif_dassgn(chan); fab->fab$l_sts = RMS$_DME; return RMS$_DME; }
         h->chan = chan; h->assigned = 1; h->fd = -1;
 
-        /* fop.chan + fop.did_* are set from the resolved member above. */
+        fop.chan      = chan;
         fop.func      = VMS_ACP_FOP_CREATE;
         /* IO$M_CREATE enters a versioned directory entry; IO$M_ACCESS builds
          * the write window on this channel so record $PUTs ride it directly. */
         fop.modifiers = VMS_ACP_M_CREATE | VMS_ACP_M_ACCESS;
         fop.acctl     = VMS_ACP_ACCTL_WRITE;
-        /* Indexed files carry a variable-length Prolog-3 block structure, never
-         * a fixed-record ODS-2 kind, even when the user records are fixed. */
-        fop.kind      = (fab->fab$b_org != FAB$C_IDX &&
-                         fab->fab$b_rfm == FAB$C_FIX) ? ODS2_FK_DATA_FIX
-                                                      : ODS2_FK_DATA;
+        /* Create the file with the ODS-2 record kind that MATCHES the RFM the
+         * records are written in, so the on-disk FAT rtype the reader frames by
+         * (rms_file_attr -> fat_rtype) agrees with the bytes on disk (vms-4ac).
+         * The previous mapping used ODS2_FK_DATA (RFM=VAR, rtype 2) for every
+         * non-FIXED file INCLUDING FAB$C_STMLF: a COPY of a stream-LF text file
+         * (LOGIN.COM et al) was written stream-LF but stamped RFM=VAR, so TYPE
+         * reframed the LF stream as variable-length records -- a bogus length
+         * prefix, then EOF -- and read back EMPTY. Honor STMLF (and FIXED)
+         * explicitly; VAR remains the default. Indexed files always carry the
+         * Prolog-3 block structure (ODS2_FK_DATA), authored on top below. */
+        if (fab->fab$b_org == FAB$C_IDX)
+            fop.kind = ODS2_FK_DATA;
+        else if (fab->fab$b_rfm == FAB$C_FIX)
+            fop.kind = ODS2_FK_DATA_FIX;
+        else if (fab->fab$b_rfm == FAB$C_STMLF)
+            fop.kind = ODS2_FK_DATA_STMLF;
+        else
+            fop.kind = ODS2_FK_DATA;             /* RFM=VAR (the default) */
         fop.version = 0;                     /* highest existing + 1 */
         strncpy(fop.name, sp.name, VMS_ACP_NAME_SIZE - 1);
 

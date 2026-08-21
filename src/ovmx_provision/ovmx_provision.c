@@ -117,6 +117,35 @@
  * reboot(2) has a different signature and flag names than Linux's). */
 #include "ovmx_boot.h"
 
+#if defined(__linux__)
+/*
+ * ACCOUNT/SYSTEM-TREE PROVISIONING OVER THE FILES-11 ODS-2 ACP (vms-4ac).
+ *
+ * Post-flip (epic vms-208) there is no /vms POSIX passthrough on the runtime
+ * path, so the lchown()/mkdir() this file used to do -- which now hit a
+ * non-existent path and were silently swallowed (ENOENT) -- set NOTHING on the
+ * genuine ODS-2 volume. Ownership and directory creation are done the VMS way
+ * now: $ASSIGN a channel to the mounted volume and drive IO$_MODIFY (set the
+ * file header's fh2_fileowner) / IO$_CREATE (a new directory) over /dev/vms --
+ * the SAME executive ACP acp_check_access() reads back. Fail-honest (Rule 9 /
+ * INV-6): no mounted volume / no /dev/vms => the real SS$_ status and a warning,
+ * never a POSIX substitute.
+ *
+ * struct vms_acp_* and the VMS_ACP_* constants arrive via vms_kif.h ->
+ * vms_ioctl.h -> vms_acp.h. */
+#include "ssdef.h"
+#include "vmsfs/ods2.h"      /* ODS2_FH2_M_DIRECTORY (the CREATE dir attr) */
+/*
+ * rms_acp_resolve_did(): the shared ACP directory-FID resolver ($OPEN/$CREATE/
+ * $SEARCH all use it, rms_internal.h). That header is private to libvmsrms and
+ * is not on this image's include path, so the prototype is declared here; the
+ * symbol is exported by libvmsrms, which this image links (CMakeLists.txt).
+ */
+uint32_t rms_acp_resolve_did(uint32_t chan, const char *dirpath,
+                             uint16_t *dn, uint16_t *ds,
+                             uint8_t *dr, uint8_t *dx);
+#endif /* __linux__ */
+
 /*
  * Translate a VMS filespec to a Linux path. Same wrapper PID 1 uses, for the
  * same reason: every path in this file is a VMS filespec, translated at point
@@ -171,12 +200,315 @@ static void provision_halt(const char *what, const char *detail)
 /* ------------------------------------------------------------------ */
 
 /*
- * Give one filesystem object to a UIC, without following symlinks.
+ * Give the system root ([SYS0] and everything under it) to the UIC that OWNS
+ * the OpenVMS system tree: the SYSTEM account's; and give each account its own
+ * home directory, owned by that account. On the product runtime (__linux__)
+ * this is done over the genuine Files-11 ODS-2 ACP -- IO$_MODIFY writes the
+ * file header's fh2_fileowner, the same field acp_check_access() reads back
+ * (vms-4ac). It used to be POSIX lchown()/mkdir() on the /vms passthrough,
+ * which the atomic flip (epic vms-208) retired: the calls hit a non-existent
+ * path, returned ENOENT, and were swallowed -- so NOTHING was owned and, once
+ * a session genuinely became UIC [1,4] or a plain user's UIC, there was
+ * nothing on the volume that account owned to write into (%RMS-E-CRE).
  *
- * lchown() and not chown(): the install copy preserves symlinks (VMS
- * concealed-device and relative-path links can appear in the tree it copies),
- * and re-owning a symlink must not re-own whatever it points at.
+ * PINNED TO THE ORACLE, not chosen (CLAUDE.md Rule 10). Measured on VAX2 of
+ * the reference lab, OpenVMS VAX V7.3, 30-JUL-2026 -- verbatim transcripts in
+ * docs/oracle/vax73-privileges.md S7:
+ *
+ *   $ DIRECTORY/OWNER/PROTECTION SYS$COMMON:[000000]SYSEXE.DIR,SYSLIB.DIR
+ *   SYSEXE.DIR;1         [SYSTEM]                         (RWE,RWE,RE,RE)
+ *   SYSLIB.DIR;1         [SYSTEM]                         (RWE,RWE,RE,RE)
+ *   $ DIRECTORY/OWNER/PROTECTION SYS$SYSTEM:LOGINOUT.EXE,AUTHORIZE.EXE
+ *   LOGINOUT.EXE;1       [SYSTEM]                         (RWED,RWED,RWED,RE)
+ *   $ DIRECTORY/OWNER/PROTECTION SYS$SYSDEVICE:[000000]*.DIR
+ *   SYS0.DIR;1           [SYSTEM]                         (RWE,RWE,RE,RE)
+ *
+ * So on VMS the system tree is owned by SYSTEM and world gets R+E and no
+ * write -- exactly the pair of facts OVMX has to reproduce: the SYSTEM account
+ * can create and delete in SYS$SYSTEM: and SYS$MANAGER:, and an ordinary user
+ * cannot.
+ *
+ * WHICH UIC IS NOT HARDCODED HERE -- it is `info.uic`, read back from the
+ * executive after vms_kif_establish_system() (vms-a17e), not from SYSUAF. It
+ * IS hardcoded one level up, in vms.ko's VMS_SYSTEM_UIC (vms_internal.h) --
+ * but that constant and SYSUAF's SYSTEM row are oracle-pinned to the SAME fact
+ * ([1,4], docs/oracle/vax73-authorize-privilege.md), not read from one
+ * another, so they cannot drift apart the way two independent parsers of one
+ * file could.
+ *
+ * WHY IT RUNS ON EVERY BOOT, not just at install: PID 1's
+ * provision_seed_files() adds files to the tree after the install step is
+ * skipped, and a file seeded by root that SYSTEM cannot write is the same
+ * regression in a smaller box.
+ *
+ * DISCLOSED DIVERGENCE (not a handler, a platform limit): VMS grants the
+ * SYSTEM protection category to every UIC whose group is <= MAXSYSGROUP
+ * (measured 8, see S7). acp_check_access() already reproduces that (group <=
+ * ACP_MAXSYSGROUP), so a system-group account reaches the system tree through
+ * the SYSTEM protection field; the owner set here is what makes the OWNER
+ * category apply to [1,4] specifically and, for a plain user, to that user's
+ * own login directory.
  */
+#if defined(__linux__)
+
+/* One directory entry captured during an ACP wildcard enumeration. */
+struct acp_ent {
+    uint16_t fid_num, fid_seq;
+    uint8_t  fid_rvn, fid_nmx;
+    int      is_dir;
+};
+
+/* Set one file/dir's ODS-2 fh2_fileowner over the executive ACP (IO$_MODIFY by
+ * FID). Fail-honest: a denied/absent header yields its SS$_ and a warning. */
+static void own_object_acp(uint32_t chan,
+                           uint16_t fid_num, uint16_t fid_seq,
+                           uint8_t fid_rvn, uint8_t fid_nmx,
+                           uint32_t uic_group, uint32_t uic_member,
+                           const char *label)
+{
+    struct vms_acp_fileop_args fop;
+    memset(&fop, 0, sizeof(fop));
+    fop.chan     = chan;
+    fop.func     = VMS_ACP_FOP_MODIFY;
+    fop.fidmode  = 1;                     /* by FID: no name/DID needed */
+    fop.fid_num  = fid_num; fop.fid_seq = fid_seq;
+    fop.fid_rvn  = fid_rvn; fop.fid_nmx = fid_nmx;
+    fop.attr_ctl = VMS_ACP_ATTR_OWNER;    /* write fh2_fileowner only */
+    fop.attr.uic_group  = (uint16_t)uic_group;
+    fop.attr.uic_member = (uint16_t)uic_member;
+
+    uint32_t st = vms_kif_acp_fileop(&fop);
+    if (!(st & 1))
+        fprintf(stderr, "%%OVMX-W-OWNER, cannot set owner of %s: SS$ %u\n",
+                label ? label : "<file>", (unsigned)st);
+}
+
+/*
+ * Recursively give a directory's CONTENTS -- and, depth-first, its
+ * subdirectories -- to a UIC over the ACP (the directory's OWN header is set by
+ * the caller). Each directory is enumerated FULLY into an array first: the
+ * executive holds the wildcard cursor per-channel, so a nested search would
+ * clobber the parent's context if opened before the parent's search finishes.
+ */
+static void own_dir_contents_acp(uint32_t chan,
+                                 uint16_t did_num, uint16_t did_seq,
+                                 uint8_t did_rvn, uint8_t did_nmx,
+                                 uint32_t grp, uint32_t mem, int depth)
+{
+    if (depth > 32)                        /* guard against a pathological loop */
+        return;
+
+    struct acp_ent *ents = NULL;
+    size_t n = 0, cap = 0;
+    struct vms_acp_acpcontrol_args a;
+    int first = 1;
+
+    for (;;) {
+        memset(&a, 0, sizeof(a));
+        a.chan = chan;
+        a.func = VMS_ACP_CTL_SEARCH;
+        if (first) {
+            a.did_num = did_num; a.did_seq = did_seq;
+            a.did_rvn = did_rvn; a.did_nmx = did_nmx;
+            a.wcc_reset = 1;               /* (re)open the wildcard context */
+            strncpy(a.pattern, "*.*;*", VMS_ACP_NAME_SIZE - 1);
+            first = 0;
+        } else {
+            a.wcc_reset = 0;               /* continue */
+        }
+        if (vms_kif_acp_acpcontrol(&a) != SS$_NORMAL)   /* SS$_NOMOREFILES ends */
+            break;
+
+        /* Belt-and-braces: skip any child whose FID equals this DID (ODS-2
+         * directories carry no "." self-entry, but the MFD's own alias does). */
+        if (a.fid_num == did_num && a.fid_nmx == did_nmx)
+            continue;
+
+        if (n == cap) {
+            size_t ncap = cap ? cap * 2 : 64;
+            struct acp_ent *ne = realloc(ents, ncap * sizeof(*ne));
+            if (!ne) break;                /* OOM: own what we captured */
+            ents = ne; cap = ncap;
+        }
+        ents[n].fid_num = a.fid_num; ents[n].fid_seq = a.fid_seq;
+        ents[n].fid_rvn = a.fid_rvn; ents[n].fid_nmx = a.fid_nmx;
+        ents[n].is_dir  = (strstr(a.resnam, ".DIR;") != NULL);
+        n++;
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        own_object_acp(chan, ents[i].fid_num, ents[i].fid_seq,
+                       ents[i].fid_rvn, ents[i].fid_nmx, grp, mem, NULL);
+        if (ents[i].is_dir)
+            own_dir_contents_acp(chan, ents[i].fid_num, ents[i].fid_seq,
+                                 ents[i].fid_rvn, ents[i].fid_nmx,
+                                 grp, mem, depth + 1);
+    }
+    free(ents);
+}
+
+/*
+ * Resolve `dirpath` (dotted, no brackets) on `chan` and give that directory --
+ * its own header AND everything beneath it -- to [grp,mem] over the ACP.
+ * Returns 1 if the directory resolved (and was re-owned), 0 otherwise.
+ */
+static int own_spec_tree_acp(uint32_t chan, const char *dirpath,
+                             uint32_t grp, uint32_t mem, const char *label)
+{
+    uint16_t dn, ds; uint8_t dr, dx;
+    if (!(rms_acp_resolve_did(chan, dirpath, &dn, &ds, &dr, &dx) & 1))
+        return 0;
+    own_object_acp(chan, dn, ds, dr, dx, grp, mem, label);    /* the dir header */
+    own_dir_contents_acp(chan, dn, ds, dr, dx, grp, mem, 0);  /* its contents   */
+    return 1;
+}
+
+/* "DEV:[A.B.C]NAME.TYP;VER" (or "[A.B.C]") -> device (keeping ':') and dotted
+ * dirpath ("A.B.C", no brackets). Either output may come back empty. */
+static void spec_split_dir(const char *spec, char *dev, size_t devsz,
+                           char *dir, size_t dirsz)
+{
+    dev[0] = '\0'; dir[0] = '\0';
+    const char *lb = strchr(spec, '[');
+    if (!lb) lb = strchr(spec, '<');
+    const char *colon = strchr(spec, ':');
+    if (colon && (!lb || colon < lb)) {
+        size_t dl = (size_t)(colon - spec) + 1;      /* keep the ':' */
+        if (dl < devsz) { memcpy(dev, spec, dl); dev[dl] = '\0'; }
+    }
+    if (lb) {
+        const char *rb = (lb[0] == '[') ? strchr(lb, ']') : strchr(lb, '>');
+        if (rb && rb > lb + 1) {
+            size_t dl = (size_t)(rb - lb - 1);
+            if (dl >= dirsz) dl = dirsz - 1;
+            memcpy(dir, lb + 1, dl); dir[dl] = '\0';
+        }
+    }
+}
+
+static void provision_ownership(uint32_t sys_grp, uint32_t sys_mem)
+{
+    uint32_t chan = 0;
+    const char *dev = SYSDISK_DEVICE ":";            /* "DKA0:" */
+    uint32_t st = vms_kif_acp_assign(dev, &chan);
+    if (!(st & 1)) {
+        fprintf(stderr, "%%OVMX-W-OWNER, cannot $ASSIGN %s for system-tree "
+                "ownership: SS$ %u\n", dev, (unsigned)st);
+        return;
+    }
+    /* [SYS0] -- the top of the OpenVMS system tree (parent of VMS_SYSROOT
+     * [SYS0.SYSCOMMON]); its own header lives in [000000]. Own it, then walk
+     * everything beneath -- SYS$SYSTEM: and SYS$MANAGER: are under here. */
+    if (!own_spec_tree_acp(chan, "SYS0", sys_grp, sys_mem, "[000000]SYS0.DIR"))
+        fprintf(stderr,
+                "%%OVMX-W-OWNER, system tree [SYS0] did not resolve over the "
+                "ACP\n");
+    vms_kif_dassgn(chan);
+}
+
+/*
+ * Give one account its login directory, owned by that account, over the ACP.
+ * If the directory already exists it is (re)owned; if it does not, it is
+ * CREATED as a directory in its parent, owned by the account (the ODS-2 class
+ * default protection for a directory, 0xBA00, leaves the OWNER RWED -- so the
+ * account can create files in its own login directory). This is VMS's own
+ * account-provisioning step (AUTHORIZE ADD + CREATE/DIRECTORY/OWNER=[g,m]),
+ * done here on the startup path where account provisioning belongs.
+ */
+static void provision_home(uint32_t uic_group, uint32_t uic_member,
+                           const char *home_spec)
+{
+    /* Resolve any concealed/rooted device logical (SYS$SYSDEVICE:, SYS$LOGIN,
+     * ...) to fully-composed physical ODS-2 candidate specs, exactly as RMS
+     * $CREATE does. The account's default directory is where it must be able to
+     * create files. */
+    char cands[4][VMSFS_MAX_FILESPEC];
+    int ncand = vmsfs_compose_ods2_candidates(home_spec, cands, 4);
+    if (ncand <= 0) {
+        snprintf(cands[0], sizeof(cands[0]), "%s", home_spec);
+        ncand = 1;
+    }
+
+    for (int ci = 0; ci < ncand; ci++) {
+        char dev[16], dir[256];
+        spec_split_dir(cands[ci], dev, sizeof(dev), dir, sizeof(dir));
+        if (dir[0] == '\0')
+            continue;
+        if (dev[0] == '\0')
+            snprintf(dev, sizeof(dev), "%s", SYSDISK_DEVICE ":");
+
+        uint32_t chan = 0;
+        if (!(vms_kif_acp_assign(dev, &chan) & 1))
+            continue;                          /* try the next candidate */
+
+        /* Present already? -> just (re)own it (and anything under it). */
+        if (own_spec_tree_acp(chan, dir, uic_group, uic_member, home_spec)) {
+            vms_kif_dassgn(chan);
+            return;
+        }
+
+        /* Missing -> CREATE it as a directory in its parent, owned by the
+         * account. Split "A.B.LEAF" into parent "A.B" + leaf "LEAF" (leaf kept
+         * as a pointer into dir; its length is bounded below by the ODS-2 name
+         * field the CREATE writes). */
+        char parent[256];
+        const char *leaf;
+        char *lastdot = strrchr(dir, '.');
+        if (lastdot) {
+            size_t pl = (size_t)(lastdot - dir);
+            if (pl >= sizeof(parent)) pl = sizeof(parent) - 1;
+            memcpy(parent, dir, pl); parent[pl] = '\0';
+            leaf = lastdot + 1;
+        } else {
+            parent[0] = '\0';                  /* the leaf sits in the MFD */
+            leaf = dir;
+        }
+
+        uint16_t dn, ds; uint8_t dr, dx;
+        if (rms_acp_resolve_did(chan, parent, &dn, &ds, &dr, &dx) & 1) {
+            struct vms_acp_fileop_args fop;
+            char name[VMS_ACP_NAME_SIZE];
+            int nn = snprintf(name, sizeof(name), "%s.DIR", leaf);
+            if (nn < 0 || nn >= (int)sizeof(name)) {   /* leaf too long -> invalid */
+                fprintf(stderr,
+                        "%%OVMX-W-OWNER, home directory name too long: %s\n",
+                        home_spec);
+                vms_kif_dassgn(chan);
+                return;
+            }
+            memset(&fop, 0, sizeof(fop));
+            fop.chan      = chan;
+            fop.func      = VMS_ACP_FOP_CREATE;
+            fop.modifiers = VMS_ACP_M_CREATE;         /* enter in the parent DID */
+            fop.did_num = dn; fop.did_seq = ds; fop.did_rvn = dr; fop.did_nmx = dx;
+            fop.version  = 1;                          /* directories are ;1 */
+            fop.attr_ctl = VMS_ACP_ATTR_OWNER;        /* owner = the account */
+            fop.attr.filechar   = ODS2_FH2_M_DIRECTORY;
+            fop.attr.uic_group  = (uint16_t)uic_group;
+            fop.attr.uic_member = (uint16_t)uic_member;
+            strncpy(fop.name, name, VMS_ACP_NAME_SIZE - 1);
+
+            uint32_t st = vms_kif_acp_fileop(&fop);
+            if (!(st & 1))
+                fprintf(stderr,
+                        "%%OVMX-W-OWNER, cannot create home %s: SS$ %u\n",
+                        home_spec, (unsigned)st);
+            vms_kif_dassgn(chan);
+            return;
+        }
+        vms_kif_dassgn(chan);
+    }
+    fprintf(stderr,
+            "%%OVMX-W-OWNER, home directory %s did not resolve over the ACP "
+            "(parent missing?)\n", home_spec);
+}
+
+#else  /* !__linux__ : the netbsd-vax standalone cross keeps the POSIX /vms
+        * passthrough path until the VAX mount retires with it (vms-d5d). */
+
+/* Give one filesystem object to a UIC, without following symlinks (lchown, not
+ * chown: the install copy preserves symlinks and re-owning one must not re-own
+ * its target). */
 static void own_object(const char *path, uint32_t uic_group, uint32_t uic_member)
 {
     if (lchown(path, (uid_t)uic_member, (gid_t)uic_group) != 0 &&
@@ -218,49 +550,6 @@ static void own_tree(const char *path, uint32_t uic_group, uint32_t uic_member)
     closedir(d);
 }
 
-/*
- * Give the system root ([SYS0] and everything under it) to the UIC that OWNS
- * the OpenVMS system tree: the SYSTEM account's.
- *
- * PINNED TO THE ORACLE, not chosen (CLAUDE.md Rule 10). Measured on VAX2 of
- * the reference lab, OpenVMS VAX V7.3, 30-JUL-2026 -- verbatim transcripts in
- * docs/oracle/vax73-privileges.md S7:
- *
- *   $ DIRECTORY/OWNER/PROTECTION SYS$COMMON:[000000]SYSEXE.DIR,SYSLIB.DIR
- *   SYSEXE.DIR;1         [SYSTEM]                         (RWE,RWE,RE,RE)
- *   SYSLIB.DIR;1         [SYSTEM]                         (RWE,RWE,RE,RE)
- *   $ DIRECTORY/OWNER/PROTECTION SYS$SYSTEM:LOGINOUT.EXE,AUTHORIZE.EXE
- *   LOGINOUT.EXE;1       [SYSTEM]                         (RWED,RWED,RWED,RE)
- *   $ DIRECTORY/OWNER/PROTECTION SYS$SYSDEVICE:[000000]*.DIR
- *   SYS0.DIR;1           [SYSTEM]                         (RWE,RWE,RE,RE)
- *
- * So on VMS the system tree is owned by SYSTEM and world gets R+E and no
- * write -- exactly the pair of facts OVMX has to reproduce: the SYSTEM account
- * can create and delete in SYS$SYSTEM: and SYS$MANAGER:, and an ordinary user
- * cannot.
- *
- * WHICH UIC IS NOT HARDCODED IN THIS FUNCTION -- it is `info.uic`, read back
- * from the executive after vms_kif_establish_system() (vms-a17e), not from
- * SYSUAF. It IS hardcoded one level up, in vms.ko's VMS_SYSTEM_UIC
- * (vms_internal.h) -- but that constant and SYSUAF's SYSTEM row are
- * oracle-pinned to the SAME fact ([1,4], docs/oracle/vax73-authorize-
- * privilege.md), not read from one another, so they cannot drift apart the
- * way two independent parsers of one file could.
- *
- * WHY IT RUNS ON EVERY BOOT, not just at install: PID 1's
- * provision_seed_files() adds files to the tree after the install step is
- * skipped, and a file seeded by root that SYSTEM cannot write is the same
- * regression in a smaller box.
- *
- * DISCLOSED DIVERGENCE (not a handler, a platform limit): VMS grants the
- * SYSTEM protection category to every UIC whose group is <= MAXSYSGROUP
- * (measured 8, see S7). A Linux inode carries exactly one owning group, so
- * OVMX can express "UIC group 1 is the owner's group" but not "UIC groups 1
- * through 8 are all system". Accounts in groups 2..8 would therefore get VMS's
- * GROUP nibble where VMS gives them the SYSTEM one. OVMX's SYSUAF ships no
- * such account, and inventing a second enforcement layer to paper over it
- * would be worse than the gap (Rule 10).
- */
 static void provision_ownership(uint32_t sys_grp, uint32_t sys_mem)
 {
     char path[512];
@@ -273,6 +562,21 @@ static void provision_ownership(uint32_t sys_grp, uint32_t sys_mem)
         *last_slash = '\0';
     own_tree(path, sys_grp, sys_mem);
 }
+
+static void provision_home(uint32_t uic_group, uint32_t uic_member,
+                           const char *home_spec)
+{
+    char home_linux[512];
+    if (strchr(home_spec, '[') || strchr(home_spec, ':'))
+        vms_to_linux(home_spec, home_linux, sizeof(home_linux));
+    else
+        snprintf(home_linux, sizeof(home_linux), "%s", home_spec);
+
+    mkdir(home_linux, 0755);
+    own_object(home_linux, uic_group, uic_member);
+}
+
+#endif /* __linux__ */
 
 /* ------------------------------------------------------------------ */
 /* Account home directories                                            */
@@ -320,36 +624,58 @@ static void provision_ownership(uint32_t sys_grp, uint32_t sys_mem)
 typedef int (*ovmx_sysuaf_enum_cb)(const sysuaf_rms_record_t *rec, void *arg);
 uint32_t ovmx_sysuaf_enum(ovmx_sysuaf_enum_cb cb, void *arg);
 
+/*
+ * The SYSUAF enumeration only READS here -- it records whether a SYSTEM account
+ * exists (the continuity fail-stop) and COLLECTS each account's [uic, home] so
+ * the actual directory creation + ownership can run LATER, after
+ * vms_kif_establish_system(), under the deliberate SYSTEM identity that holds
+ * the privilege to create in [USERS] and stamp an arbitrary owner (vms-4ac).
+ * Doing the writes inside this read callback would run them before the identity
+ * is established.
+ */
+#define PROV_MAX_HOMES 64
+struct prov_home {
+    uint32_t uic_group, uic_member;
+    char     spec[256];
+};
+struct prov_enum {
+    int              saw_system;
+    int              nhomes;
+    struct prov_home homes[PROV_MAX_HOMES];
+};
+
 static int prov_home_cb(const sysuaf_rms_record_t *raw, void *arg)
 {
-    int *saw_system = (int *)arg;
+    struct prov_enum *pe = (struct prov_enum *)arg;
     sysuaf_record_t rec;
     sysuaf_raw_to_view(raw, &rec);
 
     if (strcmp(rec.username, "SYSTEM") == 0)
-        *saw_system = 1;
+        pe->saw_system = 1;
     if (rec.default_dir[0] == '\0')
         return 0;
 
-    /* default_dir may be a VMS spec (DKA0:[USERS.name]) -- translate. */
-    char home_linux[512];
-    if (strchr(rec.default_dir, '[') || strchr(rec.default_dir, ':'))
-        vms_to_linux(rec.default_dir, home_linux, sizeof(home_linux));
-    else
-        snprintf(home_linux, sizeof(home_linux), "%s", rec.default_dir);
-
-    mkdir(home_linux, 0755);
-    own_object(home_linux, rec.uic_group, rec.uic_member);
+    if (pe->nhomes < PROV_MAX_HOMES) {
+        struct prov_home *h = &pe->homes[pe->nhomes++];
+        h->uic_group  = rec.uic_group;
+        h->uic_member = rec.uic_member;
+        snprintf(h->spec, sizeof(h->spec), "%s", rec.default_dir);
+    }
     return 0;
 }
 
-static int provision_home_directories(void)
+/*
+ * Enumerate SYSUAF, filling `pe` with the collected homes, and return whether a
+ * SYSTEM account was seen. A failed enumeration (no file / no executive) counts
+ * as "no SYSTEM account" -- the same fail-stop condition by a different route.
+ */
+static int provision_scan_accounts(struct prov_enum *pe)
 {
-    int saw_system = 0;
-    uint32_t st = ovmx_sysuaf_enum(prov_home_cb, &saw_system);
+    memset(pe, 0, sizeof(*pe));
+    uint32_t st = ovmx_sysuaf_enum(prov_home_cb, pe);
     if (!(st & 1))
-        return 0;   /* enumeration failed (no file / no executive) == no SYSTEM */
-    return saw_system;
+        return 0;
+    return pe->saw_system;
 }
 
 /* ------------------------------------------------------------------ */
@@ -392,18 +718,19 @@ int main(void)
 #endif
 
     /*
-     * ACCOUNT-PROVISIONING AND THE ONE REMAINING SYSUAF READ, FIRST
-     * (vms-a17e). provision_home_directories() is unrelated to identity --
-     * it creates every account's home directory -- but its walk is also
-     * where "does SYSUAF have a SYSTEM account at all" gets answered, so
-     * the fail-stop below rides that read instead of adding a second one
-     * (see the function's own comment). Deliberately BEFORE identity
-     * establishment: a SYSUAF with no SYSTEM account must halt before
-     * anything prints "system identity ... established", exactly as it did
-     * when this same check lived in the now-deleted SYSUAF-for-identity
-     * read (#278).
+     * SCAN SYSUAF AND THE ONE REMAINING SYSUAF READ, FIRST (vms-a17e). The
+     * account scan is unrelated to identity -- it collects every account's home
+     * directory for provisioning below -- but its walk is also where "does
+     * SYSUAF have a SYSTEM account at all" gets answered, so the fail-stop below
+     * rides that read instead of adding a second one (see prov_home_cb).
+     * Deliberately BEFORE identity establishment: a SYSUAF with no SYSTEM
+     * account must halt before anything prints "system identity ... established",
+     * exactly as it did when this same check lived in the now-deleted
+     * SYSUAF-for-identity read (#278). The actual home creation + ownership is
+     * DEFERRED to after establishment (vms-4ac), so it runs as SYSTEM.
      */
-    if (!provision_home_directories())
+    static struct prov_enum accounts;
+    if (!provision_scan_accounts(&accounts))
         provision_halt("no SYSTEM account in SYS$SYSTEM:SYSUAF.DAT",
                        "no session could ever authenticate as SYSTEM");
 
@@ -446,15 +773,20 @@ int main(void)
     fflush(stdout);
 
     /*
-     * Ownership LAST among the two provisioning steps: it is the LAST writer
-     * of ownership, so that accounts sharing a directory (SYSUAF ships
-     * SYSTEM and OPERATOR both defaulted to [SYSMGR]) cannot leave the
-     * system tree owned by whichever record was read last.
-     * provision_home_directories() already ran, above (vms-a17e moved it
-     * earlier to double as the SYSTEM-account continuity check) -- the
-     * relative order that matters here is unchanged, home directories then
-     * this.
+     * PROVISION NOW, AS SYSTEM (vms-4ac). Both steps write ODS-2 ownership over
+     * the ACP, and both run here -- after vms_kif_establish_system() -- so they
+     * carry the SYSTEM identity (and its BYPASS) needed to create in [USERS] and
+     * stamp an arbitrary owner. Home directories FIRST, then the system tree
+     * LAST: the system-tree walk is the last writer of ownership for [SYS0], so
+     * an account whose home sits under [SYS0] (SYSTEM's [SYSMGR]) ends up owned
+     * by SYSTEM regardless of enumeration order, while [USERS.*] homes keep the
+     * per-account owner set here (the tree walk never descends into [USERS]).
      */
+    for (int i = 0; i < accounts.nhomes; i++)
+        provision_home(accounts.homes[i].uic_group,
+                       accounts.homes[i].uic_member,
+                       accounts.homes[i].spec);
+
     provision_ownership(info.uic >> 16, info.uic & 0xFFFFu);
 
     /*

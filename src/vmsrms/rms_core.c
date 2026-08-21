@@ -360,6 +360,25 @@ static int rms_acp_specs_from_fab(struct FAB *fab, struct rms_acp_spec *specs,
     char cands[RMS_ACP_MAX_CANDS][VMSFS_MAX_FILESPEC];
     int n = vmsfs_compose_ods2_candidates(spec, cands, RMS_ACP_MAX_CANDS);
 
+    /* OVMX-DIAG (vms-parts-release-fix): dump compose result + live LNM state
+     * for a SYS$ device to localize the missing SYSCOMMON candidate. */
+    if (strncmp(spec, "SYS$", 4) == 0) {
+        char dev[64] = "";
+        const char *cn = strchr(spec, ':');
+        if (cn && (size_t)(cn - spec) < sizeof(dev)) {
+            memcpy(dev, spec, (size_t)(cn - spec)); dev[cn - spec] = '\0';
+        }
+        fprintf(stderr, "%%OVMX-DIAG-CMP, spec=%s n=%d\n", spec, n);
+        for (int di = 0; di < n; di++)
+            fprintf(stderr, "%%OVMX-DIAG-CMP,   [%d] %s\n", di, cands[di]);
+        {
+            int conc = 0, root = 0;
+            uint32_t rst = vmsfs_device_concealed_rooted(dev, &conc, &root);
+            fprintf(stderr, "%%OVMX-DIAG-CMP, dev=%s concealed_rooted st=%u conc=%d root=%d\n",
+                    dev, (unsigned)rst, conc, root);
+        }
+    }
+
     int out = 0;
     for (int i = 0; i < n && out < max; i++) {
         if (rms_acp_spec_parse(cands[i], &specs[out]) == 0)

@@ -61,10 +61,11 @@ MILESTONES = [
     ("0.4", "shipped",
      "Installs and boots faithfully — the product installs to a target disk and reboots "
      "into a login."),
-    ("0.5", "active",
-     "Foundations for the network and the toolchain — a shared-state executive, "
-     "VMS-faithful cluster configuration, a self-hosting toolchain, and a kernel substrate of its own."),
-    ("0.6", "planned",
+    ("0.5", "shipped",
+     "The authenticity flip — RMS reads and writes genuine Files-11 ODS-2 over the "
+     "executive ACP (the /vms passthrough retired on the runtime path), binary SYSUAF "
+     "and Purdy login, and a userland that builds itself in-guest."),
+    ("0.6", "active",
      "Cluster correctness — quorum and reconfiguration, a real distributed lock manager, "
      "and cluster membership resident in the executive."),
     ("0.7", "planned",
@@ -73,9 +74,14 @@ MILESTONES = [
     ("0.8", "planned",
      "Rejoin and satellite boot — a removed node rejoins under its own identity; "
      "diskless satellites boot from a served disk."),
+    ("0.9", "planned",
+     "Feature-complete — a voting member joins, serves genuine ODS-2 storage, holds "
+     "locks, and evacuates a live node; TCP/IP, DECnet, and the self-hosting toolchain "
+     "reach done. The last features land here."),
     ("1.0", "goal",
-     "Joins and serves a real cluster, and runs the software — a voting member that "
-     "serves genuine ODS-2 storage, holds locks, and evacuates a live node."),
+     "Hardened and proven — feature-frozen on 0.9: authenticity enforced by the "
+     "executive, not by convention, and the whole system proven on real hardware and in "
+     "extended cluster interop against a real VAX. The release you trust; fixes only."),
 ]
 MILESTONE_ORDER = [m[0] for m in MILESTONES]
 
@@ -90,15 +96,15 @@ GATE_EPICS = [
      "continuous"),
     ("vms-678", "Self-hosting toolchain",
      "OVMX builds OVMX from within: compiler, librarian, and linker run as native images "
-     "with no host tools in the build path.", "0.5-1.0"),
+     "with no host tools in the build path.", "0.5-0.9"),
     ("vms-098", "Cluster configuration",
      "Provision a node into a cluster the VMS way: SYSGEN parameters, AUTOGEN, "
-     "CLUSTER_AUTHORIZE, and CLUSTER_CONFIG.", "0.5-1.0"),
+     "CLUSTER_AUTHORIZE, and CLUSTER_CONFIG.", "0.5-0.9"),
     ("vms-67f", "TCP/IP networking",
      "A VMS-faithful IP layered product: the network device, sockets, the resolver, "
-     "and the client tools.", "0.5-1.0"),
+     "and the client tools.", "0.5-0.9"),
     ("vms-30e", "DECnet Phase IV",
-     "Clean-room DECnet: SET HOST and file transfer to and from a lab node.", "1.0"),
+     "Clean-room DECnet: SET HOST and file transfer to and from a lab node.", "0.9"),
     ("vms-19e", "Kernel substrate",
      "SYSKRNL: the OVMX executive layered over the Linux and NetBSD kernels — not a "
      "kernel of its own. Built from pinned upstream source with the VMS modules "
@@ -106,7 +112,7 @@ GATE_EPICS = [
     ("vms-8e8", "VAX as a first-class platform",
      "OVMX runs natively on VAX through a NetBSD system kernel: the executive, ODS-2 "
      "storage, and DCL boot on real VAX emulation, co-released across every architecture.",
-     "0.5-1.0"),
+     "0.5-0.9"),
 ]
 GATE_IDS = [g[0] for g in GATE_EPICS]
 

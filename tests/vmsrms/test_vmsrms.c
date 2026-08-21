@@ -174,7 +174,7 @@ static void test_create_close(void)
     check(st == RMS$_NORMAL, "sys$create returns NORMAL");
     check(fab.fab$l_sts == RMS$_CREATED, "fab$l_sts is RMS$_CREATED after create");
     check(fab.fab$w_ifi != 0, "IFI assigned after create");
-    check(fab._linux_fd >= 0, "linux fd is valid after create");
+    check(fab._rms_file != 0, "RMS file handle is valid after create");  /* vms-bc7 */
 
     /*
      * sys$create appends a version number (e.g. ;1) to the path.
@@ -186,7 +186,7 @@ static void test_create_close(void)
 
     st = sys$close(&fab, 0, 0);
     check(st == RMS$_NORMAL, "sys$close returns NORMAL after create");
-    check(fab._linux_fd == -1, "linux fd is -1 after close");
+    check(fab._rms_file == 0, "RMS file handle cleared after close");  /* vms-bc7 */
     check(fab.fab$w_ifi == 0, "IFI cleared after close");
 
     /* Verify file exists on disk (use resolved path with version) */

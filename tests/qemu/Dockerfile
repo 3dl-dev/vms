@@ -458,23 +458,52 @@ COPY tests/qemu/mkimage_ods2_search.c /src/tests/qemu/
 RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_search \
         /src/tests/qemu/mkimage_ods2_search.c \
         /src/vmsfs/ods2/ods2_reader.c /src/vmsfs/ods2/ods2_writer.c \
+        /src/vmsfs/ods2/ods2_edit.c \
         /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
     /src/tests/qemu/mkimage_ods2_search /ods2_search.img 1
 
 # GENERATED genuine ODS-2 SYSTEM-DISK tree for the directory-logical resolution
-# proof (vms-0044, epic vms-208). mkimage_ods2_sysvol.c masters, with the SAME
-# byte-genuine writer, a concealed-rooted layout [SYS0.SYSCOMMON.{SYSEXE,SYSMGR,
-# SYSLIB}] holding SYSUAF.DAT etc. Staged as /ods2_sysvol.img, which
-# run_tests.sh copies onto DKA300: (vdd). test_syssvc_dirlogical_acp composes
-# SYS$SYSTEM:SYSUAF.DAT and walks the ACP MFD->[SYS0]->[SYSCOMMON]->[SYSEXE] to
-# the file FID, then reads it byte-exact.
+# proof (vms-0044, epic vms-208) AND the login/rights read path (vms-5f0).
+# mkimage_ods2_sysvol.c masters, with the SAME byte-genuine writer, a
+# concealed-rooted layout [SYS0.SYSCOMMON.{SYSEXE,SYSMGR,SYSLIB}] holding the
+# REAL shipped SYSUAF.DAT / RIGHTSLIST.DAT (copied VERBATIM from the product's
+# own distro/rootfs, so the suites assert against what actually boots). Staged as
+# /ods2_sysvol.img, which run_tests.sh copies onto DKA300: (vdd).
+# test_syssvc_dirlogical_acp composes SYS$SYSTEM:SYSUAF.DAT and walks the ACP
+# MFD->[SYS0]->[SYSCOMMON]->[SYSEXE] to the file FID, then reads it byte-exact;
+# test_syssvc_sysuaf_uic_base / test_syssvc_rightslist $MOUNT the volume and read
+# the real records back through the RMS-over-ACP rooted-logical $OPEN.
 COPY tests/qemu/mkimage_ods2_sysvol.c /src/tests/qemu/
 RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_sysvol \
         /src/tests/qemu/mkimage_ods2_sysvol.c \
         /src/vmsfs/ods2/ods2_reader.c /src/vmsfs/ods2/ods2_writer.c \
+        /src/vmsfs/ods2/ods2_edit.c \
         /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
-    /src/tests/qemu/mkimage_ods2_sysvol /ods2_sysvol.img 2
+    /src/tests/qemu/mkimage_ods2_sysvol /ods2_sysvol.img 48 \
+        /src/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT \
+        /src/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT \
+        SYSEXE:TCC.EXE=/src/repo/build-static/bin/TCC.EXE \
+        SYSEXE:LIBRARIAN.EXE=/src/repo/build-static/bin/LIBRARIAN.EXE \
+        SYSEXE:LINK.EXE=/src/repo/build-static/bin/LINK.EXE \
+        SYSEXE:IMGACT.EXE=/src/repo/src/imgact/IMGACT.EXE \
+        'SYSLIB:DECC$SHR.EXE=/src/repo/build-static/bin/DECC$SHR.EXE'
 
+# GENERATED ODS-2 volume carrying a real ELF image [IMGACT]TESTIMG.EXE for the
+# IMGACT-over-ACP proof (vms-3e8e, epic vms-208). mkimage_ods2_imgact.c lays the
+# deterministic fixture ELF (tests/qemu/imgact_acp_fixture_elf.h) down with the
+# SAME byte-genuine ODS-2 writer the other fixtures use. Staged as
+# /ods2_imgact.img, which run_tests.sh copies onto DKA400: (vde);
+# test_syssvc_imgact_acp $MOUNTs it and reads the image header + PT_LOAD
+# segments over IO$_ACCESS + IO$_READVBLK.
+COPY tests/qemu/mkimage_ods2_imgact.c /src/tests/qemu/
+COPY tests/qemu/imgact_acp_fixture_elf.h /src/tests/qemu/
+RUN gcc -O2 -Wall -I/src/vmsfs/include -I/src/tests/qemu \
+        -o /src/tests/qemu/mkimage_ods2_imgact \
+        /src/tests/qemu/mkimage_ods2_imgact.c \
+        /src/vmsfs/ods2/ods2_reader.c /src/vmsfs/ods2/ods2_writer.c \
+        /src/vmsfs/ods2/ods2_edit.c \
+        /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
+    /src/tests/qemu/mkimage_ods2_imgact /ods2_imgact.img 1
 # Locate the kernel image (may already exist as symlink)
 RUN KVER=$(cat /tmp/kver) && \
     if [ ! -e /boot/vmlinuz ]; then \
@@ -802,8 +831,9 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # F$IDENTIFIER used to answer from a hardcoded pair of names inside
     # lex_identifier(), so the ident suite's SYSTEM/DEFAULT assertions passed
     # in an initramfs that had no system disk at all. It now READS the rights
-    # database -- SYS$SYSTEM:RIGHTSLIST.DAT for general identifiers, SYSUAF
-    # for UIC identifiers -- which means those assertions are only meaningful
+    # database -- SYS$SYSTEM:RIGHTSLIST.DAT for BOTH general AND UIC identifiers
+    # (vms-930; SYSUAF is protected World:none and no longer the UIC source) --
+    # which means those assertions are only meaningful
     # if the guest has the files. Staged at the product's own layout, from
     # the product's own distro/rootfs, so the suite asserts against what
     # actually boots rather than a fixture invented for the harness.

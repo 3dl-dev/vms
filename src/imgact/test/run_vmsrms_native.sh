@@ -147,7 +147,7 @@ echo "== mk_vmsrms_shr.sh: real src/vmsrms -> LIBVMSRMS\$SHR.EXE (THE RMS layer)
 # vector; unresolved vmsfs_* => LIBVMSFS$SHR's vector.
 CC="$CC" sh "$LINK_DIR/mk_vmsrms_shr.sh" \
     "$WORK/LINK.EXE" "$SYSLIB/LIBVMSRMS\$SHR.EXE" \
-    "$SYSLIB/DECC\$SHR.EXE" "$SYSLIB/LIBVMS\$SHR.EXE" "$SYSLIB/LIBVMSFS\$SHR.EXE" \
+    "$SYSLIB/DECC\$SHR.EXE" "$SYSLIB/LIBVMS\$SHR.EXE" "$SYSLIB/LIBVMSFS\$SHR.EXE" "$SYSLIB/LIBVMSSYS\$SHR.EXE" \
     "$VMSRMS_DIR" "$LIBVMS_INC" "$VMSFS_INC"
 
 echo "-- LIBVMSRMS\$SHR.EXE: symbol vector + bound imports; NO TLS (vmsrms has no __thread) --"

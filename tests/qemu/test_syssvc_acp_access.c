@@ -51,6 +51,17 @@
  *      only by the accessor's executive-derived identity -- the shape a silent
  *      userspace allow could never show.
  *
+ *   7. PER-FILE-CLASS PROTECTION (vms-109/vms-548b). On the generated
+ *      system-disk volume (DKA300:), the three security-sensitive SYS$SYSTEM
+ *      files are mastered with DIFFERENT protections by file class:
+ *      SYSUAF.DAT World:none (0xFF88 -- its Purdy hashes must not leak),
+ *      RIGHTSLIST.DAT World:R (0xEE00 -- the world-readable rights database),
+ *      DCL.EXE World:RE (0xAA00 -- a shipped image stays activatable). A
+ *      privileged read pins each file's exact fileprot; the SAME unprivileged
+ *      [100,100] child is then REFUSED SYSUAF.DAT but GRANTED RIGHTSLIST.DAT
+ *      and DCL.EXE -- three verdicts from one acp_check_access, decided only by
+ *      each file's class-assigned protection.
+ *
  * NO /dev/vms -> honest SKIP (77), never a fake pass: the ACP, the window, and
  * the protection gate are executive-resident, so with no /dev/vms there is
  * nothing to assert (the contract every test_syssvc_* suite is held to,
@@ -95,6 +106,18 @@
  * protection category but WORLD -- which denies read on the fixture files. */
 #define UNPRIV_GID 100
 #define UNPRIV_UID 100
+
+/* DKA300: (vdd) carries the GENERATED system-disk ODS-2 volume (mkimage_ods2_
+ * sysvol.c) holding SYS$SYSTEM:{SYSUAF.DAT,RIGHTSLIST.DAT,DCL.EXE}. The
+ * PER-FILE-CLASS protection proof (vms-109/vms-548b) reads these three files
+ * over the same acp_check_access gate, at [SYS0.SYSCOMMON.SYSEXE]. */
+#define SYSVOL_UNIT  "DKA300:"
+
+/* The per-file-class fh2_fileprot each of the three files is mastered with
+ * (ods2_class_fileprot(), ods2.h). Nibbles S/O/G/W low->high, SET bit DENIES. */
+#define SYSUAF_PROT      0xFF88u   /* S:RWE,O:RWE,G:none,W:none -- oracle (RWE,RWE,,) */
+#define RIGHTSLIST_PROT  0xEE00u   /* S:RWED,O:RWED,G:R,W:R  -- WORLD-READABLE       */
+#define DCLEXE_PROT      0xAA00u   /* S:RWED,O:RWED,G:RE,W:RE -- image World:RE       */
 
 static int pass = 0;
 static int fail = 0;
@@ -171,6 +194,88 @@ static int run_noprivchild(int b2a_write)
     return 0;
 }
 
+/* --- the per-file-class protection proof (vms-109/vms-548b/vms-930) --------- */
+
+/* Resolve one directory level: IO$_ACCESS `dirname` ("NAME.DIR") in `parent_did`
+ * and return its FID number, or 0. The parent (privileged, system group) walks
+ * the concealed-rooted path this way; the ACP does not protection-check an
+ * intermediate directory during acp_dir_find, so once the parent hands the
+ * child the leaf directory's FID the child can look up a name inside it and the
+ * TARGET FILE's own protection is the only gate (which is the point). */
+static uint32_t resolve_did(uint32_t chan, uint16_t parent_did, const char *dirname)
+{
+    struct vms_acp_access_args a;
+    uint32_t st;
+    acc_init(&a, chan);
+    a.did_num = parent_did;             /* 0 => the MFD [000000] */
+    a.did_seq = parent_did ? 1 : 0;
+    strncpy(a.name, dirname, VMS_ACP_NAME_SIZE - 1);
+    st = vms_kif_acp_access(&a);
+    if (!$VMS_STATUS_SUCCESS(st)) return 0;
+    { uint32_t fn = a.fid_num; (void)vms_kif_acp_deaccess(chan); return fn; }
+}
+
+/* What the unprivileged child reports opening each of the three files by name in
+ * [SYSEXE] (whose FID the privileged parent passes in). Fixed-width: survives
+ * fork+exec. */
+struct prot_child_rep {
+    uint32_t uic;
+    uint32_t assign_status;
+    uint32_t sysuaf_status;     /* expect SS$_NOPRIV -- World:none */
+    uint32_t rights_status;     /* expect success   -- World:R    */
+    uint32_t dclexe_status;     /* expect success   -- World:RE   */
+    uint16_t rights_prot;       /* fileprot the child saw on the granted RIGHTSLIST */
+    uint16_t dclexe_prot;       /* fileprot the child saw on the granted DCL.EXE   */
+};
+
+static int run_noprivchild_prot(int b2a_write, uint16_t sysexe_did)
+{
+    struct prot_child_rep rep;
+    struct vms_acp_access_args a;
+    uint32_t chan = 0;
+
+    memset(&rep, 0, sizeof(rep));
+
+    if (!vms_pcb_init(0xFFFFFFFFFFFFFFFFULL)) {
+        (void)!write(b2a_write, &rep, sizeof(rep));
+        return 1;
+    }
+
+    rep.assign_status = vms_kif_acp_assign(SYSVOL_UNIT, &chan);
+    if (!$VMS_STATUS_SUCCESS(rep.assign_status) || chan == 0) {
+        (void)!write(b2a_write, &rep, sizeof(rep));
+        return 1;
+    }
+
+    /* SYSUAF.DAT -- World:none: an unprivileged, non-owner, non-system caller
+     * must be REFUSED read (its Purdy hashes stay secret). */
+    acc_init(&a, chan);
+    a.did_num = sysexe_did; a.did_seq = 1;
+    strncpy(a.name, "SYSUAF.DAT", VMS_ACP_NAME_SIZE - 1);
+    rep.sysuaf_status = vms_kif_acp_access(&a);
+    (void)vms_kif_acp_deaccess(chan);
+
+    /* RIGHTSLIST.DAT -- World:R: the SAME caller must be GRANTED read. */
+    acc_init(&a, chan);
+    a.did_num = sysexe_did; a.did_seq = 1;
+    strncpy(a.name, "RIGHTSLIST.DAT", VMS_ACP_NAME_SIZE - 1);
+    rep.rights_status = vms_kif_acp_access(&a);
+    if ($VMS_STATUS_SUCCESS(rep.rights_status)) rep.rights_prot = a.attr.fileprot;
+    (void)vms_kif_acp_deaccess(chan);
+
+    /* DCL.EXE -- World:RE image: GRANTED read. */
+    acc_init(&a, chan);
+    a.did_num = sysexe_did; a.did_seq = 1;
+    strncpy(a.name, "DCL.EXE", VMS_ACP_NAME_SIZE - 1);
+    rep.dclexe_status = vms_kif_acp_access(&a);
+    if ($VMS_STATUS_SUCCESS(rep.dclexe_status)) rep.dclexe_prot = a.attr.fileprot;
+    (void)vms_kif_acp_deaccess(chan);
+
+    (void)vms_kif_dassgn(chan);
+    (void)!write(b2a_write, &rep, sizeof(rep));
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     struct vms_acp_access_args a;
@@ -185,6 +290,10 @@ int main(int argc, char **argv)
     /* Re-exec'd unprivileged-child mode (the protection proof's other half). */
     if (argc >= 3 && strcmp(argv[1], "--noprivchild") == 0)
         return run_noprivchild(atoi(argv[2]));
+    /* Re-exec'd unprivileged-child mode for the per-file-class protection proof
+     * (argv[3] = the [SYSEXE] directory FID the privileged parent resolved). */
+    if (argc >= 4 && strcmp(argv[1], "--noprivchildprot") == 0)
+        return run_noprivchild_prot(atoi(argv[2]), (uint16_t)atoi(argv[3]));
 
     printf("=== test_syssvc_acp_access: executive ACP answers IO$_ACCESS/IO$_DEACCESS "
            "(open by name + by FID, window, protection; vms-204, epic vms-208) ===\n");
@@ -318,6 +427,114 @@ int main(int argc, char **argv)
               "the unprivileged child $ASSIGNs the executive-global volume (sees the parent's mount)");
         check(got == (ssize_t)sizeof(rep) && rep.access_status == SS$_NOPRIV,
               "an UNPRIVILEGED, non-owner process is REFUSED SS$_NOPRIV opening HELLO.TXT (protection enforced, INV-6)");
+    }
+
+    /* --- (7) PER-FILE-CLASS protection over the ACP (vms-109/vms-548b) -----
+     *
+     * The single "every ordinary file is World:RE" default (vms-37e) made
+     * SYSUAF.DAT's Purdy password hashes World-readable. Files-11 protection is
+     * per-file: SYSUAF.DAT is World:none, RIGHTSLIST.DAT is World:R (so an
+     * unprivileged F$IDENTIFIER can read it), and a shipped image (DCL.EXE) is
+     * World:RE. This scenario mounts the generated system-disk volume and reads
+     * all three files over the SAME acp_check_access gate -- proving the class
+     * mapping BY the executive's own verdict, not by inspecting bytes. */
+    {
+        uint32_t schan = 0;
+        uint16_t sys0, syscommon, sysexe;
+        struct vms_acp_access_args pa;
+
+        st = vms_kif_acp_mount(SYSVOL_UNIT);
+        check($VMS_STATUS_SUCCESS(st),
+              "$MOUNT of the generated system-disk " SYSVOL_UNIT " (protection proof precondition)");
+        st = vms_kif_acp_assign(SYSVOL_UNIT, &schan);
+        check($VMS_STATUS_SUCCESS(st) && schan != 0,
+              "$ASSIGN a file-class channel to " SYSVOL_UNIT " (protection proof precondition)");
+
+        /* Privileged (system-group) walk to [SYS0.SYSCOMMON.SYSEXE]. */
+        sys0      = (uint16_t)resolve_did(schan, 0, "SYS0.DIR");
+        syscommon = (uint16_t)resolve_did(schan, sys0, "SYSCOMMON.DIR");
+        sysexe    = (uint16_t)resolve_did(schan, syscommon, "SYSEXE.DIR");
+        check(sys0 && syscommon && sysexe,
+              "walk the concealed-rooted path to [SYS0.SYSCOMMON.SYSEXE]");
+
+        /* PRIVILEGED reads pin the EXACT per-class protection each file carries
+         * (grounded values); the system-group parent is granted every file. */
+        acc_init(&pa, schan);
+        pa.did_num = sysexe; pa.did_seq = 1;
+        strncpy(pa.name, "SYSUAF.DAT", VMS_ACP_NAME_SIZE - 1);
+        st = vms_kif_acp_access(&pa);
+        check($VMS_STATUS_SUCCESS(st) && pa.attr.fileprot == SYSUAF_PROT,
+              "SYSUAF.DAT is mastered World:none (fileprot 0xFF88 -- oracle (RWE,RWE,,))");
+        (void)vms_kif_acp_deaccess(schan);
+
+        acc_init(&pa, schan);
+        pa.did_num = sysexe; pa.did_seq = 1;
+        strncpy(pa.name, "RIGHTSLIST.DAT", VMS_ACP_NAME_SIZE - 1);
+        st = vms_kif_acp_access(&pa);
+        check($VMS_STATUS_SUCCESS(st) && pa.attr.fileprot == RIGHTSLIST_PROT,
+              "RIGHTSLIST.DAT is mastered World:R (fileprot 0xEE00 -- world-readable rights db)");
+        (void)vms_kif_acp_deaccess(schan);
+
+        acc_init(&pa, schan);
+        pa.did_num = sysexe; pa.did_seq = 1;
+        strncpy(pa.name, "DCL.EXE", VMS_ACP_NAME_SIZE - 1);
+        st = vms_kif_acp_access(&pa);
+        check($VMS_STATUS_SUCCESS(st) && pa.attr.fileprot == DCLEXE_PROT,
+              "DCL.EXE is mastered World:RE (fileprot 0xAA00 -- shipped image default)");
+        (void)vms_kif_acp_deaccess(schan);
+        (void)vms_kif_dassgn(schan);
+
+        /* The UNPRIVILEGED verdict: same files, opposite outcomes decided ONLY
+         * by the accessor's executive-derived UIC and each file's protection. */
+        {
+            int p2[2];
+            pid_t cpid;
+            if (pipe(p2) < 0) {
+                check(0, "pipe() for the protection child");
+            } else if ((cpid = fork()) < 0) {
+                check(0, "fork() for the protection child");
+            } else if (cpid == 0) {
+                char wfd[16], did[16];
+                close(p2[0]);
+                if (setgid(UNPRIV_GID) != 0 || setuid(UNPRIV_UID) != 0)
+                    _exit(1);
+                snprintf(wfd, sizeof(wfd), "%d", p2[1]);
+                snprintf(did, sizeof(did), "%u", (unsigned)sysexe);
+                execl(argv[0], argv[0], "--noprivchildprot", wfd, did, (char *)NULL);
+                _exit(1);
+            } else {
+                struct prot_child_rep rep;
+                ssize_t got;
+                int wstatus = 0;
+                close(p2[1]);
+                got = read(p2[0], &rep, sizeof(rep));
+                close(p2[0]);
+                waitpid(cpid, &wstatus, 0);
+
+                check(got == (ssize_t)sizeof(rep) &&
+                      $VMS_STATUS_SUCCESS(rep.assign_status),
+                      "the unprivileged child $ASSIGNs " SYSVOL_UNIT " (sees the parent's mount)");
+                /* THE SECURITY ASSERTION: World cannot read SYSUAF.DAT. */
+                check(got == (ssize_t)sizeof(rep) && rep.sysuaf_status == SS$_NOPRIV,
+                      "an UNPRIVILEGED process is REFUSED SS$_NOPRIV reading SYSUAF.DAT "
+                      "(Purdy hashes NOT World-readable -- vms-109)");
+                /* World CAN read the world-readable rights database. */
+                check(got == (ssize_t)sizeof(rep) &&
+                      $VMS_STATUS_SUCCESS(rep.rights_status) &&
+                      rep.rights_prot == RIGHTSLIST_PROT,
+                      "the SAME unprivileged process IS GRANTED read of RIGHTSLIST.DAT "
+                      "(World:R honored by acp_check_access -- vms-548b)");
+                /* World CAN read (activate) a shipped image. */
+                check(got == (ssize_t)sizeof(rep) &&
+                      $VMS_STATUS_SUCCESS(rep.dclexe_status) &&
+                      rep.dclexe_prot == DCLEXE_PROT,
+                      "the SAME unprivileged process IS GRANTED read of DCL.EXE "
+                      "(World:RE -- image stays activatable, vms-37e kept)");
+            }
+        }
+
+        st = vms_kif_acp_dmount(SYSVOL_UNIT);
+        check($VMS_STATUS_SUCCESS(st), "$DISMOUNT removes the system-disk volume");
     }
 
     /* --- cleanup ---------------------------------------------------------- */

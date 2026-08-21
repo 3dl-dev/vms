@@ -121,6 +121,13 @@
 #include "prvdef.h"
 #include "vms/pcb.h"
 #include "vms_kif.h"
+/* ovmx_boot_stage_exec_path() + OVMX_BOOT_STAGE_DIR: the ACP-read bootstrap
+ * bridge (vms-5f0). $CREPRC genuinely fork()+execve()s a new process, so its
+ * image needs a POSIX path; with the /vms passthrough retired a SYS$SYSTEM
+ * image (e.g. JOB_CONTROL.EXE from the startup phase driver, or DCL.EXE from
+ * SPAWN) is execve'd from the boot-staging tmpfs PID 1 filled off the ODS-2
+ * volume over the ACP. */
+#include "ovmx_layout.h"
 
 /*
  * sys$exit - Terminate process with a VMS status code.
@@ -622,6 +629,20 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
 
     char img_path[512];
     dsc$strncpy(img_path, image, sizeof(img_path));
+
+    /* ATOMIC FLIP (vms-5f0): a genuinely-new process ($CREPRC/RUN-DETACHED/
+     * SPAWN) is execve'd by the Linux kernel, which maps the MAIN image's
+     * PT_LOAD and opens its PT_INTERP by POSIX path. With the /vms passthrough
+     * retired, a SYS$SYSTEM image is execve'd from the boot-staging tmpfs
+     * PID 1 filled off the ODS-2 volume THROUGH the executive ACP. Self-
+     * guarding: rewrite only when the staged copy is actually present, so a
+     * non-staged or non-Linux path is left unchanged and fails honestly. */
+    {
+        char staged[512];
+        if (ovmx_boot_stage_exec_path(img_path, staged, sizeof(staged)) &&
+            access(staged, X_OK) == 0)
+            snprintf(img_path, sizeof(img_path), "%s", staged);
+    }
 
     struct vms_pcb *parent_pcb = vms_pcb_get();
 

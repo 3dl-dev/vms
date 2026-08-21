@@ -1,58 +1,42 @@
 /*
- * test_syssvc_rms_scratch_create.c - reproduce and pin the vms-221 defect:
- * SYSTEM's sys$create() (RMS indexed file, src/vmsrms/rms_core.c) under a
- * genuinely SYSTEM-writable SYS$SCRATCH: directory (vms-e5c's fix, applied
- * here directly since vms-e5c is a separate, unmerged item -- see
- * provision_writable_dir_for_test() below).
+ * test_syssvc_rms_scratch_create.c - SYSTEM's sys$create() + $PUT of an RMS
+ * INDEXED file (src/vmsrms/rms_core.c + rms_idx.c + rms_prolog3.c) over the
+ * Files-11 (ODS-2) ACP, and a byte-for-byte keyed round-trip back through the
+ * genuine on-disk Prolog-3 index (vms-401, epic vms-d0c). No .rms_idx sidecar,
+ * no /vms passthrough, no faked success -- real IO$_CREATE / IO$_WRITEVBLK /
+ * IO$_READVBLK on a real /dev/vms (Rule 9 / INV-6).
  *
- * THE MEASURED DIVERGENCE (vms-221). A plain open(2) on a resolved
- * SYS$SCRATCH: path succeeds for SYSTEM every time (test_syssvc_scratch_
- * writable.c, vms-e5c). PARTS's own sys$create() of an RMS INDEXED file
- * under the SAME directory still hit EACCES. Root cause, traced by reading
- * src/kernel/vmsfs/vmsfs_blkdev.c end to end:
+ * HISTORY. This suite began as the vms-221 pin: PARTS's RMS indexed create hit
+ * EACCES because the RETIRED userspace path (rms_idx_put -> btree_save's
+ * ".rms_idx" sidecar over the /vms passthrough) reopened a zero-UIC file for
+ * write on its second periodic save. The converged Files-11 program
+ * (files11-acp-pivot) retired that sidecar entirely: an indexed file is now a
+ * genuine Prolog-3 image authored on the fresh ACP data fork
+ * (rms_idx_author_p3 -> rms_p3_create/put), so there is no sidecar to reopen
+ * and no passthrough UIC to get wrong. What remains worth proving is that the
+ * REAL ACP indexed write path holds up under load.
  *
- *   vmsfs_blkdev_create() and vmsfs_blkdev_mkdir() memset() the new file's
- *   on-disk header to zero and populate fh_magic/fh_fid/fh_size/timestamps/
- *   fh_protection/... but NEVER write fh_uic_group or fh_uic_member (see
- *   vmsfs_ondisk.h: they are separate fields alongside fh_protection, not
- *   derived from it). vmsfs_blkdev_iget() reads them straight into the VFS
- *   inode: inode->i_uid = fh_uic_member, inode->i_gid = fh_uic_group. So
- *   EVERY new file/directory this filesystem creates is owned UIC [0,0]
- *   (Linux uid=0/gid=0) on disk, regardless of who created it.
+ * THE vms-401 DEFECT THIS SUITE NOW PINS (ACP block extend). rms_p3_create/put
+ * grow the file one bucket at a time (IO$_WRITEVBLK past EOF -> implicit
+ * extend). vms_ioctl_acp_writevb (src/kernel-core/vmsfs_acp.c) allocated each
+ * one-block run into a FRESH channel-window extent (ch->win) and a fresh FH2
+ * retrieval pointer (ods2_fh2_map_append, src/vmsfs/ods2/ods2_edit.c) -- never
+ * coalescing physically-contiguous runs, though VMS maps a contiguous file with
+ * ONE retrieval pointer. The fixed 24-entry window (ACP_WINDOW_MAX) therefore
+ * exhausted after 24 blocks: MEASURED, $PUT #65 failed SS$_DEVICEFULL ->
+ * RMS$_WPL, the file capped at 24 blocks, and the first 64 records read back
+ * fine. THE FIX (vms-401): the extend path now grows the last window extent /
+ * last FH2 retrieval pointer in place when the freshly allocated LBNs are
+ * contiguous with it -- so a contiguous grower stays ONE extent, and 205
+ * records (crossing both periodic split points and a root-level growth,
+ * multi-level index vms-5a3) all land and all round-trip by key.
  *
- *   This is invisible on a bare, single-shot open(O_CREAT) or sys$create():
- *   Linux's VFS grants the creator access to a file it JUST created within
- *   the same syscall regardless of the resulting mode/protection (POSIX
- *   "open(O_CREAT, 0000) still returns a usable fd" semantics) -- so the
- *   FIRST open of a brand new name always succeeds no matter what UIC ends
- *   up on disk. It surfaces the moment anything reopens that SAME file for
- *   WRITE in a LATER syscall, because that second open goes through the
- *   real vmsfs_blkdev_permission() SOGW check against the file's actual
- *   (bugged) owner [0,0] -- which is neither System (UIC group 0 IS [0,*],
- *   so this specific bug accidentally self-heals for System-category
- *   checks -- but SYSTEM's real UIC here is [1,4], group 1, so it does NOT
- *   match), nor Owner (uid 4 != 0), nor Group (gid 1 != 0): it falls to
- *   World, and VMSFS_PROT_DEFAULT (0xAA00) denies World WRITE. EACCES.
+ * SYSTEM identity is preserved (the child drops to UIC [1,4] before create):
+ * SYSTEM genuinely creates + fills the indexed file over the ACP.
  *
- *   PARTS's RMS indexed-file create hits exactly this: rms_idx_put()
- *   (src/vmsrms/rms_idx.c) calls btree_save() -- a FRESH fopen(idx_path,
- *   "wb") -- every 100 records (tree->num_records %% 100 == 0), not just
- *   once. The FIRST save (record 100) creates ".rms_idx" fresh and hits the
- *   create-shortcut, masking the zero-UIC bug exactly like a bare
- *   sys$create() does. The SECOND save (record 200) reopens that SAME,
- *   now-existing, [0,0]-owned file for O_TRUNC|O_WRONLY -- a real reopen,
- *   which DOES get the full permission check -- and fails EACCES. Below,
- *   scenario A drives >200 sys$put()s through the real sys$create()+
- *   rms_idx_put() path and asserts exactly where this happens.
- *
- * THE FIX THIS ITEM SHIPS (src/kernel/vmsfs/vmsfs_blkdev.c): both
- * vmsfs_blkdev_create() and vmsfs_blkdev_mkdir() now stamp fh_uic_member/
- * fh_uic_group from the CREATING PROCESS's current_fsuid()/current_fsgid()
- * (mirroring plain Unix inode-creation semantics: the creator owns what it
- * creates), so a subsequent reopen by the SAME identity lands in the Owner
- * category and VMSFS_PROT_DEFAULT's zero-deny Owner nibble grants full
- * access -- matching what the file's protection bits were always meant to
- * mean.
+ * This rig insmods vms.ko directly and never runs PID 1, so it MOUNTS the ODS-2
+ * SYSTEM DISK on DKA0: itself (the boot-time precondition) and creates in the
+ * real fixture directory [OVMXDIR] -- the same idiom test_syssvc_rms_acp.c uses.
  *
  * Requires a real, insmod'd vms.ko at /dev/vms: exits EXIT_SKIP (77) in the
  * CI negative-control rig (no executive at all, vms-0ff), never a fake pass.
@@ -159,7 +143,7 @@ static void init_fab(struct FAB *fab, struct XABKEY *xab, const char *filespec)
     fab->fab$l_fna = (char *)filespec;
     fab->fab$b_fns = (uint8_t)strlen(filespec);
     fab->fab$l_xab = xab;
-    fab->_linux_fd = -1;
+    fab->_rms_file = 0;   /* vms-bc7: RMS handle (was _linux_fd) */
 }
 
 static void init_rab(struct RAB *rab, struct FAB *fab)
@@ -265,11 +249,60 @@ static void child_main(int wfd, const char *vms_spec)
         (void)!write(wfd, msg, strlen(msg));
     }
 
+    /* ROUND-TRIP (vms-401): the records were $PUT into the genuine on-disk
+     * Prolog-3 index over the ACP (no .rms_idx sidecar). Read every one BACK BY
+     * KEY through the same open file and verify the body byte-for-byte -- proof
+     * the created indexed file is a real, re-readable Prolog-3 image, not a
+     * write-only success. */
+    {
+        char rdbuf[REC_SIZE + 8];
+        unsigned readback_ok = 0, readback_fail = 0;
+        for (unsigned k = 1; k <= PUT_COUNT; k++) {
+            char keybuf[REC_KEY_SIZE + 1], want[REC_SIZE];
+            snprintf(keybuf, sizeof(keybuf), "PN%06u", k);
+            memset(want, 'X', sizeof(want));
+            memcpy(want, keybuf, REC_KEY_SIZE);
+
+            memset(rdbuf, 0, sizeof(rdbuf));
+            rab.rab$b_rac = RAB$C_KEY;
+            rab.rab$l_kbf = keybuf;
+            rab.rab$b_ksz = REC_KEY_SIZE;
+            rab.rab$b_krf = 0;
+            rab.rab$l_rop = 0;
+            rab.rab$l_ubf = rdbuf;
+            rab.rab$w_usz = REC_SIZE;
+            rab.rab$w_rsz = 0;
+            uint32_t gs = sys$get(&rab, 0, 0);
+            if ($VMS_STATUS_SUCCESS(gs) && rab.rab$w_rsz == REC_SIZE &&
+                memcmp(rdbuf, want, REC_SIZE) == 0)
+                readback_ok++;
+            else
+                readback_fail++;
+        }
+        snprintf(msg, sizeof(msg),
+                 "READBACK_BY_KEY_OK=%u READBACK_BY_KEY_FAIL=%u OF=%u\n",
+                 readback_ok, readback_fail, PUT_COUNT);
+        (void)!write(wfd, msg, strlen(msg));
+    }
+
     sys$disconnect(&rab, 0, 0);
     uint32_t cst = sys$close(&fab, 0, 0);
     snprintf(msg, sizeof(msg), "CLOSE_STATUS=%u (%s)\n", (unsigned)cst,
              $VMS_STATUS_SUCCESS(cst) ? "OK" : "FAIL");
     (void)!write(wfd, msg, strlen(msg));
+
+    /* ISOLATION: erase the file (IO$_DELETE) so the net [OVMXDIR] state is
+     * restored for any later suite booted in the same VM against this DKA0:
+     * -- the same discipline test_syssvc_rms_acp.c / test_syssvc_acp_create.c
+     * keep. Best-effort; not asserted. */
+    {
+        struct FAB efab;
+        init_fab(&efab, &xab, vms_spec);
+        uint32_t est = sys$erase(&efab, 0, 0);
+        snprintf(msg, sizeof(msg), "ERASE_STATUS=%u (%s)\n", (unsigned)est,
+                 $VMS_STATUS_SUCCESS(est) ? "OK" : "FAIL");
+        (void)!write(wfd, msg, strlen(msg));
+    }
 
     _exit(0);
 }
@@ -327,8 +360,9 @@ static int field_is_ok(const char *out, const char *label)
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
-    printf("=== test_syssvc_rms_scratch_create (SYSTEM sys$create of an RMS "
-           "indexed file under SYS$SCRATCH:, vms-221) ===\n");
+    printf("=== test_syssvc_rms_scratch_create (SYSTEM sys$create + 205 $PUT of "
+           "an RMS indexed file over the Files-11 ACP + keyed round-trip, "
+           "vms-401) ===\n");
 
     vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
     lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
@@ -359,8 +393,24 @@ int main(void)
             printf("  DIAG: stat(%s) failed: %s\n", p, strerror(errno));
     }
 
+    /* Mount the ODS-2 SYSTEM DISK executive-global on DKA0: so the child's
+     * sys$create()'s $ASSIGN sees a mounted volume (vms-401). PID 1 does this at
+     * boot; this rig insmods vms.ko directly and never runs the boot sequence,
+     * so it stands up the precondition itself -- the same idiom every ACP suite
+     * uses (test_syssvc_rms_acp.c, test_syssvc_acp_create.c). Executive-global,
+     * so the post-fork child (dropped to SYSTEM) sees the same mounted volume. */
+    {
+        uint32_t mst = vms_kif_acp_mount("DKA0:");
+        printf("  DIAG: vms_kif_acp_mount(DKA0:)=%u (%s)\n", (unsigned)mst,
+               $VMS_STATUS_SUCCESS(mst) ? "OK" : "FAIL");
+        CHECK($VMS_STATUS_SUCCESS(mst),
+              "the ODS-2 SYSTEM DISK mounted executive-global on DKA0: (the ACP "
+              "precondition PID 1 satisfies at boot; this rig mounts it itself, "
+              "same idiom as test_syssvc_rms_acp.c)");
+    }
+
     static char out[8192];
-    if (run_scenario("SYS$SCRATCH:VMS221.DAT", out, sizeof(out)) != 0) {
+    if (run_scenario("DKA0:[OVMXDIR]VMS221.DAT", out, sizeof(out)) != 0) {
         CHECK(0, "could not run the SYSTEM sys$create scenario");
         printf("=== test_syssvc_rms_scratch_create: %d passed, %d failed ===\n", pass, fail);
         return fail > 0 ? 1 : 0;
@@ -369,47 +419,50 @@ int main(void)
 
     CHECK(strstr(out, "DROP_FAILED") == NULL,
           "SYSTEM's credential drop to UIC [1,4] succeeded");
-    CHECK(strstr(out, "RAW_OPEN=-1") == NULL,
-          "a plain open(2) under SYS$SCRATCH:'s resolved directory succeeds "
-          "(the e5c-style positive control, run from inside this SAME "
-          "process/credentials for a true apples-to-apples comparison)");
-    CHECK(strstr(out, "RESOLVED_PATH=/vms/SYSTMP/") != NULL ||
-          strstr(out, "RESOLVED_PATH=/vms/systmp/") != NULL,
-          "sys$create() resolved the VMS filespec SYS$SCRATCH:VMS221.DAT to "
-          "its REAL translated Linux path under /vms/SYSTMP -- pins the "
-          "vms-221 regression directly: resolve_filename() (src/vmsrms/rms_core.c) "
-          "used to check vmsfs_to_linux_path()'s return value "
-          "with `== 0`, but that function returns a VMS status code "
-          "(SS$_NORMAL == 1 on success, odd = success); the check never "
-          "matched, so EVERY VMS-spec candidate silently fell through to "
-          "being treated as a literal (relative) Linux path instead of a "
-          "translated one");
-    CHECK(strstr(out, "RESOLVED_PATH=./SYS") == NULL,
-          "sys$create() did NOT fall back to treating the raw VMS spec "
-          "string as a literal relative Linux path (the exact vms-221 "
-          "regression shape)");
+    CHECK(strstr(out, "RESOLVED_PATH=VMS221.DAT") != NULL,
+          "sys$create() parsed the filespec through the Files-11 ACP path "
+          "(rms_acp_specs_from_fab): the device (DKA0:) and directory "
+          "([OVMXDIR]) were split off and the ODS-2 file name resolved to "
+          "VMS221.DAT -- NOT treated as a literal Linux/relative path. The "
+          "vms-221 regression (resolve_filename() checking vmsfs_to_linux_path()'s "
+          "VMS status code with `== 0`, so odd=success never matched and every "
+          "VMS spec fell through to a literal path) belongs to the retired POSIX "
+          "$CREATE (rms_posix_create); the Rule-9 runtime creates on the mounted "
+          "volume over the ACP, which is what this proves.");
     /* negctl: rms-create-filespec-not-translated */
+    CHECK(strstr(out, "RESOLVED_PATH=./") == NULL &&
+          strstr(out, "RESOLVED_PATH=DKA0") == NULL,
+          "sys$create() did NOT fall back to treating the raw VMS spec "
+          "string as a literal path (no './' prefix, no undivided 'DKA0:...' "
+          "device left glued to the name)");
     CHECK(field_is_ok(out, "CREATE_STATUS="),
-          "sys$create() of the RMS indexed file under SYS$SCRATCH: succeeded "
-          "(the vms-221 EACCES is gone)");
+          "sys$create() of the RMS indexed file on the mounted ODS-2 volume "
+          "succeeded (a real IO$_CREATE FID + ACP write window, no EACCES)");
     CHECK(field_is_ok(out, "CONNECT_STATUS="),
           "sys$connect() on the freshly created file succeeded");
     CHECK(field_is_ok(out, "PUT_AT_100_STATUS="),
-          "sys$put() #100 (first periodic index save, fresh .rms_idx create) "
-          "succeeded");
+          "sys$put() #100 into the genuine on-disk Prolog-3 index over the ACP "
+          "succeeded (vms-401 retired the faked .rms_idx sidecar)");
     CHECK(field_is_ok(out, "PUT_AT_200_STATUS="),
-          "sys$put() #200 (SECOND periodic index save -- reopens the .rms_idx "
-          "sidecar) succeeded");
+          "sys$put() #200 succeeded (records ride real Prolog-3 bucket writes "
+          "over IO$_WRITEVBLK, no sidecar reopen)");
     {
         char want[64];
         snprintf(want, sizeof(want), "ALL_%u_PUTS_SUCCEEDED\n", PUT_COUNT);
         CHECK(strstr(out, want) != NULL,
-              "every sys$put() across two periodic index-save reopens "
-              "succeeded -- no silent mid-run EACCES");
+              "every sys$put() succeeded -- no silent mid-run EACCES");
     }
     CHECK(field_is_ok(out, "CLOSE_STATUS="),
-          "sys$close() (final index flush, a THIRD reopen of .rms_idx) "
-          "succeeded");
+          "sys$close() of the created indexed file succeeded");
+    /* vms-401: the created indexed file is a real, re-readable Prolog-3 image. */
+    CHECK(strstr(out, "READBACK_BY_KEY_FAIL=0 ") != NULL &&
+          strstr(out, "READBACK_BY_KEY_OK=0 ") == NULL,
+          "ROUND-TRIP: every record $PUT into DKA0:[OVMXDIR]VMS221.DAT reads back "
+          "BY KEY byte-for-byte through the genuine Prolog-3 index over the ACP "
+          "(no sidecar) -- 205 records cross both periodic split points and a "
+          "root-level growth (multi-level index, vms-5a3)");
+
+    vms_kif_acp_dmount("DKA0:");
 
     printf("=== test_syssvc_rms_scratch_create: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

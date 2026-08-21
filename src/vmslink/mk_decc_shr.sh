@@ -376,7 +376,11 @@ tmpfile=PROCEDURE,clearerr=PROCEDURE,\
 \
 unsetenv=PROCEDURE,\
 \
-pthread_create=PROCEDURE,pthread_detach=PROCEDURE,pthread_join=PROCEDURE"
+pthread_create=PROCEDURE,pthread_detach=PROCEDURE,pthread_join=PROCEDURE,\
+\
+pread=PROCEDURE,pwrite=PROCEDURE,ferror=PROCEDURE,\
+\
+chown=PROCEDURE"
 
 # fcntl APPENDED for vms-8019 (append-only -> prior consumers' vector indices
 # unchanged, GSMATCH LEQUAL-compatible). $CREPRC's creation handshake sets
@@ -453,6 +457,27 @@ pthread_create=PROCEDURE,pthread_detach=PROCEDURE,pthread_join=PROCEDURE"
 # pthread_create/detach/join yet). All three are POSIX threading entry points
 # real OpenVMS DECC$SHR exports (DECthreads) and musl's libc.a defines, so
 # DECC$SHR is the right producer.
+#
+# pread/pwrite APPENDED for vms-5f0 (append-only -> prior consumers' vector
+# indices unchanged, GSMATCH LEQUAL-compatible). The Files-11 atomic-flip's RMS
+# legacy-POSIX defer (A2a, rms_io.c) reads and writes an ODS-2 block at an
+# explicit byte offset without disturbing the file position -- the POSIX backend
+# of rms_io_read/write_at (rms_io_{read,write}_posix) uses pread()/pwrite() for
+# exactly the positioned I/O the ACP backend expresses via IO$_READVBLK's VBN.
+# open/close/read/write/lseek were already exported above; pread/pwrite are the
+# POSIX positioned-I/O companions real OpenVMS DECC$SHR exports and musl's libc.a
+# defines, so DECC$SHR is the right producer. LIBVMSRMS$SHR is the consumer.
+#
+# chown APPENDED for vms-a86f (append-only -> prior consumers' vector indices
+# unchanged, GSMATCH LEQUAL-compatible). LOGINOUT.EXE (tools/vms_login.c),
+# still privileged before its credential drop, creates the session's per-user
+# private image-staging directory OVMX_BOOT_STAGE_DIR "/<uid>/" 0700 and chowns
+# it to the authenticated UIC, so a non-root session can stage an image the
+# boot bridge did not pre-stage (SYS$SYSTEM:PARTS.EXE on first `$ PARTS`) into a
+# directory it owns rather than the root-owned shared parent (whose EACCES was
+# the red PARTS gate). mkdir/setgid/setuid/setgroups were already exported for
+# LOGINOUT; chown is the POSIX ownership companion real OpenVMS DECC$SHR exports
+# and musl's libc.a defines, so DECC$SHR is the right producer.
 #
 # THE GENERAL RULE, because this is the commonest way to break the VMS-native
 # toolchain jobs: EVERY libc call added to an OVMX library is a claim that

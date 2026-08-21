@@ -14,10 +14,33 @@ else()
     set(OVMX_BOOT_BACKEND_SRC ovmx_boot_linux.c opcom_kmsg.c)
 endif()
 
+# ACP-read bootstrap bridge (vms-5f0): PID 1 stages the first-hop execve'd
+# images off the genuine ODS-2 boot volume THROUGH the executive ACP. The ACP
+# file-access walk is the SAME imgact_acp.c IMGACT.EXE and the QEMU test use --
+# ovmx_boot_acp_read.c only backs its three host primitives with libc. LINUX
+# SUBSTRATE ONLY: the atomic flip of SYS$DISK to a genuine ODS-2 ACP volume is
+# the Linux flip; the NetBSD-vax boot path (ovmx_boot_netbsd.c) is flipped
+# separately by vms-d5d and is deliberately left untouched here, so the bridge
+# sources compile in only on the Linux backend and their call sites in
+# ovmx_init.c are guarded by OVMX_BOOT_LINUX (set below).
+if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+    set(OVMX_BOOT_BRIDGE_SRC)
+else()
+    set(OVMX_BOOT_BRIDGE_SRC
+        ovmx_boot_acp_read.c
+        # vms-46c: the conversational SYSBOOT> path's OVMXVMSSYS.PAR read/write
+        # over the executive Files-11 ACP (the strong ovmx_sysgen_acp_* seam for
+        # PID 1, backed by imgact_acp.c -- no RMS pulled into the static image).
+        # Linux-only, exactly like the rest of the ACP bridge.
+        ovmx_boot_sysgen_acp.c
+        ${CMAKE_SOURCE_DIR}/src/imgact/imgact_acp.c)
+endif()
+
 add_executable(ovmx_init
     ovmx_init.c
     ${OVMX_BOOT_BACKEND_SRC}
     sysboot.c
+    ${OVMX_BOOT_BRIDGE_SRC}
 )
 
 target_include_directories(ovmx_init PRIVATE
@@ -30,6 +53,10 @@ target_include_directories(ovmx_init PRIVATE
     # console and asks the executive to record it as the job's terminal
     # (vms-d0b).
     ${CMAKE_SOURCE_DIR}/src/libvmssys
+    # imgact_acp.h (the ACP file-access walk) + vms_ioctl.h (the ACP ioctl arg
+    # structs / request numbers) for the vms-5f0 boot-image staging bridge.
+    ${CMAKE_SOURCE_DIR}/src/imgact
+    ${CMAKE_SOURCE_DIR}/src/kernel
 )
 
 # Feature-test macros. On Linux (glibc) POSIX 2008 + _DEFAULT_SOURCE expose
@@ -45,6 +72,11 @@ else()
     target_compile_definitions(ovmx_init PRIVATE
         _POSIX_C_SOURCE=200809L
         _DEFAULT_SOURCE
+        # vms-5f0: the ACP-read bootstrap bridge (genuine ODS-2 SYS$DISK flip)
+        # is the LINUX flip. Its call sites in ovmx_init.c are guarded by this
+        # macro so the shared ovmx_init.c keeps compiling on the NetBSD-vax
+        # backend with its current boot behaviour, which vms-d5d flips.
+        OVMX_BOOT_LINUX=1
     )
 endif()
 

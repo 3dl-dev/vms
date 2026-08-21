@@ -144,7 +144,8 @@ vmsfs_find_case_insensitive=PROCEDURE,vmsfs_resolve_path_case=PROCEDURE,\
 vmsfs_is_valid_ods2_name=PROCEDURE,\
 vmsfs_device_concealed_rooted=PROCEDURE,\
 vmsfs_resolve_filespec_device=PROCEDURE,\
-vmsfs_compose_ods2_candidates=PROCEDURE"
+vmsfs_compose_ods2_candidates=PROCEDURE,\
+vmsfs_device_spec_kernel_mounted=PROCEDURE"
 
 echo "mk_vmsfs_shr: LINK.EXE --shareable --use DECC\$SHR --use LIBVMSLNM\$SHR --symbol-vector ... SELECTIVE $OLB -> $OUT"
 # VMS-native link: NO explicit object TU list. The .OLB is the pool; the

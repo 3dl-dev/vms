@@ -195,9 +195,15 @@ if [ "$rc" -eq 0 ]; then
 
     # The boot console announces the authored NODE NAME before any DCL runs --
     # read_boot_parameters() applied the in-memory conversational SCSNODE to
-    # the real hostname this boot.
-    check "boot: %OVMX-I-SCSNODE console line names the authored CLUX" "$POS_LOG" \
-        "%OVMX-I-SCSNODE, node name CLUX set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
+    # the real hostname this boot. This announce is emitted several seconds into
+    # the boot continuation (after the SILENT executive attach + DKA0: mount that
+    # read_boot_parameters() runs behind), NOT within `sleep 1` of CONTINUE, so
+    # this must WAIT for the exact line (like the WRITE assertion above and the
+    # sibling test_boot_scsnode_hostname_e2e.sh's line), never one-shot grep it
+    # too early. The line must still name CLUX (assertion strength unchanged).
+    if waitfor '%OVMX-I-SCSNODE, node name CLUX set from SYS$SYSTEM:OVMXVMSSYS.PAR' 90 "$POS_LOG"; then
+        rc=0; else rc=1; fi
+    record "boot: %OVMX-I-SCSNODE console line names the authored CLUX" "$rc"
 
     wake_login "$POS_LOG"
     if waitfor 'Username:' 120 "$POS_LOG"; then rc=0; else rc=1; fi

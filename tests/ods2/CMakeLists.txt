@@ -187,6 +187,26 @@ set_tests_properties(ods2_wvolume_reopen_append PROPERTIES
     TIMEOUT 30
 )
 
+# vms-de7 (Files-11 ACP write-side, epic vms-208): the genuine file CREATE ->
+# EXTEND -> RENAME/MOVE write path, the userspace-writer twin of the ACP's
+# IO$_CREATE / IO$_MODIFY(extend) / IO$_MODIFY!IO$M_MOVE(rename). Builds a
+# volume over a raw loop-image fd, creates a file, EXTENDS it past its initial
+# single-block extent (ods2_wvolume_append_file), RENAMES it within a directory
+# and MOVES it cross-directory (ods2_wvolume_rename -> ods2_fh2_rename), then
+# reads back with the block-backed reader asserting FID identity + allocation
+# preserved, fh2_backlink rewritten on the move, old names gone, content
+# byte-exact -- the write primitive $SETUAI / AUTHORIZE-seed use for the
+# create-tmp -> rename atomic-replace pattern.
+add_executable(test_ods2_rename test_ods2_rename.c)
+target_include_directories(test_ods2_rename PRIVATE ${VMS_FS_INCLUDE_DIR})
+target_link_libraries(test_ods2_rename PRIVATE ods2)
+
+add_test(NAME ods2_rename COMMAND test_ods2_rename)
+set_tests_properties(ods2_rename PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)
+
 # vms-88d (R6-build unblocker for the ODS-2 flip vms-5eb): the WRITER's
 # long-filename IDENT-area encoding. The real distro tree contains names
 # like "LIBVMSPROCESS$SHR.EXE;1" (23 chars) that the writer's old 20-char-only
@@ -203,6 +223,24 @@ target_link_libraries(test_ods2_longname PRIVATE ods2)
 
 add_test(NAME ods2_longname COMMAND test_ods2_longname)
 set_tests_properties(ods2_longname PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)
+
+# vms-3a8 (R1 install large-file write): ods2_fh2_map_append() records a
+# contiguous run LONGER than a single FM2 format-1 pointer's 256-block ceiling
+# as several consecutive format-1 pointers, instead of the pre-fix ODS2_ERR_ARGS
+# that the ACP surfaced as SS$_DEVICEFULL (%PCSI-E-WRITE on AUTHORIZE.EXE). Drives
+# map_append() directly against a header built by ods2_fh2_build and reads the
+# split back with the reader's own ods2_fh2_map_walk, proving the large run
+# reconstructs to one contiguous span, coalesces across the split, and refuses an
+# over-full map area with an honest ODS2_ERR_NOSPACE.
+add_executable(test_ods2_map_append_large test_ods2_map_append_large.c)
+target_include_directories(test_ods2_map_append_large PRIVATE ${VMS_FS_INCLUDE_DIR})
+target_link_libraries(test_ods2_map_append_large PRIVATE ods2)
+
+add_test(NAME ods2_map_append_large COMMAND test_ods2_map_append_large)
+set_tests_properties(ods2_map_append_large PROPERTIES
     LABELS "unit;ods2;vmsfs"
     TIMEOUT 30
 )

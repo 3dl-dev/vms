@@ -115,7 +115,7 @@ rtl/lib_dyndesc rtl/lib_logical rtl/lib_symbol rtl/lib_string_ops rtl/lib_bitops
 rtl/lib_arith rtl/lib_charscan rtl/lib_queue rtl/lib_tree rtl/lib_tparse rtl/lib_common \
 rtl/lib_eventflags rtl/str_routines rtl/mth_routines rtl/ots_routines rtl/sha256 \
 rtl/lib_strconv rtl/lib_xlate_tables \
-rtl/sysuaf rtl/rightslist rtl/str_util rtl/lib_cli"
+rtl/sysuaf rtl/rightslist rtl/rms_textfile rtl/str_util rtl/lib_cli rtl/purdy"
 
 OBJS=""
 for c in $LIST; do

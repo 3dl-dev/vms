@@ -17,6 +17,7 @@
 
 #include "dcl/context.h"
 #include "dcl/parser.h"
+#include "dcl/dcl_rms.h"          /* vms-481: DCL file access via RMS/$QIO-ACP */
 #include "ssdef.h"
 #include "vms/logical.h"
 #include "vmsfs/filespec.h"
@@ -510,4 +511,317 @@ int dcl_resolve_path(struct dcl_context *ctx, const char *spec,
     }
 
     return dcl_resolve_filespec(ctx, full_spec, linux_path, path_size);
+}
+
+
+/* ============================================================================
+ * vms-481 (epic vms-208): DCL file access through RMS / $QIO-to-ACP.
+ *
+ * These helpers let DCL file commands and F$ lexicals reach files the VMS way
+ * -- RMS ($OPEN/$GET/$CREATE/$PUT/$SEARCH) + rms_file_attr -- which on the
+ * product runtime route to the Files-11 ODS-2 ACP over /dev/vms, and on the
+ * netbsd-vax cross keep RMS's own POSIX backend (vms-d5d). DCL no longer calls
+ * opendir/stat/fopen on a vmsfs_to_linux_path("/vms/...") path for these
+ * commands. FAIL-HONEST: no ACP-mounted SYS$DISK => the real RMS error, never a
+ * silent POSIX fallback (Rule 9 / INV-6).
+ * ========================================================================== */
+
+/* Build the effective VMS filespec (device/dir defaulted) DCL hands to RMS.
+ * Same defaulting as dcl_resolve_path, but stops at the VMS spec (no Linux
+ * path). A Linux-passthrough spec ('/', './', '../') is returned unchanged. */
+int dcl_rms_effective_spec(struct dcl_context *ctx, const char *spec,
+                           char *out, size_t outsz)
+{
+    if (!ctx || !spec || !out || outsz == 0)
+        return -1;
+
+    if (spec[0] == '/' || (spec[0] == '.' && (spec[1] == '/' || spec[1] == '.'))) {
+        strncpy(out, spec, outsz - 1);
+        out[outsz - 1] = '\0';
+        return 0;
+    }
+
+    if (strchr(spec, '[') || strchr(spec, ':')) {
+        /* A spec that supplies a directory (or file) but NOT a device inherits
+         * the device from the current default directory (VSI OpenVMS User's
+         * Manual, "File Specifications"; clean-room, Rule 8). */
+        vmsfs_filespec_t sparts;
+        memset(&sparts, 0, sizeof(sparts));
+        vmsfs_parse_filespec(spec, &sparts);
+        if (!sparts.has_device) {
+            vmsfs_filespec_t dparts;
+            memset(&dparts, 0, sizeof(dparts));
+            vmsfs_parse_filespec(ctx->default_dir, &dparts);
+            if (dparts.has_device && dparts.device[0])
+                snprintf(out, outsz, "%s:%s", dparts.device, spec);
+            else { strncpy(out, spec, outsz - 1); out[outsz - 1] = '\0'; }
+        } else { strncpy(out, spec, outsz - 1); out[outsz - 1] = '\0'; }
+    } else {
+        /* Plain filename -- prefix with the default directory (VMS format). */
+        snprintf(out, outsz, "%s%s", ctx->default_dir, spec);
+    }
+    return 0;
+}
+
+/* ---- Sequential record READ (TYPE, COPY source) ---- */
+
+struct dcl_rms_reader {
+    struct FAB fab;
+    struct RAB rab;
+    char spec[1024];
+    char rbuf[32768];
+    int  connected;
+};
+
+struct dcl_rms_reader *dcl_rms_read_open(struct dcl_context *ctx, const char *spec,
+                                         uint32_t *rms_status)
+{
+    struct dcl_rms_reader *r = calloc(1, sizeof(*r));
+    uint32_t st;
+    if (!r) { if (rms_status) *rms_status = RMS$_DME; return NULL; }
+
+    if (dcl_rms_effective_spec(ctx, spec, r->spec, sizeof(r->spec)) != 0) {
+        if (rms_status) *rms_status = RMS$_SYN;
+        free(r); return NULL;
+    }
+
+    r->fab = cc$rms_fab;
+    r->fab.fab$l_fna = r->spec;
+    r->fab.fab$b_fns = (uint8_t)strlen(r->spec);
+    r->fab.fab$b_org = FAB$C_SEQ;
+    r->fab.fab$b_fac = FAB$M_GET;
+    /* Frame records the way the file was written: read the record format from
+     * the file's ODS-2 header (rms_file_attr -> FAT) and supply it on $OPEN.
+     * (RMS-over-ACP does not yet persist/return RFM through $OPEN itself --
+     * FAT-persist is a deferred vms-bc7 rung -- so the reader supplies it; when
+     * the header carries no usable RFM we leave RMS's default.) */
+    {
+        struct rms_fileattr _fa;
+        if (rms_file_attr(r->spec, &_fa) == RMS$_NORMAL &&
+            _fa.rfm >= FAB$C_FIX && _fa.rfm <= FAB$C_STMCR) {
+            r->fab.fab$b_rfm = _fa.rfm;
+            if (_fa.mrs) r->fab.fab$w_mrs = _fa.mrs;
+        }
+    }
+    st = sys$open(&r->fab, 0, 0);
+    if (st != RMS$_NORMAL) { if (rms_status) *rms_status = st; free(r); return NULL; }
+
+    r->rab = cc$rms_rab;
+    r->rab.rab$l_fab = &r->fab;
+    r->rab.rab$l_ubf = r->rbuf;
+    r->rab.rab$w_usz = sizeof(r->rbuf);
+    st = sys$connect(&r->rab, 0, 0);
+    if (st != RMS$_NORMAL) {
+        if (rms_status) *rms_status = st;
+        sys$close(&r->fab, 0, 0); free(r); return NULL;
+    }
+    r->connected = 1;
+    if (rms_status) *rms_status = RMS$_NORMAL;
+    return r;
+}
+
+int dcl_rms_read_record(struct dcl_rms_reader *r, char *buf, size_t bufsz, int *eof)
+{
+    uint32_t st;
+    if (eof) *eof = 0;
+    if (!r || !buf || bufsz == 0) return -1;
+    st = sys$get(&r->rab, 0, 0);
+    if (st == RMS$_EOF) { if (eof) *eof = 1; return -1; }
+    if (st != RMS$_NORMAL) return -1;
+    {
+        size_t n = r->rab.rab$w_rsz;
+        if (n > bufsz - 1) n = bufsz - 1;
+        memcpy(buf, r->rab.rab$l_ubf, n);
+        buf[n] = '\0';
+        return (int)n;
+    }
+}
+
+void dcl_rms_read_close(struct dcl_rms_reader *r)
+{
+    if (!r) return;
+    sys$close(&r->fab, 0, 0);
+    free(r);
+}
+
+/* ---- Sequential record WRITE (CREATE, COPY dest) ---- */
+
+struct dcl_rms_writer {
+    struct FAB fab;
+    struct RAB rab;
+    char spec[1024];
+    int  connected;
+};
+
+struct dcl_rms_writer *dcl_rms_write_create(struct dcl_context *ctx, const char *spec,
+                                            uint8_t rfm, uint8_t rat, uint16_t mrs,
+                                            uint32_t *rms_status)
+{
+    struct dcl_rms_writer *w = calloc(1, sizeof(*w));
+    uint32_t st;
+    if (!w) { if (rms_status) *rms_status = RMS$_DME; return NULL; }
+
+    if (dcl_rms_effective_spec(ctx, spec, w->spec, sizeof(w->spec)) != 0) {
+        if (rms_status) *rms_status = RMS$_SYN;
+        free(w); return NULL;
+    }
+
+    w->fab = cc$rms_fab;
+    w->fab.fab$l_fna = w->spec;
+    w->fab.fab$b_fns = (uint8_t)strlen(w->spec);
+    w->fab.fab$b_org = FAB$C_SEQ;
+    w->fab.fab$b_rfm = rfm ? rfm : FAB$C_VAR;
+    w->fab.fab$b_rat = rat;
+    w->fab.fab$w_mrs = mrs;
+    w->fab.fab$b_fac = FAB$M_PUT;
+    st = sys$create(&w->fab, 0, 0);
+    if (st != RMS$_NORMAL) { if (rms_status) *rms_status = st; free(w); return NULL; }
+
+    w->rab = cc$rms_rab;
+    w->rab.rab$l_fab = &w->fab;
+    st = sys$connect(&w->rab, 0, 0);
+    if (st != RMS$_NORMAL) {
+        if (rms_status) *rms_status = st;
+        sys$close(&w->fab, 0, 0); free(w); return NULL;
+    }
+    w->connected = 1;
+    if (rms_status) *rms_status = RMS$_NORMAL;
+    return w;
+}
+
+int dcl_rms_write_record(struct dcl_rms_writer *w, const char *buf, size_t len)
+{
+    uint32_t st;
+    if (!w) return -1;
+    w->rab.rab$l_rbf = (char *)buf;
+    w->rab.rab$w_rsz = (uint16_t)len;
+    st = sys$put(&w->rab, 0, 0);
+    return (st == RMS$_NORMAL) ? 0 : -1;
+}
+
+uint32_t dcl_rms_write_close(struct dcl_rms_writer *w)
+{
+    uint32_t st;
+    if (!w) return RMS$_FAB;
+    st = sys$close(&w->fab, 0, 0);
+    free(w);
+    return st;
+}
+
+/* ---- Wildcard directory iteration (DIRECTORY, F$SEARCH) ---- */
+
+struct dcl_rms_dir {
+    struct FAB fab;
+    struct NAM nam;
+    char pattern[1024];
+    char esa[512];
+    char rsa[512];
+};
+
+struct dcl_rms_dir *dcl_rms_dir_open(struct dcl_context *ctx, const char *pattern)
+{
+    struct dcl_rms_dir *d = calloc(1, sizeof(*d));
+    if (!d) return NULL;
+
+    if (dcl_rms_effective_spec(ctx, pattern, d->pattern, sizeof(d->pattern)) != 0) {
+        free(d); return NULL;
+    }
+
+    d->fab = cc$rms_fab;
+    d->fab.fab$l_fna = d->pattern;
+    d->fab.fab$b_fns = (uint8_t)strlen(d->pattern);
+    d->nam = cc$rms_nam;
+    d->nam.nam$l_esa = d->esa;
+    d->nam.nam$b_ess = (uint8_t)(sizeof(d->esa) > 255 ? 255 : sizeof(d->esa));
+    d->nam.nam$l_rsa = d->rsa;
+    d->nam.nam$b_rss = (uint8_t)(sizeof(d->rsa) > 255 ? 255 : sizeof(d->rsa));
+    d->fab.fab$l_nam = &d->nam;
+
+    /* $PARSE expands the pattern into the NAM (device logical translated, the
+     * expanded string that $SEARCH then iterates). A syntax error => no dir. */
+    if (sys$parse(&d->fab, 0, 0) != RMS$_NORMAL) { free(d); return NULL; }
+    return d;
+}
+
+int dcl_rms_dir_next(struct dcl_rms_dir *d, char *spec, size_t specsz,
+                     uint16_t *fid_num, uint16_t *fid_seq, uint8_t *fid_rvn)
+{
+    uint32_t st;
+    if (!d) return 0;
+    st = sys$search(&d->fab, 0, 0);
+    if (st != RMS$_NORMAL) return 0;    /* RMS$_NMF or fail-honest end */
+    if (spec && specsz) {
+        size_t n = d->nam.nam$b_rsl;
+        if (n > specsz - 1) n = specsz - 1;
+        memcpy(spec, d->nam.nam$l_rsa, n);
+        spec[n] = '\0';
+    }
+    if (fid_num || fid_seq || fid_rvn) {
+        uint16_t num = 0, seq = 0; uint8_t rvn = 0, nmx = 0;
+        rms_search_fid(&d->nam, &num, &seq, &rvn, &nmx);
+        if (fid_num) *fid_num = num;
+        if (fid_seq) *fid_seq = seq;
+        if (fid_rvn) *fid_rvn = rvn;
+    }
+    return 1;
+}
+
+uint32_t dcl_rms_dir_status(const struct dcl_rms_dir *d)
+{
+    /* $SEARCH records its status on the FAB (rms_acp_search / the passthrough
+     * both set fab$l_sts == the returned status). After dcl_rms_dir_next returns
+     * 0 this is RMS$_NMF (exhausted an existing directory) or RMS$_DNF (the
+     * directory did not exist at all) -- the distinction DIRECTORY needs. */
+    return d ? d->fab.fab$l_sts : (uint32_t)RMS$_DNF;
+}
+
+void dcl_rms_dir_close(struct dcl_rms_dir *d)
+{
+    if (!d) return;
+    rms_search_end(&d->nam);      /* release the channel if we stopped early */
+    free(d);
+}
+
+/* ---- File erase (DELETE) ---- */
+
+uint32_t dcl_rms_erase(struct dcl_context *ctx, const char *spec)
+{
+    char vspec[1024];
+    struct FAB fab;
+    if (!spec || !spec[0]) return RMS$_FAB;
+    if (dcl_rms_effective_spec(ctx, spec, vspec, sizeof(vspec)) != 0)
+        return RMS$_SYN;
+
+    fab = cc$rms_fab;
+    fab.fab$l_fna = vspec;
+    fab.fab$b_fns = (uint8_t)strlen(vspec);
+    /* $ERASE routes to rms_impl_erase: $ASSIGN + IO$_DELETE over the ACP when
+     * the executive is present, POSIX unlink on the executive-absent defer. The
+     * explicit version in `vspec` selects exactly that version (a ";*" tail
+     * would delete every version in one op). */
+    return sys$erase(&fab, 0, 0);
+}
+
+/* ---- One file's genuine ODS-2 attributes (DIRECTORY /FULL, F$FILE_ATTRIBUTES) ---- */
+
+uint32_t dcl_rms_attr(struct dcl_context *ctx, const char *spec,
+                      struct rms_fileattr *out)
+{
+    char vspec[1024];
+    if (!out) return RMS$_FAB;
+    if (dcl_rms_effective_spec(ctx, spec, vspec, sizeof(vspec)) != 0)
+        return RMS$_SYN;
+    return rms_file_attr(vspec, out);
+}
+
+/* ---- Stage an image's genuine bytes off the ODS-2 volume over the ACP (vms-104) ---- */
+uint32_t dcl_rms_stage(struct dcl_context *ctx, const char *spec,
+                       const char *dest)
+{
+    char vspec[1024];
+    if (!spec || !dest)
+        return RMS$_FAB;
+    if (dcl_rms_effective_spec(ctx, spec, vspec, sizeof(vspec)) != 0)
+        return RMS$_SYN;
+    return rms_stage_over_acp(vspec, dest);
 }

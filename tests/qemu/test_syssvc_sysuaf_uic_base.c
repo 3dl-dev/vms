@@ -59,6 +59,30 @@
 #include "vms_kif.h"
 
 #define EXIT_SKIP 77
+#define ODS2_UNIT "DKA300:"    /* vdd: the generated system-disk ODS-2 fixture */
+
+/* Seed the concealed-rooted system logicals pointed at ODS2_UNIT into the
+ * process table -- the exact shape lnm_setup_defaults() seeds, but on the test
+ * fixture device rather than the boot default DKA0:. This is what the
+ * RMS-over-ACP $OPEN composes (SYS$SYSTEM:SYSUAF.DAT -> the two ordered
+ * candidates DKA300:[SYS0.SYSEXE]... / DKA300:[SYS0.SYSCOMMON.SYSEXE]...), so
+ * sysuaf_lookup() reads the REAL shipped SYSUAF.DAT off the mounted ODS-2 volume
+ * through the ACP, not any /vms passthrough. Identical to
+ * test_syssvc_dirlogical_acp.c's seed_system_logicals(). */
+static void seed_system_logicals(lnm_manager_t *mgr)
+{
+    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SYSDEVICE", ODS2_UNIT,
+               LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+    static const char *sysroot[] = {
+        "SYS$SYSDEVICE:[SYS0.]",
+        "SYS$SYSDEVICE:[SYS0.SYSCOMMON.]"
+    };
+    lnm_create_multi(mgr, LNM_PROCESS_TABLE, "SYS$SYSROOT", sysroot, 2,
+                     LNM_ATTR_CONCEALED, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SYSTEM",  "SYS$SYSROOT:[SYSEXE]", 0, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$MANAGER", "SYS$SYSROOT:[SYSMGR]", 0, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$LIBRARY", "SYS$SYSROOT:[SYSLIB]", 0, LNM_MODE_EXEC);
+}
 
 static int pass = 0;
 static int fail = 0;
@@ -114,34 +138,52 @@ int main(void)
            "(vms-e60/vms-d37) ===\n");
 
     /*
-     * Bootstrap the VMS namespace the same way every shipped image does
-     * (tools/vms_login.c, tools/vms_authorize.c, DCL.EXE, and
-     * tests/qemu/test_syssvc_setuai.c): SYSUAF_PATH is a VMS filespec and
-     * vmsfs_to_linux_path() cannot resolve it until the system device is in
-     * this process's device table AND SYS$SYSTEM is in the logical name table.
-     * VMS_SYSUAF_PATH is "SYS$SYSTEM:SYSUAF.DAT", so both halves are needed;
-     * the SYS$SYSTEM half is executive-resident, so this resolves only in the
-     * booted guest.
-     */
-    vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
-    lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
-
-    /*
      * This suite requires a real executive: the octal-UIC read is only
-     * meaningful when SYS$SYSTEM resolves through the executive-resident
-     * LNM$SYSTEM to the shipped SYSUAF.DAT. With no /dev/vms it honest-skips
-     * (77), never a fake pass -- the contract every test_syssvc_* is held to
-     * (.github/workflows/ci.yml). Nothing is asserted on the skip path (matching
-     * tests/qemu/test_syssvc_setuai.c): while vms-fk1's host-LNM fake still
-     * exists, lnm_setup_defaults above reseeds SYS$SYSTEM into LNM$PROCESS on a
-     * hostless build, so a lookup here could resolve for the WRONG reason -- the
-     * honest signal is simply "no executive -> skip", checked before any read.
+     * meaningful when SYS$SYSTEM composes through the concealed-rooted chain and
+     * the Files-11 ACP reads the shipped SYSUAF.DAT off a MOUNTED ODS-2 volume.
+     * With no /dev/vms it honest-skips (77), never a fake pass -- the contract
+     * every test_syssvc_* is held to (.github/workflows/ci.yml). Nothing is
+     * asserted on the skip path (matching tests/qemu/test_syssvc_setuai.c).
      */
     if (!executive_present()) {
         printf("=== test_syssvc_sysuaf_uic_base: 0 passed, 0 failed "
                "(SKIPPED: no /dev/vms -- the octal-UIC read needs the "
-               "executive-resident LNM$SYSTEM) ===\n");
+               "Files-11 ACP on a mounted ODS-2 volume) ===\n");
         return EXIT_SKIP;
+    }
+
+    /*
+     * Bootstrap the VMS namespace the way the booted system does: seed the
+     * concealed-rooted system logicals (SYS$SYSDEVICE=DKA300:, SYS$SYSROOT,
+     * SYS$SYSTEM=SYS$SYSROOT:[SYSEXE]) and $MOUNT the generated system-disk
+     * ODS-2 fixture on DKA300:. sysuaf_lookup() then opens SYS$SYSTEM:SYSUAF.DAT
+     * -> RMS-over-ACP $OPEN composes DKA300:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT and
+     * $GET reads the REAL shipped record off the ODS-2 platter -- the exact login
+     * read path, with NO /vms passthrough (Rule 9 / INV-6).
+     */
+    lnm_manager_t *mgr = lnm_get_manager();
+    if (!mgr) { check(0, "no LNM manager"); goto done; }
+    seed_system_logicals(mgr);
+
+    uint32_t mst = vms_kif_acp_mount(ODS2_UNIT);
+    check($VMS_STATUS_SUCCESS(mst),
+          "$MOUNT of the system-disk ODS-2 fixture on " ODS2_UNIT " (precondition)");
+    if (!$VMS_STATUS_SUCCESS(mst)) goto done;
+
+    /* PROVENANCE: with the volume mounted, the read succeeds; once DISMOUNTED
+     * the same lookup FAILS honestly (RMS stays ACP-only and cannot $ASSIGN the
+     * unmounted unit) -- so the success required the mounted ACP volume, never a
+     * /vms POSIX substitute (Rule 9 / INV-6). Proven here up front, then
+     * remounted for the octal-radix assertions. */
+    {
+        sysuaf_record_t probe;
+        int mounted_ok = (sysuaf_lookup("SYSTEM", &probe) == 0);
+        check(mounted_ok,
+              "SYSTEM record reads via RMS-over-ACP off the mounted ODS-2 volume");
+        vms_kif_acp_dmount(ODS2_UNIT);
+        check(sysuaf_lookup("SYSTEM", &probe) != 0,
+              "with the volume DISMOUNTED the read fails-honest (no /vms fallback)");
+        (void)vms_kif_acp_mount(ODS2_UNIT);   /* remount for the reads below */
     }
 
     /* --- THE DISCRIMINATING CHECK ---------------------------------------
@@ -172,6 +214,9 @@ int main(void)
         check(0, "DEFAULT: record found for the regression check");
     }
 
+    vms_kif_acp_dmount(ODS2_UNIT);
+
+done:
     printf("=== test_syssvc_sysuaf_uic_base: %d passed, %d failed ===\n",
            pass, fail);
     return fail > 0 ? 1 : 0;

@@ -11,18 +11,40 @@
 
 #include "ovmx_kit_reader.h"
 
-int ovmx_kit_reader_open(ovmx_kit_reader_t *r, const char *kitfile)
+/* ---- POSIX fd source backend (ovmx_kit_reader_open) --------------------
+ * A kit that is a plain Linux file: factory tooling + the executive-absent
+ * host ctest defer. The RMS/ACP backend is supplied by the caller
+ * (src/product/product.c) and never touches this file. */
+struct kit_posix_ctx { int fd; };
+
+static int kit_posix_pread(void *ctx, void *buf, size_t n, uint64_t off)
 {
-    r->fd = -1;
+    struct kit_posix_ctx *c = (struct kit_posix_ctx *)ctx;
+    if (lseek(c->fd, (off_t)off, SEEK_SET) < 0)
+        return -1;
+    /* short read is an error at any offset the kit index/payload names */
+    return (read(c->fd, buf, n) == (ssize_t)n) ? 0 : -1;
+}
+
+static void kit_posix_close(void *ctx)
+{
+    struct kit_posix_ctx *c = (struct kit_posix_ctx *)ctx;
+    if (c) {
+        if (c->fd >= 0)
+            close(c->fd);
+        free(c);
+    }
+}
+
+/* Read + validate the header off r->src, caching it in r->hdr. On any failure
+ * the source is closed and released (so the caller never double-frees). */
+static int kit_reader_finish_open(ovmx_kit_reader_t *r)
+{
     memset(&r->hdr, 0, sizeof(r->hdr));
 
-    int fd = open(kitfile, O_RDONLY);
-    if (fd < 0)
-        return OVMX_KIT_READER_ERR_OPEN;
-
-    if (read(fd, &r->hdr, sizeof(r->hdr)) != (ssize_t)sizeof(r->hdr) ||
+    if (r->src.pread(r->src.ctx, &r->hdr, sizeof(r->hdr), 0) != 0 ||
         memcmp(r->hdr.kh_magic, OVMX_KIT_MAGIC, OVMX_KIT_MAGIC_LEN) != 0) {
-        close(fd);
+        ovmx_kit_reader_close(r);
         return OVMX_KIT_READER_ERR_NOTKIT;
     }
 
@@ -30,12 +52,43 @@ int ovmx_kit_reader_open(ovmx_kit_reader_t *r, const char *kitfile)
     struct ovmx_kit_header check = r->hdr;
     check.kh_checksum = 0;
     if (ovmx_kit_checksum(&check, sizeof(check)) != want) {
-        close(fd);
+        ovmx_kit_reader_close(r);
         return OVMX_KIT_READER_ERR_CHKSUM;
     }
-
-    r->fd = fd;
     return OVMX_KIT_READER_OK;
+}
+
+int ovmx_kit_reader_open_source(ovmx_kit_reader_t *r, const ovmx_kit_source_t *source)
+{
+    memset(r, 0, sizeof(*r));
+    if (!source || !source->pread) {
+        if (source && source->close)
+            source->close(source->ctx);
+        return OVMX_KIT_READER_ERR_OPEN;
+    }
+    r->src = *source;
+    return kit_reader_finish_open(r);
+}
+
+int ovmx_kit_reader_open(ovmx_kit_reader_t *r, const char *kitfile)
+{
+    memset(r, 0, sizeof(*r));
+
+    int fd = open(kitfile, O_RDONLY);
+    if (fd < 0)
+        return OVMX_KIT_READER_ERR_OPEN;
+
+    struct kit_posix_ctx *c = (struct kit_posix_ctx *)malloc(sizeof(*c));
+    if (!c) {
+        close(fd);
+        return OVMX_KIT_READER_ERR_NOMEM;
+    }
+    c->fd = fd;
+    r->src.ctx   = c;
+    r->src.pread = kit_posix_pread;
+    r->src.close = kit_posix_close;
+
+    return kit_reader_finish_open(r);
 }
 
 int ovmx_kit_reader_entries(ovmx_kit_reader_t *r, struct ovmx_kit_entry **out)
@@ -48,13 +101,8 @@ int ovmx_kit_reader_entries(ovmx_kit_reader_t *r, struct ovmx_kit_entry **out)
     if (!e)
         return OVMX_KIT_READER_ERR_NOMEM;
 
-    if (lseek(r->fd, (off_t)r->hdr.kh_index_offset, SEEK_SET) < 0) {
-        free(e);
-        return OVMX_KIT_READER_ERR_READ;
-    }
-
     size_t want = (size_t)r->hdr.kh_file_count * sizeof(*e);
-    if (read(r->fd, e, want) != (ssize_t)want) {
+    if (r->src.pread(r->src.ctx, e, want, r->hdr.kh_index_offset) != 0) {
         free(e);
         return OVMX_KIT_READER_ERR_READ;
     }
@@ -76,8 +124,7 @@ int ovmx_kit_reader_read_file(ovmx_kit_reader_t *r,
     if (!buf)
         return OVMX_KIT_READER_ERR_NOMEM;
 
-    if (lseek(r->fd, (off_t)e->ke_offset, SEEK_SET) < 0 ||
-        read(r->fd, buf, e->ke_size) != (ssize_t)e->ke_size) {
+    if (r->src.pread(r->src.ctx, buf, e->ke_size, e->ke_offset) != 0) {
         free(buf);
         return OVMX_KIT_READER_ERR_READ;
     }
@@ -117,8 +164,9 @@ int ovmx_kit_reader_relpath(const char *filespec, char *out, size_t outlen)
 
 void ovmx_kit_reader_close(ovmx_kit_reader_t *r)
 {
-    if (r->fd >= 0) {
-        close(r->fd);
-        r->fd = -1;
-    }
+    if (r->src.close)
+        r->src.close(r->src.ctx);
+    r->src.ctx   = NULL;
+    r->src.pread = NULL;
+    r->src.close = NULL;
 }

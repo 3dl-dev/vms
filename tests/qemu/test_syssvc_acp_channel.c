@@ -8,13 +8,16 @@
  * the executive mount ioctls, exactly the outcome vms-149 owns:
  *
  *   1. $ASSIGN of the boot unit while NO volume is mounted fails honestly with
- *      SS$_NOSUCHDEV -- never a fabricated channel to a volume the executive
- *      does not have (CLAUDE.md Rule 9 / INV-6).
+ *      SS$_DEVNOTMOUNT -- never a fabricated channel to a volume the executive
+ *      does not have (CLAUDE.md Rule 9 / INV-6). This is DISTINCT from the
+ *      SS$_NOSUCHDEV that only an ABSENT /dev/vms yields (vms-03b): reaching the
+ *      $ASSIGN handler proves the executive is present, so "not mounted" must
+ *      not masquerade as "no executive."
  *   2. After $MOUNT records the unit as an ODS-2 volume in the executive-global
  *      table, $ASSIGN returns an EXECUTIVE-backed channel of the file class
  *      (PCB_CHAN_FILE / vms$$chan_is_file), NOT a Linux fd.
  *   3. $DASSGN releases it; the channel is reusable.
- *   4. $DISMOUNT removes the volume, and $ASSIGN is once again SS$_NOSUCHDEV.
+ *   4. $DISMOUNT removes the volume, and $ASSIGN is once again SS$_DEVNOTMOUNT.
  *
  * WHY A MOUNT STEP HERE. On real OpenVMS a file channel is $ASSIGNed to a
  * MOUNTED volume's device (VSI I/O User's Reference, "ACP-QIO Interface"); the
@@ -123,7 +126,7 @@ int main(void)
         return EXIT_SKIP;
     }
 
-    /* --- (1) FAIL-HONEST: no volume mounted -> SS$_NOSUCHDEV --------------
+    /* --- (1) FAIL-HONEST: no volume mounted -> SS$_DEVNOTMOUNT ------------
      * This is the INV-6 heart of the rung: an $ASSIGN of the boot unit when
      * the executive has no mounted volume for it must refuse, never fabricate
      * a channel. The negctl acp-assign-unmounted-fabricates-channel injects
@@ -131,8 +134,8 @@ int main(void)
     chan = 0;
     st = sys$assign(&dev, &chan, 0, NULL);
     /* negctl: acp-assign-unmounted-fabricates-channel */
-    check(st == SS$_NOSUCHDEV,
-          "$ASSIGN of an UNMOUNTED boot unit returns SS$_NOSUCHDEV -- fail-honest, no fabricated channel");
+    check(st == SS$_DEVNOTMOUNT,
+          "$ASSIGN of an UNMOUNTED boot unit returns SS$_DEVNOTMOUNT -- fail-honest, no fabricated channel");
 
     /* --- (2) $MOUNT the boot unit into the executive-global table --------- */
     st = vms_kif_acp_mount(ACP_BOOT_UNIT);
@@ -169,8 +172,8 @@ int main(void)
 
     chan = 0;
     st = sys$assign(&dev, &chan, 0, NULL);
-    check(st == SS$_NOSUCHDEV,
-          "after $DISMOUNT, $ASSIGN of the boot unit is SS$_NOSUCHDEV again (volume gone)");
+    check(st == SS$_DEVNOTMOUNT,
+          "after $DISMOUNT, $ASSIGN of the boot unit is SS$_DEVNOTMOUNT again (volume gone)");
 
     printf("=== test_syssvc_acp_channel: %d passed, %d failed ===\n",
            pass, fail);

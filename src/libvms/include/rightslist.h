@@ -6,16 +6,20 @@
  * hardcoded pair of names in src/vmsdcl/dcl_lexical.c. This is the reader
  * that makes the shipped file the source.
  *
- * TWO KINDS OF IDENTIFIER, TWO SOURCES, ONE COPY OF EACH:
+ * TWO KINDS OF IDENTIFIER, ONE SOURCE (vms-930):
  *
  *   general identifier   %X8xxxxxxx   from RIGHTSLIST.DAT
- *   UIC identifier       [g,m] octal  DERIVED from SYSUAF.DAT
+ *   UIC identifier       [g,m] octal  from RIGHTSLIST.DAT
  *
- * The oracle (docs/oracle/vax73-rights-database.md) shows both kinds in one
- * AUTHORIZE listing, because on VMS AUTHORIZE maintains an account and its
- * UIC identifier together. OVMX has no such coupled path, so keeping the UIC
- * rows in a second file would let two files disagree about one account's
- * UIC -- the defect vms-e60 closed. See the shipped RIGHTSLIST.DAT header.
+ * The oracle (docs/oracle/vax73-rights-database.md §4) shows both kinds in one
+ * AUTHORIZE listing, because on VMS AUTHORIZE maintains an account and its UIC
+ * identifier together IN RIGHTSLIST. OVMX now mirrors that: the seed
+ * (tools/mkrightslist.c) writes a UIC identifier per account alongside the
+ * general identifiers, all in the one WORLD-READABLE file. UIC identifiers are
+ * NO LONGER derived from SYSUAF -- SYSUAF is protected (World:none, vms-109) and
+ * an unprivileged F$IDENTIFIER cannot read it, so resolving identifiers from it
+ * left unprivileged callers unable to resolve any UIC identifier. The single
+ * seed keeps one copy of each account's UIC (the vms-e60 concern).
  *
  * NOT A VMS API. sys$asctoid/sys$idtoasc are the VMS system services for
  * this conversion and OVMX does not implement them; they were deferred in

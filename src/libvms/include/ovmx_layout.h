@@ -210,4 +210,209 @@
  */
 #define VMS_MOUNT_HELPER_PATH "/sbin/vms_mount_helper"
 
+/* ------------------------------------------------------------------ */
+/* Boot-image staging tmpfs — the ACP-read bootstrap bridge (vms-5f0)  */
+/* ------------------------------------------------------------------ */
+/*
+ * ATOMIC FLIP. SYS$DISK is now a genuine Files-11 (ODS-2) volume owned by
+ * the executive ACP; the vmsfs_to_linux_path -> /vms POSIX passthrough is
+ * retired. But the Linux kernel still activates a VMS image the Unix way:
+ * execve() maps a MAIN image's PT_LOAD and opens its PT_INTERP (IMGACT.EXE)
+ * BY POSIX PATH, before any OVMX code runs. The boot chain genuinely
+ * fork()+execve()s a small set of images -- PROVISION.EXE (PID 1),
+ * DCL.EXE (PROVISION), JOB_CONTROL.EXE (RUN/DETACHED), LOGINOUT.EXE
+ * (JOB_CONTROL) -- plus the PT_INTERP IMGACT.EXE the kernel opens for each.
+ * With /vms gone those files have no POSIX home.
+ *
+ * The bridge: PID 1 reads that first-hop image set FROM THE GENUINE ODS-2
+ * VOLUME THROUGH THE EXECUTIVE ACP (vms_kif_acp_* / imgact_acp.c, IO$_ACCESS
+ * + IO$_READVBLK) and writes each into this tmpfs, then every execve target
+ * that names a SYS$SYSTEM image is rewritten here (ovmx_boot_stage_exec_path
+ * below). tmpfs is ONLY the Linux-exec handoff (the chicken-and-egg of
+ * activating image #1); the BYTES come from the ACP, never a /vms read, and
+ * presence is never faked (INV-6). Everything downstream of the first hop --
+ * shareables, data files -- flows through the ACP in-process, not here.
+ *
+ * KERNEL-BINFMT ENDGAME (NOTE, not built here): the deeper end state is a
+ * kernel binfmt handler that activates a VMS image directly from the ACP,
+ * so even the first-hop main image never needs a POSIX file. That removes
+ * this tmpfs entirely. It is POST-boot-flip work; the bridge below is the
+ * boot-path realisation the flip ships.
+ */
+#define OVMX_BOOT_STAGE_DIR  "/run/ovmx-boot"
+
+/*
+ * If `in` names a SYS$SYSTEM image (a ".EXE" whose path passes through the
+ * SYSEXE directory), fill `out` with its boot-staging location
+ * (OVMX_BOOT_STAGE_DIR "/" basename) and return 1. Otherwise return 0 and
+ * leave `out` untouched, so the caller keeps the original path.
+ *
+ * Self-contained: no libc, because this header is included by freestanding
+ * translation units (libvmssys). Callers pass it a resolved Linux path
+ * (…/SYSEXE/NAME.EXE) or an equivalent and use the rewritten path as the
+ * execve target.
+ */
+static inline int ovmx_boot_stage_exec_path(const char *in, char *out,
+                                            unsigned long sz)
+    __attribute__((unused));
+static inline int ovmx_boot_stage_exec_path(const char *in, char *out,
+                                            unsigned long sz)
+{
+    if (!in || !out || sz == 0)
+        return 0;
+
+    /* Case-insensitive uppercase of an ASCII byte (no libc/locale). */
+#define OVMX_BOOT__UP(c) (((c) >= 'a' && (c) <= 'z') ? (char)((c) - 32) : (char)(c))
+
+    /* Length of `in`, and basename = char after the last '/'. */
+    unsigned long len = 0;
+    const char *base = in;
+    for (const char *p = in; *p; p++) {
+        len++;
+        if (*p == '/')
+            base = p + 1;
+    }
+
+    /* Basename must end in ".EXE" -- case-insensitively, because the /vms
+     * passthrough resolves the filename component in LOWERCASE (VMS specs are
+     * case-insensitive) while the genuine ODS-2 volume (and the staged copies)
+     * carry the UPPERCASE name. */
+    unsigned long bl = 0;
+    while (base[bl])
+        bl++;
+    if (bl < 4 || base[bl - 4] != '.' ||
+        OVMX_BOOT__UP(base[bl - 3]) != 'E' ||
+        OVMX_BOOT__UP(base[bl - 2]) != 'X' ||
+        OVMX_BOOT__UP(base[bl - 1]) != 'E')
+        return 0;
+
+    /* Guard: only rewrite images that live in the SYSEXE directory, so a
+     * non-system image path is never redirected into the boot staging dir.
+     * Case-insensitive for the same reason. */
+    int in_sysexe = 0;
+    if (len >= 6) {
+        for (unsigned long i = 0; i + 6 <= len; i++) {
+            if (OVMX_BOOT__UP(in[i])     == 'S' &&
+                OVMX_BOOT__UP(in[i + 1]) == 'Y' &&
+                OVMX_BOOT__UP(in[i + 2]) == 'S' &&
+                OVMX_BOOT__UP(in[i + 3]) == 'E' &&
+                OVMX_BOOT__UP(in[i + 4]) == 'X' &&
+                OVMX_BOOT__UP(in[i + 5]) == 'E') {
+                in_sysexe = 1;
+                break;
+            }
+        }
+    }
+    if (!in_sysexe)
+        return 0;
+
+    /* out = OVMX_BOOT_STAGE_DIR "/" UPPERCASE(basename) (bounded). The staged
+     * copies PID 1 writes carry the volume's UPPERCASE name, so the rewritten
+     * exec target must uppercase the (possibly lowercased) basename to match. */
+    static const char pre[] = OVMX_BOOT_STAGE_DIR "/";
+    unsigned long i = 0, j = 0;
+    while (pre[j] && i + 1 < sz)
+        out[i++] = pre[j++];
+    j = 0;
+    while (base[j] && i + 1 < sz) {
+        char c = base[j++];         /* separate step: the macro re-reads its arg */
+        out[i++] = OVMX_BOOT__UP(c);
+    }
+    out[i] = '\0';
+    return 1;
+#undef OVMX_BOOT__UP
+}
+
+/*
+ * PER-USER PRIVATE STAGING (vms-a86f).
+ *
+ * LOGINOUT setuid()s every VMS session onto its SYSUAF UIC, so a session is a
+ * NON-ROOT process (SYSTEM is UIC [1,4] -> uid 4). The shared boot-staging
+ * directory OVMX_BOOT_STAGE_DIR is root-owned 0755 (PID 1 creates it and
+ * pre-stages the boot images + a fixed utility set into it), so a non-root
+ * session CANNOT write it -- lazily staging an image the boot bridge did not
+ * pre-stage (e.g. SYS$SYSTEM:PARTS.EXE the first time `$ PARTS` runs) fails
+ * EACCES. Making the shared directory world-writable would be a plant hole
+ * (any user could drop an image others activate) and is forbidden.
+ *
+ * The faithful fix: each session lazily stages into a directory IT OWNS,
+ * OVMX_BOOT_STAGE_DIR "/<uid>/", created 0700. This helper computes that
+ * per-user destination for a SYS$SYSTEM image path exactly as
+ * ovmx_boot_stage_exec_path computes the shared one, but with the "<uid>/"
+ * component inserted before the (uppercased) basename. Returns 1 and fills
+ * `out` iff `in` names a SYS$SYSTEM ".EXE"; otherwise returns 0.
+ *
+ * `ovmx_boot_stage_user_dir` fills `out` with just the per-user directory
+ * (OVMX_BOOT_STAGE_DIR "/<uid>"), for the caller to mkdir(0700).
+ *
+ * Freestanding (no libc): the caller passes getuid() as `uid`. imgsrc_map_
+ * staged() in the activator maps EITHER staged shape (shared or per-user) back
+ * to the on-volume path by taking the last path component, so the genuine
+ * image bytes are still read off the ODS-2 volume over the ACP (INV-6).
+ */
+static inline int ovmx_boot_stage_user_dir(char *out, unsigned long sz,
+                                           unsigned long uid)
+    __attribute__((unused));
+static inline int ovmx_boot_stage_user_dir(char *out, unsigned long sz,
+                                           unsigned long uid)
+{
+    if (!out || sz == 0)
+        return 0;
+    static const char pre[] = OVMX_BOOT_STAGE_DIR "/";
+    unsigned long i = 0, j = 0;
+    while (pre[j] && i + 1 < sz)
+        out[i++] = pre[j++];
+    /* decimal uid, no libc */
+    char ub[24];
+    int un = 0;
+    unsigned long u = uid;
+    if (u == 0) {
+        ub[un++] = '0';
+    } else {
+        char tmp[24];
+        int t = 0;
+        while (u && t < (int)sizeof(tmp)) { tmp[t++] = (char)('0' + (u % 10)); u /= 10; }
+        while (t) ub[un++] = tmp[--t];
+    }
+    for (int k = 0; k < un && i + 1 < sz; k++)
+        out[i++] = ub[k];
+    out[i < sz ? i : sz - 1] = '\0';
+    return 1;
+}
+
+static inline int ovmx_boot_stage_user_path(const char *in, char *out,
+                                            unsigned long sz, unsigned long uid)
+    __attribute__((unused));
+static inline int ovmx_boot_stage_user_path(const char *in, char *out,
+                                            unsigned long sz, unsigned long uid)
+{
+    if (!in || !out || sz == 0)
+        return 0;
+
+    /* Reuse the shared computation for the guard (SYSEXE + ".EXE") and the
+     * uppercased basename, then rebuild with the "<uid>/" component. */
+    char shared[512];
+    if (!ovmx_boot_stage_exec_path(in, shared, sizeof shared))
+        return 0;
+
+    /* basename = char after the last '/' of the shared path. */
+    const char *base = shared;
+    for (const char *p = shared; *p; p++)
+        if (*p == '/')
+            base = p + 1;
+
+    unsigned long i = 0;
+    if (!ovmx_boot_stage_user_dir(out, sz, uid))
+        return 0;
+    while (out[i])
+        i++;
+    if (i + 1 < sz)
+        out[i++] = '/';
+    unsigned long j = 0;
+    while (base[j] && i + 1 < sz)
+        out[i++] = base[j++];
+    out[i < sz ? i : sz - 1] = '\0';
+    return 1;
+}
+
 #endif /* __OVMX_LAYOUT_H */

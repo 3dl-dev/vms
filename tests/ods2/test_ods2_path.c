@@ -185,6 +185,17 @@ int main(void)
     st = ods2_wvolume_dir_insert(&wvol, sysexe, "IMAGE.EXE", 1, image_fid);
     CHECK(st == ODS2_OK, "insert IMAGE.EXE;1");
 
+    /* A TEXT file via create_file_stmlf (vms-5f0): verbatim bytes stamped
+     * RFM=STMLF so a line-oriented RMS/DCL reader frames one record per LF,
+     * NOT the whole file as one FIXED 512-byte record. */
+    ods2_fid_t phases_fid;
+    st = ods2_wvolume_create_file_stmlf(&wvol, "PHASES.DAT", 1,
+                                        (const uint8_t *)README_TEXT, readme_len,
+                                        sysexe, &phases_fid);
+    CHECK(st == ODS2_OK, "create PHASES.DAT;1 STMLF verbatim");
+    st = ods2_wvolume_dir_insert(&wvol, sysexe, "PHASES.DAT", 1, phases_fid);
+    CHECK(st == ODS2_OK, "insert PHASES.DAT;1");
+
     /* ---- lay the metadata region onto a real loop image fd ---- */
     char path[] = "/tmp/test_ods2_path.XXXXXX";
     int fd = mkstemp(path);
@@ -276,6 +287,26 @@ int main(void)
           "IMAGE.EXE valid-byte length (efblk/ffbyte) equals the bytes written");
     CHECK(imglen == IMAGE_LEN && memcmp(imgbuf, IMAGE_BLOB, IMAGE_LEN) == 0,
           "IMAGE.EXE bytes round-trip VERBATIM (VAR framing would have corrupted them)");
+
+    /* PHASES.DAT (vms-5f0): the record format MUST be STMLF, not FIXED, AND
+     * the bytes MUST be verbatim. create_file_raw would stamp RFM=FIXED/512,
+     * making a line reader (STARTUP.COM's phase driver) see the whole file as
+     * ONE 512-byte record then EOF -- the boot hang this fixed. STMLF stores
+     * the SAME verbatim bytes (byte-identical to /vms) but frames on LF. */
+    st = ods2_bdev_resolve_file(&bv, sysexe_comps, 3, "PHASES.DAT", 0,
+                                &got_file_fid, filehdr, sizeof(filehdr));
+    CHECK(st == ODS2_OK, "resolve PHASES.DAT");
+    ods2_fh2_t phdr;
+    st = ods2_fh2_parse(filehdr, sizeof(filehdr), &phdr);
+    CHECK(st == ODS2_OK, "parse PHASES.DAT header");
+    CHECK(phdr.fh2_recattr.fat_rtype == ODS2_RTYPE_STMLF,
+          "PHASES.DAT is stamped RFM=STMLF (not FIXED) so line reads frame on LF");
+    uint8_t pbuf[4096];
+    size_t plen = 0;
+    st = ods2_bdev_read_file(&bv, filehdr, pbuf, sizeof(pbuf), &plen);
+    CHECK(st == ODS2_OK, "read PHASES.DAT raw content off the block device");
+    CHECK(plen == readme_len && memcmp(pbuf, README_TEXT, readme_len) == 0,
+          "PHASES.DAT STMLF bytes round-trip VERBATIM (no VAR framing)");
 
     /* Honest failure: a missing directory component and a missing file. */
     const char *bad_comps[] = { "SYS0", "NOPE", "SYSEXE" };

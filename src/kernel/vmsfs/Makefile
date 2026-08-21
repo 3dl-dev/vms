@@ -57,6 +57,7 @@ vmsfs-y := vmsfs_super.o \
            ../../kernel-core/vmsfs/vmsfs_header.o \
            ../../vmsfs/ods2/ods2_reader.o \
            ../../vmsfs/ods2/ods2_writer.o \
+           ../../vmsfs/ods2/ods2_edit.o \
            ../../vmsfs/ods2/ods2_bdev.o \
            ../../vmsfs/ods2/ods2_path.o \
            ../../vmsfs/ods2/ods2_block_kern.o \

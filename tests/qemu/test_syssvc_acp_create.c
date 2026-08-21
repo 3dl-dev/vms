@@ -35,6 +35,11 @@
  *   5. IO$_MODIFY EXTENDS / TRUNCATES / WRITES ATTRIBUTES, and each persists
  *      (re-read exact): extend grows HIBLK, truncate shrinks EOF + frees blocks,
  *      a protection change survives DEACCESS + re-ACCESS.
+ *   7. IO$_MODIFY!IO$M_MOVE RENAMES a file (vms-de7): RENM.TST -> RENM2.TST
+ *      removes the old directory entry, inserts the new, and rewrites the FH2
+ *      ident name while KEEPING the file's FID -- the new name re-ACCESSes, the
+ *      old name is SS$_NOSUCHFILE. This is the create-tmp -> rename atomic-
+ *      replace primitive $SETUAI / AUTHORIZE-seed build on.
  *   6. FAIL-HONEST EDGES (INV-6, never a fabricated success): an unknown $QIO
  *      function is SS$_BADPARAM; CREATE into a DID that is not a directory is
  *      SS$_NOSUCHFILE; DELETE of a name that does not exist is SS$_NOSUCHFILE.
@@ -47,7 +52,8 @@
  *      green) acp_access/acp_rw suites' NOPRIV assertions.
  *
  * ORDERING / ISOLATION. This suite MUTATES its DKA0: fixture COPY: it creates
- * files in [OVMXDIR] under UNIQUE names (CREAT.TST / MODF.TST -- never HELLO.TXT,
+ * files in [OVMXDIR] under UNIQUE names (CREAT.TST / MODF.TST / RENM.TST ->
+ * RENM2.TST -- never HELLO.TXT,
  * which the acp_access / acp_rw suites read) and DELETES every file it creates,
  * so the net directory state is restored (only BITMAP/INDEXF bits cycle,
  * harmlessly). Each shard boots its OWN fresh writable fixture copy
@@ -321,6 +327,111 @@ int main(void)
     /* clean up MODF.TST so the fixture copy is left as found */
     st = delete_file(chan, "MODF.TST", 1, &f);
     check($VMS_STATUS_SUCCESS(st), "IO$_DELETE MODF.TST (restore the fixture directory state)");
+
+    /* --- (7) IO$_MODIFY!IO$M_MOVE renames a file within a directory (vms-de7)
+     * -- the write primitive $SETUAI / AUTHORIZE-seed use for the
+     * create-tmp -> rename atomic-replace pattern (write NAME.DAT;n+1, rename
+     * over the live copy). ---------------------------------------------------- */
+    st = create_file(chan, "RENM.TST", 0, VMS_ACP_M_CREATE, 0, &f);
+    check($VMS_STATUS_SUCCESS(st) && f.out_version == 1,
+          "IO$_CREATE RENM.TST for the RENAME proof");
+
+    memset(&f, 0, sizeof(f));
+    f.chan = chan; f.func = VMS_ACP_FOP_MODIFY; f.modifiers = VMS_ACP_M_MOVE;
+    f.did_num = OVMXDIR_FID_NUM; f.did_seq = 1; f.version = 1;
+    strncpy(f.name, "RENM.TST", VMS_ACP_NAME_SIZE - 1);
+    strncpy(f.new_name, "RENM2.TST", VMS_ACP_NAME_SIZE - 1);
+    /* new_did 0 => the same directory; new_version 0 => highest+1 (== 1). */
+    st = vms_kif_acp_fileop(&f);
+    check($VMS_STATUS_SUCCESS(st) && f.out_version == 1,
+          "IO$_MODIFY!IO$M_MOVE renames RENM.TST -> RENM2.TST (remove old dir "
+          "entry, insert new, rewrite the FH2 ident name; FID kept)");
+
+    /* the NEW name resolves back to the SAME file; the OLD name is gone */
+    st = access_named(chan, "RENM2.TST", 0, 0, &a);
+    check($VMS_STATUS_SUCCESS(st),
+          "IO$_ACCESS RENM2.TST resolves the renamed file (new directory entry)");
+    (void)vms_kif_acp_deaccess(chan);
+    st = access_named(chan, "RENM.TST", 0, 0, &a);
+    check(st == SS$_NOSUCHFILE,
+          "IO$_ACCESS RENM.TST after rename is SS$_NOSUCHFILE (old entry gone)");
+
+    /* rename of a name that does not exist is fail-honest (never fabricated) */
+    memset(&f, 0, sizeof(f));
+    f.chan = chan; f.func = VMS_ACP_FOP_MODIFY; f.modifiers = VMS_ACP_M_MOVE;
+    f.did_num = OVMXDIR_FID_NUM; f.did_seq = 1; f.version = 0;
+    strncpy(f.name, "GHOST.TST", VMS_ACP_NAME_SIZE - 1);
+    strncpy(f.new_name, "GHOST2.TST", VMS_ACP_NAME_SIZE - 1);
+    st = vms_kif_acp_fileop(&f);
+    check(st == SS$_NOSUCHFILE,
+          "IO$_MODIFY!IO$M_MOVE of a nonexistent source name is SS$_NOSUCHFILE");
+
+    /* clean up RENM2.TST so the fixture copy is left as found */
+    st = delete_file(chan, "RENM2.TST", 1, &f);
+    check($VMS_STATUS_SUCCESS(st), "IO$_DELETE RENM2.TST (restore the fixture directory state)");
+
+    /* --- (8) IO$_CREATE a DIRECTORY, then CREATE a file INSIDE it (vms-3a8) --
+     * PRODUCT INSTALL creates SYS0/SYSCOMMON/<bracket> on a freshly INITIALIZEd
+     * target over the ACP, then $CREATEs files there. A directory born over the
+     * ACP must get its single all-0xFF (empty, ODS2_DIR_END) data block, or the
+     * FIRST create inside it fails SS$_DEVICEFULL (acp_dir_mutate needs >= 1
+     * mapped block). This proves that end to end: make [OVMXDIR.TSTSUB], enter a
+     * file in it, resolve it back by name. NEGCTL-relevant: without the empty-dir
+     * block init this whole block reddens. */
+    {
+        uint32_t subdir_fid;
+        struct vms_acp_fileop_args df, cf;
+        struct vms_acp_access_args ia;
+
+        memset(&df, 0, sizeof(df));
+        df.chan = chan; df.func = VMS_ACP_FOP_CREATE; df.modifiers = VMS_ACP_M_CREATE;
+        df.did_num = OVMXDIR_FID_NUM; df.did_seq = 1;
+        df.version = 1;
+        df.attr.filechar = ODS2_FH2_M_DIRECTORY;   /* => a directory file */
+        strncpy(df.name, "TSTSUB.DIR", VMS_ACP_NAME_SIZE - 1);
+        st = vms_kif_acp_fileop(&df);
+        subdir_fid = ((uint32_t)df.fid_num) | ((uint32_t)df.fid_nmx << 16);
+        check($VMS_STATUS_SUCCESS(st) && df.out_version == 1 && subdir_fid > OVMXDIR_FID_NUM,
+              "IO$_CREATE [OVMXDIR]TSTSUB.DIR creates a real directory file over the ACP");
+
+        /* CREATE a file whose DID is the just-created directory. */
+        memset(&cf, 0, sizeof(cf));
+        cf.chan = chan; cf.func = VMS_ACP_FOP_CREATE; cf.modifiers = VMS_ACP_M_CREATE;
+        cf.did_num = df.fid_num; cf.did_seq = df.fid_seq;
+        cf.did_rvn = df.fid_rvn; cf.did_nmx = df.fid_nmx;
+        cf.kind = ODS2_FK_DATA_FIX; cf.version = 1;
+        strncpy(cf.name, "INSUB.TST", VMS_ACP_NAME_SIZE - 1);
+        st = vms_kif_acp_fileop(&cf);
+        check($VMS_STATUS_SUCCESS(st) && cf.out_version == 1,
+              "IO$_CREATE INSUB.TST INSIDE the freshly ACP-created directory succeeds "
+              "(empty-dir block init: no SS$_DEVICEFULL)");
+
+        /* resolve the file back by name under the subdirectory DID. */
+        memset(&ia, 0, sizeof(ia));
+        ia.chan = chan;
+        ia.did_num = df.fid_num; ia.did_seq = df.fid_seq;
+        ia.did_rvn = df.fid_rvn; ia.did_nmx = df.fid_nmx;
+        ia.version = 0;
+        strncpy(ia.name, "INSUB.TST", VMS_ACP_NAME_SIZE - 1);
+        st = vms_kif_acp_access(&ia);
+        check($VMS_STATUS_SUCCESS(st) && ia.out_version == 1,
+              "IO$_ACCESS INSUB.TST by name under the new directory resolves it "
+              "(the directory entry was really written)");
+        (void)vms_kif_acp_deaccess(chan);
+
+        /* clean up so the fixture is left as found: file first, then the dir. */
+        memset(&cf, 0, sizeof(cf));
+        cf.chan = chan; cf.func = VMS_ACP_FOP_DELETE; cf.modifiers = VMS_ACP_M_DELETE;
+        cf.did_num = df.fid_num; cf.did_seq = df.fid_seq;
+        cf.did_rvn = df.fid_rvn; cf.did_nmx = df.fid_nmx;
+        cf.version = 1;
+        strncpy(cf.name, "INSUB.TST", VMS_ACP_NAME_SIZE - 1);
+        st = vms_kif_acp_fileop(&cf);
+        check($VMS_STATUS_SUCCESS(st), "IO$_DELETE INSUB.TST (restore fixture)");
+
+        st = delete_file(chan, "TSTSUB.DIR", 1, &df);
+        check($VMS_STATUS_SUCCESS(st), "IO$_DELETE TSTSUB.DIR (restore fixture directory state)");
+    }
 
     (void)vms_kif_dassgn(chan);
     st = vms_kif_acp_dmount(ODS2_UNIT);

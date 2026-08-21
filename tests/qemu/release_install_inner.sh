@@ -81,6 +81,15 @@
 
 set -uo pipefail
 
+# Never let a write to a DEAD qemu console (a boot that halted/powered off, so
+# the FIFO reader is gone) kill this harness with SIGPIPE before it can report
+# WHY. Without this, a container-2 boot that halts made the whole inner script
+# die silently on the next `send` -- the outer gate then saw a nonzero exit and
+# a near-empty console with no dump_and_die diagnostic (the exact way the R1
+# container-2 boot failure hid its own root cause). Ignoring SIGPIPE lets send()
+# fail harmlessly and the loops below detect the dead qemu and dump the console.
+trap '' PIPE
+
 MODE="${1:-}"
 case "$MODE" in
     install|verify) ;;
@@ -176,6 +185,12 @@ dump_and_die() {
 wake_for() {  # pattern
     local pat="$1" w=0
     until grep -qaF "$pat" "$LOG" 2>/dev/null || [ "$w" -ge 120 ]; do
+        # Stop the moment qemu is gone: a boot that halted/powered off will
+        # never print the pattern, and continuing to send() into a dead FIFO
+        # just wastes the whole 120s budget before the caller's wait_for finally
+        # dumps the console. Bail immediately so dump_and_die runs with the real
+        # halt diagnostic still on the log.
+        kill -0 "$QPID" 2>/dev/null || return 1
         send ''; sleep 1; w=$((w + 1))
     done
 }

@@ -112,6 +112,7 @@ GATE_IDS = [g[0] for g in GATE_EPICS]
 
 # Editorial release notes, tag -> one line. Tags without an entry get a generic note.
 RELEASE_NOTES = {
+    "V0.5": "The authenticity flip: RMS reads and writes genuine Files-11 ODS-2 over the executive ACP (the /vms passthrough retired on the runtime path); binary $UAFDEF SYSUAF + Purdy login proven on x86_64 and Alpha LP64; and the shipped MMK.EXE self-hosts the userland in-guest (TCC->LIBRARIAN->LINK->activate, zero bash, byte-identical). The NetBSD/VAX substrate flip is done, proven over SIMH, and lands as V0.5-1.",
     "V0.4-6": "Real OpenSSH key exchange over the executive network path, genuine ODS-2 read/write/INITIALIZE foundations, cluster rejoin proof, VAX co-release, and a sharded kernel-executive gate.",
     "V0.4-5": "Feature pack marching toward 0.5.",
     "V0.4-4": "Feature pack marching toward 0.5.",

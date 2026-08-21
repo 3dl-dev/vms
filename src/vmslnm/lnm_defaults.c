@@ -120,9 +120,23 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
 
     /*
      * System disk device logical.
-     * SYS$SYSDEVICE is the system disk — everything derives from here.
+     * SYS$SYSDEVICE is the system disk — everything derives from here (SYS$SYSROOT
+     * and every SYS$xxx directory logical compose onto it).
+     *
+     * DEVICE-NATIVE NAMING (vms-47d / vms-104): the system device is DISCOVERED,
+     * not a hard literal. The boot chain / the image activator publish the unit
+     * the system volume is mounted on as OVMX_SYSDEVICE (imgact.c reads the same
+     * variable, rung iii); honour it here so SYS$SYSTEM:/SYS$SHARE: resolve over
+     * the Files-11 ACP to the ACTUAL mounted system volume (e.g. DKA300: on the
+     * self-host toolchain harness) rather than a compile-time DKA0: guess. Absent
+     * the variable, fall back to the historical DKA0: default (unchanged).
      */
-    lnm_seed_system_locating(mgr, "SYS$SYSDEVICE", "DKA0:", LNM_ATTR_TERMINAL);
+    {
+        const char *sysdev = getenv("OVMX_SYSDEVICE");
+        lnm_seed_system_locating(mgr, "SYS$SYSDEVICE",
+                                 (sysdev && sysdev[0]) ? sysdev : "DKA0:",
+                                 LNM_ATTR_TERMINAL);
+    }
 
     /*
      * SYS$SYSROOT -> the system root, as a CONCEALED ROOTED SEARCH LIST, exactly

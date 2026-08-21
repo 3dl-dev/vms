@@ -33,7 +33,7 @@
  *      itself -- $ASSIGNs DKA100: and gets an executive file channel, because it
  *      sees the SAME mounted volume the FIRST process mounted. If the mount were
  *      per-process (the userspace OVMX_SYSDISK_DEV passthrough this rung
- *      deletes), the child's $ASSIGN would be SS$_NOSUCHDEV. Nothing crosses
+ *      deletes), the child's $ASSIGN would fail (SS$_DEVNOTMOUNT). Nothing crosses
  *      between the two processes but the unit NAME and the executive that holds
  *      the mount.
  *
@@ -278,8 +278,8 @@ int main(int argc, char **argv)
     {
         uint16_t chan = 0;
         st = sys$assign(&ods2, &chan, 0, NULL);
-        check(st == SS$_NOSUCHDEV,
-              "after $DISMOUNT, $ASSIGN of " ODS2_UNIT " is SS$_NOSUCHDEV again (volume gone)");
+        check(st == SS$_DEVNOTMOUNT,
+              "after $DISMOUNT, $ASSIGN of " ODS2_UNIT " is SS$_DEVNOTMOUNT again (volume gone)");
     }
 
     printf("=== test_syssvc_acp_mount: %d passed, %d failed ===\n", pass, fail);

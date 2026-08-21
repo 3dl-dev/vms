@@ -24,6 +24,7 @@
 #include "dcl/symbol.h"
 #include "dcl/cdu.h"
 #include "dcl/dcl_cmd.h"
+#include "dcl/dcl_rms.h"          /* vms-481: SET DEFAULT verifies the dir via the ACP */
 #include "dcl/vms_messages.h"
 #include "ssdef.h"
 #include "vms/logical.h"
@@ -37,7 +38,6 @@
 #include "vms_kif.h"
 #include "sysuaf.h"
 #include "uaidef.h"    /* UAI$M_LOCKPWD (vms-c8fa) */
-#include "sha256.h"
 #include "ovmx_accounting.h"
 
 /* Forward declarations for queue subcommands (dcl_cmd_process.c) */
@@ -94,6 +94,79 @@ static uint64_t enforced_privs_held(void)
     return info.cur_privs & VMS_PRV_M_ENFORCED;
 }
 
+/*
+ * set_default_dir_exists - vms-481: verify a SET DEFAULT target directory
+ * through the Files-11 ACP, not stat() on a /vms passthrough. A VMS directory
+ * "DEV:[A.B.C]" is the file "DEV:[A.B]C.DIR" -- so read that .DIR file's header
+ * (rms_file_attr) and confirm it is a directory. The MFD ("[000000]" / no
+ * directory) always exists on a mounted volume; a device/logical-only or bare
+ * name is accepted (resolution is deferred, as on VMS). Returns 1 if the
+ * default may be set, 0 if the directory is genuinely absent.
+ */
+static int set_default_dir_exists(struct dcl_context *ctx, const char *dirspec)
+{
+    /* Executive-absent defer (vms-5f0): with no /dev/vms (host ctest / self-host
+     * container) the ".DIR-file" ACP model below cannot see a directory that
+     * lives as a real POSIX directory on the /vms passthrough. Verify it the
+     * legacy way -- dcl_resolve_path() + stat() for S_ISDIR -- exactly as the
+     * pre-flip SET DEFAULT did. Only runs when RMS itself would defer (INV-6). */
+    if (rms_executive_absent()) {
+        char linux_path[1024];
+        if (dcl_resolve_path(ctx, dirspec, linux_path, sizeof(linux_path)) != 0)
+            return 1;   /* unresolvable -> accept, as VMS defers resolution */
+        size_t n = strlen(linux_path);
+        while (n > 1 && linux_path[n - 1] == '/') linux_path[--n] = '\0';
+        struct stat st;
+        return (stat(linux_path, &st) == 0 && S_ISDIR(st.st_mode)) ? 1 : 0;
+    }
+
+    char eff[1024];
+    if (dcl_rms_effective_spec(ctx, dirspec, eff, sizeof(eff)) != 0)
+        return 1;
+
+    const char *lb = strchr(eff, '[');
+    const char *rb = lb ? strchr(lb, ']') : NULL;
+    if (!lb || !rb || rb <= lb + 1)
+        return 1;   /* device/logical only, or no bracketed dir -- accept */
+
+    char prefix[128];
+    size_t pl = (size_t)(lb - eff);
+    if (pl >= sizeof(prefix)) pl = sizeof(prefix) - 1;
+    memcpy(prefix, eff, pl); prefix[pl] = '\0';   /* "DEV:" */
+
+    char dir[512];
+    size_t dl = (size_t)(rb - lb - 1);
+    if (dl >= sizeof(dir)) dl = sizeof(dir) - 1;
+    memcpy(dir, lb + 1, dl); dir[dl] = '\0';       /* "A.B.C" */
+
+    if (dir[0] == '\0' || strcmp(dir, "000000") == 0)
+        return 1;   /* the MFD */
+
+    /* Split trailing component: parent "A.B", leaf "C". */
+    char parent[512], leaf[256];
+    char *lastdot = strrchr(dir, '.');
+    if (lastdot) {
+        size_t plp = (size_t)(lastdot - dir);
+        if (plp >= sizeof(parent)) plp = sizeof(parent) - 1;
+        memcpy(parent, dir, plp); parent[plp] = '\0';
+        strncpy(leaf, lastdot + 1, sizeof(leaf) - 1); leaf[sizeof(leaf) - 1] = '\0';
+    } else {
+        parent[0] = '\0';
+        strncpy(leaf, dir, sizeof(leaf) - 1); leaf[sizeof(leaf) - 1] = '\0';
+    }
+
+    char dirfile[1024];
+    if (parent[0])
+        snprintf(dirfile, sizeof(dirfile), "%s[%s]%s.DIR", prefix, parent, leaf);
+    else
+        snprintf(dirfile, sizeof(dirfile), "%s[000000]%s.DIR", prefix, leaf);
+
+    struct rms_fileattr fa;
+    if (rms_file_attr(dirfile, &fa) != RMS$_NORMAL)
+        return 0;                 /* the .DIR file is genuinely absent */
+    return fa.is_directory ? 1 : 0;
+}
+
 static int cmd_set_default(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -104,21 +177,11 @@ static int cmd_set_default(struct dcl_command *cmd)
     }
 
     const char *dirspec = cmd->params[1];
-    char linux_path[1024];
 
-    dcl_resolve_path(ctx, dirspec, linux_path, sizeof(linux_path));
-
-    /* Remove trailing slash for stat */
-    char check_path[1024];
-    strncpy(check_path, linux_path, sizeof(check_path) - 1);
-    check_path[sizeof(check_path) - 1] = '\0';
-    size_t cplen = strlen(check_path);
-    if (cplen > 1 && check_path[cplen - 1] == '/') {
-        check_path[cplen - 1] = '\0';
-    }
-
-    struct stat st;
-    if (stat(check_path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+    /* vms-481: the authoritative existence check is the ACP (the real MFD/ODS-2
+     * directory), not stat() on the /vms passthrough. Fail-honest: an absent
+     * directory (or no ACP-mounted SYS$DISK) => %SET-E-... invalid directory. */
+    if (!set_default_dir_exists(ctx, dirspec)) {
         dcl_error("DCL", 2, "DIRECT", "invalid directory - \\%s\\", dirspec);
         return SS$_NOSUCHFILE;
     }
@@ -162,10 +225,9 @@ static int cmd_set_default(struct dcl_command *cmd)
      * surface. */
     vms_pcb_set_default_dir(ctx->default_dir);
 
-    /* Change the process working directory too */
-    if (chdir(check_path) != 0) {
-        /* Non-fatal - VMS default and Linux CWD diverge */
-    }
+    /* vms-481: the DCL default is now purely a VMS "DEV:[DIR]" spec resolved by
+     * the executive/ACP -- no Linux chdir() into a /vms passthrough (that host
+     * mount is retired with the ACP flip). */
 
     return SS$_NORMAL;
 }
@@ -571,10 +633,10 @@ static int dcl_read_noecho_line(char *buf, size_t bufsz)
  * INV-DCL (docs/design-dcl-fidelity.md sec 3): this used to print
  * "%SET-I-PASSWORD, password change not fully implemented" and return
  * SS$_NORMAL without touching SYSUAF -- a success-toned lie for a no-op.
- * It now verifies the old password against the real SYSUAF hash
- * (sysuaf_authenticate()) and, on match, writes a real new hash back through
- * the ONE shared writer (sysuaf_write_record() -> sysuaf_format_record(),
- * vms-9b7/INV-1) -- the same record format AUTHORIZE and $SETUAI use.
+ * It now verifies the old password against the real SYSUAF record
+ * (sysuaf_authenticate(), binary + Purdy) and, on match, writes a real new
+ * Purdy hash back through the ONE shared binary writer (sysuaf_set_password ->
+ * sysuaf_write_record, vms-d92) -- the same record AUTHORIZE and $SETUAI use.
  *
  * /SECONDARY and /SYSTEM are real VMS features OVMX does not implement
  * (no secondary-password field in sysuaf_record_t; no per-node system-
@@ -736,14 +798,18 @@ static int cmd_set_password(struct dcl_command *cmd)
     }
 #undef OVMX_PWDMINIMUM_DEFAULT
 
-    /* Real hash, real rewrite -- the same SHA256 scheme sysuaf_authenticate()
-     * checks against and the same shared writer AUTHORIZE/$SETUAI use
-     * (sysuaf_write_record() -> sysuaf_format_record(), INV-1: one format,
-     * one writer). */
-    char new_hash[65];
-    sha256_hex((const uint8_t *)new_pw, new_len, new_hash);
-    strncpy(rec.password_hash, new_hash, sizeof(rec.password_hash) - 1);
-    rec.password_hash[sizeof(rec.password_hash) - 1] = '\0';
+    /* Real Purdy hash, real rewrite (vms-d92 atomic flip). sysuaf_set_password
+     * computes the genuine UAI$C_PURDY_S quadword from (new_pw, this account's
+     * username, a fresh salt) into rec.raw's password area; sysuaf_write_record
+     * persists the binary $UAFDEF record in place through the ONE binary writer
+     * AUTHORIZE/$SETUAI use (ovmx_sysuaf_store_user -> $UPDATE over the ACP).
+     * No SHA-256, no ASCII. rec was read by sysuaf_lookup, so every other field
+     * of the record is already present -- only the password changes. */
+    if (sysuaf_set_password(&rec, new_pw) != 0) {
+        dcl_error("UAF", 2, "WRITEFAIL",
+                  "unable to hash new password - password not changed");
+        return SS$_FILACCERR;
+    }
 
     if (sysuaf_write_record(&rec) != 0) {
         dcl_error("UAF", 2, "WRITEFAIL",

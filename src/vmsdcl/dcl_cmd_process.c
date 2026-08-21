@@ -38,6 +38,7 @@
 #include "ovmx_status.h"
 #include "vms_kif.h"
 #include "imgact_activate.h"
+#include "dcl/dcl_rms.h"    /* rms_file_attr / dcl_rms_attr: ACP image probe (vms-5f0) */
 
 int cmd_wait(struct dcl_command *cmd)
 {
@@ -1302,8 +1303,180 @@ static int dcl_highest_version(const char *path, char *out, size_t sz)
     return 1;
 }
 
-int dcl_resolve_activatable(const char *linux_path, char *resolved, size_t sz)
+#if defined(__linux__)
+/* True if the final name component of a VMS filespec already carries a ".type"
+ * (so ".EXE" must NOT be appended). Scans past the device/directory. */
+static int dcl_spec_has_type(const char *spec)
 {
+    const char *base = spec;
+    for (const char *p = spec; *p; p++)
+        if (*p == ':' || *p == ']' || *p == '>' || *p == '/')
+            base = p + 1;
+    return strchr(base, '.') != NULL;
+}
+
+/*
+ * dcl_resolve_activatable_acp - resolve an image spec to an activatable path
+ * THROUGH the executive Files-11 (ODS-2) ACP (vms-5f0, epic vms-208 atomic flip).
+ *
+ * With the /vms passthrough retired, an image lives only on the mounted ODS-2
+ * SYS$DISK. This probes its presence the VMS way: dcl_rms_attr()/rms_file_attr()
+ * compose the ODS-2 search-list candidates (SYS$SYSTEM: -> [SYS0.SYSEXE] +
+ * [SYS0.SYSCOMMON.SYSEXE]) and IO$_ACCESS each over /dev/vms -- the SAME
+ * presence path RMS $OPEN and DIRECTORY/FULL already use -- never opendir()/
+ * access() on /vms.
+ *
+ * On a hit, `resolved` is filled with the path DCL / $CREPRC / IMGACT activate
+ * from: the boot-staged copy of a first-hop SYS$SYSTEM image (the POSIX home
+ * the Linux kernel execve's; IMGACT still reads the GENUINE bytes off the
+ * volume via the ACP, imgsrc_map_staged), else the on-volume path IMGACT reads
+ * in-process via the ACP. $CREPRC's own ovmx_boot_stage_exec_path rewrite maps
+ * an on-volume SYS$SYSTEM path to the staged copy too, so RUN/DETACHED works
+ * either way.
+ *
+ * Returns 1 when resolved via the ACP. Returns 0 with *acp_usable = 1 when the
+ * ACP is present but the image is genuinely absent (the caller reports an
+ * honest %DCL-E-IVIMAGE; NO /vms fallback -- INV-6). Returns 0 with
+ * *acp_usable = 0 when no ACP-mounted SYS$DISK is reachable (no /dev/vms -- the
+ * plain host ctest), so the caller runs the legacy /vms resolver unchanged.
+ */
+static int dcl_resolve_activatable_acp(struct dcl_context *ctx,
+                                       const char *vms_spec,
+                                       const char *linux_path,
+                                       char *resolved, size_t sz,
+                                       int *acp_usable)
+{
+    *acp_usable = 0;
+
+    /* NO EXECUTIVE => this ACP path does not apply: defer to the legacy resolver
+     * (vms-104). With /dev/vms absent (the plain host ctest / the BUILD.COM S3.2
+     * host DCL driver), rms_file_attr answers from a POSIX stat, NOT the ACP --
+     * so dcl_rms_attr would report RMS$_NORMAL for SYS$SYSTEM:TCC.EXE and this
+     * function would then try to stage it OVER an ACP that isn't there and fail,
+     * turning a resolvable host-path image into a false %DCL-E-IVIMAGE. The flip
+     * only retires /vms on the RUNTIME path (real /dev/vms); the legacy
+     * SYS$SYSTEM:/SYS$SHARE: -> /vms POSIX resolution below is CORRECT and
+     * expected when no executive is present (INV-6 governs the ACP-live path,
+     * enforced by the ACP branch, not this host-defer). */
+    if (rms_executive_absent()) {
+        *acp_usable = 0;
+        return 0;
+    }
+
+    const char *exts[2] = { "", ".EXE" };
+    int nexts = dcl_spec_has_type(vms_spec) ? 1 : 2;
+
+    for (int e = 0; e < nexts; e++) {
+        char trial[1056];
+        snprintf(trial, sizeof(trial), "%s%s", vms_spec, exts[e]);
+
+        struct rms_fileattr at;
+        uint32_t st = dcl_rms_attr(ctx, trial, &at);
+
+        if (st == RMS$_NORMAL) {
+            *acp_usable = 1;
+            /* on-volume Linux path carrying the type we matched with */
+            char lp[1024];
+            snprintf(lp, sizeof(lp), "%s%s", linux_path, exts[e]);
+            char staged[1024];
+            /* (1) Booted runtime: the first-hop SYS$SYSTEM image was already
+             * read off the volume over the ACP and staged to a POSIX file by
+             * ovmx_init's boot bridge -- use it directly. */
+            if (ovmx_boot_stage_exec_path(lp, staged, sizeof(staged)) &&
+                access(staged, X_OK) == 0) {
+                strncpy(resolved, staged, sz - 1);
+                resolved[sz - 1] = '\0';
+                return 1;
+            }
+            /* (2) Not boot-staged (a test harness, or a tool outside the boot
+             * set such as the self-host TCC/LIBRARIAN/LINK.EXE, or an app like
+             * SYS$SYSTEM:PARTS.EXE the first time `$ PARTS` runs): read the
+             * GENUINE bytes off the ODS-2 volume THROUGH THE ACP now and stage
+             * them to a POSIX home (the same read the boot bridge does, done
+             * lazily). The bytes come from IO$_READVBLK over /dev/vms, NEVER a
+             * /vms passthrough read (vms-104, Rule 9 / INV-6). A native musl
+             * bootstrap tool (no OVMX symbol vector) is then execve()d off this
+             * staged copy by dcl_activate_image's fork fallback; a real OVMX
+             * symbol-vector image staged the same way is IMGACT-activated (its
+             * PT_INTERP is opened by the kernel, imgsrc_map_staged re-reads it
+             * over the ACP) -- imgact_activate makes that native-vs-image call
+             * from the ELF, so ONE genuine ACP-sourced copy serves both.
+             *
+             * PER-USER PRIVATE STAGING (vms-a86f). LOGINOUT setuid()s a session
+             * onto its SYSUAF UIC, so this runs as a NON-ROOT process (SYSTEM is
+             * uid 4). The shared OVMX_BOOT_STAGE_DIR is root-owned 0755, so a
+             * non-root session cannot create a file in it -- lazily staging into
+             * the shared directory failed EACCES, which is exactly why the PARTS
+             * demo went red. Stage instead into OVMX_BOOT_STAGE_DIR "/<uid>/", a
+             * directory the activating process OWNS (created 0700): secure (no
+             * world-writable plant hole) and writable by the session. A copy a
+             * prior invocation already staged there is reused. (The deeper end
+             * state is executive-mediated staging, vms-040; per-user-private is
+             * the faithful, secure, in-scope fix.) */
+            char user_dir[1024];
+            if (ovmx_boot_stage_user_path(lp, staged, sizeof(staged),
+                                          (unsigned long)getuid())) {
+                /* Reuse an already-staged per-user copy (repeat activation). */
+                if (access(staged, X_OK) == 0) {
+                    strncpy(resolved, staged, sz - 1);
+                    resolved[sz - 1] = '\0';
+                    return 1;
+                }
+                /* Ensure the shared root (best-effort; PID 1 makes it) and the
+                 * per-user private subdirectory (0700, owned by this uid). */
+                (void)mkdir(OVMX_BOOT_STAGE_DIR, 0755);   /* EEXIST/EACCES fine */
+                if (ovmx_boot_stage_user_dir(user_dir, sizeof(user_dir),
+                                             (unsigned long)getuid()))
+                    (void)mkdir(user_dir, 0700);          /* EEXIST is fine */
+                if (dcl_rms_stage(ctx, trial, staged) == RMS$_NORMAL &&
+                    access(staged, X_OK) == 0) {
+                    strncpy(resolved, staged, sz - 1);
+                    resolved[sz - 1] = '\0';
+                    return 1;
+                }
+            }
+            /* ACP confirmed the image is present but it could not be staged off
+             * the volume. Fail HONESTLY -- do NOT read it off /vms (INV-6). The
+             * caller reports %DCL-E-IVIMAGE. */
+            return 0;
+        }
+        if (st == RMS$_ACC) {
+            /* The ACP could not answer at all (no /dev/vms, no ACP-mounted
+             * SYS$DISK) -- NOT a "file absent" answer. Defer to the legacy
+             * resolver so the plain host ctest keeps working. */
+            *acp_usable = 0;
+            return 0;
+        }
+        /* RMS$_FNF (and other per-file errors): the ACP answered and this
+         * spelling is absent. Keep probing (the .EXE default), and remember the
+         * ACP is present so all-miss fails honestly with no /vms fallback. */
+        *acp_usable = 1;
+    }
+    return 0;   /* ACP present, every spelling absent: honest miss (INV-6) */
+}
+#endif /* __linux__ */
+
+int dcl_resolve_activatable(struct dcl_context *ctx, const char *vms_spec,
+                            const char *linux_path, char *resolved, size_t sz)
+{
+#if defined(__linux__)
+    /* ATOMIC FLIP (vms-5f0): the image lives on the genuine ODS-2 SYS$DISK, not
+     * the retired /vms passthrough. When the executive Files-11 ACP is present,
+     * resolve THROUGH it and NEVER fall back to a /vms opendir()/access() probe
+     * (INV-6). Only when no ACP-mounted SYS$DISK is reachable (no /dev/vms, the
+     * plain host ctest) does the legacy resolver below run. */
+    {
+        int acp_usable = 0;
+        if (dcl_resolve_activatable_acp(ctx, vms_spec, linux_path,
+                                        resolved, sz, &acp_usable))
+            return 1;
+        if (acp_usable)
+            return 0;   /* ACP present, image genuinely absent: honest miss */
+    }
+#else
+    (void)ctx; (void)vms_spec;
+#endif
+
     if (dcl_try_readable(linux_path, resolved, sz)) return 1;
 
     char cand[1024];
@@ -1665,7 +1838,8 @@ int dcl_exec_foreign_command(struct dcl_context *ctx, struct dcl_command *cmd,
     /* Resolve to an activatable path: fills a missing .EXE type and the RMS
      * ;version, and accepts a readable OVMX image (not just a +x file) so a
      * freshly linked image activates -- the RUN path uses the same resolver. */
-    if (dcl_resolve_activatable(linux_path, resolved_path, sizeof(resolved_path))) {
+    if (dcl_resolve_activatable(ctx, image_spec, linux_path,
+                                resolved_path, sizeof(resolved_path))) {
         strncpy(linux_path, resolved_path, sizeof(linux_path) - 1);
         linux_path[sizeof(linux_path) - 1] = '\0';
     } else {
@@ -1768,7 +1942,8 @@ int cmd_run(struct dcl_command *cmd)
 
     /* Resolve to an activatable path (fills .EXE, resolves the RMS ;version,
      * accepts a readable OVMX image) -- shared with foreign-command dispatch. */
-    if (dcl_resolve_activatable(linux_path, resolved_path, sizeof(resolved_path))) {
+    if (dcl_resolve_activatable(ctx, cmd->params[0], linux_path,
+                                resolved_path, sizeof(resolved_path))) {
         strncpy(linux_path, resolved_path, sizeof(linux_path) - 1);
         linux_path[sizeof(linux_path) - 1] = '\0';
     } else {

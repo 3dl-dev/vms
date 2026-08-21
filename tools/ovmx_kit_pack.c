@@ -53,6 +53,7 @@
 #include "ovmx_kit_format.h"
 #include "ovmx_identity.h"
 #include "ovmx_kit_reader.h"
+#include "vmsfs/ods2.h"     /* ods2_class_fileprot: genuine per-file VMS protection */
 
 /* ================================================================
  * Shared helpers
@@ -322,7 +323,23 @@ static int do_pack(const char *kitfile, const char *stagedir,
         struct pack_entry *pe = &l.items[i];
         struct ovmx_kit_entry *ke = &entries[i];
         snprintf(ke->ke_filespec, sizeof(ke->ke_filespec), "%s", pe->filespec);
-        ke->ke_protection = OVMX_KIT_PROT_DEFAULT;
+        /* vms-738: record each file's GENUINE per-file-class VMS protection
+         * (ods2_class_fileprot -- the same name-keyed mapping the ODS-2 writer
+         * and the executive ACP apply when a file is created with no explicit
+         * protection), keyed on the file's own NAME.TYPE, instead of one flat
+         * OVMX_KIT_PROT_DEFAULT for every entry. PRODUCT INSTALL (product.c)
+         * stamps THIS value into the installed file's fh2_fileprot over the ACP,
+         * so an ordinary image lands World:RE (0xAA00) while a would-be
+         * SYSUAF.DAT-class file lands World-denied -- never a flat default that
+         * a special-class file would leak through. fidnum is unknown at pack
+         * time; pass a non-reserved sentinel so payload files are never
+         * misclassified as reserved volume metadata (fidnum <= ODS2_RESFILES). */
+        {
+            const char *nt = strrchr(pe->filespec, ']');
+            nt = nt ? nt + 1 : pe->filespec;
+            ke->ke_protection = ods2_class_fileprot(nt, /*is_dir*/0,
+                                                    ODS2_RESFILES + 1u);
+        }
         ke->ke_uic_group  = OVMX_KIT_UIC_GROUP_DEFAULT;
         ke->ke_uic_member = OVMX_KIT_UIC_MEMBER_DEFAULT;
         ke->ke_flags  = pe->seed_once ? OVMX_KIT_ENTRY_FLAG_SEED_ONCE : 0;

@@ -29,9 +29,15 @@ set(IMGACT_ARCHDIR "${CMAKE_CURRENT_SOURCE_DIR}/arch/${IMGACT_ARCH}")
 # provides the libc shim (open/fstat/mmap/munmap/close/strncpy/strncmp) its
 # calls need. Wires known_images_lookup() into the DT_NEEDED search path
 # (bead vms-30d).
+# imgact_acp.c (bead vms-3e8e) is compiled directly as an extra source of THIS
+# freestanding target, the same way known_images.c is: it reads images over the
+# executive Files-11 ACP (IO$_ACCESS + IO$_READVBLK on /dev/vms) instead of
+# open()/pread() on a /vms POSIX path. imgact.c provides its three host
+# primitives (imgact_acp_dev_open/close/ioctl) on the raw syscall layer.
 add_executable(imgact
     imgact.c
     known_images.c
+    imgact_acp.c
     ${IMGACT_ARCHDIR}/start.S
 )
 
@@ -42,7 +48,8 @@ add_executable(imgact
 # -I../libvms/include) so the CMake OVMX_IMGACT build sees the same headers.
 target_include_directories(imgact PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmslink/include
-    ${CMAKE_SOURCE_DIR}/src/libvms/include)
+    ${CMAKE_SOURCE_DIR}/src/libvms/include
+    ${CMAKE_SOURCE_DIR}/src/kernel)   # vms_ioctl.h + vms_acp.h (ACP arg structs)
 
 target_compile_options(imgact PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-std=gnu11>

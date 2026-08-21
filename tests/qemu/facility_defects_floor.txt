@@ -413,4 +413,10 @@
 # pollable fd for a BGn: socket. Anchors test_syssvc_bgsock_poll (poll() on the
 # fd blocks until the loopback peer sends, over a real /dev/vms); the mutation
 # makes .poll report readable unconditionally so poll() fires before data.
-104
+# Raised to 105 by vms-a86f multiuser-stage-shared-not-peruser -- per-user
+# private image staging so a non-root VMS session (LOGINOUT setuid()s SYSTEM to
+# uid 4) can activate a SYS$SYSTEM image over the ACP without writing the
+# root-owned shared /run/ovmx-boot. Anchors test_syssvc_multiuser_stage; the
+# mutation redirects the per-user stage back into the shared root-owned dir so
+# the non-root open(O_CREAT) fails EACCES.
+105

@@ -243,4 +243,17 @@ fi
 ( cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /initramfs.cpio.gz ) || exit 4
 echo "Re-staged initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')"
 
+# Per-facility negative controls run the ENTIRE suite set in ONE VM per defect
+# (check 5's isolation attribution must see every suite, so suites cannot be
+# sharded across VMs the way the positive kernel-executive job does). The 0.5
+# flip grew that set ~76 -> ~97 suites, and a mutation that makes event-flag
+# $WAITFRs wait out their timeouts pushes the full run past run_tests.sh's
+# default 600s wall under CI contention -- the run truncates at ~75/97 suites
+# ("harness never reached FINAL RESULTS"), a gate FAIL even though the control
+# reddened correctly. Give this full-suite path a bigger wall (1800s) (the sanctioned
+# "raise TIMEOUT, never drop a suite" fix; run_tests.sh honours KE_WALL_TIMEOUT
+# and documents the ~776s extrapolation). The positive job keeps the 600s
+# default -- it shards suites, so its per-VM run is a small fraction of this.
+export KE_WALL_TIMEOUT="${KE_WALL_TIMEOUT:-1800}"
+
 exec /run_tests.sh

@@ -1,0 +1,61 @@
+# tools/k3s/namespace.yaml -- the ovmx-ci namespace and its guardrails.
+#
+# BUILD/TEST TOOLING ONLY (CLAUDE.md Rule 9). This namespace exists so heavy
+# OVMX builds/tests run on the k3s rail without ever starving the shared
+# tenants (meilisearch in enterprise-ai, the mm-* batch jobs, the GPU rail).
+#
+# The ResourceQuota caps the WHOLE namespace at ~6 CPU / 40Gi of REQUESTS, so
+# the sum of everything CI schedules can never exceed that regardless of how
+# many run-on-rail.sh jobs pile up -- a second concurrent job that would push
+# the total over the cap is refused admission and queues, rather than being
+# packed onto the node beside a tenant workload.
+#
+# The LimitRange gives every CI container a sane default request/limit (so a
+# manifest that forgets to set them still counts against the quota) and a hard
+# per-container ceiling that keeps a single job from claiming the entire cap.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ovmx-ci
+  labels:
+    app.kubernetes.io/managed-by: ovmx-run-on-rail
+    ovmx.dev/purpose: build-test-tooling
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: ovmx-ci-quota
+  namespace: ovmx-ci
+spec:
+  # Generous headroom (operator: rail capacity is ample, don't let the quota
+  # gate a wave of parallel jobs). Actual concurrency is still bounded by
+  # k3s-worker's real free CPU -- the scheduler queues what doesn't fit rather
+  # than failing it -- so this cap only exists to keep a runaway from claiming
+  # the entire node against the shared tenants, not to serialize normal CI.
+  hard:
+    requests.cpu: "12"
+    requests.memory: 96Gi
+    limits.cpu: "64"
+    limits.memory: 192Gi
+    pods: "16"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: ovmx-ci-limits
+  namespace: ovmx-ci
+spec:
+  limits:
+    - type: Container
+      # Default request/limit applied to a container that names neither.
+      defaultRequest:
+        cpu: "2"
+        memory: 4Gi
+      default:
+        cpu: "4"
+        memory: 12Gi
+      # Hard ceiling: no single CI container may claim the whole namespace cap.
+      max:
+        cpu: "6"
+        memory: 32Gi

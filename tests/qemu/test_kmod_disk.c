@@ -67,7 +67,8 @@ int main(void)
     uint32_t maj = 0, min = 0, status;
     uint32_t vda_maj = 0, vda_min = 0, vdb_maj = 0, vdb_min = 0;
     uint32_t vdc_maj = 0, vdc_min = 0, vdd_maj = 0, vdd_min = 0;
-    int have_vda, have_vdb, have_vdc, have_vdd;
+    uint32_t vde_maj = 0, vde_min = 0;
+    int have_vda, have_vdb, have_vdc, have_vdd, have_vde;
 
     printf("=== test_kmod_disk: the executive names the machine's disks ===\n");
 
@@ -83,15 +84,19 @@ int main(void)
     }
 
     /* The ground truth, read independently of the executive. run_tests.sh
-     * attaches four virtio disks, so all four nodes must be present in devtmpfs. */
+     * attaches FIVE virtio disks (vms-3e8e added vde -> DKA400:, the ODS-2 image
+     * volume the IMGACT-over-ACP test mounts), so all five nodes must be present
+     * in devtmpfs. */
     have_vda = (stat_devt("/dev/vda", &vda_maj, &vda_min) == 0);
     have_vdb = (stat_devt("/dev/vdb", &vdb_maj, &vdb_min) == 0);
     have_vdc = (stat_devt("/dev/vdc", &vdc_maj, &vdc_min) == 0);
     have_vdd = (stat_devt("/dev/vdd", &vdd_maj, &vdd_min) == 0);
+    have_vde = (stat_devt("/dev/vde", &vde_maj, &vde_min) == 0);
     CHECK(have_vda, "/dev/vda is present (first virtio disk attached to the guest)");
     CHECK(have_vdb, "/dev/vdb is present (second virtio disk attached to the guest)");
     CHECK(have_vdc, "/dev/vdc is present (third virtio disk attached to the guest)");
     CHECK(have_vdd, "/dev/vdd is present (fourth virtio disk attached to the guest)");
+    CHECK(have_vde, "/dev/vde is present (fifth virtio disk attached to the guest)");
 
     /* --------------------------------------------------------------
      * 1. DKA0: exists in the executive's table -- nothing in this
@@ -151,14 +156,28 @@ int main(void)
           "DKA300: backing dev_t matches /dev/vdd as userspace stat()s it");
 
     /* --------------------------------------------------------------
-     * 5. Negative controls -- a resolver that always succeeded would be
+     * 5. DKA400: is the fifth disk, vde (the generated ODS-2 image volume the
+     *    IMGACT-over-ACP test mounts; vms-3e8e added it to run_tests.sh).
+     * -------------------------------------------------------------- */
+    memset(backing, 0, sizeof(backing));
+    maj = min = 0;
+    status = vms_kif_disk_resolve("DKA400:", backing, sizeof(backing), &maj, &min);
+    CHECK(status == SS_NORMAL,
+          "DKA400: exists in the executive's table (the fifth disk)");
+    CHECK(strcmp(backing, "vde") == 0,
+          "DKA400: backing device is vde (the executive's enumeration)");
+    CHECK(have_vde && maj == vde_maj && min == vde_min,
+          "DKA400: backing dev_t matches /dev/vde as userspace stat()s it");
+
+    /* --------------------------------------------------------------
+     * 6. Negative controls -- a resolver that always succeeded would be
      *    indistinguishable from one that works.
      * -------------------------------------------------------------- */
-    /* Four disks are attached, so there is no fifth unit. */
+    /* Five disks are attached (vda..vde), so there is no sixth unit. */
     memset(backing, 0, sizeof(backing));
-    status = vms_kif_disk_resolve("DKA400:", backing, sizeof(backing), &maj, &min);
+    status = vms_kif_disk_resolve("DKA500:", backing, sizeof(backing), &maj, &min);
     CHECK(status == SS_NOSUCHDEV,
-          "a disk unit that does not exist reports SS$_NOSUCHDEV (no fifth disk attached)");
+          "a disk unit that does not exist reports SS$_NOSUCHDEV (no sixth disk attached)");
 
     /* OPA0: exists, but it is a TERMINAL -- it has no backing block device. */
     memset(backing, 0, sizeof(backing));

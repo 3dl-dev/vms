@@ -2278,13 +2278,27 @@ jobs:
           #        vms-pv1): the suite MUST require a real /dev/vms and MUST
           #        exit 77 when it is absent, never 0.
           #
-          #   test_kmod_vmsfs*   -> rc MUST be 0.
-          #        POSITIVE control paired with the negatives: vmsfs has no
-          #        dependency on vms.ko, so it must still fully pass with the
-          #        executive absent. If the harness were failing
-          #        indiscriminately (gutted, always-fail, boot broken), this
+          #   test_kmod_vmsfs* | test_kmod_ods2_codec -> rc MUST be 0.
+          #        POSITIVE control paired with the negatives: these depend on
+          #        vmsfs.ko (which init.sh insmods even in NEGATIVE_CONTROL),
+          #        NOT on vms.ko / the executive, so they must still fully pass
+          #        with the executive absent. If the harness were failing
+          #        indiscriminately (gutted, always-fail, boot broken), these
           #        would fail too and every negative assertion here would be
           #        proving nothing about the executive specifically.
+          #        test_kmod_ods2_codec (vms-dcd) is here for the same reason as
+          #        the vmsfs suites and by its own design: it mounts the real-VAX
+          #        ODS-2 fixture through the "ods2ro" filesystem IN vmsfs.ko and
+          #        byte-compares a kernel-resident-codec read against a committed
+          #        golden -- it opens no /dev/vms and reaches no vms_kif entry
+          #        point (its only ioctl is LOOP_SET_FD), and its own header
+          #        states it follows test_kmod_vmsfs_blkdev's skip convention.
+          #        Leaving it in the catch-all below (rc MUST be nonzero) was the
+          #        vms-1d9-documented miscategorisation: a legitimately
+          #        executive-INDEPENDENT suite the gate wrongly demanded fail.
+          #        Its executive-facing teeth live in the OTHER gate -- the
+          #        per-facility negative control's ods2-read-content-vbn defect,
+          #        which reddens THIS suite against a real codec mutation.
           #
           #   every other test_kmod_* -> rc MUST be nonzero.
           #        Raw-ioctl executive tests; they cannot pass without
@@ -2383,10 +2397,10 @@ jobs:
             $suite_fails"
                 fi
                 ;;
-              test_kmod_vmsfs*)
+              test_kmod_vmsfs*|test_kmod_ods2_codec)
                 if [ "$rc" != "0" ]; then
                   BAD="$BAD
-            $suite: rc=$rc -- expected 0. vmsfs does not depend on vms.ko, so it must still pass with the executive absent; if it fails, the harness is failing indiscriminately and the negative assertions prove nothing."
+            $suite: rc=$rc -- expected 0. This suite depends on vmsfs.ko (not vms.ko/the executive), so it must still pass with the executive absent; if it fails, the harness is failing indiscriminately and the negative assertions prove nothing."
                 fi
                 ;;
               *)
@@ -3348,24 +3362,56 @@ jobs:
     # 2026-08-04); a shard's sequential work is a small fraction of that, so
     # 30m leaves headroom against the SAME per-defect variance without
     # resurrecting a 60m+ job.
-    timeout-minutes: 30
+    #
+    # SHARD-COUNT BUMP 6 -> 10 (0.5 integration). MEASURED on CI run
+    # 32447601184 (work/vms-0.5-final-dryrun): with 6 shards (~20 defects
+    # each) FIVE of six shards were KILLED at exactly 30.2m -- they hit THIS
+    # timeout-minutes, they did not fail (conclusion "cancelled", not
+    # "failure"). Shard 3 alone COMPLETED, at 24.5m, and passed -- so the
+    # manifest/gate is sound; what changed is that the flip + cascade grew the
+    # suite set (~76 -> ~97 suites), so every per-defect harness boot runs more
+    # suites and 20 defects/shard no longer fit in 30m under the 95-job run's
+    # runner contention. This is a capacity fact, NOT a facility_defects.sh
+    # inconsistency (coverage/selftest pass; shard 3 proved the defects redden).
+    # 120 defects / 10 shards = ~12/shard: at shard 3's measured ~1min/defect +
+    # ~5m fixed build+positive-control cost that is ~17m, comfortably inside 30m
+    # even at the first-batch contention that killed the 20-defect shards. The
+    # partition below is `NR % job-total`, so this is the ONLY line to touch --
+    # nothing is hand-maintained. Revisit as the manifest grows (raise the
+    # shard count, never delete a defect to fit).
+    #
+    # 30 -> 50 (0.5 integration, paired with the KE_WALL_TIMEOUT raise in
+    # tests/qemu/inject_and_run.sh). Splitting to 10 shards fixed the run #1
+    # 30m timeout, but that UNMASKED a per-defect truncation the outer timeout
+    # had hidden: with ~97 suites now, a mutation that makes event-flag $WAITFRs
+    # wait out their timeouts (eflag-readef/eflag-dacefc/lnm-manager-delete)
+    # pushes that defect's FULL-suite boot past the old 600s inner wall under CI
+    # contention -- "harness never reached FINAL RESULTS", a gate FAIL even
+    # though the control reddened. inject_and_run.sh now gives the full-suite
+    # boot an 1800s wall so it COMPLETES; a defect that used to fail at 600s now
+    # runs ~13m instead, so a shard holding one or two of them needs headroom
+    # past 30m. ~12 defects/shard, ~1min each for the fast majority + up to
+    # ~2-3 slow ones at ~13-20m + ~5m fixed build/positive-control fits in 50m.
+    # A genuine hang still surfaces: the 1800s inner wall fails the defect, and
+    # this 50m outer bound backstops a wedged shard.
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       # SHARD-BALLOON FIX (vms-86a part 2). MEASURED: the main-push run on
       # d2d76fc failed on THREE shards AT ONCE (0/6, 1/6, 5/6) -- every shard
       # runs QEMU + fork/pipe/multi-process tests, and with all 6 unbounded
       # (GitHub's default matrix concurrency), they compete for host
-      # resources (CPU for 6 concurrent QEMU guests, IPC timing) alongside
+      # resources (CPU for concurrent QEMU guests, IPC timing) alongside
       # whatever else this workflow is already running. That's resource
       # starvation, not a per-defect logic bug -- the same shard slice that
       # fails under load passes standalone. Capping how many run AT ONCE
-      # (not how many run in total -- all 6 still execute, sequenced in
+      # (not how many run in total -- all shards still execute, sequenced in
       # batches) gives each shard the headroom it needs without trading away
       # coverage or resurrecting the pre-#158 single-job wall-time problem.
       # Revisit the number empirically if shards still balloon at 3.
       max-parallel: 3
       matrix:
-        shard: [0, 1, 2, 3, 4, 5]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
     steps:
       - name: Checkout
@@ -4319,6 +4365,35 @@ jobs:
               apk add --no-cache gcc musl-dev binutils make >/dev/null
               export CC=gcc WORK=/tmp/tls-over-crtl
               sh /src/src/imgact/test/run_tls_producer_over_crtl.sh
+            '
+
+  weak-import-activate:
+    name: Weak-by-name Import (.vms$wimp) — LOGINOUT reaches RMS across the layer cycle
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Native x86_64 (no emulation): the LINK-level assertions are the gate here
+      # — a #pragma-weak reference no --use'd producer exports lands in .vms$wimp
+      # (NOT baked to 0, NOT a link error), and binds STRONG (.vms$imp) when an
+      # exporter IS --use'd. The by-name ACTIVATION half needs a real /dev/vms
+      # ACP (INV-6: IMGACT has no POSIX image-read fallback), which this container
+      # lacks by construction — that half is proven by the boot-to-DCL login
+      # (uat-session), so the script runs the LINK assertions and notes the split.
+      - name: Record + bind a weak cross-image reference through LINK.EXE/.vms$wimp (x86_64)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make python3 >/dev/null
+              export CC=gcc WORK=/tmp/weak-import-act
+              sh /src/src/imgact/test/run_weak_import_activation.sh
             '
 
   vmsprocess-native:

@@ -32,14 +32,27 @@
 #include <string.h>
 #include <unistd.h>
 
-/* SYS$MANAGER:OPERATOR.LOG path resolution -- the SAME accessor and the
- * SAME /tmp fallback src/libvms/syssvc/sys_operator.c's sys$sndopr uses
- * (see opcom_kmsg_append_operator_log() below), so both writers agree on
- * which physical file "OPERATOR.LOG" means at any point in boot. ovmx_init
- * already links vmsfs (CMakeLists.txt) for VMS-filespec translation
- * elsewhere in this executable; no new library dependency. */
+/*
+ * OPERATOR.LOG POST-FLIP (vms-aac, epic vms-208 atomic flip). The genuine
+ * Files-11 SYS$MANAGER:OPERATOR.LOG lives on the ODS-2 ACP volume now, and it
+ * is written the VMS way -- one RMS $PUT-at-EOF record per line -- which needs
+ * RMS ($CREATE/$PUT over /dev/vms). This bridge runs in PID 1 (STARTUP.EXE),
+ * which is statically linked and deliberately carries NO RMS/libvms: force-
+ * binding the RMS record services into the static PID-1 image extracts the
+ * whole vmsrms archive + ODS-2 codec and bloats the boot initramfs (the exact
+ * overflow tests/qemu/rms_acp_bind.c documents). So PID 1 cannot itself write
+ * the on-volume log.
+ *
+ * TWO honest destinations therefore split the job (Rule 9 / INV-6 -- no /vms
+ * passthrough write anywhere):
+ *   - the PID-1 follower thread appends routed lines to a local /tmp spool
+ *     (opcom_kmsg_append_operator_log() below) -- a best-effort host-side copy
+ *     and the pre-mount buffer, which NEVER masquerades as the on-volume log; and
+ *   - opcom_kmsg_drain_ringbuffer() (below) lets an RMS-capable process
+ *     (PROVISION.EXE, which runs after the SYS$DISK $MOUNT) replay the kernel
+ *     ring buffer's boot records into the real OPERATOR.LOG over the ACP.
+ */
 #include "ovmx_layout.h"
-#include "vmsfs/filespec.h"
 
 /*
  * TWO FACILITIES (Rule 8 -- both OVMX design choices, neither VMS-authentic).
@@ -229,38 +242,25 @@ static int parse_kmsg_record(const char *raw, size_t rawlen,
 }
 
 /*
- * SYS$MANAGER:OPERATOR.LOG fallback path, when the vmsfs translation
- * cannot resolve (no system disk mounted yet -- the SAME condition
- * sys_operator.c's open_operator_log() falls back for). Same literal path
- * as OPERATOR_LOG_FALLBACK in src/libvms/syssvc/sys_operator.c, so a
- * SYSKRNL line written before the system disk mounts and a sys$sndopr
- * record written in the same window land in the SAME file.
+ * The PID-1 follower's local spool. This is NOT the system OPERATOR.LOG (that
+ * lives on the ODS-2 ACP volume and is written by RMS-capable processes -- see
+ * this file's top comment): it is a best-effort host-side copy of the routed
+ * lines, on tmpfs, that PID 1 can always write without RMS. Deliberately a /tmp
+ * path, NOT a /vms passthrough path -- the passthrough is retired (Rule 9).
  */
 #define OPCOM_KMSG_OPLOG_FALLBACK "/tmp/OPERATOR.LOG"
 
 /*
- * opcom_kmsg_append_operator_log - append one already-formatted line to
- * OPERATOR.LOG. Resolves SYS$MANAGER:OPERATOR.LOG through vmsfs (the same
- * accessor sys$sndopr uses), falling back to /tmp when that path is not
- * yet writable (no system disk mounted -- OVMX's own established
- * convention for this exact condition, not a new invention here). Opens,
- * appends, and closes per call rather than holding a long-lived fd: the
- * resolvable path can CHANGE mid-boot (before vs. after the system disk
- * mounts), and re-resolving on every write is how a later call finds the
- * real file once it exists, without this thread needing to know when that
- * happens.
+ * opcom_kmsg_append_operator_log - append one already-formatted line to the
+ * PID-1 local spool. Opens/appends/closes per call (best-effort; a failure
+ * never blocks or fails boot -- see opcom_kmsg_start()'s comment). The genuine
+ * on-volume OPERATOR.LOG over the ACP is seeded from the ring buffer by
+ * opcom_kmsg_drain_ringbuffer() (run from PROVISION.EXE) and appended live by
+ * sys$sndopr; this spool does not, and must not, stand in for it (INV-6).
  */
 static void opcom_kmsg_append_operator_log(const char *line)
 {
-    char oplog_linux[1024];
-    FILE *f;
-
-    if (vmsfs_to_linux_path(VMS_OPERATOR_LOG, oplog_linux, sizeof(oplog_linux)) == 1)
-        f = fopen(oplog_linux, "a");
-    else
-        f = NULL;
-    if (!f)
-        f = fopen(OPCOM_KMSG_OPLOG_FALLBACK, "a");
+    FILE *f = fopen(OPCOM_KMSG_OPLOG_FALLBACK, "a");
     if (!f)
         return;  /* best-effort -- see opcom_kmsg_start()'s comment */
 
@@ -345,4 +345,76 @@ void opcom_kmsg_start(void)
      * not this operator-visibility aid. */
     (void)pthread_create(&tid, &attr, opcom_kmsg_thread_main, NULL);
     pthread_attr_destroy(&attr);
+}
+
+/*
+ * opcom_kmsg_drain_ringbuffer - synchronously replay every kmsg record still
+ * in the kernel ring buffer through the SAME classify() the follower uses, and
+ * hand each routed line to `emit` (with the trailing '\n' stripped -- one
+ * stream-LF record's worth of text, ready for RMS $PUT).
+ *
+ * This is the seam that puts the boot-time vms.ko/vmsfs.ko events (and any
+ * re-styled SYSKRNL warning) into the genuine Files-11 OPERATOR.LOG over the
+ * ACP: PID 1 cannot do that write itself (no RMS -- see this file's top
+ * comment), so PROVISION.EXE -- which links RMS and runs AFTER the SYS$DISK
+ * $MOUNT -- calls this with an `emit` that does rms_textfile_append_line(
+ * SYS$MANAGER:OPERATOR.LOG, line). By then every boot record is durably in the
+ * ring buffer and the volume is mounted, so the replay is race-free and lands
+ * on the real platter (read back by TYPE). One-shot: it drains what is present
+ * and returns; it does not follow live.
+ *
+ * Best-effort and side-effect-free on failure: if /dev/kmsg cannot be opened it
+ * simply emits nothing. `emit` must tolerate being called zero or many times.
+ */
+void opcom_kmsg_drain_ringbuffer(void (*emit)(const char *line))
+{
+    int kfd;
+    char raw[8192];
+
+    if (!emit)
+        return;
+
+    kfd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK);
+    if (kfd < 0)
+        return;
+
+    /* Start at the oldest record the ring buffer still holds. */
+    lseek(kfd, 0, SEEK_SET);
+
+    for (;;) {
+        ssize_t n = read(kfd, raw, sizeof(raw) - 1);
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            /* EAGAIN: caught up with the buffer's current end -- done draining.
+             * EPIPE: fell behind and some records were overwritten; the ones
+             * still present after it are handled on the next read, so keep
+             * going until EAGAIN. */
+            if (errno == EPIPE)
+                continue;
+            break;   /* EAGAIN or any other error ends the one-shot drain */
+        }
+        if (n == 0)
+            break;
+        raw[n] = '\0';
+
+        int pri;
+        char msg[512];
+        char line[600];
+
+        if (parse_kmsg_record(raw, (size_t)n, &pri, msg, sizeof(msg)) != 0)
+            continue;
+        if (opcom_kmsg_classify(pri, msg, line, sizeof(line)) == OPCOM_KMSG_DROP)
+            continue;
+
+        /* classify() emits "...text\n"; RMS $PUT wants the record without the
+         * caller newline, so strip the single trailing '\n'. */
+        size_t llen = strlen(line);
+        if (llen > 0 && line[llen - 1] == '\n')
+            line[llen - 1] = '\0';
+
+        emit(line);
+    }
+
+    close(kfd);
 }

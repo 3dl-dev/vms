@@ -89,9 +89,23 @@ set(VMSDCL_SOURCES
 if(VMSDCL_STANDALONE)
     # Cross gate: archive of elf32-vax objects (arch-checked with objdump);
     # build-vmsdcl-vax.sh performs the real DCL.EXE link over the full stack.
+    # It links --whole-archive over the userspace stack, so rightslist_live.o /
+    # sysuaf_live.o are already pulled -- no force-bind anchor needed here.
     add_library(vmsdcl STATIC ${VMSDCL_SOURCES})
 else()
-    add_executable(vmsdcl ${VMSDCL_SOURCES})
+    # RMS force-bind anchor (vms-586, epic vms-208): F$IDENTIFIER reaches
+    # RIGHTSLIST/SYSUAF through the libvms `#pragma weak` engine seam
+    # (rightslist_name_to_value -> ovmx_rightslist_asctoid; the UIC-identifier
+    # fall-through -> sysuaf_lookup -> ovmx_sysuaf_read_user). In this STATIC-musl
+    # executable link, archive member-pull is per-object: a weak-undef reference
+    # does NOT extract rightslist_live.o / sysuaf_live.o from libvmsrms, so the
+    # weak cells stay NULL and every F$IDENTIFIER goes dead (test_syssvc_ident).
+    # dcl_rms_bind.c is a guarded, never-executed strong reference to all four
+    # engine entries that forces both leaf objects to be extracted -- the same
+    # anchor mk_dcl.sh links into the LINK.EXE shareable DCL.EXE, reused here for
+    # the cmake DCL.EXE the QEMU KE harness stages at /bin/DCL.EXE.
+    add_executable(vmsdcl ${VMSDCL_SOURCES}
+        ${OVMX_SRC_ROOT}/vmslink/dcl_rms_bind.c)
 endif()
 
 target_include_directories(vmsdcl PRIVATE
@@ -138,8 +152,12 @@ endif()
 if(VMSDCL_STANDALONE)
     target_compile_options(vmsdcl PRIVATE -Wall -Wextra -O2)
 else()
-    # Core link libraries
-    target_link_libraries(vmsdcl PRIVATE pthread vms vmsfs vmsprocess vmslnm vmsqueue)
+    # Core link libraries. vms-481: DCL file commands + F$ file lexicals now
+    # reach files through RMS ($OPEN/$GET/$CREATE/$PUT/$SEARCH + rms_file_attr,
+    # which route to the Files-11 ODS-2 ACP), so vmsdcl links vmsrms. (The
+    # native-link build already --uses LIBVMSRMS$SHR; mk_dcl.sh.)
+    # vms-274: F$IDENTIFIER/SHOW read RIGHTSLIST/SYSUAF via RMS-over-ACP too.
+    target_link_libraries(vmsdcl PRIVATE pthread vms vmsrms vmsfs vmsprocess vmslnm vmsqueue)
 
     # Try to find readline for better interactive experience (skip for static
     # builds; and for the netbsd-vax cross, which has no readline in its sysroot

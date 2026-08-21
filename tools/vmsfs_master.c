@@ -1069,6 +1069,14 @@ static int read_host_file(const char *path, uint64_t size,
     return 0;
 }
 
+/* ods2_type_is_binary_image() -- which file types stay RFM=FIXED (binary images:
+ * IMGACT/loaders read raw blocks, never line records) vs RFM=STMLF (everything
+ * else, a line-oriented text file). MOVED to vmsfs/ods2.h (vms-3a8) so the live
+ * PRODUCT INSTALL path (src/product/product.c) classifies files with the SAME
+ * list this master does -- the mastered distro disk and a live-installed target
+ * must carry identical per-file record formats. `type` is the file type
+ * (extension), no dot; content bytes are verbatim in BOTH cases. */
+
 /* Construct a node's on-disk directory-entry name: "NAME.DIR" for a directory,
  * "NAME.TYPE" (or bare "NAME" when the type is empty) for a file -- exactly the
  * spelling ods2_wvolume_create_dir/create_file_raw + dir_insert expect and the
@@ -1123,8 +1131,16 @@ static int emit_tree_ods2(ods2_wvolume_t *wvol, const struct node *dir,
                 return -1;
 
             ods2_fid_t file_fid;
-            st = ods2_wvolume_create_file_raw(wvol, entry, MASTER_FILE_VER,
-                                              data, dlen, dir_fid, &file_fid);
+            /* Binary images (.EXE ...) -> RFM=FIXED verbatim (create_file_raw);
+             * text files (.COM/.DAT/SYSUAF ...) -> RFM=STMLF verbatim
+             * (create_file_stmlf) so DCL/RMS read them one LF-record at a time
+             * instead of the whole file as one 512-byte record (vms-5f0). */
+            if (ods2_type_is_binary_image(c->type))
+                st = ods2_wvolume_create_file_raw(wvol, entry, MASTER_FILE_VER,
+                                                  data, dlen, dir_fid, &file_fid);
+            else
+                st = ods2_wvolume_create_file_stmlf(wvol, entry, MASTER_FILE_VER,
+                                                    data, dlen, dir_fid, &file_fid);
             free(data);
             if (st != ODS2_OK) {
                 fprintf(stderr, "%%MASTER-F-MKFILE, create %s failed: %s\n",

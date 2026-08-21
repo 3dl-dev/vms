@@ -185,7 +185,12 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
      */
     {
         uint32_t login_uic = (rec->uic_group << 16) | rec->uic_member;
-        uint64_t login_privs = parse_privilege_string(rec->privileges);
+        /* vms-26a: build the persona mask from the binary $UAFDEF quadword,
+         * NOT by re-parsing rec->privileges. The name-string re-parser drops
+         * MOUNT (and other privileges outside its 17-name subset), which is
+         * what produced %SYSTEM-F-NOPRIV on MOUNT after the SYSUAF flip.
+         * See sysuaf_record_privileges() in sysuaf.h. */
+        uint64_t login_privs = sysuaf_record_privileges(rec);
         uint32_t ist = vms_kif_setident(rec->username, login_uic, login_privs);
         if (!(ist & 1)) {
             printf("%%OVMX-F-NOIDENT, the executive refused the "
@@ -389,6 +394,41 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
         uid_t want_uid = (uid_t)rec->uic_member;
         gid_t want_gid = (gid_t)rec->uic_group;
 
+        /*
+         * PER-USER PRIVATE IMAGE-STAGING DIRECTORY (vms-a86f).
+         *
+         * The atomic flip (vms-5f0) stages an image the Linux kernel must
+         * execve() into OVMX_BOOT_STAGE_DIR ("/run/ovmx-boot"), which PID 1
+         * creates root-owned 0755 and pre-fills with the boot images + a fixed
+         * utility set. An image the boot bridge did NOT pre-stage (e.g.
+         * SYS$SYSTEM:PARTS.EXE the first time `$ PARTS` runs) is staged lazily
+         * by DCL's activation resolver -- but that resolver runs as THIS
+         * session's UIC after the credential drop below, and a non-root session
+         * cannot create a file in the root-owned shared directory (the PARTS
+         * demo's EACCES). Making the shared directory world-writable would be a
+         * plant hole (any user could drop an image others activate) and is
+         * forbidden.
+         *
+         * So LOGINOUT -- still privileged here, the same window that stamped the
+         * SYSUAF identity -- creates the session's OWN staging directory,
+         * OVMX_BOOT_STAGE_DIR "/<uid>/", 0700 and owned by the authenticated
+         * UIC. The resolver then stages the session's images into a directory
+         * it owns; the genuine bytes still come off the ODS-2 volume over the
+         * executive ACP (INV-6), only the Linux-exec handoff is per-user-owned.
+         * Best-effort: PID 1 already made the parent, and a failure here is not
+         * fatal -- an image that then cannot be staged fails honestly at
+         * activation with %DCL-E-IVIMAGE, never a fabricated success.
+         */
+        {
+            char stage_user_dir[512];
+            (void)mkdir(OVMX_BOOT_STAGE_DIR, 0755);   /* PID 1 makes it; EEXIST fine */
+            if (ovmx_boot_stage_user_dir(stage_user_dir, sizeof(stage_user_dir),
+                                         (unsigned long)want_uid)) {
+                if (mkdir(stage_user_dir, 0700) == 0 || errno == EEXIST)
+                    (void)chown(stage_user_dir, want_uid, want_gid);
+            }
+        }
+
         if (setgroups(0, NULL) != 0 ||
             setgid(want_gid) != 0 ||
             setuid(want_uid) != 0 ||
@@ -429,6 +469,17 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
     /* Exec the DCL shell with --login flag */
     char dcl_linux[1024];
     vmsfs_to_linux_path(DCL_SHELL_PATH, dcl_linux, sizeof(dcl_linux));
+    /* ATOMIC FLIP (vms-5f0): LOGINOUT execve's DCL.EXE for the session; the
+     * Linux kernel maps its PT_LOAD + PT_INTERP by POSIX path. With the /vms
+     * passthrough retired, DCL.EXE is execve'd from the boot-staging tmpfs
+     * PID 1 filled off the ODS-2 volume THROUGH the executive ACP. Self-
+     * guarding: use the staged copy only if present. */
+    {
+        char staged[1024];
+        if (ovmx_boot_stage_exec_path(dcl_linux, staged, sizeof(staged)) &&
+            access(staged, X_OK) == 0)
+            snprintf(dcl_linux, sizeof(dcl_linux), "%s", staged);
+    }
     if (captive)
         execl(dcl_linux, "vmsdcl", "--login", "--captive",
               "--lgicmd", login_lgicmd, (char *)NULL);

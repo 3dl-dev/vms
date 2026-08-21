@@ -1373,6 +1373,11 @@ static int dcl_resolve_activatable_acp(struct dcl_context *ctx,
         struct rms_fileattr at;
         uint32_t st = dcl_rms_attr(ctx, trial, &at);
 
+        fprintf(stderr, "%%OVMX-DIAG-ACT, trial=%s attr_st=%u efblk=%u hiblk=%u\n",
+                trial, (unsigned)st,
+                (st == RMS$_NORMAL) ? (unsigned)at.efblk : 0u,
+                (st == RMS$_NORMAL) ? (unsigned)at.hiblk : 0u);
+
         if (st == RMS$_NORMAL) {
             *acp_usable = 1;
             /* on-volume Linux path carrying the type we matched with */
@@ -1402,12 +1407,17 @@ static int dcl_resolve_activatable_acp(struct dcl_context *ctx,
              * from the ELF, so ONE genuine ACP-sourced copy serves both. */
             if (ovmx_boot_stage_exec_path(lp, staged, sizeof(staged))) {
                 (void)mkdir(OVMX_BOOT_STAGE_DIR, 0755);   /* EEXIST is fine */
-                if (dcl_rms_stage(ctx, trial, staged) == RMS$_NORMAL &&
-                    access(staged, X_OK) == 0) {
+                uint32_t stg = dcl_rms_stage(ctx, trial, staged);
+                int xok = (access(staged, X_OK) == 0);
+                fprintf(stderr, "%%OVMX-DIAG-ACT, stage trial=%s -> staged=%s stg_st=%u xok=%d\n",
+                        trial, staged, (unsigned)stg, xok);
+                if (stg == RMS$_NORMAL && xok) {
                     strncpy(resolved, staged, sz - 1);
                     resolved[sz - 1] = '\0';
                     return 1;
                 }
+            } else {
+                fprintf(stderr, "%%OVMX-DIAG-ACT, stage trial=%s -> ovmx_boot_stage_exec_path FAILED\n", trial);
             }
             /* ACP confirmed the image is present but it could not be staged off
              * the volume. Fail HONESTLY -- do NOT read it off /vms (INV-6). The

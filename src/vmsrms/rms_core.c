@@ -1936,6 +1936,10 @@ static uint32_t rms_impl_create(void *fab_ptr)
         }
 
         /* Winning candidate: chan + fop are set; build the RMS handle. */
+        fprintf(stderr, "%%OVMX-DIAG-CRT, created dev=%s dir=[%s] name=%s fid=%u,%u efblk=%u hiblk=%u\n",
+                sp.devnam, sp.dirpath, sp.name,
+                (unsigned)fop.fid_num, (unsigned)fop.fid_nmx,
+                (unsigned)fop.new_efblk, (unsigned)fop.new_hiblk);
         strncpy(fab->_resolved_path, sp.name, sizeof(fab->_resolved_path) - 1);
         fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';
         h = calloc(1, sizeof(*h));

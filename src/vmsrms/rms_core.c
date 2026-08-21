@@ -993,10 +993,16 @@ uint32_t rms_stage_over_acp(const char *vmsspec, const char *destpath)
      * file is freshly created here with this mode. */
     int fd = open(destpath, O_WRONLY | O_CREAT | O_TRUNC, 0755);
     if (fd < 0) {
+        fprintf(stderr, "%%OVMX-DIAG-STG, open(%s) FAILED errno=%d(%s) uid=%d euid=%d total=%llu efblk=%u\n",
+                destpath, errno, strerror(errno), (int)getuid(), (int)geteuid(),
+                (unsigned long long)total, (unsigned)efblk);
         vms_kif_acp_deaccess(chan);
         vms_kif_dassgn(chan);
         return SS$_ABORT;
     }
+    fprintf(stderr, "%%OVMX-DIAG-STG, open(%s) OK uid=%d euid=%d total=%llu efblk=%u ffbyte=%u\n",
+            destpath, (int)getuid(), (int)geteuid(),
+            (unsigned long long)total, (unsigned)efblk, (unsigned)a.attr.ffbyte);
 
     uint32_t rc = RMS$_NORMAL;
     uint8_t  blk[512];
@@ -1019,7 +1025,12 @@ uint32_t rms_stage_over_acp(const char *vmsspec, const char *destpath)
         uint64_t left = chunk;
         while (left > 0) {
             ssize_t w = write(fd, p, (size_t)left);
-            if (w <= 0) { rc = SS$_ABORT; break; }
+            if (w <= 0) {
+                fprintf(stderr, "%%OVMX-DIAG-STG, write(%s) FAILED w=%zd errno=%d(%s) written=%llu total=%llu\n",
+                        destpath, w, errno, strerror(errno),
+                        (unsigned long long)written, (unsigned long long)total);
+                rc = SS$_ABORT; break;
+            }
             p += w;
             left -= (uint64_t)w;
         }

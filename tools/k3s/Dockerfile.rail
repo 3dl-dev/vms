@@ -1,0 +1,78 @@
+# tools/k3s/Dockerfile.rail -- the OVMX "rail" builder image.
+#
+# BUILD/TEST TOOLING ONLY. This is NOT an OVMX runtime (CLAUDE.md Rule 9): it
+# is an environment in which `cmake`/`ctest`/`tests/qemu/run_tests.sh` and the
+# QEMU-KVM smoke run on cluster hardware instead of the shared workshop host.
+# It carries no OVMX product code -- run-on-rail.sh clones the repo at a given
+# git-ref INTO a pod built from this image and runs the requested command.
+#
+# The package set is deliberately the SAME toolchain layer tests/qemu/Dockerfile
+# installs (ubuntu:24.04 + build tools + qemu + kernel pkgs + musl + cmake), so
+# anything the QEMU kernel harness needs is present, plus git (the pod clones
+# the repo) and genisoimage/xorriso (the alpha/boot ISO builders, vms-054).
+#
+# Build + push (one-time, from workshop -- this local docker build is the only
+# local-heavy step, and it is acceptable):
+#   docker build -f tools/k3s/Dockerfile.rail -t 192.168.2.43:30500/ovmx-builder:latest .
+#   docker push 192.168.2.43:30500/ovmx-builder:latest
+# 192.168.2.43:30500 = the registry NodePort on k3s-cp, which workshop's Docker
+# daemon already lists in insecure-registries (the registry is plain HTTP, so
+# the .44/k3s-worker NodePort would need a daemon.json edit -- the .43 one is
+# already trusted). Same registry storage either way; pods pull by the
+# in-cluster Service name (see README "Registry notes").
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# One apt layer, one index fetch (same discipline as tests/qemu/Dockerfile).
+# The QEMU package name is arch-conditional; everything else is arch-neutral.
+# docker.io/iptables are for run-on-rail.sh --dind mode (dockerd runs INSIDE
+# this container so the docker-wrapped e2e gates -- which `docker build
+# distro/Dockerfile.bootable` then `docker run -v $REPO_ROOT/...` -- resolve
+# their bind mounts against the same filesystem the repo is cloned into. A
+# separate dind sidecar would resolve those mounts on the wrong host.
+RUN apt-get update && \
+    ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ]; then QEMU_PKG=qemu-system-arm; else QEMU_PKG=qemu-system-x86; fi && \
+    apt-get install -y --no-install-recommends \
+        make gcc g++ libc6-dev kmod \
+        linux-headers-generic \
+        linux-image-virtual \
+        busybox-static \
+        cpio zstd xz-utils gzip bzip2 \
+        curl wget perl ca-certificates patch \
+        git \
+        cmake ninja-build pkg-config \
+        musl-tools musl-dev linux-libc-dev \
+        libelf-dev bc flex bison \
+        python3 file bsdmainutils \
+        binutils gawk strace ccache clang \
+        libssh-dev libreadline-dev \
+        docker.io iptables uidmap \
+        genisoimage xorriso \
+        "$QEMU_PKG" qemu-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# musl doesn't ship linux/ or asm/ UAPI headers -- symlink them from
+# linux-libc-dev so OVMX_STATIC=ON (musl-gcc) builds work here exactly as they
+# do in tests/qemu/Dockerfile and distro/Dockerfile.bootable.
+RUN MUSL_INC=$(echo /usr/include/*-linux-musl) && \
+    ARCH_INC=$(echo /usr/include/*-linux-gnu) && \
+    ln -sf /usr/include/linux "$MUSL_INC/linux" && \
+    ln -sf /usr/include/asm-generic "$MUSL_INC/asm-generic" && \
+    ln -sf "$ARCH_INC/asm" "$MUSL_INC/asm"
+
+# git needs to trust any checkout dir the pod clones into (it runs as root
+# against a freshly-cloned tree owned by root -- safe.directory keeps git from
+# refusing "dubious ownership").
+RUN git config --system --add safe.directory '*'
+
+# A vmlinuz is present (linux-image-virtual) so the KVM smoke can boot a real
+# kernel under -accel kvm. Record its path for kvm-smoke.sh.
+RUN KVER=$(ls /lib/modules/ | sort -V | tail -1) && \
+    if [ ! -e /boot/vmlinuz ]; then ln -s "vmlinuz-${KVER}" /boot/vmlinuz; fi && \
+    ls -l /boot/vmlinuz
+
+WORKDIR /work
+CMD ["/bin/bash"]

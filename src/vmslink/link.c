@@ -175,6 +175,20 @@
 #ifndef R_X86_64_DTPOFF32
 #define R_X86_64_DTPOFF32        21
 #endif
+/* Classic (non-TLSDESC "gnu"/"gnu2"-less) general-/local-dynamic TLS relocs the
+ * x86_64 psABI defines for the __tls_get_addr access model. STOCK upstream
+ * archives (Alpine libstdc++/libsupc++/libgcc) are compiled with the classic
+ * dialect and emit these; the OVMX producer graph uses -mtls-dialect=gnu2
+ * (TLSDESC, handled above). For a SINGLE static image (no dlopen) both relax to
+ * Local-Exec — read TP from %fs:0 and add a link-time-final TP-relative offset
+ * (vms-76a). TLSGD names the accessed TLS variable; TLSLD names an arbitrary
+ * placeholder and its per-variable offsets ride paired R_X86_64_DTPOFF32. */
+#ifndef R_X86_64_TLSGD
+#define R_X86_64_TLSGD           19
+#endif
+#ifndef R_X86_64_TLSLD
+#define R_X86_64_TLSLD           20
+#endif
 #ifndef R_X86_64_GOTPC32_TLSDESC
 #define R_X86_64_GOTPC32_TLSDESC 34
 #endif
@@ -1629,6 +1643,51 @@ static int is_dtpoff_reloc(uint32_t type)
     return type == R_X86_64_DTPOFF32;
 }
 
+/* True for a classic x86_64 general-/local-dynamic TLS lea reloc (vms-76a). Its
+ * paired `call __tls_get_addr` (an R_X86_64_PLT32/GOTPCREL against the symbol
+ * `__tls_get_addr`) is subsumed by the LE relaxation of this lea and must not be
+ * patched separately — its bytes are overwritten by patch_tls_le(). */
+static int is_classic_gdld_reloc(uint32_t type)
+{
+    return type == R_X86_64_TLSGD || type == R_X86_64_TLSLD;
+}
+
+/* GD/LD -> Local-Exec relaxation (x86_64 psABI). Valid for a SINGLE static image
+ * (no dlopen): every classic general-/local-dynamic access becomes a local-exec
+ * read of TP (%fs:0) plus a link-time-final TP-relative offset — the same value
+ * the proven gnu2/TLSDESC path resolves at run time (the executable's TLS block
+ * base sits at TP - ALIGN_UP(tls_memsz, tls_align), matching IMGACT's
+ * assign_tls_offsets()). `site` is the VA of the TLSGD/TLSLD reloc field (the
+ * lea's disp32); the fixed-size instruction window the psABI mandates begins 4
+ * bytes (GD, 16-byte window) or 3 bytes (LD, 12-byte window) before it.
+ *
+ *   GD:  66 48 8d 3d <d32>          lea x@tlsgd(%rip),%rdi
+ *        66 66 48 e8 <d32>          call __tls_get_addr@plt
+ *     -> 64 48 8b 04 25 00 00 00 00 mov %fs:0,%rax
+ *        48 8d 80 <tpoff32>         lea x@tpoff(%rax),%rax     (tpoff embedded)
+ *
+ *   LD:  48 8d 3d <d32>             lea x@tlsld(%rip),%rdi
+ *        e8 <d32>                   call __tls_get_addr@plt
+ *     -> 66 66 66                   (padding)
+ *        64 48 8b 04 25 00 00 00 00 mov %fs:0,%rax             (leaves %rax = TP)
+ * For LD the paired R_X86_64_DTPOFF32 operands carry each variable's TP-relative
+ * offset (moff - aligned_tls_size), written by the DTPOFF32 arm below. */
+static void patch_tls_le(uint32_t type, uint8_t *img, uint64_t site, int32_t tpoff)
+{
+    static const uint8_t movfs[9] = /* mov %fs:0, %rax */
+        { 0x64, 0x48, 0x8b, 0x04, 0x25, 0x00, 0x00, 0x00, 0x00 };
+    if (type == R_X86_64_TLSGD) {
+        uint8_t *w = img + site - 4;           /* 16-byte GD window */
+        memcpy(w, movfs, 9);
+        w[9] = 0x48; w[10] = 0x8d; w[11] = 0x80;  /* lea tpoff(%rax), %rax */
+        memcpy(w + 12, &tpoff, 4);
+    } else {                                   /* R_X86_64_TLSLD, 12-byte window */
+        uint8_t *w = img + site - 3;
+        w[0] = w[1] = w[2] = 0x66;             /* 3-byte prefix padding */
+        memcpy(w + 3, movfs, 9);
+    }
+}
+
 /* Patch a TLSDESC ADR_PAGE21 / LD64_LO12 / ADD_LO12 to reach the 2-word TLSDESC
  * entry PC-relatively (same encodings as ADRP / LDR64 / ADD-imm12). TLSDESC_CALL
  * is a marker at the blr and needs no patch.
@@ -1802,6 +1861,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             if (s->st_shndx != SHN_UNDEF) continue;      /* locally defined     */
             const char *nm = objs[i].str + s->st_name;
             if (!nm[0]) continue;
+            /* __tls_get_addr calls are the classic-GD/LD access model; LINK
+             * relaxes every one to Local-Exec (patch_tls_le), overwriting the
+             * call site, so the symbol is never actually referenced at run time.
+             * Do NOT create an import/PLT stub for it. (vms-76a) */
+            if (strcmp(nm, "__tls_get_addr") == 0) continue;
             if (defined_placed(objs, nm)) continue;      /* intra-image def     */
             int pidx; uint32_t svidx;
             if (!find_universal(ps, np, nm, &pidx, &svidx))
@@ -2484,7 +2548,23 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 
     /* Apply relocations across every code section: GOT-indirect pairs -> GOT
      * slot; TLSDESC -> TLSDESC entry; the rest PC-relative (with addend). */
+    /* Aligned size of the combined TLS block. In x86_64 Variant II the block
+     * base sits at TP - tls_tp_size, so a variable at combined-block offset moff
+     * is at TP-relative offset (moff - tls_tp_size) — the Local-Exec offset the
+     * GD/LD relaxation embeds, matching IMGACT assign_tls_offsets(). (vms-76a) */
+    uint64_t tls_tp_size = has_tls ? ALIGN_UP(tls_memsz, tls_align) : 0;
     for (int i = 0; i < nobj; i++) {
+        /* Per-object TLS dialect: an object carrying any classic GD/LD reloc was
+         * compiled without -mtls-dialect=gnu2, so after LD->LE relaxation its
+         * %rax holds TP (not the module base the gnu2/TLSDESC path leaves), and
+         * its paired R_X86_64_DTPOFF32 operands must be TP-relative rather than
+         * module-relative. A single object uses one dialect throughout. */
+        int classic_tls = 0;
+        for (int r = 0; r < objs[i].nreloc; r++)
+            if (is_classic_gdld_reloc(ELF64_R_TYPE(objs[i].relocs[r].info))) {
+                classic_tls = 1;
+                break;
+            }
         for (int r = 0; r < objs[i].nreloc; r++) {
             struct reloc *rl = &objs[i].relocs[r];
             uint32_t type = ELF64_R_TYPE(rl->info);
@@ -2492,6 +2572,10 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             uint32_t *insn = (uint32_t *)(img + site);
             const char *nm = objs[i].str +
                              objs[i].sym[ELF64_R_SYM(rl->info)].st_name;
+            /* The classic GD/LD call to __tls_get_addr is subsumed by the LE
+             * relaxation of its paired lea; its site bytes were overwritten by
+             * patch_tls_le(), so never patch it separately. (vms-76a) */
+            if (strcmp(nm, "__tls_get_addr") == 0) continue;
             if (is_got_reloc(type)) {
                 uint32_t si = ELF64_R_SYM(rl->info);
                 if (ELF64_ST_BIND(objs[i].sym[si].st_info) == STB_LOCAL) {
@@ -2522,15 +2606,28 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                 int ti = find_tls(tls, ntls, nm);
                 if (ti < 0) die("internal: TLSDESC slot missing for symbol");
                 patch_tlsdesc(type, insn, site, tls[ti].va, rl->add);
+            } else if (is_classic_gdld_reloc(type)) {
+                /* Classic GD/LD -> Local-Exec relaxation (vms-76a). Rewrite the
+                 * psABI-fixed lea+call window to read TP and (for GD) add the
+                 * variable's TP-relative offset in place. For LD the offsets ride
+                 * the paired DTPOFF32 operands, so tpoff here is unused. */
+                uint64_t moff = tls_ref_offset(objs, nobj, i,
+                                               ELF64_R_SYM(rl->info), 0);
+                int32_t tpoff = (int32_t)(int64_t)(moff - tls_tp_size);
+                patch_tls_le(type, (uint8_t *)img, site, tpoff);
             } else if (is_dtpoff_reloc(type)) {
-                /* x86_64 local-dynamic operand: the variable's module-relative
-                 * TLS offset, written as a flat absolute 32-bit constant. Added
-                 * at run time to the module base the TLSDESC pair returned, so
-                 * it is link-time-final — NOT load-biased, NOT in .vms$rel. */
+                /* x86_64 dynamic TLS operand: the variable's TLS offset written
+                 * as a flat absolute 32-bit constant, link-time-final — NOT
+                 * load-biased, NOT in .vms$rel. In a gnu2/TLSDESC object this is
+                 * MODULE-relative (added at run time to the module base the
+                 * TLSDESC pair resolves). In a classic object whose TLSLD was
+                 * relaxed to LE, %rax already holds TP, so the operand must be
+                 * TP-relative (moff - aligned block size). (vms-76a) */
                 uint64_t moff = tls_ref_offset(objs, nobj, i,
                                                ELF64_R_SYM(rl->info),
                                                rl->add);
-                *insn = (uint32_t)moff;
+                *insn = classic_tls ? (uint32_t)(moff - tls_tp_size)
+                                    : (uint32_t)moff;
             } else if (is_abs64_reloc(type)) {
                 /* Pointer initializer (.rela.data): write S+A as a 64-bit
                  * image-relative address and record the slot in .vms$rel so

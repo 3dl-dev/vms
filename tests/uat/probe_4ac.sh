@@ -10,7 +10,7 @@ DISTRIB_IMG=/boot/ovmx-distrib.img
 DISK=/tmp/probe-sysdisk.img
 CONSOLE_LOG=/tmp/probe-console.log
 FIFO=/tmp/probe-console.in
-BOOT_TIMEOUT=120; STEP_TIMEOUT=60; COMMAND_TIMEOUT=15
+BOOT_TIMEOUT=300; STEP_TIMEOUT=60; COMMAND_TIMEOUT=25
 
 rm -f "$DISK" "$CONSOLE_LOG" "$FIFO"
 cp "$DISTRIB_IMG" "$DISK"

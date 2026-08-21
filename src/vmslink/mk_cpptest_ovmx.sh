@@ -77,9 +77,22 @@ WORK=${WORK:-/tmp/mk-cpptest}
 rm -rf "$WORK"
 mkdir -p "$WORK"
 
-echo "mk_cpptest_ovmx: $CXX -c cpptest.cpp (HOSTED -- no -ffreestanding, musl+libstdc++ live, mirrors host-probe-cc1.sh)"
+echo "mk_cpptest_ovmx: $CXX -fPIC -c cpptest.cpp (HOSTED -- no -ffreestanding, musl+libstdc++ live, mirrors host-probe-cc1.sh)"
+# -fPIC (NOT gcc's -fPIE default): vms-608 root-caused the earlier SIGSEGV
+# (stdout resolving to a garbage FILE*) to -fPIE's direct/copy-relocation
+# data-access model (R_X86_64_PC32 straight at a cross-image =DATA symbol) --
+# LINK.EXE's import collection only promotes is_call (PLT32/CALL26) or
+# is_gotr (GOT) relocations to cross-image imports, so a PC32-to-cross-image-
+# DATA site is silently left unresolved (see src/vmslink/test/
+# debug_stdout_data_reloc.sh and docs/ovmx-image-abi.md). -fPIC makes gcc
+# emit R_X86_64_REX_GOTPCRELX (GOT-indirect) for that same access, which
+# LINK.EXE already binds correctly -- and matches EVERY other producer in the
+# OVMX graph (mk_decc_shr.sh's whole-archived musl aside, every mk_*.sh that
+# compiles its own C/C++ sources already hardcodes -fPIC in CFLAGS; cpptest
+# was the sole holdout). This is the OVMX image ABI (docs/ovmx-image-abi.md),
+# not a per-test workaround -- do not remove it.
 COMPILE_LOG="$WORK/compile.log"
-if ! "$CXX" -std=c++17 -O2 -Wall -c -o "$WORK/cpptest.o" "$CPPTEST_SRC" >"$COMPILE_LOG" 2>&1; then
+if ! "$CXX" -std=c++17 -O2 -Wall -fPIC -c -o "$WORK/cpptest.o" "$CPPTEST_SRC" >"$COMPILE_LOG" 2>&1; then
     echo "mk_cpptest_ovmx: FAIL: $CXX could not compile cpptest.cpp -- see $COMPILE_LOG"
     tail -40 "$COMPILE_LOG"
     exit 1

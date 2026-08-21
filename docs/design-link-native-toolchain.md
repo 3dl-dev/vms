@@ -372,6 +372,17 @@ indices 9–16 with `ast_init` still at 17, **and** a consumer object naming
 'eflag_set'`). A retired slot is not a slot that still works quietly.
 
 ### 7.7 Known limitations (as-built, tracked)
+- **Image ABI is `-fPIC`, not `-fPIE` (vms-608)** — see
+  `docs/ovmx-image-abi.md` for the full ruling. A translation unit compiled
+  `-fPIE` (gcc's own default) that references a cross-image `=DATA` symbol
+  emits a direct `R_X86_64_PC32` relocation LINK.EXE's import-collection pass
+  does not recognize (only `is_call`/`is_gotr` classes are promoted to
+  cross-image imports) — the site silently resolves to `0` instead of failing
+  the link. `-fPIC` avoids the whole class by emitting GOT-indirect
+  references instead, which LINK.EXE already binds correctly (§7.4). Every
+  `mk_*.sh` recipe that compiles OVMX's own sources already defaults to
+  `-fPIC`; TCC.EXE's own on-target codegen has not been characterized against
+  this rule (tracked there as a vms-044 known-limitation, not fixed here).
 - **Multi-module TLS unsupported** — `emit_shareable` accepts only **one**
   TLS-defining object per image; a second object in the same image with its own
   `.tdata`/`.tbss` aborts the link (`link.c`: `"multi-module TLS not supported yet

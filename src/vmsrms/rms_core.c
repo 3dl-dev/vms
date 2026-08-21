@@ -1855,21 +1855,48 @@ static uint32_t rms_impl_create(void *fab_ptr)
             fab->fab$l_sts = RMS$_SYN;
             return RMS$_SYN;
         }
-        sp = specs[0];
+
+        /* vms-4ac: try EACH ODS-2 candidate directory, exactly as the $OPEN read
+         * loop (rms_impl_open) already does. A concealed-rooted logical
+         * (SYS$SYSTEM:, SYS$MANAGER:, ...) expands to several {device, dirpath}
+         * candidates in search-list order (node member, then SYSCOMMON), and only
+         * the member that EXISTS on the mounted volume resolves -- for the system
+         * tree that is the SYSCOMMON candidate, NOT specs[0]. Creating in specs[0]
+         * ALONE failed RMS$_DNF for SYS$SYSTEM:/SYS$MANAGER: even though the
+         * identical spec OPENED fine for read, because $OPEN walked the candidates
+         * and $CREATE did not. Resolve the DID against each candidate and create
+         * in the FIRST that resolves -- the same directory the read path lands in,
+         * and the same fix vms-5f0 already applied to rms_open_named_handle_kind. */
+        memset(&fop, 0, sizeof(fop));
+        {
+            uint32_t last = SS$_NOSUCHFILE;
+            int ci, resolved = 0;
+            for (ci = 0; ci < ncand; ci++) {
+                sp = specs[ci];
+                st = vms_kif_acp_assign(sp.devnam, &chan);
+                if (!$VMS_STATUS_SUCCESS(st)) { last = st; chan = 0; continue; }
+                st = rms_acp_resolve_did(chan, sp.dirpath, &fop.did_num,
+                                         &fop.did_seq, &fop.did_rvn, &fop.did_nmx);
+                if ($VMS_STATUS_SUCCESS(st)) { resolved = 1; break; }
+                vms_kif_dassgn(chan); chan = 0; last = st;
+            }
+            if (!resolved) {
+                /* No candidate directory resolved: a real no-device / not-mounted
+                 * status stays itself; anything else is "directory not found". */
+                fab->fab$l_stv = last;
+                fab->fab$l_sts = (last == SS$_NOSUCHDEV || last == SS$_DEVNOTMOUNT)
+                                 ? rms_acp_open_status(last) : RMS$_DNF;
+                return fab->fab$l_sts;
+            }
+        }
+        /* sp == the resolved candidate; chan is $ASSIGNed; fop.did_* is set. */
         strncpy(fab->_resolved_path, sp.name, sizeof(fab->_resolved_path) - 1);
         fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';
 
-        st = vms_kif_acp_assign(sp.devnam, &chan);
-        if (!$VMS_STATUS_SUCCESS(st)) {
-            fab->fab$l_stv = st;
-            fab->fab$l_sts = rms_acp_open_status(st);
-            return fab->fab$l_sts;
-        }
         h = calloc(1, sizeof(*h));
         if (!h) { vms_kif_dassgn(chan); fab->fab$l_sts = RMS$_DME; return RMS$_DME; }
         h->chan = chan; h->assigned = 1; h->fd = -1;
 
-        memset(&fop, 0, sizeof(fop));
         fop.chan      = chan;
         fop.func      = VMS_ACP_FOP_CREATE;
         /* IO$M_CREATE enters a versioned directory entry; IO$M_ACCESS builds
@@ -1881,13 +1908,6 @@ static uint32_t rms_impl_create(void *fab_ptr)
         fop.kind      = (fab->fab$b_org != FAB$C_IDX &&
                          fab->fab$b_rfm == FAB$C_FIX) ? ODS2_FK_DATA_FIX
                                                       : ODS2_FK_DATA;
-        st = rms_acp_resolve_did(chan, sp.dirpath, &fop.did_num, &fop.did_seq,
-                                 &fop.did_rvn, &fop.did_nmx);
-        if (!$VMS_STATUS_SUCCESS(st)) {
-            free(h); vms_kif_dassgn(chan);
-            fab->fab$l_stv = st; fab->fab$l_sts = RMS$_DNF;
-            return RMS$_DNF;
-        }
         fop.version = 0;                     /* highest existing + 1 */
         strncpy(fop.name, sp.name, VMS_ACP_NAME_SIZE - 1);
 

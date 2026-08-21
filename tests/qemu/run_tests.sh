@@ -33,7 +33,30 @@ set -euo pipefail
 # remains the OUTER bound so a genuine hang (not mere slowness) still surfaces.
 # A wall overrun is detected (timeout rc=124) and reported legibly below, but
 # STILL fails the gate -- see the verdict path.
-TIMEOUT=600
+#
+# ENV-OVERRIDABLE (KE_WALL_TIMEOUT), default 600, per the block below's own
+# instruction ("If the suite set has genuinely outgrown ${TIMEOUT}s, raise
+# TIMEOUT... do not drop or skip a suite"). Two consumers boot this harness
+# with DIFFERENT per-VM suite counts, so they need different walls:
+#   * The POSITIVE kernel-executive job SHARDS SUITES across VMs (SHARD_INDEX/
+#     SHARD_TOTAL below), so each VM runs only ~1/N of the set -- 600s is huge
+#     headroom and it keeps the default.
+#   * The PER-FACILITY negative-control path (tests/qemu/inject_and_run.sh)
+#     runs the ENTIRE suite set in ONE VM per defect -- it cannot shard suites
+#     because check 5's isolation attribution must observe every suite -- so
+#     its full run is what actually pushes the wall. The 0.5 flip grew that set
+#     ~76 -> ~97 suites, and a mutation that makes event-flag $WAITFRs wait out
+#     their timeouts (eflag-readef-status-inverted, eflag-dacefc-status-wrong,
+#     lnm-manager-delete-noop) added enough per-suite slack that the run
+#     truncated at ~75/97 suites in 600s under CI contention -- "the harness
+#     never reached FINAL RESULTS", which is a gate FAIL even though the control
+#     itself reddened correctly. Measured extrapolation: ~75 suites at the wall
+#     -> the full 97 need ~776s under that slowdown. inject_and_run.sh sets
+#     KE_WALL_TIMEOUT=1800 (~2.3x that ~776s, margin for defects slower than eflag-readef, e.g. eflag-dacefc). This is the
+#     sanctioned "raise TIMEOUT, never drop a suite" fix, not a weakening: every
+#     control still must redden AND the run still must REACH FINAL RESULTS; a
+#     genuine hang (>1800s or a panic) still surfaces.
+TIMEOUT="${KE_WALL_TIMEOUT:-600}"
 KERNEL=/boot/vmlinuz
 INITRD=/initramfs.cpio.gz
 ARCH=$(uname -m)

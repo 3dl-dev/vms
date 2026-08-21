@@ -3288,7 +3288,22 @@ jobs:
     # partition below is `NR % job-total`, so this is the ONLY line to touch --
     # nothing is hand-maintained. Revisit as the manifest grows (raise the
     # shard count, never delete a defect to fit).
-    timeout-minutes: 30
+    #
+    # 30 -> 50 (0.5 integration, paired with the KE_WALL_TIMEOUT raise in
+    # tests/qemu/inject_and_run.sh). Splitting to 10 shards fixed the run #1
+    # 30m timeout, but that UNMASKED a per-defect truncation the outer timeout
+    # had hidden: with ~97 suites now, a mutation that makes event-flag $WAITFRs
+    # wait out their timeouts (eflag-readef/eflag-dacefc/lnm-manager-delete)
+    # pushes that defect's FULL-suite boot past the old 600s inner wall under CI
+    # contention -- "harness never reached FINAL RESULTS", a gate FAIL even
+    # though the control reddened. inject_and_run.sh now gives the full-suite
+    # boot an 1800s wall so it COMPLETES; a defect that used to fail at 600s now
+    # runs ~13m instead, so a shard holding one or two of them needs headroom
+    # past 30m. ~12 defects/shard, ~1min each for the fast majority + up to
+    # ~2-3 slow ones at ~13-20m + ~5m fixed build/positive-control fits in 50m.
+    # A genuine hang still surfaces: the 1800s inner wall fails the defect, and
+    # this 50m outer bound backstops a wedged shard.
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       # SHARD-BALLOON FIX (vms-86a part 2). MEASURED: the main-push run on

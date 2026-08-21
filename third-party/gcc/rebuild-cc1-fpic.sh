@@ -51,7 +51,16 @@ JOBS=${JOBS:-$(nproc)}
 echo "rebuild-cc1-fpic: purging non-PIC objects/archives under $WORK (gcc/, libcpp/, libiberty/, libdecnumber/, libbacktrace/, libcody/, zlib/)"
 for d in gcc libcpp libiberty libdecnumber libbacktrace libcody zlib; do
     [ -d "$WORK/$d" ] || continue
-    find "$WORK/$d" \( -name '*.o' -o -name '*.a' \) -delete
+    # .lo/.la (libtool's own object-wrapper/link-archive tracking files) MUST
+    # be purged alongside .o/.a: libbacktrace (and any other libtool-based
+    # module here) has a generated rule keyed on .lo/.la mtimes, NOT on the
+    # real .o/.a underneath -- confirmed empirically (first run: deleting
+    # only *.o/*.a left libbacktrace.la's mtime untouched, so `make all-am`
+    # considered libbacktrace.la ALREADY up to date and did nothing at all,
+    # even though the real .libs/libbacktrace.a it should produce was gone
+    # -- "make: *** No rule to make target '../libbacktrace/.libs/
+    # libbacktrace.a'" surfaced two steps later, at cc1's own link, not here).
+    find "$WORK/$d" \( -name '*.o' -o -name '*.a' -o -name '*.lo' -o -name '*.la' \) -delete
 done
 # cc1 itself (the previous HOST link, non-PIC) and its checksum source (the
 # checksum embeds an options/object list that changes across this rebuild).

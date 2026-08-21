@@ -1324,7 +1324,15 @@ static uint64_t resolve_named(struct obj *objs, int nobj,
  * for non-GOT relocations against locals — so cross-TU name collisions are
  * impossible and each local resolves to its own definition. (vms-9c1) */
 struct gotslot {
-    char     name[256];  /* diagnostic label; the dedup key only for globals */
+    /* Global dedup key + diagnostic label: a pointer into the defining object's
+     * .strtab (live for the whole run), NOT a fixed buffer. A truncating copy
+     * would (a) miss at apply time — find_got does an exact strcmp against the
+     * FULL reference name, so a >255-char mangled C++ template symbol stored
+     * truncated never matches and dies "GOT slot missing" — and (b) silently
+     * alias two distinct symbols that share a 255-char prefix (routine with
+     * deeply-nested template instantiations). The pointer key has neither
+     * failure and no arbitrary length cap. (vms-da2) */
+    const char *name;
     uint64_t va;
     uint64_t value;
     int      is_local;   /* 1 = per-object local slot keyed by (oi, sym) */
@@ -1390,7 +1398,10 @@ static int is_got_reloc(uint32_t type)
 /* A synthesized TLSDESC entry (two quadwords): [0]=resolver (IMGACT fills with
  * __tlsdesc_static), [1]=TP-relative offset (LINK pre-fills the module-relative
  * part; IMGACT adds the module's assigned TLS block offset). */
-struct tlsslot { char name[256]; int64_t addend; uint64_t va; uint64_t modoff; };
+/* name: a pointer into the defining object's live .strtab, not a fixed buffer
+ * — same truncation/prefix-collision hazard as gotslot for long mangled C++
+ * thread_local template names. (vms-da2) */
+struct tlsslot { const char *name; int64_t addend; uint64_t va; uint64_t modoff; };
 
 static int find_tls(struct tlsslot *t, int nt, const char *name)
 {
@@ -1733,7 +1744,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                 got = realloc(got, (size_t)got_cap * sizeof *got);
                 if (!got) die("oom growing GOT table");
             }
-            snprintf(got[ngot].name, sizeof got[ngot].name, "%s", nm);
+            got[ngot].name = nm;   /* strtab pointer, live for the run */
             got[ngot].is_local = is_local;
             got[ngot].oi  = is_local ? i : 0;
             got[ngot].sym = is_local ? (int)si : 0;
@@ -1754,7 +1765,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                     tls = realloc(tls, (size_t)tls_cap * sizeof *tls);
                     if (!tls) die("oom growing TLSDESC table");
                 }
-                snprintf(tls[ntls].name, sizeof tls[ntls].name, "%s", nm);
+                tls[ntls].name = nm;   /* strtab pointer, live for the run */
                 /* aarch64's TLSDESC addend is a symbol offset and belongs in the
                  * descriptor's module offset; x86_64's is a disp32 FIELD addend
                  * (-4) that belongs only in the PC-relative write. (vms-2e4) */

@@ -252,7 +252,8 @@ static void die(const char *msg)
 /* Section bucket: input sections are classified + merged by ELF flags, not by
  * exact name, so gcc's split sections (.text.unlikely, .rodata.str1.8,
  * .rodata.cst8, .data.rel.ro, ...) all land in the right output region. (vms-fa1) */
-enum { B_NONE = 0, B_TEXT, B_RODATA, B_DATA, B_INIT_ARRAY, B_BSS, B_TDATA, B_TBSS };
+enum { B_NONE = 0, B_TEXT, B_RODATA, B_DATA, B_INIT_ARRAY, B_BSS, B_TDATA, B_TBSS,
+       B_EH_FRAME };
 
 /* The buckets LINK.EXE places FLAT (a real image vaddr per input section) and
  * can therefore apply relocations into. B_BSS/B_TBSS are NOBITS (no bytes to
@@ -275,7 +276,8 @@ enum { B_NONE = 0, B_TEXT, B_RODATA, B_DATA, B_INIT_ARRAY, B_BSS, B_TDATA, B_TBS
  * toolchain.md). */
 static int bucket_is_patchable(int b)
 {
-    return b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_INIT_ARRAY;
+    return b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_INIT_ARRAY ||
+           b == B_EH_FRAME;
 }
 
 /* One relocation, tagged with the section it patches (site = sec_va + off). */
@@ -432,6 +434,16 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
             o->sec_bucket[i] = B_BSS;
         else if (s->sh_type == SHT_INIT_ARRAY)
             o->sec_bucket[i] = B_INIT_ARRAY;   /* ctor pointer table (vms-ee2) */
+        else if (s->sh_type == SHT_PROGBITS &&
+                 strcmp(o->shstr + s->sh_name, ".eh_frame") == 0)
+            /* DWARF unwinder frame table (vms-70d). Read-only PROGBITS that
+             * would otherwise fall into B_RODATA, but it needs its OWN
+             * contiguous output region (like .init_array) so the whole block
+             * is one [begin .. 0-terminator] range libgcc's __register_frame
+             * can register -- see the .eh_frame layout + .vms$ehf below. Its
+             * CIE/FDE PC32 relocs are collected/applied exactly as when it was
+             * B_RODATA (bucket_is_patchable includes B_EH_FRAME). */
+            o->sec_bucket[i] = B_EH_FRAME;
         else if (s->sh_type == SHT_PROGBITS)
             o->sec_bucket[i] = (s->sh_flags & SHF_EXECINSTR) ? B_TEXT
                              : (s->sh_flags & SHF_WRITE)     ? B_DATA
@@ -1388,6 +1400,7 @@ static uint64_t placed_addr(struct obj *d, Elf64_Sym *s)
     if (sh <= 0 || sh >= d->nsh) return 0;
     switch (d->sec_bucket[sh]) {
     case B_TEXT: case B_RODATA: case B_DATA: case B_INIT_ARRAY: case B_BSS:
+    case B_EH_FRAME:
         return d->sec_va[sh] + s->st_value;
     default:
         return 0;
@@ -1716,7 +1729,8 @@ static int defined_placed(struct obj *objs, const char *name)
     int shx = (int)s->st_shndx;
     if (shx <= 0 || shx >= objs[doi].nsh) return 0;
     int b = objs[doi].sec_bucket[shx];
-    return b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_INIT_ARRAY || b == B_BSS;
+    return b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_INIT_ARRAY ||
+           b == B_BSS || b == B_EH_FRAME;
 }
 
 /* Emit an OVMX shareable image from N objects: merge .text/.rodata/.data/.bss,
@@ -1886,7 +1900,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         imp[exit_imp].is_data = 0;   /* always a call import */
     }
 
-    int has_ro = 0, has_data = 0, has_init_array = 0, has_bss = 0;
+    int has_ro = 0, has_data = 0, has_init_array = 0, has_bss = 0, has_eh_frame = 0;
     for (int i = 0; i < nobj; i++)
         for (int s = 0; s < objs[i].nsh; s++) {
             if (objs[i].sh[s].sh_size == 0) continue;
@@ -1894,6 +1908,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             if (objs[i].sec_bucket[s] == B_DATA)       has_data = 1;
             if (objs[i].sec_bucket[s] == B_INIT_ARRAY) has_init_array = 1;
             if (objs[i].sec_bucket[s] == B_BSS)        has_bss = 1;
+            if (objs[i].sec_bucket[s] == B_EH_FRAME)   has_eh_frame = 1;
         }
 
     /* TLS geometry: COMBINED multi-module TLS block (vms-da2). A C++ image
@@ -2059,6 +2074,31 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                 cur += objs[i].sh[s].sh_size;
             }
     uint64_t ro_end = cur;
+
+    /* .eh_frame (vms-70d): the DWARF unwinder CIE/FDE table, placed in ONE
+     * contiguous region (like .init_array) so the whole block can be handed to
+     * libgcc's __register_frame as a single [begin .. 0-terminator] range. gcc
+     * emits exactly one `.eh_frame` per object; whole-archiving libstdc++/libgcc
+     * yields many, concatenated here in object order. A 4-byte-zero FDE
+     * terminator is appended after the last one (the image is calloc'd, so the
+     * reserved word is already zero) -- the terminating null crtbegin/crtend
+     * would otherwise supply. Read-only; lives in the single PT_LOAD. */
+    uint64_t ehf_beg = cur, ehf_end = cur;
+    if (has_eh_frame) {
+        int first = 1;
+        for (int i = 0; i < nobj; i++)
+            for (int s = 0; s < objs[i].nsh; s++)
+                if (objs[i].sec_bucket[s] == B_EH_FRAME && objs[i].sh[s].sh_size) {
+                    uint64_t al = objs[i].sh[s].sh_addralign ? objs[i].sh[s].sh_addralign : 8;
+                    cur = ALIGN_UP(cur, al);
+                    if (first) { ehf_beg = cur; first = 0; }
+                    objs[i].sec_va[s] = cur;
+                    cur += objs[i].sh[s].sh_size;
+                }
+        cur = ALIGN_UP(cur, 4);   /* 4-byte-zero terminator after the last FDE */
+        cur += 4;
+        ehf_end = cur;
+    }
 
     /* GOT cells (writable, 8-aligned). */
     uint64_t got_beg = ALIGN_UP(cur, 8);
@@ -2248,8 +2288,26 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         wimp_size = vms_wimp_size(nimp, imp);
     }
 
+    /* .vms$ehf: the DWARF frame-registration descriptor (vms-70d). Emitted only
+     * when the image both has a non-empty .eh_frame region AND whole-archived
+     * libgcc's __register_frame (a pure-C image has neither the registration
+     * machinery nor a need for it). IMGACT reads it and registers the frames
+     * before .init_array runs; absent -> IMGACT skips registration. Must be in
+     * the loaded range so IMGACT can read it by section vaddr. */
+    /* .vms$ehf sits after .vms$wimp (which sits after .vms$imp), so bias it off
+     * the end of the weak-import block. after_wimp == after_imp when there are
+     * no weak imports. (reconciles vms-70d's ehf placement with vms-5f0's wimp.) */
+    uint64_t after_wimp = nweak ? off_wimp + wimp_size : after_imp;
+    uint64_t register_frame_va =
+        has_eh_frame ? resolve_named(objs, nobj, "__register_frame", NULL) : 0;
+    uint64_t off_ehf = 0, ehf_desc_size = 0;
+    if (has_eh_frame && register_frame_va && ehf_end > ehf_beg) {
+        off_ehf = ALIGN_UP(after_wimp, 8);
+        ehf_desc_size = sizeof(struct ovmx_ehf_desc);
+    }
+
     /* End of file-backed loaded content; .bss (NOBITS) extends memsz beyond it. */
-    uint64_t file_loaded_end = nweak ? off_wimp + wimp_size : after_imp;
+    uint64_t file_loaded_end = off_ehf ? off_ehf + ehf_desc_size : after_wimp;
     uint64_t bss_beg = file_loaded_end, bss_end = file_loaded_end;
     if (has_bss) {
         int first = 1;
@@ -2266,10 +2324,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 
     uint64_t off_shstr = ALIGN_UP(file_loaded_end, 4);
 
-    const char *secn[24]; int nsec = 0;
+    const char *secn[26]; int nsec = 0;
     secn[nsec++] = "";
     int ix_text = nsec; secn[nsec++] = ".text";
     int ix_ro = -1;   if (has_ro)   { ix_ro   = nsec; secn[nsec++] = ".rodata"; }
+    int ix_ehf_sec = -1; if (ehf_end > ehf_beg) { ix_ehf_sec = nsec; secn[nsec++] = ".eh_frame"; }
     int ix_got = -1;  if (ngot)     { ix_got  = nsec; secn[nsec++] = ".got"; }
     int ix_tlsd = -1; if (ntls)     { ix_tlsd = nsec; secn[nsec++] = ".tlsdesc"; }
     int ix_data = -1; if (has_data) { ix_data = nsec; secn[nsec++] = ".data"; }
@@ -2282,10 +2341,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     int ix_tls = -1;  if (ntlsdesc) { ix_tls  = nsec; secn[nsec++] = OVMX_TLS_SECTION; }
     int ix_imp = -1;  if (nstrong)  { ix_imp  = nsec; secn[nsec++] = OVMX_IMP_SECTION; }
     int ix_wimp = -1; if (nweak)    { ix_wimp = nsec; secn[nsec++] = OVMX_WIMP_SECTION; }
+    int ix_ehf = -1;  if (off_ehf)  { ix_ehf  = nsec; secn[nsec++] = OVMX_EHF_SECTION; }
     int ix_bss = -1;  if (has_bss)  { ix_bss  = nsec; secn[nsec++] = ".bss"; }
     int ix_tbss = -1; if (has_tls && tbss_sz) { ix_tbss = nsec; secn[nsec++] = ".tbss"; }
     int ix_str = nsec; secn[nsec++] = ".shstrtab";
-    uint64_t sn_off[24]; uint64_t sn_sz = 0;
+    uint64_t sn_off[26]; uint64_t sn_sz = 0;
     for (int i = 0; i < nsec; i++) { sn_off[i] = sn_sz; sn_sz += strlen(secn[i]) + 1; }
     uint64_t off_shdr = ALIGN_UP(off_shstr + sn_sz, 8);
     uint64_t file_sz = off_shdr + (uint64_t)nsec * sizeof(Elf64_Shdr);
@@ -2351,7 +2411,8 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     for (int i = 0; i < nobj; i++)
         for (int s = 0; s < objs[i].nsh; s++) {
             int b = objs[i].sec_bucket[s];
-            if ((b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_INIT_ARRAY) &&
+            if ((b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_INIT_ARRAY ||
+                 b == B_EH_FRAME) &&
                 objs[i].sh[s].sh_size)
                 memcpy(img + objs[i].sec_va[s],
                        objs[i].buf + objs[i].sh[s].sh_offset, objs[i].sh[s].sh_size);
@@ -2620,6 +2681,16 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     if (nweak)
         vms_wimp_write(img, off_wimp, imp, nimp);
 
+    /* .vms$ehf descriptor: image-relative .eh_frame start + __register_frame
+     * addr (both biased by IMGACT). Only emitted when register_frame_va != 0. */
+    if (off_ehf) {
+        struct ovmx_ehf_desc *ed = (struct ovmx_ehf_desc *)(img + off_ehf);
+        ed->magic = OVMX_EHF_MAGIC;
+        ed->reserved = 0;
+        ed->eh_frame_begin = ehf_beg;
+        ed->register_frame = register_frame_va;
+    }
+
     char *shstr = (char *)(img + off_shstr);
     for (int i = 0; i < nsec; i++) memcpy(shstr + sn_off[i], secn[i], strlen(secn[i]) + 1);
     Elf64_Shdr *sh = (Elf64_Shdr *)(img + off_shdr);
@@ -2632,6 +2703,15 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         sh[ix_ro].sh_flags = SHF_ALLOC; sh[ix_ro].sh_addr = ro_beg;
         sh[ix_ro].sh_offset = ro_beg; sh[ix_ro].sh_size = ro_end - ro_beg;
         sh[ix_ro].sh_addralign = 16;
+    }
+    if (ix_ehf_sec >= 0) {
+        /* .eh_frame output section spans the whole contiguous block INCLUDING
+         * the 4-byte-zero terminator (ehf_end), so a reader/registrar that
+         * bounds by sh_size sees the terminated FDE list. */
+        sh[ix_ehf_sec].sh_name = sn_off[ix_ehf_sec]; sh[ix_ehf_sec].sh_type = SHT_PROGBITS;
+        sh[ix_ehf_sec].sh_flags = SHF_ALLOC; sh[ix_ehf_sec].sh_addr = ehf_beg;
+        sh[ix_ehf_sec].sh_offset = ehf_beg; sh[ix_ehf_sec].sh_size = ehf_end - ehf_beg;
+        sh[ix_ehf_sec].sh_addralign = 8;
     }
     if (ngot) {
         sh[ix_got].sh_name = sn_off[ix_got]; sh[ix_got].sh_type = SHT_PROGBITS;
@@ -2702,6 +2782,12 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         sh[ix_wimp].sh_flags = SHF_ALLOC; sh[ix_wimp].sh_addr = off_wimp;
         sh[ix_wimp].sh_offset = off_wimp; sh[ix_wimp].sh_size = wimp_size;
         sh[ix_wimp].sh_addralign = 8;
+    }
+    if (ix_ehf >= 0) {
+        sh[ix_ehf].sh_name = sn_off[ix_ehf]; sh[ix_ehf].sh_type = SHT_PROGBITS;
+        sh[ix_ehf].sh_flags = SHF_ALLOC; sh[ix_ehf].sh_addr = off_ehf;
+        sh[ix_ehf].sh_offset = off_ehf; sh[ix_ehf].sh_size = ehf_desc_size;
+        sh[ix_ehf].sh_addralign = 8;
     }
     if (has_tls && tbss_sz) {
         sh[ix_tbss].sh_name = sn_off[ix_tbss]; sh[ix_tbss].sh_type = SHT_NOBITS;

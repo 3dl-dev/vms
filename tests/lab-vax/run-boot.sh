@@ -59,6 +59,18 @@
 # proven stable across N consecutive runs (see the vms-065 PR description):
 #   tests/lab-vax/run-boot.sh gate            # 0 = VAX boots to DCL,
 #                                             # nonzero = not release-clean
+#
+# vms-d0e5 (parent vms-4834) adds ONE MORE mode -- the two-disk INSTALL proof,
+# the vax mirror of the x86_64 install e2e (tests/qemu/test_install_menu.sh +
+# test_install_boot_e2e.sh + test_product_install_e2e.sh). It builds the real
+# vax image set + OVMX-OS-VAX.KIT, masters the DISTRIBUTION volume (which boots
+# into OVMX$INSTALL.COM), formats a BLANK ODS-2 target, then boots the
+# distribution volume (rq1 -> DKA0:) with the blank target (rq2 -> DKA100:) and
+# drives the menu's PRESERVE path to install OVMX onto the target, asserting a
+# rooted, genuinely-activatable system tree AND a real on-disk write (sha256
+# before/after, INV-6 teeth), via tests/lab-vax/drive_install_vax.py:
+#   tests/lab-vax/run-boot.sh install         # 0 = install onto a blank target
+#                                             # succeeded and really wrote bytes
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -90,6 +102,16 @@ KERNEL_MARKER="${CACHE_DIR}/.ovmx-modular-kernel-installed"   # SHARED with sibl
 BOOT_WORKDIR="${CACHE_DIR}/boot-work"
 BOOT_COPY_MARKER="${CACHE_DIR}/.boot-disk-copied"
 BOOT_INSTALL_MARKER="${CACHE_DIR}/.ovmx-init-installed"
+
+# vms-d0e5 rung G: the two-disk INSTALL proof's artifacts (the `install' mode
+# only). VAX_IMAGES_DIR holds the FULL shipped vax image set (real elf32-vax
+# executables, built by the ovmx-images CMake target) that BOTH the OS kit and
+# the distribution volume draw from; the distribution volume boots into
+# OVMX$INSTALL.COM and installs onto the freshly-formatted blank target.
+VAX_IMAGES_DIR="${VAX_IMAGES_DIR:-${CACHE_DIR}/vax-images}"
+OS_KIT="${OS_KIT:-${CACHE_DIR}/OVMX-OS-VAX.KIT}"
+DISTRIB_IMG="${DISTRIB_IMG:-${CACHE_DIR}/ovmx-distrib-vax.img}"
+BLANK_TARGET_IMG="${BLANK_TARGET_IMG:-${CACHE_DIR}/dka100-target.img}"
 
 CROSS_IMAGE="${CROSS_IMAGE:-ovmx-cross-vax}"
 LAB_IMAGE="${LAB_IMAGE:-ovmx-vax-lab}"
@@ -275,6 +297,117 @@ master_system_volume() {
   log "mastered system volume carries DCL.EXE + PROVISION.EXE + OVMXVMSSYS.PAR"
 }
 
+# 3d (install). Cross-build the FULL shipped vax image set via the top-level
+#    CMake `ovmx-images' target (tools/cross-vax/build-ovmx-images-vax-cmake.sh)
+#    and collect the boot + utility images (PRODUCT/AUTHORIZE/INITIALIZE/SYSGEN)
+#    into VAX_IMAGES_DIR. These are REAL elf32-vax executables (the script asserts
+#    the Decision-A activation contract on each), NOT stand-ins -- both the OS kit
+#    and the distribution volume below draw from here (rd vms-d0e5 rung G).
+build_vax_images() {
+  local need="STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE PRODUCT.EXE AUTHORIZE.EXE INITIALIZE.EXE SYSGEN.EXE"
+  if [ "${FORCE_VAX_IMAGES:-0}" != "1" ]; then
+    local have=1
+    for img in $need; do [ -f "${VAX_IMAGES_DIR}/${img}" ] || have=0; done
+    [ "${have}" -eq 1 ] && { log "vax image set present -- NOT rebuilding (set FORCE_VAX_IMAGES=1)"; return 0; }
+  fi
+  mkdir -p "${VAX_IMAGES_DIR}"
+  log "cross-building the full shipped vax image set ('cmake --build --target ovmx-images'; hard cap ${KBUILD_TIMEOUT}s)"
+  local cid="ovmx-install-images-$$"; local rc=0
+  set +e
+  timeout --kill-after="${TIMEOUT_GRACE}" "${KBUILD_TIMEOUT}" \
+    docker run --rm --name "${cid}" -v "${REPO}:/src" -w /src -v "${VAX_IMAGES_DIR}:/out" \
+      --entrypoint sh "${CROSS_IMAGE}" -c '
+        set -e
+        BUILD_DIR=/tmp/build-vax-images-cmake sh tools/cross-vax/build-ovmx-images-vax-cmake.sh
+        for img in STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE \
+                   PRODUCT.EXE AUTHORIZE.EXE INITIALIZE.EXE SYSGEN.EXE; do
+          cp /tmp/build-vax-images-cmake/bin/$img /out/$img
+        done'
+  rc=$?; set -e
+  [ "${rc}" -eq 0 ] || { docker kill "${cid}" >/dev/null 2>&1 || true; die "ovmx-images vax build failed/timed out (rc=${rc})"; }
+  for img in $need; do [ -f "${VAX_IMAGES_DIR}/${img}" ] || die "ovmx-images build finished but ${img} missing"; done
+  log "vax image set built: $(echo $need | wc -w) real elf32-vax images in ${VAX_IMAGES_DIR}"
+}
+
+# 3e (install). Package OVMX-OS-VAX.KIT from those REAL images via
+#    tools/cross-vax/build-os-kit-vax.sh. That script needs a HOST ovmx_kit_pack
+#    (it links vmsfs/vmslnm/ovmx_kit_reader, so it is not a single-file compile);
+#    build it natively into /tmp inside CROSS_IMAGE -- NEVER into the repo tree
+#    (shared-host hygiene) -- and pass it as the script's 4th arg.
+build_os_kit() {
+  if [ "${FORCE_OS_KIT:-0}" != "1" ] && [ -f "${OS_KIT}" ]; then
+    log "OVMX-OS-VAX.KIT present -- NOT repacking (set FORCE_OS_KIT=1)"; return 0; fi
+  log "packaging OVMX-OS-VAX.KIT from the real vax images (build-os-kit-vax.sh)"
+  docker run --rm -v "${REPO}:/src" -w /src \
+    -v "${VAX_IMAGES_DIR}:/images:ro" -v "$(dirname "${OS_KIT}"):/out" \
+    --entrypoint sh "${CROSS_IMAGE}" -c '
+      set -e
+      cmake -S /src -B /tmp/hostbuild -DBUILD_TOOLS=ON -DCMAKE_BUILD_TYPE=Release >/dev/null
+      cmake --build /tmp/hostbuild --target ovmx_kit_pack -- -j"$(nproc)" >/dev/null
+      sh tools/cross-vax/build-os-kit-vax.sh /images /src \
+         /out/'"$(basename "${OS_KIT}")"' /tmp/hostbuild/bin/ovmx_kit_pack'
+  [ -f "${OS_KIT}" ] || die "OS kit packaging did not produce ${OS_KIT}"
+  log "packaged ${OS_KIT}"
+}
+
+# 3f (install). Master the DISTRIBUTION volume: stage the installer-media shape
+#    (stage_sysvol.sh --distribution --kit -- the system tree PLUS the OS kit at
+#    SYS$UPDATE: and the distribution SYSTARTUP that @'s OVMX$INSTALL.COM) and
+#    master it with vmsfs_master -> ovmx-distrib-vax.img. Mirrors
+#    master_system_volume, in --distribution mode. Content-gates that the mastered
+#    volume actually carries OVMX-OS-VAX.KIT.
+master_distribution_volume() {
+  [ -f "${OS_KIT}" ] || die "OS kit missing (build_os_kit first): ${OS_KIT}"
+  log "mastering the OVMX/NetBSD-vax DISTRIBUTION volume (stage_sysvol.sh --distribution + vmsfs_master)"
+  rm -f "${DISTRIB_IMG}"
+  local listing
+  listing="$(docker run --rm -v "${REPO}:/src:ro" -v "${VAX_IMAGES_DIR}:/images:ro" \
+    -v "${OS_KIT}:/kit/OVMX-OS-VAX.KIT:ro" \
+    -v "$(dirname "${DISTRIB_IMG}"):/out" --entrypoint sh "${CROSS_IMAGE}" -c '
+      set -e
+      cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+         -I /src/src/kernel/vmsfs -I /src/src/vmsfs/include \
+         -o /tmp/vmsfs_master /src/tools/vmsfs_master.c \
+         /src/src/vmsfs/ods2/ods2_reader.c /src/src/vmsfs/ods2/ods2_writer.c \
+         /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
+         /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
+      bash /src/tests/lab-vax/stage_sysvol.sh --distribution --kit /kit/OVMX-OS-VAX.KIT \
+           /images /src /tmp/stage
+      /tmp/vmsfs_master master /out/'"$(basename "${DISTRIB_IMG}")"' OVMXSYS /tmp/stage 64
+      /tmp/vmsfs_master list /out/'"$(basename "${DISTRIB_IMG}")")"
+  echo "${listing}"
+  [ -f "${DISTRIB_IMG}" ] || die "distribution-volume mastering did not produce ${DISTRIB_IMG}"
+  echo "${listing}" | grep -qiF "OVMX-OS-VAX.KIT" \
+    || die "mastered distribution volume is MISSING OVMX-OS-VAX.KIT (staging regression, rd vms-d0e5)"
+  log "mastered distribution volume carries OVMX-OS-VAX.KIT (boots into OVMX\$INSTALL.COM)"
+}
+
+# 3g (install). Format a BLANK ODS-2 install target (label WORK) -- the mirror of
+#    the x86_64 install e2e's host-side `INITIALIZE.EXE --ods2 dka100.img WORK 16'.
+#    The cross-built INITIALIZE.EXE is elf32-vax (cannot run on the host), so the
+#    blank volume is formatted with the SAME host ODS-2 codec master_volume /
+#    master_system_volume use -- vmsfs_master mastering an EMPTY tree -- which
+#    produces a genuine, mountable ODS-2 volume with label WORK and free space for
+#    the install. vmsfs is little-endian on disk (arch-neutral), so a host-mastered
+#    volume mounts on the vax.
+make_blank_target() {
+  log "formatting a BLANK ODS-2 install target (label WORK) -> ${BLANK_TARGET_IMG}"
+  rm -f "${BLANK_TARGET_IMG}"
+  docker run --rm -v "${REPO}:/src:ro" -v "$(dirname "${BLANK_TARGET_IMG}"):/out" \
+    --entrypoint sh "${CROSS_IMAGE}" -c '
+      set -e
+      cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+         -I /src/src/kernel/vmsfs -I /src/src/vmsfs/include \
+         -o /tmp/vmsfs_master /src/tools/vmsfs_master.c \
+         /src/src/vmsfs/ods2/ods2_reader.c /src/src/vmsfs/ods2/ods2_writer.c \
+         /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
+         /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
+      mkdir -p /tmp/blank
+      /tmp/vmsfs_master master /out/'"$(basename "${BLANK_TARGET_IMG}")"' WORK /tmp/blank 16'
+  [ -f "${BLANK_TARGET_IMG}" ] || die "blank target formatting did not produce ${BLANK_TARGET_IMG}"
+  log "blank ODS-2 target formatted (label WORK)"
+}
+
 # 4. ensure the shared NetBSD/vax disk (install once).
 ensure_disk() {
   if [ -f "${CACHE_DIR}/anita-work/wd0.img" ]; then
@@ -432,6 +565,56 @@ run_sysboot_negctl() {
   soft_die "SYSBOOT NEGATIVE CONTROL FAILED unexpectedly (see console output above)"
 }
 
+# vms-d0e5 rung G: the two-disk INSTALL proof. Build the real vax image set + OS
+# kit, master the distribution volume, format a blank ODS-2 target, then boot the
+# distribution volume (rq1 -> DKA0:) with the blank target (rq2 -> DKA100:) and
+# drive OVMX$INSTALL.COM to install onto it (drive_install_vax.py). sha256 the
+# target before/after so the install's real block writes are PROVEN to land (the
+# same INV-6 hash-diff teeth run_sysboot_positive applies to the RW system volume:
+# a green console alone cannot rule out a silently-faked/no-op write).
+run_install() {
+  build_vax_images
+  build_os_kit
+  master_distribution_volume
+  make_blank_target
+  local before after
+  before="$(sha256sum "${BLANK_TARGET_IMG}" | awk '{print $1}')"
+  log "blank target pre-install sha256:  ${before}"
+  local cid="ovmx-install-drive-$$"; local rc=0
+  set +e
+  timeout --kill-after="${TIMEOUT_GRACE}" "${SESSION_TIMEOUT}" \
+    docker run --rm --name "${cid}" --entrypoint python3 \
+      -e NETBSD_VERSION="${NETBSD_VERSION}" -e "SETS=${SETS}" \
+      -e OVMX_NETBSD_DIR=/netbsd -e NETBSD_WORKDIR=/cache/boot-work \
+      -e OVMX_DISTRIB_IMG=/cache/"$(basename "${DISTRIB_IMG}")" \
+      -e OVMX_BLANK_IMG=/cache/"$(basename "${BLANK_TARGET_IMG}")" \
+      -v "${CACHE_DIR}:/cache" -v "${ARTIFACTS_DIR}:/artifacts:ro" \
+      -v "${REPO}/tests/netbsd:/netbsd:ro" -v "${REPO}/tests/lab-vax:/lab-vax:ro" \
+      "${LAB_IMAGE}" /lab-vax/drive_install_vax.py
+  rc=$?; set -e
+  docker kill "${cid}" >/dev/null 2>&1 || true
+  after="$(sha256sum "${BLANK_TARGET_IMG}" | awk '{print $1}')"
+  log "blank target post-install sha256: ${after}"
+  if [ "${rc}" -ne 0 ]; then
+    soft_die "INSTALL FAILED (drive_install_vax.py exit ${rc}; see console output above)"
+    return 1
+  fi
+  if [ "${before}" = "${after}" ]; then
+    soft_die "INSTALL: the blank target's raw on-disk bytes did NOT change during the install (rd vms-d0e5). The menu reported success but PRODUCT INSTALL's real block writes never hit the target image -- a silent no-op (INV-6 failure class). A green console is NOT sufficient by itself; this hash diff is the positive proof of a real write."
+    return 1
+  fi
+  log "OK (rd vms-d0e5): the install target's on-disk bytes CHANGED -- REAL block"
+  log "  writes hit DKA100: (not a silently-faked/no-op write; INV-6 teeth)."
+  log "======================================================================"
+  log "  INSTALL-VAX PASSED: the OVMX/NetBSD-vax DISTRIBUTION volume booted into"
+  log "  OVMX\$INSTALL.COM, the PRESERVE path installed OVMX onto a BLANK ODS-2"
+  log "  target over the executive (MOUNT + PRODUCT INSTALL + AUTHORIZE + SYSGEN),"
+  log "  the installed target carries a ROOTED, genuinely-activatable system tree,"
+  log "  and the target's raw bytes really changed on disk."
+  log "======================================================================"
+  return 0
+}
+
 case "${MODE}" in
   prove)
     if run_session prove /cache/boot-work; then
@@ -484,5 +667,14 @@ case "${MODE}" in
     fi
     die "GATE FAILED (vms-065) -- see console output above"
     ;;
-  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | gate)" ;;
+  install)
+    # vms-d0e5 rung G: the two-disk INSTALL proof -- boot the distribution
+    # volume with a blank target attached, drive OVMX$INSTALL.COM to install
+    # OVMX onto the target, and assert it worked (rooted, activatable, real
+    # block writes). The vax mirror of the x86_64 install e2e.
+    #   tests/lab-vax/run-boot.sh install
+    run_install && exit 0
+    exit 1
+    ;;
+  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | gate | install)" ;;
 esac

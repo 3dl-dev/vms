@@ -44,6 +44,13 @@ $ IF F$TYPE(NORUN) .EQS. "" THEN NORUN = ""
 $ !
 $ OUTNAME = P1
 $ OBJLIST = ""
+$ ! A DCL command procedure has only P1..P8, capping the param form at 7 source
+$ ! TUs (P2..P8) -- too few for a real OVMX component (libvmssys is 10 TUs). The
+$ ! SOURCES symbol lifts that: a space-separated list of source base names,
+$ ! walked with F$ELEMENT (no cap), so @BUILD scales to a whole component while
+$ ! the P2..P8 param form stays intact for the HELLO/LINK.EXE smokes. (vms-678)
+$ IF F$TYPE(SOURCES) .EQS. "" THEN SOURCES = ""
+$ IF SOURCES .NES. "" THEN GOTO COMPILE_LIST
 $ IF P2 .EQS. "" THEN GOTO COMPILE_SINGLE
 $ !
 $ ! -- multi-TU: compile each of P2..P8 that is supplied --
@@ -57,6 +64,22 @@ $   OBJLIST = OBJLIST + " " + SRC + ".OBJ"
 $   NPARAM = NPARAM + 1
 $   IF NPARAM .LE. 8 THEN GOTO COMPILE_LOOP
 $   GOTO LINK_STEP
+$ !
+$ ! -- source-list: compile every base name in the SOURCES symbol (no cap).
+$ !    F$ELEMENT returns the delimiter itself once the list is exhausted, so a
+$ !    lone " " is the loop terminator. --
+$ COMPILE_LIST:
+$ ISRC = 0
+$ LIST_LOOP:
+$   SRC = F$ELEMENT(ISRC, " ", "''SOURCES'")
+$   IF SRC .EQS. " " THEN GOTO LINK_STEP
+$   IF SRC .EQS. "" THEN GOTO LIST_NEXT
+$   WRITE SYS$OUTPUT "%BUILD-I-COMPILE, compiling ''SRC'.C with the OVMX-native TCC.EXE"
+$   TCC 'CFLAGS' -x c -c 'SRC'.C -o 'SRC'.OBJ
+$   OBJLIST = OBJLIST + " " + SRC + ".OBJ"
+$ LIST_NEXT:
+$   ISRC = ISRC + 1
+$   GOTO LIST_LOOP
 $ !
 $ ! -- single-TU: P1 is both the source and the output --
 $ COMPILE_SINGLE:

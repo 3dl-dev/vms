@@ -177,6 +177,39 @@ grep -q '%BUILD-S-OK' "$WORK/build.out" || { echo "FAIL: BUILD.COM did not repor
 [ "$BRC" -eq 0 ] || { echo "FAIL: the DCL @BUILD session did not exit clean (got $BRC)"; exit 1; }
 
 echo
+echo "== multi-TU SOURCES build: 8 TUs (> the 7-param cap) via @BUILD + SOURCES (vms-678) =="
+# Prove BUILD.COM's SOURCES source-list path scales past the P2..P8 param cap:
+# eight translation units MA.C..MH.C (MA has main(), calls f1..f7 from the rest),
+# named in a SOURCES symbol, linked into MULTI.EXE by the OVMX-native toolchain.
+rm -f "$PROJ"/M?.OBJ* "$PROJ"/M?.obj* "$PROJ"/MULTI.* "$PROJ"/multi.* 2>/dev/null
+cat > "$PROJ/MA.C" <<'EOF'
+#include <stdio.h>
+extern int f1(void),f2(void),f3(void),f4(void),f5(void),f6(void),f7(void);
+int main(void){ printf("multi8 sum=%d\n", f1()+f2()+f3()+f4()+f5()+f6()+f7()); return 0; }
+EOF
+for N in 1 2 3 4 5 6 7; do
+    L=$(printf "\\$(printf '%03o' $((66+N-1)))")   # MB..MH
+    printf 'int f%d(void){ return %d; }\n' "$N" "$N" > "$PROJ/M$L.C"
+done
+printf '$ SOURCES == "MA MB MC MD ME MF MG MH"\n$ @SYS$SYSTEM:BUILD MULTI\n$ EXIT\n' > "$PROJ/DOmulti.com"
+set +e
+( cd "$PROJ" && VMS_ROOT=/vms VMS_DEFAULT_DIR='SYS$SYSDEVICE:[000000]' \
+    "$SYSEXE/DCL.EXE" "$PROJ/DOmulti.com" ) > "$WORK/multi.out" 2>&1
+MRC=$?
+set -e
+echo "-- @BUILD MULTI (SOURCES) output: --"; sed 's/^/   /' "$WORK/multi.out"
+echo "-- DCL.EXE exit=$MRC --"
+MULTI_EXE=$(ls "$PROJ"/multi.exe\;* "$PROJ"/MULTI.EXE\;* 2>/dev/null | head -1)
+if [ -n "$MULTI_EXE" ] && grep -q 'multi8 sum=28' "$WORK/multi.out" && grep -q '%BUILD-S-OK' "$WORK/multi.out" && [ "$MRC" -eq 0 ]; then
+    echo "-- MULTI: PASS -- 8-TU SOURCES build linked + ran (sum=28), past the 7-param cap (vms-678) --"
+else
+    if [ "${BUILD_EXPECT:-1}" = "1" ]; then
+        echo "FAIL: 8-TU SOURCES @BUILD did not produce a running MULTI.EXE (image='$MULTI_EXE' exit=$MRC)"; exit 1
+    fi
+    echo "SKIP (BUILD_EXPECT=0): multi-TU SOURCES build did not complete."
+fi
+
+echo
 echo "================================================================================"
 echo "MILESTONE (vms-615, self-host S3.2): a DCL command procedure (BUILD.COM) drives"
 echo "compile -> link -> run end-to-end using the OVMX-native TCC.EXE + LINK.EXE as DCL"

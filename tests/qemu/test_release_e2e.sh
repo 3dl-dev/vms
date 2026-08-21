@@ -15,61 +15,49 @@
 # =============================================================================
 # WHAT IT DRIVES, AND WHY IT IS NOT A MUTATION TEST
 # =============================================================================
-# The fault is injected THROUGH THE FILE, by a real SYSTEM session using real
-# DCL file I/O (OPEN/WRITE ... WRITE ... CLOSE) against the real
-# SYS$SYSTEM:SYSUAF.DAT on the real installed system disk. No source is edited,
-# no function is renamed or wrapped, and the reader under test is the one the
-# boot actually runs. What is poisoned is the input the boot reads.
+# Each case is injected THROUGH THE FILE, by a real SYSTEM session running the
+# real AUTHORIZE utility (or DCL DELETE) against the real system disk. No source
+# is edited, no function is renamed or wrapped, and the reader under test is the
+# one the boot actually runs. What changes is the on-disk state the boot reads.
 #
-# THE VARIABLE IS THE POSITION OF THE SIXTH FIELD SEPARATOR, not the write path
-# and not the length as such. Four cases run:
+# THE MECHANISM IS AUTHORIZE, THE SUPPORTED SYSUAF EDITOR. SYSUAF.DAT is an RMS
+# INDEXED file of binary $UAFDEF records; the only thing that persists an account
+# change to the file PROVISION/LOGINOUT read is AUTHORIZE, which $DELETEs/$PUTs
+# records and writes the indexed file back over the Files-11 ODS-2 ACP
+# (ovmx_sysuaf_write_all). DCL OPEN/WRITE of SYS$SYSTEM:SYSUAF.DAT is NOT a
+# SYSUAF edit: it $CREATEs a sequential TEXT version, and once the mastered
+# system disk carries the SYS$SPECIFIC per-root [SYS0.SYSEXE] (vms-f05), a create
+# through the SYS$SYSTEM: search list lands that text file in the PRIMARY member
+# and SHADOWS the binary indexed SYSUAF the common member holds -- so the next
+# boot's PROVISION opens the shadow, cannot bind it as Prolog-3, and halts "no
+# SYSTEM account". Earlier forms of the positive cases used OPEN/WRITE and only
+# "passed" while the create silently FAILED (no primary-member directory before
+# vms-f05); the SYS$SPECIFIC dirs exposed that false pass, and this rig now edits
+# every case through AUTHORIZE -- a genuine write->read round-trip (vms-persistboot,
+# completing the vms-0a5/088e14bc conversion the norecord case started).
 #
-#   short       103-byte SYSTEM row, sixth separator at  99  -- CONTROL, must boot
-#   inwin       502-byte SYSTEM row, sixth separator at 387  -- CONTROL, must boot
-#   longrow     675-byte SYSTEM row, sixth separator at 560  -- past 511, must boot
-#   norecord    NO SYSTEM row at all                         -- must HALT
+# Six cases run:
 #
-# A fifth case (poisoned_uic, vms-a17e) is not about the sixth separator at
-# all -- see its own comment below -- and proves identity establishment reads
-# SYSUAF zero times: a SYSTEM row carrying a UIC and privilege string that are
-# NOT [1,4]/ALL must still produce "[1,4] established by the executive",
-# because the executive constructs that identity from its own constant now,
-# never from this file.
+#   short         AUTHORIZE MODIFY SYSTEM (UIC [1,4])       -- CONTROL, must boot
+#   inwin         AUTHORIZE MODIFY SYSTEM (UIC [1,4])       -- CONTROL, must boot
+#   longrow       AUTHORIZE MODIFY SYSTEM (UIC [1,4])       -- CONTROL, must boot
+#   poisoned_uic  AUTHORIZE MODIFY SYSTEM (UIC != [1,4])    -- must boot [1,4]
+#   norecord      AUTHORIZE REMOVE SYSTEM                   -- must HALT
+#   noprovision   DELETE SYS$SYSTEM:PROVISION.EXE           -- must HALT
 #
-# All four are written by the same DCL session through the same commands into
-# the same file on the same rig. If the rig itself broke SYSUAF, "short" would
-# fail too -- and the whole point of running it is that it does not. And if the
-# rig could not distinguish a broken system from a working one, "norecord"
-# would pass anyway -- which is why it is here.
+# poisoned_uic (vms-a17e) proves identity establishment reads SYSUAF zero times:
+# a SYSTEM account whose stored UIC is NOT [1,4] must still produce "[1,4]
+# established by the executive", because the executive constructs that identity
+# from its own constant now, never from this file.
 #
-# MEASURED BOTH WAYS with this exact script, 2026-08-07:
-#
-#   image built from the UNFIXED tree (origin/main d7a404e):
-#       RESULTS: 21 passed, 3 failed   (exit 1)
-#         FAIL: longrow boot 2: reaches the login prompt
-#         FAIL: longrow boot 2: NO '%OVMX-F-EXECINIT, no SYSTEM record' halt
-#         FAIL: longrow boot 2: SYSTEM [1,4] established by the executive
-#   image built from the FIXED tree:
-#       RESULTS: 24 passed, 0 failed   (exit 0)
-#
-# Note that "norecord" PASSES on the unfixed tree too -- the fail-stop worked
-# there, in PID 1. That is the point of keeping it: it shows the 3 failures
-# above are this test discriminating, not this test being broken.
-#
-# Per case, on the unfixed tree:
-#
-#   short    -> boot 2 GREEN  (%OVMX-I-EXEC, system identity SYSTEM [1,4] ...)
-#   inwin    -> boot 2 GREEN
-#   longrow  -> boot 2:
-#                %STARTUP-I-SYSBOOT, system disk detected, skipping install
-#                %OVMX-F-EXECINIT, no SYSTEM record in SYS$SYSTEM:SYSUAF.DAT
-#                %OVMX-I-EXECINIT, the system process has no authorized identity
-#                [    2.925907] reboot: Power down
-#
-# That is the operator's halt, reproduced, with two controls that isolate it to
-# the one variable. On the fixed tree all cases hold, because PID 1 no longer
-# parses SYSUAF at all and the one remaining reader reports an over-length
-# record instead of silently shortening it.
+# The three MODIFY controls each run an independent boot -> edit -> boot cycle:
+# if the rig itself broke SYSUAF they would fail too, and the whole point of
+# running them is that they do not. norecord/noprovision prove the rig can still
+# go RED, so the "up" cases are "did boot", not "could never have halted". (The
+# short/inwin/longrow triplet once varied the sixth field-separator position to
+# probe a 512-byte buffer in the retired SYSUAF TEXT parser; that parser is gone
+# -- PID 1 reads no SYSUAF and the binary $UAFDEF records are fixed-size -- so
+# the three are now equivalent, kept as regression breadth over the live path.)
 #
 # =============================================================================
 # DO NOT EDIT THIS FILE WHILE A RUN IS IN FLIGHT. bash reads a script by BYTE
@@ -143,57 +131,19 @@ record() {
     fi
 }
 
-# The SYSTEM password hash the shipped SYSUAF carries for MANAGER (vms-72c).
-# Kept byte-identical so the poisoned rows still authenticate -- a row that
-# could not log in would confound "the boot found SYSTEM" with "the session
-# worked".
-HASH=36a708df24b4751520ee64bba2d92167294acbb8f8fbfc3a120fb75323e9739b
-
-# Build a SYSTEM row whose sixth separator lands at a chosen offset.
-#   $1 = DEFAULT_DIR padding target, $2 = FLAGS length
-make_system_row() {
-    local ddlen="$1" fllen="$2"
-    local dd="SYS\$SYSDEVICE:[SYSMGR"
-    while [ ${#dd} -lt $((ddlen - 1)) ]; do dd="${dd}D"; done
-    dd="${dd}]"
-    local fl=""
-    local i=0
-    while [ $i -lt "$fllen" ]; do fl="${fl}F"; i=$((i + 1)); done
-    # A real, fully expanded privilege list -- the shape the field grows into.
-    local pv="TMPMBX,NETMBX,OPER,SYSPRV,BYPASS,SETPRV,CMKRNL,CMEXEC,SYSNAM,GRPNAM,DETACH,SETPRI,ALTPRI,WORLD,GROUP,LOG_IO,PHY_IO"
-    printf 'SYSTEM|%s|1|4|%s|%s|%s' "$HASH" "$dd" "$fl" "$pv"
-}
-
-sixth_sep_offset() {
-    printf '%s' "$1" | awk '{
-        n=0
-        for (i = 1; i <= length($0); i++)
-            if (substr($0, i, 1) == "|") { n++; if (n == 6) { print i-1; exit } }
-        print -1
-    }'
-}
-
-OTHER_ROWS=(
- "OPERATOR||1|6|SYS\$SYSDEVICE:[SYSMGR]||OPER,SYSPRV,TMPMBX,NETMBX"
- "DEFAULT||200|200|SYS\$SYSDEVICE:[USERS.DEFAULT]||TMPMBX,NETMBX"
- "GUEST|16ceb2796ccd9d52d4f2a92134ef9ecfeb8f016150a82d36b299d09d5b9963f0|200|201|SYS\$SYSDEVICE:[USERS.GUEST]||TMPMBX"
- "USER1||200|202|SYS\$SYSDEVICE:[USERS.USER1]||TMPMBX,NETMBX"
- "USER2||200|203|SYS\$SYSDEVICE:[USERS.USER2]||TMPMBX,NETMBX"
-)
-
 # ---------------------------------------------------------------------------
-# One case: pre-installed disk -> boot -> edit SYSUAF from a SYSTEM session
-#           -> reboot -> the system must come up with an identity.
+# One case: pre-installed disk -> boot -> edit SYSUAF via AUTHORIZE from a
+#           SYSTEM session -> reboot -> the system must come up with an identity.
 # ---------------------------------------------------------------------------
-# $3 = "up" (must boot) or "halt" (must fail-stop with the EXECINIT message).
+# $2 = "up" (must boot) or "halt" (must fail-stop with the EXECINIT message).
+# $3 = the UIC to stamp on the SYSTEM account, "g|m" in octal (vms-e60),
+#      default "1|4". poisoned_uic passes a non-[1,4] UIC to prove the boot's
+#      identity is the executive's constant, NOT whatever SYSUAF stores; every
+#      other case leaves SYSTEM at [1,4]. This is the FILE CONTENT written, not
+#      a claim about the identity the boot ends up with -- see the boot-2
+#      "SYSTEM [1,4] established" assertion for why the two can differ.
 run_case() {
-    # uic (5th arg) is the SYSUAF-FILE-CONTENT UIC this case's row carries --
-    # used ONLY by the sanity check a few lines down that the DCL WRITE
-    # actually landed in the file. It defaults to "1|4" because that is what
-    # every case except poisoned_uic (vms-a17e) writes. It is NOT a claim
-    # about what identity the boot ends up with: see that check's own
-    # comment for why the two can legitimately differ.
-    local tag="$1" system_row="$2" expect="${3:-up}" uic="${4:-1|4}"
+    local tag="$1" expect="${2:-up}" uic="${3:-1|4}"
     local disk="/tmp/e2e-$tag.img"
     local log1="/tmp/e2e-$tag-boot1.log"
     local log2="/tmp/e2e-$tag-boot2.log"
@@ -202,11 +152,7 @@ run_case() {
 
     echo ""
     echo "=========================================================="
-    if [ -n "$system_row" ]; then
-        echo "CASE $tag: SYSTEM row ${#system_row} bytes, sixth separator at $(sixth_sep_offset "$system_row"), expect=$expect"
-    else
-        echo "CASE $tag: NO SYSTEM ROW AT ALL, expect=$expect"
-    fi
+    echo "CASE $tag: AUTHORIZE MODIFY SYSTEM -> binary \$UAFDEF round-trip (UIC ${uic}), expect=$expect"
     echo "=========================================================="
 
     rm -f "$disk" "$log1" "$log2" "$fifo"
@@ -259,28 +205,45 @@ run_case() {
     if waitfor 'Welcome to OpenVMX' 60 "$log1"; then rc=0; else rc=1; fi
     record "$tag boot 1: SYSTEM logs in" "$rc"
 
-    send 'OPEN/WRITE UF SYS$SYSTEM:SYSUAF.DAT'; sleep 1
-    if [ -n "$system_row" ]; then
-        send "WRITE UF \"$system_row\""; sleep 1
-    fi
-    for row in "${OTHER_ROWS[@]}"; do
-        send "WRITE UF \"$row\""; sleep 1
-    done
-    send 'CLOSE UF'; sleep 2
-    send 'TYPE SYS$SYSTEM:SYSUAF.DAT'; sleep 3
+    # AUTHORIZE, the SUPPORTED SYSUAF editor, over the interactive terminal
+    # (the "operator types at UAF>" shape run_norecord_case uses). MODIFY SYSTEM
+    # keeps the account authorized while rewriting the binary $UAFDEF file
+    # PROVISION actually reads on the next boot -- a genuine write->read
+    # round-trip.
+    #
+    # This REPLACES an OPEN/WRITE of SYS$SYSTEM:SYSUAF.DAT, which is NOT a SYSUAF
+    # edit and never was (run_norecord_case's header): OPEN/WRITE $CREATEs a
+    # sequential TEXT version, and once the mastered system disk carries the
+    # SYS$SPECIFIC per-root [SYS0.SYSEXE] directory (vms-f05) a create through
+    # the SYS$SYSTEM: search list lands that text file in the PRIMARY member,
+    # where it SHADOWS the binary indexed SYSUAF the common member holds. The
+    # next boot's PROVISION opens the shadow, cannot bind it as Prolog-3, and
+    # halts "no SYSTEM account" -- the very halt this rig exists to catch, fired
+    # by the rig's own edit mechanism rather than by the account state under
+    # test. It only "passed" before the SYS$SPECIFIC dirs existed because the
+    # create then FAILED (RMS$_DNF, no primary-member directory) and the boot
+    # read the untouched shipped binary. AUTHORIZE (like norecord's REMOVE,
+    # vms-0a5/088e14bc) writes the real indexed file, so these positive cases
+    # are once again true controls for the negative one.
+    #
+    # /UIC is octal (vms-e60), matching the "g|m" the case carries; poisoned_uic
+    # names a non-[1,4] UIC to prove vms_kif_establish_system() constructs [1,4]
+    # regardless of what SYSUAF stores.
+    send 'RUN SYS$SYSTEM:AUTHORIZE.EXE'; sleep 3
+    if waitfor 'UAF>' 30 "$log1"; then rc=0; else rc=1; fi
+    record "$tag boot 1: AUTHORIZE starts (UAF> prompt)" "$rc"
+    send "MODIFY SYSTEM/UIC=[${uic//|/,}]"; sleep 2
+    send 'EXIT'; sleep 3              # EXIT triggers save_sysuaf -> binary write
+    send 'SHOW TIME'; sleep 2         # back at DCL: a marker the RUN returned
 
-    # The edit must actually be in the file this session can read, or the rest
-    # of the case is measuring nothing. Checks for THIS CASE'S OWN uic (see
-    # the "uic" parameter comment above) -- poisoned_uic's row genuinely
-    # contains "50|50", not "1|4", and grepping the wrong pair here would
-    # fail even though the poison landed exactly as intended.
-    if [ -n "$system_row" ]; then
-        if grep -qF "SYSTEM|$HASH|$uic|" "$log1"; then rc=0; else rc=1; fi
-        record "$tag boot 1: the edited SYSTEM row is readable in-session" "$rc"
-    else
-        if grep -qF "OPERATOR||1|6|" "$log1"; then rc=0; else rc=1; fi
-        record "$tag boot 1: SYSUAF was rewritten without a SYSTEM row" "$rc"
-    fi
+    # The edit must have reported success AND been written back, or the rest of
+    # the case is measuring nothing. (This replaces the old "TYPE shows the row"
+    # check, which matched only the ECHO of the typed WRITE command, not a real
+    # read-back of a persisted account.)
+    if grep -qF '%UAF-S-MDFYMSG' "$log1"; then rc=0; else rc=1; fi
+    record "$tag boot 1: AUTHORIZE reports the SYSTEM record modified" "$rc"
+    if grep -qF '%UAF-I-SAVED' "$log1"; then rc=0; else rc=1; fi
+    record "$tag boot 1: AUTHORIZE writes the binary SYSUAF back on exit" "$rc"
 
     # See THE WRITEBACK TRAP at the top of this file.
     echo "  (settling ${SETTLE_SECS}s for guest writeback)"
@@ -669,58 +632,43 @@ run_norecord_case() {
 echo "=== OVMX release e2e: boot -> provision -> boot (vms-9b7) ==="
 echo "Architecture: $ARCH   QEMU: $QEMU"
 
-# CONTROL 1 -- the shipped row, written by the same path. Proves the rig's
-# edit mechanism does not itself break SYSUAF.
-run_case short  "SYSTEM|$HASH|1|4|SYS\$SYSDEVICE:[SYSMGR]||ALL"
+# The three positive cases below were once the sixth-field-separator variants of
+# the operator's original halt -- a 512-byte buffer in the SYSUAF TEXT parser.
+# That parser is gone: PID 1 reads no SYSUAF, and PROVISION reads the BINARY
+# $UAFDEF file, whose records are fixed-size, so a "separator position" no longer
+# exists to vary. Each now runs an independent boot -> AUTHORIZE MODIFY SYSTEM ->
+# boot round-trip against the live binary reader; retained as regression breadth
+# and, together, the positive controls for the norecord/noprovision halts.
+#
+# (They previously "edited" SYSUAF with DCL OPEN/WRITE, which is not a SYSUAF
+# edit -- see run_case's body and run_norecord_case's header for why that wrote
+# a sequential text SHADOW that broke the next boot once the system disk gained
+# its SYS$SPECIFIC per-root directory.)
 
-# CONTROL 2 -- a long row whose sixth separator is still INSIDE the 512-byte
-# window the deleted readers used. Isolates the variable to the separator's
-# position rather than to the row's length.
-run_case inwin  "$(make_system_row 247 63)"
+# CONTROL 1 -- MODIFY the shipped SYSTEM account (UIC left at [1,4]). Proves the
+# rig's edit mechanism writes a SYSUAF the next boot reads and comes up on.
+run_case short up
 
-# THE CASE. Sixth separator past byte 511: on the unfixed tree this halted the
-# boot; here it must not.
-run_case longrow "$(make_system_row 420 63)" up
+# CONTROL 2 -- a second independent boot -> edit -> boot round-trip.
+run_case inwin up
 
-# CASE 5 (vms-a17e) -- THE ZERO-SYSUAF-READS-FOR-IDENTITY PROOF. This row
-# names UIC [50,50] and PRIVILEGES=NONE for the SYSTEM account -- neither
-# [1,4] nor ALL. Before vms-a17e this would have produced
-# "system identity SYSTEM [62,62] established by the executive" (50 decimal
-# is 62 octal) with no enforced privileges beyond the CAP_SYS_ADMIN default,
-# because PROVISION.EXE read exactly these two fields out of this row and
-# handed them to VMS_IOCTL_SETIDENT. After vms-a17e, vms_kif_establish_system()
-# takes no username/uic/privs arguments at all -- SYSTEM/[1,4]/ALL are
+# CONTROL 3 -- a third independent boot -> edit -> boot round-trip.
+run_case longrow up
+
+# CASE (vms-a17e) -- THE ZERO-SYSUAF-READS-FOR-IDENTITY PROOF. AUTHORIZE stamps
+# the SYSTEM account with a UIC that is NOT [1,4]. Before vms-a17e PROVISION.EXE
+# read the UIC out of SYSUAF and handed it to VMS_IOCTL_SETIDENT, so the boot
+# identity would have followed this field. After vms-a17e
+# vms_kif_establish_system() takes no uic argument at all -- SYSTEM/[1,4]/ALL are
 # vms.ko's own VMS_SYSTEM_UIC / VMS_PRV_M_SYSTEM_ALL constants (vms_internal.h)
-# -- so [1,4] MUST still appear, proving the poisoned UIC in this file was
-# never read to construct it. Same HASH as every other case, so login still
-# succeeds; only the UIC/privileges fields are wrong on purpose.
+# -- so the boot-2 "SYSTEM [1,4] established by the executive" assertion MUST
+# still read [1,4], proving the stored UIC was never read to construct it.
 #
-# WHAT THIS DOES *NOT* CLAIM, and why the boot-1 "row is readable in-session"
-# sanity check below correctly reports [50,50] rather than [1,4]. There are
-# TWO identities in this boot, established by two DIFFERENT mechanisms, and
-# vms-a17e touches only one of them:
-#
-#   the STARTUP process (PROVISION.EXE, execs into STARTUP.COM/
-#   SYSTARTUP_VMS.COM)  -- identity from vms_kif_establish_system(), an
-#   executive CONSTANT, independent of SYSUAF by design (this item).
-#
-#   the INTERACTIVE session opened by typing SYSTEM/MANAGER at the login
-#   prompt below -- identity from tools/vms_login.c (LOGINOUT), which reads
-#   SYSUAF's SYSTEM row and calls VMS_IOCTL_SETIDENT with WHATEVER uic that
-#   row names. LOGINOUT-reads-SYSUAF is correct, unmodified VMS behaviour
-#   ("LOGINOUT is SYSUAF's FIRST reader") and is exactly what this item's
-#   own goal statement asks for -- it would be a REGRESSION for LOGINOUT to
-#   ignore this file. So a real interactive SYSTEM/MANAGER session against
-#   this poisoned row genuinely authenticates as UIC [50,50]; that is not
-#   probed here because the boot process's identity, not the login
-#   session's, is this item's whole scope.
-#
-# So the "$uic" argument below (used only by the file-landed sanity check,
-# not by any identity assertion) is 50|50 -- the actual, correctly-poisoned
-# content of the file -- while the SEPARATE "SYSTEM [1,4] established by the
-# executive" assertion in the shared "up" path a few lines down is the one
-# that has to stay [1,4] regardless. Confirmed on a real boot: it does.
-run_case poisoned_uic "SYSTEM|$HASH|50|50|SYS\$SYSDEVICE:[SYSMGR]||NONE" up "50|50"
+# (A real INTERACTIVE SYSTEM/MANAGER login WOULD authenticate as the stored UIC
+# -- LOGINOUT is SYSUAF's first reader, unmodified VMS behaviour -- but the boot
+# process's identity, not the login session's, is this case's scope, so that is
+# not probed here.) /UIC is octal (vms-e60); [50,50] is simply a value != [1,4].
+run_case poisoned_uic up "50|50"
 
 # NEGATIVE CONTROL. SYSUAF with NO SYSTEM row at all -- a condition VMS is never
 # in, which OVMX therefore makes unreachable rather than handles (Rule 10). This

@@ -1847,30 +1847,61 @@ static uint32_t rms_impl_create(void *fab_ptr)
         if (rms_acp_absent())
             return rms_posix_create(fab);
 
-        /* vms-5f0: compose the target through any directory/concealed logical
-         * (SYS$SYSTEM:, SYS$MANAGER:, ...) and create in the PRIMARY search-list
-         * member -- exactly where VMS places a new file for a search list. */
+        /* vms-f05: compose the target through any directory/concealed logical
+         * (SYS$SYSTEM:, SYS$MANAGER:, ...). A concealed rooted logical fans out
+         * to several search-list members (node-specific [SYS0.] first, then the
+         * cluster-common [SYS0.SYSCOMMON.]). OVMX keeps every physical file
+         * under the common member (lnm_defaults.c: "the physical files live
+         * under [SYS0.SYSCOMMON.*], so the common member wins"), so the
+         * node-specific directories do not exist on the volume. Create in the
+         * FIRST member whose directory actually resolves -- the same walk the
+         * read path already does (rms_impl_open below: "try EACH ODS-2 candidate
+         * directory ... the first candidate whose directory resolves") -- so a
+         * create through a rooted logical lands in exactly the directory a read
+         * of it resolves to, instead of a node-specific primary that is never
+         * mastered onto the volume. A device-less or explicit spec composes a
+         * single candidate, so its behaviour is unchanged. */
         ncand = rms_acp_specs_from_fab(fab, specs, RMS_ACP_MAX_CANDS);
         if (ncand < 0) {
             fab->fab$l_sts = RMS$_SYN;
             return RMS$_SYN;
         }
-        sp = specs[0];
+
+        memset(&fop, 0, sizeof(fop));
+        {
+            uint32_t last = SS$_NOSUCHFILE;
+            int ci, resolved = 0;
+            for (ci = 0; ci < ncand; ci++) {
+                sp = specs[ci];
+                st = vms_kif_acp_assign(sp.devnam, &chan);
+                if (!$VMS_STATUS_SUCCESS(st)) { last = st; chan = 0; continue; }
+                fop.chan = chan;
+                st = rms_acp_resolve_did(chan, sp.dirpath,
+                                         &fop.did_num, &fop.did_seq,
+                                         &fop.did_rvn, &fop.did_nmx);
+                if ($VMS_STATUS_SUCCESS(st)) { resolved = 1; break; }
+                last = st;
+                vms_kif_dassgn(chan); chan = 0;
+            }
+            if (!resolved) {
+                /* No search-list member's directory resolves: honest error
+                 * (INV-6), never a fabricated path or POSIX fallback. */
+                fab->fab$l_stv = last;
+                fab->fab$l_sts = (last == SS$_NOSUCHDEV ||
+                                  last == SS$_DEVNOTMOUNT)
+                                     ? rms_acp_open_status(last) : RMS$_DNF;
+                return fab->fab$l_sts;
+            }
+        }
+
         strncpy(fab->_resolved_path, sp.name, sizeof(fab->_resolved_path) - 1);
         fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';
 
-        st = vms_kif_acp_assign(sp.devnam, &chan);
-        if (!$VMS_STATUS_SUCCESS(st)) {
-            fab->fab$l_stv = st;
-            fab->fab$l_sts = rms_acp_open_status(st);
-            return fab->fab$l_sts;
-        }
         h = calloc(1, sizeof(*h));
         if (!h) { vms_kif_dassgn(chan); fab->fab$l_sts = RMS$_DME; return RMS$_DME; }
         h->chan = chan; h->assigned = 1; h->fd = -1;
 
-        memset(&fop, 0, sizeof(fop));
-        fop.chan      = chan;
+        /* fop.chan + fop.did_* are set from the resolved member above. */
         fop.func      = VMS_ACP_FOP_CREATE;
         /* IO$M_CREATE enters a versioned directory entry; IO$M_ACCESS builds
          * the write window on this channel so record $PUTs ride it directly. */
@@ -1881,13 +1912,6 @@ static uint32_t rms_impl_create(void *fab_ptr)
         fop.kind      = (fab->fab$b_org != FAB$C_IDX &&
                          fab->fab$b_rfm == FAB$C_FIX) ? ODS2_FK_DATA_FIX
                                                       : ODS2_FK_DATA;
-        st = rms_acp_resolve_did(chan, sp.dirpath, &fop.did_num, &fop.did_seq,
-                                 &fop.did_rvn, &fop.did_nmx);
-        if (!$VMS_STATUS_SUCCESS(st)) {
-            free(h); vms_kif_dassgn(chan);
-            fab->fab$l_stv = st; fab->fab$l_sts = RMS$_DNF;
-            return RMS$_DNF;
-        }
         fop.version = 0;                     /* highest existing + 1 */
         strncpy(fop.name, sp.name, VMS_ACP_NAME_SIZE - 1);
 

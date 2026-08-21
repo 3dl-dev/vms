@@ -1855,48 +1855,73 @@ static uint32_t rms_impl_create(void *fab_ptr)
             fab->fab$l_sts = RMS$_SYN;
             return RMS$_SYN;
         }
-        sp = specs[0];
+        /* vms-parts-release-fix: create in the FIRST candidate whose directory
+         * resolves AND whose IO$_CREATE succeeds, iterating EVERY search-list
+         * member -- exactly as rms_open_named_handle_kind_prot() already does.
+         * The old code tried only specs[0]; for a concealed-rooted search list
+         * (SYS$SYSTEM: -> SYS$SYSROOT:[SYSEXE] = the [SYS0.SYSEXE] node member,
+         * then the [SYS0.SYSCOMMON.SYSEXE] common member) the node member does
+         * not resolve on the mounted volume, so COPY ... SYS$SYSTEM: failed
+         * %RMS-E-CRE even though the SYSCOMMON member is right there. This is the
+         * SAME single-candidate bug already fixed for the named-handle create
+         * path (SYSGEN WRITE CURRENT of SYS$SYSTEM:OVMXVMSSYS.PAR). */
+        {
+            uint32_t last = SS$_NOSUCHFILE;
+            int ci, created = 0;
+
+            chan = 0;
+            for (ci = 0; ci < ncand; ci++) {
+                sp = specs[ci];
+                chan = 0;
+
+                st = vms_kif_acp_assign(sp.devnam, &chan);
+                if (!$VMS_STATUS_SUCCESS(st)) { last = st; chan = 0; continue; }
+
+                memset(&fop, 0, sizeof(fop));
+                fop.chan      = chan;
+                fop.func      = VMS_ACP_FOP_CREATE;
+                /* IO$M_CREATE enters a versioned directory entry; IO$M_ACCESS
+                 * builds the write window so record $PUTs ride it directly. */
+                fop.modifiers = VMS_ACP_M_CREATE | VMS_ACP_M_ACCESS;
+                fop.acctl     = VMS_ACP_ACCTL_WRITE;
+                /* Indexed files carry a variable-length Prolog-3 block
+                 * structure, never a fixed-record ODS-2 kind. */
+                fop.kind      = (fab->fab$b_org != FAB$C_IDX &&
+                                 fab->fab$b_rfm == FAB$C_FIX) ? ODS2_FK_DATA_FIX
+                                                              : ODS2_FK_DATA;
+                st = rms_acp_resolve_did(chan, sp.dirpath, &fop.did_num,
+                                         &fop.did_seq, &fop.did_rvn, &fop.did_nmx);
+                if (!$VMS_STATUS_SUCCESS(st)) {
+                    fprintf(stderr, "%%OVMX-DIAG-CAND, ci=%d dev=%s dir=[%s] name=%s resolve_did FAIL st=%u\n",
+                            ci, sp.devnam, sp.dirpath, sp.name, (unsigned)st);
+                    vms_kif_dassgn(chan); chan = 0; last = st; continue;
+                }
+                fop.version = 0;                 /* highest existing + 1 */
+                strncpy(fop.name, sp.name, VMS_ACP_NAME_SIZE - 1);
+
+                st = vms_kif_acp_fileop(&fop);
+                if (!$VMS_STATUS_SUCCESS(st)) {
+                    fprintf(stderr, "%%OVMX-DIAG-CAND, ci=%d dev=%s dir=[%s] name=%s did=%u,%u fileop FAIL st=%u\n",
+                            ci, sp.devnam, sp.dirpath, sp.name,
+                            (unsigned)fop.did_num, (unsigned)fop.did_nmx, (unsigned)st);
+                    vms_kif_dassgn(chan); chan = 0; last = st; continue;
+                }
+                created = 1;
+                break;
+            }
+            if (!created) {
+                fab->fab$l_stv = last;
+                fab->fab$l_sts = $VMS_STATUS_SUCCESS(last) ? RMS$_DNF : RMS$_CRE;
+                return fab->fab$l_sts;
+            }
+        }
+
+        /* Winning candidate: chan + fop are set; build the RMS handle. */
         strncpy(fab->_resolved_path, sp.name, sizeof(fab->_resolved_path) - 1);
         fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';
-
-        st = vms_kif_acp_assign(sp.devnam, &chan);
-        if (!$VMS_STATUS_SUCCESS(st)) {
-            fab->fab$l_stv = st;
-            fab->fab$l_sts = rms_acp_open_status(st);
-            return fab->fab$l_sts;
-        }
         h = calloc(1, sizeof(*h));
         if (!h) { vms_kif_dassgn(chan); fab->fab$l_sts = RMS$_DME; return RMS$_DME; }
         h->chan = chan; h->assigned = 1; h->fd = -1;
-
-        memset(&fop, 0, sizeof(fop));
-        fop.chan      = chan;
-        fop.func      = VMS_ACP_FOP_CREATE;
-        /* IO$M_CREATE enters a versioned directory entry; IO$M_ACCESS builds
-         * the write window on this channel so record $PUTs ride it directly. */
-        fop.modifiers = VMS_ACP_M_CREATE | VMS_ACP_M_ACCESS;
-        fop.acctl     = VMS_ACP_ACCTL_WRITE;
-        /* Indexed files carry a variable-length Prolog-3 block structure, never
-         * a fixed-record ODS-2 kind, even when the user records are fixed. */
-        fop.kind      = (fab->fab$b_org != FAB$C_IDX &&
-                         fab->fab$b_rfm == FAB$C_FIX) ? ODS2_FK_DATA_FIX
-                                                      : ODS2_FK_DATA;
-        st = rms_acp_resolve_did(chan, sp.dirpath, &fop.did_num, &fop.did_seq,
-                                 &fop.did_rvn, &fop.did_nmx);
-        if (!$VMS_STATUS_SUCCESS(st)) {
-            free(h); vms_kif_dassgn(chan);
-            fab->fab$l_stv = st; fab->fab$l_sts = RMS$_DNF;
-            return RMS$_DNF;
-        }
-        fop.version = 0;                     /* highest existing + 1 */
-        strncpy(fop.name, sp.name, VMS_ACP_NAME_SIZE - 1);
-
-        st = vms_kif_acp_fileop(&fop);
-        if (!$VMS_STATUS_SUCCESS(st)) {
-            free(h); vms_kif_dassgn(chan);
-            fab->fab$l_stv = st; fab->fab$l_sts = RMS$_CRE;
-            return RMS$_CRE;
-        }
         h->accessed = 1; h->writable = 1;
         h->fid_num = fop.fid_num; h->fid_seq = fop.fid_seq;
         h->fid_rvn = fop.fid_rvn; h->fid_nmx = fop.fid_nmx;

@@ -2014,11 +2014,17 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             }
             ia[b + 1] = key;
         }
+        int trace_ia = getenv("OVMX_LINK_DEBUG_INITARR") != NULL;
         for (int k = 0; k < nia; k++) {
             int i = ia[k].i, s = ia[k].s;
             uint64_t al = objs[i].sh[s].sh_addralign ? objs[i].sh[s].sh_addralign : 8;
             cur = ALIGN_UP(cur, al);
             objs[i].sec_va[s] = cur;
+            if (trace_ia)
+                fprintf(stderr, "  init_array[%d] prio=%llu obj#%d sec=%s va=0x%llx size=%llu\n",
+                        k, (unsigned long long)(ia[k].prio == UINT64_MAX ? 0xFFFFFFFFULL : ia[k].prio),
+                        i, objs[i].shstr + objs[i].sh[s].sh_name,
+                        (unsigned long long)cur, (unsigned long long)objs[i].sh[s].sh_size);
             cur += objs[i].sh[s].sh_size;
         }
         free(ia);

@@ -555,6 +555,15 @@ int ovmx_boot_mount_system_disk_native(void)
  * EBUSY from mount(2) means a tmpfs is already mounted there (this boot already
  * ran the op), which is genuine success, not a fallback.
  *
+ * READ-ONLY ROOT (vms-329). mount(2) never writes to the underlying filesystem,
+ * but mkdir(2) does. A NetBSD/vax root booted read-only therefore fails these
+ * two mkdirs with EROFS unless the mount point already exists -- so a shipped
+ * OVMX/NetBSD root carries /run/ovmx-boot the same way it carries /vms, /proc,
+ * /dev/pts and /dev/shm (tests/lab-vax/drive_boot_vax.py creates all five when
+ * it assembles the bootable disk). The mkdirs stay because a writable root is
+ * equally legal, and EROFS on a root that does NOT carry the directory still
+ * halts honestly rather than staging into nowhere.
+ *
  * DEAD UNTIL WIRED: stage_boot_images() is compiled only when the ACP-read
  * bridge TUs are linked in (OVMX_BOOT_ACP_BRIDGE), which the shipped VAX
  * runtime recipe does not yet define -- the runtime cutover is vms-329. This

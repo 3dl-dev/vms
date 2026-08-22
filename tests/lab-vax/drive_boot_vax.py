@@ -412,10 +412,23 @@ def do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
     #    there, so /dev/ra2c simply never opens); the two-disk install proof
     #    (drive_install_vax.py, vms-d0e5 rung G) attaches the blank target on rq2
     #    and MOUNTs DKA100: -> /dev/ra2c, so the node must already exist.
+    #
+    #    /run/ovmx-boot (vms-329) joins that list for the SAME reason the other
+    #    four are here. It is OVMX_BOOT_STAGE_DIR (src/libvms/include/
+    #    ovmx_layout.h): with the ACP cutover live, PID 1 mounts a tmpfs there
+    #    and stages the first-hop images it reads OFF the ODS-2 volume THROUGH
+    #    the executive ACP, because NetBSD's execve() needs a POSIX path. mount(2)
+    #    does not write to the underlying filesystem, but mkdir(2) does -- and
+    #    this boot runs on a READ-ONLY root (see the `mount -u -r /' at the end of
+    #    this same assembly session), so ovmx_boot_prepare_stage_dir()'s mkdir
+    #    returns EROFS and PID 1 halts %OVMX-F-SYSINIT. Creating the mount point
+    #    at disk-assembly time is what a shipped OVMX/NetBSD-vax root would carry,
+    #    exactly like /vms and /dev/shm; PID 1's mkdir stays in place (and still
+    #    halts honestly, INV-6) for a writable root.
     rc, out = run(child,
                   "cd /dev && sh MAKEDEV ra1 ra2 2>/dev/null; cd /; "
-                  "mkdir -p /vms /proc /dev/pts /dev/shm && "
-                  "ls -ld /vms /proc /dev/pts /dev/shm; "
+                  "mkdir -p /vms /proc /dev/pts /dev/shm /run/ovmx-boot && "
+                  "ls -ld /vms /proc /dev/pts /dev/shm /run/ovmx-boot; "
                   "ls -l /dev/ra1c /dev/ra2c && test -b /dev/ra1c && test -b /dev/ra2c",
                   cmd_timeout)
     if rc != 0:

@@ -3229,10 +3229,90 @@ static uint8_t *evax_ensure_content(struct evax_section *sec)
     return sec->content;
 }
 
+/* Bind an undefined EVAX reference to a symbol EXPORTED by a --use'd producer
+ * (its .vms$sv universal) as a cross-image import (bead vms-c179). LINK.EXE
+ * leaves the site's fill slot 0 and records a .vms$imp entry
+ * {producer, sv_index, patch_off = site}; IMGACT resolves the universal against
+ * the loaded producer at activation (ovmx_sv_resolve) and writes the run-time
+ * address into the slot — the SAME .vms$imp mechanism the ELF path uses. This is
+ * the genuine cross-image binding, NOT a fabricated local target (INV-6): the
+ * slot is filled by a real producer symbol-vector entry at activation.
+ *
+ * Cross-image relocation forms (clean-room: STC_LP_PSB SYMG semantics from
+ * binutils-2.43 bfd/vms-alpha.c _bfd_vms_slurp_etir + the actual assembled call
+ * sequence in the checked-in EVAX fixture):
+ *   LINKAGE (STC_LP_PSB against a SYMG): the site is the 2-quadword linkage pair;
+ *     the un-relaxed call `ldq $27,SYM($gp); jsr $26,($27)` loads quad[0] into
+ *     R27 (the procedure value) and jumps there, so quad[0] IS the slot IMGACT
+ *     fills with the imported routine's run-time value (the producer .vms$sv
+ *     PROCEDURE entry). patch_off = quad[0] site. quad[1] (the descriptor half a
+ *     LOCAL {code,PDSC} pair carries) has no meaning for an imported routine and
+ *     is left 0 — this call sequence never reads it. NOTE: the LOCAL path fills
+ *     quad[0]=code-entry, quad[1]=PDSC (evax_apply_reloc below, unchanged, vms-01d);
+ *     the cross-image path fills only quad[0] at activation. Both leave R27 = the
+ *     value the call sequence loads, so they stay consistent for THIS sequence.
+ *   REFQUAD / CODEADDR: a data pointer to the imported symbol; the 8-byte site IS
+ *     the slot IMGACT fills. patch_off = site.
+ * A cross-image REFLONG (a 32-bit slot) cannot hold a 64-bit run-time address, so
+ * it is rejected honestly rather than truncated. */
+static void evax_add_ximport(struct evax_input *in, int ii,
+                             struct evax_section *sec, const struct evax_reloc *r,
+                             struct producer *producers, int pidx, uint32_t svidx,
+                             struct import **imp, int *nimp, int *imp_cap,
+                             int *n_ximport)
+{
+    uint8_t *c = evax_ensure_content(sec);
+    if (!c) die("cross-image relocation into a zero-length psect");
+    uint64_t site_va = in[ii].sec_base[r->psect] + r->address;  /* image-relative */
+    switch (r->type) {
+    case EVAX_R_LINKAGE:
+        if (r->address + 16 > sec->alloc) die("cross-image LINKAGE site past psect end");
+        putl64(c + r->address, 0);        /* quad[0]: IMGACT fills = imported value  */
+        putl64(c + r->address + 8, 0);    /* quad[1]: unused by the call sequence     */
+        break;
+    case EVAX_R_REFQUAD:
+    case EVAX_R_CODEADDR:
+        if (r->address + 8 > sec->alloc) die("cross-image data-import site past psect end");
+        putl64(c + r->address, 0);        /* IMGACT fills = imported symbol address    */
+        break;
+    case EVAX_R_REFLONG:
+        die("cross-image REFLONG import unsupported (a 32-bit slot cannot hold a "
+            "64-bit run-time address) — the alpha-dec-vms port imports via "
+            "LINKAGE/REFQUAD");
+        break;
+    default:
+        die("unexpected relocation type for a cross-image import");
+    }
+    if (*nimp >= *imp_cap) {
+        *imp_cap = *imp_cap ? *imp_cap * 2 : 16;
+        *imp = realloc(*imp, (size_t)*imp_cap * sizeof **imp);
+        if (!*imp) die("oom recording EVAX cross-image imports");
+    }
+    struct import *e = &(*imp)[(*nimp)++];
+    memset(e, 0, sizeof *e);
+    snprintf(e->name, sizeof e->name, "%s", r->sym);
+    e->pidx    = pidx;
+    e->svidx   = svidx;
+    e->got_va  = site_va;   /* patch_off emitted into .vms$imp (vms_imp_write) */
+    e->is_data = (r->type != EVAX_R_LINKAGE);
+    e->is_weak = 0;
+    (*n_ximport)++;
+    fprintf(stderr, "%%LINK-I-IMPORT, EVAX cross-image import '%s' bound to --use "
+            "producer %s [sv#%u], IMGACT-filled at image-relative 0x%llx (%s)\n",
+            r->sym, producers[pidx].name, svidx, (unsigned long long)site_va,
+            r->type == EVAX_R_LINKAGE ? "LINKAGE quad[0]" : "data pointer");
+}
+
 /* Apply one relocation into its psect's content buffer. `site_va` is only used
- * for diagnostics; the write lands in the content buffer at r->address. */
+ * for diagnostics; the write lands in the content buffer at r->address. An
+ * undefined reference that a --use'd producer EXPORTS binds as a cross-image
+ * import (evax_add_ximport); one no producer defines stays an honest
+ * %LINK-F-UNDEF (INV-6). */
 static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
                              const struct evax_reloc *r, int allow_undef,
+                             struct producer *producers, int np,
+                             struct import **imp, int *nimp, int *imp_cap,
+                             int *n_ximport,
                              long *deferred, int *n_linkage_applied,
                              int *n_callsite_conservative)
 {
@@ -3262,6 +3342,16 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
     } else {
         int di; const struct evax_symbol *ds;
         if (evax_find_sym(in, nin, r->sym, &di, &ds) < 0) {
+            /* Not defined by any input object — is it EXPORTED by a --use'd
+             * producer? If so, bind it as a cross-image import (real .vms$imp
+             * mechanism, IMGACT-filled at activation). Only if NO producer
+             * exports it do we fall through to the honest undef path (INV-6). */
+            int pidx; uint32_t svidx;
+            if (np > 0 && find_universal(producers, np, r->sym, &pidx, &svidx)) {
+                evax_add_ximport(in, ii, sec, r, producers, pidx, svidx,
+                                 imp, nimp, imp_cap, n_ximport);
+                return;
+            }
             if (allow_undef) {
                 (*deferred)++;
                 fprintf(stderr, "%%LINK-W-UNDEF, EVAX reference to undefined symbol "
@@ -3315,9 +3405,12 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
     }
 }
 
-/* Link a set of EVAX objects into a VMS-standard ELF ET_DYN image. */
+/* Link a set of EVAX objects into a VMS-standard ELF ET_DYN image. Undefined
+ * references EXPORTED by a --use'd producer bind as cross-image imports emitted
+ * in a .vms$imp table IMGACT resolves at activation (bead vms-c179). */
 static void emit_evax_image(struct evax_input *in, int nin,
-                            const char *transfer, int allow_undef, const char *out)
+                            const char *transfer, int allow_undef,
+                            struct producer *producers, int np, const char *out)
 {
     if (!transfer)
         die("the EVAX/Alpha image needs --transfer SYMBOL (the main transfer "
@@ -3331,7 +3424,7 @@ static void emit_evax_image(struct evax_input *in, int nin,
     /* Output sections we emit headers for: one per distinct (rank-ordered) psect
      * name actually present, plus .vms$xfer. Track each output section's range. */
     struct outsec { char name[EVAX_NAME_MAX]; uint64_t addr, size; int nobits; };
-    struct outsec osec[EVAX_MAX_SECTIONS + 2];
+    struct outsec osec[EVAX_MAX_SECTIONS + 3];   /* + .vms$xfer + .vms$imp */
     int nos = 0;
 
     for (int rank = 0; rank <= 4; rank++) {
@@ -3388,22 +3481,43 @@ static void emit_evax_image(struct evax_input *in, int nin,
         osec[oi].addr = xfer_addr; osec[oi].size = xfer_size; osec[oi].nobits = 0;
     }
 
-    uint64_t file_end = cur;           /* end of loadable file content          */
-    /* (nobits $BSS$ already got vaddrs above and extends memsz past file_end;
-     * for first light our fixtures carry no $BSS$, so memsz == file_end.) */
-    uint64_t mem_end = cur;
-
-    /* ---- Apply all relocations into the psect content buffers. ---- */
+    /* ---- Apply all relocations into the psect content buffers. Cross-image
+     * references (an undefined symbol a --use'd producer exports) are collected
+     * as imports here; their .vms$imp table is laid out right after. ---- */
     long deferred = 0;
-    int n_linkage = 0, n_callsite = 0, n_data = 0;
+    int n_linkage = 0, n_callsite = 0, n_data = 0, n_ximport = 0;
+    struct import *imp = NULL; int nimp = 0, imp_cap = 0;
     for (int i = 0; i < nin; i++)
         for (int r = 0; r < in[i].obj.nreloc; r++) {
             enum evax_reloc_type t = in[i].obj.reloc[r].type;
             evax_apply_reloc(in, nin, i, &in[i].obj.reloc[r], allow_undef,
+                             producers, np, &imp, &nimp, &imp_cap, &n_ximport,
                              &deferred, &n_linkage, &n_callsite);
             if (t == EVAX_R_REFLONG || t == EVAX_R_REFQUAD || t == EVAX_R_CODEADDR)
                 n_data++;
         }
+
+    /* ---- .vms$imp: cross-image imports bound to --use producers. Each record
+     * names {producer soname, symbol-vector index, patch_off}; IMGACT resolves
+     * the universal against the loaded producer and writes the run-time address
+     * into patch_off (the linkage-pair quad[0] or the data-pointer slot) at
+     * activation — the SAME table + IMGACT contract the ELF path emits
+     * (vms_imp_write). (bead vms-c179) ---- */
+    uint64_t off_imp = 0, imp_size = 0;
+    if (nimp > 0) {
+        cur = ALIGN_UP(cur, 8);
+        off_imp = cur;
+        imp_size = vms_imp_size(nimp, imp, producers, np);
+        cur += imp_size;
+        int oi = nos++;
+        snprintf(osec[oi].name, sizeof osec[oi].name, "%s", OVMX_IMP_SECTION);
+        osec[oi].addr = off_imp; osec[oi].size = imp_size; osec[oi].nobits = 0;
+    }
+
+    uint64_t file_end = cur;           /* end of loadable file content          */
+    /* (nobits $BSS$ already got vaddrs above and extends memsz past file_end;
+     * for first light our fixtures carry no $BSS$, so memsz == file_end.) */
+    uint64_t mem_end = cur;
 
     /* ---- Build the shstrtab. ---- */
     char shstr[4096]; size_t shlen = 0;
@@ -3472,6 +3586,11 @@ static void emit_evax_image(struct evax_input *in, int nin,
     putl32(img + xfer_addr + 12, xh.reserved);
     putl64(img + xfer_addr + 16, transfer_va);   /* entry[0] = main transfer   */
 
+    /* Stamp .vms$imp (cross-image imports). patch_off = imp[i].got_va (the site
+     * image-relative address), producer soname + sv index per record. */
+    if (nimp > 0)
+        vms_imp_write(img, off_imp, imp, nimp, producers, np);
+
     /* shstrtab + section headers. */
     memcpy(img + off_shstr, shstr, shlen);
     Elf64_Shdr *sh = (Elf64_Shdr *)(img + off_shdr);
@@ -3516,9 +3635,15 @@ static void emit_evax_image(struct evax_input *in, int nin,
                 (unsigned long long)osec[k].size);
     fprintf(stderr, "%%LINK-I-XFER, transfer '%s' -> image-relative 0x%llx\n",
             transfer, (unsigned long long)transfer_va);
+    if (n_ximport)
+        fprintf(stderr, "%%LINK-I-IMPORT, %d EVAX cross-image import%s bound to "
+                "--use producer%s (.vms$imp at 0x%llx, resolved at activation)\n",
+                n_ximport, n_ximport == 1 ? "" : "s", np == 1 ? "" : "s",
+                (unsigned long long)off_imp);
     if (deferred)
         fprintf(stderr, "%%LINK-W-DEFERRED, %ld EVAX reference%s left undefined\n",
                 deferred, deferred == 1 ? "" : "s");
+    free(imp);
 }
 
 /* Sniff a file's object format from its first bytes (input already on disk). */
@@ -3627,7 +3752,7 @@ int main(int argc, char **argv)
                 exit(1);
             }
         }
-        emit_evax_image(ein, nin, transfer, allow_undef, out);
+        emit_evax_image(ein, nin, transfer, allow_undef, producers, np, out);
         return 0;
     }
     /* ELF object set: fall through to emit_shareable. load_obj does the single

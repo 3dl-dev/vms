@@ -91,9 +91,20 @@ ASK_PW2          = "Reenter password for verification"
 UAF_SAVED        = "%UAF-I-SAVED"
 ASK_SCSNODE      = "Enter SCSNODE"
 ASK_SCSID        = "Enter SCSSYSTEMID"
-SYSGEN_PROMPT    = "SYSGEN>"
+SYSGEN_PROMPT    = "SYSGEN>"      # see SYSGEN_PROMPT_RE -- NOT matched literally
 DISMOUNTED       = "%DISMOUNT-I-DISMOUNTED"
 INSTALL_DONE     = "installation is complete"
+
+# SYSGEN's OWN prompt, and nothing else (vms-d0e5, INV-6 teeth). A literal
+# "SYSGEN>" search is a FALSE PASS: OVMX$INSTALL.COM itself prints the operator
+# instruction "At the SYSGEN> prompt, type:" BEFORE it RUNs SYSGEN.EXE, so the
+# literal matches the procedure's own echo whether or not SYSGEN ever started.
+# That is exactly what happened on the 2026-08-22 run -- the driver reported
+# "SYSGEN.EXE resolves and runs" while SYSGEN had in fact exited immediately and
+# the SCS commands landed on the install menu (%OVMX-E-IVCHOICE, "USE CURRENT").
+# The real prompt is emitted at the START of a line; the instructional text has
+# it mid-sentence. Anchor there so only a genuine REPL prompt can satisfy it.
+SYSGEN_PROMPT_RE = r"(?:\r?\n|^)SYSGEN>"
 
 USERNAME   = "Username:"
 PASSWORD   = "Password:"
@@ -264,7 +275,7 @@ def do_install(a, distrib_img, blank_img, boot_deadline):
         # target's rooted SYSEXE and RUN resolves it through the DEFINE/JOB
         # SYS$SYSTEM redirect -> a SYSGEN> prompt. Drive its REPL if it appears;
         # if the RUN fell through (SET NOON), the flow reaches DISMOUNT directly.
-        idx = child.expect([_lit(SYSGEN_PROMPT), _lit(DISMOUNTED)],
+        idx = child.expect([SYSGEN_PROMPT_RE, _lit(DISMOUNTED)],
                            timeout=boot_deadline)
         if idx == 0:
             ok("SYSGEN.EXE resolves and runs against the rooted target (no "

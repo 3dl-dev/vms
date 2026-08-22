@@ -2080,39 +2080,17 @@ int cmd_spawn(struct dcl_command *cmd)
          * uniqueness within the UIC group (SS$_DUPLNAM); loop until a free
          * "base_N" is found, or stop on any other error.
          */
-        if (access("/dev/vms", R_OK | W_OK) != 0) {
-            /*
-             * No executive present. This is build/test tooling, NOT the
-             * product runtime (Rule 9: PID 1 refuses to boot without
-             * /dev/vms). The subprocess still genuinely runs, unregistered --
-             * the same "it needs no executive" path lib$spawn takes
-             * (src/libvms/rtl/lib_misc.c). This is NOT the fabrication INV-6
-             * forbids: nothing claims a PCB and nothing reports a fake
-             * registration, so SHOW USERS honestly shows nothing because
-             * nothing registered. The name is the one this SPAWN would have
-             * asked for, for the /NOWAIT message only.
-             */
-            if (proc_name_q && proc_name_q[0]) {
-                strncpy(rep.name, proc_name_q, sizeof(rep.name) - 1);
-                rep.name[sizeof(rep.name) - 1] = '\0';
-            } else {
-                /* Format into a wide temp then copy bounded into the fixed
-                 * wire field: base_name is capped above, but the compiler
-                 * cannot prove it, so a direct snprintf trips
-                 * -Werror=format-truncation. */
-                char nm[64];
-                snprintf(nm, sizeof(nm), "%s_1", base_name);
-                strncpy(rep.name, nm, sizeof(rep.name) - 1);
-                rep.name[sizeof(rep.name) - 1] = '\0';
-            }
-            rep.status = SS$_NORMAL;
-        } else if (proc_name_q && proc_name_q[0]) {
+        if (proc_name_q && proc_name_q[0]) {
             strncpy(rep.name, proc_name_q, sizeof(rep.name) - 1);
             rep.name[sizeof(rep.name) - 1] = '\0';
             rep.status = vms_kif_setprn(rep.name);
         } else {
             rep.status = SS$_DUPLNAM;
             for (int n = 1; n <= 65535; n++) {
+                /* Format into a wide temp then copy bounded into the fixed
+                 * wire field: base_name is capped above, but the compiler
+                 * cannot prove it, so a direct snprintf trips
+                 * -Werror=format-truncation. */
                 char nm[64];
                 snprintf(nm, sizeof(nm), "%s_%d", base_name, n);
                 strncpy(rep.name, nm, sizeof(rep.name) - 1);
@@ -2122,6 +2100,50 @@ int cmd_spawn(struct dcl_command *cmd)
                     break;                 /* named */
                 if (rep.status != SS$_DUPLNAM)
                     break;                 /* a real error, not a clash */
+            }
+        }
+
+        /*
+         * Confirm the registration TOOK, exactly as sys$creprc does: the FIRST
+         * vms_kif_* call (the setprn above) binds and registers this task via
+         * kif_bind, so a successful setprn means the PCB exists -- but read it
+         * back with $GETJPI to be certain the row is there before we hand the
+         * creator SS$_NORMAL. (Do NOT probe with access("/dev/vms",...): access
+         * checks the REAL uid against the device mode and can fail on a node
+         * the process can nonetheless open(O_RDWR) -- the false negative that
+         * made an earlier revision take the no-executive path in-guest and run
+         * the subprocess unregistered.)
+         */
+        if (rep.status & 1) {
+            struct vms_procinfo self_pi;
+            uint32_t g = vms_kif_getjpi_self(&self_pi);
+            if (!(g & 1))
+                rep.status = g;             /* registration did not stick */
+        }
+
+        /*
+         * If registration could not be done, decide HONESTLY why. Only when
+         * the executive is genuinely unreachable -- /dev/vms cannot be opened,
+         * i.e. build/test tooling, never the product runtime (Rule 9: PID 1
+         * refuses to boot without it) -- does the subprocess still run,
+         * UNREGISTERED, the same "it needs no executive" path lib$spawn takes
+         * (src/libvms/rtl/lib_misc.c). That is not the fabrication INV-6
+         * forbids: nothing claims a PCB, and SHOW USERS honestly shows nothing
+         * because nothing registered. With the executive PRESENT, a failed
+         * registration is a real error and is reported as such.
+         */
+        if (!(rep.status & 1)) {
+            int probe = open("/dev/vms", O_RDWR);
+            if (probe < 0) {
+                rep.status = SS$_NORMAL;    /* no executive: run unregistered */
+                if (rep.name[0] == '\0') {
+                    char nm[64];
+                    snprintf(nm, sizeof(nm), "%s_1", base_name);
+                    strncpy(rep.name, nm, sizeof(rep.name) - 1);
+                    rep.name[sizeof(rep.name) - 1] = '\0';
+                }
+            } else {
+                close(probe);               /* executive present: honest fail */
             }
         }
 

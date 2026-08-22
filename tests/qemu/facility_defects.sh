@@ -1865,7 +1865,7 @@ EOF
         case "$_f" in
         facility)     echo "job-to-terminal binding (VMS_IOCTL_SETTERM, read back through GETJPI)";;
         targets)      echo "kernel-core/vms_devtab.c";;
-        suites_red)   echo "test_kmod_setterm test_syssvc_showterm";;
+        suites_red)   echo "test_kmod_setterm test_syssvc_showterm test_syssvc_spawn_users";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -1889,6 +1889,7 @@ the last row carries the single remaining characteristic, unpadded
 ...and the cleared Echo bit, in the grid cell the oracle prints it in
 ...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
 ...and grid row 1 is the oracle's bytes again, so neither is the grid
+the interactive session root is terminal-bound (SETTERM recorded the binding)
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
@@ -1921,6 +1922,17 @@ cannot make it red, and re-running the control after the round-3 edit
 confirmed exactly that: test_syssvc_showterm's contribution to the red set
 (require_fail's 1 plus this suite's share of knock_on_fail) shrank from 13 to
 10 without this manifest changing, until this entry was corrected to match.
+
+The last entry is test_syssvc_spawn_users' (vms-c17), and it is the SAME
+missing write observed by a THIRD suite from the SPAWN direction: that suite
+establishes a terminal-bound interactive job root and then, from a DIFFERENT
+process, reads the root's row back with $GETJPI. With the binding write gone
+the root's terminal comes back empty, so its one terminal-bound assertion goes
+red; the suite reports that single assertion and stops BEFORE its
+classification checks (which all depend on the binding and would otherwise
+cascade), so this mutation contributes exactly one entry here, not a shower.
+A bind/register defect makes that suite SKIP instead (it cannot build its
+subject at all), so it does not double-count against bind-client-no-register.
 
 What stays GREEN is what makes this isolated rather than a blunderbuss: the
 unbound run still names nothing, the SS$_IVCHAN refusal still fires, the row

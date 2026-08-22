@@ -104,7 +104,7 @@ static int fail = 0;
  * the job stays alive for the $GETJPI reads. Auto-naming (no /PROCESS) so the
  * SPAWNED message and the SUB_NAME row are what vms-c17's naming produces. */
 static const char *SESSION_SCRIPT =
-    "SPAWN/NOWAIT WAIT 00:00:30\n"
+    "SPAWN/NOWAIT WAIT 00:02:00\n"
     "SHOW USERS\n"
     "SHOW USERS/FULL\n"
     "SHOW SYSTEM\n";
@@ -130,6 +130,25 @@ static int has_sys_row(const char *text, const char *name)
             return 1;
         ln = strchr(ln, '\n');
         if (ln) ln++;
+    }
+    return 0;
+}
+
+/* a NON-SPAWNED-message line that names `name` -- i.e. an actual table row
+ * (SHOW USERS/FULL or SHOW SYSTEM), not the "%DCL-S-SPAWNED, process X spawned"
+ * echo, which also contains the name and would make a bare substring match
+ * pass vacuously. */
+static int has_name_row(const char *text, const char *name)
+{
+    const char *line = text;
+    while (line && *line) {
+        const char *eol = strchr(line, '\n');
+        size_t len = eol ? (size_t)(eol - line) : strlen(line);
+        const char *hit = strstr(line, name);
+        if (hit && (size_t)(hit - line) < len &&
+            !strstr(line, "SPAWNED") && !strstr(line, "spawned"))
+            return 1;
+        line = eol ? eol + 1 : NULL;
     }
     return 0;
 }
@@ -185,7 +204,6 @@ static int device_absent_checks(void)
     struct vms_procinfo info;
     uint32_t index = 0;
     uint32_t st = vms_kif_procscan(&index, &info);
-    /* negctl: bind-client-no-register */
     CHECK(!(st & 1),
           "the process-table scan does not report success with no executive");
 
@@ -362,18 +380,41 @@ int main(void)
     uint32_t sst = vms_kif_getjpi_prcnam(SUB_NAME, &sub_info);
     uint32_t sfst = vms_kif_getjpi_self(&self_info);
 
-    /* SECOND precondition guard: if SETTERM did not actually record the
-     * binding (an injected setterm-binding-not-recorded defect returns success
-     * but records nothing), the root is not terminal-bound and the subject is
-     * not what this suite needs -- skip rather than redden. */
-    if (!(rst & 1) || root_info.terminal[0] == '\0') {
-        printf("  (root row absent or not terminal-bound (rst=%08X) -- SKIP)\n", rst);
+    printf("  (diag: transcript=%d rst=%08X root_type=%u sst=%08X sub_type=%u "
+           "sfst=%08X self_type=%u)\n",
+           have_transcript, rst, (rst & 1) ? root_info.proc_type : 0xffu,
+           sst, (sst & 1) ? sub_info.proc_type : 0xffu,
+           sfst, (sfst & 1) ? self_info.proc_type : 0xffu);
+
+    /* If the root has no row at all, registration/bind is not effective here
+     * (e.g. an injected bind-client-no-register): SKIP, deferring that
+     * detection to the bind suites (see the header comment). */
+    if (!(rst & 1)) {
+        printf("  (root row absent (rst=%08X) -- SKIP)\n", rst);
         if (sst & 1 && sub_info.linux_pid) kill((pid_t)sub_info.linux_pid, SIGKILL);
         close(in_pipe[1]);
         int s; while (waitpid(child, &s, 0) < 0 && errno == EINTR) ;
         printf("=== test_syssvc_spawn_users: %d passed, %d failed (SKIPPED) ===\n",
                pass, fail);
         return EXIT_SKIP;
+    }
+
+    /* The root registered but its terminal is not recorded => SETTERM returned
+     * success without writing the binding into the executive row. That is the
+     * setterm-binding-not-recorded facade, and this suite reads it back through
+     * $GETJPI on a row a DIFFERENT process bound -- so it DETECTS that defect.
+     * Report it and stop before the classification assertions (which all depend
+     * on the binding and would cascade), so the injection reddens this one
+     * assertion, not a shower of them. */
+    /* negctl: setterm-binding-not-recorded */
+    CHECK(root_info.terminal[0] != '\0',
+          "the interactive session root is terminal-bound (SETTERM recorded the binding)");
+    if (root_info.terminal[0] == '\0') {
+        if (sst & 1 && sub_info.linux_pid) kill((pid_t)sub_info.linux_pid, SIGKILL);
+        close(in_pipe[1]);
+        int s; while (waitpid(child, &s, 0) < 0 && errno == EINTR) ;
+        printf("=== test_syssvc_spawn_users: %d passed, %d failed ===\n", pass, fail);
+        return 1;
     }
 
     /* ---------------------------------------------------------------
@@ -417,9 +458,9 @@ int main(void)
     /* SHOW USERS/FULL now LISTS the subprocess by name -- the old terminal[0]
      * filter dropped every subprocess; proc_type keeps it. Both the root and
      * the subprocess must appear. */
-    CHECK(has_substr(out, ROOT_NAME),
+    CHECK(has_name_row(out, ROOT_NAME),
           "SHOW USERS/FULL lists the interactive root by process name");
-    CHECK(has_substr(out, SUB_NAME),
+    CHECK(has_name_row(out, SUB_NAME),
           "SHOW USERS/FULL lists the SPAWNed subprocess by process name");
 
     /* Change C: SHOW SYSTEM enumerates the whole table, so the newly-
@@ -434,6 +475,10 @@ int main(void)
         kill((pid_t)sub_info.linux_pid, SIGKILL);
     int s; while (waitpid(child, &s, 0) < 0 && errno == EINTR) ;
 
+    if (fail > 0) {
+        printf("  (diag: captured transcript follows)\n---8<---\n%.4000s\n---8<---\n",
+               out);
+    }
     printf("=== test_syssvc_spawn_users: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;
 }

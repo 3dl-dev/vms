@@ -175,6 +175,21 @@
 #ifndef R_X86_64_DTPOFF32
 #define R_X86_64_DTPOFF32        21
 #endif
+/* Initial-Exec: the GOT-slot access model. `movq x@gottpoff(%rip),%reg` loads the
+ * variable's TP-relative offset from a GOT slot, then `%fs:(%reg)`. STOCK archives
+ * (e.g. Alpine libmpfr, which cc1 whole-archives) emit these. LINK.EXE has no GOT
+ * slot bearing a tpoff, so for a SINGLE static image these relax to Local-Exec the
+ * same way GD/LD do — a direct link-time-final TP-relative offset (vms-c07). */
+#ifndef R_X86_64_GOTTPOFF
+#define R_X86_64_GOTTPOFF        22
+#endif
+/* Local-Exec direct: the 32-bit field IS the variable's TP-relative offset
+ * (%fs:x@tpoff). STOCK archives (Alpine libmpfr) emit these alongside GOTTPOFF.
+ * The field is filled link-time-final with moff - tls_tp_size — the same value
+ * the GD/LD/IE relaxations embed. (vms-c07) */
+#ifndef R_X86_64_TPOFF32
+#define R_X86_64_TPOFF32         23
+#endif
 /* Classic (non-TLSDESC "gnu"/"gnu2"-less) general-/local-dynamic TLS relocs the
  * x86_64 psABI defines for the __tls_get_addr access model. STOCK upstream
  * archives (Alpine libstdc++/libsupc++/libgcc) are compiled with the classic
@@ -1652,6 +1667,15 @@ static int is_classic_gdld_reloc(uint32_t type)
     return type == R_X86_64_TLSGD || type == R_X86_64_TLSLD;
 }
 
+/* True for an x86_64 Initial-Exec TLS reloc (vms-c07). The GOTTPOFF field sits on
+ * the disp32 of `movq x@gottpoff(%rip),%reg` (or the rarer `addq`), which loads
+ * the variable's tpoff from a GOT slot. LINK.EXE fills no such slot, so IE is
+ * relaxed to Local-Exec (patch_tls_ie) — valid for a single static image. */
+static int is_ie_reloc(uint32_t type)
+{
+    return type == R_X86_64_GOTTPOFF;
+}
+
 /* GD/LD -> Local-Exec relaxation (x86_64 psABI). Valid for a SINGLE static image
  * (no dlopen): every classic general-/local-dynamic access becomes a local-exec
  * read of TP (%fs:0) plus a link-time-final TP-relative offset — the same value
@@ -1698,6 +1722,36 @@ static void patch_tls_le(uint32_t type, uint8_t *img, uint64_t site, int32_t tpo
         for (int k = 0; k < pad; k++) w[k] = 0x66;
         memcpy(w + pad, movfs, 9);
     }
+}
+
+/* IE -> Local-Exec relaxation (x86_64 psABI), the Initial-Exec analogue of
+ * patch_tls_le(). The R_X86_64_GOTTPOFF field sits on the disp32 of a RIP-relative
+ * GOT load, so the whole instruction is `REX <op> <modrm> <disp32>` starting 3
+ * bytes before the field. Two forms occur; both are the same fixed length after
+ * relaxation, so the rewrite is in place:
+ *
+ *   movq x@gottpoff(%rip),%reg  (REX 8b modrm d32) -> movq $tpoff,%reg      (REX c7 11b|reg d32)
+ *   addq x@gottpoff(%rip),%reg  (REX 03 modrm d32) -> leaq tpoff(%reg),%reg (REX 8d modrm  d32)
+ *
+ * tpoff = moff - tls_tp_size, exactly as the GD/LD path. `reg` is modrm.reg plus
+ * REX.R; in both relaxed forms the register moves into modrm.r/m, so REX.R becomes
+ * REX.B (and, for the add->lea whose base is also the reg, REX.R stays set too).
+ * cc1's libmpfr IE is the movq form; the addq form is handled for completeness. */
+static void patch_tls_ie(uint8_t *img, uint64_t site, int32_t tpoff)
+{
+    uint8_t *w  = img + site - 3;   /* REX, opcode, modrm, disp32 */
+    uint8_t op  = w[1], modrm = w[2];
+    int     reg = (((w[0] >> 2) & 1) << 3) | ((modrm >> 3) & 7);   /* REX.R + modrm.reg */
+    if (op == 0x8b) {                          /* movq gottpoff -> movq $tpoff */
+        w[0] = 0x48 | ((reg >= 8) ? 0x01 : 0);      /* REX.W (+REX.B for r8-r15) */
+        w[1] = 0xc7;                                /* mov r/m64, imm32 (/0) */
+        w[2] = (uint8_t)(0xc0 | (reg & 7));         /* mod=11, r/m=reg */
+    } else {                                   /* op == 0x03: addq gottpoff -> leaq tpoff(%reg) */
+        w[0] = 0x48 | ((reg >= 8) ? 0x05 : 0);      /* REX.W (+REX.R+REX.B for r8-r15) */
+        w[1] = 0x8d;                                /* lea r64, m */
+        w[2] = (uint8_t)(0x80 | ((reg & 7) << 3) | (reg & 7));  /* mod=10 disp32, reg=base=reg */
+    }
+    memcpy(w + 3, &tpoff, 4);
 }
 
 /* Patch a TLSDESC ADR_PAGE21 / LD64_LO12 / ADD_LO12 to reach the 2-word TLSDESC
@@ -2634,6 +2688,22 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                                                ELF64_R_SYM(rl->info), 0);
                 int32_t tpoff = (int32_t)(int64_t)(moff - tls_tp_size);
                 patch_tls_le(type, (uint8_t *)img, site, tpoff);
+            } else if (is_ie_reloc(type)) {
+                /* Initial-Exec -> Local-Exec relaxation (vms-c07): same TP-relative
+                 * offset as GD/LD, rewriting the GOTTPOFF load to a direct tpoff so
+                 * cc1's libmpfr IE accesses land below TP instead of at %fs:0. */
+                uint64_t moff = tls_ref_offset(objs, nobj, i,
+                                               ELF64_R_SYM(rl->info), 0);
+                int32_t tpoff = (int32_t)(int64_t)(moff - tls_tp_size);
+                patch_tls_ie((uint8_t *)img, site, tpoff);
+            } else if (type == R_X86_64_TPOFF32) {
+                /* Local-Exec direct offset (vms-c07): the field IS the variable's
+                 * TP-relative offset; fill it link-time-final (moff - tls_tp_size),
+                 * the same value as the relaxed GD/LD/IE paths. libmpfr emits these
+                 * alongside its GOTTPOFF IE, and an unfilled one writes at %fs:0. */
+                uint64_t moff = tls_ref_offset(objs, nobj, i,
+                                               ELF64_R_SYM(rl->info), rl->add);
+                *insn = (uint32_t)(int32_t)(int64_t)(moff - tls_tp_size);
             } else if (is_dtpoff_reloc(type)) {
                 /* x86_64 dynamic TLS operand: the variable's TLS offset written
                  * as a flat absolute 32-bit constant, link-time-final — NOT

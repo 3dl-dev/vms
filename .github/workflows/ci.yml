@@ -4060,6 +4060,19 @@ jobs:
         run: |
           sh src/vmslink/test/run_evax_ximport.sh
 
+      # vms-069: GLOBALVALUE fold on the EVAX cross-image path. A VMS globalvalue
+      # is an ABSOLUTE LINK-TIME CONSTANT (its address IS the value) — VMS folds
+      # it at LINK, never binding it through an activation import cell. Links the
+      # EVAX fixture gvalfold_ref.obj (`.quad C$_EXIT1` REFQUAD, undefined) against
+      # a --use'd producer exporting C$_EXIT1=GLOBALVALUE:0x0035A009, and asserts
+      # the site holds the FOLDED constant with NO .vms$imp — while a real
+      # PROCEDURE export STILL emits an import cell (fold must not break imports)
+      # and a symbol in no producer still %LINK-F-UNDEF (INV-6). This unblocks the
+      # alpha-dec-vms GCC-port crt0's &C$_EXIT1. Arch-independent; fixture checked in.
+      - name: Prove LINK.EXE folds EVAX producer globalvalues to link-time constants (vms-069)
+        run: |
+          sh src/vmslink/test/run_evax_gvalfold.sh
+
       # vms-2e4: the LAST x86_64 relocation class — gnu2-dialect TLSDESC
       # (R_X86_64_GOTPC32_TLSDESC + R_X86_64_TLSDESC_CALL, plus the
       # local-dynamic R_X86_64_DTPOFF32 / _TLS_MODULE_BASE_ half). Proof is

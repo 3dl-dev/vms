@@ -3207,14 +3207,27 @@ static int evax_find_sym(struct evax_input *in, int nin, const char *name,
 }
 
 /* Resolved address of a symbol's VALUE (procedure descriptor for a procedure,
- * plain value otherwise) — section base + section-relative value. */
+ * plain value otherwise) — section base + section-relative value.
+ *
+ * An ABSOLUTE global (globalvalue, bead vms-1bc) is folded to its `value`
+ * DIRECTLY: it names no storage, so `value` is a link-time constant and its
+ * `psindx` (the synthetic $ABS$ psect) must NOT be added as a base — nor may the
+ * result be biased at load (it is not an in-image address). A REFQUAD to
+ * `&__gcc_main_flags` therefore stores the constant (e.g. 3), never
+ * psect_base + 3. (The EVAX image path emits no load-bias .vms$rel list at all,
+ * so an absolute constant is inherently never biased; this fold keeps the value
+ * correct-by-construction rather than relying on the $ABS$ psect's base being
+ * incidentally 0.) */
 static uint64_t evax_sym_value_addr(struct evax_input *in, int di, const struct evax_symbol *s)
 {
+    if (s->is_abs) return s->value;                 /* absolute constant, no base */
     return in[di].sec_base[s->psindx] + s->value;
 }
-/* Resolved address of a symbol's CODE ENTRY (procedure entry point). */
+/* Resolved address of a symbol's CODE ENTRY (procedure entry point). An absolute
+ * global is not a procedure, but fold its constant directly for consistency. */
 static uint64_t evax_sym_code_addr(struct evax_input *in, int di, const struct evax_symbol *s)
 {
+    if (s->is_abs) return s->code_value;            /* == value for a non-proc    */
     return in[di].sec_base[s->code_psindx] + s->code_value;
 }
 

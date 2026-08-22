@@ -159,6 +159,16 @@ static int parse_egsd(const uint8_t *rec, uint16_t rsz, struct evax_object *out)
             y->flags = flags;
             y->defined = (flags & EGSY__V_DEF) ? 1 : 0;
             y->is_proc = (flags & EGSY__V_NORM) ? 1 : 0;
+            /* ABSOLUTE global (globalvalue, bead vms-1bc): a DEFINED symbol with
+             * EGSY__V_REL CLEAR. alpha-dec-vms-as sets REL only for symbols in a
+             * relocatable section; an absolute symbol (e.g. `__gcc_main_flags =
+             * 3`) is bound to the synthetic $ABS$ psect and carries DEF without
+             * REL (flags 0x0002 vs 0x000a for a normal psect-relative global —
+             * confirmed against real EGSD bytes; cf. bfd/vms-alpha.c
+             * _bfd_vms_write_egsd). Its `value` is the constant; `psindx` names
+             * $ABS$ and must not be used as a base. Only meaningful for a
+             * definition — an undefined external is never absolute. */
+            y->is_abs = (y->defined && !(flags & EGSY__V_REL)) ? 1 : 0;
             if (y->defined) {
                 if (esiz < ESDF_NAMLNG_OFF + 1) { set_err("truncated esdf entry"); return -1; }
                 y->value  = getl64(e + ESDF_VALUE_OFF);

@@ -68,11 +68,24 @@ struct evax_section {
  * (esdf code_address + ca_psindx). Both are section-relative (section base is
  * added at layout). The Alpha LINKAGE pair stores <code entry, PDSC>, so BOTH
  * are needed to resolve one (slice 4). For a non-procedure defined symbol the
- * code fields mirror value/psindx. (Field layout: include/vms/esdf.h.) */
+ * code fields mirror value/psindx. (Field layout: include/vms/esdf.h.)
+ *
+ * `is_abs` (bead vms-1bc) marks an ABSOLUTE global — a "globalvalue" whose
+ * VALUE *is* its address: it names no storage and its `value` is a link-time
+ * constant, NOT a psect-relative offset. The OpenVMS GCC port emits exactly one
+ * per `main()` object — `__gcc_main_flags = <flags>` — and its crt0 reads
+ * `(unsigned __int64)&__gcc_main_flags` (the address IS the flags word). The
+ * marker is empirical: a defined EGSD SYM with EGSY__V_DEF set and EGSY__V_REL
+ * CLEAR (alpha-dec-vms-as sets REL only for symbols in a *relocatable* section;
+ * an absolute symbol is bound to the synthetic $ABS$ psect and gets no REL —
+ * bfd/vms-alpha.c _bfd_vms_write_egsd). When `is_abs`, `value` is the resolved
+ * constant directly and `psindx` (the $ABS$ psect) must NOT be used as a base;
+ * the linker folds `value` with no psect base and no load-bias relocation. */
 struct evax_symbol {
     char     name[EVAX_NAME_MAX];
     int      defined;
     int      is_proc;
+    int      is_abs;       /* absolute global (globalvalue): value == constant */
     uint16_t flags;
     uint64_t value;
     uint32_t psindx;

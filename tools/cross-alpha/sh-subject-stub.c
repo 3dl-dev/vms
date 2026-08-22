@@ -20,7 +20,14 @@ int main(void)
 {
     char buf[512];
     /* Consume the CREPRC-redirected input script the way a shell would, then
-     * block indefinitely so the process stays resident (the suite deletes it). */
+     * stay resident long enough for the suite to observe/delete this subject.
+     * BOUNDED lifetime (alarm -> SIGALRM default-terminates): a suite normally
+     * $DELPRCs its subject, but if the per-suite watchdog SIGKILLs the test
+     * mid-run the subject would otherwise pause forever and orphaned subjects
+     * would accumulate across 66 suites, slowing every later SHOW SYSTEM and
+     * eventually the whole run. 240s covers the 90s per-suite watchdog with
+     * margin, then the orphan self-reaps. */
+    alarm(240);
     while (read(0, buf, sizeof buf) > 0) { /* drain */ }
     for (;;) pause();
     return 0;

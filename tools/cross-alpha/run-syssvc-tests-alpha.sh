@@ -41,9 +41,10 @@ KV="${KV:-6.6.52}"
 ROOT="${SYSSVC_ROOT:-$REPO/.boot-cache/alpha-syssvc}"
 export VMSKO_WORK="${VMSKO_WORK:-$ROOT/vmsko}"
 WORK="${WORK:-$ROOT/work}"
-# 66 suites, several now fork/exec subject images (DCL/MMK/TCC) -- ~20s each
-# plus the per-suite 90s watchdog headroom. 2400s carries the full run.
-BOOT_TIMEOUT="${BOOT_TIMEOUT:-2400}"
+# 66 suites, several fork/exec subject images (DCL/MMK) and live /bin/sh
+# subjects (~40-50s each with process create/observe/delete). 2400s reached
+# only 48/66; 3600s carries the full run with the bounded-lifetime subjects.
+BOOT_TIMEOUT="${BOOT_TIMEOUT:-3600}"
 DOCKER_TIMEOUT="${DOCKER_TIMEOUT:-$((BOOT_TIMEOUT + 1800))}"
 
 mkdir -p "$WORK"

@@ -958,6 +958,17 @@ _Static_assert(VMS_IOCTL_DISK_RESOLVE == 0xC0305657u,
 #define VMS_USERNAME_SIZE 32
 
 /*
+ * Invoking CLI command-line bound (vms-f60d). OVMX DESIGN CHOICE
+ * (CLAUDE.md Rule 8): 256 bytes holds the classic 255-character DCL
+ * command line the OpenVMS User's Manual documents, plus a NUL for C
+ * readers. Public docs give the SEMANTICS of a CLI command line and the
+ * $CLI get-command-line callback (ovmx_activation.h) but no byte-level
+ * wire format, so this size and the ioctl structs carrying it are OVMX's
+ * own -- not presented as VMS-authentic.
+ */
+#define VMS_CLI_CMDLINE_SIZE 256
+
+/*
  * The per-process QUOTA BLOCK (vms-a7e) -- the VMS Job Information Block
  * (JIB) limits SHOW PROCESS/QUOTAS, SHOW QUOTA and F$GETJPI report. The
  * field set and its F$GETJPI item codes are from the PUBLIC OpenVMS System
@@ -1475,6 +1486,84 @@ struct vms_wake_args {
     uint32_t status;            /* return: SS$_ status */
 };
 
+/*
+ * $EXIT / $STATUS (vms-f60d) -- the executive facility IMGACT calls when an
+ * activated VMS-standard image's crt0 (its main()) returns, so the returned
+ * VMS condition value becomes the process's real completion status instead of
+ * a fail-honest stub (imgact.c imgact_vms_exit; ovmx_activation.h).
+ *
+ * VMS_IOCTL_SETEXIT records `condition` as the calling process's image
+ * completion $STATUS in the executive PCB (proc->exit_status). The full
+ * longword IS $STATUS; bit<0> (STS$M_SUCCESS) is the success/fail bit that
+ * $STATUS carries and bits<2:0> (STS$V_SEVERITY) are the $SEVERITY, exactly
+ * as the OpenVMS DCL Dictionary defines $STATUS/$SEVERITY. The executive
+ * echoes those decoded fields back and, as an OVMX design choice (CLAUDE.md
+ * Rule 8 -- POSIX has no VMS counterpart), maps the condition to a Linux
+ * exit code the caller (IMGACT) then passes to exit_group(2): 0 on success
+ * (bit<0> set), else nonzero. The AUTHORITATIVE completion status is the
+ * recorded longword, not the lossy exit code.
+ */
+struct vms_exit_args {
+    uint32_t condition;         /* in:  VMS condition value to record as $STATUS */
+    uint32_t status;            /* out: SS$_ status of the record operation */
+    uint32_t exit_code;         /* out: OVMX POSIX exit code mapped from condition */
+    uint8_t  success;           /* out: bit<0> of condition (STS$M_SUCCESS) */
+    uint8_t  severity;          /* out: bits<2:0> of condition (STS$V_SEVERITY) */
+    uint8_t  pad[2];
+};
+
+/*
+ * VMS_IOCTL_GETEXIT reads back a process's recorded image completion status.
+ * select is VMS_JPI_SEL_SELF (the caller's own $STATUS -- the invoking CLI
+ * reading the status of the image it just ran) or VMS_JPI_SEL_PID (another
+ * process, by VMS PID). A cross-process read is AUTHORIZED, NOT FREE: it is
+ * gated by vms_proc_may_read() exactly like $GETJPI (same UIC group, or
+ * WORLD) and returns SS$_NOPRIV with no data otherwise. has_exited is 0 (and
+ * condition 0) when no image has recorded a status yet -- a reader must not
+ * infer "not exited" from a zero condition, since 0 is a legal (warning-
+ * severity) value. OVMX DESIGN CHOICE (Rule 8): the by-PID observation of a
+ * process's completion status and this struct's layout are OVMX's own.
+ */
+struct vms_getexit_args {
+    uint32_t select;            /* in:  VMS_JPI_SEL_SELF or VMS_JPI_SEL_PID */
+    uint32_t vms_pid;           /* in:  target VMS PID when select == SEL_PID */
+    uint32_t condition;         /* out: recorded $STATUS condition value */
+    uint32_t status;            /* out: SS$_ status of the read */
+    uint8_t  has_exited;        /* out: 1 iff an image completion status exists */
+    uint8_t  success;           /* out: bit<0> of condition (STS$M_SUCCESS) */
+    uint8_t  severity;          /* out: bits<2:0> of condition (STS$V_SEVERITY) */
+    uint8_t  pad;
+};
+
+/*
+ * CLI invocation context (vms-f60d) -- the executive source for IMGACT's
+ * cliflag and cli_util->get_command_line (ovmx_activation.h). The invoking
+ * CLI (DCL) records its command line and cliflag with VMS_IOCTL_SETCLI; the
+ * image it activates reads the SAME context back with VMS_IOCTL_GETCLI (self
+ * only -- an image asks for its OWN invoking command line), inheriting it
+ * from the CLI's PCB at VMS_IOCTL_REGISTER_CONTINUE time. This is why the
+ * command line lives in the executive rather than a Linux env var: it is a
+ * fact the executive owns and hands down, not a string the image declares
+ * about itself (conductor ruling, INV-6). cliflag == 0 means "no CLI"
+ * (GETCLI then returns cli_present 0 and a zero-length command line, and
+ * decc$main derives argv[0] from image_file_desc instead).
+ */
+struct vms_setcli_args {
+    uint8_t  cliflag;                     /* in:  1 = invoked from a CLI/DCL */
+    uint8_t  pad;
+    uint16_t length;                      /* in:  command-line length in bytes */
+    uint32_t status;                      /* out: SS$_ status */
+    char     command[VMS_CLI_CMDLINE_SIZE];  /* in:  invoking DCL command line */
+};
+
+struct vms_getcli_args {
+    uint8_t  cliflag;                     /* out: 1 = invoked from a CLI/DCL */
+    uint8_t  pad;
+    uint16_t length;                      /* out: command-line length in bytes */
+    uint32_t status;                      /* out: SS$_ status */
+    char     command[VMS_CLI_CMDLINE_SIZE];  /* out: invoking DCL command line */
+};
+
 #define VMS_IOCTL_SETPRN    _IOWR(VMS_IOC_MAGIC, 0x41, struct vms_setprn_args)
 #define VMS_IOCTL_GETJPI    _IOWR(VMS_IOC_MAGIC, 0x42, struct vms_getjpi_args)
 #define VMS_IOCTL_PROCSCAN  _IOWR(VMS_IOC_MAGIC, 0x43, struct vms_procscan_args)
@@ -1483,6 +1572,10 @@ struct vms_wake_args {
 #define VMS_IOCTL_ESTABLISH_SYSTEM  _IOWR(VMS_IOC_MAGIC, 0x46, struct vms_establish_system_args)
 #define VMS_IOCTL_HIBER     _IOWR(VMS_IOC_MAGIC, 0x47, struct vms_hiber_args)
 #define VMS_IOCTL_WAKE      _IOWR(VMS_IOC_MAGIC, 0x48, struct vms_wake_args)
+#define VMS_IOCTL_SETEXIT   _IOWR(VMS_IOC_MAGIC, 0x49, struct vms_exit_args)
+#define VMS_IOCTL_GETEXIT   _IOWR(VMS_IOC_MAGIC, 0x4A, struct vms_getexit_args)
+#define VMS_IOCTL_SETCLI    _IOWR(VMS_IOC_MAGIC, 0x4B, struct vms_setcli_args)
+#define VMS_IOCTL_GETCLI    _IOWR(VMS_IOC_MAGIC, 0x4C, struct vms_getcli_args)
 
 /*
  * ABI lock for the process-table ioctls (vms-8019).
@@ -1541,6 +1634,14 @@ _Static_assert(sizeof(struct vms_establish_system_args) == 8,
                "vms_establish_system_args layout changed: VMS_IOCTL_ESTABLISH_SYSTEM ABI break");
 _Static_assert(sizeof(struct vms_register_args) == 8,
                "vms_register_args layout changed: VMS_IOCTL_REGISTER ABI break");
+_Static_assert(sizeof(struct vms_exit_args) == 16,
+               "vms_exit_args layout changed: VMS_IOCTL_SETEXIT ABI break");
+_Static_assert(sizeof(struct vms_getexit_args) == 20,
+               "vms_getexit_args layout changed: VMS_IOCTL_GETEXIT ABI break");
+_Static_assert(sizeof(struct vms_setcli_args) == 8 + VMS_CLI_CMDLINE_SIZE,
+               "vms_setcli_args layout changed: VMS_IOCTL_SETCLI ABI break");
+_Static_assert(sizeof(struct vms_getcli_args) == 8 + VMS_CLI_CMDLINE_SIZE,
+               "vms_getcli_args layout changed: VMS_IOCTL_GETCLI ABI break");
 /*
  * The inbound transfer buffer must be strictly larger than the
  * executive's inspection window, or an oversized name would be clipped

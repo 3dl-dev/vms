@@ -90,6 +90,9 @@
 #ifndef VMS_DEVNAM_SIZE
 #define VMS_DEVNAM_SIZE   16     /* device-name width (also in vms_mbx_nb.h) */
 #endif
+#ifndef VMS_CLI_CMDLINE_SIZE
+#define VMS_CLI_CMDLINE_SIZE 256 /* invoking DCL command-line bound (vms-f60d) */
+#endif
 
 /* ================================================================
  * VMS status codes the process-table facility returns that are NOT already in
@@ -253,6 +256,48 @@ struct vms_wake_args {
 	uint32_t status;      /* return: SS$_ status */
 };
 
+/*
+ * $EXIT/$STATUS + CLI invocation context (vms-f60d). Byte-for-byte the same
+ * structs as src/kernel/vms_ioctl.h -- the one shared facility source
+ * (src/kernel-core/vms_proctab.c) copies exactly these in and out on both
+ * substrates. See src/kernel/vms_ioctl.h for the full field semantics.
+ */
+struct vms_exit_args {
+	uint32_t condition;   /* in:  VMS condition value to record as $STATUS */
+	uint32_t status;      /* out: SS$_ status of the record operation */
+	uint32_t exit_code;   /* out: OVMX POSIX exit code mapped from condition */
+	uint8_t  success;     /* out: bit<0> of condition (STS$M_SUCCESS) */
+	uint8_t  severity;    /* out: bits<2:0> of condition (STS$V_SEVERITY) */
+	uint8_t  pad[2];
+};
+
+struct vms_getexit_args {
+	uint32_t select;      /* in:  VMS_JPI_SEL_SELF or VMS_JPI_SEL_PID */
+	uint32_t vms_pid;     /* in:  target VMS PID when select == SEL_PID */
+	uint32_t condition;   /* out: recorded $STATUS condition value */
+	uint32_t status;      /* out: SS$_ status of the read */
+	uint8_t  has_exited;  /* out: 1 iff an image completion status exists */
+	uint8_t  success;     /* out: bit<0> of condition (STS$M_SUCCESS) */
+	uint8_t  severity;    /* out: bits<2:0> of condition (STS$V_SEVERITY) */
+	uint8_t  pad;
+};
+
+struct vms_setcli_args {
+	uint8_t  cliflag;     /* in:  1 = invoked from a CLI/DCL */
+	uint8_t  pad;
+	uint16_t length;      /* in:  command-line length in bytes */
+	uint32_t status;      /* out: SS$_ status */
+	char     command[VMS_CLI_CMDLINE_SIZE];  /* in:  invoking DCL command line */
+};
+
+struct vms_getcli_args {
+	uint8_t  cliflag;     /* out: 1 = invoked from a CLI/DCL */
+	uint8_t  pad;
+	uint16_t length;      /* out: command-line length in bytes */
+	uint32_t status;      /* out: SS$_ status */
+	char     command[VMS_CLI_CMDLINE_SIZE];  /* out: invoking DCL command line */
+};
+
 /* ================================================================
  * Request numbers. All _IOWR carrying the SAME structs and NR bytes as
  * src/kernel/vms_ioctl.h, so their numbers are identical across substrates (the
@@ -317,6 +362,10 @@ struct vms_dassgn_args {
 #define VMS_IOCTL_ESTABLISH_SYSTEM  _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x46, struct vms_establish_system_args)
 #define VMS_IOCTL_HIBER             _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x47, struct vms_hiber_args)
 #define VMS_IOCTL_WAKE              _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x48, struct vms_wake_args)
+#define VMS_IOCTL_SETEXIT           _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x49, struct vms_exit_args)
+#define VMS_IOCTL_GETEXIT           _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x4A, struct vms_getexit_args)
+#define VMS_IOCTL_SETCLI            _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x4B, struct vms_setcli_args)
+#define VMS_IOCTL_GETCLI            _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x4C, struct vms_getcli_args)
 
 /*
  * Freeze the shared layouts -- the SAME sizes src/kernel/vms_ioctl.h freezes.
@@ -339,6 +388,14 @@ _Static_assert(sizeof(struct vms_hiber_args) == 8,
                "vms_hiber_args layout changed: VMS_IOCTL_HIBER ABI break");
 _Static_assert(sizeof(struct vms_wake_args) == 8,
                "vms_wake_args layout changed: VMS_IOCTL_WAKE ABI break");
+_Static_assert(sizeof(struct vms_exit_args) == 16,
+               "vms_exit_args layout changed: VMS_IOCTL_SETEXIT ABI break");
+_Static_assert(sizeof(struct vms_getexit_args) == 20,
+               "vms_getexit_args layout changed: VMS_IOCTL_GETEXIT ABI break");
+_Static_assert(sizeof(struct vms_setcli_args) == 8 + VMS_CLI_CMDLINE_SIZE,
+               "vms_setcli_args layout changed: VMS_IOCTL_SETCLI ABI break");
+_Static_assert(sizeof(struct vms_getcli_args) == 8 + VMS_CLI_CMDLINE_SIZE,
+               "vms_getcli_args layout changed: VMS_IOCTL_GETCLI ABI break");
 _Static_assert(VMS_PRCNAM_XFER > VMS_PRCNAM_SIZE,
                "VMS_PRCNAM_XFER must exceed VMS_PRCNAM_SIZE or oversized names get truncated into valid ones");
 
@@ -368,5 +425,13 @@ _Static_assert(VMS_IOCTL_SETIDENT == 0xC0305644u,
                "VMS_IOCTL_SETIDENT encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_ESTABLISH_SYSTEM == 0xC0085646u,
                "VMS_IOCTL_ESTABLISH_SYSTEM encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_SETEXIT == 0xC0105649u,
+               "VMS_IOCTL_SETEXIT encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_GETEXIT == 0xC014564Au,
+               "VMS_IOCTL_GETEXIT encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_SETCLI == 0xC108564Bu,
+               "VMS_IOCTL_SETCLI encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_GETCLI == 0xC108564Cu,
+               "VMS_IOCTL_GETCLI encodes differently here than on the reference build");
 
 #endif /* _VMS_PROCTAB_NB_H */

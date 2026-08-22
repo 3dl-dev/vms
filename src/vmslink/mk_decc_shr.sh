@@ -542,7 +542,8 @@ STUB_OBJ="$(mktemp -d)/ovmx_libc_stub.o"
 # non-TLS producer.
 CRTL_SRC="$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_crtl.c"
 CRTL_OBJ="$(mktemp -d)/ovmx_decc_crtl.o"
-"${CC:-cc}" -c -fPIC -ffreestanding -o "$CRTL_OBJ" "$CRTL_SRC"
+IMGACT_INC="$(CDPATH= cd "$(dirname "$0")/../imgact/include" && pwd)"   # ovmx_activation.h (vms-8c8)
+"${CC:-cc}" -c -fPIC -ffreestanding -I"$IMGACT_INC" -o "$CRTL_OBJ" "$CRTL_SRC"
 VEC="$VEC,get_errno_addr=PROCEDURE,get_vms_errno_addr=PROCEDURE,_malloc32=PROCEDURE,_malloc64=PROCEDURE"
 
 # decc$main (vms-954, §4b.5): the DEC C RTL image-startup routine the alpha-dec-vms

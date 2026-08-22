@@ -27,6 +27,14 @@
 #include <pthread.h>
 #include <sys/mman.h>
 
+/* Canonical VMS image-activation context — single source of truth (INV-LEDGER):
+ * dsc$descriptor_s (image_file_desc, arg 4), plus ovmx_imghdr (arg 3) and
+ * ovmx_cli_util (arg 2). Defined once in the freestanding IMGACT include (pulls
+ * only <stdint.h>); IMGACT and decc$main must agree on these, so decc$main binds
+ * the same header rather than a private copy. -Isrc/imgact/include is added to
+ * the CRTL compile in mk_decc_shr.sh and run_decc_shr.sh. (vms-8c8) */
+#include "ovmx_activation.h"
+
 /* ------------------------------------------------------------------ errno model
  * OpenVMS C keeps TWO per-thread error cells: the ISO C `errno`, and `vaxc$errno`
  * — the VMS condition value of the last failing C RTL call (VSI C RTL Ref Manual,
@@ -199,13 +207,8 @@ void *_malloc64(unsigned long size)
  * fake or a crash), just not yet the split command line. This is documented, not
  * silent. */
 
-/* VMS string descriptor (dsc$descriptor_s) — public, VMS-authentic layout. */
-struct ovmx_dsc_s {
-    unsigned short dsc_w_length;    /* string length in bytes                    */
-    unsigned char  dsc_b_dtype;     /* DSC$K_DTYPE_T                             */
-    unsigned char  dsc_b_class;     /* DSC$K_CLASS_S                            */
-    char          *dsc_a_pointer;   /* -> the (non-NUL-terminated) string        */
-};
+/* The VMS string descriptor (dsc$descriptor_s) now comes from ovmx_activation.h
+ * (included above) — the canonical definition IMGACT and decc$main share. */
 
 /* Cast a _malloc32 return (a non-negative 32-bit address) back to a pointer. */
 static inline void *p32_to_ptr(int a32)
@@ -234,8 +237,8 @@ void ovmx_decc_main(void *progxfer, void *cli_util, void *imghdr,
     const char  *name = "";
     unsigned int nlen = 0;
     if (image_file_desc) {
-        const struct ovmx_dsc_s *d = image_file_desc;
-        if (d->dsc_a_pointer) { name = d->dsc_a_pointer; nlen = d->dsc_w_length; }
+        const struct dsc$descriptor_s *d = image_file_desc;
+        if (d->dsc$a_pointer) { name = d->dsc$a_pointer; nlen = d->dsc$w_length; }
     }
 
     /* Copy the (length-counted, non-NUL-terminated) name into a <4 GB, NUL-

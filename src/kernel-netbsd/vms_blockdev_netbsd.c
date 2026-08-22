@@ -63,11 +63,26 @@
 
 uint32_t vms_devtab_disk_backing(const char *devnam, uint32_t *major_out,
 				 uint32_t *minor_out);
+uint32_t vms_devtab_disk_resolve(const char *devnam, char *backing,
+				 size_t backing_sz, uint32_t *major_out,
+				 uint32_t *minor_out);
 void vms_blockdev_netbsd_release_all(void);
 int exec_blockdev_read_block(unsigned int major_, unsigned int minor_,
 			     uint64_t lbn, void *buf, size_t buflen);
 int exec_blockdev_write_block(unsigned int major_, unsigned int minor_,
 			      uint64_t lbn, const void *buf, size_t buflen);
+
+/*
+ * VMS_IOCTL_DISK_RESOLVE handler (rd vms-f60). struct vms_proc is opaque here
+ * (the handler does not touch it -- INITIALIZE opens the target itself, the
+ * executive only names it), so a forward declaration suffices; the quarantine
+ * (no vms_internal.h) stands. struct vms_diskresolve_args comes from the shared
+ * /dev/vms contract header vms_acp_nb.h, which -- unlike vms_internal.h -- pulls
+ * no exec_rbtree twin and so does not collide with sys/rbtree.h.
+ */
+struct vms_proc;
+long vms_ioctl_disk_resolve(struct vms_proc *proc, unsigned long arg);
+#include "vms_acp_nb.h"
 
 #define OVMX_ACP_BLOCK_SIZE	512u	/* ODS-2 LBN == 512-byte block */
 
@@ -84,9 +99,12 @@ int exec_blockdev_write_block(unsigned int major_, unsigned int minor_,
 static const struct ovmx_acp_unit {
 	const char *vmsname;		/* upcased, colon-stripped */
 	const char *devpath;
+	const char *backing;		/* native block-dev name (vms-f60 resolve) */
 } ovmx_acp_unitmap[] = {
-	{ "DKA0", "/dev/ra1c" },	/* placeholder name, pending vms-47d */
-	{ "DUA0", "/dev/ra1c" },	/* the real VMS-VAX MSCP name */
+	{ "DKA0",   "/dev/ra1c", "ra1c" },	/* placeholder name, pending vms-47d */
+	{ "DUA0",   "/dev/ra1c", "ra1c" },	/* the real VMS-VAX MSCP name */
+	{ "DKA100", "/dev/ra2c", "ra2c" },	/* 2nd MSCP disk = INITIALIZE target */
+	{ "DUA100", "/dev/ra2c", "ra2c" },	/* its correct MSCP name */
 };
 
 /* Open-once-per-volume cache: bound at $MOUNT, reused by every block op, closed
@@ -234,6 +252,97 @@ vms_devtab_disk_backing(const char *devnam, uint32_t *major_out,
 	*minor_out = (uint32_t)minor(devvp->v_rdev);
 	mutex_exit(&ovmx_acp_disk_lk);
 	return SS__NORMAL;
+}
+
+/*
+ * vms_devtab_disk_resolve - resolve a VMS disk unit name to its backing block
+ * device NAME + (major,minor), WITHOUT caching the vnode (rd vms-f60). This is
+ * the deliberate twin of vms_devtab_disk_backing: $MOUNT caches SYS$DISK for
+ * its whole life because the ACP does all the block I/O through that handle;
+ * INITIALIZE.EXE, by contrast, opens the target device ITSELF and writes the
+ * fresh ODS-2 structure -- the executive only NAMES the device for it. So this
+ * resolver opens the device purely to read its dev_t (major/minor) and its
+ * native name, then closes it again with the SAME mode (FREAD|FWRITE) the open
+ * used -- the vmsfs_vfsops.c "vrelel: bad ref count" discipline. No cache slot
+ * is consumed, so resolving a unit never perturbs a mounted SYS$DISK binding.
+ *
+ * Returns a VMS status (odd == success): SS$_NORMAL on resolve, SS$_NOSUCHDEV
+ * for an unknown unit or an open failure (fail-honest -- Rule 9 / INV-6; no
+ * fabricated success, no invented device name).
+ */
+uint32_t
+vms_devtab_disk_resolve(const char *devnam, char *backing, size_t backing_sz,
+			uint32_t *major_out, uint32_t *minor_out)
+{
+	char norm[16];
+	const char *devpath = NULL;
+	const char *backname = NULL;
+	struct pathbuf *pb;
+	struct vnode *devvp = NULL;
+	int i, error;
+
+	if (devnam == NULL || backing == NULL || backing_sz == 0 ||
+	    major_out == NULL || minor_out == NULL)
+		return SS__NOSUCHDEV;
+
+	ovmx_acp_normname(devnam, norm, sizeof(norm));
+
+	for (i = 0; i < (int)__arraycount(ovmx_acp_unitmap); i++) {
+		if (strcmp(norm, ovmx_acp_unitmap[i].vmsname) == 0) {
+			devpath  = ovmx_acp_unitmap[i].devpath;
+			backname = ovmx_acp_unitmap[i].backing;
+			break;
+		}
+	}
+	if (devpath == NULL)
+		return SS__NOSUCHDEV;	/* unknown unit -- honest */
+
+	/*
+	 * Open the block device by its KERNEL-constant path (pathbuf_create, not
+	 * pathbuf_copyin) ONLY to read its v_rdev, then close it right back. No
+	 * cache slot, no lock: this resolve owns nothing past return.
+	 */
+	pb = pathbuf_create(devpath);
+	if (pb == NULL)
+		return SS__NOSUCHDEV;
+	error = vn_bdev_openpath(pb, &devvp, curlwp);
+	pathbuf_destroy(pb);
+	if (error || devvp == NULL)
+		return SS__NOSUCHDEV;	/* device absent/unopenable -- honest */
+
+	*major_out = (uint32_t)major(devvp->v_rdev);
+	*minor_out = (uint32_t)minor(devvp->v_rdev);
+	(void)vn_close(devvp, FREAD | FWRITE, curlwp->l_cred);
+
+	strlcpy(backing, backname, backing_sz);
+	return SS__NORMAL;
+}
+
+/*
+ * vms_ioctl_disk_resolve - the VMS_IOCTL_DISK_RESOLVE /dev/vms handler (rd
+ * vms-f60), letting INITIALIZE.EXE turn a VMS unit name ("DKA0:") into the real
+ * backing device it labels. `arg' is the cdevsw framework's kernel buffer for
+ * the <8KB _IOWR (already copied in from userspace by the framework), so this
+ * quarantined TU uses plain memcpy to/from (void*)arg -- NOT exec_copyin (which
+ * lives behind vms_internal.h). `proc' is unused: naming a device needs no
+ * process context. Always returns 0 (a facility-level status rides back in
+ * a.status); a bad unit is SS$_NOSUCHDEV in-band, not an ioctl errno.
+ */
+long
+vms_ioctl_disk_resolve(struct vms_proc *proc, unsigned long arg)
+{
+	struct vms_diskresolve_args a;
+
+	(void)proc;
+
+	memcpy(&a, (const void *)arg, sizeof(a));
+	a.devnam[VMS_DEVNAM_SIZE - 1] = '\0';	/* trust no userspace NUL */
+
+	a.status = vms_devtab_disk_resolve(a.devnam, a.backing,
+	    sizeof(a.backing), &a.backing_major, &a.backing_minor);
+
+	memcpy((void *)arg, &a, sizeof(a));
+	return 0;
 }
 
 /*

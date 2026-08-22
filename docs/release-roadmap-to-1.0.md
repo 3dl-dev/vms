@@ -51,7 +51,7 @@ calling anything short of that bar 1.0.
 
 ## Live status — generated
 
-> Reconciled from rd (source of truth) **as of 2026-08-21** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
+> Reconciled from rd (source of truth) **as of 2026-08-22** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
 
 ### Milestone ladder
 
@@ -180,6 +180,7 @@ calling anything short of that bar 1.0.
 
 ### Shipped releases (git tags)
 
+- **V0.5-1** — Completes the authenticity flip on all THREE substrates: the NetBSD/VAX executive Files-11 ODS-2 ACP flip (vms-d9c green), Alpha authentic binary-SYSUAF login with a standing green-by-SHA CI gate, and C++ first-light — a real C++ program (constructors, std::string/iostream, throw/catch) runs to exit-0 as an OVMX image, proven across x86_64, Alpha LP64, and VAX ILP32.
 - **V0.5** — The authenticity flip: RMS reads and writes genuine Files-11 ODS-2 over the executive ACP (the /vms passthrough retired on the runtime path); binary $UAFDEF SYSUAF + Purdy login proven on x86_64 and Alpha LP64; and the shipped MMK.EXE self-hosts the userland in-guest (TCC->LIBRARIAN->LINK->activate, zero bash, byte-identical). The NetBSD/VAX substrate flip is done, proven over SIMH, and lands as V0.5-1.
 - **V0.4-6** — Real OpenSSH key exchange over the executive network path, genuine ODS-2 read/write/INITIALIZE foundations, cluster rejoin proof, VAX co-release, and a sharded kernel-executive gate.
 - **V0.4-5** — Feature pack marching toward 0.5.
@@ -191,7 +192,6 @@ calling anything short of that bar 1.0.
 - **V0.3-9** — Executive-backed DCL, cluster rejoin, OPCOM messages.
 - **0.3-8** — Point release.
 - **0.3-7** — Point release.
-- **0.3-6** — Point release.
 
 ### rd-labeling gaps (fix these to keep the source accurate)
 

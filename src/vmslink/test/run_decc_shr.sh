@@ -124,8 +124,7 @@ void _start(void) {
     volatile unsigned long m = d_strlen(d_getenv("PATH") ? d_getenv("PATH") : "");
     volatile int c = d_strcmp("a", "b");
     (void)m; (void)c;
-    __asm__ volatile("mov $60,%%eax\n\txor %%edi,%%edi\n\tsyscall" ::: "eax","edi","memory");
-    __builtin_unreachable();
+    __builtin_trap();   /* portable across x86_64/aarch64: the proxy is link-only, never run */
 }
 EOF
 $CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/decc_proxy.o" "$WORK/decc_proxy.c"
@@ -157,8 +156,7 @@ void _start(void) {
     volatile int   p32 = _malloc32(32);
     volatile void *p64 = _malloc64(64);
     (void)e; (void)ve; (void)p32; (void)p64;
-    __asm__ volatile("mov $60,%%eax\n\txor %%edi,%%edi\n\tsyscall" ::: "eax","edi","memory");
-    __builtin_unreachable();
+    __builtin_trap();   /* portable across x86_64/aarch64: the proxy is link-only, never run */
 }
 EOF
 $CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/decc_crtl_proxy.o" "$WORK/decc_crtl_proxy.c"

@@ -36,6 +36,16 @@
  * root; bound to the console it is INTERACTIVE, and its SPAWN child inherits
  * its job and is a SUBPROCESS.
  *
+ * WHY THE SESSION IS KEPT ALIVE FOR THE $GETJPI READS. proc_type is computed
+ * LIVE: a subprocess is SUBPROCESS only while its job root is still in the
+ * table (proc_fill_info looks the root up by job_id). So the session script
+ * ends WITHOUT a LOGOUT and this process holds the command pipe OPEN, leaving
+ * DCL blocked at its prompt -- root and subprocess both alive -- while the
+ * $GETJPI reads run. Only then is the pipe closed (DCL logs out) and the
+ * subprocess killed. DCL flushes stdout before each prompt (dcl_main.c), so the
+ * transcript through SHOW SYSTEM is on disk before the reads, which is what the
+ * readiness poll waits for.
+ *
  * PRECONDITION-NOT-ESTABLISHED IS A SKIP, NOT A FAIL (the blind/skip
  * discipline this tree already uses). This suite's property is the
  * CLASSIFICATION; establishing a terminal-bound job root depends on the
@@ -60,6 +70,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <ctype.h>
+#include <time.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <stdint.h>
@@ -88,16 +99,15 @@ static int fail = 0;
 #define CONSOLE     "OPA0:"
 #define OUT_FILE    "/tmp/ovmx_c17_dcl.out"
 
-/* The session script: SPAWN a subprocess that stays alive across the two
- * displays (WAIT blocks the subprocess), then show it both ways. Auto-naming
- * (no /PROCESS) so the SPAWNED message and the SUB_NAME row are what vms-c17's
- * naming produces, not a name the test dictated. */
+/* SPAWN a subprocess that outlives the displays and the reads (WAIT blocks it),
+ * show it both ways, then STOP -- no LOGOUT, so DCL blocks at the prompt and
+ * the job stays alive for the $GETJPI reads. Auto-naming (no /PROCESS) so the
+ * SPAWNED message and the SUB_NAME row are what vms-c17's naming produces. */
 static const char *SESSION_SCRIPT =
-    "SPAWN/NOWAIT WAIT 00:00:20\n"
+    "SPAWN/NOWAIT WAIT 00:00:30\n"
     "SHOW USERS\n"
     "SHOW USERS/FULL\n"
-    "SHOW SYSTEM\n"
-    "LOGOUT\n";
+    "SHOW SYSTEM\n";
 
 /* ---- captured-output helpers ---------------------------------------- */
 
@@ -106,19 +116,22 @@ static int has_substr(const char *hay, const char *needle)
     return hay && needle && strstr(hay, needle) != NULL;
 }
 
-/* the first line containing `needle`, or NULL */
-static const char *line_with(const char *text, const char *needle)
+/* a SHOW SYSTEM row for `name`: 8 hex digits at col 0, a space, then the name
+ * at col 9 (oracle-pinned geometry, see test_syssvc_showproc.c). */
+static int has_sys_row(const char *text, const char *name)
 {
-    const char *line = text;
-    while (line && *line) {
-        const char *eol = strchr(line, '\n');
-        size_t len = eol ? (size_t)(eol - line) : strlen(line);
-        const char *hit = strstr(line, needle);
-        if (hit && (size_t)(hit - line) < len)
-            return line;
-        line = eol ? eol + 1 : NULL;
+    const char *ln = text;
+    size_t nl = strlen(name);
+    while (ln && *ln) {
+        int i;
+        for (i = 0; i < 8; i++)
+            if (!isxdigit((unsigned char)ln[i])) break;
+        if (i == 8 && ln[8] == ' ' && strncmp(ln + 9, name, nl) == 0)
+            return 1;
+        ln = strchr(ln, '\n');
+        if (ln) ln++;
     }
-    return NULL;
+    return 0;
 }
 
 static long read_file(const char *path, char *buf, size_t bufsz)
@@ -176,7 +189,6 @@ static int device_absent_checks(void)
     CHECK(!(st & 1),
           "the process-table scan does not report success with no executive");
 
-    /* SHOW USERS must fabricate no user row with no executive to read. */
     static char out[65536];
     if (access("/bin/DCL.EXE", X_OK) != 0) {
         printf("  (no /bin/DCL.EXE -- the SHOW USERS assertion cannot run here)\n");
@@ -207,8 +219,6 @@ static int device_absent_checks(void)
             out[used] = '\0';
             close(out_pipe[0]);
             int wst; while (waitpid(pid, &wst, 0) < 0 && errno == EINTR) ;
-            /* With no executive, SHOW USERS must not print a user-process
-             * table summary line -- there is no process table to read. */
             CHECK(!has_substr(out, "number of processes"),
                   "SHOW USERS fabricates no user-process summary with no "
                   "executive");
@@ -223,10 +233,10 @@ static int device_absent_checks(void)
 /* ---- the session subject ------------------------------------------- */
 
 /* The child becomes the interactive job root: it names itself, binds the
- * console, redirects its output to OUT_FILE, and execs the real DCL.EXE
- * reading SESSION_SCRIPT from stdin. It reports the status of each executive
- * call back over `repfd` so the parent can tell a broken PRECONDITION (skip)
- * apart from a real product bug. Never returns. */
+ * console, redirects its output to OUT_FILE, and execs the real DCL.EXE reading
+ * SESSION_SCRIPT from stdin. It reports the status of each executive call back
+ * over `repfd` so the parent can tell a broken PRECONDITION (skip) apart from a
+ * real product bug. Never returns. */
 struct setup_report { uint32_t setprn; uint32_t assign; uint32_t setterm; };
 
 static void session_child(int in_fd, int repfd)
@@ -253,9 +263,26 @@ static void session_child(int in_fd, int repfd)
     _exit(127);
 }
 
+/* Poll OUT_FILE until the SHOW SYSTEM output for the subprocess has been
+ * flushed (DCL flushes stdout before each prompt), or time out. Polls an
+ * OBSERVED condition rather than sleeping a fixed interval, so nothing is paced
+ * by a guess about emulator speed. */
+static int wait_for_transcript(char *buf, size_t bufsz)
+{
+    for (int i = 0; i < 3000; i++) {   /* up to ~30s */
+        if (read_file(OUT_FILE, buf, bufsz) > 0 &&
+            has_substr(buf, "number of processes") &&
+            has_sys_row(buf, SUB_NAME))
+            return 0;
+        struct timespec ts = { 0, 10 * 1000 * 1000 };  /* 10ms */
+        nanosleep(&ts, NULL);
+    }
+    return -1;
+}
+
 int main(void)
 {
-    setvbuf(stdout, NULL, _IOLBF, 0);  /* line-buffer: no buffered splice into a child */
+    setvbuf(stdout, NULL, _IOLBF, 0);
     static char out[131072];
 
     printf("=== test_syssvc_spawn_users: SPAWN visibility + interactive/"
@@ -300,19 +327,14 @@ int main(void)
     }
     close(in_pipe[0]); close(rep_pipe[1]);
 
-    /* Feed the session script, then read the child's setup report. */
+    /* Feed the session script, but KEEP in_pipe[1] OPEN so DCL blocks at its
+     * prompt after SHOW SYSTEM and the job stays alive for the reads below. */
     (void)write_all(in_pipe[1], SESSION_SCRIPT, strlen(SESSION_SCRIPT));
-    close(in_pipe[1]);
 
     struct setup_report rep;
     memset(&rep, 0, sizeof(rep));
     int got = read_all(rep_pipe[0], &rep, sizeof(rep));
     close(rep_pipe[0]);
-
-    /* Wait for DCL.EXE (the session root) to log out. The SPAWNed subprocess
-     * is a grandchild (WAIT-blocked) and is reparented away, so this returns
-     * at LOGOUT with the full transcript already flushed to OUT_FILE. */
-    int wst; while (waitpid(child, &wst, 0) < 0 && errno == EINTR) ;
 
     /* PRECONDITION: the interactive job root had to be established. A failed
      * register/$ASSIGN/SETTERM means the facilities this suite BUILDS ON are
@@ -321,59 +343,61 @@ int main(void)
     if (got != 0 || !(rep.setprn & 1) || !(rep.assign & 1) || !(rep.setterm & 1)) {
         printf("  (interactive root not established: setprn=%08X assign=%08X "
                "setterm=%08X -- SKIP)\n", rep.setprn, rep.assign, rep.setterm);
+        close(in_pipe[1]);
+        int s; while (waitpid(child, &s, 0) < 0 && errno == EINTR) ;
         printf("=== test_syssvc_spawn_users: %d passed, %d failed (SKIPPED) ===\n",
                pass, fail);
         return EXIT_SKIP;
     }
 
-    /* Now this process may register: the child's job_id was already derived
-     * (while main was unregistered), so registering here changes nothing about
-     * the subject. This lets us read the executive rows directly. */
-    struct vms_procinfo root_info, sub_info;
+    /* Wait for the transcript (through SHOW SYSTEM) to be flushed to disk. */
+    int have_transcript = (wait_for_transcript(out, sizeof(out)) == 0);
+
+    /* Now this process may register (its first vms_kif_* call): the child's
+     * job_id was already derived while main was unregistered, so this changes
+     * nothing about the subject. Read the executive rows while root and
+     * subprocess are BOTH still alive. */
+    struct vms_procinfo root_info, sub_info, self_info;
     uint32_t rst = vms_kif_getjpi_prcnam(ROOT_NAME, &root_info);
     uint32_t sst = vms_kif_getjpi_prcnam(SUB_NAME, &sub_info);
+    uint32_t sfst = vms_kif_getjpi_self(&self_info);
 
     /* SECOND precondition guard: if SETTERM did not actually record the
      * binding (an injected setterm-binding-not-recorded defect returns success
      * but records nothing), the root is not terminal-bound and the subject is
      * not what this suite needs -- skip rather than redden. */
     if (!(rst & 1) || root_info.terminal[0] == '\0') {
-        printf("  (root row absent or not terminal-bound (rst=%08X term=\"%s\") "
-               "-- SKIP)\n", rst, (rst & 1) ? root_info.terminal : "");
+        printf("  (root row absent or not terminal-bound (rst=%08X) -- SKIP)\n", rst);
+        if (sst & 1 && sub_info.linux_pid) kill((pid_t)sub_info.linux_pid, SIGKILL);
+        close(in_pipe[1]);
+        int s; while (waitpid(child, &s, 0) < 0 && errno == EINTR) ;
         printf("=== test_syssvc_spawn_users: %d passed, %d failed (SKIPPED) ===\n",
                pass, fail);
-        /* best-effort cleanup of the subprocess before leaving */
-        if (sst & 1 && sub_info.linux_pid) kill((pid_t)sub_info.linux_pid, SIGKILL);
         return EXIT_SKIP;
     }
 
     /* ---------------------------------------------------------------
-     * P1. THE EXECUTIVE'S CLASSIFICATION, read by $GETJPI (Change A+B).
-     *     The root is INTERACTIVE (terminal-bound job root); the SPAWNed
-     *     subprocess EXISTS and is a SUBPROCESS.
+     * P1. THE EXECUTIVE'S CLASSIFICATION, read by $GETJPI (Change A+B),
+     *     while the whole job is alive.
      * --------------------------------------------------------------- */
     CHECK(sst & 1,
           "the SPAWNed subprocess is registered in the executive process "
           "table (cmd_spawn no longer skips registration)");
-    CHECK((rst & 1) && root_info.proc_type == VMS_PROC_T_INTERACTIVE,
+    CHECK(root_info.proc_type == VMS_PROC_T_INTERACTIVE,
           "the terminal-bound session root is classified INTERACTIVE");
     CHECK((sst & 1) && sub_info.proc_type == VMS_PROC_T_SUBPROCESS,
           "the SPAWNed subprocess is classified SUBPROCESS");
-
-    /* A job root with no terminal is OTHER, not a "user": this process (main)
-     * is its own job root (registered above, real parent unregistered) and
-     * bound to no terminal. */
-    struct vms_procinfo self_info;
-    if (vms_kif_getjpi_self(&self_info) & 1)
-        CHECK(self_info.proc_type == VMS_PROC_T_OTHER,
-              "a terminal-less job root is classified OTHER (not a user)");
+    /* A job root with no terminal is OTHER, not a "user": this process is its
+     * own job root and bound to no terminal. */
+    CHECK((sfst & 1) && self_info.proc_type == VMS_PROC_T_OTHER,
+          "a terminal-less job root is classified OTHER (not a user)");
 
     /* ---------------------------------------------------------------
      * P2. THE USER-VISIBLE READERS (Change C + Change D), from the real
      *     DCL.EXE transcript.
      * --------------------------------------------------------------- */
-    long n = read_file(OUT_FILE, out, sizeof(out));
-    CHECK(n > 0, "captured the DCL.EXE session transcript");
+    CHECK(have_transcript, "captured the DCL.EXE session transcript "
+                           "(SHOW USERS + SHOW SYSTEM)");
 
     /* Change C: the /NOWAIT completion message is the oracle-grounded
      * "%DCL-S-SPAWNED, process <name> spawned" (severity S, the NAME) -- not
@@ -385,50 +409,30 @@ int main(void)
           "the old '%DCL-I-SPAWNED, process id is <pid>' message is gone");
 
     /* Change D: SHOW USERS counts the subprocess. Both rows carry the same
-     * (blank) username, so they aggregate to one user and two processes. */
+     * (blank) username, so they aggregate to one user and two processes -- the
+     * headline bug (was "number of processes = 1"). */
     CHECK(has_substr(out, "number of processes = 2"),
           "SHOW USERS reports number of processes = 2 (root + subprocess)");
 
     /* SHOW USERS/FULL now LISTS the subprocess by name -- the old terminal[0]
      * filter dropped every subprocess; proc_type keeps it. Both the root and
      * the subprocess must appear. */
-    CHECK(line_with(out, ROOT_NAME) != NULL,
+    CHECK(has_substr(out, ROOT_NAME),
           "SHOW USERS/FULL lists the interactive root by process name");
-    CHECK(line_with(out, SUB_NAME) != NULL,
+    CHECK(has_substr(out, SUB_NAME),
           "SHOW USERS/FULL lists the SPAWNed subprocess by process name");
 
     /* Change C: SHOW SYSTEM enumerates the whole table, so the newly-
-     * registered subprocess appears there too, by name. */
-    {
-        /* SHOW SYSTEM row: "%08X %-15s ..." -- the name field starts at
-         * column 9 (oracle-pinned, see test_syssvc_showproc.c). Assert the
-         * subprocess name appears on a line that also begins with 8 hex
-         * digits, so we are reading a SHOW SYSTEM row and not the SHOW USERS
-         * echo above. */
-        const char *ln = out;
-        int found = 0;
-        while (ln && *ln) {
-            int i;
-            for (i = 0; i < 8; i++)
-                if (!isxdigit((unsigned char)ln[i])) break;
-            if (i == 8 && ln[8] == ' ' &&
-                strncmp(ln + 9, SUB_NAME, strlen(SUB_NAME)) == 0) {
-                found = 1;
-                break;
-            }
-            ln = strchr(ln, '\n');
-            if (ln) ln++;
-        }
-        CHECK(found,
-              "SHOW SYSTEM lists the SPAWNed subprocess as a process-table row");
-    }
+     * registered subprocess appears there too, as a process-table row. */
+    CHECK(has_sys_row(out, SUB_NAME),
+          "SHOW SYSTEM lists the SPAWNed subprocess as a process-table row");
 
-    /* Release the subprocess (it is WAIT-blocked for up to 20s). */
-    if (sst & 1 && sub_info.linux_pid) {
+    /* Tear the session down: close the command pipe (DCL logs out on EOF) and
+     * release the WAIT-blocked subprocess. */
+    close(in_pipe[1]);
+    if (sst & 1 && sub_info.linux_pid)
         kill((pid_t)sub_info.linux_pid, SIGKILL);
-        int s; while (waitpid((pid_t)sub_info.linux_pid, &s, 0) < 0 && errno == EINTR)
-            ;   /* it is reparented to us via subreaper? if not, ECHILD -- fine */
-    }
+    int s; while (waitpid(child, &s, 0) < 0 && errno == EINTR) ;
 
     printf("=== test_syssvc_spawn_users: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

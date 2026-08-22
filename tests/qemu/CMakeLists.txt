@@ -566,6 +566,35 @@ set_tests_properties(cluster_params_recnx_e2e PROPERTIES
     TIMEOUT 900)
 
 # ---------------------------------------------------------------------------
+# CLUSTER PARAM ADOPTION ACROSS REBOOT -- THE R1 RELEASE PROOF
+# (vms-495, epic vms-098 R1.3).
+#
+# R1.1 (cluster_params_recnx_e2e above) proves authoring->persist->adopt within
+# ONE boot. This gate proves the R1 acceptance R1.1 does not: a WHOLE NEW
+# executive booted from the SAME persistent disk on a later power cycle comes up
+# already carrying the operator-authored cluster identity/quorum set. Boot 1
+# authors SCSNODE/SCSSYSTEMID/VOTES/EXPECTED_VOTES via SYSGEN + WRITE CURRENT;
+# boot 2 (a fresh PID 1 on the same disk) is shown to adopt every value -- the
+# boot console names the SCSNODE, a fresh SCSD --show-identity reads the whole
+# set back off the persisted store, and F$GETSYI independently reads SCSSYSTEMID.
+# A CONTROL BRACKET disk authored with DIFFERENT values boots with THOSE, and
+# run_*.sh runs the paired MEASURED negative control FIRST (unauthored store ->
+# seed defaults, never the authored identity) so the positive cannot pass for
+# the wrong reason. See the two test scripts' headers for the full sequence.
+#
+# Same opt-in/SKIP convention as the other qemu-full-boot gates: real docker +
+# QEMU boot, real minutes (four boots in the positive), gated behind
+# OVMX_QEMU_FULL_E2E=1 so it does not run under a bare `ctest`.
+add_test(
+    NAME cluster_param_adoption_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_cluster_param_adoption_e2e.sh
+)
+set_tests_properties(cluster_param_adoption_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 1800)
+
+# ---------------------------------------------------------------------------
 # MOUNT/DISMOUNT ARE REAL mount(2)/umount(2) (vms-651).
 #
 # Boots the ACTUAL mastered bootable image TWICE against a SECOND, real

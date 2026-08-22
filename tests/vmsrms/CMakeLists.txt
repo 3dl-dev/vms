@@ -213,6 +213,40 @@ set_tests_properties(vmsrms_dirlogical_compose PROPERTIES
     TIMEOUT 30
 )
 
+# vms-656 (V0.5-2 boot blocker): a PLAIN (non-rooted) multi-member search-list
+# device logical (STARTUP.COM's SYS$STARTUP, whose NAME carries a '$') must
+# compose its FIRST member's chain to the concrete on-volume ODS-2 candidate --
+# the target STARTUP.COM opens as SYS$STARTUP:VMS$PHASES.DAT. Host LNM$PROCESS,
+# no /dev/vms needed.
+add_executable(test_plain_searchlist_compose test_plain_searchlist_compose.c)
+target_include_directories(test_plain_searchlist_compose PRIVATE
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_plain_searchlist_compose PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_plain_searchlist_compose COMMAND test_plain_searchlist_compose)
+set_tests_properties(vmsrms_plain_searchlist_compose PROPERTIES
+    LABELS "unit;rms;lnm"
+    TIMEOUT 30
+)
+
+# vms-656 (V0.5-2 boot blocker regression guard): the ACTUAL boot bug was a
+# native-link build-flag drift -- the shipped LIBVMSRMS$SHR.EXE was compiled
+# WITHOUT -DOVMX_HAVE_ACP (mk_vmsrms_shr.sh missed it when vms-d5d re-keyed
+# rms_core.c's ACP arm from __linux__ to OVMX_HAVE_ACP), so sys$open fell to the
+# POSIX #else fallback that cannot read the ODS-2 volume -> SYS$STARTUP:
+# VMS$PHASES.DAT %RMS-E-FNF. This asserts every native-link recipe that COMPILES
+# an OVMX_HAVE_ACP-guarded TU also defines the flag. No build/exec needed.
+add_test(NAME vmsrms_native_acp_arm_defined
+         COMMAND ${CMAKE_COMMAND} -E env bash
+                 ${CMAKE_CURRENT_SOURCE_DIR}/test_native_acp_arm_defined.sh)
+set_tests_properties(vmsrms_native_acp_arm_defined PROPERTIES
+    LABELS "unit;rms;native-link;build-config"
+    TIMEOUT 30
+)
+
 # vms-240: iterative device-field LNM resolution through $PARSE and the unified
 # TERMINAL-honoring driver (lnm_translate_filespec). Host LNM$PROCESS, no
 # /dev/vms needed.

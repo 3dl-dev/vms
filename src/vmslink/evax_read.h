@@ -15,13 +15,16 @@
  * documentation. No VSI/HPE source or binary was disassembled or copied.
  *
  * SCOPE: slice 1 parses the records (framing), the module header (EMH/MHD),
- * and the global symbol directory (EGSD) — psects + symbols. Slice 2 (this
- * revision) adds the ETIR relocation RECOGNIZER: the STA/STO/OPR/CTL/STC
- * command stack-machine that yields a list of relocations (offset, type,
- * target, addend). Slice 2 recognizes every reloc TYPE, including the Alpha
- * linkage/GP ones; APPLYING the hard linkage/GP relocs (the two-quadword
- * linkage-pair store + link-time instruction patching) is a following slice,
- * as is wiring the front end into link.c's object loader.
+ * and the global symbol directory (EGSD) — psects + symbols. Slice 2 adds the
+ * ETIR relocation RECOGNIZER: the STA/STO/OPR/CTL/STC command stack-machine
+ * that yields a list of relocations (offset, type, target, addend), recognizing
+ * every reloc TYPE including the Alpha linkage ones. Slice 3 (this revision)
+ * additionally MATERIALIZES psect CONTENT — replaying the STO_IMM immediate
+ * bytes into a per-psect buffer (struct evax_section.content) so the linker has
+ * image bytes to relocate into — and extracts a normal procedure's CODE ENTRY
+ * (code_value/code_psindx) alongside its procedure-descriptor value, which the
+ * LINKAGE-pair store needs. APPLYING the relocations (slice 4) and the format
+ * dispatch that feeds this front end live in link.c's object loader.
  */
 #ifndef OVMX_EVAX_READ_H
 #define OVMX_EVAX_READ_H
@@ -36,19 +39,36 @@
 
 /* A psect (program section) definition from an EGSD PSC entry. `flags` are the
  * EGPS__V_* bits (REL/EXE/WRT/RD/…); `alloc` is this object's contribution size;
- * `align` is the power-of-two alignment exponent. */
+ * `align` is the power-of-two alignment exponent.
+ *
+ * `content` (slice 3) is the initialized image bytes of the psect, `alloc` long,
+ * materialized by replaying the ETIR STO_IMM commands (which carry the literal
+ * instruction/data bytes) into a per-psect buffer. It is NULL when the psect
+ * emitted no immediate bytes (a bytes-are-all-zero psect, e.g. $BSS$, or a psect
+ * whose every byte is a relocation-store slot): a NULL content means "all zero",
+ * and the linker treats it as `alloc` zero bytes. The buffer is malloc'd and
+ * lives until process exit (LINK.EXE, like the ELF path, never frees). */
 struct evax_section {
     char     name[EVAX_NAME_MAX];
     uint32_t flags;
     uint64_t alloc;
     uint8_t  align;
+    uint8_t *content;      /* [alloc] initialized bytes, or NULL == all-zero */
 };
 
 /* A symbol from an EGSD SYM entry. `defined` distinguishes a definition (esdf:
  * carries value + psindx) from an undefined external reference (esrf). `flags`
  * are the EGSY__V_* bits; `is_proc` mirrors EGSY__V_NORM (a normal procedure
  * definition); `psindx` is the 0-based index into `sec[]` of the defining
- * psect (defined symbols only). */
+ * psect (defined symbols only).
+ *
+ * `value`/`psindx` locate the symbol's VALUE — for a normal procedure this is
+ * its PROCEDURE DESCRIPTOR (the .pdesc, its procedure value / PV). A normal
+ * procedure ALSO carries a distinct CODE ENTRY point: `code_value`/`code_psindx`
+ * (esdf code_address + ca_psindx). Both are section-relative (section base is
+ * added at layout). The Alpha LINKAGE pair stores <code entry, PDSC>, so BOTH
+ * are needed to resolve one (slice 4). For a non-procedure defined symbol the
+ * code fields mirror value/psindx. (Field layout: include/vms/esdf.h.) */
 struct evax_symbol {
     char     name[EVAX_NAME_MAX];
     int      defined;
@@ -56,6 +76,8 @@ struct evax_symbol {
     uint16_t flags;
     uint64_t value;
     uint32_t psindx;
+    uint64_t code_value;   /* procedure code-entry offset (esdf code_address) */
+    uint32_t code_psindx;  /* psect of the code entry (esdf ca_psindx)        */
 };
 
 /* Relocation kind, mapped from the recognized ETIR command sequence. The names

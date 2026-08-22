@@ -19,6 +19,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* ---- record types (include/vms/eobjrec.h) ---- */
 #define EOBJ__C_EMH   8
@@ -53,10 +54,12 @@
 #define PSC_ALLOC_OFF   8
 #define PSC_NAMLNG_OFF  12
 #define SYM_FLAGS_OFF   6
-#define ESDF_VALUE_OFF  8
-#define ESDF_PSINDX_OFF 28
-#define ESDF_NAMLNG_OFF 32
-#define ESRF_NAMLNG_OFF 8
+#define ESDF_VALUE_OFF    8   /* symbol value (procedure descriptor for a proc) */
+#define ESDF_CODEADDR_OFF 16  /* code entry offset (code_address, normal procs) */
+#define ESDF_CAPSINDX_OFF 24  /* psect of the code entry (ca_psindx)            */
+#define ESDF_PSINDX_OFF   28  /* psect of the value/descriptor                  */
+#define ESDF_NAMLNG_OFF   32
+#define ESRF_NAMLNG_OFF   8
 
 /* ---- ETIR command opcodes (include/vms/etir.h) ---- */
 #define ETIR__C_STA_GBL     0    /* push global symbol                        */
@@ -160,6 +163,16 @@ static int parse_egsd(const uint8_t *rec, uint16_t rsz, struct evax_object *out)
                 if (esiz < ESDF_NAMLNG_OFF + 1) { set_err("truncated esdf entry"); return -1; }
                 y->value  = getl64(e + ESDF_VALUE_OFF);
                 y->psindx = getl32(e + ESDF_PSINDX_OFF);
+                if (y->is_proc) {
+                    /* A normal procedure carries a distinct code entry point
+                     * (code_address + ca_psindx) in addition to its descriptor
+                     * value; the LINKAGE pair stores <code entry, descriptor>. */
+                    y->code_value  = getl64(e + ESDF_CODEADDR_OFF);
+                    y->code_psindx = getl32(e + ESDF_CAPSINDX_OFF);
+                } else {
+                    y->code_value  = y->value;   /* non-proc: code addr == value */
+                    y->code_psindx = y->psindx;
+                }
                 uint8_t nl = e[ESDF_NAMLNG_OFF];
                 if ((size_t)ESDF_NAMLNG_OFF + 1 + nl > esiz) { set_err("esdf name overruns"); return -1; }
                 copy_name(y->name, e + ESDF_NAMLNG_OFF + 1, nl);
@@ -167,6 +180,8 @@ static int parse_egsd(const uint8_t *rec, uint16_t rsz, struct evax_object *out)
                 if (esiz < ESRF_NAMLNG_OFF + 1) { set_err("truncated esrf entry"); return -1; }
                 y->value = 0;
                 y->psindx = 0;
+                y->code_value = 0;
+                y->code_psindx = 0;
                 uint8_t nl = e[ESRF_NAMLNG_OFF];
                 if ((size_t)ESRF_NAMLNG_OFF + 1 + nl > esiz) { set_err("esrf name overruns"); return -1; }
                 copy_name(y->name, e + ESRF_NAMLNG_OFF + 1, nl);
@@ -231,6 +246,29 @@ static int etir_emit(struct evax_object *out, struct etir_state *st,
     return 0;
 }
 
+/* Materialize `n` immediate bytes from a STO_IMM command into the current
+ * psect's content buffer at the running vaddr, allocating the buffer (zeroed to
+ * `alloc`) on first write. Relocation-store slots left untouched stay zero and
+ * are filled by the linker when it applies the relocation (slice 4). */
+static int etir_write_content(struct evax_object *out, struct etir_state *st,
+                              const uint8_t *data, uint32_t n)
+{
+    if (st->cur_psect < 0 || st->cur_psect >= out->nsec) {
+        set_err("STO_IMM before CTL_SETRB or bad psect index"); return -1;
+    }
+    struct evax_section *s = &out->sec[st->cur_psect];
+    if (st->vaddr + n > s->alloc) {
+        set_err("STO_IMM writes past psect allocation"); return -1;
+    }
+    if (n == 0) return 0;
+    if (!s->content) {
+        s->content = calloc(1, s->alloc ? (size_t)s->alloc : 1);
+        if (!s->content) { set_err("oom allocating psect content"); return -1; }
+    }
+    memcpy(s->content + st->vaddr, data, n);
+    return 0;
+}
+
 /* Parse one ETIR record (record proper at `rec`, size `rsz`) advancing `st`. */
 static int parse_etir(const uint8_t *rec, uint16_t rsz, struct evax_object *out,
                       struct etir_state *st)
@@ -262,9 +300,13 @@ static int parse_etir(const uint8_t *rec, uint16_t rsz, struct evax_object *out,
         case ETIR__C_CTL_SETRB:
             st->cur_psect = st->cur_psidx; st->vaddr = st->cur_addend;
             st->cur_psidx = -1; st->cur_addend = 0; st->prev_cmd = cmd; break;
-        case ETIR__C_STO_IMM:
+        case ETIR__C_STO_IMM: {
             if (length < 8) { set_err("truncated STO_IMM"); return -1; }
-            st->vaddr += getl32(op); st->prev_cmd = cmd; break;
+            uint32_t n = getl32(op);
+            if ((size_t)8 + n > length) { set_err("STO_IMM data overruns command"); return -1; }
+            if (etir_write_content(out, st, op + 4, n) < 0) return -1;
+            st->vaddr += n; st->prev_cmd = cmd; break;
+        }
 
         /* --- stores: emit one relocation --- */
         case ETIR__C_STO_LW:

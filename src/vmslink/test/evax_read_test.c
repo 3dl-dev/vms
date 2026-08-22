@@ -119,6 +119,19 @@ int main(int argc, char **argv)
     CHECK(saw_extq,    "REFQUAD @ $LINK$+0x0 -> EXT_ROUTINE");
     CHECK(saw_secq,    "REFQUAD @ $LINK$+0x10 -> section $CODE$");
 
+    /* --- slice 3: materialized psect content + procedure code entry ---
+     * $CODE$'s first STO_IMM stored the function prologue; its first
+     * instruction is `lda $sp,-16($sp)` = 0x23defff0 (bytes f0 ff de 23 LE).
+     * EXAMPLE_PROC's code entry (EXAMPLE_PROC..en) is at $CODE$ (index 0) +0. */
+    CHECK(code && code->content != NULL, "$CODE$ content materialized (STO_IMM)");
+    if (code && code->content) {
+        static const uint8_t want[4] = { 0xf0, 0xff, 0xde, 0x23 };
+        CHECK(memcmp(code->content, want, 4) == 0,
+              "$CODE$[0..4] = lda $sp,-16($sp) (0x23defff0)");
+    }
+    CHECK(ep && ep->code_psindx == 0, "EXAMPLE_PROC code entry in psect 0 ($CODE$)");
+    CHECK(ep && ep->code_value  == 0, "EXAMPLE_PROC code entry at $CODE$+0");
+
     if (failures) { printf("\n%d assertion(s) FAILED\n", failures); return 1; }
     printf("\nALL EVAX READER (slice 1 psects/symbols + slice 2 relocs) CHECKS PASSED\n");
     return 0;

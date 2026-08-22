@@ -460,7 +460,31 @@ int ovmx_boot_load_module(const char *name)
         errno = saved;                           /* preserve modctl's errno */
         return -1;
     }
-    
+    /* The executive driver is now loaded: give it its /dev/vms node the way
+     * Linux devtmpfs would have, so ovmx_boot_open_executive() can open it.
+     * A VFS module (vmsfs) has no device node -- ensure_exec_node() only acts
+     * for the executive and is a no-op otherwise. */
+    if (is_exec)
+        ensure_exec_node();
+    return 0;
+}
+
+int ovmx_boot_open_executive(void)
+{
+    return open("/dev/vms", O_RDWR | O_CLOEXEC);
+}
+
+const char *ovmx_boot_system_disk_dev(void)
+{
+    return OVMX_BOOT_SYSDISK_DEV;
+}
+
+int ovmx_boot_system_disk_present(void)
+{
+    struct stat st;
+    return stat(OVMX_BOOT_SYSDISK_DEV, &st) == 0 && S_ISBLK(st.st_mode);
+}
+
 const char *ovmx_boot_system_disk_unit(void)
 {
     return "DKA0:";
@@ -488,16 +512,15 @@ int ovmx_boot_acp_mount_system_disk(void)
 }
 
 /* The boot path's whole system-disk mount, NetBSD side. Since vms-329 this is
- * the ACP $MOUNT and nothing else -- the vmsfs.ko load + VFS mount it used to
- * perform are retired along with ovmx_boot_mount_system_disk() itself. */
+ * the executive ACP $MOUNT and NOTHING else: the vmsfs.ko load + VFS mount it
+ * used to perform are retired along with ovmx_boot_mount_system_disk() itself.
+ * There is deliberately NO fallback arm -- NetBSD's spec_vnops permits exactly
+ * ONE open of the backing block device, so the ACP $MOUNT and a vmsfs VFS mount
+ * of SYS$DISK can never coexist; a volume the ACP will not mount is a
+ * fail-honest halt in PID 1 (INV-6), never a quiet reversion to the retired
+ * path. */
 int ovmx_boot_mount_system_disk_native(void)
 {
-    /* vms-d5d/vms-329 FLIP, COMPLETE: $MOUNT SYS$DISK over the executive
-     * Files-11 ACP -- no vmsfs.ko, no VFS mount, no /vms POSIX bypass. There is
-     * deliberately NO fallback arm: NetBSD's spec_vnops permits exactly one
-     * open of /dev/ra1c, so the ACP $MOUNT and a vmsfs VFS mount can never
-     * coexist, and a volume the ACP will not mount is a fail-honest halt in
-     * PID 1 (INV-6), not a quiet reversion to the retired path. */
     return ovmx_boot_acp_mount_system_disk();
 }
 

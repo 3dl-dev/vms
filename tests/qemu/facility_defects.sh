@@ -4743,7 +4743,7 @@ the MMK-driven LIBRARIAN.EXE produced OVMXRT.OLB in the guest (build #2)
 OVMXRT.OLB is BYTE-IDENTICAL across two independent MMK-driven in-guest builds (deterministic archive, zero bash)
 the MMK-driven LINK.EXE produced OVMXRT.EXE in the guest
 OVMXRT.EXE is a valid OVMX image (ELF ET_DYN) -- LINK really linked it in QEMU
-OVMXRT.EXE carries PT_INTERP=IMGACT.EXE -- it is an image the kernel activates through IMGACT, not a bare ELF
+OVMXRT.EXE carries PT_INTERP=IMGACT.EXE (/run/ovmx-boot, ACP-staged) -- it is an image the kernel activates through IMGACT, not a bare ELF
 IMGACT activated the MMK-driven OVMXRT.EXE and it RAN to exit 216 (vms_strlen("OVMXRT")*36) -- the LINK pulled VMS_STRING from the .OLB and the image really runs
 EOF
                       ;;
@@ -5060,7 +5060,7 @@ EOF
                       ;;
         knock_on_fail) cat <<'EOF'
 the walk FELL THROUGH the empty node member and resolved on the COMMON member (search order)
-$GET/IO$_READVBLK reads SYSUAF.DAT byte-exact off the ODS-2 volume -- VBN 1 begins with the shipped header (no vmsfs_to_linux_path)
+$GET/IO$_READVBLK reads SYSUAF.DAT byte-exact off the ODS-2 volume -- VBN 1 begins with the shipped binary $UAFDEF Prolog-3 prolog (no vmsfs_to_linux_path)
 SYS$MANAGER:WELCOME.TXT resolves through the same rooted chain to a file FID
 EOF
                       ;;

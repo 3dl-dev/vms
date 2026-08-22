@@ -138,4 +138,89 @@ this test's Decision-A check can no longer distinguish the two files; re-derive 
 fi
 echo "PASS: control -- the Linux SYSTARTUP_VMS.COM DOES carry the block the vax variant drops (check has teeth)"
 
-echo "ALL PASS: OVMX/NetBSD-vax system volume masters to a rooted, Decision-A-clean bootable layout"
+# ---------------------------------------------------------------------------
+# 6. INSTALLER MEDIA (--distribution) -- vms-d0e5.
+#
+#    Installer media is a BOOTABLE SYSTEM DISK that must additionally be able to
+#    RUN THE INSTALL off itself: OVMX$INSTALL.COM does `PRODUCT INSTALL VMS
+#    /SOURCE=SYS$UPDATE:<kit>' and then RUNs SYS$SYSTEM:AUTHORIZE.EXE and
+#    SYS$SYSTEM:SYSGEN.EXE. The vax media used to carry ONLY the five boot
+#    images, so PRODUCT.EXE was not on the volume at all -- PID 1's utility
+#    staging (best-effort by design) skipped it, dcl_exec_utility()'s execvp
+#    fell through, and the two-disk SIMH install died %PCSI-F-NOIMG with the
+#    blank target byte-for-byte untouched. And the media staged its kit under
+#    the vax BUILD artifact name (OVMX-OS-VAX.KIT) while the arch-neutral
+#    procedure reads OVMX-OS.KIT.
+#
+#    Both are staging contracts, so both are provable here on the host, per-PR,
+#    with no vax toolchain and no SIMH.
+# ---------------------------------------------------------------------------
+UTILS="PRODUCT.EXE AUTHORIZE.EXE INITIALIZE.EXE SYSGEN.EXE"
+make_image PRODUCT.EXE     R 13000
+make_image AUTHORIZE.EXE   A 14000
+make_image INITIALIZE.EXE  I  8000
+make_image SYSGEN.EXE      G 10000
+
+KIT="$WORK/OVMX-OS-VAX.KIT"
+head -c 40000 /dev/urandom > "$KIT"
+
+DSTAGE="$WORK/dstage"
+"$STAGE_SCRIPT" --distribution --kit "$KIT" "$IMAGES" "$REPO" "$DSTAGE" >/dev/null \
+    || fail "stage_sysvol.sh --distribution exited non-zero"
+
+DIMG="$WORK/ovmx-distrib-vax.img"
+DOUT="$WORK/dextract"
+"$MASTER" master "$DIMG" OVMXSYS "$DSTAGE" 32 >/dev/null || fail "vmsfs_master master (distribution) exited non-zero"
+"$MASTER" extract "$DIMG" "$DOUT" >/dev/null             || fail "vmsfs_master extract (distribution) exited non-zero"
+
+for f in $UTILS; do
+    [ -f "$DOUT/$ROOTED/$f" ] \
+        || fail "installer media is MISSING SYS\$SYSTEM:$f at rooted $ROOTED -- OVMX\$INSTALL.COM cannot run it (%PCSI-F-NOIMG class)"
+    cmp -s "$IMAGES/$f" "$DOUT/$ROOTED/$f" || fail "$f not byte-exact at the rooted media path"
+done
+echo "PASS: installer media carries PRODUCT/AUTHORIZE/INITIALIZE/SYSGEN byte-exact at rooted [SYS0.SYSCOMMON.SYSEXE]"
+
+# The media's kit filename must be EXACTLY the one OVMX$INSTALL.COM reads. Do
+# not hard-code it twice: derive it from the procedure itself, so a rename on
+# either side fails HERE instead of three minutes into a SIMH install.
+INSTALL_COM="$REPO/distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/OVMX\$INSTALL.COM"
+[ -f "$INSTALL_COM" ] || fail "OVMX\$INSTALL.COM not found: $INSTALL_COM"
+KIT_SPEC="$(sed -n 's/.*\/SOURCE=SYS\$UPDATE:\([A-Za-z0-9._-]*\).*/\1/p' "$INSTALL_COM" | head -1)"
+[ -n "$KIT_SPEC" ] \
+    || fail "could not read the /SOURCE=SYS\$UPDATE:<kit> filename out of OVMX\$INSTALL.COM"
+[ -f "$DOUT/SYS0/SYSCOMMON/SYSUPD/$KIT_SPEC" ] \
+    || fail "installer media has no SYS\$UPDATE:$KIT_SPEC -- OVMX\$INSTALL.COM's PRODUCT INSTALL /SOURCE names a file the media does not carry"
+cmp -s "$KIT" "$DOUT/SYS0/SYSCOMMON/SYSUPD/$KIT_SPEC" \
+    || fail "the staged kit is not byte-exact with the source kit"
+echo "PASS: installer media carries the OS kit byte-exact at SYS\$UPDATE:$KIT_SPEC (the name OVMX\$INSTALL.COM reads)"
+
+# The distribution SYSTARTUP must invoke the menu (already asserted inside
+# stage_sysvol.sh) -- assert it on the MASTERED volume too, so a mastering
+# regression cannot drop it silently.
+grep -qiE '^\$[[:space:]]+@SYS\$MANAGER:OVMX\$INSTALL\.COM' \
+     "$DOUT/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM" \
+    || fail "mastered installer media does not boot into @SYS\$MANAGER:OVMX\$INSTALL.COM"
+echo "PASS: mastered installer media boots into OVMX\$INSTALL.COM"
+
+# TEETH: media that cannot run PRODUCT.EXE must be REFUSED at staging, not
+# mastered and shipped short. Without this the section above could be satisfied
+# by a stage script that merely copies whatever it happens to find.
+rm -f "$IMAGES/PRODUCT.EXE"
+if "$STAGE_SCRIPT" --distribution --kit "$KIT" "$IMAGES" "$REPO" "$WORK/dstage-neg" >/dev/null 2>&1; then
+    fail "control failed: stage_sysvol.sh --distribution accepted an images dir with NO PRODUCT.EXE -- installer media would ship unable to install"
+fi
+echo "PASS: control -- --distribution REFUSES media that cannot run PRODUCT.EXE (check has teeth)"
+
+# ...and the DEFAULT (installed-system) mode must be unaffected by the utility
+# images: it stages them only when present, so the boot-images-only dir that
+# section 2 used still stages and masters exactly as before.
+make_image PRODUCT.EXE R 13000     # restore for any later section
+DEF2="$WORK/stage-default-2"
+for f in $UTILS; do rm -f "$IMAGES/$f"; done
+"$STAGE_SCRIPT" "$IMAGES" "$REPO" "$DEF2" >/dev/null \
+    || fail "stage_sysvol.sh (default mode, boot images only) exited non-zero"
+diff -r "$STAGE" "$DEF2" >/dev/null 2>&1 \
+    || fail "default-mode staging changed -- the installer-media utility staging must be present-only, not a new default-mode dependency"
+echo "PASS: default (installed-system) staging is byte-for-byte unchanged by the media utility set"
+
+echo "ALL PASS: OVMX/NetBSD-vax system volume masters to a rooted, Decision-A-clean bootable layout, and the installer media carries the utilities + kit the install procedure runs"

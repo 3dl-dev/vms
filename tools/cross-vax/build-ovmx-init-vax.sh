@@ -124,13 +124,39 @@ echo
 # keeps the shared POSIX surface. The include set is exactly ovmx_init's CMake
 # target include dirs, plus the local src/ovmx_init headers (ovmx_boot.h,
 # sysboot.h).
+#
+# vms-329 (the coupled VAX ACP cutover): the shipped VAX PID 1 now reaches
+# SYS$DISK through the executive Files-11 ACP, so this recipe defines BOTH
+# capability macros and links the bridge translation units:
+#
+#   OVMX_HAVE_ACP        -- "$MOUNT/read SYS$DISK over the executive ACP".
+#                           ovmx_boot_mount_system_disk_native() takes its ACP
+#                           arm (vms_kif_acp_mount), which RETIRES the vmsfs.ko
+#                           VFS mount of the boot unit: NetBSD's spec_vnops
+#                           allows exactly ONE open of /dev/ra1c, so the ACP
+#                           mount and a VFS mount are mutually exclusive. There
+#                           is deliberately no fallback -- ACP or fail-honest.
+#   OVMX_BOOT_ACP_BRIDGE -- "the ACP-read bridge TUs are in THIS link", so
+#                           ovmx_init.c compiles stage_boot_images() and probes
+#                           the installed-system marker over the ACP instead of
+#                           stat()ing a POSIX path that no longer exists.
+#
+# _POSIX_C_SOURCE is DROPPED here (it was harmless while only the three base
+# TUs compiled): src/ovmx_init/CMakeLists.txt selects the bare _NETBSD_SOURCE
+# namespace for this substrate, and so does the standing ILP32 audit
+# (build-acp-read-audit-vax.sh) -- defining _POSIX_C_SOURCE alongside it turns
+# OFF the NetBSD surface the bridge's backend needs. Keeping all three recipes
+# on ONE feature-test macro set is what makes the audit's green mean something
+# for the shipped image.
 CFLAGS_COMMON="--sysroot=$SYSROOT -O2 -Wall -Wextra \
-    -D_NETBSD_SOURCE -D_POSIX_C_SOURCE=200809L \
+    -D_NETBSD_SOURCE \
+    -DOVMX_HAVE_ACP -DOVMX_BOOT_ACP_BRIDGE=1 \
     -I$OVMX_INIT \
     -I$VMS_INCLUDE -I$VMSPROCESS_INCLUDE -I$VMSLNM_INCLUDE \
-    -I$VMSFS_INCLUDE -I$VMSRMS_INCLUDE -I$LIBVMSSYS"
+    -I$VMSFS_INCLUDE -I$VMSRMS_INCLUDE -I$LIBVMSSYS \
+    -I$SRC/src/imgact -I$SRC/src/kernel"
 
-# --- proof 2: compile the three ovmx_init translation units for elf32-vax ----
+# --- proof 2: compile the ovmx_init translation units for elf32-vax ----------
 echo "=== proof 2: cross-compile ovmx_init.c + ovmx_boot_netbsd.c + sysboot.c ==="
 # shellcheck disable=SC2086
 "$CC" $CFLAGS_COMMON -c "$OVMX_INIT/ovmx_init.c"        -o "$OUT/ovmx_init.o"
@@ -138,6 +164,19 @@ echo "=== proof 2: cross-compile ovmx_init.c + ovmx_boot_netbsd.c + sysboot.c ==
 "$CC" $CFLAGS_COMMON -c "$OVMX_INIT/ovmx_boot_netbsd.c" -o "$OUT/ovmx_boot_netbsd.o"
 # shellcheck disable=SC2086
 "$CC" $CFLAGS_COMMON -c "$OVMX_INIT/sysboot.c"          -o "$OUT/sysboot.o"
+
+# vms-329: the ACP-read bridge TUs. imgact_acp.c is the SAME ACP file-access
+# walk IMGACT.EXE and the QEMU tests use; ovmx_boot_acp_read.c backs its three
+# host primitives with libc for PID 1; ovmx_boot_sysgen_acp.c is the STRONG
+# ovmx_sysgen_acp_read that must beat sysgen_params.h's #pragma-weak NULL
+# default (proof 2b below is the weak-seam anchor that proves it did).
+echo "=== proof 2a: cross-compile the ACP-read bridge TUs ==="
+# shellcheck disable=SC2086
+"$CC" $CFLAGS_COMMON -c "$OVMX_INIT/ovmx_boot_acp_read.c"   -o "$OUT/ovmx_boot_acp_read.o"
+# shellcheck disable=SC2086
+"$CC" $CFLAGS_COMMON -c "$OVMX_INIT/ovmx_boot_sysgen_acp.c" -o "$OUT/ovmx_boot_sysgen_acp.o"
+# shellcheck disable=SC2086
+"$CC" $CFLAGS_COMMON -c "$SRC/src/imgact/imgact_acp.c"      -o "$OUT/imgact_acp.o"
 echo "--- object arch check (must be VAX / ELF32 LSB) ---"
 "$TARGET-objdump" -f "$OUT/ovmx_boot_netbsd.o" | grep -Ei 'file format|architecture'
 
@@ -147,14 +186,14 @@ echo "--- confirm the NetBSD backend defines every ovmx_boot.h op ---"
 for sym in ovmx_boot_kernel_filesystems_mounted ovmx_boot_mount_kernel_filesystems \
            ovmx_boot_start_console_log_bridge ovmx_boot_load_module \
            ovmx_boot_open_executive ovmx_boot_system_disk_dev \
-           ovmx_boot_system_disk_present ovmx_boot_mount_system_disk \
+           ovmx_boot_system_disk_present \
            ovmx_boot_power_off; do
     if ! "$TARGET-nm" "$OUT/ovmx_boot_netbsd.o" | grep -qE " T $sym\$"; then
         echo "FAIL: ovmx_boot_netbsd.o does not define $sym"
         exit 1
     fi
 done
-echo "OK: all 9 ovmx_boot.h ops defined by the NetBSD backend"
+echo "OK: every ovmx_boot.h op is defined by the NetBSD backend"
 
 # The backend must open the REAL executive device, not a faked descriptor
 # (Rule 9 / INV-6). Assert the literal /dev/vms open is in the source.
@@ -172,6 +211,7 @@ echo "=== proof 3: link a real vax--netbsdelf STARTUP.EXE (PID 1) ==="
 # exe. --start-group resolves the libvms<->vmsfs archive cycle.
 "$CC" --sysroot="$SYSROOT" \
     "$OUT/ovmx_init.o" "$OUT/ovmx_boot_netbsd.o" "$OUT/sysboot.o" \
+    "$OUT/ovmx_boot_acp_read.o" "$OUT/ovmx_boot_sysgen_acp.o" "$OUT/imgact_acp.o" \
     -Wl,--start-group \
         "$LIBVMSQUEUE_A" "$LIBVMSRMS_A" "$LIBVMS_A" "$LIBVMSFS_A" \
         "$LIBVMSLNM_A" "$LIBVMSPROCESS_A" "$LIBVMSSYS_A" \
@@ -187,6 +227,53 @@ echo "$HDR" | grep -qiE 'Class:[[:space:]]+ELF32' \
     || { echo "FAIL: STARTUP.EXE is not ELFCLASS32 (VAX is 32-bit)"; exit 1; }
 echo "$HDR" | grep -qiF 'Digital VAX' \
     || { echo "FAIL: STARTUP.EXE Machine is not Digital VAX"; exit 1; }
+
+# --- proof 4: WEAK-SEAM ANCHOR (vms-329) -------------------------------------
+# sysgen_params.h declares ovmx_sysgen_acp_read as a #pragma weak that defaults
+# to NULL, so a link that FORGETS ovmx_boot_sysgen_acp.o produces NO link error
+# -- it silently keeps the NULL default and every VAX boot falls back to the
+# default node name with %OVMX-W-NOPARAMS. That is precisely the static-link
+# weak-seam class this project has been bitten by before, so assert on the
+# LINKED image that the strong definition really won, plus the rest of the ACP
+# closure the cutover depends on. Absence here is a hard failure, never a
+# warning: a STARTUP.EXE without these is a PID 1 that cannot read its own
+# system disk with the VFS mount retired.
+echo
+echo "=== proof 4: the ACP-read bridge really linked into STARTUP.EXE ==="
+for sym in ovmx_sysgen_acp_read ovmx_boot_acp_stage ovmx_boot_acp_present \
+           ovmx_boot_acp_mount_system_disk ovmx_boot_prepare_stage_dir \
+           imgact_acp_open; do
+    if ! "$TARGET-nm" "$OUT/STARTUP.EXE" | grep -qE " [TtWw] $sym\$"; then
+        echo "FAIL: STARTUP.EXE does not define $sym -- the ACP-read bridge is"
+        echo "      NOT in this link. With OVMX_HAVE_ACP on, PID 1 ACP-mounts"
+        echo "      SYS\$DISK and the vmsfs.ko VFS mount is gone, so a missing"
+        echo "      bridge means the boot cannot read ANY file on the volume."
+        exit 1
+    fi
+done
+# The strong definition must be a real text symbol, not the weak NULL stub.
+if ! "$TARGET-nm" "$OUT/STARTUP.EXE" | grep -qE " T ovmx_sysgen_acp_read\$"; then
+    echo "FAIL: ovmx_sysgen_acp_read resolved WEAK in STARTUP.EXE -- the"
+    echo "      #pragma-weak NULL default won and OVMXVMSSYS.PAR will never be"
+    echo "      read over the ACP (silent %OVMX-W-NOPARAMS on every boot)."
+    exit 1
+fi
+echo "OK: ovmx_sysgen_acp_read is STRONG, and the ACP-read bridge is linked in"
+
+# --- proof 5: TEETH -- the ACP arms are compiled IN, not #if'd out ------------
+# A recipe that stopped passing -DOVMX_HAVE_ACP would still compile and link
+# perfectly (every arm just disappears) and would silently ship a PID 1 that
+# VFS-mounts the boot unit again. vms_kif_acp_mount is referenced ONLY from
+# ovmx_boot_netbsd.c's OVMX_HAVE_ACP arm, so an undefined reference to it in
+# that object is the positive evidence the macro reached the compiler.
+echo "=== proof 5 (TEETH): the OVMX_HAVE_ACP mount arm is compiled in ==="
+if ! "$TARGET-nm" -u "$OUT/ovmx_boot_netbsd.o" | grep -qE ' vms_kif_acp_mount$'; then
+    echo "FAIL: ovmx_boot_netbsd.o does not reference vms_kif_acp_mount --"
+    echo "      OVMX_HAVE_ACP did not reach the compiler and this STARTUP.EXE"
+    echo "      would VFS-mount SYS\$DISK instead of \$MOUNTing it over the ACP."
+    exit 1
+fi
+echo "OK: ovmx_boot_netbsd.o references vms_kif_acp_mount (ACP mount arm live)"
 
 echo
 echo "=== ALL PROOFS PASSED: ovmx_init (STARTUP.EXE) builds and links for $TARGET ==="

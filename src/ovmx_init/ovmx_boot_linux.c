@@ -20,7 +20,6 @@
  *   ovmx_boot_open_executive             -> open("/dev/vms", O_RDWR|O_CLOEXEC)
  *   ovmx_boot_system_disk_dev            -> "/dev/vda"
  *   ovmx_boot_system_disk_present        -> stat("/dev/vda") && S_ISBLK
- *   ovmx_boot_mount_system_disk          -> mount(dev, mp, "vmsfs", 0, NULL)
  *   ovmx_boot_power_off                  -> sync(); reboot(RB_POWER_OFF)
  *
  * Clean-room (CLAUDE.md Rule 8): these call only public, documented Linux
@@ -152,11 +151,6 @@ int ovmx_boot_system_disk_present(void)
 {
     struct stat st;
     return stat(OVMX_BOOT_SYSDISK_DEV, &st) == 0 && S_ISBLK(st.st_mode);
-}
-
-int ovmx_boot_mount_system_disk(const char *mountpoint)
-{
-    return mount(OVMX_BOOT_SYSDISK_DEV, mountpoint, "vmsfs", 0, NULL);
 }
 
 /* The VMS device name of the boot/system unit as the executive enumerates it

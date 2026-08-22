@@ -102,7 +102,14 @@ WORK=${WORK:-/tmp/mk-dcl}
 mkdir -p "$WORK"
 
 CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics -U_FORTIFY_SOURCE}"
-DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE"
+# -DOVMX_HAVE_ACP (vms-329): dcl_script.c's @-procedure open and
+# dcl_cmd_process.c's activatable-image resolution ride the executive Files-11
+# ACP. Both arms USED to be gated on __linux__, which this recipe satisfied for
+# free; vms-329 re-keyed them to OVMX_HAVE_ACP so the netbsd-vax cross gets them
+# too, and this recipe must now say so explicitly or the NATIVE-LINK DCL.EXE
+# would silently lose the arms the CMake DCL.EXE keeps. Same definition
+# src/vmsdcl/CMakeLists.txt applies to the target.
+DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -DOVMX_HAVE_ACP"
 INCS="-I$DCL/include -I$REPO_SRC/libvms/include -I$REPO_SRC/vmsfs/include \
 -I$REPO_SRC/vmslnm/include -I$REPO_SRC/vmsrms/include \
 -I$REPO_SRC/vmsprocess/include -I$REPO_SRC/vmsqueue -I$REPO_SRC/libvmssys \

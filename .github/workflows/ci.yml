@@ -6672,7 +6672,7 @@ jobs:
             || { echo "FAIL: the migrated ctest negctls did not both pass"; exit 1; }
           echo "$RAW" | grep -qF "OK: ovmx_init.c has no __NetBSD__/__linux__ boot-logic fork" \
             || { echo "FAIL: the ovmx_init.c INV-DRIFT check (was build-ovmx-init-vax.sh) did not run"; exit 1; }
-          echo "$RAW" | grep -qF "OK: all 9 ovmx_boot.h ops defined by the NetBSD backend" \
+          echo "$RAW" | grep -qF "OK: every ovmx_boot.h op is defined by the NetBSD backend" \
             || { echo "FAIL: the NetBSD boot-backend ops check (was build-ovmx-init-vax.sh) did not run"; exit 1; }
           echo "$RAW" | grep -qF "OK: ovmx_boot_open_executive() opens the real /dev/vms (fail-honest)" \
             || { echo "FAIL: the real-/dev/vms check (was build-ovmx-init-vax.sh) did not run"; exit 1; }

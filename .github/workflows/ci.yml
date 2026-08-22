@@ -4035,6 +4035,18 @@ jobs:
         run: |
           sh src/vmslink/test/run_evax_read.sh
 
+      # vms-cbe (slices 3+4): LINK.EXE consumes the alpha-dec-vms port's native
+      # EVAX objects END TO END — dispatches on format, maps psects/symbols,
+      # APPLIES the relocations (REFLONG/REFQUAD/CODEADDR data + the Alpha
+      # LINKAGE pair), and stamps the .vms$xfer transfer vector. The verifier
+      # re-derives every expected reloc value from the placed section addresses
+      # and asserts the image bytes match. Pure byte manipulation, arch-
+      # independent; the EVAX .obj fixtures are checked in (no toolchain at
+      # test time).
+      - name: Prove LINK.EXE links a real EVAX/Alpha object set + applies relocs (vms-cbe)
+        run: |
+          sh src/vmslink/test/run_evax_link.sh
+
       # vms-2e4: the LAST x86_64 relocation class — gnu2-dialect TLSDESC
       # (R_X86_64_GOTPC32_TLSDESC + R_X86_64_TLSDESC_CALL, plus the
       # local-dynamic R_X86_64_DTPOFF32 / _TLS_MODULE_BASE_ half). Proof is

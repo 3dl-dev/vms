@@ -83,7 +83,56 @@ int main(int argc, char **argv)
     CHECK(ep && ep->psindx == 3, "EXAMPLE_PROC defined in psect index 3 ($LINK$)");
     CHECK(er && !er->defined, "EXT_ROUTINE present and UNDEFINED (external ref)");
 
+    /* --- relocations (slice 2): must match alpha-dec-vms-objdump -r ---
+     *   $CODE$ (psect 0): LINKAGE @0x8  -> EXT_ROUTINE
+     *   $LINK$ (psect 3): REFQUAD @0x0  -> EXT_ROUTINE
+     *                     REFQUAD @0x10 -> section $CODE$ (index 0) */
+    static const char *rtn[] = { "REFLONG","REFQUAD","CODEADDR","LINKAGE","NOP","BSR","LDA","BOH" };
+    for (int i = 0; i < o.nreloc; i++) {
+        const struct evax_reloc *r = &o.reloc[i];
+        printf("  reloc[%d] %-8s psect=%d @0x%llx -> %s addend=0x%llx\n",
+               i, rtn[r->type], r->psect, (unsigned long long)r->address,
+               r->to_section >= 0 ? o.sec[r->to_section].name : r->sym,
+               (unsigned long long)r->addend);
+    }
+    CHECK(o.nreloc == 3, "expected 3 relocations, got %d", o.nreloc);
+
+    int code_idx = -1, link_idx = -1;
+    for (int i = 0; i < o.nsec; i++) {
+        if (!strcmp(o.sec[i].name, "$CODE$")) code_idx = i;
+        if (!strcmp(o.sec[i].name, "$LINK$")) link_idx = i;
+    }
+    int saw_linkage = 0, saw_extq = 0, saw_secq = 0;
+    for (int i = 0; i < o.nreloc; i++) {
+        const struct evax_reloc *r = &o.reloc[i];
+        if (r->type == EVAX_R_LINKAGE && r->psect == code_idx && r->address == 0x8 &&
+            r->to_section < 0 && !strcmp(r->sym, "EXT_ROUTINE"))
+            saw_linkage = 1;
+        if (r->type == EVAX_R_REFQUAD && r->psect == link_idx && r->address == 0x0 &&
+            r->to_section < 0 && !strcmp(r->sym, "EXT_ROUTINE"))
+            saw_extq = 1;
+        if (r->type == EVAX_R_REFQUAD && r->psect == link_idx && r->address == 0x10 &&
+            r->to_section == code_idx)
+            saw_secq = 1;
+    }
+    CHECK(saw_linkage, "LINKAGE @ $CODE$+0x8 -> EXT_ROUTINE");
+    CHECK(saw_extq,    "REFQUAD @ $LINK$+0x0 -> EXT_ROUTINE");
+    CHECK(saw_secq,    "REFQUAD @ $LINK$+0x10 -> section $CODE$");
+
+    /* --- slice 3: materialized psect content + procedure code entry ---
+     * $CODE$'s first STO_IMM stored the function prologue; its first
+     * instruction is `lda $sp,-16($sp)` = 0x23defff0 (bytes f0 ff de 23 LE).
+     * EXAMPLE_PROC's code entry (EXAMPLE_PROC..en) is at $CODE$ (index 0) +0. */
+    CHECK(code && code->content != NULL, "$CODE$ content materialized (STO_IMM)");
+    if (code && code->content) {
+        static const uint8_t want[4] = { 0xf0, 0xff, 0xde, 0x23 };
+        CHECK(memcmp(code->content, want, 4) == 0,
+              "$CODE$[0..4] = lda $sp,-16($sp) (0x23defff0)");
+    }
+    CHECK(ep && ep->code_psindx == 0, "EXAMPLE_PROC code entry in psect 0 ($CODE$)");
+    CHECK(ep && ep->code_value  == 0, "EXAMPLE_PROC code entry at $CODE$+0");
+
     if (failures) { printf("\n%d assertion(s) FAILED\n", failures); return 1; }
-    printf("\nALL EVAX READER (slice 1) CHECKS PASSED\n");
+    printf("\nALL EVAX READER (slice 1 psects/symbols + slice 2 relocs) CHECKS PASSED\n");
     return 0;
 }

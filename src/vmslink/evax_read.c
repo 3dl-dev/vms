@@ -19,6 +19,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* ---- record types (include/vms/eobjrec.h) ---- */
 #define EOBJ__C_EMH   8
@@ -53,10 +54,32 @@
 #define PSC_ALLOC_OFF   8
 #define PSC_NAMLNG_OFF  12
 #define SYM_FLAGS_OFF   6
-#define ESDF_VALUE_OFF  8
-#define ESDF_PSINDX_OFF 28
-#define ESDF_NAMLNG_OFF 32
-#define ESRF_NAMLNG_OFF 8
+#define ESDF_VALUE_OFF    8   /* symbol value (procedure descriptor for a proc) */
+#define ESDF_CODEADDR_OFF 16  /* code entry offset (code_address, normal procs) */
+#define ESDF_CAPSINDX_OFF 24  /* psect of the code entry (ca_psindx)            */
+#define ESDF_PSINDX_OFF   28  /* psect of the value/descriptor                  */
+#define ESDF_NAMLNG_OFF   32
+#define ESRF_NAMLNG_OFF   8
+
+/* ---- ETIR command opcodes (include/vms/etir.h) ---- */
+#define ETIR__C_STA_GBL     0    /* push global symbol                        */
+#define ETIR__C_STA_LW      1    /* push longword literal (addend)            */
+#define ETIR__C_STA_QW      2    /* push quadword literal (addend)            */
+#define ETIR__C_STA_PQ      3    /* push psect base + offset                  */
+#define ETIR__C_STO_LW      52   /* store longword  -> REFLONG                */
+#define ETIR__C_STO_QW      53   /* store quadword  -> REFQUAD                */
+#define ETIR__C_STO_GBL     55   /* store global    -> REFQUAD vs symbol      */
+#define ETIR__C_STO_CA      56   /* store code addr -> CODEADDR               */
+#define ETIR__C_STO_OFF     59   /* store psect off -> REFQUAD, section-rel   */
+#define ETIR__C_STO_IMM     61   /* store immediate raw bytes (advance vaddr) */
+#define ETIR__C_STO_GBL_LW  62   /* store global lw -> REFLONG vs symbol      */
+#define ETIR__C_OPR_ADD     101  /* fold stacked base + addend                */
+#define ETIR__C_CTL_SETRB   150  /* set relocation base (cur_psect + vaddr)   */
+#define ETIR__C_STC_LP_PSB  201  /* store-conditional linkage pair -> LINKAGE */
+#define ETIR__C_STC_NOP_GBL 205  /* call-site relaxation -> NOP               */
+#define ETIR__C_STC_BSR_GBL 207  /* call-site relaxation -> BSR               */
+#define ETIR__C_STC_LDA_GBL 209  /* call-site relaxation -> LDA               */
+#define ETIR__C_STC_BOH_GBL 211  /* call-site relaxation -> BOH               */
 
 static char g_err[256];
 static void set_err(const char *m) { snprintf(g_err, sizeof g_err, "%s", m); }
@@ -140,6 +163,16 @@ static int parse_egsd(const uint8_t *rec, uint16_t rsz, struct evax_object *out)
                 if (esiz < ESDF_NAMLNG_OFF + 1) { set_err("truncated esdf entry"); return -1; }
                 y->value  = getl64(e + ESDF_VALUE_OFF);
                 y->psindx = getl32(e + ESDF_PSINDX_OFF);
+                if (y->is_proc) {
+                    /* A normal procedure carries a distinct code entry point
+                     * (code_address + ca_psindx) in addition to its descriptor
+                     * value; the LINKAGE pair stores <code entry, descriptor>. */
+                    y->code_value  = getl64(e + ESDF_CODEADDR_OFF);
+                    y->code_psindx = getl32(e + ESDF_CAPSINDX_OFF);
+                } else {
+                    y->code_value  = y->value;   /* non-proc: code addr == value */
+                    y->code_psindx = y->psindx;
+                }
                 uint8_t nl = e[ESDF_NAMLNG_OFF];
                 if ((size_t)ESDF_NAMLNG_OFF + 1 + nl > esiz) { set_err("esdf name overruns"); return -1; }
                 copy_name(y->name, e + ESDF_NAMLNG_OFF + 1, nl);
@@ -147,6 +180,8 @@ static int parse_egsd(const uint8_t *rec, uint16_t rsz, struct evax_object *out)
                 if (esiz < ESRF_NAMLNG_OFF + 1) { set_err("truncated esrf entry"); return -1; }
                 y->value = 0;
                 y->psindx = 0;
+                y->code_value = 0;
+                y->code_psindx = 0;
                 uint8_t nl = e[ESRF_NAMLNG_OFF];
                 if ((size_t)ESRF_NAMLNG_OFF + 1 + nl > esiz) { set_err("esrf name overruns"); return -1; }
                 copy_name(y->name, e + ESRF_NAMLNG_OFF + 1, nl);
@@ -160,10 +195,187 @@ static int parse_egsd(const uint8_t *rec, uint16_t rsz, struct evax_object *out)
     return 0;
 }
 
+/* ---- ETIR relocation recognizer -------------------------------------------
+ * ETIR records carry a stack-machine command stream that both emits the image
+ * bytes and describes relocations. We recognize the relocation-producing
+ * command sequences (the algorithm of binutils' alpha_vms_slurp_relocs,
+ * reimplemented from the public GPL source) into a flat reloc list.
+ *
+ * State persists ACROSS ETIR records (notably cur_psect — the section a run of
+ * relocations targets, set by CTL_SETRB and left in force until the next one).
+ * `vaddr` is the running byte cursor within cur_psect; each command samples it
+ * BEFORE its own advance to get the relocation's offset. Stacking commands
+ * (the STA family, OPR_ADD, CTL_SETRB, STO_IMM) update state and emit nothing;
+ * store commands emit one relocation and then reset the per-relocation state. */
+struct etir_state {
+    uint64_t       vaddr;      /* running byte offset within cur_psect       */
+    int            cur_psect;  /* target section index (persists; -1 = none) */
+    int            cur_psidx;  /* pending psect index from STA_PQ (-1 = none) */
+    const uint8_t *cur_sym;    /* pending counted symbol name, or NULL       */
+    uint64_t       cur_addend;
+    int            prev_cmd;
+};
+
+/* Emit one relocation of `type` at `address` within cur_psect. Target is the
+ * pending symbol (cur_sym) or, failing that, the pending section (cur_psidx).
+ * `limit` bounds a counted symbol-name read (record end). */
+static int etir_emit(struct evax_object *out, struct etir_state *st,
+                     enum evax_reloc_type type, uint64_t address,
+                     const uint8_t *limit)
+{
+    if (out->nreloc >= EVAX_MAX_RELOCS) { set_err("too many relocations"); return -1; }
+    if (st->cur_psect < 0 || st->cur_psect >= out->nsec) {
+        set_err("relocation before CTL_SETRB or bad psect index"); return -1;
+    }
+    struct evax_reloc *r = &out->reloc[out->nreloc];
+    memset(r, 0, sizeof *r);
+    r->type       = type;
+    r->psect      = st->cur_psect;
+    r->address    = address;
+    r->addend     = st->cur_addend;
+    r->to_section = -1;
+    if (st->cur_sym) {
+        uint8_t nl = st->cur_sym[0];
+        const uint8_t *s = st->cur_sym + 1;
+        if (s + nl > limit) nl = (uint8_t)(limit > s ? limit - s : 0);
+        copy_name(r->sym, s, nl);
+    } else if (st->cur_psidx >= 0) {
+        r->to_section = st->cur_psidx;   /* section-relative (STA_PQ + STO_OFF) */
+    }
+    out->nreloc++;
+    return 0;
+}
+
+/* Materialize `n` immediate bytes from a STO_IMM command into the current
+ * psect's content buffer at the running vaddr, allocating the buffer (zeroed to
+ * `alloc`) on first write. Relocation-store slots left untouched stay zero and
+ * are filled by the linker when it applies the relocation (slice 4). */
+static int etir_write_content(struct evax_object *out, struct etir_state *st,
+                              const uint8_t *data, uint32_t n)
+{
+    if (st->cur_psect < 0 || st->cur_psect >= out->nsec) {
+        set_err("STO_IMM before CTL_SETRB or bad psect index"); return -1;
+    }
+    struct evax_section *s = &out->sec[st->cur_psect];
+    if (st->vaddr + n > s->alloc) {
+        set_err("STO_IMM writes past psect allocation"); return -1;
+    }
+    if (n == 0) return 0;
+    if (!s->content) {
+        s->content = calloc(1, s->alloc ? (size_t)s->alloc : 1);
+        if (!s->content) { set_err("oom allocating psect content"); return -1; }
+    }
+    memcpy(s->content + st->vaddr, data, n);
+    return 0;
+}
+
+/* Parse one ETIR record (record proper at `rec`, size `rsz`) advancing `st`. */
+static int parse_etir(const uint8_t *rec, uint16_t rsz, struct evax_object *out,
+                      struct etir_state *st)
+{
+    const uint8_t *end = rec + rsz;
+    const uint8_t *ptr = rec + 4;             /* skip rectyp[2] + size[2]      */
+    while (ptr + 4 <= end) {
+        uint16_t cmd    = getl16(ptr);
+        uint16_t length = getl16(ptr + 2);    /* includes the 4-byte header    */
+        if (length < 4 || ptr + length > end) { set_err("corrupt ETIR command"); return -1; }
+        const uint8_t *op = ptr + 4;
+        uint64_t addr = st->vaddr;            /* sampled before this command's advance */
+        int emitted = 0;
+
+        switch (cmd) {
+        /* --- stacking: set state, emit nothing --- */
+        case ETIR__C_STA_GBL: st->cur_sym = op; st->prev_cmd = cmd; break;
+        case ETIR__C_STA_LW:
+            if (length < 8)  { set_err("truncated STA_LW"); return -1; }
+            st->cur_addend = getl32(op); st->prev_cmd = cmd; break;
+        case ETIR__C_STA_QW:
+            if (length < 12) { set_err("truncated STA_QW"); return -1; }
+            st->cur_addend = getl64(op); st->prev_cmd = cmd; break;
+        case ETIR__C_STA_PQ:
+            if (length < 16) { set_err("truncated STA_PQ"); return -1; }
+            st->cur_psidx = (int)getl32(op); st->cur_addend = getl64(op + 4);
+            st->prev_cmd = cmd; break;
+        case ETIR__C_OPR_ADD: st->prev_cmd = cmd; break;
+        case ETIR__C_CTL_SETRB:
+            st->cur_psect = st->cur_psidx; st->vaddr = st->cur_addend;
+            st->cur_psidx = -1; st->cur_addend = 0; st->prev_cmd = cmd; break;
+        case ETIR__C_STO_IMM: {
+            if (length < 8) { set_err("truncated STO_IMM"); return -1; }
+            uint32_t n = getl32(op);
+            if ((size_t)8 + n > length) { set_err("STO_IMM data overruns command"); return -1; }
+            if (etir_write_content(out, st, op + 4, n) < 0) return -1;
+            st->vaddr += n; st->prev_cmd = cmd; break;
+        }
+
+        /* --- stores: emit one relocation --- */
+        case ETIR__C_STO_LW:
+            if (etir_emit(out, st, EVAX_R_REFLONG, addr, end) < 0) return -1;
+            st->vaddr += 4; emitted = 1; break;
+        case ETIR__C_STO_QW:
+            if (etir_emit(out, st, EVAX_R_REFQUAD, addr, end) < 0) return -1;
+            st->vaddr += 8; emitted = 1; break;
+        case ETIR__C_STO_OFF:
+            if (etir_emit(out, st, EVAX_R_REFQUAD, addr, end) < 0) return -1;
+            st->vaddr += 8; emitted = 1; break;
+        case ETIR__C_STO_GBL:
+            st->cur_sym = op;
+            if (etir_emit(out, st, EVAX_R_REFQUAD, addr, end) < 0) return -1;
+            st->vaddr += 8; emitted = 1; break;
+        case ETIR__C_STO_GBL_LW:
+            st->cur_sym = op;
+            if (etir_emit(out, st, EVAX_R_REFLONG, addr, end) < 0) return -1;
+            st->vaddr += 4; emitted = 1; break;
+        case ETIR__C_STO_CA:
+            st->cur_sym = op;
+            if (etir_emit(out, st, EVAX_R_CODEADDR, addr, end) < 0) return -1;
+            st->vaddr += 8; emitted = 1; break;
+        case ETIR__C_STC_LP_PSB:
+            /* [u32 linkage_index][u8 namelen][name][u8 signature=0]; the reloc
+             * targets the counted procedure name at op+4, addend 0. */
+            if (length < 9) { set_err("truncated STC_LP_PSB"); return -1; }
+            st->cur_sym = op + 4; st->cur_addend = 0;
+            if (etir_emit(out, st, EVAX_R_LINKAGE, addr, end) < 0) return -1;
+            st->vaddr += 16; emitted = 1; break;
+        case ETIR__C_STC_NOP_GBL:
+        case ETIR__C_STC_BSR_GBL:
+        case ETIR__C_STC_LDA_GBL:
+        case ETIR__C_STC_BOH_GBL: {
+            /* 32-byte payload: [u32 lkindex][u32 psect][u64 address][u32 insn]
+             * [u32 psect][u64 addend][u8 namelen][name]. address + addend come
+             * from the payload (NOT vaddr); the reloc does not advance vaddr. */
+            if (length < 36) { set_err("truncated STC_*_GBL"); return -1; }
+            enum evax_reloc_type t =
+                cmd == ETIR__C_STC_NOP_GBL ? EVAX_R_NOP :
+                cmd == ETIR__C_STC_BSR_GBL ? EVAX_R_BSR :
+                cmd == ETIR__C_STC_LDA_GBL ? EVAX_R_LDA : EVAX_R_BOH;
+            uint64_t payload_addr = getl64(op + 8);
+            st->cur_addend = getl64(op + 24);
+            st->cur_sym    = op + 32;
+            if (etir_emit(out, st, t, payload_addr, end) < 0) return -1;
+            emitted = 1; break;
+        }
+        default:
+            set_err("unknown ETIR command"); return -1;
+        }
+
+        if (emitted) {   /* reset the per-relocation state after an emit */
+            st->cur_addend = 0; st->prev_cmd = -1;
+            st->cur_sym = NULL; st->cur_psidx = -1;
+        }
+        ptr += length;
+    }
+    return 0;
+}
+
 int evax_read(const uint8_t *buf, size_t len, struct evax_object *out)
 {
     memset(out, 0, sizeof *out);
     if (!evax_is_object(buf, len)) { set_err("not an EVAX object (first record is not EMH)"); return -1; }
+
+    /* ETIR state persists across records (cur_psect stays in force until the
+     * next CTL_SETRB), so it lives here, not inside parse_etir. */
+    struct etir_state et = { 0, -1, -1, NULL, 0, -1 };
 
     size_t off = 0;
     while (off + 6 <= len) {
@@ -177,8 +389,8 @@ int evax_read(const uint8_t *buf, size_t len, struct evax_object *out)
         switch (rtyp) {
         case EOBJ__C_EMH:  parse_emh(rec, rsz, out); break;
         case EOBJ__C_EGSD: if (parse_egsd(rec, rsz, out) < 0) return -1; break;
+        case EOBJ__C_ETIR: if (parse_etir(rec, rsz, out, &et) < 0) return -1; break;
         case EOBJ__C_EEOM: return 0;                 /* end of module */
-        case EOBJ__C_ETIR: /* text + relocations: a following slice */ break;
         default:           /* EDBG/ETBT/… skip */    break;
         }
 

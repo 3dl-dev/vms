@@ -77,6 +77,15 @@ else()
         # macro so the shared ovmx_init.c keeps compiling on the NetBSD-vax
         # backend with its current boot behaviour, which vms-d5d flips.
         OVMX_BOOT_LINUX=1
+        # vms-8e8f: "the ACP-read bridge TUs are in THIS link" -- set exactly
+        # where OVMX_BOOT_BRIDGE_SRC above is non-empty, and nowhere else. The
+        # bridge call sites in ovmx_init.c key off THIS, not the substrate
+        # macro, because the bridge is substrate-neutral C: the NetBSD-vax
+        # runtime cutover (vms-329) turns it on by adding the same TUs + this
+        # macro to tools/cross-vax/build-ovmx-init-vax.sh. Its elf32-vax
+        # compile is already proven and standing-gated by
+        # tools/cross-vax/build-acp-read-audit-vax.sh (vms-8e8f).
+        OVMX_BOOT_ACP_BRIDGE=1
     )
 endif()
 

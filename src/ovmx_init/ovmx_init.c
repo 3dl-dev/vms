@@ -88,13 +88,23 @@
  * the NetBSD backend is vms-f2e. See ovmx_boot.h and docs/design-p4-netbsd-vax-
  * boot.md (GAP-C). */
 #include "ovmx_boot.h"
-#if defined(OVMX_BOOT_LINUX)
+#if defined(OVMX_BOOT_ACP_BRIDGE)
 /* ACP-read bootstrap bridge (vms-5f0): PID 1 stages the first-hop execve'd
  * images (IMGACT/PROVISION/DCL/JOB_CONTROL/LOGINOUT) off the genuine ODS-2
- * boot volume THROUGH the executive ACP into OVMX_BOOT_STAGE_DIR, so the
- * Linux kernel can execve them with the /vms POSIX passthrough retired. The
- * NetBSD-vax backend keeps its current boot behaviour (flipped by vms-d5d),
- * so the bridge is Linux-substrate only -- see src/ovmx_init/CMakeLists.txt. */
+ * boot volume THROUGH the executive ACP into OVMX_BOOT_STAGE_DIR, so the host
+ * kernel can execve them with the /vms POSIX passthrough retired.
+ *
+ * OVMX_BOOT_ACP_BRIDGE means exactly one thing: "the ACP-read bridge
+ * translation units (ovmx_boot_acp_read.c + ovmx_boot_sysgen_acp.c +
+ * imgact_acp.c) are linked into THIS PID 1". It is defined by whichever build
+ * recipe puts them in the link -- src/ovmx_init/CMakeLists.txt's Linux branch
+ * (which sets OVMX_BOOT_BRIDGE_SRC), and the elf32-vax compile audit
+ * tools/cross-vax/build-acp-read-audit-vax.sh. It is deliberately NOT
+ * OVMX_BOOT_LINUX (which names the SUBSTRATE, not the link set): the bridge is
+ * substrate-neutral C, and the NetBSD-vax runtime cutover (vms-329) turns it on
+ * by adding these TUs + this macro to the VAX recipe -- a wiring change, with
+ * the compile already proven by vms-8e8f. Until then the VAX runtime does not
+ * define it and its boot behaviour is unchanged. */
 #include "ovmx_boot_acp_read.h"
 #endif
 
@@ -821,10 +831,11 @@ static void require_installed_system(void)
      */
     char path[512];
     snprintf(path, sizeof(path), "%s/DCL.EXE", sysexe_linux);
-#if defined(OVMX_BOOT_LINUX)
+#if defined(OVMX_BOOT_ACP_BRIDGE)
     if (!ovmx_boot_acp_present(path)) {
 #else
-    /* NetBSD-vax backend (vms-d5d owns its flip): unchanged POSIX presence. */
+    /* No ACP-read bridge in this link (the pre-cutover VAX runtime, vms-329):
+     * unchanged POSIX presence probe. */
     struct stat st;
     if (stat(path, &st) != 0) {
 #endif
@@ -835,23 +846,30 @@ static void require_installed_system(void)
     }
 }
 
-#if defined(OVMX_BOOT_LINUX)
+#if defined(OVMX_BOOT_ACP_BRIDGE)
 
 /*
  * stage_boot_images - ACP-read bootstrap bridge (vms-5f0).
  *
  * The boot chain fork()+execve()s a small first-hop set of images, and the
- * Linux kernel maps each one's PT_LOAD and opens its PT_INTERP (IMGACT.EXE) BY
+ * host kernel maps each one's PT_LOAD and opens its PT_INTERP (IMGACT.EXE) BY
  * POSIX PATH before any OVMX code runs. With the /vms passthrough retired those
  * files have no POSIX home, so PID 1 reads each FROM THE GENUINE ODS-2 VOLUME
  * THROUGH THE EXECUTIVE ACP (ovmx_boot_acp_stage -> IO$_ACCESS + IO$_READVBLK)
  * and writes it into OVMX_BOOT_STAGE_DIR (a tmpfs). Every execve target that
  * names a SYS$SYSTEM image is then rewritten there (ovmx_boot_stage_exec_path).
  *
- * The bytes come from the ACP, never a /vms read; tmpfs is only the Linux-exec
+ * The bytes come from the ACP, never a /vms read; tmpfs is only the host-exec
  * handoff (the chicken-and-egg of activating image #1). Everything downstream
  * of the first hop -- shareables, data files -- flows through the ACP
  * in-process and is NOT staged here.
+ *
+ * SUBSTRATE-NEUTRAL (vms-8e8f): every line below is portable POSIX plus ACP
+ * calls, so ONE stage_boot_images() serves Linux and NetBSD-vax alike
+ * (INV-DRIFT). The single substrate-specific step -- where a writable staging
+ * filesystem comes from -- is behind ovmx_boot_prepare_stage_dir() in the
+ * ovmx_boot.h seam (Linux: two mkdirs on the initramfs tmpfs; NetBSD: the same
+ * two mkdirs plus a tmpfs mount over the FFS root).
  *
  * KERNEL-BINFMT ENDGAME (note, not built here): a kernel binfmt that activates
  * a VMS image directly from the ACP would remove even this first-hop tmpfs. It
@@ -871,10 +889,7 @@ static void stage_boot_images(void)
         "LOGINOUT.EXE",    /* JOB_CONTROL execve's this for the console login*/
     };
 
-    if (mkdir("/run", 0755) != 0 && errno != EEXIST)
-        ovmx_sysinit_halt("cannot create /run for boot-image staging",
-                          strerror(errno));
-    if (mkdir(OVMX_BOOT_STAGE_DIR, 0755) != 0 && errno != EEXIST)
+    if (ovmx_boot_prepare_stage_dir(OVMX_BOOT_STAGE_DIR) != 0)
         ovmx_sysinit_halt("cannot create the boot-image staging directory",
                           strerror(errno));
 
@@ -1006,11 +1021,13 @@ static void stage_boot_images(void)
         }
     }
 }
-#else  /* !OVMX_BOOT_LINUX */
-/* NetBSD-vax backend keeps its current boot model (no ACP-staging tmpfs);
- * its flip is vms-d5d. Staging is a no-op there. */
+#else  /* !OVMX_BOOT_ACP_BRIDGE */
+/* No ACP-read bridge in this link: the pre-cutover NetBSD-vax runtime keeps
+ * its current boot model (no ACP-staging tmpfs). The cutover is vms-329;
+ * vms-8e8f already proved the body above cross-compiles ILP32-clean for
+ * elf32-vax. Staging is a no-op here. */
 static void stage_boot_images(void) { }
-#endif  /* OVMX_BOOT_LINUX */
+#endif  /* OVMX_BOOT_ACP_BRIDGE */
 
 /* ------------------------------------------------------------------ */
 /* Boot parameters (vms-b6a7)                                         */
@@ -1082,7 +1099,7 @@ static void read_boot_parameters(void)
 
     char node[SYSGEN_STRVAL_LEN];
 
-#if defined(OVMX_BOOT_LINUX)
+#if defined(OVMX_BOOT_ACP_BRIDGE)
     /*
      * ATOMIC FLIP (vms-0cb): the shared SYSGEN reader (sysgen_params.h
      * sysgen_current_path) resolves SYS$SYSTEM:OVMXVMSSYS.PAR through
@@ -1096,7 +1113,7 @@ static void read_boot_parameters(void)
      * run_startup() forks PROVISION, so no child inherits a frozen params path
      * (which would defeat SYSGEN's on-disk versioning). A genuinely absent
      * staged file leaves the env unset and the honest NOPARAMS fallback
-     * intact. The NetBSD-vax backend keeps its /vms read (its flip is vms-d5d).
+     * intact. A link without the bridge keeps its pre-cutover read (vms-329).
      */
     int staged_params = (access(OVMX_BOOT_STAGE_DIR "/OVMXVMSSYS.PAR", R_OK) == 0);
     if (staged_params)
@@ -1106,7 +1123,7 @@ static void read_boot_parameters(void)
     int have_node =
         (sysgen_read_string("SCSNODE", node, sizeof(node)) == 0 && node[0] != '\0');
 
-#if defined(OVMX_BOOT_LINUX)
+#if defined(OVMX_BOOT_ACP_BRIDGE)
     if (staged_params)
         unsetenv("OVMX_SYSGEN_PATH");
 #endif

@@ -248,6 +248,13 @@ jobs:
               - 'src/vmsscs/**'
               - 'src/imgact/known_images.c'
               - 'src/imgact/known_images.h'
+              # vms-8e8f: the vax-acp-read-ilp32 job cross-compiles the shared
+              # ACP file-access walk for elf32-vax, so a change to it must
+              # re-trigger the VAX ILP32 leg on a PR (it is the SAME TU
+              # IMGACT.EXE, PID 1's staging bridge, and the OVMXVMSSYS.PAR
+              # reader all go through).
+              - 'src/imgact/imgact_acp.c'
+              - 'src/imgact/imgact_acp.h'
               - 'src/product/ovmx_kit_reader.c'
               # vms-64a (unified cross-build Rung B): the top-level project
               # now configures + builds the full ovmx-images aggregate
@@ -6677,3 +6684,89 @@ jobs:
           echo "$RAW" | grep -qF "ALL PROOFS PASSED: ovmx-images builds the full shipped image set via 'cmake --build --target ovmx-images' for vax--netbsdelf, every image passes the Decision-A activation contract, and every migrated teeth check genuinely fires" \
             || { echo "FAIL: did not see the ovmx-images PASS banner"; exit 1; }
           echo "PASS: ovmx-images built the full shipped image set for netbsd-vax; 10/10 vms-e1d parity-drift images closed; every migrated Rung-E teeth check fired"
+
+  # -----------------------------------------------------------------------
+  # vax-acp-read-ilp32 (rd vms-8e8f, piece A of the VAX ACP flip epic
+  # vms-c45). THE VAX ILP32 LEG of the conductor's 3-way convergence gate
+  # {x86_64 CI + VAX ILP32 + Alpha LP64} for the Files-11 ACP read path.
+  #
+  # The VMS ACP-read arms (RMS's $ASSIGN/IO$_ACCESS/DID-walk/READVBLK path,
+  # the shared imgact_acp.c file-access walk, PID 1's staging bridge, and the
+  # OVMXVMSSYS.PAR-over-ACP reader) are OVMX_HAVE_ACP-gated, and until this
+  # job NOTHING on the VAX side ever defined that macro -- the netbsd-vax
+  # vmsrms cross builds VMSRMS_STANDALONE (which skips the define) and
+  # build-ovmx-init-vax.sh defines neither OVMX_HAVE_ACP nor the bridge
+  # macro. So those arms had never been compiled for elf32-vax at all, and
+  # LP64-only-correct code could accrue in them indefinitely with every gate
+  # green.
+  #
+  # This is a COMPILE AUDIT, not a runtime build -- the same relationship
+  # build-vms-module-vax.sh has to the shipped vms.kmod. It compiles a
+  # configuration no shipped VAX recipe uses yet; the RUNTIME cutover is rd
+  # vms-329 and this job is explicitly NOT a substitute for that item's SIMH
+  # end-to-end proof. What it buys is that the cutover is a wiring change
+  # rather than also a compile-error hunt, and that the arms can never
+  # silently rot back to LP64-only-correct in the meantime.
+  #
+  # The script carries its own teeth (see its header): the ACP symbols must
+  # genuinely be compiled IN (an empty preprocessor arm compiles beautifully
+  # -- that is the INV-6 fake-success class in gate form), the strong
+  # ovmx_sysgen_acp_read must resolve in the closure link (the static-link
+  # weak-seam class), and an LP64 negative control MUST be rejected by this
+  # compiler or the whole width check is meaningless. The banner assertions
+  # below are defense in depth beyond the script's `set -e`: they confirm each
+  # check actually FIRED, not merely that the script exited 0.
+  # Gated on the same shared netbsd_vax filter; fast (compile-only, no link
+  # of the full library stack) once the cross toolchain image layer-caches.
+  # -----------------------------------------------------------------------
+  vax-acp-read-ilp32:
+    name: VAX ILP32 leg -- the whole ACP-read path cross-compiles width-clean for elf32-vax (vms-8e8f)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Cross-compile the ACP-read closure for elf32-vax with the ACP arms ON
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax tools/cross-vax/build-acp-read-audit-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: the elf32-vax ACP-read compile audit exited nonzero ($RC)"
+            exit 1
+          fi
+
+          echo "$RAW" | grep -qF "OK: all 9 ACP-read closure translation units compile for vax--netbsdelf" \
+            || { echo "FAIL: the closure compile proof did not run"; exit 1; }
+          echo "$RAW" | grep -qF "OK: 9/9 objects are elf32-vax" \
+            || { echo "FAIL: the elf32-vax object-arch proof did not run"; exit 1; }
+          echo "$RAW" | grep -qF "OK: every ACP arm in the closure is genuinely compiled in" \
+            || { echo "FAIL: the ACP-arms-compiled-in TEETH did not run"; exit 1; }
+          echo "$RAW" | grep -qF "PASS (negctl): the LP64 translation unit is correctly rejected for vax--netbsdelf" \
+            || { echo "FAIL: the LP64 width negctl did not run -- the width gate has no proven teeth"; exit 1; }
+          echo "$RAW" | grep -qF "OK   ovmx_sysgen_acp_read resolves STRONG in the closure" \
+            || { echo "FAIL: the static-link weak-seam check did not run"; exit 1; }
+          echo "$RAW" | grep -qF "ALL PROOFS PASSED: the VMS ACP-read code path compiles ILP32-clean for vax--netbsdelf" \
+            || { echo "FAIL: did not see the ACP-read audit PASS banner"; exit 1; }
+          echo "PASS: the VMS ACP-read path (RMS ACP arm + imgact_acp + PID 1 staging bridge + OVMXVMSSYS.PAR-over-ACP + the NetBSD boot backend) cross-compiles ILP32-clean for elf32-vax with OVMX_HAVE_ACP; every tooth fired"

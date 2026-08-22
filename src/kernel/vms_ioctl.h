@@ -1023,6 +1023,32 @@ struct vms_jib_quota {
 #define VMS_PI_V_BUFIO      0x00000100u  /* bufio is sourced */
 #define VMS_PI_V_QUOTA      0x00000200u  /* quota block is sourced */
 
+/*
+ * proc_type values (vms-c17). The process CLASSIFICATION SHOW USERS uses to
+ * fill the Interactive/Subprocess/Batch columns, DECLARED by the executive
+ * rather than inferred by the reader -- the same discipline as `redacted` and
+ * `fields_valid`. A reader that has to GUESS from a zeroed field (is this the
+ * absence of a terminal, or a subprocess whose root it cannot see?) eventually
+ * guesses wrong, so the executive says which one it is.
+ *
+ * The discriminator is the PCB's job_id (vms_internal.h): a job root has
+ * job_id == vms_pid; a SPAWNed subprocess inherits its root's job_id. A row is
+ * INTERACTIVE when it is a terminal-bound job root, SUBPROCESS when its job
+ * root is terminal-bound, and OTHER when neither holds (a detached/system
+ * process -- not a "user"). See proc_fill_info() in
+ * src/kernel-core/vms_proctab.c for how the value is derived.
+ *
+ * BATCH IS RESERVED AND NEVER SET TODAY. OVMX has no batch EXECUTION engine
+ * (SUBMIT queues an entry but forks/execs nothing -- see the structural note
+ * in src/vmsdcl/dcl_cmd_show.c's cmd_show_users), so no row is ever a batch
+ * job. The value exists so the wire enum is complete and a future batch
+ * executor has a name to set, not because anything produces it now.
+ */
+#define VMS_PROC_T_OTHER        0u  /* detached / system process (not a "user") */
+#define VMS_PROC_T_INTERACTIVE  1u  /* job root with a terminal (login) */
+#define VMS_PROC_T_SUBPROCESS   2u  /* belongs to a parent's job (SPAWN) */
+#define VMS_PROC_T_BATCH        3u  /* batch job root (reserved -- no engine yet) */
+
 struct vms_procinfo {
     uint32_t vms_pid;                   /* VMS-style process ID */
     uint32_t linux_pid;                 /* Linux pid backing the process */
@@ -1049,7 +1075,13 @@ struct vms_procinfo {
      * ABI is unchanged -- the _Static_asserts below still hold.
      */
     uint8_t  redacted;
-    uint8_t  pad[2];
+    uint8_t  proc_type;   /* VMS_PROC_T_* -- process classification (vms-c17).
+                           * Withheld like the identity fields on a redacted
+                           * row (job membership is not enumeration): set only
+                           * below proc_fill_info()'s redaction early return,
+                           * so a redacted row carries the OTHER default. Fits
+                           * the existing padding -- struct stays 216 bytes. */
+    uint8_t  pad[1];
     uint64_t cur_privs;                 /* current (process) privileges */
     uint64_t perm_privs;                /* authorized (permanent) privileges */
     char     username[VMS_USERNAME_SIZE]; /* "" until an identity is stamped */

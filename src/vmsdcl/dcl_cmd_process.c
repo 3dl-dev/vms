@@ -2007,9 +2007,114 @@ int cmd_spawn(struct dcl_command *cmd)
         }
     }
 
+    /*
+     * SUBPROCESS NAME (vms-c17). VMS names a SPAWNed subprocess after the
+     * CREATOR's process name plus a unique number -- SYSTEM_1, SYSTEM_2, ...
+     * -- unless /PROCESS=name overrides it (OpenVMS DCL Dictionary, SPAWN:
+     * "the subprocess name is composed of the same base name as the parent
+     * process and a unique number"; oracle VAX1, OpenVMS VAX V7.3:
+     * "%DCL-S-SPAWNED, process SYSTEM_1 spawned", cited in dcl_lexical.c and
+     * tests/uat/vms_session_qemu.sh). The base is read from the creator's OWN
+     * executive-held process name ($GETJPI self) so it is the name the system
+     * knows this process by, not a self-declared string; the DCL context is a
+     * fallback only. Capped so the "_N" suffix fits VMS_PRCNAM_SIZE.
+     */
+    struct dcl_context *spawn_ctx = dcl_get_context();
+    const char *proc_name_q = dcl_qualifier_value(cmd, "PROCESS");
+    char base_name[VMS_PRCNAM_SIZE] = {0};
+    {
+        struct vms_procinfo self_info;
+        const char *src = NULL;
+        if ((vms_kif_getjpi_self(&self_info) & 1) && self_info.prcnam[0])
+            src = self_info.prcnam;
+        else if (spawn_ctx && spawn_ctx->process_name[0])
+            src = spawn_ctx->process_name;
+        else if (spawn_ctx && spawn_ctx->username[0])
+            src = spawn_ctx->username;
+        else
+            src = "SYSTEM";
+        /* Leave room for "_65535" (6) + NUL in the 16-byte field. */
+        strncpy(base_name, src, sizeof(base_name) - 7);
+        base_name[sizeof(base_name) - 7] = '\0';
+    }
+
+    /*
+     * CREATION HANDSHAKE (vms-c17). Only the child can enter itself in the
+     * executive's process table -- the entry is keyed by ITS tgid, which
+     * execve() does not change -- so the child registers, names itself, and
+     * reports the outcome (status + final name) back over a pipe. SPAWN does
+     * not return until that report arrives, so the subprocess genuinely EXISTS
+     * (named, in the executive, visible to SHOW SYSTEM/SHOW USERS) the moment
+     * SPAWN returns, exactly as $CREPRC does (sys_process.c). Registering here
+     * is what makes the subprocess a real PCB whose job_id -- inherited from
+     * this DCL's job -- marks it a SUBPROCESS; the previous bare fork()+execl()
+     * left the child out of the table entirely (the INV-6 fabrication class).
+     * The pipe is O_CLOEXEC, so it costs the activated image nothing.
+     */
+    struct spawn_report { uint32_t status; char name[VMS_PRCNAM_SIZE]; };
+    int namefd[2] = { -1, -1 };
+    if (pipe(namefd) < 0) {
+        dcl_error("DCL", 4, "CREPRC", "cannot create process");
+        return SS$_INSFMEM;
+    }
+    /* Not pipe2(O_CLOEXEC): keep the glibc/musl-portable form sys_process.c uses. */
+    fcntl(namefd[0], F_SETFD, FD_CLOEXEC);
+    fcntl(namefd[1], F_SETFD, FD_CLOEXEC);
+
     pid_t pid = fork();
     if (pid == 0) {
         /* Child process */
+        struct spawn_report rep;
+        memset(&rep, 0, sizeof(rep));
+        close(namefd[0]);
+
+        /*
+         * Register + name in the executive BEFORE the exec and before any
+         * I/O redirection (the executive keys on the pid, which execve() does
+         * not change, so the name survives image activation with no userspace
+         * carrier). The FIRST vms_kif_* call binds and registers this task
+         * (kif_bind), deriving job_id from the real parent -- this DCL. Do NOT
+         * bind a terminal: a subprocess is terminal-unbound (only the login
+         * root calls VMS_IOCTL_SETTERM), which is what keeps it classified
+         * SUBPROCESS rather than INTERACTIVE. The executive enforces name
+         * uniqueness within the UIC group (SS$_DUPLNAM); loop until a free
+         * "base_N" is found, or stop on any other error.
+         */
+        if (proc_name_q && proc_name_q[0]) {
+            strncpy(rep.name, proc_name_q, sizeof(rep.name) - 1);
+            rep.name[sizeof(rep.name) - 1] = '\0';
+            rep.status = vms_kif_setprn(rep.name);
+        } else {
+            rep.status = SS$_DUPLNAM;
+            for (int n = 1; n <= 65535; n++) {
+                snprintf(rep.name, sizeof(rep.name), "%s_%d", base_name, n);
+                rep.status = vms_kif_setprn(rep.name);
+                if (rep.status & 1)
+                    break;                 /* named */
+                if (rep.status != SS$_DUPLNAM)
+                    break;                 /* a real error, not a clash */
+            }
+        }
+
+        /* Report back BEFORE exec so the CLOEXEC pipe carries the result even
+         * though the exec then closes it. A tiny (< PIPE_BUF) write cannot
+         * block the child. */
+        {
+            const char *p = (const char *)&rep;
+            size_t left = sizeof(rep);
+            while (left > 0) {
+                ssize_t w = write(namefd[1], p, left);
+                if (w < 0) { if (errno == EINTR) continue; break; }
+                p += w; left -= (size_t)w;
+            }
+        }
+        close(namefd[1]);
+
+        /* A subprocess the executive never entered describes nothing the
+         * creator can see -- fail honestly rather than activate an image that
+         * would make SPAWN's success a lie (INV-6). */
+        if (!(rep.status & 1))
+            _exit(126);
 
         /* Handle /OUTPUT=file redirection */
         if (output_file) {
@@ -2028,12 +2133,43 @@ int cmd_spawn(struct dcl_command *cmd)
         fprintf(stderr, "%%DCL-E-CREPRC, cannot create subprocess\n");
         _exit(127);
     } else if (pid > 0) {
+        /* Parent: wait for the child's registration report before returning,
+         * so the subprocess exists in the executive the moment SPAWN returns. */
+        struct spawn_report rep;
+        memset(&rep, 0, sizeof(rep));
+        close(namefd[1]);
+        {
+            char *p = (char *)&rep;
+            size_t left = sizeof(rep);
+            while (left > 0) {
+                ssize_t r = read(namefd[0], p, left);
+                if (r < 0) { if (errno == EINTR) continue; break; }
+                if (r == 0) break;         /* child died before reporting */
+                p += r; left -= (size_t)r;
+            }
+            close(namefd[0]);
+            if (left != 0 || !(rep.status & 1)) {
+                /* The child could not register -- reap it and report honestly. */
+                int wst;
+                while (waitpid(pid, &wst, 0) < 0 && errno == EINTR)
+                    ;
+                dcl_error("DCL", 4, "CREPRC", "cannot create process");
+                return SS$_ABORT;
+            }
+        }
+
         if (nowait) {
-            /* /NOWAIT: print PID and return immediately */
-            printf("%%DCL-I-SPAWNED, process id is %d\n", (int)pid);
+            /* /NOWAIT: VMS answers "%DCL-S-SPAWNED, process <name> spawned"
+             * (severity S, the process NAME) -- not the Linux pid. Oracle
+             * VAX1, OpenVMS VAX V7.3 (cited above). */
+            printf("%%DCL-S-SPAWNED, process %s spawned\n", rep.name);
         } else {
+            /* Attached SPAWN: run the subprocess and wait. The authentic
+             * ATTACHED/RETURNED handoff messages belong to the terminal
+             * ATTACH work, which is out of scope for vms-c17 -- so this path
+             * stays silent, as it was, while now registering a visible,
+             * named subprocess for the duration it runs. */
             extern volatile sig_atomic_t dcl_running_child;
-            struct dcl_context *spawn_ctx = dcl_get_context();
             dcl_running_child = (sig_atomic_t)pid;
             int wstatus;
             waitpid(pid, &wstatus, WUNTRACED);
@@ -2048,6 +2184,8 @@ int cmd_spawn(struct dcl_command *cmd)
         }
         return SS$_NORMAL;
     } else {
+        close(namefd[0]);
+        close(namefd[1]);
         dcl_error("DCL", 4, "CREPRC", "cannot create process");
         return SS$_ABORT;
     }

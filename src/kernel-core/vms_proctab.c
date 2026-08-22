@@ -164,6 +164,11 @@ bool vms_proc_may_read(const struct vms_proc *caller,
     return (caller->cur_privs & VMS_PRV_M_WORLD) != 0;
 }
 
+/* Forward declaration: find_by_vms_pid() is defined below, but proc_fill_info()
+ * needs it to resolve a subprocess's job root for proc_type (vms-c17). Both run
+ * under vms_proc_hash_lock and neither sleeps. */
+static struct vms_proc *find_by_vms_pid(uint32_t vms_pid);
+
 /*
  * proc_fill_info - snapshot one table row.
  *
@@ -194,6 +199,37 @@ static void proc_fill_info(const struct vms_proc *proc,
          */
         info->redacted = 1;
         return;
+    }
+
+    /*
+     * PROCESS CLASSIFICATION (vms-c17), sourced from the PCB's job_id, which
+     * the executive derives from task ancestry at registration
+     * (vms_proc_parent_job_id(), src/kernel/vms_module.c) -- never from the
+     * process's own word. This is what SHOW USERS reads to fill the
+     * Interactive/Subprocess/Batch columns.
+     *
+     * On Linux job_id is ALWAYS set at registration (vms_module.c): a job root
+     * has job_id == vms_pid, a SPAWNed subprocess inherits its root's vms_pid,
+     * so the first branch below is the only one taken. On NetBSD the job glue
+     * is not yet wired and job_id is 0 (kernel-netbsd/vms_internal.h) -- treat
+     * that like a job root and classify by this row's OWN terminal, so a
+     * terminal-bound login still reads INTERACTIVE there rather than being
+     * forced to OTHER. Either way the value is measured, never fabricated
+     * (INV-6); BATCH is never produced (no batch execution engine).
+     *
+     * Below the redaction early return with the rest of the identity: job
+     * membership is not something a row the caller may not $GETJPI hands out
+     * (same placement rule as terminal/uic above). find_by_vms_pid() is safe
+     * here -- we hold vms_proc_hash_lock and it does not sleep -- and job_id
+     * points at the top-of-job root directly, so no chain-walk is needed.
+     */
+    if (proc->job_id != 0 && proc->job_id != proc->vms_pid) {
+        struct vms_proc *root = find_by_vms_pid(proc->job_id);
+        info->proc_type = (root && root->terminal[0])
+                            ? VMS_PROC_T_SUBPROCESS : VMS_PROC_T_OTHER;
+    } else {
+        info->proc_type = proc->terminal[0]
+                            ? VMS_PROC_T_INTERACTIVE : VMS_PROC_T_OTHER;
     }
 
     info->linux_pid    = (uint32_t)proc->linux_pid;

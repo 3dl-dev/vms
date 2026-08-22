@@ -144,6 +144,16 @@
 #define VMS_PI_V_BUFIO      0x00000100u  /* bufio is sourced */
 #define VMS_PI_V_QUOTA      0x00000200u  /* quota block is sourced */
 
+/* proc_type classification (vms-c17). Byte-identical to src/kernel/vms_ioctl.h;
+ * see there for the full rationale. BATCH is reserved and never set today (no
+ * batch execution engine). On NetBSD the PCB's job_id is 0 until the job glue
+ * joins (vms_internal.h), so proc_fill_info() falls back to per-row terminal
+ * classification there -- honest, never fabricated. */
+#define VMS_PROC_T_OTHER        0u  /* detached / system process (not a "user") */
+#define VMS_PROC_T_INTERACTIVE  1u  /* job root with a terminal (login) */
+#define VMS_PROC_T_SUBPROCESS   2u  /* belongs to a parent's job (SPAWN) */
+#define VMS_PROC_T_BATCH        3u  /* batch job root (reserved -- no engine yet) */
+
 /* ================================================================
  * Argument structs -- byte-identical to src/kernel/vms_ioctl.h. The shared
  * facility (src/kernel-core/vms_proctab.c) copies exactly these in and out.
@@ -177,7 +187,8 @@ struct vms_procinfo {
 	uint32_t uic;
 	uint8_t  current_mode;
 	uint8_t  redacted;
-	uint8_t  pad[2];
+	uint8_t  proc_type;   /* VMS_PROC_T_* -- process classification (vms-c17) */
+	uint8_t  pad[1];
 	uint64_t cur_privs;
 	uint64_t perm_privs;
 	char     username[VMS_USERNAME_SIZE];

@@ -113,6 +113,18 @@ OS_KIT="${OS_KIT:-${CACHE_DIR}/OVMX-OS-VAX.KIT}"
 DISTRIB_IMG="${DISTRIB_IMG:-${CACHE_DIR}/ovmx-distrib-vax.img}"
 BLANK_TARGET_IMG="${BLANK_TARGET_IMG:-${CACHE_DIR}/dka100-target.img}"
 
+# vms-329: the sysboot NEGATIVE CONTROL's volume. It must be a GENUINE, mountable
+# ODS-2 volume that simply has no SYS$SYSTEM:DCL.EXE, so the thing it proves is
+# the INSTALLED-SYSTEM gate's teeth and nothing else. Before the ACP cutover the
+# negctl reused ODS2_IMG (the small VMFS image tests/qemu/mkimage_vmsfs.c builds
+# for the vmsfs VFS-module drivers); with SYS$DISK now $MOUNTed through the
+# executive ACP that volume no longer mounts at all, so the boot would halt one
+# step EARLIER (%OVMX-F-SYSINIT, "would not mount") and the negctl would stop
+# exercising the gate it exists to exercise -- a silently weakened control. It
+# gets its own ODS-2 image rather than re-mastering ODS2_IMG, which the sibling
+# vmsfs/access/eflag drivers still need in VMFS form.
+SYSNEG_IMG="${SYSNEG_IMG:-${CACHE_DIR}/ovmx-sysneg-vax.img}"
+
 CROSS_IMAGE="${CROSS_IMAGE:-ovmx-cross-vax}"
 LAB_IMAGE="${LAB_IMAGE:-ovmx-vax-lab}"
 
@@ -259,8 +271,18 @@ build_boot_image_set() {
 #    reused data/COM files + the Decision-A SYSTARTUP_VMS.COM), and master a
 #    64 MB vmsfs volume. All inside CROSS_IMAGE's native cc (same "cc a host tool
 #    in the container" pattern as master_volume above -- nothing on the host).
-#    vmsfs is little-endian on disk, so a host-built vmsfs_master masters a
-#    vax-bootable volume directly.
+#    ODS-2 is little-endian on disk (arch-neutral), so a host-built
+#    vmsfs_master masters a vax-mountable volume directly.
+#
+#    GENUINE ODS-2, NOT VMFS (vms-329). --ods2 is mandatory now, not a choice:
+#    since the coupled cutover PID 1 $MOUNTs SYS$DISK through the executive
+#    Files-11 ACP, and vmsfs_acp.c validates the media (home block + BITMAP.SYS
+#    header + SCB, struclev V2) before recording the mount. The default VMFS
+#    master writes its own "SFMV" superblock at LBN 1, which the ACP correctly
+#    REFUSES with SS$_DEVNOTMOUNT -- observed on the first cutover boot as
+#    %OVMX-F-SYSINIT right after a successful open+read of /dev/ra1c. That
+#    refusal is the ACP being fail-honest about a non-ODS-2 volume (INV-6), so
+#    the fix is to master the real format, never to relax the validation.
 master_system_volume() {
   # ALWAYS re-master (rd vms-72da). The mastered volume must reflect the CURRENT
   # staged boot images (stage_sysvol.sh + SYSVOL_IMAGES_DIR). Mastering is cheap
@@ -283,8 +305,8 @@ master_system_volume() {
          /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
          /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
       bash /src/tests/lab-vax/stage_sysvol.sh /images /src /tmp/stage
-      /tmp/vmsfs_master master /out/'"$(basename "${SYSVOL_IMG}")"' OVMXSYS /tmp/stage 64
-      /tmp/vmsfs_master list /out/'"$(basename "${SYSVOL_IMG}")")"
+      /tmp/vmsfs_master --ods2 master /out/'"$(basename "${SYSVOL_IMG}")"' OVMXSYS /tmp/stage 64
+      /tmp/vmsfs_master --ods2 list /out/'"$(basename "${SYSVOL_IMG}")")"
   echo "${listing}"
   [ -f "${SYSVOL_IMG}" ] || die "system-volume mastering did not produce ${SYSVOL_IMG}"
   # Hard content gate: the mastered volume MUST carry the images PID 1 execs and
@@ -373,8 +395,8 @@ master_distribution_volume() {
          /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
       bash /src/tests/lab-vax/stage_sysvol.sh --distribution --kit /kit/OVMX-OS-VAX.KIT \
            /images /src /tmp/stage
-      /tmp/vmsfs_master master /out/'"$(basename "${DISTRIB_IMG}")"' OVMXSYS /tmp/stage 64
-      /tmp/vmsfs_master list /out/'"$(basename "${DISTRIB_IMG}")")"
+      /tmp/vmsfs_master --ods2 master /out/'"$(basename "${DISTRIB_IMG}")"' OVMXSYS /tmp/stage 64
+      /tmp/vmsfs_master --ods2 list /out/'"$(basename "${DISTRIB_IMG}")")"
   echo "${listing}"
   [ -f "${DISTRIB_IMG}" ] || die "distribution-volume mastering did not produce ${DISTRIB_IMG}"
   echo "${listing}" | grep -qiF "OVMX-OS-VAX.KIT" \
@@ -403,9 +425,30 @@ make_blank_target() {
          /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
          /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
       mkdir -p /tmp/blank
-      /tmp/vmsfs_master master /out/'"$(basename "${BLANK_TARGET_IMG}")"' WORK /tmp/blank 16'
+      /tmp/vmsfs_master --ods2 master /out/'"$(basename "${BLANK_TARGET_IMG}")"' WORK /tmp/blank 16'
   [ -f "${BLANK_TARGET_IMG}" ] || die "blank target formatting did not produce ${BLANK_TARGET_IMG}"
   log "blank ODS-2 target formatted (label WORK)"
+}
+
+# 3h (sysboot-negctl). Master a genuine ODS-2 volume with NO system tree -- the
+#    installed-system gate's negative control (vms-329). Same host codec, same
+#    --ods2 writer, an EMPTY source tree: it MOUNTS (so the boot reaches the
+#    gate) and then fails the gate (no SYS$SYSTEM:DCL.EXE).
+master_sysneg_volume() {
+  log "mastering the ODS-2 NEGATIVE-CONTROL volume (mountable, no SYS\$SYSTEM:DCL.EXE)"
+  rm -f "${SYSNEG_IMG}"
+  docker run --rm -v "${REPO}:/src:ro" \
+    -v "$(dirname "${SYSNEG_IMG}"):/out" --entrypoint sh "${CROSS_IMAGE}" -c '
+      set -e
+      cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+         -I /src/src/kernel/vmsfs -I /src/src/vmsfs/include \
+         -o /tmp/vmsfs_master /src/tools/vmsfs_master.c \
+         /src/src/vmsfs/ods2/ods2_reader.c /src/src/vmsfs/ods2/ods2_writer.c \
+         /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
+         /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
+      mkdir -p /tmp/flat
+      /tmp/vmsfs_master --ods2 master /out/'"$(basename "${SYSNEG_IMG}")"' NOSYS /tmp/flat 16'
+  [ -f "${SYSNEG_IMG}" ] || die "negative-control volume mastering did not produce ${SYSNEG_IMG}"
 }
 
 # 4. ensure the shared NetBSD/vax disk (install once).
@@ -554,9 +597,12 @@ run_sysboot_positive() {
 }
 
 run_sysboot_negctl() {
-  # Teeth: boot the SAME disk with the FLAT test volume (no SYS$SYSTEM:DCL.EXE)
-  # -- the installed-system gate must halt and %STDRV-I-STARTUP must NOT appear.
-  if run_session sysboot-negctl /cache/boot-work; then
+  # Teeth: boot the SAME disk with a MOUNTABLE ODS-2 volume that carries no
+  # SYS$SYSTEM:DCL.EXE -- the installed-system gate must halt and
+  # %STDRV-I-STARTUP must NOT appear.
+  master_sysneg_volume
+  if run_session sysboot-negctl /cache/boot-work \
+       -e OVMX_ODS2_IMG=/cache/"$(basename "${SYSNEG_IMG}")"; then
     log "PASS: sysboot negative control -- the flat volume (no DCL.EXE)"
     log "      halted the installed-system gate and never reached STDRV"
     log "      (the installed-system gate has teeth)"

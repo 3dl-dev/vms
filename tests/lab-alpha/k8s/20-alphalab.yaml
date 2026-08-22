@@ -50,7 +50,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: alphalab
-          image: 192.168.2.43:30500/ovmx-alphalab:6
+          image: 192.168.2.43:30500/ovmx-alphalab:7
           imagePullPolicy: IfNotPresent
           env:
             - name: POD_NAME

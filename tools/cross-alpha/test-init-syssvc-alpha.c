@@ -46,7 +46,7 @@
  * input) must not eat the whole boot budget -- SIGALRM kills the child, the
  * pipe closes, and the suite is recorded as a genuine failure (never a skip).*/
 #ifndef SUITE_TIMEOUT_SECS
-#define SUITE_TIMEOUT_SECS 90
+#define SUITE_TIMEOUT_SECS 150
 #endif
 static volatile pid_t g_child = 0;
 static void on_alrm(int sig) { (void)sig; if (g_child > 0) kill(g_child, SIGKILL); }

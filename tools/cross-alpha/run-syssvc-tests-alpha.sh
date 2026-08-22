@@ -144,9 +144,10 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     ####################################################################
     # 3. Build the static C runner-init + bake the test initramfs.
     ####################################################################
-    echo "== build syssvc runner-init =="
+    echo "== build syssvc runner-init + /bin/sh subject stub =="
     $CC -static -O2 -Wall /tools/test-init-syssvc-alpha.c -o /work/syssvc-init
-    alpha-linux-gnu-strip /work/syssvc-init
+    $CC -static -O2 -Wall /tools/sh-subject-stub.c -o /work/sh-subject
+    alpha-linux-gnu-strip /work/syssvc-init /work/sh-subject
     cp /vmsko/vms.ko /work/vms.ko
     cp /vmsko/vmsfs.ko /work/vmsfs.ko
 
@@ -165,6 +166,7 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
       echo "dir /vms/SYS0/SYSCOMMON/SYSEXE 755 0 0"
       echo "dir /tmp 1777 0 0"
       echo "file /init /work/syssvc-init 755 0 0"
+      echo "file /bin/sh /work/sh-subject 755 0 0"   # live-process subject for showproc/procnam/delprc/startup_service
       echo "file /vms.ko /work/vms.ko 644 0 0"
       echo "file /vmsfs.ko /work/vmsfs.ko 644 0 0"
       for f in /work/tests/test_*; do

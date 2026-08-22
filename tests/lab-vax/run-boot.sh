@@ -437,30 +437,54 @@ master_distribution_volume() {
   log "mastered distribution volume carries SYS\$UPDATE:OVMX-OS.KIT + PRODUCT/AUTHORIZE/SYSGEN/INITIALIZE (boots into OVMX\$INSTALL.COM)"
 }
 
-# 3g (install). Format a BLANK ODS-2 install target (label WORK) -- the mirror of
-#    the x86_64 install e2e's host-side `INITIALIZE.EXE --ods2 dka100.img WORK 16'.
-#    The cross-built INITIALIZE.EXE is elf32-vax (cannot run on the host), so the
-#    blank volume is formatted with the SAME host ODS-2 codec master_volume /
-#    master_system_volume use -- vmsfs_master mastering an EMPTY tree -- which
-#    produces a genuine, mountable ODS-2 volume with label WORK and free space for
-#    the install. vmsfs is little-endian on disk (arch-neutral), so a host-mastered
-#    volume mounts on the vax.
+# 3g (install). INITIALIZE a BLANK ODS-2 install target (label WORK) -- the exact
+#    mirror of the x86_64 install e2e's host-side
+#    `INITIALIZE.EXE --ods2 dka100.img WORK 16' (tests/qemu/run_install_menu.sh:71,
+#    run_upgrade_e2e.sh:137, test_release_install.sh:123).
+#
+#    IT MUST BE INITIALIZE.EXE, NOT `vmsfs_master master' (rd vms-d0e5). Both
+#    write a genuine, mountable ODS-2 volume with the SAME shared codec, but they
+#    size the INDEX FILE for different jobs:
+#      * vmsfs_master masters FINISHED MEDIA, so it sizes hm2_maxfiles to the
+#        STAGED TREE (needed_files + 25% + 16). Handed an EMPTY tree -- a blank
+#        install target -- that is 10 + 2 + 16 = 28 headers, TOTAL, forever.
+#      * INITIALIZE.EXE formats a volume that is about to RECEIVE files, so it
+#        sizes the index to the VOLUME (~1% of its blocks; 16 MB -> 327 headers).
+#    The vax harness used the mastering tool, so the target came up with room for
+#    28 file headers. PRODUCT INSTALL laid the whole system tree (3 directories +
+#    14 kit files = FIDs 11..28), then hit the 29th create --
+#    VMS$SYSTEM:VMS$PRODUCT_DATABASE.DAT -- and the ACP correctly answered
+#    SS$_DEVICEFULL ("index file exhausted -- honest", vmsfs_acp.c acp_fid_alloc),
+#    surfacing as %PCSI-E-CREATE ... (0x0001C002 = RMS$_ACC). The files were real
+#    and on the volume; the TARGET was simply INITIALIZEd too small to be a system
+#    disk. The fix is to INITIALIZE it the way an install target is INITIALIZEd --
+#    with the real INITIALIZE image -- not to widen the mastering tool.
+#
+#    INITIALIZE.EXE is a HOST tool here (tools/vms_initialize.c -> CMake target
+#    vms_initialize), exactly as the x86_64 harnesses use it; the elf32-vax
+#    cross-build of the same source is what ships on the media for the menu's own
+#    INITIALIZE branch.
 make_blank_target() {
-  log "formatting a BLANK ODS-2 install target (label WORK) -> ${BLANK_TARGET_IMG}"
+  log "INITIALIZE-ing a BLANK ODS-2 install target (label WORK) -> ${BLANK_TARGET_IMG}"
   rm -f "${BLANK_TARGET_IMG}"
-  docker run --rm -v "${REPO}:/src:ro" -v "$(dirname "${BLANK_TARGET_IMG}"):/out" \
+  local out
+  out="$(docker run --rm -v "${REPO}:/src" -w /src -v "$(dirname "${BLANK_TARGET_IMG}"):/out" \
     --entrypoint sh "${CROSS_IMAGE}" -c '
       set -e
-      cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
-         -I /src/src/kernel/vmsfs -I /src/src/vmsfs/include \
-         -o /tmp/vmsfs_master /src/tools/vmsfs_master.c \
-         /src/src/vmsfs/ods2/ods2_reader.c /src/src/vmsfs/ods2/ods2_writer.c \
-         /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
-         /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
-      mkdir -p /tmp/blank
-      /tmp/vmsfs_master --ods2 master /out/'"$(basename "${BLANK_TARGET_IMG}")"' WORK /tmp/blank 16'
-  [ -f "${BLANK_TARGET_IMG}" ] || die "blank target formatting did not produce ${BLANK_TARGET_IMG}"
-  log "blank ODS-2 target formatted (label WORK)"
+      cmake -S /src -B /tmp/hostbuild -DBUILD_TOOLS=ON -DCMAKE_BUILD_TYPE=Release >/dev/null
+      cmake --build /tmp/hostbuild --target vms_initialize -- -j"$(nproc)" >/dev/null
+      /tmp/hostbuild/bin/INITIALIZE.EXE --ods2 /out/'"$(basename "${BLANK_TARGET_IMG}")"' WORK 16')"
+  echo "${out}"
+  [ -f "${BLANK_TARGET_IMG}" ] || die "blank target INITIALIZE did not produce ${BLANK_TARGET_IMG}"
+  # Content gate (vms-d0e5): the target must have index-file room for a whole
+  # system tree, or PRODUCT INSTALL dies SS$_DEVICEFULL partway through. 14 kit
+  # files + 3 directories + 10 reserved = 27 minimum; require real headroom.
+  local maxf
+  maxf="$(echo "${out}" | sed -n 's/.*%INIT-I-LAYOUT, [0-9]* blocks, \([0-9]*\) max files.*/\1/p' | head -1)"
+  [ -n "${maxf}" ] || die "INITIALIZE did not report its %INIT-I-LAYOUT max-files count -- cannot gate the target's index capacity"
+  [ "${maxf}" -ge 64 ] \
+    || die "INITIALIZE sized the target's index file at only ${maxf} headers -- PRODUCT INSTALL needs room for the whole system tree (rd vms-d0e5: a 28-header target failed SS\$_DEVICEFULL on the product database)"
+  log "blank ODS-2 target INITIALIZEd (label WORK, ${maxf} file headers)"
 }
 
 # 3h (sysboot-negctl). Master a genuine ODS-2 volume with NO system tree -- the

@@ -188,7 +188,8 @@ for n in ${NODES}; do
 
   # Per-node bring-up watcher: SRM prompt -> optional autoboot -> cold-clock
   # date prompt -> login prompt.
-  ( for _ in $(seq 1 180); do
+  ( echo "[watcher ${n}] start AUTOBOOT=[${AUTOBOOT}] SYSBOOT_PARAMS=[${SYSBOOT_PARAMS:-}] fifo=${fifo}"
+    for _ in $(seq 1 180); do
       grep -aq 'P00>>>' "${clog}" 2>/dev/null || { sleep 1; continue; }
       echo "[alpha:${LAB_NAME}] ${n}: SRM console ready"
       [ -n "${AUTOBOOT}" ] || exit 0
@@ -240,7 +241,7 @@ for n in ${NODES}; do
       echo "[alpha:${LAB_NAME}] *** ${n}: booted SRM but OpenVMS never reached a login prompt"
       exit 0
     done
-    echo "[alpha:${LAB_NAME}] *** ${n}: never reached the P00>>> prompt -- do NOT use this lab as an oracle" ) &
+    echo "[alpha:${LAB_NAME}] *** ${n}: never reached the P00>>> prompt -- do NOT use this lab as an oracle" ) 2>&1 | tee "${nd}/logs/watcher.log" &
 done
 
 cat <<EOF

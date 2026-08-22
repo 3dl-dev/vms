@@ -3303,11 +3303,53 @@ static void evax_add_ximport(struct evax_input *in, int ii,
             r->type == EVAX_R_LINKAGE ? "LINKAGE quad[0]" : "data pointer");
 }
 
+/* Fold an undefined reference that a --use'd producer exports as a GLOBALVALUE
+ * (kind OVMX_SV_GLOBALVALUE). A VMS globalvalue is an ABSOLUTE LINK-TIME CONSTANT
+ * — its ADDRESS is the value — so VMS resolves it at link, writing the constant
+ * straight into the reference site exactly as an in-object absolute symbol is
+ * written: no psect base, no load bias, no .vms$imp import cell. This mirrors the
+ * ELF path (collect_globalvalues/gval_find, link.c ~1930) for the EVAX/Alpha
+ * cross-image path — the alpha-dec-vms crt0's `&C$_EXIT1` REFQUAD is this case.
+ * A globalvalue is a data value, never a call/entry target, so a LINKAGE/CODEADDR
+ * reloc against one errors honestly rather than being folded into a call. (vms-069) */
+static void evax_fold_globalvalue(struct evax_input *in, int ii,
+                                  struct evax_section *sec,
+                                  const struct evax_reloc *r, uint64_t value)
+{
+    uint8_t *c = evax_ensure_content(sec);
+    if (!c) die("globalvalue fold into a zero-length psect");
+    uint64_t site_va = in[ii].sec_base[r->psect] + r->address;   /* image-relative */
+    uint64_t folded  = value + (uint64_t)r->addend;
+    switch (r->type) {
+    case EVAX_R_REFQUAD:
+        if (r->address + 8 > sec->alloc) die("globalvalue REFQUAD site past psect end");
+        putl64(c + r->address, folded);        /* absolute constant, folded at link */
+        break;
+    case EVAX_R_REFLONG:
+        if (r->address + 4 > sec->alloc) die("globalvalue REFLONG site past psect end");
+        putl32(c + r->address, (uint32_t)folded);
+        break;
+    case EVAX_R_LINKAGE:
+    case EVAX_R_CODEADDR:
+        fprintf(stderr, "%%LINK-F-GVALCALL, EVAX: %s reloc targets globalvalue "
+                "'%s' — a globalvalue is an absolute data constant, not a "
+                "call/entry target\n",
+                r->type == EVAX_R_LINKAGE ? "LINKAGE" : "CODEADDR", r->sym);
+        exit(1);
+    default:
+        die("unexpected relocation type folding a globalvalue");
+    }
+    fprintf(stderr, "%%LINK-I-GVALFOLD, EVAX globalvalue '%s' folded to absolute "
+            "0x%llx at image-relative 0x%llx (link-time constant, no import cell)\n",
+            r->sym, (unsigned long long)folded, (unsigned long long)site_va);
+}
+
 /* Apply one relocation into its psect's content buffer. `site_va` is only used
  * for diagnostics; the write lands in the content buffer at r->address. An
  * undefined reference that a --use'd producer EXPORTS binds as a cross-image
- * import (evax_add_ximport); one no producer defines stays an honest
- * %LINK-F-UNDEF (INV-6). */
+ * import (evax_add_ximport); one it exports as a GLOBALVALUE is folded to its
+ * absolute constant at the reference site (evax_fold_globalvalue); one no
+ * producer defines stays an honest %LINK-F-UNDEF (INV-6). */
 static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
                              const struct evax_reloc *r, int allow_undef,
                              struct producer *producers, int np,
@@ -3348,6 +3390,16 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
              * exports it do we fall through to the honest undef path (INV-6). */
             int pidx; uint32_t svidx;
             if (np > 0 && find_universal(producers, np, r->sym, &pidx, &svidx)) {
+                /* Determine the KIND of the producer's export. A GLOBALVALUE is
+                 * an absolute link-time constant — fold it into the site (no
+                 * import cell); only a PROCEDURE/DATA export binds as a
+                 * cross-image import. (vms-069) */
+                const struct ovmx_sv_entry *pe =
+                    &ovmx_sv_entries(producers[pidx].sv)[svidx];
+                if (pe->kind == OVMX_SV_GLOBALVALUE) {
+                    evax_fold_globalvalue(in, ii, sec, r, pe->value);
+                    return;
+                }
                 evax_add_ximport(in, ii, sec, r, producers, pidx, svidx,
                                  imp, nimp, imp_cap, n_ximport);
                 return;

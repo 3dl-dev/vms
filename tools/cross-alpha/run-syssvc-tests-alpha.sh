@@ -210,11 +210,13 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     cp /work/tests/ods2_imgact.img /work/d4.img
 
     echo "== boot qemu-system-alpha -M clipper, timeout ${BT}s =="
-    # A virtio-net NIC so the executive enumerates ETH0: (test_syssvc_getdvi
-    # asserts sys$getdvi ETH0: returns the LAN device class), mirroring
-    # boot-vmsko-qemu-alpha.sh and run_tests.sh.
-    timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 1024 -vga none \
-        -netdev user,id=net0 -device virtio-net-pci,netdev=net0,romfile= \
+    # NO NIC: on clipper, a virtio-net-pci alongside the 5 virtio-blk fixture
+    # disks hangs the boot before /init (6 virtio PCI devices; iter-1 with 5
+    # disks + -nic none booted clean). getdvi ETH0: is one suite and fails
+    # honestly without a NIC -- revisit with a slimmer disk set or a non-virtio
+    # NIC rather than break the whole run for it. -m 2048 gives the larger
+    # subject-image initramfs headroom.
+    timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 2048 -vga none -nic none \
         -kernel /work/vmlinux-syssvc -append "console=ttyS0 panic=-1" \
         -nographic -no-reboot \
         -drive file=/work/d0.img,format=raw,if=virtio \

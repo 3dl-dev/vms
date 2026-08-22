@@ -525,6 +525,24 @@ struct vms_proc {
 	uint64_t            p1_limit;
 
 	/*
+	 * Image completion $STATUS and CLI invocation context (vms-f60d) --
+	 * the NetBSD twin of the fields the shared facility
+	 * (src/kernel-core/vms_proctab.c) records via VMS_IOCTL_SETEXIT /
+	 * VMS_IOCTL_SETCLI and reads via VMS_IOCTL_GETEXIT / VMS_IOCTL_GETCLI.
+	 * exit_status is the process's image completion condition value ($STATUS
+	 * longword; bit<0> success, bits<2:0> severity); cli_present is the
+	 * cliflag and cli_command the invoking DCL command line, inherited from
+	 * the invoking CLI's PCB at REGISTER_CONTINUE time. Same field set and
+	 * meaning as src/kernel/vms_internal.h's Linux struct vms_proc, so the
+	 * one shared facility source compiles and behaves identically here.
+	 */
+	uint32_t            exit_status;
+	uint8_t             has_exit_status;
+	uint8_t             cli_present;
+	uint16_t            cli_length;
+	char                cli_command[VMS_CLI_CMDLINE_SIZE];
+
+	/*
 	 * Host-task liveness handle (P4-A, rd vms-ca7). The facility tests
 	 * proc->pid_ref for whole-process liveness (exec_task_alive) and pins it to
 	 * read accounting (exec_task_pin), never dereferencing it -- it is opaque.
@@ -906,5 +924,11 @@ long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_establish_system(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_hiber(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_wake(struct vms_proc *proc, unsigned long arg);
+/* $EXIT/$STATUS + CLI invocation context (vms-f60d), shared facility in
+ * src/kernel-core/vms_proctab.c; contract in vms_proctab_nb.h. */
+long vms_ioctl_setexit(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_getexit(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
 
 #endif /* _VMS_INTERNAL_H */

@@ -1,18 +1,20 @@
 # OVMX 0.5-1
 
-**Completes the authenticity flip on all three substrates, and lands C++ first-light.**
+**Advances the Alpha login gate and lands C++ first-light.**
 
 0.5 shipped the Files-11 ODS-2 executive-ACP authenticity flip proven on the Linux
-substrate (x86_64 and Alpha LP64). 0.5-1 closes the matrix and adds the first real
-C++ program running as an OVMX image.
+substrate (x86_64 and Alpha LP64). 0.5-1 hardens the Alpha authentic-login gate and
+adds the first real C++ program running as an OVMX image.
 
 ## What landed
 
-- **The 3-substrate flip is complete.** The NetBSD/VAX executive now mounts and
-  reads/writes genuine Files-11 ODS-2 over the executive ACP (`vms_blockdev_netbsd.c`,
-  the faithful transliteration of the proven `vmsfs.kmod` path), proven end-to-end
-  on real NetBSD/VAX under SIMH with an INV-6 on-disk hash-diff (real read *and*
-  write, no false-pass). The `vms-d9c` VAX-boot gate goes green — no longer excluded.
+- **ODS-2 executive ACP: proven on x86_64 and Alpha (LP64); VAX runtime still on the
+  VFS/POSIX path.** x86_64 and Alpha LP64 boot and run RMS over the executive ACP. On
+  NetBSD/VAX the executive ACP codec is built and unit-proven, but it is **not yet
+  wired into the VAX runtime** — the VAX image set builds with `OVMX_HAVE_ACP`
+  undefined and boots via the Files-11 VFS/POSIX path. Converting the VAX runtime onto
+  the ACP is tracked as `vms-d5d` / `vms-049` (targeting V0.5-2+). The `vms-d9c`
+  VAX-boot gate is green — it boots to `PROVISION.EXE` via that current VFS/POSIX path.
 - **Alpha authentic login, gated green-by-SHA.** `SYSTEM`/`MANAGER` authenticate by
   Purdy against the genuine binary `$UAFDEF` SYSUAF over the ODS-2 ACP on Alpha LP64,
   and a standing dispatch-tier CI gate boots `qemu-system-alpha` cold and proves

@@ -48,16 +48,16 @@ while sharing nothing.
 ## Honest scope — the three substrates
 
 **0.5 ships the flip proven on the Linux substrate across two architectures
-(x86_64 and Alpha LP64). The NetBSD/VAX substrate flip is DONE and PROVEN — it
-lands as V0.5-1, the next cut in this release train, not the 0.5 tag itself.**
+(x86_64 and Alpha LP64). The NetBSD/VAX substrate does NOT yet run the flip: its
+runtime boots via the Files-11 VFS/POSIX path, not the executive ACP.**
 
-We name this deliberately rather than bury it. The VAX ACP flip is complete and
-proven end-to-end on real NetBSD/VAX under SIMH: `vms.kmod` mounts `DKA0:` over the
-**executive ACP** with the vmsfs mount compiled out (`#else`), PROVISION
-demand-pages off the ODS-2 volume and runs, and an on-disk **hash-diff confirms
-real ACP read *and* write** — no false-pass. It is not in the 0.5 tag only because
-it rides the 3-way convergence gate {x86_64 + VAX ILP32 + Alpha LP64} on top of
-0.5's merged base first; that cut is V0.5-1. So the authenticity flip is real on
-all three substrates (x86_64 Linux, Alpha LP64, NetBSD/VAX); 0.5 tags two of them
-and V0.5-1 completes the matrix within days. The gap is named as closing, not
-hidden behind a job exclusion.
+We name this deliberately rather than bury it. On NetBSD/VAX the executive ACP
+codec is built and unit-proven, but it is **not yet wired into the VAX runtime** —
+the VAX image set builds with `OVMX_HAVE_ACP` undefined and boots through the
+Files-11 VFS/POSIX path. Converting the VAX runtime onto the executive ACP (so
+`vms.kmod` mounts over the ACP with the vmsfs mount compiled out, PROVISION
+demand-pages off the ODS-2 volume, and an on-disk hash-diff confirms real ACP read
+*and* write) is tracked as `vms-d5d`/`vms-049`, targeting V0.5-2+. So the
+authenticity flip is real on the two Linux architectures (x86_64 and Alpha LP64)
+today; the NetBSD/VAX runtime conversion is named as open work, not hidden behind a
+job exclusion.

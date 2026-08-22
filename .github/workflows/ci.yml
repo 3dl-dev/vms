@@ -4060,6 +4060,21 @@ jobs:
         run: |
           sh src/vmslink/test/run_evax_ximport.sh
 
+      # vms-1bc: an ABSOLUTE global (a VMS "globalvalue") DEFINED IN an EVAX
+      # object — the concrete blocker to linking a real OpenVMS GCC-port main()
+      # object. The port emits `__gcc_main_flags = <flags>` (its ADDRESS is the
+      # flags word) and its crt0 reads `(unsigned __int64)&__gcc_main_flags`.
+      # alpha-dec-vms-as marks it EGSY__V_DEF with EGSY__V_REL CLEAR (bound to
+      # the synthetic $ABS$ psect); the reader flags it is_abs and LINK.EXE folds
+      # it to its value directly — no psect base, no load-bias. The verifier
+      # asserts the reader detected it (value folded from the EGSD, not hardcoded)
+      # and the linked image holds the constant at &__gcc_main_flags while a
+      # normal cross-object symbol still resolves to its biased image address.
+      # Pure byte manipulation, arch-independent; EVAX .obj fixtures checked in.
+      - name: Prove LINK.EXE folds an EVAX absolute globalvalue (__gcc_main_flags) (vms-1bc)
+        run: |
+          sh src/vmslink/test/run_evax_absval.sh
+
       # vms-2e4: the LAST x86_64 relocation class — gnu2-dialect TLSDESC
       # (R_X86_64_GOTPC32_TLSDESC + R_X86_64_TLSDESC_CALL, plus the
       # local-dynamic R_X86_64_DTPOFF32 / _TLS_MODULE_BASE_ half). Proof is

@@ -182,6 +182,9 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
         echo "file /vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE $B/DCL.EXE 755 0 0"
       fi
       [ -f "$B/INITIALIZE.EXE" ] && echo "file /tests/INITIALIZE.EXE $B/INITIALIZE.EXE 755 0 0"
+      # AUTHORIZE.EXE: test_syssvc_authorize/identcont execle /bin/AUTHORIZE.EXE
+      # (AUTHORIZE_PATH). Stage at /bin too, not just /tests + SYS$SYSTEM.
+      [ -f "$B/AUTHORIZE.EXE" ]  && echo "file /bin/AUTHORIZE.EXE $B/AUTHORIZE.EXE 755 0 0"
       [ -f "$B/AUTHORIZE.EXE" ]  && echo "file /tests/AUTHORIZE.EXE $B/AUTHORIZE.EXE 755 0 0"
       [ -f "$B/AUTHORIZE.EXE" ]  && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/AUTHORIZE.EXE $B/AUTHORIZE.EXE 755 0 0"
       [ -f "$B/MMK.EXE" ]        && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE $B/MMK.EXE 755 0 0"

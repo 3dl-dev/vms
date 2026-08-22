@@ -86,6 +86,14 @@
  * elf32-vax cross-build's compile-coverage rung; the real NetBSD/VAX kmod
  * driver wiring (d_ioctl dispatch) is a later re-target (vms-d5d). */
 #include "vms_acp_nb.h"
+/* Device-table wire contract (rd vms-618): the $ASSIGN/$DASSGN/$ALLOC/$DALLOC/
+ * $GETDVI/$DEVICE_SCAN/IO$_SETMODE arg structs src/kernel-core/vms_devtab.c
+ * copies, the VMS_TTC_* terminal characteristics, VMS_NETIF_SIZE and the
+ * VMS_DVI_SEL_ / VMS_TTSET_ selectors. Byte-identical to src/kernel/vms_ioctl.h.
+ * The device table is the LAST executive facility to join the NetBSD module's
+ * SRCS; before it did, VMS_IOCTL_ALLOC answered ENOTTY and DCL's cmd_mount()
+ * (which $ALLOCs before it $MOUNTs) could not mount a device on NetBSD/vax. */
+#include "vms_devtab_nb.h"
 
 /* ================================================================
  * VMS status codes -- the subset the event-flag facility returns. Values match
@@ -148,6 +156,18 @@
 #define SS__FILNOTACC   2744       /* SS$_FILNOTACC (IO$_DEACCESS w/o access) */
 #define SS__DEVICEFULL  2664       /* SS$_DEVICEFULL (extend cannot allocate) */
 #define SS__DEVALLOC    2112       /* SS$_DEVALLOC (device already allocated to another user) */
+/*
+ * Device-table subset (rd vms-618). Values copied VERBATIM from
+ * src/kernel/vms_internal.h -- same provenance rule as the ACP codes above: the
+ * Linux and NetBSD builds of the SAME shared facility source
+ * (src/kernel-core/vms_devtab.c) must never answer a given refusal with two
+ * different numbers. SS$_DEVNOTALLOC is what the oracle returned for DEALLOCATE
+ * of a device this process does not have ALLOCATED (%SYSTEM-W-DEVNOTALLOC,
+ * docs/oracle/vax73-terminal-device.md section 7); SS$_NOMOREDEV terminates a
+ * $DEVICE_SCAN.
+ */
+#define SS__DEVNOTALLOC 2136       /* SS$_DEVNOTALLOC (device not allocated) */
+#define SS__NOMOREDEV   2648       /* SS$_NOMOREDEV (device scan exhausted) */
 
 /*
  * IO$_ACPCONTROL / wildcard $SEARCH exhaustion (rd vms-a0b, epic vms-208).
@@ -240,6 +260,12 @@
  * ##__VA_ARGS__ is fine under the build's -std=gnu99. */
 #ifndef pr_info
 #define pr_info(fmt, ...)  printf(fmt, ##__VA_ARGS__)
+#endif
+
+/* pr_warn (Linux) -- same NetBSD kernel printf. The device table (rd vms-618)
+ * uses it for its out-of-memory unit-creation warnings. */
+#ifndef pr_warn
+#define pr_warn(fmt, ...)  printf(fmt, ##__VA_ARGS__)
 #endif
 
 /*
@@ -480,7 +506,14 @@ struct vms_proc {
 	uint32_t            job_id;                     /* LNM$JOB scope key (0 on NetBSD until job glue joins) */
 	char                prcnam[VMS_PRCNAM_SIZE];   /* process name ("" if unnamed) */
 	char                username[VMS_USERNAME_SIZE]; /* "" until $SETIDENT stamps it */
-	char                terminal[VMS_DEVNAM_SIZE]; /* "" (no device table in SRCS yet) */
+	/*
+	 * The job's terminal. "" until VMS_IOCTL_SETTERM records one, which the
+	 * executive only does from a channel this process already holds to a
+	 * device of class DC$_TERM (vms_devtab.c) -- so the name is a device name
+	 * out of the executive's own table, never a string the process supplied.
+	 * Written and read under vms_proc_hash_lock, alongside prcnam/uic/username.
+	 */
+	char                terminal[VMS_DEVNAM_SIZE];
 
 	/* P0 program / P1 control region extents (structural; $GETJPI reports them,
 	 * VMS_IOCTL_P0_MAP/P1_MAP would record them -- not in this module's SRCS, so
@@ -511,6 +544,17 @@ struct vms_proc {
 	exec_lock_t         chan_lock;
 	exec_list_head_t    mbx_channels;     /* struct vms_mbx_chan (defined in vms_mbx.c) */
 
+	/*
+	 * DEVICE channels (rd vms-618) -- this process's channels to rows of the
+	 * executive device table (struct vms_device below), on the SAME chan_lock/
+	 * next_chan number space as the mailbox and file channels, because on real
+	 * VMS a process's channels are ONE number space regardless of device kind.
+	 * vms_ioctl_dassgn() (vms_devtab.c) checks this list FIRST and falls back
+	 * to the file-class (ACP) and mailbox lists, so $DASSGN is the one ioctl
+	 * that releases any channel kind.
+	 */
+	exec_list_head_t    channels;         /* struct vms_channel (below) */
+
 	/* Files-11 (ODS-2) ACP file-class channels (rd vms-6a7f, epic vms-208) --
 	 * a separate list on the SAME chan_lock/next_chan space, mirroring
 	 * mbx_channels exactly (struct vms_acp_chan is defined in the shared
@@ -527,6 +571,93 @@ struct vms_proc {
 	 * exec_free_deferred(&proc->rcu, ...) -- immediate on NetBSD (no lockless
 	 * readers), the blessed grace-period fallback. Mirrors Linux's kfree_rcu. */
 	exec_rcu_head_t     rcu;
+};
+
+/* ================================================================
+ * THE EXECUTIVE DEVICE TABLE (rd vms-618) -- src/kernel-core/vms_devtab.c.
+ *
+ * A VMS device is a thing the EXECUTIVE knows about: the driver enters a unit
+ * in the I/O database at boot and from that moment it exists for every process
+ * on the node. Ownership, allocation and reference count are properties of the
+ * DEVICE, not of the process doing the asking -- which is the whole reason
+ * these rows live here and not in a process's own memory (CLAUDE.md Rule 11 /
+ * INV-6: a per-process device table passes every single-process test and is
+ * still a facade; the decisive check is A-allocates / B-is-refused).
+ *
+ * Field names and types mirror src/kernel/vms_internal.h exactly (exec_* in
+ * place of the Linux spinlock_t/list_head) so the shared facility source
+ * compiles unchanged on this substrate.
+ * ================================================================ */
+struct vms_device {
+	exec_list_head_t    list;           /* in vms_device_list */
+	char                devnam[VMS_DEVNAM_SIZE];
+	uint32_t            devclass;       /* DC$_ device class */
+	uint32_t            devtype;        /* device type code; 0 = Unknown */
+	uint32_t            shareable;      /* 1 = "shareable" in the status clause */
+
+	/*
+	 * OWNERSHIP AND ALLOCATION ARE TWO DIFFERENT THINGS, both oracle-measured
+	 * (docs/oracle/vax73-terminal-device.md section 7): a channel to a
+	 * NON-shareable device makes the assigner the OWNER with no allocation;
+	 * $ALLOC sets `allocated' and is the only thing that does; an allocation
+	 * outlives the channel until $DALLOC or the owner's death. refcnt is the
+	 * device's "Reference count": one per assigned channel plus one for an
+	 * outstanding allocation.
+	 */
+	uint32_t            allocated;      /* 1 while $ALLOC'd to owner_* */
+	uint32_t            owner_pid;      /* VMS pid of the owner, 0 = unowned */
+	pid_t               owner_linux_pid;
+	uint32_t            owner_uic;
+	uint32_t            refcnt;
+
+	uint32_t            errcnt;
+	uint64_t            opcnt;
+
+	/* Terminal state (devclass == DC$_TERM) */
+	uint64_t            devchar;        /* VMS_TTC_* */
+	uint32_t            width;
+	uint32_t            page;
+
+	/*
+	 * Disk backing (devclass == DC$_DISK). The NATIVE block device this unit
+	 * was entered from -- on this substrate "ra1c"/"ra2c", the MSCP disks under
+	 * SIMH, entered by vms_blockdev_netbsd_register_units() from the
+	 * device-native unit map (vms-47d: the VMS name is a label, the path is the
+	 * real device). Empty and zero for every non-disk device.
+	 */
+	char                backing[VMS_BACKING_SIZE];
+	uint32_t            backing_major;
+	uint32_t            backing_minor;
+
+	/*
+	 * Ethernet backing (devclass == DC$_SCOM). The executive's PRIVATE record
+	 * of which real interface ETH0: fronts; NEVER surfaced to a VMS program
+	 * (INV-4). Empty/zero on this substrate today -- exec_netdev_primary is
+	 * still a contract-only twin here, so no ETH0: unit is entered at all,
+	 * which is the honest "this node has no enumerated NIC" state, not a fake
+	 * device.
+	 */
+	char                netif[VMS_NETIF_SIZE];
+	uint32_t            link_up;
+
+	/*
+	 * Every channel currently assigned to this device, by any process: the
+	 * device has to know this to decide when IMPLICIT ownership ends (when the
+	 * owner has no channel left, not when any channel is returned).
+	 */
+	exec_list_head_t    chanlist;       /* of vms_channel.devlink */
+
+	exec_lock_t         lock;
+};
+
+/* A process's handle on a device. */
+struct vms_channel {
+	exec_list_head_t    list;           /* in vms_proc->channels */
+	exec_list_head_t    devlink;        /* in vms_device->chanlist */
+	uint32_t            chan;
+	pid_t               owner_linux_pid;/* process holding this channel */
+	struct vms_device  *dev;
+	uint8_t             acmode;         /* access mode $ASSIGN was issued from */
 };
 
 /* ================================================================
@@ -653,26 +784,25 @@ long vms_ioctl_acp_acpcontrol(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg);
 /*
  * VMS_IOCTL_DISK_RESOLVE handler (rd vms-f60) -- DEFINED in the quarantined
- * vms_blockdev_netbsd.c (not the shared kernel-core, which keeps the full
- * device-table resolver the VAX substrate has not ported). Lets INITIALIZE.EXE
- * name a VMS disk unit and get back the real backing block device.
+ * vms_blockdev_netbsd.c, NOT in the shared src/kernel-core/vms_devtab.c, whose
+ * twin is compiled out here by -DOVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE. See that
+ * guard's comment in vms_devtab.c for WHY the substrate keeps its own resolver
+ * (it must lazily OPEN and cache the backing vnode for the ACP's block I/O, and
+ * must NOT hold the INITIALIZE target open -- NetBSD allows one open of a block
+ * device, so an eager bind at module init would EBUSY-block INITIALIZE.EXE).
+ * Lets INITIALIZE.EXE name a VMS disk unit and get back the real backing device.
  */
 long vms_ioctl_disk_resolve(struct vms_proc *proc, unsigned long arg);
 int  vms_acp_dassgn(struct vms_proc *proc, uint32_t chan);
 void vms_acp_release_all(struct vms_proc *proc);
 /*
- * Internal (non-ioctl) twin of the device table's disk-unit resolver
- * (src/kernel/vms_internal.h's identical declaration, DEFINED there in
- * src/kernel-core/vms_devtab.c): resolves a canonical disk-unit name to its
- * backing (major,minor) so $MOUNT can read the home block/SCB. The NetBSD
- * substrate has NOT ported the device table yet (no src/kernel-core/
- * vms_devtab.c in either Makefile's SRCS -- a separate, larger facility port,
- * not this rung); vmsfs_acp.c's $MOUNT path calls it, so the prototype is
- * declared here. vms-d5d DEFINES it -- a single-unit, device-native resolve --
- * in vms_blockdev_netbsd.c (NOT the full vms_devtab.c enumeration, which stays
- * unported per the conductor's YAGNI call), so vmsfs_acp.c's $MOUNT path now
- * resolves + reads a REAL ODS-2 volume here: a LIVE path, not a compile-only
- * stub.
+ * Internal (non-ioctl) resolve of a canonical disk-unit name to its backing
+ * (major,minor) so the Files-11 ACP's $MOUNT can read the home block/SCB.
+ * DEFINED on this substrate in vms_blockdev_netbsd.c, where it ALSO opens the
+ * backing device vnode once and caches it for the volume's life -- which is
+ * what exec_blockdev_read_block/write_block need and what the shared
+ * vms_devtab.c twin (a pure table read) cannot do. See the
+ * OVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE guard in vms_devtab.c.
  */
 uint32_t vms_devtab_disk_backing(const char *devnam,
                                  uint32_t *major_out, uint32_t *minor_out);
@@ -694,15 +824,48 @@ uint32_t vms_devtab_disk_resolve(const char *devnam, char *backing,
  */
 void vms_blockdev_netbsd_release_all(void);
 
+/*
+ * Enter this node's DISK units in the executive device table (rd vms-618).
+ * DEFINED in vms_blockdev_netbsd.c, which owns the device-native unit map
+ * (VMS unit name -> real NetBSD block device); it calls vms_devtab_add_disk()
+ * below for each unit that actually resolves. Called once, from
+ * vms_modcmd(MODULE_CMD_INIT) right after vms_devtab_init(), the way a VMS
+ * driver enters its units during system initialization -- before /dev/vms
+ * exists, so no process can be reading the table.
+ */
+void vms_blockdev_netbsd_register_units(void);
+
+/* ----------------------------------------------------------------
+ * DEVICE TABLE facility (rd vms-618) -- DEFINED in src/kernel-core/vms_devtab.c,
+ * the LAST executive facility to join this module's SRCS. vms_devtab_init/
+ * cleanup bracket the module lifetime (the table is module-global: the console
+ * terminal OPA0: is created at init, and the substrate's disk units are entered
+ * right after by vms_blockdev_netbsd_register_units()); vms_proc_release_channels
+ * gives back a dying process's channels AND any device it had allocated.
+ * ---------------------------------------------------------------- */
+int  vms_devtab_init(void);
+void vms_devtab_cleanup(void);
+/* Enter ONE disk unit, for a substrate whose disks the shared probe cannot
+ * enumerate (see vms_devtab.c). Returns 0 on success, -ENOMEM on failure. */
+int  vms_devtab_add_disk(const char *devnam, const char *backing,
+                         uint32_t backing_major, uint32_t backing_minor);
+void vms_proc_release_channels(struct vms_proc *proc);
+long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_dassgn(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_alloc(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_getdvi(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_devscan(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_setterm(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_ttsetmode(struct vms_proc *proc, unsigned long arg);
+
 /* ----------------------------------------------------------------
  * Cross-facility image-rundown release helpers. vms_ioctl_image_rundown()
- * (vms_access.c) calls all three; vms_proc_rundown_asts is DEFINED (vms_ast.c)
- * and vms_proc_rundown_locks is DEFINED (vms_lock.c, now in SRCS -- rd vms-ff7).
- * vms_mbx.c does NOT define an image-rundown channel release (a mailbox channel
- * is released at $DASSGN / process death via vms_mbx_release_all, not at image
- * rundown), so vms_netbsd.c still supplies a WEAK no-op stub for
- * vms_proc_rundown_channels only, which a real facility definition would override
- * if one ever lands (see vms_netbsd.c).
+ * (vms_access.c) calls all three; vms_proc_rundown_asts is DEFINED (vms_ast.c),
+ * vms_proc_rundown_locks is DEFINED (vms_lock.c) and -- as of the device-table
+ * port (rd vms-618) -- vms_proc_rundown_channels is DEFINED too, in
+ * vms_devtab.c. All three now link to their real facility definitions; the WEAK
+ * no-op stub vms_netbsd.c used to carry for the channel one is gone.
  * ---------------------------------------------------------------- */
 void vms_proc_rundown_locks(struct vms_proc *proc, uint8_t min_acmode);
 void vms_proc_rundown_channels(struct vms_proc *proc, uint8_t min_acmode);

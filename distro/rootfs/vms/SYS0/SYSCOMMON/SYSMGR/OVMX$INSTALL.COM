@@ -63,10 +63,13 @@ $!       dcl_cmd_process.c) exactly as on command lines, so 'symbol' in a
 $!       data line interpolates a run-time value (the entered password)
 $!       before the utility reads it. The AUTHORIZE step below uses this --
 $!       MODIFY SYSTEM/PASSWORD='OVMX_PW1' as a data line, no operator typing
-$!       and no terminal round-trip. NOTE the SCS step still RUNs SYSGEN the
-$!       old interactive way and additionally SYSGEN.EXE is not yet resolvable
-$!       on the target (%DCL-E-IVIMAGE) -- that gap is vms-597, not this item;
-$!       the password write does not depend on it.
+$!       and no terminal round-trip. [RESOLVED, vms-597] The SCS step below now
+$!       uses the SAME non-interactive inline-SYS$INPUT idiom: it feeds SYSGEN
+$!       USE CURRENT / SET SCSNODE / SET SCSSYSTEMID / WRITE CURRENT / EXIT as
+$!       data lines (no operator typing at a SYSGEN> prompt), and RUNs
+$!       SYS$SYSTEM:SYSGEN.EXE through the target's rooted SYS$SYSTEM redirect so
+$!       the image resolves and WRITE CURRENT lands the target's own
+$!       OVMXVMSSYS.PAR. An unattended install now configures the node.
 $!
 $!   (c) [FIXED, vms-8b6/#385] AUTHORIZE.EXE, forked via dcl_exec_utility(),
 $!       formerly never learned about a device MOUNTed by its DCL parent.
@@ -234,12 +237,7 @@ $ OVMX_SCSID = ""
 $ INQUIRE/NOPUNCTUATION OVMX_SCSID "Enter SCSSYSTEMID:"
 $ IF (OVMX_SCSNODE .EQS. "") .OR. (OVMX_SCSID .EQS. "") THEN GOTO SKIP_SCS
 $ WRITE SYS$OUTPUT ""
-$ WRITE SYS$OUTPUT "Configuring SCSNODE/SCSSYSTEMID on the target. At the SYSGEN> prompt, type:"
-$ WRITE SYS$OUTPUT "    USE CURRENT"
-$ WRITE SYS$OUTPUT "    SET SCSNODE ""''OVMX_SCSNODE'"""
-$ WRITE SYS$OUTPUT "    SET SCSSYSTEMID ''OVMX_SCSID'"
-$ WRITE SYS$OUTPUT "    WRITE CURRENT"
-$ WRITE SYS$OUTPUT "    EXIT"
+$ WRITE SYS$OUTPUT "Configuring SCSNODE=''OVMX_SCSNODE' / SCSSYSTEMID=''OVMX_SCSID' on the target...."
 $! Redirect SYS$SYSTEM at the TARGET's ROOTED system directory
 $! 'OVMX_TARGET'[SYS0.SYSCOMMON.SYSEXE], NOT the flat 'OVMX_TARGET'[SYSEXE]
 $! (vms-597): PRODUCT INSTALL lays the target as a rooted concealed volume
@@ -255,7 +253,28 @@ $! logical -- the SAME file the booted system reads SCSNODE/SCSSYSTEMID from.
 $! (This mirrors the identical rooted-path fix vms-963 applies to the
 $! AUTHORIZE step above; the two edits are in separate blocks.)
 $ DEFINE/JOB SYS$SYSTEM 'OVMX_TARGET'[SYS0.SYSCOMMON.SYSEXE]
+$! Drive SYSGEN NON-INTERACTIVELY via inline SYS$INPUT (vms-597) -- the same
+$! classic VMS idiom the AUTHORIZE step above uses (vms-963/vms-1a9): the non-$
+$! data lines that follow the RUN become SYSGEN.EXE's SYS$INPUT, and DCL
+$! performs apostrophe substitution on them (dcl_sysinput_setup ->
+$! dcl_sym_substitute), so ''OVMX_SCSNODE' / 'OVMX_SCSID' expand to the answers
+$! entered above BEFORE SYSGEN reads each line. Inside the "..." string the
+$! DOUBLED apostrophe ''sym' is what performs substitution (VMS DCL "Symbol
+$! Substitution Within Character Strings"), yielding SET SCSNODE "<node>"; the
+$! bare 'sym' on the numeric SCSSYSTEMID line substitutes directly. This
+$! replaces the old "RUN then have the operator type at SYSGEN>" shape, which an
+$! UNATTENDED install could never drive: a RUN'd image's SYS$INPUT is the
+$! procedure's data block, not the terminal, so the interactive form fed SYSGEN
+$! an EMPTY stream (immediate EOF) and SCSNODE was never set -- exactly the gap
+$! vms-597 tracked. USE CURRENT loads the target's own OVMXVMSSYS.PAR (through
+$! the rooted SYS$SYSTEM redirect above) and WRITE CURRENT writes the new
+$! version back to that same file, which the booted target reads SCSNODE from.
 $ RUN SYS$SYSTEM:SYSGEN.EXE
+USE CURRENT
+SET SCSNODE "''OVMX_SCSNODE'"
+SET SCSSYSTEMID 'OVMX_SCSID'
+WRITE CURRENT
+EXIT
 $ DEFINE/JOB SYS$SYSTEM SYS$SYSROOT:[SYSEXE]
 $SKIP_SCS:
 $!

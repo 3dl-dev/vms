@@ -194,6 +194,19 @@ int ovmx_boot_mount_system_disk_native(void)
     return ovmx_boot_acp_mount_system_disk();
 }
 
+/* The ACP-read boot bridge's writable staging directory, Linux side (vms-5f0).
+ * PID 1 runs on an initramfs that is already a tmpfs, so this is exactly the
+ * two mkdir(2) calls stage_boot_images() made inline before the op existed --
+ * same paths, same 0755 mode, same EEXIST tolerance. */
+int ovmx_boot_prepare_stage_dir(const char *dir)
+{
+    if (mkdir("/run", 0755) != 0 && errno != EEXIST)
+        return -1;
+    if (mkdir(dir, 0755) != 0 && errno != EEXIST)
+        return -1;
+    return 0;
+}
+
 void ovmx_boot_power_off(void)
 {
     sync();

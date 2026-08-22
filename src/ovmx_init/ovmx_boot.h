@@ -235,6 +235,36 @@ int ovmx_boot_acp_mount_system_disk(void);
 int ovmx_boot_mount_system_disk_native(void);
 
 /*
+ * ovmx_boot_prepare_stage_dir - make `dir` (OVMX_BOOT_STAGE_DIR) exist as a
+ * WRITABLE, root-owned 0755 directory that PID 1 can drop the first-hop boot
+ * images into, and that every later consumer (DCL's dcl_exec_utility, LOGINOUT,
+ * vms_login's per-uid subdirectory) can read and execve from. Returns 0 on
+ * success, -1 with errno set on failure -- the caller halts honestly; it is
+ * never faked (INV-6), because a staging directory that silently is not there
+ * would surface as an unexplained execve failure three hops later.
+ *
+ * This is the ONE substrate-specific piece of the ACP-read boot bridge
+ * (vms-5f0 on Linux, vms-8e8f/vms-329 on NetBSD-vax): the bridge itself --
+ * IO$_ACCESS + IO$_READVBLK off the genuine ODS-2 volume through the executive
+ * ACP, then a POSIX write of the bytes -- is portable and shared
+ * (ovmx_boot_acp_read.c). Only "where does a writable scratch filesystem come
+ * from" differs, so only that lives behind the seam:
+ *
+ *   Linux : PID 1 runs on an initramfs that IS a tmpfs, so the directory is
+ *           just mkdir("/run") + mkdir(dir), tolerating EEXIST -- byte-for-byte
+ *           the two mkdir(2) calls stage_boot_images() made inline before this
+ *           op existed.
+ *   NetBSD: the VAX root is a real on-disk FFS, so the same two mkdirs are
+ *           followed by mount(2)ing a tmpfs OVER `dir` (root uid/gid, mode
+ *           0755 -- the same ownership and permission Linux's initramfs gives
+ *           it, which the per-uid staging rules in ovmx_layout.h depend on).
+ *           An EBUSY mount means this boot already staged; that is success.
+ *
+ * IDEMPOTENT on every backend: calling it twice is not an error.
+ */
+int ovmx_boot_prepare_stage_dir(const char *dir);
+
+/*
  * ovmx_boot_power_off - flush and power the machine off, PID 1's analogue of
  * the VAX halting to the console prompt after a fail-stop boot. Returns ONLY
  * if the substrate refused (no privilege to power off); the caller then

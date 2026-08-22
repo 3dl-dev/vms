@@ -92,7 +92,7 @@ only our forks target.
 | **0.3** | A real system — the command language, file system, system services, and kernel executive stand on their own. | SHIPPED | 0 | 0 | 0 | — |
 | **0.4** | Installs and boots faithfully — the product installs to a target disk and reboots into a login. | SHIPPED | 0 | 0 | 0 | — |
 | **0.5** | The authenticity flip — RMS reads and writes genuine Files-11 ODS-2 over the executive ACP (the /vms passthrough retired on the runtime path), binary SYSUAF and Purdy login, and a userland that builds itself in-guest. | SHIPPED | 13 | 19 | 6 | 41% |
-| **0.6** | Cluster correctness — quorum and reconfiguration, a real distributed lock manager, and cluster membership resident in the executive. | planned | 0 | 4 | 0 | 0% |
+| **0.6** | Cluster correctness — quorum and reconfiguration, a real distributed lock manager, and cluster membership resident in the executive. | planned | 0 | 5 | 0 | 0% |
 | **0.7** | Cluster wire fidelity — the SCS/MSCP connection manager answers a real VAX byte-for-byte. | planned | 0 | 6 | 0 | 0% |
 | **0.8** | Rejoin and satellite boot — a removed node rejoins under its own identity; diskless satellites boot from a served disk. | planned | 0 | 4 | 1 | 0% |
 | **0.9** | Feature-complete — a voting member joins, serves genuine ODS-2 storage, holds locks, and evacuates a live node; TCP/IP, DECnet, and the self-hosting toolchain reach done. The last features land here. | planned | 0 | 0 | 0 | — |
@@ -104,12 +104,12 @@ only our forks target.
 |---|---|---|---|---:|---:|
 | Executive substrate | `vms-6b8` | 0.5 | in progress | 17/22 | 0 |
 | Command-surface parity | `vms-8ad` | continuous | in progress | 37/73 | 0 |
-| Self-hosting toolchain | `vms-678` | 0.5→0.9 | in progress | 15/23 | 2 |
+| Self-hosting toolchain | `vms-678` | 0.5→0.9 | in progress | 16/23 | 2 |
 | Cluster configuration | `vms-098` | 0.5→0.9 | in progress | 3/12 | 8 |
 | TCP/IP networking | `vms-67f` | 0.5→0.9 | in progress | 7/12 | 2 |
 | DECnet Phase IV | `vms-30e` | 0.9 | in progress | 5/11 | 5 |
 | Kernel substrate | `vms-19e` | 0.5 | in progress | 5/8 | 1 |
-| VAX as a first-class platform | `vms-8e8` | 0.5→0.9 | in progress | 78/87 | 2 |
+| VAX as a first-class platform | `vms-8e8` | 0.5→0.9 | in progress | 84/93 | 2 |
 
 ### Per-milestone items (rd)
 
@@ -148,11 +148,12 @@ only our forks target.
 - `vms-eb8` [done] DCL DIRECTORY [SUB] relative bracketed arg lists against SYS$DISK not current default device
 - `vms-f4c` [blocked] R2: MODPARAMS.DAT + AUTOGEN drive cluster SYSGEN params (edit MODPARAMS -> AUTOGEN -> new .PAR version adopted at boot)
 
-**0.6** — rel-0.6 (0/4 done)
+**0.6** — rel-0.6 (0/5 done)
 
 - `vms-2d6` [inbox] Quorum loss: killing the only voting node produces NO reconfiguration -- survivors go silent (run q1)
 - `vms-407` [inbox] RMS reaches no arbitrator: FAB share/access and RAB record locking have no lock manager behind them
 - `vms-551` [inbox] Cluster membership crosses into the executive: SHOW CLUSTER / $GETSYI / cluster-wide locking see a real cluster through /dev/vms
+- `vms-6d5` [inbox] EPIC: Rooted/concealed system-disk logicals + boot-derived root (kill the flattened SYS0 fabrication)
 - `vms-7fa` [inbox] OVMX holds real distributed lock state and answers ENQ-class DLM requests
 
 **0.7** — rel-0.7 (0/6 done)

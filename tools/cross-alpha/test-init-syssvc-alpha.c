@@ -142,6 +142,51 @@ static int cmpstr(const void *a, const void *b)
     return strcmp(*(const char *const *)a, *(const char *const *)b);
 }
 
+/*
+ * reap_subjects - kill and reap any /bin/sh subject processes a suite left
+ * behind, run BETWEEN suites. The process-listing suites $CREPRC /bin/sh
+ * subjects that stay resident (a bounded pause / sleep) and are usually
+ * $DELPRC'd, but a suite killed by the watchdog -- or one that simply does not
+ * delete every subject -- leaves them as orphans reparented to this init (PID
+ * 1). Left to accumulate across 66 suites they bloat the executive process
+ * table, slowing every later SHOW SYSTEM / $GETJPI scan until a subject-heavy
+ * suite trips the per-suite watchdog -- a TIMING-DEPENDENT flake (51-55/66).
+ * Reaping them after each suite makes the run deterministic. INV-6: this reaps
+ * only the harness's own /bin/sh subject processes, never a test's assertions.
+ */
+static void reap_subjects(void)
+{
+    DIR *d = opendir("/proc");
+    if (d) {
+        struct dirent *de;
+        pid_t self = getpid();
+        while ((de = readdir(d)) != NULL) {
+            if (de->d_name[0] < '1' || de->d_name[0] > '9')
+                continue;
+            pid_t pid = (pid_t)atoi(de->d_name);
+            if (pid <= 1 || pid == self)
+                continue;
+            char path[64], comm[64];
+            snprintf(path, sizeof(path), "/proc/%d/comm", pid);
+            int fd = open(path, O_RDONLY);
+            if (fd < 0)
+                continue;
+            ssize_t n = read(fd, comm, sizeof(comm) - 1);
+            close(fd);
+            if (n <= 0)
+                continue;
+            comm[n] = '\0';
+            /* /proc/<pid>/comm is the exec basename + a trailing newline. The
+             * subject is exec'd as /bin/sh (comm "sh"); the stub is "sh-subject".
+             * Match those exactly so no test binary (test_syssvc_*) is touched. */
+            if (!strcmp(comm, "sh\n") || !strncmp(comm, "sh-subject", 10))
+                kill(pid, SIGKILL);
+        }
+        closedir(d);
+    }
+    while (waitpid(-1, NULL, WNOHANG) > 0) { /* reap zombies */ }
+}
+
 int main(void)
 {
     /* Kernel opened fd 0/1/2 on the console before exec'ing us, so stdio works. */
@@ -209,6 +254,9 @@ int main(void)
         assert_fail += f;
         printf("=== SUITE %s rc=%d (pass=%d fail=%d) ===\n", names[i], rc, p, f);
         if (rc == 0 && f == 0) suites_pass++; else suites_fail++;
+        /* Prevent /bin/sh subject orphans from accumulating across suites (a
+         * timing-dependent flake in the process-listing suites). */
+        reap_subjects();
     }
 
     printf("=== ASSERTIONS: %d passed, %d failed ===\n", assert_pass, assert_fail);

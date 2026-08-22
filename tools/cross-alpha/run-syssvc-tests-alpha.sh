@@ -153,10 +153,10 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     # orphans accumulate across suites, hanging the observed-detached suites
     # (procnam/showproc/setname/setprv_dcl -- all green with the stub). The stub
     # bounds subject lifetime (alarm 300) which the detached suites need. The
-    # remaining gap is startup_service's SYNCHRONOUS plain-RUN (needs a subject
-    # that runs a touch-script and EXITS) -- a genuine dual-role /bin/sh tension
+    # remaining gap: startup_service SYNCHRONOUS plain-RUN needs a subject that
+    # runs a touch-script and EXITS -- a genuine dual-role /bin/sh tension
     # (bounded-observed vs synchronous-exit) left as a follow-up, NOT solved by
-    # busybox alone.
+    # busybox alone. [NO APOSTROPHES: inside the docker -c single-quote]
     $CC -static -O2 -Wall /tools/sh-subject-stub.c -o /work/sh-subject
     alpha-linux-gnu-strip /work/syssvc-init /work/sh-subject
     cp /vmsko/vms.ko /work/vms.ko

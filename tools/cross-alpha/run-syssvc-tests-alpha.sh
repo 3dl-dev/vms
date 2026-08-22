@@ -145,10 +145,35 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     ####################################################################
     # 3. Build the static C runner-init + bake the test initramfs.
     ####################################################################
-    echo "== build syssvc runner-init + /bin/sh subject stub =="
+    echo "== build syssvc runner-init =="
     $CC -static -O2 -Wall /tools/test-init-syssvc-alpha.c -o /work/syssvc-init
-    $CC -static -O2 -Wall /tools/sh-subject-stub.c -o /work/sh-subject
-    alpha-linux-gnu-strip /work/syssvc-init /work/sh-subject
+    alpha-linux-gnu-strip /work/syssvc-init
+
+    # Real /bin/sh = busybox-alpha (static, standalone shell), the SAME thing the
+    # x86 harness uses. The subject suites $CREPRC /bin/sh with a real script
+    # (HOLD_SCRIPT "sleep 600" for observed detached subjects; a "touch MARK"
+    # script for synchronous plain-RUN). A shell must EXECUTE those scripts:
+    # a stub that only pauses breaks the synchronous case. STANDALONE shell so
+    # sleep/touch run as built-in applets with no PATH or symlink dependence.
+    echo "== cross-build busybox-alpha as the real /bin/sh =="
+    BBVER=1.36.1
+    if [ ! -x /work/busybox ]; then
+        wget -qO /work/busybox.tar.bz2 "https://busybox.net/downloads/busybox-$BBVER.tar.bz2" \
+            || { echo "FATAL: busybox source fetch failed"; exit 1; }
+        tar xf /work/busybox.tar.bz2 -C /work
+        make -C "/work/busybox-$BBVER" ARCH=alpha CROSS_COMPILE=alpha-linux-gnu- defconfig >/work/bb-cfg.log 2>&1
+        # static + standalone shell (built-in applets, no PATH lookup)
+        sed -i -e "s/# CONFIG_STATIC is not set/CONFIG_STATIC=y/" \
+               -e "s/# CONFIG_FEATURE_SH_STANDALONE is not set/CONFIG_FEATURE_SH_STANDALONE=y/" \
+               -e "s/# CONFIG_STATIC_LIBGCC is not set/CONFIG_STATIC_LIBGCC=y/" \
+               "/work/busybox-$BBVER/.config"
+        yes "" | make -C "/work/busybox-$BBVER" ARCH=alpha CROSS_COMPILE=alpha-linux-gnu- oldconfig >>/work/bb-cfg.log 2>&1 || true
+        make -C "/work/busybox-$BBVER" ARCH=alpha CROSS_COMPILE=alpha-linux-gnu- -j"$(nproc)" busybox >/work/bb-build.log 2>&1 \
+            || { echo "FATAL: busybox-alpha build failed"; tail -25 /work/bb-build.log; exit 1; }
+        cp "/work/busybox-$BBVER/busybox" /work/busybox
+    fi
+    alpha-linux-gnu-strip /work/busybox
+    file /work/busybox | cut -d, -f1-2
     cp /vmsko/vms.ko /work/vms.ko
     cp /vmsko/vmsfs.ko /work/vmsfs.ko
 
@@ -167,7 +192,7 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
       echo "dir /vms/SYS0/SYSCOMMON/SYSEXE 755 0 0"
       echo "dir /tmp 1777 0 0"
       echo "file /init /work/syssvc-init 755 0 0"
-      echo "file /bin/sh /work/sh-subject 755 0 0"   # live-process subject for showproc/procnam/delprc/startup_service
+      echo "file /bin/sh /work/busybox 755 0 0"        # real /bin/sh = busybox-alpha (standalone): runs each subject script (sleep/touch/exit)
       echo "file /vms.ko /work/vms.ko 644 0 0"
       echo "file /vmsfs.ko /work/vmsfs.ko 644 0 0"
       for f in /work/tests/test_*; do
@@ -221,15 +246,14 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     cp /work/tests/ods2_imgact.img /work/d4.img
 
     echo "== boot qemu-system-alpha -M clipper, timeout ${BT}s =="
-    # NIC = DEC Tulip (21143), NOT virtio-net: a virtio-net-pci alongside the 5
-    # virtio-blk fixture disks hangs the clipper boot before /init (the virtio
-    # combination; iter-1 with 5 disks + -nic none booted clean). Tulip is a
-    # non-virtio PCI NIC the Alpha kernel already drives (CONFIG_TULIP=y) and
-    # the executive enumerates ANY netdev as ETH0: (generic for_each_netdev,
-    # exec_kbackend.h) -- so ETH0: comes up for test_syssvc_getdvi/showdev
-    # without the virtio-net hang. -m 2048 for the subject-image initramfs.
-    timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 2048 -vga none \
-        -netdev user,id=net0 -device tulip,netdev=net0 \
+    # NO NIC (getdvi/showdev deferred): ANY NIC -- virtio-net-pci AND tulip
+    # (non-virtio, CONFIG_TULIP=y driver present) -- hangs the clipper boot at
+    # the crng->/init handoff, AFTER all 5 virtio-blk disks enumerate, before
+    # the runner-init starts. Not NIC-model-specific, not PCI-slot-exhaustion
+    # (hangs post-probe at /init); a clipper-kernel-NIC interaction needing
+    # kernel-level debug, not a harness fix. -nic none is the known-good boot;
+    # test_syssvc_getdvi/showdev (ETH0:) fail honestly, documented-deferred.
+    timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 2048 -vga none -nic none \
         -kernel /work/vmlinux-syssvc -append "console=ttyS0 panic=-1" \
         -nographic -no-reboot \
         -drive file=/work/d0.img,format=raw,if=virtio \

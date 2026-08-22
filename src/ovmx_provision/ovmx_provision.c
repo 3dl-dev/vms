@@ -117,9 +117,17 @@
  * reboot(2) has a different signature and flag names than Linux's). */
 #include "ovmx_boot.h"
 
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
 /*
  * ACCOUNT/SYSTEM-TREE PROVISIONING OVER THE FILES-11 ODS-2 ACP (vms-4ac).
+ *
+ * KEYED ON OVMX_HAVE_ACP, NOT __linux__ (vms-329). This was Linux-only while
+ * the netbsd-vax runtime still VFS-mounted SYS$DISK and so still had a /vms
+ * POSIX tree to lchown(). The coupled VAX cutover retired that mount, so on the
+ * VAX the POSIX arm below would walk a directory that does not exist, silently
+ * swallow every ENOENT, and provision NOTHING while reporting success -- the
+ * exact fake-success class INV-6 forbids. Substrates that genuinely have no
+ * executive (host ctest, plain-container tooling) still take the POSIX arm.
  *
  * Post-flip (epic vms-208) there is no /vms POSIX passthrough on the runtime
  * path, so the lchown()/mkdir() this file used to do -- which now hit a
@@ -144,7 +152,7 @@
 uint32_t rms_acp_resolve_did(uint32_t chan, const char *dirpath,
                              uint16_t *dn, uint16_t *ds,
                              uint8_t *dr, uint8_t *dx);
-#endif /* __linux__ */
+#endif /* OVMX_HAVE_ACP */
 
 /*
  * Translate a VMS filespec to a Linux path. Same wrapper PID 1 uses, for the
@@ -249,7 +257,7 @@ static void provision_halt(const char *what, const char *detail)
  * category apply to [1,4] specifically and, for a plain user, to that user's
  * own login directory.
  */
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
 
 /* One directory entry captured during an ACP wildcard enumeration. */
 struct acp_ent {
@@ -503,8 +511,10 @@ static void provision_home(uint32_t uic_group, uint32_t uic_member,
             "(parent missing?)\n", home_spec);
 }
 
-#else  /* !__linux__ : the netbsd-vax standalone cross keeps the POSIX /vms
-        * passthrough path until the VAX mount retires with it (vms-d5d). */
+#else  /* !OVMX_HAVE_ACP : no executive in this link at all (host ctest, the
+        * plain-container link/activation gates). NOT a runtime substrate --
+        * every shipped runtime, Linux and netbsd-vax alike, defines
+        * OVMX_HAVE_ACP since vms-329. */
 
 /* Give one filesystem object to a UIC, without following symlinks (lchown, not
  * chown: the install copy preserves symlinks and re-owning one must not re-own
@@ -576,7 +586,7 @@ static void provision_home(uint32_t uic_group, uint32_t uic_member,
     own_object(home_linux, uic_group, uic_member);
 }
 
-#endif /* __linux__ */
+#endif /* OVMX_HAVE_ACP */
 
 /* ------------------------------------------------------------------ */
 /* Account home directories                                            */

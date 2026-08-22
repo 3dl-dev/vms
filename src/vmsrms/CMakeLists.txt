@@ -73,6 +73,28 @@ target_include_directories(vmsrms PUBLIC
     ${VMS_LNM_INCLUDE_DIR}
 )
 
+# vms-d5d/vms-329: RMS reaches SYS$DISK via the executive ACP (vms_kif_acp_*)
+# on EVERY runtime substrate -- the standalone configuration above is not a
+# "unit build", it is the netbsd-vax CROSS that produces the libvmsrms.a linked
+# into the shipped VAX DCL.EXE / LOGINOUT.EXE / PROVISION.EXE / JOB_CONTROL.EXE
+# (tools/cross-vax/build-*-vax.sh). Leaving OVMX_HAVE_ACP off there is what left
+# every VAX image on RMS's POSIX /vms arm while the boot claimed to have flipped
+# (rd vms-049's finding). The coupled cutover (vms-329) retires the vmsfs.ko VFS
+# mount of SYS$DISK, so there IS no /vms tree on the VAX any more: the POSIX arm
+# would not "degrade", it would simply fail -- and RMS's own ACP arm already
+# defers to POSIX only when /dev/vms is genuinely absent (rms_acp_absent(),
+# which is how host ctest and the plain-container gates still work).
+#
+# The include dir goes with it: vms_kif.h lives in libvmssys and pulls
+# ../kernel/vms_ioctl.h -> vms_acp.h. It is a header-only compile dep; the
+# vms_kif_* symbols resolve at link time through libvmssys (in-tree: the
+# transitive vms -> vmsprocess -> libvmssys edge; netbsd-vax cross: libvmssys.a
+# inside the --start-group the per-image recipes already link).
+target_compile_definitions(vmsrms PRIVATE OVMX_HAVE_ACP)
+target_include_directories(vmsrms PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libvmssys
+    ${CMAKE_CURRENT_SOURCE_DIR}/../kernel)
+
 if(VMSRMS_STANDALONE)
     # Link-libc netbsd-vax cross: a clean libvmsrms.a to arch-check with
     # objdump/ar, proven to link ON TOP of the whole elf32-vax stack at proof 2.
@@ -82,18 +104,6 @@ if(VMSRMS_STANDALONE)
     target_compile_options(vmsrms PRIVATE -Wall -Wextra -O2)
 else()
     target_link_libraries(vmsrms PUBLIC vms vmsfs vmslnm)
-
-    # vms-d5d: RMS reaches SYS$DISK via the executive ACP (vms_kif_acp_*) on every runtime substrate; the standalone unit build (no OVMX_HAVE_ACP) keeps the POSIX arm.
-    target_compile_definitions(vmsrms PRIVATE OVMX_HAVE_ACP)
-
-    # vms-bc7: rms_io.c / rms_core.c reach the Files-11 ODS-2 ACP through the
-    # libvmssys /dev/vms wrappers (vms_kif_acp_*). vms_kif.h lives in libvmssys
-    # and pulls ../kernel/vms_ioctl.h -> vms_acp.h. Header-only compile dep --
-    # the vms_kif_* symbols resolve through the transitive libvmssys link edge
-    # (vms -> vmsprocess -> libvmssys). NOT added on the netbsd-vax standalone
-    # cross, which keeps the POSIX backend (no /dev/vms).
-    target_include_directories(vmsrms PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/libvmssys)
 
     set_target_properties(vmsrms PROPERTIES
         PREFIX ""

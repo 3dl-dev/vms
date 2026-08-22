@@ -24,7 +24,6 @@
  *   ovmx_boot_open_executive             -> open("/dev/vms", O_RDWR|O_CLOEXEC)
  *   ovmx_boot_system_disk_dev            -> "/dev/wd0"
  *   ovmx_boot_system_disk_present        -> stat("/dev/wd0") && S_ISBLK
- *   ovmx_boot_mount_system_disk          -> NetBSD mount(2) "vmsfs", fspec=dev
  *   ovmx_boot_power_off                  -> sync(); reboot(RB_HALT|RB_POWERDOWN)
  *
  * FAIL-HONEST (INV-6 / CLAUDE.md Rule 9). Exactly as on Linux, an op reports
@@ -461,59 +460,7 @@ int ovmx_boot_load_module(const char *name)
         errno = saved;                           /* preserve modctl's errno */
         return -1;
     }
-    /* The executive driver is now loaded: give it its /dev/vms node the way
-     * Linux devtmpfs would have, so ovmx_boot_open_executive() can open it.
-     * A VFS module (vmsfs) has no device node -- ensure_exec_node() only acts
-     * for the executive and is a no-op otherwise. */
-    if (is_exec)
-        ensure_exec_node();
-    return 0;
-}
-
-int ovmx_boot_open_executive(void)
-{
-    return open("/dev/vms", O_RDWR | O_CLOEXEC);
-}
-
-const char *ovmx_boot_system_disk_dev(void)
-{
-    return OVMX_BOOT_SYSDISK_DEV;
-}
-
-int ovmx_boot_system_disk_present(void)
-{
-    struct stat st;
-    return stat(OVMX_BOOT_SYSDISK_DEV, &st) == 0 && S_ISBLK(st.st_mode);
-}
-
-int ovmx_boot_mount_system_disk(const char *mountpoint)
-{
-    /* NetBSD mount(2) carries the device INSIDE the fs args (fspec), unlike
-     * Linux's mount(dev, mp, type, ...). Every NetBSD disk filesystem's args
-     * struct begins with `char *fspec` (ffs / lfs / ext2fs / msdosfs / cd9660
-     * / ...); the OVMX ODS-2 vnode backend (rd vms-308 / vms-544d) uses exactly
-     * this shape -- `struct vmsfs_args { char *fspec; }`
-     * (src/kernel-netbsd/vmsfs/vmsfs_nb.h) -- so this modelled struct is the
-     * real args blob VFS_MOUNT consumes, byte-for-byte, not a stub.
-     *
-     * READ-WRITE (rd vms-e7a): the OVMX ODS-2 vnode backend now registers real
-     * write VOPs (VOP_SETATTR/WRITE/CREATE/MKDIR/REMOVE, alongside the
-     * existing VOP_LOOKUP/READ/READDIR/the exec-from-vmsfs pager), so the
-     * system volume mounts read-write here -- matching real VMS, which mounts
-     * its system disk read-write, and matching the Linux backend's mount mode.
-     * This is what lets PROVISION.EXE stamp UIC file ownership
-     * (provision_ownership()) and STARTUP write SYSUAF logs / account-dir
-     * files onto the mounted volume. tests/lab-vax/run-vmsfs.sh's read-only
-     * mount+read proof still passes MNT_RDONLY explicitly (a caller that asks
-     * for read-only still gets an honestly read-only mount: no bitmap load,
-     * every write VOP refuses with EROFS). A blank or unformatted volume still
-     * fails to mount (nonzero return), and PID 1 halts (it does NOT initialize
-     * or install -- design-init-scope.md §1). */
-    struct vmsfs_args { char *fspec; } args;
-    args.fspec = (char *)OVMX_BOOT_SYSDISK_DEV;
-    return mount("vmsfs", mountpoint, 0, &args, sizeof args);
-}
-
+    
 const char *ovmx_boot_system_disk_unit(void)
 {
     return "DKA0:";
@@ -540,28 +487,18 @@ int ovmx_boot_acp_mount_system_disk(void)
 #endif
 }
 
-/* The flagless boot path's whole system-disk mount, NetBSD side (vms-5f0):
- * NetBSD keeps the vmsfs VFS mount for SYS$DISK (the Files-11 ACP flip is the
- * Linux path only for now, vms-d5d). Load vmsfs.ko first (best-effort;
- * already-loaded is fine -- EEXIST is survivable), then mount the system disk
- * as vmsfs at SYSDISK_MOUNT. Relocated VERBATIM from ovmx_init.c's pre-seam
- * #else branch so the boot sequence stays ONE substrate-neutral source
- * (INV-DRIFT) -- same operations, same order, same errno contract. The
- * vmsfs.ko-load warning is OVMX-facility, not a borrowed VMS message: VMS never
- * narrates a kernel module load (vms-1fb facility audit). */
+/* The boot path's whole system-disk mount, NetBSD side. Since vms-329 this is
+ * the ACP $MOUNT and nothing else -- the vmsfs.ko load + VFS mount it used to
+ * perform are retired along with ovmx_boot_mount_system_disk() itself. */
 int ovmx_boot_mount_system_disk_native(void)
 {
-#if defined(OVMX_HAVE_ACP)
-    /* vms-d5d FLIP: mount SYS$DISK over the executive ACP (same as Linux) -- no
-     * vmsfs.ko, no VFS mount; the /vms + POSIX bypass is retired on VAX. */
+    /* vms-d5d/vms-329 FLIP, COMPLETE: $MOUNT SYS$DISK over the executive
+     * Files-11 ACP -- no vmsfs.ko, no VFS mount, no /vms POSIX bypass. There is
+     * deliberately NO fallback arm: NetBSD's spec_vnops permits exactly one
+     * open of /dev/ra1c, so the ACP $MOUNT and a vmsfs VFS mount can never
+     * coexist, and a volume the ACP will not mount is a fail-honest halt in
+     * PID 1 (INV-6), not a quiet reversion to the retired path. */
     return ovmx_boot_acp_mount_system_disk();
-#else
-    if (ovmx_boot_load_module("vmsfs") != 0 && errno != EEXIST) {
-        fprintf(stderr, "%%OVMX-W-MODFAIL, failed to load vmsfs.ko: %s\n",
-                strerror(errno));
-    }
-    return ovmx_boot_mount_system_disk(SYSDISK_MOUNT);
-#endif
 }
 
 /*

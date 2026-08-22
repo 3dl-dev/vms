@@ -67,6 +67,16 @@ else()
     )
 endif()
 
+# vms-329: PROVISION's system-tree / account-home provisioning runs over the
+# executive Files-11 ACP (IO$_MODIFY / IO$_CREATE by FID) on EVERY runtime
+# substrate. Those arms used to be keyed on __linux__, which silently left the
+# netbsd-vax image on POSIX lchown()/mkdir(); they are keyed on OVMX_HAVE_ACP
+# now, so this target must define it (the netbsd-vax cross recipe,
+# tools/cross-vax/build-provision-vax.sh, passes the same -D). PROVISION.EXE is
+# a runtime image with no unit/standalone configuration, so it is unconditional
+# -- exactly like src/ovmx_init/CMakeLists.txt.
+target_compile_definitions(ovmx_provision PRIVATE OVMX_HAVE_ACP)
+
 # vms-d92: PROVISION enumerates the binary $UAFDEF SYSUAF through the RMS
 # Prolog-3 engine over the ODS-2 ACP (ovmx_sysuaf_enum, src/vmsrms/
 # sysuaf_live.c), so it links LIBVMSRMS.

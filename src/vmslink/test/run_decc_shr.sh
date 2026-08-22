@@ -137,4 +137,35 @@ nm -u "$WORK/decc_proxy.o" | grep 'decc\$' || { echo "FAIL: proxy has no decc\$ 
 echo "proxy linked clean: every decc\$ import bound to DECC\$SHR's alias vector"
 
 echo
+echo "== DEC C RTL special routines (vms-3e4 R1b-2a): errno accessors + dual-pointer malloc =="
+# Real impls (ovmx_decc_crtl.c), not musl aliases: get_errno_addr /
+# get_vms_errno_addr (per-thread errno cells) + _malloc32 / _malloc64 (the port
+# crt0's dual-pointer allocators). Assert each is a PROCEDURE universal, then link
+# a proxy that imports them.
+for s in get_errno_addr get_vms_errno_addr _malloc32 _malloc64; do
+    echo "$OUT" | awk -v s="$s" '/PROCEDURE/ && $NF==s {f=1} END{exit !f}' \
+        || { echo "FAIL: $s missing / not a PROCEDURE universal (R1b-2a special routines)"; exit 1; }
+done
+cat > "$WORK/decc_crtl_proxy.c" <<'EOF'
+extern int  *get_errno_addr(void);
+extern int  *get_vms_errno_addr(void);
+extern int   _malloc32(int);
+extern void *_malloc64(unsigned long);
+void _start(void) {
+    volatile int  *e  = get_errno_addr();
+    volatile int  *ve = get_vms_errno_addr();
+    volatile int   p32 = _malloc32(32);
+    volatile void *p64 = _malloc64(64);
+    (void)e; (void)ve; (void)p32; (void)p64;
+    __asm__ volatile("mov $60,%%eax\n\txor %%edi,%%edi\n\tsyscall" ::: "eax","edi","memory");
+    __builtin_unreachable();
+}
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/decc_crtl_proxy.o" "$WORK/decc_crtl_proxy.c"
+"$WORK/LINK.EXE" --executable --use "$WORK/DECC\$SHR.EXE" \
+    -o "$WORK/DECCCRTLPROXY.EXE" "$WORK/decc_crtl_proxy.o" \
+    || { echo "FAIL: special-routine proxy did not link against DECC\$SHR (R1b-2a incomplete)"; exit 1; }
+echo "R1b-2a OK: errno accessors + _malloc32/_malloc64 exported and bound (real impls, not stubs)"
+
+echo
 echo "ALL DECC\$SHR PRODUCER CHECKS PASSED"

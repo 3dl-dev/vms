@@ -227,8 +227,6 @@ vms_devtab_disk_backing(const char *devnam, uint32_t *major_out,
 		return SS__NOSUCHDEV;
 	error = vn_bdev_openpath(pb, &devvp, curlwp);
 	pathbuf_destroy(pb);
-	printf("OVMXTRACE: vn_bdev_openpath(%s) error=%d devvp=%p\n",
-	    devpath, error, (void *)devvp);
 	if (error || devvp == NULL)
 		return SS__NOSUCHDEV;	/* device absent/unopenable -- honest */
 
@@ -309,8 +307,6 @@ vms_devtab_disk_resolve(const char *devnam, char *backing, size_t backing_sz,
 		return SS__NOSUCHDEV;
 	error = vn_bdev_openpath(pb, &devvp, curlwp);
 	pathbuf_destroy(pb);
-	printf("OVMXTRACE: vn_bdev_openpath(%s) error=%d devvp=%p\n",
-	    devpath, error, (void *)devvp);
 	if (error || devvp == NULL)
 		return SS__NOSUCHDEV;	/* device absent/unopenable -- honest */
 
@@ -371,19 +367,11 @@ exec_blockdev_read_block(unsigned int major_, unsigned int minor_,
 
 	error = bread(devvp, (daddr_t)lbn, OVMX_ACP_BLOCK_SIZE, 0, &bp);
 	if (error || bp == NULL) {
-		printf("OVMXTRACE: bread lbn=%u FAILED error=%d bp=%p\n",
-		    (unsigned)lbn, error, (void *)bp);
 		if (bp != NULL)
 			brelse(bp, 0);
 		return -1;
 	}
 	memcpy(buf, bp->b_data, OVMX_ACP_BLOCK_SIZE);
-	printf("OVMXTRACE: bread lbn=%u OK b0..7=%02x %02x %02x %02x %02x %02x %02x %02x\n",
-	    (unsigned)lbn,
-	    ((unsigned char *)buf)[0], ((unsigned char *)buf)[1],
-	    ((unsigned char *)buf)[2], ((unsigned char *)buf)[3],
-	    ((unsigned char *)buf)[4], ((unsigned char *)buf)[5],
-	    ((unsigned char *)buf)[6], ((unsigned char *)buf)[7]);
 	brelse(bp, 0);
 	return 0;
 }

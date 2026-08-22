@@ -316,7 +316,16 @@ master_system_volume() {
     echo "${listing}" | grep -qiF "${f}" \
       || die "mastered system volume is MISSING ${f} -- staging/caching regression (vms-72da)"
   done
-  log "mastered system volume carries DCL.EXE + PROVISION.EXE + OVMXVMSSYS.PAR"
+  # vms-329: [USERS] must be on the volume or PROVISION's home-directory pass has
+  # no parent to create the four account homes in, and reports four
+  # %OVMX-W-OWNER "did not resolve over the ACP (parent missing?)" -- which the
+  # sysboot proof fails on, correctly. distro/Dockerfile.bootable gates the
+  # x86_64 distribution image on the same "]USERS.DIR;" line; this is its vax
+  # twin, so a stage_sysvol.sh regression fails HERE and not three minutes into
+  # a SIMH boot.
+  echo "${listing}" | grep -qiE '\]USERS\.DIR' \
+    || die "mastered system volume is MISSING [USERS] -- PROVISION cannot create the account home directories over the ACP (vms-329)"
+  log "mastered system volume carries DCL.EXE + PROVISION.EXE + OVMXVMSSYS.PAR + [USERS]"
 }
 
 # 3d (install). Cross-build the FULL shipped vax image set via the top-level

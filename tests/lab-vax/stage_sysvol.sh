@@ -173,6 +173,31 @@ done
 [ -f "$SYSEXE/DCL.EXE" ]       || die "DCL.EXE not staged at the rooted SYSEXE path"
 [ -f "$SYSEXE/PROVISION.EXE" ] || die "PROVISION.EXE not staged at the rooted SYSEXE path"
 
+# 4b. [USERS] and [SYSTMP] -- the two SYSTEM-writable persistent system-disk
+#     directories (vms-329). distro/Dockerfile.bootable creates exactly these
+#     two in /system-stage/vms before mastering ovmx-distrib.img and gates on
+#     "]USERS.DIR;" being in the mastered listing; they are absent from
+#     distro/rootfs/vms because git cannot carry an empty directory, so every
+#     mastering step must create them itself. This one did not, and the vax
+#     volume therefore shipped with no [USERS].
+#
+#     WHY IT ONLY SURFACED NOW. PROVISION's home-directory pass used to lchown()
+#     a /vms passthrough path, and a missing parent came back ENOENT and was
+#     silently swallowed -- it "provisioned" four home directories that did not
+#     exist and said nothing. Post-cutover the ACP arm resolves the parent DID
+#     for real and reports the truth:
+#         %OVMX-W-OWNER, home directory SYS$SYSDEVICE:[USERS.DEFAULT] did not
+#                        resolve over the ACP (parent missing?)
+#     (x4: DEFAULT/GUEST/USER1/USER2). That is the fake-success being removed,
+#     not a new defect -- the media was always short a directory. With [USERS]
+#     present PROVISION CREATEs each home under it over IO$_CREATE, owned by the
+#     account's UIC. vmsfs_master masters directories SYSTEM-owned [1,4] with
+#     VMSFS_PROT_DEFAULT (tools/vmsfs_master.c), the ownership+protection
+#     SYS$SCRATCH / SYS$LOGIN need.
+mkdir -p "$STAGE/USERS" "$STAGE/SYSTMP"
+[ -d "$STAGE/USERS" ]  || die "[USERS] not staged"
+[ -d "$STAGE/SYSTMP" ] || die "[SYSTMP] not staged"
+
 # 5. Distribution mode only: lay the VAX OS kit at SYS$UPDATE:OVMX-OS-VAX.KIT.
 #    SYS$UPDATE is [SYS0.SYSCOMMON.SYSUPD] (DEFINEd in STARTUP.COM), the standard
 #    VMS home for layered-product install kits -- the exact path OVMX$INSTALL.COM

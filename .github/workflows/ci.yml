@@ -4026,6 +4026,15 @@ jobs:
         run: |
           sh src/vmslink/test/run_test_x86_64.sh
 
+      # vms-cbe: the EVAX (Alpha/VMS) object reader front end — parse a REAL
+      # native VMS object (checked-in fixture from binutils alpha-dec-vms-as)
+      # into psects + symbols. Pure byte parsing, arch-independent, no toolchain
+      # at test time. First slice toward LINK.EXE consuming the alpha-dec-vms
+      # port's intrinsic .obj output (the do-it-like-VMS ladder).
+      - name: Prove the EVAX/VMS-object reader parses a real Alpha/VMS object (vms-cbe)
+        run: |
+          sh src/vmslink/test/run_evax_read.sh
+
       # vms-2e4: the LAST x86_64 relocation class — gnu2-dialect TLSDESC
       # (R_X86_64_GOTPC32_TLSDESC + R_X86_64_TLSDESC_CALL, plus the
       # local-dynamic R_X86_64_DTPOFF32 / _TLS_MODULE_BASE_ half). Proof is

@@ -38,7 +38,11 @@
 #   SYS0/SYSCOMMON/SYSHLP/       HELPLIB.HLP (reused)
 #   SYS0/SYSCOMMON/SYSUPD/       PARTS_SETUP.COM (reused)
 #
-# Everything except the five .EXE images and SYSTARTUP_VMS.COM is copied
+# In --distribution mode SYSEXE additionally carries the four SYS$SYSTEM utility
+# images the install procedure runs off its own media: PRODUCT.EXE (PCSI),
+# AUTHORIZE.EXE, SYSGEN.EXE and INITIALIZE.EXE (see UTIL_IMAGES below).
+#
+# Everything except the .EXE images and SYSTARTUP_VMS.COM is copied
 # VERBATIM from distro/rootfs/vms -- those files are architecture-independent
 # data/DCL (INV-DRIFT: one source of truth, no vax fork of the data).
 #
@@ -101,7 +105,26 @@ ROOTFS="$REPO/distro/rootfs/vms"
 VAX_SYSTARTUP="$REPO/distro/rootfs-vax/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
 VAX_DISTRIB_SYSTARTUP="$REPO/distro/rootfs-distrib-only-vax/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
 BOOT_IMAGES="DCL.EXE PROVISION.EXE LOGINOUT.EXE JOB_CONTROL.EXE STARTUP.EXE"
-KIT_DEST_NAME="OVMX-OS-VAX.KIT"
+# SYS$SYSTEM utility images (vms-d0e5). Installer media is a BOOTABLE SYSTEM
+# DISK: its SYSEXE carries the utilities the install procedure actually runs --
+# PRODUCT.EXE (PCSI), AUTHORIZE.EXE (the SYSTEM password step), SYSGEN.EXE (the
+# SCSNODE/SCSSYSTEMID step) and INITIALIZE.EXE (the INITIALIZE branch). The vax
+# media previously carried ONLY the five boot images, so OVMX$INSTALL.COM's
+# `PRODUCT INSTALL' found no PRODUCT.EXE anywhere -- PID 1's utility staging
+# (ovmx_init.c stage_boot_images, best-effort by design) correctly skipped an
+# image the volume did not have, dcl_exec_utility()'s execvp fell through, and
+# the install died %PCSI-F-NOIMG with the target untouched. Staged from
+# IMAGES_DIR when present, so the DEFAULT (installed-system) mode -- whose
+# images dir holds only the boot five -- is byte-for-byte unchanged.
+UTIL_IMAGES="PRODUCT.EXE AUTHORIZE.EXE INITIALIZE.EXE SYSGEN.EXE"
+# The media name the (arch-neutral) OVMX$INSTALL.COM reads its payload from:
+# `PRODUCT INSTALL VMS /SOURCE=SYS$UPDATE:OVMX-OS.KIT'. The x86_64 media stages
+# its host artifact `ovmx-os.kit' under exactly this name
+# (distro/Dockerfile.bootable), and the kit's own manifest -- not its filename
+# -- carries the architecture ("OVMX VAXVMS VMS" vs "OVMX X86VMS VMS"), so the
+# vax host artifact OVMX-OS-VAX.KIT lands on the media under the same
+# media-standard name. One procedure, one media name (INV-DRIFT).
+KIT_DEST_NAME="OVMX-OS.KIT"
 
 die() { echo "[stage_sysvol] FATAL: $*" >&2; exit 1; }
 
@@ -166,6 +189,25 @@ for img in $BOOT_IMAGES; do
     [ -f "$src" ] || die "boot image missing from images dir: $src"
     cp "$src" "$SYSEXE/$img"
 done
+
+# 3b. Drop the SYS$SYSTEM utility images into SYSEXE (vms-d0e5). Present-only,
+#     so the default (installed-system) mode with a boot-images-only IMAGES_DIR
+#     stages nothing new; in --distribution mode ALL FOUR are REQUIRED -- media
+#     that cannot run PRODUCT/AUTHORIZE/SYSGEN cannot perform an install, and a
+#     silently-short volume is exactly the failure this rung is closing.
+for img in $UTIL_IMAGES; do
+    src="$IMAGES_DIR/$img"
+    if [ -f "$src" ]; then
+        cp "$src" "$SYSEXE/$img"
+    elif [ "$DISTRIBUTION" -eq 1 ]; then
+        die "distribution media requires the SYS\$SYSTEM utility image $img (missing from $IMAGES_DIR) -- OVMX\$INSTALL.COM runs PRODUCT/AUTHORIZE/SYSGEN off the media's own SYSEXE"
+    fi
+done
+if [ "$DISTRIBUTION" -eq 1 ]; then
+    for img in $UTIL_IMAGES; do
+        [ -f "$SYSEXE/$img" ] || die "$img not staged at the rooted SYSEXE path"
+    done
+fi
 
 # 4. Sanity: the boot gate marker (DCL.EXE) and the startup image PID 1 execs
 #    (PROVISION.EXE) must be present at the rooted path require_installed_system()

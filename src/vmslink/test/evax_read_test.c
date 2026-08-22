@@ -83,7 +83,43 @@ int main(int argc, char **argv)
     CHECK(ep && ep->psindx == 3, "EXAMPLE_PROC defined in psect index 3 ($LINK$)");
     CHECK(er && !er->defined, "EXT_ROUTINE present and UNDEFINED (external ref)");
 
+    /* --- relocations (slice 2): must match alpha-dec-vms-objdump -r ---
+     *   $CODE$ (psect 0): LINKAGE @0x8  -> EXT_ROUTINE
+     *   $LINK$ (psect 3): REFQUAD @0x0  -> EXT_ROUTINE
+     *                     REFQUAD @0x10 -> section $CODE$ (index 0) */
+    static const char *rtn[] = { "REFLONG","REFQUAD","CODEADDR","LINKAGE","NOP","BSR","LDA","BOH" };
+    for (int i = 0; i < o.nreloc; i++) {
+        const struct evax_reloc *r = &o.reloc[i];
+        printf("  reloc[%d] %-8s psect=%d @0x%llx -> %s addend=0x%llx\n",
+               i, rtn[r->type], r->psect, (unsigned long long)r->address,
+               r->to_section >= 0 ? o.sec[r->to_section].name : r->sym,
+               (unsigned long long)r->addend);
+    }
+    CHECK(o.nreloc == 3, "expected 3 relocations, got %d", o.nreloc);
+
+    int code_idx = -1, link_idx = -1;
+    for (int i = 0; i < o.nsec; i++) {
+        if (!strcmp(o.sec[i].name, "$CODE$")) code_idx = i;
+        if (!strcmp(o.sec[i].name, "$LINK$")) link_idx = i;
+    }
+    int saw_linkage = 0, saw_extq = 0, saw_secq = 0;
+    for (int i = 0; i < o.nreloc; i++) {
+        const struct evax_reloc *r = &o.reloc[i];
+        if (r->type == EVAX_R_LINKAGE && r->psect == code_idx && r->address == 0x8 &&
+            r->to_section < 0 && !strcmp(r->sym, "EXT_ROUTINE"))
+            saw_linkage = 1;
+        if (r->type == EVAX_R_REFQUAD && r->psect == link_idx && r->address == 0x0 &&
+            r->to_section < 0 && !strcmp(r->sym, "EXT_ROUTINE"))
+            saw_extq = 1;
+        if (r->type == EVAX_R_REFQUAD && r->psect == link_idx && r->address == 0x10 &&
+            r->to_section == code_idx)
+            saw_secq = 1;
+    }
+    CHECK(saw_linkage, "LINKAGE @ $CODE$+0x8 -> EXT_ROUTINE");
+    CHECK(saw_extq,    "REFQUAD @ $LINK$+0x0 -> EXT_ROUTINE");
+    CHECK(saw_secq,    "REFQUAD @ $LINK$+0x10 -> section $CODE$");
+
     if (failures) { printf("\n%d assertion(s) FAILED\n", failures); return 1; }
-    printf("\nALL EVAX READER (slice 1) CHECKS PASSED\n");
+    printf("\nALL EVAX READER (slice 1 psects/symbols + slice 2 relocs) CHECKS PASSED\n");
     return 0;
 }

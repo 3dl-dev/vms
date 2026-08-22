@@ -1303,7 +1303,12 @@ static int dcl_highest_version(const char *path, char *out, size_t sz)
     return 1;
 }
 
-#if defined(__linux__)
+/* KEYED ON OVMX_HAVE_ACP, NOT __linux__ (vms-329): the coupled VAX cutover
+ * retired the netbsd-vax /vms VFS mount, so the legacy opendir()/access()
+ * resolver below can no longer find ANY image on that substrate -- DCL must
+ * resolve activatable images through the executive ACP there exactly as it does
+ * on Linux. dcl_rms_read_open()/rms_file_attr are already substrate-neutral. */
+#if defined(OVMX_HAVE_ACP)
 /* True if the final name component of a VMS filespec already carries a ".type"
  * (so ".EXE" must NOT be appended). Scans past the device/directory. */
 static int dcl_spec_has_type(const char *spec)
@@ -1454,12 +1459,12 @@ static int dcl_resolve_activatable_acp(struct dcl_context *ctx,
     }
     return 0;   /* ACP present, every spelling absent: honest miss (INV-6) */
 }
-#endif /* __linux__ */
+#endif /* OVMX_HAVE_ACP */
 
 int dcl_resolve_activatable(struct dcl_context *ctx, const char *vms_spec,
                             const char *linux_path, char *resolved, size_t sz)
 {
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     /* ATOMIC FLIP (vms-5f0): the image lives on the genuine ODS-2 SYS$DISK, not
      * the retired /vms passthrough. When the executive Files-11 ACP is present,
      * resolve THROUGH it and NEVER fall back to a /vms opendir()/access() probe

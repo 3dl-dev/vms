@@ -3510,3 +3510,16 @@ int main(int argc, char **argv)
                    producers, np, out, executable);
     return 0;
 }
+
+/* --------------------------------------------------------------------------
+ * vms-cbe: the EVAX (Alpha/VMS) object front end is compiled AS PART OF this
+ * translation unit. link.c is built by ~40 sites (every mk_*.sh / run_*.sh that
+ * produces a LINK.EXE, plus the CMake `vmslink` target); pulling evax_read.c in
+ * here means none of them needs a new source-list entry — sidestepping the
+ * new-TU enumeration trap that has repeatedly reddened a stray CI leg. There is
+ * no double definition: no build both links this TU and a separate evax_read.o
+ * (the standalone reader unit test, run_evax_read.sh, compiles evax_read.c on
+ * its own and links only evax_read_test.o with it). The declarations are already
+ * visible via the "evax_read.h" include near the top.
+ * -------------------------------------------------------------------------- */
+#include "evax_read.c"

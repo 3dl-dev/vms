@@ -47,6 +47,7 @@ SRCS=		vms_netbsd.c \
 		vms_proctab.c \
 		vms_lock.c \
 		vms_lnm.c \
+		vms_devtab.c \
 		vmsfs_acp.c \
 		ods2_reader.c \
 		ods2_edit.c \
@@ -81,5 +82,14 @@ CPPFLAGS+=	-I${.CURDIR} -I${.CURDIR}/../kernel-core -DOVMX_KBACKEND_NETBSD
 # vmsfs_acp.c/exec_kbackend_netbsd.h (fail-honest SS$_DEVNOTMOUNT otherwise);
 # -I../vmsfs/include supplies the genuine ODS-2 codec header vmsfs/ods2.h.
 CPPFLAGS+=	-DOVMX_ODS2_KERNEL -I${.CURDIR}/../vmsfs/include
+# vms-618: -DOVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE compiles OUT vms_devtab.c's two
+# TABLE-READ disk resolvers (vms_devtab_disk_backing / vms_ioctl_disk_resolve),
+# because this substrate needs resolvers that also lazily OPEN + cache the
+# backing device vnode (and that must NOT hold the INITIALIZE target open --
+# NetBSD allows one open of a block device). Those definitions live in
+# vms_blockdev_netbsd.c; the guard's full reasoning is in vms_devtab.c. NOTHING
+# ownership-shaped is substrate-local: the table itself and $ALLOC/$DALLOC/
+# $ASSIGN/$DASSGN/$GETDVI/$DEVICE_SCAN have exactly ONE implementation.
+CPPFLAGS+=	-DOVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE
 
 .include <bsd.kmodule.mk>

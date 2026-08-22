@@ -76,7 +76,7 @@ ln -sf "$SYS/arch/vax/include" "$KL/vax"
 # bsd.kmodule.mk adds -fno-pic for exactly this reason (share/mk/bsd.kmodule.mk),
 # and the vax kernel Makefile builds -fno-pic. -Werror so a warning is fatal.
 CFLAGS="-std=gnu99 -O2 -fno-pic -Werror -Wall -ffreestanding -fno-strict-aliasing -fno-omit-frame-pointer"
-CPPFLAGS="-DOVMX_KBACKEND_NETBSD -DOVMX_ODS2_KERNEL -nostdinc -isystem $KL -isystem $SYS -isystem $SYS/arch -isystem $SYS/../common/include -D_KERNEL -D_MODULE -I$KMOD -I$CORE -I$ODS2_INC"
+CPPFLAGS="-DOVMX_KBACKEND_NETBSD -DOVMX_ODS2_KERNEL -DOVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE -nostdinc -isystem $KL -isystem $SYS -isystem $SYS/arch -isystem $SYS/../common/include -D_KERNEL -D_MODULE -I$KMOD -I$CORE -I$ODS2_INC"
 
 # EXACTLY src/kernel-netbsd/Makefile's SRCS (= B1's SRCS): the NetBSD backend
 # glue + OVMX intrusive containers + the SHARED executive facility sources.
@@ -92,6 +92,7 @@ SRCS="$KMOD/vms_netbsd.c \
       $CORE/vms_proctab.c \
       $CORE/vms_lock.c \
       $CORE/vms_lnm.c \
+      $CORE/vms_devtab.c \
       $CORE/vmsfs_acp.c \
       $ODS2/ods2_reader.c \
       $ODS2/ods2_edit.c \
@@ -144,6 +145,19 @@ echo "=== build the userspace ping probe (static elf32-vax) ==="
 echo "  OK: vmsprobe (static elf32-vax)"
 echo
 
+echo "=== build the device-allocation probe (static elf32-vax, rd vms-618) ==="
+# The cross-process $ALLOC/$DALLOC test program. Same static link + same
+# transport seam as vmsprobe above; the harness runs it as SEPARATE guest
+# processes so a second process really is a second process (INV-6: the decisive
+# check is that process B is refused SS$_DEVALLOC for a device process A holds).
+"$CC" -O -Wall -Wextra -static \
+    -I"$LIBVMSSYS" -I"$KMOD" \
+    -o "$OUT/vmsdevalloc" \
+    "$PROBE/vmsdevalloc.c" "$LIBVMSSYS/kif_transport_netbsd.c"
+"$OBJDUMP" -f "$OUT/vmsdevalloc" | grep -qiF 'file format elf32-vax' || { echo "FAIL: vmsdevalloc not elf32-vax"; exit 1; }
+echo "  OK: vmsdevalloc (static elf32-vax)"
+echo
+
 echo "=== ARTIFACTS ==="
-ls -l "$OUT/vms.kmod" "$OUT/vmsprobe"
+ls -l "$OUT/vms.kmod" "$OUT/vmsprobe" "$OUT/vmsdevalloc"
 echo "=== build-devvms-vax.sh: DONE (both elf32-vax artifacts ready for SIMH) ==="

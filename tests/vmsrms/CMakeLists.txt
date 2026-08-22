@@ -17,6 +17,30 @@ set_tests_properties(vmsrms_unit PROPERTIES
     TIMEOUT 30
 )
 
+# vms-0f5: the RMS ACP read-ahead is a VMS multiblock window (RMS_DFMBC blocks),
+# not one 512-byte block per QIO. Compiles rms_io.c straight in with
+# OVMX_HAVE_ACP against a counting mock of vms_kif_acp_readvb (no libvmsrms link,
+# so exactly one definition of the record primitives), reads a file byte-by-byte
+# (the rms_seq.c / SYSUAF-index pattern), and asserts the QIO count is the VMS
+# multiblock rate and strictly below the old per-block rate. Host-only, no
+# /dev/vms. Guards the perf fix the ODS-2-over-ACP flip made necessary.
+add_executable(test_rms_io_rahead
+    test_rms_io_rahead.c
+    ${CMAKE_SOURCE_DIR}/src/vmsrms/rms_io.c
+)
+target_compile_definitions(test_rms_io_rahead PRIVATE OVMX_HAVE_ACP)
+target_include_directories(test_rms_io_rahead PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsrms
+    ${CMAKE_SOURCE_DIR}/src/libvmssys
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+add_test(NAME vmsrms_rms_io_rahead COMMAND test_rms_io_rahead)
+set_tests_properties(vmsrms_rms_io_rahead PROPERTIES
+    LABELS "unit;rms;perf"
+    TIMEOUT 30
+)
+
 # vms-5f0: genuine Files-11 Prolog-3 indexed READ over the ACP block substrate.
 # Authors a real Prolog-3 image (fixed prolog + key descriptor + single-level
 # key-of-reference index bucket + two data buckets) and reads records BY PRIMARY

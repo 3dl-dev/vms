@@ -188,12 +188,16 @@ static ssize_t rms_io_readvb_at(rms_file_t *f, uint64_t at, void *buf, uint32_t 
 }
 
 /*
- * read(2) emulation over the ACP, with a one-block read-ahead cache (vms-4ac).
- * Sequential text (STMLF) records are read byte-by-byte by rms_seq.c; without a
- * cache that was one IO$_READVBLK per byte. Small reads are now served from a
- * single cached 512-byte block, refilled with one QIO per block; a large read
- * (>= a block) bypasses the cache and transfers directly. The cache is keyed by
- * absolute file offset, so an lseek that lands inside it still hits.
+ * read(2) emulation over the ACP, with a multiblock read-ahead cache (vms-4ac,
+ * widened to the VMS multiblock count in vms-0f5). Sequential text (STMLF)
+ * records are read byte-by-byte by rms_seq.c; without a cache that was one
+ * IO$_READVBLK per byte. Small reads are served from the cached window,
+ * refilled with one QIO per RMS_IO_RAHEAD_BYTES (the VMS RMS_DFMBC multiblock
+ * count) instead of per 512 bytes -- so a sequential scan issues QIOs at
+ * 1/RMS_IO_RAHEAD_BLKS the old rate, the cost the ODS-2-over-ACP flip exposed
+ * under emulation. A large read (>= a block) still bypasses the cache and
+ * transfers directly (up to 1 MiB/QIO). The cache is keyed by absolute file
+ * offset, so an lseek that lands inside it still hits.
  */
 static ssize_t rms_io_read_acp(rms_file_t *f, void *buf, size_t n)
 {
@@ -237,11 +241,13 @@ static ssize_t rms_io_read_acp(rms_file_t *f, void *buf, size_t n)
             continue;
         }
 
-        /* Small read: refill the cache with one block at the cursor's block
-         * boundary, then loop to serve from it. */
+        /* Small read: refill the cache with a multiblock read-ahead window at
+         * the cursor's block boundary, then loop to serve from it. The ACP
+         * clamps at valid EOF, so a short file just fills rbuf_len < the
+         * window. */
         {
             uint64_t base = (f->cursor / RMS_IO_BLK) * RMS_IO_BLK;
-            ssize_t got = rms_io_readvb_at(f, base, f->rbuf, RMS_IO_BLK);
+            ssize_t got = rms_io_readvb_at(f, base, f->rbuf, RMS_IO_RAHEAD_BYTES);
             if (got < 0)
                 return -1;
             if (got == 0)

@@ -34,6 +34,25 @@
 #include <sys/types.h>
 
 /*
+ * ACP read-ahead granularity, grounded to the VMS RMS multiblock model.
+ * Real OpenVMS RMS never transfers one block per record: sequential access
+ * reads a MULTIBLOCK COUNT (MBC) of blocks per I/O (FAB$B_MULTIBLOCK /
+ * SET RMS_DEFAULT/BLOCK_COUNT, SYSGEN param RMS_DFMBC), then serves records
+ * from the in-memory buffer. OVMX's read-ahead mirrors that: RMS_IO_RAHEAD_BLKS
+ * blocks are pulled per QIO instead of one, cutting guest->executive mode
+ * switches by that factor on the byte-at-a-time text/record and SYSUAF-index
+ * paths -- the cost the ODS-2-over-ACP flip exposed under emulation (the wasm
+ * demo runs pure TCG, where each mode switch is dear).
+ *
+ * The value is the VMS default multiblock count (RMS_DFMBC). Pinning the exact
+ * default to the oracle and exposing a real per-file MBC/MBF via SET
+ * RMS_DEFAULT is tracked as vms-5b5; until then this is the documented
+ * VMS-plausible default, NOT a magic buffer size.
+ */
+#define RMS_IO_RAHEAD_BLKS   16u                          /* VMS RMS_DFMBC default */
+#define RMS_IO_RAHEAD_BYTES  (RMS_IO_RAHEAD_BLKS * 512u)
+
+/*
  * An RMS accessed file: the executive channel $ASSIGNed to the volume plus the
  * state that lets the record engines treat it like a POSIX fd. Created by
  * rms_core (rms_impl_open / rms_impl_create) via the ACP, stored on
@@ -61,16 +80,18 @@ typedef struct rms_file {
      * bare fd the handle now owns in place of the retired FAB._linux_fd. Unused
      * by the ACP backend. */
     int      fd;
-    /* ACP read-ahead buffer (vms-4ac). Sequential text records are read
-     * BYTE-BY-BYTE (rms_seq.c STMLF scan), which without buffering was one
-     * IO$_READVBLK per byte -- ~69000 QIOs to read a 69 KB HELP library, slow
-     * enough to blow a 10s command timeout. rms_io_read_acp serves small reads
-     * from one cached block, refilling with a single QIO per 512 bytes.
-     * rbuf_len == 0 means "empty/invalid"; any write on the handle invalidates
-     * it. Not used by the POSIX backend. */
+    /* ACP read-ahead buffer (vms-4ac, widened to the VMS multiblock count in
+     * vms-0f5). Sequential text records are read BYTE-BY-BYTE (rms_seq.c STMLF
+     * scan), which without buffering was one IO$_READVBLK per byte -- ~69000
+     * QIOs to read a 69 KB HELP library, slow enough to blow a 10s command
+     * timeout. rms_io_read_acp serves small reads from this cache, refilling
+     * with a single QIO per RMS_IO_RAHEAD_BYTES (VMS RMS_DFMBC blocks) instead
+     * of per 512 bytes -- an RMS_IO_RAHEAD_BLKS-fold cut in QIOs on the scan
+     * path. rbuf_len == 0 means "empty/invalid"; any write on the handle
+     * invalidates it. Not used by the POSIX backend. */
     uint64_t rbuf_base;   /* file byte offset of rbuf[0] */
     uint32_t rbuf_len;    /* valid bytes in rbuf (0 == invalid) */
-    uint8_t  rbuf[512];
+    uint8_t  rbuf[RMS_IO_RAHEAD_BYTES];
 } rms_file_t;
 
 /*

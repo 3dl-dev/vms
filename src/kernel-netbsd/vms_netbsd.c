@@ -821,6 +821,52 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		}
 		return vms_facility_errno(r);
 
+	/*
+	 * VMS_IOCTL_REGISTER / _CONTINUE (vms-329): adopt-or-create this process's
+	 * executive PCB. Every other ioctl path here does that implicitly through
+	 * vms_proc_get(), which is why the op was never wired -- but the SHARED
+	 * userspace ACP client (src/imgact/imgact_acp.c, used by IMGACT.EXE, the RMS
+	 * ACP arm and PID 1's boot bridge) opens every file with acp_register() and
+	 * treats a failure as fatal. Unanswered, it returned ENOTTY -> SS$_NOSUCHDEV
+	 * and NO ACP file open could ever succeed on this substrate. This creates no
+	 * new policy: it returns the PCB vms_proc_get() builds anyway, matching the
+	 * Linux twin's "hand back the process that already exists" (vms_module.c).
+	 * _IOWR, 8 bytes: `data' is the kernel copy, answered in place.
+	 */
+	case VMS_IOCTL_REGISTER:
+	case VMS_IOCTL_REGISTER_CONTINUE: {
+		struct vms_register_args *ra = (struct vms_register_args *)data;
+
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+		ra->vms_pid = proc->vms_pid;
+		ra->status  = SS__NORMAL;
+		return 0;
+	}
+
+	/*
+	 * VMS_IOCTL_DASSGN (vms-329): release one assigned channel. Mirrors the
+	 * Linux fallback chain (vms_devtab.c) MINUS the device-channel table, which
+	 * is not in this module's SRCS -- mailbox first, then file-class (ACP). A
+	 * channel that is neither gets SS$_IVCHAN, never a fabricated success
+	 * (INV-6). Without this every ACP file open leaked its channel: PID 1 alone
+	 * stages ~20 images per boot.
+	 */
+	case VMS_IOCTL_DASSGN: {
+		struct vms_dassgn_args *da = (struct vms_dassgn_args *)data;
+
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+		if (vms_mbx_dassgn(proc, da->chan) == 0 ||
+		    vms_acp_dassgn(proc, da->chan) == 0)
+			da->status = SS__NORMAL;
+		else
+			da->status = SS__IVCHAN;
+		return 0;
+	}
+
 	case VMS_IOCTL_ACP_READVBLK:
 		return vms_acp_rw_bounce(l, data, 0);
 	case VMS_IOCTL_ACP_WRITEVBLK:

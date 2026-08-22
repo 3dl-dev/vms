@@ -281,6 +281,16 @@ this boot only. To bake a confirmed value into the golden image, boot once, `SET
 it at `SYSBOOT>`, `CONTINUE`, then `@SYS$UPDATE:AUTOGEN … SETPARAMS` (or
 `WRITE CURRENT` from `SYSGEN`) on the settled system and re-snap the golden.
 
+> **Known limitation — second node loses the auto-boot race (rd vms-0d1).**
+> Verified live: with `NODES="alpha1 alpha2"`, the knob reliably drives the
+> **first** node into `SYSBOOT>` and injects the param, but the **second** node
+> auto-boots (`boot dqa0`, serving on) before its watcher polls `P00>>>`, so the
+> knob never reaches `SYSBOOT>` there. Both nodes clone an **identical** flash.rom
+> NVRAM, so this is a bring-up timing race, not per-node state. A single-node
+> conversational run is reliable; a **two-node both-conversational** run is not
+> yet — fixing that (defeat the node-2 auto-boot when `SYSBOOT_PARAMS` is set) is
+> the follow-up needed before the two-node MSCP_LOAD=0 experiment can run clean.
+
 ## The Alpha cluster — it forms, then hits an emulator bug
 
 **A two-node Alpha VMScluster forms.** `NODES="alpha1 alpha2"` puts a whole

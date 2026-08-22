@@ -149,6 +149,9 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 ROADMAP_DOC = os.path.join(REPO_ROOT, "docs", "release-roadmap-to-1.0.md")
 BUILD_JSON = os.path.join(REPO_ROOT, "build", "roadmap.json")
 
+# Public site origin, used to build the Atom feed's stable ids and links.
+SITE_URL = "https://openvmx.3dl.dev"
+
 
 # --------------------------------------------------------------------------- #
 #  rd snapshot + rollups                                                        #
@@ -313,8 +316,24 @@ def git_releases() -> list[dict]:
     scored.sort(key=lambda kt: (kt[0], kt[1]), reverse=True)
     out = []
     for _, tag in scored:
-        out.append({"tag": tag, "note": RELEASE_NOTES.get(tag, "Point release.")})
+        out.append({"tag": tag, "note": RELEASE_NOTES.get(tag, "Point release."),
+                    "date": _tag_date(tag)})
     return out
+
+
+def _tag_date(tag: str) -> str | None:
+    """Committer date of the tag's commit, strict ISO-8601 (RFC 3339).
+
+    Deterministic (a tag's commit date is fixed), so surfacing it does not
+    break the reconcile idempotency contract — it is not a wall-clock stamp.
+    """
+    try:
+        return subprocess.run(
+            ["git", "-C", REPO_ROOT, "log", "-1", "--format=%cI", tag],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip() or None
+    except Exception:
+        return None
 
 
 def labeling_gaps(items: list[dict], by: dict[str, dict],
@@ -529,6 +548,53 @@ def public_json(data: dict, as_of: str) -> str:
     return json.dumps(obj, indent=1, sort_keys=False, ensure_ascii=False) + "\n"
 
 
+def atom_feed(data: dict, as_of: str) -> str:
+    """Atom 1.0 release feed for the public site (one entry per shipped tag).
+
+    Entry <updated> is the tag's committer date (deterministic); the feed
+    <updated> is the newest entry's date, so re-running reconcile with no new
+    tag produces a byte-identical file (idempotency contract, like the JSON).
+    Notes are trademark-scrubbed with the same contract as the site JSON.
+    """
+    from xml.sax.saxutils import escape
+
+    releases = data["releases"][:PUBLIC_RELEASE_LIMIT]
+
+    def entry_updated(rel: dict) -> str:
+        # Fall back to the as-of DATE (midnight UTC) only if a tag has no commit
+        # date — real release tags always resolve one.
+        return rel.get("date") or f"{as_of}T00:00:00+00:00"
+
+    feed_updated = entry_updated(releases[0]) if releases else f"{as_of}T00:00:00+00:00"
+
+    L = []
+    L.append('<?xml version="1.0" encoding="utf-8"?>')
+    L.append('<feed xmlns="http://www.w3.org/2005/Atom">')
+    L.append(f"  <title>OpenVMX releases</title>")
+    L.append("  <subtitle>Shipped releases of OpenVMX — the DCL and RMS "
+             "operating environment on the Linux and NetBSD kernels.</subtitle>")
+    L.append(f'  <link href="{SITE_URL}/atom.xml" rel="self"/>')
+    L.append(f'  <link href="{SITE_URL}/" rel="alternate"/>')
+    L.append(f"  <id>tag:openvmx.3dl.dev,2026:releases</id>")
+    L.append(f"  <updated>{feed_updated}</updated>")
+    L.append("  <author><name>OpenVMX</name></author>")
+    for rel in releases:
+        tag = rel["tag"]
+        note = _scrub(rel["note"])
+        updated = entry_updated(rel)
+        L.append("  <entry>")
+        L.append(f"    <title>{escape(tag)}</title>")
+        L.append(f"    <id>tag:openvmx.3dl.dev,2026:release/{escape(tag)}</id>")
+        L.append(f"    <updated>{updated}</updated>")
+        # The site has no per-release page; point the reader at the roadmap,
+        # which lists the shipped tags.
+        L.append(f'    <link href="{SITE_URL}/roadmap/" rel="alternate"/>')
+        L.append(f"    <summary>{escape(note)}</summary>")
+        L.append("  </entry>")
+    L.append("</feed>")
+    return "\n".join(L) + "\n"
+
+
 # --------------------------------------------------------------------------- #
 #  write helpers (idempotent)                                                   #
 # --------------------------------------------------------------------------- #
@@ -600,6 +666,9 @@ def main() -> int:
     if args.site_dir:
         site_data = os.path.join(args.site_dir, "data", "roadmap.json")
         write_if_changed(site_data, public_json(data, as_of), changed, args.check)
+        # 3b. public Atom release feed (served at the site root)
+        site_atom = os.path.join(args.site_dir, "atom.xml")
+        write_if_changed(site_atom, atom_feed(data, as_of), changed, args.check)
 
     if args.check:
         if changed:

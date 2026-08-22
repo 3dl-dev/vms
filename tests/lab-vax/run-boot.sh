@@ -421,9 +421,20 @@ master_distribution_volume() {
       /tmp/vmsfs_master --ods2 list /out/'"$(basename "${DISTRIB_IMG}")")"
   echo "${listing}"
   [ -f "${DISTRIB_IMG}" ] || die "distribution-volume mastering did not produce ${DISTRIB_IMG}"
-  echo "${listing}" | grep -qiF "OVMX-OS-VAX.KIT" \
-    || die "mastered distribution volume is MISSING OVMX-OS-VAX.KIT (staging regression, rd vms-d0e5)"
-  log "mastered distribution volume carries OVMX-OS-VAX.KIT (boots into OVMX\$INSTALL.COM)"
+  # The media name OVMX$INSTALL.COM actually reads (/SOURCE=SYS$UPDATE:OVMX-OS.KIT);
+  # the vax host artifact is OVMX-OS-VAX.KIT and stage_sysvol.sh lands it under
+  # the media-standard name, exactly as the x86_64 media stages ovmx-os.kit.
+  echo "${listing}" | grep -qiF "OVMX-OS.KIT" \
+    || die "mastered distribution volume is MISSING SYS\$UPDATE:OVMX-OS.KIT (staging regression, rd vms-d0e5)"
+  # Hard content gate (vms-d0e5): the media MUST carry the SYS$SYSTEM utility
+  # images OVMX$INSTALL.COM runs -- without PRODUCT.EXE the install dies
+  # %PCSI-F-NOIMG with the target untouched, three minutes into a SIMH boot.
+  # Fail HERE instead.
+  for f in PRODUCT.EXE AUTHORIZE.EXE SYSGEN.EXE INITIALIZE.EXE; do
+    echo "${listing}" | grep -qiF "]${f}" \
+      || die "mastered distribution volume is MISSING SYS\$SYSTEM:${f} -- the install procedure cannot run it (rd vms-d0e5)"
+  done
+  log "mastered distribution volume carries SYS\$UPDATE:OVMX-OS.KIT + PRODUCT/AUTHORIZE/SYSGEN/INITIALIZE (boots into OVMX\$INSTALL.COM)"
 }
 
 # 3g (install). Format a BLANK ODS-2 install target (label WORK) -- the mirror of

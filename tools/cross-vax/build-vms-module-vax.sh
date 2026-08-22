@@ -126,8 +126,16 @@ CPPFLAGS="-DOVMX_KBACKEND_NETBSD -DOVMX_ODS2_KERNEL -DOVMX_DEVTAB_SUBSTRATE_DISK
 #   vms_proctab.c       - executive process table ($GETJPI/$SETPRN/$PROCESS_SCAN)
 #   vms_lock.c          - distributed lock manager ($ENQ/$DEQ/$CONVERT/$GETLKI)
 #   vms_lnm.c           - executive-resident logical-name tables LNM$SYSTEM/GROUP/
-#                         JOB (rd vms-72da, the LAST facility): DEFINE/DELETE/
-#                         GETSCOPE + the read-only arena (sole exec_arena consumer)
+#                         JOB (rd vms-72da): DEFINE/DELETE/GETSCOPE + the
+#                         read-only arena (sole exec_arena consumer)
+#   vms_devtab.c        - the executive-resident DEVICE TABLE (rd vms-618, the
+#                         LAST facility to join): $ASSIGN/$DASSGN/$ALLOC/$DALLOC/
+#                         $GETDVI/$DEVICE_SCAN. Built with
+#                         -DOVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE, mirroring
+#                         src/kernel-netbsd/Makefile: the NetBSD substrate
+#                         supplies its own disk RESOLVERS (they must lazily open
+#                         + cache the backing vnode) in vms_blockdev_netbsd.c,
+#                         while the TABLE and every ownership rule stay shared.
 SRCS="$KMOD/vms_netbsd.c \
       $KMOD/vms_lnm_arena_netbsd.c \
       $KMOD/exec_list_netbsd.c \
@@ -266,8 +274,8 @@ done
 [ "$FAIL" -eq 0 ] || { echo "FAIL: at least one object was not elf32-vax/vax"; exit 1; }
 echo
 
-echo "=== ALL PROOFS PASSED: the OVMX executive vms module (14 TUs: vms_netbsd.c,"
+echo "=== ALL PROOFS PASSED: the OVMX executive vms module (15 TUs: vms_netbsd.c,"
 echo "    vms_lnm_arena_netbsd.c, exec_{list,hash,rbtree}_netbsd.c + shared"
-echo "    vms_{eflag,ast,access,mbx,proctab,lock,lnm}.c + the Files-11 ACP"
+echo "    vms_{eflag,ast,access,mbx,proctab,lock,lnm,devtab}.c + the Files-11 ACP"
 echo "    vmsfs_acp.c + its ods2_edit.c EDIT helpers, rd vms-6a7f)"
 echo "    cross-compiles + relocatable-links for elf32-vax, ILP32 width-clean ==="

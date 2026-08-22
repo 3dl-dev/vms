@@ -21,20 +21,29 @@
 # other lab-vax proofs use; every step is a SEPARATE guest process, so "another
 # process" really is another process):
 #   0. modload vms.kmod + mknod /dev/vms, and read back the executive's own
-#      unit-enumeration console lines -- positive evidence that DKA0:/DKA100:
-#      were entered in the table FROM REAL DEVICES (ra1c/ra2c), not invented.
-#   1. TEETH: alloc ZZZ0: -- a device that does not exist. MUST be
-#      SS$_NOSUCHDEV (2680). A rubber-stamp ALLOC would say NORMAL here.
-#   2. A: alloc_hold DKA100: -- $ALLOC succeeds (SS$_NORMAL), A holds it.
-#   3. B (a DIFFERENT process, while A holds): alloc DKA100: -- MUST be
+#      unit-enumeration console lines -- positive evidence that DKA0: was
+#      entered in the table FROM THE REAL DEVICE ra1c, and that DKA100:, whose
+#      device is NOT attached in this boot, was NOT entered at all.
+#   1. TEETH: alloc ZZZ0: -- a name that is no device. MUST be SS$_NOSUCHDEV
+#      (2680). A rubber-stamp ALLOC would say NORMAL here.
+#   1b. TEETH: alloc DKA100: -- a unit the substrate knows the NAME of but
+#      whose device is absent. MUST also be SS$_NOSUCHDEV.
+#   2. A: alloc_hold DKA0: -- $ALLOC succeeds (SS$_NORMAL), A holds it.
+#   3. B (a DIFFERENT process, while A holds): alloc DKA0: -- MUST be
 #      SS$_DEVALLOC (2112). This is the decisive step.
 #   4. A releases it with an explicit $DALLOC (SS$_NORMAL) and exits.
-#   5. C (a THIRD process, after the release): alloc DKA100: -- MUST now be
+#   5. C (a THIRD process, after the release): alloc DKA0: -- MUST now be
 #      SS$_NORMAL, then $DALLOC SS$_NORMAL. So the release was real and
 #      cross-process visible; the refusal in step 3 was about state, not a
 #      blanket "no".
-#   6. D (a FOURTH process, holding nothing): dalloc DKA100: -- MUST be
+#   6. D (a FOURTH process, holding nothing): dalloc DKA0: -- MUST be
 #      SS$_DEVNOTALLOC (2136), the oracle's %SYSTEM-W-DEVNOTALLOC.
+#
+# DKA100: (the unit the installer MOUNTs) is covered end-to-end by the sibling
+# proof tests/lab-vax/run-boot.sh install, where it IS attached: the executive
+# logs "disk unit DKA100: -> ra2c" and the menu's MOUNT reaches
+# %MOUNT-I-MOUNTED. Here it plays the opposite, equally necessary role -- the
+# unit that must NOT exist because its device does not.
 #   7. The console terminal OPA0: -- created by the executive at module init,
 #      by no process -- allocates and deallocates too.
 #
@@ -65,9 +74,14 @@ SS_DEVALLOC = 2112       # device already allocated to another user
 SS_DEVNOTALLOC = 2136    # device not allocated (by this process)
 SS_NOSUCHDEV = 2680      # no such device available
 
-TARGET = "DKA100:"       # the unit the installer's MOUNT allocates
+TARGET = "DKA0:"         # a REAL disk unit, entered from the real device ra1c
 CONSOLE = "OPA0:"        # the executive-created console terminal
-ABSENT = "ZZZ0:"         # a unit that does not exist -- the teeth
+ABSENT = "ZZZ0:"         # a name that is no unit at all -- the teeth
+# A unit that IS in the substrate's device-native map but whose device is NOT
+# attached in this boot. The executive must enter NO row for it -- a second,
+# sharper set of teeth than ZZZ0:, because a fabricating implementation would
+# happily "have" a unit it knows the name of.
+ABSENT_UNIT = "DKA100:"
 
 HOLD_SECS = 20
 
@@ -126,7 +140,6 @@ def main():
 
     artifacts_dir = env("OVMX_ARTIFACTS", "/artifacts")
     dka0_img = env("OVMX_DKA0_IMG", "/cache/ovmx-ods2-vax.img")
-    dka100_img = env("OVMX_DKA100_IMG", "/cache/dka100-target.img")
     src_iso = env("OVMX_SRC_ISO", "/tmp/ovmx-devalloc-src.iso")
 
     boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "1800"))
@@ -135,10 +148,9 @@ def main():
     log("NetBSD %s/vax  (rd vms-618: genuine $ALLOC/$DALLOC over the real "
         "executive device table)" % version)
 
-    for p in (dka0_img, dka100_img):
-        if not os.path.isfile(p):
-            log("FAIL: disk image not found: %s" % p)
-            return HARNESS_ERROR
+    if not os.path.isfile(dka0_img):
+        log("FAIL: disk image not found: %s" % dka0_img)
+        return HARNESS_ERROR
     if not os.path.isfile(os.path.join(workdir, "wd0.img")):
         log("FAIL: no cached wd0.img at %s" % workdir)
         return HARNESS_ERROR
@@ -179,14 +191,17 @@ def main():
         log("ensuring the cached NetBSD/vax disk is present (no reinstall)...")
         a.install()
 
+        # rq1 -> ra1 -> DKA0: is the only MSCP DISK attached; the artifact CD
+        # takes rq2 (anita itself attaches the NetBSD ISO on rq3, so rq3 is not
+        # ours to use). Leaving rq2 free of a DISK is deliberate: /dev/ra2c then
+        # has no attached device, so the executive must enter NO DKA100: row --
+        # the second set of teeth below.
         vmm_args = [
             "set rq1 ra92", "attach rq1 " + os.path.abspath(dka0_img),
-            "set rq2 ra92", "attach rq2 " + os.path.abspath(dka100_img),
-            "set rq3 cdrom", "attach -r rq3 " + os.path.abspath(src_iso),
+            "set rq2 cdrom", "attach -r rq2 " + os.path.abspath(src_iso),
         ]
         log("booting MODULAR kernel SINGLE-USER; rq1 -> ra1 (DKA0:), "
-            "rq2 -> ra2 (DKA100:), artifact CD on rq3 (deadline %ds)..."
-            % boot_deadline)
+            "artifact CD on rq2 (deadline %ds)..." % boot_deadline)
 
         a.dist.set_workdir(a.workdir)
         a.n_cdrom = 0
@@ -254,11 +269,14 @@ def main():
         else:
             bad("no 'disk unit DKA0: -> ra1c' line -- the device table was not "
                 "populated from a real device")
-        if re.search(r"disk unit DKA100:\s*->\s*ra2c", out):
-            ok("the executive entered DKA100: from the REAL device ra2c")
+        if re.search(r"disk unit DKA100: no backing device", out):
+            ok("the executive entered NO DKA100: row -- /dev/ra2c has no "
+               "attached device in this boot, and a unit is entered ONLY for a "
+               "device that really resolves (INV-6: nothing is invented)")
         else:
-            bad("no 'disk unit DKA100: -> ra2c' line -- the installer's target "
-                "unit is not in the executive device table")
+            bad("the executive did not report DKA100: as having no backing "
+                "device, even though no disk is attached on rq2 -- a unit may "
+                "have been invented")
 
         m = re.search(r"vms: registered, char major (\d+)", out)
         if not m:
@@ -282,9 +300,15 @@ def main():
         # ==============================================================
         rc, out = run(child, "%s alloc %s" % (P, ABSENT), cmd_timeout)
         expect_status(out, "ALLOC", ABSENT, SS_NOSUCHDEV,
-                      "TEETH: $ALLOC of a device that does not exist is "
+                      "TEETH: $ALLOC of a name that is no device at all is "
                       "SS$_NOSUCHDEV (the table is a real lookup, not a "
                       "rubber stamp)")
+
+        rc, out = run(child, "%s alloc %s" % (P, ABSENT_UNIT), cmd_timeout)
+        expect_status(out, "ALLOC", ABSENT_UNIT, SS_NOSUCHDEV,
+                      "TEETH: $ALLOC of %s -- a unit the substrate KNOWS THE "
+                      "NAME OF but whose device is not attached in this boot -- "
+                      "is SS$_NOSUCHDEV, not a fabricated success" % ABSENT_UNIT)
 
         # ==============================================================
         # STEP 2/3 -- THE DECISIVE CROSS-PROCESS CHECK.

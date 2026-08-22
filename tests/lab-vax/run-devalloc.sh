@@ -25,7 +25,6 @@
 #   anita-work/wd0.img         installed NetBSD/vax with the MODULAR kernel
 #   boot-artifacts/netbsd-OVMX the MODULAR kernel artifact
 #   ovmx-ods2-vax.img          any ODS-2 volume image (attached as ra1 -> DKA0:)
-#   dka100-target.img          any second disk image (attached as ra2 -> DKA100:)
 #
 # HARD timeout on the one SIMH invocation; container force-killed on timeout.
 set -euo pipefail
@@ -44,7 +43,6 @@ KBUILD_DIR="${KBUILD_DIR:-${CACHE_DIR}/kbuild}"
 NBSRC_DIR="${NBSRC_DIR:-${KBUILD_DIR}/nbsrc}"
 
 DKA0_IMG="${DKA0_IMG:-${CACHE_DIR}/ovmx-ods2-vax.img}"
-DKA100_IMG="${DKA100_IMG:-${CACHE_DIR}/dka100-target.img}"
 
 CROSS_IMAGE="${CROSS_IMAGE:-ovmx-cross-vax}"
 LAB_IMAGE="${LAB_IMAGE:-ovmx-vax-lab}"
@@ -62,7 +60,6 @@ ensure_prereqs() {
   [ -f "${BOOT_ARTIFACTS}/netbsd-OVMX" ]   || die "no MODULAR kernel at ${BOOT_ARTIFACTS}/netbsd-OVMX -- run tests/lab-vax/run-boot.sh first"
   [ -d "${NBSRC_DIR}/usr/src/sys" ]        || die "no NetBSD syssrc at ${NBSRC_DIR} -- run tests/lab-vax/run-boot.sh first"
   [ -f "${DKA0_IMG}" ]                     || die "missing DKA0: image ${DKA0_IMG}"
-  [ -f "${DKA100_IMG}" ]                   || die "missing DKA100: image ${DKA100_IMG}"
 }
 
 # ALWAYS rebuild: this proof is about the CURRENT executive, so a cached kmod
@@ -104,7 +101,6 @@ prove() {
       -e OVMX_NETBSD_DIR=/netbsd -e NETBSD_WORKDIR=/cache/devalloc-work \
       -e OVMX_ARTIFACTS=/artifacts \
       -e OVMX_DKA0_IMG=/cache/"$(basename "${DKA0_IMG}")" \
-      -e OVMX_DKA100_IMG=/cache/"$(basename "${DKA100_IMG}")" \
       -v "${CACHE_DIR}:/cache" -v "${DEVALLOC_ARTIFACTS}:/artifacts:ro" \
       -v "${REPO}/tests/netbsd:/netbsd:ro" -v "${REPO}/tests/lab-vax:/lab-vax:ro" \
       "${LAB_IMAGE}" /lab-vax/drive_devalloc_vax.py

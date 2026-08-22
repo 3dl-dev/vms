@@ -23,6 +23,15 @@ endif()
 
 set(IMGACT_ARCHDIR "${CMAKE_CURRENT_SOURCE_DIR}/arch/${IMGACT_ARCH}")
 
+# Alpha-only: the VMS standard-call trampoline (imgact_vms_transfer, vms-f60d).
+# Issues a genuine Alpha standard call to a VMS-standard image's transfer
+# address; the Alpha calling standard is the only one that has this class, so it
+# is not built for aarch64/x86_64 (there imgact.c fails honest on such an image).
+set(IMGACT_ARCH_EXTRA_SRC "")
+if(IMGACT_ARCH STREQUAL "alpha")
+    list(APPEND IMGACT_ARCH_EXTRA_SRC ${IMGACT_ARCHDIR}/vms_transfer.S)
+endif()
+
 # known_images.c (bead vms-913.5) is compiled directly as an extra source of
 # THIS freestanding target (not the hosted `known_images` CMake library) so
 # it picks up the same -ffreestanding/-nostdlib flags below; imgact.c
@@ -34,11 +43,17 @@ set(IMGACT_ARCHDIR "${CMAKE_CURRENT_SOURCE_DIR}/arch/${IMGACT_ARCH}")
 # executive Files-11 ACP (IO$_ACCESS + IO$_READVBLK on /dev/vms) instead of
 # open()/pread() on a /vms POSIX path. imgact.c provides its three host
 # primitives (imgact_acp_dev_open/close/ioctl) on the raw syscall layer.
+# imgact_xfer.c (bead vms-f60d) is compiled directly as an extra freestanding
+# translation unit here (like known_images.c): a PURE parse of an image's
+# .vms$xfer section (SysV tail-jump vs. VMS-standard call), shared with the host
+# unit test tests/imgact/test_xfer_parse.c.
 add_executable(imgact
     imgact.c
     known_images.c
     imgact_acp.c
+    imgact_xfer.c
     ${IMGACT_ARCHDIR}/start.S
+    ${IMGACT_ARCH_EXTRA_SRC}
 )
 
 # Shared OVMX image + symbol-vector format/resolver (LINK.EXE contract), plus
@@ -47,6 +62,7 @@ add_executable(imgact
 # Mirrors the standalone src/imgact/Makefile include path (-I../vmslink/include
 # -I../libvms/include) so the CMake OVMX_IMGACT build sees the same headers.
 target_include_directories(imgact PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include   # ovmx_activation.h (IMGACT<->C-RTL, vms-f60d)
     ${CMAKE_SOURCE_DIR}/src/vmslink/include
     ${CMAKE_SOURCE_DIR}/src/libvms/include
     ${CMAKE_SOURCE_DIR}/src/kernel)   # vms_ioctl.h + vms_acp.h (ACP arg structs)

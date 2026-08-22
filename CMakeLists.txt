@@ -186,6 +186,20 @@ if(BUILD_TESTS)
     add_test(NAME known_images_unit COMMAND test_known_images)
     set_tests_properties(known_images_unit PROPERTIES LABELS "unit;imgact" TIMEOUT 30)
 
+    # .vms$xfer parse (SysV vs. VMS-standard) + Alpha standard-call AI-register
+    # layout (bead vms-f60d). Pure host unit test over imgact_xfer.c; proves the
+    # ZERO-REGRESSION fallback to SYSV for every non-.vms$xfer image and the
+    # documented Argument-Information bit layout.
+    add_executable(test_xfer_parse
+        src/imgact/test/test_xfer_parse.c
+        src/imgact/imgact_xfer.c)
+    target_include_directories(test_xfer_parse PRIVATE
+        src/imgact
+        src/imgact/include
+        src/vmslink/include)
+    add_test(NAME imgact_xfer_parse_unit COMMAND test_xfer_parse)
+    set_tests_properties(imgact_xfer_parse_unit PROPERTIES LABELS "unit;imgact" TIMEOUT 30)
+
     # Proves /SHARED images share physical pages across processes via
     # /proc/PID/smaps (INSTALL done condition #4). See the file header in
     # test_shared_pages.c for the full verification method.

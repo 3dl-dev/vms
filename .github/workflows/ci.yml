@@ -4220,6 +4220,53 @@ jobs:
               sh /src/src/imgact/test/run_symvec_activation.sh
             '
 
+  # -----------------------------------------------------------------------
+  # Job 11b: IMGACT VMS-standard image activation (Alpha, vms-f60d)
+  #
+  # The activation-time face of R8 (the Alpha calling standard). Builds the real
+  # IMGACT.EXE (alpha) + the real trampoline, then proves under user-mode
+  # qemu-alpha: (1) imgact_vms_transfer issues a correct Alpha standard call
+  # (R16-R21 args, R25 AI, R27 PV, R26 RA into IMGACT, R0 return);
+  # (2) real IMGACT activates a VMS-standard image (.vms$xfer flavor VMS_STD)
+  # end-to-end -- standard-calls the transfer address, control returns, and the
+  # returned condition value is routed to $EXIT, FAILING HONEST (%IMGACT-F-
+  # NOSUCHDEV, exit 45) with no /dev/vms rather than faking exit(cond&1) (INV-6);
+  # (3) the identical image with flavor SYSV takes the UNCHANGED tail-jump path
+  # (zero regression + the flavor gate actually gates). Reuses the ovmx-cross-
+  # alpha toolchain image (gha layer cache, scope=cross-alpha).
+  # -----------------------------------------------------------------------
+  imgact-vms-std-alpha:
+    name: IMGACT VMS-standard Activation (Alpha)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: Activate a VMS-standard image through the real IMGACT.EXE (alpha)
+        run: |
+          docker run --rm -v "${{ github.workspace }}":/src -w /src \
+            ovmx-cross-alpha:latest sh -c '
+              sh /src/src/imgact/test/run_vms_std_activation_alpha.sh
+            '
+
   # Job 12: real src/libvmssys linked + activated VMS-native (aarch64)
   #
   # The pillar milestone (vms-ade / bead vms-80a): the whole toolchain end to

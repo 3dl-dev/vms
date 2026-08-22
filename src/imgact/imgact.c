@@ -44,6 +44,8 @@
 #endif
 #include "ovmx_image.h"   /* OVMX symbol-vector image format (LINK.EXE) */
 #include "ovmx_symvec.h"  /* shared resolver + GSMATCH (bead vms-8d5)  */
+#include "imgact_xfer.h"  /* .vms$xfer parse: SysV vs. VMS-standard (vms-f60d) */
+#include "ovmx_activation.h" /* VMS image-activation context contract (vms-f60d) */
 #include "known_images.h" /* Known Image DB lookup (bead vms-913.5; wired vms-30d) */
 #include "imgact_prodreg.h" /* publish resident producers into LIBVMS$SHR (vms-db2) */
 #include "imgact_acp.h"   /* image reads over the executive Files-11 ACP (vms-3e8e) */
@@ -314,6 +316,11 @@ static void vms_fatal(const char *ident, const char *text, const char *detail)
 
 /* IMGACT condition-value severities: fatal exits use a nonzero status. */
 #define IMGACT_EXIT_FAIL 44
+/* Executive-unreachable exit (vms-f60d): a VMS-standard image returned a
+ * condition value but IMGACT could not record it through the executive $EXIT.
+ * A DISTINGUISHED nonzero code -- deliberately NOT a mapping of the image's own
+ * return value, so this never masquerades as the image's success/failure. */
+#define IMGACT_EXIT_NOEXEC 45
 
 static void die_imgnotfnd(const char *soname)
 {
@@ -1892,6 +1899,168 @@ static void run_init_array_symvec(unsigned long base, unsigned long addr,
 	}
 }
 
+/* --------------------------------------------------------------------------
+ * VMS-standard image activation (vms-f60d) -- the activation-time face of R8.
+ *
+ * Parsed `.vms$xfer` for the executable. flavor == OVMX_ACT_SYSV (0) whenever
+ * the section is absent, so every non-`.vms$xfer` image takes the unchanged
+ * tail-jump path (ZERO regression). Populated by activate_symbol_vector while
+ * the executable's section headers are still readable.
+ * -------------------------------------------------------------------------- */
+static struct ovmx_xfer_info g_xfer;   /* zeroed => SYSV, no standard call */
+
+#if defined(IMGACT_HAVE_VMS_STD)
+/* Query the executive process context (over /dev/vms) for whether this image
+ * was launched by DCL as a CLI -- the signal for cliflag/cli_util (design
+ * §3.2/§4a.3, conductor ruling: read the executive, NOT a Linux env-var shim).
+ *
+ * The executive owns the process/CLI relationship. When /dev/vms is UNREACHABLE
+ * there is genuinely no executive CLI context to observe, so the truthful
+ * answer is 0 (no CLI): decc$main then derives argv[0] from image_file_desc.
+ * This is NOT an INV-6 fabrication -- it reports the real "no CLI" state, it
+ * does not fake an executive facility's success.
+ *
+ * DECLARED CROSS-LANE DEPENDENCY (vms-f60d, executive lane): the exact
+ * executive process-context field that records "launched as a CLI" is co-owned
+ * with the executive; until that read lands, the first-light behavior is the
+ * no-CLI path (cliflag == 0), which needs no command line. */
+static unsigned int imgact_query_cli_context(void)
+{
+	int fd = imgact_acp_dev_open();
+	if (fd < 0)
+		return 0;               /* no executive => truthfully no CLI */
+	imgact_acp_dev_close(fd);
+	/* Executive reachable: the CLI-context field read is the declared
+	 * executive-lane dependency above. Until it lands, report no CLI (the
+	 * honest conservative default) rather than fabricate one. */
+	return 0;
+}
+
+/* cli_util.get_command_line callback: fetch the invoking command line from the
+ * executive process context into *out. Reached only when cliflag != 0 (a CLI
+ * launched us). Fail-honest (SS$_NOSUCHDEV) when the executive is unreachable;
+ * NEVER fabricate a command line. The executive command-line read is part of
+ * the same declared executive-lane dependency as imgact_query_cli_context(). */
+static uint32_t imgact_cli_get_command_line(struct dsc$descriptor_s *out)
+{
+	if (out) {
+		out->dsc$w_length  = 0;
+		out->dsc$b_dtype   = DSC$K_DTYPE_T;
+		out->dsc$b_class   = DSC$K_CLASS_S;
+		out->dsc$a_pointer = 0;
+	}
+	int fd = imgact_acp_dev_open();
+	if (fd < 0)
+		return SS$_NOSUCHDEV;   /* no executive => fail honest */
+	imgact_acp_dev_close(fd);
+	return SS$_NOSUCHDEV;           /* executive command-line read: declared dep */
+}
+
+/* Route a VMS-standard image's returned condition value to process exit.
+ *
+ * Faithful behavior (design §3.4) is SYS$EXIT: the executive records the
+ * condition value as the process completion status ($STATUS/$SEVERITY) and maps
+ * the low bits to the Linux exit code. Conductor ruling (INV-6): route through
+ * the executive $EXIT over /dev/vms; if the executive is UNREACHABLE, FAIL
+ * HONEST -- NEVER a userspace exit_group(cond & 1 ? 0 : 1), which would
+ * fabricate the VMS-observable completion status. Does not return. */
+static void imgact_vms_exit(unsigned long cond)
+{
+	(void)cond;
+	int fd = imgact_acp_dev_open();
+	if (fd < 0) {
+		/* No executive: cannot record the VMS completion status. Report
+		 * it honestly and exit with a DISTINGUISHED code -- do not fake
+		 * the image's own exit code. */
+		vms_fatal("NOSUCHDEV",
+			  "executive /dev/vms unreachable; cannot record image "
+			  "completion status", 0);
+		sys_exit(IMGACT_EXIT_NOEXEC);
+	}
+	/* Executive reachable: the $EXIT facility that RECORDS `cond` as the
+	 * process completion status and terminates the image is the executive
+	 * half of this rung -- a DECLARED CROSS-LANE DEPENDENCY (vms-f60d,
+	 * executive $EXIT). Until it lands, still do not fabricate the exit:
+	 * fail honest. */
+	imgact_acp_dev_close(fd);
+	vms_fatal("NOEXITSVC",
+		  "executive $EXIT facility not yet available to record the VMS "
+		  "condition value", 0);
+	sys_exit(IMGACT_EXIT_NOEXEC);
+}
+
+/* Present the six-argument VMS image-activation context to a VMS-standard
+ * image's transfer address by the Alpha calling standard, capture the returned
+ * condition value, and route it to the executive $EXIT. Does not return. Called
+ * only when g_xfer.valid && g_xfer.flavor == OVMX_ACT_VMS_STD. */
+static void imgact_vms_standard_activate(unsigned long exe_base,
+					 const char *execfn)
+{
+	/* progxfer / PV: the resolved main transfer address (the PDSC of __main).
+	 * R27 = PV; its offset-8 quadword is the entry code (arch/alpha/start.S). */
+	void *pv = (void *)(exe_base + g_xfer.main_off);
+
+	/* image_file_desc (arg 4): a real VMS string descriptor for the image
+	 * spec, from AT_EXECFN / the resolved image path. VMS-authentic layout. */
+	static struct dsc$descriptor_s img_desc;   /* static: outlives the call */
+	const char *spec = execfn ? execfn : (g_argv0 ? g_argv0 : "");
+	unsigned long slen = xstrlen(spec);
+	if (slen > 0xffff)
+		slen = 0xffff;
+	img_desc.dsc$w_length  = (uint16_t)slen;
+	img_desc.dsc$b_dtype   = DSC$K_DTYPE_T;
+	img_desc.dsc$b_class   = DSC$K_CLASS_S;
+	img_desc.dsc$a_pointer = (char *)spec;
+
+	/* imghdr (arg 3): OVMX-original image descriptor (base + flags; none set). */
+	static struct ovmx_imghdr imghdr;
+	imghdr.version    = OVMX_IMGHDR_VERSION;
+	imghdr.flags      = 0;
+	imghdr.image_base = (void *)exe_base;
+
+	/* cliflag (arg 6) + cli_util (arg 2), from the executive process context. */
+	unsigned int cliflag = imgact_query_cli_context();
+	static struct ovmx_cli_util cli_util;
+	void *cli_util_arg = 0;
+	if (cliflag) {
+		cli_util.version          = OVMX_CLI_UTIL_VERSION;
+		cli_util.reserved         = 0;
+		cli_util.get_command_line = imgact_cli_get_command_line;
+		cli_util_arg = &cli_util;
+	}
+
+	/* The six-argument context, in R16..R21 order (design §3.2). */
+	unsigned long args[6];
+	args[0] = (unsigned long)pv;            /* progxfer        */
+	args[1] = (unsigned long)cli_util_arg;  /* cli_util        */
+	args[2] = (unsigned long)&imghdr;       /* imghdr          */
+	args[3] = (unsigned long)&img_desc;     /* image_file_desc */
+	args[4] = 0;                            /* linkflag (0)    */
+	args[5] = (unsigned long)cliflag;       /* cliflag         */
+
+	/* R25 = AI, built explicitly by the documented Argument-Information
+	 * layout (six 64-bit args), never a hard-coded 6. */
+	unsigned long ai = OVMX_AI_VMS_ACTIVATION;
+
+	unsigned long cond = imgact_vms_transfer(pv, ai, args);
+
+	imgact_vms_exit(cond);          /* executive $EXIT; does not return */
+	sys_exit(IMGACT_EXIT_NOEXEC);   /* defensive: never reached */
+}
+#else
+static void imgact_vms_standard_activate(unsigned long exe_base,
+					 const char *execfn)
+{
+	(void)exe_base;
+	/* The VMS-standard port crt0 is an Alpha calling-standard image; no
+	 * non-Alpha OVMX target ever activates one. Fail honest rather than
+	 * silently mis-transfer. */
+	vms_fatal("UNSUPACT",
+		  "VMS-standard image activation is Alpha-only", execfn);
+	sys_exit(IMGACT_EXIT_FAIL);
+}
+#endif
+
 static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 				   Elf64_Phdr *ephdr, int ephnum)
 {
@@ -1925,6 +2094,18 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	 * for a pure-C image. */
 	unsigned long ehf_addr = 0, ehf_size = 0;
 	ovmx_find_section(&src, OVMX_EHF_SECTION, &ehf_addr, &ehf_size);
+
+	/* Read this executable's .vms$xfer (VMS transfer-address array + activation
+	 * flavor) while `src` is still open, over the same ACP window (vms-f60d).
+	 * Absent => ovmx_parse_xfer leaves g_xfer.flavor = OVMX_ACT_SYSV (0), so
+	 * imgact_bootstrap takes the unchanged tail-jump path (ZERO regression).
+	 * The section (SHF_ALLOC) is already kernel-mapped at exe_base + its vaddr. */
+	unsigned long xfer_addr = 0, xfer_size = 0;
+	if (ovmx_find_section(&src, OVMX_XFER_SECTION, &xfer_addr, &xfer_size))
+		ovmx_parse_xfer((const void *)(exe_base + xfer_addr), xfer_size,
+				&g_xfer);
+	else
+		ovmx_parse_xfer(0, 0, &g_xfer);   /* absent => SYSV */
 
 	/* Record the executable module's OWN TLS geometry (PT_TLS) + its .vms$tls
 	 * TLSDESC table, so the executable participates in TLS setup exactly like a
@@ -2105,7 +2286,15 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	 * binds universal symbols through .vms$imp, not ELF DT_HASH. (vms-714) */
 	if (!edyn) {
 		activate_symbol_vector(ebias, at_execfn, ephdr, ephnum);
-		return at_entry;
+		/* VMS-standard image (the alpha-dec-vms GCC port's .EXE): present
+		 * the six-argument VMS activation context by the Alpha calling
+		 * standard, capture the returned condition value, and route it to
+		 * $EXIT. Does not return. Selected ONLY by a .vms$xfer section with
+		 * flavor OVMX_ACT_VMS_STD; its absence leaves g_xfer.flavor ==
+		 * OVMX_ACT_SYSV, so the tail-jump below is unchanged (vms-f60d). */
+		if (g_xfer.valid && g_xfer.flavor == OVMX_ACT_VMS_STD)
+			imgact_vms_standard_activate(ebias, at_execfn);
+		return at_entry;   /* OVMX-SysV / legacy: unchanged tail-jump */
 	}
 
 	/* ---- Legacy ELF DT_NEEDED path (913.2 bootstrap). ---- */

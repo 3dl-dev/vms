@@ -82,4 +82,59 @@ for b in __multc3 __fixtfsi; do
 done
 
 echo
+echo "== decc\$-prefixed CRTL alias vector (vms-3e4 R1b-1): the port imports decc\$<name> =="
+# The alpha-dec-vms GCC port references every C-RTL entry as decc$<name>. R1b-1
+# exports each NO-DECORATION-FLAG entry as a universal aliased to the musl impl
+# (SYMBOL_VECTOR universal/internal). Assert representative aliases are PROCEDURE
+# universals AND resolve to the SAME image-relative address as their bare-name
+# sibling (same code; append-only, the bare name stays exported too). Names used
+# here are all flag-free in the crtlmap (strlen/fopen/... — malloc/fprintf/memcpy
+# carry 64/FLOAT flags and are R1b-2, deliberately NOT generated yet).
+for s in decc\$strlen decc\$fopen decc\$fclose decc\$fread decc\$strcmp decc\$getenv; do
+    echo "$OUT" | awk -v s="$s" '/PROCEDURE/ && $NF==s {f=1} END{exit !f}' \
+        || { echo "FAIL: $s missing / not a PROCEDURE universal (R1b-1 decc\$ vector)"; exit 1; }
+done
+# decc$<name> must resolve to the SAME value= as the bare <name> (same impl):
+for pair in strlen fopen strcmp getenv; do
+    bare=$(echo "$OUT" | awk -v s="$pair"       '$NF==s {print $(NF-1); exit}')
+    deco=$(echo "$OUT" | awk -v s="decc\$$pair" '$NF==s {print $(NF-1); exit}')
+    [ -n "$bare" ] && [ "$bare" = "$deco" ] \
+        || { echo "FAIL: decc\$$pair ($deco) != $pair ($bare) — alias not bound to the impl"; exit 1; }
+done
+echo "decc\$ aliases present and bound to their musl impls (decc\$strlen==strlen, etc.)"
+
+echo
+echo "== proxy: an object importing decc\$<name> links CLEAN against DECC\$SHR (strict) =="
+# Stand in for a real alpha-dec-vms object: reference no-flag decc$ CRTL entries as
+# undefined externals (asm-label so the `$` is legal) and link --executable --use
+# DECC$SHR with NO --allow-undefined. If the decc$ imports bind to DECC$SHR's
+# .vms$sv, the link succeeds — the R1b-1 outcome ("the port's decc$ refs resolve").
+cat > "$WORK/decc_proxy.c" <<'EOF'
+extern void *d_fopen(const char *, const char *)  __asm__("decc$fopen");
+extern int   d_fclose(void *)                     __asm__("decc$fclose");
+extern unsigned long d_fread(void *, unsigned long, unsigned long, void *) __asm__("decc$fread");
+extern unsigned long d_strlen(const char *)       __asm__("decc$strlen");
+extern int   d_strcmp(const char *, const char *) __asm__("decc$strcmp");
+extern char *d_getenv(const char *)               __asm__("decc$getenv");
+void _start(void) {
+    void *fp = d_fopen("x", "r");
+    char buf[8];
+    volatile unsigned long n = d_fread(buf, 1, sizeof buf, fp);
+    (void)n; (void)d_fclose(fp);
+    volatile unsigned long m = d_strlen(d_getenv("PATH") ? d_getenv("PATH") : "");
+    volatile int c = d_strcmp("a", "b");
+    (void)m; (void)c;
+    __asm__ volatile("mov $60,%%eax\n\txor %%edi,%%edi\n\tsyscall" ::: "eax","edi","memory");
+    __builtin_unreachable();
+}
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/decc_proxy.o" "$WORK/decc_proxy.c"
+echo "-- proxy .o undefined decc\$ references --"
+nm -u "$WORK/decc_proxy.o" | grep 'decc\$' || { echo "FAIL: proxy has no decc\$ imports"; exit 1; }
+"$WORK/LINK.EXE" --executable --use "$WORK/DECC\$SHR.EXE" \
+    -o "$WORK/DECCPROXY.EXE" "$WORK/decc_proxy.o" \
+    || { echo "FAIL: proxy did not link against DECC\$SHR — a decc\$ import went unresolved (R1b-1 incomplete)"; exit 1; }
+echo "proxy linked clean: every decc\$ import bound to DECC\$SHR's alias vector"
+
+echo
 echo "ALL DECC\$SHR PRODUCER CHECKS PASSED"

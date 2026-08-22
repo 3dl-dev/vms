@@ -276,7 +276,11 @@ struct univ {
     int      resolved;
 };
 
-#define MAX_UNIV 512
+#define MAX_UNIV 2048   /* raised from 512 for the decc$ CRTL alias vector (vms-3e4
+                         * R1b): DECC$SHR's musl universals + the decc$<name>
+                         * aliases the alpha-dec-vms port imports. uv[] is static
+                         * (BSS), so the larger struct univ (name+internal) costs
+                         * no stack. */
 
 static void die(const char *msg)
 {
@@ -3079,7 +3083,8 @@ int main(int argc, char **argv)
     const char *out = NULL;
     const char **ins = calloc((size_t)argc, sizeof *ins);  /* <= argc inputs */
     int nin = 0;
-    struct univ uv[MAX_UNIV];
+    static struct univ uv[MAX_UNIV];   /* static (BSS): MAX_UNIV*sizeof(univ) is
+                                        * ~1MB with the R1b decc$ vector — off the stack. */
     int nuniv = 0;
     int shareable = 0, executable = 0, allow_undef = 0;
     struct producer *producers = calloc((size_t)argc, sizeof *producers);

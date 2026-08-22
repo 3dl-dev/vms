@@ -438,16 +438,29 @@ int main(void)
     CHECK((sfst & 1) && self_info.proc_type == VMS_PROC_T_OTHER,
           "a terminal-less job root is classified OTHER (not a user)");
 
-    /* The live reads are done. Release the WAIT-blocked subprocess, then LOGOUT
-     * the root: DCL flushes its buffered stdout and exits, so OUT_FILE holds the
-     * full transcript once the child is reaped. */
-    if (sst & 1 && sub_info.linux_pid)
-        kill((pid_t)sub_info.linux_pid, SIGKILL);
+    /* The live $GETJPI reads are done, but the SUBPROCESS MUST STAY ALIVE until
+     * the DCL session has run ALL THREE of SHOW USERS / SHOW USERS/FULL / SHOW
+     * SYSTEM. DCL executes the script asynchronously from this process, so the
+     * kill must not be paced by THIS process's read progress: an earlier
+     * ordering killed the subprocess right after the $GETJPI reads, and under a
+     * slow/contended SHOW path (a full-suite TCG run) the last two SHOWs then
+     * ran against a table the subprocess had already left -- a race that read as
+     * "SHOW USERS/FULL and SHOW SYSTEM drop the subprocess", not a product bug
+     * (the executive ADOPTs the name+job_id across the subprocess's execve, so
+     * the row is correct the whole time it exists).
+     *
+     * So LOGOUT FIRST -- the root runs its remaining SHOWs with the subprocess
+     * still present, then exits, flushing OUT_FILE -- reap it, read the now-
+     * complete transcript, and only THEN release the WAIT-blocked subprocess.
+     * Killing after the reap cannot race the SHOWs: the root cannot have exited
+     * before it processed every command ahead of LOGOUT in the pipe. */
     (void)write_all(in_pipe[1], "LOGOUT\n", strlen("LOGOUT\n"));
     close(in_pipe[1]);
     { int s; while (waitpid(child, &s, 0) < 0 && errno == EINTR) ; }
     have_transcript = (read_file(OUT_FILE, out, sizeof(out)) > 0 &&
                        has_substr(out, "number of processes"));
+    if (sst & 1 && sub_info.linux_pid)
+        kill((pid_t)sub_info.linux_pid, SIGKILL);
 
     /* ---------------------------------------------------------------
      * P2. THE USER-VISIBLE READERS (Change C + Change D), from the real

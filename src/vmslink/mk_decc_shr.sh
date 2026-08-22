@@ -545,6 +545,13 @@ CRTL_OBJ="$(mktemp -d)/ovmx_decc_crtl.o"
 "${CC:-cc}" -c -fPIC -ffreestanding -o "$CRTL_OBJ" "$CRTL_SRC"
 VEC="$VEC,get_errno_addr=PROCEDURE,get_vms_errno_addr=PROCEDURE,_malloc32=PROCEDURE,_malloc64=PROCEDURE"
 
+# decc$main (vms-954, §4b.5): the DEC C RTL image-startup routine the alpha-dec-vms
+# crt0's __main forwards its six-arg VMS activation context to; it PRODUCES
+# argc/argv/envp (non-CLI path implemented, CLI path a grounded follow-up). Real
+# impl in ovmx_decc_crtl.c (same object), exported as a PROCEDURE universal the
+# port image binds via .vms$imp at activation. Append-only.
+VEC="$VEC,decc\$main=PROCEDURE"
+
 # ---- vms-954 R1b-2b: C$_EXIT1 as a C-RTL globalvalue ----------------------
 # The alpha-dec-vms crt0 (libgcc/config/vms/vms-ucrt0.c) computes a POSIX exit
 # status as `(__int64)&C$_EXIT1 + ((status-1) << STS$V_MSG_NO)`: C$_EXIT1 is a

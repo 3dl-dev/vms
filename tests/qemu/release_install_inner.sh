@@ -310,8 +310,15 @@ if [ "$MODE" = "install" ]; then
     else
         dump_and_die "AUTHORIZE never reached UAF> against the target"
     fi
-    send "MODIFY SYSTEM/PASSWORD=$INSTALL_PW"
-    send "EXIT"
+    # The procedure drives AUTHORIZE NON-INTERACTIVELY via inline SYS$INPUT
+    # (vms-963): OVMX$INSTALL.COM feeds "MODIFY SYSTEM/PASSWORD='OVMX_PW1'" +
+    # EXIT as data lines after the RUN, and DCL apostrophe-substitutes the
+    # entered password ($INSTALL_PW, already answered above) into that line
+    # before AUTHORIZE reads it. There is no operator typing at UAF> -- so
+    # this driver does NOT send MODIFY/EXIT (a stray send here would sit
+    # unconsumed in the PTY and get eaten by the SCSNODE/SCSSYSTEMID prompts
+    # below); it asserts the write instead.
+    #
     # The write to the TARGET's SYSUAF must PERSIST -- AUTHORIZE saves on EXIT
     # when dirty and prints %UAF-I-SAVED on success, %UAF-E-SAVEFAIL on failure.
     # This is the in-container proof that the install-set password landed on the

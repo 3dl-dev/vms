@@ -675,7 +675,6 @@ static void bare_metal_init(void)
      * (§3.1) shows nothing does. The banner (vms-1fb) and the %OVMX-I-EXEC line
      * are deferred the same way and for the same reason.
      */
-#if defined(OVMX_BOOT_LINUX)
     /*
      * ATOMIC FLIP (vms-46c): SYSBOOT reaches OVMXVMSSYS.PAR over the executive
      * Files-11 (ODS-2) ACP -- the SAME genuine volume the flagless path mounts,
@@ -732,74 +731,12 @@ static void bare_metal_init(void)
     report_kernel_taint();
 
     provision_disk_mount_points();
-    return;
-#else
-    /* ---- NetBSD-vax backend: its pre-flip parameter I/O (its own ACP flip is
-     * vms-d5d). Mounting needs only vmsfs.ko, not the executive, so the
-     * executive is NOT attached until after the prompt returns. ---- */
-    int vmsfs_load_failed =
-        (ovmx_boot_load_module("vmsfs") != 0 && errno != EEXIST);
-    int vmsfs_errno = errno;
-
-    struct stat vms_st;
-    if (stat(SYSDISK_MOUNT, &vms_st) == 0) {
-        if (!ovmx_boot_system_disk_present()) {
-            char msg[128];
-            snprintf(msg, sizeof(msg), "no system disk %s (DKA0:)",
-                     ovmx_boot_system_disk_dev());
-            ovmx_sysinit_halt(
-                msg,
-                "the system disk is not present; OVMX does not install one at boot");
-        }
-        if (ovmx_boot_mount_system_disk(SYSDISK_MOUNT) != 0) {
-            char msg[128];
-            snprintf(msg, sizeof(msg),
-                     "system disk DKA0: (%s) would not mount",
-                     ovmx_boot_system_disk_dev());
-            ovmx_sysinit_halt(
-                msg,
-                "the volume is not an installed VMSFS system disk; "
-                "OVMX does not initialize or install it at boot");
-        }
-
-        /* The disk is mounted and SYS$SYSTEM (VMS_SYSTEM_DIR, a raw Linux
-         * path -- ovmx_layout.h) is reachable. Load the real parameter file
-         * (or factory defaults if it is not there yet), run the prompt, and
-         * stash the result for read_boot_parameters(). */
-        sysboot_load_working_set(&conversational_boot_params, VMS_SYSTEM_DIR,
-                                  "OVMXVMSSYS", "PAR");
-        sysboot_run_prompt(&conversational_boot_params, VMS_SYSTEM_DIR,
-                            "OVMXVMSSYS", "PAR", VMS_STARTUP_PATH);
-        conversational_boot_result_valid = 1;
-
-        /* SYSBOOT (the prompt) has now handed over -- attach the executive
-         * and show the banner BEFORE the mount-narration messages below,
-         * mirroring the flagless branch's ordering (vms-1fb). */
-        executive_attach();
-        print_banner_once();
-
-        printf("%%OVMX-I-SYSDISK, mounting system disk DKA0:\n");
-        printf("%%OVMX-I-MOUNTED, system disk DKA0: mounted\n");
-
-        /* Both OVMX modules are loaded on this path too (vmsfs.ko above,
-         * vms.ko via the executive_attach() just before this block): emit the
-         * taint mask readout, gated on the ovmx.taintreport boot flag (vms-566). */
-        report_kernel_taint();
-    }
-
-    if (vmsfs_load_failed)
-        fprintf(stderr, "%%OVMX-W-MODFAIL, failed to load vmsfs.ko: %s\n",
-                strerror(vmsfs_errno));
-
-    /* Idempotent fallbacks for the degenerate case where SYSDISK_MOUNT did
-     * not even exist above (the if-block never ran, so neither call site
-     * inside it did either): both functions no-op harmlessly if already
-     * done, so this is not a second attach or a second banner on the
-     * normal path. */
-    executive_attach();
-    print_banner_once();
-    provision_disk_mount_points();
-#endif /* OVMX_BOOT_LINUX */
+    /* vms-329: there is no non-ACP arm here any more. The netbsd-vax #else
+     * branch that used to VFS-mount SYS$DISK with vmsfs.ko is GONE: the
+     * coupled cutover made the ACP $MOUNT the only mount on every runtime
+     * substrate, and NetBSD's spec_vnops allows exactly ONE open of the
+     * block device, so a VFS fallback could not coexist with it even if it
+     * were wanted. ACP or fail-honest (INV-6). */
 }
 
 /* ------------------------------------------------------------------ */
@@ -882,7 +819,18 @@ static void require_installed_system(void)
 static void stage_boot_images(void)
 {
     static const char *const images[] = {
-        "IMGACT.EXE",      /* the PT_INTERP the kernel opens for each execve */
+#if defined(OVMX_BOOT_LINUX)
+        /* IMGACT.EXE is the PT_INTERP the kernel opens for each execve -- but
+         * ONLY where OVMX images are IMGACT-activated. netbsd-vax activates
+         * through NetBSD's own /usr/libexec/ld.elf_so (Decision A, vms-42d: no
+         * OVMX-native VAX toolchain exists), so no VAX image carries an
+         * IMGACT.EXE PT_INTERP and the shipped VAX system volume does not
+         * carry the file at all. Demanding it there would halt every VAX boot
+         * on a file that is correctly absent -- the opposite of fail-honest.
+         * This keys off the SUBSTRATE macro, not the bridge macro, because it
+         * is a statement about the activation model, not about this link. */
+        "IMGACT.EXE",
+#endif
         "PROVISION.EXE",   /* PID 1 forks this (the startup process)         */
         "DCL.EXE",         /* PROVISION execve's this on STARTUP.COM         */
         "JOB_CONTROL.EXE", /* RUN/DETACHED from the startup phase driver     */

@@ -187,14 +187,14 @@ test -n "$NETBSD_BOOT_OBJ" \
 for sym in ovmx_boot_kernel_filesystems_mounted ovmx_boot_mount_kernel_filesystems \
            ovmx_boot_start_console_log_bridge ovmx_boot_load_module \
            ovmx_boot_open_executive ovmx_boot_system_disk_dev \
-           ovmx_boot_system_disk_present ovmx_boot_mount_system_disk \
+           ovmx_boot_system_disk_present \
            ovmx_boot_power_off; do
     if ! "$TARGET-nm" "$NETBSD_BOOT_OBJ" | grep -qE " T $sym\$"; then
         echo "FAIL: ovmx_boot_netbsd.c.o does not define $sym"
         exit 1
     fi
 done
-echo "OK: all 9 ovmx_boot.h ops defined by the NetBSD backend"
+echo "OK: every ovmx_boot.h op is defined by the NetBSD backend"
 if ! grep -qF 'open("/dev/vms", O_RDWR | O_CLOEXEC)' "$SRC/src/ovmx_init/ovmx_boot_netbsd.c"; then
     echo "FAIL: ovmx_boot_netbsd.c does not open the real /dev/vms executive device"
     exit 1

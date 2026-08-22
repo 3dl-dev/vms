@@ -192,14 +192,16 @@ const char *ovmx_boot_system_disk_dev(void);
 int ovmx_boot_system_disk_present(void);
 
 /*
- * ovmx_boot_mount_system_disk - mount the system disk as the VMS filesystem
- * at `mountpoint` (the portable SYSDISK_MOUNT, chosen by ovmx_init.c). Returns
- * 0 on success, nonzero on failure -- a blank/unformatted volume that does not
- * mount as the VMS filesystem returns nonzero, and PID 1 halts (it does NOT
- * initialize or install). The device and filesystem type are the substrate's.
- * Linux: mount(system-disk, mountpoint, "vmsfs", 0, NULL).
+ * RETIRED (vms-329): ovmx_boot_mount_system_disk(), the vmsfs.ko VFS mount of
+ * SYS$DISK, is GONE from this seam on every substrate. SYS$DISK is now $MOUNTed
+ * through the executive Files-11 (ODS-2) ACP -- see
+ * ovmx_boot_acp_mount_system_disk() / ovmx_boot_mount_system_disk_native()
+ * below. It is not merely unused: on NetBSD/vax spec_vnops allows exactly ONE
+ * open of the block device, so a VFS mount and the ACP $MOUNT are mutually
+ * exclusive, and keeping a "fall back to the VFS mount" op would be a fallback
+ * that CANNOT work -- the fake-success class INV-6 exists to kill. ACP or
+ * fail-honest.
  */
-int ovmx_boot_mount_system_disk(const char *mountpoint);
 
 /*
  * ovmx_boot_system_disk_unit - the VMS device name of the boot/system unit as

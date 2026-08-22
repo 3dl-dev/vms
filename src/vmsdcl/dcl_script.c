@@ -313,7 +313,7 @@ int dcl_call_subroutine(const char *label, int argc, char **argv)
     return status;
 }
 
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
 #include "dcl/dcl_rms.h"     /* dcl_rms_read_open/read_record/read_close (ACP) */
 
 /*
@@ -321,6 +321,18 @@ int dcl_call_subroutine(const char *label, int argc, char **argv)
  * procedure off the GENUINE ODS-2 SYS$DISK through RMS / the Files-11 ACP,
  * staging its text in a transient stdio stream the existing fseek/fgets script
  * engine (dcl_execute_script / dcl_call_subroutine) drives unchanged.
+ *
+ * KEYED ON OVMX_HAVE_ACP, NOT __linux__ (vms-329). This was Linux-only while
+ * the netbsd-vax runtime still VFS-mounted SYS$DISK and so still had a /vms
+ * POSIX tree to fopen(). The coupled VAX cutover retired that mount, so on the
+ * VAX the fopen chain below reaches nothing at all: the first traced cutover
+ * boot got PID 1 all the way to "handing SYS$MANAGER:STARTUP.COM to DCL for ACP
+ * resolution" and DCL answered %DCL-E-OPENIN, because this arm was compiled out
+ * and the passthrough it fell back to no longer exists. The implementation was
+ * already substrate-neutral -- dcl_rms_read_open() lives in dcl_filespec.c,
+ * which every configuration compiles -- so the gate, not the code, was the gap.
+ * (It also removes a __linux__ source fork, which build-boot-images-vax.sh's
+ * INV-DRIFT note forbids in this image set.)
  *
  * WHY: a boot-time procedure (SYS$STARTUP:JOB_CONTROL_STARTUP.COM,
  * SYS$MANAGER:*.COM, ...) lives ONLY on the mounted ODS-2 volume; fopen() on
@@ -368,7 +380,7 @@ static FILE *dcl_proc_open_acp(struct dcl_context *ctx, const char *spec)
     }
     return NULL;
 }
-#endif /* __linux__ */
+#endif /* OVMX_HAVE_ACP */
 
 /*
  * Execute a command procedure (.COM file).
@@ -402,7 +414,7 @@ int dcl_execute_script(const char *filename, int argc, char **argv)
      * back to the /vms passthrough fopen chain below only when the ACP has no
      * such device/file (host builds without /dev/vms), preserving those tests. */
     FILE *fp = NULL;
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
     fp = dcl_proc_open_acp(ctx, spec);
     if (fp) {
         strncpy(linux_path, spec, sizeof(linux_path) - 1);

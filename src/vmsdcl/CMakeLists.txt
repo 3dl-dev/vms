@@ -149,6 +149,21 @@ else()
     )
 endif()
 
+# vms-329: DCL reaches SYS$DISK via the executive Files-11 ACP on EVERY
+# substrate. Two arms in this library were keyed on __linux__ back when the
+# netbsd-vax runtime still VFS-mounted SYS$DISK and so still had a /vms POSIX
+# tree to fall back to -- @-procedure execution (dcl_script.c) and activatable-
+# image resolution (dcl_cmd_process.c). The coupled VAX cutover retired that
+# mount, so on the VAX those fallbacks reach nothing: the traced cutover boot
+# reached DCL and answered %DCL-E-OPENIN on SYS$MANAGER:STARTUP.COM. Both arms
+# are substrate-neutral code (dcl_rms_read_open lives in dcl_filespec.c, which
+# every configuration compiles), so this is a definition, not a port. The
+# STANDALONE (netbsd-vax cross) archive is NOT a unit build -- it is the
+# libvmsdcl.a that becomes the shipped DCL.EXE -- so it gets the definition too,
+# exactly as src/vmsrms/CMakeLists.txt does. Runtime still fails honestly with
+# no /dev/vms: the RMS ACP arm answers RMS$_ACC and DCL says so (INV-6).
+target_compile_definitions(vmsdcl PRIVATE OVMX_HAVE_ACP)
+
 if(VMSDCL_STANDALONE)
     target_compile_options(vmsdcl PRIVATE -Wall -Wextra -O2)
 else()

@@ -3,13 +3,21 @@
  * (epic vms-208, vms-274). See rms_textfile.h for the contract and the reason
  * the SYSUAF/RIGHTSLIST/$GETUAI readers reach their file this way now.
  *
- * __linux__  : RMS $OPEN/$CONNECT/$GET/$CLOSE. rms_impl_open (src/vmsrms,
+ * OVMX_HAVE_ACP  : RMS $OPEN/$CONNECT/$GET/$CLOSE. rms_impl_open (src/vmsrms,
  *              vms-bc7) routes these to $ASSIGN + IO$_ACCESS + IO$_READVBLK on
  *              the mounted ODS-2 volume in the executive -- no _linux_fd, no
  *              POSIX. Fail-honest: a failed $OPEN (no mounted ACP volume /
  *              no /dev/vms / no such file) yields NULL, never a POSIX fallback.
- * !__linux__ : the netbsd-vax standalone cross keeps POSIX fopen/fgets until the
- *              VAX mount retires (vms-d5d).
+ * !OVMX_HAVE_ACP : no executive in this link at all (a bare libvms unit build).
+ *              POSIX fopen/fgets.
+ *
+ * KEYED ON OVMX_HAVE_ACP, NOT __linux__ (vms-329). The gate used to read
+ * __linux__ because the netbsd-vax runtime still VFS-mounted SYS$DISK and so
+ * still had a /vms POSIX tree to fopen(); the coupled VAX cutover retired that
+ * mount, so on the VAX the POSIX arm reads a path that does not exist -- every
+ * SYSUAF/RIGHTSLIST/$GETUAI consumer would fail (or, worse, read an empty file
+ * and decide the account is absent) while the boot claimed to have flipped.
+ * Same re-key ovmx_provision.c and dcl_script.c took, for the same reason.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -20,7 +28,7 @@
 
 #include "rms_textfile.h"
 
-#if defined(__linux__)
+#if defined(OVMX_HAVE_ACP)
 
 #include "rms/rms.h"
 #include "vmsfs/device.h"
@@ -231,7 +239,7 @@ int rms_textfile_write_line(const char *vms_spec, const char *line)
     return rc;
 }
 
-#else  /* !__linux__ : netbsd-vax standalone cross keeps POSIX (vms-d5d) */
+#else  /* !OVMX_HAVE_ACP : no executive in this link (bare libvms unit build) */
 
 #include <stdio.h>
 #include "vmsfs/filespec.h"
@@ -308,4 +316,4 @@ int rms_textfile_write_line(const char *vms_spec, const char *line)
     return rmstf_posix_put(vms_spec, line, "w");
 }
 
-#endif /* __linux__ */
+#endif /* OVMX_HAVE_ACP */

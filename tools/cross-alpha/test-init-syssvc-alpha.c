@@ -46,7 +46,11 @@
  * input) must not eat the whole boot budget -- SIGALRM kills the child, the
  * pipe closes, and the suite is recorded as a genuine failure (never a skip).*/
 #ifndef SUITE_TIMEOUT_SECS
-#define SUITE_TIMEOUT_SECS 150
+/* 240s: test_syssvc_startup_service is a multi-phase RUN/DETACHED driver that
+ * reached 24 assertions then hit a 150s bound (signal 9, not a crash) -- it is
+ * genuinely long under TCG, not hung. Only actually-slow suites use the extra;
+ * most finish in seconds, well within the 3600s whole-run budget. */
+#define SUITE_TIMEOUT_SECS 240
 #endif
 static volatile pid_t g_child = 0;
 static void on_alrm(int sig) { (void)sig; if (g_child > 0) kill(g_child, SIGKILL); }

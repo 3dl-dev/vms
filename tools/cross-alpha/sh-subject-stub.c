@@ -25,9 +25,9 @@ int main(void)
      * $DELPRCs its subject, but if the per-suite watchdog SIGKILLs the test
      * mid-run the subject would otherwise pause forever and orphaned subjects
      * would accumulate across 66 suites, slowing every later SHOW SYSTEM and
-     * eventually the whole run. 240s covers the 90s per-suite watchdog with
-     * margin, then the orphan self-reaps. */
-    alarm(240);
+     * eventually the whole run. 300s > the 240s per-suite watchdog, so the
+     * subject outlives a watchdog-killed test and then the orphan self-reaps. */
+    alarm(300);
     while (read(0, buf, sizeof buf) > 0) { /* drain */ }
     for (;;) pause();
     return 0;

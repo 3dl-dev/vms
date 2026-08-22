@@ -82,4 +82,136 @@ for b in __multc3 __fixtfsi; do
 done
 
 echo
+echo "== decc\$-prefixed CRTL alias vector (vms-3e4 R1b-1): the port imports decc\$<name> =="
+# The alpha-dec-vms GCC port references every C-RTL entry as decc$<name>. R1b-1
+# exports each NO-DECORATION-FLAG entry as a universal aliased to the musl impl
+# (SYMBOL_VECTOR universal/internal). Assert representative aliases are PROCEDURE
+# universals AND resolve to the SAME image-relative address as their bare-name
+# sibling (same code; append-only, the bare name stays exported too). Names used
+# here are all flag-free in the crtlmap (strlen/fopen/... — malloc/fprintf/memcpy
+# carry 64/FLOAT flags and are R1b-2, deliberately NOT generated yet).
+for s in decc\$strlen decc\$fopen decc\$fclose decc\$fread decc\$strcmp decc\$getenv; do
+    echo "$OUT" | awk -v s="$s" '/PROCEDURE/ && $NF==s {f=1} END{exit !f}' \
+        || { echo "FAIL: $s missing / not a PROCEDURE universal (R1b-1 decc\$ vector)"; exit 1; }
+done
+# decc$<name> must resolve to the SAME value= as the bare <name> (same impl):
+for pair in strlen fopen strcmp getenv; do
+    bare=$(echo "$OUT" | awk -v s="$pair"       '$NF==s {print $(NF-1); exit}')
+    deco=$(echo "$OUT" | awk -v s="decc\$$pair" '$NF==s {print $(NF-1); exit}')
+    [ -n "$bare" ] && [ "$bare" = "$deco" ] \
+        || { echo "FAIL: decc\$$pair ($deco) != $pair ($bare) — alias not bound to the impl"; exit 1; }
+done
+echo "decc\$ aliases present and bound to their musl impls (decc\$strlen==strlen, etc.)"
+
+echo
+echo "== proxy: an object importing decc\$<name> links CLEAN against DECC\$SHR (strict) =="
+# Stand in for a real alpha-dec-vms object: reference no-flag decc$ CRTL entries as
+# undefined externals (asm-label so the `$` is legal) and link --executable --use
+# DECC$SHR with NO --allow-undefined. If the decc$ imports bind to DECC$SHR's
+# .vms$sv, the link succeeds — the R1b-1 outcome ("the port's decc$ refs resolve").
+cat > "$WORK/decc_proxy.c" <<'EOF'
+extern void *d_fopen(const char *, const char *)  __asm__("decc$fopen");
+extern int   d_fclose(void *)                     __asm__("decc$fclose");
+extern unsigned long d_fread(void *, unsigned long, unsigned long, void *) __asm__("decc$fread");
+extern unsigned long d_strlen(const char *)       __asm__("decc$strlen");
+extern int   d_strcmp(const char *, const char *) __asm__("decc$strcmp");
+extern char *d_getenv(const char *)               __asm__("decc$getenv");
+void _start(void) {
+    void *fp = d_fopen("x", "r");
+    char buf[8];
+    volatile unsigned long n = d_fread(buf, 1, sizeof buf, fp);
+    (void)n; (void)d_fclose(fp);
+    volatile unsigned long m = d_strlen(d_getenv("PATH") ? d_getenv("PATH") : "");
+    volatile int c = d_strcmp("a", "b");
+    (void)m; (void)c;
+    __builtin_trap();   /* portable across x86_64/aarch64: the proxy is link-only, never run */
+}
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/decc_proxy.o" "$WORK/decc_proxy.c"
+echo "-- proxy .o undefined decc\$ references --"
+nm -u "$WORK/decc_proxy.o" | grep 'decc\$' || { echo "FAIL: proxy has no decc\$ imports"; exit 1; }
+"$WORK/LINK.EXE" --executable --use "$WORK/DECC\$SHR.EXE" \
+    -o "$WORK/DECCPROXY.EXE" "$WORK/decc_proxy.o" \
+    || { echo "FAIL: proxy did not link against DECC\$SHR — a decc\$ import went unresolved (R1b-1 incomplete)"; exit 1; }
+echo "proxy linked clean: every decc\$ import bound to DECC\$SHR's alias vector"
+
+echo
+echo "== DEC C RTL special routines (vms-3e4 R1b-2a): errno accessors + dual-pointer malloc =="
+# Real impls (ovmx_decc_crtl.c), not musl aliases: get_errno_addr /
+# get_vms_errno_addr (per-thread errno cells) + _malloc32 / _malloc64 (the port
+# crt0's dual-pointer allocators). Assert each is a PROCEDURE universal, then link
+# a proxy that imports them.
+for s in get_errno_addr get_vms_errno_addr _malloc32 _malloc64; do
+    echo "$OUT" | awk -v s="$s" '/PROCEDURE/ && $NF==s {f=1} END{exit !f}' \
+        || { echo "FAIL: $s missing / not a PROCEDURE universal (R1b-2a special routines)"; exit 1; }
+done
+cat > "$WORK/decc_crtl_proxy.c" <<'EOF'
+extern int  *get_errno_addr(void);
+extern int  *get_vms_errno_addr(void);
+extern int   _malloc32(int);
+extern void *_malloc64(unsigned long);
+void _start(void) {
+    volatile int  *e  = get_errno_addr();
+    volatile int  *ve = get_vms_errno_addr();
+    volatile int   p32 = _malloc32(32);
+    volatile void *p64 = _malloc64(64);
+    (void)e; (void)ve; (void)p32; (void)p64;
+    __builtin_trap();   /* portable across x86_64/aarch64: the proxy is link-only, never run */
+}
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/decc_crtl_proxy.o" "$WORK/decc_crtl_proxy.c"
+"$WORK/LINK.EXE" --executable --use "$WORK/DECC\$SHR.EXE" \
+    -o "$WORK/DECCCRTLPROXY.EXE" "$WORK/decc_crtl_proxy.o" \
+    || { echo "FAIL: special-routine proxy did not link against DECC\$SHR (R1b-2a incomplete)"; exit 1; }
+echo "R1b-2a OK: errno accessors + _malloc32/_malloc64 exported and bound (real impls, not stubs)"
+
+echo
+echo "== C\$_EXIT1 globalvalue (vms-954 R1b-2b): absolute link-time constant ======"
+# The alpha-dec-vms crt0 references C$_EXIT1 as `(__int64)&C$_EXIT1` — a VMS
+# globalvalue (the symbol names no storage; its ADDRESS is a link-time constant,
+# 0x0035A009, measured on lab-Alpha). DECC$SHR exports it as a GLOBALVALUE
+# universal; LINK.EXE folds `&C$_EXIT1` to the constant at link, unbiased, with
+# no import. Assert (1) the vector entry, then (2) a proxy that ABS64-references
+# C$_EXIT1 gets the constant folded at the site AND the slot is NOT in .vms$rel
+# (an absolute value must never be load-biased) AND no import was created.
+echo "$OUT" | awk '/GLOBALVALUE/ && $NF=="C$_EXIT1" && $0 ~ /value=0x0*35a009/ {f=1} END{exit !f}' \
+    || { echo "FAIL: C\$_EXIT1 not a GLOBALVALUE at 0x0035A009 in DECC\$SHR .vms\$sv"; \
+         echo "$OUT" | grep -i 'C\$_EXIT1' || true; exit 1; }
+echo "C\$_EXIT1 exported as a GLOBALVALUE universal = 0x0035A009"
+
+# Proxy: one ABS64 (pointer-init) reference to C$_EXIT1 + a trivial freestanding
+# _start (no crt0, no imports). A NON-const pointer forces the reloc into .data
+# so we can read the folded 8-byte value back out of the linked image.
+cat > "$WORK/gval_proxy.c" <<'EOF'
+extern int c_exit1 __asm__("C$_EXIT1");      /* VMS globalvalue: address IS value */
+void *ovmx_c_exit1_addr = &c_exit1;          /* ABS64 ref -> folded at link time  */
+void _start(void) { __builtin_trap(); }      /* freestanding: no crt0/exit import */
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/gval_proxy.o" "$WORK/gval_proxy.c"
+nm -u "$WORK/gval_proxy.o" | grep 'C\$_EXIT1' || { echo "FAIL: proxy has no C\$_EXIT1 ref"; exit 1; }
+"$WORK/LINK.EXE" --executable --use "$WORK/DECC\$SHR.EXE" \
+    -o "$WORK/GVALPROXY.EXE" "$WORK/gval_proxy.o" \
+    || { echo "FAIL: proxy did not link — C\$_EXIT1 globalvalue went unresolved (R1b-2b incomplete)"; exit 1; }
+
+# (a) the folded value: little-endian 0x0035A009 = bytes 09 a0 35 00 in .data.
+readelf -x .data "$WORK/GVALPROXY.EXE" 2>/dev/null | grep -qi '09a03500' \
+    || { echo "FAIL: 0x0035A009 not folded into .data (globalvalue not resolved to the constant)"; \
+         readelf -x .data "$WORK/GVALPROXY.EXE" 2>/dev/null | head; exit 1; }
+echo "C\$_EXIT1 folded into the reference site as the absolute constant 0x0035A009"
+
+# (b) no load bias: the ONLY abs64/GOT reference in this proxy is the globalvalue,
+# so a correct link records ZERO .vms$rel slots -> the section is absent. If the
+# globalvalue had been (wrongly) biased, .vms$rel would carry its .data slot.
+if readelf -SW "$WORK/GVALPROXY.EXE" 2>/dev/null | grep -q '\.vms\$rel'; then
+    echo "FAIL: .vms\$rel present — the absolute globalvalue was recorded for load-bias (must not be)"; exit 1
+fi
+echo "C\$_EXIT1 slot correctly excluded from .vms\$rel (absolute, never load-biased)"
+
+# (c) not an activation import: no .vms$imp / .vms$wimp in this image.
+if readelf -SW "$WORK/GVALPROXY.EXE" 2>/dev/null | grep -qE '\.vms\$imp|\.vms\$wimp'; then
+    echo "FAIL: globalvalue became an activation import (must be a link-time constant)"; exit 1
+fi
+echo "R1b-2b OK: C\$_EXIT1 is a link-time constant — folded unbiased, no import"
+
+echo
 echo "ALL DECC\$SHR PRODUCER CHECKS PASSED"

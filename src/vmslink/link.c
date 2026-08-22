@@ -249,13 +249,23 @@
  * Declared universal symbols (from SYMBOL_VECTOR=).
  * -------------------------------------------------------------------------- */
 struct univ {
-    char     name[256];
+    char     name[256];     /* the EXPORTED universal name (what consumers import) */
+    char     internal[256]; /* the INTERNAL symbol that defines it (what we resolve
+                             * against input objects). Equals `name` for a plain
+                             * `name=KIND` entry; differs for the VSI Linker
+                             * `SYMBOL_VECTOR=(universal/internal=KIND)` alias form —
+                             * exactly how real DECC$SHR exports `decc$<name>` bound
+                             * to the C-RTL implementation symbol. (vms-c07 R1) */
     uint32_t kind;          /* enum ovmx_sv_kind */
     uint64_t value;         /* image-relative address, filled during layout */
     int      resolved;
 };
 
-#define MAX_UNIV 512
+#define MAX_UNIV 2048   /* raised from 512 for the decc$ CRTL alias vector (vms-3e4
+                         * R1b): DECC$SHR's musl universals + the decc$<name>
+                         * aliases the alpha-dec-vms port imports. uv[] is static
+                         * (BSS), so the larger struct univ (name+internal) costs
+                         * no stack. */
 
 static void die(const char *msg)
 {
@@ -838,7 +848,10 @@ static void resolve_olbs(struct obj **objs, int *nobj, int *cap,
          * pulled, the name enters D and drops out on the next iteration. */
         for (int i = 0; i < nuniv; i++) {
             if (uv[i].kind == OVMX_SV_RETIRED) continue;
-            const char *nm = uv[i].name;
+            const char *nm = uv[i].internal;   /* the DEFINING symbol (alias-aware):
+                                                * a `decc$fprintf/fprintf` universal
+                                                * is satisfied by the member defining
+                                                * `fprintf`, not `decc$fprintf`. */
             if (nm[0] && !symset_has(&D, nm)) symset_add(&U, nm);
         }
 
@@ -895,8 +908,10 @@ static uint32_t parse_kind(const char *k)
         return OVMX_SV_DATA;
     if (strcmp(k, "PRIVATE_PROCEDURE") == 0 || strcmp(k, "PRIVATE_DATA") == 0)
         return OVMX_SV_RETIRED;
+    if (strcmp(k, "GLOBALVALUE") == 0)
+        die("GLOBALVALUE requires a value: name=GLOBALVALUE:0x<hex>");
     die("unknown SYMBOL_VECTOR keyword "
-        "(want PROCEDURE|DATA|PRIVATE_PROCEDURE|PRIVATE_DATA)");
+        "(want PROCEDURE|DATA|PRIVATE_PROCEDURE|PRIVATE_DATA|GLOBALVALUE:<val>)");
     return 0;
 }
 
@@ -911,8 +926,31 @@ static int parse_symbol_vector(char *spec, struct univ *uv)
         if (!eq) die("SYMBOL_VECTOR entry needs name=KEYWORD");
         *eq = '\0';
         if (n >= MAX_UNIV) die("too many universal symbols");
+        /* "universal" or "universal/internal" (VSI OpenVMS Linker SYMBOL_VECTOR
+         * alias form, Utility Manual §5.6): the exported universal name may differ
+         * from the internal symbol that defines it — exactly how real DECC$SHR
+         * exports `decc$<name>` bound to the C-RTL implementation. Absent a '/',
+         * internal == universal (current behavior unchanged). (vms-c07 R1) */
+        char *slash = strchr(tok, '/');
+        if (slash) *slash = '\0';
         snprintf(uv[n].name, sizeof uv[n].name, "%s", tok);
-        uv[n].kind = parse_kind(eq + 1);
+        snprintf(uv[n].internal, sizeof uv[n].internal, "%s",
+                 slash ? slash + 1 : tok);
+        /* GLOBALVALUE form: "name=GLOBALVALUE:0x<hex>" (OVMX authoring syntax —
+         * the .vms$sv is an OVMX-original section, so this keyword is ours). The
+         * value is an ABSOLUTE link-time constant carried in the vector entry,
+         * not resolved from any input object; it is preset here and left intact
+         * by the layout pass. A globalvalue names no internal symbol. (vms-954) */
+        char *kw = eq + 1;
+        char *colon = strchr(kw, ':');
+        if (colon && (size_t)(colon - kw) == strlen("GLOBALVALUE") &&
+            strncmp(kw, "GLOBALVALUE", strlen("GLOBALVALUE")) == 0) {
+            uv[n].kind  = OVMX_SV_GLOBALVALUE;
+            uv[n].value = strtoull(colon + 1, NULL, 0);   /* 0x.. hex or decimal */
+            uv[n].internal[0] = '\0';                     /* no defining symbol  */
+        } else {
+            uv[n].kind = parse_kind(kw);
+        }
         n++;
     }
     if (n == 0) die("SYMBOL_VECTOR= is empty");
@@ -1303,6 +1341,58 @@ static size_t g_syms_cap;          /* power of two */
 static int  g_allow_undef;
 static long g_deferred;            /* count of deferred (unresolved) externals */
 
+/* Producer GLOBALVALUE table (vms-954). A --use'd producer (DECC$SHR is the C
+ * RTL surface) may export universals of kind OVMX_SV_GLOBALVALUE: absolute
+ * link-time constants (VMS globalvalues — the errno message codes such as
+ * C$_EXIT1 that the alpha-dec-vms crt0 references as `&C$_EXIT1`). Unlike a
+ * PROCEDURE/DATA universal, a globalvalue is NOT bound at activation through an
+ * import cell; it is a LINK-TIME constant, folded directly into every reference
+ * (VMS resolves globalvalues at link, not activation). This table is built once
+ * per link from the loaded producers' symbol vectors, then consulted by
+ * resolve_ref() and the GOT/ABS64 apply so a reference to such a name resolves
+ * to the constant WITHOUT a load bias and WITHOUT a .vms$imp/.vms$rel entry. */
+struct gvalue { char name[256]; uint64_t value; };
+static struct gvalue *g_gval;
+static int            g_ngval;
+
+/* Look up an absolute globalvalue by name; 1 + *out on hit, 0 on miss.
+ * *out may be NULL when the caller only needs the yes/no. */
+static int gval_find(const char *nm, uint64_t *out)
+{
+    for (int i = 0; i < g_ngval; i++)
+        if (strcmp(g_gval[i].name, nm) == 0) {
+            if (out) *out = g_gval[i].value;
+            return 1;
+        }
+    return 0;
+}
+
+/* Collect every OVMX_SV_GLOBALVALUE universal across the loaded producers into
+ * g_gval. Called at the top of a consumer/executable link, before the import
+ * scan (a globalvalue must NOT become an import). Idempotent-safe: frees any
+ * prior table first. */
+static void collect_globalvalues(struct producer *ps, int np)
+{
+    free(g_gval); g_gval = NULL; g_ngval = 0;
+    int cap = 0;
+    for (int p = 0; p < np; p++) {
+        const struct ovmx_sv_entry *e = ovmx_sv_entries(ps[p].sv);
+        const char *nm = ovmx_sv_names(ps[p].sv);
+        for (uint32_t i = 0; i < ps[p].sv->count; i++) {
+            if (e[i].kind != OVMX_SV_GLOBALVALUE) continue;
+            if (g_ngval >= cap) {
+                cap = cap ? cap * 2 : 16;
+                g_gval = realloc(g_gval, (size_t)cap * sizeof *g_gval);
+                if (!g_gval) die("oom growing globalvalue table");
+            }
+            snprintf(g_gval[g_ngval].name, sizeof g_gval[g_ngval].name,
+                     "%s", nm + e[i].name_off);
+            g_gval[g_ngval].value = e[i].value;
+            g_ngval++;
+        }
+    }
+}
+
 /* Names referenced with a WEAK undefined reference and defined by NO input
  * object. Standard ELF semantics resolve a weak undefined symbol to address 0 —
  * it is NOT a deferred import and NOT an error. For DECC$SHR these are exactly
@@ -1463,6 +1553,11 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx)
             uint64_t da = placed_addr(&objs[doi], &objs[doi].sym[dki]);
             if (da) return da;
         }
+        /* A producer globalvalue (VMS globalvalue, e.g. C$_EXIT1): resolve to
+         * its ABSOLUTE link-time constant. The caller's ABS64 apply must NOT
+         * add a .vms$rel bias for it (it is absolute, not image-relative) — it
+         * re-checks gval_find() to suppress that. (vms-954) */
+        { uint64_t gv; if (gval_find(nm, &gv)) return gv; }
         if (weak_has(nm)) return 0;   /* weak-undef resolves to 0 (ELF semantics) */
         if (g_allow_undef) { g_deferred++; return 0; }
         /* NAME THE SYMBOL. Without it this diagnostic says only that *a*
@@ -1831,6 +1926,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     g_allow_undef = allow_undef;
     g_deferred = 0;
     build_symhash(objs, nobj);
+    /* Collect producer globalvalues (VMS globalvalues — absolute link-time
+     * constants exported by a --use'd producer, e.g. C$_EXIT1 from DECC$SHR)
+     * before the import scan, so a reference to one folds the constant instead
+     * of becoming an activation import. (vms-954) */
+    collect_globalvalues(ps, np);
 
     /* Executable entry mode. An object set that defines its own `_start` is a
      * FREESTANDING program (it owns entry + exit — the pre-vms-ba1 consumers and
@@ -1882,6 +1982,10 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             int pidx; uint32_t svidx;
             if (!find_universal(ps, np, nm, &pidx, &svidx))
                 continue;   /* not a producer universal: weak/deferred path below */
+            if (ovmx_sv_entries(ps[pidx].sv)[svidx].kind == OVMX_SV_GLOBALVALUE)
+                continue;   /* globalvalue: a LINK-TIME constant folded at the
+                             * reference site (resolve_ref / GOT fill), never an
+                             * activation-bound import. (vms-954) */
             int k = import_find(imp, nimp, nm);
             if (k < 0) {
                 if (nimp >= imp_cap) {
@@ -2098,8 +2202,17 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     int nabs = 0;
     for (int i = 0; i < nobj; i++)
         for (int r = 0; r < objs[i].nreloc; r++)
-            if (is_abs64_reloc(ELF64_R_TYPE(objs[i].relocs[r].info)))
+            if (is_abs64_reloc(ELF64_R_TYPE(objs[i].relocs[r].info))) {
+                /* A globalvalue ABS64 reference resolves to an ABSOLUTE constant
+                 * that is NOT recorded in .vms$rel (the apply loop skips it), so
+                 * it must not inflate the .vms$rel upper bound either — else an
+                 * image whose only ABS64 ref is a globalvalue would carry an
+                 * empty .vms$rel. (vms-954) */
+                const char *anm = objs[i].str +
+                    objs[i].sym[ELF64_R_SYM(objs[i].relocs[r].info)].st_name;
+                if (gval_find(anm, NULL)) continue;
                 nabs++;
+            }
 
     /* ---- Layout: [ehdr][phdr] text|rodata|got|tlsdesc|data|init_array|tdata|sv|rel|tls|bss --- */
     uint64_t off_ph   = sizeof(Elf64_Ehdr);
@@ -2319,11 +2432,17 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
      * from the image, which is why the slot was retired instead of deleted. Its
      * value stays 0 and no reader ever dereferences it — find_universal(),
      * ovmx_sv_at() and IMGACT's sv_find_named() all skip OVMX_SV_RETIRED. */
-    for (int i = 0; i < nuniv; i++)
-        uv[i].value = (uv[i].kind == OVMX_SV_RETIRED)
-            ? 0
-            : resolve_named(objs, nobj, uv[i].name,
+    for (int i = 0; i < nuniv; i++) {
+        if (uv[i].kind == OVMX_SV_RETIRED)
+            uv[i].value = 0;
+        else if (uv[i].kind == OVMX_SV_GLOBALVALUE)
+            /* absolute link-time constant, preset at parse — keep it (no input
+             * symbol defines it; it is bound unbiased by ovmx_sv_resolve) */
+            ;
+        else
+            uv[i].value = resolve_named(objs, nobj, uv[i].internal,
                             "universal symbol not defined in any input object");
+    }
 
     uint32_t names_size = 0;
     for (int i = 0; i < nuniv; i++) names_size += (uint32_t)strlen(uv[i].name) + 1;
@@ -2545,6 +2664,18 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             rel_off[nrel_filled++] = got[i].va;   /* image-relative -> bias at activation */
             continue;
         }
+        /* A producer globalvalue address-taken via the GOT (e.g. `&C$_EXIT1` if
+         * the port's codegen routes it GOT-indirect): fill the cell with the
+         * ABSOLUTE constant and do NOT record it in .vms$rel — it is not an
+         * image-relative address, so it must not be load-biased. (vms-954) */
+        {
+            uint64_t gv;
+            if (gval_find(got[i].name, &gv)) {
+                got[i].value = gv;
+                *(uint64_t *)(img + got[i].va) = gv;
+                continue;
+            }
+        }
         /* Undefined GOT symbol. A WEAK reference (no definition anywhere) is a
          * legitimate address-0 resolution — the linker-defined empty
          * __init_array/__fini_array bounds and null _DYNAMIC of a C-RTL with no
@@ -2656,6 +2787,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                 if (s == 0) continue;   /* deferred (counted in resolve_ref) */
                 uint64_t value = s + (uint64_t)rl->add;
                 *(uint64_t *)(img + site) = value;
+                /* A producer globalvalue is an ABSOLUTE constant (VMS
+                 * globalvalue): write it, but do NOT record the slot in
+                 * .vms$rel — biasing it at activation would corrupt the
+                 * constant (e.g. C$_EXIT1 = 0x0035A009). (vms-954) */
+                if (gval_find(nm, NULL)) continue;
                 rel_off[nrel_filled++] = site;
             } else {
                 int ii = import_find(imp, nimp, nm);
@@ -2991,7 +3127,8 @@ int main(int argc, char **argv)
     const char *out = NULL;
     const char **ins = calloc((size_t)argc, sizeof *ins);  /* <= argc inputs */
     int nin = 0;
-    struct univ uv[MAX_UNIV];
+    static struct univ uv[MAX_UNIV];   /* static (BSS): MAX_UNIV*sizeof(univ) is
+                                        * ~1MB with the R1b decc$ vector — off the stack. */
     int nuniv = 0;
     int shareable = 0, executable = 0, allow_undef = 0;
     struct producer *producers = calloc((size_t)argc, sizeof *producers);

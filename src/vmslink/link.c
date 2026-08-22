@@ -264,7 +264,13 @@
  * Declared universal symbols (from SYMBOL_VECTOR=).
  * -------------------------------------------------------------------------- */
 struct univ {
-    char     name[256];
+    char     name[256];     /* the EXPORTED universal name (what consumers import) */
+    char     internal[256]; /* the INTERNAL symbol that defines it (what we resolve
+                             * against input objects). Equals `name` for a plain
+                             * `name=KIND` entry; differs for the VSI Linker
+                             * `SYMBOL_VECTOR=(universal/internal=KIND)` alias form —
+                             * exactly how real DECC$SHR exports `decc$<name>` bound
+                             * to the C-RTL implementation symbol. (vms-c07 R1) */
     uint32_t kind;          /* enum ovmx_sv_kind */
     uint64_t value;         /* image-relative address, filled during layout */
     int      resolved;
@@ -853,7 +859,10 @@ static void resolve_olbs(struct obj **objs, int *nobj, int *cap,
          * pulled, the name enters D and drops out on the next iteration. */
         for (int i = 0; i < nuniv; i++) {
             if (uv[i].kind == OVMX_SV_RETIRED) continue;
-            const char *nm = uv[i].name;
+            const char *nm = uv[i].internal;   /* the DEFINING symbol (alias-aware):
+                                                * a `decc$fprintf/fprintf` universal
+                                                * is satisfied by the member defining
+                                                * `fprintf`, not `decc$fprintf`. */
             if (nm[0] && !symset_has(&D, nm)) symset_add(&U, nm);
         }
 
@@ -926,7 +935,16 @@ static int parse_symbol_vector(char *spec, struct univ *uv)
         if (!eq) die("SYMBOL_VECTOR entry needs name=KEYWORD");
         *eq = '\0';
         if (n >= MAX_UNIV) die("too many universal symbols");
+        /* "universal" or "universal/internal" (VSI OpenVMS Linker SYMBOL_VECTOR
+         * alias form, Utility Manual §5.6): the exported universal name may differ
+         * from the internal symbol that defines it — exactly how real DECC$SHR
+         * exports `decc$<name>` bound to the C-RTL implementation. Absent a '/',
+         * internal == universal (current behavior unchanged). (vms-c07 R1) */
+        char *slash = strchr(tok, '/');
+        if (slash) *slash = '\0';
         snprintf(uv[n].name, sizeof uv[n].name, "%s", tok);
+        snprintf(uv[n].internal, sizeof uv[n].internal, "%s",
+                 slash ? slash + 1 : tok);
         uv[n].kind = parse_kind(eq + 1);
         n++;
     }
@@ -2376,7 +2394,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     for (int i = 0; i < nuniv; i++)
         uv[i].value = (uv[i].kind == OVMX_SV_RETIRED)
             ? 0
-            : resolve_named(objs, nobj, uv[i].name,
+            : resolve_named(objs, nobj, uv[i].internal,
                             "universal symbol not defined in any input object");
 
     uint32_t names_size = 0;

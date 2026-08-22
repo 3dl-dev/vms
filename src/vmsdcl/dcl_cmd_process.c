@@ -2080,14 +2080,43 @@ int cmd_spawn(struct dcl_command *cmd)
          * uniqueness within the UIC group (SS$_DUPLNAM); loop until a free
          * "base_N" is found, or stop on any other error.
          */
-        if (proc_name_q && proc_name_q[0]) {
+        if (access("/dev/vms", R_OK | W_OK) != 0) {
+            /*
+             * No executive present. This is build/test tooling, NOT the
+             * product runtime (Rule 9: PID 1 refuses to boot without
+             * /dev/vms). The subprocess still genuinely runs, unregistered --
+             * the same "it needs no executive" path lib$spawn takes
+             * (src/libvms/rtl/lib_misc.c). This is NOT the fabrication INV-6
+             * forbids: nothing claims a PCB and nothing reports a fake
+             * registration, so SHOW USERS honestly shows nothing because
+             * nothing registered. The name is the one this SPAWN would have
+             * asked for, for the /NOWAIT message only.
+             */
+            if (proc_name_q && proc_name_q[0]) {
+                strncpy(rep.name, proc_name_q, sizeof(rep.name) - 1);
+                rep.name[sizeof(rep.name) - 1] = '\0';
+            } else {
+                /* Format into a wide temp then copy bounded into the fixed
+                 * wire field: base_name is capped above, but the compiler
+                 * cannot prove it, so a direct snprintf trips
+                 * -Werror=format-truncation. */
+                char nm[64];
+                snprintf(nm, sizeof(nm), "%s_1", base_name);
+                strncpy(rep.name, nm, sizeof(rep.name) - 1);
+                rep.name[sizeof(rep.name) - 1] = '\0';
+            }
+            rep.status = SS$_NORMAL;
+        } else if (proc_name_q && proc_name_q[0]) {
             strncpy(rep.name, proc_name_q, sizeof(rep.name) - 1);
             rep.name[sizeof(rep.name) - 1] = '\0';
             rep.status = vms_kif_setprn(rep.name);
         } else {
             rep.status = SS$_DUPLNAM;
             for (int n = 1; n <= 65535; n++) {
-                snprintf(rep.name, sizeof(rep.name), "%s_%d", base_name, n);
+                char nm[64];
+                snprintf(nm, sizeof(nm), "%s_%d", base_name, n);
+                strncpy(rep.name, nm, sizeof(rep.name) - 1);
+                rep.name[sizeof(rep.name) - 1] = '\0';
                 rep.status = vms_kif_setprn(rep.name);
                 if (rep.status & 1)
                     break;                 /* named */

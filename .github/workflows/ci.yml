@@ -5337,6 +5337,47 @@ jobs:
               sh /src/src/imgact/test/run_link_selfhost_native.sh
             '
 
+  # mmk-link-selfhost-fixpoint — self-host S4 LINK.EXE fixpoint via the MMK
+  # driver (bead vms-89d, the vms-678 Build-native 1.0 gate).  ADDITIVE port of
+  # the multi-TU LINK.EXE self-host fixpoint from BUILD.COM to MMK: the committed
+  # descrip.mms tests/toolchain/component/LINKSH.MMS describes two TCC compiles
+  # (link.c + ovmx_link_rms_io.c) then a six-shareable LINK, and MMK resolves that
+  # plan (the toolchain-mmk-link-selfhost-plan ctest proves it).  This job proves
+  # the OTHER half: the real OVMX-native LINK.EXE, executing that exact plan on
+  # the real LINK.EXE sources, reproduces itself byte-for-byte -- gen1 builds
+  # gen2, the OVMX-built gen2 builds gen3, gen2 == gen3.  Runs NATIVE amd64 (not
+  # arm64 emulation like link-selfhost-native): this proof does NOT run TCC.EXE
+  # (it compiles the objects with the host CC -- TCC's compile determinism is the
+  # separate run_tcc_selfhost gen2==gen3 fixpoint), so it is not bound by tinycc's
+  # uname-keyed arch gate.  It does NOT touch BUILD.COM or the existing
+  # link-selfhost-native job (the destructive retirement of BUILD.COM is a later
+  # vms-89d rung, deferred behind the ODS-2 flip).  MMK's own MAILBOX-DRIVEN
+  # execution of this plan (ovmx_mmk_sp.c: $CREMBX/lib$spawn, executive-only)
+  # rides QEMU and is a follow-on rung.  LINK_SELFHOST_EXPECT=1 (BLOCKING): any
+  # producer-graph, gen build, or gen2!=gen3 mismatch is a real regression.
+  # -----------------------------------------------------------------------
+  mmk-link-selfhost-fixpoint:
+    name: MMK LINK.EXE self-host fixpoint — real LINK.EXE builds LINK.EXE, gen2==gen3 (self-hosting S4)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: MMK-planned LINK.EXE fixpoint — the real LINK.EXE links LINK.EXE twice and asserts gen2==gen3 (amd64 musl)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/mmk-link-selfhost-build LINK_SELFHOST_EXPECT=1
+              sh /src/tests/toolchain/run_mmk_link_selfhost_build.sh
+            '
+
   # -----------------------------------------------------------------------
   # netbsd-vax-simh (vms-0041, epic vms-8e8 "OVMX/NetBSD SYSKRNL")
   #

@@ -37,6 +37,11 @@ USAGE
     python3 tools/roadmap/reconcile.py --site-dir ../openvmx-site
     python3 tools/roadmap/reconcile.py --rd-json snap.json --as-of 2026-08-14 --check
     python3 tools/roadmap/reconcile.py --print-gaps    # just report rd-labeling gaps
+    python3 tools/roadmap/reconcile.py --check-cascade --site-dir ../openvmx-site
+                                                       # verify every public surface
+                                                       # reflects the latest release tag
+                                                       # (fails loudly on a demo/site that
+                                                       # silently trails the shipped cut)
 """
 from __future__ import annotations
 
@@ -44,6 +49,7 @@ import argparse
 import datetime as _dt
 import json
 import os
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -631,6 +637,153 @@ def print_gaps(data: dict) -> None:
 
 
 # --------------------------------------------------------------------------- #
+#  release cascade verification                                                 #
+# --------------------------------------------------------------------------- #
+
+def _read(path: str) -> str | None:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def check_cascade(site_dir: str) -> int:
+    """Verify every downstream public surface reflects the latest release TAG.
+
+    THE SOURCE OF TRUTH is the newest release-like git tag (same set the Atom
+    feed is derived from — no new ledger). Given that tag, every public surface
+    must either (a) show that version, or (b) — for the in-browser DEMO, whose
+    image is expensively re-captured and can lag a cut when the capture races an
+    install-reboot — carry an EXPLICIT, tracked pin acknowledging the lag. A demo
+    that silently trails the latest release (the "demo shows V0.5 while V0.5-1
+    shipped" drift) FAILS here loudly.
+
+    Surfaces:
+      - index.html            `data-ovmx-version` spans      == latest tag  (product edition)
+      - docs/installation/…   `data-ovmx-version` spans      == latest tag  (manual "applies to")
+      - atom.xml              newest <entry> <title>         == latest tag  (release feed)
+      - boot/DEPLOYED_TAG     the image the demo actually boots
+      - boot/qemu-worker.js   PAYLOAD_VER cache-buster       keyed to DEPLOYED_TAG (the demo payload)
+      - index.html            `data-demo-version` span       == DEPLOYED_TAG (honest demo badge)
+      - demo lag rule         DEPLOYED_TAG == latest, OR boot/DEMO_PIN.json
+                              {pinned_to == DEPLOYED_TAG, blocked_from == latest}
+
+    Returns 0 if every surface is current (an acknowledged demo pin counts as a
+    pass, with a warning); 1 on any drift; 2 on a usage/environment error.
+    """
+    rels = git_releases()
+    if not rels:
+        print("check-cascade: no release-like git tags found (need the vms repo "
+              "with tags fetched)", file=sys.stderr)
+        return 2
+    latest = rels[0]["tag"]
+    print(f"latest release tag (source of truth): {latest}")
+
+    fails: list[str] = []
+    warns: list[str] = []
+
+    def rule(name: str, ok: bool, shown, expected):
+        mark = "OK  " if ok else "DRIFT"
+        print(f"  [{mark}] {name}: shown={shown!r} expected={expected!r}")
+        if not ok:
+            fails.append(f"{name}: shown {shown!r}, expected {expected!r}")
+
+    # ---- text/data surfaces that must always follow the latest tag ----
+    for rel in ("index.html", os.path.join("docs", "installation", "index.html")):
+        path = os.path.join(site_dir, rel)
+        html = _read(path)
+        if html is None:
+            print(f"  [skip ] {rel}: not present")
+            continue
+        spans = re.findall(r"data-ovmx-version>([^<]*)</span>", html)
+        if not spans:
+            rule(f"{rel} data-ovmx-version", False, "(no span found)", latest)
+        else:
+            for v in dict.fromkeys(spans):  # unique, stable order
+                rule(f"{rel} data-ovmx-version", v == latest, v, latest)
+
+    atom = _read(os.path.join(site_dir, "atom.xml"))
+    if atom is None:
+        rule("atom.xml newest entry", False, "(missing)", latest)
+    else:
+        m = re.search(r"<entry>.*?<title>(.*?)</title>", atom, re.S)
+        shown = m.group(1) if m else "(no entry)"
+        rule("atom.xml newest entry", shown == latest, shown, latest)
+
+    # ---- demo surfaces, keyed to what the demo image actually boots ----
+    deployed = (_read(os.path.join(site_dir, "boot", "DEPLOYED_TAG")) or "").strip()
+    if not deployed:
+        rule("boot/DEPLOYED_TAG", False, "(missing/empty)", latest)
+        deployed = None
+
+    if deployed:
+        # PAYLOAD_VER is a cache-buster for the demo PAYLOAD, so it tracks
+        # DEPLOYED_TAG (the image on disk), not the product edition.
+        worker = _read(os.path.join(site_dir, "boot", "qemu-worker.js"))
+        if worker is None:
+            rule("boot/qemu-worker.js PAYLOAD_VER", False, "(missing)", deployed)
+        else:
+            pm = re.search(r"PAYLOAD_VER\s*=\s*'([^']*)'", worker)
+            pv = pm.group(1) if pm else "(not found)"
+            ok = bool(pm) and re.fullmatch(re.escape(deployed) + r"(-\d+)?", pv) is not None
+            rule("boot/qemu-worker.js PAYLOAD_VER (keyed to DEPLOYED_TAG)",
+                 ok, pv, f"{deployed}[-<run>]")
+
+        # The visible demo badge must state what the demo really boots.
+        idx = _read(os.path.join(site_dir, "index.html")) or ""
+        dspans = re.findall(r"data-demo-version>([^<]*)</span>", idx)
+        if not dspans:
+            rule("index.html data-demo-version (visible demo badge)",
+                 False, "(no span found)", deployed)
+        else:
+            for v in dict.fromkeys(dspans):
+                rule("index.html data-demo-version (visible demo badge)",
+                     v == deployed, v, deployed)
+
+        # The lag rule: current, or explicitly + trackably pinned.
+        if deployed == latest:
+            rule("demo tracks latest release", True, deployed, latest)
+        else:
+            pin_raw = _read(os.path.join(site_dir, "boot", "DEMO_PIN.json"))
+            pin = None
+            if pin_raw:
+                try:
+                    pin = json.loads(pin_raw)
+                except json.JSONDecodeError as e:
+                    print(f"  [DRIFT] boot/DEMO_PIN.json: invalid JSON ({e})")
+                    fails.append("boot/DEMO_PIN.json is not valid JSON")
+            if (pin and pin.get("pinned_to") == deployed
+                    and pin.get("blocked_from") == latest):
+                print(f"  [WARN ] demo is DELIBERATELY pinned to {deployed} "
+                      f"(latest {latest} blocked): {pin.get('reason','(no reason)')} "
+                      f"[tracking: {pin.get('tracking','(none)')}]")
+                warns.append(f"demo pinned to {deployed}, latest is {latest}")
+            else:
+                print(f"  [DRIFT] demo boots {deployed} but latest release is "
+                      f"{latest}, and boot/DEMO_PIN.json does not explicitly "
+                      f"acknowledge it (need pinned_to={deployed}, "
+                      f"blocked_from={latest})")
+                fails.append(
+                    f"demo silently trails: boots {deployed}, latest {latest}, "
+                    f"no acknowledging DEMO_PIN.json")
+
+    print()
+    if fails:
+        print(f"CASCADE DRIFT — {len(fails)} surface(s) do not reflect {latest}:")
+        for f in fails:
+            print(f"  - {f}")
+        return 1
+    if warns:
+        print(f"cascade OK for {latest} (with {len(warns)} acknowledged pin(s)):")
+        for w in warns:
+            print(f"  - {w}")
+        return 0
+    print(f"cascade OK — every downstream surface reflects {latest}")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
@@ -645,11 +798,26 @@ def main() -> int:
                          "the rd-derived roadmap.json)")
     ap.add_argument("--check", action="store_true",
                     help="exit 1 if regeneration would change any file (drift gate)")
+    ap.add_argument("--check-cascade", action="store_true",
+                    help="verify every public downstream surface in --site-dir "
+                         "reflects the latest release tag (or, for the demo, "
+                         "carries an explicit tracked pin). Exits 1 on drift. "
+                         "Derived from git tags alone — needs no rd snapshot, so "
+                         "it is safe to run in CI/the release train.")
     ap.add_argument("--print-gaps", action="store_true",
                     help="print the rd-labeling gap report and exit")
     args = ap.parse_args()
 
     as_of = args.as_of or _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+
+    # Cascade check: verify the public surfaces reflect the latest release tag.
+    # Derived from git tags alone (like --feed-only), so it needs no rd snapshot
+    # and is safe on the release train / in CI.
+    if args.check_cascade:
+        if not args.site_dir:
+            print("--check-cascade requires --site-dir", file=sys.stderr)
+            return 2
+        return check_cascade(args.site_dir)
 
     # Feed-only: the release feed is derived from git tags alone, so it needs no
     # rd snapshot and cannot touch the rd-derived roadmap.json. This is the mode

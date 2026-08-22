@@ -247,6 +247,21 @@ static uint32_t vms_proc_continue_identity(struct vms_proc *proc)
         memcpy(proc->prcnam,   parent->prcnam,   sizeof(proc->prcnam));
         memcpy(proc->terminal, parent->terminal, sizeof(proc->terminal));
 
+        /*
+         * CLI invocation context (vms-f60d): an image inherits the invoking
+         * CLI's command line and cliflag from the CLI's PCB, the same way it
+         * inherits identity. This is what lets DCL set the context once
+         * (VMS_IOCTL_SETCLI) and every image it activates read its OWN
+         * invoking command line back (VMS_IOCTL_GETCLI) from the executive,
+         * never a Linux env-var shim (INV-6). The image's own completion
+         * $STATUS is NOT inherited -- each image records its own via
+         * VMS_IOCTL_SETEXIT -- so exit_status/has_exit_status are left as the
+         * kmem_cache_zalloc zero.
+         */
+        proc->cli_present = parent->cli_present;
+        proc->cli_length  = parent->cli_length;
+        memcpy(proc->cli_command, parent->cli_command, sizeof(proc->cli_command));
+
         spin_lock(&parent->mode_lock);
         proc->perm_privs = parent->perm_privs;
         proc->cur_privs  = parent->cur_privs;
@@ -818,6 +833,17 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_hiber(proc, arg);
     case VMS_IOCTL_WAKE:
         return vms_ioctl_wake(proc, arg);
+
+    /* $EXIT/$STATUS + CLI invocation context (vms-f60d) -- the executive
+     * half of IMGACT's VMS-standard image return path (ovmx_activation.h) */
+    case VMS_IOCTL_SETEXIT:
+        return vms_ioctl_setexit(proc, arg);
+    case VMS_IOCTL_GETEXIT:
+        return vms_ioctl_getexit(proc, arg);
+    case VMS_IOCTL_SETCLI:
+        return vms_ioctl_setcli(proc, arg);
+    case VMS_IOCTL_GETCLI:
+        return vms_ioctl_getcli(proc, arg);
 
     /* Logical name tables (executive-resident LNM$SYSTEM, vms-d37) */
     case VMS_IOCTL_LNM_DEFINE:

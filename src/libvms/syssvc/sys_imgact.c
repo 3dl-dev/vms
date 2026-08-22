@@ -1161,6 +1161,23 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
     status = g_faulted ? SS$_ACCVIO : SS$_NORMAL;
     if (!g_faulted && image_rc)
         *image_rc = (int)image_ret;
+
+    /*
+     * Record the image's completion condition value as this process's $STATUS
+     * in the executive (vms-f60d, design §3.4), at image rundown -- the VMS point
+     * where completion status is finalised. The invoking CLI reads it back with
+     * vms_kif_getexit so DCL's $STATUS is the real VMS condition value, not one
+     * lost when control returns here. Recording at rundown (not in SYS$EXIT)
+     * covers every in-process exit path uniformly -- SYS$EXIT, a marker image
+     * that returns, or a fault -- so a later GETEXIT can never read a stale value
+     * from a prior activation. A SysV image reports only a POSIX code, mapped to
+     * a VMS condition value: a fault -> SS$_ACCVIO, exit 0 -> SS$_NORMAL, nonzero
+     * -> SS$_ABORT (the verdict DCL previously synthesised, now executive-owned).
+     * INV-6: with no /dev/vms vms_kif_setexit fails and records nothing.
+     */
+    (void)vms_kif_setexit(
+        g_faulted ? SS$_ACCVIO : (image_ret == 0 ? SS$_NORMAL : SS$_ABORT),
+        NULL);
     goto out_p0;
 
 out_enter_fail:

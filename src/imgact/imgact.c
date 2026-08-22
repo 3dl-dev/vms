@@ -49,6 +49,7 @@
 #include "known_images.h" /* Known Image DB lookup (bead vms-913.5; wired vms-30d) */
 #include "imgact_prodreg.h" /* publish resident producers into LIBVMS$SHR (vms-db2) */
 #include "imgact_acp.h"   /* image reads over the executive Files-11 ACP (vms-3e8e) */
+#include "vms_ioctl.h"    /* VMS_IOCTL_SETEXIT/GETCLI + arg structs (vms-f60d)       */
 #include "ssdef.h"        /* SS$_NOSUCHDEV -- the "executive absent" defer signal */
 
 #ifndef AT_EXECFN
@@ -1929,11 +1930,20 @@ static unsigned int imgact_query_cli_context(void)
 	int fd = imgact_acp_dev_open();
 	if (fd < 0)
 		return 0;               /* no executive => truthfully no CLI */
+	/* Adopt (register-continue) this process's executive PCB, then read the
+	 * invoking CLI context DCL recorded with vms_kif_setcli and this image
+	 * inherited at REGISTER_CONTINUE time (vms-f60d). The executive owns the
+	 * process/CLI relationship, so cliflag comes from there, never an env var. */
+	struct vms_register_args reg;
+	memset(&reg, 0, sizeof(reg));
+	(void)imgact_acp_dev_ioctl(fd, VMS_IOCTL_REGISTER, &reg);
+	struct vms_getcli_args g;
+	memset(&g, 0, sizeof(g));
+	unsigned int cliflag = 0;
+	if (imgact_acp_dev_ioctl(fd, VMS_IOCTL_GETCLI, &g) >= 0 && (g.status & 1))
+		cliflag = g.cliflag ? 1u : 0u;   /* truthful executive-owned answer */
 	imgact_acp_dev_close(fd);
-	/* Executive reachable: the CLI-context field read is the declared
-	 * executive-lane dependency above. Until it lands, report no CLI (the
-	 * honest conservative default) rather than fabricate one. */
-	return 0;
+	return cliflag;
 }
 
 /* cli_util.get_command_line callback: fetch the invoking command line from the
@@ -1952,8 +1962,33 @@ static uint32_t imgact_cli_get_command_line(struct dsc$descriptor_s *out)
 	int fd = imgact_acp_dev_open();
 	if (fd < 0)
 		return SS$_NOSUCHDEV;   /* no executive => fail honest */
+	/* Read the invoking command line the executive holds for this process
+	 * (vms-f60d): register-continue to adopt the PCB, then GETCLI. */
+	struct vms_register_args reg;
+	memset(&reg, 0, sizeof(reg));
+	(void)imgact_acp_dev_ioctl(fd, VMS_IOCTL_REGISTER, &reg);
+	struct vms_getcli_args g;
+	memset(&g, 0, sizeof(g));
+	long rc = imgact_acp_dev_ioctl(fd, VMS_IOCTL_GETCLI, &g);
 	imgact_acp_dev_close(fd);
-	return SS$_NOSUCHDEV;           /* executive command-line read: declared dep */
+	if (rc < 0)
+		return SS$_NOSUCHDEV;
+	if (!(g.status & 1))
+		return g.status;        /* fail honest with the executive's status */
+	if (out && g.cliflag && g.length) {
+		/* Point the descriptor at a static copy of the executive-held command
+		 * line (it must outlive this call: decc$main reads it afterward). */
+		static char cli_cmd[VMS_CLI_CMDLINE_SIZE];
+		unsigned int len = g.length;
+		if (len > VMS_CLI_CMDLINE_SIZE - 1)
+			len = VMS_CLI_CMDLINE_SIZE - 1;
+		for (unsigned int i = 0; i < len; i++)
+			cli_cmd[i] = g.command[i];
+		cli_cmd[len] = '\0';
+		out->dsc$w_length  = (uint16_t)len;
+		out->dsc$a_pointer = cli_cmd;
+	}
+	return g.status;
 }
 
 /* Route a VMS-standard image's returned condition value to process exit.
@@ -1966,7 +2001,6 @@ static uint32_t imgact_cli_get_command_line(struct dsc$descriptor_s *out)
  * fabricate the VMS-observable completion status. Does not return. */
 static void imgact_vms_exit(unsigned long cond)
 {
-	(void)cond;
 	int fd = imgact_acp_dev_open();
 	if (fd < 0) {
 		/* No executive: cannot record the VMS completion status. Report
@@ -1977,16 +2011,28 @@ static void imgact_vms_exit(unsigned long cond)
 			  "completion status", 0);
 		sys_exit(IMGACT_EXIT_NOEXEC);
 	}
-	/* Executive reachable: the $EXIT facility that RECORDS `cond` as the
-	 * process completion status and terminates the image is the executive
-	 * half of this rung -- a DECLARED CROSS-LANE DEPENDENCY (vms-f60d,
-	 * executive $EXIT). Until it lands, still do not fabricate the exit:
-	 * fail honest. */
+	/* Executive reachable: record `cond` as this process's completion $STATUS
+	 * through the executive $EXIT (vms-f60d, design §3.4). Register-continue to
+	 * adopt the PCB, then SETEXIT; the executive maps the condition to a POSIX
+	 * exit code we then pass to exit_group. This is SYS$EXIT's authoritative
+	 * behavior -- never a bare exit_group(cond & 1 ? 0 : 1) that would drop the
+	 * VMS condition value DCL's $STATUS observes (INV-6). */
+	struct vms_register_args reg;
+	memset(&reg, 0, sizeof(reg));
+	(void)imgact_acp_dev_ioctl(fd, VMS_IOCTL_REGISTER, &reg);
+	struct vms_exit_args e;
+	memset(&e, 0, sizeof(e));
+	e.condition = (uint32_t)cond;
+	long rc = imgact_acp_dev_ioctl(fd, VMS_IOCTL_SETEXIT, &e);
+	if (rc < 0 || !(e.status & 1)) {
+		imgact_acp_dev_close(fd);
+		vms_fatal("NOEXITSVC",
+			  "executive $EXIT could not record the VMS condition "
+			  "value", 0);
+		sys_exit(IMGACT_EXIT_NOEXEC);
+	}
 	imgact_acp_dev_close(fd);
-	vms_fatal("NOEXITSVC",
-		  "executive $EXIT facility not yet available to record the VMS "
-		  "condition value", 0);
-	sys_exit(IMGACT_EXIT_NOEXEC);
+	sys_exit((int)e.exit_code);   /* the executive-mapped POSIX exit code */
 }
 
 /* Present the six-argument VMS image-activation context to a VMS-standard

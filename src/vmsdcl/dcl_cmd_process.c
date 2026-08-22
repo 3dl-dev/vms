@@ -1727,13 +1727,33 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
          * below, which handles all of those (a shebang script included).
          */
         if (ia == SS$_NORMAL || ia == SS$_ACCVIO) {
-            if (ia == SS$_NORMAL && image_rc != 0) {
-                dcl_error("DCL", 2, "ABORT",
-                          "image %s exited with error status %%X%08X",
-                          display_name, (unsigned)image_rc);
-                return SS$_ABORT;
+            if (ia == SS$_NORMAL) {
+                /* The image's completion $STATUS is owned by the executive
+                 * (vms-f60d, design §3.4): the in-process image recorded its
+                 * full VMS condition value at SYS$EXIT via vms_kif_setexit, so
+                 * read it back and make it DCL's $STATUS -- the real condition
+                 * value, not a success/fail collapsed from the POSIX exit code.
+                 * If no executive recorded one (no /dev/vms -> has_exited == 0),
+                 * fall back to the image_rc verdict. */
+                uint32_t cond = 0;
+                int exited = 0;
+                uint32_t gx = vms_kif_getexit(&cond, &exited);
+                if (gx == SS$_NORMAL && exited) {
+                    if (!(cond & 1))
+                        dcl_error("DCL", (int)(cond & 7), "ABORT",
+                                  "image %s exited with error status %%X%08X",
+                                  display_name, (unsigned)cond);
+                    return cond;
+                }
+                if (image_rc != 0) {
+                    dcl_error("DCL", 2, "ABORT",
+                              "image %s exited with error status %%X%08X",
+                              display_name, (unsigned)image_rc);
+                    return SS$_ABORT;
+                }
+                return SS$_NORMAL;
             }
-            return (ia == SS$_NORMAL) ? SS$_NORMAL : SS$_ABORT;
+            return SS$_ABORT;   /* SS$_ACCVIO: the image faulted and was run down */
         }
     }
 
@@ -1899,21 +1919,32 @@ int dcl_exec_foreign_command(struct dcl_context *ctx, struct dcl_command *cmd,
     }
     argv[argc] = NULL;
 
-    /* Publish the RAW foreign command tail so the activated image's
+    /* Record the RAW foreign command tail so the activated image's
      * LIB$GET_FOREIGN can return it (vms-54e). On OpenVMS a foreign command
-     * hands the whole untokenized tail to the image via the CLI; OVMX passes it
-     * through the VMS_FOREIGN_CMD environment variable -- the same env channel
-     * DCL already uses for VMS process context (VMS_DEFAULT_DIR, ...), which
-     * reaches BOTH the in-process activation path (same process) and the
-     * fork()+execve() fallback (inherited environment). This is set ONLY for a
-     * foreign command; RUN and DCL-driven utilities leave it unset so their
-     * LIB$GET_FOREIGN correctly falls through to SYS$INPUT. The variable is
-     * cleared after activation returns as a safety net for an image that never
-     * calls LIB$GET_FOREIGN (LIB$GET_FOREIGN itself also consumes it on first
-     * read, so a well-behaved image leaves nothing to clear). */
-    setenv("VMS_FOREIGN_CMD", cmd->raw_tail, 1);
+     * hands the whole untokenized tail to the image via the CLI, and the CLI
+     * relationship is owned by the executive -- so OVMX records it in the
+     * executive process context (vms_kif_setcli, vms-f60d), which the activated
+     * image inherits from this PCB at REGISTER_CONTINUE time and reads back with
+     * LIB$GET_FOREIGN -> vms_kif_getcli. This is the authoritative channel and
+     * replaces the former Linux-env-var shim on the real runtime (design §3.2 /
+     * §4a.3, conductor ruling: read the executive, not an env var; INV-6).
+     *
+     * When /dev/vms is UNREACHABLE (host unit tests, a dev build with no
+     * executive) vms_kif_setcli fails (a non-success VMS status) -- there is
+     * genuinely no executive CLI relationship to record. VMS_FOREIGN_CMD is
+     * retained ONLY as
+     * that no-executive fallback (inherited environment; NOT a claim the
+     * executive succeeded), so the same env channel DCL already uses for VMS
+     * process context (VMS_DEFAULT_DIR, ...) still delivers the tail off the
+     * runtime. Set ONLY for a foreign command; RUN / DCL-driven utilities leave
+     * both unset so their LIB$GET_FOREIGN correctly falls through to SYS$INPUT. */
+    uint32_t cli_st = vms_kif_setcli(1, cmd->raw_tail);
+    int have_exec = (cli_st & 1);   /* odd == the executive recorded it */
+    if (!have_exec)
+        setenv("VMS_FOREIGN_CMD", cmd->raw_tail, 1);
     int fc_status = dcl_activate_image(ctx, image_spec, linux_path, argv);
-    unsetenv("VMS_FOREIGN_CMD");
+    if (!have_exec)
+        unsetenv("VMS_FOREIGN_CMD");
     return fc_status;
 #undef DCL_FC_MAX_ARGV
 }

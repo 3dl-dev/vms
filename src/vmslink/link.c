@@ -3394,6 +3394,32 @@ static int evax_sniff(const uint8_t *buf, size_t n)
     return EVFMT_OTHER;
 }
 
+/* Classify an input's object format from a byte-exact RMS header PEEK — never a
+ * whole-file slurp. Slurping to classify would read the file a SECOND time
+ * through the RMS trace (the ELF path re-reads it in load_obj), doubling the
+ * self-link's read-total and breaking run_link_native.sh's byte-exact
+ * read-total assertion (vms-cbe). The peek reads only the first bytes via the
+ * same open/get/close seam file_is_archive uses, so it is NOT counted by that
+ * per-file sys$get-loop total. evax_sniff needs SELFMAG (4) for ELF and 6 bytes
+ * for the EMH check; 16 is a safe margin. Archives/.OLB take the ELF path. */
+static int sniff_format(const char *path)
+{
+    if (file_is_archive(path) || file_is_olb(path)) return EVFMT_ELF;
+    uint8_t hdr[16];
+    int n;
+#ifdef OVMX_RMS_IO
+    n = ovmx_link_rms_peek(path, hdr, (int)sizeof hdr);
+    if (n < 0) die("cannot open input file (RMS)");
+#else
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) die("cannot open input file");
+    ssize_t r = read(fd, hdr, sizeof hdr);
+    close(fd);
+    n = (r < 0) ? 0 : (int)r;
+#endif
+    return evax_sniff(hdr, (size_t)n);
+}
+
 int main(int argc, char **argv)
 {
     const char *out = NULL;
@@ -3444,31 +3470,31 @@ int main(int argc, char **argv)
      * are never mixed in one link. The EVAX path does not use
      * --shareable/--executable/--symbol-vector, so it dispatches BEFORE those
      * checks. ---- */
-    {
-        size_t sz0; uint8_t *b0 = slurp(ins[0], &sz0);
-        int is_container0 = file_is_archive(ins[0]) || file_is_olb(ins[0]);
-        int fmt0 = is_container0 ? EVFMT_ELF : evax_sniff(b0, sz0);
-        if (fmt0 == EVFMT_EVAX) {
-            struct evax_input *ein = calloc((size_t)nin, sizeof *ein);
-            if (!ein) die("oom allocating EVAX input table");
-            for (int i = 0; i < nin; i++) {
-                size_t sz = sz0; uint8_t *b = b0;
-                if (i != 0) b = slurp(ins[i], &sz);
-                if (file_is_archive(ins[i]) || file_is_olb(ins[i]) ||
-                    evax_sniff(b, sz) != EVFMT_EVAX)
-                    die("the EVAX/Alpha link takes plain EVAX objects only "
-                        "(mixed formats / EVAX archives are a later slice)");
-                ein[i].name = ins[i];
-                if (evax_read(b, sz, &ein[i].obj) != 0) {
-                    fprintf(stderr, "%%LINK-F-EVAX, %s: %s\n", ins[i], evax_last_error());
-                    exit(1);
-                }
+    if (sniff_format(ins[0]) == EVFMT_EVAX) {
+        /* EVAX/Alpha path. Slurp each input ONCE here (no byte-exact read-total
+         * gate on this path), sniff it from the full buffer, and hand it to
+         * evax_read. The ELF path falls through and does its single traced
+         * read per input in load_obj — so classifying ins[0] above uses the
+         * non-counted header peek, not a slurp (vms-cbe). */
+        struct evax_input *ein = calloc((size_t)nin, sizeof *ein);
+        if (!ein) die("oom allocating EVAX input table");
+        for (int i = 0; i < nin; i++) {
+            size_t sz; uint8_t *b = slurp(ins[i], &sz);
+            if (file_is_archive(ins[i]) || file_is_olb(ins[i]) ||
+                evax_sniff(b, sz) != EVFMT_EVAX)
+                die("the EVAX/Alpha link takes plain EVAX objects only "
+                    "(mixed formats / EVAX archives are a later slice)");
+            ein[i].name = ins[i];
+            if (evax_read(b, sz, &ein[i].obj) != 0) {
+                fprintf(stderr, "%%LINK-F-EVAX, %s: %s\n", ins[i], evax_last_error());
+                exit(1);
             }
-            emit_evax_image(ein, nin, transfer, allow_undef, out);
-            return 0;
         }
-        free(b0);   /* ELF path re-slurps each input via load_obj below */
+        emit_evax_image(ein, nin, transfer, allow_undef, out);
+        return 0;
     }
+    /* ELF object set: fall through to emit_shareable. load_obj does the single
+     * byte-exact RMS read per input; no slurp happened above. */
 
     if (shareable == executable)
         die("specify exactly one of --shareable / --executable");

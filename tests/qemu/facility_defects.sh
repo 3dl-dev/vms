@@ -507,6 +507,7 @@ p0-unmap-clears-p1
 super-mode-escalation
 image-rundown-without-entry
 image-rundown-leaks-user-lock
+proc-rundown-locks-not-released
 imgact-p1-not-protected
 consumer-import-not-bound-to-resident
 publish-does-not-populate-registry
@@ -5373,6 +5374,26 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    proc-rundown-locks-not-released)
+        case "$_f" in
+        facility)     echo "process rundown: lock/EF/channel release at task death, via BOTH the /dev/vms .release path and the lazy reaper (vms_proc_free_claimed -> vms_proc_release_locks, vms-ff8)";;
+        targets)      echo "kernel/vms_module.c";;
+        suites_red)   echo "test_syssvc_rundown_ff8";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_proc_free_claimed() stops calling vms_proc_release_locks(proc), so the locks a dead subject held are NEVER released as its PCB is freed -- neither on the synchronous .release path (a subject that owns its /dev/vms channel exits) nor on the lazy vms_proc_reap_dead() path (a shared-fd subject reaped by a later process-table op). The PCB is still unhashed and freed and the sibling AST / common-EF / channel releases in the same function are untouched, so rundown still 'happens' -- only the dead subject's still-granted lock survives on the resource, so a conflicting \$ENQ from a live process is denied forever. This is the exact rundown-completeness property vms-ff8 characterized: rundown must RELEASE the resources, not merely unhash the entry. Only the two assertions that re-take the resource after the subject dies can tell the difference.";;
+        require_fail) cat <<'EOF'
+A: after a fresh-fd subject's exit, EX+NOQUEUE granted with NO table op (SYNCHRONOUS .release rundown)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+B2: after an unrelated process-table op reaps the dead subject, the SAME $ENQ is granted (held only until the reap)
+EOF
+                      ;;
+        knock_on_why)  echo "SAME DEFECT, OBSERVED ON THE OTHER RELEASE PATH. vms_proc_release_locks() is called once, from vms_proc_free_claimed(), which BOTH the synchronous .release (Part A, a fresh-fd subject's own exit) and the lazy reaper (Part B2, a shared-fd subject reaped by a later \$GETJPI) funnel through. With that one call removed, the fresh-fd subject's lock is not released at .release (require_fail) and the shared-fd subject's lock is not released when the reaper frees its PCB (this assertion) -- the two visible faces of the one skipped release, not two independent properties.";;
+        esac;;
+
     imgact-p1-not-protected)
         case "$_f" in
         facility)     echo "in-process image activation, critical-P1 protection (imgact_activate() -> vms_kif_p1_protect, vms-68f.iv -- increment (iv) of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.3(b))";;
@@ -6745,6 +6766,18 @@ apply_edit() {
         # $_file for this defect (targets is kernel/vms_access.c), so it is
         # unaffected.
         sed -i 's|    vms_proc_rundown_locks(proc, rundown_mode);|    /* NEGCTL image-rundown-leaks-user-lock: image locks not released */|' "$_file";;
+
+    proc-rundown-locks-not-released)
+        # UNIQUE TEXT, no range anchor needed: vms_proc_release_locks(proc) is
+        # called exactly once in kernel/vms_module.c -- the release block of
+        # vms_proc_free_claimed(), the single teardown funnel reached by BOTH
+        # vms_dev_release() (synchronous .release) and vms_proc_reap_dead()
+        # (the lazy reaper). Replacing that one call with a comment leaves the
+        # sibling AST/common-EF/channel releases and the kfree_rcu untouched,
+        # so the PCB is still freed and unhashed; only the dead subject's locks
+        # stop being released. The definition in kernel/vms_lock.c is a
+        # different file, never $_file for this defect (targets kernel/vms_module.c).
+        sed -i 's|    vms_proc_release_locks(proc);|    /* NEGCTL proc-rundown-locks-not-released: dead proc locks not released */|' "$_file";;
 
     imgact-p1-not-protected)
         # UNIQUE TEXT, no range anchor needed: the RO protect is the only

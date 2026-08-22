@@ -236,6 +236,44 @@ echo "gpx_caller(5) exit = $RC (expect 36 = gpx_callee(5)*7+1)"
 [ "$RC" -eq 36 ] || { echo "FAIL: intra-image R_X86_64_GOTPCRELX indirect call did not yield 36 (got $RC)"; exit 1; }
 
 echo
+echo "== SYMBOL_VECTOR alias: universal/internal form (real DECC\$SHR decc\$<name>) (vms-c07 R1) =="
+# Real OpenVMS DECC\$SHR exports `decc\$fprintf` (the universal a consumer imports)
+# bound to the C-RTL's INTERNAL implementation symbol -- the VSI Linker
+# SYMBOL_VECTOR=(universal/internal=PROCEDURE) alias form (Utility Manual S5.6).
+# OVMX's musl libc.a defines `fprintf`, not `decc\$fprintf`, so R1's decc\$ vector
+# needs exactly this: export the universal under a name that DIFFERS from the
+# internal defining symbol. Proof: slot 0 (the alias) must resolve to real_impl's
+# code, AND the exported .vms\$sv name blob must carry the ALIAS name, not the
+# internal one. A plain `plain_export=PROCEDURE` shares the same vector to prove
+# the slash-parsing leaves ordinary (internal==universal) entries untouched.
+cat > "$WORK/aliaslib.c" <<'EOF'
+int real_impl(int x, int y)   { (void)y; return x * 7; }   /* internal symbol */
+int plain_export(int x, int y){ (void)y; return x + 5; }   /* plain (no alias) */
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/aliaslib.o" "$WORK/aliaslib.c"
+"$WORK/LINK.EXE" --shareable \
+    --symbol-vector "alias_export/real_impl=PROCEDURE,plain_export=PROCEDURE" \
+    --gsmatch EQUAL,1,0 -o "$WORK/LIBALIAS\$SHR.EXE" "$WORK/aliaslib.o"
+set +e
+"$WORK/CALLSLOT" "$WORK/LIBALIAS\$SHR.EXE" 0 6 0; RC=$?    # slot0=alias_export -> real_impl(6)=42
+set -e
+echo "alias slot0(6) exit = $RC (expect 42 = real_impl(6)*7)"
+[ "$RC" -eq 42 ] || { echo "FAIL: aliased universal did not resolve to the internal impl (got $RC, want 42)"; exit 1; }
+set +e
+"$WORK/CALLSLOT" "$WORK/LIBALIAS\$SHR.EXE" 1 6 0; RC=$?    # slot1=plain_export(6)=11
+set -e
+echo "plain slot1(6) exit = $RC (expect 11 = plain_export(6)+5)"
+[ "$RC" -eq 11 ] || { echo "FAIL: plain universal in a mixed vector broke (got $RC, want 11)"; exit 1; }
+# The EXPORTED universal name is the ALIAS, not the internal defining symbol:
+# isolate the .vms\$sv section (which carries only exported universal names) and
+# assert alias_export is present while the internal `real_impl` is NOT exported.
+objcopy -O binary --only-section='.vms$sv' "$WORK/LIBALIAS\$SHR.EXE" "$WORK/sv.bin"
+grep -qa "alias_export" "$WORK/sv.bin" || { echo "FAIL: alias name 'alias_export' not exported in .vms\$sv"; exit 1; }
+grep -qa "plain_export" "$WORK/sv.bin" || { echo "FAIL: 'plain_export' not exported in .vms\$sv"; exit 1; }
+if grep -qa "real_impl" "$WORK/sv.bin"; then echo "FAIL: internal symbol 'real_impl' leaked as a universal name in .vms\$sv"; exit 1; fi
+echo "alias OK: .vms\$sv exports alias_export + plain_export; internal 'real_impl' not exported"
+
+echo
 echo "== output header: e_machine must be EM_X86_64 =="
 readelf -h "$WORK/LIBPTR\$SHR.EXE" | grep -E "Machine:" || true
 readelf -h "$WORK/LIBPTR\$SHR.EXE" | grep -q "X86-64" \

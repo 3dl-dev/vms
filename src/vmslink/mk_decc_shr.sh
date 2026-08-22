@@ -532,12 +532,62 @@ STUB_SRC="$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_libc_stub.c"
 STUB_OBJ="$(mktemp -d)/ovmx_libc_stub.o"
 "${CC:-cc}" -c -fPIC -ffreestanding -o "$STUB_OBJ" "$STUB_SRC"
 
+# ovmx_decc_crtl.c (vms-3e4 R1b-2a): the DEC C RTL special-symbol impls that are
+# NOT plain musl aliases — the per-thread errno accessors (get_errno_addr /
+# get_vms_errno_addr) and the 32/64-bit dual-pointer allocators (_malloc32 /
+# _malloc64), REAL impls grounded to the VSI C RTL manual + the port crt0 contract
+# (see the file header). Compiled + linked in like ovmx_libc_stub.c; the four
+# symbols are appended to the vector below (append-only, GSMATCH LEQUAL-compatible).
+# Non-TLS (pthread-key per-thread state, never __thread) so DECC$SHR stays a
+# non-TLS producer.
+CRTL_SRC="$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_crtl.c"
+CRTL_OBJ="$(mktemp -d)/ovmx_decc_crtl.o"
+"${CC:-cc}" -c -fPIC -ffreestanding -o "$CRTL_OBJ" "$CRTL_SRC"
+VEC="$VEC,get_errno_addr=PROCEDURE,get_vms_errno_addr=PROCEDURE,_malloc32=PROCEDURE,_malloc64=PROCEDURE"
+
+# ---- vms-3e4 R1b-1: the decc$-prefixed CRTL alias vector -------------------
+# The alpha-dec-vms GCC port references every C-RTL entry as `decc$<name>`
+# (gcc/config/vms/vms.c), so a port object imports `decc$fprintf`, not `fprintf`.
+# Export each C-RTL entry as a universal ALIASED to the musl implementation via the
+# VSI Linker SYMBOL_VECTOR=(universal/internal) form (link.c R1a): the exported
+# universal `decc$<name>` is bound to the internal defining symbol `<name>` that
+# musl's whole-archived libc.a provides. Rule-based from decc_crtl_map.txt (OVMX's
+# DEC C-RTL surface map), nm-filtered to what THIS libc.a actually defines — a name
+# musl lacks is a visible GAP for a later rung (reported), never a silent success.
+# No-decoration-flag entries only (R1b-1); the decorated names (malloc64 / float
+# model / 64-bit _X32/_X64 / DPML MATH$) and the special bootstrap symbols
+# (decc$main, _malloc32/64, vaxc$errno, get_vms_errno_addr, C$_EXIT1) are R1b-2.
+# Semantics are musl/POSIX until R2 routes the file entries through RMS/ACP
+# (vms-dfb, ROUTE-THROUGH): this rung provides the linkable CRTL surface; R2
+# upgrades the file semantics. Append-only -> prior consumers' vector indices are
+# unchanged (GSMATCH LEQUAL-compatible).
+DECC_MAP="$(CDPATH= cd "$(dirname "$0")" && pwd)/decc_crtl_map.txt"
+if [ -f "$DECC_MAP" ]; then
+    LIBC_DEFS="$(mktemp)"
+    # Defined (non-undefined) symbols of the (TLS-filtered) libc.a, one pass. `nm
+    # --defined-only` prints member-header lines (NF==1, "member.o:") we drop and
+    # symbol lines "<addr> <type> <name>" whose $NF is the name.
+    nm --defined-only "$LIBC" 2>/dev/null | awk 'NF>=2{print $NF}' | sort -u > "$LIBC_DEFS"
+    n_add=0; n_skip=0
+    while read -r nm_name; do
+        case "$nm_name" in ''|\#*) continue;; esac
+        if grep -qxF "$nm_name" "$LIBC_DEFS"; then
+            VEC="$VEC,decc\$$nm_name/$nm_name=PROCEDURE"
+            n_add=$((n_add + 1))
+        else
+            n_skip=$((n_skip + 1))
+        fi
+    done < "$DECC_MAP"
+    rm -f "$LIBC_DEFS"
+    echo "mk_decc_shr: decc\$ CRTL alias vector: exported $n_add, skipped $n_skip (musl-undefined — gap for a later rung, not faked)"
+fi
+
 # Whole-archive, strict (NO --allow-undefined): a complete C-RTL shareable must
 # link with zero deferred externals. libc.a first so its strong defs win; the
 # loader-glue object last (it only REFERENCES __libc, which libc.a defines).
 "$LINK_EXE" --shareable \
     --symbol-vector "$VEC" \
     --gsmatch "$GSMATCH" \
-    -o "$OUT" "$LIBC" "$LIBGCC" "$STUB_OBJ"
+    -o "$OUT" "$LIBC" "$LIBGCC" "$STUB_OBJ" "$CRTL_OBJ"
 
 echo "mk_decc_shr: created $OUT"

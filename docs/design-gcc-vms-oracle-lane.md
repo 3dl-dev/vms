@@ -7,6 +7,42 @@
 
 ---
 
+## 0.1 LADDER RECONCILE (operator, 2026-08-22 — Rule 1, `vms-ports-build-ladder`)
+
+> **The deliverable is the existing OpenVMS GCC port building on OVMX — not a
+> Linux GCC minimally-adapted, and not an OVMX-authored GCC target as the first
+> brick.** GCC was *already ported to VMS*. The faithful mandate is to build
+> OVMX's VMS-compatibility surface (CRTL/DECC\$SHR, RMS over the executive ACP,
+> LINK.EXE/object/symbol-vector formats, condition handling) **up the ladder
+> until the real VMS GCC port just builds against it, unchanged.**
+
+This sharpens §2's base pick and re-orders the rungs:
+
+- **PRIMARY shipping target (`vms-fd1`):** the **`alpha-dec-vms` OpenVMS GCC port**
+  — the only cleanly-obtainable GPL VMS GCC port — **builds and runs on OVMX-Alpha
+  unchanged** over a faithful CRTL/DECC\$SHR/LINK/RMS surface. Surface-completeness
+  rungs: DECC\$SHR/CRTL (`vms-3e4`) and RMS-over-ACP (`vms-126`).
+- **LATER rung (`vms-9894`), explicitly distinct:** author x86_64/aarch64 VMS-host
+  GCC support from the `alpha-dec-vms` pattern. §2 correctly notes **no** upstream
+  x86_64/aarch64 VMS target exists — so that is *clean-room authoring of a new
+  port*, a later rung, **not** the first-light path this lane opens with.
+- **Linux/Alpine GCC = correctness ORACLE ONLY** — never a shipped or run artifact.
+  The §2a "OVMX authors the x86_64/aarch64 layer as PRIMARY BASE" reading is
+  demoted to the later rung above; the alpha-dec-vms *port on OVMX-Alpha* leads.
+- **cc1-in-guest is a PoC, NOT the shipping path.** The vendored-Alpine cc1 threads
+  (`vms-c07`, `vms-a09`, `vms-5b7e`) were a valid first brick for the self-host
+  northstar but required minimal-adapt slop; #698's cc1-specific LINK.EXE
+  IE→LE/TPOFF32 relaxation was **reverted** (#708), the generic IMGACT musl-TLS
+  re-drive **kept** as general substrate. The F2b general facilities already landed
+  (init-array/`LIB$INITIALIZE`, multi-module TLS, EH/`.eh_frame`, IMAGE ABI) stay
+  valid as **general** VMS-compat surface.
+
+Everything below (§0 oracle framing, the wall→genuine-backfill loop, the 3-way
+convergence gate) is unchanged and correct — this section only re-points the base
+and rung order.
+
+---
+
 ## 0. The governing constraint (operator, 2026-08-20)
 
 > "The objective is to make OVMX **more VMS-faithful** while you build this GCC. GCC and the
@@ -60,7 +96,7 @@ The charter named three candidate bases. The operator's oracle constraint decide
 | GNV "gcc" (VSI PCSI kit) | **RED FLAG — excluded** | GNV's "gcc" is **not** GCC — it is wrapper scripts around the **proprietary VSI/HPE DEC C** compiler giving it a gcc-compatible CLI. Not GCC's host layer hitting RMS/LIB$; it's DEC C's. Requires proprietary VSI source; defeats the forcing function |
 | VSI OpenVMS x86-64 GCC | **RED FLAG — not viable** | No such GCC exists upstream or as obtainable source; VSI's x86-64 C/C++ are their own proprietary compilers (no source). No `x86_64-*-vms*` target exists in mainline GCC |
 | Historical VAX/VMS GCC (gcc 2.8.1 / 3.x, `vax-vms`) | **archaeological oracle only** | GPLv2 FSF tarballs, legally obtainable; K&R-era, VAX target; keep as a VAX-target + VMS-behavior reference, not a modern base |
-| **Upstream GNU binutils + mainline GCC, `alpha-dec-vms` as the VMS-host behavioral reference** | **PRIMARY BASE** | GPLv3+, actively maintained, freely obtainable (sourceware / bminor mirror); mainline GCC still configures **`alpha-dec-vms`** (the living VMS-host reference — `ia64-hp-vms` is being removed in GCC 15). No VMS artifact is vendored from VSI/GNV; **OVMX authors the x86_64/aarch64 VMS-host layer** from the `alpha-dec-vms` pattern |
+| **The `alpha-dec-vms` OpenVMS GCC port, built on OVMX-Alpha** | **PRIMARY BASE — see §0.1** | GPLv3+, the only cleanly-obtainable GPL VMS GCC port; mainline GCC still configures **`alpha-dec-vms`** (`ia64-hp-vms` is being removed in GCC 15). The faithful deliverable is *this existing port building on OVMX-Alpha unchanged* (`vms-fd1`). Authoring x86_64/aarch64 VMS-host support from the `alpha-dec-vms` pattern is a **LATER rung** (`vms-9894`), clean-room, not the first-light base — **corrects the earlier "OVMX authors the x86_64/aarch64 layer as PRIMARY" reading** (operator 2026-08-22, §0.1) |
 
 **Configuration:** VMS-host × target. The **host layer is the forcing function** and is independent
 of codegen target, so *first-light does not require a codegen retarget* — activating a VMS-host

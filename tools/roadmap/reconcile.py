@@ -95,8 +95,10 @@ GATE_EPICS = [
      "Real breadth and depth across the DCL command set and system utilities — no facades.",
      "continuous"),
     ("vms-678", "Self-hosting toolchain",
-     "OVMX builds OVMX from within: compiler, librarian, and linker run as native images "
-     "with no host tools in the build path.", "0.5-0.9"),
+     "OVMX builds OVMX from within: the librarian and linker run as native images with no "
+     "host tools in the build path. The in-guest tcc is a labelled bootstrap; the faithful "
+     "destination is the existing OpenVMS GCC and MMK ports building on OVMX unchanged, over "
+     "a genuine VMS-compatibility surface.", "0.5-0.9"),
     ("vms-098", "Cluster configuration",
      "Provision a node into a cluster the VMS way: SYSGEN parameters, AUTOGEN, "
      "CLUSTER_AUTHORIZE, and CLUSTER_CONFIG.", "0.5-0.9"),

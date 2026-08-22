@@ -67,6 +67,13 @@ accepted.
   generator and regenerate.
 - **VMS compatibility first.** When VMS behavior and implementation ease conflict, match VMS — or
   hide the difference honestly. See `docs/architecture.md`.
+- **Third-party software is a faithfulness ladder, not a vendor-and-adapt shortcut.** Do not vendor a
+  Linux program and minimally-adapt it to OVMX's surface. GCC, OpenSSH, and much else were *already
+  ported to VMS.* Build OVMX's VMS-compatibility surface (DECC$SHR/CRTL, RMS, the VMS socket API,
+  LINK.EXE/object/symbol-vector formats, TCP/IP services) **up the ladder until the existing VMS port
+  builds against it, unchanged.** A vendored-and-hacked Linux artifact is at best a *labelled
+  temporary bootstrap*; the deliverable is the VMS port compiling on OVMX. (tcc bootstraps the
+  userland today; binutils vendoring was ripped under this rule.)
 - **Conventions.** VMS status codes (odd = success) via `ssdef.h`; `src/libvmssys/` is freestanding
   (`-ffreestanding -fno-builtin`, no glibc); VMS naming (`sys$`, `lib$`, `str$`, `mth$`, `ots$`).
 

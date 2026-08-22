@@ -47,6 +47,38 @@ calling anything short of that bar 1.0.
 
 ---
 
+## 1a. The faithfulness ladder — how OVMX treats vendored software
+
+**Operator ruling 2026-08-22 (Rule 1, "do it like VMS"):** the antipattern to stop is
+vendoring a Linux program and minimally-adapting it to whatever ad-hoc surface OVMX
+happens to expose — that is both "leaning on Linux beyond the kernel" *and* unfaithful.
+GCC, OpenSSH, and an enormous amount of other software were **already ported to VMS.**
+So the target is never "make a Linux thing run." It is: **build OVMX's
+VMS-compatibility surface up the *ladder* — DECC\$SHR/CRTL, RMS, the VMS socket API,
+LINK.EXE/object/symbol-vector formats, TCP/IP services — until the *existing VMS ports*
+just build against it, unchanged.** Each rung lets more of the real VMS ecosystem build
+as-is. A vendored-and-hacked Linux artifact is at best a **labelled temporary
+bootstrap** on a path to replacement; the real deliverable is **the VMS port compiling
+on OVMX.**
+
+How this scopes the toolchain and networking milestones:
+
+| Lane | Faithful deliverable (the ladder target) | Bootstrap / oracle (temporary, labelled) |
+|---|---|---|
+| **Compiler** (`vms-da0`) | The `alpha-dec-vms` OpenVMS **GCC** port builds+runs on OVMX-Alpha unchanged over a faithful CRTL/DECC\$SHR/LINK/RMS surface (`vms-fd1`); x86_64/aarch64 VMS-host GCC is a later **clean-room-authoring** rung (`vms-9894`, no existing port). | **tcc** self-hosts the userland today (the 0.5 rung) — a bootstrap, retired once the VMS GCC port builds on OVMX. **Linux GCC = correctness oracle only**, never shipped/run. cc1-in-guest was a PoC, not the shipping path. |
+| **SSH** (`vms-843`) | The OpenVMS **OpenSSH** port builds on OVMX over a VMS-faithful DECC\$SOCKET / \$QIO(BGn:) surface + TCP/IP services (`vms-9ef`). The `vms-4bf` de-veneer (unmodified OpenSSH dispatches every fd call to \$QIO) is the correct rung — keep and extend. | Cross-built static libcrypto/zlib for the first link; the bare-ELF socketpair adapter — both scaffolding to delete. |
+| **Build spine** (`vms-59a`) | **MMK** + **LIBRARIAN** as OVMX-native images build OVMX from a `descrip.mms`, zero bash — the VMS way; every facility a real VMS software port also needs. | BUILD.COM (retired driver); tcc (bootstrap). |
+| **binutils** | — | GNU as/ld vendoring was **ripped** (2026-08-21) under this principle. |
+
+Self-hosting (the `vms-678` 1.0 build-native gate) is therefore reframed: **tcc-userland
+self-host is a bootstrap rung, not the faithful endgame.** The 1.0 structure is
+unchanged — features land by **0.9**, and **1.0 = hardening/proof** — but the
+"self-hosting toolchain" that reaches done at 0.9 means *the existing VMS toolchain
+ports build OVMX on OVMX over a genuine VMS-compat surface*, not a bespoke OVMX surface
+only our forks target.
+
+---
+
 <!-- GENERATED:BEGIN roadmap-reconcile — do not edit by hand, run tools/roadmap/reconcile.py -->
 
 ## Live status — generated

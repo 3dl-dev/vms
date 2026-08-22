@@ -227,7 +227,14 @@ def main():
                     "{ mount_cd9660 /dev/cd0a /mnt || "
                     "  mount_cd9660 /dev/cd1a /mnt || "
                     "  mount_cd9660 /dev/cd0d /mnt ; } && "
-                    "cp -R /mnt/kmod /mnt/probe /mnt/kernel-core /root/ovmx/ && "
+                    # vms-d0c5: /mnt/vmsfs (staged by tests/netbsd/Dockerfile at
+                    # /netbsd/guest-src/vmsfs/{ods2,include}) must land as the
+                    # SIBLING dir /root/ovmx/vmsfs -- kmod/Makefile's ACP build
+                    # (vmsfs_acp.c) resolves it via `.PATH: ${.CURDIR}/../vmsfs/ods2'
+                    # and `-I${.CURDIR}/../vmsfs/include' (vmsfs/ods2.h). Without
+                    # this cp the ISO carries the header but the guest never sees
+                    # it: `fatal error: vmsfs/ods2.h: No such file or directory'.
+                    "cp -R /mnt/kmod /mnt/probe /mnt/kernel-core /mnt/vmsfs /root/ovmx/ && "
                     "umount /mnt && chmod -R u+w /root/ovmx && "
                     "ls -R /root/ovmx",
                     cmd_timeout)

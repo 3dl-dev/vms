@@ -1610,11 +1610,14 @@ static unsigned long sv_find_named(const struct ovmx_prod *p, const char *name);
  * (setup_symvec_tls), so this is compiled-in but never entered there — the
  * 3-way convergence gate {x86_64, VAX ILP32, Alpha LP64} proves that.)
  *
- * PROVISIONAL (vms-c07, pending the LINK.EXE-tpoff <-> module.offset alignment
- * close by the GCC lane): the module .offset and __libc.tls_size below are the
- * values that run cc1 deep into compilation but leave the TCB self-ptr one
- * alignment step high; the final values arrive from the LE-tpoff analysis. The
- * mechanism (getter-proc + __copy_tls/__init_tp re-drive) is proven. */
+ * The module .offset == tls_tp_size == ALIGN_UP(tls_memsz, tls_align) — the SAME
+ * value LINK.EXE uses to compute an executable's LE/IE thread-pointer offsets
+ * (tpoff = module_offset - tls_tp_size), so musl's placement below TP and the
+ * image's %fs-negative accesses agree exactly. That agreement is what makes the
+ * companion LINK.EXE change (Initial-Exec GOTTPOFF->LE relaxation + TPOFF32
+ * field-fill in link.c) land cc1's IE/LE stores in the reserved block rather
+ * than at %fs:0. Proven end-to-end: cc1 compiles C to x86_64 asm as an OVMX
+ * image (probe.s emits square:/imull, compile+activation exit 0). */
 static void reserve_exe_main_tls_over_crtl(struct ovmx_prod *crtl)
 {
 	if (!g_exe.has_tls || g_exe.tlsdesc)
@@ -1637,8 +1640,8 @@ static void reserve_exe_main_tls_over_crtl(struct ovmx_prod *crtl)
 	m[1] = (unsigned long)g_exe.tls_image;
 	m[2] = g_exe.tls_filesz;
 	m[4] = align;
-	m[3] = ALIGN_UP(g_exe.tls_memsz, align);   /* PROVISIONAL (vms-c07) */
-	m[5] = m[3];                               /* PROVISIONAL (vms-c07) */
+	m[3] = ALIGN_UP(g_exe.tls_memsz, align);   /* size   == tls_tp_size */
+	m[5] = m[3];                               /* offset == tls_tp_size (LINK tpoff base) */
 
 	/* musl struct __libc { ... tls_head@16, tls_size@24, tls_align@32,
 	 * tls_cnt@40 }. Single module: the first __init_libc (AT_BASE!=0) scanned
@@ -1647,7 +1650,7 @@ static void reserve_exe_main_tls_over_crtl(struct ovmx_prod *crtl)
 	*(unsigned long *)(libc + 16) = (unsigned long)&m[0];   /* tls_head  */
 	*(unsigned long *)(libc + 40) = 1;                      /* tls_cnt   */
 	unsigned long tls_size =
-		ALIGN_UP(m[5] + 0xc8UL + align + 0x100UL, 8);  /* PROVISIONAL (vms-c07) */
+		ALIGN_UP(m[5] + 0xc8UL + align + 0x100UL, 8);  /* block + TCB(0xc8) + align + slack */
 	*(unsigned long *)(libc + 24) = tls_size;              /* tls_size  */
 	if (align > *(unsigned long *)(libc + 32))
 		*(unsigned long *)(libc + 32) = align;        /* tls_align */

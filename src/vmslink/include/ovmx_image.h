@@ -52,6 +52,22 @@
 /* Section that names the image's DWARF .eh_frame block + libgcc __register_frame
  * so the activator can register the frames before .init_array runs (vms-70d). */
 #define OVMX_EHF_SECTION  ".vms$ehf"
+/* Section that carries the VMS TRANSFER-ADDRESS ARRAY + an activation flavor
+ * (vms-f60d). This is the image-header side of the Alpha calling standard's
+ * image-startup model: the ordered list of routines the activator invokes at
+ * startup (LIB$INITIALIZE handlers, then the main transfer address), plus a
+ * flavor selecting HOW IMGACT enters that transfer address. Its presence with
+ * flavor==OVMX_ACT_VMS_STD is how IMGACT recognizes a VMS-standard image (an
+ * `alpha-dec-vms` GCC-port `.EXE`, whose crt0 __main expects a six-argument
+ * standard call). ABSENCE => flavor OVMX_ACT_SYSV => today's tail-jump path,
+ * so every image OVMX ships now is byte-unchanged (zero regression).
+ *
+ * OVMX-ORIGINAL carrier (CLAUDE.md Rule 8): the transfer-array + startup
+ * SEMANTICS are public (OpenVMS Calling Standard / Programming Concepts
+ * Manual), but no public byte-level x86/Alpha section layout exists for it, so
+ * this section format is OVMX's own -- same posture as .vms$sv/.vms$rel/
+ * .vms$tls above, and NOT presented as a VMS-authentic on-disk structure. */
+#define OVMX_XFER_SECTION ".vms$xfer"
 
 #define OVMX_SV_MAGIC     0x31565356u  /* "VSV1" little-endian */
 #define OVMX_IMP_MAGIC    0x31504d49u  /* "IMP1" little-endian */
@@ -59,6 +75,7 @@
 #define OVMX_REL_MAGIC    0x314c4552u  /* "REL1" little-endian */
 #define OVMX_TLS_MAGIC    0x31534c54u  /* "TLS1" little-endian */
 #define OVMX_EHF_MAGIC    0x31464845u  /* "EHF1" little-endian */
+#define OVMX_XFER_MAGIC   0x31465358u  /* "XSF1" little-endian */
 
 /* GSMATCH match-control (public VMS semantics; values are OVMX-internal). */
 enum ovmx_gsmatch {
@@ -215,6 +232,46 @@ struct ovmx_ehf_desc {
     uint32_t reserved;
     uint64_t eh_frame_begin;    /* image-relative start of the .eh_frame block */
     uint64_t register_frame;    /* image-relative addr of libgcc __register_frame */
+};
+
+/*
+ * How IMGACT enters an image's transfer address. LINK.EXE records the flavor
+ * in the image's `.vms$xfer` section (vms-f60d).
+ *
+ *   OVMX_ACT_SYSV    - current OVMX crt0 / legacy images: IMGACT tail-jumps to
+ *                      the entry with the Linux/SysV initial stack in place
+ *                      (argc/argv/envp/auxv), registers cleared. This is the
+ *                      behavior for EVERY image with no `.vms$xfer` section, so
+ *                      absence == this value == today's path, ZERO regression.
+ *   OVMX_ACT_VMS_STD - a VMS-standard image (the `alpha-dec-vms` GCC port's
+ *                      `.EXE`): IMGACT issues a genuine Alpha standard call to
+ *                      the transfer address with the six-argument VMS
+ *                      image-activation context, then captures the returned
+ *                      VMS condition value (it RETURNS to IMGACT, unlike SYSV).
+ */
+enum ovmx_act_flavor {
+    OVMX_ACT_SYSV    = 0,
+    OVMX_ACT_VMS_STD = 1,
+};
+
+/*
+ * `.vms$xfer` layout: header, then `count` image-relative transfer addresses
+ * (u64 each). The LAST entry is the MAIN transfer address (the crt0 __main /
+ * ELF$TFRADR); any earlier entries are LIB$INITIALIZE handlers invoked before
+ * it (none emitted at first light -- count starts at 1). At activation IMGACT
+ * biases each entry by the image load base. For OVMX_ACT_VMS_STD the resolved
+ * last entry is the procedure value (PV/PDSC) IMGACT places in R27 and whose
+ * offset-8 entry code it standard-calls.
+ *
+ * OVMX-ORIGINAL design (CLAUDE.md Rule 8): see OVMX_XFER_SECTION above.
+ */
+struct ovmx_xfer_header {
+    uint32_t magic;         /* OVMX_XFER_MAGIC                                */
+    uint32_t flavor;        /* enum ovmx_act_flavor                          */
+    uint32_t count;         /* number of transfer entries (>= 1)             */
+    uint32_t reserved;      /* 0                                             */
+    /* uint64_t entry_off[count]; image-relative transfer addresses,         */
+    /* last == main transfer address (__main); earlier == LIB$INITIALIZE     */
 };
 
 #endif /* OVMX_IMAGE_H */

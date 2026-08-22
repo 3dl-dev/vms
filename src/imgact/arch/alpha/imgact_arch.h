@@ -131,4 +131,16 @@ void __tlsdesc_static(void);       /* OVMX-native symbol-vector TLS resolver
 void imgact_set_tp(void *tp);      /* call_pal 0x9f (wrunique)                */
 void *imgact_get_tp(void);         /* call_pal 0x9e (rduniq)                  */
 
+/* Issue a genuine OpenVMS Alpha STANDARD CALL to a VMS image's transfer address
+ * (vms-f60d). pv = procedure value (-> R27; entry code at *(pv+8)); ai = the
+ * Argument Information register value (-> R25); args = the six integer/pointer
+ * activation-context arguments (-> R16..R21). R26 is set to a return label back
+ * INTO IMGACT, so the call RETURNS (unlike _start's tail-jump). Returns R0, the
+ * VMS condition value the called procedure produced. Alpha-only: this is the
+ * Alpha calling standard, and the `alpha-dec-vms` port is the only VMS-standard
+ * image class. See arch/alpha/vms_transfer.S. */
+#define IMGACT_HAVE_VMS_STD 1
+unsigned long imgact_vms_transfer(void *pv, unsigned long ai,
+				  const unsigned long args[6]);
+
 #endif /* OVMX_IMGACT_ARCH_ALPHA_H */

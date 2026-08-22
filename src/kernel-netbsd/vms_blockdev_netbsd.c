@@ -67,6 +67,12 @@ uint32_t vms_devtab_disk_resolve(const char *devnam, char *backing,
 				 size_t backing_sz, uint32_t *major_out,
 				 uint32_t *minor_out);
 void vms_blockdev_netbsd_release_all(void);
+void vms_blockdev_netbsd_register_units(void);
+/* The executive device table's one substrate entry point (rd vms-618). DEFINED
+ * in the shared src/kernel-core/vms_devtab.c; declared here rather than pulled
+ * from vms_internal.h because of this TU's rbtree quarantine (see below). */
+int vms_devtab_add_disk(const char *devnam, const char *backing,
+			uint32_t backing_major, uint32_t backing_minor);
 int exec_blockdev_read_block(unsigned int major_, unsigned int minor_,
 			     uint64_t lbn, void *buf, size_t buflen);
 int exec_blockdev_write_block(unsigned int major_, unsigned int minor_,
@@ -100,12 +106,25 @@ static const struct ovmx_acp_unit {
 	const char *vmsname;		/* upcased, colon-stripped */
 	const char *devpath;
 	const char *backing;		/* native block-dev name (vms-f60 resolve) */
+	int	    primary;		/* 1 = the name this unit is ENTERED under */
 } ovmx_acp_unitmap[] = {
-	{ "DKA0",   "/dev/ra1c", "ra1c" },	/* placeholder name, pending vms-47d */
-	{ "DUA0",   "/dev/ra1c", "ra1c" },	/* the real VMS-VAX MSCP name */
-	{ "DKA100", "/dev/ra2c", "ra2c" },	/* 2nd MSCP disk = INITIALIZE target */
-	{ "DUA100", "/dev/ra2c", "ra2c" },	/* its correct MSCP name */
+	{ "DKA0",   "/dev/ra1c", "ra1c", 1 },	/* placeholder name, pending vms-47d */
+	{ "DUA0",   "/dev/ra1c", "ra1c", 0 },	/* the real VMS-VAX MSCP name */
+	{ "DKA100", "/dev/ra2c", "ra2c", 1 },	/* 2nd MSCP disk = INITIALIZE target */
+	{ "DUA100", "/dev/ra2c", "ra2c", 0 },	/* its correct MSCP name */
 };
+
+/*
+ * WHY `primary' (rd vms-618). The map has FOUR rows but names only TWO disks:
+ * DUA0:/DUA100: are the correct MSCP names for the same units the runtime still
+ * calls DKA0:/DKA100: (the vms-47d rename is open), and the two RESOLVERS below
+ * accept either spelling so they stay correct across that rename. The executive
+ * DEVICE TABLE cannot: a table row carries OWNERSHIP, so entering both spellings
+ * would create two independently-allocatable devices for one physical disk --
+ * ALLOCATE DKA100: would not conflict with ALLOCATE DUA100:, which is a lie
+ * about the hardware (INV-6). So exactly the `primary' rows are ENTERED, and the
+ * alias stays a resolver-only spelling until the rename lands and the flag moves.
+ */
 
 /* Open-once-per-volume cache: bound at $MOUNT, reused by every block op, closed
  * at teardown. Single entry today, indexed by dev_t. */
@@ -343,6 +362,63 @@ vms_ioctl_disk_resolve(struct vms_proc *proc, unsigned long arg)
 
 	memcpy((void *)arg, &a, sizeof(a));
 	return 0;
+}
+
+/*
+ * vms_blockdev_netbsd_register_units - enter this node's DISK units in the
+ * EXECUTIVE DEVICE TABLE (rd vms-618), the way a VMS driver enters its units in
+ * the I/O database during system initialization.
+ *
+ * WHY THE SUBSTRATE DOES THIS. The shared facility's own enumeration
+ * (vms_devtab_probe_disks, src/kernel-core/vms_devtab.c) walks the Linux
+ * virtio-blk name space /dev/vda../dev/vdz, which does not exist here: on
+ * NetBSD/vax the node's disks are MSCP units, and the device-native unit map
+ * (vms-47d -- the VMS name is a LABEL, the path is the real device) lives in
+ * THIS TU. Everything a device MEANS -- the row, its ownership, allocation and
+ * reference count -- stays in the one shared facility; only WHICH units exist is
+ * the substrate's to say.
+ *
+ * INV-6 / Rule 9: a unit is entered ONLY for a device that really resolves. The
+ * resolve is vms_devtab_disk_resolve() above -- a real open of the real block
+ * device to read its dev_t, closed again immediately -- so an absent disk (e.g.
+ * a single-disk sysboot with no rq2 attached) simply has NO table row, and
+ * $ALLOC DKA100: is then an honest SS$_NOSUCHDEV. Nothing is invented for a
+ * device that is not there.
+ *
+ * TRANSIENT open, DELIBERATELY. NetBSD allows effectively one open of a block
+ * device, so this must not HOLD anything: SYS$DISK is opened and cached later,
+ * at $MOUNT (vms_devtab_disk_backing), and the INITIALIZE target is opened by
+ * INITIALIZE.EXE itself (rd vms-f60). Called once from vms_modcmd(INIT), before
+ * /dev/vms exists and before any $MOUNT, so this open never races either.
+ */
+void
+vms_blockdev_netbsd_register_units(void)
+{
+	int i;
+
+	for (i = 0; i < (int)__arraycount(ovmx_acp_unitmap); i++) {
+		char backing[VMS_BACKING_SIZE];
+		char devnam[VMS_DEVNAM_SIZE];
+		uint32_t maj = 0, min = 0, st;
+
+		if (!ovmx_acp_unitmap[i].primary)
+			continue;	/* alias spelling -- resolver-only (above) */
+
+		st = vms_devtab_disk_resolve(ovmx_acp_unitmap[i].vmsname, backing,
+		    sizeof(backing), &maj, &min);
+		if ((st & 1u) == 0) {
+			printf("vms: disk unit %s: no backing device (%s absent)"
+			    " -- not entered\n", ovmx_acp_unitmap[i].vmsname,
+			    ovmx_acp_unitmap[i].devpath);
+			continue;	/* honest: no device, no unit */
+		}
+
+		/* The table is keyed by the canonical physical form "DDCU:". */
+		strlcpy(devnam, ovmx_acp_unitmap[i].vmsname, sizeof(devnam));
+		strlcat(devnam, ":", sizeof(devnam));
+
+		(void)vms_devtab_add_disk(devnam, backing, maj, min);
+	}
 }
 
 /*

@@ -454,27 +454,32 @@ static __inline void exec_mutex_destroy(exec_mutex_t *m)
 
 /* ---- 8. block-device resolution (vms-31b; see exec_kbackend.h) ----
  *
- * COMPILE STATUS, and why this side is a contract-only twin (the exec_rbtree
- * precedent). vms_devtab.c is NOT in this module's SRCS yet -- only vms_eflag.c
- * is -- so these are TYPE-CHECKED but never called on NetBSD. The MAJOR/MINOR
+ * The MAJOR/MINOR
  * accessors carry their real mapping (major(9)/minor(9) are portable dev_t
  * accessors from <sys/types.h>, already included above). The PATH -> dev_t
  * RESOLUTION is the one piece with no cheap NetBSD one-liner: Linux lookup_bdev
  * walks the /dev name space, whereas the NetBSD twin resolves a device path to
  * a vnode (namei/lookup on the /dev node) and reads vp->v_rdev, or maps a device
  * NAME to its dev_t through the block devsw (bdevsw_lookup / devsw_name2blk).
- * Binding that -- and enumerating the node's disks the way the executive does on
- * Linux -- is the devtab-on-NetBSD proof's concern (a later item); until then
- * this is a compile-safe documented stub that touches NO struct internals and
- * reports "no such device", naming its real source here. It is never on a live
- * path (INV-6 / Rule 11: it fabricates nothing -- it resolves nothing). */
+ * STATUS AFTER THE DEVTAB PORT (rd vms-618). The device table IS in this
+ * module's SRCS now, so vms_devtab_probe_disks() DOES call this -- 26 times, for
+ * /dev/vda../dev/vdz. Every one of those correctly resolves NOTHING, because
+ * that is the LINUX virtio-blk name space and it does not exist on NetBSD/vax:
+ * this node's disks are MSCP units. The executive therefore enters no unit from
+ * this path, and the substrate enters its OWN units by their real device-native
+ * names through vms_blockdev_netbsd_register_units() ->  vms_devtab_add_disk(),
+ * which opens the real block device to read its dev_t. So this remains an honest
+ * "no such device" answer rather than a fabricated one (INV-6 / Rule 11): it is
+ * reached, and it resolves nothing, which is the truth about /dev/vda here.
+ * Binding it to namei(vp->v_rdev) / devsw_name2blk would let the shared probe
+ * answer for a NetBSD name space, which no caller wants today. */
 typedef dev_t exec_dev_t;
 
 static __inline int
 exec_blockdev_lookup(const char *path, exec_dev_t *out)
 {
-	/* vms-31b: bind to namei(vp->v_rdev) or devsw_name2blk on the NetBSD
-	 * devtab proof (rd, later). Never reached today (devtab is Linux-built). */
+	/* Reached (vms-618) but never resolves: `path' is always a Linux
+	 * /dev/vd? name, which this substrate does not have. See above. */
 	(void)path;
 	(void)out;
 	return -1;   /* no such device */
@@ -546,10 +551,16 @@ exec_blockdev_write_block(unsigned int major_, unsigned int minor_,
 
 /* ---- 11. primary Ethernet net device (vms-9d2; see exec_kbackend.h) ----
  *
- * COMPILE STATUS, and why this side is a contract-only twin (the exec_blockdev
- * precedent above). The device table (vms_devtab.c), the ONLY caller, is NOT in
- * this module's SRCS yet, so this is type-checked at most and never run on
- * NetBSD. The REAL NetBSD binding is the generic ifnet list: IFNET_LOCK() /
+ * STATUS AFTER THE DEVTAB PORT (rd vms-618). The device table (vms_devtab.c),
+ * the ONLY caller, IS in this module's SRCS now, so vms_devtab_probe_nic() DOES
+ * call this once at module init. It answers "no NIC", which the executive
+ * handles by entering NO ETH0: unit at all -- so SHOW DEVICE has no ETH0: row
+ * and $ASSIGN/$ALLOC ETH0: is SS$_NOSUCHDEV. That is the honest "this node has
+ * no ENUMERATED Ethernet controller" state, not a fake device (INV-6): the VAX
+ * under SIMH may well have a DEQNA, but this backend does not yet ask the ifnet
+ * list, and reporting a unit it never looked up would be the fabrication.
+ * Binding it is a later item (the VAX networking lane). The REAL NetBSD binding
+ * is the generic ifnet list: IFNET_LOCK() /
  * IFNET_READER_FOREACH(ifp) over the interface list, skipping ifp->if_type ==
  * IFT_LOOP and requiring IFT_ETHER, copying ifp->if_xname and reading the link
  * state through if_link_state (LINK_STATE_UP) -- the exact NetBSD twins of
@@ -562,9 +573,9 @@ exec_blockdev_write_block(unsigned int major_, unsigned int minor_,
 static __inline int
 exec_netdev_primary(char *name, unsigned int namesz, int *link_up)
 {
-	/* vms-9d2: bind to IFNET_READER_FOREACH(ifp) filtered on IFT_ETHER on the
-	 * NetBSD devtab proof (rd, later). Never reached today (devtab is
-	 * Linux-built). */
+	/* vms-9d2: bind to IFNET_READER_FOREACH(ifp) filtered on IFT_ETHER when
+	 * the VAX networking lane needs ETH0:. Reached once per module load
+	 * (vms-618); answers "no NIC", so no unit is entered. See above. */
 	(void)name;
 	(void)namesz;
 	(void)link_up;

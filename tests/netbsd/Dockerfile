@@ -128,6 +128,12 @@ COPY src/kernel-core/vms_lock.c              /netbsd/guest-src/kernel-core/vms_l
 # Logical-name facility source (rd vms-72da) -- the SAME shared source the Linux
 # vms.ko and the per-PR crosscompile.sh gate build; listed in the Makefile SRCS.
 COPY src/kernel-core/vms_lnm.c               /netbsd/guest-src/kernel-core/vms_lnm.c
+# Device-table facility source (rd vms-618) -- the executive-resident device
+# table behind $ALLOC/$DALLOC/$ASSIGN/$DASSGN/$GETDVI/$DEVICE_SCAN, the SAME
+# shared source the Linux vms.ko builds; listed in the Makefile SRCS, so the
+# in-guest module build needs it staged (the four-enumeration rule).
+COPY src/kernel-core/vms_devtab.c            /netbsd/guest-src/kernel-core/vms_devtab.c
+COPY src/kernel-netbsd/vms_devtab_nb.h       /netbsd/guest-src/kmod/vms_devtab_nb.h
 COPY src/kernel-core/exec_hash.h             /netbsd/guest-src/kernel-core/exec_hash.h
 COPY src/kernel-core/exec_rbtree.h           /netbsd/guest-src/kernel-core/exec_rbtree.h
 # --- Files-11 ODS-2 ACP (vms-d5d): the ACP handlers + the NetBSD block-device

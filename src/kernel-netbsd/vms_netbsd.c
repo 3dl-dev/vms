@@ -235,6 +235,15 @@ vms_proc_get(pid_t pid)
 	exec_list_head_init(&np->file_channels);
 
 	/*
+	 * DEVICE channels (rd vms-618) -- this process's (initially empty) ring of
+	 * channels to executive device-table rows, on the SAME chan_lock/next_chan
+	 * space as the mailbox and file channels above. vms_proc_release_channels()
+	 * (src/kernel-core/vms_devtab.c) drains it at process death, and gives back
+	 * any DEVICE this process had $ALLOCated.
+	 */
+	exec_list_head_init(&np->channels);
+
+	/*
 	 * Lock-manager per-process state (P4-A, rd vms-ff7): this process's (initially
 	 * empty, self-linked) list of held locks, its count and their guard. Mirrors
 	 * the Linux vms.ko's proc registration (vms_module.c: INIT_LIST_HEAD(&locks)
@@ -310,7 +319,15 @@ vms_proc_free_claimed(struct vms_proc *proc)
 {
 	int m;
 
-	vms_mbx_release_all(proc);
+	/*
+	 * Release every DEVICE channel this process still held -- which ends any
+	 * ownership resting on those channels -- and give back any device it had
+	 * $ALLOCated (rd vms-618). vms_proc_release_channels() (vms_devtab.c) calls
+	 * vms_mbx_release_all() itself as its last step, so the mailbox release
+	 * that used to be here is INSIDE it now, not dropped. A device left owned
+	 * by a process that no longer exists is not a state VMS has.
+	 */
+	vms_proc_release_channels(proc);
 	/* Release every Files-11 ACP file-class channel this process still held
 	 * ($DASSGN-all at process death, vms-d5d) -- the file_channels twin of the
 	 * mailbox release above, mirroring the Linux vms.ko's vms_acp_release_all in
@@ -376,7 +393,7 @@ vms_proctab_teardown(void)
 		 * event-flag teardown above (freed by vms_eflag_cleanup, not here). We
 		 * only destroy this process's lock_list_lock guard, which vms_lock_cleanup
 		 * did not own. */
-		vms_mbx_release_all(p);
+		vms_proc_release_channels(p);
 		vms_proc_rundown_asts(p, PSL_C_KERNEL);
 		exec_lock_destroy(&p->lock_list_lock);
 		exec_lock_destroy(&p->chan_lock);
@@ -393,25 +410,20 @@ vms_proctab_teardown(void)
 }
 
 /* ================================================================
- * Cross-facility image-rundown stubs (P4-A).
+ * Cross-facility image-rundown helpers (P4-A) -- ALL THREE NOW REAL.
  *
  * vms_ioctl_image_rundown() (src/kernel-core/vms_access.c) releases the image's
  * locks, channels and ASTs at rundown by calling three per-facility helpers.
- * vms_proc_rundown_asts is DEFINED (vms_ast.c) and vms_proc_rundown_locks is now
- * DEFINED (vms_lock.c, rd vms-ff7 -- locks joined this module's SRCS), so both
- * link to their real facility definitions. Only vms_proc_rundown_channels has no
- * definition: vms_mbx.c IS in SRCS but a mailbox channel is released at $DASSGN /
- * process death (vms_mbx_release_all), not at image rundown, so there is nothing
- * for it to run down. This WEAK no-op keeps the module link-coherent and would be
- * OVERRIDDEN by a real strong definition if one ever lands. This fabricates
- * nothing (INV-6 / Rule 11): a substrate with no image-rundown channel release
- * genuinely has no such resource to run down, so running down nothing is the
- * honest result, not a faked success.
+ * vms_proc_rundown_asts is DEFINED (vms_ast.c), vms_proc_rundown_locks is
+ * DEFINED (vms_lock.c, rd vms-ff7) and vms_proc_rundown_channels is DEFINED as
+ * of the device-table port (vms_devtab.c, rd vms-618) -- it deassigns the USER-
+ * mode DEVICE channels an activated image took. So the WEAK no-op stub this file
+ * used to carry for the third one is GONE: nothing here shadows a real facility
+ * any more. (Deleting it, rather than leaving it weak beside a strong twin, is
+ * deliberate -- the static-link weak-seam trap: a weak stub that wins the link
+ * makes a facility silently do nothing, which is the failure mode this project
+ * has already been bitten by once.)
  * ================================================================ */
-__attribute__((weak)) void
-vms_proc_rundown_channels(struct vms_proc *proc __unused, uint8_t min_acmode __unused)
-{
-}
 
 /* ================================================================
  * cdevsw
@@ -846,26 +858,49 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	}
 
 	/*
-	 * VMS_IOCTL_DASSGN (vms-329): release one assigned channel. Mirrors the
-	 * Linux fallback chain (vms_devtab.c) MINUS the device-channel table, which
-	 * is not in this module's SRCS -- mailbox first, then file-class (ACP). A
-	 * channel that is neither gets SS$_IVCHAN, never a fabricated success
-	 * (INV-6). Without this every ACP file open leaked its channel: PID 1 alone
-	 * stages ~20 images per boot.
+	 * DEVICE-TABLE facility (src/kernel-core/vms_devtab.c) -- rd vms-618, the
+	 * LAST executive facility to join this module. Same dispatch shape as every
+	 * other facility above: find-or-create the caller's proc, hand the
+	 * framework's kernel buffer `data' straight to the SHARED facility, map its
+	 * Linux-style return to a NetBSD errno. Nothing here interprets the
+	 * argument, and nothing here is substrate-local: $ALLOC's answer comes from
+	 * the ONE executive-resident device table every process on the node shares,
+	 * which is the whole point (INV-6 -- a substrate-local ALLOC that returned
+	 * success with no real table would pass every single-process test and still
+	 * be a facade; the decisive property is that a SECOND process is refused
+	 * SS$_DEVALLOC).
+	 *
+	 * $ALLOC (0x55) is the DCL MOUNT prerequisite: dcl_cmd_misc.c's cmd_mount()
+	 * calls vms_kif_alloc(dev) BEFORE vms_kif_acp_mount(), so while this
+	 * answered ENOTTY no MOUNT of any device could succeed on NetBSD/vax.
+	 *
+	 * $DASSGN (0x51, wired by vms-329) MOVES HERE from the substrate-local
+	 * fallback chain this file used to carry: vms_devtab.c's handler is a strict
+	 * superset -- device channels FIRST, then file-class (ACP), then mailbox --
+	 * so there is now exactly one $DASSGN implementation, and a device channel
+	 * (impossible before the table existed) is released correctly. A channel
+	 * that is none of the three still gets SS$_IVCHAN, never a fabricated
+	 * success.
 	 */
-	case VMS_IOCTL_DASSGN: {
-		struct vms_dassgn_args *da = (struct vms_dassgn_args *)data;
-
+	case VMS_IOCTL_DASSGN:
+	case VMS_IOCTL_ALLOC:
+	case VMS_IOCTL_DALLOC:
+		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
 			return ENOMEM;
-		if (vms_mbx_dassgn(proc, da->chan) == 0 ||
-		    vms_acp_dassgn(proc, da->chan) == 0)
-			da->status = SS__NORMAL;
-		else
-			da->status = SS__IVCHAN;
-		return 0;
-	}
+
+		switch (cmd) {
+		case VMS_IOCTL_DASSGN:
+			r = vms_ioctl_dassgn(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_ALLOC:
+			r = vms_ioctl_alloc(proc, (unsigned long)uarg);  break;
+		case VMS_IOCTL_DALLOC:
+			r = vms_ioctl_dalloc(proc, (unsigned long)uarg); break;
+		default:
+			return ENOTTY;   /* unreachable */
+		}
+		return vms_facility_errno(r);
 
 	case VMS_IOCTL_ACP_READVBLK:
 		return vms_acp_rw_bounce(l, data, 0);
@@ -1062,9 +1097,38 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * a downstream SYS$SYSTEM resolution failure. */
 		vms_lnm_arena_selftest();
 
+		/*
+		 * Bring up the EXECUTIVE DEVICE TABLE (rd vms-618) BEFORE /dev/vms
+		 * exists, so no $ALLOC can race an uninitialised list guard. Two
+		 * steps, in the order a real VMS system initializes:
+		 *   1. vms_devtab_init() creates the console terminal OPA0: -- no
+		 *      process registers it; a process that never asked for it still
+		 *      sees it, exactly as the terminal driver creates the console
+		 *      unit during system initialization.
+		 *   2. vms_blockdev_netbsd_register_units() enters this node's DISK
+		 *      units from the device-native unit map (DKA0: -> ra1c,
+		 *      DKA100: -> ra2c), and ONLY for a device that really resolves
+		 *      -- an absent disk gets no row, so $ALLOC of it is an honest
+		 *      SS$_NOSUCHDEV rather than an invented unit (INV-6).
+		 * A failure here is out of memory: unwind exactly as the lnm arm above.
+		 */
+		error = vms_devtab_init();
+		if (error != 0) {
+			printf("vms: vms_devtab_init failed: %d\n", error);
+			vms_lnm_cleanup();
+			vms_eflag_cleanup();
+			vms_lock_cleanup();
+			vms_proctab_teardown();
+			vms_mbx_cleanup();
+			exec_lock_destroy(&vms_proc_hash_lock);
+			return ENOMEM;
+		}
+		vms_blockdev_netbsd_register_units();
+
 		error = devsw_attach("vms", NULL, &bmajor, &vms_cdevsw, &cmajor);
 		if (error != 0) {
 			printf("vms: devsw_attach failed: %d\n", error);
+			vms_devtab_cleanup();
 			vms_lnm_cleanup();
 			vms_eflag_cleanup();
 			vms_lock_cleanup();
@@ -1109,6 +1173,11 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * vms_proc_free_claimed above), then close the cached backing device
 		 * vnode the ACP $MOUNT opened. Mirrors the Linux vms.ko FINI. */
 		vms_acp_cleanup();
+		/* Free the device table's rows AFTER the procs are gone (rd vms-618):
+		 * vms_proctab_teardown above ran each proc's vms_proc_release_channels,
+		 * which unlinks its channels FROM these rows, so nothing points at a
+		 * device row by the time it is freed. */
+		vms_devtab_cleanup();
 		vms_blockdev_netbsd_release_all();
 		/* Free the logical-name arena LAST (rd vms-72da): no process can reach it
 		 * anymore (the device is detached) and no facility above references it. */

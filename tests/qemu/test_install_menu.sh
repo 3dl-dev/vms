@@ -398,40 +398,37 @@ fi
 OFF=$(wc -c <"$LOG")
 send "$SCS_ID"
 # SYSGEN activating and RUNNING against the rooted target is the DIRECT proof
-# of the vms-597 fix: the image resolved through the rooted SYS$SYSTEM redirect,
-# i.e. no %DCL-E-IVIMAGE. A regression to the flat [SYSEXE] redirect fails here.
+# of the vms-597 fix: the image resolved through the rooted SYS$SYSTEM redirect
+# (no %DCL-E-IVIMAGE) AND it was driven by the procedure's own INLINE SYS$INPUT.
+# OVMX$INSTALL.COM now feeds USE CURRENT / SET SCSNODE / SET SCSSYSTEMID /
+# WRITE CURRENT / EXIT as data lines after the RUN (the same idiom AUTHORIZE
+# uses), so an UNATTENDED install configures the node with no operator typing.
+# The console is NO LONGER used to drive the SYSGEN REPL -- sending REPL commands
+# here would leak past SYSGEN (which reads its data block, not the terminal) to
+# the menu after SYSGEN exits. Answering the two INQUIRE prompts non-blank
+# (SCS_NODE/SCS_ID above) is the entire operator interaction.
 #
 # ANTI-LARP (vms-dd15, INV-6): we anchor on the runtime BANNER SYSGEN.EXE prints
-# at startup ("OpenVMS System Generation Utility", vms_sysgen.c) and NOT on the
-# literal "SYSGEN>". OVMX$INSTALL.COM ECHOES instruction text just above --
-# 'At the SYSGEN> prompt, type:' -- which contains the substring "SYSGEN>"
-# BEFORE SYSGEN is RUN. Since wait_for is a fixed-substring (grep -F) match over
-# the segment after $OFF, matching "SYSGEN>" false-passed on that echo alone,
-# reporting success even if the RUN regressed to %DCL-E-IVIMAGE and SYSGEN never
-# started. The banner is emitted only by SYSGEN.EXE itself at runtime, never by
-# the procedure's echo, so it cannot be satisfied by instruction text.
+# at startup ("OpenVMS System Generation Utility", vms_sysgen.c) and NEVER on the
+# bare literal "SYSGEN>". Under the inline feed SYSGEN's SYS$INPUT is a non-tty
+# tmpfile (dcl_sysinput_setup), so vms_sysgen.c emits this banner UNCONDITIONALLY
+# (like AUTHORIZE's %UAF-I-AUTHVERSION); it is printed only by SYSGEN.EXE itself
+# at runtime, never by the procedure, so it cannot false-pass on instruction text.
 if wait_for 'OpenVMS System Generation Utility' "$RUN_TIMEOUT" "$OFF"; then
     ok "SYSGEN.EXE resolves, activates and runs against the rooted target (runtime banner emitted) -- no %DCL-E-IVIMAGE (vms-597)"
 else
-    dump_and_die "SYSGEN.EXE did not start against the target (vms-597 regressed: %DCL-E-IVIMAGE / unresolved SYS\$SYSTEM redirect -- no runtime banner)"
+    dump_and_die "SYSGEN.EXE did not start against the target (vms-597 regressed: %DCL-E-IVIMAGE / unresolved SYS\$SYSTEM redirect / empty inline SYS\$INPUT -- no runtime banner)"
 fi
-# Drive SYSGEN's own REPL at the console (SYS$INPUT is the terminal here,
-# exactly like the AUTHORIZE session above) to write the operator-chosen
-# node identity to the TARGET's own OVMXVMSSYS.PAR via WRITE CURRENT.
-send "USE CURRENT"
-send "SET SCSNODE \"$SCS_NODE\""
-send "SET SCSSYSTEMID $SCS_ID"
-send "WRITE CURRENT"
-send "EXIT"
-# ANTI-LARP (vms-dd15): the banner above proves SYSGEN STARTED; this proves it
-# genuinely PROCESSED the REPL. WRITE CURRENT emits %SYSGEN-I-WRITTEN only after
-# it serializes the parameter set to the target's OVMXVMSSYS.PAR at runtime --
-# another token SYSGEN.EXE alone prints, which the procedure's echo never emits,
-# so it too cannot false-pass on instruction text.
+# The procedure's OWN inline-SYS$INPUT block drives SYSGEN's REPL -- the test
+# does NOT type these at the console. WRITE CURRENT emits %SYSGEN-I-WRITTEN only
+# after it serializes the parameter set to the target's OVMXVMSSYS.PAR at
+# runtime, so this proves the inline feed actually reached and executed
+# WRITE CURRENT against the target -- another token SYSGEN.EXE alone prints,
+# which the procedure never emits, so it too cannot false-pass on echoed text.
 if wait_for '%SYSGEN-I-WRITTEN' "$RUN_TIMEOUT" "$OFF"; then
-    ok "SYSGEN's WRITE CURRENT ran against the target and reported %SYSGEN-I-WRITTEN"
+    ok "SYSGEN's inline-SYS\$INPUT WRITE CURRENT ran against the target and reported %SYSGEN-I-WRITTEN"
 else
-    dump_and_die "SYSGEN did not report %SYSGEN-I-WRITTEN -- the REPL never executed WRITE CURRENT against the target"
+    dump_and_die "SYSGEN did not report %SYSGEN-I-WRITTEN -- the inline SYS\$INPUT never executed WRITE CURRENT against the target"
 fi
 if wait_for '%DISMOUNT-I-DISMOUNTED' "$RUN_TIMEOUT" "$OFF"; then
     ok "the procedure dismounts the target itself after configuring SCSNODE/SCSSYSTEMID"

@@ -679,7 +679,14 @@ RUN mkdir -p /kit-stage/SYSEXE /kit-stage/SYSLIB /kit-stage/SYSMGR /kit-stage/SY
     # Ground-source gate: the kit manifest must actually name the images the
     # login chain depends on, not just carry a file count.
     LISTING=$(/src/build-static/bin/ovmx_kit_pack list /boot/ovmx-os.kit) && \
-    for name in "DCL.EXE" "LOGINOUT.EXE" "STARTUP.COM"; do \
+    # SYSGEN.EXE (vms-597): the install's SCS step now RUNs SYS$SYSTEM:SYSGEN.EXE
+    # and feeds it inline SYS$INPUT to configure SCSNODE/SCSSYSTEMID -- an
+    # UNATTENDED install cannot configure the node without this image on the kit.
+    # SYSGEN.EXE is copied best-effort above (2>/dev/null), which silently drops
+    # it where the static build did not produce it (notably some VAX cross
+    # configs); gate it here so the build FAILS HONESTLY rather than shipping a
+    # kit whose install cannot set the node name.
+    for name in "DCL.EXE" "LOGINOUT.EXE" "STARTUP.COM" "SYSGEN.EXE"; do \
         echo "$LISTING" | grep -q "$name" || { echo "FAIL: ovmx-os.kit manifest missing $name"; exit 1; }; \
         echo "OK: ovmx-os.kit manifest names $name"; \
     done && \

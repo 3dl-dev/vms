@@ -221,13 +221,15 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     cp /work/tests/ods2_imgact.img /work/d4.img
 
     echo "== boot qemu-system-alpha -M clipper, timeout ${BT}s =="
-    # NO NIC: on clipper, a virtio-net-pci alongside the 5 virtio-blk fixture
-    # disks hangs the boot before /init (6 virtio PCI devices; iter-1 with 5
-    # disks + -nic none booted clean). getdvi ETH0: is one suite and fails
-    # honestly without a NIC -- revisit with a slimmer disk set or a non-virtio
-    # NIC rather than break the whole run for it. -m 2048 gives the larger
-    # subject-image initramfs headroom.
-    timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 2048 -vga none -nic none \
+    # NIC = DEC Tulip (21143), NOT virtio-net: a virtio-net-pci alongside the 5
+    # virtio-blk fixture disks hangs the clipper boot before /init (the virtio
+    # combination; iter-1 with 5 disks + -nic none booted clean). Tulip is a
+    # non-virtio PCI NIC the Alpha kernel already drives (CONFIG_TULIP=y) and
+    # the executive enumerates ANY netdev as ETH0: (generic for_each_netdev,
+    # exec_kbackend.h) -- so ETH0: comes up for test_syssvc_getdvi/showdev
+    # without the virtio-net hang. -m 2048 for the subject-image initramfs.
+    timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 2048 -vga none \
+        -netdev user,id=net0 -device tulip,netdev=net0 \
         -kernel /work/vmlinux-syssvc -append "console=ttyS0 panic=-1" \
         -nographic -no-reboot \
         -drive file=/work/d0.img,format=raw,if=virtio \

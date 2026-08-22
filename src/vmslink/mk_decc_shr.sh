@@ -545,6 +545,22 @@ CRTL_OBJ="$(mktemp -d)/ovmx_decc_crtl.o"
 "${CC:-cc}" -c -fPIC -ffreestanding -o "$CRTL_OBJ" "$CRTL_SRC"
 VEC="$VEC,get_errno_addr=PROCEDURE,get_vms_errno_addr=PROCEDURE,_malloc32=PROCEDURE,_malloc64=PROCEDURE"
 
+# ---- vms-954 R1b-2b: C$_EXIT1 as a C-RTL globalvalue ----------------------
+# The alpha-dec-vms crt0 (libgcc/config/vms/vms-ucrt0.c) computes a POSIX exit
+# status as `(__int64)&C$_EXIT1 + ((status-1) << STS$V_MSG_NO)`: C$_EXIT1 is a
+# VMS GLOBALVALUE (the symbol names NO storage — its ADDRESS is a link-time
+# constant, the base VMS condition value of the C facility's EXIT1 message). On
+# real VMS it resolves from the C RTL's default libraries; OVMX exports it from
+# DECC$SHR, the C RTL surface, as an absolute globalvalue universal. LINK.EXE
+# folds `&C$_EXIT1` to this constant at link time (never load-biased, never an
+# activation import — see link.c collect_globalvalues / gval_find).
+#
+# VALUE GROUNDED TO THE ORACLE (Rule 8, clean-room): C$_EXIT1 = 0x0035A009,
+# measured 2026-08-22 on OpenVMS Alpha V8.4 (lab-Alpha) via a MACRO `.LONG
+# C$_EXIT1` + LINK/MAP/FULL resolved from the default libraries, cross-checked
+# with F$MESSAGE -> %C-S-NOMSG (C facility, Success severity). Not invented.
+VEC="$VEC,C\$_EXIT1=GLOBALVALUE:0x0035A009"
+
 # ---- vms-3e4 R1b-1: the decc$-prefixed CRTL alias vector -------------------
 # The alpha-dec-vms GCC port references every C-RTL entry as `decc$<name>`
 # (gcc/config/vms/vms.c), so a port object imports `decc$fprintf`, not `fprintf`.

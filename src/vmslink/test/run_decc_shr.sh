@@ -166,4 +166,52 @@ $CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/decc_crtl_proxy.o
 echo "R1b-2a OK: errno accessors + _malloc32/_malloc64 exported and bound (real impls, not stubs)"
 
 echo
+echo "== C\$_EXIT1 globalvalue (vms-954 R1b-2b): absolute link-time constant ======"
+# The alpha-dec-vms crt0 references C$_EXIT1 as `(__int64)&C$_EXIT1` — a VMS
+# globalvalue (the symbol names no storage; its ADDRESS is a link-time constant,
+# 0x0035A009, measured on lab-Alpha). DECC$SHR exports it as a GLOBALVALUE
+# universal; LINK.EXE folds `&C$_EXIT1` to the constant at link, unbiased, with
+# no import. Assert (1) the vector entry, then (2) a proxy that ABS64-references
+# C$_EXIT1 gets the constant folded at the site AND the slot is NOT in .vms$rel
+# (an absolute value must never be load-biased) AND no import was created.
+echo "$OUT" | awk '/GLOBALVALUE/ && $NF=="C$_EXIT1" && $0 ~ /value=0x0*35a009/ {f=1} END{exit !f}' \
+    || { echo "FAIL: C\$_EXIT1 not a GLOBALVALUE at 0x0035A009 in DECC\$SHR .vms\$sv"; \
+         echo "$OUT" | grep -i 'C\$_EXIT1' || true; exit 1; }
+echo "C\$_EXIT1 exported as a GLOBALVALUE universal = 0x0035A009"
+
+# Proxy: one ABS64 (pointer-init) reference to C$_EXIT1 + a trivial freestanding
+# _start (no crt0, no imports). A NON-const pointer forces the reloc into .data
+# so we can read the folded 8-byte value back out of the linked image.
+cat > "$WORK/gval_proxy.c" <<'EOF'
+extern int c_exit1 __asm__("C$_EXIT1");      /* VMS globalvalue: address IS value */
+void *ovmx_c_exit1_addr = &c_exit1;          /* ABS64 ref -> folded at link time  */
+void _start(void) { __builtin_trap(); }      /* freestanding: no crt0/exit import */
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/gval_proxy.o" "$WORK/gval_proxy.c"
+nm -u "$WORK/gval_proxy.o" | grep 'C\$_EXIT1' || { echo "FAIL: proxy has no C\$_EXIT1 ref"; exit 1; }
+"$WORK/LINK.EXE" --executable --use "$WORK/DECC\$SHR.EXE" \
+    -o "$WORK/GVALPROXY.EXE" "$WORK/gval_proxy.o" \
+    || { echo "FAIL: proxy did not link — C\$_EXIT1 globalvalue went unresolved (R1b-2b incomplete)"; exit 1; }
+
+# (a) the folded value: little-endian 0x0035A009 = bytes 09 a0 35 00 in .data.
+readelf -x .data "$WORK/GVALPROXY.EXE" 2>/dev/null | grep -qi '09a03500' \
+    || { echo "FAIL: 0x0035A009 not folded into .data (globalvalue not resolved to the constant)"; \
+         readelf -x .data "$WORK/GVALPROXY.EXE" 2>/dev/null | head; exit 1; }
+echo "C\$_EXIT1 folded into the reference site as the absolute constant 0x0035A009"
+
+# (b) no load bias: the ONLY abs64/GOT reference in this proxy is the globalvalue,
+# so a correct link records ZERO .vms$rel slots -> the section is absent. If the
+# globalvalue had been (wrongly) biased, .vms$rel would carry its .data slot.
+if readelf -SW "$WORK/GVALPROXY.EXE" 2>/dev/null | grep -q '\.vms\$rel'; then
+    echo "FAIL: .vms\$rel present — the absolute globalvalue was recorded for load-bias (must not be)"; exit 1
+fi
+echo "C\$_EXIT1 slot correctly excluded from .vms\$rel (absolute, never load-biased)"
+
+# (c) not an activation import: no .vms$imp / .vms$wimp in this image.
+if readelf -SW "$WORK/GVALPROXY.EXE" 2>/dev/null | grep -qE '\.vms\$imp|\.vms\$wimp'; then
+    echo "FAIL: globalvalue became an activation import (must be a link-time constant)"; exit 1
+fi
+echo "R1b-2b OK: C\$_EXIT1 is a link-time constant — folded unbiased, no import"
+
+echo
 echo "ALL DECC\$SHR PRODUCER CHECKS PASSED"

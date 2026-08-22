@@ -72,6 +72,13 @@ enum ovmx_sv_kind {
     OVMX_SV_PROCEDURE = 1,  /* value = code entry-point address              */
     OVMX_SV_DATA      = 2,  /* value = address of a data location            */
     OVMX_SV_RETIRED   = 3,  /* PRIVATE_* — slot preserved, not publicly bound */
+    OVMX_SV_GLOBALVALUE = 4,/* value = an ABSOLUTE link-time constant, NOT an */
+                            /* image address: a VMS "globalvalue" (the symbol */
+                            /* has no storage; its ADDRESS is the constant).  */
+                            /* Bound WITHOUT the load bias — see ovmx_symvec.h */
+                            /* ovmx_sv_resolve. This is how the C RTL exports  */
+                            /* errno message codes (e.g. C$_EXIT1) that the    */
+                            /* alpha-dec-vms crt0 references as `&C$_EXIT1`.    */
 };
 
 /*

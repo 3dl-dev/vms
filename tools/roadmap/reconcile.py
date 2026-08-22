@@ -636,6 +636,11 @@ def main() -> int:
     ap.add_argument("--rd-json", help="read snapshot from file instead of `rd list --all --json`")
     ap.add_argument("--as-of", help="date stamp YYYY-MM-DD (default: today UTC)")
     ap.add_argument("--site-dir", help="openvmx-site checkout: also write data/roadmap.json")
+    ap.add_argument("--feed-only", action="store_true",
+                    help="write ONLY the Atom release feed to --site-dir/atom.xml "
+                         "(derived from git tags alone — needs no rd snapshot, so it "
+                         "is safe to run in CI/the release train without corrupting "
+                         "the rd-derived roadmap.json)")
     ap.add_argument("--check", action="store_true",
                     help="exit 1 if regeneration would change any file (drift gate)")
     ap.add_argument("--print-gaps", action="store_true",
@@ -643,6 +648,29 @@ def main() -> int:
     args = ap.parse_args()
 
     as_of = args.as_of or _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+
+    # Feed-only: the release feed is derived from git tags alone, so it needs no
+    # rd snapshot and cannot touch the rd-derived roadmap.json. This is the mode
+    # the release train runs (see openvmx-site .github/workflows/track-release.yml)
+    # so a new tag refreshes the public feed without a live rd relay.
+    if args.feed_only:
+        if not args.site_dir:
+            print("--feed-only requires --site-dir", file=sys.stderr)
+            return 2
+        changed_feed: list[str] = []
+        site_atom = os.path.join(args.site_dir, "atom.xml")
+        write_if_changed(site_atom, atom_feed({"releases": git_releases()}, as_of),
+                         changed_feed, args.check)
+        if args.check:
+            if changed_feed:
+                print("DRIFT — regeneration would change:")
+                for p in changed_feed:
+                    print(f"  {p}")
+                return 1
+            print("clean — atom.xml is up to date")
+            return 0
+        print("wrote atom.xml" if changed_feed else "no changes to atom.xml")
+        return 0
 
     items = load_snapshot(args.rd_json)
     data = compute(items)

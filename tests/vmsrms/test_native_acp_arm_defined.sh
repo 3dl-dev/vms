@@ -53,8 +53,18 @@ for mk in "$MKDIR"/mk_*.sh; do
         # a direct "$CC ... <base>.c" line (mk_*_shr.sh use a LIST loop). Ignore
         # comment lines -- a recipe that only MENTIONS a TU it --uses from a
         # shareable (e.g. mk_loginout.sh's rms_textfile note) does not compile it.
-        if grep -vE '^[[:space:]]*#' "$mk" \
-             | grep -qE "(^|[^a-zA-Z0-9_])${base}([^a-zA-Z0-9_]|\$)" 2>/dev/null &&
+        #
+        # Feed the comment-stripped text via process substitution, NOT a pipe:
+        # under `set -o pipefail` a `strip | grep -q` pipeline reports the whole
+        # pipeline failed when the downstream `grep -q` matches early and closes
+        # the pipe, killing the upstream `grep -v` with SIGPIPE (141). That is
+        # buffering/grep-implementation dependent -- it passes with a
+        # block-buffered GNU grep on the dev host but bites with the line-buffered
+        # busybox/musl grep in the CI container, a false positive on the largest
+        # recipe (mk_libvms_shr.sh). Process substitution keeps the guard's
+        # PASS/FAIL keyed only on the matcher's own exit status (vms-f60d).
+        if grep -qE "(^|[^a-zA-Z0-9_])${base}([^a-zA-Z0-9_]|\$)" \
+             <(grep -vE '^[[:space:]]*#' "$mk") 2>/dev/null &&
            grep -qE '\$CC[[:space:]].*-c([[:space:]]|$)' "$mk" 2>/dev/null; then
             compiles_guarded="$compiles_guarded $base"
         fi
@@ -63,7 +73,9 @@ for mk in "$MKDIR"/mk_*.sh; do
 
     # Look for the actual compile flag on a NON-comment line (a bare mention in
     # an explanatory comment does not put -DOVMX_HAVE_ACP on the cc line).
-    if grep -vE '^[[:space:]]*#' "$mk" | grep -qE '(^|[^A-Za-z0-9_])-DOVMX_HAVE_ACP([^A-Za-z0-9_]|$)'; then
+    # Process substitution, not a pipe -- see the SIGPIPE/pipefail note above.
+    if grep -qE '(^|[^A-Za-z0-9_])-DOVMX_HAVE_ACP([^A-Za-z0-9_]|$)' \
+         <(grep -vE '^[[:space:]]*#' "$mk"); then
         echo "OK: $name compiles [${compiles_guarded# }] and defines OVMX_HAVE_ACP"
     else
         echo "FAIL: $name compiles OVMX_HAVE_ACP-guarded TU(s) [${compiles_guarded# }]"

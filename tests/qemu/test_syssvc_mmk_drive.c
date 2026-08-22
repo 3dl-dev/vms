@@ -332,10 +332,24 @@ int main(int argc, char **argv)
         close(outpipe[0]); close(outpipe[1]);
         int devnull = open("/dev/null", O_RDONLY);
         if (devnull >= 0) { dup2(devnull, STDIN_FILENO); close(devnull); }
-        setenv("VMS_FOREIGN_CMD",
+        static const char fcmd[] =
                "/DESCRIPTION=" ODS2_DIR "OVMXB23.MMS "
                "/RULES_FILE=" ODS2_DIR "MMS$RULES "
-               "OVMXB23.OUT", 1);
+               "OVMXB23.OUT";
+        /* Record the foreign command tail on THIS process's executive CLI
+         * context (vms-f60d). execl below keeps the same PID -- hence the same
+         * executive PCB -- so the shipped MMK's LIB$GET_FOREIGN reads the tail
+         * back with vms_kif_getcli, the authoritative channel the real runtime
+         * uses (the invoking CLI records the command line; the activated image
+         * reads it), NOT the retired VMS_FOREIGN_CMD env shim: lib$get_foreign
+         * now prefers the executive whenever /dev/vms answers, and only consults
+         * VMS_FOREIGN_CMD as the no-executive fallback. MMK.EXE is a bare static
+         * image (no IMGACT interpreter), so it re-REGISTERs onto this same PCB
+         * (EEXIST, context preserved) rather than REGISTER_CONTINUE-inheriting
+         * from a parent -- the setcli made here is what it reads. The env var is
+         * kept only for that no-executive fallback, mirroring lib$get_foreign. */
+        (void)vms_kif_setcli(1, fcmd);
+        setenv("VMS_FOREIGN_CMD", fcmd, 1);
         execl(mmk_path(), mmk_path(), (char *)NULL);
         _exit(127);
     }

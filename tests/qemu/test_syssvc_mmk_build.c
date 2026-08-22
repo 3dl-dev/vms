@@ -954,10 +954,20 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
          * rule-parsed); the P1 target is BARE (like the rule). The child keeps
          * cwd = the Linux workdir so the forked toolchain writes its artifacts
          * there, where the asserts below read them. */
-        setenv("VMS_FOREIGN_CMD",
-               do_link
+        const char *fcmd = do_link
                  ? "/DESCRIPTION=" ODS2_DIR "725.MMS /RULES_FILE=" ODS2_DIR "MMS$RULES OVMXRT.EXE"
-                 : "/DESCRIPTION=" ODS2_DIR "725.MMS /RULES_FILE=" ODS2_DIR "MMS$RULES OVMXRT.OLB", 1);
+                 : "/DESCRIPTION=" ODS2_DIR "725.MMS /RULES_FILE=" ODS2_DIR "MMS$RULES OVMXRT.OLB";
+        /* Record the foreign command tail on THIS process's executive CLI
+         * context (vms-f60d): execl keeps the same PID/PCB, so the shipped MMK's
+         * LIB$GET_FOREIGN reads it back with vms_kif_getcli -- the authoritative
+         * channel the real runtime uses, not the retired VMS_FOREIGN_CMD env
+         * shim (lib$get_foreign now prefers the executive whenever /dev/vms
+         * answers and consults the env var only as the no-executive fallback).
+         * MMK.EXE is a bare static image, so it re-REGISTERs onto this same PCB
+         * (EEXIST, context preserved). The env var is kept only for that
+         * no-executive fallback, mirroring lib$get_foreign. */
+        (void)vms_kif_setcli(1, fcmd);
+        setenv("VMS_FOREIGN_CMD", fcmd, 1);
         execl(mmk, mmk, (char *)NULL);
         _exit(127);
     }

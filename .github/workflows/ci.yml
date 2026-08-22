@@ -4047,6 +4047,19 @@ jobs:
         run: |
           sh src/vmslink/test/run_evax_link.sh
 
+      # vms-c179: cross-image (SYMG) import binding on the EVAX path. Links
+      # link_main.obj ALONE against a --use'd producer that EXPORTS its
+      # HELPER_PROC target, and asserts every reference (the STC_LP_PSB LINKAGE
+      # pair + the REFQUAD data pointers) binds as a cross-image import — fill
+      # slot left 0, a .vms$imp record naming {producer, symbol-vector index}
+      # for IMGACT to resolve at activation — while the ONE local REFQUAD stays
+      # directly resolved. The INV-6 honest-fail leg: a producer that does NOT
+      # export the symbol must still %LINK-F-UNDEF (no fabricated import). Pure
+      # byte manipulation, arch-independent; fixture checked in.
+      - name: Prove LINK.EXE binds EVAX cross-image imports from a --use producer (vms-c179)
+        run: |
+          sh src/vmslink/test/run_evax_ximport.sh
+
       # vms-2e4: the LAST x86_64 relocation class — gnu2-dialect TLSDESC
       # (R_X86_64_GOTPC32_TLSDESC + R_X86_64_TLSDESC_CALL, plus the
       # local-dynamic R_X86_64_DTPOFF32 / _TLS_MODULE_BASE_ half). Proof is

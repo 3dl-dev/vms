@@ -210,12 +210,12 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     ####################################################################
     echo "== prepare fixture disks =="
     cp /work/tests/ods2_real.img   /work/d0.img
-    # DKA100: MUST be a pristine blank each run: test_syssvc_initialize asserts
-    # "no vmsfs home block BEFORE INITIALIZE". truncate on an EXISTING file keeps
-    # its bytes, so a prior run's INITIALIZE home block would persist in the
-    # cached /work -- recreate it fresh (rm first) so it is genuinely all-zero.
-    rm -f /work/d1.img
-    truncate -s 16M                /work/d1.img
+    # DKA100: MUST be a pristine ALL-ZERO blank each run: test_syssvc_initialize
+    # asserts "no vmsfs home block BEFORE INITIALIZE". truncate keeps an existing
+    # file's bytes (a prior run's INITIALIZE home block would persist in the
+    # cached /work) AND this image's truncate will not create a fresh file -- so
+    # dd a genuinely all-zero 16 MB disk each run.
+    dd if=/dev/zero of=/work/d1.img bs=1M count=16 status=none
     cp /work/tests/ods2_search.img /work/d2.img
     cp /work/tests/ods2_sysvol.img /work/d3.img
     cp /work/tests/ods2_imgact.img /work/d4.img

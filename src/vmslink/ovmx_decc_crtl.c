@@ -26,6 +26,8 @@
 #include <errno.h>
 #include <pthread.h>
 #include <sys/mman.h>
+#include <stdarg.h>
+#include <stdio.h>
 
 /* Canonical VMS image-activation context — single source of truth (INV-LEDGER):
  * dsc$descriptor_s (image_file_desc, arg 4), plus ovmx_imghdr (arg 3) and
@@ -167,6 +169,73 @@ int _malloc32(int size)
 void *_malloc64(unsigned long size)
 {
     return malloc((size_t)size);
+}
+
+/* -------------------------------------------------- decc$malloc / decc$_malloc64
+ * (vms-981) The alpha-dec-vms GCC port maps the source `malloc` through the CRTL
+ * name table (gcc/config/vms/vms-crtlmap.map: "malloc  64 MALLOC"; the decoration
+ * in gcc/config/vms/vms.cc) to one of a POINTER-SIZE-selected pair, and the crt0
+ * itself (libgcc/config/vms/vms-ucrt0.c) references BOTH:
+ *
+ *   decc$malloc     - the 32-bit-pointer malloc: the port emits it as the
+ *                     translation of the RTL-internal `_malloc32` name (vms.cc,
+ *                     the "_X32 -> X" rule), so its result MUST be addressable by
+ *                     a 32-bit pointer (< 4 GB). The port crt0 builds the widened
+ *                     argv/envp ARRAY here (a small allocation living in the low
+ *                     4 GB, exactly as DEC C's default-heap malloc places it).
+ *   decc$_malloc64  - the 64-bit-pointer malloc: in -mpointer-size=64 the port
+ *                     maps the source `malloc` to this (vms.cc, "X -> _X64 if
+ *                     long"), the full 64-bit-addressable heap. app.c's plain
+ *                     malloc(3) lowers to this.
+ *
+ * These are the DECORATED malloc-family entries the R1b-1 alias vector
+ * deliberately did NOT generate (they are not plain decc$<name>/<name> musl
+ * aliases; decc$malloc's < 4 GB contract is not something musl's malloc honors).
+ * Real bridges onto the already-genuine OVMX allocators, correct void* signatures
+ * (NOT the bare-int _malloc32 ABI): decc$malloc -> _malloc32 (the < 4 GB arena /
+ * MAP_32BIT path above), decc$_malloc64 -> _malloc64 (musl malloc). Grounded to
+ * the GPL port source + the VSI OpenVMS C RTL Reference Manual (Rule 8). */
+
+void *ovmx_decc_malloc(size_t n)   __asm__("decc$malloc");
+void *ovmx_decc_malloc(size_t n)
+{
+    if (n > 0x7fffffffUL)              /* _malloc32 takes a (positive) int size   */
+        return NULL;                   /* honest failure, never a truncated size  */
+    int a = _malloc32((int)n);
+    if (a <= 0)                        /* no < 4 GB region (or n==0): honest NULL  */
+        return NULL;
+    return (void *)(unsigned long)(unsigned int)a;   /* genuine < 4 GB pointer     */
+}
+
+void *ovmx_decc_malloc64(size_t n) __asm__("decc$_malloc64");
+void *ovmx_decc_malloc64(size_t n)
+{
+    return _malloc64((unsigned long)n);   /* full 64-bit-addressable heap (malloc) */
+}
+
+/* ------------------------------------------------------------------ decc$tprintf
+ * (vms-981) The port maps the source `printf` (vms-crtlmap.map: "printf  FLOAT64
+ * FLOAT128") through vms.cc's float-model decoration: FLOAT64 prepends 't',
+ * FLOAT128 prepends 'x' ONLY when LONG_DOUBLE_TYPE_SIZE == 128. The port emits
+ * `decc$tprintf` (a 't', no 'x'), so this target's long double is 64-bit and the
+ * name selects the DEC C RTL's IEEE T_FLOAT variant of printf-to-stdout: %f/%g/%e
+ * arguments are IEEE-754 binary64 (as opposed to the VAX D/G-float variants
+ * decc$printf / decc$gprintf select). OVMX/musl doubles ARE IEEE-754 binary64, so
+ * the T_FLOAT model is exactly musl's native printf model — a faithful forward to
+ * vprintf (== vfprintf(stdout, ...)), NOT a reinterpretation. Real formatted
+ * output to stdout; varargs via va_list; returns the char count musl's vprintf
+ * returns (negative on output error), the C-standard printf return real OpenVMS
+ * DECC$SHR also yields. Grounded to the GPL port source + the VSI OpenVMS C RTL
+ * Reference Manual ("Floating-Point Support", the g/t/x model prefixes), Rule 8. */
+
+int ovmx_decc_tprintf(const char *fmt, ...) __asm__("decc$tprintf");
+int ovmx_decc_tprintf(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int r = vprintf(fmt, ap);          /* real formatted output to stdout          */
+    va_end(ap);
+    return r;                          /* chars written (or <0 on error)           */
 }
 
 /* ------------------------------------------------------------------- decc$main

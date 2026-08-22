@@ -1,0 +1,103 @@
+Vendored package:  GNU binutils (assembler subset: gas + bfd + opcodes + libiberty)
+Upstream URL:      https://ftp.gnu.org/gnu/binutils/binutils-2.43.tar.xz
+                    (official GNU FTP release tarball, not the bminor/binutils-gdb
+                    git mirror — the git mirror's `github.com/bminor/binutils-gdb`
+                    repo could not be reached from this build host at vendor time;
+                    the GNU FTP release tarball is an equally canonical upstream
+                    source for a binutils-2.43.x pin and carries no gdb/ tree to
+                    begin with, matching this bead's scope.)
+Pinned release:    binutils-2.43 (2024-07-27 upstream release)
+Tarball SHA256:    b53606f443ac8f01d1d5fc9c39497f2af322d99e14cea5c0b4b124d630379365
+Vendored:          2026-08-20
+License:           GPLv3+ (bfd/opcodes/binutils driver code: some files LGPLv2.1+,
+                    see COPYING.LIB) — GPL vendoring is IN-BOUNDS to OVMX's
+                    clean-room HARD INVARIANT (CLAUDE.md Rule 8): Rule 8 covers
+                    VMS *formats/protocols* derived only from public docs +
+                    observation, not upstream open-source *tool* source. Same
+                    basis as third-party/tcc and third-party/openssh.
+
+SCOPE (bead vms-0b6b / epic vms-da0, F1 of the GCC-as-VMS-oracle lane): this
+bead needs GNU `as` (gas) plus the BFD/libiberty/opcodes it links — NOT gdb,
+NOT ld, NOT gold, NOT the `binutils` driver-tools directory (ar/objcopy/
+readelf/nm/strings/...), NOT gprof/gprofng. The upstream GNU FTP "binutils"
+release tarball already excludes gdb/sim; this vendoring additionally
+PRUNED, from the stock 2.43 release tree, the directories NOT needed to
+build gas: gold/, ld/, gprof/, gprofng/, elfcpp/, binutils/ (the ar/objcopy/
+readelf/nm/strings CLI tools directory — distinct from this
+third-party/binutils/ vendor root; not a build dependency of gas). Also
+pruned the DejaGNU test-fixture testsuite/ subdirectory of bfd/, gas/,
+opcodes/ (gas/testsuite/ alone is 142M) — confirmed empirically (see below)
+that none of the three sub-configure scripts (gas/configure, bfd/configure,
+opcodes/configure) reference their own testsuite/ in AC_CONFIG_FILES, so
+none is a build input for `make all-gas`.
+
+CORRECTED DURING THE HOST-SIDE BUILD PROOF (this session): an initial, more
+aggressive prune also dropped po/ (gettext catalogs) and doc/ (Texinfo
+manuals) everywhere, and libctf/ entirely. Both turned out to be real build
+inputs, not just optional artifacts:
+  - gas/configure, bfd/configure and opcodes/configure each unconditionally
+    list `po/Makefile.in:po/Make-in` in AC_CONFIG_FILES (regardless of
+    --disable-nls) — config.status hard-fails ("cannot find input file:
+    `po/Make-in'") without the (small) po/Make-in template and its gettext
+    Makevars/POTFILES.in/*.sed/*.header/*.sin sidecar files. RESTORED po/ in
+    full for bfd/, gas/, opcodes/ (~22M) rather than cherry-pick the exact
+    subset make needs — cheap, and avoids a second round of "which gettext
+    boilerplate file is it THIS time" discovery.
+  - libiberty/configure lists `testsuite/Makefile` in AC_CONFIG_FILES
+    unconditionally too — RESTORED libiberty/testsuite/ (172K, tiny; unlike
+    gas's, libiberty's testsuite/ genuinely gates config.status).
+  - `make all-gas` transitively builds all-libsframe (bfd's SFrame stack-
+    trace section support), whose Makefile has a `doc/sframe-spec.info`
+    rule depending on `doc/sframe-spec.texi` — RESTORED bfd/doc/, gas/doc/,
+    libsframe/doc/ (~4.2M total; opcodes/ has no doc/ in the stock tree) so
+    that rule has its input.
+  - libsframe/sframe.c does `#include "swap.h"`, resolved via libctf/'s
+    directory (a byte-swap helper header, not a CTF-specific one) —
+    RESTORED libctf/ in full (2.1M) rather than lift the single header out
+    of context.
+All four corrections are documented here rather than silently applied — the
+first prune attempt was WRONG (three separate configure-time hard failures,
+reproduced and fixed in sequence during this bead's host-side build proof),
+not a deliberate scope decision.
+
+KEPT (needed to configure+build gas as a standalone module against this
+tree's own bfd/opcodes/libiberty, using the top-level autoconf/automake
+build machinery unmodified): bfd/, gas/, opcodes/, libiberty/, libctf/,
+include/, config/, cpu/ (CGEN cpu descriptions some opcodes Makefiles
+reference — kept rather than risk breaking a generated-file rule), zlib/ +
+libsframe/ (in-tree fallback deps some bfd/gas configure checks probe for;
+both are themselves stock upstream GPL/zlib-licensed vendor trees inside
+the release tarball, not OVMX-authored), texinfo/ + etc/ (top-level build-
+system helper scripts referenced by the top-level configure/Makefile.tpl
+machinery), plus every top-level autoconf/automake driver file (configure,
+configure.ac, Makefile.def/.in/.tpl, config.guess, config.sub, config-ml.in,
+install-sh, missing, ar-lib, compile, depcomp, ltmain.sh, the lt*.m4 files,
+symlink-tree, move-if-change, mkinstalldirs, ylwrap, mkdep, multilib.am,
+test-driver, COPYING*, README*, MAINTAINERS, ChangeLog*, SECURITY.txt,
+setup.com/makefile.vms — VMS-*build* helpers from a PRIOR era of upstream
+binutils' own VAX/Alpha VMS host support, kept as-is, NOT authored by OVMX,
+NOT used by this bead's mk_as.sh).
+
+DROPPED FOR REAL (confirmed buildable without them): gold/, ld/, gprof/,
+gprofng/, elfcpp/, binutils/ (the CLI-tools dir), and every testsuite/ under
+bfd/, gas/, opcodes/ (gas/testsuite/'s 142M is the overwhelming majority of
+the size this vendoring did NOT bring in).
+
+Vendored as a plain source copy (no .git, no submodule) — same convention
+as third-party/tcc. Nothing in this tree has been patched; upstream is
+unmodified. OVMX-specific additions (the RMS I/O shim mirroring
+third-party/tcc/ovmx/) live in a sibling third-party/binutils/ovmx/
+directory, kept out of src/ exactly like tcc's ovmx/ovmx_rms_io.c.
+
+To re-vendor at a new pin:
+  curl -LO https://ftp.gnu.org/gnu/binutils/binutils-<new-version>.tar.xz
+  tar xf binutils-<new-version>.tar.xz
+  cd binutils-<new-version> && rm -rf gold ld gprof gprofng elfcpp binutils
+  rm -rf bfd/testsuite gas/testsuite opcodes/testsuite
+  rsync -a --delete ./ third-party/binutils/src/
+  # update the fields above with the new tarball name/date/sha256sum. Then
+  # re-run the host-side proof (see mk_as.sh's header) to confirm
+  # config.status still resolves cleanly at the new pin before committing —
+  # this is exactly the check that caught the po/Make-in, libiberty
+  # testsuite/Makefile.in, and libsframe doc/swap.h gaps above; a future
+  # upstream release could add a new one.

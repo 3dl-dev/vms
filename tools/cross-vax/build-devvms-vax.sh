@@ -145,6 +145,19 @@ echo "=== build the userspace ping probe (static elf32-vax) ==="
 echo "  OK: vmsprobe (static elf32-vax)"
 echo
 
+echo "=== build the device-allocation probe (static elf32-vax, rd vms-618) ==="
+# The cross-process $ALLOC/$DALLOC test program. Same static link + same
+# transport seam as vmsprobe above; the harness runs it as SEPARATE guest
+# processes so a second process really is a second process (INV-6: the decisive
+# check is that process B is refused SS$_DEVALLOC for a device process A holds).
+"$CC" -O -Wall -Wextra -static \
+    -I"$LIBVMSSYS" -I"$KMOD" \
+    -o "$OUT/vmsdevalloc" \
+    "$PROBE/vmsdevalloc.c" "$LIBVMSSYS/kif_transport_netbsd.c"
+"$OBJDUMP" -f "$OUT/vmsdevalloc" | grep -qiF 'file format elf32-vax' || { echo "FAIL: vmsdevalloc not elf32-vax"; exit 1; }
+echo "  OK: vmsdevalloc (static elf32-vax)"
+echo
+
 echo "=== ARTIFACTS ==="
-ls -l "$OUT/vms.kmod" "$OUT/vmsprobe"
+ls -l "$OUT/vms.kmod" "$OUT/vmsprobe" "$OUT/vmsdevalloc"
 echo "=== build-devvms-vax.sh: DONE (both elf32-vax artifacts ready for SIMH) ==="

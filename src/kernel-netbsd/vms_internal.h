@@ -89,7 +89,7 @@
 /* Device-table wire contract (rd vms-618): the $ASSIGN/$DASSGN/$ALLOC/$DALLOC/
  * $GETDVI/$DEVICE_SCAN/IO$_SETMODE arg structs src/kernel-core/vms_devtab.c
  * copies, the VMS_TTC_* terminal characteristics, VMS_NETIF_SIZE and the
- * VMS_DVI_SEL_*/VMS_TTSET_* selectors. Byte-identical to src/kernel/vms_ioctl.h.
+ * VMS_DVI_SEL_ / VMS_TTSET_ selectors. Byte-identical to src/kernel/vms_ioctl.h.
  * The device table is the LAST executive facility to join the NetBSD module's
  * SRCS; before it did, VMS_IOCTL_ALLOC answered ENOTTY and DCL's cmd_mount()
  * (which $ALLOCs before it $MOUNTs) could not mount a device on NetBSD/vax. */

@@ -214,4 +214,58 @@ fi
 echo "R1b-2b OK: C\$_EXIT1 is a link-time constant — folded unbiased, no import"
 
 echo
+echo "== decc\$main (vms-954 §4b.5): DEC C RTL image-startup, PRODUCES argc/argv/envp =="
+# The alpha-dec-vms crt0's __main forwards its six-arg VMS activation context to
+# decc$main, which must PRODUCE argc/argv/envp. (1) it is exported as a PROCEDURE
+# universal; (2) a proxy importing it links clean; (3) its non-CLI LOGIC actually
+# runs and produces the right argc/argv/envp with genuine <4 GB (32-bit) pointers.
+echo "$OUT" | awk '/PROCEDURE/ && $NF=="decc$main" {f=1} END{exit !f}' \
+    || { echo "FAIL: decc\$main not a PROCEDURE universal in DECC\$SHR .vms\$sv"; exit 1; }
+echo "decc\$main exported as a PROCEDURE universal"
+
+cat > "$WORK/decc_main_proxy.c" <<'EOF'
+extern void d_main(void*,void*,void*,void*,unsigned,unsigned,int*,int*,int*) __asm__("decc$main");
+void _start(void){ int a,b,c; d_main(0,0,0,0,0,0,&a,&b,&c); __builtin_trap(); }
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/decc_main_proxy.o" "$WORK/decc_main_proxy.c"
+"$WORK/LINK.EXE" --executable --use "$WORK/DECC\$SHR.EXE" \
+    -o "$WORK/DECCMAINPROXY.EXE" "$WORK/decc_main_proxy.o" \
+    || { echo "FAIL: decc\$main import went unresolved against DECC\$SHR"; exit 1; }
+echo "decc\$main import binds to DECC\$SHR"
+
+# LOGIC test: compile ovmx_decc_crtl.c natively + a driver, call decc$main on the
+# non-CLI (cliflag=0) path, and assert the FULL contract — argc=1, argv[0] is the
+# image file spec, argv[1]=NULL, envp=[NULL], and every produced pointer is a
+# genuine <4 GB / positive-int value (the crt0's 32-bit argv contract). This runs
+# _malloc32 for real (MAP_32BIT on x86_64, the low arena on arm64), so it also
+# exercises the arm64 <4 GB fix decc$main depends on.
+cat > "$WORK/decc_main_logic.c" <<'EOF'
+#include <stdio.h>
+#include <string.h>
+struct dsc { unsigned short len; unsigned char dtype, dclass; char *ptr; };
+extern void d_main(void*,void*,void*,void*,unsigned,unsigned,int*,int*,int*) __asm__("decc$main");
+int main(void){
+    const char *nm = "SYS$SYSDEVICE:[000000]HELLO.EXE;1";
+    struct dsc d = { (unsigned short)strlen(nm), 0x0e /*DSC$K_DTYPE_T*/, 0x01 /*DSC$K_CLASS_S*/, (char*)nm };
+    int argc=-1, argv=-1, envp=-1;
+    d_main(0,0,0,&d,0,0,&argc,&argv,&envp);
+    if (argc != 1)              { printf("FAIL argc=%d (want 1)\n", argc); return 1; }
+    if (argv <= 0 || envp <= 0) { printf("FAIL argv/envp not positive <4GB: argv=%d envp=%d\n", argv, envp); return 1; }
+    int *av = (int*)(unsigned long)(unsigned)argv;
+    if (av[0] <= 0)             { printf("FAIL argv[0] not <4GB: %d\n", av[0]); return 1; }
+    if (av[1] != 0)             { printf("FAIL argv[1]=%d (want NULL)\n", av[1]); return 1; }
+    char *s = (char*)(unsigned long)(unsigned)av[0];
+    if (strcmp(s, nm) != 0)     { printf("FAIL argv[0]='%s' (want '%s')\n", s, nm); return 1; }
+    int *ev = (int*)(unsigned long)(unsigned)envp;
+    if (ev[0] != 0)             { printf("FAIL envp[0]=%d (want NULL, empty env)\n", ev[0]); return 1; }
+    printf("decc$main non-CLI: argc=1, argv[0]='%s' <4GB, argv[1]=NULL, envp=[] OK\n", s);
+    return 0;
+}
+EOF
+$CC -O2 -fPIC -ffreestanding -c -o "$WORK/ovmx_decc_crtl.o" "$SRC/ovmx_decc_crtl.c"
+$CC -O2 -o "$WORK/decc_main_logic" "$WORK/decc_main_logic.c" "$WORK/ovmx_decc_crtl.o"
+"$WORK/decc_main_logic" || { echo "FAIL: decc\$main non-CLI logic produced the wrong argc/argv/envp"; exit 1; }
+echo "R1b-2b OK: decc\$main produces argc/argv/envp on the non-CLI path (real 32-bit argv)"
+
+echo
 echo "ALL DECC\$SHR PRODUCER CHECKS PASSED"

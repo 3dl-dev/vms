@@ -254,6 +254,33 @@ date prompt. To build a *new* golden instead, unset `GOLDEN` and set
 > Verifying a sparse copy: `du` right after `cp` can report ~1 K because ZFS has
 > not flushed. `sync` first, and compare md5 — not size.
 
+## Conversational boot & SYSGEN params (opt-in)
+
+The default bring-up autoboots straight to a login prompt — **do not change
+that.** This is a shared oracle; a lab that stops at `SYSBOOT>` by default is
+useless to everyone else. Two env knobs let *one* run boot conversationally and
+set SYSGEN parameters, without touching the default:
+
+| Env | Default | Effect |
+|-----|---------|--------|
+| `AUTOBOOT` | `boot dqa0` (from `GOLDEN`) | Override the boot command. For a conversational boot use `boot -fl 0,1 dqa0` (root 0, RPB conversational bit → stops at `SYSBOOT>`). |
+| `SYSBOOT_PARAMS` | *(empty)* | Space-separated `PARAM=VALUE` list. When set, `entrypoint.sh` waits for `SYSBOOT>`, sends `SET PARAM VALUE` for each, then `CONTINUE`. Requires a conversational `AUTOBOOT`. |
+
+Both apply to **every** node in the pod. Set them per-run (e.g. a redeploy with
+overridden env), never in the committed manifest. Example — boot both nodes with
+the MSCP server disabled, to test whether disk-serving is what trips the
+emulator on cluster join (rd vms-0d1):
+
+```
+AUTOBOOT="boot -fl 0,1 dqa0"
+SYSBOOT_PARAMS="MSCP_LOAD=0"
+```
+
+The change is **non-persistent** (SYSBOOT `SET`, not `SET/STARTUP`): it holds for
+this boot only. To bake a confirmed value into the golden image, boot once, `SET`
+it at `SYSBOOT>`, `CONTINUE`, then `@SYS$UPDATE:AUTOGEN … SETPARAMS` (or
+`WRITE CURRENT` from `SYSGEN`) on the settled system and re-snap the golden.
+
 ## The Alpha cluster — it forms, then hits an emulator bug
 
 **A two-node Alpha VMScluster forms.** `NODES="alpha1 alpha2"` puts a whole

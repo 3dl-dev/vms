@@ -369,8 +369,20 @@ int main(void)
      * nothing about the subject. Read the executive rows while root and
      * subprocess are BOTH still alive. */
     struct vms_procinfo root_info, sub_info, self_info;
+    /* The root registered synchronously (session_child reported setprn/$ASSIGN/
+     * SETTERM back over rep_pipe before exec'ing DCL), but the SPAWN/NOWAIT
+     * subprocess registers ASYNCHRONOUSLY -- DCL forks it and it makes its first
+     * vms_kif call only after it starts. Poll for its row to APPEAR (an observed
+     * condition, not a fixed sleep) before reading the classification; the
+     * transcript's "number of processes = 2" proves it does register. */
     uint32_t rst = vms_kif_getjpi_prcnam(ROOT_NAME, &root_info);
-    uint32_t sst = vms_kif_getjpi_prcnam(SUB_NAME, &sub_info);
+    uint32_t sst = 0;
+    for (int i = 0; i < 3000; i++) {   /* up to ~30s */
+        sst = vms_kif_getjpi_prcnam(SUB_NAME, &sub_info);
+        if (sst & 1) break;
+        struct timespec ts = { 0, 10 * 1000 * 1000 };  /* 10ms */
+        nanosleep(&ts, NULL);
+    }
     uint32_t sfst = vms_kif_getjpi_self(&self_info);
 
     printf("  (diag: transcript=%d rst=%08X root_type=%u sst=%08X sub_type=%u "

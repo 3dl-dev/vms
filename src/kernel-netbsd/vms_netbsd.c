@@ -896,6 +896,10 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_ESTABLISH_SYSTEM:
 	case VMS_IOCTL_HIBER:
 	case VMS_IOCTL_WAKE:
+	case VMS_IOCTL_SETEXIT:
+	case VMS_IOCTL_GETEXIT:
+	case VMS_IOCTL_SETCLI:
+	case VMS_IOCTL_GETCLI:
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -916,6 +920,15 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_hiber(proc, (unsigned long)uarg);            break;
 		case VMS_IOCTL_WAKE:
 			r = vms_ioctl_wake(proc, (unsigned long)uarg);             break;
+		/* $EXIT/$STATUS + CLI invocation context (vms-f60d) */
+		case VMS_IOCTL_SETEXIT:
+			r = vms_ioctl_setexit(proc, (unsigned long)uarg);          break;
+		case VMS_IOCTL_GETEXIT:
+			r = vms_ioctl_getexit(proc, (unsigned long)uarg);          break;
+		case VMS_IOCTL_SETCLI:
+			r = vms_ioctl_setcli(proc, (unsigned long)uarg);           break;
+		case VMS_IOCTL_GETCLI:
+			r = vms_ioctl_getcli(proc, (unsigned long)uarg);           break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}

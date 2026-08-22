@@ -714,6 +714,57 @@ struct vms_proc {
     uint64_t            p1_limit;
     spinlock_t          p1_lock;
 
+    /*
+     * Image completion status -- the executive half of $EXIT/$STATUS
+     * (vms-f60d). When an activated image finishes (its port crt0's
+     * main() returns, or it calls SYS$EXIT explicitly), IMGACT records
+     * the returned VMS condition value here through VMS_IOCTL_SETEXIT.
+     * That value IS the process's $STATUS: the full longword is the
+     * condition value, bit<0> (STS$M_SUCCESS) is the success/fail bit
+     * and bits<2:0> (STS$V_SEVERITY) are the severity, exactly as
+     * $STATUS/$SEVERITY report them (VSI OpenVMS DCL Dictionary; System
+     * Services Reference, $EXIT). It lives in the executive rather than
+     * in the image's own memory for the same reason prcnam/username do:
+     * so it survives the image and is a fact the invoking CLI (and an
+     * authorized reader through VMS_IOCTL_GETEXIT) can observe, not a
+     * value only the exiting image ever saw.
+     *
+     * has_exit_status distinguishes "recorded the condition value 0"
+     * (a legal, even/warning-severity value) from "no image has exited
+     * yet" -- a reader must never have to guess that from a zero, the
+     * same discipline as vms_procinfo.redacted.
+     *
+     * Guarded by vms_proc_hash_lock, alongside prcnam/username/terminal:
+     * VMS_IOCTL_GETEXIT reads another process's recorded status under
+     * that lock (gated by vms_proc_may_read, like $GETJPI).
+     */
+    uint32_t            exit_status;      /* recorded image completion $STATUS */
+    uint8_t             has_exit_status;  /* 1 once SETEXIT recorded a value */
+
+    /*
+     * CLI invocation context -- the executive source for IMGACT's
+     * cliflag / cli_util->get_command_line (vms-f60d, ovmx_activation.h).
+     * cli_present is the cliflag: 1 iff this image was invoked from a
+     * CLI (DCL). cli_command is the invoking DCL command line, length
+     * cli_length (no trailing NUL required within the count; a NUL is
+     * still kept for C readers). An image inherits both from its
+     * invoking CLI's PCB at VMS_IOCTL_REGISTER_CONTINUE time
+     * (vms_proc_continue_identity), the same inheritance path as
+     * uic/username/privs -- so DCL sets the context once (SETCLI) and
+     * every image it activates reads it back (GETCLI) from the
+     * executive, never from a Linux env-var shim (conductor ruling,
+     * INV-6). Same hash_lock as the identity fields.
+     *
+     * OVMX DESIGN CHOICE (CLAUDE.md Rule 8): the 256-byte command-line
+     * bound matches the classic 255-character DCL command line the
+     * OpenVMS User's Manual documents; the byte layout of the ioctls
+     * carrying it is OVMX's own (public docs give the semantics of a
+     * CLI command line and $CLI callbacks, not a wire format).
+     */
+    uint8_t             cli_present;      /* cliflag: invoked from a CLI/DCL */
+    uint16_t            cli_length;       /* length of cli_command in bytes */
+    char                cli_command[VMS_CLI_CMDLINE_SIZE];
+
     struct rcu_head     rcu;
 };
 
@@ -999,6 +1050,19 @@ long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg);
+/*
+ * $EXIT / $STATUS and CLI invocation context (vms-f60d) -- the executive
+ * half of IMGACT's crt0 return path (ovmx_activation.h). SETEXIT records
+ * the returned condition value as the process's image completion $STATUS;
+ * GETEXIT reads it back (self, or another process gated by
+ * vms_proc_may_read like $GETJPI). SETCLI records the invoking CLI command
+ * line + cliflag; GETCLI reads the caller's own CLI context. See the PCB
+ * fields exit_status/cli_command above and vms_proctab.c.
+ */
+long vms_ioctl_setexit(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_getexit(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
 /* Construct the SYSTEM identity onto the caller (vms-a17e) -- the
  * OPA0:-style counterpart to vms_ioctl_setident() that takes no
  * caller-supplied username/uic/privs; see VMS_SYSTEM_UIC's comment. */

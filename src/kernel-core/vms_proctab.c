@@ -1031,3 +1031,197 @@ out:
         return -EFAULT;
     return 0;
 }
+
+/* ================================================================
+ * $EXIT / $STATUS and CLI invocation context (vms-f60d)
+ *
+ * The executive half of IMGACT's VMS-standard image return path
+ * (src/imgact/imgact.c, src/imgact/include/ovmx_activation.h). When a
+ * VMS-standard image's port crt0 (__main -> decc$main -> main) returns a
+ * condition value, IMGACT records it here as the process's completion
+ * $STATUS instead of fabricating an exit code in userspace; and the CLI
+ * context IMGACT presents to that crt0 (cliflag + the invoking command
+ * line) is READ from the executive rather than a Linux env-var shim.
+ * ================================================================ */
+
+/* Decode a VMS condition value into the $STATUS/$SEVERITY fields the DCL
+ * Dictionary defines: bit<0> (STS$M_SUCCESS) is the success bit and
+ * bits<2:0> (STS$V_SEVERITY) the severity. Repeated here rather than
+ * pulled from stsdef.h, which is not on the executive include path. */
+#define VMS_STS_M_SUCCESS  0x1u
+#define VMS_STS_M_SEVERITY 0x7u
+
+/*
+ * vms_ioctl_setexit - record `condition` as the caller's image completion
+ * $STATUS and report the derived success/severity + POSIX exit code.
+ *
+ * This does NOT itself terminate the Linux task: in the OVMX activation
+ * model the image is a distinct task IMGACT execs, and the actual image
+ * exit is the exit_group(2) IMGACT issues immediately after this call with
+ * the returned exit_code. What the executive owns -- and what makes the
+ * status a fact the invoking CLI can read rather than a value only the
+ * exiting image saw -- is the recorded completion status in the PCB.
+ *
+ * Self-targeted: a process records its OWN completion status, exactly as
+ * SYS$EXIT sets the status of the image that called it. There is no
+ * "record another process's exit status" service (Rule 10: unmatched, so
+ * unoffered).
+ */
+long vms_ioctl_setexit(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_exit_args args;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    exec_lock(&vms_proc_hash_lock);
+    proc->exit_status = args.condition;
+    proc->has_exit_status = 1;
+    exec_unlock(&vms_proc_hash_lock);
+
+    args.success  = (uint8_t)(args.condition & VMS_STS_M_SUCCESS);
+    args.severity = (uint8_t)(args.condition & VMS_STS_M_SEVERITY);
+    /* OVMX design choice (CLAUDE.md Rule 8): POSIX has one 8-bit exit code
+     * and no VMS counterpart, so the mapping is ours -- 0 when the VMS
+     * success bit is set, else nonzero. The full condition value remains
+     * the authoritative status; this is the lossy Linux-side echo. */
+    args.exit_code = (args.condition & VMS_STS_M_SUCCESS) ? 0u : 1u;
+    args.status = SS__NORMAL;
+
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_getexit - read back a process's recorded image completion
+ * $STATUS. SEL_SELF is the invoking CLI reading the status of the image it
+ * just ran (the authentic $STATUS path); SEL_PID is an authorized reader
+ * observing another process's completion status, gated by
+ * vms_proc_may_read() exactly like $GETJPI (SS$_NOPRIV, no data, when
+ * refused). has_exited is 0 when no image has recorded a status, so a
+ * reader never has to read "not exited" out of a zero condition value.
+ */
+long vms_ioctl_getexit(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_getexit_args args;
+    struct vms_proc *target;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    vms_proc_reap_dead();
+
+    exec_lock(&vms_proc_hash_lock);
+    switch (args.select) {
+    case VMS_JPI_SEL_SELF:
+        target = proc;
+        break;
+    case VMS_JPI_SEL_PID:
+        target = find_by_vms_pid(args.vms_pid);
+        break;
+    default:
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+
+    if (!target) {
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__NONEXPR;
+        goto out;
+    }
+
+    if (!vms_proc_may_read(proc, target)) {
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+
+    args.condition  = target->exit_status;
+    args.has_exited = target->has_exit_status;
+    exec_unlock(&vms_proc_hash_lock);
+
+    args.success  = (uint8_t)(args.condition & VMS_STS_M_SUCCESS);
+    args.severity = (uint8_t)(args.condition & VMS_STS_M_SEVERITY);
+    args.status   = SS__NORMAL;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_setcli - record the caller's CLI invocation context: the
+ * cliflag (was this a CLI/DCL invocation) and the invoking command line.
+ * The invoking CLI (DCL) calls this; every image it then activates
+ * inherits the context from the CLI's PCB at REGISTER_CONTINUE time
+ * (vms_proc_continue_identity), so an image reads its invoking command
+ * line from the executive, never from a Linux env var (INV-6).
+ *
+ * Self-targeted -- a process records its OWN context. A zero cliflag with
+ * a zero length is the legitimate "no CLI" state.
+ */
+long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_setcli_args args;
+    uint16_t len;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    /* Trust-boundary check on an untrusted length: the executive must
+     * never copy more than the buffer it was handed, and must keep room
+     * for the NUL it terminates with. */
+    len = args.length;
+    if (len >= VMS_CLI_CMDLINE_SIZE) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+
+    exec_lock(&vms_proc_hash_lock);
+    proc->cli_present = args.cliflag ? 1 : 0;
+    proc->cli_length  = len;
+    memcpy(proc->cli_command, args.command, len);
+    proc->cli_command[len] = '\0';
+    exec_unlock(&vms_proc_hash_lock);
+
+    args.status = SS__NORMAL;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_getcli - read the caller's OWN CLI invocation context. This is
+ * the source behind IMGACT's imgact_query_cli_context() (cliflag) and
+ * imgact_cli_get_command_line() (the command line): an image asks the
+ * executive for the context it inherited from its invoking CLI. Self only
+ * -- an image reads its own invoking command line, not another process's.
+ */
+long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_getcli_args args;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    exec_lock(&vms_proc_hash_lock);
+    args.cliflag = proc->cli_present;
+    args.length  = proc->cli_length;
+    memcpy(args.command, proc->cli_command, VMS_CLI_CMDLINE_SIZE);
+    exec_unlock(&vms_proc_hash_lock);
+    args.command[VMS_CLI_CMDLINE_SIZE - 1] = '\0';
+    args.status = SS__NORMAL;
+
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}

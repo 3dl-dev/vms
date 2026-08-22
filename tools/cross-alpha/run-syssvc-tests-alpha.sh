@@ -162,10 +162,14 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
             || { echo "FATAL: busybox source fetch failed"; exit 1; }
         tar xf /work/busybox.tar.bz2 -C /work
         make -C "/work/busybox-$BBVER" ARCH=alpha CROSS_COMPILE=alpha-linux-gnu- defconfig >/work/bb-cfg.log 2>&1
-        # static + standalone shell (built-in applets, no PATH lookup)
+        # static + standalone shell (built-in applets, no PATH lookup); disable
+        # tc -- the traffic-control applet does not build against modern kernel
+        # headers (TCA_CBQ_* removed) and we only need sh/sleep/touch.
         sed -i -e "s/# CONFIG_STATIC is not set/CONFIG_STATIC=y/" \
                -e "s/# CONFIG_FEATURE_SH_STANDALONE is not set/CONFIG_FEATURE_SH_STANDALONE=y/" \
                -e "s/# CONFIG_STATIC_LIBGCC is not set/CONFIG_STATIC_LIBGCC=y/" \
+               -e "s/^CONFIG_TC=y/# CONFIG_TC is not set/" \
+               -e "s/^CONFIG_FEATURE_TC_INGRESS=y/# CONFIG_FEATURE_TC_INGRESS is not set/" \
                "/work/busybox-$BBVER/.config"
         yes "" | make -C "/work/busybox-$BBVER" ARCH=alpha CROSS_COMPILE=alpha-linux-gnu- oldconfig >>/work/bb-cfg.log 2>&1 || true
         make -C "/work/busybox-$BBVER" ARCH=alpha CROSS_COMPILE=alpha-linux-gnu- -j"$(nproc)" busybox >/work/bb-build.log 2>&1 \

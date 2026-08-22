@@ -262,7 +262,7 @@ int main(void){
     return 0;
 }
 EOF
-$CC -O2 -fPIC -ffreestanding -c -o "$WORK/ovmx_decc_crtl.o" "$SRC/ovmx_decc_crtl.c"
+$CC -O2 -fPIC -ffreestanding -I"$SRC/../imgact/include" -c -o "$WORK/ovmx_decc_crtl.o" "$SRC/ovmx_decc_crtl.c"
 $CC -O2 -o "$WORK/decc_main_logic" "$WORK/decc_main_logic.c" "$WORK/ovmx_decc_crtl.o"
 "$WORK/decc_main_logic" || { echo "FAIL: decc\$main non-CLI logic produced the wrong argc/argv/envp"; exit 1; }
 echo "R1b-2b OK: decc\$main produces argc/argv/envp on the non-CLI path (real 32-bit argv)"

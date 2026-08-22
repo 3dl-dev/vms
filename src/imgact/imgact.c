@@ -1573,10 +1573,96 @@ static void setup_producer_tls_over_crtl(struct ovmx_prod *crtl)
 			continue;
 		absorb_tls_over_crtl(p, tp);
 	}
-	/* The executable module's own TLS (e.g. DCL's dcl_messages.o) is absorbed
-	 * the same way — it is not in g_prods, so handle it explicitly (vms-c86). */
-	if (g_exe.has_tls)
+	/* The executable module's own TLSDESC TLS (e.g. DCL's dcl_messages.o) is
+	 * absorbed the same way — it is not in g_prods, so handle it explicitly
+	 * (vms-c86). Its LE/IE (non-TLSDESC) TLS is NOT absorbable this way — a
+	 * fixed %fs-negative access cannot be redirected like a TLSDESC entry — so
+	 * that case is owned by reserve_exe_main_tls_over_crtl (vms-c07), which runs
+	 * BEFORE this pass and places the exe block strictly below musl's TP. Only
+	 * the TLSDESC case reaches absorb here. */
+	if (g_exe.has_tls && g_exe.tlsdesc)
 		absorb_tls_over_crtl(&g_exe, tp);
+}
+
+/* Forward decl: sv_find_named is defined below (with drive_crtl_init, which also
+ * uses it); the re-drive here needs it. */
+static unsigned long sv_find_named(const struct ovmx_prod *p, const char *name);
+
+/* vms-c07: set up an OVMX EXECUTABLE's OWN main-program TLS for the LE/IE
+ * (non-TLSDESC) case, which musl-as-a-shareable structurally cannot relocate.
+ *
+ * When the C-RTL (DECC$SHR = whole-archived musl) is present, musl's static
+ * TLS init computes the main program's load bias only from PT_DYNAMIC — which,
+ * for a LINK.EXE image running under IMGACT as PT_INTERP (AT_BASE != 0),
+ * resolves to DECC$SHR's OWN _DYNAMIC (bias 0). So musl would copy the exe's
+ * .tdata from an unrelocated address and fault, and it never places the exe's
+ * PT_TLS below TP at all. LE/IE accesses (cc1's whole-archived host runtime is
+ * classic GD-relaxed-to-LE + IE) read fixed %fs-negative slots, so — unlike a
+ * TLSDESC producer — the block cannot be given its own mapping and biased after
+ * the fact; it MUST live below musl's TP. IMGACT already holds the real bias
+ * (g_exe.tls_image = exe_base + p_vaddr), so it drives musl's OWN __copy_tls /
+ * __init_tp with a single relocated module. This runs right after the C-RTL's
+ * __init_libc (drive_crtl_init) and before setup_producer_tls_over_crtl, whose
+ * TLSDESC producers bias relative to the TP this establishes.
+ *
+ * (No-op unless a C-RTL producer is present, i.e. only the interp-driven musl
+ * path; VAX/Alpha static images have AT_BASE==0 and take the no-C-RTL branch
+ * (setup_symvec_tls), so this is compiled-in but never entered there — the
+ * 3-way convergence gate {x86_64, VAX ILP32, Alpha LP64} proves that.)
+ *
+ * PROVISIONAL (vms-c07, pending the LINK.EXE-tpoff <-> module.offset alignment
+ * close by the GCC lane): the module .offset and __libc.tls_size below are the
+ * values that run cc1 deep into compilation but leave the TCB self-ptr one
+ * alignment step high; the final values arrive from the LE-tpoff analysis. The
+ * mechanism (getter-proc + __copy_tls/__init_tp re-drive) is proven. */
+static void reserve_exe_main_tls_over_crtl(struct ovmx_prod *crtl)
+{
+	if (!g_exe.has_tls || g_exe.tlsdesc)
+		return;   /* TLSDESC case handled by absorb; nothing to do w/o TLS */
+
+	unsigned long copy_tls = sv_find_named(crtl, "__copy_tls");
+	unsigned long init_tp  = sv_find_named(crtl, "__init_tp");
+	unsigned long getlibc  = sv_find_named(crtl, "ovmx_get_libc");
+	if (!copy_tls || !init_tp || !getlibc)
+		die_tlserr("exe-main-TLS re-drive (missing DECC$SHR universal)");
+
+	unsigned char *libc = ((unsigned char *(*)(void))getlibc)();
+	unsigned long align = g_exe.tls_align ? g_exe.tls_align : 8;
+
+	/* musl struct tls_module { next@0, image@8, len@16, size@24, align@32,
+	 * offset@40 }. `static` — musl keeps __libc.tls_head pointing at it for the
+	 * process lifetime. image is the RELOCATED init-image (exe_base+p_vaddr). */
+	static unsigned long m[6];
+	m[0] = 0;
+	m[1] = (unsigned long)g_exe.tls_image;
+	m[2] = g_exe.tls_filesz;
+	m[4] = align;
+	m[3] = ALIGN_UP(g_exe.tls_memsz, align);   /* PROVISIONAL (vms-c07) */
+	m[5] = m[3];                               /* PROVISIONAL (vms-c07) */
+
+	/* musl struct __libc { ... tls_head@16, tls_size@24, tls_align@32,
+	 * tls_cnt@40 }. Single module: the first __init_libc (AT_BASE!=0) scanned
+	 * IMGACT's phdrs, found no PT_TLS, so tls_head/tls_cnt are 0 — nothing
+	 * musl-own to preserve (the TCB is rebuilt unconditionally by __copy_tls). */
+	*(unsigned long *)(libc + 16) = (unsigned long)&m[0];   /* tls_head  */
+	*(unsigned long *)(libc + 40) = 1;                      /* tls_cnt   */
+	unsigned long tls_size =
+		ALIGN_UP(m[5] + 0xc8UL + align + 0x100UL, 8);  /* PROVISIONAL (vms-c07) */
+	*(unsigned long *)(libc + 24) = tls_size;              /* tls_size  */
+	if (align > *(unsigned long *)(libc + 32))
+		*(unsigned long *)(libc + 32) = align;        /* tls_align */
+
+	unsigned long msz = PAGE_UP(tls_size);
+	void *mem = sys_mmap(0, msz, PROT_READ | PROT_WRITE,
+			     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (mem == MAP_FAILED)
+		die_tlserr("exe-main-TLS block");
+
+	/* __copy_tls(mem): allocate the TCB at mem+tls_size-0xc8, copy each
+	 * tls_head module's .tdata to TP-module.offset, build the DTV, return TP.
+	 * __init_tp(TP): write the self-ptr + __set_thread_area + canary/tid. */
+	unsigned long tp = ((unsigned long (*)(void *))copy_tls)(mem);
+	((void (*)(unsigned long))init_tp)(tp);
 }
 
 /* --------------------------------------------------------------------------
@@ -1903,7 +1989,8 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	struct ovmx_prod *crtl = find_crtl_producer();
 	if (crtl) {
 		drive_crtl_init(crtl);            /* musl owns TP + its TCB/TLS  */
-		setup_producer_tls_over_crtl(crtl);  /* absorb producer TLS modules */
+		reserve_exe_main_tls_over_crtl(crtl); /* exe's own LE/IE TLS below TP (vms-c07) */
+		setup_producer_tls_over_crtl(crtl);  /* absorb producer TLSDESC modules */
 	} else {
 		/* Set up TLS for any producer that has thread-local storage, before the
 		 * consumer (which may call into that producer's TLS-using code) runs. */

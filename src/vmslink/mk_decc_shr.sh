@@ -402,7 +402,9 @@ truncate=PROCEDURE,umask=PROCEDURE,ungetc=PROCEDURE,ungetwc=PROCEDURE,unlinkat=P
 uselocale=PROCEDURE,utimensat=PROCEDURE,vasprintf=PROCEDURE,vprintf=PROCEDURE,wait4=PROCEDURE,\
 wcrtomb=PROCEDURE,wcscoll=PROCEDURE,wcsftime=PROCEDURE,wcslen=PROCEDURE,wcsxfrm=PROCEDURE,\
 wctob=PROCEDURE,wctype=PROCEDURE,wmemchr=PROCEDURE,wmemcmp=PROCEDURE,wmemcpy=PROCEDURE,\
-wmemmove=PROCEDURE,wmemset=PROCEDURE,writev=PROCEDURE"
+wmemmove=PROCEDURE,wmemset=PROCEDURE,writev=PROCEDURE,\
+\
+__copy_tls=PROCEDURE,__init_tp=PROCEDURE,ovmx_get_libc=PROCEDURE"
 
 # fcntl APPENDED for vms-8019 (append-only -> prior consumers' vector indices
 # unchanged, GSMATCH LEQUAL-compatible). $CREPRC's creation handshake sets
@@ -510,11 +512,32 @@ wmemmove=PROCEDURE,wmemset=PROCEDURE,writev=PROCEDURE"
 echo "mk_decc_shr: LINK.EXE=$LINK_EXE"
 echo "mk_decc_shr: libc.a=$LIBC  libgcc.a=$LIBGCC  GSMATCH=$GSMATCH"
 
+# __copy_tls/__init_tp/ovmx_get_libc APPENDED for vms-c07 (append-only -> prior
+# consumers' vector indices unchanged, GSMATCH LEQUAL-compatible). IMGACT (the
+# PT_INTERP for LINK.EXE images) drives musl's OWN TLS helpers to set up an OVMX
+# executable's main-program TLS, which musl-as-a-shareable structurally cannot
+# relocate (static_init_tls derives the bias from PT_DYNAMIC = DECC$SHR's own,
+# bias 0). __copy_tls (builds the TCB + copies the RELOCATED .tdata + DTV,
+# returns TP) and __init_tp (writes the self-ptr/canary/tid) are musl libc.a
+# entry points; ovmx_get_libc is OVMX loader glue (ovmx_libc_stub.c) exposing
+# musl's hidden `__libc` so IMGACT can poke its tls_head/tls_cnt/tls_size/
+# tls_align fields. A getter PROCEDURE, not a `__libc=DATA` universal: `__libc`
+# is BSS and a BSS DATA universal hits the emit_shareable() resolve-before-place
+# gap (vms-910). See src/imgact/imgact.c (reserve_exe_main_tls_over_crtl).
+#
+# Compile the loader glue for the SAME ABI as libc.a (the recipe runs in the
+# musl container whose cc matches the target archive; CC overridable for cross).
+# -ffreestanding: no libc dependency of its own (it only takes __libc's address).
+STUB_SRC="$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_libc_stub.c"
+STUB_OBJ="$(mktemp -d)/ovmx_libc_stub.o"
+"${CC:-cc}" -c -fPIC -ffreestanding -o "$STUB_OBJ" "$STUB_SRC"
+
 # Whole-archive, strict (NO --allow-undefined): a complete C-RTL shareable must
-# link with zero deferred externals. libc.a first so its strong defs win.
+# link with zero deferred externals. libc.a first so its strong defs win; the
+# loader-glue object last (it only REFERENCES __libc, which libc.a defines).
 "$LINK_EXE" --shareable \
     --symbol-vector "$VEC" \
     --gsmatch "$GSMATCH" \
-    -o "$OUT" "$LIBC" "$LIBGCC"
+    -o "$OUT" "$LIBC" "$LIBGCC" "$STUB_OBJ"
 
 echo "mk_decc_shr: created $OUT"

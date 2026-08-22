@@ -93,6 +93,22 @@ WORK=${WORK:-/tmp/mk-vmsrms-shr}
 mkdir -p "$WORK"
 
 CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics -U_FORTIFY_SOURCE}"
+# -DOVMX_HAVE_ACP (vms-656): rms_core.c / rms_io.c / rms_search.c reach SYS$DISK
+# through the executive Files-11 ODS-2 ACP on EVERY substrate. Those arms
+# (rms_acp_specs_from_fab and the $OPEN/$CREATE/$SEARCH callers around it) were
+# keyed on __linux__ until vms-d5d re-keyed them to OVMX_HAVE_ACP so the
+# netbsd-vax cross (where __linux__ is undefined) gets them too. This recipe
+# builds the SHIPPED LIBVMSRMS$SHR.EXE and used to satisfy the __linux__ arm for
+# free on the x86_64 host; the re-key silently dropped it here (mk_dcl.sh and
+# mk_libvms_shr.sh were updated with -DOVMX_HAVE_ACP at that point, this one was
+# missed), so the native-link RMS fell to the POSIX #else branch
+# (vmsfs_to_linux_path) that cannot see a file living only on the genuine ODS-2
+# volume -- STARTUP.COM's OPEN of SYS$STARTUP:VMS$PHASES.DAT then failed
+# %RMS-E-FNF and x86_64 never reached Username:. Kept as a separate DEFS (not
+# folded into the env-overridable CFLAGS) so a caller that overrides CFLAGS
+# still gets it. Runtime still fails HONESTLY with no /dev/vms (INV-6): the ACP
+# arm answers the real RMS status, it does not fall back to /vms.
+DEFS="-DOVMX_HAVE_ACP"
 INCS="-I$SRC/include -I$LIBVMS_INC -I$VMSFS_INC -I$LIBVMSSYS_INC"
 
 echo "mk_vmsrms_shr: LINK.EXE=$LINK_EXE  CC=$CC  GSMATCH=$GSMATCH"
@@ -119,7 +135,7 @@ LIST="rms_core rms_io rms_seq rms_rel rms_idx rms_prolog3 sysuaf_rms sysuaf_live
 OBJS=""
 for c in $LIST; do
     echo "  cc $c.c"
-    $CC $CFLAGS $INCS -c -o "$WORK/$c.o" "$SRC/$c.c"
+    $CC $CFLAGS $DEFS $INCS -c -o "$WORK/$c.o" "$SRC/$c.c"
     OBJS="$OBJS $WORK/$c.o"
 done
 

@@ -86,6 +86,12 @@ ovmx_sv_resolve(const struct ovmx_sv_header *h, uint32_t index,
     const struct ovmx_sv_entry *e = ovmx_sv_at(h, index);
     if (!e)
         return 0;
+    /* A globalvalue's `value` is an ABSOLUTE link-time constant (a VMS
+     * globalvalue: the symbol names no storage, its address IS the value), so
+     * it is bound WITHOUT the image load bias — unlike a PROCEDURE/DATA entry
+     * whose value is an image-relative address. */
+    if (e->kind == OVMX_SV_GLOBALVALUE)
+        return e->value;
     return load_bias + e->value;
 }
 

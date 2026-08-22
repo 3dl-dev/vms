@@ -260,7 +260,10 @@ def main():
             return HARNESS_ERROR
         ok("vms.kmod modloaded (the executive is live)")
 
-        rc, out = run(child, "dmesg | grep -i '^vms:' | tail -20", cmd_timeout)
+        # NOT anchored: NetBSD prefixes every dmesg line with a "[ ns.ns]"
+        # timestamp, so '^vms:' matches nothing (it silently produced an empty
+        # capture, and therefore two false FAILs, on the first run of this proof).
+        rc, out = run(child, "dmesg | grep -i 'vms: ' | tail -20", cmd_timeout)
         log("executive console lines:\n%s" % out)
         # POSITIVE EVIDENCE the table was populated from REAL devices.
         if re.search(r"disk unit DKA0:\s*->\s*ra1c", out):

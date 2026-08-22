@@ -771,11 +771,6 @@ static void dir_concat(const char *parent, const char *sub,
  * unresolvable chain). Fail-honest: an unresolvable logical yields 0 candidates,
  * never a fabricated path (INV-6) -- the caller reports the honest RMS error.
  */
-static void compose_from_equiv(const char *equiv,
-                               const vmsfs_filespec_t *parsed,
-                               char out[][VMSFS_MAX_FILESPEC],
-                               int *count, int max_out, int depth);
-
 static void compose_ods2_r(const vmsfs_filespec_t *parsed,
                            char out[][VMSFS_MAX_FILESPEC],
                            int *count, int max_out, int depth)
@@ -839,49 +834,8 @@ static void compose_ods2_r(const vmsfs_filespec_t *parsed,
         }
     }
 
-    /* Not a rooted/concealed device, but still possibly a SEARCH LIST of plain
-     * or directory-bearing members (vms-656: SYS$STARTUP = SYS$SYSDEVICE:[SYS0.
-     * SYSCOMMON.SYS$STARTUP],SYS$MANAGER). lnm_translate above returned only the
-     * FIRST value -- following it alone loses the second element (SYS$MANAGER)
-     * and the RMS search-list semantics STARTUP.COM relies on. Fan out EVERY
-     * member in LNM$FILE_DEV search order and compose each; the caller (RMS /
-     * $SEARCH) tries the candidates in order, first-hit wins -- genuine VMS
-     * search-list behaviour. A single-value logical yields n==1 and behaves
-     * exactly as the pre-vms-656 single-equiv path did. */
-    {
-        char vals[LNM_MAX_SEARCHLIST][LNM_MAX_VALUE + 1];
-        uint8_t n = 0;
-        if (lnm_translate_searchlist(mgr, dev_up, vals, LNM_MAX_SEARCHLIST,
-                                     &n, NULL) == SS$_NORMAL && n > 0) {
-            for (uint8_t i = 0; i < n && *count < max_out; i++)
-                compose_from_equiv(vals[i], parsed, out, count, max_out, depth);
-            return;
-        }
-        /* Search-list read did not resolve (no LNM manager reachable, etc.):
-         * fall back to the single equivalence lnm_translate already gave us. */
-        compose_from_equiv(equiv, parsed, out, count, max_out, depth);
-    }
-}
-
-/*
- * compose_from_equiv - vms-656: resolve ONE equivalence value of a directory
- * logical (one search-list member) against the caller's spec, then recurse.
- * The value is either a directory-bearing spec (SYS$SYSTEM -> SYS$SYSROOT:
- * [SYSEXE]; SYS$STARTUP member 0 -> SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYS$STARTUP]),
- * whose device+directory fold under the caller's, or a plain device/logical
- * name (SYS$MANAGER, SYS$SYSDEVICE -> DKA0:) swapped in as the next device.
- * This is compose_ods2_r's former tail, hoisted so it can run per member.
- */
-static void compose_from_equiv(const char *equiv,
-                               const vmsfs_filespec_t *parsed,
-                               char out[][VMSFS_MAX_FILESPEC],
-                               int *count, int max_out, int depth)
-{
-    if (*count >= max_out || depth >= VMSFS_RESOLVE_MAX_DEPTH)
-        return;
-
-    /* A directory-bearing equivalence: fold its directory under the caller's
-     * and continue with its device. */
+    /* A directory-bearing equivalence (SYS$SYSTEM -> SYS$SYSROOT:[SYSEXE]):
+     * fold its directory under the caller's and continue with its device. */
     if (strchr(equiv, '[')) {
         vmsfs_filespec_t e;
         if ($VMS_STATUS_SUCCESS(vmsfs_parse_filespec(equiv, &e)) &&
@@ -902,8 +856,8 @@ static void compose_from_equiv(const char *equiv,
         return;
     }
 
-    /* A plain device/logical equivalence: swap the device, keep the caller's
-     * directory, and re-resolve. */
+    /* A plain device/logical equivalence (SYS$SYSDEVICE -> DKA0:): swap the
+     * device, keep the caller's directory, and re-resolve. */
     {
         vmsfs_filespec_t nxt = *parsed;
         char e2[VMSFS_MAX_DEVICE + 1];

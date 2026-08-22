@@ -108,41 +108,6 @@ int main(void)
     CHECK(has_candidate(cands, n, "DKA0:[SYS0.SYSCOMMON.SYSLIB]STARLET.OLB"),
           "SYS$LIBRARY:STARLET.OLB composes onto the common [SYS0.SYSCOMMON.SYSLIB]");
 
-    /* ---- vms-656: a NON-ROOTED two-element SEARCH LIST (SYS$STARTUP) ------
-     * STARTUP.COM defines
-     *   DEFINE/SYSTEM SYS$STARTUP SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYS$STARTUP],SYS$MANAGER
-     * Neither member is a concealed-rooted device, so before the fix only the
-     * FIRST member composed and the second (SYS$MANAGER -> [SYS0.SYSCOMMON.SYSMGR])
-     * was lost -- SYS$STARTUP:VMS$PHASES.DAT then returned %RMS-E-FNF and boot
-     * spun. Both members must now compose, in search order. */
-    {
-        const char *sv[] = { "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYS$STARTUP]",
-                             "SYS$MANAGER" };
-        (void)lnm_delete(mgr, LNM_PROCESS_TABLE, "SYS$STARTUP", LNM_MODE_EXEC);
-        uint32_t rc = lnm_create_multi(mgr, LNM_PROCESS_TABLE, "SYS$STARTUP",
-                                       sv, 2, LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
-        CHECK(rc == SS$_NORMAL || rc == SS$_SUPERSEDE,
-              "defined SYS$STARTUP as a 2-element search list (matches STARTUP.COM)");
-
-        n = vmsfs_compose_ods2_candidates("SYS$STARTUP:VMS$PHASES.DAT", cands,
-                                          LNM_MAX_SEARCHLIST);
-        printf("  INFO: SYS$STARTUP:VMS$PHASES.DAT -> %d candidate(s)\n", n);
-        for (int i = 0; i < n; i++)
-            printf("        [%d] %s\n", i, cands[i]);
-
-        int im0 = index_of(cands, n,
-                           "DKA0:[SYS0.SYSCOMMON.SYS$STARTUP]VMS$PHASES.DAT");
-        int im1 = index_of(cands, n,
-                           "DKA0:[SYS0.SYSCOMMON.SYSMGR]VMS$PHASES.DAT");
-        CHECK(im0 >= 0,
-              "member 0 composes onto [SYS0.SYSCOMMON.SYS$STARTUP] (where the file is staged)");
-        CHECK(im1 >= 0,
-              "member 1 (SYS$MANAGER) ALSO composes -- the second search-list element is not lost");
-        CHECK(im0 >= 0 && im1 >= 0 && im0 < im1,
-              "SEARCH ORDER: SYS$STARTUP member precedes the SYS$MANAGER member");
-        (void)lnm_delete(mgr, LNM_PROCESS_TABLE, "SYS$STARTUP", LNM_MODE_EXEC);
-    }
-
     /* ---- a plain device (already physical) passes through --------------- */
     n = vmsfs_compose_ods2_candidates("DKA0:[MYDIR]FILE.DAT", cands,
                                       LNM_MAX_SEARCHLIST);

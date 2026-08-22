@@ -41,7 +41,9 @@ KV="${KV:-6.6.52}"
 ROOT="${SYSSVC_ROOT:-$REPO/.boot-cache/alpha-syssvc}"
 export VMSKO_WORK="${VMSKO_WORK:-$ROOT/vmsko}"
 WORK="${WORK:-$ROOT/work}"
-BOOT_TIMEOUT="${BOOT_TIMEOUT:-900}"
+# 66 suites, several now fork/exec subject images (DCL/MMK/TCC) -- ~20s each
+# plus the per-suite 90s watchdog headroom. 2400s carries the full run.
+BOOT_TIMEOUT="${BOOT_TIMEOUT:-2400}"
 DOCKER_TIMEOUT="${DOCKER_TIMEOUT:-$((BOOT_TIMEOUT + 1800))}"
 
 mkdir -p "$WORK"
@@ -86,6 +88,25 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     echo "== staged $n test_syssvc_/test_imgact_ binaries =="
     [ "$n" -ge 1 ] || { echo "FATAL: no syssvc test binaries built"; exit 1; }
     alpha-linux-gnu-strip /work/tests/test_* 2>/dev/null || true
+
+    # SUBJECT IMAGES the suites fork/exec (the pass=0 tier fails its first
+    # assertion without these). Best-effort: a self-host target (mmk_native)
+    # that does not cross-build for alpha is simply not staged, and its suites
+    # fail HONESTLY (never skip). Required targets (DCL/INITIALIZE/AUTHORIZE)
+    # cross-build via the same glibc-static toolchain the tests use.
+    echo "== build subject images (DCL/INITIALIZE/AUTHORIZE + best-effort MMK/TCC) =="
+    for tgt in vmsdcl vms_initialize vms_authorize; do
+        cmake --build /work/cmake-alpha --target "$tgt" -j"$(nproc)" >>/work/cmake-subj.log 2>&1 \
+            || echo "WARN: subject target $tgt did not build for alpha"
+    done
+    # mmk_native (self-host MMK) + tcc (self-host compiler) -- the mmk_* suites
+    # drive MMK.EXE which shells out to TCC.EXE. Best-effort; a self-host target
+    # that does not cross-build leaves its suites to fail honestly.
+    for tgt in mmk_native tcc; do
+        cmake --build /work/cmake-alpha --target "$tgt" -j"$(nproc)" >>/work/cmake-subj.log 2>&1 \
+            || echo "WARN: self-host target $tgt did not cross-build for alpha"
+    done
+    alpha-linux-gnu-strip /work/cmake-alpha/bin/*.EXE 2>/dev/null || true
 
     ####################################################################
     # 2. Build the byte-genuine ODS-2 fixtures host-side (arch-independent
@@ -137,6 +158,11 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
       echo "dir /proc 755 0 0"
       echo "dir /sys 755 0 0"
       echo "dir /tests 755 0 0"
+      echo "dir /bin 755 0 0"
+      echo "dir /vms 755 0 0"
+      echo "dir /vms/SYS0 755 0 0"
+      echo "dir /vms/SYS0/SYSCOMMON 755 0 0"
+      echo "dir /vms/SYS0/SYSCOMMON/SYSEXE 755 0 0"
       echo "dir /tmp 1777 0 0"
       echo "file /init /work/syssvc-init 755 0 0"
       echo "file /vms.ko /work/vms.ko 644 0 0"
@@ -144,6 +170,19 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
       for f in /work/tests/test_*; do
         echo "file /tests/$(basename "$f") $f 755 0 0"
       done
+      # SUBJECT IMAGES at the exact paths the suites exec (guarded by build
+      # success; a target absent on alpha leaves its suites to fail honestly).
+      B=/work/cmake-alpha/bin
+      if [ -f "$B/DCL.EXE" ]; then
+        echo "file /bin/DCL.EXE $B/DCL.EXE 755 0 0"          # setprv_dcl/ident/setname/startup_service
+        echo "file /tests/DCL.EXE $B/DCL.EXE 755 0 0"        # mbx_dcldrv/showdev
+        echo "file /vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE $B/DCL.EXE 755 0 0"
+      fi
+      [ -f "$B/INITIALIZE.EXE" ] && echo "file /tests/INITIALIZE.EXE $B/INITIALIZE.EXE 755 0 0"
+      [ -f "$B/AUTHORIZE.EXE" ]  && echo "file /tests/AUTHORIZE.EXE $B/AUTHORIZE.EXE 755 0 0"
+      [ -f "$B/AUTHORIZE.EXE" ]  && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/AUTHORIZE.EXE $B/AUTHORIZE.EXE 755 0 0"
+      [ -f "$B/MMK.EXE" ]        && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE $B/MMK.EXE 755 0 0"
+      [ -f "$B/TCC.EXE" ]        && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/TCC.EXE $B/TCC.EXE 755 0 0"
     } > /work/syssvc.list
 
     echo "== rebuild vmlinux with the syssvc-test initramfs baked in =="
@@ -171,7 +210,11 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     cp /work/tests/ods2_imgact.img /work/d4.img
 
     echo "== boot qemu-system-alpha -M clipper, timeout ${BT}s =="
-    timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 1024 -vga none -nic none \
+    # A virtio-net NIC so the executive enumerates ETH0: (test_syssvc_getdvi
+    # asserts sys$getdvi ETH0: returns the LAN device class), mirroring
+    # boot-vmsko-qemu-alpha.sh and run_tests.sh.
+    timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 1024 -vga none \
+        -netdev user,id=net0 -device virtio-net-pci,netdev=net0,romfile= \
         -kernel /work/vmlinux-syssvc -append "console=ttyS0 panic=-1" \
         -nographic -no-reboot \
         -drive file=/work/d0.img,format=raw,if=virtio \

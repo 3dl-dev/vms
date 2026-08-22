@@ -40,6 +40,16 @@
 #include <sys/syscall.h>
 #include <sys/reboot.h>
 #include <linux/reboot.h>
+#include <signal.h>
+
+/* Per-suite wall bound: a suite that hangs (e.g. an exec'd DCL waiting on
+ * input) must not eat the whole boot budget -- SIGALRM kills the child, the
+ * pipe closes, and the suite is recorded as a genuine failure (never a skip).*/
+#ifndef SUITE_TIMEOUT_SECS
+#define SUITE_TIMEOUT_SECS 90
+#endif
+static volatile pid_t g_child = 0;
+static void on_alrm(int sig) { (void)sig; if (g_child > 0) kill(g_child, SIGKILL); }
 
 /* finit_module(2) -- load a .ko by fd (no libkmod on the static init). */
 static int load_module(const char *path)
@@ -81,6 +91,12 @@ static int run_suite(const char *name, int *out_pass, int *out_fail)
     }
     close(pfd[1]);
 
+    /* Arm the per-suite watchdog: SIGALRM kills a hung child so the drain
+     * loop below sees EOF and this suite is scored a failure, not a hang. */
+    g_child = pid;
+    signal(SIGALRM, on_alrm);
+    alarm(SUITE_TIMEOUT_SECS);
+
     /* Drain the pipe line-by-line: echo to console, tally PASS/FAIL. */
     char buf[4096];
     size_t buflen = 0;
@@ -104,7 +120,15 @@ static int run_suite(const char *name, int *out_pass, int *out_fail)
     close(pfd[0]);
 
     int status = 0;
-    if (waitpid(pid, &status, 0) < 0) return -1;
+    if (waitpid(pid, &status, 0) < 0) { alarm(0); g_child = 0; return -1; }
+    alarm(0);
+    g_child = 0;
+    if (WIFSIGNALED(status)) {
+        printf("  FAIL: suite %s killed by signal %d (per-suite %ds watchdog or crash)\n",
+               name, WTERMSIG(status), SUITE_TIMEOUT_SECS);
+        (*out_fail)++;
+        return -1;
+    }
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 

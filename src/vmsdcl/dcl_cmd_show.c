@@ -1126,33 +1126,24 @@ static int cmd_show_process(struct dcl_command *cmd)
  * printed the /FULL-shaped per-process rows for BOTH forms, so bare
  * SHOW USERS and SHOW USERS/FULL rendered identically (a fidelity tell).
  *
- * INTERACTIVE/SUBPROCESS/BATCH IS SOURCED, NOT GUESSED, and it comes
- * out constant today for a STRUCTURAL reason worth stating plainly
- * (INV-6: hide what cannot be sourced, never invent a count).
- * VMS_IOCTL_SETTERM -- the only device-binding fact this row set is
- * built from (see the "READER OF THE EXECUTIVE PROCESS TABLE" section
- * above) -- is called from exactly ONE place in the whole tree:
- * src/ovmx_job_control/ovmx_job_control.c, once, on the login session's
- * process, before it execl()s LOGINOUT.EXE. It survives that execl()
- * because the executive keys the process table on the Linux thread-
- * group id, which execve() does not change (ovmx_job_control.c's own
- * comment). A SPAWN child (cmd_spawn, dcl_cmd_process.c) is a fork()ed
- * NEW thread-group id -- a fresh executive PCB -- that never calls
- * VMS_IOCTL_SETTERM itself, so it is never terminal-bound and this scan
- * (which filters on `terminal[0] != '\0'`) structurally never sees it.
- * SUBMIT (src/vmsqueue/vmsqueue.c) queues an entry but has no fork/exec
- * of its own -- OVMX has no batch EXECUTION engine yet, so no batch job
- * is ever a row in the executive process table at all. Given that, EVERY
- * row this scan can ever return is the terminal-bound root of an
- * interactive job: Interactive is not a guess about an ambiguous row,
- * it is the only value the sourcing can ever produce, and Subprocess/
- * Batch are honest, measured zeros -- not withheld, not invented -- for
- * as long as that structural fact holds. The day a subprocess or a real
- * batch executor registers a distinguishable row, this comment is the
- * marker that the classification needs a real per-row signal (the
- * executive's job_id, vms_internal.h, is not on the wire today -- see
- * struct vms_procinfo, vms_ioctl.h -- and adding it is a kernel-side
- * follow-up, not this item's).
+ * INTERACTIVE/SUBPROCESS/BATCH IS SOURCED, NOT GUESSED (vms-c17, which
+ * landed the "real per-row signal" the earlier revision of this comment
+ * predicted would be needed). The row now carries info.proc_type, set by
+ * the executive from the PCB's job_id (proc_fill_info, src/kernel-core/
+ * vms_proctab.c): a terminal-bound job root is INTERACTIVE, a process
+ * whose job root is terminal-bound is a SUBPROCESS, and anything else --
+ * a detached or system process, not a "user" -- is OTHER and skipped.
+ * This is a MEASURED classification, not the structural constant it used
+ * to be: before vms-c17 SPAWN never registered its child at all
+ * (cmd_spawn, dcl_cmd_process.c) so the only row this scan ever saw was
+ * the terminal-bound login root, and the filter keyed on terminal[0]. Now
+ * SPAWN enters a named subprocess in the executive, its job_id marks it a
+ * subprocess of the login's job, and it appears here in the Subprocess
+ * column. BATCH is still never produced -- SUBMIT (src/vmsqueue/
+ * vmsqueue.c) queues an entry but forks/execs nothing, so OVMX has no
+ * batch job as a row in the process table; VMS_PROC_T_BATCH is reserved
+ * against the day a batch executor exists, and the Batch column stays a
+ * measured zero (rendered blank) until then.
  *
  * NO LOGIN-TIME COLUMN. An earlier revision carried a /FULL "Login Time"
  * column as a disclosed OVMX extension (JPI$_LOGINTIM, VMS_PI_V_LOGINTIM,
@@ -1195,22 +1186,24 @@ static int cmd_show_users(struct dcl_command *cmd)
 
     /* One scan, walked twice (Method Requirement 4): the summary needs the
      * counts before any table prints. Pass 1 aggregates per-user rows --
-     * distinct usernames and, per user, an Interactive count. Every
-     * terminal-bound row is interactive (structural, see above), so a
-     * user's Interactive count is simply the number of that user's rows;
-     * Subprocess/Batch are honest zeros. 256 distinct usernames is well
-     * above any realistic concurrent-login count for a single OVMX node --
-     * this cap de-duplicates within one scan, it does not bound how many
-     * rows the /FULL table can print. */
+     * distinct usernames and, per user, the Interactive/Subprocess/Batch
+     * split from info.proc_type (vms-c17). A row is a "user process" if it
+     * is INTERACTIVE, SUBPROCESS or BATCH; OTHER (a detached/system process)
+     * and a redacted row are skipped. 256 distinct usernames is well above
+     * any realistic concurrent-login count for a single OVMX node -- this
+     * cap de-duplicates within one scan, it does not bound how many rows the
+     * /FULL table can print. */
     uint32_t index = 0;
     struct vms_procinfo info;
     int process_count = 0;
     char seen_users[256][VMS_USERNAME_SIZE];
     int  seen_interactive[256];
+    int  seen_subprocess[256];
+    int  seen_batch[256];
     int  seen_count = 0;
 
     while (vms_kif_procscan(&index, &info) & 1) {
-        if (info.redacted || info.terminal[0] == '\0')
+        if (info.redacted || info.proc_type == VMS_PROC_T_OTHER)
             continue;
         process_count++;
 
@@ -1226,27 +1219,39 @@ static int cmd_show_users(struct dcl_command *cmd)
             strncpy(seen_users[slot], info.username, VMS_USERNAME_SIZE - 1);
             seen_users[slot][VMS_USERNAME_SIZE - 1] = '\0';
             seen_interactive[slot] = 0;
+            seen_subprocess[slot]  = 0;
+            seen_batch[slot]       = 0;
         }
-        if (slot >= 0)
-            seen_interactive[slot]++;
+        if (slot >= 0) {
+            switch (info.proc_type) {
+            case VMS_PROC_T_INTERACTIVE: seen_interactive[slot]++; break;
+            case VMS_PROC_T_SUBPROCESS:  seen_subprocess[slot]++;  break;
+            case VMS_PROC_T_BATCH:       seen_batch[slot]++;       break;
+            default: break;
+            }
+        }
     }
 
     /* Two distinct counts, wording confirmed by three independent captures
-     * (see the FORMAT block above). No OVMX parenthetical -- VMS prints
-     * only this line. */
+     * (see the FORMAT block above). "processes" is the number of rows shown;
+     * "users" is the number of distinct usernames among them. No OVMX
+     * parenthetical -- VMS prints only this line. */
     printf("    Total number of users = %d,  number of processes = %d\n\n",
            seen_count, process_count);
 
     if (full) {
         /* /FULL: per-process rows. DCL Dictionary column set is exactly
          * Username Node Process-Name PID Terminal (plus "port information"
-         * OVMX has none of) -- no Type column, no login-time field. */
+         * OVMX has none of) -- no Type column, no login-time field. A
+         * subprocess has no terminal of its own, so its Terminal column is
+         * blank; that is the honest value, and it is now visible here where
+         * the old terminal[0] filter dropped the row entirely. */
         printf("      Username     Node       Process Name      PID        "
                "Terminal\n");
 
         index = 0;
         while (vms_kif_procscan(&index, &info) & 1) {
-            if (info.redacted || info.terminal[0] == '\0')
+            if (info.redacted || info.proc_type == VMS_PROC_T_OTHER)
                 continue;
 
             char upper_name[VMS_USERNAME_SIZE];
@@ -1261,9 +1266,10 @@ static int cmd_show_users(struct dcl_command *cmd)
         }
     } else {
         /* Default: per-user counts. DCL Dictionary column set is
-         * Username Node Interactive Subprocess Batch. Subprocess/Batch are
-         * structurally zero today (see above) and VMS renders a zero
-         * column blank, so only the Interactive count prints. */
+         * Username Node Interactive Subprocess Batch. VMS renders a zero
+         * column BLANK, not "0", so each count prints only when non-zero
+         * and lands under its own heading. Batch is always zero today (no
+         * batch execution engine, see above), so that column stays blank. */
         printf("      Username     Node       Interactive  Subprocess     "
                "Batch\n");
 
@@ -1274,8 +1280,25 @@ static int cmd_show_users(struct dcl_command *cmd)
                 upper_name[j] = (char)toupper((unsigned char)seen_users[i][j]);
             upper_name[j] = '\0';
 
-            printf("      %-12s %-10s %11d\n", upper_name, node,
-                   seen_interactive[i]);
+            /* Each count right-justifies to the END of its heading word.
+             * Against the heading
+             *   "      Username     Node       Interactive  Subprocess     Batch"
+             * the "%-12s %-10s " prefix reproduces everything up to (and
+             * including the space before) "Interactive", after which the three
+             * value columns are %11s (ends under Interactive), %12s (ends under
+             * Subprocess) and %10s (ends under Batch). A zero column is the
+             * empty string, so it renders as blanks -- VMS's blank-zero, never
+             * a literal "0". */
+            char icol[12] = "", scol[12] = "", bcol[12] = "";
+            if (seen_interactive[i])
+                snprintf(icol, sizeof(icol), "%d", seen_interactive[i]);
+            if (seen_subprocess[i])
+                snprintf(scol, sizeof(scol), "%d", seen_subprocess[i]);
+            if (seen_batch[i])
+                snprintf(bcol, sizeof(bcol), "%d", seen_batch[i]);
+
+            printf("      %-12s %-10s %11s%12s%10s\n",
+                   upper_name, node, icol, scol, bcol);
         }
     }
 

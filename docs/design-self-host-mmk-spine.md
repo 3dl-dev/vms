@@ -7,6 +7,15 @@
 > symbol/file on `origin/main` (paths cited); anything unverified is marked
 > `verify:`.
 
+> **LADDER RECONCILE (operator 2026-08-22, Rule 1 / `vms-ports-build-ladder`):**
+> this spine is a faithful ladder rung. MMK/LIBRARIAN are *the* VMS build tools; a
+> real, unmodified VMS software port also needs them, so every rung here is
+> VMS-compat surface others reuse. Build the vendored MadGoat MMK **the faithful
+> way** — OVMX bends to it via tagged `OVMX_RMS_IO` seams over the VMS-compat
+> surface, never a fork hacked down to an ad-hoc OVMX surface. tcc in this chain is
+> the temporary bootstrap (`vms-678`), retired once the OpenVMS GCC port builds on
+> OVMX (`vms-da0`).
+
 ## 0. Scope and the resolved decisions (do not relitigate)
 
 The spine ports **MMK** (MadGoat Make, vendored at `tests/corpus/tier3-mmk/`) and

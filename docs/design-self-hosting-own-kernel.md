@@ -67,6 +67,16 @@ crutch is removed deliberately, post-1.0, rather than forgotten.
 
 ## 2. Current state — what self-hosts today, grounded
 
+> **LADDER RECONCILE (operator 2026-08-22, Rule 1 / `vms-ports-build-ladder`):**
+> this doc's framing already holds — **tcc is an explicitly-labeled temporary
+> bootstrap** (the S2 beachhead), **not the faithful endgame.** The faithful
+> self-host destination is the *existing VMS toolchain ports* building OVMX on
+> OVMX over a genuine VMS-compat surface: the `alpha-dec-vms` OpenVMS **GCC** port
+> on OVMX (`vms-da0` → ladder target `vms-fd1`) and **MMK/LIBRARIAN** (`vms-59a`),
+> not a bespoke OVMX slop surface only our forks target. tcc retires once the VMS
+> GCC port builds on OVMX. "tcc self-hosts OVMX; GCC lets OVMX self-host its
+> substrate" (§ below) is the same statement.
+
 ### 2.1 The userland self-host ladder (S2→S4, ACHIEVED)
 
 The toolchain already reproduces itself inside OVMX, driven by DCL against a real

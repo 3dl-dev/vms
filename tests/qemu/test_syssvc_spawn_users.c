@@ -36,15 +36,17 @@
  * root; bound to the console it is INTERACTIVE, and its SPAWN child inherits
  * its job and is a SUBPROCESS.
  *
- * WHY THE SESSION IS KEPT ALIVE FOR THE $GETJPI READS. proc_type is computed
- * LIVE: a subprocess is SUBPROCESS only while its job root is still in the
- * table (proc_fill_info looks the root up by job_id). So the session script
- * ends WITHOUT a LOGOUT and this process holds the command pipe OPEN, leaving
- * DCL blocked at its prompt -- root and subprocess both alive -- while the
- * $GETJPI reads run. Only then is the pipe closed (DCL logs out) and the
- * subprocess killed. DCL flushes stdout before each prompt (dcl_main.c), so the
- * transcript through SHOW SYSTEM is on disk before the reads, which is what the
- * readiness poll waits for.
+ * WHY THE SESSION IS KEPT ALIVE FOR THE $GETJPI READS, THEN LOGGED OUT FOR THE
+ * TRANSCRIPT. proc_type is computed LIVE: a subprocess is SUBPROCESS only while
+ * its job root is still in the table (proc_fill_info looks the root up by
+ * job_id). So the session script issues its SHOW commands but sends NO LOGOUT,
+ * and this process holds the command pipe OPEN, leaving DCL blocked -- root and
+ * subprocess both alive -- while the $GETJPI reads run. ONLY AFTER those reads
+ * does the test LOGOUT the root. That ordering is also what makes the transcript
+ * capture work: DCL's stdout is a fully-buffered file and a non-interactive DCL
+ * prints no prompt, so nothing reaches OUT_FILE until DCL exits -- the SHOW
+ * output (produced earlier, while the subprocess was alive) is flushed as one
+ * block on LOGOUT, and the transcript is read only after the child is reaped.
  *
  * PRECONDITION-NOT-ESTABLISHED IS A SKIP, NOT A FAIL (the blind/skip
  * discipline this tree already uses). This suite's property is the
@@ -100,9 +102,11 @@ static int fail = 0;
 #define OUT_FILE    "/tmp/ovmx_c17_dcl.out"
 
 /* SPAWN a subprocess that outlives the displays and the reads (WAIT blocks it),
- * show it both ways, then STOP -- no LOGOUT, so DCL blocks at the prompt and
- * the job stays alive for the $GETJPI reads. Auto-naming (no /PROCESS) so the
- * SPAWNED message and the SUB_NAME row are what vms-c17's naming produces. */
+ * show it both ways, then STOP -- no LOGOUT in the script, so DCL blocks and the
+ * job stays alive for the $GETJPI reads. The test sends LOGOUT itself, after the
+ * reads, to flush the transcript (see the header comment). Auto-naming (no
+ * /PROCESS) so the SPAWNED message and the SUB_NAME row are what vms-c17's
+ * naming produces. */
 static const char *SESSION_SCRIPT =
     "SPAWN/NOWAIT WAIT 00:02:00\n"
     "SHOW USERS\n"
@@ -281,23 +285,6 @@ static void session_child(int in_fd, int repfd)
     _exit(127);
 }
 
-/* Poll OUT_FILE until the SHOW SYSTEM output for the subprocess has been
- * flushed (DCL flushes stdout before each prompt), or time out. Polls an
- * OBSERVED condition rather than sleeping a fixed interval, so nothing is paced
- * by a guess about emulator speed. */
-static int wait_for_transcript(char *buf, size_t bufsz)
-{
-    for (int i = 0; i < 3000; i++) {   /* up to ~30s */
-        if (read_file(OUT_FILE, buf, bufsz) > 0 &&
-            has_substr(buf, "number of processes") &&
-            has_sys_row(buf, SUB_NAME))
-            return 0;
-        struct timespec ts = { 0, 10 * 1000 * 1000 };  /* 10ms */
-        nanosleep(&ts, NULL);
-    }
-    return -1;
-}
-
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -368,8 +355,14 @@ int main(void)
         return EXIT_SKIP;
     }
 
-    /* Wait for the transcript (through SHOW SYSTEM) to be flushed to disk. */
-    int have_transcript = (wait_for_transcript(out, sizeof(out)) == 0);
+    /* The transcript is captured below, AFTER the session logs out. A non-
+     * interactive DCL prints no prompt, and its stdout is a fully-buffered file,
+     * so nothing is flushed until DCL exits -- reading OUT_FILE now would see an
+     * empty file. The $GETJPI reads that follow need the whole job ALIVE, so the
+     * order is: read the executive rows here, then LOGOUT (flush + exit), then
+     * read the flushed transcript. The SHOW commands already ran while the
+     * subprocess was alive, so the flushed transcript still shows both rows. */
+    int have_transcript = 0;
 
     /* Now this process may register (its first vms_kif_* call): the child's
      * job_id was already derived while main was unregistered, so this changes
@@ -433,6 +426,17 @@ int main(void)
     CHECK((sfst & 1) && self_info.proc_type == VMS_PROC_T_OTHER,
           "a terminal-less job root is classified OTHER (not a user)");
 
+    /* The live reads are done. Release the WAIT-blocked subprocess, then LOGOUT
+     * the root: DCL flushes its buffered stdout and exits, so OUT_FILE holds the
+     * full transcript once the child is reaped. */
+    if (sst & 1 && sub_info.linux_pid)
+        kill((pid_t)sub_info.linux_pid, SIGKILL);
+    (void)write_all(in_pipe[1], "LOGOUT\n", strlen("LOGOUT\n"));
+    close(in_pipe[1]);
+    { int s; while (waitpid(child, &s, 0) < 0 && errno == EINTR) ; }
+    have_transcript = (read_file(OUT_FILE, out, sizeof(out)) > 0 &&
+                       has_substr(out, "number of processes"));
+
     /* ---------------------------------------------------------------
      * P2. THE USER-VISIBLE READERS (Change C + Change D), from the real
      *     DCL.EXE transcript.
@@ -467,13 +471,6 @@ int main(void)
      * registered subprocess appears there too, as a process-table row. */
     CHECK(has_sys_row(out, SUB_NAME),
           "SHOW SYSTEM lists the SPAWNed subprocess as a process-table row");
-
-    /* Tear the session down: close the command pipe (DCL logs out on EOF) and
-     * release the WAIT-blocked subprocess. */
-    close(in_pipe[1]);
-    if (sst & 1 && sub_info.linux_pid)
-        kill((pid_t)sub_info.linux_pid, SIGKILL);
-    int s; while (waitpid(child, &s, 0) < 0 && errno == EINTR) ;
 
     if (fail > 0) {
         printf("  (diag: captured transcript follows)\n---8<---\n%.4000s\n---8<---\n",

@@ -433,6 +433,35 @@ uint32_t vms_kif_getjpi_prcnam(const char *prcnam, struct vms_procinfo *info);
 uint32_t vms_kif_procscan(uint32_t *index, struct vms_procinfo *info);
 
 /* ================================================================
+ * $EXIT / $STATUS + CLI invocation context (vms-f60d)
+ *
+ * The executive owns image-completion status and the invoking CLI's command
+ * line. The exiting image records its status (vms_kif_setexit) and the invoking
+ * CLI reads it (vms_kif_getexit); the CLI records its command line
+ * (vms_kif_setcli) and the activated image reads it (vms_kif_getcli).
+ * INV-6: no /dev/vms -> SS$_NOSUCHDEV, no per-process fake.
+ * ================================================================ */
+
+/* Record `condition` as this process's image-completion $STATUS. *exit_code
+ * (optional) receives the OVMX POSIX exit code mapped from it. */
+uint32_t vms_kif_setexit(uint32_t condition, uint32_t *exit_code);
+
+/* Read this process's recorded image-completion $STATUS. *has_exited (optional)
+ * is nonzero iff an image has actually recorded one (do not infer it from a
+ * zero *condition, which is a legal value). */
+uint32_t vms_kif_getexit(uint32_t *condition, int *has_exited);
+
+/* Record this CLI process's invoking command line + cliflag, for an activated
+ * image to inherit and read back. cliflag == 0 means "no CLI". */
+uint32_t vms_kif_setcli(uint32_t cliflag, const char *command);
+
+/* Read this process's own invoking CLI context. *cliflag (optional) is nonzero
+ * iff a CLI launched it; command/command_size receive the NUL-terminated line;
+ * *length (optional) its true byte length. */
+uint32_t vms_kif_getcli(uint32_t *cliflag, char *command,
+                        uint32_t command_size, uint32_t *length);
+
+/* ================================================================
  * P0 program region (vms-68f.i, in-process image activation foundation)
  *
  * Records/clears this process's P0 program-region extent with the

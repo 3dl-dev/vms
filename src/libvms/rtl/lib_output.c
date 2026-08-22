@@ -14,6 +14,7 @@
 #include "descrip.h"
 #include "lib$routines.h"
 #include "str$routines.h"
+#include "vms_kif.h"       /* vms_kif_getcli/setcli: the executive CLI context (vms-f60d) */
 
 /*
  * lib$put_output - Write descriptor contents to stdout with a newline.
@@ -183,10 +184,32 @@ uint32_t lib$get_foreign(struct dsc$descriptor_s *result,
     if (result->dsc$b_class != DSC$K_CLASS_D && !result->dsc$a_pointer)
         return SS$_BADPARAM;
 
-    /* First call with a foreign command line present: return the raw tail
-     * DCL published, then consume it so a second call reads SYS$INPUT. An
+    /* First call with a foreign command line present: return the raw tail the
+     * invoking CLI recorded, then consume it so a second call reads SYS$INPUT.
+     *
+     * The CLI relationship is owned by the executive (vms-f60d, design §3.2 /
+     * §4a.3, conductor ruling): read the tail with vms_kif_getcli, the
+     * authoritative channel that replaces the former Linux VMS_FOREIGN_CMD
+     * env-var shim on the real runtime. VMS one-shot consumption is modelled by
+     * clearing the executive CLI context (vms_kif_setcli(0, ...)) once returned.
+     * Only when /dev/vms is UNREACHABLE (no executive: host unit tests, a dev
+     * build) does getcli fail (a non-success status) and we fall back to the inherited
+     * VMS_FOREIGN_CMD env var DCL set for exactly that case -- not a claim the
+     * executive succeeded, just the pre-executive channel (INV-6). An
      * empty/absent value is "no command line" -> fall through to SYS$INPUT. */
-    const char *tail = getenv("VMS_FOREIGN_CMD");
+    char cli_buf[256];
+    uint32_t cli_present = 0, cli_len = 0;
+    uint32_t gx = vms_kif_getcli(&cli_present, cli_buf, sizeof(cli_buf), &cli_len);
+    int from_exec = (gx & 1);   /* odd == the executive answered (VMS success) */
+    const char *tail = NULL;
+    if (from_exec) {
+        /* Executive is authoritative: use its CLI line, or none (-> SYS$INPUT).*/
+        if (cli_present && cli_len > 0)
+            tail = cli_buf;
+    } else {
+        /* No executive (host tests / dev build): the pre-executive env channel.*/
+        tail = getenv("VMS_FOREIGN_CMD");
+    }
     if (tail && tail[0] != '\0') {
         size_t len = strlen(tail);
 
@@ -203,7 +226,9 @@ uint32_t lib$get_foreign(struct dsc$descriptor_s *result,
             src.dsc$a_pointer = (char *)tail;
             uint32_t st = str$copy_dx(result, &src);
             if (result_len) *result_len = (uint16_t)len;
-            unsetenv("VMS_FOREIGN_CMD");
+            /* Consume: clear the executive CLI context, or the env fallback. */
+            if (from_exec) (void)vms_kif_setcli(0, NULL);
+            else           unsetenv("VMS_FOREIGN_CMD");
             return (st & 1) ? SS$_NORMAL : st;
         }
 
@@ -224,8 +249,10 @@ uint32_t lib$get_foreign(struct dsc$descriptor_s *result,
 
         if (result_len) *result_len = copylen;
 
-        /* Consume the CLI foreign line: subsequent calls read SYS$INPUT. */
-        unsetenv("VMS_FOREIGN_CMD");
+        /* Consume the CLI foreign line: subsequent calls read SYS$INPUT.
+         * Clear the executive CLI context, or the env fallback. */
+        if (from_exec) (void)vms_kif_setcli(0, NULL);
+        else           unsetenv("VMS_FOREIGN_CMD");
 
         return truncated ? LIB$_INPSTRTRU : SS$_NORMAL;
     }

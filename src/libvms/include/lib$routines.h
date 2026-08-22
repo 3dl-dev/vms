@@ -185,6 +185,28 @@ uint32_t lib$get_input(
 );
 
 /**
+ * lib$get_foreign - Return the invoking CLI's foreign command line
+ *
+ * @param resultant_string  Pointer to descriptor to receive the command line
+ * @param prompt_string     Optional pointer to descriptor of prompt
+ * @param resultant_length  Optional pointer to receive actual length
+ * @param ...               Optional flags longword (accepted, not required)
+ *
+ * @return  SS$_NORMAL on success, LIB$_INPSTRTRU if truncated, RMS$_EOF on EOF
+ *
+ * The first call returns the foreign command line the invoking CLI recorded in
+ * the executive process context (vms-f60d); subsequent calls (or no command
+ * line) fall through to SYS$INPUT like lib$get_input.  Reference: OpenVMS RTL
+ * Library (LIB$) Manual — LIB$GET_FOREIGN.
+ */
+uint32_t lib$get_foreign(
+    struct dsc$descriptor_s *resultant_string,
+    const struct dsc$descriptor_s *prompt_string,
+    uint16_t *resultant_length,
+    ...
+);
+
+/**
  * lib$put_common - Write record to process common area
  *
  * @param string  Pointer to descriptor of string to write

@@ -316,24 +316,67 @@ static int cmd_set_terminal(struct dcl_command *cmd)
      * entered (VAX1 capture, dcl_cmd_process.c:726: "%DCL-W-IVQUAL,
      * unrecognized qualifier - check validity, spelling, and placement").
      */
-    static const char *const terminal_known_qualifiers[] = {
-        "WIDTH", "PAGE", "SPEED", "PARITY", "DEVICE_TYPE", "DEVICE",
-        "ECHO", "WRAP", "BROADCAST", "TYPEAHEAD", "HOSTSYNC", "TTSYNC",
-        "LINE_EDITING", "INSERT", "OVERSTRIKE", "SCOPE", "LOWERCASE",
-        "UPPERCASE", "TAB", "MECHTAB", "HOLDSCREEN", "EIGHTBIT",
-        "READSYNC", "PASTHRU", "ESCAPE", "FORM", "FULLDUP", "HALFDUP",
-        "MODEM", "PAGE_CHAR", "SECURE", "FALLBACK", "DIALUP", "OPER",
-        "ALTYPEAHD", "RUNOUT",
+    /*
+     * The boolean characteristic qualifiers. Declared HERE, above the IVQUAL
+     * validation, so validation and the apply loop further down share ONE
+     * source of truth for the qualifier set. Each pair: /NAME sets the bit,
+     * /NONAME clears it.
+     *
+     * (vms-16a hardening -- not the primary bug, which was the apply loop
+     * below. The prior validation used a hand-maintained positive-name
+     * allowlist; deriving it from this table instead keeps the validated set
+     * and the applied set from ever drifting apart. Note the parser strips a
+     * leading "NO", so a /NOxxx qualifier reaches validation under its base
+     * name and matches quals[].on here.)
+     */
+    static const struct { const char *on; const char *off; uint32_t bit; } quals[] = {
+        { "ECHO",          "NOECHO",          TT_ECHO          },
+        { "WRAP",          "NOWRAP",          TT_WRAP          },
+        { "BROADCAST",     "NOBROADCAST",     TT_BROADCAST     },
+        { "TYPEAHEAD",     "NOTYPEAHEAD",     TT_TYPEAHEAD     },
+        { "HOSTSYNC",      "NOHOSTSYNC",      TT_HOSTSYNC      },
+        { "TTSYNC",        "NOTTSYNC",        TT_TTSYNC        },
+        { "LINE_EDITING",  "NOLINE_EDITING",  TT_LINE_EDITING  },
+        { "INSERT",        "OVERSTRIKE",      TT_INSERT        },
+        { "SCOPE",         "NOSCOPE",         TT_SCOPE         },
+        { "LOWERCASE",     "UPPERCASE",       TT_LOWERCASE     },
+        { "TAB",           "NOTAB",           TT_TAB           },
+        { "MECHTAB",       "NOMECHTAB",       TT_MECHTAB       },
+        { "HOLDSCREEN",    "NOHOLDSCREEN",    TT_HOLDSCREEN    },
+        { "EIGHTBIT",      "NOEIGHTBIT",      TT_EIGHTBIT      },
+        { "READSYNC",      "NOREADSYNC",      TT_READSYNC      },
+        { "PASTHRU",       "NOPASTHRU",       TT_PASTHRU       },
+        { "ESCAPE",        "NOESCAPE",        TT_ESCAPE        },
+        { "FORM",          "NOFORM",          TT_FORM          },
+        { "FULLDUP",       "HALFDUP",         TT_FULLDUP       },
+        { "MODEM",         "NOMODEM",         TT_MODEM         },
+        { "PAGE_CHAR",     "NOPAGE_CHAR",     TT_PAGE          },
+        { "SECURE",        "NOSECURE",        TT_SECURE        },
+        { "FALLBACK",      "NOFALLBACK",      TT_FALLBACK      },
+        { "DIALUP",        "NODIALUP",        TT_DIALUP        },
+        { "OPER",          "NOOPER",          TT_OPER          },
+        { "ALTYPEAHD",     "NOALTYPEAHD",     TT_ALTYPEAHD     },
+        { "RUNOUT",        "NORUNOUT",        TT_RUNOUT        },
     };
+
+    /* Value-taking qualifiers (/NAME=value); each validated in its own block
+     * below. DEVICE is the accepted abbreviation of DEVICE_TYPE. */
+    static const char *const terminal_value_qualifiers[] = {
+        "WIDTH", "PAGE", "SPEED", "PARITY", "DEVICE_TYPE", "DEVICE",
+    };
+
     for (int qi = 0; qi < cmd->qualifier_count; qi++) {
         const char *qname = cmd->qualifiers[qi].name;
         int known = 0;
-        for (size_t k = 0; k < sizeof(terminal_known_qualifiers) /
-                                sizeof(terminal_known_qualifiers[0]); k++) {
-            if (strcasecmp(qname, terminal_known_qualifiers[k]) == 0) {
+        for (size_t k = 0; !known && k < sizeof(terminal_value_qualifiers) /
+                                sizeof(terminal_value_qualifiers[0]); k++) {
+            if (strcasecmp(qname, terminal_value_qualifiers[k]) == 0)
                 known = 1;
-                break;
-            }
+        }
+        for (size_t k = 0; !known && k < sizeof(quals)/sizeof(quals[0]); k++) {
+            if (strcasecmp(qname, quals[k].on) == 0 ||
+                strcasecmp(qname, quals[k].off) == 0)
+                known = 1;
         }
         if (!known) {
             dcl_error("DCL", 0, "IVQUAL",
@@ -415,48 +458,34 @@ static int cmd_set_terminal(struct dcl_command *cmd)
     }
 
     /*
-     * Boolean characteristic qualifiers.
-     * Each pair: /NAME sets bit, /NONAME clears bit.
-     * Check NO-form first so that if both are present, the positive wins.
+     * Apply the boolean characteristic qualifiers (quals[] declared above,
+     * shared with the IVQUAL validation).
+     *
+     * vms-16a: this must honour how the parser (dcl_parser.c) stores a /NOxxx
+     * qualifier. It STRIPS the "NO" and records the base name with .negated=1
+     * -- so /NOECHO arrives as name "ECHO", negated. The old loop looked up the
+     * literal off-name ("NOECHO"), which the parser never stores, and
+     * dcl_has_qualifier() returns 0 for a negated match anyway; /NOECHO (and
+     * every other /NOxxx) therefore set nothing, leaving echo on and printing
+     * the install's SYSTEM password in plaintext. Walk the parsed qualifiers
+     * directly so the .negated flag drives set-vs-clear. Explicit-antonym pairs
+     * (INSERT/OVERSTRIKE, LOWERCASE/UPPERCASE, FULLDUP/HALFDUP) do not start
+     * with "NO", so the parser stores them under their own literal name and the
+     * off-name branch resolves them. Last qualifier named wins (VMS order).
      */
-    static const struct { const char *on; const char *off; uint32_t bit; } quals[] = {
-        { "ECHO",          "NOECHO",          TT_ECHO          },
-        { "WRAP",          "NOWRAP",          TT_WRAP          },
-        { "BROADCAST",     "NOBROADCAST",     TT_BROADCAST     },
-        { "TYPEAHEAD",     "NOTYPEAHEAD",     TT_TYPEAHEAD     },
-        { "HOSTSYNC",      "NOHOSTSYNC",      TT_HOSTSYNC      },
-        { "TTSYNC",        "NOTTSYNC",        TT_TTSYNC        },
-        { "LINE_EDITING",  "NOLINE_EDITING",  TT_LINE_EDITING  },
-        { "INSERT",        "OVERSTRIKE",      TT_INSERT        },
-        { "SCOPE",         "NOSCOPE",         TT_SCOPE         },
-        { "LOWERCASE",     "UPPERCASE",       TT_LOWERCASE     },
-        { "TAB",           "NOTAB",           TT_TAB           },
-        { "MECHTAB",       "NOMECHTAB",       TT_MECHTAB       },
-        { "HOLDSCREEN",    "NOHOLDSCREEN",    TT_HOLDSCREEN    },
-        { "EIGHTBIT",      "NOEIGHTBIT",      TT_EIGHTBIT      },
-        { "READSYNC",      "NOREADSYNC",      TT_READSYNC      },
-        { "PASTHRU",       "NOPASTHRU",       TT_PASTHRU       },
-        { "ESCAPE",        "NOESCAPE",        TT_ESCAPE        },
-        { "FORM",          "NOFORM",          TT_FORM          },
-        { "FULLDUP",       "HALFDUP",         TT_FULLDUP       },
-        { "MODEM",         "NOMODEM",         TT_MODEM         },
-        { "PAGE_CHAR",     "NOPAGE_CHAR",     TT_PAGE          },
-        { "SECURE",        "NOSECURE",        TT_SECURE        },
-        { "FALLBACK",      "NOFALLBACK",      TT_FALLBACK      },
-        { "DIALUP",        "NODIALUP",        TT_DIALUP        },
-        { "OPER",          "NOOPER",          TT_OPER          },
-        { "ALTYPEAHD",     "NOALTYPEAHD",     TT_ALTYPEAHD     },
-        { "RUNOUT",        "NORUNOUT",        TT_RUNOUT        },
-    };
-
     for (unsigned i = 0; i < sizeof(quals)/sizeof(quals[0]); i++) {
-        if (dcl_has_qualifier(cmd, quals[i].off)) {
-            vms_terminal_set_char(term, quals[i].bit, 0);
-            changed = 1;
-        }
-        if (dcl_has_qualifier(cmd, quals[i].on)) {
-            vms_terminal_set_char(term, quals[i].bit, 1);
-            changed = 1;
+        for (int qi = 0; qi < cmd->qualifier_count; qi++) {
+            const char *qn = cmd->qualifiers[qi].name;
+            int neg = cmd->qualifiers[qi].negated;
+            if (strcasecmp(qn, quals[i].on) == 0) {
+                /* /ON sets the bit; the parser's /NO<on> arrives here negated. */
+                vms_terminal_set_char(term, quals[i].bit, neg ? 0 : 1);
+                changed = 1;
+            } else if (strcasecmp(qn, quals[i].off) == 0) {
+                /* Literal antonym (OVERSTRIKE/UPPERCASE/HALFDUP) clears the bit. */
+                vms_terminal_set_char(term, quals[i].bit, neg ? 1 : 0);
+                changed = 1;
+            }
         }
     }
 

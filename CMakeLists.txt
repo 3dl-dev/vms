@@ -689,6 +689,18 @@ if(BUILD_TESTS)
     # ...and the evasions. Includes the two controls that matter most for a
     # gate whose passing output is a LIST: that tools/ is genuinely scanned,
     # and that a variable named only in a comment cannot enter the census.
+    #
+    # TIMEOUT 180 is now ~8x the measured runtime, not the ~1x it was (vms-808).
+    # This negctl runs the census gate 11 times over the whole src/+tools/ tree.
+    # The gate used to fork ~29 processes PER FILE (a printf+grep subshell for
+    # every one of its 14 per-variable greps, across ~450 files), so one run
+    # took ~16.7s on a GitHub runner and 11 of them was ~184s -- fractionally
+    # over this 180s budget, which is why #754/#755/#757/#766 all flaked here
+    # with (Timeout) while making steady progress (never a hang, no QEMU on this
+    # path). The gate now pre-filters files with no getenv/setenv/putenv token
+    # and greps a once-stripped temp file instead of a shell variable, cutting a
+    # single gate run to ~2s and the whole negctl to ~23s locally -- so 180s is
+    # generous headroom for a slow/contended runner without being an absurd cap.
     add_test(NAME env_identity_census_negctl
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_env_identity_census_negctl.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})

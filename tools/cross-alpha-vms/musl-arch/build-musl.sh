@@ -137,7 +137,7 @@ use strict; use warnings;
 shift @ARGV;                       # op key (rc/...): ignored
 my $out = shift @ARGV or die "ar-noindex: no output archive\n";
 my @objs = @ARGV;
-my (%off, $tab) = ((), "");        # GNU "//" long-name table for names >15 bytes
+my %off; my $tab = "";             # GNU "//" long-name table for names >15 bytes
 for my $o (@objs) { my $n = (split m{/}, $o)[-1];
     if (length($n)+1 > 16 && !exists $off{$n}) { $off{$n}=length($tab); $tab .= "$n/\n"; } }
 $tab .= "\n" if length($tab) % 2;

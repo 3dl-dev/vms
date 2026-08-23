@@ -98,8 +98,9 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
       | awk '
           $NF ~ /^decc\$/ && $NF !~ /\.\.[a-z]+$/ {
               t=$(NF-1); n=$NF;
-              if (t=="T"||t=="t") print n"=PROCEDURE";
-              else if (t=="D"||t=="d"||t=="G"||t=="g"||t=="R"||t=="r"||t=="B"||t=="b") print n"=DATA";
+              # text (incl. weak text W) -> PROCEDURE; data (incl. weak data V) -> DATA
+              if (t=="T"||t=="t"||t=="W"||t=="w") print n"=PROCEDURE";
+              else if (t~/^[DdGgRrBbVv]$/) print n"=DATA";
           }' \
       | sort -u > "$ALPHA_VEC"
     rm -rf "$EXDIR"

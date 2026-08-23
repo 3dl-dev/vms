@@ -81,6 +81,25 @@ int main(int argc, char **argv)
     CHECK(eh.e_type == ET_DYN, "image is ET_DYN");
     CHECK(eh.e_machine == EM_ALPHA, "image is EM_ALPHA (machine=0x%x)", eh.e_machine);
 
+    /* GAP1 (vms-e0c): the Alpha .EXE must carry PT_PHDR + PT_INTERP=IMGACT.EXE,
+     * so the kernel activates it through IMGACT (which fills the .vms$imp
+     * cross-image cells + re-biases .vms$rel). Without PT_INTERP the kernel maps
+     * the image but never runs IMGACT -> import cells zero -> SIGILL. */
+    int have_phdr = 0, have_interp = 0;
+    for (int i = 0; i < eh.e_phnum; i++) {
+        Elf64_Phdr ph; memcpy(&ph, g_img + eh.e_phoff + (size_t)i * sizeof ph, sizeof ph);
+        if (ph.p_type == PT_PHDR) have_phdr = 1;
+        if (ph.p_type == PT_INTERP) {
+            have_interp = 1;
+            CHECK(ph.p_offset + ph.p_filesz <= g_len, "PT_INTERP string in bounds");
+            CHECK(!strcmp((char *)(g_img + ph.p_offset),
+                          "/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE"),
+                  "PT_INTERP == IMGACT.EXE (got '%s')", (char *)(g_img + ph.p_offset));
+        }
+    }
+    CHECK(have_phdr,   "image has PT_PHDR (IMGACT derives the load bias)");
+    CHECK(have_interp, "image has PT_INTERP=IMGACT.EXE (kernel activates via IMGACT)");
+
     /* Walk the section headers; identity-mapped (sh_offset == sh_addr). */
     const char *shstr = (const char *)(g_img + ((Elf64_Shdr *)(g_img + eh.e_shoff))[eh.e_shstrndx].sh_offset);
     uint64_t code = 0, data = 0, link = 0, xfer = 0, xfer_sz = 0;

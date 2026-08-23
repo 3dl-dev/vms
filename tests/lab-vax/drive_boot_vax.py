@@ -531,27 +531,67 @@ def do_assemble_single(a, single_img, artifacts_dir, src_iso, new_a_sectors,
         return PROOF_FAILED
     log("OK: /dev/ra1* present; target root FFS clean")
 
+    # 1b. ENABLE SWAP. resize_ffs on a 2 GiB FFS needs more memory than the 32 MB
+    #     emulated VAX has, and single-user mode enables NO swap -- so an
+    #     unswapped resize_ffs is OOM-killed within seconds ("UVM: ... out of
+    #     swap"). A swap FILE on the (writable) shared root gives it the headroom
+    #     to complete. This is the shared boot disk, mounted rw by
+    #     start_single_user; the swap file is removed again below.
+    rc, out = run(child,
+                  "rm -f /swapfile; "
+                  "dd if=/dev/zero of=/swapfile bs=1048576 count=384 2>&1 | tail -1; "
+                  "chmod 600 /swapfile && swapctl -a /swapfile && swapctl -l",
+                  cmd_timeout)
+    if rc != 0:
+        log("FAIL: could not enable a swap file for resize_ffs:\n%s" % out)
+        return PROOF_FAILED
+    log("OK: 384 MiB swap file enabled for resize_ffs")
+
     # 2. SHRINK the target's root FFS to NEW_A_SECTORS so an ODS-2 partition fits
     #    after it. resize_ffs genuinely relocates blocks; a fsck confirms the
-    #    result is a clean, smaller filesystem (not a corrupted one).
+    #    result is a clean, smaller filesystem. NO pipe -- run()'s marker captures
+    #    resize_ffs's OWN exit code (a prior `| tail' masked an OOM kill as rc 0).
+    #    A generous deadline: relocating ~171 MiB on an emulated VAX under TCG,
+    #    with swapping, is slow.
+    resize_to = max(cmd_timeout, 2400)
     rc, out = run(child,
-                  "resize_ffs -y -s %d /dev/rra1a 2>&1 | tail -6; "
-                  "echo RESIZE_RC=$?" % new_a_sectors,
-                  cmd_timeout)
-    # resize_ffs's own exit rides in the pipeline; re-check with an explicit fsck.
-    rc, out = run(child, "fsck_ffs -f -y /dev/rra1a 2>&1 | tail -4", cmd_timeout)
-    if rc != 0:
-        log("FAIL: target root FFS is not clean after resize_ffs -- the shrink "
-            "to %d sectors did not succeed:\n%s" % (new_a_sectors, out))
+                  "resize_ffs -y -s %d /dev/rra1a; echo RESIZE_EXIT=$?" % new_a_sectors,
+                  resize_to)
+    if rc != 0 or "RESIZE_EXIT=0" not in out:
+        log("FAIL: resize_ffs did NOT shrink the target root FFS to %d sectors "
+            "(rc=%d) -- output:\n%s" % (new_a_sectors, rc, out))
         return PROOF_FAILED
-    log("OK: target root FFS resized to %d sectors and fsck-clean" % new_a_sectors)
+    rc, out = run(child, "fsck_ffs -f -y /dev/rra1a 2>&1 | tail -4", resize_to)
+    if rc != 0:
+        log("FAIL: target root FFS is not clean after resize_ffs:\n%s" % out)
+        return PROOF_FAILED
+    log("OK: resize_ffs shrank the target root FFS to %d sectors, fsck-clean"
+        % new_a_sectors)
 
-    # 3. Mount the target root and (a) MAKEDEV ra0 so /dev/ra0e exists on it, and
-    #    (b) replace its module_path vms.kmod with the CD's ra0e-aware build.
+    # 3. Mount the target root and (a) VERIFY the shrink actually took (a
+    #    still-2 GiB FFS here is the exact failure that silently corrupted the
+    #    disk when it was later truncated), (b) MAKEDEV ra0 so /dev/ra0e exists,
+    #    (c) replace its module_path vms.kmod with the CD's ra0e-aware build.
     rc, out = run(child, "mount /dev/ra1a /mnt && echo MOUNTED_TARGET", cmd_timeout)
     if rc != 0:
         log("FAIL: could not mount the target root FFS at /mnt")
         return PROOF_FAILED
+
+    # df total 1K-blocks must be <= NEW_A_SECTORS/2 (sectors->KiB); a 2 GiB total
+    # means resize_ffs did not shrink (OOM-killed) -- fail loudly, do not truncate.
+    max_kib = new_a_sectors // 2
+    rc, out = run(child,
+                  "TOT=`df -k /mnt | awk 'NR==2{print $2}'`; "
+                  "echo DF_TOTAL_KIB=$TOT MAX_KIB=%d; "
+                  "test -n \"$TOT\" && test \"$TOT\" -le %d" % (max_kib, max_kib),
+                  cmd_timeout)
+    if rc != 0:
+        log("FAIL: the target root FFS is still larger than %d sectors after "
+            "resize_ffs (df) -- the shrink did not take; refusing to build a "
+            "disk that truncation would corrupt:\n%s" % (new_a_sectors, out))
+        run(child, "umount /mnt 2>/dev/null; true", cmd_timeout)
+        return PROOF_FAILED
+    log("OK: verified target root FFS is <= %d sectors (df)" % new_a_sectors)
 
     rc, out = run(child,
                   "cd /mnt/dev && sh MAKEDEV ra0 && cd / && "
@@ -587,6 +627,8 @@ def do_assemble_single(a, single_img, artifacts_dir, src_iso, new_a_sectors,
     log("OK: target module_path vms.kmod replaced with the ra0e-aware build")
 
     run(child, "sync; umount /mnt 2>/dev/null; sync", cmd_timeout)
+    # Remove the swap file from the shared root (tidy; the next run recreates it).
+    run(child, "swapctl -d /swapfile 2>/dev/null; rm -f /swapfile; true", cmd_timeout)
     log("OK: single-disk in-guest assembly done (resize + ra0 nodes + kmod); "
         "the host-side label rewrite + ODS-2 dd finish it")
     return 0
@@ -944,8 +986,8 @@ def main():
     # and the sector count the target root FFS is shrunk to (partition 'a' size).
     # The slim proof attaches rq0 as a custom-sized MSCP disk (RAUSER=<MB>).
     single_img = env("OVMX_SINGLE_IMG", "/cache/single-work/wd0.img")
-    single_a_sectors = int(env("OVMX_SINGLE_A_SECTORS", "409600"))  # 200 MiB
-    single_rq0_type = env("OVMX_SINGLE_RQ0_TYPE", "RAUSER=280")     # ~267 MiB
+    single_a_sectors = int(env("OVMX_SINGLE_A_SECTORS", "524288"))  # 256 MiB
+    single_rq0_type = env("OVMX_SINGLE_RQ0_TYPE", "RAUSER=340")     # 324 MiB
 
     boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "1800"))
     cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "600"))

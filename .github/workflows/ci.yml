@@ -4469,6 +4469,58 @@ jobs:
       - name: OTS$ runtime proof (LIBOTS$ links + DECC$SHR binds it + divide correct)
         run: IMG=ovmx-cross-alpha-vms:latest bash tools/cross-alpha-vms/ots/run_ots_proof.sh
 
+  # Standing gate for vms-864: the genuine alpha DECC$SHR (musl-alpha universals
+  # + the OVMX bootstrap surface from mk_decc_shr.sh's ALPHA branch) must link a
+  # REAL alpha-dec-vms port crt0 (tools/cross-alpha-vms/joint-e2e/) with ZERO
+  # deferred symbols. OVMX_DECC_ARCH=alpha is forced (never auto-detected) so
+  # this cannot silently regress to linking a genuine EM_ALPHA crt0 against a
+  # non-alpha DECC$SHR (bead vms-2a0). Shares the cross-alpha-vms gha layer-
+  # cache scope with musl-alpha-vms above so the toolchain-image build is a
+  # cache hit.
+  joint-e2e-alpha-crt0:
+    name: genuine alpha DECC$SHR — real port crt0 links zero-deferred (vms-864)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: Link the real port crt0 against the GENUINE alpha DECC$SHR (OVMX_DECC_ARCH=alpha, strict, zero-deferred)
+        run: |
+          set -euo pipefail
+          OUT=/tmp/joint-e2e-out
+          IMG=ovmx-cross-alpha-vms tools/cross-alpha-vms/joint-e2e/build-joint-image.sh "$OUT"
+          # ---- standing assertions (loud; the strict LINK.EXE exit already
+          #      fails on undef — these guard against a silent pass) ----
+          NUNDEF=$(grep -c 'LINK-F-UNDEF' "$OUT/build.log" || true)
+          if [ "${NUNDEF:-0}" -ne 0 ]; then
+            echo "GATE FAIL: ${NUNDEF} LINK-F-UNDEF in the genuine-alpha crt0-join:"
+            grep 'LINK-F-UNDEF' "$OUT/build.log" || true
+            exit 1
+          fi
+          grep -q 'LINK-S-CREATED' "$OUT/build.log" || { echo "GATE FAIL: no %LINK-S-CREATED (joint_e2e.exe not linked)"; exit 1; }
+          readelf -h "$OUT/joint_e2e.exe" | grep -q 'Machine:.*Alpha' || { echo "GATE FAIL: joint_e2e.exe is not EM_ALPHA"; exit 1; }
+          readelf -h "$OUT/joint_e2e.exe" | grep -qE 'Type:.*DYN'     || { echo "GATE FAIL: joint_e2e.exe is not ET_DYN"; exit 1; }
+          # C$_EXIT1 should fold as a globalvalue (no import cell) — informational
+          if grep -q 'GVALFOLD' "$OUT/build.log"; then echo "ok: C\$_EXIT1 folded as globalvalue"; else echo "note: no GVALFOLD line logged"; fi
+          echo "GATE PASS (vms-864): genuine-alpha crt0-join links zero-deferred; EM_ALPHA/ET_DYN; %LINK-S-CREATED"
+
   # Job 12: real src/libvmssys linked + activated VMS-native (aarch64)
   #
   # The pillar milestone (vms-ade / bead vms-80a): the whole toolchain end to

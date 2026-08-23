@@ -3986,6 +3986,115 @@ static int sniff_format(const char *path)
     return evax_sniff(hdr, (size_t)n);
 }
 
+/* --------------------------------------------------------------------------
+ * EVAX/Alpha ARCHIVE support (vms-7b96, lifts vms-c65's "EVAX archives are a
+ * later slice" limit). The Alpha C-RTL is delivered as a whole-archive libc.a /
+ * libgcc.a, exactly like the ELF path — but the alpha-dec-vms objects are
+ * VMS-native EVAX, not ELF, so load_archive/parse_obj (ELF-only) cannot ingest
+ * them, and sniff_format routes every archive to the ELF path. These helpers add
+ * the missing EVAX archive front end: walk the System V/GNU `ar` container
+ * ourselves (identical to load_archive's walk) and evax_read() each object
+ * member. The archive symbol table ("/","/SYM64/") and long-name table ("//")
+ * members are skipped; the port cc1's .vmsdebug/DST records are skipped by
+ * evax_read itself (parse loop's EDBG/ETBT default), so a DST-carrying member
+ * links exactly like a -g0 one. Note GNU ar cannot even BUILD such an archive
+ * (its vms-alpha BFD reader chokes on DST, vms-7b96), so the archive is
+ * hand-built without a symbol index — which is fine here: whole-archive pulls
+ * every member and never consults the index. Member content buffers are kept
+ * live for the run (like load_archive), never freed. */
+static int ar_member_is_evax(const uint8_t *abuf, size_t asize)
+{
+    if (asize < AR_MAGIC_LEN || memcmp(abuf, AR_MAGIC, AR_MAGIC_LEN) != 0)
+        return 0;
+    size_t pos = AR_MAGIC_LEN;
+    while (pos + AR_HDR_SIZE <= asize) {
+        const char *h = (const char *)(abuf + pos);
+        if (h[58] != '`' || h[59] != '\n') return 0;
+        uint64_t msize = ar_dec(h + 48, 10);
+        size_t mdata = pos + AR_HDR_SIZE;
+        if (mdata + msize > asize) return 0;
+        char nm[17]; memcpy(nm, h, 16); nm[16] = '\0';
+        int e = 16; while (e > 0 && nm[e - 1] == ' ') nm[--e] = '\0';
+        int special = (!strcmp(nm, "/") || !strcmp(nm, "//") ||
+                       !strcmp(nm, "/SYM64/"));
+        if (!special)
+            return evax_is_object(abuf + mdata, (size_t)msize);
+        pos = mdata + msize;
+        if (pos & 1) pos++;
+    }
+    return 0;
+}
+
+/* Is this input the root of an EVAX link? A bare EVAX object, or a `.a` archive
+ * whose first real member is an EVAX object. (.OLB stays an ELF-path container.) */
+static int input_is_evax(const char *path)
+{
+    if (file_is_olb(path)) return 0;
+    if (file_is_archive(path)) {
+        size_t sz; uint8_t *b = slurp(path, &sz);
+        int r = ar_member_is_evax(b, sz);
+        free(b);
+        return r;
+    }
+    return sniff_format(path) == EVFMT_EVAX;
+}
+
+/* Grow the EVAX input array by one and return the (zeroed) new slot. */
+static struct evax_input *push_evax(struct evax_input **ein, int *n, int *cap)
+{
+    if (*n >= *cap) {
+        *cap = *cap ? *cap * 2 : 64;
+        *ein = realloc(*ein, (size_t)*cap * sizeof **ein);
+        if (!*ein) die("oom growing EVAX input table");
+    }
+    struct evax_input *slot = &(*ein)[(*n)++];
+    memset(slot, 0, sizeof *slot);
+    return slot;
+}
+
+/* Parse every EVAX object member of an `ar` archive into the growable ein array. */
+static void load_archive_evax(const char *path, struct evax_input **ein,
+                              int *n, int *cap)
+{
+    size_t asize;
+    uint8_t *abuf = slurp(path, &asize);   /* kept live: members reference it */
+    if (asize < AR_MAGIC_LEN || memcmp(abuf, AR_MAGIC, AR_MAGIC_LEN) != 0)
+        die("not an ar archive");
+    size_t pos = AR_MAGIC_LEN;
+    int members = 0;
+    while (pos + AR_HDR_SIZE <= asize) {
+        const char *h = (const char *)(abuf + pos);
+        if (h[58] != '`' || h[59] != '\n') die("malformed ar member header");
+        uint64_t msize = ar_dec(h + 48, 10);
+        size_t mdata = pos + AR_HDR_SIZE;
+        if (mdata + msize > asize) die("ar member extends past end of archive");
+        char nm[17]; memcpy(nm, h, 16); nm[16] = '\0';
+        int e = 16; while (e > 0 && nm[e - 1] == ' ') nm[--e] = '\0';
+        int special = (!strcmp(nm, "/") || !strcmp(nm, "//") ||
+                       !strcmp(nm, "/SYM64/"));
+        if (!special) {
+            uint8_t *mb = malloc(msize ? msize : 1);
+            if (!mb) die("oom copying ar member");
+            memcpy(mb, abuf + mdata, (size_t)msize);
+            struct evax_input *slot = push_evax(ein, n, cap);
+            char label[300];
+            snprintf(label, sizeof label, "%s(%s)", path, nm);
+            slot->name = strdup(label);
+            if (!slot->name) die("oom labeling ar member");
+            if (evax_read(mb, (size_t)msize, &slot->obj) != 0) {
+                fprintf(stderr, "%%LINK-F-EVAX, %s: %s\n",
+                        slot->name, evax_last_error());
+                exit(1);
+            }
+            members++;
+        }
+        pos = mdata + msize;
+        if (pos & 1) pos++;
+    }
+    fprintf(stderr, "%%LINK-I-ARCHIVE, %s: %d EVAX object member%s pulled "
+            "(whole-archive)\n", path, members, members == 1 ? "" : "s");
+}
+
 int main(int argc, char **argv)
 {
     const char *out = NULL;
@@ -4038,36 +4147,49 @@ int main(int argc, char **argv)
      * emits an EXECUTABLE (emit_evax_image, --transfer) by default, or a
      * SHAREABLE (emit_evax_shareable, --symbol-vector/--gsmatch) under
      * --shareable (bead vms-c65). ---- */
-    if (sniff_format(ins[0]) == EVFMT_EVAX) {
-        /* EVAX/Alpha path. Slurp each input ONCE here (no byte-exact read-total
-         * gate on this path), sniff it from the full buffer, and hand it to
-         * evax_read. The ELF path falls through and does its single traced
-         * read per input in load_obj — so classifying ins[0] above uses the
-         * non-counted header peek, not a slurp (vms-cbe). */
-        struct evax_input *ein = calloc((size_t)nin, sizeof *ein);
-        if (!ein) die("oom allocating EVAX input table");
+    if (input_is_evax(ins[0])) {
+        /* EVAX/Alpha path. Each input is a bare EVAX object OR a whole `.a`
+         * archive of EVAX members (vms-7b96); an archive expands to all its
+         * members in-process (whole-archive, no `ld -r`), exactly like the ELF
+         * path's load_archive. Inputs grow dynamically. (.OLB is not accepted on
+         * this path.) The ELF path falls through and does its single traced read
+         * per input in load_obj — so classifying ins[0] above uses a header peek
+         * (or, for an archive, a first-member peek), not a counted slurp (vms-cbe). */
+        struct evax_input *ein = NULL;
+        int nein = 0, cap_ein = 0;
         for (int i = 0; i < nin; i++) {
+            if (file_is_olb(ins[i]))
+                die("the EVAX/Alpha link does not take .OLB libraries "
+                    "(use a .a archive or plain EVAX objects)");
+            if (file_is_archive(ins[i])) {
+                if (!input_is_evax(ins[i]))
+                    die("mixed formats: an EVAX/Alpha link cannot include a "
+                        "non-EVAX archive");
+                load_archive_evax(ins[i], &ein, &nein, &cap_ein);
+                continue;
+            }
             size_t sz; uint8_t *b = slurp(ins[i], &sz);
-            if (file_is_archive(ins[i]) || file_is_olb(ins[i]) ||
-                evax_sniff(b, sz) != EVFMT_EVAX)
-                die("the EVAX/Alpha link takes plain EVAX objects only "
-                    "(mixed formats / EVAX archives are a later slice)");
-            ein[i].name = ins[i];
-            if (evax_read(b, sz, &ein[i].obj) != 0) {
+            if (evax_sniff(b, sz) != EVFMT_EVAX)
+                die("mixed formats: the EVAX/Alpha link takes EVAX objects and "
+                    "EVAX `.a` archives only");
+            struct evax_input *slot = push_evax(&ein, &nein, &cap_ein);
+            slot->name = ins[i];
+            if (evax_read(b, sz, &slot->obj) != 0) {
                 fprintf(stderr, "%%LINK-F-EVAX, %s: %s\n", ins[i], evax_last_error());
                 exit(1);
             }
         }
+        if (nein == 0) die("no EVAX object members found in inputs");
         if (shareable) {
             if (executable)
                 die("specify at most one of --shareable / --executable");
             if (nuniv == 0)
                 die("the EVAX/Alpha shareable needs --symbol-vector "
                     "(e.g. --symbol-vector \"FOO=PROCEDURE,BAR=DATA\")");
-            emit_evax_shareable(ein, nin, uv, nuniv, gk, gmaj, gmin,
+            emit_evax_shareable(ein, nein, uv, nuniv, gk, gmaj, gmin,
                                 allow_undef, producers, np, out);
         } else {
-            emit_evax_image(ein, nin, transfer, allow_undef, producers, np, out);
+            emit_evax_image(ein, nein, transfer, allow_undef, producers, np, out);
         }
         return 0;
     }

@@ -357,6 +357,20 @@ def do_install(a, distrib_img, blank_img, boot_deadline):
         child.expect(DCL_PROMPT, timeout=CMD_TO)
         ok("reached an interactive DCL session on the distribution system")
 
+        # BONUS DATA POINT (vms-d0e5, NON-ASSERTING): capture SHOW USERS / SHOW
+        # DEVICES from the live distribution DCL session so the conductor can see
+        # whether the VAX executive reports real system state (populated) or
+        # per-process fakes (empty). This must NEVER affect the verdict -- it does
+        # not call ok()/bad(); it only logs the raw console segment.
+        for probe in ("SHOW USERS", "SHOW DEVICES"):
+            _send(child, probe)
+            try:
+                child.expect(DCL_PROMPT, timeout=CMD_TO)
+            except (pexpect.TIMEOUT, pexpect.EOF):
+                pass
+            seg = _console_text(child)
+            log("BONUS %s console segment:\n%s" % (probe, seg[-1500:]))
+
         # Re-MOUNT the just-installed target for inspection.
         _send(child, "MOUNT %s %s" % (TARGET_DEV, TARGET_LABEL))
         try:

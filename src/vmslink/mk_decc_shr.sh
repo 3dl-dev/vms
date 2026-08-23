@@ -546,6 +546,25 @@ IMGACT_INC="$(CDPATH= cd "$(dirname "$0")/../imgact/include" && pwd)"   # ovmx_a
 "${CC:-cc}" -c -fPIC -ffreestanding -I"$IMGACT_INC" -o "$CRTL_OBJ" "$CRTL_SRC"
 VEC="$VEC,get_errno_addr=PROCEDURE,get_vms_errno_addr=PROCEDURE,_malloc32=PROCEDURE,_malloc64=PROCEDURE"
 
+# decc$malloc / decc$_malloc64 / decc$tprintf APPENDED for vms-981 (append-only ->
+# prior consumers' vector indices unchanged, GSMATCH LEQUAL-compatible). The three
+# DECORATED CRTL entries a real alpha-dec-vms GCC-port program actually references
+# that the R1b-1 no-decoration alias vector deliberately did NOT generate — CONFIRMED
+# undefined by linking the staged port objects (crt0.obj + app.obj, the cc1-compiled
+# crt0 + printf/malloc/strlen program) against a REAL DECC$SHR.EXE with
+# --allow-undefined (the other decc$ refs — decc$main, decc$strlen, C$_EXIT1 — already
+# bind). Real impls in ovmx_decc_crtl.c (same object), grounded to the GPL port's
+# name-decoration (gcc/config/vms/vms.cc + vms-crtlmap.map) + the VSI OpenVMS C RTL
+# Reference Manual (Rule 8):
+#   decc$malloc    -> _malloc32  (the 32-bit-pointer malloc: < 4 GB-addressable,
+#                    the crt0's widened argv/envp array; NOT musl's 64-bit malloc)
+#   decc$_malloc64 -> _malloc64  (the 64-bit-pointer malloc: full 64-bit heap;
+#                    app.c's plain malloc lowers here under -mpointer-size=64)
+#   decc$tprintf   -> vprintf    (printf's IEEE T_FLOAT variant; OVMX/musl doubles
+#                    ARE IEEE-754, so it is musl's native printf model — real
+#                    formatted output to stdout, correct char-count return)
+VEC="$VEC,decc\$malloc=PROCEDURE,decc\$_malloc64=PROCEDURE,decc\$tprintf=PROCEDURE"
+
 # decc$main (vms-954, §4b.5): the DEC C RTL image-startup routine the alpha-dec-vms
 # crt0's __main forwards its six-arg VMS activation context to; it PRODUCES
 # argc/argv/envp (non-CLI path implemented, CLI path a grounded follow-up). Real

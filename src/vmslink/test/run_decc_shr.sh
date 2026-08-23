@@ -268,4 +268,83 @@ $CC -O2 -o "$WORK/decc_main_logic" "$WORK/decc_main_logic.c" "$WORK/ovmx_decc_cr
 echo "R1b-2b OK: decc\$main produces argc/argv/envp on the non-CLI path (real 32-bit argv)"
 
 echo
+echo "== decc\$ decorated CRTL surface (vms-981): a REAL GCC-port program links CLEAN =="
+# The R1b-1 alias vector covers the no-decoration decc$<name> entries; the port
+# ALSO references three DECORATED CRTL entries (decc$malloc, decc$_malloc64,
+# decc$tprintf) that vector deliberately did not generate. mk_decc_shr.sh now
+# exports real ovmx_decc_crtl.c bridges for them. Prove it against the ACTUAL
+# cc1-compiled port objects staged as fixtures: crt0 (references decc$main +
+# decc$malloc) + a printf/malloc/strlen program (references decc$_malloc64 +
+# decc$strlen + decc$tprintf). evax-fixtures/port_{crt0,app}.obj were produced by
+# the alpha-dec-vms cross toolchain (cc1 -mpointer-size=64 -> alpha-dec-vms-as);
+# the matching .s/.c are committed alongside for provenance.
+for s in decc\$malloc decc\$_malloc64 decc\$tprintf; do
+    echo "$OUT" | awk -v s="$s" '/PROCEDURE/ && $NF==s {f=1} END{exit !f}' \
+        || { echo "FAIL: $s missing / not a PROCEDURE universal (vms-981 decorated CRTL)"; exit 1; }
+done
+echo "decc\$malloc / decc\$_malloc64 / decc\$tprintf exported as PROCEDURE universals"
+
+PORTFIX="$HERE/evax-fixtures"
+# STRICT link (NO --allow-undefined): every decc$ import the real port objects
+# reference must bind to DECC$SHR, zero deferred. --transfer __main is the crt0
+# entry (the port's image transfer address).
+"$WORK/LINK.EXE" --transfer __main --use "$WORK/DECC\$SHR.EXE" \
+    -o "$WORK/PORTAPP.EXE" "$PORTFIX/port_crt0.obj" "$PORTFIX/port_app.obj" 2>&1 | tee "$WORK/portlink.log"
+grep -q '%LINK-.*DEFERRED' "$WORK/portlink.log" \
+    && { echo "FAIL: the port link left decc\$ references DEFERRED — the decorated CRTL surface is incomplete"; exit 1; } || true
+[ -f "$WORK/PORTAPP.EXE" ] \
+    || { echo "FAIL: LINK.EXE did not produce PORTAPP.EXE from the real port objects"; exit 1; }
+# Every referenced decc$ name must have bound (import or globalvalue), none left undefined.
+for want in decc\$main decc\$malloc decc\$strlen decc\$_malloc64 decc\$tprintf; do
+    grep -qi "undefined symbol '$want'" "$WORK/portlink.log" \
+        && { echo "FAIL: $want went unresolved in the strict port link"; exit 1; } || true
+done
+echo "real GCC-port objects (crt0 + printf/malloc/strlen program) linked CLEAN against DECC\$SHR — zero deferred, every decc\$ import bound"
+
+echo
+echo "== decc\$ bridges do REAL work (vms-981): tprintf output + malloc <4GB contract =="
+# Not just link-resolvable: the bridges must produce genuine results (INV-6). Build
+# ovmx_decc_crtl.c natively + a driver that CALLS the three bridges and asserts:
+#   - decc$tprintf produces the correct formatted bytes on stdout AND returns the
+#     C-standard char count (real vprintf, not a stub returning 0/ignoring fmt);
+#   - decc$malloc returns a genuine < 4 GB-addressable pointer (the 32-bit-pointer
+#     contract the port crt0's argv array depends on);
+#   - decc$_malloc64 returns a usable full-64-bit heap pointer.
+$CC -O2 -fPIC -ffreestanding -I"$SRC/../imgact/include" -c -o "$WORK/ovmx_decc_crtl.o" "$SRC/ovmx_decc_crtl.c"
+cat > "$WORK/decc_bridge_logic.c" <<'EOF'
+#include <stdio.h>
+#include <string.h>
+extern void *d_malloc(unsigned long)     __asm__("decc$malloc");
+extern void *d_malloc64(unsigned long)   __asm__("decc$_malloc64");
+extern int   d_tprintf(const char *, ...) __asm__("decc$tprintf");
+int main(void){
+    /* decc$_malloc64: full 64-bit heap, usable */
+    char *p = d_malloc64(32);
+    if (!p) { fprintf(stderr, "FAIL decc$_malloc64 returned NULL\n"); return 1; }
+    strcpy(p, "hello");
+    /* decc$malloc: 32-bit-pointer contract -> genuinely < 4 GB */
+    void *q = d_malloc(64);
+    if (!q) { fprintf(stderr, "FAIL decc$malloc returned NULL\n"); return 1; }
+    if ((unsigned long)q >= 0x100000000UL) {
+        fprintf(stderr, "FAIL decc$malloc not <4GB: %p\n", q); return 1;
+    }
+    /* decc$tprintf: real formatted output to stdout + correct char-count return */
+    int n = d_tprintf("%s world argc=%d len=%lu\n", p, 1, (unsigned long)strlen(p));
+    fflush(stdout);
+    /* "hello world argc=1 len=5\n" = 25 chars */
+    if (n != 25) { fprintf(stderr, "FAIL decc$tprintf returned %d (want 25)\n", n); return 1; }
+    fprintf(stderr, "BRIDGE_OK\n");
+    return 0;
+}
+EOF
+$CC -O2 -o "$WORK/decc_bridge_logic" "$WORK/decc_bridge_logic.c" "$WORK/ovmx_decc_crtl.o"
+"$WORK/decc_bridge_logic" > "$WORK/tprintf.out" 2> "$WORK/tprintf.err" \
+    || { echo "FAIL: decc\$ bridge logic driver failed"; cat "$WORK/tprintf.err"; exit 1; }
+grep -q '^BRIDGE_OK$' "$WORK/tprintf.err" \
+    || { echo "FAIL: bridge asserts did not all pass"; cat "$WORK/tprintf.err"; exit 1; }
+grep -qx 'hello world argc=1 len=5' "$WORK/tprintf.out" \
+    || { echo "FAIL: decc\$tprintf did not emit the expected formatted line — got:"; cat "$WORK/tprintf.out"; exit 1; }
+echo "decc\$tprintf emitted 'hello world argc=1 len=5' (25 chars, real vprintf); decc\$malloc <4GB; decc\$_malloc64 usable"
+
+echo
 echo "ALL DECC\$SHR PRODUCER CHECKS PASSED"

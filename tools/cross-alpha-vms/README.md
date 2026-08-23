@@ -31,7 +31,9 @@ OUTDIR/bin/alpha-dec-vms-as  -o hello.obj hello.s        # a real EVAX object
 # -> feed hello.obj to OVMX LINK.EXE's EVAX path (--transfer / --use DECC$SHR)
 ```
 
-`cc1`-only (`make all-gcc`) is built: the compiler proper emits `.s` and needs
+The build also produces the **compiler runtime** `libgcc.a` (`make all-target-libgcc`, inhibit_libc mode — soft-float/long-double/division builtins the compiled port code references, no C-library dependency), which the Alpha `DECC$SHR` whole-archives alongside a C library (see `docs/design-alpha-crtl-archive.md`).
+
+`cc1` and libgcc (`make all-gcc` + `all-target-libgcc`) are built: the compiler proper emits `.s` and needs
 no target libc/headers, so the image stays small. The build **smoke-tests**
 itself — a trivial `int main(void){return 0;}` must emit `__gcc_main_flags = 3`
 (the port's main-flags globalvalue) and VMS procedure descriptors (`.ent` /

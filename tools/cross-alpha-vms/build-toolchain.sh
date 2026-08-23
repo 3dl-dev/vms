@@ -56,6 +56,32 @@ mkdir -p gcc/{c,cp,c-family,common,objc,d,rust,go,fortran,ada,lto,jit,m2,analyze
 make all-gcc -j"${JOBS}"
 make install-gcc
 
+# ---- libgcc: the compiler runtime (soft-float / long-double / integer
+#      division / __gcc_main_flags-adjacent builtins the compiled port code
+#      references). `--without-headers` builds it in inhibit_libc mode — a static
+#      libgcc.a with no C-library dependency. Needed by BOTH Alpha C-RTL-archive
+#      options (it is the compiler runtime, orthogonal to the C library the
+#      DECC$SHR whole-archives). See docs/design-alpha-crtl-archive.md. ----
+# The alpha-dec-vms libgcc has ONE VMS-specific TU — vms-gcc_shell_handler.c,
+# GCC's VMS condition-handling EXCEPTION-UNWIND shell handler — which needs VMS
+# headers (vms/chfdef.h, vms/pdscdef.h, vms/ssdef.h) this headerless
+# compiler-runtime build does not provide (OVMX has chfdef.h + ssdef.h but no
+# pdscdef.h yet). That handler is NOT referenced by the arithmetic / soft-float /
+# long-double / division builtins the DECC$SHR whole-archives — it is only GCC's
+# VMS EH/unwind path. Exclude it here so the genuine compiler-runtime builtins
+# build; wiring the VMS EH handler (with OVMX's VMS headers + a real pdscdef.h) is
+# a labeled follow-on, needed only once the port uses VMS condition handling / C++
+# EH. Honest scope, not a stub. (vms-da2c; see docs/design-alpha-crtl-archive.md)
+sed -i '/vms-gcc_shell_handler\.c/d' "/src/gcc-${GCC_VER}/libgcc/config/alpha/t-vms"
+# LIB2ADDEH= empties libgcc's exception-handling / DWARF-unwind sources
+# (unwind-dw2 &c.), which pull in libc headers (stdlib.h via md-unwind-support.h)
+# this headerless compiler-runtime build doesn't have. That is the documented
+# GCC mechanism for an EH-less libgcc — the ARITHMETIC / soft-float / division
+# builtins (what the DECC$SHR whole-archives) don't need EH. EH/unwind is the
+# same labeled follow-on as the VMS shell handler (needs the C-RTL headers).
+make all-target-libgcc LIB2ADDEH= LIB2ADDEHSTATIC= LIB2ADDEHSHARED= -j"${JOBS}"
+make install-target-libgcc LIB2ADDEH= LIB2ADDEHSTATIC= LIB2ADDEHSHARED=
+
 # ---- smoke test: the compiler emits genuine VMS/Alpha asm ----
 echo 'int main(void){ return 0; }' > /tmp/t.c
 "${PREFIX}/bin/${TARGET}-gcc" -S -mpointer-size=64 /tmp/t.c -o /tmp/t.s || \
@@ -63,6 +89,16 @@ echo 'int main(void){ return 0; }' > /tmp/t.c
 grep -q "__gcc_main_flags = 3" /tmp/t.s \
   && grep -qE "\.ent|\.pdesc" /tmp/t.s \
   && echo "SMOKE OK: emits __gcc_main_flags + VMS procedure descriptors"
+
+# ---- confirm libgcc.a was produced (the compiler runtime archive) ----
+LIBGCC_A=$("${PREFIX}/bin/${TARGET}-gcc" -print-libgcc-file-name 2>/dev/null || true)
+if [ -f "$LIBGCC_A" ]; then
+    echo "LIBGCC OK: $LIBGCC_A ($(wc -c < "$LIBGCC_A") bytes, $("${PREFIX}/bin/${TARGET}-nm" "$LIBGCC_A" 2>/dev/null | grep -c ' T ') text syms)"
+    "${PREFIX}/bin/${TARGET}-nm" "$LIBGCC_A" 2>/dev/null | grep -E ' T (__addtf3|__divdi3|__floatditf|__fixtfsi)' | head
+else
+    echo "LIBGCC MISSING (-print-libgcc-file-name -> '$LIBGCC_A')" >&2
+    exit 1
+fi
 
 echo "=== alpha-dec-vms cross toolchain built under ${PREFIX} ==="
 "${PREFIX}/bin/${TARGET}-gcc" -dumpmachine

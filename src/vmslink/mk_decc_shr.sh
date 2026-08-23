@@ -110,10 +110,21 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     VEC=$(paste -sd, "$ALPHA_VEC")
     rm -f "$ALPHA_VEC"
     # Strict whole-archive link (no --allow-undefined) unless the caller opts into
-    # first-light deferral for the VMS OTS$/STARLET runtime surface musl-alpha
-    # references (OTS$DIV_I/OTS$REM_I integer divide, ...) that a SEPARATE OVMX
-    # shareable will provide — pass DECC_ALLOW_UNDEF=1 for the RUNG-1 first light.
+    # first-light deferral for the VMS runtime surface musl-alpha references.
+    #
+    # OTS$ runtime (vms-bfd6): the VMS integer-divide / block family the compiler
+    # emits (OTS$DIV_*, OTS$REM_*, OTS$HOME_ARGS, OTS$MOVE, OTS$ZERO) is provided
+    # by a SEPARATE shareable, LIBOTS$ — the faithful OpenVMS shape (LIBOTS$ is a
+    # distinct image from DECC$SHR). Point DECC_USE at it (space-separated for
+    # several) and its OTS$ references bind as real cross-image .vms$imp imports
+    # instead of deferring. Build LIBOTS$ first with tools/cross-alpha-vms/ots/
+    # build-libots.sh, then pass DECC_USE=<path-to-LIBOTS$SHR.EXE>.
+    #
+    # DECC_ALLOW_UNDEF=1 still records any remaining first-light residual (e.g.
+    # the setjmp/cancellation surface — decc$longjmp, __cp_*, __syscall_cp_asm —
+    # and the linker-defined _DYNAMIC/__init_array bounds) as deferred imports.
     ALPHA_LINK_FLAGS="--shareable --symbol-vector $VEC --gsmatch $GSMATCH"
+    for p in ${DECC_USE:-}; do ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $p"; done
     [ "${DECC_ALLOW_UNDEF:-0}" = 1 ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --allow-undefined"
     # shellcheck disable=SC2086
     "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC"

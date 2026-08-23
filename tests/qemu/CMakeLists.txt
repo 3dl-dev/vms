@@ -839,3 +839,30 @@ set_tests_properties(release_acceptance_e2e PROPERTIES
     LABELS "slow;qemu-full-boot"
     SKIP_RETURN_CODE 77
     TIMEOUT 2400)
+
+# ---------------------------------------------------------------------------
+# BOOT-AND-RUN-COMMANDS DCL/SHOW ACCEPTANCE GATE.
+#
+# THE HOLE THIS CLOSES: release_acceptance_e2e above boots, logs in, and then
+# checks only PRODUCT SHOW PRODUCT's version -- it never runs the commands a
+# user actually types. So V0.5-2 shipped with SHOW USERS empty, SHOW DEVICE
+# not Mounted, SHOW QUOTA fabricated, and WRITE F$xxx() printing the literal,
+# none caught. This gate boots the REAL runtime (the pre-mastered ODS-2
+# distribution disk), logs in SYSTEM/MANAGER, RUNS a battery of basic
+# DCL/SHOW commands, and asserts VMS-faithful output for each, with a
+# negative control per command segment. See test_dcl_acceptance_e2e.sh's
+# header for the battery and the bug each assertion guards.
+#
+# EXPECTED TO BE RED until the in-flight command fixes land; it must NOT be
+# weakened to go green. Same opt-in convention as the qemu-full-boot gates
+# above (OVMX_QEMU_FULL_E2E=1); .github/workflows/ci.yml's dcl-acceptance-e2e
+# job runs it for real on the release-cut path and treats a SKIP as a hard
+# failure.
+add_test(
+    NAME dcl_acceptance_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_dcl_acceptance_e2e.sh
+)
+set_tests_properties(dcl_acceptance_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 1200)

@@ -378,6 +378,16 @@ uint32_t vms_kif_disk_resolve(const char *devnam, char *backing,
                               uint32_t backing_size,
                               uint32_t *major, uint32_t *minor);
 
+/* $GETDVI for the VOLUME items of a disk unit (vms-e6f): mount state, ODS-2
+ * volume label, size, cluster factor and free-block count of a mounted volume,
+ * read from the executive-global mounted-volume table the ACP populates at
+ * $MOUNT. On return `out` (optional) holds the vms_getvol_args: out->mounted is
+ * 1 for a mounted ODS-2 volume (then volnam/volsize/cluster are set, and
+ * freeblocks iff out->free_valid), 0 for a device that is not a mounted volume.
+ * SHOW DEVICE reads this to report a disk as Mounted with its label + free/total
+ * blocks; the values are the executive's, never a per-process fake (Rule 11). */
+uint32_t vms_kif_getvol(const char *devnam, struct vms_getvol_args *out);
+
 /* Set terminal characteristics through an assigned channel (the
  * $QIO IO$_SETMODE path). flags is a mask of VMS_TTSET_*; SS$_IVCHAN
  * if the caller holds no such channel.

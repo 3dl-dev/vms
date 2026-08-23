@@ -903,6 +903,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_ACP_DEACCESS:
 	case VMS_IOCTL_ACP_ACPCONTROL:
 	case VMS_IOCTL_ACP_FILEOP:
+	case VMS_IOCTL_GETVOL:
 	case VMS_IOCTL_DISK_RESOLVE:
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
@@ -924,6 +925,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_acp_acpcontrol(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_ACP_FILEOP:
 			r = vms_ioctl_acp_fileop(proc, (unsigned long)uarg);     break;
+		case VMS_IOCTL_GETVOL:
+			r = vms_ioctl_acp_getvol(proc, (unsigned long)uarg);     break;
 		case VMS_IOCTL_DISK_RESOLVE:
 			r = vms_ioctl_disk_resolve(proc, (unsigned long)uarg);   break;
 		default:

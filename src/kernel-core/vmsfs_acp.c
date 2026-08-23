@@ -85,6 +85,7 @@ struct vms_acp_volume {
     uint32_t         backing_minor;
     uint32_t         volsize;           /* SCB volume size, 512-byte blocks */
     uint16_t         struclev;          /* home/SCB structure level (0x0201) */
+    uint16_t         cluster;           /* SCB storage-bitmap cluster factor (vms-e6f) */
     char             volname[13];       /* NUL-terminated ODS-2 volume label */
     /*
      * INDEXF.SYS header base (vms-204): the LBN of the primary header for file
@@ -444,6 +445,7 @@ static uint32_t acp_validate_ods2(uint32_t major, uint32_t minor,
      * process's -- this row is executive-global). */
     out->struclev = s->home.hm2_struclev;
     out->volsize  = s->scb.scb_volsize;
+    out->cluster  = s->scb.scb_cluster; /* storage-bitmap cluster factor (vms-e6f) */
     out->idx_lbn  = idx_lbn;            /* INDEXF.SYS file-1 header base (vms-204) */
     out->ibmap_lbn = s->home.hm2_ibmaplbn;   /* index-bitmap base (vms-5303) */
     out->maxfiles  = s->home.hm2_maxfiles;   /* index-file capacity (vms-5303) */
@@ -980,6 +982,174 @@ static int acp_winbuild_cb(const ods2_extent_t *ext, void *ctx)
     w->win[w->n].count     = ext->count;
     w->next_vbn += ext->count;
     w->n++;
+    return 0;
+}
+
+#if defined(OVMX_ODS2_KERNEL)
+/*
+ * acp_count_free_blocks - count the FREE blocks of a mounted ODS-2 volume by
+ * reading its BITMAP.SYS storage bitmap (vms-e6f), the DVI$_FREEBLOCKS SHOW
+ * DEVICE reports. This is the READ-ONLY twin of acp_bitmap_alloc's scan: it
+ * builds BITMAP.SYS's VBN->LBN window (VBN1 = SCB, VBN2.. = storage-bitmap data
+ * blocks) and tallies the FREE (set) bits, one bitmap block read at a time.
+ * Every bit = one CLUSTER of `cluster` blocks (the SCB cluster factor), so the
+ * free-block total is free_bits * cluster -- matching how VMS accounts free
+ * space in whole clusters. Nothing is stored or guessed: this is a live reading
+ * of the same on-disk bitmap the allocator mutates (INV-6, CLAUDE.md Rule 10).
+ *
+ * SS$_NORMAL and *free_out set on success; SS$_DEVNOTMOUNT on a block-read or
+ * map failure (the caller then reports the volume as mounted but its free count
+ * as unavailable -- it does NOT fabricate a zero).
+ */
+static uint32_t acp_count_free_blocks(uint32_t major, uint32_t minor,
+                                      uint32_t idx_lbn, uint32_t volsize,
+                                      uint32_t cluster, uint32_t *free_out)
+{
+    struct acp_winbuild wb;
+    struct acp_win_ext  bmwin[ACP_WINDOW_MAX];
+    uint8_t *bmhdr, *bmblk;
+    uint32_t bmhdr_lbn, nbits, bit, cur_bmvbn = 0;
+    uint32_t free_bits = 0;
+    int loaded = 0;
+    uint32_t result = SS__DEVNOTMOUNT;
+
+    if (cluster == 0)
+        cluster = 1;                        /* a validated ODS-2 always has >= 1 */
+    nbits = volsize / cluster;              /* one bitmap bit per cluster */
+
+    /* Two 512-byte block buffers off the heap (the BITMAP.SYS header + one
+     * storage-bitmap data block) -- not the kernel stack (-Wframe-larger-than). */
+    bmhdr = exec_zalloc(ACP_BLOCK_SIZE);
+    bmblk = exec_zalloc(ACP_BLOCK_SIZE);
+    if (!bmhdr || !bmblk)
+        goto done;
+
+    /* BITMAP.SYS (FID 2) primary header, the INDEXF arithmetic (idx_lbn base). */
+    bmhdr_lbn = idx_lbn + (ODS2_FID_BITMAP - 1u);
+    if (exec_blockdev_read_block(major, minor, bmhdr_lbn, bmhdr, ACP_BLOCK_SIZE) != 0)
+        goto done;
+
+    wb.win = bmwin;
+    wb.max = ACP_WINDOW_MAX;
+    wb.n = 0;
+    wb.next_vbn = 1;
+    wb.overflow = 0;
+    if (ods2_fh2_map_walk(bmhdr, acp_winbuild_cb, &wb, NULL) != ODS2_OK || wb.n == 0)
+        goto done;
+
+    for (bit = 0; bit < nbits; bit++) {
+        uint32_t bmvbn = 2u + bit / ODS2_SBM_BITS_PER_BLOCK;
+
+        if (!loaded || bmvbn != cur_bmvbn) {
+            uint32_t lbn = acp_window_map_vbn(bmwin, wb.n, bmvbn);
+            if (lbn == 0)
+                break;                      /* past the bitmap's coverage */
+            if (exec_blockdev_read_block(major, minor, lbn, bmblk, ACP_BLOCK_SIZE) != 0)
+                goto done;
+            cur_bmvbn = bmvbn;
+            loaded = 1;
+        }
+        if (ods2_sbm_block_bit_free(bmblk, bit % ODS2_SBM_BITS_PER_BLOCK))
+            free_bits++;
+    }
+
+    *free_out = free_bits * cluster;
+    result = SS__NORMAL;
+
+done:
+    if (bmhdr) exec_free(bmhdr);
+    if (bmblk) exec_free(bmblk);
+    return result;
+}
+#endif /* OVMX_ODS2_KERNEL */
+
+/*
+ * VMS_IOCTL_GETVOL - $GETDVI for the VOLUME items of a mounted disk (vms-e6f):
+ * mount state, ODS-2 volume label, size, cluster factor and free blocks, read
+ * from the executive-global mounted-volume table (never a per-process fake --
+ * every process on the node reaches this SAME row, CLAUDE.md Rule 11 / INV-6).
+ * SHOW DEVICE (src/vmsdcl/dcl_cmd_show.c) is the reader.
+ *
+ * A unit that is not a mounted volume is reported honestly as mounted == 0 with
+ * SS$_NORMAL (it exists in the device table, it just is not mounted); nothing is
+ * invented for it. For a mounted volume the label/size/cluster come from the
+ * $MOUNT-time validated identity; freeblocks is counted live off BITMAP.SYS,
+ * and free_valid == 0 (with freeblocks unset) if that read fails, so the reader
+ * omits the free-block count rather than print a fabricated zero (Rule 10).
+ */
+long vms_ioctl_acp_getvol(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_getvol_args args;
+    struct vms_acp_volume *vol;
+    char devnam[VMS_DEVNAM_SIZE];
+    char volname[13];
+    uint32_t status, volsize = 0, idx_lbn = 0, cluster = 0, transcnt = 0;
+    uint32_t backing_major = 0, backing_minor = 0;
+    int mounted = 0;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    status = acp_normalize_devnam(args.devnam, devnam, sizeof(devnam));
+    if (status != SS__NORMAL) {
+        args.status = status;               /* SS$_IVDEVNAM / SS$_BADPARAM */
+        goto out;
+    }
+
+    /* Snapshot the volume identity under the table lock, then release it before
+     * any block I/O (the free-block scan sleeps) -- the mount handler validates
+     * unlocked for the same reason. */
+    exec_lock(&vms_acp_vol_lock);
+    vol = acp_vol_find_locked(devnam);
+    if (vol) {
+        mounted       = 1;
+        volsize       = vol->volsize;
+        idx_lbn       = vol->idx_lbn;
+        cluster       = vol->cluster;
+        transcnt      = vol->refcnt;
+        backing_major = vol->backing_major;
+        backing_minor = vol->backing_minor;
+        memcpy(volname, vol->volname, sizeof(volname));
+        volname[sizeof(volname) - 1] = '\0';
+    }
+    exec_unlock(&vms_acp_vol_lock);
+
+    if (!mounted) {
+        args.mounted = 0;                   /* exists but not a mounted volume */
+        args.status  = SS__NORMAL;
+        goto out;
+    }
+
+    args.mounted  = 1;
+    args.volsize  = volsize;
+    args.cluster  = cluster;
+    args.transcnt = transcnt;
+    memcpy(args.volnam, volname, sizeof(volname));
+    args.volnam[VMS_GETVOL_LABEL_SIZE - 1] = '\0';
+
+#if defined(OVMX_ODS2_KERNEL)
+    {
+        uint32_t freeblk = 0;
+        if (acp_count_free_blocks(backing_major, backing_minor, idx_lbn,
+                                  volsize, cluster, &freeblk) == SS__NORMAL) {
+            args.freeblocks = freeblk;
+            args.free_valid = 1;
+        } else {
+            args.free_valid = 0;            /* bitmap unreadable -- do not fake 0 */
+        }
+    }
+#else
+    (void)backing_major; (void)backing_minor; (void)idx_lbn;
+    args.free_valid = 0;                     /* no codec: cannot read the bitmap */
+#endif
+    args.status = SS__NORMAL;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
     return 0;
 }
 

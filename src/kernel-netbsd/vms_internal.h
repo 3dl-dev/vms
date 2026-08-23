@@ -800,6 +800,7 @@ long vms_ioctl_acp_readvb(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_acpcontrol(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_acp_getvol(struct vms_proc *proc, unsigned long arg);  /* vms-e6f: $GETDVI volume items */
 /*
  * VMS_IOCTL_DISK_RESOLVE handler (rd vms-f60) -- DEFINED in the quarantined
  * vms_blockdev_netbsd.c, NOT in the shared src/kernel-core/vms_devtab.c, whose

@@ -3193,6 +3193,28 @@ static int evax_rank(const char *n)
 }
 static int evax_is_nobits(const char *n) { return !strcmp(n, "$BSS$"); }
 
+/* A DWARF/DST DEBUG psect — NON-runtime debug information the GNU vms-alpha back
+ * end emits as allocatable psects (`debug_frame`, `debug_info`, `debug_abbrev`,
+ * `debug_line`, `debug_loclists`, `debug_str`, ...; the port cc1 emits these even
+ * under -g0 on this toolchain). They are NOT part of the loaded image and MUST be
+ * excluded from placement and relocation: a debug section carries the standard
+ * intra-DWARF 32-bit section-relative REFLONGs (a debug_* offset into another
+ * debug_* section), which are NOT load-bias fixups and cannot be represented by a
+ * .vms$rel 8-byte biased slot — placing them wrongly trips evax_apply_reloc's
+ * "REFLONG to a placed section" guard. Every real linker drops non-SHF_ALLOC
+ * debug sections from the runtime image; do the same here, keyed on the psect
+ * name (the vms-alpha DWARF psects share $LINK$'s flag bits, so name is the
+ * reliable discriminator). $DST / .vmsdebug (VMS DST) are matched defensively —
+ * DST normally arrives as EDBG *records* (skipped by evax_read) but a psect-form
+ * DST is debug too. (vms-a90f: whole-archiving a real alpha-dec-vms libgcc.a.) */
+static int evax_is_debug(const char *n)
+{
+    return strncmp(n, "debug_", 6) == 0 ||
+           strncmp(n, ".debug", 6) == 0 ||
+           strncmp(n, ".vmsdebug", 9) == 0 ||
+           strncmp(n, "$DST", 4) == 0;
+}
+
 /* Resolve a symbol NAME across all inputs to its defining symbol. Returns the
  * defining input index + symbol, or -1 if undefined. */
 static int evax_find_sym(struct evax_input *in, int nin, const char *name,
@@ -3582,6 +3604,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
             for (int s = 0; s < in[i].obj.nsec; s++) {
                 struct evax_section *sec = &in[i].obj.sec[s];
                 if (evax_rank(sec->name) != rank || sec->alloc == 0) continue;
+                if (evax_is_debug(sec->name)) continue;   /* non-runtime debug psect */
                 /* find/create the output section for this name */
                 int oi = -1;
                 for (int k = 0; k < nos; k++) if (!strcmp(osec[k].name, sec->name)) { oi = k; break; }
@@ -3600,6 +3623,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
                 for (int s = 0; s < in[i].obj.nsec; s++) {
                     struct evax_section *sec = &in[i].obj.sec[s];
                     if (strcmp(sec->name, osec[k].name) != 0 || sec->alloc == 0) continue;
+                    if (evax_is_debug(sec->name)) continue;   /* non-runtime debug psect */
                     uint64_t al = (uint64_t)1 << sec->align;
                     if (al < 1) al = 1;
                     cur = ALIGN_UP(cur, al);
@@ -3684,6 +3708,14 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
     uint64_t *rel_off = NULL; int nrel = 0, rel_cap = 0;
     for (int i = 0; i < nin; i++)
         for (int r = 0; r < in[i].obj.nreloc; r++) {
+            /* Relocations that live INSIDE a non-runtime debug psect are not
+             * applied — that psect was never placed (see evax_is_debug), so its
+             * intra-DWARF 32-bit offsets are not load-bias fixups and would
+             * otherwise trip the REFLONG-to-placed-section guard. */
+            int rps = in[i].obj.reloc[r].psect;
+            if (rps >= 0 && rps < in[i].obj.nsec &&
+                evax_is_debug(in[i].obj.sec[rps].name))
+                continue;
             enum evax_reloc_type t = in[i].obj.reloc[r].type;
             evax_apply_reloc(in, nin, i, &in[i].obj.reloc[r], allow_undef,
                              producers, np, &imp, &nimp, &imp_cap, &n_ximport,
@@ -3806,6 +3838,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         for (int s = 0; s < in[i].obj.nsec; s++) {
             struct evax_section *sec = &in[i].obj.sec[s];
             if (sec->alloc == 0 || evax_is_nobits(sec->name)) continue;
+            if (evax_is_debug(sec->name)) continue;   /* non-runtime debug psect, unplaced */
             uint64_t base = in[i].sec_base[s];
             if (base + sec->alloc > file_end) die("psect content past file image");
             if (sec->content) memcpy(img + base, sec->content, (size_t)sec->alloc);

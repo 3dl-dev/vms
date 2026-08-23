@@ -167,10 +167,37 @@ for my $o (@objs) {
 close $fh;
 AREOF
 
-if ls "${LIBGCC_BUILD}"/*.o >/dev/null 2>&1; then
-  # Byte-copy the compiled core objects into a System V no-index libgcc.a.
-  ( cd "${LIBGCC_BUILD}" && perl "$AR_NOINDEX" rc "${PREFIX}/lib/libgcc.a" ./*.o )
-  echo "== libgcc.a hand-assembled (System V no-index) at ${PREFIX}/lib/libgcc.a ($(cd "${LIBGCC_BUILD}" && ls *.o | wc -l) core objects; VMS-EH extras skipped) =="
+# WHICH objects belong in libgcc.a (vms-a90f): the compiler-runtime BUILTINS
+# only — NOT everything that happens to sit in the libgcc build dir. gcc packages
+# the profiling objects (`_gcov*`) into a SEPARATE libgcov.a and the startup
+# objects (`crtbegin.o`/`crtbeginS.o`/`crtend.o`/`crtendS.o`) as standalone crt
+# files installed beside the compiler; NEITHER is ever a member of libgcc.a. The
+# old blind `*.o` glob wrongly swept both in — and the crt objects carry a REFLONG
+# self-reference into a placed constructor/frame table that LINK.EXE's EVAX path
+# (a 32-bit slot cannot hold a 64-bit load-biased address) rightly refuses. So use
+# gcc's OWN member list: the `make`-built libgcc.a (an LBR the cross ar can list)
+# names exactly the builtins gcc puts in libgcc.a. If make produced it, byte-copy
+# that member set; otherwise fall back to a glob that excludes the gcov/crt objects
+# that are definitionally not libgcc.a members.
+MAKE_LIBGCC="${LIBGCC_BUILD}/libgcc.a"
+LGOBJS=""
+if [ -f "$MAKE_LIBGCC" ] && "${TARGET}-ar" t "$MAKE_LIBGCC" >/tmp/lgmembers.txt 2>/dev/null \
+   && [ -s /tmp/lgmembers.txt ]; then
+  echo "== libgcc.a member set taken from gcc's own make-built libgcc.a ($(wc -l </tmp/lgmembers.txt) members) =="
+  while read -r m; do [ -f "${LIBGCC_BUILD}/$m" ] && LGOBJS="$LGOBJS ${LIBGCC_BUILD}/$m"; done < /tmp/lgmembers.txt
+else
+  echo "== make did not leave a listable libgcc.a; globbing builtins (excluding gcov/crt) =="
+  for o in "${LIBGCC_BUILD}"/*.o; do
+    b=$(basename "$o")
+    case "$b" in _gcov*|crtbegin*.o|crtend*.o) continue;; esac
+    LGOBJS="$LGOBJS $o"
+  done
+fi
+
+if [ -n "$LGOBJS" ]; then
+  # shellcheck disable=SC2086
+  perl "$AR_NOINDEX" rc "${PREFIX}/lib/libgcc.a" $LGOBJS
+  echo "== libgcc.a hand-assembled (System V no-index) at ${PREFIX}/lib/libgcc.a ($(echo $LGOBJS | wc -w) builtin objects; gcov/crt excluded, VMS-EH extras skipped) =="
   # Sanity: it must be a System V ar (`!<arch>`), the container LINK.EXE walks.
   head -c 8 "${PREFIX}/lib/libgcc.a" | grep -q '!<arch>' \
     && echo "== libgcc.a is a System V ar container (LINK.EXE-readable) ==" \

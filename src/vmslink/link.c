@@ -3527,7 +3527,17 @@ static void emit_evax_image(struct evax_input *in, int nin,
 
     /* ---- Layout: merge same-named psects across objects, identity-mapped
      * (file offset == image vaddr) so a section's bytes sit at their vaddr. --- */
-    uint64_t hdr_end = ALIGN_UP(sizeof(Elf64_Ehdr) + sizeof(Elf64_Phdr), 16);
+    /* GAP1 (vms-e0c): make the Alpha .EXE kernel-activatable — emit PT_PHDR +
+     * PT_INTERP=IMGACT.EXE + PT_LOAD (mirroring the ELF exec path), so the
+     * kernel invokes IMGACT (which fills .vms$imp cross-image cells and re-biases
+     * .vms$rel). Without PT_INTERP the kernel maps the image but never runs
+     * IMGACT, leaving the import cells zero -> SIGILL on first cross-image call.
+     * The interp path string lives in the header area, ahead of the psects. */
+    const int      nph        = 3;   /* PT_PHDR, PT_INTERP, PT_LOAD */
+    const uint64_t off_ph     = sizeof(Elf64_Ehdr);
+    const uint64_t off_interp = ALIGN_UP(off_ph + (uint64_t)nph * sizeof(Elf64_Phdr), 16);
+    const uint64_t interp_sz  = strlen(IMGACT_INTERP) + 1;
+    uint64_t hdr_end = ALIGN_UP(off_interp + interp_sz, 16);
     uint64_t cur = hdr_end;
 
     /* Output sections we emit headers for: one per distinct (rank-ordered) psect
@@ -3680,20 +3690,31 @@ static void emit_evax_image(struct evax_input *in, int nin,
     eh->e_machine = EM_ALPHA;
     eh->e_version = EV_CURRENT;
     eh->e_entry   = transfer_va;
-    eh->e_phoff   = sizeof(Elf64_Ehdr);
+    eh->e_phoff   = off_ph;
     eh->e_shoff   = off_shdr;
     eh->e_ehsize  = sizeof(Elf64_Ehdr);
     eh->e_phentsize = sizeof(Elf64_Phdr);
-    eh->e_phnum   = 1;
+    eh->e_phnum   = (Elf64_Half)nph;
     eh->e_shentsize = sizeof(Elf64_Shdr);
     eh->e_shnum   = nshdr;
     eh->e_shstrndx = nshdr - 1;
 
-    /* One PT_LOAD over the whole image (RWX — first light; refinement later). */
-    Elf64_Phdr *ph = (Elf64_Phdr *)(img + sizeof(Elf64_Ehdr));
-    ph->p_type = PT_LOAD; ph->p_flags = PF_R | PF_W | PF_X;
-    ph->p_offset = 0; ph->p_vaddr = 0; ph->p_paddr = 0;
-    ph->p_filesz = file_end; ph->p_memsz = mem_end; ph->p_align = 0x1000;
+    /* PT_PHDR (so IMGACT derives the load bias from the phdr table) +
+     * PT_INTERP=IMGACT.EXE (so the kernel activates the image via IMGACT) + one
+     * PT_LOAD over the whole image (RWX — first light). Mirrors the ELF exec
+     * path. (vms-e0c) */
+    Elf64_Phdr *ph = (Elf64_Phdr *)(img + off_ph);
+    ph[0].p_type = PT_PHDR; ph[0].p_flags = PF_R;
+    ph[0].p_offset = off_ph; ph[0].p_vaddr = off_ph; ph[0].p_paddr = off_ph;
+    ph[0].p_filesz = (uint64_t)nph * sizeof(Elf64_Phdr);
+    ph[0].p_memsz  = ph[0].p_filesz; ph[0].p_align = 8;
+    ph[1].p_type = PT_INTERP; ph[1].p_flags = PF_R;
+    ph[1].p_offset = off_interp; ph[1].p_vaddr = off_interp; ph[1].p_paddr = off_interp;
+    ph[1].p_filesz = interp_sz; ph[1].p_memsz = interp_sz; ph[1].p_align = 1;
+    ph[2].p_type = PT_LOAD; ph[2].p_flags = PF_R | PF_W | PF_X;
+    ph[2].p_offset = 0; ph[2].p_vaddr = 0; ph[2].p_paddr = 0;
+    ph[2].p_filesz = file_end; ph[2].p_memsz = mem_end; ph[2].p_align = 0x1000;
+    memcpy(img + off_interp, IMGACT_INTERP, interp_sz);
 
     /* Copy each psect's (relocated) content to its identity-mapped file offset. */
     for (int i = 0; i < nin; i++)

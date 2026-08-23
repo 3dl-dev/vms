@@ -556,7 +556,7 @@ def do_assemble_single(a, single_img, artifacts_dir, src_iso, new_a_sectors,
     rc, out = run(child,
                   "cd /mnt/dev && sh MAKEDEV ra0 && cd / && "
                   "ls -l /mnt/dev/ra0a /mnt/dev/ra0e && "
-                  "test -c /mnt/dev/ra0e",
+                  "test -b /mnt/dev/ra0e",   # ra0e is a BLOCK device (brw-)
                   cmd_timeout)
     if rc != 0:
         log("FAIL: could not MAKEDEV ra0 on the target (/mnt/dev/ra0e missing)")

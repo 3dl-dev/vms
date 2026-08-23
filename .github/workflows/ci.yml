@@ -127,6 +127,7 @@ jobs:
               - 'src/vmsfs/**'
               - 'src/vmsrms/**'
               - 'src/vmsdcl/**'
+              - 'src/ovmx_job_control/**'
               - 'src/vmsqueue/**'
               - 'third-party/tcc/**'
               - 'tools/**'
@@ -1483,6 +1484,76 @@ jobs:
           fi
           echo "Negative control confirmed: the gate correctly reddened (exit $rc) on a genuine version disagreement."
           exit 0
+
+  # -----------------------------------------------------------------------
+  # dcl-acceptance-e2e: BOOT-AND-RUN-COMMANDS DCL/SHOW acceptance gate.
+  #
+  # THE HOLE THIS CLOSES: release-acceptance-e2e above boots + logs in and
+  # then checks only PRODUCT SHOW PRODUCT's version -- it never runs the
+  # commands a user types. So V0.5-2 shipped with SHOW USERS empty, SHOW
+  # DEVICE not Mounted, SHOW QUOTA fabricated, and WRITE F$xxx() printing the
+  # literal, and the acceptance gate stayed green. This job boots the REAL
+  # runtime (the pre-mastered ODS-2 distribution disk baked into ovmx-boot),
+  # logs in SYSTEM/MANAGER, RUNS a battery of basic DCL/SHOW commands, and
+  # asserts VMS-faithful output for each, with a per-segment negative control
+  # (tests/qemu/test_dcl_acceptance_e2e.sh).
+  #
+  # WIRING (the vms-7a8 path-filter hole made explicit): this gate must gate a
+  # RELEASE CUT and must never be path-filtered away on a docs-only commit,
+  # yet must not redden every unrelated PR.
+  #   - On any NON-PR event (push to main, merge_group, the release-verify
+  #     workflow_dispatch, schedule) it runs unconditionally -- so a release
+  #     cut and the pre-merge full-run always include it, even a docs-only
+  #     release commit. This is the "a release cut cannot pass without these
+  #     assertions green" requirement.
+  #   - On a PR it runs ONLY when the change touches the DCL/RTL surface
+  #     (needs.changes.outputs.toolchain, which covers src/vmsdcl/**) or the
+  #     executive (needs.changes.outputs.kernel, which covers src/kernel*/**,
+  #     src/libvms/syssvc/**, src/libvmssys/vms_kif.*, and tests/qemu/**) --
+  #     so the fix PRs get direct feedback and unrelated PRs are never
+  #     reddened.
+  #
+  # EXPECTED TO BE RED until the in-flight command fixes land. It asserts the
+  # CORRECT behavior and must NOT be weakened to pass now; it is the gate that
+  # blocks a broken V0.5-3 cut and goes green only as the fixes land. A SKIP
+  # (77) is treated as a hard failure so it can never silently no-op.
+  # -----------------------------------------------------------------------
+  dcl-acceptance-e2e:
+    name: DCL/SHOW acceptance gate — boot, run the commands a user types, assert VMS-faithful output
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.kernel == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image (qemu tooling + the pre-mastered distribution disk)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: DCL/SHOW acceptance gate — boot, log in, run the battery, assert VMS-faithful output
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_dcl_acceptance_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: dcl_acceptance_e2e SKIPPED in CI — this gate must actually boot and run the commands, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
 
   # -----------------------------------------------------------------------
   # cut-release-vax-gate (rd vms-ca5, epic vms-f10; "R2 release parity",

@@ -136,6 +136,60 @@ int main(void)
             snprintf(loginout_path, sizeof(loginout_path), "%s", staged);
     }
 
+    /*
+     * ESTABLISH JOB_CONTROL'S SYSTEM IDENTITY IN THE EXECUTIVE (vms-d31d).
+     *
+     * JOB_CONTROL is a SYSTEM-owned detached process, and every login session
+     * it creates below inherits ITS executive identity via
+     * vms_kif_register_continue() (the child's line, ~below). LOGINOUT then has
+     * to read the World-denied SYS$SYSTEM:SYSUAF.DAT (fh2_fileprot 0xFF88;
+     * acp_check_access() in src/kernel-core/vmsfs_acp.c grants that read only to
+     * a caller in the SYSTEM protection category -- UIC group <= MAXSYSGROUP, or
+     * SYSPRV/BYPASS/READALL). So JOB_CONTROL MUST hold a system identity, or the
+     * login it spawns is refused its own authorization file (%RMS-E-PRV,
+     * surfacing as LOGINOUT's "User authorization failure").
+     *
+     * WHY THIS CALL, AND WHY $CREPRC DID NOT ALREADY DO IT. JOB_CONTROL is
+     * created by SYS$STARTUP:JOB_CONTROL_STARTUP.COM's
+     * RUN/DETACHED/UIC=[1,4]/PRIVILEGES=(...), and vms-d31d's $CREPRC stamps a
+     * created process's UIC/privileges onto its executive row from the CREATOR's
+     * identity (src/libvms/syssvc/sys_process.c). But that stamp is gated on the
+     * created process inheriting an executive USER NAME, and the boot procedure
+     * that issues the RUN/DETACHED (the STARTUP/STDRV DCL) has none on its
+     * executive row -- so the stamp is skipped and JOB_CONTROL registers with
+     * the fresh, credential-derived seed (VMS_PRV_M_ENFORCED|DEFAULT: SETPRV but
+     * NOT SYSPRV/BYPASS, measured cur=0x13c00f on VAX). On x86_64 that seed
+     * lands at UIC group 0 (root), which is <= MAXSYSGROUP and reads SYSUAF by
+     * luck of the environment -- the root->group-0 crutch this program is
+     * excising -- so the gap is invisible there. On NetBSD/VAX the seed is a
+     * non-system group and the read is denied: the crutch was the only thing
+     * making x86_64 login work, and VAX has no crutch.
+     *
+     * vms_ioctl_establish_system() (src/kernel-core/vms_proctab.c) stamps the
+     * fixed SYSTEM identity -- UIC [1,4], the enforced SYSTEM privilege set,
+     * user name "SYSTEM" -- and is GATED on the caller's real host privilege
+     * (exec_current_is_privileged()); it is the same executive primitive
+     * PROVISION.EXE uses to become SYSTEM without a SYSUAF read. JOB_CONTROL
+     * genuinely holds that host privilege (it registered with the enforced set),
+     * so this is a privilege-checked establishment of a real system identity,
+     * NOT a blanket grant -- and it makes the AUTHENTIC identity load-bearing on
+     * every substrate rather than the group-0 crutch.
+     *
+     * INV-6 / fail-honest: if the executive refuses (no host privilege) or is
+     * absent, JOB_CONTROL is left non-system and the SYSUAF read then fails
+     * honestly, exactly as it does today -- nothing here fabricates the
+     * identity. The status is checked and a diagnostic printed so a regression
+     * is never silent (the swallowed-privilege-error class this item names).
+     */
+    {
+        uint32_t est = vms_kif_establish_system();
+        if (!(est & 1))
+            fprintf(stderr,
+                    "%%JBC-W-NOSYSID, JOB_CONTROL could not establish its "
+                    "SYSTEM identity (status %08X); console logins will be "
+                    "refused SYS$SYSTEM:SYSUAF.DAT\n", (unsigned)est);
+    }
+
     int console_interactive = isatty(STDIN_FILENO);
     int consecutive_failures = 0;
 

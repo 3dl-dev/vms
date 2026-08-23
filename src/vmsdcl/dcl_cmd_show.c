@@ -17,6 +17,7 @@
 #include <pwd.h>
 #include <grp.h>
 #include <limits.h>
+#include <fnmatch.h>   /* SHOW SYMBOL wildcard matching (vms-9344c) */
 /* No <mntent.h>: this file reads /proc/{mounts,meminfo,swaps} by hand with
  * fopen/fgets and references no mntent symbol. The include was vestigial and
  * absent from the NetBSD/vax sysroot (netbsd-vax cross gate, vms-1cb2). */
@@ -43,6 +44,7 @@
 #include "vmsqueue.h"
 #include "descrip.h"
 #include "jpidef.h"
+#include "dcdef.h"       /* DC$_DISK / DC$_TERM -- SHOW DEVICE groups by class (vms-e6f) */
 /* The kernel-interface client: SHOW SYSTEM enumerates the executive process
  * table through it, and SHOW DEVICE reads the executive's device table
  * through it (vms-fb9). This is the same client src/libvms's system
@@ -1323,6 +1325,34 @@ static int show_global_sym_cb(const char *name, const char *value,
 }
 
 /*
+ * Wildcard SHOW SYMBOL callback (vms-9344c). Prints only the symbols whose
+ * name matches the caller's pattern, in the scope-appropriate form (local
+ * uses "=", global uses "=="). The match count lets the command emit the
+ * VMS NOLCL error when a wildcard matched nothing, mirroring the literal
+ * lookup path.
+ */
+struct sym_wild_ctx {
+    const char *pattern;   /* fnmatch pattern (VMS % already mapped to ?) */
+    int         count;     /* symbols printed so far */
+};
+
+static int show_wild_sym_cb(const char *name, const char *value,
+                            int scope, void *vctx)
+{
+    struct sym_wild_ctx *wc = (struct sym_wild_ctx *)vctx;
+    /* DCL symbol names are case-insensitive; FNM_CASEFOLD matches regardless
+     * of the stored case, and _GNU_SOURCE is defined project-wide. */
+    if (fnmatch(wc->pattern, name, FNM_CASEFOLD) != 0)
+        return 0;
+    if (scope == DCL_SYM_GLOBAL)
+        printf("  %s == \"%s\"\n", name, value);
+    else
+        printf("  %s = \"%s\"\n", name, value);
+    wc->count++;
+    return 0;
+}
+
+/*
  * SHOW SYMBOL - Display symbol value(s).
  */
 static int cmd_show_symbol(struct dcl_command *cmd)
@@ -1330,6 +1360,44 @@ static int cmd_show_symbol(struct dcl_command *cmd)
     if (cmd->param_count >= 2) {
         /* SHOW SYMBOL specific-name */
         const char *name = cmd->params[1];
+
+        /*
+         * A name carrying a wildcard (* or %) is a PATTERN, not a literal
+         * symbol name (vms-9344c). VMS matches it against the symbol
+         * table(s), so "SHOW SYMBOL *" lists every local symbol rather than
+         * failing NOLCL on a symbol literally named "*". By default the
+         * search is the LOCAL table (VMS DCL Dictionary, SHOW SYMBOL);
+         * /GLOBAL selects the global table, /ALL (or /LOCAL/GLOBAL) both.
+         */
+        if (strpbrk(name, "*%")) {
+            /* Map the VMS pattern onto an fnmatch pattern: VMS "%" (a single
+             * character) is fnmatch "?"; VMS "*" is already fnmatch "*". */
+            char pat[256];
+            size_t pi;
+            for (pi = 0; pi + 1 < sizeof(pat) && name[pi]; pi++)
+                pat[pi] = (name[pi] == '%') ? '?' : name[pi];
+            pat[pi] = '\0';
+
+            int want_global = dcl_has_qualifier(cmd, "GLOBAL");
+            int want_local  = dcl_has_qualifier(cmd, "LOCAL");
+            int want_all    = dcl_has_qualifier(cmd, "ALL");
+            int do_local  = want_all || want_local || !want_global;
+            int do_global = want_all || want_global;
+
+            struct sym_wild_ctx wc = { pat, 0 };
+            if (do_local)
+                dcl_sym_enumerate(DCL_SYM_LOCAL, show_wild_sym_cb, &wc);
+            if (do_global)
+                dcl_sym_enumerate(DCL_SYM_GLOBAL, show_wild_sym_cb, &wc);
+
+            if (wc.count == 0) {
+                dcl_error("DCL", 0, "NOLCL",
+                          "no symbol \"%s\" found", name);
+                return SS$_NOLOGNAM;
+            }
+            return SS$_NORMAL;
+        }
+
         const char *value = dcl_sym_get(name);
         if (value) {
             /* Uppercase symbol name for display */
@@ -1478,6 +1546,104 @@ static void show_device_row(const struct vms_devinfo *info, int *rows)
 }
 
 /*
+ * SHOW DEVICE for a DISK (vms-e6f). A disk row carries what a terminal row
+ * cannot: the mount state, the mounted volume's LABEL, its FREE-block count,
+ * the transaction count and the mount count. Those are the ACP's, not the base
+ * device table's -- read from the executive-global mounted-volume table through
+ * vms_kif_getvol() (VMS_IOCTL_GETVOL), so every process on the node sees the
+ * SAME mount state and the SAME label, never a per-process fake (CLAUDE.md
+ * Rule 11 / INV-6). A disk that is not mounted reads "Online" with the volume
+ * columns blank, exactly as an idle disk does on VMS.
+ *
+ * FORMAT provenance (CLAUDE.md Rule 8). Unlike the TERMINAL row above -- whose
+ * exact byte columns are oracle-pinned to docs/oracle/vax73-terminal-device.md --
+ * this project has no lab CAPTURE of a disk SHOW DEVICES listing (that oracle
+ * explicitly did NOT measure the disk case: "the oracle's disks report Mounted"
+ * is noted as *not claimed*). The COLUMN SET and their headings (Device Name,
+ * Device Status, Error Count, Volume Label, Free Blocks, Trans Count, Mnt Cnt)
+ * are the ones the public OpenVMS DCL Dictionary documents for SHOW DEVICES/D,
+ * and the widths here are chosen to reproduce that recognizable layout. The
+ * VALUES are all genuine executive/ACP readings -- nothing in this row is
+ * fabricated. A follow-up may pin the exact widths to a lab capture; the
+ * displayed state is already the real one.
+ *
+ * One shared format string for the two header lines AND the data row so the
+ * columns cannot drift apart; numeric fields are pre-formatted to strings so
+ * the same all-%s template renders both.
+ */
+#define DISK_ROW_FMT "%-24s%-11s%8s  %-13s%9s %6s %4s\n"
+
+static void show_device_disk_row(const struct vms_devinfo *info,
+                                 const struct vms_getvol_args *vol, int *rows)
+{
+    char errbuf[16], freebuf[16], transbuf[16], mntbuf[16];
+    const char *status, *label;
+
+    if (*rows == 0) {
+        printf(DISK_ROW_FMT, "Device", "Device", "Error",
+               "Volume", "Free", "Trans", "Mnt");
+        printf(DISK_ROW_FMT, " Name", " Status", "Count",
+               "  Label", "Blocks", "Count", "Cnt");
+    }
+
+    snprintf(errbuf, sizeof(errbuf), "%u", info->errcnt);
+
+    if (vol && vol->mounted) {
+        status = "Mounted";
+        label  = vol->volnam;
+        /* Free blocks: the genuine bitmap reading, or blank when the bitmap
+         * could not be read this call -- never a fabricated "0" (Rule 10). */
+        if (vol->free_valid)
+            snprintf(freebuf, sizeof(freebuf), "%u", vol->freeblocks);
+        else
+            freebuf[0] = '\0';
+        snprintf(transbuf, sizeof(transbuf), "%u", vol->transcnt);
+        /* Mnt Cnt: the unit is in the mounted-volume table exactly once on this
+         * node -- a genuine count of one, not a placeholder. */
+        snprintf(mntbuf, sizeof(mntbuf), "%u", 1u);
+    } else {
+        status     = info->allocated ? "Online alloc" : "Online";
+        label      = "";
+        freebuf[0] = transbuf[0] = mntbuf[0] = '\0';
+    }
+
+    printf(DISK_ROW_FMT, info->devnam, status, errbuf, label,
+           freebuf, transbuf, mntbuf);
+    (*rows)++;
+}
+
+/*
+ * SHOW DEVICE/FULL for a DISK (vms-e6f). The public OpenVMS DCL Dictionary
+ * documents SHOW DEVICE/FULL for a mounted disk as reporting the volume detail:
+ * volume label, cluster size, free and maximum blocks, transaction count and
+ * error/operation counts. Only fields OVMX can source from the REAL executive/
+ * ACP state are printed; a field with no genuine source is OMITTED, never
+ * fabricated (Rule 10). Device TYPE is not printed because the executive records
+ * it as Unknown for these units (VMS_DT_UNKNOWN) and inventing a model would be
+ * the illegal third answer.
+ */
+static void show_device_disk_full(const struct vms_devinfo *info,
+                                  const struct vms_getvol_args *vol)
+{
+    printf("\nDisk %s, is online%s.\n\n", info->devnam,
+           (vol && vol->mounted) ? ", mounted" : "");
+
+    printf("    Error count            %10u    Operations completed   %10llu\n",
+           info->errcnt, (unsigned long long)info->opcnt);
+
+    if (vol && vol->mounted) {
+        printf("    Volume label           %-10s    Cluster size           %10u\n",
+               vol->volnam, vol->cluster);
+        if (vol->free_valid)
+            printf("    Free blocks            %10u    Maximum blocks         %10u\n",
+                   vol->freeblocks, vol->volsize);
+        else
+            printf("    Maximum blocks         %10u\n", vol->volsize);
+        printf("    Transaction count      %10u\n", vol->transcnt);
+    }
+}
+
+/*
  * DELETED (vms-fb9 r5): show_device_exec_failed() used to print an
  * invented "%OVMX-F-EXECDEV, the executive did not answer" for this
  * function's default: branches. That was the illegal third answer under
@@ -1616,6 +1782,14 @@ static int cmd_show_device(struct dcl_command *cmd)
      */
     (void)vms_kif_open();
 
+    /*
+     * /FULL (vms-e6f): a disk reports its full volume detail (label, cluster
+     * size, free/maximum blocks, transaction count). The brief listing carries
+     * the mount state + label + free blocks. Both source their VALUES from the
+     * executive/ACP, never a fabricated string (INV-6).
+     */
+    const int full = dcl_has_qualifier(cmd, "FULL");
+
     struct vms_devinfo info;
     int rows = 0;
     uint32_t status;
@@ -1626,7 +1800,24 @@ static int cmd_show_device(struct dcl_command *cmd)
         switch (status) {
         case SS$_NORMAL:
             info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
-            show_device_row(&info, &rows);
+            if (info.devclass == DC$_DISK) {
+                /* A disk carries mount/volume state the base device table does
+                 * not -- read it from the ACP mounted-volume table. mounted
+                 * stays 0 (shows "Online") if the unit is not a mounted volume
+                 * or the query fails; nothing is fabricated. */
+                struct vms_getvol_args vol;
+                memset(&vol, 0, sizeof(vol));
+                vms_kif_getvol(info.devnam, &vol);
+                if (full)
+                    show_device_disk_full(&info, &vol);
+                else
+                    show_device_disk_row(&info, &vol, &rows);
+            } else {
+                /* Non-disk (the console terminal): the oracle-pinned brief row.
+                 * Terminal /FULL is a separate rung (oracle section 5) and is
+                 * not rendered here; the brief row is printed either way. */
+                show_device_row(&info, &rows);
+            }
             return SS$_NORMAL;
         case SS$_IVDEVNAM:
             /* Oracle section 9, from VMS's own message facility:
@@ -1648,10 +1839,36 @@ static int cmd_show_device(struct dcl_command *cmd)
         }
     }
 
+    /*
+     * A bare SHOW DEVICES groups the listing BY DEVICE CLASS, the way VMS does:
+     * the disks (with their volume/mount columns) in one section, then the
+     * terminals in another. Two scans over the executive device table, each
+     * filtering to one class, keep the two column layouts from interleaving --
+     * a disk row and a terminal row have different headers and cannot share one.
+     */
     uint32_t index = 0;
+    int disk_rows = 0;
 
     while ((status = vms_kif_devscan(&index, &info)) == SS$_NORMAL) {
         info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+        if (info.devclass != DC$_DISK)
+            continue;
+        struct vms_getvol_args vol;
+        memset(&vol, 0, sizeof(vol));
+        vms_kif_getvol(info.devnam, &vol);
+        if (full)
+            show_device_disk_full(&info, &vol);
+        else
+            show_device_disk_row(&info, &vol, &disk_rows);
+    }
+    if (status != SS$_NOMOREDEV)
+        return status;
+
+    index = 0;
+    while ((status = vms_kif_devscan(&index, &info)) == SS$_NORMAL) {
+        info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+        if (info.devclass == DC$_DISK)
+            continue;
         show_device_row(&info, &rows);
     }
 
@@ -1855,46 +2072,65 @@ static int cmd_show_memory(struct dcl_command *cmd)
 }
 
 /*
- * SHOW STATUS - Display last command exit status.
+ * SHOW STATUS - Display the current process's resource accounting (vms-df9c).
+ *
+ * WHAT IT USED TO BE. It printed the $STATUS condition value of the last
+ * command -- "Condition value: %X...", "Message: ...". That is what F$STATUS
+ * / SHOW SYMBOL $STATUS report, NOT what VMS SHOW STATUS reports. On VMS,
+ * SHOW STATUS displays the elapsed CPU time, I/O counts, page faults and
+ * working-set size of the calling process (OpenVMS DCL Dictionary, SHOW
+ * STATUS): "Status on dd-mmm-yyyy hh:mm:ss.cc   Elapsed CPU : d hh:mm:ss.cc"
+ * followed by the accounting columns.
+ *
+ * WHAT IT IS NOW. Every measured field is READ from the executive's $GETJPI
+ * row for this process (vms_kif_getjpi_self, the SAME source SHOW PROCESS and
+ * the Ctrl-T status line read -- src/vmsdcl/dcl_terminal.c). Nothing is
+ * fabricated: a field whose fields_valid bit is CLEAR is OMITTED, never shown
+ * as a plausible zero (INV-6, Rule 10). The executive sources CPU time
+ * (JPI$_CPUTIM), page faults (JPI$_PAGEFLTS) and resident pages (JPI$_PPGCNT);
+ * the VMS "Buff. I/O" / "Dir. I/O" / "Open files" / "Page file" columns have
+ * no faithful OVMX source today (Linux has no VMS direct/buffered I/O split --
+ * src/kernel/vms_ioctl.h carries JPI$_DIRIO/BUFIO structural, valid bit
+ * never set), so they are omitted rather than mislabelled. The header date is
+ * the real current time.
  */
 static int cmd_show_status(struct dcl_command *cmd)
 {
     (void)cmd;
-    struct dcl_context *ctx = dcl_get_context();
+
+    struct vms_procinfo info;
+    memset(&info, 0, sizeof(info));
+    uint32_t jst = vms_kif_getjpi_self(&info);
+    if (!(jst & 1))
+        return (int)jst;
+
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
 
-    uint32_t status = ctx->last_status ? ctx->last_status : SS$_NORMAL;
-
-    /* Determine severity and message */
-    int severity = status & 7;
-    const char *sev_str;
-    const char *fac_str = "SYSTEM";
-    const char *msg;
-
-    switch (severity) {
-    case 1: sev_str = "S"; break;
-    case 0: sev_str = "W"; break;
-    case 2: sev_str = "E"; break;
-    case 4: sev_str = "F"; break;
-    default: sev_str = "I"; break;
+    /* Header line: current time + Elapsed CPU (JPI$_CPUTIM, 10ms units). */
+    if (info.fields_valid & VMS_PI_V_CPUTIM) {
+        char cpu_str[24];
+        format_cputim_field(info.cputim, cpu_str, sizeof(cpu_str));
+        printf("  Status on %2d-%s-%04d %02d:%02d:%02d.%02d   Elapsed CPU : %s\n",
+               tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
+               tm.tm_hour, tm.tm_min, tm.tm_sec,
+               (int)(ts.tv_nsec / 10000000), cpu_str);
+    } else {
+        printf("  Status on %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+               tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
+               tm.tm_hour, tm.tm_min, tm.tm_sec,
+               (int)(ts.tv_nsec / 10000000));
     }
 
-    if (status == SS$_NORMAL)
-        msg = "normal successful completion";
-    else if (status == 0)
-        msg = "image exit";
-    else
-        msg = "condition";
-
-    printf("  Status at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
-           tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
-           tm.tm_hour, tm.tm_min, tm.tm_sec,
-           (int)(ts.tv_nsec / 10000000));
-    printf("  Condition value: %%X%08X\n", status);
-    printf("  Message: %%%s-%s-NORMAL, %s\n", fac_str, sev_str, msg);
+    /* Accounting columns -- each printed only when the executive sourced it.
+     * Buffered/Direct I/O, open files and page-file usage are deliberately
+     * absent: OVMX has no faithful source for them (see the header note). */
+    if (info.fields_valid & VMS_PI_V_PAGEFLTS)
+        printf("  Page faults : %10u\n", info.pageflts);
+    if (info.fields_valid & VMS_PI_V_PAGES)
+        printf("  Cur. ws.    : %10u\n", info.pages);
 
     return SS$_NORMAL;
 }
@@ -2679,13 +2915,37 @@ static int cmd_show_audit(struct dcl_command *cmd)
 }
 
 /*
- * SHOW QUOTA - Display disk quota for current user.
+ * SHOW QUOTA - Report the DISK quota entry for the current UIC (vms-73c4).
+ *
+ * WHAT IT USED TO BE. It printf'd a hardcoded "User [200,1] has 0 blocks
+ * used, 0 available" -- a fabricated UIC (it ignored the real current
+ * process entirely) and a fabricated measurement. That is the exact
+ * fabrication class INV-6 exists to kill: a command reporting invented state
+ * that passes a smoke test while telling the operator nothing true.
+ *
+ * WHAT IT IS NOW. A disk quota entry lives in a volume's QUOTA.SYS, charged
+ * per-UIC by the Files-11 ACP. OVMX has NO disk-quota facility: the ODS-2
+ * volumes it mounts carry no QUOTA.SYS (src/vmsfs/ods2/ods2_writer.c records
+ * QUOTA.SYS by-name lookups failing not-found on a clean volume), and the
+ * executive charges no per-UIC disk blocks. There is therefore no real quota
+ * entry to report, and the honest answer is the error VMS itself returns when
+ * the running UIC has no disk quota entry -- never an invented one (Rule 10).
+ *
+ * When OVMX grows a real disk-quota facility (a QUOTA.SYS the ACP maintains),
+ * this becomes a genuine $QIO/IO$_ACPCONTROL query keyed on the current
+ * process's real UIC.
+ *
+ * $STATUS stand-in: the numeric SS$_NODISKQUOTA value is not yet grounded to
+ * an oracle capture, so the returned condition uses the defined fatal
+ * SS$_ABORT; the human-visible message is the faithful %SYSTEM-F-NODISKQUOTA
+ * text. Grounding the numeric code is flagged for the conductor.
  */
 static int cmd_show_quota(struct dcl_command *cmd)
 {
     (void)cmd;
-    printf("  User [200,1] has 0 blocks used, 0 available\n");
-    return SS$_NORMAL;
+    dcl_error("SYSTEM", 4, "NODISKQUOTA",
+              "no disk quota entry for this UIC");
+    return SS$_ABORT;
 }
 
 /*
@@ -2932,7 +3192,12 @@ int cmd_show(struct dcl_command *cmd)
         return cmd_show_verify(cmd);
     if (dcl_match_command(subcmd, "PROTECTION", 3))
         return cmd_show_protection(cmd);
-    if (dcl_match_command(subcmd, "DEVICE", 3))
+    /* DEVICES is a VMS synonym for DEVICE (vms-9344a): both the singular and
+     * the plural, and every abbreviation of each, dispatch identically. The
+     * singular check catches DEV..DEVICE; the plural catches DEVICES (which
+     * is longer than "DEVICE" and so is rejected by the singular match). */
+    if (dcl_match_command(subcmd, "DEVICE", 3) ||
+        dcl_match_command(subcmd, "DEVICES", 3))
         return cmd_show_device(cmd);
     if (dcl_match_command(subcmd, "MEMORY", 3))
         return cmd_show_memory(cmd);

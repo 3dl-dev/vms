@@ -32,6 +32,26 @@
  * as vms-47d; this resolve accepts BOTH so it stays correct across that rename.
  * The unit map is a single entry today but a TABLE, so a future multi-unit VAX
  * extends without a rewrite (conductor caveat, vms-d5d).
+ *
+ * SINGLE-DISK DISCOVERY (vms-7b15). SYS$DISK (DKA0:) now carries a LIST of
+ * candidate backing devices, tried in order, first that OPENS wins:
+ *
+ *   1. /dev/ra1c  -- the two-disk layout: the ODS-2 volume is a WHOLE separate
+ *                    MSCP disk on rq1 (the original, unchanged path).
+ *   2. /dev/ra0e  -- the SINGLE-disk layout: the ODS-2 volume is a PARTITION
+ *                    ('e') of the SAME MSCP disk (rq0/ra0) that VMB booted the
+ *                    NetBSD root ('a') off of -- one disk that VMB boots AND
+ *                    that carries DKA0:, the foundation for a single browser-demo
+ *                    (PCjs) artifact.
+ *
+ * The order makes this ZERO-REGRESSION for the two-disk proof: when rq1 is
+ * attached, /dev/ra1c opens and ra0e is never reached, so the existing two-disk
+ * boot binds EXACTLY as before. In the single-disk boot rq1 is absent, so the
+ * /dev/ra1c open fails honestly (ENXIO, no such MSCP unit) and the resolve falls
+ * through to /dev/ra0e -- the ODS-2 partition on the boot disk. A candidate is
+ * bound ONLY if its real block-device open succeeds (INV-6 / Rule 9): an absent
+ * rq1 and an absent 'e' partition (size 0 -> ENXIO) both fail honestly, so
+ * nothing is ever invented for a device that is not there.
  */
 
 #include <sys/param.h>			/* __arraycount, makedev/major/minor */
@@ -96,23 +116,70 @@ long vms_ioctl_disk_resolve(struct vms_proc *proc, unsigned long arg);
 #define OVMX_ACP_MAX_DISKS	4	/* single unit today; table for future */
 #endif
 
+#ifndef OVMX_ACP_MAX_CANDIDATES
+#define OVMX_ACP_MAX_CANDIDATES	3	/* NULL-terminated backing candidates */
+#endif
+
 /*
- * VMS unit name -> native NetBSD block device path. Device-native (vms-47d):
+ * VMS unit name -> native NetBSD block device path(s). Device-native (vms-47d):
  * the name is a label, the path is the real device. Accept the current
  * placeholder DKA0: AND the correct MSCP name DUA0: so the resolve survives the
  * vms-47d rename either way.
+ *
+ * `devpaths' / `backings' are PARALLEL, NULL-terminated candidate lists tried in
+ * order (vms-7b15). DKA0: prefers the two-disk whole-disk /dev/ra1c and falls
+ * back to the single-disk ODS-2 PARTITION /dev/ra0e; see the file header for why
+ * this order is zero-regression for the two-disk proof.
  */
 static const struct ovmx_acp_unit {
 	const char *vmsname;		/* upcased, colon-stripped */
-	const char *devpath;
-	const char *backing;		/* native block-dev name (vms-f60 resolve) */
+	const char *devpaths[OVMX_ACP_MAX_CANDIDATES];	/* NULL-terminated */
+	const char *backings[OVMX_ACP_MAX_CANDIDATES];	/* parallel to devpaths */
 	int	    primary;		/* 1 = the name this unit is ENTERED under */
 } ovmx_acp_unitmap[] = {
-	{ "DKA0",   "/dev/ra1c", "ra1c", 1 },	/* placeholder name, pending vms-47d */
-	{ "DUA0",   "/dev/ra1c", "ra1c", 0 },	/* the real VMS-VAX MSCP name */
-	{ "DKA100", "/dev/ra2c", "ra2c", 1 },	/* 2nd MSCP disk = INITIALIZE target */
-	{ "DUA100", "/dev/ra2c", "ra2c", 0 },	/* its correct MSCP name */
+	/* DKA0:/DUA0: -- two-disk /dev/ra1c first (unchanged), single-disk
+	 * /dev/ra0e (the ODS-2 partition on the boot disk) as the fallback. */
+	{ "DKA0",   { "/dev/ra1c", "/dev/ra0e", NULL },
+		    { "ra1c",      "ra0e",      NULL }, 1 },
+	{ "DUA0",   { "/dev/ra1c", "/dev/ra0e", NULL },
+		    { "ra1c",      "ra0e",      NULL }, 0 },
+	/* DKA100:/DUA100: -- the 2nd MSCP disk = INITIALIZE target (rq2). */
+	{ "DKA100", { "/dev/ra2c", NULL }, { "ra2c", NULL }, 1 },
+	{ "DUA100", { "/dev/ra2c", NULL }, { "ra2c", NULL }, 0 },
 };
+
+/*
+ * ovmx_acp_open_candidate - try each NULL-terminated devpath candidate of a unit
+ * in order, returning the OPENED device vnode of the first that opens (and, via
+ * *which_out, the index so the caller can name the matching backing). Every
+ * candidate is a real vn_bdev_openpath() (FREAD|FWRITE), so an absent device
+ * (rq1 not attached, or an 'e' partition of size 0) fails honestly and the loop
+ * moves on -- nothing is bound for a device that is not there (INV-6 / Rule 9).
+ * Returns NULL with *which_out unspecified if NO candidate opens.
+ */
+static struct vnode *
+ovmx_acp_open_candidate(const struct ovmx_acp_unit *u, int *which_out)
+{
+	int c;
+
+	for (c = 0; c < OVMX_ACP_MAX_CANDIDATES && u->devpaths[c] != NULL; c++) {
+		struct pathbuf *pb;
+		struct vnode *devvp = NULL;
+		int error;
+
+		pb = pathbuf_create(u->devpaths[c]);
+		if (pb == NULL)
+			continue;
+		error = vn_bdev_openpath(pb, &devvp, curlwp);
+		pathbuf_destroy(pb);
+		if (error == 0 && devvp != NULL) {
+			if (which_out != NULL)
+				*which_out = c;
+			return devvp;	/* first candidate that opens wins */
+		}
+	}
+	return NULL;			/* no candidate present -- honest */
+}
 
 /*
  * WHY `primary' (rd vms-618). The map has FOUR rows but names only TWO disks:
@@ -202,10 +269,9 @@ vms_devtab_disk_backing(const char *devnam, uint32_t *major_out,
 			uint32_t *minor_out)
 {
 	char norm[16];
-	const char *devpath = NULL;
-	struct pathbuf *pb;
+	const struct ovmx_acp_unit *u = NULL;
 	struct vnode *devvp = NULL;
-	int i, error, slot;
+	int i, slot;
 
 	if (devnam == NULL || major_out == NULL || minor_out == NULL)
 		return SS__NOSUCHDEV;
@@ -214,11 +280,11 @@ vms_devtab_disk_backing(const char *devnam, uint32_t *major_out,
 
 	for (i = 0; i < (int)__arraycount(ovmx_acp_unitmap); i++) {
 		if (strcmp(norm, ovmx_acp_unitmap[i].vmsname) == 0) {
-			devpath = ovmx_acp_unitmap[i].devpath;
+			u = &ovmx_acp_unitmap[i];
 			break;
 		}
 	}
-	if (devpath == NULL)
+	if (u == NULL)
 		return SS__NOSUCHDEV;	/* unknown unit -- honest */
 
 	ovmx_acp_disk_init_once();
@@ -238,15 +304,12 @@ vms_devtab_disk_backing(const char *devnam, uint32_t *major_out,
 
 	/*
 	 * Open the block device by path ONCE, exactly as vmsfs_vfsops.c does
-	 * (vn_bdev_openpath, FREAD|FWRITE). devpath is a KERNEL constant, so
-	 * pathbuf_create (not pathbuf_copyin, which copies from userspace).
+	 * (vn_bdev_openpath, FREAD|FWRITE). The unit's devpaths are KERNEL
+	 * constants (pathbuf_create, not pathbuf_copyin) tried in order -- the
+	 * first that opens is SYS$DISK's backing (vms-7b15).
 	 */
-	pb = pathbuf_create(devpath);
-	if (pb == NULL)
-		return SS__NOSUCHDEV;
-	error = vn_bdev_openpath(pb, &devvp, curlwp);
-	pathbuf_destroy(pb);
-	if (error || devvp == NULL)
+	devvp = ovmx_acp_open_candidate(u, NULL);
+	if (devvp == NULL)
 		return SS__NOSUCHDEV;	/* device absent/unopenable -- honest */
 
 	mutex_enter(&ovmx_acp_disk_lk);
@@ -294,11 +357,9 @@ vms_devtab_disk_resolve(const char *devnam, char *backing, size_t backing_sz,
 			uint32_t *major_out, uint32_t *minor_out)
 {
 	char norm[16];
-	const char *devpath = NULL;
-	const char *backname = NULL;
-	struct pathbuf *pb;
+	const struct ovmx_acp_unit *u = NULL;
 	struct vnode *devvp = NULL;
-	int i, error;
+	int i, which = -1;
 
 	if (devnam == NULL || backing == NULL || backing_sz == 0 ||
 	    major_out == NULL || minor_out == NULL)
@@ -308,32 +369,28 @@ vms_devtab_disk_resolve(const char *devnam, char *backing, size_t backing_sz,
 
 	for (i = 0; i < (int)__arraycount(ovmx_acp_unitmap); i++) {
 		if (strcmp(norm, ovmx_acp_unitmap[i].vmsname) == 0) {
-			devpath  = ovmx_acp_unitmap[i].devpath;
-			backname = ovmx_acp_unitmap[i].backing;
+			u = &ovmx_acp_unitmap[i];
 			break;
 		}
 	}
-	if (devpath == NULL)
+	if (u == NULL)
 		return SS__NOSUCHDEV;	/* unknown unit -- honest */
 
 	/*
-	 * Open the block device by its KERNEL-constant path (pathbuf_create, not
-	 * pathbuf_copyin) ONLY to read its v_rdev, then close it right back. No
-	 * cache slot, no lock: this resolve owns nothing past return.
+	 * Open the first candidate block device that opens (vms-7b15), by its
+	 * KERNEL-constant path (pathbuf_create, not pathbuf_copyin), ONLY to read
+	 * its v_rdev, then close it right back. No cache slot, no lock: this
+	 * resolve owns nothing past return. `which' names the backing that won.
 	 */
-	pb = pathbuf_create(devpath);
-	if (pb == NULL)
-		return SS__NOSUCHDEV;
-	error = vn_bdev_openpath(pb, &devvp, curlwp);
-	pathbuf_destroy(pb);
-	if (error || devvp == NULL)
+	devvp = ovmx_acp_open_candidate(u, &which);
+	if (devvp == NULL || which < 0)
 		return SS__NOSUCHDEV;	/* device absent/unopenable -- honest */
 
 	*major_out = (uint32_t)major(devvp->v_rdev);
 	*minor_out = (uint32_t)minor(devvp->v_rdev);
 	(void)vn_close(devvp, FREAD | FWRITE, curlwp->l_cred);
 
-	strlcpy(backing, backname, backing_sz);
+	strlcpy(backing, u->backings[which], backing_sz);
 	return SS__NORMAL;
 }
 
@@ -409,9 +466,16 @@ vms_blockdev_netbsd_register_units(void)
 		if ((st & 1u) == 0) {
 			printf("vms: disk unit %s: no backing device (%s absent)"
 			    " -- not entered\n", ovmx_acp_unitmap[i].vmsname,
-			    ovmx_acp_unitmap[i].devpath);
+			    ovmx_acp_unitmap[i].devpaths[0]);
 			continue;	/* honest: no device, no unit */
 		}
+
+		/* Name the backing that won (vms-7b15): "ra1c" (two-disk) or
+		 * "ra0e" (single-disk ODS-2 partition on the boot disk). The
+		 * single-disk proof greps this line for evidence DKA0: bound to
+		 * a PARTITION of the boot disk, not a second disk. */
+		printf("vms: disk unit %s: -> %s\n",
+		    ovmx_acp_unitmap[i].vmsname, backing);
 
 		/* The table is keyed by the canonical physical form "DDCU:". */
 		strlcpy(devnam, ovmx_acp_unitmap[i].vmsname, sizeof(devnam));

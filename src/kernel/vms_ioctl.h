@@ -830,6 +830,49 @@ struct vms_diskresolve_args {
 #define VMS_IOCTL_DISK_RESOLVE _IOWR(VMS_IOC_MAGIC, 0x57, struct vms_diskresolve_args)
 
 /*
+ * $GETDVI for the VOLUME items of a mounted disk (vms-e6f). SHOW DEVICE's brief
+ * and /FULL listings report, for a mounted Files-11 disk, its mount state, the
+ * ODS-2 volume label, the volume size and the free-block count -- items that on
+ * real VMS come from $GETDVI (DVI$_MNT, DVI$_VOLNAM, DVI$_MAXBLOCK,
+ * DVI$_FREEBLOCKS, DVI$_CLUSTER). The base device table (struct vms_devinfo)
+ * carries none of these: they are the ACP's, held in the executive-global
+ * mounted-volume table a $MOUNT populates (src/kernel-core/vmsfs_acp.c). This
+ * ioctl reads THAT table -- so every process on the node sees the same mount
+ * state and the same label, never a per-process fake (CLAUDE.md Rule 11 / INV-6).
+ *
+ * A unit that is not a mounted ODS-2 volume returns SS$_NORMAL with mounted == 0
+ * (it is simply not mounted -- not an error, not a fabricated mount). The label,
+ * size, cluster factor and INDEXF geometry are the ones the executive VALIDATED
+ * and recorded at $MOUNT from the home block / SCB; freeblocks is counted, at
+ * call time, from the volume's BITMAP.SYS storage bitmap (the same bitmap the
+ * ACP allocator reads), so it is a genuine reading and never a stored guess.
+ * free_valid == 0 means the bitmap could not be read this call (a real I/O
+ * error) -- freeblocks is then unset and a reader prints no free-block count
+ * rather than the fabricated "0" (Rule 10).
+ *
+ * OVMX CONSTRUCT, labelled (CLAUDE.md Rule 8): OVMX reaches the executive over
+ * /dev/vms, not a byte-level $GETDVI itemlist, so this flat arg struct is an
+ * OVMX design choice. The DVI$_ items it carries and their MEANINGS are the
+ * public ones ($GETDVI in the VSI System Services Reference Manual); the
+ * VALUES are read from the genuine on-disk ODS-2 structures (the codec,
+ * src/vmsfs/ods2, validated against a real VAX volume).
+ */
+#define VMS_GETVOL_LABEL_SIZE 16
+struct vms_getvol_args {
+    char     devnam[VMS_DEVNAM_SIZE];   /* in: unit name, e.g. "DKA0:" */
+    uint32_t status;                    /* out: SS$_ status */
+    uint32_t mounted;                   /* out: 1 = a mounted ODS-2 volume */
+    uint32_t volsize;                   /* out: DVI$_MAXBLOCK, SCB volume size (blocks) */
+    uint32_t freeblocks;                /* out: DVI$_FREEBLOCKS (valid iff free_valid) */
+    uint32_t free_valid;                /* out: 1 = freeblocks was read this call */
+    uint32_t cluster;                   /* out: DVI$_CLUSTER, storage-bitmap cluster factor */
+    uint32_t transcnt;                  /* out: file-class channels assigned (Trans Count) */
+    char     volnam[VMS_GETVOL_LABEL_SIZE]; /* out: NUL-terminated ODS-2 volume label */
+};
+
+#define VMS_IOCTL_GETVOL _IOWR(VMS_IOC_MAGIC, 0x58, struct vms_getvol_args)
+
+/*
  * The kernel module and the userspace client compile these structures
  * separately, from this one header, and then pass them across the
  * /dev/vms boundary by raw address. If a field is ever reordered,
@@ -863,6 +906,8 @@ _Static_assert(sizeof(struct vms_alloc_args) == 24,
                "struct vms_alloc_args changed size -- $ALLOC/$DALLOC would decode at the wrong offsets");
 _Static_assert(sizeof(struct vms_diskresolve_args) == 48,
                "struct vms_diskresolve_args changed size -- disk unit resolution would decode at the wrong offsets");
+_Static_assert(sizeof(struct vms_getvol_args) == 60,
+               "struct vms_getvol_args changed size -- $GETDVI volume items would decode at the wrong offsets");
 
 _Static_assert(VMS_IOCTL_ASSIGN == 0xC0185650u,
                "VMS_IOCTL_ASSIGN encodes differently here than on the reference build");
@@ -880,6 +925,8 @@ _Static_assert(VMS_IOCTL_DALLOC == 0xC0185656u,
                "VMS_IOCTL_DALLOC encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_DISK_RESOLVE == 0xC0305657u,
                "VMS_IOCTL_DISK_RESOLVE encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_GETVOL == 0xC03C5658u,
+               "VMS_IOCTL_GETVOL encodes differently here than on the reference build");
 
 /* ================================================================
  * Process table (executive-resident PCB directory)

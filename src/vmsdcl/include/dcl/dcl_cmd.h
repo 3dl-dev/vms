@@ -194,6 +194,8 @@ extern int dcl_translate_logical(const char *name, char *result,
                                  size_t result_size);
 extern int dcl_eval_lexical(struct dcl_context *ctx, const char *expr,
                             char *result, size_t result_size);
+extern void dcl_eval_expr_string(struct dcl_context *ctx, const char *expr,
+                                 char *out, size_t outlen);
 extern int dcl_execute_line(const char *line);
 extern int dcl_execute_script(const char *filename, int argc, char **argv);
 extern int dcl_read_input(struct dcl_context *ctx, const char *prompt,

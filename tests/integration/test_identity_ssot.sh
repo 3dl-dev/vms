@@ -92,6 +92,35 @@ for f in "$SRC_ROOT/tools/vms_login.c" "$SRC_ROOT/src/vmsssh/vmssshd.c"; do
     fi
 done
 
+# --- 4. SYSKRNL os-release must track the product version -----------
+# distro/rootfs/etc/os-release is a hand-maintained static file (it is a
+# Linux SYSKRNL-layer surface copied verbatim by distro/Dockerfile.bootable,
+# not generated from the SSOT). Its own header requires VERSION_ID be kept
+# "in step with OVMX_PRODUCT_VERSION" -- but that by-hand step silently
+# lapsed: os-release sat at 0.3 across the whole V0.4/V0.5 line while the
+# product shipped V0.5-2 (vms-8328). Because no gate scanned this file, the
+# drift was invisible. This check closes that gap: VERSION_ID must equal
+# OVMX_PRODUCT_VERSION with the leading "V" stripped.
+OSREL="$SRC_ROOT/distro/rootfs/etc/os-release"
+if [ -f "$OSREL" ] && [ -f "$SRC_ROOT/$SSOT" ]; then
+    prod_ver=$(sed -n 's/^#define[[:space:]]\+OVMX_PRODUCT_VERSION[[:space:]]\+"\([^"]*\)".*/\1/p' \
+        "$SRC_ROOT/$SSOT")
+    want_id="${prod_ver#V}"          # strip the leading "V": V0.5-2 -> 0.5-2
+    got_id=$(sed -n 's/^VERSION_ID="\([^"]*\)".*/\1/p' "$OSREL")
+    if [ -z "$prod_ver" ]; then
+        echo "FAIL: could not read OVMX_PRODUCT_VERSION from $SSOT"
+        status=1
+    elif [ "$got_id" = "$want_id" ]; then
+        echo "  OK: os-release VERSION_ID ($got_id) tracks OVMX_PRODUCT_VERSION ($prod_ver)"
+    else
+        echo "FAIL: os-release VERSION_ID drifted from the identity SSOT"
+        echo "  os-release VERSION_ID=\"$got_id\"  (from $OSREL)"
+        echo "  expected \"$want_id\"  (OVMX_PRODUCT_VERSION=\"$prod_ver\", leading V stripped)"
+        echo "  -> bump VERSION/VERSION_ID in distro/rootfs/etc/os-release to match."
+        status=1
+    fi
+fi
+
 if [ "$status" -eq 0 ]; then
     echo "INV-1 identity SSOT gate: PASS"
 else

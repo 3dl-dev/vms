@@ -353,6 +353,42 @@ int dcl_directory_header_spec(const char *def, const char *spec,
     if (have_spec)
         vmsfs_parse_filespec(spec, &sparts);
 
+    /*
+     * When the argument names a DEVICE but NO directory (e.g. "SYS$UPDATE:"),
+     * and that device is a directory-bearing logical, the directory comes from
+     * the LOGICAL's own equivalence -- NOT from the current default directory.
+     * "DIRECTORY SYS$UPDATE:" must head "[SYSUPD]" (SYS$UPDATE -> SYS$SYSROOT:
+     * [SYSUPD]), not the default's "[SYSMGR]": a directory-bearing device
+     * logical supplies its own directory field, exactly as RMS $PARSE resolves
+     * it (VSI OpenVMS User's Manual, "Logical Names in File Specifications";
+     * clean-room, Rule 8). A plain physical device, or a logical whose
+     * equivalence carries no directory, keeps inheriting the default's
+     * directory (unchanged). Resolved once here for the header only; the ACP
+     * listing does its own full translation.
+     */
+    if (have_spec && sparts.has_device && sparts.device[0] &&
+        !sparts.has_directory) {
+        char equiv[256];
+        if (dcl_translate_logical(sparts.device, equiv, sizeof(equiv)) == 0) {
+            vmsfs_filespec_t eparts;
+            memset(&eparts, 0, sizeof(eparts));
+            if ($VMS_STATUS_SUCCESS(vmsfs_parse_filespec(equiv, &eparts)) &&
+                eparts.has_directory && eparts.directory[0]) {
+                /* Fold the logical's device + directory in as if the user had
+                 * typed them (the directory now wins over the default's). */
+                if (eparts.has_device && eparts.device[0]) {
+                    strncpy(sparts.device, eparts.device,
+                            sizeof(sparts.device) - 1);
+                    sparts.device[sizeof(sparts.device) - 1] = '\0';
+                }
+                strncpy(sparts.directory, eparts.directory,
+                        sizeof(sparts.directory) - 1);
+                sparts.directory[sizeof(sparts.directory) - 1] = '\0';
+                sparts.has_directory = 1;
+            }
+        }
+    }
+
     /* Device: from the argument if it named one, else the default's. */
     vmsfs_filespec_t out;
     memset(&out, 0, sizeof(out));

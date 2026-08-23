@@ -53,8 +53,16 @@ struct seed_acct {
 };
 
 static const struct seed_acct g_seed[] = {
-    { "SYSTEM",   1,   4,   "SYS$SYSDEVICE:[SYSMGR]",        "", "ALL",                     "MANAGER" },
-    { "OPERATOR", 1,   6,   "SYS$SYSDEVICE:[SYSMGR]",        "", "OPER,SYSPRV,TMPMBX,NETMBX", NULL     },
+    /* SYSTEM / OPERATOR log in to [SYSMGR] THROUGH the concealed rooted
+     * logical SYS$SYSROOT: (= SYS$SYSDEVICE:[SYS0.], SYS$SYSDEVICE:[SYS0.SYSCOMMON.]),
+     * exactly as the OpenVMS-shipped SYSUAF does (default device SYS$SYSROOT:,
+     * default directory [SYSMGR]). An UNROOTED "SYS$SYSDEVICE:[SYSMGR]" names a
+     * root-level [SYSMGR] that does not exist -- the real manager files live in
+     * the rooted [SYS0.SYSCOMMON.SYSMGR] -- so a freshly-logged-in SYSTEM's bare
+     * DIRECTORY found no files. SYS$SYSROOT:[SYSMGR] resolves through the search
+     * list to the populated common directory (same target as SYS$MANAGER:). */
+    { "SYSTEM",   1,   4,   "SYS$SYSROOT:[SYSMGR]",          "", "ALL",                     "MANAGER" },
+    { "OPERATOR", 1,   6,   "SYS$SYSROOT:[SYSMGR]",          "", "OPER,SYSPRV,TMPMBX,NETMBX", NULL     },
     { "DEFAULT",  128, 128, "SYS$SYSDEVICE:[USERS.DEFAULT]", "", "TMPMBX,NETMBX",           NULL     },
     { "GUEST",    128, 129, "SYS$SYSDEVICE:[USERS.GUEST]",   "", "TMPMBX",                  "GUEST"  },
     { "USER1",    128, 130, "SYS$SYSDEVICE:[USERS.USER1]",   "", "TMPMBX,NETMBX",           NULL     },

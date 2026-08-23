@@ -660,6 +660,106 @@ int cmd_read(struct dcl_command *cmd)
 }
 
 /*
+ * Evaluate a WRITE argument list into a single output string.
+ *
+ * VMS DCL WRITE takes an expression (or a comma-separated list of expressions)
+ * whose VALUE is written, e.g.
+ *   WRITE SYS$OUTPUT F$GETSYI("VERSION")
+ *   WRITE SYS$OUTPUT "ver is ''VER'"
+ *   WRITE SYS$OUTPUT "a", "b", F$TIME()
+ * Each comma-separated expression is evaluated through the SAME evaluator the
+ * `=` assignment right-hand side uses (dcl_eval_expr_string), and the resulting
+ * values are concatenated (VMS treats both `,` and `+` as concatenation in the
+ * WRITE argument list). String literals stay literal, F$xxx(...) lexical
+ * functions evaluate, and symbol / apostrophe substitution resolves. (vms-65f)
+ *
+ * `arglist` is the raw argument text AFTER the channel name (from raw_tail).
+ * Top-level commas (outside quotes and parentheses) separate the expressions.
+ */
+static void write_eval_arglist(struct dcl_context *ctx, const char *arglist,
+                               char *out, size_t outlen)
+{
+    out[0] = '\0';
+    size_t used = 0;
+
+    const char *p = arglist;
+    while (*p == ' ' || *p == '\t') p++;
+
+    while (*p) {
+        /* Find the end of this comma-separated segment, honoring quotes and
+         * parenthesis nesting so a comma inside F$xxx(a,b) or a quoted string
+         * does not split the list. */
+        const char *seg_start = p;
+        int depth = 0;
+        int in_quote = 0;
+        while (*p) {
+            char ch = *p;
+            if (in_quote) {
+                if (ch == '"') {
+                    if (*(p + 1) == '"') { p++; }  /* doubled quote */
+                    else in_quote = 0;
+                }
+            } else if (ch == '"') {
+                in_quote = 1;
+            } else if (ch == '(') {
+                depth++;
+            } else if (ch == ')') {
+                if (depth > 0) depth--;
+            } else if (ch == ',' && depth == 0) {
+                break;
+            }
+            p++;
+        }
+
+        /* Copy the raw segment out and trim surrounding whitespace. */
+        size_t seg_len = (size_t)(p - seg_start);
+        char seg[DCL_MAX_VALUE];
+        if (seg_len >= sizeof(seg)) seg_len = sizeof(seg) - 1;
+        memcpy(seg, seg_start, seg_len);
+        seg[seg_len] = '\0';
+        char *s = seg;
+        while (*s == ' ' || *s == '\t') s++;
+        size_t sl = strlen(s);
+        while (sl > 0 && (s[sl - 1] == ' ' || s[sl - 1] == '\t'))
+            s[--sl] = '\0';
+
+        /* Evaluate this expression and append its value. */
+        char val[DCL_MAX_VALUE];
+        val[0] = '\0';
+        if (*s)
+            dcl_eval_expr_string(ctx, s, val, sizeof(val));
+
+        size_t vl = strlen(val);
+        if (used + vl >= outlen) vl = (outlen > used) ? (outlen - used - 1) : 0;
+        memcpy(out + used, val, vl);
+        used += vl;
+        out[used] = '\0';
+
+        if (*p == ',') {
+            p++;
+            while (*p == ' ' || *p == '\t') p++;
+        }
+    }
+}
+
+/*
+ * Extract the WRITE argument text (everything after the channel name) from the
+ * raw command tail. raw_tail is e.g. `SYS$OUTPUT F$GETSYI("VERSION")`; this
+ * returns a pointer to the text after the first whitespace-delimited token.
+ * Returns NULL if there is no argument text after the channel.
+ */
+static const char *write_arg_tail(const char *raw_tail)
+{
+    if (!raw_tail) return NULL;
+    const char *p = raw_tail;
+    while (*p == ' ' || *p == '\t') p++;
+    /* skip the channel token */
+    while (*p && *p != ' ' && *p != '\t') p++;
+    while (*p == ' ' || *p == '\t') p++;
+    return (*p) ? p : NULL;
+}
+
+/*
  * WRITE - Write text to a file channel.
  */
 
@@ -674,6 +774,37 @@ int cmd_write(struct dcl_command *cmd)
     }
 
     const char *channel_name = cmd->params[0];
+
+    /* WRITE's argument list is an expression (or comma-separated list of
+     * expressions) whose VALUE is written. Evaluate it ONCE, up front, through
+     * the SAME evaluator the `=` assignment RHS uses (write_eval_arglist ->
+     * dcl_eval_expr_string), so lexical functions F$xxx(...), symbol/apostrophe
+     * substitution, quoted string literals and +/- string ops all resolve
+     * exactly as they do elsewhere in DCL. Comma-separated items are
+     * concatenated with no separator (VSI OpenVMS DCL Dictionary, WRITE). This
+     * fixes WRITE emitting the LITERAL "F$GETSYIVERSION" instead of evaluating
+     * F$GETSYI("VERSION") (vms-65f): the old path pushed the tokenized params[]
+     * out verbatim and never routed them through the evaluator. */
+    char text[DCL_MAX_VALUE];
+    const char *arglist = write_arg_tail(cmd->raw_tail);
+    if (arglist) {
+        write_eval_arglist(ctx, arglist, text, sizeof(text));
+    } else {
+        /* No raw tail available (e.g. a synthesized command that only set
+         * params[]): fall back to the tokenized params, resolving a bare word
+         * that names a defined symbol to its value (MMK marker idiom). */
+        text[0] = '\0';
+        size_t used = 0;
+        for (int i = 1; i < cmd->param_count; i++) {
+            const char *sv = dcl_sym_get(cmd->params[i]);
+            const char *s = sv ? sv : cmd->params[i];
+            size_t l = strlen(s);
+            if (used + l >= sizeof(text)) l = sizeof(text) - used - 1;
+            memcpy(text + used, s, l);
+            used += l;
+            text[used] = '\0';
+        }
+    }
 
     /*
      * SYS$OUTPUT / SYS$ERROR: resolve through real logical-name translation
@@ -702,17 +833,13 @@ int cmd_write(struct dcl_command *cmd)
                           "error opening %s as output", equiv);
                 return SS$_NOSUCHFILE;
             }
-            for (int i = 1; i < cmd->param_count; i++)
-                fprintf(fp, "%s", cmd->params[i]);
-            fprintf(fp, "\n");
+            fprintf(fp, "%s\n", text);
             fclose(fp);
             return SS$_NORMAL;
         }
 
         FILE *out = is_err ? stderr : stdout;
-        for (int i = 1; i < cmd->param_count; i++)
-            fprintf(out, "%s", cmd->params[i]);
-        fprintf(out, "\n");
+        fprintf(out, "%s\n", text);
         return SS$_NORMAL;
     }
 
@@ -732,30 +859,12 @@ int cmd_write(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    /* WRITE's argument list is a comma-separated list of DCL expressions,
-     * CONCATENATED with no separator (VSI OpenVMS DCL Dictionary, WRITE). Each
-     * bare word is a symbol reference evaluated to its value; a quoted string is
-     * a literal. The parser strips the quotes, so a bare argument that names a
-     * defined symbol is substituted (MMK's marker
-     * WRITE MMK___OUTPUT "MMK____status=",MMK____status must emit the STATUS
-     * VALUE, not the literal name); anything else is written verbatim. */
-
     /* An RMS write channel (vms-5f0): assemble the record and $PUT it onto the
      * ODS-2 volume through the ACP. RMS records carry no line terminator (the CR
      * record attribute supplies it), so no trailing '\n' here. */
     if (ctx->channels[ch].writer) {
-        char rec[8192];
-        size_t rl = 0;
-        for (int i = 1; i < cmd->param_count && rl < sizeof(rec) - 1; i++) {
-            const char *sv = dcl_sym_get(cmd->params[i]);
-            const char *s = sv ? sv : cmd->params[i];
-            size_t sl = strlen(s);
-            if (rl + sl > sizeof(rec) - 1) sl = sizeof(rec) - 1 - rl;
-            memcpy(rec + rl, s, sl);
-            rl += sl;
-        }
-        rec[rl] = '\0';
-        if (dcl_rms_write_record(ctx->channels[ch].writer, rec, rl) != 0) {
+        if (dcl_rms_write_record(ctx->channels[ch].writer, text,
+                                 strlen(text)) != 0) {
             dcl_error("RMS", 2, "WER", "error writing to channel %s", channel_name);
             return SS$_ABORT;
         }
@@ -768,11 +877,7 @@ int cmd_write(struct dcl_command *cmd)
                   "channel %s is not open", channel_name);
         return SS$_BADPARAM;
     }
-    for (int i = 1; i < cmd->param_count; i++) {
-        const char *sv = dcl_sym_get(cmd->params[i]);
-        fprintf(fp, "%s", sv ? sv : cmd->params[i]);
-    }
-    fprintf(fp, "\n");
+    fprintf(fp, "%s\n", text);
     fflush(fp);
 
     return SS$_NORMAL;

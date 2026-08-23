@@ -49,6 +49,37 @@ itself — a trivial `int main(void){return 0;}` must emit `__gcc_main_flags = 3
      target-hooks headers for every frontend even with `--enable-languages=c`,
      and the `mv` fails if the subdir is absent.
 
+## Checked-in port patches (`patches/`)
+
+We **patch the fetched GCC source, never vendor the whole tree.** Each file in
+`patches/` is a plain `patch -p1` unified diff; `build-toolchain.sh` applies them
+right after `tar xf` and before `configure`, and the `Dockerfile` `COPY`s the
+directory into the build context. They must stay minimal, targeted, and
+clean-room (Rule 8: derived from public GCC source + observed cc1 output only).
+
+- **`0001-vms-f97-alpha-en-label-decorated-name.patch`** (vms-f97) — codegen
+  consistency: derive the procedure **entry label** (`..en`) from the same
+  resolved (transparent-alias-decorated) name that `.ent`/`.pdesc` already use.
+  Without it, a **definition** of a recognized OpenVMS C-RTL name (musl's
+  `strlen`, `malloc`, `memcpy`, `vsnprintf`, …) emitted `.pdesc decc$strlen..en`
+  pointing at a nonexistent `strlen..en` label, so GAS rejected ~52% of musl.
+  The fix does **not** change the decoration itself — only that the entry label
+  matches `.ent`/`.pdesc`. It is the operator-ruled path (A) to the Alpha
+  DECC$SHR: musl-as-DECC$SHR then defines the `decc$`-prefixed CRTL names.
+- **`0002-vms-f97-vmsdbgout-en-decorated-name.patch`** (vms-f97, 2/2) — the
+  *same* defect at a second site: the VMS DST routine-begin record
+  (`gcc/vmsdbgout.cc:write_rtnbeg`) built its entry **address** by appending
+  `..en` to the raw name, so it referenced `strlen..en` while the code label is
+  `decc$strlen..en`. This record is emitted for every VMS function (regardless
+  of `-g`), so without it GAS still rejected the CRTL definition
+  (`redefined symbol cannot be used on reloc`) even after 0001. Same
+  `assemble_name_resolve()` consistency fix.
+
+  (The `.linkage` path — `alpha_use_linkage`/`alpha_write_one_linkage` — is
+  already correct: it follows the transparent alias before keying the linkage
+  map, so its `%s..en` emits the decorated name. Only the two `concat(…"..en")`
+  sites above needed the fix.)
+
 ## Why real objects, not reasoning
 
 Reasoning about "what the port needs" from source alone produced a **false gap**

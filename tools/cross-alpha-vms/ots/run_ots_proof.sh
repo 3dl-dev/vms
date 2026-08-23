@@ -65,8 +65,21 @@ docker run --rm \
         fi
         BOUND=$(sed -n "s/.*, \([0-9]\+\) EVAX cross-image imports bound to --use producer.*/\1/p" $W/link.err | tail -1)
         echo "== PROOF: OTS\$ references bound as cross-image imports (total=${BOUND:-?}); zero OTS\$ deferred =="
-        echo "== remaining (non-OTS, later-rung) deferred residual =="
+        echo "== remaining deferred residual (must be EMPTY as of vms-838a) =="
         grep -oE "undefined symbol '"'"'[^'"'"']+'"'"'" $W/link.err | sed "s/.*'"'"'\(.*\)'"'"'/\1/" | sort | uniq -c
+
+        # (e2) ASSERT the WHOLE residual is closed (vms-838a): the setjmp/longjmp
+        # (decc$longjmp), cancellation (__cp_*/__syscall_cp_asm) and linker-defined
+        # (_DYNAMIC/__init_array_*/__fini_array_*) surface is now resolved, so a
+        # STRICT DECC$SHR+LIBOTS$ link leaves ZERO deferred externals. Any nonzero
+        # residual is a regression (a new undef entered, or a fix regressed).
+        NDEF=$(grep -cE "%LINK-W-UNDEF, EVAX reference to undefined symbol" $W/link.err || true)
+        if [ "${NDEF:-0}" -ne 0 ]; then
+            echo "PROOF FAIL (vms-838a): ${NDEF} deferred external(s) remain; expected 0:"
+            grep -E "%LINK-W-UNDEF, EVAX reference to undefined symbol" $W/link.err | sort -u
+            exit 5
+        fi
+        echo "== PROOF (vms-838a): DECC\$SHR + LIBOTS\$ link with ZERO deferred externals =="
 
         # (f) native OTS$-divide correctness proof (host gcc, same C)
         gcc -O2 -fdollars-in-identifiers -fno-builtin -fno-tree-loop-distribute-patterns \

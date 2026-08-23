@@ -3701,11 +3701,19 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
      * in the store below. This runs only on the EVAX path — output-neutral for
      * the ELF shareable/exec emitters, which resolve these via build_symhash's
      * weak-undef pass instead. ---- */
-    struct { const char *sec; uint64_t s, e; int placed; }
-        ld_arr[] = { {".init_array",0,0,0}, {".fini_array",0,0,0}, {".preinit_array",0,0,0} };
+    /* The GNU alpha-vms assembler names the psect produced from `.section
+     * .init_array` as `init_array` (the leading dot is stripped in the EVAX
+     * EGSD), so match both the dotted (ELF-style) and undotted (EVAX) forms. */
+    struct { const char *sec; const char *alt; uint64_t s, e; int placed; }
+        ld_arr[] = {
+            {".init_array",    "init_array",    0,0,0},
+            {".fini_array",    "fini_array",    0,0,0},
+            {".preinit_array", "preinit_array", 0,0,0},
+        };
     for (int a = 0; a < 3; a++)
         for (int k = 0; k < nos; k++)
-            if (!strcmp(osec[k].name, ld_arr[a].sec) && osec[k].size) {
+            if ((!strcmp(osec[k].name, ld_arr[a].sec) ||
+                 !strcmp(osec[k].name, ld_arr[a].alt)) && osec[k].size) {
                 ld_arr[a].s = osec[k].addr;
                 ld_arr[a].e = osec[k].addr + osec[k].size;
                 ld_arr[a].placed = 1;

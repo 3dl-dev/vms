@@ -33,7 +33,12 @@ CC_FLAGS="${CC_FLAGS} ${MUSL_EXTRA_CFLAGS:-}"
 mkdir -p "$WORK" && cd "$WORK"
 
 # ---- fetch musl (no vendoring; pinned + checksum-verified) ----
-wget -q "https://musl.libc.org/releases/musl-${MUSL_VER}.tar.gz"
+# Honor a pre-placed tarball (a mounted host copy under $WORK) so a reproducible
+# / offline containerized build can bypass the network; otherwise fetch it. The
+# pinned checksum is enforced either way, so a stale/corrupt cached copy fails.
+if [ ! -f "musl-${MUSL_VER}.tar.gz" ]; then
+	wget -q "https://musl.libc.org/releases/musl-${MUSL_VER}.tar.gz"
+fi
 echo "${MUSL_SHA256}  musl-${MUSL_VER}.tar.gz" | sha256sum -c -
 tar xf "musl-${MUSL_VER}.tar.gz"
 cd "musl-${MUSL_VER}"

@@ -91,20 +91,25 @@ ASK_PW2          = "Reenter password for verification"
 UAF_SAVED        = "%UAF-I-SAVED"
 ASK_SCSNODE      = "Enter SCSNODE"
 ASK_SCSID        = "Enter SCSSYSTEMID"
-SYSGEN_PROMPT    = "SYSGEN>"      # see SYSGEN_PROMPT_RE -- NOT matched literally
 DISMOUNTED       = "%DISMOUNT-I-DISMOUNTED"
 INSTALL_DONE     = "installation is complete"
 
-# SYSGEN's OWN prompt, and nothing else (vms-d0e5, INV-6 teeth). A literal
-# "SYSGEN>" search is a FALSE PASS: OVMX$INSTALL.COM itself prints the operator
-# instruction "At the SYSGEN> prompt, type:" BEFORE it RUNs SYSGEN.EXE, so the
-# literal matches the procedure's own echo whether or not SYSGEN ever started.
-# That is exactly what happened on the 2026-08-22 run -- the driver reported
-# "SYSGEN.EXE resolves and runs" while SYSGEN had in fact exited immediately and
-# the SCS commands landed on the install menu (%OVMX-E-IVCHOICE, "USE CURRENT").
-# The real prompt is emitted at the START of a line; the instructional text has
-# it mid-sentence. Anchor there so only a genuine REPL prompt can satisfy it.
-SYSGEN_PROMPT_RE = r"(?:\r?\n|^)SYSGEN>"
+# The SCS step is now NON-INTERACTIVE (vms-597/#737). OVMX$INSTALL.COM RUNs
+# SYS$SYSTEM:SYSGEN.EXE and feeds USE CURRENT / SET SCSNODE / SET SCSSYSTEMID /
+# WRITE CURRENT / EXIT as INLINE SYS$INPUT data lines -- SYSGEN reads its data
+# block, not the terminal, so there is NO interactive SYSGEN> prompt to drive.
+#
+# ANTI-LARP (vms-dd15, INV-6): anchor on the two tokens SYSGEN.EXE alone emits
+# at RUNTIME and the procedure never echoes -- the startup banner (tools/
+# vms_sysgen.c prints it UNCONDITIONALLY, non-tty SYS$INPUT included) and
+# %SYSGEN-I-WRITTEN (printed only after WRITE CURRENT serializes the parameter
+# set to the target's OVMXVMSSYS.PAR). NEVER match the bare literal "SYSGEN>":
+# OVMX$INSTALL.COM used to print the operator instruction "At the SYSGEN>
+# prompt, type:", so the literal matched the procedure's own echo whether or not
+# SYSGEN ever started -- exactly the 2026-08-22 false pass that killed rung G.
+# This mirrors tests/qemu/test_install_menu.sh's SCS handling on x86_64.
+SYSGEN_BANNER    = "OpenVMS System Generation Utility"  # vms_sysgen.c startup
+SYSGEN_WRITTEN   = "%SYSGEN-I-WRITTEN"                   # WRITE CURRENT persisted
 
 USERNAME   = "Username:"
 PASSWORD   = "Password:"
@@ -268,26 +273,53 @@ def do_install(a, distrib_img, blank_img, boot_deadline):
                 "target SYSUAF")
 
         # SCSNODE / SCSSYSTEMID -> the target's own OVMXVMSSYS.PAR via SYSGEN.
+        # Answering the two INQUIRE prompts NON-BLANK is the whole operator
+        # interaction: the .COM then RUNs SYS$SYSTEM:SYSGEN.EXE through the
+        # target's rooted SYS$SYSTEM redirect and drives its REPL from INLINE
+        # SYS$INPUT (vms-597/#737). The driver must NOT type the REPL commands
+        # at the console -- SYSGEN reads its data block, not the terminal, so
+        # console-typed REPL lines would leak past SYSGEN to the menu after it
+        # exits. This mirrors test_install_menu.sh's SCS handling on x86_64.
         _send(child, SCS_NODE)
         child.expect(_lit(ASK_SCSID), timeout=CMD_TO)
+        scs_off = len(_console_text(child))
         _send(child, SCS_ID)
-        # SYSGEN.EXE is in the vax OS kit, so PRODUCT INSTALL laid it on the
-        # target's rooted SYSEXE and RUN resolves it through the DEFINE/JOB
-        # SYS$SYSTEM redirect -> a SYSGEN> prompt. Drive its REPL if it appears;
-        # if the RUN fell through (SET NOON), the flow reaches DISMOUNT directly.
-        idx = child.expect([SYSGEN_PROMPT_RE, _lit(DISMOUNTED)],
-                           timeout=boot_deadline)
-        if idx == 0:
-            ok("SYSGEN.EXE resolves and runs against the rooted target (no "
-               "%DCL-E-IVIMAGE)")
-            for line in ("USE CURRENT", 'SET SCSNODE "%s"' % SCS_NODE,
-                         "SET SCSSYSTEMID %s" % SCS_ID, "WRITE CURRENT", "EXIT"):
-                _send(child, line)
+        # ANTI-LARP: assert the real runtime BANNER (SYSGEN activated) then
+        # %SYSGEN-I-WRITTEN (WRITE CURRENT landed the target's PAR). Never the
+        # literal "SYSGEN>".
+        try:
+            child.expect(_lit(SYSGEN_BANNER), timeout=boot_deadline)
+            ok("SYSGEN.EXE resolves, activates and runs against the rooted "
+               "target (runtime banner emitted) -- no %DCL-E-IVIMAGE (vms-597)")
+        except (pexpect.TIMEOUT, pexpect.EOF):
+            bad("SYSGEN.EXE did not start against the target -- no runtime "
+                "banner (%DCL-E-IVIMAGE / unresolved SYS$SYSTEM redirect / empty "
+                "inline SYS$INPUT); the SCS configuration step could not run")
+            log("scs tail:\n%s" % _console_text(child)[-1500:])
+            return _verdict(npass, nfail)
+        try:
+            child.expect(_lit(SYSGEN_WRITTEN), timeout=boot_deadline)
+            ok("SYSGEN's inline-SYS$INPUT WRITE CURRENT ran against the target "
+               "and reported %SYSGEN-I-WRITTEN")
+        except (pexpect.TIMEOUT, pexpect.EOF):
+            bad("SYSGEN did not report %SYSGEN-I-WRITTEN -- the inline SYS$INPUT "
+                "never executed WRITE CURRENT against the target's OVMXVMSSYS.PAR")
+            log("scs tail:\n%s" % _console_text(child)[-1500:])
+            return _verdict(npass, nfail)
+        try:
             child.expect(_lit(DISMOUNTED), timeout=boot_deadline)
+            ok("the procedure dismounts the target itself (%DISMOUNT-I-DISMOUNTED)")
+        except (pexpect.TIMEOUT, pexpect.EOF):
+            bad("did not dismount the target after the SYSGEN step")
+            log("scs tail:\n%s" % _console_text(child)[-1500:])
+            return _verdict(npass, nfail)
+        scs_seg = _console_text(child)[scs_off:]
+        if re.search(r"%DCL-E-IVIMAGE|%SYSGEN-[EF]-", scs_seg):
+            bad("the SCS/SYSGEN segment carries an IVIMAGE or a SYSGEN error")
+            log(scs_seg[-1500:])
         else:
-            bad("SYSGEN.EXE did not prompt (SYSGEN> never appeared) -- the SCS "
-                "configuration step could not run against the target")
-        ok("the procedure dismounts the target itself (%DISMOUNT-I-DISMOUNTED)")
+            ok("the SCS/SYSGEN segment carries no %DCL-E-IVIMAGE and no "
+               "%SYSGEN-[EF]- error")
 
         child.expect(_lit(INSTALL_DONE), timeout=CMD_TO)
         ok("the install reports 'installation is complete' and returns to the menu")

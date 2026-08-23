@@ -37,17 +37,20 @@
  *               below reach nothing of, and where $GETJPI's /proc-derived
  *               JPI$_CPUTIM belongs.
  *
- * OVMX-EXEC: sys$creprc (vms-afd, vms-d31d) -- exec: the created process's
- *     NAME is registered with vms_kif_setprn(); its VMS process id, reported
- *     through pidadr, is the one the executive assigned (read back with
+ * OVMX-PARTIAL: sys$creprc (vms-d31d) -- exec: the created process's NAME is
+ *     registered with vms_kif_setprn(); its VMS process id, reported through
+ *     pidadr, is the one the executive assigned (read with
  *     vms_kif_getjpi_self()); and its UIC, user name and privilege masks are
  *     stamped onto its executive row with vms_kif_setident(), inherited from
- *     the creator's executive identity (prvadr/uic override it). Another
+ *     the creator's executive identity unless prvadr/uic override them. Another
  *     process reads all of these back through $GETJPI, and the Files-11
- *     reference monitor enforces the stamped UIC/privileges.
+ *     reference monitor enforces the stamped UIC/privileges. (Before vms-d31d
+ *     only NAME and pid were the executive's; UIC/username/privileges were the
+ *     OVMX-LOCAL half. vms-afd owned that older, smaller executive part.)
  * OVMX-LOCAL: sys$creprc -- the child's default directory and quotas are still
  *     copied only into the child's process-local PCB; no executive row records
- *     those two yet.
+ *     those two, so nothing outside the child reads back what it was created
+ *     with for those two fields.
  * OVMX-PARTIAL: sys$getjpi (vms-pt1) -- exec: JPI$_PID, JPI$_PRCNAM,
  *     JPI$_USERNAME and JPI$_UIC are read from the row the executive resolved,
  *     by name or by pid, with no PCB consulted -- which is what lets $GETJPI

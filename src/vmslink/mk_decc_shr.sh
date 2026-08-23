@@ -83,9 +83,18 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     echo "mk_decc_shr: ALPHA/EVAX branch (vms-7b96)"
     echo "mk_decc_shr: LINK.EXE=$LINK_EXE  libc.a=$LIBC  libgcc.a=$LIBGCC  GSMATCH=$GSMATCH"
     ALPHA_VEC=$(mktemp)
-    # text (T) -> PROCEDURE, data (D/G/R/B) -> DATA; drop the ..-suffixed EVAX
-    # companion labels and any weak-undefined (V/w) or undefined (U) entries.
-    "$NM" --defined-only "$LIBC" "$LIBGCC" 2>/dev/null \
+    # ENUMERATE decc$ defs. The cross nm/ar's vms-alpha BFD rejects a System V ar
+    # container ("file format not recognized"), and bare host nm cannot read EVAX
+    # objects at all — but host `ar` extracts the (format-agnostic) container fine,
+    # and the cross nm reads a bare EVAX .o. So extract with host ar, nm each member
+    # with the cross nm. libc.a MUST be built -g0 for this (the cross nm cannot read
+    # DST members, vms-7b96); the shipped DECC$SHR is byte-identical either way
+    # (LINK.EXE skips DST). text (T) -> PROCEDURE, data (D/G/R/B) -> DATA; drop the
+    # ..-suffixed EVAX companion labels (the callable value is the bare descriptor).
+    AR_HOST=${AR_HOST:-ar}
+    EXDIR=$(mktemp -d)
+    ( cd "$EXDIR" && "$AR_HOST" x "$LIBC" && [ -s "$LIBGCC" ] && "$AR_HOST" x "$LIBGCC" 2>/dev/null || true )
+    "$NM" --defined-only "$EXDIR"/*.o 2>/dev/null \
       | awk '
           $NF ~ /^decc\$/ && $NF !~ /\.\.[a-z]+$/ {
               t=$(NF-1); n=$NF;
@@ -93,6 +102,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
               else if (t=="D"||t=="d"||t=="G"||t=="g"||t=="R"||t=="r"||t=="B"||t=="b") print n"=DATA";
           }' \
       | sort -u > "$ALPHA_VEC"
+    rm -rf "$EXDIR"
     NVEC=$(wc -l < "$ALPHA_VEC")
     echo "mk_decc_shr: enumerated $NVEC decc\$ universals from libc.a + libgcc.a"
     [ "$NVEC" -ge 50 ] || { echo "mk_decc_shr: FAIL only $NVEC decc\$ symbols found — is NM the alpha-dec-vms cross nm and libc.a built -g0 (nm cannot read DST, vms-7b96)?" >&2; exit 2; }

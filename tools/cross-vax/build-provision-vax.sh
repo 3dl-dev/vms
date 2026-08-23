@@ -130,9 +130,15 @@ echo
 
 # --- proof 2: link a real vax--netbsdelf PROVISION.EXE over the whole stack -
 echo "=== proof 2: link a real vax--netbsdelf PROVISION.EXE ==="
-# Dynamic (no -static): same Decision A path (vms-42d) every other netbsd-vax
-# OVMX image on this substrate takes.
-"$CC" --sysroot="$SYSROOT" \
+# STATIC (-static, vms-0ab boot-speed #2): self-contained ELF32-vax, no
+# PT_INTERP -> no ld.elf_so re-relocation per fork+execve activation. Still
+# Decision A (vms-42d), only statically linked. PROVISION.EXE reads SYSUAF to
+# establish the SYSTEM identity: ovmx_provision.c makes a STRONG call into the
+# SYSUAF RMS engine (ovmx_sysuaf_read_user), so sysuaf_rms.o is pulled from
+# vmsrms.a by a real reference -- NOT the weak seam -- and therefore survives
+# -static unchanged (proof 3b below asserts the engine really linked). No
+# rms-bind anchor is needed here; the strong call is the anchor.
+"$CC" --sysroot="$SYSROOT" -static \
     "$OUT/ovmx_provision.o" "$OUT/ovmx_boot_netbsd.o" \
     -Wl,--start-group \
         "$LIBVMSQUEUE_A" "$LIBVMSRMS_A" "$LIBVMS_A" "$LIBVMSFS_A" \
@@ -170,6 +176,37 @@ if ! "$TARGET-nm" -u "$OUT/ovmx_provision.o" | grep -qE ' vms_kif_acp_fileop$'; 
     exit 1
 fi
 echo "OK: own_object_acp defined + vms_kif_acp_fileop referenced (ACP arm live)"
+
+# --- proof 3b (WEAK-SEAM, vms-0ab): the SYSUAF engine survived -static ---------
+# The -static cutover's hazard is the static-link weak-seam class: sysuaf.c in
+# libvms `#pragma weak`-references ovmx_sysuaf_read_user and returns "miss" when
+# the cell is NULL, so a -static link that failed to pull sysuaf_rms.o would
+# silently ship a PROVISION.EXE that cannot read SYSUAF and halts the boot with
+# "no SYSTEM record" -- the exact class that broke Alpha login. ovmx_provision.c
+# makes a STRONG call, so the member IS pulled; assert the definitions really
+# landed in the LINKED -static image (not a weak UND) so a future refactor that
+# drops the strong call is caught here, not at boot.
+echo "=== proof 3b (WEAK-SEAM): the SYSUAF auth engine is defined in PROVISION.EXE ==="
+for sym in ovmx_sysuaf_read_user ovmx_sysuaf_read_uic sysuaf_authenticate purdy_s_hash; do
+    if ! "$TARGET-readelf" -sW "$OUT/PROVISION.EXE" \
+            | grep -E " $sym\$" | grep -qvE ' UND '; then
+        echo "FAIL: $sym is not DEFINED in PROVISION.EXE -- the SYSUAF engine"
+        echo "      weak seam dropped under -static; PROVISION cannot read SYSUAF"
+        echo "      and the boot would halt with no SYSTEM record (vms-0ab)."
+        exit 1
+    fi
+done
+echo "OK: SYSUAF engine (read_user/read_uic/authenticate/purdy_s_hash) defined in the -static image"
+
+# --- proof 3c (STATIC, vms-0ab): no PT_INTERP / no dynamic NEEDED -------------
+echo "=== proof 3c (STATIC): PROVISION.EXE is a self-contained static ELF32-vax ==="
+if "$TARGET-readelf" -l "$OUT/PROVISION.EXE" | grep -qiE 'INTERP'; then
+    echo "FAIL: PROVISION.EXE has a PT_INTERP -- not statically linked (vms-0ab)."; exit 1
+fi
+if "$TARGET-readelf" -d "$OUT/PROVISION.EXE" 2>/dev/null | grep -qiE 'NEEDED'; then
+    echo "FAIL: PROVISION.EXE has a DT_NEEDED -- not statically linked (vms-0ab)."; exit 1
+fi
+echo "OK: no PT_INTERP, no DT_NEEDED -- fully static"
 
 echo
 echo "=== ALL PROOFS PASSED: ovmx_provision (PROVISION.EXE) builds and links for $TARGET ==="

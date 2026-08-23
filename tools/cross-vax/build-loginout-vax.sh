@@ -109,16 +109,36 @@ echo "=== proof 1: cross-compile vms_login.c + loginout_display.c + mail_notify.
 "$CC" $CFLAGS_COMMON -c "$TOOLS/loginout_display.c"   -o "$OUT/loginout_display.o"
 # shellcheck disable=SC2086
 "$CC" $CFLAGS_COMMON -c "$TOOLS/mail_notify.c"         -o "$OUT/mail_notify.o"
+# WEAK-SEAM ANCHOR (vms-0ab). LOGINOUT authenticates by calling sysuaf_lookup()
+# (tools/vms_login.c), which in LIBVMS `#pragma weak`-references the SYSUAF RMS
+# engine ovmx_sysuaf_read_user/_uic (src/vmsrms, sysuaf_rms.o) and returns
+# "miss" when the cell is NULL. A WEAK undefined reference does NOT pull the
+# defining archive member, so both the DYNAMIC baseline and a naive -static link
+# leave those cells UND=0 -- every login then fails "User authorization failure"
+# (the exact static-link weak-seam class that broke Alpha login) without ever
+# reaching the ACP. src/vmslink/loginout_rms_bind.c is the PRODUCTION anchor for
+# this seam (already reasoned+used on the LINK.EXE shareable path): its
+# volatile-guarded rms_bind_never() makes STRONG references to the sys$open RMS
+# family AND ovmx_sysuaf_read_user/_uic, so compiled+linked here it EXTRACTS
+# sysuaf_rms.o from vmsrms.a and binds the weak cells. It executes nothing at
+# run time (the guard is always false). Reused, not reinvented.
+LOGINOUT_RMS_BIND="$SRC/src/vmslink/loginout_rms_bind.c"
+# shellcheck disable=SC2086
+"$CC" $CFLAGS_COMMON -c "$LOGINOUT_RMS_BIND"           -o "$OUT/loginout_rms_bind.o"
 echo "--- object arch check (must be VAX / ELF32 LSB) ---"
 "$TARGET-objdump" -f "$OUT/vms_login.o" | grep -Ei 'file format|architecture'
 echo
 
 # --- proof 2: link a real vax--netbsdelf LOGINOUT.EXE over the whole stack --
 echo "=== proof 2: link a real vax--netbsdelf LOGINOUT.EXE ==="
-# Dynamic (no -static): same Decision A path (vms-42d) every other netbsd-vax
-# OVMX image on this substrate takes.
-"$CC" --sysroot="$SYSROOT" \
+# STATIC (-static, vms-0ab boot-speed #2): self-contained ELF32-vax, no
+# PT_INTERP -> ld.elf_so never re-relocates libc/libpthread/libm/libatomic on
+# each fork+execve activation. Still Decision A (vms-42d), only statically
+# linked. loginout_rms_bind.o is a PRIMARY object (before the archive group) so
+# its strong refs pull the SYSUAF engine that LOGINOUT's weak seam needs.
+"$CC" --sysroot="$SYSROOT" -static \
     "$OUT/vms_login.o" "$OUT/loginout_display.o" "$OUT/mail_notify.o" \
+    "$OUT/loginout_rms_bind.o" \
     -Wl,--start-group \
         "$LIBVMSQUEUE_A" "$LIBVMSRMS_A" "$LIBVMS_A" "$LIBVMSFS_A" \
         "$LIBVMSLNM_A" "$LIBVMSPROCESS_A" "$LIBVMSSYS_A" \
@@ -133,6 +153,32 @@ echo "$HDR" | grep -qiE 'Class:[[:space:]]+ELF32' \
     || { echo "FAIL: LOGINOUT.EXE is not ELFCLASS32 (VAX is 32-bit)"; exit 1; }
 echo "$HDR" | grep -qiF 'Digital VAX' \
     || { echo "FAIL: LOGINOUT.EXE Machine is not Digital VAX"; exit 1; }
+
+# --- proof 2b (WEAK-SEAM, vms-0ab): the SYSUAF engine is DEFINED, not UND ------
+# The anti-LARP teeth: if the anchor failed to pull sysuaf_rms.o, these stay
+# weak UND=0 and sysuaf_lookup() returns miss -> every login fails "User
+# authorization failure". Assert they are DEFINED in the LINKED -static image.
+echo "=== proof 2b (WEAK-SEAM): SYSUAF auth engine defined in LOGINOUT.EXE ==="
+for sym in ovmx_sysuaf_read_user ovmx_sysuaf_read_uic sysuaf_authenticate purdy_s_hash; do
+    if ! "$TARGET-readelf" -sW "$OUT/LOGINOUT.EXE" \
+            | grep -E " $sym\$" | grep -qvE ' UND '; then
+        echo "FAIL: $sym is UND/absent in LOGINOUT.EXE -- the SYSUAF weak seam"
+        echo "      dropped; sysuaf_lookup() would return miss and every login"
+        echo "      fail 'User authorization failure' (vms-0ab static weak-seam)."
+        exit 1
+    fi
+done
+echo "OK: SYSUAF engine (read_user/read_uic/authenticate/purdy_s_hash) DEFINED"
+
+# --- proof 2c (STATIC, vms-0ab): no PT_INTERP / no dynamic NEEDED -------------
+echo "=== proof 2c (STATIC): LOGINOUT.EXE is a self-contained static ELF32-vax ==="
+if "$TARGET-readelf" -l "$OUT/LOGINOUT.EXE" | grep -qiE 'INTERP'; then
+    echo "FAIL: LOGINOUT.EXE has a PT_INTERP -- not statically linked (vms-0ab)."; exit 1
+fi
+if "$TARGET-readelf" -d "$OUT/LOGINOUT.EXE" 2>/dev/null | grep -qiE 'NEEDED'; then
+    echo "FAIL: LOGINOUT.EXE has a DT_NEEDED -- not statically linked (vms-0ab)."; exit 1
+fi
+echo "OK: no PT_INTERP, no DT_NEEDED -- fully static"
 
 echo
 echo "=== ALL PROOFS PASSED: vms_login (LOGINOUT.EXE) builds and links for $TARGET ==="

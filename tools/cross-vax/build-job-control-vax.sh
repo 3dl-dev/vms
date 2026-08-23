@@ -109,9 +109,12 @@ echo
 
 # --- proof 2: link a real vax--netbsdelf JOB_CONTROL.EXE over the stack -----
 echo "=== proof 2: link a real vax--netbsdelf JOB_CONTROL.EXE ==="
-# Dynamic (no -static): same Decision A path (vms-42d) every other netbsd-vax
-# OVMX image on this substrate takes.
-"$CC" --sysroot="$SYSROOT" \
+# STATIC (-static, vms-0ab boot-speed #2): self-contained ELF32-vax, no
+# PT_INTERP -> no ld.elf_so re-relocation per fork+execve activation. Still
+# Decision A (vms-42d), only statically linked. JOB_CONTROL.EXE forks LOGINOUT
+# but references NO SYSUAF engine seam of its own (readelf: no ovmx_sysuaf_*
+# refs), so it carries no weak auth seam to drop and needs no rms-bind anchor.
+"$CC" --sysroot="$SYSROOT" -static \
     "$OUT/ovmx_job_control.o" \
     -Wl,--start-group \
         "$LIBVMSQUEUE_A" "$LIBVMSRMS_A" "$LIBVMS_A" "$LIBVMSFS_A" \

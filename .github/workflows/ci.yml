@@ -4390,6 +4390,14 @@ jobs:
             -e OVERLAY=/overlay \
             ovmx-cross-alpha-vms:latest bash /overlay/build-musl.sh
 
+      # OTS$ runtime (LIBOTS$) — RUNG completeness (vms-bfd6). Builds LINK.EXE +
+      # LIBOTS$SHR.EXE, links DECC$SHR whole-archiving libc.a+libgcc.a WITH
+      # --use LIBOTS$, and ASSERTS zero OTS$ references are left deferred (they
+      # bind as real cross-image .vms$imp imports); then runs the native OTS$-
+      # divide correctness proof. Reuses the toolchain image loaded above.
+      - name: OTS$ runtime proof (LIBOTS$ links + DECC$SHR binds it + divide correct)
+        run: IMG=ovmx-cross-alpha-vms:latest bash tools/cross-alpha-vms/ots/run_ots_proof.sh
+
   # Job 12: real src/libvmssys linked + activated VMS-native (aarch64)
   #
   # The pillar milestone (vms-ade / bead vms-80a): the whole toolchain end to

@@ -42,8 +42,8 @@ docker run --rm \
         cp /opt/cross-alpha-vms/lib/libgcc.a     $W/libgcc.a
 
         # (b) LINK.EXE + OVMXDUMP (ordinary host tools; single-TU each)
-        gcc -O2 -Isrc/vmslink/include -Isrc/vmslink -o $W/LINK.EXE   /wt/src/vmslink/link.c
-        gcc -O2 -Isrc/vmslink/include -Isrc/vmslink -o $W/OVMXDUMP   /wt/src/vmslink/dump_image.c || true
+        gcc -O2 -I/wt/src/vmslink/include -I/wt/src/vmslink -o $W/LINK.EXE /wt/src/vmslink/link.c
+        gcc -O2 -I/wt/src/vmslink/include -I/wt/src/vmslink -o $W/OVMXDUMP /wt/src/vmslink/dump_image.c || true
 
         # (c) LIBOTS$SHR.EXE
         LINK_EXE=$W/LINK.EXE OUT=$W bash /wt/tools/cross-alpha-vms/ots/build-libots.sh
@@ -63,8 +63,8 @@ docker run --rm \
             grep -oE "undefined symbol '"'"'[^'"'"']+'"'"'" $W/link.err | grep "OTS\$" | sort -u
             exit 4
         fi
-        BOUND=$(grep -c "cross-image import '"'"'OTS\$" $W/link.err || true)
-        echo "== PROOF: all OTS\$ references bound as cross-image imports (count=$BOUND); zero OTS\$ deferred =="
+        BOUND=$(sed -n "s/.*, \([0-9]\+\) EVAX cross-image imports bound to --use producer.*/\1/p" $W/link.err | tail -1)
+        echo "== PROOF: OTS\$ references bound as cross-image imports (total=${BOUND:-?}); zero OTS\$ deferred =="
         echo "== remaining (non-OTS, later-rung) deferred residual =="
         grep -oE "undefined symbol '"'"'[^'"'"']+'"'"'" $W/link.err | sed "s/.*'"'"'\(.*\)'"'"'/\1/" | sort | uniq -c
 

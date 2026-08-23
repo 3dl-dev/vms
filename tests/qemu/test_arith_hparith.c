@@ -1,5 +1,5 @@
 /*
- * test_syssvc_hparith.c - the Alpha arithmetic-trap -> SS$_HPARITH condition
+ * test_arith_hparith.c - the Alpha arithmetic-trap -> SS$_HPARITH condition
  * bridge, end to end, under -static (rd vms-db3, epic vms-8954).
  *
  * Proves the GAP3 executive/signal primitive: a trap-enabling FP divide-by-zero
@@ -82,7 +82,7 @@ static uint32_t hparith_handler(void *sigargs, void *mecharg) {
 }
 
 int main(void) {
-    printf("=== test_syssvc_hparith (Alpha FP-trap -> SS$_HPARITH bridge, -static) ===\n");
+    printf("=== test_arith_hparith (Alpha FP-trap -> SS$_HPARITH bridge, -static) ===\n");
 
     /* CHECK 1: the image-start auto-install fired under -static. The bridge's
      * constructor is force-pulled by the arith_signal_bind.c anchor (compiled
@@ -144,13 +144,13 @@ int main(void) {
     CHECK(have == 1 && (st_summary & EXCSUM_DZE) != 0,
           "arith exception stashed (summary=DZE) for SYS$GET_ARITH_EXCEPTION follow-on");
 
-    printf("=== test_syssvc_hparith: %d passed, %d failed ===\n", pass, fail);
+    printf("=== test_arith_hparith: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;
 }
 
 #else  /* !__alpha__ */
 int main(void) {
-    printf("=== test_syssvc_hparith: SKIPPED (Alpha-only: FP-trap/sc_fpcr/trapb) ===\n");
+    printf("=== test_arith_hparith: SKIPPED (Alpha-only: FP-trap/sc_fpcr/trapb) ===\n");
     return EXIT_SKIP;
 }
 #endif

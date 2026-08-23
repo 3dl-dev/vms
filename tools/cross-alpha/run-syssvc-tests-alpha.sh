@@ -82,11 +82,15 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     cmake --build /work/cmake-alpha --target qemu_syssvc_tests -j"$(nproc)" \
         >/work/cmake-build.log 2>&1 || { echo BUILD-FAIL; grep -nE ": error:" /work/cmake-build.log | head -25; exit 1; }
     n=0
-    for t in /work/cmake-alpha/bin/test_syssvc_* /work/cmake-alpha/bin/test_imgact_*; do
+    # test_arith_* (vms-db3): Alpha-only arithmetic-trap suites (e.g. the
+    # SS$_HPARITH bridge) deliberately named off the test_syssvc_ glob so the
+    # x86/arm per-facility negctl rig never grabs a suite it cannot run; they run
+    # here on the real Alpha kernel trap path.
+    for t in /work/cmake-alpha/bin/test_syssvc_* /work/cmake-alpha/bin/test_imgact_* /work/cmake-alpha/bin/test_arith_*; do
         [ -x "$t" ] || continue
         cp "$t" /work/tests/ && n=$((n + 1))
     done
-    echo "== staged $n test_syssvc_/test_imgact_ binaries =="
+    echo "== staged $n test_syssvc_/test_imgact_/test_arith_ binaries =="
     [ "$n" -ge 1 ] || { echo "FATAL: no syssvc test binaries built"; exit 1; }
     alpha-linux-gnu-strip /work/tests/test_* 2>/dev/null || true
 

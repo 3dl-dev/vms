@@ -1063,6 +1063,28 @@ jobs:
             || { echo "FAIL: release-manifest.json has no vax_artifacts field"; exit 1; }
           echo "OK: release-manifest.json carries vax_release_parity + vax_artifacts"
 
+      - name: Assert Alpha release artifacts are present in the cut bundle
+        run: |
+          set -euo pipefail
+          # rd vms-233b, epic vms-f10: the shipped Alpha set is DERIVED from each
+          # cut's own alpha/alpha-artifact-manifest.txt (itself derived from
+          # CMake's install_manifest_ovmx-images.txt), not a hand-named list --
+          # so this check never goes stale when a new image joins ovmx-images.
+          for d in dist/release-a dist/release-b; do
+            MANIFEST="$d/alpha/alpha-artifact-manifest.txt"
+            [ -s "$MANIFEST" ] || { echo "FAIL: $MANIFEST missing or empty"; exit 1; }
+            while IFS= read -r f || [ -n "$f" ]; do
+              [ -n "$f" ] || continue
+              [ -s "$d/alpha/$f" ] || { echo "FAIL: $d/alpha/$f missing or empty -- Alpha co-release artifact not in the cut bundle"; exit 1; }
+              echo "OK: $d/alpha/$f present ($(stat -c%s "$d/alpha/$f") bytes)"
+            done < "$MANIFEST"
+          done
+          grep -q '"alpha_release_parity"' dist/release-a/release-manifest.json \
+            || { echo "FAIL: release-manifest.json has no alpha_release_parity section"; exit 1; }
+          grep -q '"alpha_artifacts"' dist/release-a/release-manifest.json \
+            || { echo "FAIL: release-manifest.json has no alpha_artifacts field"; exit 1; }
+          echo "OK: release-manifest.json carries alpha_release_parity + alpha_artifacts"
+
       # The manifest's own "cut_at_utc" field legitimately differs between
       # the two invocations (it is wall-clock metadata ABOUT the cut, not a
       # build input) -- the reproducibility claim is scoped to the four real
@@ -1440,6 +1462,22 @@ jobs:
           done < "$MANIFEST"
           echo "OK: all $n VAX co-release artifacts present in the acceptance bundle"
 
+      - name: Assert Alpha release artifacts are present in the acceptance bundle
+        run: |
+          set -euo pipefail
+          # rd vms-233b, epic vms-f10: DERIVED from the cut's own
+          # alpha/alpha-artifact-manifest.txt -- see cut-release-alpha-gate for
+          # the same pattern.
+          MANIFEST="dist/release-acceptance/alpha/alpha-artifact-manifest.txt"
+          [ -s "$MANIFEST" ] || { echo "FAIL: $MANIFEST missing or empty"; exit 1; }
+          n=0
+          while IFS= read -r f || [ -n "$f" ]; do
+            [ -n "$f" ] || continue
+            [ -s "dist/release-acceptance/alpha/$f" ] || { echo "FAIL: dist/release-acceptance/alpha/$f missing or empty"; exit 1; }
+            n=$((n + 1))
+          done < "$MANIFEST"
+          echo "OK: all $n Alpha co-release artifacts present in the acceptance bundle"
+
       - name: Build bootable image (qemu tooling only -- boots the cut bundle's own artifacts)
         uses: docker/build-push-action@v6
         with:
@@ -1667,6 +1705,118 @@ jobs:
           echo "$RAW" | grep -qF 'VAX release-artifact build FAILED -- co-release invariant' \
             || { echo "FATAL: cut-release.sh failed for the wrong reason (did not name the VAX co-release invariant)" >&2; exit 1; }
           echo "Negative control confirmed: cut-release.sh itself refuses to cut a release when the VAX build fails (exit $rc)."
+
+  # -----------------------------------------------------------------------
+  # cut-release-alpha-gate (rd vms-233b, epic vms-f10 "co-release parity across
+  # aarch64/x86_64/alpha/VAX"). The Alpha analog of cut-release-vax-gate above:
+  # the FAST, DETERMINISTIC co-release WIRING gate that proves the two halves of
+  # the Alpha co-release invariant directly against tools/cut-release-alpha.sh --
+  #   1. POSITIVE: the Alpha (EM_ALPHA/LP64) userspace ovmx-images artifact set
+  #      builds and is byte-present.
+  #   2. NEGATIVE (OVMX_ALPHA_RELEASE_NEGCTL=1): a deliberately-failed Alpha
+  #      stage must make tools/cut-release-alpha.sh -- and therefore
+  #      tools/cut-release.sh, which calls it unconditionally -- exit nonzero.
+  #      "a release is NOT cuttable if the Alpha build fails", proven mechanically.
+  #
+  # This gates on the DETERMINISTIC cross-compile + negctl, NOT on the heavy
+  # qemu-system-alpha boot: that is a SEPARATE leg (alpha-boot-login above,
+  # schedule/dispatch), exactly as netbsd-vax-boot is separate from this VAX gate
+  # -- so boot-tier TCG flake can never hold a release cut hostage. This is what
+  # protects an Alpha-carrying cut (the GCC lane's Alpha C-RTL DECC$SHR/LIBOTS$SHR
+  # userland lands in exactly this image set): if that build breaks, the cut reds.
+  #
+  # BUILD-ONLY (Rule 9): no boot here. SCOPE is the userspace image set; the Alpha
+  # executive modules (vms.ko/vmsfs.ko) are a tracked follow-on (see
+  # tools/cut-release-alpha.sh's header, INV-6). Same tier-split as the VAX gate:
+  # NON-PR events only.
+  # -----------------------------------------------------------------------
+  cut-release-alpha-gate:
+    name: Alpha co-release gate — artifacts build + a failed Alpha build reds the cut (vms-233b)
+    needs: changes
+    # vms-fb8 tier-split: heavy Alpha co-release gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request;
+    # cross-arch parity still enforced pre-merge in the full pre-merge run.
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # The ovmx-cross-alpha toolchain image is large (alpha-linux-gnu cross +
+      # kernel/qemu deps); reclaim the big unused hosted toolchains up front so a
+      # fresh runner's ~14 GB root can't ENOSPC mid-build. Same guard the
+      # alpha-boot-login job uses.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: POSITIVE — build the Alpha release artifact set (tools/cut-release-alpha.sh)
+        run: |
+          set -euo pipefail
+          tools/cut-release-alpha.sh \
+            --src-dir "${{ github.workspace }}" \
+            --out-dir "${{ github.workspace }}/dist/alpha-gate-proof"
+          # The shipped set is DERIVED from alpha-artifact-manifest.txt (itself
+          # derived from CMake's install_manifest_ovmx-images.txt), not a
+          # hand-named list here -- so this check never goes stale when a new
+          # image joins the ovmx-images aggregate. Ground-source both directions:
+          # every named artifact must be a real non-empty file, and no extra
+          # files may be present beyond what the manifest names.
+          MANIFEST="dist/alpha-gate-proof/alpha-artifact-manifest.txt"
+          [ -s "$MANIFEST" ] || { echo "FAIL: $MANIFEST missing or empty"; exit 1; }
+          n=0
+          while IFS= read -r f || [ -n "$f" ]; do
+            [ -n "$f" ] || continue
+            [ -s "dist/alpha-gate-proof/$f" ] || { echo "FAIL: dist/alpha-gate-proof/$f missing or empty (named in $MANIFEST)"; exit 1; }
+            n=$((n + 1))
+          done < "$MANIFEST"
+          dir_count=$(find dist/alpha-gate-proof -maxdepth 1 -type f ! -name 'alpha-artifact-manifest.txt' | wc -l)
+          [ "$dir_count" -eq "$n" ] || { echo "FAIL: $MANIFEST names $n artifacts but dist/alpha-gate-proof/ contains $dir_count files"; exit 1; }
+          [ "$n" -ge 12 ] || { echo "FAIL: only $n Alpha release artifacts named in $MANIFEST -- expected at least the ovmx-images baseline of 12"; exit 1; }
+          echo "PASS: all $n Alpha release artifacts named in $MANIFEST are present"
+
+      - name: NEGATIVE CONTROL — OVMX_ALPHA_RELEASE_NEGCTL=1 must fail the Alpha artifact build
+        run: |
+          set +e
+          RAW=$(OVMX_ALPHA_RELEASE_NEGCTL=1 tools/cut-release-alpha.sh \
+                  --src-dir "${{ github.workspace }}" \
+                  --out-dir "${{ github.workspace }}/dist/alpha-gate-negctl" 2>&1)
+          rc=$?
+          set -e
+          echo "$RAW"
+          if [ "$rc" -eq 0 ]; then
+            echo "FATAL: OVMX_ALPHA_RELEASE_NEGCTL=1 PASSED — the co-release gate has no teeth against a failed Alpha build" >&2
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'OVMX_ALPHA_RELEASE_NEGCTL: deliberately failing the userspace-image stage' \
+            || { echo "FATAL: did not see the expected NEGCTL failure banner — this failed for the wrong reason" >&2; exit 1; }
+          echo "Negative control confirmed: a failed Alpha stage exits nonzero (exit $rc)."
+
+      - name: NEGATIVE CONTROL — tools/cut-release.sh itself must fail when the Alpha build fails
+        run: |
+          set +e
+          RAW=$(OVMX_ALPHA_RELEASE_NEGCTL=1 tools/cut-release.sh --out-dir "${{ github.workspace }}/dist/alpha-gate-full-negctl" 2>&1)
+          rc=$?
+          set -e
+          # The VAX stage runs BEFORE the Alpha stage in cut-release.sh, and both
+          # run before the slow x86_64 container build, so with only
+          # OVMX_ALPHA_RELEASE_NEGCTL=1 set the VAX stage builds for real first
+          # (it must pass) and the Alpha stage is where the cut short-circuits.
+          echo "$RAW" | tail -60
+          if [ "$rc" -eq 0 ]; then
+            echo "FATAL: cut-release.sh PASSED despite OVMX_ALPHA_RELEASE_NEGCTL=1 — the co-release invariant is not wired into cut-release.sh" >&2
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'Alpha release-artifact build FAILED -- co-release invariant' \
+            || { echo "FATAL: cut-release.sh failed for the wrong reason (did not name the Alpha co-release invariant)" >&2; exit 1; }
+          echo "Negative control confirmed: cut-release.sh itself refuses to cut a release when the Alpha build fails (exit $rc)."
 
   # -----------------------------------------------------------------------
   # Job 2b: PARTS 0.2 Demo E2E (vms-1c8, epic vms-2579/vms-5dd)

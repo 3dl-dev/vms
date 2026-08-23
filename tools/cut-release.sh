@@ -46,6 +46,13 @@
 #      the capability existed -- that case is skipped LOUDLY (a
 #      %CUT-VAX-I-PREVAX log line + a "skipped"/"skipped_reason" field in
 #      release-manifest.json), never silently.
+#   8. Builds the Alpha (OVMX/Linux-Alpha, EM_ALPHA/LP64) release artifact set
+#      into OUT_DIR/alpha/ via tools/cut-release-alpha.sh -- the same CO-RELEASE
+#      GATE, one arch over (rd vms-233b, epic vms-f10): the byte-reproducible
+#      userspace ovmx-images aggregate, UNCONDITIONAL for any Alpha-capable tree
+#      (no --skip-alpha), with the identical pre-alpha historical-baseline
+#      exception (%CUT-ALPHA-I-PREALPHA). Alpha executive modules are a tracked
+#      follow-on (see cut-release-alpha.sh); alpha-boot-login proves them.
 #
 # Byte-reproducibility (the vms-d73 DONE criterion) depends on
 # SOURCE_DATE_EPOCH: two cuts of the SAME commit must embed the SAME clock
@@ -253,6 +260,81 @@ else
     log "VAX artifact set present in the cut bundle (${#VAX_ARTIFACT_ORDER[@]} artifacts, derived from vax-artifact-manifest.txt): ${VAX_ARTIFACT_ORDER[*]}"
 fi
 
+# --- Alpha (OVMX/Linux-Alpha, LP64) release artifacts -- CO-RELEASE GATE -----
+# (rd vms-233b, epic vms-f10, "co-release parity across aarch64/x86_64/alpha/
+# VAX"). Alpha is a first-class co-release platform exactly like VAX (operator
+# ruling 2026-08-16: the FOURTH Linux arch, vms.ko-as-executive). A release is
+# NOT cuttable unless the Alpha build gate passes: tools/cut-release-alpha.sh
+# reuses the SAME alpha-linux-gnu cross toolchain ci.yml's alpha-boot-login gate
+# drives to build the real EM_ALPHA/LP64 userspace image set into OUT_DIR/alpha/.
+# For any tree that IS Alpha-capable this call is UNCONDITIONAL -- no --skip-alpha
+# flag exists -- so a broken Alpha build fails this script, which fails the cut,
+# for every caller, with no separate wiring to keep in sync. This is exactly what
+# protects an Alpha-carrying cut (e.g. the GCC lane's Alpha C-RTL DECC$SHR/
+# LIBOTS$SHR userland): if that build breaks, the cut reds here.
+#
+# SCOPE: the byte-reproducible userspace image set (ovmx-images aggregate). The
+# Alpha executive modules (vms.ko/vmsfs.ko) are a tracked follow-on (rd child of
+# vms-233b) -- kbuild module byte-reproducibility under cut-release-reproducible
+# needs its own SOURCE_DATE_EPOCH/deterministic-signing proof, the same
+# build-vs-runtime split VAX draws between its R2 build gate and R3 modular-kernel
+# work; alpha-boot-login independently proves the Alpha modules build + boot. See
+# cut-release-alpha.sh's header for the INV-6 honesty rationale.
+#
+# HISTORICAL-BASELINE EXCEPTION (same as VAX): a ref that PREDATES Alpha
+# co-release support (no tools/cross-alpha/Dockerfile in the archived tree -- an
+# upgrade-test baseline fixture) is not "the Alpha build is broken", it is a tree
+# from before the capability existed. Skip LOUDLY and honestly; the gate stays
+# airtight for every tree that HAS the tooling (in particular every current/HEAD
+# cut). Runs BEFORE the ~25-30-min x86_64 container build below so a broken Alpha
+# build fails the cut FAST.
+ALPHA_ARTIFACT_ORDER=()
+ALPHA_SHA_NAMES=()
+ALPHA_SKIP_NOTE=""
+if [ ! -f "$SRC_DIR/tools/cross-alpha/Dockerfile" ]; then
+    log "%CUT-ALPHA-I-PREALPHA, ref $GIT_REF ($COMMIT) predates Alpha co-release support (no tools/cross-alpha in the archived tree) -- Alpha artifacts omitted for this historical cut"
+    ALPHA_SKIP_NOTE="ref $GIT_REF ($COMMIT) predates Alpha co-release support (rd vms-233b) -- no tools/cross-alpha/Dockerfile in the archived tree, so no Alpha build was attempted or required for this historical cut."
+else
+    ALPHA_OUT_DIR="$OUT_DIR/alpha"
+    mkdir -p "$ALPHA_OUT_DIR"
+    CUT_RELEASE_ALPHA_ARGS=(--src-dir "$SRC_DIR" --out-dir "$ALPHA_OUT_DIR")
+    [ "$NO_CACHE" -eq 1 ] && CUT_RELEASE_ALPHA_ARGS+=(--no-cache)
+    log "building Alpha (OVMX/Linux-Alpha/EM_ALPHA LP64) release artifacts -- co-release gate, no skip"
+    "$SCRIPT_DIR/cut-release-alpha.sh" "${CUT_RELEASE_ALPHA_ARGS[@]}" \
+        || fail "Alpha release-artifact build FAILED -- co-release invariant (epic vms-f10): a release is not cut unless the Alpha build gate passes"
+
+    # ALPHA_ARTIFACT_ORDER: DERIVED from cut-release-alpha.sh's own
+    # alpha-artifact-manifest.txt (itself derived from install_manifest_ovmx-
+    # images.txt) -- read straight from what the Alpha build actually produced on
+    # THIS cut, never a hand-maintained list here.
+    ALPHA_MANIFEST_FILE="$ALPHA_OUT_DIR/alpha-artifact-manifest.txt"
+    [ -f "$ALPHA_MANIFEST_FILE" ] || fail "cut-release-alpha.sh claimed success but wrote no alpha-artifact-manifest.txt: $ALPHA_MANIFEST_FILE"
+    while IFS= read -r name || [ -n "$name" ]; do
+        [ -n "$name" ] && ALPHA_ARTIFACT_ORDER+=("$name")
+    done < "$ALPHA_MANIFEST_FILE"
+    [ "${#ALPHA_ARTIFACT_ORDER[@]}" -gt 0 ] || fail "alpha-artifact-manifest.txt named zero artifacts: $ALPHA_MANIFEST_FILE"
+
+    # Ground-source check, both directions (same discipline as VAX above):
+    #   1. every name the manifest claims must be a real file in the bundle.
+    #   2. every real file in the bundle (other than the manifest itself) must be
+    #      named in the manifest (a shipped file the manifest forgot -- the drift
+    #      class this discipline exists to kill).
+    for name in "${ALPHA_ARTIFACT_ORDER[@]}"; do
+        [ -f "$ALPHA_OUT_DIR/$name" ] || fail "Alpha artifact missing from the cut bundle after cut-release-alpha.sh claimed success: alpha/$name"
+    done
+    ALPHA_DIR_COUNT="$(find "$ALPHA_OUT_DIR" -maxdepth 1 -type f ! -name 'alpha-artifact-manifest.txt' | wc -l)"
+    [ "$ALPHA_DIR_COUNT" -eq "${#ALPHA_ARTIFACT_ORDER[@]}" ] || \
+        fail "Alpha artifact count mismatch: alpha-artifact-manifest.txt names ${#ALPHA_ARTIFACT_ORDER[@]} artifacts but $ALPHA_OUT_DIR contains $ALPHA_DIR_COUNT files -- something shipped that the manifest did not name, or vice versa"
+
+    for name in "${ALPHA_ARTIFACT_ORDER[@]}"; do
+        ALPHA_SHA_NAMES+=("alpha/$name")
+    done
+    # alpha-artifact-manifest.txt is deterministic, git-tree-derived content, so
+    # it belongs in the same checksum net as every other artifact.
+    ALPHA_SHA_NAMES+=("alpha/alpha-artifact-manifest.txt")
+    log "Alpha artifact set present in the cut bundle (${#ALPHA_ARTIFACT_ORDER[@]} artifacts, derived from alpha-artifact-manifest.txt): ${ALPHA_ARTIFACT_ORDER[*]}"
+fi
+
 # --- The containerized build (unchanged pipeline; this script drives it) ---
 docker buildx inspect >/dev/null 2>&1 || \
     docker buildx create --name ovmx-cut-release --use >/dev/null
@@ -337,9 +419,9 @@ python3 "$SCRIPT_DIR/gen_release_notes.py" \
 # and its own `sha256sum -c SHA256SUMS` re-verification covers them for free.
 (
     cd "$OUT_DIR"
-    sha256sum "${ARTIFACT_ORDER[@]}" ovmx-os.kit.manifest.txt "${VAX_SHA_NAMES[@]}" "$RELEASE_NOTES_FILE" > SHA256SUMS
+    sha256sum "${ARTIFACT_ORDER[@]}" ovmx-os.kit.manifest.txt "${VAX_SHA_NAMES[@]}" "${ALPHA_SHA_NAMES[@]}" "$RELEASE_NOTES_FILE" > SHA256SUMS
 )
-log "wrote $OUT_DIR/SHA256SUMS (including ${#VAX_SHA_NAMES[@]} VAX artifacts)"
+log "wrote $OUT_DIR/SHA256SUMS (including ${#VAX_SHA_NAMES[@]} VAX + ${#ALPHA_SHA_NAMES[@]} Alpha artifacts)"
 
 # --- Machine-readable release manifest --------------------------------------
 # OVMX-defined format (Project Rule 8): this is NOT a VSI/PCSI artifact and is
@@ -395,6 +477,31 @@ bytes_of() { stat -c%s "$OUT_DIR/$1"; }
         [ "$vax_first" -eq 1 ] && vax_first=0 || printf ',\n'
         printf '      {"component": "vax/%s", "product_version": "%s", "sha256": "%s", "bytes": %s}' \
             "$name" "$PRODUCT_VERSION" "$(sha256_of "vax/$name")" "$(bytes_of "vax/$name")"
+    done
+    printf '\n    ]\n'
+    printf '  },\n'
+    printf '  "alpha_release_parity": {\n'
+    printf '    "_note": "Alpha (OVMX/Linux-Alpha, EM_ALPHA/LP64) co-release artifacts (rd vms-233b, epic vms-f10: co-release parity across aarch64/x86_64/alpha/VAX). BUILD-ONLY (Rule 9 tooling, never a runtime claim): the byte-reproducible userspace ovmx-images aggregate, cross-built under the alpha-linux-gnu toolchain -- the same images alpha-boot-login boots. The Alpha executive modules (vms.ko/vmsfs.ko) are a tracked follow-on, deliberately NOT shipped here (kbuild byte-reproducibility needs its own proof, INV-6); alpha-boot-login independently proves they build + boot. All files under alpha/.",\n'
+    printf '    "skipped": %s,\n' "$([ -n "$ALPHA_SKIP_NOTE" ] && echo true || echo false)"
+    if [ -n "$ALPHA_SKIP_NOTE" ]; then
+        printf '    "skipped_reason": "%s",\n' "$ALPHA_SKIP_NOTE"
+    fi
+    # alpha_artifacts: the plain flat list of shipped Alpha artifact basenames --
+    # exactly ALPHA_ARTIFACT_ORDER, DERIVED from cut-release-alpha.sh's
+    # alpha-artifact-manifest.txt, never hand-maintained.
+    printf '    "alpha_artifacts": [\n'
+    alpha_names_first=1
+    for name in "${ALPHA_ARTIFACT_ORDER[@]}"; do
+        [ "$alpha_names_first" -eq 1 ] && alpha_names_first=0 || printf ',\n'
+        printf '      "%s"' "$name"
+    done
+    printf '\n    ],\n'
+    printf '    "artifacts": [\n'
+    alpha_first=1
+    for name in "${ALPHA_ARTIFACT_ORDER[@]}"; do
+        [ "$alpha_first" -eq 1 ] && alpha_first=0 || printf ',\n'
+        printf '      {"component": "alpha/%s", "product_version": "%s", "sha256": "%s", "bytes": %s}' \
+            "$name" "$PRODUCT_VERSION" "$(sha256_of "alpha/$name")" "$(bytes_of "alpha/$name")"
     done
     printf '\n    ]\n'
     printf '  },\n'

@@ -103,6 +103,17 @@ foreach(_src ${QEMU_SYSSVC_SOURCES})
     qemu_syssvc_add_test(${_name} ${_src})
 endforeach()
 
+# test_arith_hparith (vms-db3, epic vms-8954): the Alpha FP-trap -> SS$_HPARITH
+# condition bridge. DELIBERATELY named test_arith_* (NOT test_syssvc_*): it is an
+# Alpha-only libvms RTL signal primitive, not a /dev/vms executive facility, so
+# it does not belong to the x86/arm per-facility negctl rig (which globs only
+# test_kmod_/test_syssvc_/test_imgact_ and has no qemu-system-alpha to run it).
+# It runs on the Alpha rig (tools/cross-alpha/run-syssvc-tests-alpha.sh), where
+# it is GREEN under the real kernel trap path. Registered explicitly here since
+# the test_syssvc_ glob above intentionally does not see it; the aggregate
+# qemu_syssvc_tests still builds it via the GLOBAL target list.
+qemu_syssvc_add_test(test_arith_hparith ${CMAKE_CURRENT_SOURCE_DIR}/test_arith_hparith.c)
+
 # ---------------------------------------------------------------------------
 # RMS-over-ACP force-bind (rms_acp_bind.c) -- OPT-IN, not blanket (vms-5f0).
 #
@@ -147,6 +158,23 @@ foreach(_anchored
             ${CMAKE_CURRENT_SOURCE_DIR}/rms_acp_bind.c)
     endif()
 endforeach()
+
+# test_arith_hparith (vms-db3, epic vms-8954): the Alpha FP-trap -> SS$_HPARITH
+# condition bridge, end to end under -static. Alpha-only (the test honest-skips
+# on other arches), so its two extra needs are guarded on the alpha target:
+#   1. arith_signal_bind.c as a PRIMARY object -- a strong ref to
+#      ovmx$arith_signal_anchor force-pulls src/libvms/rtl/arith_signal.o (and
+#      its image-start constructor) into the static image, the established
+#      -static weak-seam anchor pattern (src/vmslink/dcl_rms_bind.c). Without it
+#      the bridge's constructor is dropped and the auto-install CHECK fails.
+#   2. -mfp-trap-mode=sui so the test's FP divide is trap-enabling (a bare
+#      divide never traps regardless of FPCR), matching how a VMS image built
+#      for IEEE-trap FP compiles its arithmetic.
+if(TARGET test_arith_hparith AND CMAKE_SYSTEM_PROCESSOR STREQUAL "alpha")
+    target_sources(test_arith_hparith PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmslink/arith_signal_bind.c)
+    target_compile_options(test_arith_hparith PRIVATE -mieee -mfp-trap-mode=sui)
+endif()
 
 # test_syssvc_rms_p3_acp (vms-045) drives the runtime Prolog-3 indexed WRITE+READ
 # engine (src/vmsrms/rms_prolog3.c) over a real /dev/vms: it needs the engine's

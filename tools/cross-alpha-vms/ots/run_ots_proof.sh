@@ -66,7 +66,11 @@ docker run --rm \
         BOUND=$(sed -n "s/.*, \([0-9]\+\) EVAX cross-image imports bound to --use producer.*/\1/p" $W/link.err | tail -1)
         echo "== PROOF: OTS\$ references bound as cross-image imports (total=${BOUND:-?}); zero OTS\$ deferred =="
         echo "== remaining deferred residual (must be EMPTY as of vms-838a) =="
-        grep -oE "undefined symbol '"'"'[^'"'"']+'"'"'" $W/link.err | sed "s/.*'"'"'\(.*\)'"'"'/\1/" | sort | uniq -c
+        # Display-only breakdown; guard the grep so a NO-MATCH (the success case,
+        # zero residual) cannot become the step exit status under -eo pipefail.
+        # The strict zero-residual assertion is (e2) below via %LINK-W-UNDEF.
+        RESIDUAL=$(grep -oE "undefined symbol '"'"'[^'"'"']+'"'"'" $W/link.err | sed "s/.*'"'"'\(.*\)'"'"'/\1/" | sort | uniq -c || true)
+        if [ -n "$RESIDUAL" ]; then echo "$RESIDUAL"; else echo "   (none - residual EMPTY, OK)"; fi
 
         # (e2) ASSERT the WHOLE residual is closed (vms-838a): the setjmp/longjmp
         # (decc$longjmp), cancellation (__cp_*/__syscall_cp_asm) and linker-defined

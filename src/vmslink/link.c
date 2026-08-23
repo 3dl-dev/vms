@@ -3516,14 +3516,32 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
 
 /* Link a set of EVAX objects into a VMS-standard ELF ET_DYN image. Undefined
  * references EXPORTED by a --use'd producer bind as cross-image imports emitted
- * in a .vms$imp table IMGACT resolves at activation (bead vms-c179). */
-static void emit_evax_image(struct evax_input *in, int nin,
-                            const char *transfer, int allow_undef,
-                            struct producer *producers, int np, const char *out)
+ * in a .vms$imp table IMGACT resolves at activation (bead vms-c179).
+ *
+ * ONE emitter, two products (bead vms-c65). is_shareable == 0 -> a leaf/main
+ * EXECUTABLE: takes --transfer, stamps .vms$xfer, and is PT_INTERP'd
+ * (PT_PHDR + PT_INTERP=IMGACT.EXE) so the kernel activates it. is_shareable == 1
+ * -> a SHAREABLE (a real Alpha DECC$SHR and any Alpha .vms$sv producer): takes
+ * --symbol-vector/--gsmatch, stamps .vms$sv (the declared universals, each bound
+ * to the defining EVAX symbol by vector index), has NO transfer address and NO
+ * PT_INTERP -- exactly like the ELF shareable emit_shareable produces (a single
+ * PT_LOAD ET_DYN that a --use consumer / IMGACT reads by section vaddr). The
+ * .vms$sv is byte-compatible with the ELF path's (same ovmx_sv_header + entry
+ * layout + GSMATCH): an Alpha and an x86_64 shareable differ only in e_machine +
+ * .text arch, never in the arch-neutral symbol vector. Both products share the
+ * psect layout, the reloc apply, and the .vms$imp / .vms$rel tables. */
+static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
+                             const char *transfer,
+                             struct univ *uv, int nuniv,
+                             uint32_t gk, uint32_t gmaj, uint32_t gmin,
+                             int allow_undef,
+                             struct producer *producers, int np, const char *out)
 {
-    if (!transfer)
+    if (!is_shareable && !transfer)
         die("the EVAX/Alpha image needs --transfer SYMBOL (the main transfer "
             "address; crt0 __main for a GCC-port image)");
+    if (is_shareable && nuniv == 0)
+        die("the EVAX/Alpha shareable needs --symbol-vector (declared universals)");
 
     /* ---- Layout: merge same-named psects across objects, identity-mapped
      * (file offset == image vaddr) so a section's bytes sit at their vaddr. --- */
@@ -3533,11 +3551,16 @@ static void emit_evax_image(struct evax_input *in, int nin,
      * .vms$rel). Without PT_INTERP the kernel maps the image but never runs
      * IMGACT, leaving the import cells zero -> SIGILL on first cross-image call.
      * The interp path string lives in the header area, ahead of the psects. */
-    const int      nph        = 3;   /* PT_PHDR, PT_INTERP, PT_LOAD */
+    /* A shareable matches the ELF emit_shareable header: a single PT_LOAD, no
+     * PT_INTERP (it is read as a producer by IMGACT / a --use consumer, never
+     * activated through the kernel interp). An executable keeps PT_PHDR +
+     * PT_INTERP=IMGACT.EXE + PT_LOAD (vms-e0c). (vms-c65) */
+    const int      nph        = is_shareable ? 1 : 3;
     const uint64_t off_ph     = sizeof(Elf64_Ehdr);
-    const uint64_t off_interp = ALIGN_UP(off_ph + (uint64_t)nph * sizeof(Elf64_Phdr), 16);
-    const uint64_t interp_sz  = strlen(IMGACT_INTERP) + 1;
-    uint64_t hdr_end = ALIGN_UP(off_interp + interp_sz, 16);
+    const uint64_t phdrs_end  = ALIGN_UP(off_ph + (uint64_t)nph * sizeof(Elf64_Phdr), 16);
+    const uint64_t off_interp = is_shareable ? 0 : phdrs_end;
+    const uint64_t interp_sz  = is_shareable ? 0 : (uint64_t)strlen(IMGACT_INTERP) + 1;
+    uint64_t hdr_end = is_shareable ? phdrs_end : ALIGN_UP(off_interp + interp_sz, 16);
     uint64_t cur = hdr_end;
 
     /* Output sections we emit headers for: one per distinct (rank-ordered) psect
@@ -3581,23 +3604,66 @@ static void emit_evax_image(struct evax_input *in, int nin,
         }
     }
 
-    /* .vms$xfer: 16-byte header + count image-relative u64 transfer addresses.
-     * First light: count == 1 (no LIB$INITIALIZE handlers), the single entry is
-     * the --transfer symbol's descriptor address (image-relative). */
-    int di; const struct evax_symbol *ds;
-    if (evax_find_sym(in, nin, transfer, &di, &ds) < 0)
-        die("--transfer symbol is not defined by any input object");
-    uint64_t transfer_va = evax_sym_value_addr(in, di, ds);
-
+    /* .vms$xfer (executable) OR .vms$sv (shareable). Both sit right after the
+     * psects, inside the loaded range, so IMGACT / a --use consumer reads them by
+     * section vaddr. Resolution happens HERE (after placement) so every psect
+     * base is final -- exactly when the transfer address is resolved. */
+    uint64_t transfer_va = 0;
     uint32_t xfer_count = 1;
-    uint64_t xfer_size = sizeof(struct ovmx_xfer_header) + (uint64_t)xfer_count * 8;
-    cur = ALIGN_UP(cur, 8);
-    uint64_t xfer_addr = cur;
-    cur += xfer_size;
-    {
+    uint64_t xfer_addr = 0, xfer_size = 0;
+    uint64_t off_sv = 0, sv_size = 0, sv_names_o = 0;
+    uint32_t sv_names_size = 0;
+
+    if (!is_shareable) {
+        /* .vms$xfer: 16-byte header + count image-relative u64 transfer
+         * addresses. First light: count == 1 (no LIB$INITIALIZE handlers); the
+         * single entry is the --transfer symbol's descriptor address. */
+        int di; const struct evax_symbol *ds;
+        if (evax_find_sym(in, nin, transfer, &di, &ds) < 0)
+            die("--transfer symbol is not defined by any input object");
+        transfer_va = evax_sym_value_addr(in, di, ds);
+
+        xfer_size = sizeof(struct ovmx_xfer_header) + (uint64_t)xfer_count * 8;
+        cur = ALIGN_UP(cur, 8);
+        xfer_addr = cur;
+        cur += xfer_size;
         int oi = nos++;
         snprintf(osec[oi].name, sizeof osec[oi].name, "%s", OVMX_XFER_SECTION);
         osec[oi].addr = xfer_addr; osec[oi].size = xfer_size; osec[oi].nobits = 0;
+    } else {
+        /* .vms$sv: resolve each declared universal to its DEFINING EVAX symbol's
+         * image-relative address (PROCEDURE -> code entry point, DATA -> value
+         * address), a GLOBALVALUE to its preset absolute constant, RETIRED to 0.
+         * A universal that names no defining internal symbol is a hard %LINK-F
+         * error -- never a bogus vector entry (INV-6). The value stays
+         * image-relative; ovmx_sv_resolve adds the producer load bias when a
+         * consumer imports it, so the sv entries need no .vms$rel fixup of their
+         * own (identical to the ELF emit_shareable policy). (vms-c65) */
+        for (int i = 0; i < nuniv; i++) {
+            if (uv[i].kind == OVMX_SV_RETIRED)     { uv[i].value = 0; continue; }
+            if (uv[i].kind == OVMX_SV_GLOBALVALUE) { continue; /* preset const */ }
+            int di; const struct evax_symbol *ds;
+            if (evax_find_sym(in, nin, uv[i].internal, &di, &ds) < 0) {
+                fprintf(stderr, "%%LINK-F-NOUNIV, EVAX shareable: universal '%s' "
+                        "names internal symbol '%s' defined by no input object\n",
+                        uv[i].name, uv[i].internal);
+                exit(1);
+            }
+            uv[i].value = (uv[i].kind == OVMX_SV_PROCEDURE)
+                        ? evax_sym_code_addr(in, di, ds)    /* code entry point   */
+                        : evax_sym_value_addr(in, di, ds);  /* data location addr */
+        }
+        for (int i = 0; i < nuniv; i++)
+            sv_names_size += (uint32_t)strlen(uv[i].name) + 1;
+        sv_names_o = sizeof(struct ovmx_sv_header)
+                   + (uint64_t)nuniv * sizeof(struct ovmx_sv_entry);
+        sv_size = sv_names_o + sv_names_size;
+        cur = ALIGN_UP(cur, 8);
+        off_sv = cur;
+        cur += sv_size;
+        int oi = nos++;
+        snprintf(osec[oi].name, sizeof osec[oi].name, "%s", OVMX_SV_SECTION);
+        osec[oi].addr = off_sv; osec[oi].size = sv_size; osec[oi].nobits = 0;
     }
 
     /* ---- Apply all relocations into the psect content buffers. Cross-image
@@ -3704,17 +3770,24 @@ static void emit_evax_image(struct evax_input *in, int nin,
      * PT_LOAD over the whole image (RWX — first light). Mirrors the ELF exec
      * path. (vms-e0c) */
     Elf64_Phdr *ph = (Elf64_Phdr *)(img + off_ph);
-    ph[0].p_type = PT_PHDR; ph[0].p_flags = PF_R;
-    ph[0].p_offset = off_ph; ph[0].p_vaddr = off_ph; ph[0].p_paddr = off_ph;
-    ph[0].p_filesz = (uint64_t)nph * sizeof(Elf64_Phdr);
-    ph[0].p_memsz  = ph[0].p_filesz; ph[0].p_align = 8;
-    ph[1].p_type = PT_INTERP; ph[1].p_flags = PF_R;
-    ph[1].p_offset = off_interp; ph[1].p_vaddr = off_interp; ph[1].p_paddr = off_interp;
-    ph[1].p_filesz = interp_sz; ph[1].p_memsz = interp_sz; ph[1].p_align = 1;
-    ph[2].p_type = PT_LOAD; ph[2].p_flags = PF_R | PF_W | PF_X;
-    ph[2].p_offset = 0; ph[2].p_vaddr = 0; ph[2].p_paddr = 0;
-    ph[2].p_filesz = file_end; ph[2].p_memsz = mem_end; ph[2].p_align = 0x1000;
-    memcpy(img + off_interp, IMGACT_INTERP, interp_sz);
+    int li;   /* index of the PT_LOAD phdr */
+    if (is_shareable) {
+        /* Match the ELF shareable: a bare PT_LOAD ET_DYN, read as a producer. */
+        li = 0;
+    } else {
+        ph[0].p_type = PT_PHDR; ph[0].p_flags = PF_R;
+        ph[0].p_offset = off_ph; ph[0].p_vaddr = off_ph; ph[0].p_paddr = off_ph;
+        ph[0].p_filesz = (uint64_t)nph * sizeof(Elf64_Phdr);
+        ph[0].p_memsz  = ph[0].p_filesz; ph[0].p_align = 8;
+        ph[1].p_type = PT_INTERP; ph[1].p_flags = PF_R;
+        ph[1].p_offset = off_interp; ph[1].p_vaddr = off_interp; ph[1].p_paddr = off_interp;
+        ph[1].p_filesz = interp_sz; ph[1].p_memsz = interp_sz; ph[1].p_align = 1;
+        li = 2;
+    }
+    ph[li].p_type = PT_LOAD; ph[li].p_flags = PF_R | PF_W | PF_X;
+    ph[li].p_offset = 0; ph[li].p_vaddr = 0; ph[li].p_paddr = 0;
+    ph[li].p_filesz = file_end; ph[li].p_memsz = mem_end; ph[li].p_align = 0x1000;
+    if (!is_shareable) memcpy(img + off_interp, IMGACT_INTERP, interp_sz);
 
     /* Copy each psect's (relocated) content to its identity-mapped file offset. */
     for (int i = 0; i < nin; i++)
@@ -3727,15 +3800,43 @@ static void emit_evax_image(struct evax_input *in, int nin,
             /* NULL content == all zero, already zeroed by calloc. */
         }
 
-    /* Stamp .vms$xfer. */
-    struct ovmx_xfer_header xh;
-    xh.magic = OVMX_XFER_MAGIC; xh.flavor = OVMX_ACT_VMS_STD;
-    xh.count = xfer_count; xh.reserved = 0;
-    putl32(img + xfer_addr + 0,  xh.magic);
-    putl32(img + xfer_addr + 4,  xh.flavor);
-    putl32(img + xfer_addr + 8,  xh.count);
-    putl32(img + xfer_addr + 12, xh.reserved);
-    putl64(img + xfer_addr + 16, transfer_va);   /* entry[0] = main transfer   */
+    /* Stamp .vms$xfer (executable) or .vms$sv (shareable). */
+    if (!is_shareable) {
+        struct ovmx_xfer_header xh;
+        xh.magic = OVMX_XFER_MAGIC; xh.flavor = OVMX_ACT_VMS_STD;
+        xh.count = xfer_count; xh.reserved = 0;
+        putl32(img + xfer_addr + 0,  xh.magic);
+        putl32(img + xfer_addr + 4,  xh.flavor);
+        putl32(img + xfer_addr + 8,  xh.count);
+        putl32(img + xfer_addr + 12, xh.reserved);
+        putl64(img + xfer_addr + 16, transfer_va);   /* entry[0] = main transfer */
+    } else {
+        /* .vms$sv: the SAME ovmx_sv_header + entry layout + name blob the ELF
+         * emit_shareable stamps -- byte-compatible so IMGACT, the cross-image
+         * import machinery, and OVMXDUMP read an Alpha and an x86_64 shareable
+         * identically (the vector is arch-neutral). Written little-endian via
+         * putl* like the rest of the image. (vms-c65) */
+        putl32(img + off_sv + 0,  OVMX_SV_MAGIC);
+        putl32(img + off_sv + 4,  (uint32_t)nuniv);
+        putl32(img + off_sv + 8,  gk);
+        putl32(img + off_sv + 12, gmaj);
+        putl32(img + off_sv + 16, gmin);
+        putl32(img + off_sv + 20, (uint32_t)sv_names_o);   /* names_off  */
+        putl32(img + off_sv + 24, sv_names_size);          /* names_size */
+        putl32(img + off_sv + 28, 0);                      /* reserved   */
+        uint64_t ent = off_sv + sizeof(struct ovmx_sv_header);
+        uint64_t nb  = off_sv + sv_names_o;
+        uint32_t noff = 0;
+        for (int i = 0; i < nuniv; i++) {
+            uint64_t e = ent + (uint64_t)i * sizeof(struct ovmx_sv_entry);
+            putl64(img + e + 0,  uv[i].value);   /* image-relative addr / const  */
+            putl32(img + e + 8,  uv[i].kind);
+            putl32(img + e + 12, noff);          /* name blob offset (diagnostic) */
+            size_t l = strlen(uv[i].name) + 1;
+            memcpy(img + nb + noff, uv[i].name, l);
+            noff += (uint32_t)l;
+        }
+    }
 
     /* Stamp .vms$imp (cross-image imports). patch_off = imp[i].got_va (the site
      * image-relative address), producer soname + sv index per record. */
@@ -3784,20 +3885,32 @@ static void emit_evax_image(struct evax_input *in, int nin,
     close(fd);
 
     fprintf(stderr,
-        "%%LINK-S-CREATED, %s: EVAX/Alpha ET_DYN image, %d object%s, "
+        "%%LINK-S-CREATED, %s: EVAX/Alpha ET_DYN %s, %d object%s, "
         "%d data reloc%s applied, %d linkage pair%s applied, "
-        "%d call-site reloc%s kept indirect (first-light), .vms$xfer count=%u\n",
-        out, nin, nin == 1 ? "" : "s",
+        "%d call-site reloc%s kept indirect (first-light), %s=%u\n",
+        out, is_shareable ? "shareable" : "image", nin, nin == 1 ? "" : "s",
         n_data, n_data == 1 ? "" : "s",
         n_linkage, n_linkage == 1 ? "" : "s",
-        n_callsite, n_callsite == 1 ? "" : "s", xfer_count);
+        n_callsite, n_callsite == 1 ? "" : "s",
+        is_shareable ? ".vms$sv count" : ".vms$xfer count",
+        is_shareable ? (uint32_t)nuniv : xfer_count);
     /* Layout map (stderr) — aids hand-tracing + the integration test. */
     for (int k = 0; k < nos; k++)
         fprintf(stderr, "%%LINK-I-SECT, %-10s addr=0x%llx size=0x%llx\n",
                 osec[k].name, (unsigned long long)osec[k].addr,
                 (unsigned long long)osec[k].size);
-    fprintf(stderr, "%%LINK-I-XFER, transfer '%s' -> image-relative 0x%llx\n",
-            transfer, (unsigned long long)transfer_va);
+    if (!is_shareable)
+        fprintf(stderr, "%%LINK-I-XFER, transfer '%s' -> image-relative 0x%llx\n",
+                transfer, (unsigned long long)transfer_va);
+    else {
+        fprintf(stderr, "%%LINK-I-SYMVEC, .vms$sv at 0x%llx, %d universal%s, "
+                "GSMATCH kind=%u %u.%u\n",
+                (unsigned long long)off_sv, nuniv, nuniv == 1 ? "" : "s",
+                gk, gmaj, gmin);
+        for (int i = 0; i < nuniv; i++)
+            fprintf(stderr, "%%LINK-I-UNIV, sv#%d %-24s kind=%u value=0x%llx\n",
+                    i, uv[i].name, uv[i].kind, (unsigned long long)uv[i].value);
+    }
     if (n_ximport)
         fprintf(stderr, "%%LINK-I-IMPORT, %d EVAX cross-image import%s bound to "
                 "--use producer%s (.vms$imp at 0x%llx, resolved at activation)\n",
@@ -3813,6 +3926,29 @@ static void emit_evax_image(struct evax_input *in, int nin,
                 deferred, deferred == 1 ? "" : "s");
     free(imp);
     free(rel_off);
+}
+
+/* EVAX/Alpha leaf/main EXECUTABLE: takes --transfer, stamps .vms$xfer, and is
+ * PT_INTERP'd (kernel-activatable). Thin wrapper over emit_evax_common. */
+static void emit_evax_image(struct evax_input *in, int nin,
+                            const char *transfer, int allow_undef,
+                            struct producer *producers, int np, const char *out)
+{
+    emit_evax_common(in, nin, /*is_shareable=*/0, transfer, NULL, 0,
+                     0, 0, 0, allow_undef, producers, np, out);
+}
+
+/* EVAX/Alpha SHAREABLE: takes --symbol-vector/--gsmatch, stamps .vms$sv, has no
+ * transfer and no PT_INTERP -- a real Alpha DECC$SHR / .vms$sv producer built
+ * from alpha-dec-vms objects. Thin wrapper over emit_evax_common. (bead vms-c65) */
+static void emit_evax_shareable(struct evax_input *in, int nin,
+                                struct univ *uv, int nuniv,
+                                uint32_t gk, uint32_t gmaj, uint32_t gmin,
+                                int allow_undef,
+                                struct producer *producers, int np, const char *out)
+{
+    emit_evax_common(in, nin, /*is_shareable=*/1, NULL, uv, nuniv,
+                     gk, gmaj, gmin, allow_undef, producers, np, out);
 }
 
 /* Sniff a file's object format from its first bytes (input already on disk). */
@@ -3896,11 +4032,12 @@ int main(int argc, char **argv)
     if (!out) die("no -o output");
 
     /* ---- Format dispatch (bead vms-cbe). An EVAX (Alpha/VMS) object — first
-     * record is an EMH, never ELF magic — takes the dedicated Alpha path
-     * (emit_evax_image); an ELF object set takes emit_shareable below. The two
-     * are never mixed in one link. The EVAX path does not use
-     * --shareable/--executable/--symbol-vector, so it dispatches BEFORE those
-     * checks. ---- */
+     * record is an EMH, never ELF magic — takes the dedicated Alpha path; an ELF
+     * object set takes emit_shareable below. The two are never mixed in one link.
+     * The EVAX path dispatches BEFORE the ELF --shareable/--executable checks; it
+     * emits an EXECUTABLE (emit_evax_image, --transfer) by default, or a
+     * SHAREABLE (emit_evax_shareable, --symbol-vector/--gsmatch) under
+     * --shareable (bead vms-c65). ---- */
     if (sniff_format(ins[0]) == EVFMT_EVAX) {
         /* EVAX/Alpha path. Slurp each input ONCE here (no byte-exact read-total
          * gate on this path), sniff it from the full buffer, and hand it to
@@ -3921,7 +4058,17 @@ int main(int argc, char **argv)
                 exit(1);
             }
         }
-        emit_evax_image(ein, nin, transfer, allow_undef, producers, np, out);
+        if (shareable) {
+            if (executable)
+                die("specify at most one of --shareable / --executable");
+            if (nuniv == 0)
+                die("the EVAX/Alpha shareable needs --symbol-vector "
+                    "(e.g. --symbol-vector \"FOO=PROCEDURE,BAR=DATA\")");
+            emit_evax_shareable(ein, nin, uv, nuniv, gk, gmaj, gmin,
+                                allow_undef, producers, np, out);
+        } else {
+            emit_evax_image(ein, nin, transfer, allow_undef, producers, np, out);
+        }
         return 0;
     }
     /* ELF object set: fall through to emit_shareable. load_obj does the single

@@ -118,11 +118,63 @@ make -k all-target-libgcc -j"${JOBS}" \
     || echo "== all-target-libgcc kept going past VMS-EH gaps (expected) =="
 LIBGCC_BUILD="/src/build-gcc/${TARGET}/libgcc"
 mkdir -p "${PREFIX}/lib"
+
+# ARCHIVE STEP — HAND-BUILT no-index System V `ar` CONTAINER, NOT the cross ar
+# (vms-a90f, do-it-like-VMS; identical archiver to musl-arch/build-musl.sh).
+#
+# WHY NOT `${TARGET}-ar`: the binutils vms-alpha `ar` writes a VMS *LBR librarian*
+# container (magic 0x0207 "GNU ar ...", i.e. a `.olb`), NOT the System V `!<arch>\n`
+# format. OVMX LINK.EXE's EVAX front end (link.c load_archive_evax) walks a System V
+# `ar` container and evax_read()s each member; it does not parse an LBR. Fed an LBR
+# libgcc.a it dies "not an ar archive", and even host `ar`/`nm` report "file format
+# not recognized" (they cannot read vms-alpha at all — confirmed empirically), so the
+# LBR could not be repacked after the fact either. The cross ar was therefore the
+# wrong tool: libgcc.a must be a System V container from the start.
+#
+# The System V `ar` container is a trivial text-header + member-bytes format that
+# needs NO object parsing to assemble — build it byte-for-byte, never reading a
+# member. This is also robust to the port cc1's `.vmsdebug`/DST (which makes GNU ar
+# choke on read) regardless of whether -g0 fully suppresses it. LINK.EXE never reads
+# an archive symbol index, so a no-index archive is complete and correct.
+AR_NOINDEX="$(mktemp)"
+cat > "$AR_NOINDEX" <<'AREOF'
+#!/usr/bin/perl
+# no-index System V/GNU `ar` archiver: assemble a container from object files
+# WITHOUT reading their contents. Call shape `<op> <archive> <obj>...`; the op
+# key is ignored (we never build a symbol index — LINK.EXE whole-archives every
+# member and never reads one). Shared logic with musl-arch/build-musl.sh.
+use strict; use warnings;
+shift @ARGV;                       # op key (rc/rcs/...): ignored
+my $out = shift @ARGV or die "ar-noindex: no output archive\n";
+my @objs = @ARGV;
+my %off; my $tab = "";             # GNU "//" long-name table for names >15 bytes
+for my $o (@objs) { my $n = (split m{/}, $o)[-1];
+    if (length($n)+1 > 16 && !exists $off{$n}) { $off{$n}=length($tab); $tab .= "$n/\n"; } }
+$tab .= "\n" if length($tab) % 2;
+sub hdr { my ($name,$size)=@_;
+    return sprintf("%-16s%-12d%-6d%-6d%-8s%-10d\140\n",$name,0,0,0,"100644",$size); }
+open(my $fh,'>',$out) or die "ar-noindex: cannot write $out: $!\n"; binmode $fh;
+print $fh "!<arch>\n";
+if (length $tab) { print $fh hdr("//", length $tab); print $fh $tab; }
+for my $o (@objs) {
+    my $n = (split m{/}, $o)[-1];
+    open(my $in,'<',$o) or die "ar-noindex: cannot read $o: $!\n"; binmode $in;
+    local $/; my $data = <$in>; close $in;
+    my $field = exists $off{$n} ? "/$off{$n}" : "$n/";
+    print $fh hdr($field, length $data); print $fh $data;
+    print $fh "\n" if length($data) % 2;
+}
+close $fh;
+AREOF
+
 if ls "${LIBGCC_BUILD}"/*.o >/dev/null 2>&1; then
-  # Archive the compiled core objects directly (normal ar: -g0 objects, no DST).
-  ( cd "${LIBGCC_BUILD}" && "${TARGET}-ar" rcs "${PREFIX}/lib/libgcc.a" ./*.o )
-  echo "== libgcc.a hand-assembled at ${PREFIX}/lib/libgcc.a ($(cd "${LIBGCC_BUILD}" && ls *.o | wc -l) core objects; VMS-EH extras skipped) =="
-  "${TARGET}-nm" "${PREFIX}/lib/libgcc.a" >/dev/null 2>&1 && echo "== libgcc.a is nm-readable ==" || true
+  # Byte-copy the compiled core objects into a System V no-index libgcc.a.
+  ( cd "${LIBGCC_BUILD}" && perl "$AR_NOINDEX" rc "${PREFIX}/lib/libgcc.a" ./*.o )
+  echo "== libgcc.a hand-assembled (System V no-index) at ${PREFIX}/lib/libgcc.a ($(cd "${LIBGCC_BUILD}" && ls *.o | wc -l) core objects; VMS-EH extras skipped) =="
+  # Sanity: it must be a System V ar (`!<arch>`), the container LINK.EXE walks.
+  head -c 8 "${PREFIX}/lib/libgcc.a" | grep -q '!<arch>' \
+    && echo "== libgcc.a is a System V ar container (LINK.EXE-readable) ==" \
+    || { echo "== FAIL: libgcc.a is not a System V ar container ==" >&2; exit 5; }
 else
   echo "== WARNING: no libgcc objects built; emitting an EMPTY libgcc.a placeholder =="
   # An empty archive is valid; whole-archive pulls 0 members. If musl-alpha ends

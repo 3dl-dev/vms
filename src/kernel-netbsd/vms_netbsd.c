@@ -283,6 +283,104 @@ vms_proc_get(pid_t pid)
 }
 
 /*
+ * vms_proc_continue_identity - stamp the calling task's REAL PARENT's executive
+ * identity onto `proc' (a child PCB vms_proc_get() has just created and seeded
+ * fresh) for VMS_IOCTL_REGISTER_CONTINUE. This is the NetBSD twin of
+ * src/kernel/vms_module.c:vms_proc_continue_identity().
+ *
+ * WHY THIS EXISTS. On OpenVMS, RUN / a foreign command / a DCL utility
+ * activates an image IN the current process -- same PID, UIC, privileges. OVMX
+ * fork()s + execv()s instead (src/vmsdcl/dcl_cmd_process.c), and the child
+ * calls vms_kif_register_continue() BEFORE execv while it is still DCL's child.
+ * Without this the child's PCB carried the FRESH kauth-seeded mask
+ * vms_proc_get() derives (VMS_DEFAULT_PRIVS, plus VMS_PRV_M_ENFORCED for a
+ * root/kauth caller) -- which NEVER includes SYSPRV/BYPASS, since those arrive
+ * only via $SETIDENT (VMS_IOCTL_SETIDENT) after login. So SYSTEM's DCL, holding
+ * SYSPRV/BYPASS, activated AUTHORIZE/LOGINOUT into a child that did NOT, and the
+ * activated image could not open the World-denied SYSUAF.DAT: %UAF-E-NAOFIL,
+ * -RMS-E-PRV. The combined REGISTER/_CONTINUE case here fresh-seeded on BOTH
+ * paths -- it never once looked at the parent -- which is the fabrication this
+ * removes (INV-6): _CONTINUE claimed to continue the parent while handing back
+ * a fresh, differently-privileged identity.
+ *
+ * WHAT IT COPIES. The parent's identity fields (uic/username/prcnam/terminal),
+ * CLI invocation context (cli_present/length/command, so the image reads its
+ * OWN invoking DCL command line back), and BOTH privilege masks -- the parent's
+ * CURRENT (possibly $SETIDENT-reduced) cur_privs, so a non-privileged parent's
+ * child stays non-privileged and a setident-down cannot be undone by a fork.
+ * The child then SHARES the parent's vms_pid: to the rest of the executive DCL
+ * and the image it activated are ONE VMS process ($GETJPI resolves either to
+ * the same identity). Mirrors the Linux twin field-for-field; job_id is not
+ * copied because the NetBSD substrate has no job glue yet (it stays 0 here, as
+ * vms_proc_get leaves it -- honest omission, not a fake value).
+ *
+ * LOCKING. hash_lock (outer) covers the identity fields and vms_pid; each proc's
+ * mode_lock (inner) covers its 64-bit privilege masks -- taken outer-then-inner,
+ * the same order as elsewhere. The parent's masks are read into locals under the
+ * parent's mode_lock, then written to the child under the child's mode_lock, so
+ * the two mode_locks are never held at once and the 64-bit masks are never torn
+ * (which matters on 32-bit VAX, where a uint64_t store is two words).
+ *
+ * The parent is matched by pid NUMBER -- the same key vms_proc_get() and every
+ * walk of vms_proc_hash use on this substrate; the facility reaper clears a dead
+ * PCB before its pid can recycle, which is what makes the number a safe key.
+ *
+ * Returns the parent's VMS PID (nonzero) that the child now shares, or 0 when
+ * the task has no registered VMS parent to continue (0 is never a valid vms_pid;
+ * assign-side keys never hand it out). On the 0 return the child's fresh seed is
+ * left untouched and the caller fails the _CONTINUE honestly -- it does NOT
+ * silently substitute a fresh identity for a continuation that was asked for.
+ */
+static uint32_t
+vms_proc_continue_identity(struct vms_proc *proc, pid_t parent_pid)
+{
+	struct vms_proc *p, *parent = NULL;
+	uint64_t parent_perm, parent_cur;
+	uint32_t shared_vms_pid = 0;
+	int bkt;
+
+	if (parent_pid == 0)
+		return 0;
+
+	exec_lock(&vms_proc_hash_lock);
+	exec_hash_for_each(vms_proc_hash, bkt, p, hash_node) {
+		if (p->pid == parent_pid) {
+			parent = p;
+			break;
+		}
+	}
+	if (parent != NULL) {
+		/* Identity fields: read parent + write child under hash_lock. */
+		proc->uic = parent->uic;
+		memcpy(proc->username, parent->username, sizeof(proc->username));
+		memcpy(proc->prcnam,   parent->prcnam,   sizeof(proc->prcnam));
+		memcpy(proc->terminal, parent->terminal, sizeof(proc->terminal));
+		proc->cli_present = parent->cli_present;
+		proc->cli_length  = parent->cli_length;
+		memcpy(proc->cli_command, parent->cli_command,
+		       sizeof(proc->cli_command));
+
+		/* Privilege masks: read parent under its mode_lock into locals... */
+		exec_lock(&parent->mode_lock);
+		parent_perm = parent->perm_privs;
+		parent_cur  = parent->cur_privs;
+		exec_unlock(&parent->mode_lock);
+		/* ...then write the child under the child's mode_lock. */
+		exec_lock(&proc->mode_lock);
+		proc->perm_privs = parent_perm;
+		proc->cur_privs  = parent_cur;
+		exec_unlock(&proc->mode_lock);
+
+		/* One VMS process: the child SHARES the parent's VMS PID. */
+		proc->vms_pid  = parent->vms_pid;
+		shared_vms_pid = parent->vms_pid;
+	}
+	exec_unlock(&vms_proc_hash_lock);
+
+	return shared_vms_pid;
+}
+
+/*
  * vms_proc_free_claimed - tear down a PCB the facility's reaper has ALREADY
  * unlinked from vms_proc_hash under vms_proc_hash_lock (rd vms-ca7). That unlink
  * is the ownership claim (exactly one caller reaches here per entry), so this
@@ -834,25 +932,66 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		return vms_facility_errno(r);
 
 	/*
-	 * VMS_IOCTL_REGISTER / _CONTINUE (vms-329): adopt-or-create this process's
-	 * executive PCB. Every other ioctl path here does that implicitly through
-	 * vms_proc_get(), which is why the op was never wired -- but the SHARED
-	 * userspace ACP client (src/imgact/imgact_acp.c, used by IMGACT.EXE, the RMS
-	 * ACP arm and PID 1's boot bridge) opens every file with acp_register() and
-	 * treats a failure as fatal. Unanswered, it returned ENOTTY -> SS$_NOSUCHDEV
-	 * and NO ACP file open could ever succeed on this substrate. This creates no
-	 * new policy: it returns the PCB vms_proc_get() builds anyway, matching the
-	 * Linux twin's "hand back the process that already exists" (vms_module.c).
-	 * _IOWR, 8 bytes: `data' is the kernel copy, answered in place.
+	 * VMS_IOCTL_REGISTER (vms-329): adopt-or-create this process's executive
+	 * PCB, FRESH-SEEDED. Every other ioctl path here does that implicitly
+	 * through vms_proc_get(), which is why the op was never wired -- but the
+	 * SHARED userspace ACP client (src/imgact/imgact_acp.c, used by IMGACT.EXE,
+	 * the RMS ACP arm and PID 1's boot bridge) opens every file with
+	 * acp_register() and treats a failure as fatal. Unanswered, it returned
+	 * ENOTTY -> SS$_NOSUCHDEV and NO ACP file open could ever succeed on this
+	 * substrate. This creates no new policy: it returns the PCB vms_proc_get()
+	 * builds anyway, matching the Linux twin's "hand back the process that
+	 * already exists" (vms_module.c). _IOWR, 8 bytes: `data' is the kernel
+	 * copy, answered in place.
 	 */
-	case VMS_IOCTL_REGISTER:
-	case VMS_IOCTL_REGISTER_CONTINUE: {
+	case VMS_IOCTL_REGISTER: {
 		struct vms_register_args *ra = (struct vms_register_args *)data;
 
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
 			return ENOMEM;
 		ra->vms_pid = proc->vms_pid;
+		ra->status  = SS__NORMAL;
+		return 0;
+	}
+
+	/*
+	 * VMS_IOCTL_REGISTER_CONTINUE (vms-381): register this task as a
+	 * CONTINUATION of its parent's VMS process, NOT a fresh identity. DCL
+	 * fork()s + execv()s to activate an image and the child calls this before
+	 * execv while it is still DCL's child; the activated image must run as the
+	 * SAME VMS process -- same UIC, user name, CLI context and, decisively, the
+	 * parent's CURRENT privilege masks (SYSPRV/BYPASS granted to SYSTEM's DCL
+	 * via $SETIDENT), so it can open the World-denied SYSUAF.DAT that AUTHORIZE
+	 * and LOGINOUT need. This case used to be folded in with REGISTER above and
+	 * fresh-seeded identically, so the child NEVER inherited SYSPRV/BYPASS and
+	 * install failed with %UAF-E-NAOFIL / -RMS-E-PRV. It now genuinely continues
+	 * the parent, mirroring src/kernel/vms_module.c's vms_proc_continue_identity
+	 * (INV-6: this REMOVES the fresh-seed fabrication on the continue path).
+	 *
+	 * The parent is the calling task's real parent, p_pptr->p_pid. If it has no
+	 * registered VMS PCB there is nothing to continue: fail honestly (ESRCH,
+	 * leaving vms_proc_get()'s fresh seed as this child's own top-level
+	 * identity) rather than pretend a continuation happened. REGISTER (above),
+	 * not _CONTINUE, is the fresh-seed path.
+	 */
+	case VMS_IOCTL_REGISTER_CONTINUE: {
+		struct vms_register_args *ra = (struct vms_register_args *)data;
+		struct proc *pp;
+		pid_t parent_pid;
+		uint32_t shared_vms_pid;
+
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+
+		pp = l->l_proc->p_pptr;
+		parent_pid = (pp != NULL) ? pp->p_pid : 0;
+		shared_vms_pid = vms_proc_continue_identity(proc, parent_pid);
+		if (shared_vms_pid == 0)
+			return ESRCH;   /* no registered VMS parent to continue */
+
+		ra->vms_pid = proc->vms_pid;   /* == the shared parent VMS PID */
 		ra->status  = SS__NORMAL;
 		return 0;
 	}

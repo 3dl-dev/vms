@@ -544,8 +544,29 @@ static void cmd_set(const char *arg)
     }
 
     if (found->type == SYSGEN_TYPE_STRING) {
+        /* Strip a single matching pair of surrounding double quotes (vms-597).
+         * SCSNODE is a string parameter; SHOW displays it double-quoted, and
+         * both the interactive operator and OVMX$INSTALL.COM's inline-SYS$INPUT
+         * feed pass the value quoted -- SET SCSNODE "OVMXR1". The quotes are
+         * DELIMITERS, not part of the node name, so the stored value (at most
+         * SYSGEN_STRVAL_LEN-1 = 7 content bytes) must be the bare name. Without
+         * this a quoted 6-char node overflows the field WITH its quotes and
+         * stores a truncated, quote-bearing value ("OVMXQ), which the booted
+         * target then reports as its node identity. Unquoted values
+         * (SET SCSNODE TESTND) have no surrounding pair and pass through
+         * unchanged. */
+        const char *vs = value_str;
+        size_t vs_len = strlen(vs);
+        char dequoted[256];
+        if (vs_len >= 2 && vs[0] == '"' && vs[vs_len - 1] == '"') {
+            size_t inner = vs_len - 2;
+            if (inner >= sizeof(dequoted)) inner = sizeof(dequoted) - 1;
+            memcpy(dequoted, vs + 1, inner);
+            dequoted[inner] = '\0';
+            vs = dequoted;
+        }
         char newval[SYSGEN_STRVAL_LEN];
-        strncpy(newval, value_str, sizeof(newval) - 1);
+        strncpy(newval, vs, sizeof(newval) - 1);
         newval[sizeof(newval) - 1] = '\0';
         str_upper(newval);
 
@@ -694,11 +715,20 @@ int main(int argc, char *argv[])
 
     int interactive = isatty(fileno(stdin));
 
-    if (interactive) {
-        printf("\n");
-        printf("      OpenVMS System Generation Utility\n");
-        printf("\n");
-    }
+    /* Identify at startup UNCONDITIONALLY (vms-597). AUTHORIZE.EXE prints its
+     * %UAF-I-AUTHVERSION banner whether SYS$INPUT is a terminal or a command
+     * procedure's inline data block; SYSGEN must be equally uniform now that
+     * OVMX$INSTALL.COM drives the SCS step non-interactively via inline
+     * SYS$INPUT (dcl_sysinput_setup redirects fd 0 to a regular tmpfile, so
+     * isatty() is FALSE there). The install's anti-LARP gate (vms-dd15/INV-6)
+     * anchors on this runtime banner as proof SYSGEN actually activated, so it
+     * MUST be emitted even when stdin is not a terminal -- gating it behind
+     * isatty() would make an unattended, genuinely-working run indistinguishable
+     * from one where SYSGEN never ran. The SYSGEN> prompt below stays gated:
+     * a prompt is for a human at a terminal, not for a data block. */
+    printf("\n");
+    printf("      OpenVMS System Generation Utility\n");
+    printf("\n");
 
     char line[512];
 

@@ -437,6 +437,15 @@ static void provision_home(uint32_t uic_group, uint32_t uic_member,
         ncand = 1;
     }
 
+    /* PASS 1: (re)own an already-present candidate. When home_spec is a
+     * concealed-rooted search list (SYS$SYSROOT:[SYSMGR] -- SYSTEM's default),
+     * the fan-out lists the node-specific member ([SYS0.SYSMGR]) BEFORE the
+     * common member ([SYS0.SYSCOMMON.SYSMGR]) where the real files live; owning
+     * an existing member must win over creating the first, missing one, or a
+     * phantom empty node-specific directory would be created and the populated
+     * common directory never owned. So probe ALL candidates for existence
+     * first, and only fall through to CREATE if none exist (a brand-new
+     * single-member account directory like SYS$SYSDEVICE:[USERS.x]). */
     for (int ci = 0; ci < ncand; ci++) {
         char dev[16], dir[256];
         spec_split_dir(cands[ci], dev, sizeof(dev), dir, sizeof(dir));
@@ -454,8 +463,23 @@ static void provision_home(uint32_t uic_group, uint32_t uic_member,
             vms_kif_dassgn(chan);
             return;
         }
+        vms_kif_dassgn(chan);
+    }
 
-        /* Missing -> CREATE it as a directory in its parent, owned by the
+    /* PASS 2: none present -> CREATE the primary (first) candidate. */
+    for (int ci = 0; ci < ncand; ci++) {
+        char dev[16], dir[256];
+        spec_split_dir(cands[ci], dev, sizeof(dev), dir, sizeof(dir));
+        if (dir[0] == '\0')
+            continue;
+        if (dev[0] == '\0')
+            snprintf(dev, sizeof(dev), "%s", SYSDISK_DEVICE ":");
+
+        uint32_t chan = 0;
+        if (!(vms_kif_acp_assign(dev, &chan) & 1))
+            continue;                          /* try the next candidate */
+
+        /* CREATE it as a directory in its parent, owned by the
          * account. Split "A.B.LEAF" into parent "A.B" + leaf "LEAF" (leaf kept
          * as a pointer into dir; its length is bounded below by the ODS-2 name
          * field the CREATE writes). */

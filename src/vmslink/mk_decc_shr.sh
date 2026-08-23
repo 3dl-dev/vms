@@ -168,7 +168,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # surface would otherwise be silently absent from DECC$SHR and every port
     # image would defer decc$main, hiding the real gap this bead closes.
     ALPHA_CC=${ALPHA_CC:-alpha-dec-vms-gcc}
-    : "${ALPHA_MUSL_SRC:?mk_decc_shr: alpha branch needs ALPHA_MUSL_SRC=<musl-1.2.5 src tree used to build \$LIBC> to compile ovmx_decc_crtl.c's real DEC C RTL headers (get_errno_addr/pthread/stdio) -- see tools/cross-alpha-vms/musl-arch/build-musl.sh}"
+    : "${ALPHA_MUSL_SRC:?mk_decc_shr: alpha branch needs ALPHA_MUSL_SRC=<musl-1.2.5 src tree used to build \$LIBC> to compile the ovmx_decc_crtl.c DEC C RTL headers (get_errno_addr/pthread/stdio) -- see tools/cross-alpha-vms/musl-arch/build-musl.sh}"
     [ -d "$ALPHA_MUSL_SRC" ] || { echo "mk_decc_shr: FAIL ALPHA_MUSL_SRC=$ALPHA_MUSL_SRC is not a directory" >&2; exit 2; }
     ALPHA_MUSL_INC="-I$ALPHA_MUSL_SRC/arch/alpha-dec-vms -I$ALPHA_MUSL_SRC/arch/generic -I$ALPHA_MUSL_SRC/obj/src/internal -I$ALPHA_MUSL_SRC/src/include -I$ALPHA_MUSL_SRC/src/internal -I$ALPHA_MUSL_SRC/obj/include -I$ALPHA_MUSL_SRC/include"
     IMGACT_INC="$(CDPATH= cd "$(dirname "$0")/../imgact/include" && pwd)"   # ovmx_activation.h (vms-8c8)

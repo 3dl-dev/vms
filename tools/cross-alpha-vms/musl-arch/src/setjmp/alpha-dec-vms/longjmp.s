@@ -6,6 +6,19 @@
  * C semantics longjmp(env, 0) makes setjmp appear to return 1; any other value
  * is returned as-is. jmp_buf ptr in $16 (a0), value in $17 (a1).
  * VMS/EVAX procedure model - see setjmp.s.
+ *
+ * DECORATED NAME (vms-838a): the alpha-dec-vms cc1 decorates a call to the
+ * recognized C-RTL name `longjmp` as `decc$longjmp` at the CALL site (verified
+ * from cc1 -S: `jsr $26,decc$longjmp` + `.linkage decc$longjmp`). This file is
+ * hand-written EVAX asm, so it is NOT run through cc1's name decoration and its
+ * `.globl longjmp` stays the raw name — the mismatch is why `decc$longjmp` was
+ * left deferred in the DECC$SHR whole-archive link. `decc$longjmp` is made the
+ * PRIMARY .ent procedure (so it carries EGSY__V_NORM and mk_decc_shr enumerates
+ * it as a PROCEDURE universal, exactly like a cc1-emitted decc$* proc — a plain
+ * alias label would enumerate as DATA); the raw `longjmp`/`_longjmp` remain as
+ * descriptor aliases for a completeness/direct call.
+ * (setjmp needs no decorated alias: cc1 leaves `setjmp` UNDECORATED — verified
+ * the same way — so the raw `setjmp` def below already matches its call sites.)
  */
 	.set noreorder
 	.set volatile
@@ -13,8 +26,9 @@
 	.align 4
 	.globl longjmp
 	.globl _longjmp
-	.ent _longjmp
-_longjmp..en:
+	.globl decc$longjmp
+	.ent decc$longjmp
+decc$longjmp..en:
 	.base $27
 	.frame $30,0,$26,0
 	.prologue
@@ -43,7 +57,8 @@ _longjmp..en:
 	ret $31,($26),1
 	.link
 	.align 3
+decc$longjmp:
 _longjmp:
 longjmp:
-	.pdesc _longjmp..en,null
-	.end _longjmp
+	.pdesc decc$longjmp..en,null
+	.end decc$longjmp

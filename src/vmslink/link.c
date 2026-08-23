@@ -3393,12 +3393,42 @@ static void evax_rel_add(uint64_t **arr, int *n, int *cap, uint64_t off)
     (*arr)[(*n)++] = off;
 }
 
+/* Linker-defined symbols the EVAX object model has no other way to resolve
+ * (vms-838a). On the ELF path these are handled by build_symhash's weak-undef
+ * pass (link.c ~1497) — the section-boundary symbols the crt0 uses to iterate
+ * static constructors/destructors, plus _DYNAMIC — but the EVAX object model
+ * carries no ELF weak-undef bind on a reference, so LINK.EXE synthesizes them
+ * here from the already-placed output sections. __init_array_start/end and the
+ * fini/preinit pairs point at the real bounds of the corresponding placed psect
+ * (.init_array/.fini_array/.preinit_array), so a crt0 that brackets its ctors
+ * with these iterates the actual array; when the image has no such psect the
+ * range is empty (start == end == 0), the correct value (matching ELF weak-undef
+ * -> 0: the crt0 loop runs zero iterations). _DYNAMIC is 0 (these EVAX images
+ * carry no PT_DYNAMIC). `placed` marks a value that is an image-relative address
+ * needing a .vms$rel load-bias fixup (a real section base), vs an absolute 0. */
+struct evax_ldsym { const char *name; uint64_t value; int placed; };
+
+/* Match `name` against the synthesized linker-defined set; on a hit fill *val +
+ * *placed and return 1. Returns 0 for any other name (the caller then falls to
+ * the honest producer-import / undef path). */
+static int evax_ldsym_find(const struct evax_ldsym *ld, int nld, const char *name,
+                           uint64_t *val, int *placed)
+{
+    for (int i = 0; i < nld; i++)
+        if (strcmp(ld[i].name, name) == 0) {
+            *val = ld[i].value; *placed = ld[i].placed; return 1;
+        }
+    return 0;
+}
+
 /* Apply one relocation into its psect's content buffer. `site_va` is only used
  * for diagnostics; the write lands in the content buffer at r->address. An
  * undefined reference that a --use'd producer EXPORTS binds as a cross-image
  * import (evax_add_ximport); one it exports as a GLOBALVALUE is folded to its
- * absolute constant at the reference site (evax_fold_globalvalue); one no
- * producer defines stays an honest %LINK-F-UNDEF (INV-6).
+ * absolute constant at the reference site (evax_fold_globalvalue); a
+ * linker-defined section-boundary/_DYNAMIC symbol is synthesized
+ * (evax_ldsym_find); one no producer defines stays an honest %LINK-F-UNDEF
+ * (INV-6).
  *
  * A slot LINK writes as an UNBIASED image-relative pointer to a PLACED section
  * (a REFQUAD/CODEADDR to a section-relative or local-defined target, or either
@@ -3417,7 +3447,8 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
                              int *n_ximport,
                              long *deferred, int *n_linkage_applied,
                              int *n_callsite_conservative,
-                             uint64_t **rel_off, int *nrel, int *rel_cap)
+                             uint64_t **rel_off, int *nrel, int *rel_cap,
+                             const struct evax_ldsym *ldsyms, int n_ldsyms)
 {
     struct evax_object *o = &in[ii].obj;
     if (r->psect < 0 || r->psect >= o->nsec) die("relocation names a bad psect index");
@@ -3472,6 +3503,18 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
                                  imp, nimp, imp_cap, n_ximport);
                 return;
             }
+            /* Linker-defined section-boundary / _DYNAMIC symbol (vms-838a): not
+             * an undef at all — synthesize its value from the placed sections and
+             * fall through to the normal store (so a crt0 iterating
+             * __init_array_start..__init_array_end sees the real init-array
+             * bounds; an empty range when the image has none). Never deferred. */
+            {
+                uint64_t lv; int lp;
+                if (evax_ldsym_find(ldsyms, n_ldsyms, r->sym, &lv, &lp)) {
+                    S = lv; S_placed = lp; have_code = 0; code_S = 0;
+                    goto store_target;
+                }
+            }
             if (allow_undef) {
                 (*deferred)++;
                 fprintf(stderr, "%%LINK-W-UNDEF, EVAX reference to undefined symbol "
@@ -3488,6 +3531,7 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
         S_placed     = (in[di].sec_base[ds->psindx] != 0);
         codeS_placed = (in[di].sec_base[ds->code_psindx] != 0);
     }
+store_target:;
 
     /* Image-relative offset of the store slot (the site), for the .vms$rel table. */
     uint64_t rel_site = in[ii].sec_base[r->psect] + r->address;
@@ -3648,6 +3692,36 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         }
     }
 
+    /* ---- Synthesize the linker-defined section-boundary / _DYNAMIC symbols
+     * (vms-838a) now that every psect is placed. Point each init/fini/preinit
+     * boundary at the real bounds of its placed array psect; an absent psect
+     * yields an empty range (start == end == 0), the correct value for an image
+     * with no such constructors. _DYNAMIC is 0 (no PT_DYNAMIC in these images).
+     * `placed` (a real image-relative base) drives the .vms$rel load-bias fixup
+     * in the store below. This runs only on the EVAX path — output-neutral for
+     * the ELF shareable/exec emitters, which resolve these via build_symhash's
+     * weak-undef pass instead. ---- */
+    struct { const char *sec; uint64_t s, e; int placed; }
+        ld_arr[] = { {".init_array",0,0,0}, {".fini_array",0,0,0}, {".preinit_array",0,0,0} };
+    for (int a = 0; a < 3; a++)
+        for (int k = 0; k < nos; k++)
+            if (!strcmp(osec[k].name, ld_arr[a].sec) && osec[k].size) {
+                ld_arr[a].s = osec[k].addr;
+                ld_arr[a].e = osec[k].addr + osec[k].size;
+                ld_arr[a].placed = 1;
+                break;
+            }
+    const struct evax_ldsym ldsyms[] = {
+        { "__init_array_start",    ld_arr[0].s, ld_arr[0].placed },
+        { "__init_array_end",      ld_arr[0].e, ld_arr[0].placed },
+        { "__fini_array_start",    ld_arr[1].s, ld_arr[1].placed },
+        { "__fini_array_end",      ld_arr[1].e, ld_arr[1].placed },
+        { "__preinit_array_start", ld_arr[2].s, ld_arr[2].placed },
+        { "__preinit_array_end",   ld_arr[2].e, ld_arr[2].placed },
+        { "_DYNAMIC",              0,           0                 },
+    };
+    const int n_ldsyms = (int)(sizeof ldsyms / sizeof ldsyms[0]);
+
     /* .vms$xfer (executable) OR .vms$sv (shareable). Both sit right after the
      * psects, inside the loaded range, so IMGACT / a --use consumer reads them by
      * section vaddr. Resolution happens HERE (after placement) so every psect
@@ -3733,7 +3807,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
             evax_apply_reloc(in, nin, i, &in[i].obj.reloc[r], allow_undef,
                              producers, np, &imp, &nimp, &imp_cap, &n_ximport,
                              &deferred, &n_linkage, &n_callsite,
-                             &rel_off, &nrel, &rel_cap);
+                             &rel_off, &nrel, &rel_cap, ldsyms, n_ldsyms);
             if (t == EVAX_R_REFLONG || t == EVAX_R_REFQUAD || t == EVAX_R_CODEADDR)
                 n_data++;
         }

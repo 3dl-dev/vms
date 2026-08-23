@@ -43,6 +43,8 @@ cp -rv "${OVERLAY}/arch/${TARGET}"        "arch/"
 cp -rv "${OVERLAY}/crt/${TARGET}"         "crt/"
 mkdir -p "src/setjmp/${TARGET}"
 cp -v  "${OVERLAY}/src/setjmp/${TARGET}/"* "src/setjmp/${TARGET}/"
+mkdir -p "src/thread/${TARGET}"
+cp -v  "${OVERLAY}/src/thread/${TARGET}/"* "src/thread/${TARGET}/"
 cp -v  "${OVERLAY}/src/internal/vms_alpha_syscall.c" "src/internal/"
 
 # ---- teach configure the triplet -> ARCH mapping (idempotent) ----

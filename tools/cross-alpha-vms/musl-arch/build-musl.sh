@@ -20,7 +20,12 @@ export PATH="${PREFIX}/bin:${PATH}"
 
 # 64-bit pointers are mandatory: alpha-dec-vms defaults to 32-bit (VMS short
 # pointers); musl is LP64. Every object must be built -mpointer-size=64.
-CC_FLAGS="-mpointer-size=64"
+# -g0: the alpha-dec-vms port's .vmsdebug records emit a CRTL name's "..en" entry
+# reference from the BASE name (strlen..en) while the entry label is the decorated
+# decc$strlen..en (vms-f97 fixed the label, not the debug record) -> GAS "redefined
+# symbol on reloc" when a CRTL definition is compiled WITH debug. A release C RTL
+# needs no debug info; -g0 drops the .vmsdebug section. (see bead vms-2d8c)
+CC_FLAGS="-mpointer-size=64 -g0"
 
 mkdir -p "$WORK" && cd "$WORK"
 

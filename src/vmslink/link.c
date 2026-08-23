@@ -3564,9 +3564,16 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
     uint64_t cur = hdr_end;
 
     /* Output sections we emit headers for: one per distinct (rank-ordered) psect
-     * name actually present, plus .vms$xfer. Track each output section's range. */
+     * name actually present, plus .vms$xfer/.vms$imp/.vms$rel. Track each output
+     * section's range. Sized to an upper bound = total input sections + 4 (a
+     * whole-archived libc.a merges hundreds of members whose distinct psect names
+     * can exceed any fixed cap — vms-7b96, the 68-slot osec overflowed at 1345
+     * members), so it is malloc'd, not a fixed stack array. */
     struct outsec { char name[EVAX_NAME_MAX]; uint64_t addr, size; int nobits; };
-    struct outsec osec[EVAX_MAX_SECTIONS + 4];   /* + .vms$xfer + .vms$imp + .vms$rel */
+    int osec_cap = 4;
+    for (int i = 0; i < nin; i++) osec_cap += in[i].obj.nsec;
+    struct outsec *osec = calloc((size_t)osec_cap, sizeof *osec);
+    if (!osec) die("oom allocating EVAX output-section table");
     int nos = 0;
 
     for (int rank = 0; rank <= 4; rank++) {
@@ -3726,13 +3733,18 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
     uint64_t mem_end = cur;
 
     /* ---- Build the shstrtab. ---- */
-    char shstr[4096]; size_t shlen = 0;
+    /* .shstrtab + the per-section name-offset table, both sized to the dynamic
+     * output-section count (vms-7b96: a whole-archived libc.a produces far more
+     * than any fixed cap). */
+    size_t shstr_cap = (size_t)osec_cap * EVAX_NAME_MAX + 16 /* ".shstrtab\0" + NUL */;
+    char *shstr = malloc(shstr_cap); size_t shlen = 0;
+    uint32_t *sh_name_off = calloc((size_t)osec_cap, sizeof *sh_name_off);
+    if (!shstr || !sh_name_off) die("oom allocating EVAX shstrtab");
     shstr[shlen++] = '\0';
-    uint32_t sh_name_off[EVAX_MAX_SECTIONS + 4];
     for (int k = 0; k < nos; k++) {
         sh_name_off[k] = (uint32_t)shlen;
         size_t l = strlen(osec[k].name) + 1;
-        if (shlen + l > sizeof shstr) die("shstrtab overflow");
+        if (shlen + l > shstr_cap) die("shstrtab overflow");
         memcpy(shstr + shlen, osec[k].name, l); shlen += l;
     }
     uint32_t sh_shstr_name = (uint32_t)shlen;
@@ -4162,9 +4174,10 @@ int main(int argc, char **argv)
                 die("the EVAX/Alpha link does not take .OLB libraries "
                     "(use a .a archive or plain EVAX objects)");
             if (file_is_archive(ins[i])) {
-                if (!input_is_evax(ins[i]))
-                    die("mixed formats: an EVAX/Alpha link cannot include a "
-                        "non-EVAX archive");
+                /* Walk the container; load_archive_evax evax_read()s every member
+                 * and errors on a non-EVAX one (the mixed-format guard). An empty
+                 * archive (0 members, e.g. a libgcc.a the alpha port never needed)
+                 * contributes nothing — accepted, not rejected. */
                 load_archive_evax(ins[i], &ein, &nein, &cap_ein);
                 continue;
             }

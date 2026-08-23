@@ -32,10 +32,16 @@ CC_FLAGS="${CC_FLAGS} ${MUSL_EXTRA_CFLAGS:-}"
 
 mkdir -p "$WORK" && cd "$WORK"
 
-# ---- fetch musl (no vendoring; pinned + checksum-verified) ----
-# Honor a pre-placed tarball (a mounted host copy under $WORK) so a reproducible
-# / offline containerized build can bypass the network; otherwise fetch it. The
-# pinned checksum is enforced either way, so a stale/corrupt cached copy fails.
+# ---- musl source (pinned + checksum-verified) ----
+# Resolution order: (1) a copy already staged in $WORK; (2) the VENDORED tarball
+# shipped in the overlay (musl-arch/musl-<ver>.tar.gz), so the CI build is
+# HERMETIC — musl.libc.org has been persistently unreachable from GitHub runners
+# (vms-244d); (3) a network fetch as a last resort for a dev tree without the
+# vendored blob. The pinned checksum is enforced in EVERY case, so even the
+# vendored tarball is integrity-verified (a stale/corrupt copy fails the build).
+if [ ! -f "musl-${MUSL_VER}.tar.gz" ] && [ -f "${OVERLAY}/musl-${MUSL_VER}.tar.gz" ]; then
+	cp "${OVERLAY}/musl-${MUSL_VER}.tar.gz" .
+fi
 if [ ! -f "musl-${MUSL_VER}.tar.gz" ]; then
 	wget -q "https://musl.libc.org/releases/musl-${MUSL_VER}.tar.gz"
 fi

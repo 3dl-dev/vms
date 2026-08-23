@@ -65,9 +65,29 @@ $! the whole value, slashes included, as one token -- the DCL parser
 $! explicitly accepts TOK_STRING for a qualifier value
 $! (src/vmsdcl/dcl_parser.c parse_qualifier).
 $!
+$! WHY /UIC=[1,4] AND /PRIVILEGES=(ALL) (vms-69e / vms-d31d). Until vms-d31d,
+$! RUN's /UIC was refused outright (OVMX$_NOPRCUIC) and /PRIVILEGES was
+$! silently dropped, so passing them here would have been a lie DCL accepted
+$! and threw away -- JOB_CONTROL could only ever inherit whatever identity
+$! STARTUP.COM's own $CREPRC call happened to carry. vms-d31d closed that:
+$! $CREPRC now stamps a requested uic/prvadr onto the CREATED process's
+$! executive row (vms_kif_setident, src/libvms/syssvc/sys_process.c), so
+$! what RUN passes here is what every other process and the Files-11
+$! reference monitor sees. [1,4] is SYSTEM's UIC; SYSTEM's Authorized
+$! privileges, captured verbatim off the real reference lab's own SHOW
+$! PROCESS/PRIVILEGES (docs/oracle/vax73-privileges.md §4, "User: SYSTEM"),
+$! are the full 39-entry grid -- i.e. ALL. JOB_CONTROL is the process that
+$! $CREPRCs every interactive LOGINOUT, and LOGINOUT must read the
+$! World-denied SYSUAF.DAT (SYSPRV/BYPASS at minimum) -- explicit here
+$! rather than leaning on inheritance from whatever $CREPRC'd this
+$! procedure, and correct for x86_64/VAX/Alpha alike (this file is the
+$! shared, arch-independent rootfs tree).
+$!
 $ SET NOON
 $ RUN /DETACHED -
       /PROCESS_NAME=JOB_CONTROL -
+      /UIC=[1,4] -
+      /PRIVILEGES=(ALL) -
       /INPUT="/dev/console" /OUTPUT="/dev/console" /ERROR="/dev/console" -
       SYS$SYSTEM:JOB_CONTROL.EXE
 $ EXIT

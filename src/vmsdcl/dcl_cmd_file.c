@@ -724,8 +724,23 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
             printf("%s\n", vms_name);
         } else {
             if (col_width < 1) col_width = 20;
-            printf("%-*s", col_width, vms_name);
-            col++;
+            /* A name as wide as (or wider than) a column occupies as many whole
+             * columns as it needs, padded to the next column STOP -- it is never
+             * butted directly against the following entry
+             * ("LASTLOGIN_SYSTEM.DAT;1LOGIN.COM;1"). VMS pads each name to a
+             * column boundary; the "+ 1" guarantees at least one trailing space
+             * even when the length is an exact multiple of the column width. */
+            size_t nlen = strlen(vms_name);
+            int cells = (int)(nlen / (size_t)col_width) + 1;
+            if (cells > o->columns) cells = o->columns;   /* clamp giant names */
+            /* A multi-column name that will not fit in the columns left on this
+             * row starts a fresh row, as VMS does, rather than overflowing. */
+            if (col > 0 && col + cells > o->columns) {
+                printf("\n");
+                col = 0;
+            }
+            printf("%-*s", cells * col_width, vms_name);
+            col += cells;
             if (col >= o->columns) {
                 printf("\n");
                 col = 0;

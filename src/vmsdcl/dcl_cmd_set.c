@@ -210,8 +210,28 @@ static int cmd_set_default(struct dcl_command *cmd)
         else
             strncpy(ctx->default_dir, dirspec, sizeof(ctx->default_dir) - 1);
     } else {
-        /* Bare name — treat as logical or directory */
-        strncpy(ctx->default_dir, dirspec, sizeof(ctx->default_dir) - 1);
+        /*
+         * Bare name (no device/colon, no brackets) — on VMS this is a LOGICAL
+         * NAME, resolved at SET DEFAULT time. The per-user LOGIN.COM does
+         * "SET DEFAULT SYS$LOGIN", and SHOW DEFAULT on VMS then reports the
+         * RESOLVED directory, not the logical -- crucially, the STORED default
+         * must be a real "DEV:[DIR]" spec, because a later BARE "DIRECTORY"
+         * builds its pattern by concatenating the default with "*.*;*": storing
+         * the unresolved "SYS$LOGIN" yields the garbage pattern "SYS$LOGIN*.*;*"
+         * and %DIRECT-W-NOFILES. Translate the logical; if it resolves to a
+         * device/directory-bearing equivalence, store THAT (e.g. SYS$LOGIN ->
+         * SYS$SYSROOT:[SYSMGR] for SYSTEM). Only if it is not a logical do we
+         * keep the bare name (VMS defers such resolution). Clean-room, Rule 8:
+         * VSI OpenVMS DCL Dictionary, SET DEFAULT (a logical name is translated)
+         * + User's Manual, "Logical Names in File Specifications".
+         */
+        char equiv[256];
+        if (dcl_translate_logical(dirspec, equiv, sizeof(equiv)) == 0 &&
+            (strchr(equiv, '[') || strchr(equiv, ':'))) {
+            strncpy(ctx->default_dir, equiv, sizeof(ctx->default_dir) - 1);
+        } else {
+            strncpy(ctx->default_dir, dirspec, sizeof(ctx->default_dir) - 1);
+        }
         ctx->default_dir[sizeof(ctx->default_dir) - 1] = '\0';
     }
 

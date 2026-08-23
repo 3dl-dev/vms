@@ -344,6 +344,9 @@ struct obj {
     uint64_t     *sec_va;     /* [nsh] assigned image vaddr, filled at layout */
     struct reloc *relocs;   /* relocs against every code AND data section */
     int           nreloc;
+    const char   *objname;  /* owned (strdup'd): "path" or "archive.a(member.o)",
+                              * for diagnostics that must name a defining object
+                              * (e.g. %LINK-F-MULDEF). Set once in parse_obj. */
 };
 
 static void *xat(struct obj *o, uint64_t off, uint64_t sz, const char *what)
@@ -366,6 +369,8 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
     memset(o, 0, sizeof *o);
     o->buf = buf;
     o->size = size;
+    o->objname = strdup(name);
+    if (!o->objname) die("oom recording object name");
 
     if (o->size < sizeof(Elf64_Ehdr) || memcmp(o->buf, ELFMAG, SELFMAG) != 0) {
         fprintf(stderr, "%%LINK-F-ERROR, %s: input is not ELF\n", name);
@@ -1441,8 +1446,23 @@ static size_t djb2(const char *s)
     return h;
 }
 
-/* Insert a defined global; prefer a STRONG (GLOBAL) def over a WEAK one. */
-static void sym_insert(const char *name, int oi, int ki, unsigned char bind)
+/* Insert a defined global; prefer a STRONG (GLOBAL) def over a WEAK one. A
+ * STRONG def colliding with an existing STRONG def of the same name is a
+ * hard multiple-definition error (vms-d8d): real `ld` refuses to pick a
+ * winner between two strong defs, and OVMX's ELF LINK.EXE previously picked
+ * one silently -- whichever def this insert loop saw FIRST (incidental
+ * link-input order). That is a latent correctness bug, not a style nit: a
+ * strong SELF-reference inside one object (resolve_ref, ~1531) never
+ * consults this hash for STRONG symbols -- it returns the object's OWN
+ * placed_addr directly -- so that object's intra-object references bind to
+ * ITS copy while every cross-object reference and the exported .vms$sv
+ * universal bind whichever def landed here first. Two different addresses
+ * for one universal in one link, discovered only by symptom. Failing loud
+ * here converts that into an immediate, named diagnostic (INV-6 fail-honest)
+ * instead of silent misbehavior. The WEAK-vs-STRONG override below is
+ * unchanged; only STRONG-vs-STRONG is new. */
+static void sym_insert(struct obj *objs, const char *name, int oi, int ki,
+                        unsigned char bind)
 {
     size_t mask = g_syms_cap - 1;
     size_t i = djb2(name) & mask;
@@ -1452,8 +1472,21 @@ static void sym_insert(const char *name, int oi, int ki, unsigned char bind)
             return;
         }
         if (strcmp(g_syms[i].name, name) == 0) {
-            if (g_syms[i].bind == STB_WEAK && bind == STB_GLOBAL)
+            if (g_syms[i].bind == STB_WEAK && bind == STB_GLOBAL) {
                 g_syms[i] = (struct symref){ name, oi, ki, bind };  /* strong wins */
+                return;
+            }
+            if (g_syms[i].bind == STB_GLOBAL && bind == STB_GLOBAL) {
+                const char *first_obj  = objs[g_syms[i].oi].objname;
+                const char *second_obj = objs[oi].objname;
+                fprintf(stderr,
+                        "%%LINK-F-MULDEF, multiple definition of universal/global "
+                        "symbol '%s': first defined in %s, redefined in %s\n",
+                        name,
+                        first_obj  ? first_obj  : "<unknown>",
+                        second_obj ? second_obj : "<unknown>");
+                exit(1);
+            }
             return;
         }
         i = (i + 1) & mask;
@@ -1492,7 +1525,7 @@ static void build_symhash(struct obj *objs, int nobj)
             if (bind == STB_LOCAL || s->st_shndx == SHN_UNDEF) continue;
             const char *nm = objs[i].str + s->st_name;
             if (!nm[0]) continue;
-            sym_insert(nm, i, k, bind);
+            sym_insert(objs, nm, i, k, bind);
         }
     /* Second pass: a WEAK undefined reference to a symbol no object defines
      * resolves to address 0 (ELF weak-undef semantics). Record such names so the

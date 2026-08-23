@@ -285,6 +285,116 @@ static void session_child(int in_fd, int repfd)
     _exit(127);
 }
 
+/* ---- vms-01f: a REGISTERED creator's terminal-binding login is INTERACTIVE ---
+ *
+ * The scenario above keeps its creator (main) UNREGISTERED so the session child
+ * becomes a job root for free -- which is NOT the condition the real boot meets.
+ * On the real runtime JOB_CONTROL is a registered, detached, terminal-LESS
+ * process (test_job_control_console.sh proves SHOW SYSTEM lists it) that fork()s
+ * the console login. Under the inherit-the-parent's-job rule the login then took
+ * JOB_CONTROL's job_id and was classified a SUBPROCESS of a terminal-less root
+ * -- i.e. OTHER -- so SHOW USERS reported "Total number of users = 0" on a live
+ * console login (vms-01f).
+ *
+ * This reproduces THAT: a registered creator forks a child that binds the
+ * console terminal, and a DIFFERENT process ($GETJPI from main) reads the
+ * child's classification. proc_type == INTERACTIVE is only reachable through
+ * proc_fill_info()'s job-ROOT branch with a terminal set; the subprocess branch
+ * yields SUBPROCESS or OTHER, never INTERACTIVE. So this assertion fails on the
+ * pre-fix executive (the login would read OTHER) and passes once SETTERM
+ * promotes a terminal owner to a job root. */
+#define JC_LOGIN_NAME  "C01FLOGIN"
+
+struct jc_report { uint32_t setprn; uint32_t assign; uint32_t setterm; };
+
+static void registered_creator_login_scenario(void)
+{
+    int rep_pipe[2];
+    if (pipe(rep_pipe) != 0) {
+        printf("  (vms-01f: pipe() failed -- SKIP)\n");
+        return;
+    }
+
+    pid_t creator = fork();
+    if (creator < 0) {
+        printf("  (vms-01f: fork() failed -- SKIP)\n");
+        close(rep_pipe[0]); close(rep_pipe[1]);
+        return;
+    }
+    if (creator == 0) {
+        /* CREATOR: register (first vms_kif_* call binds a PCB), so this task
+         * -- the login child's real parent -- is a REGISTERED process, exactly
+         * as JOB_CONTROL is on the real boot. It binds NO terminal. */
+        close(rep_pipe[0]);
+        struct vms_procinfo ci;
+        (void)vms_kif_getjpi_self(&ci);          /* bind + register the creator */
+
+        pid_t login = fork();
+        if (login == 0) {
+            /* LOGIN CHILD: name itself, bind the console terminal, report, then
+             * stay alive (blocked) for the read below. This is the LOGINOUT/DCL
+             * session's PCB in miniature. */
+            struct jc_report rep;
+            uint32_t chan = 0;
+            memset(&rep, 0, sizeof(rep));
+            rep.setprn  = vms_kif_setprn(JC_LOGIN_NAME);
+            rep.assign  = vms_kif_assign(CONSOLE, &chan);
+            rep.setterm = (rep.assign & 1) ? vms_kif_setterm(chan) : rep.assign;
+            (void)write_all(rep_pipe[1], &rep, sizeof(rep));
+            close(rep_pipe[1]);
+            for (;;) pause();
+            _exit(0);
+        }
+        /* Creator keeps the login child as its live child and stays registered
+         * and alive until main kills the subtree. */
+        close(rep_pipe[1]);
+        for (;;) pause();
+        _exit(0);
+    }
+    close(rep_pipe[1]);
+
+    struct jc_report rep;
+    memset(&rep, 0, sizeof(rep));
+    int got = read_all(rep_pipe[0], &rep, sizeof(rep));
+    close(rep_pipe[0]);
+
+    /* Precondition: the login child had to establish its name + terminal. A
+     * failure here means the facilities this scenario BUILDS ON are not
+     * effective (see the header comment's blind/skip discipline) -- SKIP. */
+    if (got != 0 || !(rep.setprn & 1) || !(rep.assign & 1) || !(rep.setterm & 1)) {
+        printf("  (vms-01f: login not established: setprn=%08X assign=%08X "
+               "setterm=%08X -- SKIP)\n", rep.setprn, rep.assign, rep.setterm);
+        kill(creator, SIGKILL);
+        int s; while (waitpid(creator, &s, 0) < 0 && errno == EINTR) ;
+        return;
+    }
+
+    struct vms_procinfo login_info;
+    uint32_t lst = 0;
+    for (int i = 0; i < 500; i++) {   /* up to ~5s */
+        lst = vms_kif_getjpi_prcnam(JC_LOGIN_NAME, &login_info);
+        if (lst & 1) break;
+        struct timespec ts = { 0, 10 * 1000 * 1000 };
+        nanosleep(&ts, NULL);
+    }
+
+    printf("  (vms-01f diag: lst=%08X login_type=%u login_term=%s)\n",
+           lst, (lst & 1) ? login_info.proc_type : 0xffu,
+           (lst & 1) ? login_info.terminal : "?");
+
+    CHECK((lst & 1) && login_info.proc_type == VMS_PROC_T_INTERACTIVE,
+          "a REGISTERED creator's terminal-binding login is classified "
+          "INTERACTIVE, not a subprocess of a terminal-less root (vms-01f)");
+
+    /* Tear down the whole subtree (login grandchild is reparented to the
+     * creator; killing the creator is not enough, so kill the login row's task
+     * too when we know it). */
+    if (lst & 1 && login_info.linux_pid)
+        kill((pid_t)login_info.linux_pid, SIGKILL);
+    kill(creator, SIGKILL);
+    int s; while (waitpid(creator, &s, 0) < 0 && errno == EINTR) ;
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -496,6 +606,13 @@ int main(void)
      * registered subprocess appears there too, as a process-table row. */
     CHECK(has_sys_row(out, SUB_NAME),
           "SHOW SYSTEM lists the SPAWNed subprocess as a process-table row");
+
+    /* ---------------------------------------------------------------
+     * P3. vms-01f: the REAL-boot shape -- a REGISTERED creator's
+     *     terminal-binding login must be INTERACTIVE (a job root), not a
+     *     subprocess of a terminal-less root filtered out of SHOW USERS.
+     * --------------------------------------------------------------- */
+    registered_creator_login_scenario();
 
     if (fail > 0) {
         printf("  (diag: captured transcript follows)\n---8<---\n%.4000s\n---8<---\n",

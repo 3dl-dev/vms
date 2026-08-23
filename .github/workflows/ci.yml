@@ -4088,6 +4088,23 @@ jobs:
         run: |
           sh src/vmslink/test/run_evax_vmsrel.sh
 
+      # vms-c65: LINK.EXE's EVAX/Alpha path emits a SHAREABLE (a .vms$sv producer)
+      # from alpha-dec-vms objects — the half a real Alpha DECC$SHR needs (the
+      # other half, the Alpha C-RTL archive, is the Alpha lane's). Links the
+      # checked-in producer fixture shr_lib.obj into FOO$SHR.EXE and asserts an
+      # EM_ALPHA ET_DYN with a .vms$sv (magic + FOO=PROCEDURE/BAR=DATA bound to
+      # their addresses + GSMATCH LEQUAL/1/0) parsed by the SAME reader
+      # (ovmx_symvec.h) IMGACT + the ELF shareable use — byte parity (an Alpha and
+      # an x86_64 shareable differ only in e_machine + .text arch). NO .vms$xfer,
+      # NO PT_INTERP; a .vms$rel for the BAR->FOO data pointer. ROUND-TRIP: an EVAX
+      # consumer --use'ing FOO$SHR.EXE binds FOO by symbol-vector INDEX (the
+      # vms-c179 machinery) — proving the Alpha shareable is CONSUMABLE. INV-6
+      # honest-fail: a universal no object defines -> %LINK-F-NOUNIV (no bogus
+      # vector entry). Arch-independent, fixtures checked in.
+      - name: Prove LINK.EXE emits a consumable EVAX/Alpha .vms$sv shareable (vms-c65)
+        run: |
+          sh src/vmslink/test/run_evax_shareable.sh
+
       # vms-2e4: the LAST x86_64 relocation class — gnu2-dialect TLSDESC
       # (R_X86_64_GOTPC32_TLSDESC + R_X86_64_TLSDESC_CALL, plus the
       # local-dynamic R_X86_64_DTPOFF32 / _TLS_MODULE_BASE_ half). Proof is

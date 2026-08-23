@@ -3344,19 +3344,45 @@ static void evax_fold_globalvalue(struct evax_input *in, int ii,
             r->sym, (unsigned long long)folded, (unsigned long long)site_va);
 }
 
+/* Append one image-relative slot offset to the .vms$rel fixup table (grown on
+ * demand). Each recorded slot holds an 8-byte image-relative address that IMGACT
+ * re-biases by the load base at activation (apply_vms_rel, imgact.c). */
+static void evax_rel_add(uint64_t **arr, int *n, int *cap, uint64_t off)
+{
+    if (*n == *cap) {
+        int nc = *cap ? *cap * 2 : 16;
+        uint64_t *p = realloc(*arr, (size_t)nc * sizeof *p);
+        if (!p) die("oom growing .vms$rel fixup table");
+        *arr = p; *cap = nc;
+    }
+    (*arr)[(*n)++] = off;
+}
+
 /* Apply one relocation into its psect's content buffer. `site_va` is only used
  * for diagnostics; the write lands in the content buffer at r->address. An
  * undefined reference that a --use'd producer EXPORTS binds as a cross-image
  * import (evax_add_ximport); one it exports as a GLOBALVALUE is folded to its
  * absolute constant at the reference site (evax_fold_globalvalue); one no
- * producer defines stays an honest %LINK-F-UNDEF (INV-6). */
+ * producer defines stays an honest %LINK-F-UNDEF (INV-6).
+ *
+ * A slot LINK writes as an UNBIASED image-relative pointer to a PLACED section
+ * (a REFQUAD/CODEADDR to a section-relative or local-defined target, or either
+ * quad of a locally-resolved LINKAGE pair) is recorded in the .vms$rel table via
+ * rel_off/nrel/rel_cap so IMGACT adds the load bias at activation. Absolute
+ * targets are NOT recorded: an $ABS$/globalvalue symbol resolves through an
+ * unplaced section (sec_base == 0), so its S_placed/codeS_placed flag is 0.
+ * Cross-image imports and folded globalvalues return early above and never reach
+ * the recording switch — IMGACT fills the former and the latter is a link-time
+ * constant, so biasing either would be wrong (mirrors the ELF emit_shareable
+ * .vms$rel policy: GOT/ABS64 image-relative slots in, globalvalues out). */
 static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
                              const struct evax_reloc *r, int allow_undef,
                              struct producer *producers, int np,
                              struct import **imp, int *nimp, int *imp_cap,
                              int *n_ximport,
                              long *deferred, int *n_linkage_applied,
-                             int *n_callsite_conservative)
+                             int *n_callsite_conservative,
+                             uint64_t **rel_off, int *nrel, int *rel_cap)
 {
     struct evax_object *o = &in[ii].obj;
     if (r->psect < 0 || r->psect >= o->nsec) die("relocation names a bad psect index");
@@ -3378,9 +3404,16 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
      * symbol target (sym set). */
     uint64_t S = 0, code_S = 0;
     int have_code = 0;
+    /* Is the resolved target an IMAGE-RELATIVE address in a PLACED section (so a
+     * slot holding it must be load-biased), or an absolute value (an $ABS$/
+     * globalvalue symbol, whose defining section is never placed -> sec_base 0)?
+     * Placement assigns every loaded psect a base >= the ELF+phdr header end
+     * (nonzero); an unplaced section keeps its calloc-zeroed sec_base == 0. */
+    int S_placed = 0, codeS_placed = 0;
     if (r->to_section >= 0) {
         if (r->to_section >= o->nsec) die("relocation names a bad target section");
         S = in[ii].sec_base[r->to_section];   /* this object's own psect base */
+        S_placed = (S != 0);
     } else {
         int di; const struct evax_symbol *ds;
         if (evax_find_sym(in, nin, r->sym, &di, &ds) < 0) {
@@ -3417,7 +3450,12 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
         S = evax_sym_value_addr(in, di, ds);   /* procedure descriptor / value */
         code_S = evax_sym_code_addr(in, di, ds);
         have_code = 1;
+        S_placed     = (in[di].sec_base[ds->psindx] != 0);
+        codeS_placed = (in[di].sec_base[ds->code_psindx] != 0);
     }
+
+    /* Image-relative offset of the store slot (the site), for the .vms$rel table. */
+    uint64_t rel_site = in[ii].sec_base[r->psect] + r->address;
 
     uint8_t *c = evax_ensure_content(sec);
     if (!c) die("relocation into a zero-length psect");
@@ -3426,15 +3464,29 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
     case EVAX_R_REFLONG:
         if (r->address + 4 > sec->alloc) die("REFLONG site past psect end");
         putl32(c + r->address, (uint32_t)(S + r->addend));
+        /* A REFLONG is a 32-bit slot. If it holds an image-relative address into
+         * a placed section it would need a load-bias fixup — but IMGACT's
+         * .vms$rel loader adds a 64-bit bias to an 8-byte slot, which a 4-byte
+         * slot cannot represent. The alpha-dec-vms GCC port emits no such REFLONG
+         * (every runtime pointer/address is a REFQUAD/CODEADDR/LINKAGE quad; the
+         * only REFLONGs are $ABS$/globalvalue folds, S_placed == 0). Fail
+         * honestly rather than emit an unbiasable fixup or silently mis-load. */
+        if (S_placed)
+            die("EVAX REFLONG to a placed section needs a load-bias fixup, but a "
+                "32-bit slot cannot hold a 64-bit-biased address (the port must "
+                "emit a REFQUAD, or this is out of .vms$rel scope)");
         break;
     case EVAX_R_REFQUAD:
         if (r->address + 8 > sec->alloc) die("REFQUAD site past psect end");
         putl64(c + r->address, S + r->addend);
+        if (S_placed) evax_rel_add(rel_off, nrel, rel_cap, rel_site);
         break;
     case EVAX_R_CODEADDR:
         /* Store the target's CODE ENTRY address (a procedure's entry point). */
         if (r->address + 8 > sec->alloc) die("CODEADDR site past psect end");
         putl64(c + r->address, (have_code ? code_S : S) + r->addend);
+        if (have_code ? codeS_placed : S_placed)
+            evax_rel_add(rel_off, nrel, rel_cap, rel_site);
         break;
     case EVAX_R_LINKAGE: {
         /* Alpha linkage pair: two quadwords at the site. Per binutils-2.43
@@ -3449,6 +3501,11 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
         if (!have_code) die("LINKAGE target is not a procedure symbol");
         putl64(c + r->address,     code_S);   /* quad[0] = code entry           */
         putl64(c + r->address + 8, S);        /* quad[1] = procedure descriptor */
+        /* Both quads hold image-relative addresses of a locally-resolved
+         * procedure -> record both for load-bias fixup. (A cross-image LINKAGE
+         * target never reaches here: it binds as a .vms$imp import above.) */
+        if (codeS_placed) evax_rel_add(rel_off, nrel, rel_cap, rel_site);
+        if (S_placed)     evax_rel_add(rel_off, nrel, rel_cap, rel_site + 8);
         (*n_linkage_applied)++;
         break;
     }
@@ -3476,7 +3533,7 @@ static void emit_evax_image(struct evax_input *in, int nin,
     /* Output sections we emit headers for: one per distinct (rank-ordered) psect
      * name actually present, plus .vms$xfer. Track each output section's range. */
     struct outsec { char name[EVAX_NAME_MAX]; uint64_t addr, size; int nobits; };
-    struct outsec osec[EVAX_MAX_SECTIONS + 3];   /* + .vms$xfer + .vms$imp */
+    struct outsec osec[EVAX_MAX_SECTIONS + 4];   /* + .vms$xfer + .vms$imp + .vms$rel */
     int nos = 0;
 
     for (int rank = 0; rank <= 4; rank++) {
@@ -3539,12 +3596,16 @@ static void emit_evax_image(struct evax_input *in, int nin,
     long deferred = 0;
     int n_linkage = 0, n_callsite = 0, n_data = 0, n_ximport = 0;
     struct import *imp = NULL; int nimp = 0, imp_cap = 0;
+    /* .vms$rel fixup table: image-relative slot offsets LINK filled with an
+     * unbiased image-relative address, for IMGACT to +load_bias at activation. */
+    uint64_t *rel_off = NULL; int nrel = 0, rel_cap = 0;
     for (int i = 0; i < nin; i++)
         for (int r = 0; r < in[i].obj.nreloc; r++) {
             enum evax_reloc_type t = in[i].obj.reloc[r].type;
             evax_apply_reloc(in, nin, i, &in[i].obj.reloc[r], allow_undef,
                              producers, np, &imp, &nimp, &imp_cap, &n_ximport,
-                             &deferred, &n_linkage, &n_callsite);
+                             &deferred, &n_linkage, &n_callsite,
+                             &rel_off, &nrel, &rel_cap);
             if (t == EVAX_R_REFLONG || t == EVAX_R_REFQUAD || t == EVAX_R_CODEADDR)
                 n_data++;
         }
@@ -3564,6 +3625,23 @@ static void emit_evax_image(struct evax_input *in, int nin,
         int oi = nos++;
         snprintf(osec[oi].name, sizeof osec[oi].name, "%s", OVMX_IMP_SECTION);
         osec[oi].addr = off_imp; osec[oi].size = imp_size; osec[oi].nobits = 0;
+    }
+
+    /* ---- .vms$rel: the load-bias fixup table. Header + one image-relative u64
+     * offset per recorded slot. Emitted ONLY when nrel > 0 (a pure-code image
+     * with no image-relative data pointers gains no section, byte-unchanged). It
+     * carries offsets (not pointers), so it needs no fixup of its own; placed in
+     * the loaded range so IMGACT can find it by section vaddr and apply it — the
+     * SAME ovmx_rel_header + IMGACT apply_vms_rel contract the ELF path emits. --- */
+    uint64_t off_rel = 0, rel_sec_size = 0;
+    if (nrel > 0) {
+        cur = ALIGN_UP(cur, 8);
+        off_rel = cur;
+        rel_sec_size = sizeof(struct ovmx_rel_header) + (uint64_t)nrel * 8;
+        cur += rel_sec_size;
+        int oi = nos++;
+        snprintf(osec[oi].name, sizeof osec[oi].name, "%s", OVMX_REL_SECTION);
+        osec[oi].addr = off_rel; osec[oi].size = rel_sec_size; osec[oi].nobits = 0;
     }
 
     uint64_t file_end = cur;           /* end of loadable file content          */
@@ -3643,6 +3721,18 @@ static void emit_evax_image(struct evax_input *in, int nin,
     if (nimp > 0)
         vms_imp_write(img, off_imp, imp, nimp, producers, np);
 
+    /* Stamp .vms$rel (load-bias fixups): ovmx_rel_header{magic,count} then the
+     * image-relative slot offsets. Written little-endian like the rest of the
+     * image so IMGACT's apply_vms_rel reads it directly (imgact.c:apply_vms_rel:
+     * for each off, *(base+off) += load_base). */
+    if (nrel > 0) {
+        putl32(img + off_rel + 0, OVMX_REL_MAGIC);
+        putl32(img + off_rel + 4, (uint32_t)nrel);
+        for (int i = 0; i < nrel; i++)
+            putl64(img + off_rel + sizeof(struct ovmx_rel_header) + (uint64_t)i * 8,
+                   rel_off[i]);
+    }
+
     /* shstrtab + section headers. */
     memcpy(img + off_shstr, shstr, shlen);
     Elf64_Shdr *sh = (Elf64_Shdr *)(img + off_shdr);
@@ -3692,10 +3782,16 @@ static void emit_evax_image(struct evax_input *in, int nin,
                 "--use producer%s (.vms$imp at 0x%llx, resolved at activation)\n",
                 n_ximport, n_ximport == 1 ? "" : "s", np == 1 ? "" : "s",
                 (unsigned long long)off_imp);
+    if (nrel > 0)
+        fprintf(stderr, "%%LINK-I-RELOC, %d image-relative slot%s recorded in "
+                ".vms$rel at 0x%llx (load-bias fixups applied by IMGACT at "
+                "activation)\n",
+                nrel, nrel == 1 ? "" : "s", (unsigned long long)off_rel);
     if (deferred)
         fprintf(stderr, "%%LINK-W-DEFERRED, %ld EVAX reference%s left undefined\n",
                 deferred, deferred == 1 ? "" : "s");
     free(imp);
+    free(rel_off);
 }
 
 /* Sniff a file's object format from its first bytes (input already on disk). */

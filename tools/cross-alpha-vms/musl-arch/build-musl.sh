@@ -21,6 +21,14 @@ export PATH="${PREFIX}/bin:${PATH}"
 # 64-bit pointers are mandatory: alpha-dec-vms defaults to 32-bit (VMS short
 # pointers); musl is LP64. Every object must be built -mpointer-size=64.
 CC_FLAGS="-mpointer-size=64"
+# MUSL_EXTRA_CFLAGS (vms-7b96): appended to every compile. The primary path
+# leaves DST on (genuine .vmsdebug; LINK.EXE's EVAX reader skips it). Pass
+# MUSL_EXTRA_CFLAGS=-g0 to suppress DST so GNU nm/ar can read the objects — the
+# ONLY way to ENUMERATE the port's decorated decc$* definitions for the DECC$SHR
+# symbol vector (mk_decc_shr.sh), since the GNU vms-alpha reader cannot parse DST
+# and objcopy/strip cannot remove it. The resulting DECC$SHR is byte-identical
+# either way: LINK.EXE skips EDBG/ETBT, so no DST reaches the linked image.
+CC_FLAGS="${CC_FLAGS} ${MUSL_EXTRA_CFLAGS:-}"
 
 mkdir -p "$WORK" && cd "$WORK"
 

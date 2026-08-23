@@ -45,6 +45,71 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 [ -f "$LIBC" ]   || { echo "mk_decc_shr: libc.a not found: $LIBC (need the arm64 musl container)"; exit 1; }
 [ -f "$LIBGCC" ] || { echo "mk_decc_shr: libgcc.a not found: $LIBGCC"; exit 1; }
 
+# ==========================================================================
+# ALPHA / EVAX BRANCH (vms-7b96 RUNG-1) — a DEDICATED path for alpha-dec-vms
+# input archives, taken BEFORE any of the x86_64/aarch64 (ELF) machinery below.
+#
+# WHY A SEPARATE PATH. On alpha the GCC port itself DECORATES the C-RTL surface
+# at codegen: musl-alpha DEFINES `decc$strlen`, `decc$_malloc64` (malloc under
+# -mpointer-size=64), `decc$_memcpy64`, `decc$tprintf` (printf's IEEE T_float
+# variant), ... — it does NOT define the plain names. A port client imports those
+# DECORATED names directly. So DECC$SHR must export the decc$* names DIRECTLY
+# (universal == the defined symbol), NOT the x86_64 `decc$<name>/<name>`
+# alias-to-plain vector (there is no plain <name> to alias to), and the static
+# plain-name VEC below would resolve to nothing. The x86_64 TLS/fortify
+# filter_tls_members and the decc_crtl_map alias loop are likewise inapplicable
+# (alpha long double is IEEE binary64 = 8 bytes, so no 128-bit tf soft-float; no
+# GD-TLS members). And bare nm/ar/readelf are HOST binutils, which cannot read
+# VMS-native EVAX objects at all — the caller passes the cross tools via NM/AR.
+#
+# The vector is GROUND-TRUTHED from the archives: enumerate every decc$* symbol
+# libc.a + libgcc.a actually DEFINE and export each as a universal (text ->
+# PROCEDURE, data -> DATA), skipping the EVAX companion labels (..en/..ng/..lk/
+# ..lita — the callable value is the bare descriptor). A name the port did not
+# emit is simply ABSENT (a visible gap for a later rung), never faked. LINK.EXE's
+# EVAX archive front end (link.c load_archive_evax) whole-archives both inputs.
+# ==========================================================================
+NM=${NM:-nm}
+OVMX_DECC_ARCH=${OVMX_DECC_ARCH:-auto}
+if [ "$OVMX_DECC_ARCH" = auto ]; then
+    if "$NM" --defined-only "$LIBC" 2>/dev/null | grep -q 'decc\$'; then
+        OVMX_DECC_ARCH=alpha
+    else
+        OVMX_DECC_ARCH=generic
+    fi
+fi
+
+if [ "$OVMX_DECC_ARCH" = alpha ]; then
+    echo "mk_decc_shr: ALPHA/EVAX branch (vms-7b96)"
+    echo "mk_decc_shr: LINK.EXE=$LINK_EXE  libc.a=$LIBC  libgcc.a=$LIBGCC  GSMATCH=$GSMATCH"
+    ALPHA_VEC=$(mktemp)
+    # text (T) -> PROCEDURE, data (D/G/R/B) -> DATA; drop the ..-suffixed EVAX
+    # companion labels and any weak-undefined (V/w) or undefined (U) entries.
+    "$NM" --defined-only "$LIBC" "$LIBGCC" 2>/dev/null \
+      | awk '
+          $NF ~ /^decc\$/ && $NF !~ /\.\.[a-z]+$/ {
+              t=$(NF-1); n=$NF;
+              if (t=="T"||t=="t") print n"=PROCEDURE";
+              else if (t=="D"||t=="d"||t=="G"||t=="g"||t=="R"||t=="r"||t=="B"||t=="b") print n"=DATA";
+          }' \
+      | sort -u > "$ALPHA_VEC"
+    NVEC=$(wc -l < "$ALPHA_VEC")
+    echo "mk_decc_shr: enumerated $NVEC decc\$ universals from libc.a + libgcc.a"
+    [ "$NVEC" -ge 50 ] || { echo "mk_decc_shr: FAIL only $NVEC decc\$ symbols found — is NM the alpha-dec-vms cross nm and libc.a built -g0 (nm cannot read DST, vms-7b96)?" >&2; exit 2; }
+    VEC=$(paste -sd, "$ALPHA_VEC")
+    rm -f "$ALPHA_VEC"
+    # Strict whole-archive link (no --allow-undefined) unless the caller opts into
+    # first-light deferral for the VMS OTS$/STARLET runtime surface musl-alpha
+    # references (OTS$DIV_I/OTS$REM_I integer divide, ...) that a SEPARATE OVMX
+    # shareable will provide — pass DECC_ALLOW_UNDEF=1 for the RUNG-1 first light.
+    ALPHA_LINK_FLAGS="--shareable --symbol-vector $VEC --gsmatch $GSMATCH"
+    [ "${DECC_ALLOW_UNDEF:-0}" = 1 ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --allow-undefined"
+    # shellcheck disable=SC2086
+    "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC"
+    echo "mk_decc_shr: created $OUT (alpha/EVAX)"
+    exit 0
+fi
+
 # DECC$SHR must stay a NON-TLS-producer: it whole-archives libc.a/libgcc.a for
 # C-runtime support routines only and carries no __thread state of its own.
 # LINK.EXE enforces "one TLS object per image" (general multi-module TLS is

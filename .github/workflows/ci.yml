@@ -4417,6 +4417,58 @@ jobs:
               sh /src/src/imgact/test/run_vms_std_activation_alpha.sh
             '
 
+  # musl port for alpha-dec-vms — RUNG 1 (vms-960).
+  #
+  # Build/oracle tooling, Rule-9-clean: nothing here runs inside the OVMX guest.
+  # Builds the alpha-dec-vms (VMS-ABI) cross toolchain image (binutils + gcc
+  # cc1, gha layer cache scope=cross-alpha-vms), then INSIDE it fetches musl,
+  # overlays tools/cross-alpha-vms/musl-arch/arch/alpha-dec-vms, and builds
+  # lib/libc.a. The overlay is mounted read-only; the build runs in /tmp in the
+  # container (the repo is never written). A preflight asserts the LP64 model
+  # against the real compiler; VERIFY asserts libc.a is a real alpha-dec-vms
+  # archive with genuine portable text symbols (strlen/malloc/memcpy/vsnprintf)
+  # and that the honest -ENOSYS syscall stub (__vms_alpha_syscall) is defined.
+  # -----------------------------------------------------------------------
+  musl-alpha-vms:
+    name: musl alpha-dec-vms port — RUNG 1 build (vms-960)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: Fetch musl, overlay alpha-dec-vms arch, build + verify lib/libc.a
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/tools/cross-alpha-vms/musl-arch":/overlay:ro \
+            -e OVERLAY=/overlay \
+            ovmx-cross-alpha-vms:latest bash /overlay/build-musl.sh
+
+      # OTS$ runtime (LIBOTS$) — RUNG completeness (vms-bfd6). Builds LINK.EXE +
+      # LIBOTS$SHR.EXE, links DECC$SHR whole-archiving libc.a+libgcc.a WITH
+      # --use LIBOTS$, and ASSERTS zero OTS$ references are left deferred (they
+      # bind as real cross-image .vms$imp imports); then runs the native OTS$-
+      # divide correctness proof. Reuses the toolchain image loaded above.
+      - name: OTS$ runtime proof (LIBOTS$ links + DECC$SHR binds it + divide correct)
+        run: IMG=ovmx-cross-alpha-vms:latest bash tools/cross-alpha-vms/ots/run_ots_proof.sh
+
   # Job 12: real src/libvmssys linked + activated VMS-native (aarch64)
   #
   # The pillar milestone (vms-ade / bead vms-80a): the whole toolchain end to

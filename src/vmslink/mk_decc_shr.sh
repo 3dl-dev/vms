@@ -45,6 +45,93 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 [ -f "$LIBC" ]   || { echo "mk_decc_shr: libc.a not found: $LIBC (need the arm64 musl container)"; exit 1; }
 [ -f "$LIBGCC" ] || { echo "mk_decc_shr: libgcc.a not found: $LIBGCC"; exit 1; }
 
+# ==========================================================================
+# ALPHA / EVAX BRANCH (vms-7b96 RUNG-1) — a DEDICATED path for alpha-dec-vms
+# input archives, taken BEFORE any of the x86_64/aarch64 (ELF) machinery below.
+#
+# WHY A SEPARATE PATH. On alpha the GCC port itself DECORATES the C-RTL surface
+# at codegen: musl-alpha DEFINES `decc$strlen`, `decc$_malloc64` (malloc under
+# -mpointer-size=64), `decc$_memcpy64`, `decc$tprintf` (printf's IEEE T_float
+# variant), ... — it does NOT define the plain names. A port client imports those
+# DECORATED names directly. So DECC$SHR must export the decc$* names DIRECTLY
+# (universal == the defined symbol), NOT the x86_64 `decc$<name>/<name>`
+# alias-to-plain vector (there is no plain <name> to alias to), and the static
+# plain-name VEC below would resolve to nothing. The x86_64 TLS/fortify
+# filter_tls_members and the decc_crtl_map alias loop are likewise inapplicable
+# (alpha long double is IEEE binary64 = 8 bytes, so no 128-bit tf soft-float; no
+# GD-TLS members). And bare nm/ar/readelf are HOST binutils, which cannot read
+# VMS-native EVAX objects at all — the caller passes the cross tools via NM/AR.
+#
+# The vector is GROUND-TRUTHED from the archives: enumerate every decc$* symbol
+# libc.a + libgcc.a actually DEFINE and export each as a universal (text ->
+# PROCEDURE, data -> DATA), skipping the EVAX companion labels (..en/..ng/..lk/
+# ..lita — the callable value is the bare descriptor). A name the port did not
+# emit is simply ABSENT (a visible gap for a later rung), never faked. LINK.EXE's
+# EVAX archive front end (link.c load_archive_evax) whole-archives both inputs.
+# ==========================================================================
+NM=${NM:-nm}
+OVMX_DECC_ARCH=${OVMX_DECC_ARCH:-auto}
+if [ "$OVMX_DECC_ARCH" = auto ]; then
+    if "$NM" --defined-only "$LIBC" 2>/dev/null | grep -q 'decc\$'; then
+        OVMX_DECC_ARCH=alpha
+    else
+        OVMX_DECC_ARCH=generic
+    fi
+fi
+
+if [ "$OVMX_DECC_ARCH" = alpha ]; then
+    echo "mk_decc_shr: ALPHA/EVAX branch (vms-7b96)"
+    echo "mk_decc_shr: LINK.EXE=$LINK_EXE  libc.a=$LIBC  libgcc.a=$LIBGCC  GSMATCH=$GSMATCH"
+    ALPHA_VEC=$(mktemp)
+    # ENUMERATE decc$ defs. The cross nm/ar's vms-alpha BFD rejects a System V ar
+    # container ("file format not recognized"), and bare host nm cannot read EVAX
+    # objects at all — but host `ar` extracts the (format-agnostic) container fine,
+    # and the cross nm reads a bare EVAX .o. So extract with host ar, nm each member
+    # with the cross nm. libc.a MUST be built -g0 for this (the cross nm cannot read
+    # DST members, vms-7b96); the shipped DECC$SHR is byte-identical either way
+    # (LINK.EXE skips DST). text (T) -> PROCEDURE, data (D/G/R/B) -> DATA; drop the
+    # ..-suffixed EVAX companion labels (the callable value is the bare descriptor).
+    AR_HOST=${AR_HOST:-ar}
+    EXDIR=$(mktemp -d)
+    ( cd "$EXDIR" && "$AR_HOST" x "$LIBC" && [ -s "$LIBGCC" ] && "$AR_HOST" x "$LIBGCC" 2>/dev/null || true )
+    "$NM" --defined-only "$EXDIR"/*.o 2>/dev/null \
+      | awk '
+          $NF ~ /^decc\$/ && $NF !~ /\.\.[a-z]+$/ {
+              t=$(NF-1); n=$NF;
+              # text (incl. weak text W) -> PROCEDURE; data (incl. weak data V) -> DATA
+              if (t=="T"||t=="t"||t=="W"||t=="w") print n"=PROCEDURE";
+              else if (t~/^[DdGgRrBbVv]$/) print n"=DATA";
+          }' \
+      | sort -u > "$ALPHA_VEC"
+    rm -rf "$EXDIR"
+    NVEC=$(wc -l < "$ALPHA_VEC")
+    echo "mk_decc_shr: enumerated $NVEC decc\$ universals from libc.a + libgcc.a"
+    [ "$NVEC" -ge 50 ] || { echo "mk_decc_shr: FAIL only $NVEC decc\$ symbols found — is NM the alpha-dec-vms cross nm and libc.a built -g0 (nm cannot read DST, vms-7b96)?" >&2; exit 2; }
+    VEC=$(paste -sd, "$ALPHA_VEC")
+    rm -f "$ALPHA_VEC"
+    # Strict whole-archive link (no --allow-undefined) unless the caller opts into
+    # first-light deferral for the VMS runtime surface musl-alpha references.
+    #
+    # OTS$ runtime (vms-bfd6): the VMS integer-divide / block family the compiler
+    # emits (OTS$DIV_*, OTS$REM_*, OTS$HOME_ARGS, OTS$MOVE, OTS$ZERO) is provided
+    # by a SEPARATE shareable, LIBOTS$ — the faithful OpenVMS shape (LIBOTS$ is a
+    # distinct image from DECC$SHR). Point DECC_USE at it (space-separated for
+    # several) and its OTS$ references bind as real cross-image .vms$imp imports
+    # instead of deferring. Build LIBOTS$ first with tools/cross-alpha-vms/ots/
+    # build-libots.sh, then pass DECC_USE=<path-to-LIBOTS$SHR.EXE>.
+    #
+    # DECC_ALLOW_UNDEF=1 still records any remaining first-light residual (e.g.
+    # the setjmp/cancellation surface — decc$longjmp, __cp_*, __syscall_cp_asm —
+    # and the linker-defined _DYNAMIC/__init_array bounds) as deferred imports.
+    ALPHA_LINK_FLAGS="--shareable --symbol-vector $VEC --gsmatch $GSMATCH"
+    for p in ${DECC_USE:-}; do ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $p"; done
+    [ "${DECC_ALLOW_UNDEF:-0}" = 1 ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --allow-undefined"
+    # shellcheck disable=SC2086
+    "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC"
+    echo "mk_decc_shr: created $OUT (alpha/EVAX)"
+    exit 0
+fi
+
 # DECC$SHR must stay a NON-TLS-producer: it whole-archives libc.a/libgcc.a for
 # C-runtime support routines only and carries no __thread state of its own.
 # LINK.EXE enforces "one TLS object per image" (general multi-module TLS is

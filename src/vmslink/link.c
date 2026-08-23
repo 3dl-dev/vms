@@ -1342,6 +1342,19 @@ static size_t g_syms_cap;          /* power of two */
 static int  g_allow_undef;
 static long g_deferred;            /* count of deferred (unresolved) externals */
 
+/* Diagnostic (vms-bfd6): with OVMX_LINK_DUMP_UNDEF set in the environment, name
+ * every deferred external on stderr as "DEFERRED-UNDEF: <name>". This is the
+ * authoritative enumeration of the residual undefined set a --allow-undefined
+ * link leaves — used to ground-truth which OTS$/MATH$ (and any other) universals
+ * a companion shareable must define. Off by default; changes no link output. */
+static int  g_dump_undef = -1;
+static void dump_undef(const char *nm)
+{
+    if (g_dump_undef < 0) g_dump_undef = getenv("OVMX_LINK_DUMP_UNDEF") ? 1 : 0;
+    if (g_dump_undef && nm && nm[0])
+        fprintf(stderr, "DEFERRED-UNDEF: %s\n", nm);
+}
+
 /* Producer GLOBALVALUE table (vms-954). A --use'd producer (DECC$SHR is the C
  * RTL surface) may export universals of kind OVMX_SV_GLOBALVALUE: absolute
  * link-time constants (VMS globalvalues — the errno message codes such as
@@ -1560,7 +1573,7 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx)
          * re-checks gval_find() to suppress that. (vms-954) */
         { uint64_t gv; if (gval_find(nm, &gv)) return gv; }
         if (weak_has(nm)) return 0;   /* weak-undef resolves to 0 (ELF semantics) */
-        if (g_allow_undef) { g_deferred++; return 0; }
+        if (g_allow_undef) { dump_undef(nm); g_deferred++; return 0; }
         /* NAME THE SYMBOL. Without it this diagnostic says only that *a*
          * symbol did not bind, which turns "one libc call was added to an
          * OVMX library whose producer image does not export it" -- the
@@ -2684,7 +2697,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
          * (--allow-undefined) or, strict, a hard error. (vms-61f.1) */
         *(uint64_t *)(img + got[i].va) = 0;   /* cell = 0, NOT biased/recorded */
         if (weak_has(got[i].name))      { /* correct 0; nothing to defer */ }
-        else if (g_allow_undef)         { g_deferred++; }
+        else if (g_allow_undef)         { dump_undef(got[i].name); g_deferred++; }
         else die("GOT symbol undefined (cross-image DATA import is a later increment)");
     }
 
@@ -3193,6 +3206,28 @@ static int evax_rank(const char *n)
 }
 static int evax_is_nobits(const char *n) { return !strcmp(n, "$BSS$"); }
 
+/* A DWARF/DST DEBUG psect — NON-runtime debug information the GNU vms-alpha back
+ * end emits as allocatable psects (`debug_frame`, `debug_info`, `debug_abbrev`,
+ * `debug_line`, `debug_loclists`, `debug_str`, ...; the port cc1 emits these even
+ * under -g0 on this toolchain). They are NOT part of the loaded image and MUST be
+ * excluded from placement and relocation: a debug section carries the standard
+ * intra-DWARF 32-bit section-relative REFLONGs (a debug_* offset into another
+ * debug_* section), which are NOT load-bias fixups and cannot be represented by a
+ * .vms$rel 8-byte biased slot — placing them wrongly trips evax_apply_reloc's
+ * "REFLONG to a placed section" guard. Every real linker drops non-SHF_ALLOC
+ * debug sections from the runtime image; do the same here, keyed on the psect
+ * name (the vms-alpha DWARF psects share $LINK$'s flag bits, so name is the
+ * reliable discriminator). $DST / .vmsdebug (VMS DST) are matched defensively —
+ * DST normally arrives as EDBG *records* (skipped by evax_read) but a psect-form
+ * DST is debug too. (vms-a90f: whole-archiving a real alpha-dec-vms libgcc.a.) */
+static int evax_is_debug(const char *n)
+{
+    return strncmp(n, "debug_", 6) == 0 ||
+           strncmp(n, ".debug", 6) == 0 ||
+           strncmp(n, ".vmsdebug", 9) == 0 ||
+           strncmp(n, "$DST", 4) == 0;
+}
+
 /* Resolve a symbol NAME across all inputs to its defining symbol. Returns the
  * defining input index + symbol, or -1 if undefined. */
 static int evax_find_sym(struct evax_input *in, int nin, const char *name,
@@ -3358,12 +3393,42 @@ static void evax_rel_add(uint64_t **arr, int *n, int *cap, uint64_t off)
     (*arr)[(*n)++] = off;
 }
 
+/* Linker-defined symbols the EVAX object model has no other way to resolve
+ * (vms-838a). On the ELF path these are handled by build_symhash's weak-undef
+ * pass (link.c ~1497) — the section-boundary symbols the crt0 uses to iterate
+ * static constructors/destructors, plus _DYNAMIC — but the EVAX object model
+ * carries no ELF weak-undef bind on a reference, so LINK.EXE synthesizes them
+ * here from the already-placed output sections. __init_array_start/end and the
+ * fini/preinit pairs point at the real bounds of the corresponding placed psect
+ * (.init_array/.fini_array/.preinit_array), so a crt0 that brackets its ctors
+ * with these iterates the actual array; when the image has no such psect the
+ * range is empty (start == end == 0), the correct value (matching ELF weak-undef
+ * -> 0: the crt0 loop runs zero iterations). _DYNAMIC is 0 (these EVAX images
+ * carry no PT_DYNAMIC). `placed` marks a value that is an image-relative address
+ * needing a .vms$rel load-bias fixup (a real section base), vs an absolute 0. */
+struct evax_ldsym { const char *name; uint64_t value; int placed; };
+
+/* Match `name` against the synthesized linker-defined set; on a hit fill *val +
+ * *placed and return 1. Returns 0 for any other name (the caller then falls to
+ * the honest producer-import / undef path). */
+static int evax_ldsym_find(const struct evax_ldsym *ld, int nld, const char *name,
+                           uint64_t *val, int *placed)
+{
+    for (int i = 0; i < nld; i++)
+        if (strcmp(ld[i].name, name) == 0) {
+            *val = ld[i].value; *placed = ld[i].placed; return 1;
+        }
+    return 0;
+}
+
 /* Apply one relocation into its psect's content buffer. `site_va` is only used
  * for diagnostics; the write lands in the content buffer at r->address. An
  * undefined reference that a --use'd producer EXPORTS binds as a cross-image
  * import (evax_add_ximport); one it exports as a GLOBALVALUE is folded to its
- * absolute constant at the reference site (evax_fold_globalvalue); one no
- * producer defines stays an honest %LINK-F-UNDEF (INV-6).
+ * absolute constant at the reference site (evax_fold_globalvalue); a
+ * linker-defined section-boundary/_DYNAMIC symbol is synthesized
+ * (evax_ldsym_find); one no producer defines stays an honest %LINK-F-UNDEF
+ * (INV-6).
  *
  * A slot LINK writes as an UNBIASED image-relative pointer to a PLACED section
  * (a REFQUAD/CODEADDR to a section-relative or local-defined target, or either
@@ -3382,7 +3447,8 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
                              int *n_ximport,
                              long *deferred, int *n_linkage_applied,
                              int *n_callsite_conservative,
-                             uint64_t **rel_off, int *nrel, int *rel_cap)
+                             uint64_t **rel_off, int *nrel, int *rel_cap,
+                             const struct evax_ldsym *ldsyms, int n_ldsyms)
 {
     struct evax_object *o = &in[ii].obj;
     if (r->psect < 0 || r->psect >= o->nsec) die("relocation names a bad psect index");
@@ -3437,6 +3503,18 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
                                  imp, nimp, imp_cap, n_ximport);
                 return;
             }
+            /* Linker-defined section-boundary / _DYNAMIC symbol (vms-838a): not
+             * an undef at all — synthesize its value from the placed sections and
+             * fall through to the normal store (so a crt0 iterating
+             * __init_array_start..__init_array_end sees the real init-array
+             * bounds; an empty range when the image has none). Never deferred. */
+            {
+                uint64_t lv; int lp;
+                if (evax_ldsym_find(ldsyms, n_ldsyms, r->sym, &lv, &lp)) {
+                    S = lv; S_placed = lp; have_code = 0; code_S = 0;
+                    goto store_target;
+                }
+            }
             if (allow_undef) {
                 (*deferred)++;
                 fprintf(stderr, "%%LINK-W-UNDEF, EVAX reference to undefined symbol "
@@ -3453,6 +3531,7 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
         S_placed     = (in[di].sec_base[ds->psindx] != 0);
         codeS_placed = (in[di].sec_base[ds->code_psindx] != 0);
     }
+store_target:;
 
     /* Image-relative offset of the store slot (the site), for the .vms$rel table. */
     uint64_t rel_site = in[ii].sec_base[r->psect] + r->address;
@@ -3564,9 +3643,16 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
     uint64_t cur = hdr_end;
 
     /* Output sections we emit headers for: one per distinct (rank-ordered) psect
-     * name actually present, plus .vms$xfer. Track each output section's range. */
+     * name actually present, plus .vms$xfer/.vms$imp/.vms$rel. Track each output
+     * section's range. Sized to an upper bound = total input sections + 4 (a
+     * whole-archived libc.a merges hundreds of members whose distinct psect names
+     * can exceed any fixed cap — vms-7b96, the 68-slot osec overflowed at 1345
+     * members), so it is malloc'd, not a fixed stack array. */
     struct outsec { char name[EVAX_NAME_MAX]; uint64_t addr, size; int nobits; };
-    struct outsec osec[EVAX_MAX_SECTIONS + 4];   /* + .vms$xfer + .vms$imp + .vms$rel */
+    int osec_cap = 4;
+    for (int i = 0; i < nin; i++) osec_cap += in[i].obj.nsec;
+    struct outsec *osec = calloc((size_t)osec_cap, sizeof *osec);
+    if (!osec) die("oom allocating EVAX output-section table");
     int nos = 0;
 
     for (int rank = 0; rank <= 4; rank++) {
@@ -3575,6 +3661,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
             for (int s = 0; s < in[i].obj.nsec; s++) {
                 struct evax_section *sec = &in[i].obj.sec[s];
                 if (evax_rank(sec->name) != rank || sec->alloc == 0) continue;
+                if (evax_is_debug(sec->name)) continue;   /* non-runtime debug psect */
                 /* find/create the output section for this name */
                 int oi = -1;
                 for (int k = 0; k < nos; k++) if (!strcmp(osec[k].name, sec->name)) { oi = k; break; }
@@ -3593,6 +3680,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
                 for (int s = 0; s < in[i].obj.nsec; s++) {
                     struct evax_section *sec = &in[i].obj.sec[s];
                     if (strcmp(sec->name, osec[k].name) != 0 || sec->alloc == 0) continue;
+                    if (evax_is_debug(sec->name)) continue;   /* non-runtime debug psect */
                     uint64_t al = (uint64_t)1 << sec->align;
                     if (al < 1) al = 1;
                     cur = ALIGN_UP(cur, al);
@@ -3603,6 +3691,44 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
             if (begset) { osec[k].addr = beg; osec[k].size = cur - beg; }
         }
     }
+
+    /* ---- Synthesize the linker-defined section-boundary / _DYNAMIC symbols
+     * (vms-838a) now that every psect is placed. Point each init/fini/preinit
+     * boundary at the real bounds of its placed array psect; an absent psect
+     * yields an empty range (start == end == 0), the correct value for an image
+     * with no such constructors. _DYNAMIC is 0 (no PT_DYNAMIC in these images).
+     * `placed` (a real image-relative base) drives the .vms$rel load-bias fixup
+     * in the store below. This runs only on the EVAX path — output-neutral for
+     * the ELF shareable/exec emitters, which resolve these via build_symhash's
+     * weak-undef pass instead. ---- */
+    /* The GNU alpha-vms assembler names the psect produced from `.section
+     * .init_array` as `init_array` (the leading dot is stripped in the EVAX
+     * EGSD), so match both the dotted (ELF-style) and undotted (EVAX) forms. */
+    struct { const char *sec; const char *alt; uint64_t s, e; int placed; }
+        ld_arr[] = {
+            {".init_array",    "init_array",    0,0,0},
+            {".fini_array",    "fini_array",    0,0,0},
+            {".preinit_array", "preinit_array", 0,0,0},
+        };
+    for (int a = 0; a < 3; a++)
+        for (int k = 0; k < nos; k++)
+            if ((!strcmp(osec[k].name, ld_arr[a].sec) ||
+                 !strcmp(osec[k].name, ld_arr[a].alt)) && osec[k].size) {
+                ld_arr[a].s = osec[k].addr;
+                ld_arr[a].e = osec[k].addr + osec[k].size;
+                ld_arr[a].placed = 1;
+                break;
+            }
+    const struct evax_ldsym ldsyms[] = {
+        { "__init_array_start",    ld_arr[0].s, ld_arr[0].placed },
+        { "__init_array_end",      ld_arr[0].e, ld_arr[0].placed },
+        { "__fini_array_start",    ld_arr[1].s, ld_arr[1].placed },
+        { "__fini_array_end",      ld_arr[1].e, ld_arr[1].placed },
+        { "__preinit_array_start", ld_arr[2].s, ld_arr[2].placed },
+        { "__preinit_array_end",   ld_arr[2].e, ld_arr[2].placed },
+        { "_DYNAMIC",              0,           0                 },
+    };
+    const int n_ldsyms = (int)(sizeof ldsyms / sizeof ldsyms[0]);
 
     /* .vms$xfer (executable) OR .vms$sv (shareable). Both sit right after the
      * psects, inside the loaded range, so IMGACT / a --use consumer reads them by
@@ -3677,11 +3803,19 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
     uint64_t *rel_off = NULL; int nrel = 0, rel_cap = 0;
     for (int i = 0; i < nin; i++)
         for (int r = 0; r < in[i].obj.nreloc; r++) {
+            /* Relocations that live INSIDE a non-runtime debug psect are not
+             * applied — that psect was never placed (see evax_is_debug), so its
+             * intra-DWARF 32-bit offsets are not load-bias fixups and would
+             * otherwise trip the REFLONG-to-placed-section guard. */
+            int rps = in[i].obj.reloc[r].psect;
+            if (rps >= 0 && rps < in[i].obj.nsec &&
+                evax_is_debug(in[i].obj.sec[rps].name))
+                continue;
             enum evax_reloc_type t = in[i].obj.reloc[r].type;
             evax_apply_reloc(in, nin, i, &in[i].obj.reloc[r], allow_undef,
                              producers, np, &imp, &nimp, &imp_cap, &n_ximport,
                              &deferred, &n_linkage, &n_callsite,
-                             &rel_off, &nrel, &rel_cap);
+                             &rel_off, &nrel, &rel_cap, ldsyms, n_ldsyms);
             if (t == EVAX_R_REFLONG || t == EVAX_R_REFQUAD || t == EVAX_R_CODEADDR)
                 n_data++;
         }
@@ -3726,13 +3860,18 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
     uint64_t mem_end = cur;
 
     /* ---- Build the shstrtab. ---- */
-    char shstr[4096]; size_t shlen = 0;
+    /* .shstrtab + the per-section name-offset table, both sized to the dynamic
+     * output-section count (vms-7b96: a whole-archived libc.a produces far more
+     * than any fixed cap). */
+    size_t shstr_cap = (size_t)osec_cap * EVAX_NAME_MAX + 16 /* ".shstrtab\0" + NUL */;
+    char *shstr = malloc(shstr_cap); size_t shlen = 0;
+    uint32_t *sh_name_off = calloc((size_t)osec_cap, sizeof *sh_name_off);
+    if (!shstr || !sh_name_off) die("oom allocating EVAX shstrtab");
     shstr[shlen++] = '\0';
-    uint32_t sh_name_off[EVAX_MAX_SECTIONS + 4];
     for (int k = 0; k < nos; k++) {
         sh_name_off[k] = (uint32_t)shlen;
         size_t l = strlen(osec[k].name) + 1;
-        if (shlen + l > sizeof shstr) die("shstrtab overflow");
+        if (shlen + l > shstr_cap) die("shstrtab overflow");
         memcpy(shstr + shlen, osec[k].name, l); shlen += l;
     }
     uint32_t sh_shstr_name = (uint32_t)shlen;
@@ -3794,6 +3933,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         for (int s = 0; s < in[i].obj.nsec; s++) {
             struct evax_section *sec = &in[i].obj.sec[s];
             if (sec->alloc == 0 || evax_is_nobits(sec->name)) continue;
+            if (evax_is_debug(sec->name)) continue;   /* non-runtime debug psect, unplaced */
             uint64_t base = in[i].sec_base[s];
             if (base + sec->alloc > file_end) die("psect content past file image");
             if (sec->content) memcpy(img + base, sec->content, (size_t)sec->alloc);
@@ -3986,6 +4126,115 @@ static int sniff_format(const char *path)
     return evax_sniff(hdr, (size_t)n);
 }
 
+/* --------------------------------------------------------------------------
+ * EVAX/Alpha ARCHIVE support (vms-7b96, lifts vms-c65's "EVAX archives are a
+ * later slice" limit). The Alpha C-RTL is delivered as a whole-archive libc.a /
+ * libgcc.a, exactly like the ELF path — but the alpha-dec-vms objects are
+ * VMS-native EVAX, not ELF, so load_archive/parse_obj (ELF-only) cannot ingest
+ * them, and sniff_format routes every archive to the ELF path. These helpers add
+ * the missing EVAX archive front end: walk the System V/GNU `ar` container
+ * ourselves (identical to load_archive's walk) and evax_read() each object
+ * member. The archive symbol table ("/","/SYM64/") and long-name table ("//")
+ * members are skipped; the port cc1's .vmsdebug/DST records are skipped by
+ * evax_read itself (parse loop's EDBG/ETBT default), so a DST-carrying member
+ * links exactly like a -g0 one. Note GNU ar cannot even BUILD such an archive
+ * (its vms-alpha BFD reader chokes on DST, vms-7b96), so the archive is
+ * hand-built without a symbol index — which is fine here: whole-archive pulls
+ * every member and never consults the index. Member content buffers are kept
+ * live for the run (like load_archive), never freed. */
+static int ar_member_is_evax(const uint8_t *abuf, size_t asize)
+{
+    if (asize < AR_MAGIC_LEN || memcmp(abuf, AR_MAGIC, AR_MAGIC_LEN) != 0)
+        return 0;
+    size_t pos = AR_MAGIC_LEN;
+    while (pos + AR_HDR_SIZE <= asize) {
+        const char *h = (const char *)(abuf + pos);
+        if (h[58] != '`' || h[59] != '\n') return 0;
+        uint64_t msize = ar_dec(h + 48, 10);
+        size_t mdata = pos + AR_HDR_SIZE;
+        if (mdata + msize > asize) return 0;
+        char nm[17]; memcpy(nm, h, 16); nm[16] = '\0';
+        int e = 16; while (e > 0 && nm[e - 1] == ' ') nm[--e] = '\0';
+        int special = (!strcmp(nm, "/") || !strcmp(nm, "//") ||
+                       !strcmp(nm, "/SYM64/"));
+        if (!special)
+            return evax_is_object(abuf + mdata, (size_t)msize);
+        pos = mdata + msize;
+        if (pos & 1) pos++;
+    }
+    return 0;
+}
+
+/* Is this input the root of an EVAX link? A bare EVAX object, or a `.a` archive
+ * whose first real member is an EVAX object. (.OLB stays an ELF-path container.) */
+static int input_is_evax(const char *path)
+{
+    if (file_is_olb(path)) return 0;
+    if (file_is_archive(path)) {
+        size_t sz; uint8_t *b = slurp(path, &sz);
+        int r = ar_member_is_evax(b, sz);
+        free(b);
+        return r;
+    }
+    return sniff_format(path) == EVFMT_EVAX;
+}
+
+/* Grow the EVAX input array by one and return the (zeroed) new slot. */
+static struct evax_input *push_evax(struct evax_input **ein, int *n, int *cap)
+{
+    if (*n >= *cap) {
+        *cap = *cap ? *cap * 2 : 64;
+        *ein = realloc(*ein, (size_t)*cap * sizeof **ein);
+        if (!*ein) die("oom growing EVAX input table");
+    }
+    struct evax_input *slot = &(*ein)[(*n)++];
+    memset(slot, 0, sizeof *slot);
+    return slot;
+}
+
+/* Parse every EVAX object member of an `ar` archive into the growable ein array. */
+static void load_archive_evax(const char *path, struct evax_input **ein,
+                              int *n, int *cap)
+{
+    size_t asize;
+    uint8_t *abuf = slurp(path, &asize);   /* kept live: members reference it */
+    if (asize < AR_MAGIC_LEN || memcmp(abuf, AR_MAGIC, AR_MAGIC_LEN) != 0)
+        die("not an ar archive");
+    size_t pos = AR_MAGIC_LEN;
+    int members = 0;
+    while (pos + AR_HDR_SIZE <= asize) {
+        const char *h = (const char *)(abuf + pos);
+        if (h[58] != '`' || h[59] != '\n') die("malformed ar member header");
+        uint64_t msize = ar_dec(h + 48, 10);
+        size_t mdata = pos + AR_HDR_SIZE;
+        if (mdata + msize > asize) die("ar member extends past end of archive");
+        char nm[17]; memcpy(nm, h, 16); nm[16] = '\0';
+        int e = 16; while (e > 0 && nm[e - 1] == ' ') nm[--e] = '\0';
+        int special = (!strcmp(nm, "/") || !strcmp(nm, "//") ||
+                       !strcmp(nm, "/SYM64/"));
+        if (!special) {
+            uint8_t *mb = malloc(msize ? msize : 1);
+            if (!mb) die("oom copying ar member");
+            memcpy(mb, abuf + mdata, (size_t)msize);
+            struct evax_input *slot = push_evax(ein, n, cap);
+            char label[300];
+            snprintf(label, sizeof label, "%s(%s)", path, nm);
+            slot->name = strdup(label);
+            if (!slot->name) die("oom labeling ar member");
+            if (evax_read(mb, (size_t)msize, &slot->obj) != 0) {
+                fprintf(stderr, "%%LINK-F-EVAX, %s: %s\n",
+                        slot->name, evax_last_error());
+                exit(1);
+            }
+            members++;
+        }
+        pos = mdata + msize;
+        if (pos & 1) pos++;
+    }
+    fprintf(stderr, "%%LINK-I-ARCHIVE, %s: %d EVAX object member%s pulled "
+            "(whole-archive)\n", path, members, members == 1 ? "" : "s");
+}
+
 int main(int argc, char **argv)
 {
     const char *out = NULL;
@@ -4038,36 +4287,50 @@ int main(int argc, char **argv)
      * emits an EXECUTABLE (emit_evax_image, --transfer) by default, or a
      * SHAREABLE (emit_evax_shareable, --symbol-vector/--gsmatch) under
      * --shareable (bead vms-c65). ---- */
-    if (sniff_format(ins[0]) == EVFMT_EVAX) {
-        /* EVAX/Alpha path. Slurp each input ONCE here (no byte-exact read-total
-         * gate on this path), sniff it from the full buffer, and hand it to
-         * evax_read. The ELF path falls through and does its single traced
-         * read per input in load_obj — so classifying ins[0] above uses the
-         * non-counted header peek, not a slurp (vms-cbe). */
-        struct evax_input *ein = calloc((size_t)nin, sizeof *ein);
-        if (!ein) die("oom allocating EVAX input table");
+    if (input_is_evax(ins[0])) {
+        /* EVAX/Alpha path. Each input is a bare EVAX object OR a whole `.a`
+         * archive of EVAX members (vms-7b96); an archive expands to all its
+         * members in-process (whole-archive, no `ld -r`), exactly like the ELF
+         * path's load_archive. Inputs grow dynamically. (.OLB is not accepted on
+         * this path.) The ELF path falls through and does its single traced read
+         * per input in load_obj — so classifying ins[0] above uses a header peek
+         * (or, for an archive, a first-member peek), not a counted slurp (vms-cbe). */
+        struct evax_input *ein = NULL;
+        int nein = 0, cap_ein = 0;
         for (int i = 0; i < nin; i++) {
+            if (file_is_olb(ins[i]))
+                die("the EVAX/Alpha link does not take .OLB libraries "
+                    "(use a .a archive or plain EVAX objects)");
+            if (file_is_archive(ins[i])) {
+                /* Walk the container; load_archive_evax evax_read()s every member
+                 * and errors on a non-EVAX one (the mixed-format guard). An empty
+                 * archive (0 members, e.g. a libgcc.a the alpha port never needed)
+                 * contributes nothing — accepted, not rejected. */
+                load_archive_evax(ins[i], &ein, &nein, &cap_ein);
+                continue;
+            }
             size_t sz; uint8_t *b = slurp(ins[i], &sz);
-            if (file_is_archive(ins[i]) || file_is_olb(ins[i]) ||
-                evax_sniff(b, sz) != EVFMT_EVAX)
-                die("the EVAX/Alpha link takes plain EVAX objects only "
-                    "(mixed formats / EVAX archives are a later slice)");
-            ein[i].name = ins[i];
-            if (evax_read(b, sz, &ein[i].obj) != 0) {
+            if (evax_sniff(b, sz) != EVFMT_EVAX)
+                die("mixed formats: the EVAX/Alpha link takes EVAX objects and "
+                    "EVAX `.a` archives only");
+            struct evax_input *slot = push_evax(&ein, &nein, &cap_ein);
+            slot->name = ins[i];
+            if (evax_read(b, sz, &slot->obj) != 0) {
                 fprintf(stderr, "%%LINK-F-EVAX, %s: %s\n", ins[i], evax_last_error());
                 exit(1);
             }
         }
+        if (nein == 0) die("no EVAX object members found in inputs");
         if (shareable) {
             if (executable)
                 die("specify at most one of --shareable / --executable");
             if (nuniv == 0)
                 die("the EVAX/Alpha shareable needs --symbol-vector "
                     "(e.g. --symbol-vector \"FOO=PROCEDURE,BAR=DATA\")");
-            emit_evax_shareable(ein, nin, uv, nuniv, gk, gmaj, gmin,
+            emit_evax_shareable(ein, nein, uv, nuniv, gk, gmaj, gmin,
                                 allow_undef, producers, np, out);
         } else {
-            emit_evax_image(ein, nin, transfer, allow_undef, producers, np, out);
+            emit_evax_image(ein, nein, transfer, allow_undef, producers, np, out);
         }
         return 0;
     }

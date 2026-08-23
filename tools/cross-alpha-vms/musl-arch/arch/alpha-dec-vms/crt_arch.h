@@ -11,12 +11,18 @@
  * musl static-link path is complete and self-consistent, and is a minimal,
  * documented OSF/Alpha-style _start rather than a VMS-calling-standard one.
  *
+ * _start is the raw image entry, not a VMS-callable procedure, so it is a plain
+ * global label (no .ent/.pdesc procedure descriptor).
+ *
  * Sequence:
  *   ldgp $29,0($27)   establish the global pointer from the entry PV
  *   mov  $30,$16      arg0 = pointer to {argc, argv[], envp[], auxv[]}
- *   ...  $17          arg1 = &_DYNAMIC (0 for static; _start_c ignores it)
+ *   mov  $31,$17      arg1 = 0 (static: no _DYNAMIC; _start_c ignores it)
  *   align $sp to 16
  *   jsr  _start_c
+ *
+ * (Static-link crt only; the VMS/EVAX assembler has no ELF .weak/.hidden, so
+ * _DYNAMIC is not referenced here - the dynamic linker is a later rung anyway.)
  */
 
 #define START "_start"
@@ -24,17 +30,12 @@
 __asm__(
 ".text \n"
 ".align 3 \n"
+".set noreorder \n"
 ".global _start \n"
-".ent _start \n"
 "_start: \n"
-"	.frame $30,0,$26,0 \n"
 "	ldgp $29,0($27) \n"
-"	.prologue 1 \n"
 "	mov $30,$16 \n"
-".weak _DYNAMIC \n"
-".hidden _DYNAMIC \n"
-"	lda $17,_DYNAMIC \n"
+"	mov $31,$17 \n"
 "	bic $30,15,$30 \n"
 "	jsr $26,_start_c \n"
-".end _start \n"
 );

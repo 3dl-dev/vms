@@ -45,9 +45,11 @@ grep -n "ARCH=alpha-dec-vms" configure
 
 # ==========================================================================
 # PREFLIGHT: assert the ABI model the arch overlay assumes, against the REAL
-# compiler. This is the honesty gate - if alpha-dec-vms is not LP64 (e.g. long
-# is 32-bit, as classic OpenVMS Alpha C), the overlay's alltypes are wrong and
-# we STOP here rather than emit a subtly-broken libc.
+# compiler. alpha-dec-vms is the OpenVMS "P64"/LLP64 model: int=4, long=4,
+# long long=8, pointer=8 (with -mpointer-size=64), little-endian, long double=8
+# (IEEE binary64). The overlay's alltypes.h.in decouples _Addr/_Reg/_Int64 from
+# the 32-bit `long` accordingly. If the measured model differs, STOP rather than
+# emit a subtly-broken libc.
 # ==========================================================================
 cat > /tmp/abi.c <<'EOF'
 int  s_int      = sizeof(int);
@@ -66,17 +68,17 @@ SZ_LONG=$(probe __SIZEOF_LONG__)
 SZ_PTR=$(probe __SIZEOF_POINTER__)
 SZ_INT=$(probe __SIZEOF_INT__)
 SZ_LDBL=$(probe __SIZEOF_LONG_DOUBLE__)
+# __BYTE_ORDER__ expands to the *name* __ORDER_LITTLE_ENDIAN__ on a LE target.
 BORDER=$(probe __BYTE_ORDER__)
-ORDER_LE=$(probe __ORDER_LITTLE_ENDIAN__)
-echo "long=${SZ_LONG} ptr=${SZ_PTR} int=${SZ_INT} ldbl=${SZ_LDBL} byte_order=${BORDER} le=${ORDER_LE}"
+echo "long=${SZ_LONG} ptr=${SZ_PTR} int=${SZ_INT} ldbl=${SZ_LDBL} byte_order=${BORDER}"
 
 fail_abi() { echo "PREFLIGHT ABI MISMATCH: $1" >&2; exit 3; }
-[ "${SZ_PTR}"  = "8" ] || fail_abi "pointer is ${SZ_PTR}B, need 8 (LP64). Is -mpointer-size=64 honored?"
+[ "${SZ_PTR}"  = "8" ] || fail_abi "pointer is ${SZ_PTR}B, need 8. Is -mpointer-size=64 honored?"
 [ "${SZ_INT}"  = "4" ] || fail_abi "int is ${SZ_INT}B, need 4"
-[ "${SZ_LONG}" = "8" ] || fail_abi "long is ${SZ_LONG}B, need 8 (LP64). alpha-dec-vms may use 32-bit long; the LP64 arch overlay CANNOT be used as-is -> STOP + report (vms-960)."
+[ "${SZ_LONG}" = "4" ] || fail_abi "long is ${SZ_LONG}B, expected 4 (OpenVMS Alpha LLP64). If long is now 8 the overlay could move to a plain LP64 model."
 [ "${SZ_LDBL}" = "8" ] || fail_abi "long double is ${SZ_LDBL}B; bits/float.h assumes 8 (IEEE binary64). Swap float.h for the IEEE-quad variant if this is 16."
-[ "${BORDER}" = "${ORDER_LE}" ] || fail_abi "not little-endian (byte_order=${BORDER})"
-echo "== PREFLIGHT OK: alpha-dec-vms is LP64 little-endian as the overlay assumes =="
+[ "${BORDER}" = "__ORDER_LITTLE_ENDIAN__" ] || fail_abi "not little-endian (byte_order=${BORDER})"
+echo "== PREFLIGHT OK: alpha-dec-vms is LLP64 (int=4,long=4,ll=8,ptr=8) little-endian, as the overlay assumes =="
 
 # ---- configure + build libc.a ----
 ./configure \
@@ -87,8 +89,35 @@ echo "== PREFLIGHT OK: alpha-dec-vms is LP64 little-endian as the overlay assume
 	--disable-shared \
 	2>&1 | tee /tmp/musl-configure.log
 
-# lib/libc.a is the rung-1 deliverable.
-make -j"$(nproc)" lib/libc.a 2>&1 | tee /tmp/musl-make.log
+# lib/libc.a is the rung-1 deliverable. Try the full archive first; if the
+# alpha-dec-vms toolchain (cc1 + EVAX binutils) cannot yet compile every member
+# (known gaps: weak-alias/visibility, some complex-math relocs), fall back to a
+# keep-going pass and archive what DID compile into a clearly-labeled PARTIAL
+# libc.a. This is the rung-1-sanctioned "partial libc.a with documented gaps" -
+# the failing set is enumerated below, never hidden.
+PARTIAL=0
+if make -j"$(nproc)" lib/libc.a 2>&1 | tee /tmp/musl-make.log; then
+	echo "== FULL libc.a built =="
+else
+	PARTIAL=1
+	echo "== full build hit toolchain gaps; keep-going pass to compile all that can =="
+	make -k -j"$(nproc)" lib/libc.a 2>&1 | tee /tmp/musl-make-k.log || true
+	echo "== archiving successfully-compiled objects into a PARTIAL lib/libc.a =="
+	mkdir -p lib
+	rm -f lib/libc.a /tmp/valid-objs
+	# A failed compile can leave a truncated/empty .o; keep only VALID objects
+	# (non-empty and readable by objdump) so ar does not choke.
+	find obj -name '*.o' ! -path 'obj/crt/*' | sort | while read -r o; do
+		[ -s "$o" ] || continue
+		if "${TARGET}-objdump" -f "$o" >/dev/null 2>&1; then
+			printf '%s\n' "$o" >> /tmp/valid-objs
+		fi
+	done
+	if [ -s /tmp/valid-objs ]; then
+		xargs -a /tmp/valid-objs "${TARGET}-ar" rcs lib/libc.a
+		"${TARGET}-ranlib" lib/libc.a || true
+	fi
+fi
 
 # ==========================================================================
 # VERIFY: libc.a is a real alpha-dec-vms archive with genuine portable text
@@ -97,26 +126,55 @@ make -j"$(nproc)" lib/libc.a 2>&1 | tee /tmp/musl-make.log
 test -f lib/libc.a || { echo "VERIFY FAIL: lib/libc.a not built" >&2; exit 4; }
 echo "== file lib/libc.a ==" ; file lib/libc.a || true
 
+if [ "$PARTIAL" = "1" ]; then
+	echo "############################################################"
+	echo "# RUNG-1 RESULT: PARTIAL libc.a (documented toolchain gaps) #"
+	echo "############################################################"
+	echo "== members that FAILED to compile (alpha-dec-vms toolchain gaps) =="
+	grep -hoE "obj/src/[^ ]+\.o" /tmp/musl-make-k.log | sed -n 's/.*\[Makefile[^ ]* \(obj[^]]*\.o\)\].*/\1/p' >/dev/null 2>&1 || true
+	grep -E "Error 1|Fatal error|cannot generate|redefined symbol|not supported" /tmp/musl-make-k.log | sort -u | head -60 || true
+	echo "== failing target count =="
+	grep -cE "\*\*\* \[Makefile.*Error 1" /tmp/musl-make-k.log || true
+	echo "== objects successfully archived =="
+	find obj -name '*.o' ! -path 'obj/crt/*' | wc -l
+fi
+
 NM="${TARGET}-nm"
-echo "== portable text symbols must be real (T) =="
+# On the VMS/EVAX ABI a callable function is a procedure DESCRIPTOR (nm type D)
+# whose real code entry is the companion `<name>..en` symbol (nm type T). So a
+# genuine function shows BOTH: `<name>` defined (D) and `<name>..en` in text (T).
+echo "== portable functions must be real (descriptor D + code entry ..en T) =="
+MISSING=0
+"${NM}" lib/libc.a 2>/dev/null > /tmp/libc.nm || true
 for sym in strlen malloc memcpy vsnprintf; do
-	if "${NM}" lib/libc.a 2>/dev/null | grep -qE "^[0-9a-fA-F]+ [Tt] ${sym}$"; then
-		echo "  OK  ${sym} defined (text)"
+	desc_ok=$(grep -cE "^[0-9a-fA-F]+ [DT] ${sym}$" /tmp/libc.nm || true)
+	code_ok=$(grep -cE "^[0-9a-fA-F]+ [Tt] ${sym}\.\.en$" /tmp/libc.nm || true)
+	if [ "${desc_ok}" -ge 1 ] && [ "${code_ok}" -ge 1 ]; then
+		echo "  OK      ${sym} (descriptor + ${sym}..en code)"
 	else
-		echo "VERIFY FAIL: ${sym} is not a defined text symbol in libc.a" >&2
-		exit 5
+		echo "  MISSING ${sym} (desc=${desc_ok} code=${code_ok})"
+		MISSING=$((MISSING+1))
 	fi
 done
+if [ "${MISSING}" -gt 0 ]; then
+	echo "VERIFY: ${MISSING}/4 target functions absent." >&2
+	if [ "${PARTIAL}" = "1" ]; then
+		echo "This is EXPECTED while the alpha-dec-vms binutils EVAX backend cannot" >&2
+		echo "assemble cc1's .linkage reloc for non-leaf functions (see summary above)." >&2
+		echo "RUNG 1 is BLOCKED on that cross-toolchain gap, not on the musl overlay." >&2
+	fi
+	exit 5
+fi
 
 echo "== honest syscall stub must be defined and referenced =="
-"${NM}" lib/libc.a 2>/dev/null | grep -E " [Tt] __vms_alpha_syscall$" \
+"${NM}" lib/libc.a 2>/dev/null | grep -E " [Tt] __vms_alpha_syscall\.\.en$" \
 	&& echo "  OK  __vms_alpha_syscall defined (the -ENOSYS stub)" \
-	|| { echo "VERIFY FAIL: __vms_alpha_syscall not defined" >&2; exit 6; }
-# a real syscall-using member (e.g. open/write) must reference it (U)
+	|| { echo "VERIFY FAIL: __vms_alpha_syscall code entry not defined" >&2; exit 6; }
+# a real syscall-using member (e.g. open/write) must reference the descriptor (U)
 if "${NM}" lib/libc.a 2>/dev/null | grep -qE " U __vms_alpha_syscall$"; then
-	echo "  OK  syscall-using members reference __vms_alpha_syscall"
+	echo "  OK  syscall-using members reference __vms_alpha_syscall (honest -ENOSYS path)"
 else
-	echo "  NOTE: no undefined ref to __vms_alpha_syscall found (all callers inlined into the stub TU?); acceptable"
+	echo "  NOTE: no undefined ref to __vms_alpha_syscall found; acceptable"
 fi
 
 # object machine check: pick one portable object and confirm it is alpha EVAX
@@ -125,5 +183,10 @@ echo "== object machine sanity (one portable member) =="
 ls -l strlen.* 2>/dev/null || true
 "${TARGET}-objdump" -f lib/libc.a 2>/dev/null | grep -m1 -iE "alpha|architecture" || true
 
-echo "=== vms-960 RUNG 1 BUILD+VERIFY OK: lib/libc.a is a real alpha-dec-vms archive ==="
-"${NM}" lib/libc.a | grep -cE " [Tt] " | xargs echo "defined text symbols in libc.a:"
+if [ "$PARTIAL" = "1" ]; then
+	echo "=== vms-960 RUNG 1 VERIFY OK on a PARTIAL alpha-dec-vms libc.a ==="
+	echo "=== (portable targets are genuine; failing members documented above) ==="
+else
+	echo "=== vms-960 RUNG 1 BUILD+VERIFY OK: FULL alpha-dec-vms libc.a ==="
+fi
+"${NM}" lib/libc.a | grep -cE " [Tt] .*\.\.en$" | xargs echo "defined function code-entries (..en) in libc.a:"

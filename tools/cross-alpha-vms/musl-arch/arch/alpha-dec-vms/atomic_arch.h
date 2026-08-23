@@ -50,7 +50,9 @@ static inline void *a_ll_p(volatile void *p)
 #define a_sc_p a_sc_p
 static inline int a_sc_p(volatile void *p, void *v)
 {
-	long r;
+	/* `long` is 32-bit on alpha-dec-vms (LLP64); the stq_c source register
+	 * must hold the full 64-bit pointer, so use a 64-bit type for the tie. */
+	long long r;
 	__asm__ __volatile__ (
 		"stq_c %1,%0"
 		: "=m"(*(void *volatile *)p), "=&r"(r)

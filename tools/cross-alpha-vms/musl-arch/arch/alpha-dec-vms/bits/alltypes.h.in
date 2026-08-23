@@ -1,15 +1,35 @@
-#define _Addr long
-#define _Int64 long
-#define _Reg long
+/*
+ * alltypes.h.in - OVMX alpha-dec-vms musl port (vms-960).
+ *
+ * ==========================================================================
+ * ABI FINDING (measured against the real cross compiler, vms-960 RUNG 1):
+ * OpenVMS Alpha (alpha-dec-vms) is NOT LP64. It is the classic OpenVMS "P64"
+ * model, i.e. LLP64: int=4, long=4, long long=8, pointer=8 (with
+ * -mpointer-size=64). `long` is 32-bit by VMS ABI and cannot be widened without
+ * breaking VMS binary compatibility. So we must decouple the address/register
+ * width from `long`:
+ *   _Addr  = long long   (64-bit: intptr_t/ptrdiff_t/size_t width == pointer)
+ *   _Int64 = long long   (64-bit integer)
+ *   _Reg   = long long   (64-bit register width)
+ *   __LONG_MAX = 0x7fffffffL  (32-bit long)
+ * This mirrors how musl's x32 arch decouples _Reg/_Int64 from _Addr, but here it
+ * is _Addr that must be wider than `long`. See README.md: musl is an LP64/ILP32
+ * libc and its LLP64 correctness is a tracked open item, not proven by rung 1.
+ * ==========================================================================
+ */
+#define _Addr long long
+#define _Int64 long long
+#define _Reg long long
 
 /* Alpha is little-endian. */
 #define __BYTE_ORDER 1234
 
-#define __LONG_MAX 0x7fffffffffffffffL
+/* 32-bit long (OpenVMS Alpha ABI). */
+#define __LONG_MAX 0x7fffffffL
 
-/* Alpha ABI: wchar_t is signed int (matches GCC __WCHAR_TYPE__ on alpha). */
+/* Matches the cross compiler: __WCHAR_TYPE__ == unsigned int on alpha-dec-vms. */
 #ifndef __cplusplus
-TYPEDEF int wchar_t;
+TYPEDEF unsigned wchar_t;
 #endif
 TYPEDEF unsigned wint_t;
 

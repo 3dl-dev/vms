@@ -1,17 +1,20 @@
 /*
- * syscall.h.in - __NR_* syscall numbers.
- * OVMX alpha-dec-vms musl port (vms-960).
+ * syscall.h.in - syscall numbers.  OVMX alpha-dec-vms musl port (vms-960).
  *
  * ==========================================================================
  * RUNG-1 PLACEHOLDER NUMBERING (HONEST): these are the generic Linux (AArch64)
- * __NR_* values, present ONLY so that every SYS_* symbol musl references
+ * syscall values, present ONLY so that every SYS_* symbol musl references
  * resolves and libc.a compiles. They are NOT authoritative for Alpha.
  *
- * The syscall backend is stubbed: __syscallN() -> __vms_alpha_syscall(n,...)
- * IGNORES n and returns -ENOSYS (see arch/alpha-dec-vms/syscall_arch.h). So the
- * concrete value of any __NR_ here reaches no kernel and cannot cause a wrong
+ * The syscall backend is stubbed: each syscallN() routes to __vms_alpha_syscall
+ * (n,...) which IGNORES n and returns -ENOSYS (see syscall_arch.h). So the
+ * concrete value of any number here reaches no kernel and cannot cause a wrong
  * call. The real Alpha syscall numbering (which genuinely differs from this
  * table) is established with the OVMX Alpha executive backend at GAP3.
+ *
+ * (This comment deliberately avoids the N-R token: the musl Makefile greps this
+ * file for that token to derive the SYS_* names, so any prose use would leak a
+ * broken line into the generated bits/syscall.h.)
  * ==========================================================================
  */
 #define __NR_io_setup 0

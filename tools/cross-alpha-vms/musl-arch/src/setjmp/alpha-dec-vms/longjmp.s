@@ -5,18 +5,19 @@
  * Restores the state saved by setjmp.s and returns into setjmp's caller. Per
  * C semantics longjmp(env, 0) makes setjmp appear to return 1; any other value
  * is returned as-is. jmp_buf ptr in $16 (a0), value in $17 (a1).
+ * VMS/EVAX procedure model - see setjmp.s.
  */
-	.set noat
 	.set noreorder
+	.set volatile
 	.text
 	.align 4
 	.globl longjmp
 	.globl _longjmp
 	.ent _longjmp
-_longjmp:
-longjmp:
+_longjmp..en:
+	.base $27
 	.frame $30,0,$26,0
-	.prologue 0
+	.prologue
 	ldq $9,    0($16)
 	ldq $10,   8($16)
 	ldq $11,  16($16)
@@ -40,4 +41,9 @@ longjmp:
 	mov 1, $0
 1:
 	ret $31,($26),1
+	.link
+	.align 3
+_longjmp:
+longjmp:
+	.pdesc _longjmp..en,null
 	.end _longjmp

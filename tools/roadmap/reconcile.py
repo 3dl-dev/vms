@@ -639,6 +639,55 @@ def print_gaps(data: dict) -> None:
 
 
 # --------------------------------------------------------------------------- #
+
+def collapse_problems(items: list[dict], data: dict, min_items: int) -> list[str]:
+    """Return the reasons this snapshot looks collapsed/empty (empty list == healthy).
+
+    THE ALL-ZEROS INCIDENT (2026-08-15): reconcile ran against an empty/stale rd
+    snapshot (rd unsynced / `rd list` returned nothing) and published a public
+    roadmap.json where EVERY milestone had total=0 and EVERY workstream was
+    'missing' — the live site showed all 0%. Nothing in the tool objected. This
+    check makes that failure a hard, loud abort (see sanity_gate) so a collapsed
+    snapshot can never again silently overwrite good published data.
+
+    The three signals are deliberately overlapping (defence in depth): a genuine
+    collapse trips all three, a partial truncation trips at least the floor.
+    """
+    problems: list[str] = []
+    n = len(items)
+    if n < min_items:
+        problems.append(
+            f"snapshot has {n} items (< floor {min_items}) — rd is likely empty or unsynced")
+    gate_total = len(data["workstreams"])
+    gate_present = sum(1 for w in data["workstreams"] if w["self_status"] != "missing")
+    if gate_present == 0 and gate_total:
+        problems.append(
+            f"0/{gate_total} gate-epic nodes present — every workstream would render 'missing'")
+    milestone_items = sum(m["rollup"]["total"] for m in data["milestones"])
+    if milestone_items == 0:
+        problems.append(
+            "0 rel-* labelled items across all milestones — every milestone would render 0%")
+    return problems
+
+
+def sanity_gate(items: list[dict], data: dict, min_items: int, allow_empty: bool) -> None:
+    """Refuse to emit anything from a collapsed snapshot (exit 2, write nothing)."""
+    problems = collapse_problems(items, data, min_items)
+    if problems and not allow_empty:
+        sys.stderr.write(
+            "reconcile.py: REFUSING TO PUBLISH — the rd snapshot looks collapsed:\n")
+        for p in problems:
+            sys.stderr.write(f"  - {p}\n")
+        sys.stderr.write(
+            "No files written; any existing published roadmap.json is left intact.\n"
+            "Fix rd, then re-run. Most common cause: `rd list --all --json` returns an\n"
+            "EMPTY board because this was run from a git worktree (worktrees lack the CEK\n"
+            "epoch) — run reconcile.py from the primary repo checkout, not a .worktrees/ dir.\n"
+            "Otherwise check rd is synced. For a genuinely empty board, pass --allow-empty.\n")
+        raise SystemExit(2)
+
+
+# --------------------------------------------------------------------------- #
 #  release cascade verification                                                 #
 # --------------------------------------------------------------------------- #
 
@@ -808,6 +857,12 @@ def main() -> int:
                          "it is safe to run in CI/the release train.")
     ap.add_argument("--print-gaps", action="store_true",
                     help="print the rd-labeling gap report and exit")
+    ap.add_argument("--min-items", type=int, default=200,
+                    help="collapse-guard floor: refuse to publish when the rd snapshot has "
+                         "fewer items than this (default 200; a healthy board is ~1300). "
+                         "Prevents an empty/unsynced snapshot from publishing all-0%%.")
+    ap.add_argument("--allow-empty", action="store_true",
+                    help="override the collapse-guard (only for a genuinely empty board)")
     args = ap.parse_args()
 
     as_of = args.as_of or _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
@@ -846,6 +901,8 @@ def main() -> int:
 
     items = load_snapshot(args.rd_json)
     data = compute(items)
+    # Kill the all-0% failure mode at the source: never emit from a collapsed snapshot.
+    sanity_gate(items, data, args.min_items, args.allow_empty)
 
     if args.print_gaps:
         print_gaps(data)

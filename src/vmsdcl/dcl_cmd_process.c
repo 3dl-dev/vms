@@ -1122,9 +1122,12 @@ static int run_parse_uic(const struct dcl_command *cmd, uint32_t *out_uic)
         text[sizeof(text) - 1] = '\0';
     } else {
         int si = run_uic_stray_param(cmd);
+        int n;
         if (si < 0)
             return -1;
-        snprintf(text, sizeof(text), "%s,%s", v, cmd->params[si]);
+        n = snprintf(text, sizeof(text), "%s,%s", v, cmd->params[si]);
+        if (n < 0 || (size_t)n >= sizeof(text))
+            return -1;          /* absurdly long: not a UIC we can parse */
     }
 
     const char *lb = strchr(text, '[');

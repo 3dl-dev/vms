@@ -69,6 +69,32 @@ mkdir -p gcc/{c,cp,c-family,common,objc,d,rust,go,fortran,ada,lto,jit,m2,analyze
 make all-gcc -j"${JOBS}"
 make install-gcc
 
+# ---- libgcc.a: the compiler runtime (vms-7b96, RUNG-1) --------------------
+# The alpha-dec-vms C-RTL shareable (DECC$SHR) whole-archives libgcc.a alongside
+# musl's libc.a (mk_decc_shr.sh) — the compiler support routines musl references
+# internally. Build it here so the image carries it.
+#
+# -g0 (no .vmsdebug): UNLIKE libc.a, libgcc carries no genuine debug value we
+# need to preserve, and building it -g0 means no DST -> GNU `ar`/`ranlib` archive
+# it normally (the vms-7b96 DST reader gap only bites objects that carry DST).
+# -mpointer-size=64 matches musl's LP64/P64 objects so the two archives share one
+# ABI. --without-headers configured the tree, so libgcc builds in inhibit_libc
+# mode (the soft-float / integer / __clear_cache helpers, no libc-dependent bits).
+make all-target-libgcc -j"${JOBS}" \
+    CFLAGS_FOR_TARGET='-g0 -O2 -mpointer-size=64' \
+    || { echo "== all-target-libgcc failed; retry single-threaded for a clean error =="; \
+         make all-target-libgcc CFLAGS_FOR_TARGET='-g0 -O2 -mpointer-size=64'; }
+make install-target-libgcc
+# Surface libgcc.a at a stable, easy-to-extract path.
+LIBGCC_A="$("${PREFIX}/bin/${TARGET}-gcc" -mpointer-size=64 -print-libgcc-file-name 2>/dev/null || true)"
+if [ -f "$LIBGCC_A" ]; then
+  cp -v "$LIBGCC_A" "${PREFIX}/lib/libgcc.a"
+  echo "== libgcc.a at ${PREFIX}/lib/libgcc.a (from $LIBGCC_A) =="
+else
+  echo "== WARNING: could not locate libgcc.a via -print-libgcc-file-name =="
+  find "${PREFIX}" -name 'libgcc.a' -exec cp -v {} "${PREFIX}/lib/libgcc.a" \; || true
+fi
+
 # ---- smoke test: the compiler emits genuine VMS/Alpha asm ----
 echo 'int main(void){ return 0; }' > /tmp/t.c
 "${PREFIX}/bin/${TARGET}-gcc" -S -mpointer-size=64 /tmp/t.c -o /tmp/t.s || \

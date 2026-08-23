@@ -96,53 +96,80 @@ echo "== PREFLIGHT OK: alpha-dec-vms is LLP64 (int=4,long=4,ll=8,ptr=8) little-e
 # libc.a. This is the rung-1-sanctioned "partial libc.a with documented gaps" -
 # the failing set is enumerated below, never hidden.
 # ==========================================================================
-# ARCHIVE STEP — NO SYMBOL INDEX (vms-7b96, do-it-like-VMS).
+# ARCHIVE STEP — HAND-BUILT `ar` CONTAINER, NO GNU ar (vms-7b96, do-it-like-VMS).
 #
 # The patched alpha-dec-vms cc1 emits a `.vmsdebug` (VMS DST) section into every
 # object even without -g. GNU binutils 2.43's vms-alpha BFD *reader* cannot parse
-# DST, so any tool that READS an object's symbols — `ar` building its archive
-# symbol index (`s`), `ranlib`, `nm`, `ld` — dies with "invalid operation".
-# Building/inserting an archive member does NOT need to read the object, only its
-# bytes, so we archive with the `S` modifier (no symbol table) and skip ranlib.
-# That is exactly what OVMX's real consumer — LINK.EXE (src/vmslink/link.c
-# load_archive) — needs: it parses the `ar` container itself, pulls EVERY member,
-# and never consults the archive symbol index. So a no-index libc.a is complete
-# and correct for its actual target. This is the primary, do-it-like-VMS path —
+# DST: `nm`/`objdump`/`ld` die "file format not recognized", and `ar` (any op key,
+# even quick-append `qcS` with no symbol index) still bfd-opens every input to
+# copy it, so it too dies "error reading <obj>: invalid operation". objcopy/strip
+# cannot remove the section either — the read fails first. So GNU ar CANNOT build
+# this archive at all.
+#
+# But the `ar` container is a trivial System V/GNU format (a text header + the
+# member bytes) that needs NO object parsing to assemble. We build it ourselves,
+# byte-for-byte, never reading object contents — keeping the genuine DST. That is
+# exactly what OVMX's real consumer needs: LINK.EXE (src/vmslink/link.c
+# load_archive_evax, vms-7b96) walks the `ar` container itself, pulls EVERY
+# member, evax_read()s each (its EVAX reader SKIPS DST/EDBG records), and never
+# consults an archive symbol index. So a hand-built, no-index libc.a is complete
+# and correct for its actual target. This is the primary do-it-like-VMS path —
 # NOT the -g0 sidestep (which would drop the genuine DST). The remaining genuine
 # fix (a DST-tolerant binutils vms-alpha reader) stays tracked as vms-7b96.
 # ==========================================================================
-AR_NOINDEX="${WORK}/ar-noindex"
-cat > "$AR_NOINDEX" <<AREOF
-#!/bin/sh
-# force the leading op-key to carry the S (no-symtab) modifier so GNU ar never
-# reads object contents (the alpha-dec-vms DST reader is broken, vms-7b96).
-op=\$1; shift
-exec "${TARGET}-ar" "\${op}S" "\$@"
+AR_ARCHIVER="${WORK}/ar-noindex"
+cat > "$AR_ARCHIVER" <<'AREOF'
+#!/usr/bin/perl
+# do-it-like-VMS archiver: assemble a System V/GNU `ar` container from object
+# files WITHOUT reading their contents (GNU ar's vms-alpha reader chokes on the
+# port cc1's .vmsdebug/DST, vms-7b96). Invoked with musl's AR call shape
+# `<op> <archive> <obj>...`; the op key (rc/rcs/rcS/...) is ignored — we never
+# build a symbol index (LINK.EXE whole-archives every member, never reads one).
+use strict; use warnings;
+shift @ARGV;                       # op key (rc/...): ignored
+my $out = shift @ARGV or die "ar-noindex: no output archive\n";
+my @objs = @ARGV;
+my (%off, $tab) = ((), "");        # GNU "//" long-name table for names >15 bytes
+for my $o (@objs) { my $n = (split m{/}, $o)[-1];
+    if (length($n)+1 > 16 && !exists $off{$n}) { $off{$n}=length($tab); $tab .= "$n/\n"; } }
+$tab .= "\n" if length($tab) % 2;
+sub hdr { my ($name,$size)=@_;
+    return sprintf("%-16s%-12d%-6d%-6d%-8s%-10d\140\n",$name,0,0,0,"100644",$size); }
+open(my $fh,'>',$out) or die "ar-noindex: cannot write $out: $!\n"; binmode $fh;
+print $fh "!<arch>\n";
+if (length $tab) { print $fh hdr("//", length $tab); print $fh $tab; }
+for my $o (@objs) {
+    my $n = (split m{/}, $o)[-1];
+    open(my $in,'<',$o) or die "ar-noindex: cannot read $o: $!\n"; binmode $in;
+    local $/; my $data = <$in>; close $in;
+    my $field = exists $off{$n} ? "/$off{$n}" : "$n/";
+    print $fh hdr($field, length $data); print $fh $data;
+    print $fh "\n" if length($data) % 2;
+}
+close $fh;
 AREOF
-chmod +x "$AR_NOINDEX"
+chmod +x "$AR_ARCHIVER"
 
 PARTIAL=0
-if make -j"$(nproc)" AR="$AR_NOINDEX" RANLIB=true lib/libc.a 2>&1 | tee /tmp/musl-make.log; then
-	echo "== FULL libc.a built (no-index archive) =="
+if make -j"$(nproc)" AR="$AR_ARCHIVER" RANLIB=true lib/libc.a 2>&1 | tee /tmp/musl-make.log; then
+	echo "== FULL libc.a built (hand-built no-index archive) =="
 else
 	PARTIAL=1
 	echo "== full build hit toolchain gaps; keep-going pass to compile all that can =="
-	make -k -j"$(nproc)" AR="$AR_NOINDEX" RANLIB=true lib/libc.a 2>&1 | tee /tmp/musl-make-k.log || true
+	make -k -j"$(nproc)" AR="$AR_ARCHIVER" RANLIB=true lib/libc.a 2>&1 | tee /tmp/musl-make-k.log || true
 	echo "== archiving successfully-compiled objects into a PARTIAL lib/libc.a =="
 	mkdir -p lib
 	rm -f lib/libc.a /tmp/valid-objs
 	# A failed compile can leave a truncated/empty .o; keep only NON-EMPTY objects.
 	# We must NOT use objdump/nm here — those READ the object and choke on DST
-	# (vms-7b96: GNU binutils' vms-alpha reader cannot parse the .vmsdebug the
-	# port cc1 emits). These are VMS-native EVAX objects (`file` reports "data",
-	# objdump -f "file format vms-alpha"), NOT ELF, so there is no ELF magic to
-	# test; a non-empty file that the compiler did not error on is a member.
-	# `ar rcS` (no index) copies member bytes without reading object contents.
+	# (vms-7b96). These are VMS-native EVAX objects (`file` reports "data",
+	# objdump -f "file format vms-alpha"), NOT ELF; a non-empty file the compiler
+	# did not error on is a member. The perl archiver copies bytes, never reading.
 	find obj -name '*.o' ! -path 'obj/crt/*' | sort | while read -r o; do
 		[ -s "$o" ] && printf '%s\n' "$o" >> /tmp/valid-objs
 	done
 	if [ -s /tmp/valid-objs ]; then
-		xargs -a /tmp/valid-objs "${TARGET}-ar" rcS lib/libc.a
+		xargs -a /tmp/valid-objs "$AR_ARCHIVER" rc lib/libc.a
 	fi
 fi
 
@@ -179,8 +206,25 @@ fi
 # the archive headers (a pure container walk, no object parse), which is DST-safe.
 # The authoritative symbol/consumption proof is LINK.EXE emitting DECC$SHR.
 # --------------------------------------------------------------------------
-echo "== member manifest (ar t — archive-header walk, DST-safe) =="
-"${TARGET}-ar" t lib/libc.a > /tmp/libc.members 2>/dev/null || true
+echo "== member manifest (ar header walk in perl — DST-safe, tool-independent) =="
+# Walk the `ar` container directly (never opening a member as an object), so this
+# does not depend on GNU ar's broken vms-alpha reader at all. Resolves GNU "//"
+# long names. `ar t` would also work (header-only), but this is reader-agnostic.
+perl -e '
+    open(my $f,"<",$ARGV[0]) or die; binmode $f; local $/; my $b=<$f>;
+    my $p=8; my $lt=""; my @names;
+    while ($p+60 <= length $b) {
+        my $h=substr($b,$p,60); my $nm=substr($h,0,16); $nm=~s/\s+$//;
+        my $sz=substr($h,48,10)+0; my $d=$p+60;
+        if ($nm eq "//") { $lt=substr($b,$d,$sz); }
+        elsif ($nm ne "/" && $nm ne "/SYM64/") {
+            if ($nm=~m{^/(\d+)}) { my $o=$1; my $s=substr($lt,$o); $s=~s/\n.*//s; $s=~s{/$}{}; push @names,$s; }
+            else { $nm=~s{/$}{}; push @names,$nm; }
+        }
+        $p=$d+$sz; $p++ if $p&1;
+    }
+    print "$_\n" for @names;
+' lib/libc.a > /tmp/libc.members 2>/dev/null || true
 NMEMB=$(wc -l < /tmp/libc.members)
 echo "  libc.a members: ${NMEMB}"
 [ "${NMEMB}" -ge 1000 ] || { echo "VERIFY FAIL: only ${NMEMB} members archived (expected ~1346)" >&2; exit 5; }

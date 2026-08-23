@@ -49,6 +49,24 @@ itself — a trivial `int main(void){return 0;}` must emit `__gcc_main_flags = 3
      target-hooks headers for every frontend even with `--enable-languages=c`,
      and the `mv` fails if the subdir is absent.
 
+## Checked-in port patches (`patches/`)
+
+We **patch the fetched GCC source, never vendor the whole tree.** Each file in
+`patches/` is a plain `patch -p1` unified diff; `build-toolchain.sh` applies them
+right after `tar xf` and before `configure`, and the `Dockerfile` `COPY`s the
+directory into the build context. They must stay minimal, targeted, and
+clean-room (Rule 8: derived from public GCC source + observed cc1 output only).
+
+- **`0001-vms-f97-alpha-en-label-decorated-name.patch`** (vms-f97) — codegen
+  consistency: derive the procedure **entry label** (`..en`) from the same
+  resolved (transparent-alias-decorated) name that `.ent`/`.pdesc` already use.
+  Without it, a **definition** of a recognized OpenVMS C-RTL name (musl's
+  `strlen`, `malloc`, `memcpy`, `vsnprintf`, …) emitted `.pdesc decc$strlen..en`
+  pointing at a nonexistent `strlen..en` label, so GAS rejected ~52% of musl.
+  The fix does **not** change the decoration itself — only that the entry label
+  matches `.ent`/`.pdesc`. It is the operator-ruled path (A) to the Alpha
+  DECC$SHR: musl-as-DECC$SHR then defines the `decc$`-prefixed CRTL names.
+
 ## Why real objects, not reasoning
 
 Reasoning about "what the port needs" from source alone produced a **false gap**

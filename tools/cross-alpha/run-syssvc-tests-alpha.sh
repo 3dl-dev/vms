@@ -64,7 +64,7 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
   -v "$HERE:/tools:ro" \
   -v "$VMSKO_WORK:/vmsko" \
   -v "$WORK:/work" "$IMG" bash -euo pipefail -c '
-    KV="'"$KV"'"; BT="'"$BOOT_TIMEOUT"'"
+    KV="'"$KV"'"; BT="'"$BOOT_TIMEOUT"'"; ONLY="'"${ONLY_SUITE:-}"'"
     export ARCH=alpha CROSS_COMPILE=alpha-linux-gnu-
     export QEMU_LD_PREFIX=/usr/alpha-linux-gnu
     CC=alpha-linux-gnu-gcc
@@ -74,23 +74,37 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     ####################################################################
     # 1. Cross-build qemu_syssvc_tests for alpha (glibc-static).
     ####################################################################
-    echo "== cross-build qemu_syssvc_tests for alpha =="
+    # ONLY_SUITE=<name> (vms-db3): build+stage+run a SINGLE suite -- the focused
+    # standing-gate mode (e.g. the alpha-arith-hparith CI job runs ONLY
+    # test_arith_hparith under qemu-system-alpha, green-by-SHA, without paying for
+    # or flaking on the whole ~66-suite run). Empty = the full run.
+    _BUILD_TGT=qemu_syssvc_tests
+    [ -n "$ONLY" ] && _BUILD_TGT="$ONLY"
+    echo "== cross-build $_BUILD_TGT for alpha =="
     cmake -S /repo -B /work/cmake-alpha \
         -DCMAKE_TOOLCHAIN_FILE=/repo/tools/cross-alpha/toolchain-alpha-linux.cmake \
         -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_TOOLS=ON -DOVMX_STATIC=ON \
         >/work/cmake-cfg.log 2>&1 || { echo CONFIG-FAIL; tail -30 /work/cmake-cfg.log; exit 1; }
-    cmake --build /work/cmake-alpha --target qemu_syssvc_tests -j"$(nproc)" \
+    cmake --build /work/cmake-alpha --target "$_BUILD_TGT" -j"$(nproc)" \
         >/work/cmake-build.log 2>&1 || { echo BUILD-FAIL; grep -nE ": error:" /work/cmake-build.log | head -25; exit 1; }
     n=0
-    # test_arith_* (vms-db3): Alpha-only arithmetic-trap suites (e.g. the
-    # SS$_HPARITH bridge) deliberately named off the test_syssvc_ glob so the
-    # x86/arm per-facility negctl rig never grabs a suite it cannot run; they run
-    # here on the real Alpha kernel trap path.
-    for t in /work/cmake-alpha/bin/test_syssvc_* /work/cmake-alpha/bin/test_imgact_* /work/cmake-alpha/bin/test_arith_*; do
-        [ -x "$t" ] || continue
-        cp "$t" /work/tests/ && n=$((n + 1))
-    done
-    echo "== staged $n test_syssvc_/test_imgact_/test_arith_ binaries =="
+    if [ -n "$ONLY" ]; then
+        # Focused mode: stage exactly the one requested suite.
+        [ -x "/work/cmake-alpha/bin/$ONLY" ] \
+            || { echo "FATAL: ONLY_SUITE=$ONLY did not build (/work/cmake-alpha/bin/$ONLY missing)"; exit 1; }
+        cp "/work/cmake-alpha/bin/$ONLY" /work/tests/ && n=1
+        echo "== staged ONLY $ONLY (ONLY_SUITE focused gate) =="
+    else
+        # test_arith_* (vms-db3): Alpha-only arithmetic-trap suites (e.g. the
+        # SS$_HPARITH bridge) deliberately named off the test_syssvc_ glob so the
+        # x86/arm per-facility negctl rig never grabs a suite it cannot run; they run
+        # here on the real Alpha kernel trap path.
+        for t in /work/cmake-alpha/bin/test_syssvc_* /work/cmake-alpha/bin/test_imgact_* /work/cmake-alpha/bin/test_arith_*; do
+            [ -x "$t" ] || continue
+            cp "$t" /work/tests/ && n=$((n + 1))
+        done
+        echo "== staged $n test_syssvc_/test_imgact_/test_arith_ binaries =="
+    fi
     [ "$n" -ge 1 ] || { echo "FATAL: no syssvc test binaries built"; exit 1; }
     alpha-linux-gnu-strip /work/tests/test_* 2>/dev/null || true
 

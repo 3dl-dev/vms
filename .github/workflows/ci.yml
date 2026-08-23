@@ -6469,6 +6469,67 @@ jobs:
         run: tools/cross-alpha/run-boot-alpha.sh login
 
   # -----------------------------------------------------------------------
+  # alpha-arith-hparith (rd vms-db3, epic vms-8954). The STANDING green-by-SHA
+  # gate for the Alpha fault->VMS-condition bridge: a trap-enabling FP
+  # divide-by-zero on OVMX/Linux-Alpha must raise a faithful SS$_HPARITH (1284)
+  # condition -- SIGFPE -> sc_fpcr exception-summary decode -> lib$signal(
+  # SS$_HPARITH, Imask,Fmask,summary,PC,PS) -> CHF handler search -> $STATUS --
+  # PROVEN against a REAL qemu-system-alpha kernel trap path, under -static.
+  #
+  # WHY A DEDICATED JOB, focused on ONE suite: test_arith_hparith is Alpha-only
+  # (the FP-trap/sc_fpcr/trapb model is Alpha) and named off the test_syssvc_
+  # glob so the x86/arm per-facility negctl rig never grabs a suite it cannot run
+  # (it has no qemu-system-alpha). Rule 7 -- a test that does not run in CI is
+  # effectively absent -- so the bridge's RUNTIME behavior needs its own
+  # green-by-SHA proof under the shared harness that guards main, not a workshop
+  # run. ONLY_SUITE=test_arith_hparith runs exactly that suite (build+stage+boot
+  # one suite), so the gate is deterministic and does not flake on or pay for the
+  # full ~66-suite alpha run.
+  #
+  # HEAVY-EMULATOR TIER (schedule || workflow_dispatch), exactly like
+  # alpha-boot-login above: qemu-system-alpha is pure TCG, a full Alpha
+  # cross-build + boot is ~25-30 min, so it stays OFF the per-PR path. The
+  # conductor fires it via workflow_dispatch on the frozen SHA for a
+  # green-by-SHA reap; the nightly schedule catches drift on main. If the FP-trap
+  # substrate (TCG) ever proves flaky, gate on NO-NEW-vs-baseline (vms-898a) --
+  # but the CHECK 2 sc_fpcr-fidelity sub-assertion has passed green under
+  # qemu-system, so the substrate is faithful, not blocked.
+  # -----------------------------------------------------------------------
+  alpha-arith-hparith:
+    name: OVMX/Alpha FP div-by-zero raises SS$_HPARITH over the CHF (vms-db3)
+    needs: changes
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: "HPARITH gate — boot qemu-system-alpha, FP div0 -> SIGFPE -> sc_fpcr summary -> lib$signal(SS$_HPARITH=1284) -> CHF handler -> $STATUS, under -static"
+        run: ONLY_SUITE=test_arith_hparith tools/cross-alpha/run-syssvc-tests-alpha.sh
+
+  # -----------------------------------------------------------------------
   # vmsfs-core-elf32-vax (rd vms-bb8, epic vms-8e8; P4-VFS V3).
   #
   # BUILD-ONLY cross-compile gate for the substrate-neutral ODS-2 core

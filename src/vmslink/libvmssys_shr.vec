@@ -159,3 +159,9 @@ vms_kif_setexit=PROCEDURE
 vms_kif_getexit=PROCEDURE
 vms_kif_setcli=PROCEDURE
 vms_kif_getcli=PROCEDURE
+# --- $GETDVI VOLUME items of a disk unit (vms-e6f): mount state, ODS-2 volume
+# label, size, cluster factor and free-block count of a mounted volume, read
+# from the executive-global mounted-volume table. SHOW DEVICE (DCL) reads this to
+# report a disk as Mounted with its label + free/total blocks. APPENDED at the
+# end per the append-only contract -- a new universal never shifts an existing index.
+vms_kif_getvol=PROCEDURE

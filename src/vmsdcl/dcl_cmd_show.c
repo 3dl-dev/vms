@@ -43,6 +43,7 @@
 #include "vmsqueue.h"
 #include "descrip.h"
 #include "jpidef.h"
+#include "dcdef.h"       /* DC$_DISK / DC$_TERM -- SHOW DEVICE groups by class (vms-e6f) */
 /* The kernel-interface client: SHOW SYSTEM enumerates the executive process
  * table through it, and SHOW DEVICE reads the executive's device table
  * through it (vms-fb9). This is the same client src/libvms's system
@@ -1478,6 +1479,104 @@ static void show_device_row(const struct vms_devinfo *info, int *rows)
 }
 
 /*
+ * SHOW DEVICE for a DISK (vms-e6f). A disk row carries what a terminal row
+ * cannot: the mount state, the mounted volume's LABEL, its FREE-block count,
+ * the transaction count and the mount count. Those are the ACP's, not the base
+ * device table's -- read from the executive-global mounted-volume table through
+ * vms_kif_getvol() (VMS_IOCTL_GETVOL), so every process on the node sees the
+ * SAME mount state and the SAME label, never a per-process fake (CLAUDE.md
+ * Rule 11 / INV-6). A disk that is not mounted reads "Online" with the volume
+ * columns blank, exactly as an idle disk does on VMS.
+ *
+ * FORMAT provenance (CLAUDE.md Rule 8). Unlike the TERMINAL row above -- whose
+ * exact byte columns are oracle-pinned to docs/oracle/vax73-terminal-device.md --
+ * this project has no lab CAPTURE of a disk SHOW DEVICES listing (that oracle
+ * explicitly did NOT measure the disk case: "the oracle's disks report Mounted"
+ * is noted as *not claimed*). The COLUMN SET and their headings (Device Name,
+ * Device Status, Error Count, Volume Label, Free Blocks, Trans Count, Mnt Cnt)
+ * are the ones the public OpenVMS DCL Dictionary documents for SHOW DEVICES/D,
+ * and the widths here are chosen to reproduce that recognizable layout. The
+ * VALUES are all genuine executive/ACP readings -- nothing in this row is
+ * fabricated. A follow-up may pin the exact widths to a lab capture; the
+ * displayed state is already the real one.
+ *
+ * One shared format string for the two header lines AND the data row so the
+ * columns cannot drift apart; numeric fields are pre-formatted to strings so
+ * the same all-%s template renders both.
+ */
+#define DISK_ROW_FMT "%-24s%-11s%8s  %-13s%9s %6s %4s\n"
+
+static void show_device_disk_row(const struct vms_devinfo *info,
+                                 const struct vms_getvol_args *vol, int *rows)
+{
+    char errbuf[16], freebuf[16], transbuf[16], mntbuf[16];
+    const char *status, *label;
+
+    if (*rows == 0) {
+        printf(DISK_ROW_FMT, "Device", "Device", "Error",
+               "Volume", "Free", "Trans", "Mnt");
+        printf(DISK_ROW_FMT, " Name", " Status", "Count",
+               "  Label", "Blocks", "Count", "Cnt");
+    }
+
+    snprintf(errbuf, sizeof(errbuf), "%u", info->errcnt);
+
+    if (vol && vol->mounted) {
+        status = "Mounted";
+        label  = vol->volnam;
+        /* Free blocks: the genuine bitmap reading, or blank when the bitmap
+         * could not be read this call -- never a fabricated "0" (Rule 10). */
+        if (vol->free_valid)
+            snprintf(freebuf, sizeof(freebuf), "%u", vol->freeblocks);
+        else
+            freebuf[0] = '\0';
+        snprintf(transbuf, sizeof(transbuf), "%u", vol->transcnt);
+        /* Mnt Cnt: the unit is in the mounted-volume table exactly once on this
+         * node -- a genuine count of one, not a placeholder. */
+        snprintf(mntbuf, sizeof(mntbuf), "%u", 1u);
+    } else {
+        status     = info->allocated ? "Online alloc" : "Online";
+        label      = "";
+        freebuf[0] = transbuf[0] = mntbuf[0] = '\0';
+    }
+
+    printf(DISK_ROW_FMT, info->devnam, status, errbuf, label,
+           freebuf, transbuf, mntbuf);
+    (*rows)++;
+}
+
+/*
+ * SHOW DEVICE/FULL for a DISK (vms-e6f). The public OpenVMS DCL Dictionary
+ * documents SHOW DEVICE/FULL for a mounted disk as reporting the volume detail:
+ * volume label, cluster size, free and maximum blocks, transaction count and
+ * error/operation counts. Only fields OVMX can source from the REAL executive/
+ * ACP state are printed; a field with no genuine source is OMITTED, never
+ * fabricated (Rule 10). Device TYPE is not printed because the executive records
+ * it as Unknown for these units (VMS_DT_UNKNOWN) and inventing a model would be
+ * the illegal third answer.
+ */
+static void show_device_disk_full(const struct vms_devinfo *info,
+                                  const struct vms_getvol_args *vol)
+{
+    printf("\nDisk %s, is online%s.\n\n", info->devnam,
+           (vol && vol->mounted) ? ", mounted" : "");
+
+    printf("    Error count            %10u    Operations completed   %10llu\n",
+           info->errcnt, (unsigned long long)info->opcnt);
+
+    if (vol && vol->mounted) {
+        printf("    Volume label           %-10s    Cluster size           %10u\n",
+               vol->volnam, vol->cluster);
+        if (vol->free_valid)
+            printf("    Free blocks            %10u    Maximum blocks         %10u\n",
+                   vol->freeblocks, vol->volsize);
+        else
+            printf("    Maximum blocks         %10u\n", vol->volsize);
+        printf("    Transaction count      %10u\n", vol->transcnt);
+    }
+}
+
+/*
  * DELETED (vms-fb9 r5): show_device_exec_failed() used to print an
  * invented "%OVMX-F-EXECDEV, the executive did not answer" for this
  * function's default: branches. That was the illegal third answer under
@@ -1616,6 +1715,14 @@ static int cmd_show_device(struct dcl_command *cmd)
      */
     (void)vms_kif_open();
 
+    /*
+     * /FULL (vms-e6f): a disk reports its full volume detail (label, cluster
+     * size, free/maximum blocks, transaction count). The brief listing carries
+     * the mount state + label + free blocks. Both source their VALUES from the
+     * executive/ACP, never a fabricated string (INV-6).
+     */
+    const int full = dcl_has_qualifier(cmd, "FULL");
+
     struct vms_devinfo info;
     int rows = 0;
     uint32_t status;
@@ -1626,7 +1733,24 @@ static int cmd_show_device(struct dcl_command *cmd)
         switch (status) {
         case SS$_NORMAL:
             info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
-            show_device_row(&info, &rows);
+            if (info.devclass == DC$_DISK) {
+                /* A disk carries mount/volume state the base device table does
+                 * not -- read it from the ACP mounted-volume table. mounted
+                 * stays 0 (shows "Online") if the unit is not a mounted volume
+                 * or the query fails; nothing is fabricated. */
+                struct vms_getvol_args vol;
+                memset(&vol, 0, sizeof(vol));
+                vms_kif_getvol(info.devnam, &vol);
+                if (full)
+                    show_device_disk_full(&info, &vol);
+                else
+                    show_device_disk_row(&info, &vol, &rows);
+            } else {
+                /* Non-disk (the console terminal): the oracle-pinned brief row.
+                 * Terminal /FULL is a separate rung (oracle section 5) and is
+                 * not rendered here; the brief row is printed either way. */
+                show_device_row(&info, &rows);
+            }
             return SS$_NORMAL;
         case SS$_IVDEVNAM:
             /* Oracle section 9, from VMS's own message facility:
@@ -1648,10 +1772,36 @@ static int cmd_show_device(struct dcl_command *cmd)
         }
     }
 
+    /*
+     * A bare SHOW DEVICES groups the listing BY DEVICE CLASS, the way VMS does:
+     * the disks (with their volume/mount columns) in one section, then the
+     * terminals in another. Two scans over the executive device table, each
+     * filtering to one class, keep the two column layouts from interleaving --
+     * a disk row and a terminal row have different headers and cannot share one.
+     */
     uint32_t index = 0;
+    int disk_rows = 0;
 
     while ((status = vms_kif_devscan(&index, &info)) == SS$_NORMAL) {
         info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+        if (info.devclass != DC$_DISK)
+            continue;
+        struct vms_getvol_args vol;
+        memset(&vol, 0, sizeof(vol));
+        vms_kif_getvol(info.devnam, &vol);
+        if (full)
+            show_device_disk_full(&info, &vol);
+        else
+            show_device_disk_row(&info, &vol, &disk_rows);
+    }
+    if (status != SS$_NOMOREDEV)
+        return status;
+
+    index = 0;
+    while ((status = vms_kif_devscan(&index, &info)) == SS$_NORMAL) {
+        info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+        if (info.devclass == DC$_DISK)
+            continue;
         show_device_row(&info, &rows);
     }
 

@@ -1,0 +1,83 @@
+vms-a0c: alpha-dec-vms — a function ALIAS must also alias the procedure
+ENTRY label ("..en"), so `.quad <alias>..en` in the .linkage pair resolves.
+
+Third codegen-consistency defect in the alpha-dec-vms GCC 14.2.0 port, the
+same class as vms-f97 one layer deeper: the entry label ("..en") of an
+ALIASED callee.
+
+musl defines many symbols via `weak_alias(old, new)` =
+`extern __typeof(old) new __attribute__((weak, alias("old")))` and then calls
+`new` in the SAME translation unit (src/env, src/exit, several src/complex
+l-variants, ...). cc1 emits the value equate `new = old` (via ASM_OUTPUT_DEF)
+— which aliases only the procedure VALUE — but every OpenVMS call site
+references its callee through the .linkage pair as `<callee>..en`
+(alpha_write_one_linkage, config/alpha/alpha.cc). Because `new` is a `.set`
+equate, `new..en` is never a defined label (only the target's `old..en`
+exists), so GAS rejected the object:
+
+    $1..new..lk:
+        .quad new..en          <-- Error: redefined symbol cannot be used on reloc
+        .quad new              <-- OK: `new = old` resolves the value
+
+~56 musl objects failed on exactly this.
+
+Fix (minimal, precedented): the OSF/ELF alpha port ALREADY solves the identical
+problem for its own entry label — config/alpha/elf.h's
+ASM_OUTPUT_DEF_FROM_DECLS emits `$alias..ng = $name..ng` for a FUNCTION_DECL
+alias so the normalized entry aliases too. The VMS port never defined
+ASM_OUTPUT_DEF_FROM_DECLS, so do_assemble_alias (gcc/varasm.cc) fell back to
+the plain ASM_OUTPUT_DEF and the "..en" entry was left unaliased. Define
+ASM_OUTPUT_DEF_FROM_DECLS for OpenVMS to emit `<alias>..en = <target>..en`
+for FUNCTION_DECL aliases (the OpenVMS spelling of the same idea), then emit
+the normal value equate. TARGET has already been run through
+ultimate_transparent_alias_target() in do_assemble_alias, so a recognized
+C-RTL target correctly yields `decc$<name>..en`, matching the code entry label
+alpha_start_function emits (vms-f97 / patch 0001). Non-function aliases are
+unaffected (they have no "..en"). Verified: the EVAX assembler accepts the
+"..en" equate and the reloc resolves.
+
+This is internal-consistency only (the entry-label alias must exist wherever a
+value alias does); the decoration/alias behavior itself is unchanged. Sanctioned
+by the operator ruling to "make the port build" (path A to the Alpha DECC$SHR).
+
+Clean-room (Rule 8): derived from public GCC source structure (the OSF/ELF
+"..ng" precedent) + observed cc1/GAS output only; no VSI/HPE source consulted.
+
+--- a/gcc/config/alpha/vms.h
++++ b/gcc/config/alpha/vms.h
+@@ -247,6 +247,35 @@
+     }                                           \
+  while (0)
+ 
++/* vms-a0c (OVMX): a function ALIAS must also alias the procedure ENTRY label
++   ("..en"), mirroring how the OSF/ELF alpha port aliases the "..ng" entry
++   (config/alpha/elf.h's ASM_OUTPUT_DEF_FROM_DECLS).  On OpenVMS every call
++   site references its callee as `<callee>..en` in the .linkage pair
++   (alpha_write_one_linkage); when a function is defined via
++   __attribute__((alias)) / weak_alias, the plain `alias = target` equate
++   aliases only the procedure VALUE, so `alias..en` was never defined and GAS
++   rejected `.quad alias..en` ("redefined symbol cannot be used on reloc").
++   Without this macro do_assemble_alias (gcc/varasm.cc) uses the bare
++   ASM_OUTPUT_DEF and the entry label is left unaliased.  TARGET has already
++   been run through ultimate_transparent_alias_target() in do_assemble_alias,
++   so a recognized C-RTL target correctly yields `decc$<name>..en`, matching
++   the code entry label emitted by alpha_start_function (vms-f97).  */
++#undef  ASM_OUTPUT_DEF_FROM_DECLS
++#define ASM_OUTPUT_DEF_FROM_DECLS(FILE, DECL, TARGET)		\
++  do {								\
++    const char *alias_ = XSTR (XEXP (DECL_RTL (DECL), 0), 0);	\
++    const char *name_ = IDENTIFIER_POINTER (TARGET);		\
++    if (TREE_CODE (DECL) == FUNCTION_DECL)			\
++      {								\
++	fputc ('\t', FILE);					\
++	assemble_name (FILE, alias_);				\
++	fputs ("..en = ", FILE);				\
++	assemble_name (FILE, name_);				\
++	fputs ("..en\n", FILE);					\
++      }								\
++    ASM_OUTPUT_DEF (FILE, alias_, name_);			\
++  } while (0)
++
+ #undef PREFERRED_DEBUGGING_TYPE
+ #define PREFERRED_DEBUGGING_TYPE DWARF2_DEBUG
+ 

@@ -433,6 +433,62 @@ jobs:
           fi
           echo "OK: docs/compatibility-surface.md matches a fresh render of docs/compat/ (date stamp ignored)."
   # -----------------------------------------------------------------------
+  # Job: vmslink shell-portability lint (vms-200)
+  #
+  # Fail-fast gate for the #773 class: a #!/bin/sh script (e.g.
+  # src/vmslink/mk_decc_shr.sh) is invoked by one harness as sh (dash, lenient)
+  # and by another as bash (strict), so a syntax/portability error can parse
+  # fine under one shell and die at container-runtime under the other (an
+  # apostrophe in a ${VAR:?...}, a bashism in a POSIX script, ...). This parses
+  # every vmslink + cross-alpha shell script under the shell(s) it must
+  # satisfy -- bash -n for #!/bin/bash, BOTH bash -n and sh -n for #!/bin/sh (a
+  # POSIX script must stay portable to bash) -- in seconds at PR time, before
+  # any deep container build. Unconditional (no path filter): a shell change
+  # can land anywhere. A negative control proves the gate has teeth.
+  # -----------------------------------------------------------------------
+  vmslink-shell-lint:
+    name: vmslink shell-portability lint (bash -n + sh -n) (vms-200)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse every vmslink + cross-alpha shell script under its shell(s)
+        run: |
+          set -eu
+          rc=0; n=0
+          scripts=$(find src/vmslink tools/cross-alpha-vms -name '*.sh' -type f | sort)
+          for s in $scripts; do
+            case "$(head -1 "$s")" in
+              *bin/bash*)          shells="bash" ;;
+              *bin/sh*|*bin/dash*) shells="bash sh" ;;  # a #!/bin/sh script must stay POSIX -> parse under bash too
+              *)                   shells="bash sh" ;;   # no/unknown shebang: require both
+            esac
+            for shellcmd in $shells; do
+              n=$((n+1))
+              if ! "$shellcmd" -n "$s" 2>/tmp/lint.err; then
+                echo "::error file=$s::$shellcmd -n rejected $s (shell-portability, vms-200)"
+                sed 's/^/    /' /tmp/lint.err
+                rc=1
+              fi
+            done
+          done
+          [ "$rc" -eq 0 ] || { echo "shell-portability lint FAILED"; exit 1; }
+          echo "OK: $(echo "$scripts" | wc -l) scripts, $n parse-checks, all clean under bash AND sh"
+
+      - name: NEGATIVE CONTROL -- the linter must reject the #773 apostrophe-in-dollar-brace trap
+        run: |
+          set -eu
+          tmp=$(mktemp --suffix=.sh)
+          printf '#!/bin/sh\n: "${X:?a b c'\''s d (e/f)}"\n' > "$tmp"
+          if bash -n "$tmp" 2>/dev/null; then
+            echo "::error::NEGATIVE CONTROL FAILED: bash -n accepted the known-bad apostrophe-in-\${VAR:?} script -- the gate has no teeth"
+            rm -f "$tmp"; exit 1
+          fi
+          rm -f "$tmp"
+          echo "OK: bash -n rejects the apostrophe-in-\${VAR:?} trap (gate has teeth)"
+  # -----------------------------------------------------------------------
   # Job: cross-arch shippable-image parity gate (rd vms-e1d)
   #
   # Operator ruling: "if I see a release that has something on x86_64 and

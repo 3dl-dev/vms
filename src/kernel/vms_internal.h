@@ -1158,6 +1158,7 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg);
  * attributes. func-dispatched on VMS_ACP_FOP_*; see vms_acp.h.
  */
 long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_acp_getvol(struct vms_proc *proc, unsigned long arg);  /* vms-e6f: $GETDVI volume items */
 /*
  * Release one file-class channel by number, for vms_ioctl_dassgn()'s fallback
  * when `chan` is neither a device nor a mailbox channel. Returns 0 if `chan`

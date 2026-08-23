@@ -125,6 +125,19 @@ BLANK_TARGET_IMG="${BLANK_TARGET_IMG:-${CACHE_DIR}/dka100-target.img}"
 # vmsfs/access/eflag drivers still need in VMFS form.
 SYSNEG_IMG="${SYSNEG_IMG:-${CACHE_DIR}/ovmx-sysneg-vax.img}"
 
+# vms-7b15: the SINGLE-disk artifact -- ONE labeled MSCP disk that VMB boots the
+# NetBSD root off partition 'a' AND from which the executive mounts the OVMX
+# ODS-2 system volume off partition 'e' (DKA0: -> ra0e), with NO rq1. The slim
+# artifact for the PCjs browser demo. SINGLE_A_SECTORS is what the root FFS is
+# resize_ffs'd to; SINGLE_TOTAL_SECTORS is the slim whole-disk size the image is
+# truncated to; SINGLE_RQ0_TYPE is the SIMH MSCP drive type sized to match (a
+# custom-sized RAUSER disk, not the 2 GiB RA92 install geometry).
+SINGLE_WORKDIR="${SINGLE_WORKDIR:-${CACHE_DIR}/single-work}"
+SINGLE_IMG="${SINGLE_IMG:-${SINGLE_WORKDIR}/wd0.img}"
+SINGLE_A_SECTORS="${SINGLE_A_SECTORS:-524288}"      # root FFS: 256 MiB
+SINGLE_TOTAL_SECTORS="${SINGLE_TOTAL_SECTORS:-664360}"  # slim disk: RAUSER=340
+SINGLE_RQ0_TYPE="${SINGLE_RQ0_TYPE:-RAUSER=340}"    # 324 MiB MSCP disk
+
 CROSS_IMAGE="${CROSS_IMAGE:-ovmx-cross-vax}"
 LAB_IMAGE="${LAB_IMAGE:-ovmx-vax-lab}"
 
@@ -670,6 +683,89 @@ run_install() {
   return 0
 }
 
+# vms-7b15: assemble the SLIM SINGLE-disk artifact from the already-assembled
+# two-disk boot-work disk. Rebuilds the ra0e-aware vms.kmod, clones boot-work,
+# runs the in-guest FFS resize + node/module edits (drive_boot_vax.py
+# assemble-single), then host-side rewrites the disklabel (shrink 'a', add the
+# ODS-2 partition 'e', slim geometry), injects the mastered ODS-2 SYSTEM volume
+# into 'e', and truncates the image to the slim disk size.
+build_single_disk() {
+  # 1. Rebuild the ra0e-aware vms.kmod into ARTIFACTS_DIR (the DKA0: single-disk
+  #    discovery lives in src/kernel-netbsd/vms_blockdev_netbsd.c). The artifact
+  #    CD assemble-single builds carries THIS build; the two-disk boot-work disk
+  #    keeps its own already-installed kmod (the change is backward-compatible --
+  #    ra1c is still tried first -- so this is zero-regression regardless).
+  ensure_src
+  mkdir -p "${ARTIFACTS_DIR}"
+  log "rebuilding the ra0e-aware vms.kmod for the single-disk layout"
+  docker run --rm -v "${REPO}:/src" -w /src -v "${NBSRC_DIR}:/nbsrc:ro" \
+    -v "${ARTIFACTS_DIR}:/out" --entrypoint sh "${CROSS_IMAGE}" -c \
+    'OUT=/tmp/build-devvms sh tools/cross-vax/build-devvms-vax.sh >/dev/null 2>&1 && cp /tmp/build-devvms/vms.kmod /out/vms.kmod' \
+    || die "ra0e-aware vms.kmod rebuild failed"
+
+  # 2. Clone the assembled two-disk boot disk (ovmx_init + modules + boot nodes).
+  [ -f "${BOOT_WORKDIR}/wd0.img" ] || die "boot-work disk missing; run the standard chain first"
+  mkdir -p "${SINGLE_WORKDIR}"
+  log "cloning the assembled boot disk -> ${SINGLE_IMG}"
+  cp "${BOOT_WORKDIR}/wd0.img" "${SINGLE_IMG}.part"
+  mv "${SINGLE_IMG}.part" "${SINGLE_IMG}"
+
+  # 3. In-guest assembly: boot the SHARED NetBSD disk single-user (its stock init
+  #    gives a shell), target=single on rq1, artifact CD on rq2 -- resize_ffs the
+  #    target root FFS down to SINGLE_A_SECTORS, MAKEDEV ra0 on it (so /dev/ra0e
+  #    exists), replace its module_path vms.kmod with the ra0e-aware build.
+  log "single-disk in-guest assembly (resize_ffs + ra0 nodes + kmod swap)"
+  run_session assemble-single /cache/anita-work \
+    -e OVMX_SINGLE_IMG=/cache/single-work/wd0.img \
+    -e OVMX_SINGLE_A_SECTORS="${SINGLE_A_SECTORS}" \
+    || die "single-disk in-guest assembly session failed"
+
+  # 4. Host-side finish: rewrite the disklabel (shrink 'a', add ODS-2 'e', slim
+  #    geometry), inject the mastered ODS-2 SYSTEM volume into 'e', truncate to
+  #    the slim disk size. Deterministic on-disk struct + dd; no NetBSD tools.
+  log "host-side slim relabel + ODS-2 inject + truncate (mk_single_disk.py)"
+  python3 "${HERE}/mk_single_disk.py" "${SINGLE_IMG}" "${SYSVOL_IMG}" \
+    "${SINGLE_A_SECTORS}" "${SINGLE_TOTAL_SECTORS}" \
+    || die "host-side single-disk finish failed"
+  local bytes; bytes="$(stat -c%s "${SINGLE_IMG}")"
+  log "SLIM SINGLE DISK ready: ${SINGLE_IMG} (${bytes} bytes, $((bytes/1048576)) MiB)"
+}
+
+# vms-7b15: boot the slim SINGLE disk and prove it reaches Username: with DKA0:
+# bound to the boot disk's ODS-2 PARTITION (ra0e), NO rq1. sha256 before/after so
+# the ODS-2 RW during PROVISION is a proven real on-disk write (INV-6 teeth, the
+# same hash-diff the two-disk sysboot applies).
+run_sysboot_single() {
+  local before after
+  before="$(sha256sum "${SINGLE_IMG}" | awk '{print $1}')"
+  log "single-disk pre-boot sha256:  ${before}"
+  local rc=0
+  run_session sysboot-single /cache/single-work \
+    -e OVMX_SINGLE_RQ0_TYPE="${SINGLE_RQ0_TYPE}" \
+    -e OVMX_SINGLE_A_SECTORS="${SINGLE_A_SECTORS}" || rc=$?
+  after="$(sha256sum "${SINGLE_IMG}" | awk '{print $1}')"
+  log "single-disk post-boot sha256: ${after}"
+  if [ "${rc}" -ne 0 ]; then
+    soft_die "SYSBOOT-SINGLE FAILED (drive_boot_vax.py exit ${rc}; see console above)"
+    return 1
+  fi
+  if [ "${before}" = "${after}" ]; then
+    soft_die "SYSBOOT-SINGLE: the single disk's on-disk bytes did NOT change during the boot -- PROVISION's UIC-ownership writes to the ODS-2 partition never landed (INV-6 failure class). A green console alone is not sufficient."
+    return 1
+  fi
+  log "OK (rd vms-7b15): the single disk's on-disk bytes CHANGED during the boot"
+  log "  -- REAL block writes hit the ODS-2 partition (DKA0: -> ra0e), not a no-op."
+  log "======================================================================"
+  log "  SYSBOOT-SINGLE PASSED: ONE slim disk booted ovmx_init as PID 1 on"
+  log "  NetBSD/vax -- VMB booted the root off partition 'a' AND the executive"
+  log "  mounted the OVMX ODS-2 SYSTEM volume off partition 'e' of the SAME disk"
+  log "  (DKA0: -> ra0e, NO rq1), reached a real interactive Username: prompt,"
+  log "  and PROVISION's writes really hit the ODS-2 partition on disk."
+  log "  ARTIFACT: ${SINGLE_IMG} ($(stat -c%s "${SINGLE_IMG}") bytes)"
+  log "======================================================================"
+  return 0
+}
+
 case "${MODE}" in
   prove)
     if run_session prove /cache/boot-work; then
@@ -722,6 +818,19 @@ case "${MODE}" in
     fi
     die "GATE FAILED (vms-065) -- see console output above"
     ;;
+  sysboot-single)
+    # vms-7b15: the SLIM SINGLE-disk proof. Build the mastered ODS-2 SYSTEM
+    # volume (same as two-disk sysboot), assemble ONE slim disk that carries both
+    # the NetBSD boot root AND that volume in a partition, then boot it with a
+    # single `attach rq0' (NO rq1) and prove it reaches Username: with DKA0:
+    # bound to the boot disk's ODS-2 partition (ra0e).
+    #   tests/lab-vax/run-boot.sh sysboot-single
+    build_boot_image_set
+    master_system_volume
+    build_single_disk
+    run_sysboot_single && exit 0
+    exit 1
+    ;;
   install)
     # vms-d0e5 rung G: the two-disk INSTALL proof -- boot the distribution
     # volume with a blank target attached, drive OVMX$INSTALL.COM to install
@@ -731,5 +840,5 @@ case "${MODE}" in
     run_install && exit 0
     exit 1
     ;;
-  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | gate | install)" ;;
+  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | sysboot-single | gate | install)" ;;
 esac

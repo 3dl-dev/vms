@@ -211,6 +211,30 @@ struct vms_setterm_args {
 #define VMS_IOCTL_ALLOC     _IOWR(VMS_DEVTAB_IOC_MAGIC, 0x55, struct vms_alloc_args)
 #define VMS_IOCTL_DALLOC    _IOWR(VMS_DEVTAB_IOC_MAGIC, 0x56, struct vms_alloc_args)
 
+/*
+ * $GETDVI volume items of a mounted disk (vms-e6f) -- SHOW DEVICE's mount state,
+ * ODS-2 volume label, size and free-block count. The Linux twin's full rationale
+ * is in src/kernel/vms_ioctl.h; this is the SAME struct/nr re-made under the
+ * 32-bit VAX compiler so the ABI guards below catch any width drift. The handler
+ * (vms_ioctl_acp_getvol) is shared (src/kernel-core/vmsfs_acp.c).
+ */
+#ifndef VMS_GETVOL_LABEL_SIZE
+#define VMS_GETVOL_LABEL_SIZE 16
+#endif
+struct vms_getvol_args {
+	char     devnam[VMS_DEVNAM_SIZE];   /* in: unit name, e.g. "DKA0:" */
+	uint32_t status;                    /* out: SS$_ status */
+	uint32_t mounted;                   /* out: 1 = a mounted ODS-2 volume */
+	uint32_t volsize;                   /* out: DVI$_MAXBLOCK (blocks) */
+	uint32_t freeblocks;                /* out: DVI$_FREEBLOCKS (valid iff free_valid) */
+	uint32_t free_valid;                /* out: 1 = freeblocks read this call */
+	uint32_t cluster;                   /* out: DVI$_CLUSTER */
+	uint32_t transcnt;                  /* out: file-class channels assigned (Trans Count) */
+	char     volnam[VMS_GETVOL_LABEL_SIZE]; /* out: NUL-terminated ODS-2 label */
+};
+
+#define VMS_IOCTL_GETVOL    _IOWR(VMS_DEVTAB_IOC_MAGIC, 0x58, struct vms_getvol_args)
+
 /* ================================================================
  * ABI guards -- the SAME assertions src/kernel/vms_ioctl.h makes, re-made here
  * under the 32-bit VAX compiler (the whole point of a NetBSD twin).
@@ -229,6 +253,8 @@ _Static_assert(sizeof(struct vms_setmode_args) == 40,
                "struct vms_setmode_args changed size -- IO$_SETMODE would decode at the wrong offsets");
 _Static_assert(sizeof(struct vms_setterm_args) == 8,
                "struct vms_setterm_args changed size -- VMS_IOCTL_SETTERM ABI break");
+_Static_assert(sizeof(struct vms_getvol_args) == 60,
+               "struct vms_getvol_args changed size -- $GETDVI volume items would decode at the wrong offsets");
 
 _Static_assert(VMS_IOCTL_SETTERM == 0xC0085645u,
                "VMS_IOCTL_SETTERM encodes differently here than on the reference build");
@@ -244,5 +270,7 @@ _Static_assert(VMS_IOCTL_ALLOC == 0xC0185655u,
                "VMS_IOCTL_ALLOC encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_DALLOC == 0xC0185656u,
                "VMS_IOCTL_DALLOC encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_GETVOL == 0xC03C5658u,
+               "VMS_IOCTL_GETVOL encodes differently here than on the reference build");
 
 #endif /* OVMX_VMS_DEVTAB_NB_H */

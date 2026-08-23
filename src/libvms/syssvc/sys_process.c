@@ -25,22 +25,32 @@
  * it, SHOW SYSTEM lists processes DCL did not create, and $GETJPI resolves a
  * process by name -- all against a real /dev/vms. Nobody is coming back for a
  * done item, so the lines below cite the live items that own what is left:
- *   vms-afd  -- $CREPRC does not propagate identity to the executive, so the
- *               child's row carries no user name. That is the OVMX-LOCAL half
- *               of $CREPRC exactly.
+ *   vms-afd  -- historically $CREPRC did not propagate identity to the
+ *               executive, so the child's row carried no user name and a
+ *               capable()-derived UIC/privilege set. vms-d31d closed that:
+ *               $CREPRC now stamps the child's EXECUTIVE row with the
+ *               creator's identity (or the prvadr/uic override) via
+ *               vms_kif_setident(), so the child inherits the creator's UIC,
+ *               user name and privileges the way OpenVMS $CREPRC does.
  *   vms-pt1  -- the executive process table every process can query, with
  *               VMS-meaningful attributes. That is what the eleven services
  *               below reach nothing of, and where $GETJPI's /proc-derived
  *               JPI$_CPUTIM belongs.
  *
- * OVMX-PARTIAL: sys$creprc (vms-afd) -- exec: the created process's NAME is
- *     registered with vms_kif_setprn() and the VMS process id reported back
- *     through pidadr is the one the executive assigned, read with
- *     vms_kif_getjpi_self(). Those are the parts another process can see.
- * OVMX-LOCAL: sys$creprc -- the child's privileges, UIC, username, default
- *     directory and quotas are copied out of the PARENT'S process-local PCB
- *     into the child's process-local PCB. No executive row records any of them,
- *     so nothing outside the child can read back what it was created with.
+ * OVMX-PARTIAL: sys$creprc (vms-d31d) -- exec: the created process's NAME is
+ *     registered with vms_kif_setprn(); its VMS process id, reported through
+ *     pidadr, is the one the executive assigned (read with
+ *     vms_kif_getjpi_self()); and its UIC, user name and privilege masks are
+ *     stamped onto its executive row with vms_kif_setident(), inherited from
+ *     the creator's executive identity unless prvadr/uic override them. Another
+ *     process reads all of these back through $GETJPI, and the Files-11
+ *     reference monitor enforces the stamped UIC/privileges. (Before vms-d31d
+ *     only NAME and pid were the executive's; UIC/username/privileges were the
+ *     OVMX-LOCAL half. vms-afd owned that older, smaller executive part.)
+ * OVMX-LOCAL: sys$creprc -- the child's default directory and quotas are still
+ *     copied only into the child's process-local PCB; no executive row records
+ *     those two, so nothing outside the child reads back what it was created
+ *     with for those two fields.
  * OVMX-PARTIAL: sys$getjpi (vms-pt1) -- exec: JPI$_PID, JPI$_PRCNAM,
  *     JPI$_USERNAME and JPI$_UIC are read from the row the executive resolved,
  *     by name or by pid, with no PCB consulted -- which is what lets $GETJPI
@@ -646,19 +656,79 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
 
     struct vms_pcb *parent_pcb = vms_pcb_get();
 
-    /* Determine child privileges */
-    uint64_t child_privs;
-    if (prvadr)
-        child_privs = *(const uint64_t *)prvadr;
-    else if (parent_pcb)
-        child_privs = parent_pcb->cur_privs;
-    else
-        child_privs = 0;
+    /*
+     * INHERITANCE BASE -- the CREATOR's authentic EXECUTIVE identity
+     * (vms-d31d).
+     *
+     * $CREPRC gives the created process the creator's privileges, UIC and
+     * user name by default; a caller-supplied prvadr/uic overrides them
+     * (OpenVMS System Services Reference, $CREPRC). Those masks must reach
+     * the child's EXECUTIVE row -- the row the Files-11 reference monitor
+     * (vmsfs_acp.c acp_check_access) and $GETJPI read -- not merely the
+     * child's process-local PCB. Until this item they reached only the PCB:
+     * the child registered with a capable()-derived identity (UIC from
+     * Linux credentials, privileges = VMS_PRV_M_ENFORCED, which carries
+     * neither SYSPRV nor BYPASS). On x86_64 that was masked because root
+     * maps to UIC group 0, which the SYSTEM protection category covers
+     * (group <= MAXSYSGROUP); on VAX, with no such mapping, a detached
+     * LOGINOUT created by SYSTEM [1,4] fell through to the WORLD nibble of
+     * SYS$SYSTEM:SYSUAF.DAT and was refused its own authorization read.
+     *
+     * The creator reads its OWN executive identity here (authentic -- a
+     * process cannot forge the row the executive holds for it), and the
+     * child stamps the resulting identity after it registers, via
+     * vms_kif_setident() below.
+     */
+    struct vms_procinfo creator_info;
+    memset(&creator_info, 0, sizeof(creator_info));
+    int have_creator = (vms_kif_getjpi_self(&creator_info) & 1) != 0;
 
-    /* Determine child UIC */
+    /* Determine child UIC: explicit uic, else the creator's. */
     uint32_t child_uic = uic;
-    if (child_uic == 0 && parent_pcb)
-        child_uic = parent_pcb->uic;
+    if (child_uic == 0)
+        child_uic = have_creator ? creator_info.uic
+                                 : (parent_pcb ? parent_pcb->uic : 0);
+
+    /*
+     * Determine child privileges.
+     *
+     * With prvadr the child gets the requested set, but a creator may grant
+     * only privileges it is itself AUTHORIZED to hold, UNLESS it holds
+     * SETPRV -- SETPRV is what authorizes exceeding the authorized mask
+     * ($CREPRC/AUTHORIZE semantics; the same rule vms_ioctl_setident
+     * enforces). Without prvadr the child inherits the creator's current
+     * privileges. The executive re-checks this when the child stamps the
+     * identity: a child without SETPRV cannot stamp a superset of its own
+     * authorized mask, so a clamp missed here fails honestly rather than
+     * fabricating privilege (INV-6).
+     */
+    uint64_t child_privs;
+    if (prvadr) {
+        uint64_t req = *(const uint64_t *)prvadr;
+        if (have_creator && !(creator_info.perm_privs & PRV$M_SETPRV))
+            child_privs = req & creator_info.perm_privs;
+        else
+            child_privs = req;
+    } else if (have_creator) {
+        child_privs = creator_info.cur_privs;
+    } else if (parent_pcb) {
+        child_privs = parent_pcb->cur_privs;
+    } else {
+        child_privs = 0;
+    }
+
+    /*
+     * The user name the child's executive identity carries -- the creator's,
+     * so a detached process created by SYSTEM is SYSTEM in the executive's
+     * table, not a nameless capable()-derived row. Empty when the creator
+     * itself has no executive name: the child then keeps its registration
+     * identity rather than being stamped with an invented name (Rule 10).
+     */
+    char child_username[VMS_USERNAME_SIZE] = {0};
+    if (have_creator && creator_info.username[0])
+        strncpy(child_username, creator_info.username, sizeof(child_username) - 1);
+    else if (parent_pcb && parent_pcb->username[0])
+        strncpy(child_username, parent_pcb->username, sizeof(child_username) - 1);
 
     /*
      * Process name.
@@ -792,6 +862,33 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
             else
                 rep.status = gst;
         }
+        /*
+         * STAMP THE INHERITED EXECUTIVE IDENTITY (vms-d31d).
+         *
+         * The child now has an executive row (setprn or getjpi_self
+         * registered it, with a capable()-derived identity). Replace that
+         * identity with the one $CREPRC computed from the creator's row and
+         * any prvadr/uic override, so the child's EXECUTIVE UIC and
+         * privilege masks -- the ones vmsfs_acp.c's acp_check_access and
+         * $GETJPI read -- are the creator's (or the requested set), not the
+         * registration default. This is what makes a detached LOGINOUT
+         * created by SYSTEM [1,4] hold SYSTEM's UIC and privileges and read
+         * its own World-denied SYSUAF, on VAX and Alpha as on x86_64,
+         * WITHOUT leaning on the root->UIC-group-0 mapping.
+         *
+         * Only stamped when there is a name to stamp; the executive refuses
+         * a caller that lacks the authority to establish the identity
+         * (SS$_NOPRIV -- a child without SETPRV cannot grant itself a
+         * superset of its authorized mask), and that refusal becomes
+         * $CREPRC's status. It is never papered over with a fabricated
+         * success (INV-6, CLAUDE.md Rule 9).
+         */
+        if ((rep.status & 1) && child_username[0]) {
+            uint32_t ist = vms_kif_setident(child_username, child_uic,
+                                            child_privs);
+            if (!(ist & 1))
+                rep.status = ist;
+        }
         /* Retried on EINTR and on a short write: an interrupted report
          * from a child that is about to exec its image would reach the
          * creator as a short read, i.e. as OVMX$_PRCLOST for a running
@@ -812,7 +909,9 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
         /* Child: Initialize PCB with inherited context */
         struct vms_pcb *child_pcb = vms_pcb_init(child_privs);
         if (child_pcb) {
-            const char *username = parent_pcb ? parent_pcb->username : "UNKNOWN";
+            const char *username = child_username[0] ? child_username
+                                 : (parent_pcb ? parent_pcb->username
+                                               : "UNKNOWN");
             vms_pcb_set_identity((uint32_t)getpid(), child_uic,
                                  username, child_prcnam);
             if (parent_pcb && parent_pcb->default_dir[0])

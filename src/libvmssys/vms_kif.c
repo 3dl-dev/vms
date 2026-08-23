@@ -899,6 +899,25 @@ uint32_t vms_kif_disk_resolve(const char *devnam, char *backing,
     return args.status;
 }
 
+uint32_t vms_kif_getvol(const char *devnam, struct vms_getvol_args *out)
+{
+    struct vms_getvol_args args;
+
+    if (!devnam)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, VMS_DEVNAM_SIZE - 1);
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    KIF_CALL(VMS_IOCTL_GETVOL, &args);
+
+    if (out)
+        vms_memcpy(out, &args, sizeof(*out));
+
+    return args.status;
+}
+
 uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,
                            uint64_t setchar, uint64_t clrchar,
                            uint32_t width, uint32_t page)

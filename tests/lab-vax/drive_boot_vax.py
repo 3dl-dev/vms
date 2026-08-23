@@ -77,6 +77,15 @@ MS_EXEC    = "VMS executive attached on /dev/vms"           # /dev/vms open
 MS_BANNER  = "OpenVMS-compatible"                           # product banner
 MS_MOUNTED = "system disk DKA0: mounted"                    # ODS-2 mounted
 
+# vms-7b15: the SINGLE-disk evidence line. In the single-disk layout the ODS-2
+# volume is PARTITION 'e' of the same MSCP disk (ra0) VMB booted the NetBSD root
+# ('a') off of -- NOT a second disk (ra1). vms_blockdev_netbsd.c's
+# register_units() prints this the moment vms.kmod loads (during ovmx_init's
+# modctl(MODCTL_LOAD,"vms"), BEFORE MS_EXEC), naming the backing DKA0: bound to.
+# Seeing "-> ra0e" (not "-> ra1c") is the deterministic proof the system disk
+# came off the SAME disk that booted, with NO rq1 attached.
+MS_DKA0_RA0E = r"disk unit DKA0: -> ra0e"
+
 # vms-d9c: the milestones PAST the mount, on a real installed OVMX SYSTEM volume
 # (the sysboot mode). require_installed_system() halts %OVMX-F-SYSINIT with this
 # detail when SYS$SYSTEM:DCL.EXE is absent (the flat/test volume); on a MASTERED
@@ -470,6 +479,161 @@ def do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
     return 0
 
 
+def do_assemble_single(a, single_img, artifacts_dir, src_iso, new_a_sectors,
+                       boot_deadline, cmd_timeout):
+    """vms-7b15: turn the already-assembled boot disk (ovmx_init + modules + boot
+    nodes, a COPY of boot-work/wd0.img) into a SINGLE-disk image whose one MSCP
+    disk both VMB-boots the NetBSD root AND carries the OVMX ODS-2 volume in a
+    second partition.
+
+    Runs one single-user session booting the SHARED NetBSD/vax disk on rq0 (its
+    stock NetBSD /sbin/init gives a real shell -- the boot-work copy's is
+    ovmx_init, which is why the shared disk is the one we boot here), with the
+    target single-disk image on rq1 and the OVMX artifact CD (the freshly-built
+    vms.kmod, carrying the DKA0:->ra0e single-disk discovery) on rq2. Against the
+    target (ra1) it:
+
+      1. resize_ffs -s NEW_A_SECTORS /dev/rra1a  -- SHRINK the root FFS so a
+         second partition fits (the FFS only uses ~171 MiB of its 2032 MiB
+         partition). Genuinely relocates blocks; not a label trick.
+      2. MAKEDEV ra0 on the target's own /dev  -- so /dev/ra0e (the ODS-2
+         partition node the executive opens at boot) exists on a read-only-root
+         boot.
+      3. replaces the target's module_path vms.kmod with the CD's freshly-built
+         one  -- the boot-work copy carries a vms.kmod built BEFORE the ra0e
+         discovery landed; the running executive must be the new one.
+
+    The disklabel rewrite (shrink 'a', add the ODS-2 'e' partition) and the dd of
+    the mastered ODS-2 volume into 'e' happen HOST-side afterwards
+    (mk_single_disk.py), because they need no NetBSD tools and are deterministic.
+    This session only does what genuinely needs a NetBSD kernel: the FFS resize
+    and the on-target device/module edits."""
+    build_source_iso(artifacts_dir, src_iso, ("vms.kmod",))
+    src_abs = os.path.abspath(src_iso)
+    single_abs = os.path.abspath(single_img)
+    vmm_args = ["set rq1 ra92", "attach rq1 " + single_abs,
+                "set rq2 cdrom", "attach -r rq2 " + src_abs]
+    log("assembling the SINGLE disk: boot the SHARED NetBSD disk single-user, "
+        "target=%s on rq1, artifact CD on rq2 (deadline %ds)"
+        % (single_abs, boot_deadline))
+    child, con = start_single_user(a, vmm_args, boot_deadline, cmd_timeout)
+
+    # 1. MAKEDEV ra1 on the RUNNING system so /dev/(r)ra1* exist (the shared disk
+    #    only ever MAKEDEV'd its own root ra0). Then fsck the target's root FFS
+    #    clean before resizing it.
+    rc, out = run(child,
+                  "cd /dev && sh MAKEDEV ra1 && cd / && "
+                  "ls -l /dev/ra1a /dev/rra1a && "
+                  "fsck_ffs -f -y /dev/rra1a 2>&1 | tail -3",
+                  cmd_timeout)
+    if rc != 0:
+        log("FAIL: could not MAKEDEV ra1 / fsck the target root FFS")
+        return PROOF_FAILED
+    log("OK: /dev/ra1* present; target root FFS clean")
+
+    # 1b. ENABLE SWAP. resize_ffs on a 2 GiB FFS needs more memory than the 32 MB
+    #     emulated VAX has, and single-user mode enables NO swap -- so an
+    #     unswapped resize_ffs is OOM-killed within seconds ("UVM: ... out of
+    #     swap"). A swap FILE on the (writable) shared root gives it the headroom
+    #     to complete. This is the shared boot disk, mounted rw by
+    #     start_single_user; the swap file is removed again below.
+    rc, out = run(child,
+                  "rm -f /swapfile; "
+                  "dd if=/dev/zero of=/swapfile bs=1048576 count=384 2>&1 | tail -1; "
+                  "chmod 600 /swapfile && swapctl -a /swapfile && swapctl -l",
+                  cmd_timeout)
+    if rc != 0:
+        log("FAIL: could not enable a swap file for resize_ffs:\n%s" % out)
+        return PROOF_FAILED
+    log("OK: 384 MiB swap file enabled for resize_ffs")
+
+    # 2. SHRINK the target's root FFS to NEW_A_SECTORS so an ODS-2 partition fits
+    #    after it. resize_ffs genuinely relocates blocks; a fsck confirms the
+    #    result is a clean, smaller filesystem. NO pipe -- run()'s marker captures
+    #    resize_ffs's OWN exit code (a prior `| tail' masked an OOM kill as rc 0).
+    #    A generous deadline: relocating ~171 MiB on an emulated VAX under TCG,
+    #    with swapping, is slow.
+    resize_to = max(cmd_timeout, 2400)
+    rc, out = run(child,
+                  "resize_ffs -y -s %d /dev/rra1a; echo RESIZE_EXIT=$?" % new_a_sectors,
+                  resize_to)
+    if rc != 0 or "RESIZE_EXIT=0" not in out:
+        log("FAIL: resize_ffs did NOT shrink the target root FFS to %d sectors "
+            "(rc=%d) -- output:\n%s" % (new_a_sectors, rc, out))
+        return PROOF_FAILED
+    rc, out = run(child, "fsck_ffs -f -y /dev/rra1a 2>&1 | tail -4", resize_to)
+    if rc != 0:
+        log("FAIL: target root FFS is not clean after resize_ffs:\n%s" % out)
+        return PROOF_FAILED
+    log("OK: resize_ffs shrank the target root FFS to %d sectors, fsck-clean"
+        % new_a_sectors)
+
+    # 3. Mount the target root and (a) VERIFY the shrink actually took (a
+    #    still-2 GiB FFS here is the exact failure that silently corrupted the
+    #    disk when it was later truncated), (b) MAKEDEV ra0 so /dev/ra0e exists,
+    #    (c) replace its module_path vms.kmod with the CD's ra0e-aware build.
+    rc, out = run(child, "mount /dev/ra1a /mnt && echo MOUNTED_TARGET", cmd_timeout)
+    if rc != 0:
+        log("FAIL: could not mount the target root FFS at /mnt")
+        return PROOF_FAILED
+
+    # df total 1K-blocks must be <= NEW_A_SECTORS/2 (sectors->KiB); a 2 GiB total
+    # means resize_ffs did not shrink (OOM-killed) -- fail loudly, do not truncate.
+    max_kib = new_a_sectors // 2
+    rc, out = run(child,
+                  "TOT=`df -k /mnt | awk 'NR==2{print $2}'`; "
+                  "echo DF_TOTAL_KIB=$TOT MAX_KIB=%d; "
+                  "test -n \"$TOT\" && test \"$TOT\" -le %d" % (max_kib, max_kib),
+                  cmd_timeout)
+    if rc != 0:
+        log("FAIL: the target root FFS is still larger than %d sectors after "
+            "resize_ffs (df) -- the shrink did not take; refusing to build a "
+            "disk that truncation would corrupt:\n%s" % (new_a_sectors, out))
+        run(child, "umount /mnt 2>/dev/null; true", cmd_timeout)
+        return PROOF_FAILED
+    log("OK: verified target root FFS is <= %d sectors (df)" % new_a_sectors)
+
+    rc, out = run(child,
+                  "cd /mnt/dev && sh MAKEDEV ra0 && cd / && "
+                  "ls -l /mnt/dev/ra0a /mnt/dev/ra0e && "
+                  "test -b /mnt/dev/ra0e",   # ra0e is a BLOCK device (brw-)
+                  cmd_timeout)
+    if rc != 0:
+        log("FAIL: could not MAKEDEV ra0 on the target (/mnt/dev/ra0e missing)")
+        run(child, "umount /mnt 2>/dev/null; true", cmd_timeout)
+        return PROOF_FAILED
+    log("OK: /mnt/dev/ra0e (the ODS-2 partition node) created on the target")
+
+    rc, out = run(child,
+                  "MP=`sysctl -n kern.module.path | cut -d: -f1`; "
+                  "echo module_path=$MP; DEST=/mnt$MP/vms/vms.kmod; "
+                  "mkdir -p /cdrom; "   # stock NetBSD root has only /mnt
+                  "ok=; for dev in /dev/racd0[a-z] /dev/racd1[a-z] "
+                  "/dev/cd0[a-z] /dev/cd1[a-z]; do "
+                  "  test -e $dev || continue; "
+                  "  if mount_cd9660 $dev /cdrom 2>/dev/null; then "
+                  "    if test -f /cdrom/vms.kmod; then ok=$dev; break; "
+                  "    else umount /cdrom 2>/dev/null; fi; fi; done; "
+                  "test -n \"$ok\" || { echo NO_KMOD_CD; exit 1; }; "
+                  "test -f \"$DEST\" || { echo NO_DEST_KMOD; exit 1; }; "
+                  "cp /cdrom/vms.kmod \"$DEST.new\" && mv \"$DEST.new\" \"$DEST\" && "
+                  "sync && umount /cdrom && ls -l \"$DEST\"",
+                  cmd_timeout)
+    if rc != 0:
+        log("FAIL: could not replace the target's module_path vms.kmod with the "
+            "ra0e-aware build:\n%s" % out)
+        run(child, "umount /mnt 2>/dev/null; true", cmd_timeout)
+        return PROOF_FAILED
+    log("OK: target module_path vms.kmod replaced with the ra0e-aware build")
+
+    run(child, "sync; umount /mnt 2>/dev/null; sync", cmd_timeout)
+    # Remove the swap file from the shared root (tidy; the next run recreates it).
+    run(child, "swapctl -d /swapfile 2>/dev/null; rm -f /swapfile; true", cmd_timeout)
+    log("OK: single-disk in-guest assembly done (resize + ra0 nodes + kmod); "
+        "the host-side label rewrite + ODS-2 dd finish it")
+    return 0
+
+
 def do_prove(a, ods2_img, negctl, boot_deadline):
     """Boot the assembled disk single-user (securelevel 0 -> ovmx_init's modctl
     loads are permitted) with the ODS-2 volume on rq1. The kernel execs
@@ -553,7 +717,8 @@ def do_prove(a, ods2_img, negctl, boot_deadline):
     return seen
 
 
-def do_sysboot(a, sysvol_img, negctl, boot_deadline):
+def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
+               single_rq0_type=None):
     """vms-d9c: boot the assembled vms-7b1 disk (ovmx_init as PID 1) with a real
     MASTERED OVMX SYSTEM volume on rq1 (-> ra1 -> DKA0:), and assert the boot
     proceeds PAST ovmx_init's installed-system gate and reaches the point where
@@ -587,17 +752,32 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline):
     Nothing is faked into a login the boot did not reach (INV-6)."""
     import pexpect
 
-    ods2_abs = os.path.abspath(sysvol_img)
-    vmm_args = ["set rq1 ra92", "attach rq1 " + ods2_abs]
-    if negctl:
-        log("SYSBOOT NEGATIVE CONTROL: booting with the FLAT test volume (no "
-            "SYS$SYSTEM:DCL.EXE) -- the installed-system gate MUST halt and "
-            "'%s' MUST NOT appear" % MS_STDRV)
+    if single:
+        # vms-7b15: SINGLE disk. The ODS-2 SYSTEM volume is PARTITION 'e' of the
+        # SAME disk anita booted on rq0 (ra0) -- there is NO rq1. DKA0: resolves
+        # to /dev/ra0e via the candidate fallback in vms_blockdev_netbsd.c.
+        # The slim artifact is a custom-sized MSCP disk (RAUSER=<MB>), so override
+        # anita's hardcoded `set rq0 ra92' (the LAST `set rq0' before `attach rq0'
+        # wins) -- otherwise SIMH would re-extend the slim file back to 2 GiB.
+        vmm_args = []
+        if single_rq0_type:
+            vmm_args = ["set rq0 " + single_rq0_type]
+        log("SYSBOOT-SINGLE: booting ONE disk on rq0 (%s) -- VMB boots the NetBSD "
+            "root ('a') AND the executive mounts the ODS-2 SYSTEM volume from "
+            "PARTITION 'e' of the SAME disk (DKA0: -> ra0e), NO rq1 (deadline "
+            "%ds)" % (single_rq0_type or "default", boot_deadline))
     else:
-        log("SYSBOOT: booting the assembled disk with the MASTERED OVMX system "
-            "volume on rq1 -> ra1 -> DKA0: (deadline %ds); expecting the boot "
-            "to pass the installed-system gate and reach the PROVISION.EXE exec"
-            % boot_deadline)
+        ods2_abs = os.path.abspath(sysvol_img)
+        vmm_args = ["set rq1 ra92", "attach rq1 " + ods2_abs]
+        if negctl:
+            log("SYSBOOT NEGATIVE CONTROL: booting with the FLAT test volume (no "
+                "SYS$SYSTEM:DCL.EXE) -- the installed-system gate MUST halt and "
+                "'%s' MUST NOT appear" % MS_STDRV)
+        else:
+            log("SYSBOOT: booting the assembled disk with the MASTERED OVMX "
+                "system volume on rq1 -> ra1 -> DKA0: (deadline %ds); expecting "
+                "the boot to pass the installed-system gate and reach the "
+                "PROVISION.EXE exec" % boot_deadline)
 
     a.dist.set_workdir(a.workdir)
     a.n_cdrom = 0
@@ -608,9 +788,17 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline):
         child.expect(r">>>")
         child.send("B/R5:2 DUA0\r")
 
-        # Pre-mount milestones, same order as do_prove.
-        for key, pat in [("syskrnl", MS_SYSKRNL), ("exec", MS_EXEC),
-                         ("banner", MS_BANNER), ("mounted", MS_MOUNTED)]:
+        # Pre-mount milestones, same order as do_prove. In single-disk mode the
+        # "DKA0: -> ra0e" backing line is inserted between MS_SYSKRNL and MS_EXEC
+        # (vms.kmod's register_units prints it during the modctl load, before
+        # ovmx_init emits the executive-attached line) -- deterministic proof the
+        # system disk bound to a PARTITION of the boot disk, not a second disk.
+        premount = [("syskrnl", MS_SYSKRNL)]
+        if single:
+            premount.append(("dka0_ra0e", MS_DKA0_RA0E))
+        premount += [("exec", MS_EXEC), ("banner", MS_BANNER),
+                     ("mounted", MS_MOUNTED)]
+        for key, pat in premount:
             try:
                 child.expect(pat, timeout=boot_deadline)
                 seen[key] = True
@@ -794,6 +982,12 @@ def main():
     src_iso = env("OVMX_SRC_ISO", "/tmp/ovmx-vax-boot.iso")
     ods2_img = env("OVMX_ODS2_IMG", "/cache/ovmx-ods2-vax.img")
     sysvol_img = env("OVMX_SYSVOL_IMG", "/cache/ovmx-sysvol-vax.img")
+    # vms-7b15: the single-disk image being assembled (assemble-single mode only)
+    # and the sector count the target root FFS is shrunk to (partition 'a' size).
+    # The slim proof attaches rq0 as a custom-sized MSCP disk (RAUSER=<MB>).
+    single_img = env("OVMX_SINGLE_IMG", "/cache/single-work/wd0.img")
+    single_a_sectors = int(env("OVMX_SINGLE_A_SECTORS", "524288"))  # 256 MiB
+    single_rq0_type = env("OVMX_SINGLE_RQ0_TYPE", "RAUSER=340")     # 324 MiB
 
     boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "1800"))
     cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "600"))
@@ -826,23 +1020,46 @@ def main():
         if mode == "install-boot":
             return do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout)
 
-        if mode in ("sysboot", "sysboot-negctl"):
+        if mode == "assemble-single":
+            # vms-7b15: the shared NetBSD disk is rq0 (its stock init gives a
+            # shell); the single-disk image being built is rq1.
+            if not os.path.isfile(single_img):
+                log("FAIL: single-disk image not found at %s (copy boot-work "
+                    "first)" % single_img)
+                return HARNESS_ERROR
+            return do_assemble_single(a, single_img, artifacts_dir, src_iso,
+                                      single_a_sectors, boot_deadline, cmd_timeout)
+
+        if mode in ("sysboot", "sysboot-negctl", "sysboot-single"):
             sb_negctl = (mode == "sysboot-negctl")
-            # negctl reuses the FLAT test volume (no DCL.EXE); the positive
-            # case uses the mastered SYSTEM volume.
+            sb_single = (mode == "sysboot-single")
+            # negctl reuses the FLAT test volume (no DCL.EXE); the positive case
+            # uses the mastered SYSTEM volume; single mounts the ODS-2 volume from
+            # partition 'e' of the boot disk itself (no separate volume file).
             vol = ods2_img if sb_negctl else sysvol_img
-            if not os.path.isfile(vol):
+            if not sb_single and not os.path.isfile(vol):
                 log("FAIL: volume image not found at %s (master it first)" % vol)
                 return HARNESS_ERROR
-            seen = do_sysboot(a, vol, sb_negctl, boot_deadline)
+            seen = do_sysboot(a, vol, sb_negctl, boot_deadline, single=sb_single,
+                              single_rq0_type=(single_rq0_type if sb_single
+                                               else None))
 
-            # Pre-mount milestones are required in BOTH cases -- a run that never
+            # Pre-mount milestones are required in ALL cases -- a run that never
             # even mounts cannot conclude anything about the installed-system
             # gate.
             if not (seen.get("syskrnl") and seen.get("exec")
                     and seen.get("banner") and seen.get("mounted")):
                 log("SYSBOOT INCONCLUSIVE: did not reach the pre-gate milestones "
                     "(executive attach + banner + MOUNTED); saw=%s" % sorted(seen))
+                return PROOF_FAILED
+
+            # vms-7b15: the single-disk proof additionally REQUIRES that DKA0:
+            # bound to /dev/ra0e (a PARTITION of the boot disk), not ra1c (a
+            # second disk) -- the whole point of the single-disk layout.
+            if sb_single and not seen.get("dka0_ra0e"):
+                log("SYSBOOT-SINGLE FAILED: the executive did NOT bind DKA0: to "
+                    "/dev/ra0e (the ODS-2 partition on the boot disk) -- expected "
+                    "the %r evidence line; saw=%s" % (MS_DKA0_RA0E, sorted(seen)))
                 return PROOF_FAILED
 
             if sb_negctl:
@@ -948,14 +1165,26 @@ def main():
                     "outcome: %s" % seen.get("provision_outcome", "unknown"))
                 return PROOF_FAILED
             log("======================================================================")
-            log("  SYSBOOT PASSED: ovmx_init booted as PID 1 on NetBSD/vax, mounted the")
-            log("  MASTERED OVMX ODS-2 system volume READ-WRITE, passed the installed-")
-            log("  system gate, PROVISION.EXE DEMAND-PAGED + RAN (SYSTEM identity")
-            log("  established), stamped UIC file ownership on the RW-ODS2 volume with")
-            log("  ZERO %%OVMX-W-OWNER warnings, STARTUP.COM was seen ACTIVELY EXECUTING")
-            log("  commands, and JOB_CONTROL's LOGINOUT reached the console prompt.")
-            log("  *** DCL CAPSTONE (vms-d59): the boot CLEARED the logical-name layer")
-            log("  *** (vms-72da) and reached a real interactive Username: prompt. ***")
+            if sb_single:
+                log("  SYSBOOT-SINGLE PASSED: ovmx_init booted as PID 1 on NetBSD/vax")
+                log("  from ONE disk -- VMB booted the NetBSD root off partition 'a' AND")
+                log("  the executive mounted the OVMX ODS-2 system volume from partition")
+                log("  'e' of the SAME disk (DKA0: -> ra0e, NO rq1), passed the installed-")
+                log("  system gate, PROVISION.EXE DEMAND-PAGED + RAN (SYSTEM identity),")
+                log("  stamped UIC file ownership with ZERO %%OVMX-W-OWNER warnings,")
+                log("  STARTUP.COM was seen ACTIVELY EXECUTING, and LOGINOUT reached the")
+                log("  console prompt.")
+                log("  *** vms-7b15: a SINGLE disk both VMB-boots AND carries DKA0:, to a")
+                log("  *** real interactive Username: prompt. ***")
+            else:
+                log("  SYSBOOT PASSED: ovmx_init booted as PID 1 on NetBSD/vax, mounted the")
+                log("  MASTERED OVMX ODS-2 system volume READ-WRITE, passed the installed-")
+                log("  system gate, PROVISION.EXE DEMAND-PAGED + RAN (SYSTEM identity")
+                log("  established), stamped UIC file ownership on the RW-ODS2 volume with")
+                log("  ZERO %%OVMX-W-OWNER warnings, STARTUP.COM was seen ACTIVELY EXECUTING")
+                log("  commands, and JOB_CONTROL's LOGINOUT reached the console prompt.")
+                log("  *** DCL CAPSTONE (vms-d59): the boot CLEARED the logical-name layer")
+                log("  *** (vms-72da) and reached a real interactive Username: prompt. ***")
             log("======================================================================")
             return 0
 

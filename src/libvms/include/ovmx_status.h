@@ -191,21 +191,18 @@ extern "C" {
  * in different groups may hold the same name; a third in the same
  * group is refused SS$_DUPLNAM).
  *
- * WHY THE STATE EXISTS IN OVMX: $CREPRC's uic argument reaches only the
- * created process's OWN userspace PCB (vms_pcb_set_identity()). The
- * executive derives a process's UIC from the Linux credentials the task
- * is running under (src/kernel/vms_module.c), and scopes process names
- * by the group of THAT UIC (src/kernel/vms_proctab.c). A caller-chosen
- * UIC therefore changes nothing any other process can observe -- it is
- * the per-process facade shape CLAUDE.md Rule 11 names. Propagating
- * identity to the executive is tracked as vms-afd and is not done.
- *
- * WHY OPENVMS CANNOT REACH IT: on OpenVMS the executive creates the
- * process and takes its UIC from $CREPRC's argument, subject to
- * privilege. "The UIC you asked for cannot be given to the process" is
- * not a state that exists there; the request either succeeds or is
- * refused for want of IMPERSONATE privilege, and both of those are
- * about the CALLER, not about the system's inability.
+ * NO LONGER RAISED (vms-d31d). This condition existed because $CREPRC's
+ * uic argument once reached only the created process's OWN userspace PCB
+ * (vms_pcb_set_identity()), so a caller-chosen UIC changed nothing another
+ * process could observe. vms-d31d closed that: $CREPRC now stamps the
+ * created process's EXECUTIVE row with the requested UIC and privileges
+ * (via vms_kif_setident), so RUN/DETACHED/UIC=[g,m] gives the process a UIC
+ * every other process and the Files-11 reference monitor can see -- exactly
+ * as OpenVMS does, subject to the creator's privilege. RUN therefore
+ * HONOURS /UIC now (src/vmsdcl/dcl_cmd_process.c run_detached) and never
+ * emits this condition. The value is retained (defined here, named in
+ * src/libvms/status.c) so any historical reference still resolves, but no
+ * code path raises it.
  */
 #define OVMX$_NOPRCUIC  OVMX_STATUS(STS$K_SEVERE, 3)
 

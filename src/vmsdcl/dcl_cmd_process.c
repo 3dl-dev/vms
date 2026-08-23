@@ -34,6 +34,7 @@
 #include "starlet.h"
 #include "descrip.h"
 #include "prcdef.h"
+#include "vms/privs.h"    /* parse_privilege_string, PRV$M_* (RUN/PRIVILEGES, vms-d31d) */
 #include "msgdef.h"
 #include "ovmx_status.h"
 #include "vms_kif.h"
@@ -1016,17 +1017,17 @@ static int run_process_qualifier_count(const struct dcl_command *cmd)
  */
 static uint32_t run_refuse_unhonourable(struct dcl_command *cmd)
 {
-    /* /UIC is checked FIRST, and before the image parameter is even
-     * looked at. The DCL lexer splits on ',', so "/UIC=[300,1]" arrives
-     * as the qualifier value "[300" plus a stray parameter "1]"; if the
-     * image were resolved first, the user would be told "image not
-     * found - 1]" and never hear about the UIC at all. Refusing on the
-     * qualifier's PRESENCE also means OVMX never has to pretend it
-     * understood a UIC it cannot honour. */
-    if (run_has_qualifier(cmd, "UIC")) {
-        run_creprc_failed(OVMX$_NOPRCUIC);
-        return OVMX$_NOPRCUIC;
-    }
+    /* /UIC IS NOW HONOURED on the detached path (vms-d31d): $CREPRC
+     * stamps the created process's executive row with the requested UIC
+     * (and /PRIVILEGES) via vms_kif_setident(), so a UIC handed to
+     * $CREPRC now changes what every other process sees -- the exact
+     * observability that once made refusing it the honest answer. /UIC
+     * (like /DETACHED) creates a DETACHED process, so cmd_run routes it to
+     * run_detached(), which reads and forwards it; it is NOT refused here
+     * and it is excepted from the subprocess test below (as the oracle's
+     * sentence excepts it). The DCL lexer still splits "/UIC=[g,m]" on the
+     * comma, so run_detached()/cmd_run reassemble the "[g" value with the
+     * stray "m]" parameter (run_parse_uic / run_uic_stray_param). */
 
     /* A RUN (PROCESS) qualifier -- any of the thirty-two the oracle's
      * index lists besides /UIC and /DETACHED -- asks OpenVMS for a
@@ -1043,8 +1044,15 @@ static uint32_t run_refuse_unhonourable(struct dcl_command *cmd)
      * set of qualifiers the user ASKED FOR, not the set they spelled out
      * in full: RUN/PRIO=4 is /PRIORITY (oracle-pinned, see that
      * function), and keying the membership test on exact names left it
-     * running the image with the priority thrown away. */
+     * running the image with the priority thrown away.
+     *
+     * /UIC (like /DETACHED) makes the command a DETACHED create, not a
+     * subprocess one (the oracle sentence excepts BOTH), so /UIC present
+     * means the OTHER process qualifiers ride the detached path too --
+     * RUN/UIC=[1,4]/PRIVILEGES=(...) is a detached create, not a refused
+     * subprocess (vms-d31d). */
     if (!run_has_qualifier(cmd, "DETACHED") &&
+        !run_has_qualifier(cmd, "UIC") &&
         run_process_qualifier_count(cmd) > 0) {
         run_creprc_failed(OVMX$_NOSUBPRC);
         return OVMX$_NOSUBPRC;
@@ -1076,6 +1084,115 @@ static uint32_t run_refuse_unhonourable(struct dcl_command *cmd)
 }
 
 /*
+ * run_uic_stray_param - the index of the bare parameter that is really the
+ * second half of a /UIC=[g,m] value (vms-d31d).
+ *
+ * The DCL lexer splits "/UIC=[g,m]" on the comma, so it reaches RUN as the
+ * qualifier value "[g" plus a bare parameter "m]". That "m]" is NOT the
+ * image. Return its parameter index so the image parameter can skip it, or
+ * -1 when there is no such split (no /UIC, or the whole "[g,m]" survived as
+ * a single qualifier value).
+ */
+static int run_uic_stray_param(const struct dcl_command *cmd)
+{
+    const char *v;
+    if (!run_has_qualifier(cmd, "UIC"))
+        return -1;
+    v = run_qualifier_value(cmd, "UIC");
+    if (!v || v[0] != '[' || strchr(v, ']'))
+        return -1;                  /* value already complete: no stray half */
+    for (int i = 0; i < cmd->param_count; i++) {
+        size_t l = strlen(cmd->params[i]);
+        if (l && cmd->params[i][l - 1] == ']')
+            return i;
+    }
+    return -1;
+}
+
+/*
+ * run_parse_uic - parse /UIC=[g,m] into a packed UIC, (group << 16) | member
+ * (vms-d31d). VMS UIC numbers are OCTAL (OpenVMS User's Manual). Reassembles
+ * the lexer's comma split (see run_uic_stray_param). Returns 0 on success,
+ * -1 if the qualifier is absent or malformed.
+ */
+static int run_parse_uic(const struct dcl_command *cmd, uint32_t *out_uic)
+{
+    const char *v = run_qualifier_value(cmd, "UIC");
+    char text[80];
+
+    if (!v || !*v)
+        return -1;
+
+    if (strchr(v, ',') && strchr(v, ']')) {
+        /* The whole "[g,m]" survived as one qualifier value. */
+        strncpy(text, v, sizeof(text) - 1);
+        text[sizeof(text) - 1] = '\0';
+    } else {
+        int si = run_uic_stray_param(cmd);
+        int n;
+        if (si < 0)
+            return -1;
+        n = snprintf(text, sizeof(text), "%s,%s", v, cmd->params[si]);
+        if (n < 0 || (size_t)n >= sizeof(text))
+            return -1;          /* absurdly long: not a UIC we can parse */
+    }
+
+    const char *lb = strchr(text, '[');
+    const char *comma = strchr(text, ',');
+    const char *rb = strchr(text, ']');
+    if (!lb || !comma || !rb || comma <= lb || rb <= comma)
+        return -1;
+
+    char gs[32], ms[32];
+    size_t gl = (size_t)(comma - (lb + 1));
+    size_t ml = (size_t)(rb - (comma + 1));
+    if (gl == 0 || gl >= sizeof(gs) || ml == 0 || ml >= sizeof(ms))
+        return -1;
+    memcpy(gs, lb + 1, gl); gs[gl] = '\0';
+    memcpy(ms, comma + 1, ml); ms[ml] = '\0';
+
+    char *end;
+    unsigned long g = strtoul(gs, &end, 8);
+    if (*end) return -1;
+    unsigned long m = strtoul(ms, &end, 8);
+    if (*end) return -1;
+
+    *out_uic = ((uint32_t)(g & 0xFFFFu) << 16) | (uint32_t)(m & 0xFFFFu);
+    return 0;
+}
+
+/*
+ * run_parse_privileges - parse /PRIVILEGES=(name,...) into a mask (vms-d31d).
+ *
+ * The DCL parser preserves the surrounding parentheses of a list value, so
+ * "/PRIVILEGES=(SYSPRV,BYPASS)" arrives as the literal "(SYSPRV,BYPASS)" and
+ * "/PRIVILEGES=ALL" as "ALL" (dcl_parser.c). Strip one layer of parens and
+ * hand the rest to the shared privilege-name parser. Returns 1 when the
+ * qualifier was present (mask filled, possibly 0), 0 when absent.
+ */
+static int run_parse_privileges(const struct dcl_command *cmd, uint64_t *out_mask)
+{
+    const char *v = run_qualifier_value(cmd, "PRIVILEGES");
+    char buf[512];
+    char *p;
+    size_t bl;
+
+    if (!v || !*v)
+        return 0;
+
+    strncpy(buf, v, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    p = buf;
+    bl = strlen(p);
+    if (bl >= 2 && p[0] == '(' && p[bl - 1] == ')') {
+        p[bl - 1] = '\0';
+        p++;
+    }
+    *out_mask = parse_privilege_string(p);
+    return 1;
+}
+
+/*
  * RUN/DETACHED - create a detached process.
  *
  * This is how a system startup procedure starts a service: the service
@@ -1092,24 +1209,21 @@ static uint32_t run_refuse_unhonourable(struct dcl_command *cmd)
  * Rule 10 worked example 2 -- would satisfy every single-process test
  * and share nothing.
  *
- * Qualifiers honoured here: /PROCESS_NAME=, /INPUT=, /OUTPUT=, /ERROR=.
- * /UIC is NOT one of them -- it is refused before this is reached (see
- * run_refuse_unhonourable), because the created process's UIC is the
- * executive's to derive and nothing DCL passes can change it.
+ * Qualifiers honoured here: /PROCESS_NAME=, /INPUT=, /OUTPUT=, /ERROR=,
+ * /UIC=[g,m] and /PRIVILEGES=(name,...) (vms-d31d). /UIC and /PRIVILEGES
+ * are forwarded to $CREPRC's uic and prvadr arguments, which stamp them
+ * onto the created process's EXECUTIVE row (vms_kif_setident): the
+ * created process now runs under the requested UIC and privileges where
+ * every other process and the Files-11 reference monitor can see them.
+ * This is what lets SYSTEM's startup create a detached LOGINOUT that
+ * holds SYSTEM's UIC [1,4] + SYSPRV/BYPASS and reads its own SYSUAF.
  *
- * KNOWN GAP, TRACKED AS vms-69e -- READ THIS BEFORE ADDING A QUALIFIER.
- * Every OTHER RUN (Process) qualifier reaching this function is READ BY
- * NOBODY: baspri, prvadr and the whole quota set are passed to $CREPRC
- * as bare literals below, so RUN/DETACHED/PRIORITY=4 creates the process
- * and announces %RUN-S-PROC_ID while the priority is discarded in
- * silence. That is the same Rule 10 illegal third answer this file
- * refuses one layer up, and it is reachable from real VMS software in
- * this repo (tests/corpus/tier4-mx/kit/mx_start.com). It is asserted --
- * as it BEHAVES, not as it should behave -- in P10 of
- * tests/qemu/test_syssvc_startup_service.c, so that the day vms-69e
- * settles the question (refuse with a condition value, or propagate
- * quota and privilege to the executive) the change cannot land without
- * that assertion being rewritten.
+ * PARTIAL GAP STILL TRACKED AS vms-69e: baspri (/PRIORITY) and the quota
+ * set are still passed to $CREPRC as bare literals, so /PRIORITY on a
+ * RUN/DETACHED is still parsed and discarded under %RUN-S-PROC_ID. That
+ * remainder is asserted -- as it BEHAVES -- in P10 of
+ * tests/qemu/test_syssvc_startup_service.c. /UIC and /PRIVILEGES were the
+ * other half of vms-69e and are now honoured.
  */
 static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
                         const char *image_path)
@@ -1128,6 +1242,14 @@ static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
 
     const char *prcnam = run_qualifier_value(cmd, "PROCESS_NAME");
 
+    /* /UIC=[g,m] -> $CREPRC uic argument (0 = inherit the creator's). */
+    uint32_t child_uic = 0;
+    (void)run_parse_uic(cmd, &child_uic);
+
+    /* /PRIVILEGES=(name,...) -> $CREPRC prvadr (NULL = inherit creator's). */
+    uint64_t child_privs = 0;
+    int have_privs = run_parse_privileges(cmd, &child_privs);
+
     struct dsc$descriptor_s img_d  = dsc_from_str(image_path);
     struct dsc$descriptor_s in_d   = dsc_from_str(in_path);
     struct dsc$descriptor_s out_d  = dsc_from_str(out_path);
@@ -1139,9 +1261,9 @@ static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
                                  in_d.dsc$a_pointer  ? &in_d  : NULL,
                                  out_d.dsc$a_pointer ? &out_d : NULL,
                                  err_d.dsc$a_pointer ? &err_d : NULL,
-                                 NULL, NULL,
+                                 have_privs ? &child_privs : NULL, NULL,
                                  prc_d.dsc$a_pointer ? &prc_d : NULL,
-                                 0, 0 /* uic: see run_refuse_unhonourable */,
+                                 0, child_uic,
                                  0, PRC$M_DETACH);
 
     if (!(status & 1)) {
@@ -1967,30 +2089,43 @@ int cmd_run(struct dcl_command *cmd)
             return refused;
     }
 
-    if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
+    /* Which parameter is the image? With /UIC=[g,m] the DCL lexer splits
+     * on the comma, so the "m]" half lands as a bare parameter that is NOT
+     * the image (vms-d31d) -- skip it. Without /UIC this picks params[0]. */
+    int stray = run_uic_stray_param(cmd);
+    int img_idx = -1;
+    for (int i = 0; i < cmd->param_count; i++) {
+        if (i == stray) continue;
+        if (cmd->params[i][0] == '\0') continue;
+        img_idx = i;
+        break;
+    }
+    if (img_idx < 0) {
         dcl_error("DCL", 2, "NOFILE", "missing image specification");
         return SS$_BADPARAM;
     }
 
     char linux_path[1024];
     char resolved_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
+    dcl_resolve_path(ctx, cmd->params[img_idx], linux_path, sizeof(linux_path));
 
     /* Resolve to an activatable path (fills .EXE, resolves the RMS ;version,
      * accepts a readable OVMX image) -- shared with foreign-command dispatch. */
-    if (dcl_resolve_activatable(ctx, cmd->params[0], linux_path,
+    if (dcl_resolve_activatable(ctx, cmd->params[img_idx], linux_path,
                                 resolved_path, sizeof(resolved_path))) {
         strncpy(linux_path, resolved_path, sizeof(linux_path) - 1);
         linux_path[sizeof(linux_path) - 1] = '\0';
     } else {
         dcl_error("DCL", 2, "IVIMAGE",
-                  "image not found - %s", cmd->params[0]);
+                  "image not found - %s", cmd->params[img_idx]);
         return SS$_NOSUCHFILE;
     }
 
     /* /DETACHED creates a detached process -- a service -- instead of
-     * running the image as a subprocess of this DCL. */
-    if (run_has_qualifier(cmd, "DETACHED"))
+     * running the image as a subprocess of this DCL. /UIC also selects a
+     * detached process (HELP RUN Process: /UIC "Specifies that the created
+     * process be a detached process"), so it takes the same path (vms-d31d). */
+    if (run_has_qualifier(cmd, "DETACHED") || run_has_qualifier(cmd, "UIC"))
         return run_detached(ctx, cmd, linux_path);
 
     /* RUN has never forwarded parameters to the image (unlike a foreign
@@ -1998,7 +2133,7 @@ int cmd_run(struct dcl_command *cmd)
     char *argv[2];
     argv[0] = linux_path;
     argv[1] = NULL;
-    return dcl_activate_image(ctx, cmd->params[0], linux_path, argv);
+    return dcl_activate_image(ctx, cmd->params[img_idx], linux_path, argv);
 }
 
 /*

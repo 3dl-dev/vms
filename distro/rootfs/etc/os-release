@@ -25,6 +25,6 @@
 NAME="OVMX/Linux"
 ID=ovmx
 PRETTY_NAME="OVMX/Linux"
-VERSION="0.5-2 (SYSKRNL)"
-VERSION_ID="0.5-2"
+VERSION="0.5-3 (SYSKRNL)"
+VERSION_ID="0.5-3"
 HOME_URL="https://openvmx.3dl.dev"

@@ -28,17 +28,18 @@
  * is /bin/sh -- busybox, which knows nothing about VMS and never opens
  * /dev/vms -- so a name B can see can only have come from the executive.
  *
- * AND WHAT THE COMMAND REFUSES (P7, P8). RUN's process qualifiers are
- * documented OpenVMS syntax with documented meanings -- quoted verbatim,
- * from the reference lab's own HELP, in src/libvms/include/ovmx_status.h.
- * OVMX honours the /DETACHED form and cannot honour /UIC (the executive
- * derives a process's UIC from Linux credentials, vms-afd) or the
- * subprocess form (OVMX's RUN has none). CLAUDE.md Rule 10 leaves two
- * answers, and a qualifier a user can type cannot be made unreachable, so
- * it must be REFUSED. Those phases assert the refusal is real: the
- * diagnostic names what could not be done, no process is created, the
- * image does not run behind it -- and, as the control that keeps the
- * refusal honest, plain RUN still runs the image.
+ * WHAT THE COMMAND HONOURS AND REFUSES (P7, P8, P11). RUN's process
+ * qualifiers are documented OpenVMS syntax with documented meanings --
+ * quoted verbatim, from the reference lab's own HELP, in
+ * src/libvms/include/ovmx_status.h. OVMX honours the /DETACHED form, and
+ * now /UIC and /PRIVILEGES on it (vms-d31d): $CREPRC stamps the requested
+ * UIC and privileges onto the created process's executive row, so P7
+ * proves /UIC creates a real process and P11 proves the executive carries
+ * the requested UIC + privileges. OVMX still has no subprocess form of RUN,
+ * so a process qualifier WITHOUT /UIC or /DETACHED is REFUSED (CLAUDE.md
+ * Rule 10 -- a qualifier a user can type cannot be made unreachable); P8
+ * asserts that refusal is real, with plain RUN as the control that keeps it
+ * honest.
  *
  * WHAT IS NOT ASSERTED HERE: the real shipped service. As of vms-8d2,
  * SYS$MANAGER:SYSTARTUP_VMS.COM DOES start one -- JOB_CONTROL, via
@@ -74,6 +75,7 @@
 #include "descrip.h"
 #include "ssdef.h"
 #include "prcdef.h"
+#include "prvdef.h"
 #include "vms_kif.h"
 
 #define EXIT_SKIP 77
@@ -106,6 +108,12 @@ static int fail = 0;
 #define ABBR_NAME       "OVMX47BABR"
 #define DETABBR_NAME    "OVMX47BDTA"
 #define DETPRIO_NAME    "OVMX47BDTP"
+
+/* P11's names (vms-d31d): the two processes the identity-propagation probe
+ * creates by $CREPRC -- one that INHERITS the creator's SYSTEM identity,
+ * one whose prvadr/uic OVERRIDE it. */
+#define PRIV_NAME       "OVMX47BPRV"
+#define OVR_NAME        "OVMX47BOVR"
 
 #define HOLD_SCRIPT     "/tmp/ovmx47b_hold.sh"
 #define SVC_LOG         "/tmp/ovmx47b_svc.log"
@@ -200,11 +208,15 @@ static int write_fixtures(void)
      * given. Written exactly as an operator would type it, INCLUDING the
      * comma, because the comma is half the defect this refuses. */
     if (write_file(UIC_COM,
-                   "$! /UIC refusal (test fixture, vms-47b)\n"
+                   "$! /UIC is now honoured on the detached path (vms-d31d).\n"
+                   "$! Written with the comma an operator types, so the DCL\n"
+                   "$! lexer's split of \"[300,1]\" is exercised end to end.\n"
                    "$ RUN/DETACHED/UIC=[300,1]"
                    "/PROCESS_NAME=" UIC_NAME
                    "/INPUT=\"" HOLD_SCRIPT "\""
-                   " \"" TOUCH_SCRIPT "\"\n"
+                   "/OUTPUT=\"" SVC_LOG "\""
+                   "/ERROR=\"" SVC_LOG "\""
+                   " \"" SUBJECT_IMAGE "\"\n"
                    "$ EXIT\n", 0644) != 0)
         return -1;
 
@@ -578,6 +590,83 @@ static void detach_probe(int fd)
 }
 
 /*
+ * The identity-PROPAGATION probe (vms-d31d).
+ *
+ * P5's probe proved a detached process EXISTS in the executive. This one
+ * proves $CREPRC carries the CREATOR's identity -- UIC and privileges --
+ * INTO the created process's executive row, which is what a detached
+ * LOGINOUT created by SYSTEM needs so it can read its own World-denied
+ * SYSUAF without leaning on the root->UIC-group-0 mapping.
+ *
+ * It runs as its own child of the test so it can BECOME SYSTEM (setident,
+ * as PROVISION.EXE does at boot) without changing the test's own identity,
+ * then creates two detached processes: one that INHERITS (no prvadr/uic)
+ * and one whose prvadr/uic OVERRIDE the inherited set. It reports both
+ * executive-assigned PIDs; the parent reads their rows back BY PID (a
+ * cross-group read the test holds WORLD for) and checks the executive --
+ * not this process's own claim -- carries the right UIC and privileges.
+ */
+struct priv_probe_report {
+    uint32_t setident_status; /* did this probe become SYSTEM? */
+    uint64_t creator_privs;   /* the probe's OWN privs, read back after setident */
+    uint32_t creator_uic;
+    uint32_t inh_status;      /* $CREPRC (default, inherit) status */
+    uint32_t inh_vms_pid;
+    uint32_t ovr_status;      /* $CREPRC (explicit prvadr/uic) status */
+    uint32_t ovr_vms_pid;
+};
+
+#define PRIV_SYSTEM_UIC  0x00010004u          /* [1,4] */
+#define PRIV_OVR_UIC     0x00C00001u          /* [300,1] octal -> group 0300=192 */
+
+static void priv_prop_probe(int fd)
+{
+    struct priv_probe_report rep;
+    struct vms_procinfo self;
+    /* A full SYSTEM privilege set. SETPRV is what authorises establishing
+     * an arbitrary identity (this probe holds it as root -> ENFORCED), and
+     * SYSPRV/BYPASS are the privileges an inheriting child must end up with. */
+    uint64_t sys_privs = PRV$M_SYSPRV | PRV$M_BYPASS | PRV$M_SETPRV |
+                         PRV$M_OPER   | PRV$M_CMKRNL | PRV$M_CMEXEC |
+                         PRV$M_TMPMBX | PRV$M_NETMBX | PRV$M_WORLD;
+    /* The OVERRIDE set: deliberately WITHOUT SYSPRV/BYPASS, so a reader can
+     * tell an honoured override from an ignored one. */
+    uint64_t ovr_privs = PRV$M_TMPMBX | PRV$M_NETMBX;
+
+    memset(&rep, 0, sizeof(rep));
+
+    rep.setident_status = vms_kif_setident("SYSTEM", PRIV_SYSTEM_UIC, sys_privs);
+    memset(&self, 0, sizeof(self));
+    if (vms_kif_getjpi_self(&self) & 1) {
+        rep.creator_privs = self.cur_privs;
+        rep.creator_uic   = self.uic;
+    }
+
+    /* (a) DEFAULT: no prvadr, no uic -- the child inherits SYSTEM. */
+    {
+        struct dsc$descriptor_s img = str_dsc(SUBJECT_IMAGE);
+        struct dsc$descriptor_s in  = str_dsc(HOLD_SCRIPT);
+        struct dsc$descriptor_s nd  = str_dsc(PRIV_NAME);
+        rep.inh_status = sys$creprc(&rep.inh_vms_pid, &img, &in, NULL, NULL,
+                                    NULL, NULL, &nd, 0, 0, 0, PRC$M_DETACH);
+    }
+
+    /* (b) OVERRIDE: prvadr = a reduced set, uic = [300,1]. */
+    {
+        struct dsc$descriptor_s img = str_dsc(SUBJECT_IMAGE);
+        struct dsc$descriptor_s in  = str_dsc(HOLD_SCRIPT);
+        struct dsc$descriptor_s nd  = str_dsc(OVR_NAME);
+        rep.ovr_status = sys$creprc(&rep.ovr_vms_pid, &img, &in, NULL, NULL,
+                                    &ovr_privs, NULL, &nd, 0, PRIV_OVR_UIC,
+                                    0, PRC$M_DETACH);
+    }
+
+    ssize_t w = write(fd, &rep, sizeof(rep));
+    (void)w;
+    _exit(0);
+}
+
+/*
  * Checks that run when there is NO executive. Nothing may report success.
  */
 static int device_absent_checks(void)
@@ -898,53 +987,54 @@ int main(void)
     }
 
     /* ---------------------------------------------------------------
-     * P7. A QUALIFIER OVMX CANNOT HONOUR IS REFUSED, NOT DISCARDED.
+     * P7. /UIC IS HONOURED ON THE DETACHED PATH (vms-d31d).
      *
      * ORACLE-PINNED. HELP RUN Process /UIC on the reference lab (VAX2,
      * OpenVMS VAX V7.3, 2026-07-31) says /UIC "Specifies that the
      * created process be a detached process and assigns it a user
-     * identification code (UIC)", and HELP RUN Process /PROCESS_NAME
-     * says the process name "is implicitly qualified by the group
-     * number of the process's user identification code (UIC)". So /UIC
-     * chooses the scope in which the process NAME is unique -- the
-     * whole subject of the lab transcript in
-     * tests/qemu/test_kmod_procnam.c.
+     * identification code (UIC)". OVMX now delivers that: $CREPRC stamps
+     * the requested UIC onto the created process's EXECUTIVE row
+     * (vms_kif_setident), so RUN/DETACHED/UIC=[g,m] creates a real
+     * detached process. The old %RUN-F-CREPRC / -OVMX-F-NOPRCUIC refusal
+     * is gone -- OVMX no longer has to pretend it cannot honour a UIC.
      *
-     * OVMX cannot deliver that: the executive derives a process's UIC
-     * from Linux credentials, so a UIC handed to $CREPRC changes
-     * nothing another process can observe (vms-afd). CLAUDE.md Rule 10
-     * gives two answers and the qualifier cannot be made unreachable,
-     * so it is REFUSED. What is being tested is that the refusal
-     * happens -- that the user is not told a UIC was accepted.
-     *
-     * The procedure is written with the comma an operator would type.
-     * The DCL lexer splits on it, so before this refusal the command
-     * reported "%DCL-E-IVIMAGE, image not found - 1]" -- a fragment of
-     * the UIC named as a missing image, with the UIC itself never
-     * mentioned. That specific symptom is asserted absent.
+     * WHAT THIS PHASE PROVES is the DCL-LEVEL honouring: the command
+     * succeeds, resolves the image PAST the lexer's comma split (the old
+     * "%DCL-E-IVIMAGE, image not found - 1]" symptom is asserted absent),
+     * and a process is created under the requested name. The EXECUTIVE
+     * carrying the requested UIC AND privileges is proven separately in
+     * P11, which first establishes a SYSTEM creator identity (a detached
+     * process only inherits a NAMED identity, and run_dcl's DCL registers
+     * with none). Here the created process runs SUBJECT_IMAGE reading a
+     * 600-second hold script, so it is alive to be observed and killed.
      * --------------------------------------------------------------- */
     {
         char out7[65536];
         int n7 = 0;
 
-        clear_touch();
         run_dcl(UIC_COM, out7, sizeof(out7), &exit_st);
         printf("  (RUN/DETACHED/UIC=[300,1])\n%s\n", out7);
 
-        CHECK(strstr(out7, "%RUN-F-CREPRC, process creation failed") != NULL &&
-              strstr(out7, "-OVMX-F-NOPRCUIC,") != NULL,
-              "RUN refuses /UIC with %RUN-F-CREPRC / -OVMX-F-NOPRCUIC");
+        /* negctl-knockon: bind-client-no-register */
+        CHECK(strstr(out7, "-OVMX-F-NOPRCUIC,") == NULL &&
+              strstr(out7, "%RUN-F-CREPRC") == NULL,
+              "RUN no longer refuses /UIC (vms-d31d): no -OVMX-F-NOPRCUIC");
         CHECK(strstr(out7, "IVIMAGE") == NULL,
-              "the refusal names the UIC, not a fragment of it mistaken for an image");
+              "the image is resolved past the lexer's [g,m] comma split, "
+              "not reported as a missing image named '1]'");
+        CHECK(strstr(out7, "%RUN-S-PROC_ID") != NULL,
+              "RUN/DETACHED/UIC announces the created process ID");
 
         (void)proc_id_of(out7, &n7);
-        CHECK(n7 == 0, "the refused /UIC start announced no process");
+        CHECK(n7 == 1, "exactly one process ID is announced");
 
         memset(&info, 0, sizeof(info));
-        CHECK(vms_kif_getjpi_prcnam(UIC_NAME, &info) != SS$_NORMAL,
-              "no process exists in the executive under the refused name");
-        CHECK(!touched(),
-              "the image was not run behind the refusal");
+        st = vms_kif_getjpi_prcnam(UIC_NAME, &info);
+        /* negctl-knockon: run-detached-name-dropped */
+        CHECK(st == SS$_NORMAL,
+              "the /UIC detached process exists in the executive under its name");
+        if (st == SS$_NORMAL && info.linux_pid)
+            kill((pid_t)info.linux_pid, SIGKILL);
     }
 
     /* ---------------------------------------------------------------
@@ -1165,30 +1255,28 @@ int main(void)
               "the abbreviated form announces the process ID the executive assigned");
         if (ab_lpid) kill((pid_t)ab_lpid, SIGKILL);
 
-        /* (e) KNOWN GAP, TRACKED AS vms-69e -- THIS ASSERTION PINS WHAT
-         * OVMX DOES TODAY, NOT WHAT VMS DOES.
+        /* (e) vms-69e -- PARTIALLY SETTLED (vms-d31d). THIS ASSERTION PINS
+         * THE REMAINDER: what OVMX still drops, not what VMS does.
          *
-         * On the /DETACHED path a process qualifier outside the four
-         * run_detached() reads is passed to $CREPRC as a bare literal
-         * (baspri 0, prvadr NULL, quota NULL), so /PRIORITY, /PRIVILEGES
-         * and the whole quota set are parsed, never read, and dropped --
-         * under a SUCCESS message. That is Rule 10's illegal third
-         * answer, and it is what an adversary found on the previous
-         * round by booting this harness and driving
-         * RUN/DETACHED/PROCESS_NAME=.../PRIORITY=4.
+         * vms-69e was the whole family of RUN (Process) qualifiers that
+         * run_detached() parsed and threw away under a SUCCESS message.
+         * vms-d31d settled the privilege/identity half: /UIC and
+         * /PRIVILEGES now reach $CREPRC and are stamped onto the created
+         * process's executive row (P7 above; P11 below). What is STILL
+         * dropped is /PRIORITY (baspri) and the quota set -- passed to
+         * $CREPRC as bare literals (baspri 0, quota NULL) and read by
+         * nobody. That remainder is Rule 10's illegal third answer for
+         * those qualifiers, and it is what this phase keeps visible with a
+         * /PRIORITY procedure so the suite can still tell "refused" from
+         * "silently discarded" on this branch.
          *
-         * The fix is NOT this item's to make: settling it needs either a
-         * third OVMX condition value or real quota/privilege propagation
-         * to the executive, and it is filed as vms-69e. What IS this
-         * item's to do is make the gap VISIBLE, because until this
-         * assertion existed the suite could not tell "refused" from
-         * "silently discarded" on this branch -- the same blindness that
-         * let round 2's overshoot ship. When vms-69e settles, this
+         * When the /PRIORITY + quota remainder of vms-69e settles (a third
+         * OVMX condition value, or real priority/quota propagation), this
          * assertion MUST go red and be rewritten; that is its job.
          *
          * There is deliberately NO negative control for this one. A
-         * mutation that reddened it would have to be the vms-69e FIX,
-         * and the manifest in tests/qemu/facility_defects.sh injects
+         * mutation that reddened it would have to be the remaining vms-69e
+         * FIX, and the manifest in tests/qemu/facility_defects.sh injects
          * defects, not improvements. */
         {
             uint32_t dp_lpid = 0;
@@ -1236,6 +1324,115 @@ int main(void)
         CHECK(touched() && strstr(outA, "ABKEYW") == NULL,
               "parser-wide gap: an ambiguous abbreviation is not resolved, and "
               "OVMX has no %DCL-W-ABKEYW to refuse it with");
+    }
+
+    /* ---------------------------------------------------------------
+     * P11. $CREPRC PROPAGATES THE CREATOR'S IDENTITY TO THE EXECUTIVE
+     *      (vms-d31d).
+     *
+     * The load-bearing proof for authentic VAX/Alpha login: a detached
+     * process created by a SYSTEM parent must hold SYSTEM's UIC and
+     * privileges in its EXECUTIVE row -- the row vmsfs_acp.c's
+     * acp_check_access reads -- so it can read its own World-denied SYSUAF
+     * without leaning on the root->UIC-group-0 mapping x86_64 has and VAX
+     * does not. The probe becomes SYSTEM [1,4] (setident, as PROVISION does
+     * at boot) then $CREPRCs two detached processes; we read their rows
+     * back BY PID (the test holds WORLD, so a cross-group read returns the
+     * full row) and check the EXECUTIVE -- not the child's own word.
+     *
+     *   (a) DEFAULT: no prvadr/uic -> the child INHERITS SYSTEM [1,4] and
+     *       the creator's privileges, INCLUDING SYSPRV and BYPASS.
+     *   (b) OVERRIDE: prvadr=(TMPMBX,NETMBX), uic=[300,1] -> the child
+     *       holds EXACTLY that reduced set and that UIC -- proving the
+     *       qualifiers are honoured, not merely inherited.
+     * --------------------------------------------------------------- */
+    {
+        int pfd[2];
+        struct priv_probe_report rep;
+
+        memset(&rep, 0, sizeof(rep));
+        if (pipe(pfd) < 0) {
+            CHECK(0, "the identity-propagation probe could be started");
+        } else {
+            pid_t probe = fork();
+            if (probe < 0) {
+                close(pfd[0]); close(pfd[1]);
+                CHECK(0, "the identity-propagation probe could be started");
+            } else if (probe == 0) {
+                close(pfd[0]);
+                priv_prop_probe(pfd[1]);
+                _exit(0);   /* not reached */
+            } else {
+                ssize_t r;
+                int pst;
+
+                close(pfd[1]);
+                r = read(pfd[0], &rep, sizeof(rep));
+                close(pfd[0]);
+                while (waitpid(probe, &pst, 0) < 0 && errno == EINTR)
+                    ;
+
+                CHECK(r == (ssize_t)sizeof(rep),
+                      "the identity-propagation probe reported back");
+
+                /* The probe genuinely became SYSTEM (the executive can
+                 * refuse -- this is what makes the inheritance below an
+                 * observation, not a claim). */
+                CHECK((rep.setident_status & 1) &&
+                      rep.creator_uic == PRIV_SYSTEM_UIC &&
+                      (rep.creator_privs & PRV$M_SYSPRV) &&
+                      (rep.creator_privs & PRV$M_BYPASS),
+                      "the probe established SYSTEM [1,4] with SYSPRV+BYPASS "
+                      "before creating any process");
+
+                CHECK(rep.inh_status & 1,
+                      "sys$creprc (default, inherit) created the process");
+                CHECK(rep.ovr_status & 1,
+                      "sys$creprc (explicit prvadr/uic) created the process");
+
+                /* (a) DEFAULT inheritance -- read the child's EXECUTIVE row. */
+                if (rep.inh_status & 1) {
+                    memset(&info, 0, sizeof(info));
+                    st = vms_kif_getjpi_pid(rep.inh_vms_pid, &info);
+                    printf("  (inherited child: uic %08X privs %016llX)\n",
+                           (unsigned)info.uic,
+                           (unsigned long long)info.cur_privs);
+                    CHECK(st == SS$_NORMAL && !info.redacted &&
+                          info.uic == PRIV_SYSTEM_UIC,
+                          "the inheriting child's EXECUTIVE UIC is the creator's "
+                          "SYSTEM [1,4], not a capable()-derived Linux UIC");
+                    CHECK(st == SS$_NORMAL &&
+                          (info.cur_privs & PRV$M_SYSPRV) &&
+                          (info.cur_privs & PRV$M_BYPASS),
+                          "the inheriting child holds SYSPRV+BYPASS in the "
+                          "executive -- the privileges a SYSUAF read needs");
+                    if (st == SS$_NORMAL && info.linux_pid)
+                        kill((pid_t)info.linux_pid, SIGKILL);
+                }
+
+                /* (b) OVERRIDE -- prvadr/uic must WIN over inheritance. */
+                if (rep.ovr_status & 1) {
+                    memset(&info, 0, sizeof(info));
+                    st = vms_kif_getjpi_pid(rep.ovr_vms_pid, &info);
+                    printf("  (override child: uic %08X privs %016llX)\n",
+                           (unsigned)info.uic,
+                           (unsigned long long)info.cur_privs);
+                    CHECK(st == SS$_NORMAL && !info.redacted &&
+                          info.uic == PRIV_OVR_UIC,
+                          "the override child's EXECUTIVE UIC is the requested "
+                          "[300,1], not the creator's [1,4]");
+                    CHECK(st == SS$_NORMAL &&
+                          (info.cur_privs & (PRV$M_TMPMBX | PRV$M_NETMBX)) ==
+                              (PRV$M_TMPMBX | PRV$M_NETMBX) &&
+                          !(info.cur_privs & PRV$M_SYSPRV) &&
+                          !(info.cur_privs & PRV$M_BYPASS),
+                          "the override child holds EXACTLY the requested "
+                          "reduced privileges -- prvadr won over inheritance");
+                    if (st == SS$_NORMAL && info.linux_pid)
+                        kill((pid_t)info.linux_pid, SIGKILL);
+                }
+            }
+        }
     }
 
     clear_touch();

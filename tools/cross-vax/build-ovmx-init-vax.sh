@@ -206,10 +206,18 @@ echo
 
 # --- proof 3: link a real vax--netbsdelf STARTUP.EXE over the whole stack ----
 echo "=== proof 3: link a real vax--netbsdelf STARTUP.EXE (PID 1) ==="
-# Dynamic (no -static): Decision A activates OVMX images on netbsd-vax through
-# NetBSD's ld.elf_so (rd vms-42d), so PID 1 is a plain NetBSD ELF32-vax dynamic
-# exe. --start-group resolves the libvms<->vmsfs archive cycle.
-"$CC" --sysroot="$SYSROOT" \
+# STATIC (-static, vms-0ab boot-speed #2): PID 1 is a self-contained ELF32-vax
+# with NO PT_INTERP, so NetBSD's ld.elf_so never re-relocates
+# libc/libpthread/libm/libatomic on each fork+execve activation. The in-process
+# IMGACT bails SS$_UNSUPPORTED on the foreign ld.elf_so interp, so every boot
+# activation was a fork+execve paying full dynamic relocation from scratch --
+# native VMS's prelinked activation never pays that. Still Decision A (vms-42d):
+# the substrate activates a plain NetBSD ELF32-vax, only now statically linked.
+# STARTUP.EXE references NO SYSUAF engine seam (readelf: no ovmx_sysuaf_* refs),
+# so it needs no rms-bind anchor; its ONE weak seam (ovmx_sysgen_acp_read,
+# proof 4) is strong-linked via ovmx_boot_sysgen_acp.o on the link line and so
+# survives -static unchanged. --start-group resolves the libvms<->vmsfs cycle.
+"$CC" --sysroot="$SYSROOT" -static \
     "$OUT/ovmx_init.o" "$OUT/ovmx_boot_netbsd.o" "$OUT/sysboot.o" \
     "$OUT/ovmx_boot_acp_read.o" "$OUT/ovmx_boot_sysgen_acp.o" "$OUT/imgact_acp.o" \
     -Wl,--start-group \

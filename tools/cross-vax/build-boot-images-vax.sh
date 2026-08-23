@@ -30,19 +30,25 @@
 #   JOB_CONTROL.EXE  (src/ovmx_job_control, build-job-control-vax.sh)
 #   LOGINOUT.EXE     (tools/vms_login.c,    build-loginout-vax.sh)
 #
-# ACTIVATION (vms-42d, Decision A): none of these images build/run under an
-# OVMX-native VAX toolchain (there is none, §4.3) -- on netbsd-vax they are
-# ORDINARY NetBSD ELF32-vax dynamic executables activated by NetBSD's own
-# `/usr/libexec/ld.elf_so`, a LABELLED Rule-8 substrate divergence from the
-# Linux/self-hosting path's IMGACT.EXE + `.vms$sv` symbol-vector activation.
-# "Link + activatable" therefore means, for each image: a well-formed
-# ELF32-vax dynamic executable, PT_INTERP == /usr/libexec/ld.elf_so, and a
-# resolvable NEEDED set (libc/libpthread/libm/libatomic, the same set every
-# other netbsd-vax OVMX image links) -- exactly what build-activation-vax.sh
-# already asserts for a representative image, applied here to the five REAL
-# boot images. No qemu-system-vax exists (§6), so this is a static ELF
-# proof, never an execution -- the SIMH-booted follow-up is the P4 capstone
-# (vms-d59).
+# ACTIVATION (vms-42d, Decision A; vms-0ab -static): none of these images
+# build/run under an OVMX-native VAX toolchain (there is none, §4.3) -- on
+# netbsd-vax they are ORDINARY NetBSD ELF32-vax executables activated by the
+# substrate, a LABELLED Rule-8 substrate divergence from the Linux/self-hosting
+# path's IMGACT.EXE + `.vms$sv` symbol-vector activation.
+#
+# BOOT-SPEED (vms-0ab): these five boot images are now STATICALLY linked
+# (-static). The in-process IMGACT bails SS$_UNSUPPORTED on the foreign
+# ld.elf_so PT_INTERP, so every boot activation is a fork+execve; when the
+# images were DYNAMIC, ld.elf_so then re-relocated libc/libpthread/libm/libatomic
+# from scratch on EACH of the ~4 activations a boot walks -- a large per-boot
+# cost native VMS's prelinked activation never pays. A static image carries no
+# PT_INTERP and no DT_NEEDED, so ld.elf_so is never invoked and that relocation
+# cost is gone. "Link + activatable" therefore now means, for each image: a
+# well-formed ELF32-vax STATIC executable, NO PT_INTERP, NO DT_NEEDED, and (for
+# the auth-path images) the SYSUAF/RIGHTSLIST weak-seam engines force-anchored so
+# nothing silently drops under -static (asserted in each image's own recipe).
+# No qemu-system-vax exists (§6), so this is a static ELF proof, never an
+# execution -- the SIMH-booted follow-up is the P4 capstone (vms-d59).
 #
 # INV-DRIFT: no image's C source forks logic on __NetBSD__/__linux__.
 # ovmx_init.c is asserted #ifdef-free by build-ovmx-init-vax.sh already; the
@@ -118,10 +124,13 @@ for pair in $IMAGES; do
         || { echo "FAIL: $name is not an ELF 32-bit LSB executable"; exit 1; }
     echo "$FILE_OUT" | grep -qiF 'Digital VAX' \
         || { echo "FAIL: $name is not Digital VAX"; exit 1; }
-    echo "$FILE_OUT" | grep -qiF 'dynamically linked' \
-        || { echo "FAIL: $name is not dynamically linked"; exit 1; }
+    # vms-0ab: STATIC now. The boot images no longer name ld.elf_so as their
+    # interpreter, so each fork+execve activation stops paying ld.elf_so's
+    # from-scratch re-relocation of libc/libpthread/libm/libatomic.
+    echo "$FILE_OUT" | grep -qiF 'statically linked' \
+        || { echo "FAIL: $name is not statically linked (vms-0ab boot-speed)"; exit 1; }
     echo "$FILE_OUT" | grep -qF '/usr/libexec/ld.elf_so' \
-        || { echo "FAIL: $name does not name interpreter /usr/libexec/ld.elf_so"; exit 1; }
+        && { echo "FAIL: $name still names interpreter /usr/libexec/ld.elf_so -- not static"; exit 1; }
 
     # readelf -h: class/machine, independent of file(1)'s wording.
     HDR="$("$READELF" -h "$path")"
@@ -130,31 +139,18 @@ for pair in $IMAGES; do
     echo "$HDR" | grep -qiF 'Digital VAX' \
         || { echo "FAIL: $name Machine field is not Digital VAX"; exit 1; }
 
-    # readelf -l: PT_INTERP requests exactly NetBSD's runtime linker.
+    # readelf -l: NO PT_INTERP -- a static ELF requests no runtime linker.
     PHDRS="$("$READELF" -l "$path")"
     echo "$PHDRS" | grep -qiE 'INTERP' \
-        || { echo "FAIL: $name has no PT_INTERP -- not dynamically activated"; exit 1; }
-    INTERP="$("$READELF" -p .interp "$path" 2>/dev/null | grep -oE '/[^ ]*ld\.elf_so' | head -1 || true)"
-    [ "$INTERP" = "/usr/libexec/ld.elf_so" ] \
-        || { echo "FAIL: $name interpreter is not /usr/libexec/ld.elf_so (got '${INTERP:-none}')"; exit 1; }
+        && { echo "FAIL: $name has a PT_INTERP -- not statically linked (vms-0ab)"; exit 1; }
     echo "$PHDRS" | grep -qiF 'IMGACT.EXE' \
         && { echo "FAIL: $name requests IMGACT.EXE -- OVMX-native activation must NOT be used on netbsd-vax"; exit 1; }
 
-    # readelf -d: NEEDED shared libs are the expected NetBSD/OVMX set --
-    # libc (implicit via ld.elf_so, not always a DT_NEEDED entry itself) plus
-    # whatever this image's link line pulled in (pthread, m, atomic).
+    # readelf -d: NO DT_NEEDED / no dynamic section -- a fully static exe carries
+    # no shared-object dependency for ld.elf_so to resolve at activation.
     DYN="$("$READELF" -d "$path" 2>/dev/null || true)"
     echo "$DYN" | grep -qiE 'NEEDED' \
-        || { echo "FAIL: $name has no DT_NEEDED -- not a genuinely dynamic exe"; exit 1; }
-    NEEDED="$(echo "$DYN" | grep -oE '\[lib[a-z]+\.so[^]]*\]' | tr -d '[]')"
-    echo "  NEEDED: $(echo "$NEEDED" | tr '\n' ' ')"
-    echo "$NEEDED" | grep -qE '^libc\.so' \
-        || { echo "FAIL: $name does not NEED libc.so"; exit 1; }
-    # every NEEDED entry must be an ordinary NetBSD libc-family .so -- no
-    # unexpected/OVMX-native shared object leaked into a netbsd-vax link.
-    BAD="$(echo "$NEEDED" | grep -vE '^lib(c|pthread|m|atomic)\.so' || true)"
-    [ -z "$BAD" ] \
-        || { echo "FAIL: $name NEEDs unexpected shared object(s): $BAD"; exit 1; }
+        && { echo "FAIL: $name has a DT_NEEDED -- not a genuinely static exe (vms-0ab)"; exit 1; }
 
     # no OVMX symbol-vector sections -- not an IMGACT image on this substrate.
     SECS="$("$READELF" -S "$path")"
@@ -163,8 +159,8 @@ for pair in $IMAGES; do
         exit 1
     fi
 
-    echo "  -> $name: ELF32 Digital VAX, dynamically linked, interp=/usr/libexec/ld.elf_so, NEEDED={$(echo "$NEEDED" | tr '\n' ' ')}, no .vms\$sv/.vms\$imp"
+    echo "  -> $name: ELF32 Digital VAX, STATICALLY linked, no PT_INTERP, no DT_NEEDED, no .vms\$sv/.vms\$imp"
     echo
 done
 
-echo "=== ALL PROOFS PASSED: the full OVMX boot image set (STARTUP.EXE, PROVISION.EXE, DCL.EXE, JOB_CONTROL.EXE, LOGINOUT.EXE) builds, links, and activates via ld.elf_so for $TARGET ==="
+echo "=== ALL PROOFS PASSED: the full OVMX boot image set (STARTUP.EXE, PROVISION.EXE, DCL.EXE, JOB_CONTROL.EXE, LOGINOUT.EXE) builds, links STATICALLY (no ld.elf_so re-relocation per activation), and satisfies the Decision-A static contract for $TARGET ==="

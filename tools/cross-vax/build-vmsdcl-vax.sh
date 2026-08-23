@@ -121,14 +121,34 @@ fi
 echo "OK: no undefined readline symbols -- DCL's own non-readline line editor is used"
 echo
 
+# WEAK-SEAM ANCHOR (vms-0ab). DCL reads identity files IN-PROCESS -- SHOW that
+# consults SYSUAF, F$IDENTIFIER against RIGHTSLIST -- through LIBVMS readers that
+# `#pragma weak`-reference ovmx_sysuaf_read_user/_uic and ovmx_rightslist_*
+# (src/vmsrms live engines) and return "miss" when the cell is NULL. A WEAK
+# undefined reference does not pull the defining archive member, so the DYNAMIC
+# baseline already left those cells UND=0 and a naive -static link keeps them
+# NULL. src/vmslink/dcl_rms_bind.c is the PRODUCTION anchor for exactly this seam
+# (already used on the LINK.EXE shareable path): its volatile-guarded
+# dcl_rms_bind_never() strongly references the SYSUAF + RIGHTSLIST engines, so
+# compiled+linked here it EXTRACTS sysuaf_rms.o / rightslist_live.o from vmsrms.a
+# and binds the weak cells. Executes nothing at run time. Reused, not reinvented.
+echo "=== anchor: cross-compile dcl_rms_bind.c (SYSUAF/RIGHTSLIST weak seam) ==="
+"$CC" --sysroot="$SYSROOT" -O2 -c "$SRC/src/vmslink/dcl_rms_bind.c" \
+    -o "$OUT/dcl_rms_bind.o"
+
 # --- proof 2: link the REAL DCL.EXE over the full elf32-vax stack -----------
 echo "=== proof 2: link a real vax--netbsdelf DCL.EXE over the whole stack ==="
+# STATIC (-static, vms-0ab boot-speed #2): self-contained ELF32-vax, no
+# PT_INTERP -> no ld.elf_so re-relocation per fork+execve activation. Still
+# Decision A (vms-42d), only statically linked.
 # --whole-archive on libvmsdcl.a forces EVERY DCL object in, so any unresolved
 # symbol (against the stack or libc) is a hard link error -- a complete shell,
-# not just the objects crt0 happens to reach through main().
-"$CC" --sysroot="$SYSROOT" \
+# not just the objects crt0 happens to reach through main(). dcl_rms_bind.o is a
+# primary object so its strong refs pull the identity engines DCL's weak seam needs.
+"$CC" --sysroot="$SYSROOT" -static \
     -I"$VMS_INCLUDE" -I"$VMSPROCESS_INCLUDE" -I"$VMSLNM_INCLUDE" \
     -I"$VMSFS_INCLUDE" -I"$VMSRMS_INCLUDE" -I"$VMSDCL_INCLUDE" -I"$LIBVMSSYS" \
+    "$OUT/dcl_rms_bind.o" \
     -Wl,--whole-archive "$LIBDCL" -Wl,--no-whole-archive \
     -Wl,--start-group \
         "$LIBVMSQUEUE_A" "$LIBVMSRMS_A" "$LIBVMS_A" "$LIBVMSFS_A" \
@@ -138,6 +158,29 @@ echo "=== proof 2: link a real vax--netbsdelf DCL.EXE over the whole stack ==="
 echo "--- linked executable ---"
 file "$OUT/DCL.EXE"
 "$TARGET-readelf" -h "$OUT/DCL.EXE" | grep -Ei 'Class|Data|Machine|Type'
+
+# --- proof 2b (WEAK-SEAM, vms-0ab): identity engines DEFINED, not UND ---------
+echo "=== proof 2b (WEAK-SEAM): SYSUAF/RIGHTSLIST engines defined in DCL.EXE ==="
+for sym in ovmx_sysuaf_read_user ovmx_sysuaf_read_uic ovmx_rightslist_asctoid \
+           ovmx_rightslist_idtoasc; do
+    if ! "$TARGET-readelf" -sW "$OUT/DCL.EXE" \
+            | grep -E " $sym\$" | grep -qvE ' UND '; then
+        echo "FAIL: $sym is UND/absent in DCL.EXE -- the identity weak seam"
+        echo "      dropped under -static; SHOW/F\$IDENTIFIER would read nothing (vms-0ab)."
+        exit 1
+    fi
+done
+echo "OK: SYSUAF + RIGHTSLIST engines DEFINED in the -static image"
+
+# --- proof 2c (STATIC, vms-0ab): no PT_INTERP / no dynamic NEEDED -------------
+echo "=== proof 2c (STATIC): DCL.EXE is a self-contained static ELF32-vax ==="
+if "$TARGET-readelf" -l "$OUT/DCL.EXE" | grep -qiE 'INTERP'; then
+    echo "FAIL: DCL.EXE has a PT_INTERP -- not statically linked (vms-0ab)."; exit 1
+fi
+if "$TARGET-readelf" -d "$OUT/DCL.EXE" 2>/dev/null | grep -qiE 'NEEDED'; then
+    echo "FAIL: DCL.EXE has a DT_NEEDED -- not statically linked (vms-0ab)."; exit 1
+fi
+echo "OK: no PT_INTERP, no DT_NEEDED -- fully static"
 
 echo
 echo "=== ALL PROOFS PASSED: vmsdcl builds and links a DCL.EXE for $TARGET ==="

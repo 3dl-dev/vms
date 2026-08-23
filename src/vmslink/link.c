@@ -1342,6 +1342,19 @@ static size_t g_syms_cap;          /* power of two */
 static int  g_allow_undef;
 static long g_deferred;            /* count of deferred (unresolved) externals */
 
+/* Diagnostic (vms-bfd6): with OVMX_LINK_DUMP_UNDEF set in the environment, name
+ * every deferred external on stderr as "DEFERRED-UNDEF: <name>". This is the
+ * authoritative enumeration of the residual undefined set a --allow-undefined
+ * link leaves — used to ground-truth which OTS$/MATH$ (and any other) universals
+ * a companion shareable must define. Off by default; changes no link output. */
+static int  g_dump_undef = -1;
+static void dump_undef(const char *nm)
+{
+    if (g_dump_undef < 0) g_dump_undef = getenv("OVMX_LINK_DUMP_UNDEF") ? 1 : 0;
+    if (g_dump_undef && nm && nm[0])
+        fprintf(stderr, "DEFERRED-UNDEF: %s\n", nm);
+}
+
 /* Producer GLOBALVALUE table (vms-954). A --use'd producer (DECC$SHR is the C
  * RTL surface) may export universals of kind OVMX_SV_GLOBALVALUE: absolute
  * link-time constants (VMS globalvalues — the errno message codes such as
@@ -1560,7 +1573,7 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx)
          * re-checks gval_find() to suppress that. (vms-954) */
         { uint64_t gv; if (gval_find(nm, &gv)) return gv; }
         if (weak_has(nm)) return 0;   /* weak-undef resolves to 0 (ELF semantics) */
-        if (g_allow_undef) { g_deferred++; return 0; }
+        if (g_allow_undef) { dump_undef(nm); g_deferred++; return 0; }
         /* NAME THE SYMBOL. Without it this diagnostic says only that *a*
          * symbol did not bind, which turns "one libc call was added to an
          * OVMX library whose producer image does not export it" -- the
@@ -2684,7 +2697,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
          * (--allow-undefined) or, strict, a hard error. (vms-61f.1) */
         *(uint64_t *)(img + got[i].va) = 0;   /* cell = 0, NOT biased/recorded */
         if (weak_has(got[i].name))      { /* correct 0; nothing to defer */ }
-        else if (g_allow_undef)         { g_deferred++; }
+        else if (g_allow_undef)         { dump_undef(got[i].name); g_deferred++; }
         else die("GOT symbol undefined (cross-image DATA import is a later increment)");
     }
 

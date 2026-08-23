@@ -127,6 +127,7 @@ jobs:
               - 'src/vmsfs/**'
               - 'src/vmsrms/**'
               - 'src/vmsdcl/**'
+              - 'src/ovmx_job_control/**'
               - 'src/vmsqueue/**'
               - 'third-party/tcc/**'
               - 'tools/**'

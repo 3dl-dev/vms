@@ -38,7 +38,8 @@ docker run --rm \
 
         # (a) musl libc.a (-g0), plus the toolchain libgcc.a
         OVERLAY=/wt/tools/cross-alpha-vms/musl-arch bash /wt/tools/cross-alpha-vms/musl-arch/build-musl.sh
-        cp /tmp/musl-build/musl-1.2.5/lib/libc.a $W/libc.a
+        MUSL_SRC=/tmp/musl-build/musl-1.2.5
+        cp $MUSL_SRC/lib/libc.a               $W/libc.a
         cp /opt/cross-alpha-vms/lib/libgcc.a     $W/libgcc.a
 
         # (b) LINK.EXE + OVMXDUMP (ordinary host tools; single-TU each)
@@ -51,8 +52,14 @@ docker run --rm \
         [ -x $W/OVMXDUMP ] && $W/OVMXDUMP $W/LIBOTS_SHR.EXE 2>/dev/null | grep -iE "OTS\$" || true
 
         # (d) DECC$SHR whole-archive WITH the LIBOTS$ producer
+        # ALPHA_MUSL_SRC (vms-864): the same musl-1.2.5 src tree used to build
+        # $LIBC above, needed by the ALPHA branch to cross-compile
+        # ovmx_decc_crtl.c (real musl-alpha headers) so THIS DECC$SHR also
+        # carries the OVMX bootstrap surface (decc$main/C$_EXIT1) -- one
+        # genuine alpha DECC$SHR everywhere, never conditional/skippable.
         export NM=alpha-dec-vms-nm AR_HOST=ar
         export OVMX_DECC_ARCH=alpha DECC_ALLOW_UNDEF=1 OVMX_LINK_DUMP_UNDEF=1
+        export ALPHA_CC=alpha-dec-vms-gcc ALPHA_MUSL_SRC=$MUSL_SRC
         export DECC_USE=$W/LIBOTS_SHR.EXE
         bash /wt/src/vmslink/mk_decc_shr.sh $W/LINK.EXE $W/DECC_SHR.EXE $W/libc.a $W/libgcc.a 2> $W/link.err || { cat $W/link.err; exit 1; }
         cat $W/link.err

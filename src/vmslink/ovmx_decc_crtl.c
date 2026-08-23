@@ -166,10 +166,29 @@ int _malloc32(int size)
     return 0;   /* honest failure: no <4 GB region (NOT a truncated 64-bit pointer) */
 }
 
+/* ALPHA (vms-864): unlike _malloc32 (no musl equivalent -- genuinely needed,
+ * see the wrapper note below), a plain `_malloc64` DEFINITION here is ALSO
+ * auto-decorated by the alpha-dec-vms cc1 to `decc$_malloc64` (the same
+ * crtlmap "_X64 -> X" rule) -- and musl-alpha's OWN malloc.c, compiled
+ * -mpointer-size=64, decorates its plain `malloc` definition to that EXACT
+ * same name (the "malloc 64 MALLOC" pointer-size rule). Whole-archiving both
+ * this object and libc.a into DECC$SHR then gives `decc$_malloc64` TWO
+ * definitions across two archive members -- confirmed empirically: LINK.EXE's
+ * whole-archive resolver does not flag it (a real link.c gap, not exercised
+ * here), and the requested --symbol-vector simply lists the name twice
+ * (harmless, but a genuine duplicate-definition hazard, not a clean state).
+ * musl-alpha's decc$_malloc64 is the correct, sufficient producer (this
+ * function is a bare `return malloc(size)` forward -- literally the same
+ * call musl's own malloc already IS), so on alpha this definition is
+ * unneeded as well as duplicating; __VMS__ selects it out. x86_64/aarch64
+ * (no musl decc$ auto-decoration) still need it, exported as the plain
+ * `_malloc64` universal (mk_decc_shr.sh generic tail) -- unchanged. */
+#ifndef __VMS__
 void *_malloc64(unsigned long size)
 {
     return malloc((size_t)size);
 }
+#endif /* !__VMS__ */
 
 /* -------------------------------------------------- decc$malloc / decc$_malloc64
  * (vms-981) The alpha-dec-vms GCC port maps the source `malloc` through the CRTL
@@ -196,6 +215,26 @@ void *_malloc64(unsigned long size)
  * MAP_32BIT path above), decc$_malloc64 -> _malloc64 (musl malloc). Grounded to
  * the GPL port source + the VSI OpenVMS C RTL Reference Manual (Rule 8). */
 
+/* ALPHA (vms-864): the alpha-dec-vms cc1 auto-decorates the CRTL surface at
+ * codegen (gcc/config/vms/vms.cc's crtlmap) -- transparently, at every
+ * definition AND call site, keyed off the plain SOURCE identifier. Confirmed
+ * by direct compile: a definition literally named `_malloc32` (above) is
+ * ALREADY emitted as `decc$malloc` (the crtlmap "_X32 -> X" rule), and
+ * `_malloc64` as `decc$_malloc64` ("_X64 -> X"). Defining ovmx_decc_malloc /
+ * ovmx_decc_malloc64 as SEPARATE functions asm-relabeled to those same
+ * decorated names, on THAT compiler, is a genuine duplicate definition of the
+ * same linker symbol within one translation unit (confirmed: GAS rejects the
+ * emitted .s with "symbol 'decc$malloc..en' is already defined") -- not a
+ * theoretical conflict, an actual assembler error. So on alpha these wrapper
+ * functions are unneeded AND unbuildable; __VMS__ (predefined only by the
+ * alpha-dec-vms port compiler, never by a host x86_64/aarch64 gcc/musl-gcc)
+ * selects them out. This does not omit functionality (Rule: adapt minimally,
+ * never #ifdef away something needed) -- decc$malloc/decc$_malloc64 are still
+ * produced, by the port's own auto-decoration of the SAME _malloc32/_malloc64
+ * definitions above, just without a redundant second copy. On x86_64/aarch64
+ * (no such auto-decoration exists) these wrappers remain the only source of
+ * decc$malloc/decc$_malloc64, unchanged. */
+#ifndef __VMS__
 void *ovmx_decc_malloc(size_t n)   __asm__("decc$malloc");
 void *ovmx_decc_malloc(size_t n)
 {
@@ -212,6 +251,7 @@ void *ovmx_decc_malloc64(size_t n)
 {
     return _malloc64((unsigned long)n);   /* full 64-bit-addressable heap (malloc) */
 }
+#endif /* !__VMS__ */
 
 /* ------------------------------------------------------------------ decc$tprintf
  * (vms-981) The port maps the source `printf` (vms-crtlmap.map: "printf  FLOAT64
@@ -226,8 +266,20 @@ void *ovmx_decc_malloc64(size_t n)
  * output to stdout; varargs via va_list; returns the char count musl's vprintf
  * returns (negative on output error), the C-standard printf return real OpenVMS
  * DECC$SHR also yields. Grounded to the GPL port source + the VSI OpenVMS C RTL
- * Reference Manual ("Floating-Point Support", the g/t/x model prefixes), Rule 8. */
-
+ * Reference Manual ("Floating-Point Support", the g/t/x model prefixes), Rule 8.
+ *
+ * ALPHA (vms-864): the SAME crtlmap "printf FLOAT64" rule that motivates this
+ * wrapper on x86_64/aarch64 fires INSIDE the alpha-dec-vms cc1 itself when it
+ * compiles musl-alpha's own printf.c -- musl's `printf` definition is already
+ * auto-decorated straight to `decc$tprintf` (confirmed in the plain libc.a +
+ * libgcc.a decc$ enumeration, mk_decc_shr.sh's ALPHA branch: sv#... decc$tprintf,
+ * no ovmx_decc_crtl.c involvement). Defining ovmx_decc_tprintf here TOO would be
+ * a second, cross-object definition of the same decc$tprintf universal (libc.a's
+ * printf.o vs. this file) once both are whole-archived into DECC$SHR -- guarded
+ * out under __VMS__ for the same reason as decc$malloc/decc$_malloc64 above: not
+ * omitted functionality, the port's own codegen already produces it from musl's
+ * real printf. */
+#ifndef __VMS__
 int ovmx_decc_tprintf(const char *fmt, ...) __asm__("decc$tprintf");
 int ovmx_decc_tprintf(const char *fmt, ...)
 {
@@ -237,6 +289,7 @@ int ovmx_decc_tprintf(const char *fmt, ...)
     va_end(ap);
     return r;                          /* chars written (or <0 on error)           */
 }
+#endif /* !__VMS__ */
 
 /* ------------------------------------------------------------------- decc$main
  * The DEC C RTL image-startup routine. The alpha-dec-vms crt0

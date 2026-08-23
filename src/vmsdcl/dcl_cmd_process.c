@@ -1044,8 +1044,15 @@ static uint32_t run_refuse_unhonourable(struct dcl_command *cmd)
      * set of qualifiers the user ASKED FOR, not the set they spelled out
      * in full: RUN/PRIO=4 is /PRIORITY (oracle-pinned, see that
      * function), and keying the membership test on exact names left it
-     * running the image with the priority thrown away. */
+     * running the image with the priority thrown away.
+     *
+     * /UIC (like /DETACHED) makes the command a DETACHED create, not a
+     * subprocess one (the oracle sentence excepts BOTH), so /UIC present
+     * means the OTHER process qualifiers ride the detached path too --
+     * RUN/UIC=[1,4]/PRIVILEGES=(...) is a detached create, not a refused
+     * subprocess (vms-d31d). */
     if (!run_has_qualifier(cmd, "DETACHED") &&
+        !run_has_qualifier(cmd, "UIC") &&
         run_process_qualifier_count(cmd) > 0) {
         run_creprc_failed(OVMX$_NOSUBPRC);
         return OVMX$_NOSUBPRC;

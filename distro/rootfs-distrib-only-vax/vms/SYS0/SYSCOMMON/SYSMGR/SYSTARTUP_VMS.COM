@@ -75,11 +75,40 @@ $! there is no OVMX shareable for INSTALL to accelerate. Blindly copying
 $! the Linux block would red the boot on the first INSTALL ADD.
 $! ----------------------------------------------------------------------
 $!
-$! JOB_CONTROL (vms-8d2) -- the console-session process -- is NOT started
-$! here. It is a registered STDRV component (SYS$STARTUP:VMS$VMS.DAT, END
-$! phase), created by STARTUP.COM's own RUN_COMPONENTS after this file and
-$! everything else STDRV runs has finished -- identical to the Linux path
-$! (vms-2a9). See SYS$STARTUP:VMS$VMS.DAT's header for why END, not here.
+$! JOB_CONTROL (vms-8d2) -- the console-session process -- IS started from
+$! this file on the DISTRIBUTION boot (vms-422, Wall 6b), by the direct
+$! @SYS$STARTUP:JOB_CONTROL_STARTUP.COM call near the end -- CONVERGED with
+$! the x86_64 distribution file (distro/rootfs-distrib-only/.../
+$! SYSTARTUP_VMS.COM line 96), which starts it the same way. The intent is
+$! that this file must NOT defer to the "one layer out" STDRV END-phase
+$! component: JOB_CONTROL_STARTUP.COM's RUN/DETACHED is a $CREPRC that is
+$! meant to stamp the child's UIC/username/privileges through the executive
+$! (sys$creprc -> vms_pcb_set_identity, src/libvms/syssvc/sys_process.c), so a
+$! JOB_CONTROL $CREPRC'd DIRECTLY from THIS procedure would inherit
+$! STARTUP.COM's genuine SYSTEM identity ([1,4], stamped by PROVISION.EXE at
+$! boot and reported as "%OVMX-I-EXEC, system identity SYSTEM [1,4]
+$! established by the executive"); LOGINOUT would then continue that identity
+$! (vms_kif_register_continue, ovmx_job_control.c) and read the World-denied
+$! SYSUAF.DAT.
+$!
+$! MEASURED STATUS ON netbsd-vax (vms-422, real SIMH, tests/lab-vax/
+$! run-boot.sh install): this convergence is NECESSARY but NOT YET SUFFICIENT.
+$! The direct call DOES fire and DOES create JOB_CONTROL ("%RUN-S-PROC_ID ...
+$! 0000006A" right after the menu returns), yet the interactive SYSTEM login
+$! STILL fails "User authorization failure" -- even though STARTUP.COM holds a
+$! genuine SYSTEM [1,4] (the %OVMX-I-EXEC line above). So the residual gap is
+$! NOT this .COM's control flow: it is the EXECUTIVE identity model on this
+$! substrate not propagating STARTUP.COM's SYSTEM [1,4] through the
+$! $CREPRC(JOB_CONTROL) -> register_continue(LOGINOUT) -> ACP SYSUAF-read
+$! chain. That half is tracked separately (executive identity model); do NOT
+$! "fix" it by weakening the SYSUAF World-deny or faking a login success.
+$!
+$! SYS$STARTUP:VMS$VMS.DAT still carries the END-phase JOB_CONTROL
+$! registration (the arch-independent rootfs tree is staged verbatim, exactly
+$! as the x86_64 install-media image keeps it); that END attempt now finds
+$! JOB_CONTROL already running and is refused %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM,
+$! swallowed by SET NOON -- benign, and identical to the x86_64 distribution
+$! boot.
 $!
 $! THE SITE-STARTUP ANNOUNCEMENT is printed by STARTUP.COM's RUN_SITE_STARTUP
 $! subroutine (its single owner, vms-3ab8), immediately before it invokes
@@ -93,18 +122,32 @@ $! (distro/rootfs-distrib-only/.../SYSTARTUP_VMS.COM) and matches the oracle
 $! (docs/oracle/installation-media-vax73-alpha84.md sec3a), where the media's
 $! menu appears right after boot, no login required.
 $!
-$! WHERE THE FALL-THROUGH-TO-LOGIN HAPPENS DIFFERS BY SUBSTRATE, THE EFFECT
-$! DOES NOT. On x86_64 SYSTARTUP itself starts JOB_CONTROL
-$! (@SYS$STARTUP:JOB_CONTROL_STARTUP.COM) and the menu block sits just before
-$! that call, so when the operator finishes (the menu procedure EXITs)
-$! execution falls straight through to the login. On netbsd-vax JOB_CONTROL
-$! is NOT started from this file -- it is a registered STDRV END-phase
-$! component that STARTUP.COM's RUN_COMPONENTS creates AFTER this file returns
-$! (see this file's own JOB_CONTROL note above). So here the menu returns,
-$! this file EXITs, and STARTUP.COM then starts JOB_CONTROL one layer out --
-$! the distribution disk still offers a normal console login after the menu.
+$! THE MENU BLOCK SITS JUST BEFORE THE JOB_CONTROL CALL, EXACTLY AS ON x86_64
+$! (vms-422 convergence). When the operator finishes (the menu procedure
+$! EXITs, e.g. option 8 "Execute DCL commands") execution falls straight
+$! through to @SYS$STARTUP:JOB_CONTROL_STARTUP.COM below, which $CREPRCs
+$! JOB_CONTROL from THIS procedure so it inherits STARTUP.COM's SYSTEM
+$! identity -- the login the "one layer out" STDRV END-phase path could not
+$! reach on netbsd-vax (see this file's JOB_CONTROL note above). The
+$! distribution disk offers a normal console login after the menu.
 $! ---------------------------------------------------------------------
 $!
 $ @SYS$MANAGER:OVMX$INSTALL.COM
+$! ---------------------------------------------------------------------
+$!
+$! START JOB_CONTROL (vms-8d2, vms-422) -- the console-session process --
+$! $CREPRC'd DIRECTLY from this procedure (the intent: inherit STARTUP.COM's
+$! genuine SYSTEM identity [1,4]/SYSPRV so LOGINOUT can continue it to read the
+$! World-denied SYSUAF.DAT). CONVERGED with the x86_64 distribution file's
+$! line 96 (distro/rootfs-distrib-only/.../SYSTARTUP_VMS.COM). See the
+$! JOB_CONTROL note above for the MEASURED netbsd-vax status: the call fires
+$! and creates JOB_CONTROL, but the SYSUAF read at interactive login is still
+$! denied pending the executive identity-model fix -- this .COM is the correct
+$! rung, not the whole fix. No INSTALL ADD precedes it here (Decision A:
+$! netbsd-vax has no OVMX shareables and no INSTALL.EXE -- see the NO INSTALL
+$! ADD block above); JOB_CONTROL.EXE's own ELF32-vax dependencies resolve
+$! through ld.elf_so, not INSTALL.
+$!
+$ @SYS$STARTUP:JOB_CONTROL_STARTUP.COM
 $!
 $ EXIT

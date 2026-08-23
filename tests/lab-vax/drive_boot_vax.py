@@ -567,6 +567,7 @@ def do_assemble_single(a, single_img, artifacts_dir, src_iso, new_a_sectors,
     rc, out = run(child,
                   "MP=`sysctl -n kern.module.path | cut -d: -f1`; "
                   "echo module_path=$MP; DEST=/mnt$MP/vms/vms.kmod; "
+                  "mkdir -p /cdrom; "   # stock NetBSD root has only /mnt
                   "ok=; for dev in /dev/racd0[a-z] /dev/racd1[a-z] "
                   "/dev/cd0[a-z] /dev/cd1[a-z]; do "
                   "  test -e $dev || continue; "

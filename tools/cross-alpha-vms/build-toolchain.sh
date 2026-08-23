@@ -23,9 +23,33 @@ JOBS=$(nproc)
 
 cd /src
 
+# ---- patch routing helper (vms-52c1) ----
+# Patches under tools/cross-alpha-vms/patches/ target EITHER the GCC tree OR the
+# binutils tree; route each by the paths its diff touches. A binutils patch must
+# be applied BEFORE binutils is configured/built (below); GCC patches are applied
+# in the GCC section further down. Keep the two loops in sync with this predicate.
+is_binutils_patch() {
+  grep -qE '^(---|\+\+\+) [ab]/(bfd|gas|ld|opcodes|binutils|libctf|gprof)/' "$1"
+}
+
 # ---- binutils: target assembler/linker/objdump for EVAX ----
 wget -q "https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VER}.tar.xz"
 tar xf "binutils-${BINUTILS_VER}.tar.xz"
+
+# ---- apply checked-in alpha-dec-vms port patches to binutils (vms-52c1) ----
+# e.g. 0004: emit weak/aliased procedure DEFINITIONS in the vms-alpha back end
+# (gas/bfd) so musl's weak_alias'd decc$* universals (decc$_malloc64, ...) reach
+# the object symbol table. Applied to the FETCHED binutils source (we patch,
+# never vendor).
+if [ -d /src/patches ]; then
+  for p in /src/patches/*.patch; do
+    [ -e "$p" ] || continue
+    is_binutils_patch "$p" || continue
+    echo "== applying binutils port patch: $(basename "$p") =="
+    patch -p1 -d "/src/binutils-${BINUTILS_VER}" < "$p"
+  done
+fi
+
 mkdir -p build-binutils && cd build-binutils
 "/src/binutils-${BINUTILS_VER}/configure" \
     --target="${TARGET}" --prefix="${PREFIX}" --disable-nls --disable-werror
@@ -45,7 +69,8 @@ tar xf "gcc-${GCC_VER}.tar.xz"
 if [ -d /src/patches ]; then
   for p in /src/patches/*.patch; do
     [ -e "$p" ] || continue
-    echo "== applying port patch: $(basename "$p") =="
+    is_binutils_patch "$p" && continue   # binutils patches applied above
+    echo "== applying gcc port patch: $(basename "$p") =="
     patch -p1 -d "/src/gcc-${GCC_VER}" < "$p"
   done
 fi

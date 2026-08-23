@@ -23,6 +23,9 @@ RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y --no
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /src
+# vms-f97: checked-in alpha-dec-vms port patches, applied to the fetched GCC
+# source by build-toolchain.sh (we patch, never vendor the whole tree).
+COPY patches/ /src/patches/
 COPY build-toolchain.sh /src/build-toolchain.sh
 RUN bash /src/build-toolchain.sh && rm -rf /src/binutils-* /src/gcc-* /src/build-*
 

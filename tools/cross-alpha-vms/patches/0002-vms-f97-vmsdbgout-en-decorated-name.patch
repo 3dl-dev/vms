@@ -1,0 +1,43 @@
+vms-f97 (2/2): alpha-dec-vms — VMS DST routine-begin entry address uses the
+resolved (transparent-alias-decorated) name, matching the emitted ..en label.
+
+Second site of the same codegen-consistency defect fixed by
+0001-vms-f97-alpha-en-label-decorated-name.patch. write_rtnbeg() in the VMS
+debug/traceback writer builds the routine-begin ENTRY ADDRESS by concatenating
+"..en" to the RAW routine name (rtnname), then emits it via write_debug_addr()
+(-> assemble_name()). For a recognized OpenVMS C-RTL *definition* the code entry
+label is decc$<name>..en (config/alpha/alpha.cc after patch 0001), but this
+record referenced <name>..en — a label that does not exist — so GAS rejected the
+object even after the .pdesc was fixed (e.g. `strlen..en` vs `decc$strlen..en`;
+"redefined symbol cannot be used on reloc"). This DST record is emitted for
+every VMS function, so it blocks the C-RTL definitions regardless of -g.
+
+Fix: resolve rtnname via assemble_name_resolve() (the routine assemble_name uses)
+BEFORE appending "..en", so the entry address matches the real label. The
+procedure-descriptor address just below already resolves correctly (it passes
+rtnname straight to assemble_name), and the human-readable routine NAME field
+correctly stays the source name. Consistency-only; the decoration behavior itself
+is unchanged.
+
+Clean-room (Rule 8): derived from public GCC source + observed cc1/GAS output.
+
+--- a/gcc/vmsdbgout.cc
++++ b/gcc/vmsdbgout.cc
+@@ -654,7 +654,16 @@
+ 
+   rtnname = funcnam_table[rtnnum];
+   rtnnamelen = strlen (rtnname);
+-  rtnentryname = concat (rtnname, "..en", NULL);
++  /* vms-f97 (OVMX): the routine-begin ENTRY ADDRESS must reference the same
++     resolved (transparent-alias-decorated) entry label the code emits in
++     alpha_start_function (config/alpha/alpha.cc) -- decc$<name>..en for a
++     recognized OpenVMS C-RTL name (config/vms/vms.cc).  Building it from the
++     raw name produced `strlen..en`, a label that does not exist, so GAS
++     rejected the object.  assemble_name_resolve () applies the alias exactly
++     as assemble_name () does for the procedure-descriptor address emitted
++     just below (which stays rtnname); the human-readable routine NAME field
++     further down also, correctly, stays the source name.  */
++  rtnentryname = concat (assemble_name_resolve (rtnname), "..en", NULL);
+ 
+   if (!strcmp (rtnname, "main"))
+     {

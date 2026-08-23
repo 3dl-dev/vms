@@ -1362,6 +1362,48 @@ long vms_ioctl_setterm(struct vms_proc *proc, unsigned long arg)
      */
     exec_lock(&vms_proc_hash_lock);
     strscpy(proc->terminal, devnam, sizeof(proc->terminal));
+
+    /*
+     * BINDING A TERMINAL MAKES THIS PROCESS AN INTERACTIVE JOB ROOT
+     * (vms-01f).
+     *
+     * SETTERM records "THIS JOB's terminal" (see the vms_kif_setterm call
+     * in src/ovmx_job_control/ovmx_job_control.c, and vms_ioctl.h) -- a
+     * process that owns a terminal is, by definition, the master process
+     * of an interactive job. On OpenVMS an interactive login created by the
+     * job controller is the top of its OWN job, not a member of the job
+     * controller's job (System Services Reference, $CREPRC / job trees).
+     *
+     * OVMX derives job_id from Linux task ancestry at registration
+     * (vms_proc_parent_job_id, src/kernel/vms_module.c): a task whose real
+     * parent already has a PCB inherits that parent's job. That rule is
+     * correct for a SPAWNed subprocess (its parent IS the interactive DCL),
+     * but WRONG for the console login: JOB_CONTROL is a real, registered,
+     * DETACHED process (test_job_control_console.sh proves SHOW SYSTEM
+     * lists it), so its fork()ed login child inherited JOB_CONTROL's job_id
+     * and became a "subprocess" of a terminal-LESS root -- which
+     * proc_fill_info() classifies OTHER, which SHOW USERS filters out. The
+     * whole interactive session, and every subprocess it later SPAWNs
+     * (they inherit ITS job), then vanished from SHOW USERS / SHOW USERS
+     * /FULL -- "Total number of users = 0" on a live console login
+     * (vms-01f). The mechanism was proven only by test_syssvc_spawn_users.c,
+     * which SIDESTEPS the defect by keeping its creator UNregistered so the
+     * session child becomes a job root for free -- exactly the condition the
+     * real boot does not meet.
+     *
+     * Promoting here, keyed on the OBSERVABLE fact that this process bound
+     * its own terminal, is faithful and forge-safe: job membership grants
+     * no identity or privilege (unlike UIC/username/privs, which stay
+     * derived, never asserted), it only scopes LNM$JOB (vms_lnm.c) and the
+     * SHOW USERS classification -- both of which are correct for a terminal
+     * owner to root. A detached process (JOB_CONTROL) never calls SETTERM
+     * and stays a terminal-less root; a subprocess (SPAWN) never calls it
+     * and stays in its creator's job. It also fixes a latent LNM$JOB bug:
+     * before this, every console login shared JOB_CONTROL's job table, so
+     * one session's SYS$LOGIN was visible to all; now each login job is its
+     * own LNM$JOB scope, as on VMS.
+     */
+    proc->job_id = proc->vms_pid;
     exec_unlock(&vms_proc_hash_lock);
 
     args.status = SS__NORMAL;

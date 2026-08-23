@@ -37,6 +37,19 @@ cd /src
 # ---- gcc cc1 (compiler proper) ----
 wget -q "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VER}/gcc-${GCC_VER}.tar.xz"
 tar xf "gcc-${GCC_VER}.tar.xz"
+
+# ---- apply checked-in alpha-dec-vms port patches (vms-f97) ----
+# Minimal codegen-consistency fixes to the FETCHED GCC source (we patch, never
+# vendor the whole tree). Each patch is a plain `patch -p1` unified diff under
+# tools/cross-alpha-vms/patches/, COPYed into /src/patches by the Dockerfile.
+if [ -d /src/patches ]; then
+  for p in /src/patches/*.patch; do
+    [ -e "$p" ] || continue
+    echo "== applying port patch: $(basename "$p") =="
+    patch -p1 -d "/src/gcc-${GCC_VER}" < "$p"
+  done
+fi
+
 mkdir -p build-gcc && cd build-gcc
 "/src/gcc-${GCC_VER}/configure" \
     --target="${TARGET}" --prefix="${PREFIX}" \

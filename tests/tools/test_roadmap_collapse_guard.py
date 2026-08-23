@@ -11,6 +11,7 @@ rd, no network — so they run in plain per-PR CI.
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -31,8 +32,17 @@ def _run(snapshot, tmp_path, *extra):
     # Seed a good published file so we can assert the guard does NOT clobber it.
     good = site / "data" / "roadmap.json"
     good.write_text('{"sentinel": "pre-existing good data"}\n')
+    # Redirect the in-repo roadmap doc write to a tmp copy — reconcile.py always
+    # splices+writes this doc (regardless of --site-dir), so without redirecting
+    # it a "healthy" run here would silently overwrite the real tracked doc with
+    # synthetic test content. Copy the real doc so splice_doc's GEN_BEGIN/GEN_END
+    # markers are present.
+    real_doc = os.path.join(REPO, "docs", "release-roadmap-to-1.0.md")
+    tmp_doc = tmp_path / "roadmap.md"
+    shutil.copy(real_doc, tmp_doc)
     cmd = [sys.executable, RECONCILE, "--rd-json", str(snap),
-           "--as-of", "2026-08-20", "--site-dir", str(site), *extra]
+           "--as-of", "2026-08-20", "--site-dir", str(site),
+           "--roadmap-doc", str(tmp_doc), *extra]
     return subprocess.run(cmd, capture_output=True, text=True), good
 
 

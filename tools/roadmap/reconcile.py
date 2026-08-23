@@ -863,6 +863,9 @@ def main() -> int:
                          "Prevents an empty/unsynced snapshot from publishing all-0%%.")
     ap.add_argument("--allow-empty", action="store_true",
                     help="override the collapse-guard (only for a genuinely empty board)")
+    ap.add_argument("--roadmap-doc", default=ROADMAP_DOC,
+                    help="roadmap markdown to splice+write (default: the tracked doc; "
+                         "tests redirect this)")
     args = ap.parse_args()
 
     as_of = args.as_of or _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
@@ -911,10 +914,10 @@ def main() -> int:
     changed: list[str] = []
 
     # 1. in-repo roadmap doc GENERATED block
-    with open(ROADMAP_DOC) as fh:
+    with open(args.roadmap_doc) as fh:
         doc = fh.read()
     block = render_doc_block(data, as_of)
-    write_if_changed(ROADMAP_DOC, splice_doc(doc, block), changed, args.check)
+    write_if_changed(args.roadmap_doc, splice_doc(doc, block), changed, args.check)
 
     # 2. canonical machine export
     write_if_changed(BUILD_JSON, canonical_json(data, as_of), changed, args.check)

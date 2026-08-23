@@ -4073,6 +4073,21 @@ jobs:
         run: |
           sh src/vmslink/test/run_evax_gvalfold.sh
 
+      # vms-b5a0: LINK.EXE's EVAX/Alpha path emits a .vms$rel LOAD-BIAS FIXUP
+      # table, so a GCC-port program's global initialized pointers survive a
+      # non-zero IMGACT load bias. A REFQUAD/CODEADDR/LINKAGE slot LINK fills with
+      # an UNBIASED image-relative address is recorded; IMGACT's generic
+      # apply_vms_rel adds the bias at activation. VERIFY-FIRST, emit AND consume:
+      # PART A links gdata.obj (a global pointer `g_ptr = greeting`), asserts the
+      # g_ptr slot is in .vms$rel, then replicates IMGACT's exact `*(base+off)+=
+      # base` walk at a non-zero bias B and asserts g_ptr resolves to B+greeting.
+      # PART B a folded GLOBALVALUE (absolute) gets NO .vms$rel entry; PART C
+      # cross-image .vms$imp import slots are excluded (IMGACT fills those). Pure
+      # byte manipulation, arch-independent; fixtures checked in.
+      - name: Prove LINK.EXE emits an EVAX .vms$rel load-bias fixup table (vms-b5a0)
+        run: |
+          sh src/vmslink/test/run_evax_vmsrel.sh
+
       # vms-2e4: the LAST x86_64 relocation class — gnu2-dialect TLSDESC
       # (R_X86_64_GOTPC32_TLSDESC + R_X86_64_TLSDESC_CALL, plus the
       # local-dynamic R_X86_64_DTPOFF32 / _TLS_MODULE_BASE_ half). Proof is

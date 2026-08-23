@@ -66,6 +66,19 @@ clean-room (Rule 8: derived from public GCC source + observed cc1 output only).
   The fix does **not** change the decoration itself — only that the entry label
   matches `.ent`/`.pdesc`. It is the operator-ruled path (A) to the Alpha
   DECC$SHR: musl-as-DECC$SHR then defines the `decc$`-prefixed CRTL names.
+- **`0002-vms-f97-vmsdbgout-en-decorated-name.patch`** (vms-f97, 2/2) — the
+  *same* defect at a second site: the VMS DST routine-begin record
+  (`gcc/vmsdbgout.cc:write_rtnbeg`) built its entry **address** by appending
+  `..en` to the raw name, so it referenced `strlen..en` while the code label is
+  `decc$strlen..en`. This record is emitted for every VMS function (regardless
+  of `-g`), so without it GAS still rejected the CRTL definition
+  (`redefined symbol cannot be used on reloc`) even after 0001. Same
+  `assemble_name_resolve()` consistency fix.
+
+  (The `.linkage` path — `alpha_use_linkage`/`alpha_write_one_linkage` — is
+  already correct: it follows the transparent alias before keying the linkage
+  map, so its `%s..en` emits the decorated name. Only the two `concat(…"..en")`
+  sites above needed the fix.)
 
 ## Why real objects, not reasoning
 

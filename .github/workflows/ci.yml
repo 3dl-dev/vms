@@ -4303,6 +4303,16 @@ jobs:
         run: |
           sh src/vmslink/test/run_test_x86_64.sh
 
+      # vms-d8d: a STRONG-vs-STRONG duplicate definition of the same universal/
+      # global symbol across two whole-archived objects is now a hard
+      # %LINK-F-MULDEF error instead of silent first-wins. Proves the positive
+      # (MULDEF fires, names the symbol + both defining objects) and the
+      # regression (the pre-existing weak-yields-to-strong override is
+      # unchanged, in either link order).
+      - name: Prove LINK.EXE rejects a STRONG-vs-STRONG duplicate definition (vms-d8d)
+        run: |
+          sh src/vmslink/test/run_muldef_x86_64.sh
+
       # vms-cbe: the EVAX (Alpha/VMS) object reader front end — parse a REAL
       # native VMS object (checked-in fixture from binutils alpha-dec-vms-as)
       # into psects + symbols. Pure byte parsing, arch-independent, no toolchain

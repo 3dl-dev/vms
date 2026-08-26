@@ -1,0 +1,63 @@
+vms-7b96: defer the DST slurp at object-scan time (vms-alpha BFD read)
+
+The alpha-dec-vms cross toolchain emits a VMS Debug Symbol Table (DST) as an
+EDBG/ETBT record for -gvms objects (musl's libc.a is built -gvms).  On read,
+alpha_vms_object_p slurps every record at bfd_check_format time; for EDBG/ETBT
+that replays the DST -- an ETIR-form store stream -- into a freshly made,
+size-0 $DST$ section.  Two things in the reader's store machinery then reject
+the whole object as bfd_error_wrong_format -> "file format not recognized":
+
+  1. image_write bounds-checks every store against the current section size and
+     cannot grow it, so the first STO_IMM overruns the size-0 $DST$; and
+  2. even sized, the traceback DST's section-relative STO_LW store takes the
+     relocation branch into alpha_vms_add_lw_reloc, a binutils-2.43 stub that
+     unconditionally returns false -- and the check-format replay runs with
+     info == NULL (there is no link), so there is no reloc context anyway.
+
+The net effect is that nm/objdump/addr2line cannot read ANY -gvms object
+(every member of the musl alpha-dec-vms libc.a).
+
+The object-scan pass is not meant to perform image writes at all: it runs
+before sections are sized, which is exactly why the neighbouring ETIR case is
+already a no-op (`ok = true; /* _bfd_vms_slurp_etir (abfd); */`).  This makes
+EDBG/ETBT consistent with it and defers the DST the same way.  The symbols
+nm/objdump -t report come from the EGSD record read earlier in the same scan,
+so -gvms objects now load and are symbol-inspectable.  This cannot regress a
+previously-readable object: it only removes a failing operation.  DST line-info
+decoding (replaying the store stream with a link context) is a separate
+enhancement with no current consumer -- the port's real symbol proof is
+LINK.EXE consuming these members to emit DECC$SHR.
+
+Upstream binutils 2.43 behaviour (the OVMX 0001-0004 patches touch only the
+emit side); it never bites in normal VMS use because GNU nm is not run on DST
+objects there.  Clean-room (Rule 8): derived from the public binutils source +
+the record framing observed empirically; no VSI/HPE material.
+
+--- a/bfd/vms-alpha.c	2026-08-26 21:06:04.282802966 +0000
++++ b/bfd/vms-alpha.c	2026-08-26 21:06:10.893714727 +0000
+@@ -2723,10 +2723,22 @@
+ 	  ok = true; /* _bfd_vms_slurp_etir (abfd); */
+ 	  break;
+ 	case EOBJ__C_EDBG:
+-	  ok = _bfd_vms_slurp_edbg (abfd);
+-	  break;
+ 	case EOBJ__C_ETBT:
+-	  ok = _bfd_vms_slurp_etbt (abfd);
++	  /* vms-7b96: defer DST replay, exactly as ETIR above is deferred.  The
++	     object-scan pass runs before any section is sized; slurping the DST
++	     here (an ETIR-form store stream carried by EDBG/ETBT) replays it into
++	     a size-0 $DST$ section, where the store machinery -- the image_write
++	     bounds check, then the STO_LW/add_lw_reloc reloc path (a stub that
++	     returns false when info == NULL, as it is at check-format time) --
++	     makes _bfd_vms_slurp_etir fail and the whole object is rejected as
++	     bfd_error_wrong_format ("file format not recognized").  That left
++	     nm/objdump unable to read any -gvms object (every member of the musl
++	     alpha-dec-vms libc.a).  The symbols nm/objdump -t report come from the
++	     EGSD record read earlier, so deferring the DST lets these objects load
++	     and be symbol-inspected.  Decoding the DST (line info) needs the replay
++	     run with a link context and is a separate enhancement with no current
++	     consumer.  */
++	  ok = true;
+ 	  break;
+ 	default:
+ 	  ok = false;

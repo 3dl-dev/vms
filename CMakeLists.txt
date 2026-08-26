@@ -227,6 +227,12 @@ add_subdirectory(src/vmsdcl)
 # sockets), so it builds unconditionally like known_images.
 add_subdirectory(src/vmsscs)
 
+# boundary_audit - executive-boundary AUDIT tracer (vms-c08, Phase A under
+# vms-040). Hosted library (seccomp user-notif + supervisor thread); no
+# dependency on the OVMX library chain, so it builds unconditionally.
+# docs/design-executive-boundary-audit-tracer.md.
+add_subdirectory(src/boundary_audit)
+
 # NetBSD/vax facility guest test tools (vmseflag/vmsaccess/vmsproctab/vmsmbx
 # + their width-safety negctl teeth) -- vms-74b, epic vms-509 "unified
 # cross-platform build" Rung D, docs/design-unified-cross-build.md §5/§8.
@@ -251,6 +257,7 @@ endif()
 if(BUILD_TESTS)
     add_subdirectory(tests/libvms)
     add_subdirectory(tests/vmsprocess)
+    add_subdirectory(tests/boundary_audit)
     add_subdirectory(tests/vmslnm)
     add_subdirectory(tests/vmsfs)
     add_subdirectory(tests/ods2)

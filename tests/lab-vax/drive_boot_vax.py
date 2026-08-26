@@ -890,15 +890,55 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
                 # -- expect_wake() feeds a CR once a second the whole time, the same
                 # wake_login()/`send ''` every tests/qemu/*.sh boot proof already
                 # does for the Linux runtime (vms-2213).
+                # vms-494: the installed single-disk path timed out here at 300s
+                # (STARTUP.COM ran but Username: never appeared). VAX SIMH boots
+                # are slow, so give a generous window (env-overridable) FIRST --
+                # if Username: appears with more time it is a slow-boot timeout,
+                # not a hard gap. Still bounded by run_session's SESSION_TIMEOUT.
+                _login_deadline = int(env("PROVISION_LOGIN_DEADLINE", "1200"))
                 idx = expect_wake(child, [MS_PROVISION_LOGIN, MS_PROVISION_LNMFAIL,
                                           MS_PROVISION_IVLOGNAM, MS_PROVISION_HALT,
-                                          MS_PROVISION_NOIMG], total_timeout=300)
+                                          MS_PROVISION_NOIMG],
+                                  total_timeout=_login_deadline)
                 if idx == 0:
                     seen["login"] = True
                     seen["provision_outcome"] = "LOGIN(Username:) -- DCL capstone (vms-d59)"
                     log("CAPSTONE: reached Username: -- PROVISION created the system "
                         "logicals and STARTUP ran to LOGINOUT (vms-72da clears "
                         "LNMFAIL; DCL login capstone vms-d59)")
+                    # vms-865 PERSISTENCE PROBE: log in SYSTEM/MANAGER on the
+                    # INSTALLED-system disk (the Purdy fix, b1248bb9, makes this
+                    # authenticate) and run TWO commands. Does the interactive
+                    # DCL session survive past the first command ($ reappears =
+                    # usable login, p2) or log out (Username: reappears = p1,
+                    # usable-login blocker)? Non-asserting: records seen[] only.
+                    try:
+                        child.send("SYSTEM\r")
+                        child.expect("Password:", timeout=30)
+                        child.send("MANAGER\r")
+                        child.expect(r"\r?\n\$ ", timeout=120)
+                        log("PERSIST: SYSTEM/MANAGER authenticated, reached $ "
+                            "(Purdy fix confirmed on the installed system)")
+                        seen["login_dollar"] = True
+                        child.send("SHOW TIME\r")
+                        c1 = child.expect([r"\r?\n\$ ", r"Username:"], timeout=60)
+                        child.send("SHOW TIME\r")
+                        c2 = child.expect([r"\r?\n\$ ", r"Username:"], timeout=60)
+                        if c1 == 0 and c2 == 0:
+                            seen["login_persist"] = True
+                            log("PERSIST-PASS: DCL session survived TWO post-login "
+                                "commands -> installed-system login is USABLE "
+                                "(vms-865 scoped to install-media path = p2)")
+                        else:
+                            seen["login_persist"] = False
+                            log("PERSIST-FAIL: session logged out after a command "
+                                "(c1=%d c2=%d) -> installed login also non-persistent "
+                                "(vms-865 = p1, usable-login blocker)" % (c1, c2))
+                    except (pexpect.TIMEOUT, pexpect.EOF, Exception) as pe:
+                        seen["login_persist"] = False
+                        log("PERSIST-PROBE inconclusive/fail: %s (login reached "
+                            "Username: but the SYSTEM/MANAGER->$->commands probe "
+                            "did not complete)" % type(pe).__name__)
                 elif idx in (1, 2):
                     seen["lnmfail"] = True
                     seen["provision_outcome"] = "LNMFAIL/IVLOGNAM loop (vms-72da REGRESSION)"
@@ -1164,6 +1204,22 @@ def main():
                     "(vms-2213). This is a NEW boundary past vms-84fe's fix; "
                     "outcome: %s" % seen.get("provision_outcome", "unknown"))
                 return PROOF_FAILED
+            # vms-494: on the INSTALLED single-disk system, reaching Username: is
+            # NOT sufficient -- an interactive user must be able to AUTHENTICATE
+            # and reach DCL. The SYSUAF-engine anchor regression (loginout_rms_bind.c
+            # dropped from the VAX LOGINOUT cross-link) let login reach Username:
+            # yet fail every SYSTEM/MANAGER attempt with "User authorization
+            # failure" (ovmx_sysuaf_read_user resolved NULL, sysuaf_lookup bailed
+            # before the ACP). So the installed path REQUIRES the persist probe's
+            # SYSTEM/MANAGER -> $ to succeed; reaching $ at all is the anchor-fix
+            # gate. (login_persist ACROSS commands stays a p2 nuance, vms-865.)
+            if sb_single and not seen.get("login_dollar"):
+                log("FAIL: the installed single-disk system reached Username: but "
+                    "SYSTEM/MANAGER could not authenticate to a DCL $ prompt -- the "
+                    "SYSUAF-engine anchor (loginout_rms_bind.c) is missing from "
+                    "LOGINOUT.EXE, so sysuaf_lookup bails before the ACP read "
+                    "(vms-494). outcome: %s" % seen.get("provision_outcome", "unknown"))
+                return PROOF_FAILED
             log("======================================================================")
             if sb_single:
                 log("  SYSBOOT-SINGLE PASSED: ovmx_init booted as PID 1 on NetBSD/vax")
@@ -1172,10 +1228,11 @@ def main():
                 log("  'e' of the SAME disk (DKA0: -> ra0e, NO rq1), passed the installed-")
                 log("  system gate, PROVISION.EXE DEMAND-PAGED + RAN (SYSTEM identity),")
                 log("  stamped UIC file ownership with ZERO %%OVMX-W-OWNER warnings,")
-                log("  STARTUP.COM was seen ACTIVELY EXECUTING, and LOGINOUT reached the")
-                log("  console prompt.")
-                log("  *** vms-7b15: a SINGLE disk both VMB-boots AND carries DKA0:, to a")
-                log("  *** real interactive Username: prompt. ***")
+                log("  STARTUP.COM was seen ACTIVELY EXECUTING, LOGINOUT reached the")
+                log("  console prompt, AND SYSTEM/MANAGER AUTHENTICATED to a DCL $ prompt")
+                log("  (vms-494: the SYSUAF engine is wired into LOGINOUT).")
+                log("  *** vms-7b15/vms-494: a SINGLE disk both VMB-boots AND carries DKA0:,")
+                log("  *** to a real interactive Username: prompt AND a usable DCL $. ***")
             else:
                 log("  SYSBOOT PASSED: ovmx_init booted as PID 1 on NetBSD/vax, mounted the")
                 log("  MASTERED OVMX ODS-2 system volume READ-WRITE, passed the installed-")

@@ -109,6 +109,16 @@ echo "=== proof 1: cross-compile vms_login.c + loginout_display.c + mail_notify.
 "$CC" $CFLAGS_COMMON -c "$TOOLS/loginout_display.c"   -o "$OUT/loginout_display.o"
 # shellcheck disable=SC2086
 "$CC" $CFLAGS_COMMON -c "$TOOLS/mail_notify.c"         -o "$OUT/mail_notify.o"
+# SYSUAF-engine anchor (vms-341 / vms-494): sysuaf_lookup() reaches the binary
+# $UAFDEF engine (ovmx_sysuaf_read_user) and the RMS $OPEN/$GET-over-ACP seam
+# ONLY through #pragma weak cells, and a weak reference does NOT pull an archive
+# member -- so without this strong-anchor TU sysuaf_live.o is dropped from
+# LOGINOUT.EXE, sysuaf_lookup returns -1 BEFORE any SYSUAF read, and every login
+# prints "User authorization failure" (observed on the installed VAX single-disk
+# path, vms-494). This is the SAME anchor tools/CMakeLists.txt's vms_login target
+# and x86_64's LINK.EXE (mk_loginout.sh) compile; the VAX cross-link must too.
+# shellcheck disable=SC2086
+"$CC" $CFLAGS_COMMON -c "$SRC/src/vmslink/loginout_rms_bind.c" -o "$OUT/loginout_rms_bind.o"
 echo "--- object arch check (must be VAX / ELF32 LSB) ---"
 "$TARGET-objdump" -f "$OUT/vms_login.o" | grep -Ei 'file format|architecture'
 echo
@@ -119,6 +129,7 @@ echo "=== proof 2: link a real vax--netbsdelf LOGINOUT.EXE ==="
 # OVMX image on this substrate takes.
 "$CC" --sysroot="$SYSROOT" \
     "$OUT/vms_login.o" "$OUT/loginout_display.o" "$OUT/mail_notify.o" \
+    "$OUT/loginout_rms_bind.o" \
     -Wl,--start-group \
         "$LIBVMSQUEUE_A" "$LIBVMSRMS_A" "$LIBVMS_A" "$LIBVMSFS_A" \
         "$LIBVMSLNM_A" "$LIBVMSPROCESS_A" "$LIBVMSSYS_A" \

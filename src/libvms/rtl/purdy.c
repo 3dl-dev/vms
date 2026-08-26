@@ -40,6 +40,22 @@
 static inline uint32_t lo32(uint64_t x) { return (uint32_t)x; }
 static inline uint32_t hi32(uint64_t x) { return (uint32_t)(x >> 32); }
 
+/*
+ * gcc-vax 13.3.0 miscompiles this 64-bit (DImode) modular-arithmetic core at
+ * -O2: a value carried across the pqmul() calls in pqexp()'s squaring loop has
+ * its low 32 bits dropped (register-coalescing/argument-passing codegen bug),
+ * so pqexp() -- and thus the whole Purdy hash -- diverges from every other
+ * width. Measured: pqmul(a,a) direct is correct, but sq=pqmul(sq,sq) in a loop
+ * is not (rd vms-b86, minimal repro there). Building this arithmetic core at
+ * -O0 puts the loop-carried quadwords in memory (reloaded per use), which the
+ * compiler gets right; Purdy runs a handful of times per login, so the cost is
+ * irrelevant. Cross-width golden-vector test (tests/.../purdy VAX+host) guards
+ * against both this workaround being removed and any width-value regression.
+ * LOAD-BEARING -- do not remove without re-proving VAX login on real vectors.
+ */
+#pragma GCC push_options
+#pragma GCC optimize ("O0")
+
 /* (U + Y) cmod P: add, and if the sum overflowed 2^64 fold the deficit A back
  * in (twice if the fold itself overflows -- both operands may exceed P). */
 static uint64_t pqadd(uint64_t u, uint64_t y)
@@ -116,6 +132,9 @@ static uint64_t purdy_poly(uint64_t u)
         r = (uint64_t)(lo32(r) + (uint32_t)PURDY_A);   /* r - P */
     return r;
 }
+
+#pragma GCC pop_options
+/* end gcc-vax -O2 DImode miscompile workaround (rd vms-b86) */
 
 /* --- byte-level pre-hash (operates on the 8-byte little-endian seed) ------- */
 

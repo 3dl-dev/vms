@@ -158,6 +158,21 @@ echo "=== build the device-allocation probe (static elf32-vax, rd vms-618) ==="
 echo "  OK: vmsdevalloc (static elf32-vax)"
 echo
 
+echo "=== build the Purdy golden-vector gate (static elf32-vax, rd vms-b86) ==="
+# vmspurdy runs the 7 real OpenVMS oracle vectors (the same table test_purdy.c
+# asserts on the host, LP64) on VAX (ILP32) so the cross-width golden test is
+# proven on BOTH widths -- the regression gate for the gcc-vax -O2 DImode
+# miscompile that broke Purdy on VAX (rd vms-b86). Pure userland: no /dev/vms,
+# no transport seam. -O2 overall; purdy.c's own #pragma forces the arithmetic
+# core to -O0, so this exercises EXACTLY the shipped configuration.
+"$CC" -O2 -Wall -Wextra -static \
+    -I"$SRC/src/libvms/include" \
+    -o "$OUT/vmspurdy" \
+    "$SRC/tests/lab-vax/guest/vmspurdy.c" "$SRC/src/libvms/rtl/purdy.c"
+"$OBJDUMP" -f "$OUT/vmspurdy" | grep -qiF 'file format elf32-vax' || { echo "FAIL: vmspurdy not elf32-vax"; exit 1; }
+echo "  OK: vmspurdy (static elf32-vax)"
+echo
+
 echo "=== ARTIFACTS ==="
-ls -l "$OUT/vms.kmod" "$OUT/vmsprobe" "$OUT/vmsdevalloc"
+ls -l "$OUT/vms.kmod" "$OUT/vmsprobe" "$OUT/vmsdevalloc" "$OUT/vmspurdy"
 echo "=== build-devvms-vax.sh: DONE (both elf32-vax artifacts ready for SIMH) ==="

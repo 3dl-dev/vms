@@ -258,6 +258,42 @@ for m in strlen malloc memcpy vsnprintf; do
 	fi
 done
 
+# --------------------------------------------------------------------------
+# PER-SYMBOL READER PROOF (vms-7b96 FIX). Previously blocked: these members are
+# built with DST on (primary path), and GNU binutils' vms-alpha reader choked
+# on the .vmsdebug/DST -> nm/objdump "file format not recognized". The
+# 0005-vms-7b96-defer-dst-at-scan.patch (in tools/cross-alpha-vms/patches,
+# baked into this very toolchain image) defers the DST slurp at object-scan
+# time, so the GNU reader now loads these DST-carrying members and enumerates
+# their EGSD symbols. Assert it on a real global-bearing member: this is the
+# per-symbol reader verification that used to be skipped (Rule 7), and it
+# guards the DST-reader fix against regression. (Statics are not in the EGSD by
+# design, so pick a member that defines a global; the assertion is nm exit 0 +
+# >=1 symbol, NOT a specific name.)
+# --------------------------------------------------------------------------
+NM="${TARGET}-nm"
+LIBCA="$(pwd)/lib/libc.a"
+MEMBER=$(grep -m1 -E '(^|/)(strlen|memcpy|strcmp|memset|strchr)\.' /tmp/libc.members \
+         || head -1 /tmp/libc.members)
+echo "== per-symbol reader proof (vms-7b96): ${NM} reads DST-carrying member '${MEMBER}' =="
+rm -rf /tmp/nmck && mkdir -p /tmp/nmck
+( cd /tmp/nmck && ar x "${LIBCA}" "${MEMBER}" ) 2>/dev/null || true
+if [ ! -s "/tmp/nmck/${MEMBER}" ]; then
+	echo "VERIFY FAIL: could not extract member '${MEMBER}' from libc.a" >&2
+	exit 6
+fi
+if ! "${NM}" "/tmp/nmck/${MEMBER}" >/tmp/nm.out 2>&1; then
+	echo "VERIFY FAIL (vms-7b96 regressed): ${NM} cannot read DST-carrying member '${MEMBER}':" >&2
+	cat /tmp/nm.out >&2
+	exit 6
+fi
+NSYMS=$(grep -cE '[^[:space:]]' /tmp/nm.out || true)
+[ "${NSYMS}" -ge 1 ] || {
+	echo "VERIFY FAIL: ${NM} read '${MEMBER}' but enumerated 0 symbols" >&2
+	exit 6
+}
+echo "  OK      ${NM} read DST member '${MEMBER}' (DST on): ${NSYMS} symbol(s) enumerated"
+
 if [ "$PARTIAL" = "1" ]; then
 	echo "=== vms-960 RUNG 1 VERIFY OK on a PARTIAL alpha-dec-vms libc.a (${NMEMB} members) ==="
 	echo "=== (failing members documented above; symbol-level proof is LINK.EXE) ==="

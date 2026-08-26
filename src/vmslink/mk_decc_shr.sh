@@ -82,11 +82,34 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 NM=${NM:-nm}
 OVMX_DECC_ARCH=${OVMX_DECC_ARCH:-auto}
 if [ "$OVMX_DECC_ARCH" = auto ]; then
-    if "$NM" --defined-only "$LIBC" 2>/dev/null | grep -q 'decc\$'; then
+    # Container-format-aware detection (vms-2a0). Detecting the alpha C-RTL
+    # surface by `nm`-ing $LIBC as an archive misdetects 'generic' on a genuine
+    # alpha libc.a: the alpha-dec-vms cross nm's vms-alpha BFD cannot read a
+    # System V `ar` container at all ("file format not recognized") — a gap
+    # DISTINCT from the DST-in-a-bare-object gap that vms-7b96/#781 fixed. So
+    # detect the same way the alpha branch below (ENUMERATE decc$ defs)
+    # succeeds: host `ar` extracts the format-agnostic container, then the cross
+    # nm reads the bare EVAX members (DST-tolerant since #781) — a decc$ hit
+    # means the alpha surface. This makes auto-detect correct without needing
+    # the OVMX_DECC_ARCH=alpha override.
+    _detdir=$(mktemp -d)
+    ( cd "$_detdir" && "${AR_HOST:-ar}" x "$LIBC" 2>/dev/null || true )
+    if "$NM" --defined-only "$_detdir"/*.o 2>/dev/null | grep -q 'decc\$'; then
         OVMX_DECC_ARCH=alpha
     else
         OVMX_DECC_ARCH=generic
     fi
+    rm -rf "$_detdir"
+fi
+
+# vms-2a0 test hook: with OVMX_DECC_DETECT_ONLY=1, print the (auto-)detected
+# arch and stop — so a caller can assert the container-format-aware detection
+# resolves correctly. The auto path is otherwise never exercised in CI (every
+# gated caller forces OVMX_DECC_ARCH=alpha), which is exactly why the archive
+# misdetect (nm cannot read a System V .a) lurked unnoticed.
+if [ "${OVMX_DECC_DETECT_ONLY:-0}" = 1 ]; then
+    echo "$OVMX_DECC_ARCH"
+    exit 0
 fi
 
 if [ "$OVMX_DECC_ARCH" = alpha ]; then

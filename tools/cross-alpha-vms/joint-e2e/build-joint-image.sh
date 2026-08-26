@@ -83,6 +83,19 @@ LINK_EXE="$WORK/LINK.EXE" OUT="$WORK/libots" \
 #         fallback vms-2a0 tracks, and this script exists to prove the real
 #         path instead), whole-archiving musl-alpha libc.a + libgcc.a + the
 #         OVMX bootstrap surface (decc$main/decc$malloc/C$_EXIT1, vms-864) ----
+# vms-2a0 REGRESSION GUARD: with the arch UNSET (auto), the container-format-
+# aware detection must resolve to alpha on the genuine libc.a -- it must NOT
+# misdetect generic by nm-ing the System V .a container directly (which the
+# alpha-dec-vms cross nm rejects "file format not recognized"). This is the ONLY
+# place the auto path is exercised; every real caller forces the arch, which is
+# exactly why the misdetect lurked. Runs detect-only (exits before any build).
+echo "-- vms-2a0 guard: auto-detect must resolve to alpha on the genuine libc.a --"
+DET=$(OVMX_DECC_ARCH= OVMX_DECC_DETECT_ONLY=1 \
+        NM="$PREFIX/bin/alpha-dec-vms-nm" AR_HOST=ar \
+        sh /src/src/vmslink/mk_decc_shr.sh "$WORK/LINK.EXE" /tmp/decc-detect.out "$LIBC" "$LIBGCC" 2>/dev/null | tail -1)
+[ "$DET" = alpha ] || { echo "FAIL (vms-2a0): auto-detect resolved [$DET], expected alpha" >&2; exit 1; }
+echo "   OK: auto-detect resolves to alpha (container-format-aware, vms-2a0)"
+
 echo "-- building the GENUINE alpha DECC\$SHR (OVMX_DECC_ARCH=alpha, forced) --"
 OVMX_DECC_ARCH=alpha \
     NM="$PREFIX/bin/alpha-dec-vms-nm" \

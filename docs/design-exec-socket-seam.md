@@ -189,6 +189,19 @@ done here).
 
 ## Post-combine execution checklist (the `vms_bg.c` move — run in one pass)
 
+> **EXECUTED** on post-#803 main (rebased onto f7d59524). All of A–D done in one
+> pass; the move landed exactly as planned (the `exec_socket_t`-is-the-holder
+> refinement made `struct vms_bg_socket` disappear as predicted). **Proof (E) —
+> Linux leg GREEN host-light:** `make` in `src/kernel` compiled
+> `../kernel-core/vms_bg.o` + `vms_bg_pollfd.o`, MODPOST passed, and `vms.ko`
+> linked with **no undefined symbols** — i.e. the `exec_socket_*` Linux backend,
+> the core↔rind `vms_bg_ref_socket` boundary, and vms_module.c's dispatch all
+> resolve. **NetBSD cross-kmod leg (type-checks `vms_socket_netbsd.c`) and the
+> x86_64 QEMU bgsock negctls run in CI / on the rail** — no NetBSD src tree is
+> cached on the dev host and the rail egress is the vms-101 escalation, so the
+> NetBSD twin is *compiles-pending-cross-kmod*, not yet locally proven. Green-by-
+> SHA on the PR is the gate.
+
 Ordered, mechanical, on **post-combine main** after the #803 vmsfs-combine lands
 (rebase the branch first; the backends don't touch the deleted vmsfs trees). File
 references are to `src/kernel/vms_bg.c` @ 303d4680 unless noted.

@@ -2210,6 +2210,18 @@ echo "  floor-exempt: ${n_floor_exempt:-0} definition(s) issue no opcode and nam
 echo "          selector in their own body (necessary, not sufficient, for their"
 echo "          deletion to be uncaught by the floor):$(printf ' %s' $(cat "$WORK/floor_exempt" 2>/dev/null))"
 
+# Executive-boundary AUDIT findings (vms-617, Phase A: REPORTING ONLY). This
+# census proves the executive INTERFACE is called; the boundary-audit tracer
+# reports where an activated image went AROUND it with a raw syscall instead --
+# the complementary bypass signal. Surface it here as a non-failing reporting
+# input (never touches $status; Phase A does not ratchet on findings).
+_ba_report="$(dirname "$0")/boundary_audit_report.sh"
+if [ -x "$_ba_report" ]; then
+    "$_ba_report" || true
+elif [ -f "$_ba_report" ]; then
+    sh "$_ba_report" || true
+fi
+
 if [ "$status" -eq 0 ]; then
     echo "vms_kif caller census: PASS"
 else

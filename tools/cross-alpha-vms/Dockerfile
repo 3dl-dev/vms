@@ -26,6 +26,10 @@ RUN mkdir -p /src
 # vms-f97: checked-in alpha-dec-vms port patches, applied to the fetched GCC
 # source by build-toolchain.sh (we patch, never vendor the whole tree).
 COPY patches/ /src/patches/
+# vms-8a06: VENDORED binutils tarball (SHA256-pinned in build-toolchain.sh), COPY'd
+# to /src (the script's CWD) so the offline/hermetic path takes it instead of one
+# ftp.gnu.org hiccup reddening the gate. gcc is NOT vendored (90MB) — hardened fetch.
+COPY binutils-2.43.tar.xz /src/binutils-2.43.tar.xz
 COPY build-toolchain.sh /src/build-toolchain.sh
 RUN bash /src/build-toolchain.sh && rm -rf /src/binutils-* /src/gcc-* /src/build-*
 

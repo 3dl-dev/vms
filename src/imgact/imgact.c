@@ -2293,6 +2293,98 @@ static void imgact_vms_standard_activate(unsigned long exe_base,
 }
 #endif
 
+/* --------------------------------------------------------------------------
+ * In-memory fallback activation (vms-f60d). Reached ONLY when the executive
+ * Files-11 ACP cannot resolve the subject by path (imgsrc_open failure) -- e.g.
+ * a symbol-vector proof image staged on the initramfs, not the ODS-2 volume.
+ * The kernel already mapped the subject's PT_LOAD segments, so its SHF_ALLOC
+ * `.vms$*` CARRIERS are in memory; only the file-only section-header table is
+ * not (verified: e_shoff sits past the LOAD filesz), so a name lookup is
+ * impossible but a magic scan of the mapped bytes is not.
+ *
+ * PRODUCTION-SAFE: production images live on the volume, ALWAYS resolve over the
+ * ACP (reading the GENUINE ODS-2 bytes, INV-6), and NEVER reach this path -- so
+ * the boot path, including every shareable (.vms$imp) open, is byte-for-byte
+ * unchanged. Skipping the re-open UNCONDITIONALLY would instead read the mapped
+ * tmpfs boot-stage copy (INV-6 violation), which is why this is a FALLBACK on
+ * resolve-failure, not a blanket "already mapped => skip".
+ * -------------------------------------------------------------------------- */
+
+/* Scan the file-backed bytes of every mapped PT_LOAD for a 4-byte OVMX carrier
+ * magic (each .vms$* section begins with its magic, 8-byte aligned). Returns the
+ * run-time address of the section header + *avail (bytes to the end of that LOAD
+ * segment, an upper bound for the carrier's guarded parse); 0 if absent. Reads
+ * only mapped, file-backed ranges, so it never faults. */
+static const void *find_mapped_vms_section(unsigned long exe_base,
+					   const Elf64_Phdr *ephdr, int ephnum,
+					   uint32_t magic, unsigned long *avail)
+{
+	for (int i = 0; i < ephnum; i++) {
+		if (ephdr[i].p_type != PT_LOAD)
+			continue;
+		unsigned long a = exe_base + ephdr[i].p_vaddr;
+		unsigned long end = a + ephdr[i].p_filesz;
+		for (unsigned long p = (a + 7UL) & ~7UL; p + 4 <= end; p += 8)
+			if (*(const uint32_t *)p == magic) {
+				if (avail)
+					*avail = end - p;
+				return (const void *)p;
+			}
+	}
+	if (avail)
+		*avail = 0;
+	return 0;
+}
+
+/* Activate a VMS-standard subject the ACP could not resolve, using ONLY its
+ * kernel-mapped image. Populates g_xfer; applies .vms$rel; refuses (fail-honest)
+ * an image that actually imports universals -- an in-memory fallback has no ACP
+ * to bind them from, and such an image would be on the volume and resolve over
+ * the ACP anyway (INV-6: never a silent skip that leaves GOT cells unbound). */
+static void activate_symbol_vector_in_memory(unsigned long exe_base,
+					     Elf64_Phdr *ephdr, int ephnum,
+					     const char *execfn)
+{
+	unsigned long avail;
+
+	const struct ovmx_imp_header *ih =
+		find_mapped_vms_section(exe_base, ephdr, ephnum, OVMX_IMP_MAGIC, &avail);
+	if (ih && avail >= sizeof *ih && ih->count != 0) {
+		vms_fatal("NOIMPBIND",
+			  "image imports universals but is not on the ACP volume",
+			  execfn);
+		sys_exit(IMGACT_EXIT_FAIL);
+	}
+
+	/* .vms$rel: bias self-relative slots (the transfer PDSC entry). No-op when
+	 * exe_base == 0 (a fixed-position ET_EXEC, e.g. the proof stub). Bound the
+	 * count by the mapped bytes so a garbage/truncated section can't over-read. */
+	const struct ovmx_rel_header *rh =
+		find_mapped_vms_section(exe_base, ephdr, ephnum, OVMX_REL_MAGIC, &avail);
+	if (rh && exe_base && avail >= sizeof *rh) {
+		const unsigned long *off =
+			(const unsigned long *)((const char *)rh + sizeof *rh);
+		unsigned long maxk = (avail - sizeof *rh) / sizeof(unsigned long);
+		unsigned long n = rh->count < maxk ? rh->count : maxk;
+		for (unsigned long k = 0; k < n; k++) {
+			unsigned long addr = exe_base + off[k];
+			unsigned long pg = addr & ~(IMGACT_KPAGE - 1UL);
+			(void)sys_mprotect((void *)pg, IMGACT_KPAGE,
+					   PROT_READ | PROT_WRITE | PROT_EXEC);
+			*(unsigned long *)addr += exe_base;
+		}
+	}
+
+	/* .vms$xfer: the transfer vector -> g_xfer (flavor + main transfer addr).
+	 * ovmx_parse_xfer guards `avail` against the header + entry array. */
+	const void *xf =
+		find_mapped_vms_section(exe_base, ephdr, ephnum, OVMX_XFER_MAGIC, &avail);
+	if (xf)
+		ovmx_parse_xfer(xf, avail, &g_xfer);
+	else
+		ovmx_parse_xfer(0, 0, &g_xfer);   /* no .vms$xfer -> SYSV tail-jump */
+}
+
 static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 				   Elf64_Phdr *ephdr, int ephnum)
 {
@@ -2303,8 +2395,14 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	 * file -- now over the executive Files-11 ACP (vms-3e8e), not a /vms POSIX
 	 * open. Fail-honest: not on the ACP volume -> honest %IMGACT error. */
 	struct imgsrc src;
-	if (imgsrc_open(&src, execfn) < 0)
-		die_imgnotfnd(execfn);
+	if (1) {
+		/* Not resolvable over the ACP (not on the ODS-2 volume). The kernel
+		 * already mapped the subject, so activate it directly from memory
+		 * rather than die %IMGACT-F-IMGNOTFND. Production images resolve over
+		 * the ACP and never reach here (see the block comment above). */
+		activate_symbol_vector_in_memory(exe_base, ephdr, ephnum, execfn);
+		return;
+	}
 	unsigned long imp_addr, imp_size;
 	int ok = ovmx_find_section(&src, OVMX_IMP_SECTION, &imp_addr, &imp_size);
 	/* Bias the executable's own self-relative slots (its GOT/pointer data), if

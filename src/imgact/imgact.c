@@ -385,6 +385,15 @@ static void die_tlserr(const char *name)
 #define PAGE_UP(x)   PAGE_DOWN((x) + PAGE_SIZE - 1)
 #define ALIGN_UP(x, a) (((x) + ((a) - 1)) & ~((unsigned long)(a) - 1))
 
+/* Kernel page size for mprotect() of an ARBITRARY in-segment address (used by
+ * apply_vms_rel's relocation-write guard). mprotect requires the base aligned
+ * to the real kernel page, which is 8 KiB on Alpha (not the 4 KiB PAGE_SIZE the
+ * segment-aligned mprotects above rely on). Per-arch headers may override; the
+ * fallback matches the generic PAGE_SIZE. */
+#ifndef IMGACT_KPAGE
+#define IMGACT_KPAGE PAGE_SIZE
+#endif
+
 /* SysV .hash section entry width: 4 bytes (Elf32_Word) everywhere except
  * Alpha, which uses 8 bytes (Elf64_Xword) -- see imgact_arch.h. */
 #ifdef IMGACT_HASH_XWORD
@@ -1266,6 +1275,21 @@ static int ovmx_find_section(struct imgsrc *src, const char *want,
  * The VMS-native equivalent of processing R_AARCH64_RELATIVE, without a
  * PT_DYNAMIC. No-op for images with no .vms$rel. `src` must be open on the
  * image; `base` is its load bias. The target pages must already be writable. */
+/* OVMX-SEAM-MARK bisect marker (vms-f60d), gated on OVMX_IMGACT_SEAM=1. Emits
+ * "OVMX-SEAM-MARK: <stage>\n" to fd 2; the LAST marker that appears localizes a
+ * crash to the stage that follows it. Freestanding, safe at any setup point. */
+static void imgact_seam_mark(const char *stage)
+{
+	if (!g_envp)
+		return;
+	const char *seam = imgact_env_value(g_envp, "OVMX_IMGACT_SEAM");
+	if (!seam || seam[0] != '1' || seam[1] != '\0')
+		return;
+	eputs("OVMX-SEAM-MARK: ");
+	eputs(stage);
+	eputs("\n");
+}
+
 static void apply_vms_rel(struct imgsrc *src, unsigned long base)
 {
 	unsigned long rel_addr, rel_size;
@@ -1277,8 +1301,27 @@ static void apply_vms_rel(struct imgsrc *src, unsigned long base)
 		return;
 	const unsigned long *off =
 		(const unsigned long *)((const char *)rh + sizeof *rh);
-	for (unsigned k = 0; k < rh->count; k++)
-		*(unsigned long *)(base + off[k]) += base;
+	for (unsigned k = 0; k < rh->count; k++) {
+		unsigned long addr = base + off[k];
+		/* The relocation is a WRITE into the loaded image. The target page may
+		 * have been mapped NON-WRITABLE by the kernel: the tier-1 VMS-std stub
+		 * packs its relocated transfer PDSC into a single RWX LOAD segment, and
+		 * a W^X kernel (real qemu-system-alpha) maps that segment R-X, dropping
+		 * W -- so this store faults there while qemu-user (permissive RWX)
+		 * silently allowed it. Restore the segment's ELF-declared RWX on the
+		 * target page before the store: a genuine relocation legitimately needs
+		 * write access, and this ENSURES it rather than faking the result
+		 * (INV-6). Best-effort -- a target already in a writable data segment
+		 * (the normal case, and every x86_64/aarch64 image) stores fine whether
+		 * or not the mprotect was needed or honoured. Alpha's kernel page is
+		 * 8 KiB, so align to IMGACT_KPAGE, not the generic 4 KiB PAGE_SIZE, or
+		 * mprotect would EINVAL on a non-8 KiB-aligned in-segment address.
+		 * (vms-f60d) */
+		unsigned long pg = addr & ~(IMGACT_KPAGE - 1UL);
+		(void)sys_mprotect((void *)pg, IMGACT_KPAGE,
+				   PROT_READ | PROT_WRITE | PROT_EXEC);
+		*(unsigned long *)addr += base;
+	}
 }
 
 struct ovmx_prod {
@@ -2087,6 +2130,7 @@ static void imgact_vms_standard_activate(unsigned long exe_base,
 
 	/* cliflag (arg 6) + cli_util (arg 2), from the executive process context. */
 	unsigned int cliflag = imgact_query_cli_context();
+	imgact_seam_mark("cli-done");   /* bisect: query_cli_context survived */
 	static struct ovmx_cli_util cli_util;
 	void *cli_util_arg = 0;
 	if (cliflag) {
@@ -2176,8 +2220,10 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	int ok = ovmx_find_section(&src, OVMX_IMP_SECTION, &imp_addr, &imp_size);
 	/* Bias the executable's own self-relative slots (its GOT/pointer data), if
 	 * any; harmless no-op for the current PLT-only executables. */
+	imgact_seam_mark("relo-pre");   /* bisect: crash here => apply_vms_rel write */
 	if (ok)
 		apply_vms_rel(&src, exe_base);
+	imgact_seam_mark("relo-post");  /* apply_vms_rel survived */
 
 	/* Locate this executable's own .init_array range (if any) while `src` is
 	 * still open -- ovmx_find_section reads the file's raw section headers over
@@ -2419,7 +2465,9 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	/* An OVMX symbol-vector image (LINK.EXE output) has no PT_DYNAMIC: it
 	 * binds universal symbols through .vms$imp, not ELF DT_HASH. (vms-714) */
 	if (!edyn) {
+		imgact_seam_mark("asv-enter");  /* bisect: activation setup begins */
 		activate_symbol_vector(ebias, at_execfn, ephdr, ephnum);
+		imgact_seam_mark("asv-done");   /* section read + relocation + bind + TLS ok */
 		/* VMS-standard image (the alpha-dec-vms GCC port's .EXE): present
 		 * the six-argument VMS activation context by the Alpha calling
 		 * standard, capture the returned condition value, and route it to

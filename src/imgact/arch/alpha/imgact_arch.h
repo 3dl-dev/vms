@@ -119,6 +119,13 @@ static inline long syscall6(long n, long a, long b, long c, long d, long e,
 #define IMGACT_TLS_VARIANT  1
 #define TLS_TCB_SIZE        0
 
+/* Alpha's kernel page size is 8 KiB (confirmed: alpha-linux getpagesize()==8192,
+ * and mprotect() of a non-8 KiB-aligned base returns EINVAL). imgact.c's
+ * apply_vms_rel mprotects the page around an arbitrary in-segment relocation
+ * target, so it must align to the REAL kernel page, not the generic 4 KiB
+ * PAGE_SIZE (vms-f60d: relocation write into a W^X R-X-mapped LOAD segment). */
+#define IMGACT_KPAGE        8192UL
+
 /* Assembly helpers (arch/alpha/start.S). */
 void _start(void);                 /* ELF entry point                        */
 void __tlsdesc_static(void);       /* OVMX-native symbol-vector TLS resolver

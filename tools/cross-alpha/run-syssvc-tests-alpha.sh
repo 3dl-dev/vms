@@ -137,12 +137,16 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     fi
     n=0
     if [ -n "$SUBJECT" ]; then
-        # Seam mode: the ONLY thing the runner runs is the subject image, staged
-        # as /tests/activate_seam (the runner-init execs it; PT_INTERP -> the
-        # instrumented IMGACT.EXE). The subject + IMGACT.EXE are added to the
-        # initramfs list below (the test_* glob does not see activate_seam).
-        cp /work/subject.exe /work/tests/activate_seam && n=1
-        echo "== staged SUBJECT seam: /tests/activate_seam (subject) + IMGACT.EXE at $INTERP_GUEST =="
+        # Seam mode (vms-341/vms-f60d, option (c) authentic staging): the subject
+        # is activated via the PRODUCTION ACP path, not a raw initramfs path. Its
+        # genuine bytes go onto the DKA300 sysvol at SYSEXE:ACTIVATE.EXE (below,
+        # via mk_sysvol); a tmpfs boot-stage copy at /run/ovmx-boot/ACTIVATE.EXE
+        # (initramfs list below) is what the runner-init execs -- so the IMGACT
+        # map_staged remaps it to /vms/SYS0/SYSCOMMON/SYSEXE/ACTIVATE.EXE and the
+        # UNCHANGED imgsrc_open re-reads the GENUINE ODS-2 bytes off DKA300 over
+        # the ACP (OVMX_SYSDEVICE=DKA300: in the seam envp). INV-6-clean.
+        n=1
+        echo "== staged SUBJECT seam: exec /run/ovmx-boot/ACTIVATE.EXE + genuine bytes on DKA300 SYSEXE:ACTIVATE.EXE + IMGACT.EXE at $INTERP_GUEST =="
     elif [ -n "$ONLY" ]; then
         # Focused mode: stage exactly the one requested suite.
         [ -x "/work/cmake-alpha/bin/$ONLY" ] \
@@ -208,10 +212,15 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
         /repo/tests/qemu/mkimage_ods2_sysvol.c $ODS2CC
     IMGACT_ARG=""
     [ -f /work/cmake-alpha/src/imgact/IMGACT.EXE ] && IMGACT_ARG="SYSEXE:IMGACT.EXE=/work/cmake-alpha/src/imgact/IMGACT.EXE"
+    # vms-341/vms-f60d option (c): stage the seam SUBJECT onto the DKA300 sysvol
+    # at SYSEXE:ACTIVATE.EXE so IMGACT re-reads its GENUINE ODS-2 bytes over the
+    # ACP (the production activation path), not a raw initramfs path.
+    SUBJECT_SYSVOL_ARG=""
+    [ -n "$SUBJECT" ] && [ -f /work/subject.exe ] && SUBJECT_SYSVOL_ARG="SYSEXE:ACTIVATE.EXE=/work/subject.exe"
     /work/mk_sysvol /work/tests/ods2_sysvol.img 48 \
         /repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT \
         /repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT \
-        $IMGACT_ARG >/work/mk_sysvol.log 2>&1 \
+        $IMGACT_ARG $SUBJECT_SYSVOL_ARG >/work/mk_sysvol.log 2>&1 \
         || { echo "WARN: ods2_sysvol master failed (sysvol-dependent suites will fail honestly)"; cat /work/mk_sysvol.log; truncate -s 24M /work/tests/ods2_sysvol.img; }
     ls -la /work/tests/ods2_*.img
 
@@ -247,12 +256,16 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
         [ -e "$f" ] || continue     # no test_* staged (SUBJECT/seam mode) -> skip the literal glob
         echo "file /tests/$(basename "$f") $f 755 0 0"
       done
-      # SUBJECT_IMAGE seam (vms-341/vms-f60d): the subject image (staged as
-      # /tests/activate_seam) + the instrumented IMGACT.EXE at the guest path the
-      # subject .interp names, so the kernel loads IMGACT.EXE as the interpreter
-      # and the VMS-std 6-arg activation runs on the real executive.
+      # SUBJECT_IMAGE seam (vms-341/vms-f60d, option (c)): the subject is executed
+      # from a boot-stage tmpfs copy (/run/ovmx-boot/ACTIVATE.EXE) so the IMGACT
+      # map_staged remaps it to the DKA300 SYSEXE ODS-2 path and re-reads the
+      # GENUINE volume bytes over the ACP -- the production activation path. The
+      # interp IMGACT.EXE stays at the guest SYSEXE path the subject .interp names
+      # (the kernel loads it from the initramfs).
       if [ -n "$SUBJECT" ]; then
-        echo "file /tests/activate_seam /work/tests/activate_seam 755 0 0"
+        echo "dir /run 755 0 0"
+        echo "dir /run/ovmx-boot 755 0 0"
+        echo "file /run/ovmx-boot/ACTIVATE.EXE /work/subject.exe 755 0 0"
         echo "file $INTERP_GUEST $IMGACT_EXE 755 0 0"
       fi
       # SUBJECT IMAGES at the exact paths the suites exec (guarded by build

@@ -72,7 +72,14 @@ static int load_module(const char *path)
 static int run_suite(const char *name, int *out_pass, int *out_fail)
 {
     char path[512];
-    snprintf(path, sizeof(path), "/tests/%s", name);
+    int is_seam = (strcmp(name, "activate_seam") == 0);
+    if (is_seam)
+        /* vms-341/vms-f60d option (c): the seam subject is exec'd from the
+         * boot-stage tmpfs path; IMGACT's map_staged remaps it to the DKA300
+         * SYSEXE ODS-2 path and re-reads the genuine volume bytes over the ACP. */
+        snprintf(path, sizeof(path), "/run/ovmx-boot/ACTIVATE.EXE");
+    else
+        snprintf(path, sizeof(path), "/tests/%s", name);
 
     int pfd[2];
     if (pipe(pfd) != 0) { printf("SYSSVC-ALPHA: pipe failed for %s\n", name); return -1; }
@@ -91,8 +98,12 @@ static int run_suite(const char *name, int *out_pass, int *out_fail)
          * other suite's IMGACT activations emit the seam line. */
         char *envp_plain[] = { (char *)"PATH=/tests:/bin", (char *)"HOME=/", NULL };
         char *envp_seam[]  = { (char *)"PATH=/tests:/bin", (char *)"HOME=/",
-                               (char *)"OVMX_IMGACT_SEAM=1", NULL };
-        char **envp = (strcmp(name, "activate_seam") == 0) ? envp_seam : envp_plain;
+                               (char *)"OVMX_IMGACT_SEAM=1",
+                               /* option (c): resolve the subject over the ACP on
+                                * the writable DKA300 sysvol (default DKA0: is the
+                                * immutable clean-room disk). */
+                               (char *)"OVMX_SYSDEVICE=DKA300:", NULL };
+        char **envp = is_seam ? envp_seam : envp_plain;
         execve(path, argv, envp);
         printf("SYSSVC-ALPHA: execve %s failed: %s\n", path, strerror(errno));
         _exit(127);
@@ -190,12 +201,20 @@ int main(void)
     while ((de = readdir(d)) != NULL && n_names < 512) {
         if (strncmp(de->d_name, "test_syssvc_", 12) != 0 &&
             strncmp(de->d_name, "test_imgact_", 12) != 0 &&
-            strncmp(de->d_name, "test_arith_", 11) != 0 &&  /* vms-db3: Alpha-only arith-trap suites */
-            strcmp(de->d_name, "activate_seam") != 0)       /* vms-341/vms-f60d: the SUBJECT IMAGE (its .interp = IMGACT.EXE; exec'ing it activates via IMGACT.EXE's VMS-std path). Staged only in SUBJECT_IMAGE mode. */
+            strncmp(de->d_name, "test_arith_", 11) != 0)    /* vms-db3: Alpha-only arith-trap suites */
             continue;
         names[n_names++] = strdup(de->d_name);
     }
     closedir(d);
+
+    /* vms-341/vms-f60d option (c): the seam subject is NOT a /tests binary -- its
+     * genuine bytes live on the DKA300 ODS-2 volume, with a boot-stage tmpfs copy
+     * at /run/ovmx-boot/ACTIVATE.EXE. Run it as the "activate_seam" suite when
+     * that copy is present (SUBJECT_IMAGE seam mode); run_suite execs the tmpfs
+     * copy so IMGACT map_staged resolves the genuine bytes off DKA300 (the ACP). */
+    if (access("/run/ovmx-boot/ACTIVATE.EXE", F_OK) == 0 && n_names < 512)
+        names[n_names++] = strdup("activate_seam");
+
     qsort(names, n_names, sizeof(names[0]), cmpstr);
 
     if (n_names == 0) {

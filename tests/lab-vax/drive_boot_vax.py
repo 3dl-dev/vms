@@ -906,6 +906,18 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
                     log("CAPSTONE: reached Username: -- PROVISION created the system "
                         "logicals and STARTUP ran to LOGINOUT (vms-72da clears "
                         "LNMFAIL; DCL login capstone vms-d59)")
+                    # vms-948: capture the STARTUP-executing announcement NOW,
+                    # from child.before at the moment Username: matched -- it
+                    # still holds the "...site-specific startup commands" line
+                    # (printed just before the prompt). The persistence probe
+                    # below issues its own expect()s, which consume child.before
+                    # and would leave the later post_identity_text snapshot
+                    # (used by the startup_executing check) without it -- a
+                    # false FAIL even though reaching Username: PROVES STARTUP
+                    # ran. Reaching login is the stronger signal; record it here
+                    # so the probe cannot erase it (OR'd in at the check below).
+                    if MS_STARTUP_EXECUTING in _console_text(child):
+                        seen["startup_executing"] = True
                     # vms-865 PERSISTENCE PROBE: log in SYSTEM/MANAGER on the
                     # INSTALLED-system disk (the Purdy fix, b1248bb9, makes this
                     # authenticate) and run TWO commands. Does the interactive
@@ -994,7 +1006,11 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
             # rule out provision_ownership() being skipped entirely (silence
             # looks identical either way); this is a second, independent
             # forward-progress signal in the SAME captured window.
-            seen["startup_executing"] = MS_STARTUP_EXECUTING in post_identity_text
+            # OR, never overwrite: an early capture at the Username: match
+            # (vms-948, above) may already have recorded it before the
+            # persistence probe consumed child.before.
+            seen["startup_executing"] = (seen.get("startup_executing")
+                                         or MS_STARTUP_EXECUTING in post_identity_text)
             if seen["startup_executing"]:
                 log("OK: %r seen -- STARTUP.COM is actively EXECUTING commands "
                     "(SYSTARTUP_VMS.COM running), not just an absence of errors"

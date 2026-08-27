@@ -23,6 +23,7 @@
 #include "vmsfs/filespec.h"
 #include "vmsfs/version.h"
 #include "ovmx_layout.h"
+#include "ovmx_console.h"   /* vms-948: OPA0:/TT: -> console, one resolver */
 
 /* Forward declaration of logical name translation */
 extern int dcl_translate_logical(const char *name, char *result, size_t result_size);
@@ -497,6 +498,20 @@ int dcl_resolve_path(struct dcl_context *ctx, const char *spec,
         linux_path[path_size - 1] = '\0';
         return 0;
     }
+
+    /*
+     * TERMINAL ALIAS, NOT A DISK FILESPEC (vms-948). A VMS console-terminal
+     * name -- OPA0:/_OPA0:/TT:/TT0: -- carries a ':' and would otherwise fall
+     * into the device/directory branch below and be sent through the vmsfs
+     * DISK translator, which cannot resolve the console. sys$assign already
+     * resolves these the terminal way; route them through the SAME single
+     * resolver here so RUN /DETACHED /INPUT=OPA0: (/OUTPUT=, /ERROR=) works
+     * and a shipped .COM names the VMS device (OPA0:) instead of the substrate
+     * path /dev/console. Disk specs (DKA0:, [DIR]) do not match and are
+     * untouched -- this only diverts the console-terminal aliases.
+     */
+    if (ovmx_console_terminal_path(spec, linux_path, path_size))
+        return 0;
 
     /*
      * Build a full VMS filespec by filling in defaults, then let

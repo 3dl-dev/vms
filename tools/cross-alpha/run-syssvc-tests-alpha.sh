@@ -257,6 +257,44 @@ echo
 echo "==================== VERDICT ===================="
 LOG="$WORK/syssvc-boot.log"
 [ -f "$LOG" ] || die "no boot log produced at $LOG"
+
+# The suites that actually failed this run (rc != 0), sorted unique. `|| true`:
+# a perfect run (zero failures) makes the inner grep exit nonzero, which under
+# `set -o pipefail` would otherwise abort the script before the verdict.
+ACTUAL_FAILS=$( { grep -aE "=== SUITE .* rc=" "$LOG" | grep -avE " rc=0 " \
+    | sed -E 's/.*=== SUITE ([A-Za-z0-9_]+) rc=.*/\1/' | sort -u; } || true )
+
+# NO-NEW-vs-BASELINE mode (BASELINE=<file>, rd vms-341 / vms-898a). The FULL
+# alpha syssvc run carries a DOCUMENTED baseline of ENVIRONMENTAL / not-
+# applicable suite failures (symbol-vector LINK.EXE-only imgact suites that
+# cannot exist on an Alpha static image; subject images that do not cross-build
+# for Alpha yet; the -nic-none ETH0: suites; emulator-timing races). The gate is
+# GREEN iff no NEW suite fails beyond that baseline. This catches regressions in
+# the passing tier WITHOUT faking the known-environmental blockers green and
+# WITHOUT the runner skipping -- it still runs and fails them honestly (the
+# "never skip" invariant holds); the gate merely tolerates a named, reasoned set.
+# Each baseline entry is a tracked follow-on; a baselined suite that starts
+# PASSING is flagged so the baseline is tightened (never silently widened).
+if [ -n "${BASELINE:-}" ]; then
+    [ -f "$BASELINE" ] || die "BASELINE=$BASELINE not found"
+    grep -aqE "FINAL RESULTS:" "$LOG" \
+        || die "no FINAL RESULTS -- the suite did not run to completion (boot/harness failure, not a baselined suite fail)"
+    EXPECTED=$(grep -avE "^[[:space:]]*#|^[[:space:]]*$" "$BASELINE" | awk '{print $1}' | sort -u)
+    NEW_FAILS=$(comm -23 <(printf '%s\n' "$ACTUAL_FAILS") <(printf '%s\n' "$EXPECTED"))
+    FIXED=$(comm -13 <(printf '%s\n' "$ACTUAL_FAILS") <(printf '%s\n' "$EXPECTED"))
+    grep -aE "FINAL RESULTS|ASSERTIONS" "$LOG" | sed 's/^/  /'
+    [ -n "$FIXED" ] && log "NOTE: baselined suite(s) now PASS -- tighten $BASELINE (remove): $(echo $FIXED)"
+    if [ -z "$NEW_FAILS" ]; then
+        log "PASS: no new suite failures beyond the documented baseline ($(echo $ACTUAL_FAILS | wc -w) known env/N-A fails tolerated, $(echo $EXPECTED | wc -w) baselined)"
+        exit 0
+    fi
+    echo "-- NEW failing suites (NOT in $BASELINE) --"
+    printf '  %s\n' $NEW_FAILS
+    grep -aE "=== SUITE .* rc=|  FAIL:" "$LOG" | head -80 | sed 's/^/  /'
+    die "NEW syssvc suite failure(s) beyond baseline: $(echo $NEW_FAILS) -- a regression in the passing tier, or a newly-added suite that needs triage or an explicit baseline entry"
+fi
+
+# Default (ONLY_SUITE focused gate / no BASELINE): every suite must pass.
 # Reuse the x86_64 harness verdict logic verbatim.
 # shellcheck disable=SC1091
 if [ -f "$REPO/tests/qemu/lib/harness_verdict.sh" ]; then

@@ -250,6 +250,22 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # (vms-bdd first sub-step: settles the stdio-stream link-readiness gap.)
     VEC="$VEC,stdin=DATA,stdout=DATA,stderr=DATA"
 
+    # decc$free (vms-47f8) -- a weak-alias'd C-RTL PROCEDURE the ^decc$
+    # enumeration above MISSES, for a different reason than the streams: free.o
+    # DOES define decc$free (musl's public `free` = weak_alias(__libc_free,
+    # free), which the port cc1 emits on alpha as a WEAK-ALIAS EQUATE), but
+    # `nm --defined-only` does not report an alias-equate as a definition, so
+    # the enumeration never sees it -- while LINK.EXE's own evax_read DOES
+    # resolve it (confirmed: a shim that re-defined decc$free triggered
+    # %LINK-F-MULDEF against free.o). So the fix is NOT a shim (that duplicates
+    # free.o's def) but exporting the EXISTING free.o decc$free explicitly,
+    # exactly like the streams above -- the whole-archive link resolves it from
+    # free.o and fails loudly if it is not actually defined. Without this, a
+    # real port program calling free() hits %LINK-F-UNDEF decc$free (measured:
+    # the vms-bdd multi-file-program LINK step). The nm-enumeration blind spot
+    # for plain-CRTL-name weak-alias equates is the root, tracked on vms-614.
+    VEC="$VEC,decc\$free=PROCEDURE"
+
     # ---- vms-864 (mirrors vms-954 R1b-2b on the generic tail): C$_EXIT1 ----
     # Same architecture-independent VMS C-facility globalvalue, same oracle
     # grounding as the generic tail above (measured on OpenVMS Alpha V8.4,

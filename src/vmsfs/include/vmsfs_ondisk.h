@@ -7,7 +7,9 @@
  * SOGW protection) with our own on-disk structures — not byte-compatible
  * with real ODS-2.
  *
- * Shared between kernel module (vmsfs.ko) and userspace tools (INITIALIZE).
+ * Consumed by the userspace host tools only (INITIALIZE.EXE / ANALYZE /
+ * vmsfs_master / vms_mount_helper). Relocated here from src/kernel/vmsfs/ by
+ * vms-165, which retired the vmsfs VFS kernel driver that formerly shared it.
  *
  * Volume layout (512-byte blocks):
  *   Block 0            Boot block (reserved)
@@ -23,13 +25,14 @@
 #define _VMSFS_ONDISK_H
 
 /*
- * Fixed-width types (uint8/16/32/64_t) for the on-disk layout. This header is
- * shared THREE ways -- the Linux vmsfs.ko, the NetBSD/BSD vnode module, and
- * userspace tools (vmsfs_master) -- so the include must be portable across all
- * three. __KERNEL__ is a LINUX-only macro; the NetBSD kernel-module build
- * defines _KERNEL (never __KERNEL__), so a bare `#ifdef __KERNEL__ ... #else
- * <stdint.h>' wrongly pulled userspace <stdint.h> into the -nostdinc BSD kernel
- * build and broke it (INV-DRIFT). Branch on each kernel explicitly.
+ * Fixed-width types (uint8/16/32/64_t) for the on-disk layout. vms-165 retired
+ * the two kernel drivers (Linux vmsfs.ko + the NetBSD/BSD vnode module) that
+ * once also compiled this header, so it is now consumed only by the userspace
+ * host tools. The portable __KERNEL__/_KERNEL branch below is kept harmless in
+ * case a future kernel consumer returns: __KERNEL__ is a LINUX-only macro; the
+ * NetBSD kernel-module build defines _KERNEL (never __KERNEL__), so a bare
+ * `#ifdef __KERNEL__ ... #else <stdint.h>' would wrongly pull userspace
+ * <stdint.h> into a -nostdinc BSD kernel build (INV-DRIFT). Branch explicitly.
  */
 #if defined(__KERNEL__)         /* Linux kernel */
 #include <linux/types.h>
@@ -127,12 +130,10 @@
  * It is a settable SYSGEN parameter on VMS and a compile-time constant here
  * until OVMX has a SYSGEN parameter store.
  *
- * Lives in the SHARED on-disk header (not the Linux-only vmsfs.h) because
- * every backend's SOGW permission check needs it -- the NetBSD ODS-2 vnode
- * backend (rd vms-e7a) applies the identical System-category rule via
- * kauth_cred_getegid(), mirroring the Linux block-device backend's
- * vmsfs_blkdev_permission() (src/kernel/vmsfs/vmsfs_blkdev.c). One
- * definition, not two independently-drifting ones (INV-DRIFT).
+ * Lives in the shared host-tool on-disk header so every tool's SOGW permission
+ * check reads one definition. (Before vms-165 it was also shared with the
+ * Linux block-device backend's vmsfs_blkdev_permission() and the NetBSD ODS-2
+ * vnode backend's System-category rule; both VFS drivers are now retired.)
  */
 #define VMSFS_MAXSYSGROUP 8
 

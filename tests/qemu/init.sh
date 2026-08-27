@@ -14,33 +14,16 @@ echo "=== OVMX Kernel Module Test Suite ==="
 echo "Kernel: $(uname -r) ($(uname -m))"
 echo ""
 
-# MODULE_PASS/MODULE_FAIL count the two module-load checks below (vms.ko,
-# vmsfs.ko). SUITE_PASS/SUITE_FAIL (declared below the loop) count only
-# actual test-suite runs. Keeping them apart is the vms-95f fix: the old
-# single TOTAL_PASS/TOTAL_FAIL counter mixed the two, so the "FINAL RESULTS"
-# headline printed "28 suites passed" when only 26 suites ever ran -- the
-# other 2 were these module-load checks mislabeled as suites. See the
-# FINAL RESULTS derivation at the bottom of this file for the reconciliation.
+# MODULE_PASS/MODULE_FAIL count the module-load check below (vms.ko -- the
+# executive, which now carries the Files-11 ODS-2 ACP; the legacy vmsfs.ko VFS
+# driver was retired by vms-165). SUITE_PASS/SUITE_FAIL (declared below the loop)
+# count only actual test-suite runs. Keeping them apart is the vms-95f fix: the
+# old single TOTAL_PASS/TOTAL_FAIL counter mixed the two, so the "FINAL RESULTS"
+# headline printed "28 suites passed" when only 26 suites ever ran -- the extra
+# were these module-load checks mislabeled as suites. See the FINAL RESULTS
+# derivation at the bottom of this file for the reconciliation.
 MODULE_PASS=0
 MODULE_FAIL=0
-
-# Set up loop device for block-device vmsfs test
-# loop may be built-in (CONFIG_BLK_DEV_LOOP=y) or a module
-if [ -f /lib/modules/loop.ko ]; then
-    echo "--- Loading loop.ko ---"
-    insmod /lib/modules/loop.ko
-fi
-if [ -f /test_data/vmsfs_test.img ]; then
-    echo "--- Setting up loop device for blkdev test ---"
-    # Create /dev/loop0 if devtmpfs didn't auto-create it
-    [ -b /dev/loop0 ] || mknod /dev/loop0 b 7 0
-    losetup /dev/loop0 /test_data/vmsfs_test.img
-    if [ -b /dev/loop0 ]; then
-        echo "  OK: loop0 attached to vmsfs_test.img"
-    else
-        echo "  WARN: losetup failed or /dev/loop0 not present"
-    fi
-fi
 
 # Load vms.ko
 echo "--- Loading vms.ko ---"
@@ -54,21 +37,6 @@ else
     # Show dmesg for diagnostics
     dmesg | tail -20
 fi
-
-# Load vmsfs.ko
-echo "--- Loading vmsfs.ko ---"
-insmod /lib/modules/vmsfs.ko
-if grep -q vmsfs /proc/filesystems; then
-    echo "  PASS: vmsfs.ko loaded, filesystem registered"
-    MODULE_PASS=$((MODULE_PASS+1))
-else
-    echo "  FAIL: vmsfs.ko load or filesystem registration failed"
-    MODULE_FAIL=$((MODULE_FAIL+1))
-    dmesg | tail -20
-fi
-
-# Create directories needed by vmsfs tests
-mkdir -p /tmp/vmsfs_backing /mnt/vmsfs
 
 # ASSERTION CHANNEL (vms-b5b round 2). Round 1 (ef9b99c) made suite text
 # stream to the console in real time via `tee`, which fixed "a wedge loses
@@ -108,7 +76,8 @@ else
 fi
 
 # Run each test program. test_kmod_* drive /dev/vms with raw ioctls
-# (kernel lock manager, ASTs, event flags, access modes, vmsfs). test_syssvc_*
+# (kernel lock manager, ASTs, event flags, access modes, Files-11 ACP).
+# test_syssvc_*
 # drive the same /dev/vms through the PUBLIC sys$ API in src/libvms instead
 # (vms-1d9) -- exercising the userspace system-service layer the ioctl tests
 # cannot see at all. test_imgact_* (main-red classification fix; were
@@ -153,10 +122,9 @@ fi
 # (vms-95f). This loop is the ONLY place a "=== SUITE <name> rc= ==="
 # verdict line is printed, so SUITE_PASS+SUITE_FAIL, by construction, always
 # equals the number of those lines. Before this fix there was a single
-# TOTAL_PASS/TOTAL_FAIL shared with the two module-load checks above, so
-# the "FINAL RESULTS" headline below reported 28 ("suites passed") when
-# only 26 suite verdict lines were ever printed -- the other 2 were the
-# vms.ko/vmsfs.ko module-load checks, not suites. Derived twice
+# TOTAL_PASS/TOTAL_FAIL shared with the module-load checks above, so
+# the "FINAL RESULTS" headline below over-counted "suites passed" -- the
+# extra were the vms.ko module-load check(s), not suites. Derived twice
 # independently against a clean tree (see rd vms-215's notes). Keeping the
 # counters apart means the headline's suite count reconciles with the
 # "=== SUITE ... ===" lines by construction instead of by someone
@@ -327,19 +295,19 @@ echo ""
 # "suites passed/failed" below counts only what the loop above actually ran
 # -- SUITE_PASS+SUITE_FAIL is exactly the number of "=== SUITE ... ===" lines
 # printed, no module-load check folded in under the same name. A module-load
-# failure is not silently lost by this split: /dev/vms absent or vmsfs
-# unregistered means every test_kmod_*/test_syssvc_* suite above fails or
-# honest-skips against a missing device, which SUITE_FAIL already reports,
-# and .github/workflows/ci.yml's kernel-executive job additionally asserts
-# on the two "PASS: vms.ko loaded" / "PASS: vmsfs.ko loaded" lines directly.
+# failure is not silently lost by this split: /dev/vms absent means every
+# test_kmod_*/test_syssvc_* suite above fails or honest-skips against a missing
+# device, which SUITE_FAIL already reports, and .github/workflows/ci.yml's
+# kernel-executive job additionally asserts on the "PASS: vms.ko loaded" line
+# directly.
 echo "=== MODULE LOAD: $MODULE_PASS passed, $MODULE_FAIL failed ==="
 echo "=== FINAL RESULTS: $SUITE_PASS suites passed, $SUITE_FAIL suites failed ==="
 echo "=== ASSERTIONS: $ASSERT_PASS passed, $ASSERT_FAIL failed (derived from PASS/FAIL lines actually printed, not summed from suite self-reports) ==="
 echo ""
 
 # Show kernel log for debugging
-echo "--- dmesg (vms/vmsfs) ---"
-dmesg | grep -iE 'vms|vmsfs' || true
+echo "--- dmesg (vms) ---"
+dmesg | grep -iE 'vms' || true
 echo "--- end dmesg ---"
 
 # Exit QEMU (with -no-reboot, reboot causes QEMU to exit)

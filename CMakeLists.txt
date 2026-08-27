@@ -382,8 +382,9 @@ if(BUILD_TESTS)
         LABELS "integration;authenticity" TIMEOUT 120)
 
     # vms-bae standing gate: drivers/ovmx/ is a REUSABLE kernel-module home, not
-    # a hard-coded {vms,vmsfs} pair. Runs the real overlay against a fabricated
-    # kernel tree with a hypothetical third module dropped in as {subdir +
+    # a hard-coded module list (vms-165 retired vmsfs, leaving vms). Runs the real
+    # overlay against a fabricated
+    # kernel tree with a hypothetical extra module dropped in as {subdir +
     # Kconfig stanza + config flag} only, and proves it is discovered and fully
     # wired (menu sourced, Makefile obj- line, sources flattened) with the
     # overlay script byte-for-byte unchanged. Hermetic source/wiring proof -- no

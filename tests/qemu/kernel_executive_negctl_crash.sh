@@ -16,7 +16,7 @@
 # `var=$(cmd)` assignment is NOT one of the errexit-exempt forms -- so the
 # unguarded grep ABORTED THE ENTIRE STEP the instant a suite crashed,
 # silently: no per-suite verdicts, no "FAIL: negative control did not go red
-# for the RIGHT REASON", the vms.ko/vmsfs.ko module-load checks never
+# for the RIGHT REASON", the vms.ko module-load check never
 # reached. The step meant to make the diagnostic honest instead went silent
 # in exactly the case that most needs a diagnostic.
 #
@@ -97,10 +97,6 @@ CAPTURE="$WORKDIR/crash_capture.txt"
             test_syssvc_*)
                 echo "=== SUITE $suite rc=77 ==="
                 ;;
-            test_kmod_vmsfs*)
-                echo "PASS: $suite ok"
-                echo "=== SUITE $suite rc=0 ==="
-                ;;
             *)
                 echo "FAIL: $suite raw ioctl unexpectedly worked without executive"
                 echo "=== SUITE $suite rc=1 ==="
@@ -108,8 +104,7 @@ CAPTURE="$WORKDIR/crash_capture.txt"
         esac
     done
     echo "FAIL: vms.ko load or /dev/vms creation failed -- executive absent as expected"
-    echo "PASS: vmsfs.ko loaded, filesystem registered"
-    echo "=== FINAL RESULTS: 3 suites passed, 25 suites failed ==="
+    echo "=== FINAL RESULTS: 2 suites passed, 25 suites failed ==="
 } > "$CAPTURE"
 
 OUTPUT=$(python3 "$REPLAY" negative "$CAPTURE" 1 2>&1)

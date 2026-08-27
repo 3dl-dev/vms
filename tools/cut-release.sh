@@ -274,7 +274,7 @@ fi
 # LIBOTS$SHR userland): if that build breaks, the cut reds here.
 #
 # SCOPE: the byte-reproducible userspace image set (ovmx-images aggregate). The
-# Alpha executive modules (vms.ko/vmsfs.ko) are a tracked follow-on (rd child of
+# Alpha executive module (vms.ko) is a tracked follow-on (rd child of
 # vms-233b) -- kbuild module byte-reproducibility under cut-release-reproducible
 # needs its own SOURCE_DATE_EPOCH/deterministic-signing proof, the same
 # build-vs-runtime split VAX draws between its R2 build gate and R3 modular-kernel
@@ -454,7 +454,7 @@ bytes_of() { stat -c%s "$OUT_DIR/$1"; }
     done
     printf '\n  ],\n'
     printf '  "vax_release_parity": {\n'
-    printf '    "_note": "VAX (netbsd-vax/elf32-vax) co-release artifacts (rd vms-ca5, epic vms-f10, R2: docs/design-vax-mainstream-release.md). BUILD-ONLY (Rule 9 tooling, never a runtime claim): vms.kmod.o is a RELOCATABLE object, not yet a loadable .kmod (loading needs the custom MODULAR NetBSD/vax kernel, R3/R4 territory, tools/cross-vax/build-vax-modular-kernel.sh); vmsfs.kmod IS a genuine loadable module. All files under vax/.",\n'
+    printf '    "_note": "VAX (netbsd-vax/elf32-vax) co-release artifacts (rd vms-ca5, epic vms-f10, R2: docs/design-vax-mainstream-release.md). BUILD-ONLY (Rule 9 tooling, never a runtime claim): vms.kmod.o is a RELOCATABLE object, not yet a loadable .kmod (loading needs the custom MODULAR NetBSD/vax kernel, R3/R4 territory, tools/cross-vax/build-vax-modular-kernel.sh). The ODS-2 Files-11 ACP is in vms.kmod.o itself; vms-165 retired the separate vmsfs.kmod VFS module. All files under vax/.",\n'
     printf '    "skipped": %s,\n' "$([ -n "$VAX_SKIP_NOTE" ] && echo true || echo false)"
     if [ -n "$VAX_SKIP_NOTE" ]; then
         printf '    "skipped_reason": "%s",\n' "$VAX_SKIP_NOTE"
@@ -481,7 +481,7 @@ bytes_of() { stat -c%s "$OUT_DIR/$1"; }
     printf '\n    ]\n'
     printf '  },\n'
     printf '  "alpha_release_parity": {\n'
-    printf '    "_note": "Alpha (OVMX/Linux-Alpha, EM_ALPHA/LP64) co-release artifacts (rd vms-233b, epic vms-f10: co-release parity across aarch64/x86_64/alpha/VAX). BUILD-ONLY (Rule 9 tooling, never a runtime claim): the byte-reproducible userspace ovmx-images aggregate, cross-built under the alpha-linux-gnu toolchain -- the same images alpha-boot-login boots. The Alpha executive modules (vms.ko/vmsfs.ko) are a tracked follow-on, deliberately NOT shipped here (kbuild byte-reproducibility needs its own proof, INV-6); alpha-boot-login independently proves they build + boot. All files under alpha/.",\n'
+    printf '    "_note": "Alpha (OVMX/Linux-Alpha, EM_ALPHA/LP64) co-release artifacts (rd vms-233b, epic vms-f10: co-release parity across aarch64/x86_64/alpha/VAX). BUILD-ONLY (Rule 9 tooling, never a runtime claim): the byte-reproducible userspace ovmx-images aggregate, cross-built under the alpha-linux-gnu toolchain -- the same images alpha-boot-login boots. The Alpha executive module (vms.ko) is a tracked follow-on, deliberately NOT shipped here (kbuild byte-reproducibility needs its own proof, INV-6); alpha-boot-login independently proves it builds + boots. All files under alpha/.",\n'
     printf '    "skipped": %s,\n' "$([ -n "$ALPHA_SKIP_NOTE" ] && echo true || echo false)"
     if [ -n "$ALPHA_SKIP_NOTE" ]; then
         printf '    "skipped_reason": "%s",\n' "$ALPHA_SKIP_NOTE"

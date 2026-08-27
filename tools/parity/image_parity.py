@@ -6,7 +6,7 @@ in two different places:
 
   * x86_64 (the native/Linux runtime): whatever distro/Dockerfile.bootable's
     `cp` lines happen to stage into /system-stage (the shipped system disk +
-    OS kit) and the kernel-module harvest (vms.ko/vmsfs.ko).
+    OS kit) and the kernel-module harvest (vms.ko).
   * VAX (netbsd-vax/elf32-vax, epic vms-f10): tools/cut-release.sh's
     VAX_ARTIFACT_ORDER array, itself produced by ~25 hand-maintained
     tools/cross-vax/build-*.sh scripts.
@@ -227,13 +227,14 @@ _NETBSD_GUARD_RE = re.compile(
     r'if\(NOT CMAKE_SYSTEM_NAME STREQUAL "NetBSD"\)(.*?)endif\(\)', re.DOTALL
 )
 
-# Kernel-module + mount-helper artifacts tools/cut-release-vax.sh ships
-# ALONGSIDE the ovmx-images aggregate (its stage 1/2 -- kernel modules, not
-# CMake install-component members, so there is no aggregate target to derive
-# them from). Extracted from that script's own static `printf` line so a
-# future rename still flows through here rather than silently going stale.
+# The executive kernel-module artifact tools/cut-release-vax.sh ships
+# ALONGSIDE the ovmx-images aggregate (its stage 1/2 -- vms.kmod.o, not a
+# CMake install-component member, so there is no aggregate target to derive
+# it from; vms-165 retired the vmsfs.kmod VFS module + its vmsfs_mount helper
+# that used to ship here too). Extracted from that script's own static `printf`
+# line so a future rename still flows through here rather than silently going stale.
 _VAX_MODULE_ARTIFACTS_RE = re.compile(
-    r"printf '%s\\n' (vms\.kmod\.o\s+vmsfs\.kmod\s+vmsfs_mount)\s*$", re.MULTILINE
+    r"printf '%s\\n' (vms\.kmod\.o)\s*$", re.MULTILINE
 )
 
 
@@ -268,7 +269,7 @@ def extract_vax_images(cmakelists_text: str, cut_release_vax_text: str) -> set[s
     """The VAX shippable-image set: the `ovmx-images` CMake aggregate's
     target list (top-level CMakeLists.txt `_OVMX_IMAGES_DEPS`, as it builds
     under the vax/NetBSD toolchain -- see _cmake_ovmx_images_entries), plus
-    the kernel-module/mount-helper artifacts tools/cut-release-vax.sh ships
+    the executive kernel-module artifact tools/cut-release-vax.sh ships
     alongside it. This is the authoritative source cut-release-vax.sh itself
     builds+installs (`cmake --build --target ovmx-images` + `cmake --install
     --component ovmx-images`) to produce vax-artifact-manifest.txt, the file
@@ -280,7 +281,7 @@ def extract_vax_images(cmakelists_text: str, cut_release_vax_text: str) -> set[s
     module_m = _VAX_MODULE_ARTIFACTS_RE.search(cut_release_vax_text)
     if not module_m:
         raise RuntimeError(
-            "image_parity.py: could not find the vms.kmod.o/vmsfs.kmod/vmsfs_mount "
+            "image_parity.py: could not find the vms.kmod.o "
             f"artifact-manifest printf line in {CUT_RELEASE_VAX_SH} -- has it been "
             "restructured? Update extract_vax_images()."
         )

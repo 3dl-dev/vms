@@ -7,7 +7,8 @@
  * Yet the real boot stalls after %STDRV-I-STARTUP, i.e. inside PROVISION.EXE
  * when STARTUP.EXE fork+execl's it.  This init reproduces STARTUP's exact
  * pre-PROVISION context minimally:
- *   1. mount proc/sys/dev, load vms.ko + vmsfs.ko, mount /dev/vda as vmsfs;
+ *   1. mount proc/sys/dev, load vms.ko (the Files-11 ODS-2 ACP is inside it,
+ *      vms-165 -- no separate vmsfs.ko / vmsfs mount);
  *   2. HOLD an executive attachment (open /dev/vms, keep the fd) -- what
  *      STARTUP's executive_attach() does before it forks;
  *   3. fork + execl the REAL SYS$SYSTEM:PROVISION.EXE off the mounted disk,
@@ -60,11 +61,11 @@ int main(void)
 
     printf("XPROV: init up\n");
     load_module("/vms.ko");
-    load_module("/vmsfs.ko");
-    printf("XPROV: modules; /dev/vms %s\n", access("/dev/vms", F_OK) == 0 ? "PRESENT" : "ABSENT");
+    printf("XPROV: module; /dev/vms %s\n", access("/dev/vms", F_OK) == 0 ? "PRESENT" : "ABSENT");
 
-    int mrc = mount("/dev/vda", "/vms", "vmsfs", 0, NULL);
-    printf("XPROV: mounted rc=%d errno=%d\n", mrc, mrc ? errno : 0);
+    /* vms-165: SYS$DISK is reached through the vms.ko Files-11 ODS-2 ACP (over
+     * /dev/vms), not a legacy `mount -t vmsfs`; the vmsfs.ko VFS driver is gone.
+     * The /vms/... reads below predate the ACP cutover (historical diagnostic). */
 
     /* Mirror STARTUP's executive_attach(): hold an executive attachment open
      * across the fork/exec of PROVISION. */

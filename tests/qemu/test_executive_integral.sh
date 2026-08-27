@@ -177,8 +177,10 @@ echo ""
 # --- Boot C (NEGATIVE CONTROL): module loads, /dev/vms never appears --------
 # Same kernel, same disk layout, same STARTUP.EXE. The ONLY difference from
 # Boot A is that /lib/modules/vms.ko is a DIFFERENT real, loadable kernel
-# module (vmsfs.ko's own binary, built by this same Dockerfile stage) that
-# registers no misc device -- so finit_module() succeeds but /dev/vms never
+# module (nodev-stub.ko, a dependency-free stock module harvested by this same
+# Dockerfile stage -- vms-165; was vmsfs.ko's binary before the vmsfs VFS driver
+# was retired) that registers no misc device -- so finit_module() succeeds but
+# /dev/vms never
 # appears in devtmpfs. This is the second half of executive_attach's
 # guarantee: Boot B proves "module missing" is fatal, Boot C proves "module
 # loads but the device node never shows up" is *independently* fatal, and

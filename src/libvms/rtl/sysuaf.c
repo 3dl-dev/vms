@@ -338,8 +338,11 @@ int sysuaf_authenticate(const sysuaf_record_t *rec, const char *password)
 /* Lookup (binary, via the weak LIBVMSRMS entry points)                */
 /* ------------------------------------------------------------------ */
 
-int sysuaf_lookup(const char *username, sysuaf_record_t *rec)
+int sysuaf_lookup_st(const char *username, sysuaf_record_t *rec,
+                     uint32_t *rms_st)
 {
+    if (rms_st)
+        *rms_st = 0;
     if (!username || !rec)
         return -1;
     if (!ovmx_sysuaf_read_user)          /* no LIBVMSRMS in this image */
@@ -347,10 +350,22 @@ int sysuaf_lookup(const char *username, sysuaf_record_t *rec)
 
     sysuaf_rms_record_t raw;
     uint32_t st = ovmx_sysuaf_read_user(username, &raw);
+    /* Surface the REAL RMS status of the SYSUAF read (vms-3b0). The int
+     * return collapses every failure to -1, which masked a privilege-denied
+     * read (RMS$_PRV -- a SYSTEM fault, the file is unreadable) as if it were
+     * an ordinary no-such-user. A caller that needs to tell a system fault
+     * from a genuine record-not-found (RMS$_RNF) reads *rms_st. */
+    if (rms_st)
+        *rms_st = st;
     if (!$VMS_STATUS_SUCCESS(st))
         return -1;
     sysuaf_raw_to_view(&raw, rec);
     return 0;
+}
+
+int sysuaf_lookup(const char *username, sysuaf_record_t *rec)
+{
+    return sysuaf_lookup_st(username, rec, NULL);
 }
 
 int sysuaf_lookup_by_uic(uint32_t uic, sysuaf_record_t *rec)

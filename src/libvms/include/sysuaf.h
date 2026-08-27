@@ -271,6 +271,14 @@ void sysuaf_record_set_username(sysuaf_record_t *rec, const char *username);
    /dev/vms, gets -1, never a fabricated record). Case-insensitive. */
 int sysuaf_lookup(const char *username, sysuaf_record_t *rec);
 
+/* Like sysuaf_lookup(), but surfaces the RAW RMS status of the SYSUAF read
+   into *rms_st (NULL-able) so a caller can tell a SYSTEM fault -- the SYSUAF
+   itself unreadable (RMS$_PRV insufficient privilege, RMS$_FNF file not found,
+   ...) -- from a genuine record-not-found (RMS$_RNF = no such user). Same 0/-1
+   return and same fail-honest contract as sysuaf_lookup(). vms-3b0. */
+int sysuaf_lookup_st(const char *username, sysuaf_record_t *rec,
+                     uint32_t *rms_st);
+
 /* Look up the account holding UIC 'uic' ((group << 16) | member) by the
    secondary UIC key. Returns 0 on success, -1 if none holds it / engine absent.*/
 int sysuaf_lookup_by_uic(uint32_t uic, sysuaf_record_t *rec);

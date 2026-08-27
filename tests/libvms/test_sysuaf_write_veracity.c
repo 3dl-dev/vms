@@ -30,6 +30,7 @@
 
 #include "sysuaf.h"
 #include "sysuaf_live.h"   /* ovmx_sysuaf_write_all -- seed the binary fixture */
+#include "rmsdef.h"        /* RMS$_NORMAL / RMS$_RNF -- vms-3b0 status surfacing */
 #include "vmsfs/device.h"
 #include "vms/logical.h"
 #include "ovmx_layout.h"
@@ -121,6 +122,24 @@ int main(void)
     sysuaf_record_t rec;
     check(sysuaf_lookup("TESTUSER", &rec) == 0,
           "TESTUSER resolves through SYS$SYSTEM:SYSUAF.DAT (real binary read)");
+
+    /* --- vms-3b0: sysuaf_lookup_st() surfaces the RAW RMS status instead of
+     * collapsing every failure to a bare -1 (which masked a privilege-denied
+     * read as an ordinary no-such-user during the #766 VAX-login diagnosis).
+     * A present account reports RMS$_NORMAL; an ABSENT one reports RMS$_RNF
+     * (record-not-found) -- the value LOGINOUT relies on to keep a genuine
+     * no-such-user indistinguishable from a wrong password while still making a
+     * SYSTEM fault (RMS$_PRV/RMS$_FNF) diagnosable. --- */
+    uint32_t look_st = 0;
+    sysuaf_record_t strec;
+    check(sysuaf_lookup_st("TESTUSER", &strec, &look_st) == 0
+              && look_st == RMS$_NORMAL,
+          "sysuaf_lookup_st surfaces RMS$_NORMAL for a present account");
+    look_st = 0;
+    check(sysuaf_lookup_st("NOSUCHUSER_ZZ", &strec, &look_st) < 0
+              && look_st == RMS$_RNF,
+          "sysuaf_lookup_st surfaces RMS$_RNF (not a bare -1) for an absent "
+          "account -- the fail-honesty the collapse used to hide (vms-3b0)");
     check(sysuaf_authenticate(&rec, old_pw) == 1,
           "pre-condition: OLD password authenticates before any change");
     check(sysuaf_authenticate(&rec, new_pw) == 0,

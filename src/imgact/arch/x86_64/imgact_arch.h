@@ -30,6 +30,7 @@
 #define SYS_mmap        9
 #define SYS_mprotect    10
 #define SYS_munmap      11
+#define SYS_mincore     27
 #define SYS_exit_group  231
 
 static inline long syscall6(long n, long a, long b, long c, long d, long e,

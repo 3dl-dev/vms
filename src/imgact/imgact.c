@@ -1202,11 +1202,34 @@ static void self_relocate(unsigned long base)
 	}
 	Elf64_Rela *r = (Elf64_Rela *)rela;
 	unsigned long n = relasz / sizeof(Elf64_Rela);
+	unsigned long last_pg = ~0UL;
 	for (unsigned long i = 0; i < n; i++) {
 		if (ELF64_R_TYPE(r[i].r_info) == IMGACT_R_RELATIVE) {
-			unsigned long *w =
-				(unsigned long *)(base + r[i].r_offset);
-			*w = base + (unsigned long)r[i].r_addend;
+			unsigned long addr = base + r[i].r_offset;
+			/* Same unprotected-write pattern as apply_vms_rel, but on
+			 * IMGACT.EXE's OWN pages and BEFORE any print. AUDIT (readelf):
+			 * IMGACT's RELATIVE targets sit in its PF_R|PF_W data segment
+			 * (no RELRO -- built -z norelro), which a W^X kernel leaves
+			 * writable, so this store does NOT actually fault and
+			 * self_relocate is NOT the Branch-C crash. This mprotect is a
+			 * zero-cost DEFENSIVE hedge only: PROT_READ|PROT_WRITE (the page
+			 * is pure data; no EXEC, so it stays W^X-clean and this is a
+			 * no-op on the already-writable page) -- it merely covers a
+			 * hardened kernel that unexpectedly maps this RW segment R-only.
+			 *
+			 * GOT-FREE by necessity: this runs BEFORE the GOT it is fixing,
+			 * so it must not call a GOT-routed helper. syscall6 is `static
+			 * inline` (a bare callsys, no GOT) and all args are immediates or
+			 * locals -- unlike sys_mprotect(), a real function gcc could reach
+			 * through the not-yet-relocated GOT. (vms-f60d) */
+			unsigned long pg = addr & ~(IMGACT_KPAGE - 1UL);
+			if (pg != last_pg) {
+				(void)syscall6(SYS_mprotect, (long)pg,
+					       (long)IMGACT_KPAGE,
+					       PROT_READ | PROT_WRITE, 0, 0, 0);
+				last_pg = pg;
+			}
+			*(unsigned long *)addr = base + (unsigned long)r[i].r_addend;
 		}
 	}
 }
@@ -1222,6 +1245,18 @@ static unsigned long exec_bias(Elf64_Phdr *phdr, int phnum, unsigned long at_phd
 		if (phdr[i].p_type == PT_PHDR)
 			return at_phdr - phdr[i].p_vaddr;
 	return 0;
+}
+
+/* Signal-free "is the page containing `addr` mapped?" probe (vms-f60d). mincore
+ * fills a residency byte for a MAPPED range and returns -ENOMEM for an unmapped
+ * one, so it answers WITHOUT dereferencing `addr` (no SIGSEGV) and WITHOUT any
+ * side effect on the probed page (unlike an mprotect/mlock probe). Returns 1 iff
+ * mincore reported the page mapped. `addr` is page-aligned for the syscall. */
+static int imgact_page_mapped(unsigned long addr)
+{
+	unsigned char vec;
+	unsigned long pg = addr & ~(IMGACT_KPAGE - 1UL);
+	return syscall6(SYS_mincore, (long)pg, 1, (long)&vec, 0, 0, 0) == 0;
 }
 
 /* --------------------------------------------------------------------------
@@ -2468,6 +2503,18 @@ static void imgact_maybe_boundary_audit(char **envp, const char *image)
 
 unsigned long imgact_bootstrap(unsigned long *sp)
 {
+	/* UNGATED marker (a): BARE proof that IMGACT.EXE's C entry runs at all,
+	 * emitted as the VERY FIRST thing -- before the stack parse, before
+	 * self_relocate, before g_envp exists. It must be GOT-free (self_relocate
+	 * has not fixed the GOT yet) and must NOT read g_envp (still NULL): syscall6
+	 * is inlined (bare callsys) and the length is compile-time. If this prints
+	 * but IMGACT-GENVP (marker b) does not, the fault is in self_relocate. */
+	{
+		static const char m_a[] = "IMGACT-ENTRY reached\n";
+		(void)syscall6(SYS_write, 2, (long)m_a,
+			       (long)(sizeof(m_a) - 1), 0, 0, 0);
+	}
+
 	/* ---- Parse the initial process stack (no globals yet). ---- */
 	long argc = (long)sp[0];
 	char **argv = (char **)(sp + 1);
@@ -2497,10 +2544,61 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	g_envp  = envp;                         /* for the C-RTL __init_libc bootstrap */
 	g_argv0 = argc > 0 ? argv[0] : 0;
 
+	/* UNGATED marker (b): self_relocate survived and g_envp is now populated.
+	 * This is the reading-(2) disambiguator -- with g_envp set, imgact_env_value
+	 * gives the TRUE seam_env (marker a was bare precisely because g_envp was
+	 * still NULL there and would have read a false 0). seam_env=1 => the env
+	 * DOES reach IMGACT and every gated print should have fired -- so a silent
+	 * gated marker means a real crash, not a dead gate. seam_env=0 => the env
+	 * var is not in the subject's environment (a harness-propagation issue), and
+	 * all prior crash-location inferences from silent gated prints are suspect. */
+	{
+		const char *s = imgact_env_value(g_envp, "OVMX_IMGACT_SEAM");
+		int on = (s && s[0] == '1' && s[1] == '\0');
+		eputs("IMGACT-GENVP seam_env=");
+		eputs(on ? "1" : "0");
+		eputs("\n");
+	}
+
 	/* Discover the ACP system device before any image read (imgsrc_open uses
 	 * g_acp_sysdevice). Runtime-discovered, not a compile-time literal
 	 * (vms-29ff/vms-47d). */
 	imgact_discover_sysdevice(envp);
+	eputs("IMGACT-SYSDEV\n");   /* UNGATED marker (c): discover_sysdevice ok */
+
+	/* INV-6 HEDGE (vms-f60d): the kernel-supplied AT_PHDR must point at MAPPED
+	 * memory before we walk ephdr[] (below AND inside exec_bias). A malformed
+	 * image whose program headers are not covered by any PT_LOAD -- e.g. a
+	 * hand-written linker script that omits the headers from a segment -- leaves
+	 * AT_PHDR pointing at an address the kernel never mapped; dereferencing
+	 * ephdr[i] then SIGSEGVs (seen on real qemu-system-alpha; invisible under
+	 * qemu-user's lenient whole-file map). IMGACT must FAIL HONEST, never crash.
+	 * Bound at_phnum, then mincore-probe the whole [at_phdr, at_phdr+n*phdr)
+	 * range (signal-free, no dereference). A CONTROL probe on the stack (always
+	 * mapped) first confirms mincore is usable here, so a quirky/unsupported
+	 * mincore can never REJECT a valid image -- it just falls back to today's
+	 * behaviour. */
+	if (at_phnum <= 0 || at_phnum > 64 || at_phdr == 0) {
+		vms_fatal("BADIMGHDR",
+			  "image program-header count absent or out of range",
+			  at_execfn);
+		sys_exit(IMGACT_EXIT_FAIL);
+	}
+	if (imgact_page_mapped((unsigned long)&argc)) {   /* control: mincore works */
+		unsigned long phdr_bytes =
+			(unsigned long)at_phnum * sizeof(Elf64_Phdr);
+		int mapped = 1;
+		for (unsigned long o = 0; mapped && o < phdr_bytes; o += IMGACT_KPAGE)
+			mapped = imgact_page_mapped(at_phdr + o);
+		if (mapped)
+			mapped = imgact_page_mapped(at_phdr + phdr_bytes - 1);
+		if (!mapped) {
+			vms_fatal("BADIMGHDR",
+				  "AT_PHDR not within a mapped image segment",
+				  at_execfn);
+			sys_exit(IMGACT_EXIT_FAIL);
+		}
+	}
 
 	/* ---- Build the executable object from the kernel-provided phdrs. ----
 	 * The kernel has already mapped the main executable's LOAD segments;
@@ -2515,10 +2613,12 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	for (int i = 0; i < ephnum; i++)
 		if (ephdr[i].p_type == PT_DYNAMIC)
 			edyn = (Elf64_Dyn *)(ebias + ephdr[i].p_vaddr);
+	eputs("IMGACT-PHDR\n");     /* UNGATED marker (d): phdr/exec-object build ok */
 
 	/* An OVMX symbol-vector image (LINK.EXE output) has no PT_DYNAMIC: it
 	 * binds universal symbols through .vms$imp, not ELF DT_HASH. (vms-714) */
 	if (!edyn) {
+		eputs("IMGACT-PRE-ASV\n");      /* UNGATED marker (e): about to activate */
 		imgact_seam_mark("asv-enter");  /* bisect: activation setup begins */
 		activate_symbol_vector(ebias, at_execfn, ephdr, ephnum);
 		imgact_seam_mark("asv-done");   /* section read + relocation + bind + TLS ok */

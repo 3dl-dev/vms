@@ -43,6 +43,8 @@
 #include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <errno.h>
+#include <fcntl.h>         /* openat (vms_sys_openat) -- vms-706 */
+#include <sys/syscall.h>   /* SYS___futex (vms_sys_futex) -- vms-706 */
 
 /* ================================================================
  * Process
@@ -111,6 +113,35 @@ static inline vms_off_t vms_sys_lseek(int fd, vms_off_t offset, int whence)
 static inline int vms_sys_ioctl(int fd, unsigned long request, unsigned long arg)
 {
     return ioctl(fd, request, (void *)(unsigned long)arg);
+}
+
+/* vms-706: the freestanding buffered-I/O (vms_stdio.c) + futex (vms_futex.c)
+ * facilities. The VMS_O_ and VMS_FUTEX_ constants resolve to the NetBSD
+ * <fcntl.h> / <sys/futex.h> values (vms_types.h substrate-select) -- never a
+ * transcribed Linux number. */
+
+static inline int vms_sys_openat(int dirfd, const char *path, int flags,
+                                 vms_mode_t mode)
+{
+    /* NetBSD libc openat(2); flags is the VMS_O_* mask (== NetBSD O_*). */
+    return openat(dirfd, path, flags, (mode_t)mode);
+}
+
+static inline long vms_sys_futex(uint32_t *uaddr, int futex_op, uint32_t val,
+                                 const struct vms_timespec *timeout,
+                                 uint32_t *uaddr2, uint32_t val3)
+{
+    /* NetBSD ships no libc futex() wrapper -- the syscall is __futex
+     * (SYS___futex), a SEVEN-arg form that inserts `val2` before val3. Our ops
+     * (WAIT/WAKE/WAIT_BITSET) do not use val2, so it is 0. struct vms_timespec
+     * is layout-compatible with struct timespec on ILP32; cast explicitly. */
+    long r = syscall(SYS___futex, (int *)uaddr, futex_op, (int)val,
+                     (const struct timespec *)timeout, (int *)uaddr2,
+                     0 /* val2 */, (int)val3);
+    /* Fold errno into a raw negative-errno return: vms_futex.c's
+     * vms_condvar_timedwait tests `ret == -VMS_ETIMEDOUT`, so the libc
+     * -1/errno convention would break timeout detection. */
+    return (r < 0) ? -(long)errno : r;
 }
 
 /* ================================================================

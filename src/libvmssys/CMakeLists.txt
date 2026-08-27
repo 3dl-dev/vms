@@ -52,15 +52,17 @@ if(VMSSYS_SUBSTRATE STREQUAL "netbsd")
     # Link-libc build set: substrate-agnostic VMS RTL + kif policy + NetBSD
     # transport leaf. Excluded on purpose (design §4.1):
     #   * vms_runtime_init.c    -- hand-rolled auxv/TLS; NetBSD csu/libc does it.
-    #   * vms_stdio.c/vms_futex.c -- freestanding buffered-I/O + futex sync,
-    #     superseded by NetBSD libc/libpthread; they also use VMS_O_*/futex
-    #     wrappers whose per-substrate constant resolution is a deferred audit
-    #     item (docs/design-ovmx-netbsd-syskrnl.md §4.2).
     #   * kif_transport_linux.c -- replaced by kif_transport_netbsd.c.
+    # vms_stdio.c + vms_futex.c ARE built here now (vms-706): their VMS_O_*/futex
+    # wrappers resolve per-substrate (vms_sys_openat/vms_sys_futex over NetBSD
+    # openat(2)/__futex(2); VMS_O_*/VMS_FUTEX_* alias <fcntl.h>/<sys/futex.h>),
+    # closing the freestanding-facility gap so the same sources build on VAX.
     set(VMSSYS_C_SOURCES
         vms_string.c
         vms_snprintf.c
         vms_math.c
+        vms_stdio.c
+        vms_futex.c
         vms_kif.c
         kif_transport_netbsd.c
     )

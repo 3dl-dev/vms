@@ -335,7 +335,7 @@ def do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
     modules in the module_path, capture the executive major + pre-create
     /dev/vms, MAKEDEV ra1, create the boot mount points. Idempotent."""
     build_source_iso(artifacts_dir, src_iso,
-                     ("STARTUP.EXE", "vms.kmod", "vmsfs.kmod"))
+                     ("STARTUP.EXE", "vms.kmod"))
     src_abs = os.path.abspath(src_iso)
     vmm_args = ["set rq2 cdrom", "attach -r rq2 " + src_abs]
     log("booting the isolated boot-disk copy SINGLE-USER with the artifact CD "
@@ -354,34 +354,33 @@ def do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
                   "  test -e $dev || continue; "
                   "  if mount_cd9660 $dev /mnt 2>/dev/null; then "
                   "    if test -f /mnt/STARTUP.EXE; then ok=$dev; "
-                  "      cp /mnt/STARTUP.EXE /mnt/vms.kmod /mnt/vmsfs.kmod /root/ovmx/ && "
+                  "      cp /mnt/STARTUP.EXE /mnt/vms.kmod /root/ovmx/ && "
                   "      umount /mnt && break; "
                   "    else umount /mnt 2>/dev/null; fi; "
                   "  fi; done; "
                   "echo \"OVMX boot CD = $ok\"; ls -l /root/ovmx; "
-                  "test -f /root/ovmx/STARTUP.EXE && test -f /root/ovmx/vms.kmod "
-                  "&& test -f /root/ovmx/vmsfs.kmod",
+                  "test -f /root/ovmx/STARTUP.EXE && test -f /root/ovmx/vms.kmod",
                   cmd_timeout)
     if rc != 0:
         log("FAIL: could not stage the boot artifacts from the OVMX CD")
         return PROOF_FAILED
-    log("OK: staged STARTUP.EXE + vms.kmod + vmsfs.kmod")
+    log("OK: staged STARTUP.EXE + vms.kmod")
 
-    # 2. Place the modules in the kernel module_path so ovmx_init's bare-name
-    #    modctl(MODCTL_LOAD, "vms"/"vmsfs") resolves them the standard way -- the
-    #    authentic way an installed NetBSD module is found.
+    # 2. Place the executive module in the kernel module_path so ovmx_init's
+    #    bare-name modctl(MODCTL_LOAD, "vms") resolves it the standard way -- the
+    #    authentic way an installed NetBSD module is found. (vms-165: the vmsfs
+    #    VFS module is retired; the runtime reads SYS$DISK over the ACP.)
     rc, out = run(child,
                   "MP=`sysctl -n kern.module.path | cut -d: -f1`; "
                   "echo \"module_path=$MP\"; "
-                  "mkdir -p \"$MP/vms\" \"$MP/vmsfs\" && "
+                  "mkdir -p \"$MP/vms\" && "
                   "cp /root/ovmx/vms.kmod \"$MP/vms/vms.kmod\" && "
-                  "cp /root/ovmx/vmsfs.kmod \"$MP/vmsfs/vmsfs.kmod\" && "
-                  "ls -l \"$MP/vms/vms.kmod\" \"$MP/vmsfs/vmsfs.kmod\"",
+                  "ls -l \"$MP/vms/vms.kmod\"",
                   cmd_timeout)
     if rc != 0:
-        log("FAIL: could not place vms.kmod/vmsfs.kmod in the module_path")
+        log("FAIL: could not place vms.kmod in the module_path")
         return PROOF_FAILED
-    log("OK: modules placed in the kernel module_path")
+    log("OK: executive module placed in the kernel module_path")
 
     # 3. Verify BARE-NAME modload works (exactly ovmx_init's path) for BOTH
     #    modules, and capture the executive's dynamically-assigned char major so
@@ -404,14 +403,7 @@ def do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
         log("FAIL: could not capture the vms char major / pre-create /dev/vms")
         return PROOF_FAILED
     run(child, "modunload vms 2>/dev/null; true", cmd_timeout)
-
-    rc, out = run(child, "modload vmsfs && echo LOADED_VMSFS", cmd_timeout)
-    if rc != 0:
-        log("FAIL: bare-name `modload vmsfs' FAILED -- ovmx_init's vmsfs load "
-            "would fail identically.")
-        return PROOF_FAILED
-    run(child, "modunload vmsfs 2>/dev/null; true", cmd_timeout)
-    log("OK: both modules bare-name modload cleanly; /dev/vms pre-created")
+    log("OK: vms.kmod bare-name modloads cleanly; /dev/vms pre-created")
 
     # 4. Create the system-disk device node (ra1 = the ODS-2 volume on rq1) AND
     #    the second MSCP disk node (ra2 = the install TARGET on rq2 -> DKA100:,

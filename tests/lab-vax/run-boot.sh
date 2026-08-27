@@ -183,14 +183,14 @@ ensure_src() {
   [ -f "${NBSRC_DIR}/usr/src/build.sh" ] || die "src tree extract incomplete"
 }
 
-# 1. cross-build STARTUP.EXE + vms.kmod + vmsfs.kmod into ARTIFACTS_DIR (each into
-#    its own scratch subdir; only the delivered artifact is copied up, so the CD
-#    carries just the four boot deliverables).
+# 1. cross-build STARTUP.EXE + vms.kmod into ARTIFACTS_DIR (each into its own
+#    scratch subdir; only the delivered artifact is copied up). vms-165: the
+#    vmsfs.kmod VFS module is gone -- the runtime reads SYS$DISK over the
+#    executive ACP (vms.kmod), never a vmsfs mount, so it is no longer built.
 cross_build() {
   if [ "${FORCE_CROSS_BUILD:-0}" != "1" ] \
      && [ -f "${ARTIFACTS_DIR}/STARTUP.EXE" ] \
-     && [ -f "${ARTIFACTS_DIR}/vms.kmod" ] \
-     && [ -f "${ARTIFACTS_DIR}/vmsfs.kmod" ]; then
+     && [ -f "${ARTIFACTS_DIR}/vms.kmod" ]; then
     log "boot artifacts present -- NOT rebuilding (set FORCE_CROSS_BUILD=1 to force)"; return 0; fi
   ensure_src
   mkdir -p "${ARTIFACTS_DIR}"
@@ -205,12 +205,8 @@ cross_build() {
   docker run --rm -v "${REPO}:/src" -w /src -v "${NBSRC_DIR}:/nbsrc:ro" \
     -v "${ARTIFACTS_DIR}:/out" --entrypoint sh "${CROSS_IMAGE}" -c \
     'OUT=/tmp/build-devvms sh tools/cross-vax/build-devvms-vax.sh && cp /tmp/build-devvms/vms.kmod /out/vms.kmod'
-  log "cross-building the loadable vmsfs.kmod for elf32-vax"
-  docker run --rm -v "${REPO}:/src" -w /src -v "${NBSRC_DIR}:/nbsrc:ro" \
-    -v "${ARTIFACTS_DIR}:/out" --entrypoint sh "${CROSS_IMAGE}" -c \
-    'OUT=/tmp/build-vmsfs sh tools/cross-vax/build-vmsfs-mount-vax.sh && cp /tmp/build-vmsfs/vmsfs.kmod /out/vmsfs.kmod'
   [ -f "${ARTIFACTS_DIR}/STARTUP.EXE" ] && [ -f "${ARTIFACTS_DIR}/vms.kmod" ] \
-    && [ -f "${ARTIFACTS_DIR}/vmsfs.kmod" ] || die "cross-build missing artifacts"
+    || die "cross-build missing artifacts"
 }
 
 # 2. build (or reuse) the custom MODULAR kernel, cached as ARTIFACTS_DIR/netbsd-OVMX.

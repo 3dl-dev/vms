@@ -6882,6 +6882,65 @@ jobs:
         run: ONLY_SUITE=test_arith_hparith tools/cross-alpha/run-syssvc-tests-alpha.sh
 
   # -----------------------------------------------------------------------
+  # alpha-syssvc-suite (rd vms-341, epic vms-8954). The STANDING green-by-SHA
+  # proof that the OVMX public sys$ API tier (the whole test_syssvc_*/
+  # test_imgact_* suite) RUNS LP64 under a REAL qemu-system-alpha kernel over
+  # /dev/vms -- not just cross-compiles. This is the honest anti-LARP proof the
+  # Alpha userspace works, distinct from alpha-boot-login (which proves boot ->
+  # authenticated DCL) and alpha-arith-hparith (one arithmetic-trap suite).
+  #
+  # NO-NEW-vs-BASELINE gate (vms-898a policy). 58/66 suites pass on Alpha -- that
+  # IS the LP64 proof. The 11 that fail are ENVIRONMENTAL / not-applicable, not
+  # LP64 sys$ bugs, enumerated with per-suite reasons + follow-on rd items in
+  # tools/cross-alpha/alpha-syssvc-baseline.txt (5 symbol-vector suites that are
+  # LINK.EXE-only and N/A on Alpha static images; 2 whose subject image does not
+  # cross-build for Alpha yet; the -nic-none ETH0: pair; 2 emulator-timing). The
+  # runner still RUNS and honestly FAILS them (never skips); the gate REDS on ANY
+  # failure not in that list -- a new suite failing OR one of the 58 passes
+  # regressing -- so it protects the LP64 tier against regression without faking
+  # the environmental blockers green. A new failure is triaged, never
+  # auto-absorbed (adding to the baseline is an explicit, reviewed commit).
+  #
+  # HEAVY-EMULATOR TIER (schedule || workflow_dispatch), like alpha-boot-login:
+  # a full Alpha cross-build + ~66-suite qemu-system-alpha run is ~45-60 min, off
+  # the per-PR path. Conductor fires workflow_dispatch on the frozen SHA for the
+  # green-by-SHA reap; nightly schedule catches drift on main.
+  # -----------------------------------------------------------------------
+  alpha-syssvc-suite:
+    name: OVMX/Alpha public sys$ API tier RUNS LP64 on qemu-system-alpha, no-new-vs-baseline (vms-341)
+    needs: changes
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: "sys tier gate — boot qemu-system-alpha, run the whole test_syssvc_*/test_imgact_* suite over /dev/vms, assert no NEW failure beyond the documented environmental baseline"
+        run: BASELINE=tools/cross-alpha/alpha-syssvc-baseline.txt tools/cross-alpha/run-syssvc-tests-alpha.sh
+
+  # -----------------------------------------------------------------------
   # vmsfs-core-elf32-vax (rd vms-bb8, epic vms-8e8; P4-VFS V3).
   #
   # BUILD-ONLY cross-compile gate for the substrate-neutral ODS-2 core

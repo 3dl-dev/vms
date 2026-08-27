@@ -112,7 +112,7 @@ trap cleanup EXIT
 # shellcheck disable=SC2086
 timeout "$((BOOT_TIMEOUT + CMD_TIMEOUT * 4 + 60))" $QEMU $MACHINE \
     -kernel "$KERNEL" -initrd "$SLIM_INITRD" \
-    -nographic -append "$CONSOLE loglevel=3 quiet" \
+    -nographic -append "$CONSOLE loglevel=3" \
     -m 384M -smp 1 -nic none -nodefaults -serial stdio \
     -drive file="$DISK",format=raw,if=virtio,cache=writethrough \
     -no-reboot <"$FIFO" >"$LOG" 2>&1 &

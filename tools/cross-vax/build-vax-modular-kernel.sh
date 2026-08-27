@@ -70,6 +70,26 @@ MEOF
   echo "patched machdep.c (+module_init_md)"
 fi
 
+# --- rd vms-603: faithful boot console -- suppress the NetBSD banner under -----
+# AB_QUIET. The autoconf device probes + root/swap mount lines already go quiet
+# under AB_QUIET (subr_prf.c: aprint_normal drops TOCONS), but banner() emits the
+# copyright + version + total/avail-memory lines with printf (always TOCONS), so
+# no boothowto bit stock-suppresses them. Gate banner()'s body on AB_QUIET so
+# that a QUIET boot (R5 = RB_SINGLE|AB_QUIET, drive_boot_vax.py) shows the VMS
+# boot sequence, not a Unix dmesg. A non-quiet boot is untouched (reversible).
+# Clean-room (CLAUDE.md Rule 8): NetBSD kernel source, not VMS -- unaffected.
+INITMAIN="$SRC/sys/kern/init_main.c"
+if ! grep -q 'OVMX vms-603 quiet banner' "$INITMAIN"; then
+  # Anchor on the unique `if ((boothowto & AB_SILENT) != 0)' -- banner()'s first
+  # STATEMENT -- so the early return lands AFTER the locals (no C89
+  # declaration-after-statement issue) and only in banner() (that AB_SILENT test
+  # occurs exactly once in init_main.c).
+  perl -0pi -e 's/(\n\tif \(\(boothowto & AB_SILENT\) != 0\) \{)/\n\tif \(boothowto & AB_QUIET\)\t\/* OVMX vms-603 quiet banner *\/\n\t\treturn;$1/' "$INITMAIN"
+  grep -q 'OVMX vms-603 quiet banner' "$INITMAIN" \
+    || { echo "FAIL: could not gate banner() on AB_QUIET in $INITMAIN"; exit 3; }
+  echo "patched init_main.c (banner() quiet under AB_QUIET -- vms-603)"
+fi
+
 # --- custom kernel config: GENERIC + the module framework (idempotent) -------
 CONF="$SRC/sys/arch/vax/conf/OVMX"
 if [ ! -f "$CONF" ]; then

@@ -303,15 +303,24 @@ def do_install_kernel(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
 
 def start_single_user(a, vmm_args, boot_deadline, cmd_timeout):
     """Reuse anita's start_simh() to spawn SIMH with the disk + our extra
-    drives, then drive the KA655 ROM to boot SINGLE-USER (R5 = RB_SINGLE) and
-    bring up a writable root shell with a unique prompt. Returns (child, con)."""
+    drives, then drive the KA655 ROM to boot SINGLE-USER + QUIET and bring up a
+    writable root shell with a unique prompt. Returns (child, con).
+
+    R5 = 0x10002 = RB_SINGLE (0x2) | AB_QUIET (0x10000): VMB copies R5 to
+    rpb_bootr5 and the kernel assigns it to boothowto (arch/vax/vax/locore.c),
+    so AB_QUIET silences NetBSD's autoconf device probes + root/swap mount lines
+    on the console (subr_prf.c: aprint_normal drops TOCONS under AB_QUIET). The
+    OVMX kernel additionally gates banner() on AB_QUIET (build-vax-modular-
+    kernel.sh) so the copyright/version/memory lines go too -- the console shows
+    the VMS boot, not a Unix dmesg (vms-603, faithful boot console). The `/R5:`
+    value is HEX on the KA655 console."""
     import pexpect  # noqa: F401  (import proves availability early)
     a.dist.set_workdir(a.workdir)
     a.n_cdrom = 0
     child = a.start_simh(vmm_args)
     child.timeout = boot_deadline
     child.expect(r">>>")
-    child.send("B/R5:2 DUA0\r")
+    child.send("B/R5:10002 DUA0\r")   # RB_SINGLE|AB_QUIET (hex) -- vms-603
     r = child.expect([r"Enter pathname of shell or RETURN for /bin/sh:", r"# "])
     if r == 0:
         child.send("\n")
@@ -659,7 +668,7 @@ def do_prove(a, ods2_img, negctl, boot_deadline):
     try:
         child.timeout = boot_deadline
         child.expect(r">>>")
-        child.send("B/R5:2 DUA0\r")
+        child.send("B/R5:10002 DUA0\r")   # RB_SINGLE|AB_QUIET (hex) -- vms-603
 
         # ovmx_init IS init: no shell, no login. Watch the console for the
         # milestone lines in order. Each expect has the boot deadline; a
@@ -786,7 +795,7 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
     try:
         child.timeout = boot_deadline
         child.expect(r">>>")
-        child.send("B/R5:2 DUA0\r")
+        child.send("B/R5:10002 DUA0\r")   # RB_SINGLE|AB_QUIET (hex) -- vms-603
 
         # Pre-mount milestones, same order as do_prove. In single-disk mode the
         # "DKA0: -> ra0e" backing line is inserted between MS_SYSKRNL and MS_EXEC

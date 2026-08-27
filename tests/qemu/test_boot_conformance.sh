@@ -249,12 +249,20 @@ fi
 # (the exact shape opcom_kmsg_classify() recognizes as an OVMX kernel-module
 # record -- see src/ovmx_init/opcom_kmsg.c -- which belongs in
 # SYS$MANAGER:OPERATOR.LOG, never verbatim on the console).
-if printf '%s\n' "$CLEAN" | grep -qE '\[[[:space:]]*[0-9]+\.[0-9]+\]'; then
+# vms-603: the forbidden host-substrate patterns come from the SHARED contract
+# lib -- the SAME one the VAX gate (tests/lab-vax/run-boot.sh) sources -- so the
+# two gates' "no substrate leak" contract cannot drift into two copies. The
+# regexes are identical to the previous inline literals, so behaviour is
+# unchanged (the shared kernel-timestamp tell + the linux vms:/vmsfs: probes).
+# shellcheck source=../lib/console_cleanliness.sh
+. "$(dirname "$0")/../lib/console_cleanliness.sh"
+if printf '%s\n' "$CLEAN" | grep -qE "$CONSOLE_FORBID_SHARED"; then
     bad "a kernel-timestamped line (e.g. '[   41.332690]') reached the console -- raw dmesg leak (vms-300)"
 else
     pass "no kernel-timestamped '[ NNN.NNN]' line on the console (vms-300)"
 fi
-if printf '%s\n' "$CLEAN" | grep -qE '^vms: |^vmsfs: '; then
+_lx_forbid="$(console_forbid_for_substrate linux | paste -sd'|' -)"
+if printf '%s\n' "$CLEAN" | grep -qE "$_lx_forbid"; then
     bad "a raw 'vms:'/'vmsfs:' kernel-module line reached the console verbatim -- must be OPERATOR.LOG-only via the kmsg bridge (vms-300)"
 else
     pass "no raw 'vms:'/'vmsfs:' kernel-module line on the console (vms-300)"

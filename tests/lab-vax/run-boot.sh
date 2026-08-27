@@ -77,6 +77,11 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "${HERE}/../.." && pwd)"
 MODE="${1:-prove}"
 
+# vms-603: the shared faithful-boot-console contract (same lib the Linux gate
+# tests/qemu/test_boot_conformance.sh sources) -- assert_console_clean().
+# shellcheck source=../lib/console_cleanliness.sh
+. "${REPO}/tests/lib/console_cleanliness.sh"
+
 NETBSD_VERSION="${NETBSD_VERSION:-10.1}"
 ISO_NAME="NetBSD-${NETBSD_VERSION}-vax.iso"
 ISO_SHA512="${ISO_SHA512:-aa763aa2240e4623adf09dd1a1ed2da0e3b96959d33544d52026a0c7c7448c6f0da8517bf059b9c53a9786782c0373b2e3da84de4b36cc5aeb669d219ac0f225}"
@@ -597,7 +602,12 @@ run_sysboot_positive() {
   local sysvol_hash_before sysvol_hash_after
   sysvol_hash_before="$(sha256sum "${SYSVOL_IMG}" | awk '{print $1}')"
   log "sysvol pre-boot sha256:  ${sysvol_hash_before}"
-  if run_session sysboot /cache/boot-work; then
+  # vms-603: capture the FULL raw SIMH transcript (tee keeps the live console AND
+  # a file to grep for substrate leaks -- the driver's milestone-matching stream
+  # would silently skip the very spam we must catch).
+  local _console_log="${CACHE_DIR}/sysboot-console-$$.log"
+  run_session sysboot /cache/boot-work 2>&1 | tee "${_console_log}"
+  if [ "${PIPESTATUS[0]}" -eq 0 ]; then
     sysvol_hash_after="$(sha256sum "${SYSVOL_IMG}" | awk '{print $1}')"
     log "sysvol post-boot sha256: ${sysvol_hash_after}"
     if [ "${sysvol_hash_before}" = "${sysvol_hash_after}" ]; then
@@ -607,6 +617,17 @@ run_sysboot_positive() {
     log "OK (rd vms-e7a): the mounted ODS-2 SYSTEM volume's on-disk bytes CHANGED"
     log "  during this boot -- REAL block writes hit the volume (not a"
     log "  silently-faked/no-op VOP_SETATTR; INV-6 honest-failure teeth)."
+    # vms-603: FAITHFUL BOOT CONSOLE. The console must show ONLY the VMS boot
+    # sequence -- no NetBSD kernel banner/dmesg, no autoconf device probes, no
+    # root/swap mount lines, no empty-newline flood. The AB_QUIET boothowto
+    # (R5=0x10002) + the banner() gate (build-vax-modular-kernel.sh) suppress
+    # them at the source; this asserts the raw transcript is actually clean so a
+    # substrate leak can never regress (standing gate, shared contract).
+    if ! assert_console_clean "${_console_log}" vax; then
+      soft_die "SYSBOOT: the boot console leaked host-substrate (NetBSD kernel) text -- not a faithful VMS boot (vms-603). See the CONSOLE-LEAK line(s) above."
+      return 1
+    fi
+    log "OK (vms-603): the boot console is VMS-faithful -- no NetBSD substrate leak."
     log "======================================================================"
     log "  SYSBOOT PASSED: ovmx_init on NetBSD/vax mounted the MASTERED OVMX"
     log "  ODS-2 SYSTEM volume READ-WRITE, passed the installed-system gate,"

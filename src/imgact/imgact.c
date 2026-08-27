@@ -297,6 +297,26 @@ int strncmp(const char *a, const char *b, unsigned long n)
 
 static void eputs(const char *s) { sys_write(2, s, xstrlen(s)); }
 
+/* Defined further down; forward-declared here for the OVMX-SEAM-DBG probe in
+ * imgact_vms_standard_activate (which precedes the definition). */
+static const char *imgact_env_value(char **envp, const char *key);
+
+#if defined(IMGACT_HAVE_VMS_STD)
+/* Freestanding: format `v` as exactly 16 lowercase hex digits into buf[0..15],
+ * NUL at buf[16] (buf must hold 17 bytes). Used only by the OVMX-SEAM-DBG
+ * activation probe (imgact_vms_standard_activate, Alpha-only); no libc, no
+ * allocation. Guarded so non-Alpha targets (no VMS-std path) don't build it. */
+static void imgact_hex64(unsigned long v, char *buf)
+{
+	static const char hd[] = "0123456789abcdef";
+	for (int i = 15; i >= 0; i--) {
+		buf[i] = hd[v & 0xfUL];
+		v >>= 4;
+	}
+	buf[16] = '\0';
+}
+#endif
+
 static void vms_fatal(const char *ident, const char *text, const char *detail)
 {
 	char line[512];
@@ -2142,6 +2162,38 @@ static void imgact_vms_standard_activate(unsigned long exe_base,
 	/* R25 = AI, built explicitly by the documented Argument-Information
 	 * layout (six 64-bit args), never a hard-coded 6. */
 	unsigned long ai = OVMX_AI_VMS_ACTIVATION;
+
+	/* OVMX-SEAM-DBG activation probe (vms-f60d), gated on OVMX_IMGACT_SEAM=1.
+	 * Dumps the COMPUTED transfer inputs the moment before the standard call so
+	 * the Alpha seam runner can read, from ground truth, whether a load-bias
+	 * error mis-computed pv/entry BEFORE the jsr (the leading SIGSEGV theory).
+	 *
+	 * For the ET_EXEC tier-1 stub (load_bias MUST be 0, pdsc @ 0x10060, entry
+	 * 0x1005c) the EXPECTED line is `... load_bias=0x0 ... entry=0x...1005c`.
+	 * A nonzero load_bias or a wrong entry is the confirmation.
+	 *
+	 * ORDER IS DELIBERATE: pv/load_bias/ai are emitted FIRST because reading
+	 * `entry = *(pv+8)` is the SAME dereference the trampoline does
+	 * (vms_transfer.S `ldq $27,8($3)`). If pv is mis-biased to unmapped memory
+	 * that read faults HERE, at the same spot the transfer would -- so emitting
+	 * the bias evidence before the deref guarantees the runner captures pv +
+	 * load_bias even when the probe itself crashes on the entry read (which then
+	 * itself localizes the fault to the pv computation). */
+	if (g_envp) {
+		const char *seam = imgact_env_value(g_envp, "OVMX_IMGACT_SEAM");
+		if (seam && seam[0] == '1' && seam[1] == '\0') {
+			char hx[17];
+			eputs("OVMX-SEAM-DBG: pv=0x");
+			imgact_hex64((unsigned long)pv, hx);        eputs(hx);
+			eputs(" load_bias=0x");
+			imgact_hex64(exe_base, hx);                 eputs(hx);
+			eputs(" ai=0x");
+			imgact_hex64(ai, hx);                       eputs(hx);
+			eputs(" entry=0x");
+			imgact_hex64(((const unsigned long *)pv)[1], hx);  eputs(hx);
+			eputs("\n");
+		}
+	}
 
 	unsigned long cond = imgact_vms_transfer(pv, ai, args);
 

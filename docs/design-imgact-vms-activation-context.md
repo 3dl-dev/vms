@@ -215,17 +215,24 @@ Grounded in the OpenVMS Calling Standard (VSI/HPE) — see Sources:
   `<25:8>` = six 3-bit groups, each `AI$K_AR_I64 = 0` (64-bit/sign-extended integer); `<63:26>` = 0.
   So `R25 = 6` (all-integer, six args) — but IMGACT must set it *explicitly* by the documented
   layout, not hard-code `6`.
-- **R27 = PV (procedure value)** = address of `__main`'s **procedure descriptor (PDSC)**; the entry
-  code address is at **offset 8** in the PDSC. For a symbol-vector image the transfer entry names the
-  PDSC (procedure kind), so `.vms$xfer entry_off[last]` resolves to the PDSC; the trampoline loads
-  R27 and jumps to `*(PDSC+8)`.
+- **R27 = PV (procedure value).** `.vms$xfer entry_off[last]` names the transfer symbol's VALUE,
+  i.e. the address of `__main`'s **procedure descriptor (PDSC)**; the entry code address is at
+  **offset 8** (`PDSC$Q_ENTRY`). **IMPLEMENTATION CORRECTION (vms-f60d, first live run):** the OVMX
+  `alpha-dec-vms` port is an **ELF-Alpha (musl)** target, so a real `__main`'s prologue is
+  `ldgp $gp, 0($27)` — it derives its GP *from R27*, which therefore must hold the **ENTRY code
+  address**, not the descriptor. (This matches the OVMX EVAX local-call sequence
+  `ldq $27,quad[0]=code-entry; jsr $26,($27)` LINK.EXE assembles — `src/vmslink/link.c`.) The
+  trampoline reads `entry = *(PDSC+8)`, sets **R27 = entry**, and jumps there. Setting R27 = the
+  descriptor (this doc's original wording, drawn from the *native* OpenVMS-Alpha standard) gave a
+  bogus GP and SIGSEGV'd the first real GCC-compiled `__main`; the earlier `.prologue 0` stubs never
+  used GP and so masked it.
 - **R26 = RA (return address)** = a return label inside IMGACT's Alpha trampoline, so control comes
   *back* after `main()`/`__main` returns.
 - On return, **R0 = the VMS condition value** `__main` produced (§1.3).
 
-`src/imgact/arch/alpha/start.S` gains a trampoline `imgact_vms_transfer(pdsc, a0..a5)` that loads
-R16–R21, sets R25 per the AI layout, sets R27=PV, R26=return label, jumps to `*(PV+8)`, and returns
-R0. `imgact_bootstrap` returns a *disposition* to `_start`: for VMS_STD images it calls the
+`src/imgact/arch/alpha/vms_transfer.S` provides the trampoline `imgact_vms_transfer(pdsc, ai, args)`
+that loads R16–R21, sets R25 per the AI layout, R26=return label, **R27 = the entry code = `*(PV+8)`**
+(the ELF-Alpha PV convention — see the R27 correction above), jumps there, and returns R0. `imgact_bootstrap` returns a *disposition* to `_start`: for VMS_STD images it calls the
 trampoline and then maps R0 → exit; for SysV/legacy it tail-jumps as today.
 
 ### 3.4 Mapping the returned condition value to process exit
@@ -303,7 +310,11 @@ Queue for a serialized read when the Alpha lane frees lab-Alpha ([[alpha-oracle-
 10. **The `C$_EXIT1`/`$STATUS` round-trip** — run an image that `exit()`s with a known code under
     OpenVMS Alpha and read DCL `$STATUS`/`$SEVERITY`, to confirm §3.4's condition-value mapping.
 11. **PDSC kind + `.vms$xfer` fidelity** — confirm the transfer entry resolves to a real
-    procedure descriptor (offset-8 entry) on Alpha, so R27/PV setup matches.
+    procedure descriptor (offset-8 entry) on Alpha. **Resolved in code (vms-f60d):** the entry is
+    read from `*(PDSC+8)` and R27 is set to that ENTRY (not the descriptor), because the OVMX port is
+    ELF-Alpha and its `__main` ldgp's from R27 — see the §3.3 R27 correction. A future lab-Alpha read
+    can still confirm the *native* OpenVMS-Alpha activator convention, but the OVMX port's requirement
+    is settled by GCC's emitted prologue + the LINK.EXE EVAX call sequence.
 
 Everything else in this design is grounded in public docs + the GPL crt0; the §4c items are
 *confirmation*, not blockers to starting implementation against the documented standard.

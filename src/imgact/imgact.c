@@ -1247,6 +1247,18 @@ static unsigned long exec_bias(Elf64_Phdr *phdr, int phnum, unsigned long at_phd
 	return 0;
 }
 
+/* Signal-free "is the page containing `addr` mapped?" probe (vms-f60d). mincore
+ * fills a residency byte for a MAPPED range and returns -ENOMEM for an unmapped
+ * one, so it answers WITHOUT dereferencing `addr` (no SIGSEGV) and WITHOUT any
+ * side effect on the probed page (unlike an mprotect/mlock probe). Returns 1 iff
+ * mincore reported the page mapped. `addr` is page-aligned for the syscall. */
+static int imgact_page_mapped(unsigned long addr)
+{
+	unsigned char vec;
+	unsigned long pg = addr & ~(IMGACT_KPAGE - 1UL);
+	return syscall6(SYS_mincore, (long)pg, 1, (long)&vec, 0, 0, 0) == 0;
+}
+
 /* --------------------------------------------------------------------------
  * OVMX symbol-vector activation (bead vms-714).
  *
@@ -2499,6 +2511,40 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	 * (vms-29ff/vms-47d). */
 	imgact_discover_sysdevice(envp);
 	eputs("IMGACT-SYSDEV\n");   /* UNGATED marker (c): discover_sysdevice ok */
+
+	/* INV-6 HEDGE (vms-f60d): the kernel-supplied AT_PHDR must point at MAPPED
+	 * memory before we walk ephdr[] (below AND inside exec_bias). A malformed
+	 * image whose program headers are not covered by any PT_LOAD -- e.g. a
+	 * hand-written linker script that omits the headers from a segment -- leaves
+	 * AT_PHDR pointing at an address the kernel never mapped; dereferencing
+	 * ephdr[i] then SIGSEGVs (seen on real qemu-system-alpha; invisible under
+	 * qemu-user's lenient whole-file map). IMGACT must FAIL HONEST, never crash.
+	 * Bound at_phnum, then mincore-probe the whole [at_phdr, at_phdr+n*phdr)
+	 * range (signal-free, no dereference). A CONTROL probe on the stack (always
+	 * mapped) first confirms mincore is usable here, so a quirky/unsupported
+	 * mincore can never REJECT a valid image -- it just falls back to today's
+	 * behaviour. */
+	if (at_phnum <= 0 || at_phnum > 64 || at_phdr == 0) {
+		vms_fatal("BADIMGHDR",
+			  "image program-header count absent or out of range",
+			  at_execfn);
+		sys_exit(IMGACT_EXIT_FAIL);
+	}
+	if (imgact_page_mapped((unsigned long)&argc)) {   /* control: mincore works */
+		unsigned long phdr_bytes =
+			(unsigned long)at_phnum * sizeof(Elf64_Phdr);
+		int mapped = 1;
+		for (unsigned long o = 0; mapped && o < phdr_bytes; o += IMGACT_KPAGE)
+			mapped = imgact_page_mapped(at_phdr + o);
+		if (mapped)
+			mapped = imgact_page_mapped(at_phdr + phdr_bytes - 1);
+		if (!mapped) {
+			vms_fatal("BADIMGHDR",
+				  "AT_PHDR not within a mapped image segment",
+				  at_execfn);
+			sys_exit(IMGACT_EXIT_FAIL);
+		}
+	}
 
 	/* ---- Build the executable object from the kernel-provided phdrs. ----
 	 * The kernel has already mapped the main executable's LOAD segments;

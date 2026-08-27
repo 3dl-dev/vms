@@ -95,6 +95,7 @@ jobs:
       libcrypto: ${{ steps.decide.outputs.libcrypto }}
       openssh: ${{ steps.decide.outputs.openssh }}
       alpha_toolchain: ${{ steps.decide.outputs.alpha_toolchain }}
+      vax_toolchain: ${{ steps.decide.outputs.vax_toolchain }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -328,6 +329,12 @@ jobs:
               - 'tools/cross-alpha-vms/build-toolchain.sh'
               - 'tools/cross-alpha-vms/patches/**'
               - 'tools/cross-alpha-vms/*.tar.xz'
+            # vms-e7c5 twin for VAX (this PR): the vax-toolchain-image build-push
+            # job re-builds + re-pushes the prebuilt ghcr image only when the
+            # toolchain SOURCES change (its Dockerfile or the vendored tarball).
+            vax_toolchain:
+              - 'tools/cross-vax/Dockerfile'
+              - 'tools/cross-vax/*.tar.xz'
 
       - name: Decide (force every output true on non-PR events)
         id: decide
@@ -347,6 +354,7 @@ jobs:
               echo "libcrypto=${{ steps.filter.outputs.libcrypto }}"
               echo "openssh=${{ steps.filter.outputs.openssh }}"
               echo "alpha_toolchain=${{ steps.filter.outputs.alpha_toolchain }}"
+              echo "vax_toolchain=${{ steps.filter.outputs.vax_toolchain }}"
             } >> "$GITHUB_OUTPUT"
           else
             {
@@ -363,6 +371,7 @@ jobs:
               echo "libcrypto=true"
               echo "openssh=true"
               echo "alpha_toolchain=true"
+              echo "vax_toolchain=true"
             } >> "$GITHUB_OUTPUT"
           fi
   # -----------------------------------------------------------------------
@@ -5837,8 +5846,89 @@ jobs:
   # first; this job restores it and NEVER reinstalls in the hot path (design-p4
   # sec 5). run-devvms.sh wraps every SIMH invocation in a hard timeout.
   # -----------------------------------------------------------------------
+  # -----------------------------------------------------------------------
+  # vax-toolchain-image (vms-e7c5 twin for VAX): build ONCE, push to ghcr, keyed
+  # by a hash of the toolchain SOURCES — the "once and for all" fix for the
+  # recurring VAX-gate ftp.gnu.org flake, mirroring the alpha-toolchain-image job
+  # (#804) exactly.
+  #
+  # ROOT CAUSE: every VAX gate below `docker build`s the vax--netbsdelf cross
+  # toolchain image (tools/cross-vax/Dockerfile) from scratch on a gha-cache
+  # miss, and that build fetched binutils-2.42 + gcc-13.3.0 from ftp.gnu.org. A
+  # gnu.org outage HARD-FAILS gates that have nothing to do with the toolchain
+  # sources (the cut-release VAX artifact build just died on
+  # `wget binutils-2.42.tar.xz -> exit 4`). binutils is now VENDORED
+  # (tools/cross-vax/binutils-2.42.tar.xz, SHA256-pinned) and gcc is a hardened
+  # SHA256-checked mirror fetch, but a from-scratch image build is still a
+  # network dependency we can eliminate for the gates.
+  #
+  # FIX: this job builds the image and PUSHES it to a PRIVATE ghcr package,
+  # tagged by SOURCE_HASH = a 16-hex digest over the committed content of the
+  # toolchain sources (the Dockerfile + the vendored *.tar.xz) via
+  # `git ls-files -s | sha256sum`. Committed-content-based, so the tag CI
+  # computes here and the tag the gates compute below are identical for the same
+  # sources. The gates PULL that tag (zero gnu.org) and only fall back to
+  # building if the tag is missing. A toolchain bump -> new hash -> this job
+  # builds + pushes the new image (path-filtered on the sources; forced true on
+  # any non-PR event; workflow_dispatch seeds the very first image manually while
+  # gnu.org is up). Self-contained: pushes with the built-in GITHUB_TOKEN
+  # (packages: write) — no external secret. The package is PRIVATE; the gates
+  # read it with GITHUB_TOKEN (packages: read).
+  # -----------------------------------------------------------------------
+  vax-toolchain-image:
+    name: vax-toolchain-image (vms-e7c5 twin)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.vax_toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute SOURCE_HASH over the toolchain sources
+        id: srchash
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "source_hash=$SOURCE_HASH" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ghcr.io (built-in GITHUB_TOKEN)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # Builds tools/cross-vax (whose Dockerfile COPYs the VENDORED
+      # binutils-2.42.tar.xz so the binutils step is offline; only gcc is fetched,
+      # hardened + SHA256-checked). push:true publishes both the source-hash tag
+      # and :latest to the PRIVATE ghcr package. gha layer cache keeps an
+      # unchanged-source rebuild (e.g. a main push) a cache hit — zero fetch.
+      - name: Build and push the vax--netbsdelf cross toolchain image (source-hash + latest)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/3dl-dev/ovmx-cross-vax:${{ steps.srchash.outputs.source_hash }}
+            ghcr.io/3dl-dev/ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
   netbsd-vax-devvms:
     name: /dev/vms live on NetBSD/vax under SIMH — PING (vms-f78bb)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from
+    # ghcr (top-level default is contents:read only, no packages).
+    permissions:
+      packages: read
+      contents: read
     needs: [changes, netbsd-vax-simh]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -5877,7 +5967,34 @@ jobs:
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -5930,6 +6047,10 @@ jobs:
   # -----------------------------------------------------------------------
   netbsd-vax-eflag:
     name: Event flags proven cross-process on NetBSD/vax under SIMH — INV-6 (vms-4e7)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: [changes, netbsd-vax-simh]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -5961,7 +6082,34 @@ jobs:
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -6032,6 +6180,10 @@ jobs:
   # -----------------------------------------------------------------------
   netbsd-vax-access:
     name: Access-mode enforcement + cross-process AST delivery proven on NetBSD/vax under SIMH — INV-6 (vms-4b7)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: [changes, netbsd-vax-simh]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -6063,7 +6215,34 @@ jobs:
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -6164,6 +6343,10 @@ jobs:
   # -----------------------------------------------------------------------
   netbsd-vax-proctab:
     name: Process table proven cross-process on NetBSD/vax under SIMH — INV-6 (vms-2e0)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: [changes, netbsd-vax-simh]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -6195,7 +6378,34 @@ jobs:
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -6223,6 +6433,10 @@ jobs:
   # -----------------------------------------------------------------------
   netbsd-vax-mbx:
     name: Mailboxes proven cross-process on NetBSD/vax under SIMH — INV-6 (vms-fe8)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: [changes, netbsd-vax-simh]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -6254,7 +6468,34 @@ jobs:
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -6277,6 +6518,10 @@ jobs:
   # -----------------------------------------------------------------------
   netbsd-vax-boot:
     name: OVMX boots as PID 1 on NetBSD/vax under SIMH (vms-7b1)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: [changes, netbsd-vax-simh]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -6311,7 +6556,34 @@ jobs:
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -6365,6 +6637,10 @@ jobs:
   # -----------------------------------------------------------------------
   netbsd-vax-sysboot:
     name: OVMX boots past the installed-system gate to PROVISION.EXE on NetBSD/vax (vms-d9c)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: [changes, netbsd-vax-simh]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -6394,7 +6670,34 @@ jobs:
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -6564,6 +6867,10 @@ jobs:
   # -----------------------------------------------------------------------
   netbsd-vax-vms-crosscompile:
     name: NetBSD/vax vms module cross-compiles
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.exec_netbsd_vax == 'true' }}
     runs-on: ubuntu-latest
@@ -6576,7 +6883,34 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -6699,6 +7033,10 @@ jobs:
   # -----------------------------------------------------------------------
   netbsd-vax-facility-tools-crosscompile:
     name: Facility guest tools (eflag/access/proctab/mbx) cross-compile for netbsd-vax via CMake (vms-74b)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.exec_netbsd_vax == 'true' }}
     runs-on: ubuntu-latest
@@ -6711,7 +7049,34 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -6813,6 +7178,10 @@ jobs:
   # -----------------------------------------------------------------------
   vax-cmake-images:
     name: vax toolchain builds the ovmx-images aggregate; 10/10 parity-drift images close (vms-64a, vms-838)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
     runs-on: ubuntu-latest
@@ -6825,7 +7194,34 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -6918,6 +7314,10 @@ jobs:
   # -----------------------------------------------------------------------
   vax-acp-read-ilp32:
     name: VAX ILP32 leg -- the whole ACP-read path cross-compiles width-clean for elf32-vax (vms-8e8f)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
     runs-on: ubuntu-latest
@@ -6930,7 +7330,34 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax

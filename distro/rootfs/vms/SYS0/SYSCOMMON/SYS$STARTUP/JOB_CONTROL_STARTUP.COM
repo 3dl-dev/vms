@@ -32,42 +32,31 @@ $! STARTUP.EXE (PID 1) used to run that loop itself, inline -- real function,
 $! wrong owner. JOB_CONTROL.EXE now holds it, and this procedure is what
 $! creates JOB_CONTROL, exactly the way any other OVMX service is created.
 $!
-$! WHY /INPUT, /OUTPUT AND /ERROR NAME A LINUX PATH, NOT A VMS FILESPEC.
+$! WHY /INPUT, /OUTPUT AND /ERROR NAME OPA0:, THE VMS CONSOLE (vms-948).
 $! A DETACHED process has no controlling terminal by definition -- $CREPRC
 $! (src/libvms/syssvc/sys_process.c) attaches an unsupplied stream to the
 $! null device for one. JOB_CONTROL needs the REAL console to do its job, so
-$! this procedure supplies it explicitly. The VMS filespec for the console is
-$! OPA0: (src/kernel/vms_devtab.c) -- but RUN/DETACHED's /INPUT=/OUTPUT=
-$! /ERROR= qualifiers resolve through dcl_resolve_path() (src/vmsdcl/
-$! dcl_filespec.c), which sends a spec with a ':' or '[' through the vmsfs
-$! disk-backed translator, not through the SEPARATE terminal-alias resolution
-$! sys$assign() implements (src/libvms/syssvc/sys_assign.c) for TT:/TT0:/
-$! OPA0:/_OPA0:. That resolver's own comment names the Linux device behind
-$! OPA0: directly: /dev/console (measured, vms-1c57 -- NOT /dev/tty, which
-$! resolves to the CALLING process's own controlling terminal and nothing in
-$! OVMX ever establishes one). dcl_resolve_path() already passes an absolute
-$! Linux path through unchanged, so this procedure spells the same physical
-$! device sys_assign.c already names, rather than extending the VMS-filespec
-$! resolver to understand terminal aliases -- a change out of this item's
-$! scope. JOB_CONTROL's own login children still take a channel to OPA0: the
-$! VMS way ($ASSIGN + $GETDVI, vms-d0b) once they are running; only THIS
-$! procedure's creation-time redirection is spelled as a Linux path.
+$! this procedure supplies it explicitly, and names it the VMS way: OPA0:,
+$! the operator console (src/kernel-core/vms_devtab.c). This procedure spells
+$! a VMS device, never a substrate path.
 $!
-$! WHY THE PATH IS QUOTED. DCL's lexer (src/vmsdcl/dcl_lexer.c) treats
-$! EVERY '/' as the start of a new qualifier, unconditionally -- including
-$! one that appears inside a qualifier's own unquoted value. An unquoted
-$! /INPUT=/dev/console therefore does not tokenize as "qualifier INPUT,
-$! value /dev/console" at all: it tokenizes as three separate qualifiers
-$! (INPUT with no value, then bogus DEV and CONSOLE), which the parser
-$! neither refuses nor honours as intended. Quoting forces the lexer's
-$! quoted-string branch (checked before the qualifier branch), which reads
-$! the whole value, slashes included, as one token -- the DCL parser
-$! explicitly accepts TOK_STRING for a qualifier value
-$! (src/vmsdcl/dcl_parser.c parse_qualifier).
+$! HOW OPA0: RESOLVES. RUN/DETACHED's /INPUT=/OUTPUT=/ERROR= qualifiers resolve
+$! through dcl_resolve_path() (src/vmsdcl/dcl_filespec.c). It recognises the
+$! console-terminal aliases (OPA0:/_OPA0:/TT:/TT0:) via the SINGLE resolver
+$! ovmx_console_terminal_path() (src/libvms/include/ovmx_console.h) -- the same
+$! source sys$assign() uses -- and yields the console's backing device before
+$! the ':'-bearing spec could fall into the vmsfs disk translator. The Linux
+$! device that backs OPA0: (measured vms-1c57) lives ONLY inside that resolver
+$! and never appears on this VMS surface. JOB_CONTROL's own login children take
+$! a channel to OPA0: the VMS way ($ASSIGN + $GETDVI, vms-d0b) once they are
+$! running; this creation-time redirection names the same device.
+$!
+$! No quoting: OPA0: contains no '/', so it tokenises as a normal qualifier
+$! value (the quoting that a leading-slash Linux path once forced is gone).
 $!
 $ SET NOON
 $ RUN /DETACHED -
       /PROCESS_NAME=JOB_CONTROL -
-      /INPUT="/dev/console" /OUTPUT="/dev/console" /ERROR="/dev/console" -
+      /INPUT=OPA0: /OUTPUT=OPA0: /ERROR=OPA0: -
       SYS$SYSTEM:JOB_CONTROL.EXE
 $ EXIT

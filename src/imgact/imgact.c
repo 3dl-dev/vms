@@ -297,25 +297,9 @@ int strncmp(const char *a, const char *b, unsigned long n)
 
 static void eputs(const char *s) { sys_write(2, s, xstrlen(s)); }
 
-/* Defined further down; forward-declared here for the OVMX-SEAM-DBG probe in
- * imgact_vms_standard_activate (which precedes the definition). */
+/* Defined further down; forward-declared here because imgact_vms_exit (which
+ * precedes the definition) reads it for the OVMX_IMGACT_SEAM $STATUS readback. */
 static const char *imgact_env_value(char **envp, const char *key);
-
-#if defined(IMGACT_HAVE_VMS_STD)
-/* Freestanding: format `v` as exactly 16 lowercase hex digits into buf[0..15],
- * NUL at buf[16] (buf must hold 17 bytes). Used only by the OVMX-SEAM-DBG
- * activation probe (imgact_vms_standard_activate, Alpha-only); no libc, no
- * allocation. Guarded so non-Alpha targets (no VMS-std path) don't build it. */
-static void imgact_hex64(unsigned long v, char *buf)
-{
-	static const char hd[] = "0123456789abcdef";
-	for (int i = 15; i >= 0; i--) {
-		buf[i] = hd[v & 0xfUL];
-		v >>= 4;
-	}
-	buf[16] = '\0';
-}
-#endif
 
 static void vms_fatal(const char *ident, const char *text, const char *detail)
 {
@@ -1310,21 +1294,6 @@ static int ovmx_find_section(struct imgsrc *src, const char *want,
  * The VMS-native equivalent of processing R_AARCH64_RELATIVE, without a
  * PT_DYNAMIC. No-op for images with no .vms$rel. `src` must be open on the
  * image; `base` is its load bias. The target pages must already be writable. */
-/* OVMX-SEAM-MARK bisect marker (vms-f60d), gated on OVMX_IMGACT_SEAM=1. Emits
- * "OVMX-SEAM-MARK: <stage>\n" to fd 2; the LAST marker that appears localizes a
- * crash to the stage that follows it. Freestanding, safe at any setup point. */
-static void imgact_seam_mark(const char *stage)
-{
-	if (!g_envp)
-		return;
-	const char *seam = imgact_env_value(g_envp, "OVMX_IMGACT_SEAM");
-	if (!seam || seam[0] != '1' || seam[1] != '\0')
-		return;
-	eputs("OVMX-SEAM-MARK: ");
-	eputs(stage);
-	eputs("\n");
-}
-
 static void apply_vms_rel(struct imgsrc *src, unsigned long base)
 {
 	unsigned long rel_addr, rel_size;
@@ -2219,7 +2188,6 @@ static void imgact_vms_standard_activate(unsigned long exe_base,
 
 	/* cliflag (arg 6) + cli_util (arg 2), from the executive process context. */
 	unsigned int cliflag = imgact_query_cli_context();
-	imgact_seam_mark("cli-done");   /* bisect: query_cli_context survived */
 	static struct ovmx_cli_util cli_util;
 	void *cli_util_arg = 0;
 	if (cliflag) {
@@ -2241,38 +2209,6 @@ static void imgact_vms_standard_activate(unsigned long exe_base,
 	/* R25 = AI, built explicitly by the documented Argument-Information
 	 * layout (six 64-bit args), never a hard-coded 6. */
 	unsigned long ai = OVMX_AI_VMS_ACTIVATION;
-
-	/* OVMX-SEAM-DBG activation probe (vms-f60d), gated on OVMX_IMGACT_SEAM=1.
-	 * Dumps the COMPUTED transfer inputs the moment before the standard call so
-	 * the Alpha seam runner can read, from ground truth, whether a load-bias
-	 * error mis-computed pv/entry BEFORE the jsr (the leading SIGSEGV theory).
-	 *
-	 * For the ET_EXEC tier-1 stub (load_bias MUST be 0, pdsc @ 0x10060, entry
-	 * 0x1005c) the EXPECTED line is `... load_bias=0x0 ... entry=0x...1005c`.
-	 * A nonzero load_bias or a wrong entry is the confirmation.
-	 *
-	 * ORDER IS DELIBERATE: pv/load_bias/ai are emitted FIRST because reading
-	 * `entry = *(pv+8)` is the SAME dereference the trampoline does
-	 * (vms_transfer.S `ldq $27,8($3)`). If pv is mis-biased to unmapped memory
-	 * that read faults HERE, at the same spot the transfer would -- so emitting
-	 * the bias evidence before the deref guarantees the runner captures pv +
-	 * load_bias even when the probe itself crashes on the entry read (which then
-	 * itself localizes the fault to the pv computation). */
-	if (g_envp) {
-		const char *seam = imgact_env_value(g_envp, "OVMX_IMGACT_SEAM");
-		if (seam && seam[0] == '1' && seam[1] == '\0') {
-			char hx[17];
-			eputs("OVMX-SEAM-DBG: pv=0x");
-			imgact_hex64((unsigned long)pv, hx);        eputs(hx);
-			eputs(" load_bias=0x");
-			imgact_hex64(exe_base, hx);                 eputs(hx);
-			eputs(" ai=0x");
-			imgact_hex64(ai, hx);                       eputs(hx);
-			eputs(" entry=0x");
-			imgact_hex64(((const unsigned long *)pv)[1], hx);  eputs(hx);
-			eputs("\n");
-		}
-	}
 
 	unsigned long cond = imgact_vms_transfer(pv, ai, args);
 
@@ -2309,10 +2245,8 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	int ok = ovmx_find_section(&src, OVMX_IMP_SECTION, &imp_addr, &imp_size);
 	/* Bias the executable's own self-relative slots (its GOT/pointer data), if
 	 * any; harmless no-op for the current PLT-only executables. */
-	imgact_seam_mark("relo-pre");   /* bisect: crash here => apply_vms_rel write */
 	if (ok)
 		apply_vms_rel(&src, exe_base);
-	imgact_seam_mark("relo-post");  /* apply_vms_rel survived */
 
 	/* Locate this executable's own .init_array range (if any) while `src` is
 	 * still open -- ovmx_find_section reads the file's raw section headers over
@@ -2503,18 +2437,6 @@ static void imgact_maybe_boundary_audit(char **envp, const char *image)
 
 unsigned long imgact_bootstrap(unsigned long *sp)
 {
-	/* UNGATED marker (a): BARE proof that IMGACT.EXE's C entry runs at all,
-	 * emitted as the VERY FIRST thing -- before the stack parse, before
-	 * self_relocate, before g_envp exists. It must be GOT-free (self_relocate
-	 * has not fixed the GOT yet) and must NOT read g_envp (still NULL): syscall6
-	 * is inlined (bare callsys) and the length is compile-time. If this prints
-	 * but IMGACT-GENVP (marker b) does not, the fault is in self_relocate. */
-	{
-		static const char m_a[] = "IMGACT-ENTRY reached\n";
-		(void)syscall6(SYS_write, 2, (long)m_a,
-			       (long)(sizeof(m_a) - 1), 0, 0, 0);
-	}
-
 	/* ---- Parse the initial process stack (no globals yet). ---- */
 	long argc = (long)sp[0];
 	char **argv = (char **)(sp + 1);
@@ -2544,27 +2466,10 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	g_envp  = envp;                         /* for the C-RTL __init_libc bootstrap */
 	g_argv0 = argc > 0 ? argv[0] : 0;
 
-	/* UNGATED marker (b): self_relocate survived and g_envp is now populated.
-	 * This is the reading-(2) disambiguator -- with g_envp set, imgact_env_value
-	 * gives the TRUE seam_env (marker a was bare precisely because g_envp was
-	 * still NULL there and would have read a false 0). seam_env=1 => the env
-	 * DOES reach IMGACT and every gated print should have fired -- so a silent
-	 * gated marker means a real crash, not a dead gate. seam_env=0 => the env
-	 * var is not in the subject's environment (a harness-propagation issue), and
-	 * all prior crash-location inferences from silent gated prints are suspect. */
-	{
-		const char *s = imgact_env_value(g_envp, "OVMX_IMGACT_SEAM");
-		int on = (s && s[0] == '1' && s[1] == '\0');
-		eputs("IMGACT-GENVP seam_env=");
-		eputs(on ? "1" : "0");
-		eputs("\n");
-	}
-
 	/* Discover the ACP system device before any image read (imgsrc_open uses
 	 * g_acp_sysdevice). Runtime-discovered, not a compile-time literal
 	 * (vms-29ff/vms-47d). */
 	imgact_discover_sysdevice(envp);
-	eputs("IMGACT-SYSDEV\n");   /* UNGATED marker (c): discover_sysdevice ok */
 
 	/* INV-6 HEDGE (vms-f60d): the kernel-supplied AT_PHDR must point at MAPPED
 	 * memory before we walk ephdr[] (below AND inside exec_bias). A malformed
@@ -2613,15 +2518,11 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	for (int i = 0; i < ephnum; i++)
 		if (ephdr[i].p_type == PT_DYNAMIC)
 			edyn = (Elf64_Dyn *)(ebias + ephdr[i].p_vaddr);
-	eputs("IMGACT-PHDR\n");     /* UNGATED marker (d): phdr/exec-object build ok */
 
 	/* An OVMX symbol-vector image (LINK.EXE output) has no PT_DYNAMIC: it
 	 * binds universal symbols through .vms$imp, not ELF DT_HASH. (vms-714) */
 	if (!edyn) {
-		eputs("IMGACT-PRE-ASV\n");      /* UNGATED marker (e): about to activate */
-		imgact_seam_mark("asv-enter");  /* bisect: activation setup begins */
 		activate_symbol_vector(ebias, at_execfn, ephdr, ephnum);
-		imgact_seam_mark("asv-done");   /* section read + relocation + bind + TLS ok */
 		/* VMS-standard image (the alpha-dec-vms GCC port's .EXE): present
 		 * the six-argument VMS activation context by the Alpha calling
 		 * standard, capture the returned condition value, and route it to

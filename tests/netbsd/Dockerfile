@@ -144,6 +144,7 @@ COPY src/kernel-core/exec_rbtree.h           /netbsd/guest-src/kernel-core/exec_
 # "vmsfs/ods2.h" (-I../vmsfs/include). ---
 COPY src/kernel-core/vmsfs_acp.c             /netbsd/guest-src/kernel-core/vmsfs_acp.c
 COPY src/kernel-netbsd/vms_blockdev_netbsd.c /netbsd/guest-src/kmod/vms_blockdev_netbsd.c
+COPY src/kernel-netbsd/vms_socket_netbsd.c   /netbsd/guest-src/kmod/vms_socket_netbsd.c
 COPY src/vmsfs/ods2/ods2_reader.c            /netbsd/guest-src/vmsfs/ods2/ods2_reader.c
 COPY src/vmsfs/ods2/ods2_edit.c              /netbsd/guest-src/vmsfs/ods2/ods2_edit.c
 COPY src/vmsfs/ods2/ods2_kcompat.h           /netbsd/guest-src/vmsfs/ods2/ods2_kcompat.h

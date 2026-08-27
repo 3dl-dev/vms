@@ -54,12 +54,13 @@ obj-m := vms.o
 # move EVERY substrate-agnostic executive facility lives in src/kernel-core/;
 # what remains here is the Linux glue -- vms_module.c (the /dev/vms char device
 # + registration), vms_p0.c/vms_p1.c (the P0/P1 region mappers, still host-mm-
-# coupled), and vms_bg.c (the BGn: INET pseudo-device, vms-527 -- a kernel-mode
-# driver over the HOST kernel's in-kernel socket API, deliberately not in the
-# core because it names the host transport directly; see its own header).
+# coupled), and vms_bg_pollfd.c (the BGn: readiness poll fd, vms-22a -- pure
+# Linux anon_inode/->poll fd machinery with no NetBSD analogue; the rest of BGn:
+# moved to ../kernel-core/vms_bg.c behind the exec_socket_* seam, vms-9951).
 vms-y := vms_module.o \
          ../kernel-core/vms_access.o \
          ../kernel-core/vms_ast.o \
+         ../kernel-core/vms_bg.o \
          ../kernel-core/vms_devtab.o \
          ../kernel-core/vms_eflag.o \
          ../kernel-core/vms_lnm.o \
@@ -71,7 +72,7 @@ vms-y := vms_module.o \
          ../vmsfs/ods2/ods2_edit.o \
          vms_p0.o \
          vms_p1.o \
-         vms_bg.o
+         vms_bg_pollfd.o
 
 # The GENUINE ODS-2 codec, kernel-resident, gives the Files-11 ACP $MOUNT
 # (kernel-core/vmsfs_acp.c, vms-127) its home-block/SCB validation. Only

@@ -51,7 +51,8 @@ SRCS=		vms_netbsd.c \
 		vmsfs_acp.c \
 		ods2_reader.c \
 		ods2_edit.c \
-		vms_blockdev_netbsd.c
+		vms_blockdev_netbsd.c \
+		vms_socket_netbsd.c
 
 # vms-d5d: vmsfs_acp.c (the Files-11 ODS-2 ACP: channel + IO$_ACCESS/READVBLK/
 # WRITEVBLK/$MOUNT handlers) + ods2_edit.c (the pure on-disk EDIT helpers its

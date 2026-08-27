@@ -152,7 +152,8 @@ SRCS="$KMOD/vms_netbsd.c \
       $CORE/vmsfs_acp.c \
       $ODS2/ods2_reader.c \
       $ODS2/ods2_edit.c \
-      $KMOD/vms_blockdev_netbsd.c"
+      $KMOD/vms_blockdev_netbsd.c \
+      $KMOD/vms_socket_netbsd.c"
 #   vms_blockdev_netbsd.c - the NetBSD exec_blockdev_* seam (bread/bwrite on a
 #                         vn_bdev_openpath device vnode) + the single-unit ODS-2
 #                         disk resolve (vms_devtab_disk_backing) the ACP $MOUNT

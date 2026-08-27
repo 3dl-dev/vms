@@ -3642,6 +3642,119 @@ store_target:;
  * layout + GSMATCH): an Alpha and an x86_64 shareable differ only in e_machine +
  * .text arch, never in the arch-neutral symbol vector. Both products share the
  * psect layout, the reloc apply, and the .vms$imp / .vms$rel tables. */
+/* EGSY__V_WEAK — the EGSD SYM `flags` bit that marks a WEAK global (evax_read.c;
+ * `struct evax_symbol.flags` carries the raw EGSY__V_* bits). A defined symbol is
+ * WEAK iff this bit is set, else STRONG. Value matches evax_read.c's definition
+ * exactly (that TU is #included later in this single-file build), so the two are
+ * a benign identical redefinition. (vms-f1a) */
+#define EGSY__V_WEAK 0x0001
+
+/* EVAX STRONG-vs-STRONG multiple-definition pre-pass (vms-f1a) — the Alpha/EVAX
+ * mirror of the ELF sym_insert guard (vms-d8d, #777).
+ *
+ * THE GAP: evax_find_sym (above) is a linear FIRST-MATCH over every input's
+ * defined symbols with NO duplicate check, so two objects that both STRONGLY
+ * define the same universal/global bind SILENTLY to whichever appears first by
+ * link-input order — the exact latent correctness bug (two addresses for one
+ * name in one link, discoverable only by symptom) that #777 closed on the ELF
+ * path. This ONE-TIME pass over all inputs (run once at emit time, NOT a
+ * per-lookup scan inside the hot evax_find_sym — that would be O(refs*symbols),
+ * pathological over a 1345-member whole-archive) hard-errors %LINK-F-MULDEF the
+ * instant two DIFFERENT inputs both define a name and BOTH defs are STRONG.
+ *
+ * Semantics mirror sym_insert exactly: WEAK-vs-STRONG / WEAK-vs-WEAK / a single
+ * def are UNCHANGED (strong/first still wins silently — correct VMS/ELF symbol
+ * resolution, and load-bearing for musl-alpha's weak_alias overridable defs). A
+ * name defined multiple times in the SAME input (same index) is not a
+ * cross-object dup and is skipped.
+ *
+ * WHOLE-ARCHIVE-SAFE by construction (verified on the genuine alpha DECC$SHR,
+ * vms-864 joint-e2e): a well-formed library carries NO strong-vs-strong dups —
+ * every overridable def (malloc, ...) is WEAK (musl weak_alias emits a weak EVAX
+ * symbol), and the one known alpha collision, decc$_malloc64 (musl-alpha vs the
+ * ovmx_decc_crtl.c stub), is `#ifndef __VMS__`-excluded on alpha (the alpha cc1
+ * defines __VMS__). So the genuine whole-archive build must see ZERO spurious
+ * MULDEF; a spurious hit means a genuinely-weak symbol was misread as strong,
+ * to be fixed at the read — never worked around by loosening this check.
+ *
+ * Cost: keyed on name via djb2 open addressing -> ~O(total symbols). */
+/* Are two input labels members of the SAME archive? Input names are
+ * "path/to/archive.a(member.o)" for whole-archive members (vms-004) and a plain
+ * path for an explicitly-linked object. Two names are same-archive iff both
+ * carry a '(' (i.e. both are members) and share the identical archive-path
+ * prefix before it. An explicit object (no '(') is never same-archive with
+ * anything, so a genuine explicit-vs-explicit or explicit-vs-library strong
+ * conflict is never exempted. (vms-f1a) */
+static int evax_same_archive_member(const char *a, const char *b)
+{
+    if (!a || !b) return 0;
+    const char *pa = strchr(a, '(');
+    const char *pb = strchr(b, '(');
+    if (!pa || !pb) return 0;                     /* at least one explicit object */
+    size_t la = (size_t)(pa - a), lb = (size_t)(pb - b);
+    return la == lb && memcmp(a, b, la) == 0;     /* identical archive prefix     */
+}
+
+static void evax_check_muldef(struct evax_input *in, int nin)
+{
+    size_t total = 0;
+    for (int i = 0; i < nin; i++) total += (size_t)in[i].obj.nsym;
+    size_t cap = 64;
+    while (cap < total * 2 + 16) cap <<= 1;
+    struct muldef_ent { const char *name; int oi; } *tab =
+        calloc(cap, sizeof *tab);
+    if (!tab) die("oom building EVAX MULDEF pre-pass table");
+    size_t mask = cap - 1;
+    for (int i = 0; i < nin; i++)
+        for (int s = 0; s < in[i].obj.nsym; s++) {
+            const struct evax_symbol *y = &in[i].obj.sym[s];
+            if (!y->defined) continue;               /* only definitions count      */
+            if (y->flags & EGSY__V_WEAK) continue;   /* WEAK defs never collide      */
+            const char *nm = y->name;
+            if (!nm[0]) continue;
+            size_t h = djb2(nm) & mask;
+            for (;;) {
+                if (!tab[h].name) { tab[h].name = nm; tab[h].oi = i; break; }
+                if (strcmp(tab[h].name, nm) == 0) {
+                    if (tab[h].oi != i) {            /* cross-object STRONG dup      */
+                        const char *first_obj  = in[tab[h].oi].name;
+                        const char *second_obj = in[i].name;
+                        if (evax_same_archive_member(first_obj, second_obj)) {
+                            /* Same-archive library dup — NOT a genuine conflict.
+                             * VMS library search resolves by first-MODULE-wins
+                             * and never errors on a second definition; OVMX
+                             * whole-archives as policy but the intent is
+                             * identical (first-wins, already the shipped
+                             * behavior). BENIGN case that made this real: on
+                             * alpha `long double == double` (IEEE T-float), so
+                             * the cc1 decorates musl's weak_alias'd *l math
+                             * variants (cacoshl, ...) to their double
+                             * counterpart's MATH$*_T symbol, both STRONG — a
+                             * whole class of same-archive dups absent on
+                             * ld!=double targets (why the ELF gate, #777, was
+                             * clean). The GENUINE vms-d8d bug is still caught:
+                             * two EXPLICIT objects, or two DIFFERENT archives,
+                             * strong-defining one universal fail this test and
+                             * fall through to the error. (vms-f1a) */
+                            break;
+                        }
+                        fprintf(stderr,
+                                "%%LINK-F-MULDEF, multiple definition of "
+                                "universal/global symbol '%s': first defined in "
+                                "%s, redefined in %s\n",
+                                nm,
+                                first_obj  ? first_obj  : "<unknown>",
+                                second_obj ? second_obj : "<unknown>");
+                        exit(1);
+                    }
+                    break;                          /* same input: not a dup        */
+                }
+                h = (h + 1) & mask;
+            }
+        }
+    free(tab);
+}
+
 static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
                              const char *transfer,
                              struct univ *uv, int nuniv,
@@ -3654,6 +3767,13 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
             "address; crt0 __main for a GCC-port image)");
     if (is_shareable && nuniv == 0)
         die("the EVAX/Alpha shareable needs --symbol-vector (declared universals)");
+
+    /* vms-f1a: reject a STRONG-vs-STRONG cross-object multiple definition of a
+     * universal/global BEFORE layout/resolution (mirror of the ELF sym_insert
+     * guard, #777). Runs once over all inputs; whole-archive-safe (see the
+     * function comment). Fires ahead of any UNDEF/reloc work, so the diagnostic
+     * is the MULDEF, not a downstream symptom. */
+    evax_check_muldef(in, nin);
 
     /* ---- Layout: merge same-named psects across objects, identity-mapped
      * (file offset == image vaddr) so a section's bytes sit at their vaddr. --- */

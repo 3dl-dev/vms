@@ -9,6 +9,8 @@
 
 add_library(boundary_audit STATIC
     boundary_audit.c
+    boundary_audit_filter.c   # SHARED classifier + finding format (also an
+                              # extra freestanding TU of IMGACT.EXE; vms-617)
 )
 
 target_include_directories(boundary_audit PUBLIC

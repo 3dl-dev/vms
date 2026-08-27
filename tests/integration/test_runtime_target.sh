@@ -815,6 +815,22 @@ else
     status=1
 fi
 
+# --- 6. Executive-boundary AUDIT findings (vms-617, Phase A: REPORTING ONLY) --
+# The tracer (src/imgact/imgact_boundary_audit.c, armed behind
+# OVMX_BOUNDARY_AUDIT=1) records every raw VMS-semantic syscall an activated
+# image issues INSTEAD of routing through the executive -- the exact bypass this
+# whole gate exists to make loud. Surface those findings here as a REPORTING
+# input so they are visible alongside the Rule 9 checks. Phase A does NOT fail
+# the build on findings (that ratchet is a later, deliberate step); it makes
+# them visible and it surfaces the tracer's own overflow marker so nothing is
+# silently dropped. This section never touches $status.
+_ba_report="$(dirname "$0")/boundary_audit_report.sh"
+if [ -x "$_ba_report" ]; then
+    "$_ba_report" || true      # reporting-only: never affects the gate status
+elif [ -f "$_ba_report" ]; then
+    sh "$_ba_report" || true
+fi
+
 if [ "$status" -eq 0 ]; then
     echo "Rule 9 gate: PASS"
 else

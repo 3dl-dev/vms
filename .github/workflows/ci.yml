@@ -4731,11 +4731,43 @@ jobs:
             exit 1
           fi
           grep -q 'LINK-S-CREATED' "$OUT/build.log" || { echo "GATE FAIL: no %LINK-S-CREATED (joint_e2e.exe not linked)"; exit 1; }
+          # vms-f1a: the EVAX STRONG-vs-STRONG MULDEF pre-pass must be WHOLE-
+          # ARCHIVE-SAFE — the genuine alpha DECC$SHR whole-archives musl-alpha
+          # libc.a + libgcc.a here, and a well-formed library has NO strong dup
+          # (overridable defs are WEAK; decc$_malloc64 is #ifndef __VMS__-excluded
+          # on alpha). ZERO spurious %LINK-F-MULDEF is the correctness property;
+          # any hit means a genuinely-weak symbol was misread as strong.
+          NMULDEF=$(grep -c 'LINK-F-MULDEF' "$OUT/build.log" || true)
+          if [ "${NMULDEF:-0}" -ne 0 ]; then
+            echo "GATE FAIL: ${NMULDEF} spurious %LINK-F-MULDEF in the genuine-alpha whole-archive build (vms-f1a):"
+            grep 'LINK-F-MULDEF' "$OUT/build.log" || true
+            exit 1
+          fi
           readelf -h "$OUT/joint_e2e.exe" | grep -q 'Machine:.*Alpha' || { echo "GATE FAIL: joint_e2e.exe is not EM_ALPHA"; exit 1; }
           readelf -h "$OUT/joint_e2e.exe" | grep -qE 'Type:.*DYN'     || { echo "GATE FAIL: joint_e2e.exe is not ET_DYN"; exit 1; }
           # C$_EXIT1 should fold as a globalvalue (no import cell) — informational
           if grep -q 'GVALFOLD' "$OUT/build.log"; then echo "ok: C\$_EXIT1 folded as globalvalue"; else echo "note: no GVALFOLD line logged"; fi
-          echo "GATE PASS (vms-864): genuine-alpha crt0-join links zero-deferred; EM_ALPHA/ET_DYN; %LINK-S-CREATED"
+          echo "GATE PASS (vms-864): genuine-alpha crt0-join links zero-deferred; EM_ALPHA/ET_DYN; %LINK-S-CREATED; zero spurious MULDEF (vms-f1a)"
+
+      # vms-f1a: the EVAX/Alpha mirror of the ELF STRONG-vs-STRONG MULDEF gate
+      # (vms-d8d, #777, run_muldef_x86_64.sh). LINK.EXE's evax_find_sym was a
+      # linear FIRST-MATCH with no duplicate check, so two objects both STRONGLY
+      # defining a universal bound silently to link-input order. emit_evax_common
+      # now runs a one-time pre-pass (evax_check_muldef) that hard-errors
+      # %LINK-F-MULDEF. This proves BOTH halves with REAL alpha-dec-vms EVAX
+      # objects (cross cc1, no blobs checked in): the POSITIVE (two objects both
+      # strong-define dup_sym -> MULDEF names the symbol + BOTH objects, exit
+      # non-zero) and the CONTROL (weak-vs-strong still links clean, either link
+      # order — the new check is scoped to STRONG-vs-STRONG only). The whole-
+      # archive-safe no-regression half is the genuine-DECC$SHR link asserted in
+      # the step above (zero spurious MULDEF). Runs in the toolchain image built
+      # above.
+      - name: Prove LINK.EXE rejects a STRONG-vs-STRONG EVAX/Alpha duplicate definition (vms-f1a)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}":/src:ro \
+            ovmx-cross-alpha-vms:latest \
+            sh -c 'export PATH=/opt/cross-alpha-vms/bin:$PATH CC=gcc; sh /src/src/vmslink/test/run_muldef_evax.sh'
 
   # Job 12: real src/libvmssys linked + activated VMS-native (aarch64)
   #

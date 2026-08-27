@@ -6,11 +6,18 @@
  * Observe-only: the seccomp filter returns SECCOMP_RET_USER_NOTIF for the
  * VMS-semantic syscall set; the supervisor records a finding and continues the
  * syscall with SECCOMP_USER_NOTIF_FLAG_CONTINUE. No blocking, no rerouting.
+ *
+ * This is the HOSTED supervisor (pthread + libc), the de-risking core with the
+ * unit proof under tests/boundary_audit. The classifier (BPF program), the
+ * VMS-semantic syscall table, and the JSON finding format are shared verbatim
+ * with the FREESTANDING IMGACT-path supervisor (src/imgact/imgact_boundary_
+ * audit.c) via boundary_audit_filter.h, so the two can never drift.
  */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
 #include "boundary_audit.h"
+#include "boundary_audit_filter.h"   /* shared classifier + finding format */
 
 #include <errno.h>
 #include <poll.h>
@@ -21,146 +28,10 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <linux/audit.h>
-#include <linux/filter.h>
-#include <linux/seccomp.h>
 #include <sys/ioctl.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
-
-/* -------- arch selection (Phase A: x86_64; a second arch is a table add) ---- */
-#if defined(__x86_64__)
-#  define OVMX_BA_AUDIT_ARCH AUDIT_ARCH_X86_64
-#elif defined(__aarch64__)
-#  define OVMX_BA_AUDIT_ARCH AUDIT_ARCH_AARCH64
-#else
-#  define OVMX_BA_UNSUPPORTED_ARCH 1
-#endif
-
-/* -------- seccomp user-notif ioctl / struct fallbacks (older headers) ------- */
-#ifndef SECCOMP_IOC_MAGIC
-#  define SECCOMP_IOC_MAGIC '!'
-#endif
-#ifndef SECCOMP_IOWR
-#  define SECCOMP_IOWR(nr, type) _IOWR(SECCOMP_IOC_MAGIC, (nr), type)
-#endif
-#ifndef SECCOMP_IOCTL_NOTIF_RECV
-#  define SECCOMP_IOCTL_NOTIF_RECV SECCOMP_IOWR(0, struct seccomp_notif)
-#endif
-#ifndef SECCOMP_IOCTL_NOTIF_SEND
-#  define SECCOMP_IOCTL_NOTIF_SEND SECCOMP_IOWR(1, struct seccomp_notif_resp)
-#endif
-#ifndef SECCOMP_USER_NOTIF_FLAG_CONTINUE
-#  define SECCOMP_USER_NOTIF_FLAG_CONTINUE (1UL << 0)
-#endif
-
-/*
- * The classifier: the VMS-semantic syscalls that in a faithful system would
- * trap to the executive. Single source of truth for BOTH the BPF program and
- * the supervisor's name lookup, so they can never drift. __NR_* are already
- * arch-specific via <sys/syscall.h>; guard the ones absent on some arches.
- */
-struct ba_sc { int nr; const char *name; };
-static const struct ba_sc FILTERED[] = {
-	/* process create */
-#ifdef __NR_clone
-	{ __NR_clone,     "clone"     },
-#endif
-#ifdef __NR_clone3
-	{ __NR_clone3,    "clone3"    },
-#endif
-#ifdef __NR_fork
-	{ __NR_fork,      "fork"      },
-#endif
-#ifdef __NR_vfork
-	{ __NR_vfork,     "vfork"     },
-#endif
-#ifdef __NR_execve
-	{ __NR_execve,    "execve"    },
-#endif
-#ifdef __NR_execveat
-	{ __NR_execveat,  "execveat"  },
-#endif
-	/* file / volume */
-#ifdef __NR_open
-	{ __NR_open,      "open"      },
-#endif
-#ifdef __NR_openat
-	{ __NR_openat,    "openat"    },
-#endif
-#ifdef __NR_openat2
-	{ __NR_openat2,   "openat2"   },
-#endif
-#ifdef __NR_creat
-	{ __NR_creat,     "creat"     },
-#endif
-#ifdef __NR_rename
-	{ __NR_rename,    "rename"    },
-#endif
-#ifdef __NR_renameat
-	{ __NR_renameat,  "renameat"  },
-#endif
-#ifdef __NR_renameat2
-	{ __NR_renameat2, "renameat2" },
-#endif
-#ifdef __NR_unlink
-	{ __NR_unlink,    "unlink"    },
-#endif
-#ifdef __NR_unlinkat
-	{ __NR_unlinkat,  "unlinkat"  },
-#endif
-#ifdef __NR_mkdir
-	{ __NR_mkdir,     "mkdir"     },
-#endif
-#ifdef __NR_mkdirat
-	{ __NR_mkdirat,   "mkdirat"   },
-#endif
-#ifdef __NR_chmod
-	{ __NR_chmod,     "chmod"     },
-#endif
-#ifdef __NR_fchmod
-	{ __NR_fchmod,    "fchmod"    },
-#endif
-#ifdef __NR_fchmodat
-	{ __NR_fchmodat,  "fchmodat"  },
-#endif
-#ifdef __NR_truncate
-	{ __NR_truncate,  "truncate"  },
-#endif
-	/* network */
-#ifdef __NR_socket
-	{ __NR_socket,    "socket"    },
-#endif
-#ifdef __NR_socketcall
-	{ __NR_socketcall,"socketcall"},
-#endif
-#ifdef __NR_connect
-	{ __NR_connect,   "connect"   },
-#endif
-#ifdef __NR_bind
-	{ __NR_bind,      "bind"      },
-#endif
-#ifdef __NR_sendto
-	{ __NR_sendto,    "sendto"    },
-#endif
-#ifdef __NR_recvfrom
-	{ __NR_recvfrom,  "recvfrom"  },
-#endif
-	/* device */
-#ifdef __NR_ioctl
-	{ __NR_ioctl,     "ioctl"     },
-#endif
-};
-#define N_FILTERED ((int)(sizeof(FILTERED) / sizeof(FILTERED[0])))
-
-static const char *sc_name(int nr)
-{
-	for (int i = 0; i < N_FILTERED; i++)
-		if (FILTERED[i].nr == nr)
-			return FILTERED[i].name;
-	return "?";
-}
 
 /* -------- findings (supervisor-owned; coalesced by nr + scalar key args) ---- */
 struct finding {
@@ -371,46 +242,6 @@ static void *supervisor(void *arg)
 	return NULL;
 }
 
-/* Build the BPF program from FILTERED[]; caller frees. Returns len via *len. */
-static struct sock_filter *build_filter(int *len)
-{
-#ifdef OVMX_BA_UNSUPPORTED_ARCH
-	(void)len;
-	return NULL;
-#else
-	int n = N_FILTERED;
-	int total = 4 + n + 2;   /* load arch, jeq, ret(wrongarch), load nr,
-				  * n compares, ret(allow), ret(notif) */
-	struct sock_filter *p = calloc(total, sizeof(*p));
-	if (!p)
-		return NULL;
-	int k = 0;
-	/* verify arch; a mismatched arch is not our target -> ALLOW */
-	p[k++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
-			offsetof(struct seccomp_data, arch));
-	p[k++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K,
-			OVMX_BA_AUDIT_ARCH, 1, 0);
-	p[k++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K,
-			SECCOMP_RET_ALLOW);
-	/* load syscall nr */
-	p[k++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
-			offsetof(struct seccomp_data, nr));
-	/* one compare per filtered nr; match jumps to the USER_NOTIF ret. The
-	 * default-allow ret sits between the last compare and the notif ret, so
-	 * a match at compare i (0-based) skips (n-1-i) later compares + the
-	 * default-allow ret => jt = n - i. */
-	for (int i = 0; i < n; i++)
-		p[k++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K,
-				FILTERED[i].nr, n - i, 0);
-	p[k++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K,
-			SECCOMP_RET_ALLOW);
-	p[k++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K,
-			SECCOMP_RET_USER_NOTIF);
-	*len = k;   /* == total */
-	return p;
-#endif
-}
-
 struct boundary_audit *boundary_audit_start(const char *image, int exempt_fd,
 					    const char *log_path)
 {
@@ -448,19 +279,16 @@ struct boundary_audit *boundary_audit_start(const char *image, int exempt_fd,
 	}
 	ba->sup_started = 1;
 
+	struct sock_filter filter[BA_FILTER_MAX_INSNS];
 	int flen = 0;
-	struct sock_filter *filter = build_filter(&flen);
-	if (!filter)
+	if (ba_build_filter(filter, BA_FILTER_MAX_INSNS, &flen) != 0)
 		goto fail;
 
-	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
-		free(filter);
+	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0)
 		goto fail;
-	}
 	struct sock_fprog prog = { .len = (unsigned short)flen, .filter = filter };
 	long lfd = syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER,
 			   SECCOMP_FILTER_FLAG_NEW_LISTENER, &prog);
-	free(filter);
 	if (lfd < 0)
 		goto fail;   /* fail honest: kernel refused the listener */
 
@@ -496,12 +324,11 @@ static void flush_log(struct boundary_audit *ba)
 		return;   /* fail honest: no fake on a log we cannot open */
 	for (size_t i = 0; i < ba->nf; i++) {
 		struct finding *e = &ba->f[i];
-		fprintf(fp,
-			"{\"image\":\"%s\",\"pid\":%d,\"syscall\":\"%s\","
-			"\"key_args\":[%lu,%lu,%lu],\"path\":\"%s\","
-			"\"count\":%lu}\n",
-			ba->image, e->pid, sc_name(e->nr),
-			e->a0, e->a1, e->a2, e->path, e->count);
+		char line[1024];
+		ba_format_finding(line, sizeof(line), ba->image, e->pid,
+				  ba_sc_name(e->nr), e->a0, e->a1, e->a2,
+				  e->path, e->count);
+		fputs(line, fp);
 	}
 	fclose(fp);
 }
@@ -536,7 +363,7 @@ int boundary_audit_saw_syscall(const struct boundary_audit *ba,
 	if (!ba || !sysname)
 		return 0;
 	for (size_t i = 0; i < ba->nf; i++)
-		if (strcmp(sc_name(ba->f[i].nr), sysname) == 0)
+		if (strcmp(ba_sc_name(ba->f[i].nr), sysname) == 0)
 			return 1;
 	return 0;
 }

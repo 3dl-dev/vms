@@ -83,7 +83,7 @@ only our forks target.
 
 ## Live status — generated
 
-> Reconciled from rd (source of truth) **as of 2026-08-26** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
+> Reconciled from rd (source of truth) **as of 2026-08-27** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
 
 ### Milestone ladder
 
@@ -96,7 +96,7 @@ only our forks target.
 | **0.7** | Cluster wire fidelity — the SCS/MSCP connection manager answers a real VAX byte-for-byte. | planned | 0 | 6 | 0 | 0% |
 | **0.8** | Rejoin and satellite boot — a removed node rejoins under its own identity; diskless satellites boot from a served disk. | planned | 0 | 4 | 1 | 0% |
 | **0.9** | Feature-complete — a voting member joins, serves genuine ODS-2 storage, holds locks, and evacuates a live node; TCP/IP, DECnet, and the self-hosting toolchain reach done. The last features land here. | planned | 0 | 0 | 0 | — |
-| **1.0** | Hardened and proven — feature-frozen on 0.9: authenticity enforced by the executive, not by convention, and the whole system proven on real hardware and in extended cluster interop against a real VAX. The release you trust; fixes only. | 1.0 goal | 23 | 13 | 5 | 64% |
+| **1.0** | Hardened and proven — feature-frozen on 0.9: authenticity enforced by the executive, not by convention, and the whole system proven on real hardware and in extended cluster interop against a real VAX. The release you trust; fixes only. | 1.0 goal | 24 | 12 | 4 | 67% |
 
 ### 1.0-gate workstreams (epic rollups)
 
@@ -109,7 +109,7 @@ only our forks target.
 | TCP/IP networking | `vms-67f` | 0.5→0.9 | in progress | 7/12 | 2 |
 | DECnet Phase IV | `vms-30e` | 0.9 | in progress | 5/11 | 5 |
 | Kernel substrate | `vms-19e` | 0.5 | in progress | 5/8 | 1 |
-| VAX as a first-class platform | `vms-8e8` | 0.5→0.9 | in progress | 85/95 | 2 |
+| VAX as a first-class platform | `vms-8e8` | 0.5→0.9 | in progress | 86/95 | 1 |
 
 ### Per-milestone items (rd)
 
@@ -172,7 +172,7 @@ only our forks target.
 - `vms-4838` [inbox] REJOIN: drive op 0x02 CM readmission on the MEMBER-INITIATED VMS$VAXcluster connection (rejoiner=TARGET), not OVMX's own outbound joiner VC
 - `vms-ce7` [inbox] Complete diskless satellite boot: NISCS boot-time disk-server VC formation (no MOP load — VMB is ROM-resident) -> pure MSCP-served-disk-over-NISCA capture
 
-**1.0** — rel-1.0 (23/36 done)
+**1.0** — rel-1.0 (24/36 done)
 
 - `vms-065` [done] Runtime parity: the VAX boot-to-DCL SIMH proof joins the release acceptance gate so every co-release includes a working VAX runtime
 - `vms-1bd` [done] ODS-2 writer completeness: multi-block directories + created-file VAR records round-trip
@@ -209,7 +209,7 @@ only our forks target.
 - `vms-e28` [done] MSCP READ streams real block data: implement the 28-byte-header SCA block-transfer builder/parser + READ transfer hook, proven by capture-replay unit test
 - `vms-e7a` [done] read-write ODS-2 vnode backend on netbsd-vax: drop MNT_RDONLY, implement the write VOPs (currently genfs_eopnotsupp) + VOP_ACCESS VWRITE, so PROVISION/STARTUP can write SYSUAF logs + account dirs on the mounted system volume
 - `vms-f10` [inbox] VAX first-class in the unified build + release stream — co-release parity across aarch64/x86_64/alpha/VAX
-- `vms-f1d` [blocked] VAX installer R4 capstone e2e: install -> separate SIMH session -> boot target alone -> login -> PRODUCT SHOW
+- `vms-f1d` [done] VAX installer R4 capstone e2e: install -> separate SIMH session -> boot target alone -> login -> PRODUCT SHOW
 
 ### Shipped releases (git tags)
 

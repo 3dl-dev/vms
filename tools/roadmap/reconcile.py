@@ -509,6 +509,27 @@ def _scrub(s: str) -> str:
     return s
 
 
+# Editorial one-liner for the next in-progress point release (INV-0 curation, like
+# RELEASE_NOTES). Version is DERIVED (latest tag + 1); this is just the theme.
+NEXT_POINT_THEME = "Actively landing on the current line."
+
+
+def _next_point_release(releases: list[dict]):
+    """The next in-progress POINT release, derived from the newest shipped tag
+    (releases is newest-first). "V0.5-4" -> "V0.5-5"; "V0.5" -> "V0.5-1".
+    Returns {version, theme} or None. Drives the site's rail-next so the public
+    view tracks the point-release cadence, not a jump to the next milestone."""
+    if not releases:
+        return None
+    import re
+    m = re.match(r"^(V?\d+\.\d+)(?:-(\d+))?$", releases[0].get("tag", ""))
+    if not m:
+        return None
+    base, pt = m.group(1), m.group(2)
+    return {"version": f"{base}-{(int(pt) + 1) if pt else 1}",
+            "theme": NEXT_POINT_THEME}
+
+
 def public_json(data: dict, as_of: str) -> str:
     """MILESTONE-LEVEL, curated, trademark-scrubbed. NO internal item IDs."""
     ladder = []
@@ -542,6 +563,7 @@ def public_json(data: dict, as_of: str) -> str:
             "note": "Derived, milestone-level public view. Regenerated each checkpoint; "
                     "do not hand-edit.",
             "scrubbed": "trademark scrub applied on render (public site)",
+            "nextPointRelease": _next_point_release(data["releases"]),
         },
         "vocab": {
             "status": {

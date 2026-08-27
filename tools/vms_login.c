@@ -31,6 +31,10 @@
 #include "vmsfs/filespec.h"
 /* LOGINOUT stamps the authenticated identity onto the executive's row. */
 #include "vms_kif.h"
+/* vms-3b0: distinguish a SYSUAF read fault (RMS$_PRV/...) from RMS$_RNF and
+ * render the authentic %RMS- status text. */
+#include "rmsdef.h"
+#include "ovmx_status.h"
 /* The OpenVMS-faithful post-authentication login-info block (vms-417). */
 #include "loginout_display.h"
 /* New-mail count for the login notification (vms-417). */
@@ -625,7 +629,30 @@ static int console_login(void)
          */
         /* Look up user */
         memset(&user_rec, 0, sizeof(user_rec));
-        if (sysuaf_lookup(username, &user_rec) < 0) {
+        uint32_t uaf_st = 0;
+        if (sysuaf_lookup_st(username, &user_rec, &uaf_st) < 0) {
+            /*
+             * FAIL-HONESTY (vms-3b0). A privilege- or access-denied SYSUAF
+             * read (RMS$_PRV, RMS$_FNF, ... -- the authorization file itself
+             * could not be read) is a SYSTEM fault, not a per-user decision,
+             * and collapsing it into the generic failure MASKED the real
+             * cause during the vms-d31d/#766 VAX-login diagnosis. Surface the
+             * AUTHENTIC %RMS- status on SYS$ERROR so a privilege denial is
+             * diagnosable.
+             *
+             * A record-not-found (RMS$_RNF = no such user) is deliberately
+             * NOT surfaced: it stays indistinguishable from a wrong password
+             * (the generic "User authorization failure" below), so a failed
+             * login cannot reveal whether the account exists (OpenVMS Guide to
+             * System Security, "Disusering Accounts"). Only a whole-file read
+             * fault -- identical for EVERY username -- is surfaced, so the
+             * security invariant is not weakened.
+             */
+            if (uaf_st != 0 && uaf_st != RMS$_RNF) {
+                char rmsmsg[256];
+                vms_status_string(uaf_st, rmsmsg, sizeof(rmsmsg));
+                fprintf(stderr, "%s\n", rmsmsg);
+            }
             printf("\nUser authorization failure\n\n");
             attempts++;
             continue;

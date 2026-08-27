@@ -46,6 +46,7 @@
 #define __OVMX_STATUS_H
 
 #include <stdint.h>
+#include <stddef.h>   /* size_t for vms_status_string() */
 #include "stsdef.h"
 
 #ifdef __cplusplus
@@ -261,6 +262,14 @@ extern "C" {
  * stop, and it was shipped once.
  */
 #define OVMX$_NODEBUGGER  OVMX_STATUS(STS$K_SEVERE, 4)
+
+/*
+ * Render a VMS status into its "%FACILITY-S-IDENT, text" form (src/libvms/
+ * status.c, the single message table). Returns the snprintf length. Exposed
+ * here (vms-3b0) so callers surface the AUTHENTIC message rather than
+ * hand-rolling a second mapping.
+ */
+int vms_status_string(uint32_t status, char *buf, size_t bufsize);
 
 #ifdef __cplusplus
 }

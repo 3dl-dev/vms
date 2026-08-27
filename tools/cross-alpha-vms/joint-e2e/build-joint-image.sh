@@ -36,8 +36,17 @@ IMG=${IMG:-ovmx-cross-alpha-vms}
 OUT=${1:-/tmp/joint-e2e-out}
 mkdir -p "$OUT"
 
-echo "== [1/2] build the alpha-dec-vms cross toolchain image ($IMG) =="
-docker build -t "$IMG" "$TC_DIR"
+# vms-e7c5: if the toolchain image is already present (a CI gate PULLED the
+# source-hash-keyed prebuilt image from ghcr, or a prior run built it), reuse
+# it — do NOT rebuild, which would re-fetch gcc from ftp.gnu.org and reintroduce
+# the outage flake this whole change exists to kill. A missing image still
+# builds from source (local runs, or the pull-miss fallback in CI).
+if docker image inspect "$IMG" >/dev/null 2>&1; then
+    echo "== [1/2] toolchain image $IMG already present — skipping build (prebuilt/pulled) =="
+else
+    echo "== [1/2] build the alpha-dec-vms cross toolchain image ($IMG) =="
+    docker build -t "$IMG" "$TC_DIR"
+fi
 
 echo "== [2/2] build the genuine alpha DECC\$SHR + link the joint-e2e proof (in-container) =="
 docker run --rm \

@@ -25,8 +25,16 @@ CROSS=$(cd "$HERE/.." && pwd)                 # tools/cross-alpha-vms
 REPO=$(cd "$CROSS/../.." && pwd)
 IMG=${IMG:-ovmx-cross-alpha-vms}
 
-echo "== [1/3] build alpha-dec-vms cross toolchain image ($IMG) =="
-docker build -t "$IMG" "$CROSS"
+# vms-e7c5: reuse an already-present toolchain image (a CI gate PULLED the
+# source-hash-keyed prebuilt image from ghcr, or a prior run built it) — do NOT
+# rebuild, which would re-fetch gcc from ftp.gnu.org and reintroduce the outage
+# flake. A missing image still builds from source.
+if docker image inspect "$IMG" >/dev/null 2>&1; then
+    echo "== [1/3] toolchain image $IMG already present — skipping build (prebuilt/pulled) =="
+else
+    echo "== [1/3] build alpha-dec-vms cross toolchain image ($IMG) =="
+    docker build -t "$IMG" "$CROSS"
+fi
 
 echo "== [2/3] build libc.a + LINK.EXE + LIBOTS\$ + DECC\$SHR (--use LIBOTS\$) =="
 docker run --rm \

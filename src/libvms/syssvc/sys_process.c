@@ -888,6 +888,39 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                                             child_privs);
             if (!(ist & 1))
                 rep.status = ist;
+        } else if ((rep.status & 1) && (uic != 0 || prvadr != NULL)) {
+            /*
+             * CLAIMED-BUT-INEFFECTIVE GUARD (vms-bbd, INV-6).
+             *
+             * The caller asked for an EXPLICIT /UIC or /PRIVILEGES override
+             * (uic != 0, or prvadr != NULL), but there is no executive user
+             * name to stamp it under: child_username is empty because the
+             * CREATOR is unauthenticated -- a freshly registered process
+             * starts unnamed (src/kernel/vms_module.c) and only SETIDENT,
+             * after a SYSUAF check under privilege, gives it a name. The boot
+             * STARTUP-DCL context is exactly such a caller (vms-a2d1).
+             *
+             * The override can reach the created process's EXECUTIVE row --
+             * the row vmsfs_acp.c's acp_check_access and $GETJPI read -- ONLY
+             * through vms_kif_setident(), which by design refuses an empty
+             * user name (SS$_IVLOGNAM; "no identity" is expressed by never
+             * calling SETIDENT -- vms_proctab.c username_is_valid). So the
+             * requested UIC/privileges CANNOT be placed on the row.
+             *
+             * Falling through to report %RUN-S-PROC_ID here is precisely the
+             * LARP that #760's "/UIC//PRIVILEGES honoured" claim slipped in
+             * (vms-bbd): the override would be silently DROPPED while the
+             * caller was told it took effect. Fail honestly instead -- the
+             * created process cannot be given the requested identity. This is
+             * the SAME status a NAMED creator lacking SETPRV already gets for
+             * an override it may not make (SS$_NOPRIV, above), so both
+             * "cannot honour the override" outcomes report identically.
+             *
+             * The DEEPER fix -- give the boot STARTUP-DCL a SYSTEM executive
+             * user name so the stamp FIRES and the override is actually
+             * honoured from STARTUP -- is vms-a2d1 (p1, boot chain), not this.
+             */
+            rep.status = SS$_NOPRIV;
         }
         /* Retried on EINTR and on a short write: an interrupted report
          * from a child that is about to exec its image would reach the

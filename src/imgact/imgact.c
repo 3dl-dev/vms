@@ -49,6 +49,7 @@
 #include "known_images.h" /* Known Image DB lookup (bead vms-913.5; wired vms-30d) */
 #include "imgact_prodreg.h" /* publish resident producers into LIBVMS$SHR (vms-db2) */
 #include "imgact_acp.h"   /* image reads over the executive Files-11 ACP (vms-3e8e) */
+#include "imgact_boundary_audit.h" /* executive-boundary AUDIT tracer install (vms-617) */
 #include "vms_ioctl.h"    /* VMS_IOCTL_SETEXIT/GETCLI + arg structs (vms-f60d)       */
 #include "ssdef.h"        /* SS$_NOSUCHDEV -- the "executive absent" defer signal */
 
@@ -2278,6 +2279,41 @@ static void imgact_discover_sysdevice(char **envp)
 	}
 }
 
+/* Freestanding scan of the raw envp vector for KEY=... ; returns the value
+ * pointer (may be "") or NULL when the key is absent. No libc getenv. */
+static const char *imgact_env_value(char **envp, const char *key)
+{
+	unsigned long klen = xstrlen(key);
+	for (char **e = envp; e && *e; e++) {
+		const char *s = *e;
+		unsigned long i = 0;
+		while (i < klen && s[i] && s[i] == key[i])
+			i++;
+		if (i == klen && s[i] == '=')
+			return s + klen + 1;
+	}
+	return 0;
+}
+
+/*
+ * Executive-boundary AUDIT tracer (vms-617, Phase A under vms-040). OPT-IN via
+ * OVMX_BOUNDARY_AUDIT=1 -- NEVER a default runtime change. Installed as the LAST
+ * step before control transfers to the activated image, so IMGACT's own
+ * activation-time syscalls are not audited; only the image's own syscalls are.
+ * The freestanding raw-clone supervisor records every VMS-semantic syscall the
+ * image issues RAW (bypassing the executive) as a finding, and CONTINUEs it
+ * (behaviour byte-identical on/off). Fail honest (INV-6): if the kernel refuses
+ * the filter the image simply runs un-audited -- never a fake.
+ */
+static void imgact_maybe_boundary_audit(char **envp, const char *image)
+{
+	const char *on = imgact_env_value(envp, "OVMX_BOUNDARY_AUDIT");
+	if (!on || on[0] != '1' || on[1] != '\0')
+		return;   /* off by default */
+	const char *log = imgact_env_value(envp, "OVMX_BOUNDARY_AUDIT_LOG");
+	imgact_boundary_audit_install(image ? image : "IMAGE.EXE", log);
+}
+
 unsigned long imgact_bootstrap(unsigned long *sp)
 {
 	/* ---- Parse the initial process stack (no globals yet). ---- */
@@ -2340,6 +2376,8 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 		 * OVMX_ACT_SYSV, so the tail-jump below is unchanged (vms-f60d). */
 		if (g_xfer.valid && g_xfer.flavor == OVMX_ACT_VMS_STD)
 			imgact_vms_standard_activate(ebias, at_execfn);
+		/* Opt-in executive-boundary AUDIT tracer, armed last (vms-617). */
+		imgact_maybe_boundary_audit(envp, at_execfn);
 		return at_entry;   /* OVMX-SysV / legacy: unchanged tail-jump */
 	}
 
@@ -2368,5 +2406,7 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 		run_init(&g_objs[i]);
 
 	/* ---- Transfer control to the executable entry point. ---- */
+	/* Opt-in executive-boundary AUDIT tracer, armed last (vms-617). */
+	imgact_maybe_boundary_audit(envp, at_execfn);
 	return at_entry;
 }

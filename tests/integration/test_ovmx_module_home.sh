@@ -4,18 +4,19 @@
 #
 # WHAT THIS PROVES
 # ----------------
-# drivers/ovmx/ is a MENU, not a hard-coded {vms,vmsfs} pair: adding an OVMX
+# drivers/ovmx/ is a MENU, not a hard-coded module list (vms-165 retired the
+# vmsfs module, leaving vms as the sole real one): adding an OVMX
 # kernel module is exactly {a new drivers-ovmx/<mod>/ subdir + a Kconfig stanza
 # + a CONFIG_OVMX_<MOD>=m flag}, and the new module then inherits the in-tree
 # build (intree=Y) + auto-signing WITHOUT any edit to the overlay script, the
 # generated Kconfig/Makefile, or the Dockerfile harvest/sign loops.
 #
 # This gate runs the REAL overlay-ovmx-drivers.sh against a fabricated kernel
-# tree, TWICE: once with the two real modules, and once with a hypothetical
-# third module `ovmxdemo` dropped in as {subdir + Kconfig + Kbuild + sources.
+# tree, TWICE: once with the real module(s), and once with a hypothetical
+# extra module `ovmxdemo` dropped in as {subdir + Kconfig + Kbuild + sources.
 # conf} only. It asserts the demonstrator is discovered and fully wired (Kconfig
 # sourced, Makefile obj- line, sources flattened) with the overlay script byte-
-# for-byte unchanged -- i.e. the pattern is generic, not two special cases.
+# for-byte unchanged -- i.e. the pattern is generic, not a set of special cases.
 #
 # It is a hermetic source/wiring proof: NO kernel build, NO Docker, NO QEMU
 # (the real intree=Y + signed proof on the shipped modules is the boot-time
@@ -62,7 +63,7 @@ for kb in "$SCAFFOLD"/*/Kbuild; do
     [ -n "$sym" ];           chk "module '$mod' Kconfig declares a config OVMX_* symbol ($sym)" $?
     real_mods=$((real_mods + 1))
 done
-[ "$real_mods" -ge 2 ]; chk "scaffold has the two baseline modules (vms, vmsfs)" $?
+[ "$real_mods" -ge 1 ]; chk "scaffold has the baseline module (vms; vms-165 retired vmsfs)" $?
 
 # --- build a fabricated kernel tree the overlay will accept ------------------
 make_ktree() {
@@ -74,7 +75,7 @@ make_ktree() {
 }
 
 # --- (1) BASELINE: overlay the real scaffold, unmodified ---------------------
-echo "--- baseline overlay (real two modules) ---"
+echo "--- baseline overlay (real module: vms) ---"
 KT1="$WORK/kt-baseline"
 make_ktree "$KT1"
 if bash "$OVERLAY" "$KT1" "$SRC_ROOT" > "$WORK/ov1.log" 2>&1; then

@@ -75,7 +75,7 @@ TAINT_O_BIT=4096      # bit 12, TAINT_OUT_OF_TREE  -- cleared by vms-934
 TAINT_E_BIT=8192      # bit 13, TAINT_UNSIGNED_MODULE -- cleared by vms-ff5
 
 # ALLOWLIST of taint bits that are genuinely unavoidable in this harness. EMPTY
-# today: both OVMX modules are GPL, built in-tree (vms-934) and signed (vms-ff5),
+# today: the OVMX module (vms.ko) is GPL, built in-tree (vms-934) and signed (vms-ff5),
 # so a clean self-built kernel boots with tainted == 0. O and E are NEVER added
 # here (they are the whole point of the untaint work). Any bit added MUST carry
 # an inline reason naming the source and why it is unavoidable, e.g.:
@@ -220,7 +220,7 @@ fi
 
 # Boot to a captured console log, feeding CR to reach login (OPA0: waits for the
 # operator's RETURN). "ovmx.taintreport" tells PID 1 to read
-# /proc/sys/kernel/tainted after both modules load and print the numeric mask on
+# /proc/sys/kernel/tainted after the executive module loads and print the numeric mask on
 # the console as %OVMX-I-TAINT. loglevel=7 keeps the (best-effort) kernel taint
 # strings in play for corroboration; the numeric line is a userspace printf and
 # is unaffected by the console log level.

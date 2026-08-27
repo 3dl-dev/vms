@@ -1062,52 +1062,71 @@ int main(void)
     }
 
     /* ---------------------------------------------------------------
-     * P7. /UIC IS HONOURED ON THE DETACHED PATH (vms-d31d).
+     * P7. /UIC ON THE DETACHED PATH IS PARSED AND FORWARDED, THEN REFUSED
+     *     HONESTLY WHEN THE CREATOR CANNOT STAMP IT (vms-d31d, vms-bbd).
      *
      * ORACLE-PINNED. HELP RUN Process /UIC on the reference lab (VAX2,
-     * OpenVMS VAX V7.3, 2026-07-31) says /UIC "Specifies that the
-     * created process be a detached process and assigns it a user
-     * identification code (UIC)". OVMX now delivers that: $CREPRC stamps
-     * the requested UIC onto the created process's EXECUTIVE row
-     * (vms_kif_setident), so RUN/DETACHED/UIC=[g,m] creates a real
-     * detached process. The old %RUN-F-CREPRC / -OVMX-F-NOPRCUIC refusal
-     * is gone -- OVMX no longer has to pretend it cannot honour a UIC.
+     * OpenVMS VAX V7.3, 2026-07-31) says /UIC "Specifies that the created
+     * process be a detached process and assigns it a user identification
+     * code (UIC)". #760 (vms-d31d) closed the DCL front half: RUN parses
+     * /UIC (past the lexer's comma split of "[300,1]") and forwards it to
+     * $CREPRC's uic argument, which stamps it onto the created process's
+     * EXECUTIVE row via vms_kif_setident() -- and it genuinely lands when
+     * the creator has an executive user name to stamp it under (proven by
+     * P11, which becomes SYSTEM first).
      *
-     * WHAT THIS PHASE PROVES is the DCL-LEVEL honouring: the command
-     * succeeds, resolves the image PAST the lexer's comma split (the old
-     * "%DCL-E-IVIMAGE, image not found - 1]" symptom is asserted absent),
-     * and a process is created under the requested name. The EXECUTIVE
-     * carrying the requested UIC AND privileges is proven separately in
-     * P11, which first establishes a SYSTEM creator identity (a detached
-     * process only inherits a NAMED identity, and run_dcl's DCL registers
-     * with none). Here the created process runs SUBJECT_IMAGE reading a
-     * 600-second hold script, so it is alive to be observed and killed.
+     * BUT run_dcl's DCL registers with NO executive user name (it never
+     * authenticated), and a caller-chosen UIC can reach the executive row
+     * ONLY through vms_kif_setident(), which by design refuses an empty
+     * user name (SS$_IVLOGNAM). So from an UNNAMED creator -- which is
+     * exactly the boot STARTUP-DCL situation (vms-a2d1) -- the requested
+     * UIC CANNOT be placed on the row.
+     *
+     * #760 originally reported %RUN-S-PROC_ID here and SILENTLY DROPPED the
+     * UIC (this phase asserted that success and never checked the UIC
+     * landed -- the claimed-but-ineffective LARP vms-bbd names). The fix
+     * (vms-bbd, src/libvms/syssvc/sys_process.c) makes $CREPRC FAIL
+     * HONESTLY instead: an explicit /UIC (or /PRIVILEGES) override that
+     * cannot be stamped is %RUN-F-CREPRC / -SYSTEM-F-NOPRIV, and NO process
+     * is created. So THIS phase now proves the honest refusal from the
+     * unnamed DCL context; P11 proves the honouring from a NAMED creator;
+     * P12 proves the same refusal at the $CREPRC layer directly. When
+     * vms-a2d1 gives the boot STARTUP-DCL a SYSTEM user name, RUN/UIC from
+     * it flips to the P11 success path -- that is the remaining half of the
+     * feature, not a regression here.
      * --------------------------------------------------------------- */
     {
         char out7[65536];
         int n7 = 0;
 
         run_dcl(UIC_COM, out7, sizeof(out7), &exit_st);
-        printf("  (RUN/DETACHED/UIC=[300,1])\n%s\n", out7);
+        printf("  (RUN/DETACHED/UIC=[300,1] from an unnamed DCL)\n%s\n", out7);
 
-        /* negctl-knockon: bind-client-no-register */
-        CHECK(strstr(out7, "-OVMX-F-NOPRCUIC,") == NULL &&
-              strstr(out7, "%RUN-F-CREPRC") == NULL,
-              "RUN no longer refuses /UIC (vms-d31d): no -OVMX-F-NOPRCUIC");
+        /* The /UIC override cannot be stamped by a nameless creator, so the
+         * creation is REFUSED honestly -- never a fabricated %RUN-S-PROC_ID
+         * with the UIC quietly discarded (vms-bbd LARP guard, INV-6). */
+        CHECK(strstr(out7, "%RUN-F-CREPRC") != NULL &&
+              strstr(out7, "-SYSTEM-F-NOPRIV") != NULL,
+              "RUN/DETACHED/UIC from an unnamed creator is REFUSED honestly "
+              "with %RUN-F-CREPRC / -SYSTEM-F-NOPRIV, not silently dropped");
+        /* The retired refusal status is gone (the UIC is no longer refused
+         * on its mere PRESENCE -- it is parsed and forwarded; the refusal
+         * now comes from the executive being unable to stamp it). */
+        CHECK(strstr(out7, "-OVMX-F-NOPRCUIC,") == NULL,
+              "the mere-presence /UIC refusal (-OVMX-F-NOPRCUIC) is retired");
         CHECK(strstr(out7, "IVIMAGE") == NULL,
               "the image is resolved past the lexer's [g,m] comma split, "
               "not reported as a missing image named '1]'");
-        CHECK(strstr(out7, "%RUN-S-PROC_ID") != NULL,
-              "RUN/DETACHED/UIC announces the created process ID");
+        CHECK(strstr(out7, "%RUN-S-PROC_ID") == NULL,
+              "no created-process ID is announced for the refused /UIC");
 
         (void)proc_id_of(out7, &n7);
-        CHECK(n7 == 1, "exactly one process ID is announced");
+        CHECK(n7 == 0, "the refused /UIC start announced no process");
 
         memset(&info, 0, sizeof(info));
         st = vms_kif_getjpi_prcnam(UIC_NAME, &info);
-        /* negctl-knockon: run-detached-name-dropped */
-        CHECK(st == SS$_NORMAL,
-              "the /UIC detached process exists in the executive under its name");
+        CHECK(st != SS$_NORMAL,
+              "no process persists in the executive under the refused /UIC name");
         if (st == SS$_NORMAL && info.linux_pid)
             kill((pid_t)info.linux_pid, SIGKILL);
     }

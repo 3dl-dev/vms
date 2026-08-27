@@ -42,6 +42,14 @@
 #include <linux/reboot.h>
 #include <signal.h>
 
+/* The production ACP $MOUNT (src/ovmx_init/ovmx_boot_linux.c's
+ * ovmx_boot_acp_mount_system_disk calls vms_kif_acp_mount on boot). Linked in
+ * from libvmssys (vms_kif.c + kif_transport_linux.c + vms_string.c +
+ * arch/alpha/syscall.S) so this runner-init mounts the sysdevice the SAME way
+ * production does -- no hand-rolled ioctl, no ABI-drift copy of the 24-byte
+ * mount arg struct. vms_kif.h pulls ../kernel/vms_ioctl.h -> vms_acp.h. */
+#include "vms_kif.h"
+
 /* Per-suite wall bound: a suite that hangs (e.g. an exec'd DCL waiting on
  * input) must not eat the whole boot budget -- SIGALRM kills the child, the
  * pipe closes, and the suite is recorded as a genuine failure (never a skip).*/
@@ -151,6 +159,25 @@ static int run_suite(const char *name, int *out_pass, int *out_fail)
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
+/*
+ * $MOUNT an ODS-2 volume through the executive Files-11 (ODS-2) ACP -- the
+ * EXACT production mount (vms_kif_acp_mount, the same entry point
+ * ovmx_boot_acp_mount_system_disk drives on a real boot). It honors the mount
+ * protocol guard (acp_bind_ok: open /dev/vms + register the PCB) internally, so
+ * this init does not hand-roll register/ioctl. Records the unit executive-global
+ * (cross-process), so the seam subject's genuine ACTIVATE.EXE bytes on DKA300
+ * resolve over the ACP: without this, imgact_acp_open's $ASSIGN hits an
+ * unmounted unit (SS$_DEVNOTMOUNT) and the subject fails IMGNOTFND. Returns 0 on
+ * an odd (success) VMS status, -1 otherwise. Non-fatal by design: on failure the
+ * seam suite fails HONESTLY (IMGNOTFND), never skipped (INV-6). */
+static int mount_acp_sysdevice(const char *unit)
+{
+    uint32_t st = vms_kif_acp_mount(unit);
+    printf("SYSSVC-ALPHA: $MOUNT %s -> status=0x%08x (%s)\n",
+           unit, (unsigned)st, (st & 1u) ? "MOUNTED" : "FAILED");
+    return (st & 1u) ? 0 : -1;
+}
+
 /* qsort comparator for stable, deterministic suite ordering. */
 static int cmpstr(const void *a, const void *b)
 {
@@ -183,6 +210,16 @@ int main(void)
         printf("=== FINAL RESULTS: 0 suites passed, 1 suites failed ===\n");
         goto out;
     }
+
+    /* vms-341/vms-f60d option (c): the subject-image activation seam resolves
+     * ACTIVATE.EXE's GENUINE bytes off the DKA300 sysvol over the ACP. Production
+     * $MOUNTs the sysdevice on boot (ovmx_boot_acp_mount_system_disk); mirror
+     * that here BEFORE the seam suite runs so imgact_acp_open's $ASSIGN reaches a
+     * MOUNTED unit instead of SS$_DEVNOTMOUNT. Gated to the seam run only -- the
+     * normal syssvc suites $MOUNT the volumes they need themselves, so the plain
+     * run is unaffected. Non-fatal: on failure the seam suite fails honestly. */
+    if (access("/run/ovmx-boot/ACTIVATE.EXE", F_OK) == 0)
+        mount_acp_sysdevice("DKA300:");
 
     /* Discover every /tests/test_syssvc_* and /tests/test_imgact_* binary
      * (the qemu_syssvc_tests target), sorted for deterministic order. The

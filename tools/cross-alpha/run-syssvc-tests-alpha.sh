@@ -228,7 +228,17 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     # 3. Build the static C runner-init + bake the test initramfs.
     ####################################################################
     echo "== build syssvc runner-init + /bin/sh subject stub =="
-    $CC -static -O2 -Wall /tools/test-init-syssvc-alpha.c -o /work/syssvc-init
+    # The runner-init links the PRODUCTION ACP $MOUNT (vms_kif_acp_mount) so it
+    # mounts DKA300 through the executive exactly as ovmx_boot_acp_mount_system_disk
+    # does on a real boot (vms-341/vms-f60d). Pull the minimal libvmssys set that
+    # resolves it: policy (vms_kif.c) + Linux transport (kif_transport_linux.c) +
+    # vms_memset/vms_strncpy (vms_string.c) + the alpha raw-syscall trampolines
+    # (arch/alpha/syscall.S provides __vms_syscall3). vms_kif.h reaches
+    # ../kernel/vms_ioctl.h via its own relative include (NO apostrophes here).
+    $CC -static -O2 -Wall -I/repo/src/libvmssys /tools/test-init-syssvc-alpha.c \
+        /repo/src/libvmssys/vms_kif.c /repo/src/libvmssys/kif_transport_linux.c \
+        /repo/src/libvmssys/vms_string.c /repo/src/libvmssys/arch/alpha/syscall.S \
+        -o /work/syssvc-init
     $CC -static -O2 -Wall /tools/sh-subject-stub.c -o /work/sh-subject
     alpha-linux-gnu-strip /work/syssvc-init /work/sh-subject
     cp /vmsko/vms.ko /work/vms.ko

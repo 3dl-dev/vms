@@ -238,6 +238,18 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     #     plain OVMX-original name never decorated.
     VEC="$VEC,__copy_tls=PROCEDURE,__init_tp=PROCEDURE,ovmx_get_libc=PROCEDURE"
 
+    # stdin/stdout/stderr -- the C stdio stream FILE* objects, plain DATA names
+    # the decc$ filter above cannot catch. The alpha cc1 does NOT decorate the
+    # stream data objects (decc_crtl_map.txt maps no std* stream; verified: a
+    # fprintf(stderr,...) TU references plain `stderr`/`stdin`/`stdout`, never
+    # decc$ga_*), so the ^decc$ enumeration misses them and a real multi-file
+    # program using fprintf(stderr,...) / stdio would hit %LINK-F-UNDEF. Export
+    # them as DATA universals exactly like the generic (x86_64/aarch64) tail
+    # does -- resolved from musl's stdin/stdout/stderr members by the
+    # whole-archive link (which fails loudly if a name is not actually defined).
+    # (vms-bdd first sub-step: settles the stdio-stream link-readiness gap.)
+    VEC="$VEC,stdin=DATA,stdout=DATA,stderr=DATA"
+
     # ---- vms-864 (mirrors vms-954 R1b-2b on the generic tail): C$_EXIT1 ----
     # Same architecture-independent VMS C-facility globalvalue, same oracle
     # grounding as the generic tail above (measured on OpenVMS Alpha V8.4,

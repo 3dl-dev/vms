@@ -3,9 +3,11 @@
  *
  * This is the "mkfs -d" / mastering step of the OVMX build: it takes a Linux
  * source directory tree (e.g. distro/rootfs/vms/...) and writes it into a
- * VMSFS/ODS-2-inspired block image with the files and directories in place,
- * ready to be mounted by vmsfs.ko at boot.  It extends the empty-volume writer
- * in tools/vms_initialize.c (INITIALIZE.EXE) to populate content.
+ * VMSFS/ODS-2-inspired block image with the files and directories in place.
+ * (The legacy VMSFS format's in-kernel reader was the vmsfs.ko VFS driver,
+ * retired by vms-165; this tool's --ods2 mode writes genuine ODS-2 volumes the
+ * executive Files-11 ACP reads.)  It extends the empty-volume writer in
+ * tools/vms_initialize.c (INITIALIZE.EXE) to populate content.
  *
  * It is factory BUILD tooling: never shipped on the media, never given a VMS
  * name, never run at boot (per docs/design-vms-faithful-install.md §3.3).
@@ -29,11 +31,12 @@
  * ----------------------------------------------------------------------------
  * Grounding (clean-room Rule 8):
  *   The on-disk byte layout is taken entirely from vmsfs_ondisk.h — the SAME
- *   header shared by vmsfs.ko and INITIALIZE.EXE, so the format has exactly one
- *   description.  The block-level semantics this tool writes to (home block at
- *   LBN 1, storage bitmap, one 512-byte file header per FID in the index area,
- *   88-byte directory entries with de_version==0 marking a directory) are what
- *   the kernel reader in src/kernel/vmsfs/vmsfs_blkdev.c consumes.
+ *   header shared by the VMFS host tools (INITIALIZE.EXE / ANALYZE), so the
+ *   format has exactly one description.  The block-level semantics this tool
+ *   writes to (home block at LBN 1, storage bitmap, one 512-byte file header per
+ *   FID in the index area, 88-byte directory entries with de_version==0 marking
+ *   a directory) are what those tools read back.  (The vmsfs.ko block-device
+ *   reader that once consumed this format was retired by vms-165.)
  *
  *   VMSFS is explicitly "not byte-compatible with real ODS-2" (vmsfs_ondisk.h
  *   header comment) — it is an OVMX design choice, not presented as

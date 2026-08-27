@@ -26,8 +26,8 @@
 #   1. CROSS-BUILD (ovmx-cross-vax): STARTUP.EXE (ovmx_init, dynamic elf32-vax,
 #      ld.elf_so activation, Decision A) + loadable vms.kmod + vmsfs.kmod.
 #   2. BUILD-KERNEL (ovmx-cross-vax): the GENERIC+MODULAR vax kernel (cached).
-#   3. MASTER (ovmx-cross-vax): a small OVMX ODS-2 volume (tests/qemu/
-#      mkimage_vmsfs.c; host cc; arch-independent). Cached.
+#   3. MASTER (ovmx-cross-vax): a small OVMX ODS-2 volume (vmsfs_master
+#      --ods2; host cc; arch-independent). Cached.
 #   4. INSTALL (ovmx-vax-lab): install NetBSD/vax once if the shared cache is cold.
 #   5. INSTALL-KERNEL (ovmx-vax-lab): swap the MODULAR kernel onto the SHARED disk
 #      once (shared marker; the siblings may have done it already).
@@ -116,13 +116,13 @@ BLANK_TARGET_IMG="${BLANK_TARGET_IMG:-${CACHE_DIR}/dka100-target.img}"
 # vms-329: the sysboot NEGATIVE CONTROL's volume. It must be a GENUINE, mountable
 # ODS-2 volume that simply has no SYS$SYSTEM:DCL.EXE, so the thing it proves is
 # the INSTALLED-SYSTEM gate's teeth and nothing else. Before the ACP cutover the
-# negctl reused ODS2_IMG (the small VMFS image tests/qemu/mkimage_vmsfs.c builds
-# for the vmsfs VFS-module drivers); with SYS$DISK now $MOUNTed through the
-# executive ACP that volume no longer mounts at all, so the boot would halt one
-# step EARLIER (%OVMX-F-SYSINIT, "would not mount") and the negctl would stop
-# exercising the gate it exists to exercise -- a silently weakened control. It
-# gets its own ODS-2 image rather than re-mastering ODS2_IMG, which the sibling
-# vmsfs/access/eflag drivers still need in VMFS form.
+# negctl reused ODS2_IMG (which, before vms-165 retired the vmsfs VFS driver, was
+# a byte-divergent legacy-VMFS image); ODS2_IMG is now a GENUINE ODS-2 volume
+# (master_volume, vmsfs_master --ods2) that DOES mount through the executive ACP
+# but carries no SYS$SYSTEM:DCL.EXE -- so the sysboot negctl still halts on the
+# INSTALLED-SYSTEM gate rather than one step earlier at "would not mount". It
+# gets its own ODS-2 image (SYSNEG_IMG) rather than re-mastering ODS2_IMG, so the
+# two negative controls cannot perturb each other.
 SYSNEG_IMG="${SYSNEG_IMG:-${CACHE_DIR}/ovmx-sysneg-vax.img}"
 
 # vms-7b15: the SINGLE-disk artifact -- ONE labeled MSCP disk that VMB boots the
@@ -235,14 +235,30 @@ build_kernel() {
   [ -f "${ARTIFACTS_DIR}/netbsd-OVMX" ] || die "kernel build finished but netbsd-OVMX missing"
 }
 
-# 3. master a small OVMX ODS-2 volume (host cc; arch-independent). Cached/shared.
+# 3. master a small GENUINE ODS-2 volume (host cc; arch-independent). Cached/shared.
+#    vms-165: the retired vmsfs VFS driver took its legacy-format helper
+#    (tests/qemu/mkimage_vmsfs.c) with it. The guest now mounts this volume ONLY
+#    through the vms.kmod Files-11 ACP, which reads genuine ODS-2 -- so master it
+#    with the same ODS-2 codec (vmsfs_master --ods2) the SYSTEM volume above uses,
+#    not the old byte-divergent VMSFS helper.
 master_volume() {
   if [ -f "${ODS2_IMG}" ]; then
     log "mastered ODS-2 volume present -- NOT re-mastering"; return 0; fi
-  log "mastering a small OVMX ODS-2 volume (tests/qemu/mkimage_vmsfs.c)"
+  log "mastering a small OVMX ODS-2 volume (vmsfs_master --ods2)"
   docker run --rm -v "${REPO}:/src:ro" -v "$(dirname "${ODS2_IMG}"):/out" \
-    --entrypoint sh "${CROSS_IMAGE}" -c \
-    "cc -O2 -Wall -I /src/src/kernel/vmsfs -o /tmp/mkimage_vmsfs /src/tests/qemu/mkimage_vmsfs.c && /tmp/mkimage_vmsfs /out/$(basename "${ODS2_IMG}")"
+    --entrypoint sh "${CROSS_IMAGE}" -c '
+      set -e
+      cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+         -I /src/src/vmsfs/include \
+         -o /tmp/vmsfs_master /src/tools/vmsfs_master.c \
+         /src/src/vmsfs/ods2/ods2_reader.c /src/src/vmsfs/ods2/ods2_writer.c \
+         /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
+         /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
+      mkdir -p /tmp/ods2stage
+      printf "Hello from the OVMX ODS-2 test volume\n" > /tmp/ods2stage/HELLO.TXT
+      /tmp/vmsfs_master --ods2 master /out/'"$(basename "${ODS2_IMG}")"' OVMXTEST /tmp/ods2stage 4
+      /tmp/vmsfs_master --ods2 list /out/'"$(basename "${ODS2_IMG}")"'
+    '
   [ -f "${ODS2_IMG}" ] || die "ODS-2 mastering did not produce ${ODS2_IMG}"
 }
 
@@ -308,7 +324,7 @@ master_system_volume() {
     -v "$(dirname "${SYSVOL_IMG}"):/out" --entrypoint sh "${CROSS_IMAGE}" -c '
       set -e
       cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
-         -I /src/src/kernel/vmsfs -I /src/src/vmsfs/include \
+         -I /src/src/vmsfs/include \
          -o /tmp/vmsfs_master /src/tools/vmsfs_master.c \
          /src/src/vmsfs/ods2/ods2_reader.c /src/src/vmsfs/ods2/ods2_writer.c \
          /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
@@ -406,7 +422,7 @@ master_distribution_volume() {
     -v "$(dirname "${DISTRIB_IMG}"):/out" --entrypoint sh "${CROSS_IMAGE}" -c '
       set -e
       cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
-         -I /src/src/kernel/vmsfs -I /src/src/vmsfs/include \
+         -I /src/src/vmsfs/include \
          -o /tmp/vmsfs_master /src/tools/vmsfs_master.c \
          /src/src/vmsfs/ods2/ods2_reader.c /src/src/vmsfs/ods2/ods2_writer.c \
          /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
@@ -437,7 +453,7 @@ make_blank_target() {
     --entrypoint sh "${CROSS_IMAGE}" -c '
       set -e
       cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
-         -I /src/src/kernel/vmsfs -I /src/src/vmsfs/include \
+         -I /src/src/vmsfs/include \
          -o /tmp/vmsfs_master /src/tools/vmsfs_master.c \
          /src/src/vmsfs/ods2/ods2_reader.c /src/src/vmsfs/ods2/ods2_writer.c \
          /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
@@ -459,7 +475,7 @@ master_sysneg_volume() {
     -v "$(dirname "${SYSNEG_IMG}"):/out" --entrypoint sh "${CROSS_IMAGE}" -c '
       set -e
       cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
-         -I /src/src/kernel/vmsfs -I /src/src/vmsfs/include \
+         -I /src/src/vmsfs/include \
          -o /tmp/vmsfs_master /src/tools/vmsfs_master.c \
          /src/src/vmsfs/ods2/ods2_reader.c /src/src/vmsfs/ods2/ods2_writer.c \
          /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \

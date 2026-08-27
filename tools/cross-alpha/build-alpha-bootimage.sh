@@ -24,7 +24,7 @@
 #                              is unreliable, so we bake it, same as
 #                              boot-vmsko-qemu-alpha.sh).  The initramfs is the
 #                              bootstrap-only slim image: /init = STARTUP.EXE,
-#                              vms.ko + vmsfs.ko, minimal SYSMGR/SYSUAF config,
+#                              vms.ko, minimal SYSMGR/SYSUAF config,
 #                              vms_mount_helper -- exactly Dockerfile.bootable's
 #                              initramfs-slim, cross-built for Alpha.
 #   imgact-proof/           -- IMGACT.EXE(alpha) + a VMS-native ET_DYN Alpha
@@ -33,8 +33,8 @@
 #                              activates a real image UNDER THE BOOTED KERNEL.
 #
 # DEPENDS ON (built by the sibling scripts, cached in their own $WORK):
-#   * build-vmsko-alpha.sh  -> /tmp/ovmx-vmsko-alpha/{linux-6.6.52, vms.ko,
-#                              vmsfs.ko}  (kernel tree + executive modules)
+#   * build-vmsko-alpha.sh  -> /tmp/ovmx-vmsko-alpha/{linux-6.6.52, vms.ko}
+#                              (kernel tree + executive module)
 #   * the Alpha userland cross-build -> $USERLAND/bin/*.EXE.  If absent this
 #     script builds it (cmake alpha toolchain, static, tools ON).
 #
@@ -67,7 +67,7 @@ docker build -t "$IMG" "$HERE" >/dev/null
 _force="${FORCE_BUILD:-0}"
 
 # ---- 0. prerequisites: executive modules + kernel tree ----
-if [ "$_force" = "1" ] || [ ! -f "$VMSKO_WORK/vms.ko" ] || [ ! -f "$VMSKO_WORK/vmsfs.ko" ] || [ ! -d "$VMSKO_WORK/linux-$KV" ]; then
+if [ "$_force" = "1" ] || [ ! -f "$VMSKO_WORK/vms.ko" ] || [ ! -d "$VMSKO_WORK/linux-$KV" ]; then
     echo "== executive modules/kernel not cached (or FORCE_BUILD) -- running build-vmsko-alpha.sh =="
     FORCE_BUILD="$_force" WORK="$VMSKO_WORK" KV="$KV" "$HERE/build-vmsko-alpha.sh"
 fi
@@ -195,7 +195,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
 
     #########################################################################
     # 3. Bootstrap initramfs -- Dockerfile.bootable initramfs-slim for Alpha:
-    #    /init = STARTUP.EXE, /lib/modules/{vms.ko,vmsfs.ko}, /sbin/
+    #    /init = STARTUP.EXE, /lib/modules/vms.ko, /sbin/
     #    vms_mount_helper, minimal SYSUAF + SYSMGR config.  The full system
     #    (DCL/LOGINOUT/IMGACT/SYSLIB) lives on the mounted disk, not here.
     #########################################################################
@@ -209,7 +209,6 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     cp "$BIN/vms_mount_helper"   "$IR/sbin/vms_mount_helper"
     chmod 4755 "$IR/sbin/vms_mount_helper"
     cp /vmsko/vms.ko             "$IR/lib/modules/vms.ko"
-    cp /vmsko/vmsfs.ko           "$IR/lib/modules/vmsfs.ko"
     cp /repo/distro/rootfs/etc/os-release "$IR/etc/os-release" 2>/dev/null || true
     cp /repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT "$IR/vms/SYS0/SYSCOMMON/SYSEXE/"
     cp -r /repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/* "$IR/vms/SYS0/SYSCOMMON/SYSMGR/"
@@ -234,7 +233,6 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
       echo "file /init /work/initramfs/init 755 0 0"
       echo "file /sbin/vms_mount_helper /work/initramfs/sbin/vms_mount_helper 4755 0 0"
       echo "file /lib/modules/vms.ko /work/initramfs/lib/modules/vms.ko 644 0 0"
-      echo "file /lib/modules/vmsfs.ko /work/initramfs/lib/modules/vmsfs.ko 644 0 0"
       [ -f "$IR/etc/os-release" ] && echo "file /etc/os-release /work/initramfs/etc/os-release 644 0 0"
       # VMS config tree (walk the staged initramfs vms/ subtree)
       while IFS= read -r d; do

@@ -19,7 +19,8 @@ never a runtime.
 ## The bootable OVMX/Alpha system image (rd vms-989, rung A5a)
 
 The front-half of boot-to-DCL: assemble a full Linux/Alpha system image carrying
-the cross-built OVMX userland + the `vms.ko`/`vmsfs.ko` executive, boot PID 1
+the cross-built OVMX userland + the `vms.ko` executive (which carries the Files-11
+ODS-2 ACP; the separate `vmsfs.ko` VFS driver was retired by vms-165), boot PID 1
 (the REAL `ovmx_init`, i.e. `STARTUP.EXE`) under `qemu-system-alpha -M clipper`,
 and drive it to the current executive/ACP frontier — mirroring the x86_64 QEMU
 bootable path (`distro/Dockerfile.bootable`) as far as the Alpha cross-build
@@ -30,7 +31,7 @@ wrapped in a hard `timeout`.
   (`/tmp/ovmx-alpha-boot`): masters a VMSFS system disk (`ovmx-distrib-alpha.img`)
   from the Alpha `/vms` tree (STARTUP/PROVISION/JOB_CONTROL/LOGINOUT/DCL + RTL,
   all EM_ALPHA) with the Alpha `vmsfs_master` run under `qemu-alpha`; assembles
-  the bootstrap initramfs (`/init` = `STARTUP.EXE`, `vms.ko` + `vmsfs.ko`,
+  the bootstrap initramfs (`/init` = `STARTUP.EXE`, `vms.ko`,
   minimal SYSMGR/SYSUAF config) and bakes it into `vmlinux-boot`; and stages the
   IMGACT-under-booted-kernel proof (IMGACT.EXE + a VMS-native Alpha image).
 - `boot-alpha-image.sh` — boots two images under a hard timeout: **BOOT A**, the
@@ -137,17 +138,18 @@ executive on Alpha is **`vms.ko` recompiled for the Linux/Alpha kernel** and
 reached via `/dev/vms` -- NOT a NetBSD SYSKRNL port (that is the VAX path).
 Two scripts prove it, both build/test tooling (Rule 9), never a runtime:
 
-- `build-vmsko-alpha.sh` -- cross-compiles the executive `vms.ko` and the
-  ACP-bearing filesystem `vmsfs.ko` (the genuine kernel-resident ODS-2 codec,
-  epic vms-208) for the Linux/Alpha kernel (6.6.52, `alpha-linux-gnu-`).
-  **Result: both modules cross-compile CLEAN** -- every kernel-core facility
+- `build-vmsko-alpha.sh` -- cross-compiles the executive `vms.ko`, which carries
+  the genuine kernel-resident ODS-2 codec + Files-11 ACP (epic vms-208; the
+  separate `vmsfs.ko` VFS driver was retired by vms-165), for the Linux/Alpha
+  kernel (6.6.52, `alpha-linux-gnu-`).
+  **Result: the module cross-compiles CLEAN** -- every kernel-core facility
   (locks / event flags / AST / mailboxes / process table / device table /
   logical names) and every ODS-2 codec source builds with zero width or
   endianness warnings. Alpha is little-endian + LP64 like x86_64, and the
   codec reads on-disk fields through byte-wise `le16/le32` helpers, so the
   ODS-2 work converged onto Alpha without change. (The one and only warning is
   a pre-existing large-stack-frame note in `ods2_writer.c`, not Alpha-specific.)
-  Produces `elf64-alpha` `vms.ko`/`vmsfs.ko`, vermagic `6.6.52`.
+  Produces `elf64-alpha` `vms.ko`, vermagic `6.6.52`.
 
   NOTE: `make modules` (not just `vmlinux modules_prepare`) is required so the
   kernel emits `Module.symvers`; an external module's modpost resolves the

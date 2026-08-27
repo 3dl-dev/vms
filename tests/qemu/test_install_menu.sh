@@ -125,7 +125,7 @@ FAIL=0
 ok()  { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
-echo "=== install menu e2e: OVMX\$INSTALL.COM against a real vms.ko + vmsfs.ko (vms-dcf) ==="
+echo "=== install menu e2e: OVMX\$INSTALL.COM against a real vms.ko executive + Files-11 ACP (vms-dcf) ==="
 echo "arch=$ARCH qemu=$QEMU kernel=$KERNEL initrd=$INITRD"
 
 WORKDIR=$(mktemp -d)

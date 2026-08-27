@@ -33,24 +33,6 @@
       "names": ["vms.kmod.o"],
       "missing_on": "x86_64",
       "reason": "Companion to 'executive-module-packaging-x86_64': x86_64 has no relocatable vms.kmod.o because its executive module ships loadable (vms.ko) directly -- there is no intermediate relocatable-object packaging step on the Linux side."
-    },
-    {
-      "group": "vmsfs-module-filename-convention-x86_64",
-      "names": ["vmsfs.ko"],
-      "missing_on": "vax",
-      "reason": "Naming convention only, not a functional gap: x86_64's loadable ODS-2 VFS module is named vmsfs.ko (Linux .ko convention). The identical loadable module ships for VAX as vmsfs.kmod (NetBSD .kmod convention) -- see the companion 'vmsfs-module-filename-convention-vax' entry. Unlike vms.ko/vms.kmod.o, both are genuine loadable modules on both arches."
-    },
-    {
-      "group": "vmsfs-module-filename-convention-vax",
-      "names": ["vmsfs.kmod"],
-      "missing_on": "x86_64",
-      "reason": "Companion to 'vmsfs-module-filename-convention-x86_64': same loadable ODS-2 VFS module, NetBSD .kmod filename convention instead of Linux .ko."
-    },
-    {
-      "group": "vmsfs-mount-helper-vax",
-      "names": ["vmsfs_mount"],
-      "missing_on": "x86_64",
-      "reason": "NetBSD VFS registration for a new on-disk format needs a userspace mount(8) helper to translate `mount -t vmsfs ...` arguments into the vfsops mount call -- vmsfs_mount is that helper (tests/netbsd/guest/vmsfs_mount.c). Linux's vmsfs.ko registers via register_filesystem() and is mounted through the standard mount(2)/mount.<fstype> path directly, so x86_64 needs no separate helper binary."
     }
   ]
 }

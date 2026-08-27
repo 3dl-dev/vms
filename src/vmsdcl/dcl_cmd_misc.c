@@ -2141,7 +2141,8 @@ int mount_point_is_mounted(const char *mount_point)
 }
 
 /*
- * MOUNT - mount(2) a VMS disk unit's backing block device as vmsfs (vms-651).
+ * MOUNT - $MOUNT a VMS disk unit's ODS-2 volume through the executive ACP
+ * (vms-651; vms-481 retired the old setuid mount(2)-as-vmsfs path).
  *
  * Syntax: MOUNT device: label [/SYSTEM]
  *

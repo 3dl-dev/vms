@@ -6,7 +6,7 @@
 # WHAT THIS IS. VAX is a first-class co-release platform, not a side-thread
 # (docs/design-vax-mainstream-release.md). R1 (vms-9172, DONE) made a broken
 # VAX build red a PR via fast per-PR cross-compile gates in ci.yml
-# (netbsd-vax-vms-crosscompile, netbsd-vax-vmsfs-crosscompile, vmsdcl-netbsd-
+# (netbsd-vax-vms-crosscompile, vmsdcl-netbsd-
 # vax, ovmx-init-netbsd-vax, librarian-netbsd-vax). vms-d65 (unified
 # cross-build Rung C) retired the standalone ovmx-boot-images-netbsd-vax
 # job -- the boot-image set's per-PR proof now lives in vax-cmake-images'
@@ -49,12 +49,9 @@
 #                      rather than relabeling it "vms.kmod" is a deliberate
 #                      Rule-8/INV-6 honesty choice -- never claim an artifact
 #                      is more built than it is.
-#   vmsfs.kmod         the loadable ODS-2 VFS module -- a genuine loadable
-#                      kernel module (MODULE() metadata, no GOT32 relocs),
-#                      built the same way the fast per-PR
-#                      netbsd-vax-vmsfs-crosscompile gate proves it
-#                      (build-vmsfs-mount-vax.sh). Its static mount helper
-#                      (vmsfs_mount) ships alongside it.
+#   (vms-165: the loadable ODS-2 VFS module vmsfs.kmod + its vmsfs_mount helper
+#    were retired with the vmsfs VFS driver -- SYS$DISK is read through the
+#    executive ACP in vms.kmod.o, never a vmsfs mount, so no VFS module ships.)
 #   [every image in the ovmx-images aggregate] the full shipped userspace
 #                      image set (STARTUP.EXE, PROVISION.EXE, JOB_CONTROL.EXE,
 #                      DCL.EXE, LOGINOUT.EXE, OVMXDUMP, LIBRARIAN.EXE,
@@ -182,8 +179,8 @@ BUILD_ARGS+=("$SRC_DIR/tools/cross-vax")
 docker "${BUILD_ARGS[@]}"
 
 # --- NetBSD/vax kernel headers (syssrc), pinned + checksummed, cached ------
-# Same pin the amd64 gate (tests/netbsd/netbsd_version.env) and the vax vmsfs
-# harness (tests/lab-vax/run-vmsfs.sh) both use -- read from the ARCHIVED
+# Same pin the amd64 gate (tests/netbsd/netbsd_version.env) and the vax lab
+# harness (tests/lab-vax/run-boot.sh) both use -- read from the ARCHIVED
 # tree's own copy so this always builds against the exact commit being cut,
 # never a literal duplicated here.
 VERSION_ENV="$SRC_DIR/tests/netbsd/netbsd_version.env"
@@ -204,12 +201,12 @@ else
     log "NetBSD syssrc cache hit: $NBSRC_CACHE"
 fi
 
-# --- Stage 1/3: the OVMX executive module (vms.kmod.o, relocatable) --------
+# --- Stage 1/2: the OVMX executive module (vms.kmod.o, relocatable) --------
 # build-vms-module-vax.sh does `rm -rf "$OUT"; mkdir -p "$OUT"` -- OUT is set
 # to a SUBDIRECTORY of the bind mount (/out/build), not the mount point
 # itself, because `rm -rf` on the mount point of a bind mount fails with
 # "Device or resource busy" (Docker cannot unlink the mountpoint inode).
-log "=== stage 1/3: OVMX executive module (vms.kmod.o) ==="
+log "=== stage 1/2: OVMX executive module (vms.kmod.o) ==="
 STAGE1="$WORK/vms-module"; mkdir -p "$STAGE1"
 docker run --rm \
     -v "$SRC_DIR:/src" -w /src \
@@ -220,21 +217,12 @@ docker run --rm \
 cp "$STAGE1/build/vms.kmod.o" "$OUT_DIR/vms.kmod.o"
 log "-> $OUT_DIR/vms.kmod.o"
 
-# --- Stage 2/3: the loadable ODS-2 VFS module (vmsfs.kmod) + mount helper --
-log "=== stage 2/3: loadable ODS-2 VFS module (vmsfs.kmod) ==="
-STAGE2="$WORK/vmsfs-mount"; mkdir -p "$STAGE2"
-docker run --rm \
-    -v "$SRC_DIR:/src" -w /src \
-    -v "$NBSRC_CACHE:/nbsrc:ro" -e NBSRC=/nbsrc \
-    -v "$STAGE2:/out" -e OUT=/out \
-    "$TOOLCHAIN_IMAGE" sh tools/cross-vax/build-vmsfs-mount-vax.sh
-[ -f "$STAGE2/vmsfs.kmod" ] || fail "vmsfs.kmod missing after cross-compile"
-[ -f "$STAGE2/vmsfs_mount" ] || fail "vmsfs_mount (mount helper) missing after cross-compile"
-cp "$STAGE2/vmsfs.kmod" "$OUT_DIR/vmsfs.kmod"
-cp "$STAGE2/vmsfs_mount" "$OUT_DIR/vmsfs_mount"
-log "-> $OUT_DIR/vmsfs.kmod, $OUT_DIR/vmsfs_mount"
+# (vms-165: the loadable ODS-2 VFS module stage -- vmsfs.kmod + its vmsfs_mount
+# helper, built by the now-deleted build-vmsfs-mount-vax.sh -- was retired with
+# the vmsfs VFS driver. SYS$DISK is read through the executive ACP in the vms
+# module (vms.kmod.o, staged above), never a vmsfs mount, so no VFS module ships.)
 
-# --- Stage 3/3: the full userspace image set (ovmx-images aggregate) -------
+# --- Stage 2/2: the full userspace image set (ovmx-images aggregate) -------
 # (rd vms-88c, epic vms-509 Rung F). Also the OVMX_VAX_RELEASE_NEGCTL target
 # -- fail loudly BEFORE spending the build time, same pattern the old stage
 # 4/LIBRARIAN.EXE negctl used.
@@ -302,10 +290,10 @@ log "ovmx-images aggregate: ${#IMAGE_NAMES[@]} images shipped (derived from inst
 # VAX_ARTIFACT_ORDER array -- generated fresh every cut, never hand-
 # duplicated, so it cannot drift from what was actually built.
 {
-    printf '%s\n' vms.kmod.o vmsfs.kmod vmsfs_mount
+    printf '%s\n' vms.kmod.o
     printf '%s\n' "${IMAGE_NAMES[@]}"
 } > "$OUT_DIR/vax-artifact-manifest.txt"
-log "-> $OUT_DIR/vax-artifact-manifest.txt ($(( ${#IMAGE_NAMES[@]} + 3 )) artifacts total)"
+log "-> $OUT_DIR/vax-artifact-manifest.txt ($(( ${#IMAGE_NAMES[@]} + 1 )) artifacts total)"
 
 log "=== ALL VAX RELEASE ARTIFACTS BUILT: $OUT_DIR ==="
 ls -la "$OUT_DIR"

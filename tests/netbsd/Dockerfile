@@ -175,18 +175,14 @@ COPY tests/netbsd/run_p2c.sh                 /netbsd/run_p2c.sh
 COPY tests/netbsd/drive_netbsd_p4a.py        /netbsd/drive_netbsd_p4a.py
 COPY tests/netbsd/run_p4a.sh                 /netbsd/run_p4a.sh
 
-# P4-VFS V4 (rd vms-308): the OVMX/NetBSD ODS-2 vnode/VFS backend mount+read
-# proof. Staged as FOUR in-guest dirs (bundled into an ISO by the driver and
-# built in-guest) plus a HOST-side master dir (mkimage_vmsfs is compiled + run
-# on the host to master the ODS-2 volume attached as wd1).
-#   kmod/        : the NetBSD ODS-2 vnode backend (vmsfs_vfsops.c) + its headers
-#   kernel-core/ : the SHARED substrate-neutral ODS-2 core (SAME sources the
-#                  Linux vmsfs.ko builds) + the shim/seam contracts
-#   ondisk/      : vmsfs_ondisk.h (lives beside the Linux glue; -I../ondisk)
-#   tool/        : the in-guest mount(2) helper
-# vms-165: the NetBSD vmsfs.kmod VFS module + its in-guest mount/read proof
-# (guest-vmsfs/, vmsfs-master/, run_vmsfs.sh, drive_netbsd_vmsfs.py) are retired
-# -- the runtime reads SYS$DISK over the executive ACP, not a vmsfs mount.
+# P4-VFS V4 (rd vms-308) — RETIRED by vms-165. This was the OVMX/NetBSD ODS-2
+# vnode/VFS-backend mount+read proof: it staged the NetBSD ODS-2 vnode backend
+# (vmsfs_vfsops.c), the shared substrate-neutral ODS-2 core, vmsfs_ondisk.h and
+# an in-guest mount(2) helper, plus a host-mastered ODS-2 volume, and mounted it
+# in-guest. The whole vmsfs VFS driver (NetBSD vmsfs.kmod + Linux vmsfs.ko + the
+# shared kernel-core/vmsfs core + their host helpers guest-vmsfs/, vmsfs-master/,
+# run_vmsfs.sh, drive_netbsd_vmsfs.py, mkimage_vmsfs) was deleted -- the runtime
+# reads SYS$DISK over the executive Files-11 ACP, never a vmsfs mount.
 
 RUN chmod +x /netbsd/run_tests.sh /netbsd/drive_netbsd.py \
              /netbsd/run_p2b.sh /netbsd/drive_netbsd_p2b.py \

@@ -821,7 +821,9 @@ grep -E '\.[sS]$' "$WORK/buildset" > "$WORK/prodasm" 2>/dev/null || : > "$WORK/p
 # ONE file-level exclusion (rd vms-dcd, epic vms-208): the genuine ODS-2 codec
 # (src/vmsfs/ods2/) is a single source of truth compiled BOTH userspace (its
 # reader/writer/bdev/path .c files, scanned here normally) AND kernel-resident
-# (the ODS-2 ACP in vmsfs.ko). ods2_block_kern.c is the KERNEL realization of
+# (the ODS-2 ACP in vms.ko -- ods2_reader.o + ods2_edit.o; vms-165 folded the
+# codec into the executive when the vmsfs VFS driver was retired).
+# ods2_block_kern.c is the KERNEL realization of
 # the codec's block-access seam: it includes vmsfs_bio.h -> <linux/*> and so is
 # uncompilable in a host userland build, for the SAME sound reason as
 # src/kernel-core -- it is a kernel TU that merely happens to live under the

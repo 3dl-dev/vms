@@ -11,7 +11,7 @@
 #   VMSFS system disk PRE-POPULATED from distro/rootfs/vms (the
 #   [SYS0][SYSCOMMON][SYSEXE][SYSLIB][SYSMGR][SYSUPD] tree, SYSUAF, STARTUP.COM,
 #   the .EXE images). Booting the SLIM initramfs (STARTUP.EXE + vms.ko +
-#   vmsfs.ko + minimal config — NONE of DCL.EXE/LOGINOUT.EXE/IMGACT.EXE/SYSLIB)
+#   minimal config — NONE of DCL.EXE/LOGINOUT.EXE/IMGACT.EXE/SYSLIB)
 #   against that image reaches a login prompt and SYSTEM/MANAGER logs in, with
 #   DCL, LOGINOUT, IMGACT and the SYSLIB shareables ALL resolved FROM THE DISK.
 #

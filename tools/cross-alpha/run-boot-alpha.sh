@@ -8,7 +8,7 @@
 #
 # WHAT IT PROVES (BOOT A only, from boot-alpha-image.sh -- see that script's
 # header for the full milestone chain): kernel up -> vms.ko attaches
-# /dev/vms -> vmsfs.ko mounts the VMSFS system disk on DKA0: -> PID 1
+# /dev/vms -> its Files-11 ODS-2 ACP mounts the system disk on DKA0: -> PID 1
 # (STARTUP.EXE) execs PROVISION.EXE (SYSTEM [1,4] identity established) ->
 # STARTUP.COM -> JOB_CONTROL -> LOGINOUT -> a real interactive DCL
 # `Username:` prompt (INV-6-clean -- not a printf). BOOT B (the IMGACT
@@ -283,7 +283,7 @@ case "$MODE" in
       dur=$(( $(date +%s) - ts0 ))
       log "======================================================================"
       log "  GATE PASSED (vms-359): OVMX/Alpha booted -- executive on /dev/vms ->"
-      log "  vmsfs.ko -> DKA0: mounted -> PROVISION.EXE (SYSTEM [1,4] identity) ->"
+      log "  Files-11 ACP -> DKA0: mounted -> PROVISION.EXE (SYSTEM [1,4] identity) ->"
       log "  STARTUP -> JOB_CONTROL -> LOGINOUT -> a real interactive DCL"
       log "  Username: prompt, under qemu-system-alpha -M clipper, in ${dur}s."
       log "  Release-acceptance clean for the Alpha runtime."

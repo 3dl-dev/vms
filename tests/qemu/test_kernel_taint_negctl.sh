@@ -9,7 +9,7 @@
 # regression that reverts the modules to out-of-tree or unsigned cannot pass it.
 #
 # Runs inside the ovmx-boot Docker image (needs the boot initramfs -- for the
-# real shipped vms.ko/vmsfs.ko -- and `modinfo` from kmod). It does NOT boot
+# real shipped vms.ko -- and `modinfo` from kmod). It does NOT boot
 # QEMU: it sources the gate's PURE helpers and exercises them directly, which is
 # what makes it cheap enough to run on every PR.
 #
@@ -30,7 +30,7 @@
 #       -- goes RED. modpost stamps intree=N on an OUT-OF-TREE build, so this is
 #       exactly the shipped-artifact regression the static check must catch.
 #
-#   (3) THE signature DISCRIMINATOR IS TWO-SIDED. Take the REAL shipped vmsfs.ko,
+#   (3) THE signature DISCRIMINATOR IS TWO-SIDED. Take the REAL shipped vms.ko,
 #       corrupt the appended "~Module signature appended~" magic (a same-length
 #       byte edit), so modinfo no longer recognizes the signature -- exactly how
 #       an UNSIGNED module presents -- and assert ko_signed_ok() goes RED.
@@ -120,7 +120,9 @@ if ! gzip -dc "$INITRD" 2>/dev/null | ( cd "$WORK" && cpio -idm 2>/dev/null ); t
     have_modules=0
 fi
 VMS_KO=$(find "$WORK" -name vms.ko 2>/dev/null | head -1)
-VMSFS_KO=$(find "$WORK" -name vmsfs.ko 2>/dev/null | head -1)
+# vms-165 retired vmsfs.ko; vms.ko is the only shipped OVMX module, so both the
+# intree and the signature discriminators below operate on it (separate copies,
+# separate mutations).
 
 # mutation_landed <orig> <mutated> -- 0 iff they differ (the edit really landed).
 mutation_landed() { ! cmp -s "$1" "$2"; }
@@ -154,24 +156,25 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# (3) signature DISCRIMINATOR. Real vmsfs.ko is signed; a copy whose appended
+# (3) signature DISCRIMINATOR. Real vms.ko is signed; a copy whose appended
 # signature magic is corrupted (the unsigned condition, as modinfo sees it) must
-# redden ko_signed_ok.
+# redden ko_signed_ok. (vms-165: was vmsfs.ko before the vmsfs VFS driver was
+# retired; vms.ko is the only shipped module now.)
 # ---------------------------------------------------------------------------
-if [ "$have_modules" = "1" ] && [ -n "$VMSFS_KO" ]; then
-    if ko_signed_ok "$VMSFS_KO"; then
-        pass "signature control baseline: real vmsfs.ko is signed (ko_signed_ok green)"
+if [ "$have_modules" = "1" ] && [ -n "$VMS_KO" ]; then
+    if ko_signed_ok "$VMS_KO"; then
+        pass "signature control baseline: real vms.ko is signed (ko_signed_ok green)"
     else
-        bad "signature control baseline: real vmsfs.ko is NOT signed -- fixture broken"
+        bad "signature control baseline: real vms.ko is NOT signed -- fixture broken"
     fi
-    MUT="$WORK/vmsfs-unsigned.ko"
+    MUT="$WORK/vms-unsigned.ko"
     # Same-length edit: corrupt the trailing '~Module signature appended~' magic
     # (flip the leading '~M' to '~m'). modinfo keys the appended PKCS#7 signature
     # off this exact magic at EOF; corrupting it makes modinfo see an UNSIGNED
     # module -- signer/sig_id empty -- exactly the unsigned regression's shape.
-    LC_ALL=C sed 's/~Module signature appended~/~module signature appended~/' "$VMSFS_KO" > "$MUT"
-    if ! mutation_landed "$VMSFS_KO" "$MUT"; then
-        bad "signature control: the signature-magic edit did not change vmsfs.ko"
+    LC_ALL=C sed 's/~Module signature appended~/~module signature appended~/' "$VMS_KO" > "$MUT"
+    if ! mutation_landed "$VMS_KO" "$MUT"; then
+        bad "signature control: the signature-magic edit did not change vms.ko"
         echo "        (the appended-signature magic was not found -- re-anchor)"
     elif ko_signed_ok "$MUT"; then
         bad "signature control: ko_signed_ok CERTIFIED an unsigned-looking module -- not two-sided"
@@ -180,7 +183,7 @@ if [ "$have_modules" = "1" ] && [ -n "$VMSFS_KO" ]; then
         pass "signature control: an unsigned module (magic corrupted) reddens ko_signed_ok"
     fi
 else
-    bad "signature control: could not extract vmsfs.ko from $INITRD -- broken fixture"
+    bad "signature control: could not extract vms.ko from $INITRD -- broken fixture"
 fi
 
 echo ""

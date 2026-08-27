@@ -89,19 +89,20 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     # src/imgact/test/vmsstd/img.S ($STATUS 0x00000BAD); a path stages that image
     # (Tier-2 = the GCC genuine port image, $STATUS 0x0FAC0001).
     # (NO apostrophes in this container-script region -- docker single-quote trap.)
-    _BUILD_TGT=qemu_syssvc_tests
-    [ -n "$ONLY" ] && _BUILD_TGT="$ONLY"
-    [ -n "$SUBJECT" ] && _BUILD_TGT=imgact   # the seam needs IMGACT.EXE (the activator)
-    echo "== cross-build $_BUILD_TGT for alpha =="
-    cmake -S /repo -B /work/cmake-alpha \
-        -DCMAKE_TOOLCHAIN_FILE=/repo/tools/cross-alpha/toolchain-alpha-linux.cmake \
-        -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_TOOLS=ON -DOVMX_STATIC=ON \
-        >/work/cmake-cfg.log 2>&1 || { echo CONFIG-FAIL; tail -30 /work/cmake-cfg.log; exit 1; }
-    cmake --build /work/cmake-alpha --target "$_BUILD_TGT" -j"$(nproc)" \
-        >/work/cmake-build.log 2>&1 || { echo BUILD-FAIL; grep -nE ": error:" /work/cmake-build.log | head -25; exit 1; }
     if [ -n "$SUBJECT" ]; then
-        IMGACT_EXE=/work/cmake-alpha/src/imgact/IMGACT.EXE
-        [ -x "$IMGACT_EXE" ] || { echo "FATAL: IMGACT.EXE(alpha) did not build at $IMGACT_EXE"; exit 1; }
+        # SUBJECT/seam mode: NO cmake test build. IMGACT.EXE is NOT a cmake target
+        # under OVMX_STATIC (OVMX_STATIC and OVMX_IMGACT are mutually exclusive) --
+        # it is built by the standalone src/imgact/Makefile (ARCH=alpha), in a
+        # WRITABLE src copy since /repo is read-only (same recipe as
+        # build-alpha-bootimage.sh). Uses whatever imgact.c is in the tree (with
+        # the OVMX_IMGACT_SEAM instrumentation when #793 is merged in).
+        echo "== build IMGACT.EXE(alpha) via src/imgact Makefile (seam activator) =="
+        cp -a /repo/src /work/imgact-src
+        ( cd /work/imgact-src/imgact && make ARCH=alpha CC=alpha-linux-gnu-gcc ) >/work/imgact-build.log 2>&1 \
+            || { echo "FATAL: IMGACT.EXE(alpha) make failed"; tail -25 /work/imgact-build.log; exit 1; }
+        IMGACT_EXE=/work/imgact-src/imgact/IMGACT.EXE
+        [ -x "$IMGACT_EXE" ] || { echo "FATAL: IMGACT.EXE(alpha) not produced at $IMGACT_EXE"; exit 1; }
+        mkdir -p /work/cmake-alpha/bin   # later best-effort subject-image globs reference this
         # The subject image: build the Tier-1 stub, or use a provided image. Its
         # .interp names the GUEST IMGACT.EXE path so the kernel loads IMGACT.EXE
         # as the interpreter -> VMS-std activation.
@@ -122,6 +123,17 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
             cp "$SUBJECT" /work/subject.exe
             echo "== staged provided subject image $SUBJECT (its .interp must name $INTERP_GUEST) =="
         fi
+    else
+        # Non-SUBJECT (full run / ONLY_SUITE): the cmake test build.
+        _BUILD_TGT=qemu_syssvc_tests
+        [ -n "$ONLY" ] && _BUILD_TGT="$ONLY"
+        echo "== cross-build $_BUILD_TGT for alpha =="
+        cmake -S /repo -B /work/cmake-alpha \
+            -DCMAKE_TOOLCHAIN_FILE=/repo/tools/cross-alpha/toolchain-alpha-linux.cmake \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_TOOLS=ON -DOVMX_STATIC=ON \
+            >/work/cmake-cfg.log 2>&1 || { echo CONFIG-FAIL; tail -30 /work/cmake-cfg.log; exit 1; }
+        cmake --build /work/cmake-alpha --target "$_BUILD_TGT" -j"$(nproc)" \
+            >/work/cmake-build.log 2>&1 || { echo BUILD-FAIL; grep -nE ": error:" /work/cmake-build.log | head -25; exit 1; }
     fi
     n=0
     if [ -n "$SUBJECT" ]; then
@@ -232,6 +244,7 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
       echo "file /vms.ko /work/vms.ko 644 0 0"
       echo "file /vmsfs.ko /work/vmsfs.ko 644 0 0"
       for f in /work/tests/test_*; do
+        [ -e "$f" ] || continue     # no test_* staged (SUBJECT/seam mode) -> skip the literal glob
         echo "file /tests/$(basename "$f") $f 755 0 0"
       done
       # SUBJECT_IMAGE seam (vms-341/vms-f60d): the subject image (staged as

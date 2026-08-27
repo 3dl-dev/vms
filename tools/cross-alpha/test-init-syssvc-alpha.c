@@ -84,7 +84,15 @@ static int run_suite(const char *name, int *out_pass, int *out_fail)
         dup2(pfd[1], 2);
         close(pfd[0]); close(pfd[1]);
         char *argv[] = { path, NULL };
-        char *envp[] = { (char *)"PATH=/tests:/bin", (char *)"HOME=/", NULL };
+        /* The subject-image activation seam (vms-341/vms-f60d): exec'ing the
+         * VMS-std subject triggers IMGACT.EXE via PT_INTERP; OVMX_IMGACT_SEAM=1
+         * enables IMGACT.EXE's test-mode OVMX-SEAM print (getexit(SEL_SELF) ->
+         * the executive-recorded $STATUS). Gated to this subject only, so no
+         * other suite's IMGACT activations emit the seam line. */
+        char *envp_plain[] = { (char *)"PATH=/tests:/bin", (char *)"HOME=/", NULL };
+        char *envp_seam[]  = { (char *)"PATH=/tests:/bin", (char *)"HOME=/",
+                               (char *)"OVMX_IMGACT_SEAM=1", NULL };
+        char **envp = (strcmp(name, "activate_seam") == 0) ? envp_seam : envp_plain;
         execve(path, argv, envp);
         printf("SYSSVC-ALPHA: execve %s failed: %s\n", path, strerror(errno));
         _exit(127);
@@ -182,7 +190,8 @@ int main(void)
     while ((de = readdir(d)) != NULL && n_names < 512) {
         if (strncmp(de->d_name, "test_syssvc_", 12) != 0 &&
             strncmp(de->d_name, "test_imgact_", 12) != 0 &&
-            strncmp(de->d_name, "test_arith_", 11) != 0)  /* vms-db3: Alpha-only arith-trap suites */
+            strncmp(de->d_name, "test_arith_", 11) != 0 &&  /* vms-db3: Alpha-only arith-trap suites */
+            strcmp(de->d_name, "activate_seam") != 0)       /* vms-341/vms-f60d: the SUBJECT IMAGE (its .interp = IMGACT.EXE; exec'ing it activates via IMGACT.EXE's VMS-std path). Staged only in SUBJECT_IMAGE mode. */
             continue;
         names[n_names++] = strdup(de->d_name);
     }

@@ -184,35 +184,13 @@ COPY tests/netbsd/run_p4a.sh                 /netbsd/run_p4a.sh
 #                  Linux vmsfs.ko builds) + the shim/seam contracts
 #   ondisk/      : vmsfs_ondisk.h (lives beside the Linux glue; -I../ondisk)
 #   tool/        : the in-guest mount(2) helper
-# --- kmod/: the NetBSD ODS-2 vnode backend glue + headers + Makefile ---
-COPY src/kernel-netbsd/vmsfs/vmsfs_vfsops.c          /netbsd/guest-vmsfs/kmod/vmsfs_vfsops.c
-COPY src/kernel-netbsd/vmsfs/vmsfs_nb.h              /netbsd/guest-vmsfs/kmod/vmsfs_nb.h
-COPY src/kernel-netbsd/vmsfs/vmsfs_backend_netbsd.h  /netbsd/guest-vmsfs/kmod/vmsfs_backend_netbsd.h
-COPY src/kernel-netbsd/vmsfs/Makefile                /netbsd/guest-vmsfs/kmod/Makefile
-# --- kernel-core/: the shared, substrate-agnostic ODS-2 core + shim contracts ---
-COPY src/kernel-core/vmsfs/vmsfs_version.c   /netbsd/guest-vmsfs/kernel-core/vmsfs_version.c
-COPY src/kernel-core/vmsfs/vmsfs_map.c       /netbsd/guest-vmsfs/kernel-core/vmsfs_map.c
-COPY src/kernel-core/vmsfs/vmsfs_name.c      /netbsd/guest-vmsfs/kernel-core/vmsfs_name.c
-COPY src/kernel-core/vmsfs/vmsfs_header.c    /netbsd/guest-vmsfs/kernel-core/vmsfs_header.c
-COPY src/kernel-core/vmsfs/vmsfs_alloc.c     /netbsd/guest-vmsfs/kernel-core/vmsfs_alloc.c
-COPY src/kernel-core/vmsfs/vmsfs_dirscan.c   /netbsd/guest-vmsfs/kernel-core/vmsfs_dirscan.c
-COPY src/kernel-core/vmsfs/vmsfs_bio.h       /netbsd/guest-vmsfs/kernel-core/vmsfs_bio.h
-COPY src/kernel-core/vmsfs/vmsfs_core.h      /netbsd/guest-vmsfs/kernel-core/vmsfs_core.h
-COPY src/kernel-core/vmsfs/vmsfs_backend.h   /netbsd/guest-vmsfs/kernel-core/vmsfs_backend.h
-# --- ondisk/: the on-disk format header (physically beside the Linux glue) ---
-COPY src/kernel/vmsfs/vmsfs_ondisk.h         /netbsd/guest-vmsfs/ondisk/vmsfs_ondisk.h
-# --- tool/: the in-guest mount(2) helper ---
-COPY tests/netbsd/guest/vmsfs_mount.c        /netbsd/guest-vmsfs/tool/vmsfs_mount.c
-# --- HOST-side ODS-2 mastering (compiled + run on the host, not in-guest) ---
-COPY tests/qemu/mkimage_vmsfs.c              /netbsd/vmsfs-master/mkimage_vmsfs.c
-COPY src/kernel/vmsfs/vmsfs_ondisk.h         /netbsd/vmsfs-master/vmsfs_ondisk.h
-COPY tests/netbsd/drive_netbsd_vmsfs.py      /netbsd/drive_netbsd_vmsfs.py
-COPY tests/netbsd/run_vmsfs.sh               /netbsd/run_vmsfs.sh
+# vms-165: the NetBSD vmsfs.kmod VFS module + its in-guest mount/read proof
+# (guest-vmsfs/, vmsfs-master/, run_vmsfs.sh, drive_netbsd_vmsfs.py) are retired
+# -- the runtime reads SYS$DISK over the executive ACP, not a vmsfs mount.
 
 RUN chmod +x /netbsd/run_tests.sh /netbsd/drive_netbsd.py \
              /netbsd/run_p2b.sh /netbsd/drive_netbsd_p2b.py \
              /netbsd/run_p2c.sh /netbsd/drive_netbsd_p2c.py \
-             /netbsd/run_vmsfs.sh /netbsd/drive_netbsd_vmsfs.py \
              /netbsd/run_p4a.sh /netbsd/drive_netbsd_p4a.py
 
 # The installed NetBSD image + download mirror live under /cache so they persist

@@ -17,6 +17,13 @@ set -euxo pipefail
 
 BINUTILS_VER=${BINUTILS_VER:-2.43}
 GCC_VER=${GCC_VER:-14.2.0}
+# SHA256 integrity pins (vms-8a06). A from-scratch rebuild (gha layer-cache miss)
+# used to be one ftp.gnu.org hiccup from a red gate — both alpha gates just died on
+# `wget binutils-2.43.tar.xz -> exit 4` — and the fetches carried NO integrity check.
+# binutils is now VENDORED (mirrored like musl); gcc (90MB, too big to vendor) is
+# fetched from GNU's mirror redirector with retries. BOTH are SHA256-enforced here.
+BINUTILS_SHA256=${BINUTILS_SHA256:-b53606f443ac8f01d1d5fc9c39497f2af322d99e14cea5c0b4b124d630379365}
+GCC_SHA256=${GCC_SHA256:-a7b39bc69cbf9e25826c5a60ab26477001f7c08d85cec04bc0e29cabed6f3cc9}
 TARGET=${TARGET:-alpha-dec-vms}
 PREFIX=${PREFIX:-/opt/cross-alpha-vms}
 JOBS=$(nproc)
@@ -33,7 +40,17 @@ is_binutils_patch() {
 }
 
 # ---- binutils: target assembler/linker/objdump for EVAX ----
-wget -q "https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VER}.tar.xz"
+# Resolution order (vms-8a06, mirrors musl-arch/build-musl.sh): (1) the VENDORED
+# tarball COPY'd to /src by the Dockerfile (tools/cross-alpha-vms/binutils-<ver>.tar.xz),
+# so the CI image build is HERMETIC — ftp.gnu.org has flaked a from-scratch gate red
+# (exit 4); (2) a network fetch as a last resort for a dev tree without the vendored
+# blob, GNU mirror redirector first then ftp.gnu.org, retried. The pinned SHA256 is
+# enforced in EVERY case, so even the vendored tarball is integrity-verified.
+if [ ! -f "binutils-${BINUTILS_VER}.tar.xz" ]; then
+  wget --tries=3 --timeout=30 -q "https://ftpmirror.gnu.org/gnu/binutils/binutils-${BINUTILS_VER}.tar.xz" \
+    || wget --tries=3 --timeout=30 -q "https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VER}.tar.xz"
+fi
+echo "${BINUTILS_SHA256}  binutils-${BINUTILS_VER}.tar.xz" | sha256sum -c -
 tar xf "binutils-${BINUTILS_VER}.tar.xz"
 
 # ---- apply checked-in alpha-dec-vms port patches to binutils (vms-52c1) ----
@@ -59,7 +76,14 @@ export PATH="${PREFIX}/bin:${PATH}"
 cd /src
 
 # ---- gcc cc1 (compiler proper) ----
-wget -q "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VER}/gcc-${GCC_VER}.tar.xz"
+# NOT vendored (90MB — irreversible git bloat). Hardened for CI-robustness instead
+# (vms-8a06): GNU mirror redirector first, ftp.gnu.org fallback, retries on each, and
+# a SHA256 integrity check on the result (closes the no-integrity-check gap too).
+if [ ! -f "gcc-${GCC_VER}.tar.xz" ]; then
+  wget --tries=3 --timeout=30 -q "https://ftpmirror.gnu.org/gnu/gcc/gcc-${GCC_VER}/gcc-${GCC_VER}.tar.xz" \
+    || wget --tries=3 --timeout=30 -q "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VER}/gcc-${GCC_VER}.tar.xz"
+fi
+echo "${GCC_SHA256}  gcc-${GCC_VER}.tar.xz" | sha256sum -c -
 tar xf "gcc-${GCC_VER}.tar.xz"
 
 # ---- apply checked-in alpha-dec-vms port patches (vms-f97) ----

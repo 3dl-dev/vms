@@ -1992,6 +1992,22 @@ static uint32_t imgact_cli_get_command_line(struct dsc$descriptor_s *out)
 	return g.status;
 }
 
+/* Freestanding envp scan for KEY=... (defined later in the file, in the
+ * common region); forward-declared here for the vms-f60d activation-seam
+ * instrumentation in imgact_vms_exit below. */
+static const char *imgact_env_value(char **envp, const char *key);
+
+/* Format a 32-bit value as exactly 8 lowercase hex digits + NUL. Freestanding
+ * (no libc): IMGACT has no snprintf. Used only by the vms-f60d activation-seam
+ * instrumentation below. */
+static void imgact_u32_hex8(char *out, uint32_t v)
+{
+	static const char hexd[] = "0123456789abcdef";
+	for (int i = 0; i < 8; i++)
+		out[i] = hexd[(v >> ((7 - i) * 4)) & 0xf];
+	out[8] = '\0';
+}
+
 /* Route a VMS-standard image's returned condition value to process exit.
  *
  * Faithful behavior (design §3.4) is SYS$EXIT: the executive records the
@@ -2031,6 +2047,44 @@ static void imgact_vms_exit(unsigned long cond)
 			  "executive $EXIT could not record the VMS condition "
 			  "value", 0);
 		sys_exit(IMGACT_EXIT_NOEXEC);
+	}
+	/* vms-f60d activation-seam instrumentation (OPT-IN, OVMX_IMGACT_SEAM=1 --
+	 * NEVER a default runtime change). IMGACT.EXE is the long-lived caller the
+	 * VMS-standard 6-arg call RETURNS to (R26); it has just recorded `cond` as
+	 * its OWN completion $STATUS via SETEXIT above, with no reaper race. Read it
+	 * straight back with GETEXIT(SEL_SELF) and print one line the Alpha-lane
+	 * qemu-system-alpha seam runner captures. Fail-quiet: a GETEXIT error just
+	 * leaves the fields at their zeroed defaults -- the seam is diagnostic only,
+	 * never load-bearing on the exit path. */
+	const char *seam = imgact_env_value(g_envp, "OVMX_IMGACT_SEAM");
+	if (seam && seam[0] == '1' && seam[1] == '\0') {
+		struct vms_getexit_args gx;
+		memset(&gx, 0, sizeof(gx));
+		gx.select = VMS_JPI_SEL_SELF;   /* our own recorded $STATUS */
+		(void)imgact_acp_dev_ioctl(fd, VMS_IOCTL_GETEXIT, &gx);
+
+		/* basename of the activated image path (argv[0] the kernel set) */
+		const char *base = g_argv0 ? g_argv0 : "";
+		for (const char *q = base; *q; q++)
+			if (*q == '/')
+				base = q + 1;
+
+		char hex[9];
+		imgact_u32_hex8(hex, gx.condition);
+		char he[2];
+		he[0] = gx.has_exited ? '1' : '0';
+		he[1] = '\0';
+
+		char line[512];
+		line[0] = '\0';
+		xstrcat(line, "OVMX-SEAM: image=");
+		xstrcat(line, base);
+		xstrcat(line, " stdcall_returned=1 has_exited=");
+		xstrcat(line, he);
+		xstrcat(line, " $STATUS=0x");
+		xstrcat(line, hex);
+		xstrcat(line, "\n");
+		eputs(line);
 	}
 	imgact_acp_dev_close(fd);
 	sys_exit((int)e.exit_code);   /* the executive-mapped POSIX exit code */

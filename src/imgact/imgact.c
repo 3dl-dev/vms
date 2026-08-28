@@ -1959,11 +1959,16 @@ static unsigned long sv_find_named(const struct ovmx_prod *p, const char *name);
  * The module .offset == tls_tp_size == ALIGN_UP(tls_memsz, tls_align) — the SAME
  * value LINK.EXE uses to compute an executable's LE/IE thread-pointer offsets
  * (tpoff = module_offset - tls_tp_size), so musl's placement below TP and the
- * image's %fs-negative accesses agree exactly. That agreement is what makes the
- * companion LINK.EXE change (Initial-Exec GOTTPOFF->LE relaxation + TPOFF32
- * field-fill in link.c) land cc1's IE/LE stores in the reserved block rather
- * than at %fs:0. Proven end-to-end: cc1 compiles C to x86_64 asm as an OVMX
- * image (probe.s emits square:/imull, compile+activation exit 0). */
+ * image's %fs-negative accesses agree exactly. This IMGACT-half reservation is
+ * the retained general facility (#698, kept by #708). NOTE: the companion
+ * LINK.EXE change that made an executable's OWN IE/LE stores land in this block
+ * — the Initial-Exec GOTTPOFF->LE relaxation + Local-Exec TPOFF32 field-fill in
+ * link.c — was REVERTED by #708 (operator ruling: ladder-noncompliant
+ * minimal-adapt). So an image whose own TLS uses IE/LE (GOTTPOFF/TPOFF32)
+ * relocations is NOT supported end-to-end: LINK.EXE will not fill those fields.
+ * OVMX's own shipping images use TLSDESC / classic GD->LE, which LINK.EXE does
+ * handle; the vendored-x86_64-cc1-in-guest case that needed IE/LE was the #698
+ * PoC #708 shelved (vms-c07/vms-5b7e, closed as ladder-superseded). */
 static void reserve_exe_main_tls_over_crtl(struct ovmx_prod *crtl)
 {
 	if (!g_exe.has_tls || g_exe.tlsdesc)

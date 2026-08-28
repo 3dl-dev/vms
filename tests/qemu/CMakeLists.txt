@@ -196,6 +196,18 @@ if(TARGET test_syssvc_loginout_acp)
         ${CMAKE_SOURCE_DIR}/src/vmsrms)
 endif()
 
+# test_syssvc_dlm_xnode (vms-94c / vms-17c) drives the cross-node DLM RECEIVE
+# handler (vms_lock_dlm_xnode_dispatch) through VMS_IOCTL_DLM_XNODE + a raw
+# VMS_IOCTL_REGISTER, so it needs src/kernel on its include path for
+# vms_ioctl.h (VMS_IOCTL_REGISTER / struct vms_register_args). The generic
+# recipe already links libvms (which carries the vms_kif client the test calls)
+# and put src/libvmssys (vms_kif.h) on the path; this only adds src/kernel.
+# ONE source, built once here, runs in the syssvc suite on x86_64 AND Alpha LP64.
+if(TARGET test_syssvc_dlm_xnode)
+    target_include_directories(test_syssvc_dlm_xnode PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/kernel)
+endif()
+
 # test_syssvc_imgact_acp (vms-3e8e) drives the EXACT freestanding ACP reader
 # IMGACT.EXE runs (src/imgact/imgact_acp.c) against a real /dev/vms: the generic
 # function above already registered the target off the glob, so augment it with

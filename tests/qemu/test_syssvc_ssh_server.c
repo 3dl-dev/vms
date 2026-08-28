@@ -44,20 +44,6 @@
 #define SRV_SSHD   "/ovmxsshsrv/sshd"   /* WRAPPED server (listen/accept over BGn:) */
 #define SRV_SSHDCFG "/ovmxsshsrv/etc/sshd_config"
 #define SRV_SSHCFG  "/ovmxsshsrv/etc/ssh_config"
-#define SSHD_ERRLOG "/tmp/ovmx_sshd.err"
-
-/* Echo the wrapped sshd's captured stderr, so a bind/listen failure over BGn: is
- * diagnosable from the CI log instead of vanishing. */
-static void dump_sshd_errlog(void)
-{
-    FILE *f = fopen(SSHD_ERRLOG, "r");
-    char line[512];
-    if (!f) { printf("  --- (no sshd stderr captured) ---\n"); return; }
-    printf("  --- wrapped sshd stderr ---\n");
-    while (fgets(line, sizeof(line), f)) printf("  | %s", line);
-    printf("  --- end sshd stderr ---\n");
-    fclose(f);
-}
 
 static int pass = 0, fail = 0;
 #define CHECK(cond, msg) do { \
@@ -192,22 +178,22 @@ int main(void)
         if (f) { fputs("root:x:0:\nsshd:x:74:\n", f); fclose(f); }
     }
 
-    /* ---- fork the WRAPPED sshd: its listen/accept ride BGn: ---- */
+    /* ---- fork the WRAPPED sshd: its listen/accept ride BGn: ----
+     * DIAGNOSTIC cycle: -ddd forces full debug logging to stderr AND disables
+     * sshd's self-re-exec, so (a) the fatal reason is legible and (b) if a bind
+     * over BGn: succeeds here it isolates re-exec fd-passing (which hands the
+     * listener veneer handle across dup2/exec) as the culprit. sshd stderr is
+     * merged into this test's stdout so it lands in the captured CI log. */
     pid_t sd = fork();
     if (sd == 0) {
-        /* -D foreground, -e log to stderr, -f config (Port 2223, ListenAddress
-         * 127.0.0.1). socket()/bind()/listen() dispatch to the executive. Capture
-         * sshd's own diagnostics so a bind/listen failure is legible, not silent. */
-        int ef = open(SSHD_ERRLOG, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (ef >= 0) { dup2(ef, 2); close(ef); }
-        execl(SRV_SSHD, "sshd", "-D", "-e", "-f", SRV_SSHDCFG, (char *)NULL);
+        dup2(STDOUT_FILENO, 2);
+        execl(SRV_SSHD, "sshd", "-ddd", "-e", "-f", SRV_SSHDCFG, (char *)NULL);
         _exit(127);
     }
 
     int up = wait_for_sshd(50);
     CHECK(up, "the WRAPPED sshd bound BGn: to a real host port and accepts inbound connections");
     if (!up) {
-        /* Say WHY: did sshd exit, and what did it log about bind/listen? */
         int est = 0;
         pid_t w = waitpid(sd, &est, WNOHANG);
         if (w == sd)
@@ -216,7 +202,6 @@ int main(void)
                    WIFEXITED(est) ? WEXITSTATUS(est) : WTERMSIG(est));
         else
             printf("  --- sshd still running but not accepting on %d ---\n", SSH_PORT);
-        dump_sshd_errlog();
     }
 
     /* ---- run the STOCK ssh client against it ---- */

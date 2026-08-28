@@ -657,6 +657,50 @@ static inline int exec_socket_getopt_int(exec_socket_t s, int level, int name, i
 	return -ENOPROTOOPT;
 }
 
+/* ---- server path (vms-698): bind / listen / accept ------------------------ */
+
+static inline int exec_socket_bind(exec_socket_t s, uint16_t family,
+				   uint16_t port_be, uint32_t addr_be)
+{
+	struct sockaddr_in sa;
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sin_family = family;
+	sa.sin_port = port_be;              /* network byte order, straight through */
+	sa.sin_addr.s_addr = addr_be;
+	return kernel_bind(s->sock, (struct sockaddr *)&sa, sizeof(sa));
+}
+
+static inline int exec_socket_listen(exec_socket_t s, int backlog)
+{
+	return kernel_listen(s->sock, backlog);
+}
+
+/* Accept one inbound connection, minting a NEW reference-counted holder for the
+ * accepted socket (ref count 1 -- the accepting channel's reference), returned
+ * via *out. Blocking (MAY SLEEP), exactly the $QIOW shape. The local/peer address
+ * of *out is read afterwards through exec_socket_getname, not returned here. */
+static inline int exec_socket_accept(exec_socket_t s, exec_socket_t *out)
+{
+	struct exec_socket_holder *h;
+	struct socket *newsock = NULL;
+	int rc;
+
+	*out = NULL;
+	rc = kernel_accept(s->sock, &newsock, 0);
+	if (rc)
+		return rc;
+	h = kmalloc(sizeof(*h), GFP_KERNEL);
+	if (!h) {
+		sock_release(newsock);
+		return -ENOMEM;
+	}
+	h->sock = newsock;
+	kref_init(&h->kref);            /* the accepting channel's reference */
+	*out = h;
+	return 0;
+}
+
 /* Linux-ONLY accessor for the readiness poll-fd rind (src/kernel/vms_bg_pollfd.c):
  * the raw host socket for ->ops->poll delegation. NOT part of the substrate-
  * neutral seam -- no NetBSD counterpart (NetBSD uses kqueue; see vms-024). */

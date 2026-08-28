@@ -282,19 +282,76 @@ ssize_t ovmx_recv(int s, void *buf, size_t len, int flags)
     return n;
 }
 
-/* SERVER path: needs the BGn: bind/listen/accept executive path (vms-698).
- * Honest ENOSYS until then -- never a userspace fake (Rule 9 / INV-6). */
+/* SERVER path (vms-698): bind/listen/accept over the BGn: executive path
+ * (vms_kif_bg_bind/listen/accept). No userspace fake -- with no /dev/vms the kif
+ * returns SS$_NOSUCHDEV, rendered as an errno (Rule 9 / INV-6). */
 int ovmx_bind(int s, const struct sockaddr *addr, socklen_t addrlen)
 {
-    (void)s; (void)addr; (void)addrlen; errno = ENOSYS; return -1;
+    struct bg_sock *p = sock_get(s);
+    const struct sockaddr_in *sin = (const struct sockaddr_in *)addr;
+    uint32_t st;
+
+    if (p == NULL) { errno = EBADF; return -1; }
+    if (addr == NULL || (size_t)addrlen < sizeof(*sin) ||
+        addr->sa_family != AF_INET) {
+        errno = EAFNOSUPPORT; return -1;
+    }
+    /* Bind the local address; the effective port (if ephemeral) is read later via
+     * ovmx_getsockname, exactly as BSD sockets do. */
+    st = vms_kif_bg_bind(p->exec_chan, 2, sin->sin_port, sin->sin_addr.s_addr,
+                         NULL, NULL);
+    if (!(st & 1)) { errno = bg_status_to_errno(st); return -1; }
+    return 0;
 }
 int ovmx_listen(int s, int backlog)
 {
-    (void)s; (void)backlog; errno = ENOSYS; return -1;
+    struct bg_sock *p = sock_get(s);
+    uint32_t st;
+
+    if (p == NULL) { errno = EBADF; return -1; }
+    st = vms_kif_bg_listen(p->exec_chan, backlog);
+    if (!(st & 1)) { errno = bg_status_to_errno(st); return -1; }
+    return 0;
 }
 int ovmx_accept(int s, struct sockaddr *addr, socklen_t *addrlen)
 {
-    (void)s; (void)addr; (void)addrlen; errno = ENOSYS; return -1;
+    struct bg_sock *lp = sock_get(s);
+    struct bg_sock *ap;
+    uint32_t acc_chan = 0, unit = 0, st;
+    uint16_t fam = 0, port = 0;
+    uint32_t a4 = 0;
+    int handle;
+
+    if (lp == NULL) { errno = EBADF; return -1; }
+
+    /* $ASSIGN a fresh, EMPTY BG channel to receive the accepted connection --
+     * NO IO$_SETMODE: accept installs the accepted socket onto it (the executive
+     * analogue of accept() minting a new fd). */
+    st = vms_kif_bg_create(&acc_chan, &unit, NULL, 0);
+    if (!(st & 1)) { errno = bg_status_to_errno(st); return -1; }
+
+    st = vms_kif_bg_accept(lp->exec_chan, acc_chan, &fam, &port, &a4);
+    if (!(st & 1)) {
+        errno = bg_status_to_errno(st);
+        vms_kif_bg_dassgn(acc_chan);
+        return -1;
+    }
+
+    handle = sock_alloc(acc_chan);
+    if (handle < 0) { vms_kif_bg_dassgn(acc_chan); errno = EMFILE; return -1; }
+    ap = sock_get(handle);
+    if (ap) ap->connected = 1;      /* the accepted socket is connected */
+
+    /* Report the peer address (network byte order, as accept() does). */
+    if (addr != NULL && addrlen != NULL &&
+        (size_t)*addrlen >= sizeof(struct sockaddr_in)) {
+        struct sockaddr_in *sin = (struct sockaddr_in *)addr;
+        sin->sin_family = AF_INET;
+        sin->sin_port = port;
+        sin->sin_addr.s_addr = a4;
+        *addrlen = sizeof(*sin);
+    }
+    return handle;
 }
 
 int ovmx_shutdown(int s, int how)

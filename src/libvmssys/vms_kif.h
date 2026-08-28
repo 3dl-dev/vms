@@ -777,6 +777,16 @@ uint32_t vms_kif_bg_setsockopt(uint32_t exec_chan, int level, int optname,
  * the live host kernel socket; *out_optval gets it on success. */
 uint32_t vms_kif_bg_getsockopt(uint32_t exec_chan, int level, int optname,
                                int *out_optval);
+/* Server path (vms-698, OpenSSH server port). bind binds a local AF_INET address
+ * (network byte order; port 0 = ephemeral) and returns the EFFECTIVE port/addr in
+ * *out_port/*out_addr; listen marks the socket passive; accept blocks for one
+ * inbound connection and installs it onto accept_exec_chan (a second BG channel
+ * the caller $ASSIGNed empty), returning the peer address. NULL out params OK. */
+uint32_t vms_kif_bg_bind(uint32_t exec_chan, uint16_t family, uint16_t port,
+                         uint32_t addr, uint16_t *out_port, uint32_t *out_addr);
+uint32_t vms_kif_bg_listen(uint32_t exec_chan, int backlog);
+uint32_t vms_kif_bg_accept(uint32_t listen_exec_chan, uint32_t accept_exec_chan,
+                           uint16_t *family, uint16_t *port, uint32_t *addr);
 
 /* ================================================================
  * Files-11 (ODS-2) ACP -- channel + mount front-end (vms-149, epic vms-208)

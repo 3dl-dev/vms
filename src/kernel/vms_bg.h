@@ -181,6 +181,44 @@ struct vms_bg_sockopt_args {
     uint32_t status;        /* out */
 };
 
+/*
+ * Server path (vms-698, OpenSSH server port). IO$_SETMODE(bind) binds the
+ * channel's socket to a local AF_INET address and reads the EFFECTIVE address
+ * back (a zero port yields an ephemeral one, returned so a server learns its
+ * port). Same 8-byte AF_INET tuple as IO$_ACCESS, port/addr in network order.
+ */
+struct vms_bg_bind_args {
+    uint32_t chan;          /* in */
+    uint32_t status;        /* out */
+    uint16_t sin_family;    /* in / out: AF_INET (2) */
+    uint16_t sin_port;      /* in (0 = ephemeral) / out: effective, network order */
+    uint32_t sin_addr;      /* in / out: network order (0 = INADDR_ANY) */
+};
+
+/* IO$_SETMODE(listen) -- mark the socket passive with a backlog. */
+struct vms_bg_listen_args {
+    uint32_t chan;          /* in */
+    int32_t  backlog;       /* in */
+    uint32_t status;        /* out */
+    uint32_t pad;
+};
+
+/*
+ * IO$_ACCESS|IO$M_ACCEPT -- block for one inbound connection on listen_chan and
+ * install the accepted socket onto accept_chan (a SECOND BG channel the caller
+ * $ASSIGNed empty); the peer address is returned. The accepted connection is
+ * then used via ordinary IO$_READVBLK/WRITEVBLK on accept_chan.
+ */
+struct vms_bg_accept_args {
+    uint32_t listen_chan;   /* in: the listening channel */
+    uint32_t accept_chan;   /* in: the pre-$ASSIGNed empty channel to receive it */
+    uint32_t status;        /* out */
+    uint16_t sin_family;    /* out: peer AF_INET (2) */
+    uint16_t sin_port;      /* out: peer port, network order */
+    uint32_t sin_addr;      /* out: peer v4 addr, network order */
+    uint32_t pad;
+};
+
 #define VMS_IOCTL_BG_CREATE   _IOWR(VMS_IOC_MAGIC, 0x80, struct vms_bg_create_args)
 #define VMS_IOCTL_BG_SETMODE  _IOWR(VMS_IOC_MAGIC, 0x81, struct vms_bg_chanonly_args)
 #define VMS_IOCTL_BG_CONNECT  _IOWR(VMS_IOC_MAGIC, 0x82, struct vms_bg_connect_args)
@@ -191,6 +229,9 @@ struct vms_bg_sockopt_args {
 #define VMS_IOCTL_BG_POLLFD   _IOWR(VMS_IOC_MAGIC, 0x87, struct vms_bg_pollfd_args)
 #define VMS_IOCTL_BG_GETNAME  _IOWR(VMS_IOC_MAGIC, 0x88, struct vms_bg_name_args)
 #define VMS_IOCTL_BG_SOCKOPT  _IOWR(VMS_IOC_MAGIC, 0x89, struct vms_bg_sockopt_args)
+#define VMS_IOCTL_BG_BIND     _IOWR(VMS_IOC_MAGIC, 0x8a, struct vms_bg_bind_args)
+#define VMS_IOCTL_BG_LISTEN   _IOWR(VMS_IOC_MAGIC, 0x8b, struct vms_bg_listen_args)
+#define VMS_IOCTL_BG_ACCEPT   _IOWR(VMS_IOC_MAGIC, 0x8c, struct vms_bg_accept_args)
 
 /*
  * Freeze the shared layouts -- see vms_mbx.h's identical note for why this
@@ -212,5 +253,11 @@ _Static_assert(sizeof(struct vms_bg_name_args) == 20,
                "vms_bg_name_args changed size -- VMS_IOCTL_BG_GETNAME ABI break");
 _Static_assert(sizeof(struct vms_bg_sockopt_args) == 24,
                "vms_bg_sockopt_args changed size -- VMS_IOCTL_BG_SOCKOPT ABI break");
+_Static_assert(sizeof(struct vms_bg_bind_args) == 16,
+               "vms_bg_bind_args changed size -- VMS_IOCTL_BG_BIND ABI break");
+_Static_assert(sizeof(struct vms_bg_listen_args) == 16,
+               "vms_bg_listen_args changed size -- VMS_IOCTL_BG_LISTEN ABI break");
+_Static_assert(sizeof(struct vms_bg_accept_args) == 24,
+               "vms_bg_accept_args changed size -- VMS_IOCTL_BG_ACCEPT ABI break");
 
 #endif /* _VMS_BG_H */

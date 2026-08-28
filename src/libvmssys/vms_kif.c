@@ -2160,6 +2160,70 @@ uint32_t vms_kif_bg_getname(uint32_t exec_chan, uint32_t which,
     return args.status;
 }
 
+/* Server path (vms-698). bind reads the effective local address back (ephemeral
+ * port); accept installs the connection onto a second, pre-$ASSIGNed BG channel
+ * (accept_exec_chan) and returns the peer address. /dev/vms absent -> SS$_NOSUCHDEV. */
+uint32_t vms_kif_bg_bind(uint32_t exec_chan, uint16_t family, uint16_t port,
+                         uint32_t addr, uint16_t *out_port, uint32_t *out_addr)
+{
+    struct vms_bg_bind_args args;
+
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.sin_family = family;
+    args.sin_port = port;   /* network byte order (0 = ephemeral) */
+    args.sin_addr = addr;   /* network byte order (0 = INADDR_ANY) */
+
+    KIF_CALL(VMS_IOCTL_BG_BIND, &args);
+
+    if (args.status & 1) {  /* effective local address read back */
+        if (out_port) *out_port = args.sin_port;
+        if (out_addr) *out_addr = args.sin_addr;
+    }
+    return args.status;
+}
+
+uint32_t vms_kif_bg_listen(uint32_t exec_chan, int backlog)
+{
+    struct vms_bg_listen_args args;
+
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.backlog = backlog;
+
+    KIF_CALL(VMS_IOCTL_BG_LISTEN, &args);
+
+    return args.status;
+}
+
+uint32_t vms_kif_bg_accept(uint32_t listen_exec_chan, uint32_t accept_exec_chan,
+                           uint16_t *family, uint16_t *port, uint32_t *addr)
+{
+    struct vms_bg_accept_args args;
+
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.listen_chan = listen_exec_chan;
+    args.accept_chan = accept_exec_chan;
+
+    KIF_CALL(VMS_IOCTL_BG_ACCEPT, &args);
+
+    if (args.status & 1) {  /* peer address */
+        if (family) *family = args.sin_family;
+        if (port)   *port   = args.sin_port;
+        if (addr)   *addr   = args.sin_addr;
+    }
+    return args.status;
+}
+
 uint32_t vms_kif_bg_setsockopt(uint32_t exec_chan, int level, int optname,
                                int optval)
 {

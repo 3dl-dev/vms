@@ -402,6 +402,85 @@
  *        contract-only twin until devtab joins the NetBSD module's SRCS
  *        (following the exec_blockdev precedent -- type-checked, never run, and
  *        names its real source in the backend comment).
+ *
+ * 12. Host TCP client socket  (vms-9951; called ONLY from the BGn: INET facility,
+ *    src/kernel-core/vms_bg.c -- the executive-resident network pseudo-device,
+ *    the block-layer seam's transport twin). OVMX never reimplements a transport:
+ *    the IP stack is the host kernel's, reached through this small set of host
+ *    PRIMITIVES over an OPAQUE socket handle. The client path only (connect / send
+ *    / recv / shutdown / getname / sockopt); listen/accept are declared contract-
+ *    only (the bgsock veneer returns ENOSYS for the server path in this increment).
+ *
+ *   Type (concrete per substrate):
+ *     exec_socket_t   an opaque, REFERENCE-COUNTED host TCP socket handle. The
+ *                     refcount is encapsulated in the type BECAUSE the Linux
+ *                     readiness poll fd (VMS_IOCTL_BG_POLLFD, a Linux rind, no
+ *                     NetBSD kqueue analogue) must outlive the channel's $DASSGN.
+ *                     Linux: a kref'd holder over `struct socket *`. NetBSD: a
+ *                     `struct socket *` (no poll fd, so the refcount is trivial).
+ *
+ *   Addresses cross the seam as RAW network-order fields (family, port, v4 addr),
+ *   NOT struct sockaddr_in, so kernel-core names no networking header; the backend
+ *   builds the host sockaddr.
+ *
+ *   int  exec_socket_create(exec_socket_t *out)
+ *        create an AF_INET/SOCK_STREAM/IPPROTO_TCP host socket, ref count 1.
+ *        Returns 0 + *out on success, nonzero on failure. MAY SLEEP.
+ *        Linux: sock_create_kern(&init_net, ...) into a kref'd holder.
+ *        NetBSD: socreate(AF_INET, ..., curlwp, NULL) (contract-only twin).
+ *   void exec_socket_get(exec_socket_t s)
+ *        take an ADDITIONAL reference (the Linux poll fd rind's second ref).
+ *        Linux: kref_get. NetBSD: trivial (never called -- no poll fd).
+ *   void exec_socket_release(exec_socket_t s)
+ *        drop one reference; the last drop closes the host socket.
+ *        Linux: kref_put -> sock_release. NetBSD: soclose.
+ *   int  exec_socket_connect(exec_socket_t s, uint16_t family,
+ *                            uint16_t port_be, uint32_t addr_be)
+ *        connect to the peer (fields already in network byte order). 0/nonzero.
+ *        MAY SLEEP. Linux: kernel_connect(...,0) (blocking). NetBSD: soconnect +
+ *        wait for soisconnected (contract-only twin; async -- see vms-024).
+ *   long exec_socket_send(exec_socket_t s, const void *buf, size_t len)
+ *        send up to len bytes; returns the count sent, or negative on error.
+ *        MAY SLEEP. Linux: kernel_sendmsg (kvec). NetBSD: uio -> sosend.
+ *   long exec_socket_recv(exec_socket_t s, void *buf, size_t len)
+ *        receive up to len bytes; returns the count (0 == orderly peer close /
+ *        EOF), or negative on error. MAY SLEEP. Linux: kernel_recvmsg. NetBSD:
+ *        uio -> soreceive.
+ *   int  exec_socket_shutdown(exec_socket_t s)
+ *        shut both directions down. Linux: kernel_sock_shutdown(SHUT_RDWR).
+ *        NetBSD: soshutdown(SHUT_RDWR).
+ *   int  exec_socket_getname(exec_socket_t s, int peer, uint16_t *family,
+ *                            uint16_t *port_be, uint32_t *addr_be)
+ *        report the socket's local (peer==0) or peer (peer!=0) AF_INET address.
+ *        Returns 0 (+ fields) on an AF_INET socket, nonzero otherwise (the honest
+ *        "not an IPv4 tuple" case, never a fabricated address -- the de-veneer
+ *        crux, vms-4bf). Linux: kernel_get{sock,peer}name. NetBSD: the pr_usrreqs
+ *        sockaddr op (contract-only twin).
+ *   int  exec_socket_setopt_int(exec_socket_t s, int level, int name, int val)
+ *        set one integer socket option on the REAL host socket. 0/nonzero.
+ *        Linux: sock_setsockopt (SOL_SOCKET) or ops->setsockopt, KERNEL_SOCKPTR.
+ *        NetBSD: sockopt_setint + sosetopt (contract-only twin).
+ *   int  exec_socket_getopt_int(exec_socket_t s, int level, int name, int *out)
+ *        read one integer socket option back off the LIVE socket. Returns 0 (+
+ *        *out) for the supported whitelist (SO_KEEPALIVE/SO_REUSEADDR/SO_ERROR,
+ *        TCP_NODELAY, IP_TOS -- exactly what OpenSSH probes), nonzero for anything
+ *        outside it (honest "unsupported", never a faked value). The whitelist
+ *        logic itself is BACKEND code (Linux reads raw struct sock; NetBSD
+ *        sogetopt), so no raw-struct-sock read leaks into shared core.
+ *
+ *   Contract-only (server path, bgsock returns ENOSYS today): exec_socket_bind /
+ *   exec_socket_listen / exec_socket_accept -> Linux kernel_bind/listen/accept,
+ *   NetBSD sobind/solisten/soaccept.
+ *
+ *   WHERE THE READINESS POLL FD IS **NOT**. VMS_IOCTL_BG_POLLFD hands userspace a
+ *   real Linux fd whose .poll delegates to the host socket's ->poll (OpenSSH's
+ *   event loop, vms-22a). anon_inode_getfile / fd_install / EPOLL / ->ops->poll
+ *   are pure Linux fd machinery with NO NetBSD analogue (NetBSD uses kqueue), so
+ *   the poll fd stays a LINUX RIND over this seam (src/kernel/vms_bg_pollfd.c): it
+ *   holds an extra exec_socket_get reference and reaches the raw struct socket
+ *   through a Linux-only accessor. NetBSD BGn: is therefore NOT feature-complete
+ *   for a poll()-driven client until a kqueue equivalent lands (vms-024); the
+ *   NetBSD backend is the type-checked contract-only twin until then.
  */
 
 #ifndef OVMX_EXEC_KBACKEND_H

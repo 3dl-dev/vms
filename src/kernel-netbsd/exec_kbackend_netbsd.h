@@ -620,4 +620,38 @@ typedef void *exec_arena_t;
 void *exec_arena_alloc(size_t n);
 void  exec_arena_free(void *arena);
 
+/* ================================================================
+ * §12  Host TCP client socket (vms-9951; BGn: INET facility).
+ *
+ * Substrate-neutrality anchor for the exec_socket_* seam: these declarations
+ * prove the §12 contract (exec_kbackend.h) is expressible in NetBSD terms with
+ * no Linux type leaking across the seam -- addresses are raw net-order scalars,
+ * the handle is an opaque pointer, no struct socket / struct sockaddr in the
+ * signatures. exec_socket_t wraps NetBSD's in-kernel `struct socket` (socreate/
+ * soconnect/sosend/soreceive/soshutdown, socket(9)) with a refcount, exactly as
+ * the Linux backend wraps its own; the readiness poll rind (exec_socket_raw) is
+ * deliberately ABSENT here -- it is a Linux-only accessor (NetBSD readiness is
+ * kqueue, a different rind).
+ *
+ * The DEFINITIONS live in a dedicated glue TU (src/kernel-netbsd/
+ * vms_socket_netbsd.c) that includes <sys/socketvar.h> -- like the arena and
+ * blockdev twins, the host-mm/socket-coupled bodies stay out of this shared
+ * header. That TU + its four build-enum wirings (Makefile SRCS, the two cross
+ * build scripts, tests/netbsd/Dockerfile guest-src) land with the vms_bg.c ->
+ * kernel-core move on post-combine main; a genuinely RUNNABLE NetBSD BGn: is
+ * vms-024. Until that move references them, these are unresolved-but-unreferenced
+ * decls (no NetBSD executive TU calls exec_socket_* yet), so they add no link
+ * dependency -- they are the type-check contract only. */
+typedef struct exec_socket_holder *exec_socket_t;
+int  exec_socket_create(exec_socket_t *out);
+void exec_socket_get(exec_socket_t s);
+void exec_socket_release(exec_socket_t s);
+int  exec_socket_connect(exec_socket_t s, uint16_t family, uint16_t port_be, uint32_t addr_be);
+long exec_socket_send(exec_socket_t s, const void *buf, size_t len);
+long exec_socket_recv(exec_socket_t s, void *buf, size_t len);
+int  exec_socket_shutdown(exec_socket_t s);
+int  exec_socket_getname(exec_socket_t s, int peer, uint16_t *family, uint16_t *port_be, uint32_t *addr_be);
+int  exec_socket_setopt_int(exec_socket_t s, int level, int name, int val);
+int  exec_socket_getopt_int(exec_socket_t s, int level, int name, int *out);
+
 #endif /* OVMX_EXEC_KBACKEND_NETBSD_H */

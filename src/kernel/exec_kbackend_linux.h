@@ -65,6 +65,15 @@
 /* vms-d61 (seqlock barriers + userspace-publishable arena) backing headers. */
 #include <linux/vmalloc.h>        /* vmalloc_user / vfree (exec_arena_*) */
 #include <asm/barrier.h>          /* smp_wmb / smp_rmb (exec_membar_*) */
+/* vms-9951 (host TCP client socket -> BGn:) backing headers. */
+#include <linux/net.h>            /* struct socket, sock_create_kern, kernel_* */
+#include <linux/in.h>             /* struct sockaddr_in, IPPROTO_TCP/IP */
+#include <linux/socket.h>         /* AF_INET, SOL_SOCKET, SHUT_RDWR */
+#include <linux/kref.h>           /* kref (the exec_socket_t refcount) */
+#include <net/sock.h>             /* sock_release, sock_setsockopt, sock_flag, sock_error, KERNEL_SOCKPTR */
+#include <linux/tcp.h>            /* tcp_sk() */
+#include <net/tcp.h>              /* TCP_NAGLE_OFF */
+#include <net/inet_sock.h>        /* inet_sk() */
 
 /* ---- primitive types ---- */
 typedef spinlock_t        exec_lock_t;
@@ -496,5 +505,161 @@ static inline void exec_membar_consumer(void) { smp_rmb(); }
 typedef void *exec_arena_t;
 static inline void *exec_arena_alloc(size_t n) { return vmalloc_user(n); }
 static inline void  exec_arena_free(void *arena) { vfree(arena); }
+
+/* ================================================================
+ * §12  Host TCP client socket (vms-9951; BGn: INET facility).
+ *
+ * exec_socket_t is a REFERENCE-COUNTED holder over the host in-kernel socket:
+ * the channel holds one reference, the Linux readiness poll fd (a Linux rind,
+ * src/kernel/vms_bg_pollfd.c) holds a second via exec_socket_get, so the socket
+ * outlives a poll fd still open when the channel is $DASSGN'd. The IP stack is
+ * Linux's (sock_create_kern into init_net); OVMX never reimplements transport.
+ * Addresses cross the seam as raw network-order fields (no struct sockaddr_in in
+ * shared core -- the backend builds the sockaddr).
+ * ================================================================ */
+struct exec_socket_holder { struct socket *sock; struct kref kref; };
+typedef struct exec_socket_holder *exec_socket_t;
+
+static inline void exec_socket_holder_free(struct kref *kref)
+{
+	struct exec_socket_holder *h =
+		container_of(kref, struct exec_socket_holder, kref);
+	if (h->sock)
+		sock_release(h->sock);
+	kfree(h);
+}
+
+static inline int exec_socket_create(exec_socket_t *out)
+{
+	struct exec_socket_holder *h;
+	struct socket *sock;
+	int rc;
+
+	*out = NULL;
+	rc = sock_create_kern(&init_net, AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
+	if (rc)
+		return rc;
+	h = kmalloc(sizeof(*h), GFP_KERNEL);
+	if (!h) {
+		sock_release(sock);
+		return -ENOMEM;
+	}
+	h->sock = sock;
+	kref_init(&h->kref);        /* the channel's reference */
+	*out = h;
+	return 0;
+}
+
+static inline void exec_socket_get(exec_socket_t s) { kref_get(&s->kref); }
+static inline void exec_socket_release(exec_socket_t s)
+{
+	kref_put(&s->kref, exec_socket_holder_free);
+}
+
+static inline int exec_socket_connect(exec_socket_t s, uint16_t family,
+				      uint16_t port_be, uint32_t addr_be)
+{
+	struct sockaddr_in sa;
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sin_family = family;
+	sa.sin_port = port_be;              /* network byte order, straight through */
+	sa.sin_addr.s_addr = addr_be;
+	return kernel_connect(s->sock, (struct sockaddr *)&sa, sizeof(sa), 0);
+}
+
+static inline long exec_socket_send(exec_socket_t s, const void *buf, size_t len)
+{
+	struct msghdr msg;
+	struct kvec vec;
+
+	memset(&msg, 0, sizeof(msg));
+	vec.iov_base = (void *)buf;
+	vec.iov_len = len;
+	return kernel_sendmsg(s->sock, &msg, &vec, 1, len);
+}
+
+static inline long exec_socket_recv(exec_socket_t s, void *buf, size_t len)
+{
+	struct msghdr msg;
+	struct kvec vec;
+
+	memset(&msg, 0, sizeof(msg));
+	vec.iov_base = buf;
+	vec.iov_len = len;
+	return kernel_recvmsg(s->sock, &msg, &vec, 1, len, 0);
+}
+
+static inline int exec_socket_shutdown(exec_socket_t s)
+{
+	return kernel_sock_shutdown(s->sock, SHUT_RDWR);
+}
+
+static inline int exec_socket_getname(exec_socket_t s, int peer, uint16_t *family,
+				      uint16_t *port_be, uint32_t *addr_be)
+{
+	struct sockaddr_storage ss;
+	struct sockaddr_in *sin;
+	int rc;
+
+	memset(&ss, 0, sizeof(ss));
+	rc = peer ? kernel_getpeername(s->sock, (struct sockaddr *)&ss)
+		  : kernel_getsockname(s->sock, (struct sockaddr *)&ss);
+	if (rc < 0)
+		return rc;
+	if (ss.ss_family != AF_INET)
+		return -EAFNOSUPPORT;       /* IPv6 not carried by this tuple yet */
+	sin = (struct sockaddr_in *)&ss;
+	*family = sin->sin_family;
+	*port_be = sin->sin_port;
+	*addr_be = sin->sin_addr.s_addr;
+	return 0;
+}
+
+static inline int exec_socket_setopt_int(exec_socket_t s, int level, int name, int val)
+{
+	struct socket *sock = s->sock;
+
+	/* SOL_SOCKET options must go through sock_setsockopt directly (->setsockopt
+	 * reaches only the protocol/IP handlers); every other level rides ->ops. */
+	if (level == SOL_SOCKET)
+		return sock_setsockopt(sock, level, name, KERNEL_SOCKPTR(&val), sizeof(val));
+	if (sock->ops && sock->ops->setsockopt)
+		return sock->ops->setsockopt(sock, level, name, KERNEL_SOCKPTR(&val), sizeof(val));
+	return -ENOPROTOOPT;
+}
+
+static inline int exec_socket_getopt_int(exec_socket_t s, int level, int name, int *out)
+{
+	struct sock *sk = s->sock->sk;
+
+	/* ->getsockopt takes user pointers (unusable from kernel context); read the
+	 * live socket state directly for the integer whitelist OpenSSH probes. Each
+	 * value is the socket's genuine current state; anything else is a HONEST
+	 * -ENOPROTOOPT (the caller maps it to SS$_BADPARAM), never a faked value. */
+	if (!sk)
+		return -EINVAL;
+	if (level == SOL_SOCKET && name == SO_KEEPALIVE) {
+		*out = sock_flag(sk, SOCK_KEEPOPEN) ? 1 : 0; return 0;
+	}
+	if (level == SOL_SOCKET && name == SO_REUSEADDR) {
+		*out = sk->sk_reuse ? 1 : 0; return 0;
+	}
+	if (level == SOL_SOCKET && name == SO_ERROR) {
+		*out = -sock_error(sk); return 0;   /* pending error, cleared as getsockopt does */
+	}
+	if (level == IPPROTO_TCP && name == TCP_NODELAY) {
+		*out = (tcp_sk(sk)->nonagle & TCP_NAGLE_OFF) ? 1 : 0; return 0;
+	}
+	if (level == IPPROTO_IP && name == IP_TOS) {
+		*out = inet_sk(sk)->tos; return 0;
+	}
+	return -ENOPROTOOPT;
+}
+
+/* Linux-ONLY accessor for the readiness poll-fd rind (src/kernel/vms_bg_pollfd.c):
+ * the raw host socket for ->ops->poll delegation. NOT part of the substrate-
+ * neutral seam -- no NetBSD counterpart (NetBSD uses kqueue; see vms-024). */
+static inline struct socket *exec_socket_raw(exec_socket_t s) { return s->sock; }
 
 #endif /* OVMX_EXEC_KBACKEND_LINUX_H */

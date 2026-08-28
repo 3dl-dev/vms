@@ -291,6 +291,10 @@ target_link_libraries(test_scsd_wire PRIVATE
     # vms-34b: scsd.c now also drives the MSCP disk-server RESPONDER
     # (scsd_mscp_srv_msg_input() calls scs_mscp_srv_handle() etc.), same reason.
     vmsscs_mscp_srv
+    # vms-94c: scsd.c now hosts the DLM SYSAP receive path
+    # (scsd_dlm_srv_msg_input() calls scs_dlm_parse()), so the whole-file test
+    # seam needs the DLM message-class library too.
+    vmsscs_dlm
     # vms-7a9: scsd.c folds each peer's advertised VOTES into the connection-
     # manager quorum model (scs_quorum_*), so the whole-file test seam needs it.
     vmsscs_quorum

@@ -410,6 +410,7 @@ add_executable(scsd_exe scsd.c)
 target_include_directories(scsd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/libvms/include
+    ${CMAKE_SOURCE_DIR}/src/kernel   # vms-94c: vms_ioctl.h (VMS_IOCTL_DLM_XNODE) for the /dev/vms DLM dispatch
     ${VMS_FS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
 )
@@ -426,7 +427,7 @@ target_include_directories(scsd_exe PRIVATE
 # scsd_exe needs the vmsfs/vmslnm link it previously didn't (see the
 # header-only claim at the top of this file -- no longer true).
 # vms-838: the raw-L2 transport backend (see vmsscs_datalink above).
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_quorum vmsscs_recnx vmsscs_mscp vmsscs_mscp_srv vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll vmsscs_rx vmsscs_credit vmsscs_datalink vmsrms vmsfs vmslnm)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_quorum vmsscs_recnx vmsscs_mscp vmsscs_mscp_srv vmsscs_dlm vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll vmsscs_rx vmsscs_credit vmsscs_datalink vmsrms vmsfs vmslnm)
 # vms-5f0/vms-c3b: SCSD reads SYS$SYSTEM:OVMXVMSSYS.PAR (SCSNODE/SCSSYSTEMID/
 # ALLOCLASS/RECNXINTERVAL) through sysgen_read_* -> the executive Files-11 ACP
 # (RMS-over-ACP), not the retired /vms passthrough. Link vmsrms; the strong-ref

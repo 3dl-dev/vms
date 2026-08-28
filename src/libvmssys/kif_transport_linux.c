@@ -21,9 +21,25 @@
 
 int kif_xport_dev_open(void)
 {
-    /* AT_FDCWD (-100), O_RDWR (2). The device name is the transport's own
-     * knowledge, per the contract -- the policy layer never spells it. */
-    return vms_sys_openat(-100 /* AT_FDCWD */, "/dev/vms", 2 /* O_RDWR */, 0);
+    /* AT_FDCWD (-100), O_RDWR (2) | O_CLOEXEC (02000000 == 0x80000). The device
+     * name is the transport's own knowledge, per the contract -- the policy
+     * layer never spells it.
+     *
+     * O_CLOEXEC (vms-707): a /dev/vms channel must NOT survive execve(). The
+     * executive PCB is keyed on the thread group, not the channel, and every
+     * task re-binds its own channel on its first kif call after an execve
+     * (kif_bind / REGISTER_CONTINUE), so an inherited descriptor is never read.
+     * Worse, it is actively harmful: DCL's RUN fork child opens a channel via
+     * REGISTER_CONTINUE and then execve()s the image; without O_CLOEXEC that
+     * channel LEAKS into the image (no userspace handle references it), stays
+     * open across the image's whole run, and its implicit close at the image's
+     * do_exit() is what triggers vms_dev_release() to FREE the process's PCB --
+     * destroying the image's recorded completion $STATUS before DCL can read it
+     * back. Closing the channel at execve() leaves the PCB owned solely by the
+     * image's own channel (which IMGACT closes before SYS$EXIT, not at exit), so
+     * the PCB survives to lazy reap and RUN can read the recorded $STATUS. */
+    return vms_sys_openat(VMS_AT_FDCWD, "/dev/vms",
+                          VMS_O_RDWR | VMS_O_CLOEXEC, 0);
 }
 
 void kif_xport_dev_close(int fd)

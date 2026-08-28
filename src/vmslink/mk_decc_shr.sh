@@ -116,30 +116,29 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     echo "mk_decc_shr: ALPHA/EVAX branch (vms-7b96)"
     echo "mk_decc_shr: LINK.EXE=$LINK_EXE  libc.a=$LIBC  libgcc.a=$LIBGCC  GSMATCH=$GSMATCH"
     ALPHA_VEC=$(mktemp)
-    # ENUMERATE decc$ defs. The cross nm/ar's vms-alpha BFD rejects a System V ar
-    # container ("file format not recognized"), and bare host nm cannot read EVAX
-    # objects at all — but host `ar` extracts the (format-agnostic) container fine,
-    # and the cross nm reads a bare EVAX .o. So extract with host ar, nm each member
-    # with the cross nm. libc.a MUST be built -g0 for this (the cross nm cannot read
-    # DST members, vms-7b96); the shipped DECC$SHR is byte-identical either way
-    # (LINK.EXE skips DST). text (T) -> PROCEDURE, data (D/G/R/B) -> DATA; drop the
-    # ..-suffixed EVAX companion labels (the callable value is the bare descriptor).
-    AR_HOST=${AR_HOST:-ar}
-    EXDIR=$(mktemp -d)
-    ( cd "$EXDIR" && "$AR_HOST" x "$LIBC" && [ -s "$LIBGCC" ] && "$AR_HOST" x "$LIBGCC" 2>/dev/null || true )
-    "$NM" --defined-only "$EXDIR"/*.o 2>/dev/null \
-      | awk '
-          $NF ~ /^decc\$/ && $NF !~ /\.\.[a-z]+$/ {
-              t=$(NF-1); n=$NF;
-              # text (incl. weak text W) -> PROCEDURE; data (incl. weak data V) -> DATA
-              if (t=="T"||t=="t"||t=="W"||t=="w") print n"=PROCEDURE";
-              else if (t~/^[DdGgRrBbVv]$/) print n"=DATA";
-          }' \
+    # ENUMERATE decc$ universals from the LINKER's own evax_read view (vms-614),
+    # NOT `nm --defined-only`. nm's BLIND SPOT is weak-alias EQUATES: musl's public
+    # `free` = weak_alias(__libc_free, free), which the alpha cc1 emits as an
+    # equate that nm does not report as a definition — so decc$free (and every
+    # alias-equate decc$ symbol) was silently dropped from the vector even though
+    # LINK.EXE resolves it fine, and a real program calling free() then hit
+    # %LINK-F-UNDEF. LINK.EXE's OVMX_LINK_DUMP_UNIVERSALS mode lists the DEFINED
+    # decc$ symbols exactly as the reader it links with sees them, one
+    # `NAME=PROCEDURE|DATA` per line (companion ..en/..lk labels dropped; is_proc/
+    # code-entry classified). This supersedes the ar-extract + nm|awk pipeline AND
+    # the per-function VEC-add workarounds (e.g. the earlier explicit
+    # decc$free=PROCEDURE) — the whole alias-equate class now exports uniformly.
+    # The dummy --shareable/--symbol-vector/-o only satisfy arg parsing; the dump
+    # exits before any emit, so nothing is written to -o. (NM/AR_HOST no longer
+    # used on this path.)
+    OVMX_LINK_DUMP_UNIVERSALS=1 "$LINK_EXE" --shareable \
+        --symbol-vector "__ovmx_dump_probe=PROCEDURE" --gsmatch "$GSMATCH" \
+        -o /dev/null "$LIBC" "$LIBGCC" 2>/dev/null \
+      | grep -E '^decc\$[^=]+=(PROCEDURE|DATA)$' \
       | sort -u > "$ALPHA_VEC"
-    rm -rf "$EXDIR"
     NVEC=$(wc -l < "$ALPHA_VEC")
-    echo "mk_decc_shr: enumerated $NVEC decc\$ universals from libc.a + libgcc.a"
-    [ "$NVEC" -ge 50 ] || { echo "mk_decc_shr: FAIL only $NVEC decc\$ symbols found — is NM the alpha-dec-vms cross nm and libc.a built -g0 (nm cannot read DST, vms-7b96)?" >&2; exit 2; }
+    echo "mk_decc_shr: enumerated $NVEC decc\$ universals from libc.a + libgcc.a (linker/evax_read view, vms-614)"
+    [ "$NVEC" -ge 50 ] || { echo "mk_decc_shr: FAIL only $NVEC decc\$ universals from the LINK.EXE dump — is LINK_EXE the vms-614 build and libc.a genuine EVAX?" >&2; exit 2; }
     VEC=$(paste -sd, "$ALPHA_VEC")
     rm -f "$ALPHA_VEC"
 
@@ -250,21 +249,11 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # (vms-bdd first sub-step: settles the stdio-stream link-readiness gap.)
     VEC="$VEC,stdin=DATA,stdout=DATA,stderr=DATA"
 
-    # decc$free (vms-47f8) -- a weak-alias'd C-RTL PROCEDURE the ^decc$
-    # enumeration above MISSES, for a different reason than the streams: free.o
-    # DOES define decc$free (musl's public `free` = weak_alias(__libc_free,
-    # free), which the port cc1 emits on alpha as a WEAK-ALIAS EQUATE), but
-    # `nm --defined-only` does not report an alias-equate as a definition, so
-    # the enumeration never sees it -- while LINK.EXE's own evax_read DOES
-    # resolve it (confirmed: a shim that re-defined decc$free triggered
-    # %LINK-F-MULDEF against free.o). So the fix is NOT a shim (that duplicates
-    # free.o's def) but exporting the EXISTING free.o decc$free explicitly,
-    # exactly like the streams above -- the whole-archive link resolves it from
-    # free.o and fails loudly if it is not actually defined. Without this, a
-    # real port program calling free() hits %LINK-F-UNDEF decc$free (measured:
-    # the vms-bdd multi-file-program LINK step). The nm-enumeration blind spot
-    # for plain-CRTL-name weak-alias equates is the root, tracked on vms-614.
-    VEC="$VEC,decc\$free=PROCEDURE"
+    # (The explicit `decc$free=PROCEDURE` VEC-add of #795 is removed here: the
+    # vms-614 linker-view enumeration above now catches decc$free — and every
+    # other weak-alias-equate decc$ symbol — automatically, so the one-off add is
+    # redundant. The stdin/stdout/stderr=DATA add above stays: those are plain,
+    # non-decc$ names the decc$ dump does not match.)
 
     # ---- vms-864 (mirrors vms-954 R1b-2b on the generic tail): C$_EXIT1 ----
     # Same architecture-independent VMS C-facility globalvalue, same oracle

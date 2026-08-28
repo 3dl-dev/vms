@@ -109,7 +109,7 @@ def test_load_allowlist_rejects_bad_missing_on(tmp_path):
 
 
 _FAKE_CUT_RELEASE_VAX_SH = (
-    "printf '%s\\n' vms.kmod.o vmsfs.kmod vmsfs_mount\n"
+    "printf '%s\\n' vms.kmod.o\n"
     'printf \'%s\\n\' "${IMAGE_NAMES[@]}"\n'
 )
 
@@ -159,7 +159,7 @@ def test_main_cli_exits_zero_when_fully_allowlisted(tmp_path, capsys):
     (repo / "tools" / "cut-release-vax.sh").write_text(_FAKE_CUT_RELEASE_VAX_SH)
     (repo / "tools" / "parity" / "image-parity-allowlist.json").write_text(
         '{"entries": ['
-        '{"names": ["LIBRARIAN.EXE", "vms.kmod.o", "vmsfs.kmod", "vmsfs_mount"], '
+        '{"names": ["LIBRARIAN.EXE", "vms.kmod.o"], '
         '"missing_on": "x86_64", "reason": "test fixture"}'
         "]}"
     )
@@ -258,7 +258,6 @@ def test_real_x86_64_extraction_finds_shareables_and_modules(dockerfile_text):
     for name in ip.LINK_NATIVE_SHAREABLES:
         assert name in images
     assert "vms.ko" in images
-    assert "vmsfs.ko" in images
 
 
 def test_real_x86_64_extraction_excludes_non_images(dockerfile_text):
@@ -275,7 +274,7 @@ def test_real_vax_extraction_finds_boot_chain_images(cmakelists_text, cut_releas
     ):
         assert expected in images, f"{expected} missing from vax extraction -- CMakeLists.txt _OVMX_IMAGES_DEPS parsing regressed"
 
-    for expected in ("vms.kmod.o", "vmsfs.kmod", "vmsfs_mount"):
+    for expected in ("vms.kmod.o",):
         assert expected in images
 
 

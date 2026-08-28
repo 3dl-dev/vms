@@ -221,10 +221,13 @@ int vmsfs_device_resolve(const char *devname, char *mount_point, size_t size)
  * under the atomic flip, epic vms-208).
  *
  * Does the DEVICE named at the head of VMS filespec `spec` correspond to a unit
- * genuinely mounted RIGHT NOW in the KERNEL's own mount table (/proc/mounts) as
- * /mnt/<lowercase dev> -- i.e. a real, cross-process `mount -t vmsfs` volume
- * some OTHER process mounted (the install target vms-718 MOUNTs then RUNs
- * AUTHORIZE against; a DKA100: loop image; ...)? Returns 1 iff so.
+ * genuinely mounted RIGHT NOW in the KERNEL's own mount table (/proc/mounts) at
+ * /mnt/<lowercase dev> -- i.e. a real, cross-process Linux VFS mount some OTHER
+ * process mounted? Returns 1 iff so. (vms-165 retired the vmsfs VFS driver, so
+ * nothing mounts as a `vmsfs' type any more and this fail-honest probe now only
+ * ever returns 0; the runtime reads every ODS-2 volume through the executive
+ * ACP, never a VFS mount. The check is kept as a fail-honest guard, never a
+ * fabricated success.)
  *
  * This reads the SAME global, cross-process /proc/mounts truth
  * vmsfs_device_resolve_executive() consults (INV-6: the kernel is the source of

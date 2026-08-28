@@ -15,7 +15,7 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # NEGATIVE_CONTROL=1 simulates the executive being absent: vms.ko is built
-# normally (so the module and vmsfs.ko are proven buildable) but init.sh's
+# normally (so the module is proven buildable) but init.sh's
 # insmod of vms.ko is skipped, so /dev/vms never appears and every test that
 # depends on it fails honestly with "cannot open /dev/vms" instead of
 # silently passing. (This comment used to call that "the real SS$_NOSUCHDEV
@@ -37,8 +37,8 @@ ARG NEGATIVE_CONTROL=0
 #
 # These are the same kernel. `linux-image-virtual` resolves to the identical
 # linux-image-6.8.0-NNN-generic + linux-modules-6.8.0-NNN-generic pair that
-# `linux-image-generic` pulls, so the vmlinuz booted below, the module tree
-# vms.ko/vmsfs.ko are built against, and loop.ko are all byte-for-byte what
+# `linux-image-generic` pulls, so the vmlinuz booted below and the module tree
+# vms.ko is built against are all byte-for-byte what
 # they were. NOTHING THIS HARNESS TESTS CHANGES.
 #
 # The one difference is that the `generic` meta-package hard-Depends on
@@ -95,11 +95,12 @@ RUN KVER=$(ls /lib/modules/ | sort -V | tail -1) && \
 # it must sit beside /src/kernel as /src/kernel-core.
 COPY src/kernel-core/ /src/kernel-core/
 COPY src/kernel/ /src/kernel/
-# The genuine ODS-2 codec compiled kernel-resident into vmsfs.ko (rd vms-dcd):
-# src/kernel/vmsfs/Makefile's vmsfs-y lists ../../vmsfs/ods2/*.o (the SAME
-# cross-dir pattern it already uses for ../../kernel-core/vmsfs/*.o), so kbuild
-# needs those .c sources present in the build context -- exactly as it needs
-# src/kernel-core above. Copy them BEFORE the vmsfs.ko build below.
+# The genuine ODS-2 codec is compiled kernel-resident into vms.ko itself now
+# (rd vms-dcd/vms-5f0, epic vms-208): src/kernel/Makefile's vms-y lists
+# ../vmsfs/ods2/ods2_reader.o + ods2_edit.o (the pure parse/validate + edit
+# surface the Files-11 ACP, kernel-core/vmsfs_acp.c, uses), so kbuild needs those
+# .c sources present in the build context -- exactly as it needs src/kernel-core
+# above. Copy them BEFORE the vms.ko build below.
 COPY src/vmsfs/include/ /src/vmsfs/include/
 COPY src/vmsfs/ods2/ /src/vmsfs/ods2/
 RUN KVER=$(cat /tmp/kver) && \
@@ -108,14 +109,6 @@ RUN KVER=$(cat /tmp/kver) && \
     echo "--- vms.ko info ---" && \
     ls -la /src/kernel/vms.ko && \
     modinfo /src/kernel/vms.ko
-
-# Build vmsfs.ko (VMS filesystem kernel module)
-RUN KVER=$(cat /tmp/kver) && \
-    cd /src/kernel/vmsfs && \
-    make KDIR=/lib/modules/${KVER}/build 2>&1 && \
-    echo "--- vmsfs.ko info ---" && \
-    ls -la /src/kernel/vmsfs/vmsfs.ko && \
-    modinfo /src/kernel/vmsfs/vmsfs.ko
 
 # Copy test source and build statically-linked test programs.
 #
@@ -427,22 +420,18 @@ RUN cd /src/repo && \
     { readelf -d /ovmxssh/ssh 2>/dev/null | grep -q NEEDED && \
         { echo "FATAL: staged ssh is not static"; exit 1; } || true; }
 
-# Build mkimage_vmsfs (host tool) and create test image
-COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/
-RUN gcc -O2 -Wall -o /src/tests/qemu/mkimage_vmsfs \
-        /src/tests/qemu/mkimage_vmsfs.c \
-        -I/src/kernel/vmsfs && \
-    /src/tests/qemu/mkimage_vmsfs /vmsfs_test.img
-
-# GENUINE ODS-2 codec kernel-resident proof (rd vms-dcd, epic vms-208).
-# Stage the REAL-VAX fixture as the block-device image the "ods2ro" mount reads
-# in-guest, and the COMMITTED byte-identical golden (tests/ods2/ovmxdir_hello.
-# golden = the real on-disk content of [OVMXDIR]HELLO.TXT). The golden is
-# COMMITTED, not regenerated from the codec here, ON PURPOSE (rd vms-dcd negctl):
-# a committed oracle is immune to a codec mutation, so the facility-defects
-# negative control (ods2-read-content-vbn) makes test_kmod_ods2_codec's
-# byte-identical assertion genuinely go red -- a golden regenerated from the
-# mutated codec would corrupt both sides equally and hide the defect.
+# GENUINE ODS-2 codec proof (rd vms-dcd, epic vms-208). Stage the REAL-VAX
+# fixture as the ODS-2 volume the executive ACP ($MOUNT/$QIO over /dev/vms in
+# vms.ko) reads in-guest, and the COMMITTED byte-identical golden
+# (tests/ods2/ovmxdir_hello.golden = the real on-disk content of
+# [OVMXDIR]HELLO.TXT). The golden is COMMITTED, not regenerated from the codec
+# here, ON PURPOSE (rd vms-dcd negctl): a committed oracle is immune to a codec
+# mutation, so the facility-defects negative control (ods2-read-content-vbn)
+# makes the ACP read-back suites' byte-identical assertion genuinely go red -- a
+# golden regenerated from the mutated codec would corrupt both sides equally and
+# hide the defect. Consumed now by the surviving test_syssvc_acp_* suites
+# (acp_rw / acp_mount / ...), which mount + read this volume through the real
+# executive ACP (the retired vmsfs.ko "ods2ro" VFS presentation used to be here).
 COPY tests/ods2/real_vax_ods2.dsk /ods2_real.img
 COPY tests/ods2/ovmxdir_hello.golden /hello.golden
 
@@ -511,66 +500,19 @@ RUN KVER=$(cat /tmp/kver) && \
     fi && \
     ls -la /boot/vmlinuz
 
-# Find and decompress loop.ko for block-device tests, IF it is a module.
-#
-# THE "not found" BRANCH IS THE NORMAL ONE, AND IT IS NOT A SKIP (vms-2c6).
-# Ubuntu builds the loop driver into the kernel (CONFIG_BLK_DEV_LOOP=y), so
-# there is no loop.ko under /lib/modules at all and this step takes the else
-# branch on every build -- including every build on main today. init.sh knows
-# this ("loop may be built-in or a module"): it insmods /lib/modules/loop.ko
-# only if the file exists, then runs losetup either way. Measured on run
-# 30913764276: this step printed the "not found" message AND the guest still
-# reported "OK: loop0 attached to vmsfs_test.img" and ran
-# test_kmod_vmsfs_blkdev to completion.
-#
-# The old message claimed "block-device test will skip", which is FALSE and
-# actively misleading -- it reads like a silently-dropped suite, which is the
-# one thing this project treats as a failing test. Reworded to say what is
-# actually true. Nothing about the image or the tests changes here; the whole
-# edit is the text of an echo.
-#
-# This is also unaffected by the linux-image-virtual move above: `virtual`
-# selects the SAME linux-image-6.8.0-NNN-generic binary, so the loop driver is
-# built in there exactly as before.
-RUN KVER=$(cat /tmp/kver) && \
-    LOOP_MOD=$(find /lib/modules/$KVER -name 'loop.ko*' | head -1) && \
-    if [ -n "$LOOP_MOD" ]; then \
-        echo "Found loop module: $LOOP_MOD"; \
-        case "$LOOP_MOD" in \
-            *.zst) zstd -d "$LOOP_MOD" -o /tmp/loop.ko ;; \
-            *.xz)  xz -d -c "$LOOP_MOD" > /tmp/loop.ko ;; \
-            *.gz)  gzip -d -c "$LOOP_MOD" > /tmp/loop.ko ;; \
-            *)     cp "$LOOP_MOD" /tmp/loop.ko ;; \
-        esac; \
-        echo "Decompressed: $(ls -la /tmp/loop.ko)"; \
-    else \
-        echo "loop.ko is not a module in this kernel (CONFIG_BLK_DEV_LOOP=y)."; \
-        echo "This is the EXPECTED path on Ubuntu. The block-device test still"; \
-        echo "runs -- init.sh calls losetup against the built-in driver; watch"; \
-        echo "for 'OK: loop0 attached' and the test_kmod_vmsfs_blkdev suite in"; \
-        echo "the guest output. Nothing is skipped."; \
-    fi
-
 # Assemble initramfs
 COPY tests/qemu/init.sh /src/tests/qemu/init.sh
 RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
              /initramfs/proc /initramfs/sys /initramfs/tests \
-             /initramfs/tmp /initramfs/mnt/vmsfs \
-             /initramfs/mnt/vmsfs_blkdev /initramfs/test_data && \
-    # Busybox provides sh, mount, insmod, reboot, grep, losetup, etc.
+             /initramfs/tmp /initramfs/test_data && \
+    # Busybox provides sh, mount, insmod, reboot, grep, etc.
     cp /bin/busybox /initramfs/bin/busybox && \
     ln -s busybox /initramfs/bin/sh && \
     # Kernel modules
     cp /src/kernel/vms.ko /initramfs/lib/modules/ && \
-    cp /src/kernel/vmsfs/vmsfs.ko /initramfs/lib/modules/ && \
-    # Loop module, only if this kernel has it as a module. On Ubuntu it does
-    # not (built in -- see the step above), so this is normally a no-op.
-    [ -f /tmp/loop.ko ] && cp /tmp/loop.ko /initramfs/lib/modules/ || true && \
-    # Block-device test image
-    [ -f /vmsfs_test.img ] && cp /vmsfs_test.img /initramfs/test_data/ || true && \
-    # Genuine ODS-2 fixture + byte-identical golden for test_kmod_ods2_codec
-    # (rd vms-dcd): the kernel-resident ODS-2 codec proof. Absence is FATAL --
-    # a silently-missing fixture would make the suite honest-skip forever.
+    # Genuine ODS-2 fixture + byte-identical golden for the test_syssvc_acp_*
+    # suites (rd vms-dcd): the executive ACP ODS-2 read-back proof. Absence is
+    # FATAL -- a silently-missing fixture would make the suites honest-skip forever.
     { [ -f /ods2_real.img ] && cp /ods2_real.img /initramfs/test_data/ods2_real.img || \
         { echo "FATAL: /ods2_real.img (ODS-2 fixture) missing"; exit 1; }; } && \
     { [ -f /hello.golden ] && cp /hello.golden /initramfs/test_data/hello.golden || \

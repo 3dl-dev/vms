@@ -12,9 +12,9 @@
 # can run for hours):
 #
 #   BOOT A -- the REAL image: /init = STARTUP.EXE (ovmx_init), mounting the
-#     VMSFS system disk on /dev/vda, exactly mirroring the x86_64 QEMU bootable
+#     ODS-2 system disk on /dev/vda, exactly mirroring the x86_64 QEMU bootable
 #     path (distro/Dockerfile.bootable).  This finds the true Alpha frontier:
-#     PID 1 -> vms.ko/dev/vms -> vmsfs.ko -> mount /dev/vda -> exec PROVISION ->
+#     PID 1 -> vms.ko/dev/vms Files-11 ACP -> mount /dev/vda -> exec PROVISION ->
 #     ... -> stop.  Whatever milestone Alpha reaches is reported honestly; no
 #     userspace fake is used to "get further" (INV-6).
 #

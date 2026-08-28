@@ -5,7 +5,7 @@
  * same reason ke-init-alpha.c is C, tools/cross-alpha/ke-init-alpha.c).
  *
  * Boots as init under qemu-system-alpha -M clipper. Loads the cross-built
- * vms.ko + vmsfs.ko executive modules (which enumerate the attached virtio
+ * vms.ko executive module (which enumerates the attached virtio
  * disks into DKA0:/DKA100:/DKA200:/DKA300:/DKA400: -- the ODS-2 fixtures the
  * harness attaches, mirroring tests/qemu/run_tests.sh's vda..vde mapping),
  * confirms /dev/vms, then fork/exec's EVERY /tests/test_syssvc_* and
@@ -201,7 +201,7 @@ int main(void)
         printf("=== FINAL RESULTS: 0 suites passed, 1 suites failed ===\n");
         goto out;
     }
-    load_module("/vmsfs.ko");
+    /* vms-165: the Files-11 ODS-2 ACP is inside vms.ko; no separate vmsfs.ko. */
 
     if (access("/dev/vms", F_OK) == 0) {
         printf("SYSSVC-ALPHA: /dev/vms PRESENT\n");

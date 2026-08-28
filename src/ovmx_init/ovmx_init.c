@@ -4,8 +4,9 @@
  * PID 1 / ENTRYPOINT for OVMX on its one runtime target: the real-kernel /
  * QEMU path (CLAUDE.md Rule 9). This is SYSBOOT + EXEC_INIT + SYSINIT and
  * NOTHING ELSE (docs/design-init-scope.md, operator ruling 2026-08-10 "STRIP
- * ALL OF IT"): mount the Linux base layer, attach the executive, load vmsfs.ko,
- * mount the system disk -- or halt -- hand off to STARTUP.COM, then wait.
+ * ALL OF IT"): mount the Linux base layer, attach the executive, mount the
+ * system disk through the executive Files-11 ACP -- or halt -- hand off to
+ * STARTUP.COM, then wait.
  *
  * IT DOES NOT INSTALL, INITIALIZE OR PROVISION ANYTHING. A booting VMS system
  * FINDS its system disk already installed or does not boot (design-init-scope.md
@@ -471,8 +472,9 @@ static void executive_attach(void)
  * report_kernel_taint() - OVMX taint-audit readout (rd vms-566, epic vms-19e
  * "owns-kernel").
  *
- * After BOTH OVMX kernel modules have loaded -- vms.ko via executive_attach()
- * and vmsfs.ko via ovmx_boot_load_module("vmsfs") -- read the REAL
+ * After the OVMX executive module has loaded -- vms.ko via executive_attach()
+ * (vms-165 retired the separate vmsfs.ko VFS module; the ODS-2 ACP is in vms.ko
+ * now) -- read the REAL
  * /proc/sys/kernel/tainted mask and, IF the boot-flag register (kernel cmdline)
  * carries the token "ovmx.taintreport", print it as an OVMX-facility line the
  * taint-clean acceptance gate scrapes (tests/qemu/test_kernel_taint.sh). This is
@@ -538,8 +540,8 @@ static void report_kernel_taint(void)
 
 /*
  * Bare-metal bootstrap: mount the Linux base layer, set hostname, attach the
- * executive, load vmsfs.ko, and MOUNT THE SYSTEM DISK OR HALT. Called when
- * running as PID 1 on bare metal or QEMU.
+ * executive, and MOUNT THE SYSTEM DISK (through the executive Files-11 ACP) OR
+ * HALT. Called when running as PID 1 on bare metal or QEMU.
  *
  * This is SYSINIT: it mounts the pre-installed system disk. It does NOT
  * install, initialize, or fall back to an ephemeral overlay -- a booting VMS
@@ -557,7 +559,7 @@ static void bare_metal_init(void)
     /*
      * The kernel-log -> operator-console bridge (vms-32a) starts as early as
      * /dev exists, ahead of BOTH boot branches below, so it is running
-     * before vms.ko/vmsfs.ko load in either one and replays their init-time
+     * before vms.ko loads in either one and replays its init-time
      * records rather than missing them. See docs/design-opcom-executive-
      * logging.md. Best-effort: the bridge never blocks or fails boot even if
      * the substrate's kernel-log source is unavailable.
@@ -632,14 +634,15 @@ static void bare_metal_init(void)
          * (INV-DRIFT); the substrate split lives ONLY in ovmx_boot_linux.c /
          * ovmx_boot_netbsd.c:
          *   Linux  -- ATOMIC FLIP (vms-5f0, epic vms-208): $MOUNT the boot unit
-         *             through the Files-11 (ODS-2) ACP in the executive, NOT the
-         *             vmsfs.ko VFS mount of a bespoke-VMFS volume at /vms.
+         *             through the Files-11 (ODS-2) ACP in the executive, NOT a
+         *             VFS mount of a bespoke-VMFS volume at /vms.
          *             SYS$DISK is now a genuine ODS-2 block device the ACP owns;
          *             every consumer (RMS/DCL/IMGACT/LOGINOUT) reaches it by
          *             $ASSIGN + $QIO. The executive is already attached
          *             (executive_attach() above), which the ACP $MOUNT requires.
-         *   NetBSD -- load vmsfs.ko (best-effort) then mount the system disk as
-         *             vmsfs (vms-d5d; its existing pre-flip sequence).
+         *   NetBSD -- the SAME executive Files-11 ACP in the vms module
+         *             (vms-329 VAX ACP cutover; vms-165 retired the separate
+         *             vmsfs VFS module on both substrates).
          * Either way a blank/unformatted or non-installed volume fails to mount
          * and PID 1 halts here -- it does NOT initialize it (the installer
          * spine's INITIALIZE/PCSI job runs out of band). */
@@ -656,9 +659,9 @@ static void bare_metal_init(void)
 
         printf("%%OVMX-I-MOUNTED, system disk DKA0: mounted\n");
 
-        /* Both OVMX modules are loaded (vms.ko via executive_attach() above,
-         * vmsfs.ko just before the mount): the taint mask is now final.
-         * Emits ONLY under the ovmx.taintreport boot flag (vms-566). */
+        /* The OVMX executive module is loaded (vms.ko via executive_attach()
+         * above; vms-165 retired the separate vmsfs.ko): the taint mask is now
+         * final. Emits ONLY under the ovmx.taintreport boot flag (vms-566). */
         report_kernel_taint();
         return;
     }

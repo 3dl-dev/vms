@@ -239,13 +239,13 @@ fi
 # the console alongside them. vms-300: QEMU's ttyS0 is both the kernel's own
 # console and ovmx_init's stdout, one wire; without
 # ovmx_boot_mute_kernel_console() (src/ovmx_init/ovmx_boot_linux.c, called
-# from bare_metal_init() before any kernel module loads) vms.ko/vmsfs.ko's
+# from bare_metal_init() before any kernel module loads) vms.ko's
 # pr_info lifecycle lines -- "vms: initializing VMS kernel module",
 # "vms: disk unit DKA0: -> vda (253:0)", the kernel's own module-taint
 # warning, etc. -- interleaved directly with the VMS boot banner. These two
 # checks assert the SPECIFIC shapes the operator saw, independent of the
 # curated noise list tests/qemu/test_job_control_console.sh already checks:
-# a general kernel-timestamp prefix, and a general vms:/vmsfs: raw prefix
+# a general kernel-timestamp prefix, and a general vms: raw prefix
 # (the exact shape opcom_kmsg_classify() recognizes as an OVMX kernel-module
 # record -- see src/ovmx_init/opcom_kmsg.c -- which belongs in
 # SYS$MANAGER:OPERATOR.LOG, never verbatim on the console).
@@ -254,10 +254,10 @@ if printf '%s\n' "$CLEAN" | grep -qE '\[[[:space:]]*[0-9]+\.[0-9]+\]'; then
 else
     pass "no kernel-timestamped '[ NNN.NNN]' line on the console (vms-300)"
 fi
-if printf '%s\n' "$CLEAN" | grep -qE '^vms: |^vmsfs: '; then
-    bad "a raw 'vms:'/'vmsfs:' kernel-module line reached the console verbatim -- must be OPERATOR.LOG-only via the kmsg bridge (vms-300)"
+if printf '%s\n' "$CLEAN" | grep -qE '^vms: '; then
+    bad "a raw 'vms:' kernel-module line reached the console verbatim -- must be OPERATOR.LOG-only via the kmsg bridge (vms-300)"
 else
-    pass "no raw 'vms:'/'vmsfs:' kernel-module line on the console (vms-300)"
+    pass "no raw 'vms:' kernel-module line on the console (vms-300)"
 fi
 # OPERATOR.LOG-routing side of the fix (that muting the console console did
 # NOT also starve SYS$MANAGER:OPERATOR.LOG of these same records): NOT

@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 #
-# build-vmsko-alpha.sh -- cross-compile the OVMX executive kernel modules
-# (vms.ko + vmsfs.ko) for the Linux/Alpha (AXP) kernel.  rd vms-89dd, epic
+# build-vmsko-alpha.sh -- cross-compile the OVMX executive kernel module
+# (vms.ko) for the Linux/Alpha (AXP) kernel.  rd vms-89dd, epic
 # vms-89dd (OVMX-on-Alpha), executive rung A4.
 #
 # WHY: on the OVMX/Linux-Alpha substrate (operator ruling 2026-08-16) the VMS
 # executive on Alpha is `vms.ko` recompiled for the Linux/Alpha kernel and
 # reached via /dev/vms -- NOT a NetBSD SYSKRNL port (that is the VAX path).  The
-# kernel-core is substrate-agnostic C; this proves it, and the ACP-bearing
-# vmsfs.ko codec, cross-compile clean for the alpha target.
+# kernel-core is substrate-agnostic C; this proves it cross-compiles clean for
+# the alpha target.  (vms-165 retired the separate vmsfs.ko VFS driver; the
+# Files-11 ODS-2 ACP codec now lives inside vms.ko itself.)
 #
 # This is BUILD/TEST tooling (Rule 9): it never runs OVMX, it builds the module
 # that IS the executive and boots it under qemu-system-alpha in a sibling
@@ -31,7 +32,7 @@ echo "== building cross/emulation image ($IMG) =="
 docker build -t "$IMG" "$HERE" >/dev/null
 
 mkdir -p "$WORK"
-echo "== cross-build Linux/Alpha kernel + vms.ko + vmsfs.ko =="
+echo "== cross-build Linux/Alpha kernel + vms.ko =="
 # Mount the repo src read-only; the module build needs a WRITABLE src tree
 # (kbuild writes .o beside .c for external modules), so we rsync it into /work.
 docker run --rm --memory=8g --cpus="$(nproc)" \
@@ -85,7 +86,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
         # Module.symvers, and Module.symvers is generated only by the modules
         # phase (modpost over vmlinux.o). Without it modpost errors out with
         # "Module.symvers is missing" + a wall of undefined symbols even though
-        # every .o compiled clean. (Learned building vms.ko/vmsfs.ko for alpha.)
+        # every .o compiled clean. (Learned building vms.ko for alpha.)
         make -j"$(nproc)" vmlinux modules >/dev/null 2>&1
         test -f Module.symvers || { echo "FATAL: Module.symvers not generated"; exit 1; }
         alpha-linux-gnu-strip -o /work/vmlinux-alpha vmlinux
@@ -117,24 +118,8 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     fi
 
     echo
-    echo "############ CROSS-COMPILE vmsfs.ko (ACP-bearing ODS-2 codec) ############"
-    set +e
-    make -C "$KDIR" M=/work/src/kernel/vmsfs ARCH=alpha CROSS_COMPILE=alpha-linux-gnu- modules \
-        > /work/build-vmsfs.log 2>&1
-    RC_VMSFS=$?
-    set -e
-    tail -60 /work/build-vmsfs.log
-    if [ $RC_VMSFS -eq 0 ] && [ -f /work/src/kernel/vmsfs/vmsfs.ko ]; then
-        echo "RESULT vmsfs.ko: BUILT"
-        alpha-linux-gnu-objdump -f /work/src/kernel/vmsfs/vmsfs.ko | grep -i "architecture" || true
-        cp /work/src/kernel/vmsfs/vmsfs.ko /work/vmsfs.ko
-    else
-        echo "RESULT vmsfs.ko: FAILED (rc=$RC_VMSFS) -- see /work/build-vmsfs.log"
-    fi
-
-    echo
     echo "############ SUMMARY ############"
     ls -la /work/*.ko 2>/dev/null || echo "(no .ko produced)"
-    file /work/vms.ko /work/vmsfs.ko 2>/dev/null || true
+    file /work/vms.ko 2>/dev/null || true
   '
 echo "== done; artifacts + logs in $WORK =="

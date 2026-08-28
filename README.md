@@ -23,8 +23,8 @@ where the split falls.
   with FAB/RAB/NAM/XAB interface
 - **Logical Name Manager** — Hierarchical name tables with daemon (`vmslnmd`)
 - **VMS Filesystem** — Path translation, file versioning, ODS-2 protection bits
-- **Kernel Modules** — `vms.ko` (access control, ASTs, event flags, locks) and
-  `vmsfs.ko` (VMS filesystem)
+- **Kernel Module** — `vms.ko` (the VMS executive: access control, ASTs, event
+  flags, locks, and the Files-11 ODS-2 ACP)
 - **Freestanding Syscall Layer** — `libvmssys` runs without glibc (x86_64 + aarch64)
 - **Bootable Distro** — Static musl binaries, initramfs, QEMU boot
 - **Multi-User SSH** — `vms_login`, SYSUAF authentication, `sshd` integration

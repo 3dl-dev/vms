@@ -88,7 +88,7 @@
 
 /*
  * Read the vmsfs volume label from `backing`'s home block (block 1). The
- * on-disk format is src/kernel/vmsfs/vmsfs_ondisk.h's struct vmsfs_home_block:
+ * on-disk format is src/vmsfs/include/vmsfs_ondisk.h's struct vmsfs_home_block:
  * hb_magic at offset 0, the space-padded hb_volname[12] at offset 64. On
  * success writes the trimmed, NUL-terminated label to `out` and returns 0; on
  * any read / magic / format problem returns -1 with errno set (0 for a format

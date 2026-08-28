@@ -4,18 +4,19 @@
 #
 # WHAT THIS PROVES
 # ----------------
-# drivers/ovmx/ is a MENU, not a hard-coded {vms,vmsfs} pair: adding an OVMX
+# drivers/ovmx/ is a MENU, not a hard-coded module list (vms-165 retired the
+# vmsfs module, leaving vms as the sole real one): adding an OVMX
 # kernel module is exactly {a new drivers-ovmx/<mod>/ subdir + a Kconfig stanza
 # + a CONFIG_OVMX_<MOD>=m flag}, and the new module then inherits the in-tree
 # build (intree=Y) + auto-signing WITHOUT any edit to the overlay script, the
 # generated Kconfig/Makefile, or the Dockerfile harvest/sign loops.
 #
 # This gate runs the REAL overlay-ovmx-drivers.sh against a fabricated kernel
-# tree, TWICE: once with the two real modules, and once with a hypothetical
-# third module `ovmxdemo` dropped in as {subdir + Kconfig + Kbuild + sources.
+# tree, TWICE: once with the real module(s), and once with a hypothetical
+# extra module `ovmxdemo` dropped in as {subdir + Kconfig + Kbuild + sources.
 # conf} only. It asserts the demonstrator is discovered and fully wired (Kconfig
 # sourced, Makefile obj- line, sources flattened) with the overlay script byte-
-# for-byte unchanged -- i.e. the pattern is generic, not two special cases.
+# for-byte unchanged -- i.e. the pattern is generic, not a set of special cases.
 #
 # It is a hermetic source/wiring proof: NO kernel build, NO Docker, NO QEMU
 # (the real intree=Y + signed proof on the shipped modules is the boot-time
@@ -62,7 +63,7 @@ for kb in "$SCAFFOLD"/*/Kbuild; do
     [ -n "$sym" ];           chk "module '$mod' Kconfig declares a config OVMX_* symbol ($sym)" $?
     real_mods=$((real_mods + 1))
 done
-[ "$real_mods" -ge 2 ]; chk "scaffold has the two baseline modules (vms, vmsfs)" $?
+[ "$real_mods" -ge 1 ]; chk "scaffold has the baseline module (vms; vms-165 retired vmsfs)" $?
 
 # --- build a fabricated kernel tree the overlay will accept ------------------
 make_ktree() {
@@ -74,7 +75,7 @@ make_ktree() {
 }
 
 # --- (1) BASELINE: overlay the real scaffold, unmodified ---------------------
-echo "--- baseline overlay (real two modules) ---"
+echo "--- baseline overlay (real module: vms) ---"
 KT1="$WORK/kt-baseline"
 make_ktree "$KT1"
 if bash "$OVERLAY" "$KT1" "$SRC_ROOT" > "$WORK/ov1.log" 2>&1; then
@@ -85,14 +86,11 @@ fi
 [ -f "$KT1/drivers/ovmx/Kconfig" ];  chk "baseline: drivers/ovmx/Kconfig generated" $?
 [ -f "$KT1/drivers/ovmx/Makefile" ]; chk "baseline: drivers/ovmx/Makefile generated" $?
 grep -q 'source "drivers/ovmx/vms/Kconfig"'   "$KT1/drivers/ovmx/Kconfig"; chk "baseline: vms sourced in menu"   $?
-grep -q 'source "drivers/ovmx/vmsfs/Kconfig"' "$KT1/drivers/ovmx/Kconfig"; chk "baseline: vmsfs sourced in menu" $?
 grep -q 'obj-$(CONFIG_OVMX_VMS)'   "$KT1/drivers/ovmx/Makefile"; chk "baseline: vms obj- line generated"   $?
-grep -q 'obj-$(CONFIG_OVMX_VMSFS)' "$KT1/drivers/ovmx/Makefile"; chk "baseline: vmsfs obj- line generated" $?
 grep -q 'drivers/ovmx/Kconfig' "$KT1/drivers/Kconfig"; chk "baseline: drivers/ovmx wired into kernel drivers/Kconfig" $?
 grep -q 'obj-$(CONFIG_OVMX)'    "$KT1/drivers/Makefile"; chk "baseline: drivers/ovmx wired into kernel drivers/Makefile" $?
-# Sources actually flattened (a .c that must exist for each real module).
+# Sources actually flattened (a .c that must exist for the real module).
 [ -f "$KT1/drivers/ovmx/vms/vms_module.c" ];   chk "baseline: vms sources flattened (vms_module.c)"     $?
-[ -f "$KT1/drivers/ovmx/vmsfs/vmsfs_super.c" ]; chk "baseline: vmsfs sources flattened (vmsfs_super.c)"  $?
 # Byte-identical hash of the overlay script, captured for the tamper check below.
 OVERLAY_SHA_BEFORE=$(sha256sum "$OVERLAY" | awk '{print $1}')
 
@@ -114,14 +112,15 @@ EOF
 # drivers-ovmx and sources as <repo>/<glob>, so lay the scratch repo out to match.
 cp "$OVERLAY" "$WORK/repo/distro/kernel/overlay-ovmx-drivers.sh"
 cp -r "$SCAFFOLD2" "$WORK/repo/distro/kernel/drivers-ovmx"
-# The scratch repo carries the REAL vms/vmsfs sources so those two modules still
-# flatten (the overlay fails a module whose sources.conf glob matches 0 files);
-# the demo adds its own src/ovmxdemo/ alongside. src/vmsfs is required because
-# vmsfs's sources.conf stages the genuine ODS-2 codec from src/vmsfs/ods2/ + the
-# public header src/vmsfs/include/vmsfs/ods2.h (rd vms-4a8) -- the SAME trees the
-# real distro/Dockerfile.bootable kernel-build stage now COPYs into its overlay
-# context. Without it the codec glob matches nothing and the overlay's
-# zero-match-glob guard (correctly) aborts.
+# The scratch repo carries the REAL vms module sources so it still flattens
+# (the overlay fails a module whose sources.conf glob matches 0 files); the demo
+# adds its own src/ovmxdemo/ alongside. src/vmsfs is required because the vms
+# module's sources.conf stages the genuine ODS-2 codec from src/vmsfs/ods2/ +
+# the public header src/vmsfs/include/vmsfs/ods2.h (rd vms-4a8/vms-5f0 -- the ACP
+# codec compiled into vms.ko) -- the SAME trees the real
+# distro/Dockerfile.bootable kernel-build stage COPYs into its overlay context.
+# Without it the codec glob matches nothing and the overlay's zero-match-glob
+# guard (correctly) aborts.
 cp -r "$SRC_ROOT/src/kernel"      "$WORK/repo/src/kernel"
 cp -r "$SRC_ROOT/src/kernel-core" "$WORK/repo/src/kernel-core"
 cp -r "$SRC_ROOT/src/vmsfs"       "$WORK/repo/src/vmsfs"
@@ -163,9 +162,8 @@ grep -q 'source "drivers/ovmx/ovmxdemo/Kconfig"' "$KT2/drivers/ovmx/Kconfig"; ch
 grep -q 'obj-$(CONFIG_OVMX_OVMXDEMO)' "$KT2/drivers/ovmx/Makefile";           chk "demo: ovmxdemo obj- line generated in Makefile" $?
 [ -f "$KT2/drivers/ovmx/ovmxdemo/ovmxdemo_main.c" ];                          chk "demo: ovmxdemo sources flattened into module dir" $?
 [ -f "$KT2/drivers/ovmx/ovmxdemo/Kbuild" ];                                   chk "demo: ovmxdemo Kbuild staged" $?
-# The two real modules are STILL wired alongside it (additive, not replaced).
+# The real module is STILL wired alongside it (additive, not replaced).
 grep -q 'source "drivers/ovmx/vms/Kconfig"'   "$KT2/drivers/ovmx/Kconfig"; chk "demo: vms still wired alongside" $?
-grep -q 'source "drivers/ovmx/vmsfs/Kconfig"' "$KT2/drivers/ovmx/Kconfig"; chk "demo: vmsfs still wired alongside" $?
 
 # --- negative: a subdir with NO Kbuild is not a module (isn't picked up) ------
 echo "--- negative: a non-module subdir is ignored ---"

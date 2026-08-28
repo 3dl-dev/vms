@@ -30,9 +30,9 @@ cd build && ctest --output-on-failure
 cmake -B build-static -DCMAKE_C_COMPILER=musl-gcc -DOVMX_STATIC=ON -DBUILD_TOOLS=ON
 cmake --build build-static -j$(nproc)
 
-# Kernel modules (need kernel headers)
+# Kernel module (needs kernel headers). vms.ko is the VMS executive; it carries
+# the Files-11 ODS-2 ACP (the legacy vmsfs.ko VFS driver was retired, vms-165).
 make -C src/kernel
-make -C src/kernel/vmsfs
 
 # QEMU kernel-module tests
 tests/qemu/run_tests.sh

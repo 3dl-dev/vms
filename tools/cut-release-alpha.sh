@@ -33,7 +33,7 @@
 #                      co-release gate exists to do for an Alpha-carrying cut.
 #
 # DELIBERATELY OUT OF SCOPE HERE (INV-6 honesty -- never claim an artifact is
-# more built than it is): the Alpha executive kernel modules vms.ko + vmsfs.ko.
+# more built than it is): the Alpha executive kernel module vms.ko.
 # Unlike the cross-compiled static ELF images above (naturally byte-reproducible,
 # no embedded wall-clock -- the same property that lets cut-release-vax.sh ship
 # its images with no SOURCE_DATE_EPOCH handling), the Linux/Alpha modules go

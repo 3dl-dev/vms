@@ -202,10 +202,10 @@
 # libvmssys and vmsdcl alongside kernel/ when it checks that every anchor still
 # matches.
 #
-# vmsfs.ko (src/kernel/vmsfs/, and the two suites that drive it) is NOT an
-# executive facility and is NOT covered here. See scope_* below: that exclusion
-# is now DECLARED and CHECKED rather than falling out of a glob, because an
-# implicit narrowing is how a gate quietly stops meaning what its title says.
+# (vms-165: the vmsfs.ko VFS driver -- a SEPARATE filesystem module, not an
+# executive facility -- was retired, its ODS-2 paths folded into the executive
+# Files-11 ACP in vms.ko which this gate DOES cover. The scope_* declarations
+# below, which used to exclude vmsfs.ko's suites, are now empty -- see them.)
 #
 # `coverage` turns "every facility has a control" into a mechanical check at
 # THREE granularities -- translation unit, suite, and individual defect -- so
@@ -525,9 +525,7 @@ tcpip-ftp-get-length-dropped
 bgsock-recv-length-zeroed
 bgsock-poll-always-ready
 bgsock-getname-addr-zeroed
-vmsfs-mountvis-crossproc-resolve-disabled
 initialize-home-magic-not-written
-ods2-read-content-vbn
 dirlogical-compose-drops-common-member
 dcl-acp-search-fid-fabricated
 loginout-acp-auth-from-ods2
@@ -538,69 +536,26 @@ multiuser-stage-shared-not-peruser"
 #
 # The item's title is "every wired EXECUTIVE facility". These two declarations
 # say exactly what that set is and what it is not, so the coverage PASS line
-# cannot be read as a broader claim than it makes. Round 1 got this wrong by
-# omission: `coverage` globbed src/kernel/*.c only, which silently left
-# test_kmod_vmsfs and test_kmod_vmsfs_blkdev -- 2 of the 13 derived suites --
-# never proven capable of going red, while printing a PASS a reader would
-# reasonably take as covering the whole harness.
+# cannot be read as a broader claim than it makes.
 #
-# test_kmod_vmsfs_exepath (rd vms-00e) joins them for the same reason: it
-# mounts vmsfs and reads /proc/<pid>/exe and /proc/<pid>/fd/<n>, and never
-# opens /dev/vms. Its own red/green control is a vmsfs.ko mutation, not an
-# executive one -- it was measured failing 3 phases against the pre-fix
-# ->d_revalidate and passing 28/28 against the fixed one.
-#
-# test_kmod_vmsfs_rename (rd vms-8b3) joins them for the same reason: it
-# mounts a block-device vmsfs volume and exercises rename(2), whose own
-# red/green control is a vmsfs.ko mutation (vmsfs_blkdev_rename present vs.
-# absent), never an executive one -- it opens no /dev/vms and reaches no
-# vms_kif entry point.
-#
-# test_kmod_vmsfs_readdir (rd vms-93a) joins them for the same reason: it
-# mounts a BACKING-DIRECTORY (overlay) vmsfs volume and, from a separate
-# process, iterates the directory and opens a child by name. Its own
-# red/green control is a vmsfs.ko mutation (vmsfs_iterate_shared honouring
-# ctx->pos vs. re-scanning the backing dir from 0 every getdents()), never an
-# executive one -- it opens no /dev/vms and reaches no vms_kif entry point.
-#
-# SCOPE_OUT_UNIT_DIRS   directories under src/ whose .c files are NOT executive
-#                       translation units. Files there must NOT be named by any
-#                       defect (a control there would mean the scope statement
-#                       is wrong, not that coverage improved).
-# SCOPE_OUT_SUITES      derived tests/qemu suites with no facility control.
+# vms-165: the ONLY members of these scope-out sets were the vmsfs.ko VFS
+# driver's own suites (test_kmod_vmsfs*, which drove a SEPARATE filesystem
+# module, not an executive facility) and its src/kernel/vmsfs translation-unit
+# directory. The vmsfs VFS driver was retired (its ODS-2 code paths moved into
+# the executive Files-11 ACP in vms.ko, which THIS gate does cover), so those
+# suites and that directory no longer exist and both sets are now empty. There
+# is no longer any derived suite that is executive-independent, so nothing needs
+# scoping out.
 # ---------------------------------------------------------------------------
-SCOPE_OUT_UNIT_DIRS="kernel/vmsfs"
-SCOPE_OUT_SUITES="test_kmod_vmsfs test_kmod_vmsfs_blkdev test_kmod_vmsfs_exepath test_kmod_vmsfs_rename test_kmod_vmsfs_readdir test_kmod_vmsfs_sysgroup"
+SCOPE_OUT_UNIT_DIRS=""
+SCOPE_OUT_SUITES=""
 
 scope_out_why() {
     cat <<'EOF'
-vmsfs.ko is a SEPARATE kernel module with its own Makefile, its own
-insmod in init.sh and its own /proc/filesystems registration. It is a
-filesystem driver, not a facility of the executive: nothing in it is
-reached through /dev/vms, it exports no vms_kif entry point, and
-src/kernel/vms_module.c dispatches no ioctl to it. CI job 3c already
-treats it as independent -- in the executive-absent negative control
-vmsfs's suites are the ones REQUIRED to keep passing, precisely because
-they do not depend on the executive. Injecting an executive defect
-therefore cannot turn them red, and a control that could would be
-testing vmsfs, not the executive.
-CONSEQUENCE, STATED PLAINLY: this gate proves nothing about vmsfs.ko.
-These vmsfs suites are covered by CI job 3c, not by this one.
-
-test_kmod_vmsfs_sysgroup (vms-581, added by #284/#272) is here for exactly
-this reason and was added to SCOPE_OUT_SUITES by vms-6c6: the property it
-proves -- the System-category SOGW decision (UIC group <= MAXSYSGROUP) that
-lets a SYSTEM session create in a system-group directory -- is decided
-entirely inside vmsfs.ko's vmsfs_blkdev_permission() (src/kernel/vmsfs/,
-SCOPE_OUT_UNIT_DIRS above). It is reached through the VFS open(2) path, not
-through /dev/vms; no userspace consumer mirrors the decision (the create is
-a raw open(2), never sys$create/RMS), so the only control that could redden
-it is a kernel/vmsfs mutation -- which SCOPE_OUT_UNIT_DIRS forbids precisely
-because it would be testing vmsfs, not the executive. Its sibling
-test_kmod_vmsfs_mountvis (vms-8b6) is NOT scope-out: its cross-process
-resolution lives in a userspace library (src/vmsfs/vmsfs_device.c), a
-targetable product-half consumer of the kernel mount table, so vms-6c6
-anchors it with a real control instead.
+(none) -- vms-165 retired the vmsfs.ko VFS driver, which owned the only
+executive-independent suites this gate scoped out. Every derived suite now
+exercises an executive facility (the vms.ko lock manager / ASTs / event flags /
+access modes / Files-11 ACP), so there is nothing to declare out of scope.
 EOF
 }
 
@@ -5877,34 +5832,18 @@ EOF
         esac;;
 
     # -------------------------------------------------------------------
-    # vms-6c6: two suites #284/#272 (vms-8b6, vms-cf62) left with NO
-    # per-facility negative control -- the same coverage-gate hole
-    # vms-6d6/#293 closed for the lnm search-list suites. Baselined before
-    # this change: `coverage` named both in "NAMED BY NO defect's suites_red"
-    # and "in-scope suite(s) with NO anchor at all". The THIRD suite in that
-    # baseline, test_kmod_vmsfs_sysgroup, is NOT anchored here: its property
-    # (the System-category SOGW decision) lives entirely in vmsfs.ko
-    # (kernel/vmsfs, SCOPE_OUT_UNIT_DIRS), which this executive gate declares
-    # out of scope, so it is moved to SCOPE_OUT_SUITES with its siblings --
-    # see the scope_out_why note and the vms-6c6 rd trail.
+    # vms-6c6 / vms-165: the two vms-8b6/#284 cross-process mount-visibility
+    # controls (vmsfs-mountvis-crossproc-resolve-disabled) and the
+    # kernel-resident ODS-2 content read control (ods2-read-content-vbn) were
+    # RETIRED with the vmsfs VFS driver: their anchor suites
+    # (test_kmod_vmsfs_mountvis, test_kmod_ods2_codec) are deleted, and the
+    # mount-visibility path they exercised is moot now that no unit can mount as
+    # a `vmsfs' type. The genuine ODS-2 content-read correctness is still
+    # POSITIVELY proven by the surviving test_syssvc_acp_* suites (acp_rw /
+    # acp_search read [OVMXDIR]HELLO.TXT through the executive ACP and byte-
+    # compare against the committed golden); re-adding an explicit fault-injection
+    # facility control anchored to those ACP suites is a tracked follow-up.
     # -------------------------------------------------------------------
-
-    vmsfs-mountvis-crossproc-resolve-disabled)
-        case "$_f" in
-        facility)     echo "cross-process device-mount VISIBILITY -- the executive/system-wide resolution of a MOUNTed unit through the kernel's own mount table (vmsfs_device_resolve_executive, src/vmsfs/vmsfs_device.c, vms-8b6). A VMS mount is EXECUTIVE state: a unit MOUNTed by one process must resolve for a SEPARATE process (an exec'd AUTHORIZE.EXE, SYSGEN.EXE, any RUN'd image). The per-process device_table cannot carry that, so a table miss consults /proc/mounts -- the kernel's own mount table, global and cross-process. This is the userspace consumer of that executive-owned state (the same product-half class as the devtab/rms translation entries, INV-6), not a vms.ko-dispatched ioctl.";;
-        targets)      echo "vmsfs/vmsfs_device.c";;
-        suites_red)   echo "test_kmod_vmsfs_mountvis";;
-        blind_suites) echo "";;
-        blind_why)    echo "";;
-        isolation)    echo "isolated";;
-        why)          echo "vmsfs_device_resolve_executive() stops consulting the kernel mount table on a per-process device_table miss: the guard \`if (!mount_table_has(mp))\` is forced true (\`if (1 || !mount_table_has(mp))\`), so every dynamically-MOUNTed unit resolves SS\$_NOSUCHDEV for a process that did not itself mount it -- the exact per-process view vms-8b6 converted away from. DCL.EXE (a separate process) can no longer resolve DKA100: mounted by the test process and falls back to the system disk, where the volume's distinctive HELLO.TXT does not exist. DKA0: never reaches this path (seeded into device_table at startup), so every suite that only touches the system disk stays green; the unmounted-unit negative control (DKA200:) still returns NOSUCHDEV, so nothing is fabricated. One guard forced true.";;
-        require_fail) cat <<'EOF'
-cross-process: DCL resolves DKA100: (mounted by another process) and reads HELLO.TXT off it -- the mounted unit is visible and readable
-EOF
-                      ;;
-        knock_on_fail) echo "";;
-        knock_on_why)  echo "";;
-        esac;;
 
     initialize-home-magic-not-written)
         case "$_f" in
@@ -5917,23 +5856,6 @@ EOF
         why)          echo "format_volume() writes the vmsfs home block to LBN 1 of the resolved backing device with \`hb.hb_magic = VMSFS_HOME_MAGIC;\`. The mutation zeroes it (\`hb.hb_magic = 0;\`), so INITIALIZE still exits 0 (the block is written and its checksum recomputed over it) but the REAL device carries NO valid home block -- it reports success while the store is unformatted, the exact fake-success class vms-cf62 exists to kill. Only the A/B \"after INITIALIZE the backing device carries a home block\" assertion reads hb_magic and reddens; the label field is still written correctly (the volname assertion stays green), the command's own rc stays 0, and the BOGUS999: honest-failure negative control is untouched. One constant zeroed.";;
         require_fail) cat <<'EOF'
 after INITIALIZE, the REAL backing device carries a vmsfs home block
-EOF
-                      ;;
-        knock_on_fail) echo "";;
-        knock_on_why)  echo "";;
-        esac;;
-
-    ods2-read-content-vbn)
-        case "$_f" in
-        facility)     echo "genuine ODS-2 codec, kernel-resident CONTENT read (ods2_bdev_read_file over the block-backed reader compiled into vmsfs.ko's ods2ro presentation, rd vms-dcd)";;
-        targets)      echo "vmsfs/ods2/ods2_path.c";;
-        suites_red)   echo "test_kmod_ods2_codec";;
-        blind_suites) echo "";;
-        blind_why)    echo "";;
-        isolation)    echo "isolated";;
-        why)          echo "ods2_bdev_read_file()'s per-extent loop reads each of a file's data blocks at its retrieval-pointer LBN (ext->lbn + k). The mutation reads ext->lbn + k + 1 -- one block too far -- so the KERNEL-RESIDENT codec returns the WRONG content bytes for [OVMXDIR]HELLO.TXT, while its length, its INDEXF.SYS header/FID lookup and the directory walk (all different code paths) stay correct: mount, both directory listings, stat size and read length all still pass. The read-back therefore differs from the COMMITTED golden (tests/ods2/ovmxdir_hello.golden, immune to this codec mutation because it is not regenerated from the codec), and ONLY the byte-identical assertion reddens. One wrong VBN in the content read.";;
-        require_fail) cat <<'EOF'
-BYTE-IDENTICAL: kernel-resident codec read == committed golden
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -6959,15 +6881,6 @@ apply_edit() {
         # no-op -- BROKEN FIXTURE, as selftest requires.
         sed -i 's@args.sin_addr   = sin->sin_addr.s_addr;     /\* NEGCTL bgsock-getname-addr-zeroed \*/@args.sin_addr   = 0; /* NEGCTL bgsock-getname-addr-zeroed */@' "$_file";;
 
-    vmsfs-mountvis-crossproc-resolve-disabled)
-        # UNIQUE TEXT: vmsfs_device_resolve_executive's own /proc/mounts guard;
-        # `if (!mount_table_has(mp))` occurs once in the file. Forcing it true
-        # with `1 ||` makes every cross-process resolve of a MOUNTed unit return
-        # NOSUCHDEV. After substitution the guard reads
-        # `if (1 || !mount_table_has(mp))`, so a second apply finds no
-        # `if (!mount_table_has(mp))` left -- the no-op selftest requires.
-        sed -i 's|    if (!mount_table_has(mp))|    if (1 \|\| !mount_table_has(mp)) /* NEGCTL vmsfs-mountvis-crossproc-resolve-disabled */|' "$_file";;
-
     initialize-home-magic-not-written)
         # UNIQUE TEXT: the home-block magic write in format_volume
         # (`hb.hb_magic        = VMSFS_HOME_MAGIC;`) is the only occurrence of
@@ -6976,15 +6889,6 @@ apply_edit() {
         # `hb.hb_magic        = VMSFS_HOME_MAGIC;` is left -- the no-op selftest
         # requires.
         sed -i 's|hb.hb_magic        = VMSFS_HOME_MAGIC;|hb.hb_magic        = 0; /* NEGCTL initialize-home-magic-not-written */|' "$_file";;
-
-    ods2-read-content-vbn)
-        # UNIQUE TEXT: ods2_bdev_read_file()'s per-extent block read
-        # (`c->bv, ext->lbn + k,` -- the LBN argument to ods2_bdev_read_block)
-        # occurs once in ods2_path.c. Reading `ext->lbn + k + 1` returns the
-        # WRONG data block for a file's content while leaving length + metadata
-        # paths correct. After substitution no `c->bv, ext->lbn + k,` is left
-        # (now `+ k + 1,`) -- the no-op the idempotency selftest requires.
-        sed -i 's|c->bv, ext->lbn + k,|c->bv, ext->lbn + k + 1, /* NEGCTL ods2-read-content-vbn */|' "$_file";;
 
     acp-writevb-extend-alloc-offbyone)
         # UNIQUE TEXT: ods2_fh2_map_append()'s format-1 low-LBN word encode
@@ -7726,12 +7630,11 @@ cmd_selftest() {
         # DCL/vmsfs-facing manager built on top of the executive-resident
         # LNM$SYSTEM), and a target this function cannot see would be
         # reported as a dead anchor on every run.
-        # vmsfs is copied too (vms-6c6): vmsfs-mountvis-crossproc-resolve-disabled
-        # targets vmsfs/vmsfs_device.c -- the userspace mount-visibility library
-        # (a product-half consumer of the kernel mount table, same class as the
-        # vmsrms/vmsdcl entries above), which vmsdcl links but is its own
-        # translation unit under src/vmsfs. Without it that defect's anchor would
-        # be reported as a dead fixture on every run.
+        # vmsfs is copied too: several defects target genuine ODS-2 codec
+        # translation units under src/vmsfs (e.g. acp-writevb-extend-alloc-offbyone
+        # -> vmsfs/ods2/ods2_edit.c, and the vmsfs/vmsfs_translate.c control) --
+        # product-half sources the executive ACP + RMS consume. Without this copy
+        # those defects' anchors would be reported as dead fixtures on every run.
         # vmstcpip is copied too (vms-6c6): tcpip-ftp-get-length-dropped targets
         # vmstcpip/services/tcpip_client.h -- the shared TCP/IP client engine
         # header the DCL FTP/TELNET verbs ship (a product-half consumer of the

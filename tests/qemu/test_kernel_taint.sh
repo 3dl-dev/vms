@@ -26,18 +26,18 @@
 #
 #   1. GROUND-SOURCE NUMERIC MASK (the durable assertion). Boot the real runtime
 #      with the "ovmx.taintreport" boot flag set. PID 1 (ovmx_init.c's
-#      report_kernel_taint), AFTER loading vms.ko and vmsfs.ko, reads the actual
+#      report_kernel_taint), AFTER loading vms.ko, reads the actual
 #      /proc/sys/kernel/tainted and prints "%OVMX-I-TAINT, kernel taint mask =
 #      <N> (0x..)". We scrape <N> and FAIL if (N & 4096) [O] or (N & 8192) [E].
 #      This is not a log-string scrape: it is the kernel's own numeric taint
 #      state, read by the booted PID 1 from the real proc file after the real
 #      modules loaded. O and E are NEVER allowlisted. Any OTHER nonzero bit is
 #      failed too, unless it is in TAINT_ALLOWED_BITS below (empty today, since
-#      both modules are MODULE_LICENSE("GPL") built in-tree and signed, so a
+#      the vms.ko module is MODULE_LICENSE("GPL") built in-tree and signed, so a
 #      clean self-built kernel boots with mask 0).
 #
 #   2. STATIC modinfo on the SHIPPED artifacts (the exact regression
-#      discriminators, from the two predecessor gates). Extract vms.ko + vmsfs.ko
+#      discriminators, from the two predecessor gates). Extract vms.ko
 #      FROM the boot initramfs that actually boots and assert, on the bytes that
 #      boot: `modinfo -F intree` == "Y" (built in OUR tree -> modpost skips
 #      TAINT_OUT_OF_TREE) AND `modinfo -F signer` is non-empty with a PKCS#7
@@ -75,7 +75,7 @@ TAINT_O_BIT=4096      # bit 12, TAINT_OUT_OF_TREE  -- cleared by vms-934
 TAINT_E_BIT=8192      # bit 13, TAINT_UNSIGNED_MODULE -- cleared by vms-ff5
 
 # ALLOWLIST of taint bits that are genuinely unavoidable in this harness. EMPTY
-# today: both OVMX modules are GPL, built in-tree (vms-934) and signed (vms-ff5),
+# today: the OVMX module (vms.ko) is GPL, built in-tree (vms-934) and signed (vms-ff5),
 # so a clean self-built kernel boots with tainted == 0. O and E are NEVER added
 # here (they are the whole point of the untaint work). Any bit added MUST carry
 # an inline reason naming the source and why it is unavoidable, e.g.:
@@ -170,7 +170,7 @@ echo "Forbidden bits: O=$TAINT_O_BIT (out-of-tree), E=$TAINT_E_BIT (unsigned); a
 echo ""
 
 # --- (2) STATIC: modinfo intree=Y AND signed on the SHIPPED modules ----------
-echo "--- STATIC: modinfo intree + signature on the shipped vms.ko / vmsfs.ko ---"
+echo "--- STATIC: modinfo intree + signature on the shipped vms.ko ---"
 WORK=$(mktemp -d)
 if gzip -dc "$INITRD" | ( cd "$WORK" && cpio -idm 2>/dev/null ); then
     record "boot initramfs unpacked" 0
@@ -181,12 +181,13 @@ fi
 
 # DISCOVER every kernel module shipped in the boot initramfs and gate each one
 # (vms-bae: the drivers/ovmx/ home is a MENU, so a new OVMX module that ships in
-# the image must inherit this taint gate for free -- not just the two named
-# below). vms.ko + vmsfs.ko are ALSO asserted present explicitly as a floor, so
-# an empty/broken initramfs cannot silently pass.
+# the image must inherit this taint gate for free -- not just the one named
+# below). vms.ko is ALSO asserted present explicitly as a floor, so an
+# empty/broken initramfs cannot silently pass. (vms-165 retired vmsfs.ko; vms.ko
+# is the only OVMX module now.)
 mapfile -t SHIPPED_KOS < <(find "$WORK" -name '*.ko' | sort)
 record "at least one kernel module shipped in boot initramfs" $([ "${#SHIPPED_KOS[@]}" -gt 0 ] && echo 0 || echo 1)
-for req in vms vmsfs; do
+for req in vms; do
     find "$WORK" -name "${req}.ko" | grep -q .; record "${req}.ko present in boot initramfs (required)" $?
 done
 
@@ -219,7 +220,7 @@ fi
 
 # Boot to a captured console log, feeding CR to reach login (OPA0: waits for the
 # operator's RETURN). "ovmx.taintreport" tells PID 1 to read
-# /proc/sys/kernel/tainted after both modules load and print the numeric mask on
+# /proc/sys/kernel/tainted after the executive module loads and print the numeric mask on
 # the console as %OVMX-I-TAINT. loglevel=7 keeps the (best-effort) kernel taint
 # strings in play for corroboration; the numeric line is a userspace printf and
 # is unaffected by the console log level.
@@ -257,9 +258,9 @@ echo "$OUT" | tail -30
 echo "[... console truncated ...]"
 echo ""
 
-# Positive: the modules actually loaded (so a clean mask is meaningful).
-check "vms.ko loaded (executive attached)"   "$OUT" "%OVMX-I-EXEC" present
-check "vmsfs.ko loaded (ODS-2 disk mounted)" "$OUT" "%OVMX-I-MOUNTED" present
+# Positive: the executive actually loaded (so a clean mask is meaningful).
+check "vms.ko loaded (executive attached)"          "$OUT" "%OVMX-I-EXEC" present
+check "system disk mounted (Files-11 ACP in vms.ko)" "$OUT" "%OVMX-I-MOUNTED" present
 
 # THE DURABLE ASSERTION: the numeric mask, read from the real proc file by the
 # booted PID 1. Extract "%OVMX-I-TAINT, kernel taint mask = <N> ...".

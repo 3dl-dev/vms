@@ -48,12 +48,12 @@ echo "Sandbox: $SB"
 echo ""
 
 # ------------------------------------------------------------------ sandbox --
-mkdir -p "$SB/tests/qemu" "$SB/src/kernel/vmsfs" "$SB/tracking"
+mkdir -p "$SB/tests/qemu" "$SB/src/kernel" "$SB/tracking"
 cp "$ROOT"/tests/qemu/*.c        "$SB/tests/qemu/"  2>/dev/null
 cp "$ROOT"/tests/qemu/*.sh       "$SB/tests/qemu/"  2>/dev/null
 cp "$ROOT"/tests/qemu/facility_defects_floor.txt "$SB/tests/qemu/"
 cp "$ROOT"/src/kernel/*.c        "$SB/src/kernel/"  2>/dev/null
-cp "$ROOT"/src/kernel/vmsfs/*.c  "$SB/src/kernel/vmsfs/" 2>/dev/null
+# vms-165: src/kernel/vmsfs (the retired vmsfs VFS driver) no longer exists.
 
 MF="$SB/tests/qemu/facility_defects.sh"
 LIB="$SB/tests/qemu/facility_negctl_record.sh"

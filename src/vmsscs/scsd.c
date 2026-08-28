@@ -4210,6 +4210,20 @@ static int scsd_vc_peer_round2(enum scs_vc_event ev)
     return ev == SCS_VC_EV_ACK;
 }
 
+/*
+ * scsd_member_initiate_enabled - vms-d60 (rung-VC): is OVMX's member-role START
+ * INITIATE armed? The member-role umbrella flag OVMX_MCAST_SOLICIT (which also
+ * arms rung-0's directed-HELLO solicit), with OVMX_NO_START_INITIATE as the
+ * suppression sibling (guardrail idiom). Read fresh -- these are lab switches,
+ * not hot-path state. Absent the flag, OVMX never initiates and never takes the
+ * simultaneous-START ack-due path below, so the OVMX<->VAX wire is unchanged.
+ */
+static int scsd_member_initiate_enabled(void)
+{
+    return getenv("OVMX_MCAST_SOLICIT") != NULL &&
+           getenv("OVMX_NO_START_INITIATE") == NULL;
+}
+
 static int scsd_vc_ack_due(const struct peer_state *ps, int peer_round2_seen)
 {
     if (peer_round2_seen) {
@@ -4256,8 +4270,22 @@ static void scsd_vc_settle(const struct scsd_vc_ctx *ctx, struct peer_state *ps,
         ps->start_replied = 0;
         return;
     }
+    /* vms-d60 (rung-VC): the SIMULTANEOUS-START ack-due path. When two OVMX
+     * nodes both INITIATE round-0 START (member role), the FSM's Figure 2-7
+     * collision resolution reaches OPEN a step EARLY -- via the peer's round-1
+     * STACK (EV_STACK), returning SCS_VC_ACT_SEND_ACK -- NOT via the peer's
+     * round-2 ACK the default trigger (scsd_vc_peer_round2 == EV_ACK) waits for.
+     * That round-2 ACK never comes in the symmetric case, so start_acked never
+     * latched and the sequencer never ignited (rd vms-f3e rung-VC stall: VC=OPEN
+     * but start_acked=0). The FSM RETURNING SEND_ACK on the OPEN transition IS
+     * the round-2-ack-due signal here -- OVMX's ACK is the round-2, with no peer
+     * round-2 to order behind. GATED on the member-role flag so a real VAX
+     * (flag off, OVMX only reflects, reaches OPEN via the member's EV_ACK) is
+     * byte-identical. */
+    int collision_ack_due = (act == SCS_VC_ACT_SEND_ACK) &&
+                            scsd_member_initiate_enabled();
     if (ps->pb->vc_state == SCS_VC_OPEN && !ps->start_acked &&
-        scsd_vc_ack_due(ps, peer_round2_seen)) {
+        (scsd_vc_ack_due(ps, peer_round2_seen) || collision_ack_due)) {
         if (scsd_vc_emit(ctx, ps, SCS_VC_ACT_SEND_ACK)) {
             (*start_ack_sent)++;
             ps->start_acked = 1;
@@ -11688,8 +11716,7 @@ static void scsd_start_initiate_for_peer(struct scsd_rx *rx, struct peer_state *
     if (rx == NULL || ps == NULL || ps->pb == NULL || rx->vc_ctx == NULL) {
         return;
     }
-    if (!rx->do_connect || getenv("OVMX_MCAST_SOLICIT") == NULL ||
-        getenv("OVMX_NO_START_INITIATE") != NULL) {
+    if (!rx->do_connect || !scsd_member_initiate_enabled()) {
         return;
     }
     /* Only once the channel is verified (rung-0), and only from a fresh CLOSED

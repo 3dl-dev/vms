@@ -163,6 +163,44 @@ join against each other; a member-role initiator (solicit + first-START, both
 kill-switch-gated) must land before any two-node DLM round-trip is testable.
 This harness is the oracle that will prove each rung as it lands.
 
+## rung-VC landed (rd vms-d60, 2026-08-28)
+
+The member-role **0x41 START INITIATE** closes gap #2. Once the channel is up,
+OVMX now issues its OWN round-0 START off the main-loop tick
+(`scsd_start_initiate_for_peer`) instead of only reflecting a peer's — plus a
+companion fix: in the simultaneous-START collision both nodes reach VC OPEN via
+the peer's round-1 **STACK** (FSM action `SEND_ACK`), not the round-2 **ACK**
+the default latch waits for, so `scsd_vc_settle` now treats that `SEND_ACK` as
+round-2-ack-due (member-role-gated). Both under the same `OVMX_MCAST_SOLICIT`
+umbrella (`OVMX_NO_START_INITIATE` suppresses just the initiate).
+
+```bash
+SCSD_ENV="OVMX_MCAST_SOLICIT=1" tests/cluster/two-ovmx/run.sh 60                 # rung-VC
+SCSD_ENV="OVMX_MCAST_SOLICIT=1 OVMX_JOIN_SEQ=1" tests/cluster/two-ovmx/run.sh 60 # + sequencer
+```
+
+Proven on the harness:
+
+- **rung-VC complete:** both nodes reach `STARTTX (initiated)` → `STARTRX` →
+  `VCFSM STACK→ACK` → **VC OPEN + `start_acked=1`** (`SCSD-I-STARTDONE`,
+  `SCSD-I-VCOPEN`). `members_reached=1`.
+- **the join sequencer then FIRES** (`OVMX_JOIN_SEQ=1`) and climbs **5 of 8
+  steps**: SCS$DIRECTORY connect **accepted both ways** (`OWNDIRBOUND`),
+  MSCP$TAPE miss → MSCP$DISK lookup HIT → **MSCP$DISK connect accepted**
+  (`MSCPBOUND`), VMS$VAXcluster lookup HIT → **VC connect sent (step 7/8)**.
+- **next stall = the next rung:** it retransmits step 6/7 to `JOIN_RETX_MAX` —
+  the peer transport-accepts OVMX's VMS$VAXcluster VC connect but never sends
+  `ACCEPT_REQUEST` for a connect it did not itself solicit (`joiner=CONNECT
+  SENT, connected=no`). That is the **member-side VMS$VAXcluster accept /
+  add-member** rung — the next member-role item, not rung-VC.
+- **flag-off byte-identical:** re-run with the flag absent → only the multicast
+  HELLO beacon; **zero** `STARTTX`/`DIRHELLO`/`MCASTSOLICIT`, no new frames. The
+  merged OVMX↔VAX path is unperturbed (OVMX still only reflects a peer's START).
+
+So OVMX↔OVMX now completes rung-0 + rung-VC and drives the joiner choreography
+through MSCP$DISK; what remains before a two-node DLM round-trip is the
+member-side SYSAP-accept rung.
+
 ## Kill-switch discipline
 
 Any fix that this harness motivates for the OVMX↔OVMX path MUST follow the

@@ -191,16 +191,28 @@ done here).
 
 > **EXECUTED** on post-#803 main (rebased onto f7d59524). All of A–D done in one
 > pass; the move landed exactly as planned (the `exec_socket_t`-is-the-holder
-> refinement made `struct vms_bg_socket` disappear as predicted). **Proof (E) —
-> Linux leg GREEN host-light:** `make` in `src/kernel` compiled
-> `../kernel-core/vms_bg.o` + `vms_bg_pollfd.o`, MODPOST passed, and `vms.ko`
-> linked with **no undefined symbols** — i.e. the `exec_socket_*` Linux backend,
-> the core↔rind `vms_bg_ref_socket` boundary, and vms_module.c's dispatch all
-> resolve. **NetBSD cross-kmod leg (type-checks `vms_socket_netbsd.c`) and the
-> x86_64 QEMU bgsock negctls run in CI / on the rail** — no NetBSD src tree is
-> cached on the dev host and the rail egress is the vms-101 escalation, so the
-> NetBSD twin is *compiles-pending-cross-kmod*, not yet locally proven. Green-by-
-> SHA on the PR is the gate.
+> refinement made `struct vms_bg_socket` disappear as predicted). **Proof (E),
+> BOTH backends now ground-source proven:**
+> - **Linux `vms.ko` GREEN (host-light):** `make` in `src/kernel` compiled
+>   `../kernel-core/vms_bg.o` + `vms_bg_pollfd.o`, MODPOST passed, and `vms.ko`
+>   linked with **no undefined symbols** — the `exec_socket_*` Linux backend, the
+>   core↔rind `vms_bg_ref_socket` boundary, and vms_module.c's dispatch all resolve.
+> - **NetBSD/vax twin GREEN (reproduced locally with the exact CI toolchain +
+>   pinned NetBSD 10.1 syssrc):** `build-vms-module-vax.sh` compiled
+>   `vms_socket_netbsd.c` freestanding for **elf32-vax, -Werror, ILP32
+>   width-clean**, emitted an `elf32-vax` object, and relocatable-linked the
+>   15-TU module — "ALL PROOFS PASSED". This is the authoritative twin type-check
+>   (the amd64 `crosscompile.sh` gate is a narrower pre-ACP subset that, by design,
+>   excludes BOTH backend twins — blockdev and socket — so the vax full-module gate
+>   is where both twins are proven).
+>
+> **Finding while proving the vax leg:** the twin first `#include`d
+> `<sys/sockopt.h>`, which **does not exist in NetBSD** — `struct sockopt` +
+> `sockopt_init/setint/getint/destroy` live in `<sys/socketvar.h>` (already
+> included). Every other socket(9)/uio(9) KPI signature was verified against the
+> NetBSD 10.1 syssrc oracle and matched. Lesson: an LP64 amd64 gate that omits a
+> TU cannot stand in for the ILP32 vax gate that compiles it — ground-source the
+> compile, don't infer it from a sibling arch.
 
 Ordered, mechanical, on **post-combine main** after the #803 vmsfs-combine lands
 (rebase the branch first; the backends don't touch the deleted vmsfs trees). File

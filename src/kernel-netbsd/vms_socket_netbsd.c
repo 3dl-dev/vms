@@ -32,10 +32,11 @@
 #include <sys/atomic.h>
 #include <sys/proc.h>            /* curlwp */
 #include <sys/socket.h>
-#include <sys/socketvar.h>      /* struct socket, socreate/soclose/soconnect/... */
-#include <sys/protosw.h>        /* so_proto->pr_usrreqs */
+#include <sys/socketvar.h>      /* struct socket + socreate/soclose/soconnect/so*,
+                                 * AND struct sockopt + sockopt_init/setint/getint/
+                                 * destroy (NetBSD has no separate <sys/sockopt.h>) */
+#include <sys/protosw.h>        /* so_proto->pr_usrreqs (pr_sockaddr/pr_peeraddr) */
 #include <sys/uio.h>            /* struct uio, UIO_SETUP_SYSSPACE */
-#include <sys/sockopt.h>        /* struct sockopt, sockopt_* */
 #include <sys/errno.h>
 #include <netinet/in.h>         /* struct sockaddr_in, IPPROTO_TCP/IP */
 #include <netinet/tcp.h>        /* TCP_NODELAY */

@@ -1839,10 +1839,16 @@ static unsigned long sv_find_named(const struct ovmx_prod *p, const char *name);
  * __init_libc (drive_crtl_init) and before setup_producer_tls_over_crtl, whose
  * TLSDESC producers bias relative to the TP this establishes.
  *
- * (No-op unless a C-RTL producer is present, i.e. only the interp-driven musl
- * path; VAX/Alpha static images have AT_BASE==0 and take the no-C-RTL branch
- * (setup_symvec_tls), so this is compiled-in but never entered there — the
- * 3-way convergence gate {x86_64, VAX ILP32, Alpha LP64} proves that.)
+ * (No-op unless a C-RTL producer is present. Entered for BOTH the interp-driven
+ * musl path (x86_64, AT_BASE!=0) AND an AT_BASE==0 symbol-vector image whose
+ * graph contains DECC$SHR (the Alpha LP64 GCC-port image, vms-719) — the
+ * C-RTL-producer test in find_crtl_producer, not AT_BASE, selects it. A truly
+ * static image with NO C-RTL producer (VAX native; an OVMX-native Alpha image
+ * without DECC$SHR) takes the no-C-RTL branch (setup_symvec_tls) instead. This
+ * function is itself a further no-op when the executable carries no PT_TLS —
+ * the Alpha joint-e2e image (a trivial main) has none, so drive_crtl_init's
+ * __init_libc builds the bare musl TCB and this re-drive is skipped. The 3-way
+ * convergence gate {x86_64, VAX ILP32, Alpha LP64} covers all three paths.)
  *
  * The module .offset == tls_tp_size == ALIGN_UP(tls_memsz, tls_align) — the SAME
  * value LINK.EXE uses to compute an executable's LE/IE thread-pointer offsets
@@ -1950,12 +1956,36 @@ static unsigned long sv_find_named(const struct ovmx_prod *p, const char *name)
 	return 0;
 }
 
-/* The C-RTL producer is the one exporting musl's __init_libc bootstrap. */
+/* Find the musl C-RTL producer (DECC$SHR = whole-archived musl) in the loaded
+ * producer set, so its bootstrap can own the thread pointer + TCB. A producer
+ * is the C-RTL iff it exports musl's whole-archived bootstrap SURFACE — the
+ * TP/TCB entry points no OVMX library or plain shareable ever defines
+ * (__init_libc, and the TCB builders __copy_tls / __init_tp that vms-c07 drives).
+ *
+ * Detected by SURFACE, not by AT_BASE: an OVMX symbol-vector image binds
+ * DECC$SHR through .vms$sv (there is NO ELF PT_INTERP, so AT_BASE==0) exactly as
+ * a PT_INTERP image (AT_BASE!=0) does — the C-RTL is equally present in both, so
+ * the TLS-ownership decision keys on "is a musl C-RTL producer in the graph",
+ * never on the arch-dependent AT_BASE. This is what lets an AT_BASE==0 Alpha
+ * (LP64) LINK.EXE image whose graph contains DECC$SHR take the musl-owns-TP path,
+ * while a truly static image with no C-RTL producer (VAX native, an OVMX-native
+ * Alpha image without DECC$SHR) still falls to setup_symvec_tls. (vms-719)
+ *
+ * Keying on the whole surface — not on __init_libc alone — also makes the
+ * detection fail HONEST (INV-6): if a whole-archived musl producer is present
+ * but its __init_libc export is missing, it is still recognized as the C-RTL, so
+ * drive_crtl_init() dies with a clear %IMGACT undefined-symbol diagnostic rather
+ * than silently taking the TCB-less setup_symvec_tls branch and SIGSEGVing later
+ * on the first TP-relative errno access. */
 static struct ovmx_prod *find_crtl_producer(void)
 {
-	for (int i = 0; i < g_nprods; i++)
-		if (sv_find_named(&g_prods[i], "__init_libc"))
-			return &g_prods[i];
+	for (int i = 0; i < g_nprods; i++) {
+		struct ovmx_prod *p = &g_prods[i];
+		if (sv_find_named(p, "__init_libc") ||
+		    sv_find_named(p, "__copy_tls") ||
+		    sv_find_named(p, "__init_tp"))
+			return p;
+	}
 	return 0;
 }
 

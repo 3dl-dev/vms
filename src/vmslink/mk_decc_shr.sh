@@ -228,6 +228,17 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
 
     # Plain (non-decc$-decorated) names the decc$ filter above cannot catch,
     # each verified present by direct nm before being claimed here:
+    #   __init_libc -- musl's C-RTL bootstrap (programs the thread pointer, builds
+    #     the `struct pthread` TCB, sets the stack-guard canary + page size, makes
+    #     malloc usable). IMGACT's activation bootstrap resolves it BY NAME and
+    #     drives it (drive_crtl_init) so musl OWNS the TP + a valid TCB; the errno
+    #     slot it reaches through the TP is then writable. WITHOUT this export the
+    #     generic branch's FIRST universal (line ~535), IMGACT's find_crtl_producer
+    #     could not see DECC$SHR as the C-RTL producer on Alpha, so an activated
+    #     Alpha port image fell to the TCB-LESS setup_symvec_tls path and SIGSEGV'd
+    #     on musl's first TP-relative errno write (gap-5, vms-719). A plain C name;
+    #     "musl-internal", never DEC-C-RTL-decorated by the alpha cc1, so the ^decc$
+    #     enumeration above misses it exactly as it misses __copy_tls/__init_tp.
     #   __copy_tls / __init_tp -- musl-alpha's OWN TLS bootstrap entry points
     #     (plain C names; "musl-internal", not a recognized DEC C RTL surface
     #     name, so the cc1 does not decorate them). IMGACT's activation-time
@@ -235,7 +246,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     #     (x86_64/aarch64) DECC$SHR.
     #   ovmx_get_libc -- OVMX loader glue (ovmx_libc_stub.c), likewise a
     #     plain OVMX-original name never decorated.
-    VEC="$VEC,__copy_tls=PROCEDURE,__init_tp=PROCEDURE,ovmx_get_libc=PROCEDURE"
+    VEC="$VEC,__init_libc=PROCEDURE,__copy_tls=PROCEDURE,__init_tp=PROCEDURE,ovmx_get_libc=PROCEDURE"
 
     # stdin/stdout/stderr -- the C stdio stream FILE* objects, plain DATA names
     # the decc$ filter above cannot catch. The alpha cc1 does NOT decorate the

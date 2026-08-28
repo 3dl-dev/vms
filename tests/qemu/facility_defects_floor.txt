@@ -112,7 +112,7 @@
 # program-region bookkeeping foundation of the Option A in-process image
 # activation design (docs/design-in-process-activation.md Part II). The
 # first mutation targeting the new kernel/vms_p0.c, anchoring the new
-# test_kmod_p0 suite (VMS_IOCTL_P0_MAP/P0_UNMAP, reflected through
+# test_syssvc_p0 suite (VMS_IOCTL_P0_MAP/P0_UNMAP, reflected through
 # $GETJPI's new p0_base/p0_limit fields). See its own entry in
 # facility_defects.sh for what it covers and why.
 # Raised to 70 by vms-6ba's p1-map-not-recorded and p0-unmap-clears-p1 --
@@ -120,7 +120,7 @@
 # (same design). p1-map-not-recorded is the first mutation targeting the
 # new kernel/vms_p1.c (VMS_IOCTL_P1_MAP, mirroring p0-map-not-recorded's
 # shape on the new file); p0-unmap-clears-p1 targets vms_ioctl_p0_unmap()'s
-# own body (kernel/vms_p0.c) and anchors the new test_kmod_p1 suite's key
+# own body (kernel/vms_p0.c) and anchors the new test_syssvc_p1 suite's key
 # property, "P0 deleted on rundown, P1 survives", reflected through
 # $GETJPI's new p1_base/p1_limit fields. See their own entries in
 # facility_defects.sh for what each covers and why.

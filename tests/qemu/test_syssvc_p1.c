@@ -1,5 +1,5 @@
 /*
- * test_kmod_p1.c - P1 control-region persistence + the P0/P1 distinction
+ * test_syssvc_p1.c - P1 control-region persistence + the P0/P1 distinction
  * (vms-68f.ii, increment (ii) of the Option A in-process image activation
  * design, docs/design-in-process-activation.md Part II §A.1.1, §A.2.1).
  *
@@ -12,7 +12,7 @@
  *      reflected back through $GETJPI (struct vms_procinfo.p1_base/
  *      p1_limit) -- observable by the process itself AND by a different
  *      process reading this one's row (A-WRITES/B-READS, CLAUDE.md rule
- *      11), same discipline as test_kmod_p0.c.
+ *      11), same discipline as test_syssvc_p0.c.
  *   2. THE KEY FAITHFUL PROPERTY: "P0 deleted on rundown, P1 survives".
  *      A process registers BOTH a P1 extent and a P0 extent, then cycles
  *      P0 map/unmap repeatedly -- and P1 is unchanged by every single
@@ -40,7 +40,7 @@
  * Status values. SS$_NORMAL is 1 in $SSDEF on the reference lab (OpenVMS
  * VAX V7.3, VAX1). SS$_BADPARAM is this tree's existing
  * src/libvmssys/vms_errno.h value (20) -- not re-derived here, same
- * discipline test_kmod_p0.c uses for its own borrowed statuses.
+ * discipline test_syssvc_p0.c uses for its own borrowed statuses.
  */
 #define SS_NORMAL       1
 #define SS_BADPARAM     20
@@ -50,6 +50,13 @@
  * enough to mmap without fuss. Two separate windows so P0 and P1 extents
  * are never numerically confusable with each other. */
 #define WIN_SIZE        (4UL * 1024 * 1024)
+
+/* test_syssvc_* device-absent contract (vms-d40, ci.yml kernel-executive
+ * negative control): with no /dev/vms the executive is absent and there is
+ * nothing this suite can exercise or fabricate -- it MUST exit exactly 77
+ * (honest SKIP), never 0 and never a plain 1. Reachable only on the
+ * executive-absent rig; under a real /dev/vms the assertions below run. */
+#define EXIT_SKIP       77
 
 static int pass = 0, fail = 0;
 
@@ -70,10 +77,8 @@ struct cross_report {
 
 static int open_and_register(uint32_t *vms_pid)
 {
-    if (vms_kif_open() < 0) {
-        printf("  FAIL: cannot open /dev/vms (executive absent)\n");
-        return -1;
-    }
+    if (vms_kif_open() < 0)
+        return EXIT_SKIP;
     if (vms_kif_register(vms_pid) != SS_NORMAL) {
         printf("  FAIL: VMS_IOCTL_REGISTER rejected\n");
         return -1;
@@ -129,10 +134,16 @@ int main(void)
 
     signal(SIGPIPE, SIG_IGN);
 
-    printf("=== test_kmod_p1: P1 control-region persistence (vms-68f.ii) ===\n");
+    printf("=== test_syssvc_p1: P1 control-region persistence (vms-68f.ii) ===\n");
 
-    if (open_and_register(&my_vms_pid) < 0) {
-        printf("=== test_kmod_p1: %d passed, %d failed ===\n", pass, fail + 1);
+    int oar = open_and_register(&my_vms_pid);
+    if (oar == EXIT_SKIP) {
+        printf("=== test_syssvc_p1: 0 passed, 0 failed "
+               "(SKIPPED: no /dev/vms -- executive absent) ===\n");
+        return EXIT_SKIP;
+    }
+    if (oar < 0) {
+        printf("=== test_syssvc_p1: %d passed, %d failed ===\n", pass, fail + 1);
         return 1;
     }
 
@@ -265,6 +276,6 @@ cycle_p0:
     munmap(p1_win, WIN_SIZE);
 
     vms_kif_close();
-    printf("=== test_kmod_p1: %d passed, %d failed ===\n", pass, fail);
+    printf("=== test_syssvc_p1: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;
 }

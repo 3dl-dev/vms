@@ -1,5 +1,5 @@
 /*
- * test_kmod_pin.c - The executive cannot be removed while OVMX is running
+ * test_syssvc_pin.c - The executive cannot be removed while OVMX is running
  *
  * WHAT THIS PROVES (epic vms-6b8 / item vms-0ff)
  *
@@ -46,6 +46,13 @@
 
 #define SS_NORMAL 1
 
+/* test_syssvc_* device-absent contract (vms-d40, ci.yml kernel-executive
+ * negative control): with no executive present (vms.ko not loaded / no
+ * /dev/vms) this suite MUST exit exactly 77 (honest SKIP), never 0 and never
+ * a plain 1. Reachable only on the executive-absent rig; under a real
+ * /dev/vms the pin assertions below run for real. */
+#define EXIT_SKIP 77
+
 static int pass = 0, fail = 0;
 
 #define CHECK(cond, msg) do { \
@@ -69,17 +76,25 @@ static long read_refcnt(void)
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
-    printf("=== test_kmod_pin ===\n");
+    printf("=== test_syssvc_pin ===\n");
 
+    /* Read the module refcount BEFORE opening /dev/vms (the "held > base"
+     * assertion below depends on base excluding our own reference). An absent
+     * /sys/module/vms/refcnt means vms.ko is not loaded -- the executive is
+     * absent, so honest-SKIP (77) rather than fabricate a pin proof. */
     long base = read_refcnt();
+    if (base < 0) {
+        printf("=== test_syssvc_pin: 0 passed, 0 failed "
+               "(SKIPPED: vms.ko not loaded -- executive absent) ===\n");
+        return EXIT_SKIP;
+    }
     CHECK(base >= 0, "/sys/module/vms/refcnt is readable (vms.ko is loaded)");
-    if (base < 0)
-        return 1;
 
     int fd = open("/dev/vms", O_RDWR);
     if (fd < 0) {
-        printf("  FAIL: cannot open /dev/vms\n");
-        return 1;
+        printf("=== test_syssvc_pin: 0 passed, 0 failed "
+               "(SKIPPED: no /dev/vms -- executive absent) ===\n");
+        return EXIT_SKIP;
     }
 
     /* 1. The open descriptor must hold a module reference. */
@@ -144,6 +159,6 @@ int main(void)
 
     close(fd);
 
-    printf("=== test_kmod_pin: %d passed, %d failed ===\n", pass, fail);
+    printf("=== test_syssvc_pin: %d passed, %d failed ===\n", pass, fail);
     return fail == 0 ? 0 : 1;
 }

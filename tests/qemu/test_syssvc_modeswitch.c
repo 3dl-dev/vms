@@ -1,5 +1,5 @@
 /*
- * test_kmod_modeswitch.c - Access-mode transition + boundary enforcement
+ * test_syssvc_modeswitch.c - Access-mode transition + boundary enforcement
  * (vms-68f.iii, increment (iii) of the Option A in-process image
  * activation design, docs/design-in-process-activation.md Part II
  * §A.1.2, §A.1.3, §A.2.3).
@@ -64,6 +64,12 @@
  * suites' children can never collide if ever run concurrently. */
 #define C_GID   302
 #define C_UID   1003
+
+/* test_syssvc_* device-absent contract (vms-d40, ci.yml kernel-executive
+ * negative control): with no /dev/vms present the executive is absent and
+ * this suite MUST exit exactly 77 (honest SKIP), never 0 and never a plain 1.
+ * Reachable only on the executive-absent rig. */
+#define EXIT_SKIP   77
 
 static int pass = 0, fail = 0;
 
@@ -207,12 +213,12 @@ int main(void)
     void *p1region;
     size_t p1len = 4096;
 
-    printf("=== test_kmod_modeswitch ===\n");
+    printf("=== test_syssvc_modeswitch ===\n");
 
     if (vms_kif_open() < 0) {
-        printf("  FAIL: cannot open /dev/vms (executive absent)\n");
-        printf("=== test_kmod_modeswitch: 0 passed, 1 failed ===\n");
-        return 1;
+        printf("=== test_syssvc_modeswitch: 0 passed, 0 failed "
+               "(SKIPPED: no /dev/vms -- executive absent) ===\n");
+        return EXIT_SKIP;
     }
 
     memset(&reg, 0, sizeof(reg));
@@ -321,6 +327,6 @@ int main(void)
               "... and the mode is still USER after the refused IMAGE_RUNDOWN -- no door reaches Supervisor without the controlled transition");
     }
 
-    printf("=== test_kmod_modeswitch: %d passed, %d failed ===\n", pass, fail);
+    printf("=== test_syssvc_modeswitch: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;
 }

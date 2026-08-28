@@ -248,10 +248,9 @@ add_executable(vms_initialize
 )
 
 target_include_directories(vms_initialize PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/kernel/vmsfs
     ${CMAKE_SOURCE_DIR}/src/libvmssys
     ${VMS_INCLUDE_DIR}
-    ${VMS_FS_INCLUDE_DIR}   # vmsfs/ods2.h -- genuine ODS-2 writer (vms-6ef)
+    ${VMS_FS_INCLUDE_DIR}   # vmsfs_ondisk.h + vmsfs/ods2.h -- genuine ODS-2 writer (vms-6ef)
 )
 
 target_compile_definitions(vms_initialize PRIVATE
@@ -370,7 +369,7 @@ add_executable(vms_analyze
 )
 
 target_include_directories(vms_analyze PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/kernel/vmsfs
+    ${VMS_FS_INCLUDE_DIR}   # vmsfs_ondisk.h (relocated from src/kernel/vmsfs, vms-165)
 )
 
 target_compile_definitions(vms_analyze PRIVATE
@@ -394,15 +393,14 @@ install(TARGETS vms_analyze RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 # master dist/ovmx-distrib.img.  Per docs/design-vms-faithful-install.md §3.3
 # this is FACTORY tooling: it is NOT installed onto the media, keeps a plain
 # host name (no .EXE, no VMS name), and is never run at boot. Shares the single
-# format description in src/kernel/vmsfs/vmsfs_ondisk.h with INITIALIZE.EXE and
-# vmsfs.ko.
+# format description in src/vmsfs/include/vmsfs_ondisk.h (relocated there by
+# vms-165 when the vmsfs VFS driver was retired) with INITIALIZE.EXE.
 add_executable(vmsfs_master
     vmsfs_master.c
 )
 
 target_include_directories(vmsfs_master PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/kernel/vmsfs
-    ${VMS_FS_INCLUDE_DIR}   # vmsfs/ods2.h -- genuine ODS-2 writer/reader (vms-5eb R6-build)
+    ${VMS_FS_INCLUDE_DIR}   # vmsfs_ondisk.h + vmsfs/ods2.h -- genuine ODS-2 writer/reader (vms-5eb R6-build)
 )
 
 target_compile_definitions(vmsfs_master PRIVATE
@@ -479,8 +477,9 @@ add_executable(vms_mount_helper
 target_include_directories(vms_mount_helper PRIVATE
     ${VMS_INCLUDE_DIR}
     # readlabel (vms-f83) reads the vmsfs home block layout to pull the
-    # volume label MOUNT builds DISK$<label> from.
-    ${CMAKE_SOURCE_DIR}/src/kernel/vmsfs
+    # volume label MOUNT builds DISK$<label> from. vmsfs_ondisk.h relocated to
+    # src/vmsfs/include (vms-165).
+    ${VMS_FS_INCLUDE_DIR}
 )
 
 target_compile_definitions(vms_mount_helper PRIVATE

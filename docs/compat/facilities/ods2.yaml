@@ -7,13 +7,15 @@ vms_ref: "OpenVMS File System (ODS-2) documentation; Files-11 On-Disk Structure"
 scope_1_0: in
 plan_ref: vms-0f3
 summary: >
-  Two distinct surfaces: the OVMX runtime filesystem (vmsfs.ko — its own honestly-labeled
-  format, not byte-compatible) and a genuine Files-11 ODS-2 reader/writer for interop,
-  byte-exact-verified against a real OpenVMS VAX volume from lab-2. File versioning is
-  real and wired to DCL; COPY/CREATE has a versioning-semantics gap.
-last_reviewed: 2026-08-13
+  SYS$DISK is a genuine Files-11 ODS-2 volume read and written through the executive
+  ACP (in vms.ko), byte-exact-verified against a real OpenVMS VAX volume from lab-2.
+  (The former OVMX runtime filesystem — a separate vmsfs.ko VFS driver with its own
+  honestly-labeled non-byte-compatible format — was retired by vms-165 when the ACP
+  became the sole runtime SYS$DISK path.) File versioning is real and wired to DCL;
+  COPY/CREATE has a versioning-semantics gap.
+last_reviewed: 2026-08-27
 items:
-  - {id: vmsfs$runtime_fs, kind: subsystem, status: implemented, authenticity: real, vms: "OVMX runtime file system (vmsfs.ko) — the boot/runtime fs", evidence: src/kernel/vmsfs/vmsfs_ondisk.h, notes: "honestly own format (magic VMFS/VFH2), case-insensitive, versioned, SOGW-protected — NOT byte-compatible with real ODS-2 by design"}
+  - {id: vmsfs$runtime_fs, kind: subsystem, status: implemented, authenticity: real, vms: "SYS$DISK runtime file system — genuine Files-11 ODS-2 over the executive ACP", evidence: src/kernel-core/vmsfs_acp.c, notes: "vms-165 retired the legacy vmsfs.ko VFS driver (its own VMFS/VFH2 format); the runtime now reads/writes a real ODS-2 volume via $ASSIGN + IO$_ACCESS/READVBLK/WRITEVBLK through the ACP, with per-file SOGW protection enforced in acp_check_access"}
   - {id: ods2$reader, kind: feature, status: verified, authenticity: real, vms: "Files-11 L2 (ODS-2) volume reader", evidence: src/vmsfs/ods2/ods2_reader.c, verified_against: "real OpenVMS VAX V7.3 ODS-2 volume, tests/ods2/real_vax_ods2.dsk (see tests/ods2/PROVENANCE-real_vax_ods2.md)", notes: "byte-exact: home block, INDEXF.SYS, BITMAP.SYS, FH2 headers, FM2 retrieval pointers, directory listing"}
   - {id: ods2$writer, kind: feature, status: implemented, authenticity: real, vms: "Files-11 L2 (ODS-2) volume writer", evidence: src/vmsfs/ods2/ods2_writer.c, notes: "not yet oracle round-tripped; some fields are [OVMX-inferred] rather than VSI-doc-cited"}
   - {id: ods2$versioning, kind: feature, status: implemented, authenticity: real, vms: "File versioning (;N)", evidence: src/vmsrms/rms_core.c, notes: "rms_next_version; wired to DCL via dcl_filespec.c's resolve_version_suffix — bare names resolve to highest ;N"}

@@ -156,8 +156,9 @@ set_tests_properties(vmsrms_concealed_rooted PROPERTIES
 # (Part 2, composing on vms-d8e). Compiles dcl_disk_logical.c (the exact
 # helpers cmd_mount()/cmd_dismount() call) directly, so the DISK$ naming /
 # DEFINE / removal is exercised on the host against LNM$PROCESS, where ctest
-# runs and no /dev/vms exists. The full MOUNT -> mount(2) -> DISK$ path is the
-# paired positive in tests/qemu/test_mount_e2e.sh.
+# runs and no /dev/vms exists. The full MOUNT -> executive Files-11 ACP $MOUNT
+# -> DISK$ path is exercised end-to-end by the QA-cluster acceptance gate and
+# the sysboot proofs (vms-165 retired the old mount(2)-as-vmsfs test_mount_e2e).
 add_executable(test_disk_transparency
     test_disk_transparency.c
     ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_disk_logical.c

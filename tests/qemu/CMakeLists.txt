@@ -73,7 +73,8 @@ function(qemu_syssvc_add_test name source)
         ${CMAKE_SOURCE_DIR}/src/vmstcpip/sockets
         # vmsfs_ondisk.h -- test_syssvc_initialize.c (vms-cf62) reads the raw
         # home block off the backing device to prove INITIALIZE wrote it there.
-        ${CMAKE_SOURCE_DIR}/src/kernel/vmsfs
+        # (relocated to src/vmsfs/include by vms-165.)
+        ${CMAKE_SOURCE_DIR}/src/vmsfs/include
         # ovmx_image.h / ovmx_symvec.h -- the OVMX symbol-vector image format the
         # in-process resident-import-binding test constructs against (vms-db2).
         # imgact_prodreg.h (a libvms public header) includes ovmx_image.h, so any
@@ -594,27 +595,15 @@ set_tests_properties(cluster_params_recnx_e2e PROPERTIES
     TIMEOUT 900)
 
 # ---------------------------------------------------------------------------
-# MOUNT/DISMOUNT ARE REAL mount(2)/umount(2) (vms-651).
-#
-# Boots the ACTUAL mastered bootable image TWICE against a SECOND, real
-# virtio disk (formatted VMSFS on the host first -- see run_mount_e2e.sh):
-# MOUNT DKA100:, CREATE a real file on it, DISMOUNT, re-MOUNT, then a full
-# QEMU process restart against the SAME disk file, proving the file landed
-# on the disk and not a tmpfs. See tests/qemu/test_mount_e2e.sh's header for
-# the full ground-source shape. Same opt-in convention as parts_demo_e2e
-# above, for the same reason (a real docker+QEMU boot, real minutes, must
-# not tax a bare `ctest` run's time budget).
-add_test(
-    NAME mount_e2e
-    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_mount_e2e.sh
-)
-set_tests_properties(mount_e2e PROPERTIES
-    LABELS "slow;qemu-full-boot"
-    SKIP_RETURN_CODE 77
-    TIMEOUT 900)
+# (vms-165: the mount_e2e ctest was retired with the vmsfs VFS driver. It drove
+# run_mount_e2e.sh / test_mount_e2e.sh, which formatted a second disk as the
+# legacy VMSFS type and MOUNTed it via a real mount(2)-as-vmsfs -- the exact path
+# vms-481 replaced with the executive Files-11 ACP $MOUNT and vms-165 deleted the
+# driver for. DCL MOUNT/DISMOUNT of a second ODS-2 volume through the ACP is
+# exercised by the QA-cluster acceptance gate and the sysboot proofs instead.)
 
 # ---------------------------------------------------------------------------
-# PRODUCT INSTALL onto a real vmsfs volume (vms-df9).
+# PRODUCT INSTALL onto a real ODS-2 volume (vms-df9).
 #
 # Boots the actual mastered bootable image, MOUNTs a second real virtio disk
 # (formatted VMSFS on the host first, same as mount_e2e above), PRODUCT

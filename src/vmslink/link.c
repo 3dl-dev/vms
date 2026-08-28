@@ -3755,6 +3755,48 @@ static void evax_check_muldef(struct evax_input *in, int nin)
     free(tab);
 }
 
+/* True if NAME ends in "..<lowercase>+" — an EVAX companion label (the "..en"
+ * procedure entry / "..lk" linkage cells the compiler emits alongside the bare
+ * callable descriptor). mk_decc_shr's nm|awk enumeration dropped these
+ * (`name !~ /\.\.[a-z]+$/`); the dump below mirrors that. (vms-614) */
+static int evax_is_companion_label(const char *n)
+{
+    const char *dd = NULL, *p = n;
+    while ((p = strstr(p, "..")) != NULL) { dd = p; p += 2; }
+    if (!dd) return 0;
+    const char *tail = dd + 2;
+    if (!*tail) return 0;
+    for (const char *c = tail; *c; c++)
+        if (*c < 'a' || *c > 'z') return 0;
+    return 1;
+}
+
+/* vms-614: dump the DEFINED decc$ universals as seen by evax_read (the LINKER's
+ * own view), one `NAME=PROCEDURE|DATA` per line, for mk_decc_shr.sh to build the
+ * DECC$SHR symbol vector from. This replaces mk_decc_shr's `nm --defined-only`
+ * pipeline, whose BLIND SPOT is weak-alias EQUATES: musl's public `free` =
+ * weak_alias(__libc_free, free) is emitted by the alpha cc1 as an equate that
+ * nm does not report as a definition, so decc$free (and every alias-equate
+ * decc$ symbol) was silently dropped from the vector even though evax_read
+ * resolves it fine (a real program calling free() then hit %LINK-F-UNDEF). By
+ * enumerating from the same reader LINK.EXE links with, the whole class exports
+ * uniformly. Classify by is_proc, falling back to a real code entry (an aliased
+ * function's equate carries the code descriptor even if the EGSY NORM bit is not
+ * set on the alias). Callers dedup (sort -u); companion labels are dropped. */
+static void evax_dump_universals(struct evax_input *in, int nin)
+{
+    for (int i = 0; i < nin; i++)
+        for (int s = 0; s < in[i].obj.nsym; s++) {
+            const struct evax_symbol *y = &in[i].obj.sym[s];
+            if (!y->defined) continue;
+            const char *n = y->name;
+            if (strncmp(n, "decc$", 5) != 0) continue;
+            if (evax_is_companion_label(n)) continue;
+            int is_proc = y->is_proc || y->code_value != 0 || y->code_psindx != 0;
+            printf("%s=%s\n", n, is_proc ? "PROCEDURE" : "DATA");
+        }
+}
+
 static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
                              const char *transfer,
                              struct univ *uv, int nuniv,
@@ -4474,6 +4516,15 @@ int main(int argc, char **argv)
             }
         }
         if (nein == 0) die("no EVAX object members found in inputs");
+        /* vms-614: linker-view universal dump — list the DEFINED decc$ symbols
+         * evax_read resolves (weak-alias equates included), for mk_decc_shr.sh to
+         * build the symbol vector from, then stop before any emit. Runs after the
+         * inputs are read; the dummy --shareable/--symbol-vector/-o mk_decc_shr
+         * passes only satisfy earlier arg parsing and are never used. */
+        if (getenv("OVMX_LINK_DUMP_UNIVERSALS")) {
+            evax_dump_universals(ein, nein);
+            return 0;
+        }
         if (shareable) {
             if (executable)
                 die("specify at most one of --shareable / --executable");

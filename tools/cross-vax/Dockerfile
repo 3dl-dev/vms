@@ -30,6 +30,16 @@ ARG GCC_VERSION=13.3.0
 ARG NETBSD_VERSION=10.1
 ARG TARGET=vax--netbsdelf
 
+# SHA256 integrity pins for the GNU toolchain sources (mirrors #802/#804,
+# tools/cross-alpha-vms). binutils is now VENDORED (COPY'd below) so its build
+# step is HERMETIC -- a single ftp.gnu.org hiccup used to redden a from-scratch
+# gate (wget -> exit 4), and the fetch carried NO integrity check. gcc-13.3.0 is
+# 90MB (too big to vendor into git), so it stays a hardened fetch: GNU mirror
+# redirector first, ftp.gnu.org fallback, retries on each, SHA256-enforced. BOTH
+# tarballs are verified against these pins in EVERY case (== upstream GNU).
+ARG BINUTILS_SHA256=f6e4d41fd5fc778b06b7891457b3620da5ecea1006c6a4a41ae998109f85a800
+ARG GCC_SHA256=0845e9621c9543a13f484e94584a49ffc0129970e9914624235fc1d061a0c083
+
 # The NetBSD/vax sets (headers + libc + crt objects) come off the NetBSD CDN and
 # are the security-relevant download here, so they are SHA512-pinned from the
 # CDN's own published manifest:
@@ -73,9 +83,16 @@ RUN set -eux; \
 # ------------------------------------------------------------------
 # binutils for vax--netbsdelf. Build tree removed in-layer so only the install
 # (a few MB) persists.
+#
+# VENDORED (SHA256-pinned) tarball COPY'd into the image so this step needs NO
+# gnu.org fetch -- ftp.gnu.org flaking a from-scratch rebuild (wget -> exit 4) was
+# reddening VAX gates that have nothing to do with the toolchain sources. Mirrors
+# tools/cross-alpha-vms (#802/vms-8a06). The SHA256 is enforced regardless, so even
+# the vendored copy is integrity-verified.
 # ------------------------------------------------------------------
+COPY binutils-2.42.tar.xz /tmp/binutils-2.42.tar.xz
 RUN set -eux; cd /tmp; \
-    wget -q "https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VERSION}.tar.xz"; \
+    echo "${BINUTILS_SHA256}  binutils-${BINUTILS_VERSION}.tar.xz" | sha256sum -c -; \
     tar xf "binutils-${BINUTILS_VERSION}.tar.xz"; \
     mkdir build-binutils; cd build-binutils; \
     ../binutils-${BINUTILS_VERSION}/configure \
@@ -101,7 +118,9 @@ RUN set -eux; cd /tmp; \
 # libatomic's lock-based 8-byte ops give a correct atomic read on VAX.
 # ------------------------------------------------------------------
 RUN set -eux; cd /tmp; \
-    wget -q "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz"; \
+    { wget --tries=3 --timeout=30 -q "https://ftpmirror.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz" \
+      || wget --tries=3 --timeout=30 -q "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz"; }; \
+    echo "${GCC_SHA256}  gcc-${GCC_VERSION}.tar.xz" | sha256sum -c -; \
     tar xf "gcc-${GCC_VERSION}.tar.xz"; \
     mkdir build-gcc; cd build-gcc; \
     ../gcc-${GCC_VERSION}/configure \

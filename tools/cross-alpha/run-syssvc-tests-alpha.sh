@@ -15,8 +15,8 @@
 #     with plain gcc (src/vmsfs/ods2/* is fixed-width LE) -- real/search/imgact,
 #     plus a best-effort sysvol (needs product subject images; see below);
 #   * bakes a static C runner-init (test-init-syssvc-alpha.c -- no busybox on
-#     alpha, same reason ke-init-alpha.c is C) + the test binaries + vms.ko/
-#     vmsfs.ko into the kernel via INITRAMFS_SOURCE (clipper -initrd is
+#     alpha, same reason ke-init-alpha.c is C) + the test binaries + vms.ko
+#     into the kernel via INITRAMFS_SOURCE (clipper -initrd is
 #     unreliable), boots from initramfs so DKA0: is free for /ods2_real.img;
 #   * attaches the fixtures as virtio disks in DKA0:/100:/200:/300:/400: order
 #     (the executive enumerates virtio-blk into DK units at module init, exactly
@@ -51,8 +51,8 @@ mkdir -p "$WORK"
 log() { echo "[syssvc-alpha] $*"; }
 die() { echo "[syssvc-alpha] FATAL: $*" >&2; exit 1; }
 
-# The kernel tree + vms.ko/vmsfs.ko come from build-vmsko-alpha.sh (cached).
-if [ ! -f "$VMSKO_WORK/vms.ko" ] || [ ! -f "$VMSKO_WORK/vmsfs.ko" ] || [ ! -d "$VMSKO_WORK/linux-$KV" ]; then
+# The kernel tree + vms.ko come from build-vmsko-alpha.sh (cached).
+if [ ! -f "$VMSKO_WORK/vms.ko" ] || [ ! -d "$VMSKO_WORK/linux-$KV" ]; then
     log "executive modules/kernel not cached -- running build-vmsko-alpha.sh (~15 min)"
     WORK="$VMSKO_WORK" KV="$KV" "$HERE/build-vmsko-alpha.sh"
 fi
@@ -168,7 +168,6 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     $CC -static -O2 -Wall /tools/sh-subject-stub.c -o /work/sh-subject
     alpha-linux-gnu-strip /work/syssvc-init /work/sh-subject
     cp /vmsko/vms.ko /work/vms.ko
-    cp /vmsko/vmsfs.ko /work/vmsfs.ko
 
     echo "== assemble test initramfs list =="
     {
@@ -187,7 +186,6 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
       echo "file /init /work/syssvc-init 755 0 0"
       echo "file /bin/sh /work/sh-subject 755 0 0"   # live-process subject for showproc/procnam/delprc/startup_service
       echo "file /vms.ko /work/vms.ko 644 0 0"
-      echo "file /vmsfs.ko /work/vmsfs.ko 644 0 0"
       for f in /work/tests/test_*; do
         echo "file /tests/$(basename "$f") $f 755 0 0"
       done

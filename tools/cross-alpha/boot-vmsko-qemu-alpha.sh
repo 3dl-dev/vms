@@ -10,15 +10,15 @@
 # in-process-activation family) src/libvms/syssvc/sys_imgact.c).
 #
 # Depends on build-vmsko-alpha.sh having populated $WORK (the Linux/Alpha kernel
-# tree + Module.symvers + vms.ko/vmsfs.ko). This script:
+# tree + Module.symvers + vms.ko). This script:
 #   1. cross-compiles all 29 test_kmod_* suites for alpha -- the RAW-ioctl tier
 #      (plain gcc -static against vms_ioctl.h) and the vms_kif.h-linked tier
 #      (built against src/libvmssys/vms_kif.c + kif_transport_linux.c +
 #      vms_string.c + arch/alpha/syscall.S), exactly mirroring the two build
 #      recipes tests/qemu/Dockerfile uses for x86_64,
-#   2. stages the SAME fixtures tests/qemu/Dockerfile stages (the mkimage_vmsfs
-#      test image + the real-VAX ODS-2 fixture + its golden) so the loop-
-#      device-backed suites run for real, not skip,
+#   2. stages the SAME fixtures tests/qemu/Dockerfile stages (the real-VAX
+#      ODS-2 fixture + its golden) so the loop-device-backed suites run for
+#      real, not skip,
 #   3. embeds them + ke-init-alpha (PID 1) + the modules as a built-in
 #      initramfs (the proven path from boot-ovmx-qemu.sh -- qemu-system-alpha's
 #      -initrd on clipper is unreliable, so we bake it into vmlinux),
@@ -70,8 +70,9 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     mkdir -p /work/tests
 
     echo "== stage fixtures (mirrors tests/qemu/Dockerfile) =="
-    gcc -O2 -Wall -o /work/mkimage_vmsfs /repo/tests/qemu/mkimage_vmsfs.c -I/repo/src/kernel/vmsfs
-    /work/mkimage_vmsfs /work/tests/vmsfs_test.img
+    # vms-165 retired the legacy vmsfs VFS driver and its mkimage_vmsfs helper /
+    # vmsfs_test.img fixture; the surviving loop-backed suites use the genuine
+    # real-VAX ODS-2 fixture below.
     cp /repo/tests/ods2/real_vax_ods2.dsk /work/tests/ods2_real.img
     cp /repo/tests/ods2/ovmxdir_hello.golden /work/tests/hello.golden
 
@@ -113,9 +114,9 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     $CC -static -O2 -Wall /tools/ke-init-alpha.c -o /work/ke-init
 
     echo "== cross-compile DCL.EXE for alpha (CMake glibc-static toolchain) =="
-    # test_kmod_vmsfs_mountvis.c drives the REAL shipped DCL.EXE as a separate
-    # process to prove a mounted vmsfs unit resolves cross-process (it does not
-    # touch /dev/vms itself -- the mount-table read is the point). vmsdcl
+    # DCL.EXE is staged as the REAL shipped shell so cross-process suites can
+    # drive it (the SYS$DISK unit now resolves through the vms.ko Files-11 ACP,
+    # vms-165 -- not a legacy vmsfs mount). vmsdcl
     # already cross-builds clean for alpha (rd vms-fed/A3, build-libstack-
     # alpha.sh) via the SAME glibc alpha-linux-gnu toolchain + OVMX_STATIC=ON
     # this repo already proves static-links on Alpha (no musl-alpha exists,
@@ -146,8 +147,6 @@ dir /mnt 755 0 0
 dir /tmp 1777 0 0
 file /init /work/ke-init 755 0 0
 file /vms.ko /work/vms.ko 755 0 0
-file /vmsfs.ko /work/vmsfs.ko 755 0 0
-file /test_data/vmsfs_test.img /work/tests/vmsfs_test.img 644 0 0
 file /test_data/ods2_real.img /work/tests/ods2_real.img 644 0 0
 file /test_data/hello.golden /work/tests/hello.golden 644 0 0
 file /tests/DCL.EXE /work/tests/DCL.EXE 755 0 0

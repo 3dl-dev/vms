@@ -57,11 +57,12 @@ int main(void)
 
     printf("PROBE: init up\n");
     load_module("/vms.ko");
-    load_module("/vmsfs.ko");
     printf("PROBE: /dev/vms %s\n", access("/dev/vms", F_OK) == 0 ? "PRESENT" : "ABSENT");
 
-    int mrc = mount("/dev/vda", "/vms", "vmsfs", 0, NULL);
-    printf("PROBE: mounted /vms rc=%d errno=%d\n", mrc, mrc ? errno : 0);
+    /* vms-165: SYS$DISK is reached through the vms.ko Files-11 ODS-2 ACP (over
+     * /dev/vms), not a legacy `mount -t vmsfs`; the separate vmsfs.ko VFS driver
+     * is gone. This dev probe's raw /vms/... reads below predate the ACP cutover
+     * and are retained only as historical diagnostics. */
 
     /* (1a) vmsfs READ of SYSUAF */
     int fd = open("/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT", O_RDONLY);

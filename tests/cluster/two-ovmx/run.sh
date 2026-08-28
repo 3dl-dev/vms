@@ -27,9 +27,14 @@ docker build -f "$HERE/Dockerfile" -t "$IMAGE" "$REPO_ROOT"
 
 echo "[run] running harness (duration=${DURATION}s) -> $OUT_HOST"
 # Hard host-side timeout is a belt over the entrypoint's own guard.
+# Docker's default cap set already carries NET_RAW (AF_PACKET) but NOT NET_ADMIN
+# (bridge/veth create + the /sys multicast_snooping write); add it. We do NOT
+# --cap-drop ALL: that also strips CAP_DAC_OVERRIDE, and container-root then
+# cannot write the bind-mounted /out or the root-owned sysfs bridge knob. This
+# is still an unprivileged run (no --privileged, no /dev/net/tun).
 timeout $((DURATION + 120)) docker run --rm \
   --name "$NAME" \
-  --cap-drop ALL --cap-add NET_ADMIN --cap-add NET_RAW \
+  --cap-add NET_ADMIN --cap-add NET_RAW \
   -e DURATION="$DURATION" \
   -e SCSD_ENV="${SCSD_ENV:-}" \
   -e NODE_A="${NODE_A:-OVMXA}" -e SYSID_A="${SYSID_A:-1601}" \

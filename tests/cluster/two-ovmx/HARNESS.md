@@ -105,6 +105,64 @@ Identities must stay cluster-unique (distinct SCSNODE **and** SCSSYSTEMID) or a
 real peer would refuse them with `%PEA0, Remote System Conflicts with Known
 System`; the defaults (OVMXA/1601, OVMXB/1602) are distinct.
 
+## Baseline finding (rd vms-f3e, 2026-08-28)
+
+Ran the harness against **unmodified main** SCSD.EXE (default flags). Result:
+
+**JOIN DOES NOT COMPLETE.** Both nodes stall at **rung 0 — NISCA channel
+formation.** Each node emits its multicast HELLO and *receives* the other's
+(the bridge floods `0x6007` correctly: node A logs `SCSD-I-FRAME class=HELLO
+… dst=ab:00:04:01:01:01` from node B's MAC), but neither ever exchanges a
+**directed** HELLO. Nothing climbs past `HELLOSENT`; all DGRAM/CM counters
+stay 0.
+
+**Root cause — OVMX SCSD has no MEMBER/initiator role; it is a pure
+RESPONDER.** The whole choreography was tuned against a real VAX, where the
+running *member* drives every initiator step and OVMX (the joiner) only
+responds. Two symmetric OVMX joiners have no member, so the handshake
+deadlocks at the first step that needs an initiator — and again at every later
+initiator step. Two concrete manifestations, same cause:
+
+1. **Rung 0 — the member-side SOLICIT is missing.** The receive dispatch acts
+   only on frames *unicast to our HW MAC* (`scsd.c` ~line 8115: "our own
+   multicast beacon prompts the peer's directed HELLO"). A received *multicast*
+   HELLO returns immediately. OVMX never turns a heard multicast HELLO into a
+   soliciting directed HELLO (abs-30 = `PFW_INIT`/0xb2, the documented
+   "member's first directed contact"). Both nodes wait forever for a directed
+   HELLO neither will send.
+
+2. **Rung ~VC — the first 0x41 START is never initiated.** Even with the
+   channel up, `scsd.c` ~line 9425 sends OVMX's own START *only when a peer
+   START arrives* ("OVMX issues its own START only when a peer identity-bearing
+   frame arrives"). The member (VAX) normally sends START round-0 first; two
+   OVMX nodes both wait. Since `ps->start_acked` gates the joiner
+   CONNECT-REQUEST and the whole join sequencer, nothing downstream can fire.
+
+### PoC that confirms the diagnosis: `OVMX_MCAST_SOLICIT`
+
+`src/vmsscs/scsd.c` carries a **minimal, kill-switch-gated** member-side
+solicit (rd vms-f3e): when `OVMX_MCAST_SOLICIT` is set, a heard multicast HELLO
+from another node triggers one directed HELLO (`PFW_INIT`/0xb2 — grounded, not
+invented) per peer per second until the channel is up. **Absent the flag the
+wire toward a real VAX is byte-identical** (a VAX is the member and does the
+soliciting; OVMX must not also solicit it).
+
+```bash
+SCSD_ENV="OVMX_MCAST_SOLICIT=1" tests/cluster/two-ovmx/run.sh 60
+```
+
+With the flag, both nodes climb rung 0 → **directed HELLO exchanged + padded
+HELLO size-verify complete** (`DIRHELLO`, `PADINIT`, `PADACK`; pcap ~44→~793
+`0x6007` frames). It then stalls at manifestation #2 (no START initiated →
+`start_acked` never set → no CONNREQ) — the **next** rung-1b gap to close,
+which needs the same member-role initiator for the 0x41 START (grounded on
+`scs_start_build` config-round-0) and should ride the same kill-switch.
+
+**Bottom line for rung-1b (DLM):** two OVMX SCS nodes cannot today complete the
+join against each other; a member-role initiator (solicit + first-START, both
+kill-switch-gated) must land before any two-node DLM round-trip is testable.
+This harness is the oracle that will prove each rung as it lands.
+
 ## Kill-switch discipline
 
 Any fix that this harness motivates for the OVMX↔OVMX path MUST follow the

@@ -3618,9 +3618,23 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                                sequenced SCS traffic on a connection that
  *                                cannot exist before its circuit does.
  *     scsd_dlm_srv_msg_input()   node-B's GRANT response leg: the honest
- *                                executive status (SS$_UNSUPPORTED/SS$_NOSUCHDEV,
- *                                never a fabricated grant) sent back on the SAME
- *                                OPEN VC, same argument as the MSCP responder.
+ *                                executive status (a granted cross-node $ENQ,
+ *                                a queued-reply, or -- new in vms-6ca -- the
+ *                                DEFERRED GRANT the master WIREs off a real
+ *                                $DEQ when a queued cross-node request finally
+ *                                grants; never a fabricated grant) sent back on
+ *                                the SAME OPEN VC, same argument as the MSCP
+ *                                responder.
+ *
+ *   CHOKED, and new in vms-6ca (DLM rung H5):
+ *     scsd_dlm_client_send_op()  node-A's generic DLM client SEND: the second,
+ *                                contending $ENQ and the holder's $DEQ that drive
+ *                                the block-then-grant-over-the-wire sequence.
+ *                                MTYPE-10 SYSAP messages on the OPEN VMS$VAXcluster
+ *                                VC to the peer's OVMX$DLM server handle -- ordinary
+ *                                sequenced SCS traffic on a connection that cannot
+ *                                exist before its circuit does, exactly like
+ *                                scsd_dlm_send_enq above.
  *
  *   CHOKED, and new in vms-600:
  *     scsd_mscp_srv_xfer()       the live scs_mscp_srv_xfer_fn: the SCA
@@ -13708,34 +13722,31 @@ int main(int argc, char **argv)
              * with SS$_NOSUCHDEV (2680). It fabricates NOTHING (INV-6): it
              * prints verbatim whatever scsd_dlm_dispatch_to_executive() got.
              *
-             * It builds a synthetic-but-well-formed DEQ request (the same shape
-             * scs_dlm_parse hands scsd_dlm_srv_msg_input on a real received
-             * frame) so the executive's VMS_IOCTL_DLM_XNODE handler is reached
-             * exactly as an inbound cross-node request would reach it -- opens no
-             * socket, needs no CAP_NET_RAW, touches no wire. The 2296-not-2680
-             * flip is the machine-checkable proof.
+             * It builds a synthetic-but-well-formed BLKAST request (the same shape
+             * scs_dlm_parse hands the input routines on a real received frame) so
+             * the executive's VMS_IOCTL_DLM_XNODE handler is reached exactly as an
+             * inbound cross-node message would reach it -- opens no socket, needs
+             * no CAP_NET_RAW, touches no wire. The 2296-not-2680 flip is the
+             * machine-checkable proof.
              *
-             * DEQ (not ENQ) on purpose: DLM rung 2 (vms-e8f1) makes a compatible
-             * cross-node ENQ GRANT (SS$_NORMAL), which would master + hold a lock
-             * as a side effect of a self-test. DEQ (cross-node release) is a
-             * LATER rung that still returns SS$_UNSUPPORTED (2296) and touches no
-             * lock state -- the ideal side-effect-free "executive reached, honest
-             * status" probe H0 needs. */
+             * BLKAST (not ENQ or DEQ) on purpose. The side-effect-free
+             * "executive reached, honest status = 2296" probe has to name an op
+             * the handler still declines with SS$_UNSUPPORTED and that touches no
+             * lock state. ENQ now GRANTS a compatible cross-node lock (rung 2,
+             * vms-e8f1) and DEQ now RELEASES/authorizes real lock state (rung 3,
+             * vms-904c: a DEQ of an unknown handle returns SS$_IVLOCKID, not
+             * SS$_UNSUPPORTED) -- both have moved off 2296. BLKAST as a RECEIVE op
+             * is the holder-side blocking-AST delivery whose WIRE is deferred
+             * (vms-6ca, rung H5): it still returns SS$_UNSUPPORTED and mutates
+             * nothing -- the ideal probe H0 needs. */
             struct scs_dlm_msg m;
             memset(&m, 0, sizeof(m));
-            m.op = SCS_DLM_OP_DEQ;
+            m.op = SCS_DLM_OP_BLKAST;
             m.mode = LCK$K_NLMODE;
             m.req_lkid = 0x00040011u;
             m.master_lkid = 0x00080002u;
             m.req_csid = 1025u;
             m.master_csid = 1026u;
-            {
-                static const char *res = "DLMXNODE1";
-                size_t rn = strlen(res);
-                if (rn > SCS_DLM_RESNAM_MAX) rn = SCS_DLM_RESNAM_MAX;
-                memcpy(m.resnam, res, rn);
-                m.namelen = (uint8_t)rn;
-            }
 
             uint32_t status = scsd_dlm_dispatch_to_executive(&m, NULL, NULL, NULL);
             printf("SCSD-I-DLMSELFTEST, executive DLM dispatch status=%u"

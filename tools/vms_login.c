@@ -540,8 +540,17 @@ static int console_login(void)
      * STARTUP.COM, so a bare removal risks "Username:" interleaving a startup
      * line, and dropping the tcflush below would re-expose the "empty
      * username machine-gun" it guards. That is tracked as a follow-up; this
-     * rung keeps the wake but silences the echo of the wake keystrokes (the
-     * reported spam), which is the guaranteed fix.
+     * rung keeps the wake.
+     *
+     * THE NEWLINE-SPAM FIX (vms-dec) does NOT live here: the operator hammers
+     * RETURN during the WHOLE slow boot, but LOGINOUT is not forked until
+     * STARTUP.COM's tail, so by the time this function runs almost all the
+     * mashing has already happened and been echoed by the console tty.
+     * Silencing the echo therefore belongs in PID 1, which owns the console
+     * for the whole boot (boot_console_disable_echo() in
+     * src/ovmx_init/ovmx_init.c). This function's only role in that fix is to
+     * RE-ENABLE ECHO just before "Username:" (below), so the operator's typed
+     * username shows again.
      *
      * CONSOLE ONLY. The wait is gated on an interactive terminal: JOB_CONTROL
      * execs this image with stdin bound to the physical console (OPA0: ->
@@ -555,43 +564,10 @@ static int console_login(void)
      */
     if (isatty(STDIN_FILENO)) {
         int c;
-        struct termios wake_saved, wake_quiet;
-        int wake_have_term = 0;
-        /*
-         * SILENCE THE ECHO OF WAKE KEYSTROKES DURING THE BOOT (vms-dec).
-         *
-         * The wake below invites the operator to strike RETURN while the slow
-         * console boot is still running, and an operator naturally hammers it
-         * several times before "Username:" is visible. The console tty is in
-         * cooked/ECHO mode, so the kernel echoes each of those RETURNs at
-         * type-time as a BLANK LINE, scattered through the boot output -- the
-         * "newline spam" the operator reported. tcflush() (below) discards the
-         * leftover keystrokes from the input queue but CANNOT un-print the
-         * blank lines the tty already echoed, so the spam survived it.
-         *
-         * Clearing ECHO for the duration of this pre-prompt window stops the
-         * kernel from echoing those wake keystrokes. ECHO gates INPUT echoing
-         * only -- boot OUTPUT (program writes to the console) is untouched, and
-         * ECHO is restored below, before the real "Username:" prompt, so the
-         * username the operator types there still echoes normally. This is OVMX
-         * console-handling behaviour (CLAUDE.md Rule 8), not a claimed VMS
-         * terminal-driver detail. TCSANOW (not TCSAFLUSH) preserves the wake's
-         * existing semantics: a RETURN already queued during the boot still
-         * wakes the session -- it just no longer prints.
-         */
-        if (tcgetattr(STDIN_FILENO, &wake_saved) == 0) {
-            wake_quiet = wake_saved;
-            wake_quiet.c_lflag &= ~(tcflag_t)ECHO;
-            tcsetattr(STDIN_FILENO, TCSANOW, &wake_quiet);
-            wake_have_term = 1;
-        }
         while ((c = getchar()) != EOF && c != '\n')
             ;
-        if (c == EOF) {
-            if (wake_have_term)
-                tcsetattr(STDIN_FILENO, TCSANOW, &wake_saved);
+        if (c == EOF)
             return 1;
-        }
         /*
          * DISCARD TYPE-AHEAD QUEUED DURING THE (LONG) BOOT (vms-3ab8).
          *
@@ -617,10 +593,25 @@ static int console_login(void)
          * tcflush() discards the kernel tty input queue directly.
          */
         tcflush(STDIN_FILENO, TCIFLUSH);
-        /* Restore ECHO now that the wake window is over: the real
-         * "Username:" prompt below must echo what the operator types. */
-        if (wake_have_term)
-            tcsetattr(STDIN_FILENO, TCSANOW, &wake_saved);
+        /*
+         * RE-ENABLE ECHO for the real "Username:" prompt (vms-dec). PID 1
+         * turned the console's ECHO OFF for the whole boot so the operator's
+         * RETURN keystrokes, mashed while waiting on the slow console, were not
+         * echoed as blank-line "newline spam" (boot_console_disable_echo() in
+         * src/ovmx_init/ovmx_init.c). This is the point where the operator's
+         * typing must show again, so turn ECHO back on. Idempotent and
+         * console-only (inside the isatty() guard): a scripted/piped LOGINOUT
+         * never reaches here. If the console still had ECHO on (some substrate
+         * where PID 1's disable did not take), this is a harmless no-op and the
+         * prompt still echoes.
+         */
+        {
+            struct termios t;
+            if (tcgetattr(STDIN_FILENO, &t) == 0) {
+                t.c_lflag |= (tcflag_t)ECHO;
+                tcsetattr(STDIN_FILENO, TCSANOW, &t);
+            }
+        }
     }
 
     /* SYS$ANNOUNCE -- displayed once before the first Username: prompt.

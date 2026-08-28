@@ -50,6 +50,8 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <termios.h>
 
 /* vms/pcb.h and vms/privs.h are DELIBERATELY NOT INCLUDED (vms-9b7). PID 1
  * no longer seeds a private PCB and no longer parses a privilege string --
@@ -550,6 +552,45 @@ static void report_kernel_taint(void)
  * fail-honest halt (ovmx_sysinit_halt), never a silent overlay onto a tmpfs
  * tree the way the deleted code did.
  */
+/*
+ * BOOT-CONSOLE ECHO SILENCE (vms-dec).
+ *
+ * The operator console (OPA0: -> /dev/console) is a cooked-mode tty with ECHO
+ * on. During the slow boot no login prompt is visible yet, so an operator
+ * naturally strikes RETURN several times -- and the tty echoes each keystroke
+ * at type-time as a BLANK LINE, scattered through the boot narration: the
+ * operator-reported "newline spam". PID 1 owns the console for the WHOLE boot
+ * -- LOGINOUT is not forked until STARTUP.COM's tail (JOB_CONTROL, seen as the
+ * final %RUN-S-PROC_ID line) -- so the echo has to be silenced HERE, not in
+ * LOGINOUT, to cover the entire window the operator is hammering. Silencing it
+ * only inside LOGINOUT's wake catches almost none of the mashing, because the
+ * mashing happens long before LOGINOUT exists.
+ *
+ * ECHO gates INPUT echo only: the boot's own OUTPUT is untouched. LOGINOUT
+ * RE-ENABLES ECHO right before it prints "Username:" (console_login() in
+ * tools/vms_login.c), so the operator's typed username shows normally. termios
+ * is per-tty device state shared across the exec/fork chain that reaches the
+ * same /dev/console, so clearing it here persists until LOGINOUT restores it.
+ *
+ * OVMX console-handling behaviour (CLAUDE.md Rule 8), not a claimed VMS
+ * terminal-driver byte detail. Best-effort: never blocks or fails the boot.
+ * Deliberately NOT applied across the conversational SYSBOOT> prompt, which
+ * must keep echoing the commands the operator types there; it is applied on
+ * that path only after the prompt hands over, before the boot narration.
+ */
+static void boot_console_disable_echo(void)
+{
+    int fd = open("/dev/console", O_RDWR | O_NOCTTY);
+    if (fd < 0)
+        return;
+    struct termios t;
+    if (tcgetattr(fd, &t) == 0) {
+        t.c_lflag &= ~(tcflag_t)ECHO;
+        tcsetattr(fd, TCSANOW, &t);
+    }
+    close(fd);
+}
+
 static void bare_metal_init(void)
 {
     /* Mount essential filesystems (proc/sys/dev/tmp/pts/shm) through the
@@ -588,6 +629,12 @@ static void bare_metal_init(void)
     if (!sysboot_conversational_requested()) {
         /* ---- Flagless boot: EXACTLY the code that stood here before
          * this item, unchanged in content and order. ---- */
+
+        /* Silence the console's echo of operator RETURN keystrokes for the
+         * duration of the boot (vms-dec) -- before the first narration line
+         * below, so the whole hammering window is covered. LOGINOUT re-enables
+         * ECHO at its "Username:" prompt. */
+        boot_console_disable_echo();
 
         /* NO hardcoded sethostname() HERE (vms-b6a7: "the hardcoded OVMX
          * hostname DIES"). The real node name is SYS$SYSTEM:OVMXVMSSYS.PAR's
@@ -720,6 +767,13 @@ static void bare_metal_init(void)
     sysboot_run_prompt(&conversational_boot_params, VMS_SYSTEM_DIR,
                         "OVMXVMSSYS", "PAR", VMS_STARTUP_PATH);
     conversational_boot_result_valid = 1;
+
+    /* SYSBOOT> has handed over: from here the boot narration prints and the
+     * operator may be hammering RETURN waiting for the login. Silence the
+     * console echo now (vms-dec) -- AFTER the prompt above, which had to keep
+     * echoing the commands the operator typed into it. LOGINOUT re-enables
+     * ECHO at its "Username:" prompt. */
+    boot_console_disable_echo();
 
     /* SYSBOOT has handed over -- emit the deferred narration in the flagless
      * branch's order (vms-1fb): the executive-attach line (already attached

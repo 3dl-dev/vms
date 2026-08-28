@@ -230,6 +230,17 @@ long vms_ioctl_bg_materialize_fd(struct vms_proc *proc, unsigned long arg)
     args.fd = -1;
 
     bs = vms_bg_ref_socket(proc, args.chan);
+    {   /* OVMX-DIAG (temporary, vms-0cd): why does materialize IVCHAN in sshd's
+         * re-exec'd child? Log the requested chan, this task's identity, and its
+         * real_parent tgid, so the CI console shows whether inheritance populated
+         * the proc. Remove before reap. */
+        pid_t rpt = 0;
+        rcu_read_lock();
+        if (current->real_parent) rpt = task_tgid_nr(current->real_parent);
+        rcu_read_unlock();
+        pr_info("OVMX-DIAG materialize: chan=%u tgid=%d comm=%s real_parent_tgid=%d found=%d\n",
+                args.chan, current->tgid, current->comm, rpt, bs ? 1 : 0);
+    }
     if (!bs) {
         args.status = SS__IVCHAN;       /* no channel / no socket -> honest reject */
         goto out;

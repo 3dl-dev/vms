@@ -418,18 +418,26 @@ static void vms_proc_inherit_channels(struct vms_proc *child)
         return;
     }
 
-    spin_lock(&vms_proc_hash_lock);
-    hash_for_each_possible(vms_proc_hash, parent, hash_node, parent_tgid) {
-        if (parent->linux_pid != parent_tgid)
-            continue;
-        /* Recycle-safe: continue only the same parent INSTANCE (pinned struct
-         * pid), never a reused pid number. Same check as the helpers above. */
-        if (parent->pid_ref != parent_pid)
-            continue;
-        vms_bg_inherit(child, parent);
-        break;
+    {
+        int matched = 0;
+        spin_lock(&vms_proc_hash_lock);
+        hash_for_each_possible(vms_proc_hash, parent, hash_node, parent_tgid) {
+            if (parent->linux_pid != parent_tgid)
+                continue;
+            /* Recycle-safe: continue only the same parent INSTANCE (pinned struct
+             * pid), never a reused pid number. Same check as the helpers above. */
+            if (parent->pid_ref != parent_pid)
+                continue;
+            vms_bg_inherit(child, parent);
+            matched = 1;
+            break;
+        }
+        spin_unlock(&vms_proc_hash_lock);
+        /* OVMX-DIAG (temporary, vms-0cd): does the re-exec'd child find its parent
+         * proc to inherit BG channels from? Remove before reap. */
+        pr_info("OVMX-DIAG inherit: child_tgid=%d comm=%s real_parent_tgid=%d parent_proc_found=%d\n",
+                current->tgid, current->comm, (int)parent_tgid, matched);
     }
-    spin_unlock(&vms_proc_hash_lock);
     rcu_read_unlock();
 }
 

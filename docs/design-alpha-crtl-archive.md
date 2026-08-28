@@ -1,7 +1,12 @@
 # Alpha C-RTL archive — the DECC$SHR backing for `alpha-dec-vms` (GAP2-archive)
 
-**Status:** decision scope for the operator. **Owner routing:** conductor gates
-this (operator-facing); the Alpha lane owns the chosen implementation.
+**Status:** DECIDED — **Option A** (port musl's `arch/alpha-dec-vms` layer),
+operator ruling (Baron, 2026-08-23). Implementation routing in progress: the
+musl-arch-port couples to the OVMX Alpha executive (GAP3 / Alpha boot lane), so
+it sequences with GAP3; libgcc + the decoration-bridge layer + the DECC$SHR
+whole-archive (via the vms-c65 shareable emit) are the toolchain/LINK side that
+follow. **Owner routing:** conductor coordinates; the Alpha lane owns the
+executive-facing syscall backend.
 **Bead:** vms-da2c. **Blocks:** a runnable Alpha crt0 activation (the last
 non-Alpha-boot rung of the crt0 join).
 
@@ -52,6 +57,10 @@ overwhelmingly arch-neutral; only `arch/<arch>/` is arch-specific (syscall stubs
 | E | **Vendor DEC/VSI DECC$SHR** | — | — | Proprietary + clean-room forbidden (Rule 8). Reject. |
 
 ## Recommendation
+
+> **DECIDED (operator, 2026-08-23): Option A.** The rationale below stands as the
+> ruling's basis; B remains available only as a labeled bootstrap if a pre-GAP3
+> demo is ever wanted.
 
 **Option A (port musl's `arch/alpha-dec-vms/` layer), with Option B as a labeled
 bootstrap** if a runnable demo is wanted before A completes.

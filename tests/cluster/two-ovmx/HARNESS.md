@@ -201,6 +201,52 @@ So OVMX↔OVMX now completes rung-0 + rung-VC and drives the joiner choreography
 through MSCP$DISK; what remains before a two-node DLM round-trip is the
 member-side SYSAP-accept rung.
 
+## rung-ADD landed — OVMX↔OVMX JOIN COMPLETES (rd vms-45c, 2026-08-28)
+
+The member-side **VMS$VAXcluster accept** closes the last gap. At step 7/8 the
+join stalled with `joiner=CONNECT SENT, connected=no`: OVMX-A opened its
+VMS$VAXcluster joiner VC to OVMX-B and waited for B's `ACCEPT_REQ` that never
+came.
+
+**Root cause:** a joiner-initiated VMS$VAXcluster connect is msgtype **0x5b**
+(the VC is not up yet; grounded on `vax3-2to3-established-join` /
+`scsd_svc_emit_connect_req`), but OVMX's member-accept branch (c) admitted only
+the **0x4b** (`SEQAPP`) form — because a VAX joiner never connects *to* OVMX
+(OVMX joins the VAX). Two symmetric OVMX joiners each send 0x5b and branch (c)
+dropped it at `v.msgtype != SCS_MSGTYPE_SEQAPP`. (B accepted A's SCS$DIRECTORY
+and MSCP$DISK connects fine — those ride their own Con.ID-class branches.)
+
+**Fix:** under the member-role flag, branch (c) also admits the 0x5b 110/190-byte
+connect and runs the existing `scs_accept` → `scsd_svc_emit_member_accept` →
+`ACCEPT_REQ`. The peer's joiner-accept receive (`CLS_JOINER` + `dop==RESPONSE`,
+the same path that works against a VAX) then sets `joiner_connected` → JOINBOUND
+→ op=3 CONFIRM → the add-member config burst.
+
+Proven on the harness (`OVMX_MCAST_SOLICIT=1 OVMX_JOIN_SEQ=1`), **both** nodes:
+
+```
+STARTDONE → VCOPEN → OWNDIRBOUND → MSCPBOUND → (accept peer 0x5b) →
+JOINBOUND → VAXCLMEMBER → CMCONFIG
+vaxcluster_member=CONNECTED(reached-OPEN), connected=YES, cm_config=YES
+```
+
+`verdict.sh` prints **"JOIN COMPLETES — both OVMX nodes reached VMS$VAXcluster
+OPEN"** — the success oracle (`SCSD-I-VAXCLMEMBER` on both). ~1571 `0x6007`
+frames on the bridge. This **completes the OVMX↔OVMX member/initiator role**
+(rung-0 solicit + rung-VC START-initiate + rung-ADD accept, all under one
+kill-switch): two OVMX SCS nodes now form a cluster against each other, each
+seeing the other as a member — which unblocks the two-node DLM `$ENQ`
+round-trip (rung-1b).
+
+**Flag-off still byte-identical:** re-run with `OVMX_MCAST_SOLICIT` absent → only
+the multicast HELLO beacon, zero member-role markers (no `SCSENV`/`JOINBOUND`/
+`VAXCLMEMBER`). The OVMX↔VAX path is unperturbed — the VAX drives the accept in
+its own 0x4b form.
+
+(Beyond VAXCLMEMBER, the coordinator's op-0x03/0x05/**0x06** membership-commit
+burst — `SHOW CLUSTER` CLUSTATE — is a further quorum-transition layer, not part
+of the SYSAP-connection success oracle.)
+
 ## Kill-switch discipline
 
 Any fix that this harness motivates for the OVMX↔OVMX path MUST follow the

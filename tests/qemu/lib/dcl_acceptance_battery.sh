@@ -38,6 +38,9 @@
 #     EXPECTED_COMPAT_VERSION -- the version F$GETSYI("VERSION") must report,
 #                                true-to-arch (ovmx_compat_version()): the real
 #                                VSI version on a lineage arch, else OVMX's own.
+#     EXPECTED_ARCH_NAME      -- the arch token F$GETSYI("ARCH_NAME") must report,
+#                                the gate's own build arch (ovmx_hw_arch()):
+#                                "X86_64" / "AARCH64" / "VAX" / "Alpha".
 #     VOLUME_LABEL            -- the mastered ODS-2 system-disk label (OVMXSYS).
 #     CMD_TIMEOUT             -- per-command bound run_cmd passes to wait_for.
 #     PASS / FAIL             -- integer counters; ok/bad below increment them.
@@ -200,6 +203,17 @@ run_dcl_acceptance_battery() {
     run_cmd 'WRITE SYS$OUTPUT "[" + F$GETSYI("VERSION") + "]"'
     must_have "$SEG" "[${EXPECTED_COMPAT_FIELD}]" "WRITE F\$GETSYI [vms-28a]: F\$GETSYI(\"VERSION\") is the fixed 8-char space-padded VMS field '[${EXPECTED_COMPAT_FIELD}]' (not a trimmed token)"
     negctl    "$SEG" 'F$GETSYI' "WRITE F\$GETSYI field"
+
+    # --- F$GETSYI("ARCH_NAME") reports the VMS arch token (vms-76c3) ---------
+    # Was UNWIRED in the DCL lexical -> fell through to "0"; real VMS reports the
+    # arch name ("VAX"/"Alpha"/"X86_64"), the SAME ovmx_hw_arch() the $GETSYI
+    # service returns (SYI$_ARCH_NAME). Bracket it (robust; NOT space-padded --
+    # the oracle confirmed "Alpha" exact, no padding). EXPECTED_ARCH_NAME is
+    # caller-provided (the gate's own build arch), so each arch asserts its own.
+    run_cmd 'WRITE SYS$OUTPUT "[" + F$GETSYI("ARCH_NAME") + "]"'
+    must_have     "$SEG" "[${EXPECTED_ARCH_NAME}]" "WRITE F\$GETSYI [vms-76c3]: F\$GETSYI(\"ARCH_NAME\") reports the VMS arch token '[${EXPECTED_ARCH_NAME}]'"
+    must_not_have "$SEG" '[0]' "WRITE F\$GETSYI [vms-76c3]: F\$GETSYI(\"ARCH_NAME\") is NOT the unwired '[0]' fall-through"
+    negctl        "$SEG" 'F$GETSYI' "WRITE F\$GETSYI ARCH_NAME"
 
     # --- SHOW QUOTA (vms-73c4: fabricated "[200,1]") ------------------------
     run_cmd 'SHOW QUOTA'

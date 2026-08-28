@@ -287,6 +287,9 @@ derive_expected_identity() {
   cver=$(idval OVMX_VMS_COMPAT_VERSION_ALPHA)
   [ -n "$cver" ] || die "could not read OVMX_VMS_COMPAT_VERSION_ALPHA from $IDENTITY (rd vms-10e)"
   EXPECTED_COMPAT_VERSION="$cver"
+  # rd vms-76c3: F$GETSYI("ARCH_NAME") on an __alpha__ build -> ovmx_hw_arch() =
+  # "Alpha" (mixed case, byte-confirmed on the live lab-Alpha oracle).
+  EXPECTED_ARCH_NAME="Alpha"
   # VOLUME_LABEL tracks build-alpha-bootimage.sh's master step; verify the source
   # still uses it so a relabel there cannot silently desync this gate.
   VOLUME_LABEL="OVMXSYS"
@@ -324,6 +327,7 @@ run_acceptance_boot() {
       LOGIN_USER="'"${LOGIN_USER:-SYSTEM}"'"; LOGIN_PASS="'"${LOGIN_PASS:-MANAGER}"'"
       export EXPECTED_BOOT_BANNER="'"$EXPECTED_BOOT_BANNER"'"
       export EXPECTED_COMPAT_VERSION="'"$EXPECTED_COMPAT_VERSION"'"
+      export EXPECTED_ARCH_NAME="'"$EXPECTED_ARCH_NAME"'"
       export VOLUME_LABEL="'"$VOLUME_LABEL"'"
       # qemu-system-alpha -M clipper RTC reads ~20 years off (emulator epoch
       # quirk); OVMX faithfully reports that guest clock, so the SHOW TIME battery

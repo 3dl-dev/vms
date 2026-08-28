@@ -50,6 +50,45 @@ mkdir -p "$OUT"
 # OTS$MOVE library call out of the C block loops (which would self-reference).
 CF="-O2 -g0 -mpointer-size=64 -fno-builtin -fno-tree-loop-distribute-patterns"
 
+# OTS$ REGISTER-PRESERVATION CONTRACT (bead vms-334 — clean-room, Rule 8).
+#
+# The OTS$ compiler-support routines are NOT ordinary procedures: the GCC port
+# emits IMPLICIT calls to them mid-expression (a block-zero/move or an integer
+# divide lowered inside a larger computation), so — unlike a normal call — it
+# keeps LIVE VALUES in the caller-saved temporary registers ACROSS the call and
+# expects them intact on return. A plain C compile of these routines follows the
+# ordinary Alpha convention and freely clobbers those temps (t0/R1 as loop
+# scratch, etc.), so a caller that parked a live pointer in R1 across OTS$ZERO
+# got it back as garbage -> SIGSEGV deep in musl's __init_libc.
+#
+# GROUNDING (both clean-room sources):
+#  (a) OBSERVED gcc-oracle codegen. The alpha-dec-vms cc1 emits the block
+#      helpers via a `.code_address OTS$ZERO` linkage (bare code-address call,
+#      AI in R25) and keeps live temporaries in the caller-saved set across it;
+#      the actual fault proves it parks a live pointer in R1 (t0) across
+#      OTS$ZERO and dereferences it afterward. The routine MUST therefore
+#      preserve every caller-saved temp it touches, not just R1.
+#  (b) The public OpenVMS Alpha Calling Standard: the language-support (OTS$)
+#      routines preserve all registers except the result register (R0) and the
+#      reserved scratch (AT/R28) — precisely because the compiler calls them
+#      inside an expression. No VSI/HPE source or binary was read.
+#
+# MECHANISM: mark the whole caller-saved integer TEMP set call-SAVED for this
+# compile so GCC preserves (prologue-save/epilogue-restore) any of them each
+# routine uses. That is R1-R8 (t0-t7), R16-R25 (a0-a5, t8-t11). Excluded on
+# purpose: R0 (the DIV/REM result), R26 (RA), R27 (PV — callers reload it after
+# every call), R28 (AT, reserved volatile), R29/R30/R31. GCC is left R0/R28 plus
+# the already-callee-saved R9-R15 to work in; the div loop spills to R9-R15
+# (themselves preserved), so no caller-visible temp is ever clobbered. This
+# makes the OVMX OTS$ routines honor the OTS$ preservation contract as a set —
+# not a point-patch for R1 — so the next live temp gcc parks across a call
+# (gap-10) is already covered.
+OTS_CALL_SAVED=""
+for r in 1 2 3 4 5 6 7 8 16 17 18 19 20 21 22 23 24 25; do
+    OTS_CALL_SAVED="$OTS_CALL_SAVED -fcall-saved-$r"
+done
+CF="$CF $OTS_CALL_SAVED"
+
 "${TARGET}-gcc" $CF -c "$OTS_SRC/ots_runtime.c"  -o "$OUT/ots_runtime.o"
 "${TARGET}-as"       "$OTS_SRC/ots_home_args.s"  -o "$OUT/ots_home_args.o"
 

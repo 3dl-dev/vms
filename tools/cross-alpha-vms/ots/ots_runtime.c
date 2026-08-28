@@ -84,23 +84,12 @@ s32 OTS$REM_I (s32 a, s32 b) { s64 r; sdivmod64((s64)a, (s64)b, &r); return (s32
 u32 OTS$DIV_UI(u32 a, u32 b) { u64 r; return (u32)udivmod64((u64)a, (u64)b, &r); }
 u32 OTS$REM_UI(u32 a, u32 b) { u64 r; udivmod64((u64)a, (u64)b, &r); return (u32)r; }
 
-/* ---- block primitives ----
- * OTS$MOVE(dst, len, src): move `len` bytes from src to dst. Confirmed arg order
- * from cc1 codegen (R16=dst, R17=len, R18=src). Overlap-correct (memmove
- * semantics): copies backward when the regions overlap forward, so it is never
- * wrong even where a caller relies on move (not copy) semantics.
- * OTS$ZERO(dst, len): zero `len` bytes at dst (R16=dst, R17=len). */
-void OTS$MOVE(void *dst, u64 len, const void *src)
-{
-    unsigned char *d = (unsigned char *)dst;
-    const unsigned char *s = (const unsigned char *)src;
-    if (d == s || len == 0) return;
-    if (d < s) { for (u64 i = 0; i < len; i++) d[i] = s[i]; }
-    else       { for (u64 i = len; i-- > 0; )  d[i] = s[i]; }
-}
-
-void OTS$ZERO(void *dst, u64 len)
-{
-    unsigned char *d = (unsigned char *)dst;
-    for (u64 i = 0; i < len; i++) d[i] = 0;
-}
+/* ---- block primitives (OTS$MOVE / OTS$ZERO) live in ots_block.c ----
+ * They are VOID (no R0 result), so — unlike the DIV/REM routines above whose
+ * result IS R0 — they must ALSO preserve R0 under the OTS$ contract: the port
+ * compiler parks a live value (musl __init_libc's `envp`) in R0 across an
+ * implicit OTS$ZERO call. ots_block.c is compiled with R0 additionally
+ * call-saved (-fcall-saved-0), which GCC docs warn is "disaster" on a
+ * return-value register — so it must NOT be applied to this file's R0-returning
+ * DIV/REM routines. That register-conflict is exactly why the block routines
+ * are a separate translation unit (bead vms-0e4d, gap-10). */

@@ -110,9 +110,29 @@ The console login (`vms_login.c`) is the working reference for the whole flow.
   RMS objects). `-DCUSTOM_SYS_AUTH_PASSWD` selects the auth hook.
 - The `getpwnam`/`getpwuid`→SYSUAF override: openbsd-compat replacement or
   `-Wl,--wrap=getpwnam -Wl,--wrap=getpwuid` (consistent with the transport wrap).
-- **Depends on** the sshd `--wrap` transport build (RUNG 3, deferred — sits on the
-  fork-inheritance feature) to produce a runnable sshd. This doc's hooks compile
-  independently; they RUN only once the transport + fork-inheritance land.
+- **The sshd `--wrap` transport build LANDED (RUNG 3, vms-0cd / PR #823).** Its
+  realized shape, which 3c's hooks link into:
+  - The server wrap set (`socket`/`connect`/`read`/`write`/… **plus**
+    `bind`/`listen`/`accept`/`accept4`) lives in the SAME `ovmx_ssh_wrap.c` as the
+    client set, but the four listener wraps and their `__real_*` externs are gated
+    behind **`OVMX_WRAP_SERVER`**. This is load-bearing: a link that does not pass
+    `-Wl,--wrap=bind …` (the client link) would otherwise leave `__real_bind`
+    undefined. **Contract: a shared `--wrap` TU must gate each `__wrap_X`/`__real_X`
+    to the binaries whose link actually passes `--wrap=X`.** Compile the object
+    twice — `-DOVMX_WRAP` (client) and `-DOVMX_WRAP -DOVMX_WRAP_SERVER` (server).
+  - `sshd` (9.8+) re-execs `sshd-session` from its **compiled `--libexecdir`**
+    (a `config.h` `#define`, no runtime override), and the accepted connection must
+    reach that child — so `sshd-session` is the binary that must carry the wrap
+    (the harness applies the wrap set via LIBS-global, covering sshd + sshd-session
+    + sshd-auth). Because the baked libexecdir can hold only ONE `sshd-session`
+    variant, `build-ssh-harness.sh` configures **twice** into distinct
+    `--libexecdir` trees: `/ovmxssh/libexec` (stock `sshd-session`, client-wrap KEX
+    proof) and `/ovmxsshsrv/libexec` (wrapped `sshd-session`, server proof).
+  - The accepted channel survives sshd's `fork()`+`exec()` of `sshd-session`
+    because the executive inherits the BG channel by number via `real_parent`
+    (#815) and the veneer handle is self-describing across exec (#822).
+- This doc's 3c hooks compile independently; they RUN once linked into the wrapped
+  sshd-session of the server tree.
 
 ## Tests
 

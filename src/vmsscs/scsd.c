@@ -7886,6 +7886,31 @@ static uint32_t scsd_dlm_dispatch_to_executive(const struct scs_dlm_msg *m)
     int fd = open("/dev/vms", O_RDWR);
     if (fd < 0)
         return 2680u; /* SS$_NOSUCHDEV -- fail honest, no fake grant */
+
+    /* REGISTER first (vms-4b6). The executive's ioctl dispatcher gates EVERY
+     * ioctl behind vms_proc_find_or_err() (src/kernel/vms_module.c) -- a caller
+     * with no registered VMS process context is refused -ESRCH before the DLM
+     * cross-node handler is ever reached. VMS_IOCTL_DLM_XNODE itself needs no
+     * registered proc (it delivers a peer's request, not the daemon's own lock),
+     * but the DEVICE does: talking to /dev/vms at all requires the standard
+     * REGISTER handshake every other client performs (see
+     * tests/qemu/test_kmod_dlm_xnode.c, which REGISTERs before it dispatches).
+     * Without this, scsd's dispatch reached the device but was rejected before
+     * the handler, so a REAL executive returned SS$_NOSUCHDEV(2680) exactly like
+     * a missing device -- the two failures were indistinguishable and the
+     * cross-node receive path could never actually reach the lock manager. The
+     * DLM harness rung H0 (a real /dev/vms) surfaced this; the Docker harness
+     * masked it (no device, always 2680). Keying is by process (current->tgid),
+     * so this registers scsd once and is idempotent across the fresh fds this
+     * function opens per call. INV-6: registration grants nothing -- it only
+     * establishes the caller context the executive requires. */
+    struct vms_register_args reg;
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) {
+        close(fd);
+        return 2680u; /* device present but the executive refused us -- honest */
+    }
+
     memset(&args, 0, sizeof(args));
     args.op = m->op;
     args.lkmode = m->mode;

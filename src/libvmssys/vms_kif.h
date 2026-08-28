@@ -305,7 +305,10 @@ uint32_t vms_kif_get_resmaster(const char *resnam, uint32_t *found,
 uint32_t vms_kif_dlm_xnode(uint32_t op, uint32_t lkmode, uint32_t flags,
                            uint32_t req_lkid, uint32_t master_lkid,
                            uint32_t req_csid, uint32_t master_csid,
-                           const char *resnam, const uint8_t *valblk);
+                           const char *resnam, const uint8_t *valblk,
+                           uint32_t *out_master_lkid, uint32_t *out_queued,
+                           uint32_t *out_blocking_csid,
+                           uint32_t *out_blocking_master_lkid);
 
 /* ================================================================
  * Device table (executive-resident I/O database)

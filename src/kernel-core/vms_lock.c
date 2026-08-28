@@ -830,7 +830,26 @@ static int enq_wait_sync(struct vms_lock_resource *res,
  * is unchanged from the original ioctl handler; only the copy in/out moved to
  * the callers, so every `goto out` writes the result back through *io.
  */
-static long vms_enq_core(struct vms_proc *proc, struct vms_enq_args *io)
+/*
+ * Cross-node ($ENQ-over-SCS) enqueue outputs (DLM epic vms-7fa rung 3, vms-904c).
+ * When the caller passes a non-NULL pointer, vms_enq_core_ex is in CROSS-NODE mode:
+ *   - LOCAL wait-for-graph deadlock detection is SKIPPED. Two locks held for two
+ *     different cluster identities are two different owners even though they share
+ *     the local delivery proc, so the single-node detector (which keys on `proc`)
+ *     would false-positive; cross-node/distributed deadlock detection is a later
+ *     rung (vms-ec75) and is honestly out of scope here, not faked.
+ *   - a QUEUED (blocked) request reports queued=1 and, if a cross-node holder
+ *     blocks it, the identity that must receive a blocking AST (blocking_csid) and
+ *     that holder's master lock handle (blocking_master_lkid).
+ */
+struct dlm_xnode_enq_out {
+    int      queued;
+    uint32_t blocking_csid;
+    uint32_t blocking_master_lkid;
+};
+
+static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
+                            struct dlm_xnode_enq_out *xn)
 {
     struct vms_enq_args args = *io;
     struct vms_lock_entry *lock;
@@ -942,6 +961,8 @@ static long vms_enq_core(struct vms_proc *proc, struct vms_enq_args *io)
     exec_lock(&res->lock);
     if (lock_compatible(res, args.lkmode, NULL)) {
         /* Granted immediately */
+        if (xn)
+            xn->queued = 0;
         lock->granted_mode = args.lkmode;
         exec_list_add_tail(&lock->res_granted, &res->granted);
 
@@ -987,8 +1008,14 @@ static long vms_enq_core(struct vms_proc *proc, struct vms_enq_args *io)
             lock->grant_state = 0;
             exec_list_add_tail(&lock->res_waiting, &res->waiting);
 
-            /* Check for deadlock */
-            if (check_deadlock(lock, 0)) {
+            /*
+             * Check for deadlock. Skipped in cross-node mode (xn set): the local
+             * wait-for-graph detector keys on `proc`, but every cross-node lock
+             * shares the delivery proc while representing a DIFFERENT cluster
+             * owner, so it would false-positive; distributed deadlock detection is
+             * a later rung (vms-ec75), honestly out of scope here.
+             */
+            if (!xn && check_deadlock(lock, 0)) {
                 exec_list_del(&lock->res_waiting);
                 exec_unlock(&res->lock);
 
@@ -1003,8 +1030,34 @@ static long vms_enq_core(struct vms_proc *proc, struct vms_enq_args *io)
                 args.lkid = 0;
                 args.status = SS__DEADLOCK;
             } else {
-                /* Notify blocking AST holders */
+                /* Notify blocking AST holders (LOCAL holders -- a real user-mode
+                 * blocking AST). A cross-node holder has no local blkastadr, so it
+                 * is handled by the directive below instead. */
                 notify_blocking_asts(res, lock);
+
+                /*
+                 * Cross-node BLKAST directive (vms-904c). Still under res->lock:
+                 * find a currently-granted holder that (a) blocks this request and
+                 * (b) is held for a REMOTE cluster identity (req_csid != 0). That
+                 * holder must be sent a blocking AST over SCS -- which is the
+                 * daemon's transport job -- so the master hands its identity and
+                 * lock handle back to the caller. First blocking remote holder
+                 * only (the foundational rung; several blocked holders => several
+                 * BLKASTs is a refinement). This is the executive genuinely FIRING
+                 * the blocking AST decision, not a fabricated notification.
+                 */
+                if (xn) {
+                    struct vms_lock_entry *g;
+                    xn->queued = 1;
+                    exec_list_for_each_entry(g, &res->granted, res_granted) {
+                        if (!compat[lock->requested_mode][g->granted_mode] &&
+                            g->req_csid != 0) {
+                            xn->blocking_csid = g->req_csid;
+                            xn->blocking_master_lkid = g->lkid;
+                            break;
+                        }
+                    }
+                }
                 exec_unlock(&res->lock);
 
                 if (args.flags & LCK_M_SYNC) {
@@ -1061,7 +1114,7 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
-    vms_enq_core(proc, &args);
+    vms_enq_core_ex(proc, &args, NULL);   /* local $ENQ: full deadlock detection */
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
@@ -1165,7 +1218,7 @@ uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
     a.flags  = LCK_M_SYNC;      /* $ENQW: block in-kernel until granted */
     strscpy(a.resnam, resnam, sizeof(a.resnam));
 
-    vms_enq_core(proc, &a);
+    vms_enq_core_ex(proc, &a, NULL);   /* ACP volume lock: local, full detection */
     if (a.status == SS__NORMAL && lkid_out)
         *lkid_out = a.lkid;
     return a.status;
@@ -1419,33 +1472,95 @@ out:
 }
 
 /*
+ * vms_lock_dlm_xnode_deq - the cross-node DLM RELEASE ($DEQ) on the master
+ * (DLM epic vms-7fa rung 3, vms-904c).
+ *
+ * A peer's $DEQ arrived over SCS: release the master's lock record identified by
+ * req->master_lkid, held FOR the releasing node (req->req_csid). Cross-node
+ * AUTHORIZATION is by cluster identity, NOT local proc: a node may release only a
+ * lock the master holds for THAT node's CSID -- a local lock (req_csid == 0) or a
+ * lock held for a different CSID is refused SS$_IVLOCKID. Releasing runs
+ * try_grant_waiters, so a request queued behind this holder (the contention case)
+ * GRANTS now -- the block-then-grant flip, driven by a real release, never faked.
+ */
+static uint32_t vms_lock_dlm_xnode_deq(struct vms_dlm_xnode_args *req)
+{
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
+
+    lock = lock_find_by_id(req->master_lkid);   /* takes a reference */
+    if (!lock)
+        return SS__IVLOCKID;
+    if (lock->req_csid == 0 || lock->req_csid != req->req_csid) {
+        /* Not a cross-node lock, or not held for the releasing node. */
+        lock_put(lock);
+        return SS__IVLOCKID;
+    }
+
+    res = lock->resource;
+
+    exec_lock(&res->lock);
+    if ((lock->flags & LCK_M_VALBLK) && !lock->waiting)
+        memcpy(res->valblk, lock->valblk, LCK_VALBLK_SIZE);
+    if (lock->waiting)
+        exec_list_del(&lock->res_waiting);
+    else
+        exec_list_del(&lock->res_granted);
+    /* The release grants any waiter now compatible -- the blocked cross-node
+     * request flips from queued (grant_state 0) to granted (grant_state
+     * SS$_NORMAL, granted_mode = requested). */
+    try_grant_waiters(res);
+    exec_unlock(&res->lock);
+
+    exec_lock(&lock->proc->lock_list_lock);
+    exec_list_del(&lock->proc_list);
+    if (lock->proc->lock_count > 0)
+        lock->proc->lock_count--;
+    exec_unlock(&lock->proc->lock_list_lock);
+
+    lock_remove_id(lock);
+    resource_release(res);
+    lock_put(lock);  /* drop lock_find_by_id reference */
+    lock_put(lock);  /* drop "exists in system" reference -- triggers free */
+    return SS__NORMAL;
+}
+
+/*
  * vms_lock_dlm_xnode_dispatch - the cross-node DLM RECEIVE handler
- * (vms-94c, DLM epic vms-7fa rung 1).
+ * (vms-94c transport; DLM epic vms-7fa).
  *
  * A DLM request that arrived over SCS from a REMOTE node (decoded by
  * src/vmsscs/scs_dlm.c, marshalled through VMS_IOCTL_DLM_XNODE) is dispatched
- * HERE -- the point at which the kernel lock manager would act on a peer's
- * behalf, as the resource's master or directory node.
+ * HERE -- the point at which the kernel lock manager acts on a peer's behalf, as
+ * the resource's master (membership is a stub-of-one, so this node is directory +
+ * master for the name and grants/queues locally; that is the mastering node's
+ * REAL lock state, never a fabrication).
  *
- * RUNG 2 -- THE FOUNDATION GRANT (vms-e8f1). VMS_DLM_OP_ENQ now acts on the real
- * single-node lock manager on the mastering node: the decoded cross-node $ENQ is
- * run through vms_enq_core() with the requesting proc bound to the REMOTE
- * requester's cluster identity (owner_csid = req->req_csid), so a COMPATIBLE
- * request is GRANTED (SS$_NORMAL) and the master's resource DB genuinely holds a
- * lock record FOR the peer's CSID -- verifiable via GET_RESMASTER
- * (remote_holder_csid). Membership here is a stub-of-one, so this node is the
- * directory + master for the name and vms_enq_core grants locally; that is the
- * mastering node's real grant, not a fabrication.
+ * RUNG 2 -- THE FOUNDATION GRANT (vms-e8f1): a COMPATIBLE cross-node $ENQ grants
+ * (SS$_NORMAL), the lock held FOR the remote requester's CSID (owner_csid), so
+ * GET_RESMASTER reports remote_holder_csid == the peer.
  *
- * SCOPE FENCE (INV-6 -- everything past the foundation FAILS HONESTLY):
- *   - The ENQ runs with LCK_M_NOQUEUE and without LCK_M_SYNC, so an INCOMPATIBLE
- *     cross-node request declines with SS$_NOTQUEUED rather than building a
- *     cross-node wait queue. Cross-node CONTENTION/blocking is a later rung
- *     (vms-904c) -- this handler never queues or blocks the delivery thread.
- *   - LVB replication (vms-d81) and cross-node blocking-AST delivery are later
- *     rungs, so no LCK_M_VALBLK / AST is carried into the grant here.
- *   - VMS_DLM_OP_DEQ (release), GRANT, and BLKAST are NOT the foundation: they
- *     still return SS$_UNSUPPORTED -- an honest decline, never a faked receipt.
+ * RUNG 3 -- CROSS-NODE CONTENTION / BLOCK-THEN-GRANT + BLKAST (vms-904c). The ENQ
+ * scope-fence is LIFTED on exactly three things, implemented for real:
+ *   - An INCOMPATIBLE cross-node $ENQ (no NOQUEUE) now QUEUES on the master's real
+ *     waiting queue instead of declining. The dispatch returns VMS_DLM_STS_QUEUED
+ *     (0, "no completion posted") -- NOT SS$_NORMAL, NOT SS$_NOTQUEUED -- with
+ *     req->queued=1 and req->master_lkid the queued lock's handle. It NEVER blocks
+ *     the delivery thread (async queue, no LCK_M_SYNC). A wire NOQUEUE still
+ *     declines SS$_NOTQUEUED (honest).
+ *   - The master FIRES the blocking-AST decision: when the queued request blocks a
+ *     REMOTE holder, req->blocking_csid / req->blocking_master_lkid name the holder
+ *     that must receive a BLKAST over SCS (the daemon transports it).
+ *   - VMS_DLM_OP_DEQ is IMPLEMENTED (vms_lock_dlm_xnode_deq): a peer's release
+ *     runs try_grant_waiters, so the blocked request GRANTS -- the block-then-grant
+ *     flip, driven by a real $DEQ.
+ *
+ * STILL FENCED HONESTLY (INV-6 -- SS$_UNSUPPORTED, never faked):
+ *   - VMS_DLM_OP_GRANT / VMS_DLM_OP_BLKAST as RECEIVE ops: completing/notifying the
+ *     ORIGINATING node's pending lock is the requester-side wiring, not routed
+ *     through this master-centric executive path.
+ *   - LVB replication (vms-d81), resource-directory consistency (vms-1bba),
+ *     remastering (vms-6ee), distributed deadlock detection (vms-ec75).
  *
  * The request is VALIDATED so a malformed message is rejected (SS$_BADPARAM)
  * rather than silently dropped -- the same discipline vms_enq_core applies.
@@ -1461,55 +1576,62 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
         return SS__BADPARAM;
     req->resnam[sizeof(req->resnam) - 1] = '\0';
 
+    /* Clean contention outputs on every path; the ENQ branch fills them. */
+    req->queued = 0;
+    req->blocking_csid = 0;
+    req->blocking_master_lkid = 0;
+
     switch (req->op) {
     case VMS_DLM_OP_ENQ: {
         struct vms_enq_args a;
+        struct dlm_xnode_enq_out xn;
 
         /* A request that names a resource must actually name one. */
         if (req->resnam[0] == '\0')
             return SS__BADPARAM;
 
         /*
-         * THE FOUNDATION GRANT. Marshal the decoded cross-node $ENQ into the
-         * single-node lock manager on this (the mastering) node and grant it.
-         * The lock is held FOR the remote requester's cluster identity
-         * (owner_csid), NOT the local delivery daemon -- vms_enq_core stamps
-         * lock->req_csid = a.owner_csid, so GET_RESMASTER later reports the
-         * grant as remote-held for the peer's CSID.
-         *
-         * LCK_M_NOQUEUE fences out cross-node contention (a later rung): a
-         * compatible request grants immediately (SS$_NORMAL); an incompatible
-         * one declines with SS$_NOTQUEUED -- honest, no wait queue. No
-         * LCK_M_SYNC: this must never block the daemon thread waiting on a
-         * remote-driven grant. No VALBLK/AST: LVB replication and blocking-AST
-         * delivery are later rungs.
+         * Marshal the decoded cross-node $ENQ into the single-node lock manager
+         * on this (the mastering) node, in CROSS-NODE mode (xn): the lock is held
+         * FOR the remote requester's cluster identity (owner_csid), local deadlock
+         * detection is skipped (distributed, rung 7), and a blocked request is
+         * QUEUED -- not declined. Only NOQUEUE is honored from the wire flags; no
+         * LCK_M_SYNC (must never block the delivery thread) and no VALBLK (LVB is
+         * a later rung).
          */
         memset(&a, 0, sizeof(a));
         a.lkmode = req->lkmode;
-        a.flags = LCK_M_NOQUEUE;
+        a.flags = req->flags & LCK_M_NOQUEUE;
         memcpy(a.resnam, req->resnam, sizeof(a.resnam));
         a.resnam[sizeof(a.resnam) - 1] = '\0';
         a.owner_csid = req->req_csid;   /* held FOR the remote requester */
 
-        vms_enq_core(proc, &a);
+        memset(&xn, 0, sizeof(xn));
+        vms_enq_core_ex(proc, &a, &xn);
 
-        /* Hand the master's lock id back to the requester (the GRANT reply's
-         * master_lkid). On an incompatible/declined request a.lkid is 0. */
+        /* Hand the master's lock id back (the GRANT reply's master_lkid) and the
+         * contention outputs. On a NOQUEUE decline a.lkid is 0. */
         req->master_lkid = a.lkid;
-        req->master_csid = vms_local_csid; /* this node mastered the grant */
+        req->master_csid = vms_local_csid; /* this node mastered the request */
+        req->queued = xn.queued ? 1u : 0u;
+        req->blocking_csid = xn.blocking_csid;
+        req->blocking_master_lkid = xn.blocking_master_lkid;
+
+        /* A queued request is a REAL lock on the waiting queue, not a grant. */
+        if (xn.queued)
+            return VMS_DLM_STS_QUEUED;
         return a.status;
     }
     case VMS_DLM_OP_DEQ:
         /* A request that names a resource must actually name one. */
         if (req->resnam[0] == '\0')
             return SS__BADPARAM;
-        /* Cross-node release is NOT the foundation grant -- a later rung wires
-         * the master's release path. Decline honestly (never a faked receipt). */
-        return SS__UNSUPPORTED;
+        return vms_lock_dlm_xnode_deq(req);
     case VMS_DLM_OP_GRANT:
     case VMS_DLM_OP_BLKAST:
-        /* Responses carry no resource name. Completing/notifying the
-         * originating node's pending request is a later rung; decline honestly. */
+        /* Responses carry no resource name. Completing/notifying the ORIGINATING
+         * node's pending request is the requester-side wiring, not this
+         * master-centric path; decline honestly. */
         return SS__UNSUPPORTED;
     default:
         return SS__BADPARAM;

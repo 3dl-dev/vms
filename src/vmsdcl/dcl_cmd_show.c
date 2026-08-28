@@ -1167,25 +1167,6 @@ static int cmd_show_users(struct dcl_command *cmd)
 {
     int full = dcl_has_qualifier(cmd, "FULL");
 
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    struct tm tm;
-    localtime_r(&ts.tv_sec, &tm);
-
-    /* Banner brand is OVMX, not "OpenVMS": the human header names THIS
-     * product, and the trademark ceiling (INV-0) forbids claiming the
-     * OpenVMS mark as our own identity. Real VMS prints "OpenVMS User
-     * Processes"; SHOW SYSTEM already badges via ovmx_product_banner() for
-     * exactly this reason -- SHOW USERS was the one human header the
-     * rebrand missed. */
-    printf("      %s User Processes at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
-           OVMX_PRODUCT_NAME,
-           tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
-           tm.tm_hour, tm.tm_min, tm.tm_sec, (int)(ts.tv_nsec / 10000000));
-
-    char node[OVMX_IDENTITY_MAXLEN];
-    ovmx_node_name(node, sizeof(node));
-
     /* One scan, walked twice (Method Requirement 4): the summary needs the
      * counts before any table prints. Pass 1 aggregates per-user rows --
      * distinct usernames and, per user, the Interactive/Subprocess/Batch
@@ -1204,42 +1185,111 @@ static int cmd_show_users(struct dcl_command *cmd)
     int  seen_batch[256];
     int  seen_count = 0;
 
-    while (vms_kif_procscan(&index, &info) & 1) {
-        if (info.redacted || info.proc_type == VMS_PROC_T_OTHER)
-            continue;
-        process_count++;
+    /*
+     * REACH THE EXECUTIVE BEFORE PRINTING THE COUNT (vms-6a1, INV-6 / Rule 9),
+     * AND MATCH SHOW SYSTEM'S NO-EXECUTIVE FRAME.
+     *
+     * SHOW USERS is a READER of the executive process table, not a thing that
+     * fabricates its own answer. The FIRST vms_kif_procscan() call is this
+     * reader's contact with the executive, and its status splits into two
+     * outcomes that both clear bit 0 -- only one of which is "no executive":
+     *
+     *   - EXECUTIVE ANSWERED. vms_ioctl_procscan (src/kernel-core/vms_proctab.c)
+     *     sets exactly SS$_NORMAL for a row or SS$_NONEXPR (2280) once the table
+     *     walk is exhausted. SS$_NONEXPR is a PRESENT executive reporting an
+     *     empty/finished scan -- a genuinely empty table, which is still owed
+     *     the honest "= 0" count line. (The caller's own PCB is normally in the
+     *     table, so in practice the first row is SS$_NORMAL.)
+     *   - EXECUTIVE UNREACHABLE. With /dev/vms absent the bare KIF_CALL path
+     *     never reaches the executive: the ioctl fails and vms_kif_kerr_to_ss()
+     *     maps it (SS$_BUGCHECK for a bad-fd ioctl, or another transport code) --
+     *     NOT SS$_NOSUCHDEV, and NOT SS$_NONEXPR.
+     *
+     * WHAT THE UNREACHABLE BRANCH PRINTS (adjudication, vms-6a1). SHOW SYSTEM is
+     * the controlling precedent: with no executive it prints its banner and
+     * column HEADINGS and NO rows, and -- crucially -- NO computed count line
+     * (test_show_system_no_fabrication.sh, cmd_show_system in this file). SHOW
+     * USERS is the only SHOW command that prints a WALKED count, and a count
+     * computed from a scan that HARD-FAILED is a mild fabrication: it claims
+     * "I enumerated 0" when the truth is "I could not enumerate". So the
+     * unreachable branch prints the SAME frame SHOW SYSTEM does -- banner +
+     * headings (honouring the bare-vs-/FULL column split), no rows, no
+     * "Total number of users / number of processes" line -- and returns
+     * SS$_NORMAL. The count line prints ONLY when the table was readable,
+     * INCLUDING the readable-but-empty (SS$_NONEXPR) case. `readable` below is
+     * that gate; keying on "bit-0 clear" would wrongly suppress the legitimate
+     * empty-but-present count.
+     */
+    uint32_t scan_st = vms_kif_procscan(&index, &info);
+    int readable = (scan_st & 1) || scan_st == SS$_NONEXPR;
 
-        int slot = -1;
-        for (int i = 0; i < seen_count; i++) {
-            if (strcasecmp(seen_users[i], info.username) == 0) {
-                slot = i;
-                break;
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    struct tm tm;
+    localtime_r(&ts.tv_sec, &tm);
+
+    /* Banner brand is OVMX, not "OpenVMS": the human header names THIS
+     * product, and the trademark ceiling (INV-0) forbids claiming the
+     * OpenVMS mark as our own identity. Real VMS prints "OpenVMS User
+     * Processes"; SHOW SYSTEM already badges via ovmx_product_banner() for
+     * exactly this reason -- SHOW USERS was the one human header the
+     * rebrand missed. Printed only after the executive answered above. */
+    printf("      %s User Processes at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+           OVMX_PRODUCT_NAME,
+           tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
+           tm.tm_hour, tm.tm_min, tm.tm_sec, (int)(ts.tv_nsec / 10000000));
+
+    char node[OVMX_IDENTITY_MAXLEN];
+    ovmx_node_name(node, sizeof(node));
+
+    /* Walk the scan started above and print the count -- ONLY when the table
+     * was readable (executive answered). With no executive the frame below still
+     * prints its banner and headings, but no walked count: an unwalked scan has
+     * no honest count to report (see the adjudication comment above).
+     *
+     * scan_st carries the first row's status; the loop re-fetches at the tail so
+     * the guard's call is the first, not a discarded probe. */
+    if (readable) {
+        while (scan_st & 1) {
+            if (!info.redacted && info.proc_type != VMS_PROC_T_OTHER) {
+                process_count++;
+
+                int slot = -1;
+                for (int i = 0; i < seen_count; i++) {
+                    if (strcasecmp(seen_users[i], info.username) == 0) {
+                        slot = i;
+                        break;
+                    }
+                }
+                if (slot < 0 && seen_count < 256) {
+                    slot = seen_count++;
+                    strncpy(seen_users[slot], info.username, VMS_USERNAME_SIZE - 1);
+                    seen_users[slot][VMS_USERNAME_SIZE - 1] = '\0';
+                    seen_interactive[slot] = 0;
+                    seen_subprocess[slot]  = 0;
+                    seen_batch[slot]       = 0;
+                }
+                if (slot >= 0) {
+                    switch (info.proc_type) {
+                    case VMS_PROC_T_INTERACTIVE: seen_interactive[slot]++; break;
+                    case VMS_PROC_T_SUBPROCESS:  seen_subprocess[slot]++;  break;
+                    case VMS_PROC_T_BATCH:       seen_batch[slot]++;       break;
+                    default: break;
+                    }
+                }
             }
+            scan_st = vms_kif_procscan(&index, &info);
         }
-        if (slot < 0 && seen_count < 256) {
-            slot = seen_count++;
-            strncpy(seen_users[slot], info.username, VMS_USERNAME_SIZE - 1);
-            seen_users[slot][VMS_USERNAME_SIZE - 1] = '\0';
-            seen_interactive[slot] = 0;
-            seen_subprocess[slot]  = 0;
-            seen_batch[slot]       = 0;
-        }
-        if (slot >= 0) {
-            switch (info.proc_type) {
-            case VMS_PROC_T_INTERACTIVE: seen_interactive[slot]++; break;
-            case VMS_PROC_T_SUBPROCESS:  seen_subprocess[slot]++;  break;
-            case VMS_PROC_T_BATCH:       seen_batch[slot]++;       break;
-            default: break;
-            }
-        }
+
+        /* Two distinct counts, wording confirmed by three independent captures
+         * (see the FORMAT block above). "processes" is the number of rows shown;
+         * "users" is the number of distinct usernames among them. No OVMX
+         * parenthetical -- VMS prints only this line. A readable-but-empty table
+         * (SS$_NONEXPR) prints the honest "= 0" here; a scan that could not
+         * reach the executive prints no count at all. */
+        printf("    Total number of users = %d,  number of processes = %d\n\n",
+               seen_count, process_count);
     }
-
-    /* Two distinct counts, wording confirmed by three independent captures
-     * (see the FORMAT block above). "processes" is the number of rows shown;
-     * "users" is the number of distinct usernames among them. No OVMX
-     * parenthetical -- VMS prints only this line. */
-    printf("    Total number of users = %d,  number of processes = %d\n\n",
-           seen_count, process_count);
 
     if (full) {
         /* /FULL: per-process rows. DCL Dictionary column set is exactly

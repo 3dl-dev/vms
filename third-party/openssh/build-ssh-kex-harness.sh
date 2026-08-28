@@ -5,14 +5,15 @@
 # all from the one SHA-pinned OpenSSH tree, static against musl + the vendored
 # libcrypto. Item vms-22a (parent vms-843), docs/design-openssh-port-ovmx.md §7.
 #
-# WHY ONE BUILD FOR BOTH ENDS. The veneer substitution only rewrites the CLIENT
-# connect path (sshconnect.c) and the packet-layer data sites (packet.c) behind
-# -DOVMX_VENEER, keyed on a per-connection fd→handle map. `sshd` never calls
-# ovmx_ssh_connect and its accepted sockets are not in that map, so the shims
-# fall through to ordinary read()/write(): sshd is a STOCK server on host
-# sockets. So a single OVMX_VENEER build yields: `ssh` = the OVMX client whose
-# transport rides BGn: → the executive, and `sshd` = the loopback peer. The real
-# key exchange therefore happens OVER the veneer.
+# WHY ONE BUILD FOR BOTH ENDS (vms-9ac full de-veneer). The OpenSSH source is
+# UNMODIFIED: the client's socket()/connect()/read()/write()/... reach the
+# executive purely via the linker's --wrap dispatch (ovmx_ssh_wrap.o), and that
+# --wrap set is applied ONLY to the `ssh` link (via SSHLIBS), NOT to `sshd`. So
+# `ssh` = the OVMX client whose transport rides BGn: → the executive over a
+# genuine veneer handle (no AF_UNIX socketpair, no pump), and `sshd` = a STOCK
+# server on real host sockets (its socket()/connect() are never wrapped). The
+# real key exchange therefore happens OVER the executive socket seam, with zero
+# fabrication.
 #
 # OpenSSH >= 9.8 splits the daemon: `sshd` (listener) re-execs `sshd-session`
 # (per-connection) and `sshd-auth` from the COMPILED libexecdir, so this builds
@@ -67,15 +68,12 @@ LIBCRYPTO_INC="$(echo "$LC_OUT" | sed -n 's/^OVMX_LIBCRYPTO_INCLUDE=//p' | tail 
 SSL="$WORK/ssl"; rm -rf "$SSL"; mkdir -p "$SSL/lib" "$SSL/include"
 cp "$LIBCRYPTO_A" "$SSL/lib/"; cp -r "$LIBCRYPTO_INC/openssl" "$SSL/include/"
 
-# --- extract + apply the veneer transport substitution (client only takes effect) ---
+# --- extract; NO source patch (vms-9ac full de-veneer: --wrap dispatch only) ---
 rm -rf "$SRCDIR"; tar xzf "$TARBALL"
 [ -d "$SRCDIR" ] || { echo "FAIL: inner dir $SRCDIR missing" >&2; exit 1; }
-( cd "$SRCDIR" && patch -p1 < "$HERE/ovmx/sshconnect-veneer.patch" \
-               && patch -p1 < "$HERE/ovmx/packet-veneer.patch" )
 mkdir -p "$SRCDIR/ovmx"
 cp "$ROOT/src/vmstcpip/sockets/vms_bgsock.h" "$SRCDIR/ovmx/"
-cp "$HERE/ovmx/ovmx_ssh_glue.h" "$SRCDIR/ovmx/"
-cp "$HERE/ovmx/ovmx_ssh_glue.c" "$SRCDIR/ovmx/"
+cp "$HERE/ovmx/ovmx_ssh_wrap.c" "$SRCDIR/ovmx/"
 
 # --- configure (static musl; runtime libexec/privsep paths baked in) ---
 mkdir -p "$OSSH_PRIVSEP"
@@ -97,10 +95,18 @@ ar rcs "$WORK/libovmxveneer.a" "$WORK/ov_bgsock.o" "$WORK/ov_kif.o" "$WORK/ov_xp
 
 OSSH_CFLAGS=$(sed -n 's/^CFLAGS=[[:space:]]*//p' Makefile | head -1)
 OSSH_CPPFLAGS=$(sed -n 's/^CPPFLAGS=[[:space:]]*//p' Makefile | head -1 | sed "s#\$(PATHS)##; s#\$(srcdir)#$SRCDIR#g")
-"$CC" $OSSH_CFLAGS $OSSH_CPPFLAGS -DOVMX_VENEER -I"$SRCDIR" -c "$SRCDIR/ovmx/ovmx_ssh_glue.c" -o "$WORK/ov_glue.o"
+"$CC" $OSSH_CFLAGS $OSSH_CPPFLAGS -DOVMX_WRAP -I"$SRCDIR" -c "$SRCDIR/ovmx/ovmx_ssh_wrap.c" -o "$WORK/ov_wrap.o"
+OVMX_WRAP_LDFLAGS=""
+for _s in socket connect read write close getpeername getsockname \
+          setsockopt getsockopt shutdown fcntl poll ppoll; do
+    OVMX_WRAP_LDFLAGS="$OVMX_WRAP_LDFLAGS -Wl,--wrap=$_s"
+done
 
-sed -i 's/^CPPFLAGS=/CPPFLAGS=-DOVMX_VENEER /' Makefile
-sed -i "s#^LIBS=#LIBS=$WORK/ov_glue.o $WORK/libovmxveneer.a #" Makefile
+# CLIENT-ONLY wrap: SSHLIBS is on the `ssh` link rule ONLY (not sshd), so the
+# forked sshd stays a STOCK server on a REAL socket that the wrapped ssh client
+# reaches over the executive (BGn:). Wrapping sshd too would route its listen
+# socket through the executive and break the test's stock-server topology.
+sed -i "s#^SSHLIBS=#SSHLIBS=$OVMX_WRAP_LDFLAGS $WORK/ov_wrap.o $WORK/libovmxveneer.a #" Makefile
 
 echo "== make ssh sshd sshd-session sshd-auth ssh-keygen =="
 make -j"$(nproc 2>/dev/null || echo 2)" ssh sshd sshd-session sshd-auth ssh-keygen \

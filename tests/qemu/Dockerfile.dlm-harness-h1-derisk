@@ -1,0 +1,60 @@
+# Dockerfile.dlm-harness-h1-derisk - DLM harness H1 NETDEV DE-RISK (rd vms-534).
+#
+# A throwaway-cheap image whose ONLY job is to settle H1's make-or-break
+# question: does a QEMU `socket` netdev flood the 0x6007 group multicast between
+# two guests with no host bridge / no privilege? It builds NOTHING from the OVMX
+# tree except the tiny sca_l2probe raw-L2 probe -- no vms.ko, no SCSD, no ODS-2.
+# The full H1 harness (Dockerfile.dlm-harness-h1) is built only once this proves
+# the netdev floods.
+#
+# Usage:
+#   docker build -f tests/qemu/Dockerfile.dlm-harness-h1-derisk -t ovmx-h1-derisk .
+#   docker run --rm --device /dev/kvm ovmx-h1-derisk    # (--device optional)
+# Exit 0 = both guests received the other's 0x6007 group multicast.
+
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ]; then QEMU_PKG=qemu-system-arm; else QEMU_PKG=qemu-system-x86; fi && \
+    apt-get install -y --no-install-recommends \
+    gcc musl-tools linux-libc-dev \
+    linux-image-virtual \
+    busybox-static cpio \
+    "$QEMU_PKG" \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN KVER=$(ls /lib/modules/ | sort -V | tail -1) && echo "$KVER" > /tmp/kver && echo "Kernel: $KVER"
+
+# musl UAPI header symlinks (same trick as tests/qemu/Dockerfile).
+RUN MUSL_INC=$(echo /usr/include/*-linux-musl) && \
+    ARCH_INC=$(echo /usr/include/*-linux-gnu) && \
+    ln -s /usr/include/linux "$MUSL_INC/linux" && \
+    ln -s /usr/include/asm-generic "$MUSL_INC/asm-generic" && \
+    ln -s "$ARCH_INC/asm" "$MUSL_INC/asm"
+
+COPY tests/qemu/sca_l2probe.c /src/sca_l2probe.c
+RUN musl-gcc -static -O2 -Wall -Wextra /src/sca_l2probe.c -o /sca_l2probe && \
+    { readelf -d /sca_l2probe 2>/dev/null | grep -q NEEDED && \
+        { echo "FATAL: sca_l2probe is not static"; exit 1; } || true; }
+
+RUN KVER=$(cat /tmp/kver) && \
+    if [ ! -e /boot/vmlinuz ]; then ln -s vmlinuz-${KVER} /boot/vmlinuz; fi && \
+    ls -la /boot/vmlinuz
+
+COPY tests/qemu/init_dlm_h1_derisk.sh /src/init_dlm_h1_derisk.sh
+RUN mkdir -p /initramfs/bin /initramfs/dev /initramfs/proc /initramfs/sys /initramfs/tmp && \
+    cp /bin/busybox /initramfs/bin/busybox && \
+    ln -s busybox /initramfs/bin/sh && \
+    cp /sca_l2probe /initramfs/bin/sca_l2probe && \
+    chmod +x /initramfs/bin/sca_l2probe && \
+    cp /src/init_dlm_h1_derisk.sh /initramfs/init && \
+    chmod +x /initramfs/init && \
+    cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /initramfs.cpio.gz && \
+    echo "Initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')"
+
+COPY tests/qemu/run_dlm_h1_derisk.sh /run_dlm_h1_derisk.sh
+RUN chmod +x /run_dlm_h1_derisk.sh
+
+CMD ["/run_dlm_h1_derisk.sh"]

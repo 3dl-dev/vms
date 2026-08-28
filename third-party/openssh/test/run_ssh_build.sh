@@ -48,17 +48,29 @@ if command -v readelf >/dev/null 2>&1; then
 fi
 
 echo
-echo "== confirm the transport+poll substitution is wired into the binary =="
+echo "== confirm the --wrap de-veneer dispatch is wired into the binary =="
+# vms-9ac full de-veneer: the OpenSSH source is UNMODIFIED, so there are NO
+# ovmx_ssh_* shim symbols any more. What must be linked is the __wrap_* dispatch
+# (socket/connect included -- no sshconnect source patch) over the veneer's
+# ovmx_*/$QIO transport. No AF_UNIX socketpair, no glue.
 if command -v nm >/dev/null 2>&1; then
-    for sym in ovmx_ssh_connect ovmx_ssh_read ovmx_ssh_write ovmx_ssh_sshbuf_read \
+    for sym in __wrap_socket __wrap_connect __wrap_read __wrap_write \
                ovmx_socket ovmx_connect ovmx_send ovmx_recv ovmx_pollfd \
                vms_kif_bg_pollfd; do
         nm "$SSH" | grep -q " T $sym" || {
-            echo "FAIL: expected symbol '$sym' not linked into ssh — substitution not wired"
+            echo "FAIL: expected symbol '$sym' not linked into ssh — --wrap dispatch not wired"
             exit 1
         }
     done
-    echo "   nm: transport glue + veneer + executive readiness-fd symbols all present"
+    echo "   nm: --wrap dispatch + veneer + executive readiness-fd symbols all present"
+    # And prove the fabrication is GONE: no ovmx_ssh_* glue shim may survive.
+    for gone in ovmx_ssh_connect ovmx_ssh_read ovmx_ssh_write ovmx_ssh_sshbuf_read; do
+        nm "$SSH" | grep -q " T $gone" && {
+            echo "FAIL: retired glue symbol '$gone' still linked — the socketpair pump was not excised"
+            exit 1
+        }
+    done
+    echo "   nm: no retired ovmx_ssh_* glue shim survives (socketpair pump excised)"
 fi
 
 echo

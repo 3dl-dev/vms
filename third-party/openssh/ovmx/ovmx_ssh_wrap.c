@@ -43,6 +43,7 @@
 #include <poll.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <netinet/in.h>         /* IPPROTO_TCP (AF_INET is in sys/socket.h) */
 
 #include "ovmx/vms_bgsock.h"
 
@@ -59,10 +60,35 @@ extern int __real_fcntl(int fd, int cmd, ...);
 extern int __real_poll(struct pollfd *fds, nfds_t nfds, int timeout);
 extern int __real_ppoll(struct pollfd *fds, nfds_t nfds,
                         const struct timespec *tmo, const sigset_t *mask);
+extern int __real_socket(int domain, int type, int protocol);
+extern int __real_connect(int fd, const struct sockaddr *addr, socklen_t alen);
 
 static int is_veneer(int fd)
 {
     return fd >= OVMX_BGSOCK_BASE;
+}
+
+/* vms-9ac (full de-veneer): wrap socket()/connect() so UNMODIFIED OpenSSH's
+ * ssh_create_socket() reaches the executive with NO source patch. An
+ * AF_INET/SOCK_STREAM socket becomes a veneer handle (the executive IS the IP
+ * stack, so every TCP socket belongs to it, not just the client connection);
+ * everything else stays a real libc socket. connect() on a veneer handle is the
+ * blocking ovmx_connect returning 0 on success -- OpenSSH's timeout_connect
+ * treats connect()==0 as immediate success and skips the non-blocking/EINPROGRESS
+ * dance, so no sshconnect source patch is needed. */
+int __wrap_socket(int domain, int type, int protocol)
+{
+    if (domain == AF_INET && (type & 0x0f) == SOCK_STREAM &&
+        (protocol == 0 || protocol == IPPROTO_TCP))
+        return ovmx_socket(AF_INET, SOCK_STREAM, protocol);
+    return __real_socket(domain, type, protocol);
+}
+
+int __wrap_connect(int fd, const struct sockaddr *addr, socklen_t alen)
+{
+    if (is_veneer(fd))
+        return ovmx_connect(fd, addr, alen);
+    return __real_connect(fd, addr, alen);
 }
 
 ssize_t __wrap_read(int fd, void *buf, size_t n)

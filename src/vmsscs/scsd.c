@@ -944,6 +944,8 @@ struct peer_state {
     /* --- vms-21e / vms-691: SCS sequenced-message VC engine state --- */
     struct scs_vc vc;              /* seq/ack tracking + credit + retransmit (embeds scs_seq_state) */
     int      start_replied;        /* we answered the peer's 0x41 START (sent round 0/1) */
+    int      start_initiated;      /* vms-d60: WE issued the round-0 START first (member role,
+                                    * OVMX_MCAST_SOLICIT), rather than only reflecting a peer's */
     int      start_acked;          /* we sent the round-2 46-byte ack -> START complete */
     int      vc_noack_warned;      /* vms-694: SCSD-W-VCNOACK already emitted for this peer */
     long     start_replies;        /* count of 0x41 frames we sent to this peer */
@@ -11647,6 +11649,81 @@ static void scsd_retransmit_tick(struct scsd_rx *rx, uint64_t now_ms)
 }
 
 /*
+ * scsd_start_initiate_for_peer - vms-d60 (rung-VC): the MEMBER-ROLE 0x41 START
+ * INITIATE. Off the main-loop clock, once the NISCA channel to this peer is up
+ * (rung-0's directed-HELLO solicit done), OVMX issues its OWN round-0 START to
+ * OPEN the virtual circuit -- instead of only REFLECTING a peer's START in the
+ * receive path (scsd_handle_frame ~9433, "OVMX issues its own START only when a
+ * peer identity-bearing frame arrives"). That reflect-only rule is what makes
+ * two symmetric OVMX joiners deadlock: neither initiates, start_acked never
+ * latches on either, and the whole join sequencer never fires (rd vms-f3e
+ * baseline; the two-OVMX harness stalls at rung-VC).
+ *
+ * THIS IS THE MEMBER'S ROLE. Against a real VAX, the running MEMBER sends round-0
+ * START after it has verified the channel (JOIN_MEMBER_GREET_MS: "a timer, not
+ * an event hook", the member acts 0.24-1.67 s after the newcomer's channel is
+ * up). OVMX had every RESPONDER half of the choreography but no initiator half.
+ * The frame emitted is the EXACT round-0 START the reflect path already builds
+ * (scsd_vc_emit -> scs_start_build config-round-0, send_seq=1 grounded joiner
+ * value): nothing new goes on the wire, only EARLIER and unprompted.
+ *
+ * KILL-SWITCH DISCIPLINE (CLAUDE.md Rule 8 / INV-6): fires ONLY when
+ * OVMX_MCAST_SOLICIT is set (the member-role umbrella that also arms rung-0) and
+ * OVMX_NO_START_INITIATE is unset. Absent the flag, OVMX never initiates -- it
+ * still only reflects a peer's START -- so the merged OVMX<->VAX path is
+ * BYTE-IDENTICAL (the VAX drives the START; OVMX must not also drive it). The
+ * FSM's Figure 2-7 collision handling means that even if BOTH OVMX nodes
+ * initiate within the same second, each resolves the other's START cleanly
+ * (START SENT -> START RECEIVED -> OPEN), so a single initiator is sufficient
+ * and a symmetric pair is safe.
+ *
+ * ONE-SHOT, self-limiting: after the emit the circuit leaves CLOSED, so the
+ * CLOSED guard blocks any re-initiate; the existing scsd_vc_fsm_timeout path
+ * (SCS_VC_FORMATION_TIMEOUT_MS) owns retransmits from START SENT, and an
+ * abandoned circuit is blocked by fsm.abandoned.
+ */
+static void scsd_start_initiate_for_peer(struct scsd_rx *rx, struct peer_state *ps,
+                                         uint64_t now_ms)
+{
+    if (rx == NULL || ps == NULL || ps->pb == NULL || rx->vc_ctx == NULL) {
+        return;
+    }
+    if (!rx->do_connect || getenv("OVMX_MCAST_SOLICIT") == NULL ||
+        getenv("OVMX_NO_START_INITIATE") != NULL) {
+        return;
+    }
+    /* Only once the channel is verified (rung-0), and only from a fresh CLOSED
+     * circuit we have neither started nor completed and have not been asked to
+     * reflect a peer's START into. */
+    if (!ps->channel_up || ps->start_initiated || ps->start_replied ||
+        ps->start_acked || ps->pb->fsm.abandoned ||
+        ps->pb->vc_state != SCS_VC_CLOSED) {
+        return;
+    }
+    if (!ps->vc.initialized) {
+        scs_vc_init(&ps->vc);   /* send_seq=1: the grounded joiner value */
+    }
+    if (scs_vc_fsm_send_start(ps->pb, now_ms) == SCS_VC_ACT_SEND_START &&
+        scsd_vc_emit(rx->vc_ctx, ps, SCS_VC_ACT_SEND_START)) {
+        rx->start_sent++;
+        ps->start_replies++;
+        ps->start_initiated = 1;
+        log_ts(stdout);
+        printf(" SCSD-I-STARTTX, INITIATED round-0 START (member role,"
+               " OVMX_MCAST_SOLICIT; VC %s) to"
+               " %02x:%02x:%02x:%02x:%02x:%02x (sysid=%u node='%s' send_seq=%u"
+               " incarnation=%u sys_incarnation=0x%016llx)\n",
+               scs_vc_state_name(ps->pb->vc_state),
+               ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+               ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
+               rx->vc_ctx->scssystemid, rx->vc_ctx->node_name,
+               ps->vc.seq.send_seq, ps->incarnation ? ps->incarnation : 1,
+               (unsigned long long)ovmx_incarnation_time());
+        fflush(stdout);
+    }
+}
+
+/*
  * scsd_join_retx_tick - vms-694: drive scsd_join_retx_for_peer() from the main
  * loop's OWN clock, for every peer with an outstanding join step, so a
  * stalled step (JS_MSCP_CONNECT in particular) is retried even when the
@@ -11659,6 +11736,11 @@ static void scsd_retransmit_tick(struct scsd_rx *rx, uint64_t now_ms)
  * gate on the same ps->js_last_tx / ps->last_joiner_req timestamps, so this
  * tick cannot double-send within one JOIN_RETX_TIMEOUT_MS window of a
  * HELLO-triggered send, or vice versa.
+ *
+ * vms-d60: this tick ALSO drives scsd_start_initiate_for_peer() -- the member-
+ * role round-0 START initiate -- for the same reason it drives the join retx:
+ * it is a timer-driven member action ("a timer, not an event hook"), not a
+ * response to an inbound frame. Both are no-ops with their kill-switch absent.
  *
  * OVMX_NO_JOIN_RETX_TICK=1 disables this call (guardrail 23: prove the gated
  * behaviour is suppressed) so the pre-fix HELLO-only path can be reproduced
@@ -11674,6 +11756,7 @@ static void scsd_join_retx_tick(struct scsd_rx *rx, uint64_t now_ms)
         if (ps->pb == NULL) {
             continue;
         }
+        scsd_start_initiate_for_peer(rx, ps, now_ms);
         scsd_join_retx_for_peer(rx, ps, (long)now_ms);
     }
 }

@@ -158,11 +158,23 @@ static inline const char *ovmx_syskrnl_banner(void)
 /* ---- VMS-compat identity (machine surfaces, true-to-arch) -------- */
 
 /*
- * Real VSI OpenVMS version for an arch with VMS lineage. x86-64 is the only
- * lineage arch OVMX targets today. PURITY: operator-ruled family (D1);
- * exact patch level pending oracle pin -- see the purity note above.
+ * Real VSI OpenVMS version for each arch with VMS lineage -- the version the
+ * real VSI/HP OpenVMS that ran on THAT hardware reports, so F$GETSYI("VERSION")
+ * is true-to-arch (a program reading it learns the VMS version, not OVMX's own).
+ * PURITY: operator-pinned (rd vms-10e), grounded in the lab systems + public
+ * OpenVMS facts, never guessed:
+ *   - x86-64 -> V9.2-3 (the current VSI OpenVMS x86 family; D1).
+ *   - VAX    -> V7.3   (OpenVMS VAX V7.3, the FINAL VAX release; lab-1's version.
+ *                       Exact 8-char padded F$GETSYI form to be refined from the
+ *                       lab-1 oracle when vms-2f3 frees it -- do NOT disturb the
+ *                       live rejoin investigation for this; "V7.3" is correct).
+ *   - Alpha  -> V8.4   (OpenVMS Alpha V8.4, the FINAL Alpha release; lab-Alpha's
+ *                       version. Byte-confirm of the exact string pending the
+ *                       Alpha lane's lab-Alpha check).
  */
 #define OVMX_VMS_COMPAT_VERSION_X86_64  "V9.2-3"
+#define OVMX_VMS_COMPAT_VERSION_VAX     "V7.3"
+#define OVMX_VMS_COMPAT_VERSION_ALPHA   "V8.4"
 
 /* Node-name fallback when SYSGEN SCSNODE is unconfigured. Matches the
  * cluster daemon's fallback (src/vmsscs/scsd.c resolve_node_identity) so
@@ -184,6 +196,10 @@ static inline const char *ovmx_hw_arch(void)
     return "X86_64";
 #elif defined(__aarch64__)
     return "AARCH64";
+#elif defined(__alpha__)
+    return "Alpha";   /* real VMS SYI$_ARCH_NAME is mixed-case "Alpha" */
+#elif defined(__vax__)
+    return "VAX";
 #else
     return "UNKNOWN";
 #endif
@@ -196,7 +212,7 @@ static inline const char *ovmx_hw_arch(void)
  */
 static inline int ovmx_arch_has_vms_lineage(void)
 {
-#if defined(__x86_64__)
+#if defined(__x86_64__) || defined(__alpha__) || defined(__vax__)
     return 1;
 #else
     return 0;
@@ -205,16 +221,28 @@ static inline int ovmx_arch_has_vms_lineage(void)
 
 /*
  * ovmx_compat_version - The version token MACHINES read (F$GETSYI VERSION,
- * SYI$_VERSION). True-to-arch per the iron rule:
- *   - lineage arch (x86-64) -> the real VSI version for that arch
- *   - no lineage  (aarch64) -> OVMX's own version, honestly
- * Never a global constant, never a fabricated VMS arch.
+ * SYI$_VERSION). True-to-arch per the iron rule -- the real VSI OpenVMS version
+ * that ran on THIS hardware, selected at compile time from the arch's own
+ * predefined macro:
+ *   - x86-64 -> V9.2-3   (VSI OpenVMS x86)
+ *   - Alpha  -> V8.4     (OpenVMS Alpha, final release)
+ *   - VAX    -> V7.3     (OpenVMS VAX, final release)
+ *   - no lineage (aarch64/other) -> OVMX's own version, honestly
+ * Never a global constant, never a fabricated VMS arch. The per-arch constant
+ * matches ovmx_arch_has_vms_lineage()/ovmx_hw_arch(): every lineage arch has its
+ * own real version here, so no arch reports another arch's VMS version.
  */
 static inline const char *ovmx_compat_version(void)
 {
-    return ovmx_arch_has_vms_lineage()
-           ? OVMX_VMS_COMPAT_VERSION_X86_64
-           : OVMX_PRODUCT_VERSION;
+#if defined(__x86_64__)
+    return OVMX_VMS_COMPAT_VERSION_X86_64;
+#elif defined(__alpha__)
+    return OVMX_VMS_COMPAT_VERSION_ALPHA;
+#elif defined(__vax__)
+    return OVMX_VMS_COMPAT_VERSION_VAX;
+#else
+    return OVMX_PRODUCT_VERSION;
+#endif
 }
 
 /*

@@ -265,12 +265,13 @@ run_login_boot() {
 # does -- never a literal version here.
 #   BANNER = OVMX_PRODUCT_NAME " " OVMX_PRODUCT_VERSION (what the boot prints,
 #            ovmx_product_banner()).
-#   COMPAT = the token F$GETSYI("VERSION") reports, ovmx_compat_version(): on a
-#            lineage arch the real VSI version, else OVMX's own version. Alpha is
-#            NOT __x86_64__ (the only lineage branch in ovmx_identity.h today), so
-#            ovmx_arch_has_vms_lineage()==0 and ovmx_compat_version() returns
-#            OVMX_PRODUCT_VERSION -- so COMPAT == the product version on Alpha.
-#            (If Alpha ever gains a lineage define, this tracks it automatically.)
+#   COMPAT = the token F$GETSYI("VERSION") reports, ovmx_compat_version(): rd
+#            vms-10e added an __alpha__ VMS-lineage branch, so on Alpha this now
+#            returns the real OpenVMS Alpha version OVMX_VMS_COMPAT_VERSION_ALPHA
+#            ("V8.4", the final Alpha release), NOT the product version. We
+#            single-source it from that same per-arch constant the runtime reads,
+#            so the F$GETSYI VERSION assertion stays INV-1-consistent (VAX gained
+#            the same treatment, V7.3).
 #   VOLUME_LABEL = the mastered ODS-2 system-disk label, from
 #            build-alpha-bootimage.sh's `vmsfs_master --ods2 master ... OVMXSYS`.
 derive_expected_identity() {
@@ -282,7 +283,10 @@ derive_expected_identity() {
   pver=$(idval OVMX_PRODUCT_VERSION)
   [ -n "$pname" ] && [ -n "$pver" ] || die "could not read OVMX_PRODUCT_NAME/VERSION from $IDENTITY"
   EXPECTED_BOOT_BANNER="$pname $pver"
-  EXPECTED_COMPAT_VERSION="$pver"
+  local cver
+  cver=$(idval OVMX_VMS_COMPAT_VERSION_ALPHA)
+  [ -n "$cver" ] || die "could not read OVMX_VMS_COMPAT_VERSION_ALPHA from $IDENTITY (rd vms-10e)"
+  EXPECTED_COMPAT_VERSION="$cver"
   # VOLUME_LABEL tracks build-alpha-bootimage.sh's master step; verify the source
   # still uses it so a relabel there cannot silently desync this gate.
   VOLUME_LABEL="OVMXSYS"
@@ -455,7 +459,7 @@ case "$MODE" in
     ensure_artifacts
     derive_expected_identity
     log "expected boot banner (ovmx_identity.h): $EXPECTED_BOOT_BANNER"
-    log "expected compat version (ovmx_compat_version, Alpha=product version): $EXPECTED_COMPAT_VERSION"
+    log "expected compat version (ovmx_compat_version, Alpha VMS lineage V8.4): $EXPECTED_COMPAT_VERSION"
     log "volume label: $VOLUME_LABEL"
     ts0=$(date +%s)
     if run_acceptance_boot "acceptance"; then

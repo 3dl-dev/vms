@@ -30,6 +30,7 @@
 #include <linux/vmalloc.h>          /* remap_vmalloc_range (vms_lnm_mmap, vms-d61) */
 
 #include "vms_internal.h"
+#include "vms_bg_core.h"    /* vms_bg_capture_channels -- fork-inherit snapshot (vms-0cd) */
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("OVMX Project");
@@ -360,12 +361,51 @@ static uint32_t vms_proc_parent_job_id(void)
  * inside it (hash-outer, chan-inner; BG ioctls never take hash_lock, so no
  * inverse order exists). child is not yet in the hash, so it needs no lock.
  */
+/*
+ * vms_proc_capture_channels_for_task - for the fork-inherit rind (vms-0cd). If
+ * `parent_task`'s thread group has a registered PCB, capture a kref'd snapshot of
+ * its BG channels onto `out` (a caller-owned empty list). Returns nonzero iff
+ * anything was captured. Holds vms_proc_hash_lock so the parent PCB cannot be freed
+ * mid-capture -- safe to call from the atomic sched_process_fork tracepoint. Same
+ * hash-outer / chan-inner order as vms_proc_inherit_channels below.
+ */
+int vms_proc_capture_channels_for_task(struct task_struct *parent_task,
+                                       struct list_head *out, uint32_t *out_next_chan)
+{
+    struct vms_proc *parent;
+    pid_t ptgid = task_tgid_nr(parent_task);
+    struct pid *ppid = task_tgid(parent_task);
+
+    spin_lock(&vms_proc_hash_lock);
+    hash_for_each_possible(vms_proc_hash, parent, hash_node, ptgid) {
+        if (parent->linux_pid != ptgid)
+            continue;
+        if (parent->pid_ref != ppid)     /* recycle-safe: same INSTANCE only */
+            continue;
+        (void)vms_bg_capture_channels(parent, out, out_next_chan);
+        break;
+    }
+    spin_unlock(&vms_proc_hash_lock);
+    return !list_empty(out);
+}
+
 static void vms_proc_inherit_channels(struct vms_proc *child)
 {
     struct task_struct *rp;
     struct pid *parent_pid = NULL;
     pid_t parent_tgid = 0;
     struct vms_proc *parent;
+
+    /*
+     * vms-0cd: prefer the FORK-TIME snapshot, captured before an accept->fork->close
+     * forking server (sshd, inetd) could close the listener's copy of the accepted
+     * connection. Falls through to the #815 real_parent-at-registration snapshot
+     * below when there is no fork record (the parent-stays-open case, which both
+     * paths handle -- the fork record just wins the race when the parent closes
+     * early).
+     */
+    if (vms_bg_forkinherit_consume(child))
+        return;
 
     rcu_read_lock();
     rp = rcu_dereference(current->real_parent);
@@ -1271,6 +1311,16 @@ static int __init vms_init(void)
     }
 
     pr_info("vms: /dev/vms registered successfully\n");
+
+    /* vms-0cd: eager fork-time BG channel inheritance (sched_process_fork hook), so
+     * an accept->fork->close forking server (sshd, inetd) hands its accepted
+     * connection to the forked child even though it closes its own copy right after
+     * the fork. Non-fatal on failure: the #815 real_parent-at-registration path
+     * still handles the parent-stays-open case; only the close-early race stays
+     * unfixed, and it fails HONEST (SS$_IVCHAN), never fabricated. */
+    if (vms_bg_forkinherit_init())
+        pr_warn("vms: fork-time BG channel inheritance unavailable; accept->fork->close daemons fall back to #815 (honest)\n");
+
     return 0;
 }
 
@@ -1284,6 +1334,10 @@ static void __exit vms_exit(void)
 
     /* Unregister device */
     misc_deregister(&vms_misc);
+
+    /* vms-0cd: stop capturing forks and drain any un-consumed fork-inherit records
+     * (dropping the socket refs they hold) BEFORE the PCBs they snapshot are freed. */
+    vms_bg_forkinherit_exit();
 
     /* Free all process state (vms_proc_free handles sub-objects) */
     hash_for_each_safe(vms_proc_hash, bkt, tmp, proc, hash_node) {

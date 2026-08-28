@@ -713,10 +713,26 @@ void vms_bg_release_all(struct vms_proc *proc)
  * PARENT's chan_lock is taken here to walk its live list; the copies are built
  * on a private list and spliced onto CHILD only once the whole set succeeded.
  */
-void vms_bg_inherit(struct vms_proc *child, struct vms_proc *parent)
+/*
+ * vms_bg_capture_channels - take a kref'd SNAPSHOT of `parent`'s BG channels onto
+ * the caller-owned list `out` (must start empty). Each captured channel shares the
+ * parent's ONE host socket via exec_socket_get, so the connection SURVIVES even if
+ * the parent later $DASSGNs its own copy -- which is the whole point when the
+ * snapshot is taken at FORK (vms-0cd): the accept->fork->close forking-server
+ * pattern (sshd, inetd) closes the listener's copy of the connection right after
+ * the fork, long before the child registers, and a snapshot taken at the child's
+ * registration would miss it. All-or-nothing under memory pressure: on OOM `out` is
+ * left EMPTY (every partial copy unwound) and -ENOMEM returned, so a caller never
+ * adopts a half-table. *out_next_chan receives parent->next_chan iff anything was
+ * captured. GFP_ATOMIC: callable from the atomic sched_process_fork tracepoint.
+ *
+ * Takes parent->chan_lock; the caller must hold whatever keeps `parent` itself
+ * alive across the call (vms_proc_hash_lock at both call sites).
+ */
+int vms_bg_capture_channels(struct vms_proc *parent, struct list_head *out,
+                            uint32_t *out_next_chan)
 {
-    struct vms_bg_chan *pch, *cch, *tmp;
-    LIST_HEAD(copied);
+    struct vms_bg_chan *pch, *cch;
     bool oom = false;
 
     spin_lock(&parent->chan_lock);
@@ -731,28 +747,71 @@ void vms_bg_inherit(struct vms_proc *child, struct vms_proc *parent)
         cch->sock = pch->sock;
         if (cch->sock)
             exec_socket_get(cch->sock);     /* share the ONE host socket */
-        list_add_tail(&cch->list, &copied);
+        list_add_tail(&cch->list, out);
     }
     /*
-     * Carry the channel-number high-water mark forward so a later $ASSIGN in
-     * the child never mints a number that collides with an inherited one
-     * (next_chan is the shared counter for device/mailbox/BG/file channels).
+     * Carry the channel-number high-water mark forward so a later $ASSIGN in the
+     * child never mints a number that collides with an inherited one (next_chan is
+     * the shared counter for device/mailbox/BG/file channels).
      */
-    if (!oom && !list_empty(&copied))
-        child->next_chan = parent->next_chan;
+    if (!oom && !list_empty(out) && out_next_chan)
+        *out_next_chan = parent->next_chan;
     spin_unlock(&parent->chan_lock);
 
     if (oom) {
-        list_for_each_entry_safe(cch, tmp, &copied, list) {
-            list_del(&cch->list);
-            if (cch->sock)
-                exec_socket_release(cch->sock);
-            kfree(cch);
-        }
+        vms_bg_drop_captured(out);
+        return -ENOMEM;
+    }
+    return 0;
+}
+
+/*
+ * vms_bg_adopt_channels - splice a captured list (from vms_bg_capture_channels)
+ * onto `child`'s channel table, carrying the next_chan high-water forward. The list
+ * is consumed (emptied). `child` is not yet published in the hash, so it needs no
+ * lock of its own.
+ */
+void vms_bg_adopt_channels(struct vms_proc *child, struct list_head *captured,
+                           uint32_t next_chan)
+{
+    if (list_empty(captured))
+        return;
+    if (next_chan)
+        child->next_chan = next_chan;
+    list_splice_tail_init(captured, &child->bg_channels);
+}
+
+/*
+ * vms_bg_drop_captured - free a captured list WITHOUT adopting it, releasing each
+ * shared socket ref. Used when a fork-time snapshot is never consumed (the forked
+ * child never registers before it exits), and on the OOM unwind above.
+ */
+void vms_bg_drop_captured(struct list_head *captured)
+{
+    struct vms_bg_chan *cch, *tmp;
+
+    list_for_each_entry_safe(cch, tmp, captured, list) {
+        list_del(&cch->list);
+        if (cch->sock)
+            exec_socket_release(cch->sock);
+        kfree(cch);
+    }
+}
+
+/*
+ * vms_bg_inherit - the #815 real_parent-at-registration path: snapshot the parent
+ * live and adopt it onto the child. Retained as the FALLBACK for the parent-stays-
+ * open case; the fork-time snapshot (vms_bg_forkinherit.c) wins the race when the
+ * parent closes early. Caller holds vms_proc_hash_lock (keeping `parent` alive).
+ */
+void vms_bg_inherit(struct vms_proc *child, struct vms_proc *parent)
+{
+    LIST_HEAD(captured);
+    uint32_t next_chan = 0;
+
+    if (vms_bg_capture_channels(parent, &captured, &next_chan) != 0) {
         pr_warn("vms: BG-channel fork inheritance OOM; child inherits none (honest IVCHAN downstream)\n");
         return;
     }
-
-    /* Publish the fully-built set onto the (still-private) child list. */
-    list_splice_tail(&copied, &child->bg_channels);
+    vms_bg_adopt_channels(child, &captured, next_chan);
 }

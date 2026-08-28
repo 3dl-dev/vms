@@ -528,6 +528,7 @@ bgsock-getname-addr-zeroed
 bgsock-exec-handle-not-readopted
 bg-accept-socket-not-installed
 bg-materialize-fd-not-routed
+fork-inherit-disabled
 initialize-home-magic-not-written
 dirlogical-compose-drops-common-member
 dcl-acp-search-fid-fabricated
@@ -5887,6 +5888,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    fork-inherit-disabled)
+        case "$_f" in
+        facility)     echo "INET pseudo-device BGn: -- EAGER FORK-TIME BG channel inheritance (vms_bg_forkinherit_consume + the sched_process_fork capture, src/kernel/vms_bg_forkinherit.c, vms-0cd). #815 inherits a parent's BG channels at the child's REGISTRATION; the fork-time path captures them AT FORK so an accept->fork->close forking server (sshd, inetd) still hands the accepted connection to its child even though it closes its own copy right after the fork.";;
+        targets)      echo "kernel/vms_bg_forkinherit.c";;
+        suites_red)   echo "test_syssvc_bg_fork_close_inherit";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation makes vms_bg_forkinherit_consume's lookup never match (if (0 && ...)), so the child's registration finds no fork-time record and falls back to the #815 real_parent-at-registration snapshot. In test_syssvc_bg_fork_close_inherit the parent CLOSES the accepted channel right after the fork, so by the time the child registers the channel is gone: the child's ovmx_materialize_fd returns SS\$_IVCHAN, and its byte-exact round-trip fails. The no-executive honest-skip and the accept/listener assertions stay green -- only the child's inherit-and-round-trip assertion reddens. This is the eager-fork-inheritance anchor: disable the fork-time capture and the accept->fork->close race is lost. One condition zeroed.";;
+        require_fail) cat <<'EOF'
+the forked+exec'd child materialized the inherited connection and round-tripped BYTE-EXACT, though the parent CLOSED it right after the fork -- eager fork-time inheritance (vms-0cd)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     # -------------------------------------------------------------------
     # vms-6c6 / vms-165: the two vms-8b6/#284 cross-process mount-visibility
     # controls (vmsfs-mountvis-crossproc-resolve-disabled) and the
@@ -6966,6 +6984,15 @@ apply_edit() {
         # After substitution no "    return n;" is left in the range, so a second
         # apply is the no-op the selftest requires.
         sed -i '/^static ssize_t vms_bg_datafd_read/,/^}$/ s|    return n;.*|    return 0; /* NEGCTL bg-materialize-fd-not-routed */|' "$_file";;
+
+    fork-inherit-disabled)
+        # Make vms_bg_forkinherit_consume's lookup NEVER match, so the registering
+        # child finds no fork-time record and falls back to the #815 real_parent
+        # snapshot -- which loses the accept->fork->close race. The matching
+        # condition is UNIQUE to this file; prefixing "0 && " keeps every variable
+        # referenced (compiles clean) while forcing the loop to never set pend. After
+        # substitution the original condition is gone, so a second apply is a no-op.
+        sed -i 's|if (cur->tgid == tgid \&\& cur->pid_ref == pidref)|if (0 \&\& cur->tgid == tgid \&\& cur->pid_ref == pidref) /* NEGCTL fork-inherit-disabled */|' "$_file";;
 
     initialize-home-magic-not-written)
         # UNIQUE TEXT: the home-block magic write in format_volume

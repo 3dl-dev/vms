@@ -1208,6 +1208,19 @@ void vms_bg_release_all(struct vms_proc *proc);
  */
 void vms_bg_inherit(struct vms_proc *child, struct vms_proc *parent);
 
+/*
+ * Eager fork-time BG channel inheritance (vms-0cd), Linux rind
+ * (src/kernel/vms_bg_forkinherit.c). vms_proc_capture_channels_for_task lives in
+ * vms_module.c (it owns the PCB hash); the rest are the rind's tracepoint machinery.
+ */
+struct task_struct;
+struct list_head;
+int  vms_proc_capture_channels_for_task(struct task_struct *parent_task,
+                                        struct list_head *out, uint32_t *out_next_chan);
+int  vms_bg_forkinherit_init(void);              /* register the fork/exit hooks */
+void vms_bg_forkinherit_exit(void);              /* unregister + drain pending records */
+int  vms_bg_forkinherit_consume(struct vms_proc *child);  /* adopt this task's fork record, if any */
+
 /* Subsystem init/cleanup */
 int vms_lock_init(void);
 void vms_lock_cleanup(void);

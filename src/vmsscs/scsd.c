@@ -983,6 +983,11 @@ struct peer_state {
      * connection (formation-clean-2node.pcap idx52 CONNECT-REQ -> idx59 CM). */
     int      joiner_connect_sent;  /* we sent our own VMS$VAXcluster CONNECT-REQUEST */
     int      joiner_connected;     /* the member accepted it (Con.ID pair bound) */
+    /* vms-164d (DLM rung-1b): the LIVE cross-node $ENQ round-trip state. */
+    int      dlm_enq_sent;         /* node-A: we sent one OVMX$DLM ENQ to this peer (one-shot) */
+    int      dlm_grant_recv;       /* node-A: the peer's GRANT response arrived */
+    uint32_t dlm_grant_status;     /* node-A: the VMS status the peer's executive returned */
+    unsigned long dlm_srv_responses; /* node-B: GRANT frames we emitted back to this peer */
     /* vms-694 (§4(O.7)): OVMX's OWN model of "am I a connected VMS$VAXcluster
      * member of this peer", LATCHED the moment the VMS$VAXcluster SYSAP
      * connection (cdt_joiner, or cdt_member if it ever reaches OPEN) hits the
@@ -3595,6 +3600,17 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                                sixteen above: this is ordinary sequenced SCS
  *                                traffic on a connection that cannot exist
  *                                before its circuit does.
+ *
+ *   CHOKED, and new in vms-164d (DLM rung-1b):
+ *     scsd_dlm_send_enq()        node-A's cross-node $ENQ request, an MTYPE-10
+ *                                SYSAP message on the OPEN VMS$VAXcluster VC to
+ *                                the peer's OVMX$DLM server handle -- ordinary
+ *                                sequenced SCS traffic on a connection that
+ *                                cannot exist before its circuit does.
+ *     scsd_dlm_srv_msg_input()   node-B's GRANT response leg: the honest
+ *                                executive status (SS$_UNSUPPORTED/SS$_NOSUCHDEV,
+ *                                never a fabricated grant) sent back on the SAME
+ *                                OPEN VC, same argument as the MSCP responder.
  *
  *   CHOKED, and new in vms-600:
  *     scsd_mscp_srv_xfer()       the live scs_mscp_srv_xfer_fn: the SCA
@@ -7917,8 +7933,191 @@ static void scsd_dlm_srv_msg_input(struct scs_cdt *cdt, const void *msg,
         return; /* not a well-formed DLM-over-SCS frame -- nothing to dispatch */
     }
 
-    (void)scsd_dlm_dispatch_to_executive(&v.msg);
+    /* Only a REQUEST (ENQ/DEQ) is dispatched + answered here. A GRANT/BLKAST is
+     * a response class and belongs to the client input, not this server input;
+     * ignoring it also makes a stray GRANT unable to trigger a reply storm. */
+    if (v.msg.op != SCS_DLM_OP_ENQ && v.msg.op != SCS_DLM_OP_DEQ) {
+        return;
+    }
+
+    /* Hand the decoded request to the executive's cross-node lock handler over
+     * /dev/vms (rung 1). REAL status: SS$_UNSUPPORTED on a live /dev/vms (the
+     * rung-1 dispatch stub grants nothing), SS$_NOSUCHDEV when no executive is
+     * present (the Docker harness -- Rule 9: Docker is not a runtime, there is
+     * no /dev/vms). Either way it is HONEST -- never a fabricated grant. */
+    uint32_t status = scsd_dlm_dispatch_to_executive(&v.msg);
     rx_dlm_dispatched++;
+    log_ts(stdout);
+    printf(" SCSD-I-DLMRX, cross-node %s from CSID=%u resnam='%.*s'"
+           " -> executive status=0x%08X\n",
+           scs_dlm_op_name(v.msg.op), (unsigned)v.msg.req_csid,
+           (int)v.msg.namelen, v.msg.resnam, (unsigned)status);
+    fflush(stdout);
+
+    /* vms-164d (DLM rung-1b): THE B->A RESPONSE LEG. The executive's real status
+     * travels back to the requester as an SCS_DLM_OP_GRANT frame on the same VC.
+     * INV-6: this GRANTS NOTHING -- it carries `status` verbatim (SS$_UNSUPPORTED
+     * / SS$_NOSUCHDEV), never a fabricated success. Gated on the member-role flag
+     * so flag-off is byte-identical (a real VAX drives its own DLM; OVMX does not
+     * originate cross-node DLM traffic without the flag). */
+    struct scsd_rx *rx = scsd_rx_current.rx;
+    if (rx == NULL || !scsd_member_initiate_enabled()) {
+        return;
+    }
+    struct scs_dlm_params gp;
+    memset(&gp, 0, sizeof(gp));
+    memcpy(gp.dst_mac, ps_port_addr(ps), 6);
+    memcpy(gp.src_mac, rx->our_hw_mac, 6);
+    memcpy(gp.src_logical, rx->our_src_logical, 6);
+    memcpy(gp.peer_logical, ps_sys_addr(ps), 6);
+    gp.local_conid = PS_DLM_SERVER_CONID(ps);
+    gp.remote_conid = v.local_conid;              /* the requester's DLM client handle */
+    gp.recv_ack = ps->vc.seq.recv_seq;
+    gp.send_seq = scs_seq_advance(&ps->vc.seq);
+    gp.incarnation = ps->incarnation;
+
+    struct scs_dlm_msg g;
+    memset(&g, 0, sizeof(g));
+    g.op = SCS_DLM_OP_GRANT;
+    g.mode = v.msg.mode;
+    g.req_lkid = v.msg.req_lkid;
+    g.status = status;                            /* the HONEST executive status */
+    g.req_csid = v.msg.req_csid;
+    g.master_csid = resolve_scssystemid();        /* this node mastered the request */
+    g.namelen = v.msg.namelen;
+    memcpy(g.resnam, v.msg.resnam, sizeof(g.resnam));
+
+    uint8_t frame[SCS_DLM_FRAME_LEN];
+    if (scs_dlm_build_frame(&gp, &g, frame) == 0 &&
+        send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
+                      "OVMX$DLM GRANT (rung-1b response)", frame,
+                      sizeof(frame)) > 0) {
+        ps->dlm_srv_responses++;
+        log_ts(stdout);
+        printf(" SCSD-I-DLMGRANT, sent GRANT status=0x%08X back to CSID=%u"
+               " (local=0x%08X remote=0x%08X) -- honest response, no grant\n",
+               (unsigned)status, (unsigned)v.msg.req_csid,
+               (unsigned)PS_DLM_SERVER_CONID(ps), (unsigned)v.local_conid);
+        fflush(stdout);
+    }
+}
+
+/*
+ * scsd_dlm_cli_msg_input - node-A's DLM CLIENT input routine (vms-164d rung-1b).
+ * The GRANT the peer sent back in answer to our ENQ lands here (dest Con.ID =
+ * our PS_DLM_CONID). Decode it and complete the pending request by recording the
+ * peer's status. INV-6: we record whatever the peer's executive returned -- a
+ * GRANT carrying SS$_UNSUPPORTED/SS$_NOSUCHDEV is NOT a lock grant; the LIVE
+ * transport worked, the lock did not.
+ */
+static void scsd_dlm_cli_msg_input(struct scs_cdt *cdt, const void *msg,
+                                   size_t msglen, void *ctx)
+{
+    (void)cdt;
+    (void)msg;
+    (void)msglen;
+    struct peer_state *ps = (struct peer_state *)ctx;
+    struct scsd_rx_frame cur = scsd_rx_current;
+    struct scs_dlm_view v;
+
+    if (ps == NULL || cur.frame == NULL ||
+        scs_dlm_parse(cur.frame, (size_t)cur.len, &v) != 0 ||
+        v.msg.op != SCS_DLM_OP_GRANT) {
+        return;
+    }
+    ps->dlm_grant_recv = 1;
+    ps->dlm_grant_status = v.msg.status;
+    log_ts(stdout);
+    printf(" SCSD-I-DLMDONE, cross-node $ENQ round-trip COMPLETE: peer"
+           " (master CSID=%u) answered GRANT status=0x%08X resnam='%.*s'"
+           " -- LIVE A->B->A transport proven; lock NOT granted (honest)\n",
+           (unsigned)v.msg.master_csid, (unsigned)v.msg.status,
+           (int)v.msg.namelen, v.msg.resnam);
+    fflush(stdout);
+}
+
+/*
+ * scsd_dlm_send_enq - node-A's SEND path (vms-164d rung-1b). Once the join to
+ * this peer is complete (its VMS$VAXcluster VC bound at JOINBOUND, so we know
+ * its Con.ID base), issue ONE OVMX$DLM ENQ over the LIVE VC. Triggered by the
+ * lab switch OVMX_DLM_ENQ=<resource-name>; one-shot per peer.
+ *
+ * DLM SYSAP addressing WITHOUT a separate connect round-trip (OVMX design
+ * choice, labelled): the peer allocates its DLM SERVER handle deterministically
+ * as PS_DLM_SERVER_CONID = base | slot | 0x000F, sharing the SAME base+slot as
+ * the VMS$VAXcluster server handle it already taught us at JOINBOUND
+ * (joiner_remote_conid, class 0x0001). We therefore RESOLVE its DLM server
+ * Con.ID by substituting the class nibble -- no fabricated handle, the exact
+ * value the peer's scsd_dlm_ensure_server_cdt() registered. The peer's server
+ * CDT is unbound (remote_conid==0), so scs_cdl_resolve() admits our frame and
+ * learns our client handle from the envelope; symmetrically our client CDT
+ * (also unbound) admits its GRANT. Gated on the member-role flag.
+ */
+static void scsd_dlm_send_enq(struct scsd_rx *rx, struct peer_state *ps)
+{
+    if (rx == NULL || ps == NULL || ps->pb == NULL) {
+        return;
+    }
+    const char *resname = getenv("OVMX_DLM_ENQ");
+    if (resname == NULL || resname[0] == '\0' || !scsd_member_initiate_enabled()) {
+        return;
+    }
+    /* Only after the join is complete: JOINBOUND taught us joiner_remote_conid,
+     * which anchors the peer's Con.ID base+slot. */
+    if (!ps->joiner_connected || ps->joiner_remote_conid == 0 || ps->dlm_enq_sent) {
+        return;
+    }
+
+    struct scs_cdt *cli = scs_cdl_lookup(&scsd_cdl, PS_DLM_CONID(ps));
+    if (cli == NULL) {
+        cli = scs_cdl_alloc_conid(&scsd_cdl, PS_DLM_CONID(ps),
+                                  "OVMX$DLM", "OVMX$DLM", ps->pb);
+    }
+    if (cli != NULL) {
+        scs_cdt_set_handlers(cli, scsd_dlm_cli_msg_input, NULL, NULL, ps);
+    }
+
+    uint32_t dlm_server = (ps->joiner_remote_conid & 0xFFFFFFF0u) |
+                          OVMX_CONID_CLS_DLMSRV;
+
+    struct scs_dlm_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, ps_port_addr(ps), 6);
+    memcpy(p.src_mac, rx->our_hw_mac, 6);
+    memcpy(p.src_logical, rx->our_src_logical, 6);
+    memcpy(p.peer_logical, ps_sys_addr(ps), 6);
+    p.local_conid = PS_DLM_CONID(ps);
+    p.remote_conid = dlm_server;
+    p.recv_ack = ps->vc.seq.recv_seq;
+    p.send_seq = scs_seq_advance(&ps->vc.seq);
+    p.incarnation = ps->incarnation;
+
+    struct scs_dlm_msg m;
+    memset(&m, 0, sizeof(m));
+    m.op = SCS_DLM_OP_ENQ;
+    m.mode = LCK$K_EXMODE;
+    m.req_lkid = 1;                        /* our local lock handle for this request */
+    m.req_csid = resolve_scssystemid();    /* our node identity */
+    size_t rl = strlen(resname);
+    if (rl > SCS_DLM_RESNAM_MAX) {
+        rl = SCS_DLM_RESNAM_MAX;
+    }
+    m.namelen = (uint8_t)rl;
+    memcpy(m.resnam, resname, rl);
+
+    uint8_t frame[SCS_DLM_FRAME_LEN];
+    if (scs_dlm_build_frame(&p, &m, frame) == 0 &&
+        send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
+                      "OVMX$DLM ENQ (rung-1b request)", frame,
+                      sizeof(frame)) > 0) {
+        ps->dlm_enq_sent = 1;
+        log_ts(stdout);
+        printf(" SCSD-I-DLMENQ, sent cross-node $ENQ resnam='%.*s' mode=%s"
+               " to peer DLM server 0x%08X (our client 0x%08X) over LIVE VC\n",
+               (int)m.namelen, m.resnam, scs_dlm_mode_name(m.mode),
+               (unsigned)dlm_server, (unsigned)PS_DLM_CONID(ps));
+        fflush(stdout);
+    }
 }
 
 /*
@@ -11802,6 +12001,10 @@ static void scsd_join_retx_tick(struct scsd_rx *rx, uint64_t now_ms)
         }
         scsd_start_initiate_for_peer(rx, ps, now_ms);
         scsd_join_retx_for_peer(rx, ps, (long)now_ms);
+        /* vms-164d (DLM rung-1b): once the join to this peer is complete, fire
+         * the one-shot cross-node $ENQ if OVMX_DLM_ENQ names a resource. A no-op
+         * with the lab switch or the member-role flag absent. */
+        scsd_dlm_send_enq(rx, ps);
     }
 }
 

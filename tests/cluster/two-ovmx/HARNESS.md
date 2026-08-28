@@ -247,6 +247,48 @@ its own 0x4b form.
 burst — `SHOW CLUSTER` CLUSTATE — is a further quorum-transition layer, not part
 of the SYSAP-connection success oracle.)
 
+## DLM rung-1b landed — LIVE cross-node $ENQ round-trip (rd vms-164d, 2026-08-28)
+
+With both nodes at full membership, the harness now carries the **live A→B→A
+distributed-lock round-trip** — the DLM long pole's payoff. Add `OVMX_DLM_ENQ`:
+
+```bash
+SCSD_ENV="OVMX_MCAST_SOLICIT=1 OVMX_JOIN_SEQ=1 OVMX_DLM_ENQ=RESONE" \
+  tests/cluster/two-ovmx/run.sh 60
+```
+
+Proven on the harness (symmetric — each node drives a full round-trip):
+
+```
+node A: DLMENQ (→ peer DLM server 0xFE1D000F)
+        DLMRX  (peer's ENQ from CSID 1602 → executive status=0x00000A78)
+        DLMGRANT (honest status back to CSID 1602)
+        DLMDONE  (peer GRANT status=0x00000A78 → round-trip COMPLETE)
+node B: symmetric, CSIDs swapped
+```
+
+- **The $ENQ travels A→B over live SCS** (152-byte MTYPE-10 DLM frames on the
+  bridge, resource name `RESONE` in the body), reaches B's real
+  `scsd_dlm_srv_msg_input` → `scsd_dlm_dispatch_to_executive` over `/dev/vms`.
+- **B's real GRANT travels B→A**, carrying `status=0x00000A78` = **2680 =
+  `SS$_NOSUCHDEV`** — the honest fail-status because the Docker harness has **no
+  `/dev/vms`** (Rule 9: Docker is not a runtime). On a real `/dev/vms` the
+  executive's rung-1 dispatch stub returns `SS$_UNSUPPORTED` (2296). **INV-6:**
+  a GRANT carrying an error status is *not* a lock grant — the transport works,
+  the lock does not.
+- **DLM addressing without a separate connect** (labelled OVMX design choice):
+  A resolves the peer's DLM server Con.ID by substituting the class nibble of
+  the VMS$VAXcluster handle it learned at JOINBOUND (`base|slot|0x000F`) — the
+  exact handle the peer's `scsd_dlm_ensure_server_cdt()` registered; both server
+  and client CDTs are unbound so `scs_cdl_resolve()` admits the frames and learns
+  the opposite handle from the envelope.
+- **Join unaffected** (both nodes still reach VAXCLMEMBER); **flag-off
+  byte-identical** — with `OVMX_MCAST_SOLICIT` absent (even with `OVMX_DLM_ENQ`
+  set) only the multicast HELLO beacon appears, zero DLM markers.
+
+This closes rung-1b and unblocks **rung-2** (the cross-node *grant* — a real lock
+serviced by the mastering node's executive, vms-17c).
+
 ## Kill-switch discipline
 
 Any fix that this harness motivates for the OVMX↔OVMX path MUST follow the

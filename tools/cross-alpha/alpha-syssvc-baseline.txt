@@ -44,6 +44,14 @@ test_syssvc_ssh_kex          # B: needs sshd glibc-static cross for Alpha (not b
 # before /init. Needs a different NIC model / slimmer disk set (rd vms-7ee).
 test_syssvc_getdvi           # C: ETH0: absent (boot -nic none, clipper 6-virtio hang) — rd vms-7ee
 test_syssvc_showdev          # C: ETH0: absent (boot -nic none, clipper 6-virtio hang) — rd vms-7ee
+# ssh_server: the WRAPPED sshd cannot bind a real host port / accept an inbound
+# TCP session because the Alpha boot is `-nic none` (same -nic-none root cause as
+# getdvi/showdev). The FACILITY is proven present here: the INV-6 assertion "no
+# fabricated AF_UNIX socket — the listener/accepted/materialized fds are
+# executive-resident" PASSES; only the three assertions that need an actual
+# network session (bind BGn: to a host port, client handshake+auth, byte-exact
+# round-trip) fail. Unbaseline once the Alpha boot gets a NIC (rd vms-67f).
+test_syssvc_ssh_server       # C: sshd network session needs a NIC (boot -nic none); INV-6 socket check PASSES — rd vms-67f
 # procnam/startup_service/initialize: emulator-timing FLAKY (observed flapping
 # pass<->fail across runs — e.g. initialize was 8/0 one run, 7/1 the next on a
 # single disk-state/timing assertion; procnam races on process-ceased-mid-call;
@@ -54,3 +62,18 @@ test_syssvc_showdev          # C: ETH0: absent (boot -nic none, clipper 6-virtio
 test_syssvc_procnam          # C: process-ceased-mid-call timing races (emulator timing, flaky) — rd vms-780
 test_syssvc_startup_service  # C: killed by signal 9 (150s watchdog/crash, flaky) — rd vms-780
 test_syssvc_initialize       # C: one disk-state/timing assertion flaps pass<->fail (emulator timing, flaky) — rd vms-780
+#
+# ---- (D) expected arch-capability gap — honestly absent on Alpha (rd vms-6b7) -
+# bg_fork_close_inherit exercises EAGER fork-time BGn: connection inheritance
+# (vms-0cd): a forked+exec'd child must materialize a BGn: connection the parent
+# CLOSED right after the fork. That eager-inheritance path is driven by a
+# fork-hook that, on the portable substrate, rides a scheduler tracepoint / kprobe
+# — and the Alpha Linux kernel cannot provide EITHER (CONFIG_TRACEPOINTS is
+# unbuildable on Alpha; #847 guarded the tracepoint-using vms.ko TUs behind
+# CONFIG_TRACEPOINTS with an honest -ENOSYS fallback — see the alpha-kernel-no-
+# tracepoints lesson / vms-6b7). So the facility is HONESTLY ABSENT on Alpha, not
+# broken: the two upstream assertions (listener veneer, accept-over-BGn: veneer)
+# PASS; only the eager fork-time-inheritance assertion fails, deterministically
+# (pass=2 fail=1 every run). Unbaseline if/when Alpha gains a kprobe/tracepoint
+# path for the fork-hook (rd vms-6b7).
+test_syssvc_bg_fork_close_inherit  # D: eager fork-time BGn: inheritance needs a fork-hook tracepoint/kprobe Alpha's kernel lacks (#847/vms-6b7); listener+accept PASS, deterministic

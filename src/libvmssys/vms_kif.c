@@ -1209,6 +1209,34 @@ uint32_t vms_kif_getexit(uint32_t *condition, int *has_exited)
     return args.status;
 }
 
+/* Read the image-completion $STATUS of a process named by its backing Linux pid
+ * (vms-707). This is how DCL's RUN recovers the true condition value of an image
+ * it activated through the fork()+execve() fallback: the child shares DCL's VMS
+ * PID (REGISTER_CONTINUE), so a by-VMS-PID read is ambiguous, but the child's
+ * Linux pid -- which DCL holds from fork() -- names its PCB uniquely. Must be
+ * called BEFORE the child is reaped (waitpid), or the row is gone. *has_exited
+ * (if given) is nonzero iff an image actually recorded a status -- a foreign
+ * tool that never calls $EXIT leaves it 0, and the caller then derives $STATUS
+ * from the POSIX exit as before. INV-6: with no /dev/vms this returns the
+ * transport status and records nothing. */
+uint32_t vms_kif_getexit_linux(uint32_t linux_pid, uint32_t *condition,
+                               int *has_exited)
+{
+    struct vms_getexit_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.select  = VMS_JPI_SEL_LINUX_PID;
+    args.vms_pid = linux_pid;               /* field carries the Linux pid here */
+
+    KIF_CALL(VMS_IOCTL_GETEXIT, &args);
+
+    if (condition)
+        *condition = args.condition;
+    if (has_exited)
+        *has_exited = (int)args.has_exited;
+    return args.status;
+}
+
 /* Record this (CLI) process's invoking command line + cliflag in the executive,
  * so an image it activates reads the SAME context back (inherited from this
  * PCB at REGISTER_CONTINUE time). cliflag == 0 means "no CLI" and the command

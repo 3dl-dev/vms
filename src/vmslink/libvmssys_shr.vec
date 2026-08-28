@@ -177,3 +177,9 @@ vms_kif_bg_accept=PROCEDURE
 # executive cross-node RECEIVE seam reached over /dev/vms. APPENDED per the
 # append-only contract -- a new universal never shifts an existing index.
 vms_kif_dlm_xnode=PROCEDURE
+# RUN's $STATUS readback for the fork()+execve() image-activation fallback
+# (vms-707): read a forked child's executive-recorded completion $STATUS by its
+# backing Linux pid, before waitpid reaps it, so DCL's $STATUS is the image's
+# real VMS condition value -- not a success/fail collapse of the POSIX exit.
+# APPENDED per the append-only contract -- a new universal never shifts an index.
+vms_kif_getexit_linux=PROCEDURE

@@ -1354,6 +1354,18 @@ struct vms_procinfo {
 #define VMS_JPI_SEL_SELF    0   /* the calling process */
 #define VMS_JPI_SEL_PID     1   /* by vms_pid */
 #define VMS_JPI_SEL_PRCNAM  2   /* by prcnam, within the caller's UIC group */
+/*
+ * VMS_JPI_SEL_LINUX_PID (GETEXIT only, vms-707): read the completion $STATUS of
+ * a process named by its backing Linux pid, carried in the getexit args'
+ * `vms_pid` field. This is the primitive DCL's RUN uses to recover the true
+ * condition value of an image it activated through the fork()+execve() fallback:
+ * that child shares DCL's VMS PID (VMS_IOCTL_REGISTER_CONTINUE), so a by-VMS-PID
+ * read is ambiguous between DCL and the child, but the child's Linux pid -- which
+ * DCL holds from fork() -- names its PCB row uniquely. Read before the child is
+ * reaped (waitpid); an authorized read gated by vms_proc_may_read() exactly like
+ * SEL_PID. GETJPI does NOT accept this selector (its switch rejects it).
+ */
+#define VMS_JPI_SEL_LINUX_PID 3
 
 struct vms_getjpi_args {
     uint32_t select;            /* VMS_JPI_SEL_* */

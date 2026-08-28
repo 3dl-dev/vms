@@ -440,6 +440,29 @@ static struct vms_proc *find_by_vms_pid(uint32_t vms_pid)
 }
 
 /*
+ * find_by_linux_pid - locate a process by the Linux pid (thread-group id)
+ * backing its PCB. Unlike find_by_vms_pid(), this is unambiguous even when
+ * several rows SHARE one VMS PID: an image DCL activated through the
+ * fork()+execve() fallback runs as a continuation of DCL's identity
+ * (VMS_IOCTL_REGISTER_CONTINUE) and so carries DCL's VMS PID, but its own
+ * distinct Linux pid. This is the lookup behind VMS_JPI_SEL_LINUX_PID, the
+ * primitive RUN uses to read that child's true completion $STATUS (vms-707).
+ *
+ * Caller must hold vms_proc_hash_lock.
+ */
+static struct vms_proc *find_by_linux_pid(uint32_t linux_pid)
+{
+    struct vms_proc *proc;
+    int bkt;
+
+    exec_hash_for_each(vms_proc_hash, bkt, proc, hash_node) {
+        if ((uint32_t)proc->linux_pid == linux_pid)
+            return proc;
+    }
+    return NULL;
+}
+
+/*
  * vms_ioctl_hiber - $HIBER, executive-resident and AST-interruptible (vms-feb).
  *
  * Blocks the caller in the executive until a $WAKE is pending for it OR an AST
@@ -1121,6 +1144,13 @@ long vms_ioctl_getexit(struct vms_proc *proc, unsigned long arg)
         break;
     case VMS_JPI_SEL_PID:
         target = find_by_vms_pid(args.vms_pid);
+        break;
+    case VMS_JPI_SEL_LINUX_PID:
+        /* By backing Linux pid (vms-707): the args' vms_pid field carries the
+         * Linux pid here. RUN reads its fork()+execve() child's true $STATUS
+         * this way -- the child shares DCL's VMS PID, so only the Linux pid
+         * names its PCB row unambiguously. */
+        target = find_by_linux_pid(args.vms_pid);
         break;
     default:
         exec_unlock(&vms_proc_hash_lock);

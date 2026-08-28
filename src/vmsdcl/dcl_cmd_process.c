@@ -1838,6 +1838,11 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
         if (dcl_p1_critical_range(&cp1.base, &cp1.limit))
             cpp = &cp1;
         uint32_t ia = imgact_activate(linux_path, 0, 0, cpp, &image_rc);
+        /* RUN-DISC (vms-430 diagnostic, revert-before-fix): pin whether the
+         * in-process activation ran (ia==SS$_NORMAL/SS$_ACCVIO) or fell through
+         * to the fork()+execve() fallback (ia==SS$_UNSUPPORTED or other). */
+        fprintf(stderr, "RUN-DISC: ia=0x%08X image_rc=%d\n",
+                (unsigned)ia, image_rc);
         /*
          * ONLY a genuine in-process run bypasses the fork: SS$_NORMAL (the
          * image ran and returned) or SS$_ACCVIO (it ran, faulted, and was run
@@ -1900,6 +1905,11 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
          */
         (void)vms_kif_register_continue();
         execv(linux_path, argv);
+        /* RUN-DISC (vms-430 diagnostic, revert-before-fix): reached ONLY if
+         * execv failed to replace the process -- proves the PT_INTERP/staging
+         * of the GCC-port image is the fault. No line = execv succeeded. */
+        fprintf(stderr, "RUN-DISC: execv failed errno=%d path=%s\n",
+                errno, linux_path);
         _exit(1);
     } else if (pid > 0) {
         /*
@@ -1955,6 +1965,15 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
         while (waitpid(pid, &wstatus, 0) < 0 && errno == EINTR)
             ;
         dcl_running_child = 0;
+
+        /* RUN-DISC (vms-430 diagnostic, revert-before-fix): what status the
+         * fork path recovered. gx/recorded = the executive-recorded VMS
+         * condition value (vms_kif_getexit_linux, read at ~L1951 before the
+         * reap); exit_code = the child's POSIX exit derived from the reaped
+         * wstatus (-1 if it did not exit normally). */
+        fprintf(stderr, "RUN-DISC: getexit_linux gx=0x%08X recorded=%d exit_code=%d\n",
+                (unsigned)gx, recorded,
+                WIFEXITED(wstatus) ? WEXITSTATUS(wstatus) : -1);
 
         if (gx == SS$_NORMAL && recorded) {
             /* The executive holds the image's real VMS condition value -- that

@@ -84,7 +84,11 @@ int main(void)
     }
     printf("OVMX-ALPHA-IMGACT: IMGACT ACTIVATED REAL IMAGE rc=%d\n", rc);
 
-    if (rc == 0)
+    /* The proof image is the GCC-port joint_e2e.exe, whose joint_main.c returns
+     * the documented sentinel 3 (C$_EXIT1 fold -> executive $EXIT -> rc=3). The
+     * rc readback line above is the ground truth regardless; the harness PASS
+     * verdict fires only on the exact expected sentinel. */
+    if (rc == 3)
         printf("OVMX-ALPHA-IMGACT: ALL-PROVEN\n");
     else
         printf("OVMX-ALPHA-IMGACT: NOT-PROVEN (rc=%d)\n", rc);

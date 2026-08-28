@@ -59,7 +59,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     # -- JOB_CONTROL forks LOGINOUT.EXE, which execs and reaches the wake wait
     # -- but blocks there unseen and "Username:" never reaches the log. This is
     # a HARNESS driver, not a boot change: the same disk booted under a human at
-    # the console reaches the prompt on the operator's own RETURN.
+    # the console reaches the prompt on the operator hitting RETURN.
     #########################################################################
     echo "======================================================================"
     echo "== BOOT A: real OVMX/Alpha image -- init=STARTUP.EXE, VMSFS on /dev/vda"
@@ -99,15 +99,24 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     echo "======================================================================"
     CC=alpha-linux-gnu-gcc
     PROOF=/work/imgact-proof
-    LIB="LIBTEST\$SHR.EXE"
-    # Rebuild test_prog with the in-guest interpreter path /imgact-proof/IMGACT.EXE
-    $CC -std=gnu11 -O2 -Wall -no-pie -nostdlib -ffreestanding -fno-stack-protector \
-        -Wl,--dynamic-linker=/imgact-proof/IMGACT.EXE -Wl,--hash-style=sysv \
-        -Wl,-z,norelro -Wl,--allow-shlib-undefined -Wl,-e,_start \
-        -o "$PROOF/test_prog_alpha" /work/imgact-src/imgact/test/test_prog.c \
-        -L"$PROOF" -l:"$LIB"
+    JOINT=/work/joint
+    # PROOF IMAGE (vms-157 confirm run): the REAL alpha-dec-vms GCC-port image
+    # joint_e2e.exe, prebuilt by tools/cross-alpha-vms/joint-e2e/build-joint-image.sh
+    # (real port crt0 + joint_main, linked strict/zero-deferred against the genuine
+    # alpha DECC$SHR). It is NOT rebuilt here -- it is the finished VMS-native image.
+    #   readelf: EM_ALPHA ET_DYN, PT_INTERP=/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE
+    #   .vms$imp producers: DECC$SHR.EXE (decc$main/decc$malloc/decc$tprintf) ->
+    #     LIBOTS_SHR.EXE (OTS$ int-divide/block-move), resolved by IMGACT from
+    #     SYS$SHARE == IMGACT_FALLBACK_SYSLIB == /vms/SYS0/SYSCOMMON/SYSLIB.
+    # So stage: IMGACT.EXE at its baked interp path (SYSEXE); joint_e2e.exe as the
+    # image the init execs (/imgact-proof/test_prog_alpha); BOTH producers in SYSLIB
+    # (the port musl needs LIBOTS_SHR.EXE AND DECC$SHR.EXE staged in SYS$SHARE).
     $CC -static -O2 -Wall /tools/alpha-imgact-init.c -o /work/imgact-init
     alpha-linux-gnu-strip /work/imgact-init
+
+    test -f "$JOINT/joint_e2e.exe"   || { echo "FATAL: $JOINT/joint_e2e.exe missing -- copy build-joint-image.sh output into WORK/joint"; exit 1; }
+    test -f "$JOINT/DECC\$SHR.EXE"    || { echo "FATAL: $JOINT/DECC\$SHR.EXE missing";   exit 1; }
+    test -f "$JOINT/LIBOTS_SHR.EXE"  || { echo "FATAL: $JOINT/LIBOTS_SHR.EXE missing"; exit 1; }
 
     cat > /work/imgact-proof.list <<L
 dir /dev 755 0 0
@@ -119,12 +128,14 @@ dir /imgact-proof 755 0 0
 dir /vms 755 0 0
 dir /vms/SYS0 755 0 0
 dir /vms/SYS0/SYSCOMMON 755 0 0
+dir /vms/SYS0/SYSCOMMON/SYSEXE 755 0 0
 dir /vms/SYS0/SYSCOMMON/SYSLIB 755 0 0
 file /init /work/imgact-init 755 0 0
 file /vms.ko /vmsko/vms.ko 644 0 0
-file /imgact-proof/IMGACT.EXE $PROOF/IMGACT.EXE 755 0 0
-file /imgact-proof/test_prog_alpha $PROOF/test_prog_alpha 755 0 0
-file /vms/SYS0/SYSCOMMON/SYSLIB/LIBTEST\$SHR.EXE $PROOF/LIBTEST\$SHR.EXE 755 0 0
+file /vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE $PROOF/IMGACT.EXE 755 0 0
+file /imgact-proof/test_prog_alpha $JOINT/joint_e2e.exe 755 0 0
+file /vms/SYS0/SYSCOMMON/SYSLIB/DECC\$SHR.EXE $JOINT/DECC\$SHR.EXE 644 0 0
+file /vms/SYS0/SYSCOMMON/SYSLIB/LIBOTS_SHR.EXE $JOINT/LIBOTS_SHR.EXE 644 0 0
 L
     cd /vmsko/linux-$KV
     ./scripts/config --enable BLK_DEV_INITRD --set-str INITRAMFS_SOURCE /work/imgact-proof.list

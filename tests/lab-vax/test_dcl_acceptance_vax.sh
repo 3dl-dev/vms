@@ -24,14 +24,13 @@
 # EXPECTED VALUES ARE SINGLE-SOURCED (INV-1) from src/libvms/include/ovmx_identity.h,
 # never a literal here -- the SAME idval sed the x86_64/Alpha drivers use:
 #   BANNER  = OVMX_PRODUCT_NAME + " " + OVMX_PRODUCT_VERSION
-#   COMPAT  = the token F$GETSYI("VERSION") reports, ovmx_compat_version(): on a
-#             __NetBSD__/vax build ovmx_arch_has_vms_lineage() is 0 today (the
-#             header's only lineage branch is __x86_64__), so this returns
-#             OVMX_PRODUCT_VERSION -- COMPAT == the product version on VAX, EXACTLY
-#             as it does on Alpha. That VAX (and Alpha) report the product version
-#             rather than a VMS-authentic V7.3/V8.4 is a real header-lineage gap
-#             tracked SEPARATELY (rd vms-f2c follow-up) -- NOT this gate's concern
-#             and NOT a reason to weaken the shared battery.
+#   COMPAT  = the token F$GETSYI("VERSION") reports, ovmx_compat_version(): rd
+#             vms-10e added a __vax__ VMS-lineage branch, so on a VAX build this
+#             returns the real OpenVMS VAX version OVMX_VMS_COMPAT_VERSION_VAX
+#             ("V7.3", the final VAX release) -- NOT the product version. We
+#             single-source it from that same per-arch constant, so the F$GETSYI
+#             VERSION assertion stays INV-1-consistent with the runtime (both read
+#             ovmx_identity.h). Alpha gained the same treatment (V8.4).
 #   VOLUME_LABEL = OVMXSYS (run-boot.sh master_system_volume: vmsfs_master --ods2
 #                  ... OVMXSYS); verified against the source below.
 #
@@ -68,8 +67,13 @@ PNAME=$(idval OVMX_PRODUCT_NAME)
 PVER=$(idval OVMX_PRODUCT_VERSION)
 [ -n "$PNAME" ] && [ -n "$PVER" ] || die "could not read OVMX_PRODUCT_NAME/VERSION from $IDENTITY"
 export EXPECTED_BOOT_BANNER="$PNAME $PVER"
-# ovmx_compat_version() on a non-x86 (no-lineage-branch) build == product version.
-export EXPECTED_COMPAT_VERSION="$PVER"
+# rd vms-10e: VAX now has a VMS-lineage branch, so ovmx_compat_version() returns
+# the real OpenVMS VAX version (V7.3), NOT the product version -- single-source
+# it from the SAME per-arch constant the runtime reads (OVMX_VMS_COMPAT_VERSION_VAX
+# in ovmx_identity.h), so the F$GETSYI VERSION assertion stays INV-1-consistent.
+CVER=$(idval OVMX_VMS_COMPAT_VERSION_VAX)
+[ -n "$CVER" ] || die "could not read OVMX_VMS_COMPAT_VERSION_VAX from $IDENTITY (rd vms-10e)"
+export EXPECTED_COMPAT_VERSION="$CVER"
 
 # VOLUME_LABEL tracks master_system_volume's vmsfs_master --ods2 label; verify.
 export VOLUME_LABEL="OVMXSYS"
@@ -104,7 +108,7 @@ rm -f "$RAW" "$FIFO"
 mkfifo "$FIFO" || die "mkfifo $FIFO failed"
 
 log "expected boot banner (ovmx_identity.h): $EXPECTED_BOOT_BANNER"
-log "expected compat version (ovmx_compat_version, VAX=product version): $EXPECTED_COMPAT_VERSION"
+log "expected compat version (ovmx_compat_version, VAX VMS lineage V7.3): $EXPECTED_COMPAT_VERSION"
 log "volume label: $VOLUME_LABEL ; workdir: $WORKDIR ; rq0: $SINGLE_RQ0_TYPE"
 log "console RAW=$RAW FIFO=$FIFO  (whole-run cap ${ACCEPT_TIMEOUT}s)"
 

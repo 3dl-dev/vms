@@ -96,10 +96,39 @@ _Static_assert(VMS_O_RDWR  == O_RDWR,  "VMS_O_RDWR must resolve to NetBSD O_RDWR
 
 #else /* !__NetBSD__ : Linux raw-syscall numeric ABI (freestanding path) */
 
-/* openat flags */
+/*
+ * openat flags -- Linux raw-syscall numeric ABI.
+ *
+ * THESE ARE PER-ARCHITECTURE ON LINUX (vms-707 boot regression). Most Linux
+ * ports share asm-generic's O_* values (the block below), but Alpha inherits
+ * the OSF/1-derived numbering from arch/alpha/include/uapi/asm/fcntl.h, where
+ * the octal codes are entirely different. The overlap is actively dangerous,
+ * not merely cosmetic: the GENERIC O_CLOEXEC bit (0x80000) is O_DIRECT on
+ * Alpha, so opening a char device (e.g. /dev/vms) with the generic value sets
+ * O_DIRECT on a mapping that has no ->direct_IO and the open fails -EINVAL --
+ * exactly how the Alpha system-disk $MOUNT broke when the /dev/vms open gained
+ * O_CLOEXEC. O_RDONLY/O_WRONLY/O_RDWR (0/1/2) and the AT_* constants are the
+ * same on every Linux arch, so only the divergent O_* flags split here.
+ */
 #define VMS_O_RDONLY     0x0000
 #define VMS_O_WRONLY     0x0001
 #define VMS_O_RDWR       0x0002
+#if defined(__alpha__)
+/* Alpha (OSF/1 numbering): arch/alpha/include/uapi/asm/fcntl.h. */
+#define VMS_O_CREAT      0x0200   /* 01000  */
+#define VMS_O_EXCL       0x0800   /* 04000  */
+#define VMS_O_NOCTTY     0x1000   /* 010000 */
+#define VMS_O_TRUNC      0x0400   /* 02000  */
+#define VMS_O_APPEND     0x0008   /* 010    */
+#define VMS_O_NONBLOCK   0x0004   /* 04     */
+#define VMS_O_CLOEXEC    0x200000 /* 010000000 (generic 0x80000 == O_DIRECT here) */
+#define VMS_O_DIRECTORY  0x8000   /* 0100000 */
+/* Guard the exact hazard that caused the regression: the generic O_CLOEXEC bit
+ * must NOT be what Alpha opens with -- 0x80000 is O_DIRECT on Alpha. */
+_Static_assert(VMS_O_CLOEXEC != 0x80000,
+               "Alpha O_CLOEXEC must be 0x200000, not the generic O_DIRECT bit");
+#else
+/* x86_64 / aarch64 / generic asm-generic/fcntl.h numbering. */
 #define VMS_O_CREAT      0x0040
 #define VMS_O_EXCL       0x0080
 #define VMS_O_NOCTTY     0x0100
@@ -108,6 +137,7 @@ _Static_assert(VMS_O_RDWR  == O_RDWR,  "VMS_O_RDWR must resolve to NetBSD O_RDWR
 #define VMS_O_NONBLOCK   0x0800
 #define VMS_O_CLOEXEC    0x80000
 #define VMS_O_DIRECTORY  0x10000
+#endif
 
 /* AT_* constants */
 #define VMS_AT_FDCWD          (-100)

@@ -21,9 +21,11 @@
 
 int kif_xport_dev_open(void)
 {
-    /* AT_FDCWD (-100), O_RDWR (2) | O_CLOEXEC (02000000 == 0x80000). The device
-     * name is the transport's own knowledge, per the contract -- the policy
-     * layer never spells it.
+    /* AT_FDCWD (-100), O_RDWR (2) | O_CLOEXEC. The device name is the
+     * transport's own knowledge, per the contract -- the policy layer never
+     * spells it. VMS_O_CLOEXEC is the ARCH-CORRECT close-on-exec bit
+     * (vms_types.h): 0x80000 on x86_64/aarch64, 0x200000 on Alpha -- the
+     * generic 0x80000 is O_DIRECT on Alpha and would fail this open -EINVAL.
      *
      * O_CLOEXEC (vms-707): a /dev/vms channel must NOT survive execve(). The
      * executive PCB is keyed on the thread group, not the channel, and every

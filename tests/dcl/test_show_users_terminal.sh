@@ -38,8 +38,27 @@
 # invocation's own getpid() in it -- so this is a discriminating assertion
 # about dcl_cmd_show.c's own code, not a decoration.
 #
+# --- no walked count with no executive (vms-6a1, adjudicated) ----------
+#
+# This file used to assert EXPECT: contains:Total number of users. That is
+# now REMOVED, and EXPECT_NOT: contains:number of processes ADDED -- a
+# STRENGTHENING that reconciles this host contract to SHOW SYSTEM and to the
+# QEMU negative control (tests/qemu/test_syssvc_spawn_users.c, which forbids
+# "number of processes" with no executive). SHOW USERS is the only SHOW
+# command that prints a WALKED count ("Total number of users = N, number of
+# processes = M"); a count computed from a scan that HARD-FAILED is a mild
+# fabrication -- it claims "I enumerated 0" when the truth is "I could not
+# enumerate". SHOW SYSTEM (same directory,
+# test_show_system_no_fabrication.sh) already omits any computed count with
+# no executive and prints only its banner + headings; SHOW USERS now matches.
+# The count line still prints for a READABLE table, including readable-but-
+# empty (SS$_NONEXPR -> honest "= 0") -- that positive case is proven against
+# a real executive in tests/uat/vms_session_qemu.sh, not here. Everything
+# else below (Username/Node/Interactive headings present; no PID, terminal,
+# or _FTA row data) is unchanged.
+#
 # EXPECT: contains:Username
-# EXPECT: contains:Total number of users
+# EXPECT_NOT: contains:number of processes
 # EXPECT_NOT: contains:_FTA
 # EXPECT_NOT: regex:_[A-Z]{2,3}[0-9]+:
 # EXPECT_NOT: regex:[0-9A-F]{8}

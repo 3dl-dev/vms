@@ -190,9 +190,21 @@ struct vms_dlm_xnode_args {
 	uint32_t master_csid;       /* in: mastering node CSID (0 = resolve) */
 	char     resnam[32];        /* in: resource name (null-terminated) */
 	uint8_t  valblk[LCK_VALBLK_SIZE]; /* in: value block */
-	uint32_t status;            /* return: SS$_ status (rung 1: SS$_UNSUPPORTED) */
-	uint32_t pad;
+	uint32_t status;            /* return: SS$_ status. granted=SS$_NORMAL;
+	                             * queued=VMS_DLM_STS_QUEUED (0); NOQUEUE decline=
+	                             * SS$_NOTQUEUED; response ops=SS$_UNSUPPORTED. */
+	uint32_t queued;            /* return: 1 = queued on the master (blocked) */
+	uint32_t blocking_csid;     /* return: cross-node holder to BLKAST (0 = none) */
+	uint32_t blocking_master_lkid; /* return: that holder's master lock handle */
 };
+
+/*
+ * The `status` an ENQ dispatch returns when the request was QUEUED (blocked) on
+ * the master rather than granted (contention rung vms-904c) -- 0, the VMS
+ * lock-status-block "no completion posted" state; NOT SS$_NORMAL, NOT
+ * SS$_NOTQUEUED. Mirrors src/kernel/vms_ioctl.h.
+ */
+#define VMS_DLM_STS_QUEUED  0u
 
 /* ================================================================
  * Request numbers. All five are _IOWR carrying the SAME structs and NR bytes as
@@ -221,7 +233,7 @@ _Static_assert(sizeof(struct vms_getlki_args) == 72,
                "vms_getlki_args changed size -- VMS_IOCTL_GETLKI ABI break");
 _Static_assert(sizeof(struct vms_resmaster_args) == 64,
                "vms_resmaster_args changed size -- VMS_IOCTL_GET_RESMASTER ABI break");
-_Static_assert(sizeof(struct vms_dlm_xnode_args) == 84,
+_Static_assert(sizeof(struct vms_dlm_xnode_args) == 92,
                "vms_dlm_xnode_args changed size -- VMS_IOCTL_DLM_XNODE ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

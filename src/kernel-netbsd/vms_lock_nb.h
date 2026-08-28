@@ -162,6 +162,33 @@ struct vms_resmaster_args {
 	uint32_t pad;
 };
 
+/*
+ * vms-94c (DLM epic vms-7fa rung 1): the cross-node DLM RECEIVE dispatch, mirror
+ * of src/kernel/vms_ioctl.h -- byte-identical, because vms_lock.c is SHARED
+ * kernel-core (Linux vms.ko AND NetBSD vms.kmod), and vms_lock_dlm_xnode_dispatch
+ * references struct vms_dlm_xnode_args and the VMS_DLM_OP_* op values here. The
+ * VMS_DLM_OP_* values MUST equal scs_dlm.h's SCS_DLM_OP_* (scsd.c static-asserts
+ * that on the Linux/userspace side). See vms_ioctl.h for the full provenance note.
+ */
+#define VMS_DLM_OP_ENQ      1u   /* lock/convert request  -> master  */
+#define VMS_DLM_OP_GRANT    2u   /* status response       <- master  */
+#define VMS_DLM_OP_DEQ      3u   /* dequeue request       -> master  */
+#define VMS_DLM_OP_BLKAST   4u   /* blocking-AST notify   <- master  */
+
+struct vms_dlm_xnode_args {
+	uint32_t op;                /* in: VMS_DLM_OP_* */
+	uint32_t lkmode;            /* in: LCK$K_ mode (0..5) */
+	uint32_t flags;             /* in: LCK$M_ flags */
+	uint32_t req_lkid;          /* in: requester's lock handle */
+	uint32_t master_lkid;       /* in: master's lock handle */
+	uint32_t req_csid;          /* in: requesting node CSID */
+	uint32_t master_csid;       /* in: mastering node CSID (0 = resolve) */
+	char     resnam[32];        /* in: resource name (null-terminated) */
+	uint8_t  valblk[LCK_VALBLK_SIZE]; /* in: value block */
+	uint32_t status;            /* return: SS$_ status (rung 1: SS$_UNSUPPORTED) */
+	uint32_t pad;
+};
+
 /* ================================================================
  * Request numbers. All five are _IOWR carrying the SAME structs and NR bytes as
  * src/kernel/vms_ioctl.h (0x30-0x34, magic 'V'), so their command words are
@@ -173,6 +200,7 @@ struct vms_resmaster_args {
 #define VMS_IOCTL_CONVERT       _IOWR(VMS_LOCK_IOC_MAGIC, 0x32, struct vms_enq_args)
 #define VMS_IOCTL_GETLKI        _IOWR(VMS_LOCK_IOC_MAGIC, 0x33, struct vms_getlki_args)
 #define VMS_IOCTL_GET_RESMASTER _IOWR(VMS_LOCK_IOC_MAGIC, 0x34, struct vms_resmaster_args)
+#define VMS_IOCTL_DLM_XNODE     _IOWR(VMS_LOCK_IOC_MAGIC, 0x35, struct vms_dlm_xnode_args)
 
 /*
  * Freeze the shared layouts -- see the other _nb.h contracts' identical asserts:
@@ -188,5 +216,7 @@ _Static_assert(sizeof(struct vms_getlki_args) == 72,
                "vms_getlki_args changed size -- VMS_IOCTL_GETLKI ABI break");
 _Static_assert(sizeof(struct vms_resmaster_args) == 64,
                "vms_resmaster_args changed size -- VMS_IOCTL_GET_RESMASTER ABI break");
+_Static_assert(sizeof(struct vms_dlm_xnode_args) == 84,
+               "vms_dlm_xnode_args changed size -- VMS_IOCTL_DLM_XNODE ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

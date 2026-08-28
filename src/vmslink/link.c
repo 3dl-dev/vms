@@ -1125,6 +1125,12 @@ struct import {
     uint64_t plt_va;       /* PLT stub address (assigned at layout) */
     uint64_t got_va;       /* GOT cell address (assigned at layout) */
     int      is_data;      /* 1 = DATA import (GOT-read), 0 = call import (PLT) */
+    int      is_codeaddr;  /* EVAX/Alpha only: 1 = EVAX_R_CODEADDR import (a
+                            * single-cell CODE-ENTRY reference the caller jsr's
+                            * through directly). IMGACT must fill the code entry
+                            * *(PV+8), not the raw PV/PDSC (bit30 OVMX_IMP_CODEADDR
+                            * in .vms$imp; see vms_imp_write). is_data=1 too, so
+                            * this disambiguates CODEADDR from REFQUAD. (vms-e06) */
     int      is_weak;      /* 1 = resolved by NAME at activation (.vms$wimp): no
                             * --use producer exports it, but a loaded producer
                             * MAY (a lower layer reaching a higher one across a
@@ -1218,15 +1224,18 @@ static void vms_imp_write(uint8_t *img, uint64_t off_imp, struct import *imp,
     for (int i = 0; i < nimp; i++) {
         if (imp[i].is_weak) continue;   /* -> .vms$wimp, not here */
         ie[o].producer_off = prod_off[imp[i].pidx];
-        /* Pack the linkage FORM into bit31 (OVMX_IMP_LINKAGE): EVAX/Alpha only,
-         * and only for a 2-quad LINKAGE import (!is_data). The ELF path passes
-         * is_evax=0, so a non-Alpha .vms$imp entry is written byte-identical to
-         * origin/main (bit never set). IMGACT masks it off on Alpha; non-Alpha
-         * IMGACT reads sv_index as-is. (Kills the earlier shared-struct growth
-         * AND the bug where is_data==0 ELF call-imports would get the bit.)
-         * vms-32e1. */
+        /* Pack the import FORM into the top two bits (EVAX/Alpha only, mutually
+         * exclusive): bit31 OVMX_IMP_LINKAGE for a 2-quad LINKAGE import
+         * (!is_data), bit30 OVMX_IMP_CODEADDR for a single-cell CODE-ENTRY
+         * (EVAX_R_CODEADDR) import so IMGACT fills *(PV+8) not the raw PV/PDSC
+         * (vms-e06). The ELF path passes is_evax=0, so a non-Alpha .vms$imp entry
+         * is written byte-identical to origin/main (neither bit set). IMGACT masks
+         * both off on Alpha; non-Alpha IMGACT reads sv_index as-is. (Kills the
+         * earlier shared-struct growth AND the is_data==0 ELF-call-import bit bug.)
+         * vms-32e1 / vms-e06. */
         ie[o].sv_index = imp[i].svidx
-                       | ((is_evax && !imp[i].is_data) ? OVMX_IMP_LINKAGE : 0u);
+                       | ((is_evax && !imp[i].is_data)    ? OVMX_IMP_LINKAGE  : 0u)
+                       | ((is_evax && imp[i].is_codeaddr) ? OVMX_IMP_CODEADDR : 0u);
         ie[o].patch_off = imp[i].got_va;
         ie[o].req_major = ps[imp[i].pidx].sv->gsmatch_major;
         ie[o].req_minor = ps[imp[i].pidx].sv->gsmatch_minor;
@@ -3377,6 +3386,14 @@ static void evax_add_ximport(struct evax_input *in, int ii,
     e->svidx   = svidx;
     e->got_va  = site_va;   /* patch_off emitted into .vms$imp (vms_imp_write) */
     e->is_data = (r->type != EVAX_R_LINKAGE);
+    /* A CODEADDR cross-image import is a single-cell CODE-ENTRY reference: the
+     * caller jsr's THROUGH the cell (ldq r27,cell; jsr ra,(r27)), so IMGACT must
+     * fill the code entry *(PV+8), NOT the raw PV/PDSC — matching the LOCAL
+     * CODEADDR fill above (evax_apply_reloc stores code_S). REFQUAD stays raw PV
+     * (a data pointer / procedure value the consumer derefs itself). Flag it so
+     * vms_imp_write sets OVMX_IMP_CODEADDR and IMGACT's single-cell branch derefs.
+     * (vms-e06: OTS$ZERO/OTS$MOVE arrive as CODEADDR; OTS$HOME_ARGS as REFQUAD.) */
+    e->is_codeaddr = (r->type == EVAX_R_CODEADDR);
     e->is_weak = 0;
     (*n_ximport)++;
     fprintf(stderr, "%%LINK-I-IMPORT, EVAX cross-image import '%s' bound to --use "

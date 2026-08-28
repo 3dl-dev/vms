@@ -759,7 +759,8 @@ uint32_t vms_kif_dlm_xnode(uint32_t op, uint32_t lkmode, uint32_t flags,
                            const char *resnam, const uint8_t *valblk,
                            uint32_t *out_master_lkid, uint32_t *out_queued,
                            uint32_t *out_blocking_csid,
-                           uint32_t *out_blocking_master_lkid)
+                           uint32_t *out_blocking_master_lkid,
+                           uint32_t *out_req_lkid, uint32_t *out_lkmode)
 {
     struct vms_dlm_xnode_args args;
 
@@ -788,6 +789,14 @@ uint32_t vms_kif_dlm_xnode(uint32_t op, uint32_t lkmode, uint32_t flags,
     if (out_queued) *out_queued = args.queued;
     if (out_blocking_csid) *out_blocking_csid = args.blocking_csid;
     if (out_blocking_master_lkid) *out_blocking_master_lkid = args.blocking_master_lkid;
+    /* Deferred-GRANT readback (vms-6ca, H5): on a cross-node $DEQ that flipped a
+     * queued cross-node waiter to granted, the executive names that waiter in the
+     * fields a DEQ otherwise leaves 0 -- queued=1 (a waiter flipped), blocking_*
+     * = the granted waiter's CSID + master handle, req_lkid = its requester
+     * handle, lkmode = the mode it was granted at. The daemon reads these to wire
+     * the deferred GRANT back to the requester. */
+    if (out_req_lkid) *out_req_lkid = args.req_lkid;
+    if (out_lkmode) *out_lkmode = args.lkmode;
 
     return args.status;
 }

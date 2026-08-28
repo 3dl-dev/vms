@@ -394,6 +394,13 @@ struct vms_lock_entry {
 	                                     * a cross-node grant on behalf of a remote
 	                                     * node (vms-e8f1). Set from
 	                                     * vms_enq_args.owner_csid at creation. */
+	uint32_t            req_lkid;       /* the REMOTE requester's own lock handle
+	                                     * for a cross-node grant (vms-6ca, H5).
+	                                     * 0 for a local lock. Set from the wire
+	                                     * ENQ's req_lkid so a later deferred GRANT
+	                                     * can name the requester's original
+	                                     * request when this lock's release grants
+	                                     * a queued cross-node waiter. */
 };
 
 /* Lock resource -- a named resource in the lock database. */

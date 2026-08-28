@@ -80,12 +80,52 @@ uint32_t vms_next_lock_id = 1;
 EXEC_DEFINE_HASHTABLE(vms_res_hash, VMS_RES_HASH_BITS);
 exec_lock_t vms_res_hash_lock;
 
+/* ================================================================
+ * Cross-node REQUESTER-SIDE origin records (DLM epic vms-7fa rung H5, vms-6ca)
+ * ================================================================
+ *
+ * When THIS node issues a cross-node $ENQ over SCS to a REMOTE master, the
+ * request is not a local lock (the local lock manager never grants it -- the
+ * remote master does). But the requester still needs a REAL, executive-resident
+ * record of the outstanding request so its completion is genuine state, not a
+ * per-process userspace fake (INV-6): the origin record's granted mode is set
+ * ONLY from GRANT/queued-reply messages the master genuinely sent back over the
+ * live SCS wire (VMS_DLM_OP_GRANT receive), never by a local grant decision.
+ *
+ * This is the requester-side mirror of the master's lock block. It lives on its
+ * OWN list, keyed by the requester's local lock handle (req_lkid), so it never
+ * touches the resource granted/waiting queues the local lock manager scans --
+ * the executive cannot auto-grant an origin record, only the wire can complete
+ * it. GETLKI falls through to it so the NL->EX status flip driven by the remote
+ * master's deferred GRANT is observable on the REQUESTER node.
+ */
+struct vms_dlm_origin {
+    exec_list_node_t list;
+    uint32_t         req_lkid;       /* our own lock handle for the request     */
+    uint32_t         req_csid;       /* our node's CSID (the requester)          */
+    uint32_t         master_lkid;    /* the master's lock handle (0 until known) */
+    uint32_t         master_csid;    /* the mastering node's CSID                */
+    uint32_t         granted_mode;   /* NL while pending/queued; the granted mode
+                                      * once the master's GRANT arrives          */
+    uint32_t         requested_mode; /* the mode we asked for                    */
+    char             resnam[32];
+};
+
+exec_list_head_t vms_dlm_origin_list;
+exec_lock_t vms_dlm_origin_lock;
+
+static int vms_lock_dlm_origin_getlki(uint32_t lkid, uint32_t *granted_mode,
+                                      uint32_t *requested_mode, char *resnam,
+                                      size_t resnam_len);
+
 int vms_lock_init(void)
 {
     exec_lock_init(&vms_lock_id_lock);
     exec_lock_init(&vms_res_hash_lock);
+    exec_lock_init(&vms_dlm_origin_lock);
     exec_rbtree_init(&vms_lock_id_tree);
     exec_hash_init(vms_res_hash);
+    exec_list_head_init(&vms_dlm_origin_list);
     return 0;
 }
 
@@ -141,9 +181,21 @@ void vms_lock_cleanup(void)
     }
     exec_unlock(&vms_res_hash_lock);
 
+    /* Free any cross-node requester-side origin records (vms-6ca, H5). */
+    {
+        struct vms_dlm_origin *org, *otmp;
+        exec_lock(&vms_dlm_origin_lock);
+        exec_list_for_each_entry_safe(org, otmp, &vms_dlm_origin_list, list) {
+            exec_list_del(&org->list);
+            exec_free(org);
+        }
+        exec_unlock(&vms_dlm_origin_lock);
+    }
+
     /* Tear down the runtime-initialized locks (a no-op on Linux; a real
      * mutex_destroy on NetBSD -- paired with the exec_lock_init in
      * vms_lock_init). */
+    exec_lock_destroy(&vms_dlm_origin_lock);
     exec_lock_destroy(&vms_res_hash_lock);
     exec_lock_destroy(&vms_lock_id_lock);
 }
@@ -843,6 +895,9 @@ static int enq_wait_sync(struct vms_lock_resource *res,
  *     that holder's master lock handle (blocking_master_lkid).
  */
 struct dlm_xnode_enq_out {
+    uint32_t req_lkid;              /* IN: the remote requester's own lock handle,
+                                    * stored on the master lock so a deferred
+                                    * GRANT can name the original request (H5). */
     int      queued;
     uint32_t blocking_csid;
     uint32_t blocking_master_lkid;
@@ -932,6 +987,13 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
      * fabricated status (INV-6).
      */
     lock->req_csid = args.owner_csid;
+    /*
+     * The remote requester's OWN lock handle (vms-6ca, H5). Non-zero only on the
+     * cross-node path (xn set), so that when this granted lock is later released
+     * and its release grants a queued cross-node waiter, the master can name the
+     * waiter's original request (req_lkid) in the deferred GRANT it wires back.
+     */
+    lock->req_lkid = xn ? xn->req_lkid : 0;
 
     /*
      * Record the access mode $ENQ was issued from, so image rundown can tell
@@ -1373,6 +1435,23 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg)
 
     lock = lock_find_by_id(args.lkid);
     if (!lock) {
+        /*
+         * Fall through to the requester-side cross-node ORIGIN records (vms-6ca,
+         * H5): a cross-node request THIS node issued is not a local lock (the
+         * remote master holds it), so it has no entry in the lock-ID tree, but
+         * its origin record carries the status the master's GRANT completed. This
+         * makes the NL->EX flip driven by the remote master observable here.
+         */
+        uint32_t org_granted = 0, org_requested = 0;
+        if (vms_lock_dlm_origin_getlki(args.lkid, &org_granted, &org_requested,
+                                       args.resnam, sizeof(args.resnam))) {
+            args.granted_mode = org_granted;
+            args.requested_mode = org_requested;
+            args.parent_id = 0;
+            memset(args.valblk, 0, LCK_VALBLK_SIZE);
+            args.status = SS__NORMAL;
+            goto out;
+        }
         args.status = SS__IVLOCKID;
         goto out;
     }
@@ -1506,10 +1585,60 @@ static uint32_t vms_lock_dlm_xnode_deq(struct vms_dlm_xnode_args *req)
         exec_list_del(&lock->res_waiting);
     else
         exec_list_del(&lock->res_granted);
+
+    /*
+     * Deferred-GRANT discovery (vms-6ca, DLM epic vms-7fa rung H5). Snapshot the
+     * FIRST cross-node waiter (held FOR a remote CSID) BEFORE the release, so
+     * after try_grant_waiters we can tell whether THIS release flipped it from
+     * queued to granted -- the block-then-grant transition the master must now
+     * WIRE back to that requester as a deferred GRANT. We report the flipped
+     * waiter's identity (its requester CSID + req_lkid + master lock handle +
+     * granted mode) through the fields that are 0 on a DEQ, so the daemon that
+     * delivered this $DEQ can transport the GRANT without a second round-trip.
+     * First waiter only -- the same "first blocking holder" scope the contention
+     * rung uses (vms-904c); several flipped waiters is a refinement. INV-6: this
+     * REPORTS a grant the executive genuinely made; it fabricates nothing.
+     */
+    uint32_t pend_lkid = 0, pend_csid = 0, pend_req_lkid = 0;
+    {
+        struct vms_lock_entry *w;
+        exec_list_for_each_entry(w, &res->waiting, res_waiting) {
+            if (w->req_csid != 0) {
+                pend_lkid = w->lkid;
+                pend_csid = w->req_csid;
+                pend_req_lkid = w->req_lkid;
+                break;
+            }
+        }
+    }
+
     /* The release grants any waiter now compatible -- the blocked cross-node
      * request flips from queued (grant_state 0) to granted (grant_state
      * SS$_NORMAL, granted_mode = requested). */
     try_grant_waiters(res);
+
+    /* Did the snapshotted cross-node waiter just get granted? If so, name it in
+     * the deferred-GRANT outputs (reusing the fields that are otherwise 0 on a
+     * DEQ). We are still under res->lock, and the granted list is walked here. */
+    req->queued = 0;
+    req->blocking_csid = 0;
+    req->blocking_master_lkid = 0;
+    if (pend_lkid != 0) {
+        struct vms_lock_entry *g;
+        exec_list_for_each_entry(g, &res->granted, res_granted) {
+            if (g->lkid == pend_lkid && !g->waiting &&
+                g->grant_state == SS__NORMAL) {
+                /* DEFERRED GRANT: this queued cross-node request is now granted. */
+                req->queued = 1;                       /* "a waiter flipped"      */
+                req->blocking_csid = pend_csid;        /* -> deferred-grant CSID  */
+                req->blocking_master_lkid = g->lkid;   /* -> its master handle    */
+                req->req_lkid = pend_req_lkid;         /* -> requester's handle   */
+                req->lkmode = g->granted_mode;         /* -> the mode granted     */
+                break;
+            }
+        }
+        (void)pend_req_lkid;
+    }
     exec_unlock(&res->lock);
 
     exec_lock(&lock->proc->lock_list_lock);
@@ -1523,6 +1652,108 @@ static uint32_t vms_lock_dlm_xnode_deq(struct vms_dlm_xnode_args *req)
     lock_put(lock);  /* drop lock_find_by_id reference */
     lock_put(lock);  /* drop "exists in system" reference -- triggers free */
     return SS__NORMAL;
+}
+
+/*
+ * vms_lock_dlm_xnode_grant_recv - the REQUESTER-SIDE GRANT RECEIVE (vms-6ca, DLM
+ * epic vms-7fa rung H5). Previously SS$_UNSUPPORTED.
+ *
+ * A GRANT / queued-reply message the MASTER sent back over SCS in answer to a
+ * cross-node $ENQ THIS node issued lands here. It completes the requester's
+ * origin record -- the executive-resident proxy of the outstanding request --
+ * so the request's status is genuine executive state, not a per-process
+ * userspace flag (INV-6). The record's granted mode is set ONLY from what the
+ * master genuinely sent:
+ *   - a queued-reply carries lkmode == NL  -> the origin record stays pending
+ *     (granted_mode NL): the requester genuinely sees "blocked", from the
+ *     master's real waiting-queue decision transported over the wire.
+ *   - a deferred GRANT carries lkmode == the granted mode (e.g. EX) and
+ *     status SS$_NORMAL -> the origin record flips NL -> EX. THIS is the status
+ *     flip observed on the REQUESTER node, driven by the master's real release.
+ *
+ * find-or-create keyed by the requester's own lock handle (req_lkid). The record
+ * never touches the resource granted/waiting queues (the local lock manager
+ * cannot auto-grant it); only this wire path completes it. GETLKI(req_lkid)
+ * reads it back, so the flip is independently observable.
+ *
+ * Returns SS$_NORMAL when the receive was accepted (the record now reflects the
+ * master's status), or SS$_INSFMEM if the record could not be allocated. It
+ * grants nothing itself -- it records the master's genuine decision.
+ */
+static uint32_t vms_lock_dlm_xnode_grant_recv(struct vms_dlm_xnode_args *req)
+{
+    struct vms_dlm_origin *org = NULL, *cur;
+
+    if (req->req_lkid == 0)
+        return SS__BADPARAM;   /* a GRANT must name the requester's own handle */
+
+    exec_lock(&vms_dlm_origin_lock);
+    exec_list_for_each_entry(cur, &vms_dlm_origin_list, list) {
+        if (cur->req_lkid == req->req_lkid) {
+            org = cur;
+            break;
+        }
+    }
+    if (org == NULL) {
+        org = exec_zalloc(sizeof(*org));
+        if (org == NULL) {
+            exec_unlock(&vms_dlm_origin_lock);
+            return SS__INSFMEM;
+        }
+        org->req_lkid = req->req_lkid;
+        org->req_csid = req->req_csid;
+        org->requested_mode = LCK_K_EXMODE; /* refined below from the reply mode */
+        org->granted_mode = LCK_K_NLMODE;   /* pending until a real grant arrives */
+        memcpy(org->resnam, req->resnam, sizeof(org->resnam));
+        org->resnam[sizeof(org->resnam) - 1] = '\0';
+        exec_list_add_tail(&org->list, &vms_dlm_origin_list);
+    }
+
+    /* Record what the MASTER genuinely reported. The master's lock handle and
+     * CSID come from the reply; the granted mode is whatever the master said the
+     * request is granted at (NL == still pending/queued, non-NL == granted). */
+    if (req->master_lkid != 0)
+        org->master_lkid = req->master_lkid;
+    if (req->master_csid != 0)
+        org->master_csid = req->master_csid;
+    if (req->lkmode > LCK_K_NLMODE)
+        org->requested_mode = req->lkmode;
+    org->granted_mode = req->lkmode;   /* NL on a queued-reply; EX on a grant */
+
+    exec_unlock(&vms_dlm_origin_lock);
+    return SS__NORMAL;
+}
+
+/*
+ * vms_lock_dlm_origin_getlki - GETLKI fall-through for a requester-side origin
+ * record (vms-6ca, H5). Returns 1 and fills the getlki fields if an origin
+ * record with lkid == req_lkid exists; 0 otherwise. Lets GETLKI observe the
+ * cross-node request's status flip on the REQUESTER node.
+ */
+static int vms_lock_dlm_origin_getlki(uint32_t lkid, uint32_t *granted_mode,
+                                      uint32_t *requested_mode, char *resnam,
+                                      size_t resnam_len)
+{
+    struct vms_dlm_origin *cur;
+    int found = 0;
+
+    if (lkid == 0)
+        return 0;
+    exec_lock(&vms_dlm_origin_lock);
+    exec_list_for_each_entry(cur, &vms_dlm_origin_list, list) {
+        if (cur->req_lkid == lkid) {
+            if (granted_mode)
+                *granted_mode = cur->granted_mode;
+            if (requested_mode)
+                *requested_mode = cur->requested_mode;
+            if (resnam && resnam_len)
+                strscpy(resnam, cur->resnam, resnam_len);
+            found = 1;
+            break;
+        }
+    }
+    exec_unlock(&vms_dlm_origin_lock);
+    return found;
 }
 
 /*
@@ -1607,6 +1838,8 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
         a.owner_csid = req->req_csid;   /* held FOR the remote requester */
 
         memset(&xn, 0, sizeof(xn));
+        xn.req_lkid = req->req_lkid;    /* stamp the master lock with the
+                                         * requester's own handle (H5) */
         vms_enq_core_ex(proc, &a, &xn);
 
         /* Hand the master's lock id back (the GRANT reply's master_lkid) and the
@@ -1628,10 +1861,16 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
             return SS__BADPARAM;
         return vms_lock_dlm_xnode_deq(req);
     case VMS_DLM_OP_GRANT:
+        /* REQUESTER-SIDE GRANT RECEIVE (vms-6ca, H5). A GRANT / queued-reply the
+         * MASTER sent back for a cross-node $ENQ THIS node issued completes the
+         * requester's origin record -- genuine executive state, the status flip
+         * observed on the requester node. Was SS$_UNSUPPORTED. */
+        return vms_lock_dlm_xnode_grant_recv(req);
     case VMS_DLM_OP_BLKAST:
-        /* Responses carry no resource name. Completing/notifying the ORIGINATING
-         * node's pending request is the requester-side wiring, not this
-         * master-centric path; decline honestly. */
+        /* BLKAST RECEIVE is the holder-side blocking-AST delivery. The BLKAST
+         * WIRE (master -> holder) is deferred honestly on this rung (vms-6ca):
+         * the block-then-grant round-trip is proven without it (the holder
+         * releases on its own). Still SS$_UNSUPPORTED -- never faked. */
         return SS__UNSUPPORTED;
     default:
         return SS__BADPARAM;

@@ -1,10 +1,10 @@
 ! =============================================================================
 ! LINKSH.MMS  --  MMK (MadGoat Make) description file for the OVMX self-host S4
 !                 FIXPOINT: the OVMX linker LINK.EXE built from WITHIN OVMX.
-!                 Ports the multi-TU LINK.EXE fixpoint from BUILD.COM (the DCL
-!                 driver distro/.../SYS0/SYSCOMMON/SYSEXE/BUILD.COM +
-!                 src/imgact/test/run_link_selfhost_native.sh) to MMK (bead
-!                 vms-89d, the vms-678 Build-native 1.0 gate).
+!                 The multi-TU LINK.EXE fixpoint, formerly driven by the DCL
+!                 procedure BUILD.COM (retired vms-e49, with its DCL driver
+!                 run_link_selfhost_native.sh), is now driven solely by MMK
+!                 (bead vms-89d, the vms-678 Build-native 1.0 gate).
 !
 ! Builds the REAL two-translation-unit OVMX linker -- the actual
 ! src/vmslink/link.c (LINK.C) + src/vmslink/ovmx_link_rms_io.c
@@ -18,7 +18,7 @@
 !               runnable OVMX linker image, LINKSH.EXE (PT_INTERP=IMGACT.EXE).
 !
 ! THE FIXPOINT (what the harness that drives this file asserts -- vms-89d,
-! mirroring the BUILD.COM path run_link_selfhost_native.sh proves today):
+! the same property the retired BUILD.COM path once proved):
 !
 !   gen1  a host-bootstrap-built LINK.EXE links LINK.OBJ + OVMX_LINK_RMS_IO.OBJ
 !         (the SAME objects this file compiles) into LINKSH.EXE = gen2 -- the
@@ -34,8 +34,8 @@
 ! MMK order the build itself: compile every TU, THEN link -- the plan a
 ! self-hosting `make` must produce.  link.c / imgact.c / tcc are the toolchain
 ! and are OUT of scope here (do NOT edit them); this file is the MMK driver that
-! replaces BUILD.COM's multi-TU LINK.EXE fixpoint (the destructive retirement of
-! BUILD.COM itself is a later vms-89d rung, deferred behind the ODS-2 flip).
+! replaced BUILD.COM's multi-TU LINK.EXE fixpoint -- BUILD.COM itself was retired
+! (vms-e49) once the ODS-2 flip landed, and MMK is now the sole self-host driver.
 !
 ! -----------------------------------------------------------------------------
 ! SYNTAX (clean-room, CLAUDE.md Rule 8).  This file uses only documented
@@ -55,8 +55,8 @@
 ! exactly as on OpenVMS (this mirrors BUILD.COM's own LNK :== $...LINK.EXE, and
 ! OVMXRT.MMS documents the same trap).
 !
-! CFLAGS/INCS mirror run_link_selfhost_native.sh's LC_CFLAGS (the same -D/-I set
-! mk_link.sh compiles link.c with): -DOVMX_RMS_IO selects link.c's RMS I/O seams;
+! CFLAGS/INCS mirror the -D/-I set mk_link.sh compiles link.c with (the same set
+! run_mmk_link_selfhost_build.sh uses): -DOVMX_RMS_IO selects link.c's RMS I/O seams;
 ! the include roots are logical names the harness defines (VMSLINK$SRC -> the
 ! staged sources' dir, holding ovmx_link_rms_io.h; OVMX$INCLUDE -> the staged
 ! ovmx_image.h / ovmx_symvec.h; RMS$INCLUDE -> rms/rms.h).  tcc ignores gcc-only

@@ -70,8 +70,8 @@
  * host-side OVMXRT.MMS uses is an authenticity nicety, not needed for a real
  * chain (the drive passes an ABSOLUTE --use path, the same way the compile/
  * archive steps pass absolute TCC/LIBRARIAN paths and mk_dcl.sh passes absolute
- * shareable paths). With this green, BUILD.COM is retired for the MMK path
- * (docs/design-self-host-spine5-mmk-component.md).
+ * shareable paths). This green is what let BUILD.COM be retired for the MMK path
+ * (vms-e49; docs/design-self-host-spine5-mmk-component.md).
  *
  * NO EXECUTIVE (honest-failure branch, Rule 9 / INV-6): $CREMBX must fail
  * SS$_NOSUCHDEV, never fabricate a private per-process mailbox. Returns

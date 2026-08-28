@@ -1355,8 +1355,8 @@ int dcl_p1_critical_range(uint64_t *base, uint64_t *limit)
  * file. But an OVMX image produced by LINK.EXE through RMS lands on the Linux
  * backing store as "FOO.EXE;1" (sys$create mints a ;version) and frequently
  * without a Unix +x bit. The old up-front access(X_OK) gate therefore refused to
- * activate a freshly linked image -- which is exactly what BUILD.COM must do
- * (vms-615). This resolver accepts a readable file (imgact_activate reads it),
+ * activate a freshly linked image -- which is exactly what a self-host build
+ * (MMK driving RUN of the produced image) must do. This resolver accepts a readable file (imgact_activate reads it),
  * fills in a missing .EXE type, and resolves the highest ;version.
  *
  * `resolved` is filled from `linux_path` (already run through dcl_resolve_path).
@@ -1476,8 +1476,8 @@ static int dcl_resolve_activatable_acp(struct dcl_context *ctx,
     *acp_usable = 0;
 
     /* NO EXECUTIVE => this ACP path does not apply: defer to the legacy resolver
-     * (vms-104). With /dev/vms absent (the plain host ctest / the BUILD.COM S3.2
-     * host DCL driver), rms_file_attr answers from a POSIX stat, NOT the ACP --
+     * (vms-104). With /dev/vms absent (the plain host ctest / the MMK
+     * self-host toolchain ctests), rms_file_attr answers from a POSIX stat, NOT the ACP --
      * so dcl_rms_attr would report RMS$_NORMAL for SYS$SYSTEM:TCC.EXE and this
      * function would then try to stage it OVER an ACP that isn't there and fail,
      * turning a resolvable host-path image into a false %DCL-E-IVIMAGE. The flip

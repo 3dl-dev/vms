@@ -1061,8 +1061,8 @@ static const char *resolve_producer_path(const char *path, char *out, size_t sz)
         if (access(out, R_OK) == 0)
             return out;
 
-        /* (2) HOST CTEST (no /dev/vms, no boot bridge -- e.g. the BUILD.COM S3.2
-         * DCL driver): the installed images live at their legacy POSIX
+        /* (2) HOST CTEST (no /dev/vms, no boot bridge -- e.g. the MMK
+         * self-host toolchain ctests): the installed images live at their legacy POSIX
          * SYS$SYSROOT location. This /vms read is the sanctioned legacy path for
          * the no-executive case (the flip only retires /vms when the ACP is
          * live), NEVER reached on the runtime where (1) resolves first. */

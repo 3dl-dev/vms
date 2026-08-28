@@ -1024,21 +1024,51 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	 * that is none of the three still gets SS$_IVCHAN, never a fabricated
 	 * success.
 	 */
+	/*
+	 * Device-table facility (src/kernel-core/vms_devtab.c). rd vms-6a6: the
+	 * $ASSIGN/$GETDVI/device-scan/terminal ioctls were handled by the SHARED
+	 * kernel-core code (already compiled + linked into vms.kmod, declared in
+	 * vms_internal.h) but were NEVER routed here -- they fell through the outer
+	 * default: ENOTTY -> SS$_ILLIOFUNC, so on VAX SHOW DEVICE printed nothing,
+	 * SHOW DEVICES enumerated nothing, and SHOW USERS reported 0 users (no login
+	 * could bind its console terminal via $ASSIGN + SETTERM, so vms_proctab's
+	 * classifier never stamped any process INTERACTIVE). The device table AND the
+	 * console terminal OPA0: are already populated on VAX (vms_devtab_init() +
+	 * vms_blockdev_netbsd_register_units at attach); this just wires the dispatch,
+	 * exactly as x86 does (src/kernel/vms_module.c). Same marshaling as the
+	 * $DASSGN/$ALLOC group: find-or-create the caller's proc, hand the framework's
+	 * kernel buffer `data' straight to the shared (proc, arg) handler.
+	 */
+	case VMS_IOCTL_ASSIGN:
 	case VMS_IOCTL_DASSGN:
 	case VMS_IOCTL_ALLOC:
 	case VMS_IOCTL_DALLOC:
+	case VMS_IOCTL_GETDVI:
+	case VMS_IOCTL_DEVSCAN:
+	case VMS_IOCTL_TTSETMODE:
+	case VMS_IOCTL_SETTERM:
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
 			return ENOMEM;
 
 		switch (cmd) {
+		case VMS_IOCTL_ASSIGN:
+			r = vms_ioctl_assign(proc, (unsigned long)uarg);    break;
 		case VMS_IOCTL_DASSGN:
-			r = vms_ioctl_dassgn(proc, (unsigned long)uarg); break;
+			r = vms_ioctl_dassgn(proc, (unsigned long)uarg);    break;
 		case VMS_IOCTL_ALLOC:
-			r = vms_ioctl_alloc(proc, (unsigned long)uarg);  break;
+			r = vms_ioctl_alloc(proc, (unsigned long)uarg);     break;
 		case VMS_IOCTL_DALLOC:
-			r = vms_ioctl_dalloc(proc, (unsigned long)uarg); break;
+			r = vms_ioctl_dalloc(proc, (unsigned long)uarg);    break;
+		case VMS_IOCTL_GETDVI:
+			r = vms_ioctl_getdvi(proc, (unsigned long)uarg);    break;
+		case VMS_IOCTL_DEVSCAN:
+			r = vms_ioctl_devscan(proc, (unsigned long)uarg);   break;
+		case VMS_IOCTL_TTSETMODE:
+			r = vms_ioctl_ttsetmode(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_SETTERM:
+			r = vms_ioctl_setterm(proc, (unsigned long)uarg);   break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}

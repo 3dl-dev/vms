@@ -2386,6 +2386,16 @@ static void imgact_u32_hex8(char *out, uint32_t v)
 	out[8] = '\0';
 }
 
+/* vms-430 DIAGNOSTIC (revert-before-fix): format a 64-bit value as exactly 16
+ * lowercase hex digits + NUL, for the transfer-path instrumentation below. */
+static void imgact_u64_hex16(char *out, unsigned long v)
+{
+	static const char hexd[] = "0123456789abcdef";
+	for (int i = 0; i < 16; i++)
+		out[i] = hexd[(v >> ((15 - i) * 4)) & 0xf];
+	out[16] = '\0';
+}
+
 /* Route a VMS-standard image's returned condition value to process exit.
  *
  * Faithful behavior (design §3.4) is SYS$EXIT: the executive records the
@@ -2545,7 +2555,57 @@ static void imgact_vms_standard_activate(unsigned long exe_base,
 	 * layout (six 64-bit args), never a hard-coded 6. */
 	unsigned long ai = OVMX_AI_VMS_ACTIVATION;
 
+	/* vms-430 DIAGNOSTIC DISCRIMINATOR (NOT a fix; do not merge). UNCONDITIONAL
+	 * transfer-path instrumentation on the boot console (same eputs mechanism as
+	 * the forced seam). Pins WHERE, not just whether:
+	 *   - no "reached" line  => activate path not taken (candidate b: imgact.c
+	 *                           gating / g_xfer.valid).
+	 *   - "reached" then silence (no "returned", no seam) => child crashed IN the
+	 *                           image after transfer (candidate a-crash) -- and
+	 *                           entry/pv below are the values to check vs the
+	 *                           #812 Alpha PV/PDSC linkage fill.
+	 *   - "reached" + "returned cond=.." + forced seam delivered=/$STATUS= => the
+	 *                           image ran; status-value path (a2): fold vs record.
+	 * pv  = R27 (the PDSC / procedure value) the standard call sets up.
+	 * entry = *(pv+8) = PDSC$Q_ENTRY, the code address the trampoline jumps to.
+	 * Revert before any real fix lands. */
+	{
+		unsigned long xpv    = (unsigned long)pv;
+		unsigned long xentry = imgact_sv_code_entry(xpv);   /* *(pv+8) on Alpha */
+		char fbuf[9], vbuf[9], pbuf[17], ebuf[17];
+		imgact_u32_hex8(fbuf, (uint32_t)g_xfer.flavor);
+		imgact_u32_hex8(vbuf, (uint32_t)g_xfer.valid);
+		imgact_u64_hex16(pbuf, xpv);
+		imgact_u64_hex16(ebuf, xentry);
+		char xl[512];
+		xl[0] = '\0';
+		xstrcat(xl, "OVMX_XFER: reached flavor=0x");
+		xstrcat(xl, fbuf);
+		xstrcat(xl, " valid=0x");
+		xstrcat(xl, vbuf);
+		xstrcat(xl, " entry=0x");
+		xstrcat(xl, ebuf);
+		xstrcat(xl, " pv=0x");
+		xstrcat(xl, pbuf);
+		xstrcat(xl, "\n");
+		eputs(xl);
+	}
+
 	unsigned long cond = imgact_vms_transfer(pv, ai, args);
+
+	/* vms-430 DIAGNOSTIC (revert-before-fix): the transfer RETURNED -- the image
+	 * did not crash after the standard call. cond is what crt0's __main handed
+	 * back in R0; imgact_vms_exit records it via SETEXIT next. */
+	{
+		char cbuf[17];
+		imgact_u64_hex16(cbuf, cond);
+		char xl[128];
+		xl[0] = '\0';
+		xstrcat(xl, "OVMX_XFER: returned cond=0x");
+		xstrcat(xl, cbuf);
+		xstrcat(xl, "\n");
+		eputs(xl);
+	}
 
 	imgact_vms_exit(cond);          /* executive $EXIT; does not return */
 	sys_exit(IMGACT_EXIT_NOEXEC);   /* defensive: never reached */

@@ -98,8 +98,9 @@ The C library the built images bind is `DECC$SHR.EXE` = whole-archived musl
 `libc.a` + `libgcc.a` (`src/vmslink/mk_decc_shr.sh`).
 
 **1.0 self-host gate** (rd `vms-678`, "Build-native" bar): no bash/host tool in
-the 1.0 *build path* for everything **above the kernel line**. The remaining 1.0
-item is retiring `BUILD.COM`→MMK for the full tree (rd `vms-89d`); S5
+the 1.0 *build path* for everything **above the kernel line**. `BUILD.COM` was
+retired in favour of the MMK descrip.mms driver for the full tree (rd `vms-89d`,
+`vms-e49`); S5
 (agent-in-OVMX, network-native, runtime-native) is explicitly **post-1.0**.
 
 ### 2.2 The kernel is cross-built OUTSIDE OVMX (the open loop)

@@ -1,7 +1,7 @@
 #!/bin/bash
 # TEST: vms-5c1 DCL symbol evaluation — bare-symbol IF/assignment eval, P'N'
 #       parameter indexing, ''SYM' substitution inside quoted strings, and
-#       object-list accumulation (the idioms the multi-TU BUILD.COM needs, vms-62b)
+#       object-list accumulation (general DCL symbol-evaluation idioms, vms-62b)
 # EXPECT: contains:idx ALPHA BETA GAMMA
 # EXPECT: contains:objs= ALPHA.OBJ BETA.OBJ GAMMA.OBJ
 # EXPECT: contains:assign-ok

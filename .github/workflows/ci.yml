@@ -131,7 +131,6 @@ jobs:
               - 'src/vmsqueue/**'
               - 'third-party/tcc/**'
               - 'tools/**'
-              - 'distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/BUILD.COM'
             libcrypto:
               - '.github/workflows/**'
               - 'third-party/libcrypto/**'
@@ -5674,87 +5673,6 @@ jobs:
               sh /src/src/imgact/test/run_olb_symvec_native.sh
             '
 
-  # -----------------------------------------------------------------------
-  # build-com-native — self-host S3.2 (bead vms-615): a DCL command procedure
-  # (BUILD.COM) drives compile -> link -> run of a C program from inside an
-  # OVMX DCL session using the OVMX-native TCC.EXE + LINK.EXE as foreign
-  # commands, with ZERO bash in the build path. Replaces the run_*.sh shell
-  # build driver -- "Build-native" self-hosting (vms-678). aarch64-only for the
-  # same reason as tcc-native (tinycc configure keys off uname -m); runs under
-  # arm64 binfmt/QEMU emulation. BUILD_EXPECT=1 (BLOCKING): any native build or
-  # the @BUILD run failing is a real regression.
-  # -----------------------------------------------------------------------
-  build-com-native:
-    name: BUILD.COM DCL driver — compile+link+run, no bash (self-hosting S3.2)
-    needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
-    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Register QEMU binfmt handlers (arm64 emulation)
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - name: Build the native toolchain + DCL.EXE, then @SYS$SYSTEM:BUILD HELLO drives TCC.EXE + LINK.EXE and runs HELLO.EXE (arm64)
-        run: |
-          docker run --rm --platform linux/arm64 \
-            -v "${{ github.workspace }}":/src -w /src \
-            docker.io/library/alpine:3.20 sh -c '
-              set -e
-              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
-              export CC=gcc WORK=/tmp/build-com-native BUILD_EXPECT=1
-              sh /src/src/imgact/test/run_build_com_native.sh
-            '
-
-  # link-selfhost-native — self-host S4 FIXPOINT (bead vms-62b, the vms-678
-  # Build-native 1.0 gate): OVMX builds a nontrivial OVMX component (the OVMX
-  # linker LINK.EXE) from WITHIN OVMX and proves it byte-stable. A multi-TU
-  # BUILD.COM, driven from a DCL session with ZERO bash in the build path, has
-  # the OVMX-native TCC.EXE compile link.c + ovmx_link_rms_io.c and the native
-  # gen1 LINK.EXE link them into gen2; gen2 is installed as SYS$SYSTEM:LINK.EXE
-  # and links LINK.EXE again into gen3; the job FAILs unless gen2 == gen3
-  # byte-for-byte (the tcc gen2==gen3 fixpoint, now for LINK.EXE). aarch64-only
-  # for the same reason as tcc-native/build-com-native (tinycc configure keys
-  # off uname -m); runs under arm64 binfmt/QEMU emulation. LINK_SELFHOST_EXPECT=1
-  # (BLOCKING): any native build, either @BUILD run, or a gen2!=gen3 mismatch is
-  # a real regression.
-  # -----------------------------------------------------------------------
-  link-selfhost-native:
-    name: LINK.EXE self-host fixpoint — OVMX builds LINK.EXE, gen2==gen3, no bash (self-hosting S4)
-    needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
-    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 40
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Register QEMU binfmt handlers (arm64 emulation)
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - name: Build the native toolchain + DCL.EXE, then @BUILD LINK.EXE inside OVMX twice and assert gen2==gen3 (arm64)
-        run: |
-          docker run --rm --platform linux/arm64 \
-            -v "${{ github.workspace }}":/src -w /src \
-            docker.io/library/alpine:3.20 sh -c '
-              set -e
-              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
-              export CC=gcc WORK=/tmp/link-selfhost-native LINK_SELFHOST_EXPECT=1
-              sh /src/src/imgact/test/run_link_selfhost_native.sh
-            '
-
   # mmk-link-selfhost-fixpoint — self-host S4 LINK.EXE fixpoint via the MMK
   # driver (bead vms-89d, the vms-678 Build-native 1.0 gate).  ADDITIVE port of
   # the multi-TU LINK.EXE self-host fixpoint from BUILD.COM to MMK: the committed
@@ -5763,13 +5681,15 @@ jobs:
   # plan (the toolchain-mmk-link-selfhost-plan ctest proves it).  This job proves
   # the OTHER half: the real OVMX-native LINK.EXE, executing that exact plan on
   # the real LINK.EXE sources, reproduces itself byte-for-byte -- gen1 builds
-  # gen2, the OVMX-built gen2 builds gen3, gen2 == gen3.  Runs NATIVE amd64 (not
-  # arm64 emulation like link-selfhost-native): this proof does NOT run TCC.EXE
+  # gen2, the OVMX-built gen2 builds gen3, gen2 == gen3.  Runs NATIVE amd64 (the
+  # retired BUILD.COM fixpoint ran arm64-emulated because it ran TCC.EXE, tinycc
+  # keying off uname -m): this proof does NOT run TCC.EXE
   # (it compiles the objects with the host CC -- TCC's compile determinism is the
   # separate run_tcc_selfhost gen2==gen3 fixpoint), so it is not bound by tinycc's
-  # uname-keyed arch gate.  It does NOT touch BUILD.COM or the existing
-  # link-selfhost-native job (the destructive retirement of BUILD.COM is a later
-  # vms-89d rung, deferred behind the ODS-2 flip).  MMK's own MAILBOX-DRIVEN
+  # uname-keyed arch gate.  This job is now the PR-gated LINK.EXE self-host
+  # fixpoint proof outright: BUILD.COM and its DCL driver run_link_selfhost_native.sh
+  # were retired (vms-e49) once the ODS-2 flip landed, and the MMK descrip.mms
+  # (LINKSH.MMS) is the sole self-host driver.  MMK's own MAILBOX-DRIVEN
   # execution of this plan (ovmx_mmk_sp.c: $CREMBX/lib$spawn, executive-only)
   # rides QEMU and is a follow-on rung.  LINK_SELFHOST_EXPECT=1 (BLOCKING): any
   # producer-graph, gen build, or gen2!=gen3 mismatch is a real regression.

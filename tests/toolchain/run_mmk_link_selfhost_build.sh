@@ -5,15 +5,15 @@
 # vms-678 Build-native 1.0 gate).
 #
 # This is the host, real-toolchain half of porting the multi-TU LINK.EXE
-# self-host fixpoint from BUILD.COM to MMK -- the LINK.EXE analog of
+# self-host fixpoint from the retired BUILD.COM to MMK -- the LINK.EXE analog of
 # tests/toolchain/run_mmk_component_build.sh (which proves the real
 # LIBRARIAN.EXE/LINK.EXE build the freestanding-runtime component byte-
 # identically).  It proves, on the real OVMX linker on the actual LINK.EXE
-# sources, the SAME property src/imgact/test/run_link_selfhost_native.sh proves
-# under BUILD.COM: an OVMX-built linker linking the OVMX linker's own two
+# sources, the SAME property the retired BUILD.COM driver proved: an
+# OVMX-built linker linking the OVMX linker's own two
 # translation units reproduces itself.
 #
-# THE FIXPOINT (mirrors run_link_selfhost_native.sh gen1/gen2/gen3):
+# THE FIXPOINT (gen1/gen2/gen3):
 #   boot   a host-tool bootstrap LINK.EXE (build_producer_graph: plain host cc
 #          of link.c) -- allowed, a build step is not an activation proof
 #          (CLAUDE.md Rule 9);
@@ -41,7 +41,7 @@
 # proven by src/imgact/test/run_tcc_selfhost.sh (gen2==gen3), so the objects are
 # a constant here and what this proof isolates is the LINK output's self-host
 # fixpoint.  aarch64 (native or arm64 emulation) OR x86_64 native -- unlike
-# run_link_selfhost_native.sh this proof is NOT aarch64-only, because it does not
+# the retired BUILD.COM fixpoint this proof is NOT aarch64-only, because it does not
 # run TCC.EXE (tinycc's configure keys off uname -m); it reuses the same
 # lib_build_graph.sh producer graph that already supports both arches (vms-cb5f).
 #
@@ -91,8 +91,8 @@ LIBGCC=${LIBGCC:-$($CC -print-libgcc-file-name)}
 [ -f "$LIBGCC" ] || { echo "FAIL: no libgcc.a at $LIBGCC"; exit 1; }
 
 # ---- Producer graph: IMGACT.EXE + host-tool bootstrap LINK.EXE ($WORK/LINK.EXE)
-# + DECC$SHR + the five OVMX shareables at SYS$LIBRARY.  Same builder the BUILD.COM
-# fixpoint (run_link_selfhost_native.sh) and run_link_native.sh use.
+# + DECC$SHR + the five OVMX shareables at SYS$LIBRARY.  Same builder
+# run_link_native.sh uses.
 . "$GRAPH"
 build_producer_graph
 
@@ -100,7 +100,7 @@ build_producer_graph
 # linker wrote.  gen1's bootstrap is a host tool (plain open() -> exact path), but
 # gen1/gen2 are OVMX images whose -DOVMX_RMS_IO image write goes through OVMX RMS,
 # which lowercases the unqualified name and mints a ;version suffix (+ a
-# "<name>;N.rms_meta" sidecar).  Mirrors run_link_selfhost_native.sh find_output:
+# "<name>;N.rms_meta" sidecar).  Resolve the RMS ;version output:
 # pick the highest pure-digit ;version, else the exact path if it exists.
 resolve_rms_out() {
     _d=$(dirname "$1"); _b=$(basename "$1"); _lb=$(echo "$_b" | tr 'A-Z' 'a-z')
@@ -178,7 +178,7 @@ echo "LINKSH.MMS describes (and MMK resolves -- run_mmk_link_selfhost_plan.sh), 
 echo "the OVMX linker (link.c + ovmx_link_rms_io.c) into gen2, then the OVMX-BUILT gen2"
 echo "LINK.EXE linked LINK.EXE again into gen3.  gen2 and gen3 are BYTE-IDENTICAL"
 echo "($S2) -- a true self-hosting fixpoint, the same"
-echo "property BUILD.COM proves (run_link_selfhost_native.sh), now for the MMK driver."
+echo "property the retired BUILD.COM driver proved, now for the MMK driver."
 echo "MMK's mailbox-driven execution of this plan rides QEMU"
 echo "(tests/qemu/test_syssvc_mmk_link_selfhost.c)."
 echo "================================================================================"

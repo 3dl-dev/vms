@@ -764,7 +764,7 @@ static uint32_t rms_posix_file_attr(const char *vmsspec, struct rms_fileattr *ou
      * to a bare "name.type" that does NOT exist -- the real file is
      * "name.type;1". Without this, RUN of a freshly LINKed image failed
      * %DCL-E-IVIMAGE even though the image was right there under its ";1" name
-     * (BUILD.COM S3.2). Only as a FALLBACK when the exact path is absent, and
+     * (the self-host RUN probe). Only as a FALLBACK when the exact path is absent, and
      * never for a "name.dir" directory probe (whose own suffix-strip retry runs
      * below): find the highest existing "name.type;N" and stat that instead.
      * rms_resolve_version() honours an explicit ";N" and otherwise picks the

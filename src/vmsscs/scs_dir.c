@@ -434,14 +434,17 @@ static void dir_build_common(const uint8_t *dst_mac, const uint8_t *src_mac,
      * rejections of a retried connect immediately followed by a tenth attempt
      * that switches message type to ACCEPT_REQ/RSP and succeeds. See
      * scs_dir.h's SCS_DIR_OP_ACCEPT / SCS_DIR_OP_MSCP_CONFIRM entries for the
-     * full grounding and the wire-behaviour follow-up this decode opens
-     * (NOT fixed here -- out of scope for vms-754): scsd.c's server-first
-     * MSCP accept path still BUILDS these bytes believing an op-4 BINDS a
-     * server connection (still open, a separate item -- the builders below
-     * keep emitting exactly the bytes they emitted before; vms-754 is a
-     * decode, not a wire change). The CONSUME half is fixed: vms-257
-     * (2026-08-08) stopped scsd.c from treating a peer's op-4 answer to OUR
-     * outbound MSCP$DISK connect as a bind -- see scsd.c's FORM B comment. */
+     * full grounding. BOTH halves of the wire-behaviour follow-up this decode
+     * opened are now fixed, and vms-754 itself was neither (it was the decode
+     * only). The CONSUME half: vms-257 (2026-08-08) stopped scsd.c from
+     * treating a peer's op-4 answer to OUR outbound MSCP$DISK connect as a bind
+     * -- see scsd.c's FORM B comment. The BUILD half: vms-257 (2026-08-28)
+     * stopped scsd.c's server-first MSCP accept path from emitting op-4 -- it no
+     * longer BUILDS an op-4 believing an op-4 BINDS a server connection, and now
+     * sends the genuine op-2 ACCEPT_REQ via scs_dir_build_mscp_response() below.
+     * scs_dir_build_mscp_accept still lays down op-4, but it is NO LONGER OVMX's
+     * server accept -- it is the labelled REJECT_REQ builder (a FORM B receive-
+     * path test fixture); scsd.c no longer calls it on any send path. */
     if (env != NULL) {
         (void)scs_env_build(out + 14, sca_len, env);
     }
@@ -742,8 +745,56 @@ int scs_dir_build_mscp_accept(const struct scs_dir_params *p,
      * the shared-namespace REJECT_REQ, not an accept (SCS_DIR_OP_ACCEPT in
      * scs_dir.h carries the full grounding). Con.ID pair still bound the same
      * way: remote = member's MSCP client handle, local = OVMX's fresh MSCP
-     * server handle -- the byte layout is unchanged, only the name was wrong. */
+     * server handle -- the byte layout is unchanged, only the name was wrong.
+     * vms-257: this builder is NO LONGER OVMX's server accept -- the server-first
+     * path uses scs_dir_build_mscp_response (op-2 ACCEPT_REQ). It remains as the
+     * labelled REJECT_REQ builder and a FORM B receive-path test fixture. */
     struct scs_env_fields env = { SCS_DIR_OP_ACCEPT, SCS_DIR_ENV_CREDIT_CONFIRM,
+                                  p->remote_conid, p->local_conid };
+    dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
+                     dir_confirm_tmpl, SCS_DIR_CONFIRM_SCA_LEN, p->recv_ack,
+                     p->send_seq, p->incarnation, &env, out);
+    return 0;
+}
+
+/*
+ * scs_dir_build_mscp_response -- vms-257: OVMX's GENUINE server-side accept of a
+ * member's inbound MSCP$DISK connect. This is Figure 2-14's ACCEPT_REQ (the
+ * "CONNECT-RESPONSE" that supplies the target's Con.ID): shared-namespace MTYPE
+ * 2 (scs_env.h SCS_ENV_MTYPE_ACCEPT_REQ == scs_dir.h SCS_DIR_MSGTYPE_ACCEPT_REQ),
+ * NOT the MTYPE 4 REJECT_REQ that scs_dir_build_mscp_accept lays down.
+ *
+ * WHY THIS EXISTS. scs_dir_build_mscp_accept builds op [46:48]=4, which vms-754
+ * decoded as the shared-namespace REJECT_REQ (NOT an accept). When the
+ * server-first path emitted that as its "accept", a real class driver read it
+ * as a rejection, abandoned the connection, and retried every ~10s with a fresh
+ * Con.ID -- the connection never reached OPEN, no MSCP command ever arrived, and
+ * MOUNT blocked in DUDRIVER mount-verify (vms-257, live on lab-2 vaxlab-0
+ * 2026-08-28). A genuine accept MUST carry MTYPE 2 (ACCEPT_REQ), the same value
+ * the client-side receive path already reads as "the member accepted OUR
+ * connect" (scsd.c, dop == SCS_DIR_OP_RESPONSE), mirrored here for the server.
+ *
+ * GROUNDING / OVMX DESIGN CHOICE (rule 8). Grounded: the MTYPE value 2 =
+ * ACCEPT_REQ (scs_env.h, undisputed 0..3 census) and Fig 2-14's target column
+ * (CLOSED --RCV_CONNECT_REQ--> send CONNECT_RSP; --SVC_ACCEPT--> send
+ * ACCEPT_REQ; --RCV_ACCEPT_RSP--> OPEN). NOT grounded byte-exact: OVMX has never
+ * captured a real MSCP$DISK server ACCEPT_REQ (it never successfully served one,
+ * and the af2 template scs_dir_build_mscp_accept replays is a real-VAX-to-
+ * real-VAX REJECT dialogue with no OVMX participant, vms-754). The 62-byte
+ * confirm-family byte SHAPE is therefore an OVMX construction, labelled: it is
+ * the same short connection-control layout OVMX already used, with only the
+ * MTYPE corrected from REJECT_REQ(4) to ACCEPT_REQ(2). Con.ID pair bound the
+ * same way: remote = member's MSCP client handle, local = OVMX's server handle.
+ * Returns 0, or -1 if p/out is NULL.
+ */
+int scs_dir_build_mscp_response(const struct scs_dir_params *p,
+                                uint8_t out[SCS_DIR_CONFIRM_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    struct scs_env_fields env = { SCS_DIR_MSGTYPE_ACCEPT_REQ,
+                                  SCS_DIR_ENV_CREDIT_CONFIRM,
                                   p->remote_conid, p->local_conid };
     dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
                      dir_confirm_tmpl, SCS_DIR_CONFIRM_SCA_LEN, p->recv_ack,

@@ -7227,6 +7227,52 @@ jobs:
         run: tools/cross-alpha/run-boot-alpha.sh login
 
   # -----------------------------------------------------------------------
+  # alpha-dcl-acceptance (rd vms-f2c, epic vms-8954). Co-release ACCEPTANCE
+  # PARITY: the SAME ground-source DCL/SHOW acceptance battery x86_64 runs
+  # (dcl-acceptance-e2e -> the shared tests/qemu/lib/dcl_acceptance_battery.sh),
+  # driven over qemu-system-alpha -- boot the real runtime, log in
+  # SYSTEM/MANAGER, run the commands a user types, assert VMS-FAITHFUL output
+  # (Rule 1). One shared battery, both arches, no drift. HEAVY-EMULATOR TIER
+  # (schedule || workflow_dispatch) like alpha-boot-login; the ~25-30 min full
+  # boot keeps it off the PR path (the per-PR Alpha guard is the vms-5af modpost
+  # smoke). A RED assertion here is a real Alpha faithful-output gap to fix, each
+  # naming its bug -- never weaken the shared battery to go green.
+  # -----------------------------------------------------------------------
+  alpha-dcl-acceptance:
+    name: OVMX/Alpha DCL/SHOW acceptance — boot, run the commands a user types, assert VMS-faithful (vms-f2c)
+    needs: changes
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: "Acceptance gate — boot qemu-system-alpha, log in SYSTEM/MANAGER, run the DCL/SHOW battery, assert VMS-faithful output"
+        run: tools/cross-alpha/run-boot-alpha.sh acceptance
+
+  # -----------------------------------------------------------------------
   # alpha-arith-hparith (rd vms-db3, epic vms-8954). The STANDING green-by-SHA
   # gate for the Alpha fault->VMS-condition bridge: a trap-enabling FP
   # divide-by-zero on OVMX/Linux-Alpha must raise a faithful SS$_HPARITH (1284)

@@ -1,0 +1,226 @@
+#!/bin/bash
+# dcl_acceptance_battery.sh -- the SHARED DCL/SHOW acceptance battery.
+#
+# WHY THIS FILE EXISTS (co-release parity, no drift): x86_64 and Alpha are a
+# single release stream (memory: vax-mainstream-corelease / alpha first-class).
+# The boot-and-RUN-COMMANDS acceptance battery -- log in SYSTEM/MANAGER, run the
+# basic DCL/SHOW commands a user types on first login, and ASSERT the output is
+# VMS-faithful (project Rule 1), each assertion naming the bug it guards and
+# carrying a negative control -- must be BYTE-IDENTICAL across arches, or the two
+# runtimes silently diverge in what "acceptance" means. So the battery lives here
+# ONCE and both arch drivers source it and call run_dcl_acceptance_battery.
+#
+# THE CALLER-PROVIDED CONTRACT. This file is arch-INDEPENDENT: it knows nothing
+# about qemu-system-x86_64 vs qemu-system-alpha, docker, fifos, or console
+# framing. Before sourcing and calling run_dcl_acceptance_battery, the caller
+# MUST have defined these primitives and variables:
+#
+#   FUNCTIONS
+#     send <str>              -- write <str> + a carriage return to the guest
+#                                console (send '' feeds a bare CR, as a real
+#                                operator hitting RETURN on OPA0:).
+#     wait_for <pat> <secs> <since-byte>
+#                             -- return 0 as soon as fixed-string <pat> appears
+#                                in the console log at/after byte <since-byte>
+#                                (default 0), else 1 after <secs> seconds or if
+#                                the guest dies. Fixed-string (grep -F) semantics.
+#     run_cmd <cmd>           -- send <cmd>, wait (bounded by CMD_TIMEOUT) for the
+#                                returned DCL "$ " prompt, then set the GLOBAL var
+#                                SEG to everything the command produced (its echo
+#                                + output + trailing prompt), CR-stripped.
+#
+#   VARIABLES
+#     LOG                     -- path to the live console log file (read directly
+#                                for the boot banner + Username:/CR-feed loop).
+#     EXPECTED_BOOT_BANNER    -- brand+version the boot must print, from
+#                                ovmx_identity.h (INV-1 single source), e.g.
+#                                "OpenVMX V0.5-7".
+#     EXPECTED_COMPAT_VERSION -- the version F$GETSYI("VERSION") must report,
+#                                true-to-arch (ovmx_compat_version()): the real
+#                                VSI version on a lineage arch, else OVMX's own.
+#     VOLUME_LABEL            -- the mastered ODS-2 system-disk label (OVMXSYS).
+#     CMD_TIMEOUT             -- per-command bound run_cmd passes to wait_for.
+#     PASS / FAIL             -- integer counters; ok/bad below increment them.
+#                                Initialise PASS=0 FAIL=0 before calling.
+#     BOOT_TIMEOUT            -- optional; CR-feed-to-Username bound (default 180).
+#
+# NO set -e. Like the original test_dcl_acceptance_e2e.sh, the assertion helpers
+# below rely on grep exit codes inside if/&&; the caller must run this battery
+# with `set +e` (errexit off) or the first "not found" grep would abort it.
+#
+# RETURN. run_dcl_acceptance_battery returns 0 once it has driven the runtime to
+# an authenticated DCL prompt and run the full battery (individual assertions may
+# still have recorded FAILs in the global FAIL -- that is the RED-until-fixed
+# result, NOT a battery error). It returns 1 ONLY if the runtime never reached
+# the Username: prompt or SYSTEM login failed -- a hard boot/login failure the
+# caller should surface with a console dump.
+
+# --- assertion helpers (arch-independent; operate on a captured console SEGMENT)
+ok()  { echo "  PASS: $1"; PASS=$((PASS + 1)); }
+bad() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
+# must_have: a VMS-faithful substring MUST be present.
+must_have() { local seg="$1" pat="$2" desc="$3"
+    if printf '%s\n' "$seg" | grep -qiF -- "$pat"; then ok "$desc"
+    else bad "$desc [expected substring: '$pat']"; fi; }
+# must_match: a VMS-faithful regex MUST match.
+must_match() { local seg="$1" re="$2" desc="$3"
+    if printf '%s\n' "$seg" | grep -qiE -- "$re"; then ok "$desc"
+    else bad "$desc [expected match: /$re/]"; fi; }
+# must_not_have: a broken/fabricated bug marker MUST be absent (bug guard).
+must_not_have() { local seg="$1" pat="$2" desc="$3"
+    if printf '%s\n' "$seg" | grep -qiF -- "$pat"; then bad "$desc [found bug marker: '$pat']"
+    else ok "$desc"; fi; }
+# negctl: PROVES the search over THIS segment is not vacuous -- it must FIND a
+# token known present (the echoed command) and REJECT a random sentinel known
+# absent. If either half is wrong the segment is empty/unsearchable and every
+# must_*/must_not_have above it cannot be trusted.
+negctl() { local seg="$1" present="$2" desc="$3"
+    local sentinel="ZZ_NEGCTRL_${$}_${RANDOM}${RANDOM}_ZZ"
+    local a=1 b=1
+    printf '%s\n' "$seg" | grep -qiF -- "$present" && a=0
+    printf '%s\n' "$seg" | grep -qiF -- "$sentinel" && b=0
+    if [ "$a" -eq 0 ] && [ "$b" -eq 1 ]; then
+        ok "NEGCTL $desc: search over the real segment finds a present token ('$present') and rejects a bogus sentinel -- the assertions above can genuinely go red"
+    else
+        bad "NEGCTL $desc: search is vacuous (present-token found=$([ $a -eq 0 ] && echo yes || echo NO), sentinel rejected=$([ $b -eq 1 ] && echo yes || echo NO)) -- assertions above cannot be trusted"
+    fi; }
+
+# run_dcl_acceptance_battery -- the login + basic-command battery + assertions.
+# See the caller-provided contract above for the primitives/vars it requires.
+run_dcl_acceptance_battery() {
+    local BOOT_TIMEOUT="${BOOT_TIMEOUT:-180}"
+
+    # --- Boot the real runtime to the login prompt --------------------------
+    if wait_for '%OVMX-I-EXEC' 60; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
+    # vms-2213: LOGINOUT on OPA0: waits for the operator's RETURN; feed a CR each
+    # second (as a real operator would) until Username: appears.
+    local w=0
+    until grep -qaF 'Username:' "$LOG" 2>/dev/null || [ "$w" -ge "$BOOT_TIMEOUT" ]; do
+        send ''; sleep 1; w=$((w + 1))
+    done
+    if wait_for 'Username:' 5; then
+        ok "runtime boots to the login prompt"
+    else
+        bad "boot never reached Username: within ${BOOT_TIMEOUT}s"
+        return 1
+    fi
+
+    # --- ASSERTION 0: the boot banner names the product+version -------------
+    # Grounded in ovmx_identity.h (OVMX_PRODUCT_BANNER, INV-1 single source).
+    local BOOT_SEG; BOOT_SEG=$(tr -d '\r' < "$LOG" 2>/dev/null)
+    must_have "$BOOT_SEG" "$EXPECTED_BOOT_BANNER" "BOOT BANNER: boot prints '$EXPECTED_BOOT_BANNER' (ovmx_identity.h OVMX_PRODUCT_VERSION)"
+    # negctl present-token is the brand, which is printed regardless of the version
+    # (never the expected banner itself -- that is exactly what the assertion tests).
+    negctl   "$BOOT_SEG" 'OpenVMX' "boot banner"
+
+    # --- Log in as SYSTEM ---------------------------------------------------
+    local LOGIN_OFF; LOGIN_OFF=$(wc -c <"$LOG")
+    send 'SYSTEM'
+    wait_for 'Password:' 30 "$LOGIN_OFF" && send 'MANAGER'
+    if wait_for 'Welcome to OpenVMX' 30 "$LOGIN_OFF"; then
+        ok "SYSTEM logs in (LOGINOUT.EXE -> DCL.EXE off the mounted ODS-2 disk)"
+    else
+        bad "SYSTEM login failed"
+        return 1
+    fi
+    wait_for '$ ' 20 "$LOGIN_OFF"
+
+    # =======================================================================
+    # THE BATTERY: the basic commands a user types on first login. Each block
+    # asserts VMS-faithful output, guards the specific shipped bug, and carries
+    # a negative control.
+    # =======================================================================
+
+    # --- SHOW TIME (sane clock) ---------------------------------------------
+    run_cmd 'SHOW TIME'
+    local CURYEAR; CURYEAR=$(date +%Y)
+    # A real, sane date -- a plausible 4-digit year + HH:MM:SS -- catches a
+    # fabricated/garbage clock on any arch. Where the guest clock IS the host
+    # clock (EXPECT_HOST_YEAR=1, the default: x86_64/aarch64 qemu) we ALSO pin the
+    # exact host year. Alpha sets EXPECT_HOST_YEAR=0 because qemu-system-alpha
+    # -M clipper's RTC reads ~20 years off (an emulator epoch quirk) and OVMX
+    # FAITHFULLY reports that guest clock -- so pinning the host year there would
+    # test the emulator, not OVMX faithfulness. This does NOT weaken x86_64: it
+    # keeps its exact-host-year assertion; it only adds the plausible-year guard
+    # and lets the Alpha emulator-RTC case pass honestly.
+    must_match "$SEG" '20[0-9][0-9]' "SHOW TIME: reports a plausible current-century year 20XX (rejects epoch-zero 1970 / a hardcoded 19XX; the HH:MM:SS + negctl below are the primary anti-fabrication teeth)"
+    if [ "${EXPECT_HOST_YEAR:-1}" = 1 ]; then
+        must_have "$SEG" "$CURYEAR" "SHOW TIME: reports the real host year ($CURYEAR)"
+    fi
+    must_match "$SEG" '[0-9]{2}:[0-9]{2}:[0-9]{2}' "SHOW TIME: reports an HH:MM:SS time"
+    negctl     "$SEG" 'SHOW TIME' "SHOW TIME"
+
+    # --- SHOW USERS (vms-01f / vms-72c: shipped EMPTY / "0 users") ----------
+    run_cmd 'SHOW USERS'
+    must_have     "$SEG" 'SYSTEM' "SHOW USERS [vms-01f/72c]: lists the SYSTEM interactive process (NOT empty)"
+    # Accept the real-VMS wording ('interactive users = N') or OVMX's current
+    # header ('number of users = N') -- either must show a nonzero count.
+    must_match    "$SEG" '(interactive users = [1-9]|number of users = [1-9])' "SHOW USERS [vms-01f/72c]: reports >= 1 user (real VMS: 'Total number of interactive users = 1')"
+    must_not_have "$SEG" 'users = 0' "SHOW USERS [vms-01f/72c]: does NOT report 0 users (the shipped-empty bug)"
+    must_not_have "$SEG" 'No interactive users' "SHOW USERS [vms-01f/72c]: does NOT print 'No interactive users'"
+    negctl        "$SEG" 'SHOW USERS' "SHOW USERS"
+
+    # --- SHOW DEVICE DKA0: (vms-e6f: shipped bare "Online", no Mounted/label)
+    run_cmd 'SHOW DEVICE DKA0:'
+    # The DKA0: DATA line, not the echoed command 'SHOW DEVICE DKA0:' (which also
+    # contains 'DKA0'): exclude any line naming the SHOW verb.
+    local DKA0_LINE; DKA0_LINE=$(printf '%s\n' "$SEG" | grep -i 'DKA0:' | grep -iv 'SHOW ' | head -1)
+    must_have  "$SEG" 'DKA0' "SHOW DEVICE DKA0: [vms-e6f]: names the device DKA0:"
+    must_have  "$DKA0_LINE" 'Mounted' "SHOW DEVICE DKA0: [vms-e6f]: device status is 'Mounted' (NOT bare 'Online')"
+    must_have  "$DKA0_LINE" "$VOLUME_LABEL" "SHOW DEVICE DKA0: [vms-e6f]: shows the volume label '$VOLUME_LABEL'"
+    must_match "$DKA0_LINE" '[1-9][0-9]{3,}' "SHOW DEVICE DKA0: [vms-e6f]: shows a nonzero free-block count (128MB ODS-2 volume has thousands free)"
+    must_not_have "$DKA0_LINE" 'Online' "SHOW DEVICE DKA0: [vms-e6f]: DKA0: status is not the bare 'Online' bug"
+    negctl     "$SEG" 'SHOW DEVICE' "SHOW DEVICE DKA0:"
+
+    # --- SHOW DEVICES (plural accepted) (vms-9344 surface) ------------------
+    run_cmd 'SHOW DEVICES'
+    must_have     "$SEG" 'DKA0' "SHOW DEVICES [vms-9344]: plural form is accepted and lists devices"
+    must_not_have "$SEG" 'IVKEYW' "SHOW DEVICES [vms-9344]: not rejected with %DCL-*-IVKEYW"
+    must_not_have "$SEG" 'IVVERB' "SHOW DEVICES [vms-9344]: not rejected with %DCL-*-IVVERB"
+    negctl        "$SEG" 'SHOW DEVICES' "SHOW DEVICES"
+
+    # --- WRITE SYS$OUTPUT F$GETSYI("VERSION") (vms-65f: prints the literal) --
+    run_cmd 'WRITE SYS$OUTPUT F$GETSYI("VERSION")'
+    must_have     "$SEG" "$EXPECTED_COMPAT_VERSION" "WRITE F\$GETSYI [vms-65f]: emits the real VMS version '$EXPECTED_COMPAT_VERSION'"
+    # The stripped literal 'F$GETSYIVERSION' can only appear if the lexical was
+    # printed verbatim -- it never appears in the echoed command (which has the
+    # parens+quotes), so this is a clean bug guard.
+    must_not_have "$SEG" 'F$GETSYIVERSION' "WRITE F\$GETSYI [vms-65f]: does NOT print the literal 'F\$GETSYIVERSION' (the shipped bug)"
+    negctl        "$SEG" 'F$GETSYI' "WRITE F\$GETSYI"
+
+    # --- SHOW QUOTA (vms-73c4: fabricated "[200,1]") ------------------------
+    run_cmd 'SHOW QUOTA'
+    # VMS-faithful: either the real current UIC ([1,4] for SYSTEM) OR an honest
+    # %SYSTEM-F-NODISKQUOTA when no quota is enabled -- NOT a fabricated UIC.
+    # Accept [1,4] or the zero-padded [001,004] form OVMX prints elsewhere.
+    must_match    "$SEG" '(\[0*1,0*4\]|NODISKQUOTA)' "SHOW QUOTA [vms-73c4]: shows the real SYSTEM UIC [1,4] OR an honest %SYSTEM-F-NODISKQUOTA"
+    must_not_have "$SEG" '[200,1]' "SHOW QUOTA [vms-73c4]: does NOT print the fabricated UIC '[200,1]' (the shipped bug)"
+    negctl        "$SEG" 'SHOW QUOTA' "SHOW QUOTA"
+
+    # --- SHOW SYSTEM (lists the real processes) -----------------------------
+    run_cmd 'SHOW SYSTEM'
+    must_have  "$SEG" 'SYSTEM' "SHOW SYSTEM: lists the SYSTEM process"
+    must_match "$SEG" '[0-9A-Fa-f]{8}' "SHOW SYSTEM: shows 8-hex-digit VMS PIDs"
+    negctl     "$SEG" 'SHOW SYSTEM' "SHOW SYSTEM"
+
+    # --- SHOW PROCESS (current process works) -------------------------------
+    run_cmd 'SHOW PROCESS'
+    must_have "$SEG" 'SYSTEM' "SHOW PROCESS: names the current user SYSTEM"
+    must_not_have "$SEG" 'IVKEYW' "SHOW PROCESS: not rejected as an invalid keyword"
+    negctl    "$SEG" 'SHOW PROCESS' "SHOW PROCESS"
+
+    # --- SHOW DEFAULT (VMS filespec, no Unix path) --------------------------
+    run_cmd 'SHOW DEFAULT'
+    must_match    "$SEG" '[A-Z$_]+:\[[A-Z0-9._]+\]' "SHOW DEFAULT: prints a VMS device:[directory] filespec"
+    must_not_have "$SEG" '/tmp' "SHOW DEFAULT: no Unix path leaks into the default directory"
+    negctl        "$SEG" 'SHOW DEFAULT' "SHOW DEFAULT"
+
+    # --- bare DIRECTORY at login lists files --------------------------------
+    run_cmd 'DIRECTORY'
+    must_match "$SEG" 'Total of [1-9]' "DIRECTORY: a bare DIRECTORY at login lists >= 1 file"
+    must_match "$SEG" 'Directory ' "DIRECTORY: prints a VMS 'Directory <spec>' header"
+    must_not_have "$SEG" '/tmp' "DIRECTORY: no Unix path leaks into the listing"
+    negctl     "$SEG" 'DIRECTORY' "DIRECTORY"
+
+    return 0
+}

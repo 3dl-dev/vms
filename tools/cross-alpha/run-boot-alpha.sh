@@ -321,6 +321,12 @@ run_acceptance_boot() {
       export EXPECTED_BOOT_BANNER="'"$EXPECTED_BOOT_BANNER"'"
       export EXPECTED_COMPAT_VERSION="'"$EXPECTED_COMPAT_VERSION"'"
       export VOLUME_LABEL="'"$VOLUME_LABEL"'"
+      # qemu-system-alpha -M clipper RTC reads ~20 years off (emulator epoch
+      # quirk); OVMX faithfully reports that guest clock, so the SHOW TIME battery
+      # asserts a plausible year + HH:MM:SS here rather than pinning the host year
+      # (which x86_64/aarch64, where guest==host clock, still do). See the shared
+      # battery SHOW TIME block.
+      export EXPECT_HOST_YEAR=0
       export CMD_TIMEOUT="'"${CMD_TIMEOUT:-30}"'"
       export BOOT_TIMEOUT="'"$BOOT_TIMEOUT"'"
       cd /work

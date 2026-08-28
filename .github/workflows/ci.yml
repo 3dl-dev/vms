@@ -7042,6 +7042,70 @@ jobs:
   # 64-bit width.
   #
   # HEAVY-EMULATOR TIER (schedule || workflow_dispatch), exactly like the
+  # alpha-vmsko-modpost-smoke (rd vms-5af, parent vms-1d6). The PER-PR guard: a
+  # shared kernel-core TU that breaks the ALPHA vms.ko cross-build must fail the
+  # PR, not slip through. The heavy Alpha gates below (boot-login, syssvc) are
+  # schedule-only, so before this a kernel change that redded ONLY the Alpha
+  # module build (e.g. vms-0cd/#835's tracepoint use, undefined on Alpha) landed
+  # unseen and red the whole Alpha lane for a day. This is the CHEAP half of that
+  # coverage: cross-build vms.ko + assert modpost is clean -- NO qemu boot (that
+  # stays in the nightly boot-login gate). The kernel build is gha-cached (keyed
+  # on the build script + patches, NOT the module source), so a src/kernel change
+  # is a cache hit and only vms.ko + modpost re-run -- a few minutes.
+  #
+  # NB: build-vmsko-alpha.sh exits 0 even when vms.ko fails (it only echoes
+  # "RESULT vms.ko: FAILED"), so the grep assertion below -- not the exit code --
+  # is the gate.
+  alpha-vmsko-modpost-smoke:
+    name: Alpha vms.ko cross-builds + modpost clean (per-PR kernel guard, vms-5af)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: Cache the Alpha kernel build (only vms.ko + modpost re-run per PR)
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ovmx-vmsko-alpha
+          key: alpha-vmsko-kernel-6.6.52-${{ hashFiles('tools/cross-alpha/build-vmsko-alpha.sh', 'tools/cross-alpha/patches/**', 'tools/cross-alpha/Dockerfile') }}
+
+      - name: Cross-build the Alpha vms.ko and assert modpost is clean (no boot)
+        run: |
+          set -euo pipefail
+          WORK=/tmp/ovmx-vmsko-alpha tools/cross-alpha/build-vmsko-alpha.sh 2>&1 | tee /tmp/vmsko-build.log
+          if ! grep -qa 'RESULT vms\.ko: BUILT' /tmp/vmsko-build.log; then
+            echo "::error::Alpha vms.ko failed to cross-build / modpost -- a kernel-core change broke the Alpha executive module build. Guard arch/CONFIG-specific kernel APIs (e.g. tracepoints) behind the right #ifdef with an honest fallback; see docs + the vms-0cd/#847 fix."
+            exit 1
+          fi
+          echo "OK: Alpha vms.ko cross-built + modpost clean."
+
+      - name: Normalise cache ownership for save (docker built as root)
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" /tmp/ovmx-vmsko-alpha 2>/dev/null || true
+
   # netbsd-vax-boot SIMH gate above -- deliberately NOT the per-PR path (a full
   # Alpha cross-build + qemu-system-alpha boot is ~25-30 min; keeping it off the
   # PR path preserves the fast PR wall). qemu-system-alpha is pure TCG (no KVM /

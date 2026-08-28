@@ -202,31 +202,54 @@ int __wrap_close(int fd)
     return __real_close(fd);
 }
 
+/* getpeername/getsockname/setsockopt/getsockopt reach the executive socket by two
+ * routes: a veneer HANDLE (the ssh client's connection, is_veneer) via ovmx_*, OR --
+ * for the SERVER (vms-0cd) -- a MATERIALIZED [bgconn] fd, which is a REAL fd (so
+ * is_veneer is false) that sshd-session holds as its connection stdin/stdout after
+ * dup2. For a real fd, probe the [bgconn] surface (ovmx_fd_*): it returns 1 for a
+ * GENUINE socket/stdio (-> the real syscall, untouched), else it answered from the
+ * executive socket (the TRUE peer / real option), so return that. */
 int __wrap_getpeername(int fd, struct sockaddr *addr, socklen_t *alen)
 {
+    int r;
     if (is_veneer(fd))
         return ovmx_getpeername(fd, addr, alen);
+    r = ovmx_fd_getname(fd, 1, addr, alen);
+    if (r != 1)
+        return r;
     return __real_getpeername(fd, addr, alen);
 }
 
 int __wrap_getsockname(int fd, struct sockaddr *addr, socklen_t *alen)
 {
+    int r;
     if (is_veneer(fd))
         return ovmx_getsockname(fd, addr, alen);
+    r = ovmx_fd_getname(fd, 0, addr, alen);
+    if (r != 1)
+        return r;
     return __real_getsockname(fd, addr, alen);
 }
 
 int __wrap_setsockopt(int fd, int lvl, int opt, const void *v, socklen_t l)
 {
+    int r;
     if (is_veneer(fd))
         return ovmx_setsockopt(fd, lvl, opt, v, l);
+    r = ovmx_fd_setsockopt(fd, lvl, opt, v, l);
+    if (r != 1)
+        return r;
     return __real_setsockopt(fd, lvl, opt, v, l);
 }
 
 int __wrap_getsockopt(int fd, int lvl, int opt, void *v, socklen_t *l)
 {
+    int r;
     if (is_veneer(fd))
         return ovmx_getsockopt(fd, lvl, opt, v, l);
+    r = ovmx_fd_getsockopt(fd, lvl, opt, v, l);
+    if (r != 1)
+        return r;
     return __real_getsockopt(fd, lvl, opt, v, l);
 }
 

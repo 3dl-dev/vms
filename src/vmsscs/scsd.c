@@ -7886,6 +7886,31 @@ static uint32_t scsd_dlm_dispatch_to_executive(const struct scs_dlm_msg *m)
     int fd = open("/dev/vms", O_RDWR);
     if (fd < 0)
         return 2680u; /* SS$_NOSUCHDEV -- fail honest, no fake grant */
+
+    /* REGISTER first (vms-4b6). The executive's ioctl dispatcher gates EVERY
+     * ioctl behind vms_proc_find_or_err() (src/kernel/vms_module.c) -- a caller
+     * with no registered VMS process context is refused -ESRCH before the DLM
+     * cross-node handler is ever reached. VMS_IOCTL_DLM_XNODE itself needs no
+     * registered proc (it delivers a peer's request, not the daemon's own lock),
+     * but the DEVICE does: talking to /dev/vms at all requires the standard
+     * REGISTER handshake every other client performs (see
+     * tests/qemu/test_kmod_dlm_xnode.c, which REGISTERs before it dispatches).
+     * Without this, scsd's dispatch reached the device but was rejected before
+     * the handler, so a REAL executive returned SS$_NOSUCHDEV(2680) exactly like
+     * a missing device -- the two failures were indistinguishable and the
+     * cross-node receive path could never actually reach the lock manager. The
+     * DLM harness rung H0 (a real /dev/vms) surfaced this; the Docker harness
+     * masked it (no device, always 2680). Keying is by process (current->tgid),
+     * so this registers scsd once and is idempotent across the fresh fds this
+     * function opens per call. INV-6: registration grants nothing -- it only
+     * establishes the caller context the executive requires. */
+    struct vms_register_args reg;
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) {
+        close(fd);
+        return 2680u; /* device present but the executive refused us -- honest */
+    }
+
     memset(&args, 0, sizeof(args));
     args.op = m->op;
     args.lkmode = m->mode;
@@ -13334,6 +13359,55 @@ int main(int argc, char **argv)
                    idnode, (unsigned)idsysid, (unsigned)idalloc, idrecnx);
             fflush(stdout);
             return 0;
+        } else if (strcmp(argv[i], "--dlm-selftest") == 0) {
+            /* vms-4b6 (DLM harness rung H0): drive ONE local cross-node DLM
+             * dispatch through SCSD's OWN executive path --
+             * scsd_dlm_dispatch_to_executive() -- and print the status the
+             * executive returned, then exit. This is the single-node
+             * foundation the two-node DLM harness (H1-H4) builds on: it proves
+             * that the SCSD-carrying image COMPOSES WITH A REAL EXECUTIVE. On a
+             * node with a real /dev/vms (the tests/qemu KTEST path, vms.ko
+             * insmod'd) the rung-1 handler returns SS$_UNSUPPORTED (2296); with
+             * NO executive (the Docker cluster harness -- Rule 9: Docker is not
+             * a runtime, there is no /dev/vms) the SAME code path fails HONEST
+             * with SS$_NOSUCHDEV (2680). It fabricates NOTHING (INV-6): it
+             * prints verbatim whatever scsd_dlm_dispatch_to_executive() got.
+             *
+             * It builds a synthetic-but-well-formed ENQ request (the same shape
+             * scs_dlm_parse hands scsd_dlm_srv_msg_input on a real received
+             * frame) so the executive's VMS_IOCTL_DLM_XNODE handler is reached
+             * exactly as an inbound cross-node ENQ would reach it -- opens no
+             * socket, needs no CAP_NET_RAW, touches no wire. The 2296-not-2680
+             * flip is the machine-checkable proof. */
+            struct scs_dlm_msg m;
+            memset(&m, 0, sizeof(m));
+            m.op = SCS_DLM_OP_ENQ;
+            m.mode = LCK$K_EXMODE;
+            m.flags = 0x0011; /* VALBLK|SYSTEM, as test_kmod_dlm_xnode drives */
+            m.req_lkid = 0x00040011u;
+            m.master_lkid = 0;
+            m.req_csid = 1025u;
+            m.master_csid = 0; /* resolve via directory */
+            {
+                static const char *res = "DLMXNODE1";
+                size_t rn = strlen(res);
+                if (rn > SCS_DLM_RESNAM_MAX) rn = SCS_DLM_RESNAM_MAX;
+                memcpy(m.resnam, res, rn);
+                m.namelen = (uint8_t)rn;
+            }
+            for (size_t vi = 0; vi < LCK$C_VALBLK_LEN; vi++)
+                m.valblk[vi] = (uint8_t)(0xA0 + vi);
+
+            uint32_t status = scsd_dlm_dispatch_to_executive(&m);
+            printf("SCSD-I-DLMSELFTEST, executive DLM dispatch status=%u"
+                   " (0x%08X)\n", (unsigned)status, (unsigned)status);
+            fflush(stdout);
+            /* Exit code carries the verdict too (the low byte of a VMS status
+             * is not portable to $?, so map it): 0 iff the real executive was
+             * reached (SS$_UNSUPPORTED, rung 1); nonzero otherwise -- including
+             * the fail-honest SS$_NOSUCHDEV when no /dev/vms is present. The H0
+             * driver asserts on the printed status line either way. */
+            return (status == 2296u) ? 0 : 1;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             fprintf(stderr,
                     "usage: %s [--iface IFACE] [--duration SECONDS] [--emit-hello]\n"
@@ -13358,7 +13432,13 @@ int main(int argc, char **argv)
                     "                      node adopts from the SYSGEN store\n"
                     "                      (SCSNODE/SCSSYSTEMID/ALLOCLASS/\n"
                     "                      RECNXINTERVAL) and exit; opens no\n"
-                    "                      socket (vms-9cf, vms-c3b)\n",
+                    "                      socket (vms-9cf, vms-c3b)\n"
+                    "  --dlm-selftest      drive ONE local cross-node DLM dispatch\n"
+                    "                      through the executive (/dev/vms,\n"
+                    "                      VMS_IOCTL_DLM_XNODE) and print the status;\n"
+                    "                      SS$_UNSUPPORTED(2296) on a real executive,\n"
+                    "                      SS$_NOSUCHDEV(2680) fail-honest without one.\n"
+                    "                      Opens no socket (vms-4b6, DLM harness H0)\n",
                     argv[0], SCA_ETHERTYPE, HELLO_DEFAULT_INTERVAL_SEC);
             return 0;
         }

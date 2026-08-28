@@ -10644,6 +10644,104 @@ static void test_readmit_verdict_classifies_the_rejoin_frontier(void)
           readmit_verdict_name(readmit_verdict_of(ps)));
 }
 
+/*
+ * vms-94c (DLM epic vms-7fa rung 1): a DLM message RECEIVED over the daemon's
+ * real receive path (scsd_handle_frame) is classified as an application message,
+ * delivered through the CDL to the DLM server CDT, DECODED to the right fields,
+ * and DISPATCHED to the executive's cross-node handler. This is the "node B
+ * receives + decodes + dispatches" half of the transport, proven end-to-end
+ * within the daemon (the /dev/vms ioctl itself is proven separately against a
+ * real executive by tests/qemu/test_kmod_dlm_xnode.c; here the dispatch is
+ * captured via the SCSD_UNIT_TEST seam, parallel to send_frame_raw's).
+ */
+static void test_dlm_message_reaches_the_lock_handler_over_scs(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, ovmx760_hw_mac, ovmx760_logical);
+
+    /* A peer with an OPEN VC -- the state the wire always has before app traffic. */
+    struct peer_state *ps = open_circuit_to(&r, ovmx760_member_mac, ovmx760_member_sysid);
+    if (ps == NULL) {
+        return;
+    }
+
+    /* Ready this node's DLM server CDT (the daemon does this when a peer
+     * connection is established). A DLM frame addressed to PS_DLM_SERVER_CONID
+     * now resolves through the CDL to scsd_dlm_srv_msg_input. */
+    struct scs_cdt *dcdt = scsd_dlm_ensure_server_cdt(ps);
+    CHECK(dcdt != NULL, "the DLM server CDT was not allocated");
+    CHECK(scs_cdl_lookup(&scsd_cdl, PS_DLM_SERVER_CONID(ps)) == dcdt,
+          "the DLM server CDT is not reachable by its Con.ID through the CDL");
+
+    /* Build a DLM ENQ frame as the PEER's daemon would: from the peer's MAC and
+     * logical to OURS, addressed to our DLM server handle. This is exactly the
+     * scs_dlm_build_frame() the peer would call, so the bytes on the wire are the
+     * bytes this node decodes -- not re-derived in the test. */
+    struct scs_dlm_params p;
+    struct scs_dlm_msg m;
+    uint8_t frame[SCS_DLM_FRAME_LEN];
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, r.hw_mac, 6);             /* to us */
+    memcpy(p.src_mac, ps_port_addr(ps), 6);     /* from the peer */
+    memcpy(p.src_logical, ps_sys_addr(ps), 6);  /* the peer's logical addr */
+    memcpy(p.peer_logical, r.logical, 6);       /* our logical addr (destination) */
+    p.remote_conid = PS_DLM_SERVER_CONID(ps);   /* our DLM server handle */
+    p.local_conid  = PS_DLM_CONID(ps);          /* stand-in for the peer's own DLM handle */
+
+    memset(&m, 0, sizeof(m));
+    m.op = SCS_DLM_OP_ENQ;
+    m.mode = LCK$K_EXMODE;
+    m.flags = (uint16_t)(LCK$M_VALBLK | LCK$M_SYSTEM);
+    m.req_lkid = 0x00040011u;
+    m.req_csid = 1329;      /* the requesting node's CSID */
+    m.master_csid = 0;      /* resolve the master via the directory */
+    {
+        const char *name = "SYS$SYSDEVICE";
+        m.namelen = (uint8_t)strlen(name);
+        memcpy(m.resnam, name, m.namelen);
+    }
+    for (int i = 0; i < LCK$C_VALBLK_LEN; i++) {
+        m.valblk[i] = (uint8_t)(0xC0 + i);
+    }
+    CHECK(scs_dlm_build_frame(&p, &m, frame) == 0, "the DLM ENQ frame did not build");
+
+    scsd_test_dlm_dispatches = 0;
+    memset(&scsd_test_last_dlm, 0, sizeof(scsd_test_last_dlm));
+
+    /* NODE B RECEIVES the frame through the real receive path. */
+    rx_feed(&r, frame, sizeof(frame));
+
+    /* Classified as an application message and DELIVERED through the CDL. */
+    CHECK(rx_app_messages == 1,
+          "the DLM frame was not classified as an application message (%lu)",
+          rx_app_messages);
+    CHECK(rx_delivered_message == 1,
+          "the DLM frame was not delivered through the CDL (%lu)", rx_delivered_message);
+    CHECK(rx_deliver_no_cdt == 0,
+          "the DLM frame's destination Con.ID resolved to no CDT (%lu)", rx_deliver_no_cdt);
+    CHECK(rx_deliver_no_routine == 0,
+          "the DLM CDT carried no message input routine (%lu)", rx_deliver_no_routine);
+
+    /* It reached the DLM handler and DECODED to the right fields. */
+    CHECK(rx_dlm_dispatched == 1,
+          "the DLM handler decoded+dispatched %lu message(s), expected 1", rx_dlm_dispatched);
+    CHECK(scsd_test_dlm_dispatches == 1,
+          "the executive dispatch fired %u time(s), expected 1", scsd_test_dlm_dispatches);
+    CHECK(scsd_test_last_dlm.op == SCS_DLM_OP_ENQ,
+          "decoded op %u, expected ENQ", scsd_test_last_dlm.op);
+    CHECK(scsd_test_last_dlm.mode == LCK$K_EXMODE,
+          "decoded mode %u, expected EX", scsd_test_last_dlm.mode);
+    CHECK(scsd_test_last_dlm.flags == (uint16_t)(LCK$M_VALBLK | LCK$M_SYSTEM),
+          "decoded flags 0x%x", scsd_test_last_dlm.flags);
+    CHECK(scsd_test_last_dlm.req_csid == 1329,
+          "decoded requester CSID %u, expected 1329", scsd_test_last_dlm.req_csid);
+    CHECK(scsd_test_last_dlm.namelen == m.namelen &&
+          memcmp(scsd_test_last_dlm.resnam, m.resnam, m.namelen) == 0,
+          "the decoded resource name did not match SYS$SYSDEVICE");
+    CHECK(memcmp(scsd_test_last_dlm.valblk, m.valblk, LCK$C_VALBLK_LEN) == 0,
+          "the decoded value block did not match");
+}
+
 int main(void)
 {
     /* THE FAILURE STREAM, taken before anything can dup2() over fd 2. See
@@ -10720,6 +10818,9 @@ int main(void)
      * that make the lookup a gate rather than a formality. */
     test_rx_classifier_over_captured_frames();
     test_captured_app_message_reaches_the_sysap_through_the_cdl();
+    /* vms-94c: a DLM message received over the real receive path reaches the
+     * lock handler decoded (the transport's node-B half). */
+    test_dlm_message_reaches_the_lock_handler_over_scs();
     /* vms-aa1 */
     test_credit_receive_path_banks_the_wire_field();
     test_credit_send_path_stamps_the_grounded_field();

@@ -876,6 +876,11 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
     /* DLM resource-directory + mastering readback (vms-ci.5 DB) */
     case VMS_IOCTL_GET_RESMASTER:
         return vms_ioctl_get_resmaster(proc, arg);
+    /* DLM cross-node lock-request dispatch (vms-94c, DLM epic vms-7fa rung 1):
+     * a decoded remote DLM message reaches the cross-node handler, which
+     * returns SS$_UNSUPPORTED (rung 1 transport; no fake grant). */
+    case VMS_IOCTL_DLM_XNODE:
+        return vms_ioctl_dlm_xnode(proc, arg);
 
     /* Device table (executive-resident I/O database) */
     case VMS_IOCTL_ASSIGN:

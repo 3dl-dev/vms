@@ -73,6 +73,21 @@
 #include "scs_membership.h"  /* vms-8d4: publish live membership for DCL SHOW CLUSTER */
 #include "scs_reason.h"
 #include "scs_env.h" /* vms-ec7: THE shared SCS message envelope (build + parse + dispatch) */
+#include "scs_dlm.h" /* vms-94c: the DLM SYSAP message class (ENQ/GRANT/DEQ/BLKAST) */
+
+/* vms-94c: reaching the executive's cross-node DLM handler over /dev/vms. scsd
+ * is a glibc process, so it uses a direct POSIX ioctl on /dev/vms (not the
+ * freestanding vms_kif client) -- see scsd_dlm_dispatch_to_executive(). */
+#ifndef SCSD_UNIT_TEST
+#include <sys/ioctl.h>
+#include "vms_ioctl.h"
+#endif
+
+/* The DLM op vocabulary the executive expects (VMS_DLM_OP_*) MUST match the SCS
+ * message opcodes (SCS_DLM_OP_*); scsd is the one place that includes both. */
+_Static_assert((int)SCS_DLM_OP_ENQ == 1 && (int)SCS_DLM_OP_GRANT == 2 &&
+               (int)SCS_DLM_OP_DEQ == 3 && (int)SCS_DLM_OP_BLKAST == 4,
+               "SCS_DLM_OP_* must match VMS_DLM_OP_* in vms_ioctl.h");
 #include "scs_rx.h"
 #include "scs_start.h"
 #include "scs_svc.h"
@@ -677,6 +692,8 @@ static uint64_t ovmx_incarnation_time(void)
 #define OVMX_CONID_CLS_MSCPSRV 0x000Bu  /* MSCP$DISK server (member-opened) */
 #define OVMX_CONID_CLS_PSDIR   0x000Cu  /* pure-server SCS$DIRECTORY client */
 #define OVMX_CONID_CLS_PSMSCP  0x000Du  /* pure-server MSCP$DISK client */
+#define OVMX_CONID_CLS_DLM     0x000Eu  /* DLM SYSAP client (OVMX-opened)  -- vms-94c */
+#define OVMX_CONID_CLS_DLMSRV  0x000Fu  /* DLM SYSAP server (peer-opened)  -- vms-94c */
 
 /* OVMX's own handle of class `cls` for peer `ps` -- the per-peer replacement
  * for the fixed OVMX_*_CONID macros. `ps` must be non-NULL. */
@@ -698,6 +715,11 @@ static uint64_t ovmx_incarnation_time(void)
 #define PS_MSCP_SERVER_CONID(ps)    PS_CONID((ps), OVMX_CONID_CLS_MSCPSRV)
 #define PS_PS_DIR_CONID(ps)         PS_CONID((ps), OVMX_CONID_CLS_PSDIR)
 #define PS_PS_MSCP_CONID(ps)        PS_CONID((ps), OVMX_CONID_CLS_PSMSCP)
+/* vms-94c: the DLM SYSAP handles. Client = the handle OVMX opens toward a peer's
+ * DLM SYSAP; server = the handle a peer's DLM SYSAP connects TO on this node
+ * (where a received cross-node DLM request lands). Per-peer like every handle. */
+#define PS_DLM_CONID(ps)            PS_CONID((ps), OVMX_CONID_CLS_DLM)
+#define PS_DLM_SERVER_CONID(ps)     PS_CONID((ps), OVMX_CONID_CLS_DLMSRV)
 
 /*
  * Does `conid` name one of OVMX's OWN per-peer handles of connection class
@@ -3302,6 +3324,13 @@ unsigned scsd_test_frames;
 #define SCSD_TEST_RING 8
 uint8_t  scsd_test_ring[SCSD_TEST_RING][SCA_FRAME_MAX];
 size_t   scsd_test_ring_len[SCSD_TEST_RING];
+/* vms-94c: DLM cross-node dispatch capture. Under SCSD_UNIT_TEST,
+ * scsd_dlm_dispatch_to_executive() records the decoded request here instead of
+ * issuing the real /dev/vms ioctl (CI has no /dev/vms), so a test can assert
+ * node B decoded the received DLM message to the right fields and dispatched it
+ * to the executive. */
+struct scs_dlm_msg scsd_test_last_dlm;
+unsigned scsd_test_dlm_dispatches;
 #endif
 
 /*
@@ -7761,6 +7790,119 @@ static void scsd_mscp_srv_msg_input(struct scs_cdt *cdt, const void *msg,
     }
 }
 
+/* ======================================================================
+ * vms-94c (DLM epic vms-7fa rung 1) -- the DLM SYSAP RECEIVE path.
+ *
+ * A dedicated SCS connection class for distributed-lock-manager traffic, like
+ * MSCP$DISK and SCS$DIRECTORY. Rung 1 is the message TRANSPORT: a DLM message
+ * (src/vmsscs/scs_dlm.c) that arrives on this node's DLM server handle
+ * (PS_DLM_SERVER_CONID) is routed here by scs_cdl_deliver_message (dest Con.ID),
+ * DECODED, and DISPATCHED to the executive's cross-node lock handler over
+ * /dev/vms (VMS_IOCTL_DLM_XNODE -> vms_lock_dlm_xnode_dispatch), which returns
+ * SS$_UNSUPPORTED in rung 1. The pipe is real; the grant is rung 2. INV-6:
+ * nothing here fabricates a grant or a receipt -- a request that cannot be
+ * dispatched fails honestly.
+ * ====================================================================== */
+
+static unsigned long rx_dlm_dispatched = 0; /* DLM frames decoded + dispatched */
+
+/*
+ * scsd_dlm_dispatch_to_executive - hand ONE decoded cross-node DLM request to
+ * the kernel lock manager over /dev/vms. Returns the executive status (rung 1:
+ * SS$_UNSUPPORTED, 2296). FAIL-HONEST (Rule 9 / INV-6): if /dev/vms cannot be
+ * opened or the ioctl fails, returns SS$_NOSUCHDEV (2680) -- it NEVER fabricates
+ * a grant. scsd is a glibc process, so it issues a direct POSIX ioctl here
+ * rather than the freestanding vms_kif client.
+ */
+static uint32_t scsd_dlm_dispatch_to_executive(const struct scs_dlm_msg *m)
+{
+#ifdef SCSD_UNIT_TEST
+    /* Capture seam, parallel to send_frame_raw's: record the decoded request so
+     * a test can assert node B decoded + dispatched the right fields. The real
+     * ioctl needs /dev/vms, which CI does not have. */
+    scsd_test_last_dlm = *m;
+    scsd_test_dlm_dispatches++;
+    return 2296u; /* SS$_UNSUPPORTED, as the real handler returns in rung 1 */
+#else
+    struct vms_dlm_xnode_args args;
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0)
+        return 2680u; /* SS$_NOSUCHDEV -- fail honest, no fake grant */
+    memset(&args, 0, sizeof(args));
+    args.op = m->op;
+    args.lkmode = m->mode;
+    args.flags = m->flags;
+    args.req_lkid = m->req_lkid;
+    args.master_lkid = m->master_lkid;
+    args.req_csid = m->req_csid;
+    args.master_csid = m->master_csid;
+    {
+        size_t n = m->namelen;
+        if (n > sizeof(args.resnam) - 1)
+            n = sizeof(args.resnam) - 1;
+        memcpy(args.resnam, m->resnam, n);
+        args.resnam[sizeof(args.resnam) - 1] = '\0';
+    }
+    memcpy(args.valblk, m->valblk, sizeof(args.valblk));
+    if (ioctl(fd, VMS_IOCTL_DLM_XNODE, &args) < 0) {
+        close(fd);
+        return 2680u; /* honest failure, not a grant */
+    }
+    close(fd);
+    return args.status;
+#endif
+}
+
+/*
+ * scsd_dlm_srv_msg_input - the DLM server CDT's message input routine. Reads the
+ * received frame from scsd_rx_current (the same OVMX design choice
+ * scsd_mscp_srv_msg_input uses), decodes it with scs_dlm_parse, and dispatches
+ * the decoded request to the executive. Rung 1 records the outcome; rung 2 turns
+ * a GRANT response into an outbound reply from here.
+ */
+static void scsd_dlm_srv_msg_input(struct scs_cdt *cdt, const void *msg,
+                                   size_t msglen, void *ctx)
+{
+    (void)cdt;
+    (void)msg;
+    (void)msglen;
+    struct peer_state *ps = (struct peer_state *)ctx;
+    struct scsd_rx_frame cur = scsd_rx_current;
+    struct scs_dlm_view v;
+
+    if (ps == NULL || cur.frame == NULL ||
+        scs_dlm_parse(cur.frame, (size_t)cur.len, &v) != 0) {
+        return; /* not a well-formed DLM-over-SCS frame -- nothing to dispatch */
+    }
+
+    (void)scsd_dlm_dispatch_to_executive(&v.msg);
+    rx_dlm_dispatched++;
+}
+
+/*
+ * scsd_dlm_ensure_server_cdt - allocate (once) this node's DLM server CDT for a
+ * peer and point it at scsd_dlm_srv_msg_input, so a DLM message arriving on
+ * PS_DLM_SERVER_CONID(ps) is delivered to the handler above. Mirrors the MSCP
+ * server CDT registration. "OVMX$DLM" is a LABELLED OVMX SYSAP name (no public
+ * VMS DLM SYSAP name is documented; the real lock manager rides the connection
+ * manager's VC -- OVMX gives the DLM its own SYSAP per the rung-1 scope, an
+ * OVMX design choice recorded in docs/compat/facilities/cluster-dlm.yaml).
+ */
+static struct scs_cdt *scsd_dlm_ensure_server_cdt(struct peer_state *ps)
+{
+    if (ps == NULL)
+        return NULL;
+    struct scs_cdt *dcdt = scs_cdl_lookup(&scsd_cdl, PS_DLM_SERVER_CONID(ps));
+    if (dcdt == NULL) {
+        dcdt = scs_cdl_alloc_conid(&scsd_cdl, PS_DLM_SERVER_CONID(ps),
+                                   "OVMX$DLM", "OVMX$DLM", ps->pb);
+    }
+    if (dcdt != NULL) {
+        scs_cdt_set_handlers(dcdt, scsd_dlm_srv_msg_input, NULL, NULL, ps);
+    }
+    return dcdt;
+}
+
 /*
  * mscp_connect_retx_timeout_ms - vms-694: the grounded ~10s MSCP$DISK
  * CONNECT-REQUEST retransmit cadence (MSCP_CONNECT_RETX_TIMEOUT_MS above),
@@ -10234,6 +10376,13 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                                " answered\n");
                         fflush(stdout);
                     }
+                    /* vms-94c: ready this node's DLM server CDT for the same
+                     * peer, so a cross-node DLM message that arrives on our DLM
+                     * server handle is decoded + dispatched (rung 1) rather than
+                     * black-holed. Additive: PS_DLM_SERVER_CONID is a fresh
+                     * per-peer Con.ID class no other path uses. Rung 2 adds the
+                     * connect choreography that teaches the peer this handle. */
+                    (void)scsd_dlm_ensure_server_cdt(ps);
                 }
             }
             return;

@@ -126,6 +126,19 @@ set_tests_properties(vmsscs_dir_unit PROPERTIES
     TIMEOUT 30
 )
 
+# vms-94c (DLM epic vms-7fa rung 1) - the DLM SYSAP message class round-trip.
+add_executable(test_scs_dlm test_scs_dlm.c)
+target_include_directories(test_scs_dlm PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+    ${CMAKE_SOURCE_DIR}/src/libvms/include
+)
+target_link_libraries(test_scs_dlm PRIVATE vmsscs_dlm vmsscs_env)
+add_test(NAME vmsscs_dlm_unit COMMAND test_scs_dlm)
+set_tests_properties(vmsscs_dlm_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)
+
 # vms-224 - VMS$VAXcluster connection-manager add-member transaction: op
 # 0x14/0x01/0x02 config builders (byte-exact vs golden joiner frames), VOTES=0
 # non-voting, the 0x81 response echoing the member's REAL captured (txn,checksum)
@@ -278,6 +291,10 @@ target_link_libraries(test_scsd_wire PRIVATE
     # vms-34b: scsd.c now also drives the MSCP disk-server RESPONDER
     # (scsd_mscp_srv_msg_input() calls scs_mscp_srv_handle() etc.), same reason.
     vmsscs_mscp_srv
+    # vms-94c: scsd.c now hosts the DLM SYSAP receive path
+    # (scsd_dlm_srv_msg_input() calls scs_dlm_parse()), so the whole-file test
+    # seam needs the DLM message-class library too.
+    vmsscs_dlm
     # vms-7a9: scsd.c folds each peer's advertised VOTES into the connection-
     # manager quorum model (scs_quorum_*), so the whole-file test seam needs it.
     vmsscs_quorum

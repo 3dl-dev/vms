@@ -3633,13 +3633,19 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                           guard here -- scs_vc_fsm_*() decides what may be
  *                           sent from each state, which is a stricter check
  *                           than "is it OPEN", not a weaker one.
- *     send_frame_channel()  ALL NISCA HELLO traffic, called from 5 sites in 3
+ *     send_frame_channel()  ALL NISCA HELLO traffic, called from 6 sites in 3
  *                           functions -- a set and a count BOTH PINNED by the
  *                           census (CHANNEL_CALLERS), so this paragraph
  *                           re-derives:
- *                             scsd_handle_frame()       3 -- the padded-probe
- *                               b4 ack, the rate-limited directed reply, and
- *                               the one-shot proactive padded HELLO;
+ *                             scsd_handle_frame()       4 -- the padded-probe
+ *                               b4 ack, the rate-limited directed reply, the
+ *                               one-shot proactive padded HELLO, and (vms-f3e)
+ *                               the OVMX_MCAST_SOLICIT member-first directed
+ *                               HELLO -- a heard MULTICAST HELLO answered with a
+ *                               soliciting directed HELLO (abs-30 b2/PFW_INIT),
+ *                               kill-switch-gated (default OFF), so it rides the
+ *                               HELLO exemption exactly like the directed reply
+ *                               beside it: NISCA channel traffic below any VC;
  *                             scsd_hello_beacon_emit()  1 -- the periodic
  *                               MULTICAST beacon off main()'s timer, the one
  *                               that increments rx.hello_sent and is reported

@@ -331,11 +331,13 @@ for fn, at in sorted(callers.items(), key=lambda kv: (kv[0] or "")):
 # send_frame_channel() is exempt as a FUNCTION, so every one of its callers
 # inherits the exemption. Check 1 cannot see that set grow -- it only sees
 # send_frame_channel() itself. This pins who may take the HELLO exemption and
-# how often, and it is what makes the "4 sites in 2 functions" figure in the
+# how often, and it is what makes the "6 sites in 3 functions" figure in the
 # EXEMPT entry of the SEND SITE TABLE a measurement rather than a claim.
 CHANNEL_CALLERS = {
-    "scsd_handle_frame": 3,       # padded-probe b4 ack, rate-limited directed
-                                  # reply, one-shot proactive padded HELLO
+    "scsd_handle_frame": 4,       # padded-probe b4 ack, rate-limited directed
+                                  # reply, one-shot proactive padded HELLO, and
+                                  # (vms-f3e) the OVMX_MCAST_SOLICIT member-first
+                                  # directed HELLO (kill-switch-gated)
     "scsd_hello_beacon_emit": 1,  # the periodic multicast beacon off main()'s
                                   # timer loop
     "scsd_emit_port_lastgasp": 1, # vms-708 (spec 4(O.30)): the port-level

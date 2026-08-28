@@ -83,7 +83,7 @@ only our forks target.
 
 ## Live status — generated
 
-> Reconciled from rd (source of truth) **as of 2026-08-27** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
+> Reconciled from rd (source of truth) **as of 2026-08-28** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
 
 ### Milestone ladder
 
@@ -94,7 +94,7 @@ only our forks target.
 | **0.5** | The authenticity flip — RMS reads and writes genuine Files-11 ODS-2 over the executive ACP (the /vms passthrough retired on the runtime path), binary SYSUAF and Purdy login, and a userland that builds itself in-guest. | SHIPPED | 13 | 19 | 6 | 41% |
 | **0.6** | Cluster correctness — quorum and reconfiguration, a real distributed lock manager, and cluster membership resident in the executive. | planned | 0 | 5 | 0 | 0% |
 | **0.7** | Cluster wire fidelity — the SCS/MSCP connection manager answers a real VAX byte-for-byte. | planned | 0 | 6 | 0 | 0% |
-| **0.8** | Rejoin and satellite boot — a removed node rejoins under its own identity; diskless satellites boot from a served disk. | planned | 0 | 4 | 1 | 0% |
+| **0.8** | Rejoin and satellite boot — a removed node rejoins under its own identity; diskless satellites boot from a served disk. | in progress | 1 | 3 | 0 | 25% |
 | **0.9** | Feature-complete — a voting member joins, serves genuine ODS-2 storage, holds locks, and evacuates a live node; TCP/IP, DECnet, and the self-hosting toolchain reach done. The last features land here. | planned | 0 | 0 | 0 | — |
 | **1.0** | Hardened and proven — feature-frozen on 0.9: authenticity enforced by the executive, not by convention, and the whole system proven on real hardware and in extended cluster interop against a real VAX. The release you trust; fixes only. | 1.0 goal | 24 | 12 | 4 | 67% |
 
@@ -165,10 +165,10 @@ only our forks target.
 - `vms-7f4` [inbox] vms-a61 audit: removing scs_credit_header_offset's redundant pre-gate lets a conformant-but-non-allowlisted MTYPE-10 frame silently debit Send Credit and zero Pending Receive Credit with nothing transmitted
 - `vms-abd` [inbox] A real VAX REFUSES OVMX's DISCONNECT_REQ: Inappropriate SCA Control Message
 
-**0.8** — rel-0.8 (0/4 done)
+**0.8** — rel-0.8 (1/4 done)
 
 - `vms-2248` [inbox] op 0x02 REJOIN: member declines to reciprocate config on the joiner VC — the rejoin readmission blocker (NOT the op 0x02 body)
-- `vms-2f3` [waiting] OVMX cannot REJOIN a cluster it was just removed from, under the same SCSNODE/SCSSYSTEMID
+- `vms-2f3` [done] OVMX cannot REJOIN a cluster it was just removed from, under the same SCSNODE/SCSSYSTEMID
 - `vms-4838` [inbox] REJOIN: drive op 0x02 CM readmission on the MEMBER-INITIATED VMS$VAXcluster connection (rejoiner=TARGET), not OVMX's own outbound joiner VC
 - `vms-ce7` [inbox] Complete diskless satellite boot: NISCS boot-time disk-server VC formation (no MOP load — VMB is ROM-resident) -> pure MSCP-served-disk-over-NISCA capture
 
@@ -213,6 +213,7 @@ only our forks target.
 
 ### Shipped releases (git tags)
 
+- **V0.5-6** — Image activation proven end-to-end, and the filesystem converges on a single executive path. The do-it-like-VMS image activation now runs end-to-end against a real /dev/vms — a VMS-standard activation context on the live executive, not a userspace stand-in — the Tier-1 flagship for the runtime. Filesystem convergence: the legacy ODS-2 VFS driver is atomically retired across Linux, NetBSD, and the shared core (~16k lines removed), leaving a single Files-11 ACP executive path. Toolchain hardening up the do-it-like-VMS ladder: the Alpha and VAX cross toolchains now pull source-hash-keyed prebuilt images from ghcr (killing the ftp.gnu.org build flake), the Alpha DECC$SHR vector is enumerated from the linker's own EVAX read view, and the multi-TU LINK.EXE self-host fixpoint is ported from BUILD.COM to MMK (additive, gen2==gen3 proven). VAX substrate: the exec_socket_* seam moves BGn: networking into kernel-core with Linux and NetBSD backends, and vms_stdio/vms_futex build on VAX to close the freestanding-facility gap. Cut through the all-architectures gate (x86_64, aarch64, VAX, and Alpha green-by-SHA on the tagged commit).
 - **V0.5-5** — VAX login end-to-end, executive faithfulness, and Alpha toolchain hardening — the first release cut through an all-architectures gate (x86_64, aarch64, VAX, and Alpha all proven green on the exact commit before tagging). The VAX installed single-disk authenticates SYSTEM/MANAGER to a DCL prompt, and RUN /DETACHED now names the console OPA0: instead of the raw substrate path. The executive-boundary audit tracer is wired operational at image activation, so a raw syscall an image issues becomes a visible finding rather than a silent bypass. Alpha toolchain: a DST-tolerant object reader, container-format-aware C-RTL architecture auto-detection, LINK.EXE hard-errors a strong-vs-strong duplicate definition on the EVAX path (exempting same-library members, VMS first-module-wins), the stdio streams export as data universals, and $CREPRC fails honestly when a UIC or privilege override cannot reach the executive row.
 - **V0.5-4** — VAX authentication reaches DCL. The VAX login chain lands end-to-end: the Purdy-S hash defeats a gcc-vax DImode miscompile by construction so it matches the real binary SYSUAF, JOB_CONTROL establishes SYSTEM identity at startup, and $CREPRC stamps executive identity with RUN /UIC//PRIVILEGES honored. Alpha becomes a co-release peer with a genuine C runtime: a wiring gate reds the cut on any broken Alpha build, the Alpha C-RTL shareables (DECC$SHR's 538 universals and LIBOTS$SHR's 11 OTS$ routines) are built from real musl and libgcc with zero undefined, the GCC port's crt0 links zero-deferred against them, and an FP divide-by-zero raises SS$_HPARITH through the condition handler into $STATUS. Toolchain and faithfulness hardening: a standing shell-portability lint gate, LINK.EXE hard-errors a strong-vs-strong multiple definition (%LINK-F-MULDEF), and the executive-boundary audit tracer (seccomp user-notification, observe-only) makes every raw syscall an image issues visible as a finding — the Phase-A instrument under the executive-boundary program.
 - **V0.5-3** — QA-remediation, acceptance-gate-proven. Fixes the basic-command breakage that shipped in V0.5-2 and installs a standing boot-and-run DCL/SHOW acceptance gate so it cannot recur — the gate boots the real image, logs in, runs the commands a user types, and asserts VMS-faithful output. SHOW USERS lists real interactive and spawned processes (was empty); WRITE F$GETSYI and other lexical functions evaluate rather than printing literal tokens; SHOW DEVICE shows mount state, volume label, and free blocks; SHOW QUOTA is de-fabricated to an honest %SYSTEM-F-NODISKQUOTA (no invented UIC/blocks, INV-6); SHOW DEVICES/SYMBOL wildcard/STATUS real $GETJPI accounting; bare DIRECTORY resolves the rooted login default (was %DIRECT-W-NOFILES); DIRECTORY header/columns and the SPAWN /PROCESS= qualifier. Also: os-release VERSION_ID SSOT guard, the roadmap Ledger reconcile, and the alpha-dec-vms cc1 entry-label decoration up the do-it-like-VMS ladder.
@@ -224,7 +225,6 @@ only our forks target.
 - **V0.4-4** — Feature pack marching toward 0.5.
 - **V0.4-3** — Feature pack marching toward 0.5.
 - **V0.4-2** — Feature pack marching toward 0.5.
-- **V0.4-1** — Dense feature pack toward 0.5.
 
 ### rd-labeling gaps (fix these to keep the source accurate)
 

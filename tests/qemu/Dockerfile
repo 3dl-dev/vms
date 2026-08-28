@@ -911,18 +911,26 @@ COPY tests/qemu/lib/harness_verdict.sh /lib/harness_verdict.sh
 RUN chmod +x /run_tests.sh
 
 # The image must not be able to build without the helper run_tests.sh sources.
-# Both halves are checked because they fail differently and both were live
-# possibilities here: the file must EXIST (a dropped COPY), and it must be the
-# only thing lib/ ships (a second helper added upstream that no COPY brings in,
-# which would fail identically at boot and just as confusingly).
+# Two halves are checked because they fail differently and both were live
+# possibilities here: harness_verdict.sh must EXIST (a dropped COPY), and lib/
+# must ship only the KNOWN-ALLOWED helpers -- a NEW helper added upstream that no
+# COPY brings in would fail identically at boot and just as confusingly, so it
+# must trip this guard and force a conscious decision.
+#
+# ALLOWED SET (not a bare count -- vms-904c): harness_verdict.sh is sourced by
+# run_tests.sh and IS copied in above; dcl_acceptance_battery.sh (added by
+# vms-76c3 / #868) belongs to the DCL ACCEPTANCE harness (tests/qemu/
+# run_dcl_acceptance_e2e.sh and the lab-vax drivers), NOT run_tests.sh, so it is
+# intentionally NOT in this kernel-executive image. Any OTHER file trips the
+# guard. Add a new name here only after deciding whether it needs a COPY.
 RUN test -r /lib/harness_verdict.sh \
     || { echo "FATAL: /lib/harness_verdict.sh missing -- run_tests.sh sources it at boot, so the harness would die before running one suite and CI would report it as 'harness exited nonzero'"; exit 1; }
 COPY tests/qemu/lib/ /tmp/lib_check/
-RUN n=$(ls -1 /tmp/lib_check | wc -l); \
-    if [ "$n" -ne 1 ]; then \
-        echo "FATAL: tests/qemu/lib/ now holds $n files but only harness_verdict.sh is COPYed into the image."; \
-        ls -1 /tmp/lib_check; \
-        echo "Add a COPY for each, then raise the count here. Do not delete this check."; \
+RUN unexpected=$(ls -1 /tmp/lib_check | grep -vxE 'harness_verdict\.sh|dcl_acceptance_battery\.sh' || true); \
+    if [ -n "$unexpected" ]; then \
+        echo "FATAL: tests/qemu/lib/ holds unexpected file(s) not accounted for in this image:"; \
+        echo "$unexpected"; \
+        echo "Decide whether each needs a COPY into the image, then add its name to the allow-list here. Do not delete this check."; \
         exit 1; \
     fi && rm -rf /tmp/lib_check
 

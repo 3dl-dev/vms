@@ -256,6 +256,20 @@ struct vms_bg_datafd_args {
 #define VMS_IOCTL_BG_MATERIALIZE_FD _IOWR(VMS_IOC_MAGIC, 0x8d, struct vms_bg_datafd_args)
 
 /*
+ * Socket-name / socket-option surface for a MATERIALIZED [bgconn] fd (vms-0cd).
+ * These are issued on the materialized data fd ITSELF (its .unlocked_ioctl), NOT on
+ * /dev/vms: after a wrapped daemon dup2()s the connection onto stdin/stdout and
+ * execs its child, that child holds only the real [bgconn] fd -- with no BG channel
+ * of its own -- yet still calls getpeername()/getsockname()/setsockopt()/
+ * getsockopt() on it. The handler answers them from the fd's HELD exec_socket_t
+ * (the SAME executive socket carrying the bytes), so the peer is the TRUE accepted-
+ * connection peer, never a synthesized value. Reuses the BG name/sockopt arg
+ * layouts (the `chan` field is unused here -- the fd is the socket).
+ */
+#define VMS_IOCTL_BGCONN_GETNAME  _IOWR(VMS_IOC_MAGIC, 0x90, struct vms_bg_name_args)
+#define VMS_IOCTL_BGCONN_SOCKOPT  _IOWR(VMS_IOC_MAGIC, 0x91, struct vms_bg_sockopt_args)
+
+/*
  * Freeze the shared layouts -- see vms_mbx.h's identical note for why this
  * matters: both sides of /dev/vms compile these structs separately and pass
  * them across the boundary by raw address, and _IOWR folds sizeof(struct) into

@@ -206,6 +206,27 @@ int main(int argc, char **argv)
     CHECK(realfd >= 0 && realfd < OVMX_BGSOCK_BASE,
           "the materialized fd is a REAL small-integer fd (< OVMX_BGSOCK_BASE), not a veneer handle -- the thing dup2 accepts");
 
+    /* (2c) the materialized fd answers getpeername() from the executive socket with
+     * the TRUE peer -- the SAME endpoint this connection was made to. This is what
+     * lets a wrapped daemon's exec'd child (sshd-session) getpeername() its stdin.
+     * INV-6: a REAL peer read from the REAL executive socket, never synthesized. */
+    if (realfd >= 0) {
+        struct sockaddr_in pn, rn;
+        socklen_t pl = sizeof(pn), rl = sizeof(rn);
+        int gr = ovmx_fd_getname(realfd, 1, (struct sockaddr *)&pn, &pl);
+        CHECK(gr == 0 && pn.sin_family == AF_INET &&
+              pn.sin_addr.s_addr == htonl(INADDR_LOOPBACK) &&
+              pn.sin_port == peer.sin_port,
+              "getpeername() on the materialized fd returns the TRUE peer (the real "
+              "connection endpoint from the executive socket), not a synthesized value");
+        /* regression teeth: a REAL host socket is NOT a [bgconn], so ovmx_fd_getname
+         * reports 1 (not mine) and the --wrap falls through to the real syscall --
+         * getpeername on real sockets/stdio is untouched. */
+        CHECK(ovmx_fd_getname(lsock, 1, (struct sockaddr *)&rn, &rl) == 1,
+              "ovmx_fd_getname on a REAL host socket returns 1 (not a [bgconn]) -- "
+              "getpeername/getsockname/setsockopt on real fds are left to the kernel");
+    }
+
     /* (2a) dup2 onto a target fd SUCCEEDS -- the EBADF that killed 3a's sshd is gone. */
     int dr = (realfd >= 0) ? dup2(realfd, CHILD_FD) : -1;
     CHECK(dr == CHILD_FD,

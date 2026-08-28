@@ -883,3 +883,19 @@ set_tests_properties(dcl_acceptance_e2e PROPERTIES
     LABELS "slow;qemu-full-boot"
     SKIP_RETURN_CODE 77
     TIMEOUT 1200)
+
+# ---------------------------------------------------------------------------
+# run_status_e2e (vms-707): boot the real runtime, log in, RUN SYS$SYSTEM:RC3.EXE,
+# and assert the reworked DCL RUN fork path (waitid(WNOWAIT) peek -> executive
+# $STATUS readback by Linux pid -> reap) routes the activated image's stdout to
+# the console AND reports its completion status (SS$_NORMAL for RC3's clean exit)
+# through the new readback path -- never a hang, spurious error, or wrong status.
+# Same opt-in convention (OVMX_QEMU_FULL_E2E=1) and shape as dcl_acceptance_e2e.
+add_test(
+    NAME run_status_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_run_status_e2e.sh
+)
+set_tests_properties(run_status_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 1200)

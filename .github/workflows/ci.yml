@@ -1730,7 +1730,7 @@ jobs:
   # run of echoed blank lines precedes "Username:" while login still works
   # (tests/qemu/test_console_boot_no_newline_spam.sh).
   console-newline-spam-e2e:
-    name: Console boot — no echoed-RETURN newline spam before Username: (vms-dec)
+    name: "Console boot — no echoed-RETURN newline spam before Username: (vms-dec)"
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.kernel == 'true' }}
     runs-on: ubuntu-latest

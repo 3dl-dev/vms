@@ -440,6 +440,23 @@ int ovmx_pollfd(int s)
     return fd;
 }
 
+int ovmx_materialize_fd(int s)
+{
+    struct bg_sock *p = sock_get(s);
+    int fd = -1;
+    uint32_t st;
+
+    if (p == NULL) { errno = EBADF; return -1; }
+    /* Ask the executive to materialize the channel's socket as a REAL data fd
+     * (read/write route to the executive socket, no O_CLOEXEC -> survives execve).
+     * This is what lets a wrapped daemon dup2() a BGn: connection onto stdin/stdout
+     * and exec a child that does ordinary read()/write() on it. Fail-honest: a bad
+     * handle or absent executive returns -1 with errno, never a fabricated fd. */
+    st = vms_kif_bg_materialize_fd(p->exec_chan, &fd);
+    if (!(st & 1)) { errno = bg_status_to_errno(st); return -1; }
+    return fd;
+}
+
 /* Return the channel's CACHED executive readiness fd (creating it once), for a
  * poll()/select() layer that must fold veneer handles into a real fd set (the
  * --wrap dispatch, vms-4bf). Unlike ovmx_pollfd() -- which mints a FRESH fd the

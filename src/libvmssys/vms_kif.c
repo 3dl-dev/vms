@@ -2173,6 +2173,34 @@ uint32_t vms_kif_bg_pollfd(uint32_t exec_chan, int *out_fd)
     return args.status;
 }
 
+/*
+ * Materialize the channel's executive socket as a REAL, data-carrying fd (RUNG-3b).
+ * Unlike vms_kif_bg_pollfd's readiness-only fd, the fd returned here has real
+ * read/write that route to the executive socket, and NO O_CLOEXEC so it survives
+ * execve -- the primitive the --wrap dup2/dup uses to hand a BGn: connection to a
+ * ported daemon's exec'd child. Fail-honest: no /dev/vms -> SS$_NOSUCHDEV; bad
+ * channel / no socket -> SS$_IVCHAN (from the executive). Never a fabricated fd.
+ */
+uint32_t vms_kif_bg_materialize_fd(uint32_t exec_chan, int *out_fd)
+{
+    struct vms_bg_datafd_args args;
+
+    if (out_fd)
+        *out_fd = -1;
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.fd = -1;
+
+    KIF_CALL(VMS_IOCTL_BG_MATERIALIZE_FD, &args);
+
+    if ((args.status & 1) && out_fd)
+        *out_fd = args.fd;
+    return args.status;
+}
+
 uint32_t vms_kif_bg_getname(uint32_t exec_chan, uint32_t which,
                             uint16_t *family, uint16_t *port, uint32_t *addr)
 {

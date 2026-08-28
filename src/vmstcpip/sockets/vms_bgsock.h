@@ -108,6 +108,14 @@ int ovmx_socket_close(int s);
  * the fd (>= 0), or -1 with errno (ENODEV = no /dev/vms). */
 int ovmx_pollfd(int s);
 
+/* Materialize the veneer handle's channel as a REAL, data-carrying fd (RUNG-3b):
+ * its read/write route to the executive socket and it has NO O_CLOEXEC, so it is
+ * dup2-able and survives execve. This is what lets a wrapped daemon (sshd) hand a
+ * BGn: connection to its exec'd child by dup2()'ing onto stdin/stdout. The caller
+ * owns the returned fd. Returns the real fd (>= 0), or -1 with errno (fail-honest;
+ * ENODEV = no /dev/vms, EBADF = not a live veneer handle). */
+int ovmx_materialize_fd(int s);
+
 /* Return the channel's CACHED executive readiness fd (created once, owned by the
  * veneer socket, closed at ovmx_socket_close). This is what a poll()/select()
  * --wrap layer folds into a real fd set for a veneer handle; unlike ovmx_pollfd

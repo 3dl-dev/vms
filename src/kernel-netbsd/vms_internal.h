@@ -389,6 +389,11 @@ struct vms_lock_entry {
 	                                     *            SS__DEADLOCK=cycle detected */
 	uint8_t             acmode;         /* access mode $ENQ was issued from (0-3),
 	                                     * for image rundown -- NOT a lock mode */
+	uint32_t            req_csid;       /* cluster CSID this lock is held FOR;
+	                                     * 0 = a local process owns it, non-zero =
+	                                     * a cross-node grant on behalf of a remote
+	                                     * node (vms-e8f1). Set from
+	                                     * vms_enq_args.owner_csid at creation. */
 };
 
 /* Lock resource -- a named resource in the lock database. */

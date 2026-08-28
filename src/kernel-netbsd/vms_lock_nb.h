@@ -129,7 +129,10 @@ struct vms_enq_args {
 	uint32_t lk_status;         /* return: lock status (granted mode in LKSB) */
 	uint8_t  valblk[LCK_VALBLK_SIZE]; /* in/out: lock value block */
 	uint32_t status;            /* return: SS$_ status */
-	uint32_t pad;
+	uint32_t owner_csid;        /* in: cluster CSID that OWNS this lock; 0 = the
+	                             * local node. Cross-node DLM dispatch sets it to
+	                             * the remote requester's CSID (vms-e8f1). Was a
+	                             * reserved pad -- same size, no ABI change. */
 };
 
 struct vms_deq_args {
@@ -159,7 +162,9 @@ struct vms_resmaster_args {
 	uint32_t is_local_master;   /* return: 1 if mastered by this node */
 	uint32_t n_granted;         /* return: granted locks on the resource */
 	uint32_t status;            /* return: SS$_ status */
-	uint32_t pad;
+	uint32_t remote_holder_csid;/* return: CSID a remote-held granted lock is held
+	                             * FOR; 0 if all grants are local (vms-e8f1). Was a
+	                             * reserved pad -- same size, no ABI change. */
 };
 
 /*

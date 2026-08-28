@@ -407,7 +407,15 @@ struct vms_enq_args {
     uint32_t lk_status;         /* return: lock status (granted mode in LKSB) */
     uint8_t  valblk[LCK_VALBLK_SIZE]; /* lock value block */
     uint32_t status;            /* return: SS$_ status */
-    uint32_t pad;
+    uint32_t owner_csid;        /* in: cluster CSID that OWNS this lock; 0 = the
+                                 * local node (the calling process's own node).
+                                 * A userspace $ENQ leaves this 0 (local hold);
+                                 * the cross-node DLM dispatch
+                                 * (vms_lock_dlm_xnode_dispatch) sets it to the
+                                 * REMOTE requester's CSID so the master's lock
+                                 * record is stamped with the identity it is held
+                                 * FOR (DLM epic vms-7fa rung 2, vms-e8f1). Was a
+                                 * reserved pad; same size, no ABI change. */
 };
 
 struct vms_deq_args {
@@ -452,7 +460,13 @@ struct vms_resmaster_args {
     uint32_t is_local_master;   /* return: 1 if mastered by this node */
     uint32_t n_granted;         /* return: granted locks on the resource */
     uint32_t status;            /* return: SS$_ status */
-    uint32_t pad;
+    uint32_t remote_holder_csid;/* return: the CSID a REMOTE-held granted lock on
+                                 * this resource is held FOR (the req_csid stamped
+                                 * by the cross-node DLM grant); 0 if every grant
+                                 * is local. Lets a test PROVE the master genuinely
+                                 * holds a lock for a peer's cluster identity, not
+                                 * just that n_granted rose (DLM epic vms-7fa rung
+                                 * 2, vms-e8f1). Was a reserved pad; same size. */
 };
 
 #define VMS_IOCTL_ENQ       _IOWR(VMS_IOC_MAGIC, 0x30, struct vms_enq_args)

@@ -288,7 +288,8 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
 uint32_t vms_kif_get_resmaster(const char *resnam, uint32_t *found,
                                uint32_t *local_csid, uint32_t *dir_csid,
                                uint32_t *master_csid, uint32_t *is_local_master,
-                               uint32_t *n_granted);
+                               uint32_t *n_granted,
+                               uint32_t *remote_holder_csid);
 
 /* Dispatch a decoded cross-node DLM request to the kernel lock manager's
  * cross-node handler (vms-94c, DLM epic vms-7fa rung 1).

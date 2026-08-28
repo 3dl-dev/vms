@@ -451,6 +451,15 @@ struct vms_lock_entry {
                                          * USER mode; inner-mode locks are
                                          * process-permanent. See
                                          * vms_proc_rundown_locks(). */
+    uint32_t            req_csid;       /* cluster CSID this lock is held FOR.
+                                         * 0 = a local process on THIS node owns
+                                         * it (the common case). Non-zero = a
+                                         * cross-node grant: the master holds this
+                                         * lock on behalf of a REMOTE node whose
+                                         * CSID this is (DLM epic vms-7fa rung 2,
+                                         * vms-e8f1). Set from vms_enq_args
+                                         * .owner_csid at creation; surfaced by
+                                         * GET_RESMASTER.remote_holder_csid. */
 };
 
 /* Lock resource (named resource in the lock database) */

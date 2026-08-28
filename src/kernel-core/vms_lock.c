@@ -902,6 +902,17 @@ static long vms_enq_core(struct vms_proc *proc, struct vms_enq_args *io)
     lock->waiting = 0;
     exec_cv_init(&lock->wait_wq);
     lock->grant_state = 0;
+    /*
+     * The cluster identity this lock is held FOR. 0 for an ordinary $ENQ (a
+     * local process on this node owns the lock -- args.owner_csid is 0, the
+     * memset default every userspace caller leaves in place). Non-zero only on
+     * the cross-node DLM grant path (vms_lock_dlm_xnode_dispatch, vms-e8f1),
+     * which sets owner_csid to the REMOTE requester's CSID so the master's lock
+     * record carries the identity it is held on behalf of. Read back through
+     * GET_RESMASTER.remote_holder_csid -- a genuine held-lock proof, not a
+     * fabricated status (INV-6).
+     */
+    lock->req_csid = args.owner_csid;
 
     /*
      * Record the access mode $ENQ was issued from, so image rundown can tell
@@ -1381,8 +1392,19 @@ long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg)
         args.master_csid = res->master_csid;
         args.is_local_master =
             (res->master_csid != 0 && res->master_csid == vms_local_csid) ? 1 : 0;
-        exec_list_for_each_entry(granted, &res->granted, res_granted)
+        exec_list_for_each_entry(granted, &res->granted, res_granted) {
             n++;
+            /*
+             * Report the identity a REMOTE-held grant is held for (the first
+             * one, if several). A local grant carries req_csid==0 and is
+             * skipped, so remote_holder_csid stays 0 when every holder is
+             * local. This is the held-lock proof the cross-node grant
+             * (vms-e8f1) is verified by: after a peer's $ENQ, the master's DB
+             * genuinely shows a lock held FOR that peer's CSID.
+             */
+            if (granted->req_csid != 0 && args.remote_holder_csid == 0)
+                args.remote_holder_csid = granted->req_csid;
+        }
         args.n_granted = n;
         exec_unlock(&res->lock);
     }
@@ -1405,17 +1427,25 @@ out:
  * HERE -- the point at which the kernel lock manager would act on a peer's
  * behalf, as the resource's master or directory node.
  *
- * RUNG 1 IS THE TRANSPORT ONLY. This handler exists, the message reaches it
- * DECODED, and it returns SS$_UNSUPPORTED. It does NOT grant, queue, dequeue, or
- * deliver a blocking AST. INV-6: no fabricated cross-node grant -- a cross-node
- * lock op honestly fails with SS$_UNSUPPORTED, exactly as dlm_resolve_master()
- * already does for the SEND side, rather than fabricating a remote answer.
+ * RUNG 2 -- THE FOUNDATION GRANT (vms-e8f1). VMS_DLM_OP_ENQ now acts on the real
+ * single-node lock manager on the mastering node: the decoded cross-node $ENQ is
+ * run through vms_enq_core() with the requesting proc bound to the REMOTE
+ * requester's cluster identity (owner_csid = req->req_csid), so a COMPATIBLE
+ * request is GRANTED (SS$_NORMAL) and the master's resource DB genuinely holds a
+ * lock record FOR the peer's CSID -- verifiable via GET_RESMASTER
+ * (remote_holder_csid). Membership here is a stub-of-one, so this node is the
+ * directory + master for the name and vms_enq_core grants locally; that is the
+ * mastering node's real grant, not a fabrication.
  *
- * RUNG 2 (vms-7fa) wires each op into the real single-node lock manager on the
- * mastering node: VMS_DLM_OP_ENQ -> vms_enq_core() with proc bound to the
- * remote requester's cluster identity, DEQ -> the release path, GRANT/BLKAST ->
- * completing/notifying the ORIGINATING node's pending request. That is where
- * this switch stops returning SS$_UNSUPPORTED; nothing above this line changes.
+ * SCOPE FENCE (INV-6 -- everything past the foundation FAILS HONESTLY):
+ *   - The ENQ runs with LCK_M_NOQUEUE and without LCK_M_SYNC, so an INCOMPATIBLE
+ *     cross-node request declines with SS$_NOTQUEUED rather than building a
+ *     cross-node wait queue. Cross-node CONTENTION/blocking is a later rung
+ *     (vms-904c) -- this handler never queues or blocks the delivery thread.
+ *   - LVB replication (vms-d81) and cross-node blocking-AST delivery are later
+ *     rungs, so no LCK_M_VALBLK / AST is carried into the grant here.
+ *   - VMS_DLM_OP_DEQ (release), GRANT, and BLKAST are NOT the foundation: they
+ *     still return SS$_UNSUPPORTED -- an honest decline, never a faked receipt.
  *
  * The request is VALIDATED so a malformed message is rejected (SS$_BADPARAM)
  * rather than silently dropped -- the same discipline vms_enq_core applies.
@@ -1423,27 +1453,63 @@ out:
 uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
                                      struct vms_dlm_xnode_args *req)
 {
-    (void)proc;
-
     if (!req)
+        return SS__BADPARAM;
+    if (!proc)
         return SS__BADPARAM;
     if (req->lkmode > LCK_K_EXMODE)
         return SS__BADPARAM;
     req->resnam[sizeof(req->resnam) - 1] = '\0';
 
     switch (req->op) {
-    case VMS_DLM_OP_ENQ:
+    case VMS_DLM_OP_ENQ: {
+        struct vms_enq_args a;
+
+        /* A request that names a resource must actually name one. */
+        if (req->resnam[0] == '\0')
+            return SS__BADPARAM;
+
+        /*
+         * THE FOUNDATION GRANT. Marshal the decoded cross-node $ENQ into the
+         * single-node lock manager on this (the mastering) node and grant it.
+         * The lock is held FOR the remote requester's cluster identity
+         * (owner_csid), NOT the local delivery daemon -- vms_enq_core stamps
+         * lock->req_csid = a.owner_csid, so GET_RESMASTER later reports the
+         * grant as remote-held for the peer's CSID.
+         *
+         * LCK_M_NOQUEUE fences out cross-node contention (a later rung): a
+         * compatible request grants immediately (SS$_NORMAL); an incompatible
+         * one declines with SS$_NOTQUEUED -- honest, no wait queue. No
+         * LCK_M_SYNC: this must never block the daemon thread waiting on a
+         * remote-driven grant. No VALBLK/AST: LVB replication and blocking-AST
+         * delivery are later rungs.
+         */
+        memset(&a, 0, sizeof(a));
+        a.lkmode = req->lkmode;
+        a.flags = LCK_M_NOQUEUE;
+        memcpy(a.resnam, req->resnam, sizeof(a.resnam));
+        a.resnam[sizeof(a.resnam) - 1] = '\0';
+        a.owner_csid = req->req_csid;   /* held FOR the remote requester */
+
+        vms_enq_core(proc, &a);
+
+        /* Hand the master's lock id back to the requester (the GRANT reply's
+         * master_lkid). On an incompatible/declined request a.lkid is 0. */
+        req->master_lkid = a.lkid;
+        req->master_csid = vms_local_csid; /* this node mastered the grant */
+        return a.status;
+    }
     case VMS_DLM_OP_DEQ:
         /* A request that names a resource must actually name one. */
         if (req->resnam[0] == '\0')
             return SS__BADPARAM;
-        /* Rung 2 acts on the decoded request here (vms_enq_core on the master,
-         * the release path for DEQ). Rung 1 delivers it and honestly declines. */
+        /* Cross-node release is NOT the foundation grant -- a later rung wires
+         * the master's release path. Decline honestly (never a faked receipt). */
         return SS__UNSUPPORTED;
     case VMS_DLM_OP_GRANT:
     case VMS_DLM_OP_BLKAST:
-        /* Responses carry no resource name. Rung 2 completes/notifies the
-         * originating node's pending request here; rung 1 declines. */
+        /* Responses carry no resource name. Completing/notifying the
+         * originating node's pending request is a later rung; decline honestly. */
         return SS__UNSUPPORTED;
     default:
         return SS__BADPARAM;

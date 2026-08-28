@@ -377,6 +377,15 @@ jobs:
               - 'tests/qemu/Dockerfile.dlm-harness-h3'
               - 'tests/qemu/init_dlm_h3.sh'
               - 'tests/qemu/run_dlm_harness_h3.sh'
+              # H4 (rd vms-e8f1 / vms-17c, THE CROWN): after the join, node A
+              # issues a cross-node $ENQ for a resource mastered on node B; node
+              # B DISPATCHES it to its REAL executive, which GRANTS it (rung-2
+              # foundation grant, vms_lock_dlm_xnode_dispatch). Proves the GRANT
+              # (SS$_NORMAL, the 2296->1 flip) AND that B genuinely holds the lock
+              # for A's CSID (SCSD-I-DLMHELD held_for_csid).
+              - 'tests/qemu/Dockerfile.dlm-harness-h4'
+              - 'tests/qemu/init_dlm_h4.sh'
+              - 'tests/qemu/run_dlm_harness_h4.sh'
               - 'tests/cluster/two-ovmx/mk_sysgen_scratch.py'
               - 'tests/cluster/two-ovmx/verdict.sh'
 
@@ -2500,6 +2509,84 @@ jobs:
         with:
           name: dlm-harness-h3-artifacts
           path: h3out/
+          if-no-files-found: ignore
+
+  # -----------------------------------------------------------------------
+  # DLM Harness H4 (rd vms-e8f1 / vms-17c) -- THE CROWN: the real cross-node GRANT.
+  # tests/qemu/Dockerfile.dlm-harness-h4 builds the SAME real-executive ingredients
+  # as H3 (vms.ko -- now with the rung-2 grant in vms_lock_dlm_xnode_dispatch --
+  # SCSD.EXE static musl + sca_l2probe + the two OVMXA/OVMXB SYSGEN stores) and
+  # boots the SAME TWO QEMU nodes, each with a real /dev/vms, on one shared L2 via a
+  # QEMU `socket` (mcast) netdev (NO host bridge, NO privilege). It runs the SAME
+  # join sequencer so both nodes reach VMS$VAXcluster membership, then arms node A's
+  # cross-node $ENQ (OVMX_DLM_ENQ=RESONE) for a resource mastered on node B. Node B
+  # DISPATCHES it to its REAL executive, which GRANTS it. H4 PASS iff (a) B's
+  # dispatch returns 0x00000001 (SS$_NORMAL -- GRANTED; the 2296->1 flip), NOT 2296
+  # and NOT 2680, AND (b) B's OWN resource DB (GET_RESMASTER, printed as
+  # SCSD-I-DLMHELD) shows the lock GENUINELY HELD for A's CSID (found=1,
+  # is_local_master=1, n_granted>=1, held_for_csid=A). INV-6: the verdict READS B's
+  # grant + held-lock state from B's own log; a fabricated grant cannot pass.
+  # -----------------------------------------------------------------------
+  dlm-harness-h4:
+    name: DLM Harness H4 (cross-node $ENQ GRANTED -> SS$_NORMAL, B holds lock for A, QEMU)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.dlm_harness == 'true' }}
+    runs-on: ubuntu-latest
+    # vms.ko + SCSD.EXE build + TWO QEMU boots, each running the join sequencer +
+    # the one-shot $ENQ for ~90s. The inner H4_WALL_TIMEOUT (600s) is the real
+    # budget; this is the OUTER bound so a genuine hang surfaces.
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build DLM harness H4 image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu/Dockerfile.dlm-harness-h4
+          push: false
+          load: true
+          tags: ovmx-dlm-h4:latest
+          cache-from: type=gha,scope=dlm-harness-h4
+          cache-to: type=gha,mode=max,scope=dlm-harness-h4
+
+      - name: Boot TWO QEMU nodes, drive node A's cross-node $ENQ and grant it on B
+        run: |
+          set +e
+          # GitHub Linux runners expose /dev/kvm; pass it through so the two
+          # guests boot under KVM (much faster than TCG). Fall back cleanly if
+          # a runner lacks it -- the harness auto-detects and uses TCG.
+          KVM=""
+          [ -e /dev/kvm ] && KVM="--device /dev/kvm"
+          mkdir -p "$PWD/h4out"
+          RAW=$(docker run --rm $KVM -v "$PWD/h4out:/out" ovmx-dlm-h4:latest 2>&1)
+          RC=$?
+          set -e
+          # QEMU serial emits CRLF; strip \r so the line-anchored match holds.
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: DLM harness H4 exited nonzero"
+            exit 1
+          fi
+          if printf '%s\n' "$OUTPUT" | grep -qE '^  DLM HARNESS H4 PASSED'; then
+            echo "PASS: node A's cross-node \$ENQ was GRANTED by node B's real executive (rc=SS\$_NORMAL), and B holds the lock for A's CSID."
+          else
+            echo "FAIL: H4 verdict 'DLM HARNESS H4 PASSED' not found."
+            printf '%s\n' "$OUTPUT" | grep -E 'verdict inputs|B_DISPATCH_STATUS|B_HELD|held_for_csid|highest join rung|VAXCLMEMBER|DLMENQ|DLMRX|DLMHELD|H4-NODE|MISS:|FAIL:' || true
+            exit 1
+          fi
+
+      - name: Upload H4 pcap + node logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dlm-harness-h4-artifacts
+          path: h4out/
           if-no-files-found: ignore
 
   # -----------------------------------------------------------------------

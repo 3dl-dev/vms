@@ -7165,6 +7165,97 @@ jobs:
         run: tests/lab-vax/run-boot.sh sysboot-negctl
 
   # -----------------------------------------------------------------------
+  # vax-dcl-acceptance (rd vms-f2c, epic vms-8954). Co-release ACCEPTANCE PARITY,
+  # the VAX third of {x86_64, Alpha, VAX}: the SAME ground-source DCL/SHOW
+  # acceptance battery x86_64 runs (dcl-acceptance-e2e) and Alpha runs
+  # (alpha-dcl-acceptance) -> the shared tests/qemu/lib/dcl_acceptance_battery.sh,
+  # driven here over the OVMX/NetBSD-vax SIMH runtime via run-boot.sh's
+  # `acceptance' mode. Boot the real slim single disk, log in SYSTEM/MANAGER, run
+  # the commands a user types, ASSERT VMS-FAITHFUL output (Rule 1). One shared
+  # battery, three arches, no drift. A RED assertion here is a real VAX
+  # faithful-output gap to fix, each naming its bug -- never weaken the shared
+  # battery to go green.
+  #
+  # HEAVY-EMULATOR TIER (schedule || workflow_dispatch), same shape as
+  # netbsd-vax-sysboot above -- VAX under SIMH is a ~1980s CPU emulated, so a full
+  # boot + login + the command battery is many minutes; it stays OFF the per-PR
+  # path (the per-PR VAX guard is netbsd-vax-simh + the module gates). The
+  # conductor fires it via workflow_dispatch on the frozen SHA for a green-by-SHA
+  # reap; the nightly schedule catches drift on main.
+  # -----------------------------------------------------------------------
+  vax-dcl-acceptance:
+    name: OVMX/NetBSD-vax DCL/SHOW acceptance — boot, run the commands a user types, assert VMS-faithful (vms-f2c)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
+    needs: [changes, netbsd-vax-simh]
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      KBUILD_DIR: /tmp/ovmx-vax-acceptance-kbuild
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
+        uses: actions/cache/restore@v4
+        with:
+          path: .boot-cache/lab-vax
+          key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
+
+      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX)
+        uses: actions/cache@v4
+        with:
+          path: .boot-cache/lab-vax/boot-artifacts/netbsd-OVMX
+          key: vax-modular-kernel-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+
+      - name: Build the lab-vax image (SIMH + anita)
+        run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
+
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: "Acceptance gate — boot the OVMX/NetBSD-vax single disk, log in SYSTEM/MANAGER, run the shared DCL/SHOW battery, assert VMS-faithful output"
+        env:
+          CROSS_IMAGE: ovmx-cross-vax
+          LAB_IMAGE: ovmx-vax-lab
+        run: tests/lab-vax/run-boot.sh acceptance
+
+  # -----------------------------------------------------------------------
   # alpha-boot-login (rd vms-341, epic vms-8954). The Alpha member of the
   # cut-time release-acceptance set: proves the OVMX/Linux-Alpha (LP64) runtime
   # boots to an AUTHENTICATED interactive DCL "$" over the genuine Files-11

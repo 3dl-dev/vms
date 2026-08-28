@@ -78,10 +78,14 @@ if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
     QEMU=qemu-system-aarch64
     MACHINE="-machine virt -cpu cortex-a57"
     CONSOLE="console=ttyAMA0"
+    # rd vms-76c3: F$GETSYI("ARCH_NAME") on an __aarch64__ build -> ovmx_hw_arch() = "AARCH64".
+    EXPECTED_ARCH_NAME="AARCH64"
 else
     QEMU=qemu-system-x86_64
     MACHINE=""
     CONSOLE="console=ttyS0"
+    # rd vms-76c3: F$GETSYI("ARCH_NAME") on an __x86_64__ build -> ovmx_hw_arch() = "X86_64".
+    EXPECTED_ARCH_NAME="X86_64"
 fi
 
 for f in "$KERNEL" "$SLIM_INITRD" "$DISTRIB_IMG"; do

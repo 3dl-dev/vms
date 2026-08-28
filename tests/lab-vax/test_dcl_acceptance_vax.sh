@@ -74,6 +74,8 @@ export EXPECTED_BOOT_BANNER="$PNAME $PVER"
 CVER=$(idval OVMX_VMS_COMPAT_VERSION_VAX)
 [ -n "$CVER" ] || die "could not read OVMX_VMS_COMPAT_VERSION_VAX from $IDENTITY (rd vms-10e)"
 export EXPECTED_COMPAT_VERSION="$CVER"
+# rd vms-76c3: F$GETSYI("ARCH_NAME") on a __vax__ build -> ovmx_hw_arch() = "VAX".
+export EXPECTED_ARCH_NAME="VAX"
 
 # VOLUME_LABEL tracks master_system_volume's vmsfs_master --ods2 label; verify.
 export VOLUME_LABEL="OVMXSYS"

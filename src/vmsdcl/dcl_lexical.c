@@ -1407,6 +1407,15 @@ static int lex_getsyi(struct dcl_context *ctx, const char *args,
         ovmx_compat_version_field(field);
         field[OVMX_VMS_VERSION_FIELD_LEN] = '\0';
         strncpy(result, field, result_size - 1);
+    } else if (strcmp(s, "ARCH_NAME") == 0) {
+        /* Machine surface: the VMS-style architecture name (SYI$_ARCH_NAME),
+         * from the identity SSOT (INV-1) -- the SAME ovmx_hw_arch() the $GETSYI
+         * service (sys_misc.c SYI$_ARCH_NAME) returns, so the two surfaces never
+         * disagree. Was UNHANDLED here, so F$GETSYI("ARCH_NAME") fell through to
+         * "0"; real VMS returns the arch token ("VAX"/"Alpha"/"IA64"/"x86_64").
+         * NOT space-padded (byte-confirmed on the live oracle: "Alpha" exact, no
+         * padding -- unlike VERSION's fixed 8-char field). rd vms-76c3. */
+        strncpy(result, ovmx_hw_arch(), result_size - 1);
     } else if (strcmp(s, "HW_NAME") == 0) {
         strncpy(result, uts.machine, result_size - 1);
         for (size_t i = 0; result[i]; i++)

@@ -830,7 +830,26 @@ grep -E '\.[sS]$' "$WORK/buildset" > "$WORK/prodasm" 2>/dev/null || : > "$WORK/p
 # otherwise-userspace src/vmsfs/ tree. Its userspace peer ods2_block_posix.c IS
 # scanned. Exports no sys$ symbol either way. Anchored + $-terminated so it
 # excludes exactly this one file, never a directory.
-SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$"
+#
+# TWO MORE file-level exclusions (rd vms-157): the alpha-dec-vms musl port's
+# syscall backend --
+#   tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall.c   (the
+#     `callsys` call_pal trampoline: the OSF-1 syscall trap, in explicit-register
+#     inline asm because the a3/v0 out-of-band error result cannot be read from C)
+#   tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area.c
+#     (the PAL_wruniq thread-pointer set: TP lives in the PALcode "unique"
+#     register, not a syscall)
+# -- both name explicit Alpha registers ($0, $16) in inline asm, which a host
+# x86_64 cc rejects ("invalid register name for 'r0'"), so they genuinely cannot
+# be compiled here. What the exclusion costs is nothing this gate exists to see:
+# both export ONLY __vms_alpha_syscall / __set_thread_area -- neither defines any
+# sys$ symbol, so the object scan would find no service to certify in either even
+# if it could compile them. Their symbol surface is exercised by the real
+# alpha-dec-vms cross build, which compiles and links them for the Alpha target.
+# Anchored + $-terminated so each excludes exactly its one file, never a
+# directory (src/internal/ is a generic musl dir; a future host-compilable file
+# added there must still be scanned).
+SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$"
 
 SYMCC=""
 for _c in cc gcc; do

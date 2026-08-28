@@ -1193,6 +1193,13 @@ long vms_ioctl_bg_listen(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_accept(struct vms_proc *proc, unsigned long arg);
 /* Give back every BG channel (and its host socket) a dying process holds. */
 void vms_bg_release_all(struct vms_proc *proc);
+/*
+ * Copy PARENT's open BGn: channels into a just-registering CHILD PCB (executive
+ * fork/exec inheritance, vms-3bf) -- the fd-inheritance analogue: same channel
+ * NUMBERs, the one host socket SHARED by reference. Caller holds
+ * vms_proc_hash_lock (keeps parent alive); child is not yet published.
+ */
+void vms_bg_inherit(struct vms_proc *child, struct vms_proc *parent);
 
 /* Subsystem init/cleanup */
 int vms_lock_init(void);

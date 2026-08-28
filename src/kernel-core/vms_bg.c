@@ -659,3 +659,100 @@ void vms_bg_release_all(struct vms_proc *proc)
         kfree(ch);
     }
 }
+
+/*
+ * vms_bg_inherit - give CHILD its own references to every BG channel PARENT
+ * holds, at the moment CHILD first registers with the executive (vms-3bf).
+ *
+ * This is executive fork/exec inheritance of BGn: channels -- the direct
+ * analogue of a Linux child inheriting the parent's open file descriptors
+ * across fork(), and (a not-CLOEXEC fd surviving execve) across fork()+exec()
+ * too. OVMX gives every task its OWN /dev/vms descriptor and its OWN PCB (keyed
+ * by tgid; kif_bind() in src/libvmssys/vms_kif.c deliberately drops the
+ * inherited descriptor and re-registers, so identity is accounted per task).
+ * A forked child therefore does NOT share the parent's struct file and cannot
+ * reach the parent's channels through it -- so keying channels to the struct
+ * file would not survive OVMX's own fork/register discipline. The faithful
+ * reproduction of fd inheritance in THIS model is to copy the parent's channel
+ * TABLE into the child's PCB when the child registers: each inherited channel
+ * keeps the SAME channel NUMBER (the child operates BGn: by the very number the
+ * parent used, exactly as a forked child's fd 5 is the parent's fd 5) and
+ * SHARES the parent's host socket by taking a reference on the one refcounted
+ * holder (send/recv on either side drive the ONE real connection -- not a
+ * per-process fake, INV-6).
+ *
+ * This is what lets a STOCK forking server over BGn: work UNCHANGED: OpenSSH's
+ * sshd master accepts a connection (an executive BG channel), then fork()+exec's
+ * a separate sshd-session image for privilege separation; the accepted channel
+ * must be operable in that exec'd child. After the exec the child's real_parent
+ * is still the master, and the child's first executive call registers a PCB --
+ * which is when this copy runs -- so the inherited channel is present by the
+ * number the master handed across (arg/env), with no userspace re-registration
+ * step and no veneer handle map to rebuild.
+ *
+ * SNAPSHOT SEMANTICS. Inheritance is taken at registration, the fork/exec
+ * moment. A channel whose socket already exists (IO$_SETMODE issued before the
+ * fork -- the sshd accepted-connection case) is fully shared: both PCBs point at
+ * the one struct socket, so subsequent I/O is mutually visible, matching a
+ * shared open file description. A channel with no socket yet is inherited as an
+ * empty slot; a socket the PARENT creates AFTER the child registered is not
+ * retro-shared. That ordering is out of scope for the forking-server case
+ * (which always establishes the connection before the fork) and is documented
+ * here rather than faked.
+ *
+ * ALL-OR-NOTHING. The GFP_ATOMIC copy (it runs with vms_proc_hash_lock +
+ * parent->chan_lock held) can fail under memory pressure. Rather than inherit a
+ * PARTIAL table -- silently dropping some channels while presenting others, a
+ * per-process half-truth -- any failure unwinds every copy made, so the child
+ * inherits either ALL of the parent's channels or none. A child that inherited
+ * none fails honestly downstream (SS$_IVCHAN on the missing channel), never
+ * fabricates one.
+ *
+ * LOCKING: the caller holds vms_proc_hash_lock so PARENT cannot be freed, and
+ * CHILD is not yet published in the hash so it needs no lock of its own.
+ * PARENT's chan_lock is taken here to walk its live list; the copies are built
+ * on a private list and spliced onto CHILD only once the whole set succeeded.
+ */
+void vms_bg_inherit(struct vms_proc *child, struct vms_proc *parent)
+{
+    struct vms_bg_chan *pch, *cch, *tmp;
+    LIST_HEAD(copied);
+    bool oom = false;
+
+    spin_lock(&parent->chan_lock);
+    list_for_each_entry(pch, &parent->bg_channels, list) {
+        cch = kzalloc(sizeof(*cch), GFP_ATOMIC);
+        if (!cch) {
+            oom = true;
+            break;
+        }
+        cch->chan = pch->chan;
+        cch->unit = pch->unit;
+        cch->sock = pch->sock;
+        if (cch->sock)
+            exec_socket_get(cch->sock);     /* share the ONE host socket */
+        list_add_tail(&cch->list, &copied);
+    }
+    /*
+     * Carry the channel-number high-water mark forward so a later $ASSIGN in
+     * the child never mints a number that collides with an inherited one
+     * (next_chan is the shared counter for device/mailbox/BG/file channels).
+     */
+    if (!oom && !list_empty(&copied))
+        child->next_chan = parent->next_chan;
+    spin_unlock(&parent->chan_lock);
+
+    if (oom) {
+        list_for_each_entry_safe(cch, tmp, &copied, list) {
+            list_del(&cch->list);
+            if (cch->sock)
+                exec_socket_release(cch->sock);
+            kfree(cch);
+        }
+        pr_warn("vms: BG-channel fork inheritance OOM; child inherits none (honest IVCHAN downstream)\n");
+        return;
+    }
+
+    /* Publish the fully-built set onto the (still-private) child list. */
+    list_splice_tail(&copied, &child->bg_channels);
+}

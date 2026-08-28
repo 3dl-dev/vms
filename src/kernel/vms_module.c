@@ -333,6 +333,66 @@ static uint32_t vms_proc_parent_job_id(void)
     return job_id;
 }
 
+/*
+ * vms_proc_inherit_channels - copy the registering task's VMS parent's open
+ * BGn: channels into this fresh child PCB (vms-3bf, executive fork/exec
+ * inheritance of BG channels).
+ *
+ * INHERIT THE CHANNEL, NOT THE IDENTITY. This is deliberately separate from
+ * vms_proc_continue_identity(): the child keeps its OWN PCB and its own
+ * identity (UIC, user name, privilege masks, VMS PID) -- the per-task fresh
+ * accounting that vms-8019/2b8/4d7 rests on is untouched. What the child gains
+ * is only the ability to operate the parent's BG channels BY NUMBER, exactly as
+ * a Linux child inherits the parent's open fds across fork() without inheriting
+ * the parent's credentials. vms_bg_inherit() copies channel-table entries and
+ * refcount-shares the host sockets; it writes none of the identity fields.
+ *
+ * Same read-the-parent's-row discipline as the two helpers above: the child
+ * declares nothing; which process is the parent comes from current->real_parent
+ * (unforgeable), which survives both fork() and execve(), so the exec'd image's
+ * first registration still finds the channel-owning parent. A task with no
+ * registered VMS parent -- or a parent that holds no BG channels -- inherits
+ * nothing, and a later $QIO on a channel it never received fails honestly with
+ * SS$_IVCHAN (INV-6: no fabricated inheritance).
+ *
+ * LOCKING: vms_proc_hash_lock is held across the copy so the parent PCB cannot
+ * be freed under us; vms_bg_inherit() takes the parent's chan_lock nested
+ * inside it (hash-outer, chan-inner; BG ioctls never take hash_lock, so no
+ * inverse order exists). child is not yet in the hash, so it needs no lock.
+ */
+static void vms_proc_inherit_channels(struct vms_proc *child)
+{
+    struct task_struct *rp;
+    struct pid *parent_pid = NULL;
+    pid_t parent_tgid = 0;
+    struct vms_proc *parent;
+
+    rcu_read_lock();
+    rp = rcu_dereference(current->real_parent);
+    if (rp) {
+        parent_pid  = task_tgid(rp);
+        parent_tgid = task_tgid_nr(rp);
+    }
+    if (!parent_pid) {
+        rcu_read_unlock();
+        return;
+    }
+
+    spin_lock(&vms_proc_hash_lock);
+    hash_for_each_possible(vms_proc_hash, parent, hash_node, parent_tgid) {
+        if (parent->linux_pid != parent_tgid)
+            continue;
+        /* Recycle-safe: continue only the same parent INSTANCE (pinned struct
+         * pid), never a reused pid number. Same check as the helpers above. */
+        if (parent->pid_ref != parent_pid)
+            continue;
+        vms_bg_inherit(child, parent);
+        break;
+    }
+    spin_unlock(&vms_proc_hash_lock);
+    rcu_read_unlock();
+}
+
 struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity)
 {
     struct vms_proc *existing, *proc;
@@ -494,11 +554,30 @@ struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity)
      * kmem_cache_zalloc() above already zeroed p1_base/p1_limit. */
     spin_lock_init(&proc->p1_lock);
 
+    /*
+     * EXECUTIVE FORK/EXEC INHERITANCE OF BG CHANNELS (vms-3bf). Now that the
+     * child's channel lists and chan_lock are initialised (empty), copy in the
+     * parent's open BGn: channels -- by number, host socket refcount-shared --
+     * so a forked (and fork+exec'd) child can operate a connection its parent
+     * accepted, the fd-inheritance analogue a stock forking server (sshd's
+     * privsep sshd-session) needs over BGn:. Done here, before the child is
+     * published in the hash, so no reader observes a half-filled channel list;
+     * identity is NOT inherited -- the child keeps its own PCB (see
+     * vms_proc_inherit_channels). Unrelated tasks inherit nothing -> honest
+     * SS$_IVCHAN downstream, never a fabricated channel (INV-6).
+     */
+    vms_proc_inherit_channels(proc);
+
     /* Atomically check-and-insert under spinlock to avoid TOCTOU race */
     spin_lock(&vms_proc_hash_lock);
     hash_for_each_possible_rcu(vms_proc_hash, existing, hash_node, pid) {
         if (existing->linux_pid == pid) {
             spin_unlock(&vms_proc_hash_lock);
+            /* Release any BG channels vms_proc_inherit_channels() copied in,
+             * dropping their shared host-socket references, before discarding
+             * this never-published PCB -- otherwise the inherited socket refs
+             * leak (vms-3bf). */
+            vms_bg_release_all(proc);
             put_pid(proc->pid_ref);
             kmem_cache_free(vms_proc_cache, proc);
             return ERR_PTR(-EEXIST);
@@ -526,6 +605,8 @@ struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity)
     proc->vms_pid = shared_vms_pid ? shared_vms_pid : assign_vms_pid();
     if (proc->vms_pid == 0) {
         spin_unlock(&vms_proc_hash_lock);
+        /* Same inherited-channel unwind as the -EEXIST path above (vms-3bf). */
+        vms_bg_release_all(proc);
         put_pid(proc->pid_ref);
         kmem_cache_free(vms_proc_cache, proc);
         return ERR_PTR(-ENOSPC);

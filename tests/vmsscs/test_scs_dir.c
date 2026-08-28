@@ -788,6 +788,100 @@ static void test_mscp_server_builders(void)
     check(scs_dir_build_mscp_accept(&p, NULL) == -1, "build_mscp_accept NULL out rejected");
 }
 
+/*
+ * vms-257: OVMX's server-side accept of an inbound MSCP$DISK connect must be a
+ * GENUINE ACCEPT_REQ (MTYPE 2), not the REJECT_REQ (MTYPE 4) the old
+ * scs_dir_build_mscp_accept lays down. A real class driver read op-4 as a
+ * rejection, retried every ~10s with a fresh Con.ID, and never reached OPEN --
+ * so no MSCP command ever arrived and MOUNT blocked in DUDRIVER mount-verify
+ * (proven live, lab-2 vaxlab-0 2026-08-28). This pins the builder's message type
+ * against the shared SCS namespace, pins the connect/reject classification, and
+ * walks the whole server column of Figure 2-14 over a real CDT.
+ */
+static void test_mscp_response_is_accept_not_reject(void)
+{
+    printf("[vms-257: server accept is op=2 ACCEPT_REQ, not op=4 REJECT_REQ]\n");
+    struct scs_dir_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, af2_member, 6);
+    memcpy(p.src_mac, af2_joiner_hw, 6);
+    memcpy(p.src_logical, af2_joiner_logical, 6);
+    memcpy(p.peer_logical, af2_member, 6);
+    p.remote_conid = 0x3553000au;         /* member MSCP CLIENT handle */
+    p.local_conid  = SCS_DIR_OVMX_CONID;  /* an OVMX-issued server handle */
+    p.recv_ack = 7; p.send_seq = 9; p.incarnation = 0;
+
+    uint8_t rout[SCS_DIR_CONFIRM_FRAME_LEN];
+    memset(rout, 0xAA, sizeof(rout));
+    check(scs_dir_build_mscp_response(&p, rout) == 0, "build_mscp_response succeeds");
+
+    /* THE FIX: the server accept carries MTYPE 2 (ACCEPT_REQ), NOT 4. */
+    check(le16(rout + 14 + 46) == SCS_DIR_MSGTYPE_ACCEPT_REQ,
+          "server accept op [46:48] == 2 (ACCEPT_REQ), the vms-257 fix");
+    check(le16(rout + 14 + 46) != SCS_DIR_OP_ACCEPT,
+          "server accept op [46:48] is NOT 4 (the REJECT_REQ a real driver refused)");
+    /* Con.ID pair bound: remote = client handle, local = OVMX server handle. */
+    check(le32(rout + 64) == 0x3553000au, "accept remote Con.ID == member client handle");
+    check(le32(rout + 68) == SCS_DIR_OVMX_CONID, "accept local Con.ID == OVMX server handle");
+    check(scs_dir_build_mscp_response(&p, NULL) == -1, "build_mscp_response NULL out rejected");
+
+    /* The classifier must map that op to a connect-handshake event, NOT a reject. */
+    enum scs_conn_event ev;
+    check(scs_conn_event_for_msgtype(SCS_DIR_MSGTYPE_ACCEPT_REQ, &ev) == 1, "op 2 maps");
+    check(ev == SCS_CONN_EV_RCV_ACCEPT_REQ, "op 2 maps to RCV_ACCEPT_REQ, not a reject");
+    check(scs_conn_event_for_msgtype(SCS_DIR_MSGTYPE_CONNECT_REQ, &ev) == 1, "op 0 maps");
+    check(ev == SCS_CONN_EV_RCV_CONNECT_REQ,
+          "op 0 (the driver's connect) maps to RCV_CONNECT_REQ, NOT RCV_REJECT_RSP");
+
+    /* The old reject builder still, honestly, builds op-4 -- it is now the
+     * REJECT_REQ builder / FORM B fixture, not OVMX's server accept. */
+    uint8_t aout[SCS_DIR_CONFIRM_FRAME_LEN];
+    check(scs_dir_build_mscp_accept(&p, aout) == 0, "build_mscp_accept still builds");
+    check(le16(aout + 14 + 46) == SCS_DIR_OP_ACCEPT,
+          "scs_dir_build_mscp_accept remains the op-4 REJECT_REQ builder");
+
+    /* Walk the server column of Figure 2-14 over a real CDT: the driver's
+     * CONNECT_REQ drives CLOSED -> CONNECT REC (send CONNECT_RSP); our ACCEPT_REQ
+     * drives -> ACCEPT SENT; the driver's ACCEPT_RSP opens it. */
+    static struct scs_cdl cdl;
+    scs_cdl_init(&cdl);
+    struct scs_cdt *c = scs_cdl_alloc_conid(&cdl, SCS_DIR_OVMX_CONID, "MSCP$DISK",
+                                            "VMS$DISK_CL_DRVR", NULL);
+    check(c != NULL, "allocate the MSCP$DISK server CDT");
+    if (c == NULL) {
+        return;
+    }
+    scs_conn_fsm_init(c);
+    struct scs_conn_transition t;
+    t = scs_conn_fsm_step(c, SCS_CONN_EV_RCV_CONNECT_REQ);
+    check(!t.illegal && t.to == SCS_CONN_CONNECT_REC &&
+          t.action == SCS_CONN_ACT_SEND_CONNECT_RSP,
+          "inbound CONNECT_REQ (CLOSED/listen) -> CONNECT REC, send CONNECT_RSP"
+          " -- NOT an illegal reject");
+    t = scs_conn_fsm_step(c, SCS_CONN_EV_SVC_ACCEPT);
+    check(!t.illegal && t.to == SCS_CONN_ACCEPT_SENT &&
+          t.action == SCS_CONN_ACT_SEND_ACCEPT_REQ,
+          "invoking ACCEPT -> ACCEPT SENT, send ACCEPT_REQ");
+    t = scs_conn_fsm_step(c, SCS_CONN_EV_RCV_ACCEPT_RSP);
+    check(!t.illegal && t.to == SCS_CONN_OPEN,
+          "the driver's ACCEPT_RSP opens the server connection");
+
+    /* The misclassification, pinned: feeding RCV_REJECT_RSP into a listening
+     * CLOSED CDT is illegal -- the exact ILLEGAL-EVENT the live daemon logged
+     * when it mistook the driver's connect for a REJECT_RSP. */
+    struct scs_cdt *c2 = scs_cdl_alloc_conid(&cdl, SCS_DIR_OVMX_JOINER_CONID,
+                                             "MSCP$DISK", "VMS$DISK_CL_DRVR", NULL);
+    check(c2 != NULL, "allocate a second server CDT");
+    if (c2 == NULL) {
+        return;
+    }
+    scs_conn_fsm_init(c2);
+    t = scs_conn_fsm_step(c2, SCS_CONN_EV_RCV_REJECT_RSP);
+    check(t.illegal,
+          "RCV_REJECT_RSP in CLOSED is illegal -- misclassifying the connect as"
+          " this event is exactly the vms-257 stall");
+}
+
 static void test_mscp_disk_affirmative(void)
 {
     printf("[vms-760 SERVER-FIRST: MSCP$DISK lookup HIT result == name echo]\n");
@@ -965,6 +1059,7 @@ int main(void)
     test_response_msgtype_never_mirrors();
     test_build_connect_confirm();
     test_mscp_server_builders();
+    test_mscp_response_is_accept_not_reject();
     test_mscp_disk_affirmative();
     test_build_mscp_confirm5();
     printf("test_scs_dir: %d failure(s)\n", failures);

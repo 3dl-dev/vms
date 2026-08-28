@@ -6856,6 +6856,102 @@ static void test_mscp_srv_answers_a_command_on_a_live_connection(void)
           "the answer's P.CRF does not echo the command's (sec 5.1)");
 }
 
+/*
+ * (2a-0) vms-257: OVMX'S SERVER-FIRST ACCEPT IS A GENUINE ACCEPT_REQ (op-2),
+ * NOT A REJECT_REQ (op-4), AND THE CONNECTION REACHES OPEN HONESTLY.
+ *
+ * This is the live defect (lab-2 vaxlab-0, 2026-08-28): a real class driver
+ * opened an MSCP$DISK connect to OVMX's server, OVMX answered with op-4 (which
+ * vms-754 decoded as REJECT_REQ), the driver read that as a rejection and
+ * retried every ~10s with a fresh Con.ID, no MSCP command ever arrived, and
+ * MOUNT blocked in DUDRIVER mount-verify. The daemon meanwhile logged
+ * SCSD-I-MSCPSRVOK "confirmed" off the driver's op-5 REJECT_RSP while the
+ * server FSM was still CLOSED -- the INV-6 fabrication this fix removes.
+ *
+ * Fed against the pre-fix daemon this test reds three ways: the reply op is 4
+ * not 2, the server CDT stays CLOSED (the accept path never drove the FSM), and
+ * MSCPSRVOK fires off the op-5 with the FSM still CLOSED.
+ */
+static void test_mscp_srv_accept_is_accept_req_and_reaches_open(void)
+{
+    uint8_t req[sizeof(cap_vaxcluster_connect_req)];
+    subst_sysap_name(req, cap_vaxcluster_connect_req,
+                     sizeof(cap_vaxcluster_connect_req), "MSCP$DISK");
+
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_MSCP_SERVER") == 0, "unsetenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+
+    rx_feed(&r, req, sizeof(req));
+
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(ps->mscp_srv_bound == 1, "the daemon did not bind the MSCP$DISK server connection");
+
+    /* THE ACCEPT ON THE WIRE. The last frame the connect provoked is OVMX's
+     * op-2 CONNECT-RESPONSE (the op-1 echo precedes it). It MUST carry MTYPE 2
+     * (ACCEPT_REQ), never 4 (REJECT_REQ). */
+    uint16_t reply_op = (uint16_t)(scsd_test_last_frame[14 + 46] |
+                                   (scsd_test_last_frame[14 + 47] << 8));
+    CHECK(reply_op == SCS_DIR_MSGTYPE_ACCEPT_REQ,
+          "OVMX's server accept op [46:48] is %u, expected 2 (ACCEPT_REQ) --"
+          " op 4 (REJECT_REQ) is what a real driver refused (vms-257)",
+          (unsigned)reply_op);
+    CHECK(reply_op != SCS_DIR_OP_ACCEPT,
+          "OVMX's server accept is still the op-4 REJECT_REQ (vms-257 not fixed)");
+
+    /* THE FSM. The server connection must have advanced off CLOSED to ACCEPT
+     * SENT: the inbound CONNECT_REQ took it to CONNECT REC, our ACCEPT_REQ to
+     * ACCEPT SENT. Before vms-257 the accept path never drove the FSM, so this
+     * CDT stayed CLOSED. */
+    struct scs_cdt *mcdt = scs_cdl_lookup(&scsd_cdl, OVMX_MSCP_SERVER_CONID);
+    CHECK(mcdt != NULL, "no CDT at OVMX_MSCP_SERVER_CONID after the accept");
+    if (mcdt == NULL) {
+        return;
+    }
+    CHECK(scs_conn_state_of(mcdt) == SCS_CONN_ACCEPT_SENT,
+          "the server connection FSM is %s, expected ACCEPT SENT after sending"
+          " our ACCEPT_REQ",
+          scs_conn_state_name(scs_conn_state_of(mcdt)));
+
+    /* HONEST MSCPSRVOK: it must NOT be logged yet -- the connection is not OPEN,
+     * the client has not confirmed. */
+    CHECK(!rxlog_has("MSCPSRVOK"),
+          "SCSD-I-MSCPSRVOK fired while the server FSM was only ACCEPT SENT"
+          " (the INV-6 optimistic-confirm bug): '%s'", rxlog);
+
+    /* The client's op-3 ACCEPT_RSP (CONNECT-CONFIRM) confirms OUR accept and
+     * opens the connection. Addressed FROM the driver's handle TO OVMX's server
+     * handle. op 3 == SCS_ENV_MTYPE_ACCEPT_RSP, which the shared classifier
+     * steps as RCV_ACCEPT_RSP. */
+    struct scs_dir_params c3;
+    memset(&c3, 0, sizeof(c3));
+    memcpy(c3.dst_mac, r.rx.our_hw_mac, 6);
+    memcpy(c3.src_mac, vax1_hw_mac, 6);
+    memcpy(c3.src_logical, vax1_logical, 6);
+    memcpy(c3.peer_logical, r.rx.our_src_logical, 6);
+    c3.remote_conid = OVMX_MSCP_SERVER_CONID;      /* dest: OVMX server handle */
+    c3.local_conid = ps->mscp_srv_remote_conid;    /* src: the class driver */
+    c3.incarnation = ps->incarnation;
+    c3.recv_ack = ps->vc.seq.recv_seq;
+    c3.send_seq = (uint16_t)(ps->vc.seq.recv_seq + 1u);
+
+    uint8_t f3[SCS_DIR_CONFIRM_FRAME_LEN];
+    CHECK(scs_dir_build_connect_confirm(&c3, f3) == 0,
+          "the op-3 ACCEPT_RSP fixture frame failed to build");
+    rx_feed(&r, f3, sizeof(f3));
+
+    CHECK(scs_conn_state_of(mcdt) == SCS_CONN_OPEN,
+          "the server connection FSM is %s after the client's ACCEPT_RSP,"
+          " expected OPEN", scs_conn_state_name(scs_conn_state_of(mcdt)));
+    CHECK(ps->mscp_srv_confirmed == 1,
+          "the daemon did not record the server connection confirmed after OPEN");
+    CHECK(rxlog_has("MSCPSRVOK"),
+          "SCSD-I-MSCPSRVOK was not logged once the FSM genuinely reached OPEN:"
+          " '%s'", rxlog);
+}
+
 /* vms-600: a private little-endian u32 poke, matching scsd_mscp_le32()'s
  * read side. Needed because scs_mscp_build_command() only lays down the
  * 12-byte MSCP header + (for SCC only) its own parameter area -- struct
@@ -10758,6 +10854,9 @@ int main(void)
     /* vms-7fe: the SDIR queue as the daemon uses it, and its kill switch. */
     test_sdir_lookup_is_answered_from_the_queue();
     test_sdir_refuses_a_connect_request_for_an_unlisted_sysap();
+    /* vms-257: OVMX's server-first accept is a genuine op-2 ACCEPT_REQ that
+     * drives the connection to OPEN, not the op-4 REJECT_REQ that stalled MOUNT. */
+    test_mscp_srv_accept_is_accept_req_and_reaches_open();
     /* vms-34b: the MSCP$DISK server connection now answers, not just accepts. */
     test_mscp_srv_answers_a_command_on_a_live_connection();
     /* vms-600: with a real unit attached, the same live path serves real

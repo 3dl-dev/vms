@@ -1595,37 +1595,57 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 }
 
 /* --------------------------------------------------------------------------
- * Symbol-vector value -> callable code entry (the ONE resolver — vms-dc1).
+ * The Alpha Calling Standard, in ONE place: a symbol-vector value that names a
+ * PROCEDURE is its PROCEDURE VALUE (PV) = the address of the procedure's
+ * DESCRIPTOR (PDSC), NOT the code entry. Two things follow, and BOTH are needed
+ * to correctly reach an SV procedure (vms-dc1 gap-6 + vms-fe9 gap-7):
  *
- * On Alpha, a symbol-vector universal that names a PROCEDURE exports its
- * PROCEDURE VALUE (PV) per the Alpha Calling Standard, and a PV is the address
- * of the procedure's DESCRIPTOR (PDSC) — NOT the code entry. The runnable code
- * entry is PDSC$Q_ENTRY = *(PV+8). So `sv_find_named` / `ovmx_sv_resolve` return
- * base+value = the PV = the PDSC; that value is correct as a PV (it belongs in
- * R27 and in a caller's linkage pair, e.g. bind_imports' quad[1]), but it is
- * NOT directly callable: IMGACT is a native Linux-ELF Alpha binary where a C
- * function pointer is a code address, so casting a raw PV to a C function
- * pointer and calling it JUMPS INTO the PDSC and executes its first quadword (a
- * call_pal) -> SIGILL. That is gap-6 (and gaps 2/4 before it: the same
- * entry-vs-PDSC confusion recurring). This resolver maps a symbol-vector value
- * to its callable code entry so no site ever calls a raw PV again.
+ *   (1) the runnable code entry is PDSC$Q_ENTRY = *(PV+8), and
+ *   (2) the callee reaches its own linkage cells GP-relative FROM R27 = PV; a
+ *       VMS-native `alpha-dec-vms` procedure (musl is built to that ABI) does
+ *       e.g. `ldq t0,-64(t12)` (t12 == R27) at its first statement, so R27 must
+ *       hold the PV (the PDSC), not the entry.
  *
- * INVARIANT (gap-6 / prevents gap-7): on Alpha, NO site in IMGACT calls or jumps
- * to a raw symbol-vector value as code — every such call/jump routes the value
- * through imgact_sv_code_entry() first. (The final image transfer to a
- * VMS-standard main is the one call that legitimately hands the *PV* across, and
- * it does so through imgact_vms_transfer's asm, which sets R27=PV and jumps to
- * *(PV+8) per the calling standard — not a C function-pointer call.)
+ * `sv_find_named` / `ovmx_sv_resolve` return base+value = the PV = the PDSC.
+ * That value is correct AS a PV — it belongs in R27 and in a caller's linkage
+ * pair (bind_imports' quad[1]) — but it is NOT a callable code address. IMGACT
+ * is a native Linux-ELF Alpha binary where a C function pointer IS a code
+ * address, so:
+ *   - Casting a raw PV to a C fn-ptr and calling it JUMPS INTO the PDSC and runs
+ *     its first quadword (a call_pal) -> SIGILL. That was gap-6.
+ *   - Even after resolving the entry, calling that entry via a BARE C fn-ptr
+ *     leaves R27 = the entry, so the callee's linkage-relative first access
+ *     reads raw code and SIGSEGVs one instruction in. That is gap-7 — the OTHER
+ *     half of the same contract.
+ *
+ * TWO helpers keep the two uses cleanly separated:
+ *
+ *   imgact_sv_code_entry(pv)  — the ENTRY, for STORAGE/linkage only: building a
+ *     linkage pair whose eventual caller supplies R27 = PV itself (bind_imports
+ *     writes quad[0]=*(PV+8), quad[1]=PV). It NEVER produces a value that IMGACT
+ *     then calls via a bare C fn-ptr.
+ *
+ *   imgact_sv_call(pv, a0, a1) — a DIRECT CALL of an SV procedure that IMGACT
+ *     itself issues and that RETURNS (declared below; asm in
+ *     arch/alpha/vms_transfer.S). It sets R27 = PV AND jumps to *(PV+8), the
+ *     full standard call, so BOTH halves hold.
+ *
+ * INVARIANT (gap-6 + gap-7, unified): on Alpha, NO site in IMGACT CALLS an
+ * SV-value procedure via a bare C function pointer. Every direct call goes
+ * through imgact_sv_call (R27=PV + *(PV+8)); imgact_sv_code_entry is used ONLY
+ * to build/store a linkage entry, never for a direct call. (The final image
+ * transfer to a VMS-standard main likewise hands the PV across through
+ * imgact_vms_transfer's asm — same R27=PV + *(PV+8) contract, one-way to $EXIT.)
  *
  * On x86_64 / aarch64 / VAX a symbol-vector value is already the direct code
- * address (those ABIs have no PV/PDSC indirection), so this is a compile-time
- * no-op that returns its argument unchanged — the non-Alpha arches stay
- * byte-for-byte identical.
+ * address (no PV/PDSC indirection): imgact_sv_code_entry returns its argument
+ * unchanged, and every direct-call site is a plain typed C fn-ptr call — the
+ * non-Alpha arches stay byte-for-byte identical.
  *
- * Fail-honest (INV-6): pv == 0 means the symbol is absent; return 0 WITHOUT
- * dereferencing, so the caller's existing missing-symbol diagnostics fire rather
- * than a silent 0+8 deref. CLEAN-ROOM (rule 8): PDSC$Q_ENTRY at PV+8 is the
- * public Alpha Calling Standard, not VSI/HPE source.
+ * Fail-honest (INV-6): imgact_sv_code_entry on pv == 0 (absent symbol) returns 0
+ * WITHOUT dereferencing, so the caller's existing missing-symbol diagnostics
+ * fire rather than a silent 0+8 deref. CLEAN-ROOM (rule 8): PDSC$Q_ENTRY at PV+8
+ * and R27=PV are the public Alpha Calling Standard, not VSI/HPE source.
  * -------------------------------------------------------------------------- */
 static inline unsigned long imgact_sv_code_entry(unsigned long pv)
 {
@@ -1637,6 +1657,15 @@ static inline unsigned long imgact_sv_code_entry(unsigned long pv)
 	return pv;                              /* SV value is already code */
 #endif
 }
+
+#if defined(__alpha__)
+/* PV-preserving standard-call trampoline (arch/alpha/vms_transfer.S): sets
+ * R27 = pv (the PDSC), jumps to the entry *(pv+8), forwards a0->R16 / a1->R17,
+ * and RETURNS the callee's R0. This is how IMGACT calls an SV procedure on
+ * Alpha — never a bare C fn-ptr (which would leave R27 = entry, gap-7). */
+extern unsigned long imgact_sv_call(unsigned long pv,
+				    unsigned long a0, unsigned long a1);
+#endif
 
 /* Bind every .vms$imp import at `ih` into image `base`: map each named producer
  * (recursively — transitive imports), GSMATCH-resolve the universal by vector
@@ -1913,8 +1942,11 @@ static void reserve_exe_main_tls_over_crtl(struct ovmx_prod *crtl)
 	if (!copy_tls || !init_tp || !getlibc)
 		die_tlserr("exe-main-TLS re-drive (missing DECC$SHR universal)");
 
-	unsigned char *libc =
-		((unsigned char *(*)(void))imgact_sv_code_entry(getlibc))();
+#if defined(__alpha__)
+	unsigned char *libc = (unsigned char *)imgact_sv_call(getlibc, 0, 0);
+#else
+	unsigned char *libc = ((unsigned char *(*)(void))getlibc)();
+#endif
 	unsigned long align = g_exe.tls_align ? g_exe.tls_align : 8;
 
 	/* musl struct tls_module { next@0, image@8, len@16, size@24, align@32,
@@ -1949,9 +1981,13 @@ static void reserve_exe_main_tls_over_crtl(struct ovmx_prod *crtl)
 	/* __copy_tls(mem): allocate the TCB at mem+tls_size-0xc8, copy each
 	 * tls_head module's .tdata to TP-module.offset, build the DTV, return TP.
 	 * __init_tp(TP): write the self-ptr + __set_thread_area + canary/tid. */
-	unsigned long tp =
-		((unsigned long (*)(void *))imgact_sv_code_entry(copy_tls))(mem);
-	((void (*)(unsigned long))imgact_sv_code_entry(init_tp))(tp);
+#if defined(__alpha__)
+	unsigned long tp = imgact_sv_call(copy_tls, (unsigned long)mem, 0);
+	imgact_sv_call(init_tp, tp, 0);
+#else
+	unsigned long tp = ((unsigned long (*)(void *))copy_tls)(mem);
+	((void (*)(unsigned long))init_tp)(tp);
+#endif
 }
 
 /* --------------------------------------------------------------------------
@@ -2068,8 +2104,11 @@ static void publish_resident_producers(void)
 		list[n].sv     = g_prods[i].sv;
 		n++;
 	}
-	((uint32_t (*)(const struct imgact_prod_pub *, int))
-	 imgact_sv_code_entry(pub))(list, n);
+#if defined(__alpha__)
+	imgact_sv_call(pub, (unsigned long)list, (unsigned long)n);
+#else
+	((uint32_t (*)(const struct imgact_prod_pub *, int))pub)(list, n);
+#endif
 }
 
 /* Run musl's own libc bootstrap for a mapped C-RTL producer: program the thread
@@ -2080,7 +2119,11 @@ static void drive_crtl_init(struct ovmx_prod *crtl)
 	unsigned long init_libc = sv_find_named(crtl, "__init_libc");
 	if (!init_libc)
 		die_undsym("__init_libc");
-	((void (*)(char **, char *))imgact_sv_code_entry(init_libc))(g_envp, g_argv0);
+#if defined(__alpha__)
+	imgact_sv_call(init_libc, (unsigned long)g_envp, (unsigned long)g_argv0);
+#else
+	((void (*)(char **, char *))init_libc)(g_envp, g_argv0);
+#endif
 }
 
 /* Resolve one image's .vms$wimp (mapped at `wimp_addr`, cells inside the image

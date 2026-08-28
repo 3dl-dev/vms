@@ -20,7 +20,16 @@ export PATH="${PREFIX}/bin:${PATH}"
 
 # 64-bit pointers are mandatory: alpha-dec-vms defaults to 32-bit (VMS short
 # pointers); musl is LP64. Every object must be built -mpointer-size=64.
-CC_FLAGS="-mpointer-size=64"
+#
+# gap-4 (vms-5f9): musl's ./configure auto-detects and adds
+# `-ffunction-sections -fdata-sections` to CFLAGS_AUTO. On alpha-dec-vms that is
+# actively harmful: each function lands in its own `.text.<name>` section which
+# the alpha-dec-vms `as` mis-classifies as DATA, so the cc1-emitted `.align 3`
+# prologue gap is ZERO-filled (0x00000000 = a halt/SIGILL) instead of fnop-filled.
+# Under whole-archive linking (LINK.EXE pulls EVERY member) function-sections buys
+# nothing anyway, so force it off. User CFLAGS is applied last by musl's Makefile,
+# so `-fno-*` here overrides configure's CFLAGS_AUTO.
+CC_FLAGS="-mpointer-size=64 -fno-function-sections -fno-data-sections"
 # MUSL_EXTRA_CFLAGS (vms-7b96): appended to every compile. The primary path
 # leaves DST on (genuine .vmsdebug; LINK.EXE's EVAX reader skips it). Pass
 # MUSL_EXTRA_CFLAGS=-g0 to suppress DST so GNU nm/ar can read the objects — the

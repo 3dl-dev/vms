@@ -179,15 +179,15 @@ int main(void)
     }
 
     /* ---- fork the WRAPPED sshd: its listen/accept ride BGn: ----
-     * DIAGNOSTIC cycle: -ddd forces full debug logging to stderr AND disables
-     * sshd's self-re-exec, so (a) the fatal reason is legible and (b) if a bind
-     * over BGn: succeeds here it isolates re-exec fd-passing (which hands the
-     * listener veneer handle across dup2/exec) as the culprit. sshd stderr is
-     * merged into this test's stdout so it lands in the captured CI log. */
+     * argv[0] MUST be the absolute path: sshd re-execs itself through argv[0] and
+     * refuses ("sshd requires execution with an absolute path") otherwise. -D keeps
+     * it a persistent listener; -e + merging its stderr into this test's stdout puts
+     * any bind/listen failure over BGn: into the captured CI log. */
     pid_t sd = fork();
     if (sd == 0) {
+        char *av[] = { (char *)SRV_SSHD, "-D", "-e", "-f", (char *)SRV_SSHDCFG, NULL };
         dup2(STDOUT_FILENO, 2);
-        execl(SRV_SSHD, "sshd", "-ddd", "-e", "-f", SRV_SSHDCFG, (char *)NULL);
+        execv(SRV_SSHD, av);
         _exit(127);
     }
 

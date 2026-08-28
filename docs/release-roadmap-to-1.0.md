@@ -102,11 +102,11 @@ only our forks target.
 
 | Workstream | Epic | Lands by | Status | Done/Total | Blocked |
 |---|---|---|---|---:|---:|
-| Executive substrate | `vms-6b8` | 0.5 | in progress | 17/22 | 0 |
+| Executive substrate | `vms-6b8` | 0.5 | in progress | 17/23 | 0 |
 | Command-surface parity | `vms-8ad` | continuous | in progress | 37/73 | 0 |
 | Self-hosting toolchain | `vms-678` | 0.5→0.9 | in progress | 16/23 | 2 |
 | Cluster configuration | `vms-098` | 0.5→0.9 | in progress | 3/12 | 8 |
-| TCP/IP networking | `vms-67f` | 0.5→0.9 | in progress | 7/12 | 2 |
+| TCP/IP networking | `vms-67f` | 0.5→0.9 | in progress | 12/26 | 5 |
 | DECnet Phase IV | `vms-30e` | 0.9 | in progress | 5/11 | 5 |
 | Kernel substrate | `vms-19e` | 0.5 | in progress | 5/8 | 1 |
 | VAX as a first-class platform | `vms-8e8` | 0.5→0.9 | in progress | 86/95 | 1 |
@@ -213,6 +213,7 @@ only our forks target.
 
 ### Shipped releases (git tags)
 
+- **V0.5-8** — Point release.
 - **V0.5-7** — The GCC-port-on-the-real-executive release. The genuine alpha-dec-vms OpenVMS GCC port runs as an OVMX-Alpha image on the live /dev/vms executive — a P1 milestone up the do-it-like-VMS ladder: activated via IMGACT over the mounted ODS-2 ACP, decc$main binds its producers (DECC$SHR/LIBOTS) over the ACP, and crt0->main returns the executive sentinel $STATUS=0x0035A019 (faithful C$_EXIT1(3), control-verified). The last three activation gaps close honestly against the real runtime — LIBOTS OTS$ register-preservation, the C-RTL auxv/R0 path, and the wired alpha-dec-vms musl syscall backend (callsys ABI, native Alpha syscall numbers, wruniq TP) — with the faithfulness lock catching four real gaps that qemu-user had hidden. Cluster: the OVMX<->OVMX member/initiator role is complete — two OVMX nodes form a VMScluster against each other (rung-0 solicit, rung-VC 0x41 START initiate, rung-ADD 0x5b joiner accept) — and a live cross-node $ENQ round-trip A->B->A over SCS works through the distributed lock manager (granting nothing, INV-6). Networking: a real OpenSSH sshd session rides entirely on the executive's own primitives over BGn: — bind/listen/accept over BGn:, a materialized [bgconn] fd for the session, getpeername/setsockopt answered from the executive socket, and byte-exact data through IO$_READVBLK/WRITEVBLK, with no AF_UNIX and no raw host socket. QA'd under KVM boot-to-login with the full SHOW battery VMS-faithful (42/42 acceptance); the frozen-verify red legs confirmed no-new-vs-baseline (TCG-flake, vms-898a).
 - **V0.5-6** — Image activation proven end-to-end, and the filesystem converges on a single executive path. The do-it-like-VMS image activation now runs end-to-end against a real /dev/vms — a VMS-standard activation context on the live executive, not a userspace stand-in — the Tier-1 flagship for the runtime. Filesystem convergence: the legacy ODS-2 VFS driver is atomically retired across Linux, NetBSD, and the shared core (~16k lines removed), leaving a single Files-11 ACP executive path. Toolchain hardening up the do-it-like-VMS ladder: the Alpha and VAX cross toolchains now pull source-hash-keyed prebuilt images from ghcr (killing the ftp.gnu.org build flake), the Alpha DECC$SHR vector is enumerated from the linker's own EVAX read view, and the multi-TU LINK.EXE self-host fixpoint is ported from BUILD.COM to MMK (additive, gen2==gen3 proven). VAX substrate: the exec_socket_* seam moves BGn: networking into kernel-core with Linux and NetBSD backends, and vms_stdio/vms_futex build on VAX to close the freestanding-facility gap. Cut through the all-architectures gate (x86_64, aarch64, VAX, and Alpha green-by-SHA on the tagged commit).
 - **V0.5-5** — VAX login end-to-end, executive faithfulness, and Alpha toolchain hardening — the first release cut through an all-architectures gate (x86_64, aarch64, VAX, and Alpha all proven green on the exact commit before tagging). The VAX installed single-disk authenticates SYSTEM/MANAGER to a DCL prompt, and RUN /DETACHED now names the console OPA0: instead of the raw substrate path. The executive-boundary audit tracer is wired operational at image activation, so a raw syscall an image issues becomes a visible finding rather than a silent bypass. Alpha toolchain: a DST-tolerant object reader, container-format-aware C-RTL architecture auto-detection, LINK.EXE hard-errors a strong-vs-strong duplicate definition on the EVAX path (exempting same-library members, VMS first-module-wins), the stdio streams export as data universals, and $CREPRC fails honestly when a UIC or privilege override cannot reach the executive row.
@@ -224,7 +225,6 @@ only our forks target.
 - **V0.4-6** — Real OpenSSH key exchange over the executive network path, genuine ODS-2 read/write/INITIALIZE foundations, cluster rejoin proof, VAX co-release, and a sharded kernel-executive gate.
 - **V0.4-5** — Feature pack marching toward 0.5.
 - **V0.4-4** — Feature pack marching toward 0.5.
-- **V0.4-3** — Feature pack marching toward 0.5.
 
 ### rd-labeling gaps (fix these to keep the source accurate)
 

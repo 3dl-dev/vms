@@ -377,6 +377,15 @@ jobs:
               - 'tests/qemu/Dockerfile.dlm-harness-h3'
               - 'tests/qemu/init_dlm_h3.sh'
               - 'tests/qemu/run_dlm_harness_h3.sh'
+              # H4 (rd vms-e8f1 / vms-17c, THE CROWN): after the join, node A
+              # issues a cross-node $ENQ for a resource mastered on node B; node
+              # B DISPATCHES it to its REAL executive, which GRANTS it (rung-2
+              # foundation grant, vms_lock_dlm_xnode_dispatch). Proves the GRANT
+              # (SS$_NORMAL, the 2296->1 flip) AND that B genuinely holds the lock
+              # for A's CSID (SCSD-I-DLMHELD held_for_csid).
+              - 'tests/qemu/Dockerfile.dlm-harness-h4'
+              - 'tests/qemu/init_dlm_h4.sh'
+              - 'tests/qemu/run_dlm_harness_h4.sh'
               - 'tests/cluster/two-ovmx/mk_sysgen_scratch.py'
               - 'tests/cluster/two-ovmx/verdict.sh'
 
@@ -1697,6 +1706,52 @@ jobs:
           exit "$rc"
 
   # -----------------------------------------------------------------------
+  # console-newline-spam-e2e (vms-dec): the boot-console coverage CI lacked.
+  # Every other boot gate waits for "Username:" and only THEN feeds input, so
+  # none ever provoked the echo that produced the operator-reported boot
+  # "newline spam" (the operator's own RETURN keystrokes, mashed at a slow
+  # boot, echoed by the cooked-mode console tty as blank lines). This gate
+  # TYPES RETURNs DURING the boot, before the prompt appears, and asserts no
+  # run of echoed blank lines precedes "Username:" while login still works
+  # (tests/qemu/test_console_boot_no_newline_spam.sh).
+  console-newline-spam-e2e:
+    name: Console boot — no echoed-RETURN newline spam before Username: (vms-dec)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.kernel == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image (qemu tooling + the pre-mastered distribution disk)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Console newline-spam gate — hammer RETURN during boot, assert no echoed blank-line spam
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_console_boot_no_newline_spam_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: console_boot_no_newline_spam_e2e SKIPPED in CI — this gate must actually boot and type during boot, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
   # cut-release-vax-gate (rd vms-ca5, epic vms-f10; "R2 release parity",
   # docs/design-vax-mainstream-release.md). FAST per-PR complement to the
   # heavy cut-release-reproducible / release-acceptance-e2e jobs above (which
@@ -2454,6 +2509,84 @@ jobs:
         with:
           name: dlm-harness-h3-artifacts
           path: h3out/
+          if-no-files-found: ignore
+
+  # -----------------------------------------------------------------------
+  # DLM Harness H4 (rd vms-e8f1 / vms-17c) -- THE CROWN: the real cross-node GRANT.
+  # tests/qemu/Dockerfile.dlm-harness-h4 builds the SAME real-executive ingredients
+  # as H3 (vms.ko -- now with the rung-2 grant in vms_lock_dlm_xnode_dispatch --
+  # SCSD.EXE static musl + sca_l2probe + the two OVMXA/OVMXB SYSGEN stores) and
+  # boots the SAME TWO QEMU nodes, each with a real /dev/vms, on one shared L2 via a
+  # QEMU `socket` (mcast) netdev (NO host bridge, NO privilege). It runs the SAME
+  # join sequencer so both nodes reach VMS$VAXcluster membership, then arms node A's
+  # cross-node $ENQ (OVMX_DLM_ENQ=RESONE) for a resource mastered on node B. Node B
+  # DISPATCHES it to its REAL executive, which GRANTS it. H4 PASS iff (a) B's
+  # dispatch returns 0x00000001 (SS$_NORMAL -- GRANTED; the 2296->1 flip), NOT 2296
+  # and NOT 2680, AND (b) B's OWN resource DB (GET_RESMASTER, printed as
+  # SCSD-I-DLMHELD) shows the lock GENUINELY HELD for A's CSID (found=1,
+  # is_local_master=1, n_granted>=1, held_for_csid=A). INV-6: the verdict READS B's
+  # grant + held-lock state from B's own log; a fabricated grant cannot pass.
+  # -----------------------------------------------------------------------
+  dlm-harness-h4:
+    name: DLM Harness H4 (cross-node $ENQ GRANTED -> SS$_NORMAL, B holds lock for A, QEMU)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.dlm_harness == 'true' }}
+    runs-on: ubuntu-latest
+    # vms.ko + SCSD.EXE build + TWO QEMU boots, each running the join sequencer +
+    # the one-shot $ENQ for ~90s. The inner H4_WALL_TIMEOUT (600s) is the real
+    # budget; this is the OUTER bound so a genuine hang surfaces.
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build DLM harness H4 image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu/Dockerfile.dlm-harness-h4
+          push: false
+          load: true
+          tags: ovmx-dlm-h4:latest
+          cache-from: type=gha,scope=dlm-harness-h4
+          cache-to: type=gha,mode=max,scope=dlm-harness-h4
+
+      - name: Boot TWO QEMU nodes, drive node A's cross-node $ENQ and grant it on B
+        run: |
+          set +e
+          # GitHub Linux runners expose /dev/kvm; pass it through so the two
+          # guests boot under KVM (much faster than TCG). Fall back cleanly if
+          # a runner lacks it -- the harness auto-detects and uses TCG.
+          KVM=""
+          [ -e /dev/kvm ] && KVM="--device /dev/kvm"
+          mkdir -p "$PWD/h4out"
+          RAW=$(docker run --rm $KVM -v "$PWD/h4out:/out" ovmx-dlm-h4:latest 2>&1)
+          RC=$?
+          set -e
+          # QEMU serial emits CRLF; strip \r so the line-anchored match holds.
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: DLM harness H4 exited nonzero"
+            exit 1
+          fi
+          if printf '%s\n' "$OUTPUT" | grep -qE '^  DLM HARNESS H4 PASSED'; then
+            echo "PASS: node A's cross-node \$ENQ was GRANTED by node B's real executive (rc=SS\$_NORMAL), and B holds the lock for A's CSID."
+          else
+            echo "FAIL: H4 verdict 'DLM HARNESS H4 PASSED' not found."
+            printf '%s\n' "$OUTPUT" | grep -E 'verdict inputs|B_DISPATCH_STATUS|B_HELD|held_for_csid|highest join rung|VAXCLMEMBER|DLMENQ|DLMRX|DLMHELD|H4-NODE|MISS:|FAIL:' || true
+            exit 1
+          fi
+
+      - name: Upload H4 pcap + node logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dlm-harness-h4-artifacts
+          path: h4out/
           if-no-files-found: ignore
 
   # -----------------------------------------------------------------------
@@ -7032,6 +7165,97 @@ jobs:
         run: tests/lab-vax/run-boot.sh sysboot-negctl
 
   # -----------------------------------------------------------------------
+  # vax-dcl-acceptance (rd vms-f2c, epic vms-8954). Co-release ACCEPTANCE PARITY,
+  # the VAX third of {x86_64, Alpha, VAX}: the SAME ground-source DCL/SHOW
+  # acceptance battery x86_64 runs (dcl-acceptance-e2e) and Alpha runs
+  # (alpha-dcl-acceptance) -> the shared tests/qemu/lib/dcl_acceptance_battery.sh,
+  # driven here over the OVMX/NetBSD-vax SIMH runtime via run-boot.sh's
+  # `acceptance' mode. Boot the real slim single disk, log in SYSTEM/MANAGER, run
+  # the commands a user types, ASSERT VMS-FAITHFUL output (Rule 1). One shared
+  # battery, three arches, no drift. A RED assertion here is a real VAX
+  # faithful-output gap to fix, each naming its bug -- never weaken the shared
+  # battery to go green.
+  #
+  # HEAVY-EMULATOR TIER (schedule || workflow_dispatch), same shape as
+  # netbsd-vax-sysboot above -- VAX under SIMH is a ~1980s CPU emulated, so a full
+  # boot + login + the command battery is many minutes; it stays OFF the per-PR
+  # path (the per-PR VAX guard is netbsd-vax-simh + the module gates). The
+  # conductor fires it via workflow_dispatch on the frozen SHA for a green-by-SHA
+  # reap; the nightly schedule catches drift on main.
+  # -----------------------------------------------------------------------
+  vax-dcl-acceptance:
+    name: OVMX/NetBSD-vax DCL/SHOW acceptance — boot, run the commands a user types, assert VMS-faithful (vms-f2c)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
+    needs: [changes, netbsd-vax-simh]
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      KBUILD_DIR: /tmp/ovmx-vax-acceptance-kbuild
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
+        uses: actions/cache/restore@v4
+        with:
+          path: .boot-cache/lab-vax
+          key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
+
+      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX)
+        uses: actions/cache@v4
+        with:
+          path: .boot-cache/lab-vax/boot-artifacts/netbsd-OVMX
+          key: vax-modular-kernel-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+
+      - name: Build the lab-vax image (SIMH + anita)
+        run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
+
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: "Acceptance gate — boot the OVMX/NetBSD-vax single disk, log in SYSTEM/MANAGER, run the shared DCL/SHOW battery, assert VMS-faithful output"
+        env:
+          CROSS_IMAGE: ovmx-cross-vax
+          LAB_IMAGE: ovmx-vax-lab
+        run: tests/lab-vax/run-boot.sh acceptance
+
+  # -----------------------------------------------------------------------
   # alpha-boot-login (rd vms-341, epic vms-8954). The Alpha member of the
   # cut-time release-acceptance set: proves the OVMX/Linux-Alpha (LP64) runtime
   # boots to an AUTHENTICATED interactive DCL "$" over the genuine Files-11
@@ -7092,6 +7316,52 @@ jobs:
 
       - name: "Login gate — boot qemu-system-alpha, authenticate SYSTEM/MANAGER against the binary SYSUAF over the ACP, land on an interactive DCL $, run SHOW TIME"
         run: tools/cross-alpha/run-boot-alpha.sh login
+
+  # -----------------------------------------------------------------------
+  # alpha-dcl-acceptance (rd vms-f2c, epic vms-8954). Co-release ACCEPTANCE
+  # PARITY: the SAME ground-source DCL/SHOW acceptance battery x86_64 runs
+  # (dcl-acceptance-e2e -> the shared tests/qemu/lib/dcl_acceptance_battery.sh),
+  # driven over qemu-system-alpha -- boot the real runtime, log in
+  # SYSTEM/MANAGER, run the commands a user types, assert VMS-FAITHFUL output
+  # (Rule 1). One shared battery, both arches, no drift. HEAVY-EMULATOR TIER
+  # (schedule || workflow_dispatch) like alpha-boot-login; the ~25-30 min full
+  # boot keeps it off the PR path (the per-PR Alpha guard is the vms-5af modpost
+  # smoke). A RED assertion here is a real Alpha faithful-output gap to fix, each
+  # naming its bug -- never weaken the shared battery to go green.
+  # -----------------------------------------------------------------------
+  alpha-dcl-acceptance:
+    name: OVMX/Alpha DCL/SHOW acceptance — boot, run the commands a user types, assert VMS-faithful (vms-f2c)
+    needs: changes
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: "Acceptance gate — boot qemu-system-alpha, log in SYSTEM/MANAGER, run the DCL/SHOW battery, assert VMS-faithful output"
+        run: tools/cross-alpha/run-boot-alpha.sh acceptance
 
   # -----------------------------------------------------------------------
   # alpha-arith-hparith (rd vms-db3, epic vms-8954). The STANDING green-by-SHA

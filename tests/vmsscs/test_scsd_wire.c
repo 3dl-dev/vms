@@ -10747,7 +10747,7 @@ static void test_readmit_verdict_classifies_the_rejoin_frontier(void)
  * and DISPATCHED to the executive's cross-node handler. This is the "node B
  * receives + decodes + dispatches" half of the transport, proven end-to-end
  * within the daemon (the /dev/vms ioctl itself is proven separately against a
- * real executive by tests/qemu/test_kmod_dlm_xnode.c; here the dispatch is
+ * real executive by tests/qemu/test_syssvc_dlm_xnode.c; here the dispatch is
  * captured via the SCSD_UNIT_TEST seam, parallel to send_frame_raw's).
  */
 static void test_dlm_message_reaches_the_lock_handler_over_scs(void)

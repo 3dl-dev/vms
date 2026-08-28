@@ -63,8 +63,10 @@ $! ported (OVMX.CONF had ZERO code readers on main; verified again here).
 $!
 $ SET NOON
 $!
-$! Display system time
-$ SHOW TIME
+$! (vms-dec) No "SHOW TIME" here: it emitted a stray bare date line in the
+$! middle of the boot, and the boot identification banner already prints the
+$! date. Real VMS site-startup has no SHOW TIME, and the oracle boot capture
+$! (docs/design-boot-faithful.md sec3.5) shows none.
 $!
 $! Define system-wide logical names.
 $!

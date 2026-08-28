@@ -7865,15 +7865,39 @@ static void scsd_mscp_srv_msg_input(struct scs_cdt *cdt, const void *msg,
 static unsigned long rx_dlm_dispatched = 0; /* DLM frames decoded + dispatched */
 
 /*
- * scsd_dlm_dispatch_to_executive - hand ONE decoded cross-node DLM request to
- * the kernel lock manager over /dev/vms. Returns the executive status (rung 1:
- * SS$_UNSUPPORTED, 2296). FAIL-HONEST (Rule 9 / INV-6): if /dev/vms cannot be
- * opened or the ioctl fails, returns SS$_NOSUCHDEV (2680) -- it NEVER fabricates
- * a grant. scsd is a glibc process, so it issues a direct POSIX ioctl here
- * rather than the freestanding vms_kif client.
+ * Held-lock readback (DLM rung 2 / vms-e8f1). After the master GRANTS an inbound
+ * cross-node $ENQ, scsd_dlm_dispatch_to_executive() reads the master's OWN
+ * resource DB back via VMS_IOCTL_GET_RESMASTER and fills this, so node B can
+ * PROVE the grant is genuine: the resource exists, is mastered here, and holds a
+ * lock FOR the remote requester's CSID -- not merely that the ENQ returned
+ * SS$_NORMAL. `queried` is 1 iff the readback ran (only on a granted ENQ).
  */
-static uint32_t scsd_dlm_dispatch_to_executive(const struct scs_dlm_msg *m)
+struct scsd_dlm_held {
+    int      queried;
+    uint32_t found;
+    uint32_t master_csid;
+    uint32_t is_local_master;
+    uint32_t n_granted;
+    uint32_t held_for_csid;   /* remote_holder_csid: whose CSID the grant is for */
+};
+
+/*
+ * scsd_dlm_dispatch_to_executive - hand ONE decoded cross-node DLM request to
+ * the kernel lock manager over /dev/vms. Returns the executive status: a granted
+ * cross-node $ENQ now yields SS$_NORMAL (1) (DLM rung 2, vms-e8f1); a later-rung
+ * op (DEQ/GRANT/BLKAST) yields SS$_UNSUPPORTED (2296). FAIL-HONEST (Rule 9 /
+ * INV-6): if /dev/vms cannot be opened or the ioctl fails, returns SS$_NOSUCHDEV
+ * (2680) -- it NEVER fabricates a grant. scsd is a glibc process, so it issues a
+ * direct POSIX ioctl here rather than the freestanding vms_kif client.
+ *
+ * `held` (may be NULL): on a GRANTED ENQ, filled from a follow-up GET_RESMASTER
+ * on the SAME registered fd so the caller can print the held-lock proof.
+ */
+static uint32_t scsd_dlm_dispatch_to_executive(const struct scs_dlm_msg *m,
+                                               struct scsd_dlm_held *held)
 {
+    if (held)
+        memset(held, 0, sizeof(*held));
 #ifdef SCSD_UNIT_TEST
     /* Capture seam, parallel to send_frame_raw's: record the decoded request so
      * a test can assert node B decoded + dispatched the right fields. The real
@@ -7894,7 +7918,7 @@ static uint32_t scsd_dlm_dispatch_to_executive(const struct scs_dlm_msg *m)
      * registered proc (it delivers a peer's request, not the daemon's own lock),
      * but the DEVICE does: talking to /dev/vms at all requires the standard
      * REGISTER handshake every other client performs (see
-     * tests/qemu/test_kmod_dlm_xnode.c, which REGISTERs before it dispatches).
+     * tests/qemu/test_syssvc_dlm_xnode.c, which REGISTERs before it dispatches).
      * Without this, scsd's dispatch reached the device but was rejected before
      * the handler, so a REAL executive returned SS$_NOSUCHDEV(2680) exactly like
      * a missing device -- the two failures were indistinguishable and the
@@ -7931,6 +7955,27 @@ static uint32_t scsd_dlm_dispatch_to_executive(const struct scs_dlm_msg *m)
         close(fd);
         return 2680u; /* honest failure, not a grant */
     }
+
+    /* DLM rung 2 (vms-e8f1): if the master GRANTED this cross-node $ENQ, read its
+     * OWN resource DB back on the SAME registered fd so the caller can prove the
+     * grant is genuine -- the resource is mastered here and a lock is held FOR
+     * the remote requester's CSID (remote_holder_csid). This is a READ of the
+     * executive's real lock state, never a fabrication (INV-6). */
+    if (held != NULL && args.op == VMS_DLM_OP_ENQ && args.status == 1u) {
+        struct vms_resmaster_args rm;
+        memset(&rm, 0, sizeof(rm));
+        memcpy(rm.resnam, args.resnam, sizeof(rm.resnam));
+        rm.resnam[sizeof(rm.resnam) - 1] = '\0';
+        if (ioctl(fd, VMS_IOCTL_GET_RESMASTER, &rm) == 0) {
+            held->queried = 1;
+            held->found = rm.found;
+            held->master_csid = rm.master_csid;
+            held->is_local_master = rm.is_local_master;
+            held->n_granted = rm.n_granted;
+            held->held_for_csid = rm.remote_holder_csid;
+        }
+    }
+
     close(fd);
     return args.status;
 #endif
@@ -7970,14 +8015,33 @@ static void scsd_dlm_srv_msg_input(struct scs_cdt *cdt, const void *msg,
      * rung-1 dispatch stub grants nothing), SS$_NOSUCHDEV when no executive is
      * present (the Docker harness -- Rule 9: Docker is not a runtime, there is
      * no /dev/vms). Either way it is HONEST -- never a fabricated grant. */
-    uint32_t status = scsd_dlm_dispatch_to_executive(&v.msg);
+    struct scsd_dlm_held held;
+    uint32_t status = scsd_dlm_dispatch_to_executive(&v.msg, &held);
     rx_dlm_dispatched++;
     log_ts(stdout);
     printf(" SCSD-I-DLMRX, cross-node %s from CSID=%u resnam='%.*s'"
-           " -> executive status=0x%08X\n",
+           " -> executive status=0x%08X%s\n",
            scs_dlm_op_name(v.msg.op), (unsigned)v.msg.req_csid,
-           (int)v.msg.namelen, v.msg.resnam, (unsigned)status);
+           (int)v.msg.namelen, v.msg.resnam, (unsigned)status,
+           status == 1u ? " (GRANTED)" : "");
     fflush(stdout);
+
+    /* DLM rung 2 (vms-e8f1): the HELD-LOCK PROOF. On a GRANTED cross-node $ENQ,
+     * print what the master's OWN resource DB (GET_RESMASTER) reports -- the
+     * resource is mastered HERE and a lock is genuinely held FOR the remote
+     * requester's CSID. This is the machine-checkable "B holds a real lock for
+     * A's CSID" the H4 verdict reads; it is a READ of executive state, never a
+     * fabricated line (INV-6). */
+    if (held.queried) {
+        log_ts(stdout);
+        printf(" SCSD-I-DLMHELD, master DB: resnam='%.*s' found=%u"
+               " is_local_master=%u n_granted=%u held_for_csid=%u"
+               " master_csid=%u\n",
+               (int)v.msg.namelen, v.msg.resnam, (unsigned)held.found,
+               (unsigned)held.is_local_master, (unsigned)held.n_granted,
+               (unsigned)held.held_for_csid, (unsigned)held.master_csid);
+        fflush(stdout);
+    }
 
     /* vms-164d (DLM rung-1b): THE B->A RESPONSE LEG. The executive's real status
      * travels back to the requester as an SCS_DLM_OP_GRANT frame on the same VC.
@@ -8020,9 +8084,11 @@ static void scsd_dlm_srv_msg_input(struct scs_cdt *cdt, const void *msg,
         ps->dlm_srv_responses++;
         log_ts(stdout);
         printf(" SCSD-I-DLMGRANT, sent GRANT status=0x%08X back to CSID=%u"
-               " (local=0x%08X remote=0x%08X) -- honest response, no grant\n",
+               " (local=0x%08X remote=0x%08X) -- %s\n",
                (unsigned)status, (unsigned)v.msg.req_csid,
-               (unsigned)PS_DLM_SERVER_CONID(ps), (unsigned)v.local_conid);
+               (unsigned)PS_DLM_SERVER_CONID(ps), (unsigned)v.local_conid,
+               status == 1u ? "cross-node lock GRANTED (held for requester)"
+                            : "honest response, request not granted");
         fflush(stdout);
     }
 }
@@ -8055,9 +8121,12 @@ static void scsd_dlm_cli_msg_input(struct scs_cdt *cdt, const void *msg,
     log_ts(stdout);
     printf(" SCSD-I-DLMDONE, cross-node $ENQ round-trip COMPLETE: peer"
            " (master CSID=%u) answered GRANT status=0x%08X resnam='%.*s'"
-           " -- LIVE A->B->A transport proven; lock NOT granted (honest)\n",
+           " -- LIVE A->B->A transport proven; %s\n",
            (unsigned)v.msg.master_csid, (unsigned)v.msg.status,
-           (int)v.msg.namelen, v.msg.resnam);
+           (int)v.msg.namelen, v.msg.resnam,
+           v.msg.status == 1u
+               ? "cross-node lock GRANTED by the master (SS$_NORMAL)"
+               : "lock NOT granted (honest)");
     fflush(stdout);
 }
 
@@ -13373,21 +13442,27 @@ int main(int argc, char **argv)
              * with SS$_NOSUCHDEV (2680). It fabricates NOTHING (INV-6): it
              * prints verbatim whatever scsd_dlm_dispatch_to_executive() got.
              *
-             * It builds a synthetic-but-well-formed ENQ request (the same shape
+             * It builds a synthetic-but-well-formed DEQ request (the same shape
              * scs_dlm_parse hands scsd_dlm_srv_msg_input on a real received
              * frame) so the executive's VMS_IOCTL_DLM_XNODE handler is reached
-             * exactly as an inbound cross-node ENQ would reach it -- opens no
+             * exactly as an inbound cross-node request would reach it -- opens no
              * socket, needs no CAP_NET_RAW, touches no wire. The 2296-not-2680
-             * flip is the machine-checkable proof. */
+             * flip is the machine-checkable proof.
+             *
+             * DEQ (not ENQ) on purpose: DLM rung 2 (vms-e8f1) makes a compatible
+             * cross-node ENQ GRANT (SS$_NORMAL), which would master + hold a lock
+             * as a side effect of a self-test. DEQ (cross-node release) is a
+             * LATER rung that still returns SS$_UNSUPPORTED (2296) and touches no
+             * lock state -- the ideal side-effect-free "executive reached, honest
+             * status" probe H0 needs. */
             struct scs_dlm_msg m;
             memset(&m, 0, sizeof(m));
-            m.op = SCS_DLM_OP_ENQ;
-            m.mode = LCK$K_EXMODE;
-            m.flags = 0x0011; /* VALBLK|SYSTEM, as test_kmod_dlm_xnode drives */
+            m.op = SCS_DLM_OP_DEQ;
+            m.mode = LCK$K_NLMODE;
             m.req_lkid = 0x00040011u;
-            m.master_lkid = 0;
+            m.master_lkid = 0x00080002u;
             m.req_csid = 1025u;
-            m.master_csid = 0; /* resolve via directory */
+            m.master_csid = 1026u;
             {
                 static const char *res = "DLMXNODE1";
                 size_t rn = strlen(res);
@@ -13395,10 +13470,8 @@ int main(int argc, char **argv)
                 memcpy(m.resnam, res, rn);
                 m.namelen = (uint8_t)rn;
             }
-            for (size_t vi = 0; vi < LCK$C_VALBLK_LEN; vi++)
-                m.valblk[vi] = (uint8_t)(0xA0 + vi);
 
-            uint32_t status = scsd_dlm_dispatch_to_executive(&m);
+            uint32_t status = scsd_dlm_dispatch_to_executive(&m, NULL);
             printf("SCSD-I-DLMSELFTEST, executive DLM dispatch status=%u"
                    " (0x%08X)\n", (unsigned)status, (unsigned)status);
             fflush(stdout);

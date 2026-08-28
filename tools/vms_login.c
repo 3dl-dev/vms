@@ -530,6 +530,28 @@ static int console_login(void)
      * operator's RETURN guarantees the boot banner has finished printing
      * before the prompt appears -- banner first, then Username:, as on VMS.
      *
+     * NOTE (vms-dec): that banner-ordering rationale is now STALE. vms-1fb
+     * moved the banner to print from PID 1 (print_banner_once() in
+     * src/ovmx_init/ovmx_init.c) BEFORE run_startup(), so the banner has
+     * already been emitted by the time JOB_CONTROL forks this LOGINOUT. The
+     * oracle (docs/design-boot-faithful.md sec3.5) boots straight to
+     * "Username:" with no "press RETURN". Removing the wake entirely is the
+     * faithful end state, but LOGINOUT runs concurrently with the tail of
+     * STARTUP.COM, so a bare removal risks "Username:" interleaving a startup
+     * line, and dropping the tcflush below would re-expose the "empty
+     * username machine-gun" it guards. That is tracked as a follow-up; this
+     * rung keeps the wake.
+     *
+     * THE NEWLINE-SPAM FIX (vms-dec) does NOT live here: the operator hammers
+     * RETURN during the WHOLE slow boot, but LOGINOUT is not forked until
+     * STARTUP.COM's tail, so by the time this function runs almost all the
+     * mashing has already happened and been echoed by the console tty.
+     * Silencing the echo therefore belongs in PID 1, which owns the console
+     * for the whole boot (boot_console_disable_echo() in
+     * src/ovmx_init/ovmx_init.c). This function's only role in that fix is to
+     * RE-ENABLE ECHO just before "Username:" (below), so the operator's typed
+     * username shows again.
+     *
      * CONSOLE ONLY. The wait is gated on an interactive terminal: JOB_CONTROL
      * execs this image with stdin bound to the physical console (OPA0: ->
      * /dev/console, SYS$STARTUP:JOB_CONTROL_STARTUP.COM), so isatty() is true
@@ -571,6 +593,25 @@ static int console_login(void)
          * tcflush() discards the kernel tty input queue directly.
          */
         tcflush(STDIN_FILENO, TCIFLUSH);
+        /*
+         * RE-ENABLE ECHO for the real "Username:" prompt (vms-dec). PID 1
+         * turned the console's ECHO OFF for the whole boot so the operator's
+         * RETURN keystrokes, mashed while waiting on the slow console, were not
+         * echoed as blank-line "newline spam" (boot_console_disable_echo() in
+         * src/ovmx_init/ovmx_init.c). This is the point where the operator's
+         * typing must show again, so turn ECHO back on. Idempotent and
+         * console-only (inside the isatty() guard): a scripted/piped LOGINOUT
+         * never reaches here. If the console still had ECHO on (some substrate
+         * where PID 1's disable did not take), this is a harmless no-op and the
+         * prompt still echoes.
+         */
+        {
+            struct termios t;
+            if (tcgetattr(STDIN_FILENO, &t) == 0) {
+                t.c_lflag |= (tcflag_t)ECHO;
+                tcsetattr(STDIN_FILENO, TCSANOW, &t);
+            }
+        }
     }
 
     /* SYS$ANNOUNCE -- displayed once before the first Username: prompt.

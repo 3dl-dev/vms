@@ -433,6 +433,7 @@ lock-valblk-grant-not-delivered
 lock-enq-immediate-grant-status-wrong
 lock-deq-status-wrong
 lock-convert-mode-not-updated
+dlm-xnode-mode-unvalidated
 resdir-master-csid-not-reported
 devtab-owner-not-recorded
 devtab-alloc-not-recorded
@@ -1564,6 +1565,31 @@ EOF
         why)          echo "\$ENQ/CONVERT's immediate-conversion branch stops updating lock->granted_mode to the newly-requested mode (the assignment deleted). The call still reports SS\$_NORMAL -- conversion \"succeeded\" -- but GETLKI on the same lock afterward reads back the OLD granted mode, not the one just requested.";;
         require_fail) cat <<'EOF'
 granted mode is CR
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    dlm-xnode-mode-unvalidated)
+        case "$_f" in
+        facility)     echo "distributed lock manager -- the cross-node DLM RECEIVE handler's request validation (VMS_IOCTL_DLM_XNODE, vms-94c rung 1 / vms-17c)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        # vms_lock_dlm_xnode_dispatch()'s own lock-mode bounds check
+        # `if (req->lkmode > LCK_K_EXMODE) return SS__BADPARAM;`. UNIQUE TEXT in
+        # the file: the two OTHER `lkmode > LCK_K_EXMODE` guards (vms_enq_core
+        # line ~839, vms_ioctl_convert line ~1195) read `args.lkmode` with a
+        # brace body, so the `req->lkmode`/no-brace form anchors this handler
+        # alone -- no range anchor needed. Reached by exactly one suite:
+        # test_syssvc_dlm_xnode (the cross-node handler has no public sys$ entry
+        # point and no other test drives VMS_IOCTL_DLM_XNODE).
+        suites_red)   echo "test_syssvc_dlm_xnode";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_lock_dlm_xnode_dispatch() stops bounds-checking the decoded request's lock mode: the up-front 'lkmode > LCK_K_EXMODE' refusal is forced always-false with a 0-AND prefix, so a request naming an out-of-range mode (LCK_K_EXMODE+1) is no longer refused with SS\$_BADPARAM at the door -- it falls through to the op switch and, for an ENQ that names a resource, returns SS\$_UNSUPPORTED (rung 1's honest decline) as though the mode were valid. A malformed cross-node message that should be rejected up front is instead accepted for dispatch. One guard neutered; the op switch, the empty-name check, and the unknown-op default are all untouched, so only the bad-mode assertion moves.";;
+        require_fail) cat <<'EOF'
+bad lock mode -> SS$_BADPARAM
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -6135,6 +6161,22 @@ apply_edit() {
         # conversion branch), not an unbraced single-statement `if`, so there
         # is no dangling-body hazard here.
         sed -i '/^long vms_ioctl_convert/,/^}$/ s|^        lock->granted_mode = args\.lkmode;$|        /* NEGCTL lock-convert-mode-not-updated: granted_mode left unchanged */|' "$_file";;
+    dlm-xnode-mode-unvalidated)
+        # UNIQUE TEXT, no range anchor needed: `if (req->lkmode > LCK_K_EXMODE)`
+        # occurs once in the file -- vms_lock_dlm_xnode_dispatch's own mode
+        # bounds check. The two sibling guards (vms_enq_core, vms_ioctl_convert)
+        # read `args.lkmode > LCK_K_EXMODE) {` with a brace body, so neither
+        # matches this `req->lkmode`/no-brace anchor. Forcing the condition
+        # always-false with `0 &&` (the same idiom access-mode-escalation and
+        # lock-valblk-grant-not-delivered use in this file) makes the up-front
+        # SS$_BADPARAM refusal structurally unreachable, so an out-of-range mode
+        # falls through to the op switch -- an ENQ naming a resource returns
+        # rung 1's SS$_UNSUPPORTED as though the mode were valid. After
+        # substitution the line reads `if (0 && req->lkmode > LCK_K_EXMODE)`, so
+        # a second apply finds nothing left to match -- the no-op selftest
+        # requires. The op switch, the empty-name check, and the unknown-op
+        # default are untouched, so ONLY "bad lock mode -> SS$_BADPARAM" reddens.
+        sed -i 's|    if (req->lkmode > LCK_K_EXMODE)|    if (0 \&\& req->lkmode > LCK_K_EXMODE) /* NEGCTL dlm-xnode-mode-unvalidated */|' "$_file";;
     resdir-master-csid-not-reported)
         # `args.master_csid = res->master_csid;` is the ONLY assignment to
         # that field in the file (vms_ioctl_get_resmaster's sole copy-out),

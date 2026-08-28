@@ -61,6 +61,9 @@
 #   tools/cross-alpha/run-boot-alpha.sh login          # boot + authenticate SYSTEM/
 #                                                       # MANAGER to an interactive DCL $
 #                                                       # (end-to-end boot-login gate)
+#   tools/cross-alpha/run-boot-alpha.sh acceptance     # boot + login + the SHARED
+#                                                       # DCL/SHOW acceptance battery
+#                                                       # (co-release parity with x86_64)
 #   tools/cross-alpha/run-boot-alpha.sh validate [N]   # N consecutive real boots
 #                                                       # (reliability validation; default N=5)
 set -euo pipefail
@@ -256,6 +259,134 @@ run_login_boot() {
   return "$rc"
 }
 
+# derive_expected_identity -- set EXPECTED_BOOT_BANNER / EXPECTED_COMPAT_VERSION
+# / VOLUME_LABEL for the Alpha runtime, single-sourced (INV-1) from
+# ovmx_identity.h EXACTLY as the x86_64 gate's tests/qemu/run_dcl_acceptance_e2e.sh
+# does -- never a literal version here.
+#   BANNER = OVMX_PRODUCT_NAME " " OVMX_PRODUCT_VERSION (what the boot prints,
+#            ovmx_product_banner()).
+#   COMPAT = the token F$GETSYI("VERSION") reports, ovmx_compat_version(): on a
+#            lineage arch the real VSI version, else OVMX's own version. Alpha is
+#            NOT __x86_64__ (the only lineage branch in ovmx_identity.h today), so
+#            ovmx_arch_has_vms_lineage()==0 and ovmx_compat_version() returns
+#            OVMX_PRODUCT_VERSION -- so COMPAT == the product version on Alpha.
+#            (If Alpha ever gains a lineage define, this tracks it automatically.)
+#   VOLUME_LABEL = the mastered ODS-2 system-disk label, from
+#            build-alpha-bootimage.sh's `vmsfs_master --ods2 master ... OVMXSYS`.
+derive_expected_identity() {
+  local IDENTITY="$REPO/src/libvms/include/ovmx_identity.h"
+  [ -f "$IDENTITY" ] || die "ovmx_identity.h not found at $IDENTITY -- cannot derive EXPECTED_* (INV-1)"
+  idval() { sed -n "s/^#define[[:space:]]\+$1[[:space:]]\+\"\([^\"]*\)\".*/\1/p" "$IDENTITY" | head -1; }
+  local pname pver
+  pname=$(idval OVMX_PRODUCT_NAME)
+  pver=$(idval OVMX_PRODUCT_VERSION)
+  [ -n "$pname" ] && [ -n "$pver" ] || die "could not read OVMX_PRODUCT_NAME/VERSION from $IDENTITY"
+  EXPECTED_BOOT_BANNER="$pname $pver"
+  EXPECTED_COMPAT_VERSION="$pver"
+  # VOLUME_LABEL tracks build-alpha-bootimage.sh's master step; verify the source
+  # still uses it so a relabel there cannot silently desync this gate.
+  VOLUME_LABEL="OVMXSYS"
+  if ! grep -qE "ovmx-distrib-alpha\.img $VOLUME_LABEL" "$HERE/build-alpha-bootimage.sh" 2>/dev/null; then
+    log "WARNING: build-alpha-bootimage.sh no longer masters volume '$VOLUME_LABEL' -- update VOLUME_LABEL in derive_expected_identity"
+  fi
+}
+
+# run_acceptance_boot <tag> -- ONE real boot driven through the SHARED DCL/SHOW
+# acceptance battery (tests/qemu/lib/dcl_acceptance_battery.sh), the SAME battery
+# the x86_64 gate runs -- boot to login, SYSTEM/MANAGER, then the basic-command
+# battery with VMS-faithful assertions + negative controls. This is the Alpha half
+# of co-release parity: identical assertions, one source, no drift. Verdict = the
+# battery ran and recorded zero FAILs. RED assertions are a RESULT (Alpha
+# faithful-output gaps to fix, each naming its bug), never weakened to pass.
+# Returns 0/1; never `exit`s (composable).
+run_acceptance_boot() {
+  local tag="$1"
+  rm -f "$WORK/gate-${tag}.img" "$WORK/gate-${tag}.raw" "$WORK/gate-${tag}.log" "$WORK/gate-${tag}.fifo"
+  # Stage the shared battery where the in-container script can source it (/work).
+  cp "$REPO/tests/qemu/lib/dcl_acceptance_battery.sh" "$WORK/dcl_acceptance_battery.sh" \
+    || die "shared battery tests/qemu/lib/dcl_acceptance_battery.sh missing"
+  local cname="ovmx-alpha-accept-${tag}-$$"
+  # The full battery (~10 commands) needs far longer than a boot-only run, so use
+  # a generous qemu-run bound (QT); the CR-feed-to-Username loop keeps the shorter
+  # BOOT_TIMEOUT bound (it breaks the instant Username: appears).
+  local QT="${ACCEPT_TIMEOUT:-900}"
+  local DT="$((QT + 150))"
+  local rc=0
+  set +e
+  timeout --kill-after="$TIMEOUT_GRACE" "$DT" docker run --rm \
+    --name "$cname" --memory=8g --cpus="$(nproc)" \
+    -v "$WORK":/work "$IMG" bash -uo pipefail -c '
+      QT="'"$QT"'"; TAG="'"$tag"'"
+      LOGIN_USER="'"${LOGIN_USER:-SYSTEM}"'"; LOGIN_PASS="'"${LOGIN_PASS:-MANAGER}"'"
+      export EXPECTED_BOOT_BANNER="'"$EXPECTED_BOOT_BANNER"'"
+      export EXPECTED_COMPAT_VERSION="'"$EXPECTED_COMPAT_VERSION"'"
+      export VOLUME_LABEL="'"$VOLUME_LABEL"'"
+      # qemu-system-alpha -M clipper RTC reads ~20 years off (emulator epoch
+      # quirk); OVMX faithfully reports that guest clock, so the SHOW TIME battery
+      # asserts a plausible year + HH:MM:SS here rather than pinning the host year
+      # (which x86_64/aarch64, where guest==host clock, still do). See the shared
+      # battery SHOW TIME block.
+      export EXPECT_HOST_YEAR=0
+      export CMD_TIMEOUT="'"${CMD_TIMEOUT:-30}"'"
+      export BOOT_TIMEOUT="'"$BOOT_TIMEOUT"'"
+      cd /work
+      cp ovmx-distrib-alpha.img "gate-${TAG}.img"
+      export LOG="/work/gate-${TAG}.raw"; RAW="$LOG"
+      FIFO="/work/gate-${TAG}.fifo"; mkfifo "$FIFO"
+      timeout "$QT" qemu-system-alpha -M clipper -smp 1 -m 1024 -vga none -nic none \
+          -kernel vmlinux-boot -append "console=ttyS0 panic=-1" \
+          -drive file="gate-${TAG}.img",format=raw,if=virtio \
+          -nographic -no-reboot <"$FIFO" > "$RAW" 2>&1 &
+      QP=$!
+      exec 6>"$FIFO"
+      trap "" PIPE   # a CR fed just as the guest exits must not kill this shell
+      # --- caller-provided console primitives the shared battery drives --------
+      send()    { printf "%s\r" "$1" >&6 2>/dev/null || true; }
+      # wait_for <pat> <secs> <since-byte> -- fixed-string, bounded (dies if guest dies).
+      wait_for() {
+          local pat="$1" lim="${2:-30}" since="${3:-0}" w=0
+          while [ "$w" -lt "$lim" ]; do
+              tail -c "+$((since + 1))" "$RAW" 2>/dev/null | grep -qaF -- "$pat" && return 0
+              kill -0 "$QP" 2>/dev/null || return 1
+              sleep 1; w=$((w + 1))
+          done
+          return 1
+      }
+      # run_cmd <cmd> -- send, wait for the returned DCL prompt, set SEG.
+      SEG=""
+      run_cmd() {
+          local cmd="$1" off
+          off=$(wc -c < "$RAW")
+          send "$cmd"
+          wait_for "$ " "$CMD_TIMEOUT" "$off"
+          sleep 1
+          SEG=$(tail -c "+$((off + 1))" "$RAW" 2>/dev/null | tr -d "\r")
+      }
+      # --- run the SHARED battery (no errexit: it relies on grep exit codes) ---
+      PASS=0; FAIL=0
+      set +e
+      . /work/dcl_acceptance_battery.sh
+      run_dcl_acceptance_battery
+      BRC=$?
+      exec 6>&-
+      sleep 2
+      kill "$QP" 2>/dev/null || true
+      wait "$QP" 2>/dev/null || true
+      rm -f "$FIFO"
+      grep -avE "TSUNAMI machine check|tsunami_(read|write)" "$RAW" > "gate-${TAG}.log" || true
+      { echo ""; echo "===================================="; echo "RESULT: $PASS passed, $FAIL failed"; } | tee -a "gate-${TAG}.log"
+      # Exit 0 IFF every basic command produced VMS-faithful output AND the
+      # battery reached an authenticated prompt (BRC != 1). RED == a real Alpha
+      # faithful-output gap; that is a result, not a harness error.
+      [ "$FAIL" -eq 0 ] && [ "$BRC" -ne 1 ]
+    '
+  rc=$?
+  set -e
+  docker rm -f "$cname" >/dev/null 2>&1 || true
+  rm -f "$WORK/gate-${tag}.img"
+  return "$rc"
+}
+
 case "$MODE" in
   build)
     ensure_artifacts
@@ -313,6 +444,32 @@ case "$MODE" in
     tail -40 "$WORK/gate-login.log" 2>/dev/null || true
     die "LOGIN GATE FAILED -- did not authenticate to a DCL \$ prompt, see $WORK/gate-login.log"
     ;;
+  acceptance)
+    # DCL/SHOW ACCEPTANCE gate -- boots, logs in SYSTEM/MANAGER, and runs the
+    # SHARED basic-command battery (tests/qemu/lib/dcl_acceptance_battery.sh, the
+    # SAME assertions the x86_64 gate runs -- co-release parity, one source, no
+    # drift), asserting VMS-faithful output for each command with a negative
+    # control. Exit 0 IFF every command is VMS-faithful. RED lines are a RESULT
+    # (Alpha faithful-output gaps to fix later, each naming its bug) and must NOT
+    # be weakened to pass -- the gate's job is to run the battery and assert.
+    ensure_artifacts
+    derive_expected_identity
+    log "expected boot banner (ovmx_identity.h): $EXPECTED_BOOT_BANNER"
+    log "expected compat version (ovmx_compat_version, Alpha=product version): $EXPECTED_COMPAT_VERSION"
+    log "volume label: $VOLUME_LABEL"
+    ts0=$(date +%s)
+    if run_acceptance_boot "acceptance"; then
+      dur=$(( $(date +%s) - ts0 ))
+      log "======================================================================"
+      log "  ACCEPTANCE GATE PASSED: OVMX/Alpha booted -> SYSTEM/MANAGER login ->"
+      log "  the shared DCL/SHOW battery ran and EVERY command produced"
+      log "  VMS-faithful output, under qemu-system-alpha, in ${dur}s."
+      log "======================================================================"
+      exit 0
+    fi
+    tail -60 "$WORK/gate-acceptance.log" 2>/dev/null || true
+    die "ACCEPTANCE GATE FAILED -- at least one DCL/SHOW command is not VMS-faithful on Alpha (see the RESULT line + $WORK/gate-acceptance.log); RED == a real faithful-output gap to fix, do NOT weaken the battery"
+    ;;
   validate)
     N="${2:-5}"
     ensure_artifacts
@@ -332,6 +489,6 @@ case "$MODE" in
     [ "$fail" -eq 0 ] || die "validation found $fail flake(s) out of $N runs -- NOT gate-grade"
     ;;
   *)
-    die "unknown mode '$MODE' (want: build | boot | gate | login | validate [N])"
+    die "unknown mode '$MODE' (want: build | boot | gate | login | acceptance | validate [N])"
     ;;
 esac

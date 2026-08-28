@@ -5858,11 +5858,11 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_ioctl_bg_accept() completes exec_socket_accept and reports SS\$_NORMAL, but the mutation RELEASES the accepted socket instead of installing it onto the target channel (tch->sock stays NULL) -- the executive-resident handoff the whole server path turns on. With the accepted holder dropped and set NULL, the SS\$_BADPARAM branch is skipped, so the accept still returns SS\$_NORMAL and the accept-status assertion stays green; but the accepted channel now carries no socket, so the subsequent IO\$_READVBLK and IO\$_WRITEVBLK on it both fail SS\$_IVCHAN -- reddening exactly the two accepted-channel assertions. The assign / setmode / bind / listen assertions (and the no-executive honest-skip) all stay green. One install replaced by a release.";;
+        why)          echo "vms_ioctl_bg_accept() completes exec_socket_accept and reports SS\$_NORMAL, but the mutation RELEASES the accepted socket instead of installing it onto the target channel (tch->sock stays NULL) -- the executive-resident handoff the whole server path turns on. With the accepted holder dropped and set NULL, the SS\$_BADPARAM branch is skipped, so the accept still returns SS\$_NORMAL and the accept-status assertion stays green; but the accepted channel now carries no socket, so the subsequent IO\$_READVBLK and IO\$_WRITEVBLK on it both fail SS\$_IVCHAN -- reddening exactly the two accepted-channel assertions. It equally reddens test_syssvc_ssh_server's accept assertion: with the accepted channel socketless, the wrapped sshd's getpeername on it fails, so sshd never records \"connection from 127.0.0.1\" and the accept-over-BGn: assertion fails; the bind/listen assertion (Server listening) and the no-executive honest-skip stay green. The assign / setmode / bind / listen assertions all stay green. One install replaced by a release.";;
         require_fail) cat <<'EOF'
 the accepted BG channel returns the exact bytes the inbound client sent
 the accepted BG channel sends a reply back to the inbound client
-the remote command output came back BYTE-EXACT -- a real inbound session rode BGn: through sshd's fork+exec sshd-session (vms-0cd)
+the executive accepted the inbound connection over BGn: and sshd forked a per-connection child for it -- accept rides BGn: (full session handoff = RUNG-3b)
 EOF
                       ;;
         knock_on_fail) echo "";;

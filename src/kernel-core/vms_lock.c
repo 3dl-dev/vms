@@ -1395,3 +1395,77 @@ out:
         return -EFAULT;
     return 0;
 }
+
+/*
+ * vms_lock_dlm_xnode_dispatch - the cross-node DLM RECEIVE handler
+ * (vms-94c, DLM epic vms-7fa rung 1).
+ *
+ * A DLM request that arrived over SCS from a REMOTE node (decoded by
+ * src/vmsscs/scs_dlm.c, marshalled through VMS_IOCTL_DLM_XNODE) is dispatched
+ * HERE -- the point at which the kernel lock manager would act on a peer's
+ * behalf, as the resource's master or directory node.
+ *
+ * RUNG 1 IS THE TRANSPORT ONLY. This handler exists, the message reaches it
+ * DECODED, and it returns SS$_UNSUPPORTED. It does NOT grant, queue, dequeue, or
+ * deliver a blocking AST. INV-6: no fabricated cross-node grant -- a cross-node
+ * lock op honestly fails with SS$_UNSUPPORTED, exactly as dlm_resolve_master()
+ * already does for the SEND side, rather than fabricating a remote answer.
+ *
+ * RUNG 2 (vms-7fa) wires each op into the real single-node lock manager on the
+ * mastering node: VMS_DLM_OP_ENQ -> vms_enq_core() with proc bound to the
+ * remote requester's cluster identity, DEQ -> the release path, GRANT/BLKAST ->
+ * completing/notifying the ORIGINATING node's pending request. That is where
+ * this switch stops returning SS$_UNSUPPORTED; nothing above this line changes.
+ *
+ * The request is VALIDATED so a malformed message is rejected (SS$_BADPARAM)
+ * rather than silently dropped -- the same discipline vms_enq_core applies.
+ */
+uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
+                                     struct vms_dlm_xnode_args *req)
+{
+    (void)proc;
+
+    if (!req)
+        return SS__BADPARAM;
+    if (req->lkmode > LCK_K_EXMODE)
+        return SS__BADPARAM;
+    req->resnam[sizeof(req->resnam) - 1] = '\0';
+
+    switch (req->op) {
+    case VMS_DLM_OP_ENQ:
+    case VMS_DLM_OP_DEQ:
+        /* A request that names a resource must actually name one. */
+        if (req->resnam[0] == '\0')
+            return SS__BADPARAM;
+        /* Rung 2 acts on the decoded request here (vms_enq_core on the master,
+         * the release path for DEQ). Rung 1 delivers it and honestly declines. */
+        return SS__UNSUPPORTED;
+    case VMS_DLM_OP_GRANT:
+    case VMS_DLM_OP_BLKAST:
+        /* Responses carry no resource name. Rung 2 completes/notifies the
+         * originating node's pending request here; rung 1 declines. */
+        return SS__UNSUPPORTED;
+    default:
+        return SS__BADPARAM;
+    }
+}
+
+/*
+ * vms_ioctl_dlm_xnode - VMS_IOCTL_DLM_XNODE marshalling wrapper (vms-94c).
+ * Copies the decoded DLM request in, runs the cross-node handler, copies the
+ * status back. Requires no registered process (like GET_RESMASTER): the daemon
+ * that issues it is delivering a peer's request, not enqueuing its own.
+ */
+long vms_ioctl_dlm_xnode(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_dlm_xnode_args args;
+
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    args.status = vms_lock_dlm_xnode_dispatch(proc, &args);
+
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}

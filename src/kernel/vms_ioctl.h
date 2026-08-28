@@ -466,6 +466,42 @@ struct vms_resmaster_args {
  */
 #define VMS_IOCTL_GET_RESMASTER _IOWR(VMS_IOC_MAGIC, 0x34, struct vms_resmaster_args)
 
+/*
+ * DLM cross-node lock-request dispatch (vms-94c, DLM epic vms-7fa rung 1).
+ *
+ * The RECEIVE side of the distributed lock manager. A DLM message that arrived
+ * over SCS from a REMOTE node (decoded by src/vmsscs/scs_dlm.c) is marshalled
+ * into the executive through this ioctl so it reaches the kernel lock manager's
+ * cross-node handler (vms_lock_dlm_xnode_dispatch). Rung 1 is the TRANSPORT
+ * only: the message reaches the handler decoded and the handler returns
+ * SS$_UNSUPPORTED -- it does NOT grant, queue, dequeue, or deliver a blocking
+ * AST (that is rung 2). INV-6: no fabricated cross-node grant; a cross-node op
+ * honestly fails, exactly as dlm_resolve_master() already does for the SEND side.
+ *
+ * `op` carries a DLM message kind as a plain byte so this header takes no
+ * dependency on src/vmsscs; the VMS_DLM_OP_* values below MUST match
+ * scs_dlm.h's SCS_DLM_OP_* (scsd.c static-asserts they do).
+ */
+#define VMS_DLM_OP_ENQ      1u   /* lock/convert request  -> master  */
+#define VMS_DLM_OP_GRANT    2u   /* status response       <- master  */
+#define VMS_DLM_OP_DEQ      3u   /* dequeue request       -> master  */
+#define VMS_DLM_OP_BLKAST   4u   /* blocking-AST notify   <- master  */
+
+struct vms_dlm_xnode_args {
+    uint32_t op;                /* in: VMS_DLM_OP_* */
+    uint32_t lkmode;            /* in: LCK$K_ mode (0..5) */
+    uint32_t flags;             /* in: LCK$M_ flags */
+    uint32_t req_lkid;          /* in: requester's lock handle */
+    uint32_t master_lkid;       /* in: master's lock handle */
+    uint32_t req_csid;          /* in: requesting node CSID */
+    uint32_t master_csid;       /* in: mastering node CSID (0 = resolve) */
+    char     resnam[32];        /* in: resource name (null-terminated) */
+    uint8_t  valblk[LCK_VALBLK_SIZE]; /* in: value block */
+    uint32_t status;            /* return: SS$_ status (rung 1: SS$_UNSUPPORTED) */
+    uint32_t pad;
+};
+#define VMS_IOCTL_DLM_XNODE _IOWR(VMS_IOC_MAGIC, 0x35, struct vms_dlm_xnode_args)
+
 /* ================================================================
  * Process registration
  * ================================================================ */

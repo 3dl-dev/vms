@@ -42,6 +42,14 @@
 #include <linux/reboot.h>
 #include <signal.h>
 
+/* The production ACP $MOUNT (src/ovmx_init/ovmx_boot_linux.c's
+ * ovmx_boot_acp_mount_system_disk calls vms_kif_acp_mount on boot). Linked in
+ * from libvmssys (vms_kif.c + kif_transport_linux.c + vms_string.c +
+ * arch/alpha/syscall.S) so this runner-init mounts the sysdevice the SAME way
+ * production does -- no hand-rolled ioctl, no ABI-drift copy of the 24-byte
+ * mount arg struct. vms_kif.h pulls ../kernel/vms_ioctl.h -> vms_acp.h. */
+#include "vms_kif.h"
+
 /* Per-suite wall bound: a suite that hangs (e.g. an exec'd DCL waiting on
  * input) must not eat the whole boot budget -- SIGALRM kills the child, the
  * pipe closes, and the suite is recorded as a genuine failure (never a skip).*/
@@ -72,7 +80,14 @@ static int load_module(const char *path)
 static int run_suite(const char *name, int *out_pass, int *out_fail)
 {
     char path[512];
-    snprintf(path, sizeof(path), "/tests/%s", name);
+    int is_seam = (strcmp(name, "activate_seam") == 0);
+    if (is_seam)
+        /* vms-341/vms-f60d option (c): the seam subject is exec'd from the
+         * boot-stage tmpfs path; IMGACT's map_staged remaps it to the DKA300
+         * SYSEXE ODS-2 path and re-reads the genuine volume bytes over the ACP. */
+        snprintf(path, sizeof(path), "/run/ovmx-boot/ACTIVATE.EXE");
+    else
+        snprintf(path, sizeof(path), "/tests/%s", name);
 
     int pfd[2];
     if (pipe(pfd) != 0) { printf("SYSSVC-ALPHA: pipe failed for %s\n", name); return -1; }
@@ -84,7 +99,19 @@ static int run_suite(const char *name, int *out_pass, int *out_fail)
         dup2(pfd[1], 2);
         close(pfd[0]); close(pfd[1]);
         char *argv[] = { path, NULL };
-        char *envp[] = { (char *)"PATH=/tests:/bin", (char *)"HOME=/", NULL };
+        /* The subject-image activation seam (vms-341/vms-f60d): exec'ing the
+         * VMS-std subject triggers IMGACT.EXE via PT_INTERP; OVMX_IMGACT_SEAM=1
+         * enables IMGACT.EXE's test-mode OVMX-SEAM print (getexit(SEL_SELF) ->
+         * the executive-recorded $STATUS). Gated to this subject only, so no
+         * other suite's IMGACT activations emit the seam line. */
+        char *envp_plain[] = { (char *)"PATH=/tests:/bin", (char *)"HOME=/", NULL };
+        char *envp_seam[]  = { (char *)"PATH=/tests:/bin", (char *)"HOME=/",
+                               (char *)"OVMX_IMGACT_SEAM=1",
+                               /* option (c): resolve the subject over the ACP on
+                                * the writable DKA300 sysvol (default DKA0: is the
+                                * immutable clean-room disk). */
+                               (char *)"OVMX_SYSDEVICE=DKA300:", NULL };
+        char **envp = is_seam ? envp_seam : envp_plain;
         execve(path, argv, envp);
         printf("SYSSVC-ALPHA: execve %s failed: %s\n", path, strerror(errno));
         _exit(127);
@@ -132,6 +159,25 @@ static int run_suite(const char *name, int *out_pass, int *out_fail)
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
+/*
+ * $MOUNT an ODS-2 volume through the executive Files-11 (ODS-2) ACP -- the
+ * EXACT production mount (vms_kif_acp_mount, the same entry point
+ * ovmx_boot_acp_mount_system_disk drives on a real boot). It honors the mount
+ * protocol guard (acp_bind_ok: open /dev/vms + register the PCB) internally, so
+ * this init does not hand-roll register/ioctl. Records the unit executive-global
+ * (cross-process), so the seam subject's genuine ACTIVATE.EXE bytes on DKA300
+ * resolve over the ACP: without this, imgact_acp_open's $ASSIGN hits an
+ * unmounted unit (SS$_DEVNOTMOUNT) and the subject fails IMGNOTFND. Returns 0 on
+ * an odd (success) VMS status, -1 otherwise. Non-fatal by design: on failure the
+ * seam suite fails HONESTLY (IMGNOTFND), never skipped (INV-6). */
+static int mount_acp_sysdevice(const char *unit)
+{
+    uint32_t st = vms_kif_acp_mount(unit);
+    printf("SYSSVC-ALPHA: $MOUNT %s -> status=0x%08x (%s)\n",
+           unit, (unsigned)st, (st & 1u) ? "MOUNTED" : "FAILED");
+    return (st & 1u) ? 0 : -1;
+}
+
 /* qsort comparator for stable, deterministic suite ordering. */
 static int cmpstr(const void *a, const void *b)
 {
@@ -165,6 +211,16 @@ int main(void)
         goto out;
     }
 
+    /* vms-341/vms-f60d option (c): the subject-image activation seam resolves
+     * ACTIVATE.EXE's GENUINE bytes off the DKA300 sysvol over the ACP. Production
+     * $MOUNTs the sysdevice on boot (ovmx_boot_acp_mount_system_disk); mirror
+     * that here BEFORE the seam suite runs so imgact_acp_open's $ASSIGN reaches a
+     * MOUNTED unit instead of SS$_DEVNOTMOUNT. Gated to the seam run only -- the
+     * normal syssvc suites $MOUNT the volumes they need themselves, so the plain
+     * run is unaffected. Non-fatal: on failure the seam suite fails honestly. */
+    if (access("/run/ovmx-boot/ACTIVATE.EXE", F_OK) == 0)
+        mount_acp_sysdevice("DKA300:");
+
     /* Discover every /tests/test_syssvc_* and /tests/test_imgact_* binary
      * (the qemu_syssvc_tests target), sorted for deterministic order. The
      * suites $ASSIGN the ODS-2 units the harness attached as virtio disks;
@@ -182,11 +238,20 @@ int main(void)
     while ((de = readdir(d)) != NULL && n_names < 512) {
         if (strncmp(de->d_name, "test_syssvc_", 12) != 0 &&
             strncmp(de->d_name, "test_imgact_", 12) != 0 &&
-            strncmp(de->d_name, "test_arith_", 11) != 0)  /* vms-db3: Alpha-only arith-trap suites */
+            strncmp(de->d_name, "test_arith_", 11) != 0)    /* vms-db3: Alpha-only arith-trap suites */
             continue;
         names[n_names++] = strdup(de->d_name);
     }
     closedir(d);
+
+    /* vms-341/vms-f60d option (c): the seam subject is NOT a /tests binary -- its
+     * genuine bytes live on the DKA300 ODS-2 volume, with a boot-stage tmpfs copy
+     * at /run/ovmx-boot/ACTIVATE.EXE. Run it as the "activate_seam" suite when
+     * that copy is present (SUBJECT_IMAGE seam mode); run_suite execs the tmpfs
+     * copy so IMGACT map_staged resolves the genuine bytes off DKA300 (the ACP). */
+    if (access("/run/ovmx-boot/ACTIVATE.EXE", F_OK) == 0 && n_names < 512)
+        names[n_names++] = strdup("activate_seam");
+
     qsort(names, n_names, sizeof(names[0]), cmpstr);
 
     if (n_names == 0) {

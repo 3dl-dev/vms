@@ -65,6 +65,7 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
   -v "$VMSKO_WORK:/vmsko" \
   -v "$WORK:/work" "$IMG" bash -euo pipefail -c '
     KV="'"$KV"'"; BT="'"$BOOT_TIMEOUT"'"; ONLY="'"${ONLY_SUITE:-}"'"
+    SUBJECT="'"${SUBJECT_IMAGE:-}"'"; SUBJECT_EXPECT="'"${SUBJECT_EXPECT_STATUS:-}"'"
     export ARCH=alpha CROSS_COMPILE=alpha-linux-gnu-
     export QEMU_LD_PREFIX=/usr/alpha-linux-gnu
     CC=alpha-linux-gnu-gcc
@@ -78,17 +79,75 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     # standing-gate mode (e.g. the alpha-arith-hparith CI job runs ONLY
     # test_arith_hparith under qemu-system-alpha, green-by-SHA, without paying for
     # or flaking on the whole ~66-suite run). Empty = the full run.
-    _BUILD_TGT=qemu_syssvc_tests
-    [ -n "$ONLY" ] && _BUILD_TGT="$ONLY"
-    echo "== cross-build $_BUILD_TGT for alpha =="
-    cmake -S /repo -B /work/cmake-alpha \
-        -DCMAKE_TOOLCHAIN_FILE=/repo/tools/cross-alpha/toolchain-alpha-linux.cmake \
-        -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_TOOLS=ON -DOVMX_STATIC=ON \
-        >/work/cmake-cfg.log 2>&1 || { echo CONFIG-FAIL; tail -30 /work/cmake-cfg.log; exit 1; }
-    cmake --build /work/cmake-alpha --target "$_BUILD_TGT" -j"$(nproc)" \
-        >/work/cmake-build.log 2>&1 || { echo BUILD-FAIL; grep -nE ": error:" /work/cmake-build.log | head -25; exit 1; }
+    # SUBJECT_IMAGE=<path|"tier1-stub"> (vms-341/vms-f60d): the arbitrary-EM_ALPHA
+    # subject-image ACTIVATION seam. Builds+stages IMGACT.EXE + one subject image
+    # whose .interp names IMGACT.EXE, execs the subject under the real executive
+    # so the IMGACT.EXE VMS-std 6-arg path activates it, and asserts the OVMX-SEAM
+    # serial line (the IMGACT.EXE test-mode getexit SEL_SELF $STATUS readback). The
+    # genuine convergence proof (the do-it-like-VMS activation half), NOT the SysV
+    # imgact_activate path. "tier1-stub" builds the syscall-free stub from
+    # src/imgact/test/vmsstd/img.S ($STATUS 0x00000BAD); a path stages that image
+    # (Tier-2 = the GCC genuine port image, $STATUS 0x0FAC0001).
+    # (NO apostrophes in this container-script region -- docker single-quote trap.)
+    if [ -n "$SUBJECT" ]; then
+        # SUBJECT/seam mode: NO cmake test build. IMGACT.EXE is NOT a cmake target
+        # under OVMX_STATIC (OVMX_STATIC and OVMX_IMGACT are mutually exclusive) --
+        # it is built by the standalone src/imgact/Makefile (ARCH=alpha), in a
+        # WRITABLE src copy since /repo is read-only (same recipe as
+        # build-alpha-bootimage.sh). Uses whatever imgact.c is in the tree (with
+        # the OVMX_IMGACT_SEAM instrumentation when #793 is merged in).
+        echo "== build IMGACT.EXE(alpha) via src/imgact Makefile (seam activator) =="
+        cp -a /repo/src /work/imgact-src
+        ( cd /work/imgact-src/imgact && make ARCH=alpha CC=alpha-linux-gnu-gcc ) >/work/imgact-build.log 2>&1 \
+            || { echo "FATAL: IMGACT.EXE(alpha) make failed"; tail -25 /work/imgact-build.log; exit 1; }
+        IMGACT_EXE=/work/imgact-src/imgact/IMGACT.EXE
+        [ -x "$IMGACT_EXE" ] || { echo "FATAL: IMGACT.EXE(alpha) not produced at $IMGACT_EXE"; exit 1; }
+        mkdir -p /work/cmake-alpha/bin   # later best-effort subject-image globs reference this
+        # The subject image: build the Tier-1 stub, or use a provided image. Its
+        # .interp names the GUEST IMGACT.EXE path so the kernel loads IMGACT.EXE
+        # as the interpreter -> VMS-std activation.
+        INTERP_GUEST=/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE
+        if [ "$SUBJECT" = "tier1-stub" ]; then
+            FIX=/repo/src/imgact/test/vmsstd
+            # NB: this block runs inside the outer single-quoted docker bash -c
+            # script, so it must contain NO single quotes -- build interp.S with
+            # double-quoted printf (backslash-quote for the literal quotes).
+            { printf "\t.section .interp, \"a\"\n"; printf "\t.asciz \"%s\"\n" "$INTERP_GUEST"; } > /work/interp.S
+            alpha-linux-gnu-gcc -nostdlib -no-pie -static -DXFER_FLAVOR=1 \
+                -Wl,-T,"$FIX/img.lds" -Wl,-e,_start -Wl,--build-id=none \
+                -o /work/subject.exe "$FIX/img.S" /work/interp.S \
+                || { echo "FATAL: Tier-1 stub image build failed"; exit 1; }
+            echo "== built Tier-1 stub subject (VMS_STD, .interp=$INTERP_GUEST) =="
+        else
+            [ -f "$SUBJECT" ] || { echo "FATAL: SUBJECT_IMAGE=$SUBJECT not found in container"; exit 1; }
+            cp "$SUBJECT" /work/subject.exe
+            echo "== staged provided subject image $SUBJECT (its .interp must name $INTERP_GUEST) =="
+        fi
+    else
+        # Non-SUBJECT (full run / ONLY_SUITE): the cmake test build.
+        _BUILD_TGT=qemu_syssvc_tests
+        [ -n "$ONLY" ] && _BUILD_TGT="$ONLY"
+        echo "== cross-build $_BUILD_TGT for alpha =="
+        cmake -S /repo -B /work/cmake-alpha \
+            -DCMAKE_TOOLCHAIN_FILE=/repo/tools/cross-alpha/toolchain-alpha-linux.cmake \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_TOOLS=ON -DOVMX_STATIC=ON \
+            >/work/cmake-cfg.log 2>&1 || { echo CONFIG-FAIL; tail -30 /work/cmake-cfg.log; exit 1; }
+        cmake --build /work/cmake-alpha --target "$_BUILD_TGT" -j"$(nproc)" \
+            >/work/cmake-build.log 2>&1 || { echo BUILD-FAIL; grep -nE ": error:" /work/cmake-build.log | head -25; exit 1; }
+    fi
     n=0
-    if [ -n "$ONLY" ]; then
+    if [ -n "$SUBJECT" ]; then
+        # Seam mode (vms-341/vms-f60d, option (c) authentic staging): the subject
+        # is activated via the PRODUCTION ACP path, not a raw initramfs path. Its
+        # genuine bytes go onto the DKA300 sysvol at SYSEXE:ACTIVATE.EXE (below,
+        # via mk_sysvol); a tmpfs boot-stage copy at /run/ovmx-boot/ACTIVATE.EXE
+        # (initramfs list below) is what the runner-init execs -- so the IMGACT
+        # map_staged remaps it to /vms/SYS0/SYSCOMMON/SYSEXE/ACTIVATE.EXE and the
+        # UNCHANGED imgsrc_open re-reads the GENUINE ODS-2 bytes off DKA300 over
+        # the ACP (OVMX_SYSDEVICE=DKA300: in the seam envp). INV-6-clean.
+        n=1
+        echo "== staged SUBJECT seam: exec /run/ovmx-boot/ACTIVATE.EXE + genuine bytes on DKA300 SYSEXE:ACTIVATE.EXE + IMGACT.EXE at $INTERP_GUEST =="
+    elif [ -n "$ONLY" ]; then
         # Focused mode: stage exactly the one requested suite.
         [ -x "/work/cmake-alpha/bin/$ONLY" ] \
             || { echo "FATAL: ONLY_SUITE=$ONLY did not build (/work/cmake-alpha/bin/$ONLY missing)"; exit 1; }
@@ -153,10 +212,15 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
         /repo/tests/qemu/mkimage_ods2_sysvol.c $ODS2CC
     IMGACT_ARG=""
     [ -f /work/cmake-alpha/src/imgact/IMGACT.EXE ] && IMGACT_ARG="SYSEXE:IMGACT.EXE=/work/cmake-alpha/src/imgact/IMGACT.EXE"
+    # vms-341/vms-f60d option (c): stage the seam SUBJECT onto the DKA300 sysvol
+    # at SYSEXE:ACTIVATE.EXE so IMGACT re-reads its GENUINE ODS-2 bytes over the
+    # ACP (the production activation path), not a raw initramfs path.
+    SUBJECT_SYSVOL_ARG=""
+    [ -n "$SUBJECT" ] && [ -f /work/subject.exe ] && SUBJECT_SYSVOL_ARG="SYSEXE:ACTIVATE.EXE=/work/subject.exe"
     /work/mk_sysvol /work/tests/ods2_sysvol.img 48 \
         /repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT \
         /repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT \
-        $IMGACT_ARG >/work/mk_sysvol.log 2>&1 \
+        $IMGACT_ARG $SUBJECT_SYSVOL_ARG >/work/mk_sysvol.log 2>&1 \
         || { echo "WARN: ods2_sysvol master failed (sysvol-dependent suites will fail honestly)"; cat /work/mk_sysvol.log; truncate -s 24M /work/tests/ods2_sysvol.img; }
     ls -la /work/tests/ods2_*.img
 
@@ -164,7 +228,17 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     # 3. Build the static C runner-init + bake the test initramfs.
     ####################################################################
     echo "== build syssvc runner-init + /bin/sh subject stub =="
-    $CC -static -O2 -Wall /tools/test-init-syssvc-alpha.c -o /work/syssvc-init
+    # The runner-init links the PRODUCTION ACP $MOUNT (vms_kif_acp_mount) so it
+    # mounts DKA300 through the executive exactly as ovmx_boot_acp_mount_system_disk
+    # does on a real boot (vms-341/vms-f60d). Pull the minimal libvmssys set that
+    # resolves it: policy (vms_kif.c) + Linux transport (kif_transport_linux.c) +
+    # vms_memset/vms_strncpy (vms_string.c) + the alpha raw-syscall trampolines
+    # (arch/alpha/syscall.S provides __vms_syscall3). vms_kif.h reaches
+    # ../kernel/vms_ioctl.h via its own relative include (NO apostrophes here).
+    $CC -static -O2 -Wall -I/repo/src/libvmssys /tools/test-init-syssvc-alpha.c \
+        /repo/src/libvmssys/vms_kif.c /repo/src/libvmssys/kif_transport_linux.c \
+        /repo/src/libvmssys/vms_string.c /repo/src/libvmssys/arch/alpha/syscall.S \
+        -o /work/syssvc-init
     $CC -static -O2 -Wall /tools/sh-subject-stub.c -o /work/sh-subject
     alpha-linux-gnu-strip /work/syssvc-init /work/sh-subject
     cp /vmsko/vms.ko /work/vms.ko
@@ -187,8 +261,21 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
       echo "file /bin/sh /work/sh-subject 755 0 0"   # live-process subject for showproc/procnam/delprc/startup_service
       echo "file /vms.ko /work/vms.ko 644 0 0"
       for f in /work/tests/test_*; do
+        [ -e "$f" ] || continue     # no test_* staged (SUBJECT/seam mode) -> skip the literal glob
         echo "file /tests/$(basename "$f") $f 755 0 0"
       done
+      # SUBJECT_IMAGE seam (vms-341/vms-f60d, option (c)): the subject is executed
+      # from a boot-stage tmpfs copy (/run/ovmx-boot/ACTIVATE.EXE) so the IMGACT
+      # map_staged remaps it to the DKA300 SYSEXE ODS-2 path and re-reads the
+      # GENUINE volume bytes over the ACP -- the production activation path. The
+      # interp IMGACT.EXE stays at the guest SYSEXE path the subject .interp names
+      # (the kernel loads it from the initramfs).
+      if [ -n "$SUBJECT" ]; then
+        echo "dir /run 755 0 0"
+        echo "dir /run/ovmx-boot 755 0 0"
+        echo "file /run/ovmx-boot/ACTIVATE.EXE /work/subject.exe 755 0 0"
+        echo "file $INTERP_GUEST $IMGACT_EXE 755 0 0"
+      fi
       # SUBJECT IMAGES at the exact paths the suites exec (guarded by build
       # success; a target absent on alpha leaves its suites to fail honestly).
       B=/work/cmake-alpha/bin
@@ -255,6 +342,69 @@ echo
 echo "==================== VERDICT ===================="
 LOG="$WORK/syssvc-boot.log"
 [ -f "$LOG" ] || die "no boot log produced at $LOG"
+
+# SUBJECT_IMAGE seam verdict (vms-341/vms-f60d): assert the OVMX-SEAM line
+# IMGACT.EXE printed after activating the subject through its VMS-std 6-arg path.
+# Format (owned by IMGACT.EXE): "OVMX-SEAM: image=<n> stdcall_returned=1
+# has_exited=<0|1> $STATUS=0x<8hex>". $STATUS is the full 32-bit executive-
+# recorded condition read via getexit(SEL_SELF) -- not the POSIX exit_code.
+if [ -n "${SUBJECT_IMAGE:-}" ]; then
+    SEAM=$(grep -aE "OVMX-SEAM:" "$LOG" | tail -1 || true)
+    [ -n "$SEAM" ] || die "no OVMX-SEAM line -- IMGACT.EXE did not activate the subject or did not print (needs the instrumented IMGACT.EXE + OVMX_IMGACT_SEAM=1)"
+    echo "  $SEAM"
+    echo "$SEAM" | grep -qE "stdcall_returned=1" \
+        || die "OVMX-SEAM: stdcall_returned != 1 -- the VMS-std 6-arg call did not return to IMGACT.EXE"
+    echo "$SEAM" | grep -qE "has_exited=1" \
+        || die "OVMX-SEAM: has_exited != 1 -- the executive recorded no completion status for the image"
+    GOT=$(printf '%s\n' "$SEAM" | sed -E 's/.*\$STATUS=(0x[0-9a-fA-F]+).*/\1/')
+    if [ -n "${SUBJECT_EXPECT_STATUS:-}" ]; then
+        if [ "$(printf '%d' "$GOT" 2>/dev/null)" = "$(printf '%d' "$SUBJECT_EXPECT_STATUS" 2>/dev/null)" ]; then
+            log "PASS: subject activated via IMGACT VMS-std 6-arg path; executive \$STATUS=$GOT == expected $SUBJECT_EXPECT_STATUS"
+            exit 0
+        fi
+        die "OVMX-SEAM: executive \$STATUS=$GOT != expected $SUBJECT_EXPECT_STATUS"
+    fi
+    log "PASS: subject activated via IMGACT VMS-std 6-arg path; executive \$STATUS=$GOT (no expected value asserted)"
+    exit 0
+fi
+
+# The suites that actually failed this run (rc != 0), sorted unique. `|| true`:
+# a perfect run (zero failures) makes the inner grep exit nonzero, which under
+# `set -o pipefail` would otherwise abort the script before the verdict.
+ACTUAL_FAILS=$( { grep -aE "=== SUITE .* rc=" "$LOG" | grep -avE " rc=0 " \
+    | sed -E 's/.*=== SUITE ([A-Za-z0-9_]+) rc=.*/\1/' | sort -u; } || true )
+
+# NO-NEW-vs-BASELINE mode (BASELINE=<file>, rd vms-341 / vms-898a). The FULL
+# alpha syssvc run carries a DOCUMENTED baseline of ENVIRONMENTAL / not-
+# applicable suite failures (symbol-vector LINK.EXE-only imgact suites that
+# cannot exist on an Alpha static image; subject images that do not cross-build
+# for Alpha yet; the -nic-none ETH0: suites; emulator-timing races). The gate is
+# GREEN iff no NEW suite fails beyond that baseline. This catches regressions in
+# the passing tier WITHOUT faking the known-environmental blockers green and
+# WITHOUT the runner skipping -- it still runs and fails them honestly (the
+# "never skip" invariant holds); the gate merely tolerates a named, reasoned set.
+# Each baseline entry is a tracked follow-on; a baselined suite that starts
+# PASSING is flagged so the baseline is tightened (never silently widened).
+if [ -n "${BASELINE:-}" ]; then
+    [ -f "$BASELINE" ] || die "BASELINE=$BASELINE not found"
+    grep -aqE "FINAL RESULTS:" "$LOG" \
+        || die "no FINAL RESULTS -- the suite did not run to completion (boot/harness failure, not a baselined suite fail)"
+    EXPECTED=$(grep -avE "^[[:space:]]*#|^[[:space:]]*$" "$BASELINE" | awk '{print $1}' | sort -u)
+    NEW_FAILS=$(comm -23 <(printf '%s\n' "$ACTUAL_FAILS") <(printf '%s\n' "$EXPECTED"))
+    FIXED=$(comm -13 <(printf '%s\n' "$ACTUAL_FAILS") <(printf '%s\n' "$EXPECTED"))
+    grep -aE "FINAL RESULTS|ASSERTIONS" "$LOG" | sed 's/^/  /'
+    [ -n "$FIXED" ] && log "NOTE: baselined suite(s) now PASS -- tighten $BASELINE (remove): $(echo $FIXED)"
+    if [ -z "$NEW_FAILS" ]; then
+        log "PASS: no new suite failures beyond the documented baseline ($(echo $ACTUAL_FAILS | wc -w) known env/N-A fails tolerated, $(echo $EXPECTED | wc -w) baselined)"
+        exit 0
+    fi
+    echo "-- NEW failing suites (NOT in $BASELINE) --"
+    printf '  %s\n' $NEW_FAILS
+    grep -aE "=== SUITE .* rc=|  FAIL:" "$LOG" | head -80 | sed 's/^/  /'
+    die "NEW syssvc suite failure(s) beyond baseline: $(echo $NEW_FAILS) -- a regression in the passing tier, or a newly-added suite that needs triage or an explicit baseline entry"
+fi
+
+# Default (ONLY_SUITE focused gate / no BASELINE): every suite must pass.
 # Reuse the x86_64 harness verdict logic verbatim.
 # shellcheck disable=SC1091
 if [ -f "$REPO/tests/qemu/lib/harness_verdict.sh" ]; then

@@ -297,6 +297,10 @@ int strncmp(const char *a, const char *b, unsigned long n)
 
 static void eputs(const char *s) { sys_write(2, s, xstrlen(s)); }
 
+/* Defined further down; forward-declared here because imgact_vms_exit (which
+ * precedes the definition) reads it for the OVMX_IMGACT_SEAM $STATUS readback. */
+static const char *imgact_env_value(char **envp, const char *key);
+
 static void vms_fatal(const char *ident, const char *text, const char *detail)
 {
 	char line[512];
@@ -364,6 +368,15 @@ static void die_tlserr(const char *name)
 #define PAGE_DOWN(x) ((x) & ~(PAGE_SIZE - 1))
 #define PAGE_UP(x)   PAGE_DOWN((x) + PAGE_SIZE - 1)
 #define ALIGN_UP(x, a) (((x) + ((a) - 1)) & ~((unsigned long)(a) - 1))
+
+/* Kernel page size for mprotect() of an ARBITRARY in-segment address (used by
+ * apply_vms_rel's relocation-write guard). mprotect requires the base aligned
+ * to the real kernel page, which is 8 KiB on Alpha (not the 4 KiB PAGE_SIZE the
+ * segment-aligned mprotects above rely on). Per-arch headers may override; the
+ * fallback matches the generic PAGE_SIZE. */
+#ifndef IMGACT_KPAGE
+#define IMGACT_KPAGE PAGE_SIZE
+#endif
 
 /* SysV .hash section entry width: 4 bytes (Elf32_Word) everywhere except
  * Alpha, which uses 8 bytes (Elf64_Xword) -- see imgact_arch.h. */
@@ -1173,11 +1186,34 @@ static void self_relocate(unsigned long base)
 	}
 	Elf64_Rela *r = (Elf64_Rela *)rela;
 	unsigned long n = relasz / sizeof(Elf64_Rela);
+	unsigned long last_pg = ~0UL;
 	for (unsigned long i = 0; i < n; i++) {
 		if (ELF64_R_TYPE(r[i].r_info) == IMGACT_R_RELATIVE) {
-			unsigned long *w =
-				(unsigned long *)(base + r[i].r_offset);
-			*w = base + (unsigned long)r[i].r_addend;
+			unsigned long addr = base + r[i].r_offset;
+			/* Same unprotected-write pattern as apply_vms_rel, but on
+			 * IMGACT.EXE's OWN pages and BEFORE any print. AUDIT (readelf):
+			 * IMGACT's RELATIVE targets sit in its PF_R|PF_W data segment
+			 * (no RELRO -- built -z norelro), which a W^X kernel leaves
+			 * writable, so this store does NOT actually fault and
+			 * self_relocate is NOT the Branch-C crash. This mprotect is a
+			 * zero-cost DEFENSIVE hedge only: PROT_READ|PROT_WRITE (the page
+			 * is pure data; no EXEC, so it stays W^X-clean and this is a
+			 * no-op on the already-writable page) -- it merely covers a
+			 * hardened kernel that unexpectedly maps this RW segment R-only.
+			 *
+			 * GOT-FREE by necessity: this runs BEFORE the GOT it is fixing,
+			 * so it must not call a GOT-routed helper. syscall6 is `static
+			 * inline` (a bare callsys, no GOT) and all args are immediates or
+			 * locals -- unlike sys_mprotect(), a real function gcc could reach
+			 * through the not-yet-relocated GOT. (vms-f60d) */
+			unsigned long pg = addr & ~(IMGACT_KPAGE - 1UL);
+			if (pg != last_pg) {
+				(void)syscall6(SYS_mprotect, (long)pg,
+					       (long)IMGACT_KPAGE,
+					       PROT_READ | PROT_WRITE, 0, 0, 0);
+				last_pg = pg;
+			}
+			*(unsigned long *)addr = base + (unsigned long)r[i].r_addend;
 		}
 	}
 }
@@ -1193,6 +1229,18 @@ static unsigned long exec_bias(Elf64_Phdr *phdr, int phnum, unsigned long at_phd
 		if (phdr[i].p_type == PT_PHDR)
 			return at_phdr - phdr[i].p_vaddr;
 	return 0;
+}
+
+/* Signal-free "is the page containing `addr` mapped?" probe (vms-f60d). mincore
+ * fills a residency byte for a MAPPED range and returns -ENOMEM for an unmapped
+ * one, so it answers WITHOUT dereferencing `addr` (no SIGSEGV) and WITHOUT any
+ * side effect on the probed page (unlike an mprotect/mlock probe). Returns 1 iff
+ * mincore reported the page mapped. `addr` is page-aligned for the syscall. */
+static int imgact_page_mapped(unsigned long addr)
+{
+	unsigned char vec;
+	unsigned long pg = addr & ~(IMGACT_KPAGE - 1UL);
+	return syscall6(SYS_mincore, (long)pg, 1, (long)&vec, 0, 0, 0) == 0;
 }
 
 /* --------------------------------------------------------------------------
@@ -1257,8 +1305,27 @@ static void apply_vms_rel(struct imgsrc *src, unsigned long base)
 		return;
 	const unsigned long *off =
 		(const unsigned long *)((const char *)rh + sizeof *rh);
-	for (unsigned k = 0; k < rh->count; k++)
-		*(unsigned long *)(base + off[k]) += base;
+	for (unsigned k = 0; k < rh->count; k++) {
+		unsigned long addr = base + off[k];
+		/* The relocation is a WRITE into the loaded image. The target page may
+		 * have been mapped NON-WRITABLE by the kernel: the tier-1 VMS-std stub
+		 * packs its relocated transfer PDSC into a single RWX LOAD segment, and
+		 * a W^X kernel (real qemu-system-alpha) maps that segment R-X, dropping
+		 * W -- so this store faults there while qemu-user (permissive RWX)
+		 * silently allowed it. Restore the segment's ELF-declared RWX on the
+		 * target page before the store: a genuine relocation legitimately needs
+		 * write access, and this ENSURES it rather than faking the result
+		 * (INV-6). Best-effort -- a target already in a writable data segment
+		 * (the normal case, and every x86_64/aarch64 image) stores fine whether
+		 * or not the mprotect was needed or honoured. Alpha's kernel page is
+		 * 8 KiB, so align to IMGACT_KPAGE, not the generic 4 KiB PAGE_SIZE, or
+		 * mprotect would EINVAL on a non-8 KiB-aligned in-segment address.
+		 * (vms-f60d) */
+		unsigned long pg = addr & ~(IMGACT_KPAGE - 1UL);
+		(void)sys_mprotect((void *)pg, IMGACT_KPAGE,
+				   PROT_READ | PROT_WRITE | PROT_EXEC);
+		*(unsigned long *)addr += base;
+	}
 }
 
 struct ovmx_prod {
@@ -1992,6 +2059,22 @@ static uint32_t imgact_cli_get_command_line(struct dsc$descriptor_s *out)
 	return g.status;
 }
 
+/* Freestanding envp scan for KEY=... (defined later in the file, in the
+ * common region); forward-declared here for the vms-f60d activation-seam
+ * instrumentation in imgact_vms_exit below. */
+static const char *imgact_env_value(char **envp, const char *key);
+
+/* Format a 32-bit value as exactly 8 lowercase hex digits + NUL. Freestanding
+ * (no libc): IMGACT has no snprintf. Used only by the vms-f60d activation-seam
+ * instrumentation below. */
+static void imgact_u32_hex8(char *out, uint32_t v)
+{
+	static const char hexd[] = "0123456789abcdef";
+	for (int i = 0; i < 8; i++)
+		out[i] = hexd[(v >> ((7 - i) * 4)) & 0xf];
+	out[8] = '\0';
+}
+
 /* Route a VMS-standard image's returned condition value to process exit.
  *
  * Faithful behavior (design §3.4) is SYS$EXIT: the executive records the
@@ -2031,6 +2114,44 @@ static void imgact_vms_exit(unsigned long cond)
 			  "executive $EXIT could not record the VMS condition "
 			  "value", 0);
 		sys_exit(IMGACT_EXIT_NOEXEC);
+	}
+	/* vms-f60d activation-seam instrumentation (OPT-IN, OVMX_IMGACT_SEAM=1 --
+	 * NEVER a default runtime change). IMGACT.EXE is the long-lived caller the
+	 * VMS-standard 6-arg call RETURNS to (R26); it has just recorded `cond` as
+	 * its OWN completion $STATUS via SETEXIT above, with no reaper race. Read it
+	 * straight back with GETEXIT(SEL_SELF) and print one line the Alpha-lane
+	 * qemu-system-alpha seam runner captures. Fail-quiet: a GETEXIT error just
+	 * leaves the fields at their zeroed defaults -- the seam is diagnostic only,
+	 * never load-bearing on the exit path. */
+	const char *seam = imgact_env_value(g_envp, "OVMX_IMGACT_SEAM");
+	if (seam && seam[0] == '1' && seam[1] == '\0') {
+		struct vms_getexit_args gx;
+		memset(&gx, 0, sizeof(gx));
+		gx.select = VMS_JPI_SEL_SELF;   /* our own recorded $STATUS */
+		(void)imgact_acp_dev_ioctl(fd, VMS_IOCTL_GETEXIT, &gx);
+
+		/* basename of the activated image path (argv[0] the kernel set) */
+		const char *base = g_argv0 ? g_argv0 : "";
+		for (const char *q = base; *q; q++)
+			if (*q == '/')
+				base = q + 1;
+
+		char hex[9];
+		imgact_u32_hex8(hex, gx.condition);
+		char he[2];
+		he[0] = gx.has_exited ? '1' : '0';
+		he[1] = '\0';
+
+		char line[512];
+		line[0] = '\0';
+		xstrcat(line, "OVMX-SEAM: image=");
+		xstrcat(line, base);
+		xstrcat(line, " stdcall_returned=1 has_exited=");
+		xstrcat(line, he);
+		xstrcat(line, " $STATUS=0x");
+		xstrcat(line, hex);
+		xstrcat(line, "\n");
+		eputs(line);
 	}
 	imgact_acp_dev_close(fd);
 	sys_exit((int)e.exit_code);   /* the executive-mapped POSIX exit code */
@@ -2349,6 +2470,40 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	 * g_acp_sysdevice). Runtime-discovered, not a compile-time literal
 	 * (vms-29ff/vms-47d). */
 	imgact_discover_sysdevice(envp);
+
+	/* INV-6 HEDGE (vms-f60d): the kernel-supplied AT_PHDR must point at MAPPED
+	 * memory before we walk ephdr[] (below AND inside exec_bias). A malformed
+	 * image whose program headers are not covered by any PT_LOAD -- e.g. a
+	 * hand-written linker script that omits the headers from a segment -- leaves
+	 * AT_PHDR pointing at an address the kernel never mapped; dereferencing
+	 * ephdr[i] then SIGSEGVs (seen on real qemu-system-alpha; invisible under
+	 * qemu-user's lenient whole-file map). IMGACT must FAIL HONEST, never crash.
+	 * Bound at_phnum, then mincore-probe the whole [at_phdr, at_phdr+n*phdr)
+	 * range (signal-free, no dereference). A CONTROL probe on the stack (always
+	 * mapped) first confirms mincore is usable here, so a quirky/unsupported
+	 * mincore can never REJECT a valid image -- it just falls back to today's
+	 * behaviour. */
+	if (at_phnum <= 0 || at_phnum > 64 || at_phdr == 0) {
+		vms_fatal("BADIMGHDR",
+			  "image program-header count absent or out of range",
+			  at_execfn);
+		sys_exit(IMGACT_EXIT_FAIL);
+	}
+	if (imgact_page_mapped((unsigned long)&argc)) {   /* control: mincore works */
+		unsigned long phdr_bytes =
+			(unsigned long)at_phnum * sizeof(Elf64_Phdr);
+		int mapped = 1;
+		for (unsigned long o = 0; mapped && o < phdr_bytes; o += IMGACT_KPAGE)
+			mapped = imgact_page_mapped(at_phdr + o);
+		if (mapped)
+			mapped = imgact_page_mapped(at_phdr + phdr_bytes - 1);
+		if (!mapped) {
+			vms_fatal("BADIMGHDR",
+				  "AT_PHDR not within a mapped image segment",
+				  at_execfn);
+			sys_exit(IMGACT_EXIT_FAIL);
+		}
+	}
 
 	/* ---- Build the executable object from the kernel-provided phdrs. ----
 	 * The kernel has already mapped the main executable's LOAD segments;

@@ -39,6 +39,7 @@
 #define SYS_mmap        71
 #define SYS_mprotect    74
 #define SYS_munmap      73
+#define SYS_mincore     375
 #define SYS_exit_group  405
 
 static inline long syscall6(long n, long a, long b, long c, long d, long e,
@@ -119,6 +120,13 @@ static inline long syscall6(long n, long a, long b, long c, long d, long e,
 #define IMGACT_TLS_VARIANT  1
 #define TLS_TCB_SIZE        0
 
+/* Alpha's kernel page size is 8 KiB (confirmed: alpha-linux getpagesize()==8192,
+ * and mprotect() of a non-8 KiB-aligned base returns EINVAL). imgact.c's
+ * apply_vms_rel mprotects the page around an arbitrary in-segment relocation
+ * target, so it must align to the REAL kernel page, not the generic 4 KiB
+ * PAGE_SIZE (vms-f60d: relocation write into a W^X R-X-mapped LOAD segment). */
+#define IMGACT_KPAGE        8192UL
+
 /* Assembly helpers (arch/alpha/start.S). */
 void _start(void);                 /* ELF entry point                        */
 void __tlsdesc_static(void);       /* OVMX-native symbol-vector TLS resolver
@@ -132,13 +140,17 @@ void imgact_set_tp(void *tp);      /* call_pal 0x9f (wrunique)                */
 void *imgact_get_tp(void);         /* call_pal 0x9e (rduniq)                  */
 
 /* Issue a genuine OpenVMS Alpha STANDARD CALL to a VMS image's transfer address
- * (vms-f60d). pv = procedure value (-> R27; entry code at *(pv+8)); ai = the
+ * (vms-f60d). pv = procedure value = the address of the transfer PDSC; the entry
+ * code is at *(pv+8) (PDSC$Q_ENTRY). The trampoline sets R27 = that ENTRY code
+ * address (NOT the descriptor): the OVMX `alpha-dec-vms` port is ELF-Alpha, so
+ * the callee's prologue does `ldgp $gp,0($27)` and must find its own entry in
+ * R27 (see arch/alpha/vms_transfer.S for the first-live-run fix). ai = the
  * Argument Information register value (-> R25); args = the six integer/pointer
  * activation-context arguments (-> R16..R21). R26 is set to a return label back
  * INTO IMGACT, so the call RETURNS (unlike _start's tail-jump). Returns R0, the
  * VMS condition value the called procedure produced. Alpha-only: this is the
  * Alpha calling standard, and the `alpha-dec-vms` port is the only VMS-standard
- * image class. See arch/alpha/vms_transfer.S. */
+ * image class. */
 #define IMGACT_HAVE_VMS_STD 1
 unsigned long imgact_vms_transfer(void *pv, unsigned long ai,
 				  const unsigned long args[6]);

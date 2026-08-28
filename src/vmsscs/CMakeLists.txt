@@ -377,6 +377,21 @@ target_include_directories(vmsscs_mscp_srv PUBLIC
 )
 target_link_libraries(vmsscs_mscp_srv PUBLIC vmsscs_mscp vmsscs_env)
 
+# vms-94c (DLM epic vms-7fa rung 1) - THE DLM SYSAP MESSAGE CLASS: encode/decode
+# for the four core distributed-lock-manager messages (ENQ / GRANT / DEQ /
+# BLKAST). Rides the shared SCS envelope (vmsscs_env) as a p. 4-13 application
+# message (MTYPE 10), the same nesting scs_mscp.c uses. The SEMANTIC field values
+# are authentic $LCKDEF (lckdef.h in src/libvms/include, oracle-pinned); the DLM
+# body BYTE LAYOUT is a LABELLED OVMX design choice (VSI/HPE do not publish it --
+# Rule 8), recorded in docs/compat/facilities/cluster-dlm.yaml. Pure: no socket,
+# no allocation. scsd_exe links it for the DLM SYSAP receive/transmit path.
+add_library(vmsscs_dlm STATIC scs_dlm.c)
+target_include_directories(vmsscs_dlm PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/libvms/include
+)
+target_link_libraries(vmsscs_dlm PUBLIC vmsscs_env)
+
 # vms-7c0 - THE RECEIVE-SIDE SCS HEADER. One pure function: decode the sec
 # 4(h)(1b) envelope, classify the p. 4-13 MTYPE, hand out the destination and
 # source Con.IDs so scsd.c can do the p. 2-29 CDL lookup instead of comparing a

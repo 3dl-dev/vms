@@ -1902,33 +1902,86 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
         execv(linux_path, argv);
         _exit(1);
     } else if (pid > 0) {
-        /* Parent - wait for child (WUNTRACED for Ctrl-Y stop support) */
+        /*
+         * Parent. On OpenVMS the image runs IN the CLI's process and its
+         * completion condition value IS $STATUS. OVMX fork()s+execve()s, so the
+         * image records its VMS condition value in the executive PCB of this
+         * child (vms_kif_setexit, driven by IMGACT / sys_imgact at SYS$EXIT) and
+         * DCL reads it back here -- the fork fallback's authentic $STATUS path,
+         * mirroring the in-process path above (vms-707). Collapsing the POSIX
+         * child exit to SS$_NORMAL/SS$_ABORT, as this did before, discarded the
+         * real condition value: an image whose main returned 3 reported
+         * %X00000001, not the faithful DEC C encoding the executive held.
+         *
+         * Peek at the child's terminal state with WNOWAIT so its executive PCB
+         * is STILL PRESENT when we read it: a plain waitpid() reaps the child,
+         * and vms_proc_reap_dead() (run at the head of GETEXIT) then drops the
+         * row before we can read it. WEXITED|WSTOPPED catches both a Ctrl-Y stop
+         * and a true exit, the two outcomes the old WUNTRACED wait distinguished.
+         */
         extern volatile sig_atomic_t dcl_running_child;
         dcl_running_child = (sig_atomic_t)pid;
-        int wstatus;
-        waitpid(pid, &wstatus, WUNTRACED);
-        dcl_running_child = 0;
-        if (WIFSTOPPED(wstatus)) {
-            /* Child was stopped by Ctrl-Y — save for CONTINUE */
+
+        siginfo_t si;
+        memset(&si, 0, sizeof(si));
+        while (waitid(P_PID, (id_t)pid, &si, WEXITED | WSTOPPED | WNOWAIT) < 0 &&
+               errno == EINTR)
+            ;
+
+        if (si.si_code == CLD_STOPPED || si.si_code == CLD_TRAPPED) {
+            /* Child stopped by Ctrl-Y — save for CONTINUE (do NOT reap it). */
+            dcl_running_child = 0;
             printf("\nInterrupt\n");
             ctx->interrupted_pid = pid;
             return SS$_ABORT;
         }
+
+        /*
+         * The child has exited but is not yet reaped (WNOWAIT), so its zombie
+         * task keeps the executive PCB alive. Read the image's recorded
+         * completion $STATUS by the child's Linux pid BEFORE reaping -- by-Linux-
+         * pid because the child SHARES DCL's VMS PID (REGISTER_CONTINUE), which
+         * makes a by-VMS-PID read ambiguous between DCL and the child. `recorded`
+         * is set iff an image actually recorded a status: a genuine OVMX image
+         * (IMGACT routes SYS$EXIT through the executive $EXIT) does; a foreign
+         * tool or a shebang script that never calls $EXIT does not.
+         */
+        uint32_t cond = 0;
+        int recorded = 0;
+        uint32_t gx = vms_kif_getexit_linux((uint32_t)pid, &cond, &recorded);
+
+        /* Now actually reap the child. */
+        int wstatus = 0;
+        while (waitpid(pid, &wstatus, 0) < 0 && errno == EINTR)
+            ;
+        dcl_running_child = 0;
+
+        if (gx == SS$_NORMAL && recorded) {
+            /* The executive holds the image's real VMS condition value -- that
+             * is $STATUS. Surface an error severity exactly as the in-process
+             * path does, then hand back the true condition value (not a
+             * POSIX-derived collapse). */
+            if (!(cond & 1))
+                dcl_error("DCL", (int)(cond & 7), "ABORT",
+                          "image %s exited with error status %%X%08X",
+                          display_name, (unsigned)cond);
+            return cond;
+        }
+
+        /*
+         * No executive-recorded status (no /dev/vms, or a foreign tool that
+         * never called $EXIT): derive $STATUS from the POSIX outcome, exactly as
+         * before. vms-17f9: a nonzero exit or a killing signal is SURFACED, not
+         * swallowed, so a failed RUN never looks identical to a successful one.
+         */
         if (WIFEXITED(wstatus)) {
             int exit_code = WEXITSTATUS(wstatus);
-            /* vms-17f9: a nonzero image exit must be SURFACED, not swallowed.
-             * Previously this returned SS$_ABORT silently, so a RUN that
-             * failed looked identical to one that succeeded (the de-risk that
-             * hunted a "no output" RUN, docs/derisk-vms-530-imgact-qemu.md). */
             if (exit_code != 0)
                 dcl_error("DCL", 2, "ABORT",
                           "image %s exited with error status %%X%08X",
                           display_name, (unsigned)exit_code);
             return (exit_code == 0) ? SS$_NORMAL : SS$_ABORT;
         }
-        /* vms-17f9: a child killed by a signal (a crash) was silently dropped
-         * here and cmd_run fell through to SS$_NORMAL, reporting success for an
-         * image that never ran. Report it and fail. */
         if (WIFSIGNALED(wstatus)) {
             dcl_error("DCL", 4, "ABORT",
                       "image %s terminated abnormally (signal %d)",

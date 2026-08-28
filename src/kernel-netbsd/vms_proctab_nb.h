@@ -135,6 +135,7 @@
 #define VMS_JPI_SEL_SELF    0   /* the calling process */
 #define VMS_JPI_SEL_PID     1   /* by vms_pid */
 #define VMS_JPI_SEL_PRCNAM  2   /* by prcnam, within the caller's UIC group */
+#define VMS_JPI_SEL_LINUX_PID 3 /* GETEXIT only: by backing Linux pid (vms-707) */
 
 #define VMS_PI_V_CPUTIM     0x00000001u  /* cputim is sourced */
 #define VMS_PI_V_PAGEFLTS   0x00000002u  /* pageflts is sourced */

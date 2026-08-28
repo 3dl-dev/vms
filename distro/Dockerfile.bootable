@@ -80,6 +80,19 @@ RUN CC=gcc CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -m
         "/tmp/build/link-native/SYSLIB/DECC\$SHR.EXE" \
         "/tmp/build/link-native/SYSLIB/LIBVMSRMS\$SHR.EXE"
 
+# RC3.EXE (vms-707): a minimal RUN target for the DCL $STATUS-propagation gate --
+# prints one line to SYS$OUTPUT and terminates with a nonzero completion status.
+# Same cc -> LINK.EXE toolchain + producer images as PARTS.EXE above, so it
+# activates through IMGACT.EXE over the ACP exactly as any RUN target does.
+# tests/qemu/test_run_status_e2e.sh boots the runtime, RUNs it, and asserts DCL's
+# $STATUS is the image's executive-recorded completion status (not a blanket
+# %X00000001) AND that the image's stdout reached the console.
+RUN CC=gcc CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mtls-dialect=gnu2" \
+    sh src/apps/rctest/mk_rc3.sh \
+        /tmp/build/bin/LINK.EXE \
+        /tmp/build/link-native/RC3.EXE \
+        "/tmp/build/link-native/SYSLIB/DECC\$SHR.EXE"
+
 # Ground-source gate, baked into the build itself (not just asserted by a
 # separate CI job elsewhere): every artifact this stage ships must be a real
 # LINK.EXE-built x86_64 image with NO DT_NEEDED/DT_HASH (LINK.EXE emits no
@@ -405,6 +418,7 @@ COPY --from=link-native /tmp/build/link-native/SYSLIB /link-native/SYSLIB
 COPY --from=link-native /tmp/build/link-native/SYSEXE /link-native/SYSEXE
 COPY --from=link-native /src/src/imgact/IMGACT.EXE /link-native/IMGACT.EXE
 COPY --from=link-native /tmp/build/link-native/PARTS.EXE /link-native/PARTS.EXE
+COPY --from=link-native /tmp/build/link-native/RC3.EXE /link-native/RC3.EXE
 
 # KVER is the from-source kernel's kernelrelease (copied from kernel-build as
 # /tmp/kver above, e.g. 6.18.44-ovmx). The build tree lives at
@@ -521,6 +535,7 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     # static+dynamic initramfs, DCL as the flagship dynamic proof.
     cp build-static/bin/STARTUP.EXE    /system-stage/init && \
     cp /link-native/IMGACT.EXE         /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp /link-native/RC3.EXE            /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp "/link-native/SYSEXE/DCL.EXE"      /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp "/link-native/SYSEXE/LOGINOUT.EXE" /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp /link-native/SYSLIB/*.EXE       /system-stage/vms/SYS0/SYSCOMMON/SYSLIB/ && \

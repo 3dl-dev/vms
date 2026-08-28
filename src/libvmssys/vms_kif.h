@@ -478,6 +478,16 @@ uint32_t vms_kif_setexit(uint32_t condition, uint32_t *exit_code);
  * zero *condition, which is a legal value). */
 uint32_t vms_kif_getexit(uint32_t *condition, int *has_exited);
 
+/* Read the image-completion $STATUS of a process named by its backing Linux pid
+ * (vms-707). DCL's RUN uses this to recover the true condition value of an image
+ * it activated through the fork()+execve() fallback -- that child shares DCL's
+ * VMS PID, so only the child's Linux pid names its PCB unambiguously. Must be
+ * called BEFORE the child is reaped. *has_exited (optional) is nonzero iff an
+ * image actually recorded a status (a foreign tool that never $EXITs leaves it
+ * 0). */
+uint32_t vms_kif_getexit_linux(uint32_t linux_pid, uint32_t *condition,
+                               int *has_exited);
+
 /* Record this CLI process's invoking command line + cliflag, for an activated
  * image to inherit and read back. cliflag == 0 means "no CLI". */
 uint32_t vms_kif_setcli(uint32_t cliflag, const char *command);

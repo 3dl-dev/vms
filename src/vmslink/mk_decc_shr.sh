@@ -877,6 +877,15 @@ if [ -f "$DECC_MAP" ]; then
     echo "mk_decc_shr: decc\$ CRTL alias vector: exported $n_add, skipped $n_skip (musl-undefined — gap for a later rung, not faked)"
 fi
 
+# waitid (vms-707) APPENDED at the very end of the vector -> no prior universal's
+# index moves (GSMATCH LEQUAL-compatible). DCL's RUN reads an activated image's
+# executive-recorded completion $STATUS with waitid(P_PID, ..., WNOWAIT): a peek
+# that does NOT reap the exited image, so its executive PCB survives to be read
+# back before waitpid() reaps it. A bare musl universal DCL references directly
+# (musl defines waitid); the curated bare-name block above is index-frozen, so it
+# is appended here rather than inserted next to waitpid.
+VEC="$VEC,waitid=PROCEDURE"
+
 # Whole-archive, strict (NO --allow-undefined): a complete C-RTL shareable must
 # link with zero deferred externals. libc.a first so its strong defs win; the
 # loader-glue object last (it only REFERENCES __libc, which libc.a defines).

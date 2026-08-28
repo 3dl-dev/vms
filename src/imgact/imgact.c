@@ -1612,6 +1612,34 @@ static void bind_imports(unsigned long base, const struct ovmx_imp_header *ih,
 		struct ovmx_prod *p = load_ovmx_producer(soname);
 		if (!p)
 			die_imgnotfnd(soname);
+#if defined(__alpha__)
+		/* Alpha .vms$imp reader contract (vms-32e1 / vms-f60d): bit31 of
+		 * sv_index (OVMX_IMP_LINKAGE) selects the 2-quadword LINKAGE form; the
+		 * real symbol-vector index is the low 31 bits. GCC's face-2 SV supplies
+		 * the producer PROCEDURE entry's `value` as PV = the PROCEDURE
+		 * DESCRIPTOR (PDSC) address, so the resolved SV value IS PV. The code
+		 * entry is PDSC$Q_ENTRY = *(PV+8). Fill the pair so the alpha-dec-vms
+		 * port's standard call (R27 = quad[1] = PV, entry = quad[0] = *(PV+8) --
+		 * see LINK.EXE evax_add_ximport in src/vmslink/link.c and
+		 * src/imgact/arch/alpha/vms_transfer.S) resolves; the earlier one-quad
+		 * fill left quad[1]=PV NULL and SEGV'd decc$main's prologue. */
+		int linkage = (ie[k].sv_index & OVMX_IMP_LINKAGE) != 0;
+		uint32_t sidx = ie[k].sv_index & ~OVMX_IMP_LINKAGE;
+		unsigned long PV = ovmx_sv_resolve(p->sv, sidx, p->base,
+						   ie[k].req_major, ie[k].req_minor);
+		if (!PV) {
+			vms_fatal("GSMATCH", "shareable image version mismatch", soname);
+			sys_exit(IMGACT_EXIT_FAIL);
+		}
+		if (linkage) {
+			/* 2-quad linkage pair at patch_off (the quad[0] site). */
+			*(unsigned long *)(base + ie[k].patch_off)     = *(unsigned long *)(PV + 8); /* quad[0] = code entry = PDSC$Q_ENTRY */
+			*(unsigned long *)(base + ie[k].patch_off + 8) = PV;                          /* quad[1] = PV = the PDSC             */
+		} else {
+			/* 1-quad data/CODEADDR import: the single slot receives PV. */
+			*(unsigned long *)(base + ie[k].patch_off) = PV;
+		}
+#else
 		unsigned long addr = ovmx_sv_resolve(p->sv, ie[k].sv_index, p->base,
 						     ie[k].req_major, ie[k].req_minor);
 		if (!addr) {
@@ -1619,6 +1647,7 @@ static void bind_imports(unsigned long base, const struct ovmx_imp_header *ih,
 			sys_exit(IMGACT_EXIT_FAIL);
 		}
 		*(unsigned long *)(base + ie[k].patch_off) = addr;
+#endif
 	}
 }
 

@@ -75,34 +75,45 @@ CF="-O2 -g0 -mpointer-size=64 -fno-builtin -fno-tree-loop-distribute-patterns"
 #
 # MECHANISM: mark the whole caller-saved integer TEMP set call-SAVED for this
 # compile so GCC preserves (prologue-save/epilogue-restore) any of them each
-# routine uses. That is R1-R8 (t0-t7), R16-R25 (a0-a5, t8-t11). Excluded on
-# purpose: R0 (the DIV/REM result), R26 (RA), R27 (PV — callers reload it after
-# every call), R28 (AT, reserved volatile), R29/R30/R31. GCC is left R0/R28 plus
-# the already-callee-saved R9-R15 to work in; the div loop spills to R9-R15
-# (themselves preserved), so no caller-visible temp is ever clobbered. This
-# makes the OVMX OTS$ routines honor the OTS$ preservation contract as a set —
-# not a point-patch for R1 — so the next live temp gcc parks across a call
-# (gap-10) is already covered.
+# routine uses. That is R1-R8 (t0-t7), R16-R25 (a0-a5, t8-t11). Excluded from
+# THIS set: R0, R26 (RA), R27 (PV — callers reload it after every call), R28
+# (AT, reserved volatile), R29/R30/R31. GCC is left R0/R28 plus the already-
+# callee-saved R9-R15 to work in; the div loop spills to R9-R15 (themselves
+# preserved), so no caller-visible temp is clobbered.
 OTS_CALL_SAVED=""
 for r in 1 2 3 4 5 6 7 8 16 17 18 19 20 21 22 23 24 25; do
     OTS_CALL_SAVED="$OTS_CALL_SAVED -fcall-saved-$r"
 done
 CF="$CF $OTS_CALL_SAVED"
 
-"${TARGET}-gcc" $CF -c "$OTS_SRC/ots_runtime.c"  -o "$OUT/ots_runtime.o"
+# gap-10 (bead vms-0e4d): R0 is EXCLUDED above because it is the DIV/REM RESULT
+# register — GCC docs warn -fcall-saved on a return-value register is
+# "disaster", and ots_runtime.c's OTS$DIV_*/OTS$REM_* return in R0. But the VOID
+# block routines (OTS$MOVE/OTS$ZERO, no R0 result) ALSO fall under the OTS$
+# contract's preserve-everything-but-the-result clause, and the port compiler
+# parks a live value in R0 across an implicit OTS$ZERO call (musl __init_libc's
+# `envp` across the OTS$ZERO that zeroes its aux[AUX_CNT] — the gap-10 fault). So
+# the block routines are their OWN translation unit (ots_block.c), compiled with
+# R0 ADDED to the call-saved set. Applying -fcall-saved-0 here — and ONLY here,
+# where nothing returns in R0 — makes OTS$MOVE/OTS$ZERO preserve R0 too, without
+# touching the R0-returning arithmetic routines.
+OTS_BLOCK_CF="$CF -fcall-saved-0"
+
+"${TARGET}-gcc" $CF          -c "$OTS_SRC/ots_runtime.c"  -o "$OUT/ots_runtime.o"
+"${TARGET}-gcc" $OTS_BLOCK_CF -c "$OTS_SRC/ots_block.c"   -o "$OUT/ots_block.o"
 "${TARGET}-as"       "$OTS_SRC/ots_home_args.s"  -o "$OUT/ots_home_args.o"
 
 # GUARD: the runtime objects must not reference any OTS$/decc$ symbol themselves
 # (no self-recursion, no accidental CRTL dependency).
-if "${TARGET}-nm" -u "$OUT/ots_runtime.o" "$OUT/ots_home_args.o" \
+if "${TARGET}-nm" -u "$OUT/ots_runtime.o" "$OUT/ots_block.o" "$OUT/ots_home_args.o" \
      | grep -qiE 'OTS\$|decc\$'; then
     echo "build-libots: FAIL — OTS runtime references an OTS\$/decc\$ symbol (self-dep)" >&2
-    "${TARGET}-nm" -u "$OUT/ots_runtime.o" "$OUT/ots_home_args.o" | grep -iE 'OTS\$|decc\$' >&2
+    "${TARGET}-nm" -u "$OUT/ots_runtime.o" "$OUT/ots_block.o" "$OUT/ots_home_args.o" | grep -iE 'OTS\$|decc\$' >&2
     exit 2
 fi
 
 # Symbol vector = every OTS$ PROCEDURE the objects define.
-VEC=$("${TARGET}-nm" --defined-only "$OUT/ots_runtime.o" "$OUT/ots_home_args.o" \
+VEC=$("${TARGET}-nm" --defined-only "$OUT/ots_runtime.o" "$OUT/ots_block.o" "$OUT/ots_home_args.o" \
       | awk '$NF ~ /^OTS\$/ && $(NF-1) ~ /^[Tt]$/ {print $NF"=PROCEDURE"}' \
       | sort | paste -sd,)
 NVEC=$(printf '%s' "$VEC" | tr ',' '\n' | grep -c .)
@@ -110,6 +121,6 @@ echo "build-libots: symbol vector ($NVEC universals): $VEC"
 [ "$NVEC" -eq 11 ] || { echo "build-libots: FAIL expected 11 OTS\$ universals, got $NVEC" >&2; exit 3; }
 
 "$LINK_EXE" --shareable --symbol-vector "$VEC" --gsmatch LEQUAL,1,0 \
-    -o "$OUT/LIBOTS_SHR.EXE" "$OUT/ots_runtime.o" "$OUT/ots_home_args.o"
+    -o "$OUT/LIBOTS_SHR.EXE" "$OUT/ots_runtime.o" "$OUT/ots_block.o" "$OUT/ots_home_args.o"
 
 echo "build-libots: created $OUT/LIBOTS_SHR.EXE (LIBOTS\$ shareable, $NVEC OTS\$ universals)"

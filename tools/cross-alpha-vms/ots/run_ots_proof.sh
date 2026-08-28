@@ -6,7 +6,7 @@
 #   1. build the alpha-dec-vms cross toolchain image (binutils + cc1 + libgcc.a)
 #   2. build musl libc.a (-g0) with the arch overlay
 #   3. build LINK.EXE + OVMXDUMP from the repo (ordinary host tools)
-#   4. build LIBOTS$SHR.EXE from ots_runtime.c + ots_home_args.s (build-libots.sh)
+#   4. build LIBOTS$SHR.EXE from ots_runtime.c + ots_block.c + ots_home_args.s (build-libots.sh)
 #   5. link DECC$SHR whole-archiving libc.a + libgcc.a WITH --use LIBOTS$SHR.EXE
 #      and ASSERT zero OTS$ references are left deferred (they bind as real
 #      cross-image .vms$imp imports); the only residual is the non-OTS setjmp/

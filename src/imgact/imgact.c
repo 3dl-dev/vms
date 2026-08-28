@@ -2434,8 +2434,24 @@ static void imgact_vms_exit(unsigned long cond)
 	 * qemu-system-alpha seam runner captures. Fail-quiet: a GETEXIT error just
 	 * leaves the fields at their zeroed defaults -- the seam is diagnostic only,
 	 * never load-bearing on the exit path. */
+	/* vms-430 DIAGNOSTIC DISCRIMINATOR (NOT a fix; do not merge). The opt-in
+	 * env gate (OVMX_IMGACT_SEAM==1) is deliberately OVERRIDDEN so the seam
+	 * block runs UNCONDITIONALLY on every activation. Purpose: split the two
+	 * vms-430 candidates for the Alpha rail. If this FORCED block now emits a
+	 * status line (even a default 0x00000001), the seam/exit path IS reached
+	 * and imgact_vms_exit RAN -> the fault is candidate (a): the crt0
+	 * main-return / C$_EXIT1 condition (or its #812 PV/PDSC linkage) never
+	 * delivered N to SETEXIT. If the block is STILL silent, imgact_vms_exit is
+	 * never reached at all -> candidate (b): env/activation (the child crashed
+	 * before returning, or the seam code path is not hit). Revert before any
+	 * real fix lands. */
 	const char *seam = imgact_env_value(g_envp, "OVMX_IMGACT_SEAM");
-	if (seam && seam[0] == '1' && seam[1] == '\0') {
+	(void)seam;   /* gate intentionally ignored for the discriminator */
+	{
+		/* Distinct marker proving the FORCED block executed regardless of the
+		 * env gate -- if THIS line is absent the block never ran (candidate b). */
+		eputs("OVMX_SEAM_FORCED: entered\n");
+
 		struct vms_getexit_args gx;
 		memset(&gx, 0, sizeof(gx));
 		gx.select = VMS_JPI_SEL_SELF;   /* our own recorded $STATUS */
@@ -2453,12 +2469,20 @@ static void imgact_vms_exit(unsigned long cond)
 		he[0] = gx.has_exited ? '1' : '0';
 		he[1] = '\0';
 
+		/* Raw value we DELIVERED to SETEXIT (cond) vs the value GETEXIT read
+		 * back -- if delivered != 0x1 but read-back == 0x1 the fault is in the
+		 * record path; if BOTH are 0x1 the crt0/linkage never handed us N. */
+		char dhex[9];
+		imgact_u32_hex8(dhex, (uint32_t)cond);   /* the fn arg, pre-ioctl */
+
 		char line[512];
 		line[0] = '\0';
 		xstrcat(line, "OVMX-SEAM: image=");
 		xstrcat(line, base);
 		xstrcat(line, " stdcall_returned=1 has_exited=");
 		xstrcat(line, he);
+		xstrcat(line, " delivered=0x");
+		xstrcat(line, dhex);
 		xstrcat(line, " $STATUS=0x");
 		xstrcat(line, hex);
 		xstrcat(line, "\n");

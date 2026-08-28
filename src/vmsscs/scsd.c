@@ -10949,7 +10949,24 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                v.msgtype, v.format, v.total_sca_len, v.remote_conid, v.local_conid);
         fflush(stdout);
 
-        if (v.msgtype != SCS_MSGTYPE_SEQAPP || !v.has_conid) {
+        /* vms-45c (rung-ADD): a JOINER-INITIATED VMS$VAXcluster connect is
+         * msgtype 0x5b (SCS_MSGTYPE_DIRLOOKUP's value; the VC is not up yet, so
+         * it rides the establishing 0x5b form -- GROUNDED, scsd_svc_emit_
+         * connect_req / vax3-2to3-established-join). OVMX's member-accept below
+         * only ever admitted the member's 0x4b (SEQAPP) form, because a VAX
+         * joiner never connects TO OVMX -- OVMX joins the VAX. Two OVMX nodes
+         * are symmetric joiners, so each must ACCEPT the OTHER's 0x5b joiner
+         * connect (send the ACCEPT_REQ the peer waits on) to reach JOINBOUND /
+         * ADD_MEMBER. Under the member-role flag, also admit the 0x5b connect;
+         * the length gate just below scopes it to the 110-byte connect / 190-
+         * byte add-member classes (a 0x5b directory LOOKUP is 62/66-byte and is
+         * handled on the dir Con.ID branches long before it could reach here).
+         * Flag-off, only 0x4b is accepted -- byte-identical toward a real VAX,
+         * which drives the accept in its own 0x4b form. */
+        int connect_msgtype_ok =
+            (v.msgtype == SCS_MSGTYPE_SEQAPP) ||
+            (v.msgtype == SCS_MSGTYPE_DIRLOOKUP && scsd_member_initiate_enabled());
+        if (!connect_msgtype_ok || !v.has_conid) {
             return;
         }
         /* vms-770 (vms-a61 audit): has_conid used to BE the length-class test

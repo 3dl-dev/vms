@@ -21,36 +21,59 @@
 
 #include <errno.h>
 
-long __vms_alpha_syscall(long n, long a1, long a2, long a3, long a4, long a5, long a6);
+/*
+ * vms-157 -- 64-bit syscall argument ABI, MANDATORY on this LLP64 port.
+ *
+ * alpha-dec-vms is the OpenVMS "P64"/LLP64 model: int=4, LONG=4, long long=8,
+ * pointer=8 (build-musl.sh's preflight asserts exactly this). But the runtime
+ * kernel is Linux-Alpha, which is LP64: every syscall argument is a full 64-bit
+ * register, and pointers are 64 bits. musl's generic syscall glue assumes
+ * sizeof(long)==sizeof(void*) and casts every argument through __scc == (long).
+ * On this port `long` is only 32 bits, so that cast TRUNCATES (and sign-extends)
+ * any pointer argument -- e.g. a stack-resident iovec at 0x7743_c8937790 becomes
+ * 0xffffffff_c8937790 and writev() EFAULTs. syscall_arch.h is included by
+ * src/internal/syscall.h BEFORE its `#ifndef __scc` fallback, so we override the
+ * cast and the arg type here to the 64-bit `long long`. This is the port's
+ * syscall register width, independent of the VMS `long`.
+ */
+#define __scc(X) ((long long)(X))
+typedef long long syscall_arg_t;
+
+long long __vms_alpha_syscall(long long n, long long a1, long long a2,
+			      long long a3, long long a4, long long a5,
+			      long long a6);
 
 #define __SYSCALL_LL_E(x) (x)
 #define __SYSCALL_LL_O(x) (x)
 
-static inline long __syscall0(long n)
+static inline long __syscall0(long long n)
 {
 	return __vms_alpha_syscall(n, 0, 0, 0, 0, 0, 0);
 }
-static inline long __syscall1(long n, long a)
+static inline long __syscall1(long long n, long long a)
 {
 	return __vms_alpha_syscall(n, a, 0, 0, 0, 0, 0);
 }
-static inline long __syscall2(long n, long a, long b)
+static inline long __syscall2(long long n, long long a, long long b)
 {
 	return __vms_alpha_syscall(n, a, b, 0, 0, 0, 0);
 }
-static inline long __syscall3(long n, long a, long b, long c)
+static inline long __syscall3(long long n, long long a, long long b, long long c)
 {
 	return __vms_alpha_syscall(n, a, b, c, 0, 0, 0);
 }
-static inline long __syscall4(long n, long a, long b, long c, long d)
+static inline long __syscall4(long long n, long long a, long long b, long long c,
+			     long long d)
 {
 	return __vms_alpha_syscall(n, a, b, c, d, 0, 0);
 }
-static inline long __syscall5(long n, long a, long b, long c, long d, long e)
+static inline long __syscall5(long long n, long long a, long long b, long long c,
+			     long long d, long long e)
 {
 	return __vms_alpha_syscall(n, a, b, c, d, e, 0);
 }
-static inline long __syscall6(long n, long a, long b, long c, long d, long e, long f)
+static inline long __syscall6(long long n, long long a, long long b, long long c,
+			     long long d, long long e, long long f)
 {
 	return __vms_alpha_syscall(n, a, b, c, d, e, f);
 }

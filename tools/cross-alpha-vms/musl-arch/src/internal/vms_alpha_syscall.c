@@ -31,15 +31,25 @@
  * cc1-compiled callers (and syscall_cp.s's linkage pair) expect.
  */
 
-long __vms_alpha_syscall(long n, long a1, long a2, long a3, long a4, long a5, long a6)
+/*
+ * Args and result are `long long` (64-bit), NOT `long` -- on this LLP64 port
+ * `long` is only 32 bits, but the Linux-Alpha kernel passes every syscall
+ * argument (and returns pointers) in full 64-bit registers. Truncating a
+ * pointer argument through a 32-bit `long` is exactly the writev-EFAULT bug the
+ * 64-bit __scc / syscall_arg_t in syscall_arch.h exists to prevent; the register
+ * variables here must be equally wide so no truncation reappears in the trap.
+ */
+long long __vms_alpha_syscall(long long n, long long a1, long long a2,
+			      long long a3, long long a4, long long a5,
+			      long long a6)
 {
-	register long r0  __asm__("$0")  = n;   /* syscall number -> result/errno  */
-	register long r16 __asm__("$16") = a1;  /* a0 */
-	register long r17 __asm__("$17") = a2;  /* a1 */
-	register long r18 __asm__("$18") = a3;  /* a2 */
-	register long r19 __asm__("$19") = a4;  /* a3 in; error flag out           */
-	register long r20 __asm__("$20") = a5;  /* a4 */
-	register long r21 __asm__("$21") = a6;  /* a5 */
+	register long long r0  __asm__("$0")  = n;   /* syscall number -> result/errno */
+	register long long r16 __asm__("$16") = a1;  /* a0 */
+	register long long r17 __asm__("$17") = a2;  /* a1 */
+	register long long r18 __asm__("$18") = a3;  /* a2 */
+	register long long r19 __asm__("$19") = a4;  /* a3 in; error flag out          */
+	register long long r20 __asm__("$20") = a5;  /* a4 */
+	register long long r21 __asm__("$21") = a6;  /* a5 */
 
 	__asm__ __volatile__ (
 		"callsys"

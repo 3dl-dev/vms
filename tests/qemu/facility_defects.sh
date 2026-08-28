@@ -535,7 +535,8 @@ initialize-home-magic-not-written
 dirlogical-compose-drops-common-member
 dcl-acp-search-fid-fabricated
 loginout-acp-auth-from-ods2
-multiuser-stage-shared-not-peruser"
+multiuser-stage-shared-not-peruser
+tcpip-config-hostaddr-not-defined"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -5810,6 +5811,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    tcpip-config-hostaddr-not-defined)
+        case "$_f" in
+        facility)     echo "TCP/IP Services CONFIG/MANAGEMENT plane -- the config round-trip of tcpip_cfg_configure() (src/vmstcpip/mgmt/tcpip_config.h, vms-67f), the engine TCPIP\$CONFIG.COM and the DCL \`TCPIP SET/SHOW\` verbs drive and test_syssvc_tcpip_config proves. Configuring OVMX IP THE VMS WAY records the local host name/domain/address in the VMS-faithful TCPIP\$* SYSTEM logical names, which are EXECUTIVE-RESIDENT in LNM\$SYSTEM (shared cross-process over /dev/vms, vms-d37) -- not a per-process fake. With no executive the define fails SS\$_NOSUCHDEV honestly.";;
+        targets)      echo "vmstcpip/mgmt/tcpip_config.h";;
+        suites_red)   echo "test_syssvc_tcpip_config";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tcpip_cfg_configure() records the configured host ADDRESS in the TCPIP\$INET_HOSTADDR SYSTEM logical with 'st = tcpip_cfg_define_system(TCPIP_LNM_INET_HOSTADDR, addr);'. The mutation replaces that with 'st = SS\$_NORMAL;' -- the define is dropped but success is still reported, so configure() STILL RETURNS SS\$_NORMAL and the interface address, the TCPIP\$INET_HOST and the TCPIP\$INET_DOMAIN logicals are all still real. Only the one assertion that reads TCPIP\$INET_HOSTADDR back through the independent sys\$trnlnm sees the missing logical (SS\$_NOLOGNAM instead of the configured dotted-quad), reddening exactly the config-does-not-round-trip invariant. The host/domain round-trip, the interface-reflects-it (SIOCGIFADDR), and the supersede assertions stay green. One statement neutralised.";;
+        require_fail) cat <<'EOF'
+TCPIP$INET_HOSTADDR reads back the configured host address via sys$trnlnm
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     bgsock-recv-length-zeroed)
         case "$_f" in
         facility)     echo "BSD-sockets RTL veneer over BGn: -- the ovmx_recv() receive path of the OVMX sockets veneer (src/vmstcpip/sockets/vms_bgsock.c, vms-22a prereq), the DECC\$SOCKET-equivalent middle layer between an application's standard socket()/send()/recv() and the executive-resident BGn: driver. The app speaks ONLY sockets; the veneer translates them into the public \$ASSIGN TCPIP\$DEVICE: + \$QIO ops. \$ASSIGN TCPIP\$DEVICE: fails SS\$_NOSUCHDEV with no executive (ovmx_socket -> ENODEV).";;
@@ -6989,6 +7007,16 @@ apply_edit() {
         # range anchor is needed; after substitution no 'total += take;' is left,
         # making a second apply the no-op the selftest requires.
         sed -i 's|total += take;          /\* NEGCTL tcpip-ftp-get-length-dropped \*/|total += 0; /* NEGCTL tcpip-ftp-get-length-dropped */|' "$_file";;
+
+    tcpip-config-hostaddr-not-defined)
+        # Drop the TCPIP$INET_HOSTADDR system-logical define in
+        # tcpip_cfg_configure(): the define call becomes a bare success. The
+        # string is UNIQUE in the header (only the configure round-trip carries
+        # this NEGCTL comment), so no range anchor is needed; after substitution
+        # the original define with that comment is gone, making a second apply
+        # the no-op the selftest requires. configure() still returns success, so
+        # only the TCPIP$INET_HOSTADDR read-back assertion reddens.
+        sed -i 's|st = tcpip_cfg_define_system(TCPIP_LNM_INET_HOSTADDR, addr); /\* NEGCTL tcpip-config-hostaddr-not-defined \*/|st = SS$_NORMAL; /* NEGCTL tcpip-config-hostaddr-not-defined */|' "$_file";;
 
     bgsock-recv-length-zeroed)
         # Zero the received byte count in ovmx_recv(), anchored on its own NEGCTL

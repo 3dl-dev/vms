@@ -525,6 +525,7 @@ tcpip-ftp-get-length-dropped
 bgsock-recv-length-zeroed
 bgsock-poll-always-ready
 bgsock-getname-addr-zeroed
+bg-accept-socket-not-installed
 initialize-home-magic-not-written
 dirlogical-compose-drops-common-member
 dcl-acp-search-fid-fabricated
@@ -5831,6 +5832,24 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    bg-accept-socket-not-installed)
+        case "$_f" in
+        facility)     echo "INET pseudo-device BGn: SERVER path -- the IO\$_ACCESS|IO\$M_ACCEPT (accept) handler of the executive-resident BGn: driver (vms_ioctl_bg_accept, src/kernel-core/vms_bg.c, vms-698). The inbound half of the network facility: a VMS program \$ASSIGNs TCPIP\$DEVICE:, \$QIOs bind + listen, then accepts an inbound TCP connection onto a SECOND BG channel, and the accepted socket lives IN the executive (host in-kernel socket API, exec_socket_accept) exactly as the vms-527 client socket does.";;
+        targets)      echo "kernel-core/vms_bg.c";;
+        suites_red)   echo "test_syssvc_bg_server";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_bg_accept() completes exec_socket_accept and reports SS\$_NORMAL, but the mutation RELEASES the accepted socket instead of installing it onto the target channel (tch->sock stays NULL) -- the executive-resident handoff the whole server path turns on. With the accepted holder dropped and set NULL, the SS\$_BADPARAM branch is skipped, so the accept still returns SS\$_NORMAL and the accept-status assertion stays green; but the accepted channel now carries no socket, so the subsequent IO\$_READVBLK and IO\$_WRITEVBLK on it both fail SS\$_IVCHAN -- reddening exactly the two accepted-channel assertions. The assign / setmode / bind / listen assertions (and the no-executive honest-skip) all stay green. One install replaced by a release.";;
+        require_fail) cat <<'EOF'
+the accepted BG channel returns the exact bytes the inbound client sent
+the accepted BG channel sends a reply back to the inbound client
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     # -------------------------------------------------------------------
     # vms-6c6 / vms-165: the two vms-8b6/#284 cross-process mount-visibility
     # controls (vmsfs-mountvis-crossproc-resolve-disabled) and the
@@ -6880,6 +6899,16 @@ apply_edit() {
         # delegating assignment with that comment is gone, so a second apply is a
         # no-op -- BROKEN FIXTURE, as selftest requires.
         sed -i 's@args.sin_addr   = sin->sin_addr.s_addr;     /\* NEGCTL bgsock-getname-addr-zeroed \*/@args.sin_addr   = 0; /* NEGCTL bgsock-getname-addr-zeroed */@' "$_file";;
+
+    bg-accept-socket-not-installed)
+        # RANGE-ANCHORED to vms_ioctl_bg_accept's body. Its install line
+        # "tch->sock = accepted;" is unique within that range; replacing it with a
+        # release leaves the target channel with NO socket while the accept still
+        # returns SS$_NORMAL (accepted is then NULL, so the SS$_BADPARAM branch is
+        # skipped) -- so the read and write on the accepted channel both fail
+        # SS$_IVCHAN. After substitution the "tch->sock = accepted;" line is gone
+        # from the range, so a second apply is the no-op the selftest requires.
+        sed -i '/^long vms_ioctl_bg_accept/,/^}$/ s|        tch->sock = accepted;|        exec_socket_release(accepted); /* NEGCTL bg-accept-socket-not-installed */|' "$_file";;
 
     initialize-home-magic-not-written)
         # UNIQUE TEXT: the home-block magic write in format_volume

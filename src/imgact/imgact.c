@@ -1594,6 +1594,50 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 	return p;
 }
 
+/* --------------------------------------------------------------------------
+ * Symbol-vector value -> callable code entry (the ONE resolver — vms-dc1).
+ *
+ * On Alpha, a symbol-vector universal that names a PROCEDURE exports its
+ * PROCEDURE VALUE (PV) per the Alpha Calling Standard, and a PV is the address
+ * of the procedure's DESCRIPTOR (PDSC) — NOT the code entry. The runnable code
+ * entry is PDSC$Q_ENTRY = *(PV+8). So `sv_find_named` / `ovmx_sv_resolve` return
+ * base+value = the PV = the PDSC; that value is correct as a PV (it belongs in
+ * R27 and in a caller's linkage pair, e.g. bind_imports' quad[1]), but it is
+ * NOT directly callable: IMGACT is a native Linux-ELF Alpha binary where a C
+ * function pointer is a code address, so casting a raw PV to a C function
+ * pointer and calling it JUMPS INTO the PDSC and executes its first quadword (a
+ * call_pal) -> SIGILL. That is gap-6 (and gaps 2/4 before it: the same
+ * entry-vs-PDSC confusion recurring). This resolver maps a symbol-vector value
+ * to its callable code entry so no site ever calls a raw PV again.
+ *
+ * INVARIANT (gap-6 / prevents gap-7): on Alpha, NO site in IMGACT calls or jumps
+ * to a raw symbol-vector value as code — every such call/jump routes the value
+ * through imgact_sv_code_entry() first. (The final image transfer to a
+ * VMS-standard main is the one call that legitimately hands the *PV* across, and
+ * it does so through imgact_vms_transfer's asm, which sets R27=PV and jumps to
+ * *(PV+8) per the calling standard — not a C function-pointer call.)
+ *
+ * On x86_64 / aarch64 / VAX a symbol-vector value is already the direct code
+ * address (those ABIs have no PV/PDSC indirection), so this is a compile-time
+ * no-op that returns its argument unchanged — the non-Alpha arches stay
+ * byte-for-byte identical.
+ *
+ * Fail-honest (INV-6): pv == 0 means the symbol is absent; return 0 WITHOUT
+ * dereferencing, so the caller's existing missing-symbol diagnostics fire rather
+ * than a silent 0+8 deref. CLEAN-ROOM (rule 8): PDSC$Q_ENTRY at PV+8 is the
+ * public Alpha Calling Standard, not VSI/HPE source.
+ * -------------------------------------------------------------------------- */
+static inline unsigned long imgact_sv_code_entry(unsigned long pv)
+{
+#if defined(__alpha__)
+	if (!pv)
+		return 0;                       /* absent symbol: fail honest */
+	return *(unsigned long *)(pv + 8);      /* PDSC$Q_ENTRY = code entry */
+#else
+	return pv;                              /* SV value is already code */
+#endif
+}
+
 /* Bind every .vms$imp import at `ih` into image `base`: map each named producer
  * (recursively — transitive imports), GSMATCH-resolve the universal by vector
  * index, and store the run-time address into the importing image's GOT cell.
@@ -1633,8 +1677,8 @@ static void bind_imports(unsigned long base, const struct ovmx_imp_header *ih,
 		}
 		if (linkage) {
 			/* 2-quad linkage pair at patch_off (the quad[0] site). */
-			*(unsigned long *)(base + ie[k].patch_off)     = *(unsigned long *)(PV + 8); /* quad[0] = code entry = PDSC$Q_ENTRY */
-			*(unsigned long *)(base + ie[k].patch_off + 8) = PV;                          /* quad[1] = PV = the PDSC             */
+			*(unsigned long *)(base + ie[k].patch_off)     = imgact_sv_code_entry(PV); /* quad[0] = code entry = PDSC$Q_ENTRY (one resolver, vms-dc1) */
+			*(unsigned long *)(base + ie[k].patch_off + 8) = PV;                        /* quad[1] = PV = the PDSC             */
 		} else {
 			/* 1-quad data/CODEADDR import: the single slot receives PV. */
 			*(unsigned long *)(base + ie[k].patch_off) = PV;
@@ -1869,7 +1913,8 @@ static void reserve_exe_main_tls_over_crtl(struct ovmx_prod *crtl)
 	if (!copy_tls || !init_tp || !getlibc)
 		die_tlserr("exe-main-TLS re-drive (missing DECC$SHR universal)");
 
-	unsigned char *libc = ((unsigned char *(*)(void))getlibc)();
+	unsigned char *libc =
+		((unsigned char *(*)(void))imgact_sv_code_entry(getlibc))();
 	unsigned long align = g_exe.tls_align ? g_exe.tls_align : 8;
 
 	/* musl struct tls_module { next@0, image@8, len@16, size@24, align@32,
@@ -1904,8 +1949,9 @@ static void reserve_exe_main_tls_over_crtl(struct ovmx_prod *crtl)
 	/* __copy_tls(mem): allocate the TCB at mem+tls_size-0xc8, copy each
 	 * tls_head module's .tdata to TP-module.offset, build the DTV, return TP.
 	 * __init_tp(TP): write the self-ptr + __set_thread_area + canary/tid. */
-	unsigned long tp = ((unsigned long (*)(void *))copy_tls)(mem);
-	((void (*)(unsigned long))init_tp)(tp);
+	unsigned long tp =
+		((unsigned long (*)(void *))imgact_sv_code_entry(copy_tls))(mem);
+	((void (*)(unsigned long))imgact_sv_code_entry(init_tp))(tp);
 }
 
 /* --------------------------------------------------------------------------
@@ -2022,7 +2068,8 @@ static void publish_resident_producers(void)
 		list[n].sv     = g_prods[i].sv;
 		n++;
 	}
-	((uint32_t (*)(const struct imgact_prod_pub *, int))pub)(list, n);
+	((uint32_t (*)(const struct imgact_prod_pub *, int))
+	 imgact_sv_code_entry(pub))(list, n);
 }
 
 /* Run musl's own libc bootstrap for a mapped C-RTL producer: program the thread
@@ -2033,7 +2080,7 @@ static void drive_crtl_init(struct ovmx_prod *crtl)
 	unsigned long init_libc = sv_find_named(crtl, "__init_libc");
 	if (!init_libc)
 		die_undsym("__init_libc");
-	((void (*)(char **, char *))init_libc)(g_envp, g_argv0);
+	((void (*)(char **, char *))imgact_sv_code_entry(init_libc))(g_envp, g_argv0);
 }
 
 /* Resolve one image's .vms$wimp (mapped at `wimp_addr`, cells inside the image

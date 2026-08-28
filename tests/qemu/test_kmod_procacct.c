@@ -22,7 +22,7 @@
  *     a fabricated zero (INV-6, Rule 10).
  *
  * THE DECISIVE TEST IS A-BURNS / B-READS (CLAUDE.md Rule 11), the same
- * discipline as tests/qemu/test_kmod_p0.c. A per-process fake would pass
+ * discipline as tests/qemu/test_syssvc_p0.c. A per-process fake would pass
  * every SELF assertion here perfectly; only a SECOND process reading A's
  * accounting out of the executive proves it is executive-resident (sourced
  * from the task the executive pins by pid_ref) rather than a local variable

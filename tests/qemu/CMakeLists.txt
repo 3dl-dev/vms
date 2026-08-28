@@ -223,6 +223,20 @@ if(TARGET test_syssvc_imgact_acp)
         ${CMAKE_CURRENT_SOURCE_DIR})
 endif()
 
+# vms-68f memory/access-mode suites (vms-d40): test_syssvc_{p0,p1,pin,modeswitch}
+# were renamed out of the test_kmod_* tier so they run in qemu_syssvc_tests on
+# BOTH x86_64 and Alpha LP64 from a SINGLE source (DRY) -- proving the P0/P1
+# region-extent and access-mode bookkeeping is width-correct on LP64. p0/p1 need
+# only vms_kif.h (already on the generic recipe's path); pin and modeswitch drive
+# the raw ioctl interface directly, so they need src/kernel for vms_ioctl.h
+# (VMS_IOCTL_* / struct vms_*_args), exactly as test_syssvc_imgact_acp above.
+foreach(_memmode_tgt test_syssvc_pin test_syssvc_modeswitch)
+    if(TARGET ${_memmode_tgt})
+        target_include_directories(${_memmode_tgt} PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/kernel)
+    endif()
+endforeach()
+
 # ---------------------------------------------------------------------------
 # DEVICE-CORPUS PROGRAMS UNDER A REAL /dev/vms (vms-08c).
 #

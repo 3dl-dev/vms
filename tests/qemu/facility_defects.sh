@@ -2453,11 +2453,11 @@ EOF
         case "$_f" in
         facility)     echo "executive residency (vms_fops.owner pins vms.ko while /dev/vms is open)";;
         targets)      echo "kernel/vms_module.c";;
-        suites_red)   echo "test_kmod_pin";;
+        suites_red)   echo "test_syssvc_pin";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "fatal";;
-        why)          echo "vms_fops loses .owner = THIS_MODULE, so an open descriptor no longer holds a module reference and test_kmod_pin's own rmmod succeeds. FATAL, and measured, not assumed: the guest then takes 'Unable to handle kernel paging request' + 'Internal error: Oops' with Comm: test_kmod_pin, and the run never reaches its own accounting. That IS the guarantee -- an unpinned executive is not a degraded system, it is a dead one -- so the control asserts what is checkable (every suite ordered before test_kmod_pin ran clean -- a count derived from the checkout, never written down -- and the three pin assertions went red by name) instead of pretending the unload is survivable.";;
+        why)          echo "vms_fops loses .owner = THIS_MODULE, so an open descriptor no longer holds a module reference and test_syssvc_pin's own rmmod succeeds. FATAL, and measured, not assumed: the guest then takes 'Unable to handle kernel paging request' + 'Internal error: Oops' with Comm: test_syssvc_pin, and the run never reaches its own accounting. That IS the guarantee -- an unpinned executive is not a degraded system, it is a dead one -- so the control asserts what is checkable (every suite ordered before test_syssvc_pin ran clean -- a count derived from the checkout, never written down -- and the three pin assertions went red by name) instead of pretending the unload is survivable.";;
         require_fail) cat <<'EOF'
 an open /dev/vms descriptor holds a reference on vms.ko
 rmmod vms is REFUSED while a descriptor is open (executive pinned)
@@ -5164,7 +5164,7 @@ EOF
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
         targets)      echo "kernel/vms_p0.c";;
-        suites_red)   echo "test_kmod_p0";;
+        suites_red)   echo "test_syssvc_p0";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -5212,7 +5212,7 @@ EOF
         case "$_f" in
         facility)     echo "P1 control-region bookkeeping (VMS_IOCTL_P1_MAP, vms-68f.ii -- increment (ii) of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
         targets)      echo "kernel/vms_p1.c";;
-        suites_red)   echo "test_kmod_p1";;
+        suites_red)   echo "test_syssvc_p1";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -5264,7 +5264,7 @@ EOF
         case "$_f" in
         facility)     echo "P1 control-region persistence -- P0 deleted on rundown, P1 survives (vms-68f.ii -- increment (ii) of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
         targets)      echo "kernel/vms_p0.c";;
-        suites_red)   echo "test_kmod_p1";;
+        suites_red)   echo "test_syssvc_p1";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -5278,7 +5278,7 @@ after P0_MAP: P1 extent still matches what was registered before any P0 activity
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
-SAME DEFECT, OBSERVED ON THE NEXT CYCLE. test_kmod_p1.c registers one P1
+SAME DEFECT, OBSERVED ON THE NEXT CYCLE. test_syssvc_p1.c registers one P1
 extent, then cycles VMS_IOCTL_P0_MAP/P0_UNMAP three times, checking after
 EVERY unmap that P1 is unchanged (this is require_fail, and it goes red on
 the FIRST cycle's unmap: the mutation zeroes p1_base/p1_limit right then).
@@ -5299,7 +5299,7 @@ the mutated code path. VMS_IOCTL_P0_MAP's own status and the
 "P0-DELETED-ON-RUNDOWN" GETJPI-shows-no-P0-extent check are unaffected in
 every cycle: the mutation adds clears, it does not remove the ones already
 there, so P0's own bookkeeping is exactly as correct as it was in
-p0-map-not-recorded's absence. test_kmod_p0.c -- the OTHER suite exercising
+p0-map-not-recorded's absence. test_syssvc_p0.c -- the OTHER suite exercising
 VMS_IOCTL_P0_MAP/P0_UNMAP -- never registers or reads a P1 extent at all,
 so it has nothing in its own assertions this mutation's added clears could
 ever touch; it stays fully green.
@@ -5311,7 +5311,7 @@ EOF
         case "$_f" in
         facility)     echo "access-mode transition + boundary enforcement (VMS_IOCTL_SETMODE/ENTER_IMAGE/IMAGE_RUNDOWN, vms-68f.iii -- increment (iii) of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.3)";;
         targets)      echo "kernel-core/vms_access.c";;
-        suites_red)   echo "test_kmod_modeswitch";;
+        suites_red)   echo "test_syssvc_modeswitch";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -5329,7 +5329,7 @@ EOF
         case "$_f" in
         facility)     echo "access-mode transition + boundary enforcement (VMS_IOCTL_ENTER_IMAGE/IMAGE_RUNDOWN, vms-68f.iii -- increment (iii) of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.3)";;
         targets)      echo "kernel-core/vms_access.c";;
-        suites_red)   echo "test_kmod_modeswitch";;
+        suites_red)   echo "test_syssvc_modeswitch";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;

@@ -288,7 +288,7 @@ echo ""
 # which is satisfied by the trailing 0 of ANY count ending in zero -- so
 # "10 suites failed" reported ALL KERNEL MODULE TESTS PASSED and exited 0.
 # Latent since the harness was written; it first fires on the vms-a35 merge
-# product, where vms-8019's test_kmod_procnam, vms-0ff's test_kmod_pin and
+# product, where vms-8019's test_kmod_procnam, vms-0ff's test_syssvc_pin and
 # vms-d0b's test_kmod_devtab together push the executive-absent failure count
 # into double digits. Two ways it lies, both fatal to the barrier:
 #   - the positive kernel-executive job goes green with 10 (or 20) real

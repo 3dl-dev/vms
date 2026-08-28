@@ -121,8 +121,12 @@ static int run_suite(const char *name, int *out_pass, int *out_fail)
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
-/* Every tests/qemu/test_kmod_*.c suite -- all 29, the full raw-ioctl/
- * kernel-interface tier -- this rung (vms-bc4) ported to alpha. */
+/* Every tests/qemu/test_kmod_*.c suite -- all 25, the full raw-ioctl/
+ * kernel-interface tier -- this rung (vms-bc4) ported to alpha.
+ * vms-d40 moved the four vms-68f memory/access-mode suites (modeswitch, p0,
+ * p1, pin) into the test_syssvc_* family (renamed test_syssvc_{modeswitch,p0,
+ * p1,pin}.c) so they run on BOTH x86_64 and Alpha LP64 from a single source
+ * via run-syssvc-tests-alpha.sh -- they are NO LONGER in this kmod tier. */
 static const char *const kSuites[] = {
     "test_kmod_access",
     "test_kmod_ast",
@@ -136,10 +140,6 @@ static const char *const kSuites[] = {
     "test_kmod_lock_mproc",
     "test_kmod_lock_sync",
     "test_kmod_mbx",
-    "test_kmod_modeswitch",
-    "test_kmod_p0",
-    "test_kmod_p1",
-    "test_kmod_pin",
     "test_kmod_procacct",
     "test_kmod_procnam",
     "test_kmod_resdir",

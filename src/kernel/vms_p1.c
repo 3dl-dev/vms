@@ -38,7 +38,7 @@
  * names p1_base/p1_limit, so a P0 map/unmap cycle has no code path that
  * can reach the P1 fields -- "P0 deleted on rundown, P1 survives" is a
  * fact about which lock guards which field, not a convention a future
- * edit to vms_p0.c could quietly break. tests/qemu/test_kmod_p1.c proves
+ * edit to vms_p0.c could quietly break. tests/qemu/test_syssvc_p1.c proves
  * this against a real /dev/vms: it maps a P1 extent, cycles P0 map/unmap
  * (repeatedly), and checks $GETJPI's p1_base/p1_limit are unchanged after
  * every cycle.

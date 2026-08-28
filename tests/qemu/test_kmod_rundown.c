@@ -31,7 +31,7 @@
  *
  * This process runs privileged (init.sh execs it as root), so it holds
  * CMEXEC/CMKRNL and may SETMODE(SUPER) and ENTER_IMAGE; the enforcement that
- * an UNprivileged/User-mode caller cannot do those is test_kmod_modeswitch.c's
+ * an UNprivileged/User-mode caller cannot do those is test_syssvc_modeswitch.c's
  * job, not this suite's.
  */
 

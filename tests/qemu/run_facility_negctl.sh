@@ -353,7 +353,7 @@ N_EXPECTED=$(echo "$EXPECTED" | grep -c . || true)
 # which is why the old check 3 comment could claim "shell glob order ... is the
 # sorted derived set". test_imgact_* broke that equivalence: it sorts FIRST
 # (i < k) but RUNS LAST. So for the one fatal control whose suite is a kmod
-# suite (executive-not-pinned -> test_kmod_pin), the sorted "before" set wrongly
+# suite (executive-not-pinned -> test_syssvc_pin), the sorted "before" set wrongly
 # included test_imgact_bind/publish, which init.sh never reaches because the
 # guest is already dead by the time the imgact group would run -- and check 3
 # then failed them as "NEVER RAN". EXEC_ORDER models init.sh's real order, and

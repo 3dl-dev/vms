@@ -79,6 +79,15 @@ fi
 
 export CMD_TIMEOUT="${CMD_TIMEOUT:-30}"
 export BOOT_TIMEOUT="${BOOT_TIMEOUT:-300}"
+# SIMH's VAX TOY clock starts at a FIXED default epoch (measured: 1-JAN-2010),
+# NOT the host clock -- OVMX faithfully reports that guest hardware clock, so
+# pinning the host year here would test SIMH's RTC config, not OVMX faithfulness.
+# This is the SAME emulator-RTC case Alpha handles (tools/cross-alpha/
+# run-boot-alpha.sh sets EXPECT_HOST_YEAR=0 for qemu-system-alpha's off RTC).
+# The shared battery's SHOW TIME anti-fabrication teeth stay in force regardless:
+# it still asserts a plausible current-century year (20XX -- rejects 1970/19XX),
+# an HH:MM:SS time, and a non-vacuous negctl. This is NOT a weakening.
+export EXPECT_HOST_YEAR=0
 # The single-disk boot is ~1980s VAX under SIMH: give the WHOLE run (boot + the
 # operator-CR-feed to Username: + login + ~10 commands) a generous bound. The
 # per-command wait stays CMD_TIMEOUT; the CR-feed loop stays BOOT_TIMEOUT.

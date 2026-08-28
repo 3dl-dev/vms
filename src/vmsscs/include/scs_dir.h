@@ -205,19 +205,21 @@ extern "C" {
  * a member's MSCP connect nine times before a real VAX also somehow accepts
  * one a tenth time with a completely different message type."
  *
- * NOT FIXED HERE, AND SAID OUT LOUD RATHER THAN LEFT SILENT: src/vmsscs/scsd.c
- * still BUILDS and CONSUMES frames through these constants believing they
- * mean ACCEPT/CONFIRM -- i.e. when a real peer answers OVMX's MSCP$DISK
- * connect with what is actually a REJECT_REQ, scsd.c currently marks
- * ps->mscp_connected = 1 and proceeds as though the connection succeeded.
- * That is a genuine wire-behaviour question (does this explain part of
- * vms-abd's refusal?) and fixing it is a design-affecting change to the
- * server-first MSCP accept path, deliberately OUT OF SCOPE for vms-754 (which
- * settled the decode and applied the interim documentation/log-naming safety
- * fix only) -- flagged here as a follow-up rather than silently fixed or
- * silently left unmentioned. See src/vmsscs/scsd.c's FORM B comment.
+ * NOW FIXED (both halves), RECORDED RATHER THAN LEFT SILENT: at vms-754 time
+ * src/vmsscs/scsd.c still BUILT and CONSUMED frames through these constants
+ * believing they meant ACCEPT/CONFIRM -- when a real peer answered OVMX's
+ * MSCP$DISK connect with what is actually a REJECT_REQ, scsd.c marked
+ * ps->mscp_connected = 1 and proceeded as though the connection succeeded.
+ * vms-754 was the DECODE only; the wire behaviour was fixed by vms-257 in two
+ * halves: the CONSUME half (2026-08-08 -- scsd.c's FORM B receive path no
+ * longer binds on a peer's op-4 REJECT_REQ) and the BUILD half (2026-08-28 --
+ * scsd.c's server-first MSCP accept path now emits the genuine op-2 ACCEPT_REQ
+ * via scs_dir_build_mscp_response(), never op-4). SCS_DIR_OP_ACCEPT(4) /
+ * SCS_DIR_OP_MSCP_CONFIRM(5) survive ONLY as the labelled REJECT_REQ/REJECT_RSP
+ * builders and FORM B test fixtures -- no OVMX send path presents them as an
+ * accept/confirm any more. See src/vmsscs/scsd.c's FORM B comment.
  */
-#define SCS_DIR_OP_ACCEPT   4 /* vms-754: actually the shared-namespace REJECT_REQ; kept under this name only because scsd.c still builds/reads it as such -- see the block above */
+#define SCS_DIR_OP_ACCEPT   4 /* vms-754: actually the shared-namespace REJECT_REQ; kept under this name only as the FORM B reject builder / test fixture -- scsd.c no longer emits it as an accept (vms-257), see the block above */
 #define SCS_DIR_OP_MSCP_CONFIRM 5 /* vms-754: actually the shared-namespace REJECT_RSP; see above */
 
 /* Recognizable OVMX SCS$DIRECTORY Con.ID ("OX" base | 7). OVMX design choice,
@@ -479,6 +481,20 @@ int scs_dir_build_vc_echo(const struct scs_dir_params *p,
  */
 int scs_dir_build_mscp_accept(const struct scs_dir_params *p,
                               uint8_t out[SCS_DIR_CONFIRM_FRAME_LEN]);
+
+/*
+ * scs_dir_build_mscp_response -- vms-257: OVMX's GENUINE server-side accept of a
+ * member's inbound MSCP$DISK connect -- Figure 2-14's ACCEPT_REQ, shared-
+ * namespace MTYPE 2 (SCS_DIR_MSGTYPE_ACCEPT_REQ), NOT the MTYPE 4 REJECT_REQ
+ * that scs_dir_build_mscp_accept emits. This is the builder scsd.c's server-first
+ * accept path now uses so a real class driver sees an accept, reaches OPEN, and
+ * sends its MSCP commands (instead of rejecting and retrying forever). Con.ID
+ * pair bound: remote = member's MSCP client handle, local = OVMX's server
+ * handle. Byte SHAPE is an OVMX construction (labelled) -- see the .c comment.
+ * Returns 0, or -1 if p/out is NULL.
+ */
+int scs_dir_build_mscp_response(const struct scs_dir_params *p,
+                                uint8_t out[SCS_DIR_CONFIRM_FRAME_LEN]);
 
 /* Read-only view of a received directory (0x5b / 0x4b-directory) frame. */
 struct scs_dir_view {

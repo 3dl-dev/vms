@@ -1115,8 +1115,8 @@ struct peer_state {
      * server). DISTINCT from the mscp_* CLIENT fields above (that is OVMX's own
      * outbound MSCP connect, driven only by the sequencer). This server path is
      * additive and runs on the DEFAULT path. --- */
-    int      mscp_srv_bound;       /* we sent the op=4 accept binding OUR server handle */
-    int      mscp_srv_confirmed;   /* the member sent its op=5 confirm on this connection */
+    int      mscp_srv_bound;       /* we sent the op=2 ACCEPT_REQ binding OUR server handle (vms-257) */
+    int      mscp_srv_confirmed;   /* the server FSM reached OPEN off the member's op=3 ACCEPT_RSP (vms-257) */
     uint32_t mscp_srv_remote_conid;/* the member's MSCP CLIENT Con.ID (its local in its op=0 connect) */
     long     mscp_srv_accepts;     /* op=4 accepts we sent this peer */
     uint16_t mscp_srv_echo_seq;    /* send_seq allocated for the op=1 echo (reused on retransmit) */
@@ -3169,19 +3169,24 @@ static void scsd_svc_slot_refused(uint32_t local_conid, const char *local_sysap)
  * silence. That log line is the honest record of the OVMX/SCA divergence, and
  * on the 0x4b connections it fires on every run.
  */
-static void conn_step(struct scs_cdt *cdt, enum scs_conn_event ev, const char *emitted)
+static struct scs_conn_transition conn_step(struct scs_cdt *cdt,
+                                            enum scs_conn_event ev,
+                                            const char *emitted)
 {
+    struct scs_conn_transition t;
+    memset(&t, 0, sizeof(t));
     if (cdt == NULL) {
-        return;
+        t.illegal = 1;
+        return t;
     }
-    struct scs_conn_transition t = scs_conn_fsm_step(cdt, ev);
+    t = scs_conn_fsm_step(cdt, ev);
     if (t.suppressed) {
-        return;
+        return t;
     }
     conn_transitions++;
     if (t.illegal) {
         conn_illegal_events++;
-        return;
+        return t;
     }
     if (t.action != SCS_CONN_ACT_NONE && emitted == NULL) {
         conn_unemitted_actions++;
@@ -3191,6 +3196,7 @@ static void conn_step(struct scs_cdt *cdt, enum scs_conn_event ev, const char *e
                (unsigned)cdt->local_conid, scs_conn_action_name(t.action));
         fflush(stdout);
     }
+    return t;
 }
 
 /*
@@ -8644,7 +8650,35 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                                 conn_step(tgt, cev, NULL);
                             }
                         } else {
-                            conn_step(tgt, cev, NULL);
+                            struct scs_conn_transition ct = conn_step(tgt, cev, NULL);
+                            /* vms-257: THE HONEST MSCPSRVOK. The member's op=3
+                             * ACCEPT_RSP is the confirm of OUR server-side accept;
+                             * this classifier steps it through the FSM. Report the
+                             * server connection "confirmed" ONLY when that step
+                             * actually reached OPEN on OUR MSCP$DISK server handle
+                             * -- never optimistically, and never off a REJECT_RSP.
+                             * This replaces the old op=5-as-confirm log that fired
+                             * while the FSM was still CLOSED (INV-6). */
+                            if (cev == SCS_CONN_EV_RCV_ACCEPT_RSP && !ct.illegal &&
+                                ct.to == SCS_CONN_OPEN &&
+                                ovmx_conid_is_class(h.dest_conid,
+                                                    OVMX_CONID_CLS_MSCPSRV)) {
+                                struct peer_state *ops =
+                                    peer_find_or_add(rx->cfg, rx->pdt, rx->peers,
+                                                     src_mac);
+                                if (ops != NULL && !ops->mscp_srv_confirmed) {
+                                    ops->mscp_srv_confirmed = 1;
+                                    ops->mscp_srv_remote_conid = h.src_conid;
+                                    log_ts(stdout);
+                                    printf(" SCSD-I-MSCPSRVOK, member confirmed OUR"
+                                           " MSCP$DISK server connection (FSM"
+                                           " reached OPEN): local=0x%08X"
+                                           " remote=0x%08X\n",
+                                           (unsigned)h.dest_conid,
+                                           (unsigned)h.src_conid);
+                                    fflush(stdout);
+                                }
+                            }
                         }
                     }
                 }
@@ -10322,15 +10356,24 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                                   eframe, sizeof(eframe));
                 }
 
-                /* op=4 accept: bind OUR fresh MSCP server handle. */
+                /* vms-257: op=2 ACCEPT_REQ (CONNECT-RESPONSE) binding OUR fresh
+                 * MSCP server handle -- Figure 2-14's target-column accept. This
+                 * REPLACES the op=4 scs_dir_build_mscp_accept the server-first
+                 * path used to emit: op 4 is the shared-namespace REJECT_REQ
+                 * (vms-754), so a real class driver read OVMX's "accept" as a
+                 * REJECT, abandoned the connection and retried every ~10s with a
+                 * fresh Con.ID, never reaching OPEN and never sending an MSCP
+                 * command (vms-257, live lab-2 vaxlab-0 2026-08-28). A genuine
+                 * accept is op 2 (ACCEPT_REQ), which the client-side receive path
+                 * already reads as "member accepted OUR connect". */
                 dp.local_conid = PS_MSCP_SERVER_CONID(ps);
                 dp.recv_ack = ps->vc.seq.recv_seq;
                 dp.send_seq = ps->mscp_srv_accept_seq;
                 uint8_t aframe[SCS_DIR_CONFIRM_FRAME_LEN];
-                if (scs_dir_build_mscp_accept(&dp, aframe) == 0 &&
+                if (scs_dir_build_mscp_response(&dp, aframe) == 0 &&
                     (aframe[30] = mscp_mt, 1) &&
                     send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
-                                  "0x41 START ack / op=2 CONNECT-RESPONSE",
+                                  "op=2 CONNECT-RESPONSE (ACCEPT_REQ)",
                                   aframe,
                                   sizeof(aframe)) > 0) {
                     ps->mscp_srv_bound = 1;
@@ -10368,6 +10411,24 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                         scs_cdt_set_remote_conid(mcdt, m_lconid);
                         scs_cdt_set_handlers(mcdt, scsd_mscp_srv_msg_input,
                                              NULL, NULL, ps);
+                        /* vms-257: DRIVE THE SERVER CONNECTION FSM so its state
+                         * reflects the accept we just sent. Figure 2-14's target
+                         * column: the inbound CONNECT_REQ took the connection to
+                         * CONNECT REC (we sent the op=1 CONNECT_RSP echo above),
+                         * and invoking ACCEPT (our op=2 ACCEPT_REQ) takes it to
+                         * ACCEPT SENT, awaiting the client's op=3 ACCEPT_RSP that
+                         * opens it. Both frames were already emitted here, so the
+                         * FSM actions are passed a non-NULL `emitted` and never
+                         * log an unemitted-action warning. On a retransmit the
+                         * connection may already be past CLOSED; the RCV_CONNECT_REQ
+                         * tolerance rows keep that legal, and SVC_ACCEPT is only
+                         * re-driven from CONNECT REC. */
+                        conn_step(mcdt, SCS_CONN_EV_RCV_CONNECT_REQ,
+                                  "op=1 CONNECT_RSP echo");
+                        if (scs_conn_state_of(mcdt) == SCS_CONN_CONNECT_REC) {
+                            conn_step(mcdt, SCS_CONN_EV_SVC_ACCEPT,
+                                      "op=2 ACCEPT_REQ");
+                        }
                     } else {
                         log_ts(stdout);
                         printf(" SCSD-W-MSCPSRVNOCDT, accepted the connect but"
@@ -10388,27 +10449,24 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
             return;
         }
 
-        /* op=5 CONFIRM binding OUR MSCP$DISK server connection: the member
-         * acks our op=4 accept (remote Con.ID == OUR server handle, local ==
-         * the member's MSCP client handle). Con.ID-signature, opcode-agnostic. */
-        if (mop == SCS_DIR_OP_MSCP_CONFIRM &&
-            ovmx_conid_is_class(m_rconid, OVMX_CONID_CLS_MSCPSRV)) {
-            struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
-            if (ps != NULL) {
-                if (!ps->vc.initialized) {
-                    scs_vc_init(&ps->vc);
-                }
-                scs_vc_note_recv(&ps->vc, m_seq);
-                ps->mscp_srv_confirmed = 1;
-                ps->mscp_srv_remote_conid = m_lconid;
-                log_ts(stdout);
-                printf(" SCSD-I-MSCPSRVOK, member confirmed OUR MSCP$DISK server"
-                       " connection: local=0x%08X remote=0x%08X\n",
-                       (unsigned)PS_MSCP_SERVER_CONID(ps), m_lconid);
-                fflush(stdout);
-            }
-            return;
-        }
+        /* vms-257: THERE IS NO op=5 "CONFIRM" HANDLER HERE ANY MORE.
+         *
+         * It used to set ps->mscp_srv_confirmed = 1 and log SCSD-I-MSCPSRVOK on
+         * an inbound op=5, believing op 5 was the member's confirm of OUR server
+         * connection. vms-754 decoded op 5 as the shared-namespace REJECT_RSP,
+         * so that handler read a REJECTION as a confirmation and logged success
+         * while the connection FSM was still CLOSED and the peer disagreed --
+         * exactly the fabricated-success shape INV-6 forbids (proven live on
+         * lab-2 vaxlab-0 2026-08-28: the FSM logged the op-5 as an illegal
+         * RCV_REJECT_RSP while MSCPSRVOK claimed "confirmed").
+         *
+         * The honest confirm is the client's op=3 ACCEPT_RSP, which the shared
+         * envelope classifier (scsd_handle_frame's SCS_RX_CONTROL arm) steps
+         * through the connection FSM; MSCPSRVOK is now logged there, and only
+         * when the FSM actually reaches OPEN. An inbound op=5 REJECT_RSP now
+         * falls through to that same FSM step, which records it honestly (an
+         * illegal event in any server state, since after this fix OVMX never
+         * sends the op-4 REJECT_REQ that would provoke one). */
     }
 
     /* (b2) vms-246: SCS$DIRECTORY connect + SCS$DIR_LOOKUP responder. After

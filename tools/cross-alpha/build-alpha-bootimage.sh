@@ -173,6 +173,9 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
         cp "$JOINT/joint_e2e.exe"   "$SYSEXE/JOINT_E2E.EXE"
         cp "$JOINT/DECC\$SHR.EXE"   "$ST/vms/SYS0/SYSCOMMON/SYSLIB/DECC\$SHR.EXE"
         cp "$JOINT/LIBOTS_SHR.EXE"  "$ST/vms/SYS0/SYSCOMMON/SYSLIB/LIBOTS_SHR.EXE"
+        # Control image (main returns 0) -- proves the DCL-RUN fork-path status
+        # mapping (0 -> success-class; sentinel 3 -> ABORT-with-3). Optional.
+        [ -f "$JOINT/joint_e2e_ok.exe" ] && cp "$JOINT/joint_e2e_ok.exe" "$SYSEXE/JOINT_E2E_OK.EXE" || true
         cp /repo/tools/cross-alpha/SYSTARTUP_VMS_JOINT_PROOF.COM \
            "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
         echo "   JOINT-E2E: joint_e2e.exe -> SYS\$SYSEXE:JOINT_E2E.EXE; DECC\$SHR.EXE + LIBOTS_SHR.EXE -> SYS\$SHARE; proof SYSTARTUP staged"

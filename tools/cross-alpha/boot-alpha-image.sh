@@ -66,8 +66,16 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     echo "======================================================================"
     rm -f diskA.img; cp ovmx-distrib-alpha.img diskA.img
     FIFO=/work/bootA.fifo; rm -f "$FIFO"; mkfifo "$FIFO"
+    # OVMX_IMGACT_SEAM=1 (kernel cmdline -> init env -> inherited by execv down
+    # the boot chain to DCL and its RUN fork child IMGACT): opt-in vms-f60d
+    # activation-seam diagnostic. IMGACT prints one line per activated image
+    # carrying the EXECUTIVE-RECORDED completion $STATUS it read back via
+    # GETEXIT(SEL_SELF) -- "OVMX-SEAM: image=<name> ... $STATUS=0x<cond>". This is
+    # how the returned VALUE (the sentinel 3 that main returns -> VMS condition %X...03) is
+    # surfaced: the executive owns it; the DCL-RUN fork path collapses the POSIX
+    # exit to SS$_NORMAL, but the executive $STATUS the seam prints is the truth.
     timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 1024 -vga none -nic none \
-        -kernel vmlinux-boot -append "console=ttyS0 panic=-1" \
+        -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1" \
         -drive file=diskA.img,format=raw,if=virtio \
         -nographic -no-reboot <"$FIFO" > /work/bootA.raw 2>&1 &
     QP=$!
@@ -164,15 +172,52 @@ fi
 echo
 echo "-- JOINT-E2E (vms-157): GCC-port image RUN at DCL over the mounted ODS-2 ACP --"
 if [ -f "$WORK/bootA.log" ]; then
-    grep -aE "JOINT-E2E-PROOF:|OVMX crt0 join: activated" "$WORK/bootA.log" 2>/dev/null | sed 's/^/    /' || true
-    if grep -qaF "OVMX crt0 join: activated" "$WORK/bootA.log" 2>/dev/null; then _joint_ran=1; else _joint_ran=0; fi
-    _joint_stat=$(grep -aoE "JOINT-E2E-PROOF: STATUS=[^ ]+ SEVERITY=[0-9]+" "$WORK/bootA.log" 2>/dev/null | tail -1)
-    if [ "$_joint_ran" -eq 1 ] && [ -n "$_joint_stat" ]; then
-        echo "  PASS: the real alpha-dec-vms GCC-port image joint_e2e.exe ACTIVATED via IMGACT over the"
-        echo "        MOUNTED ODS-2 volume (crt0 -> decc\$main -> main ran) and RUN recorded its status:"
-        echo "        $_joint_stat"
+    grep -aE "JOINT-E2E-PROOF:|OVMX crt0 join|exited with error status" "$WORK/bootA.log" 2>/dev/null | sed 's/^/    /' || true
+    echo
+    # MILESTONE requires ALL THREE, read from the console (no crt0-join-alone claim):
+    #  (a) crt0-join line (crt0 ran), (b) argc=1 FROM main (main entered),
+    #  (c) the returned VALUE 3 (main ran its body to `return 3`) -- DECODED, below.
+    _crt0=$(grep -qaE "OVMX crt0 join: activated, argc=1" "$WORK/bootA.log" 2>/dev/null && echo 1 || echo 0)
+    # (c) the returned VALUE: read the EXECUTIVE-recorded completion $STATUS from
+    # IMGACT's opt-in seam line (OVMX_IMGACT_SEAM=1) for each image. The value is
+    # NOT the raw integer -- crt0.s emits the DEC C main-return mapping:
+    #   return 0    -> SS$_NORMAL (0x00000001)
+    #   return N>=2 -> C$_EXIT1 + (N-1)*8     (C$_EXIT1 = the OVMX bootstrap-surface
+    #                                          globalvalue LINK folds; build.log:
+    #                                          "C$_EXIT1 folded to absolute 0x35a009")
+    # So DECODE the milestone status back to the sentinel and assert it is 3, with
+    # the control (return 0 -> 0x1) as the value-sensitivity anchor (teeth: a fixed
+    # constant or a failed activation cannot both satisfy the decode AND the anchor).
+    _cexit1=$((0x35a009))
+    _seam_mile=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\n]*STATUS=0x[0-9A-Fa-f]+" "$WORK/bootA.log" 2>/dev/null | tail -1)
+    _seam_ctl=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E_OK\.EXE[^\n]*STATUS=0x[0-9A-Fa-f]+" "$WORK/bootA.log" 2>/dev/null | tail -1)
+    _mile_hex=$(printf '%s' "$_seam_mile" | grep -oiE '0x[0-9a-f]+' | tail -1)
+    _ctl_hex=$(printf '%s' "$_seam_ctl"  | grep -oiE '0x[0-9a-f]+' | tail -1)
+    _val3=0; _sentinel="?"
+    if [ -n "$_mile_hex" ]; then
+        _mile_dec=$(( _mile_hex ))
+        if [ "$_mile_dec" -ge "$_cexit1" ] && [ $(( (_mile_dec - _cexit1) % 8 )) -eq 0 ]; then
+            _sentinel=$(( (_mile_dec - _cexit1) / 8 + 1 ))
+            [ "$_sentinel" -eq 3 ] && _val3=1
+        fi
+    fi
+    # value-sensitivity anchor: the control (return 0) MUST read SS$_NORMAL (0x1).
+    _ctl_ok=0; [ -n "$_ctl_hex" ] && [ "$(( _ctl_hex ))" -eq 1 ] && _ctl_ok=1
+    _ctl_ran=$(grep -qaE "OVMX crt0 join OK-CONTROL: activated, argc=1" "$WORK/bootA.log" 2>/dev/null && echo 1 || echo 0)
+
+    echo "  Control  (main returns 0): crt0-join+argc=1=$_ctl_ran  executive seam: $_seam_ctl  (SS\$_NORMAL anchor=$_ctl_ok)"
+    echo "  Milestone(main returns 3): crt0-join+argc=1=$_crt0     executive seam: $_seam_mile"
+    echo "           DECODE: (${_mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $_sentinel  (want 3; match=$_val3)"
+    if [ "$_crt0" = 1 ] && [ "$_val3" = 1 ] && [ "$_ctl_ok" = 1 ]; then
+        echo "  PASS (MILESTONE): the real alpha-dec-vms GCC-port image joint_e2e.exe ACTIVATED via IMGACT"
+        echo "        over the MOUNTED ODS-2 volume; crt0 -> decc\$main -> main ENTERED (argc=1) and ran its"
+        echo "        body to return the sentinel 3. The EXECUTIVE-recorded completion \$STATUS decodes via the"
+        echo "        faithful DEC C mapping C\$_EXIT1+(N-1)*8 to N=3, and the control (return 0 -> SS\$_NORMAL)"
+        echo "        anchors value-sensitivity. NOTE: DCL RUN's fork path collapses the POSIX exit to"
+        echo "        SS\$_NORMAL and does NOT propagate the executive \$STATUS -- a separate DCL-fidelity gap;"
+        echo "        the executive seam value is the truth."
     else
-        echo "  NOT PROVEN -- joint_e2e.exe did not run its main / no STATUS readback. Failure signatures:"
+        echo "  NOT PROVEN -- need crt0-join+argc=1 ($_crt0), decoded-sentinel-3 ($_val3), control-anchor ($_ctl_ok). Signatures:"
         grep -aE "%IMGACT|%RUN-|%DCL-|IMGNOTFND|no such|NOSUCHFILE|DEVNOTMOUNT|SS\\\$_" "$WORK/bootA.log" 2>/dev/null | sed 's/^/    /' | tail -20 || echo "    (none captured)"
     fi
 else

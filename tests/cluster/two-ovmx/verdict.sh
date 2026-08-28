@@ -9,15 +9,21 @@ LA="$OUT/scsd-$A.log"; LB="$OUT/scsd-$B.log"
 
 # Ordered progress ladder: marker -> human label. First column is the grep key
 # in the SCSD run log; presence means that node reached that rung.
+# Chronological up the NEW->MEMBER path. rung-0 (vms-f3e): HELLO -> directed
+# HELLO. rung-VC (vms-d60): 0x41 START -> VC OPEN + start_acked. Then the join
+# sequencer (OVMX_JOIN_SEQ) 8-step choreography: SCS$DIRECTORY -> MSCP$DISK ->
+# VMS$VAXcluster -> add-member.
 ladder=(
-  "SCSD-I-HELLOSENT|multicast HELLO emitted"
-  "SCSD-I-DIRHELLO|directed HELLO exchanged (NISCA channel)"
-  "SCSD-I-CONNREQ|VMS\$VAXcluster CONNECT-REQUEST sent"
+  "SCSD-I-HELLOSENT|rung-0: multicast HELLO emitted"
+  "SCSD-I-DIRHELLO|rung-0: directed HELLO exchanged (NISCA channel)"
+  "SCSD-I-STARTTX|rung-VC: 0x41 START sent"
+  "SCSD-I-STARTDONE|rung-VC: START handshake done (start_acked)"
+  "SCSD-I-VCOPEN|rung-VC: virtual circuit OPEN"
+  "SCSD-I-OWNDIRBOUND|seq step 1: our SCS\$DIRECTORY connect accepted"
+  "SCSD-I-MSCPBOUND|seq step 5: our MSCP\$DISK connect accepted"
+  "SCSD-I-CONNREQ|VMS\$VAXcluster CONNECT-REQUEST sent (non-seq path)"
   "SCSD-I-CONNRESP|peer CONNECT-REQUEST answered/accepted"
-  "SCSD-I-VCOPEN|virtual circuit OPEN"
   "SCSD-I-VAXCLMEMBER|VMS\$VAXcluster SYSAP connection OPEN"
-  "SCSD-I-STARTTX|CM START sent"
-  "SCSD-I-STARTDONE|CM START handshake done"
   "SCSD-I-CMCONFIG|CM config/topology exchanged"
   "SCSD-I-CLUSTATE|cluster membership state learned"
 )

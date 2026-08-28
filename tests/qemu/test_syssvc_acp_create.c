@@ -324,6 +324,61 @@ int main(void)
           "after re-ACCESS the on-disk FH2 reports the modified protection 0xFF00 (attr write persisted)");
     (void)vms_kif_acp_deaccess(chan);
 
+    /* --- (5b) IO$_MODIFY write-owner is idempotent + skips redundant writes
+     * (FIX D, vms-af26). PROVISION re-owns the whole system tree on EVERY boot;
+     * the executive now skips the FH2 header write-back when the on-disk owner
+     * already equals the requested UIC. The write-skip is internal, so what is
+     * asserted here is its OBSERVABLE contract: (a) setting a NEW owner writes
+     * and persists it; (b) re-setting the SAME owner succeeds and leaves the
+     * owner unchanged (the skipped-write case -- correctness preserved); (c) a
+     * GENUINELY different owner still gets written (the skip never blocks a real
+     * change -- a mis-owned or new file is still owned). */
+    /* (a) set owner to [7,4] -- differs from the creator's UIC, so it writes */
+    memset(&f, 0, sizeof(f));
+    f.chan = chan; f.func = VMS_ACP_FOP_MODIFY;
+    f.did_num = OVMXDIR_FID_NUM; f.did_seq = 1; f.version = 1;
+    f.attr_ctl = VMS_ACP_ATTR_OWNER;
+    f.attr.uic_group = 7; f.attr.uic_member = 4;
+    strncpy(f.name, "MODF.TST", VMS_ACP_NAME_SIZE - 1);
+    st = vms_kif_acp_fileop(&f);
+    check($VMS_STATUS_SUCCESS(st), "IO$_MODIFY write owner = [7,4]");
+    st = access_named(chan, "MODF.TST", 0, 0, &a);
+    check($VMS_STATUS_SUCCESS(st) && a.attr.uic_group == 7 && a.attr.uic_member == 4,
+          "after re-ACCESS the on-disk FH2 reports owner [7,4] (owner write persisted)");
+    (void)vms_kif_acp_deaccess(chan);
+
+    /* (b) set the SAME owner [7,4] again -- FIX D skips the write, still succeeds,
+     * and the owner is unchanged (re-stamping already-correct ownership is a
+     * no-op that must not corrupt or clear the owner) */
+    memset(&f, 0, sizeof(f));
+    f.chan = chan; f.func = VMS_ACP_FOP_MODIFY;
+    f.did_num = OVMXDIR_FID_NUM; f.did_seq = 1; f.version = 1;
+    f.attr_ctl = VMS_ACP_ATTR_OWNER;
+    f.attr.uic_group = 7; f.attr.uic_member = 4;
+    strncpy(f.name, "MODF.TST", VMS_ACP_NAME_SIZE - 1);
+    st = vms_kif_acp_fileop(&f);
+    check($VMS_STATUS_SUCCESS(st),
+          "IO$_MODIFY re-write of the SAME owner [7,4] succeeds (FIX D skip path is SS$_NORMAL)");
+    st = access_named(chan, "MODF.TST", 0, 0, &a);
+    check($VMS_STATUS_SUCCESS(st) && a.attr.uic_group == 7 && a.attr.uic_member == 4,
+          "after the redundant MODIFY the owner is still [7,4] (skip preserves the correct owner)");
+    (void)vms_kif_acp_deaccess(chan);
+
+    /* (c) a genuinely different owner [1,4] still gets written (skip only elides
+     * a match, never a real change) */
+    memset(&f, 0, sizeof(f));
+    f.chan = chan; f.func = VMS_ACP_FOP_MODIFY;
+    f.did_num = OVMXDIR_FID_NUM; f.did_seq = 1; f.version = 1;
+    f.attr_ctl = VMS_ACP_ATTR_OWNER;
+    f.attr.uic_group = 1; f.attr.uic_member = 4;
+    strncpy(f.name, "MODF.TST", VMS_ACP_NAME_SIZE - 1);
+    st = vms_kif_acp_fileop(&f);
+    check($VMS_STATUS_SUCCESS(st), "IO$_MODIFY change owner [7,4] -> [1,4]");
+    st = access_named(chan, "MODF.TST", 0, 0, &a);
+    check($VMS_STATUS_SUCCESS(st) && a.attr.uic_group == 1 && a.attr.uic_member == 4,
+          "after re-ACCESS the on-disk FH2 reports owner [1,4] (a real owner change still persists)");
+    (void)vms_kif_acp_deaccess(chan);
+
     /* clean up MODF.TST so the fixture copy is left as found */
     st = delete_file(chan, "MODF.TST", 1, &f);
     check($VMS_STATUS_SUCCESS(st), "IO$_DELETE MODF.TST (restore the fixture directory state)");

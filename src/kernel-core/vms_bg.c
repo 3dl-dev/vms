@@ -252,6 +252,143 @@ out:
 }
 
 /*
+ * IO$_SETMODE (bind subfunction) -- bind the channel's socket to a local AF_INET
+ * address (exec_socket_bind), then read the EFFECTIVE local address back (a zero
+ * input port yields an ephemeral one) via exec_socket_getname, so a server learns
+ * the port it was given. vms-698 (OpenSSH server port).
+ */
+long vms_ioctl_bg_bind(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_bg_bind_args args;
+    struct vms_bg_chan *ch;
+    exec_socket_t sock;
+    int rc;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (const void __user *)arg, sizeof(args)))
+        return -EFAULT;
+
+    ch = bgchan_lookup(proc, args.chan, &sock);
+    if (!ch || !sock) {
+        args.status = SS__IVCHAN;   /* no socket: IO$_SETMODE(create) never issued */
+        goto out;
+    }
+
+    rc = exec_socket_bind(sock, args.sin_family, args.sin_port, args.sin_addr);
+    if (rc) {
+        args.status = SS__ABORT;
+        goto out;
+    }
+    /* Read the effective local address back (the ephemeral port, if any). */
+    rc = exec_socket_getname(sock, 0, &args.sin_family, &args.sin_port, &args.sin_addr);
+    args.status = rc ? SS__ABORT : SS__NORMAL;
+
+out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * IO$_SETMODE (listen subfunction) -- mark the channel's socket passive with the
+ * given backlog (exec_socket_listen). vms-698.
+ */
+long vms_ioctl_bg_listen(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_bg_listen_args args;
+    struct vms_bg_chan *ch;
+    exec_socket_t sock;
+    int rc;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (const void __user *)arg, sizeof(args)))
+        return -EFAULT;
+
+    ch = bgchan_lookup(proc, args.chan, &sock);
+    if (!ch || !sock) {
+        args.status = SS__IVCHAN;
+        goto out;
+    }
+
+    rc = exec_socket_listen(sock, args.backlog);
+    args.status = rc ? SS__ABORT : SS__NORMAL;
+
+out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * IO$_ACCESS|IO$M_ACCEPT -- block for one inbound connection on the LISTEN
+ * channel and install the accepted socket onto a second, pre-$ASSIGNed BG channel
+ * (accept_chan) the caller supplies EMPTY, then report the peer address. The
+ * accepted connection is thereafter used through ordinary IO$_READVBLK/WRITEVBLK
+ * on accept_chan -- the executive analogue of accept() minting a new fd. vms-698.
+ */
+long vms_ioctl_bg_accept(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_bg_accept_args args;
+    struct vms_bg_chan *lch, *tch;
+    exec_socket_t lsock, tsock, accepted;
+    int rc;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (const void __user *)arg, sizeof(args)))
+        return -EFAULT;
+
+    /* The listening channel must have a socket. */
+    lch = bgchan_lookup(proc, args.listen_chan, &lsock);
+    if (!lch || !lsock) {
+        args.status = SS__IVCHAN;
+        goto out;
+    }
+    /* The target channel must exist and be EMPTY (a fresh $ASSIGN, no socket). */
+    tch = bgchan_lookup(proc, args.accept_chan, &tsock);
+    if (!tch) {
+        args.status = SS__IVCHAN;
+        goto out;
+    }
+    if (tsock) {
+        args.status = SS__BADPARAM;     /* target already carries a socket */
+        goto out;
+    }
+
+    /* Blocking accept (lock dropped, MAY SLEEP) mints a new holder. */
+    rc = exec_socket_accept(lsock, &accepted);
+    if (rc) {
+        args.status = SS__ABORT;
+        goto out;
+    }
+
+    /* Report the peer address (best-effort) before the handoff. */
+    exec_socket_getname(accepted, 1, &args.sin_family, &args.sin_port, &args.sin_addr);
+
+    /* Re-find the target under the lock (it may have been $DASSGN'd during the
+     * long blocking accept) and install only if still empty; otherwise drop the
+     * accepted socket rather than leak or double-install. */
+    spin_lock(&proc->chan_lock);
+    tch = bgchan_find_locked(proc, args.accept_chan);
+    if (tch && !tch->sock) {
+        tch->sock = accepted;
+        accepted = NULL;
+    }
+    spin_unlock(&proc->chan_lock);
+
+    if (accepted) {
+        exec_socket_release(accepted);
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    args.status = SS__NORMAL;
+
+out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * IO$_WRITEVBLK -- send one buffer over the connection (exec_socket_send).
  */
 long vms_ioctl_bg_send(struct vms_proc *proc, unsigned long arg)

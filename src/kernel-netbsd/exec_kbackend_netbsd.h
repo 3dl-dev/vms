@@ -654,4 +654,11 @@ int  exec_socket_getname(exec_socket_t s, int peer, uint16_t *family, uint16_t *
 int  exec_socket_setopt_int(exec_socket_t s, int level, int name, int val);
 int  exec_socket_getopt_int(exec_socket_t s, int level, int name, int *out);
 
+/* Server path (vms-698). exec_socket_accept mints a NEW holder for the accepted
+ * connection (like exec_socket_create), returned via *out. Contract-only twin:
+ * sobind/solisten/soaccept -- see vms_socket_netbsd.c. */
+int  exec_socket_bind(exec_socket_t s, uint16_t family, uint16_t port_be, uint32_t addr_be);
+int  exec_socket_listen(exec_socket_t s, int backlog);
+int  exec_socket_accept(exec_socket_t s, exec_socket_t *out);
+
 #endif /* OVMX_EXEC_KBACKEND_NETBSD_H */

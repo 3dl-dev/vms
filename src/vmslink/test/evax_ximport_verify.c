@@ -148,15 +148,35 @@ int main(int argc, char **argv)
         const char *pn = names + ie.producer_off;
         CHECK(strcmp(pn, producer) == 0,
               "record[%u] producer soname == \"%s\" (got \"%s\")", k, producer, pn);
-        CHECK(ie.sv_index == 0,
-              "record[%u] symbol-vector index == 0 (HELPER_PROC, got %u)", k, ie.sv_index);
+        /* The producer symbol-vector index lives in the low 31 bits; bit31
+         * (OVMX_IMP_LINKAGE) carries the EVAX/Alpha import FORM, not the index,
+         * so it MUST be masked off before the index compare — exactly the
+         * contract IMGACT reads by (imgact.c: sidx = sv_index & ~OVMX_IMP_LINKAGE).
+         * vms-32e1. */
+        CHECK((ie.sv_index & ~OVMX_IMP_LINKAGE) == 0,
+              "record[%u] symbol-vector index == 0 (HELPER_PROC, got %u)",
+              k, ie.sv_index & ~OVMX_IMP_LINKAGE);
         int matched = -1;
         for (int j = 0; j < 3; j++) if (!seen[j] && ie.patch_off == want[j]) { matched = j; break; }
         CHECK(matched >= 0,
               "record[%u] patch_off 0x%llx is one of the 3 import sites {0x%llx,0x%llx,0x%llx}",
               k, (unsigned long long)ie.patch_off,
               (unsigned long long)want[0], (unsigned long long)want[1], (unsigned long long)want[2]);
-        if (matched >= 0) seen[matched] = 1;
+        if (matched >= 0) {
+            seen[matched] = 1;
+            /* POSITIVE form-bit check: the LINKAGE-pair import (site 0 =
+             * linkage_q0 @ $CODE$+0x08, a 2-quadword procedure linkage) MUST
+             * carry OVMX_IMP_LINKAGE; the two REFQUAD DATA imports ($DATA$ and
+             * $LINK$, sites 1 and 2) MUST NOT. This is the on-disk encoding
+             * IMGACT keys the 2-quad PV fill off — so the test now pins BOTH
+             * the index (masked, above) AND the form (here). vms-32e1. */
+            int want_linkage = (matched == 0);
+            int have_linkage = (ie.sv_index & OVMX_IMP_LINKAGE) != 0;
+            CHECK(have_linkage == want_linkage,
+                  "record[%u] (%s import) OVMX_IMP_LINKAGE bit31 %s (sv_index=0x%08x)",
+                  k, want_linkage ? "LINKAGE" : "DATA",
+                  want_linkage ? "set" : "clear", ie.sv_index);
+        }
     }
     CHECK(seen[0], "LINKAGE quad[0] site 0x%llx bound in .vms$imp", (unsigned long long)want[0]);
     CHECK(seen[1], "$DATA$ import site 0x%llx bound in .vms$imp",   (unsigned long long)want[1]);

@@ -83,7 +83,7 @@ cat > PROBE.C <<'EOF'
 #include "vms_snprintf.h"
 int ovmxrt_probe(void){ char b[8]; return vms_snprintf(b, sizeof b, "%u", 216u); }
 EOF
-$CC -x c $CF PROBE.C -o PROBE.OBJ    # -x c: a case-sensitive host CC treats .C as C++ (see BUILD.COM)
+$CC -x c $CF PROBE.C -o PROBE.OBJ    # -x c: a case-sensitive host CC treats .C as C++ (the OVMXRT.MMS CFLAGS carry the same -x c)
 LOG=$("$LINK_EXE" --shareable --symbol-vector "ovmxrt_probe=PROCEDURE" \
         --gsmatch LEQUAL,1,0 -o OVMXRT1.EXE PROBE.OBJ OVMXRT1.OLB 2>&1)
 echo "$LOG" | sed 's/^/   /'

@@ -1645,6 +1645,13 @@ static struct {
     unsigned generation;      /* vms-e15: how many times this identity has been
                                * admitted. 1 on the first admission; the op 0x02
                                * REJOIN form carries prior+1 at body[36:40]. */
+    unsigned clean;           /* vms-2f3: 1 iff the prior run recorded a CLEAN
+                               * shutdown (scsd_shutdown_teardown rewrote the
+                               * sidecar clean=1 AFTER its port-level last gasp).
+                               * 0 (the on-admission value, or an old sidecar with
+                               * no field) means the prior incarnation CRASHED
+                               * without announcing its departure, so the peer may
+                               * still be holding the corpse CSB in reconnect. */
 } ovmx_prior;
 
 /* vms-e15: the membership generation THIS run is admitted as -- 1 for a first
@@ -1685,31 +1692,41 @@ static void prior_admission_load(void)
     unsigned long long formed = 0;
     unsigned sysid = 0;
     unsigned generation = 0;
+    unsigned clean = 0;
     if (fscanf(f, "formed=%llx founding_sysid=%u", &formed, &sysid) == 2 &&
         formed != 0) {
         ovmx_prior.valid = 1;
         ovmx_prior.formed = (uint64_t)formed;
         ovmx_prior.founding_sysid = (uint16_t)sysid;
-        /* generation is a later field: an old sidecar lacks it (fscanf misses,
-         * generation stays 0) and a rejoin then floors to 2. */
+        /* generation and clean are later fields, written in that order: an old
+         * sidecar lacks both (fscanf misses, they stay 0 -- generation then
+         * floors to 2 on a rejoin, and clean=0 conservatively treats an old
+         * sidecar as a possible crash, which only costs a harmless corpse gasp
+         * the peer has no CSB to act on). */
         if (fscanf(f, " generation=%u", &generation) == 1) {
             ovmx_prior.generation = generation;
+            if (fscanf(f, " clean=%u", &clean) == 1) {
+                ovmx_prior.clean = clean;
+            }
         }
     }
     fclose(f);
     if (ovmx_prior.valid) {
         log_ts(stdout);
         printf(" SCSD-I-PRIORCLU, this identity has been admitted before:"
-               " cluster formed=0x%016llx, founding node SCSSYSTEMID %u (%s)."
-               " If the cluster we meet carries that founding time, our"
-               " op 0x02 will take the REJOIN form\n",
+               " cluster formed=0x%016llx, founding node SCSSYSTEMID %u,"
+               " prior run shut down %s (%s). If the cluster we meet carries that"
+               " founding time, our op 0x02 will take the REJOIN form%s\n",
                (unsigned long long)ovmx_prior.formed,
-               (unsigned)ovmx_prior.founding_sysid, path);
+               (unsigned)ovmx_prior.founding_sysid,
+               ovmx_prior.clean ? "CLEANLY" : "with NO clean-leave (CRASH)", path,
+               ovmx_prior.clean ? "" :
+               " -- and we will first emit the crashed incarnation's last gasp");
         fflush(stdout);
     }
 }
 
-static void prior_admission_save(void)
+static void prior_admission_write(unsigned clean)
 {
     char path[1024];
     if (prior_admission_path(path, sizeof(path)) != 0 ||
@@ -1720,18 +1737,41 @@ static void prior_admission_save(void)
     if (f == NULL) {
         return;
     }
-    fprintf(f, "formed=%016llx founding_sysid=%u generation=%u\n",
+    fprintf(f, "formed=%016llx founding_sysid=%u generation=%u clean=%u\n",
             (unsigned long long)ovmx_cluster.formed,
             (unsigned)ovmx_cluster.founding_sysid,
-            ovmx_run_generation);
+            ovmx_run_generation, clean);
     fclose(f);
     log_ts(stdout);
     printf(" SCSD-I-PRIORCLU, recorded our admission to cluster"
-           " formed=0x%016llx (founding node %u) in %s -- a rebooted VAX"
-           " carries this across a crash and a restarted OVMX must too\n",
+           " formed=0x%016llx (founding node %u, clean=%u) in %s -- a rebooted"
+           " VAX carries this across a crash and a restarted OVMX must too\n",
            (unsigned long long)ovmx_cluster.formed,
-           (unsigned)ovmx_cluster.founding_sysid, path);
+           (unsigned)ovmx_cluster.founding_sysid, clean, path);
     fflush(stdout);
+}
+
+/*
+ * prior_admission_save - vms-2f3: called at ADMISSION. The record is written
+ * DIRTY (clean=0): we are now a live incarnation and if we crash before a clean
+ * teardown the peer will still hold our CSB, so our NEXT boot must announce this
+ * incarnation's departure. scsd_shutdown_teardown() rewrites clean=1 only after
+ * a genuine clean-leave last gasp has gone out.
+ */
+static void prior_admission_save(void)
+{
+    prior_admission_write(0);
+}
+
+/*
+ * prior_admission_mark_clean - vms-2f3: called at CLEAN shutdown, AFTER the
+ * port-level last gasp has already announced our departure. Stamps clean=1 so
+ * the next boot does NOT emit a corpse last gasp -- the peer removed us at
+ * departure and there is nothing left to retract.
+ */
+static void prior_admission_mark_clean(void)
+{
+    prior_admission_write(1);
 }
 
 /*
@@ -11892,6 +11932,118 @@ static unsigned scsd_emit_port_lastgasp(struct scsd_rx *rx)
     return 1;
 }
 
+/*
+ * ovmx_crash_lastgasp_enabled - vms-2f3 kill switch for the corpse last gasp.
+ * DEFAULT ON. OVMX_CRASH_LASTGASP=0 restores the pre-fix behaviour (a crashed
+ * predecessor's CSB is left for the peer to age out over ~RECNXINTERVAL), so the
+ * whale stays reproducible and the change stays bisectable (guardrail 23). Read
+ * fresh every call.
+ */
+static int ovmx_crash_lastgasp_enabled(void)
+{
+    const char *off = getenv("OVMX_CRASH_LASTGASP");
+    if (off != NULL && off[0] == '0' && off[1] == '\0') {
+        return 0;
+    }
+    return 1;
+}
+
+/* vms-2f3: how many times to (best-effort) repeat the corpse gasp against
+ * multicast loss, and how long to then hold OVMX's own join drive so the peer
+ * can sequence departure -> CSB reclaim before our fresh channel-verify
+ * re-establishes same-MAC continuity. ~3.3 s is the grounded reclaim latency
+ * (o35proof); OVMX_CRASH_SETTLE_MS overrides. */
+#define OVMX_CRASH_LASTGASP_REPEAT 3
+#define OVMX_CRASH_SETTLE_MS       3300u
+
+/*
+ * scsd_emit_crash_lastgasp - vms-2f3 (spec 4(O.30)): THE WHITE-WHALE FIX.
+ *
+ * ROOT CAUSE. On a CRASH (SIGKILL, no clean shutdown) followed by a fast return
+ * within RECNXINTERVAL, OVMX never emitted the port-level last gasp that
+ * announces the PRIOR incarnation's departure -- so the peer, reading same-MAC
+ * channel continuity (the pod stays up, the CLOCK_MONOTONIC HELLO timer never
+ * resets), holds the crashed VMS$VAXcluster CDT open in reconnect/long_break for
+ * ~RECNXINTERVAL (~100 s) and refuses the return onto that still-open CSB. OVMX
+ * already emits the correct signal on a CLEAN shutdown (scsd_emit_port_lastgasp
+ * via scsd_shutdown_teardown), which is exactly why clean rejoin works.
+ *
+ * THE FIX. Emit the CRASHED predecessor's port-level last gasp on the RETURN, at
+ * birth, before the fresh join. The peer identifies the departing node by
+ * SCSSYSTEMID (stable across incarnations, carried in the HELLO src logical
+ * aa:00:04:00:<LE16(sysid)>) and removes the CSB it holds for the crashed one,
+ * so the return admits in seconds instead of ~100 s.
+ *
+ * CRASH DETECTION is the prior-admission sidecar's clean flag: written 0 at
+ * admission (prior_admission_save), rewritten 1 only after a clean-leave last
+ * gasp (prior_admission_mark_clean). valid && clean!=1 at boot == crashed last
+ * run. A clean rejoin (clean==1) or a first-timer (!valid) emits nothing.
+ *
+ * SAFETY (critical). This uses the PORT-LEVEL last gasp (scsd_emit_port_lastgasp,
+ * a plain best-effort channel HELLO below the VC, abs-30=0xb1 + cluster nonce) --
+ * NOT the CM-layer op-0x0d self-departure (scsd_emit_clean_departure), which a
+ * live bracket proved CRASHES the real coordinator (spec 4(O.29)) because it is a
+ * class-0x04 SCS transition-open emitted out of choreography. Same frame the
+ * reference VAX puts on the wire on SHUTDOWN.COM; carries no SCS transition
+ * state. Reusing scsd_emit_port_lastgasp also keeps every transmit inside the
+ * one send-site the census (test_scsd_send_sites.py) enforces.
+ */
+static unsigned scsd_emit_crash_lastgasp(struct scsd_rx *rx)
+{
+    if (!ovmx_crash_lastgasp_enabled()) {
+        return 0;
+    }
+    /* Only a node ADMITTED before AND with no recorded clean exit has a corpse
+     * the peer may still hold. Emitting otherwise would be a harmless no-op (the
+     * peer has no matching CSB to remove), but we stay honest and quiet. */
+    if (!ovmx_prior.valid || ovmx_prior.clean == 1) {
+        return 0;
+    }
+    if (!rx->emit_hello || rx->hello_params == NULL || rx->lab_nonce == NULL) {
+        return 0;
+    }
+    log_ts(stdout);
+    printf(" SCSD-I-CRASHGASP, prior admission to cluster formed=0x%016llx was NOT"
+           " cleanly shut down (sidecar clean=0) -- emitting the crashed"
+           " incarnation's PORT-LEVEL last gasp at BIRTH so the peer drops the"
+           " corpse CSB (keyed on SCSSYSTEMID, stable across incarnations) before"
+           " our fresh join re-masks the channel (spec 4(O.30), vms-2f3)\n",
+           (unsigned long long)ovmx_prior.formed);
+    fflush(stdout);
+
+    unsigned sent = 0;
+    for (int i = 0; i < OVMX_CRASH_LASTGASP_REPEAT; i++) {
+        sent += scsd_emit_port_lastgasp(rx);
+        if (i + 1 < OVMX_CRASH_LASTGASP_REPEAT) {
+            struct timespec gap = { 0, 150L * 1000L * 1000L }; /* 150 ms */
+            nanosleep(&gap, NULL);
+        }
+    }
+    if (sent == 0) {
+        return 0; /* port_lastgasp suppressed (e.g. OVMX_REJOIN_CLEANLEAVE=0) */
+    }
+
+    unsigned settle_ms = OVMX_CRASH_SETTLE_MS;
+    const char *s = getenv("OVMX_CRASH_SETTLE_MS");
+    if (s != NULL && s[0] != '\0') {
+        long v = strtol(s, NULL, 10);
+        if (v >= 0 && v <= 60000) {
+            settle_ms = (unsigned)v;
+        }
+    }
+    if (settle_ms > 0) {
+        log_ts(stdout);
+        printf(" SCSD-I-CRASHGASP, holding our join drive %u ms for the peer to"
+               " sequence departure -> CSB reclaim before our fresh join\n",
+               settle_ms);
+        fflush(stdout);
+        struct timespec hold = { settle_ms / 1000,
+                                 (long)(settle_ms % 1000) * 1000L * 1000L };
+        nanosleep(&hold, NULL);
+    }
+    return sent;
+}
+
 static void scsd_shutdown_teardown(struct scsd_rx *rx, uint8_t *buf, size_t bufsz)
 {
     struct scs_svc_port *port = scsd_svc();
@@ -11949,6 +12101,9 @@ static void scsd_shutdown_teardown(struct scsd_rx *rx, uint8_t *buf, size_t bufs
         /* No VC to disconnect, but still announce departure at the port level
          * (vms-708): the multicast last gasp rides no circuit. */
         (void)scsd_emit_port_lastgasp(rx);
+        /* vms-2f3: a clean-leave gasp went out -- record it so the next boot
+         * does NOT emit a corpse gasp for this (properly departed) incarnation. */
+        prior_admission_mark_clean();
         return;
     }
 
@@ -11988,6 +12143,10 @@ static void scsd_shutdown_teardown(struct scsd_rx *rx, uint8_t *buf, size_t bufs
      * is the authentic immediate-removal signal that REPLACES the crashing
      * op-0x0d (spec 4(O.29)). */
     (void)scsd_emit_port_lastgasp(rx);
+    /* vms-2f3: our departure has been cleanly announced -- stamp the sidecar
+     * clean=1 so a fast restart does NOT emit a corpse gasp (the peer already
+     * removed us at departure; clean rejoin already works). */
+    prior_admission_mark_clean();
 }
 
 /*
@@ -12869,6 +13028,15 @@ int main(int argc, char **argv)
     rx.do_connect = do_connect;
     rx.emit_hello = emit_hello;
     rx.join_seq_enabled = join_seq_enabled; /* vms-578: travels with the context */
+
+    /* vms-2f3: THE WHITE-WHALE FIX. If this identity was admitted before and the
+     * prior run did NOT record a clean shutdown, it CRASHED -- the peer may still
+     * hold our prior incarnation's VMS$VAXcluster CDT in reconnect/long_break for
+     * ~RECNXINTERVAL (~100 s), refusing our return onto that still-open CSB. Emit
+     * that crashed incarnation's port-level last gasp NOW, at birth, before the
+     * fresh join, so the peer removes the corpse in seconds. No-op on a clean
+     * rejoin or a first join. See scsd_emit_crash_lastgasp(). */
+    (void)scsd_emit_crash_lastgasp(&rx);
 
     while (!g_stop) {
         if (emit_hello) {

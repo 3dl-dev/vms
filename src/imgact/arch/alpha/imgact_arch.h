@@ -140,11 +140,12 @@ void imgact_set_tp(void *tp);      /* call_pal 0x9f (wrunique)                */
 void *imgact_get_tp(void);         /* call_pal 0x9e (rduniq)                  */
 
 /* Issue a genuine OpenVMS Alpha STANDARD CALL to a VMS image's transfer address
- * (vms-f60d). pv = procedure value = the address of the transfer PDSC; the entry
- * code is at *(pv+8) (PDSC$Q_ENTRY). The trampoline sets R27 = that ENTRY code
- * address (NOT the descriptor): the OVMX `alpha-dec-vms` port is ELF-Alpha, so
- * the callee's prologue does `ldgp $gp,0($27)` and must find its own entry in
- * R27 (see arch/alpha/vms_transfer.S for the first-live-run fix). ai = the
+ * (vms-f60d; convention corrected vms-04e). pv = procedure value = the address of
+ * the transfer PDSC; the entry code is at *(pv+8) (PDSC$Q_ENTRY). The trampoline
+ * jumps to that entry but sets R27 = PV = the PDSC (the descriptor, NOT the
+ * entry): the genuine `alpha-dec-vms` port __main is VMS-native and reaches its
+ * linkage pairs GP-relative FROM R27 = PDSC (it never `ldgp $gp,0($27)`s) -- see
+ * arch/alpha/vms_transfer.S. ai = the
  * Argument Information register value (-> R25); args = the six integer/pointer
  * activation-context arguments (-> R16..R21). R26 is set to a return label back
  * INTO IMGACT, so the call RETURNS (unlike _start's tail-jump). Returns R0, the

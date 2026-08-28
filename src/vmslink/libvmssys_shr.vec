@@ -165,3 +165,8 @@ vms_kif_getcli=PROCEDURE
 # report a disk as Mounted with its label + free/total blocks. APPENDED at the
 # end per the append-only contract -- a new universal never shifts an existing index.
 vms_kif_getvol=PROCEDURE
+# BGn: SERVER path (vms-698, OpenSSH server port). bind/listen/accept over the
+# exec_socket_* seam. APPENDED per the append-only contract.
+vms_kif_bg_bind=PROCEDURE
+vms_kif_bg_listen=PROCEDURE
+vms_kif_bg_accept=PROCEDURE

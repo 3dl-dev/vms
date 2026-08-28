@@ -248,3 +248,71 @@ exec_socket_getopt_int(exec_socket_t s, int level, int name, int *out)
 	sockopt_destroy(&sopt);
 	return rc;
 }
+
+/* ---- server path (vms-698): bind / listen / accept ------------------------ */
+
+int
+exec_socket_bind(exec_socket_t s, uint16_t family, uint16_t port_be,
+    uint32_t addr_be)
+{
+	struct sockaddr_in sin;
+
+	memset(&sin, 0, sizeof(sin));
+	sin.sin_len = sizeof(sin);
+	sin.sin_family = family;
+	sin.sin_port = port_be;         /* network byte order, straight through */
+	sin.sin_addr.s_addr = addr_be;
+	return sobind(s->so, (struct sockaddr *)&sin, curlwp);
+}
+
+int
+exec_socket_listen(exec_socket_t s, int backlog)
+{
+	return solisten(s->so, backlog, curlwp);
+}
+
+int
+exec_socket_accept(exec_socket_t s, exec_socket_t *out)
+{
+	struct exec_socket_holder *h;
+	struct socket *so = s->so, *so2;
+	struct sockaddr_storage ss;
+	int rc = 0;
+
+	*out = NULL;
+	solock(so);
+	/* >>> vms-024 <<< block until a connection is queued, exactly the shape
+	 * do_sys_accept uses (uipc_syscalls.c): wait on so_qlen, then pull the head
+	 * of so_q with soqremque and soaccept it. The interrupt/timeout hardening is
+	 * the runnable-BGn: item; this is the documented in-kernel accept path. */
+	while (so->so_qlen == 0 && so->so_error == 0) {
+		rc = sowait(so, true, 0);
+		if (rc)
+			break;
+	}
+	if (rc == 0 && so->so_error != 0) {
+		rc = so->so_error;
+		so->so_error = 0;
+	}
+	if (rc != 0) {
+		sounlock(so);
+		return rc;
+	}
+	so2 = TAILQ_FIRST(&so->so_q);
+	if (so2 == NULL || soqremque(so2, 1) == 0) {
+		sounlock(so);
+		return -EINVAL;
+	}
+	memset(&ss, 0, sizeof(ss));
+	rc = soaccept(so2, (struct sockaddr *)&ss);     /* finalize the accepted socket */
+	sounlock(so);
+	if (rc != 0) {
+		soclose(so2);
+		return rc;
+	}
+	h = kmem_alloc(sizeof(*h), KM_SLEEP);
+	h->so = so2;
+	h->refcnt = 1;                  /* the accepting channel's reference */
+	*out = h;
+	return 0;
+}

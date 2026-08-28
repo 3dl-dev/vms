@@ -441,9 +441,9 @@ int dcl_execute_script(const char *filename, int argc, char **argv)
 
     /* Still not found: the ODS-2 namespace is case-folded but the Linux backing
      * store is case-sensitive, so vmsfs_to_linux_path lowercases a leaf that does
-     * not exist yet -- e.g. `@SYS$SYSTEM:BUILD` -> ".../build", missing the real
-     * BUILD.COM. Case-resolve the base and the two .COM spellings against the
-     * actual directory entries. (vms-615) */
+     * not exist yet -- e.g. `@SYS$STARTUP:STARTUP` -> ".../startup", missing the
+     * real STARTUP.COM. Case-resolve the base and the two .COM spellings against
+     * the actual directory entries. (vms-615) */
     if (!fp) {
         extern int vmsfs_resolve_path_case(const char *, char *, size_t);
         const char *exts[] = { "", ".com", ".COM" };

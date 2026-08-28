@@ -34,9 +34,9 @@
 ! The toolchain verbs TCC / LIBR / LNK are OVMX foreign commands defined by the
 ! build environment (see the test harness), an OVMX design choice (Rule 8).  LNK
 ! -- not LINK -- names the OVMX-native LINK.EXE because a DCL foreign-command
-! symbol cannot shadow the built-in DCL LINK verb, exactly as on OpenVMS (this
-! mirrors distro/.../BUILD.COM, the shell-free DCL build driver this file
-! retires for the MMK-driven path).
+! symbol cannot shadow the built-in DCL LINK verb, exactly as on OpenVMS.  This
+! descrip.mms is the self-host build driver: the shell-free DCL BUILD.COM it
+! replaced was retired (vms-e49) once the ODS-2 flip landed.
 ! =============================================================================
 
 ! ---- macros ----------------------------------------------------------------

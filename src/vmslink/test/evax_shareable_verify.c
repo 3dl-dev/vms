@@ -9,7 +9,9 @@
  *   - it carries NO .vms$xfer (a shareable has no transfer address);
  *   - the .vms$sv parses with the SAME reader IMGACT / the ELF shareable use
  *     (ovmx_symvec.h): magic OVMX_SV_MAGIC, count 2, GSMATCH LEQUAL/1/0;
- *   - sv#0 FOO is OVMX_SV_PROCEDURE, value == $CODE$ base (FOO's code entry);
+ *   - sv#0 FOO is OVMX_SV_PROCEDURE, value == $LINK$ base (FOO's PROCEDURE
+ *     DESCRIPTOR — VMS's real "value" of an Alpha procedure symbol; vms-32e1),
+ *     and the PDSC's code-entry quad (*(PDSC+8)) resolves back to $CODE$ base;
  *   - sv#1 BAR is OVMX_SV_DATA,      value == $DATA$ base (BAR's data addr);
  *   - each entry's name blob string is exactly "FOO" / "BAR";
  *   - GSMATCH accepts a consumer linked at (1,0) and (1, older), and rejects a
@@ -77,19 +79,21 @@ int main(int argc, char **argv)
     Elf64_Shdr shstrhdr;
     memcpy(&shstrhdr, img + eh.e_shoff + (uint64_t)eh.e_shstrndx * sizeof(Elf64_Shdr), sizeof shstrhdr);
     const char *shstr = (const char *)(img + shstrhdr.sh_offset);
-    uint64_t code = 0, data = 0, sv_off = 0, rel_off = 0;
-    int have_code = 0, have_data = 0, have_sv = 0, have_xfer = 0, have_rel = 0;
+    uint64_t code = 0, data = 0, link = 0, sv_off = 0, rel_off = 0;
+    int have_code = 0, have_data = 0, have_link = 0, have_sv = 0, have_xfer = 0, have_rel = 0;
     for (int i = 0; i < eh.e_shnum; i++) {
         Elf64_Shdr sh; memcpy(&sh, img + eh.e_shoff + (uint64_t)i * sizeof sh, sizeof sh);
         const char *nm = shstr + sh.sh_name;
         if      (!strcmp(nm, "$CODE$"))    { code = sh.sh_addr; have_code = 1; }
         else if (!strcmp(nm, "$DATA$"))    { data = sh.sh_addr; have_data = 1; }
+        else if (!strcmp(nm, "$LINK$"))    { link = sh.sh_addr; have_link = 1; }
         else if (!strcmp(nm, ".vms$sv"))   { sv_off = sh.sh_offset; have_sv = 1; }
         else if (!strcmp(nm, ".vms$xfer")) { have_xfer = 1; }
         else if (!strcmp(nm, ".vms$rel"))  { rel_off = sh.sh_offset; have_rel = 1; }
     }
     CHECK(have_code, "$CODE$ section present");
     CHECK(have_data, "$DATA$ section present");
+    CHECK(have_link, "$LINK$ section present (holds FOO's procedure descriptor)");
     CHECK(have_sv,   ".vms$sv section present (symbol vector emitted)");
     CHECK(!have_xfer, "NO .vms$xfer (a shareable has no transfer address)");
     if (!have_sv) { printf("\n%d assertion(s) FAILED (no .vms$sv)\n", failures); return 1; }
@@ -105,16 +109,34 @@ int main(int argc, char **argv)
 
     const char *names = ovmx_sv_names(h);
 
-    /* sv#0 FOO — a PROCEDURE bound to FOO's code entry (== $CODE$ base). */
+    /* sv#0 FOO — a PROCEDURE whose universal value is its PROCEDURE DESCRIPTOR
+     * (PDSC, in $LINK$), not the raw code entry: VMS's real "value" of an Alpha
+     * procedure symbol. IMGACT loads R27 = PV = this PDSC and derives the code
+     * entry = *(PV+8) at activation (vms-32e1 — the code-entry form left IMGACT's
+     * linkage quad[1]=PV NULL and SEGV'd decc$main's prologue). The image is
+     * identity-mapped (sh_offset == sh_addr), so the PDSC is readable at
+     * img + value, and its code-entry quad *(PDSC+8) ties back to $CODE$ base. */
     const struct ovmx_sv_entry *e0 = ovmx_sv_at(h, 0);
     CHECK(e0 != NULL, "sv#0 resolves through ovmx_sv_at (shared reader)");
     if (e0) {
         CHECK(e0->kind == OVMX_SV_PROCEDURE, "sv#0 kind == PROCEDURE (got %u)", e0->kind);
         CHECK(strcmp(names + e0->name_off, "FOO") == 0,
               "sv#0 name == \"FOO\" (got \"%s\")", names + e0->name_off);
-        CHECK(e0->value == code,
-              "sv#0 FOO value == $CODE$ base 0x%llx (got 0x%llx) — bound to the code entry",
-              (unsigned long long)code, (unsigned long long)e0->value);
+        CHECK(e0->value == link,
+              "sv#0 FOO value == $LINK$ base 0x%llx (got 0x%llx) — bound to the PROCEDURE DESCRIPTOR",
+              (unsigned long long)link, (unsigned long long)e0->value);
+        /* Positive PDSC->code-entry tie: the descriptor's PDSC$Q_ENTRY quad
+         * (offset +8) holds FOO's code entry, which is $CODE$ base. */
+        if (e0->value + 16 <= len) {
+            uint64_t pdsc_entry;
+            memcpy(&pdsc_entry, img + e0->value + 8, sizeof pdsc_entry);
+            CHECK(pdsc_entry == code,
+                  "sv#0 FOO PDSC code-entry quad *(PV+8) == $CODE$ base 0x%llx (got 0x%llx)",
+                  (unsigned long long)code, (unsigned long long)pdsc_entry);
+        } else {
+            CHECK(0, "sv#0 FOO PDSC (0x%llx) lies within the image (len 0x%llx)",
+                  (unsigned long long)e0->value, (unsigned long long)len);
+        }
     }
 
     /* sv#1 BAR — a DATA symbol bound to BAR's data address (== $DATA$ base). */

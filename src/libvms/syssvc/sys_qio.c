@@ -308,7 +308,7 @@ struct bg_sockaddr_in {
 };
 
 static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
-                          void *p1, uint32_t p2, uint32_t efn,
+                          void *p1, uint32_t p2, uint32_t p3, uint32_t efn,
                           void (*astadr)(uint32_t), uint32_t astprm) {
     struct _iosb *iosb = (struct _iosb *)iosb_ptr;
     uint32_t exec_chan = vms$$chan_exec_chan(chan);
@@ -319,21 +319,53 @@ static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
     switch (base_func) {
         case IO$_SETMODE:
         case IO$_SETCHAR:
-            /* Create the socket on the channel (AF_INET/SOCK_STREAM). */
-            st = vms_kif_bg_setmode(exec_chan);
+            /* Overloaded (vms-698): P1 != NULL -> bind (P1 = sockaddr; the
+             * effective local address, incl. an ephemeral port, is written back);
+             * else P3 != 0 -> listen (P3 = backlog); else -> create the socket
+             * (the client path, AF_INET/SOCK_STREAM). */
+            if (p1) {
+                struct bg_sockaddr_in *sa = (struct bg_sockaddr_in *)p1;
+                uint16_t eport = 0;
+                uint32_t eaddr = 0;
+                st = vms_kif_bg_bind(exec_chan, sa->family, sa->port, sa->addr,
+                                     &eport, &eaddr);
+                if (st & 1) { sa->port = eport; sa->addr = eaddr; }
+            } else if (p3 != 0) {
+                st = vms_kif_bg_listen(exec_chan, (int)p3);
+            } else {
+                st = vms_kif_bg_setmode(exec_chan);
+            }
             break;
 
         case IO$_ACCESS:
-            /* Connect. P1 = sockaddr (family/port/addr), P2 = its length. */
-            if (!p1 || p2 < sizeof(struct bg_sockaddr_in)) {
-                st = SS$_BADPARAM;
-                break;
-            }
-            {
-                const struct bg_sockaddr_in *sa =
-                    (const struct bg_sockaddr_in *)p1;
-                st = vms_kif_bg_connect(exec_chan, sa->family, sa->port,
-                                        sa->addr);
+            if (func & IO$M_ACCEPT) {
+                /* accept (vms-698): P3 = a second BG channel ($ASSIGNed empty) to
+                 * receive the connection; P1 (optional) = peer sockaddr out. */
+                uint32_t acc_chan;
+                uint16_t fam = 0, port = 0;
+                uint32_t a4 = 0;
+                if (p3 == 0 || !vms$$chan_is_bg((uint16_t)p3)) {
+                    st = SS$_BADPARAM;
+                    break;
+                }
+                acc_chan = vms$$chan_exec_chan((uint16_t)p3);
+                st = vms_kif_bg_accept(exec_chan, acc_chan, &fam, &port, &a4);
+                if ((st & 1) && p1 && p2 >= sizeof(struct bg_sockaddr_in)) {
+                    struct bg_sockaddr_in *sa = (struct bg_sockaddr_in *)p1;
+                    sa->family = fam; sa->port = port; sa->addr = a4;
+                }
+            } else {
+                /* Connect. P1 = sockaddr (family/port/addr), P2 = its length. */
+                if (!p1 || p2 < sizeof(struct bg_sockaddr_in)) {
+                    st = SS$_BADPARAM;
+                    break;
+                }
+                {
+                    const struct bg_sockaddr_in *sa =
+                        (const struct bg_sockaddr_in *)p1;
+                    st = vms_kif_bg_connect(exec_chan, sa->family, sa->port,
+                                            sa->addr);
+                }
             }
             break;
 
@@ -498,7 +530,7 @@ uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
         return qio_mailbox_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
 
     if (vms$$chan_is_bg(chan))
-        return qio_bg_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
+        return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
 
     int fd, is_read;
     uint32_t status = qio_validate_and_classify(chan, func, iosb_ptr, p1,
@@ -538,7 +570,7 @@ uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
         return qio_mailbox_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
 
     if (vms$$chan_is_bg(chan))
-        return qio_bg_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
+        return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
 
     int fd, is_read;
     uint32_t status = qio_validate_and_classify(chan, func, iosb_ptr, p1,

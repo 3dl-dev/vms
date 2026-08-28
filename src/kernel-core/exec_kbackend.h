@@ -407,9 +407,9 @@
  *    src/kernel-core/vms_bg.c -- the executive-resident network pseudo-device,
  *    the block-layer seam's transport twin). OVMX never reimplements a transport:
  *    the IP stack is the host kernel's, reached through this small set of host
- *    PRIMITIVES over an OPAQUE socket handle. The client path only (connect / send
- *    / recv / shutdown / getname / sockopt); listen/accept are declared contract-
- *    only (the bgsock veneer returns ENOSYS for the server path in this increment).
+ *    PRIMITIVES over an OPAQUE socket handle. Client path (connect / send / recv /
+ *    shutdown / getname / sockopt) AND server path (bind / listen / accept, added
+ *    vms-698 for the OpenSSH server port); accept mints a new exec_socket_t.
  *
  *   Type (concrete per substrate):
  *     exec_socket_t   an opaque, REFERENCE-COUNTED host TCP socket handle. The
@@ -468,9 +468,20 @@
  *        logic itself is BACKEND code (Linux reads raw struct sock; NetBSD
  *        sogetopt), so no raw-struct-sock read leaks into shared core.
  *
- *   Contract-only (server path, bgsock returns ENOSYS today): exec_socket_bind /
- *   exec_socket_listen / exec_socket_accept -> Linux kernel_bind/listen/accept,
- *   NetBSD sobind/solisten/soaccept.
+ *   int  exec_socket_bind(exec_socket_t s, uint16_t family, uint16_t port_be,
+ *                         uint32_t addr_be)
+ *        bind the socket to a local AF_INET address (fields in network order; a
+ *        zero port means "pick an ephemeral one", read back via getname). 0/nonzero.
+ *        Linux: kernel_bind. NetBSD: sobind (contract-only twin).
+ *   int  exec_socket_listen(exec_socket_t s, int backlog)
+ *        mark the socket passive with the given backlog. 0/nonzero.
+ *        Linux: kernel_listen. NetBSD: solisten (contract-only twin).
+ *   int  exec_socket_accept(exec_socket_t s, exec_socket_t *out)
+ *        block for one inbound connection and MINT A NEW holder (ref count 1) for
+ *        the accepted socket, returned via *out; its peer/local address is then
+ *        read with exec_socket_getname. 0 (+ *out) / nonzero. MAY SLEEP.
+ *        Linux: kernel_accept into a fresh kref'd holder. NetBSD: soqremque +
+ *        soaccept off so_q (contract-only twin; the queue wait is vms-024).
  *
  *   WHERE THE READINESS POLL FD IS **NOT**. VMS_IOCTL_BG_POLLFD hands userspace a
  *   real Linux fd whose .poll delegates to the host socket's ->poll (OpenSSH's

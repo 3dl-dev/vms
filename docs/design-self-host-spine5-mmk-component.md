@@ -19,9 +19,9 @@
 > (`tests/qemu/test_syssvc_mmk_build.c`, wired into the standing
 > `kernel-executive` CI barrier). This is self-hosting's final MMK-driven rung:
 > **MMK builds a real OVMX component to a running image entirely inside OVMX.**
-> **BUILD.COM nonetheless STAYS** — it is still load-bearing for the S4 self-host
-> *fixpoint* (a multi-TU LINK.EXE gen2==gen3 build, a 1.0 gate) that MMK does not
-> yet drive; see "Retiring BUILD.COM" below. Builds on spine #4 (vms-b23, MMK's
+> **BUILD.COM has since been retired** (vms-e49) — the S4 self-host *fixpoint*
+> (a multi-TU LINK.EXE gen2==gen3 build, a 1.0 gate) it was load-bearing for is
+> now driven by the MMK `LINKSH.MMS`; see "Retiring BUILD.COM" below. Builds on spine #4 (vms-b23, MMK's
 > mailbox-driven DCL drive) and spine #3 (vms-ca9, LIBRARIAN/.OLB). Reads
 > `docs/design-self-host-mmk-spine.md` (the anchor) and
 > `docs/design-mmk-exec-drive-ovmx.md` first.
@@ -195,20 +195,23 @@ Key choices:
 Staged into `tests/qemu/Dockerfile`: the static `vmslink` LINK.EXE, `IMGACT.EXE`
 (`make -C src/imgact ARCH=x86_64`), and `DECC$SHR.EXE` (`mk_decc_shr.sh`).
 
-## Retiring BUILD.COM — STILL BLOCKED (not by the LINK→activate proof, by the S4 fixpoint)
+## Retiring BUILD.COM — DONE (vms-e49)
 
-`distro/.../BUILD.COM` (the shell-free **DCL** build driver) **stays.** The
-LINK→activate proof this rung adds does *not* clear it, because BUILD.COM is
-load-bearing for a proof MMK does **not yet** replace:
-`src/imgact/test/run_link_selfhost_native.sh` (CI job `link-selfhost-native`, the
-**S4 self-host FIXPOINT — a 1.0 gate**, vms-62b) copies `BUILD.COM` (line 136) and
-drives it as a **multi-TU** build to rebuild `LINK.EXE` from within OVMX and prove
-`gen2 == gen3` byte-stable; `run_build_com_native.sh` (S3.2) similarly drives it.
-The vms-725 MMK chain builds a **small single-TU** component to a trivial runnable
-image — it does not yet drive the multi-TU LINK.EXE self-host fixpoint. Deleting
-BUILD.COM would redden that 1.0 gate. Retirement therefore waits on **porting the
-S4 fixpoint from BUILD.COM to an MMK descrip.mms** (tracked separately); only then
-do BUILD.COM + `run_build_com_native.sh` + `run_link_selfhost_native.sh`'s
-BUILD.COM use + their CI jobs get removed. `OVMXRT.MMS` remains the MMK-native
-successor for the *build description*; the driver handoff completes at the
-fixpoint port.
+`distro/.../BUILD.COM` (the shell-free **DCL** build driver) has been **retired.**
+The block was the S4 self-host FIXPOINT — a 1.0 gate (vms-62b): BUILD.COM was
+load-bearing for `src/imgact/test/run_link_selfhost_native.sh` (CI job
+`link-selfhost-native`), which drove it as a **multi-TU** build to rebuild
+`LINK.EXE` from within OVMX and prove `gen2 == gen3` byte-stable, and for
+`run_build_com_native.sh` (S3.2, single-TU compile→link→run).
+
+That block cleared once the multi-TU LINK.EXE self-host fixpoint was **ported from
+BUILD.COM to an MMK descrip.mms** (`tests/toolchain/component/LINKSH.MMS`): the CI
+job `mmk-link-selfhost-fixpoint` (`run_mmk_link_selfhost_build.sh`) now proves
+`gen2 == gen3` on the real OVMX LINK.EXE, the `toolchain-mmk-link-selfhost-plan`
+ctest proves MMK resolves that plan, and the in-guest QEMU suite
+`test_syssvc_mmk_build.c` proves the shipped **MMK.EXE** drives TCC→LIBRARIAN→LINK
+and **activates** the produced image — superseding the single-TU RUN proof
+`run_build_com_native.sh` carried. With those green, vms-e49 deleted `BUILD.COM`,
+`run_build_com_native.sh`, `run_link_selfhost_native.sh`, and their two CI jobs.
+`OVMXRT.MMS`/`LINKSH.MMS` are the MMK-native successors for the *build
+description*; MMK is now the sole self-host build driver.

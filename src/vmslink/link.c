@@ -1061,8 +1061,8 @@ static const char *resolve_producer_path(const char *path, char *out, size_t sz)
         if (access(out, R_OK) == 0)
             return out;
 
-        /* (2) HOST CTEST (no /dev/vms, no boot bridge -- e.g. the BUILD.COM S3.2
-         * DCL driver): the installed images live at their legacy POSIX
+        /* (2) HOST CTEST (no /dev/vms, no boot bridge -- e.g. the MMK
+         * self-host toolchain ctests): the installed images live at their legacy POSIX
          * SYS$SYSROOT location. This /vms read is the sanctioned legacy path for
          * the no-executive case (the flip only retires /vms when the ACP is
          * live), NEVER reached on the runtime where (1) resolves first. */
@@ -1192,7 +1192,7 @@ static uint64_t vms_wimp_size(int nimp, struct import *imp)
  * address and stores it there at activation. Producer sonames are deduped into a
  * trailing name blob. Shared by the executable and shareable emit paths (vms-e65). */
 static void vms_imp_write(uint8_t *img, uint64_t off_imp, struct import *imp,
-                          int nimp, struct producer *ps, int np)
+                          int nimp, struct producer *ps, int np, int is_evax)
 {
     int nstrong = import_count_strong(imp, nimp);
     uint64_t imp_hdr = sizeof(struct ovmx_imp_header);
@@ -1218,7 +1218,15 @@ static void vms_imp_write(uint8_t *img, uint64_t off_imp, struct import *imp,
     for (int i = 0; i < nimp; i++) {
         if (imp[i].is_weak) continue;   /* -> .vms$wimp, not here */
         ie[o].producer_off = prod_off[imp[i].pidx];
-        ie[o].sv_index = imp[i].svidx;
+        /* Pack the linkage FORM into bit31 (OVMX_IMP_LINKAGE): EVAX/Alpha only,
+         * and only for a 2-quad LINKAGE import (!is_data). The ELF path passes
+         * is_evax=0, so a non-Alpha .vms$imp entry is written byte-identical to
+         * origin/main (bit never set). IMGACT masks it off on Alpha; non-Alpha
+         * IMGACT reads sv_index as-is. (Kills the earlier shared-struct growth
+         * AND the bug where is_data==0 ELF call-imports would get the bit.)
+         * vms-32e1. */
+        ie[o].sv_index = imp[i].svidx
+                       | ((is_evax && !imp[i].is_data) ? OVMX_IMP_LINKAGE : 0u);
         ie[o].patch_off = imp[i].got_va;
         ie[o].req_major = ps[imp[i].pidx].sv->gsmatch_major;
         ie[o].req_minor = ps[imp[i].pidx].sv->gsmatch_minor;
@@ -2974,7 +2982,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     /* .vms$imp: this shareable's own cross-image imports (patch_off = import-GOT
      * cell). IMGACT binds each to its --use producer at activation. (vms-e65) */
     if (nstrong)
-        vms_imp_write(img, off_imp, imp, nimp, ps, np);
+        vms_imp_write(img, off_imp, imp, nimp, ps, np, /*is_evax=*/0);
     /* .vms$wimp: weak-by-name imports; IMGACT binds each by NAME at activation
      * against the loaded producer set (absent -> cell stays 0). (vms-5f0) */
     if (nweak)
@@ -3309,16 +3317,22 @@ static uint8_t *evax_ensure_content(struct evax_section *sec)
  * Cross-image relocation forms (clean-room: STC_LP_PSB SYMG semantics from
  * binutils-2.43 bfd/vms-alpha.c _bfd_vms_slurp_etir + the actual assembled call
  * sequence in the checked-in EVAX fixture):
- *   LINKAGE (STC_LP_PSB against a SYMG): the site is the 2-quadword linkage pair;
- *     the un-relaxed call `ldq $27,SYM($gp); jsr $26,($27)` loads quad[0] into
- *     R27 (the procedure value) and jumps there, so quad[0] IS the slot IMGACT
- *     fills with the imported routine's run-time value (the producer .vms$sv
- *     PROCEDURE entry). patch_off = quad[0] site. quad[1] (the descriptor half a
- *     LOCAL {code,PDSC} pair carries) has no meaning for an imported routine and
- *     is left 0 — this call sequence never reads it. NOTE: the LOCAL path fills
- *     quad[0]=code-entry, quad[1]=PDSC (evax_apply_reloc below, unchanged, vms-01d);
- *     the cross-image path fills only quad[0] at activation. Both leave R27 = the
- *     value the call sequence loads, so they stay consistent for THIS sequence.
+ *   LINKAGE (STC_LP_PSB against a SYMG): the site is the 2-quadword linkage pair
+ *     {code-entry, PV}. The genuine alpha-dec-vms port's call sequence loads
+ *     R27 = quad[1] = PV = the PROCEDURE DESCRIPTOR (PDSC), then calls through
+ *     entry = quad[0] = *(PV+8). LINK writes BOTH quads 0 and defers them to
+ *     IMGACT, which at activation fills quad[1] = PV = the imported routine's
+ *     run-time value = the producer .vms$sv PROCEDURE entry — now the PDSC
+ *     address, since the SV value is value=PDSC (vms-32e1) — and quad[0] =
+ *     *(PV+8) = the code entry. patch_off = the quad[0] site; the .vms$imp
+ *     record flags this by setting OVMX_IMP_LINKAGE in bit31 of sv_index
+ *     (EVAX-only, see vms_imp_write) so IMGACT fills the pair, not a single
+ *     slot. (Supersedes the earlier stale 1-quad `ldq $27,SYM($gp); jsr
+ *     $26,($27)` assumption, under which quad[0] alone was the procedure value
+ *     loaded into R27 and quad[1] went unread.) NOTE: the LOCAL path fills
+ *     quad[0]=code-entry, quad[1]=PDSC directly (evax_apply_reloc below,
+ *     unchanged, vms-01d); the cross-image path defers BOTH to IMGACT. Both
+ *     leave R27 = PV = PDSC, so they stay consistent for the port's sequence.
  *   REFQUAD / CODEADDR: a data pointer to the imported symbol; the 8-byte site IS
  *     the slot IMGACT fills. patch_off = site.
  * A cross-image REFLONG (a 32-bit slot) cannot hold a 64-bit run-time address, so
@@ -3335,8 +3349,8 @@ static void evax_add_ximport(struct evax_input *in, int ii,
     switch (r->type) {
     case EVAX_R_LINKAGE:
         if (r->address + 16 > sec->alloc) die("cross-image LINKAGE site past psect end");
-        putl64(c + r->address, 0);        /* quad[0]: IMGACT fills = imported value  */
-        putl64(c + r->address + 8, 0);    /* quad[1]: unused by the call sequence     */
+        putl64(c + r->address, 0);        /* quad[0]: IMGACT fills = code entry=*(PV+8)*/
+        putl64(c + r->address + 8, 0);    /* quad[1]: IMGACT fills = PV = PDSC (SV val)*/
         break;
     case EVAX_R_REFQUAD:
     case EVAX_R_CODEADDR:
@@ -3970,9 +3984,20 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
                         uv[i].name, uv[i].internal);
                 exit(1);
             }
-            uv[i].value = (uv[i].kind == OVMX_SV_PROCEDURE)
-                        ? evax_sym_code_addr(in, di, ds)    /* code entry point   */
-                        : evax_sym_value_addr(in, di, ds);  /* data location addr */
+            /* PROCEDURE: the universal's value is the PROCEDURE DESCRIPTOR
+             * (PDSC) — VMS's real "value" of a procedure symbol on Alpha
+             * (evax_sym_value_addr; a DISTINCT psect address from the code
+             * entry, not a fixed offset from it). IMGACT loads R27 = PV = this
+             * PDSC and derives the code entry = *(PV+8) at activation. (Was the
+             * code entry via evax_sym_code_addr, which left IMGACT's linkage
+             * quad[1]=PV NULL and SEGV'd decc$main's prologue — vms-32e1.)
+             * DATA: the universal's value is the data location address. On EVAX
+             * both kinds ARE evax_sym_value_addr(sec_base[psindx]+value).
+             * ARCH GUARD: this whole block is the EVAX/Alpha image emitter,
+             * reached only via input_is_evax() dispatch (~link.c:4485); the
+             * x86-64/aarch64 SV emit is the separate emit_shareable() path
+             * (uv[i].value set at ~2484/2490) and stays byte-identical. */
+            uv[i].value = evax_sym_value_addr(in, di, ds);
         }
         for (int i = 0; i < nuniv; i++)
             sv_names_size += (uint32_t)strlen(uv[i].name) + 1;
@@ -4176,7 +4201,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
     /* Stamp .vms$imp (cross-image imports). patch_off = imp[i].got_va (the site
      * image-relative address), producer soname + sv index per record. */
     if (nimp > 0)
-        vms_imp_write(img, off_imp, imp, nimp, producers, np);
+        vms_imp_write(img, off_imp, imp, nimp, producers, np, /*is_evax=*/1);
 
     /* Stamp .vms$rel (load-bias fixups): ovmx_rel_header{magic,count} then the
      * image-relative slot offsets. Written little-endian like the rest of the

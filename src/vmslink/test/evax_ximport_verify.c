@@ -148,14 +148,15 @@ int main(int argc, char **argv)
         const char *pn = names + ie.producer_off;
         CHECK(strcmp(pn, producer) == 0,
               "record[%u] producer soname == \"%s\" (got \"%s\")", k, producer, pn);
-        /* The producer symbol-vector index lives in the low 31 bits; bit31
-         * (OVMX_IMP_LINKAGE) carries the EVAX/Alpha import FORM, not the index,
-         * so it MUST be masked off before the index compare — exactly the
-         * contract IMGACT reads by (imgact.c: sidx = sv_index & ~OVMX_IMP_LINKAGE).
-         * vms-32e1. */
-        CHECK((ie.sv_index & ~OVMX_IMP_LINKAGE) == 0,
+        /* The producer symbol-vector index lives in the low 30 bits; the top two
+         * bits (OVMX_IMP_LINKAGE bit31 / OVMX_IMP_CODEADDR bit30) carry the EVAX/
+         * Alpha import FORM, not the index, so they MUST be masked off before the
+         * index compare — exactly the contract IMGACT reads by (imgact.c: sidx =
+         * sv_index & ~(OVMX_IMP_LINKAGE | OVMX_IMP_CODEADDR)). vms-32e1 / vms-e06.
+         * (This fixture's imports are LINKAGE + REFQUAD; none are CODEADDR.) */
+        CHECK((ie.sv_index & ~(OVMX_IMP_LINKAGE | OVMX_IMP_CODEADDR)) == 0,
               "record[%u] symbol-vector index == 0 (HELPER_PROC, got %u)",
-              k, ie.sv_index & ~OVMX_IMP_LINKAGE);
+              k, ie.sv_index & ~(OVMX_IMP_LINKAGE | OVMX_IMP_CODEADDR));
         int matched = -1;
         for (int j = 0; j < 3; j++) if (!seen[j] && ie.patch_off == want[j]) { matched = j; break; }
         CHECK(matched >= 0,

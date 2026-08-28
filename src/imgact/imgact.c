@@ -1665,7 +1665,46 @@ static inline unsigned long imgact_sv_code_entry(unsigned long pv)
  * Alpha — never a bare C fn-ptr (which would leave R27 = entry, gap-7). */
 extern unsigned long imgact_sv_call(unsigned long pv,
 				    unsigned long a0, unsigned long a1);
-#endif
+
+/* --------------------------------------------------------------------------
+ * The FILL surface (vms-e06): write an import cell from a resolved symbol-vector
+ * value PV, honoring the Alpha import FORM. This is the WRITE-side twin of the
+ * CALL surface (imgact_sv_call): the ONE place a resolved PV becomes a linkage /
+ * call / data cell, so the PDSC->entry deref has a single source of truth
+ * (imgact_sv_code_entry). `cell` is the absolute address of the import slot;
+ * `linkage`/`codeaddr` are the OVMX_IMP_LINKAGE/OVMX_IMP_CODEADDR bits.
+ *
+ * INVARIANT (FILL, mirrors the CALL invariant): on Alpha every filled cell that
+ * the consumer CALLS holds the CODE ENTRY (*(PV+8)) — the 2-quad LINKAGE call
+ * slot (quad[0]) and the single-cell CODEADDR slot both do. A raw PV (PDSC)
+ * lives ONLY where the consumer treats it as a PV: LINKAGE quad[1] (loaded into
+ * R27) or a REFQUAD data pointer the consumer derefs itself (OTS$HOME_ARGS). So
+ * no site the consumer jsr's through ever holds the bare descriptor -> the gap-8
+ * class (a `jsr` landing on a PDSC) cannot recur. On x86_64/aarch64/VAX there is
+ * no PV/PDSC indirection and no EVAX form bit, so the fill is one direct store.
+ * -------------------------------------------------------------------------- */
+static void imgact_fill_import(unsigned long cell, unsigned long PV,
+			       int linkage, int codeaddr)
+{
+	if (linkage) {
+		/* 2-quad linkage pair: quad[0] = code entry, quad[1] = PV = PDSC. */
+		*(unsigned long *)cell       = imgact_sv_code_entry(PV);
+		*(unsigned long *)(cell + 8) = PV;
+	} else if (codeaddr) {
+		/* single-cell CODE-ENTRY import: the caller jsr's THROUGH this cell
+		 * (ldq r27,cell; jsr ra,(r27)), so it must hold the entry *(PV+8) —
+		 * matching the LOCAL CODEADDR fill (link.c evax_apply_reloc: code_S).
+		 * Filling PV (the PDSC) here lands the jsr on the descriptor -> SIGILL
+		 * (vms-e06: OTS$ZERO/OTS$MOVE). */
+		*(unsigned long *)cell = imgact_sv_code_entry(PV);
+	} else {
+		/* REFQUAD data pointer / procedure value: the raw PV (the PDSC address
+		 * for a procedure). The consumer derefs the PDSC itself if it needs the
+		 * entry (e.g. OTS$HOME_ARGS: ldq $0,8($0)). Unchanged from #812. */
+		*(unsigned long *)cell = PV;
+	}
+}
+#endif  /* __alpha__ */
 
 /* Bind every .vms$imp import at `ih` into image `base`: map each named producer
  * (recursively — transitive imports), GSMATCH-resolve the universal by vector
@@ -1686,32 +1725,26 @@ static void bind_imports(unsigned long base, const struct ovmx_imp_header *ih,
 		if (!p)
 			die_imgnotfnd(soname);
 #if defined(__alpha__)
-		/* Alpha .vms$imp reader contract (vms-32e1 / vms-f60d): bit31 of
-		 * sv_index (OVMX_IMP_LINKAGE) selects the 2-quadword LINKAGE form; the
-		 * real symbol-vector index is the low 31 bits. GCC's face-2 SV supplies
-		 * the producer PROCEDURE entry's `value` as PV = the PROCEDURE
-		 * DESCRIPTOR (PDSC) address, so the resolved SV value IS PV. The code
-		 * entry is PDSC$Q_ENTRY = *(PV+8). Fill the pair so the alpha-dec-vms
-		 * port's standard call (R27 = quad[1] = PV, entry = quad[0] = *(PV+8) --
-		 * see LINK.EXE evax_add_ximport in src/vmslink/link.c and
-		 * src/imgact/arch/alpha/vms_transfer.S) resolves; the earlier one-quad
-		 * fill left quad[1]=PV NULL and SEGV'd decc$main's prologue. */
-		int linkage = (ie[k].sv_index & OVMX_IMP_LINKAGE) != 0;
-		uint32_t sidx = ie[k].sv_index & ~OVMX_IMP_LINKAGE;
+		/* Alpha .vms$imp reader contract (vms-32e1 / vms-f60d / vms-e06): the
+		 * top two bits of sv_index carry the import FORM (mutually exclusive) and
+		 * the low 30 bits are the real symbol-vector index. GCC's face-2 SV
+		 * supplies a producer PROCEDURE entry's `value` as PV = the PROCEDURE
+		 * DESCRIPTOR (PDSC) address, so the resolved SV value IS PV; the code
+		 * entry is PDSC$Q_ENTRY = *(PV+8). imgact_fill_import writes each form
+		 * (LINKAGE 2-quad / CODEADDR single-entry / REFQUAD raw-PV) so no cell the
+		 * consumer jsr's through ever holds the bare descriptor — see the helper's
+		 * FILL invariant, LINK.EXE evax_add_ximport in src/vmslink/link.c, and
+		 * src/imgact/arch/alpha/vms_transfer.S. */
+		int linkage  = (ie[k].sv_index & OVMX_IMP_LINKAGE)  != 0;
+		int codeaddr = (ie[k].sv_index & OVMX_IMP_CODEADDR) != 0;
+		uint32_t sidx = ie[k].sv_index & ~(OVMX_IMP_LINKAGE | OVMX_IMP_CODEADDR);
 		unsigned long PV = ovmx_sv_resolve(p->sv, sidx, p->base,
 						   ie[k].req_major, ie[k].req_minor);
 		if (!PV) {
 			vms_fatal("GSMATCH", "shareable image version mismatch", soname);
 			sys_exit(IMGACT_EXIT_FAIL);
 		}
-		if (linkage) {
-			/* 2-quad linkage pair at patch_off (the quad[0] site). */
-			*(unsigned long *)(base + ie[k].patch_off)     = imgact_sv_code_entry(PV); /* quad[0] = code entry = PDSC$Q_ENTRY (one resolver, vms-dc1) */
-			*(unsigned long *)(base + ie[k].patch_off + 8) = PV;                        /* quad[1] = PV = the PDSC             */
-		} else {
-			/* 1-quad data/CODEADDR import: the single slot receives PV. */
-			*(unsigned long *)(base + ie[k].patch_off) = PV;
-		}
+		imgact_fill_import(base + ie[k].patch_off, PV, linkage, codeaddr);
 #else
 		unsigned long addr = ovmx_sv_resolve(p->sv, ie[k].sv_index, p->base,
 						     ie[k].req_major, ie[k].req_minor);

@@ -3633,13 +3633,19 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                           guard here -- scs_vc_fsm_*() decides what may be
  *                           sent from each state, which is a stricter check
  *                           than "is it OPEN", not a weaker one.
- *     send_frame_channel()  ALL NISCA HELLO traffic, called from 5 sites in 3
+ *     send_frame_channel()  ALL NISCA HELLO traffic, called from 6 sites in 3
  *                           functions -- a set and a count BOTH PINNED by the
  *                           census (CHANNEL_CALLERS), so this paragraph
  *                           re-derives:
- *                             scsd_handle_frame()       3 -- the padded-probe
- *                               b4 ack, the rate-limited directed reply, and
- *                               the one-shot proactive padded HELLO;
+ *                             scsd_handle_frame()       4 -- the padded-probe
+ *                               b4 ack, the rate-limited directed reply, the
+ *                               one-shot proactive padded HELLO, and (vms-f3e)
+ *                               the OVMX_MCAST_SOLICIT member-first directed
+ *                               HELLO -- a heard MULTICAST HELLO answered with a
+ *                               soliciting directed HELLO (abs-30 b2/PFW_INIT),
+ *                               kill-switch-gated (default OFF), so it rides the
+ *                               HELLO exemption exactly like the directed reply
+ *                               beside it: NISCA channel traffic below any VC;
  *                             scsd_hello_beacon_emit()  1 -- the periodic
  *                               MULTICAST beacon off main()'s timer, the one
  *                               that increments rx.hello_sent and is reported
@@ -8109,6 +8115,62 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
            buf[6], buf[7], buf[8], buf[9], buf[10], buf[11],
            buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]);
     fflush(stdout);
+
+    /* --- vms-f3e: OVMX<->OVMX bring-up -- the MEMBER-SIDE SOLICIT.
+     *
+     * The responder below acts ONLY on frames unicast to our HW MAC, because
+     * the whole design assumes "our own multicast beacon prompts the PEER's
+     * directed HELLO": against a real VAX, a running MEMBER hears a new node's
+     * multicast HELLO and INITIATES a directed HELLO (abs-30 = PFW_INIT/b2,
+     * "member's first directed contact") to solicit it. OVMX has no member-side
+     * solicit -- it only ever REPLIES to a directed HELLO -- so two OVMX joiners
+     * both multicast and both wait forever for a directed HELLO that neither
+     * sends. The NISCA channel never forms, join_step never leaves JS_IDLE, and
+     * nothing climbs past HELLO (rd vms-f3e two-OVMX baseline, this file's
+     * tests/cluster/two-ovmx harness).
+     *
+     * KILL-SWITCH DISCIPLINE (CLAUDE.md Rule 8, INV-6): this fires ONLY when
+     * OVMX_MCAST_SOLICIT is set. Absent the flag the multicast-return path below
+     * is UNCHANGED, so OVMX's bytes toward a real VAX stay byte-identical -- a
+     * VAX is the member and does the soliciting; OVMX must not also solicit it.
+     * The value on the wire is GROUNDED, not invented: PFW_INIT (0xb2) is the
+     * documented member-first-contact abs-30 word (scs_hello.h). One directed
+     * HELLO per peer per second, and only until the channel is up, so it merely
+     * bootstraps the handshake the existing (a)/padded paths then carry. */
+    if (rx->respond && (buf[OFF_ETH_DST] & 0x01) &&        /* multicast dst   */
+        cls == SCS_CLASS_HELLO &&
+        !mac_eq(buf + OFF_ETH_SRC, rx->our_hw_mac) &&       /* not our beacon  */
+        getenv("OVMX_MCAST_SOLICIT") != NULL) {
+        const uint8_t *sm = buf + OFF_ETH_SRC;
+        struct peer_state *sps =
+            peer_find_or_add(rx->cfg, rx->pdt, rx->peers, sm);
+        if (sps != NULL && !sps->channel_up) {
+            ps_learn_sys_addr(rx->cfg, sps, buf + OFF_HELLO_SRCLOG);
+            struct timespec snow;
+            clock_gettime(CLOCK_MONOTONIC, &snow);
+            int sdue = (sps->directed_replies == 0 && sps->last_directed.tv_sec == 0) ||
+                       (snow.tv_sec - sps->last_directed.tv_sec >= 1);
+            if (sdue) {
+                uint8_t sframe[SCS_HELLO_FRAME_LEN];
+                rx->hello_params->timer_tick = hello_timer_tick100();
+                memcpy(rx->hello_params->peer_logical, buf + OFF_HELLO_SRCLOG, 6);
+                if (scs_hello_build_directed_frame(rx->hello_params, sm, rx->lab_nonce,
+                                                   SCS_HELLO_JOINER_INCARNATION,
+                                                   SCS_HELLO_PFW_INIT, sframe) == 0 &&
+                    send_frame_channel(rx->sock, rx->ifindex, sm, sframe,
+                                       sizeof(sframe)) > 0) {
+                    rx->directed_sent++;
+                    sps->last_directed = snow;
+                    log_ts(stdout);
+                    printf(" SCSD-I-MCASTSOLICIT, OVMX_MCAST_SOLICIT: sent"
+                           " member-first directed HELLO (abs30 b2/PFW_INIT) to"
+                           " %02x:%02x:%02x:%02x:%02x:%02x heard on multicast\n",
+                           sm[0], sm[1], sm[2], sm[3], sm[4], sm[5]);
+                    fflush(stdout);
+                }
+            }
+        }
+    }
 
     /* --- vms-5fe responder --- only act on frames unicast to our HW MAC
      * (our own multicast beacon prompts the peer's directed HELLO). */

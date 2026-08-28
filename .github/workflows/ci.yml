@@ -351,6 +351,18 @@ jobs:
               - 'tests/qemu/Dockerfile.dlm-harness'
               - 'tests/qemu/init_dlm_h0.sh'
               - 'tests/qemu/run_dlm_harness_h0.sh'
+              # vms-534: harness rung H1 -- two real-executive nodes exchange
+              # 0x6007 LAVC/SCA HELLOs over a QEMU socket netdev (no bridge, no
+              # privilege). sca_l2probe (the raw-L2 pcap capturer + netdev
+              # de-risk probe) and the two-node images/init/runner.
+              - 'tests/qemu/sca_l2probe.c'
+              - 'tests/qemu/Dockerfile.dlm-harness-h1'
+              - 'tests/qemu/init_dlm_h1.sh'
+              - 'tests/qemu/run_dlm_harness_h1.sh'
+              - 'tests/qemu/Dockerfile.dlm-harness-h1-derisk'
+              - 'tests/qemu/init_dlm_h1_derisk.sh'
+              - 'tests/qemu/run_dlm_h1_derisk.sh'
+              - 'tests/cluster/two-ovmx/mk_sysgen_scratch.py'
 
       - name: Decide (force every output true on non-PR events)
         id: decide
@@ -2194,6 +2206,81 @@ jobs:
             printf '%s\n' "$OUTPUT" | grep -E 'H0-DLM-SCSD-EXEC|SCSD-I-DLMSELFTEST' || true
             exit 1
           fi
+
+  # -----------------------------------------------------------------------
+  # Job 3a-2: DLM Harness H1 (vms-534) -- the TWO-node cousin of H0.
+  #
+  # tests/qemu/Dockerfile.dlm-harness-h1 builds vms.ko + SCSD.EXE (static musl)
+  # + the tiny sca_l2probe pcap capturer, bakes two per-node SYSGEN identity
+  # stores (OVMXA/OVMXB), and boots TWO QEMU nodes -- EACH with a real /dev/vms
+  # -- wired on one shared L2 by a QEMU `socket` (mcast) netdev: NO host bridge,
+  # NO privilege, so it runs on a stock GitHub runner (unlike tests/cluster/
+  # two-ovmx, which needs NET_ADMIN). Each node runs SCSD.EXE --connect --iface
+  # eth0. H1 PASS iff BOTH nodes emitted their own 0x6007 LAVC/SCA HELLO
+  # (SCSD-I-HELLOSENT) AND received the PEER's (SCSD-I-FRAME with the other
+  # node's distinct HW MAC). This is transport/HELLO ONLY -- it does NOT assert
+  # the full VMS$VAXcluster join or any DLM grant (H2+/H3/H4).
+  # -----------------------------------------------------------------------
+  dlm-harness-h1:
+    name: DLM Harness H1 (two nodes exchange 0x6007 HELLO over a socket netdev, QEMU)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.dlm_harness == 'true' }}
+    runs-on: ubuntu-latest
+    # vms.ko + SCSD.EXE build + TWO QEMU boots. The inner H1_WALL_TIMEOUT (420s)
+    # is the real budget; this is the OUTER bound so a genuine hang surfaces.
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build DLM harness H1 image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu/Dockerfile.dlm-harness-h1
+          push: false
+          load: true
+          tags: ovmx-dlm-h1:latest
+          cache-from: type=gha,scope=dlm-harness-h1
+          cache-to: type=gha,mode=max,scope=dlm-harness-h1
+
+      - name: Boot TWO QEMU nodes, exchange 0x6007 HELLO over a socket netdev
+        run: |
+          set +e
+          # GitHub Linux runners expose /dev/kvm; pass it through so the two
+          # guests boot under KVM (much faster than TCG). Fall back cleanly if
+          # a runner lacks it -- the harness auto-detects and uses TCG.
+          KVM=""
+          [ -e /dev/kvm ] && KVM="--device /dev/kvm"
+          mkdir -p "$PWD/h1out"
+          RAW=$(docker run --rm $KVM -v "$PWD/h1out:/out" ovmx-dlm-h1:latest 2>&1)
+          RC=$?
+          set -e
+          # QEMU serial emits CRLF; strip \r so the line-anchored match holds.
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: DLM harness H1 exited nonzero"
+            exit 1
+          fi
+          if printf '%s\n' "$OUTPUT" | grep -qE '^  DLM HARNESS H1 PASSED'; then
+            echo "PASS: two real-executive OVMX nodes exchanged 0x6007 HELLOs over a QEMU socket netdev."
+          else
+            echo "FAIL: H1 verdict 'DLM HARNESS H1 PASSED' not found."
+            printf '%s\n' "$OUTPUT" | grep -E 'verdict inputs|SCSD-I-HELLOSENT|H1-NODE' || true
+            exit 1
+          fi
+
+      - name: Upload H1 pcap + node logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dlm-harness-h1-artifacts
+          path: h1out/
+          if-no-files-found: ignore
 
   # -----------------------------------------------------------------------
   # Job 3b: Kernel Executive (vms-e4d, epic vms-6b8 PHASE 0 HARD BARRIER)

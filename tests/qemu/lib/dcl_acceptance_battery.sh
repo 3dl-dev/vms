@@ -188,6 +188,19 @@ run_dcl_acceptance_battery() {
     must_not_have "$SEG" 'F$GETSYIVERSION' "WRITE F\$GETSYI [vms-65f]: does NOT print the literal 'F\$GETSYIVERSION' (the shipped bug)"
     negctl        "$SEG" 'F$GETSYI' "WRITE F\$GETSYI"
 
+    # --- F$GETSYI("VERSION") is the fixed 8-char SPACE-PADDED field (vms-28a) ---
+    # Real VMS returns the version as an 8-char space-padded field (byte-confirmed
+    # on the live oracle: "V8.4    "). BRACKET it so the trailing spaces sit
+    # BETWEEN visible delimiters -- a bare WRITE would let the console/segment
+    # strip trailing whitespace and the padding would be untestable. Derive the
+    # expected padded field from the SAME EXPECTED_COMPAT_VERSION (printf %-8.8s),
+    # so each arch's gate asserts its own arch-true padded field with no drift.
+    local EXPECTED_COMPAT_FIELD
+    EXPECTED_COMPAT_FIELD=$(printf '%-8.8s' "$EXPECTED_COMPAT_VERSION")
+    run_cmd 'WRITE SYS$OUTPUT "[" + F$GETSYI("VERSION") + "]"'
+    must_have "$SEG" "[${EXPECTED_COMPAT_FIELD}]" "WRITE F\$GETSYI [vms-28a]: F\$GETSYI(\"VERSION\") is the fixed 8-char space-padded VMS field '[${EXPECTED_COMPAT_FIELD}]' (not a trimmed token)"
+    negctl    "$SEG" 'F$GETSYI' "WRITE F\$GETSYI field"
+
     # --- SHOW QUOTA (vms-73c4: fabricated "[200,1]") ------------------------
     run_cmd 'SHOW QUOTA'
     # VMS-faithful: either the real current UIC ([1,4] for SYSTEM) OR an honest

@@ -1399,8 +1399,14 @@ static int lex_getsyi(struct dcl_context *ctx, const char *args,
         snprintf(result, result_size, "%u", alloclass);
     } else if (strcmp(s, "VERSION") == 0) {
         /* Machine surface: the true-to-arch VMS-compat token, from the
-         * identity SSOT (INV-1). Never a hardcoded constant here. */
-        strncpy(result, ovmx_compat_version(), result_size - 1);
+         * identity SSOT (INV-1). Never a hardcoded constant here. vms-28a: real
+         * VMS F$GETSYI("VERSION") is the fixed 8-char SPACE-PADDED field
+         * ("V7.3    "), byte-confirmed on the live oracle -- emit the padded
+         * field, not the trimmed token. */
+        char field[OVMX_VMS_VERSION_FIELD_LEN + 1];
+        ovmx_compat_version_field(field);
+        field[OVMX_VMS_VERSION_FIELD_LEN] = '\0';
+        strncpy(result, field, result_size - 1);
     } else if (strcmp(s, "HW_NAME") == 0) {
         strncpy(result, uts.machine, result_size - 1);
         for (size_t i = 0; result[i]; i++)

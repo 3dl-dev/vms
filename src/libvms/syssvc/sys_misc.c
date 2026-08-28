@@ -150,11 +150,15 @@ uint32_t sys$getsyi(uint32_t efn, const uint32_t *csidadr,
                 /* Machine surface: the true-to-arch VMS-compat token from
                  * the identity SSOT (INV-1). This used to answer "V0.1"
                  * while F$GETSYI answered "V7.3" -- two different answers
-                 * to the same question, which is the tell INV-1 kills. */
-                const char *ver = ovmx_compat_version();
-                uint16_t len = (uint16_t)strlen(ver);
+                 * to the same question, which is the tell INV-1 kills.
+                 * vms-28a: real VMS returns this as a fixed 8-char SPACE-PADDED
+                 * field ("V7.3    "), byte-confirmed on the live oracle -- emit
+                 * the padded field, not a counted trimmed token. */
+                char field[OVMX_VMS_VERSION_FIELD_LEN];
+                ovmx_compat_version_field(field);
+                uint16_t len = OVMX_VMS_VERSION_FIELD_LEN;
                 if (len > item->buflen) len = item->buflen;
-                if (item->bufaddr) memcpy(item->bufaddr, ver, len);
+                if (item->bufaddr) memcpy(item->bufaddr, field, len);
                 if (item->retlen) *item->retlen = len;
                 break;
             }

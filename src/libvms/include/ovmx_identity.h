@@ -246,6 +246,33 @@ static inline const char *ovmx_compat_version(void)
 }
 
 /*
+ * The width of the fixed F$GETSYI("VERSION") / SYI$_VERSION field. Real VMS
+ * returns the system version as an 8-character SPACE-PADDED field, byte-confirmed
+ * on the live OpenVMS Alpha V8.4 oracle: F$GETSYI("VERSION") = "V8.4    " (the
+ * content "V8.4" left-justified, padded with 4 trailing spaces to 8). rd vms-28a.
+ */
+#define OVMX_VMS_VERSION_FIELD_LEN 8
+
+/*
+ * ovmx_compat_version_field - Write the real VMS fixed 8-char F$GETSYI("VERSION")
+ * / SYI$_VERSION field into `out': the trimmed compat token (ovmx_compat_version)
+ * left-justified and space-padded (truncated if ever longer) to exactly
+ * OVMX_VMS_VERSION_FIELD_LEN bytes. Writes NO NUL -- this is a fixed byte field,
+ * not a C string (e.g. 'V','7','.','3',' ',' ',' ',' '). The FORMAT half of the
+ * F$GETSYI version surface (rd vms-28a); the VALUE is ovmx_compat_version(), and
+ * the trimmed content still feeds the banner + SHOW displays unchanged.
+ */
+static inline void ovmx_compat_version_field(char out[OVMX_VMS_VERSION_FIELD_LEN])
+{
+    const char *v = ovmx_compat_version();
+    int i = 0;
+    for (; i < OVMX_VMS_VERSION_FIELD_LEN && v[i] != '\0'; i++)
+        out[i] = v[i];
+    for (; i < OVMX_VMS_VERSION_FIELD_LEN; i++)
+        out[i] = ' ';
+}
+
+/*
  * ovmx_product_version - The version HUMANS are shown (brand, ours).
  */
 static inline const char *ovmx_product_version(void)

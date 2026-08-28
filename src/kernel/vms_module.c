@@ -435,7 +435,7 @@ static void vms_proc_inherit_channels(struct vms_proc *child)
         spin_unlock(&vms_proc_hash_lock);
         /* OVMX-DIAG (temporary, vms-0cd): does the re-exec'd child find its parent
          * proc to inherit BG channels from? Remove before reap. */
-        pr_info("OVMX-DIAG inherit: child_tgid=%d comm=%s real_parent_tgid=%d parent_proc_found=%d\n",
+        pr_err("OVMX-DIAG inherit: child_tgid=%d comm=%s real_parent_tgid=%d parent_proc_found=%d\n",
                 current->tgid, current->comm, (int)parent_tgid, matched);
     }
     rcu_read_unlock();

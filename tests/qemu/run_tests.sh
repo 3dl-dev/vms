@@ -239,7 +239,7 @@ OUTPUT=$(timeout "$TIMEOUT" $QEMU \
     -initrd "$INITRD" \
     -nographic \
     -append "$CONSOLE panic=-1 loglevel=4 $KCMD_SHARD" \
-    -m 256M \
+    -m 512M \
     -no-reboot \
     -smp 1 \
     -netdev user,id=net0 \

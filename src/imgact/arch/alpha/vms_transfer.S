@@ -15,27 +15,33 @@
  * Calling Standard (VSI/HPE). No VSI/HPE source or binary was read.
  *
  * ---------------------------------------------------------------------------
- * FIRST-LIVE-RUN CONVENTION FIX (vms-f60d): R27 = the ENTRY code, not the PDSC.
+ * CONVENTION (vms-04e, ground-truth): R27 = PV = the PROCEDURE DESCRIPTOR (PDSC),
+ * and the trampoline jumps to the entry = *(PV+8).
  *
  * The `.vms$xfer` transfer entry names the procedure VALUE (the address of the
  * procedure descriptor); the entry code address sits at PDSC$Q_ENTRY == PDSC+8.
- * The OVMX `alpha-dec-vms` port, however, is an ELF-Alpha (musl) target: GCC
- * emits the ELF-Alpha linkage, so a real procedure's prologue begins with
- * `ldgp $gp, 0($27)` -- it computes its own GP *from R27*, which therefore MUST
- * hold the ENTRY code address, not the descriptor. (This matches the OVMX EVAX
- * local-call sequence `ldq $27,quad[0]=code-entry; jsr $26,($27)` that LINK.EXE
- * assembles -- see src/vmslink/link.c, evax_add_ximport: R27 is loaded with the
- * code entry, and the callee ldgp's from it.)
+ * The genuine OVMX `alpha-dec-vms` GCC-port __main is a VMS-native procedure
+ * (`.base $27` + `.linkage`/`.pdesc`): its prologue establishes GP with
+ * `mov $sp,$gp` and it reaches its OWN linkage pairs GP-relative FROM R27 = the
+ * descriptor -- e.g. it calls decc$main via `ldq $ra,48($27); ldq $27,56($27)`
+ * where 48($27)/56($27) are that linkage pair's {entry,PDSC} at PDSC+0x30. So
+ * R27 MUST hold the descriptor. It NEVER does `ldgp $gp,0($27)`. This matches
+ * how crt0 itself calls decc$main (`ldq $27,lk+8` = PDSC), how LINK.EXE fills a
+ * LOCAL linkage pair (link.c: quad[0]=entry, quad[1]=PDSC), and how IMGACT fills
+ * a CROSS-IMAGE import (quad[1] = PDSC). The whole pipeline is R27 = PDSC.
  *
- * The original trampoline set R27 = PV = the *descriptor* address and jumped to
- * *(PV+8). Against a real GCC-compiled `__main` that computed GP from R27 = the
- * descriptor, giving a bogus GP; the first GP-relative load (`ldq $27,0($gp)`
- * resolving decc$main) then read garbage and the call jumped to a wild address
- * -> SIGSEGV before IMGACT printed anything. It was invisible until now because
- * every stand-in transfer address exercised so far (stub_main / std_stub_entry)
- * used `.prologue 0` and never touched GP, so R27's value did not matter to them.
- * The fix loads the entry from PDSC+8 straight into R27 and enters there, so a
- * real ELF-Alpha `__main` establishes the correct GP.
+ * A PRIOR revision (vms-f60d) set R27 = the ENTRY on the mistaken premise that
+ * the port emits ELF-Alpha `ldgp $gp,0($27)` prologues. It did not: the real
+ * __main derives NO GP from R27 and instead reads its linkage pairs at R27+off.
+ * With R27 = entry, __main read its decc$main linkage at entry+0x30 = garbage
+ * code, jumped to a wild address -> SIGSEGV before IMGACT printed anything. It
+ * was invisible because every stand-in transfer address exercised then
+ * (stub_main / the old std_stub_entry) was itself written to that wrong ELF-Alpha
+ * convention (`ldgp $gp,0($27)`), so it "passed" against the very bug it hid.
+ * This revision restores R27 = PDSC (jumping to *(PV+8) via a scratch register,
+ * since R27 and the jsr target register cannot both be $27), so the real
+ * VMS-native __main runs. Confirmed end-to-end under qemu-alpha on the joint-e2e
+ * image (real port crt0 vs the genuine alpha DECC$SHR).
  * ---------------------------------------------------------------------------
  *
  * Kept in its own translation unit (separate from start.S's entry/TLS/TP stubs)
@@ -56,10 +62,10 @@
  * activation-context arguments into R16..R21, sets R25 = AI by the documented
  * Argument-Information layout, sets R26 = a RETURN address back INTO the caller
  * (so __main/decc$main/main RETURNS here and IMGACT can route the returned VMS
- * condition value to $EXIT), and sets R27 = the ENTRY code address = the
- * quadword at PV+8 (PDSC$Q_ENTRY of the transfer procedure descriptor), so the
- * ELF-Alpha callee's `ldgp $gp,0($27)` prologue establishes the correct GP.
- * Returns R0, the condition value the called procedure produced.
+ * condition value to $EXIT), and sets R27 = PV = the PROCEDURE DESCRIPTOR (the
+ * pv argument), then jumps to the entry code = *(PV+8) (PDSC$Q_ENTRY) via a
+ * scratch register -- so the VMS-native callee reaches its linkage pairs
+ * GP-relative from R27 = PDSC. Returns R0, the condition value it produced.
  */
 	.globl imgact_vms_transfer
 	.hidden imgact_vms_transfer
@@ -82,11 +88,22 @@ imgact_vms_transfer:
 	ldq	$20, 32($5)		/* R20 = args[4]  linkflag                 */
 	ldq	$21, 40($5)		/* R21 = args[5]  cliflag                  */
 	mov	$4, $25			/* R25 = AI (argument information)         */
-	ldq	$27, 8($3)		/* R27 = PV = ENTRY code addr = *(PDSC + 8) */
-					/*   (PDSC$Q_ENTRY). R27 is the ENTRY, not   */
-					/*   the descriptor: the ELF-Alpha callee    */
-					/*   does ldgp $gp,0($27) from it (see hdr). */
-	jsr	$26, ($27)		/* STANDARD CALL; R26 = return-into-caller  */
+	ldq	$1, 8($3)		/* $1 = ENTRY code addr = *(PDSC + 8)       */
+					/*   (PDSC$Q_ENTRY) -- the jump TARGET only. */
+	mov	$3, $27			/* R27 = PV = the PROCEDURE DESCRIPTOR       */
+					/*   (PDSC) address. The genuine alpha-dec-  */
+					/*   vms port __main is VMS-native (.base $27*/
+					/*   + .linkage/.pdesc): it establishes GP   */
+					/*   via `mov $sp,$gp` and reaches its own    */
+					/*   linkage pairs GP-relative FROM R27=PDSC  */
+					/*   (e.g. `ldq $ra,48($27)` = decc$main lk). */
+					/*   So R27 must hold the DESCRIPTOR, exactly */
+					/*   as crt0 itself calls decc$main with      */
+					/*   `ldq $27,lk+8`=PDSC (and gap-2 fills the */
+					/*   import quad[1]=PDSC). R27 and $27 are one */
+					/*   register, so the entry rides $1, not $27.*/
+	jsr	$26, ($1)		/* STANDARD CALL to the entry; R26 = return- */
+					/*   into-caller, R27 = PV = PDSC preserved.  */
 	ldgp	$29, 0($26)		/* reload our gp after the call (canonical) */
 
 	ldq	$26, 0($30)		/* restore our return address              */

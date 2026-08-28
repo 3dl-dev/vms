@@ -6,10 +6,11 @@
  * (std_call_stub_alpha.S) standing in for the port crt0's __main. Proves:
  *   (a) the six activation-context args land in R16..R21 in order;
  *   (b) R25 == AI, built by the documented Argument-Information layout;
- *   (c) R27 == the ENTRY code address (PDSC$Q_ENTRY = *(PV+8)) -- the ELF-Alpha
- *       PV convention: the stub's `ldgp $29,0($27)` prologue then derives the
- *       correct GP from it (vms-f60d first-live-run fix; the stub faults on a
- *       regression to R27 = descriptor);
+ *   (c) R27 == PV == the PROCEDURE DESCRIPTOR address -- the VMS-native Alpha
+ *       convention (vms-04e, corrected from vms-f60d): the trampoline jumps to
+ *       the entry = *(PV+8) but leaves R27 = the descriptor, so the real
+ *       alpha-dec-vms port __main reaches its linkage pairs GP-relative FROM
+ *       R27 = PDSC (the CHECK fails on a regression to R27 = entry);
  *   (d) R26 (RA) points back INTO the trampoline -- control RETURNS to IMGACT
  *       (unlike _start's tail-jump), which is what lets IMGACT map the result;
  *   (e) the value the stub returned in R0 is delivered back to the caller.
@@ -41,13 +42,15 @@ static int failures = 0;
 
 int main(void)
 {
-	/* The stub fills its own global capture buffer (std_capture), reached
-	 * GP-relative after it ldgp's from R27 -- so the capture path itself
-	 * proves R27 = the entry code address. */
+	/* The stub fills its own global capture buffer (std_capture), reached via a
+	 * SELF-established GP (not from R27) -- so R27 is captured verbatim and the
+	 * test asserts it is the DESCRIPTOR address (vms-04e ground-truth). */
 	uint64_t *capture = std_capture;
 
 	/* Procedure descriptor: entry code at +8 (PDSC$Q_ENTRY). The trampoline
-	 * reads PV+8 and enters there with R27 = that entry (vms-f60d fix). */
+	 * reads *(PV+8) as the entry to jump to, and enters it with R27 = PV = the
+	 * DESCRIPTOR address (the pointer we pass here), per the Alpha calling
+	 * standard and the real alpha-dec-vms port __main (vms-04e). */
 	static uint64_t pdsc[2];
 	pdsc[0] = 0;
 	pdsc[1] = (uint64_t)(uintptr_t)&std_stub_entry;   /* PDSC$Q_ENTRY */
@@ -70,8 +73,9 @@ int main(void)
 	CHECK(capture[5] == args[5], "R21 == args[5] (cliflag)");
 	CHECK(capture[6] == ai,      "R25 == AI (argument information)");
 	CHECK(capture[6] == 6,       "R25 value == 6 (six 64-bit args, AI$K_AR_I64)");
-	CHECK(capture[7] == pdsc[1],
-	      "R27 == ENTRY code address (*(PV+8); ELF-Alpha PV, callee ldgp's from it)");
+	CHECK(capture[7] == (uint64_t)(uintptr_t)pdsc,
+	      "R27 == PV = the PROCEDURE DESCRIPTOR address (VMS-native; callee reaches "
+	      "its linkage pairs GP-relative FROM R27=PDSC)");
 
 	/* (d) RA must point back into the trampoline, proving the call RETURNS to
 	 * IMGACT. The trampoline is a small routine; the return address sits just

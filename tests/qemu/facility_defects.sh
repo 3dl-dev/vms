@@ -5854,7 +5854,7 @@ EOF
         case "$_f" in
         facility)     echo "INET pseudo-device BGn: SERVER path -- the IO\$_ACCESS|IO\$M_ACCEPT (accept) handler of the executive-resident BGn: driver (vms_ioctl_bg_accept, src/kernel-core/vms_bg.c, vms-698). The inbound half of the network facility: a VMS program \$ASSIGNs TCPIP\$DEVICE:, \$QIOs bind + listen, then accepts an inbound TCP connection onto a SECOND BG channel, and the accepted socket lives IN the executive (host in-kernel socket API, exec_socket_accept) exactly as the vms-527 client socket does.";;
         targets)      echo "kernel-core/vms_bg.c";;
-        suites_red)   echo "test_syssvc_bg_server";;
+        suites_red)   echo "test_syssvc_bg_server test_syssvc_ssh_server";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -5862,6 +5862,7 @@ EOF
         require_fail) cat <<'EOF'
 the accepted BG channel returns the exact bytes the inbound client sent
 the accepted BG channel sends a reply back to the inbound client
+the remote command output came back BYTE-EXACT -- a real inbound session rode BGn: through sshd's fork+exec sshd-session (vms-0cd)
 EOF
                       ;;
         knock_on_fail) echo "";;

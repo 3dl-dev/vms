@@ -378,32 +378,43 @@ RUN cd /src/repo && \
     echo "--- DECC\$SHR.EXE (C run-time shareable; --use producer + IMGACT resolves it, vms-725) ---" && \
     ls -la 'build-static/bin/DECC$SHR.EXE'
 
-# SSH KEX proof harness (vms-22a): the veneer-linked `ssh` CLIENT + a stock
-# `sshd` server (+ sshd-session/sshd-auth) + generated keys/config, staged at the
-# RUNTIME path /ovmxssh so the in-guest test_syssvc_ssh_kex drives a REAL SSH key
-# exchange over the veneer -> BGn: -> executive against a loopback sshd on a real
-# /dev/vms. Built static against musl (musl-gcc) + the vendored libcrypto, out of
-# the SHA-pinned OpenSSH tree (third-party/openssh/build-ssh-kex-harness.sh).
-# ABSENCE is fatal here -- a missing binary/key would silently turn the KEX proof
-# into a no-op while the job stayed green.
+# SSH transport proof harnesses: ONE unified build (third-party/openssh/
+# build-ssh-harness.sh, static musl + vendored libcrypto, SHA-pinned OpenSSH)
+# emits BOTH proofs' binaries and stages each at its runtime path:
+#   /ovmxssh    (vms-22a KEX, port 2222): veneer-linked `ssh` CLIENT + stock sshd
+#               -> test_syssvc_ssh_kex drives the CLIENT transport over BGn:.
+#   /ovmxsshsrv (vms-0cd, port 2223): STOCK ssh client + WRAPPED sshd (listen/
+#               accept + connection I/O over BGn:) -> test_syssvc_ssh_server drives
+#               the SERVER transport (a stock client connects inbound).
+# The wrapped sshd's listener binds a REAL host port (the IP stack is the host's),
+# so an ordinary client connects; the accepted connection reaches the fork+exec'd
+# sshd-session via #815 (channel inheritance) + #822 (self-describing handle).
+# ABSENCE is fatal -- a missing binary/key would silently turn a proof into a
+# no-op while the job stayed green.
 RUN cd /src/repo && \
-    CC=musl-gcc WORK=/tmp/ovmx-ssh-kex \
-        OSSH_LIBEXECDIR=/ovmxssh/libexec OSSH_PRIVSEP=/ovmxssh/empty \
-        sh third-party/openssh/build-ssh-kex-harness.sh > /tmp/kexh.log 2>&1 || \
-        { echo "FATAL: SSH KEX harness build failed"; tail -40 /tmp/kexh.log; exit 1; } && \
-    SSHB=$(sed -n 's/^OVMX_KEX_SSH=//p' /tmp/kexh.log | tail -1) && \
-    SSHDB=$(sed -n 's/^OVMX_KEX_SSHD=//p' /tmp/kexh.log | tail -1) && \
-    KEYGEN=$(sed -n 's/^OVMX_KEX_KEYGEN=//p' /tmp/kexh.log | tail -1) && \
-    mkdir -p /ovmxssh/etc /ovmxssh/libexec /ovmxssh/empty && chmod 755 /ovmxssh/empty && \
-    cp "$SSHB" /ovmxssh/ssh && cp "$SSHDB" /ovmxssh/sshd && \
-    chmod +x /ovmxssh/ssh /ovmxssh/sshd && \
-    ls -la /ovmxssh/libexec/sshd-session /ovmxssh/libexec/sshd-auth && \
-    # Deterministic host + user keypairs (checked NOWHERE -- generated fresh, so
-    # the proof is self-contained and reproducible per build).
+    CC=musl-gcc WORK=/tmp/ovmx-ssh \
+        sh third-party/openssh/build-ssh-harness.sh > /tmp/sshh.log 2>&1 || \
+        { echo "FATAL: SSH harness build failed"; tail -60 /tmp/sshh.log; exit 1; } && \
+    KSSH=$(sed -n 's/^OVMX_KEX_SSH=//p' /tmp/sshh.log | tail -1) && \
+    KSSHD=$(sed -n 's/^OVMX_KEX_SSHD=//p' /tmp/sshh.log | tail -1) && \
+    KEYGEN=$(sed -n 's/^OVMX_KEX_KEYGEN=//p' /tmp/sshh.log | tail -1) && \
+    SSSH=$(sed -n 's/^OVMX_SRV_SSH=//p' /tmp/sshh.log | tail -1) && \
+    SSSHD=$(sed -n 's/^OVMX_SRV_SSHD=//p' /tmp/sshh.log | tail -1) && \
+    mkdir -p /ovmxssh/etc /ovmxssh/libexec /ovmxssh/empty \
+             /ovmxsshsrv/etc /ovmxsshsrv/libexec /ovmxsshsrv/empty && \
+    chmod 755 /ovmxssh/empty /ovmxsshsrv/empty && \
+    cp "$KSSH" /ovmxssh/ssh && cp "$KSSHD" /ovmxssh/sshd && chmod +x /ovmxssh/ssh /ovmxssh/sshd && \
+    cp "$SSSH" /ovmxsshsrv/ssh && cp "$SSSHD" /ovmxsshsrv/sshd && chmod +x /ovmxsshsrv/ssh /ovmxsshsrv/sshd && \
+    ls -la /ovmxssh/libexec/sshd-session /ovmxssh/libexec/sshd-auth \
+           /ovmxsshsrv/libexec/sshd-session /ovmxsshsrv/libexec/sshd-auth && \
+    # Shared host + user keypairs (generated fresh, checked nowhere).
     "$KEYGEN" -t ed25519 -f /ovmxssh/etc/hostkey -N "" -q && \
     "$KEYGEN" -t ed25519 -f /ovmxssh/etc/userkey -N "" -q && \
     cp /ovmxssh/etc/userkey.pub /ovmxssh/etc/authorized_keys && \
     chmod 600 /ovmxssh/etc/hostkey /ovmxssh/etc/userkey /ovmxssh/etc/authorized_keys && \
+    cp /ovmxssh/etc/hostkey /ovmxssh/etc/userkey /ovmxssh/etc/authorized_keys /ovmxsshsrv/etc/ && \
+    chmod 600 /ovmxsshsrv/etc/hostkey /ovmxsshsrv/etc/userkey /ovmxsshsrv/etc/authorized_keys && \
+    # KEX (2222): wrapped client -> stock sshd.
     printf '%s\n' \
         'Port 2222' 'ListenAddress 127.0.0.1' 'HostKey /ovmxssh/etc/hostkey' \
         'PidFile /ovmxssh/sshd.pid' 'AuthorizedKeysFile /ovmxssh/etc/authorized_keys' \
@@ -415,10 +426,24 @@ RUN cd /src/repo && \
         '  IdentityFile /ovmxssh/etc/userkey' '  StrictHostKeyChecking no' \
         '  UserKnownHostsFile /dev/null' '  IdentitiesOnly yes' \
         > /ovmxssh/etc/ssh_config && \
-    echo "--- /ovmxssh staged (ssh veneer client + stock sshd + keys/config) ---" && \
-    ls -la /ovmxssh /ovmxssh/etc && \
+    # SERVER (2223): stock client -> WRAPPED sshd (listen/accept over BGn:).
+    printf '%s\n' \
+        'Port 2223' 'ListenAddress 127.0.0.1' 'HostKey /ovmxsshsrv/etc/hostkey' \
+        'PidFile /ovmxsshsrv/sshd.pid' 'AuthorizedKeysFile /ovmxsshsrv/etc/authorized_keys' \
+        'StrictModes no' 'PubkeyAuthentication yes' 'PasswordAuthentication no' \
+        'LogLevel VERBOSE' 'Subsystem sftp internal-sftp' \
+        > /ovmxsshsrv/etc/sshd_config && \
+    printf '%s\n' \
+        'Host srvpeer' '  HostName 127.0.0.1' '  Port 2223' '  User root' \
+        '  IdentityFile /ovmxsshsrv/etc/userkey' '  StrictHostKeyChecking no' \
+        '  UserKnownHostsFile /dev/null' '  IdentitiesOnly yes' \
+        > /ovmxsshsrv/etc/ssh_config && \
+    echo "--- /ovmxssh (KEX 2222) + /ovmxsshsrv (server 2223) staged ---" && \
+    ls -la /ovmxssh /ovmxsshsrv && \
     { readelf -d /ovmxssh/ssh 2>/dev/null | grep -q NEEDED && \
-        { echo "FATAL: staged ssh is not static"; exit 1; } || true; }
+        { echo "FATAL: staged KEX ssh is not static"; exit 1; } || true; } && \
+    { readelf -d /ovmxsshsrv/sshd 2>/dev/null | grep -q NEEDED && \
+        { echo "FATAL: staged server sshd is not static"; exit 1; } || true; }
 
 # GENUINE ODS-2 codec proof (rd vms-dcd, epic vms-208). Stage the REAL-VAX
 # fixture as the ODS-2 volume the executive ACP ($MOUNT/$QIO over /dev/vms in
@@ -801,9 +826,10 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # privsep user). test_syssvc_ssh_kex starts sshd on 127.0.0.1 and drives the
     # veneer ssh through a REAL KEX over BGn:. ABSENCE is fatal -- a missing
     # binary/key would turn the KEX proof into a no-op while the job stayed green.
-    mkdir -p /initramfs/ovmxssh /initramfs/etc /initramfs/root && \
+    mkdir -p /initramfs/ovmxssh /initramfs/ovmxsshsrv /initramfs/etc /initramfs/root && \
     cp -a /ovmxssh/. /initramfs/ovmxssh/ && \
-    chmod 755 /initramfs/ovmxssh/empty && \
+    cp -a /ovmxsshsrv/. /initramfs/ovmxsshsrv/ && \
+    chmod 755 /initramfs/ovmxssh/empty /initramfs/ovmxsshsrv/empty && \
     printf '%s\n' \
         'root:x:0:0:root:/root:/bin/sh' \
         'sshd:x:74:74:sshd privsep:/ovmxssh/empty:/bin/false' \
@@ -812,9 +838,12 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     ln -sf busybox /initramfs/bin/false && \
     { [ -x /initramfs/ovmxssh/ssh ] && [ -x /initramfs/ovmxssh/sshd ] && \
       [ -x /initramfs/ovmxssh/libexec/sshd-session ] && \
-      [ -f /initramfs/ovmxssh/etc/hostkey ] || \
-      { echo "FATAL: SSH KEX harness not fully staged into initramfs"; exit 1; }; } && \
-    echo "--- SSH KEX harness staged into initramfs ---" && \
+      [ -f /initramfs/ovmxssh/etc/hostkey ] && \
+      [ -x /initramfs/ovmxsshsrv/ssh ] && [ -x /initramfs/ovmxsshsrv/sshd ] && \
+      [ -x /initramfs/ovmxsshsrv/libexec/sshd-session ] && \
+      [ -f /initramfs/ovmxsshsrv/etc/hostkey ] || \
+      { echo "FATAL: SSH harness (KEX + server) not fully staged into initramfs"; exit 1; }; } && \
+    echo "--- SSH harness (KEX /ovmxssh + server /ovmxsshsrv) staged into initramfs ---" && \
     # Init script (PID 1)
     cp /src/tests/qemu/init.sh /initramfs/init && \
     if [ "$NEGATIVE_CONTROL" = "1" ]; then \

@@ -419,4 +419,4 @@
 # root-owned shared /run/ovmx-boot. Anchors test_syssvc_multiuser_stage; the
 # mutation redirects the per-user stage back into the shared root-owned dir so
 # the non-root open(O_CREAT) fails EACCES.
-106
+107

@@ -525,6 +525,7 @@ tcpip-ftp-get-length-dropped
 bgsock-recv-length-zeroed
 bgsock-poll-always-ready
 bgsock-getname-addr-zeroed
+bgsock-exec-handle-not-readopted
 bg-accept-socket-not-installed
 initialize-home-magic-not-written
 dirlogical-compose-drops-common-member
@@ -5832,6 +5833,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    bgsock-exec-handle-not-readopted)
+        case "$_f" in
+        facility)     echo "BSD-sockets RTL veneer over BGn: -- the SELF-DESCRIBING handle + lazy re-adopt (src/vmstcpip/sockets/vms_bgsock.c sock_get, vms-0cd). handle = OVMX_BGSOCK_BASE + exec_chan, so a fork()+exec()'d child (OpenSSH sshd-session) that INHERITS an accepted-connection handle NUMBER resolves it with no g_socks, re-adopting the state slot lazily -- the userspace half of #815's channel-by-number inheritance.";;
+        targets)      echo "vmstcpip/sockets/vms_bgsock.c";;
+        suites_red)   echo "test_syssvc_bgsock_exec";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sock_get() lazily RE-ADOPTS a state slot for a valid handle first seen post-exec (fresh g_socks). The mutation disables the re-adopt, so a handle inherited across fork()+exec() resolves to NULL -- the child's ovmx_send/recv fail EBADF -- reddening the fork+exec byte-exact assertion. Same-process handles (whose slot already exists) are unaffected, so the client bgsock echo/peername/poll suites stay green. One guard disabled.";;
+        require_fail) cat <<'EOF'
+a fork()+exec()'d child drove ovmx_send/recv on the INHERITED veneer handle byte-exact (self-describing handle survives exec, vms-0cd)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     bg-accept-socket-not-installed)
         case "$_f" in
         facility)     echo "INET pseudo-device BGn: SERVER path -- the IO\$_ACCESS|IO\$M_ACCEPT (accept) handler of the executive-resident BGn: driver (vms_ioctl_bg_accept, src/kernel-core/vms_bg.c, vms-698). The inbound half of the network facility: a VMS program \$ASSIGNs TCPIP\$DEVICE:, \$QIOs bind + listen, then accepts an inbound TCP connection onto a SECOND BG channel, and the accepted socket lives IN the executive (host in-kernel socket API, exec_socket_accept) exactly as the vms-527 client socket does.";;
@@ -6899,6 +6917,15 @@ apply_edit() {
         # delegating assignment with that comment is gone, so a second apply is a
         # no-op -- BROKEN FIXTURE, as selftest requires.
         sed -i 's@args.sin_addr   = sin->sin_addr.s_addr;     /\* NEGCTL bgsock-getname-addr-zeroed \*/@args.sin_addr   = 0; /* NEGCTL bgsock-getname-addr-zeroed */@' "$_file";;
+
+    bgsock-exec-handle-not-readopted)
+        # Disable the lazy re-adopt in sock_get: a handle first seen post-exec
+        # (fresh g_socks) then resolves to NULL, so the exec'd child's ovmx_* fail
+        # EBADF and the fork+exec byte-exact assertion reds; same-process handles
+        # (slot already present) are unaffected. Anchored on the unique re-adopt
+        # line; after substitution the "lazy re-adopt" text is gone, so a second
+        # apply is the no-op the selftest requires.
+        sed -i 's|if (!p && free_i >= 0) {.*lazy re-adopt (post-exec).*|if (0 \&\& free_i >= 0) { /* NEGCTL bgsock-exec-handle-not-readopted */|' "$_file";;
 
     bg-accept-socket-not-installed)
         # RANGE-ANCHORED to vms_ioctl_bg_accept's body. Its install line

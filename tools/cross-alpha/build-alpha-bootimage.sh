@@ -155,6 +155,31 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     # (distro/rootfs-vax, vms-42d/vms-d9c).
     cp /repo/distro/rootfs-alpha/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM \
        "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+
+    # ---- vms-157 JOINT-E2E GCC-port-image proof (path B, the faithful one) ----
+    # Stage the REAL alpha-dec-vms GCC-port image joint_e2e.exe into SYS$SYSEXE
+    # and its .vms$imp producers DECC$SHR.EXE + LIBOTS_SHR.EXE into SYS$SHARE
+    # (SYSLIB) ON the ODS-2 volume, then swap SYSTARTUP for the proof variant
+    # that RUNs it during STDRV. IMGACT then reads the image + both shareables
+    # OVER THE ACP from the MOUNTED Files-11 volume (the rc=44 gap was that the
+    # ACP does not read the initramfs-staged copy). Guarded on the joint
+    # artifacts being present in /work/joint (built by
+    # tools/cross-alpha-vms/joint-e2e/build-joint-image.sh, copied there by the
+    # caller). No apostrophes / literal \$ escaped: this whole block runs inside
+    # the assemble docker bash -c single-quote.
+    JOINT=/work/joint
+    if [ -f "$JOINT/joint_e2e.exe" ] && [ -f "$JOINT/DECC\$SHR.EXE" ] && [ -f "$JOINT/LIBOTS_SHR.EXE" ]; then
+        echo "-- staging JOINT-E2E port-image proof onto the ODS-2 volume --"
+        cp "$JOINT/joint_e2e.exe"   "$SYSEXE/JOINT_E2E.EXE"
+        cp "$JOINT/DECC\$SHR.EXE"   "$ST/vms/SYS0/SYSCOMMON/SYSLIB/DECC\$SHR.EXE"
+        cp "$JOINT/LIBOTS_SHR.EXE"  "$ST/vms/SYS0/SYSCOMMON/SYSLIB/LIBOTS_SHR.EXE"
+        cp /repo/tools/cross-alpha/SYSTARTUP_VMS_JOINT_PROOF.COM \
+           "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+        echo "   JOINT-E2E: joint_e2e.exe -> SYS\$SYSEXE:JOINT_E2E.EXE; DECC\$SHR.EXE + LIBOTS_SHR.EXE -> SYS\$SHARE; proof SYSTARTUP staged"
+    else
+        echo "-- (no /work/joint artifacts -- JOINT-E2E proof NOT staged) --"
+    fi
+
     cp -r "/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYS\$STARTUP/." "$ST/vms/SYS0/SYSCOMMON/SYS\$STARTUP/" 2>/dev/null || true
     cp -r /repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSHLP/. "$ST/vms/SYS0/SYSCOMMON/SYSHLP/" 2>/dev/null || true
 
@@ -191,6 +216,16 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
             || { echo "FAIL: mastered ODS-2 image missing SYS\$SYSTEM:$name"; exit 1; }
         echo "   OK: ovmx-distrib-alpha.img (ODS-2) carries SYS\$SYSTEM:$name"
     done
+    # vms-157: if the JOINT-E2E proof was staged, the port image + both
+    # shareables MUST be on the mastered ODS-2 volume (IMGACT reads them over the
+    # ACP -- an initramfs copy is invisible to the ACP, the rc=44 gap).
+    if [ -f "$SYSEXE/JOINT_E2E.EXE" ]; then
+        for jn in JOINT_E2E.EXE DECC\$SHR.EXE LIBOTS_SHR.EXE; do
+            grep -qi "$jn" /work/distrib-list.txt \
+                || { echo "FAIL: mastered ODS-2 image missing JOINT-E2E proof file $jn"; exit 1; }
+            echo "   OK: ovmx-distrib-alpha.img (ODS-2) carries JOINT-E2E $jn"
+        done
+    fi
     rm -f /work/distrib-list.txt
 
     #########################################################################

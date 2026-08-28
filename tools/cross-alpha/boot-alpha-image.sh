@@ -162,6 +162,23 @@ else
     echo "  NOT REACHED: Username: prompt absent -- see $WORK/bootA.log"
 fi
 echo
+echo "-- JOINT-E2E (vms-157): GCC-port image RUN at DCL over the mounted ODS-2 ACP --"
+if [ -f "$WORK/bootA.log" ]; then
+    grep -aE "JOINT-E2E-PROOF:|OVMX crt0 join: activated" "$WORK/bootA.log" 2>/dev/null | sed 's/^/    /' || true
+    if grep -qaF "OVMX crt0 join: activated" "$WORK/bootA.log" 2>/dev/null; then _joint_ran=1; else _joint_ran=0; fi
+    _joint_stat=$(grep -aoE "JOINT-E2E-PROOF: STATUS=[^ ]+ SEVERITY=[0-9]+" "$WORK/bootA.log" 2>/dev/null | tail -1)
+    if [ "$_joint_ran" -eq 1 ] && [ -n "$_joint_stat" ]; then
+        echo "  PASS: the real alpha-dec-vms GCC-port image joint_e2e.exe ACTIVATED via IMGACT over the"
+        echo "        MOUNTED ODS-2 volume (crt0 -> decc\$main -> main ran) and RUN recorded its status:"
+        echo "        $_joint_stat"
+    else
+        echo "  NOT PROVEN -- joint_e2e.exe did not run its main / no STATUS readback. Failure signatures:"
+        grep -aE "%IMGACT|%RUN-|%DCL-|IMGNOTFND|no such|NOSUCHFILE|DEVNOTMOUNT|SS\\\$_" "$WORK/bootA.log" 2>/dev/null | sed 's/^/    /' | tail -20 || echo "    (none captured)"
+    fi
+else
+    echo "  NOT PROVEN -- no bootA.log"
+fi
+echo
 echo "-- BOOT B (IMGACT capability) --"
 if grep -aq "OVMX-ALPHA-IMGACT: ALL-PROVEN" "$WORK/bootB.log" 2>/dev/null; then
     echo "  PASS: IMGACT.EXE activated a REAL VMS-native Alpha image under the booted kernel."

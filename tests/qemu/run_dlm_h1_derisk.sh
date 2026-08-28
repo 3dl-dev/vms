@@ -66,7 +66,12 @@ netdev_arg() {
     esac
 }
 
-boot_node() {
+# Launch a guest as a REAL background child of THIS shell (never inside a
+# command-substitution subshell -- $() would reparent the guest and make
+# `wait` on it a no-op, reading the result files before the guest has run).
+# The PID lands in the global LAUNCH_PID.
+LAUNCH_PID=0
+launch_node() {
     # $1=role $2=mac $3=node-letter-for-cmdline
     local role="$1" mac="$2" node="$3"
     local nd; nd=$(netdev_arg "$role")
@@ -84,16 +89,16 @@ boot_node() {
         -serial "file:$OUT/node${node}.ttyS1.log" \
         -serial "file:$OUT/node${node}.pcap.b64" \
         >/dev/null 2>&1 &
-    echo $!
+    LAUNCH_PID=$!
 }
 
 # In sockpair mode the listener (A) must be up before the connector (B); in
 # mcast mode order is irrelevant. Start A, then B.
 echo "--- booting node A (mac=$MAC_A) ---"
-PA=$(boot_node A "$MAC_A" A)
+launch_node A "$MAC_A" A; PA=$LAUNCH_PID
 sleep 2
 echo "--- booting node B (mac=$MAC_B) ---"
-PB=$(boot_node B "$MAC_B" B)
+launch_node B "$MAC_B" B; PB=$LAUNCH_PID
 
 # Hard wall: reap if a guest wedges (poweroff -f should end each guest itself).
 ( sleep "$WALL"; kill -9 "$PA" "$PB" 2>/dev/null ) &

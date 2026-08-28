@@ -199,4 +199,55 @@ grep -qE '^gh release (create|upload|edit)' "$GH_LOG" \
     || fail "case5: --dry-run mutated the git tree"
 ok "--dry-run verifies + prints plan, no gh mutation, no git mutation"
 
+# ============================================================================
+# Case 6 (REGRESSION): a real cut bundle ships the same VMS image basenames
+# under more than one per-arch subdir (vax/STARTUP.EXE AND alpha/STARTUP.EXE).
+# GitHub names an asset by its basename, so uploading by basename made the
+# SECOND upload 422 ("ReleaseAsset.name already exists") and abort the whole
+# publish -- the silent V0.5-4..V0.5-8 gap. The publisher must PATH-NAMESPACE
+# per-arch assets (vax/STARTUP.EXE -> STARTUP-VAX.EXE) so every uploaded name
+# is unique, WITHOUT renaming the actual bundle files (SHA256SUMS still lists
+# the real vax/… alpha/… paths).
+# ============================================================================
+: > "$GH_LOG"
+git -C "$REPO" reset -q
+MULTI="$REPO/dist/release-multiarch"
+make_bundle "$MULTI"                          # the flat top-level artifacts + notes
+# Add two per-arch dirs whose basenames deliberately collide across arches.
+for a in vax alpha; do
+    mkdir -p "$MULTI/$a"
+    printf '%s-startup\n'  "$a" > "$MULTI/$a/STARTUP.EXE"
+    printf '%s-dcl\n'      "$a" > "$MULTI/$a/DCL.EXE"
+    printf '%s-manifest\n' "$a" > "$MULTI/$a/$a-artifact-manifest.txt"
+done
+# Rebuild SHA256SUMS to include the per-arch (subdir-prefixed) files too.
+( cd "$MULTI" && sha256sum \
+    vmlinuz initramfs-ovmx-slim.cpio.gz ovmx-distrib.img ovmx-os.kit \
+    ovmx-os.kit.manifest.txt "$NOTES" \
+    vax/STARTUP.EXE vax/DCL.EXE vax/vax-artifact-manifest.txt \
+    alpha/STARTUP.EXE alpha/DCL.EXE alpha/alpha-artifact-manifest.txt \
+    > SHA256SUMS )
+
+GH_RELEASE_EXISTS=0 "$REPO/tools/publish-release.sh" --bundle-dir "$MULTI" \
+    --no-record-notes > "$WORK/out6.txt" 2>&1 \
+    || { cat "$WORK/out6.txt"; fail "case6: publisher failed on a valid multi-arch bundle"; }
+ok "multi-arch bundle (colliding per-arch basenames) publishes without error"
+
+CREATE6="$(grep '^gh release create' "$GH_LOG")"
+# The colliding basenames must have been namespaced by arch dir.
+for want in STARTUP-VAX.EXE STARTUP-ALPHA.EXE DCL-VAX.EXE DCL-ALPHA.EXE; do
+    case "$CREATE6" in
+        *"$want"*) ;;
+        *) { echo "$CREATE6"; fail "case6: expected namespaced asset '$want' not uploaded"; } ;;
+    esac
+done
+ok "per-arch collisions namespaced (STARTUP-VAX.EXE / STARTUP-ALPHA.EXE, DCL-VAX/-ALPHA)"
+
+# The bare colliding basename must NOT appear as an upload arg, and no two
+# upload-arg basenames may repeat -- that is the 422 the fix prevents.
+BASENAMES="$(printf '%s\n' $CREATE6 | sed -n 's#.*/##p' | grep -E '\.(EXE|txt|img|gz|kit|json)$|SHA256SUMS|^vmlinuz$')"
+DUPES="$(printf '%s\n' "$BASENAMES" | sort | uniq -d)"
+[ -z "$DUPES" ] || { echo "duplicate asset names: $DUPES"; fail "case6: two upload assets share a name (the 422 bug)"; }
+ok "no two uploaded assets share a name (asset-collision 422 cannot recur)"
+
 echo "PASS: test_publish_release.sh ($PASS checks)"

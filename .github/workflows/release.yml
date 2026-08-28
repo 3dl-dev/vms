@@ -77,12 +77,26 @@ jobs:
             echo "draft=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout the tagged commit (full history for release notes)
+      # CHECKOUT REF -- tooling vs. content:
+      #   * push of a release tag  -> check out the TAG. The release is cut by
+      #     the tooling present AT that commit (reproducible: the tag carries
+      #     both its source and the scripts that build it).
+      #   * workflow_dispatch      -> check out the DISPATCHED ref (github.sha,
+      #     i.e. the branch you ran the workflow from), so a manual re-publish
+      #     runs the CURRENT release TOOLING (cut-release.sh + publish-
+      #     release.sh, incl. fixes like the asset-name-collision fix) while
+      #     still building the requested tag's SOURCE: cut-release.sh
+      #     git-archives `--ref <tag>` and gen_release_notes.py walks to that
+      #     tag's commit. This is exactly how you re-publish a historical tag
+      #     (e.g. V0.5-4..V0.5-8, which cut fine but hit the by-basename asset
+      #     collision) with fixed tooling without rewriting an immutable tag.
+      - name: Checkout (tooling ref; tag for a push, dispatched ref for a manual re-publish)
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.tag.outputs.tag }}
-          # gen_release_notes.py walks history from the previous release tag,
-          # so the whole history and all tags must be present.
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || steps.tag.outputs.tag }}
+          # gen_release_notes.py walks history from the previous release tag and
+          # cut-release.sh git-archives the requested tag, so the whole history
+          # and all tags must be present.
           fetch-depth: 0
 
       - name: Set up Docker Buildx

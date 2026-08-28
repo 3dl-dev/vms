@@ -187,7 +187,68 @@ done < "$BUNDLE_DIR/SHA256SUMS"
 UPLOAD_FILES+=("$BUNDLE_DIR/SHA256SUMS")
 UPLOAD_FILES+=("$MANIFEST")
 
-log "publishing $PRODUCT_NAME $PRODUCT_VERSION as tag '$TAG' (${#UPLOAD_FILES[@]} assets)"
+# --- Give every asset a UNIQUE upload name (asset-name collision fix) ---------
+# GitHub derives a release asset's NAME from the basename of the file handed to
+# `gh release {create,upload}` -- there is NO per-asset name override flag (the
+# `file#label` form only sets a cosmetic display label, not the asset name). A
+# cut bundle ships the SAME VMS image basenames under more than one per-arch
+# subdir: the whole `ovmx-images` set (STARTUP.EXE, DCL.EXE, LOGINOUT.EXE,
+# STARTUP.COM, SYSUAF.DAT, ...) is duplicated under vax/ AND alpha/ (and any
+# future x86_64/ arch dir). Uploading them all by basename made the SECOND
+# upload of a shared basename fail with
+#     HTTP 422 Validation Failed ... ReleaseAsset.name already exists
+# and ABORT the whole publish -- the create was rolled back, so V0.5-4 ..
+# V0.5-7 all cut cleanly yet SILENTLY published nothing (the gap this fixes).
+#
+# Fix: PATH-NAMESPACE the asset name. A bundle file at <archdir>/<name> uploads
+# as <stem>-<ARCHDIR>.<ext> -- vax/STARTUP.EXE -> STARTUP-VAX.EXE,
+# alpha/STARTUP.EXE -> STARTUP-ALPHA.EXE, x86_64/FOO.EXE -> FOO-X86_64.EXE
+# (arch dir upper-cased; the token is inserted before the final extension, or
+# appended if the basename has none). A TOP-LEVEL bundle file (vmlinuz,
+# ovmx-distrib.img, SHA256SUMS, release-manifest.json, the notes, ...) keeps
+# its name unchanged. This is a STABLE, documented scheme: the arch dir is the
+# namespace, so the mapping is mechanical and reversible.
+#
+# The actual bundle files are NEVER renamed -- only the upload label is made
+# unique -- so SHA256SUMS (which lists the real vax/… alpha/… relative paths)
+# still describes the bundle exactly; a verifier re-creates the arch subdirs.
+# We stage SYMLINKS under a temp dir with the unique names and upload those
+# (symlinks are cheap; several bundle artifacts are hundreds of MB).
+asset_name_for_relpath() {
+    local rel="$1"
+    case "$rel" in
+        */*) : ;;                        # has an arch-dir component -> namespace
+        *)   printf '%s' "$rel"; return ;;  # top-level file -> unchanged
+    esac
+    local dir base arch
+    dir="${rel%%/*}"                     # first path component == the arch dir
+    base="${rel##*/}"                    # the basename
+    arch="$(printf '%s' "$dir" | tr '[:lower:]' '[:upper:]')"
+    case "$base" in
+        *.*) printf '%s-%s.%s' "${base%.*}" "$arch" "${base##*.}" ;;
+        *)   printf '%s-%s' "$base" "$arch" ;;
+    esac
+}
+
+STAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ovmx-publish-assets.XXXXXX")"
+cleanup_stage() { [ -n "${STAGE_DIR:-}" ] && rm -rf "$STAGE_DIR"; }
+trap cleanup_stage EXIT
+
+STAGED_FILES=()
+declare -A SEEN_ASSET=()
+for f in "${UPLOAD_FILES[@]}"; do
+    rel="${f#"$BUNDLE_DIR"/}"
+    aname="$(asset_name_for_relpath "$rel")"
+    if [ -n "${SEEN_ASSET[$aname]:-}" ]; then
+        fail "asset-name collision AFTER namespacing: '$aname' derives from both '${SEEN_ASSET[$aname]}' and '$rel' -- the arch-prefix scheme did not disambiguate these; refusing to publish a colliding set"
+    fi
+    SEEN_ASSET["$aname"]="$rel"
+    ln -s "$f" "$STAGE_DIR/$aname"
+    STAGED_FILES+=("$STAGE_DIR/$aname")
+done
+log "asset upload set: ${#STAGED_FILES[@]} files, per-arch basenames namespaced (e.g. vax/STARTUP.EXE -> STARTUP-VAX.EXE, alpha/STARTUP.EXE -> STARTUP-ALPHA.EXE) so no two assets share a name"
+
+log "publishing $PRODUCT_NAME $PRODUCT_VERSION as tag '$TAG' (${#STAGED_FILES[@]} assets)"
 
 GH_COMMON=()
 [ -n "$GH_REPO" ] && GH_COMMON+=(--repo "$GH_REPO")
@@ -216,14 +277,16 @@ fi
 if [ "$DRY_RUN" -eq 1 ]; then
     log "[dry-run] release '$TAG' currently exists: $([ $RELEASE_EXISTS -eq 1 ] && echo yes || echo no)"
     if [ "$RELEASE_EXISTS" -eq 1 ]; then
-        log "[dry-run] would run: gh release upload $TAG <${#UPLOAD_FILES[@]} assets> --clobber ${GH_COMMON[*]}"
+        log "[dry-run] would run: gh release upload $TAG <${#STAGED_FILES[@]} assets> --clobber ${GH_COMMON[*]}"
         log "[dry-run] would run: gh release edit $TAG --notes-file '$NOTES_FILE' --title '$TITLE' ${GH_COMMON[*]}"
     else
         CREATE_FLAGS=""
         [ "$DRAFT" -eq 1 ] && CREATE_FLAGS+=" --draft"
         [ "$PRERELEASE" -eq 1 ] && CREATE_FLAGS+=" --prerelease"
-        log "[dry-run] would run: gh release create $TAG <${#UPLOAD_FILES[@]} assets> --title '$TITLE' --notes-file '$NOTES_FILE'$CREATE_FLAGS ${GH_COMMON[*]}"
+        log "[dry-run] would run: gh release create $TAG <${#STAGED_FILES[@]} assets> --title '$TITLE' --notes-file '$NOTES_FILE'$CREATE_FLAGS ${GH_COMMON[*]}"
     fi
+    log "[dry-run] namespaced asset names:"
+    for a in "${STAGED_FILES[@]}"; do log "[dry-run]   $(basename "$a")"; done
     log "[dry-run] no GitHub or git mutation performed"
     exit 0
 fi
@@ -233,17 +296,17 @@ gh auth status >/dev/null 2>&1 || fail "gh is not authenticated (set GH_TOKEN or
 
 if [ "$RELEASE_EXISTS" -eq 1 ]; then
     log "release '$TAG' exists -- updating assets and notes (idempotent re-publish)"
-    gh release upload "$TAG" "${UPLOAD_FILES[@]}" --clobber "${GH_COMMON[@]}" \
+    gh release upload "$TAG" "${STAGED_FILES[@]}" --clobber "${GH_COMMON[@]}" \
         || fail "gh release upload failed"
     gh release edit "$TAG" --notes-file "$NOTES_FILE" --title "$TITLE" "${GH_COMMON[@]}" \
         || fail "gh release edit failed"
 else
-    CREATE_ARGS=("$TAG" "${UPLOAD_FILES[@]}" --title "$TITLE" --notes-file "$NOTES_FILE")
+    CREATE_ARGS=("$TAG" "${STAGED_FILES[@]}" --title "$TITLE" --notes-file "$NOTES_FILE")
     [ "$DRAFT" -eq 1 ] && CREATE_ARGS+=(--draft)
     [ "$PRERELEASE" -eq 1 ] && CREATE_ARGS+=(--prerelease)
     gh release create "${CREATE_ARGS[@]}" "${GH_COMMON[@]}" \
         || fail "gh release create failed"
 fi
 
-log "published: $PRODUCT_NAME $PRODUCT_VERSION -> release '$TAG' with ${#UPLOAD_FILES[@]} assets"
+log "published: $PRODUCT_NAME $PRODUCT_VERSION -> release '$TAG' with ${#STAGED_FILES[@]} assets"
 gh release view "$TAG" "${GH_COMMON[@]}" | head -20 || true

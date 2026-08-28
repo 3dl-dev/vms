@@ -1,0 +1,111 @@
+# Dockerfile.dlm-harness-h1 - DLM cross-node harness, rung H1 (rd vms-534).
+#
+# The two-node cousin of tests/qemu/Dockerfile.dlm-harness (H0). It builds the
+# SAME real-executive ingredients -- vms.ko (the executive) + SCSD.EXE (static
+# musl) -- adds the tiny sca_l2probe pcap capturer, bakes TWO per-node SYSGEN
+# identity stores (OVMXA/OVMXB), assembles ONE symmetric initramfs, and boots
+# TWO QEMU nodes wired on one shared L2 by a QEMU `socket` (mcast) netdev -- NO
+# host bridge, NO privilege (the make-or-break netdev proven in isolation by
+# Dockerfile.dlm-harness-h1-derisk). It does NOT build the full src/libvms
+# suite, tcc, OpenSSH, IMGACT or any ODS-2 fixture.
+#
+# WHAT H1 PROVES (transport/HELLO only; grants are H3/H4): each node, on a REAL
+# /dev/vms, runs SCSD.EXE --connect --iface eth0, emits its own 0x6007 LAVC/SCA
+# HELLO (AB-00-04-01-01-01) AND receives the OTHER node's HELLO. See
+# tests/qemu/init_dlm_h1.sh + run_dlm_harness_h1.sh.
+#
+# Usage:
+#   docker build -f tests/qemu/Dockerfile.dlm-harness-h1 -t ovmx-dlm-h1 .
+#   docker run --rm --device /dev/kvm ovmx-dlm-h1     # --device optional (TCG fallback)
+# Exit 0 = H1 PASS (both nodes sent + received the peer's HELLO), 1 = FAIL.
+
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Same inputs as tests/qemu/Dockerfile.dlm-harness (H0), plus python3 to bake the
+# two SYSGEN stores at build time (the busybox initramfs has no python).
+RUN apt-get update && \
+    ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ]; then QEMU_PKG=qemu-system-arm; else QEMU_PKG=qemu-system-x86; fi && \
+    apt-get install -y --no-install-recommends \
+    make gcc libc6-dev kmod \
+    linux-headers-generic \
+    linux-image-virtual \
+    busybox-static \
+    cpio \
+    python3 \
+    cmake musl-tools linux-libc-dev \
+    "$QEMU_PKG" \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN KVER=$(ls /lib/modules/ | sort -V | tail -1) && echo "$KVER" > /tmp/kver && echo "Kernel version: $KVER"
+
+# vms.ko: the real executive (same inputs as tests/qemu/Dockerfile.dlm-harness).
+COPY src/kernel-core/ /src/kernel-core/
+COPY src/kernel/ /src/kernel/
+COPY src/vmsfs/include/ /src/vmsfs/include/
+COPY src/vmsfs/ods2/ /src/vmsfs/ods2/
+RUN KVER=$(cat /tmp/kver) && \
+    cd /src/kernel && \
+    make KDIR=/lib/modules/${KVER}/build 2>&1 && \
+    ls -la /src/kernel/vms.ko && \
+    modinfo /src/kernel/vms.ko
+
+# musl UAPI header symlinks (same trick as tests/qemu/Dockerfile.dlm-harness).
+RUN MUSL_INC=$(echo /usr/include/*-linux-musl) && \
+    ARCH_INC=$(echo /usr/include/*-linux-gnu) && \
+    ln -s /usr/include/linux "$MUSL_INC/linux" && \
+    ln -s /usr/include/asm-generic "$MUSL_INC/asm-generic" && \
+    ln -s "$ARCH_INC/asm" "$MUSL_INC/asm"
+
+# SCSD.EXE, static musl (OVMX_STATIC=ON) -- the real SCS datalink daemon.
+COPY . /src/repo/
+RUN cd /src/repo && \
+    cmake -B build-static \
+        -DCMAKE_C_COMPILER=musl-gcc \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DOVMX_STATIC=ON \
+    && cmake --build build-static --target scsd_exe --parallel $(nproc) 2>&1 && \
+    { [ -f build-static/bin/SCSD.EXE ] || { echo "FATAL: SCSD.EXE was not built"; exit 1; }; } && \
+    ls -la build-static/bin/SCSD.EXE && \
+    { readelf -d build-static/bin/SCSD.EXE 2>/dev/null | grep -q NEEDED && \
+        { echo "FATAL: staged SCSD.EXE is not static"; exit 1; } || true; }
+
+# sca_l2probe: the tiny static raw-L2 pcap capturer (also the de-risk probe).
+RUN musl-gcc -static -O2 -Wall -Wextra /src/repo/tests/qemu/sca_l2probe.c -o /src/sca_l2probe && \
+    { readelf -d /src/sca_l2probe 2>/dev/null | grep -q NEEDED && \
+        { echo "FATAL: sca_l2probe is not static"; exit 1; } || true; }
+
+# The two per-node SYSGEN identity stores (distinct SCSNODE + SCSSYSTEMID), baked
+# from the SAME generator the two-ovmx harness uses. ALLOCLASS=1, RECNXINTERVAL=20.
+RUN mkdir -p /src/sysgen && \
+    python3 /src/repo/tests/cluster/two-ovmx/mk_sysgen_scratch.py /src/sysgen/sysgen-A.dat OVMXA 1601 1 20 && \
+    python3 /src/repo/tests/cluster/two-ovmx/mk_sysgen_scratch.py /src/sysgen/sysgen-B.dat OVMXB 1602 1 20
+
+RUN KVER=$(cat /tmp/kver) && \
+    if [ ! -e /boot/vmlinuz ]; then ln -s vmlinuz-${KVER} /boot/vmlinuz; fi && \
+    ls -la /boot/vmlinuz
+
+# Assemble ONE symmetric initramfs: busybox, vms.ko, SCSD.EXE, sca_l2probe, both
+# identity stores, and the H1 init (which selects its identity by ovmx.node=).
+COPY tests/qemu/init_dlm_h1.sh /src/init_dlm_h1.sh
+RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/etc/ovmx \
+             /initramfs/dev /initramfs/proc /initramfs/sys /initramfs/tmp && \
+    cp /bin/busybox /initramfs/bin/busybox && \
+    ln -s busybox /initramfs/bin/sh && \
+    cp /src/kernel/vms.ko /initramfs/lib/modules/ && \
+    cp /src/repo/build-static/bin/SCSD.EXE /initramfs/bin/SCSD.EXE && \
+    chmod +x /initramfs/bin/SCSD.EXE && \
+    cp /src/sca_l2probe /initramfs/bin/sca_l2probe && \
+    chmod +x /initramfs/bin/sca_l2probe && \
+    cp /src/sysgen/sysgen-A.dat /initramfs/etc/ovmx/sysgen-A.dat && \
+    cp /src/sysgen/sysgen-B.dat /initramfs/etc/ovmx/sysgen-B.dat && \
+    cp /src/init_dlm_h1.sh /initramfs/init && \
+    chmod +x /initramfs/init && \
+    cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /initramfs.cpio.gz && \
+    echo "Initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')"
+
+COPY tests/qemu/run_dlm_harness_h1.sh /run_dlm_harness_h1.sh
+RUN chmod +x /run_dlm_harness_h1.sh
+
+CMD ["/run_dlm_harness_h1.sh"]

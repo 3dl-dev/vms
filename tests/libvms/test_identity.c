@@ -177,6 +177,23 @@ static void test_compat_identity(void)
     /* The pre-INV-1 hardcoded value must be gone from every arch path. */
     check(strcmp(compat, "V7.3") != 0,
           "compat version is no longer the hardcoded V7.3");
+
+    /* vms-28a: F$GETSYI("VERSION")/SYI$_VERSION is the real VMS fixed 8-char
+     * SPACE-PADDED field -- the trimmed compat token left-justified, the rest
+     * spaces, exactly OVMX_VMS_VERSION_FIELD_LEN bytes (no NUL). The trimmed
+     * ovmx_compat_version() above still feeds the banner/SHOW display unchanged. */
+    {
+        char field[OVMX_VMS_VERSION_FIELD_LEN];
+        ovmx_compat_version_field(field);
+        size_t clen = strlen(compat);
+        if (clen > OVMX_VMS_VERSION_FIELD_LEN) clen = OVMX_VMS_VERSION_FIELD_LEN;
+        check(memcmp(field, compat, clen) == 0,
+              "F$GETSYI VERSION field starts with the trimmed compat token");
+        int padded = 1;
+        for (size_t i = clen; i < (size_t)OVMX_VMS_VERSION_FIELD_LEN; i++)
+            if (field[i] != ' ') padded = 0;
+        check(padded, "F$GETSYI VERSION field is space-padded to the fixed 8-char VMS field");
+    }
 }
 
 static void test_node_identity(const char *sysgen_path)

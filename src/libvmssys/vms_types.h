@@ -640,16 +640,28 @@ struct vms_io_uring_params {
 /* ================================================================
  * Futex operations
  *
- * These are Linux futex(2) op numbers. They are deliberately NOT defined on the
- * NetBSD substrate (rd vms-30a, audit item 5.2): NetBSD has no Linux-compatible
- * futex ABI, the netbsd executive/lnm/mbx wait primitive is provided separately
- * (design 4.2), and vms_futex.c (their only consumer) is excluded from the
- * netbsd build set. Leaving Linux-numeric op values defined on NetBSD would be
- * exactly the hardcoded-Linux-constant-reaching-a-NetBSD-syscall hazard this
- * audit item exists to kill, so the whole block is Linux-only.
+ * futex(2) op numbers, substrate-selected like VMS_O_* above (vms-706). The op
+ * VALUES happen to match across Linux and NetBSD, but each substrate takes them
+ * from ITS OWN header so no transcribed magic number reaches the wrong syscall:
+ * Linux hardcodes the well-known futex(2) numbers; NetBSD aliases <sys/futex.h>
+ * FUTEX_*, and vms_sys_futex (arch/vax/vms_syscall_netbsd.h) issues __futex(2).
+ * (Supersedes the earlier "deferred, NetBSD-excluded" audit note, rd vms-30a
+ * item 5.2: vms_futex.c is no longer excluded from the netbsd build.)
  * ================================================================ */
 
-#if !defined(__NetBSD__)
+#if defined(__NetBSD__)
+#include <sys/futex.h>
+#define VMS_FUTEX_WAIT                 FUTEX_WAIT
+#define VMS_FUTEX_WAKE                 FUTEX_WAKE
+#define VMS_FUTEX_WAIT_PRIVATE         (FUTEX_WAIT | FUTEX_PRIVATE_FLAG)
+#define VMS_FUTEX_WAKE_PRIVATE         (FUTEX_WAKE | FUTEX_PRIVATE_FLAG)
+#define VMS_FUTEX_WAIT_BITSET          FUTEX_WAIT_BITSET
+#define VMS_FUTEX_WAIT_BITSET_PRIVATE  (FUTEX_WAIT_BITSET | FUTEX_PRIVATE_FLAG)
+#define VMS_FUTEX_BITSET_MATCH_ANY     FUTEX_BITSET_MATCH_ANY
+/* Prove the substrate-select took the NetBSD header value, not a stale copy. */
+_Static_assert(VMS_FUTEX_WAIT == FUTEX_WAIT, "VMS_FUTEX_WAIT must resolve to NetBSD FUTEX_WAIT");
+_Static_assert(VMS_FUTEX_WAIT_BITSET == FUTEX_WAIT_BITSET, "VMS_FUTEX_WAIT_BITSET must resolve to NetBSD FUTEX_WAIT_BITSET");
+#else
 #define VMS_FUTEX_WAIT          0
 #define VMS_FUTEX_WAKE          1
 #define VMS_FUTEX_WAIT_PRIVATE  (VMS_FUTEX_WAIT | 128)
@@ -657,7 +669,7 @@ struct vms_io_uring_params {
 #define VMS_FUTEX_WAIT_BITSET   9
 #define VMS_FUTEX_WAIT_BITSET_PRIVATE  (VMS_FUTEX_WAIT_BITSET | 128)
 #define VMS_FUTEX_BITSET_MATCH_ANY  0xFFFFFFFF
-#endif /* !__NetBSD__ */
+#endif /* __NetBSD__ */
 
 /* ================================================================
  * Auxiliary vector (from kernel ELF loader)

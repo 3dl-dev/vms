@@ -1,9 +1,44 @@
 # Design — TCP/IP Services for OVMX
 
-**Status:** design / teed for the 1.0 march (new networking lane, parallel to clustering + parity).
-**Companion:** `docs/design-decnet-ovmx.md` (shares the networking seam ruling in §2).
-**Author of record:** conductor, 2026-08-11. Grounds: OVMX standing rulings + VSI TCP/IP
-Services public docs (docs.vmssoftware.com) + a full `origin/main` surface inventory.
+**Status:** active — **first-class layered-product deliverable** (operator ruling 2026-08-28,
+below). Networking lane on the 1.0 march, parallel to clustering + parity.
+**Companion:** `docs/design-decnet-ovmx.md` (shares the networking seam ruling in §2 and the
+layered-product kit model in §6 — DECnet is the same pattern).
+**Author of record:** conductor, 2026-08-11; layered-product framing 2026-08-28. Grounds: OVMX
+standing rulings + VSI TCP/IP Services public docs (docs.vmssoftware.com) + a full `origin/main`
+surface inventory (kit mechanism re-grounded against `tools/ovmx_kit_pack.c` + `src/product/`).
+
+---
+
+## 0. Operator ruling — first-class layered product (2026-08-28)
+
+TCP/IP Services for OVMX (rd epic **vms-67f**, now **p1**) is a **first-class layered-product
+deliverable** — *distinct from the base OVMX OS, but part of this repo* (`src/vmstcpip/`). This
+mirrors how real OpenVMS is structured: a **base operating system** plus separately-installable
+**layered products** (TCP/IP Services, DECnet, …), each shipping as its own kit on top of the
+executive.
+
+- **Its own kit, its own release line.** TCP/IP Services is packed as a **distinct product kit**
+  (its own product identity in the PCSI-equivalent product database), layered on the base OVMX
+  OS — not folded into the base OS image. See §6, which grounds this in the actual OVMX kit
+  mechanism (`ovmx_kit_pack` / `PRODUCT INSTALL`).
+- **OpenSSH bundles INTO this product**, exactly as real OpenVMS ships SSH *inside* TCP/IP
+  Services — **not** as a side-riding standalone feature. The earlier sshd-over-`BGn:` work
+  (`vms-843` native VMSSSHD, `vms-4bf` de-veneer) was **not a mistake**: it was a valid OpenVMS
+  source-support **oracle** that validated the `BGn:` socket surface (the `DECC$SOCKET`/`$QIO`
+  model, honest under INV-6). But as a *shippable feature* it is pointless outside the layered
+  product, so it re-homes here (§5 Phase 4, §6) and is packaged **into** the TCP/IP Services kit.
+- **The config/management half is the gap to build.** Networking today only rides the substrate
+  `ETH0:` device; the VMS-faithful **configuration + management plane** — `TCPIP$CONFIG`-equivalent,
+  the `TCPIP$*` system logical names, and durable VMS-faithful IP config — does not yet exist.
+  That is the active work: rd rungs **vms-85b** (config/management), **vms-cb0** (bundle OpenSSH
+  into the kit), **vms-f394** (kit + release integration), plus **vms-843** (native VMSSSHD).
+- **Base-OS-vs-layered-product split (the load-bearing distinction).** The **base OS** owns the
+  executive, the device namespace, the `$QIO`/process framework, and the runtime NIC-as-VMS-device
+  (`EWA0:`). The **layered product** owns everything TCP/IP-specific in userspace: the INET/`BGn:`
+  device shim, the sockets veneer, the management plane, the services, and OpenSSH. The **IP
+  engine itself is the substrate** — the Linux (or NetBSD) kernel's `AF_INET`/`AF_INET6` stack —
+  and **faithfulness lives entirely in the userspace product surface** on top of it (§1, §2).
 
 ---
 
@@ -122,13 +157,46 @@ Consequences under the standing rulings:
 | **4. Auxiliary server + services** | Auxiliary server launches BIND resolver + TELNET/FTP servers (+ re-wired `VMSSSHD.EXE`); inbound connect from host succeeds. | Needs tap or hostfwd from Phase 0. |
 | **5. e2e QEMU gate** | CI gate: booted VM gets an address, resolves a name, PINGs the gateway, FTP round-trips a file; **honest-degradation** sub-test asserts `SS$_NOSUCHDEV` with no NIC / no `/dev/vms`. | Release proof. |
 
-## 6. Packaging
+## 6. Packaging — a distinct layered-product kit (grounded in the OVMX kit mechanism)
 
-A **layered-product kit** (`TCPIP$`) installed via the Alpha/PCSI model (`vms-718`):
-`TCPIP$STARTUP.COM` invoked from the STARTUP phases (`vms-46c`), gated to **not** announce
-running if no NIC is present (no LARP). Kit contents: management images, INET/BG driver-shim,
-service daemons, `TCPIP$CONFIG.COM`, DCL tool images, the `TCPIP$*` logical-name and database
-templates. Config lives under `TCPIP$ETC:`/`SYS$SYSTEM:TCPIP$*.DAT`.
+TCP/IP Services ships as a **separate product kit**, layered on the base OVMX OS — built and
+installed by the *same* PCSI-equivalent mechanism the base OS already uses, just with its own
+product identity. This is not a new build mechanism; it is a second consumer of the existing one.
+
+**How the base OS kit is built today (the model to mirror).** `tools/ovmx_kit_pack.c` packs a
+staging tree into a single self-identifying kit container (`OVMXKIT1`, `src/libvms/include/
+ovmx_kit_format.h`) whose product name has the shape *vendor + arch-code + product* — the base
+OS is **`OVMX X86VMS VMS`** (x86-64) / **`OVMX VAXVMS VMS`** (VAX), echoing the Alpha oracle's
+`DEC AXPVMS VMS` shape (`tools/cross-vax/build-os-kit-vax.sh`). `distro/Dockerfile.bootable`'s
+kit-packing stage produces `ovmx-os.kit` and its manifest; `tools/cut-release.sh` ships that kit
+as a release artifact (`ARTIFACT_ORDER=(… ovmx-os.kit)`). `PRODUCT INSTALL` (`src/product/
+product.c`, `PRODUCT.EXE`) reads a kit and registers the product in the per-system PCSI-equivalent
+**product database** (`SYS$SYSTEM:VMS$PRODUCT_DATABASE.DAT`, `src/product/ovmx_product_db.h`), so
+`PRODUCT SHOW PRODUCT` lists it.
+
+**The TCP/IP Services kit does exactly this, with its own identity.** Packed by the same
+`ovmx_kit_pack pack <kit> <staging-dir> "<arch-code> TCPIP"` invocation, it becomes a **distinct
+product** — e.g. `OVMX X86VMS TCPIP` (and `OVMX VAXVMS TCPIP` / an Alpha identity per arch) —
+carried as its own release artifact (`ovmx-tcpip.kit`, alongside `ovmx-os.kit`) with its own
+release line (`vms-f394`). Because `PRODUCT.EXE` registers by product identity, installing it
+adds a **second row** to `VMS$PRODUCT_DATABASE.DAT`, so `PRODUCT SHOW PRODUCT` lists the base OS
+**and** TCP/IP Services as separate products — exactly the real-OpenVMS layered-product shape.
+
+**Kit contents:** the management images and `TCPIP$CONFIG.COM`, the INET/`BGn:` driver-shim, the
+sockets-veneer RTL, the service daemons, the DCL tool images (PING/TELNET/FTP), the `TCPIP$*`
+logical-name + config-database templates (seeded once via `OVMX_KIT_ENTRY_FLAG_SEED_ONCE` so an
+upgrade never clobbers site config), **and the OpenSSH port** (`VMSSSHD.EXE` + client) bundled in
+here rather than in the base OS. Config lives under `TCPIP$ETC:` / `SYS$SYSTEM:TCPIP$*.DAT`.
+
+**Startup + honest degradation.** `TCPIP$STARTUP.COM` is invoked from the STARTUP phases
+(`vms-46c`) *only when the product is installed*, and is gated to **not** announce running if no
+NIC is present (no LARP — INV-6). A base-OS image with no TCP/IP kit installed simply has no
+`TCPIP$*` product, no `BGn:`, and `$ASSIGN TCPIP$DEVICE:` → `SS$_NOSUCHDEV` — the honest layered
+absence, not a per-process fake.
+
+**DECnet is the same pattern.** DECnet Phase IV (`vms-30e`, `docs/design-decnet-ovmx.md`) packs
+its own `OVMX <arch> DECNET` kit by the identical mechanism and registers as a third product —
+the general OVMX layered-product model, of which TCP/IP Services is the first instance.
 
 ## 7. Testing & oracle
 
@@ -146,8 +214,11 @@ the DCL **verb table** (the `TCPIP` verb front-end; one owner per week, append-o
 through the bridge, never a parallel edit). Runtime NIC touches `distro/boot/run-qemu.sh` +
 `Dockerfile.bootable` (Phase 0, coordinate with boot owner).
 
-## 9. Open operator calls
+## 9. Operator calls — resolved
 
-1. **Service breadth for 1.0.** Recommend: resolver + TELNET + FTP + SSH in-scope; SMTP/NTP/
-   SNMP/NFS/LPD deferred to post-1.0. (Conductor default unless overridden.)
-2. **Kit branding** under INV-0 — "TCP/IP Services for OVMX" proposed; confirm.
+1. **Layered-product structure (resolved 2026-08-28, §0).** First-class layered product, its own
+   kit + release line, OpenSSH bundled in, config/management the gap. vms-67f → p1.
+2. **Service breadth for 1.0 (resolved, `vms-4ad`).** Resolver + TELNET + FTP + SSH in-scope;
+   SMTP/NTP/SNMP/NFS/LPD deferred to post-1.0.
+3. **Kit branding under INV-0 (resolved, `vms-79fd`).** "TCP/IP Services for OVMX" (OVMX is our
+   mark); the machine product identity is `OVMX <arch-code> TCPIP` (§6). Never badged as VSI/HP.

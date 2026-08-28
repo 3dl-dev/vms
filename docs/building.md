@@ -81,6 +81,36 @@ The bootable image includes:
 - Initramfs with busybox, static OVMX binaries, kernel modules
 - `init-wrapper.sh` as PID 1: mounts filesystems, loads vms.ko + vmsfs.ko, launches ovmx_init
 
+## Base OS vs. Layered Products (kits)
+
+OVMX is structured like real OpenVMS: a **base operating system** plus separately-installable
+**layered products** (TCP/IP Services, DECnet, …). Each is packed as its own PCSI-equivalent
+**kit** with a distinct product identity, and installed onto the target system by `PRODUCT
+INSTALL` — which registers each product separately in `SYS$SYSTEM:VMS$PRODUCT_DATABASE.DAT`, so
+`PRODUCT SHOW PRODUCT` lists them individually.
+
+- **Kit format + packer:** `src/libvms/include/ovmx_kit_format.h` (the `OVMXKIT1` container) and
+  `tools/ovmx_kit_pack.c` (the host packer). Product name shape is *vendor + arch-code + product*.
+- **Installer + product DB:** `src/product/product.c` (`PRODUCT.EXE`), `src/product/ovmx_product_db.h`.
+- **Base OS kit** — `OVMX X86VMS VMS` / `OVMX VAXVMS VMS`, packed as `ovmx-os.kit` by
+  `distro/Dockerfile.bootable` and shipped by `tools/cut-release.sh`.
+- **Layered-product kit** — packed by the *same* mechanism with its own identity and shipped as a
+  separate artifact on its own release line:
+
+  ```bash
+  # (from a staging tree of the product's images/templates)
+  ovmx_kit_pack pack ovmx-tcpip.kit <staging-dir> "X86VMS TCPIP"   # -> product "OVMX X86VMS TCPIP"
+  # on the target system:
+  $ PRODUCT INSTALL TCPIP        # registers a second product; SHOW PRODUCT lists OS + TCPIP
+  ```
+
+**TCP/IP Services** (`src/vmstcpip/`, rd epic `vms-67f`) is the first layered product, and
+**bundles the OpenSSH port** into its kit (as real OpenVMS ships SSH inside TCP/IP Services).
+Its IP engine is the substrate kernel's `AF_INET` stack; faithfulness lives in the userspace
+product surface (`TCPIP$CONFIG`-equivalent, the `TCPIP$*` logicals, the `BGn:` device + sockets
+veneer). Full design: `docs/design-tcpip-services-ovmx.md`. **DECnet** (`vms-30e`) follows the
+identical layered-product kit pattern.
+
 ## Kernel Modules
 
 Built out-of-tree against installed kernel headers. Not integrated into CMake.

@@ -1,0 +1,97 @@
+vms-144: force the hard frame pointer for OpenVMS procedures unwound via $15
+
+Port cc1 (gcc 14.2.0, target alpha-dec-vms) emits integer ldq/stq based on the
+soft frame pointer -- register $63 (== $f31 == alpha's FRAME_POINTER_REGNUM) --
+under -O2/-O3 register pressure, e.g. `stq $0,0($63)`.  The soft frame pointer
+was meant to be eliminated to $sp/$15 before code generation but was left in
+place, so it leaks into spill addresses and the alpha-dec-vms `as` chokes on a
+$63 integer base (real zlib deflate.c trips this at -O2 -mpointer-size=64; a
+longest_match-shaped loop trips it at -O2 -mpointer-size=32).
+
+Root cause is OpenVMS-ABI-specific.  alpha_vms_can_eliminate (installed only
+under TARGET_ABI_OPEN_VMS) forbids the FRAME_POINTER_REGNUM -> STACK_POINTER
+elimination for a PT_STACK/PT_REGISTER procedure whose vms_unwind_regno is
+HARD_FRAME_POINTER_REGNUM ($15); the only legal target left is the hard frame
+pointer.  But the alpha back end defines no TARGET_FRAME_POINTER_REQUIRED, so at
+-O2/-O3 frame_pointer_needed is clear, alpha_expand_prologue never establishes
+$15, and reload has no valid destination for the soft frame pointer -- it leaks.
+alpha-linux (OSF ABI) uses the default CAN_ELIMINATE (FRAME->SP always allowed)
+and never leaks; the axis is OSF-vs-VMS, not the gcc version.
+
+The RTL dumps localise it as an elimination leak, not a post-reload regen: the
+soft frame pointer MEM base -- (reg/f:DI 63 FP), printed as %sfp -- is absent in
+every dump through .ira (311r) and first appears in .reload (312r), then
+persists unbroken through .postreload, .split2, .pro_and_epilogue and .final.
+
+Fix: add TARGET_FRAME_POINTER_REQUIRED for the OpenVMS back end, returning true
+exactly when the VMS frame classification yields a non-PT_NULL procedure unwound
+through HARD_FRAME_POINTER_REGNUM -- i.e. the case in which alpha_vms_can_eliminate
+would force FRAME_POINTER -> HARD_FRAME_POINTER.  Forcing frame_pointer_needed in
+that case makes alpha_expand_prologue set up $15, giving the elimination a valid
+destination.  The hook reuses the existing frame-classification helper
+(alpha_compute_frame_layout, which sets alpha_procedure_type and vms_unwind_regno)
+rather than duplicating the logic, and is installed only under TARGET_ABI_OPEN_VMS
+so OSF/alpha-linux is byte-for-byte unaffected.
+
+Clean-room (Rule 8): derived from the public GCC internals documentation
+(TARGET_FRAME_POINTER_REQUIRED, register elimination) and this back end's own
+published OpenVMS frame model; no VSI/HPE source or binaries were consulted.
+
+--- a/gcc/config/alpha/alpha.cc
++++ b/gcc/config/alpha/alpha.cc
+@@ -7417,6 +7417,46 @@
+   gcc_unreachable ();
+ }
+ 
++/* Worker function for TARGET_FRAME_POINTER_REQUIRED.
++
++   Under the OpenVMS calling standard the soft frame pointer may be
++   eliminated to the stack pointer only when the frame is NOT unwound
++   through the hard frame pointer: alpha_vms_can_eliminate refuses the
++   FRAME_POINTER_REGNUM -> STACK_POINTER_REGNUM elimination for a PT_STACK
++   or PT_REGISTER procedure whose vms_unwind_regno is HARD_FRAME_POINTER_REGNUM,
++   leaving the hard frame pointer as the only legal target.  The hard frame
++   pointer, however, is established by alpha_expand_prologue only when
++   frame_pointer_needed is set, and the alpha back end otherwise defines no
++   TARGET_FRAME_POINTER_REQUIRED -- so at -O2/-O3 the generic code clears
++   frame_pointer_needed for exactly such a procedure, reload is left with no
++   valid destination for the soft frame pointer, and it leaks into spill
++   addresses (integer ldq/stq based on the soft FP, $63/$f31).
++
++   Force the hard frame pointer in precisely that case so the elimination has
++   a destination.  OSF/ELF (alpha-linux) uses the default CAN_ELIMINATE and is
++   unaffected: this hook, like TARGET_CAN_ELIMINATE, is installed only for
++   TARGET_ABI_OPEN_VMS.  Clean-room (Rule 8): derived from the public GCC
++   internals docs (TARGET_FRAME_POINTER_REQUIRED / elimination) and this
++   back end's own OpenVMS frame model; no VSI/HPE material.  */
++
++static bool
++alpha_vms_frame_pointer_required (void)
++{
++  /* Refresh the VMS frame classification for the current function.  The
++     middle end does not run TARGET_COMPUTE_FRAME_LAYOUT until after
++     frame_pointer_needed has been decided, so alpha_procedure_type and
++     vms_unwind_regno would otherwise be stale at this point.  This recompute
++     reads only current df/cfun/crtl state and cannot recurse here.  */
++  alpha_compute_frame_layout ();
++
++  /* A PT_NULL procedure has no frame of its own and resolves the soft frame
++     pointer to the stack pointer, so it never needs the hard frame pointer.
++     Any other procedure unwound through the hard frame pointer needs it to be
++     actually set up.  */
++  return (alpha_procedure_type != PT_NULL
++	  && vms_unwind_regno == HARD_FRAME_POINTER_REGNUM);
++}
++
+ /* FROM is to be eliminated for TO. Return the offset so that TO+offset
+    designates the same location as FROM.  */
+ 
+@@ -9946,6 +9986,8 @@
+ # define TARGET_ATTRIBUTE_TABLE vms_attribute_table
+ # undef TARGET_CAN_ELIMINATE
+ # define TARGET_CAN_ELIMINATE alpha_vms_can_eliminate
++# undef TARGET_FRAME_POINTER_REQUIRED
++# define TARGET_FRAME_POINTER_REQUIRED alpha_vms_frame_pointer_required
+ #endif
+ 
+ #undef TARGET_IN_SMALL_DATA_P

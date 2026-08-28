@@ -16,7 +16,7 @@
  * executive (vms.ko) and out the host kernel's loopback; sshd is an ordinary
  * host-socket server (the BGn: SERVER path is vms-698, not needed for a client
  * proof). The staged binaries + keys + config come from
- * third-party/openssh/build-ssh-kex-harness.sh (see tests/qemu/Dockerfile).
+ * third-party/openssh/build-ssh-harness.sh (see tests/qemu/Dockerfile).
  * ============================================================
  *
  * NO EXECUTIVE (honest-failure branch, run on the host before vms.ko): with no

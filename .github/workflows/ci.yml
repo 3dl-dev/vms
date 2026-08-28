@@ -1697,6 +1697,52 @@ jobs:
           exit "$rc"
 
   # -----------------------------------------------------------------------
+  # console-newline-spam-e2e (vms-dec): the boot-console coverage CI lacked.
+  # Every other boot gate waits for "Username:" and only THEN feeds input, so
+  # none ever provoked the echo that produced the operator-reported boot
+  # "newline spam" (the operator's own RETURN keystrokes, mashed at a slow
+  # boot, echoed by the cooked-mode console tty as blank lines). This gate
+  # TYPES RETURNs DURING the boot, before the prompt appears, and asserts no
+  # run of echoed blank lines precedes "Username:" while login still works
+  # (tests/qemu/test_console_boot_no_newline_spam.sh).
+  console-newline-spam-e2e:
+    name: Console boot — no echoed-RETURN newline spam before Username: (vms-dec)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.kernel == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image (qemu tooling + the pre-mastered distribution disk)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Console newline-spam gate — hammer RETURN during boot, assert no echoed blank-line spam
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_console_boot_no_newline_spam_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: console_boot_no_newline_spam_e2e SKIPPED in CI — this gate must actually boot and type during boot, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
   # cut-release-vax-gate (rd vms-ca5, epic vms-f10; "R2 release parity",
   # docs/design-vax-mainstream-release.md). FAST per-PR complement to the
   # heavy cut-release-reproducible / release-acceptance-e2e jobs above (which

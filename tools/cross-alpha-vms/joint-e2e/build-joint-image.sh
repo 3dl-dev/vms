@@ -15,6 +15,15 @@
 #
 #   IMG=ovmx-cross-alpha-vms tools/cross-alpha-vms/joint-e2e/build-joint-image.sh [OUTDIR]
 #
+# JOINT_MAIN (default joint_main.c) selects which self-contained main-source
+# beside this script the cross cc1 compiles into joint_e2e.exe. The default
+# builds the P1 milestone crt0-activation test byte-identically to before;
+# JOINT_MAIN=crtl_rms_test.c builds the richer CRTL/RMS port variant (heap +
+# RMS file I/O + stdio) against the SAME genuine alpha DECC$SHR:
+#
+#   JOINT_MAIN=crtl_rms_test.c IMG=ovmx-cross-alpha-vms \
+#       tools/cross-alpha-vms/joint-e2e/build-joint-image.sh [OUTDIR]
+#
 # OUTDIR (default /tmp/joint-e2e-out) receives: LINK.EXE, LIBOTS_SHR.EXE,
 # 'DECC$SHR.EXE', crt0.obj, joint_main.obj, joint_e2e.exe, and build.log.
 #
@@ -34,6 +43,19 @@ TC_DIR=$(cd "$HERE/.." && pwd)              # tools/cross-alpha-vms
 SRC_ROOT=$(cd "$TC_DIR/../.." && pwd)       # repo root
 IMG=${IMG:-ovmx-cross-alpha-vms}
 OUT=${1:-/tmp/joint-e2e-out}
+# JOINT_MAIN (vms-crtl-rms-porttest): which main-source under this dir the cross
+# cc1 compiles into joint_main.obj -> joint_e2e.exe. Defaults to joint_main.c so
+# the P1 milestone crt0-activation test builds byte-identically to before; set
+# JOINT_MAIN=crtl_rms_test.c to build the richer CRTL/RMS port variant instead.
+# Every candidate is a self-contained .c compiled by the SAME real alpha-dec-vms
+# cc1 and linked against the SAME genuine alpha DECC$SHR — only the main source
+# changes. Basename only (must live beside this script; mounted read-only at
+# /joint in the container).
+JOINT_MAIN=${JOINT_MAIN:-joint_main.c}
+case "$JOINT_MAIN" in
+    */*) echo "FAIL: JOINT_MAIN must be a bare basename beside this script, got '$JOINT_MAIN'" >&2; exit 1;;
+esac
+test -f "$HERE/$JOINT_MAIN" || { echo "FAIL: JOINT_MAIN source '$JOINT_MAIN' not found in $HERE" >&2; exit 1; }
 mkdir -p "$OUT"
 
 # vms-e7c5: if the toolchain image is already present (a CI gate PULLED the
@@ -54,6 +76,7 @@ docker run --rm \
     -v "$HERE:/joint:ro" \
     -v "$OUT:/out" \
     -e IMGACT_INTERP_PATH \
+    -e JOINT_MAIN \
     "$IMG" bash -c '
 set -euxo pipefail
 OUT=/out
@@ -131,13 +154,24 @@ OVMX_DECC_ARCH=alpha \
 echo "-- assembling crt0.obj (real port vms-ucrt0.c -> crt0.s, cross as) --"
 "$ALPHA_AS" -o "$OUT/crt0.obj" /joint/crt0.s
 
-echo "-- compiling joint_main.obj (cross cc1, -mpointer-size=64) --"
-"$ALPHA_CC" -mpointer-size=64 -g0 -c /joint/joint_main.c -o "$OUT/joint_main.obj"
+JOINT_MAIN=${JOINT_MAIN:-joint_main.c}
+echo "-- compiling joint_main.obj from $JOINT_MAIN (cross cc1, -mpointer-size=64) --"
+"$ALPHA_CC" -mpointer-size=64 -g0 -c "/joint/$JOINT_MAIN" -o "$OUT/joint_main.obj"
 
 # ---- 6. the JOINT-E2E IMAGE: real crt0 + real main, --use the genuine
-#         alpha DECC$SHR, STRICT (no --allow-undefined; expect zero deferred) ----
-echo "== linking joint-e2e image (strict, expect zero deferred) =="
-"$WORK/LINK.EXE" --transfer __main --use "$WORK/DECC\$SHR.EXE" \
+#         alpha DECC$SHR *and* LIBOTS$SHR, STRICT (no --allow-undefined;
+#         expect zero deferred) ----
+# LIBOTS$SHR.EXE is added to the canonical consumer link recipe alongside
+# DECC$SHR.EXE (zlib-crtl-rungs). The alpha-dec-vms port compiler lowers every
+# integer divide/remainder to an OTS$DIV_*/OTS$REM_* call (Alpha has no integer-
+# divide instruction), and those universals live in the SEPARATE LIBOTS$
+# shareable -- DECC$SHR imports OTS$ for its OWN use but does NOT transitively
+# re-export it, so a consumer that divides (zlib, and most real C) would defer
+# OTS$DIV_UL/OTS$REM_UI against DECC$SHR alone. LINK binds only REFERENCED
+# imports, so adding --use LIBOTS$ is inert for programs (like this joint_main)
+# that emit no OTS$ call, and closes the gap for those that do.
+"$WORK/LINK.EXE" --transfer __main \
+    --use "$WORK/DECC\$SHR.EXE" --use "$WORK/libots/LIBOTS_SHR.EXE" \
     -o "$OUT/joint_e2e.exe" "$OUT/crt0.obj" "$OUT/joint_main.obj"
 
 cp "$WORK/LINK.EXE" "$WORK/DECC\$SHR.EXE" "$WORK/libots/LIBOTS_SHR.EXE" "$OUT/"

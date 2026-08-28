@@ -54,7 +54,17 @@
  * input) must not eat the whole boot budget -- SIGALRM kills the child, the
  * pipe closes, and the suite is recorded as a genuine failure (never a skip).*/
 #ifndef SUITE_TIMEOUT_SECS
-#define SUITE_TIMEOUT_SECS 150
+/* qemu-system-alpha runs pure TCG (no KVM on Alpha), ~10-50x slower than the
+ * x86_64 KVM path, so 150s was too tight for several suites (procnam, the
+ * DCL.EXE / process-spawning suites) that make real forward progress. 300s is
+ * the honest per-suite calibration and fits the 3600s boot budget. NOTE: 300s
+ * alone does NOT green the DCL/SPAWN suites (setname/spawn_users/showproc/
+ * setprv_dcl/showterm) -- a 2026-08-28 confirm run showed they blow the suites'
+ * OWN inner 15-30s poll deadlines (wait_for_named_row, subprocess-registration
+ * poll, DCL_TIMEOUT_MS) under TCG cold-start, which are independent of this
+ * outer watchdog. Proving those on LP64 needs the inner deadlines made
+ * TCG-tolerant too -- a tracked follow-on, not a baseline (vms-039 commit msg). */
+#define SUITE_TIMEOUT_SECS 300
 #endif
 static volatile pid_t g_child = 0;
 static void on_alrm(int sig) { (void)sig; if (g_child > 0) kill(g_child, SIGKILL); }

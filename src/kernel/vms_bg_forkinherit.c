@@ -63,6 +63,28 @@ struct vms_bg_pending {
 static DEFINE_HASHTABLE(fork_pending_hash, FORK_PENDING_BITS);
 static DEFINE_SPINLOCK(fork_pending_lock);
 
+/* --- Tracepoint-driven capture (CONFIG_TRACEPOINTS only) ---------------------
+ * Everything from here through vms_on_exit(), plus the tracepoint hookup and the
+ * real vms_bg_forkinherit_init/_exit() below, needs the kernel tracepoint
+ * infrastructure (for_each_kernel_tracepoint / tracepoint_probe_register).  An
+ * arch whose kernel cannot enable CONFIG_TRACEPOINTS compiles all of it out.
+ *
+ * OpenVMS/Linux-Alpha is exactly that: init/main.c's UNCONDITIONAL initcall
+ * TRACE_EVENTs mean CONFIG_TRACEPOINTS drags in the full event-tracing runtime
+ * (trace_event_buffer_reserve, trace_event_printf, ...) -> CONFIG_TRACING ->
+ * CONFIG_STACKTRACE -> a stack unwinder Alpha does not have, so TRACEPOINTS
+ * cannot even build there (verified on a clean tree).  So on Alpha fork-time BG
+ * channel inheritance is HONESTLY ABSENT: the #else tail makes init() return an
+ * error, the caller (vms_module.c) logs the honest "unavailable; fall back to
+ * #815" warning, and vms_bg_forkinherit_consume() below stays compiled and
+ * honestly finds nothing (the pending hash is never populated) -- BG-inheritance
+ * is genuinely off, NEVER a fabricated success (INV-6).  A follow-up revisits a
+ * portable fork-hook (kprobe/other) if Alpha grows a forking daemon that would
+ * exercise this.  x86_64 keeps CONFIG_TRACEPOINTS and the full mechanism; VAX
+ * does not build this file (its NetBSD fork path handles it).
+ */
+#ifdef CONFIG_TRACEPOINTS
+
 /* Deferred free (records freed from atomic probe context land here). */
 static LLIST_HEAD(fork_pending_tofree);
 static void fork_pending_free_work(struct work_struct *w);
@@ -161,6 +183,8 @@ static void vms_on_exit(void *data, struct task_struct *p)
         pending_free_deferred(pend);
 }
 
+#endif /* CONFIG_TRACEPOINTS -- capture probes + deferred-free machinery */
+
 /*
  * Consume this task's fork-inherit record, adopting its captured channels onto
  * `child`. Returns 1 if a record was consumed, 0 if none (caller then falls back to
@@ -190,6 +214,7 @@ int vms_bg_forkinherit_consume(struct vms_proc *child)
     return 1;
 }
 
+#ifdef CONFIG_TRACEPOINTS
 /*
  * The sched_process_fork / _exit tracepoints are NOT exported to out-of-tree
  * modules (no __tracepoint_* symbol), so we cannot use register_trace_*(). Instead
@@ -253,3 +278,20 @@ void vms_bg_forkinherit_exit(void)
     }
     flush_work(&fork_pending_free_wk);      /* drain records the probes deferred */
 }
+
+#else  /* !CONFIG_TRACEPOINTS -- the kernel has no tracepoint infrastructure
+        * (see the banner above; Alpha cannot build CONFIG_TRACEPOINTS). Fork-time
+        * BG channel inheritance is honestly UNAVAILABLE here: report it so the
+        * caller falls back to #815, and NEVER fabricate success (INV-6). */
+
+int vms_bg_forkinherit_init(void)
+{
+    return -ENOSYS;     /* honest: no kernel tracepoints -> no sched fork/exit hook */
+}
+
+void vms_bg_forkinherit_exit(void)
+{
+    /* Nothing was registered and the pending hash is never populated. */
+}
+
+#endif /* CONFIG_TRACEPOINTS */

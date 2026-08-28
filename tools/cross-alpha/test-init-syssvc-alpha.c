@@ -114,8 +114,20 @@ static int run_suite(const char *name, int *out_pass, int *out_fail)
          * enables IMGACT.EXE's test-mode OVMX-SEAM print (getexit(SEL_SELF) ->
          * the executive-recorded $STATUS). Gated to this subject only, so no
          * other suite's IMGACT activations emit the seam line. */
-        char *envp_plain[] = { (char *)"PATH=/tests:/bin", (char *)"HOME=/", NULL };
+        /* OVMX_TEST_DEADLINE_SCALE (vms-5ae): pure-TCG qemu-system-alpha runs
+         * ~10-50x slower than the x86_64 KVM path, so the suites' OWN inner
+         * poll deadlines (wait_for_named_row 15s, DCL_TIMEOUT_MS 30s, the
+         * subprocess-registration polls) -- independent of the SUITE_TIMEOUT_SECS
+         * watchdog above -- are hit as failures under DCL/subprocess cold-start.
+         * This multiplies every deadline wrapped in ovmx_tcg_ms() (tcg_deadline.h)
+         * so a slow-but-healthy guest reaches the same PASS/FAIL. Scale 8 keeps
+         * the largest scaled inner deadline (30s*8 = 240s) below the 300s
+         * per-suite watchdog, so a genuine hang still fails LOUDLY (INV-6). The
+         * x86_64/aarch64 path never sets this env -> scale == 1, unchanged. */
+        char *envp_plain[] = { (char *)"PATH=/tests:/bin", (char *)"HOME=/",
+                               (char *)"OVMX_TEST_DEADLINE_SCALE=8", NULL };
         char *envp_seam[]  = { (char *)"PATH=/tests:/bin", (char *)"HOME=/",
+                               (char *)"OVMX_TEST_DEADLINE_SCALE=8",
                                (char *)"OVMX_IMGACT_SEAM=1",
                                /* option (c): resolve the subject over the ACP on
                                 * the writable DKA300 sysvol (default DKA0: is the

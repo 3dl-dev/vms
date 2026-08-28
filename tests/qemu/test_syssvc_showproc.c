@@ -62,6 +62,7 @@
 #include "ssdef.h"
 #include "jpidef.h"
 #include "vms_kif.h"
+#include "tcg_deadline.h"
 
 #define EXIT_SKIP 77
 
@@ -399,19 +400,31 @@ static int run_dcl(const char *script, int uic_group, const char *prcnam,
     }
     close(in_pipe[1]);
 
+    /* Bounded drain (was an UNBOUNDED blocking read that hung forever if
+     * DCL.EXE never closed stdout -- the "5 PASS then outer timeout" mode).
+     * ovmx_tcg_ms scales the 30s base for a slow TCG guest; x86_64 keeps 30s
+     * (scale == 1). */
     size_t used = 0;
-    for (;;) {
-        ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
-        if (n <= 0) break;
-        used += (size_t)n;
-        if (used >= outsz - 1) break;
-    }
-    out[used] = '\0';
+    long deadline_ms = ovmx_tcg_ms(30000);
+    int dr = ovmx_tcg_drain_pipe(out_pipe[0], out, outsz, deadline_ms, pid, &used);
     close(out_pipe[0]);
 
     int st;
     while (waitpid(pid, &st, 0) < 0 && errno == EINTR)
         ;
+
+    if (dr == OVMX_TCG_DRAIN_TIMEOUT) {
+        /* INV-6 / prove-or-expose: expose the partial capture, then FAIL the
+         * caller's CHECK(run_dcl(...) == 0) loudly -- never mask a hang. The
+         * child was SIGKILLed by the drain so this waitpid did not block. */
+        printf("  ---- SHOWPROC partial DCL.EXE output (%zu bytes) ----\n%s\n"
+               "  ---- end partial ----\n", used, out);
+        printf("SHOWPROC: DCL.EXE did NOT close stdout within %ldms (scale=%ld)"
+               " -- partial output above; child SIGKILLed\n",
+               deadline_ms, ovmx_tcg_scale());
+        fflush(stdout);
+        return -1;
+    }
     return 0;
 }
 
@@ -458,7 +471,10 @@ static int comm_of(uint32_t pid, char *out, size_t outsz)
 static int wait_for_exec(uint32_t pid, const char *want)
 {
     char comm[64];
-    for (int i = 0; i < 2000; i++) {
+    /* Base ~20s (2000 * 10ms); ovmx_tcg_ms scales the bound for a slow TCG
+     * guest (x86_64 keeps 2000 iters, scale == 1). */
+    long exec_iters = ovmx_tcg_ms(2000);
+    for (long i = 0; i < exec_iters; i++) {
         if (comm_of(pid, comm, sizeof(comm)) == 0 && strcmp(comm, want) == 0)
             return 0;
         struct timespec ts = { 0, 10 * 1000 * 1000 };

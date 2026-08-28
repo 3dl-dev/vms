@@ -71,6 +71,8 @@ extern int __real_bind(int fd, const struct sockaddr *addr, socklen_t alen);
 extern int __real_listen(int fd, int backlog);
 extern int __real_accept(int fd, struct sockaddr *addr, socklen_t *alen);
 extern int __real_accept4(int fd, struct sockaddr *addr, socklen_t *alen, int flags);
+extern int __real_dup(int oldfd);
+extern int __real_dup2(int oldfd, int newfd);
 #endif /* OVMX_WRAP_SERVER */
 
 static int is_veneer(int fd)
@@ -144,6 +146,39 @@ int __wrap_accept4(int fd, struct sockaddr *addr, socklen_t *alen, int flags)
     }
     return __real_accept4(fd, addr, alen, flags);
 }
+
+/* vms-0cd (RUNG-3 completion): the session handoff. Portable sshd hands the
+ * accepted connection to sshd-session by dup2()'ing it onto stdin/stdout and then
+ * execv()'ing the child, which does ordinary read()/write() on fd 0/1. A veneer
+ * HANDLE is not a real fd, so dup2(handle, 0) fails EBADF (where RUNG-3a stopped).
+ * Materialize the handle as a REAL executive-backed fd (ovmx_materialize_fd -> a
+ * vms.ko [bgconn] fd whose read/write route to the executive socket, no O_CLOEXEC
+ * so it survives execve), then dup2 THAT onto the target. Data still transits the
+ * executive; the exec'd child needs no veneer at all -- the kernel fops carry its
+ * fd 0/1. The temporary materialized fd is closed once duped (unless it landed on
+ * the target itself). A subsequent dup2(0, 1) has a real oldfd and takes the plain
+ * path, so both stdin and stdout reference the connection. */
+int __wrap_dup2(int oldfd, int newfd)
+{
+    if (is_veneer(oldfd)) {
+        int real = ovmx_materialize_fd(oldfd);
+        int r;
+        if (real < 0)
+            return -1;
+        r = __real_dup2(real, newfd);
+        if (real != newfd)
+            (void)__real_close(real);
+        return r;
+    }
+    return __real_dup2(oldfd, newfd);
+}
+
+int __wrap_dup(int oldfd)
+{
+    if (is_veneer(oldfd))
+        return ovmx_materialize_fd(oldfd);   /* a fresh real fd on the connection */
+    return __real_dup(oldfd);
+}
 #endif /* OVMX_WRAP_SERVER */
 
 ssize_t __wrap_read(int fd, void *buf, size_t n)
@@ -167,31 +202,54 @@ int __wrap_close(int fd)
     return __real_close(fd);
 }
 
+/* getpeername/getsockname/setsockopt/getsockopt reach the executive socket by two
+ * routes: a veneer HANDLE (the ssh client's connection, is_veneer) via ovmx_*, OR --
+ * for the SERVER (vms-0cd) -- a MATERIALIZED [bgconn] fd, which is a REAL fd (so
+ * is_veneer is false) that sshd-session holds as its connection stdin/stdout after
+ * dup2. For a real fd, probe the [bgconn] surface (ovmx_fd_*): it returns 1 for a
+ * GENUINE socket/stdio (-> the real syscall, untouched), else it answered from the
+ * executive socket (the TRUE peer / real option), so return that. */
 int __wrap_getpeername(int fd, struct sockaddr *addr, socklen_t *alen)
 {
+    int r;
     if (is_veneer(fd))
         return ovmx_getpeername(fd, addr, alen);
+    r = ovmx_fd_getname(fd, 1, addr, alen);
+    if (r != 1)
+        return r;
     return __real_getpeername(fd, addr, alen);
 }
 
 int __wrap_getsockname(int fd, struct sockaddr *addr, socklen_t *alen)
 {
+    int r;
     if (is_veneer(fd))
         return ovmx_getsockname(fd, addr, alen);
+    r = ovmx_fd_getname(fd, 0, addr, alen);
+    if (r != 1)
+        return r;
     return __real_getsockname(fd, addr, alen);
 }
 
 int __wrap_setsockopt(int fd, int lvl, int opt, const void *v, socklen_t l)
 {
+    int r;
     if (is_veneer(fd))
         return ovmx_setsockopt(fd, lvl, opt, v, l);
+    r = ovmx_fd_setsockopt(fd, lvl, opt, v, l);
+    if (r != 1)
+        return r;
     return __real_setsockopt(fd, lvl, opt, v, l);
 }
 
 int __wrap_getsockopt(int fd, int lvl, int opt, void *v, socklen_t *l)
 {
+    int r;
     if (is_veneer(fd))
         return ovmx_getsockopt(fd, lvl, opt, v, l);
+    r = ovmx_fd_getsockopt(fd, lvl, opt, v, l);
+    if (r != 1)
+        return r;
     return __real_getsockopt(fd, lvl, opt, v, l);
 }
 

@@ -127,7 +127,12 @@ make -j"$(nproc 2>/dev/null || echo 2)" ssh ssh-keygen \
 "$CC" $OSSH_CFLAGS $OSSH_CPPFLAGS -DOVMX_WRAP -DOVMX_WRAP_SERVER -I"$SRV_SRC" \
     -c "$SRV_SRC/ovmx/ovmx_ssh_wrap.c" -o "$WORK/ov_wrap_srv.o"
 SERVER_WRAP=""
-for _s in socket connect bind listen accept accept4 read write close \
+# dup2/dup: the session handoff (vms-0cd RUNG-3 completion). sshd dup2()s the
+# accepted connection (a veneer handle) onto stdin/stdout before execv()'ing
+# sshd-session; __wrap_dup2 materializes the handle as a real executive fd so the
+# dup2 succeeds and the exec'd child reads/writes it natively (kernel fops -> the
+# executive socket). Server-only -- the client link does not --wrap these.
+for _s in socket connect bind listen accept accept4 dup dup2 read write close \
           getpeername getsockname setsockopt getsockopt shutdown fcntl poll ppoll; do
     SERVER_WRAP="$SERVER_WRAP -Wl,--wrap=$_s"
 done

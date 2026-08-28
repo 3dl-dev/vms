@@ -1167,25 +1167,6 @@ static int cmd_show_users(struct dcl_command *cmd)
 {
     int full = dcl_has_qualifier(cmd, "FULL");
 
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    struct tm tm;
-    localtime_r(&ts.tv_sec, &tm);
-
-    /* Banner brand is OVMX, not "OpenVMS": the human header names THIS
-     * product, and the trademark ceiling (INV-0) forbids claiming the
-     * OpenVMS mark as our own identity. Real VMS prints "OpenVMS User
-     * Processes"; SHOW SYSTEM already badges via ovmx_product_banner() for
-     * exactly this reason -- SHOW USERS was the one human header the
-     * rebrand missed. */
-    printf("      %s User Processes at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
-           OVMX_PRODUCT_NAME,
-           tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
-           tm.tm_hour, tm.tm_min, tm.tm_sec, (int)(ts.tv_nsec / 10000000));
-
-    char node[OVMX_IDENTITY_MAXLEN];
-    ovmx_node_name(node, sizeof(node));
-
     /* One scan, walked twice (Method Requirement 4): the summary needs the
      * counts before any table prints. Pass 1 aggregates per-user rows --
      * distinct usernames and, per user, the Interactive/Subprocess/Batch
@@ -1204,34 +1185,97 @@ static int cmd_show_users(struct dcl_command *cmd)
     int  seen_batch[256];
     int  seen_count = 0;
 
-    while (vms_kif_procscan(&index, &info) & 1) {
-        if (info.redacted || info.proc_type == VMS_PROC_T_OTHER)
-            continue;
-        process_count++;
+    /*
+     * REACH THE EXECUTIVE BEFORE ANYTHING PRINTS (vms-6a1, INV-6 / Rule 9).
+     *
+     * SHOW USERS is a READER of the executive process table, not a thing that
+     * fabricates its own answer. The FIRST vms_kif_procscan() call is this
+     * reader's contact with the executive; the honest answer when the executive
+     * cannot be reached is to say so and STOP -- never to print the banner and
+     * a "number of processes = 0" summary that reads as a real, empty system.
+     * That fabricated summary with no executive is exactly the INV-6 violation
+     * the negative-control test (tests/qemu/test_syssvc_spawn_users.c) pins.
+     *
+     * THE RETURN CONTRACT, AND WHY "BIT-0 CLEAR" IS NOT THE TEST. Two very
+     * different outcomes both clear bit 0, and only ONE of them is "no
+     * executive":
+     *
+     *   - EXECUTIVE ANSWERED. vms_ioctl_procscan (src/kernel-core/vms_proctab.c)
+     *     sets exactly SS$_NORMAL for a row or SS$_NONEXPR (2280) once the table
+     *     walk is exhausted -- the latter is a PRESENT executive reporting an
+     *     empty/finished scan, and it MUST still print the honest 0-users
+     *     summary below. (The caller's own PCB is normally in the table, so in
+     *     practice the first row is SS$_NORMAL; SS$_NONEXPR-first is the
+     *     genuinely-empty case the summary is still owed.)
+     *   - EXECUTIVE UNREACHABLE. With /dev/vms absent the bare KIF_CALL path
+     *     never reaches the executive: the ioctl fails and vms_kif_kerr_to_ss()
+     *     maps it (SS$_BUGCHECK for a bad-fd ioctl, or another transport code) --
+     *     NOT SS$_NOSUCHDEV, and NOT SS$_NONEXPR. This is the state that must
+     *     suppress all output.
+     *
+     * So the gate admits precisely the executive-answered statuses (success, or
+     * SS$_NONEXPR) and treats everything else as "no executive": fail honestly
+     * with SS$_NOSUCHDEV and print nothing. Keying on a single literal status
+     * would miss the real absent code; keying on "bit-0 clear" would wrongly
+     * suppress the legitimate empty-but-present summary.
+     */
+    uint32_t scan_st = vms_kif_procscan(&index, &info);
+    if (!(scan_st & 1) && scan_st != SS$_NONEXPR) {
+        dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available");
+        return SS$_NOSUCHDEV;
+    }
 
-        int slot = -1;
-        for (int i = 0; i < seen_count; i++) {
-            if (strcasecmp(seen_users[i], info.username) == 0) {
-                slot = i;
-                break;
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    struct tm tm;
+    localtime_r(&ts.tv_sec, &tm);
+
+    /* Banner brand is OVMX, not "OpenVMS": the human header names THIS
+     * product, and the trademark ceiling (INV-0) forbids claiming the
+     * OpenVMS mark as our own identity. Real VMS prints "OpenVMS User
+     * Processes"; SHOW SYSTEM already badges via ovmx_product_banner() for
+     * exactly this reason -- SHOW USERS was the one human header the
+     * rebrand missed. Printed only after the executive answered above. */
+    printf("      %s User Processes at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+           OVMX_PRODUCT_NAME,
+           tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
+           tm.tm_hour, tm.tm_min, tm.tm_sec, (int)(ts.tv_nsec / 10000000));
+
+    char node[OVMX_IDENTITY_MAXLEN];
+    ovmx_node_name(node, sizeof(node));
+
+    /* Walk the scan started above: aggregate the fetched row (if success),
+     * then advance. scan_st carries the first row's status; the loop re-fetches
+     * at the tail so the guard's call is the first, not a discarded probe. */
+    while (scan_st & 1) {
+        if (!info.redacted && info.proc_type != VMS_PROC_T_OTHER) {
+            process_count++;
+
+            int slot = -1;
+            for (int i = 0; i < seen_count; i++) {
+                if (strcasecmp(seen_users[i], info.username) == 0) {
+                    slot = i;
+                    break;
+                }
+            }
+            if (slot < 0 && seen_count < 256) {
+                slot = seen_count++;
+                strncpy(seen_users[slot], info.username, VMS_USERNAME_SIZE - 1);
+                seen_users[slot][VMS_USERNAME_SIZE - 1] = '\0';
+                seen_interactive[slot] = 0;
+                seen_subprocess[slot]  = 0;
+                seen_batch[slot]       = 0;
+            }
+            if (slot >= 0) {
+                switch (info.proc_type) {
+                case VMS_PROC_T_INTERACTIVE: seen_interactive[slot]++; break;
+                case VMS_PROC_T_SUBPROCESS:  seen_subprocess[slot]++;  break;
+                case VMS_PROC_T_BATCH:       seen_batch[slot]++;       break;
+                default: break;
+                }
             }
         }
-        if (slot < 0 && seen_count < 256) {
-            slot = seen_count++;
-            strncpy(seen_users[slot], info.username, VMS_USERNAME_SIZE - 1);
-            seen_users[slot][VMS_USERNAME_SIZE - 1] = '\0';
-            seen_interactive[slot] = 0;
-            seen_subprocess[slot]  = 0;
-            seen_batch[slot]       = 0;
-        }
-        if (slot >= 0) {
-            switch (info.proc_type) {
-            case VMS_PROC_T_INTERACTIVE: seen_interactive[slot]++; break;
-            case VMS_PROC_T_SUBPROCESS:  seen_subprocess[slot]++;  break;
-            case VMS_PROC_T_BATCH:       seen_batch[slot]++;       break;
-            default: break;
-            }
-        }
+        scan_st = vms_kif_procscan(&index, &info);
     }
 
     /* Two distinct counts, wording confirmed by three independent captures

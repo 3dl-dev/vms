@@ -5,15 +5,15 @@
 
 ## Inventory
 
-**406 surfaces catalogued** across 9 domains, each with a per-surface status.
+**407 surfaces catalogued** across 9 domains, each with a per-surface status.
 
 > This register is an **inventory, not a percentage.** The total VMS compatibility surface has **no known denominator** — it is not version-scoped and cannot be counted — so no "% compatible" is claimed or computable. The catalogue is **incomplete by construction** and grows as surfaces are identified. Below are absolute counts; V1 progress is tracked separately against the commitment set we define, and is never conflated with the whole surface.
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 24 | | real | 229 |
+| ✅ verified | 24 | | real | 230 |
 | 🟢 implemented | 206 | | n/a | 99 |
-| 🟡 partial | 44 | | advisory | 34 |
+| 🟡 partial | 45 | | advisory | 34 |
 | 🟠 stub | 19 | | facade-risk | 44 |
 | 🔵 designed | 2 | |  |  |
 | ⬜ absent | 111 | |  |  |
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **364 committed** — **230 met** (implemented/verified), 43 in progress (partial), 91 not started (absent/stub/designed).
+- **365 committed** — **230 met** (implemented/verified), 44 in progress (partial), 91 not started (absent/stub/designed).
 - ⚠ **42 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 8 out · 25 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 
@@ -854,19 +854,21 @@ Full UAF account record storage and SHA-256 password authentication are real. Ac
 
 _SCS, NISCA/NISCS, connection manager/quorum, cluster-wide DLM, MSCP serving, cluster-wide logicals, shadowing._
 
-`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟠🟠🟠⬜⬜⬜⬜⬜⬜⬜⬜`  —  15 surfaces catalogued (6 met · 2 in progress · 7 not started) · V1: 14 committed, 6 met · ⚠ 1 facade-risk
+`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟠🟠🟠⬜⬜⬜⬜⬜⬜⬜⬜`  —  16 surfaces catalogued (6 met · 3 in progress · 7 not started) · V1: 15 committed, 6 met · ⚠ 1 facade-risk
 
 ### cluster-dlm — Cluster-wide Distributed Lock Manager
 <sub>scope: in · plan: vms-694 · ref: OpenVMS Cluster Systems manual; $ENQ/$DEQ/$GETLKI system services · reviewed 2026-08-28</sub>
 
-A cross-node $ENQ now GRANTS, BLOCKS, and GRANTS-on-release on the mastering node — the DLM's core contention behaviour — while resource remastering, LVB replication, and distributed deadlock detection remain absent, that absence authentic (SS$_UNSUPPORTED, never a fabricated answer). Rung 1 (vms-94c) built the DLM message TRANSPORT (a DLM SYSAP SCS connection + the ENQ/GRANT/DEQ/BLKAST message class). Rung 2 (vms-e8f1) made the RECEIVE handler grant a compatible cross-node $ENQ, held for the remote requester's CSID. Rung 3 (vms-904c) lifts the ENQ scope-fence: an incompatible request now QUEUES on the master's real waiting queue (VMS_DLM_STS_QUEUED, not a grant, not a NOQUEUE decline), the master FIRES a blocking-AST decision naming the remote holder, and a real cross-node $DEQ releases and grants the blocked request (block-then-grant). See kernel-executive.yaml for the single-node lock manager this builds on.
+A cross-node $ENQ now GRANTS, BLOCKS, and GRANTS-on-release on the mastering node — the DLM's core contention behaviour — while resource remastering, LVB replication, and distributed deadlock detection remain absent, that absence authentic (SS$_UNSUPPORTED, never a fabricated answer). Rung 1 (vms-94c) built the DLM message TRANSPORT (a DLM SYSAP SCS connection + the ENQ/GRANT/DEQ/BLKAST message class). Rung 2 (vms-e8f1) made the RECEIVE handler grant a compatible cross-node $ENQ, held for the remote requester's CSID. Rung 3 (vms-904c) lifts the ENQ scope-fence: an incompatible request now QUEUES on the master's real waiting queue (VMS_DLM_STS_QUEUED, not a grant, not a NOQUEUE decline), the master FIRES a blocking-AST decision naming the remote holder, and a real cross-node $DEQ releases and grants the blocked request (block-then-grant). Rung H5 (vms-6ca) carries the async replies over the real SCS wire: the master WIREs the queued-reply and — on a real $DEQ — the deferred GRANT, and the REQUESTER-SIDE GRANT RECEIVE (was SS$_UNSUPPORTED) completes an executive-resident origin record on the requesting node, so the block-then-grant status flip (NL->EX) is observed on the REQUESTER across the wire, not just in the master's local state. The BLKAST wire is deferred honestly (the holder releases on its own). See kernel-executive.yaml for the single-node lock manager this builds on.
 
 
-<sub>3 items · 0 met · 2 in progress · 1 not started</sub>
+<sub>4 items · 0 met · 3 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
 | 🟡 | `cluster-dlm$cross-node-lock` | feature | Cross-node $ENQ grant / block-then-grant / blocking-AST on the mastering node | partial | real | in | `src/kernel-core/vms_lock.c` — vms-94c/vms-e8f1/vms-904c. vms_lock_dlm_xnode_dispatch runs a decoded cross-node $ENQ through the real lock manager on the mastering node, held FOR the remote requester's CSID: a compatible request GRANTS (SS$_NORMAL, GET_RESMASTER shows held_for=<peer>); an incompatible one QUEUES on the real waiting queue (VMS_DLM_STS_QUEUED, GETLKI shows granted NL / requested EX) and the master emits the BLKAST directive (blocking_csid) for the remote holder; a cross-node $DEQ (vms_lock_dlm_xnode_deq, authorized by CSID) releases and grants the blocked request (GETLKI flips NL->EX). Proven on a real /dev/vms (tests/qemu/test_syssvc_dlm_xnode.c, x86_64 + Alpha LP64). No fake grants OR blocks — a queued request is a real lock on the master's queue that releases only on a real $DEQ (INV-6).
+ |
+| 🟡 | `cluster-dlm$async-reply-wire` | feature | Async DLM replies (queued-reply + deferred GRANT) delivered over SCS; requester-side completion | partial | real | in | `src/vmsscs/scsd.c` — vms-6ca rung H5. The master's async replies ride the live SCS wire: node B WIREs the queued-reply (granted mode NL — the requester stays genuinely pending) and, on a real cross-node $DEQ that flips a queued waiter to granted, WIREs an unprompted deferred GRANT (SS$_NORMAL, the granted mode) to that requester (vms_lock_dlm_xnode_deq reports the flipped waiter). The REQUESTER-SIDE GRANT RECEIVE (VMS_DLM_OP_GRANT, was SS$_UNSUPPORTED) completes an executive-resident ORIGIN record on the requesting node, whose granted mode is set ONLY from what the master sent over SCS; GETLKI reads the NL->EX flip back on the REQUESTER. Proven on a two-node live A<->B QEMU harness with real /dev/vms on both (tests/qemu/run_dlm_harness_h5.sh: SCSD-I-DLMPEND, SCSD-I-DLMDEFER, SCSD-I-DLMH5FLIP granted_mode=EX). The BLKAST wire (master -> holder) is deferred honestly on this rung — BLKAST as a receive op still returns SS$_UNSUPPORTED; the block-then-grant is proven without it (the holder releases on its own). Multi-peer routing of a deferred grant by CSID (releaser and queued waiter on different nodes) is a later rung; H5 proves the same-peer case. No fabricated wire reply or grant (INV-6).
  |
 | ⬜ | `cluster-dlm$remaster-lvb-deadlock` | feature | Resource-directory consistency, dynamic remastering, LVB replication, distributed deadlock detection | absent | real | in | `src/kernel-core/vms_lock.c` — Still honestly out of scope, above the contention rung: resource-directory consistency (vms-1bba), remastering on membership change (vms-6ee), LVB replication (vms-d81), and distributed deadlock detection (vms-ec75). The cross-node ENQ carries no VALBLK and the queue path skips the single-node (proc-keyed) deadlock detector, both by design — SS$_UNSUPPORTED / omission, never a fabricated answer. A non-local directory/master on the SEND side still fails SS$_UNSUPPORTED (dlm_resolve_master). Gap is authentic (real).
  |

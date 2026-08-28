@@ -39,10 +39,19 @@
  *       handle now shows granted_mode == EX -- the unfakeable status flip NL->EX,
  *       driven by a real $DEQ -- and the master now holds FOR the second node's
  *       CSID.
+ *   (3b) ⭐ DEFERRED-GRANT REPORT + REQUESTER-SIDE RECEIVE (vms-6ca, rung H5).
+ *       The block-then-grant $DEQ now REPORTS the flipped waiter (the requester
+ *       CSID + original req_lkid + master handle + granted mode) so the daemon
+ *       can WIRE a deferred GRANT to it. And the REQUESTER-SIDE GRANT RECEIVE
+ *       (VMS_DLM_OP_GRANT, was SS$_UNSUPPORTED) completes an executive-resident
+ *       ORIGIN record: a queued-reply (mode NL) leaves it PENDING, a deferred
+ *       GRANT (mode EX) flips it NL->EX -- the status flip observed on the
+ *       REQUESTER node, driven only by what the master sent over the wire, read
+ *       back by GETLKI. INV-6: genuine executive state, no fabricated grant.
  *   (4) SCOPE FENCE / INV-6: a wire NOQUEUE incompatible $ENQ still declines
  *       SS$_NOTQUEUED (honest); a $DEQ of a lock NOT held for the releasing node
- *       is refused SS$_IVLOCKID; the RESPONSE ops (GRANT/BLKAST as receive) still
- *       return SS$_UNSUPPORTED -- requester-side completion is a later rung.
+ *       is refused SS$_IVLOCKID; BLKAST as a receive op still returns
+ *       SS$_UNSUPPORTED -- the BLKAST WIRE is deferred honestly on this rung.
  *   (5) VALIDATION unchanged: a bad mode, a bad op, or an ENQ with an empty
  *       resource name is refused SS$_BADPARAM, not silently dropped.
  *
@@ -110,7 +119,7 @@ int main(void)
     st = vms_kif_dlm_xnode(VMS_DLM_OP_ENQ, LCK_K_EXMODE, 0,
                            0x00040011u /*req_lkid*/, 0 /*master_lkid*/,
                            REQ_CSID_A, 0 /*master_csid: resolve*/, res, NULL,
-                           &lkid_a, &queued, &blk_csid, &blk_lkid);
+                           &lkid_a, &queued, &blk_csid, &blk_lkid, NULL, NULL);
     CHECK(st == SS_NORMAL, "cross-node ENQ (compatible) -> SS$_NORMAL (rung-2 grant)");
     CHECK(queued == 0, "the granted request was NOT queued");
     CHECK(lkid_a != 0, "the master returned a lock handle for the grant");
@@ -145,7 +154,7 @@ int main(void)
     queued = 0; blk_csid = 0; blk_lkid = 0;
     st = vms_kif_dlm_xnode(VMS_DLM_OP_ENQ, LCK_K_EXMODE, 0,
                            0x00050022u, 0, REQ_CSID_B, 0, res, NULL,
-                           &lkid_b, &queued, &blk_csid, &blk_lkid);
+                           &lkid_b, &queued, &blk_csid, &blk_lkid, NULL, NULL);
     CHECK(st == (uint32_t)VMS_DLM_STS_QUEUED,
           "second incompatible cross-node ENQ -> VMS_DLM_STS_QUEUED (blocked, not granted)");
     CHECK(st != SS_NORMAL && st != SS_NOTQUEUED,
@@ -171,22 +180,42 @@ int main(void)
     /* ---- 3. SCOPE FENCE: a NOQUEUE incompatible ENQ still DECLINES ---------- */
     st = vms_kif_dlm_xnode(VMS_DLM_OP_ENQ, LCK_K_EXMODE, LCK_M_NOQUEUE,
                            0x00060033u, 0, REQ_CSID_C, 0, res, NULL,
-                           NULL, NULL, NULL, NULL);
+                           NULL, NULL, NULL, NULL, NULL, NULL);
     CHECK(st == SS_NOTQUEUED,
           "NOQUEUE incompatible cross-node ENQ -> SS$_NOTQUEUED (honest decline preserved)");
 
     /* ---- 4. cross-node $DEQ authorization: wrong CSID is refused ------------ */
     st = vms_kif_dlm_xnode(VMS_DLM_OP_DEQ, LCK_K_NLMODE, 0,
                            0, lkid_b /*B's queued lock*/, REQ_CSID_A /*wrong owner*/,
-                           0, res, NULL, NULL, NULL, NULL, NULL);
+                           0, res, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
     CHECK(st == SS_IVLOCKID,
           "cross-node DEQ of a lock NOT held for the releasing node -> SS$_IVLOCKID");
 
-    /* ---- 5. ⭐ BLOCK-THEN-GRANT: the holder DEQs, the blocked request GRANTS - */
+    /* ---- 5. ⭐ BLOCK-THEN-GRANT + DEFERRED-GRANT REPORT (vms-6ca, H5) --------
+     * The holder DEQs; the master releases and GRANTS the blocked request. The
+     * $DEQ dispatch now REPORTS the flipped waiter through the fields a DEQ
+     * otherwise leaves 0 -- queued=1 (a waiter flipped), blocking_csid = the
+     * requester to notify (B), blocking_master_lkid = its master handle (lkid_b),
+     * def_req_lkid = its ORIGINAL requester handle (0x00050022), def_mode = the
+     * mode it was granted at (EX). This is what the daemon reads to WIRE the
+     * deferred GRANT to the requester. INV-6: it reports a grant the executive
+     * genuinely made. */
+    uint32_t def_flipped = 0, def_csid = 0, def_master_lkid = 0,
+             def_req_lkid = 0, def_mode = 0;
     st = vms_kif_dlm_xnode(VMS_DLM_OP_DEQ, LCK_K_NLMODE, 0,
                            0, lkid_a, REQ_CSID_A, 0, res, NULL,
-                           NULL, NULL, NULL, NULL);
+                           NULL, &def_flipped, &def_csid, &def_master_lkid,
+                           &def_req_lkid, &def_mode);
     CHECK(st == SS_NORMAL, "holder's cross-node $DEQ -> SS$_NORMAL (released)");
+    CHECK(def_flipped == 1, "the $DEQ REPORTED a deferred grant (a queued waiter flipped)");
+    CHECK(def_csid == REQ_CSID_B,
+          "the deferred-grant report names the requester to notify (B)");
+    CHECK(def_master_lkid == lkid_b,
+          "the deferred-grant report carries the flipped waiter's master handle");
+    CHECK(def_req_lkid == 0x00050022u,
+          "the deferred-grant report carries the requester's ORIGINAL lock handle");
+    CHECK(def_mode == LCK_K_EXMODE,
+          "the deferred-grant report carries the granted mode (EX)");
 
     /* the previously-blocked request has FLIPPED to granted at EX */
     gm = 99; rm = 99;
@@ -201,38 +230,74 @@ int main(void)
     CHECK(n_granted == 1 && held_for == REQ_CSID_B,
           "the master now holds one lock, held FOR the second node (B)");
 
+    /* ---- 5b. ⭐ REQUESTER-SIDE GRANT RECEIVE (vms-6ca, H5) -------------------
+     * The OTHER half of the wire: on the REQUESTER node, a GRANT / queued-reply
+     * the master sent back completes an executive-resident ORIGIN record, so the
+     * request's status is genuine executive state (INV-6), not a userspace flag.
+     * A queued-reply (granted mode NL) leaves it PENDING; a deferred GRANT
+     * (granted mode EX) flips it NL->EX -- the status flip observed on the
+     * REQUESTER node, driven ONLY by what the master sent over the wire. The op
+     * was SS$_UNSUPPORTED before this rung. GETLKI reads the flip back
+     * independently. RREQ_LKID is the requester's own handle for the request. */
+    const uint32_t RREQ_LKID = 0x00090077u;
+    /* (i) queued-reply arrives: mode NL, master handle 0x0808 on CSID B. */
+    st = vms_kif_dlm_xnode(VMS_DLM_OP_GRANT, LCK_K_NLMODE, 0,
+                           RREQ_LKID, 0x00000808u, REQ_CSID_A, REQ_CSID_B,
+                           "RORIGIN1", NULL,
+                           NULL, NULL, NULL, NULL, NULL, NULL);
+    CHECK(st == SS_NORMAL,
+          "requester-side queued-reply RECEIVE -> SS$_NORMAL (was SS$_UNSUPPORTED)");
+    gm = 99; rm = 99;
+    st = vms_kif_getlki(RREQ_LKID, &gm, &rm, NULL, NULL);
+    CHECK(st == SS_NORMAL && gm == LCK_K_NLMODE,
+          "GETLKI on the requester: the origin record is PENDING (granted NL)");
+    /* (ii) deferred GRANT arrives: mode EX -> the origin record FLIPS NL->EX. */
+    st = vms_kif_dlm_xnode(VMS_DLM_OP_GRANT, LCK_K_EXMODE, 0,
+                           RREQ_LKID, 0x00000808u, REQ_CSID_A, REQ_CSID_B,
+                           "RORIGIN1", NULL,
+                           NULL, NULL, NULL, NULL, NULL, NULL);
+    CHECK(st == SS_NORMAL, "requester-side deferred GRANT RECEIVE -> SS$_NORMAL");
+    gm = 99; rm = 99;
+    st = vms_kif_getlki(RREQ_LKID, &gm, &rm, NULL, NULL);
+    CHECK(st == SS_NORMAL && gm == LCK_K_EXMODE,
+          "GETLKI on the requester: the origin record FLIPPED to GRANTED at EX (NL->EX)");
+    /* a GRANT with no requester handle is refused, not silently dropped */
+    st = vms_kif_dlm_xnode(VMS_DLM_OP_GRANT, LCK_K_EXMODE, 0,
+                           0 /*no req_lkid*/, 0x00000808u, REQ_CSID_A, REQ_CSID_B,
+                           "RORIGIN1", NULL,
+                           NULL, NULL, NULL, NULL, NULL, NULL);
+    CHECK(st == SS_BADPARAM, "requester-side GRANT with no req_lkid -> SS$_BADPARAM");
+
     /* ---- 6. release the second lock; the resource is torn down -------------- */
     st = vms_kif_dlm_xnode(VMS_DLM_OP_DEQ, LCK_K_NLMODE, 0,
                            0, lkid_b, REQ_CSID_B, 0, res, NULL,
-                           NULL, NULL, NULL, NULL);
+                           NULL, NULL, NULL, NULL, NULL, NULL);
     CHECK(st == SS_NORMAL, "second node's cross-node $DEQ -> SS$_NORMAL");
 
-    /* ---- 7. STILL FENCED: the RESPONSE ops (later rung) decline honestly ---- */
-    st = vms_kif_dlm_xnode(VMS_DLM_OP_GRANT, LCK_K_EXMODE, 0,
-                           0x00040011u, 0x00080002u, REQ_CSID_A, REQ_CSID_B, "", NULL,
-                           NULL, NULL, NULL, NULL);
-    CHECK(st == SS_UNSUPPORTED, "cross-node GRANT (receive, no resnam) -> SS$_UNSUPPORTED");
-
+    /* ---- 7. STILL FENCED: BLKAST receive (the BLKAST WIRE) is deferred ------
+     * The block-then-grant round-trip is proven WITHOUT the BLKAST wire (vms-6ca
+     * defers it honestly). BLKAST as a RECEIVE op still declines SS$_UNSUPPORTED
+     * -- never faked. */
     st = vms_kif_dlm_xnode(VMS_DLM_OP_BLKAST, LCK_K_EXMODE, 0,
                            0x00040011u, 0x00080002u, REQ_CSID_A, REQ_CSID_B, "", NULL,
-                           NULL, NULL, NULL, NULL);
-    CHECK(st == SS_UNSUPPORTED, "cross-node BLKAST (receive, no resnam) -> SS$_UNSUPPORTED");
+                           NULL, NULL, NULL, NULL, NULL, NULL);
+    CHECK(st == SS_UNSUPPORTED, "cross-node BLKAST (receive) -> SS$_UNSUPPORTED (wire deferred)");
 
     /* ---- 8. malformed requests are refused, not dropped ---- */
     st = vms_kif_dlm_xnode(VMS_DLM_OP_ENQ, LCK_K_EXMODE + 1, 0,
                            1, 0, REQ_CSID_A, 0, res, NULL,
-                           NULL, NULL, NULL, NULL);
+                           NULL, NULL, NULL, NULL, NULL, NULL);
     /* negctl: dlm-xnode-mode-unvalidated */
     CHECK(st == SS_BADPARAM, "bad lock mode -> SS$_BADPARAM");
 
     st = vms_kif_dlm_xnode(99u /*bad op*/, LCK_K_EXMODE, 0,
                            1, 0, REQ_CSID_A, 0, res, NULL,
-                           NULL, NULL, NULL, NULL);
+                           NULL, NULL, NULL, NULL, NULL, NULL);
     CHECK(st == SS_BADPARAM, "unknown op -> SS$_BADPARAM");
 
     st = vms_kif_dlm_xnode(VMS_DLM_OP_ENQ, LCK_K_EXMODE, 0,
                            1, 0, REQ_CSID_A, 0, "" /*empty name*/, NULL,
-                           NULL, NULL, NULL, NULL);
+                           NULL, NULL, NULL, NULL, NULL, NULL);
     CHECK(st == SS_BADPARAM, "ENQ with empty resource name -> SS$_BADPARAM");
 
     printf("=== test_syssvc_dlm_xnode: %d passed, %d failed ===\n", pass, fail);

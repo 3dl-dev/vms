@@ -38,6 +38,7 @@
  * are the direct IO$_* ops against the executive-resident BGn: driver; no
  * userspace socket stack. */
 #include "vms_kif.h"
+#include "vms_syscall.h"    /* vms_sys_ioctl -- freestanding ioctl on a [bgconn] fd */
 #include "ssdef.h"
 
 #include "vms_bgsock.h"
@@ -461,6 +462,76 @@ int ovmx_materialize_fd(int s)
     st = vms_kif_bg_materialize_fd(p->exec_chan, &fd);
     if (!(st & 1)) { errno = bg_status_to_errno(st); return -1; }
     return fd;
+}
+
+/* --- materialized [bgconn] fd: socket-name / socket-option surface (vms-0cd) ---
+ * A wrapped daemon's exec'd child holds only the real materialized fd (no BG
+ * channel of its own), yet still getpeername()/getsockname()/setsockopt()/
+ * getsockopt()s it. These ioctl the fd ITSELF (VMS_IOCTL_BGCONN_*), which the
+ * [bgconn] fops answer from the fd's held executive socket -- the TRUE peer, not a
+ * guess. Return convention for the --wrap layer:
+ *   1 = fd is NOT a materialized [bgconn] fd (ioctl -ENOTTY) -> use the real syscall
+ *   0 = handled (bgconn); addr/optval written
+ *  -1 = bgconn, but the query failed (errno set) */
+int ovmx_fd_getname(int fd, int peer, struct sockaddr *addr, socklen_t *addrlen)
+{
+    struct vms_bg_name_args a;
+    struct sockaddr_in sin;
+
+    if (addr == NULL || addrlen == NULL) { errno = EFAULT; return -1; }
+    memset(&a, 0, sizeof(a));
+    a.which = peer ? 1u : 0u;
+    if (vms_sys_ioctl(fd, VMS_IOCTL_BGCONN_GETNAME, (unsigned long)&a) != 0)
+        return 1;                       /* not a materialized [bgconn] fd */
+    if (!(a.status & 1)) { errno = ENOTCONN; return -1; }
+
+    memset(&sin, 0, sizeof(sin));
+    sin.sin_family = a.sin_family;
+    sin.sin_port = a.sin_port;
+    sin.sin_addr.s_addr = a.sin_addr;
+    {
+        socklen_t n = *addrlen;
+        if (n > (socklen_t)sizeof(sin))
+            n = (socklen_t)sizeof(sin);
+        memcpy(addr, &sin, n);
+        *addrlen = (socklen_t)sizeof(sin);
+    }
+    return 0;
+}
+
+int ovmx_fd_setsockopt(int fd, int level, int optname, const void *optval, socklen_t optlen)
+{
+    struct vms_bg_sockopt_args a;
+
+    if (optval == NULL || optlen < (socklen_t)sizeof(int)) { errno = EINVAL; return -1; }
+    memset(&a, 0, sizeof(a));
+    a.op = 0;                           /* set */
+    a.level = level;
+    a.optname = optname;
+    a.optval = *(const int *)optval;
+    if (vms_sys_ioctl(fd, VMS_IOCTL_BGCONN_SOCKOPT, (unsigned long)&a) != 0)
+        return 1;                       /* not a materialized [bgconn] fd */
+    if (!(a.status & 1)) { errno = ENOPROTOOPT; return -1; }
+    return 0;
+}
+
+int ovmx_fd_getsockopt(int fd, int level, int optname, void *optval, socklen_t *optlen)
+{
+    struct vms_bg_sockopt_args a;
+
+    if (optval == NULL || optlen == NULL || *optlen < (socklen_t)sizeof(int)) {
+        errno = EINVAL; return -1;
+    }
+    memset(&a, 0, sizeof(a));
+    a.op = 1;                           /* get */
+    a.level = level;
+    a.optname = optname;
+    if (vms_sys_ioctl(fd, VMS_IOCTL_BGCONN_SOCKOPT, (unsigned long)&a) != 0)
+        return 1;                       /* not a materialized [bgconn] fd */
+    if (!(a.status & 1)) { errno = ENOPROTOOPT; return -1; }
+    *(int *)optval = a.optval;
+    *optlen = (socklen_t)sizeof(int);
+    return 0;
 }
 
 /* Return the channel's CACHED executive readiness fd (creating it once), for a

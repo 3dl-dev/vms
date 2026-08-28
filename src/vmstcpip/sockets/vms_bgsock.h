@@ -116,6 +116,16 @@ int ovmx_pollfd(int s);
  * ENODEV = no /dev/vms, EBADF = not a live veneer handle). */
 int ovmx_materialize_fd(int s);
 
+/* Socket-name / socket-option surface for a MATERIALIZED [bgconn] fd (a real fd,
+ * NOT a veneer handle) -- for a wrapped daemon's exec'd child that getpeername()/
+ * getsockname()/setsockopt()/getsockopt()s its connection fd. Answered from the
+ * fd's held executive socket (the TRUE peer). Return: 1 = fd is NOT a [bgconn]
+ * (caller should use the real syscall); 0 = handled; -1 = [bgconn] but failed
+ * (errno set). peer!=0 -> getpeername, peer==0 -> getsockname. */
+int ovmx_fd_getname(int fd, int peer, struct sockaddr *addr, socklen_t *addrlen);
+int ovmx_fd_setsockopt(int fd, int level, int optname, const void *optval, socklen_t optlen);
+int ovmx_fd_getsockopt(int fd, int level, int optname, void *optval, socklen_t *optlen);
+
 /* Return the channel's CACHED executive readiness fd (created once, owned by the
  * veneer socket, closed at ovmx_socket_close). This is what a poll()/select()
  * --wrap layer folds into a real fd set for a veneer handle; unlike ovmx_pollfd

@@ -144,13 +144,67 @@ static int vms_bg_datafd_release(struct inode *inode, struct file *file)
     return 0;
 }
 
+/*
+ * Socket-name / socket-option surface on the materialized fd itself (vms-0cd). A
+ * wrapped daemon's exec'd child holds only this real [bgconn] fd -- no BG channel --
+ * yet still getpeername()/getsockname()/setsockopt()/getsockopt()s it. Answer from
+ * the fd's HELD exec_socket_t (the SAME executive socket carrying the bytes), so the
+ * peer is the TRUE accepted-connection peer, never synthesized. Anything else is
+ * -ENOTTY, so an ordinary ioctl on this fd (and the wrap's probe of a non-[bgconn]
+ * fd) falls through cleanly. The `chan` field of the reused arg structs is ignored.
+ */
+static long vms_bg_datafd_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    exec_socket_t bs = file->private_data;
+    int rc;
+
+    if (!bs)
+        return -EBADF;
+
+    switch (cmd) {
+    case VMS_IOCTL_BGCONN_GETNAME: {
+        struct vms_bg_name_args a;
+
+        if (copy_from_user(&a, (const void __user *)arg, sizeof(a)))
+            return -EFAULT;
+        rc = exec_socket_getname(bs, a.which, &a.sin_family, &a.sin_port, &a.sin_addr);
+        a.status = rc ? SS__ABORT : SS__NORMAL;
+        if (copy_to_user((void __user *)arg, &a, sizeof(a)))
+            return -EFAULT;
+        return 0;
+    }
+    case VMS_IOCTL_BGCONN_SOCKOPT: {
+        struct vms_bg_sockopt_args a;
+        int val;
+
+        if (copy_from_user(&a, (const void __user *)arg, sizeof(a)))
+            return -EFAULT;
+        if (a.op == 0) {
+            rc = exec_socket_setopt_int(bs, a.level, a.optname, a.optval);
+            a.status = rc ? SS__BADPARAM : SS__NORMAL;
+        } else {
+            rc = exec_socket_getopt_int(bs, a.level, a.optname, &val);
+            if (!rc)
+                a.optval = val;
+            a.status = rc ? SS__BADPARAM : SS__NORMAL;
+        }
+        if (copy_to_user((void __user *)arg, &a, sizeof(a)))
+            return -EFAULT;
+        return 0;
+    }
+    default:
+        return -ENOTTY;                 /* not one of ours -> honest fall-through */
+    }
+}
+
 static const struct file_operations vms_bg_datafd_fops = {
-    .owner   = THIS_MODULE,
-    .read    = vms_bg_datafd_read,
-    .write   = vms_bg_datafd_write,
-    .poll    = vms_bg_datafd_poll,
-    .release = vms_bg_datafd_release,
-    .llseek  = noop_llseek,
+    .owner          = THIS_MODULE,
+    .read           = vms_bg_datafd_read,
+    .write          = vms_bg_datafd_write,
+    .poll           = vms_bg_datafd_poll,
+    .unlocked_ioctl = vms_bg_datafd_ioctl,
+    .release        = vms_bg_datafd_release,
+    .llseek         = noop_llseek,
 };
 
 /*

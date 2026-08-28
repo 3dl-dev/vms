@@ -528,6 +528,7 @@ bgsock-getname-addr-zeroed
 bgsock-exec-handle-not-readopted
 bg-accept-socket-not-installed
 bg-materialize-fd-not-routed
+bgconn-getname-addr-zeroed
 fork-inherit-disabled
 initialize-home-magic-not-written
 dirlogical-compose-drops-common-member
@@ -5888,6 +5889,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    bgconn-getname-addr-zeroed)
+        case "$_f" in
+        facility)     echo "INET pseudo-device BGn: -- the socket-name surface of a materialized [bgconn] fd (VMS_IOCTL_BGCONN_GETNAME, the .unlocked_ioctl of the [bgconn] anon_inode answering getpeername/getsockname from the fd's HELD exec_socket_t, src/kernel/vms_bg_datafd.c, vms-0cd). A wrapped daemon's exec'd child holds only the real [bgconn] fd -- no BG channel -- yet getpeername()s it; the executive answers with the TRUE accepted-connection peer, never a synthesized value.";;
+        targets)      echo "kernel/vms_bg_datafd.c";;
+        suites_red)   echo "test_syssvc_bg_materialize_fd";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_bg_datafd_ioctl()'s VMS_IOCTL_BGCONN_GETNAME reads the true peer address off the held executive socket (exec_socket_getname -> kernel_getpeername) into a.sin_addr. The mutation zeroes a.sin_addr before the status is set, so getpeername() on the materialized fd returns 0.0.0.0 instead of the real connection endpoint -- reddening exactly the TRUE-peer assertion, which checks the address MATCHES the connection (127.0.0.1), not merely that a value came back. The materialize/dup2/byte-exact/no-AF_UNIX assertions and the not-a-[bgconn]-on-a-real-socket regression assertion all stay green. This is the real-peer-not-synthesized anchor. One field zeroed.";;
+        require_fail) cat <<'EOF'
+getpeername() on the materialized fd returns the TRUE peer (the real connection endpoint from the executive socket), not a synthesized value
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     fork-inherit-disabled)
         case "$_f" in
         facility)     echo "INET pseudo-device BGn: -- EAGER FORK-TIME BG channel inheritance (vms_bg_forkinherit_consume + the sched_process_fork capture, src/kernel/vms_bg_forkinherit.c, vms-0cd). #815 inherits a parent's BG channels at the child's REGISTRATION; the fork-time path captures them AT FORK so an accept->fork->close forking server (sshd, inetd) still hands the accepted connection to its child even though it closes its own copy right after the fork.";;
@@ -6984,6 +7002,15 @@ apply_edit() {
         # After substitution no "    return n;" is left in the range, so a second
         # apply is the no-op the selftest requires.
         sed -i '/^static ssize_t vms_bg_datafd_read/,/^}$/ s|    return n;.*|    return 0; /* NEGCTL bg-materialize-fd-not-routed */|' "$_file";;
+
+    bgconn-getname-addr-zeroed)
+        # Zero the peer address the [bgconn] fd's ioctl reports, by prefixing the
+        # GETNAME-case status line (which is UNIQUE in this file -- the SOCKOPT case
+        # uses SS$_BADPARAM, and vms_ioctl_bg_getname in vms_bg.c uses "args." not
+        # "a.") with "a.sin_addr = 0;". getpeername() on the materialized fd then
+        # returns 0.0.0.0, reddening the TRUE-peer assertion. After substitution the
+        # bare status line is gone, so a second apply is the no-op the selftest wants.
+        sed -i 's|        a.status = rc ? SS__ABORT : SS__NORMAL;|        a.sin_addr = 0; a.status = rc ? SS__ABORT : SS__NORMAL; /* NEGCTL bgconn-getname-addr-zeroed */|' "$_file";;
 
     fork-inherit-disabled)
         # Make vms_bg_forkinherit_consume's lookup NEVER match, so the registering

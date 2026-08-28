@@ -91,36 +91,17 @@ command -v "$QEMU" >/dev/null 2>&1 || { echo "FATAL: $QEMU not available"; exit 
 
 PASS=0
 FAIL=0
-ok()  { echo "  PASS: $1"; PASS=$((PASS + 1)); }
-bad() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
-
-# --- assertion helpers (all operate on a captured console SEGMENT) ----------
-# must_have: a VMS-faithful substring MUST be present.
-must_have() { local seg="$1" pat="$2" desc="$3"
-    if printf '%s\n' "$seg" | grep -qiF -- "$pat"; then ok "$desc"
-    else bad "$desc [expected substring: '$pat']"; fi; }
-# must_match: a VMS-faithful regex MUST match.
-must_match() { local seg="$1" re="$2" desc="$3"
-    if printf '%s\n' "$seg" | grep -qiE -- "$re"; then ok "$desc"
-    else bad "$desc [expected match: /$re/]"; fi; }
-# must_not_have: a broken/fabricated bug marker MUST be absent (bug guard).
-must_not_have() { local seg="$1" pat="$2" desc="$3"
-    if printf '%s\n' "$seg" | grep -qiF -- "$pat"; then bad "$desc [found bug marker: '$pat']"
-    else ok "$desc"; fi; }
-# negctl: PROVES the search over THIS segment is not vacuous -- it must FIND a
-# token known present (the echoed command) and REJECT a random sentinel known
-# absent. If either half is wrong the segment is empty/unsearchable and every
-# must_*/must_not_have above it cannot be trusted.
-negctl() { local seg="$1" present="$2" desc="$3"
-    local sentinel="ZZ_NEGCTRL_${$}_${RANDOM}${RANDOM}_ZZ"
-    local a=1 b=1
-    printf '%s\n' "$seg" | grep -qiF -- "$present" && a=0
-    printf '%s\n' "$seg" | grep -qiF -- "$sentinel" && b=0
-    if [ "$a" -eq 0 ] && [ "$b" -eq 1 ]; then
-        ok "NEGCTL $desc: search over the real segment finds a present token ('$present') and rejects a bogus sentinel -- the assertions above can genuinely go red"
-    else
-        bad "NEGCTL $desc: search is vacuous (present-token found=$([ $a -eq 0 ] && echo yes || echo NO), sentinel rejected=$([ $b -eq 1 ] && echo yes || echo NO)) -- assertions above cannot be trusted"
-    fi; }
+# The assertion helpers (ok/bad/must_have/must_match/must_not_have/negctl) AND
+# the login+command battery (run_dcl_acceptance_battery) live in the SHARED,
+# arch-independent battery that x86_64 and Alpha both drive, so the two release
+# co-arches can never diverge in what "DCL/SHOW acceptance" asserts. This script
+# supplies the x86_64/aarch64 console primitives (send/wait_for/run_cmd/SEG) and
+# the EXPECTED_* vars; the shared file supplies the assertions. See the contract
+# in tests/qemu/lib/dcl_acceptance_battery.sh.
+BATTERY_LIB="${OVMX_BATTERY_LIB:-$(dirname "$0")/lib/dcl_acceptance_battery.sh}"
+[ -f "$BATTERY_LIB" ] || { echo "FATAL: shared DCL acceptance battery not found at '$BATTERY_LIB' (set OVMX_BATTERY_LIB or mount tests/qemu/lib/dcl_acceptance_battery.sh)"; exit 1; }
+# shellcheck source=lib/dcl_acceptance_battery.sh
+. "$BATTERY_LIB"
 
 echo "=== OVMX DCL/SHOW acceptance e2e: boot the runtime, log in, RUN THE COMMANDS A USER TYPES, assert VMS-faithful output ==="
 echo "arch=$ARCH qemu=$QEMU"
@@ -186,123 +167,15 @@ run_cmd() {
     SEG=$(segment_since "$off")
 }
 
-# --- Boot the real runtime to the login prompt ------------------------------
-if wait_for '%OVMX-I-EXEC' 60; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
-# vms-2213: LOGINOUT on OPA0: waits for the operator's RETURN; feed a CR each
-# second (as a real operator would) until Username: appears.
-w=0
-until grep -qaF 'Username:' "$LOG" 2>/dev/null || [ "$w" -ge "$BOOT_TIMEOUT" ]; do
-    send ''; sleep 1; w=$((w + 1))
-done
-if wait_for 'Username:' 5; then
-    ok "runtime boots to the login prompt"
-else
-    dump_and_die "boot never reached Username: within ${BOOT_TIMEOUT}s"
+# --- Drive the runtime: boot to login, log in, run the battery, assert -------
+# The shared battery does the executive-attach check, the OPA0: CR-feed to the
+# Username: prompt, the boot-banner assertion, SYSTEM/MANAGER login, and the full
+# basic-command battery -- byte-identical to what Alpha runs. It returns nonzero
+# ONLY on a hard boot/login failure (never reached Username: / login rejected),
+# which we surface with the same console dump dump_and_die would.
+if ! run_dcl_acceptance_battery; then
+    dump_and_die "runtime never reached an authenticated DCL prompt (boot or SYSTEM login failed)"
 fi
-
-# --- ASSERTION 0: the boot banner names the product+version -----------------
-# Grounded in ovmx_identity.h (OVMX_PRODUCT_BANNER, INV-1 single source).
-BOOT_SEG=$(segment_since 0)
-must_have "$BOOT_SEG" "$EXPECTED_BOOT_BANNER" "BOOT BANNER: boot prints '$EXPECTED_BOOT_BANNER' (ovmx_identity.h OVMX_PRODUCT_VERSION)"
-# negctl present-token is the brand, which is printed regardless of the version
-# (never the expected banner itself -- that is exactly what the assertion tests).
-negctl   "$BOOT_SEG" 'OpenVMX' "boot banner"
-
-# --- Log in as SYSTEM -------------------------------------------------------
-LOGIN_OFF=$(wc -c <"$LOG")
-send 'SYSTEM'
-wait_for 'Password:' 30 "$LOGIN_OFF" && send 'MANAGER'
-if wait_for 'Welcome to OpenVMX' 30 "$LOGIN_OFF"; then
-    ok "SYSTEM logs in (LOGINOUT.EXE -> DCL.EXE off the mounted ODS-2 disk)"
-else
-    dump_and_die "SYSTEM login failed"
-fi
-wait_for '$ ' 20 "$LOGIN_OFF"
-
-# ===========================================================================
-# THE BATTERY: the basic commands a user types on first login. Each block
-# asserts VMS-faithful output, guards the specific shipped bug, and carries a
-# negative control.
-# ===========================================================================
-
-# --- SHOW TIME (sane clock) -------------------------------------------------
-run_cmd 'SHOW TIME'
-CURYEAR=$(date +%Y)
-must_have  "$SEG" "$CURYEAR" "SHOW TIME: reports the real year ($CURYEAR)"
-must_match "$SEG" '[0-9]{2}:[0-9]{2}:[0-9]{2}' "SHOW TIME: reports an HH:MM:SS time"
-negctl     "$SEG" 'SHOW TIME' "SHOW TIME"
-
-# --- SHOW USERS (vms-01f / vms-72c: shipped EMPTY / "0 users") --------------
-run_cmd 'SHOW USERS'
-must_have     "$SEG" 'SYSTEM' "SHOW USERS [vms-01f/72c]: lists the SYSTEM interactive process (NOT empty)"
-# Accept the real-VMS wording ('interactive users = N') or OVMX's current
-# header ('number of users = N') -- either must show a nonzero count.
-must_match    "$SEG" '(interactive users = [1-9]|number of users = [1-9])' "SHOW USERS [vms-01f/72c]: reports >= 1 user (real VMS: 'Total number of interactive users = 1')"
-must_not_have "$SEG" 'users = 0' "SHOW USERS [vms-01f/72c]: does NOT report 0 users (the shipped-empty bug)"
-must_not_have "$SEG" 'No interactive users' "SHOW USERS [vms-01f/72c]: does NOT print 'No interactive users'"
-negctl        "$SEG" 'SHOW USERS' "SHOW USERS"
-
-# --- SHOW DEVICE DKA0: (vms-e6f: shipped bare "Online", no Mounted/label) ---
-run_cmd 'SHOW DEVICE DKA0:'
-# The DKA0: DATA line, not the echoed command 'SHOW DEVICE DKA0:' (which also
-# contains 'DKA0'): exclude any line naming the SHOW verb.
-DKA0_LINE=$(printf '%s\n' "$SEG" | grep -i 'DKA0:' | grep -iv 'SHOW ' | head -1)
-must_have  "$SEG" 'DKA0' "SHOW DEVICE DKA0: [vms-e6f]: names the device DKA0:"
-must_have  "$DKA0_LINE" 'Mounted' "SHOW DEVICE DKA0: [vms-e6f]: device status is 'Mounted' (NOT bare 'Online')"
-must_have  "$DKA0_LINE" "$VOLUME_LABEL" "SHOW DEVICE DKA0: [vms-e6f]: shows the volume label '$VOLUME_LABEL'"
-must_match "$DKA0_LINE" '[1-9][0-9]{3,}' "SHOW DEVICE DKA0: [vms-e6f]: shows a nonzero free-block count (128MB ODS-2 volume has thousands free)"
-must_not_have "$DKA0_LINE" 'Online' "SHOW DEVICE DKA0: [vms-e6f]: DKA0: status is not the bare 'Online' bug"
-negctl     "$SEG" 'SHOW DEVICE' "SHOW DEVICE DKA0:"
-
-# --- SHOW DEVICES (plural accepted) (vms-9344 surface) ----------------------
-run_cmd 'SHOW DEVICES'
-must_have     "$SEG" 'DKA0' "SHOW DEVICES [vms-9344]: plural form is accepted and lists devices"
-must_not_have "$SEG" 'IVKEYW' "SHOW DEVICES [vms-9344]: not rejected with %DCL-*-IVKEYW"
-must_not_have "$SEG" 'IVVERB' "SHOW DEVICES [vms-9344]: not rejected with %DCL-*-IVVERB"
-negctl        "$SEG" 'SHOW DEVICES' "SHOW DEVICES"
-
-# --- WRITE SYS$OUTPUT F$GETSYI("VERSION") (vms-65f: prints the literal) -----
-run_cmd 'WRITE SYS$OUTPUT F$GETSYI("VERSION")'
-must_have     "$SEG" "$EXPECTED_COMPAT_VERSION" "WRITE F\$GETSYI [vms-65f]: emits the real VMS version '$EXPECTED_COMPAT_VERSION'"
-# The stripped literal 'F$GETSYIVERSION' can only appear if the lexical was
-# printed verbatim -- it never appears in the echoed command (which has the
-# parens+quotes), so this is a clean bug guard.
-must_not_have "$SEG" 'F$GETSYIVERSION' "WRITE F\$GETSYI [vms-65f]: does NOT print the literal 'F\$GETSYIVERSION' (the shipped bug)"
-negctl        "$SEG" 'F$GETSYI' "WRITE F\$GETSYI"
-
-# --- SHOW QUOTA (vms-73c4: fabricated "[200,1]") ----------------------------
-run_cmd 'SHOW QUOTA'
-# VMS-faithful: either the real current UIC ([1,4] for SYSTEM) OR an honest
-# %SYSTEM-F-NODISKQUOTA when no quota is enabled -- NOT a fabricated UIC.
-# Accept [1,4] or the zero-padded [001,004] form OVMX prints elsewhere.
-must_match    "$SEG" '(\[0*1,0*4\]|NODISKQUOTA)' "SHOW QUOTA [vms-73c4]: shows the real SYSTEM UIC [1,4] OR an honest %SYSTEM-F-NODISKQUOTA"
-must_not_have "$SEG" '[200,1]' "SHOW QUOTA [vms-73c4]: does NOT print the fabricated UIC '[200,1]' (the shipped bug)"
-negctl        "$SEG" 'SHOW QUOTA' "SHOW QUOTA"
-
-# --- SHOW SYSTEM (lists the real processes) ---------------------------------
-run_cmd 'SHOW SYSTEM'
-must_have  "$SEG" 'SYSTEM' "SHOW SYSTEM: lists the SYSTEM process"
-must_match "$SEG" '[0-9A-Fa-f]{8}' "SHOW SYSTEM: shows 8-hex-digit VMS PIDs"
-negctl     "$SEG" 'SHOW SYSTEM' "SHOW SYSTEM"
-
-# --- SHOW PROCESS (current process works) -----------------------------------
-run_cmd 'SHOW PROCESS'
-must_have "$SEG" 'SYSTEM' "SHOW PROCESS: names the current user SYSTEM"
-must_not_have "$SEG" 'IVKEYW' "SHOW PROCESS: not rejected as an invalid keyword"
-negctl    "$SEG" 'SHOW PROCESS' "SHOW PROCESS"
-
-# --- SHOW DEFAULT (VMS filespec, no Unix path) ------------------------------
-run_cmd 'SHOW DEFAULT'
-must_match    "$SEG" '[A-Z$_]+:\[[A-Z0-9._]+\]' "SHOW DEFAULT: prints a VMS device:[directory] filespec"
-must_not_have "$SEG" '/tmp' "SHOW DEFAULT: no Unix path leaks into the default directory"
-negctl        "$SEG" 'SHOW DEFAULT' "SHOW DEFAULT"
-
-# --- bare DIRECTORY at login lists files ------------------------------------
-run_cmd 'DIRECTORY'
-must_match "$SEG" 'Total of [1-9]' "DIRECTORY: a bare DIRECTORY at login lists >= 1 file"
-must_match "$SEG" 'Directory ' "DIRECTORY: prints a VMS 'Directory <spec>' header"
-must_not_have "$SEG" '/tmp' "DIRECTORY: no Unix path leaks into the listing"
-negctl     "$SEG" 'DIRECTORY' "DIRECTORY"
 
 kill "$QPID" 2>/dev/null; wait "$QPID" 2>/dev/null; QPID=""
 

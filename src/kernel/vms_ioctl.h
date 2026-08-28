@@ -501,6 +501,18 @@ struct vms_resmaster_args {
 #define VMS_DLM_OP_DEQ      3u   /* dequeue request       -> master  */
 #define VMS_DLM_OP_BLKAST   4u   /* blocking-AST notify   <- master  */
 
+/*
+ * The `status` an ENQ dispatch returns when the request was QUEUED on the master
+ * (blocked behind an incompatible holder) rather than granted -- the contention
+ * rung (vms-904c). It is deliberately NOT SS$_NORMAL (that means granted) and NOT
+ * SS$_NOTQUEUED (that means declined, NOQUEUE): 0 is the VMS lock-status-block
+ * "no completion posted yet" state (mirrors vms_lock_entry.grant_state == 0). The
+ * grant arrives later -- when the holder releases -- as the request flips to
+ * SS$_NORMAL and (in a live cluster) a deferred GRANT message is sent. INV-6: a
+ * queued request is a REAL lock on the master's waiting queue, never a fake grant.
+ */
+#define VMS_DLM_STS_QUEUED  0u
+
 struct vms_dlm_xnode_args {
     uint32_t op;                /* in: VMS_DLM_OP_* */
     uint32_t lkmode;            /* in: LCK$K_ mode (0..5) */
@@ -511,8 +523,27 @@ struct vms_dlm_xnode_args {
     uint32_t master_csid;       /* in: mastering node CSID (0 = resolve) */
     char     resnam[32];        /* in: resource name (null-terminated) */
     uint8_t  valblk[LCK_VALBLK_SIZE]; /* in: value block */
-    uint32_t status;            /* return: SS$_ status (rung 1: SS$_UNSUPPORTED) */
-    uint32_t pad;
+    uint32_t status;            /* return: SS$_ status. ENQ granted immediately =>
+                                 * SS$_NORMAL; ENQ queued (blocked, contention rung
+                                 * vms-904c) => 0 (VMS_DLM_STS_QUEUED: no completion
+                                 * status posted yet -- a later GRANT carries
+                                 * SS$_NORMAL); ENQ+NOQUEUE incompatible =>
+                                 * SS$_NOTQUEUED; higher rungs => SS$_UNSUPPORTED. */
+    /*
+     * Cross-node contention outputs (DLM epic vms-7fa rung 3, vms-904c). Filled by
+     * the ENQ path so the requester/daemon can act on a QUEUED request:
+     *   queued            - 1 when the request was placed on the master's real
+     *                       waiting queue (blocked) rather than granted now.
+     *   blocking_csid     - CSID of the cross-node HOLDER whose grant blocks this
+     *                       request and that must receive a blocking AST (BLKAST);
+     *                       0 when nothing blocks it across nodes.
+     *   blocking_master_lkid - that holder's master lock handle (the BLKAST target).
+     * On a DEQ these are 0. master_lkid above is (re)used as the ENQ output: the
+     * master's lock handle for the granted-or-queued request.
+     */
+    uint32_t queued;
+    uint32_t blocking_csid;
+    uint32_t blocking_master_lkid;
 };
 #define VMS_IOCTL_DLM_XNODE _IOWR(VMS_IOC_MAGIC, 0x35, struct vms_dlm_xnode_args)
 

@@ -756,7 +756,10 @@ uint32_t vms_kif_get_resmaster(const char *resnam, uint32_t *found,
 uint32_t vms_kif_dlm_xnode(uint32_t op, uint32_t lkmode, uint32_t flags,
                            uint32_t req_lkid, uint32_t master_lkid,
                            uint32_t req_csid, uint32_t master_csid,
-                           const char *resnam, const uint8_t *valblk)
+                           const char *resnam, const uint8_t *valblk,
+                           uint32_t *out_master_lkid, uint32_t *out_queued,
+                           uint32_t *out_blocking_csid,
+                           uint32_t *out_blocking_master_lkid)
 {
     struct vms_dlm_xnode_args args;
 
@@ -776,6 +779,15 @@ uint32_t vms_kif_dlm_xnode(uint32_t op, uint32_t lkmode, uint32_t flags,
         vms_memcpy(args.valblk, valblk, sizeof(args.valblk));
 
     KIF_CALL(VMS_IOCTL_DLM_XNODE, &args);
+
+    /* Contention-rung outputs (vms-904c): the master's lock handle for the
+     * granted-or-queued request, whether it was queued (blocked), and -- when it
+     * blocked a cross-node holder -- the identity + lock handle that must receive
+     * a BLKAST. All optional. */
+    if (out_master_lkid) *out_master_lkid = args.master_lkid;
+    if (out_queued) *out_queued = args.queued;
+    if (out_blocking_csid) *out_blocking_csid = args.blocking_csid;
+    if (out_blocking_master_lkid) *out_blocking_master_lkid = args.blocking_master_lkid;
 
     return args.status;
 }

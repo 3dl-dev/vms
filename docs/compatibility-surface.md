@@ -5,15 +5,15 @@
 
 ## Inventory
 
-**405 surfaces catalogued** across 9 domains, each with a per-surface status.
+**406 surfaces catalogued** across 9 domains, each with a per-surface status.
 
 > This register is an **inventory, not a percentage.** The total VMS compatibility surface has **no known denominator** — it is not version-scoped and cannot be counted — so no "% compatible" is claimed or computable. The catalogue is **incomplete by construction** and grows as surfaces are identified. Below are absolute counts; V1 progress is tracked separately against the commitment set we define, and is never conflated with the whole surface.
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 24 | | real | 228 |
+| ✅ verified | 24 | | real | 229 |
 | 🟢 implemented | 206 | | n/a | 99 |
-| 🟡 partial | 43 | | advisory | 34 |
+| 🟡 partial | 44 | | advisory | 34 |
 | 🟠 stub | 19 | | facade-risk | 44 |
 | 🔵 designed | 2 | |  |  |
 | ⬜ absent | 111 | |  |  |
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **363 committed** — **230 met** (implemented/verified), 42 in progress (partial), 91 not started (absent/stub/designed).
+- **364 committed** — **230 met** (implemented/verified), 43 in progress (partial), 91 not started (absent/stub/designed).
 - ⚠ **42 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 8 out · 25 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 
@@ -854,19 +854,22 @@ Full UAF account record storage and SHA-256 password authentication are real. Ac
 
 _SCS, NISCA/NISCS, connection manager/quorum, cluster-wide DLM, MSCP serving, cluster-wide logicals, shadowing._
 
-`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠🟠🟠⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  14 surfaces catalogued (6 met · 1 in progress · 7 not started) · V1: 13 committed, 6 met · ⚠ 1 facade-risk
+`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟠🟠🟠⬜⬜⬜⬜⬜⬜⬜⬜`  —  15 surfaces catalogued (6 met · 2 in progress · 7 not started) · V1: 14 committed, 6 met · ⚠ 1 facade-risk
 
 ### cluster-dlm — Cluster-wide Distributed Lock Manager
 <sub>scope: in · plan: vms-694 · ref: OpenVMS Cluster Systems manual; $ENQ/$DEQ/$GETLKI system services · reviewed 2026-08-28</sub>
 
-Cross-node lock GRANTING and resource remastering are absent, and that absence is authentic: a non-local directory or master honestly fails with SS$_UNSUPPORTED rather than fabricating a grant. Rung 1 (vms-94c) builds the DLM message TRANSPORT under this: a DLM SYSAP SCS connection and the ENQ/GRANT/DEQ/BLKAST message class, so a request genuinely travels node->node over SCS and dispatches to the (still-SS$_UNSUPPORTED) cross-node handler. Rungs 2+ make that handler grant. See kernel-executive.yaml for the single-node lock manager this builds on.
+A cross-node $ENQ now GRANTS, BLOCKS, and GRANTS-on-release on the mastering node — the DLM's core contention behaviour — while resource remastering, LVB replication, and distributed deadlock detection remain absent, that absence authentic (SS$_UNSUPPORTED, never a fabricated answer). Rung 1 (vms-94c) built the DLM message TRANSPORT (a DLM SYSAP SCS connection + the ENQ/GRANT/DEQ/BLKAST message class). Rung 2 (vms-e8f1) made the RECEIVE handler grant a compatible cross-node $ENQ, held for the remote requester's CSID. Rung 3 (vms-904c) lifts the ENQ scope-fence: an incompatible request now QUEUES on the master's real waiting queue (VMS_DLM_STS_QUEUED, not a grant, not a NOQUEUE decline), the master FIRES a blocking-AST decision naming the remote holder, and a real cross-node $DEQ releases and grants the blocked request (block-then-grant). See kernel-executive.yaml for the single-node lock manager this builds on.
 
 
-<sub>2 items · 0 met · 1 in progress · 1 not started</sub>
+<sub>3 items · 0 met · 2 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
-| ⬜ | `cluster-dlm$cross-node-lock` | feature | Lock request forwarding / resource remastering to a non-local master node | absent | real | in | `src/kernel-core/vms_lock.c` — vms_lock.c dlm_resolve_master() returns SS$_UNSUPPORTED for a non-local directory or master, and the cross-node RECEIVE handler (vms_lock_dlm_xnode_dispatch) returns SS$_UNSUPPORTED too — rung 1 delivers a decoded request TO it but does not grant. Single-node DLM only — no fake grants, so the gap is authentic (real), not a facade. |
+| 🟡 | `cluster-dlm$cross-node-lock` | feature | Cross-node $ENQ grant / block-then-grant / blocking-AST on the mastering node | partial | real | in | `src/kernel-core/vms_lock.c` — vms-94c/vms-e8f1/vms-904c. vms_lock_dlm_xnode_dispatch runs a decoded cross-node $ENQ through the real lock manager on the mastering node, held FOR the remote requester's CSID: a compatible request GRANTS (SS$_NORMAL, GET_RESMASTER shows held_for=<peer>); an incompatible one QUEUES on the real waiting queue (VMS_DLM_STS_QUEUED, GETLKI shows granted NL / requested EX) and the master emits the BLKAST directive (blocking_csid) for the remote holder; a cross-node $DEQ (vms_lock_dlm_xnode_deq, authorized by CSID) releases and grants the blocked request (GETLKI flips NL->EX). Proven on a real /dev/vms (tests/qemu/test_syssvc_dlm_xnode.c, x86_64 + Alpha LP64). No fake grants OR blocks — a queued request is a real lock on the master's queue that releases only on a real $DEQ (INV-6).
+ |
+| ⬜ | `cluster-dlm$remaster-lvb-deadlock` | feature | Resource-directory consistency, dynamic remastering, LVB replication, distributed deadlock detection | absent | real | in | `src/kernel-core/vms_lock.c` — Still honestly out of scope, above the contention rung: resource-directory consistency (vms-1bba), remastering on membership change (vms-6ee), LVB replication (vms-d81), and distributed deadlock detection (vms-ec75). The cross-node ENQ carries no VALBLK and the queue path skips the single-node (proc-keyed) deadlock detector, both by design — SS$_UNSUPPORTED / omission, never a fabricated answer. A non-local directory/master on the SEND side still fails SS$_UNSUPPORTED (dlm_resolve_master). Gap is authentic (real).
+ |
 | 🟡 | `cluster-dlm$scs-transport` | feature | DLM SYSAP SCS connection + lock-request message class (ENQ/GRANT/DEQ/BLKAST) between cluster nodes | partial | real | in | `src/vmsscs/scs_dlm.c` — vms-94c rung 1. A DLM message rides as a p.4-13 SCS application message (MTYPE 10) with its body at SCA content offset 58 (the scs_mscp.c nesting). The message TRANSPORT is real; the message HANDLER does not yet grant (rung 2).
  |
 

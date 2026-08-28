@@ -1,26 +1,66 @@
 /*
- * vms_alpha_syscall.c - the honest RUNG-1 syscall stub for the OVMX
- * alpha-dec-vms musl port (vms-960).
+ * vms_alpha_syscall.c - the REAL syscall backend for the OVMX alpha-dec-vms
+ * musl port (vms-157, the last rung of P1).
  *
- * INV-6: this returns a real error (-ENOSYS). It NEVER fakes success. Every
- * syscall-dependent libc routine that reaches here fails with ENOSYS and the
- * caller's __syscall_ret() turns that into errno=ENOSYS / return -1.
+ * This replaces the rung-1 honest -ENOSYS stub with an actual Alpha/OSF-1
+ * `callsys` trap into the Linux-Alpha kernel. Every __syscallN in
+ * arch/alpha-dec-vms/syscall_arch.h, and the cancellable path in
+ * src/thread/alpha-dec-vms/syscall_cp.s, funnels through this one function,
+ * so wiring it here wires the whole port. (INV-6: no path here fakes success;
+ * a failed syscall returns a genuine negative errno.)
  *
- * The real backend (the OVMX Alpha executive) lands in GAP3 (vms-8954): it will
- * replace this translation unit with the actual trap/executive-facility path.
- * The intended Alpha syscall ABI is documented in
- * arch/alpha-dec-vms/syscall_arch.h.
+ * Alpha/Linux syscall convention (see src/libvmssys/arch/alpha/syscall.S, the
+ * in-tree reference this mirrors):
+ *   - syscall number in $0 (v0)
+ *   - args a0..a5 in $16..$21  (this port's C ABI hands us n,a1..a6, which map
+ *     n -> $0 and a1..a6 -> $16..$21)
+ *   - trap instruction: `callsys` (call_pal 0x83)
+ *   - error is OUT OF BAND: after the trap, $19 (a3) == 0 means success and $0
+ *     holds the result; $19 != 0 means error and $0 holds a *positive* errno.
+ *     Alpha does NOT return -errno like x86_64/aarch64 do.
  *
- * It is deliberately impossible for this to appear "wired": grep for
- * __vms_alpha_syscall to find the single point where the executive backend
- * gets soldered in.
+ * musl's __syscall_ret expects the classic negative-errno contract, so on the
+ * error path we negate v0. With that one normalization every syscall wrapper in
+ * musl works unchanged.
+ *
+ * The trap and the a3/v0 handling MUST be assembly (a plain C wrapper cannot
+ * read the out-of-band error register). We use an explicit-register inline-asm
+ * `callsys` -- the same idiom src/libvmssys/vms_runtime_init.c already proves
+ * under qemu-alpha for call_pal -- so the alpha-dec-vms cc1 still emits the
+ * correct OpenVMS-calling-standard procedure descriptor and linkage that the
+ * cc1-compiled callers (and syscall_cp.s's linkage pair) expect.
  */
 
-#include <errno.h>
-
-long __vms_alpha_syscall(long n, long a1, long a2, long a3, long a4, long a5, long a6)
+/*
+ * Args and result are `long long` (64-bit), NOT `long` -- on this LLP64 port
+ * `long` is only 32 bits, but the Linux-Alpha kernel passes every syscall
+ * argument (and returns pointers) in full 64-bit registers. Truncating a
+ * pointer argument through a 32-bit `long` is exactly the writev-EFAULT bug the
+ * 64-bit __scc / syscall_arg_t in syscall_arch.h exists to prevent; the register
+ * variables here must be equally wide so no truncation reappears in the trap.
+ */
+long long __vms_alpha_syscall(long long n, long long a1, long long a2,
+			      long long a3, long long a4, long long a5,
+			      long long a6)
 {
-	(void)n; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
-	/* RUNG 1: no executive backend yet. Fail honestly. */
-	return -ENOSYS;
+	register long long r0  __asm__("$0")  = n;   /* syscall number -> result/errno */
+	register long long r16 __asm__("$16") = a1;  /* a0 */
+	register long long r17 __asm__("$17") = a2;  /* a1 */
+	register long long r18 __asm__("$18") = a3;  /* a2 */
+	register long long r19 __asm__("$19") = a4;  /* a3 in; error flag out          */
+	register long long r20 __asm__("$20") = a5;  /* a4 */
+	register long long r21 __asm__("$21") = a6;  /* a5 */
+
+	__asm__ __volatile__ (
+		"callsys"
+		: "+r"(r0), "+r"(r19)
+		: "r"(r16), "r"(r17), "r"(r18), "r"(r20), "r"(r21)
+		: "$1", "$2", "$3", "$4", "$5", "$6", "$7", "$8",
+		  "$22", "$23", "$24", "$25", "$27", "$28", "memory");
+
+	/* $19 (a3) nonzero => error; $0 holds POSITIVE errno. Normalize to the
+	 * negative-errno form musl's __syscall_ret consumes. */
+	if (r19 != 0)
+		return -r0;
+	return r0;
 }

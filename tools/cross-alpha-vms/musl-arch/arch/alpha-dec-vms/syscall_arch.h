@@ -1,62 +1,79 @@
 /*
- * syscall_arch.h - Alpha syscall entry.  OVMX alpha-dec-vms musl port
- * (vms-960, RUNG 1): HONEST STUB, not a real syscall path.
+ * syscall_arch.h - Alpha syscall entry.  OVMX alpha-dec-vms musl port.
  *
  * ==========================================================================
- * RUNG 1 STATUS: UNIMPLEMENTED-BUT-HONEST.
- * Every __syscallN routes to __vms_alpha_syscall(), which returns -ENOSYS.
- * Nothing is faked: a syscall-dependent libc function that reaches the kernel
- * will fail with ENOSYS and return -1, exactly as an unimplemented syscall
- * must.  This is INV-6 compliant (fail honestly; never fake success).
+ * vms-157 (last rung of P1): the syscall path is now REAL. Every __syscallN
+ * below funnels into __vms_alpha_syscall() (src/internal/vms_alpha_syscall.c),
+ * which is now an actual Alpha `callsys` (CALL_PAL 0x83) trap into the
+ * Linux-Alpha kernel -- no longer the rung-1 -ENOSYS stub. INV-6 still holds:
+ * a failed syscall returns a genuine negative errno; nothing is faked.
  * ==========================================================================
  *
- * The REAL backend (GAP3 / vms-8954, the OVMX Alpha executive) will replace
- * __vms_alpha_syscall() with the actual trap sequence into the executive.
- *
- * Intended real Alpha ABI (documented now so GAP3 has the contract; NOT wired
- * at rung 1): the classic Alpha/OSF syscall convention is
+ * Alpha/OSF syscall ABI (implemented in vms_alpha_syscall.c):
  *   $0  = syscall number on entry; result on return
  *   $16..$21 (a0..a5) = up to six arguments
  *   entry via  callsys  (CALL_PAL 0x83)
  *   on return $19 (a3) = 0 on success / nonzero on error, $0 = value/errno
- * The OVMX executive backend may instead present a $QIO/executive-facility
- * interface; see src/libvmssys/vms_kif.h for the executive-facility contract
- * that the raw POSIX-over-executive backend will build on. That decision is
- * GAP3's, not rung 1's.
+ *   (the backend negates v0 on the error path so callers see -errno).
+ * The syscall numbers themselves are the authoritative Alpha values in
+ * arch/alpha-dec-vms/bits/syscall.h.in.
  */
 
 #include <errno.h>
 
-long __vms_alpha_syscall(long n, long a1, long a2, long a3, long a4, long a5, long a6);
+/*
+ * vms-157 -- 64-bit syscall argument ABI, MANDATORY on this LLP64 port.
+ *
+ * alpha-dec-vms is the OpenVMS "P64"/LLP64 model: int=4, LONG=4, long long=8,
+ * pointer=8 (build-musl.sh's preflight asserts exactly this). But the runtime
+ * kernel is Linux-Alpha, which is LP64: every syscall argument is a full 64-bit
+ * register, and pointers are 64 bits. musl's generic syscall glue assumes
+ * sizeof(long)==sizeof(void*) and casts every argument through __scc == (long).
+ * On this port `long` is only 32 bits, so that cast TRUNCATES (and sign-extends)
+ * any pointer argument -- e.g. a stack-resident iovec at 0x7743_c8937790 becomes
+ * 0xffffffff_c8937790 and writev() EFAULTs. syscall_arch.h is included by
+ * src/internal/syscall.h BEFORE its `#ifndef __scc` fallback, so we override the
+ * cast and the arg type here to the 64-bit `long long`. This is the port's
+ * syscall register width, independent of the VMS `long`.
+ */
+#define __scc(X) ((long long)(X))
+typedef long long syscall_arg_t;
+
+long long __vms_alpha_syscall(long long n, long long a1, long long a2,
+			      long long a3, long long a4, long long a5,
+			      long long a6);
 
 #define __SYSCALL_LL_E(x) (x)
 #define __SYSCALL_LL_O(x) (x)
 
-static inline long __syscall0(long n)
+static inline long __syscall0(long long n)
 {
 	return __vms_alpha_syscall(n, 0, 0, 0, 0, 0, 0);
 }
-static inline long __syscall1(long n, long a)
+static inline long __syscall1(long long n, long long a)
 {
 	return __vms_alpha_syscall(n, a, 0, 0, 0, 0, 0);
 }
-static inline long __syscall2(long n, long a, long b)
+static inline long __syscall2(long long n, long long a, long long b)
 {
 	return __vms_alpha_syscall(n, a, b, 0, 0, 0, 0);
 }
-static inline long __syscall3(long n, long a, long b, long c)
+static inline long __syscall3(long long n, long long a, long long b, long long c)
 {
 	return __vms_alpha_syscall(n, a, b, c, 0, 0, 0);
 }
-static inline long __syscall4(long n, long a, long b, long c, long d)
+static inline long __syscall4(long long n, long long a, long long b, long long c,
+			     long long d)
 {
 	return __vms_alpha_syscall(n, a, b, c, d, 0, 0);
 }
-static inline long __syscall5(long n, long a, long b, long c, long d, long e)
+static inline long __syscall5(long long n, long long a, long long b, long long c,
+			     long long d, long long e)
 {
 	return __vms_alpha_syscall(n, a, b, c, d, e, 0);
 }
-static inline long __syscall6(long n, long a, long b, long c, long d, long e, long f)
+static inline long __syscall6(long long n, long long a, long long b, long long c,
+			     long long d, long long e, long long f)
 {
 	return __vms_alpha_syscall(n, a, b, c, d, e, f);
 }

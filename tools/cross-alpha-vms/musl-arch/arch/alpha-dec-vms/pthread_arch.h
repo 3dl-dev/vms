@@ -8,11 +8,14 @@
  * Linux/Alpha alike). GCC also exposes it as __builtin_thread_pointer(); we use
  * the explicit call_pal so the sequence is unambiguous.
  *
- * RUNG-1 note: the TLS layout constants below are provisional. No thread is
- * created and no TLS block is set up at rung 1 (thread creation needs the
- * executive backend, GAP3), so these are compiled but never exercised; they
- * will be confirmed against the OVMX Alpha loader/executive at a later rung.
- * Alpha is TLS variant I (TLS block above the thread pointer).
+ * vms-157: the TLS layout is now exercised (musl's __init_tls runs once the
+ * syscall backend + wruniq __set_thread_area are wired). Alpha is TLS variant I
+ * (TLS block ABOVE the thread pointer) with a 16-byte TCB / tprel offset 16 --
+ * pinned empirically under qemu-alpha and used by the in-tree references
+ * (src/libvmssys/vms_runtime_init.c setup_tls __alpha__ branch: data copied to
+ * TP+16). So the gap between TP and the TLS segment is 16 bytes, exactly like
+ * AArch64 (GAP_ABOVE_TP 16, TP_OFFSET 0). With GAP_ABOVE_TP 0 musl would place
+ * the TLS data at TP+0 while the compiler reads it at TP+16 -- a 16-byte skew.
  */
 
 static inline uintptr_t __get_tp(void)
@@ -23,6 +26,6 @@ static inline uintptr_t __get_tp(void)
 }
 
 #define TLS_ABOVE_TP
-#define GAP_ABOVE_TP 0
+#define GAP_ABOVE_TP 16
 
 #define MC_PC sc_pc

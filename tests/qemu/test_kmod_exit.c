@@ -66,6 +66,13 @@
 #define COND_WARN   0u          /* severity 0 (WARNING), bit<0> clear           */
 #define COND_INFO   0x0000012Bu /* bit<0> set, severity 3 (INFO): 0x12B & 7 == 3 */
 #define COND_CHILD  0x00038090u /* cross-process vector: bit<0> clear, sev 0    */
+/*
+ * The faithful DEC C encoding of `main` returning 3: C$_EXIT1 + (3-1)*8 ==
+ * 0x0035A019 (vms-707, the JOINT_E2E $STATUS the executive recorded while DCL's
+ * RUN fork path collapsed it to %X00000001). Used below to prove RUN's readback
+ * primitive round-trips the EXACT condition value, not a POSIX success/fail.
+ */
+#define COND_RUN3   0x0035A019u /* return 3: bit<0> clear (even = failure sev)   */
 
 #define STS_SUCCESS(c) ((unsigned)((c) & 0x1u))
 #define STS_SEVERITY(c) ((unsigned)((c) & 0x7u))
@@ -113,6 +120,33 @@ static int do_getexit(int fd, uint32_t select, uint32_t vms_pid,
         return -1;
     *out = a;
     return 0;
+}
+
+/* GETEXIT for a process named by its backing Linux pid (VMS_JPI_SEL_LINUX_PID,
+ * vms-707). The Linux pid travels in the args' vms_pid field. This is the exact
+ * primitive DCL's RUN fork path uses to read a forked image's true $STATUS. */
+static int do_getexit_linux(int fd, uint32_t linux_pid,
+                            struct vms_getexit_args *out)
+{
+    struct vms_getexit_args a;
+    memset(&a, 0, sizeof(a));
+    a.select = VMS_JPI_SEL_LINUX_PID;
+    a.vms_pid = linux_pid;      /* field carries the Linux pid for this selector */
+    if (ioctl(fd, VMS_IOCTL_GETEXIT, &a) != 0)
+        return -1;
+    *out = a;
+    return 0;
+}
+
+/* Read the calling process's own VMS PID via $GETJPI(self). Returns 0 on error. */
+static uint32_t do_getjpi_self_pid(int fd)
+{
+    struct vms_getjpi_args a;
+    memset(&a, 0, sizeof(a));
+    a.select = VMS_JPI_SEL_SELF;
+    if (ioctl(fd, VMS_IOCTL_GETJPI, &a) != 0 || a.status != SS_NORMAL)
+        return 0;
+    return a.info.vms_pid;
 }
 
 /* One $EXIT/$STATUS self round-trip: record `cond`, read it back, and assert
@@ -344,6 +378,90 @@ int main(void)
                   "activated image inherited the EXACT invoking command line");
             waitpid(kid, NULL, 0);
             close(c2r[0]);
+        }
+    }
+
+    /* --- Part 5: RUN fork-path $STATUS readback by Linux pid (vms-707) ---
+     *
+     * This is the exact mechanism DCL's RUN now uses. On OpenVMS the image runs
+     * IN the CLI's process and its completion condition value IS $STATUS; OVMX
+     * fork()s+execve()s, so the image (a REGISTER_CONTINUE continuation of DCL's
+     * identity) records its condition value in ITS OWN PCB, and DCL reads it
+     * back. Because the child SHARES DCL's VMS PID, a by-VMS-PID read is
+     * ambiguous between the two rows -- so RUN reads by the child's Linux pid,
+     * which names its row uniquely. Prove both facts against a real /dev/vms:
+     * the child's VMS PID EQUALS the parent's (ambiguity is real), and the
+     * by-Linux-pid read returns the EXACT condition value the child recorded. */
+    printf("--- RUN fork-path $STATUS readback (SEL_LINUX_PID) ---\n");
+    {
+        int c2r[2];
+        if (pipe(c2r) != 0) {
+            CHECK(0, "pipe() for RUN fork-path exit test");
+        } else {
+            pid_t kid = fork();
+            if (kid == 0) {
+                /* CHILD: the activated image. Continue the CLI's identity (so it
+                 * shares the CLI's VMS PID), record a completion condition value,
+                 * report its VMS PID, then EXIT -- exactly as a real fork()ed
+                 * image does. The parent must read the recorded status in the
+                 * zombie window (WNOWAIT), before it reaps, which is precisely
+                 * what dcl_activate_image now does. */
+                close(c2r[0]);
+                int cfd = open("/dev/vms", O_RDWR);
+                struct child_exit_report rep; memset(&rep, 0, sizeof rep);
+                if (cfd >= 0 && do_register(cfd, 1) != 0) {
+                    struct vms_exit_args se;
+                    if (do_setexit(cfd, COND_RUN3, &se) == 0 &&
+                        se.status == SS_NORMAL) {
+                        rep.vms_pid = do_getjpi_self_pid(cfd);
+                        rep.ok = 1;
+                    }
+                }
+                (void)!write(c2r[1], &rep, sizeof rep);
+                if (cfd >= 0) close(cfd);
+                _exit(0);                       /* becomes a zombie until reaped */
+            }
+            /* PARENT: the CLI (DCL). It knows the child's Linux pid from fork().
+             * Read the report, then reproduce DCL's exact sequence: peek with
+             * WNOWAIT so the exited child's PCB is still present, read its
+             * $STATUS by Linux pid, THEN reap. */
+            close(c2r[1]);
+            struct child_exit_report rep; memset(&rep, 0, sizeof rep);
+            ssize_t n = read(c2r[0], &rep, sizeof rep);
+            close(c2r[0]);
+            CHECK(n == (ssize_t)sizeof rep && rep.ok,
+                  "activated image REGISTER_CONTINUEd and recorded its $STATUS");
+            CHECK(n == (ssize_t)sizeof rep && rep.ok && rep.vms_pid == self_pid,
+                  "the child SHARES the CLI's VMS PID (by-VMS-PID read is ambiguous)");
+
+            /* Peek without reaping -- the zombie keeps the PCB alive. */
+            siginfo_t si; memset(&si, 0, sizeof si);
+            while (waitid(P_PID, (id_t)kid, &si, WEXITED | WNOWAIT) < 0 &&
+                   errno == EINTR)
+                ;
+
+            if (n == (ssize_t)sizeof rep && rep.ok) {
+                struct vms_getexit_args ge;
+                int rc = do_getexit_linux(fd, (uint32_t)kid, &ge);
+                CHECK(rc == 0 && ge.status == SS_NORMAL,
+                      "RUN reads the exited child's $STATUS by its Linux pid "
+                      "(zombie window, before reap)");
+                CHECK(rc == 0 && ge.condition == COND_RUN3,
+                      "RUN reads back the EXACT recorded condition value "
+                      "(0x0035A019, NOT a POSIX-collapsed 0x1)");
+                CHECK(rc == 0 && ge.has_exited == 1,
+                      "RUN sees has_exited == 1 for the activated image");
+                CHECK(rc == 0 && ge.success == STS_SUCCESS(COND_RUN3) &&
+                      ge.severity == STS_SEVERITY(COND_RUN3),
+                      "RUN decodes the image's success/severity correctly");
+                /* A Linux pid no process backs is SS$_NONEXPR, not a fabricated
+                 * success -- the honest "no such process" answer. */
+                struct vms_getexit_args gz;
+                int rz = do_getexit_linux(fd, 0x7fffffffu, &gz);
+                CHECK(rz == 0 && gz.status != SS_NORMAL && gz.has_exited == 0,
+                      "an unbacked Linux pid reads SS$_NONEXPR, not a fake status");
+            }
+            waitpid(kid, NULL, 0);              /* now reap */
         }
     }
 

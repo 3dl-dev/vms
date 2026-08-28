@@ -460,6 +460,14 @@ struct vms_lock_entry {
                                          * vms-e8f1). Set from vms_enq_args
                                          * .owner_csid at creation; surfaced by
                                          * GET_RESMASTER.remote_holder_csid. */
+    uint32_t            req_lkid;       /* the REMOTE requester's own lock handle
+                                         * for a cross-node grant (vms-6ca, DLM
+                                         * epic vms-7fa rung H5). 0 for a local
+                                         * lock. Set from the wire ENQ's req_lkid
+                                         * so a later deferred GRANT (sent when
+                                         * this lock's release grants a queued
+                                         * cross-node waiter) can name the
+                                         * requester's ORIGINAL request. */
 };
 
 /* Lock resource (named resource in the lock database) */

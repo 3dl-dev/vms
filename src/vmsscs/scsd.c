@@ -7918,7 +7918,7 @@ static uint32_t scsd_dlm_dispatch_to_executive(const struct scs_dlm_msg *m,
      * registered proc (it delivers a peer's request, not the daemon's own lock),
      * but the DEVICE does: talking to /dev/vms at all requires the standard
      * REGISTER handshake every other client performs (see
-     * tests/qemu/test_kmod_dlm_xnode.c, which REGISTERs before it dispatches).
+     * tests/qemu/test_syssvc_dlm_xnode.c, which REGISTERs before it dispatches).
      * Without this, scsd's dispatch reached the device but was rejected before
      * the handler, so a REAL executive returned SS$_NOSUCHDEV(2680) exactly like
      * a missing device -- the two failures were indistinguishable and the

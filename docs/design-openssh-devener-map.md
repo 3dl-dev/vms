@@ -21,6 +21,20 @@
 > `$QIO` path (assert no AF_UNIX fd), then delete the socketpair+pump adapter
 > and the 2 `OVMX_VENEER` patches — the veneer is not gone until that lands.
 
+> **STATUS (2026-08-28): Tier A.2 LANDED (`vms-9ac`).** The veneer is GONE. The
+> OpenSSH source is now UNMODIFIED — `socket()`/`connect()`/`read()`/`write()`/…
+> reach the executive purely via the linker's `--wrap` (`ovmx_ssh_wrap.c`,
+> `socket`+`connect` added so no `sshconnect` source patch is needed;
+> `timeout_connect` treats `connect()==0` as immediate success, so a blocking
+> `__wrap_connect` suffices). **DELETED:** `ovmx_ssh_glue.c/.h` (the AF_UNIX
+> socketpair+pump) and both `OVMX_VENEER` patches. The `--wrap` set is applied via
+> `SSHLIBS` to the `ssh` client ONLY, so `sshd` stays a stock real-socket server.
+> Re-proven end-to-end in CI: `test_syssvc_ssh_kex.c` runs the wrapped KEX AND
+> asserts (hard-fail) NO AF_UNIX socket fd in the ssh process (`/proc/<pid>/fd`
+> vs `/proc/net/unix`); `run_ssh_build.sh` asserts the `__wrap_*` dispatch is
+> linked and no retired `ovmx_ssh_*` glue shim survives. The sshd path now carries
+> real bytes over the executive socket seam with **zero fabrication**.
+
 > **Task:** COMPAT-SURFACE MAPPING (read/analyze only; the conductor files rungs).
 > **Operator directive (2026-08-15):** "Use SSH as a compat goal. Use the VMS SSH
 > port to map and build the surface we're missing — it's a DE-VENEER exercise,

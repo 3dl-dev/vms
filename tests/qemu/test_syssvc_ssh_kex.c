@@ -43,6 +43,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <net/if.h>
+#include <dirent.h>
 
 #include "vms_kif.h"
 
@@ -76,6 +77,53 @@ static int executive_present(void)
     if (fd < 0) return 0;
     vms_kif_close();
     return 1;
+}
+
+/* vms-9ac de-LARP proof: does process `pid` hold ANY AF_UNIX socket fd? Under the
+ * full --wrap de-veneer the ssh connection is a veneer HANDLE (>= OVMX_BGSOCK_BASE,
+ * not a real fd), so a wrapped ssh has NO AF_UNIX socket at all; a surviving
+ * AF_UNIX socket fd would mean the retired socketpair+pump fabrication is back.
+ * Cross-refs /proc/<pid>/fd socket inodes against /proc/net/unix (AF_UNIX inodes). */
+static int proc_has_afunix_socket(pid_t pid)
+{
+    unsigned long uinodes[8192];
+    size_t nu = 0;
+    char line[512], path[64], fp[128], tgt[128];
+    struct dirent *de;
+    DIR *d;
+    int found = 0;
+
+    FILE *u = fopen("/proc/net/unix", "r");
+    if (!u) return 0;                       /* can't tell -> never false-fail */
+    if (!fgets(line, sizeof(line), u)) { fclose(u); return 0; }   /* header */
+    while (fgets(line, sizeof(line), u) && nu < 8192) {
+        /* fields: Num RefCount Protocol Flags Type St Inode [Path] */
+        char c[6][48];
+        unsigned long ino = 0;
+        if (sscanf(line, "%47s %47s %47s %47s %47s %47s %lu",
+                   c[0], c[1], c[2], c[3], c[4], c[5], &ino) >= 7 && ino != 0)
+            uinodes[nu++] = ino;
+    }
+    fclose(u);
+
+    snprintf(path, sizeof(path), "/proc/%ld/fd", (long)pid);
+    d = opendir(path);
+    if (!d) return 0;
+    while (!found && (de = readdir(d)) != NULL) {
+        ssize_t r;
+        unsigned long ino = 0;
+        if (de->d_name[0] == '.') continue;
+        snprintf(fp, sizeof(fp), "%s/%s", path, de->d_name);
+        r = readlink(fp, tgt, sizeof(tgt) - 1);
+        if (r <= 0) continue;
+        tgt[r] = '\0';
+        if (sscanf(tgt, "socket:[%lu]", &ino) == 1 && ino != 0) {
+            for (size_t i = 0; i < nu; i++)
+                if (uinodes[i] == ino) { found = 1; break; }
+        }
+    }
+    closedir(d);
+    return found;
 }
 
 static void bring_lo_up(void)
@@ -191,6 +239,17 @@ int main(void)
         _exit(127);
     }
     close(pfd[1]);
+    /* vms-9ac de-LARP proof: sample the ssh process for any AF_UNIX socket fd
+     * WHILE it handshakes. Under the full --wrap de-veneer the connection is a
+     * veneer handle (not a real fd), so there must be ZERO AF_UNIX sockets; any
+     * would mean the retired socketpair+pump is back. Sampled (WNOHANG) so a slow
+     * QEMU-TCG handshake is covered without wedging. */
+    int saw_afunix = 0, reaped = 0, cst = 0;
+    for (int s = 0; s < 200; s++) {
+        if (waitpid(cp, &cst, WNOHANG) == cp) { reaped = 1; break; }
+        if (proc_has_afunix_socket(cp)) { saw_afunix = 1; break; }
+        usleep(15000);
+    }
     char buf[512];
     size_t got = 0;
     for (;;) {
@@ -201,11 +260,12 @@ int main(void)
     }
     buf[got] = '\0';
     close(pfd[0]);
-    int cst = 0;
-    waitpid(cp, &cst, 0);
+    if (!reaped) waitpid(cp, &cst, 0);
 
     CHECK(WIFEXITED(cst) && WEXITSTATUS(cst) == 0,
           "veneer-linked ssh completed the SSH handshake + session (exit 0)");
+    CHECK(!saw_afunix,
+          "NO AF_UNIX socket fd in the ssh process during the handshake -- the socketpair pump is EXCISED; bytes ride the executive seam, not a fabricated Unix socket (vms-9ac)");
     /* negctl: bg-recv-length-zeroed */
     CHECK(strstr(buf, "OVMX_SSH_OK") != NULL,
           "the remote command output came back BYTE-EXACT over the veneer (real KEX proven)");

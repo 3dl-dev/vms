@@ -399,6 +399,14 @@ jobs:
               - 'tests/qemu/Dockerfile.dlm-harness-h4'
               - 'tests/qemu/init_dlm_h4.sh'
               - 'tests/qemu/run_dlm_harness_h4.sh'
+              # H5 (rd vms-6ca, THE ASYNC-REPLY WIRE): after the join, node A holds
+              # RESONE then a second incompatible $ENQ QUEUES on node B; B WIREs a
+              # queued-reply (A's origin record PENDING) then, on A's $DEQ, WIREs
+              # the deferred GRANT -> A's origin record flips NL->EX. Proves the
+              # block-then-grant on the REQUESTER node across the live SCS wire.
+              - 'tests/qemu/Dockerfile.dlm-harness-h5'
+              - 'tests/qemu/init_dlm_h5.sh'
+              - 'tests/qemu/run_dlm_harness_h5.sh'
               - 'tests/cluster/two-ovmx/mk_sysgen_scratch.py'
               - 'tests/cluster/two-ovmx/verdict.sh'
 
@@ -1730,7 +1738,7 @@ jobs:
   # run of echoed blank lines precedes "Username:" while login still works
   # (tests/qemu/test_console_boot_no_newline_spam.sh).
   console-newline-spam-e2e:
-    name: Console boot — no echoed-RETURN newline spam before Username: (vms-dec)
+    name: "Console boot — no echoed-RETURN newline spam before Username: (vms-dec)"
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.kernel == 'true' }}
     runs-on: ubuntu-latest
@@ -2602,6 +2610,85 @@ jobs:
         with:
           name: dlm-harness-h4-artifacts
           path: h4out/
+          if-no-files-found: ignore
+
+  # -----------------------------------------------------------------------
+  # DLM Harness H5 (rd vms-6ca) -- THE ASYNC-REPLY SCS WIRE: block-then-grant on
+  # the REQUESTER node. tests/qemu/Dockerfile.dlm-harness-h5 builds the SAME
+  # real-executive ingredients as H4 (vms.ko -- now with the requester-side GRANT
+  # RECEIVE + the deferred-grant report -- SCSD.EXE static musl with the H5 wire
+  # sequence + sca_l2probe + the two OVMXA/OVMXB SYSGEN stores) and boots the SAME
+  # TWO QEMU nodes, each with a real /dev/vms, on one shared L2 via a QEMU `socket`
+  # (mcast) netdev. It runs the SAME join sequencer, then arms node A's
+  # block-then-grant sequence (OVMX_DLM_ENQ=RESONE OVMX_DLM_H5=1): node A holds
+  # RESONE, a second incompatible $ENQ QUEUES on node B (B WIREs a queued-reply ->
+  # A's origin record PENDING), A releases the holder, and node B WIREs the
+  # deferred GRANT off that real $DEQ -> A's origin record FLIPS NL->EX. H5 PASS
+  # iff node A prints SCSD-I-DLMH5FLIP (granted_mode=EX -- the flip read back from
+  # A's OWN executive via GETLKI) and node B prints SCSD-I-DLMDEFER. INV-6: the
+  # verdict READS A's flip + B's deferred-grant from the nodes' own logs; a
+  # fabricated wire reply or grant cannot pass. The BLKAST wire is deferred.
+  # -----------------------------------------------------------------------
+  dlm-harness-h5:
+    name: DLM Harness H5 (block-then-grant proven on the REQUESTER over the SCS wire, QEMU)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.dlm_harness == 'true' }}
+    runs-on: ubuntu-latest
+    # vms.ko + SCSD.EXE build + TWO QEMU boots, each running the join sequencer +
+    # the multi-step H5 sequence for ~90s. The inner H5_WALL_TIMEOUT (600s) is the
+    # real budget; this is the OUTER bound so a genuine hang surfaces.
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build DLM harness H5 image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu/Dockerfile.dlm-harness-h5
+          push: false
+          load: true
+          tags: ovmx-dlm-h5:latest
+          cache-from: type=gha,scope=dlm-harness-h5
+          cache-to: type=gha,mode=max,scope=dlm-harness-h5
+
+      - name: Boot TWO QEMU nodes, drive node A's block-then-grant over the SCS wire
+        run: |
+          set +e
+          # GitHub Linux runners expose /dev/kvm; pass it through so the two
+          # guests boot under KVM (much faster than TCG). Fall back cleanly if
+          # a runner lacks it -- the harness auto-detects and uses TCG.
+          KVM=""
+          [ -e /dev/kvm ] && KVM="--device /dev/kvm"
+          mkdir -p "$PWD/h5out"
+          RAW=$(docker run --rm $KVM -v "$PWD/h5out:/out" ovmx-dlm-h5:latest 2>&1)
+          RC=$?
+          set -e
+          # QEMU serial emits CRLF; strip \r so the line-anchored match holds.
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: DLM harness H5 exited nonzero"
+            exit 1
+          fi
+          if printf '%s\n' "$OUTPUT" | grep -qE '^  DLM HARNESS H5 PASSED'; then
+            echo "PASS: node A's QUEUED cross-node request GRANTED on the REQUESTER over the live SCS wire (SCSD-I-DLMH5FLIP granted_mode=EX)."
+          else
+            echo "FAIL: H5 verdict 'DLM HARNESS H5 PASSED' not found."
+            printf '%s\n' "$OUTPUT" | grep -E 'verdict inputs|A_FLIP|granted_mode|A_PEND|B_DEFER|highest join rung|VAXCLMEMBER|DLMENQ|DLMPEND|DLMDEFER|DLMH5FLIP|H5-NODE|MISS:|FAIL:' || true
+            exit 1
+          fi
+
+      - name: Upload H5 pcap + node logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dlm-harness-h5-artifacts
+          path: h5out/
           if-no-files-found: ignore
 
   # -----------------------------------------------------------------------

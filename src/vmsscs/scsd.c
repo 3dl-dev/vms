@@ -988,6 +988,16 @@ struct peer_state {
     int      dlm_grant_recv;       /* node-A: the peer's GRANT response arrived */
     uint32_t dlm_grant_status;     /* node-A: the VMS status the peer's executive returned */
     unsigned long dlm_srv_responses; /* node-B: GRANT frames we emitted back to this peer */
+    /* vms-6ca (DLM rung H5): node-A's block-then-grant-over-the-wire sequence.
+     * A holds RESONE EX (req_lkid 1), then a SECOND incompatible $ENQ (req_lkid 2)
+     * QUEUES on B; A releases #1; B WIRES the deferred GRANT and A's origin record
+     * for #2 flips NL->EX. */
+    int      dlm_h5;               /* node-A: H5 sequence armed (OVMX_DLM_H5) */
+    uint32_t dlm_master_lkid1;     /* node-A: B's master handle for our holder (#1) */
+    int      dlm_enq2_sent;        /* node-A: the second (contending) $ENQ sent */
+    int      dlm_deq1_sent;        /* node-A: the holder's $DEQ sent */
+    int      dlm_pend_seen;        /* node-A: the queued-reply for #2 landed (pending) */
+    int      dlm_flip_seen;        /* node-A: #2's origin record flipped to granted */
     /* vms-694 (§4(O.7)): OVMX's OWN model of "am I a connected VMS$VAXcluster
      * member of this peer", LATCHED the moment the VMS$VAXcluster SYSAP
      * connection (cdt_joiner, or cdt_member if it ever reaches OPEN) hits the
@@ -3608,9 +3618,23 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                                sequenced SCS traffic on a connection that
  *                                cannot exist before its circuit does.
  *     scsd_dlm_srv_msg_input()   node-B's GRANT response leg: the honest
- *                                executive status (SS$_UNSUPPORTED/SS$_NOSUCHDEV,
- *                                never a fabricated grant) sent back on the SAME
- *                                OPEN VC, same argument as the MSCP responder.
+ *                                executive status (a granted cross-node $ENQ,
+ *                                a queued-reply, or -- new in vms-6ca -- the
+ *                                DEFERRED GRANT the master WIREs off a real
+ *                                $DEQ when a queued cross-node request finally
+ *                                grants; never a fabricated grant) sent back on
+ *                                the SAME OPEN VC, same argument as the MSCP
+ *                                responder.
+ *
+ *   CHOKED, and new in vms-6ca (DLM rung H5):
+ *     scsd_dlm_client_send_op()  node-A's generic DLM client SEND: the second,
+ *                                contending $ENQ and the holder's $DEQ that drive
+ *                                the block-then-grant-over-the-wire sequence.
+ *                                MTYPE-10 SYSAP messages on the OPEN VMS$VAXcluster
+ *                                VC to the peer's OVMX$DLM server handle -- ordinary
+ *                                sequenced SCS traffic on a connection that cannot
+ *                                exist before its circuit does, exactly like
+ *                                scsd_dlm_send_enq above.
  *
  *   CHOKED, and new in vms-600:
  *     scsd_mscp_srv_xfer()       the live scs_mscp_srv_xfer_fn: the SCA
@@ -7879,6 +7903,24 @@ struct scsd_dlm_held {
     uint32_t is_local_master;
     uint32_t n_granted;
     uint32_t held_for_csid;   /* remote_holder_csid: whose CSID the grant is for */
+    uint32_t master_lkid;     /* the master's lock handle for the dispatched req
+                               * (vms-6ca, H5): sent back so the requester can name
+                               * the holder in a later $DEQ. */
+};
+
+/*
+ * Deferred-GRANT report (DLM epic vms-7fa rung H5, vms-6ca). On a cross-node
+ * $DEQ that flipped a QUEUED cross-node waiter to granted, the executive names
+ * that waiter so node B can WIRE a deferred GRANT to the requester. `flipped`
+ * is 1 iff a waiter flipped; the rest name it. A READ of the executive's genuine
+ * decision, never fabricated (INV-6).
+ */
+struct scsd_dlm_defer {
+    int      flipped;
+    uint32_t req_csid;        /* requester to notify with the deferred GRANT */
+    uint32_t master_lkid;     /* the flipped waiter's master lock handle      */
+    uint32_t req_lkid;        /* the flipped waiter's ORIGINAL requester handle */
+    uint32_t mode;            /* the mode it was granted at                    */
 };
 
 /*
@@ -7894,10 +7936,16 @@ struct scsd_dlm_held {
  * on the SAME registered fd so the caller can print the held-lock proof.
  */
 static uint32_t scsd_dlm_dispatch_to_executive(const struct scs_dlm_msg *m,
-                                               struct scsd_dlm_held *held)
+                                               struct scsd_dlm_held *held,
+                                               struct scsd_dlm_defer *defer,
+                                               uint32_t *out_origin_mode)
 {
     if (held)
         memset(held, 0, sizeof(*held));
+    if (defer)
+        memset(defer, 0, sizeof(*defer));
+    if (out_origin_mode)
+        *out_origin_mode = 0;
 #ifdef SCSD_UNIT_TEST
     /* Capture seam, parallel to send_frame_raw's: record the decoded request so
      * a test can assert node B decoded + dispatched the right fields. The real
@@ -7956,6 +8004,11 @@ static uint32_t scsd_dlm_dispatch_to_executive(const struct scs_dlm_msg *m,
         return 2680u; /* honest failure, not a grant */
     }
 
+    /* The master's lock handle for the dispatched request (vms-6ca, H5), so the
+     * requester can name the holder in a later cross-node $DEQ. */
+    if (held != NULL)
+        held->master_lkid = args.master_lkid;
+
     /* DLM rung 2 (vms-e8f1): if the master GRANTED this cross-node $ENQ, read its
      * OWN resource DB back on the SAME registered fd so the caller can prove the
      * grant is genuine -- the resource is mastered here and a lock is held FOR
@@ -7974,6 +8027,32 @@ static uint32_t scsd_dlm_dispatch_to_executive(const struct scs_dlm_msg *m,
             held->n_granted = rm.n_granted;
             held->held_for_csid = rm.remote_holder_csid;
         }
+    }
+
+    /* DLM rung H5 (vms-6ca): a cross-node $DEQ that flipped a queued waiter to
+     * granted names it in the fields a DEQ otherwise leaves 0, so the caller can
+     * WIRE the deferred GRANT to that requester. A READ of the executive's real
+     * report, never fabricated (INV-6). */
+    if (defer != NULL && args.op == VMS_DLM_OP_DEQ && args.queued == 1u) {
+        defer->flipped = 1;
+        defer->req_csid = args.blocking_csid;
+        defer->master_lkid = args.blocking_master_lkid;
+        defer->req_lkid = args.req_lkid;
+        defer->mode = args.lkmode;
+    }
+
+    /* DLM rung H5 (vms-6ca): the REQUESTER-SIDE GRANT RECEIVE completed our
+     * executive-resident ORIGIN record. Read the record BACK via GETLKI on the
+     * SAME registered fd so the caller can prove the status the master sent
+     * genuinely landed in executive state -- the NL->EX flip observed on the
+     * requester node, not a userspace flag (INV-6). */
+    if (out_origin_mode != NULL && args.op == VMS_DLM_OP_GRANT &&
+        args.status == 1u && args.req_lkid != 0) {
+        struct vms_getlki_args gl;
+        memset(&gl, 0, sizeof(gl));
+        gl.lkid = args.req_lkid;
+        if (ioctl(fd, VMS_IOCTL_GETLKI, &gl) == 0 && gl.status == 1u)
+            *out_origin_mode = gl.granted_mode;
     }
 
     close(fd);
@@ -8016,7 +8095,8 @@ static void scsd_dlm_srv_msg_input(struct scs_cdt *cdt, const void *msg,
      * present (the Docker harness -- Rule 9: Docker is not a runtime, there is
      * no /dev/vms). Either way it is HONEST -- never a fabricated grant. */
     struct scsd_dlm_held held;
-    uint32_t status = scsd_dlm_dispatch_to_executive(&v.msg, &held);
+    struct scsd_dlm_defer defer;
+    uint32_t status = scsd_dlm_dispatch_to_executive(&v.msg, &held, &defer, NULL);
     rx_dlm_dispatched++;
     log_ts(stdout);
     printf(" SCSD-I-DLMRX, cross-node %s from CSID=%u resnam='%.*s'"
@@ -8068,8 +8148,14 @@ static void scsd_dlm_srv_msg_input(struct scs_cdt *cdt, const void *msg,
     struct scs_dlm_msg g;
     memset(&g, 0, sizeof(g));
     g.op = SCS_DLM_OP_GRANT;
-    g.mode = v.msg.mode;
+    /* The granted mode the requester must record (vms-6ca, H5): a GRANT (status
+     * SS$_NORMAL) carries the granted mode; a QUEUED-reply (status
+     * VMS_DLM_STS_QUEUED == 0) carries NL so the requester's origin record stays
+     * genuinely PENDING -- never a fabricated grant (INV-6). */
+    g.mode = (status == 1u) ? v.msg.mode : (uint8_t)LCK$K_NLMODE;
     g.req_lkid = v.msg.req_lkid;
+    g.master_lkid = held.master_lkid;             /* the master's handle (H5): lets
+                                                   * the requester $DEQ the holder */
     g.status = status;                            /* the HONEST executive status */
     g.req_csid = v.msg.req_csid;
     g.master_csid = resolve_scssystemid();        /* this node mastered the request */
@@ -8091,15 +8177,132 @@ static void scsd_dlm_srv_msg_input(struct scs_cdt *cdt, const void *msg,
                             : "honest response, request not granted");
         fflush(stdout);
     }
+
+    /* THE DEFERRED GRANT (vms-6ca, DLM epic vms-7fa rung H5). If THIS $DEQ
+     * released a holder and thereby GRANTED a previously-QUEUED cross-node
+     * request, the executive named that request in `defer`. WIRE a deferred
+     * SCS_DLM_OP_GRANT (status SS$_NORMAL, the granted mode) to the requester so
+     * ITS origin record flips from pending to granted -- the block-then-grant
+     * completion, carried over the live SCS wire, driven by a real release. This
+     * is the reply the master pushes UNPROMPTED (not in answer to a message the
+     * requester just sent). INV-6: it carries a grant the executive genuinely
+     * made (`defer` is a READ of the DEQ report), never a fabricated success.
+     *
+     * H5 proves the SAME-PEER case (the released holder and the queued waiter are
+     * the same peer, so the deferred GRANT rides this peer's VC); routing a
+     * deferred grant to a DIFFERENT node by CSID is a later multi-peer rung. */
+    if (defer.flipped && defer.req_lkid != 0) {
+        struct scs_dlm_params dp;
+        memset(&dp, 0, sizeof(dp));
+        memcpy(dp.dst_mac, ps_port_addr(ps), 6);
+        memcpy(dp.src_mac, rx->our_hw_mac, 6);
+        memcpy(dp.src_logical, rx->our_src_logical, 6);
+        memcpy(dp.peer_logical, ps_sys_addr(ps), 6);
+        dp.local_conid = PS_DLM_SERVER_CONID(ps);
+        dp.remote_conid = v.local_conid;          /* the requester's DLM client handle */
+        dp.recv_ack = ps->vc.seq.recv_seq;
+        dp.send_seq = scs_seq_advance(&ps->vc.seq);
+        dp.incarnation = ps->incarnation;
+
+        struct scs_dlm_msg dg;
+        memset(&dg, 0, sizeof(dg));
+        dg.op = SCS_DLM_OP_GRANT;
+        dg.mode = (uint8_t)defer.mode;            /* the mode it was granted at (EX) */
+        dg.req_lkid = defer.req_lkid;             /* the queued request's own handle */
+        dg.master_lkid = defer.master_lkid;
+        dg.status = 1u;                           /* SS$_NORMAL -- a REAL grant     */
+        dg.req_csid = defer.req_csid;
+        dg.master_csid = resolve_scssystemid();
+        dg.namelen = v.msg.namelen;
+        memcpy(dg.resnam, v.msg.resnam, sizeof(dg.resnam));
+
+        uint8_t dframe[SCS_DLM_FRAME_LEN];
+        if (scs_dlm_build_frame(&dp, &dg, dframe) == 0 &&
+            send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
+                          "OVMX$DLM deferred GRANT (H5)", dframe,
+                          sizeof(dframe)) > 0) {
+            ps->dlm_srv_responses++;
+            log_ts(stdout);
+            printf(" SCSD-I-DLMDEFER, WIRED deferred GRANT req_lkid=0x%08X mode=%s"
+                   " to CSID=%u -- a queued cross-node request GRANTED by the real"
+                   " release (block-then-grant over SCS)\n",
+                   (unsigned)defer.req_lkid, scs_dlm_mode_name((uint8_t)defer.mode),
+                   (unsigned)defer.req_csid);
+            fflush(stdout);
+        }
+    }
 }
 
 /*
- * scsd_dlm_cli_msg_input - node-A's DLM CLIENT input routine (vms-164d rung-1b).
- * The GRANT the peer sent back in answer to our ENQ lands here (dest Con.ID =
- * our PS_DLM_CONID). Decode it and complete the pending request by recording the
- * peer's status. INV-6: we record whatever the peer's executive returned -- a
- * GRANT carrying SS$_UNSUPPORTED/SS$_NOSUCHDEV is NOT a lock grant; the LIVE
- * transport worked, the lock did not.
+ * scsd_dlm_client_send_op - node-A's generic DLM client SEND (vms-6ca, H5).
+ * Builds and sends one DLM message on our DLM client CDT toward the peer's DLM
+ * server handle (the same addressing scsd_dlm_send_enq resolves). Used for the
+ * H5 sequence's second $ENQ and the holder's $DEQ. Returns 1 on send.
+ */
+static int scsd_dlm_client_send_op(struct scsd_rx *rx, struct peer_state *ps,
+                                   uint8_t op, uint8_t mode, uint32_t req_lkid,
+                                   uint32_t master_lkid, const char *resname,
+                                   const char *label)
+{
+    if (rx == NULL || ps == NULL || ps->pb == NULL || ps->joiner_remote_conid == 0)
+        return 0;
+
+    uint32_t dlm_server = (ps->joiner_remote_conid & 0xFFFFFFF0u) |
+                          OVMX_CONID_CLS_DLMSRV;
+
+    struct scs_dlm_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, ps_port_addr(ps), 6);
+    memcpy(p.src_mac, rx->our_hw_mac, 6);
+    memcpy(p.src_logical, rx->our_src_logical, 6);
+    memcpy(p.peer_logical, ps_sys_addr(ps), 6);
+    p.local_conid = PS_DLM_CONID(ps);
+    p.remote_conid = dlm_server;
+    p.recv_ack = ps->vc.seq.recv_seq;
+    p.send_seq = scs_seq_advance(&ps->vc.seq);
+    p.incarnation = ps->incarnation;
+
+    struct scs_dlm_msg m;
+    memset(&m, 0, sizeof(m));
+    m.op = op;
+    m.mode = mode;
+    m.req_lkid = req_lkid;
+    m.master_lkid = master_lkid;
+    m.req_csid = resolve_scssystemid();
+    if (resname != NULL) {
+        size_t rl = strlen(resname);
+        if (rl > SCS_DLM_RESNAM_MAX)
+            rl = SCS_DLM_RESNAM_MAX;
+        m.namelen = (uint8_t)rl;
+        memcpy(m.resnam, resname, rl);
+    }
+
+    uint8_t frame[SCS_DLM_FRAME_LEN];
+    if (scs_dlm_build_frame(&p, &m, frame) == 0 &&
+        send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb, label, frame,
+                      sizeof(frame)) > 0)
+        return 1;
+    return 0;
+}
+
+/*
+ * scsd_dlm_cli_msg_input - node-A's DLM CLIENT input routine (vms-164d rung-1b;
+ * vms-6ca rung H5). The GRANT / queued-reply the peer sent back lands here (dest
+ * Con.ID = our PS_DLM_CONID). Decode it and complete the pending request.
+ *
+ * Rung 1b: record the status and print DLMDONE (the round-trip proof).
+ *
+ * Rung H5 (armed by OVMX_DLM_H5): drive the block-then-grant-over-the-wire
+ * sequence, keyed on the request handle (req_lkid) and the reply status the
+ * MASTER genuinely sent -- never a local decision (INV-6):
+ *   - GRANT for #1 (status SS$_NORMAL): our holder is granted; remember B's
+ *     master handle for it, then send the SECOND, incompatible $ENQ (#2).
+ *   - queued-reply for #2 (status VMS_DLM_STS_QUEUED, mode NL): dispatch it into
+ *     OUR executive (VMS_DLM_OP_GRANT receive) so #2's ORIGIN record is genuinely
+ *     PENDING, read it back (GETLKI -> NL), then $DEQ the holder (#1).
+ *   - deferred GRANT for #2 (status SS$_NORMAL, mode EX): dispatch it into our
+ *     executive; the origin record FLIPS NL->EX -- the status flip observed on
+ *     the REQUESTER node, read back (GETLKI -> EX) as the H5 proof.
  */
 static void scsd_dlm_cli_msg_input(struct scs_cdt *cdt, const void *msg,
                                    size_t msglen, void *ctx)
@@ -8121,13 +8324,84 @@ static void scsd_dlm_cli_msg_input(struct scs_cdt *cdt, const void *msg,
     log_ts(stdout);
     printf(" SCSD-I-DLMDONE, cross-node $ENQ round-trip COMPLETE: peer"
            " (master CSID=%u) answered GRANT status=0x%08X resnam='%.*s'"
-           " -- LIVE A->B->A transport proven; %s\n",
+           " req_lkid=0x%08X mode=%s -- LIVE A->B->A transport proven; %s\n",
            (unsigned)v.msg.master_csid, (unsigned)v.msg.status,
-           (int)v.msg.namelen, v.msg.resnam,
+           (int)v.msg.namelen, v.msg.resnam, (unsigned)v.msg.req_lkid,
+           scs_dlm_mode_name(v.msg.mode),
            v.msg.status == 1u
                ? "cross-node lock GRANTED by the master (SS$_NORMAL)"
                : "lock NOT granted (honest)");
     fflush(stdout);
+
+    if (!ps->dlm_h5)
+        return;   /* rung 1b only: no H5 sequence armed */
+
+    struct scsd_rx *rx = scsd_rx_current.rx;
+    if (rx == NULL || !scsd_member_initiate_enabled())
+        return;
+
+    /* GRANT for our holder (#1): remember B's master handle, then contend (#2). */
+    if (v.msg.req_lkid == 1u && v.msg.status == 1u) {
+        ps->dlm_master_lkid1 = v.msg.master_lkid;
+        if (!ps->dlm_enq2_sent) {
+            if (scsd_dlm_client_send_op(rx, ps, SCS_DLM_OP_ENQ, LCK$K_EXMODE,
+                                        2u /*req_lkid*/, 0, (const char *)v.msg.resnam,
+                                        "OVMX$DLM ENQ #2 (H5 contend)")) {
+                ps->dlm_enq2_sent = 1;
+                log_ts(stdout);
+                printf(" SCSD-I-DLMENQ2, sent SECOND cross-node $ENQ (req_lkid=2,"
+                       " EX) -- incompatible with our held #1, expect it to QUEUE"
+                       " on the master (H5)\n");
+                fflush(stdout);
+            }
+        }
+        return;
+    }
+
+    /* Replies for our contending request (#2). */
+    if (v.msg.req_lkid == 2u) {
+        /* Dispatch the reply into OUR executive so #2's origin record reflects
+         * the master's genuine status; read the record back (GETLKI). */
+        uint32_t origin_mode = 0xFFu;
+        uint32_t st = scsd_dlm_dispatch_to_executive(&v.msg, NULL, NULL,
+                                                     &origin_mode);
+
+        if (v.msg.status == 0u) {   /* VMS_DLM_STS_QUEUED: pending, not granted */
+            /* QUEUED-reply: the request is genuinely PENDING on the requester. */
+            ps->dlm_pend_seen = 1;
+            log_ts(stdout);
+            printf(" SCSD-I-DLMPEND, cross-node $ENQ #2 QUEUED on the master;"
+                   " requester origin record PENDING (recv rc=0x%08X granted_mode=%s)"
+                   " -- genuine block, read from OUR executive\n",
+                   (unsigned)st, scs_dlm_mode_name((uint8_t)origin_mode));
+            fflush(stdout);
+            /* Release the holder (#1): the real $DEQ that unblocks #2. */
+            if (!ps->dlm_deq1_sent && ps->dlm_master_lkid1 != 0) {
+                if (scsd_dlm_client_send_op(rx, ps, SCS_DLM_OP_DEQ, LCK$K_NLMODE,
+                                            0, ps->dlm_master_lkid1, (const char *)v.msg.resnam,
+                                            "OVMX$DLM DEQ #1 (H5 release holder)")) {
+                    ps->dlm_deq1_sent = 1;
+                    log_ts(stdout);
+                    printf(" SCSD-I-DLMDEQ1, released holder #1 (master_lkid=0x%08X)"
+                           " -- expect the master to GRANT #2 and WIRE the deferred"
+                           " GRANT back (H5)\n", (unsigned)ps->dlm_master_lkid1);
+                    fflush(stdout);
+                }
+            }
+        } else if (v.msg.status == 1u) {
+            /* DEFERRED GRANT: the origin record flips NL->EX -- THE H5 PROOF. */
+            ps->dlm_flip_seen = 1;
+            log_ts(stdout);
+            printf(" SCSD-I-DLMH5FLIP, requester origin FLIPPED NL->%s for #2"
+                   " (recv rc=0x%08X GETLKI granted_mode=%s) -- a QUEUED cross-node"
+                   " request, GRANTED by a real remote $DEQ, delivered over the LIVE"
+                   " SCS wire; block-then-grant proven on the REQUESTER node\n",
+                   scs_dlm_mode_name((uint8_t)origin_mode), (unsigned)st,
+                   scs_dlm_mode_name((uint8_t)origin_mode));
+            fflush(stdout);
+        }
+        return;
+    }
 }
 
 /*
@@ -8170,6 +8444,12 @@ static void scsd_dlm_send_enq(struct scsd_rx *rx, struct peer_state *ps)
     if (cli != NULL) {
         scs_cdt_set_handlers(cli, scsd_dlm_cli_msg_input, NULL, NULL, ps);
     }
+
+    /* vms-6ca (H5): arm the block-then-grant-over-the-wire sequence if requested.
+     * The cli input routine drives the rest (second $ENQ, $DEQ, deferred-grant
+     * flip) off the GRANT replies. A no-op without OVMX_DLM_H5 (rung 1b only). */
+    if (getenv("OVMX_DLM_H5") != NULL)
+        ps->dlm_h5 = 1;
 
     uint32_t dlm_server = (ps->joiner_remote_conid & 0xFFFFFFF0u) |
                           OVMX_CONID_CLS_DLMSRV;
@@ -13442,36 +13722,33 @@ int main(int argc, char **argv)
              * with SS$_NOSUCHDEV (2680). It fabricates NOTHING (INV-6): it
              * prints verbatim whatever scsd_dlm_dispatch_to_executive() got.
              *
-             * It builds a synthetic-but-well-formed DEQ request (the same shape
-             * scs_dlm_parse hands scsd_dlm_srv_msg_input on a real received
-             * frame) so the executive's VMS_IOCTL_DLM_XNODE handler is reached
-             * exactly as an inbound cross-node request would reach it -- opens no
-             * socket, needs no CAP_NET_RAW, touches no wire. The 2296-not-2680
-             * flip is the machine-checkable proof.
+             * It builds a synthetic-but-well-formed BLKAST request (the same shape
+             * scs_dlm_parse hands the input routines on a real received frame) so
+             * the executive's VMS_IOCTL_DLM_XNODE handler is reached exactly as an
+             * inbound cross-node message would reach it -- opens no socket, needs
+             * no CAP_NET_RAW, touches no wire. The 2296-not-2680 flip is the
+             * machine-checkable proof.
              *
-             * DEQ (not ENQ) on purpose: DLM rung 2 (vms-e8f1) makes a compatible
-             * cross-node ENQ GRANT (SS$_NORMAL), which would master + hold a lock
-             * as a side effect of a self-test. DEQ (cross-node release) is a
-             * LATER rung that still returns SS$_UNSUPPORTED (2296) and touches no
-             * lock state -- the ideal side-effect-free "executive reached, honest
-             * status" probe H0 needs. */
+             * BLKAST (not ENQ or DEQ) on purpose. The side-effect-free
+             * "executive reached, honest status = 2296" probe has to name an op
+             * the handler still declines with SS$_UNSUPPORTED and that touches no
+             * lock state. ENQ now GRANTS a compatible cross-node lock (rung 2,
+             * vms-e8f1) and DEQ now RELEASES/authorizes real lock state (rung 3,
+             * vms-904c: a DEQ of an unknown handle returns SS$_IVLOCKID, not
+             * SS$_UNSUPPORTED) -- both have moved off 2296. BLKAST as a RECEIVE op
+             * is the holder-side blocking-AST delivery whose WIRE is deferred
+             * (vms-6ca, rung H5): it still returns SS$_UNSUPPORTED and mutates
+             * nothing -- the ideal probe H0 needs. */
             struct scs_dlm_msg m;
             memset(&m, 0, sizeof(m));
-            m.op = SCS_DLM_OP_DEQ;
+            m.op = SCS_DLM_OP_BLKAST;
             m.mode = LCK$K_NLMODE;
             m.req_lkid = 0x00040011u;
             m.master_lkid = 0x00080002u;
             m.req_csid = 1025u;
             m.master_csid = 1026u;
-            {
-                static const char *res = "DLMXNODE1";
-                size_t rn = strlen(res);
-                if (rn > SCS_DLM_RESNAM_MAX) rn = SCS_DLM_RESNAM_MAX;
-                memcpy(m.resnam, res, rn);
-                m.namelen = (uint8_t)rn;
-            }
 
-            uint32_t status = scsd_dlm_dispatch_to_executive(&m, NULL);
+            uint32_t status = scsd_dlm_dispatch_to_executive(&m, NULL, NULL, NULL);
             printf("SCSD-I-DLMSELFTEST, executive DLM dispatch status=%u"
                    " (0x%08X)\n", (unsigned)status, (unsigned)status);
             fflush(stdout);

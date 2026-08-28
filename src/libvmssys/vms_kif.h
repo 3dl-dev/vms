@@ -308,7 +308,8 @@ uint32_t vms_kif_dlm_xnode(uint32_t op, uint32_t lkmode, uint32_t flags,
                            const char *resnam, const uint8_t *valblk,
                            uint32_t *out_master_lkid, uint32_t *out_queued,
                            uint32_t *out_blocking_csid,
-                           uint32_t *out_blocking_master_lkid);
+                           uint32_t *out_blocking_master_lkid,
+                           uint32_t *out_req_lkid, uint32_t *out_lkmode);
 
 /* ================================================================
  * Device table (executive-resident I/O database)

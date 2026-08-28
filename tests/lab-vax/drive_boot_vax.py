@@ -53,6 +53,7 @@ import os
 import sys
 import signal
 import subprocess
+import time
 import traceback
 
 import anita
@@ -1017,6 +1018,128 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
     return seen
 
 
+def do_acceptance(a, boot_deadline, single_rq0_type):
+    """rd vms-f2c (VAX half of co-release acceptance parity). Boot the SLIM
+    SINGLE disk EXACTLY as do_sysboot(single=True) does -- ONE `attach rq0'
+    (RAUSER=<MB>), VMB boots the NetBSD root off partition 'a' and the executive
+    mounts the ODS-2 SYSTEM volume off partition 'e' (DKA0: -> ra0e) -- but
+    instead of this Python driver asserting boot milestones, it BRIDGES the SIMH
+    console to a bash caller so the SAME shared DCL/SHOW acceptance battery
+    x86_64 and Alpha run (tests/qemu/lib/dcl_acceptance_battery.sh) drives the
+    login + basic-command assertions here too. ONE battery, three arches, zero
+    assertion drift.
+
+    THE BRIDGE. anita owns a pexpect child on the SIMH pty. This function:
+      1. brings the guest up to the point OVMX starts emitting on the console
+         (SIMH `>>>` VMB prompt reached, `B/R5:2 DUA0' boot command issued), the
+         emulator-specific pre-boot dialog the arch-independent battery must not
+         know about;
+      2. tees EVERY console byte from SIMH start into OVMX_ACCEPT_RAW (pexpect
+         `logfile_read`), which the caller reads as the battery's LOG; and
+      3. forwards bytes the caller writes to OVMX_ACCEPT_FIFO into the console
+         (child.send) -- the battery's `send`.
+    From step 1 on this Python side does NO expect()/assert: the bash battery
+    drives banner-assert -> operator-CR-feed to Username: -> SYSTEM/MANAGER
+    login -> the basic-command battery, all over RAW+FIFO. We just pump bytes
+    until the caller kills us (battery done) or the whole-run deadline. A RED
+    assertion is the caller's RESULT (a real VAX faithful-output gap to fix),
+    never faked green here (INV-6)."""
+    import pexpect
+
+    raw_path = env("OVMX_ACCEPT_RAW")
+    fifo_path = env("OVMX_ACCEPT_FIFO")
+    if not raw_path or not fifo_path:
+        log("ACCEPTANCE: OVMX_ACCEPT_RAW / OVMX_ACCEPT_FIFO not set -- the bash "
+            "orchestrator (test_dcl_acceptance_vax.sh) must provide both")
+        return HARNESS_ERROR
+
+    # Open the console-input FIFO's read end BEFORE booting so the caller's
+    # `exec 6>FIFO' unblocks promptly and it can start polling RAW; O_NONBLOCK so
+    # a read with no pending bytes returns EAGAIN instead of stalling the pump.
+    try:
+        fifo_fd = os.open(fifo_path, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError as e:
+        log("ACCEPTANCE: cannot open FIFO %s: %s" % (fifo_path, e))
+        return HARNESS_ERROR
+    raw_f = open(raw_path, "wb", buffering=0)
+
+    vmm_args = ["set rq0 " + single_rq0_type] if single_rq0_type else []
+    log("ACCEPTANCE: booting ONE disk on rq0 (%s) and bridging its console to "
+        "the shared DCL/SHOW battery via RAW=%s FIFO=%s (deadline %ds)"
+        % (single_rq0_type or "default", raw_path, fifo_path, boot_deadline))
+
+    a.dist.set_workdir(a.workdir)
+    a.n_cdrom = 0
+    child = a.start_simh(vmm_args)
+
+    # Tee EVERY console byte the guest emits into RAW (the battery's LOG) by
+    # writing read_nonblocking()'s own return value -- mode-agnostic: pexpect
+    # spawn yields bytes, spawnu yields str, and we normalise both to bytes so we
+    # never depend on the child's (anita-chosen) I/O mode, which is what a bare
+    # logfile_read assignment would.
+    def tee(chunk):
+        if not chunk:
+            return
+        if isinstance(chunk, str):
+            chunk = chunk.encode("latin-1", "replace")
+        raw_f.write(chunk)
+
+    deadline = time.time() + boot_deadline
+    try:
+        child.timeout = boot_deadline
+        child.expect(r">>>")
+        child.send("B/R5:2 DUA0\r")
+        # --- Pure byte bridge. No expect()/assert on this side. ---------------
+        while time.time() < deadline:
+            # Pump console output -> RAW.
+            try:
+                tee(child.read_nonblocking(size=4096, timeout=0.05))
+            except pexpect.TIMEOUT:
+                pass
+            except (pexpect.EOF, OSError):
+                log("ACCEPTANCE: SIMH child exited -- ending bridge (the caller's "
+                    "wait_for will see the guest die and stop honestly)")
+                break
+            if not child.isalive():
+                # Drain any final bytes, then stop -- the guest/SIMH is gone.
+                try:
+                    tee(child.read_nonblocking(size=4096, timeout=0))
+                except (pexpect.TIMEOUT, pexpect.EOF, OSError):
+                    pass
+                log("ACCEPTANCE: SIMH child no longer alive -- ending bridge")
+                break
+            # Forward caller keystrokes (FIFO) -> console. Send the raw bytes;
+            # pexpect's send coerces bytes or str, so this is mode-agnostic too.
+            try:
+                data = os.read(fifo_fd, 4096)
+                if data:
+                    child.send(data)
+            except BlockingIOError:
+                pass
+            except OSError:
+                pass
+        else:
+            log("ACCEPTANCE: whole-run deadline (%ds) reached -- ending bridge"
+                % boot_deadline)
+    except (pexpect.TIMEOUT, pexpect.EOF, Exception) as e:
+        log("ACCEPTANCE: bridge ended on %s: %s" % (type(e).__name__, e))
+    finally:
+        try:
+            raw_f.flush(); raw_f.close()
+        except OSError:
+            pass
+        try:
+            os.close(fifo_fd)
+        except OSError:
+            pass
+        _hard_kill(child)
+
+    # The verdict is the BATTERY's (recorded by the bash caller from RAW). This
+    # bridge only needs to have run without a harness error; a clean 0 lets the
+    # caller's PASS/FAIL be the sole gate.
+    return 0
+
+
 def main():
     version = env("NETBSD_VERSION", "10.1")
     arch = env("NETBSD_ARCH", "vax")
@@ -1067,6 +1190,14 @@ def main():
 
         if mode == "install-boot":
             return do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout)
+
+        if mode == "acceptance":
+            # rd vms-f2c: bridge the SINGLE-disk boot's console to the shared
+            # DCL/SHOW acceptance battery (the bash orchestrator
+            # test_dcl_acceptance_vax.sh drives it over RAW+FIFO). NETBSD_WORKDIR
+            # is the single disk's workdir (/cache/single-work), the same disk
+            # sysboot-single builds and boots.
+            return do_acceptance(a, boot_deadline, single_rq0_type)
 
         if mode == "assemble-single":
             # vms-7b15: the shared NetBSD disk is rq0 (its stock init gives a

@@ -524,6 +524,56 @@ run_session() {
   return "${rc}"
 }
 
+# run_acceptance_session -- like run_session, but the container ENTRYPOINT is the
+# bash orchestrator tests/lab-vax/test_dcl_acceptance_vax.sh (rd vms-f2c), which
+# drives the SHARED DCL/SHOW acceptance battery over the SIMH console bridge
+# (drive_boot_vax.py acceptance mode). It additionally mounts the repo at /src so
+# the orchestrator can single-source EXPECTED_* from src/libvms/include/
+# ovmx_identity.h and read tests/qemu/lib/dcl_acceptance_battery.sh -- the SAME
+# battery x86_64 and Alpha run. Verdict = the battery's PASS/FAIL (a RED is a real
+# VAX faithful-output gap, never weakened to pass).
+run_acceptance_session() {
+  local workdir="$1"; shift
+  local cid="ovmx-vax-accept-$$"; local rc=0
+  # The acceptance run is boot + operator-CR-feed to Username: + login + ~10
+  # commands, longer than a boot-only sysboot-single, so it gets its own outer
+  # cap kept safely ABOVE the orchestrator's inner ACCEPT_TIMEOUT (default 3000).
+  local accept_session_timeout="${ACCEPT_SESSION_TIMEOUT:-3600}"
+  set +e
+  timeout --kill-after="${TIMEOUT_GRACE}" "${accept_session_timeout}" \
+    docker run --rm --name "${cid}" --entrypoint bash \
+      -e NETBSD_VERSION="${NETBSD_VERSION}" -e "SETS=${SETS}" \
+      -e OVMX_ARTIFACTS=/artifacts -e OVMX_NETBSD_DIR=/netbsd \
+      -e NETBSD_WORKDIR="${workdir}" \
+      -e OVMX_SINGLE_RQ0_TYPE="${SINGLE_RQ0_TYPE}" \
+      "$@" \
+      -v "${CACHE_DIR}:/cache" -v "${ARTIFACTS_DIR}:/artifacts:ro" \
+      -v "${REPO}:/src:ro" \
+      -v "${REPO}/tests/netbsd:/netbsd:ro" -v "${REPO}/tests/lab-vax:/lab-vax:ro" \
+      "${LAB_IMAGE}" /lab-vax/test_dcl_acceptance_vax.sh
+  rc=$?; set -e
+  docker kill "${cid}" >/dev/null 2>&1 || true
+  return "${rc}"
+}
+
+# run_acceptance -- build the slim SINGLE disk (identical to sysboot-single) and
+# then run the SHARED DCL/SHOW acceptance battery against a real OVMX/NetBSD-vax
+# boot of it. The VAX half of co-release acceptance parity (x86_64 + Alpha + VAX
+# all boot -> login -> run the SAME battery). rd vms-f2c.
+run_acceptance() {
+  build_boot_image_set
+  master_system_volume
+  build_single_disk
+  log "======================================================================"
+  log "  VAX DCL/SHOW ACCEPTANCE: booting the slim single disk and driving the"
+  log "  SHARED battery (tests/qemu/lib/dcl_acceptance_battery.sh) over the SIMH"
+  log "  console bridge -- log in SYSTEM/MANAGER, run the commands a user types,"
+  log "  assert VMS-faithful output. A RED is a real VAX gap to fix (rd vms-f2c)."
+  log "======================================================================"
+  run_acceptance_session /cache/single-work && return 0
+  return 1
+}
+
 # 5. swap the MODULAR kernel onto the SHARED disk (shared marker).
 ensure_modular_kernel() {
   if [ -f "${KERNEL_MARKER}" ]; then
@@ -843,6 +893,18 @@ case "${MODE}" in
     run_sysboot_single && exit 0
     exit 1
     ;;
+  acceptance)
+    # rd vms-f2c (epic vms-8954): the VAX half of co-release DCL/SHOW acceptance
+    # parity. Build the slim single disk (as sysboot-single) and drive the SHARED
+    # arch-independent battery (tests/qemu/lib/dcl_acceptance_battery.sh, the SAME
+    # one x86_64 and Alpha run) over the SIMH console bridge -- boot, log in
+    # SYSTEM/MANAGER, run the basic DCL/SHOW commands a user types, assert
+    # VMS-faithful output with negative controls. A RED is a real VAX
+    # faithful-output gap to fix (each naming its bug), never a battery weakening.
+    #   tests/lab-vax/run-boot.sh acceptance
+    run_acceptance && exit 0
+    exit 1
+    ;;
   install)
     # vms-d0e5 rung G: the two-disk INSTALL proof -- boot the distribution
     # volume with a blank target attached, drive OVMX$INSTALL.COM to install
@@ -852,5 +914,5 @@ case "${MODE}" in
     run_install && exit 0
     exit 1
     ;;
-  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | sysboot-single | gate | install)" ;;
+  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | sysboot-single | acceptance | gate | install)" ;;
 esac

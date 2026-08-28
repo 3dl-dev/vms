@@ -720,7 +720,8 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
 uint32_t vms_kif_get_resmaster(const char *resnam, uint32_t *found,
                                uint32_t *local_csid, uint32_t *dir_csid,
                                uint32_t *master_csid, uint32_t *is_local_master,
-                               uint32_t *n_granted)
+                               uint32_t *n_granted,
+                               uint32_t *remote_holder_csid)
 {
     struct vms_resmaster_args args;
 
@@ -739,6 +740,7 @@ uint32_t vms_kif_get_resmaster(const char *resnam, uint32_t *found,
     if (master_csid) *master_csid = args.master_csid;
     if (is_local_master) *is_local_master = args.is_local_master;
     if (n_granted) *n_granted = args.n_granted;
+    if (remote_holder_csid) *remote_holder_csid = args.remote_holder_csid;
 
     return args.status;
 }

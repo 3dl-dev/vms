@@ -55,7 +55,8 @@ static uint32_t resmaster(int fd, const char *name,
     memset(out, 0, sizeof(*out));
     return vms_kif_get_resmaster(name, &out->found, &out->local_csid,
                                  &out->dir_csid, &out->master_csid,
-                                 &out->is_local_master, &out->n_granted);
+                                 &out->is_local_master, &out->n_granted,
+                                 &out->remote_holder_csid);
 }
 
 static uint32_t enq(int fd, const char *name, uint32_t mode, uint32_t *lkid_out)

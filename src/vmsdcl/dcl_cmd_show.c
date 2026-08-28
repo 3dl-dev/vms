@@ -3170,39 +3170,69 @@ static int cmd_show_cpu(struct dcl_command *cmd)
     format_cpu_set(online, online_max, active_str, sizeof(active_str));
     format_cpu_set(present, present_max, config_str, sizeof(config_str));
 
-    /* Header: node + honest hardware class (never a fabricated VMS model,
-     * INV-1). */
-    printf("\n%s, an OVMX %s system\n\n", node, uts.machine);
+    /*
+     * FORMAT, DCL-Dictionary-pinned (public OpenVMS DCL Dictionary, SHOW CPU
+     * -- clean-room Rule 8, public doc). The verbatim reference example is:
+     *
+     *   SOWHAT, A VAX 8800
+     *   Multiprocessing is ENABLED. Full checking synchronization image loaded.
+     *   Minimum multiprocessing revision levels: CPU = 0 uCODE = 0 UWCS = 0.
+     *
+     *   PRIMARY CPU = 01
+     *   Active CPUs:      00 01
+     *   Configured CPUs:  00 01
+     *
+     * TWO THINGS THE PRIOR OUTPUT GOT WRONG, both fixed here (vms-SHOWFID):
+     *
+     *   1. VMS prints every line at COLUMN ZERO. The prior output indented
+     *      the whole body 8 spaces -- a width VMS never uses. The indent is
+     *      removed; the survivors sit at column 0 exactly as VMS prints them.
+     *
+     *   2. The "Multiprocessing is ..." line is part of VMS's SUMMARY display,
+     *      and the DCL Dictionary states /BRIEF and /FULL each "produce
+     *      information from the summary display" -- i.e. VMS prints that line
+     *      in ALL THREE forms (the /BRIEF example above shows it). The prior
+     *      output emitted it only for the default display, so /BRIEF and
+     *      /FULL were missing it. It is now printed unconditionally.
+     *
+     * HONEST OMISSIONS (INV-6). The node header keeps OVMX's own identity
+     * ("an OVMX <machine> system") rather than a fabricated VMS model such as
+     * "A VAX 8800" (INV-1). The two summary lines OVMX cannot source -- "Full
+     * checking synchronization image loaded" (OVMX has no synchronization
+     * image) and the VAX-microcode "Minimum multiprocessing revision levels:
+     * CPU/uCODE/UWCS" -- are omitted whole rather than mislabelled. VMS's
+     * /BRIEF and /FULL also print "Current Process: <name>  PID = ..." under
+     * each CPU; OVMX has no per-CPU current-process binding to read (no VMS
+     * scheduler dispatching a named process onto a specific CPU), so that
+     * line is omitted rather than fabricated.
+     */
+    printf("\n%s, an OVMX %s system\n", node, uts.machine);
+    printf("Multiprocessing is %s.\n", n_online > 1 ? "ENABLED" : "DISABLED");
+    printf("\nPRIMARY CPU = %02d\n", primary);
 
     if (want_summary) {
-        if (n_online > 1)
-            printf("        Multiprocessing is ENABLED.\n\n");
-        else
-            printf("        Multiprocessing is DISABLED.\n\n");
-        printf("        PRIMARY CPU = %02d\n\n", primary);
-        printf("        Active CPUs:      %s\n", active_str);
-        printf("        Configured CPUs:  %s\n", config_str);
+        printf("Active CPUs:      %s\n", active_str);
+        printf("Configured CPUs:  %s\n", config_str);
     }
 
     if (want_brief || want_full) {
-        printf("        PRIMARY CPU = %02d\n", primary);
         for (int i = 0; i <= present_max; i++) {
             if (!present[i]) continue;
             printf("\n");
             if (online[i]) {
-                printf("        CPU %02d is in RUN state\n", i);
+                printf("CPU %02d is in RUN state\n", i);
                 if (want_full) {
-                    printf("          Capabilities of this CPU:\n");
+                    printf("  Capabilities of this CPU:\n");
                     if (i == primary)
-                        printf("             PRIMARY QUORUM RUN\n");
+                        printf("     PRIMARY QUORUM RUN\n");
                     else
-                        printf("             QUORUM RUN\n");
-                    printf("          Processes which can only execute on this CPU:\n");
-                    printf("             *** None ***\n");
+                        printf("     QUORUM RUN\n");
+                    printf("  Processes which can only execute on this CPU:\n");
+                    printf("     *** None ***\n");
                 }
             } else {
                 /* Present but offline: honestly not in the active set. */
-                printf("        CPU %02d is not in the active set\n", i);
+                printf("CPU %02d is not in the active set\n", i);
             }
         }
     }

@@ -62,6 +62,7 @@
 #include "starlet.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "tcg_deadline.h"
 
 #define EXIT_SKIP 77
 
@@ -153,19 +154,35 @@ static int run_dcl_creds(const char *script, char *out, size_t outsz,
     (void)write_full(in_pipe[1], script, strlen(script));
     close(in_pipe[1]);
 
+    /* Bounded drain (was an UNBOUNDED blocking read that hung forever if
+     * DCL.EXE never closed stdout). ovmx_tcg_ms scales the 30s base for a slow
+     * TCG guest; x86_64 keeps 30s (scale == 1). */
     size_t used = 0;
-    for (;;) {
-        ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
-        if (n <= 0) break;
-        used += (size_t)n;
-        if (used >= outsz - 1) break;
-    }
-    out[used] = '\0';
+    long deadline_ms = ovmx_tcg_ms(30000);
+    int dr = ovmx_tcg_drain_pipe(out_pipe[0], out, outsz, deadline_ms, pid, &used);
     close(out_pipe[0]);
 
     int st;
     while (waitpid(pid, &st, 0) < 0 && errno == EINTR)
         ;
+
+    if (dr == OVMX_TCG_DRAIN_TIMEOUT) {
+        /* INV-6 / prove-or-expose: DCL.EXE never closed stdout within the
+         * (scaled) deadline. Show the PARTIAL capture and how far DCL got,
+         * then FAIL loudly -- never mask a hang as success. A genuine
+         * executive-path deadlock on Alpha surfaces here as a partial (or
+         * empty) transcript pinpointing the wedge; a merely TCG-slow DCL
+         * clears the bar once OVMX_TEST_DEADLINE_SCALE is large enough and
+         * returns EOF instead. The child was SIGKILLed by the drain. */
+        printf("  ---- SETPRV_DCL partial DCL.EXE output (%zu bytes) ----\n%s\n"
+               "  ---- end partial ----\n", used, out);
+        printf("SETPRV_DCL: DCL.EXE did NOT complete "
+               "'SET PROCESS/PRIVILEGES=ALL;SHOW;LOGOUT' within %ldms "
+               "(scale=%ld) -- partial output above; child SIGKILLed\n",
+               deadline_ms, ovmx_tcg_scale());
+        fflush(stdout);
+        return -1;
+    }
     return 0;
 }
 

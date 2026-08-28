@@ -86,6 +86,7 @@
 #include "descrip.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "tcg_deadline.h"
 
 #define EXIT_SKIP 77
 
@@ -517,7 +518,7 @@ int main(void)
 
     struct vms_procinfo hinfo;
     memset(&hinfo, 0, sizeof(hinfo));
-    int found = wait_for_named_row((uint32_t)holder_pid, &hinfo, 15000) == 0;
+    int found = wait_for_named_row((uint32_t)holder_pid, &hinfo, (int)ovmx_tcg_ms(15000)) == 0;
 
     /* ---------------------------------------------------------------
      * P1-P2. THE EXECUTIVE'S OWN ROW, read by THIS process (a third
@@ -612,7 +613,7 @@ int main(void)
     if (holder2_pid > 0) {
         struct vms_procinfo hinfo2;
         memset(&hinfo2, 0, sizeof(hinfo2));
-        int found2 = wait_for_named_row((uint32_t)holder2_pid, &hinfo2, 15000) == 0;
+        int found2 = wait_for_named_row((uint32_t)holder2_pid, &hinfo2, (int)ovmx_tcg_ms(15000)) == 0;
         /* negctl-knockon: bind-client-no-register */
         CHECK(found2,
               "the executive's process table row for the second holder became named");

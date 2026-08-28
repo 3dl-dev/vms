@@ -81,6 +81,7 @@
 #include "descrip.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "tcg_deadline.h"
 
 #define EXIT_SKIP 77
 
@@ -487,7 +488,10 @@ int main(void)
      * transcript's "number of processes = 2" proves it does register. */
     uint32_t rst = vms_kif_getjpi_prcnam(ROOT_NAME, &root_info);
     uint32_t sst = 0;
-    for (int i = 0; i < 3000; i++) {   /* up to ~30s */
+    /* Base ~30s (3000 * 10ms); ovmx_tcg_ms scales the bound for a slow TCG
+     * guest (x86_64 keeps 3000 iters, scale == 1). */
+    long spawn_iters = ovmx_tcg_ms(3000);
+    for (long i = 0; i < spawn_iters; i++) {   /* up to ~30s * scale */
         sst = vms_kif_getjpi_prcnam(SUB_NAME, &sub_info);
         if (sst & 1) break;
         struct timespec ts = { 0, 10 * 1000 * 1000 };  /* 10ms */

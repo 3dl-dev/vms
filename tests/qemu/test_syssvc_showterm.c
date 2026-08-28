@@ -75,6 +75,7 @@
 
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "tcg_deadline.h"
 
 #define EXIT_SKIP 77
 
@@ -210,7 +211,8 @@ static int run_dcl(const char *cmdline, int bind, char *out, size_t outsz)
         return -1;
     }
 
-    for (int waited = 0; waited < DCL_TIMEOUT_MS; waited += 20) {
+    long dcl_deadline_ms = ovmx_tcg_ms(DCL_TIMEOUT_MS);
+    for (long waited = 0; waited < dcl_deadline_ms; waited += 20) {
         pid_t r = waitpid(pid, &wstatus, WNOHANG);
         if (r == pid)
             goto reaped;

@@ -62,6 +62,7 @@
 
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "tcg_deadline.h"
 
 #define EXIT_SKIP 77
 
@@ -159,7 +160,8 @@ static int run_dcl_streams(const char *cmdline, char *out, size_t outsz,
 
     /* Bounded wait: poll waitpid rather than blocking forever, so a hung
      * DCL becomes a named FAIL instead of killing the whole VM run. */
-    for (int waited = 0; waited < DCL_TIMEOUT_MS; waited += 20) {
+    long dcl_deadline_ms = ovmx_tcg_ms(DCL_TIMEOUT_MS);
+    for (long waited = 0; waited < dcl_deadline_ms; waited += 20) {
         pid_t r = waitpid(pid, &wstatus, WNOHANG);
         if (r == pid)
             goto reaped;
@@ -372,7 +374,7 @@ int main(void)
     {
         struct pollfd pfd = { .fd = pipefd[0], .events = POLLIN };
         char verdict = '?';
-        int pr = poll(&pfd, 1, DCL_TIMEOUT_MS);
+        int pr = poll(&pfd, 1, (int)ovmx_tcg_ms(DCL_TIMEOUT_MS));
 
         /* negctl-knockon: bind-client-no-register */
         if (pr > 0 && read(pipefd[0], &verdict, 1) == 1)

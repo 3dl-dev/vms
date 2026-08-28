@@ -32,6 +32,7 @@
 #include <limits.h>
 
 #include "sysgen_params.h"
+#include "ovmx_identity.h"   /* ovmx_node_name() -- the real local node name */
 
 /* ------------------------------------------------------------------ */
 /*  Paths                                                              */
@@ -55,6 +56,25 @@ static int prefix_match(const char *str, const char *pfx)
         pfx++;
     }
     return 1;
+}
+
+/* Case-insensitive substring search — returns pointer into hay, or NULL */
+static const char *stristr_ci(const char *hay, const char *needle)
+{
+    if (!*needle)
+        return hay;
+    for (; *hay; hay++) {
+        const char *h = hay;
+        const char *n = needle;
+        while (*h && *n &&
+               toupper((unsigned char)*h) == toupper((unsigned char)*n)) {
+            h++;
+            n++;
+        }
+        if (!*n)
+            return hay;
+    }
+    return NULL;
 }
 
 /* Skip leading whitespace */
@@ -87,12 +107,104 @@ static void vms_timestamp(char *buf, size_t len)
 }
 
 /* ------------------------------------------------------------------ */
-/*  SET ENVIRONMENT                                                    */
+/*  SET ENVIRONMENT / DO environment state (vms-495)                    */
+/* ------------------------------------------------------------------ */
+/*
+ * SYSMAN begins in a LOCAL environment on the node it runs on -- the genuine
+ * OpenVMS default (VSI OpenVMS System Management Utilities Reference Manual,
+ * SET ENVIRONMENT). A LOCAL environment executes DO commands on this node,
+ * which is exactly what OVMX can honestly do.
+ *
+ * A remote (SET ENVIRONMENT/NODE=<other>) or /CLUSTER environment requires
+ * SYSMAN to connect to the SMISERVER process on each target node and ship the
+ * command there. OVMX has NO SMISERVER and NO cluster command transport (that
+ * is a separately-tracked rung, not built here). So a remote request cannot be
+ * honestly serviced: SET ENVIRONMENT fails honest, AND the requested-but-
+ * unserviceable target is recorded so a subsequent DO also fails honest rather
+ * than silently forking a LOCAL DCL and mislabelling its output as the remote
+ * node's. INV-6: never fake per-node/cluster success.
+ */
+enum sysman_env { SYSMAN_ENV_LOCAL, SYSMAN_ENV_REMOTE_UNAVAIL };
+static enum sysman_env env_state = SYSMAN_ENV_LOCAL;
+static char env_target[256] = "";   /* remote target text, for the DO error */
+
+/* ------------------------------------------------------------------ */
+/*  SET ENVIRONMENT [/NODE=name | /CLUSTER]                             */
 /* ------------------------------------------------------------------ */
 static void cmd_set_environment(const char *rest)
 {
-    (void)rest;
-    printf("Environment set to local node OVMX\n");
+    /* rest begins with the ENVIRONMENT/ENV keyword itself; skip past it. */
+    const char *p = rest;
+    while (*p && !isspace((unsigned char)*p) && *p != '/')
+        p++;
+    const char *args = skip_ws(p);
+
+    const char *cluster = stristr_ci(args, "/CLUSTER");
+    const char *nodeq   = stristr_ci(args, "/NODE");
+
+    char local[OVMX_IDENTITY_MAXLEN];
+    ovmx_node_name(local, sizeof(local));
+
+    /* No qualifier (or an explicit local node) -> LOCAL environment. This is
+     * genuine, fully-serviceable VMS behavior. */
+    if (!cluster && !nodeq) {
+        env_state = SYSMAN_ENV_LOCAL;
+        env_target[0] = '\0';
+        printf("%%SYSMAN-I-ENV, environment established on local node %s\n",
+               local);
+        return;
+    }
+
+    if (cluster) {
+        env_state = SYSMAN_ENV_REMOTE_UNAVAIL;
+        strncpy(env_target, "cluster", sizeof(env_target) - 1);
+        env_target[sizeof(env_target) - 1] = '\0';
+        /* Honest failure -- OVMX has no cluster command transport. Not a
+         * VMS-authentic message text (no oracle pin for the exact code); the
+         * message states the real reason plainly rather than fake success. */
+        printf("%%SYSMAN-E-NOSMISERVER, cannot establish cluster environment: "
+               "OVMX has no SMISERVER / cluster command transport\n");
+        return;
+    }
+
+    /* /NODE=value : extract the value after '='. */
+    const char *eq = strchr(nodeq, '=');
+    char value[256] = "";
+    if (eq) {
+        const char *v = skip_ws(eq + 1);
+        int vi = 0;
+        while (*v && !isspace((unsigned char)*v) && *v != '/'
+               && vi < (int)sizeof(value) - 1)
+            value[vi++] = *v++;
+        value[vi] = '\0';
+    }
+
+    if (value[0] == '\0') {
+        printf("%%SYSMAN-E-SYNTAX, SET ENVIRONMENT/NODE requires a node name\n");
+        return;
+    }
+
+    /* A parenthesised or comma list is by definition multi-node (remote); a
+     * single name is remote unless it is THIS node. */
+    int remote;
+    if (strchr(value, '(') || strchr(value, ','))
+        remote = 1;
+    else
+        remote = (strcasecmp(value, local) != 0);
+
+    if (!remote) {
+        env_state = SYSMAN_ENV_LOCAL;
+        env_target[0] = '\0';
+        printf("%%SYSMAN-I-ENV, environment established on local node %s\n",
+               local);
+        return;
+    }
+
+    env_state = SYSMAN_ENV_REMOTE_UNAVAIL;
+    strncpy(env_target, value, sizeof(env_target) - 1);
+    env_target[sizeof(env_target) - 1] = '\0';
+    printf("%%SYSMAN-E-NOSMISERVER, cannot establish environment on node %s: "
+           "OVMX has no SMISERVER / cluster command transport\n", value);
 }
 
 /* ------------------------------------------------------------------ */
@@ -685,7 +797,22 @@ static void cmd_do(const char *rest)
         return;
     }
 
-    printf("%%SYSMAN-I-OUTPUT, command execution on node OVMX\n");
+    /* INV-6: OVMX can only execute DO in a LOCAL environment. A remote /
+     * cluster environment has no command transport, so fail honest rather than
+     * forking a LOCAL DCL and mislabelling its output as a remote node's. */
+    if (env_state != SYSMAN_ENV_LOCAL) {
+        printf("%%SYSMAN-E-NOSMISERVER, cannot execute command on environment "
+               "\"%s\": OVMX has no SMISERVER / cluster command transport\n",
+               env_target[0] ? env_target : "remote");
+        return;
+    }
+
+    /* LOCAL environment: report the real local node name, not a hardcoded
+     * "OVMX" pretense of cluster reach. */
+    char node[OVMX_IDENTITY_MAXLEN];
+    ovmx_node_name(node, sizeof(node));
+
+    printf("%%SYSMAN-I-OUTPUT, command execution on node %s\n", node);
 
     /* Find DCL.EXE */
     char dcl_path[PATH_MAX];
@@ -715,7 +842,7 @@ static void cmd_do(const char *rest)
         return;
     }
 
-    printf("%%SYSMAN-I-DONEALL, command execution completed\n");
+    printf("%%SYSMAN-I-DONEALL, command execution complete on node %s\n", node);
 }
 
 /* ------------------------------------------------------------------ */

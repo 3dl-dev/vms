@@ -39,12 +39,14 @@
  * ovmx_socket() fails with errno=ENODEV -- it NEVER falls back to a raw Linux
  * socket() that would connect while sharing nothing with the executive.
  *
- * SCOPE (this increment). CLIENT path over loopback / a localhost peer, IPv4:
- * ovmx_socket/ovmx_connect/ovmx_send/ovmx_recv/ovmx_shutdown/ovmx_socket_close +
- * numeric-IPv4 resolution. The SERVER path (bind/listen/accept) needs the BGn:
- * server path (vms-698) and returns ENOSYS honestly until then. DNS is a later
- * phase. A POLLABLE-fd form (for OpenSSH's poll()/select() multiplexing) is the
- * NEXT increment -- an async $QIO + AST veneer poll, or a fixed fd bridge.
+ * SCOPE. CLIENT path (ovmx_socket/connect/send/recv/shutdown/socket_close,
+ * numeric-IPv4) AND SERVER path (ovmx_bind/listen/accept over the BGn: server
+ * path, vms-698/#810). accept mints a new veneer handle for the connection, so a
+ * --wrap-linked server accepts inbound the same way the client connects out. The
+ * POLLABLE-fd form for OpenSSH's poll()/select() multiplexing landed too
+ * (ovmx_pollfd -> VMS_IOCTL_BG_POLLFD, readiness-only). DNS is a later phase.
+ * (There is NO "fixed fd bridge": a socketpair/pump would be a fabricated fd, the
+ * exact veneer excised in vms-9ac -- data moves only through $QIO on the handle.)
  *
  * HANDLES, NOT libc fds. ovmx_socket() returns an OVMX socket HANDLE (>= 0, but
  * offset by OVMX_BGSOCK_BASE so it never collides with a real fd number). It is

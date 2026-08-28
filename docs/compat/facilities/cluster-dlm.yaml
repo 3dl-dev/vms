@@ -6,11 +6,15 @@ vms_ref: "OpenVMS Cluster Systems manual; $ENQ/$DEQ/$GETLKI system services"
 scope_1_0: in
 plan_ref: vms-694
 summary: >
-  Cross-node lock forwarding and resource remastering are absent, and that
+  Cross-node lock GRANTING and resource remastering are absent, and that
   absence is authentic: a non-local directory or master honestly fails with
-  SS$_UNSUPPORTED rather than fabricating a grant. See kernel-executive.yaml
-  for the single-node lock manager this builds on.
-last_reviewed: 2026-08-13
+  SS$_UNSUPPORTED rather than fabricating a grant. Rung 1 (vms-94c) builds the
+  DLM message TRANSPORT under this: a DLM SYSAP SCS connection and the
+  ENQ/GRANT/DEQ/BLKAST message class, so a request genuinely travels node->node
+  over SCS and dispatches to the (still-SS$_UNSUPPORTED) cross-node handler.
+  Rungs 2+ make that handler grant. See kernel-executive.yaml for the
+  single-node lock manager this builds on.
+last_reviewed: 2026-08-28
 items:
   - id: cluster-dlm$cross-node-lock
     kind: feature
@@ -18,4 +22,43 @@ items:
     authenticity: real
     vms: "Lock request forwarding / resource remastering to a non-local master node"
     evidence: src/kernel-core/vms_lock.c
-    notes: "vms_lock.c:318-390 returns SS$_UNSUPPORTED for a non-local directory or master; membership hard-stubbed to 1 node. Single-node DLM only — no fake grants, so the gap is authentic (real), not a facade."
+    notes: "vms_lock.c dlm_resolve_master() returns SS$_UNSUPPORTED for a non-local directory or master, and the cross-node RECEIVE handler (vms_lock_dlm_xnode_dispatch) returns SS$_UNSUPPORTED too — rung 1 delivers a decoded request TO it but does not grant. Single-node DLM only — no fake grants, so the gap is authentic (real), not a facade."
+  - id: cluster-dlm$scs-transport
+    kind: feature
+    status: partial
+    authenticity: real
+    vms: "DLM SYSAP SCS connection + lock-request message class (ENQ/GRANT/DEQ/BLKAST) between cluster nodes"
+    evidence: src/vmsscs/scs_dlm.c
+    notes: >
+      vms-94c rung 1. A DLM message rides as a p.4-13 SCS application message
+      (MTYPE 10) with its body at SCA content offset 58 (the scs_mscp.c
+      nesting). The message TRANSPORT is real; the message HANDLER does not yet
+      grant (rung 2).
+    wire_format:
+      provenance: >
+        TWO provenance classes, kept distinct (Rule 8). (A) SEMANTIC field
+        VALUES are authentic OpenVMS $LCKDEF from src/libvms/include/lckdef.h,
+        oracle-pinned by LIBRARIAN + MACRO-32 on the OpenVMS VAX V7.3 oracle:
+        lock grant modes LCK$K_NLMODE..LCK$K_EXMODE (0..5), $ENQ flags LCK$M_*,
+        and the 16-byte value block (LCK$C_VALBLK_LEN). The public $ENQ/$DEQ
+        interface (System Services Reference; Programming Concepts, Lock
+        Management) and the directory/master resolution ALGORITHM (VSI OpenVMS
+        Cluster Systems manual; IDSM lock-management chapter, documented 3-case
+        directory lookup) define what a request carries and how it routes.
+        (B) The BYTE LAYOUT below is a LABELLED OVMX DESIGN CHOICE — VSI/HPE do
+        NOT publish the lock manager's SCS message byte layout and Rule 8 forbids
+        disassembly. As with docs/design-link-native-toolchain.md, OVMX defines
+        its own self-describing layout, uses it OVMX<->OVMX, and will replace it
+        with the authentic layout once a real VAX DLM capture is obtained on the
+        reference lab (the field SET is stable; only the offsets change). NOT
+        VMS-authentic; never described as such.
+      transport: "Ethernet(14) + NISCA seq-msg header [0:42] + SCS envelope [42:58] (MTYPE 10, Con.ID pair) + DLM body [58:138]. Header+envelope byte-identical to every SYSAP application message."
+      opcodes: "OVMX-derived: ENQ=1, GRANT=2, DEQ=3, BLKAST=4."
+      body_layout: >
+        OVMX-derived, little-endian, body-relative offsets (body base = SCA
+        content 58): [0]u8 op; [1]u8 mode (LCK$K_); [2:4]u16 flags (LCK$M_);
+        [4:8]u32 requester lock handle; [8:12]u32 master lock handle;
+        [12:16]u32 VMS status; [16:20]u32 requester CSID; [20:24]u32 master CSID;
+        [24]u8 namelen(0..31); [25]u8 parent-present; [26:28]u16 reserved;
+        [28:32]u32 parent lock handle; [32:48] 16-byte value block;
+        [48:80] 32-byte resource name. Body length 80; SCA content length 138.

@@ -40,12 +40,15 @@ This test:
       src/vmsscs/scs_dir.c, src/vmsscs/include/scs_dir.h or
       docs/cluster-protocol-spec.md.
 
-  (3) REQUIRES THE FOLLOW-UP BUG TO BE ON THE RECORD. Resolving the decode
-      does NOT fix src/vmsscs/scsd.c's server-first MSCP accept path, which
-      still emits and consumes these bytes believing they mean ACCEPT/CONFIRM
-      -- i.e. still calls a genuine REJECT_REQ/REJECT_RSP exchange a bound
-      connection. Fixing that is out of scope for vms-754 (a wire-behaviour
-      change needs its own item), but scs_dir.c must say so, not go silent.
+  (3) REQUIRES THE FOLLOW-UP FIX TO BE ON THE RECORD, AND STRUCTURALLY PROVEN.
+      Resolving the decode (vms-754) did NOT by itself fix scsd.c's server-first
+      MSCP accept path, which emitted and consumed these bytes believing they
+      meant ACCEPT/CONFIRM. vms-257 fixed the wire behaviour in two halves: the
+      CONSUME half (FORM B receive path no longer binds on a peer's op-4) and
+      the BUILD half (the server-first accept path now emits the genuine op-2
+      ACCEPT_REQ via scs_dir_build_mscp_response, never op-4). This gate keeps
+      the history on the record AND checks the fix structurally, so the build
+      half can never quietly regress to emitting op-4 as an "accept".
 
 AND SINCE vms-371, IT READS THE WIRE WHEN THE WIRE IS HERE (see
 tests/vmsscs/scs_wire.py): on a host with the lab captures this gate calls
@@ -267,8 +270,8 @@ check(re.search(r"REJECT_REQ", dir_c) is not None,
       "scs_dir.c no longer states that op 4/5 are actually REJECT_REQ/REJECT_RSP")
 
 # ===========================================================================
-# 4. THE CONSUME-SIDE BUG IS FIXED (vms-257) AND ITS HISTORY STAYS ON RECORD;
-#    THE BUILD-SIDE HALF STAYS ON RECORD AS STILL OPEN (out of scope here).
+# 4. BOTH THE CONSUME-SIDE AND BUILD-SIDE BUGS ARE FIXED (vms-257) AND THEIR
+#    HISTORY STAYS ON RECORD; THE BUILD-SIDE FIX IS CHECKED STRUCTURALLY.
 # ===========================================================================
 # A generic "vms-abd|follow-?up|separate item|out of scope" OR-search is
 # vacuously satisfiable: scsd.c already carries THREE unrelated matches
@@ -298,19 +301,37 @@ for label, path, txt in (("scs_dir.c", DIR_C, dir_c), ("scsd.c", SCSD_C, scsd_c)
           f"accept path's REJECT_REQ/REJECT_RSP-as-ACCEPT/CONFIRM misreading "
           f"was deleted, not just reworded")
 
-# vms-257 fixed the CONSUME half (scsd.c's receive-path interpretation of a
-# peer's answer to OUR outbound MSCP$DISK connect); the BUILD half (scsd.c
-# emitting op-4 as its own server-side "accept" of a member's inbound
-# connect, scs_dir_build_mscp_accept) is a SEPARATE, still-open item -- do
-# not let this gate quietly start treating the build half as fixed too.
+# vms-257 fixed BOTH halves: the CONSUME half (scsd.c's receive-path
+# interpretation of a peer's answer to OUR outbound MSCP$DISK connect) AND the
+# BUILD half (scsd.c's server-first server-side accept of a member's inbound
+# connect). The BUILD-half fix is checked STRUCTURALLY below, not by prose
+# alone, so it can never quietly regress to emitting op-4 as an "accept".
 check("vms-257" in scsd_c,
       "scsd.c's FORM B comment no longer cites vms-257 -- the fix record was "
       "deleted, not just reworded")
 check(flatten("scsd.c's server-first") in flatten(dir_c) and
       re.search(r"BUILDS[^.]*ACCEPT|BUILDS[^.]*BINDS", dir_c),
-      "scs_dir.c no longer discloses that the BUILD half (scs_dir_build_mscp_"
-      "accept, OVMX's own op-4 server-side emission) is still unfixed and "
-      "out of scope for vms-257")
+      "scs_dir.c no longer carries the historical record of the BUILD half "
+      "(scs_dir_build_mscp_accept, OVMX's former op-4 server-side emission) -- "
+      "the vms-754/vms-257 history was deleted, not just reworded")
+# THE BUILD-HALF FIX, checked structurally: scsd.c's server-first accept path
+# must call scs_dir_build_mscp_response (the op-2 ACCEPT_REQ builder), and that
+# builder must lay down MTYPE 2 (SCS_DIR_MSGTYPE_ACCEPT_REQ), not op-4.
+check("scs_dir_build_mscp_response" in scsd_c,
+      "scsd.c's server-first MSCP accept path no longer calls "
+      "scs_dir_build_mscp_response -- the vms-257 build-half fix (emit op-2 "
+      "ACCEPT_REQ, not op-4 REJECT_REQ) has regressed")
+_resp = re.search(
+    r"int\s+scs_dir_build_mscp_response\s*\([^)]*\)\s*\{.*?return\s+0;",
+    dir_c, re.S)
+check(_resp is not None,
+      "could not locate scs_dir_build_mscp_response's body in scs_dir.c")
+if _resp is not None:
+    check("SCS_DIR_MSGTYPE_ACCEPT_REQ" in _resp.group(0) and
+          "SCS_DIR_OP_ACCEPT" not in _resp.group(0),
+          "scs_dir_build_mscp_response no longer builds MTYPE 2 "
+          "(SCS_DIR_MSGTYPE_ACCEPT_REQ) -- OVMX's server accept is not a "
+          "genuine ACCEPT_REQ")
 
 # The actual fix, checked structurally rather than by prose alone: within the
 # FORM B receive-path branch (dop == SCS_DIR_OP_ACCEPT, i.e. a real peer's

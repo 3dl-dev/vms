@@ -1005,6 +1005,12 @@ uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid);
  * hand-set structure.
  */
 long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
+/* vms-94c (DLM epic vms-7fa rung 1): the cross-node DLM RECEIVE handler and its
+ * ioctl wrapper. Rung 1 delivers a decoded remote DLM request TO the handler,
+ * which returns SS$_UNSUPPORTED (no fabricated cross-node grant, INV-6). */
+uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
+                                     struct vms_dlm_xnode_args *req);
+long vms_ioctl_dlm_xnode(struct vms_proc *proc, unsigned long arg);
 
 /*
  * This node's cluster system ID (CSID) for the DLM (vms-ci.5 DB).
@@ -1193,6 +1199,13 @@ long vms_ioctl_bg_listen(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_accept(struct vms_proc *proc, unsigned long arg);
 /* Give back every BG channel (and its host socket) a dying process holds. */
 void vms_bg_release_all(struct vms_proc *proc);
+/*
+ * Copy PARENT's open BGn: channels into a just-registering CHILD PCB (executive
+ * fork/exec inheritance, vms-3bf) -- the fd-inheritance analogue: same channel
+ * NUMBERs, the one host socket SHARED by reference. Caller holds
+ * vms_proc_hash_lock (keeps parent alive); child is not yet published.
+ */
+void vms_bg_inherit(struct vms_proc *child, struct vms_proc *parent);
 
 /* Subsystem init/cleanup */
 int vms_lock_init(void);

@@ -62,6 +62,16 @@ extern int __real_ppoll(struct pollfd *fds, nfds_t nfds,
                         const struct timespec *tmo, const sigset_t *mask);
 extern int __real_socket(int domain, int type, int protocol);
 extern int __real_connect(int fd, const struct sockaddr *addr, socklen_t alen);
+#ifdef OVMX_WRAP_SERVER
+/* Server-path __real_* — only referenced when the sshd (server) build wraps
+ * bind/listen/accept/accept4. The client (ssh) link does NOT pass --wrap for
+ * these, so the linker would leave __real_bind &c. undefined; gate them (and
+ * their __wrap_* below) on OVMX_WRAP_SERVER, which the 3c sshd build defines. */
+extern int __real_bind(int fd, const struct sockaddr *addr, socklen_t alen);
+extern int __real_listen(int fd, int backlog);
+extern int __real_accept(int fd, struct sockaddr *addr, socklen_t *alen);
+extern int __real_accept4(int fd, struct sockaddr *addr, socklen_t *alen, int flags);
+#endif /* OVMX_WRAP_SERVER */
 
 static int is_veneer(int fd)
 {
@@ -90,6 +100,51 @@ int __wrap_connect(int fd, const struct sockaddr *addr, socklen_t alen)
         return ovmx_connect(fd, addr, alen);
     return __real_connect(fd, addr, alen);
 }
+
+#ifdef OVMX_WRAP_SERVER
+/* vms-0cd (server path): wrap bind/listen/accept so UNMODIFIED OpenSSH sshd's
+ * listener rides BGn: -- the inbound analogue of the client's socket/connect.
+ * accept mints a NEW veneer handle for the connection (ovmx_accept, vms-698), so
+ * the accepted connection is $QIO-backed like any other veneer socket; there is
+ * NO real fd and NO socketpair (the fabrication excised in vms-9ac stays gone).
+ * Gated on OVMX_WRAP_SERVER: the client (ssh) link does not --wrap these, so
+ * compiling them there would leave __real_bind &c. undefined. The 3c sshd build
+ * defines OVMX_WRAP_SERVER and passes the matching --wrap=bind/listen/accept. */
+int __wrap_bind(int fd, const struct sockaddr *addr, socklen_t alen)
+{
+    if (is_veneer(fd))
+        return ovmx_bind(fd, addr, alen);
+    return __real_bind(fd, addr, alen);
+}
+
+int __wrap_listen(int fd, int backlog)
+{
+    if (is_veneer(fd))
+        return ovmx_listen(fd, backlog);
+    return __real_listen(fd, backlog);
+}
+
+int __wrap_accept(int fd, struct sockaddr *addr, socklen_t *alen)
+{
+    if (is_veneer(fd))
+        return ovmx_accept(fd, addr, alen);
+    return __real_accept(fd, addr, alen);
+}
+
+/* accept4() -- OpenSSH uses it (SOCK_CLOEXEC/NONBLOCK). The veneer handle carries
+ * no O_CLOEXEC/NONBLOCK real-fd flags; O_NONBLOCK is tracked via ovmx_fcntl, and
+ * CLOEXEC is moot (a handle is not a kernel fd), so the flags are dropped. */
+int __wrap_accept4(int fd, struct sockaddr *addr, socklen_t *alen, int flags)
+{
+    if (is_veneer(fd)) {
+        int h = ovmx_accept(fd, addr, alen);
+        if (h >= 0 && (flags & O_NONBLOCK))
+            (void)ovmx_fcntl(h, F_SETFL, O_NONBLOCK);
+        return h;
+    }
+    return __real_accept4(fd, addr, alen, flags);
+}
+#endif /* OVMX_WRAP_SERVER */
 
 ssize_t __wrap_read(int fd, void *buf, size_t n)
 {

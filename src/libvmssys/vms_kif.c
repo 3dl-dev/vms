@@ -743,6 +743,41 @@ uint32_t vms_kif_get_resmaster(const char *resnam, uint32_t *found,
     return args.status;
 }
 
+/*
+ * vms_kif_dlm_xnode - dispatch a decoded cross-node DLM request to the kernel
+ * lock manager's cross-node handler (vms-94c, DLM epic vms-7fa rung 1). Issues
+ * VMS_IOCTL_DLM_XNODE, which reaches vms_lock_dlm_xnode_dispatch(): rung 1 the
+ * message arrives DECODED and the handler returns SS$_UNSUPPORTED (no fabricated
+ * cross-node grant, INV-6). `op` is a VMS_DLM_OP_* value. Returns the executive
+ * status; on a failed ioctl the honest translated status, never a fake grant.
+ */
+uint32_t vms_kif_dlm_xnode(uint32_t op, uint32_t lkmode, uint32_t flags,
+                           uint32_t req_lkid, uint32_t master_lkid,
+                           uint32_t req_csid, uint32_t master_csid,
+                           const char *resnam, const uint8_t *valblk)
+{
+    struct vms_dlm_xnode_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.op = op;
+    args.lkmode = lkmode;
+    args.flags = flags;
+    args.req_lkid = req_lkid;
+    args.master_lkid = master_lkid;
+    args.req_csid = req_csid;
+    args.master_csid = master_csid;
+    if (resnam) {
+        vms_strncpy(args.resnam, resnam, sizeof(args.resnam) - 1);
+        args.resnam[sizeof(args.resnam) - 1] = '\0';
+    }
+    if (valblk)
+        vms_memcpy(args.valblk, valblk, sizeof(args.valblk));
+
+    KIF_CALL(VMS_IOCTL_DLM_XNODE, &args);
+
+    return args.status;
+}
+
 /* ================================================================
  * Device table (executive-resident I/O database)
  *

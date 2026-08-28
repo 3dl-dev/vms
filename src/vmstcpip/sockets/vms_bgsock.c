@@ -64,21 +64,59 @@ struct bg_sock {
 static struct bg_sock g_socks[BG_SOCK_MAX];
 static pthread_mutex_t g_socks_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static int idx_of(int s)
+/* SELF-DESCRIBING HANDLE (vms-0cd): the OVMX socket handle is
+ * OVMX_BGSOCK_BASE + exec_chan, so the executive channel derives from the handle
+ * ALONE (chan_of), needing no g_socks lookup. This is the userspace half of #815's
+ * channel-by-number fork/exec inheritance: an exec'd child (OpenSSH sshd-session)
+ * that INHERITS the accepted-connection handle number can drive it immediately,
+ * even though its g_socks table is fresh after execve. g_socks is now just a
+ * per-handle STATE cache (connected/nonblock/pollfd), keyed by exec_chan and
+ * LAZILY re-adopted for a handle first seen post-exec.
+ *
+ * COLLISION INVARIANTS (both directions):
+ *  - vs real libc fds: is_veneer(fd) := fd >= OVMX_BGSOCK_BASE (0x40000000), which
+ *    is far above any real fd; exec_chan is bounded below so BASE+exec_chan can
+ *    never wrap past a positive int nor descend into the real-fd range.
+ *  - vs other live veneer sockets: the executive assigns each BG channel a UNIQUE
+ *    exec_chan (++proc->next_chan; an accept mints a fresh distinct channel), so
+ *    two live handles never collide. */
+#define OVMX_BGSOCK_MAXCHAN 0x0FFFFFFFu   /* BASE+this stays a positive int well above any fd */
+
+static uint32_t chan_of(int s)             /* the exec_chan a handle encodes */
 {
-    int i = s - OVMX_BGSOCK_BASE;
-    return (i >= 0 && i < BG_SOCK_MAX) ? i : -1;
+    return (uint32_t)(s - OVMX_BGSOCK_BASE);
 }
 
+/* Return the STATE slot for the handle's exec_chan, LAZILY re-adopting one if this
+ * process has not seen the handle yet (the post-exec case: the executive channel
+ * was inherited by #815, but this address space's g_socks is fresh). Faithful
+ * re-adopt defaults: the inherited connection is already connected; blocking mode
+ * (real O_NONBLOCK survives exec on a kernel fd, but the executive does not track
+ * a per-channel blocking mode to re-query, so we default to blocking and let the
+ * child re-set O_NONBLOCK via ovmx_fcntl if it wants it -- OpenSSH sshd-session
+ * configures the connection fd's flags itself); pollfd re-fetched on first poll. */
 static struct bg_sock *sock_get(int s)
 {
-    int i = idx_of(s);
+    uint32_t chan;
     struct bg_sock *p = NULL;
-    if (i < 0)
+    int i, free_i = -1;
+
+    if (s < OVMX_BGSOCK_BASE)
         return NULL;
+    chan = chan_of(s);
+    if (chan == 0 || chan > OVMX_BGSOCK_MAXCHAN)   /* chan 0 is never a valid BG channel */
+        return NULL;
+
     pthread_mutex_lock(&g_socks_lock);
-    if (g_socks[i].in_use)
-        p = &g_socks[i];
+    for (i = 0; i < BG_SOCK_MAX; i++) {
+        if (g_socks[i].in_use && g_socks[i].exec_chan == chan) { p = &g_socks[i]; break; }
+        if (!g_socks[i].in_use && free_i < 0) free_i = i;
+    }
+    if (!p && free_i >= 0) {                        /* lazy re-adopt (post-exec) */
+        p = &g_socks[free_i];
+        p->in_use = 1; p->exec_chan = chan; p->connected = 1;
+        p->nonblock = 0; p->pollfd = -1;
+    }
     pthread_mutex_unlock(&g_socks_lock);
     return p;
 }
@@ -86,6 +124,8 @@ static struct bg_sock *sock_get(int s)
 static int sock_alloc(uint32_t exec_chan)
 {
     int i, handle = -1;
+    if (exec_chan == 0 || exec_chan > OVMX_BGSOCK_MAXCHAN)
+        return -1;                                  /* out of representable range */
     pthread_mutex_lock(&g_socks_lock);
     for (i = 0; i < BG_SOCK_MAX; i++) {
         if (!g_socks[i].in_use) {
@@ -94,7 +134,7 @@ static int sock_alloc(uint32_t exec_chan)
             g_socks[i].connected = 0;
             g_socks[i].nonblock  = 0;
             g_socks[i].pollfd    = -1;
-            handle = OVMX_BGSOCK_BASE + i;
+            handle = OVMX_BGSOCK_BASE + (int)exec_chan;   /* SELF-DESCRIBING */
             break;
         }
     }
@@ -104,11 +144,17 @@ static int sock_alloc(uint32_t exec_chan)
 
 static void sock_release(int s)
 {
-    int i = idx_of(s);
-    if (i < 0)
+    uint32_t chan;
+    int i;
+    if (s < OVMX_BGSOCK_BASE)
         return;
+    chan = chan_of(s);
     pthread_mutex_lock(&g_socks_lock);
-    memset(&g_socks[i], 0, sizeof(g_socks[i]));
+    for (i = 0; i < BG_SOCK_MAX; i++)
+        if (g_socks[i].in_use && g_socks[i].exec_chan == chan) {
+            memset(&g_socks[i], 0, sizeof(g_socks[i]));
+            break;
+        }
     pthread_mutex_unlock(&g_socks_lock);
 }
 

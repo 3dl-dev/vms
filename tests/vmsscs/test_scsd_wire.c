@@ -6856,6 +6856,102 @@ static void test_mscp_srv_answers_a_command_on_a_live_connection(void)
           "the answer's P.CRF does not echo the command's (sec 5.1)");
 }
 
+/*
+ * (2a-0) vms-257: OVMX'S SERVER-FIRST ACCEPT IS A GENUINE ACCEPT_REQ (op-2),
+ * NOT A REJECT_REQ (op-4), AND THE CONNECTION REACHES OPEN HONESTLY.
+ *
+ * This is the live defect (lab-2 vaxlab-0, 2026-08-28): a real class driver
+ * opened an MSCP$DISK connect to OVMX's server, OVMX answered with op-4 (which
+ * vms-754 decoded as REJECT_REQ), the driver read that as a rejection and
+ * retried every ~10s with a fresh Con.ID, no MSCP command ever arrived, and
+ * MOUNT blocked in DUDRIVER mount-verify. The daemon meanwhile logged
+ * SCSD-I-MSCPSRVOK "confirmed" off the driver's op-5 REJECT_RSP while the
+ * server FSM was still CLOSED -- the INV-6 fabrication this fix removes.
+ *
+ * Fed against the pre-fix daemon this test reds three ways: the reply op is 4
+ * not 2, the server CDT stays CLOSED (the accept path never drove the FSM), and
+ * MSCPSRVOK fires off the op-5 with the FSM still CLOSED.
+ */
+static void test_mscp_srv_accept_is_accept_req_and_reaches_open(void)
+{
+    uint8_t req[sizeof(cap_vaxcluster_connect_req)];
+    subst_sysap_name(req, cap_vaxcluster_connect_req,
+                     sizeof(cap_vaxcluster_connect_req), "MSCP$DISK");
+
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_MSCP_SERVER") == 0, "unsetenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+
+    rx_feed(&r, req, sizeof(req));
+
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(ps->mscp_srv_bound == 1, "the daemon did not bind the MSCP$DISK server connection");
+
+    /* THE ACCEPT ON THE WIRE. The last frame the connect provoked is OVMX's
+     * op-2 CONNECT-RESPONSE (the op-1 echo precedes it). It MUST carry MTYPE 2
+     * (ACCEPT_REQ), never 4 (REJECT_REQ). */
+    uint16_t reply_op = (uint16_t)(scsd_test_last_frame[14 + 46] |
+                                   (scsd_test_last_frame[14 + 47] << 8));
+    CHECK(reply_op == SCS_DIR_MSGTYPE_ACCEPT_REQ,
+          "OVMX's server accept op [46:48] is %u, expected 2 (ACCEPT_REQ) --"
+          " op 4 (REJECT_REQ) is what a real driver refused (vms-257)",
+          (unsigned)reply_op);
+    CHECK(reply_op != SCS_DIR_OP_ACCEPT,
+          "OVMX's server accept is still the op-4 REJECT_REQ (vms-257 not fixed)");
+
+    /* THE FSM. The server connection must have advanced off CLOSED to ACCEPT
+     * SENT: the inbound CONNECT_REQ took it to CONNECT REC, our ACCEPT_REQ to
+     * ACCEPT SENT. Before vms-257 the accept path never drove the FSM, so this
+     * CDT stayed CLOSED. */
+    struct scs_cdt *mcdt = scs_cdl_lookup(&scsd_cdl, OVMX_MSCP_SERVER_CONID);
+    CHECK(mcdt != NULL, "no CDT at OVMX_MSCP_SERVER_CONID after the accept");
+    if (mcdt == NULL) {
+        return;
+    }
+    CHECK(scs_conn_state_of(mcdt) == SCS_CONN_ACCEPT_SENT,
+          "the server connection FSM is %s, expected ACCEPT SENT after sending"
+          " our ACCEPT_REQ",
+          scs_conn_state_name(scs_conn_state_of(mcdt)));
+
+    /* HONEST MSCPSRVOK: it must NOT be logged yet -- the connection is not OPEN,
+     * the client has not confirmed. */
+    CHECK(!rxlog_has("MSCPSRVOK"),
+          "SCSD-I-MSCPSRVOK fired while the server FSM was only ACCEPT SENT"
+          " (the INV-6 optimistic-confirm bug): '%s'", rxlog);
+
+    /* The client's op-3 ACCEPT_RSP (CONNECT-CONFIRM) confirms OUR accept and
+     * opens the connection. Addressed FROM the driver's handle TO OVMX's server
+     * handle. op 3 == SCS_ENV_MTYPE_ACCEPT_RSP, which the shared classifier
+     * steps as RCV_ACCEPT_RSP. */
+    struct scs_dir_params c3;
+    memset(&c3, 0, sizeof(c3));
+    memcpy(c3.dst_mac, r.rx.our_hw_mac, 6);
+    memcpy(c3.src_mac, vax1_hw_mac, 6);
+    memcpy(c3.src_logical, vax1_logical, 6);
+    memcpy(c3.peer_logical, r.rx.our_src_logical, 6);
+    c3.remote_conid = OVMX_MSCP_SERVER_CONID;      /* dest: OVMX server handle */
+    c3.local_conid = ps->mscp_srv_remote_conid;    /* src: the class driver */
+    c3.incarnation = ps->incarnation;
+    c3.recv_ack = ps->vc.seq.recv_seq;
+    c3.send_seq = (uint16_t)(ps->vc.seq.recv_seq + 1u);
+
+    uint8_t f3[SCS_DIR_CONFIRM_FRAME_LEN];
+    CHECK(scs_dir_build_connect_confirm(&c3, f3) == 0,
+          "the op-3 ACCEPT_RSP fixture frame failed to build");
+    rx_feed(&r, f3, sizeof(f3));
+
+    CHECK(scs_conn_state_of(mcdt) == SCS_CONN_OPEN,
+          "the server connection FSM is %s after the client's ACCEPT_RSP,"
+          " expected OPEN", scs_conn_state_name(scs_conn_state_of(mcdt)));
+    CHECK(ps->mscp_srv_confirmed == 1,
+          "the daemon did not record the server connection confirmed after OPEN");
+    CHECK(rxlog_has("MSCPSRVOK"),
+          "SCSD-I-MSCPSRVOK was not logged once the FSM genuinely reached OPEN:"
+          " '%s'", rxlog);
+}
+
 /* vms-600: a private little-endian u32 poke, matching scsd_mscp_le32()'s
  * read side. Needed because scs_mscp_build_command() only lays down the
  * 12-byte MSCP header + (for SCC only) its own parameter area -- struct
@@ -10644,6 +10740,104 @@ static void test_readmit_verdict_classifies_the_rejoin_frontier(void)
           readmit_verdict_name(readmit_verdict_of(ps)));
 }
 
+/*
+ * vms-94c (DLM epic vms-7fa rung 1): a DLM message RECEIVED over the daemon's
+ * real receive path (scsd_handle_frame) is classified as an application message,
+ * delivered through the CDL to the DLM server CDT, DECODED to the right fields,
+ * and DISPATCHED to the executive's cross-node handler. This is the "node B
+ * receives + decodes + dispatches" half of the transport, proven end-to-end
+ * within the daemon (the /dev/vms ioctl itself is proven separately against a
+ * real executive by tests/qemu/test_kmod_dlm_xnode.c; here the dispatch is
+ * captured via the SCSD_UNIT_TEST seam, parallel to send_frame_raw's).
+ */
+static void test_dlm_message_reaches_the_lock_handler_over_scs(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, ovmx760_hw_mac, ovmx760_logical);
+
+    /* A peer with an OPEN VC -- the state the wire always has before app traffic. */
+    struct peer_state *ps = open_circuit_to(&r, ovmx760_member_mac, ovmx760_member_sysid);
+    if (ps == NULL) {
+        return;
+    }
+
+    /* Ready this node's DLM server CDT (the daemon does this when a peer
+     * connection is established). A DLM frame addressed to PS_DLM_SERVER_CONID
+     * now resolves through the CDL to scsd_dlm_srv_msg_input. */
+    struct scs_cdt *dcdt = scsd_dlm_ensure_server_cdt(ps);
+    CHECK(dcdt != NULL, "the DLM server CDT was not allocated");
+    CHECK(scs_cdl_lookup(&scsd_cdl, PS_DLM_SERVER_CONID(ps)) == dcdt,
+          "the DLM server CDT is not reachable by its Con.ID through the CDL");
+
+    /* Build a DLM ENQ frame as the PEER's daemon would: from the peer's MAC and
+     * logical to OURS, addressed to our DLM server handle. This is exactly the
+     * scs_dlm_build_frame() the peer would call, so the bytes on the wire are the
+     * bytes this node decodes -- not re-derived in the test. */
+    struct scs_dlm_params p;
+    struct scs_dlm_msg m;
+    uint8_t frame[SCS_DLM_FRAME_LEN];
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, r.hw_mac, 6);             /* to us */
+    memcpy(p.src_mac, ps_port_addr(ps), 6);     /* from the peer */
+    memcpy(p.src_logical, ps_sys_addr(ps), 6);  /* the peer's logical addr */
+    memcpy(p.peer_logical, r.logical, 6);       /* our logical addr (destination) */
+    p.remote_conid = PS_DLM_SERVER_CONID(ps);   /* our DLM server handle */
+    p.local_conid  = PS_DLM_CONID(ps);          /* stand-in for the peer's own DLM handle */
+
+    memset(&m, 0, sizeof(m));
+    m.op = SCS_DLM_OP_ENQ;
+    m.mode = LCK$K_EXMODE;
+    m.flags = (uint16_t)(LCK$M_VALBLK | LCK$M_SYSTEM);
+    m.req_lkid = 0x00040011u;
+    m.req_csid = 1329;      /* the requesting node's CSID */
+    m.master_csid = 0;      /* resolve the master via the directory */
+    {
+        const char *name = "SYS$SYSDEVICE";
+        m.namelen = (uint8_t)strlen(name);
+        memcpy(m.resnam, name, m.namelen);
+    }
+    for (int i = 0; i < LCK$C_VALBLK_LEN; i++) {
+        m.valblk[i] = (uint8_t)(0xC0 + i);
+    }
+    CHECK(scs_dlm_build_frame(&p, &m, frame) == 0, "the DLM ENQ frame did not build");
+
+    scsd_test_dlm_dispatches = 0;
+    memset(&scsd_test_last_dlm, 0, sizeof(scsd_test_last_dlm));
+
+    /* NODE B RECEIVES the frame through the real receive path. */
+    rx_feed(&r, frame, sizeof(frame));
+
+    /* Classified as an application message and DELIVERED through the CDL. */
+    CHECK(rx_app_messages == 1,
+          "the DLM frame was not classified as an application message (%lu)",
+          rx_app_messages);
+    CHECK(rx_delivered_message == 1,
+          "the DLM frame was not delivered through the CDL (%lu)", rx_delivered_message);
+    CHECK(rx_deliver_no_cdt == 0,
+          "the DLM frame's destination Con.ID resolved to no CDT (%lu)", rx_deliver_no_cdt);
+    CHECK(rx_deliver_no_routine == 0,
+          "the DLM CDT carried no message input routine (%lu)", rx_deliver_no_routine);
+
+    /* It reached the DLM handler and DECODED to the right fields. */
+    CHECK(rx_dlm_dispatched == 1,
+          "the DLM handler decoded+dispatched %lu message(s), expected 1", rx_dlm_dispatched);
+    CHECK(scsd_test_dlm_dispatches == 1,
+          "the executive dispatch fired %u time(s), expected 1", scsd_test_dlm_dispatches);
+    CHECK(scsd_test_last_dlm.op == SCS_DLM_OP_ENQ,
+          "decoded op %u, expected ENQ", scsd_test_last_dlm.op);
+    CHECK(scsd_test_last_dlm.mode == LCK$K_EXMODE,
+          "decoded mode %u, expected EX", scsd_test_last_dlm.mode);
+    CHECK(scsd_test_last_dlm.flags == (uint16_t)(LCK$M_VALBLK | LCK$M_SYSTEM),
+          "decoded flags 0x%x", scsd_test_last_dlm.flags);
+    CHECK(scsd_test_last_dlm.req_csid == 1329,
+          "decoded requester CSID %u, expected 1329", scsd_test_last_dlm.req_csid);
+    CHECK(scsd_test_last_dlm.namelen == m.namelen &&
+          memcmp(scsd_test_last_dlm.resnam, m.resnam, m.namelen) == 0,
+          "the decoded resource name did not match SYS$SYSDEVICE");
+    CHECK(memcmp(scsd_test_last_dlm.valblk, m.valblk, LCK$C_VALBLK_LEN) == 0,
+          "the decoded value block did not match");
+}
+
 int main(void)
 {
     /* THE FAILURE STREAM, taken before anything can dup2() over fd 2. See
@@ -10720,6 +10914,9 @@ int main(void)
      * that make the lookup a gate rather than a formality. */
     test_rx_classifier_over_captured_frames();
     test_captured_app_message_reaches_the_sysap_through_the_cdl();
+    /* vms-94c: a DLM message received over the real receive path reaches the
+     * lock handler decoded (the transport's node-B half). */
+    test_dlm_message_reaches_the_lock_handler_over_scs();
     /* vms-aa1 */
     test_credit_receive_path_banks_the_wire_field();
     test_credit_send_path_stamps_the_grounded_field();
@@ -10758,6 +10955,9 @@ int main(void)
     /* vms-7fe: the SDIR queue as the daemon uses it, and its kill switch. */
     test_sdir_lookup_is_answered_from_the_queue();
     test_sdir_refuses_a_connect_request_for_an_unlisted_sysap();
+    /* vms-257: OVMX's server-first accept is a genuine op-2 ACCEPT_REQ that
+     * drives the connection to OPEN, not the op-4 REJECT_REQ that stalled MOUNT. */
+    test_mscp_srv_accept_is_accept_req_and_reaches_open();
     /* vms-34b: the MSCP$DISK server connection now answers, not just accepts. */
     test_mscp_srv_answers_a_command_on_a_live_connection();
     /* vms-600: with a real unit attached, the same live path serves real

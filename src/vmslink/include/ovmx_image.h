@@ -142,27 +142,49 @@ struct ovmx_imp_header {
     /* char names[names_size]; */
 };
 
-/* Linkage-form flag packed into the TOP BIT of ovmx_imp_entry.sv_index (OVMX
- * design choice, labeled OVMX-original). Symbol-vector indices are tiny
- * (hundreds/thousands), so bit31 is always free. This keeps ovmx_imp_entry at
- * its original 24-byte layout — NO struct growth, so a non-Alpha .vms$imp entry
- * stays byte-identical to a bit-less encoding (the bit is set only on EVAX/Alpha
- * output for a LINKAGE import; see vms_imp_write). Reader contract:
- *   Alpha:     form         = (sv_index & OVMX_IMP_LINKAGE) ? LINKAGE : single;
- *              real_sv_index =  sv_index & ~OVMX_IMP_LINKAGE;
- *   non-Alpha: sv_index used as-is (bit never set -> no mask needed).
- * LINKAGE => IMGACT fills a 2-quad linkage pair: quad[1] = PV = the PROCEDURE
- * DESCRIPTOR (the resolved producer SV value, which is now the PDSC address) and
- * quad[0] = *(PV+8) = the code entry. Clear => a single-pointer (1-quad) import:
- * one slot receives the resolved value. (vms-32e1) */
-#define OVMX_IMP_LINKAGE  0x80000000u
+/* Import-FORM flags packed into the TOP TWO BITS of ovmx_imp_entry.sv_index
+ * (OVMX design choice, labeled OVMX-original). Symbol-vector indices are tiny
+ * (hundreds/thousands), so bits 30-31 are always free. This keeps ovmx_imp_entry
+ * at its original 24-byte layout — NO struct growth, so a non-Alpha .vms$imp
+ * entry stays byte-identical to a bit-less encoding (the bits are set only on
+ * EVAX/Alpha output; see vms_imp_write). The two form bits are MUTUALLY
+ * EXCLUSIVE. Reader contract:
+ *   Alpha:     form          = (sv_index & OVMX_IMP_LINKAGE)  ? LINKAGE
+ *                            : (sv_index & OVMX_IMP_CODEADDR) ? CODEADDR
+ *                            :                                  REFQUAD/data;
+ *              real_sv_index =  sv_index & ~(OVMX_IMP_LINKAGE | OVMX_IMP_CODEADDR);
+ *   non-Alpha: sv_index used as-is (neither bit ever set -> no mask needed).
+ *
+ * The forms differ in what IMGACT writes into the cell, because on Alpha a
+ * symbol-vector value for a procedure is its PROCEDURE VALUE (PV) = the address
+ * of the PROCEDURE DESCRIPTOR (PDSC), and the code entry is PDSC$Q_ENTRY=*(PV+8):
+ *   LINKAGE  (EVAX_R_LINKAGE)  => a 2-quad linkage pair: quad[0] = *(PV+8) = the
+ *            code entry, quad[1] = PV = the PDSC. The port's standard call reads
+ *            R27 = quad[1] = PV and jumps through quad[0] = entry.
+ *   CODEADDR (EVAX_R_CODEADDR) => a single quad holding the CODE ENTRY *(PV+8).
+ *            The caller jsr's THROUGH this cell directly (ldq r27,cell; jsr
+ *            ra,(r27)); the cell must therefore be the entry, matching the LOCAL
+ *            CODEADDR fill (link.c evax_apply_reloc stores code_S). Filling PV
+ *            (the PDSC) instead lands the jsr on the descriptor -> SIGILL
+ *            (vms-e06: OTS$ZERO/OTS$MOVE). CODEADDR imports carry is_data=1
+ *            (single-cell) so the LINKAGE bit is clear; this bit disambiguates a
+ *            CODEADDR (entry) from a REFQUAD (raw PV) single-cell import.
+ *   neither  (EVAX_R_REFQUAD) => a single quad holding the raw resolved value =
+ *            PV (the PDSC address for a procedure, or a data address). The caller
+ *            derefs the PDSC itself if it needs the entry (e.g. OTS$HOME_ARGS:
+ *            ldq $0,8($0)). Unchanged from the original single-slot fill (#812).
+ * (vms-32e1 / vms-e06) */
+#define OVMX_IMP_LINKAGE   0x80000000u   /* bit31: 2-quad linkage pair          */
+#define OVMX_IMP_CODEADDR  0x40000000u   /* bit30: single-cell CODE ENTRY *(PV+8)*/
 
 struct ovmx_imp_entry {
     uint32_t producer_off;  /* offset into soname blob: producer image name  */
-    uint32_t sv_index;      /* producer symbol-vector index in the low 31 bits;*/
-                            /* bit31 = OVMX_IMP_LINKAGE (Alpha linkage form),  */
-                            /* set only on EVAX/Alpha output. Non-Alpha writes  */
-                            /* the bare index (bit31 clear). vms-32e1.         */
+    uint32_t sv_index;      /* producer symbol-vector index in the low 30 bits;*/
+                            /* bit31 = OVMX_IMP_LINKAGE (Alpha 2-quad linkage), */
+                            /* bit30 = OVMX_IMP_CODEADDR (Alpha single-cell     */
+                            /* code entry). Set only on EVAX/Alpha output;      */
+                            /* non-Alpha writes the bare index (both clear).    */
+                            /* vms-32e1 / vms-e06.                              */
     uint64_t patch_off;     /* image-relative slot to receive the resolved    */
                             /* address at activation (a GOT-like cell)        */
     uint32_t req_major;     /* producer GSMATCH major this consumer linked to */

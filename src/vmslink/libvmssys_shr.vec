@@ -170,3 +170,7 @@ vms_kif_getvol=PROCEDURE
 vms_kif_bg_bind=PROCEDURE
 vms_kif_bg_listen=PROCEDURE
 vms_kif_bg_accept=PROCEDURE
+# DLM cross-node message TRANSPORT (vms-94c, cluster-wide $ENQ/$DEQ rung 1). The
+# executive cross-node RECEIVE seam reached over /dev/vms. APPENDED per the
+# append-only contract -- a new universal never shifts an existing index.
+vms_kif_dlm_xnode=PROCEDURE

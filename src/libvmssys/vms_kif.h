@@ -290,6 +290,22 @@ uint32_t vms_kif_get_resmaster(const char *resnam, uint32_t *found,
                                uint32_t *master_csid, uint32_t *is_local_master,
                                uint32_t *n_granted);
 
+/* Dispatch a decoded cross-node DLM request to the kernel lock manager's
+ * cross-node handler (vms-94c, DLM epic vms-7fa rung 1).
+ * OVMX-UNWIRED: vms_kif_dlm_xnode (vms-94c) -- the DLM message TRANSPORT reaches
+ * the executive here, but the daemon that carries a peer's DLM message (scsd) is
+ * a glibc process and reaches /dev/vms with a direct POSIX ioctl, not this
+ * freestanding client; and no sys$ service issues it. This wrapper exists so the
+ * cross-node RECEIVE handler (vms_lock_dlm_xnode_dispatch, which returns
+ * SS$_UNSUPPORTED in rung 1) is observable against a real /dev/vms -- exercised
+ * only by tests/qemu/test_kmod_dlm_xnode.c, the same footing as
+ * vms_kif_get_resmaster above. Rung 2 (vms-7fa) gives it a product path (or
+ * moves the dispatch behind a shared client); wire it and delete this line then. */
+uint32_t vms_kif_dlm_xnode(uint32_t op, uint32_t lkmode, uint32_t flags,
+                           uint32_t req_lkid, uint32_t master_lkid,
+                           uint32_t req_csid, uint32_t master_csid,
+                           const char *resnam, const uint8_t *valblk);
+
 /* ================================================================
  * Device table (executive-resident I/O database)
  *

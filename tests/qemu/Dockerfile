@@ -427,11 +427,15 @@ RUN cd /src/repo && \
         '  UserKnownHostsFile /dev/null' '  IdentitiesOnly yes' \
         > /ovmxssh/etc/ssh_config && \
     # SERVER (2223): stock client -> WRAPPED sshd (listen/accept over BGn:).
+    # AddressFamily inet: the wrapped socket()/bind() ride BGn:, which is AF_INET
+    # only -- keep sshd off any AF_INET6 listener attempt. LogLevel DEBUG1 so a
+    # bind/listen failure over the veneer is fully traced in the captured stderr.
     printf '%s\n' \
-        'Port 2223' 'ListenAddress 127.0.0.1' 'HostKey /ovmxsshsrv/etc/hostkey' \
+        'Port 2223' 'ListenAddress 127.0.0.1' 'AddressFamily inet' \
+        'HostKey /ovmxsshsrv/etc/hostkey' \
         'PidFile /ovmxsshsrv/sshd.pid' 'AuthorizedKeysFile /ovmxsshsrv/etc/authorized_keys' \
         'StrictModes no' 'PubkeyAuthentication yes' 'PasswordAuthentication no' \
-        'LogLevel VERBOSE' 'Subsystem sftp internal-sftp' \
+        'LogLevel DEBUG1' 'Subsystem sftp internal-sftp' \
         > /ovmxsshsrv/etc/sshd_config && \
     printf '%s\n' \
         'Host srvpeer' '  HostName 127.0.0.1' '  Port 2223' '  User root' \

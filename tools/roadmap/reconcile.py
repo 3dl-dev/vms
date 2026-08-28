@@ -109,8 +109,9 @@ GATE_EPICS = [
      "Provision a node into a cluster the VMS way: SYSGEN parameters, AUTOGEN, "
      "CLUSTER_AUTHORIZE, and CLUSTER_CONFIG.", "0.5-0.9"),
     ("vms-67f", "TCP/IP networking",
-     "A VMS-faithful IP layered product: the network device, sockets, the resolver, "
-     "and the client tools.", "0.5-0.9"),
+     "A VMS-faithful IP networking layered product — its own installable kit on the base "
+     "operating system: the network device, sockets, configuration and management, the "
+     "resolver, the client tools, and a bundled SSH.", "0.5-0.9"),
     ("vms-30e", "DECnet Phase IV",
      "Clean-room DECnet: SET HOST and file transfer to and from a lab node.", "0.9"),
     ("vms-19e", "Kernel substrate",

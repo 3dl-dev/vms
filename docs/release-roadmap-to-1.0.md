@@ -102,11 +102,11 @@ only our forks target.
 
 | Workstream | Epic | Lands by | Status | Done/Total | Blocked |
 |---|---|---|---|---:|---:|
-| Executive substrate | `vms-6b8` | 0.5 | in progress | 17/22 | 0 |
+| Executive substrate | `vms-6b8` | 0.5 | in progress | 17/23 | 0 |
 | Command-surface parity | `vms-8ad` | continuous | in progress | 37/73 | 0 |
 | Self-hosting toolchain | `vms-678` | 0.5→0.9 | in progress | 16/23 | 2 |
 | Cluster configuration | `vms-098` | 0.5→0.9 | in progress | 3/12 | 8 |
-| TCP/IP networking | `vms-67f` | 0.5→0.9 | in progress | 7/12 | 2 |
+| TCP/IP networking | `vms-67f` | 0.5→0.9 | in progress | 12/26 | 5 |
 | DECnet Phase IV | `vms-30e` | 0.9 | in progress | 5/11 | 5 |
 | Kernel substrate | `vms-19e` | 0.5 | in progress | 5/8 | 1 |
 | VAX as a first-class platform | `vms-8e8` | 0.5→0.9 | in progress | 86/95 | 1 |

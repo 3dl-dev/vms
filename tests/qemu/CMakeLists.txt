@@ -883,3 +883,21 @@ set_tests_properties(dcl_acceptance_e2e PROPERTIES
     LABELS "slow;qemu-full-boot"
     SKIP_RETURN_CODE 77
     TIMEOUT 1200)
+
+# console_boot_no_newline_spam_e2e (vms-dec): the coverage every other boot
+# harness lacks. All the gates above wait for "Username:" and only THEN feed
+# input, so none provokes the echo that produced the operator-reported boot
+# "newline spam" (the operator's own RETURN keystrokes, mashed at a slow boot,
+# echoed by the cooked-mode console tty as blank lines). This gate TYPES
+# RETURNs DURING the boot, before the prompt, and asserts no run of echoed
+# blank lines precedes "Username:" while login still works. See
+# test_console_boot_no_newline_spam.sh's header. Same opt-in convention as the
+# qemu-full-boot gates above (OVMX_QEMU_FULL_E2E=1).
+add_test(
+    NAME console_boot_no_newline_spam_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_console_boot_no_newline_spam_e2e.sh
+)
+set_tests_properties(console_boot_no_newline_spam_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 1200)

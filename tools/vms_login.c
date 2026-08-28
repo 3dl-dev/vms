@@ -530,6 +530,19 @@ static int console_login(void)
      * operator's RETURN guarantees the boot banner has finished printing
      * before the prompt appears -- banner first, then Username:, as on VMS.
      *
+     * NOTE (vms-dec): that banner-ordering rationale is now STALE. vms-1fb
+     * moved the banner to print from PID 1 (print_banner_once() in
+     * src/ovmx_init/ovmx_init.c) BEFORE run_startup(), so the banner has
+     * already been emitted by the time JOB_CONTROL forks this LOGINOUT. The
+     * oracle (docs/design-boot-faithful.md sec3.5) boots straight to
+     * "Username:" with no "press RETURN". Removing the wake entirely is the
+     * faithful end state, but LOGINOUT runs concurrently with the tail of
+     * STARTUP.COM, so a bare removal risks "Username:" interleaving a startup
+     * line, and dropping the tcflush below would re-expose the "empty
+     * username machine-gun" it guards. That is tracked as a follow-up; this
+     * rung keeps the wake but silences the echo of the wake keystrokes (the
+     * reported spam), which is the guaranteed fix.
+     *
      * CONSOLE ONLY. The wait is gated on an interactive terminal: JOB_CONTROL
      * execs this image with stdin bound to the physical console (OPA0: ->
      * /dev/console, SYS$STARTUP:JOB_CONTROL_STARTUP.COM), so isatty() is true
@@ -542,10 +555,43 @@ static int console_login(void)
      */
     if (isatty(STDIN_FILENO)) {
         int c;
+        struct termios wake_saved, wake_quiet;
+        int wake_have_term = 0;
+        /*
+         * SILENCE THE ECHO OF WAKE KEYSTROKES DURING THE BOOT (vms-dec).
+         *
+         * The wake below invites the operator to strike RETURN while the slow
+         * console boot is still running, and an operator naturally hammers it
+         * several times before "Username:" is visible. The console tty is in
+         * cooked/ECHO mode, so the kernel echoes each of those RETURNs at
+         * type-time as a BLANK LINE, scattered through the boot output -- the
+         * "newline spam" the operator reported. tcflush() (below) discards the
+         * leftover keystrokes from the input queue but CANNOT un-print the
+         * blank lines the tty already echoed, so the spam survived it.
+         *
+         * Clearing ECHO for the duration of this pre-prompt window stops the
+         * kernel from echoing those wake keystrokes. ECHO gates INPUT echoing
+         * only -- boot OUTPUT (program writes to the console) is untouched, and
+         * ECHO is restored below, before the real "Username:" prompt, so the
+         * username the operator types there still echoes normally. This is OVMX
+         * console-handling behaviour (CLAUDE.md Rule 8), not a claimed VMS
+         * terminal-driver detail. TCSANOW (not TCSAFLUSH) preserves the wake's
+         * existing semantics: a RETURN already queued during the boot still
+         * wakes the session -- it just no longer prints.
+         */
+        if (tcgetattr(STDIN_FILENO, &wake_saved) == 0) {
+            wake_quiet = wake_saved;
+            wake_quiet.c_lflag &= ~(tcflag_t)ECHO;
+            tcsetattr(STDIN_FILENO, TCSANOW, &wake_quiet);
+            wake_have_term = 1;
+        }
         while ((c = getchar()) != EOF && c != '\n')
             ;
-        if (c == EOF)
+        if (c == EOF) {
+            if (wake_have_term)
+                tcsetattr(STDIN_FILENO, TCSANOW, &wake_saved);
             return 1;
+        }
         /*
          * DISCARD TYPE-AHEAD QUEUED DURING THE (LONG) BOOT (vms-3ab8).
          *
@@ -571,6 +617,10 @@ static int console_login(void)
          * tcflush() discards the kernel tty input queue directly.
          */
         tcflush(STDIN_FILENO, TCIFLUSH);
+        /* Restore ECHO now that the wake window is over: the real
+         * "Username:" prompt below must echo what the operator types. */
+        if (wake_have_term)
+            tcsetattr(STDIN_FILENO, TCSANOW, &wake_saved);
     }
 
     /* SYS$ANNOUNCE -- displayed once before the first Username: prompt.

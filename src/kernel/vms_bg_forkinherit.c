@@ -108,13 +108,8 @@ static void vms_on_fork(void *data, struct task_struct *parent,
     /* Fast path: capture only if the parent is a registered OVMX process WITH BG
      * channels (one hash probe, taken under vms_proc_hash_lock so the parent PCB
      * cannot be freed mid-capture). Empty capture -> nothing to remember. */
-    {
-        int cap = vms_proc_capture_channels_for_task(parent, &captured, &next_chan);
-        pr_err("OVMX-DIAG fork: parent_tgid=%d child_tgid=%d captured=%d\n",
-               task_tgid_nr(parent), task_tgid_nr(child), cap);   /* TEMP vms-0cd */
-        if (!cap)
-            return;
-    }
+    if (!vms_proc_capture_channels_for_task(parent, &captured, &next_chan))
+        return;
 
     pend = kzalloc(sizeof(*pend), GFP_ATOMIC);
     if (!pend) {
@@ -186,7 +181,6 @@ int vms_bg_forkinherit_consume(struct vms_proc *child)
         hash_del(&pend->node);
     spin_unlock(&fork_pending_lock);
 
-    pr_err("OVMX-DIAG consume: tgid=%d found=%d\n", tgid, pend ? 1 : 0);   /* TEMP vms-0cd */
     if (!pend)
         return 0;
 
@@ -222,16 +216,12 @@ int vms_bg_forkinherit_init(void)
     tp_fork = NULL;
     tp_exit = NULL;
     for_each_kernel_tracepoint(find_tracepoint, NULL);
-    pr_err("OVMX-DIAG forkinherit init: tp_fork=%d tp_exit=%d\n",
-           !!tp_fork, !!tp_exit);                          /* TEMP vms-0cd */
     if (!tp_fork || !tp_exit)
         return -ENOENT;
 
     ret = tracepoint_probe_register(tp_fork, (void *)vms_on_fork, NULL);
-    if (ret) {
-        pr_err("OVMX-DIAG forkinherit: register fork probe ret=%d\n", ret);  /* TEMP */
+    if (ret)
         return ret;
-    }
     ret = tracepoint_probe_register(tp_exit, (void *)vms_on_exit, NULL);
     if (ret) {
         tracepoint_probe_unregister(tp_fork, (void *)vms_on_fork, NULL);

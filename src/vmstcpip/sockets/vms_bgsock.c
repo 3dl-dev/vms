@@ -416,8 +416,14 @@ int ovmx_socket_close(int s)
     int cached_fd;
     if (p == NULL) { errno = EBADF; return -1; }
     cached_fd = p->pollfd;
-    if (p->connected)
-        vms_kif_bg_deaccess(p->exec_chan);
+    /* close() drops THIS reference only; it must NOT shut the connection down --
+     * on a socket shared across fork (an accept->fork->close forking server hands
+     * the accepted connection to a child, then closes its own copy) an explicit
+     * IO$_DEACCESS shutdown would tear the connection down for the child too. The
+     * transport FIN happens at the LAST reference: $DASSGN drops this channel's
+     * socket ref, and the executive's exec_socket_release runs sock_release only at
+     * ref 0. Explicit shutdown() still maps to IO$_DEACCESS via ovmx_shutdown()
+     * (vms-0cd). */
     vms_kif_bg_dassgn(p->exec_chan);
     sock_release(s);
     if (cached_fd >= 0)

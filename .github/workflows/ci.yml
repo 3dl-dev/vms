@@ -95,6 +95,7 @@ jobs:
       libcrypto: ${{ steps.decide.outputs.libcrypto }}
       openssh: ${{ steps.decide.outputs.openssh }}
       alpha_toolchain: ${{ steps.decide.outputs.alpha_toolchain }}
+      alpha_boot_runtime: ${{ steps.decide.outputs.alpha_boot_runtime }}
       vax_toolchain: ${{ steps.decide.outputs.vax_toolchain }}
       dlm_harness: ${{ steps.decide.outputs.dlm_harness }}
     steps:
@@ -171,6 +172,18 @@ jobs:
               - 'tests/qemu/test_cluster_params_recnx_negctl.sh'
               - 'tests/qemu/run_cluster_params_recnx_e2e.sh'
               - 'tests/uat/**'
+            # vms-707: the change classes that can regress the OVMX/Alpha
+            # RUNTIME boot-to-mount (as distinct from the modpost-only vms-5af
+            # guard). A change here fires the per-PR alpha-boot-mount gate below.
+            # Kept narrow (the runtime executive + PID 1 + the Alpha boot tooling)
+            # so the fast PR wall is preserved for everything else.
+            alpha_boot_runtime:
+              - '.github/workflows/**'
+              - 'src/kernel/**'
+              - 'src/kernel-core/**'
+              - 'src/libvmssys/**'
+              - 'src/ovmx_init/**'
+              - 'tools/cross-alpha/**'
             release:
               - '.github/workflows/**'
               - 'tools/cut-release.sh'
@@ -407,6 +420,7 @@ jobs:
               echo "libcrypto=${{ steps.filter.outputs.libcrypto }}"
               echo "openssh=${{ steps.filter.outputs.openssh }}"
               echo "alpha_toolchain=${{ steps.filter.outputs.alpha_toolchain }}"
+              echo "alpha_boot_runtime=${{ steps.filter.outputs.alpha_boot_runtime }}"
               echo "vax_toolchain=${{ steps.filter.outputs.vax_toolchain }}"
               echo "dlm_harness=${{ steps.filter.outputs.dlm_harness }}"
             } >> "$GITHUB_OUTPUT"
@@ -425,6 +439,7 @@ jobs:
               echo "libcrypto=true"
               echo "openssh=true"
               echo "alpha_toolchain=true"
+              echo "alpha_boot_runtime=true"
               echo "vax_toolchain=true"
               echo "dlm_harness=true"
             } >> "$GITHUB_OUTPUT"
@@ -7316,6 +7331,68 @@ jobs:
 
       - name: "Login gate — boot qemu-system-alpha, authenticate SYSTEM/MANAGER against the binary SYSUAF over the ACP, land on an interactive DCL $, run SHOW TIME"
         run: tools/cross-alpha/run-boot-alpha.sh login
+
+  # -----------------------------------------------------------------------
+  # alpha-boot-mount (rd vms-707). THE PER-PR Alpha RUNTIME-boot gate -- the
+  # guard this arch-asymmetric boot regression slipped through TWICE (#835
+  # tracepoints, #853 O_CLOEXEC): a change that reds the OVMX/Alpha boot while
+  # x86_64 stays green, so its author's x86_64-only proofs pass and the PR
+  # merges. The EXISTING per-PR Alpha guard (vms-5af) is BUILD/modpost ONLY --
+  # it proves vms.ko cross-compiles + links + modpost-passes for Alpha, NOT that
+  # the assembled runtime BOOTS and MOUNTS the system disk. #853 compiled and
+  # modpost-passed cleanly for Alpha yet halted at $MOUNT, because the generic
+  # O_CLOEXEC bit (0x80000) is O_DIRECT on Alpha -- a runtime-only, arch-specific
+  # fault no build check can see. This job closes that gap.
+  #
+  # SCOPE-GATED (needs.changes.outputs.alpha_boot_runtime) to the runtime
+  # executive + PID 1 + Alpha boot tooling. Most PRs don't touch those, so the
+  # fast PR wall is preserved; the ones that do are exactly the class that can
+  # regress the Alpha boot-to-mount. run-boot-alpha.sh `gate` boots to a real
+  # DCL Username: prompt, which PROVES the DKA0: $MOUNT -- the mount is a strict
+  # prerequisite of ever reaching login, so a mount regression reds this gate.
+  # (The boot's dominant cost is the cross-build, identical whether the assertion
+  # stops at mount or at Username, so the stronger post-condition is asserted for
+  # the same wall time -- no separate boot-to-mount subset buys anything.) PR-ONLY
+  # by design: on schedule/workflow_dispatch the fuller alpha-boot-login and
+  # alpha-dcl-acceptance legs already run, so this job does not duplicate them.
+  # -----------------------------------------------------------------------
+  alpha-boot-mount:
+    name: "OVMX/Alpha per-PR boot gate — boots + mounts DKA0: (vms-707)"
+    needs: changes
+    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_boot_runtime == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # A full Alpha cross-build + a 128 MB ODS-2 disk + docker images is tight
+      # on a stock runner's ~14 GB root; reclaim the large unused toolchains up
+      # front so the boot build can't die on ENOSPC mid-build (mirrors
+      # alpha-boot-login).
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: "Boot gate — qemu-system-alpha boots the assembled OVMX/Alpha runtime and mounts the ODS-2 system disk on DKA0: (reds on the #853 mount-halt class)"
+        run: tools/cross-alpha/run-boot-alpha.sh gate
 
   # -----------------------------------------------------------------------
   # alpha-dcl-acceptance (rd vms-f2c, epic vms-8954). Co-release ACCEPTANCE

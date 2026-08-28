@@ -4304,6 +4304,17 @@ jobs:
               sh /src/src/imgact/test/run_symvec_activation.sh
             '
 
+      - name: Activate a producer whose section table exceeds the old 64 cap (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/shnum-cap-act
+              sh /src/src/imgact/test/run_shnum_cap_activation.sh
+            '
+
   # -----------------------------------------------------------------------
   # Job 11b: IMGACT VMS-standard image activation (Alpha, vms-f60d)
   #

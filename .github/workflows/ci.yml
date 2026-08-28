@@ -96,6 +96,7 @@ jobs:
       openssh: ${{ steps.decide.outputs.openssh }}
       alpha_toolchain: ${{ steps.decide.outputs.alpha_toolchain }}
       vax_toolchain: ${{ steps.decide.outputs.vax_toolchain }}
+      dlm_harness: ${{ steps.decide.outputs.dlm_harness }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -334,6 +335,22 @@ jobs:
             vax_toolchain:
               - 'tools/cross-vax/Dockerfile'
               - 'tools/cross-vax/*.tar.xz'
+            # vms-4b6: the DLM cross-node harness rung H0. A dedicated MINIMAL
+            # QEMU image (tests/qemu/Dockerfile.dlm-harness) builds vms.ko +
+            # SCSD.EXE and proves SCSD's own scsd_dlm_dispatch_to_executive()
+            # reaches a real /dev/vms (SS$_UNSUPPORTED 2296, not SS$_NOSUCHDEV
+            # 2680). Narrow on purpose -- it exercises only the executive DLM
+            # dispatch (src/kernel*) and SCSD (src/vmsscs), so it triggers on
+            # those + the harness files, NOT on every tests/qemu change.
+            dlm_harness:
+              - '.github/workflows/**'
+              - 'src/kernel/**'
+              - 'src/kernel-core/vms_lock.c'
+              - 'src/kernel/vms_ioctl.h'
+              - 'src/vmsscs/**'
+              - 'tests/qemu/Dockerfile.dlm-harness'
+              - 'tests/qemu/init_dlm_h0.sh'
+              - 'tests/qemu/run_dlm_harness_h0.sh'
 
       - name: Decide (force every output true on non-PR events)
         id: decide
@@ -354,6 +371,7 @@ jobs:
               echo "openssh=${{ steps.filter.outputs.openssh }}"
               echo "alpha_toolchain=${{ steps.filter.outputs.alpha_toolchain }}"
               echo "vax_toolchain=${{ steps.filter.outputs.vax_toolchain }}"
+              echo "dlm_harness=${{ steps.filter.outputs.dlm_harness }}"
             } >> "$GITHUB_OUTPUT"
           else
             {
@@ -371,6 +389,7 @@ jobs:
               echo "openssh=true"
               echo "alpha_toolchain=true"
               echo "vax_toolchain=true"
+              echo "dlm_harness=true"
             } >> "$GITHUB_OUTPUT"
           fi
   # -----------------------------------------------------------------------
@@ -2110,6 +2129,71 @@ jobs:
             exit 1
           fi
           exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # Job 3a2: DLM cross-node harness — rung H0 (vms-4b6, DLM epic vms-7fa)
+  #
+  # Proves that the SCSD-carrying image COMPOSES WITH A REAL EXECUTIVE, the
+  # single-node foundation the two-node DLM harness (H1-H4) builds on. A
+  # dedicated MINIMAL QEMU image (tests/qemu/Dockerfile.dlm-harness) builds only
+  # vms.ko + SCSD.EXE (static musl), boots ONE node, and runs
+  # `SCSD.EXE --dlm-selftest` -- which drives ONE cross-node ENQ through SCSD's
+  # OWN scsd_dlm_dispatch_to_executive() (src/vmsscs/scsd.c). On a real /dev/vms
+  # the rung-1 handler (vms_lock_dlm_xnode_dispatch) returns SS$_UNSUPPORTED
+  # (2296); with no executive the SAME code fails HONEST with SS$_NOSUCHDEV
+  # (2680). H0 PASS iff the boot transcript carries `H0-DLM-SCSD-EXEC: rc=2296
+  # PASS`. This is the status FLIP the Docker cluster harness (no /dev/vms,
+  # Rule 9) cannot produce -- exactly why H0 needs a real executive.
+  # -----------------------------------------------------------------------
+  dlm-harness-h0:
+    name: DLM Harness H0 (SCSD.EXE composes with a real executive, QEMU)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.dlm_harness == 'true' }}
+    runs-on: ubuntu-latest
+    # Minimal image (vms.ko + one static SCSD.EXE) + one QEMU boot with no disks
+    # or NIC. 30m is generous headroom; the inner H0_WALL_TIMEOUT (300s) is the
+    # real budget, this is the OUTER bound so a genuine hang still surfaces.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build DLM harness H0 image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu/Dockerfile.dlm-harness
+          push: false
+          load: true
+          tags: ovmx-dlm-h0:latest
+          cache-from: type=gha,scope=dlm-harness-h0
+          cache-to: type=gha,mode=max,scope=dlm-harness-h0
+
+      - name: Boot QEMU, insmod vms.ko, run SCSD --dlm-selftest against /dev/vms
+        run: |
+          set +e
+          RAW=$(docker run --rm ovmx-dlm-h0:latest 2>&1)
+          RC=$?
+          set -e
+          # QEMU serial emits CRLF; strip \r so the line-anchored match holds.
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: DLM harness H0 exited nonzero"
+            exit 1
+          fi
+          # Machine-checkable verdict: the EXACT 2296 PASS line. A 2680 (fail-
+          # honest, no executive) or any other status cannot masquerade as pass.
+          if printf '%s\n' "$OUTPUT" | grep -qE '^H0-DLM-SCSD-EXEC: rc=2296 PASS'; then
+            echo "PASS: SCSD.EXE reached the real executive (SS\$_UNSUPPORTED 2296, not SS\$_NOSUCHDEV 2680)."
+          else
+            echo "FAIL: H0 verdict line 'H0-DLM-SCSD-EXEC: rc=2296 PASS' not found."
+            printf '%s\n' "$OUTPUT" | grep -E 'H0-DLM-SCSD-EXEC|SCSD-I-DLMSELFTEST' || true
+            exit 1
+          fi
 
   # -----------------------------------------------------------------------
   # Job 3b: Kernel Executive (vms-e4d, epic vms-6b8 PHASE 0 HARD BARRIER)

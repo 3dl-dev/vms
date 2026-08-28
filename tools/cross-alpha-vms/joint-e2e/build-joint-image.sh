@@ -135,9 +135,19 @@ echo "-- compiling joint_main.obj (cross cc1, -mpointer-size=64) --"
 "$ALPHA_CC" -mpointer-size=64 -g0 -c /joint/joint_main.c -o "$OUT/joint_main.obj"
 
 # ---- 6. the JOINT-E2E IMAGE: real crt0 + real main, --use the genuine
-#         alpha DECC$SHR, STRICT (no --allow-undefined; expect zero deferred) ----
-echo "== linking joint-e2e image (strict, expect zero deferred) =="
-"$WORK/LINK.EXE" --transfer __main --use "$WORK/DECC\$SHR.EXE" \
+#         alpha DECC$SHR *and* LIBOTS$SHR, STRICT (no --allow-undefined;
+#         expect zero deferred) ----
+# LIBOTS$SHR.EXE is added to the canonical consumer link recipe alongside
+# DECC$SHR.EXE (zlib-crtl-rungs). The alpha-dec-vms port compiler lowers every
+# integer divide/remainder to an OTS$DIV_*/OTS$REM_* call (Alpha has no integer-
+# divide instruction), and those universals live in the SEPARATE LIBOTS$
+# shareable -- DECC$SHR imports OTS$ for its OWN use but does NOT transitively
+# re-export it, so a consumer that divides (zlib, and most real C) would defer
+# OTS$DIV_UL/OTS$REM_UI against DECC$SHR alone. LINK binds only REFERENCED
+# imports, so adding --use LIBOTS$ is inert for programs (like this joint_main)
+# that emit no OTS$ call, and closes the gap for those that do.
+"$WORK/LINK.EXE" --transfer __main \
+    --use "$WORK/DECC\$SHR.EXE" --use "$WORK/libots/LIBOTS_SHR.EXE" \
     -o "$OUT/joint_e2e.exe" "$OUT/crt0.obj" "$OUT/joint_main.obj"
 
 cp "$WORK/LINK.EXE" "$WORK/DECC\$SHR.EXE" "$WORK/libots/LIBOTS_SHR.EXE" "$OUT/"

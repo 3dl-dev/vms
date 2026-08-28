@@ -246,7 +246,27 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     #     (x86_64/aarch64) DECC$SHR.
     #   ovmx_get_libc -- OVMX loader glue (ovmx_libc_stub.c), likewise a
     #     plain OVMX-original name never decorated.
-    VEC="$VEC,__init_libc=PROCEDURE,__copy_tls=PROCEDURE,__init_tp=PROCEDURE,ovmx_get_libc=PROCEDURE"
+    #   ___errno_location -- the port's errno ACCESSOR. musl's <errno.h> defines
+    #     `errno` as `(*__errno_location())` (a plain, undecorated C name), so
+    #     EVERY consumer TU that touches errno emits a reference to it. It is
+    #     "musl-internal", NOT a recognized DEC C RTL surface name, so the alpha
+    #     cc1 does NOT decorate it to decc$* and the ^decc$ enumeration above
+    #     misses it -- exactly as it misses __init_tp/__copy_tls. (The DEC-C-
+    #     decorated decc$get_errno_addr IS exported via the bootstrap surface
+    #     above, but that is DEC C's own errno ABI, not the accessor musl-
+    #     compiled consumer code references.)
+    #       NAME FORM: the C symbol is `__errno_location` (two leading
+    #     underscores; that is how GNU nm reports it in libc.a). LINK.EXE's EVAX
+    #     symbol reader represents an external C symbol with ONE leading
+    #     underscore prepended, uniformly for the musl DEFINITION and for every
+    #     consumer REFERENCE -- so at the link/vector level the name is
+    #     `___errno_location` (THREE underscores). A real port consumer that uses
+    #     errno (gzread.c in zlib, and most real C) references `___errno_location`
+    #     and fails %LINK-F-UNDEF without this export; the two-underscore C form
+    #     does NOT match it. Defined in musl-alpha libc.a
+    #     (src/errno/__errno_location.c), resolved by the strict whole-archive
+    #     link below.
+    VEC="$VEC,__init_libc=PROCEDURE,__copy_tls=PROCEDURE,__init_tp=PROCEDURE,ovmx_get_libc=PROCEDURE,___errno_location=PROCEDURE"
 
     # stdin/stdout/stderr -- the C stdio stream FILE* objects, plain DATA names
     # the decc$ filter above cannot catch. The alpha cc1 does NOT decorate the

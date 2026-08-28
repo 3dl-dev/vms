@@ -779,6 +779,12 @@ uint32_t vms_kif_bg_dassgn(uint32_t exec_chan);
  * channel's socket (poll()/select()-able; data still moves via send/recv). The
  * fd is installed in the caller's fd table; *out_fd gets it on success. */
 uint32_t vms_kif_bg_pollfd(uint32_t exec_chan, int *out_fd);
+/* Materialize the channel's executive socket as a REAL, data-carrying fd (RUNG-3b):
+ * real read/write route to the executive socket, and NO O_CLOEXEC so it survives
+ * execve. The primitive the --wrap dup2/dup uses to hand a BGn: connection to a
+ * ported daemon's exec'd child. *out_fd gets the real fd on success; fail-honest
+ * (no /dev/vms -> SS$_NOSUCHDEV, bad channel -> SS$_IVCHAN), never a fabricated fd. */
+uint32_t vms_kif_bg_materialize_fd(uint32_t exec_chan, int *out_fd);
 /* IO$_SENSEMODE -- report the channel socket's local (which==0) or peer
  * (which==1) address, straight from the host kernel socket. The de-veneer path
  * (vms-4bf): getpeername gets the REAL remote IP:port. Out params (network byte

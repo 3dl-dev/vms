@@ -527,6 +527,7 @@ bgsock-poll-always-ready
 bgsock-getname-addr-zeroed
 bgsock-exec-handle-not-readopted
 bg-accept-socket-not-installed
+bg-materialize-fd-not-routed
 initialize-home-magic-not-written
 dirlogical-compose-drops-common-member
 dcl-acp-search-fid-fabricated
@@ -5869,6 +5870,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    bg-materialize-fd-not-routed)
+        case "$_f" in
+        facility)     echo "INET pseudo-device BGn: -- the real DATA fd the executive materializes for a BG channel (vms_ioctl_bg_materialize_fd / the .read/.write fops of the [bgconn] anon_inode, src/kernel/vms_bg_datafd.c, vms-0cd RUNG-3b). The last structural piece for a wrapped Unix daemon to hand a BGn: connection to its exec'd child: VMS_IOCTL_BG_MATERIALIZE_FD returns a REAL fd (dup2-able, no O_CLOEXEC) whose read/write route to the SAME executive-resident socket the IO\$_READVBLK/WRITEVBLK handlers drive, so DATA TRANSITS THE EXECUTIVE, never a socketpair.";;
+        targets)      echo "kernel/vms_bg_datafd.c";;
+        suites_red)   echo "test_syssvc_bg_materialize_fd";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_bg_datafd_read()'s kernel_recvmsg brings the echoed bytes back from the executive socket into the bounce buffer, then copy_to_user hands them to the child. The mutation makes the read report 0 bytes moved (return 0 -- an orderly-EOF short-circuit) instead of the count kernel_recvmsg returned, so the fork()+exec()'d child sees EOF where the byte-exact echo should be and its raw read()/write() round-trip fails. The fd is still a real dup2-able fd (materialize still returns it, the dup2 + real-fd assertions stay green), and the no-AF_UNIX INV-6 anchor stays green -- only the 'fops route to the executive socket' byte-exact assertion reddens. This is the data-transits-the-executive anchor: break the routing and the proof fails. One return zeroed.";;
+        require_fail) cat <<'EOF'
+a fork()+exec()'d child (no $QIO, no /dev/vms) does raw write()/read() on the inherited real fd byte-exact -- the fd's fops route to the executive socket AND survive execve (vms-0cd)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     # -------------------------------------------------------------------
     # vms-6c6 / vms-165: the two vms-8b6/#284 cross-process mount-visibility
     # controls (vmsfs-mountvis-crossproc-resolve-disabled) and the
@@ -6937,6 +6955,17 @@ apply_edit() {
         # SS$_IVCHAN. After substitution the "tch->sock = accepted;" line is gone
         # from the range, so a second apply is the no-op the selftest requires.
         sed -i '/^long vms_ioctl_bg_accept/,/^}$/ s|        tch->sock = accepted;|        exec_socket_release(accepted); /* NEGCTL bg-accept-socket-not-installed */|' "$_file";;
+
+    bg-materialize-fd-not-routed)
+        # RANGE-ANCHORED to vms_bg_datafd_read's body: its final "    return n;"
+        # (the count kernel_recvmsg routed back from the executive socket) is
+        # replaced with "return 0;", an orderly-EOF short-circuit, so the fork+exec
+        # child sees EOF instead of the byte-exact echo and its raw read()/write()
+        # round-trip fails. The range excludes vms_bg_datafd_write's own "return n;".
+        # The early "return 0;" for count==0 is 8-space indented and is not matched.
+        # After substitution no "    return n;" is left in the range, so a second
+        # apply is the no-op the selftest requires.
+        sed -i '/^static ssize_t vms_bg_datafd_read/,/^}$/ s|    return n;.*|    return 0; /* NEGCTL bg-materialize-fd-not-routed */|' "$_file";;
 
     initialize-home-magic-not-written)
         # UNIQUE TEXT: the home-block magic write in format_volume

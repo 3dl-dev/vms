@@ -219,6 +219,27 @@ struct vms_bg_accept_args {
     uint32_t pad;
 };
 
+/*
+ * Materialize a BG channel as a REAL, DATA-carrying Linux fd (vms-0cd, RUNG-3b).
+ * Unlike the readiness-only poll fd above, this fd has real .read/.write ops that
+ * route straight to the channel's executive-resident socket (the SAME
+ * exec_socket_send/recv the IO$_READVBLK/WRITEVBLK handlers use) -- so DATA STILL
+ * TRANSITS THE EXECUTIVE; it is NOT a host socket handed to userspace, and NOT an
+ * AF_UNIX socketpair (INV-6). It exists because a ported Unix daemon (sshd) hands a
+ * connection to its child by dup2()'ing it onto stdin/stdout and then execv()'ing;
+ * a veneer HANDLE is not a real fd, so dup2 fails. This gives back a real fd that
+ * is dup2-able and -- crucially -- has NO O_CLOEXEC, so it survives execve into the
+ * child, whose ordinary read()/write() on fd 0/1 then reach the executive socket
+ * through this fd's fops. OVMX design choice (Rule 8): the materialized fd is our
+ * own vms.ko-backed handle, labelled "[bgconn]", not a VMS-authentic object. Layout
+ * mirrors vms_bg_pollfd_args (chan in, fd out, status out).
+ */
+struct vms_bg_datafd_args {
+    uint32_t chan;          /* in */
+    int32_t  fd;            /* out: real data-carrying fd (>= 0), else -1 */
+    uint32_t status;        /* out */
+};
+
 #define VMS_IOCTL_BG_CREATE   _IOWR(VMS_IOC_MAGIC, 0x80, struct vms_bg_create_args)
 #define VMS_IOCTL_BG_SETMODE  _IOWR(VMS_IOC_MAGIC, 0x81, struct vms_bg_chanonly_args)
 #define VMS_IOCTL_BG_CONNECT  _IOWR(VMS_IOC_MAGIC, 0x82, struct vms_bg_connect_args)
@@ -232,6 +253,7 @@ struct vms_bg_accept_args {
 #define VMS_IOCTL_BG_BIND     _IOWR(VMS_IOC_MAGIC, 0x8a, struct vms_bg_bind_args)
 #define VMS_IOCTL_BG_LISTEN   _IOWR(VMS_IOC_MAGIC, 0x8b, struct vms_bg_listen_args)
 #define VMS_IOCTL_BG_ACCEPT   _IOWR(VMS_IOC_MAGIC, 0x8c, struct vms_bg_accept_args)
+#define VMS_IOCTL_BG_MATERIALIZE_FD _IOWR(VMS_IOC_MAGIC, 0x8d, struct vms_bg_datafd_args)
 
 /*
  * Freeze the shared layouts -- see vms_mbx.h's identical note for why this
@@ -259,5 +281,7 @@ _Static_assert(sizeof(struct vms_bg_listen_args) == 16,
                "vms_bg_listen_args changed size -- VMS_IOCTL_BG_LISTEN ABI break");
 _Static_assert(sizeof(struct vms_bg_accept_args) == 24,
                "vms_bg_accept_args changed size -- VMS_IOCTL_BG_ACCEPT ABI break");
+_Static_assert(sizeof(struct vms_bg_datafd_args) == 12,
+               "vms_bg_datafd_args changed size -- VMS_IOCTL_BG_MATERIALIZE_FD ABI break");
 
 #endif /* _VMS_BG_H */

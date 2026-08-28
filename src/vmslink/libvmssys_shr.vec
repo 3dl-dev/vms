@@ -102,6 +102,9 @@ vms_kif_bg_recv=PROCEDURE
 vms_kif_bg_deaccess=PROCEDURE
 vms_kif_bg_dassgn=PROCEDURE
 vms_kif_bg_pollfd=PROCEDURE
+# vms-0cd RUNG-3b: materialize a BGn: channel as a real data-carrying fd (dup2-able,
+# survives execve) so a wrapped daemon can hand a connection to its exec'd child.
+vms_kif_bg_materialize_fd=PROCEDURE
 # vms-4bf: OpenSSH de-veneer Tier A -- getsockname/getpeername (IO$_SENSEMODE)
 # and get/setsockopt (IO$_SETMODE/SENSEMODE) over BGn:, so unmodified OpenSSH's
 # getpeername()/setsockopt() dispatch to $QIO on the executive-resident socket.

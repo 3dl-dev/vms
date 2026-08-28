@@ -67,7 +67,16 @@ VERSION_RE = re.compile(r'^#define\s+OVMX_PRODUCT_VERSION\s+"([^"]*)"', re.M)
 # release" by previous_release_tag() below, so the NEXT release's notes
 # would silently skip straight back to the last non-suffixed tag and
 # re-list commits the point release already shipped.
-RELEASE_TAG_RE = re.compile(r'^v?[0-9]+(\.[0-9]+)+(-[0-9]+)?$')
+#
+# The V/v prefix is CASE-INSENSITIVE: this repo has SHIPPED all three
+# spellings -- bare (0.3-8), lowercase (v0.1.0), and UPPERCASE (V0.4,
+# V0.5-1..V0.5-8) -- exactly the set release.yml's tag filter accepts. A
+# lowercase-only `^v?` here silently EXCLUDED every capital-V tag from the
+# candidate set, so previous_release_tag() for V0.5-8 could not see V0.5-7
+# and fell back to the last spelling it DID match (0.3-8) -- making the
+# V0.5-8 notes span ~445 commits back to 0.3-8 instead of the ~15-commit
+# V0.5-7..V0.5-8 delta. Match [Vv] so the immediately-prior release tag wins.
+RELEASE_TAG_RE = re.compile(r'^[Vv]?[0-9]+(\.[0-9]+)+(-[0-9]+)?$')
 ATTEST_RE = re.compile(r'^Attest [0-9a-f]{40}$')
 
 # Reverse-engineering / cluster-wire-protocol work: this project's commit
@@ -140,7 +149,10 @@ def previous_release_tag(repo_root, ref):
         # ahead of it but behind the next dotted release, matching how
         # cut-release.sh names them (vms-1d28).
         main, _, suffix = tag.partition('-')
-        key = [int(p) for p in re.sub(r'^v', '', main).split('.')]
+        # Strip the V/v prefix case-insensitively (see RELEASE_TAG_RE): a
+        # lowercase-only `^v` here left the capital V on a "V0.5" tag, so
+        # int('V0') would raise the moment a capital-V tag became a candidate.
+        key = [int(p) for p in re.sub(r'^[Vv]', '', main).split('.')]
         key.append(int(suffix) if suffix else 0)
         return key
 

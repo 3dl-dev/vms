@@ -86,5 +86,41 @@ if grep -q "since \`0.2\`" "$OUT"; then
     fail "REGRESSION: previous-release detection selected the ref's own tag (0.2)"
 fi
 
-echo "PASS: gen_release_notes.py cuts <prev-tag>..<tag> when --ref is a release tag (non-empty notes)"
+# --- 3. CAPITAL-V tags must be recognized as release candidates --------------
+# THE BUG THIS PINS: RELEASE_TAG_RE matched only a lowercase `v?` prefix, so
+# every capital-V tag (V0.4, V0.5-1..V0.5-8 -- spellings this repo ships and
+# release.yml accepts) was EXCLUDED from the candidate set. previous_release_tag()
+# for V0.5-8 then could not see V0.5-7 and fell back to the last spelling it DID
+# match (0.3-8), so the notes spanned ~445 commits back to 0.3-8 instead of the
+# ~15-commit V0.5-7..V0.5-8 delta -- a public note that reads as broken.
+#
+# Extend the history with two capital-V releases and assert the newer one's
+# notes span the immediately-prior CAPITAL-V tag, not a distant bare fallback.
+echo c > c.txt && git add -A && git commit -q -m "feat: capital-V era feature"
+id_header "V0.3-1"
+git add -A && git commit -q -m "release: cut V0.3-1"
+git tag V0.3-1
+
+echo d > d.txt && git add -A && git commit -q -m "feat: only-in-V0.3-2 feature"
+id_header "V0.3-2"
+git add -A && git commit -q -m "release: cut V0.3-2"
+git tag V0.3-2
+
+OUTV="$WORK/notes-V0.3-2.md"
+python3 "$GEN" --repo-root "$REPO" --ref V0.3-2 --out "$OUTV" 2>"$WORK/genv.err" \
+    || { cat "$WORK/genv.err" >&2; fail "gen_release_notes.py exited nonzero for --ref V0.3-2"; }
+
+# The immediately-prior release is the capital-V tag V0.3-1, NOT bare 0.2.
+grep -q "since \`V0.3-1\`" "$OUTV" \
+    || fail "capital-V prev-tag not detected: expected 'since \`V0.3-1\`', got:\n$(cat "$OUTV")"
+grep -qF "feat: only-in-V0.3-2 feature" "$OUTV" \
+    || fail "V0.3-2 notes do not list the commit between V0.3-1 and V0.3-2"
+# Must NOT span back past V0.3-1 (the pre-fix fallback behaviour).
+if grep -q "since \`0.2\`" "$OUTV" || grep -q "since \`v0.1.0\`" "$OUTV"; then
+    fail "REGRESSION: capital-V tag ignored -> notes fell back to a distant bare tag"
+fi
+grep -qF "feat: capital-V era feature" "$OUTV" \
+    && fail "REGRESSION: V0.3-2 notes re-list commits V0.3-1 already shipped (span too wide)"
+
+echo "PASS: gen_release_notes.py cuts <prev-tag>..<tag> for lowercase/bare AND capital-V release tags"
 exit 0

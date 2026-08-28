@@ -118,6 +118,16 @@ $! registered components (RUN_COMPONENTS), then the one site file (if any)
 $! documented for that phase.
 $! ======================================================================
 $ RUN_PHASES:
+$!  FIX C (vms-af26, boot-speed): read the component database SYS$STARTUP:
+$!  VMS$VMS.DAT ONCE into DCL symbols here, before the phase loop, instead of
+$!  re-OPEN/READ-ing it inside RUN_COMPONENTS for every one of the nine phases
+$!  (nine full opens+scans of the same file per boot). LOAD_COMPONENTS caches
+$!  each registration line's phase name and procedure filespec into the indexed
+$!  symbols COMPONENT_PHASE_n / COMPONENT_PROC_n (n = 1..COMPONENT_COUNT);
+$!  RUN_COMPONENTS then walks those symbols. Behaviour is identical -- the same
+$!  procedures run for the same phases, in file order -- only the redundant
+$!  re-reads are gone.
+$   GOSUB LOAD_COMPONENTS
 $   OPEN/READ PHASE_FILE SYS$STARTUP:VMS$PHASES.DAT
 $ PHASE_LOOP:
 $   READ PHASE_FILE PHASE_NAME
@@ -154,25 +164,43 @@ $   WRITE SYS$OUTPUT "The OVMX system is now executing the site-specific startup
 $   @SYS$MANAGER:SYSTARTUP_VMS.COM
 $   RETURN
 $!
-$! RUN_COMPONENTS - run every SYS$STARTUP:VMS$VMS.DAT component registered
-$! for the CURRENT phase (PHASE_NAME, set by RUN_PHASES above). See
-$! SYS$STARTUP:VMS$VMS.DAT's own header for the OVMX-defined line format
-$! (Rule 8: this format is OVMX's invention, not VMS-authentic). A phase
-$! with no matching line runs nothing and prints nothing -- an empty phase
-$! is honest, not a shortcut.
-$ RUN_COMPONENTS:
+$! LOAD_COMPONENTS - read SYS$STARTUP:VMS$VMS.DAT ONCE (FIX C, vms-af26) and
+$! cache each registration into COMPONENT_PHASE_n / COMPONENT_PROC_n. Called
+$! once from RUN_PHASES before the phase loop. See SYS$STARTUP:VMS$VMS.DAT's
+$! own header for the OVMX-defined line format (Rule 8: this format is OVMX's
+$! invention, not VMS-authentic). The same skip rules RUN_COMPONENTS applied
+$! per phase are applied once here: blank lines and lines beginning with "!"
+$! are ignored, so only real registrations are cached.
+$ LOAD_COMPONENTS:
+$   COMPONENT_COUNT = 0
 $   OPEN/READ COMPONENT_FILE SYS$STARTUP:VMS$VMS.DAT
-$ COMPONENT_LOOP:
+$ LOAD_LOOP:
 $   READ COMPONENT_FILE COMPONENT_LINE
-$   IF $STATUS .EQ. 2160 THEN GOTO COMPONENT_LOOP_DONE
-$   IF COMPONENT_LINE .EQS. "" THEN GOTO COMPONENT_LOOP
+$   IF $STATUS .EQ. 2160 THEN GOTO LOAD_LOOP_DONE
+$   IF COMPONENT_LINE .EQS. "" THEN GOTO LOAD_LOOP
 $   COMPONENT_FIRST_CHAR = F$EXTRACT(0,1,COMPONENT_LINE)
-$   IF COMPONENT_FIRST_CHAR .EQS. "!" THEN GOTO COMPONENT_LOOP
-$   COMPONENT_PHASE = F$ELEMENT(0," ",'COMPONENT_LINE')
-$   IF COMPONENT_PHASE .NES. PHASE_NAME THEN GOTO COMPONENT_LOOP
-$   COMPONENT_PROC = F$ELEMENT(1," ",'COMPONENT_LINE')
+$   IF COMPONENT_FIRST_CHAR .EQS. "!" THEN GOTO LOAD_LOOP
+$   COMPONENT_COUNT = COMPONENT_COUNT + 1
+$   COMPONENT_PHASE_'COMPONENT_COUNT' = F$ELEMENT(0," ",'COMPONENT_LINE')
+$   COMPONENT_PROC_'COMPONENT_COUNT' = F$ELEMENT(1," ",'COMPONENT_LINE')
+$   GOTO LOAD_LOOP
+$ LOAD_LOOP_DONE:
+$   CLOSE COMPONENT_FILE
+$   RETURN
+$!
+$! RUN_COMPONENTS - run every component registered for the CURRENT phase
+$! (PHASE_NAME, set by RUN_PHASES above). Walks the symbols LOAD_COMPONENTS
+$! cached from SYS$STARTUP:VMS$VMS.DAT -- no file re-open (FIX C, vms-af26).
+$! A phase with no matching registration runs nothing and prints nothing --
+$! an empty phase is honest, not a shortcut.
+$ RUN_COMPONENTS:
+$   COMPONENT_I = 0
+$ COMPONENT_LOOP:
+$   COMPONENT_I = COMPONENT_I + 1
+$   IF COMPONENT_I .GT. COMPONENT_COUNT THEN GOTO COMPONENT_LOOP_DONE
+$   IF COMPONENT_PHASE_'COMPONENT_I' .NES. PHASE_NAME THEN GOTO COMPONENT_LOOP
+$   COMPONENT_PROC = COMPONENT_PROC_'COMPONENT_I'
 $   IF COMPONENT_PROC .NES. "" THEN @'COMPONENT_PROC'
 $   GOTO COMPONENT_LOOP
 $ COMPONENT_LOOP_DONE:
-$   CLOSE COMPONENT_FILE
 $   RETURN

@@ -3308,11 +3308,30 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                     touched = 1;
                 }
                 if (args.attr_ctl & VMS_ACP_ATTR_OWNER) {
-                    acp_put16(sc->filehdr + offsetof(ods2_fh2_t, fh2_fileowner) + 0,
-                             args.attr.uic_member);
-                    acp_put16(sc->filehdr + offsetof(ods2_fh2_t, fh2_fileowner) + 2,
-                             args.attr.uic_group);
-                    touched = 1;
+                    /*
+                     * FIX D (vms-af26, boot-speed): skip the header write-back
+                     * when the on-disk owner ALREADY equals the requested UIC.
+                     * PROVISION.EXE re-owns the whole SYS0 tree on EVERY boot
+                     * (own_spec_tree_acp, src/ovmx_provision/ovmx_provision.c),
+                     * which on a warm reboot is an O(files) sequence of 512-byte
+                     * FH2 write-backs that change nothing -- re-stamping already
+                     * -correct ownership every boot is wasted work, not
+                     * provisioning. sc->fh was decoded from sc->filehdr by the
+                     * acp_read_header() above, so fh2_fileowner is this file's
+                     * CURRENT on-disk owner. Only mark the header touched (and
+                     * thus written) when the owner genuinely differs; a
+                     * mis-owned or new file still gets owned. Correctness is
+                     * unchanged -- the resulting on-disk owner is identical
+                     * either way; only the redundant write is elided.
+                     */
+                    if (sc->fh.fh2_fileowner.uic_group  != args.attr.uic_group ||
+                        sc->fh.fh2_fileowner.uic_member != args.attr.uic_member) {
+                        acp_put16(sc->filehdr + offsetof(ods2_fh2_t, fh2_fileowner) + 0,
+                                 args.attr.uic_member);
+                        acp_put16(sc->filehdr + offsetof(ods2_fh2_t, fh2_fileowner) + 2,
+                                 args.attr.uic_group);
+                        touched = 1;
+                    }
                 }
 
                 if (touched) {

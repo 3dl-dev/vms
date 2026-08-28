@@ -17,7 +17,14 @@ summary: >
   waiting queue (VMS_DLM_STS_QUEUED, not a grant, not a NOQUEUE decline), the
   master FIRES a blocking-AST decision naming the remote holder, and a real
   cross-node $DEQ releases and grants the blocked request (block-then-grant).
-  See kernel-executive.yaml for the single-node lock manager this builds on.
+  Rung H5 (vms-6ca) carries the async replies over the real SCS wire: the master
+  WIREs the queued-reply and — on a real $DEQ — the deferred GRANT, and the
+  REQUESTER-SIDE GRANT RECEIVE (was SS$_UNSUPPORTED) completes an
+  executive-resident origin record on the requesting node, so the block-then-grant
+  status flip (NL->EX) is observed on the REQUESTER across the wire, not just in
+  the master's local state. The BLKAST wire is deferred honestly (the holder
+  releases on its own). See kernel-executive.yaml for the single-node lock manager
+  this builds on.
 last_reviewed: 2026-08-28
 items:
   - id: cluster-dlm$cross-node-lock
@@ -38,6 +45,29 @@ items:
       real /dev/vms (tests/qemu/test_syssvc_dlm_xnode.c, x86_64 + Alpha LP64). No
       fake grants OR blocks — a queued request is a real lock on the master's
       queue that releases only on a real $DEQ (INV-6).
+  - id: cluster-dlm$async-reply-wire
+    kind: feature
+    status: partial
+    authenticity: real
+    vms: "Async DLM replies (queued-reply + deferred GRANT) delivered over SCS; requester-side completion"
+    evidence: src/vmsscs/scsd.c
+    notes: >
+      vms-6ca rung H5. The master's async replies ride the live SCS wire: node B
+      WIREs the queued-reply (granted mode NL — the requester stays genuinely
+      pending) and, on a real cross-node $DEQ that flips a queued waiter to
+      granted, WIREs an unprompted deferred GRANT (SS$_NORMAL, the granted mode)
+      to that requester (vms_lock_dlm_xnode_deq reports the flipped waiter). The
+      REQUESTER-SIDE GRANT RECEIVE (VMS_DLM_OP_GRANT, was SS$_UNSUPPORTED)
+      completes an executive-resident ORIGIN record on the requesting node, whose
+      granted mode is set ONLY from what the master sent over SCS; GETLKI reads
+      the NL->EX flip back on the REQUESTER. Proven on a two-node live A<->B QEMU
+      harness with real /dev/vms on both (tests/qemu/run_dlm_harness_h5.sh:
+      SCSD-I-DLMPEND, SCSD-I-DLMDEFER, SCSD-I-DLMH5FLIP granted_mode=EX). The
+      BLKAST wire (master -> holder) is deferred honestly on this rung — BLKAST as
+      a receive op still returns SS$_UNSUPPORTED; the block-then-grant is proven
+      without it (the holder releases on its own). Multi-peer routing of a deferred
+      grant by CSID (releaser and queued waiter on different nodes) is a later
+      rung; H5 proves the same-peer case. No fabricated wire reply or grant (INV-6).
   - id: cluster-dlm$remaster-lvb-deadlock
     kind: feature
     status: absent

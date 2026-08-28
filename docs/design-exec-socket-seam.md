@@ -285,9 +285,22 @@ references are to `src/kernel/vms_bg.c` @ 303d4680 unless noted.
      (4) `tests/netbsd/Dockerfile` guest-src. **(4) is edited by the #803 combine —
      that is why C waits for post-combine main.**
 
-**D. Makefiles (Linux):** `src/kernel/Makefile` — remove `vms_bg.o`, add
-   `vms_bg_pollfd.o`; kernel-core build — add `vms_bg.o`. (These are the gated
-   `src/kernel/Makefile` hunks.)
+**D. Makefiles (Linux) — TWO object lists, not one:** `vms.ko` is built from
+   `vms-y` in **both** `src/kernel/Makefile` (the standalone / QEMU-test build)
+   **and** `distro/kernel/drivers-ovmx/vms/Kbuild` (the in-tree build the bootable
+   distro image uses — `overlay-ovmx-drivers.sh` FLATTENS `src/kernel*` + the
+   sources.conf globs into one dir). Update **both**: remove `vms_bg.o` / add
+   `vms_bg_pollfd.o` in `src/kernel/Makefile`; add `vms_bg_pollfd.o` to the Kbuild
+   `vms-y` (its `vms_bg.o` already covers the flattened kernel-core file, and the
+   `src/kernel*/*.c` globs stage the new sources automatically — only the explicit
+   object list needs the edit). **A cross-dir include must be a plain basename**
+   (`#include "vms_bg_core.h"`, not `"../kernel-core/..."`) so it resolves under
+   both `-I../kernel-core` (standalone) and the flattened `-I$(src)` (in-tree).
+   MISSED FIRST PASS → the DCL/SHOW boot gate red on
+   `modpost: "vms_ioctl_bg_pollfd" undefined` (the standalone build + QEMU shards
+   were green, masking it); caught by the boot-the-rebuilt-vms.ko gate. Both
+   layouts now build clean, verified locally (standalone `make` + a flattened
+   overlay reproduction).
 
 **E. Proof + cascade:** 3-way compile — Linux `vms.ko` (host-light module build)
    + NetBSD cross-kmod (`build-vms-module-vax.sh`, type-checks the twin) + confirm

@@ -33,7 +33,10 @@
 
 #include "vms_internal.h"       /* struct vms_proc / SS__* / vms_bg_pollfd_args */
 #include "exec_kbackend.h"      /* exec_socket_t / exec_socket_raw / exec_socket_release */
-#include "../kernel-core/vms_bg_core.h"  /* vms_bg_ref_socket -- the core boundary */
+#include "vms_bg_core.h"        /* vms_bg_ref_socket -- the core boundary. Plain
+                                 * basename: resolves via -I../kernel-core in the
+                                 * standalone src/kernel build AND via -I$(src) in
+                                 * the flattened in-tree drivers/ovmx/vms build. */
 
 /* ---- readiness-only poll fd ------------------------------------------------
  * A real Linux fd whose .poll delegates to the executive socket's own poll, and

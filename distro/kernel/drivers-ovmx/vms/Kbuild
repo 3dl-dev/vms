@@ -20,6 +20,7 @@ vms-y := vms_module.o \
          vms_p0.o \
          vms_p1.o \
          vms_bg.o \
+         vms_bg_pollfd.o \
          vms_access.o \
          vms_ast.o \
          vms_devtab.o \

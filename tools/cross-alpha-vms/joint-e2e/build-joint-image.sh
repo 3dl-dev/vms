@@ -53,6 +53,7 @@ docker run --rm \
     -v "$SRC_ROOT:/src:ro" \
     -v "$HERE:/joint:ro" \
     -v "$OUT:/out" \
+    -e IMGACT_INTERP_PATH \
     "$IMG" bash -c '
 set -euxo pipefail
 OUT=/out
@@ -77,8 +78,17 @@ LIBGCC="$PREFIX/lib/libgcc.a"
 test -f "$LIBC" || { echo "FAIL: musl-alpha libc.a not built" >&2; exit 1; }
 
 # ---- 2. LINK.EXE (host tool) ----
-echo "-- building LINK.EXE --"
-gcc -std=gnu11 -O2 -I/src/src/vmslink/include -o "$WORK/LINK.EXE" /src/src/vmslink/link.c
+# vms-157: IMGACT_INTERP_PATH (optional, from the environment) overrides the
+# PT_INTERP LINK.EXE bakes into the joint_e2e image. The default is the native-
+# toolchain path /vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE, which is NOT a POSIX path
+# on the ACP-flipped bootable runtime (the /vms passthrough is retired) -- so the
+# kernel cannot open the interpreter and execve fails. The boot proof
+# (tools/cross-alpha/build-alpha-bootimage.sh) sets IMGACT_INTERP_PATH to the
+# bootable stage dir /run/ovmx-boot/IMGACT.EXE, where PID 1 stages IMGACT.EXE.
+# Passed as a BARE token (not a quoted string), per link.c: link.c stringifies it.
+echo "-- building LINK.EXE (IMGACT_INTERP_PATH=${IMGACT_INTERP_PATH:-<default /vms>}) --"
+gcc -std=gnu11 -O2 ${IMGACT_INTERP_PATH:+-DIMGACT_INTERP_PATH=$IMGACT_INTERP_PATH} \
+    -I/src/src/vmslink/include -o "$WORK/LINK.EXE" /src/src/vmslink/link.c
 
 # ---- 3. LIBOTS$SHR.EXE (the OTS$ integer-divide/block-move runtime the
 #         port compiler emits calls to; a SEPARATE shareable, the faithful

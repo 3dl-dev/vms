@@ -27,6 +27,19 @@ int vmsfs_device_add(const char *devname, const char *mount_point);
 /* Look up a device's Linux mount point. Returns SS$_NORMAL or SS$_NOSUCHDEV */
 int vmsfs_device_resolve(const char *devname, char *mount_point, size_t size);
 
+/*
+ * vms-b3e: is the DEVICE at the head of VMS filespec `spec` a unit genuinely
+ * mounted RIGHT NOW in the kernel's own mount table (/proc/mounts) at
+ * /mnt/<dev> by a real, cross-process Linux VFS mount the Files-11 ACP does
+ * not own? Returns 1 iff so. Reads only /proc/mounts (global, cross-process,
+ * INV-6); returns 0 for the seeded /vms SYS$DISK passthrough and for any
+ * unmounted unit, so it never resurrects the /vms masquerade. (vms-165 retired
+ * the vmsfs VFS driver, so no unit mounts as a `vmsfs' type any more; this
+ * fail-honest fallback therefore now only ever returns 0 -- the runtime reads
+ * every ODS-2 volume through the executive ACP, never a VFS mount.)
+ */
+int vmsfs_device_spec_kernel_mounted(const char *spec);
+
 /* Remove a device from the table */
 int vmsfs_device_remove(const char *devname);
 

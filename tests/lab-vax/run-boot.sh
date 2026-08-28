@@ -26,8 +26,8 @@
 #   1. CROSS-BUILD (ovmx-cross-vax): STARTUP.EXE (ovmx_init, dynamic elf32-vax,
 #      ld.elf_so activation, Decision A) + loadable vms.kmod + vmsfs.kmod.
 #   2. BUILD-KERNEL (ovmx-cross-vax): the GENERIC+MODULAR vax kernel (cached).
-#   3. MASTER (ovmx-cross-vax): a small OVMX ODS-2 volume (tests/qemu/
-#      mkimage_vmsfs.c; host cc; arch-independent). Cached.
+#   3. MASTER (ovmx-cross-vax): a small OVMX ODS-2 volume (vmsfs_master
+#      --ods2; host cc; arch-independent). Cached.
 #   4. INSTALL (ovmx-vax-lab): install NetBSD/vax once if the shared cache is cold.
 #   5. INSTALL-KERNEL (ovmx-vax-lab): swap the MODULAR kernel onto the SHARED disk
 #      once (shared marker; the siblings may have done it already).
@@ -59,6 +59,18 @@
 # proven stable across N consecutive runs (see the vms-065 PR description):
 #   tests/lab-vax/run-boot.sh gate            # 0 = VAX boots to DCL,
 #                                             # nonzero = not release-clean
+#
+# vms-d0e5 (parent vms-4834) adds ONE MORE mode -- the two-disk INSTALL proof,
+# the vax mirror of the x86_64 install e2e (tests/qemu/test_install_menu.sh +
+# test_install_boot_e2e.sh + test_product_install_e2e.sh). It builds the real
+# vax image set + OVMX-OS-VAX.KIT, masters the DISTRIBUTION volume (which boots
+# into OVMX$INSTALL.COM), formats a BLANK ODS-2 target, then boots the
+# distribution volume (rq1 -> DKA0:) with the blank target (rq2 -> DKA100:) and
+# drives the menu's PRESERVE path to install OVMX onto the target, asserting a
+# rooted, genuinely-activatable system tree AND a real on-disk write (sha256
+# before/after, INV-6 teeth), via tests/lab-vax/drive_install_vax.py:
+#   tests/lab-vax/run-boot.sh install         # 0 = install onto a blank target
+#                                             # succeeded and really wrote bytes
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -90,6 +102,41 @@ KERNEL_MARKER="${CACHE_DIR}/.ovmx-modular-kernel-installed"   # SHARED with sibl
 BOOT_WORKDIR="${CACHE_DIR}/boot-work"
 BOOT_COPY_MARKER="${CACHE_DIR}/.boot-disk-copied"
 BOOT_INSTALL_MARKER="${CACHE_DIR}/.ovmx-init-installed"
+
+# vms-d0e5 rung G: the two-disk INSTALL proof's artifacts (the `install' mode
+# only). VAX_IMAGES_DIR holds the FULL shipped vax image set (real elf32-vax
+# executables, built by the ovmx-images CMake target) that BOTH the OS kit and
+# the distribution volume draw from; the distribution volume boots into
+# OVMX$INSTALL.COM and installs onto the freshly-formatted blank target.
+VAX_IMAGES_DIR="${VAX_IMAGES_DIR:-${CACHE_DIR}/vax-images}"
+OS_KIT="${OS_KIT:-${CACHE_DIR}/OVMX-OS-VAX.KIT}"
+DISTRIB_IMG="${DISTRIB_IMG:-${CACHE_DIR}/ovmx-distrib-vax.img}"
+BLANK_TARGET_IMG="${BLANK_TARGET_IMG:-${CACHE_DIR}/dka100-target.img}"
+
+# vms-329: the sysboot NEGATIVE CONTROL's volume. It must be a GENUINE, mountable
+# ODS-2 volume that simply has no SYS$SYSTEM:DCL.EXE, so the thing it proves is
+# the INSTALLED-SYSTEM gate's teeth and nothing else. Before the ACP cutover the
+# negctl reused ODS2_IMG (which, before vms-165 retired the vmsfs VFS driver, was
+# a byte-divergent legacy-VMFS image); ODS2_IMG is now a GENUINE ODS-2 volume
+# (master_volume, vmsfs_master --ods2) that DOES mount through the executive ACP
+# but carries no SYS$SYSTEM:DCL.EXE -- so the sysboot negctl still halts on the
+# INSTALLED-SYSTEM gate rather than one step earlier at "would not mount". It
+# gets its own ODS-2 image (SYSNEG_IMG) rather than re-mastering ODS2_IMG, so the
+# two negative controls cannot perturb each other.
+SYSNEG_IMG="${SYSNEG_IMG:-${CACHE_DIR}/ovmx-sysneg-vax.img}"
+
+# vms-7b15: the SINGLE-disk artifact -- ONE labeled MSCP disk that VMB boots the
+# NetBSD root off partition 'a' AND from which the executive mounts the OVMX
+# ODS-2 system volume off partition 'e' (DKA0: -> ra0e), with NO rq1. The slim
+# artifact for the PCjs browser demo. SINGLE_A_SECTORS is what the root FFS is
+# resize_ffs'd to; SINGLE_TOTAL_SECTORS is the slim whole-disk size the image is
+# truncated to; SINGLE_RQ0_TYPE is the SIMH MSCP drive type sized to match (a
+# custom-sized RAUSER disk, not the 2 GiB RA92 install geometry).
+SINGLE_WORKDIR="${SINGLE_WORKDIR:-${CACHE_DIR}/single-work}"
+SINGLE_IMG="${SINGLE_IMG:-${SINGLE_WORKDIR}/wd0.img}"
+SINGLE_A_SECTORS="${SINGLE_A_SECTORS:-524288}"      # root FFS: 256 MiB
+SINGLE_TOTAL_SECTORS="${SINGLE_TOTAL_SECTORS:-664360}"  # slim disk: RAUSER=340
+SINGLE_RQ0_TYPE="${SINGLE_RQ0_TYPE:-RAUSER=340}"    # 324 MiB MSCP disk
 
 CROSS_IMAGE="${CROSS_IMAGE:-ovmx-cross-vax}"
 LAB_IMAGE="${LAB_IMAGE:-ovmx-vax-lab}"
@@ -136,14 +183,14 @@ ensure_src() {
   [ -f "${NBSRC_DIR}/usr/src/build.sh" ] || die "src tree extract incomplete"
 }
 
-# 1. cross-build STARTUP.EXE + vms.kmod + vmsfs.kmod into ARTIFACTS_DIR (each into
-#    its own scratch subdir; only the delivered artifact is copied up, so the CD
-#    carries just the four boot deliverables).
+# 1. cross-build STARTUP.EXE + vms.kmod into ARTIFACTS_DIR (each into its own
+#    scratch subdir; only the delivered artifact is copied up). vms-165: the
+#    vmsfs.kmod VFS module is gone -- the runtime reads SYS$DISK over the
+#    executive ACP (vms.kmod), never a vmsfs mount, so it is no longer built.
 cross_build() {
   if [ "${FORCE_CROSS_BUILD:-0}" != "1" ] \
      && [ -f "${ARTIFACTS_DIR}/STARTUP.EXE" ] \
-     && [ -f "${ARTIFACTS_DIR}/vms.kmod" ] \
-     && [ -f "${ARTIFACTS_DIR}/vmsfs.kmod" ]; then
+     && [ -f "${ARTIFACTS_DIR}/vms.kmod" ]; then
     log "boot artifacts present -- NOT rebuilding (set FORCE_CROSS_BUILD=1 to force)"; return 0; fi
   ensure_src
   mkdir -p "${ARTIFACTS_DIR}"
@@ -158,12 +205,8 @@ cross_build() {
   docker run --rm -v "${REPO}:/src" -w /src -v "${NBSRC_DIR}:/nbsrc:ro" \
     -v "${ARTIFACTS_DIR}:/out" --entrypoint sh "${CROSS_IMAGE}" -c \
     'OUT=/tmp/build-devvms sh tools/cross-vax/build-devvms-vax.sh && cp /tmp/build-devvms/vms.kmod /out/vms.kmod'
-  log "cross-building the loadable vmsfs.kmod for elf32-vax"
-  docker run --rm -v "${REPO}:/src" -w /src -v "${NBSRC_DIR}:/nbsrc:ro" \
-    -v "${ARTIFACTS_DIR}:/out" --entrypoint sh "${CROSS_IMAGE}" -c \
-    'OUT=/tmp/build-vmsfs sh tools/cross-vax/build-vmsfs-mount-vax.sh && cp /tmp/build-vmsfs/vmsfs.kmod /out/vmsfs.kmod'
   [ -f "${ARTIFACTS_DIR}/STARTUP.EXE" ] && [ -f "${ARTIFACTS_DIR}/vms.kmod" ] \
-    && [ -f "${ARTIFACTS_DIR}/vmsfs.kmod" ] || die "cross-build missing artifacts"
+    || die "cross-build missing artifacts"
 }
 
 # 2. build (or reuse) the custom MODULAR kernel, cached as ARTIFACTS_DIR/netbsd-OVMX.
@@ -192,14 +235,30 @@ build_kernel() {
   [ -f "${ARTIFACTS_DIR}/netbsd-OVMX" ] || die "kernel build finished but netbsd-OVMX missing"
 }
 
-# 3. master a small OVMX ODS-2 volume (host cc; arch-independent). Cached/shared.
+# 3. master a small GENUINE ODS-2 volume (host cc; arch-independent). Cached/shared.
+#    vms-165: the retired vmsfs VFS driver took its legacy-format helper
+#    (tests/qemu/mkimage_vmsfs.c) with it. The guest now mounts this volume ONLY
+#    through the vms.kmod Files-11 ACP, which reads genuine ODS-2 -- so master it
+#    with the same ODS-2 codec (vmsfs_master --ods2) the SYSTEM volume above uses,
+#    not the old byte-divergent VMSFS helper.
 master_volume() {
   if [ -f "${ODS2_IMG}" ]; then
     log "mastered ODS-2 volume present -- NOT re-mastering"; return 0; fi
-  log "mastering a small OVMX ODS-2 volume (tests/qemu/mkimage_vmsfs.c)"
+  log "mastering a small OVMX ODS-2 volume (vmsfs_master --ods2)"
   docker run --rm -v "${REPO}:/src:ro" -v "$(dirname "${ODS2_IMG}"):/out" \
-    --entrypoint sh "${CROSS_IMAGE}" -c \
-    "cc -O2 -Wall -I /src/src/kernel/vmsfs -o /tmp/mkimage_vmsfs /src/tests/qemu/mkimage_vmsfs.c && /tmp/mkimage_vmsfs /out/$(basename "${ODS2_IMG}")"
+    --entrypoint sh "${CROSS_IMAGE}" -c '
+      set -e
+      cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+         -I /src/src/vmsfs/include \
+         -o /tmp/vmsfs_master /src/tools/vmsfs_master.c \
+         /src/src/vmsfs/ods2/ods2_reader.c /src/src/vmsfs/ods2/ods2_writer.c \
+         /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
+         /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
+      mkdir -p /tmp/ods2stage
+      printf "Hello from the OVMX ODS-2 test volume\n" > /tmp/ods2stage/HELLO.TXT
+      /tmp/vmsfs_master --ods2 master /out/'"$(basename "${ODS2_IMG}")"' OVMXTEST /tmp/ods2stage 4
+      /tmp/vmsfs_master --ods2 list /out/'"$(basename "${ODS2_IMG}")"'
+    '
   [ -f "${ODS2_IMG}" ] || die "ODS-2 mastering did not produce ${ODS2_IMG}"
 }
 
@@ -237,8 +296,18 @@ build_boot_image_set() {
 #    reused data/COM files + the Decision-A SYSTARTUP_VMS.COM), and master a
 #    64 MB vmsfs volume. All inside CROSS_IMAGE's native cc (same "cc a host tool
 #    in the container" pattern as master_volume above -- nothing on the host).
-#    vmsfs is little-endian on disk, so a host-built vmsfs_master masters a
-#    vax-bootable volume directly.
+#    ODS-2 is little-endian on disk (arch-neutral), so a host-built
+#    vmsfs_master masters a vax-mountable volume directly.
+#
+#    GENUINE ODS-2, NOT VMFS (vms-329). --ods2 is mandatory now, not a choice:
+#    since the coupled cutover PID 1 $MOUNTs SYS$DISK through the executive
+#    Files-11 ACP, and vmsfs_acp.c validates the media (home block + BITMAP.SYS
+#    header + SCB, struclev V2) before recording the mount. The default VMFS
+#    master writes its own "SFMV" superblock at LBN 1, which the ACP correctly
+#    REFUSES with SS$_DEVNOTMOUNT -- observed on the first cutover boot as
+#    %OVMX-F-SYSINIT right after a successful open+read of /dev/ra1c. That
+#    refusal is the ACP being fail-honest about a non-ODS-2 volume (INV-6), so
+#    the fix is to master the real format, never to relax the validation.
 master_system_volume() {
   # ALWAYS re-master (rd vms-72da). The mastered volume must reflect the CURRENT
   # staged boot images (stage_sysvol.sh + SYSVOL_IMAGES_DIR). Mastering is cheap
@@ -255,10 +324,14 @@ master_system_volume() {
     -v "$(dirname "${SYSVOL_IMG}"):/out" --entrypoint sh "${CROSS_IMAGE}" -c '
       set -e
       cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
-         -I /src/src/kernel/vmsfs -o /tmp/vmsfs_master /src/tools/vmsfs_master.c
+         -I /src/src/vmsfs/include \
+         -o /tmp/vmsfs_master /src/tools/vmsfs_master.c \
+         /src/src/vmsfs/ods2/ods2_reader.c /src/src/vmsfs/ods2/ods2_writer.c \
+         /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
+         /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
       bash /src/tests/lab-vax/stage_sysvol.sh /images /src /tmp/stage
-      /tmp/vmsfs_master master /out/'"$(basename "${SYSVOL_IMG}")"' OVMXSYS /tmp/stage 64
-      /tmp/vmsfs_master list /out/'"$(basename "${SYSVOL_IMG}")")"
+      /tmp/vmsfs_master --ods2 master /out/'"$(basename "${SYSVOL_IMG}")"' OVMXSYS /tmp/stage 64
+      /tmp/vmsfs_master --ods2 list /out/'"$(basename "${SYSVOL_IMG}")")"
   echo "${listing}"
   [ -f "${SYSVOL_IMG}" ] || die "system-volume mastering did not produce ${SYSVOL_IMG}"
   # Hard content gate: the mastered volume MUST carry the images PID 1 execs and
@@ -268,7 +341,148 @@ master_system_volume() {
     echo "${listing}" | grep -qiF "${f}" \
       || die "mastered system volume is MISSING ${f} -- staging/caching regression (vms-72da)"
   done
-  log "mastered system volume carries DCL.EXE + PROVISION.EXE + OVMXVMSSYS.PAR"
+  # vms-329: [USERS] must be on the volume or PROVISION's home-directory pass has
+  # no parent to create the four account homes in, and reports four
+  # %OVMX-W-OWNER "did not resolve over the ACP (parent missing?)" -- which the
+  # sysboot proof fails on, correctly. distro/Dockerfile.bootable gates the
+  # x86_64 distribution image on the same "]USERS.DIR;" line; this is its vax
+  # twin, so a stage_sysvol.sh regression fails HERE and not three minutes into
+  # a SIMH boot.
+  echo "${listing}" | grep -qiE '\]USERS\.DIR' \
+    || die "mastered system volume is MISSING [USERS] -- PROVISION cannot create the account home directories over the ACP (vms-329)"
+  log "mastered system volume carries DCL.EXE + PROVISION.EXE + OVMXVMSSYS.PAR + [USERS]"
+}
+
+# 3d (install). Cross-build the FULL shipped vax image set via the top-level
+#    CMake `ovmx-images' target (tools/cross-vax/build-ovmx-images-vax-cmake.sh)
+#    and collect the boot + utility images (PRODUCT/AUTHORIZE/INITIALIZE/SYSGEN)
+#    into VAX_IMAGES_DIR. These are REAL elf32-vax executables (the script asserts
+#    the Decision-A activation contract on each), NOT stand-ins -- both the OS kit
+#    and the distribution volume below draw from here (rd vms-d0e5 rung G).
+build_vax_images() {
+  local need="STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE PRODUCT.EXE AUTHORIZE.EXE INITIALIZE.EXE SYSGEN.EXE"
+  if [ "${FORCE_VAX_IMAGES:-0}" != "1" ]; then
+    local have=1
+    for img in $need; do [ -f "${VAX_IMAGES_DIR}/${img}" ] || have=0; done
+    [ "${have}" -eq 1 ] && { log "vax image set present -- NOT rebuilding (set FORCE_VAX_IMAGES=1)"; return 0; }
+  fi
+  mkdir -p "${VAX_IMAGES_DIR}"
+  log "cross-building the full shipped vax image set ('cmake --build --target ovmx-images'; hard cap ${KBUILD_TIMEOUT}s)"
+  local cid="ovmx-install-images-$$"; local rc=0
+  set +e
+  timeout --kill-after="${TIMEOUT_GRACE}" "${KBUILD_TIMEOUT}" \
+    docker run --rm --name "${cid}" -v "${REPO}:/src" -w /src -v "${VAX_IMAGES_DIR}:/out" \
+      --entrypoint sh "${CROSS_IMAGE}" -c '
+        set -e
+        BUILD_DIR=/tmp/build-vax-images-cmake sh tools/cross-vax/build-ovmx-images-vax-cmake.sh
+        for img in STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE \
+                   PRODUCT.EXE AUTHORIZE.EXE INITIALIZE.EXE SYSGEN.EXE; do
+          cp /tmp/build-vax-images-cmake/bin/$img /out/$img
+        done'
+  rc=$?; set -e
+  [ "${rc}" -eq 0 ] || { docker kill "${cid}" >/dev/null 2>&1 || true; die "ovmx-images vax build failed/timed out (rc=${rc})"; }
+  for img in $need; do [ -f "${VAX_IMAGES_DIR}/${img}" ] || die "ovmx-images build finished but ${img} missing"; done
+  log "vax image set built: $(echo $need | wc -w) real elf32-vax images in ${VAX_IMAGES_DIR}"
+}
+
+# 3e (install). Package OVMX-OS-VAX.KIT from those REAL images via
+#    tools/cross-vax/build-os-kit-vax.sh. That script needs a HOST ovmx_kit_pack
+#    (it links vmsfs/vmslnm/ovmx_kit_reader, so it is not a single-file compile);
+#    build it natively into /tmp inside CROSS_IMAGE -- NEVER into the repo tree
+#    (shared-host hygiene) -- and pass it as the script's 4th arg.
+build_os_kit() {
+  if [ "${FORCE_OS_KIT:-0}" != "1" ] && [ -f "${OS_KIT}" ]; then
+    log "OVMX-OS-VAX.KIT present -- NOT repacking (set FORCE_OS_KIT=1)"; return 0; fi
+  log "packaging OVMX-OS-VAX.KIT from the real vax images (build-os-kit-vax.sh)"
+  docker run --rm -v "${REPO}:/src" -w /src \
+    -v "${VAX_IMAGES_DIR}:/images:ro" -v "$(dirname "${OS_KIT}"):/out" \
+    --entrypoint sh "${CROSS_IMAGE}" -c '
+      set -e
+      cmake -S /src -B /tmp/hostbuild -DBUILD_TOOLS=ON -DCMAKE_BUILD_TYPE=Release >/dev/null
+      cmake --build /tmp/hostbuild --target ovmx_kit_pack -- -j"$(nproc)" >/dev/null
+      sh tools/cross-vax/build-os-kit-vax.sh /images /src \
+         /out/'"$(basename "${OS_KIT}")"' /tmp/hostbuild/bin/ovmx_kit_pack'
+  [ -f "${OS_KIT}" ] || die "OS kit packaging did not produce ${OS_KIT}"
+  log "packaged ${OS_KIT}"
+}
+
+# 3f (install). Master the DISTRIBUTION volume: stage the installer-media shape
+#    (stage_sysvol.sh --distribution --kit -- the system tree PLUS the OS kit at
+#    SYS$UPDATE: and the distribution SYSTARTUP that @'s OVMX$INSTALL.COM) and
+#    master it with vmsfs_master -> ovmx-distrib-vax.img. Mirrors
+#    master_system_volume, in --distribution mode. Content-gates that the mastered
+#    volume actually carries OVMX-OS-VAX.KIT.
+master_distribution_volume() {
+  [ -f "${OS_KIT}" ] || die "OS kit missing (build_os_kit first): ${OS_KIT}"
+  log "mastering the OVMX/NetBSD-vax DISTRIBUTION volume (stage_sysvol.sh --distribution + vmsfs_master)"
+  rm -f "${DISTRIB_IMG}"
+  local listing
+  listing="$(docker run --rm -v "${REPO}:/src:ro" -v "${VAX_IMAGES_DIR}:/images:ro" \
+    -v "${OS_KIT}:/kit/OVMX-OS-VAX.KIT:ro" \
+    -v "$(dirname "${DISTRIB_IMG}"):/out" --entrypoint sh "${CROSS_IMAGE}" -c '
+      set -e
+      cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+         -I /src/src/vmsfs/include \
+         -o /tmp/vmsfs_master /src/tools/vmsfs_master.c \
+         /src/src/vmsfs/ods2/ods2_reader.c /src/src/vmsfs/ods2/ods2_writer.c \
+         /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
+         /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
+      bash /src/tests/lab-vax/stage_sysvol.sh --distribution --kit /kit/OVMX-OS-VAX.KIT \
+           /images /src /tmp/stage
+      /tmp/vmsfs_master --ods2 master /out/'"$(basename "${DISTRIB_IMG}")"' OVMXSYS /tmp/stage 64
+      /tmp/vmsfs_master --ods2 list /out/'"$(basename "${DISTRIB_IMG}")")"
+  echo "${listing}"
+  [ -f "${DISTRIB_IMG}" ] || die "distribution-volume mastering did not produce ${DISTRIB_IMG}"
+  echo "${listing}" | grep -qiF "OVMX-OS-VAX.KIT" \
+    || die "mastered distribution volume is MISSING OVMX-OS-VAX.KIT (staging regression, rd vms-d0e5)"
+  log "mastered distribution volume carries OVMX-OS-VAX.KIT (boots into OVMX\$INSTALL.COM)"
+}
+
+# 3g (install). Format a BLANK ODS-2 install target (label WORK) -- the mirror of
+#    the x86_64 install e2e's host-side `INITIALIZE.EXE --ods2 dka100.img WORK 16'.
+#    The cross-built INITIALIZE.EXE is elf32-vax (cannot run on the host), so the
+#    blank volume is formatted with the SAME host ODS-2 codec master_volume /
+#    master_system_volume use -- vmsfs_master mastering an EMPTY tree -- which
+#    produces a genuine, mountable ODS-2 volume with label WORK and free space for
+#    the install. vmsfs is little-endian on disk (arch-neutral), so a host-mastered
+#    volume mounts on the vax.
+make_blank_target() {
+  log "formatting a BLANK ODS-2 install target (label WORK) -> ${BLANK_TARGET_IMG}"
+  rm -f "${BLANK_TARGET_IMG}"
+  docker run --rm -v "${REPO}:/src:ro" -v "$(dirname "${BLANK_TARGET_IMG}"):/out" \
+    --entrypoint sh "${CROSS_IMAGE}" -c '
+      set -e
+      cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+         -I /src/src/vmsfs/include \
+         -o /tmp/vmsfs_master /src/tools/vmsfs_master.c \
+         /src/src/vmsfs/ods2/ods2_reader.c /src/src/vmsfs/ods2/ods2_writer.c \
+         /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
+         /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
+      mkdir -p /tmp/blank
+      /tmp/vmsfs_master --ods2 master /out/'"$(basename "${BLANK_TARGET_IMG}")"' WORK /tmp/blank 16'
+  [ -f "${BLANK_TARGET_IMG}" ] || die "blank target formatting did not produce ${BLANK_TARGET_IMG}"
+  log "blank ODS-2 target formatted (label WORK)"
+}
+
+# 3h (sysboot-negctl). Master a genuine ODS-2 volume with NO system tree -- the
+#    installed-system gate's negative control (vms-329). Same host codec, same
+#    --ods2 writer, an EMPTY source tree: it MOUNTS (so the boot reaches the
+#    gate) and then fails the gate (no SYS$SYSTEM:DCL.EXE).
+master_sysneg_volume() {
+  log "mastering the ODS-2 NEGATIVE-CONTROL volume (mountable, no SYS\$SYSTEM:DCL.EXE)"
+  rm -f "${SYSNEG_IMG}"
+  docker run --rm -v "${REPO}:/src:ro" \
+    -v "$(dirname "${SYSNEG_IMG}"):/out" --entrypoint sh "${CROSS_IMAGE}" -c '
+      set -e
+      cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+         -I /src/src/vmsfs/include \
+         -o /tmp/vmsfs_master /src/tools/vmsfs_master.c \
+         /src/src/vmsfs/ods2/ods2_reader.c /src/src/vmsfs/ods2/ods2_writer.c \
+         /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
+         /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
+      mkdir -p /tmp/flat
+      /tmp/vmsfs_master --ods2 master /out/'"$(basename "${SYSNEG_IMG}")"' NOSYS /tmp/flat 16'
+  [ -f "${SYSNEG_IMG}" ] || die "negative-control volume mastering did not produce ${SYSNEG_IMG}"
 }
 
 # 4. ensure the shared NetBSD/vax disk (install once).
@@ -417,15 +631,151 @@ run_sysboot_positive() {
 }
 
 run_sysboot_negctl() {
-  # Teeth: boot the SAME disk with the FLAT test volume (no SYS$SYSTEM:DCL.EXE)
-  # -- the installed-system gate must halt and %STDRV-I-STARTUP must NOT appear.
-  if run_session sysboot-negctl /cache/boot-work; then
+  # Teeth: boot the SAME disk with a MOUNTABLE ODS-2 volume that carries no
+  # SYS$SYSTEM:DCL.EXE -- the installed-system gate must halt and
+  # %STDRV-I-STARTUP must NOT appear.
+  master_sysneg_volume
+  if run_session sysboot-negctl /cache/boot-work \
+       -e OVMX_ODS2_IMG=/cache/"$(basename "${SYSNEG_IMG}")"; then
     log "PASS: sysboot negative control -- the flat volume (no DCL.EXE)"
     log "      halted the installed-system gate and never reached STDRV"
     log "      (the installed-system gate has teeth)"
     return 0
   fi
   soft_die "SYSBOOT NEGATIVE CONTROL FAILED unexpectedly (see console output above)"
+}
+
+# vms-d0e5 rung G: the two-disk INSTALL proof. Build the real vax image set + OS
+# kit, master the distribution volume, format a blank ODS-2 target, then boot the
+# distribution volume (rq1 -> DKA0:) with the blank target (rq2 -> DKA100:) and
+# drive OVMX$INSTALL.COM to install onto it (drive_install_vax.py). sha256 the
+# target before/after so the install's real block writes are PROVEN to land (the
+# same INV-6 hash-diff teeth run_sysboot_positive applies to the RW system volume:
+# a green console alone cannot rule out a silently-faked/no-op write).
+run_install() {
+  build_vax_images
+  build_os_kit
+  master_distribution_volume
+  make_blank_target
+  local before after
+  before="$(sha256sum "${BLANK_TARGET_IMG}" | awk '{print $1}')"
+  log "blank target pre-install sha256:  ${before}"
+  local cid="ovmx-install-drive-$$"; local rc=0
+  set +e
+  timeout --kill-after="${TIMEOUT_GRACE}" "${SESSION_TIMEOUT}" \
+    docker run --rm --name "${cid}" --entrypoint python3 \
+      -e NETBSD_VERSION="${NETBSD_VERSION}" -e "SETS=${SETS}" \
+      -e OVMX_NETBSD_DIR=/netbsd -e NETBSD_WORKDIR=/cache/boot-work \
+      -e OVMX_DISTRIB_IMG=/cache/"$(basename "${DISTRIB_IMG}")" \
+      -e OVMX_BLANK_IMG=/cache/"$(basename "${BLANK_TARGET_IMG}")" \
+      -v "${CACHE_DIR}:/cache" -v "${ARTIFACTS_DIR}:/artifacts:ro" \
+      -v "${REPO}/tests/netbsd:/netbsd:ro" -v "${REPO}/tests/lab-vax:/lab-vax:ro" \
+      "${LAB_IMAGE}" /lab-vax/drive_install_vax.py
+  rc=$?; set -e
+  docker kill "${cid}" >/dev/null 2>&1 || true
+  after="$(sha256sum "${BLANK_TARGET_IMG}" | awk '{print $1}')"
+  log "blank target post-install sha256: ${after}"
+  if [ "${rc}" -ne 0 ]; then
+    soft_die "INSTALL FAILED (drive_install_vax.py exit ${rc}; see console output above)"
+    return 1
+  fi
+  if [ "${before}" = "${after}" ]; then
+    soft_die "INSTALL: the blank target's raw on-disk bytes did NOT change during the install (rd vms-d0e5). The menu reported success but PRODUCT INSTALL's real block writes never hit the target image -- a silent no-op (INV-6 failure class). A green console is NOT sufficient by itself; this hash diff is the positive proof of a real write."
+    return 1
+  fi
+  log "OK (rd vms-d0e5): the install target's on-disk bytes CHANGED -- REAL block"
+  log "  writes hit DKA100: (not a silently-faked/no-op write; INV-6 teeth)."
+  log "======================================================================"
+  log "  INSTALL-VAX PASSED: the OVMX/NetBSD-vax DISTRIBUTION volume booted into"
+  log "  OVMX\$INSTALL.COM, the PRESERVE path installed OVMX onto a BLANK ODS-2"
+  log "  target over the executive (MOUNT + PRODUCT INSTALL + AUTHORIZE + SYSGEN),"
+  log "  the installed target carries a ROOTED, genuinely-activatable system tree,"
+  log "  and the target's raw bytes really changed on disk."
+  log "======================================================================"
+  return 0
+}
+
+# vms-7b15: assemble the SLIM SINGLE-disk artifact from the already-assembled
+# two-disk boot-work disk. Rebuilds the ra0e-aware vms.kmod, clones boot-work,
+# runs the in-guest FFS resize + node/module edits (drive_boot_vax.py
+# assemble-single), then host-side rewrites the disklabel (shrink 'a', add the
+# ODS-2 partition 'e', slim geometry), injects the mastered ODS-2 SYSTEM volume
+# into 'e', and truncates the image to the slim disk size.
+build_single_disk() {
+  # 1. Rebuild the ra0e-aware vms.kmod into ARTIFACTS_DIR (the DKA0: single-disk
+  #    discovery lives in src/kernel-netbsd/vms_blockdev_netbsd.c). The artifact
+  #    CD assemble-single builds carries THIS build; the two-disk boot-work disk
+  #    keeps its own already-installed kmod (the change is backward-compatible --
+  #    ra1c is still tried first -- so this is zero-regression regardless).
+  ensure_src
+  mkdir -p "${ARTIFACTS_DIR}"
+  log "rebuilding the ra0e-aware vms.kmod for the single-disk layout"
+  docker run --rm -v "${REPO}:/src" -w /src -v "${NBSRC_DIR}:/nbsrc:ro" \
+    -v "${ARTIFACTS_DIR}:/out" --entrypoint sh "${CROSS_IMAGE}" -c \
+    'OUT=/tmp/build-devvms sh tools/cross-vax/build-devvms-vax.sh >/dev/null 2>&1 && cp /tmp/build-devvms/vms.kmod /out/vms.kmod' \
+    || die "ra0e-aware vms.kmod rebuild failed"
+
+  # 2. Clone the assembled two-disk boot disk (ovmx_init + modules + boot nodes).
+  [ -f "${BOOT_WORKDIR}/wd0.img" ] || die "boot-work disk missing; run the standard chain first"
+  mkdir -p "${SINGLE_WORKDIR}"
+  log "cloning the assembled boot disk -> ${SINGLE_IMG}"
+  cp "${BOOT_WORKDIR}/wd0.img" "${SINGLE_IMG}.part"
+  mv "${SINGLE_IMG}.part" "${SINGLE_IMG}"
+
+  # 3. In-guest assembly: boot the SHARED NetBSD disk single-user (its stock init
+  #    gives a shell), target=single on rq1, artifact CD on rq2 -- resize_ffs the
+  #    target root FFS down to SINGLE_A_SECTORS, MAKEDEV ra0 on it (so /dev/ra0e
+  #    exists), replace its module_path vms.kmod with the ra0e-aware build.
+  log "single-disk in-guest assembly (resize_ffs + ra0 nodes + kmod swap)"
+  run_session assemble-single /cache/anita-work \
+    -e OVMX_SINGLE_IMG=/cache/single-work/wd0.img \
+    -e OVMX_SINGLE_A_SECTORS="${SINGLE_A_SECTORS}" \
+    || die "single-disk in-guest assembly session failed"
+
+  # 4. Host-side finish: rewrite the disklabel (shrink 'a', add ODS-2 'e', slim
+  #    geometry), inject the mastered ODS-2 SYSTEM volume into 'e', truncate to
+  #    the slim disk size. Deterministic on-disk struct + dd; no NetBSD tools.
+  log "host-side slim relabel + ODS-2 inject + truncate (mk_single_disk.py)"
+  python3 "${HERE}/mk_single_disk.py" "${SINGLE_IMG}" "${SYSVOL_IMG}" \
+    "${SINGLE_A_SECTORS}" "${SINGLE_TOTAL_SECTORS}" \
+    || die "host-side single-disk finish failed"
+  local bytes; bytes="$(stat -c%s "${SINGLE_IMG}")"
+  log "SLIM SINGLE DISK ready: ${SINGLE_IMG} (${bytes} bytes, $((bytes/1048576)) MiB)"
+}
+
+# vms-7b15: boot the slim SINGLE disk and prove it reaches Username: with DKA0:
+# bound to the boot disk's ODS-2 PARTITION (ra0e), NO rq1. sha256 before/after so
+# the ODS-2 RW during PROVISION is a proven real on-disk write (INV-6 teeth, the
+# same hash-diff the two-disk sysboot applies).
+run_sysboot_single() {
+  local before after
+  before="$(sha256sum "${SINGLE_IMG}" | awk '{print $1}')"
+  log "single-disk pre-boot sha256:  ${before}"
+  local rc=0
+  run_session sysboot-single /cache/single-work \
+    -e OVMX_SINGLE_RQ0_TYPE="${SINGLE_RQ0_TYPE}" \
+    -e OVMX_SINGLE_A_SECTORS="${SINGLE_A_SECTORS}" || rc=$?
+  after="$(sha256sum "${SINGLE_IMG}" | awk '{print $1}')"
+  log "single-disk post-boot sha256: ${after}"
+  if [ "${rc}" -ne 0 ]; then
+    soft_die "SYSBOOT-SINGLE FAILED (drive_boot_vax.py exit ${rc}; see console above)"
+    return 1
+  fi
+  if [ "${before}" = "${after}" ]; then
+    soft_die "SYSBOOT-SINGLE: the single disk's on-disk bytes did NOT change during the boot -- PROVISION's UIC-ownership writes to the ODS-2 partition never landed (INV-6 failure class). A green console alone is not sufficient."
+    return 1
+  fi
+  log "OK (rd vms-7b15): the single disk's on-disk bytes CHANGED during the boot"
+  log "  -- REAL block writes hit the ODS-2 partition (DKA0: -> ra0e), not a no-op."
+  log "======================================================================"
+  log "  SYSBOOT-SINGLE PASSED: ONE slim disk booted ovmx_init as PID 1 on"
+  log "  NetBSD/vax -- VMB booted the root off partition 'a' AND the executive"
+  log "  mounted the OVMX ODS-2 SYSTEM volume off partition 'e' of the SAME disk"
+  log "  (DKA0: -> ra0e, NO rq1), reached a real interactive Username: prompt,"
+  log "  and PROVISION's writes really hit the ODS-2 partition on disk."
+  log "  ARTIFACT: ${SINGLE_IMG} ($(stat -c%s "${SINGLE_IMG}") bytes)"
+  log "======================================================================"
+  return 0
 }
 
 case "${MODE}" in
@@ -480,5 +830,27 @@ case "${MODE}" in
     fi
     die "GATE FAILED (vms-065) -- see console output above"
     ;;
-  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | gate)" ;;
+  sysboot-single)
+    # vms-7b15: the SLIM SINGLE-disk proof. Build the mastered ODS-2 SYSTEM
+    # volume (same as two-disk sysboot), assemble ONE slim disk that carries both
+    # the NetBSD boot root AND that volume in a partition, then boot it with a
+    # single `attach rq0' (NO rq1) and prove it reaches Username: with DKA0:
+    # bound to the boot disk's ODS-2 partition (ra0e).
+    #   tests/lab-vax/run-boot.sh sysboot-single
+    build_boot_image_set
+    master_system_volume
+    build_single_disk
+    run_sysboot_single && exit 0
+    exit 1
+    ;;
+  install)
+    # vms-d0e5 rung G: the two-disk INSTALL proof -- boot the distribution
+    # volume with a blank target attached, drive OVMX$INSTALL.COM to install
+    # OVMX onto the target, and assert it worked (rooted, activatable, real
+    # block writes). The vax mirror of the x86_64 install e2e.
+    #   tests/lab-vax/run-boot.sh install
+    run_install && exit 0
+    exit 1
+    ;;
+  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | sysboot-single | gate | install)" ;;
 esac

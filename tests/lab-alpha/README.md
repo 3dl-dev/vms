@@ -254,6 +254,49 @@ date prompt. To build a *new* golden instead, unset `GOLDEN` and set
 > Verifying a sparse copy: `du` right after `cp` can report ~1 K because ZFS has
 > not flushed. `sync` first, and compare md5 — not size.
 
+## Conversational boot & SYSGEN params (opt-in)
+
+The default bring-up autoboots straight to a login prompt — **do not change
+that.** This is a shared oracle; a lab that stops at `SYSBOOT>` by default is
+useless to everyone else. Two env knobs let *one* run boot conversationally and
+set SYSGEN parameters, without touching the default:
+
+| Env | Default | Effect |
+|-----|---------|--------|
+| `AUTOBOOT` | `boot dqa0` (from `GOLDEN`) | Override the boot command. For a conversational boot use `boot -fl 0,1 dqa0` (root 0, RPB conversational bit → stops at `SYSBOOT>`). |
+| `SYSBOOT_PARAMS` | *(empty)* | Space-separated `PARAM=VALUE` list. When set, `entrypoint.sh` waits for `SYSBOOT>`, sends `SET PARAM VALUE` for each, then `CONTINUE`. Requires a conversational `AUTOBOOT`. |
+
+Both apply to **every** node in the pod. Set them per-run (e.g. a redeploy with
+overridden env), never in the committed manifest. Example — boot both nodes with
+the MSCP server disabled, to test whether disk-serving is what trips the
+emulator on cluster join (rd vms-0d1):
+
+```
+AUTOBOOT="boot -fl 0,1 dqa0"
+SYSBOOT_PARAMS="MSCP_LOAD=0"
+```
+
+The change is **non-persistent** (SYSBOOT `SET`, not `SET/STARTUP`): it holds for
+this boot only. To bake a confirmed value into the golden image, boot once, `SET`
+it at `SYSBOOT>`, `CONTINUE`, then `@SYS$UPDATE:AUTOGEN … SETPARAMS` (or
+`WRITE CURRENT` from `SYSGEN`) on the settled system and re-snap the golden.
+
+> **Verified live on both nodes (rd vms-0d1).** With `NODES="alpha1 alpha2"` the
+> knob drives **both** nodes into `SYSBOOT>` and injects the param on each — see
+> the per-node `logs/watcher.log` (this image tees the bring-up watcher there):
+> both log `SYSBOOT> reached -- injecting MSCP_LOAD=0`.
+>
+> **Stale-log / single-node trap (cost a long detour — read this).** The lab dir
+> lives on a persistent volume, so a node's `logs/` from a *previous* run survive.
+> If a run sets `NODES="alpha1"` (a single-node override — e.g. an oracle read
+> left one on the StatefulSet), only alpha1 starts, and alpha2's directory still
+> holds the **old** `alpha2.log`/`pump.log`. Reading those looks exactly like a
+> live second node that "booted serving-on and lost quorum" — it is not; it is
+> 11-day-old output. **Always confirm both emulators are actually running**
+> (`ps -ef | grep axpbox` → one per node) and check `stat` timestamps on the node
+> logs before trusting a second node's console. `NODES` on the live StatefulSet is
+> the ground truth, not the manifest default.
+
 ## The Alpha cluster — it forms, then hits an emulator bug
 
 **A two-node Alpha VMScluster forms.** `NODES="alpha1 alpha2"` puts a whole

@@ -112,7 +112,10 @@ int main(void)
     ods2_format_params_t params;
     ods2_wvolume_t wvol;
     ods2_status_t st;
-    ods2_fid_t ovmxdir_fid, hello_fid, world_fid, manyline_fid;
+    ods2_fid_t ovmxdir_fid, hello_fid, world_fid, manyline_fid, bigfile_fid;
+#define BIGFILE_BLOCKS 300u
+#define BIGFILE_BYTES  (BIGFILE_BLOCKS * ODS2_BLOCK_SIZE)
+    static uint8_t bigfile_data[BIGFILE_BYTES];
     const char hello_data[] = "hello from the OVMX ODS-2 writer\n";
     const char world_data[] = "genuine Files-11 bytes\n";
     char manyline_data[40 * 16 + 1];
@@ -180,6 +183,27 @@ int main(void)
         st = ods2_wvolume_dir_insert(&wvol, ovmxdir_fid, "MANYLINE.TXT", 1,
                                      manyline_fid);
         CHECK_EQ(st, ODS2_OK, "dir_insert(OVMXDIR, MANYLINE.TXT)");
+    }
+
+    /* BIGFILE.BIN (vms-5f0): a file whose data exceeds 256 blocks (128 KB),
+     * the largest a single FM2 format-1 retrieval pointer can address. Before
+     * the map-encoder learned format 2/3, ods2_wvolume_create_file_raw() failed
+     * such a file with ODS2_ERR_ARGS -- so a genuine ODS-2 system disk could
+     * not hold real binaries (DCL.EXE is 840 KB). This creates a 300-block
+     * (153 600-byte) VERBATIM file; the read-back below asserts it is a SINGLE
+     * format-2 extent covering all 300 blocks and that its bytes round-trip
+     * exactly. */
+    {
+        unsigned bi;
+        for (bi = 0; bi < BIGFILE_BYTES; bi++)
+            bigfile_data[bi] = (uint8_t)((bi * 7u + 3u) & 0xFF);
+        st = ods2_wvolume_create_file_raw(&wvol, "BIGFILE.BIN", 1,
+                                          bigfile_data, BIGFILE_BYTES,
+                                          ovmxdir_fid, &bigfile_fid);
+        CHECK_EQ(st, ODS2_OK, "create_file_raw(BIGFILE.BIN, 300 blocks -> format-2)");
+        st = ods2_wvolume_dir_insert(&wvol, ovmxdir_fid, "BIGFILE.BIN", 1,
+                                     bigfile_fid);
+        CHECK_EQ(st, ODS2_OK, "dir_insert(OVMXDIR, BIGFILE.BIN)");
     }
 
     /* Optional: dump the finished image to disk for a manual lab-2 MOUNT
@@ -308,6 +332,34 @@ int main(void)
             }
         }
 
+        /* BIGFILE.BIN (vms-5f0): a >256-block file is ONE format-2 retrieval
+         * pointer covering all 300 blocks (not a fan of format-1 pointers),
+         * and its VERBATIM bytes round-trip exactly through the map. This is
+         * the regression for the map-encoder's old 256-block (format-1-only)
+         * ceiling that made create_file_raw reject real binaries. */
+        st = ods2_volume_read_header(&vol, ods2_fid_number(&bigfile_fid),
+                                     hdr, sizeof(hdr));
+        CHECK_EQ(st, ODS2_OK, "read_header(BIGFILE.BIN)");
+        if (st == ODS2_OK) {
+            memset(&ec, 0, sizeof(ec));
+            st = ods2_fh2_map_walk(hdr, extent_collect, &ec, NULL);
+            CHECK_EQ(st, ODS2_OK, "map_walk(BIGFILE.BIN)");
+            CHECK_EQ(ec.n, 1, "BIGFILE.BIN is ONE extent (format-2, not a format-1 fan)");
+            if (ec.n >= 1) {
+                CHECK_EQ(ec.ext[0].count, BIGFILE_BLOCKS,
+                         "BIGFILE.BIN extent covers all 300 blocks");
+                /* byte-exact round-trip: every block matches the pattern. */
+                unsigned bad = 0, bk;
+                for (bk = 0; bk < BIGFILE_BLOCKS; bk++) {
+                    const uint8_t *blk = ods2_volume_block(&vol, ec.ext[0].lbn + bk);
+                    if (!blk) { bad = 1; break; }
+                    if (memcmp(blk, bigfile_data + (size_t)bk * ODS2_BLOCK_SIZE,
+                               ODS2_BLOCK_SIZE) != 0) { bad = 1; break; }
+                }
+                CHECK(bad == 0, "BIGFILE.BIN 300 blocks round-trip byte-exact via the format-2 map");
+            }
+        }
+
         /* SCB parses off BITMAP.SYS's map-derived VBN1 */
         st = ods2_volume_read_header(&vol, ODS2_FID_BITMAP, hdr, sizeof(hdr));
         CHECK_EQ(st, ODS2_OK, "read_header(BITMAP.SYS)");
@@ -413,7 +465,7 @@ int main(void)
             memset(&dc, 0, sizeof(dc));
             st = ods2_volume_list_dir(&vol, hdr, dir_collect, &dc);
             CHECK_EQ(st, ODS2_OK, "list_dir(OVMXDIR)");
-            CHECK_EQ(dc.count, 3, "OVMXDIR has exactly 3 entries");
+            CHECK_EQ(dc.count, 4, "OVMXDIR has exactly 4 entries");
 
             e = find_entry(&dc, "HELLO.TXT");
             CHECK(e != NULL, "HELLO.TXT listed");
@@ -434,6 +486,13 @@ int main(void)
             if (e) {
                 CHECK_EQ(e->version, 1, "MANYLINE.TXT version");
                 CHECK_EQ(e->fid_num, ods2_fid_number(&manyline_fid), "MANYLINE.TXT fid");
+            }
+
+            e = find_entry(&dc, "BIGFILE.BIN");
+            CHECK(e != NULL, "BIGFILE.BIN listed");
+            if (e) {
+                CHECK_EQ(e->version, 1, "BIGFILE.BIN version");
+                CHECK_EQ(e->fid_num, ods2_fid_number(&bigfile_fid), "BIGFILE.BIN fid");
             }
         }
 

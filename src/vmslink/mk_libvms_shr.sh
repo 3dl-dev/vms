@@ -115,13 +115,22 @@ rtl/lib_dyndesc rtl/lib_logical rtl/lib_symbol rtl/lib_string_ops rtl/lib_bitops
 rtl/lib_arith rtl/lib_charscan rtl/lib_queue rtl/lib_tree rtl/lib_tparse rtl/lib_common \
 rtl/lib_eventflags rtl/str_routines rtl/mth_routines rtl/ots_routines rtl/sha256 \
 rtl/lib_strconv rtl/lib_xlate_tables \
-rtl/sysuaf rtl/rightslist rtl/str_util rtl/lib_cli"
+rtl/sysuaf rtl/rightslist rtl/rms_textfile rtl/str_util rtl/lib_cli rtl/purdy"
+
+# -DOVMX_HAVE_ACP (vms-329): rtl/rms_textfile.c (SYSUAF / RIGHTSLIST / $GETUAI /
+# OPERATOR.LOG) reads and writes through RMS-over-the-executive-ACP. That arm
+# USED to be gated on __linux__, which this recipe satisfied for free; vms-329
+# re-keyed it to OVMX_HAVE_ACP so the netbsd-vax cross gets it too, and this
+# recipe must now say so explicitly or the NATIVE-LINK LIBVMS$SHR would silently
+# fall back to POSIX fopen while the CMake libvms keeps the ACP path. Same
+# definition src/libvms/CMakeLists.txt applies to the target.
+DEFS="-DOVMX_HAVE_ACP"
 
 OBJS=""
 for c in $LIST; do
     b=$(echo "$c" | tr / _)
     echo "  cc $c.c"
-    $CC $CFLAGS $INCS -c -o "$WORK/$b.o" "$SRC/$c.c"
+    $CC $CFLAGS $DEFS $INCS -c -o "$WORK/$b.o" "$SRC/$c.c"
     OBJS="$OBJS $WORK/$b.o"
 done
 

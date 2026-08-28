@@ -50,13 +50,20 @@ endif()
 
 add_library(vmsrms ${OVMX_LIB_TYPE}
     rms_core.c
+    rms_io.c
     rms_seq.c
     rms_rel.c
     rms_idx.c
+    rms_prolog3.c
+    sysuaf_rms.c
+    sysuaf_live.c
+    rightslist_rms.c
+    rightslist_live.c
     rms_record.c
     rms_parse.c
     rms_search.c
     rms_util.c
+    sysgen_acp.c
 )
 
 target_include_directories(vmsrms PUBLIC
@@ -65,6 +72,28 @@ target_include_directories(vmsrms PUBLIC
     ${VMS_FS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
 )
+
+# vms-d5d/vms-329: RMS reaches SYS$DISK via the executive ACP (vms_kif_acp_*)
+# on EVERY runtime substrate -- the standalone configuration above is not a
+# "unit build", it is the netbsd-vax CROSS that produces the libvmsrms.a linked
+# into the shipped VAX DCL.EXE / LOGINOUT.EXE / PROVISION.EXE / JOB_CONTROL.EXE
+# (tools/cross-vax/build-*-vax.sh). Leaving OVMX_HAVE_ACP off there is what left
+# every VAX image on RMS's POSIX /vms arm while the boot claimed to have flipped
+# (rd vms-049's finding). The coupled cutover (vms-329) retires the vmsfs.ko VFS
+# mount of SYS$DISK, so there IS no /vms tree on the VAX any more: the POSIX arm
+# would not "degrade", it would simply fail -- and RMS's own ACP arm already
+# defers to POSIX only when /dev/vms is genuinely absent (rms_acp_absent(),
+# which is how host ctest and the plain-container gates still work).
+#
+# The include dir goes with it: vms_kif.h lives in libvmssys and pulls
+# ../kernel/vms_ioctl.h -> vms_acp.h. It is a header-only compile dep; the
+# vms_kif_* symbols resolve at link time through libvmssys (in-tree: the
+# transitive vms -> vmsprocess -> libvmssys edge; netbsd-vax cross: libvmssys.a
+# inside the --start-group the per-image recipes already link).
+target_compile_definitions(vmsrms PRIVATE OVMX_HAVE_ACP)
+target_include_directories(vmsrms PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libvmssys
+    ${CMAKE_CURRENT_SOURCE_DIR}/../kernel)
 
 if(VMSRMS_STANDALONE)
     # Link-libc netbsd-vax cross: a clean libvmsrms.a to arch-check with

@@ -75,9 +75,10 @@ int main(int argc, char **argv)
     const char *names = (const char *)at(svs->sh_offset + h->names_off,
                                          h->names_size, "truncated .vms$sv names");
     for (uint32_t i = 0; i < h->count; i++) {
-        const char *kind = e[i].kind == OVMX_SV_PROCEDURE ? "PROCEDURE" :
-                           e[i].kind == OVMX_SV_DATA      ? "DATA"      :
-                           e[i].kind == OVMX_SV_RETIRED   ? "RETIRED"   : "?";
+        const char *kind = e[i].kind == OVMX_SV_PROCEDURE   ? "PROCEDURE"   :
+                           e[i].kind == OVMX_SV_DATA        ? "DATA"        :
+                           e[i].kind == OVMX_SV_RETIRED     ? "RETIRED"     :
+                           e[i].kind == OVMX_SV_GLOBALVALUE ? "GLOBALVALUE" : "?";
         printf("    [%3u] %-10s value=0x%016llx  %s\n",
                i, kind, (unsigned long long)e[i].value, names + e[i].name_off);
     }

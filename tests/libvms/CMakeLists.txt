@@ -42,6 +42,14 @@ libvms_add_test(test_libvms_lib_bitops
 libvms_add_test(test_libvms_str_routines
     ${CMAKE_CURRENT_SOURCE_DIR}/test_str_routines.c)
 
+# Test 4a: VMS Purdy password hash (vms-631e, epic vms-d0c) -- the REAL
+# UAI$C_PURDY_S one-way hash that replaces the SHA-256 facade. Asserts the 7
+# real OpenVMS UAF$Q_PWD quadwords (VAX V7.3 + Alpha V8.4,
+# docs/oracle/purdy-hash-vectors.md) byte-exact, plus determinism / salt /
+# username / password / length sensitivity.
+libvms_add_test(test_libvms_purdy
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_purdy.c)
+
 # Test 4b: lib$table_parse / lib$tparse — TPARSE finite-state parser (vms-9f6)
 libvms_add_test(test_libvms_lib_tparse
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_tparse.c)
@@ -109,9 +117,25 @@ libvms_add_test(test_libvms_lib_symtab
 libvms_add_test(test_libvms_lib_fb3
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_fb3.c)
 
-# Test 9: vms-846.1 — binary SYSUAF record layout + RMS primary-key XABKEY
-libvms_add_test(test_libvms_sysuaf_record
+# Test 9: vms-f88 (epic vms-d0c) — the REAL binary $UAFDEF SYSUAF record over
+# the genuine Files-11 Prolog-3 indexed engine (supersedes the ASCII+SHA-256 /
+# 368-byte facade). Locks the 644-byte oracle layout, then authors a binary
+# indexed SYSUAF (primary USERNAME key + secondary UIC key) and reads records
+# back by username AND by UIC through sysuaf_rms.c/rms_prolog3.c. Not via
+# libvms_add_test(): it drives the RMS engine, so it links vmsrms (+ vmsfs,
+# vmslnm) and sees src/vmsrms (sysuaf_rms.h, rms_prolog3.h) + the RMS includes.
+add_executable(test_libvms_sysuaf_record
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_record.c)
+target_include_directories(test_libvms_sysuaf_record PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/vmsrms
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+)
+target_link_libraries(test_libvms_sysuaf_record PRIVATE
+    vmsrms vmsfs vmslnm vms pthread m)
+add_test(NAME test_libvms_sysuaf_record COMMAND test_libvms_sysuaf_record)
 
 # Test 10: vms-ci.8 — node identity + cluster SYSGEN params (SCSNODE/
 # SCSSYSTEMID round-trip through the typed SYSGEN store, sys$getsyi)
@@ -230,11 +254,11 @@ target_include_directories(test_libvms_priv_render_bounds PRIVATE
 add_test(NAME test_libvms_priv_render_bounds
          COMMAND test_libvms_priv_render_bounds)
 
-# Test 14: vms-08f — every SYSUAF row with an unset password hash refuses
-# EVERY password, derived from the actual shipped SYSUAF.DAT rather than a
-# hand-enumerated account list (see the file's own header comment). Takes
-# the real shipped file as argv[1] so the assertion always runs against
-# what actually boots, not a fixture that can drift from it.
+# Test 14: vms-08f (flipped to binary by vms-d92) — an account with no Purdy
+# password refuses EVERY password; a Purdy-passworded account accepts only the
+# right one. The property is now STRUCTURAL (sysuaf_authenticate keys off
+# UAF$B_ENCRYPT), so the test builds binary $UAFDEF records in memory (no ASCII
+# file, no argv) and proves both sides plus a synthetic extra account.
 add_executable(test_libvms_sysuaf_auth
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_auth.c)
 target_include_directories(test_libvms_sysuaf_auth PRIVATE
@@ -245,9 +269,29 @@ target_link_libraries(test_libvms_sysuaf_auth PRIVATE
     pthread
     m
 )
-add_test(NAME test_libvms_sysuaf_auth
-         COMMAND test_libvms_sysuaf_auth
-         "${CMAKE_SOURCE_DIR}/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT")
+add_test(NAME test_libvms_sysuaf_auth COMMAND test_libvms_sysuaf_auth)
+
+# vms-26a — the login persona privilege mask must come from the BINARY $UAFDEF
+# quadword (sysuaf_record_privileges), NOT a re-parse of the rendered name
+# string. The atomic flip's expanded name string, fed back through the
+# 17-name parse_privilege_string() table (no MOUNT row), silently dropped
+# MOUNT so SYSTEM logged in without it and `MOUNT DKA100:` returned NOPRIV.
+# Builds the seed SYSTEM record exactly as tools/mksysuaf.c does and asserts
+# the persona mask carries MOUNT while the old string path does not. Needs the
+# vmsprocess include for the OLD path (vms/privs.h) it contrasts against.
+add_executable(test_libvms_sysuaf_priv_persona
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_priv_persona.c)
+target_include_directories(test_libvms_sysuaf_priv_persona PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/vmsprocess/include
+)
+target_link_libraries(test_libvms_sysuaf_priv_persona PRIVATE
+    vms
+    pthread
+    m
+)
+add_test(NAME test_libvms_sysuaf_priv_persona
+         COMMAND test_libvms_sysuaf_priv_persona)
 
 # Tests vms-e60 (SYSUAF.DAT UIC fields are OCTAL) and vms-2f8 (F$IDENTIFIER
 # READS the rights database) MIGRATED to the QEMU kernel-executive harness by
@@ -260,16 +304,12 @@ add_test(NAME test_libvms_sysuaf_auth
 # deletes. So the assertions now run against a real /dev/vms (reading the actual
 # shipped files at SYS$SYSTEM:) and honest-skip 77 without it.
 
-# The SYSUAF record limit, at the boundary (vms-9b7).
-#
-# Guards the defect that let a boot halt with "%OVMX-F-EXECINIT, no SYSTEM
-# record in SYS$SYSTEM:SYSUAF.DAT": five parsers of one format with three
-# different line limits between them, so a row one wrote was a row another
-# silently truncated. Drives real files through the real writer and the real
-# reader at 511/512/513/1022/1023/1024/1025 bytes -- the sizes the deleted
-# implementations disagreed on.
-libvms_add_test(test_libvms_sysuaf_line_limit
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_line_limit.c)
+# test_libvms_sysuaf_line_limit RETIRED by the vms-d92 atomic flip: it guarded
+# the ASCII SYSUAF text line-limit (sysuaf_read_line truncation), a format that
+# no longer exists -- the binary $UAFDEF record is fixed 644 bytes with no text
+# line and no per-parser limit to disagree on. Its property (one reader, one
+# writer, no silent truncation) is now structural: there is a single binary
+# engine (sysuaf_rms / rms_prolog3).
 
 # vms-c8fa — SYSUAF login-flag enforcement. Authenticating the password is not
 # authorizing the login: a DISUSER (disabled) account with the right password
@@ -311,11 +351,18 @@ add_executable(test_libvms_sysuaf_write_veracity
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_write_veracity.c)
 target_include_directories(test_libvms_sysuaf_write_veracity PRIVATE
     ${VMS_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/vmsrms   # sysuaf_live.h (binary seed via write_all)
     ${VMS_FS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
 )
 target_link_libraries(test_libvms_sysuaf_write_veracity PRIVATE
     vms
+    # Bind rms_textfile_open()'s WEAK RMS references so SYSUAF is read the same
+    # RMS way LOGINOUT/DCL read it; with no /dev/vms the vms-5f0 legacy defer
+    # serves it over POSIX (INV-6). --no-as-needed forces the DT_NEEDED: the
+    # references are weak-only, so the default --as-needed would drop the lib
+    # (LOGINOUT/DCL keep it via strong RMS refs elsewhere; this test has none).
+    -Wl,--no-as-needed vmsrms -Wl,--as-needed
     vmsfs
     vmslnm
     pthread
@@ -342,6 +389,10 @@ target_include_directories(test_libvms_accounting_veracity PRIVATE
 )
 target_link_libraries(test_libvms_accounting_veracity PRIVATE
     vms
+    # Bind rms_textfile's WEAK RMS refs (accounting state is read/written the RMS
+    # way); vms-5f0 legacy defer serves it over POSIX when /dev/vms is absent
+    # (INV-6). --no-as-needed forces the otherwise-dropped weak-only DT_NEEDED.
+    -Wl,--no-as-needed vmsrms -Wl,--as-needed
     vmsfs
     vmslnm
     pthread

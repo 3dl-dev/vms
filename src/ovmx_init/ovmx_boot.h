@@ -192,14 +192,79 @@ const char *ovmx_boot_system_disk_dev(void);
 int ovmx_boot_system_disk_present(void);
 
 /*
- * ovmx_boot_mount_system_disk - mount the system disk as the VMS filesystem
- * at `mountpoint` (the portable SYSDISK_MOUNT, chosen by ovmx_init.c). Returns
- * 0 on success, nonzero on failure -- a blank/unformatted volume that does not
- * mount as the VMS filesystem returns nonzero, and PID 1 halts (it does NOT
- * initialize or install). The device and filesystem type are the substrate's.
- * Linux: mount(system-disk, mountpoint, "vmsfs", 0, NULL).
+ * RETIRED (vms-329): ovmx_boot_mount_system_disk(), the vmsfs.ko VFS mount of
+ * SYS$DISK, is GONE from this seam on every substrate. SYS$DISK is now $MOUNTed
+ * through the executive Files-11 (ODS-2) ACP -- see
+ * ovmx_boot_acp_mount_system_disk() / ovmx_boot_mount_system_disk_native()
+ * below. It is not merely unused: on NetBSD/vax spec_vnops allows exactly ONE
+ * open of the block device, so a VFS mount and the ACP $MOUNT are mutually
+ * exclusive, and keeping a "fall back to the VFS mount" op would be a fallback
+ * that CANNOT work -- the fake-success class INV-6 exists to kill. ACP or
+ * fail-honest.
  */
-int ovmx_boot_mount_system_disk(const char *mountpoint);
+
+/*
+ * ovmx_boot_system_disk_unit - the VMS device name of the boot/system unit as
+ * the executive enumerates it (Linux: "DKA0:" from vda). This is what the
+ * Files-11 ACP $MOUNT and $ASSIGN name, distinct from the substrate host device
+ * path returned by ovmx_boot_system_disk_dev(). Returns storage valid for the
+ * life of the process (vms-5f0, epic vms-208).
+ */
+const char *ovmx_boot_system_disk_unit(void);
+
+/*
+ * ovmx_boot_acp_mount_system_disk - ATOMIC FLIP (vms-5f0): $MOUNT the boot unit
+ * through the Files-11 (ODS-2) ACP in the executive, recording it executive-
+ * global so SYS$DISK is served by the ACP over the genuine ODS-2 block device --
+ * the replacement for the Linux vmsfs.ko VFS mount at SYSDISK_MOUNT. Requires
+ * the executive open (executive_attach()). Returns 0 on success, nonzero on
+ * failure (PID 1 then halts honestly, exactly as the vmsfs mount(2) failure
+ * did). The device and ACP are the substrate's; NetBSD supplies its own.
+ */
+int ovmx_boot_acp_mount_system_disk(void);
+
+/*
+ * ovmx_boot_mount_system_disk_native - run the substrate's WHOLE system-disk
+ * mount sequence for the flagless boot path, returning 0 on success and nonzero
+ * on failure (PID 1 then halts honestly). This is the seam that absorbs the
+ * atomic-flip substrate split (vms-5f0) so ovmx_init.c calls it ONCE with no
+ * #ifdef (INV-DRIFT); the substrate split lives ONLY in the backend files:
+ *   Linux  -> $MOUNT the boot unit through the Files-11 (ODS-2) ACP
+ *             (ovmx_boot_acp_mount_system_disk); no vmsfs.ko VFS mount.
+ *   NetBSD -> load vmsfs.ko (best-effort) then mount the system disk as vmsfs
+ *             at SYSDISK_MOUNT -- its existing pre-flip sequence (vms-d5d).
+ */
+int ovmx_boot_mount_system_disk_native(void);
+
+/*
+ * ovmx_boot_prepare_stage_dir - make `dir` (OVMX_BOOT_STAGE_DIR) exist as a
+ * WRITABLE, root-owned 0755 directory that PID 1 can drop the first-hop boot
+ * images into, and that every later consumer (DCL's dcl_exec_utility, LOGINOUT,
+ * vms_login's per-uid subdirectory) can read and execve from. Returns 0 on
+ * success, -1 with errno set on failure -- the caller halts honestly; it is
+ * never faked (INV-6), because a staging directory that silently is not there
+ * would surface as an unexplained execve failure three hops later.
+ *
+ * This is the ONE substrate-specific piece of the ACP-read boot bridge
+ * (vms-5f0 on Linux, vms-8e8f/vms-329 on NetBSD-vax): the bridge itself --
+ * IO$_ACCESS + IO$_READVBLK off the genuine ODS-2 volume through the executive
+ * ACP, then a POSIX write of the bytes -- is portable and shared
+ * (ovmx_boot_acp_read.c). Only "where does a writable scratch filesystem come
+ * from" differs, so only that lives behind the seam:
+ *
+ *   Linux : PID 1 runs on an initramfs that IS a tmpfs, so the directory is
+ *           just mkdir("/run") + mkdir(dir), tolerating EEXIST -- byte-for-byte
+ *           the two mkdir(2) calls stage_boot_images() made inline before this
+ *           op existed.
+ *   NetBSD: the VAX root is a real on-disk FFS, so the same two mkdirs are
+ *           followed by mount(2)ing a tmpfs OVER `dir` (root uid/gid, mode
+ *           0755 -- the same ownership and permission Linux's initramfs gives
+ *           it, which the per-uid staging rules in ovmx_layout.h depend on).
+ *           An EBUSY mount means this boot already staged; that is success.
+ *
+ * IDEMPOTENT on every backend: calling it twice is not an error.
+ */
+int ovmx_boot_prepare_stage_dir(const char *dir);
 
 /*
  * ovmx_boot_power_off - flush and power the machine off, PID 1's analogue of

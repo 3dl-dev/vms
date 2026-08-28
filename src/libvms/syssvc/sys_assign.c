@@ -45,6 +45,7 @@
 #include "lnmdef.h"
 #include "vms/pcb.h"
 #include "vms_kif.h"
+#include "ovmx_console.h"   /* vms-948: single OPA0:/TT: -> console resolver */
 
 /*
  * VMS device resolution result.
@@ -156,10 +157,8 @@ static int resolve_vms_device(const char *name, struct vms_device_result *result
      * is out of vms-d0b's own stated scope ("console terminal only") and
      * out of this item's, and is not invented here.
      */
-    if (strcmp(upper, "TT") == 0 || strcmp(upper, "TT0") == 0 ||
-        strcmp(upper, "OPA0") == 0 || strcmp(upper, "_OPA0") == 0) {
-        strncpy(result->resolved_path, "/dev/console", sizeof(result->resolved_path) - 1);
-        result->resolved_path[sizeof(result->resolved_path) - 1] = '\0';
+    if (ovmx_console_terminal_path(name, result->resolved_path,
+                                   sizeof(result->resolved_path))) {
         result->is_terminal = 1;
         return 1;
     }

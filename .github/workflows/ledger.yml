@@ -78,6 +78,11 @@ jobs:
       - name: NO-NEW-HAND-COPIES -- forbid a second, hand-kept ledger
         run: python3 tools/ledger/no_new_hand_copies.py
 
+      - name: ROADMAP collapse-guard self-tests -- an empty rd snapshot must NOT publish 0%
+        run: |
+          python3 -m pip install --user pytest
+          python3 -m pytest tests/tools/test_roadmap_collapse_guard.py -v
+
   # ---------------------------------------------------------------------------
   # Scheduled/manual live-rd roadmap regen. Keeps the GENERATED block + compat md
   # current WITHOUT blaming per-PR authors. Needs `rd` (and the CEK epoch) on the

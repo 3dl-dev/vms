@@ -128,8 +128,27 @@ COPY src/kernel-core/vms_lock.c              /netbsd/guest-src/kernel-core/vms_l
 # Logical-name facility source (rd vms-72da) -- the SAME shared source the Linux
 # vms.ko and the per-PR crosscompile.sh gate build; listed in the Makefile SRCS.
 COPY src/kernel-core/vms_lnm.c               /netbsd/guest-src/kernel-core/vms_lnm.c
+# Device-table facility source (rd vms-618) -- the executive-resident device
+# table behind $ALLOC/$DALLOC/$ASSIGN/$DASSGN/$GETDVI/$DEVICE_SCAN, the SAME
+# shared source the Linux vms.ko builds; listed in the Makefile SRCS, so the
+# in-guest module build needs it staged (the four-enumeration rule).
+COPY src/kernel-core/vms_devtab.c            /netbsd/guest-src/kernel-core/vms_devtab.c
+COPY src/kernel-netbsd/vms_devtab_nb.h       /netbsd/guest-src/kmod/vms_devtab_nb.h
 COPY src/kernel-core/exec_hash.h             /netbsd/guest-src/kernel-core/exec_hash.h
 COPY src/kernel-core/exec_rbtree.h           /netbsd/guest-src/kernel-core/exec_rbtree.h
+# --- Files-11 ODS-2 ACP (vms-d5d): the ACP handlers + the NetBSD block-device
+# seam + the genuine ODS-2 codec (ods2_reader/edit, built under -DOVMX_ODS2_KERNEL).
+# These joined the module SRCS (src/kernel-netbsd/Makefile) with the ACP flip, so
+# the in-guest module build needs them staged. ods2_reader.c/ods2_edit.c live in
+# src/vmsfs/ods2 (Makefile .PATH ../vmsfs/ods2) and include "ods2_kcompat.h" +
+# "vmsfs/ods2.h" (-I../vmsfs/include). ---
+COPY src/kernel-core/vmsfs_acp.c             /netbsd/guest-src/kernel-core/vmsfs_acp.c
+COPY src/kernel-netbsd/vms_blockdev_netbsd.c /netbsd/guest-src/kmod/vms_blockdev_netbsd.c
+COPY src/vmsfs/ods2/ods2_reader.c            /netbsd/guest-src/vmsfs/ods2/ods2_reader.c
+COPY src/vmsfs/ods2/ods2_edit.c              /netbsd/guest-src/vmsfs/ods2/ods2_edit.c
+COPY src/vmsfs/ods2/ods2_kcompat.h           /netbsd/guest-src/vmsfs/ods2/ods2_kcompat.h
+COPY src/vmsfs/ods2/ods2_block.h             /netbsd/guest-src/vmsfs/ods2/ods2_block.h
+COPY src/vmsfs/include/vmsfs/ods2.h          /netbsd/guest-src/vmsfs/include/vmsfs/ods2.h
 # --- probe/: the userspace tools + the NetBSD transport seam ---
 COPY tests/netbsd/guest/vmsprobe.c           /netbsd/guest-src/probe/vmsprobe.c
 COPY tests/netbsd/guest/vmseflag.c           /netbsd/guest-src/probe/vmseflag.c
@@ -156,44 +175,18 @@ COPY tests/netbsd/run_p2c.sh                 /netbsd/run_p2c.sh
 COPY tests/netbsd/drive_netbsd_p4a.py        /netbsd/drive_netbsd_p4a.py
 COPY tests/netbsd/run_p4a.sh                 /netbsd/run_p4a.sh
 
-# P4-VFS V4 (rd vms-308): the OVMX/NetBSD ODS-2 vnode/VFS backend mount+read
-# proof. Staged as FOUR in-guest dirs (bundled into an ISO by the driver and
-# built in-guest) plus a HOST-side master dir (mkimage_vmsfs is compiled + run
-# on the host to master the ODS-2 volume attached as wd1).
-#   kmod/        : the NetBSD ODS-2 vnode backend (vmsfs_vfsops.c) + its headers
-#   kernel-core/ : the SHARED substrate-neutral ODS-2 core (SAME sources the
-#                  Linux vmsfs.ko builds) + the shim/seam contracts
-#   ondisk/      : vmsfs_ondisk.h (lives beside the Linux glue; -I../ondisk)
-#   tool/        : the in-guest mount(2) helper
-# --- kmod/: the NetBSD ODS-2 vnode backend glue + headers + Makefile ---
-COPY src/kernel-netbsd/vmsfs/vmsfs_vfsops.c          /netbsd/guest-vmsfs/kmod/vmsfs_vfsops.c
-COPY src/kernel-netbsd/vmsfs/vmsfs_nb.h              /netbsd/guest-vmsfs/kmod/vmsfs_nb.h
-COPY src/kernel-netbsd/vmsfs/vmsfs_backend_netbsd.h  /netbsd/guest-vmsfs/kmod/vmsfs_backend_netbsd.h
-COPY src/kernel-netbsd/vmsfs/Makefile                /netbsd/guest-vmsfs/kmod/Makefile
-# --- kernel-core/: the shared, substrate-agnostic ODS-2 core + shim contracts ---
-COPY src/kernel-core/vmsfs/vmsfs_version.c   /netbsd/guest-vmsfs/kernel-core/vmsfs_version.c
-COPY src/kernel-core/vmsfs/vmsfs_map.c       /netbsd/guest-vmsfs/kernel-core/vmsfs_map.c
-COPY src/kernel-core/vmsfs/vmsfs_name.c      /netbsd/guest-vmsfs/kernel-core/vmsfs_name.c
-COPY src/kernel-core/vmsfs/vmsfs_header.c    /netbsd/guest-vmsfs/kernel-core/vmsfs_header.c
-COPY src/kernel-core/vmsfs/vmsfs_alloc.c     /netbsd/guest-vmsfs/kernel-core/vmsfs_alloc.c
-COPY src/kernel-core/vmsfs/vmsfs_dirscan.c   /netbsd/guest-vmsfs/kernel-core/vmsfs_dirscan.c
-COPY src/kernel-core/vmsfs/vmsfs_bio.h       /netbsd/guest-vmsfs/kernel-core/vmsfs_bio.h
-COPY src/kernel-core/vmsfs/vmsfs_core.h      /netbsd/guest-vmsfs/kernel-core/vmsfs_core.h
-COPY src/kernel-core/vmsfs/vmsfs_backend.h   /netbsd/guest-vmsfs/kernel-core/vmsfs_backend.h
-# --- ondisk/: the on-disk format header (physically beside the Linux glue) ---
-COPY src/kernel/vmsfs/vmsfs_ondisk.h         /netbsd/guest-vmsfs/ondisk/vmsfs_ondisk.h
-# --- tool/: the in-guest mount(2) helper ---
-COPY tests/netbsd/guest/vmsfs_mount.c        /netbsd/guest-vmsfs/tool/vmsfs_mount.c
-# --- HOST-side ODS-2 mastering (compiled + run on the host, not in-guest) ---
-COPY tests/qemu/mkimage_vmsfs.c              /netbsd/vmsfs-master/mkimage_vmsfs.c
-COPY src/kernel/vmsfs/vmsfs_ondisk.h         /netbsd/vmsfs-master/vmsfs_ondisk.h
-COPY tests/netbsd/drive_netbsd_vmsfs.py      /netbsd/drive_netbsd_vmsfs.py
-COPY tests/netbsd/run_vmsfs.sh               /netbsd/run_vmsfs.sh
+# P4-VFS V4 (rd vms-308) — RETIRED by vms-165. This was the OVMX/NetBSD ODS-2
+# vnode/VFS-backend mount+read proof: it staged the NetBSD ODS-2 vnode backend
+# (vmsfs_vfsops.c), the shared substrate-neutral ODS-2 core, vmsfs_ondisk.h and
+# an in-guest mount(2) helper, plus a host-mastered ODS-2 volume, and mounted it
+# in-guest. The whole vmsfs VFS driver (NetBSD vmsfs.kmod + Linux vmsfs.ko + the
+# shared kernel-core/vmsfs core + their host helpers guest-vmsfs/, vmsfs-master/,
+# run_vmsfs.sh, drive_netbsd_vmsfs.py, mkimage_vmsfs) was deleted -- the runtime
+# reads SYS$DISK over the executive Files-11 ACP, never a vmsfs mount.
 
 RUN chmod +x /netbsd/run_tests.sh /netbsd/drive_netbsd.py \
              /netbsd/run_p2b.sh /netbsd/drive_netbsd_p2b.py \
              /netbsd/run_p2c.sh /netbsd/drive_netbsd_p2c.py \
-             /netbsd/run_vmsfs.sh /netbsd/drive_netbsd_vmsfs.py \
              /netbsd/run_p4a.sh /netbsd/drive_netbsd_p4a.py
 
 # The installed NetBSD image + download mirror live under /cache so they persist

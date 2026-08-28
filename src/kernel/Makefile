@@ -86,11 +86,10 @@ vms-y := vms_module.o \
 # exec_blockdev_write_block writes around them. -DOVMX_ODS2_KERNEL selects the
 # codec's kernel string/type vocabulary (ods2_kcompat.h). This is the OUT-OF-TREE
 # / QEMU-test module; the in-tree bootable overlay (distro/kernel/drivers-ovmx/
-# vms) deliberately does NOT carry the codec yet (flatten-safe-include follow-up),
-# so vmsfs_acp.c gates its codec use on OVMX_ODS2_KERNEL and $MOUNT fail-honestly
-# refuses there. This build MUST mirror into the bootable Kbuild ONLY the object
-# set the bootable module can resolve -- ods2_reader.o is intentionally absent
-# from distro/kernel/drivers-ovmx/vms/Kbuild.
+# vms) now ALSO carries the codec (vms-5f0: ods2_reader.o + ods2_edit.o, with the
+# subdir'd "vmsfs/ods2.h" made flatten-safe), because the atomic flip makes PID 1
+# $MOUNT SYS$DISK via the ACP. This object set MUST stay mirrored with
+# distro/kernel/drivers-ovmx/vms/Kbuild's vms-y -- add a codec .c to both.
 
 # -I$(src)/../kernel-core: the substrate-agnostic executive core + the shim
 #   contracts (exec_kbackend.h, exec_list.h, exec_hash.h). The relocated core

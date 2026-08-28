@@ -20,7 +20,6 @@
  *   ovmx_boot_open_executive             -> open("/dev/vms", O_RDWR|O_CLOEXEC)
  *   ovmx_boot_system_disk_dev            -> "/dev/vda"
  *   ovmx_boot_system_disk_present        -> stat("/dev/vda") && S_ISBLK
- *   ovmx_boot_mount_system_disk          -> mount(dev, mp, "vmsfs", 0, NULL)
  *   ovmx_boot_power_off                  -> sync(); reboot(RB_POWER_OFF)
  *
  * Clean-room (CLAUDE.md Rule 8): these call only public, documented Linux
@@ -31,6 +30,7 @@
  * compile definitions (CMakeLists.txt) -- not redefined here. */
 #include "ovmx_boot.h"
 #include "opcom_kmsg.h"
+#include "vms_kif.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -153,9 +153,52 @@ int ovmx_boot_system_disk_present(void)
     return stat(OVMX_BOOT_SYSDISK_DEV, &st) == 0 && S_ISBLK(st.st_mode);
 }
 
-int ovmx_boot_mount_system_disk(const char *mountpoint)
+/* The VMS device name of the boot/system unit as the executive enumerates it
+ * (vms_devtab.c: vda -> DKA0:). This is what $ASSIGN / the Files-11 ACP $MOUNT
+ * name, NOT the Linux "/dev/vda" path -- the ACP owns the genuine ODS-2 block
+ * device directly (vms-5f0, epic vms-208). */
+#define OVMX_BOOT_SYSDISK_UNIT  "DKA0:"
+
+const char *ovmx_boot_system_disk_unit(void)
 {
-    return mount(OVMX_BOOT_SYSDISK_DEV, mountpoint, "vmsfs", 0, NULL);
+    return OVMX_BOOT_SYSDISK_UNIT;
+}
+
+/* ATOMIC FLIP (vms-5f0): $MOUNT the boot unit through the Files-11 (ODS-2) ACP
+ * in the executive, recording it executive-global so SYS$DISK is served by the
+ * ACP -- replacing the Linux vmsfs.ko VFS mount of a bespoke-VMFS volume at
+ * /vms. Requires /dev/vms already open (executive_attach()). Returns 0 on a
+ * successful ACP mount, -1 otherwise (VMS status is odd == success); a caller
+ * that gets -1 halts honestly exactly as the old vmsfs mount(2) failure did. */
+int ovmx_boot_acp_mount_system_disk(void)
+{
+    uint32_t st = vms_kif_acp_mount(OVMX_BOOT_SYSDISK_UNIT);
+    if (st & 1)          /* odd VMS status == success */
+        return 0;
+    errno = 0;           /* not an errno; the caller reports the VMS unit name */
+    return -1;
+}
+
+/* The flagless boot path's whole system-disk mount, Linux side (vms-5f0): the
+ * ATOMIC FLIP $MOUNTs the boot unit through the executive Files-11 (ODS-2) ACP
+ * -- there is no vmsfs.ko VFS mount on Linux any more. Relocated out of
+ * ovmx_init.c so the boot sequence stays ONE substrate-neutral source. */
+int ovmx_boot_mount_system_disk_native(void)
+{
+    return ovmx_boot_acp_mount_system_disk();
+}
+
+/* The ACP-read boot bridge's writable staging directory, Linux side (vms-5f0).
+ * PID 1 runs on an initramfs that is already a tmpfs, so this is exactly the
+ * two mkdir(2) calls stage_boot_images() made inline before the op existed --
+ * same paths, same 0755 mode, same EEXIST tolerance. */
+int ovmx_boot_prepare_stage_dir(const char *dir)
+{
+    if (mkdir("/run", 0755) != 0 && errno != EEXIST)
+        return -1;
+    if (mkdir(dir, 0755) != 0 && errno != EEXIST)
+        return -1;
+    return 0;
 }
 
 void ovmx_boot_power_off(void)

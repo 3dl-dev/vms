@@ -71,6 +71,13 @@
 #define VMS_DEVNAM_SIZE 16
 #endif
 
+/* Backing block-device name field width -- matches src/kernel/vms_ioctl.h's
+ * VMS_BACKING_SIZE (16). Guarded like VMS_DEVNAM_SIZE so this header composes
+ * with any other /dev/vms contract header that also defines it. */
+#ifndef VMS_BACKING_SIZE
+#define VMS_BACKING_SIZE 16
+#endif
+
 /* FIB$L_ACCTL access-control flag + the IO$_ACCESS name buffer size --
  * byte-identical to src/kernel/vms_acp.h. */
 #define VMS_ACP_ACCTL_WRITE   0x00000001u
@@ -195,7 +202,7 @@ struct vms_acp_acpcontrol_args {
  * IO$_CREATE / IO$_DELETE / IO$_MODIFY via a func-dispatched ioctl on nr 0x6F
  * (size-distinct from ACPCONTROL). NetBSD-substrate MIRROR of the same-named
  * surface in src/kernel/vms_acp.h -- byte-identical (all fixed-width, so the
- * layout + the sizeof==252 hold identically on ILP32 and LP64). See vms_acp.h
+ * layout + the sizeof==344 hold identically on ILP32 and LP64). See vms_acp.h
  * for the FIB/ATR role documentation; retire this twin per vms-02b.
  */
 #define VMS_ACP_FOP_CREATE   9u    /* IO$_CREATE */
@@ -204,6 +211,7 @@ struct vms_acp_acpcontrol_args {
 #define VMS_ACP_M_CREATE     0x0001u  /* IO$M_CREATE: enter the file in a directory */
 #define VMS_ACP_M_ACCESS     0x0002u  /* IO$M_ACCESS: also access it (build a window) */
 #define VMS_ACP_M_DELETE     0x0004u  /* IO$M_DELETE: also delete the file (dealloc) */
+#define VMS_ACP_M_MOVE       0x0008u  /* IO$M_MOVE: MODIFY renames/moves the file */
 #define VMS_ACP_ATTR_PROT    0x01u    /* apply attr.fileprot */
 #define VMS_ACP_ATTR_OWNER   0x02u    /* apply attr.uic_group/uic_member */
 struct vms_acp_fileop_args {
@@ -240,6 +248,34 @@ struct vms_acp_fileop_args {
 	struct vms_acp_fileattr attr;
 	uint32_t status;
 	uint32_t pad3;
+	/* --- MODIFY!VMS_ACP_M_MOVE (rename/move) target, vms-de7 --- */
+	uint16_t new_did_num;
+	uint16_t new_did_seq;
+	uint8_t  new_did_rvn;
+	uint8_t  new_did_nmx;
+	uint16_t new_version;
+	uint16_t pad4;
+	uint16_t pad5;
+	char     new_name[VMS_ACP_NAME_SIZE];
+};
+
+/*
+ * Disk-unit resolve (rd vms-f60) -- NetBSD twin of src/kernel/vms_ioctl.h's
+ * struct vms_diskresolve_args. INITIALIZE.EXE names a VMS disk unit ("DKA0:")
+ * and the executive resolves it to the REAL backing block device the unit
+ * labels (device-native, vms-47d). BYTE-IDENTICAL to the Linux struct (all
+ * fixed-width -> same layout on ILP32/VAX and LP64), so the ONE userspace
+ * client decodes it the same across substrates. Not an ACP file op -- it names
+ * a device, it does not touch a mounted volume -- but it shares the /dev/vms
+ * magic space, so it lives beside the ACP contract.
+ */
+struct vms_diskresolve_args {
+	char     devnam[VMS_DEVNAM_SIZE];   /* in: disk unit name, e.g. "DKA0:" */
+	char     backing[VMS_BACKING_SIZE]; /* out: native block dev, e.g. "ra1c" */
+	uint32_t backing_major;             /* out: backing dev_t major */
+	uint32_t backing_minor;             /* out: backing dev_t minor */
+	uint32_t status;                    /* return: SS$_ status */
+	uint32_t pad;
 };
 
 /* ================================================================
@@ -256,6 +292,17 @@ struct vms_acp_fileop_args {
 #define VMS_IOCTL_ACP_WRITEVBLK _IOWR(VMS_ACP_IOC_MAGIC, 0x6E, struct vms_acp_rw_args)
 #define VMS_IOCTL_ACP_ACPCONTROL _IOWR(VMS_ACP_IOC_MAGIC, 0x6F, struct vms_acp_acpcontrol_args)
 #define VMS_IOCTL_ACP_FILEOP     _IOWR(VMS_ACP_IOC_MAGIC, 0x6F, struct vms_acp_fileop_args)
+
+/*
+ * Disk-unit resolve -- nr 0x57, the SAME (magic,nr,size) as the Linux
+ * VMS_IOCTL_DISK_RESOLVE. VMS_ACP_IOC_MAGIC is 'V', identical to the Linux
+ * VMS_IOC_MAGIC, and sizeof(struct vms_diskresolve_args) == 48 on both
+ * substrates, so _IOWR folds to the IDENTICAL request number 0xC0305657 (unlike
+ * the ACP ops, whose Linux/NetBSD numbers may legitimately differ). The
+ * cross-substrate equality is asserted below -- one userspace ioctl number
+ * reaches both executives.
+ */
+#define VMS_IOCTL_DISK_RESOLVE   _IOWR(VMS_ACP_IOC_MAGIC, 0x57, struct vms_diskresolve_args)
 
 /*
  * Freeze the shared layouts -- see src/kernel/vms_acp.h's identical asserts:
@@ -278,9 +325,18 @@ _Static_assert(sizeof(struct vms_acp_rw_args) == 48,
                "vms_acp_rw_args changed size -- ACP READVBLK/WRITEVBLK ABI break");
 _Static_assert(sizeof(struct vms_acp_acpcontrol_args) == 200,
                "vms_acp_acpcontrol_args changed size -- VMS_IOCTL_ACP_ACPCONTROL ABI break");
-_Static_assert(sizeof(struct vms_acp_fileop_args) == 252,
+_Static_assert(sizeof(struct vms_acp_fileop_args) == 344,
                "vms_acp_fileop_args changed size -- VMS_IOCTL_ACP_FILEOP ABI break");
 _Static_assert(VMS_IOCTL_ACP_FILEOP != VMS_IOCTL_ACP_ACPCONTROL,
                "FILEOP/ACPCONTROL must stay distinct on nr 0x6F (size-distinct _IOWR)");
+_Static_assert(sizeof(struct vms_diskresolve_args) == 48,
+               "struct vms_diskresolve_args changed size -- disk unit resolution would decode at the wrong offsets");
+/*
+ * Unlike the ACP ops, this ioctl number MUST equal the Linux side's: the same
+ * userspace INITIALIZE.EXE client issues it against either executive. 'V' magic
+ * + nr 0x57 + size 48 fold to 0xC0305657 on both substrates.
+ */
+_Static_assert(VMS_IOCTL_DISK_RESOLVE == 0xC0305657u,
+               "VMS_IOCTL_DISK_RESOLVE encodes differently here than on the Linux reference build");
 
 #endif /* _VMS_ACP_NB_H */

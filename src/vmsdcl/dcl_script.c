@@ -313,6 +313,75 @@ int dcl_call_subroutine(const char *label, int argc, char **argv)
     return status;
 }
 
+#if defined(OVMX_HAVE_ACP)
+#include "dcl/dcl_rms.h"     /* dcl_rms_read_open/read_record/read_close (ACP) */
+
+/*
+ * dcl_proc_open_acp (vms-5f0, epic vms-208 atomic flip) - open a command
+ * procedure off the GENUINE ODS-2 SYS$DISK through RMS / the Files-11 ACP,
+ * staging its text in a transient stdio stream the existing fseek/fgets script
+ * engine (dcl_execute_script / dcl_call_subroutine) drives unchanged.
+ *
+ * KEYED ON OVMX_HAVE_ACP, NOT __linux__ (vms-329). This was Linux-only while
+ * the netbsd-vax runtime still VFS-mounted SYS$DISK and so still had a /vms
+ * POSIX tree to fopen(). The coupled VAX cutover retired that mount, so on the
+ * VAX the fopen chain below reaches nothing at all: the first traced cutover
+ * boot got PID 1 all the way to "handing SYS$MANAGER:STARTUP.COM to DCL for ACP
+ * resolution" and DCL answered %DCL-E-OPENIN, because this arm was compiled out
+ * and the passthrough it fell back to no longer exists. The implementation was
+ * already substrate-neutral -- dcl_rms_read_open() lives in dcl_filespec.c,
+ * which every configuration compiles -- so the gate, not the code, was the gap.
+ * (It also removes a __linux__ source fork, which build-boot-images-vax.sh's
+ * INV-DRIFT note forbids in this image set.)
+ *
+ * WHY: a boot-time procedure (SYS$STARTUP:JOB_CONTROL_STARTUP.COM,
+ * SYS$MANAGER:*.COM, ...) lives ONLY on the mounted ODS-2 volume; fopen() on
+ * the vmsfs_to_linux_path("/vms/...") passthrough cannot see it, so @-execution
+ * of it failed %DCL-E-OPENIN and the END-phase JOB_CONTROL/LOGINOUT never
+ * started. DCL's other file verbs already ride RMS-over-ACP (vms-481/vms-5f0);
+ * this brings @-procedure execution onto the same path.
+ *
+ * A STMLF/VAR text file's records ARE its lines, so joining them with '\n'
+ * reconstructs the procedure text the engine expects. Tries `spec` then the
+ * `.COM` default type. Returns NULL when the ACP cannot resolve the spec (a
+ * build with no /dev/vms, or a genuinely absent file), so the caller falls back
+ * to the passthrough fopen chain -- keeping the plain host ctest environment
+ * (no ACP-mounted SYS$DISK) working exactly as before.
+ */
+static FILE *dcl_proc_open_acp(struct dcl_context *ctx, const char *spec)
+{
+    static const char *exts[] = { "", ".COM" };
+    for (unsigned e = 0; e < 2; e++) {
+        char trial[1056];
+        uint32_t rst = 0;
+        struct dcl_rms_reader *r;
+
+        snprintf(trial, sizeof(trial), "%s%s", spec, exts[e]);
+        r = dcl_rms_read_open(ctx, trial, &rst);
+        if (!r)
+            continue;                       /* try .COM, then passthrough */
+
+        FILE *fp = tmpfile();
+        if (!fp) { dcl_rms_read_close(r); return NULL; }
+
+        char rec[8192];
+        int eof = 0;
+        for (;;) {
+            int n = dcl_rms_read_record(r, rec, sizeof(rec), &eof);
+            if (n < 0)
+                break;                      /* end-of-file / read error */
+            if (n > 0)
+                fwrite(rec, 1, (size_t)n, fp);
+            fputc('\n', fp);
+        }
+        dcl_rms_read_close(r);
+        rewind(fp);
+        return fp;
+    }
+    return NULL;
+}
+#endif /* OVMX_HAVE_ACP */
+
 /*
  * Execute a command procedure (.COM file).
  *
@@ -339,8 +408,21 @@ int dcl_execute_script(const char *filename, int argc, char **argv)
 
     dcl_resolve_path(ctx, spec, linux_path, sizeof(linux_path));
 
-    /* Try to open the file */
-    FILE *fp = fopen(linux_path, "r");
+    /* Try to open the file. vms-5f0: FIRST reach it the VMS way -- through RMS /
+     * the Files-11 ACP on the mounted ODS-2 SYS$DISK -- so a procedure that
+     * lives only on the volume (JOB_CONTROL_STARTUP.COM et al) is found. Fall
+     * back to the /vms passthrough fopen chain below only when the ACP has no
+     * such device/file (host builds without /dev/vms), preserving those tests. */
+    FILE *fp = NULL;
+#if defined(OVMX_HAVE_ACP)
+    fp = dcl_proc_open_acp(ctx, spec);
+    if (fp) {
+        strncpy(linux_path, spec, sizeof(linux_path) - 1);
+        linux_path[sizeof(linux_path) - 1] = '\0';
+    }
+#endif
+    if (!fp)
+        fp = fopen(linux_path, "r");
 
     /* If not found, try adding .com extension */
     if (!fp) {

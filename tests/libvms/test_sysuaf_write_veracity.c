@@ -1,42 +1,24 @@
 /*
  * test_sysuaf_write_veracity.c - INV-DCL veracity gate for SET PASSWORD
- * (vms-e9e, docs/design-dcl-fidelity.md sec 3)
+ * (vms-e9e, flipped to the binary $UAFDEF path by vms-d92)
  *
- * THE FACADE THIS GATES. cmd_set_password() (src/vmsdcl/dcl_cmd_set.c) used
- * to print "%SET-I-PASSWORD, password change not fully implemented" and
- * return SS$_NORMAL without touching SYSUAF at all -- a success-toned lie
- * for a no-op (INV-DCL: "a command that prints -S-/-I- while doing nothing
- * is a worse tell than an honest error, because it appears to work").
+ * THE FACADE THIS GATES. cmd_set_password() (src/vmsdcl/dcl_cmd_set.c) used to
+ * print "%SET-I-PASSWORD, password change not fully implemented" and return
+ * SS$_NORMAL without touching SYSUAF -- a success-toned lie for a no-op.
  *
- * WHAT THIS PROVES. This test drives the exact mechanism cmd_set_password()
- * now calls -- sysuaf_lookup() -> sysuaf_authenticate() -> sha256_hex() ->
- * sysuaf_write_record() -- against a REAL SYSUAF.DAT file resolved through
- * the SAME SYS$SYSTEM: path translation AUTHORIZE and LOGIN use
- * (vmsfs_to_linux_path(), src/vmslnm/lnm_defaults.c's documented
- * process-scope fallback for host tooling with no executive). It asserts
- * the property the item asked for directly: change a password, then the
- * NEW password authenticates and the OLD one does not -- proving a real
- * hash change PERSISTED TO SYSUAF, not a per-process fake (INV-6).
+ * WHAT THIS PROVES. It drives the exact mechanism cmd_set_password() now calls
+ * -- sysuaf_lookup() -> sysuaf_authenticate() -> sysuaf_set_password() ->
+ * sysuaf_write_record() -- against a REAL binary SYSUAF.DAT resolved through the
+ * SAME SYS$SYSTEM: path translation AUTHORIZE and LOGIN use. It asserts the
+ * property directly: change a password, then the NEW password authenticates
+ * and the OLD one does not -- a real credential change PERSISTED to the binary
+ * $UAFDEF record via the Prolog-3 engine ($UPDATE over the ACP, or the POSIX
+ * defer with no /dev/vms), not a per-process fake (INV-6). No ASCII, no SHA-256.
  *
- * WHY THIS IS A HOST TEST, NOT A tests/qemu ONE. sysuaf_write_record() is
- * plain file I/O plus the SAME SYS$SYSTEM: logical-name resolution
- * AUTHORIZE and LOGIN already rely on for host testing (see
- * lnm_seed_system_locating()'s doc comment, src/vmslnm/lnm_defaults.c) --
- * it needs no /dev/vms. This test bootstraps its OWN private VMS namespace
- * (a throwaway temp directory registered as DKA0:, exactly the pattern
- * tools/vms_authorize.c's main() uses) rather than touching the real /vms
- * mount, so it cannot race or collide with any other test or with a real
- * boot's SYSUAF.DAT.
- *
- * THE TRIPWIRE. Before this session, sysuaf_write_record() did not exist:
- * this test does not link. After it exists but before cmd_set_password()
- * is wired to it, the property below would still hold (the library
- * function works standalone) -- the DCL-level facade is what
- * tests/dcl/test_set_password_veracity.sh separately gates, from the
- * SET PASSWORD command's own output/status. This test's job is narrower
- * and more mechanical: prove the WRITER cmd_set_password() now calls
- * actually persists a hash change that flips authentication, not merely
- * that it returns 0.
+ * WHY A HOST TEST. The whole path needs no /dev/vms: with the executive absent
+ * the binary engine's legacy defer serves SYSUAF over POSIX (vms-5f0). The test
+ * bootstraps its OWN private VMS namespace (a throwaway temp dir registered as
+ * DKA0:, the pattern AUTHORIZE's main() uses) so it cannot race the real /vms.
  */
 
 #include <stdio.h>
@@ -47,7 +29,8 @@
 #include <sys/stat.h>
 
 #include "sysuaf.h"
-#include "sha256.h"
+#include "sysuaf_live.h"   /* ovmx_sysuaf_write_all -- seed the binary fixture */
+#include "rmsdef.h"        /* RMS$_NORMAL / RMS$_RNF -- vms-3b0 status surfacing */
 #include "vmsfs/device.h"
 #include "vms/logical.h"
 #include "ovmx_layout.h"
@@ -79,21 +62,32 @@ static void mkdir_p(const char *path)
     mkdir(tmp, 0777);
 }
 
+/* Build a binary $UAFDEF record for one account with a Purdy password. */
+static void seed_record(sysuaf_rms_record_t *out, const char *user,
+                        uint16_t grp, uint16_t mem, const char *pw)
+{
+    sysuaf_record_t v;
+    memset(&v, 0, sizeof(v));
+    strncpy(v.username, user, sizeof(v.username) - 1);
+    v.uic_group = grp; v.uic_member = mem;
+    snprintf(v.default_dir, sizeof(v.default_dir),
+             "SYS$SYSDEVICE:[USERS.%s]", user);
+    strncpy(v.privileges, "TMPMBX,NETMBX", sizeof(v.privileges) - 1);
+    sysuaf_view_to_raw(&v);
+    sysuaf_set_password(&v, pw);
+    *out = v.raw;
+}
+
 int main(void)
 {
-    printf("test_sysuaf_write_veracity: SET PASSWORD's writer persists a "
-           "real hash change to SYSUAF (vms-e9e, INV-DCL)\n");
+    printf("test_sysuaf_write_veracity: SET PASSWORD's writer persists a real "
+           "credential change to the binary SYSUAF (vms-e9e/vms-d92)\n");
 
-    /* --- Isolated VMS namespace: a throwaway temp root, never the real
-     * /vms mount -- same bootstrap tools/vms_authorize.c's main() does
-     * (vmsfs_device_add + lnm_setup_defaults), pointed at a private
-     * directory so this test cannot race or collide with anything else. */
     char root[] = "/tmp/sysuaf_write_veracity_XXXXXX";
     if (!mkdtemp(root)) {
         fprintf(stderr, "FATAL: mkdtemp failed\n");
         return 2;
     }
-
     char sysexe_dir[1100];
     snprintf(sysexe_dir, sizeof(sysexe_dir), "%s/SYS0/SYSCOMMON/SYSEXE", root);
     mkdir_p(sysexe_dir);
@@ -101,93 +95,89 @@ int main(void)
     vmsfs_device_add(SYSDISK_DEVICE, root);
     lnm_setup_defaults(lnm_get_manager(), root);
 
-    /* --- Seed a SYSUAF.DAT fixture with two accounts: TESTUSER (the one
-     * this test changes) and BYSTANDER (proves every OTHER row survives
-     * the targeted rewrite untouched -- sysuaf_write_record()'s own
-     * contract). */
     const char *old_pw = "OldPass123";
     const char *new_pw = "NewPass456";
     const char *bystander_pw = "BystanderPW789";
 
-    char old_hash[65], bystander_hash[65];
-    sha256_hex((const uint8_t *)old_pw, strlen(old_pw), old_hash);
-    sha256_hex((const uint8_t *)bystander_pw, strlen(bystander_pw),
-               bystander_hash);
-
-    char sysuaf_path[1200];
-    snprintf(sysuaf_path, sizeof(sysuaf_path), "%s/SYSUAF.DAT", sysexe_dir);
-
-    FILE *fp = fopen(sysuaf_path, "w");
-    if (!fp) {
-        fprintf(stderr, "FATAL: cannot create fixture %s\n", sysuaf_path);
+    /* --- Seed the binary SYSUAF fixture: TESTUSER (the account this test
+     * changes) + BYSTANDER (proves every OTHER record survives untouched). --- */
+    sysuaf_rms_record_t recs[2];
+    seed_record(&recs[0], "TESTUSER", 200, 205, old_pw);
+    seed_record(&recs[1], "BYSTANDER", 200, 206, bystander_pw);
+    uint32_t wst = ovmx_sysuaf_write_all(recs, 2);
+    check((wst & 1) != 0,
+          "seeded a binary $UAFDEF SYSUAF through the Prolog-3 engine");
+    if (!(wst & 1)) {
+        fprintf(stderr, "FATAL: could not seed the binary SYSUAF (0x%08x)\n", wst);
         return 2;
     }
-    fprintf(fp, "# fixture SYSUAF.DAT for test_sysuaf_write_veracity\n");
-    fprintf(fp, "TESTUSER|%s|200|205|SYS$SYSDEVICE:[USERS.TESTUSER]||"
-                "TMPMBX,NETMBX\n", old_hash);
-    fprintf(fp, "BYSTANDER|%s|200|206|SYS$SYSDEVICE:[USERS.BYSTANDER]||"
-                "TMPMBX,NETMBX\n", bystander_hash);
-    fclose(fp);
 
-    /* --- Pre-condition: the file resolves through the real SYS$SYSTEM:
-     * translation, and the fixture reads back as written. */
+    /* Capture BYSTANDER's stored password quadword for a byte-exact
+     * unchanged check after TESTUSER's rewrite. */
+    uint8_t bystander_pwd_before[8];
+    memcpy(bystander_pwd_before, recs[1].uaf$q_pwd, 8);
+
+    /* --- Pre-condition: the record resolves through SYS$SYSTEM: and the OLD
+     * password authenticates while the NEW one does not yet. --- */
     sysuaf_record_t rec;
     check(sysuaf_lookup("TESTUSER", &rec) == 0,
-          "TESTUSER resolves through SYS$SYSTEM:SYSUAF.DAT (real path "
-          "translation, not a bypassed file)");
+          "TESTUSER resolves through SYS$SYSTEM:SYSUAF.DAT (real binary read)");
+
+    /* --- vms-3b0: sysuaf_lookup_st() surfaces the RAW RMS status instead of
+     * collapsing every failure to a bare -1 (which masked a privilege-denied
+     * read as an ordinary no-such-user during the #766 VAX-login diagnosis).
+     * A present account reports RMS$_NORMAL; an ABSENT one reports RMS$_RNF
+     * (record-not-found) -- the value LOGINOUT relies on to keep a genuine
+     * no-such-user indistinguishable from a wrong password while still making a
+     * SYSTEM fault (RMS$_PRV/RMS$_FNF) diagnosable. --- */
+    uint32_t look_st = 0;
+    sysuaf_record_t strec;
+    check(sysuaf_lookup_st("TESTUSER", &strec, &look_st) == 0
+              && look_st == RMS$_NORMAL,
+          "sysuaf_lookup_st surfaces RMS$_NORMAL for a present account");
+    look_st = 0;
+    check(sysuaf_lookup_st("NOSUCHUSER_ZZ", &strec, &look_st) < 0
+              && look_st == RMS$_RNF,
+          "sysuaf_lookup_st surfaces RMS$_RNF (not a bare -1) for an absent "
+          "account -- the fail-honesty the collapse used to hide (vms-3b0)");
     check(sysuaf_authenticate(&rec, old_pw) == 1,
           "pre-condition: OLD password authenticates before any change");
     check(sysuaf_authenticate(&rec, new_pw) == 0,
           "pre-condition: NEW password does NOT authenticate yet");
 
     /* --- The change: exactly what cmd_set_password() now does after a
-     * verified old-password match -- hash the new password and call the
-     * ONE shared writer. */
-    char new_hash[65];
-    sha256_hex((const uint8_t *)new_pw, strlen(new_pw), new_hash);
-    strncpy(rec.password_hash, new_hash, sizeof(rec.password_hash) - 1);
-    rec.password_hash[sizeof(rec.password_hash) - 1] = '\0';
+     * verified old-password match -- Purdy-hash the new password into the
+     * record and persist it through the ONE binary writer. --- */
+    check(sysuaf_set_password(&rec, new_pw) == 0, "sysuaf_set_password succeeds");
+    check(sysuaf_write_record(&rec) == 0, "sysuaf_write_record reports success");
 
-    int wrc = sysuaf_write_record(&rec);
-    check(wrc == 0, "sysuaf_write_record() reports success");
-
-    /* --- THE VERACITY ASSERTIONS (the item's own acceptance test): a
-     * fresh lookup (not the in-memory struct) sees the NEW password
-     * authenticate and the OLD one refused -- a real, persisted change,
-     * not a per-process fake (INV-6). */
+    /* --- THE VERACITY ASSERTIONS: a FRESH lookup (not the in-memory struct)
+     * sees the NEW password authenticate and the OLD one refused. --- */
     sysuaf_record_t rec2;
     check(sysuaf_lookup("TESTUSER", &rec2) == 0,
           "TESTUSER still resolves after the rewrite");
     check(sysuaf_authenticate(&rec2, new_pw) == 1,
-          "POST-CHANGE: the NEW password now authenticates (real hash "
-          "change persisted to SYSUAF)");
+          "POST-CHANGE: the NEW password now authenticates (real credential "
+          "change persisted to the binary SYSUAF)");
     check(sysuaf_authenticate(&rec2, old_pw) == 0,
           "POST-CHANGE: the OLD password no longer authenticates");
 
-    /* --- The bystander row must be untouched: proves the targeted
-     * rewrite did not corrupt or drop a neighbour (sysuaf_write_record()'s
-     * documented contract, sysuaf.h). */
+    /* --- The bystander record must be untouched: the in-place $UPDATE changed
+     * only TESTUSER's record, leaving BYSTANDER's bytes (and its password)
+     * exactly as seeded. --- */
     sysuaf_record_t bystander;
     check(sysuaf_lookup("BYSTANDER", &bystander) == 0,
           "BYSTANDER still resolves after TESTUSER's rewrite");
     check(sysuaf_authenticate(&bystander, bystander_pw) == 1,
           "BYSTANDER's own password is unchanged by TESTUSER's rewrite");
-    check(strcmp(bystander.password_hash, bystander_hash) == 0,
-          "BYSTANDER's stored hash byte-for-byte unchanged");
+    check(memcmp(bystander.raw.uaf$q_pwd, bystander_pwd_before, 8) == 0,
+          "BYSTANDER's stored password quadword byte-for-byte unchanged");
 
-    /* --- Negative control: sysuaf_write_record() for a username that is
-     * NOT in the file must fail and must not touch the file (matches the
-     * documented contract -- "no matching username" is a -1, unchanged
-     * file, never a silent append). */
-    sysuaf_record_t ghost;
-    memset(&ghost, 0, sizeof(ghost));
-    strncpy(ghost.username, "NOSUCHUSER", sizeof(ghost.username) - 1);
-    strncpy(ghost.password_hash, "deadbeef", sizeof(ghost.password_hash) - 1);
-    check(sysuaf_write_record(&ghost) != 0,
-          "sysuaf_write_record() refuses a username with no matching row "
-          "(never silently appends)");
-    check(sysuaf_lookup("NOSUCHUSER", &rec) != 0,
-          "the refused write did not create a NOSUCHUSER row");
+    /* Note (vms-d92): the retired ASCII writer REFUSED a username with no
+     * matching row; the binary store (ovmx_sysuaf_store_user) is a deliberate
+     * UPSERT ($UPDATE if present, else $PUT) because AUTHORIZE ADD needs to
+     * insert. That is a different, intended contract, so the old
+     * "refuse-unknown / never-append" negative control is not reasserted here. */
 
     printf("test_sysuaf_write_veracity: %d failure(s)\n", g_failures);
     return g_failures ? 1 : 0;

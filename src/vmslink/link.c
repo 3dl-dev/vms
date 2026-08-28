@@ -41,6 +41,7 @@
 
 #include "ovmx_image.h"
 #include "ovmx_symvec.h"
+#include "evax_read.h"      /* Alpha/VMS (EVAX) object front end (bead vms-cbe) */
 
 #ifdef OVMX_RMS_IO
 #include "ovmx_link_rms_io.h"   /* vms-b5a: RMS-backed object read + image write */
@@ -175,6 +176,20 @@
 #ifndef R_X86_64_DTPOFF32
 #define R_X86_64_DTPOFF32        21
 #endif
+/* Classic (non-TLSDESC "gnu"/"gnu2"-less) general-/local-dynamic TLS relocs the
+ * x86_64 psABI defines for the __tls_get_addr access model. STOCK upstream
+ * archives (Alpine libstdc++/libsupc++/libgcc) are compiled with the classic
+ * dialect and emit these; the OVMX producer graph uses -mtls-dialect=gnu2
+ * (TLSDESC, handled above). For a SINGLE static image (no dlopen) both relax to
+ * Local-Exec — read TP from %fs:0 and add a link-time-final TP-relative offset
+ * (vms-76a). TLSGD names the accessed TLS variable; TLSLD names an arbitrary
+ * placeholder and its per-variable offsets ride paired R_X86_64_DTPOFF32. */
+#ifndef R_X86_64_TLSGD
+#define R_X86_64_TLSGD           19
+#endif
+#ifndef R_X86_64_TLSLD
+#define R_X86_64_TLSLD           20
+#endif
 #ifndef R_X86_64_GOTPC32_TLSDESC
 #define R_X86_64_GOTPC32_TLSDESC 34
 #endif
@@ -186,19 +201,72 @@
  * pair. It is not a variable: its "module offset" is 0 by definition. */
 #define TLS_MODULE_BASE_SYM "_TLS_MODULE_BASE_"
 
-#define IMGACT_INTERP "/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE"
+/*
+ * PT_INTERP baked into every LINK.EXE executable: the OVMX image activator.
+ * This is the POSIX path the Linux kernel opens as the interpreter when it
+ * execve()s a native image, BEFORE any OVMX code runs.
+ *
+ * ATOMIC FLIP (vms-5f0), spot #3. OVERRIDABLE so the boot flip and the native
+ * test suite can disagree on where IMGACT.EXE lives:
+ *
+ *   - DEFAULT "/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE": the ~30 native
+ *     activation tests (src/imgact/test/*.sh via lib_build_graph.sh) build
+ *     their OWN LINK.EXE from this source and stage IMGACT.EXE at exactly this
+ *     path, so the default keeps them green untouched.
+ *
+ *   - BOOTABLE BUILD "/run/ovmx-boot/IMGACT.EXE": the /vms POSIX passthrough is
+ *     retired, so this path no longer resolves at boot and the kernel cannot
+ *     exec IMGACT.EXE for a native image (DCL.EXE/LOGINOUT.EXE). PID 1 stages
+ *     IMGACT.EXE off the genuine ODS-2 volume THROUGH the ACP into
+ *     OVMX_BOOT_STAGE_DIR ("/run/ovmx-boot", src/ovmx_init/ovmx_boot_acp_read.c
+ *     + src/libvms/include/ovmx_layout.h), so the CMake `vmslink` target that
+ *     LINK.EXE-builds the bootable DCL.EXE/LOGINOUT.EXE defines IMGACT_INTERP
+ *     to that staged path (src/vmslink/CMakeLists.txt). Keep the two in sync.
+ *
+ * The basename stays IMGACT.EXE either way, so sys_imgact.c's in-process
+ * external-image activation (which matches on the basename, vms-db2) is
+ * unaffected by which absolute path is baked.
+ */
+/*
+ * The CMake `vmslink` target overrides the interp via -DIMGACT_INTERP_PATH=
+ * <unquoted path> (NOT a -DIMGACT_INTERP="..." string): a quoted string macro
+ * lands in compile_commands.json as \"...\" backslash escapes, which the
+ * kif_caller_census authenticity gate's line reader refuses (vms-5f0). Passing
+ * the path as a bare token and stringifying it here keeps the compile database
+ * escape-free. The standalone native-activation tests build link.c with neither
+ * macro and keep the /vms default, exactly as before.
+ */
+#ifndef IMGACT_INTERP
+# ifdef IMGACT_INTERP_PATH
+#  define IMGACT_INTERP_STR_(s) #s
+#  define IMGACT_INTERP_STR(s)  IMGACT_INTERP_STR_(s)
+#  define IMGACT_INTERP IMGACT_INTERP_STR(IMGACT_INTERP_PATH)
+# else
+#  define IMGACT_INTERP "/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE"
+# endif
+#endif
 
 /* --------------------------------------------------------------------------
  * Declared universal symbols (from SYMBOL_VECTOR=).
  * -------------------------------------------------------------------------- */
 struct univ {
-    char     name[256];
+    char     name[256];     /* the EXPORTED universal name (what consumers import) */
+    char     internal[256]; /* the INTERNAL symbol that defines it (what we resolve
+                             * against input objects). Equals `name` for a plain
+                             * `name=KIND` entry; differs for the VSI Linker
+                             * `SYMBOL_VECTOR=(universal/internal=KIND)` alias form —
+                             * exactly how real DECC$SHR exports `decc$<name>` bound
+                             * to the C-RTL implementation symbol. (vms-c07 R1) */
     uint32_t kind;          /* enum ovmx_sv_kind */
     uint64_t value;         /* image-relative address, filled during layout */
     int      resolved;
 };
 
-#define MAX_UNIV 512
+#define MAX_UNIV 2048   /* raised from 512 for the decc$ CRTL alias vector (vms-3e4
+                         * R1b): DECC$SHR's musl universals + the decc$<name>
+                         * aliases the alpha-dec-vms port imports. uv[] is static
+                         * (BSS), so the larger struct univ (name+internal) costs
+                         * no stack. */
 
 static void die(const char *msg)
 {
@@ -209,17 +277,32 @@ static void die(const char *msg)
 /* Section bucket: input sections are classified + merged by ELF flags, not by
  * exact name, so gcc's split sections (.text.unlikely, .rodata.str1.8,
  * .rodata.cst8, .data.rel.ro, ...) all land in the right output region. (vms-fa1) */
-enum { B_NONE = 0, B_TEXT, B_RODATA, B_DATA, B_BSS, B_TDATA, B_TBSS };
+enum { B_NONE = 0, B_TEXT, B_RODATA, B_DATA, B_INIT_ARRAY, B_BSS, B_TDATA, B_TBSS,
+       B_EH_FRAME };
 
 /* The buckets LINK.EXE places FLAT (a real image vaddr per input section) and
  * can therefore apply relocations into. B_BSS/B_TBSS are NOBITS (no bytes to
  * patch); B_TDATA is reached through TLSDESC, not a flat address; B_NONE is an
  * allocatable section type this linker does not place at all. Anything outside
  * this set that still carries relocations is REPORTED, never dropped in
- * silence. (vms-a66) */
+ * silence. (vms-a66)
+ *
+ * B_INIT_ARRAY (vms-ee2) is SHT_INIT_ARRAY: the ELF ctor-pointer table gcc
+ * emits for a real GNU-C static constructor (__attribute__((constructor)),
+ * a C++ static object, ...). It is placed in its OWN writable, dedicated
+ * output region (never merged into plain .data) precisely so its start/end
+ * can be reported as a clean range -- see the .init_array output-section
+ * block in emit_shareable() and its use in imgact.c's symbol-vector ctor
+ * runner. Each entry is a plain ABS64 pointer initializer, patched by the
+ * SAME reloc-apply loop as B_DATA (no special-casing needed there). This is
+ * OVMX's ELF-native carrier for "run these before the image starts" -- the
+ * functional equivalent of VMS's LIB$INITIALIZE constructor pass, NOT a
+ * reproduction of VMS's PSECT-collection layout (see docs/design-link-native-
+ * toolchain.md). */
 static int bucket_is_patchable(int b)
 {
-    return b == B_TEXT || b == B_RODATA || b == B_DATA;
+    return b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_INIT_ARRAY ||
+           b == B_EH_FRAME;
 }
 
 /* One relocation, tagged with the section it patches (site = sec_va + off). */
@@ -261,6 +344,9 @@ struct obj {
     uint64_t     *sec_va;     /* [nsh] assigned image vaddr, filled at layout */
     struct reloc *relocs;   /* relocs against every code AND data section */
     int           nreloc;
+    const char   *objname;  /* owned (strdup'd): "path" or "archive.a(member.o)",
+                              * for diagnostics that must name a defining object
+                              * (e.g. %LINK-F-MULDEF). Set once in parse_obj. */
 };
 
 static void *xat(struct obj *o, uint64_t off, uint64_t sz, const char *what)
@@ -283,6 +369,8 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
     memset(o, 0, sizeof *o);
     o->buf = buf;
     o->size = size;
+    o->objname = strdup(name);
+    if (!o->objname) die("oom recording object name");
 
     if (o->size < sizeof(Elf64_Ehdr) || memcmp(o->buf, ELFMAG, SELFMAG) != 0) {
         fprintf(stderr, "%%LINK-F-ERROR, %s: input is not ELF\n", name);
@@ -374,12 +462,28 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
             o->sec_bucket[i] = (s->sh_type == SHT_NOBITS) ? B_TBSS : B_TDATA;
         else if (s->sh_type == SHT_NOBITS)
             o->sec_bucket[i] = B_BSS;
+        else if (s->sh_type == SHT_INIT_ARRAY)
+            o->sec_bucket[i] = B_INIT_ARRAY;   /* ctor pointer table (vms-ee2) */
+        else if (s->sh_type == SHT_PROGBITS &&
+                 strcmp(o->shstr + s->sh_name, ".eh_frame") == 0)
+            /* DWARF unwinder frame table (vms-70d). Read-only PROGBITS that
+             * would otherwise fall into B_RODATA, but it needs its OWN
+             * contiguous output region (like .init_array) so the whole block
+             * is one [begin .. 0-terminator] range libgcc's __register_frame
+             * can register -- see the .eh_frame layout + .vms$ehf below. Its
+             * CIE/FDE PC32 relocs are collected/applied exactly as when it was
+             * B_RODATA (bucket_is_patchable includes B_EH_FRAME). */
+            o->sec_bucket[i] = B_EH_FRAME;
         else if (s->sh_type == SHT_PROGBITS)
             o->sec_bucket[i] = (s->sh_flags & SHF_EXECINSTR) ? B_TEXT
                              : (s->sh_flags & SHF_WRITE)     ? B_DATA
                              :                                 B_RODATA;
-        /* Other allocatable types (SHT_INIT_ARRAY, SHT_NOTE, ...) stay B_NONE;
-         * a relocation into one dies loudly rather than silently misplacing. */
+        /* Other allocatable types (SHT_NOTE, SHT_FINI_ARRAY, ...) stay B_NONE;
+         * a relocation into one dies loudly rather than silently misplacing.
+         * SHT_FINI_ARRAY (image-teardown destructors) is out of scope here:
+         * IMGACT.EXE symbol-vector images never return to an "unload" path --
+         * see docs/design-image-activation.md -- so there is nothing for a
+         * fini-array runner to be called from. */
     }
 
     /* Collect relocations against every FLAT-PLACED allocatable section into one
@@ -714,9 +818,20 @@ static int member_satisfies(struct obj *o, struct symset *U)
 }
 
 /* Iterate the .OLB pools, pulling members that resolve currently-undefined
- * strong references, to a fixpoint. Pulled members are moved into objs[]. */
+ * strong references, to a fixpoint. Pulled members are moved into objs[].
+ *
+ * `uv`/`nuniv` are the --symbol-vector universals (may be NULL/0). In real VMS
+ * a SYMBOL_VECTOR entry is an unresolved reference that the library search must
+ * satisfy: the vector roots the selective pull. So the universal names seed the
+ * initial unresolved set U alongside the root objects' own undefined refs. This
+ * is what lets a /SHAREABLE link from an .OLB alone (no explicit object TU list)
+ * pull exactly the modules that define the universals + their transitive refs
+ * (design-vms-native-shareable-build.md Part C, C.4.1). A retired slot
+ * (OVMX_SV_RETIRED) names no symbol that still exists, so it never roots a
+ * search. Seeding an empty vector (nuniv==0) leaves current behavior unchanged. */
 static void resolve_olbs(struct obj **objs, int *nobj, int *cap,
-                         struct olb_pool *pools, int npool)
+                         struct olb_pool *pools, int npool,
+                         const struct univ *uv, int nuniv)
 {
     for (;;) {
         struct symset D, U;
@@ -732,6 +847,18 @@ static void resolve_olbs(struct obj **objs, int *nobj, int *cap,
                 const char *nm = o->str + s->st_name;
                 if (nm[0] && !symset_has(&D, nm)) symset_add(&U, nm);
             }
+        }
+        /* Root the search at the symbol vector: each still-undefined universal
+         * is a reference the .OLB must satisfy (VMS §1.2.3.2 default library
+         * search rooted at the SYMBOL_VECTOR). Once its defining member is
+         * pulled, the name enters D and drops out on the next iteration. */
+        for (int i = 0; i < nuniv; i++) {
+            if (uv[i].kind == OVMX_SV_RETIRED) continue;
+            const char *nm = uv[i].internal;   /* the DEFINING symbol (alias-aware):
+                                                * a `decc$fprintf/fprintf` universal
+                                                * is satisfied by the member defining
+                                                * `fprintf`, not `decc$fprintf`. */
+            if (nm[0] && !symset_has(&D, nm)) symset_add(&U, nm);
         }
 
         int pulled = 0;
@@ -787,8 +914,10 @@ static uint32_t parse_kind(const char *k)
         return OVMX_SV_DATA;
     if (strcmp(k, "PRIVATE_PROCEDURE") == 0 || strcmp(k, "PRIVATE_DATA") == 0)
         return OVMX_SV_RETIRED;
+    if (strcmp(k, "GLOBALVALUE") == 0)
+        die("GLOBALVALUE requires a value: name=GLOBALVALUE:0x<hex>");
     die("unknown SYMBOL_VECTOR keyword "
-        "(want PROCEDURE|DATA|PRIVATE_PROCEDURE|PRIVATE_DATA)");
+        "(want PROCEDURE|DATA|PRIVATE_PROCEDURE|PRIVATE_DATA|GLOBALVALUE:<val>)");
     return 0;
 }
 
@@ -803,8 +932,31 @@ static int parse_symbol_vector(char *spec, struct univ *uv)
         if (!eq) die("SYMBOL_VECTOR entry needs name=KEYWORD");
         *eq = '\0';
         if (n >= MAX_UNIV) die("too many universal symbols");
+        /* "universal" or "universal/internal" (VSI OpenVMS Linker SYMBOL_VECTOR
+         * alias form, Utility Manual §5.6): the exported universal name may differ
+         * from the internal symbol that defines it — exactly how real DECC$SHR
+         * exports `decc$<name>` bound to the C-RTL implementation. Absent a '/',
+         * internal == universal (current behavior unchanged). (vms-c07 R1) */
+        char *slash = strchr(tok, '/');
+        if (slash) *slash = '\0';
         snprintf(uv[n].name, sizeof uv[n].name, "%s", tok);
-        uv[n].kind = parse_kind(eq + 1);
+        snprintf(uv[n].internal, sizeof uv[n].internal, "%s",
+                 slash ? slash + 1 : tok);
+        /* GLOBALVALUE form: "name=GLOBALVALUE:0x<hex>" (OVMX authoring syntax —
+         * the .vms$sv is an OVMX-original section, so this keyword is ours). The
+         * value is an ABSOLUTE link-time constant carried in the vector entry,
+         * not resolved from any input object; it is preset here and left intact
+         * by the layout pass. A globalvalue names no internal symbol. (vms-954) */
+        char *kw = eq + 1;
+        char *colon = strchr(kw, ':');
+        if (colon && (size_t)(colon - kw) == strlen("GLOBALVALUE") &&
+            strncmp(kw, "GLOBALVALUE", strlen("GLOBALVALUE")) == 0) {
+            uv[n].kind  = OVMX_SV_GLOBALVALUE;
+            uv[n].value = strtoull(colon + 1, NULL, 0);   /* 0x.. hex or decimal */
+            uv[n].internal[0] = '\0';                     /* no defining symbol  */
+        } else {
+            uv[n].kind = parse_kind(kw);
+        }
         n++;
     }
     if (n == 0) die("SYMBOL_VECTOR= is empty");
@@ -862,9 +1014,69 @@ struct producer {
     struct ovmx_sv_header  *sv;
 };
 
-static void load_producer(const char *path, struct producer *p)
+/* A leading VMS logical the caller may name a --use producer by (vms-104). */
+static int leading_ci(const char *s, const char *pfx)
+{
+    for (; *pfx; s++, pfx++) {
+        char a = *s, b = *pfx;
+        if (a >= 'a' && a <= 'z') a = (char)(a - 'a' + 'A');
+        if (b >= 'a' && b <= 'z') b = (char)(b - 'a' + 'A');
+        if (a != b) return 0;
+    }
+    return 1;
+}
+
+/*
+ * resolve_producer_path (vms-104) - map a --use producer named by VMS logical
+ * spec to the POSIX file that carries its bytes. A shareable installed on the
+ * ODS-2 system volume is named SYS$SHARE:/SYS$LIBRARY:/SYS$SYSTEM:<NAME.EXE> --
+ * NOT a /vms POSIX path (the atomic-flip-retired passthrough). ovmx_init read
+ * each installed shareable off the volume THROUGH the Files-11 ACP and staged it
+ * to OVMX_BOOT_STAGE_DIR ("/run/ovmx-boot"); LINK.EXE, a native musl tool that
+ * opens the producer with POSIX open(), resolves the logical to that staged copy
+ * -- so the producer bytes come from the volume over the ACP, never /vms
+ * (Rule 9 / INV-6). Any other spec (a bare name, an absolute POSIX path from a
+ * host bootstrap build) is returned unchanged. `out` is a caller buffer.
+ */
+static const char *resolve_producer_path(const char *path, char *out, size_t sz)
+{
+    /* Each installed-image logical -> the SYS$SYSROOT subdirectory it lives in. */
+    static const struct { const char *log; const char *sub; } maps[] = {
+        { "SYS$SHARE:",   "SYSLIB" },
+        { "SYS$LIBRARY:", "SYSLIB" },
+        { "SYS$SYSTEM:",  "SYSEXE" },
+    };
+    for (unsigned i = 0; i < sizeof(maps) / sizeof(maps[0]); i++) {
+        if (!leading_ci(path, maps[i].log))
+            continue;
+        const char *leaf = path + strlen(maps[i].log);
+        /* Defend against an embedded directory: a spec is SYS$SHARE:NAME.EXE. */
+        const char *slash = strrchr(leaf, '/');
+        if (slash) leaf = slash + 1;
+
+        /* (1) RUNTIME: the boot bridge read the installed image off the ODS-2
+         * volume THROUGH the ACP and staged it here (the /vms passthrough is
+         * retired on the runtime path). Prefer it when present. */
+        snprintf(out, sz, "/run/ovmx-boot/%s", leaf);
+        if (access(out, R_OK) == 0)
+            return out;
+
+        /* (2) HOST CTEST (no /dev/vms, no boot bridge -- e.g. the BUILD.COM S3.2
+         * DCL driver): the installed images live at their legacy POSIX
+         * SYS$SYSROOT location. This /vms read is the sanctioned legacy path for
+         * the no-executive case (the flip only retires /vms when the ACP is
+         * live), NEVER reached on the runtime where (1) resolves first. */
+        snprintf(out, sz, "/vms/SYS0/SYSCOMMON/%s/%s", maps[i].sub, leaf);
+        return out;
+    }
+    return path;
+}
+
+static void load_producer(const char *path_in, struct producer *p)
 {
     memset(p, 0, sizeof *p);
+    char pbuf[512];
+    const char *path = resolve_producer_path(path_in, pbuf, sizeof pbuf);
     const char *base = strrchr(path, '/');
     snprintf(p->name, sizeof p->name, "%s", base ? base + 1 : path);
 
@@ -908,11 +1120,16 @@ static int find_universal(struct producer *ps, int np, const char *name,
 
 struct import {
     char     name[256];
-    int      pidx;         /* producer index */
+    int      pidx;         /* producer index (-1 for a weak-by-name import) */
     uint32_t svidx;        /* vector index within that producer */
     uint64_t plt_va;       /* PLT stub address (assigned at layout) */
     uint64_t got_va;       /* GOT cell address (assigned at layout) */
     int      is_data;      /* 1 = DATA import (GOT-read), 0 = call import (PLT) */
+    int      is_weak;      /* 1 = resolved by NAME at activation (.vms$wimp): no
+                            * --use producer exports it, but a loaded producer
+                            * MAY (a lower layer reaching a higher one across a
+                            * build cycle). Absent at run time -> cell stays 0.
+                            * (vms-5f0) */
 };
 
 /* Patch a GOT-relative reference to reach `slot` PC-relatively: the aarch64
@@ -931,15 +1148,43 @@ static int import_find(struct import *imp, int nimp, const char *nm)
     return -1;
 }
 
-/* Byte size of a .vms$imp section: header + entries + deduped soname blob.
+/* Number of STRONG (by producer+index) vs WEAK (by name) imports in imp[]. Both
+ * kinds share the PLT/import-GOT layout; they split only at section emission —
+ * strong -> .vms$imp, weak -> .vms$wimp. (vms-5f0) */
+static int import_count_strong(struct import *imp, int nimp)
+{
+    int n = 0;
+    for (int i = 0; i < nimp; i++) if (!imp[i].is_weak) n++;
+    return n;
+}
+static int import_count_weak(struct import *imp, int nimp)
+{
+    int n = 0;
+    for (int i = 0; i < nimp; i++) if (imp[i].is_weak) n++;
+    return n;
+}
+
+/* Byte size of a .vms$imp section: header + STRONG entries + deduped soname blob.
  * Shared by the executable and shareable emit paths (a lib
  * shareable's own cross-image imports — vms-e65). */
-static uint64_t vms_imp_size(int nimp, struct producer *ps, int np)
+static uint64_t vms_imp_size(int nimp, struct import *imp, struct producer *ps, int np)
 {
     uint32_t names_sz = 0;
     for (int p = 0; p < np; p++) names_sz += (uint32_t)strlen(ps[p].name) + 1;
     return sizeof(struct ovmx_imp_header)
-         + (uint64_t)nimp * sizeof(struct ovmx_imp_entry) + names_sz;
+         + (uint64_t)import_count_strong(imp, nimp) * sizeof(struct ovmx_imp_entry)
+         + names_sz;
+}
+
+/* Byte size of a .vms$wimp section: header + WEAK entries + symbol-name blob. */
+static uint64_t vms_wimp_size(int nimp, struct import *imp)
+{
+    uint32_t names_sz = 0;
+    for (int i = 0; i < nimp; i++)
+        if (imp[i].is_weak) names_sz += (uint32_t)strlen(imp[i].name) + 1;
+    return sizeof(struct ovmx_wimp_header)
+         + (uint64_t)import_count_weak(imp, nimp) * sizeof(struct ovmx_wimp_entry)
+         + names_sz;
 }
 
 /* Write the .vms$imp section at img+off_imp. Each import's patch_off is its GOT
@@ -949,8 +1194,9 @@ static uint64_t vms_imp_size(int nimp, struct producer *ps, int np)
 static void vms_imp_write(uint8_t *img, uint64_t off_imp, struct import *imp,
                           int nimp, struct producer *ps, int np)
 {
+    int nstrong = import_count_strong(imp, nimp);
     uint64_t imp_hdr = sizeof(struct ovmx_imp_header);
-    uint64_t imp_ents = (uint64_t)nimp * sizeof(struct ovmx_imp_entry);
+    uint64_t imp_ents = (uint64_t)nstrong * sizeof(struct ovmx_imp_entry);
     uint64_t imp_names_o = imp_hdr + imp_ents;
 
     uint32_t *prod_off = calloc((size_t)(np > 0 ? np : 1), sizeof *prod_off);
@@ -964,18 +1210,53 @@ static void vms_imp_write(uint8_t *img, uint64_t off_imp, struct import *imp,
         names_sz += (uint32_t)l;
     }
     struct ovmx_imp_header *ih = (struct ovmx_imp_header *)(img + off_imp);
-    ih->magic = OVMX_IMP_MAGIC; ih->count = (uint32_t)nimp;
+    ih->magic = OVMX_IMP_MAGIC; ih->count = (uint32_t)nstrong;
     ih->names_off = (uint32_t)imp_names_o; ih->names_size = names_sz;
     struct ovmx_imp_entry *ie =
         (struct ovmx_imp_entry *)(img + off_imp + imp_hdr);
+    int o = 0;
     for (int i = 0; i < nimp; i++) {
-        ie[i].producer_off = prod_off[imp[i].pidx];
-        ie[i].sv_index = imp[i].svidx;
-        ie[i].patch_off = imp[i].got_va;
-        ie[i].req_major = ps[imp[i].pidx].sv->gsmatch_major;
-        ie[i].req_minor = ps[imp[i].pidx].sv->gsmatch_minor;
+        if (imp[i].is_weak) continue;   /* -> .vms$wimp, not here */
+        ie[o].producer_off = prod_off[imp[i].pidx];
+        ie[o].sv_index = imp[i].svidx;
+        ie[o].patch_off = imp[i].got_va;
+        ie[o].req_major = ps[imp[i].pidx].sv->gsmatch_major;
+        ie[o].req_minor = ps[imp[i].pidx].sv->gsmatch_minor;
+        o++;
     }
     free(prod_off);
+}
+
+/* Write the .vms$wimp section at img+off_wimp: header, WEAK import entries
+ * (name_off, patch_off = import-GOT cell), then a symbol-name blob. IMGACT
+ * resolves each name against the loaded producer set at activation. (vms-5f0) */
+static void vms_wimp_write(uint8_t *img, uint64_t off_wimp, struct import *imp,
+                           int nimp)
+{
+    int nweak = import_count_weak(imp, nimp);
+    uint64_t hdr = sizeof(struct ovmx_wimp_header);
+    uint64_t ents = (uint64_t)nweak * sizeof(struct ovmx_wimp_entry);
+    uint64_t names_o = hdr + ents;
+
+    struct ovmx_wimp_header *wh = (struct ovmx_wimp_header *)(img + off_wimp);
+    wh->magic = OVMX_WIMP_MAGIC; wh->count = (uint32_t)nweak;
+    wh->names_off = (uint32_t)names_o;
+    struct ovmx_wimp_entry *we =
+        (struct ovmx_wimp_entry *)(img + off_wimp + hdr);
+    char *nb = (char *)(img + off_wimp + names_o);
+    uint32_t names_sz = 0;
+    int o = 0;
+    for (int i = 0; i < nimp; i++) {
+        if (!imp[i].is_weak) continue;
+        we[o].name_off = names_sz;
+        we[o].reserved = 0;
+        we[o].patch_off = imp[i].got_va;
+        size_t l = strlen(imp[i].name) + 1;
+        memcpy(nb + names_sz, imp[i].name, l);
+        names_sz += (uint32_t)l;
+        o++;
+    }
+    wh->names_size = names_sz;
 }
 
 
@@ -1066,6 +1347,71 @@ static size_t g_syms_cap;          /* power of two */
 static int  g_allow_undef;
 static long g_deferred;            /* count of deferred (unresolved) externals */
 
+/* Diagnostic (vms-bfd6): with OVMX_LINK_DUMP_UNDEF set in the environment, name
+ * every deferred external on stderr as "DEFERRED-UNDEF: <name>". This is the
+ * authoritative enumeration of the residual undefined set a --allow-undefined
+ * link leaves — used to ground-truth which OTS$/MATH$ (and any other) universals
+ * a companion shareable must define. Off by default; changes no link output. */
+static int  g_dump_undef = -1;
+static void dump_undef(const char *nm)
+{
+    if (g_dump_undef < 0) g_dump_undef = getenv("OVMX_LINK_DUMP_UNDEF") ? 1 : 0;
+    if (g_dump_undef && nm && nm[0])
+        fprintf(stderr, "DEFERRED-UNDEF: %s\n", nm);
+}
+
+/* Producer GLOBALVALUE table (vms-954). A --use'd producer (DECC$SHR is the C
+ * RTL surface) may export universals of kind OVMX_SV_GLOBALVALUE: absolute
+ * link-time constants (VMS globalvalues — the errno message codes such as
+ * C$_EXIT1 that the alpha-dec-vms crt0 references as `&C$_EXIT1`). Unlike a
+ * PROCEDURE/DATA universal, a globalvalue is NOT bound at activation through an
+ * import cell; it is a LINK-TIME constant, folded directly into every reference
+ * (VMS resolves globalvalues at link, not activation). This table is built once
+ * per link from the loaded producers' symbol vectors, then consulted by
+ * resolve_ref() and the GOT/ABS64 apply so a reference to such a name resolves
+ * to the constant WITHOUT a load bias and WITHOUT a .vms$imp/.vms$rel entry. */
+struct gvalue { char name[256]; uint64_t value; };
+static struct gvalue *g_gval;
+static int            g_ngval;
+
+/* Look up an absolute globalvalue by name; 1 + *out on hit, 0 on miss.
+ * *out may be NULL when the caller only needs the yes/no. */
+static int gval_find(const char *nm, uint64_t *out)
+{
+    for (int i = 0; i < g_ngval; i++)
+        if (strcmp(g_gval[i].name, nm) == 0) {
+            if (out) *out = g_gval[i].value;
+            return 1;
+        }
+    return 0;
+}
+
+/* Collect every OVMX_SV_GLOBALVALUE universal across the loaded producers into
+ * g_gval. Called at the top of a consumer/executable link, before the import
+ * scan (a globalvalue must NOT become an import). Idempotent-safe: frees any
+ * prior table first. */
+static void collect_globalvalues(struct producer *ps, int np)
+{
+    free(g_gval); g_gval = NULL; g_ngval = 0;
+    int cap = 0;
+    for (int p = 0; p < np; p++) {
+        const struct ovmx_sv_entry *e = ovmx_sv_entries(ps[p].sv);
+        const char *nm = ovmx_sv_names(ps[p].sv);
+        for (uint32_t i = 0; i < ps[p].sv->count; i++) {
+            if (e[i].kind != OVMX_SV_GLOBALVALUE) continue;
+            if (g_ngval >= cap) {
+                cap = cap ? cap * 2 : 16;
+                g_gval = realloc(g_gval, (size_t)cap * sizeof *g_gval);
+                if (!g_gval) die("oom growing globalvalue table");
+            }
+            snprintf(g_gval[g_ngval].name, sizeof g_gval[g_ngval].name,
+                     "%s", nm + e[i].name_off);
+            g_gval[g_ngval].value = e[i].value;
+            g_ngval++;
+        }
+    }
+}
+
 /* Names referenced with a WEAK undefined reference and defined by NO input
  * object. Standard ELF semantics resolve a weak undefined symbol to address 0 —
  * it is NOT a deferred import and NOT an error. For DECC$SHR these are exactly
@@ -1100,8 +1446,23 @@ static size_t djb2(const char *s)
     return h;
 }
 
-/* Insert a defined global; prefer a STRONG (GLOBAL) def over a WEAK one. */
-static void sym_insert(const char *name, int oi, int ki, unsigned char bind)
+/* Insert a defined global; prefer a STRONG (GLOBAL) def over a WEAK one. A
+ * STRONG def colliding with an existing STRONG def of the same name is a
+ * hard multiple-definition error (vms-d8d): real `ld` refuses to pick a
+ * winner between two strong defs, and OVMX's ELF LINK.EXE previously picked
+ * one silently -- whichever def this insert loop saw FIRST (incidental
+ * link-input order). That is a latent correctness bug, not a style nit: a
+ * strong SELF-reference inside one object (resolve_ref, ~1531) never
+ * consults this hash for STRONG symbols -- it returns the object's OWN
+ * placed_addr directly -- so that object's intra-object references bind to
+ * ITS copy while every cross-object reference and the exported .vms$sv
+ * universal bind whichever def landed here first. Two different addresses
+ * for one universal in one link, discovered only by symptom. Failing loud
+ * here converts that into an immediate, named diagnostic (INV-6 fail-honest)
+ * instead of silent misbehavior. The WEAK-vs-STRONG override below is
+ * unchanged; only STRONG-vs-STRONG is new. */
+static void sym_insert(struct obj *objs, const char *name, int oi, int ki,
+                        unsigned char bind)
 {
     size_t mask = g_syms_cap - 1;
     size_t i = djb2(name) & mask;
@@ -1111,8 +1472,21 @@ static void sym_insert(const char *name, int oi, int ki, unsigned char bind)
             return;
         }
         if (strcmp(g_syms[i].name, name) == 0) {
-            if (g_syms[i].bind == STB_WEAK && bind == STB_GLOBAL)
+            if (g_syms[i].bind == STB_WEAK && bind == STB_GLOBAL) {
                 g_syms[i] = (struct symref){ name, oi, ki, bind };  /* strong wins */
+                return;
+            }
+            if (g_syms[i].bind == STB_GLOBAL && bind == STB_GLOBAL) {
+                const char *first_obj  = objs[g_syms[i].oi].objname;
+                const char *second_obj = objs[oi].objname;
+                fprintf(stderr,
+                        "%%LINK-F-MULDEF, multiple definition of universal/global "
+                        "symbol '%s': first defined in %s, redefined in %s\n",
+                        name,
+                        first_obj  ? first_obj  : "<unknown>",
+                        second_obj ? second_obj : "<unknown>");
+                exit(1);
+            }
             return;
         }
         i = (i + 1) & mask;
@@ -1151,7 +1525,7 @@ static void build_symhash(struct obj *objs, int nobj)
             if (bind == STB_LOCAL || s->st_shndx == SHN_UNDEF) continue;
             const char *nm = objs[i].str + s->st_name;
             if (!nm[0]) continue;
-            sym_insert(nm, i, k, bind);
+            sym_insert(objs, nm, i, k, bind);
         }
     /* Second pass: a WEAK undefined reference to a symbol no object defines
      * resolves to address 0 (ELF weak-undef semantics). Record such names so the
@@ -1176,7 +1550,8 @@ static uint64_t placed_addr(struct obj *d, Elf64_Sym *s)
     int sh = (int)s->st_shndx;
     if (sh <= 0 || sh >= d->nsh) return 0;
     switch (d->sec_bucket[sh]) {
-    case B_TEXT: case B_RODATA: case B_DATA: case B_BSS:
+    case B_TEXT: case B_RODATA: case B_DATA: case B_INIT_ARRAY: case B_BSS:
+    case B_EH_FRAME:
         return d->sec_va[sh] + s->st_value;
     default:
         return 0;
@@ -1225,8 +1600,13 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx)
             uint64_t da = placed_addr(&objs[doi], &objs[doi].sym[dki]);
             if (da) return da;
         }
+        /* A producer globalvalue (VMS globalvalue, e.g. C$_EXIT1): resolve to
+         * its ABSOLUTE link-time constant. The caller's ABS64 apply must NOT
+         * add a .vms$rel bias for it (it is absolute, not image-relative) — it
+         * re-checks gval_find() to suppress that. (vms-954) */
+        { uint64_t gv; if (gval_find(nm, &gv)) return gv; }
         if (weak_has(nm)) return 0;   /* weak-undef resolves to 0 (ELF semantics) */
-        if (g_allow_undef) { g_deferred++; return 0; }
+        if (g_allow_undef) { dump_undef(nm); g_deferred++; return 0; }
         /* NAME THE SYMBOL. Without it this diagnostic says only that *a*
          * symbol did not bind, which turns "one libc call was added to an
          * OVMX library whose producer image does not export it" -- the
@@ -1246,8 +1626,9 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx)
     }
     (void)nobj;
     /* Defined, but in a section this linker doesn't place flat (TLS, or an
-     * allocatable type like SHT_INIT_ARRAY): a pointer into it is deferred
-     * under --allow-undefined, otherwise a hard error. */
+     * allocatable type like SHT_NOTE): a pointer into it is deferred under
+     * --allow-undefined, otherwise a hard error. (SHT_INIT_ARRAY is placed
+     * flat as B_INIT_ARRAY as of vms-ee2 and no longer reaches this branch.) */
     if (g_allow_undef) { g_deferred++; return 0; }
     die("relocation against an unsupported section");
     return 0;
@@ -1284,7 +1665,15 @@ static uint64_t resolve_named(struct obj *objs, int nobj,
  * for non-GOT relocations against locals — so cross-TU name collisions are
  * impossible and each local resolves to its own definition. (vms-9c1) */
 struct gotslot {
-    char     name[256];  /* diagnostic label; the dedup key only for globals */
+    /* Global dedup key + diagnostic label: a pointer into the defining object's
+     * .strtab (live for the whole run), NOT a fixed buffer. A truncating copy
+     * would (a) miss at apply time — find_got does an exact strcmp against the
+     * FULL reference name, so a >255-char mangled C++ template symbol stored
+     * truncated never matches and dies "GOT slot missing" — and (b) silently
+     * alias two distinct symbols that share a 255-char prefix (routine with
+     * deeply-nested template instantiations). The pointer key has neither
+     * failure and no arbitrary length cap. (vms-da2) */
+    const char *name;
     uint64_t va;
     uint64_t value;
     int      is_local;   /* 1 = per-object local slot keyed by (oi, sym) */
@@ -1350,7 +1739,10 @@ static int is_got_reloc(uint32_t type)
 /* A synthesized TLSDESC entry (two quadwords): [0]=resolver (IMGACT fills with
  * __tlsdesc_static), [1]=TP-relative offset (LINK pre-fills the module-relative
  * part; IMGACT adds the module's assigned TLS block offset). */
-struct tlsslot { char name[256]; int64_t addend; uint64_t va; uint64_t modoff; };
+/* name: a pointer into the defining object's live .strtab, not a fixed buffer
+ * — same truncation/prefix-collision hazard as gotslot for long mangled C++
+ * thread_local template names. (vms-da2) */
+struct tlsslot { const char *name; int64_t addend; uint64_t va; uint64_t modoff; };
 
 static int find_tls(struct tlsslot *t, int nt, const char *name)
 {
@@ -1393,6 +1785,63 @@ static int is_dtpoff_reloc(uint32_t type)
     return type == R_X86_64_DTPOFF32;
 }
 
+/* True for a classic x86_64 general-/local-dynamic TLS lea reloc (vms-76a). Its
+ * paired `call __tls_get_addr` (an R_X86_64_PLT32/GOTPCREL against the symbol
+ * `__tls_get_addr`) is subsumed by the LE relaxation of this lea and must not be
+ * patched separately — its bytes are overwritten by patch_tls_le(). */
+static int is_classic_gdld_reloc(uint32_t type)
+{
+    return type == R_X86_64_TLSGD || type == R_X86_64_TLSLD;
+}
+
+/* GD/LD -> Local-Exec relaxation (x86_64 psABI). Valid for a SINGLE static image
+ * (no dlopen): every classic general-/local-dynamic access becomes a local-exec
+ * read of TP (%fs:0) plus a link-time-final TP-relative offset — the same value
+ * the proven gnu2/TLSDESC path resolves at run time (the executable's TLS block
+ * base sits at TP - ALIGN_UP(tls_memsz, tls_align), matching IMGACT's
+ * assign_tls_offsets()). `site` is the VA of the TLSGD/TLSLD reloc field (the
+ * lea's disp32); the fixed-size instruction window the psABI mandates begins 4
+ * bytes (GD, 16-byte window) or 3 bytes (LD, 12-byte window) before it.
+ *
+ *   GD:  66 48 8d 3d <d32>          lea x@tlsgd(%rip),%rdi
+ *        66 66 48 e8 <d32>          call __tls_get_addr@plt
+ *     -> 64 48 8b 04 25 00 00 00 00 mov %fs:0,%rax
+ *        48 8d 80 <tpoff32>         lea x@tpoff(%rax),%rax     (tpoff embedded)
+ *
+ *   LD:  48 8d 3d <d32>             lea x@tlsld(%rip),%rdi
+ *        e8 <d32> | ff 15 <d32>     call __tls_get_addr@plt | *..@gotpcrel(%rip)
+ *     -> 66 [66] 66 66              (3- or 4-byte 0x66 padding)
+ *        64 48 8b 04 25 00 00 00 00 mov %fs:0,%rax             (leaves %rax = TP)
+ * For LD the paired R_X86_64_DTPOFF32 operands carry each variable's TP-relative
+ * offset (moff - aligned_tls_size), written by the DTPOFF32 arm below.
+ *
+ * BOTH call dialects occur in the wild: -fplt emits a 5-byte direct `e8` call,
+ * -fno-plt (Alpine's libstdc++/libgcc, GOTPCRELX) a 6-byte indirect `ff 15`.
+ * The GD lea+call window is 16 bytes for both (the direct call carries an extra
+ * 0x66 prefix). The LD window is 12 bytes for the direct call, 13 for the
+ * indirect, so its 0x66 padding is sized from the actual call opcode. */
+static void patch_tls_le(uint32_t type, uint8_t *img, uint64_t site, int32_t tpoff)
+{
+    static const uint8_t movfs[9] = /* mov %fs:0, %rax */
+        { 0x64, 0x48, 0x8b, 0x04, 0x25, 0x00, 0x00, 0x00, 0x00 };
+    if (type == R_X86_64_TLSGD) {
+        uint8_t *w = img + site - 4;           /* 16-byte GD window */
+        memcpy(w, movfs, 9);
+        w[9] = 0x48; w[10] = 0x8d; w[11] = 0x80;  /* lea tpoff(%rax), %rax */
+        memcpy(w + 12, &tpoff, 4);
+    } else {                                   /* R_X86_64_TLSLD */
+        /* lea is a fixed 7 bytes (48 8d 3d <d32>) starting 3 before the reloc
+         * field, so the paired call begins at site+4. Its first opcode byte
+         * selects the window length: 0xff (ff 15, indirect) -> 13-byte window
+         * with 4-byte padding; anything else (0xe8, direct) -> 12-byte, 3-byte
+         * padding. The extra 0x66 prefixes are ignored at execution. */
+        uint8_t *w   = img + site - 3;
+        int      pad = (img[site + 4] == 0xff) ? 4 : 3;
+        for (int k = 0; k < pad; k++) w[k] = 0x66;
+        memcpy(w + pad, movfs, 9);
+    }
+}
+
 /* Patch a TLSDESC ADR_PAGE21 / LD64_LO12 / ADD_LO12 to reach the 2-word TLSDESC
  * entry PC-relatively (same encodings as ADRP / LDR64 / ADD-imm12). TLSDESC_CALL
  * is a marker at the blr and needs no patch.
@@ -1421,15 +1870,31 @@ static void patch_tlsdesc(uint32_t type, uint32_t *insn, uint64_t site,
     /* R_AARCH64_TLSDESC_CALL / R_X86_64_TLSDESC_CALL: no-op markers. */
 }
 
-/* Module-relative TLS offset of a TLS symbol: 0-based within the module's
- * [.tdata | .tbss] block. tbss_base is where .tbss begins (aligned .tdata size). */
-static uint64_t tls_module_offset(struct obj *objs, int nobj, uint64_t tbss_base,
+/* True if section index `sh` of object `o` is a thread-local section (.tdata /
+ * .tbss, INCLUDING gcc's per-variable .tdata.<sym> / .tbss.<sym> split sections
+ * that a function-local or COMDAT `thread_local` lands in). Classified by the
+ * SHF_TLS flag in parse_obj, so the exact section name does not matter. */
+static int is_tls_section(struct obj *o, int sh)
+{
+    return sh > 0 && sh < o->nsh &&
+           (o->sec_bucket[sh] == B_TDATA || o->sec_bucket[sh] == B_TBSS);
+}
+
+/* Module-relative TLS offset of a TLS symbol: its byte offset within the image's
+ * single combined TLS block. With multi-module TLS (vms-da2) the block holds
+ * every input object's TLS sections — .tdata (and .tdata.*) concatenated, then
+ * .tbss (and .tbss.*). Each such section was assigned its own base offset within
+ * the block (stored in sec_va[] during emit_shareable's TLS-layout pass, which
+ * placed_addr leaves untouched for TLS buckets), so a TLS symbol resolves to
+ * (its defining section's block base + st_value). */
+static uint64_t tls_module_offset(struct obj *objs, int nobj,
                                   const char *name, int64_t addend)
 {
     /* x86_64 local-dynamic (vms-2e4): `_TLS_MODULE_BASE_` is a synthetic UND
-     * symbol naming the module's TLS block base, defined by no object — its
-     * module offset is 0 by definition. Each `static _Thread_local` access then
-     * adds its own R_X86_64_DTPOFF32 operand offset on top. */
+     * symbol naming the combined block's base, defined by no object — offset 0
+     * by definition. Each `static _Thread_local` access then adds its own
+     * R_X86_64_DTPOFF32 operand offset (the symbol's combined-block offset) on
+     * top, so the whole image is treated as one module with base 0. */
     if (strcmp(name, TLS_MODULE_BASE_SYM) == 0)
         return (uint64_t)addend;
     for (int j = 0; j < nobj; j++) {
@@ -1437,13 +1902,13 @@ static uint64_t tls_module_offset(struct obj *objs, int nobj, uint64_t tbss_base
         for (int k = 0; k < d->nsym; k++) {
             Elf64_Sym *s = &d->sym[k];
             if (strcmp(d->str + s->st_name, name) != 0) continue;
-            if (d->tdata && s->st_shndx == (Elf64_Section)d->tdata_ndx)
-                return s->st_value + (uint64_t)addend;
-            if (d->tbss && s->st_shndx == (Elf64_Section)d->tbss_ndx)
-                return tbss_base + s->st_value + (uint64_t)addend;
+            if (is_tls_section(d, (int)s->st_shndx))
+                return d->sec_va[s->st_shndx] + s->st_value + (uint64_t)addend;
         }
     }
-    die("TLS symbol not defined in any input .tdata/.tbss");
+    fprintf(stderr, "%%LINK-F-ERROR, TLS symbol not defined in any input "
+                    ".tdata/.tbss: %s\n", name);
+    exit(1);
     return 0;
 }
 
@@ -1455,17 +1920,13 @@ static uint64_t tls_module_offset(struct obj *objs, int nobj, uint64_t tbss_base
  * its own object, and fall back to the cross-object name lookup only for a
  * genuinely undefined (external / _TLS_MODULE_BASE_) reference. */
 static uint64_t tls_ref_offset(struct obj *objs, int nobj, int oi, uint32_t si,
-                               uint64_t tbss_base, int64_t addend)
+                               int64_t addend)
 {
     struct obj *o = &objs[oi];
     Elf64_Sym  *s = &o->sym[si];
-    if (s->st_shndx != SHN_UNDEF && s->st_shndx < (Elf64_Section)o->nsh) {
-        if (o->tdata && s->st_shndx == (Elf64_Section)o->tdata_ndx)
-            return s->st_value + (uint64_t)addend;
-        if (o->tbss && s->st_shndx == (Elf64_Section)o->tbss_ndx)
-            return tbss_base + s->st_value + (uint64_t)addend;
-    }
-    return tls_module_offset(objs, nobj, tbss_base, o->str + s->st_name, addend);
+    if (s->st_shndx != SHN_UNDEF && is_tls_section(o, (int)s->st_shndx))
+        return o->sec_va[s->st_shndx] + s->st_value + (uint64_t)addend;
+    return tls_module_offset(objs, nobj, o->str + s->st_name, addend);
 }
 
 /* True if `name` is defined by some input object in a section this linker places
@@ -1481,7 +1942,8 @@ static int defined_placed(struct obj *objs, const char *name)
     int shx = (int)s->st_shndx;
     if (shx <= 0 || shx >= objs[doi].nsh) return 0;
     int b = objs[doi].sec_bucket[shx];
-    return b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_BSS;
+    return b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_INIT_ARRAY ||
+           b == B_BSS || b == B_EH_FRAME;
 }
 
 /* Emit an OVMX shareable image from N objects: merge .text/.rodata/.data/.bss,
@@ -1511,6 +1973,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     g_allow_undef = allow_undef;
     g_deferred = 0;
     build_symhash(objs, nobj);
+    /* Collect producer globalvalues (VMS globalvalues — absolute link-time
+     * constants exported by a --use'd producer, e.g. C$_EXIT1 from DECC$SHR)
+     * before the import scan, so a reference to one folds the constant instead
+     * of becoming an activation import. (vms-954) */
+    collect_globalvalues(ps, np);
 
     /* Executable entry mode. An object set that defines its own `_start` is a
      * FREESTANDING program (it owns entry + exit — the pre-vms-ba1 consumers and
@@ -1553,10 +2020,19 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             if (s->st_shndx != SHN_UNDEF) continue;      /* locally defined     */
             const char *nm = objs[i].str + s->st_name;
             if (!nm[0]) continue;
+            /* __tls_get_addr calls are the classic-GD/LD access model; LINK
+             * relaxes every one to Local-Exec (patch_tls_le), overwriting the
+             * call site, so the symbol is never actually referenced at run time.
+             * Do NOT create an import/PLT stub for it. (vms-76a) */
+            if (strcmp(nm, "__tls_get_addr") == 0) continue;
             if (defined_placed(objs, nm)) continue;      /* intra-image def     */
             int pidx; uint32_t svidx;
             if (!find_universal(ps, np, nm, &pidx, &svidx))
                 continue;   /* not a producer universal: weak/deferred path below */
+            if (ovmx_sv_entries(ps[pidx].sv)[svidx].kind == OVMX_SV_GLOBALVALUE)
+                continue;   /* globalvalue: a LINK-TIME constant folded at the
+                             * reference site (resolve_ref / GOT fill), never an
+                             * activation-bound import. (vms-954) */
             int k = import_find(imp, nimp, nm);
             if (k < 0) {
                 if (nimp >= imp_cap) {
@@ -1568,6 +2044,60 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                 memset(&imp[k], 0, sizeof imp[k]);
                 snprintf(imp[k].name, sizeof imp[k].name, "%s", nm);
                 imp[k].pidx = pidx; imp[k].svidx = svidx;
+                imp[k].is_data = is_gotr ? 1 : 0;
+            }
+            if (is_call) imp[k].is_data = 0;   /* any call use needs a PLT stub */
+        }
+
+    /* ---- Weak-by-name imports (vms-5f0). A CALL/GOT reference to a symbol that
+     * is UNDEF in its own object, defined by NO input object, exported by NO
+     * --use'd producer (the strong-import scan above skipped it), but declared
+     * `#pragma weak` in the source (build_symhash recorded it in g_weak) is NOT
+     * a link error and NOT a bake-to-0: it becomes a WEAK import. LINK emits a
+     * PLT stub + import-GOT cell for it exactly like a strong import, but records
+     * it in .vms$wimp for IMGACT to resolve by NAME against the loaded producer
+     * set at activation -- found -> bound, absent -> the cell stays 0 (the ELF
+     * weak-undef result rms_services_present() reads as "service not present").
+     *
+     * This is the ONLY way a lower-layer producer can reach a universal a
+     * HIGHER-layer producer exports: LIBVMS$SHR's rms_textfile.c weak-references
+     * sys$open/$get/$connect/$close, exported by LIBVMSRMS$SHR, which --use's
+     * LIBVMS$SHR -- so LIBVMS$SHR cannot --use LIBVMSRMS$SHR to import them by
+     * (producer,index) without a build cycle. IMGACT's by-name activation bind
+     * closes that cycle, matching how VMS resolves inter-shareable references.
+     *
+     * Linker-defined weak-undef section symbols (__init_array_start/_DYNAMIC on
+     * DECC$SHR) also land here: no producer exports them, so IMGACT leaves them
+     * 0 -- identical to today's bake-to-0, so including them is harmless. */
+    for (int i = 0; i < nobj; i++)
+        for (int r = 0; r < objs[i].nreloc; r++) {
+            uint32_t type = ELF64_R_TYPE(objs[i].relocs[r].info);
+            int is_call = (type == R_AARCH64_CALL26 || type == R_AARCH64_JUMP26 ||
+                           type == R_X86_64_PLT32);
+            int is_gotr = is_got_reloc(type);
+            if (!is_call && !is_gotr) continue;
+            uint32_t si = ELF64_R_SYM(objs[i].relocs[r].info);
+            Elf64_Sym *s = &objs[i].sym[si];
+            if (s->st_shndx != SHN_UNDEF) continue;
+            const char *nm = objs[i].str + s->st_name;
+            if (!nm[0]) continue;
+            if (!weak_has(nm)) continue;                 /* only weak-undef refs */
+            if (defined_placed(objs, nm)) continue;      /* intra-image def      */
+            int pidx; uint32_t svidx;
+            if (find_universal(ps, np, nm, &pidx, &svidx))
+                continue;   /* a --use producer exports it: already a strong import */
+            int k = import_find(imp, nimp, nm);
+            if (k < 0) {
+                if (nimp >= imp_cap) {
+                    imp_cap = imp_cap ? imp_cap * 2 : 32;
+                    imp = realloc(imp, (size_t)imp_cap * sizeof *imp);
+                    if (!imp) die("oom growing import table");
+                }
+                k = nimp++;
+                memset(&imp[k], 0, sizeof imp[k]);
+                snprintf(imp[k].name, sizeof imp[k].name, "%s", nm);
+                imp[k].pidx = -1;          /* producer chosen by IMGACT by name */
+                imp[k].is_weak = 1;
                 imp[k].is_data = is_gotr ? 1 : 0;
             }
             if (is_call) imp[k].is_data = 0;   /* any call use needs a PLT stub */
@@ -1597,36 +2127,61 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         imp[exit_imp].is_data = 0;   /* always a call import */
     }
 
-    int has_ro = 0, has_data = 0, has_bss = 0;
+    int has_ro = 0, has_data = 0, has_init_array = 0, has_bss = 0, has_eh_frame = 0;
     for (int i = 0; i < nobj; i++)
         for (int s = 0; s < objs[i].nsh; s++) {
             if (objs[i].sh[s].sh_size == 0) continue;
-            if (objs[i].sec_bucket[s] == B_RODATA) has_ro = 1;
-            if (objs[i].sec_bucket[s] == B_DATA)   has_data = 1;
-            if (objs[i].sec_bucket[s] == B_BSS)    has_bss = 1;
+            if (objs[i].sec_bucket[s] == B_RODATA)     has_ro = 1;
+            if (objs[i].sec_bucket[s] == B_DATA)       has_data = 1;
+            if (objs[i].sec_bucket[s] == B_INIT_ARRAY) has_init_array = 1;
+            if (objs[i].sec_bucket[s] == B_BSS)        has_bss = 1;
+            if (objs[i].sec_bucket[s] == B_EH_FRAME)   has_eh_frame = 1;
         }
 
-    /* TLS geometry (single TLS-bearing object per image for now). */
-    int tls_obj = -1;
-    for (int i = 0; i < nobj; i++) {
-        if ((objs[i].tdata && objs[i].tdata->sh_size) ||
-            (objs[i].tbss && objs[i].tbss->sh_size)) {
-            if (tls_obj >= 0)
-                die("multi-module TLS not supported yet (one TLS object per image)");
-            tls_obj = i;
+    /* TLS geometry: COMBINED multi-module TLS block (vms-da2). A C++ image
+     * whole-archives libstdc++/libsupc++/libgcc, each of which can contribute
+     * its own .tdata/.tbss; a single image therefore has MANY TLS-bearing
+     * objects, not one. LINK builds ONE combined per-thread TLS block for the
+     * whole image and emits a SINGLE PT_TLS over it — matching what a real
+     * linker (ld) does when it statically combines a program with its runtime.
+     *
+     * Layout (the ELF-standard TLS block shape): every module's .tdata is
+     * concatenated first (the file-backed init image = PT_TLS p_filesz), then
+     * every module's .tbss (zero-fill = the p_memsz tail). Each section is
+     * placed at its own alignment; each object records the base offset it was
+     * assigned (tls_tdata_off / tls_tbss_off) so a TLS symbol resolves to
+     * (its module's base + st_value). No per-image cap and no one-object
+     * limitation — the count of TLS-bearing objects is unbounded. */
+    uint64_t tls_align = 1;   /* max alignment over all TLS sections (>=1) */
+    /* Pass 1: place every .tdata / .tdata.* (initialized image) contiguously.
+     * Each section's block-relative base offset is recorded in sec_va[] (which
+     * placed_addr ignores for TLS buckets), so a TLS symbol later resolves to
+     * (its section's base + st_value) regardless of which object or which split
+     * per-variable section it came from. */
+    uint64_t tls_cursor = 0;
+    for (int i = 0; i < nobj; i++)
+        for (int s = 0; s < objs[i].nsh; s++) {
+            if (objs[i].sec_bucket[s] != B_TDATA || !objs[i].sh[s].sh_size) continue;
+            uint64_t al = objs[i].sh[s].sh_addralign ? objs[i].sh[s].sh_addralign : 8;
+            if (al > tls_align) tls_align = al;
+            tls_cursor = ALIGN_UP(tls_cursor, al);
+            objs[i].sec_va[s] = tls_cursor;
+            tls_cursor += objs[i].sh[s].sh_size;
         }
-    }
-    int has_tls = (tls_obj >= 0);
-    uint64_t tdata_sz = (has_tls && objs[tls_obj].tdata) ? objs[tls_obj].tdata->sh_size : 0;
-    uint64_t tbss_sz  = (has_tls && objs[tls_obj].tbss)  ? objs[tls_obj].tbss->sh_size  : 0;
-    uint64_t tdata_al = (has_tls && objs[tls_obj].tdata && objs[tls_obj].tdata->sh_addralign)
-                        ? objs[tls_obj].tdata->sh_addralign : 8;
-    uint64_t tbss_al  = (has_tls && objs[tls_obj].tbss && objs[tls_obj].tbss->sh_addralign)
-                        ? objs[tls_obj].tbss->sh_addralign : 1;
-    uint64_t tls_align = tdata_al > tbss_al ? tdata_al : tbss_al;
-    if (tls_align == 0) tls_align = 1;
-    uint64_t tbss_base = tbss_sz ? ALIGN_UP(tdata_sz, tbss_al) : tdata_sz;
-    uint64_t tls_memsz = tbss_base + tbss_sz;
+    uint64_t tdata_sz = tls_cursor;   /* total .tdata = PT_TLS p_filesz */
+    /* Pass 2: place every .tbss / .tbss.* (zero image) after all .tdata. */
+    for (int i = 0; i < nobj; i++)
+        for (int s = 0; s < objs[i].nsh; s++) {
+            if (objs[i].sec_bucket[s] != B_TBSS || !objs[i].sh[s].sh_size) continue;
+            uint64_t al = objs[i].sh[s].sh_addralign ? objs[i].sh[s].sh_addralign : 1;
+            if (al > tls_align) tls_align = al;
+            tls_cursor = ALIGN_UP(tls_cursor, al);
+            objs[i].sec_va[s] = tls_cursor;
+            tls_cursor += objs[i].sh[s].sh_size;
+        }
+    uint64_t tls_memsz = tls_cursor;  /* total block = PT_TLS p_memsz */
+    uint64_t tbss_sz   = tls_memsz - tdata_sz; /* zero-tail size (diagnostic/hdr) */
+    int has_tls = (tls_memsz > 0);
 
     /* Collect the distinct GOT-referenced symbols (across all code sections).
      * Growable — musl references hundreds of globals GOT-indirectly. (vms-004) */
@@ -1657,7 +2212,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                 got = realloc(got, (size_t)got_cap * sizeof *got);
                 if (!got) die("oom growing GOT table");
             }
-            snprintf(got[ngot].name, sizeof got[ngot].name, "%s", nm);
+            got[ngot].name = nm;   /* strtab pointer, live for the run */
             got[ngot].is_local = is_local;
             got[ngot].oi  = is_local ? i : 0;
             got[ngot].sym = is_local ? (int)si : 0;
@@ -1678,7 +2233,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                     tls = realloc(tls, (size_t)tls_cap * sizeof *tls);
                     if (!tls) die("oom growing TLSDESC table");
                 }
-                snprintf(tls[ntls].name, sizeof tls[ntls].name, "%s", nm);
+                tls[ntls].name = nm;   /* strtab pointer, live for the run */
                 /* aarch64's TLSDESC addend is a symbol offset and belongs in the
                  * descriptor's module offset; x86_64's is a disp32 FIELD addend
                  * (-4) that belongs only in the PC-relative write. (vms-2e4) */
@@ -1694,10 +2249,19 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     int nabs = 0;
     for (int i = 0; i < nobj; i++)
         for (int r = 0; r < objs[i].nreloc; r++)
-            if (is_abs64_reloc(ELF64_R_TYPE(objs[i].relocs[r].info)))
+            if (is_abs64_reloc(ELF64_R_TYPE(objs[i].relocs[r].info))) {
+                /* A globalvalue ABS64 reference resolves to an ABSOLUTE constant
+                 * that is NOT recorded in .vms$rel (the apply loop skips it), so
+                 * it must not inflate the .vms$rel upper bound either — else an
+                 * image whose only ABS64 ref is a globalvalue would carry an
+                 * empty .vms$rel. (vms-954) */
+                const char *anm = objs[i].str +
+                    objs[i].sym[ELF64_R_SYM(objs[i].relocs[r].info)].st_name;
+                if (gval_find(anm, NULL)) continue;
                 nabs++;
+            }
 
-    /* ---- Layout: [ehdr][phdr] text|rodata|got|tlsdesc|data|tdata|sv|rel|tls|bss --- */
+    /* ---- Layout: [ehdr][phdr] text|rodata|got|tlsdesc|data|init_array|tdata|sv|rel|tls|bss --- */
     uint64_t off_ph   = sizeof(Elf64_Ehdr);
     /* shareable: PT_LOAD (+ PT_TLS). executable: PT_PHDR, PT_INTERP, PT_LOAD
      * (+ PT_TLS) — the kernel maps the executable and reads PT_INTERP=IMGACT. */
@@ -1747,14 +2311,46 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             }
     uint64_t ro_end = cur;
 
+    /* .eh_frame (vms-70d): the DWARF unwinder CIE/FDE table, placed in ONE
+     * contiguous region (like .init_array) so the whole block can be handed to
+     * libgcc's __register_frame as a single [begin .. 0-terminator] range. gcc
+     * emits exactly one `.eh_frame` per object; whole-archiving libstdc++/libgcc
+     * yields many, concatenated here in object order. A 4-byte-zero FDE
+     * terminator is appended after the last one (the image is calloc'd, so the
+     * reserved word is already zero) -- the terminating null crtbegin/crtend
+     * would otherwise supply. Read-only; lives in the single PT_LOAD. */
+    uint64_t ehf_beg = cur, ehf_end = cur;
+    if (has_eh_frame) {
+        int first = 1;
+        for (int i = 0; i < nobj; i++)
+            for (int s = 0; s < objs[i].nsh; s++)
+                if (objs[i].sec_bucket[s] == B_EH_FRAME && objs[i].sh[s].sh_size) {
+                    uint64_t al = objs[i].sh[s].sh_addralign ? objs[i].sh[s].sh_addralign : 8;
+                    cur = ALIGN_UP(cur, al);
+                    if (first) { ehf_beg = cur; first = 0; }
+                    objs[i].sec_va[s] = cur;
+                    cur += objs[i].sh[s].sh_size;
+                }
+        cur = ALIGN_UP(cur, 4);   /* 4-byte-zero terminator after the last FDE */
+        cur += 4;
+        ehf_end = cur;
+    }
+
     /* GOT cells (writable, 8-aligned). */
     uint64_t got_beg = ALIGN_UP(cur, 8);
     for (int i = 0; i < ngot; i++) got[i].va = got_beg + (uint64_t)i * 8;
     uint64_t got_end = got_beg + (uint64_t)ngot * 8;
     cur = got_end;
 
-    /* TLSDESC entries (writable, 2 quadwords each, 8-aligned). */
-    uint64_t tlsdesc_beg = ALIGN_UP(cur, 8);
+    /* TLSDESC entries (writable, 2 quadwords = 16 bytes each). The x86_64
+     * TLSDESC ABI requires each descriptor 16-byte ALIGNED: a
+     * `lea sym@TLSDESC(%rip),%rax` must resolve to a descriptor boundary, and
+     * the resolver treats %rax as a 16-byte-aligned [resolver,offset] pair.
+     * Align the TABLE BASE to 16 (was 8, vms-da2's combined-TLS-block reorg
+     * shifted `cur` so an 8-aligned base landed at 8 mod 16 -> descriptors off
+     * boundary; caught by the x86_64 TLSX86.EXE reloc test). i*16 then keeps
+     * every entry ≡0 mod 16. */
+    uint64_t tlsdesc_beg = ALIGN_UP(cur, 16);
     for (int i = 0; i < ntls; i++) tls[i].va = tlsdesc_beg + (uint64_t)i * 16;
     uint64_t tlsdesc_end = tlsdesc_beg + (uint64_t)ntls * 16;
     cur = tlsdesc_end;
@@ -1771,9 +2367,89 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             }
     uint64_t data_end = cur;
 
+    /* .init_array (writable, ABS64-relocated ctor function-pointer table,
+     * vms-ee2). A DEDICATED region -- deliberately not merged into .data --
+     * so the placed range is exactly the ctor table, nothing else: IMGACT's
+     * symbol-vector activator (imgact.c) reads this section's own sh_addr/
+     * sh_size (via the same generic by-name section lookup it already uses
+     * for .vms$imp/.vms$rel/.vms$tls/.vms$sv) to bound its constructor-call
+     * loop. Each entry is patched by the ordinary ABS64 reloc-apply loop
+     * below (bucket_is_patchable() now includes B_INIT_ARRAY) -- no special
+     * casing needed there. Most images (TCC.EXE, DECC$SHR, every pure musl+
+     * libgcc image) carry no SHT_INIT_ARRAY input section at all, so
+     * has_init_array is 0 and this region is simply empty (initarr_beg ==
+     * initarr_end): the correct, unaffected case.
+     *
+     * ORDERING (vms-0962): the input SHT_INIT_ARRAY sections MUST be laid down
+     * in GNU-ld order, not object-encounter order. gcc emits a priority-tagged
+     * constructor into its own section `.init_array.NNNNN` (NNNNN = the numeric
+     * init_priority, zero-padded); untagged (default-priority) ctors land in
+     * plain `.init_array`. GNU ld's default script places
+     *   KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*)))   -- numbered, ASCENDING
+     *   KEEP(*(.init_array))                             -- plain, AFTER those
+     * Because .init_array entries execute front-to-back at activation, a lower
+     * NNNNN (higher priority) must be placed EARLIER so it runs EARLIER. libstdc++
+     * has hundreds of priority-ordered ctors (std::ios_base::Init, locale facets,
+     * ...); concatenated in object order a later-priority ctor can run before the
+     * earlier-priority ctor that establishes the state it reads -> garbage ptr ->
+     * SIGSEGV in static init. Sort a flat (obj,sec) index list by the parsed
+     * priority (plain = sentinel MAX, so it sorts last), ties broken by encounter
+     * order (stable, matching ld's input order), then assign sec_va in that order.
+     * The copy + ABS64 reloc-apply loops below are keyed on sec_va, so they follow
+     * this ordering with no further change. */
+    uint64_t initarr_beg = cur;
+    if (has_init_array) {
+        /* Flat list of every non-empty B_INIT_ARRAY input section. */
+        int nia_cap = 0;
+        for (int i = 0; i < nobj; i++)
+            for (int s = 0; s < objs[i].nsh; s++)
+                if (objs[i].sec_bucket[s] == B_INIT_ARRAY && objs[i].sh[s].sh_size)
+                    nia_cap++;
+        struct ia_ent { int i, s; uint64_t prio; int order; } *ia =
+            nia_cap ? malloc((size_t)nia_cap * sizeof *ia) : NULL;
+        int nia = 0;
+        for (int i = 0; i < nobj; i++)
+            for (int s = 0; s < objs[i].nsh; s++)
+                if (objs[i].sec_bucket[s] == B_INIT_ARRAY && objs[i].sh[s].sh_size) {
+                    const char *nm = objs[i].shstr + objs[i].sh[s].sh_name;
+                    /* `.init_array.NNNNN` -> prio = NNNNN (ascending). Plain
+                     * `.init_array` (no numeric suffix) -> sentinel MAX = last. */
+                    uint64_t prio = UINT64_MAX;
+                    const char *pfx = ".init_array.";
+                    size_t pl = strlen(pfx);
+                    if (strncmp(nm, pfx, pl) == 0 && nm[pl] >= '0' && nm[pl] <= '9')
+                        prio = strtoull(nm + pl, NULL, 10);
+                    ia[nia].i = i; ia[nia].s = s; ia[nia].prio = prio;
+                    ia[nia].order = nia;
+                    nia++;
+                }
+        /* Stable ascending sort by (prio, encounter order). Section counts are
+         * modest (hundreds); an in-place insertion sort is clearer than qsort_r
+         * and preserves ld's stable input-order tiebreak trivially. */
+        for (int a = 1; a < nia; a++) {
+            struct ia_ent key = ia[a];
+            int b = a - 1;
+            while (b >= 0 && (ia[b].prio > key.prio ||
+                             (ia[b].prio == key.prio && ia[b].order > key.order))) {
+                ia[b + 1] = ia[b];
+                b--;
+            }
+            ia[b + 1] = key;
+        }
+        for (int k = 0; k < nia; k++) {
+            int i = ia[k].i, s = ia[k].s;
+            uint64_t al = objs[i].sh[s].sh_addralign ? objs[i].sh[s].sh_addralign : 8;
+            cur = ALIGN_UP(cur, al);
+            objs[i].sec_va[s] = cur;
+            cur += objs[i].sh[s].sh_size;
+        }
+        free(ia);
+    }
+    uint64_t initarr_end = cur;
+
     /* .tdata (TLS init image, file-backed). PT_TLS references it; a reserved
      * vaddr is assigned even for a pure-.tbss image (tdata_sz == 0). */
-    uint64_t tdata_va = 0, tdata_end = data_end;
+    uint64_t tdata_va = 0, tdata_end = initarr_end;
     if (has_tls) {
         cur = ALIGN_UP(cur, tls_align);
         tdata_va = cur;
@@ -1803,11 +2479,17 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
      * from the image, which is why the slot was retired instead of deleted. Its
      * value stays 0 and no reader ever dereferences it — find_universal(),
      * ovmx_sv_at() and IMGACT's sv_find_named() all skip OVMX_SV_RETIRED. */
-    for (int i = 0; i < nuniv; i++)
-        uv[i].value = (uv[i].kind == OVMX_SV_RETIRED)
-            ? 0
-            : resolve_named(objs, nobj, uv[i].name,
+    for (int i = 0; i < nuniv; i++) {
+        if (uv[i].kind == OVMX_SV_RETIRED)
+            uv[i].value = 0;
+        else if (uv[i].kind == OVMX_SV_GLOBALVALUE)
+            /* absolute link-time constant, preset at parse — keep it (no input
+             * symbol defines it; it is bound unbiased by ovmx_sv_resolve) */
+            ;
+        else
+            uv[i].value = resolve_named(objs, nobj, uv[i].internal,
                             "universal symbol not defined in any input object");
+    }
 
     uint32_t names_size = 0;
     for (int i = 0; i < nuniv; i++) names_size += (uint32_t)strlen(uv[i].name) + 1;
@@ -1839,14 +2521,42 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
      * producers at activation, like a consumer). Must be in the loaded range so
      * IMGACT can read it by section vaddr. (vms-e65) */
     uint64_t after_tls = ntlsdesc ? off_tls + tls_sec_size : after_rel;
+    int nstrong = import_count_strong(imp, nimp);
+    int nweak   = import_count_weak(imp, nimp);
     uint64_t off_imp = 0, imp_size = 0;
-    if (nimp) {
+    if (nstrong) {
         off_imp = ALIGN_UP(after_tls, 8);
-        imp_size = vms_imp_size(nimp, ps, np);
+        imp_size = vms_imp_size(nimp, imp, ps, np);
+    }
+    /* .vms$wimp: weak-by-name imports, resolved by IMGACT at activation. Placed
+     * right after .vms$imp, also inside the loaded range. (vms-5f0) */
+    uint64_t after_imp = nstrong ? off_imp + imp_size : after_tls;
+    uint64_t off_wimp = 0, wimp_size = 0;
+    if (nweak) {
+        off_wimp = ALIGN_UP(after_imp, 8);
+        wimp_size = vms_wimp_size(nimp, imp);
+    }
+
+    /* .vms$ehf: the DWARF frame-registration descriptor (vms-70d). Emitted only
+     * when the image both has a non-empty .eh_frame region AND whole-archived
+     * libgcc's __register_frame (a pure-C image has neither the registration
+     * machinery nor a need for it). IMGACT reads it and registers the frames
+     * before .init_array runs; absent -> IMGACT skips registration. Must be in
+     * the loaded range so IMGACT can read it by section vaddr. */
+    /* .vms$ehf sits after .vms$wimp (which sits after .vms$imp), so bias it off
+     * the end of the weak-import block. after_wimp == after_imp when there are
+     * no weak imports. (reconciles vms-70d's ehf placement with vms-5f0's wimp.) */
+    uint64_t after_wimp = nweak ? off_wimp + wimp_size : after_imp;
+    uint64_t register_frame_va =
+        has_eh_frame ? resolve_named(objs, nobj, "__register_frame", NULL) : 0;
+    uint64_t off_ehf = 0, ehf_desc_size = 0;
+    if (has_eh_frame && register_frame_va && ehf_end > ehf_beg) {
+        off_ehf = ALIGN_UP(after_wimp, 8);
+        ehf_desc_size = sizeof(struct ovmx_ehf_desc);
     }
 
     /* End of file-backed loaded content; .bss (NOBITS) extends memsz beyond it. */
-    uint64_t file_loaded_end = nimp ? off_imp + imp_size : after_tls;
+    uint64_t file_loaded_end = off_ehf ? off_ehf + ehf_desc_size : after_wimp;
     uint64_t bss_beg = file_loaded_end, bss_end = file_loaded_end;
     if (has_bss) {
         int first = 1;
@@ -1863,24 +2573,28 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 
     uint64_t off_shstr = ALIGN_UP(file_loaded_end, 4);
 
-    const char *secn[24]; int nsec = 0;
+    const char *secn[26]; int nsec = 0;
     secn[nsec++] = "";
     int ix_text = nsec; secn[nsec++] = ".text";
     int ix_ro = -1;   if (has_ro)   { ix_ro   = nsec; secn[nsec++] = ".rodata"; }
+    int ix_ehf_sec = -1; if (ehf_end > ehf_beg) { ix_ehf_sec = nsec; secn[nsec++] = ".eh_frame"; }
     int ix_got = -1;  if (ngot)     { ix_got  = nsec; secn[nsec++] = ".got"; }
     int ix_tlsd = -1; if (ntls)     { ix_tlsd = nsec; secn[nsec++] = ".tlsdesc"; }
     int ix_data = -1; if (has_data) { ix_data = nsec; secn[nsec++] = ".data"; }
+    int ix_initarr = -1; if (has_init_array) { ix_initarr = nsec; secn[nsec++] = ".init_array"; }
     int ix_tdata = -1; if (has_tls && tdata_sz) { ix_tdata = nsec; secn[nsec++] = ".tdata"; }
     int ix_igot = -1; if (nimp)     { ix_igot = nsec; secn[nsec++] = ".igot"; }
     int ix_plt = -1;  if (nimp)     { ix_plt  = nsec; secn[nsec++] = ".plt"; }
     int ix_sv = nsec; secn[nsec++] = OVMX_SV_SECTION;
     int ix_rel = -1;  if (nrel)     { ix_rel  = nsec; secn[nsec++] = OVMX_REL_SECTION; }
     int ix_tls = -1;  if (ntlsdesc) { ix_tls  = nsec; secn[nsec++] = OVMX_TLS_SECTION; }
-    int ix_imp = -1;  if (nimp)     { ix_imp  = nsec; secn[nsec++] = OVMX_IMP_SECTION; }
+    int ix_imp = -1;  if (nstrong)  { ix_imp  = nsec; secn[nsec++] = OVMX_IMP_SECTION; }
+    int ix_wimp = -1; if (nweak)    { ix_wimp = nsec; secn[nsec++] = OVMX_WIMP_SECTION; }
+    int ix_ehf = -1;  if (off_ehf)  { ix_ehf  = nsec; secn[nsec++] = OVMX_EHF_SECTION; }
     int ix_bss = -1;  if (has_bss)  { ix_bss  = nsec; secn[nsec++] = ".bss"; }
     int ix_tbss = -1; if (has_tls && tbss_sz) { ix_tbss = nsec; secn[nsec++] = ".tbss"; }
     int ix_str = nsec; secn[nsec++] = ".shstrtab";
-    uint64_t sn_off[24]; uint64_t sn_sz = 0;
+    uint64_t sn_off[26]; uint64_t sn_sz = 0;
     for (int i = 0; i < nsec; i++) { sn_off[i] = sn_sz; sn_sz += strlen(secn[i]) + 1; }
     uint64_t off_shdr = ALIGN_UP(off_shstr + sn_sz, 8);
     uint64_t file_sz = off_shdr + (uint64_t)nsec * sizeof(Elf64_Shdr);
@@ -1912,7 +2626,8 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
      * A PT_TLS follows when the image has thread-local storage. An executable
      * adds PT_PHDR (so IMGACT derives the load bias) + PT_INTERP=IMGACT.EXE, and
      * its GOT/import cells are written at activation so it is always writable. */
-    int writable = (ngot || ntls || has_data || has_bss || has_tls || nimp || is_exec);
+    int writable = (ngot || ntls || has_data || has_init_array || has_bss ||
+                    has_tls || nimp || is_exec);
     Elf64_Phdr *ph = (Elf64_Phdr *)(img + off_ph);
     int li;   /* index of the PT_LOAD phdr */
     if (is_exec) {
@@ -1938,19 +2653,32 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     }
     if (is_exec) memcpy(img + off_interp, IMGACT_INTERP, interp_sz);
 
-    /* Copy each placed PROGBITS section (text/rodata/data) to its vaddr. */
+    /* Copy each placed PROGBITS section (text/rodata/data/init_array) to its
+     * vaddr. SHT_INIT_ARRAY's file-resident bytes are the pre-relocation
+     * addends; the ABS64 reloc-apply loop below overwrites each entry with
+     * the real placed pointer value. */
     for (int i = 0; i < nobj; i++)
         for (int s = 0; s < objs[i].nsh; s++) {
             int b = objs[i].sec_bucket[s];
-            if ((b == B_TEXT || b == B_RODATA || b == B_DATA) &&
+            if ((b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_INIT_ARRAY ||
+                 b == B_EH_FRAME) &&
                 objs[i].sh[s].sh_size)
                 memcpy(img + objs[i].sec_va[s],
                        objs[i].buf + objs[i].sh[s].sh_offset, objs[i].sh[s].sh_size);
         }
 
-    /* Copy the TLS init image (.tdata); .tbss is zero-filled per thread. */
-    if (has_tls && tdata_sz)
-        memcpy(img + tdata_va, objs[tls_obj].buf + objs[tls_obj].tdata->sh_offset, tdata_sz);
+    /* Copy the combined TLS init image: every .tdata / .tdata.* section into its
+     * assigned slot within the block's [tdata_va, tdata_va+tdata_sz) init region
+     * (vms-da2). sec_va[s] holds the section's block-relative base. .tbss is
+     * zero-filled per thread (already zero in the calloc'd image, and re-zeroed
+     * by the activator's anonymous TLS mapping). */
+    if (has_tls)
+        for (int i = 0; i < nobj; i++)
+            for (int s = 0; s < objs[i].nsh; s++)
+                if (objs[i].sec_bucket[s] == B_TDATA && objs[i].sh[s].sh_size)
+                    memcpy(img + tdata_va + objs[i].sec_va[s],
+                           objs[i].buf + objs[i].sh[s].sh_offset,
+                           objs[i].sh[s].sh_size);
 
     /* Image-relative slots (GOT cells + ABS64 data pointers) to bias at
      * activation; filled as they resolve, header count set at the end. */
@@ -1983,6 +2711,18 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             rel_off[nrel_filled++] = got[i].va;   /* image-relative -> bias at activation */
             continue;
         }
+        /* A producer globalvalue address-taken via the GOT (e.g. `&C$_EXIT1` if
+         * the port's codegen routes it GOT-indirect): fill the cell with the
+         * ABSOLUTE constant and do NOT record it in .vms$rel — it is not an
+         * image-relative address, so it must not be load-biased. (vms-954) */
+        {
+            uint64_t gv;
+            if (gval_find(got[i].name, &gv)) {
+                got[i].value = gv;
+                *(uint64_t *)(img + got[i].va) = gv;
+                continue;
+            }
+        }
         /* Undefined GOT symbol. A WEAK reference (no definition anywhere) is a
          * legitimate address-0 resolution — the linker-defined empty
          * __init_array/__fini_array bounds and null _DYNAMIC of a C-RTL with no
@@ -1990,13 +2730,13 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
          * (--allow-undefined) or, strict, a hard error. (vms-61f.1) */
         *(uint64_t *)(img + got[i].va) = 0;   /* cell = 0, NOT biased/recorded */
         if (weak_has(got[i].name))      { /* correct 0; nothing to defer */ }
-        else if (g_allow_undef)         { g_deferred++; }
+        else if (g_allow_undef)         { dump_undef(got[i].name); g_deferred++; }
         else die("GOT symbol undefined (cross-image DATA import is a later increment)");
     }
 
     /* Fill TLSDESC entries: [0]=0 (IMGACT sets the resolver), [1]=module offset. */
     for (int i = 0; i < ntls; i++) {
-        tls[i].modoff = tls_module_offset(objs, nobj, tbss_base,
+        tls[i].modoff = tls_module_offset(objs, nobj,
                                           tls[i].name, tls[i].addend);
         uint64_t *e = (uint64_t *)(img + tls[i].va);
         e[0] = 0;
@@ -2005,7 +2745,23 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 
     /* Apply relocations across every code section: GOT-indirect pairs -> GOT
      * slot; TLSDESC -> TLSDESC entry; the rest PC-relative (with addend). */
+    /* Aligned size of the combined TLS block. In x86_64 Variant II the block
+     * base sits at TP - tls_tp_size, so a variable at combined-block offset moff
+     * is at TP-relative offset (moff - tls_tp_size) — the Local-Exec offset the
+     * GD/LD relaxation embeds, matching IMGACT assign_tls_offsets(). (vms-76a) */
+    uint64_t tls_tp_size = has_tls ? ALIGN_UP(tls_memsz, tls_align) : 0;
     for (int i = 0; i < nobj; i++) {
+        /* Per-object TLS dialect: an object carrying any classic GD/LD reloc was
+         * compiled without -mtls-dialect=gnu2, so after LD->LE relaxation its
+         * %rax holds TP (not the module base the gnu2/TLSDESC path leaves), and
+         * its paired R_X86_64_DTPOFF32 operands must be TP-relative rather than
+         * module-relative. A single object uses one dialect throughout. */
+        int classic_tls = 0;
+        for (int r = 0; r < objs[i].nreloc; r++)
+            if (is_classic_gdld_reloc(ELF64_R_TYPE(objs[i].relocs[r].info))) {
+                classic_tls = 1;
+                break;
+            }
         for (int r = 0; r < objs[i].nreloc; r++) {
             struct reloc *rl = &objs[i].relocs[r];
             uint32_t type = ELF64_R_TYPE(rl->info);
@@ -2013,12 +2769,20 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             uint32_t *insn = (uint32_t *)(img + site);
             const char *nm = objs[i].str +
                              objs[i].sym[ELF64_R_SYM(rl->info)].st_name;
+            /* The classic GD/LD call to __tls_get_addr is subsumed by the LE
+             * relaxation of its paired lea; its site bytes were overwritten by
+             * patch_tls_le(), so never patch it separately. (vms-76a) */
+            if (strcmp(nm, "__tls_get_addr") == 0) continue;
             if (is_got_reloc(type)) {
                 uint32_t si = ELF64_R_SYM(rl->info);
                 if (ELF64_ST_BIND(objs[i].sym[si].st_info) == STB_LOCAL) {
                     /* LOCAL GOT reference -> its per-object (oi, sym) slot. */
                     int gi = find_got_local(got, ngot, i, (int)si);
-                    if (gi < 0) die("internal: local GOT slot missing for symbol");
+                    if (gi < 0) {
+                        fprintf(stderr, "%%LINK-F-ERROR, internal: local GOT slot "
+                                "missing for symbol '%s' (reloc type %u)\n", nm, type);
+                        exit(1);
+                    }
                     patch_got(type, insn, site, got[gi].va, rl->add);
                 } else {
                     int ii = import_find(imp, nimp, nm);
@@ -2027,7 +2791,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                         patch_got(type, insn, site, imp[ii].got_va, rl->add);
                     } else {
                         int gi = find_got(got, ngot, nm);
-                        if (gi < 0) die("internal: GOT slot missing for symbol");
+                        if (gi < 0) {
+                            fprintf(stderr, "%%LINK-F-ERROR, internal: GOT slot "
+                                    "missing for symbol '%s' (reloc type %u)\n", nm, type);
+                            exit(1);
+                        }
                         patch_got(type, insn, site, got[gi].va, rl->add);
                     }
                 }
@@ -2035,15 +2803,28 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                 int ti = find_tls(tls, ntls, nm);
                 if (ti < 0) die("internal: TLSDESC slot missing for symbol");
                 patch_tlsdesc(type, insn, site, tls[ti].va, rl->add);
+            } else if (is_classic_gdld_reloc(type)) {
+                /* Classic GD/LD -> Local-Exec relaxation (vms-76a). Rewrite the
+                 * psABI-fixed lea+call window to read TP and (for GD) add the
+                 * variable's TP-relative offset in place. For LD the offsets ride
+                 * the paired DTPOFF32 operands, so tpoff here is unused. */
+                uint64_t moff = tls_ref_offset(objs, nobj, i,
+                                               ELF64_R_SYM(rl->info), 0);
+                int32_t tpoff = (int32_t)(int64_t)(moff - tls_tp_size);
+                patch_tls_le(type, (uint8_t *)img, site, tpoff);
             } else if (is_dtpoff_reloc(type)) {
-                /* x86_64 local-dynamic operand: the variable's module-relative
-                 * TLS offset, written as a flat absolute 32-bit constant. Added
-                 * at run time to the module base the TLSDESC pair returned, so
-                 * it is link-time-final — NOT load-biased, NOT in .vms$rel. */
+                /* x86_64 dynamic TLS operand: the variable's TLS offset written
+                 * as a flat absolute 32-bit constant, link-time-final — NOT
+                 * load-biased, NOT in .vms$rel. In a gnu2/TLSDESC object this is
+                 * MODULE-relative (added at run time to the module base the
+                 * TLSDESC pair resolves). In a classic object whose TLSLD was
+                 * relaxed to LE, %rax already holds TP, so the operand must be
+                 * TP-relative (moff - aligned block size). (vms-76a) */
                 uint64_t moff = tls_ref_offset(objs, nobj, i,
                                                ELF64_R_SYM(rl->info),
-                                               tbss_base, rl->add);
-                *insn = (uint32_t)moff;
+                                               rl->add);
+                *insn = classic_tls ? (uint32_t)(moff - tls_tp_size)
+                                    : (uint32_t)moff;
             } else if (is_abs64_reloc(type)) {
                 /* Pointer initializer (.rela.data): write S+A as a 64-bit
                  * image-relative address and record the slot in .vms$rel so
@@ -2053,6 +2834,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                 if (s == 0) continue;   /* deferred (counted in resolve_ref) */
                 uint64_t value = s + (uint64_t)rl->add;
                 *(uint64_t *)(img + site) = value;
+                /* A producer globalvalue is an ABSOLUTE constant (VMS
+                 * globalvalue): write it, but do NOT record the slot in
+                 * .vms$rel — biasing it at activation would corrupt the
+                 * constant (e.g. C$_EXIT1 = 0x0035A009). (vms-954) */
+                if (gval_find(nm, NULL)) continue;
                 rel_off[nrel_filled++] = site;
             } else {
                 int ii = import_find(imp, nimp, nm);
@@ -2187,8 +2973,22 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 
     /* .vms$imp: this shareable's own cross-image imports (patch_off = import-GOT
      * cell). IMGACT binds each to its --use producer at activation. (vms-e65) */
-    if (nimp)
+    if (nstrong)
         vms_imp_write(img, off_imp, imp, nimp, ps, np);
+    /* .vms$wimp: weak-by-name imports; IMGACT binds each by NAME at activation
+     * against the loaded producer set (absent -> cell stays 0). (vms-5f0) */
+    if (nweak)
+        vms_wimp_write(img, off_wimp, imp, nimp);
+
+    /* .vms$ehf descriptor: image-relative .eh_frame start + __register_frame
+     * addr (both biased by IMGACT). Only emitted when register_frame_va != 0. */
+    if (off_ehf) {
+        struct ovmx_ehf_desc *ed = (struct ovmx_ehf_desc *)(img + off_ehf);
+        ed->magic = OVMX_EHF_MAGIC;
+        ed->reserved = 0;
+        ed->eh_frame_begin = ehf_beg;
+        ed->register_frame = register_frame_va;
+    }
 
     char *shstr = (char *)(img + off_shstr);
     for (int i = 0; i < nsec; i++) memcpy(shstr + sn_off[i], secn[i], strlen(secn[i]) + 1);
@@ -2202,6 +3002,15 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         sh[ix_ro].sh_flags = SHF_ALLOC; sh[ix_ro].sh_addr = ro_beg;
         sh[ix_ro].sh_offset = ro_beg; sh[ix_ro].sh_size = ro_end - ro_beg;
         sh[ix_ro].sh_addralign = 16;
+    }
+    if (ix_ehf_sec >= 0) {
+        /* .eh_frame output section spans the whole contiguous block INCLUDING
+         * the 4-byte-zero terminator (ehf_end), so a reader/registrar that
+         * bounds by sh_size sees the terminated FDE list. */
+        sh[ix_ehf_sec].sh_name = sn_off[ix_ehf_sec]; sh[ix_ehf_sec].sh_type = SHT_PROGBITS;
+        sh[ix_ehf_sec].sh_flags = SHF_ALLOC; sh[ix_ehf_sec].sh_addr = ehf_beg;
+        sh[ix_ehf_sec].sh_offset = ehf_beg; sh[ix_ehf_sec].sh_size = ehf_end - ehf_beg;
+        sh[ix_ehf_sec].sh_addralign = 8;
     }
     if (ngot) {
         sh[ix_got].sh_name = sn_off[ix_got]; sh[ix_got].sh_type = SHT_PROGBITS;
@@ -2221,11 +3030,20 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         sh[ix_data].sh_offset = data_beg; sh[ix_data].sh_size = data_end - data_beg;
         sh[ix_data].sh_addralign = 8;
     }
+    if (has_init_array) {
+        /* Real SHT_INIT_ARRAY output section: preserves the type so a reader
+         * (readelf, IMGACT's ovmx_find_section by name) sees exactly what it
+         * is -- the placed ctor-pointer range, not generic writable data. */
+        sh[ix_initarr].sh_name = sn_off[ix_initarr]; sh[ix_initarr].sh_type = SHT_INIT_ARRAY;
+        sh[ix_initarr].sh_flags = SHF_ALLOC | SHF_WRITE; sh[ix_initarr].sh_addr = initarr_beg;
+        sh[ix_initarr].sh_offset = initarr_beg; sh[ix_initarr].sh_size = initarr_end - initarr_beg;
+        sh[ix_initarr].sh_addralign = 8;
+    }
     if (has_tls && tdata_sz) {
         sh[ix_tdata].sh_name = sn_off[ix_tdata]; sh[ix_tdata].sh_type = SHT_PROGBITS;
         sh[ix_tdata].sh_flags = SHF_ALLOC | SHF_WRITE | SHF_TLS;
         sh[ix_tdata].sh_addr = tdata_va; sh[ix_tdata].sh_offset = tdata_va;
-        sh[ix_tdata].sh_size = tdata_sz; sh[ix_tdata].sh_addralign = tdata_al;
+        sh[ix_tdata].sh_size = tdata_sz; sh[ix_tdata].sh_addralign = tls_align;
     }
     sh[ix_sv].sh_name = sn_off[ix_sv]; sh[ix_sv].sh_type = SHT_PROGBITS;
     sh[ix_sv].sh_flags = SHF_ALLOC; sh[ix_sv].sh_addr = off_sv;
@@ -2251,16 +3069,30 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         sh[ix_plt].sh_flags = SHF_ALLOC | SHF_EXECINSTR; sh[ix_plt].sh_addr = plt_beg;
         sh[ix_plt].sh_offset = plt_beg; sh[ix_plt].sh_size = plt_end - plt_beg;
         sh[ix_plt].sh_addralign = 4;
+    }
+    if (nstrong) {
         sh[ix_imp].sh_name = sn_off[ix_imp]; sh[ix_imp].sh_type = SHT_PROGBITS;
         sh[ix_imp].sh_flags = SHF_ALLOC; sh[ix_imp].sh_addr = off_imp;
         sh[ix_imp].sh_offset = off_imp; sh[ix_imp].sh_size = imp_size;
         sh[ix_imp].sh_addralign = 8;
     }
+    if (nweak) {
+        sh[ix_wimp].sh_name = sn_off[ix_wimp]; sh[ix_wimp].sh_type = SHT_PROGBITS;
+        sh[ix_wimp].sh_flags = SHF_ALLOC; sh[ix_wimp].sh_addr = off_wimp;
+        sh[ix_wimp].sh_offset = off_wimp; sh[ix_wimp].sh_size = wimp_size;
+        sh[ix_wimp].sh_addralign = 8;
+    }
+    if (ix_ehf >= 0) {
+        sh[ix_ehf].sh_name = sn_off[ix_ehf]; sh[ix_ehf].sh_type = SHT_PROGBITS;
+        sh[ix_ehf].sh_flags = SHF_ALLOC; sh[ix_ehf].sh_addr = off_ehf;
+        sh[ix_ehf].sh_offset = off_ehf; sh[ix_ehf].sh_size = ehf_desc_size;
+        sh[ix_ehf].sh_addralign = 8;
+    }
     if (has_tls && tbss_sz) {
         sh[ix_tbss].sh_name = sn_off[ix_tbss]; sh[ix_tbss].sh_type = SHT_NOBITS;
         sh[ix_tbss].sh_flags = SHF_ALLOC | SHF_WRITE | SHF_TLS;
-        sh[ix_tbss].sh_addr = tdata_va + tbss_base; sh[ix_tbss].sh_offset = tdata_end;
-        sh[ix_tbss].sh_size = tbss_sz; sh[ix_tbss].sh_addralign = tbss_al;
+        sh[ix_tbss].sh_addr = tdata_va + tdata_sz; sh[ix_tbss].sh_offset = tdata_end;
+        sh[ix_tbss].sh_size = tbss_sz; sh[ix_tbss].sh_addralign = tls_align;
     }
     if (has_bss) {
         sh[ix_bss].sh_name = sn_off[ix_bss]; sh[ix_bss].sh_type = SHT_NOBITS;
@@ -2296,12 +3128,17 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         ngot, ntls, abs_applied, nimp, nimp==1?"":"s",
         gk == OVMX_GSMATCH_ALWAYS ? "ALWAYS" :
         gk == OVMX_GSMATCH_EQUAL  ? "EQUAL"  : "LEQUAL", gmaj, gmin);
-    if (nimp)
+    if (nstrong)
         fprintf(stderr, "%%LINK-I-IMPORT, %d cross-image import%s bound to --use "
                 "producer%s (%d PLT stub%s + import GOT; resolved at activation "
                 "via .vms$imp)\n",
-                nimp, nimp==1?"":"s", np==1?"":"s",
-                nimp, nimp==1?"":"s");
+                nstrong, nstrong==1?"":"s", np==1?"":"s",
+                nstrong, nstrong==1?"":"s");
+    if (nweak)
+        fprintf(stderr, "%%LINK-I-WEAKIMP, %d weak-by-name import%s "
+                "(resolved by NAME against the loaded producer set at activation "
+                "via .vms$wimp; absent -> 0, ELF weak-undef)\n",
+                nweak, nweak==1?"":"s");
     if (g_deferred)
         fprintf(stderr, "%%LINK-I-DEFEXT, %ld external reference%s left unresolved "
                 "(deferred imports — satisfied by the C RTL / a companion "
@@ -2332,16 +3169,1279 @@ static int file_is_archive(const char *path)
 #endif
 }
 
+/* ==========================================================================
+ * EVAX (Alpha/VMS) object -> VMS-standard image path (bead vms-cbe, slices 3+4)
+ * ==========================================================================
+ *
+ * The OpenVMS GCC port (alpha-dec-vms) emits native VMS "EVAX" objects, not
+ * ELF. src/vmslink/evax_read.{c,h} is the clean-room front end that parses one
+ * into a struct evax_object (psects with materialized content, symbols with a
+ * procedure descriptor value AND a code entry, and a flat relocation list).
+ * This block maps that into a laid-out image, resolves the symbols, APPLIES the
+ * relocations, and stamps the .vms$xfer transfer vector.
+ *
+ * WHY A DEDICATED PATH, NOT emit_shareable(): the ELF emitter above is
+ * arch-locked to aarch64/x86_64 — its GOT/TLSDESC/PLT synthesis, crt0 stub, and
+ * every reloc apply switch on the aarch64 / x86_64 R_* type numbers, and it
+ * reads Elf64_* structures directly out of the input buffer. Alpha has a different
+ * relocation and linkage model (the 2-quadword linkage pair, GP-relative calls,
+ * procedure descriptors). Feeding EVAX through the ELF machinery would mean
+ * synthesizing fake Elf64 structures and then still not having any Alpha reloc
+ * apply — i.e. it would fake structure without faking correctness, the exact
+ * anti-pattern the authenticity invariants forbid. So the EVAX object gets its
+ * own honest, self-contained emit. The ELF path is untouched (no regression).
+ * (Judgment call — flagged to the conductor for the co-design review.)
+ *
+ * FIRST-LIGHT SCOPE (what is fully applied vs conservative) — see each reloc.
+ */
+
+/* .vms$xfer transfer-vector section — the co-design contract with IMGACT.
+ * mirrors ovmx_image.h from #720; switch to the include once it lands on main. */
+#ifndef OVMX_XFER_SECTION
+#define OVMX_XFER_SECTION ".vms$xfer"
+#define OVMX_XFER_MAGIC   0x31465358u  /* 'XSF1' little-endian */
+#define OVMX_ACT_VMS_STD  1u
+struct ovmx_xfer_header {
+    uint32_t magic;     /* OVMX_XFER_MAGIC */
+    uint32_t flavor;    /* OVMX_ACT_VMS_STD = 1 */
+    uint32_t count;     /* >= 1 */
+    uint32_t reserved;  /* 0 */
+};
+#endif
+
+#ifndef EM_ALPHA
+#define EM_ALPHA 0x9026
+#endif
+
+/* One EVAX input object plus the image vaddr assigned to each of its psects. */
+struct evax_input {
+    struct evax_object obj;
+    const char *name;
+    uint64_t    sec_base[EVAX_MAX_SECTIONS];  /* placed image vaddr per psect */
+};
+
+static void putl32(uint8_t *p, uint32_t v)
+{
+    p[0] = v & 0xff; p[1] = (v >> 8) & 0xff; p[2] = (v >> 16) & 0xff; p[3] = (v >> 24) & 0xff;
+}
+static void putl64(uint8_t *p, uint64_t v) { putl32(p, (uint32_t)v); putl32(p + 4, (uint32_t)(v >> 32)); }
+
+/* Placement rank: $CODE$ | $DATA$ | $LINK$ | other-loaded | $BSS$ (nobits, last).
+ * Psects of the same name are merged across objects into one output section,
+ * exactly as the ELF path buckets sections. */
+static int evax_rank(const char *n)
+{
+    if (!strcmp(n, "$CODE$")) return 0;
+    if (!strcmp(n, "$DATA$")) return 1;
+    if (!strcmp(n, "$LINK$")) return 2;
+    if (!strcmp(n, "$BSS$"))  return 4;
+    return 3;
+}
+static int evax_is_nobits(const char *n) { return !strcmp(n, "$BSS$"); }
+
+/* A DWARF/DST DEBUG psect — NON-runtime debug information the GNU vms-alpha back
+ * end emits as allocatable psects (`debug_frame`, `debug_info`, `debug_abbrev`,
+ * `debug_line`, `debug_loclists`, `debug_str`, ...; the port cc1 emits these even
+ * under -g0 on this toolchain). They are NOT part of the loaded image and MUST be
+ * excluded from placement and relocation: a debug section carries the standard
+ * intra-DWARF 32-bit section-relative REFLONGs (a debug_* offset into another
+ * debug_* section), which are NOT load-bias fixups and cannot be represented by a
+ * .vms$rel 8-byte biased slot — placing them wrongly trips evax_apply_reloc's
+ * "REFLONG to a placed section" guard. Every real linker drops non-SHF_ALLOC
+ * debug sections from the runtime image; do the same here, keyed on the psect
+ * name (the vms-alpha DWARF psects share $LINK$'s flag bits, so name is the
+ * reliable discriminator). $DST / .vmsdebug (VMS DST) are matched defensively —
+ * DST normally arrives as EDBG *records* (skipped by evax_read) but a psect-form
+ * DST is debug too. (vms-a90f: whole-archiving a real alpha-dec-vms libgcc.a.) */
+static int evax_is_debug(const char *n)
+{
+    return strncmp(n, "debug_", 6) == 0 ||
+           strncmp(n, ".debug", 6) == 0 ||
+           strncmp(n, ".vmsdebug", 9) == 0 ||
+           strncmp(n, "$DST", 4) == 0;
+}
+
+/* Resolve a symbol NAME across all inputs to its defining symbol. Returns the
+ * defining input index + symbol, or -1 if undefined. */
+static int evax_find_sym(struct evax_input *in, int nin, const char *name,
+                         int *out_i, const struct evax_symbol **out_s)
+{
+    for (int i = 0; i < nin; i++)
+        for (int s = 0; s < in[i].obj.nsym; s++)
+            if (in[i].obj.sym[s].defined && strcmp(in[i].obj.sym[s].name, name) == 0) {
+                *out_i = i; *out_s = &in[i].obj.sym[s]; return 0;
+            }
+    return -1;
+}
+
+/* Resolved address of a symbol's VALUE (procedure descriptor for a procedure,
+ * plain value otherwise) — section base + section-relative value. */
+static uint64_t evax_sym_value_addr(struct evax_input *in, int di, const struct evax_symbol *s)
+{
+    return in[di].sec_base[s->psindx] + s->value;
+}
+/* Resolved address of a symbol's CODE ENTRY (procedure entry point). */
+static uint64_t evax_sym_code_addr(struct evax_input *in, int di, const struct evax_symbol *s)
+{
+    return in[di].sec_base[s->code_psindx] + s->code_value;
+}
+
+/* Ensure a psect's content buffer exists (zeroed to alloc) so a relocation
+ * store slot can be patched into it. */
+static uint8_t *evax_ensure_content(struct evax_section *sec)
+{
+    if (!sec->content && sec->alloc) {
+        sec->content = calloc(1, (size_t)sec->alloc);
+        if (!sec->content) die("oom allocating psect content for relocation");
+    }
+    return sec->content;
+}
+
+/* Bind an undefined EVAX reference to a symbol EXPORTED by a --use'd producer
+ * (its .vms$sv universal) as a cross-image import (bead vms-c179). LINK.EXE
+ * leaves the site's fill slot 0 and records a .vms$imp entry
+ * {producer, sv_index, patch_off = site}; IMGACT resolves the universal against
+ * the loaded producer at activation (ovmx_sv_resolve) and writes the run-time
+ * address into the slot — the SAME .vms$imp mechanism the ELF path uses. This is
+ * the genuine cross-image binding, NOT a fabricated local target (INV-6): the
+ * slot is filled by a real producer symbol-vector entry at activation.
+ *
+ * Cross-image relocation forms (clean-room: STC_LP_PSB SYMG semantics from
+ * binutils-2.43 bfd/vms-alpha.c _bfd_vms_slurp_etir + the actual assembled call
+ * sequence in the checked-in EVAX fixture):
+ *   LINKAGE (STC_LP_PSB against a SYMG): the site is the 2-quadword linkage pair;
+ *     the un-relaxed call `ldq $27,SYM($gp); jsr $26,($27)` loads quad[0] into
+ *     R27 (the procedure value) and jumps there, so quad[0] IS the slot IMGACT
+ *     fills with the imported routine's run-time value (the producer .vms$sv
+ *     PROCEDURE entry). patch_off = quad[0] site. quad[1] (the descriptor half a
+ *     LOCAL {code,PDSC} pair carries) has no meaning for an imported routine and
+ *     is left 0 — this call sequence never reads it. NOTE: the LOCAL path fills
+ *     quad[0]=code-entry, quad[1]=PDSC (evax_apply_reloc below, unchanged, vms-01d);
+ *     the cross-image path fills only quad[0] at activation. Both leave R27 = the
+ *     value the call sequence loads, so they stay consistent for THIS sequence.
+ *   REFQUAD / CODEADDR: a data pointer to the imported symbol; the 8-byte site IS
+ *     the slot IMGACT fills. patch_off = site.
+ * A cross-image REFLONG (a 32-bit slot) cannot hold a 64-bit run-time address, so
+ * it is rejected honestly rather than truncated. */
+static void evax_add_ximport(struct evax_input *in, int ii,
+                             struct evax_section *sec, const struct evax_reloc *r,
+                             struct producer *producers, int pidx, uint32_t svidx,
+                             struct import **imp, int *nimp, int *imp_cap,
+                             int *n_ximport)
+{
+    uint8_t *c = evax_ensure_content(sec);
+    if (!c) die("cross-image relocation into a zero-length psect");
+    uint64_t site_va = in[ii].sec_base[r->psect] + r->address;  /* image-relative */
+    switch (r->type) {
+    case EVAX_R_LINKAGE:
+        if (r->address + 16 > sec->alloc) die("cross-image LINKAGE site past psect end");
+        putl64(c + r->address, 0);        /* quad[0]: IMGACT fills = imported value  */
+        putl64(c + r->address + 8, 0);    /* quad[1]: unused by the call sequence     */
+        break;
+    case EVAX_R_REFQUAD:
+    case EVAX_R_CODEADDR:
+        if (r->address + 8 > sec->alloc) die("cross-image data-import site past psect end");
+        putl64(c + r->address, 0);        /* IMGACT fills = imported symbol address    */
+        break;
+    case EVAX_R_REFLONG:
+        die("cross-image REFLONG import unsupported (a 32-bit slot cannot hold a "
+            "64-bit run-time address) — the alpha-dec-vms port imports via "
+            "LINKAGE/REFQUAD");
+        break;
+    default:
+        die("unexpected relocation type for a cross-image import");
+    }
+    if (*nimp >= *imp_cap) {
+        *imp_cap = *imp_cap ? *imp_cap * 2 : 16;
+        *imp = realloc(*imp, (size_t)*imp_cap * sizeof **imp);
+        if (!*imp) die("oom recording EVAX cross-image imports");
+    }
+    struct import *e = &(*imp)[(*nimp)++];
+    memset(e, 0, sizeof *e);
+    snprintf(e->name, sizeof e->name, "%s", r->sym);
+    e->pidx    = pidx;
+    e->svidx   = svidx;
+    e->got_va  = site_va;   /* patch_off emitted into .vms$imp (vms_imp_write) */
+    e->is_data = (r->type != EVAX_R_LINKAGE);
+    e->is_weak = 0;
+    (*n_ximport)++;
+    fprintf(stderr, "%%LINK-I-IMPORT, EVAX cross-image import '%s' bound to --use "
+            "producer %s [sv#%u], IMGACT-filled at image-relative 0x%llx (%s)\n",
+            r->sym, producers[pidx].name, svidx, (unsigned long long)site_va,
+            r->type == EVAX_R_LINKAGE ? "LINKAGE quad[0]" : "data pointer");
+}
+
+/* Fold an undefined reference that a --use'd producer exports as a GLOBALVALUE
+ * (kind OVMX_SV_GLOBALVALUE). A VMS globalvalue is an ABSOLUTE LINK-TIME CONSTANT
+ * — its ADDRESS is the value — so VMS resolves it at link, writing the constant
+ * straight into the reference site exactly as an in-object absolute symbol is
+ * written: no psect base, no load bias, no .vms$imp import cell. This mirrors the
+ * ELF path (collect_globalvalues/gval_find, link.c ~1930) for the EVAX/Alpha
+ * cross-image path — the alpha-dec-vms crt0's `&C$_EXIT1` REFQUAD is this case.
+ * A globalvalue is a data value, never a call/entry target, so a LINKAGE/CODEADDR
+ * reloc against one errors honestly rather than being folded into a call. (vms-069) */
+static void evax_fold_globalvalue(struct evax_input *in, int ii,
+                                  struct evax_section *sec,
+                                  const struct evax_reloc *r, uint64_t value)
+{
+    uint8_t *c = evax_ensure_content(sec);
+    if (!c) die("globalvalue fold into a zero-length psect");
+    uint64_t site_va = in[ii].sec_base[r->psect] + r->address;   /* image-relative */
+    uint64_t folded  = value + (uint64_t)r->addend;
+    switch (r->type) {
+    case EVAX_R_REFQUAD:
+        if (r->address + 8 > sec->alloc) die("globalvalue REFQUAD site past psect end");
+        putl64(c + r->address, folded);        /* absolute constant, folded at link */
+        break;
+    case EVAX_R_REFLONG:
+        if (r->address + 4 > sec->alloc) die("globalvalue REFLONG site past psect end");
+        putl32(c + r->address, (uint32_t)folded);
+        break;
+    case EVAX_R_LINKAGE:
+    case EVAX_R_CODEADDR:
+        fprintf(stderr, "%%LINK-F-GVALCALL, EVAX: %s reloc targets globalvalue "
+                "'%s' — a globalvalue is an absolute data constant, not a "
+                "call/entry target\n",
+                r->type == EVAX_R_LINKAGE ? "LINKAGE" : "CODEADDR", r->sym);
+        exit(1);
+    default:
+        die("unexpected relocation type folding a globalvalue");
+    }
+    fprintf(stderr, "%%LINK-I-GVALFOLD, EVAX globalvalue '%s' folded to absolute "
+            "0x%llx at image-relative 0x%llx (link-time constant, no import cell)\n",
+            r->sym, (unsigned long long)folded, (unsigned long long)site_va);
+}
+
+/* Append one image-relative slot offset to the .vms$rel fixup table (grown on
+ * demand). Each recorded slot holds an 8-byte image-relative address that IMGACT
+ * re-biases by the load base at activation (apply_vms_rel, imgact.c). */
+static void evax_rel_add(uint64_t **arr, int *n, int *cap, uint64_t off)
+{
+    if (*n == *cap) {
+        int nc = *cap ? *cap * 2 : 16;
+        uint64_t *p = realloc(*arr, (size_t)nc * sizeof *p);
+        if (!p) die("oom growing .vms$rel fixup table");
+        *arr = p; *cap = nc;
+    }
+    (*arr)[(*n)++] = off;
+}
+
+/* Linker-defined symbols the EVAX object model has no other way to resolve
+ * (vms-838a). On the ELF path these are handled by build_symhash's weak-undef
+ * pass (link.c ~1497) — the section-boundary symbols the crt0 uses to iterate
+ * static constructors/destructors, plus _DYNAMIC — but the EVAX object model
+ * carries no ELF weak-undef bind on a reference, so LINK.EXE synthesizes them
+ * here from the already-placed output sections. __init_array_start/end and the
+ * fini/preinit pairs point at the real bounds of the corresponding placed psect
+ * (.init_array/.fini_array/.preinit_array), so a crt0 that brackets its ctors
+ * with these iterates the actual array; when the image has no such psect the
+ * range is empty (start == end == 0), the correct value (matching ELF weak-undef
+ * -> 0: the crt0 loop runs zero iterations). _DYNAMIC is 0 (these EVAX images
+ * carry no PT_DYNAMIC). `placed` marks a value that is an image-relative address
+ * needing a .vms$rel load-bias fixup (a real section base), vs an absolute 0. */
+struct evax_ldsym { const char *name; uint64_t value; int placed; };
+
+/* Match `name` against the synthesized linker-defined set; on a hit fill *val +
+ * *placed and return 1. Returns 0 for any other name (the caller then falls to
+ * the honest producer-import / undef path). */
+static int evax_ldsym_find(const struct evax_ldsym *ld, int nld, const char *name,
+                           uint64_t *val, int *placed)
+{
+    for (int i = 0; i < nld; i++)
+        if (strcmp(ld[i].name, name) == 0) {
+            *val = ld[i].value; *placed = ld[i].placed; return 1;
+        }
+    return 0;
+}
+
+/* Apply one relocation into its psect's content buffer. `site_va` is only used
+ * for diagnostics; the write lands in the content buffer at r->address. An
+ * undefined reference that a --use'd producer EXPORTS binds as a cross-image
+ * import (evax_add_ximport); one it exports as a GLOBALVALUE is folded to its
+ * absolute constant at the reference site (evax_fold_globalvalue); a
+ * linker-defined section-boundary/_DYNAMIC symbol is synthesized
+ * (evax_ldsym_find); one no producer defines stays an honest %LINK-F-UNDEF
+ * (INV-6).
+ *
+ * A slot LINK writes as an UNBIASED image-relative pointer to a PLACED section
+ * (a REFQUAD/CODEADDR to a section-relative or local-defined target, or either
+ * quad of a locally-resolved LINKAGE pair) is recorded in the .vms$rel table via
+ * rel_off/nrel/rel_cap so IMGACT adds the load bias at activation. Absolute
+ * targets are NOT recorded: an $ABS$/globalvalue symbol resolves through an
+ * unplaced section (sec_base == 0), so its S_placed/codeS_placed flag is 0.
+ * Cross-image imports and folded globalvalues return early above and never reach
+ * the recording switch — IMGACT fills the former and the latter is a link-time
+ * constant, so biasing either would be wrong (mirrors the ELF emit_shareable
+ * .vms$rel policy: GOT/ABS64 image-relative slots in, globalvalues out). */
+static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
+                             const struct evax_reloc *r, int allow_undef,
+                             struct producer *producers, int np,
+                             struct import **imp, int *nimp, int *imp_cap,
+                             int *n_ximport,
+                             long *deferred, int *n_linkage_applied,
+                             int *n_callsite_conservative,
+                             uint64_t **rel_off, int *nrel, int *rel_cap,
+                             const struct evax_ldsym *ldsyms, int n_ldsyms)
+{
+    struct evax_object *o = &in[ii].obj;
+    if (r->psect < 0 || r->psect >= o->nsec) die("relocation names a bad psect index");
+    struct evax_section *sec = &o->sec[r->psect];
+
+    /* Call-site relaxation relocs (STC_{NOP,BSR,LDA,BOH}_GBL): FIRST-LIGHT
+     * CONSERVATIVE. The object already assembled the un-relaxed indirect call
+     * (ldq $27,proc($gp) / jsr) into the psect content; these relocs only OFFER
+     * a faster direct form. Leaving the instruction word untouched keeps the
+     * correct indirect path through the linkage pair — an honest, working first
+     * light, NOT a fake. Instruction relaxation is a later slice. */
+    if (r->type == EVAX_R_NOP || r->type == EVAX_R_BSR ||
+        r->type == EVAX_R_LDA || r->type == EVAX_R_BOH) {
+        (*n_callsite_conservative)++;
+        return;
+    }
+
+    /* Resolve the target address. Section-relative target (to_section >= 0) or a
+     * symbol target (sym set). */
+    uint64_t S = 0, code_S = 0;
+    int have_code = 0;
+    /* Is the resolved target an IMAGE-RELATIVE address in a PLACED section (so a
+     * slot holding it must be load-biased), or an absolute value (an $ABS$/
+     * globalvalue symbol, whose defining section is never placed -> sec_base 0)?
+     * Placement assigns every loaded psect a base >= the ELF+phdr header end
+     * (nonzero); an unplaced section keeps its calloc-zeroed sec_base == 0. */
+    int S_placed = 0, codeS_placed = 0;
+    if (r->to_section >= 0) {
+        if (r->to_section >= o->nsec) die("relocation names a bad target section");
+        S = in[ii].sec_base[r->to_section];   /* this object's own psect base */
+        S_placed = (S != 0);
+    } else {
+        int di; const struct evax_symbol *ds;
+        if (evax_find_sym(in, nin, r->sym, &di, &ds) < 0) {
+            /* Not defined by any input object — is it EXPORTED by a --use'd
+             * producer? If so, bind it as a cross-image import (real .vms$imp
+             * mechanism, IMGACT-filled at activation). Only if NO producer
+             * exports it do we fall through to the honest undef path (INV-6). */
+            int pidx; uint32_t svidx;
+            if (np > 0 && find_universal(producers, np, r->sym, &pidx, &svidx)) {
+                /* Determine the KIND of the producer's export. A GLOBALVALUE is
+                 * an absolute link-time constant — fold it into the site (no
+                 * import cell); only a PROCEDURE/DATA export binds as a
+                 * cross-image import. (vms-069) */
+                const struct ovmx_sv_entry *pe =
+                    &ovmx_sv_entries(producers[pidx].sv)[svidx];
+                if (pe->kind == OVMX_SV_GLOBALVALUE) {
+                    evax_fold_globalvalue(in, ii, sec, r, pe->value);
+                    return;
+                }
+                evax_add_ximport(in, ii, sec, r, producers, pidx, svidx,
+                                 imp, nimp, imp_cap, n_ximport);
+                return;
+            }
+            /* Linker-defined section-boundary / _DYNAMIC symbol (vms-838a): not
+             * an undef at all — synthesize its value from the placed sections and
+             * fall through to the normal store (so a crt0 iterating
+             * __init_array_start..__init_array_end sees the real init-array
+             * bounds; an empty range when the image has none). Never deferred. */
+            {
+                uint64_t lv; int lp;
+                if (evax_ldsym_find(ldsyms, n_ldsyms, r->sym, &lv, &lp)) {
+                    S = lv; S_placed = lp; have_code = 0; code_S = 0;
+                    goto store_target;
+                }
+            }
+            if (allow_undef) {
+                (*deferred)++;
+                fprintf(stderr, "%%LINK-W-UNDEF, EVAX reference to undefined symbol "
+                        "'%s' left 0 (--allow-undefined)\n", r->sym);
+                return;   /* leave the store slot 0 (ELF weak-undef semantics) */
+            }
+            fprintf(stderr, "%%LINK-F-UNDEF, EVAX: undefined symbol '%s' referenced "
+                    "by %s\n", r->sym, in[ii].name);
+            exit(1);
+        }
+        S = evax_sym_value_addr(in, di, ds);   /* procedure descriptor / value */
+        code_S = evax_sym_code_addr(in, di, ds);
+        have_code = 1;
+        S_placed     = (in[di].sec_base[ds->psindx] != 0);
+        codeS_placed = (in[di].sec_base[ds->code_psindx] != 0);
+    }
+store_target:;
+
+    /* Image-relative offset of the store slot (the site), for the .vms$rel table. */
+    uint64_t rel_site = in[ii].sec_base[r->psect] + r->address;
+
+    uint8_t *c = evax_ensure_content(sec);
+    if (!c) die("relocation into a zero-length psect");
+
+    switch (r->type) {
+    case EVAX_R_REFLONG:
+        if (r->address + 4 > sec->alloc) die("REFLONG site past psect end");
+        putl32(c + r->address, (uint32_t)(S + r->addend));
+        /* A REFLONG is a 32-bit slot. If it holds an image-relative address into
+         * a placed section it would need a load-bias fixup — but IMGACT's
+         * .vms$rel loader adds a 64-bit bias to an 8-byte slot, which a 4-byte
+         * slot cannot represent. The alpha-dec-vms GCC port emits no such REFLONG
+         * (every runtime pointer/address is a REFQUAD/CODEADDR/LINKAGE quad; the
+         * only REFLONGs are $ABS$/globalvalue folds, S_placed == 0). Fail
+         * honestly rather than emit an unbiasable fixup or silently mis-load. */
+        if (S_placed)
+            die("EVAX REFLONG to a placed section needs a load-bias fixup, but a "
+                "32-bit slot cannot hold a 64-bit-biased address (the port must "
+                "emit a REFQUAD, or this is out of .vms$rel scope)");
+        break;
+    case EVAX_R_REFQUAD:
+        if (r->address + 8 > sec->alloc) die("REFQUAD site past psect end");
+        putl64(c + r->address, S + r->addend);
+        if (S_placed) evax_rel_add(rel_off, nrel, rel_cap, rel_site);
+        break;
+    case EVAX_R_CODEADDR:
+        /* Store the target's CODE ENTRY address (a procedure's entry point). */
+        if (r->address + 8 > sec->alloc) die("CODEADDR site past psect end");
+        putl64(c + r->address, (have_code ? code_S : S) + r->addend);
+        if (have_code ? codeS_placed : S_placed)
+            evax_rel_add(rel_off, nrel, rel_cap, rel_site);
+        break;
+    case EVAX_R_LINKAGE: {
+        /* Alpha linkage pair: two quadwords at the site. Per binutils-2.43
+         * bfd/vms-alpha.c _bfd_vms_slurp_etir STC_LP_PSB (authoritative clean-
+         * room reference): quad[0] = resolved CODE ENTRY, quad[1] = resolved
+         * PROCEDURE DESCRIPTOR (the symbol value). A locally-resolvable target
+         * (this fixture) is filled directly. An undefined/cross-image target is
+         * the DECC$SHR case that needs IMGACT's symbol-vector + producer GP — a
+         * later slice; here it errors honestly (handled above via the undef
+         * path) rather than emitting a wrong pair. */
+        if (r->address + 16 > sec->alloc) die("LINKAGE site past psect end");
+        if (!have_code) die("LINKAGE target is not a procedure symbol");
+        putl64(c + r->address,     code_S);   /* quad[0] = code entry           */
+        putl64(c + r->address + 8, S);        /* quad[1] = procedure descriptor */
+        /* Both quads hold image-relative addresses of a locally-resolved
+         * procedure -> record both for load-bias fixup. (A cross-image LINKAGE
+         * target never reaches here: it binds as a .vms$imp import above.) */
+        if (codeS_placed) evax_rel_add(rel_off, nrel, rel_cap, rel_site);
+        if (S_placed)     evax_rel_add(rel_off, nrel, rel_cap, rel_site + 8);
+        (*n_linkage_applied)++;
+        break;
+    }
+    default:
+        die("unhandled EVAX relocation type");
+    }
+}
+
+/* Link a set of EVAX objects into a VMS-standard ELF ET_DYN image. Undefined
+ * references EXPORTED by a --use'd producer bind as cross-image imports emitted
+ * in a .vms$imp table IMGACT resolves at activation (bead vms-c179).
+ *
+ * ONE emitter, two products (bead vms-c65). is_shareable == 0 -> a leaf/main
+ * EXECUTABLE: takes --transfer, stamps .vms$xfer, and is PT_INTERP'd
+ * (PT_PHDR + PT_INTERP=IMGACT.EXE) so the kernel activates it. is_shareable == 1
+ * -> a SHAREABLE (a real Alpha DECC$SHR and any Alpha .vms$sv producer): takes
+ * --symbol-vector/--gsmatch, stamps .vms$sv (the declared universals, each bound
+ * to the defining EVAX symbol by vector index), has NO transfer address and NO
+ * PT_INTERP -- exactly like the ELF shareable emit_shareable produces (a single
+ * PT_LOAD ET_DYN that a --use consumer / IMGACT reads by section vaddr). The
+ * .vms$sv is byte-compatible with the ELF path's (same ovmx_sv_header + entry
+ * layout + GSMATCH): an Alpha and an x86_64 shareable differ only in e_machine +
+ * .text arch, never in the arch-neutral symbol vector. Both products share the
+ * psect layout, the reloc apply, and the .vms$imp / .vms$rel tables. */
+/* EGSY__V_WEAK — the EGSD SYM `flags` bit that marks a WEAK global (evax_read.c;
+ * `struct evax_symbol.flags` carries the raw EGSY__V_* bits). A defined symbol is
+ * WEAK iff this bit is set, else STRONG. Value matches evax_read.c's definition
+ * exactly (that TU is #included later in this single-file build), so the two are
+ * a benign identical redefinition. (vms-f1a) */
+#define EGSY__V_WEAK 0x0001
+
+/* EVAX STRONG-vs-STRONG multiple-definition pre-pass (vms-f1a) — the Alpha/EVAX
+ * mirror of the ELF sym_insert guard (vms-d8d, #777).
+ *
+ * THE GAP: evax_find_sym (above) is a linear FIRST-MATCH over every input's
+ * defined symbols with NO duplicate check, so two objects that both STRONGLY
+ * define the same universal/global bind SILENTLY to whichever appears first by
+ * link-input order — the exact latent correctness bug (two addresses for one
+ * name in one link, discoverable only by symptom) that #777 closed on the ELF
+ * path. This ONE-TIME pass over all inputs (run once at emit time, NOT a
+ * per-lookup scan inside the hot evax_find_sym — that would be O(refs*symbols),
+ * pathological over a 1345-member whole-archive) hard-errors %LINK-F-MULDEF the
+ * instant two DIFFERENT inputs both define a name and BOTH defs are STRONG.
+ *
+ * Semantics mirror sym_insert exactly: WEAK-vs-STRONG / WEAK-vs-WEAK / a single
+ * def are UNCHANGED (strong/first still wins silently — correct VMS/ELF symbol
+ * resolution, and load-bearing for musl-alpha's weak_alias overridable defs). A
+ * name defined multiple times in the SAME input (same index) is not a
+ * cross-object dup and is skipped.
+ *
+ * WHOLE-ARCHIVE-SAFE by construction (verified on the genuine alpha DECC$SHR,
+ * vms-864 joint-e2e): a well-formed library carries NO strong-vs-strong dups —
+ * every overridable def (malloc, ...) is WEAK (musl weak_alias emits a weak EVAX
+ * symbol), and the one known alpha collision, decc$_malloc64 (musl-alpha vs the
+ * ovmx_decc_crtl.c stub), is `#ifndef __VMS__`-excluded on alpha (the alpha cc1
+ * defines __VMS__). So the genuine whole-archive build must see ZERO spurious
+ * MULDEF; a spurious hit means a genuinely-weak symbol was misread as strong,
+ * to be fixed at the read — never worked around by loosening this check.
+ *
+ * Cost: keyed on name via djb2 open addressing -> ~O(total symbols). */
+/* Are two input labels members of the SAME archive? Input names are
+ * "path/to/archive.a(member.o)" for whole-archive members (vms-004) and a plain
+ * path for an explicitly-linked object. Two names are same-archive iff both
+ * carry a '(' (i.e. both are members) and share the identical archive-path
+ * prefix before it. An explicit object (no '(') is never same-archive with
+ * anything, so a genuine explicit-vs-explicit or explicit-vs-library strong
+ * conflict is never exempted. (vms-f1a) */
+static int evax_same_archive_member(const char *a, const char *b)
+{
+    if (!a || !b) return 0;
+    const char *pa = strchr(a, '(');
+    const char *pb = strchr(b, '(');
+    if (!pa || !pb) return 0;                     /* at least one explicit object */
+    size_t la = (size_t)(pa - a), lb = (size_t)(pb - b);
+    return la == lb && memcmp(a, b, la) == 0;     /* identical archive prefix     */
+}
+
+static void evax_check_muldef(struct evax_input *in, int nin)
+{
+    size_t total = 0;
+    for (int i = 0; i < nin; i++) total += (size_t)in[i].obj.nsym;
+    size_t cap = 64;
+    while (cap < total * 2 + 16) cap <<= 1;
+    struct muldef_ent { const char *name; int oi; } *tab =
+        calloc(cap, sizeof *tab);
+    if (!tab) die("oom building EVAX MULDEF pre-pass table");
+    size_t mask = cap - 1;
+    for (int i = 0; i < nin; i++)
+        for (int s = 0; s < in[i].obj.nsym; s++) {
+            const struct evax_symbol *y = &in[i].obj.sym[s];
+            if (!y->defined) continue;               /* only definitions count      */
+            if (y->flags & EGSY__V_WEAK) continue;   /* WEAK defs never collide      */
+            const char *nm = y->name;
+            if (!nm[0]) continue;
+            size_t h = djb2(nm) & mask;
+            for (;;) {
+                if (!tab[h].name) { tab[h].name = nm; tab[h].oi = i; break; }
+                if (strcmp(tab[h].name, nm) == 0) {
+                    if (tab[h].oi != i) {            /* cross-object STRONG dup      */
+                        const char *first_obj  = in[tab[h].oi].name;
+                        const char *second_obj = in[i].name;
+                        if (evax_same_archive_member(first_obj, second_obj)) {
+                            /* Same-archive library dup — NOT a genuine conflict.
+                             * VMS library search resolves by first-MODULE-wins
+                             * and never errors on a second definition; OVMX
+                             * whole-archives as policy but the intent is
+                             * identical (first-wins, already the shipped
+                             * behavior). BENIGN case that made this real: on
+                             * alpha `long double == double` (IEEE T-float), so
+                             * the cc1 decorates musl's weak_alias'd *l math
+                             * variants (cacoshl, ...) to their double
+                             * counterpart's MATH$*_T symbol, both STRONG — a
+                             * whole class of same-archive dups absent on
+                             * ld!=double targets (why the ELF gate, #777, was
+                             * clean). The GENUINE vms-d8d bug is still caught:
+                             * two EXPLICIT objects, or two DIFFERENT archives,
+                             * strong-defining one universal fail this test and
+                             * fall through to the error. (vms-f1a) */
+                            break;
+                        }
+                        fprintf(stderr,
+                                "%%LINK-F-MULDEF, multiple definition of "
+                                "universal/global symbol '%s': first defined in "
+                                "%s, redefined in %s\n",
+                                nm,
+                                first_obj  ? first_obj  : "<unknown>",
+                                second_obj ? second_obj : "<unknown>");
+                        exit(1);
+                    }
+                    break;                          /* same input: not a dup        */
+                }
+                h = (h + 1) & mask;
+            }
+        }
+    free(tab);
+}
+
+/* True if NAME ends in "..<lowercase>+" — an EVAX companion label (the "..en"
+ * procedure entry / "..lk" linkage cells the compiler emits alongside the bare
+ * callable descriptor). mk_decc_shr's nm|awk enumeration dropped these
+ * (`name !~ /\.\.[a-z]+$/`); the dump below mirrors that. (vms-614) */
+static int evax_is_companion_label(const char *n)
+{
+    const char *dd = NULL, *p = n;
+    while ((p = strstr(p, "..")) != NULL) { dd = p; p += 2; }
+    if (!dd) return 0;
+    const char *tail = dd + 2;
+    if (!*tail) return 0;
+    for (const char *c = tail; *c; c++)
+        if (*c < 'a' || *c > 'z') return 0;
+    return 1;
+}
+
+/* vms-614: dump the DEFINED decc$ universals as seen by evax_read (the LINKER's
+ * own view), one `NAME=PROCEDURE|DATA` per line, for mk_decc_shr.sh to build the
+ * DECC$SHR symbol vector from. This replaces mk_decc_shr's `nm --defined-only`
+ * pipeline, whose BLIND SPOT is weak-alias EQUATES: musl's public `free` =
+ * weak_alias(__libc_free, free) is emitted by the alpha cc1 as an equate that
+ * nm does not report as a definition, so decc$free (and every alias-equate
+ * decc$ symbol) was silently dropped from the vector even though evax_read
+ * resolves it fine (a real program calling free() then hit %LINK-F-UNDEF). By
+ * enumerating from the same reader LINK.EXE links with, the whole class exports
+ * uniformly. Classify by is_proc, falling back to a real code entry (an aliased
+ * function's equate carries the code descriptor even if the EGSY NORM bit is not
+ * set on the alias). Callers dedup (sort -u); companion labels are dropped. */
+static void evax_dump_universals(struct evax_input *in, int nin)
+{
+    for (int i = 0; i < nin; i++)
+        for (int s = 0; s < in[i].obj.nsym; s++) {
+            const struct evax_symbol *y = &in[i].obj.sym[s];
+            if (!y->defined) continue;
+            const char *n = y->name;
+            if (strncmp(n, "decc$", 5) != 0) continue;
+            if (evax_is_companion_label(n)) continue;
+            int is_proc = y->is_proc || y->code_value != 0 || y->code_psindx != 0;
+            printf("%s=%s\n", n, is_proc ? "PROCEDURE" : "DATA");
+        }
+}
+
+static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
+                             const char *transfer,
+                             struct univ *uv, int nuniv,
+                             uint32_t gk, uint32_t gmaj, uint32_t gmin,
+                             int allow_undef,
+                             struct producer *producers, int np, const char *out)
+{
+    if (!is_shareable && !transfer)
+        die("the EVAX/Alpha image needs --transfer SYMBOL (the main transfer "
+            "address; crt0 __main for a GCC-port image)");
+    if (is_shareable && nuniv == 0)
+        die("the EVAX/Alpha shareable needs --symbol-vector (declared universals)");
+
+    /* vms-f1a: reject a STRONG-vs-STRONG cross-object multiple definition of a
+     * universal/global BEFORE layout/resolution (mirror of the ELF sym_insert
+     * guard, #777). Runs once over all inputs; whole-archive-safe (see the
+     * function comment). Fires ahead of any UNDEF/reloc work, so the diagnostic
+     * is the MULDEF, not a downstream symptom. */
+    evax_check_muldef(in, nin);
+
+    /* ---- Layout: merge same-named psects across objects, identity-mapped
+     * (file offset == image vaddr) so a section's bytes sit at their vaddr. --- */
+    /* GAP1 (vms-e0c): make the Alpha .EXE kernel-activatable — emit PT_PHDR +
+     * PT_INTERP=IMGACT.EXE + PT_LOAD (mirroring the ELF exec path), so the
+     * kernel invokes IMGACT (which fills .vms$imp cross-image cells and re-biases
+     * .vms$rel). Without PT_INTERP the kernel maps the image but never runs
+     * IMGACT, leaving the import cells zero -> SIGILL on first cross-image call.
+     * The interp path string lives in the header area, ahead of the psects. */
+    /* A shareable matches the ELF emit_shareable header: a single PT_LOAD, no
+     * PT_INTERP (it is read as a producer by IMGACT / a --use consumer, never
+     * activated through the kernel interp). An executable keeps PT_PHDR +
+     * PT_INTERP=IMGACT.EXE + PT_LOAD (vms-e0c). (vms-c65) */
+    const int      nph        = is_shareable ? 1 : 3;
+    const uint64_t off_ph     = sizeof(Elf64_Ehdr);
+    const uint64_t phdrs_end  = ALIGN_UP(off_ph + (uint64_t)nph * sizeof(Elf64_Phdr), 16);
+    const uint64_t off_interp = is_shareable ? 0 : phdrs_end;
+    const uint64_t interp_sz  = is_shareable ? 0 : (uint64_t)strlen(IMGACT_INTERP) + 1;
+    uint64_t hdr_end = is_shareable ? phdrs_end : ALIGN_UP(off_interp + interp_sz, 16);
+    uint64_t cur = hdr_end;
+
+    /* Output sections we emit headers for: one per distinct (rank-ordered) psect
+     * name actually present, plus .vms$xfer/.vms$imp/.vms$rel. Track each output
+     * section's range. Sized to an upper bound = total input sections + 4 (a
+     * whole-archived libc.a merges hundreds of members whose distinct psect names
+     * can exceed any fixed cap — vms-7b96, the 68-slot osec overflowed at 1345
+     * members), so it is malloc'd, not a fixed stack array. */
+    struct outsec { char name[EVAX_NAME_MAX]; uint64_t addr, size; int nobits; };
+    int osec_cap = 4;
+    for (int i = 0; i < nin; i++) osec_cap += in[i].obj.nsec;
+    struct outsec *osec = calloc((size_t)osec_cap, sizeof *osec);
+    if (!osec) die("oom allocating EVAX output-section table");
+    int nos = 0;
+
+    for (int rank = 0; rank <= 4; rank++) {
+        /* Gather the distinct psect names at this rank in first-seen order. */
+        for (int i = 0; i < nin; i++)
+            for (int s = 0; s < in[i].obj.nsec; s++) {
+                struct evax_section *sec = &in[i].obj.sec[s];
+                if (evax_rank(sec->name) != rank || sec->alloc == 0) continue;
+                if (evax_is_debug(sec->name)) continue;   /* non-runtime debug psect */
+                /* find/create the output section for this name */
+                int oi = -1;
+                for (int k = 0; k < nos; k++) if (!strcmp(osec[k].name, sec->name)) { oi = k; break; }
+                if (oi < 0) {
+                    oi = nos++;
+                    snprintf(osec[oi].name, sizeof osec[oi].name, "%s", sec->name);
+                    osec[oi].addr = 0; osec[oi].size = 0;
+                    osec[oi].nobits = evax_is_nobits(sec->name);
+                }
+            }
+        /* Place every contribution to each output section of this rank. */
+        for (int k = 0; k < nos; k++) {
+            if (evax_rank(osec[k].name) != rank) continue;
+            uint64_t beg = 0; int begset = 0;
+            for (int i = 0; i < nin; i++)
+                for (int s = 0; s < in[i].obj.nsec; s++) {
+                    struct evax_section *sec = &in[i].obj.sec[s];
+                    if (strcmp(sec->name, osec[k].name) != 0 || sec->alloc == 0) continue;
+                    if (evax_is_debug(sec->name)) continue;   /* non-runtime debug psect */
+                    uint64_t al = (uint64_t)1 << sec->align;
+                    if (al < 1) al = 1;
+                    cur = ALIGN_UP(cur, al);
+                    if (!begset) { beg = cur; begset = 1; }
+                    in[i].sec_base[s] = cur;
+                    cur += sec->alloc;
+                }
+            if (begset) { osec[k].addr = beg; osec[k].size = cur - beg; }
+        }
+    }
+
+    /* ---- Synthesize the linker-defined section-boundary / _DYNAMIC symbols
+     * (vms-838a) now that every psect is placed. Point each init/fini/preinit
+     * boundary at the real bounds of its placed array psect; an absent psect
+     * yields an empty range (start == end == 0), the correct value for an image
+     * with no such constructors. _DYNAMIC is 0 (no PT_DYNAMIC in these images).
+     * `placed` (a real image-relative base) drives the .vms$rel load-bias fixup
+     * in the store below. This runs only on the EVAX path — output-neutral for
+     * the ELF shareable/exec emitters, which resolve these via build_symhash's
+     * weak-undef pass instead. ---- */
+    /* The GNU alpha-vms assembler names the psect produced from `.section
+     * .init_array` as `init_array` (the leading dot is stripped in the EVAX
+     * EGSD), so match both the dotted (ELF-style) and undotted (EVAX) forms. */
+    struct { const char *sec; const char *alt; uint64_t s, e; int placed; }
+        ld_arr[] = {
+            {".init_array",    "init_array",    0,0,0},
+            {".fini_array",    "fini_array",    0,0,0},
+            {".preinit_array", "preinit_array", 0,0,0},
+        };
+    for (int a = 0; a < 3; a++)
+        for (int k = 0; k < nos; k++)
+            if ((!strcmp(osec[k].name, ld_arr[a].sec) ||
+                 !strcmp(osec[k].name, ld_arr[a].alt)) && osec[k].size) {
+                ld_arr[a].s = osec[k].addr;
+                ld_arr[a].e = osec[k].addr + osec[k].size;
+                ld_arr[a].placed = 1;
+                break;
+            }
+    const struct evax_ldsym ldsyms[] = {
+        { "__init_array_start",    ld_arr[0].s, ld_arr[0].placed },
+        { "__init_array_end",      ld_arr[0].e, ld_arr[0].placed },
+        { "__fini_array_start",    ld_arr[1].s, ld_arr[1].placed },
+        { "__fini_array_end",      ld_arr[1].e, ld_arr[1].placed },
+        { "__preinit_array_start", ld_arr[2].s, ld_arr[2].placed },
+        { "__preinit_array_end",   ld_arr[2].e, ld_arr[2].placed },
+        { "_DYNAMIC",              0,           0                 },
+    };
+    const int n_ldsyms = (int)(sizeof ldsyms / sizeof ldsyms[0]);
+
+    /* .vms$xfer (executable) OR .vms$sv (shareable). Both sit right after the
+     * psects, inside the loaded range, so IMGACT / a --use consumer reads them by
+     * section vaddr. Resolution happens HERE (after placement) so every psect
+     * base is final -- exactly when the transfer address is resolved. */
+    uint64_t transfer_va = 0;
+    uint32_t xfer_count = 1;
+    uint64_t xfer_addr = 0, xfer_size = 0;
+    uint64_t off_sv = 0, sv_size = 0, sv_names_o = 0;
+    uint32_t sv_names_size = 0;
+
+    if (!is_shareable) {
+        /* .vms$xfer: 16-byte header + count image-relative u64 transfer
+         * addresses. First light: count == 1 (no LIB$INITIALIZE handlers); the
+         * single entry is the --transfer symbol's descriptor address. */
+        int di; const struct evax_symbol *ds;
+        if (evax_find_sym(in, nin, transfer, &di, &ds) < 0)
+            die("--transfer symbol is not defined by any input object");
+        transfer_va = evax_sym_value_addr(in, di, ds);
+
+        xfer_size = sizeof(struct ovmx_xfer_header) + (uint64_t)xfer_count * 8;
+        cur = ALIGN_UP(cur, 8);
+        xfer_addr = cur;
+        cur += xfer_size;
+        int oi = nos++;
+        snprintf(osec[oi].name, sizeof osec[oi].name, "%s", OVMX_XFER_SECTION);
+        osec[oi].addr = xfer_addr; osec[oi].size = xfer_size; osec[oi].nobits = 0;
+    } else {
+        /* .vms$sv: resolve each declared universal to its DEFINING EVAX symbol's
+         * image-relative address (PROCEDURE -> code entry point, DATA -> value
+         * address), a GLOBALVALUE to its preset absolute constant, RETIRED to 0.
+         * A universal that names no defining internal symbol is a hard %LINK-F
+         * error -- never a bogus vector entry (INV-6). The value stays
+         * image-relative; ovmx_sv_resolve adds the producer load bias when a
+         * consumer imports it, so the sv entries need no .vms$rel fixup of their
+         * own (identical to the ELF emit_shareable policy). (vms-c65) */
+        for (int i = 0; i < nuniv; i++) {
+            if (uv[i].kind == OVMX_SV_RETIRED)     { uv[i].value = 0; continue; }
+            if (uv[i].kind == OVMX_SV_GLOBALVALUE) { continue; /* preset const */ }
+            int di; const struct evax_symbol *ds;
+            if (evax_find_sym(in, nin, uv[i].internal, &di, &ds) < 0) {
+                fprintf(stderr, "%%LINK-F-NOUNIV, EVAX shareable: universal '%s' "
+                        "names internal symbol '%s' defined by no input object\n",
+                        uv[i].name, uv[i].internal);
+                exit(1);
+            }
+            uv[i].value = (uv[i].kind == OVMX_SV_PROCEDURE)
+                        ? evax_sym_code_addr(in, di, ds)    /* code entry point   */
+                        : evax_sym_value_addr(in, di, ds);  /* data location addr */
+        }
+        for (int i = 0; i < nuniv; i++)
+            sv_names_size += (uint32_t)strlen(uv[i].name) + 1;
+        sv_names_o = sizeof(struct ovmx_sv_header)
+                   + (uint64_t)nuniv * sizeof(struct ovmx_sv_entry);
+        sv_size = sv_names_o + sv_names_size;
+        cur = ALIGN_UP(cur, 8);
+        off_sv = cur;
+        cur += sv_size;
+        int oi = nos++;
+        snprintf(osec[oi].name, sizeof osec[oi].name, "%s", OVMX_SV_SECTION);
+        osec[oi].addr = off_sv; osec[oi].size = sv_size; osec[oi].nobits = 0;
+    }
+
+    /* ---- Apply all relocations into the psect content buffers. Cross-image
+     * references (an undefined symbol a --use'd producer exports) are collected
+     * as imports here; their .vms$imp table is laid out right after. ---- */
+    long deferred = 0;
+    int n_linkage = 0, n_callsite = 0, n_data = 0, n_ximport = 0;
+    struct import *imp = NULL; int nimp = 0, imp_cap = 0;
+    /* .vms$rel fixup table: image-relative slot offsets LINK filled with an
+     * unbiased image-relative address, for IMGACT to +load_bias at activation. */
+    uint64_t *rel_off = NULL; int nrel = 0, rel_cap = 0;
+    for (int i = 0; i < nin; i++)
+        for (int r = 0; r < in[i].obj.nreloc; r++) {
+            /* Relocations that live INSIDE a non-runtime debug psect are not
+             * applied — that psect was never placed (see evax_is_debug), so its
+             * intra-DWARF 32-bit offsets are not load-bias fixups and would
+             * otherwise trip the REFLONG-to-placed-section guard. */
+            int rps = in[i].obj.reloc[r].psect;
+            if (rps >= 0 && rps < in[i].obj.nsec &&
+                evax_is_debug(in[i].obj.sec[rps].name))
+                continue;
+            enum evax_reloc_type t = in[i].obj.reloc[r].type;
+            evax_apply_reloc(in, nin, i, &in[i].obj.reloc[r], allow_undef,
+                             producers, np, &imp, &nimp, &imp_cap, &n_ximport,
+                             &deferred, &n_linkage, &n_callsite,
+                             &rel_off, &nrel, &rel_cap, ldsyms, n_ldsyms);
+            if (t == EVAX_R_REFLONG || t == EVAX_R_REFQUAD || t == EVAX_R_CODEADDR)
+                n_data++;
+        }
+
+    /* ---- .vms$imp: cross-image imports bound to --use producers. Each record
+     * names {producer soname, symbol-vector index, patch_off}; IMGACT resolves
+     * the universal against the loaded producer and writes the run-time address
+     * into patch_off (the linkage-pair quad[0] or the data-pointer slot) at
+     * activation — the SAME table + IMGACT contract the ELF path emits
+     * (vms_imp_write). (bead vms-c179) ---- */
+    uint64_t off_imp = 0, imp_size = 0;
+    if (nimp > 0) {
+        cur = ALIGN_UP(cur, 8);
+        off_imp = cur;
+        imp_size = vms_imp_size(nimp, imp, producers, np);
+        cur += imp_size;
+        int oi = nos++;
+        snprintf(osec[oi].name, sizeof osec[oi].name, "%s", OVMX_IMP_SECTION);
+        osec[oi].addr = off_imp; osec[oi].size = imp_size; osec[oi].nobits = 0;
+    }
+
+    /* ---- .vms$rel: the load-bias fixup table. Header + one image-relative u64
+     * offset per recorded slot. Emitted ONLY when nrel > 0 (a pure-code image
+     * with no image-relative data pointers gains no section, byte-unchanged). It
+     * carries offsets (not pointers), so it needs no fixup of its own; placed in
+     * the loaded range so IMGACT can find it by section vaddr and apply it — the
+     * SAME ovmx_rel_header + IMGACT apply_vms_rel contract the ELF path emits. --- */
+    uint64_t off_rel = 0, rel_sec_size = 0;
+    if (nrel > 0) {
+        cur = ALIGN_UP(cur, 8);
+        off_rel = cur;
+        rel_sec_size = sizeof(struct ovmx_rel_header) + (uint64_t)nrel * 8;
+        cur += rel_sec_size;
+        int oi = nos++;
+        snprintf(osec[oi].name, sizeof osec[oi].name, "%s", OVMX_REL_SECTION);
+        osec[oi].addr = off_rel; osec[oi].size = rel_sec_size; osec[oi].nobits = 0;
+    }
+
+    uint64_t file_end = cur;           /* end of loadable file content          */
+    /* (nobits $BSS$ already got vaddrs above and extends memsz past file_end;
+     * for first light our fixtures carry no $BSS$, so memsz == file_end.) */
+    uint64_t mem_end = cur;
+
+    /* ---- Build the shstrtab. ---- */
+    /* .shstrtab + the per-section name-offset table, both sized to the dynamic
+     * output-section count (vms-7b96: a whole-archived libc.a produces far more
+     * than any fixed cap). */
+    size_t shstr_cap = (size_t)osec_cap * EVAX_NAME_MAX + 16 /* ".shstrtab\0" + NUL */;
+    char *shstr = malloc(shstr_cap); size_t shlen = 0;
+    uint32_t *sh_name_off = calloc((size_t)osec_cap, sizeof *sh_name_off);
+    if (!shstr || !sh_name_off) die("oom allocating EVAX shstrtab");
+    shstr[shlen++] = '\0';
+    for (int k = 0; k < nos; k++) {
+        sh_name_off[k] = (uint32_t)shlen;
+        size_t l = strlen(osec[k].name) + 1;
+        if (shlen + l > shstr_cap) die("shstrtab overflow");
+        memcpy(shstr + shlen, osec[k].name, l); shlen += l;
+    }
+    uint32_t sh_shstr_name = (uint32_t)shlen;
+    memcpy(shstr + shlen, ".shstrtab", 10); shlen += 10;
+
+    uint64_t off_shstr = ALIGN_UP(file_end, 8);
+    uint64_t off_shdr  = ALIGN_UP(off_shstr + shlen, 8);
+    int nshdr = 1 /*NULL*/ + nos + 1 /*.shstrtab*/;
+    uint64_t total = off_shdr + (uint64_t)nshdr * sizeof(Elf64_Shdr);
+
+    uint8_t *img = calloc(1, (size_t)total);
+    if (!img) die("oom building EVAX image");
+
+    /* ELF header. */
+    Elf64_Ehdr *eh = (Elf64_Ehdr *)img;
+    memcpy(eh->e_ident, ELFMAG, SELFMAG);
+    eh->e_ident[EI_CLASS]   = ELFCLASS64;
+    eh->e_ident[EI_DATA]    = ELFDATA2LSB;
+    eh->e_ident[EI_VERSION] = EV_CURRENT;
+    eh->e_type    = ET_DYN;
+    eh->e_machine = EM_ALPHA;
+    eh->e_version = EV_CURRENT;
+    eh->e_entry   = transfer_va;
+    eh->e_phoff   = off_ph;
+    eh->e_shoff   = off_shdr;
+    eh->e_ehsize  = sizeof(Elf64_Ehdr);
+    eh->e_phentsize = sizeof(Elf64_Phdr);
+    eh->e_phnum   = (Elf64_Half)nph;
+    eh->e_shentsize = sizeof(Elf64_Shdr);
+    eh->e_shnum   = nshdr;
+    eh->e_shstrndx = nshdr - 1;
+
+    /* PT_PHDR (so IMGACT derives the load bias from the phdr table) +
+     * PT_INTERP=IMGACT.EXE (so the kernel activates the image via IMGACT) + one
+     * PT_LOAD over the whole image (RWX — first light). Mirrors the ELF exec
+     * path. (vms-e0c) */
+    Elf64_Phdr *ph = (Elf64_Phdr *)(img + off_ph);
+    int li;   /* index of the PT_LOAD phdr */
+    if (is_shareable) {
+        /* Match the ELF shareable: a bare PT_LOAD ET_DYN, read as a producer. */
+        li = 0;
+    } else {
+        ph[0].p_type = PT_PHDR; ph[0].p_flags = PF_R;
+        ph[0].p_offset = off_ph; ph[0].p_vaddr = off_ph; ph[0].p_paddr = off_ph;
+        ph[0].p_filesz = (uint64_t)nph * sizeof(Elf64_Phdr);
+        ph[0].p_memsz  = ph[0].p_filesz; ph[0].p_align = 8;
+        ph[1].p_type = PT_INTERP; ph[1].p_flags = PF_R;
+        ph[1].p_offset = off_interp; ph[1].p_vaddr = off_interp; ph[1].p_paddr = off_interp;
+        ph[1].p_filesz = interp_sz; ph[1].p_memsz = interp_sz; ph[1].p_align = 1;
+        li = 2;
+    }
+    ph[li].p_type = PT_LOAD; ph[li].p_flags = PF_R | PF_W | PF_X;
+    ph[li].p_offset = 0; ph[li].p_vaddr = 0; ph[li].p_paddr = 0;
+    ph[li].p_filesz = file_end; ph[li].p_memsz = mem_end; ph[li].p_align = 0x1000;
+    if (!is_shareable) memcpy(img + off_interp, IMGACT_INTERP, interp_sz);
+
+    /* Copy each psect's (relocated) content to its identity-mapped file offset. */
+    for (int i = 0; i < nin; i++)
+        for (int s = 0; s < in[i].obj.nsec; s++) {
+            struct evax_section *sec = &in[i].obj.sec[s];
+            if (sec->alloc == 0 || evax_is_nobits(sec->name)) continue;
+            if (evax_is_debug(sec->name)) continue;   /* non-runtime debug psect, unplaced */
+            uint64_t base = in[i].sec_base[s];
+            if (base + sec->alloc > file_end) die("psect content past file image");
+            if (sec->content) memcpy(img + base, sec->content, (size_t)sec->alloc);
+            /* NULL content == all zero, already zeroed by calloc. */
+        }
+
+    /* Stamp .vms$xfer (executable) or .vms$sv (shareable). */
+    if (!is_shareable) {
+        struct ovmx_xfer_header xh;
+        xh.magic = OVMX_XFER_MAGIC; xh.flavor = OVMX_ACT_VMS_STD;
+        xh.count = xfer_count; xh.reserved = 0;
+        putl32(img + xfer_addr + 0,  xh.magic);
+        putl32(img + xfer_addr + 4,  xh.flavor);
+        putl32(img + xfer_addr + 8,  xh.count);
+        putl32(img + xfer_addr + 12, xh.reserved);
+        putl64(img + xfer_addr + 16, transfer_va);   /* entry[0] = main transfer */
+    } else {
+        /* .vms$sv: the SAME ovmx_sv_header + entry layout + name blob the ELF
+         * emit_shareable stamps -- byte-compatible so IMGACT, the cross-image
+         * import machinery, and OVMXDUMP read an Alpha and an x86_64 shareable
+         * identically (the vector is arch-neutral). Written little-endian via
+         * putl* like the rest of the image. (vms-c65) */
+        putl32(img + off_sv + 0,  OVMX_SV_MAGIC);
+        putl32(img + off_sv + 4,  (uint32_t)nuniv);
+        putl32(img + off_sv + 8,  gk);
+        putl32(img + off_sv + 12, gmaj);
+        putl32(img + off_sv + 16, gmin);
+        putl32(img + off_sv + 20, (uint32_t)sv_names_o);   /* names_off  */
+        putl32(img + off_sv + 24, sv_names_size);          /* names_size */
+        putl32(img + off_sv + 28, 0);                      /* reserved   */
+        uint64_t ent = off_sv + sizeof(struct ovmx_sv_header);
+        uint64_t nb  = off_sv + sv_names_o;
+        uint32_t noff = 0;
+        for (int i = 0; i < nuniv; i++) {
+            uint64_t e = ent + (uint64_t)i * sizeof(struct ovmx_sv_entry);
+            putl64(img + e + 0,  uv[i].value);   /* image-relative addr / const  */
+            putl32(img + e + 8,  uv[i].kind);
+            putl32(img + e + 12, noff);          /* name blob offset (diagnostic) */
+            size_t l = strlen(uv[i].name) + 1;
+            memcpy(img + nb + noff, uv[i].name, l);
+            noff += (uint32_t)l;
+        }
+    }
+
+    /* Stamp .vms$imp (cross-image imports). patch_off = imp[i].got_va (the site
+     * image-relative address), producer soname + sv index per record. */
+    if (nimp > 0)
+        vms_imp_write(img, off_imp, imp, nimp, producers, np);
+
+    /* Stamp .vms$rel (load-bias fixups): ovmx_rel_header{magic,count} then the
+     * image-relative slot offsets. Written little-endian like the rest of the
+     * image so IMGACT's apply_vms_rel reads it directly (imgact.c:apply_vms_rel:
+     * for each off, *(base+off) += load_base). */
+    if (nrel > 0) {
+        putl32(img + off_rel + 0, OVMX_REL_MAGIC);
+        putl32(img + off_rel + 4, (uint32_t)nrel);
+        for (int i = 0; i < nrel; i++)
+            putl64(img + off_rel + sizeof(struct ovmx_rel_header) + (uint64_t)i * 8,
+                   rel_off[i]);
+    }
+
+    /* shstrtab + section headers. */
+    memcpy(img + off_shstr, shstr, shlen);
+    Elf64_Shdr *sh = (Elf64_Shdr *)(img + off_shdr);
+    /* sh[0] = NULL (zeroed). */
+    for (int k = 0; k < nos; k++) {
+        Elf64_Shdr *s = &sh[1 + k];
+        s->sh_name = sh_name_off[k];
+        s->sh_type = osec[k].nobits ? SHT_NOBITS : SHT_PROGBITS;
+        s->sh_flags = SHF_ALLOC | (strcmp(osec[k].name, "$CODE$") == 0 ? SHF_EXECINSTR : SHF_WRITE);
+        s->sh_addr = osec[k].addr;
+        s->sh_offset = osec[k].nobits ? file_end : osec[k].addr;  /* identity map */
+        s->sh_size = osec[k].size;
+        s->sh_addralign = 16;
+    }
+    Elf64_Shdr *sstr = &sh[nshdr - 1];
+    sstr->sh_name = sh_shstr_name; sstr->sh_type = SHT_STRTAB;
+    sstr->sh_offset = off_shstr; sstr->sh_size = shlen; sstr->sh_addralign = 1;
+
+    /* Write the image. */
+    int fd = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    if (fd < 0) die("cannot create output image");
+    size_t w = 0;
+    while (w < total) {
+        ssize_t n = write(fd, img + w, (size_t)total - w);
+        if (n <= 0) die("short write output image");
+        w += (size_t)n;
+    }
+    close(fd);
+
+    fprintf(stderr,
+        "%%LINK-S-CREATED, %s: EVAX/Alpha ET_DYN %s, %d object%s, "
+        "%d data reloc%s applied, %d linkage pair%s applied, "
+        "%d call-site reloc%s kept indirect (first-light), %s=%u\n",
+        out, is_shareable ? "shareable" : "image", nin, nin == 1 ? "" : "s",
+        n_data, n_data == 1 ? "" : "s",
+        n_linkage, n_linkage == 1 ? "" : "s",
+        n_callsite, n_callsite == 1 ? "" : "s",
+        is_shareable ? ".vms$sv count" : ".vms$xfer count",
+        is_shareable ? (uint32_t)nuniv : xfer_count);
+    /* Layout map (stderr) — aids hand-tracing + the integration test. */
+    for (int k = 0; k < nos; k++)
+        fprintf(stderr, "%%LINK-I-SECT, %-10s addr=0x%llx size=0x%llx\n",
+                osec[k].name, (unsigned long long)osec[k].addr,
+                (unsigned long long)osec[k].size);
+    if (!is_shareable)
+        fprintf(stderr, "%%LINK-I-XFER, transfer '%s' -> image-relative 0x%llx\n",
+                transfer, (unsigned long long)transfer_va);
+    else {
+        fprintf(stderr, "%%LINK-I-SYMVEC, .vms$sv at 0x%llx, %d universal%s, "
+                "GSMATCH kind=%u %u.%u\n",
+                (unsigned long long)off_sv, nuniv, nuniv == 1 ? "" : "s",
+                gk, gmaj, gmin);
+        for (int i = 0; i < nuniv; i++)
+            fprintf(stderr, "%%LINK-I-UNIV, sv#%d %-24s kind=%u value=0x%llx\n",
+                    i, uv[i].name, uv[i].kind, (unsigned long long)uv[i].value);
+    }
+    if (n_ximport)
+        fprintf(stderr, "%%LINK-I-IMPORT, %d EVAX cross-image import%s bound to "
+                "--use producer%s (.vms$imp at 0x%llx, resolved at activation)\n",
+                n_ximport, n_ximport == 1 ? "" : "s", np == 1 ? "" : "s",
+                (unsigned long long)off_imp);
+    if (nrel > 0)
+        fprintf(stderr, "%%LINK-I-RELOC, %d image-relative slot%s recorded in "
+                ".vms$rel at 0x%llx (load-bias fixups applied by IMGACT at "
+                "activation)\n",
+                nrel, nrel == 1 ? "" : "s", (unsigned long long)off_rel);
+    if (deferred)
+        fprintf(stderr, "%%LINK-W-DEFERRED, %ld EVAX reference%s left undefined\n",
+                deferred, deferred == 1 ? "" : "s");
+    free(imp);
+    free(rel_off);
+}
+
+/* EVAX/Alpha leaf/main EXECUTABLE: takes --transfer, stamps .vms$xfer, and is
+ * PT_INTERP'd (kernel-activatable). Thin wrapper over emit_evax_common. */
+static void emit_evax_image(struct evax_input *in, int nin,
+                            const char *transfer, int allow_undef,
+                            struct producer *producers, int np, const char *out)
+{
+    emit_evax_common(in, nin, /*is_shareable=*/0, transfer, NULL, 0,
+                     0, 0, 0, allow_undef, producers, np, out);
+}
+
+/* EVAX/Alpha SHAREABLE: takes --symbol-vector/--gsmatch, stamps .vms$sv, has no
+ * transfer and no PT_INTERP -- a real Alpha DECC$SHR / .vms$sv producer built
+ * from alpha-dec-vms objects. Thin wrapper over emit_evax_common. (bead vms-c65) */
+static void emit_evax_shareable(struct evax_input *in, int nin,
+                                struct univ *uv, int nuniv,
+                                uint32_t gk, uint32_t gmaj, uint32_t gmin,
+                                int allow_undef,
+                                struct producer *producers, int np, const char *out)
+{
+    emit_evax_common(in, nin, /*is_shareable=*/1, NULL, uv, nuniv,
+                     gk, gmaj, gmin, allow_undef, producers, np, out);
+}
+
+/* Sniff a file's object format from its first bytes (input already on disk). */
+enum { EVFMT_ELF, EVFMT_EVAX, EVFMT_OTHER };
+static int evax_sniff(const uint8_t *buf, size_t n)
+{
+    if (n >= SELFMAG && memcmp(buf, ELFMAG, SELFMAG) == 0) return EVFMT_ELF;
+    if (evax_is_object(buf, n)) return EVFMT_EVAX;
+    return EVFMT_OTHER;
+}
+
+/* Classify an input's object format from a byte-exact RMS header PEEK — never a
+ * whole-file slurp. Slurping to classify would read the file a SECOND time
+ * through the RMS trace (the ELF path re-reads it in load_obj), doubling the
+ * self-link's read-total and breaking run_link_native.sh's byte-exact
+ * read-total assertion (vms-cbe). The peek reads only the first bytes via the
+ * same open/get/close seam file_is_archive uses, so it is NOT counted by that
+ * per-file sys$get-loop total. evax_sniff needs SELFMAG (4) for ELF and 6 bytes
+ * for the EMH check; 16 is a safe margin. Archives/.OLB take the ELF path. */
+static int sniff_format(const char *path)
+{
+    if (file_is_archive(path) || file_is_olb(path)) return EVFMT_ELF;
+    uint8_t hdr[16];
+    int n;
+#ifdef OVMX_RMS_IO
+    n = ovmx_link_rms_peek(path, hdr, (int)sizeof hdr);
+    if (n < 0) die("cannot open input file (RMS)");
+#else
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) die("cannot open input file");
+    ssize_t r = read(fd, hdr, sizeof hdr);
+    close(fd);
+    n = (r < 0) ? 0 : (int)r;
+#endif
+    return evax_sniff(hdr, (size_t)n);
+}
+
+/* --------------------------------------------------------------------------
+ * EVAX/Alpha ARCHIVE support (vms-7b96, lifts vms-c65's "EVAX archives are a
+ * later slice" limit). The Alpha C-RTL is delivered as a whole-archive libc.a /
+ * libgcc.a, exactly like the ELF path — but the alpha-dec-vms objects are
+ * VMS-native EVAX, not ELF, so load_archive/parse_obj (ELF-only) cannot ingest
+ * them, and sniff_format routes every archive to the ELF path. These helpers add
+ * the missing EVAX archive front end: walk the System V/GNU `ar` container
+ * ourselves (identical to load_archive's walk) and evax_read() each object
+ * member. The archive symbol table ("/","/SYM64/") and long-name table ("//")
+ * members are skipped; the port cc1's .vmsdebug/DST records are skipped by
+ * evax_read itself (parse loop's EDBG/ETBT default), so a DST-carrying member
+ * links exactly like a -g0 one. Note GNU ar cannot even BUILD such an archive
+ * (its vms-alpha BFD reader chokes on DST, vms-7b96), so the archive is
+ * hand-built without a symbol index — which is fine here: whole-archive pulls
+ * every member and never consults the index. Member content buffers are kept
+ * live for the run (like load_archive), never freed. */
+static int ar_member_is_evax(const uint8_t *abuf, size_t asize)
+{
+    if (asize < AR_MAGIC_LEN || memcmp(abuf, AR_MAGIC, AR_MAGIC_LEN) != 0)
+        return 0;
+    size_t pos = AR_MAGIC_LEN;
+    while (pos + AR_HDR_SIZE <= asize) {
+        const char *h = (const char *)(abuf + pos);
+        if (h[58] != '`' || h[59] != '\n') return 0;
+        uint64_t msize = ar_dec(h + 48, 10);
+        size_t mdata = pos + AR_HDR_SIZE;
+        if (mdata + msize > asize) return 0;
+        char nm[17]; memcpy(nm, h, 16); nm[16] = '\0';
+        int e = 16; while (e > 0 && nm[e - 1] == ' ') nm[--e] = '\0';
+        int special = (!strcmp(nm, "/") || !strcmp(nm, "//") ||
+                       !strcmp(nm, "/SYM64/"));
+        if (!special)
+            return evax_is_object(abuf + mdata, (size_t)msize);
+        pos = mdata + msize;
+        if (pos & 1) pos++;
+    }
+    return 0;
+}
+
+/* Is this input the root of an EVAX link? A bare EVAX object, or a `.a` archive
+ * whose first real member is an EVAX object. (.OLB stays an ELF-path container.) */
+static int input_is_evax(const char *path)
+{
+    if (file_is_olb(path)) return 0;
+    if (file_is_archive(path)) {
+        size_t sz; uint8_t *b = slurp(path, &sz);
+        int r = ar_member_is_evax(b, sz);
+        free(b);
+        return r;
+    }
+    return sniff_format(path) == EVFMT_EVAX;
+}
+
+/* Grow the EVAX input array by one and return the (zeroed) new slot. */
+static struct evax_input *push_evax(struct evax_input **ein, int *n, int *cap)
+{
+    if (*n >= *cap) {
+        *cap = *cap ? *cap * 2 : 64;
+        *ein = realloc(*ein, (size_t)*cap * sizeof **ein);
+        if (!*ein) die("oom growing EVAX input table");
+    }
+    struct evax_input *slot = &(*ein)[(*n)++];
+    memset(slot, 0, sizeof *slot);
+    return slot;
+}
+
+/* Parse every EVAX object member of an `ar` archive into the growable ein array. */
+static void load_archive_evax(const char *path, struct evax_input **ein,
+                              int *n, int *cap)
+{
+    size_t asize;
+    uint8_t *abuf = slurp(path, &asize);   /* kept live: members reference it */
+    if (asize < AR_MAGIC_LEN || memcmp(abuf, AR_MAGIC, AR_MAGIC_LEN) != 0)
+        die("not an ar archive");
+    size_t pos = AR_MAGIC_LEN;
+    int members = 0;
+    while (pos + AR_HDR_SIZE <= asize) {
+        const char *h = (const char *)(abuf + pos);
+        if (h[58] != '`' || h[59] != '\n') die("malformed ar member header");
+        uint64_t msize = ar_dec(h + 48, 10);
+        size_t mdata = pos + AR_HDR_SIZE;
+        if (mdata + msize > asize) die("ar member extends past end of archive");
+        char nm[17]; memcpy(nm, h, 16); nm[16] = '\0';
+        int e = 16; while (e > 0 && nm[e - 1] == ' ') nm[--e] = '\0';
+        int special = (!strcmp(nm, "/") || !strcmp(nm, "//") ||
+                       !strcmp(nm, "/SYM64/"));
+        if (!special) {
+            uint8_t *mb = malloc(msize ? msize : 1);
+            if (!mb) die("oom copying ar member");
+            memcpy(mb, abuf + mdata, (size_t)msize);
+            struct evax_input *slot = push_evax(ein, n, cap);
+            char label[300];
+            snprintf(label, sizeof label, "%s(%s)", path, nm);
+            slot->name = strdup(label);
+            if (!slot->name) die("oom labeling ar member");
+            if (evax_read(mb, (size_t)msize, &slot->obj) != 0) {
+                fprintf(stderr, "%%LINK-F-EVAX, %s: %s\n",
+                        slot->name, evax_last_error());
+                exit(1);
+            }
+            members++;
+        }
+        pos = mdata + msize;
+        if (pos & 1) pos++;
+    }
+    fprintf(stderr, "%%LINK-I-ARCHIVE, %s: %d EVAX object member%s pulled "
+            "(whole-archive)\n", path, members, members == 1 ? "" : "s");
+}
+
 int main(int argc, char **argv)
 {
     const char *out = NULL;
     const char **ins = calloc((size_t)argc, sizeof *ins);  /* <= argc inputs */
     int nin = 0;
-    struct univ uv[MAX_UNIV];
+    static struct univ uv[MAX_UNIV];   /* static (BSS): MAX_UNIV*sizeof(univ) is
+                                        * ~1MB with the R1b decc$ vector — off the stack. */
     int nuniv = 0;
     int shareable = 0, executable = 0, allow_undef = 0;
     struct producer *producers = calloc((size_t)argc, sizeof *producers);
     int np = 0;
+    const char *transfer = NULL;   /* EVAX/Alpha main transfer symbol (vms-cbe) */
     uint32_t gk = OVMX_GSMATCH_EQUAL, gmaj = 0, gmin = 0;
     if (!ins || !producers) die("oom parsing arguments");
     memset(uv, 0, sizeof uv);
@@ -2361,6 +4461,8 @@ int main(int argc, char **argv)
             nuniv = parse_symbol_vector(argv[++i], uv);
         } else if (strcmp(argv[i], "--gsmatch") == 0 && i + 1 < argc) {
             parse_gsmatch(argv[++i], &gk, &gmaj, &gmin);
+        } else if (strcmp(argv[i], "--transfer") == 0 && i + 1 < argc) {
+            transfer = argv[++i];   /* EVAX/Alpha main transfer address (vms-cbe) */
         } else if (argv[i][0] == '-') {
             fprintf(stderr, "%%LINK-W-IGNORED, unknown option %s\n", argv[i]);
         } else {
@@ -2372,6 +4474,73 @@ int main(int argc, char **argv)
                   "-o X.EXE a.o [b.o | lib.a ...] "
                   "| LINK.EXE --executable --use LIB$SHR.EXE -o PROG.EXE prog.o)");
     if (!out) die("no -o output");
+
+    /* ---- Format dispatch (bead vms-cbe). An EVAX (Alpha/VMS) object — first
+     * record is an EMH, never ELF magic — takes the dedicated Alpha path; an ELF
+     * object set takes emit_shareable below. The two are never mixed in one link.
+     * The EVAX path dispatches BEFORE the ELF --shareable/--executable checks; it
+     * emits an EXECUTABLE (emit_evax_image, --transfer) by default, or a
+     * SHAREABLE (emit_evax_shareable, --symbol-vector/--gsmatch) under
+     * --shareable (bead vms-c65). ---- */
+    if (input_is_evax(ins[0])) {
+        /* EVAX/Alpha path. Each input is a bare EVAX object OR a whole `.a`
+         * archive of EVAX members (vms-7b96); an archive expands to all its
+         * members in-process (whole-archive, no `ld -r`), exactly like the ELF
+         * path's load_archive. Inputs grow dynamically. (.OLB is not accepted on
+         * this path.) The ELF path falls through and does its single traced read
+         * per input in load_obj — so classifying ins[0] above uses a header peek
+         * (or, for an archive, a first-member peek), not a counted slurp (vms-cbe). */
+        struct evax_input *ein = NULL;
+        int nein = 0, cap_ein = 0;
+        for (int i = 0; i < nin; i++) {
+            if (file_is_olb(ins[i]))
+                die("the EVAX/Alpha link does not take .OLB libraries "
+                    "(use a .a archive or plain EVAX objects)");
+            if (file_is_archive(ins[i])) {
+                /* Walk the container; load_archive_evax evax_read()s every member
+                 * and errors on a non-EVAX one (the mixed-format guard). An empty
+                 * archive (0 members, e.g. a libgcc.a the alpha port never needed)
+                 * contributes nothing — accepted, not rejected. */
+                load_archive_evax(ins[i], &ein, &nein, &cap_ein);
+                continue;
+            }
+            size_t sz; uint8_t *b = slurp(ins[i], &sz);
+            if (evax_sniff(b, sz) != EVFMT_EVAX)
+                die("mixed formats: the EVAX/Alpha link takes EVAX objects and "
+                    "EVAX `.a` archives only");
+            struct evax_input *slot = push_evax(&ein, &nein, &cap_ein);
+            slot->name = ins[i];
+            if (evax_read(b, sz, &slot->obj) != 0) {
+                fprintf(stderr, "%%LINK-F-EVAX, %s: %s\n", ins[i], evax_last_error());
+                exit(1);
+            }
+        }
+        if (nein == 0) die("no EVAX object members found in inputs");
+        /* vms-614: linker-view universal dump — list the DEFINED decc$ symbols
+         * evax_read resolves (weak-alias equates included), for mk_decc_shr.sh to
+         * build the symbol vector from, then stop before any emit. Runs after the
+         * inputs are read; the dummy --shareable/--symbol-vector/-o mk_decc_shr
+         * passes only satisfy earlier arg parsing and are never used. */
+        if (getenv("OVMX_LINK_DUMP_UNIVERSALS")) {
+            evax_dump_universals(ein, nein);
+            return 0;
+        }
+        if (shareable) {
+            if (executable)
+                die("specify at most one of --shareable / --executable");
+            if (nuniv == 0)
+                die("the EVAX/Alpha shareable needs --symbol-vector "
+                    "(e.g. --symbol-vector \"FOO=PROCEDURE,BAR=DATA\")");
+            emit_evax_shareable(ein, nein, uv, nuniv, gk, gmaj, gmin,
+                                allow_undef, producers, np, out);
+        } else {
+            emit_evax_image(ein, nein, transfer, allow_undef, producers, np, out);
+        }
+        return 0;
+    }
+    /* ELF object set: fall through to emit_shareable. load_obj does the single
+     * byte-exact RMS read per input; no slurp happened above. */
+
     if (shareable == executable)
         die("specify exactly one of --shareable / --executable");
 
@@ -2399,12 +4568,29 @@ int main(int argc, char **argv)
             load_obj(ins[i], push_obj(&objs, &nobj, &cap));
     }
     /* Search object libraries after the mandatory objects/archives, pulling only
-     * the members that resolve outstanding references (vms-ca9). */
+     * the members that resolve outstanding references (vms-ca9). The selective
+     * search is rooted at both the root objects' undefined refs AND the
+     * --symbol-vector universals, so a /SHAREABLE link whose only roots are its
+     * symbol vector (the VMS way — no explicit TU list) pulls the defining
+     * modules from the .OLB alone (design-vms-native-shareable-build.md C.4.1). */
     if (npool)
-        resolve_olbs(&objs, &nobj, &cap, pools, npool);
+        resolve_olbs(&objs, &nobj, &cap, pools, npool, uv, nuniv);
     free(pools);
     if (nobj == 0) die("no object members found in inputs");
     emit_shareable(objs, nobj, uv, nuniv, gk, gmaj, gmin, allow_undef,
                    producers, np, out, executable);
     return 0;
 }
+
+/* --------------------------------------------------------------------------
+ * vms-cbe: the EVAX (Alpha/VMS) object front end is compiled AS PART OF this
+ * translation unit. link.c is built by ~40 sites (every mk_*.sh / run_*.sh that
+ * produces a LINK.EXE, plus the CMake `vmslink` target); pulling evax_read.c in
+ * here means none of them needs a new source-list entry — sidestepping the
+ * new-TU enumeration trap that has repeatedly reddened a stray CI leg. There is
+ * no double definition: no build both links this TU and a separate evax_read.o
+ * (the standalone reader unit test, run_evax_read.sh, compiles evax_read.c on
+ * its own and links only evax_read_test.o with it). The declarations are already
+ * visible via the "evax_read.h" include near the top.
+ * -------------------------------------------------------------------------- */
+#include "evax_read.c"

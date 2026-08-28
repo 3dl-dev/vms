@@ -24,6 +24,7 @@
 #include "dcl/parser.h"
 #include "dcl/symbol.h"
 #include "dcl/context.h"
+#include "dcl/dcl_rms.h"   /* vms-5f0: close RMS reader/writer channels at exit */
 #include "dcl/dcl_cmd.h"
 #include "dcl/terminal.h"
 #include "dcl/cdu.h"
@@ -913,11 +914,19 @@ int main(int argc, char *argv[])
     restore_termios();
     /* Deallocate terminal device */
     vms_term_deallocate(dcl_ctx.terminal.device_name);
-    /* Close any open channels */
+    /* Close any open channels (stdio streams AND RMS reader/writer handles). */
     for (int i = 0; i < 16; i++) {
         if (dcl_ctx.channels[i].fp) {
             fclose(dcl_ctx.channels[i].fp);
             dcl_ctx.channels[i].fp = NULL;
+        }
+        if (dcl_ctx.channels[i].reader) {
+            dcl_rms_read_close(dcl_ctx.channels[i].reader);
+            dcl_ctx.channels[i].reader = NULL;
+        }
+        if (dcl_ctx.channels[i].writer) {
+            (void)dcl_rms_write_close(dcl_ctx.channels[i].writer);
+            dcl_ctx.channels[i].writer = NULL;
         }
     }
 

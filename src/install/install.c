@@ -141,6 +141,36 @@ static int resolve_filespec(const char *filespec, char *soname, size_t soname_le
     int n = snprintf(linux_path, path_len, "%s/%s", dir, soname);
     if (n < 0 || (size_t)n >= path_len)
         return -1;
+
+    /*
+     * ATOMIC FLIP (vms-0cb): SYS$DISK is now a genuine Files-11 (ODS-2) volume
+     * owned by the executive ACP; the vmsfs_to_linux_path -> /vms POSIX
+     * passthrough is retired, so a SYS$SHARE / SYS$SYSTEM image has no /vms
+     * path to stat. PID 1 stages the SYS$SHARE shareables (and SYS$SYSTEM
+     * utilities) off the ODS-2 volume THROUGH THE ACP into OVMX_BOOT_STAGE_DIR
+     * (src/ovmx_init/ovmx_init.c stage_boot_images(); INV-6: bytes from the
+     * ACP, never a /vms read). INSTALL cannot ride the in-process ACP path --
+     * it must stat() a real file to register it and to record the path IMGACT
+     * maps -- so when the canonical /vms path is absent, resolve to the staged
+     * copy instead. The staging directory is flat, keyed by the uppercase
+     * basename (== SONAME), so the same rewrite covers SYS$SHARE and SYS$SYSTEM.
+     *
+     * When neither the /vms path nor a staged copy exists, keep the canonical
+     * path: cmd_add's stat() then reports an honest %INSTALL-E-FILNOTFND naming
+     * the SYS$SHARE/SYS$SYSTEM location, never a faked success. On a real /vms
+     * fixture (the host INSTALL unit test) the canonical path exists and is
+     * used unchanged -- the staged fallback only engages on the flipped runtime.
+     */
+    struct stat st;
+    if (stat(linux_path, &st) != 0) {
+        char staged[256];
+        int m = snprintf(staged, sizeof(staged), "%s/%s",
+                         OVMX_BOOT_STAGE_DIR, soname);
+        if (m > 0 && (size_t)m < sizeof(staged) &&
+            (size_t)m < path_len && stat(staged, &st) == 0) {
+            memcpy(linux_path, staged, (size_t)m + 1);
+        }
+    }
     return 0;
 }
 

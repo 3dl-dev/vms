@@ -67,7 +67,6 @@ dir /sys 755 0 0
 dir /vms 755 0 0
 file /init /work/probe-init 755 0 0
 file /vms.ko /vmsko/vms.ko 644 0 0
-file /vmsfs.ko /vmsko/vmsfs.ko 644 0 0
 L
     echo "== bake probe kernel =="
     cd /vmsko/linux-$KV

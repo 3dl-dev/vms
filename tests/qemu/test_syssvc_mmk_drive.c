@@ -83,6 +83,8 @@
 #include "starlet.h"
 #include "descrip.h"
 #include "ssdef.h"
+#include "rmsdef.h"
+#include "rms/rms.h"
 #include "vms_kif.h"
 #include "vms/pcb.h"
 
@@ -90,6 +92,53 @@
 
 /* MMK.EXE is staged at SYS$SYSTEM (tests/qemu/Dockerfile). OVMX_MMK overrides. */
 #define MMK_PATH_DEFAULT "/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE"
+
+/* THE BUILD VOLUME (vms-dff). The atomic flip (epic vms-208) made OVMX RMS
+ * ACP-ONLY when /dev/vms is present -- sys$open/$create ride the Files-11 ODS-2
+ * ACP over /dev/vms, with NO /vms POSIX passthrough (Rule 9 / INV-6; see
+ * src/vmsrms/rms_core.c rms_acp_absent()). MMK.EXE opens its description /
+ * rules / dependency files through that SAME RMS (readdesc.c file_open ->
+ * sys$open), so those files can no longer live on a Linux /tmp tmpfs -- MMK's
+ * $OPEN would walk the mounted ODS-2 volume and honestly miss them
+ * (RMS$_FNF -> MMK__NOOPNDSC, "cannot open description file"). They must live on
+ * a genuine mounted ODS-2 volume, exactly as a real VMS MMK build reads its
+ * description off a real Files-11 disk. This suite therefore authors its build
+ * files on the harness's writable DKA0: fixture (the same volume+directory
+ * test_syssvc_rms_acp.c / test_syssvc_dcl_acp.c create files on) through the
+ * public RMS services, and hands MMK full ODS-2 filespecs -- NOT a passthrough
+ * (which the flip deleted) and NOT a loosened assertion. The DCL action the
+ * drive runs is pure (arithmetic + WRITE SYS$OUTPUT), so nothing here needs a
+ * POSIX working file. */
+#define ODS2_UNIT  "DKA0:"
+/* WHERE the build files live, and the two DISTINCT filespec forms this needs.
+ *
+ * The atomic flip (epic vms-208) made OVMX RMS ACP-ONLY when /dev/vms is present
+ * -- sys$open/$create ride the Files-11 ODS-2 ACP over /dev/vms, with NO /vms
+ * POSIX passthrough (Rule 9 / INV-6; src/vmsrms/rms_core.c rms_acp_absent()).
+ * MMK.EXE opens its description / rules through that SAME RMS (readdesc.c
+ * file_open -> sys$open), so those files must live on a genuine mounted ODS-2
+ * volume -- exactly as a real VMS MMK reads its description off a real Files-11
+ * disk. This suite authors them on the harness's writable DKA0: fixture (the
+ * SAME volume+directory test_syssvc_rms_acp.c / test_syssvc_dcl_acp.c create
+ * files on), through the public RMS services. That is NOT a passthrough (the
+ * flip deleted it) and NOT a loosened assertion.
+ *
+ * TWO forms are needed, and they are not interchangeable:
+ *  - ODS2_DIR ("DKA0:[OVMXDIR]") -- a FULL device+directory spec. Used for the
+ *    test's own sys$create/$erase and for MMK's /DESCRIPTION= and /RULES_FILE=
+ *    QUALIFIER VALUES, which the CLI parses as $FILE values (never as MMS rule
+ *    text). [OVMXDIR] is the writable directory the fixture provides; the volume
+ *    MFD ([000000]) is NOT writable, so files are authored here.
+ *  - BARE names ("OVMXB23.OUT") -- used INSIDE the description (the rule target)
+ *    and as the command-line P1 target. MMK parses each `target : dependency`
+ *    rule with lib$tparse, whose grammar accepts ONLY bare names: a device colon
+ *    reads as the rule separator and a '[' is not a filespec token, so either
+ *    reddens MMK__PARSERR. A bare target resolves through RMS to the MFD
+ *    (DKA0:[000000]), where it does NOT exist -> MMK builds it (a READ/stat of
+ *    the MFD, which succeeds; only CREATES in the MFD are refused). The rule is
+ *    deliberately DEPENDENCY-FREE so nothing forces a bare-named file to EXIST
+ *    in the MFD -- the target is simply always built, running the action. */
+#define ODS2_DIR   "DKA0:[OVMXDIR]"
 
 /* Failure bound (ms) on how long the parent waits for MMK to spawn a DCL, drive
  * one action command through the mailbox, echo the computed result marker, AND run
@@ -140,15 +189,54 @@ static int executive_present(void)
     return 1;
 }
 
-/* Write a file, return 0 on success. */
-static int write_file(const char *path, const char *contents)
+/* Author a VAR-record text file on the mounted ODS-2 volume through the public
+ * RMS services ($CREATE + $PUT one record per line -> IO$_CREATE / IO$_WRITEVBLK
+ * to the Files-11 ACP). `lines` is a NULL-terminated array of line bodies (no
+ * terminator -- the VAR/CR record format supplies it), so each becomes one
+ * record MMK's file_open reads back with $GET. Returns 0 on success. This is the
+ * same $CREATE/$PUT path test_syssvc_rms_acp.c proves byte-exact. */
+static int create_ods2_text(const char *spec, const char *const *lines)
 {
-    FILE *f = fopen(path, "w");
-    if (!f) return -1;
-    size_t n = strlen(contents);
-    int ok = (fwrite(contents, 1, n, f) == n);
-    if (fclose(f) != 0) ok = 0;
-    return ok ? 0 : -1;
+    struct FAB fab = cc$rms_fab;
+    struct RAB rab;
+    uint32_t st;
+
+    fab.fab$l_fna = (char *)spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    fab.fab$b_org = FAB$C_SEQ;
+    fab.fab$b_rfm = FAB$C_STMLF;   /* the flip's text convention (matches the
+                                    * stream-LF file MMK read pre-flip) */
+    fab.fab$b_rat = FAB$M_CR;
+    fab.fab$w_mrs = 0;
+    fab.fab$b_fac = FAB$M_PUT | FAB$M_GET;
+
+    st = sys$create(&fab, 0, 0);
+    if (st != RMS$_NORMAL)
+        return -1;
+
+    rab = cc$rms_rab;
+    rab.rab$l_fab = &fab;
+    st = sys$connect(&rab, 0, 0);
+    if (st != RMS$_NORMAL) { sys$close(&fab, 0, 0); return -1; }
+
+    for (int i = 0; lines[i]; i++) {
+        rab.rab$l_rbf = (char *)lines[i];
+        rab.rab$w_rsz = (uint16_t)strlen(lines[i]);
+        st = sys$put(&rab, 0, 0);
+        if (st != RMS$_NORMAL) { sys$close(&fab, 0, 0); return -1; }
+    }
+
+    st = sys$close(&fab, 0, 0);
+    return (st == RMS$_NORMAL) ? 0 : -1;
+}
+
+/* $ERASE (IO$_DELETE) a file off the ODS-2 volume; best-effort cleanup. */
+static void erase_ods2(const char *spec)
+{
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = (char *)spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    (void)sys$erase(&fab, 0, 0);
 }
 
 int main(int argc, char **argv)
@@ -185,38 +273,45 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* A hermetic work directory on the SYSDISK. MMK opens the description file
-     * through OVMX RMS, which resolves a bare filespec against the process
-     * default directory (cwd); the child chdir()s here before exec. */
-    char workdir[] = "/tmp/mmkb23_XXXXXX";
-    if (!mkdtemp(workdir)) {
-        printf("  FAIL: mkdtemp() failed\n");
+    /* Mount the writable ODS-2 fixture on DKA0: executive-global so MMK's forked
+     * DCL and MMK itself both reach it through the ACP (idempotent -- another
+     * suite in this VM may have mounted it already). This is the SAME volume the
+     * flip's RMS/DCL ACP suites author files on. */
+    uint32_t mst = vms_kif_acp_mount(ODS2_UNIT);
+    if (!$VMS_STATUS_SUCCESS(mst)) {
+        printf("  FAIL: could not mount %s for the build volume (0x%08X)\n",
+               ODS2_UNIT, mst);
         return 1;
     }
 
-    /* A real MMS description file: OVMXB23.OUT depends on OVMXB23.IN, with a
-     * tab-indented action that makes DCL COMPUTE the independent oracle and
-     * write it to SYS$OUTPUT (which rides back over MMK's result mailbox and is
-     * echoed to MMK's own SYS$OUTPUT). MMK requires the leading TAB. */
-    char path[256];
-    snprintf(path, sizeof(path), "%s/OVMXB23.MMS", workdir);
-    if (write_file(path,
-            "OVMXB23.OUT : OVMXB23.IN\n"
-            "\tANSWER = 6 * 7\n"
-            "\tWRITE SYS$OUTPUT \"OVMXB23:''ANSWER'\"\n") != 0) {
-        printf("  FAIL: could not write descrip.mms\n");
+    /* Author the description + rules files in DKA0:[OVMXDIR] through RMS
+     * ($CREATE/$PUT -> the Files-11 ACP). The rule target is a BARE name (all
+     * MMK's lib$tparse accepts) and the rule is DEPENDENCY-FREE, so MMK just
+     * builds it (its MFD stat misses -> out of date) without needing any bare
+     * file to exist in the non-writable MFD. The tab-indented action is unchanged
+     * from the original: DCL COMPUTES the independent oracle (6*7) and WRITEs it
+     * to SYS$OUTPUT, which rides back over MMK's result mailbox and is echoed to
+     * MMK's own SYS$OUTPUT. MMK requires the leading TAB on each action line. */
+    static const char *mms_lines[] = {
+        "OVMXB23.OUT :",
+        "\tANSWER = 6 * 7",
+        "\tWRITE SYS$OUTPUT \"OVMXB23:''ANSWER'\"",
+        NULL
+    };
+    static const char *rules_lines[] = { "! empty default rules (vms-b23 drive test)", NULL };
+
+    /* Start clean: a prior run in this booted VM may have left these behind. */
+    erase_ods2(ODS2_DIR "OVMXB23.MMS");
+    erase_ods2(ODS2_DIR "MMS$RULES");
+
+    if (create_ods2_text(ODS2_DIR "OVMXB23.MMS", mms_lines) != 0) {
+        printf("  FAIL: could not author %sOVMXB23.MMS via RMS\n", ODS2_DIR);
         return 1;
     }
-    /* The dependency source must exist so MMK resolves the rule. */
-    snprintf(path, sizeof(path), "%s/OVMXB23.IN", workdir);
-    if (write_file(path, "vms-b23 spine-4 build input\n") != 0) {
-        printf("  FAIL: could not write OVMXB23.IN\n");
-        return 1;
-    }
-    /* /RULES defaults to MMS$RULES; an empty one keeps the run's status clean. */
-    snprintf(path, sizeof(path), "%s/MMS$RULES", workdir);
-    if (write_file(path, "! empty default rules (vms-b23 drive test)\n") != 0) {
-        printf("  FAIL: could not write MMS$RULES\n");
+    /* /RULES_FILE points MMK at this empty rules file (full ODS-2 spec) so the
+     * run's status stays clean. */
+    if (create_ods2_text(ODS2_DIR "MMS$RULES", rules_lines) != 0) {
+        printf("  FAIL: could not author %sMMS$RULES via RMS\n", ODS2_DIR);
         return 1;
     }
 
@@ -228,14 +323,33 @@ int main(int argc, char **argv)
     if (pid < 0) { printf("  FAIL: fork() failed\n"); return 1; }
     if (pid == 0) {
         /* Child = the shipped MMK. Run the REAL build (NOT /NOACTION): MMK opens
-         * the persistent DCL and drives the action over the mailbox. */
-        if (chdir(workdir) != 0) _exit(120);
+         * the description off the ODS-2 volume through RMS, opens the persistent
+         * DCL, and drives the action over the mailbox. /DESCRIPTION + /RULES_FILE
+         * are qualifier VALUES (not rule-parsed) so they carry the device+MFD
+         * spec; the P1 target is bare (resolving to DKA0:'s MFD like the rule). */
         dup2(outpipe[1], STDOUT_FILENO);
         dup2(outpipe[1], STDERR_FILENO);
         close(outpipe[0]); close(outpipe[1]);
         int devnull = open("/dev/null", O_RDONLY);
         if (devnull >= 0) { dup2(devnull, STDIN_FILENO); close(devnull); }
-        setenv("VMS_FOREIGN_CMD", "/DESCRIPTION=OVMXB23.MMS OVMXB23.OUT", 1);
+        static const char fcmd[] =
+               "/DESCRIPTION=" ODS2_DIR "OVMXB23.MMS "
+               "/RULES_FILE=" ODS2_DIR "MMS$RULES "
+               "OVMXB23.OUT";
+        /* Record the foreign command tail on THIS process's executive CLI
+         * context (vms-f60d). execl below keeps the same PID -- hence the same
+         * executive PCB -- so the shipped MMK's LIB$GET_FOREIGN reads the tail
+         * back with vms_kif_getcli, the authoritative channel the real runtime
+         * uses (the invoking CLI records the command line; the activated image
+         * reads it), NOT the retired VMS_FOREIGN_CMD env shim: lib$get_foreign
+         * now prefers the executive whenever /dev/vms answers, and only consults
+         * VMS_FOREIGN_CMD as the no-executive fallback. MMK.EXE is a bare static
+         * image (no IMGACT interpreter), so it re-REGISTERs onto this same PCB
+         * (EEXIST, context preserved) rather than REGISTER_CONTINUE-inheriting
+         * from a parent -- the setcli made here is what it reads. The env var is
+         * kept only for that no-executive fallback, mirroring lib$get_foreign. */
+        (void)vms_kif_setcli(1, fcmd);
+        setenv("VMS_FOREIGN_CMD", fcmd, 1);
         execl(mmk_path(), mmk_path(), (char *)NULL);
         _exit(127);
     }
@@ -310,6 +424,15 @@ int main(int argc, char **argv)
     CHECK(got_marker,
           "MMK.EXE drove a real build: its spawned DCL computed 6*7 and delivered OVMXB23:42 back over the mailbox drive (spawn + mailbox + write-attention AST + $HIBER + IO$M_NOW + $STATUS marker)");
 
+    /* On failure, surface MMK's captured SYS$OUTPUT so a wedge is attributable
+     * (e.g. an MMK__NOOPNDSC "cannot open description file" signal names a build
+     * volume / ACP problem, distinct from a mailbox/AST hang). Bounded. */
+    if (!got_marker) {
+        printf("  DIAG: reaped=%d waited=%dms acclen=%zu MMK captured output follows:\n",
+               reaped, waited, acclen);
+        printf("  DIAG-BEGIN>>>\n%.*s\n  <<<DIAG-END\n", (int)acclen, acc);
+    }
+
     /* Hygiene, NOT a verdict. In the working case MMK already exited on its own in
      * the loop above (reaped=1), having run sp_close() to $FORCEX/$DELPRC its DCL
      * subprocess and $DASSGN its mailboxes -- so this suite leaves NOTHING alive on
@@ -333,12 +456,12 @@ int main(int argc, char **argv)
     }
     close(outpipe[0]);
 
-    /* Cleanup the work directory. */
-    snprintf(path, sizeof(path), "%s/OVMXB23.MMS", workdir); unlink(path);
-    snprintf(path, sizeof(path), "%s/OVMXB23.IN",  workdir); unlink(path);
-    snprintf(path, sizeof(path), "%s/OVMXB23.OUT", workdir); unlink(path);
-    snprintf(path, sizeof(path), "%s/MMS$RULES",   workdir); unlink(path);
-    rmdir(workdir);
+    /* Cleanup: $ERASE the build files off the ODS-2 volume (each service
+     * $DASSGNs its own channel). DKA0: is SYS$SYSDEVICE and is left MOUNTED --
+     * sibling suites depend on it and the mount is executive-global + idempotent,
+     * so dismounting it here would be both unnecessary and hostile to them. */
+    erase_ods2(ODS2_DIR "OVMXB23.MMS");
+    erase_ods2(ODS2_DIR "MMS$RULES");
 
     printf("=== test_syssvc_mmk_drive: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

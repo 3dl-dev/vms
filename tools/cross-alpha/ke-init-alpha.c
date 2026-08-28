@@ -5,7 +5,7 @@
  *
  * Boots as init under qemu-system-alpha (-M clipper = the DS10 compute stack:
  * 21264/EV6 + Tsunami + OSF/1 PALcode) on a Linux/Alpha kernel, loads the
- * cross-compiled vms.ko + vmsfs.ko executive modules, confirms /dev/vms
+ * cross-compiled vms.ko executive module, confirms /dev/vms
  * appears, attaches the fixtures the raw-ioctl suites need (a loop device
  * over a VMSFS test image, mirroring tests/qemu/init.sh's own convention),
  * then runs EVERY tests/qemu/test_kmod_*.c suite (all 29) -- the SAME
@@ -58,25 +58,10 @@ static int load_module(const char *path)
     return 0;
 }
 
-/* Attach a backing file to a loop device (mirrors tests/qemu/init.sh's
- * `losetup /dev/loop0 /test_data/vmsfs_test.img`, done by hand since there is
- * no busybox/losetup binary in this initramfs). */
-static int loop_attach(const char *dev, int minor, const char *backing_path)
-{
-    (void)mknod(dev, S_IFBLK | 0600, makedev(7, minor));
-    int backing = open(backing_path, O_RDWR);
-    if (backing < 0) { printf("OVMX-ALPHA-KE: open %s failed: %s\n", backing_path, strerror(errno)); return -1; }
-    int loopfd = open(dev, O_RDWR);
-    if (loopfd < 0) { printf("OVMX-ALPHA-KE: open %s failed: %s\n", dev, strerror(errno)); close(backing); return -1; }
-    if (ioctl(loopfd, LOOP_SET_FD, backing) < 0) {
-        printf("OVMX-ALPHA-KE: LOOP_SET_FD %s -> %s failed: %s\n", backing_path, dev, strerror(errno));
-        close(loopfd); close(backing); return -1;
-    }
-    close(backing);
-    close(loopfd);
-    printf("OVMX-ALPHA-KE: %s attached to %s\n", dev, backing_path);
-    return 0;
-}
+/* vms-165: the loop_attach() helper (which backed /dev/loop0 with the deleted
+ * vmsfs_test.img fixture for the retired vmsfs VFS-driver suites) was removed
+ * with those suites. The surviving test_kmod_* suites drive the executive
+ * directly over /dev/vms and need no loop device. */
 
 /*
  * Run a suite binary at /tests/<name>; capture its stdout through a pipe so
@@ -152,7 +137,6 @@ static const char *const kSuites[] = {
     "test_kmod_lock_sync",
     "test_kmod_mbx",
     "test_kmod_modeswitch",
-    "test_kmod_ods2_codec",
     "test_kmod_p0",
     "test_kmod_p1",
     "test_kmod_pin",
@@ -161,13 +145,9 @@ static const char *const kSuites[] = {
     "test_kmod_resdir",
     "test_kmod_rundown",
     "test_kmod_setterm",
-    "test_kmod_vmsfs",
-    "test_kmod_vmsfs_blkdev",
-    "test_kmod_vmsfs_exepath",
-    "test_kmod_vmsfs_mountvis",
-    "test_kmod_vmsfs_readdir",
-    "test_kmod_vmsfs_rename",
-    "test_kmod_vmsfs_sysgroup",
+    /* vms-165 retired the vmsfs VFS driver + its test suites
+     * (test_kmod_vmsfs* / test_kmod_ods2_codec); the Files-11 ODS-2 ACP now
+     * lives in vms.ko and is covered by the test_syssvc_* / ACP suites. */
 };
 #define N_SUITES (sizeof(kSuites) / sizeof(kSuites[0]))
 
@@ -188,7 +168,8 @@ int main(void)
         printf("OVMX-ALPHA-KE: FATAL vms.ko load failed\n");
         goto out;
     }
-    load_module("/vmsfs.ko");
+    /* vms-165: the Files-11 ODS-2 ACP is inside vms.ko now; there is no separate
+     * vmsfs.ko VFS module to load. */
 
     if (access("/dev/vms", F_OK) == 0) {
         printf("OVMX-ALPHA-KE: /dev/vms PRESENT\n");
@@ -197,15 +178,9 @@ int main(void)
         goto out;
     }
 
-    /* /dev/loop0 <- /test_data/vmsfs_test.img, exactly as tests/qemu/init.sh
-     * does for the x86_64 harness: test_kmod_vmsfs_{exepath,mountvis,rename,
-     * sysgroup} all hard-code LOOP_DEV="/dev/loop0" against this SAME image.
-     * test_kmod_ods2_codec attaches its OWN /dev/loop1 internally (a DIFFERENT
-     * device, no conflict) -- see its own source comment. */
-    if (access("/test_data/vmsfs_test.img", F_OK) == 0)
-        loop_attach("/dev/loop0", 0, "/test_data/vmsfs_test.img");
-    else
-        printf("OVMX-ALPHA-KE: /test_data/vmsfs_test.img not staged -- loop0 suites will fail honestly, not skip\n");
+    /* vms-165 retired the vmsfs VFS driver and its mkimage_vmsfs / vmsfs_test.img
+     * loop0 fixture; the remaining test_kmod_* suites exercise the executive
+     * directly over /dev/vms and stage no loop device here. */
 
     int suites_pass = 0, suites_fail = 0;
     int assert_pass = 0, assert_fail = 0;

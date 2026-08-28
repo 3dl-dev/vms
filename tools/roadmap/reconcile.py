@@ -37,6 +37,11 @@ USAGE
     python3 tools/roadmap/reconcile.py --site-dir ../openvmx-site
     python3 tools/roadmap/reconcile.py --rd-json snap.json --as-of 2026-08-14 --check
     python3 tools/roadmap/reconcile.py --print-gaps    # just report rd-labeling gaps
+    python3 tools/roadmap/reconcile.py --check-cascade --site-dir ../openvmx-site
+                                                       # verify every public surface
+                                                       # reflects the latest release tag
+                                                       # (fails loudly on a demo/site that
+                                                       # silently trails the shipped cut)
 """
 from __future__ import annotations
 
@@ -44,6 +49,7 @@ import argparse
 import datetime as _dt
 import json
 import os
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -61,10 +67,11 @@ MILESTONES = [
     ("0.4", "shipped",
      "Installs and boots faithfully — the product installs to a target disk and reboots "
      "into a login."),
-    ("0.5", "active",
-     "Foundations for the network and the toolchain — a shared-state executive, "
-     "VMS-faithful cluster configuration, a self-hosting toolchain, and a kernel substrate of its own."),
-    ("0.6", "planned",
+    ("0.5", "shipped",
+     "The authenticity flip — RMS reads and writes genuine Files-11 ODS-2 over the "
+     "executive ACP (the /vms passthrough retired on the runtime path), binary SYSUAF "
+     "and Purdy login, and a userland that builds itself in-guest."),
+    ("0.6", "active",
      "Cluster correctness — quorum and reconfiguration, a real distributed lock manager, "
      "and cluster membership resident in the executive."),
     ("0.7", "planned",
@@ -73,9 +80,14 @@ MILESTONES = [
     ("0.8", "planned",
      "Rejoin and satellite boot — a removed node rejoins under its own identity; "
      "diskless satellites boot from a served disk."),
+    ("0.9", "planned",
+     "Feature-complete — a voting member joins, serves genuine ODS-2 storage, holds "
+     "locks, and evacuates a live node; TCP/IP, DECnet, and the self-hosting toolchain "
+     "reach done. The last features land here."),
     ("1.0", "goal",
-     "Joins and serves a real cluster, and runs the software — a voting member that "
-     "serves genuine ODS-2 storage, holds locks, and evacuates a live node."),
+     "Hardened and proven — feature-frozen on 0.9: authenticity enforced by the "
+     "executive, not by convention, and the whole system proven on real hardware and in "
+     "extended cluster interop against a real VAX. The release you trust; fixes only."),
 ]
 MILESTONE_ORDER = [m[0] for m in MILESTONES]
 
@@ -89,16 +101,18 @@ GATE_EPICS = [
      "Real breadth and depth across the DCL command set and system utilities — no facades.",
      "continuous"),
     ("vms-678", "Self-hosting toolchain",
-     "OVMX builds OVMX from within: compiler, librarian, and linker run as native images "
-     "with no host tools in the build path.", "0.5-1.0"),
+     "OVMX builds OVMX from within: the librarian and linker run as native images with no "
+     "host tools in the build path. The in-guest tcc is a labelled bootstrap; the faithful "
+     "destination is the existing OpenVMS GCC and MMK ports building on OVMX unchanged, over "
+     "a genuine VMS-compatibility surface.", "0.5-0.9"),
     ("vms-098", "Cluster configuration",
      "Provision a node into a cluster the VMS way: SYSGEN parameters, AUTOGEN, "
-     "CLUSTER_AUTHORIZE, and CLUSTER_CONFIG.", "0.5-1.0"),
+     "CLUSTER_AUTHORIZE, and CLUSTER_CONFIG.", "0.5-0.9"),
     ("vms-67f", "TCP/IP networking",
      "A VMS-faithful IP layered product: the network device, sockets, the resolver, "
-     "and the client tools.", "0.5-1.0"),
+     "and the client tools.", "0.5-0.9"),
     ("vms-30e", "DECnet Phase IV",
-     "Clean-room DECnet: SET HOST and file transfer to and from a lab node.", "1.0"),
+     "Clean-room DECnet: SET HOST and file transfer to and from a lab node.", "0.9"),
     ("vms-19e", "Kernel substrate",
      "SYSKRNL: the OVMX executive layered over the Linux and NetBSD kernels — not a "
      "kernel of its own. Built from pinned upstream source with the VMS modules "
@@ -106,12 +120,18 @@ GATE_EPICS = [
     ("vms-8e8", "VAX as a first-class platform",
      "OVMX runs natively on VAX through a NetBSD system kernel: the executive, ODS-2 "
      "storage, and DCL boot on real VAX emulation, co-released across every architecture.",
-     "0.5-1.0"),
+     "0.5-0.9"),
 ]
 GATE_IDS = [g[0] for g in GATE_EPICS]
 
 # Editorial release notes, tag -> one line. Tags without an entry get a generic note.
 RELEASE_NOTES = {
+    "V0.5-5": "VAX login end-to-end, executive faithfulness, and Alpha toolchain hardening — the first release cut through an all-architectures gate (x86_64, aarch64, VAX, and Alpha all proven green on the exact commit before tagging). The VAX installed single-disk authenticates SYSTEM/MANAGER to a DCL prompt, and RUN /DETACHED now names the console OPA0: instead of the raw substrate path. The executive-boundary audit tracer is wired operational at image activation, so a raw syscall an image issues becomes a visible finding rather than a silent bypass. Alpha toolchain: a DST-tolerant object reader, container-format-aware C-RTL architecture auto-detection, LINK.EXE hard-errors a strong-vs-strong duplicate definition on the EVAX path (exempting same-library members, VMS first-module-wins), the stdio streams export as data universals, and $CREPRC fails honestly when a UIC or privilege override cannot reach the executive row.",
+    "V0.5-4": "VAX authentication reaches DCL. The VAX login chain lands end-to-end: the Purdy-S hash defeats a gcc-vax DImode miscompile by construction so it matches the real binary SYSUAF, JOB_CONTROL establishes SYSTEM identity at startup, and $CREPRC stamps executive identity with RUN /UIC//PRIVILEGES honored. Alpha becomes a co-release peer with a genuine C runtime: a wiring gate reds the cut on any broken Alpha build, the Alpha C-RTL shareables (DECC$SHR's 538 universals and LIBOTS$SHR's 11 OTS$ routines) are built from real musl and libgcc with zero undefined, the GCC port's crt0 links zero-deferred against them, and an FP divide-by-zero raises SS$_HPARITH through the condition handler into $STATUS. Toolchain and faithfulness hardening: a standing shell-portability lint gate, LINK.EXE hard-errors a strong-vs-strong multiple definition (%LINK-F-MULDEF), and the executive-boundary audit tracer (seccomp user-notification, observe-only) makes every raw syscall an image issues visible as a finding — the Phase-A instrument under the executive-boundary program.",
+    "V0.5-3": "QA-remediation, acceptance-gate-proven. Fixes the basic-command breakage that shipped in V0.5-2 and installs a standing boot-and-run DCL/SHOW acceptance gate so it cannot recur — the gate boots the real image, logs in, runs the commands a user types, and asserts VMS-faithful output. SHOW USERS lists real interactive and spawned processes (was empty); WRITE F$GETSYI and other lexical functions evaluate rather than printing literal tokens; SHOW DEVICE shows mount state, volume label, and free blocks; SHOW QUOTA is de-fabricated to an honest %SYSTEM-F-NODISKQUOTA (no invented UIC/blocks, INV-6); SHOW DEVICES/SYMBOL wildcard/STATUS real $GETJPI accounting; bare DIRECTORY resolves the rooted login default (was %DIRECT-W-NOFILES); DIRECTORY header/columns and the SPAWN /PROCESS= qualifier. Also: os-release VERSION_ID SSOT guard, the roadmap Ledger reconcile, and the alpha-dec-vms cc1 entry-label decoration up the do-it-like-VMS ladder.",
+    "V0.5-2": "Restores x86_64 boot-to-login (vms-656): a native-link build-flag drift had dropped the shipped RMS's ODS-2 ACP arm, so STARTUP.COM could not resolve SYS$STARTUP:VMS$PHASES.DAT over the executive ACP — genuine Files-11 ACP search-list resolution is restored (the POSIX fallback removed) with a drift-catching guard, and x86_64 boots to the Username: prompt again. Builds the OpenVMS GCC-port crt0 surface up the do-it-like-VMS ladder: IMGACT presents a genuine VMS image-activation context (Alpha standard call), decc$main produces argc/argv/envp, C$_EXIT1 is a C-RTL globalvalue, and LINK.EXE reads the alpha-dec-vms port's native EVAX object (cross-image SYMG import binding, dsc$descriptor_s canonical binding) with no ELF force-down. Also: vmssshd fail-honest on executive identity refusal (INV-6), the vms-040 executive-boundary audit, genuine $ALLOC/$DALLOC over a NetBSD executive device table, the vms-329 VAX-runtime ACP cutover work, RMS multiblock ACP read-ahead, and SPAWN visibility in SHOW USERS/SYSTEM.",
+    "V0.5-1": "Hardens the Alpha authentic-login gate and lands C++ first-light. The ODS-2 executive ACP is proven on x86_64 and Alpha LP64 (which boot and run RMS over the executive ACP); on NetBSD/VAX the ACP codec is built and unit-proven but is NOT yet wired into the runtime — the VAX image set builds with OVMX_HAVE_ACP undefined and boots via the Files-11 VFS/POSIX path (converting the VAX runtime onto the ACP is tracked as vms-d5d/vms-049, V0.5-2+; the vms-d9c VAX-boot gate is green to PROVISION.EXE via that path). Alpha authentic binary-SYSUAF login carries a standing green-by-SHA CI gate, and C++ first-light — a real C++ program (constructors, std::string/iostream, throw/catch) runs to exit-0 as an OVMX image, proven across x86_64, Alpha LP64, and VAX ILP32.",
+    "V0.5": "The authenticity flip: RMS reads and writes genuine Files-11 ODS-2 over the executive ACP (the /vms passthrough retired on the runtime path); binary $UAFDEF SYSUAF + Purdy login proven on x86_64 and Alpha LP64; and the shipped MMK.EXE self-hosts the userland in-guest (TCC->LIBRARIAN->LINK->activate, zero bash, byte-identical). The NetBSD/VAX substrate runs on the Files-11 VFS/POSIX path; wiring the VAX runtime onto the executive ACP is tracked as vms-d5d/vms-049 (V0.5-2+).",
     "V0.4-6": "Real OpenSSH key exchange over the executive network path, genuine ODS-2 read/write/INITIALIZE foundations, cluster rejoin proof, VAX co-release, and a sharded kernel-executive gate.",
     "V0.4-5": "Feature pack marching toward 0.5.",
     "V0.4-4": "Feature pack marching toward 0.5.",
@@ -140,6 +160,9 @@ DOC_ANCHOR = "## 2. The 1.0 objective and its pillars"
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ROADMAP_DOC = os.path.join(REPO_ROOT, "docs", "release-roadmap-to-1.0.md")
 BUILD_JSON = os.path.join(REPO_ROOT, "build", "roadmap.json")
+
+# Public site origin, used to build the Atom feed's stable ids and links.
+SITE_URL = "https://openvmx.3dl.dev"
 
 
 # --------------------------------------------------------------------------- #
@@ -305,8 +328,24 @@ def git_releases() -> list[dict]:
     scored.sort(key=lambda kt: (kt[0], kt[1]), reverse=True)
     out = []
     for _, tag in scored:
-        out.append({"tag": tag, "note": RELEASE_NOTES.get(tag, "Point release.")})
+        out.append({"tag": tag, "note": RELEASE_NOTES.get(tag, "Point release."),
+                    "date": _tag_date(tag)})
     return out
+
+
+def _tag_date(tag: str) -> str | None:
+    """Committer date of the tag's commit, strict ISO-8601 (RFC 3339).
+
+    Deterministic (a tag's commit date is fixed), so surfacing it does not
+    break the reconcile idempotency contract — it is not a wall-clock stamp.
+    """
+    try:
+        return subprocess.run(
+            ["git", "-C", REPO_ROOT, "log", "-1", "--format=%cI", tag],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip() or None
+    except Exception:
+        return None
 
 
 def labeling_gaps(items: list[dict], by: dict[str, dict],
@@ -471,6 +510,27 @@ def _scrub(s: str) -> str:
     return s
 
 
+# Editorial one-liner for the next in-progress point release (INV-0 curation, like
+# RELEASE_NOTES). Version is DERIVED (latest tag + 1); this is just the theme.
+NEXT_POINT_THEME = "Actively landing on the current line."
+
+
+def _next_point_release(releases: list[dict]):
+    """The next in-progress POINT release, derived from the newest shipped tag
+    (releases is newest-first). "V0.5-4" -> "V0.5-5"; "V0.5" -> "V0.5-1".
+    Returns {version, theme} or None. Drives the site's rail-next so the public
+    view tracks the point-release cadence, not a jump to the next milestone."""
+    if not releases:
+        return None
+    import re
+    m = re.match(r"^(V?\d+\.\d+)(?:-(\d+))?$", releases[0].get("tag", ""))
+    if not m:
+        return None
+    base, pt = m.group(1), m.group(2)
+    return {"version": f"{base}-{(int(pt) + 1) if pt else 1}",
+            "theme": NEXT_POINT_THEME}
+
+
 def public_json(data: dict, as_of: str) -> str:
     """MILESTONE-LEVEL, curated, trademark-scrubbed. NO internal item IDs."""
     ladder = []
@@ -504,6 +564,7 @@ def public_json(data: dict, as_of: str) -> str:
             "note": "Derived, milestone-level public view. Regenerated each checkpoint; "
                     "do not hand-edit.",
             "scrubbed": "trademark scrub applied on render (public site)",
+            "nextPointRelease": _next_point_release(data["releases"]),
         },
         "vocab": {
             "status": {
@@ -519,6 +580,53 @@ def public_json(data: dict, as_of: str) -> str:
         "releases": releases,
     }
     return json.dumps(obj, indent=1, sort_keys=False, ensure_ascii=False) + "\n"
+
+
+def atom_feed(data: dict, as_of: str) -> str:
+    """Atom 1.0 release feed for the public site (one entry per shipped tag).
+
+    Entry <updated> is the tag's committer date (deterministic); the feed
+    <updated> is the newest entry's date, so re-running reconcile with no new
+    tag produces a byte-identical file (idempotency contract, like the JSON).
+    Notes are trademark-scrubbed with the same contract as the site JSON.
+    """
+    from xml.sax.saxutils import escape
+
+    releases = data["releases"][:PUBLIC_RELEASE_LIMIT]
+
+    def entry_updated(rel: dict) -> str:
+        # Fall back to the as-of DATE (midnight UTC) only if a tag has no commit
+        # date — real release tags always resolve one.
+        return rel.get("date") or f"{as_of}T00:00:00+00:00"
+
+    feed_updated = entry_updated(releases[0]) if releases else f"{as_of}T00:00:00+00:00"
+
+    L = []
+    L.append('<?xml version="1.0" encoding="utf-8"?>')
+    L.append('<feed xmlns="http://www.w3.org/2005/Atom">')
+    L.append(f"  <title>OpenVMX releases</title>")
+    L.append("  <subtitle>Shipped releases of OpenVMX — the DCL and RMS "
+             "operating environment on the Linux and NetBSD kernels.</subtitle>")
+    L.append(f'  <link href="{SITE_URL}/atom.xml" rel="self"/>')
+    L.append(f'  <link href="{SITE_URL}/" rel="alternate"/>')
+    L.append(f"  <id>tag:openvmx.3dl.dev,2026:releases</id>")
+    L.append(f"  <updated>{feed_updated}</updated>")
+    L.append("  <author><name>OpenVMX</name></author>")
+    for rel in releases:
+        tag = rel["tag"]
+        note = _scrub(rel["note"])
+        updated = entry_updated(rel)
+        L.append("  <entry>")
+        L.append(f"    <title>{escape(tag)}</title>")
+        L.append(f"    <id>tag:openvmx.3dl.dev,2026:release/{escape(tag)}</id>")
+        L.append(f"    <updated>{updated}</updated>")
+        # The site has no per-release page; point the reader at the roadmap,
+        # which lists the shipped tags.
+        L.append(f'    <link href="{SITE_URL}/roadmap/" rel="alternate"/>')
+        L.append(f"    <summary>{escape(note)}</summary>")
+        L.append("  </entry>")
+    L.append("</feed>")
+    return "\n".join(L) + "\n"
 
 
 # --------------------------------------------------------------------------- #
@@ -556,22 +664,272 @@ def print_gaps(data: dict) -> None:
 
 # --------------------------------------------------------------------------- #
 
+def collapse_problems(items: list[dict], data: dict, min_items: int) -> list[str]:
+    """Return the reasons this snapshot looks collapsed/empty (empty list == healthy).
+
+    THE ALL-ZEROS INCIDENT (2026-08-15): reconcile ran against an empty/stale rd
+    snapshot (rd unsynced / `rd list` returned nothing) and published a public
+    roadmap.json where EVERY milestone had total=0 and EVERY workstream was
+    'missing' — the live site showed all 0%. Nothing in the tool objected. This
+    check makes that failure a hard, loud abort (see sanity_gate) so a collapsed
+    snapshot can never again silently overwrite good published data.
+
+    The three signals are deliberately overlapping (defence in depth): a genuine
+    collapse trips all three, a partial truncation trips at least the floor.
+    """
+    problems: list[str] = []
+    n = len(items)
+    if n < min_items:
+        problems.append(
+            f"snapshot has {n} items (< floor {min_items}) — rd is likely empty or unsynced")
+    gate_total = len(data["workstreams"])
+    gate_present = sum(1 for w in data["workstreams"] if w["self_status"] != "missing")
+    if gate_present == 0 and gate_total:
+        problems.append(
+            f"0/{gate_total} gate-epic nodes present — every workstream would render 'missing'")
+    milestone_items = sum(m["rollup"]["total"] for m in data["milestones"])
+    if milestone_items == 0:
+        problems.append(
+            "0 rel-* labelled items across all milestones — every milestone would render 0%")
+    return problems
+
+
+def sanity_gate(items: list[dict], data: dict, min_items: int, allow_empty: bool) -> None:
+    """Refuse to emit anything from a collapsed snapshot (exit 2, write nothing)."""
+    problems = collapse_problems(items, data, min_items)
+    if problems and not allow_empty:
+        sys.stderr.write(
+            "reconcile.py: REFUSING TO PUBLISH — the rd snapshot looks collapsed:\n")
+        for p in problems:
+            sys.stderr.write(f"  - {p}\n")
+        sys.stderr.write(
+            "No files written; any existing published roadmap.json is left intact.\n"
+            "Fix rd, then re-run. Most common cause: `rd list --all --json` returns an\n"
+            "EMPTY board because this was run from a git worktree (worktrees lack the CEK\n"
+            "epoch) — run reconcile.py from the primary repo checkout, not a .worktrees/ dir.\n"
+            "Otherwise check rd is synced. For a genuinely empty board, pass --allow-empty.\n")
+        raise SystemExit(2)
+
+
+# --------------------------------------------------------------------------- #
+#  release cascade verification                                                 #
+# --------------------------------------------------------------------------- #
+
+def _read(path: str) -> str | None:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def check_cascade(site_dir: str) -> int:
+    """Verify every downstream public surface reflects the latest release TAG.
+
+    THE SOURCE OF TRUTH is the newest release-like git tag (same set the Atom
+    feed is derived from — no new ledger). Given that tag, every public surface
+    must either (a) show that version, or (b) — for the in-browser DEMO, whose
+    image is expensively re-captured and can lag a cut when the capture races an
+    install-reboot — carry an EXPLICIT, tracked pin acknowledging the lag. A demo
+    that silently trails the latest release (the "demo shows V0.5 while V0.5-1
+    shipped" drift) FAILS here loudly.
+
+    Surfaces:
+      - index.html            `data-ovmx-version` spans      == latest tag  (product edition)
+      - docs/installation/…   `data-ovmx-version` spans      == latest tag  (manual "applies to")
+      - atom.xml              newest <entry> <title>         == latest tag  (release feed)
+      - boot/DEPLOYED_TAG     the image the demo actually boots
+      - boot/qemu-worker.js   PAYLOAD_VER cache-buster       keyed to DEPLOYED_TAG (the demo payload)
+      - index.html            `data-demo-version` span       == DEPLOYED_TAG (honest demo badge)
+      - demo lag rule         DEPLOYED_TAG == latest, OR boot/DEMO_PIN.json
+                              {pinned_to == DEPLOYED_TAG, blocked_from == latest}
+
+    Returns 0 if every surface is current (an acknowledged demo pin counts as a
+    pass, with a warning); 1 on any drift; 2 on a usage/environment error.
+    """
+    rels = git_releases()
+    if not rels:
+        print("check-cascade: no release-like git tags found (need the vms repo "
+              "with tags fetched)", file=sys.stderr)
+        return 2
+    latest = rels[0]["tag"]
+    print(f"latest release tag (source of truth): {latest}")
+
+    fails: list[str] = []
+    warns: list[str] = []
+
+    def rule(name: str, ok: bool, shown, expected):
+        mark = "OK  " if ok else "DRIFT"
+        print(f"  [{mark}] {name}: shown={shown!r} expected={expected!r}")
+        if not ok:
+            fails.append(f"{name}: shown {shown!r}, expected {expected!r}")
+
+    # ---- text/data surfaces that must always follow the latest tag ----
+    for rel in ("index.html", os.path.join("docs", "installation", "index.html")):
+        path = os.path.join(site_dir, rel)
+        html = _read(path)
+        if html is None:
+            print(f"  [skip ] {rel}: not present")
+            continue
+        spans = re.findall(r"data-ovmx-version>([^<]*)</span>", html)
+        if not spans:
+            rule(f"{rel} data-ovmx-version", False, "(no span found)", latest)
+        else:
+            for v in dict.fromkeys(spans):  # unique, stable order
+                rule(f"{rel} data-ovmx-version", v == latest, v, latest)
+
+    atom = _read(os.path.join(site_dir, "atom.xml"))
+    if atom is None:
+        rule("atom.xml newest entry", False, "(missing)", latest)
+    else:
+        m = re.search(r"<entry>.*?<title>(.*?)</title>", atom, re.S)
+        shown = m.group(1) if m else "(no entry)"
+        rule("atom.xml newest entry", shown == latest, shown, latest)
+
+    # ---- demo surfaces, keyed to what the demo image actually boots ----
+    deployed = (_read(os.path.join(site_dir, "boot", "DEPLOYED_TAG")) or "").strip()
+    if not deployed:
+        rule("boot/DEPLOYED_TAG", False, "(missing/empty)", latest)
+        deployed = None
+
+    if deployed:
+        # PAYLOAD_VER is a cache-buster for the demo PAYLOAD, so it tracks
+        # DEPLOYED_TAG (the image on disk), not the product edition.
+        worker = _read(os.path.join(site_dir, "boot", "qemu-worker.js"))
+        if worker is None:
+            rule("boot/qemu-worker.js PAYLOAD_VER", False, "(missing)", deployed)
+        else:
+            pm = re.search(r"PAYLOAD_VER\s*=\s*'([^']*)'", worker)
+            pv = pm.group(1) if pm else "(not found)"
+            ok = bool(pm) and re.fullmatch(re.escape(deployed) + r"(-\d+)?", pv) is not None
+            rule("boot/qemu-worker.js PAYLOAD_VER (keyed to DEPLOYED_TAG)",
+                 ok, pv, f"{deployed}[-<run>]")
+
+        # The visible demo badge must state what the demo really boots.
+        idx = _read(os.path.join(site_dir, "index.html")) or ""
+        dspans = re.findall(r"data-demo-version>([^<]*)</span>", idx)
+        if not dspans:
+            rule("index.html data-demo-version (visible demo badge)",
+                 False, "(no span found)", deployed)
+        else:
+            for v in dict.fromkeys(dspans):
+                rule("index.html data-demo-version (visible demo badge)",
+                     v == deployed, v, deployed)
+
+        # The lag rule: current, or explicitly + trackably pinned.
+        if deployed == latest:
+            rule("demo tracks latest release", True, deployed, latest)
+        else:
+            pin_raw = _read(os.path.join(site_dir, "boot", "DEMO_PIN.json"))
+            pin = None
+            if pin_raw:
+                try:
+                    pin = json.loads(pin_raw)
+                except json.JSONDecodeError as e:
+                    print(f"  [DRIFT] boot/DEMO_PIN.json: invalid JSON ({e})")
+                    fails.append("boot/DEMO_PIN.json is not valid JSON")
+            if (pin and pin.get("pinned_to") == deployed
+                    and pin.get("blocked_from") == latest):
+                print(f"  [WARN ] demo is DELIBERATELY pinned to {deployed} "
+                      f"(latest {latest} blocked): {pin.get('reason','(no reason)')} "
+                      f"[tracking: {pin.get('tracking','(none)')}]")
+                warns.append(f"demo pinned to {deployed}, latest is {latest}")
+            else:
+                print(f"  [DRIFT] demo boots {deployed} but latest release is "
+                      f"{latest}, and boot/DEMO_PIN.json does not explicitly "
+                      f"acknowledge it (need pinned_to={deployed}, "
+                      f"blocked_from={latest})")
+                fails.append(
+                    f"demo silently trails: boots {deployed}, latest {latest}, "
+                    f"no acknowledging DEMO_PIN.json")
+
+    print()
+    if fails:
+        print(f"CASCADE DRIFT — {len(fails)} surface(s) do not reflect {latest}:")
+        for f in fails:
+            print(f"  - {f}")
+        return 1
+    if warns:
+        print(f"cascade OK for {latest} (with {len(warns)} acknowledged pin(s)):")
+        for w in warns:
+            print(f"  - {w}")
+        return 0
+    print(f"cascade OK — every downstream surface reflects {latest}")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--rd-json", help="read snapshot from file instead of `rd list --all --json`")
     ap.add_argument("--as-of", help="date stamp YYYY-MM-DD (default: today UTC)")
     ap.add_argument("--site-dir", help="openvmx-site checkout: also write data/roadmap.json")
+    ap.add_argument("--feed-only", action="store_true",
+                    help="write ONLY the Atom release feed to --site-dir/atom.xml "
+                         "(derived from git tags alone — needs no rd snapshot, so it "
+                         "is safe to run in CI/the release train without corrupting "
+                         "the rd-derived roadmap.json)")
     ap.add_argument("--check", action="store_true",
                     help="exit 1 if regeneration would change any file (drift gate)")
+    ap.add_argument("--check-cascade", action="store_true",
+                    help="verify every public downstream surface in --site-dir "
+                         "reflects the latest release tag (or, for the demo, "
+                         "carries an explicit tracked pin). Exits 1 on drift. "
+                         "Derived from git tags alone — needs no rd snapshot, so "
+                         "it is safe to run in CI/the release train.")
     ap.add_argument("--print-gaps", action="store_true",
                     help="print the rd-labeling gap report and exit")
+    ap.add_argument("--min-items", type=int, default=200,
+                    help="collapse-guard floor: refuse to publish when the rd snapshot has "
+                         "fewer items than this (default 200; a healthy board is ~1300). "
+                         "Prevents an empty/unsynced snapshot from publishing all-0%%.")
+    ap.add_argument("--allow-empty", action="store_true",
+                    help="override the collapse-guard (only for a genuinely empty board)")
+    ap.add_argument("--roadmap-doc", default=ROADMAP_DOC,
+                    help="roadmap markdown to splice+write (default: the tracked doc; "
+                         "tests redirect this)")
     args = ap.parse_args()
 
     as_of = args.as_of or _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
 
+    # Cascade check: verify the public surfaces reflect the latest release tag.
+    # Derived from git tags alone (like --feed-only), so it needs no rd snapshot
+    # and is safe on the release train / in CI.
+    if args.check_cascade:
+        if not args.site_dir:
+            print("--check-cascade requires --site-dir", file=sys.stderr)
+            return 2
+        return check_cascade(args.site_dir)
+
+    # Feed-only: the release feed is derived from git tags alone, so it needs no
+    # rd snapshot and cannot touch the rd-derived roadmap.json. This is the mode
+    # the release train runs (see openvmx-site .github/workflows/track-release.yml)
+    # so a new tag refreshes the public feed without a live rd relay.
+    if args.feed_only:
+        if not args.site_dir:
+            print("--feed-only requires --site-dir", file=sys.stderr)
+            return 2
+        changed_feed: list[str] = []
+        site_atom = os.path.join(args.site_dir, "atom.xml")
+        write_if_changed(site_atom, atom_feed({"releases": git_releases()}, as_of),
+                         changed_feed, args.check)
+        if args.check:
+            if changed_feed:
+                print("DRIFT — regeneration would change:")
+                for p in changed_feed:
+                    print(f"  {p}")
+                return 1
+            print("clean — atom.xml is up to date")
+            return 0
+        print("wrote atom.xml" if changed_feed else "no changes to atom.xml")
+        return 0
+
     items = load_snapshot(args.rd_json)
     data = compute(items)
+    # Kill the all-0% failure mode at the source: never emit from a collapsed snapshot.
+    sanity_gate(items, data, args.min_items, args.allow_empty)
 
     if args.print_gaps:
         print_gaps(data)
@@ -580,10 +938,10 @@ def main() -> int:
     changed: list[str] = []
 
     # 1. in-repo roadmap doc GENERATED block
-    with open(ROADMAP_DOC) as fh:
+    with open(args.roadmap_doc) as fh:
         doc = fh.read()
     block = render_doc_block(data, as_of)
-    write_if_changed(ROADMAP_DOC, splice_doc(doc, block), changed, args.check)
+    write_if_changed(args.roadmap_doc, splice_doc(doc, block), changed, args.check)
 
     # 2. canonical machine export
     write_if_changed(BUILD_JSON, canonical_json(data, as_of), changed, args.check)
@@ -592,6 +950,9 @@ def main() -> int:
     if args.site_dir:
         site_data = os.path.join(args.site_dir, "data", "roadmap.json")
         write_if_changed(site_data, public_json(data, as_of), changed, args.check)
+        # 3b. public Atom release feed (served at the site root)
+        site_atom = os.path.join(args.site_dir, "atom.xml")
+        write_if_changed(site_atom, atom_feed(data, as_of), changed, args.check)
 
     if args.check:
         if changed:

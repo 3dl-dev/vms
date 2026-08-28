@@ -90,6 +90,9 @@
 #ifndef VMS_DEVNAM_SIZE
 #define VMS_DEVNAM_SIZE   16     /* device-name width (also in vms_mbx_nb.h) */
 #endif
+#ifndef VMS_CLI_CMDLINE_SIZE
+#define VMS_CLI_CMDLINE_SIZE 256 /* invoking DCL command-line bound (vms-f60d) */
+#endif
 
 /* ================================================================
  * VMS status codes the process-table facility returns that are NOT already in
@@ -144,6 +147,16 @@
 #define VMS_PI_V_BUFIO      0x00000100u  /* bufio is sourced */
 #define VMS_PI_V_QUOTA      0x00000200u  /* quota block is sourced */
 
+/* proc_type classification (vms-c17). Byte-identical to src/kernel/vms_ioctl.h;
+ * see there for the full rationale. BATCH is reserved and never set today (no
+ * batch execution engine). On NetBSD the PCB's job_id is 0 until the job glue
+ * joins (vms_internal.h), so proc_fill_info() falls back to per-row terminal
+ * classification there -- honest, never fabricated. */
+#define VMS_PROC_T_OTHER        0u  /* detached / system process (not a "user") */
+#define VMS_PROC_T_INTERACTIVE  1u  /* job root with a terminal (login) */
+#define VMS_PROC_T_SUBPROCESS   2u  /* belongs to a parent's job (SPAWN) */
+#define VMS_PROC_T_BATCH        3u  /* batch job root (reserved -- no engine yet) */
+
 /* ================================================================
  * Argument structs -- byte-identical to src/kernel/vms_ioctl.h. The shared
  * facility (src/kernel-core/vms_proctab.c) copies exactly these in and out.
@@ -177,7 +190,8 @@ struct vms_procinfo {
 	uint32_t uic;
 	uint8_t  current_mode;
 	uint8_t  redacted;
-	uint8_t  pad[2];
+	uint8_t  proc_type;   /* VMS_PROC_T_* -- process classification (vms-c17) */
+	uint8_t  pad[1];
 	uint64_t cur_privs;
 	uint64_t perm_privs;
 	char     username[VMS_USERNAME_SIZE];
@@ -242,6 +256,48 @@ struct vms_wake_args {
 	uint32_t status;      /* return: SS$_ status */
 };
 
+/*
+ * $EXIT/$STATUS + CLI invocation context (vms-f60d). Byte-for-byte the same
+ * structs as src/kernel/vms_ioctl.h -- the one shared facility source
+ * (src/kernel-core/vms_proctab.c) copies exactly these in and out on both
+ * substrates. See src/kernel/vms_ioctl.h for the full field semantics.
+ */
+struct vms_exit_args {
+	uint32_t condition;   /* in:  VMS condition value to record as $STATUS */
+	uint32_t status;      /* out: SS$_ status of the record operation */
+	uint32_t exit_code;   /* out: OVMX POSIX exit code mapped from condition */
+	uint8_t  success;     /* out: bit<0> of condition (STS$M_SUCCESS) */
+	uint8_t  severity;    /* out: bits<2:0> of condition (STS$V_SEVERITY) */
+	uint8_t  pad[2];
+};
+
+struct vms_getexit_args {
+	uint32_t select;      /* in:  VMS_JPI_SEL_SELF or VMS_JPI_SEL_PID */
+	uint32_t vms_pid;     /* in:  target VMS PID when select == SEL_PID */
+	uint32_t condition;   /* out: recorded $STATUS condition value */
+	uint32_t status;      /* out: SS$_ status of the read */
+	uint8_t  has_exited;  /* out: 1 iff an image completion status exists */
+	uint8_t  success;     /* out: bit<0> of condition (STS$M_SUCCESS) */
+	uint8_t  severity;    /* out: bits<2:0> of condition (STS$V_SEVERITY) */
+	uint8_t  pad;
+};
+
+struct vms_setcli_args {
+	uint8_t  cliflag;     /* in:  1 = invoked from a CLI/DCL */
+	uint8_t  pad;
+	uint16_t length;      /* in:  command-line length in bytes */
+	uint32_t status;      /* out: SS$_ status */
+	char     command[VMS_CLI_CMDLINE_SIZE];  /* in:  invoking DCL command line */
+};
+
+struct vms_getcli_args {
+	uint8_t  cliflag;     /* out: 1 = invoked from a CLI/DCL */
+	uint8_t  pad;
+	uint16_t length;      /* out: command-line length in bytes */
+	uint32_t status;      /* out: SS$_ status */
+	char     command[VMS_CLI_CMDLINE_SIZE];  /* out: invoking DCL command line */
+};
+
 /* ================================================================
  * Request numbers. All _IOWR carrying the SAME structs and NR bytes as
  * src/kernel/vms_ioctl.h, so their numbers are identical across substrates (the
@@ -250,6 +306,55 @@ struct vms_wake_args {
  * module's SRCS, so its facility handler is not linked here and the row's
  * `terminal` field stays "" -- honestly empty, not fabricated (INV-6).
  * ================================================================ */
+/*
+ * VMS_IOCTL_REGISTER / _REGISTER_CONTINUE (vms-329). The /dev/vms contract's
+ * "adopt-or-create this process's PCB" op. It was MISSING from this substrate
+ * because every NetBSD ioctl path find-or-creates the PCB implicitly
+ * (vms_proc_get, vms_netbsd.c) -- so nothing the kernel itself needed ever
+ * issued it. But the SHARED userspace ACP client does: imgact_acp.c (the file-
+ * access walk IMGACT.EXE, RMS and PID 1's boot bridge all run) opens with
+ * acp_register() and treats its failure as fatal, so on the VAX every ACP file
+ * open returned SS$_NOSUCHDEV before it ever touched the disk -- observed as
+ * the boot mounting SYS$DISK over the ACP and then declaring the volume "not an
+ * installed OVMX system volume". Answering it here is not new policy: it hands
+ * back the PCB vms_proc_get would have created anyway, which is exactly what
+ * the Linux twin's register does for an existing process (src/kernel/
+ * vms_module.c: "register a process that already exists -> hand back the
+ * process that already exists").
+ *
+ * NR 0x40/0x41 with the 8-byte struct, so the command word is identical to the
+ * Linux build's (asserted below). Note 0x41 is shared with SETPRN by NR alone;
+ * the encoded size differs (8 vs 72), so the command words do not collide --
+ * the same overlap src/kernel/vms_ioctl.h already carries.
+ */
+struct vms_register_args {
+	uint32_t vms_pid;     /* return: the VMS process ID assigned/adopted */
+	uint32_t status;      /* return: SS$_ status */
+};
+
+#define VMS_IOCTL_REGISTER          _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x40, struct vms_register_args)
+#define VMS_IOCTL_REGISTER_CONTINUE _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x41, struct vms_register_args)
+
+/*
+ * VMS_IOCTL_DASSGN (vms-329) -- $DASSGN, release one assigned channel. Also
+ * missing here, and also needed by the shared ACP client: imgact_acp.c and the
+ * RMS ACP arm $DASSGN every channel they take, and PID 1's boot bridge stages
+ * ~20 images per boot, so an unanswered $DASSGN leaks a file-class channel per
+ * open.
+ *
+ * HONEST SCOPE. The Linux twin (vms_devtab.c) tries the DEVICE channel table
+ * first, then falls back to mailbox and file-class channels. This substrate has
+ * no device table in SRCS, so only the mailbox and file-class fallbacks exist
+ * here; a channel that is neither reports SS$_IVCHAN rather than a fabricated
+ * success (INV-6).
+ */
+struct vms_dassgn_args {
+	uint32_t chan;
+	uint32_t status;      /* return: SS$_ status */
+};
+
+#define VMS_IOCTL_DASSGN            _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x51, struct vms_dassgn_args)
+
 #define VMS_IOCTL_SETPRN            _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x41, struct vms_setprn_args)
 #define VMS_IOCTL_GETJPI            _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x42, struct vms_getjpi_args)
 #define VMS_IOCTL_PROCSCAN          _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x43, struct vms_procscan_args)
@@ -257,6 +362,10 @@ struct vms_wake_args {
 #define VMS_IOCTL_ESTABLISH_SYSTEM  _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x46, struct vms_establish_system_args)
 #define VMS_IOCTL_HIBER             _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x47, struct vms_hiber_args)
 #define VMS_IOCTL_WAKE              _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x48, struct vms_wake_args)
+#define VMS_IOCTL_SETEXIT           _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x49, struct vms_exit_args)
+#define VMS_IOCTL_GETEXIT           _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x4A, struct vms_getexit_args)
+#define VMS_IOCTL_SETCLI            _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x4B, struct vms_setcli_args)
+#define VMS_IOCTL_GETCLI            _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x4C, struct vms_getcli_args)
 
 /*
  * Freeze the shared layouts -- the SAME sizes src/kernel/vms_ioctl.h freezes.
@@ -279,6 +388,14 @@ _Static_assert(sizeof(struct vms_hiber_args) == 8,
                "vms_hiber_args layout changed: VMS_IOCTL_HIBER ABI break");
 _Static_assert(sizeof(struct vms_wake_args) == 8,
                "vms_wake_args layout changed: VMS_IOCTL_WAKE ABI break");
+_Static_assert(sizeof(struct vms_exit_args) == 16,
+               "vms_exit_args layout changed: VMS_IOCTL_SETEXIT ABI break");
+_Static_assert(sizeof(struct vms_getexit_args) == 20,
+               "vms_getexit_args layout changed: VMS_IOCTL_GETEXIT ABI break");
+_Static_assert(sizeof(struct vms_setcli_args) == 8 + VMS_CLI_CMDLINE_SIZE,
+               "vms_setcli_args layout changed: VMS_IOCTL_SETCLI ABI break");
+_Static_assert(sizeof(struct vms_getcli_args) == 8 + VMS_CLI_CMDLINE_SIZE,
+               "vms_getcli_args layout changed: VMS_IOCTL_GETCLI ABI break");
 _Static_assert(VMS_PRCNAM_XFER > VMS_PRCNAM_SIZE,
                "VMS_PRCNAM_XFER must exceed VMS_PRCNAM_SIZE or oversized names get truncated into valid ones");
 
@@ -288,6 +405,16 @@ _Static_assert(VMS_PRCNAM_XFER > VMS_PRCNAM_SIZE,
  * the reference build byte for byte (dir=3, size<<16, 'V'<<8, nr). If a struct
  * grows, the number changes and this fails -- a wire break, caught at compile.
  */
+_Static_assert(sizeof(struct vms_register_args) == 8,
+               "vms_register_args layout changed: VMS_IOCTL_REGISTER ABI break");
+_Static_assert(sizeof(struct vms_dassgn_args) == 8,
+               "vms_dassgn_args layout changed: VMS_IOCTL_DASSGN ABI break");
+_Static_assert(VMS_IOCTL_REGISTER == 0xC0085640u,
+               "VMS_IOCTL_REGISTER encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_REGISTER_CONTINUE == 0xC0085641u,
+               "VMS_IOCTL_REGISTER_CONTINUE encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_DASSGN == 0xC0085651u,
+               "VMS_IOCTL_DASSGN encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_SETPRN == 0xC0485641u,
                "VMS_IOCTL_SETPRN encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_GETJPI == 0xC1205642u,
@@ -298,5 +425,13 @@ _Static_assert(VMS_IOCTL_SETIDENT == 0xC0305644u,
                "VMS_IOCTL_SETIDENT encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_ESTABLISH_SYSTEM == 0xC0085646u,
                "VMS_IOCTL_ESTABLISH_SYSTEM encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_SETEXIT == 0xC0105649u,
+               "VMS_IOCTL_SETEXIT encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_GETEXIT == 0xC014564Au,
+               "VMS_IOCTL_GETEXIT encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_SETCLI == 0xC108564Bu,
+               "VMS_IOCTL_SETCLI encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_GETCLI == 0xC108564Cu,
+               "VMS_IOCTL_GETCLI encodes differently here than on the reference build");
 
 #endif /* _VMS_PROCTAB_NB_H */

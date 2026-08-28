@@ -12,7 +12,7 @@
 # EXPECT: contains:SYS$MANAGER:ACCOUNTNG.DAT
 # EXPECT: contains:security auditing is currently disabled.
 # EXPECT: contains:SYS$MANAGER:AUDIT.LOG
-# EXPECT: contains:User [200,1]
+# EXPECT: contains:%SYSTEM-F-NODISKQUOTA
 # EXPECT: contains:System root is SYS$SYSDEVICE:[SYS0.SYSCOMMON.]
 #
 # vms-17d (INV-DCL): SHOW ACCOUNTING now reads a REAL, system-wide,

@@ -1,5 +1,40 @@
 name: CI
 
+# =====================================================================
+# TIER SPLIT (vms-fb8) -- why a PR does not run the heavy e2e gates
+# =====================================================================
+# The per-PR path used to run the full suite when a core path changed,
+# and its wall was one job: the release/install/upgrade/boot-scenario
+# QEMU e2e gates (14-46 min each, TCG-emulated). That made the 5-wide
+# peer iteration loop pay ~46 min per push.
+#
+# Those heavy gates now run on every NON-pull_request event only --
+# push(main), merge_group, workflow_dispatch, schedule -- via
+# `if: github.event_name != 'pull_request'`. A pull_request runs the
+# FAST tier (build+test, link/activate, kernel-executive shards,
+# static analysis, conformance, cross-compiles). No coverage is
+# deleted; the heavy tier MOVES off the per-PR critical path.
+#
+# COVERAGE-BEFORE-MERGE IS PRESERVED, two ways:
+#   * merge_group -- when a merge queue is enabled, the full suite runs
+#     on the batched result before it lands (nothing enqueues it until
+#     then; see below).
+#   * PRE-MERGE FULL RUN -- until a merge queue exists, the reap gate
+#     MUST fire a `workflow_dispatch` run on the candidate branch/SHA
+#     (`gh workflow run ci.yml --ref <branch>`) and verify it GREEN
+#     before squash-merge. workflow_dispatch forces every output true
+#     (full suite). KVM-accelerated, this is ~single-digit minutes, not
+#     46. This replaces "the PR's own run was the full suite" -- the
+#     by-SHA proof still exists, just fired deliberately at reap time.
+# Do NOT merge a core change on the fast-tier PR run alone.
+#
+# WIDENS the "invisible-on-PR, red-on-push" class: gates that only run on
+# non-PR events (these heavy e2e jobs, plus the pre-existing negative-control
+# meta-checks in facility_defects.sh) will NOT redden a PR — only the
+# pre-merge full run / push / nightly. A lane that reaps on fast-tier-green
+# alone WILL get bitten. The pre-merge `workflow_dispatch` full run is the
+# backstop; read it, do not skip it.
+
 on:
   push:
     branches: [main]
@@ -54,13 +89,13 @@ jobs:
       release: ${{ steps.decide.outputs.release }}
       netbsd: ${{ steps.decide.outputs.netbsd }}
       netbsd_vax: ${{ steps.decide.outputs.netbsd_vax }}
-      vmsfs_core_vax: ${{ steps.decide.outputs.vmsfs_core_vax }}
-      vmsfs_mount_vax: ${{ steps.decide.outputs.vmsfs_mount_vax }}
       exec_netbsd_vax: ${{ steps.decide.outputs.exec_netbsd_vax }}
       aarch64_boot: ${{ steps.decide.outputs.aarch64_boot }}
       compat_surface: ${{ steps.decide.outputs.compat_surface }}
       libcrypto: ${{ steps.decide.outputs.libcrypto }}
       openssh: ${{ steps.decide.outputs.openssh }}
+      alpha_toolchain: ${{ steps.decide.outputs.alpha_toolchain }}
+      vax_toolchain: ${{ steps.decide.outputs.vax_toolchain }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -92,6 +127,7 @@ jobs:
               - 'src/vmsfs/**'
               - 'src/vmsrms/**'
               - 'src/vmsdcl/**'
+              - 'src/ovmx_job_control/**'
               - 'src/vmsqueue/**'
               - 'third-party/tcc/**'
               - 'tools/**'
@@ -147,7 +183,7 @@ jobs:
               - 'tools/vmsfs_master.c'
               - 'src/libvms/include/ovmx_identity.h'
               - 'src/libvms/include/ovmx_kit_format.h'
-              - 'src/kernel/vmsfs/vmsfs_ondisk.h'
+              - 'src/vmsfs/include/vmsfs_ondisk.h'
               - 'src/product/**'
               - 'tests/qemu/test_upgrade_e2e.sh'
               - 'tests/qemu/run_upgrade_e2e.sh'
@@ -171,7 +207,7 @@ jobs:
               - 'tests/netbsd/**'
               - 'src/kernel-netbsd/**'
               - 'src/kernel-core/**'
-              - 'src/kernel/vmsfs/vmsfs_ondisk.h'
+              - 'src/vmsfs/include/vmsfs_ondisk.h'
               - 'src/libvmssys/kif_transport.h'
               - 'src/libvmssys/kif_transport_netbsd.c'
             netbsd_vax:
@@ -213,6 +249,13 @@ jobs:
               - 'src/vmsscs/**'
               - 'src/imgact/known_images.c'
               - 'src/imgact/known_images.h'
+              # vms-8e8f: the vax-acp-read-ilp32 job cross-compiles the shared
+              # ACP file-access walk for elf32-vax, so a change to it must
+              # re-trigger the VAX ILP32 leg on a PR (it is the SAME TU
+              # IMGACT.EXE, PID 1's staging bridge, and the OVMXVMSSYS.PAR
+              # reader all go through).
+              - 'src/imgact/imgact_acp.c'
+              - 'src/imgact/imgact_acp.h'
               - 'src/product/ovmx_kit_reader.c'
               # vms-64a (unified cross-build Rung B): the top-level project
               # now configures + builds the full ovmx-images aggregate
@@ -224,24 +267,6 @@ jobs:
               - 'docs/design-p4-netbsd-vax-boot.md'
               - 'docs/design-unified-cross-build.md'
               - 'docs/audit-ilp32-vax-libvmssys.md'
-            vmsfs_core_vax:
-              - '.github/workflows/**'
-              - 'tools/cross-vax/**'
-              - 'src/kernel-core/vmsfs/**'
-              - 'src/kernel/vmsfs/vmsfs_ondisk.h'
-              - 'docs/audit-ilp32-vax-vmsfs.md'
-            # The LOADABLE elf32-vax vmsfs.kmod = shared ODS-2 core + NetBSD vnode
-            # backend (src/kernel-netbsd/vmsfs) + mount helper. Distinct from
-            # vmsfs_core_vax (core only): the backend + lab-vax harness gate the
-            # per-PR kmod cross-compile and the nightly SIMH mount+read proof.
-            vmsfs_mount_vax:
-              - '.github/workflows/**'
-              - 'tools/cross-vax/**'
-              - 'src/kernel-core/vmsfs/**'
-              - 'src/kernel-netbsd/vmsfs/**'
-              - 'src/kernel/vmsfs/vmsfs_ondisk.h'
-              - 'tests/lab-vax/**'
-              - 'tests/netbsd/guest/vmsfs_mount.c'
             exec_netbsd_vax:
               - '.github/workflows/**'
               - 'tools/cross-vax/**'
@@ -291,6 +316,25 @@ jobs:
               - 'docs/compat/**'
               - 'tools/compat/**'
               - 'docs/compatibility-surface.md'
+            # vms-e7c5: the alpha-dec-vms cross toolchain SOURCES. A change here
+            # bumps the source-hash tag (see the alpha-toolchain-image job), so
+            # the dedicated build-push job must rebuild + push the new prebuilt
+            # image to ghcr. Deliberately narrow (NOT '.github/workflows/**'): a
+            # CI-only edit does not change the toolchain source hash, so it need
+            # not re-seed the registry. Non-PR events force this true (the decide
+            # step below) so a main push / manual dispatch always refreshes the
+            # seed (a gha cache-hit build, zero gnu.org fetch when unchanged).
+            alpha_toolchain:
+              - 'tools/cross-alpha-vms/Dockerfile'
+              - 'tools/cross-alpha-vms/build-toolchain.sh'
+              - 'tools/cross-alpha-vms/patches/**'
+              - 'tools/cross-alpha-vms/*.tar.xz'
+            # vms-e7c5 twin for VAX (this PR): the vax-toolchain-image build-push
+            # job re-builds + re-pushes the prebuilt ghcr image only when the
+            # toolchain SOURCES change (its Dockerfile or the vendored tarball).
+            vax_toolchain:
+              - 'tools/cross-vax/Dockerfile'
+              - 'tools/cross-vax/*.tar.xz'
 
       - name: Decide (force every output true on non-PR events)
         id: decide
@@ -304,13 +348,13 @@ jobs:
               echo "release=${{ steps.filter.outputs.release }}"
               echo "netbsd=${{ steps.filter.outputs.netbsd }}"
               echo "netbsd_vax=${{ steps.filter.outputs.netbsd_vax }}"
-              echo "vmsfs_core_vax=${{ steps.filter.outputs.vmsfs_core_vax }}"
-              echo "vmsfs_mount_vax=${{ steps.filter.outputs.vmsfs_mount_vax }}"
               echo "exec_netbsd_vax=${{ steps.filter.outputs.exec_netbsd_vax }}"
               echo "aarch64_boot=${{ steps.filter.outputs.aarch64_boot }}"
               echo "compat_surface=${{ steps.filter.outputs.compat_surface }}"
               echo "libcrypto=${{ steps.filter.outputs.libcrypto }}"
               echo "openssh=${{ steps.filter.outputs.openssh }}"
+              echo "alpha_toolchain=${{ steps.filter.outputs.alpha_toolchain }}"
+              echo "vax_toolchain=${{ steps.filter.outputs.vax_toolchain }}"
             } >> "$GITHUB_OUTPUT"
           else
             {
@@ -321,13 +365,13 @@ jobs:
               echo "release=true"
               echo "netbsd=true"
               echo "netbsd_vax=true"
-              echo "vmsfs_core_vax=true"
-              echo "vmsfs_mount_vax=true"
               echo "exec_netbsd_vax=true"
               echo "aarch64_boot=true"
               echo "compat_surface=true"
               echo "libcrypto=true"
               echo "openssh=true"
+              echo "alpha_toolchain=true"
+              echo "vax_toolchain=true"
             } >> "$GITHUB_OUTPUT"
           fi
   # -----------------------------------------------------------------------
@@ -390,6 +434,62 @@ jobs:
           fi
           echo "OK: docs/compatibility-surface.md matches a fresh render of docs/compat/ (date stamp ignored)."
   # -----------------------------------------------------------------------
+  # Job: vmslink shell-portability lint (vms-200)
+  #
+  # Fail-fast gate for the #773 class: a #!/bin/sh script (e.g.
+  # src/vmslink/mk_decc_shr.sh) is invoked by one harness as sh (dash, lenient)
+  # and by another as bash (strict), so a syntax/portability error can parse
+  # fine under one shell and die at container-runtime under the other (an
+  # apostrophe in a ${VAR:?...}, a bashism in a POSIX script, ...). This parses
+  # every vmslink + cross-alpha shell script under the shell(s) it must
+  # satisfy -- bash -n for #!/bin/bash, BOTH bash -n and sh -n for #!/bin/sh (a
+  # POSIX script must stay portable to bash) -- in seconds at PR time, before
+  # any deep container build. Unconditional (no path filter): a shell change
+  # can land anywhere. A negative control proves the gate has teeth.
+  # -----------------------------------------------------------------------
+  vmslink-shell-lint:
+    name: vmslink shell-portability lint (bash -n + sh -n) (vms-200)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse every vmslink + cross-alpha shell script under its shell(s)
+        run: |
+          set -eu
+          rc=0; n=0
+          scripts=$(find src/vmslink tools/cross-alpha-vms -name '*.sh' -type f | sort)
+          for s in $scripts; do
+            case "$(head -1 "$s")" in
+              *bin/bash*)          shells="bash" ;;
+              *bin/sh*|*bin/dash*) shells="bash sh" ;;  # a #!/bin/sh script must stay POSIX -> parse under bash too
+              *)                   shells="bash sh" ;;   # no/unknown shebang: require both
+            esac
+            for shellcmd in $shells; do
+              n=$((n+1))
+              if ! "$shellcmd" -n "$s" 2>/tmp/lint.err; then
+                echo "::error file=$s::$shellcmd -n rejected $s (shell-portability, vms-200)"
+                sed 's/^/    /' /tmp/lint.err
+                rc=1
+              fi
+            done
+          done
+          [ "$rc" -eq 0 ] || { echo "shell-portability lint FAILED"; exit 1; }
+          echo "OK: $(echo "$scripts" | wc -l) scripts, $n parse-checks, all clean under bash AND sh"
+
+      - name: NEGATIVE CONTROL -- the linter must reject the #773 apostrophe-in-dollar-brace trap
+        run: |
+          set -eu
+          tmp=$(mktemp --suffix=.sh)
+          printf '#!/bin/sh\n: "${X:?a b c'\''s d (e/f)}"\n' > "$tmp"
+          if bash -n "$tmp" 2>/dev/null; then
+            echo "::error::NEGATIVE CONTROL FAILED: bash -n accepted the known-bad apostrophe-in-\${VAR:?} script -- the gate has no teeth"
+            rm -f "$tmp"; exit 1
+          fi
+          rm -f "$tmp"
+          echo "OK: bash -n rejects the apostrophe-in-\${VAR:?} trap (gate has teeth)"
+  # -----------------------------------------------------------------------
   # Job: cross-arch shippable-image parity gate (rd vms-e1d)
   #
   # Operator ruling: "if I see a release that has something on x86_64 and
@@ -403,8 +503,8 @@ jobs:
   # tools/parity/image-parity-allowlist.json (Decision A / vms-42d: VAX
   # activates images via NetBSD's own ld.elf_so, not IMGACT.EXE's symbol-
   # vector scheme, so it has no $SHR shareables or IMGACT.EXE by design;
-  # plus the vms/vmsfs kernel-module packaging and filename-convention
-  # differences and the NetBSD-only vmsfs_mount helper). This is the
+  # plus the vms kernel-module packaging and filename-convention
+  # differences). This is the
   # INTERIM gate for the vms-509 unified-build migration -- no SIMH, no
   # docker, pure text-parsing, so it runs on every PR fast. Unconditional
   # (not gated on a path filter): a drift-introducing change can touch
@@ -624,7 +724,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             cmake gcc make libc6-dev libreadline-dev strace libcap2-bin \
-            libssh-dev musl-tools
+            libssh-dev musl-tools ccache
 
       - name: Cache CMake build
         uses: actions/cache@v4
@@ -633,12 +733,26 @@ jobs:
           key: cmake-build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**/CMakeLists.txt', 'src/**/*.c', 'src/**/*.h', 'src/**/*.S') }}
           restore-keys: cmake-build-${{ runner.os }}-
 
+      # ccache (vms-fb8): every build job here is otherwise a cold recompile of
+      # the same tree. ccache keys on preprocessed content, so across runs the
+      # unchanged TUs are served from cache and only genuinely-changed files
+      # recompile. Populates on the first run, hits on subsequent ones. Keyed
+      # per job-family with a sha suffix so each run saves a fresh layer that
+      # the next run restores via the prefix.
+      - name: Cache ccache (compiler object cache)
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-buildtest-${{ runner.os }}-${{ github.sha }}
+          restore-keys: ccache-buildtest-${{ runner.os }}-
+
       - name: Configure
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Debug \
             -DBUILD_TESTS=ON \
-            -DBUILD_TOOLS=ON
+            -DBUILD_TOOLS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -691,10 +805,18 @@ jobs:
           # parts_demo_e2e). Every PRODUCT gate -- unit tests, the positive
           # census/register authenticity gates, all integration gates --
           # still runs on every PR.
+          # vms-ed4: run tests in parallel. ctest --parallel honors per-test
+          # RESOURCE_LOCK properties, so tests that share mutable global state
+          # (the /vms SYSDISK, /dev/vms, fixed ports) serialize among themselves
+          # via their lock while independent tests run concurrently. The locks
+          # are declared in CMake (see set_tests_properties ... RESOURCE_LOCK).
+          # NEVER drop a lock to speed a run -- an unlocked shared-state test is
+          # a flaky test (Rule 8).
+          JOBS="$(nproc)"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            ctest --output-on-failure -LE slow
+            ctest --output-on-failure --parallel "$JOBS" -LE slow
           else
-            ctest --output-on-failure
+            ctest --output-on-failure --parallel "$JOBS"
           fi
 
   # -----------------------------------------------------------------------
@@ -708,7 +830,10 @@ jobs:
   persistent-boot:
     name: Persistent Boot Smoke Test
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     # 40 (was 30): the SYSBOOT> conversational proof (vms-b81, wired in by
     # vms-46c) adds a three-boot expect-driven step to this job; the extra
@@ -866,7 +991,7 @@ jobs:
       # vms-566 (parent vms-19e "owns-kernel"). Reuses the image built above (no
       # extra build). THE taint-clean acceptance gate: boots the real runtime with
       # the ovmx.taintreport flag so PID 1 reads the actual /proc/sys/kernel/tainted
-      # AFTER loading vms.ko/vmsfs.ko and prints the numeric mask, then FAILS if
+      # AFTER loading vms.ko and prints the numeric mask, then FAILS if
       # (mask & 4096) [O, out-of-tree] or (mask & 8192) [E, unsigned] -- the durable
       # numeric assertion. Also re-asserts, on the shipped artifacts, modinfo
       # intree=Y (vms-934) AND a PKCS#7 signature (vms-ff5). This CONSOLIDATES and
@@ -923,7 +1048,10 @@ jobs:
   cut-release-reproducible:
     name: cut-release is byte-reproducible + boots (vms-d73)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -991,6 +1119,28 @@ jobs:
           grep -q '"vax_artifacts"' dist/release-a/release-manifest.json \
             || { echo "FAIL: release-manifest.json has no vax_artifacts field"; exit 1; }
           echo "OK: release-manifest.json carries vax_release_parity + vax_artifacts"
+
+      - name: Assert Alpha release artifacts are present in the cut bundle
+        run: |
+          set -euo pipefail
+          # rd vms-233b, epic vms-f10: the shipped Alpha set is DERIVED from each
+          # cut's own alpha/alpha-artifact-manifest.txt (itself derived from
+          # CMake's install_manifest_ovmx-images.txt), not a hand-named list --
+          # so this check never goes stale when a new image joins ovmx-images.
+          for d in dist/release-a dist/release-b; do
+            MANIFEST="$d/alpha/alpha-artifact-manifest.txt"
+            [ -s "$MANIFEST" ] || { echo "FAIL: $MANIFEST missing or empty"; exit 1; }
+            while IFS= read -r f || [ -n "$f" ]; do
+              [ -n "$f" ] || continue
+              [ -s "$d/alpha/$f" ] || { echo "FAIL: $d/alpha/$f missing or empty -- Alpha co-release artifact not in the cut bundle"; exit 1; }
+              echo "OK: $d/alpha/$f present ($(stat -c%s "$d/alpha/$f") bytes)"
+            done < "$MANIFEST"
+          done
+          grep -q '"alpha_release_parity"' dist/release-a/release-manifest.json \
+            || { echo "FAIL: release-manifest.json has no alpha_release_parity section"; exit 1; }
+          grep -q '"alpha_artifacts"' dist/release-a/release-manifest.json \
+            || { echo "FAIL: release-manifest.json has no alpha_artifacts field"; exit 1; }
+          echo "OK: release-manifest.json carries alpha_release_parity + alpha_artifacts"
 
       # The manifest's own "cut_at_utc" field legitimately differs between
       # the two invocations (it is wall-clock metadata ABOUT the cut, not a
@@ -1086,7 +1236,10 @@ jobs:
   upgrade-e2e:
     name: install -> UPGRADE -> boot e2e (vms-f05)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1162,7 +1315,10 @@ jobs:
   install-boot-e2e:
     name: install /DESTINATION -> boot the installed target -> login (vms-96ec)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1235,13 +1391,16 @@ jobs:
   # install and asserts AUTHORIZE persisted it to the target SYSUAF
   # (%UAF-I-SAVED), and container 2 logs in with THAT install-set password —
   # possible now that vms-8b6 (#385, cross-process mounted-device visibility) and
-  # vms-581 (#378, RMS CREATE on a mounted vmsfs volume) are in base. (A separate
+  # vms-581 (#378, RMS CREATE on a mounted ODS-2 volume) are in base. (A separate
   # SET TERMINAL/NOECHO display gap remains, captured as a NOTE, not scored.)
   # -----------------------------------------------------------------------
   release-install-e2e:
     name: R1 release e2e — media→menu install→separate container→login→PRODUCT SHOW (vms-37f)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1322,7 +1481,10 @@ jobs:
   release-acceptance-e2e:
     name: Release-acceptance gate — boot the CUT artifact, verify shipped version (vms-a86f)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1356,6 +1518,22 @@ jobs:
             n=$((n + 1))
           done < "$MANIFEST"
           echo "OK: all $n VAX co-release artifacts present in the acceptance bundle"
+
+      - name: Assert Alpha release artifacts are present in the acceptance bundle
+        run: |
+          set -euo pipefail
+          # rd vms-233b, epic vms-f10: DERIVED from the cut's own
+          # alpha/alpha-artifact-manifest.txt -- see cut-release-alpha-gate for
+          # the same pattern.
+          MANIFEST="dist/release-acceptance/alpha/alpha-artifact-manifest.txt"
+          [ -s "$MANIFEST" ] || { echo "FAIL: $MANIFEST missing or empty"; exit 1; }
+          n=0
+          while IFS= read -r f || [ -n "$f" ]; do
+            [ -n "$f" ] || continue
+            [ -s "dist/release-acceptance/alpha/$f" ] || { echo "FAIL: dist/release-acceptance/alpha/$f missing or empty"; exit 1; }
+            n=$((n + 1))
+          done < "$MANIFEST"
+          echo "OK: all $n Alpha co-release artifacts present in the acceptance bundle"
 
       - name: Build bootable image (qemu tooling only -- boots the cut bundle's own artifacts)
         uses: docker/build-push-action@v6
@@ -1403,6 +1581,76 @@ jobs:
           exit 0
 
   # -----------------------------------------------------------------------
+  # dcl-acceptance-e2e: BOOT-AND-RUN-COMMANDS DCL/SHOW acceptance gate.
+  #
+  # THE HOLE THIS CLOSES: release-acceptance-e2e above boots + logs in and
+  # then checks only PRODUCT SHOW PRODUCT's version -- it never runs the
+  # commands a user types. So V0.5-2 shipped with SHOW USERS empty, SHOW
+  # DEVICE not Mounted, SHOW QUOTA fabricated, and WRITE F$xxx() printing the
+  # literal, and the acceptance gate stayed green. This job boots the REAL
+  # runtime (the pre-mastered ODS-2 distribution disk baked into ovmx-boot),
+  # logs in SYSTEM/MANAGER, RUNS a battery of basic DCL/SHOW commands, and
+  # asserts VMS-faithful output for each, with a per-segment negative control
+  # (tests/qemu/test_dcl_acceptance_e2e.sh).
+  #
+  # WIRING (the vms-7a8 path-filter hole made explicit): this gate must gate a
+  # RELEASE CUT and must never be path-filtered away on a docs-only commit,
+  # yet must not redden every unrelated PR.
+  #   - On any NON-PR event (push to main, merge_group, the release-verify
+  #     workflow_dispatch, schedule) it runs unconditionally -- so a release
+  #     cut and the pre-merge full-run always include it, even a docs-only
+  #     release commit. This is the "a release cut cannot pass without these
+  #     assertions green" requirement.
+  #   - On a PR it runs ONLY when the change touches the DCL/RTL surface
+  #     (needs.changes.outputs.toolchain, which covers src/vmsdcl/**) or the
+  #     executive (needs.changes.outputs.kernel, which covers src/kernel*/**,
+  #     src/libvms/syssvc/**, src/libvmssys/vms_kif.*, and tests/qemu/**) --
+  #     so the fix PRs get direct feedback and unrelated PRs are never
+  #     reddened.
+  #
+  # EXPECTED TO BE RED until the in-flight command fixes land. It asserts the
+  # CORRECT behavior and must NOT be weakened to pass now; it is the gate that
+  # blocks a broken V0.5-3 cut and goes green only as the fixes land. A SKIP
+  # (77) is treated as a hard failure so it can never silently no-op.
+  # -----------------------------------------------------------------------
+  dcl-acceptance-e2e:
+    name: DCL/SHOW acceptance gate — boot, run the commands a user types, assert VMS-faithful output
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.kernel == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image (qemu tooling + the pre-mastered distribution disk)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: DCL/SHOW acceptance gate — boot, log in, run the battery, assert VMS-faithful output
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_dcl_acceptance_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: dcl_acceptance_e2e SKIPPED in CI — this gate must actually boot and run the commands, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
   # cut-release-vax-gate (rd vms-ca5, epic vms-f10; "R2 release parity",
   # docs/design-vax-mainstream-release.md). FAST per-PR complement to the
   # heavy cut-release-reproducible / release-acceptance-e2e jobs above (which
@@ -1424,7 +1672,11 @@ jobs:
   cut-release-vax-gate:
     name: VAX co-release gate — artifacts build + a failed VAX build reds the cut (vms-ca5)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' || needs.changes.outputs.netbsd_vax == 'true' }}
+    # vms-fb8 tier-split: heavy VAX co-release gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request;
+    # cross-arch parity still enforced pre-merge (image-parity-gate stays on PR;
+    # the full VAX build runs in the pre-merge full run).
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -1512,6 +1764,118 @@ jobs:
           echo "Negative control confirmed: cut-release.sh itself refuses to cut a release when the VAX build fails (exit $rc)."
 
   # -----------------------------------------------------------------------
+  # cut-release-alpha-gate (rd vms-233b, epic vms-f10 "co-release parity across
+  # aarch64/x86_64/alpha/VAX"). The Alpha analog of cut-release-vax-gate above:
+  # the FAST, DETERMINISTIC co-release WIRING gate that proves the two halves of
+  # the Alpha co-release invariant directly against tools/cut-release-alpha.sh --
+  #   1. POSITIVE: the Alpha (EM_ALPHA/LP64) userspace ovmx-images artifact set
+  #      builds and is byte-present.
+  #   2. NEGATIVE (OVMX_ALPHA_RELEASE_NEGCTL=1): a deliberately-failed Alpha
+  #      stage must make tools/cut-release-alpha.sh -- and therefore
+  #      tools/cut-release.sh, which calls it unconditionally -- exit nonzero.
+  #      "a release is NOT cuttable if the Alpha build fails", proven mechanically.
+  #
+  # This gates on the DETERMINISTIC cross-compile + negctl, NOT on the heavy
+  # qemu-system-alpha boot: that is a SEPARATE leg (alpha-boot-login above,
+  # schedule/dispatch), exactly as netbsd-vax-boot is separate from this VAX gate
+  # -- so boot-tier TCG flake can never hold a release cut hostage. This is what
+  # protects an Alpha-carrying cut (the GCC lane's Alpha C-RTL DECC$SHR/LIBOTS$SHR
+  # userland lands in exactly this image set): if that build breaks, the cut reds.
+  #
+  # BUILD-ONLY (Rule 9): no boot here. SCOPE is the userspace image set; the Alpha
+  # executive module (vms.ko) is a tracked follow-on (see
+  # tools/cut-release-alpha.sh's header, INV-6). Same tier-split as the VAX gate:
+  # NON-PR events only.
+  # -----------------------------------------------------------------------
+  cut-release-alpha-gate:
+    name: Alpha co-release gate — artifacts build + a failed Alpha build reds the cut (vms-233b)
+    needs: changes
+    # vms-fb8 tier-split: heavy Alpha co-release gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request;
+    # cross-arch parity still enforced pre-merge in the full pre-merge run.
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # The ovmx-cross-alpha toolchain image is large (alpha-linux-gnu cross +
+      # kernel/qemu deps); reclaim the big unused hosted toolchains up front so a
+      # fresh runner's ~14 GB root can't ENOSPC mid-build. Same guard the
+      # alpha-boot-login job uses.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: POSITIVE — build the Alpha release artifact set (tools/cut-release-alpha.sh)
+        run: |
+          set -euo pipefail
+          tools/cut-release-alpha.sh \
+            --src-dir "${{ github.workspace }}" \
+            --out-dir "${{ github.workspace }}/dist/alpha-gate-proof"
+          # The shipped set is DERIVED from alpha-artifact-manifest.txt (itself
+          # derived from CMake's install_manifest_ovmx-images.txt), not a
+          # hand-named list here -- so this check never goes stale when a new
+          # image joins the ovmx-images aggregate. Ground-source both directions:
+          # every named artifact must be a real non-empty file, and no extra
+          # files may be present beyond what the manifest names.
+          MANIFEST="dist/alpha-gate-proof/alpha-artifact-manifest.txt"
+          [ -s "$MANIFEST" ] || { echo "FAIL: $MANIFEST missing or empty"; exit 1; }
+          n=0
+          while IFS= read -r f || [ -n "$f" ]; do
+            [ -n "$f" ] || continue
+            [ -s "dist/alpha-gate-proof/$f" ] || { echo "FAIL: dist/alpha-gate-proof/$f missing or empty (named in $MANIFEST)"; exit 1; }
+            n=$((n + 1))
+          done < "$MANIFEST"
+          dir_count=$(find dist/alpha-gate-proof -maxdepth 1 -type f ! -name 'alpha-artifact-manifest.txt' | wc -l)
+          [ "$dir_count" -eq "$n" ] || { echo "FAIL: $MANIFEST names $n artifacts but dist/alpha-gate-proof/ contains $dir_count files"; exit 1; }
+          [ "$n" -ge 12 ] || { echo "FAIL: only $n Alpha release artifacts named in $MANIFEST -- expected at least the ovmx-images baseline of 12"; exit 1; }
+          echo "PASS: all $n Alpha release artifacts named in $MANIFEST are present"
+
+      - name: NEGATIVE CONTROL — OVMX_ALPHA_RELEASE_NEGCTL=1 must fail the Alpha artifact build
+        run: |
+          set +e
+          RAW=$(OVMX_ALPHA_RELEASE_NEGCTL=1 tools/cut-release-alpha.sh \
+                  --src-dir "${{ github.workspace }}" \
+                  --out-dir "${{ github.workspace }}/dist/alpha-gate-negctl" 2>&1)
+          rc=$?
+          set -e
+          echo "$RAW"
+          if [ "$rc" -eq 0 ]; then
+            echo "FATAL: OVMX_ALPHA_RELEASE_NEGCTL=1 PASSED — the co-release gate has no teeth against a failed Alpha build" >&2
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'OVMX_ALPHA_RELEASE_NEGCTL: deliberately failing the userspace-image stage' \
+            || { echo "FATAL: did not see the expected NEGCTL failure banner — this failed for the wrong reason" >&2; exit 1; }
+          echo "Negative control confirmed: a failed Alpha stage exits nonzero (exit $rc)."
+
+      - name: NEGATIVE CONTROL — tools/cut-release.sh itself must fail when the Alpha build fails
+        run: |
+          set +e
+          RAW=$(OVMX_ALPHA_RELEASE_NEGCTL=1 tools/cut-release.sh --out-dir "${{ github.workspace }}/dist/alpha-gate-full-negctl" 2>&1)
+          rc=$?
+          set -e
+          # The VAX stage runs BEFORE the Alpha stage in cut-release.sh, and both
+          # run before the slow x86_64 container build, so with only
+          # OVMX_ALPHA_RELEASE_NEGCTL=1 set the VAX stage builds for real first
+          # (it must pass) and the Alpha stage is where the cut short-circuits.
+          echo "$RAW" | tail -60
+          if [ "$rc" -eq 0 ]; then
+            echo "FATAL: cut-release.sh PASSED despite OVMX_ALPHA_RELEASE_NEGCTL=1 — the co-release invariant is not wired into cut-release.sh" >&2
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'Alpha release-artifact build FAILED -- co-release invariant' \
+            || { echo "FATAL: cut-release.sh failed for the wrong reason (did not name the Alpha co-release invariant)" >&2; exit 1; }
+          echo "Negative control confirmed: cut-release.sh itself refuses to cut a release when the Alpha build fails (exit $rc)."
+
+  # -----------------------------------------------------------------------
   # Job 2b: PARTS 0.2 Demo E2E (vms-1c8, epic vms-2579/vms-5dd)
   #
   # The OVMX 0.2 "killer app" demo, end to end, against a REAL docker+QEMU
@@ -1537,7 +1901,10 @@ jobs:
   parts-demo-e2e:
     name: PARTS 0.2 Demo E2E (real boot, RMS load, DIRECTORY corroboration)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.core == 'true' || needs.changes.outputs.boot == 'true' }}
+    # vms-fb8 tier-split: heavy PARTS demo e2e runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 50
 
@@ -1591,7 +1958,10 @@ jobs:
   boot-scsnode-hostname-e2e:
     name: SCSNODE -> real hostname across reboot (vms-b6a7)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -1647,7 +2017,10 @@ jobs:
   sysboot-cluster-params-e2e:
     name: SYSBOOT> authors cluster params (vms-46c gap #2)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -1702,7 +2075,10 @@ jobs:
   cluster-params-recnx-e2e:
     name: SYSGEN authors cluster params, SCSD adopts RECNXINTERVAL (vms-c3b)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -1745,11 +2121,11 @@ jobs:
   # which has no /dev/vms) — so every executive facility (access modes, ASTs,
   # event flags, the lock manager) was provably untested in CI, and userspace
   # code drifted toward per-process fakes that report success without ever
-  # touching the executive. tests/qemu/Dockerfile builds vms.ko + vmsfs.ko
+  # touching the executive. tests/qemu/Dockerfile builds vms.ko
   # against a real Ubuntu kernel, assembles an initramfs with statically-linked
   # test programs (ENQ/CONVERT/DEQ round-trips, AST delivery, event-flag
   # clusters, access-mode/privilege checks, cross-process lock arbitration,
-  # vmsfs mount/read/write), and boots QEMU on the serial console via
+  # Files-11 ACP mount/read/write), and boots QEMU on the serial console via
   # tests/qemu/run_tests.sh, which exits nonzero if any suite failed.
   #
   # Docker here is BUILD/TEST TOOLING (produces the kernel module + boots the
@@ -1819,7 +2195,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       # Content-addressed gha layer cache, SHARED SCOPE across all shards
-      # (scope=kernel-executive): the vms.ko/vmsfs.ko + initramfs image is
+      # (scope=kernel-executive): the vms.ko + initramfs image is
       # identical for every shard (the shard only changes the boot cmdline, not
       # the image), so all N legs pull the same cached layers -- the image is
       # effectively built once, not N times. load: true keeps `docker run
@@ -1968,9 +2344,6 @@ jobs:
           echo "$OUTPUT" | grep -qF 'PASS: vms.ko loaded, /dev/vms present' \
             || BAD="$BAD
             vms.ko: did not load / /dev/vms absent"
-          echo "$OUTPUT" | grep -qF 'PASS: vmsfs.ko loaded, filesystem registered' \
-            || BAD="$BAD
-            vmsfs.ko: did not load / filesystem not registered"
 
           if [ -n "$BAD" ]; then
             echo "FAIL: kernel-executive suite verdicts not all clean (shard $SHARD_INDEX/$SHARD_TOTAL):$BAD"
@@ -2083,7 +2456,7 @@ jobs:
   # Proves the kernel-executive gate above can actually fail. Builds the SAME
   # harness with --build-arg NEGATIVE_CONTROL=1, which patches init.sh to skip
   # insmod of vms.ko (simulating the executive being absent) while everything
-  # else — building vms.ko itself, loading vmsfs.ko, the test binaries — stays
+  # else — building vms.ko itself, the test binaries — stays
   # real. Every test that opens /dev/vms then fails ("cannot open /dev/vms")
   # instead of silently passing. (This comment used to add "the same
   # SS$_NOSUCHDEV path sys_lock.c already takes"; that path was DELETED by
@@ -2187,13 +2560,26 @@ jobs:
           #        vms-pv1): the suite MUST require a real /dev/vms and MUST
           #        exit 77 when it is absent, never 0.
           #
-          #   test_kmod_vmsfs*   -> rc MUST be 0.
-          #        POSITIVE control paired with the negatives: vmsfs has no
-          #        dependency on vms.ko, so it must still fully pass with the
-          #        executive absent. If the harness were failing
-          #        indiscriminately (gutted, always-fail, boot broken), this
-          #        would fail too and every negative assertion here would be
-          #        proving nothing about the executive specifically.
+          #   (RETIRED, vms-165) The former POSITIVE control paired with the
+          #        negatives -- "test_kmod_vmsfs* | test_kmod_ods2_codec -> rc
+          #        MUST be 0" -- had its SUBJECT deleted. Those suites drove the
+          #        vmsfs.ko VFS driver (and its kernel-resident ods2ro codec),
+          #        which was executive-INDEPENDENT (it depended on vmsfs.ko, not
+          #        vms.ko), so a clean rc=0 with the executive absent proved the
+          #        harness was not failing indiscriminately (gutted, always-fail,
+          #        boot broken). vms-165 retired the whole vmsfs VFS driver, so
+          #        this positive control has NO SUBJECT left -- there is no
+          #        executive-INDEPENDENT suite in the tree to pass rc=0 here.
+          #        The VALUE it carried ("prove the gate CAN come up and run a
+          #        real binary to a clean decision, so the negatives below are
+          #        not proving-nothing") is PRESERVED, not dropped: it now rides
+          #        the test_syssvc_* rule below, which requires each such suite to
+          #        reach the SPECIFIC honest-skip code 77 (a real binary running
+          #        to a deliberate decision, plus the N_SYSSVC>=1 floor) -- a
+          #        gutted/always-fail/boot-broken harness cannot manufacture a 77
+          #        any more than it could a 0. So the harness-liveness signal
+          #        survives the driver's deletion; only its (now subjectless)
+          #        vehicle changed.
           #
           #   every other test_kmod_* -> rc MUST be nonzero.
           #        Raw-ioctl executive tests; they cannot pass without
@@ -2292,12 +2678,6 @@ jobs:
             $suite_fails"
                 fi
                 ;;
-              test_kmod_vmsfs*)
-                if [ "$rc" != "0" ]; then
-                  BAD="$BAD
-            $suite: rc=$rc -- expected 0. vmsfs does not depend on vms.ko, so it must still pass with the executive absent; if it fails, the harness is failing indiscriminately and the negative assertions prove nothing."
-                fi
-                ;;
               *)
                 if [ "$rc" = "0" ]; then
                   BAD="$BAD
@@ -2312,14 +2692,14 @@ jobs:
             no test_syssvc_* suite ran at all -- the userspace public-sys\$ layer is not in the initramfs, so the silent-fallback gate above checked nothing."
           fi
 
-          # vms.ko must NOT have loaded (that is the scenario), and vmsfs.ko
-          # must have -- the paired negative/positive at module-load level.
+          # vms.ko must NOT have loaded (that is the scenario) -- the module-load
+          # negative. (The paired module-load POSITIVE was "vmsfs.ko must load
+          # with the executive absent"; vms-165 retired vmsfs.ko, so that
+          # subjectless check is gone -- the harness-liveness signal it shared
+          # now rides the test_syssvc_* honest-skip-77 rule above.)
           echo "$OUTPUT" | grep -qF 'FAIL: vms.ko load or /dev/vms creation failed' \
             || BAD="$BAD
             vms.ko: expected the load to fail (NEGATIVE_CONTROL skips the insmod) but no such failure was reported -- the negative control may not have been applied at all."
-          echo "$OUTPUT" | grep -qF 'PASS: vmsfs.ko loaded, filesystem registered' \
-            || BAD="$BAD
-            vmsfs.ko: did not load with the executive absent -- the harness may be failing indiscriminately rather than isolating the executive dependency."
 
           if [ -n "$BAD" ]; then
             echo "FAIL: negative control did not go red for the RIGHT REASON:$BAD"
@@ -2331,7 +2711,7 @@ jobs:
           echo "$OUTPUT" | grep -qE '=== FINAL RESULTS: [0-9]+ suites passed, [0-9]+ suites failed ===' \
             || { echo "FAIL: the harness never reached its own FINAL RESULTS accounting -- boot panic, QEMU missing, or run_tests.sh timeout, not an executive-absent failure"; exit 1; }
 
-          echo "PASS: harness went red for the RIGHT REASON -- executive absent, all $N_SYSSVC public-sys\$ suite(s) returned the honest-skip code 77 (so no sys\$ entry point fabricated a success), every executive-dependent raw-ioctl suite failed, and vmsfs's independent facility still passed"
+          echo "PASS: harness went red for the RIGHT REASON -- executive absent, all $N_SYSSVC public-sys\$ suite(s) returned the honest-skip code 77 (so no sys\$ entry point fabricated a success, AND a real binary ran to a deliberate decision -- the harness-liveness signal that the retired vmsfs positive control used to carry, vms-165), and every executive-dependent raw-ioctl suite failed"
 
   # -----------------------------------------------------------------------
   # Job 3b-netbsd: OVMX/NetBSD amd64 harness (vms-7f7, epic vms-8e8 Phase 2a)
@@ -2429,83 +2809,6 @@ jobs:
         run: OVMX_REPO="$PWD" NBSRC="$PWD/.netbsd-src" CC=clang CROSSCOMPILE_NEGCTL=1 bash tests/netbsd/crosscompile.sh
 
   # -----------------------------------------------------------------------
-  # Job: NetBSD/amd64 vmsfs module cross-compiles (rd vms-308, P4-VFS V4). THE
-  # PER-PR NetBSD GATE for the ODS-2 vnode/VFS backend -- BUILD ONLY, no QEMU, no
-  # console, no boot, ~1-2 min. It cross-compiles the ODS-2 vnode module
-  # (src/kernel-netbsd/vmsfs/) + the SHARED substrate-neutral ODS-2 core
-  # (src/kernel-core/vmsfs/*.c) against the pinned NetBSD/amd64 kernel headers
-  # with clang -target x86_64-unknown-netbsd, and relocatable-links them. The
-  # ODS-2 logic is byte-identical to the Linux vmsfs.ko side (it IS the same core
-  # sources), so what a PR must catch is a NetBSD-backend / header-API DRIFT that
-  # breaks the NetBSD vmsfs build -- a pure compile+link question. The full "does
-  # it mount + read on NetBSD" proof runs NIGHTLY (schedule/dispatch) under
-  # QEMU-TCG (netbsd-amd64-vmsfs-mount), never on a per-PR runner. This is the
-  # ODS-2 sibling of netbsd-amd64-vms-crosscompile (the executive module gate),
-  # and reuses the SAME cached NetBSD syssrc.
-  netbsd-amd64-vmsfs-crosscompile:
-    name: NetBSD/amd64 vmsfs module cross-compiles
-    needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install clang (NetBSD cross target)
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends clang
-
-      # Same cache + key as the executive cross-compile job (netbsd_version.env
-      # pins the release); a source change never re-downloads the headers.
-      - name: Cache NetBSD kernel sources (syssrc)
-        uses: actions/cache@v4
-        with:
-          path: .netbsd-src
-          key: netbsd-src-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
-          restore-keys: |
-            netbsd-src-
-
-      - name: Fetch + verify + extract NetBSD syssrc (kernel headers) if not cached
-        run: |
-          set -euo pipefail
-          # shellcheck disable=SC1091
-          . tests/netbsd/netbsd_version.env
-          if [ ! -d .netbsd-src/usr/src/sys ]; then
-            mkdir -p .netbsd-src
-            curl -sSL -o /tmp/syssrc.tgz "$NETBSD_SYSSRC_URL"
-            echo "$NETBSD_SYSSRC_SHA512  /tmp/syssrc.tgz" | sha512sum -c -
-            tar xzf /tmp/syssrc.tgz -C .netbsd-src usr/src/sys usr/src/common
-          fi
-
-      - name: Cross-compile the vmsfs module + shared ODS-2 core (clang, NetBSD/amd64 kernel)
-        run: OVMX_REPO="$PWD" NBSRC="$PWD/.netbsd-src" CC=clang bash tests/netbsd/crosscompile-vmsfs.sh
-
-      - name: NEGATIVE CONTROL — a deliberately-broken TU must fail the cross-compile
-        run: OVMX_REPO="$PWD" NBSRC="$PWD/.netbsd-src" CC=clang CROSSCOMPILE_NEGCTL=1 bash tests/netbsd/crosscompile-vmsfs.sh
-
-      # HEADER-PORTABILITY NEGATIVE CONTROL (rd vms-9172 / vms-bbf): a
-      # vmsfs_ondisk.h regressed to the pre-#516 bug (_KERNEL branch -> bare
-      # <stdint.h>) must be REJECTED by the -H stdint-portability check. Proves
-      # the per-PR gate now has teeth against the exact #509 class it missed.
-      - name: HEADER-PORTABILITY NEGATIVE CONTROL — a regressed vmsfs_ondisk.h must red the gate
-        run: OVMX_REPO="$PWD" NBSRC="$PWD/.netbsd-src" CC=clang CROSSCOMPILE_NEGCTL_HDR=1 bash tests/netbsd/crosscompile-vmsfs.sh
-
-  # -----------------------------------------------------------------------
-  # Job: PRIME the shared NetBSD install cache (rd vms-2d9). THE KEYSTONE of
-  # reliable NetBSD CI. This job runs FIRST and ALONE and is the ONLY writer of
-  # the shared installed-disk cache: it restores the shared image if present, or
-  # does the single unavoidable cold TCG install (~30-40min), and lets
-  # actions/cache SAVE it. The three test jobs `needs:` this job and RESTORE the
-  # warm image (restore-only), so they never install. This serialises the one
-  # cold install into a single job with generous headroom, instead of three test
-  # jobs racing three parallel ~30min cold installs -- which timed out and, being
-  # cancelled, never saved the cache, leaving every future run cold (permanent
-  # red). It installs via the P2c driver in PRIME_ONLY mode (install + exit; no
-  # boot/build/proof), which uses the SAME shared workdir + sets the test jobs
-  # reuse.
   netbsd-amd64-prime-cache:
     name: NetBSD/amd64 Prime Install Cache (QEMU)
     needs: changes
@@ -3048,202 +3351,6 @@ jobs:
           echo "PASS: harness correctly went RED when process A never registered -- the proctab cross-process proof has teeth"
 
   # -----------------------------------------------------------------------
-  # Job 3b-netbsd-vmsfs: OVMX/NetBSD ODS-2 mount+read (vms-308, epic vms-8e8
-  # P4-VFS V4)
-  #
-  # THE PHASE THAT PROVES THE SHARED ODS-2 CORE MOUNTS + READS ON NETBSD. Builds
-  # the harness image, masters an OVMX ODS-2 volume with tests/qemu/mkimage_vmsfs
-  # (the SAME tool + image the Linux vmsfs.ko block-device test uses), boots the
-  # cached NetBSD/amd64 guest (comp + syssrc) with that volume attached as wd1,
-  # and:
-  #   - builds the OVMX/NetBSD ODS-2 vnode module, which compiles the SAME
-  #     src/kernel-core/vmsfs/*.c the Linux vmsfs.ko builds -- with the NetBSD
-  #     backend (vmsfs_backend_netbsd.h). There is NO NetBSD copy of the ODS-2
-  #     logic; the one core mounts + reads on both substrates,
-  #   - NEGATIVE CONTROL: attempts the mount with the module NOT loaded -> the
-  #     mount(2) must fail (no vmsfs type), never appear to succeed,
-  #   - modloads the module, mounts /dev/wd1d READ-ONLY, lists the directory
-  #     (VOP_READDIR) asserting HELLO.TXT;1 appears, and reads HELLO.TXT
-  #     (VOP_LOOKUP -> VOP_READ) asserting its known content byte-for-byte.
-  #
-  # GATING: NIGHTLY (schedule) + manual (workflow_dispatch) ONLY -- NOT per-PR,
-  # exactly like the executive P2c cross-process proof (rd vms-2d9). Booting a
-  # NetBSD guest under TCG on a KVM-less GitHub runner is too slow/variable for a
-  # per-PR gate; the per-PR NetBSD vmsfs gate is the fast QEMU-free cross-compile
-  # (netbsd-amd64-vmsfs-crosscompile). It uses the SAME shared prime cache and
-  # deterministic console as the executive jobs.
-  netbsd-amd64-vmsfs-mount:
-    name: NetBSD/amd64 ODS-2 Mount + Read (QEMU)
-    needs: [changes, netbsd-amd64-prime-cache]
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Restore shared NetBSD image (version-keyed, restore-only)
-        uses: actions/cache/restore@v4
-        with:
-          path: .netbsd-cache
-          key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
-          restore-keys: |
-            netbsd-amd64-install-
-          fail-on-cache-miss: false
-
-      - name: Build NetBSD harness image (gha layer cache)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: tests/netbsd/Dockerfile
-          push: false
-          load: true
-          tags: ovmx-netbsd-ktest:latest
-          cache-from: type=gha,scope=netbsd-harness
-          cache-to: type=gha,mode=max,scope=netbsd-harness
-
-      - name: Master an ODS-2 volume; build + modload the vnode module; mount + read
-        run: |
-          set +e
-          mkdir -p "$GITHUB_WORKSPACE/.netbsd-cache"
-          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
-                  --entrypoint /netbsd/run_vmsfs.sh \
-                  ovmx-netbsd-ktest:latest 2>&1)
-          RC=$?
-          set -e
-          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
-          echo "$OUTPUT"
-
-          if [ "$RC" -ne 0 ]; then
-            echo "FAIL: NetBSD/amd64 ODS-2 mount harness exited nonzero ($RC)"
-            exit 1
-          fi
-          echo "$OUTPUT" | grep -qF "OK (negctl): with no module loaded the ODS-2 mount FAILED" \
-            || { echo "FAIL: did not see the module-absent mount-fails negative control"; exit 1; }
-          echo "$OUTPUT" | grep -qF "OK (readdir): HELLO.TXT;1 appears" \
-            || { echo "FAIL: did not see the VOP_READDIR directory-listing proof"; exit 1; }
-          echo "$OUTPUT" | grep -qF "OK (read): HELLO.TXT read back the expected content" \
-            || { echo "FAIL: did not see the VOP_READ content proof"; exit 1; }
-          echo "$OUTPUT" | grep -qF 'NetBSD/amd64 ODS-2 mount HARNESS PASSED' \
-            || { echo "FAIL: harness did not report its own PASSED banner"; exit 1; }
-          echo "PASS: the SAME src/kernel-core/vmsfs core, compiled with the NetBSD backend, mounted + read an OVMX ODS-2 volume on NetBSD"
-
-      - name: NEGATIVE CONTROL — skipping modload must redden the mount+read proof
-        run: |
-          set +e
-          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
-                  --entrypoint /netbsd/run_vmsfs.sh \
-                  -e VMSFS_SKIP_MODLOAD=1 \
-                  ovmx-netbsd-ktest:latest 2>&1)
-          RC=$?
-          set -e
-          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
-          echo "$OUTPUT"
-
-          if [ "$RC" -eq 0 ]; then
-            echo "FAIL: harness exited 0 with the module never loaded -- the mount+read proof has no teeth."
-            exit 1
-          fi
-          echo "$OUTPUT" | grep -qF "the mount+read assertions below must go RED" \
-            || { echo "FAIL: nonzero exit but not the expected skip-modload reason -- negative control may have failed for an unrelated cause"; exit 1; }
-          echo "PASS: harness correctly went RED when the module was not loaded -- the mount+read proof has teeth"
-
-  # -----------------------------------------------------------------------
-  # Job 3d: Kernel Executive — per-facility negative controls (vms-e7d)
-  #
-  # Job 3c proves the executive gate CAN fail, by deleting the whole
-  # executive. That is a blunderbuss: it establishes "this job can go red",
-  # not "this job would go red if the event-flag code stopped clearing a
-  # flag", and it cannot name what regressed. ATTRIBUTION IS THE POINT — a
-  # gate that only ever says "something failed" tells the next implementer
-  # nothing, and a facility whose assertions had quietly stopped meaning
-  # anything would still be covered by 3c.
-  #
-  # This job injects ONE minimal defect per facility — the vms-e4d
-  # compat[EX][CR] flip, mechanised, plus one of the same shape for every
-  # other facility — boots each in QEMU against a REAL /dev/vms, and asserts
-  # THE RUNTIME PROPERTY: the facility's OWN test suite goes RED
-  # (run_facility_negctl.sh checks 1-4/8). That behavioral proof -- defect
-  # injected, vms.ko rebuilt, booted for real, the suite reddens -- is what
-  # caught the #177 fake test.
-  #
-  # TORN OUT (vms-49f), per the CLAUDE.md Rule 9 amendment: the per-defect
-  # EXACT red-set equality against the manifest's named set, the attribution to
-  # declared suites, and the committed-ledger comparison. Those are string
-  # relations over the harness's OWN self-declarations, not runtime behavior --
-  # "it may lint but MUST NOT be gated or worded as proof" -- and they re-broke
-  # on every executive change that shifted which assertions redden. They remain
-  # as non-gating lint inside run_facility_negctl.sh. The aggregate ledger job
-  # that used to compare the union against a committed 61 KB record is deleted.
-  #
-  # It also runs the PRISTINE image first as a positive control, so a harness
-  # that fails indiscriminately cannot pass this job.
-  #
-  # WHAT THIS JOB DOES NOT COVER, stated because an implicit narrowing is how
-  # a gate quietly stops meaning what its name says: vmsfs.ko and its two
-  # suites. vmsfs is a filesystem module, not an executive facility — nothing
-  # in it is reached through /dev/vms — and job 3c above is where it is
-  # covered. facility_defects.sh declares that exclusion and prints it.
-  #
-  # Docker here is BUILD/TEST TOOLING (CLAUDE.md Rule 9): it builds vms.ko and
-  # boots an independent guest kernel that loads it for real. Nothing in this
-  # job treats a container as an OVMX runtime.
-  #
-  # Runtime note: ~12 QEMU boots, one of which (executive-not-pinned) is
-  # EXPECTED to hang until run_tests.sh's 120s timeout, because unloading an
-  # unpinned vms.ko under an open descriptor Oopses the guest kernel. That is
-  # the guarantee being demonstrated, not a flake — the control asserts that
-  # every suite ordered before test_kmod_pin ran clean (a count derived from
-  # the checkout, never written down), so a genuine boot failure cannot be
-  # mistaken for it. Hence the wider timeout-minutes than the other QEMU jobs.
-  # -----------------------------------------------------------------------
-  # SHARDED (vms-86a). MEASURED root cause: this job ran the full defect list
-  # sequentially -- one in-container rebuild plus one QEMU boot per defect --
-  # in a single job: 27m09s idle, 50m39s under moderate concurrent CI load,
-  # >60m and timeout-minutes-killed with three PRs in flight (rd vms-86a
-  # trail, measured 2026-08-04).
-  #
-  # WHY it slows down under load is NOT established, and a prior version of
-  # this comment asserted a cause ("no host-level resource shared between two
-  # PRs' jobs -- so the slowdown is queueing/scheduling variance, not
-  # contention this workflow can remove") with no command behind it (rd
-  # vms-570 audit). timeout-minutes counts execution time on an already-
-  # assigned runner, not queue wait, so a job the timeout kills at 60+ minutes
-  # spent that time RUNNING -- queueing before the runner was assigned cannot
-  # produce that, which contradicts the deleted claim rather than supporting
-  # it. GitHub does not expose runner host placement, so whether concurrent
-  # jobs share underlying physical-host resources is not verifiable from
-  # here either way. Deleted rather than reworded, per this program's own
-  # rule: a false emphatic gets removed, not restated more carefully.
-  #
-  # The fix below does not depend on knowing the mechanism: shrinking what
-  # ONE job must sequentially get through before its own timeout widens the
-  # margin against whatever the slowdown turns out to be. Raising
-  # timeout-minutes was rejected regardless: it hides the same margin problem
-  # under a bigger number rather than fixing it (flaky-test rule, CLAUDE.md).
-  # A concurrency group serialising these jobs across PRs remains on the
-  # table if sharding's margin ever proves insufficient -- not applied here
-  # because sharding alone already multiplies the measured margin (see the
-  # per-shard budget comment below), and serialising would trade this job's
-  # timeout risk for queue-time risk on whichever PR runs second.
-  #
-  # So the per-facility loop is split into N independent shard jobs, each
-  # running ~1/N of the manifest's defects (`facility_defects.sh list`, split
-  # by `NR % N`, so the split tracks the manifest as it grows or shrinks --
-  # never a hand-maintained defect list that goes stale). Splitting shrinks
-  # the SEQUENTIAL run inside any one job, which is what the timeout budgets
-  # against; it does not remove or narrow the RUNTIME check -- every shard still
-  # runs the same positive control and the same per-defect runtime detection
-  # (the facility's own suite reddens against a real /dev/vms) as the single job
-  # did, just over a subset of defects. (The per-defect exact red-set equality,
-  # the attribution to declared suites, and the full-manifest committed-ledger
-  # comparison that a former aggregate job ran over the union of shards were
-  # TORN OUT as declaration gates in vms-49f -- see the block above. The shards
-  # no longer feed an aggregate ledger comparison.)
   kernel-executive-facility-negative-controls-shard:
     name: Kernel Executive — Per-Facility Negative Controls (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     if: ${{ github.event_name != 'pull_request' }}
@@ -3257,24 +3364,56 @@ jobs:
     # 2026-08-04); a shard's sequential work is a small fraction of that, so
     # 30m leaves headroom against the SAME per-defect variance without
     # resurrecting a 60m+ job.
-    timeout-minutes: 30
+    #
+    # SHARD-COUNT BUMP 6 -> 10 (0.5 integration). MEASURED on CI run
+    # 32447601184 (work/vms-0.5-final-dryrun): with 6 shards (~20 defects
+    # each) FIVE of six shards were KILLED at exactly 30.2m -- they hit THIS
+    # timeout-minutes, they did not fail (conclusion "cancelled", not
+    # "failure"). Shard 3 alone COMPLETED, at 24.5m, and passed -- so the
+    # manifest/gate is sound; what changed is that the flip + cascade grew the
+    # suite set (~76 -> ~97 suites), so every per-defect harness boot runs more
+    # suites and 20 defects/shard no longer fit in 30m under the 95-job run's
+    # runner contention. This is a capacity fact, NOT a facility_defects.sh
+    # inconsistency (coverage/selftest pass; shard 3 proved the defects redden).
+    # 120 defects / 10 shards = ~12/shard: at shard 3's measured ~1min/defect +
+    # ~5m fixed build+positive-control cost that is ~17m, comfortably inside 30m
+    # even at the first-batch contention that killed the 20-defect shards. The
+    # partition below is `NR % job-total`, so this is the ONLY line to touch --
+    # nothing is hand-maintained. Revisit as the manifest grows (raise the
+    # shard count, never delete a defect to fit).
+    #
+    # 30 -> 50 (0.5 integration, paired with the KE_WALL_TIMEOUT raise in
+    # tests/qemu/inject_and_run.sh). Splitting to 10 shards fixed the run #1
+    # 30m timeout, but that UNMASKED a per-defect truncation the outer timeout
+    # had hidden: with ~97 suites now, a mutation that makes event-flag $WAITFRs
+    # wait out their timeouts (eflag-readef/eflag-dacefc/lnm-manager-delete)
+    # pushes that defect's FULL-suite boot past the old 600s inner wall under CI
+    # contention -- "harness never reached FINAL RESULTS", a gate FAIL even
+    # though the control reddened. inject_and_run.sh now gives the full-suite
+    # boot an 1800s wall so it COMPLETES; a defect that used to fail at 600s now
+    # runs ~13m instead, so a shard holding one or two of them needs headroom
+    # past 30m. ~12 defects/shard, ~1min each for the fast majority + up to
+    # ~2-3 slow ones at ~13-20m + ~5m fixed build/positive-control fits in 50m.
+    # A genuine hang still surfaces: the 1800s inner wall fails the defect, and
+    # this 50m outer bound backstops a wedged shard.
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       # SHARD-BALLOON FIX (vms-86a part 2). MEASURED: the main-push run on
       # d2d76fc failed on THREE shards AT ONCE (0/6, 1/6, 5/6) -- every shard
       # runs QEMU + fork/pipe/multi-process tests, and with all 6 unbounded
       # (GitHub's default matrix concurrency), they compete for host
-      # resources (CPU for 6 concurrent QEMU guests, IPC timing) alongside
+      # resources (CPU for concurrent QEMU guests, IPC timing) alongside
       # whatever else this workflow is already running. That's resource
       # starvation, not a per-defect logic bug -- the same shard slice that
       # fails under load passes standalone. Capping how many run AT ONCE
-      # (not how many run in total -- all 6 still execute, sequenced in
+      # (not how many run in total -- all shards still execute, sequenced in
       # batches) gives each shard the headroom it needs without trading away
       # coverage or resurrecting the pre-#158 single-job wall-time problem.
       # Revisit the number empirically if shards still balloon at 3.
       max-parallel: 3
       matrix:
-        shard: [0, 1, 2, 3, 4, 5]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
     steps:
       - name: Checkout
@@ -3481,7 +3620,18 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             cmake gcc make libc6-dev libreadline-dev \
-            clang-tidy cppcheck
+            clang-tidy cppcheck ccache
+
+      # ccache (vms-fb8): this job's build (below, for generated headers +
+      # compile_commands) is otherwise a full cold recompile of the tree --
+      # the single biggest chunk of its wall. ccache serves unchanged TUs from
+      # cache across runs. See build-and-test for the rationale.
+      - name: Cache ccache (compiler object cache)
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-staticanalysis-${{ runner.os }}-${{ github.sha }}
+          restore-keys: ccache-staticanalysis-${{ runner.os }}-
 
       - name: Configure (generate compile_commands.json)
         run: |
@@ -3489,15 +3639,34 @@ jobs:
             -DCMAKE_BUILD_TYPE=Debug \
             -DBUILD_TESTS=ON \
             -DBUILD_TOOLS=ON \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
       - name: Build (required for generated headers)
         run: cmake --build build -j$(nproc)
 
+      # vms-fb8: on a PR, lint only files changed vs the base branch -- the
+      # whole-tree sweep (~hundreds of files) was the bulk of clang-tidy's
+      # cost and it re-flags code the PR never touched. On non-PR events
+      # (push/merge_group/schedule) still sweep the whole tree so nothing is
+      # lost from the coverage that gates main. This job is informational-only
+      # (always exits 0), so narrowing the PR view changes latency, not a gate.
+      - name: Compute changed-file filter (PR only)
+        id: changed
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" || true
+          git diff --name-only "origin/${{ github.base_ref }}" HEAD -- '*.c' '*.h' > /tmp/changed_files.txt || true
+          echo "count=$(wc -l < /tmp/changed_files.txt)" >> "$GITHUB_OUTPUT"
+          echo "Changed C/H files vs origin/${{ github.base_ref }}:"; cat /tmp/changed_files.txt || true
+
       - name: Run clang-tidy
+        env:
+          OVMX_CHANGED_ONLY: ${{ github.event_name == 'pull_request' && '1' || '' }}
         run: |
           # Collect source files from compile_commands.json,
           # excluding freestanding (libvmssys) and kernel directories.
+          # On a PR (OVMX_CHANGED_ONLY=1) intersect with the changed-file set.
           python3 - <<'PYEOF'
           import json, subprocess, sys, os
 
@@ -3511,14 +3680,24 @@ jobs:
 
           cwd = os.getcwd()
           excluded = ("src/libvmssys/", "src/kernel/")
+
+          changed = None
+          if os.environ.get("OVMX_CHANGED_ONLY") and os.path.exists("/tmp/changed_files.txt"):
+              with open("/tmp/changed_files.txt") as cf:
+                  changed = {line.strip() for line in cf if line.strip()}
+              print(f"PR mode: {len(changed)} changed C/H file(s) drive the filter")
+
           files = []
           for entry in db:
               rel = entry["file"].replace(cwd + "/", "")
-              if not any(rel.startswith(ex) for ex in excluded):
-                  files.append(entry["file"])
+              if any(rel.startswith(ex) for ex in excluded):
+                  continue
+              if changed is not None and rel not in changed:
+                  continue
+              files.append(entry["file"])
 
           if not files:
-              print("No files to analyze after exclusions.")
+              print("No files to analyze (no changed non-excluded C files on this PR).")
               sys.exit(0)
 
           print(f"Running clang-tidy on {len(files)} files...")
@@ -3594,7 +3773,10 @@ jobs:
   uat-session:
     name: VMS User Acceptance Test
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -3646,7 +3828,9 @@ jobs:
     name: IMGACT.EXE Activation Proof (musl)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
 
     steps:
@@ -3694,7 +3878,9 @@ jobs:
     # Fixed by linking the vmslink host tools statically in IMGACT mode
     # (src/vmslink/CMakeLists.txt) + adding src/libvms/include to the imgact
     # target's include path (src/imgact/CMakeLists.txt, for imgact_prodreg.h).
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
 
     steps:
@@ -3777,7 +3963,9 @@ jobs:
     name: LINK.EXE VMS-native Linker (MVP)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -3833,6 +4021,95 @@ jobs:
         run: |
           sh src/vmslink/test/run_test_x86_64.sh
 
+      # vms-d8d: a STRONG-vs-STRONG duplicate definition of the same universal/
+      # global symbol across two whole-archived objects is now a hard
+      # %LINK-F-MULDEF error instead of silent first-wins. Proves the positive
+      # (MULDEF fires, names the symbol + both defining objects) and the
+      # regression (the pre-existing weak-yields-to-strong override is
+      # unchanged, in either link order).
+      - name: Prove LINK.EXE rejects a STRONG-vs-STRONG duplicate definition (vms-d8d)
+        run: |
+          sh src/vmslink/test/run_muldef_x86_64.sh
+
+      # vms-cbe: the EVAX (Alpha/VMS) object reader front end — parse a REAL
+      # native VMS object (checked-in fixture from binutils alpha-dec-vms-as)
+      # into psects + symbols. Pure byte parsing, arch-independent, no toolchain
+      # at test time. First slice toward LINK.EXE consuming the alpha-dec-vms
+      # port's intrinsic .obj output (the do-it-like-VMS ladder).
+      - name: Prove the EVAX/VMS-object reader parses a real Alpha/VMS object (vms-cbe)
+        run: |
+          sh src/vmslink/test/run_evax_read.sh
+
+      # vms-cbe (slices 3+4): LINK.EXE consumes the alpha-dec-vms port's native
+      # EVAX objects END TO END — dispatches on format, maps psects/symbols,
+      # APPLIES the relocations (REFLONG/REFQUAD/CODEADDR data + the Alpha
+      # LINKAGE pair), and stamps the .vms$xfer transfer vector. The verifier
+      # re-derives every expected reloc value from the placed section addresses
+      # and asserts the image bytes match. Pure byte manipulation, arch-
+      # independent; the EVAX .obj fixtures are checked in (no toolchain at
+      # test time).
+      - name: Prove LINK.EXE links a real EVAX/Alpha object set + applies relocs (vms-cbe)
+        run: |
+          sh src/vmslink/test/run_evax_link.sh
+
+      # vms-c179: cross-image (SYMG) import binding on the EVAX path. Links
+      # link_main.obj ALONE against a --use'd producer that EXPORTS its
+      # HELPER_PROC target, and asserts every reference (the STC_LP_PSB LINKAGE
+      # pair + the REFQUAD data pointers) binds as a cross-image import — fill
+      # slot left 0, a .vms$imp record naming {producer, symbol-vector index}
+      # for IMGACT to resolve at activation — while the ONE local REFQUAD stays
+      # directly resolved. The INV-6 honest-fail leg: a producer that does NOT
+      # export the symbol must still %LINK-F-UNDEF (no fabricated import). Pure
+      # byte manipulation, arch-independent; fixture checked in.
+      - name: Prove LINK.EXE binds EVAX cross-image imports from a --use producer (vms-c179)
+        run: |
+          sh src/vmslink/test/run_evax_ximport.sh
+
+      # vms-069: GLOBALVALUE fold on the EVAX cross-image path. A VMS globalvalue
+      # is an ABSOLUTE LINK-TIME CONSTANT (its address IS the value) — VMS folds
+      # it at LINK, never binding it through an activation import cell. Links the
+      # EVAX fixture gvalfold_ref.obj (`.quad C$_EXIT1` REFQUAD, undefined) against
+      # a --use'd producer exporting C$_EXIT1=GLOBALVALUE:0x0035A009, and asserts
+      # the site holds the FOLDED constant with NO .vms$imp — while a real
+      # PROCEDURE export STILL emits an import cell (fold must not break imports)
+      # and a symbol in no producer still %LINK-F-UNDEF (INV-6). This unblocks the
+      # alpha-dec-vms GCC-port crt0's &C$_EXIT1. Arch-independent; fixture checked in.
+      - name: Prove LINK.EXE folds EVAX producer globalvalues to link-time constants (vms-069)
+        run: |
+          sh src/vmslink/test/run_evax_gvalfold.sh
+
+      # vms-b5a0: LINK.EXE's EVAX/Alpha path emits a .vms$rel LOAD-BIAS FIXUP
+      # table, so a GCC-port program's global initialized pointers survive a
+      # non-zero IMGACT load bias. A REFQUAD/CODEADDR/LINKAGE slot LINK fills with
+      # an UNBIASED image-relative address is recorded; IMGACT's generic
+      # apply_vms_rel adds the bias at activation. VERIFY-FIRST, emit AND consume:
+      # PART A links gdata.obj (a global pointer `g_ptr = greeting`), asserts the
+      # g_ptr slot is in .vms$rel, then replicates IMGACT's exact `*(base+off)+=
+      # base` walk at a non-zero bias B and asserts g_ptr resolves to B+greeting.
+      # PART B a folded GLOBALVALUE (absolute) gets NO .vms$rel entry; PART C
+      # cross-image .vms$imp import slots are excluded (IMGACT fills those). Pure
+      # byte manipulation, arch-independent; fixtures checked in.
+      - name: Prove LINK.EXE emits an EVAX .vms$rel load-bias fixup table (vms-b5a0)
+        run: |
+          sh src/vmslink/test/run_evax_vmsrel.sh
+
+      # vms-c65: LINK.EXE's EVAX/Alpha path emits a SHAREABLE (a .vms$sv producer)
+      # from alpha-dec-vms objects — the half a real Alpha DECC$SHR needs (the
+      # other half, the Alpha C-RTL archive, is the Alpha lane's). Links the
+      # checked-in producer fixture shr_lib.obj into FOO$SHR.EXE and asserts an
+      # EM_ALPHA ET_DYN with a .vms$sv (magic + FOO=PROCEDURE/BAR=DATA bound to
+      # their addresses + GSMATCH LEQUAL/1/0) parsed by the SAME reader
+      # (ovmx_symvec.h) IMGACT + the ELF shareable use — byte parity (an Alpha and
+      # an x86_64 shareable differ only in e_machine + .text arch). NO .vms$xfer,
+      # NO PT_INTERP; a .vms$rel for the BAR->FOO data pointer. ROUND-TRIP: an EVAX
+      # consumer --use'ing FOO$SHR.EXE binds FOO by symbol-vector INDEX (the
+      # vms-c179 machinery) — proving the Alpha shareable is CONSUMABLE. INV-6
+      # honest-fail: a universal no object defines -> %LINK-F-NOUNIV (no bogus
+      # vector entry). Arch-independent, fixtures checked in.
+      - name: Prove LINK.EXE emits a consumable EVAX/Alpha .vms$sv shareable (vms-c65)
+        run: |
+          sh src/vmslink/test/run_evax_shareable.sh
+
       # vms-2e4: the LAST x86_64 relocation class — gnu2-dialect TLSDESC
       # (R_X86_64_GOTPC32_TLSDESC + R_X86_64_TLSDESC_CALL, plus the
       # local-dynamic R_X86_64_DTPOFF32 / _TLS_MODULE_BASE_ half). Proof is
@@ -3861,7 +4138,9 @@ jobs:
     name: DECC$SHR VMS-native C-RTL Shareable
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -3903,7 +4182,9 @@ jobs:
     name: VMS-native LINK.EXE Graph via CMake (OVMX_LINK_NATIVE)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
 
     steps:
@@ -3998,7 +4279,9 @@ jobs:
     name: IMGACT.EXE Symbol-Vector Activation
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4021,6 +4304,329 @@ jobs:
               sh /src/src/imgact/test/run_symvec_activation.sh
             '
 
+  # -----------------------------------------------------------------------
+  # Job 11b: IMGACT VMS-standard image activation (Alpha, vms-f60d)
+  #
+  # The activation-time face of R8 (the Alpha calling standard). Builds the real
+  # IMGACT.EXE (alpha) + the real trampoline, then proves under user-mode
+  # qemu-alpha: (1) imgact_vms_transfer issues a correct Alpha standard call
+  # (R16-R21 args, R25 AI, R27 PV, R26 RA into IMGACT, R0 return);
+  # (2) real IMGACT activates a VMS-standard image (.vms$xfer flavor VMS_STD)
+  # end-to-end -- standard-calls the transfer address, control returns, and the
+  # returned condition value is routed to $EXIT, FAILING HONEST (%IMGACT-F-
+  # NOSUCHDEV, exit 45) with no /dev/vms rather than faking exit(cond&1) (INV-6);
+  # (3) the identical image with flavor SYSV takes the UNCHANGED tail-jump path
+  # (zero regression + the flavor gate actually gates). Reuses the ovmx-cross-
+  # alpha toolchain image (gha layer cache, scope=cross-alpha).
+  # -----------------------------------------------------------------------
+  imgact-vms-std-alpha:
+    name: IMGACT VMS-standard Activation (Alpha)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: Activate a VMS-standard image through the real IMGACT.EXE (alpha)
+        run: |
+          docker run --rm -v "${{ github.workspace }}":/src -w /src \
+            ovmx-cross-alpha:latest sh -c '
+              sh /src/src/imgact/test/run_vms_std_activation_alpha.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # alpha-toolchain-image (vms-e7c5): build ONCE, push to ghcr, keyed by a hash
+  # of the toolchain SOURCES — the "once and for all" fix for the recurring
+  # alpha-gate flake.
+  #
+  # ROOT CAUSE: every alpha gate below used to `docker build` the alpha-dec-vms
+  # cross toolchain from scratch on a gha-cache miss, and that build fetches
+  # gcc from ftp.gnu.org (binutils is now vendored, #802 / vms-8a06, but gcc is
+  # 90MB and stays a hardened fetch). A gnu.org outage HARD-FAILS the gates that
+  # have nothing to do with the toolchain sources.
+  #
+  # FIX: this job builds the image and PUSHES it to a PRIVATE ghcr package,
+  # tagged by SOURCE_HASH = a 16-hex digest over the committed content of the
+  # toolchain sources (Dockerfile, build-toolchain.sh, patches/*, the vendored
+  # *.tar.xz) via `git ls-files -s | sha256sum`. Committed-content-based, so the
+  # tag CI computes here and the tag the gates compute below are identical for
+  # the same sources. The gates then PULL that tag (zero gnu.org), and only fall
+  # back to building if the tag is missing. A toolchain bump -> new hash -> this
+  # job builds + pushes the new image (path-filtered on the sources; forced true
+  # on any non-PR event; workflow_dispatch seeds the very first image manually
+  # while gnu.org is up). Self-contained: pushes with the built-in GITHUB_TOKEN
+  # (packages: write) — no external secret. The package is PRIVATE; the gates
+  # read it with GITHUB_TOKEN (packages: read).
+  # -----------------------------------------------------------------------
+  alpha-toolchain-image:
+    name: alpha-toolchain-image (vms-e7c5)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.alpha_toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute SOURCE_HASH over the toolchain sources
+        id: srchash
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-alpha-vms/Dockerfile \
+            tools/cross-alpha-vms/build-toolchain.sh \
+            'tools/cross-alpha-vms/patches/*' \
+            'tools/cross-alpha-vms/binutils-*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "source_hash=$SOURCE_HASH" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ghcr.io (built-in GITHUB_TOKEN)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # Builds tools/cross-alpha-vms (whose Dockerfile COPYs the VENDORED
+      # binutils-2.43.tar.xz — #802/vms-8a06 — so the binutils step is offline;
+      # only gcc is fetched, hardened). push:true publishes both the source-hash
+      # tag and :latest to the PRIVATE ghcr package. gha layer cache keeps an
+      # unchanged-source rebuild (e.g. a main push) a cache hit — zero fetch.
+      - name: Build and push the alpha-dec-vms cross toolchain image (source-hash + latest)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/3dl-dev/ovmx-cross-alpha-vms:${{ steps.srchash.outputs.source_hash }}
+            ghcr.io/3dl-dev/ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+  # musl port for alpha-dec-vms — RUNG 1 (vms-960).
+  #
+  # Build/oracle tooling, Rule-9-clean: nothing here runs inside the OVMX guest.
+  # Builds the alpha-dec-vms (VMS-ABI) cross toolchain image (binutils + gcc
+  # cc1, gha layer cache scope=cross-alpha-vms), then INSIDE it fetches musl,
+  # overlays tools/cross-alpha-vms/musl-arch/arch/alpha-dec-vms, and builds
+  # lib/libc.a. The overlay is mounted read-only; the build runs in /tmp in the
+  # container (the repo is never written). A preflight asserts the LP64 model
+  # against the real compiler; VERIFY asserts libc.a is a real alpha-dec-vms
+  # archive with genuine portable text symbols (strlen/malloc/memcpy/vsnprintf)
+  # and that the honest -ENOSYS syscall stub (__vms_alpha_syscall) is defined.
+  # -----------------------------------------------------------------------
+  musl-alpha-vms:
+    name: musl alpha-dec-vms port — RUNG 1 build (vms-960)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # vms-e7c5: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # vms-e7c5: PULL the source-hash-keyed prebuilt toolchain image from ghcr
+      # (zero ftp.gnu.org fetch). SOURCE_HASH is computed by the exact same
+      # `git ls-files -s | sha256sum` command as the alpha-toolchain-image
+      # build-push job, so the tag matches the current sources exactly. A
+      # missing tag (not yet seeded / registry hiccup) cleanly FALLS THROUGH to
+      # the gha-cached build below — `if docker pull; then … else …` keeps the
+      # pull-miss from aborting under `set -e`. Tags the result
+      # ovmx-cross-alpha-vms:latest either way, so the downstream steps are
+      # unchanged.
+      - name: Pull the prebuilt alpha-dec-vms toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-alpha-vms
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-alpha-vms/Dockerfile \
+            tools/cross-alpha-vms/build-toolchain.sh \
+            'tools/cross-alpha-vms/patches/*' \
+            'tools/cross-alpha-vms/binutils-*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-alpha-vms:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the alpha-dec-vms cross toolchain image (fallback — gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: Fetch musl, overlay alpha-dec-vms arch, build + verify lib/libc.a
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/tools/cross-alpha-vms/musl-arch":/overlay:ro \
+            -e OVERLAY=/overlay \
+            ovmx-cross-alpha-vms:latest bash /overlay/build-musl.sh
+
+      # OTS$ runtime (LIBOTS$) — RUNG completeness (vms-bfd6). Builds LINK.EXE +
+      # LIBOTS$SHR.EXE, links DECC$SHR whole-archiving libc.a+libgcc.a WITH
+      # --use LIBOTS$, and ASSERTS zero OTS$ references are left deferred (they
+      # bind as real cross-image .vms$imp imports); then runs the native OTS$-
+      # divide correctness proof. Reuses the toolchain image loaded above.
+      - name: OTS$ runtime proof (LIBOTS$ links + DECC$SHR binds it + divide correct)
+        run: IMG=ovmx-cross-alpha-vms:latest bash tools/cross-alpha-vms/ots/run_ots_proof.sh
+
+  # Standing gate for vms-864: the genuine alpha DECC$SHR (musl-alpha universals
+  # + the OVMX bootstrap surface from mk_decc_shr.sh's ALPHA branch) must link a
+  # REAL alpha-dec-vms port crt0 (tools/cross-alpha-vms/joint-e2e/) with ZERO
+  # deferred symbols. OVMX_DECC_ARCH=alpha is forced (never auto-detected) so
+  # this cannot silently regress to linking a genuine EM_ALPHA crt0 against a
+  # non-alpha DECC$SHR (bead vms-2a0). Shares the cross-alpha-vms gha layer-
+  # cache scope with musl-alpha-vms above so the toolchain-image build is a
+  # cache hit.
+  joint-e2e-alpha-crt0:
+    name: genuine alpha DECC$SHR — real port crt0 links zero-deferred (vms-864)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # vms-e7c5: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # vms-e7c5: PULL the source-hash-keyed prebuilt toolchain image from ghcr
+      # (zero ftp.gnu.org fetch), identical SOURCE_HASH command as the build-push
+      # job. A missing tag cleanly falls through to the gha-cached build below.
+      # The image is tagged ovmx-cross-alpha-vms:latest; build-joint-image.sh
+      # (IMG=ovmx-cross-alpha-vms) then SKIPS its own step-1 docker build because
+      # the image already inspects OK — so a pulled image is used, not rebuilt.
+      - name: Pull the prebuilt alpha-dec-vms toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-alpha-vms
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-alpha-vms/Dockerfile \
+            tools/cross-alpha-vms/build-toolchain.sh \
+            'tools/cross-alpha-vms/patches/*' \
+            'tools/cross-alpha-vms/binutils-*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-alpha-vms:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the alpha-dec-vms cross toolchain image (fallback — gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: Link the real port crt0 against the GENUINE alpha DECC$SHR (OVMX_DECC_ARCH=alpha, strict, zero-deferred)
+        run: |
+          set -euo pipefail
+          OUT=/tmp/joint-e2e-out
+          IMG=ovmx-cross-alpha-vms tools/cross-alpha-vms/joint-e2e/build-joint-image.sh "$OUT"
+          # ---- standing assertions (loud; the strict LINK.EXE exit already
+          #      fails on undef — these guard against a silent pass) ----
+          NUNDEF=$(grep -c 'LINK-F-UNDEF' "$OUT/build.log" || true)
+          if [ "${NUNDEF:-0}" -ne 0 ]; then
+            echo "GATE FAIL: ${NUNDEF} LINK-F-UNDEF in the genuine-alpha crt0-join:"
+            grep 'LINK-F-UNDEF' "$OUT/build.log" || true
+            exit 1
+          fi
+          grep -q 'LINK-S-CREATED' "$OUT/build.log" || { echo "GATE FAIL: no %LINK-S-CREATED (joint_e2e.exe not linked)"; exit 1; }
+          # vms-f1a: the EVAX STRONG-vs-STRONG MULDEF pre-pass must be WHOLE-
+          # ARCHIVE-SAFE — the genuine alpha DECC$SHR whole-archives musl-alpha
+          # libc.a + libgcc.a here, and a well-formed library has NO strong dup
+          # (overridable defs are WEAK; decc$_malloc64 is #ifndef __VMS__-excluded
+          # on alpha). ZERO spurious %LINK-F-MULDEF is the correctness property;
+          # any hit means a genuinely-weak symbol was misread as strong.
+          NMULDEF=$(grep -c 'LINK-F-MULDEF' "$OUT/build.log" || true)
+          if [ "${NMULDEF:-0}" -ne 0 ]; then
+            echo "GATE FAIL: ${NMULDEF} spurious %LINK-F-MULDEF in the genuine-alpha whole-archive build (vms-f1a):"
+            grep 'LINK-F-MULDEF' "$OUT/build.log" || true
+            exit 1
+          fi
+          readelf -h "$OUT/joint_e2e.exe" | grep -q 'Machine:.*Alpha' || { echo "GATE FAIL: joint_e2e.exe is not EM_ALPHA"; exit 1; }
+          readelf -h "$OUT/joint_e2e.exe" | grep -qE 'Type:.*DYN'     || { echo "GATE FAIL: joint_e2e.exe is not ET_DYN"; exit 1; }
+          # C$_EXIT1 should fold as a globalvalue (no import cell) — informational
+          if grep -q 'GVALFOLD' "$OUT/build.log"; then echo "ok: C\$_EXIT1 folded as globalvalue"; else echo "note: no GVALFOLD line logged"; fi
+          echo "GATE PASS (vms-864): genuine-alpha crt0-join links zero-deferred; EM_ALPHA/ET_DYN; %LINK-S-CREATED; zero spurious MULDEF (vms-f1a)"
+
+      # vms-f1a: the EVAX/Alpha mirror of the ELF STRONG-vs-STRONG MULDEF gate
+      # (vms-d8d, #777, run_muldef_x86_64.sh). LINK.EXE's evax_find_sym was a
+      # linear FIRST-MATCH with no duplicate check, so two objects both STRONGLY
+      # defining a universal bound silently to link-input order. emit_evax_common
+      # now runs a one-time pre-pass (evax_check_muldef) that hard-errors
+      # %LINK-F-MULDEF. This proves BOTH halves with REAL alpha-dec-vms EVAX
+      # objects (cross cc1, no blobs checked in): the POSITIVE (two objects both
+      # strong-define dup_sym -> MULDEF names the symbol + BOTH objects, exit
+      # non-zero) and the CONTROL (weak-vs-strong still links clean, either link
+      # order — the new check is scoped to STRONG-vs-STRONG only). The whole-
+      # archive-safe no-regression half is the genuine-DECC$SHR link asserted in
+      # the step above (zero spurious MULDEF). Runs in the toolchain image built
+      # above.
+      - name: Prove LINK.EXE rejects a STRONG-vs-STRONG EVAX/Alpha duplicate definition (vms-f1a)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}":/src:ro \
+            ovmx-cross-alpha-vms:latest \
+            sh -c 'export PATH=/opt/cross-alpha-vms/bin:$PATH CC=gcc; sh /src/src/vmslink/test/run_muldef_evax.sh'
+
   # Job 12: real src/libvmssys linked + activated VMS-native (aarch64)
   #
   # The pillar milestone (vms-ade / bead vms-80a): the whole toolchain end to
@@ -4035,7 +4641,9 @@ jobs:
     name: libvmssys VMS-native Link + Activate
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4076,7 +4684,9 @@ jobs:
     name: DECC$SHR C-RTL Activation (musl init)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4117,7 +4727,9 @@ jobs:
     name: Lib-Shareable Transitive Import Activation
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4144,7 +4756,9 @@ jobs:
     name: TLS Producer / C-RTL Coexistence Activation
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4167,11 +4781,59 @@ jobs:
               sh /src/src/imgact/test/run_tls_producer_over_crtl.sh
             '
 
+  weak-import-activate:
+    name: Weak-by-name Import (.vms$wimp) — LOGINOUT reaches RMS across the layer cycle
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Native x86_64 (no emulation): the LINK-level assertions are the gate here
+      # — a #pragma-weak reference no --use'd producer exports lands in .vms$wimp
+      # (NOT baked to 0, NOT a link error), and binds STRONG (.vms$imp) when an
+      # exporter IS --use'd. The by-name ACTIVATION half needs a real /dev/vms
+      # ACP (INV-6: IMGACT has no POSIX image-read fallback), which this container
+      # lacks by construction — that half is proven by the boot-to-DCL login
+      # (uat-session), so the script runs the LINK assertions and notes the split.
+      - name: Record + bind a weak cross-image reference through LINK.EXE/.vms$wimp (x86_64)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make python3 >/dev/null
+              export CC=gcc WORK=/tmp/weak-import-act
+              sh /src/src/imgact/test/run_weak_import_activation.sh
+            '
+
+      # The SYMMETRIC case: the MAIN EXECUTABLE's OWN .vms$wimp (vms-4a6). A
+      # whole-archived C++ image weak-references a universal a producer loaded
+      # transitively at activation exports; resolve_weak_imports() must resolve
+      # g_exe, not only g_prods[]. Activation runs in-container via the sanctioned
+      # POSIX-defer image read (as run_symvec/run_shareable_import_activation do),
+      # so this gates the binding end-to-end here, present -> bound.
+      - name: Bind the EXECUTABLE's own weak cross-image reference at activation (x86_64)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make python3 >/dev/null
+              export CC=gcc WORK=/tmp/exe-weak-import-act
+              sh /src/src/imgact/test/run_exe_weak_import_activation.sh
+            '
+
   vmsprocess-native:
     name: vmsprocess VMS-native Migration (LIBVMSPROCESS$SHR)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4198,7 +4860,9 @@ jobs:
     name: vmslnm VMS-native Migration (LIBVMSLNM$SHR)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4225,7 +4889,9 @@ jobs:
     name: vmsfs VMS-native Migration (LIBVMSFS$SHR)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4252,7 +4918,9 @@ jobs:
     name: libvms VMS-native Migration (LIBVMS$SHR)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
 
     steps:
@@ -4279,7 +4947,9 @@ jobs:
     name: vmsrms VMS-native Migration (LIBVMSRMS$SHR)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
 
     steps:
@@ -4317,7 +4987,9 @@ jobs:
     name: Multi-Object main() Executable Link + Activate
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4426,7 +5098,9 @@ jobs:
     name: Executable-Own TLS Link + Activate
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -4463,7 +5137,9 @@ jobs:
     name: DCL.EXE VMS-native Link + Activate (self-hosting S1)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
 
     steps:
@@ -4540,7 +5216,9 @@ jobs:
     name: LOGINOUT.EXE VMS-native Link + Activate (login chain)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
 
     steps:
@@ -4663,7 +5341,9 @@ jobs:
     name: tcc Object LINK.EXE Compatibility (S2 crux, musl)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
 
     steps:
@@ -4715,7 +5395,9 @@ jobs:
     name: TCC.EXE VMS-native Link + Activate (self-hosting S2 endpoint)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
 
     steps:
@@ -4754,7 +5436,9 @@ jobs:
     name: TCC.EXE RMS File I/O (sys$open/$get read, sys$create/$put write)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
 
     steps:
@@ -4810,7 +5494,9 @@ jobs:
     name: TCC.EXE Self-Host Fixpoint (tcc compiles tcc inside OVMX, S2 summit)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
 
     steps:
@@ -4860,7 +5546,9 @@ jobs:
     name: LINK.EXE VMS-native Self-Link + Activate (self-hosting S3.1, arm64)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
 
     steps:
@@ -4942,6 +5630,40 @@ jobs:
             '
 
   # -----------------------------------------------------------------------
+  # olb-symvec-native-x86_64 — Rung 1 of the VMS-native shareable-build
+  # migration (rd vms-bf8, epic vms-a90; design-vms-native-shareable-build.md
+  # C.4.1). LINK.EXE --shareable ROOTS its selective .OLB search at the
+  # --symbol-vector universals: a /SHAREABLE built from MATH.OLB with NO explicit
+  # object TU list (the VMS way) pulls exactly the module defining the universal
+  # PLUS its transitive dependency (2 of 3), leaves the unreferenced member out,
+  # carries a symbol vector, and IMGACT-activates through a consumer that reaches
+  # mul3(14)==42. Before this rung a symbol-vector-only shareable seeded an empty
+  # root set and pulled zero members. Runner is x86_64 so alpine:3.20/amd64 runs
+  # natively — no QEMU.
+  # -----------------------------------------------------------------------
+  olb-symvec-native-x86_64:
+    name: LINK.EXE --shareable seeds selective .OLB pull from --symbol-vector + Activate (VMS-native shareable Rung 1, x86_64)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: LINK.EXE --shareable rooted at --symbol-vector selectively pulls from the .OLB (2 of 3), IMGACT activates a consumer (x86_64)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc ARCH=x86_64 WORK=/tmp/olb-symvec-native SV_EXPECT=1
+              sh /src/src/imgact/test/run_olb_symvec_native.sh
+            '
+
+  # -----------------------------------------------------------------------
   # build-com-native — self-host S3.2 (bead vms-615): a DCL command procedure
   # (BUILD.COM) drives compile -> link -> run of a C program from inside an
   # OVMX DCL session using the OVMX-native TCC.EXE + LINK.EXE as foreign
@@ -4955,7 +5677,9 @@ jobs:
     name: BUILD.COM DCL driver — compile+link+run, no bash (self-hosting S3.2)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
 
     steps:
@@ -4995,7 +5719,9 @@ jobs:
     name: LINK.EXE self-host fixpoint — OVMX builds LINK.EXE, gen2==gen3, no bash (self-hosting S4)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    runs-on: ubuntu-latest
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
 
     steps:
@@ -5095,7 +5821,11 @@ jobs:
   netbsd-vax-simh:
     name: NetBSD/vax boots under SIMH (vms-0041)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    # vms-fb8: SIMH boots STOCK NetBSD/vax (TCG, no OVMX source in the
+    # smoke) and VAX has no KVM -- 312s of un-accelerable emulation. Like
+    # the heavy QEMU e2e, run it on NON-PR events only; the ILP32 width
+    # proof stays per-PR via the elf32-vax cross-compile jobs.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -5157,8 +5887,89 @@ jobs:
   # first; this job restores it and NEVER reinstalls in the hot path (design-p4
   # sec 5). run-devvms.sh wraps every SIMH invocation in a hard timeout.
   # -----------------------------------------------------------------------
+  # -----------------------------------------------------------------------
+  # vax-toolchain-image (vms-e7c5 twin for VAX): build ONCE, push to ghcr, keyed
+  # by a hash of the toolchain SOURCES — the "once and for all" fix for the
+  # recurring VAX-gate ftp.gnu.org flake, mirroring the alpha-toolchain-image job
+  # (#804) exactly.
+  #
+  # ROOT CAUSE: every VAX gate below `docker build`s the vax--netbsdelf cross
+  # toolchain image (tools/cross-vax/Dockerfile) from scratch on a gha-cache
+  # miss, and that build fetched binutils-2.42 + gcc-13.3.0 from ftp.gnu.org. A
+  # gnu.org outage HARD-FAILS gates that have nothing to do with the toolchain
+  # sources (the cut-release VAX artifact build just died on
+  # `wget binutils-2.42.tar.xz -> exit 4`). binutils is now VENDORED
+  # (tools/cross-vax/binutils-2.42.tar.xz, SHA256-pinned) and gcc is a hardened
+  # SHA256-checked mirror fetch, but a from-scratch image build is still a
+  # network dependency we can eliminate for the gates.
+  #
+  # FIX: this job builds the image and PUSHES it to a PRIVATE ghcr package,
+  # tagged by SOURCE_HASH = a 16-hex digest over the committed content of the
+  # toolchain sources (the Dockerfile + the vendored *.tar.xz) via
+  # `git ls-files -s | sha256sum`. Committed-content-based, so the tag CI
+  # computes here and the tag the gates compute below are identical for the same
+  # sources. The gates PULL that tag (zero gnu.org) and only fall back to
+  # building if the tag is missing. A toolchain bump -> new hash -> this job
+  # builds + pushes the new image (path-filtered on the sources; forced true on
+  # any non-PR event; workflow_dispatch seeds the very first image manually while
+  # gnu.org is up). Self-contained: pushes with the built-in GITHUB_TOKEN
+  # (packages: write) — no external secret. The package is PRIVATE; the gates
+  # read it with GITHUB_TOKEN (packages: read).
+  # -----------------------------------------------------------------------
+  vax-toolchain-image:
+    name: vax-toolchain-image (vms-e7c5 twin)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.vax_toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute SOURCE_HASH over the toolchain sources
+        id: srchash
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "source_hash=$SOURCE_HASH" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ghcr.io (built-in GITHUB_TOKEN)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # Builds tools/cross-vax (whose Dockerfile COPYs the VENDORED
+      # binutils-2.42.tar.xz so the binutils step is offline; only gcc is fetched,
+      # hardened + SHA256-checked). push:true publishes both the source-hash tag
+      # and :latest to the PRIVATE ghcr package. gha layer cache keeps an
+      # unchanged-source rebuild (e.g. a main push) a cache hit — zero fetch.
+      - name: Build and push the vax--netbsdelf cross toolchain image (source-hash + latest)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/3dl-dev/ovmx-cross-vax:${{ steps.srchash.outputs.source_hash }}
+            ghcr.io/3dl-dev/ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
   netbsd-vax-devvms:
     name: /dev/vms live on NetBSD/vax under SIMH — PING (vms-f78bb)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from
+    # ghcr (top-level default is contents:read only, no packages).
+    permissions:
+      packages: read
+      contents: read
     needs: [changes, netbsd-vax-simh]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -5197,7 +6008,34 @@ jobs:
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -5250,6 +6088,10 @@ jobs:
   # -----------------------------------------------------------------------
   netbsd-vax-eflag:
     name: Event flags proven cross-process on NetBSD/vax under SIMH — INV-6 (vms-4e7)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: [changes, netbsd-vax-simh]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -5281,7 +6123,34 @@ jobs:
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -5352,6 +6221,10 @@ jobs:
   # -----------------------------------------------------------------------
   netbsd-vax-access:
     name: Access-mode enforcement + cross-process AST delivery proven on NetBSD/vax under SIMH — INV-6 (vms-4b7)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: [changes, netbsd-vax-simh]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -5383,7 +6256,34 @@ jobs:
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -5484,6 +6384,10 @@ jobs:
   # -----------------------------------------------------------------------
   netbsd-vax-proctab:
     name: Process table proven cross-process on NetBSD/vax under SIMH — INV-6 (vms-2e0)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: [changes, netbsd-vax-simh]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -5515,7 +6419,34 @@ jobs:
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -5543,6 +6474,10 @@ jobs:
   # -----------------------------------------------------------------------
   netbsd-vax-mbx:
     name: Mailboxes proven cross-process on NetBSD/vax under SIMH — INV-6 (vms-fe8)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: [changes, netbsd-vax-simh]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -5574,7 +6509,34 @@ jobs:
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -5595,204 +6557,12 @@ jobs:
         run: tests/lab-vax/run-mbx.sh negctl-create
 
   # -----------------------------------------------------------------------
-  # netbsd-vax-vmsfs-crosscompile (rd vms-544d, epic vms-8e8; P4-VFS-vax).
-  #
-  # Per-PR cross-compile gate for the LOADABLE elf32-vax vmsfs.kmod = the shared
-  # ODS-2 core (src/kernel-core/vmsfs) + the NetBSD vnode backend
-  # (src/kernel-netbsd/vmsfs) + the static mount helper. The vax analog of
-  # netbsd-amd64-vmsfs-crosscompile and the loadable-module complement to
-  # vmsfs-core-elf32-vax (which compiles ONLY the core): the three vnode-backend
-  # fixes that make an OVMX ODS-2 volume mount+read on vax (register vop_parsepath,
-  # return the looked-up child unlocked, close the device FREAD|FWRITE) live in
-  # the backend, so THIS is their fast per-PR signal. It stands up the pinned
-  # vax--netbsdelf cross toolchain over a SHA512-pinned NetBSD 10.1 syssrc and
-  # cross-compiles the module at -O2 -fno-pic -Werror, asserting elf32-vax +
-  # MODULE() metadata + no GOT32 relocs. BUILD/TEST tooling, never a runtime
-  # (Rule 9). The SIMH mount+read PROOF is the nightly netbsd-vax-vmsfs-mount job.
-  # -----------------------------------------------------------------------
-  netbsd-vax-vmsfs-crosscompile:
-    name: Loadable elf32-vax vmsfs.kmod cross-compiles (vms-544d)
-    needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.vmsfs_mount_vax == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
-        uses: docker/build-push-action@v6
-        with:
-          context: tools/cross-vax
-          file: tools/cross-vax/Dockerfile
-          push: false
-          load: true
-          tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
-          cache-to: type=gha,mode=max,scope=cross-vax
-
-      # Same NetBSD release the runtime harness pins (tests/lab-vax/run-vmsfs.sh);
-      # syssrc is arch-independent kernel source, so only usr/src/sys + common are
-      # extracted. A source change never re-downloads (keyed on the harness pin).
-      - name: Cache NetBSD/vax kernel sources (syssrc)
-        uses: actions/cache@v4
-        with:
-          path: .netbsd-vax-src
-          key: netbsd-vax-syssrc-${{ hashFiles('tests/lab-vax/run-vmsfs.sh') }}
-          restore-keys: |
-            netbsd-vax-syssrc-
-
-      - name: Fetch + verify + extract NetBSD/vax syssrc (kernel headers) if not cached
-        run: |
-          set -euo pipefail
-          # Source the pinned version + syssrc SHA512 from the runtime harness so
-          # the two can never drift apart.
-          VER=$(sed -n 's/.*NETBSD_VERSION:-\([0-9.]*\).*/\1/p' tests/lab-vax/run-vmsfs.sh | head -1)
-          SHA=$(sed -n 's/.*SYSSRC_SHA512:-\([0-9a-f]*\).*/\1/p' tests/lab-vax/run-vmsfs.sh | head -1)
-          URL="https://cdn.netbsd.org/pub/NetBSD/NetBSD-${VER}/source/sets/syssrc.tgz"
-          if [ ! -d .netbsd-vax-src/usr/src/sys ]; then
-            mkdir -p .netbsd-vax-src
-            curl -fSL --retry 3 -o /tmp/syssrc.tgz "$URL"
-            echo "$SHA  /tmp/syssrc.tgz" | sha512sum -c -
-            tar xzf /tmp/syssrc.tgz -C .netbsd-vax-src usr/src/sys usr/src/common
-          fi
-
-      - name: Cross-compile the loadable elf32-vax vmsfs.kmod (ODS-2 core + NetBSD vnode backend)
-        run: |
-          set +e
-          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
-                  -v "$GITHUB_WORKSPACE/.netbsd-vax-src:/nbsrc:ro" \
-                  ovmx-cross-vax:latest sh tools/cross-vax/build-vmsfs-mount-vax.sh 2>&1)
-          RC=$?
-          set -e
-          echo "$RAW"
-          [ "$RC" -eq 0 ] || { echo "FAIL: loadable vmsfs.kmod elf32-vax cross build exited nonzero ($RC)"; exit 1; }
-          echo "$RAW" | grep -qiF 'loadable VFS module with MODULE() metadata, no GOT32' \
-            || { echo "FAIL: did not see the loadable-module PASS banner"; exit 1; }
-          echo "$RAW" | grep -qiF 'file format elf32-vax' \
-            || { echo "FAIL: artifacts were not elf32-vax -- wrong target"; exit 1; }
-          echo "PASS: the loadable vmsfs.kmod (ODS-2 core + NetBSD vnode backend) cross-compiled to elf32-vax"
-
-      - name: NEGATIVE CONTROL — a deliberately-broken vmsfs TU must fail the cross-compile
-        run: |
-          docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
-            -v "$GITHUB_WORKSPACE/.netbsd-vax-src:/nbsrc:ro" \
-            -e CROSSCOMPILE_NEGCTL=1 \
-            ovmx-cross-vax:latest sh tools/cross-vax/build-vmsfs-mount-vax.sh
-
-      # HEADER-PORTABILITY NEGATIVE CONTROL (rd vms-9172 / vms-bbf): a
-      # vmsfs_ondisk.h regressed to the pre-#516 bug (_KERNEL branch -> bare
-      # <stdint.h>) must be REJECTED by the -H stdint-portability check. The vax
-      # cross-build ALSO slipped the #509 break through (its toolchain include
-      # dir exposed <stdint.h>); this gives the per-PR vax gate teeth against it.
-      - name: HEADER-PORTABILITY NEGATIVE CONTROL — a regressed vmsfs_ondisk.h must red the gate
-        run: |
-          docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
-            -v "$GITHUB_WORKSPACE/.netbsd-vax-src:/nbsrc:ro" \
-            -e CROSSCOMPILE_NEGCTL_HDR=1 \
-            ovmx-cross-vax:latest sh tools/cross-vax/build-vmsfs-mount-vax.sh
-
-  # -----------------------------------------------------------------------
-  # netbsd-vax-vmsfs-mount (rd vms-544d, epic vms-8e8; P4-VFS-vax). The ODS-2
-  # sibling of netbsd-vax-devvms and the vax analog of netbsd-amd64-vmsfs-mount
-  # (vms-308): boot NetBSD/vax under SIMH, cross-build + modload the loadable
-  # vmsfs.kmod, MOUNT an OVMX ODS-2 volume and READ HELLO.TXT out of it through
-  # the shared ODS-2 core -- the boot-critical /vms mount that gates boot-to-DCL
-  # on vax (vms-7b1 -> vms-d59). Includes the module-absent negative control (the
-  # mount must FAIL HONESTLY with no backend loaded -- INV-6). NIGHTLY
-  # (schedule/dispatch): a full SIMH boot + the ~40-min custom MODULAR-kernel
-  # build (vax GENERIC omits the module framework) is far too heavy for a per-PR
-  # runner; the per-PR signal is netbsd-vax-vmsfs-crosscompile above.
-  # -----------------------------------------------------------------------
-  netbsd-vax-vmsfs-mount:
-    name: OVMX ODS-2 mounts+reads on NetBSD/vax under SIMH (vms-544d)
-    needs: [changes, netbsd-vax-simh]
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    # The full NetBSD src tree + build.sh obj/tools are large, rebuildable scratch
-    # -> keep them OUT of the disk cache (a literal /tmp path; the `runner'
-    # context is not available in a job-level env).
-    env:
-      KBUILD_DIR: /tmp/ovmx-vax-vmsfs-kbuild
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
-        uses: actions/cache/restore@v4
-        with:
-          path: .boot-cache/lab-vax
-          key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
-
-      # Cache the built MODULAR kernel (4 MB) so the ~40-min build.sh runs only on
-      # a cold cache, keyed on the kernel-build inputs (the vax module-wiring
-      # patch + the pinned NetBSD version).
-      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX)
-        uses: actions/cache@v4
-        with:
-          path: .boot-cache/lab-vax/vmsfs-artifacts/netbsd-OVMX
-          key: vax-modular-kernel-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
-
-      - name: Build the lab-vax image (SIMH + anita)
-        run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
-
-      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
-        uses: docker/build-push-action@v6
-        with:
-          context: tools/cross-vax
-          file: tools/cross-vax/Dockerfile
-          push: false
-          load: true
-          tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
-          cache-to: type=gha,mode=max,scope=cross-vax
-
-      - name: Prove — OVMX ODS-2 MOUNTS + READS on NetBSD/vax (cross-build, MODULAR kernel, modload, mount, read HELLO.TXT)
-        run: tests/lab-vax/run-vmsfs.sh prove
-
-      - name: Negative control — with the vmsfs module unloaded the ODS-2 mount+read must fail
-        run: tests/lab-vax/run-vmsfs.sh negctl
-
-  # -----------------------------------------------------------------------
-  # netbsd-vax-boot (rd vms-7b1, parent vms-c99, epic vms-8e8). The VAX
-  # capstone-minus-one: ASSEMBLE a bootable OVMX/NetBSD-vax system disk from the
-  # OVMX build and boot it UNATTENDED under SIMH with ovmx_init (STARTUP.EXE) as
-  # PID 1 (init), reaching the boot milestone -- kernel up -> vms.kmod loaded
-  # (/dev/vms live) -> OpenVMX banner -> vmsfs.kmod loaded -> OVMX ODS-2 system
-  # disk (DKA0:) mounted. It WIRES TOGETHER what netbsd-vax-devvms (/dev/vms
-  # PING) and netbsd-vax-vmsfs-mount (ODS-2 mount+read) prove in isolation, but
-  # UNDER ovmx_init as real PID 1 driving its own NetBSD boot seam
-  # (ovmx_boot_netbsd.c). Reaching a full DCL prompt is the SEPARATE capstone
-  # (vms-d59) and is deliberately NOT scoped here.
-  #
-  # It cross-builds STARTUP.EXE (ovmx_init, dynamic elf32-vax, ld.elf_so
-  # activation) + the loadable vms.kmod + vmsfs.kmod, assembles them onto a
-  # PRIVATE COPY of the cached disk (never the shared wd0.img the devvms/vmsfs
-  # proofs boot -- this replaces /sbin/init), and boots it. The prove step
-  # asserts the milestone console lines; the negctl step boots WITHOUT the ODS-2
-  # volume so the "system disk DKA0: mounted" line MUST NOT appear -- proving the
-  # mount assertion has teeth (Rule 7). BUILD/TEST tooling, never a runtime (Rule
-  # 9): SIMH is emulation; nothing runs on the host. run-boot.sh wraps every SIMH
-  # invocation in a hard timeout.
-  #
-  # NIGHTLY (schedule) + manual (workflow_dispatch) ONLY -- a full SIMH boot + the
-  # ~40-min custom MODULAR-kernel build (vax GENERIC omits the module framework)
-  # is far too heavy per-PR; the per-PR signal is the fast cross-compile gates
-  # (exec-netbsd-vax, netbsd-vax-vmsfs-crosscompile). It `needs' netbsd-vax-simh
-  # so that job primes the shared 10.1 disk cache first; this job restores it,
-  # clones a private copy, and NEVER reinstalls in the hot path.
-  # -----------------------------------------------------------------------
   netbsd-vax-boot:
     name: OVMX boots as PID 1 on NetBSD/vax under SIMH (vms-7b1)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: [changes, netbsd-vax-simh]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -5827,7 +6597,34 @@ jobs:
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -5881,6 +6678,10 @@ jobs:
   # -----------------------------------------------------------------------
   netbsd-vax-sysboot:
     name: OVMX boots past the installed-system gate to PROVISION.EXE on NetBSD/vax (vms-d9c)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: [changes, netbsd-vax-simh]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -5910,7 +6711,34 @@ jobs:
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -5928,33 +6756,36 @@ jobs:
         run: tests/lab-vax/run-boot.sh sysboot-negctl
 
   # -----------------------------------------------------------------------
-  # vmsfs-core-elf32-vax (rd vms-bb8, epic vms-8e8; P4-VFS V3).
+  # alpha-boot-login (rd vms-341, epic vms-8954). The Alpha member of the
+  # cut-time release-acceptance set: proves the OVMX/Linux-Alpha (LP64) runtime
+  # boots to an AUTHENTICATED interactive DCL "$" over the genuine Files-11
+  # ODS-2 executive ACP -- SYSTEM/MANAGER authenticated by Purdy against the
+  # binary $UAFDEF SYSUAF (not just boot-to-Username). This is the 4th-arch
+  # authenticity dimension: the SAME authenticity flip x86_64 ships (the 0.5
+  # release-acceptance-e2e job proves x86_64), proven green-by-SHA on a second
+  # 64-bit width.
   #
-  # BUILD-ONLY cross-compile gate for the substrate-neutral ODS-2 core
-  # (src/kernel-core/vmsfs/*.c). It reuses the SAME pinned vax--netbsdelf GCC
-  # cross toolchain image as libvmssys-netbsd-vax (shared gha layer cache,
-  # scope=cross-vax -- no gcc rebuild), then compiles the whole ODS-2 core
-  # FREESTANDING (-ffreestanding -fno-builtin -Werror, no libc) against the
-  # width-audit backend to elf32-vax relocatable objects. This is the ODS-2
-  # analog of the libvmssys VAX cross-compile: it proves the allocator, the
-  # directory scanner, the file-header codec and the retrieval-map math are
-  # ILP32/endian-clean for the VAX (32-bit) width class -- any long/pointer-width
-  # assumption is a hard compile error, and the on-disk-format _Static_asserts
-  # (512/512/88/8-byte structs) plus the generated width TU's explicit width+offset
-  # asserts are re-evaluated under ILP32. Width audit: docs/audit-ilp32-vax-vmsfs.md.
+  # HEAVY-EMULATOR TIER (schedule || workflow_dispatch), exactly like the
+  # netbsd-vax-boot SIMH gate above -- deliberately NOT the per-PR path (a full
+  # Alpha cross-build + qemu-system-alpha boot is ~25-30 min; keeping it off the
+  # PR path preserves the fast PR wall). qemu-system-alpha is pure TCG (no KVM /
+  # nested virt), so it runs on a stock ubuntu-latest runner. The conductor
+  # fires it via workflow_dispatch on the frozen SHA at cut time for a
+  # machine-observable green-by-SHA Alpha authenticity proof; the nightly
+  # schedule catches drift between cuts.
   #
-  # DELIBERATELY NOT emulation: there is no VAX system target and the core is not
-  # linked into a runnable image (a booted-volume round-trip is the later SIMH/V5
-  # phase). BUILD/TEST TOOLING, never a runtime (Rule 9): the audit backend binds
-  # no VFS and mounts nothing. Gated like the other build-check jobs: push/
-  # merge_group/schedule always; on a PR only when the core / cross inputs change.
+  # NO persistent .boot-cache: on a fresh runner run-boot-alpha.sh cross-builds
+  # the FULL Alpha userland + vms.ko + ODS-2 disk from the checked-out SHA, so
+  # the gate can never pass on a stale artifact (the V0.4-6-on-a-V0.5-tree
+  # false-green class, vms-46f5). Only the cross toolchain docker layers are
+  # gha-cached (the compiler, not the product).
   # -----------------------------------------------------------------------
-  vmsfs-core-elf32-vax:
-    name: vmsfs-core cross-compiles for elf32-vax (vms-bb8)
+  alpha-boot-login:
+    name: OVMX/Alpha boots to an authenticated DCL $ over the ODS-2 ACP (vms-341)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.vmsfs_core_vax == 'true' }}
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - name: Checkout
@@ -5963,34 +6794,89 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+      # A full Alpha cross-build + a 128 MB ODS-2 disk + docker images is tight
+      # on a stock runner's ~14 GB root; reclaim the large unused toolchains up
+      # front so the boot build can't die on ENOSPC at minute 25.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
         with:
-          context: tools/cross-vax
-          file: tools/cross-vax/Dockerfile
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
           push: false
           load: true
-          tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
-          cache-to: type=gha,mode=max,scope=cross-vax
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
 
-      - name: Cross-compile the ODS-2 core for elf32-vax (ILP32 width proof)
+      - name: "Login gate — boot qemu-system-alpha, authenticate SYSTEM/MANAGER against the binary SYSUAF over the ACP, land on an interactive DCL $, run SHOW TIME"
+        run: tools/cross-alpha/run-boot-alpha.sh login
+
+  # -----------------------------------------------------------------------
+  # alpha-arith-hparith (rd vms-db3, epic vms-8954). The STANDING green-by-SHA
+  # gate for the Alpha fault->VMS-condition bridge: a trap-enabling FP
+  # divide-by-zero on OVMX/Linux-Alpha must raise a faithful SS$_HPARITH (1284)
+  # condition -- SIGFPE -> sc_fpcr exception-summary decode -> lib$signal(
+  # SS$_HPARITH, Imask,Fmask,summary,PC,PS) -> CHF handler search -> $STATUS --
+  # PROVEN against a REAL qemu-system-alpha kernel trap path, under -static.
+  #
+  # WHY A DEDICATED JOB, focused on ONE suite: test_arith_hparith is Alpha-only
+  # (the FP-trap/sc_fpcr/trapb model is Alpha) and named off the test_syssvc_
+  # glob so the x86/arm per-facility negctl rig never grabs a suite it cannot run
+  # (it has no qemu-system-alpha). Rule 7 -- a test that does not run in CI is
+  # effectively absent -- so the bridge's RUNTIME behavior needs its own
+  # green-by-SHA proof under the shared harness that guards main, not a workshop
+  # run. ONLY_SUITE=test_arith_hparith runs exactly that suite (build+stage+boot
+  # one suite), so the gate is deterministic and does not flake on or pay for the
+  # full ~66-suite alpha run.
+  #
+  # HEAVY-EMULATOR TIER (schedule || workflow_dispatch), exactly like
+  # alpha-boot-login above: qemu-system-alpha is pure TCG, a full Alpha
+  # cross-build + boot is ~25-30 min, so it stays OFF the per-PR path. The
+  # conductor fires it via workflow_dispatch on the frozen SHA for a
+  # green-by-SHA reap; the nightly schedule catches drift on main. If the FP-trap
+  # substrate (TCG) ever proves flaky, gate on NO-NEW-vs-baseline (vms-898a) --
+  # but the CHECK 2 sc_fpcr-fidelity sub-assertion has passed green under
+  # qemu-system, so the substrate is faithful, not blocked.
+  # -----------------------------------------------------------------------
+  alpha-arith-hparith:
+    name: OVMX/Alpha FP div-by-zero raises SS$_HPARITH over the CHF (vms-db3)
+    needs: changes
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
         run: |
-          set +e
-          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
-                  ovmx-cross-vax tools/cross-vax/build-vmsfs-core-vax.sh 2>&1)
-          RC=$?
-          set -e
-          echo "$RAW"
-          if [ "$RC" -ne 0 ]; then
-            echo "FAIL: vmsfs-core elf32-vax cross build exited nonzero ($RC)"
-            exit 1
-          fi
-          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: vmsfs-core compiles for elf32-vax (ILP32 width-clean)' \
-            || { echo "FAIL: did not see the ODS-2 core width-proof PASS banner"; exit 1; }
-          echo "$RAW" | grep -qiF 'file format elf32-vax' \
-            || { echo "FAIL: objects were not elf32-vax -- wrong target"; exit 1; }
-          echo "PASS: the ODS-2 core compiled ILP32-clean to elf32-vax objects"
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: "HPARITH gate — boot qemu-system-alpha, FP div0 -> SIGFPE -> sc_fpcr summary -> lib$signal(SS$_HPARITH=1284) -> CHF handler -> $STATUS, under -static"
+        run: ONLY_SUITE=test_arith_hparith tools/cross-alpha/run-syssvc-tests-alpha.sh
 
   # -----------------------------------------------------------------------
   # Job: NetBSD/vax vms module cross-compiles (rd vms-20b9, epic vms-8e8; P4-B).
@@ -6001,13 +6887,13 @@ jobs:
   # headers with clang, THIS gate compiles the SAME module SRCS against NetBSD/vax
   # kernel headers with the pinned `vax--netbsdelf' gcc -- the 32-bit VAX (ILP32)
   # width class no other OVMX target exercises. It is the executive analog of the
-  # vmsfs-core-elf32-vax gate: BUILD-ONLY, no emulator, no boot, -Werror,
+  # libvmssys VAX cross-compile gate: BUILD-ONLY, no emulator, no boot, -Werror,
   # relocatable-link, and a generated width-audit TU whose _Static_asserts pin the
   # ILP32 width class + the packed RB parent+colour word invariant + the intrusive
   # container node sizes/offsets. Findings: docs/audit-ilp32-vax-netbsd-exec.md.
   #
   # It reuses the SAME pinned vax--netbsdelf toolchain image as the libvmssys/
-  # vmsprocess/libvms/vmsfs-core VAX jobs (shared gha layer cache, scope=cross-vax
+  # vmsprocess/libvms VAX jobs (shared gha layer cache, scope=cross-vax
   # -- no gcc rebuild) and mounts the SAME pinned NetBSD 10.1 syssrc kernel headers
   # the amd64 gate uses (tests/netbsd/netbsd_version.env, cached the same way). The
   # container image carries only the compiler + a NetBSD/vax libc sysroot; the
@@ -6022,6 +6908,10 @@ jobs:
   # -----------------------------------------------------------------------
   netbsd-vax-vms-crosscompile:
     name: NetBSD/vax vms module cross-compiles
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.exec_netbsd_vax == 'true' }}
     runs-on: ubuntu-latest
@@ -6034,7 +6924,34 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -6157,6 +7074,10 @@ jobs:
   # -----------------------------------------------------------------------
   netbsd-vax-facility-tools-crosscompile:
     name: Facility guest tools (eflag/access/proctab/mbx) cross-compile for netbsd-vax via CMake (vms-74b)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.exec_netbsd_vax == 'true' }}
     runs-on: ubuntu-latest
@@ -6169,7 +7090,34 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -6262,8 +7210,7 @@ jobs:
   # build-boot-images-vax.sh -- only their now-redundant standalone CI jobs
   # were removed.
   #
-  # netbsd-vax-vms-crosscompile (the vms.kmod.o executive module),
-  # netbsd-vax-vmsfs-crosscompile (the vmsfs.kmod loadable module), and
+  # netbsd-vax-vms-crosscompile (the vms.kmod.o executive module) and
   # netbsd-vax-facility-tools-crosscompile (the eflag/access/proctab/mbx
   # guest tools, not shipped images) are UNTOUCHED by this rung -- they are
   # not per-lib/per-image script gates this aggregate covers.
@@ -6272,6 +7219,10 @@ jobs:
   # -----------------------------------------------------------------------
   vax-cmake-images:
     name: vax toolchain builds the ovmx-images aggregate; 10/10 parity-drift images close (vms-64a, vms-838)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
     runs-on: ubuntu-latest
@@ -6284,7 +7235,34 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -6328,7 +7306,7 @@ jobs:
             || { echo "FAIL: the migrated ctest negctls did not both pass"; exit 1; }
           echo "$RAW" | grep -qF "OK: ovmx_init.c has no __NetBSD__/__linux__ boot-logic fork" \
             || { echo "FAIL: the ovmx_init.c INV-DRIFT check (was build-ovmx-init-vax.sh) did not run"; exit 1; }
-          echo "$RAW" | grep -qF "OK: all 9 ovmx_boot.h ops defined by the NetBSD backend" \
+          echo "$RAW" | grep -qF "OK: every ovmx_boot.h op is defined by the NetBSD backend" \
             || { echo "FAIL: the NetBSD boot-backend ops check (was build-ovmx-init-vax.sh) did not run"; exit 1; }
           echo "$RAW" | grep -qF "OK: ovmx_boot_open_executive() opens the real /dev/vms (fail-honest)" \
             || { echo "FAIL: the real-/dev/vms check (was build-ovmx-init-vax.sh) did not run"; exit 1; }
@@ -6340,3 +7318,120 @@ jobs:
           echo "$RAW" | grep -qF "ALL PROOFS PASSED: ovmx-images builds the full shipped image set via 'cmake --build --target ovmx-images' for vax--netbsdelf, every image passes the Decision-A activation contract, and every migrated teeth check genuinely fires" \
             || { echo "FAIL: did not see the ovmx-images PASS banner"; exit 1; }
           echo "PASS: ovmx-images built the full shipped image set for netbsd-vax; 10/10 vms-e1d parity-drift images closed; every migrated Rung-E teeth check fired"
+
+  # -----------------------------------------------------------------------
+  # vax-acp-read-ilp32 (rd vms-8e8f, piece A of the VAX ACP flip epic
+  # vms-c45). THE VAX ILP32 LEG of the conductor's 3-way convergence gate
+  # {x86_64 CI + VAX ILP32 + Alpha LP64} for the Files-11 ACP read path.
+  #
+  # The VMS ACP-read arms (RMS's $ASSIGN/IO$_ACCESS/DID-walk/READVBLK path,
+  # the shared imgact_acp.c file-access walk, PID 1's staging bridge, and the
+  # OVMXVMSSYS.PAR-over-ACP reader) are OVMX_HAVE_ACP-gated, and until this
+  # job NOTHING on the VAX side ever defined that macro -- the netbsd-vax
+  # vmsrms cross builds VMSRMS_STANDALONE (which skips the define) and
+  # build-ovmx-init-vax.sh defines neither OVMX_HAVE_ACP nor the bridge
+  # macro. So those arms had never been compiled for elf32-vax at all, and
+  # LP64-only-correct code could accrue in them indefinitely with every gate
+  # green.
+  #
+  # This is a COMPILE AUDIT, not a runtime build -- the same relationship
+  # build-vms-module-vax.sh has to the shipped vms.kmod. It compiles a
+  # configuration no shipped VAX recipe uses yet; the RUNTIME cutover is rd
+  # vms-329 and this job is explicitly NOT a substitute for that item's SIMH
+  # end-to-end proof. What it buys is that the cutover is a wiring change
+  # rather than also a compile-error hunt, and that the arms can never
+  # silently rot back to LP64-only-correct in the meantime.
+  #
+  # The script carries its own teeth (see its header): the ACP symbols must
+  # genuinely be compiled IN (an empty preprocessor arm compiles beautifully
+  # -- that is the INV-6 fake-success class in gate form), the strong
+  # ovmx_sysgen_acp_read must resolve in the closure link (the static-link
+  # weak-seam class), and an LP64 negative control MUST be rejected by this
+  # compiler or the whole width check is meaningless. The banner assertions
+  # below are defense in depth beyond the script's `set -e`: they confirm each
+  # check actually FIRED, not merely that the script exited 0.
+  # Gated on the same shared netbsd_vax filter; fast (compile-only, no link
+  # of the full library stack) once the cross toolchain image layer-caches.
+  # -----------------------------------------------------------------------
+  vax-acp-read-ilp32:
+    name: VAX ILP32 leg -- the whole ACP-read path cross-compiles width-clean for elf32-vax (vms-8e8f)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Cross-compile the ACP-read closure for elf32-vax with the ACP arms ON
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax tools/cross-vax/build-acp-read-audit-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: the elf32-vax ACP-read compile audit exited nonzero ($RC)"
+            exit 1
+          fi
+
+          echo "$RAW" | grep -qF "OK: all 9 ACP-read closure translation units compile for vax--netbsdelf" \
+            || { echo "FAIL: the closure compile proof did not run"; exit 1; }
+          echo "$RAW" | grep -qF "OK: 9/9 objects are elf32-vax" \
+            || { echo "FAIL: the elf32-vax object-arch proof did not run"; exit 1; }
+          echo "$RAW" | grep -qF "OK: every ACP arm in the closure is genuinely compiled in" \
+            || { echo "FAIL: the ACP-arms-compiled-in TEETH did not run"; exit 1; }
+          echo "$RAW" | grep -qF "PASS (negctl): the LP64 translation unit is correctly rejected for vax--netbsdelf" \
+            || { echo "FAIL: the LP64 width negctl did not run -- the width gate has no proven teeth"; exit 1; }
+          echo "$RAW" | grep -qF "OK   ovmx_sysgen_acp_read resolves STRONG in the closure" \
+            || { echo "FAIL: the static-link weak-seam check did not run"; exit 1; }
+          echo "$RAW" | grep -qF "ALL PROOFS PASSED: the VMS ACP-read code path compiles ILP32-clean for vax--netbsdelf" \
+            || { echo "FAIL: did not see the ACP-read audit PASS banner"; exit 1; }
+          echo "PASS: the VMS ACP-read path (RMS ACP arm + imgact_acp + PID 1 staging bridge + OVMXVMSSYS.PAR-over-ACP + the NetBSD boot backend) cross-compiles ILP32-clean for elf32-vax with OVMX_HAVE_ACP; every tooth fired"

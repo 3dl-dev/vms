@@ -3,8 +3,10 @@
 # A standalone, dependency-free static library: reads AND writes byte-genuine
 # ODS-2 volume images (home block, INDEXF.SYS headers, FM2 retrieval pointers,
 # directory records, storage bitmap). Kept separate from the ODS-2-INSPIRED
-# src/kernel/vmsfs on-disk format, which is not byte-genuine. See vmsfs/ods2.h
-# for provenance (reader: increments 1-2; writer: increment 3).
+# legacy VMSFS on-disk format (src/vmsfs/include/vmsfs_ondisk.h, the host-tool
+# format header relocated there when vms-165 retired the vmsfs VFS driver),
+# which is not byte-genuine. See vmsfs/ods2.h for provenance (reader:
+# increments 1-2; writer: increment 3).
 #
 # Standalone netbsd-vax cross (vms-64a, epic vms-f10, unified cross-build Rung
 # B): INITIALIZE.EXE (tools/vms_initialize.c) links this library directly

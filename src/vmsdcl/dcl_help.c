@@ -24,6 +24,31 @@
 #include "dcl/hlb.h"
 #include "ssdef.h"
 
+/*
+ * vms-4ac: the HELP library (SYS$HELP:HELPLIB.HLP) is read over the Files-11
+ * ODS-2 ACP on the product runtime -- the /vms POSIX passthrough it used to
+ * fopen() was retired by the atomic flip (epic vms-208), so a runtime HELP
+ * answered %HELP-E-OPENIN even though HELPLIB.HLP is mastered on the volume.
+ *
+ * The RMS/ACP read lives in a SEPARATE translation unit (dcl_help_acp.c),
+ * reached here through TWO WEAK SEAMS so this engine stays free of the RMS and
+ * vmsfs dependencies -- the hermetic engine unit test (tests/dcl/
+ * test_help_engine.c) compiles THIS file alone and links neither. When the
+ * seam is present (DCL.EXE, HELP.EXE), a VMS filespec is read over the ACP with
+ * a POSIX /vms fallback; when it is absent (the engine test, which only ever
+ * feeds Linux temp paths), the VMS-spec branch is simply inert.
+ *
+ *   help_acp_library_text(spec)          -> malloc'd .HLP text over the ACP, or
+ *                                           NULL if the ACP cannot reach it.
+ *   help_acp_vms_to_linux(spec,buf,sz)   -> 1 + Linux /vms path for the POSIX
+ *                                           fallback, 0 if it cannot translate.
+ * The same #pragma weak layering seam rms_textfile.c uses (LIBVMS sits below
+ * RMS, so a hard reference would invert the layering).
+ */
+char *help_acp_library_text(const char *vms_spec) __attribute__((weak));
+int   help_acp_vms_to_linux(const char *vms_spec, char *buf, size_t bufsz)
+      __attribute__((weak));
+
 /* ------------------------------------------------------------------ */
 /* Node construction                                                   */
 /* ------------------------------------------------------------------ */
@@ -292,11 +317,86 @@ static char *hlb_reconstruct_text(FILE *fp, const struct lbr_header *hdr)
     return text;
 }
 
-/* Return the numbered-level source text for one library file, auto-detecting a
- * compiled .HLB (LBRO magic) versus a raw .HLP source. Malloc'd, or NULL. */
-static char *library_source_text(const char *linux_path)
+/* A VMS filespec (DEV:[DIR]NAME.TYP or a device-logical spec) rather than a
+ * Linux path: has a ':' or '[' and does not begin with '/'. */
+static int help_is_vms_spec(const char *path)
 {
-    FILE *fp = fopen(linux_path, "rb");
+    return path && path[0] != '/' &&
+           (strchr(path, ':') != NULL || strchr(path, '[') != NULL);
+}
+
+/* True if the filespec's type is .HLB (a compiled binary LBRO library). The ACP
+ * text reader (help_acp_library_text) reads records and would mangle a binary
+ * .HLB, so a .HLB is always taken through the POSIX read path, which detects the
+ * LBRO magic and reconstructs the numbered-level source. The .HLB library is a
+ * build/test artifact; the product volume ships the .HLP source. */
+static int help_type_is_hlb(const char *path)
+{
+    /* Scan the name part only (after the last ']' ':' '/'), find its last '.',
+     * and compare the type -- up to a ';' version -- to "HLB". */
+    const char *base = path;
+    for (const char *p = path; *p; p++)
+        if (*p == ']' || *p == ':' || *p == '/' || *p == '>')
+            base = p + 1;
+
+    const char *dot = NULL;
+    for (const char *p = base; *p && *p != ';'; p++)
+        if (*p == '.') dot = p;
+    if (!dot) return 0;
+
+    return (dot[1] == 'H' || dot[1] == 'h') &&
+           (dot[2] == 'L' || dot[2] == 'l') &&
+           (dot[3] == 'B' || dot[3] == 'b') &&
+           (dot[4] == '\0' || dot[4] == ';');
+}
+
+/*
+ * Return the numbered-level source text for one library, given either a VMS
+ * filespec or a Linux path.
+ *
+ *  - A VMS spec (SYS$HELP:HELPLIB.HLP, HLP$LIBRARY translations) is read over
+ *    the Files-11 ACP first (the weak help_acp_library_text seam) -- the product
+ *    runtime, where /dev/vms is present and the /vms passthrough is gone. If the
+ *    ACP cannot reach it (host build/test tooling with no /dev/vms, or the
+ *    netbsd-vax cross), it FALLS BACK to a POSIX read of the translated /vms
+ *    path (help_acp_vms_to_linux). On the real runtime a file that is genuinely
+ *    absent fails BOTH the ACP read and the POSIX open (/vms does not exist
+ *    there), so HELP reports %HELP-E-OPENIN honestly -- never a fabricated
+ *    success (Rule 9 / INV-6). This is the same ACP-first, POSIX-for-host dual
+ *    backend $SEARCH (rms_search.c) uses. When the seam is absent (engine unit
+ *    test), a VMS spec has no reader and yields NULL.
+ *  - A Linux path (the $OVMX_HELPLIB locator; temp-file engine tests) is read
+ *    directly.
+ *
+ * Either way, a compiled .HLB (LBRO magic) is auto-detected on the POSIX read
+ * and reconstructed to its numbered-level source; a raw .HLP is returned as-is.
+ * Malloc'd, or NULL.
+ */
+static char *library_source_text(const char *path)
+{
+    if (help_is_vms_spec(path)) {
+        /* A .HLP source is line-oriented, so it reads over the ACP text reader;
+         * a binary .HLB does NOT (the record reader would mangle it) -- it goes
+         * straight to the POSIX read below, which detects the LBRO magic and
+         * reconstructs the source. */
+        if (!help_type_is_hlb(path) && &help_acp_library_text) {
+            char *text = help_acp_library_text(path);   /* ACP; NULL on a miss */
+            if (text)
+                return text;
+        }
+        /* POSIX fallback (host tooling / netbsd cross), and the .HLB read path:
+         * translate to the /vms path and read it as a Linux path below (fopen +
+         * .HLB/.HLP auto-detect). On the product runtime /vms does not exist, so
+         * this open fails too -- an honest miss, not a fake (Rule 9 / INV-6). */
+        if (&help_acp_vms_to_linux) {
+            char linux_path[1024];
+            if (help_acp_vms_to_linux(path, linux_path, sizeof(linux_path)))
+                return library_source_text(linux_path);   /* now a Linux path */
+        }
+        return NULL;
+    }
+
+    FILE *fp = fopen(path, "rb");
     if (!fp) return NULL;
 
     struct lbr_header hdr;

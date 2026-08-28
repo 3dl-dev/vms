@@ -188,12 +188,40 @@ for n in ${NODES}; do
 
   # Per-node bring-up watcher: SRM prompt -> optional autoboot -> cold-clock
   # date prompt -> login prompt.
-  ( for _ in $(seq 1 180); do
+  ( echo "[watcher ${n}] start AUTOBOOT=[${AUTOBOOT}] SYSBOOT_PARAMS=[${SYSBOOT_PARAMS:-}] fifo=${fifo}"
+    for _ in $(seq 1 180); do
       grep -aq 'P00>>>' "${clog}" 2>/dev/null || { sleep 1; continue; }
       echo "[alpha:${LAB_NAME}] ${n}: SRM console ready"
       [ -n "${AUTOBOOT}" ] || exit 0
       echo "[alpha:${LAB_NAME}] ${n}: autoboot ${AUTOBOOT}"
       printf '%s\n' "${AUTOBOOT}" > "${fifo}"
+
+      # OPT-IN conversational SYSGEN param injection (vms-0d1 and R8-type oracle
+      # work). When SYSBOOT_PARAMS is set (space-separated PARAM=VALUE), the
+      # AUTOBOOT above must be a CONVERSATIONAL boot (e.g. AUTOBOOT="boot -fl
+      # 0,1 dqa0") so the machine stops at the SYSBOOT> prompt; this then SETs
+      # each param and CONTINUEs the boot. Default empty -> nothing happens and
+      # the unattended boot is unchanged (this is a SHARED oracle: the default
+      # must never become conversational). Non-persistent (per-boot); use
+      # WRITE CURRENT on a settled boot to bake a value into the golden image.
+      if [ -n "${SYSBOOT_PARAMS:-}" ]; then
+        got=""
+        for _ in $(seq 1 120); do
+          if tail -c 600 "${clog}" 2>/dev/null | grep -aq 'SYSBOOT>'; then got=1; break; fi
+          sleep 1
+        done
+        if [ -n "${got}" ]; then
+          echo "[alpha:${LAB_NAME}] ${n}: SYSBOOT> reached -- injecting ${SYSBOOT_PARAMS}"
+          for pv in ${SYSBOOT_PARAMS}; do
+            printf 'SET %s %s\n' "${pv%%=*}" "${pv#*=}" > "${fifo}"
+            sleep 1
+          done
+          printf 'CONTINUE\n' > "${fifo}"
+        else
+          echo "[alpha:${LAB_NAME}] *** ${n}: SYSBOOT_PARAMS set but SYSBOOT> never appeared -- is AUTOBOOT conversational (boot -fl 0,1 ...)?"
+        fi
+      fi
+
       for _ in $(seq 1 120); do
         grep -aq 'Username:' "${clog}" 2>/dev/null && break
         if tail -c 400 "${clog}" | grep -aq 'enter date and time'; then
@@ -213,7 +241,7 @@ for n in ${NODES}; do
       echo "[alpha:${LAB_NAME}] *** ${n}: booted SRM but OpenVMS never reached a login prompt"
       exit 0
     done
-    echo "[alpha:${LAB_NAME}] *** ${n}: never reached the P00>>> prompt -- do NOT use this lab as an oracle" ) &
+    echo "[alpha:${LAB_NAME}] *** ${n}: never reached the P00>>> prompt -- do NOT use this lab as an oracle" ) 2>&1 | tee "${nd}/logs/watcher.log" &
 done
 
 cat <<EOF

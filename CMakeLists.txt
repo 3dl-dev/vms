@@ -186,6 +186,20 @@ if(BUILD_TESTS)
     add_test(NAME known_images_unit COMMAND test_known_images)
     set_tests_properties(known_images_unit PROPERTIES LABELS "unit;imgact" TIMEOUT 30)
 
+    # .vms$xfer parse (SysV vs. VMS-standard) + Alpha standard-call AI-register
+    # layout (bead vms-f60d). Pure host unit test over imgact_xfer.c; proves the
+    # ZERO-REGRESSION fallback to SYSV for every non-.vms$xfer image and the
+    # documented Argument-Information bit layout.
+    add_executable(test_xfer_parse
+        src/imgact/test/test_xfer_parse.c
+        src/imgact/imgact_xfer.c)
+    target_include_directories(test_xfer_parse PRIVATE
+        src/imgact
+        src/imgact/include
+        src/vmslink/include)
+    add_test(NAME imgact_xfer_parse_unit COMMAND test_xfer_parse)
+    set_tests_properties(imgact_xfer_parse_unit PROPERTIES LABELS "unit;imgact" TIMEOUT 30)
+
     # Proves /SHARED images share physical pages across processes via
     # /proc/PID/smaps (INSTALL done condition #4). See the file header in
     # test_shared_pages.c for the full verification method.
@@ -213,6 +227,12 @@ add_subdirectory(src/vmsdcl)
 # sockets), so it builds unconditionally like known_images.
 add_subdirectory(src/vmsscs)
 
+# boundary_audit - executive-boundary AUDIT tracer (vms-c08, Phase A under
+# vms-040). Hosted library (seccomp user-notif + supervisor thread); no
+# dependency on the OVMX library chain, so it builds unconditionally.
+# docs/design-executive-boundary-audit-tracer.md.
+add_subdirectory(src/boundary_audit)
+
 # NetBSD/vax facility guest test tools (vmseflag/vmsaccess/vmsproctab/vmsmbx
 # + their width-safety negctl teeth) -- vms-74b, epic vms-509 "unified
 # cross-platform build" Rung D, docs/design-unified-cross-build.md §5/§8.
@@ -237,6 +257,8 @@ endif()
 if(BUILD_TESTS)
     add_subdirectory(tests/libvms)
     add_subdirectory(tests/vmsprocess)
+    add_subdirectory(tests/boundary_audit)
+    add_subdirectory(tests/imgact)   # boundary_audit IMGACT-path e2e (vms-617)
     add_subdirectory(tests/vmslnm)
     add_subdirectory(tests/vmsfs)
     add_subdirectory(tests/ods2)
@@ -360,8 +382,9 @@ if(BUILD_TESTS)
         LABELS "integration;authenticity" TIMEOUT 120)
 
     # vms-bae standing gate: drivers/ovmx/ is a REUSABLE kernel-module home, not
-    # a hard-coded {vms,vmsfs} pair. Runs the real overlay against a fabricated
-    # kernel tree with a hypothetical third module dropped in as {subdir +
+    # a hard-coded module list (vms-165 retired vmsfs, leaving vms). Runs the real
+    # overlay against a fabricated
+    # kernel tree with a hypothetical extra module dropped in as {subdir +
     # Kconfig stanza + config flag} only, and proves it is discovered and fully
     # wired (menu sourced, Makefile obj- line, sources flattened) with the
     # overlay script byte-for-byte unchanged. Hermetic source/wiring proof -- no
@@ -506,6 +529,20 @@ if(BUILD_TESTS)
                     $<TARGET_FILE:ovmx_kit_pack>)
         set_tests_properties(ovmx_kit_pack_roundtrip PROPERTIES
             LABELS "integration;tools" TIMEOUT 60)
+
+        # vms-c2c: the same packer, pointed at a synthetic VAX kit payload
+        # (docs/design-vax-installer.md §4 -- five boot images + four utility
+        # images + SYSUAF/RIGHTSLIST/OVMXVMSSYS.PAR + STARTUP.COM + the
+        # Decision-A SYSTARTUP_VMS.COM), must round-trip byte-exact and carry
+        # the "OVMX VAXVMS VMS" product identity. No vax cross-build toolchain
+        # needed -- ovmx_kit_pack is a host tool and this proves the
+        # packaging PATH, not the real vax images (tools/cross-vax/
+        # build-os-kit-vax.sh drives the real cross-built payload).
+        add_test(NAME ovmx_kit_pack_vax_roundtrip
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_ovmx_kit_pack_vax_roundtrip.sh
+                    $<TARGET_FILE:ovmx_kit_pack>)
+        set_tests_properties(ovmx_kit_pack_vax_roundtrip PROPERTIES
+            LABELS "integration;tools;netbsd-vax" TIMEOUT 60)
     endif()
 
     # vms_kif caller census (vms-7fb): every kernel-interface entry point is
@@ -661,6 +698,18 @@ if(BUILD_TESTS)
     # ...and the evasions. Includes the two controls that matter most for a
     # gate whose passing output is a LIST: that tools/ is genuinely scanned,
     # and that a variable named only in a comment cannot enter the census.
+    #
+    # TIMEOUT 180 is now ~8x the measured runtime, not the ~1x it was (vms-808).
+    # This negctl runs the census gate 11 times over the whole src/+tools/ tree.
+    # The gate used to fork ~29 processes PER FILE (a printf+grep subshell for
+    # every one of its 14 per-variable greps, across ~450 files), so one run
+    # took ~16.7s on a GitHub runner and 11 of them was ~184s -- fractionally
+    # over this 180s budget, which is why #754/#755/#757/#766 all flaked here
+    # with (Timeout) while making steady progress (never a hang, no QEMU on this
+    # path). The gate now pre-filters files with no getenv/setenv/putenv token
+    # and greps a once-stripped temp file instead of a shell variable, cutting a
+    # single gate run to ~2s and the whole negctl to ~23s locally -- so 180s is
+    # generous headroom for a slow/contended runner without being an absurd cap.
     add_test(NAME env_identity_census_negctl
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_env_identity_census_negctl.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
@@ -755,7 +804,13 @@ if(BUILD_TESTS)
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_opcom_record_body.sh
                 $<TARGET_FILE:vmsdcl>)
     set_tests_properties(opcom_record_body_gate PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 60)
+        LABELS "integration;authenticity" TIMEOUT 60
+        # vms-ed4: reads a GLOBAL recency-ordered OPERATOR.LOG view across all of
+        # /vms and /tmp (find /vms /tmp -iname OPERATOR.LOG -newer $STAMP). Any
+        # other test emitting an OPERATOR.LOG concurrently could poison that
+        # scan, so under ctest --parallel it must run alone. RUN_SERIAL, not a
+        # sysdisk lock, because the shared surface includes /tmp too (Rule 8).
+        RUN_SERIAL TRUE)
 
     # MONITOR PROCESS and SHOW SYSTEM list the SAME process set because they
     # read the SAME single source -- the executive process table via

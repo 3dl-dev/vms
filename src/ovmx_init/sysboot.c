@@ -10,6 +10,23 @@
  * filespec-translating reader.
  */
 
+/*
+ * vms-46c: on the Linux atomic-flip runtime, SYSBOOT reads AND writes the real
+ * SYS$SYSTEM:OVMXVMSSYS.PAR over the executive Files-11 (ODS-2) ACP through the
+ * SHARED sysgen_params.h machinery (sysgen_load_working / sysgen_commit_working,
+ * over the ovmx_sysgen_acp_* seam) -- exactly the reader/writer every other
+ * consumer uses, NOT the retired /vms passthrough (vmsfs_to_linux_path()+fopen).
+ * PID 1 supplies the STRONG definition of that seam in ovmx_boot_sysgen_acp.c
+ * (backed by the imgact_acp.c ACP client already linked into STARTUP.EXE, no
+ * RMS pulled into the static image). Declaring the seam STRONG here binds the
+ * inline helpers to that definition instead of the #pragma-weak null path. The
+ * NetBSD-vax backend keeps its /vms parameter I/O until its own flip (vms-d5d),
+ * so this is scoped to OVMX_BOOT_LINUX -- the same guard ovmx_init.c's ACP boot
+ * path uses. */
+#if defined(OVMX_BOOT_LINUX)
+#define OVMX_SYSGEN_ACP_STRONG 1
+#endif
+
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
@@ -104,6 +121,11 @@ static void sysboot_load_defaults(struct sysgen_file *ws)
         ws->params[i] = sysboot_default_params[i];
 }
 
+#if !defined(OVMX_BOOT_LINUX)
+/* /vms-path readers -- the NetBSD-vax backend's parameter I/O (its ACP flip is
+ * vms-d5d). On the Linux runtime the parameter file is read/written over the
+ * executive ACP (see the OVMX_SYSGEN_ACP_STRONG note at the top of this file),
+ * so these are compiled out there to keep no /vms residual on the boot path. */
 static int load_from_file(struct sysgen_file *ws, const char *path)
 {
     FILE *fp = fopen(path, "rb");
@@ -133,15 +155,29 @@ static int highest_version_path(const char *dir, const char *name,
     int n = snprintf(path, pathlen, "%s/%s.%s;%d", dir, name, ext, highest);
     return (n > 0 && (size_t)n < pathlen) ? highest : -1;
 }
+#endif /* !OVMX_BOOT_LINUX */
 
 void sysboot_load_working_set(struct sysgen_file *ws, const char *dir,
                                const char *name, const char *ext)
 {
+#if defined(OVMX_BOOT_LINUX)
+    /* vms-46c: read the highest version of SYS$SYSTEM:OVMXVMSSYS.PAR over the
+     * executive ACP (USE CURRENT semantics), the shared reader. SILENT -- safe
+     * to call before the SYSBOOT> prompt exists. An absent parameter file (a
+     * freshly INITIALIZE'd volume legitimately has none yet) or any read failure
+     * falls back to compiled-in factory defaults; there is NO /vms fallback
+     * (Rule 9 / INV-6). */
+    (void)dir; (void)name; (void)ext;
+    if (sysgen_load_working(ws) == 0)
+        return;
+    sysboot_load_defaults(ws);
+#else
     char path[VMSFS_MAX_PATH];
     if (highest_version_path(dir, name, ext, path, sizeof(path)) >= 1 &&
         load_from_file(ws, path) == 0)
         return;
     sysboot_load_defaults(ws);
+#endif
 }
 
 const char *sysboot_get_string(const struct sysgen_file *ws, const char *name)
@@ -381,6 +417,19 @@ static void cmd_use(struct sysgen_file *ws, const char *arg, const char *dir,
     char *target = str_trim(buf);
 
     if (strcasecmp(target, "CURRENT") == 0) {
+#if defined(OVMX_BOOT_LINUX)
+        /* vms-46c: USE CURRENT reads the highest OVMXVMSSYS.PAR version over the
+         * executive ACP, the shared reader -- not a /vms fopen. */
+        (void)dir;
+        if (sysgen_load_working(ws) == 0) {
+            printf("%%SYSGEN-I-LOADED, %u parameters loaded from "
+                   "SYS$SYSTEM:%s.%s\n", ws->count, name, ext);
+            return;
+        }
+        printf("%%SYSGEN-I-NOCURRENT, no current parameter file found\n");
+        printf("-SYSGEN-I-USEDEF, loading factory defaults\n");
+        sysboot_load_defaults(ws);
+#else
         char path[VMSFS_MAX_PATH];
         if (highest_version_path(dir, name, ext, path, sizeof(path)) >= 1 &&
             load_from_file(ws, path) == 0) {
@@ -391,6 +440,7 @@ static void cmd_use(struct sysgen_file *ws, const char *arg, const char *dir,
         printf("%%SYSGEN-I-NOCURRENT, no current parameter file found\n");
         printf("-SYSGEN-I-USEDEF, loading factory defaults\n");
         sysboot_load_defaults(ws);
+#endif
     } else if (strcasecmp(target, "DEFAULT") == 0) {
         sysboot_load_defaults(ws);
         printf("%%SYSGEN-I-DEFLOADED, %u factory default parameters loaded\n",
@@ -412,6 +462,28 @@ static void cmd_use(struct sysgen_file *ws, const char *arg, const char *dir,
 static void cmd_write(struct sysgen_file *ws, const char *dir,
                        const char *name, const char *ext)
 {
+#if defined(OVMX_BOOT_LINUX)
+    /* vms-46c: mint a fresh highest+1 version of SYS$SYSTEM:OVMXVMSSYS.PAR on
+     * the genuine ODS-2 volume over the executive ACP -- IO$_CREATE + IO$_WRITEVBLK
+     * through the shared sysgen_commit_working(), the SAME persist path SYSGEN /
+     * SYSMAN WRITE CURRENT use. The bytes reach the real volume (fixing the flip
+     * residual where a SYSBOOT WRITE went to a /vms path that no longer exists);
+     * WRITEVBLK is write-through so there is nothing to sync(). NO /vms fallback:
+     * if the ACP is unreachable this fails honest (Rule 9 / INV-6). */
+    (void)dir;
+    char path[VMSFS_MAX_PATH];
+    int new_version = 0;
+    int status = sysgen_commit_working(ws, /*new_version=*/1, path, sizeof(path),
+                                       &new_version);
+    if (!$VMS_STATUS_SUCCESS(status)) {
+        fprintf(stderr,
+                "%%SYSGEN-E-OPENOUT, error creating a new version of "
+                "SYS$SYSTEM:%s.%s\n", name, ext);
+        return;
+    }
+    printf("%%SYSGEN-I-WRITTEN, %u parameters written to SYS$SYSTEM:%s.%s;%d\n",
+           ws->count, name, ext, new_version);
+#else
     char path[VMSFS_MAX_PATH];
     int new_version = 0;
     int status = vmsfs_create_new_version(dir, name, ext, path, sizeof(path),
@@ -442,6 +514,7 @@ static void cmd_write(struct sysgen_file *ws, const char *dir,
     sync();
     printf("%%SYSGEN-I-WRITTEN, %u parameters written to SYS$SYSTEM:%s.%s;%d\n",
            ws->count, name, ext, new_version);
+#endif /* OVMX_BOOT_LINUX */
 }
 
 /* ------------------------------------------------------------------ */

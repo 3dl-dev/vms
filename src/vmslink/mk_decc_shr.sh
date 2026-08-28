@@ -45,6 +45,247 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 [ -f "$LIBC" ]   || { echo "mk_decc_shr: libc.a not found: $LIBC (need the arm64 musl container)"; exit 1; }
 [ -f "$LIBGCC" ] || { echo "mk_decc_shr: libgcc.a not found: $LIBGCC"; exit 1; }
 
+# ==========================================================================
+# ALPHA / EVAX BRANCH (vms-7b96 RUNG-1) — a DEDICATED path for alpha-dec-vms
+# input archives, taken BEFORE any of the x86_64/aarch64 (ELF) machinery below.
+#
+# WHY A SEPARATE PATH. On alpha the GCC port itself DECORATES the C-RTL surface
+# at codegen: musl-alpha DEFINES `decc$strlen`, `decc$_malloc64` (malloc under
+# -mpointer-size=64), `decc$_memcpy64`, `decc$tprintf` (printf's IEEE T_float
+# variant), ... — it does NOT define the plain names. A port client imports those
+# DECORATED names directly. So DECC$SHR must export the decc$* names DIRECTLY
+# (universal == the defined symbol), NOT the x86_64 `decc$<name>/<name>`
+# alias-to-plain vector (there is no plain <name> to alias to), and the static
+# plain-name VEC below would resolve to nothing. The x86_64 TLS/fortify
+# filter_tls_members and the decc_crtl_map alias loop are likewise inapplicable
+# (alpha long double is IEEE binary64 = 8 bytes, so no 128-bit tf soft-float; no
+# GD-TLS members). And bare nm/ar/readelf are HOST binutils, which cannot read
+# VMS-native EVAX objects at all — the caller passes the cross tools via NM/AR.
+#
+# The vector is GROUND-TRUTHED from the archives: enumerate every decc$* symbol
+# libc.a + libgcc.a actually DEFINE and export each as a universal (text ->
+# PROCEDURE, data -> DATA), skipping the EVAX companion labels (..en/..ng/..lk/
+# ..lita — the callable value is the bare descriptor). A name the port did not
+# emit is simply ABSENT (a visible gap for a later rung), never faked. LINK.EXE's
+# EVAX archive front end (link.c load_archive_evax) whole-archives both inputs.
+#
+# THE OVMX BOOTSTRAP SURFACE (vms-864). musl-alpha's own decc$ decoration
+# covers everything musl DEFINES, but a port crt0 also needs OVMX-authored
+# glue no C library defines: decc$main (the DEC C RTL image-startup routine)
+# and C$_EXIT1 (a linker globalvalue, not code at all). Below (after the
+# libc.a/libgcc.a enumeration) this branch cross-compiles the SAME
+# ovmx_decc_crtl.c / ovmx_libc_stub.c the generic tail uses, with the
+# alpha-dec-vms cc1 — whose own CRTL auto-decoration turns their plain
+# _malloc32/_malloc64/get_errno_addr/get_vms_errno_addr definitions into the
+# decc$-decorated universals a port image actually imports, for free.
+# ==========================================================================
+NM=${NM:-nm}
+OVMX_DECC_ARCH=${OVMX_DECC_ARCH:-auto}
+if [ "$OVMX_DECC_ARCH" = auto ]; then
+    # Container-format-aware detection (vms-2a0). Detecting the alpha C-RTL
+    # surface by `nm`-ing $LIBC as an archive misdetects 'generic' on a genuine
+    # alpha libc.a: the alpha-dec-vms cross nm's vms-alpha BFD cannot read a
+    # System V `ar` container at all ("file format not recognized") — a gap
+    # DISTINCT from the DST-in-a-bare-object gap that vms-7b96/#781 fixed. So
+    # detect the same way the alpha branch below (ENUMERATE decc$ defs)
+    # succeeds: host `ar` extracts the format-agnostic container, then the cross
+    # nm reads the bare EVAX members (DST-tolerant since #781) — a decc$ hit
+    # means the alpha surface. This makes auto-detect correct without needing
+    # the OVMX_DECC_ARCH=alpha override.
+    _detdir=$(mktemp -d)
+    ( cd "$_detdir" && "${AR_HOST:-ar}" x "$LIBC" 2>/dev/null || true )
+    if "$NM" --defined-only "$_detdir"/*.o 2>/dev/null | grep -q 'decc\$'; then
+        OVMX_DECC_ARCH=alpha
+    else
+        OVMX_DECC_ARCH=generic
+    fi
+    rm -rf "$_detdir"
+fi
+
+# vms-2a0 test hook: with OVMX_DECC_DETECT_ONLY=1, print the (auto-)detected
+# arch and stop — so a caller can assert the container-format-aware detection
+# resolves correctly. The auto path is otherwise never exercised in CI (every
+# gated caller forces OVMX_DECC_ARCH=alpha), which is exactly why the archive
+# misdetect (nm cannot read a System V .a) lurked unnoticed.
+if [ "${OVMX_DECC_DETECT_ONLY:-0}" = 1 ]; then
+    echo "$OVMX_DECC_ARCH"
+    exit 0
+fi
+
+if [ "$OVMX_DECC_ARCH" = alpha ]; then
+    echo "mk_decc_shr: ALPHA/EVAX branch (vms-7b96)"
+    echo "mk_decc_shr: LINK.EXE=$LINK_EXE  libc.a=$LIBC  libgcc.a=$LIBGCC  GSMATCH=$GSMATCH"
+    ALPHA_VEC=$(mktemp)
+    # ENUMERATE decc$ universals from the LINKER's own evax_read view (vms-614),
+    # NOT `nm --defined-only`. nm's BLIND SPOT is weak-alias EQUATES: musl's public
+    # `free` = weak_alias(__libc_free, free), which the alpha cc1 emits as an
+    # equate that nm does not report as a definition — so decc$free (and every
+    # alias-equate decc$ symbol) was silently dropped from the vector even though
+    # LINK.EXE resolves it fine, and a real program calling free() then hit
+    # %LINK-F-UNDEF. LINK.EXE's OVMX_LINK_DUMP_UNIVERSALS mode lists the DEFINED
+    # decc$ symbols exactly as the reader it links with sees them, one
+    # `NAME=PROCEDURE|DATA` per line (companion ..en/..lk labels dropped; is_proc/
+    # code-entry classified). This supersedes the ar-extract + nm|awk pipeline AND
+    # the per-function VEC-add workarounds (e.g. the earlier explicit
+    # decc$free=PROCEDURE) — the whole alias-equate class now exports uniformly.
+    # The dummy --shareable/--symbol-vector/-o only satisfy arg parsing; the dump
+    # exits before any emit, so nothing is written to -o. (NM/AR_HOST no longer
+    # used on this path.)
+    OVMX_LINK_DUMP_UNIVERSALS=1 "$LINK_EXE" --shareable \
+        --symbol-vector "__ovmx_dump_probe=PROCEDURE" --gsmatch "$GSMATCH" \
+        -o /dev/null "$LIBC" "$LIBGCC" 2>/dev/null \
+      | grep -E '^decc\$[^=]+=(PROCEDURE|DATA)$' \
+      | sort -u > "$ALPHA_VEC"
+    NVEC=$(wc -l < "$ALPHA_VEC")
+    echo "mk_decc_shr: enumerated $NVEC decc\$ universals from libc.a + libgcc.a (linker/evax_read view, vms-614)"
+    [ "$NVEC" -ge 50 ] || { echo "mk_decc_shr: FAIL only $NVEC decc\$ universals from the LINK.EXE dump — is LINK_EXE the vms-614 build and libc.a genuine EVAX?" >&2; exit 2; }
+    VEC=$(paste -sd, "$ALPHA_VEC")
+    rm -f "$ALPHA_VEC"
+
+    # ----------------------------------------------------------------------
+    # OVMX BOOTSTRAP SURFACE ON ALPHA (vms-864). A real alpha-dec-vms port
+    # crt0 (libgcc/config/vms/vms-ucrt0.c) references decc$main + C$_EXIT1
+    # UNCONDITIONALLY — musl-alpha defines neither (decc$main is not a musl
+    # function at all; C$_EXIT1 is a linker globalvalue, not code). Without
+    # them every port image fails "%LINK-F-UNDEF" against an otherwise-
+    # complete genuine alpha DECC$SHR. Mirror the generic tail's OVMX-authored
+    # bootstrap objects (ovmx_decc_crtl.c / ovmx_libc_stub.c) here, cross-
+    # compiled to real EVAX objects by the alpha-dec-vms cc1 (tools/cross-
+    # alpha-vms), and whole-archived alongside libc.a/libgcc.a.
+    #
+    # WHY NOT A PLAIN PORT OF THE GENERIC TAIL. The alpha-dec-vms GCC port
+    # cc1 ITSELF auto-decorates any function whose SOURCE NAME matches a
+    # recognized DEC C RTL surface name — transparently, at every definition
+    # AND call site (gcc/config/vms/vms.cc's crtlmap; verified empirically
+    # against the cached toolchain, vms-864). Confirmed by direct compile:
+    #   _malloc32(int)          -> decc$malloc      (the crtlmap "_X32->X" rule)
+    #   _malloc64(unsigned long)-> decc$_malloc64    (the "_X64->X" rule)
+    #   get_errno_addr(void)    -> decc$get_errno_addr    (real DEC C RTL name)
+    #   get_vms_errno_addr(void)-> decc$get_vms_errno_addr (real DEC C RTL name)
+    # ovmx_decc_crtl.c ALREADY defines _malloc32/_malloc64/get_errno_addr/
+    # get_vms_errno_addr under those exact plain names for the generic
+    # (x86_64/aarch64, non-VMS-native-compiler) branch — so compiling that
+    # SAME file with the alpha cc1 makes those four decorated universals fall
+    # out for free, with no source change. The file's OWN decc$malloc /
+    # decc$_malloc64 / decc$tprintf WRAPPER functions (asm-relabeled explicitly)
+    # are the generic branch's substitute for that auto-decoration and are
+    # NOT needed on alpha — compiling them too is a genuine duplicate
+    # definition (confirmed: GAS rejects the .s with "symbol 'decc$malloc..en'
+    # is already defined"), so they are '#ifndef __VMS__'-guarded out in
+    # ovmx_decc_crtl.c (the alpha-dec-vms cc1 predefines __VMS__; a host gcc
+    # building the generic branch does not) — this is not "#ifdef away needed
+    # functionality" (Rule: adapt minimally/honestly): the functionality
+    # (decc$malloc/decc$_malloc64) is still produced, by the port's own
+    # codegen from the SAME _malloc32/_malloc64 source, not omitted.
+    # decc$tprintf is likewise already produced by musl-alpha's OWN printf.c
+    # (the "printf FLOAT64" crtlmap rule prepends 't', then decc$-decorates —
+    # confirmed present in the plain libc.a+libgcc.a enumeration above, no
+    # ovmx_decc_crtl.c involvement needed for it at all).
+    #
+    # ovmx_decc_crtl.c needs real musl-alpha headers (pthread.h/stdio.h/
+    # errno.h/sys/mman.h) for correct struct/ABI layouts, not host ones —
+    # ALPHA_MUSL_SRC must point at the musl-1.2.5 source tree used to build
+    # $LIBC (tools/cross-alpha-vms/musl-arch/build-musl.sh's $WORK/musl-*).
+    # Fail honestly (no silent skip, INV-6) if it is not given: the bootstrap
+    # surface would otherwise be silently absent from DECC$SHR and every port
+    # image would defer decc$main, hiding the real gap this bead closes.
+    ALPHA_CC=${ALPHA_CC:-alpha-dec-vms-gcc}
+    : "${ALPHA_MUSL_SRC:?mk_decc_shr: alpha branch needs ALPHA_MUSL_SRC=<musl-1.2.5 src tree used to build \$LIBC> to compile the ovmx_decc_crtl.c DEC C RTL headers (get_errno_addr/pthread/stdio) -- see tools/cross-alpha-vms/musl-arch/build-musl.sh}"
+    [ -d "$ALPHA_MUSL_SRC" ] || { echo "mk_decc_shr: FAIL ALPHA_MUSL_SRC=$ALPHA_MUSL_SRC is not a directory" >&2; exit 2; }
+    ALPHA_MUSL_INC="-I$ALPHA_MUSL_SRC/arch/alpha-dec-vms -I$ALPHA_MUSL_SRC/arch/generic -I$ALPHA_MUSL_SRC/obj/src/internal -I$ALPHA_MUSL_SRC/src/include -I$ALPHA_MUSL_SRC/src/internal -I$ALPHA_MUSL_SRC/obj/include -I$ALPHA_MUSL_SRC/include"
+    IMGACT_INC="$(CDPATH= cd "$(dirname "$0")/../imgact/include" && pwd)"   # ovmx_activation.h (vms-8c8)
+
+    ALPHA_BOOT_DIR=$(mktemp -d)
+    ALPHA_STUB_OBJ="$ALPHA_BOOT_DIR/ovmx_libc_stub.o"
+    ALPHA_CRTL_OBJ="$ALPHA_BOOT_DIR/ovmx_decc_crtl.o"
+    STUB_SRC="$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_libc_stub.c"
+    CRTL_SRC="$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_crtl.c"
+
+    # -g0: same reason as libc.a/libgcc.a above — the cross nm cannot read
+    # DST, and WE must nm these two objects ourselves next to ground-truth
+    # their decc$ universals (never hand-guessed).
+    "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 \
+        -o "$ALPHA_STUB_OBJ" "$STUB_SRC"
+    # shellcheck disable=SC2086
+    "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 \
+        $ALPHA_MUSL_INC -I"$IMGACT_INC" -o "$ALPHA_CRTL_OBJ" "$CRTL_SRC"
+
+    # Ground-truth the decc$ universals these two objects ACTUALLY define —
+    # same enumeration as libc.a/libgcc.a above, never a hardcoded name list.
+    ALPHA_BOOT_VEC=$(mktemp)
+    "$NM" --defined-only "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" 2>/dev/null \
+      | awk '
+          $NF ~ /^decc\$/ && $NF !~ /\.\.[a-z]+$/ {
+              t=$(NF-1); n=$NF;
+              if (t=="T"||t=="t"||t=="W"||t=="w") print n"=PROCEDURE";
+              else if (t~/^[DdGgRrBbVv]$/) print n"=DATA";
+          }' | sort -u > "$ALPHA_BOOT_VEC"
+    NBOOT=$(wc -l < "$ALPHA_BOOT_VEC")
+    echo "mk_decc_shr: enumerated $NBOOT decc\$ universals from the OVMX bootstrap surface (ovmx_decc_crtl.c/ovmx_libc_stub.c)"
+    [ "$NBOOT" -ge 1 ] || { echo "mk_decc_shr: FAIL 0 decc\$ universals from the bootstrap surface -- did the alpha-dec-vms cc1's CRTL auto-decoration not fire (wrong ALPHA_CC)?" >&2; exit 2; }
+    VEC="$VEC,$(paste -sd, "$ALPHA_BOOT_VEC")"
+    rm -f "$ALPHA_BOOT_VEC"
+
+    # Plain (non-decc$-decorated) names the decc$ filter above cannot catch,
+    # each verified present by direct nm before being claimed here:
+    #   __copy_tls / __init_tp -- musl-alpha's OWN TLS bootstrap entry points
+    #     (plain C names; "musl-internal", not a recognized DEC C RTL surface
+    #     name, so the cc1 does not decorate them). IMGACT's activation-time
+    #     TLS setup (vms-c07) resolves these BY NAME, same as the generic
+    #     (x86_64/aarch64) DECC$SHR.
+    #   ovmx_get_libc -- OVMX loader glue (ovmx_libc_stub.c), likewise a
+    #     plain OVMX-original name never decorated.
+    VEC="$VEC,__copy_tls=PROCEDURE,__init_tp=PROCEDURE,ovmx_get_libc=PROCEDURE"
+
+    # stdin/stdout/stderr -- the C stdio stream FILE* objects, plain DATA names
+    # the decc$ filter above cannot catch. The alpha cc1 does NOT decorate the
+    # stream data objects (decc_crtl_map.txt maps no std* stream; verified: a
+    # fprintf(stderr,...) TU references plain `stderr`/`stdin`/`stdout`, never
+    # decc$ga_*), so the ^decc$ enumeration misses them and a real multi-file
+    # program using fprintf(stderr,...) / stdio would hit %LINK-F-UNDEF. Export
+    # them as DATA universals exactly like the generic (x86_64/aarch64) tail
+    # does -- resolved from musl's stdin/stdout/stderr members by the
+    # whole-archive link (which fails loudly if a name is not actually defined).
+    # (vms-bdd first sub-step: settles the stdio-stream link-readiness gap.)
+    VEC="$VEC,stdin=DATA,stdout=DATA,stderr=DATA"
+
+    # (The explicit `decc$free=PROCEDURE` VEC-add of #795 is removed here: the
+    # vms-614 linker-view enumeration above now catches decc$free — and every
+    # other weak-alias-equate decc$ symbol — automatically, so the one-off add is
+    # redundant. The stdin/stdout/stderr=DATA add above stays: those are plain,
+    # non-decc$ names the decc$ dump does not match.)
+
+    # ---- vms-864 (mirrors vms-954 R1b-2b on the generic tail): C$_EXIT1 ----
+    # Same architecture-independent VMS C-facility globalvalue, same oracle
+    # grounding as the generic tail above (measured on OpenVMS Alpha V8.4,
+    # lab-Alpha, 2026-08-22): C$_EXIT1 = 0x0035A009. LINK.EXE folds
+    # `&C$_EXIT1` to this constant at link time -- never an activation import.
+    VEC="$VEC,C\$_EXIT1=GLOBALVALUE:0x0035A009"
+
+    # Strict whole-archive link (no --allow-undefined) unless the caller opts into
+    # first-light deferral for the VMS runtime surface musl-alpha references.
+    #
+    # OTS$ runtime (vms-bfd6): the VMS integer-divide / block family the compiler
+    # emits (OTS$DIV_*, OTS$REM_*, OTS$HOME_ARGS, OTS$MOVE, OTS$ZERO) is provided
+    # by a SEPARATE shareable, LIBOTS$ — the faithful OpenVMS shape (LIBOTS$ is a
+    # distinct image from DECC$SHR). Point DECC_USE at it (space-separated for
+    # several) and its OTS$ references bind as real cross-image .vms$imp imports
+    # instead of deferring. Build LIBOTS$ first with tools/cross-alpha-vms/ots/
+    # build-libots.sh, then pass DECC_USE=<path-to-LIBOTS$SHR.EXE>.
+    #
+    # DECC_ALLOW_UNDEF=1 still records any remaining first-light residual (e.g.
+    # the setjmp/cancellation surface — decc$longjmp, __cp_*, __syscall_cp_asm —
+    # and the linker-defined _DYNAMIC/__init_array bounds) as deferred imports.
+    ALPHA_LINK_FLAGS="--shareable --symbol-vector $VEC --gsmatch $GSMATCH"
+    for p in ${DECC_USE:-}; do ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $p"; done
+    [ "${DECC_ALLOW_UNDEF:-0}" = 1 ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --allow-undefined"
+    # shellcheck disable=SC2086
+    "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC" "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ"
+    rm -rf "$ALPHA_BOOT_DIR"
+    echo "mk_decc_shr: created $OUT (alpha/EVAX)"
+    exit 0
+fi
+
 # DECC$SHR must stay a NON-TLS-producer: it whole-archives libc.a/libgcc.a for
 # C-runtime support routines only and carries no __thread state of its own.
 # LINK.EXE enforces "one TLS object per image" (general multi-module TLS is
@@ -376,7 +617,35 @@ tmpfile=PROCEDURE,clearerr=PROCEDURE,\
 \
 unsetenv=PROCEDURE,\
 \
-pthread_create=PROCEDURE,pthread_detach=PROCEDURE,pthread_join=PROCEDURE"
+pthread_create=PROCEDURE,pthread_detach=PROCEDURE,pthread_join=PROCEDURE,\
+\
+pread=PROCEDURE,pwrite=PROCEDURE,ferror=PROCEDURE,\
+\
+chown=PROCEDURE,\
+__ctype_get_mb_cur_max=PROCEDURE,__cxa_atexit=PROCEDURE,__fsetlocking=PROCEDURE,__stack_chk_fail=PROCEDURE,\
+asprintf=PROCEDURE,btowc=PROCEDURE,dirfd=PROCEDURE,dl_iterate_phdr=PROCEDURE,dlerror=PROCEDURE,\
+fchmod=PROCEDURE,fchmodat=PROCEDURE,fdopendir=PROCEDURE,fegetround=PROCEDURE,feof=PROCEDURE,\
+fesetround=PROCEDURE,ffs=PROCEDURE,freelocale=PROCEDURE,frexp=PROCEDURE,frexpl=PROCEDURE,\
+fseeko=PROCEDURE,ftello=PROCEDURE,get_nprocs=PROCEDURE,getc=PROCEDURE,getentropy=PROCEDURE,\
+getpagesize=PROCEDURE,getwc=PROCEDURE,isalpha=PROCEDURE,isblank=PROCEDURE,iscntrl=PROCEDURE,\
+islower=PROCEDURE,isprint=PROCEDURE,ispunct=PROCEDURE,isspace=PROCEDURE,isupper=PROCEDURE,\
+iswctype=PROCEDURE,ldexp=PROCEDURE,link=PROCEDURE,lstat=PROCEDURE,mbrtowc=PROCEDURE,\
+mbstowcs=PROCEDURE,mempcpy=PROCEDURE,mkstemps=PROCEDURE,mktemp=PROCEDURE,newlocale=PROCEDURE,\
+nl_langinfo=PROCEDURE,openat=PROCEDURE,pathconf=PROCEDURE,poll=PROCEDURE,posix_spawn=PROCEDURE,\
+posix_spawn_file_actions_addclose=PROCEDURE,posix_spawn_file_actions_adddup2=PROCEDURE,posix_spawn_file_actions_destroy=PROCEDURE,posix_spawn_file_actions_init=PROCEDURE,posix_spawnattr_destroy=PROCEDURE,\
+posix_spawnattr_init=PROCEDURE,posix_spawnattr_setflags=PROCEDURE,posix_spawnp=PROCEDURE,prctl=PROCEDURE,pthread_cond_signal=PROCEDURE,\
+pthread_getspecific=PROCEDURE,pthread_key_create=PROCEDURE,pthread_key_delete=PROCEDURE,pthread_rwlock_rdlock=PROCEDURE,pthread_rwlock_unlock=PROCEDURE,\
+pthread_rwlock_wrlock=PROCEDURE,pthread_setspecific=PROCEDURE,putc=PROCEDURE,putwc=PROCEDURE,sbrk=PROCEDURE,\
+sched_yield=PROCEDURE,secure_getenv=PROCEDURE,sendfile=PROCEDURE,setlocale=PROCEDURE,sigfillset=PROCEDURE,\
+signal=PROCEDURE,stpcpy=PROCEDURE,strcoll=PROCEDURE,strerror_r=PROCEDURE,strsignal=PROCEDURE,\
+strspn=PROCEDURE,strxfrm=PROCEDURE,symlink=PROCEDURE,towlower=PROCEDURE,towupper=PROCEDURE,\
+truncate=PROCEDURE,umask=PROCEDURE,ungetc=PROCEDURE,ungetwc=PROCEDURE,unlinkat=PROCEDURE,\
+uselocale=PROCEDURE,utimensat=PROCEDURE,vasprintf=PROCEDURE,vprintf=PROCEDURE,wait4=PROCEDURE,\
+wcrtomb=PROCEDURE,wcscoll=PROCEDURE,wcsftime=PROCEDURE,wcslen=PROCEDURE,wcsxfrm=PROCEDURE,\
+wctob=PROCEDURE,wctype=PROCEDURE,wmemchr=PROCEDURE,wmemcmp=PROCEDURE,wmemcpy=PROCEDURE,\
+wmemmove=PROCEDURE,wmemset=PROCEDURE,writev=PROCEDURE,\
+\
+__copy_tls=PROCEDURE,__init_tp=PROCEDURE,ovmx_get_libc=PROCEDURE"
 
 # fcntl APPENDED for vms-8019 (append-only -> prior consumers' vector indices
 # unchanged, GSMATCH LEQUAL-compatible). $CREPRC's creation handshake sets
@@ -454,6 +723,27 @@ pthread_create=PROCEDURE,pthread_detach=PROCEDURE,pthread_join=PROCEDURE"
 # real OpenVMS DECC$SHR exports (DECthreads) and musl's libc.a defines, so
 # DECC$SHR is the right producer.
 #
+# pread/pwrite APPENDED for vms-5f0 (append-only -> prior consumers' vector
+# indices unchanged, GSMATCH LEQUAL-compatible). The Files-11 atomic-flip's RMS
+# legacy-POSIX defer (A2a, rms_io.c) reads and writes an ODS-2 block at an
+# explicit byte offset without disturbing the file position -- the POSIX backend
+# of rms_io_read/write_at (rms_io_{read,write}_posix) uses pread()/pwrite() for
+# exactly the positioned I/O the ACP backend expresses via IO$_READVBLK's VBN.
+# open/close/read/write/lseek were already exported above; pread/pwrite are the
+# POSIX positioned-I/O companions real OpenVMS DECC$SHR exports and musl's libc.a
+# defines, so DECC$SHR is the right producer. LIBVMSRMS$SHR is the consumer.
+#
+# chown APPENDED for vms-a86f (append-only -> prior consumers' vector indices
+# unchanged, GSMATCH LEQUAL-compatible). LOGINOUT.EXE (tools/vms_login.c),
+# still privileged before its credential drop, creates the session's per-user
+# private image-staging directory OVMX_BOOT_STAGE_DIR "/<uid>/" 0700 and chowns
+# it to the authenticated UIC, so a non-root session can stage an image the
+# boot bridge did not pre-stage (SYS$SYSTEM:PARTS.EXE on first `$ PARTS`) into a
+# directory it owns rather than the root-owned shared parent (whose EACCES was
+# the red PARTS gate). mkdir/setgid/setuid/setgroups were already exported for
+# LOGINOUT; chown is the POSIX ownership companion real OpenVMS DECC$SHR exports
+# and musl's libc.a defines, so DECC$SHR is the right producer.
+#
 # THE GENERAL RULE, because this is the commonest way to break the VMS-native
 # toolchain jobs: EVERY libc call added to an OVMX library is a claim that
 # DECC$SHR provides it. The claim is checked by LINK.EXE at link time — the
@@ -463,11 +753,125 @@ pthread_create=PROCEDURE,pthread_detach=PROCEDURE,pthread_join=PROCEDURE"
 echo "mk_decc_shr: LINK.EXE=$LINK_EXE"
 echo "mk_decc_shr: libc.a=$LIBC  libgcc.a=$LIBGCC  GSMATCH=$GSMATCH"
 
+# __copy_tls/__init_tp/ovmx_get_libc APPENDED for vms-c07 (append-only -> prior
+# consumers' vector indices unchanged, GSMATCH LEQUAL-compatible). IMGACT (the
+# PT_INTERP for LINK.EXE images) drives musl's OWN TLS helpers to set up an OVMX
+# executable's main-program TLS, which musl-as-a-shareable structurally cannot
+# relocate (static_init_tls derives the bias from PT_DYNAMIC = DECC$SHR's own,
+# bias 0). __copy_tls (builds the TCB + copies the RELOCATED .tdata + DTV,
+# returns TP) and __init_tp (writes the self-ptr/canary/tid) are musl libc.a
+# entry points; ovmx_get_libc is OVMX loader glue (ovmx_libc_stub.c) exposing
+# musl's hidden `__libc` so IMGACT can poke its tls_head/tls_cnt/tls_size/
+# tls_align fields. A getter PROCEDURE, not a `__libc=DATA` universal: `__libc`
+# is BSS and a BSS DATA universal hits the emit_shareable() resolve-before-place
+# gap (vms-910). See src/imgact/imgact.c (reserve_exe_main_tls_over_crtl).
+#
+# Compile the loader glue for the SAME ABI as libc.a (the recipe runs in the
+# musl container whose cc matches the target archive; CC overridable for cross).
+# -ffreestanding: no libc dependency of its own (it only takes __libc's address).
+STUB_SRC="$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_libc_stub.c"
+STUB_OBJ="$(mktemp -d)/ovmx_libc_stub.o"
+"${CC:-cc}" -c -fPIC -ffreestanding -o "$STUB_OBJ" "$STUB_SRC"
+
+# ovmx_decc_crtl.c (vms-3e4 R1b-2a): the DEC C RTL special-symbol impls that are
+# NOT plain musl aliases — the per-thread errno accessors (get_errno_addr /
+# get_vms_errno_addr) and the 32/64-bit dual-pointer allocators (_malloc32 /
+# _malloc64), REAL impls grounded to the VSI C RTL manual + the port crt0 contract
+# (see the file header). Compiled + linked in like ovmx_libc_stub.c; the four
+# symbols are appended to the vector below (append-only, GSMATCH LEQUAL-compatible).
+# Non-TLS (pthread-key per-thread state, never __thread) so DECC$SHR stays a
+# non-TLS producer.
+CRTL_SRC="$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_crtl.c"
+CRTL_OBJ="$(mktemp -d)/ovmx_decc_crtl.o"
+IMGACT_INC="$(CDPATH= cd "$(dirname "$0")/../imgact/include" && pwd)"   # ovmx_activation.h (vms-8c8)
+"${CC:-cc}" -c -fPIC -ffreestanding -I"$IMGACT_INC" -o "$CRTL_OBJ" "$CRTL_SRC"
+VEC="$VEC,get_errno_addr=PROCEDURE,get_vms_errno_addr=PROCEDURE,_malloc32=PROCEDURE,_malloc64=PROCEDURE"
+
+# decc$malloc / decc$_malloc64 / decc$tprintf APPENDED for vms-981 (append-only ->
+# prior consumers' vector indices unchanged, GSMATCH LEQUAL-compatible). The three
+# DECORATED CRTL entries a real alpha-dec-vms GCC-port program actually references
+# that the R1b-1 no-decoration alias vector deliberately did NOT generate — CONFIRMED
+# undefined by linking the staged port objects (crt0.obj + app.obj, the cc1-compiled
+# crt0 + printf/malloc/strlen program) against a REAL DECC$SHR.EXE with
+# --allow-undefined (the other decc$ refs — decc$main, decc$strlen, C$_EXIT1 — already
+# bind). Real impls in ovmx_decc_crtl.c (same object), grounded to the GPL port's
+# name-decoration (gcc/config/vms/vms.cc + vms-crtlmap.map) + the VSI OpenVMS C RTL
+# Reference Manual (Rule 8):
+#   decc$malloc    -> _malloc32  (the 32-bit-pointer malloc: < 4 GB-addressable,
+#                    the crt0's widened argv/envp array; NOT musl's 64-bit malloc)
+#   decc$_malloc64 -> _malloc64  (the 64-bit-pointer malloc: full 64-bit heap;
+#                    app.c's plain malloc lowers here under -mpointer-size=64)
+#   decc$tprintf   -> vprintf    (printf's IEEE T_FLOAT variant; OVMX/musl doubles
+#                    ARE IEEE-754, so it is musl's native printf model — real
+#                    formatted output to stdout, correct char-count return)
+VEC="$VEC,decc\$malloc=PROCEDURE,decc\$_malloc64=PROCEDURE,decc\$tprintf=PROCEDURE"
+
+# decc$main (vms-954, §4b.5): the DEC C RTL image-startup routine the alpha-dec-vms
+# crt0's __main forwards its six-arg VMS activation context to; it PRODUCES
+# argc/argv/envp (non-CLI path implemented, CLI path a grounded follow-up). Real
+# impl in ovmx_decc_crtl.c (same object), exported as a PROCEDURE universal the
+# port image binds via .vms$imp at activation. Append-only.
+VEC="$VEC,decc\$main=PROCEDURE"
+
+# ---- vms-954 R1b-2b: C$_EXIT1 as a C-RTL globalvalue ----------------------
+# The alpha-dec-vms crt0 (libgcc/config/vms/vms-ucrt0.c) computes a POSIX exit
+# status as `(__int64)&C$_EXIT1 + ((status-1) << STS$V_MSG_NO)`: C$_EXIT1 is a
+# VMS GLOBALVALUE (the symbol names NO storage — its ADDRESS is a link-time
+# constant, the base VMS condition value of the C facility's EXIT1 message). On
+# real VMS it resolves from the C RTL's default libraries; OVMX exports it from
+# DECC$SHR, the C RTL surface, as an absolute globalvalue universal. LINK.EXE
+# folds `&C$_EXIT1` to this constant at link time (never load-biased, never an
+# activation import — see link.c collect_globalvalues / gval_find).
+#
+# VALUE GROUNDED TO THE ORACLE (Rule 8, clean-room): C$_EXIT1 = 0x0035A009,
+# measured 2026-08-22 on OpenVMS Alpha V8.4 (lab-Alpha) via a MACRO `.LONG
+# C$_EXIT1` + LINK/MAP/FULL resolved from the default libraries, cross-checked
+# with F$MESSAGE -> %C-S-NOMSG (C facility, Success severity). Not invented.
+VEC="$VEC,C\$_EXIT1=GLOBALVALUE:0x0035A009"
+
+# ---- vms-3e4 R1b-1: the decc$-prefixed CRTL alias vector -------------------
+# The alpha-dec-vms GCC port references every C-RTL entry as `decc$<name>`
+# (gcc/config/vms/vms.c), so a port object imports `decc$fprintf`, not `fprintf`.
+# Export each C-RTL entry as a universal ALIASED to the musl implementation via the
+# VSI Linker SYMBOL_VECTOR=(universal/internal) form (link.c R1a): the exported
+# universal `decc$<name>` is bound to the internal defining symbol `<name>` that
+# musl's whole-archived libc.a provides. Rule-based from decc_crtl_map.txt (OVMX's
+# DEC C-RTL surface map), nm-filtered to what THIS libc.a actually defines — a name
+# musl lacks is a visible GAP for a later rung (reported), never a silent success.
+# No-decoration-flag entries only (R1b-1); the decorated names (malloc64 / float
+# model / 64-bit _X32/_X64 / DPML MATH$) and the special bootstrap symbols
+# (decc$main, _malloc32/64, vaxc$errno, get_vms_errno_addr, C$_EXIT1) are R1b-2.
+# Semantics are musl/POSIX until R2 routes the file entries through RMS/ACP
+# (vms-dfb, ROUTE-THROUGH): this rung provides the linkable CRTL surface; R2
+# upgrades the file semantics. Append-only -> prior consumers' vector indices are
+# unchanged (GSMATCH LEQUAL-compatible).
+DECC_MAP="$(CDPATH= cd "$(dirname "$0")" && pwd)/decc_crtl_map.txt"
+if [ -f "$DECC_MAP" ]; then
+    LIBC_DEFS="$(mktemp)"
+    # Defined (non-undefined) symbols of the (TLS-filtered) libc.a, one pass. `nm
+    # --defined-only` prints member-header lines (NF==1, "member.o:") we drop and
+    # symbol lines "<addr> <type> <name>" whose $NF is the name.
+    nm --defined-only "$LIBC" 2>/dev/null | awk 'NF>=2{print $NF}' | sort -u > "$LIBC_DEFS"
+    n_add=0; n_skip=0
+    while read -r nm_name; do
+        case "$nm_name" in ''|\#*) continue;; esac
+        if grep -qxF "$nm_name" "$LIBC_DEFS"; then
+            VEC="$VEC,decc\$$nm_name/$nm_name=PROCEDURE"
+            n_add=$((n_add + 1))
+        else
+            n_skip=$((n_skip + 1))
+        fi
+    done < "$DECC_MAP"
+    rm -f "$LIBC_DEFS"
+    echo "mk_decc_shr: decc\$ CRTL alias vector: exported $n_add, skipped $n_skip (musl-undefined — gap for a later rung, not faked)"
+fi
+
 # Whole-archive, strict (NO --allow-undefined): a complete C-RTL shareable must
-# link with zero deferred externals. libc.a first so its strong defs win.
+# link with zero deferred externals. libc.a first so its strong defs win; the
+# loader-glue object last (it only REFERENCES __libc, which libc.a defines).
 "$LINK_EXE" --shareable \
     --symbol-vector "$VEC" \
     --gsmatch "$GSMATCH" \
-    -o "$OUT" "$LIBC" "$LIBGCC"
+    -o "$OUT" "$LIBC" "$LIBGCC" "$STUB_OBJ" "$CRTL_OBJ"
 
 echo "mk_decc_shr: created $OUT"

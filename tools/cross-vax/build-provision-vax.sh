@@ -102,11 +102,21 @@ echo "  $LIBVMSQUEUE_A"
 echo
 
 # --- common compile flags for ovmx_provision + its boot backend object ------
+#
+# vms-329: -DOVMX_HAVE_ACP. PROVISION provisions the system tree and the account
+# homes over the executive Files-11 ACP (IO$_MODIFY / IO$_CREATE by FID), not
+# with POSIX lchown()/mkdir() on a /vms passthrough -- the coupled VAX cutover
+# retired that passthrough with the vmsfs.ko VFS mount, so the POSIX arm here
+# would walk a directory that no longer exists and provision NOTHING while
+# reporting success (INV-6's fake-success class). _POSIX_C_SOURCE is dropped
+# for the same reason build-ovmx-init-vax.sh drops it: it turns OFF the NetBSD
+# namespace the shared ovmx_boot_netbsd.c compiled here needs, and
+# src/ovmx_provision/CMakeLists.txt already selects bare _NETBSD_SOURCE.
 CFLAGS_COMMON="--sysroot=$SYSROOT -O2 -Wall -Wextra \
-    -D_NETBSD_SOURCE -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+    -D_NETBSD_SOURCE -DOVMX_HAVE_ACP \
     -I$OVMX_PROVISION -I$OVMX_INIT \
     -I$VMS_INCLUDE -I$VMSPROCESS_INCLUDE -I$VMSLNM_INCLUDE \
-    -I$VMSFS_INCLUDE -I$VMSRMS_INCLUDE -I$LIBVMSSYS"
+    -I$VMSFS_INCLUDE -I$VMSRMS_INCLUDE -I$LIBVMSSYS -I$SRC/src/kernel"
 
 # --- proof 1: cross-compile ovmx_provision.c + the NetBSD boot backend ------
 echo "=== proof 1: cross-compile ovmx_provision.c + ovmx_boot_netbsd.c ==="
@@ -138,6 +148,28 @@ echo "$HDR" | grep -qiE 'Class:[[:space:]]+ELF32' \
     || { echo "FAIL: PROVISION.EXE is not ELFCLASS32 (VAX is 32-bit)"; exit 1; }
 echo "$HDR" | grep -qiF 'Digital VAX' \
     || { echo "FAIL: PROVISION.EXE Machine is not Digital VAX"; exit 1; }
+
+# --- proof 3 (TEETH, vms-329): the ACP provisioning arm is compiled IN --------
+# Dropping -DOVMX_HAVE_ACP would still compile and link perfectly -- the POSIX
+# lchown()/mkdir() arm takes over -- and would silently ship a PROVISION.EXE
+# that writes NOTHING to the ODS-2 volume (every lchown ENOENT is swallowed).
+# own_object_acp() exists ONLY inside the ACP arm, and the IO$_MODIFY it drives
+# reaches the executive through vms_kif_acp_fileop, so both are positive
+# evidence the macro really reached the compiler.
+echo "=== proof 3 (TEETH): the OVMX_HAVE_ACP provisioning arm is compiled in ==="
+if ! "$TARGET-nm" "$OUT/ovmx_provision.o" | grep -qE ' [Tt] own_object_acp$'; then
+    echo "FAIL: ovmx_provision.o does not define own_object_acp -- the ACP"
+    echo "      provisioning arm is #if'd OUT, so this PROVISION.EXE would"
+    echo "      lchown() a /vms tree that no longer exists on the VAX and"
+    echo "      report success having written nothing (INV-6)."
+    exit 1
+fi
+if ! "$TARGET-nm" -u "$OUT/ovmx_provision.o" | grep -qE ' vms_kif_acp_fileop$'; then
+    echo "FAIL: ovmx_provision.o does not reference vms_kif_acp_fileop -- no"
+    echo "      IO\$_MODIFY reaches the executive from this image."
+    exit 1
+fi
+echo "OK: own_object_acp defined + vms_kif_acp_fileop referenced (ACP arm live)"
 
 echo
 echo "=== ALL PROOFS PASSED: ovmx_provision (PROVISION.EXE) builds and links for $TARGET ==="

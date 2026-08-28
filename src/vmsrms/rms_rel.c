@@ -19,6 +19,7 @@
 #include "rms/rms.h"
 #include "rms_internal.h"
 #include "rms_util.h"
+#include "rms_io.h"
 
 /* Cell status byte values */
 #define REL_CELL_EMPTY   0x00    /* Cell has never been used */
@@ -57,8 +58,8 @@ static size_t cell_size(struct FAB *fab)
  */
 uint32_t rms_rel_get(struct FAB *fab, struct RAB *rab)
 {
-    int fd = fab->_linux_fd;
-    if (fd < 0) return RMS$_ACC;
+    struct rms_file *fd = fab->_rms_file;
+    if (!fd) return RMS$_ACC;
     if (!rab->rab$l_ubf || rab->rab$w_usz == 0) return RMS$_RAB;
 
     size_t csize = cell_size(fab);
@@ -80,12 +81,12 @@ uint32_t rms_rel_get(struct FAB *fab, struct RAB *rab)
     /* Read loop: for sequential access, skip deleted/empty cells */
     for (;;) {
         off_t offset = (off_t)(rrn * csize);
-        if (lseek(fd, offset, SEEK_SET) < 0) {
+        if (rms_io_lseek(fd, offset, SEEK_SET) < 0) {
             return RMS$_EOF;
         }
 
         uint8_t status_byte;
-        ssize_t n = read(fd, &status_byte, 1);
+        ssize_t n = rms_io_read(fd, &status_byte, 1);
         if (n <= 0) {
             return RMS$_EOF;
         }
@@ -98,7 +99,7 @@ uint32_t rms_rel_get(struct FAB *fab, struct RAB *rab)
                 return RMS$_RTB;
             }
 
-            n = rms_read_exact(fd, rab->rab$l_ubf, reclen);
+            n = rms_io_read_exact(fd, rab->rab$l_ubf, reclen);
             if (n < reclen) return RMS$_RER;
 
             rab->rab$w_rsz = reclen;
@@ -143,8 +144,8 @@ uint32_t rms_rel_get(struct FAB *fab, struct RAB *rab)
  */
 uint32_t rms_rel_put(struct FAB *fab, struct RAB *rab)
 {
-    int fd = fab->_linux_fd;
-    if (fd < 0) return RMS$_ACC;
+    struct rms_file *fd = fab->_rms_file;
+    if (!fd) return RMS$_ACC;
 
     char *buf = rab->rab$l_rbf ? rab->rab$l_rbf : rab->rab$l_ubf;
     if (!buf) return RMS$_RAB;
@@ -162,11 +163,11 @@ uint32_t rms_rel_put(struct FAB *fab, struct RAB *rab)
         }
 
         off_t offset = (off_t)(rrn * csize);
-        if (lseek(fd, offset, SEEK_SET) < 0) return RMS$_RER;
+        if (rms_io_lseek(fd, offset, SEEK_SET) < 0) return RMS$_RER;
 
         /* Check if cell is already active */
         uint8_t existing;
-        ssize_t n = read(fd, &existing, 1);
+        ssize_t n = rms_io_read(fd, &existing, 1);
         if (n == 1 && existing == REL_CELL_ACTIVE) {
             /* Cell already occupied - check UIF (update-if-existent) */
             if (rab->rab$l_rop & RAB$M_UIF) {
@@ -185,10 +186,10 @@ uint32_t rms_rel_put(struct FAB *fab, struct RAB *rab)
             }
 
             off_t offset = (off_t)(rrn * csize);
-            if (lseek(fd, offset, SEEK_SET) < 0) break;
+            if (rms_io_lseek(fd, offset, SEEK_SET) < 0) break;
 
             uint8_t status_byte;
-            ssize_t n = read(fd, &status_byte, 1);
+            ssize_t n = rms_io_read(fd, &status_byte, 1);
             if (n <= 0 || status_byte != REL_CELL_ACTIVE) {
                 break;  /* Found an empty or deleted cell */
             }
@@ -198,11 +199,11 @@ uint32_t rms_rel_put(struct FAB *fab, struct RAB *rab)
 
     /* Write the record at the determined position */
     off_t offset = (off_t)(rrn * csize);
-    if (lseek(fd, offset, SEEK_SET) < 0) return RMS$_WER;
+    if (rms_io_lseek(fd, offset, SEEK_SET) < 0) return RMS$_WER;
 
     /* Write status byte */
     uint8_t status_byte = REL_CELL_ACTIVE;
-    if (rms_write_exact(fd, &status_byte, 1) < 0) return RMS$_WER;
+    if (rms_io_write_exact(fd, &status_byte, 1) < 0) return RMS$_WER;
 
     /* Write record data, padded to MRS */
     uint16_t reclen = rab->rab$w_rsz;
@@ -216,7 +217,7 @@ uint32_t rms_rel_put(struct FAB *fab, struct RAB *rab)
     memcpy(cell, buf, reclen);
     /* Remaining bytes stay zero (calloc) */
 
-    int rc = rms_write_exact(fd, cell, fab->fab$w_mrs);
+    int rc = rms_io_write_exact(fd, cell, fab->fab$w_mrs);
     free(cell);
     if (rc < 0) return RMS$_WER;
 
@@ -242,8 +243,8 @@ uint32_t rms_rel_put(struct FAB *fab, struct RAB *rab)
  */
 uint32_t rms_rel_update(struct FAB *fab, struct RAB *rab)
 {
-    int fd = fab->_linux_fd;
-    if (fd < 0) return RMS$_ACC;
+    struct rms_file *fd = fab->_rms_file;
+    if (!fd) return RMS$_ACC;
 
     char *buf = rab->rab$l_rbf ? rab->rab$l_rbf : rab->rab$l_ubf;
     if (!buf) return RMS$_RAB;
@@ -255,11 +256,11 @@ uint32_t rms_rel_update(struct FAB *fab, struct RAB *rab)
 
     size_t csize = cell_size(fab);
     off_t offset = (off_t)(rab->rab$l_bkt * csize);
-    if (lseek(fd, offset, SEEK_SET) < 0) return RMS$_RER;
+    if (rms_io_lseek(fd, offset, SEEK_SET) < 0) return RMS$_RER;
 
     /* Verify cell is still active */
     uint8_t status_byte;
-    if (read(fd, &status_byte, 1) != 1 || status_byte != REL_CELL_ACTIVE) {
+    if (rms_io_read(fd, &status_byte, 1) != 1 || status_byte != REL_CELL_ACTIVE) {
         return RMS$_CUR;
     }
 
@@ -274,7 +275,7 @@ uint32_t rms_rel_update(struct FAB *fab, struct RAB *rab)
 
     memcpy(cell, buf, reclen);
 
-    int rc = rms_write_exact(fd, cell, fab->fab$w_mrs);
+    int rc = rms_io_write_exact(fd, cell, fab->fab$w_mrs);
     free(cell);
     if (rc < 0) return RMS$_WER;
 
@@ -294,8 +295,8 @@ uint32_t rms_rel_update(struct FAB *fab, struct RAB *rab)
  */
 uint32_t rms_rel_delete(struct FAB *fab, struct RAB *rab)
 {
-    int fd = fab->_linux_fd;
-    if (fd < 0) return RMS$_ACC;
+    struct rms_file *fd = fab->_rms_file;
+    if (!fd) return RMS$_ACC;
 
     /* Must have a current record */
     if (rab->_last_rec_offset == 0 && rab->rab$l_bkt == 0) {
@@ -304,11 +305,11 @@ uint32_t rms_rel_delete(struct FAB *fab, struct RAB *rab)
 
     size_t csize = cell_size(fab);
     off_t offset = (off_t)(rab->rab$l_bkt * csize);
-    if (lseek(fd, offset, SEEK_SET) < 0) return RMS$_WER;
+    if (rms_io_lseek(fd, offset, SEEK_SET) < 0) return RMS$_WER;
 
     /* Mark cell as deleted */
     uint8_t status_byte = REL_CELL_DELETED;
-    if (rms_write_exact(fd, &status_byte, 1) < 0) return RMS$_WER;
+    if (rms_io_write_exact(fd, &status_byte, 1) < 0) return RMS$_WER;
 
     return RMS$_NORMAL;
 }
@@ -327,8 +328,8 @@ uint32_t rms_rel_delete(struct FAB *fab, struct RAB *rab)
  */
 uint32_t rms_rel_find(struct FAB *fab, struct RAB *rab)
 {
-    int fd = fab->_linux_fd;
-    if (fd < 0) return RMS$_ACC;
+    struct rms_file *fd = fab->_rms_file;
+    if (!fd) return RMS$_ACC;
 
     size_t csize = cell_size(fab);
     uint32_t rrn;
@@ -344,10 +345,10 @@ uint32_t rms_rel_find(struct FAB *fab, struct RAB *rab)
     }
 
     off_t offset = (off_t)(rrn * csize);
-    if (lseek(fd, offset, SEEK_SET) < 0) return RMS$_RER;
+    if (rms_io_lseek(fd, offset, SEEK_SET) < 0) return RMS$_RER;
 
     uint8_t status_byte;
-    ssize_t n = read(fd, &status_byte, 1);
+    ssize_t n = rms_io_read(fd, &status_byte, 1);
     if (n <= 0) return RMS$_EOF;
 
     if (status_byte == REL_CELL_DELETED) return RMS$_DEL;

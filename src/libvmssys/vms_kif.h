@@ -378,6 +378,16 @@ uint32_t vms_kif_disk_resolve(const char *devnam, char *backing,
                               uint32_t backing_size,
                               uint32_t *major, uint32_t *minor);
 
+/* $GETDVI for the VOLUME items of a disk unit (vms-e6f): mount state, ODS-2
+ * volume label, size, cluster factor and free-block count of a mounted volume,
+ * read from the executive-global mounted-volume table the ACP populates at
+ * $MOUNT. On return `out` (optional) holds the vms_getvol_args: out->mounted is
+ * 1 for a mounted ODS-2 volume (then volnam/volsize/cluster are set, and
+ * freeblocks iff out->free_valid), 0 for a device that is not a mounted volume.
+ * SHOW DEVICE reads this to report a disk as Mounted with its label + free/total
+ * blocks; the values are the executive's, never a per-process fake (Rule 11). */
+uint32_t vms_kif_getvol(const char *devnam, struct vms_getvol_args *out);
+
 /* Set terminal characteristics through an assigned channel (the
  * $QIO IO$_SETMODE path). flags is a mask of VMS_TTSET_*; SS$_IVCHAN
  * if the caller holds no such channel.
@@ -431,6 +441,35 @@ uint32_t vms_kif_getjpi_prcnam(const char *prcnam, struct vms_procinfo *info);
  * call fills info and advances *index. Returns SS$_NONEXPR when the
  * scan is exhausted. */
 uint32_t vms_kif_procscan(uint32_t *index, struct vms_procinfo *info);
+
+/* ================================================================
+ * $EXIT / $STATUS + CLI invocation context (vms-f60d)
+ *
+ * The executive owns image-completion status and the invoking CLI's command
+ * line. The exiting image records its status (vms_kif_setexit) and the invoking
+ * CLI reads it (vms_kif_getexit); the CLI records its command line
+ * (vms_kif_setcli) and the activated image reads it (vms_kif_getcli).
+ * INV-6: no /dev/vms -> SS$_NOSUCHDEV, no per-process fake.
+ * ================================================================ */
+
+/* Record `condition` as this process's image-completion $STATUS. *exit_code
+ * (optional) receives the OVMX POSIX exit code mapped from it. */
+uint32_t vms_kif_setexit(uint32_t condition, uint32_t *exit_code);
+
+/* Read this process's recorded image-completion $STATUS. *has_exited (optional)
+ * is nonzero iff an image has actually recorded one (do not infer it from a
+ * zero *condition, which is a legal value). */
+uint32_t vms_kif_getexit(uint32_t *condition, int *has_exited);
+
+/* Record this CLI process's invoking command line + cliflag, for an activated
+ * image to inherit and read back. cliflag == 0 means "no CLI". */
+uint32_t vms_kif_setcli(uint32_t cliflag, const char *command);
+
+/* Read this process's own invoking CLI context. *cliflag (optional) is nonzero
+ * iff a CLI launched it; command/command_size receive the NUL-terminated line;
+ * *length (optional) its true byte length. */
+uint32_t vms_kif_getcli(uint32_t *cliflag, char *command,
+                        uint32_t command_size, uint32_t *length);
 
 /* ================================================================
  * P0 program region (vms-68f.i, in-process image activation foundation)
@@ -756,19 +795,20 @@ uint32_t vms_kif_bg_getsockopt(uint32_t exec_chan, int level, int optname,
 
 /* $MOUNT an ODS-2 volume into the executive-global mounted table by unit name
  * (e.g. "DKA0:"). Idempotent. SS$_NOSUCHDEV if /dev/vms is absent.
- * OVMX-UNWIRED: vms_kif_acp_mount (vms-149) -- no product caller yet: PID 1's
- * boot-time $MOUNT of the system disk is a later rung of epic vms-208 (the full
- * $MOUNT that binds the backing device + validates the home block). Exercised
- * now only by tests/qemu/test_syssvc_acp_channel.c, the same footing as
- * vms_kif_get_resmaster. */
+ * WIRED (vms-481, epic vms-208): the DCL MOUNT command mounts a volume through
+ * the ACP -- src/vmsdcl/dcl_cmd_misc.c cmd_mount emits vms_kif_acp_mount instead
+ * of the retired setuid mount(2) helper (the /vms passthrough is gone). Also
+ * exercised by tests/qemu/test_syssvc_acp_channel.c and test_syssvc_dcl_acp.c. */
 uint32_t vms_kif_acp_mount(const char *devnam);
 
 /* $DISMOUNT: remove a volume from the executive-global mounted table.
  * SS$_NOSUCHDEV if it is not mounted, SS$_DEVALLOC while channels remain
  * assigned to it, SS$_NOSUCHDEV if /dev/vms is absent.
- * OVMX-UNWIRED: vms_kif_acp_dmount (vms-149) -- the dismount counterpart of
- * vms_kif_acp_mount above, exercised only by tests/qemu/test_syssvc_acp_channel.c
- * until PID 1's mount/dismount lifecycle lands in a later vms-208 rung. */
+ * WIRED (vms-149, epic vms-208): the DCL DISMOUNT command removes a volume
+ * through the ACP -- src/vmsdcl/dcl_cmd_misc.c cmd_dismount emits
+ * vms_kif_acp_dmount, mirroring cmd_mount's vms-481 switch to vms_kif_acp_mount
+ * (the /proc/mounts scan is gone). Also exercised by
+ * tests/qemu/test_syssvc_acp_channel.c. */
 uint32_t vms_kif_acp_dmount(const char *devnam);
 
 /* $ASSIGN a FILE-CLASS channel to a mounted ODS-2 volume by unit name; the
@@ -791,12 +831,11 @@ uint32_t vms_kif_acp_assign(const char *devnam, uint32_t *exec_chan);
  * SS$_NOSUCHDEV if /dev/vms is absent). See src/kernel/vms_acp.h for the FIB/ATR
  * interface.
  *
- * OVMX-UNWIRED: vms_kif_acp_access (vms-204) -- no product caller yet: RMS
- * $OPEN/$CLOSE is the path that will emit these, and that is the next rung
- * (RMS-over-$QIO) of epic vms-208. Exercised today only by
- * tests/qemu/test_syssvc_acp_access.c against a real /dev/vms.
- * OVMX-UNWIRED: vms_kif_acp_deaccess (vms-204) -- the IO$_DEACCESS counterpart
- * of vms_kif_acp_access above, same reason, same test. */
+ * WIRED (vms-bc7, epic vms-208): RMS $OPEN/$CREATE emit vms_kif_acp_access to
+ * open a file on the SYS$DISK channel (src/vmsrms/rms_core.c rms_acp_open_file,
+ * and rms_acp_resolve_did walking directory components), and $CLOSE emits
+ * vms_kif_acp_deaccess (rms_impl_close / rms_acp_close_handle). Also exercised
+ * by tests/qemu/test_syssvc_acp_access.c and test_syssvc_rms_acp.c. */
 uint32_t vms_kif_acp_access(struct vms_acp_access_args *args);
 uint32_t vms_kif_acp_deaccess(uint32_t chan);
 /*
@@ -805,9 +844,11 @@ uint32_t vms_kif_acp_deaccess(uint32_t chan);
  * allocation + FH2 grow). args carries the transfer control fields + a user data
  * `buffer` pointer; see src/kernel/vms_acp.h. Fail-honest (SS$_NOSUCHDEV if
  * /dev/vms is absent). Exercised only by tests/qemu/test_syssvc_acp_rw.c against
- * a real /dev/vms until the RMS-over-$QIO rung wires $GET/$PUT to them.
- * OVMX-UNWIRED: vms_kif_acp_readvb (vms-c60) -- no product caller yet; RMS $GET reaches it on the RMS-over-$QIO rung
- * OVMX-UNWIRED: vms_kif_acp_writevb (vms-c60) -- no product caller yet; RMS $PUT reaches it on the RMS-over-$QIO rung
+ * a real /dev/vms.
+ * WIRED (vms-bc7, epic vms-208): RMS record I/O rides these -- $GET is
+ * vms_kif_acp_readvb and $PUT is vms_kif_acp_writevb, through the block-I/O
+ * substrate src/vmsrms/rms_io.c (rms_io_read / rms_io_write) under the seq/rel
+ * record engines; also exercised by test_syssvc_acp_rw.c / test_syssvc_rms_acp.c.
  */
 uint32_t vms_kif_acp_readvb(struct vms_acp_rw_args *args);
 uint32_t vms_kif_acp_writevb(struct vms_acp_rw_args *args);
@@ -817,9 +858,11 @@ uint32_t vms_kif_acp_writevb(struct vms_acp_rw_args *args);
  * file-class channel and return the NEXT matching {name, version, FID}, or
  * SS$_NOMOREFILES when the context is exhausted. See src/kernel/vms_acp.h for
  * the FIB/wildcard interface. Returns SS$_NOSUCHDEV if /dev/vms is absent.
- * OVMX-UNWIRED: vms_kif_acp_acpcontrol (vms-a0b) -- no product caller yet
- * (RMS $SEARCH and the DCL DIRECTORY / F$SEARCH lexical wire to it in a later
- * rung); exercised by tests/qemu/test_syssvc_acp_search.c against real /dev/vms. */
+ * WIRED (vms-481, epic vms-208): RMS $SEARCH emits vms_kif_acp_acpcontrol --
+ * src/vmsrms/rms_search.c drives the executive wildcard directory context, and
+ * the DCL DIRECTORY command + the F$SEARCH lexical reach it through sys$search
+ * (src/vmsdcl/dcl_filespec.c dcl_rms_dir_*). Also exercised by
+ * tests/qemu/test_syssvc_acp_search.c and test_syssvc_dcl_acp.c. */
 uint32_t vms_kif_acp_acpcontrol(struct vms_acp_acpcontrol_args *args);
 
 /*
@@ -829,9 +872,11 @@ uint32_t vms_kif_acp_acpcontrol(struct vms_acp_acpcontrol_args *args);
  * and blocks), modify a file (extend/truncate/write attributes). func-dispatched
  * on args->func (VMS_ACP_FOP_*). See src/kernel/vms_acp.h for the FIB/ATR
  * interface and the ioctl-mapping decision. Returns SS$_NOSUCHDEV if /dev/vms
- * is absent. OVMX-UNWIRED: vms_kif_acp_fileop (vms-5303) -- no product caller
- * yet (RMS $CREATE/$ERASE/$EXTEND wire to it in a later rung); exercised by
- * tests/qemu/test_syssvc_acp_create.c against real /dev/vms. */
+ * is absent. WIRED (vms-bc7, epic vms-208): RMS $CREATE emits IO$_CREATE,
+ * $ERASE emits IO$_DELETE, and $EXTEND / truncate emit IO$_MODIFY through this
+ * umbrella (src/vmsrms/rms_core.c rms_impl_create/_erase/_extend/_close and
+ * rms_io.c rms_io_ftruncate); also exercised by tests/qemu/test_syssvc_acp_create.c
+ * and test_syssvc_rms_acp.c against real /dev/vms. */
 uint32_t vms_kif_acp_fileop(struct vms_acp_fileop_args *args);
 
 #endif /* _VMS_KIF_H */

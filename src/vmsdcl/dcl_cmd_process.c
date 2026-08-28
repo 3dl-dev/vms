@@ -34,10 +34,12 @@
 #include "starlet.h"
 #include "descrip.h"
 #include "prcdef.h"
+#include "vms/privs.h"    /* parse_privilege_string, PRV$M_* (RUN/PRIVILEGES, vms-d31d) */
 #include "msgdef.h"
 #include "ovmx_status.h"
 #include "vms_kif.h"
 #include "imgact_activate.h"
+#include "dcl/dcl_rms.h"    /* rms_file_attr / dcl_rms_attr: ACP image probe (vms-5f0) */
 
 int cmd_wait(struct dcl_command *cmd)
 {
@@ -1015,17 +1017,17 @@ static int run_process_qualifier_count(const struct dcl_command *cmd)
  */
 static uint32_t run_refuse_unhonourable(struct dcl_command *cmd)
 {
-    /* /UIC is checked FIRST, and before the image parameter is even
-     * looked at. The DCL lexer splits on ',', so "/UIC=[300,1]" arrives
-     * as the qualifier value "[300" plus a stray parameter "1]"; if the
-     * image were resolved first, the user would be told "image not
-     * found - 1]" and never hear about the UIC at all. Refusing on the
-     * qualifier's PRESENCE also means OVMX never has to pretend it
-     * understood a UIC it cannot honour. */
-    if (run_has_qualifier(cmd, "UIC")) {
-        run_creprc_failed(OVMX$_NOPRCUIC);
-        return OVMX$_NOPRCUIC;
-    }
+    /* /UIC IS NOW HONOURED on the detached path (vms-d31d): $CREPRC
+     * stamps the created process's executive row with the requested UIC
+     * (and /PRIVILEGES) via vms_kif_setident(), so a UIC handed to
+     * $CREPRC now changes what every other process sees -- the exact
+     * observability that once made refusing it the honest answer. /UIC
+     * (like /DETACHED) creates a DETACHED process, so cmd_run routes it to
+     * run_detached(), which reads and forwards it; it is NOT refused here
+     * and it is excepted from the subprocess test below (as the oracle's
+     * sentence excepts it). The DCL lexer still splits "/UIC=[g,m]" on the
+     * comma, so run_detached()/cmd_run reassemble the "[g" value with the
+     * stray "m]" parameter (run_parse_uic / run_uic_stray_param). */
 
     /* A RUN (PROCESS) qualifier -- any of the thirty-two the oracle's
      * index lists besides /UIC and /DETACHED -- asks OpenVMS for a
@@ -1042,8 +1044,15 @@ static uint32_t run_refuse_unhonourable(struct dcl_command *cmd)
      * set of qualifiers the user ASKED FOR, not the set they spelled out
      * in full: RUN/PRIO=4 is /PRIORITY (oracle-pinned, see that
      * function), and keying the membership test on exact names left it
-     * running the image with the priority thrown away. */
+     * running the image with the priority thrown away.
+     *
+     * /UIC (like /DETACHED) makes the command a DETACHED create, not a
+     * subprocess one (the oracle sentence excepts BOTH), so /UIC present
+     * means the OTHER process qualifiers ride the detached path too --
+     * RUN/UIC=[1,4]/PRIVILEGES=(...) is a detached create, not a refused
+     * subprocess (vms-d31d). */
     if (!run_has_qualifier(cmd, "DETACHED") &&
+        !run_has_qualifier(cmd, "UIC") &&
         run_process_qualifier_count(cmd) > 0) {
         run_creprc_failed(OVMX$_NOSUBPRC);
         return OVMX$_NOSUBPRC;
@@ -1075,6 +1084,115 @@ static uint32_t run_refuse_unhonourable(struct dcl_command *cmd)
 }
 
 /*
+ * run_uic_stray_param - the index of the bare parameter that is really the
+ * second half of a /UIC=[g,m] value (vms-d31d).
+ *
+ * The DCL lexer splits "/UIC=[g,m]" on the comma, so it reaches RUN as the
+ * qualifier value "[g" plus a bare parameter "m]". That "m]" is NOT the
+ * image. Return its parameter index so the image parameter can skip it, or
+ * -1 when there is no such split (no /UIC, or the whole "[g,m]" survived as
+ * a single qualifier value).
+ */
+static int run_uic_stray_param(const struct dcl_command *cmd)
+{
+    const char *v;
+    if (!run_has_qualifier(cmd, "UIC"))
+        return -1;
+    v = run_qualifier_value(cmd, "UIC");
+    if (!v || v[0] != '[' || strchr(v, ']'))
+        return -1;                  /* value already complete: no stray half */
+    for (int i = 0; i < cmd->param_count; i++) {
+        size_t l = strlen(cmd->params[i]);
+        if (l && cmd->params[i][l - 1] == ']')
+            return i;
+    }
+    return -1;
+}
+
+/*
+ * run_parse_uic - parse /UIC=[g,m] into a packed UIC, (group << 16) | member
+ * (vms-d31d). VMS UIC numbers are OCTAL (OpenVMS User's Manual). Reassembles
+ * the lexer's comma split (see run_uic_stray_param). Returns 0 on success,
+ * -1 if the qualifier is absent or malformed.
+ */
+static int run_parse_uic(const struct dcl_command *cmd, uint32_t *out_uic)
+{
+    const char *v = run_qualifier_value(cmd, "UIC");
+    char text[80];
+
+    if (!v || !*v)
+        return -1;
+
+    if (strchr(v, ',') && strchr(v, ']')) {
+        /* The whole "[g,m]" survived as one qualifier value. */
+        strncpy(text, v, sizeof(text) - 1);
+        text[sizeof(text) - 1] = '\0';
+    } else {
+        int si = run_uic_stray_param(cmd);
+        int n;
+        if (si < 0)
+            return -1;
+        n = snprintf(text, sizeof(text), "%s,%s", v, cmd->params[si]);
+        if (n < 0 || (size_t)n >= sizeof(text))
+            return -1;          /* absurdly long: not a UIC we can parse */
+    }
+
+    const char *lb = strchr(text, '[');
+    const char *comma = strchr(text, ',');
+    const char *rb = strchr(text, ']');
+    if (!lb || !comma || !rb || comma <= lb || rb <= comma)
+        return -1;
+
+    char gs[32], ms[32];
+    size_t gl = (size_t)(comma - (lb + 1));
+    size_t ml = (size_t)(rb - (comma + 1));
+    if (gl == 0 || gl >= sizeof(gs) || ml == 0 || ml >= sizeof(ms))
+        return -1;
+    memcpy(gs, lb + 1, gl); gs[gl] = '\0';
+    memcpy(ms, comma + 1, ml); ms[ml] = '\0';
+
+    char *end;
+    unsigned long g = strtoul(gs, &end, 8);
+    if (*end) return -1;
+    unsigned long m = strtoul(ms, &end, 8);
+    if (*end) return -1;
+
+    *out_uic = ((uint32_t)(g & 0xFFFFu) << 16) | (uint32_t)(m & 0xFFFFu);
+    return 0;
+}
+
+/*
+ * run_parse_privileges - parse /PRIVILEGES=(name,...) into a mask (vms-d31d).
+ *
+ * The DCL parser preserves the surrounding parentheses of a list value, so
+ * "/PRIVILEGES=(SYSPRV,BYPASS)" arrives as the literal "(SYSPRV,BYPASS)" and
+ * "/PRIVILEGES=ALL" as "ALL" (dcl_parser.c). Strip one layer of parens and
+ * hand the rest to the shared privilege-name parser. Returns 1 when the
+ * qualifier was present (mask filled, possibly 0), 0 when absent.
+ */
+static int run_parse_privileges(const struct dcl_command *cmd, uint64_t *out_mask)
+{
+    const char *v = run_qualifier_value(cmd, "PRIVILEGES");
+    char buf[512];
+    char *p;
+    size_t bl;
+
+    if (!v || !*v)
+        return 0;
+
+    strncpy(buf, v, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    p = buf;
+    bl = strlen(p);
+    if (bl >= 2 && p[0] == '(' && p[bl - 1] == ')') {
+        p[bl - 1] = '\0';
+        p++;
+    }
+    *out_mask = parse_privilege_string(p);
+    return 1;
+}
+
+/*
  * RUN/DETACHED - create a detached process.
  *
  * This is how a system startup procedure starts a service: the service
@@ -1091,24 +1209,21 @@ static uint32_t run_refuse_unhonourable(struct dcl_command *cmd)
  * Rule 10 worked example 2 -- would satisfy every single-process test
  * and share nothing.
  *
- * Qualifiers honoured here: /PROCESS_NAME=, /INPUT=, /OUTPUT=, /ERROR=.
- * /UIC is NOT one of them -- it is refused before this is reached (see
- * run_refuse_unhonourable), because the created process's UIC is the
- * executive's to derive and nothing DCL passes can change it.
+ * Qualifiers honoured here: /PROCESS_NAME=, /INPUT=, /OUTPUT=, /ERROR=,
+ * /UIC=[g,m] and /PRIVILEGES=(name,...) (vms-d31d). /UIC and /PRIVILEGES
+ * are forwarded to $CREPRC's uic and prvadr arguments, which stamp them
+ * onto the created process's EXECUTIVE row (vms_kif_setident): the
+ * created process now runs under the requested UIC and privileges where
+ * every other process and the Files-11 reference monitor can see them.
+ * This is what lets SYSTEM's startup create a detached LOGINOUT that
+ * holds SYSTEM's UIC [1,4] + SYSPRV/BYPASS and reads its own SYSUAF.
  *
- * KNOWN GAP, TRACKED AS vms-69e -- READ THIS BEFORE ADDING A QUALIFIER.
- * Every OTHER RUN (Process) qualifier reaching this function is READ BY
- * NOBODY: baspri, prvadr and the whole quota set are passed to $CREPRC
- * as bare literals below, so RUN/DETACHED/PRIORITY=4 creates the process
- * and announces %RUN-S-PROC_ID while the priority is discarded in
- * silence. That is the same Rule 10 illegal third answer this file
- * refuses one layer up, and it is reachable from real VMS software in
- * this repo (tests/corpus/tier4-mx/kit/mx_start.com). It is asserted --
- * as it BEHAVES, not as it should behave -- in P10 of
- * tests/qemu/test_syssvc_startup_service.c, so that the day vms-69e
- * settles the question (refuse with a condition value, or propagate
- * quota and privilege to the executive) the change cannot land without
- * that assertion being rewritten.
+ * PARTIAL GAP STILL TRACKED AS vms-69e: baspri (/PRIORITY) and the quota
+ * set are still passed to $CREPRC as bare literals, so /PRIORITY on a
+ * RUN/DETACHED is still parsed and discarded under %RUN-S-PROC_ID. That
+ * remainder is asserted -- as it BEHAVES -- in P10 of
+ * tests/qemu/test_syssvc_startup_service.c. /UIC and /PRIVILEGES were the
+ * other half of vms-69e and are now honoured.
  */
 static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
                         const char *image_path)
@@ -1127,6 +1242,14 @@ static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
 
     const char *prcnam = run_qualifier_value(cmd, "PROCESS_NAME");
 
+    /* /UIC=[g,m] -> $CREPRC uic argument (0 = inherit the creator's). */
+    uint32_t child_uic = 0;
+    (void)run_parse_uic(cmd, &child_uic);
+
+    /* /PRIVILEGES=(name,...) -> $CREPRC prvadr (NULL = inherit creator's). */
+    uint64_t child_privs = 0;
+    int have_privs = run_parse_privileges(cmd, &child_privs);
+
     struct dsc$descriptor_s img_d  = dsc_from_str(image_path);
     struct dsc$descriptor_s in_d   = dsc_from_str(in_path);
     struct dsc$descriptor_s out_d  = dsc_from_str(out_path);
@@ -1138,9 +1261,9 @@ static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
                                  in_d.dsc$a_pointer  ? &in_d  : NULL,
                                  out_d.dsc$a_pointer ? &out_d : NULL,
                                  err_d.dsc$a_pointer ? &err_d : NULL,
-                                 NULL, NULL,
+                                 have_privs ? &child_privs : NULL, NULL,
                                  prc_d.dsc$a_pointer ? &prc_d : NULL,
-                                 0, 0 /* uic: see run_refuse_unhonourable */,
+                                 0, child_uic,
                                  0, PRC$M_DETACH);
 
     if (!(status & 1)) {
@@ -1302,8 +1425,185 @@ static int dcl_highest_version(const char *path, char *out, size_t sz)
     return 1;
 }
 
-int dcl_resolve_activatable(const char *linux_path, char *resolved, size_t sz)
+/* KEYED ON OVMX_HAVE_ACP, NOT __linux__ (vms-329): the coupled VAX cutover
+ * retired the netbsd-vax /vms VFS mount, so the legacy opendir()/access()
+ * resolver below can no longer find ANY image on that substrate -- DCL must
+ * resolve activatable images through the executive ACP there exactly as it does
+ * on Linux. dcl_rms_read_open()/rms_file_attr are already substrate-neutral. */
+#if defined(OVMX_HAVE_ACP)
+/* True if the final name component of a VMS filespec already carries a ".type"
+ * (so ".EXE" must NOT be appended). Scans past the device/directory. */
+static int dcl_spec_has_type(const char *spec)
 {
+    const char *base = spec;
+    for (const char *p = spec; *p; p++)
+        if (*p == ':' || *p == ']' || *p == '>' || *p == '/')
+            base = p + 1;
+    return strchr(base, '.') != NULL;
+}
+
+/*
+ * dcl_resolve_activatable_acp - resolve an image spec to an activatable path
+ * THROUGH the executive Files-11 (ODS-2) ACP (vms-5f0, epic vms-208 atomic flip).
+ *
+ * With the /vms passthrough retired, an image lives only on the mounted ODS-2
+ * SYS$DISK. This probes its presence the VMS way: dcl_rms_attr()/rms_file_attr()
+ * compose the ODS-2 search-list candidates (SYS$SYSTEM: -> [SYS0.SYSEXE] +
+ * [SYS0.SYSCOMMON.SYSEXE]) and IO$_ACCESS each over /dev/vms -- the SAME
+ * presence path RMS $OPEN and DIRECTORY/FULL already use -- never opendir()/
+ * access() on /vms.
+ *
+ * On a hit, `resolved` is filled with the path DCL / $CREPRC / IMGACT activate
+ * from: the boot-staged copy of a first-hop SYS$SYSTEM image (the POSIX home
+ * the Linux kernel execve's; IMGACT still reads the GENUINE bytes off the
+ * volume via the ACP, imgsrc_map_staged), else the on-volume path IMGACT reads
+ * in-process via the ACP. $CREPRC's own ovmx_boot_stage_exec_path rewrite maps
+ * an on-volume SYS$SYSTEM path to the staged copy too, so RUN/DETACHED works
+ * either way.
+ *
+ * Returns 1 when resolved via the ACP. Returns 0 with *acp_usable = 1 when the
+ * ACP is present but the image is genuinely absent (the caller reports an
+ * honest %DCL-E-IVIMAGE; NO /vms fallback -- INV-6). Returns 0 with
+ * *acp_usable = 0 when no ACP-mounted SYS$DISK is reachable (no /dev/vms -- the
+ * plain host ctest), so the caller runs the legacy /vms resolver unchanged.
+ */
+static int dcl_resolve_activatable_acp(struct dcl_context *ctx,
+                                       const char *vms_spec,
+                                       const char *linux_path,
+                                       char *resolved, size_t sz,
+                                       int *acp_usable)
+{
+    *acp_usable = 0;
+
+    /* NO EXECUTIVE => this ACP path does not apply: defer to the legacy resolver
+     * (vms-104). With /dev/vms absent (the plain host ctest / the BUILD.COM S3.2
+     * host DCL driver), rms_file_attr answers from a POSIX stat, NOT the ACP --
+     * so dcl_rms_attr would report RMS$_NORMAL for SYS$SYSTEM:TCC.EXE and this
+     * function would then try to stage it OVER an ACP that isn't there and fail,
+     * turning a resolvable host-path image into a false %DCL-E-IVIMAGE. The flip
+     * only retires /vms on the RUNTIME path (real /dev/vms); the legacy
+     * SYS$SYSTEM:/SYS$SHARE: -> /vms POSIX resolution below is CORRECT and
+     * expected when no executive is present (INV-6 governs the ACP-live path,
+     * enforced by the ACP branch, not this host-defer). */
+    if (rms_executive_absent()) {
+        *acp_usable = 0;
+        return 0;
+    }
+
+    const char *exts[2] = { "", ".EXE" };
+    int nexts = dcl_spec_has_type(vms_spec) ? 1 : 2;
+
+    for (int e = 0; e < nexts; e++) {
+        char trial[1056];
+        snprintf(trial, sizeof(trial), "%s%s", vms_spec, exts[e]);
+
+        struct rms_fileattr at;
+        uint32_t st = dcl_rms_attr(ctx, trial, &at);
+
+        if (st == RMS$_NORMAL) {
+            *acp_usable = 1;
+            /* on-volume Linux path carrying the type we matched with */
+            char lp[1024];
+            snprintf(lp, sizeof(lp), "%s%s", linux_path, exts[e]);
+            char staged[1024];
+            /* (1) Booted runtime: the first-hop SYS$SYSTEM image was already
+             * read off the volume over the ACP and staged to a POSIX file by
+             * ovmx_init's boot bridge -- use it directly. */
+            if (ovmx_boot_stage_exec_path(lp, staged, sizeof(staged)) &&
+                access(staged, X_OK) == 0) {
+                strncpy(resolved, staged, sz - 1);
+                resolved[sz - 1] = '\0';
+                return 1;
+            }
+            /* (2) Not boot-staged (a test harness, or a tool outside the boot
+             * set such as the self-host TCC/LIBRARIAN/LINK.EXE, or an app like
+             * SYS$SYSTEM:PARTS.EXE the first time `$ PARTS` runs): read the
+             * GENUINE bytes off the ODS-2 volume THROUGH THE ACP now and stage
+             * them to a POSIX home (the same read the boot bridge does, done
+             * lazily). The bytes come from IO$_READVBLK over /dev/vms, NEVER a
+             * /vms passthrough read (vms-104, Rule 9 / INV-6). A native musl
+             * bootstrap tool (no OVMX symbol vector) is then execve()d off this
+             * staged copy by dcl_activate_image's fork fallback; a real OVMX
+             * symbol-vector image staged the same way is IMGACT-activated (its
+             * PT_INTERP is opened by the kernel, imgsrc_map_staged re-reads it
+             * over the ACP) -- imgact_activate makes that native-vs-image call
+             * from the ELF, so ONE genuine ACP-sourced copy serves both.
+             *
+             * PER-USER PRIVATE STAGING (vms-a86f). LOGINOUT setuid()s a session
+             * onto its SYSUAF UIC, so this runs as a NON-ROOT process (SYSTEM is
+             * uid 4). The shared OVMX_BOOT_STAGE_DIR is root-owned 0755, so a
+             * non-root session cannot create a file in it -- lazily staging into
+             * the shared directory failed EACCES, which is exactly why the PARTS
+             * demo went red. Stage instead into OVMX_BOOT_STAGE_DIR "/<uid>/", a
+             * directory the activating process OWNS (created 0700): secure (no
+             * world-writable plant hole) and writable by the session. A copy a
+             * prior invocation already staged there is reused. (The deeper end
+             * state is executive-mediated staging, vms-040; per-user-private is
+             * the faithful, secure, in-scope fix.) */
+            char user_dir[1024];
+            if (ovmx_boot_stage_user_path(lp, staged, sizeof(staged),
+                                          (unsigned long)getuid())) {
+                /* Reuse an already-staged per-user copy (repeat activation). */
+                if (access(staged, X_OK) == 0) {
+                    strncpy(resolved, staged, sz - 1);
+                    resolved[sz - 1] = '\0';
+                    return 1;
+                }
+                /* Ensure the shared root (best-effort; PID 1 makes it) and the
+                 * per-user private subdirectory (0700, owned by this uid). */
+                (void)mkdir(OVMX_BOOT_STAGE_DIR, 0755);   /* EEXIST/EACCES fine */
+                if (ovmx_boot_stage_user_dir(user_dir, sizeof(user_dir),
+                                             (unsigned long)getuid()))
+                    (void)mkdir(user_dir, 0700);          /* EEXIST is fine */
+                if (dcl_rms_stage(ctx, trial, staged) == RMS$_NORMAL &&
+                    access(staged, X_OK) == 0) {
+                    strncpy(resolved, staged, sz - 1);
+                    resolved[sz - 1] = '\0';
+                    return 1;
+                }
+            }
+            /* ACP confirmed the image is present but it could not be staged off
+             * the volume. Fail HONESTLY -- do NOT read it off /vms (INV-6). The
+             * caller reports %DCL-E-IVIMAGE. */
+            return 0;
+        }
+        if (st == RMS$_ACC) {
+            /* The ACP could not answer at all (no /dev/vms, no ACP-mounted
+             * SYS$DISK) -- NOT a "file absent" answer. Defer to the legacy
+             * resolver so the plain host ctest keeps working. */
+            *acp_usable = 0;
+            return 0;
+        }
+        /* RMS$_FNF (and other per-file errors): the ACP answered and this
+         * spelling is absent. Keep probing (the .EXE default), and remember the
+         * ACP is present so all-miss fails honestly with no /vms fallback. */
+        *acp_usable = 1;
+    }
+    return 0;   /* ACP present, every spelling absent: honest miss (INV-6) */
+}
+#endif /* OVMX_HAVE_ACP */
+
+int dcl_resolve_activatable(struct dcl_context *ctx, const char *vms_spec,
+                            const char *linux_path, char *resolved, size_t sz)
+{
+#if defined(OVMX_HAVE_ACP)
+    /* ATOMIC FLIP (vms-5f0): the image lives on the genuine ODS-2 SYS$DISK, not
+     * the retired /vms passthrough. When the executive Files-11 ACP is present,
+     * resolve THROUGH it and NEVER fall back to a /vms opendir()/access() probe
+     * (INV-6). Only when no ACP-mounted SYS$DISK is reachable (no /dev/vms, the
+     * plain host ctest) does the legacy resolver below run. */
+    {
+        int acp_usable = 0;
+        if (dcl_resolve_activatable_acp(ctx, vms_spec, linux_path,
+                                        resolved, sz, &acp_usable))
+            return 1;
+        if (acp_usable)
+            return 0;   /* ACP present, image genuinely absent: honest miss */
+    }
+#else
+    (void)ctx; (void)vms_spec;
+#endif
+
     if (dcl_try_readable(linux_path, resolved, sz)) return 1;
 
     char cand[1024];
@@ -1549,13 +1849,33 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
          * below, which handles all of those (a shebang script included).
          */
         if (ia == SS$_NORMAL || ia == SS$_ACCVIO) {
-            if (ia == SS$_NORMAL && image_rc != 0) {
-                dcl_error("DCL", 2, "ABORT",
-                          "image %s exited with error status %%X%08X",
-                          display_name, (unsigned)image_rc);
-                return SS$_ABORT;
+            if (ia == SS$_NORMAL) {
+                /* The image's completion $STATUS is owned by the executive
+                 * (vms-f60d, design §3.4): the in-process image recorded its
+                 * full VMS condition value at SYS$EXIT via vms_kif_setexit, so
+                 * read it back and make it DCL's $STATUS -- the real condition
+                 * value, not a success/fail collapsed from the POSIX exit code.
+                 * If no executive recorded one (no /dev/vms -> has_exited == 0),
+                 * fall back to the image_rc verdict. */
+                uint32_t cond = 0;
+                int exited = 0;
+                uint32_t gx = vms_kif_getexit(&cond, &exited);
+                if (gx == SS$_NORMAL && exited) {
+                    if (!(cond & 1))
+                        dcl_error("DCL", (int)(cond & 7), "ABORT",
+                                  "image %s exited with error status %%X%08X",
+                                  display_name, (unsigned)cond);
+                    return cond;
+                }
+                if (image_rc != 0) {
+                    dcl_error("DCL", 2, "ABORT",
+                              "image %s exited with error status %%X%08X",
+                              display_name, (unsigned)image_rc);
+                    return SS$_ABORT;
+                }
+                return SS$_NORMAL;
             }
-            return (ia == SS$_NORMAL) ? SS$_NORMAL : SS$_ABORT;
+            return SS$_ABORT;   /* SS$_ACCVIO: the image faulted and was run down */
         }
     }
 
@@ -1665,7 +1985,8 @@ int dcl_exec_foreign_command(struct dcl_context *ctx, struct dcl_command *cmd,
     /* Resolve to an activatable path: fills a missing .EXE type and the RMS
      * ;version, and accepts a readable OVMX image (not just a +x file) so a
      * freshly linked image activates -- the RUN path uses the same resolver. */
-    if (dcl_resolve_activatable(linux_path, resolved_path, sizeof(resolved_path))) {
+    if (dcl_resolve_activatable(ctx, image_spec, linux_path,
+                                resolved_path, sizeof(resolved_path))) {
         strncpy(linux_path, resolved_path, sizeof(linux_path) - 1);
         linux_path[sizeof(linux_path) - 1] = '\0';
     } else {
@@ -1720,21 +2041,32 @@ int dcl_exec_foreign_command(struct dcl_context *ctx, struct dcl_command *cmd,
     }
     argv[argc] = NULL;
 
-    /* Publish the RAW foreign command tail so the activated image's
+    /* Record the RAW foreign command tail so the activated image's
      * LIB$GET_FOREIGN can return it (vms-54e). On OpenVMS a foreign command
-     * hands the whole untokenized tail to the image via the CLI; OVMX passes it
-     * through the VMS_FOREIGN_CMD environment variable -- the same env channel
-     * DCL already uses for VMS process context (VMS_DEFAULT_DIR, ...), which
-     * reaches BOTH the in-process activation path (same process) and the
-     * fork()+execve() fallback (inherited environment). This is set ONLY for a
-     * foreign command; RUN and DCL-driven utilities leave it unset so their
-     * LIB$GET_FOREIGN correctly falls through to SYS$INPUT. The variable is
-     * cleared after activation returns as a safety net for an image that never
-     * calls LIB$GET_FOREIGN (LIB$GET_FOREIGN itself also consumes it on first
-     * read, so a well-behaved image leaves nothing to clear). */
-    setenv("VMS_FOREIGN_CMD", cmd->raw_tail, 1);
+     * hands the whole untokenized tail to the image via the CLI, and the CLI
+     * relationship is owned by the executive -- so OVMX records it in the
+     * executive process context (vms_kif_setcli, vms-f60d), which the activated
+     * image inherits from this PCB at REGISTER_CONTINUE time and reads back with
+     * LIB$GET_FOREIGN -> vms_kif_getcli. This is the authoritative channel and
+     * replaces the former Linux-env-var shim on the real runtime (design §3.2 /
+     * §4a.3, conductor ruling: read the executive, not an env var; INV-6).
+     *
+     * When /dev/vms is UNREACHABLE (host unit tests, a dev build with no
+     * executive) vms_kif_setcli fails (a non-success VMS status) -- there is
+     * genuinely no executive CLI relationship to record. VMS_FOREIGN_CMD is
+     * retained ONLY as
+     * that no-executive fallback (inherited environment; NOT a claim the
+     * executive succeeded), so the same env channel DCL already uses for VMS
+     * process context (VMS_DEFAULT_DIR, ...) still delivers the tail off the
+     * runtime. Set ONLY for a foreign command; RUN / DCL-driven utilities leave
+     * both unset so their LIB$GET_FOREIGN correctly falls through to SYS$INPUT. */
+    uint32_t cli_st = vms_kif_setcli(1, cmd->raw_tail);
+    int have_exec = (cli_st & 1);   /* odd == the executive recorded it */
+    if (!have_exec)
+        setenv("VMS_FOREIGN_CMD", cmd->raw_tail, 1);
     int fc_status = dcl_activate_image(ctx, image_spec, linux_path, argv);
-    unsetenv("VMS_FOREIGN_CMD");
+    if (!have_exec)
+        unsetenv("VMS_FOREIGN_CMD");
     return fc_status;
 #undef DCL_FC_MAX_ARGV
 }
@@ -1757,29 +2089,43 @@ int cmd_run(struct dcl_command *cmd)
             return refused;
     }
 
-    if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
+    /* Which parameter is the image? With /UIC=[g,m] the DCL lexer splits
+     * on the comma, so the "m]" half lands as a bare parameter that is NOT
+     * the image (vms-d31d) -- skip it. Without /UIC this picks params[0]. */
+    int stray = run_uic_stray_param(cmd);
+    int img_idx = -1;
+    for (int i = 0; i < cmd->param_count; i++) {
+        if (i == stray) continue;
+        if (cmd->params[i][0] == '\0') continue;
+        img_idx = i;
+        break;
+    }
+    if (img_idx < 0) {
         dcl_error("DCL", 2, "NOFILE", "missing image specification");
         return SS$_BADPARAM;
     }
 
     char linux_path[1024];
     char resolved_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
+    dcl_resolve_path(ctx, cmd->params[img_idx], linux_path, sizeof(linux_path));
 
     /* Resolve to an activatable path (fills .EXE, resolves the RMS ;version,
      * accepts a readable OVMX image) -- shared with foreign-command dispatch. */
-    if (dcl_resolve_activatable(linux_path, resolved_path, sizeof(resolved_path))) {
+    if (dcl_resolve_activatable(ctx, cmd->params[img_idx], linux_path,
+                                resolved_path, sizeof(resolved_path))) {
         strncpy(linux_path, resolved_path, sizeof(linux_path) - 1);
         linux_path[sizeof(linux_path) - 1] = '\0';
     } else {
         dcl_error("DCL", 2, "IVIMAGE",
-                  "image not found - %s", cmd->params[0]);
+                  "image not found - %s", cmd->params[img_idx]);
         return SS$_NOSUCHFILE;
     }
 
     /* /DETACHED creates a detached process -- a service -- instead of
-     * running the image as a subprocess of this DCL. */
-    if (run_has_qualifier(cmd, "DETACHED"))
+     * running the image as a subprocess of this DCL. /UIC also selects a
+     * detached process (HELP RUN Process: /UIC "Specifies that the created
+     * process be a detached process"), so it takes the same path (vms-d31d). */
+    if (run_has_qualifier(cmd, "DETACHED") || run_has_qualifier(cmd, "UIC"))
         return run_detached(ctx, cmd, linux_path);
 
     /* RUN has never forwarded parameters to the image (unlike a foreign
@@ -1787,7 +2133,7 @@ int cmd_run(struct dcl_command *cmd)
     char *argv[2];
     argv[0] = linux_path;
     argv[1] = NULL;
-    return dcl_activate_image(ctx, cmd->params[0], linux_path, argv);
+    return dcl_activate_image(ctx, cmd->params[img_idx], linux_path, argv);
 }
 
 /*
@@ -1832,9 +2178,165 @@ int cmd_spawn(struct dcl_command *cmd)
         }
     }
 
+    /*
+     * SUBPROCESS NAME (vms-c17). VMS names a SPAWNed subprocess after the
+     * CREATOR's process name plus a unique number -- SYSTEM_1, SYSTEM_2, ...
+     * -- unless /PROCESS=name overrides it (OpenVMS DCL Dictionary, SPAWN:
+     * "the subprocess name is composed of the same base name as the parent
+     * process and a unique number"; oracle VAX1, OpenVMS VAX V7.3:
+     * "%DCL-S-SPAWNED, process SYSTEM_1 spawned", cited in dcl_lexical.c and
+     * tests/uat/vms_session_qemu.sh). The base is read from the creator's OWN
+     * executive-held process name ($GETJPI self) so it is the name the system
+     * knows this process by, not a self-declared string; the DCL context is a
+     * fallback only. Capped so the "_N" suffix fits VMS_PRCNAM_SIZE.
+     */
+    struct dcl_context *spawn_ctx = dcl_get_context();
+    const char *proc_name_q = dcl_qualifier_value(cmd, "PROCESS");
+    char base_name[VMS_PRCNAM_SIZE] = {0};
+    {
+        struct vms_procinfo self_info;
+        const char *src = NULL;
+        if ((vms_kif_getjpi_self(&self_info) & 1) && self_info.prcnam[0])
+            src = self_info.prcnam;
+        else if (spawn_ctx && spawn_ctx->process_name[0])
+            src = spawn_ctx->process_name;
+        else if (spawn_ctx && spawn_ctx->username[0])
+            src = spawn_ctx->username;
+        else
+            src = "SYSTEM";
+        /* Leave room for "_65535" (6) + NUL in the 16-byte field. */
+        strncpy(base_name, src, sizeof(base_name) - 7);
+        base_name[sizeof(base_name) - 7] = '\0';
+    }
+
+    /*
+     * CREATION HANDSHAKE (vms-c17). Only the child can enter itself in the
+     * executive's process table -- the entry is keyed by ITS tgid, which
+     * execve() does not change -- so the child registers, names itself, and
+     * reports the outcome (status + final name) back over a pipe. SPAWN does
+     * not return until that report arrives, so the subprocess genuinely EXISTS
+     * (named, in the executive, visible to SHOW SYSTEM/SHOW USERS) the moment
+     * SPAWN returns, exactly as $CREPRC does (sys_process.c). Registering here
+     * is what makes the subprocess a real PCB whose job_id -- inherited from
+     * this DCL's job -- marks it a SUBPROCESS; the previous bare fork()+execl()
+     * left the child out of the table entirely (the INV-6 fabrication class).
+     * The pipe is O_CLOEXEC, so it costs the activated image nothing.
+     */
+    struct spawn_report { uint32_t status; char name[VMS_PRCNAM_SIZE]; };
+    int namefd[2] = { -1, -1 };
+    if (pipe(namefd) < 0) {
+        dcl_error("DCL", 4, "CREPRC", "cannot create process");
+        return SS$_INSFMEM;
+    }
+    /* Not pipe2(O_CLOEXEC): keep the glibc/musl-portable form sys_process.c uses. */
+    fcntl(namefd[0], F_SETFD, FD_CLOEXEC);
+    fcntl(namefd[1], F_SETFD, FD_CLOEXEC);
+
     pid_t pid = fork();
     if (pid == 0) {
         /* Child process */
+        struct spawn_report rep;
+        memset(&rep, 0, sizeof(rep));
+        close(namefd[0]);
+
+        /*
+         * Register + name in the executive BEFORE the exec and before any
+         * I/O redirection (the executive keys on the pid, which execve() does
+         * not change, so the name survives image activation with no userspace
+         * carrier). The FIRST vms_kif_* call binds and registers this task
+         * (kif_bind), deriving job_id from the real parent -- this DCL. Do NOT
+         * bind a terminal: a subprocess is terminal-unbound (only the login
+         * root calls VMS_IOCTL_SETTERM), which is what keeps it classified
+         * SUBPROCESS rather than INTERACTIVE. The executive enforces name
+         * uniqueness within the UIC group (SS$_DUPLNAM); loop until a free
+         * "base_N" is found, or stop on any other error.
+         */
+        if (proc_name_q && proc_name_q[0]) {
+            strncpy(rep.name, proc_name_q, sizeof(rep.name) - 1);
+            rep.name[sizeof(rep.name) - 1] = '\0';
+            rep.status = vms_kif_setprn(rep.name);
+        } else {
+            rep.status = SS$_DUPLNAM;
+            for (int n = 1; n <= 65535; n++) {
+                /* Format into a wide temp then copy bounded into the fixed
+                 * wire field: base_name is capped above, but the compiler
+                 * cannot prove it, so a direct snprintf trips
+                 * -Werror=format-truncation. */
+                char nm[64];
+                snprintf(nm, sizeof(nm), "%s_%d", base_name, n);
+                strncpy(rep.name, nm, sizeof(rep.name) - 1);
+                rep.name[sizeof(rep.name) - 1] = '\0';
+                rep.status = vms_kif_setprn(rep.name);
+                if (rep.status & 1)
+                    break;                 /* named */
+                if (rep.status != SS$_DUPLNAM)
+                    break;                 /* a real error, not a clash */
+            }
+        }
+
+        /*
+         * Confirm the registration TOOK, exactly as sys$creprc does: the FIRST
+         * vms_kif_* call (the setprn above) binds and registers this task via
+         * kif_bind, so a successful setprn means the PCB exists -- but read it
+         * back with $GETJPI to be certain the row is there before we hand the
+         * creator SS$_NORMAL. (Do NOT probe with access("/dev/vms",...): access
+         * checks the REAL uid against the device mode and can fail on a node
+         * the process can nonetheless open(O_RDWR) -- the false negative that
+         * made an earlier revision take the no-executive path in-guest and run
+         * the subprocess unregistered.)
+         */
+        if (rep.status & 1) {
+            struct vms_procinfo self_pi;
+            uint32_t g = vms_kif_getjpi_self(&self_pi);
+            if (!(g & 1))
+                rep.status = g;             /* registration did not stick */
+        }
+
+        /*
+         * If registration could not be done, decide HONESTLY why. Only when
+         * the executive is genuinely unreachable -- /dev/vms cannot be opened,
+         * i.e. build/test tooling, never the product runtime (Rule 9: PID 1
+         * refuses to boot without it) -- does the subprocess still run,
+         * UNREGISTERED, the same "it needs no executive" path lib$spawn takes
+         * (src/libvms/rtl/lib_misc.c). That is not the fabrication INV-6
+         * forbids: nothing claims a PCB, and SHOW USERS honestly shows nothing
+         * because nothing registered. With the executive PRESENT, a failed
+         * registration is a real error and is reported as such.
+         */
+        if (!(rep.status & 1)) {
+            int probe = open("/dev/vms", O_RDWR);
+            if (probe < 0) {
+                rep.status = SS$_NORMAL;    /* no executive: run unregistered */
+                if (rep.name[0] == '\0') {
+                    char nm[64];
+                    snprintf(nm, sizeof(nm), "%s_1", base_name);
+                    strncpy(rep.name, nm, sizeof(rep.name) - 1);
+                    rep.name[sizeof(rep.name) - 1] = '\0';
+                }
+            } else {
+                close(probe);               /* executive present: honest fail */
+            }
+        }
+
+        /* Report back BEFORE exec so the CLOEXEC pipe carries the result even
+         * though the exec then closes it. A tiny (< PIPE_BUF) write cannot
+         * block the child. */
+        {
+            const char *p = (const char *)&rep;
+            size_t left = sizeof(rep);
+            while (left > 0) {
+                ssize_t w = write(namefd[1], p, left);
+                if (w < 0) { if (errno == EINTR) continue; break; }
+                p += w; left -= (size_t)w;
+            }
+        }
+        close(namefd[1]);
+
+        /* A subprocess the executive never entered describes nothing the
+         * creator can see -- fail honestly rather than activate an image that
+         * would make SPAWN's success a lie (INV-6). */
+        if (!(rep.status & 1))
+            _exit(126);
 
         /* Handle /OUTPUT=file redirection */
         if (output_file) {
@@ -1853,12 +2355,43 @@ int cmd_spawn(struct dcl_command *cmd)
         fprintf(stderr, "%%DCL-E-CREPRC, cannot create subprocess\n");
         _exit(127);
     } else if (pid > 0) {
+        /* Parent: wait for the child's registration report before returning,
+         * so the subprocess exists in the executive the moment SPAWN returns. */
+        struct spawn_report rep;
+        memset(&rep, 0, sizeof(rep));
+        close(namefd[1]);
+        {
+            char *p = (char *)&rep;
+            size_t left = sizeof(rep);
+            while (left > 0) {
+                ssize_t r = read(namefd[0], p, left);
+                if (r < 0) { if (errno == EINTR) continue; break; }
+                if (r == 0) break;         /* child died before reporting */
+                p += r; left -= (size_t)r;
+            }
+            close(namefd[0]);
+            if (left != 0 || !(rep.status & 1)) {
+                /* The child could not register -- reap it and report honestly. */
+                int wst;
+                while (waitpid(pid, &wst, 0) < 0 && errno == EINTR)
+                    ;
+                dcl_error("DCL", 4, "CREPRC", "cannot create process");
+                return SS$_ABORT;
+            }
+        }
+
         if (nowait) {
-            /* /NOWAIT: print PID and return immediately */
-            printf("%%DCL-I-SPAWNED, process id is %d\n", (int)pid);
+            /* /NOWAIT: VMS answers "%DCL-S-SPAWNED, process <name> spawned"
+             * (severity S, the process NAME) -- not the Linux pid. Oracle
+             * VAX1, OpenVMS VAX V7.3 (cited above). */
+            printf("%%DCL-S-SPAWNED, process %s spawned\n", rep.name);
         } else {
+            /* Attached SPAWN: run the subprocess and wait. The authentic
+             * ATTACHED/RETURNED handoff messages belong to the terminal
+             * ATTACH work, which is out of scope for vms-c17 -- so this path
+             * stays silent, as it was, while now registering a visible,
+             * named subprocess for the duration it runs. */
             extern volatile sig_atomic_t dcl_running_child;
-            struct dcl_context *spawn_ctx = dcl_get_context();
             dcl_running_child = (sig_atomic_t)pid;
             int wstatus;
             waitpid(pid, &wstatus, WUNTRACED);
@@ -1873,6 +2406,8 @@ int cmd_spawn(struct dcl_command *cmd)
         }
         return SS$_NORMAL;
     } else {
+        close(namefd[0]);
+        close(namefd[1]);
         dcl_error("DCL", 4, "CREPRC", "cannot create process");
         return SS$_ABORT;
     }

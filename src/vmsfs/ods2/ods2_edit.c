@@ -67,16 +67,23 @@ static inline uint32_t ed_rd32(const uint8_t *p)
 }
 
 /*
- * ods2_fh2_map_append - append ONE format-1 FM2 retrieval pointer covering
- * [lbn, lbn+count) to the END of the file header's map area, bumping
- * fh2_map_inuse by 2 words. The map area begins at (fh2_mpoffset * 2) bytes and
- * the currently-used words are fh2_map_inuse; the new 2-word entry is written at
- * (mpoffset*2 + map_inuse*2). The whole 255-word header is checksummed, so the
- * entry must land before the checksum word at byte 510 -- if it would not fit,
- * ODS2_ERR_NOSPACE (the file's extent map is full; the ACP surfaces this as an
- * honest device-full rather than a silent partial map). count in 1..256 and
- * lbn < 2^22 are the format-1 range (larger runs need FM2 format 2/3, which this
- * rung's small-volume corpus never needs -- ODS2_ERR_ARGS, fail-honest).
+ * ods2_fh2_map_append - record the contiguous run [lbn, lbn+count) in the file
+ * header's map area, as ONE OR MORE format-1 FM2 retrieval pointers. Each
+ * format-1 pointer's count field is 8 bits (1..256 blocks), so a run longer than
+ * 256 blocks is stored as several consecutive format-1 pointers -- exactly how
+ * ODS-2 records a large contiguous allocation (a single physically-contiguous
+ * file still maps with back-to-back pointers whose LBNs abut). The map builder
+ * (ods2_fh2_map_walk) and the ACP's window builder read them back and coalesce
+ * abutting runs, so the file remains ONE VBN->LBN window turn.
+ *
+ * Each 2-word pointer is written at (mpoffset*2 + map_inuse*2), bumping
+ * fh2_map_inuse by 2 words per pointer. The whole 255-word header is checksummed,
+ * so every entry must land before the checksum word at byte 510; if the run does
+ * not fit in the remaining map words, ODS2_ERR_NOSPACE (the file's extent map is
+ * full -- an extension header is a later rung; the ACP surfaces this as an honest
+ * device-full rather than a silent partial map). count >= 1 and the run must stay
+ * within the format-1 LBN range (lbn+count-1 < 2^22); a larger volume needs FM2
+ * format 2/3, which this rung's corpus never reaches -- ODS2_ERR_ARGS.
  *
  * `header_block` is the file's already-parsed FH2 primary header (>= 512 bytes);
  * the caller reseals the checksum with ods2_fh2_reseal() after all edits.
@@ -84,33 +91,76 @@ static inline uint32_t ed_rd32(const uint8_t *p)
 ods2_status_t ods2_fh2_map_append(void *header_block, uint32_t lbn, uint32_t count)
 {
     uint8_t *h = (uint8_t *)header_block;
-    unsigned mpoffset, map_inuse, entry_byte;
-    uint16_t w0, w1;
-    uint32_t high6;
+    unsigned mpoffset, map_inuse;
+    uint32_t cur_lbn = lbn, remaining = count;
 
     if (!h)
         return ODS2_ERR_ARGS;
-    if (count < 1 || count > 256 || lbn >= (1u << 22))
+    /* Whole run must lie in the format-1 LBN window (each sub-pointer's own LBN
+     * is checked again below as it advances). count 0 is a no-op success. */
+    if (count == 0)
+        return ODS2_OK;
+    if ((uint64_t)lbn + count - 1u >= (1u << 22))
         return ODS2_ERR_ARGS;
 
     mpoffset  = h[offsetof(ods2_fh2_t, fh2_mpoffset)];
     map_inuse = h[offsetof(ods2_fh2_t, fh2_map_inuse)];
 
-    entry_byte = mpoffset * 2u + map_inuse * 2u;
-    /* Need 4 bytes (2 words) and must stay clear of the checksum word (510). */
-    if (entry_byte + 4u > offsetof(ods2_fh2_t, fh2_checksum))
-        return ODS2_ERR_NOSPACE;
+    /* COALESCE (vms-401): a file grown one bucket at a time issues a run of
+     * single-block extends whose LBNs are physically contiguous. VMS stores a
+     * contiguous file as back-to-back retrieval pointers, not one-per-block; a
+     * fresh pointer per block would exhaust the fixed 255-word map area (and,
+     * upstream, the channel's 24-entry window) after a few dozen blocks. So if
+     * the LAST existing format-1 pointer ends exactly where this run begins,
+     * grow it up to format-1's 256-block ceiling first, then append the rest. */
+    if (map_inuse >= 2u) {
+        unsigned last_byte = mpoffset * 2u + (map_inuse - 2u) * 2u;
+        uint16_t lw0 = ed_rd16(h + last_byte + 0);
+        uint16_t lw1 = ed_rd16(h + last_byte + 2);
+        if ((lw0 & 0xC000u) == 0x4000u) {            /* format 1 */
+            uint32_t last_count = (uint32_t)(lw0 & 0xFFu) + 1u;
+            uint32_t last_lbn   = ((uint32_t)(lw0 & 0x3F00u) << 8) | lw1;
+            if (last_lbn + last_count == cur_lbn && last_count < 256u) {
+                uint32_t grow = 256u - last_count;
+                if (grow > remaining)
+                    grow = remaining;
+                uint32_t nc = last_count + grow;
+                uint32_t hi = (last_lbn >> 16) & 0x3F;
+                ed_put16(h + last_byte + 0,
+                         (uint16_t)(0x4000u | ((nc - 1u) & 0xFF) | (hi << 8)));
+                /* word1 (low-16 LBN) unchanged: the run still starts at last_lbn */
+                cur_lbn   += grow;
+                remaining -= grow;
+            }
+        }
+    }
 
-    /* FM2 format 1: word0 = 0x4000 | (count-1) | (high-6 LBN bits << 8),
-     * word1 = low 16 LBN bits. Inverse of ods2_fh2_map_walk()'s format-1
-     * decode; identical to ods2_writer.c's encode_map_extent(). */
-    high6 = (lbn >> 16) & 0x3F;
-    w0 = (uint16_t)(0x4000u | ((count - 1u) & 0xFF) | (high6 << 8));
-    w1 = (uint16_t)(lbn & 0xFFFF);
-    ed_put16(h + entry_byte + 0, w0);
-    ed_put16(h + entry_byte + 2, w1);
+    /* Append the remainder as consecutive format-1 pointers, <= 256 blocks each. */
+    while (remaining > 0) {
+        unsigned entry_byte = mpoffset * 2u + map_inuse * 2u;
+        uint32_t chunk = remaining > 256u ? 256u : remaining;
+        uint32_t high6;
+        uint16_t w0, w1;
 
-    h[offsetof(ods2_fh2_t, fh2_map_inuse)] = (uint8_t)(map_inuse + 2u);
+        /* Need 4 bytes (2 words) and must stay clear of the checksum word (510). */
+        if (entry_byte + 4u > offsetof(ods2_fh2_t, fh2_checksum))
+            return ODS2_ERR_NOSPACE;
+
+        /* FM2 format 1: word0 = 0x4000 | (count-1) | (high-6 LBN bits << 8),
+         * word1 = low 16 LBN bits. Inverse of ods2_fh2_map_walk()'s format-1
+         * decode; identical to ods2_writer.c's encode_map_extent(). */
+        high6 = (cur_lbn >> 16) & 0x3F;
+        w0 = (uint16_t)(0x4000u | ((chunk - 1u) & 0xFF) | (high6 << 8));
+        w1 = (uint16_t)(cur_lbn & 0xFFFF);
+        ed_put16(h + entry_byte + 0, w0);
+        ed_put16(h + entry_byte + 2, w1);
+
+        map_inuse += 2u;
+        h[offsetof(ods2_fh2_t, fh2_map_inuse)] = (uint8_t)map_inuse;
+        cur_lbn   += chunk;
+        remaining -= chunk;
+    }
+
     return ODS2_OK;
 }
 
@@ -341,6 +391,13 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
     case ODS2_FK_DATA:
         rtype = ODS2_RTYPE_VAR; rattrib = ODS2_RAT_CR; rsize = 0; maxrec = 0;
         break;
+    case ODS2_FK_DATA_STMLF:
+        /* RFM=STMLF (stream, LF-terminated), implied-CR -- the shape a live
+         * PRODUCT INSTALL must give a byte-stream text file (.COM/.DAT) so
+         * DCL/RMS read it one LF-record at a time (vms-3a8). Byte-for-byte the
+         * same preset ods2_writer.c's FH2_KIND_DATA_STMLF uses for the master. */
+        rtype = ODS2_RTYPE_STMLF; rattrib = ODS2_RAT_CR; rsize = 0; maxrec = 0;
+        break;
     case ODS2_FK_DATA_FIX:
         rtype = ODS2_RTYPE_FIX; rattrib = 0x00; rsize = 512; maxrec = 512;
         break;
@@ -357,7 +414,8 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
             ffbyte = 0;
         } else {
             efblk = total_count;
-            if ((kind == ODS2_FK_DATA || kind == ODS2_FK_DATA_FIX) && data_len > 0) {
+            if ((kind == ODS2_FK_DATA || kind == ODS2_FK_DATA_FIX ||
+                 kind == ODS2_FK_DATA_STMLF) && data_len > 0) {
                 size_t last = data_len - (size_t)(total_count - 1) * ODS2_BLOCK_SIZE;
                 ffbyte = (uint16_t)last;
             } else {
@@ -385,8 +443,17 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
     if (eff_owner.uic_group == 0 && eff_owner.uic_member == 0) {
         eff_owner.uic_member = 4; eff_owner.uic_group = 1;         /* SYSTEM [1,4] */
     }
+    /*
+     * When the caller supplies no explicit protection, take the per-file-CLASS
+     * default (vms-109): a runtime-created SYS$SYSTEM image must be
+     * World-activatable (0xAA00) exactly like the mastered ones, but a
+     * runtime-created SYSUAF.DAT must be World-DENIED (its Purdy hashes) and
+     * RIGHTSLIST.DAT World:R -- the SAME class->prot mapping ods2_class_fileprot()
+     * (ods2.h) gives the userspace writer, so protection does not depend on
+     * whether the file was mastered or created live over the ACP.
+     */
     if (eff_prot == 0)
-        eff_prot = (kind == ODS2_FK_DIR) ? 0xBA00u : 0xFA00u;
+        eff_prot = ods2_class_fileprot(name, kind == ODS2_FK_DIR, fidnum);
     ed_put16(h + offsetof(ods2_fh2_t, fh2_reserved1),
              (fidnum <= ODS2_RESFILES) ? 0xFE00u : 0u);
     ed_put16(h + offsetof(ods2_fh2_t, fh2_fileowner) + 0, eff_owner.uic_member);
@@ -418,6 +485,74 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
     }
 
     ed_put16(h + offsetof(ods2_fh2_t, fh2_checksum), ods2_block_checksum(h));
+    return ODS2_OK;
+}
+
+/*
+ * ods2_fh2_rename - rewrite an EXISTING file header's identification area (file
+ * name + version), and -- when `new_backlink` is non-NULL -- its directory
+ * back-link FID, for an IO$_MODIFY!IO$M_MOVE (rename/move) of the file
+ * (vms-de7, epic vms-208). PURE: edits the caller's 512-byte header block in
+ * place, touching ONLY the ident name / revision word / filename-extension and
+ * (optionally) fh2_backlink -- every other FH2 field (FID, RECATTR/EOF, map,
+ * owner/prot, create/revise dates) is left byte-for-byte unchanged, so the file
+ * KEEPS its identity and allocation and only its NAME (and parent) moves. The
+ * caller reseals with ods2_fh2_reseal() and writes the block back, exactly as
+ * for ods2_fh2_map_append()/ods2_fh2_set_eof().
+ *
+ * Every byte written is ods2_fh2_build()'s own ident-area / backlink layout
+ * (see its [F2]/[F11] provenance and lines 397-411): fi2_filename[20] holds the
+ * space-padded "NAME.TYPE;VERSION" head, fi2_revision the version word, and
+ * fi2_filenamext[66] the >20-char overflow. fh2_idoffset is read from the header
+ * itself (not the build-time constant) so a header laid down with a different
+ * ident offset still renames correctly. ODS2_ERR_ARGS on a bad block/name,
+ * ODS2_ERR_FORMAT if the header's ident offset does not fit a 512-byte block.
+ */
+ods2_status_t ods2_fh2_rename(void *header_block, const char *name,
+                              uint16_t version, const ods2_fid_t *new_backlink)
+{
+    uint8_t *h = (uint8_t *)header_block;
+    unsigned idoff_words;
+    uint8_t *id;
+    char idbuf[20 + 66 + 1];
+    size_t n, first_len, ext_len;
+
+    if (!h || !name || name[0] == '\0')
+        return ODS2_ERR_ARGS;
+
+    n = (size_t)snprintf(idbuf, sizeof(idbuf), "%s;%u", name, (unsigned)version);
+    if (n >= sizeof(idbuf))
+        return ODS2_ERR_ARGS;
+
+    idoff_words = h[offsetof(ods2_fh2_t, fh2_idoffset)];
+    if (idoff_words == 0 ||
+        (size_t)idoff_words * 2u + sizeof(ods2_ident_t) > ODS2_BLOCK_SIZE)
+        return ODS2_ERR_FORMAT;
+    id = h + (size_t)idoff_words * 2u;
+
+    /* ident name: "NAME.TYPE;VERSION", space-padded (ods2_fh2_build lines
+     * 397-411). Touch only fi2_filename[20] / fi2_revision / fi2_filenamext[66];
+     * fi2_credate / fi2_revdate etc. (bytes 22..53) are left as they are. */
+    first_len = (n < 20) ? n : 20;
+    ext_len   = (n > 20) ? (n - 20) : 0;
+    memset(id, ' ', 20);
+    memcpy(id, idbuf, first_len);
+    ed_put16(id + offsetof(ods2_ident_t, fi2_revision), version);
+    {
+        uint8_t *ext = id + offsetof(ods2_ident_t, fi2_filenamext);
+        memset(ext, ' ', sizeof(((ods2_ident_t *)0)->fi2_filenamext));
+        if (ext_len > 0)
+            memcpy(ext, idbuf + 20, ext_len);
+    }
+
+    /* fh2_backlink: the parent-directory FID ([F2]). Rewritten only on a MOVE
+     * across directories; a same-directory rename passes NULL and keeps it. */
+    if (new_backlink) {
+        ed_put16(h + offsetof(ods2_fh2_t, fh2_backlink) + 0, new_backlink->fid_num);
+        ed_put16(h + offsetof(ods2_fh2_t, fh2_backlink) + 2, new_backlink->fid_seq);
+        h[offsetof(ods2_fh2_t, fh2_backlink) + 4] = new_backlink->fid_rvn;
+        h[offsetof(ods2_fh2_t, fh2_backlink) + 5] = new_backlink->fid_nmx;
+    }
     return ODS2_OK;
 }
 

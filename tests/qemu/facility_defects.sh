@@ -202,10 +202,10 @@
 # libvmssys and vmsdcl alongside kernel/ when it checks that every anchor still
 # matches.
 #
-# vmsfs.ko (src/kernel/vmsfs/, and the two suites that drive it) is NOT an
-# executive facility and is NOT covered here. See scope_* below: that exclusion
-# is now DECLARED and CHECKED rather than falling out of a glob, because an
-# implicit narrowing is how a gate quietly stops meaning what its title says.
+# (vms-165: the vmsfs.ko VFS driver -- a SEPARATE filesystem module, not an
+# executive facility -- was retired, its ODS-2 paths folded into the executive
+# Files-11 ACP in vms.ko which this gate DOES cover. The scope_* declarations
+# below, which used to exclude vmsfs.ko's suites, are now empty -- see them.)
 #
 # `coverage` turns "every facility has a control" into a mechanical check at
 # THREE granularities -- translation unit, suite, and individual defect -- so
@@ -498,12 +498,16 @@ acp-writevb-extend-alloc-offbyone
 acp-search-cursor-skips-versions
 acp-create-header-slot-offbyone
 acp-fileop-no-dlm-lock
+rms-put-wrong-vbn
+p3-index-child-pointer-offbyone
+imgact-acp-valid-bytes-offbyone
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
 super-mode-escalation
 image-rundown-without-entry
 image-rundown-leaks-user-lock
+proc-rundown-locks-not-released
 imgact-p1-not-protected
 consumer-import-not-bound-to-resident
 publish-does-not-populate-registry
@@ -521,79 +525,37 @@ tcpip-ftp-get-length-dropped
 bgsock-recv-length-zeroed
 bgsock-poll-always-ready
 bgsock-getname-addr-zeroed
-vmsfs-mountvis-crossproc-resolve-disabled
 initialize-home-magic-not-written
-ods2-read-content-vbn
-dirlogical-compose-drops-common-member"
+dirlogical-compose-drops-common-member
+dcl-acp-search-fid-fabricated
+loginout-acp-auth-from-ods2
+multiuser-stage-shared-not-peruser"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
 #
 # The item's title is "every wired EXECUTIVE facility". These two declarations
 # say exactly what that set is and what it is not, so the coverage PASS line
-# cannot be read as a broader claim than it makes. Round 1 got this wrong by
-# omission: `coverage` globbed src/kernel/*.c only, which silently left
-# test_kmod_vmsfs and test_kmod_vmsfs_blkdev -- 2 of the 13 derived suites --
-# never proven capable of going red, while printing a PASS a reader would
-# reasonably take as covering the whole harness.
+# cannot be read as a broader claim than it makes.
 #
-# test_kmod_vmsfs_exepath (rd vms-00e) joins them for the same reason: it
-# mounts vmsfs and reads /proc/<pid>/exe and /proc/<pid>/fd/<n>, and never
-# opens /dev/vms. Its own red/green control is a vmsfs.ko mutation, not an
-# executive one -- it was measured failing 3 phases against the pre-fix
-# ->d_revalidate and passing 28/28 against the fixed one.
-#
-# test_kmod_vmsfs_rename (rd vms-8b3) joins them for the same reason: it
-# mounts a block-device vmsfs volume and exercises rename(2), whose own
-# red/green control is a vmsfs.ko mutation (vmsfs_blkdev_rename present vs.
-# absent), never an executive one -- it opens no /dev/vms and reaches no
-# vms_kif entry point.
-#
-# test_kmod_vmsfs_readdir (rd vms-93a) joins them for the same reason: it
-# mounts a BACKING-DIRECTORY (overlay) vmsfs volume and, from a separate
-# process, iterates the directory and opens a child by name. Its own
-# red/green control is a vmsfs.ko mutation (vmsfs_iterate_shared honouring
-# ctx->pos vs. re-scanning the backing dir from 0 every getdents()), never an
-# executive one -- it opens no /dev/vms and reaches no vms_kif entry point.
-#
-# SCOPE_OUT_UNIT_DIRS   directories under src/ whose .c files are NOT executive
-#                       translation units. Files there must NOT be named by any
-#                       defect (a control there would mean the scope statement
-#                       is wrong, not that coverage improved).
-# SCOPE_OUT_SUITES      derived tests/qemu suites with no facility control.
+# vms-165: the ONLY members of these scope-out sets were the vmsfs.ko VFS
+# driver's own suites (test_kmod_vmsfs*, which drove a SEPARATE filesystem
+# module, not an executive facility) and its src/kernel/vmsfs translation-unit
+# directory. The vmsfs VFS driver was retired (its ODS-2 code paths moved into
+# the executive Files-11 ACP in vms.ko, which THIS gate does cover), so those
+# suites and that directory no longer exist and both sets are now empty. There
+# is no longer any derived suite that is executive-independent, so nothing needs
+# scoping out.
 # ---------------------------------------------------------------------------
-SCOPE_OUT_UNIT_DIRS="kernel/vmsfs"
-SCOPE_OUT_SUITES="test_kmod_vmsfs test_kmod_vmsfs_blkdev test_kmod_vmsfs_exepath test_kmod_vmsfs_rename test_kmod_vmsfs_readdir test_kmod_vmsfs_sysgroup"
+SCOPE_OUT_UNIT_DIRS=""
+SCOPE_OUT_SUITES=""
 
 scope_out_why() {
     cat <<'EOF'
-vmsfs.ko is a SEPARATE kernel module with its own Makefile, its own
-insmod in init.sh and its own /proc/filesystems registration. It is a
-filesystem driver, not a facility of the executive: nothing in it is
-reached through /dev/vms, it exports no vms_kif entry point, and
-src/kernel/vms_module.c dispatches no ioctl to it. CI job 3c already
-treats it as independent -- in the executive-absent negative control
-vmsfs's suites are the ones REQUIRED to keep passing, precisely because
-they do not depend on the executive. Injecting an executive defect
-therefore cannot turn them red, and a control that could would be
-testing vmsfs, not the executive.
-CONSEQUENCE, STATED PLAINLY: this gate proves nothing about vmsfs.ko.
-These vmsfs suites are covered by CI job 3c, not by this one.
-
-test_kmod_vmsfs_sysgroup (vms-581, added by #284/#272) is here for exactly
-this reason and was added to SCOPE_OUT_SUITES by vms-6c6: the property it
-proves -- the System-category SOGW decision (UIC group <= MAXSYSGROUP) that
-lets a SYSTEM session create in a system-group directory -- is decided
-entirely inside vmsfs.ko's vmsfs_blkdev_permission() (src/kernel/vmsfs/,
-SCOPE_OUT_UNIT_DIRS above). It is reached through the VFS open(2) path, not
-through /dev/vms; no userspace consumer mirrors the decision (the create is
-a raw open(2), never sys$create/RMS), so the only control that could redden
-it is a kernel/vmsfs mutation -- which SCOPE_OUT_UNIT_DIRS forbids precisely
-because it would be testing vmsfs, not the executive. Its sibling
-test_kmod_vmsfs_mountvis (vms-8b6) is NOT scope-out: its cross-process
-resolution lives in a userspace library (src/vmsfs/vmsfs_device.c), a
-targetable product-half consumer of the kernel mount table, so vms-6c6
-anchors it with a real control instead.
+(none) -- vms-165 retired the vmsfs.ko VFS driver, which owned the only
+executive-independent suites this gate scoped out. Every derived suite now
+exercises an executive facility (the vms.ko lock manager / ASTs / event flags /
+access modes / Files-11 ACP), so there is nothing to declare out of scope.
 EOF
 }
 
@@ -1859,7 +1821,7 @@ EOF
         case "$_f" in
         facility)     echo "job-to-terminal binding (VMS_IOCTL_SETTERM, read back through GETJPI)";;
         targets)      echo "kernel-core/vms_devtab.c";;
-        suites_red)   echo "test_kmod_setterm test_syssvc_showterm";;
+        suites_red)   echo "test_kmod_setterm test_syssvc_showterm test_syssvc_spawn_users";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -1883,6 +1845,7 @@ the last row carries the single remaining characteristic, unpadded
 ...and the cleared Echo bit, in the grid cell the oracle prints it in
 ...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
 ...and grid row 1 is the oracle's bytes again, so neither is the grid
+the interactive session root is terminal-bound (SETTERM recorded the binding)
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
@@ -1915,6 +1878,17 @@ cannot make it red, and re-running the control after the round-3 edit
 confirmed exactly that: test_syssvc_showterm's contribution to the red set
 (require_fail's 1 plus this suite's share of knock_on_fail) shrank from 13 to
 10 without this manifest changing, until this entry was corrected to match.
+
+The last entry is test_syssvc_spawn_users' (vms-c17), and it is the SAME
+missing write observed by a THIRD suite from the SPAWN direction: that suite
+establishes a terminal-bound interactive job root and then, from a DIFFERENT
+process, reads the root's row back with $GETJPI. With the binding write gone
+the root's terminal comes back empty, so its one terminal-bound assertion goes
+red; the suite reports that single assertion and stops BEFORE its
+classification checks (which all depend on the binding and would otherwise
+cascade), so this mutation contributes exactly one entry here, not a shower.
+A bind/register defect makes that suite SKIP instead (it cannot build its
+subject at all), so it does not double-count against bind-client-no-register.
 
 What stays GREEN is what makes this isolated rather than a blunderbuss: the
 unbound run still names nothing, the SS$_IVCHAN refusal still fires, the row
@@ -4126,7 +4100,7 @@ EOF
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-1-3: SYSUAF.DAT is byte-identical after all three refusals
+1-3: the target SYSUAF record is byte-identical after all three refusals
 EOF
                       ;;
         knock_on_why)  echo "Each of the three calls the mutation turns from a refusal into a grant WRITES -- they all carry the same UAI\$_DEFDIR item -- so the file-unchanged check is the same single defect observed in the artifact instead of in the returned status. It is listed rather than dropped because it is the assertion that shows the refusals were refusals and not merely a status the service returned after doing the work anyway.";;
@@ -4191,40 +4165,34 @@ EOF
 
     rms-create-filespec-not-translated)
         case "$_f" in
-        facility)     echo "RMS filespec-to-Linux-path translation on create (src/vmsrms/rms_core.c resolve_filename(), called by both sys\$open() and sys\$create()) -- a userspace consumer of vmsfs's translation, the same class as the dcl-fident-*/dcl-fuser-* entries above, not a vms.ko-dispatched ioctl";;
+        facility)     echo "RMS VMS-filespec translation on create -- rms_acp_spec_parse() (src/vmsrms/rms_core.c), which splits a filespec (DKA0:[OVMXDIR]VMS221.DAT) into device / directory / ODS-2 name before the Files-11 ACP \$CREATE. RE-ANCHORED from resolve_filename() (retired with the POSIX \$CREATE by the vms-401/vms-5f0 flip); the Rule-9 ACP create path is the live consumer of this translation, the same product-half class as the dcl-fident-*/dcl-fuser-* entries above, not a vms.ko-dispatched ioctl";;
         targets)      echo "vmsrms/rms_core.c";;
         suites_red)   echo "test_syssvc_rms_scratch_create";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "resolve_filename() checked vmsfs_to_linux_path()'s return value with \`== 0\`, but that function returns a VMS status code (SS\$_NORMAL == 1 on success, odd = success -- \$VMS_STATUS_SUCCESS is the project-wide convention, never 0). The check never matched, so a VMS filespec (SYS\$SCRATCH:FOO.DAT) was never recognized as translated and silently fell through to being treated as a literal, relative Linux path -- resolving against the calling process's cwd instead of /vms/... This is the exact vms-221 regression: PARTS's sys\$create() under SYS\$SCRATCH: returned EACCES for a reason that had nothing to do with directory ownership, because it was never really looking at SYS\$SCRATCH: at all.";;
+        why)          echo "rms_acp_spec_parse() stops taking the ODS-2 NAME.TYP component from the post-split remainder \`p\` (device and [directory] already stripped) and takes the whole undivided filespec \`spec\` instead -- so DKA0:[OVMXDIR]VMS221.DAT resolves to a name of \"DKA0:[OVMXDIR]VMS221.DAT\" rather than \"VMS221.DAT\". This is the live-ACP shape of the exact vms-221 regression: a VMS filespec treated as a LITERAL instead of being translated/split. rms_impl_create copies that name into BOTH fab->_resolved_path (the RESOLVED_PATH the suite reads back) AND fop.name (the actual IO\$_CREATE target), so it is a genuine create-path defect, not a decorative echo. The old mutation reverted resolve_filename()'s \`== 0\` check, but with /dev/vms present and DKA0: mounted the create path is ACP-only (rms_acp_absent()==0) and never reaches resolve_filename(), so it could no longer redden the flip-rewritten suite.";;
         require_fail) cat <<'EOF'
-sys$create() of the RMS indexed file under SYS$SCRATCH: succeeded (the vms-221 EACCES is gone)
+sys$create() did NOT fall back to treating the raw VMS spec string as a literal path (no './' prefix, no undivided 'DKA0:...' device left glued to the name)
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-sys$create() resolved the VMS filespec SYS$SCRATCH:VMS221.DAT to its REAL translated Linux path under /vms/SYSTMP -- pins the vms-221 regression directly: resolve_filename() (src/vmsrms/rms_core.c) used to check vmsfs_to_linux_path()'s return value with `== 0`, but that function returns a VMS status code (SS$_NORMAL == 1 on success, odd = success); the check never matched, so EVERY VMS-spec candidate silently fell through to being treated as a literal (relative) Linux path instead of a translated one
-sys$create() did NOT fall back to treating the raw VMS spec string as a literal relative Linux path (the exact vms-221 regression shape)
-sys$connect() on the freshly created file succeeded
-sys$put() #100 (first periodic index save, fresh .rms_idx create) succeeded
-sys$put() #200 (SECOND periodic index save -- reopens the .rms_idx sidecar) succeeded
-every sys$put() across two periodic index-save reopens succeeded -- no silent mid-run EACCES
-sys$close() (final index flush, a THIRD reopen of .rms_idx) succeeded
+sys$create() parsed the filespec through the Files-11 ACP path (rms_acp_specs_from_fab): the device (DKA0:) and directory ([OVMXDIR]) were split off and the ODS-2 file name resolved to VMS221.DAT -- NOT treated as a literal Linux/relative path. The vms-221 regression (resolve_filename() checking vmsfs_to_linux_path()'s VMS status code with `== 0`, so odd=success never matched and every VMS spec fell through to a literal path) belongs to the retired POSIX $CREATE (rms_posix_create); the Rule-9 runtime creates on the mounted volume over the ACP, which is what this proves.
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
-ONE LINE, ONE EARLY RETURN, EVERY LATER STAGE FOLLOWS MECHANICALLY -- not a
-second property. With the check reverted, sys$create()'s open() targets an
-unwritable relative path and returns non-success; test_syssvc_rms_scratch_
-create.c's child_main() checks $VMS_STATUS_SUCCESS(st) immediately after and
-_exit(0)s right there (see the file: "if (!$VMS_STATUS_SUCCESS(st)) { _exit(0);
-}"), before sys$connect(), any sys$put(), or sys$close() ever run. Each of
-those stages' status line is therefore simply ABSENT from the child's
-transcript, which field_is_ok() reports as not-OK for every one of them, and
-the "ALL_205_PUTS_SUCCEEDED" line is never printed either since the put loop
-never executes. The two RESOLVED_PATH knock-ons are the same single symptom
-observed a second way -- through the path string sys$create() computed,
-rather than through the status it returned -- not an independent defect.
+ONE PROPERTY -- "the VMS filespec is TRANSLATED (device/dir/name split off),
+not treated as a raw literal" -- read through BOTH of the suite's RESOLVED_PATH
+echoes. require_fail reads it one way: the resolved path must NOT be the
+undivided "DKA0:..." literal. This knock-on reads the SAME corrupted
+fab->_resolved_path the other way: it must positively equal "VMS221.DAT", the
+split-off ODS-2 name. With rms_acp_spec_parse() taking the whole spec as the
+name, _resolved_path becomes "DKA0:[OVMXDIR]VMS221.DAT" -- so the "== VMS221.DAT"
+check fails at the same instant the "no DKA0: literal" check does. It is one
+mis-split observed twice, not a second defect. (The downstream create/connect/
+put/close/readback stages may also redden if the ACP rejects the malformed
+name; per vms-49f the exact red-set equality is a non-gating lint and the
+runtime teeth are check 4 -- this facility's own suite reddened.)
 EOF
                       ;;
         esac;;
@@ -4730,7 +4698,7 @@ the MMK-driven LIBRARIAN.EXE produced OVMXRT.OLB in the guest (build #2)
 OVMXRT.OLB is BYTE-IDENTICAL across two independent MMK-driven in-guest builds (deterministic archive, zero bash)
 the MMK-driven LINK.EXE produced OVMXRT.EXE in the guest
 OVMXRT.EXE is a valid OVMX image (ELF ET_DYN) -- LINK really linked it in QEMU
-OVMXRT.EXE carries PT_INTERP=IMGACT.EXE -- it is an image the kernel activates through IMGACT, not a bare ELF
+OVMXRT.EXE carries PT_INTERP=IMGACT.EXE (/run/ovmx-boot, ACP-staged) -- it is an image the kernel activates through IMGACT, not a bare ELF
 IMGACT activated the MMK-driven OVMXRT.EXE and it RAN to exit 216 (vms_strlen("OVMXRT")*36) -- the LINK pulled VMS_STRING from the .OLB and the image really runs
 EOF
                       ;;
@@ -4769,13 +4737,13 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_ioctl_acp_assign() stops FAILING when the named unit is not a mounted volume: the SS\$_NOSUCHDEV on the not-found (!vol) path becomes SS\$_NORMAL, so \$ASSIGN of the boot unit hands back a 'success' (and libvmssys then stores a PCB_CHAN_FILE slot) for a volume the executive does not have. That is the exact INV-6 facade the ACP exists to refuse -- a channel to nothing reported as an executive channel to something. The MOUNTED-volume \$ASSIGN is untouched (vol is found, so the mutated line never runs), so only the two fail-honest assertions -- \$ASSIGN before any \$MOUNT and \$ASSIGN after \$DISMOUNT -- can tell the difference, which is precisely the 'report success while sharing nothing' shape CLAUDE.md Rule 9 exists to catch.";;
+        why)          echo "vms_ioctl_acp_assign() stops FAILING when the named unit is not a mounted volume: the SS\$_DEVNOTMOUNT on the not-found (!vol) path becomes SS\$_NORMAL, so \$ASSIGN of the boot unit hands back a 'success' (and libvmssys then stores a PCB_CHAN_FILE slot) for a volume the executive does not have. That is the exact INV-6 facade the ACP exists to refuse -- a channel to nothing reported as an executive channel to something. The MOUNTED-volume \$ASSIGN is untouched (vol is found, so the mutated line never runs), so only the two fail-honest assertions -- \$ASSIGN before any \$MOUNT and \$ASSIGN after \$DISMOUNT -- can tell the difference, which is precisely the 'report success while sharing nothing' shape CLAUDE.md Rule 9 exists to catch.";;
         require_fail) cat <<'EOF'
-$ASSIGN of an UNMOUNTED boot unit returns SS$_NOSUCHDEV -- fail-honest, no fabricated channel
+$ASSIGN of an UNMOUNTED boot unit returns SS$_DEVNOTMOUNT -- fail-honest, no fabricated channel
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-after $DISMOUNT, $ASSIGN of the boot unit is SS$_NOSUCHDEV again (volume gone)
+after $DISMOUNT, $ASSIGN of the boot unit is SS$_DEVNOTMOUNT again (volume gone)
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
@@ -4874,6 +4842,55 @@ EOF
                       ;;
         knock_on_fail) echo "";;
         knock_on_why)  echo "";;
+        esac;;
+
+    rms-put-wrong-vbn)
+        case "$_f" in
+        facility)     echo "RMS reaches file data through the Files-11 (ODS-2) ACP: a record \$PUT is IO\$_WRITEVBLK at the record's {VBN, byte-offset} on the file's channel window, and a \$GET is IO\$_READVBLK at the same coordinate (src/vmsrms/rms_io.c, the block-I/O substrate under rms_seq/rel/idx; RMS \$OPEN/\$CREATE/\$CLOSE ride the ACP in rms_core.c), vms-bc7, epic vms-208";;
+        targets)      echo "vmsrms/rms_io.c";;
+        # test_syssvc_rms_p3_acp (vms-045) also rides rms_io_write() -- it authors
+        # a genuine Prolog-3 indexed file over the SAME IO$_WRITEVBLK substrate,
+        # so a $PUT that lands one VBN too high desynchronizes the on-disk index
+        # from the untouched read path and its keyed read-back cannot resolve.
+        suites_red)   echo "test_syssvc_rms_acp test_syssvc_rms_p3_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "rms_io_write() -- the \$PUT side of the substrate -- computes the transfer's starting virtual block as (cursor / 512) + 2 instead of + 1, so every record RMS writes lands ONE VBN too high on disk (IO\$_WRITEVBLK persists it there, and grows the file's EOF to cover the gap). The \$GET side, rms_io_read(), is untouched and still computes the correct VBN, so after \$CLOSE + re-\$OPEN a record read back at its true VBN finds the empty (never-written) block instead of the data. This is exactly the property RMS-over-\$QIO exists to provide -- that a record written through the window is the record read back through it (INV-6: it hit the disk WHERE RMS says it did, not a block off) -- so the byte-exact readback assertions redden while \$CREATE/\$CONNECT/\$PUT (which still 'succeed', just to the wrong block) stay green. The read path being the untouched half is what lets the round-trip catch the write-side fault.";;
+        require_fail) cat <<'EOF'
+RMS-over-ACP: all records round-tripped byte-exact through the ACP window
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    p3-index-child-pointer-offbyone)
+        case "$_f" in
+        facility)     echo "RMS Prolog-3 indexed READ engine's index descent -- p3_descend() picks the data bucket for a keyed \$GET by following each index record's 2-byte child pointer down the on-disk ISAM index (src/vmsrms/rms_prolog3.c, the keyed read path under the Files-11 ODS-2 ACP), vms-045, epic vms-208";;
+        targets)      echo "vmsrms/rms_prolog3.c";;
+        suites_red)   echo "test_syssvc_rms_p3_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "p3_descend() decodes each index record's child pointer as p3_le16(bkt + off) -- the 2-byte VBN of the subtree to follow to the data level. Reading it ONE BYTE too high (bkt + off + 1) yields a mis-aligned, garbage VBN, so rms_p3_get_by_key descends to the wrong data bucket and the keyed read-back cannot resolve the record. test_syssvc_rms_p3_acp authors a genuine Prolog-3 indexed file, \$PUTs NREC records forcing real data-bucket SPLITs, then reads EVERY record back BY KEY across the split -- so the corrupted descent reddens the byte-exact keyed read-back, and the durability re-read (same descent, rebuilt window) reddens with it. The \$PUT/\$CREATE writes and the 'a genuine bucket SPLIT occurred' bucket-count assertion do not descend the index to verify and stay green. Only keyed reads through this descent can tell; test_syssvc_rms_acp is a SEQUENTIAL RMS suite (sys\$put/sys\$get, no P3 index) and never reaches p3_descend, so nothing outside test_syssvc_rms_p3_acp reddens.";;
+        require_fail) cat <<'EOF'
+every record reads back BY KEY over the ACP, byte-exact, across splits
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+records survive DEACCESS+re-ACCESS (durable on the volume)
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME CORRUPTED DESCENT, SEEN AT THE DURABILITY RE-READ. After DEACCESS +
+re-ACCESS the suite rebinds the prologue from the on-disk image and calls
+read_all_by_key() a second time -- the same rms_p3_get_by_key index descent,
+still reading the child pointer one byte too high -- so the durable-volume
+re-read reddens with the first keyed read-back. The re-bind of the prologue and
+the split bucket-count check do not descend the index and stay green.
+EOF
+                      ;;
         esac;;
 
     acp-search-cursor-skips-versions)
@@ -4998,7 +5015,7 @@ EOF
                       ;;
         knock_on_fail) cat <<'EOF'
 the walk FELL THROUGH the empty node member and resolved on the COMMON member (search order)
-$GET/IO$_READVBLK reads SYSUAF.DAT byte-exact off the ODS-2 volume (no vmsfs_to_linux_path)
+$GET/IO$_READVBLK reads SYSUAF.DAT byte-exact off the ODS-2 volume -- VBN 1 begins with the shipped binary $UAFDEF Prolog-3 prolog (no vmsfs_to_linux_path)
 SYS$MANAGER:WELCOME.TXT resolves through the same rooted chain to a file FID
 EOF
                       ;;
@@ -5014,6 +5031,102 @@ DOES resolve (RMS$_FNF) and a concrete spec with a missing directory level
 (RMS$_DNF) -- never depend on the common member being present and stay green.
 EOF
                       ;;
+        esac;;
+
+    loginout-acp-auth-from-ods2)
+        case "$_f" in
+        facility)     echo "LOGINOUT authenticates from SYSUAF via the Files-11 (ODS-2) ACP: the SYSUAF / RIGHTSLIST / \$GETUAI readers open their file with RMS \$OPEN/\$GET over the mounted ODS-2 volume (rms_textfile_open -> sys\$open/sys\$get, routed by rms_impl_open to \$ASSIGN + IO\$_ACCESS + IO\$_READVBLK), NOT fopen on a /vms passthrough -- so a login reads its SYSUAF credential off the genuine ODS-2 SYS\$DISK (src/libvms/rtl/rms_textfile.c, vms-274, epic vms-208). A userspace consumer of the ACP facility, the same product-half class as the RMS/devtab reroutes.";;
+        targets)      echo "libvms/rtl/rms_textfile.c";;
+        suites_red)   echo "test_syssvc_loginout_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "rms_textfile_open() -- the sequential reader the per-boot LOGINOUT writers' read-backs (OPERATOR.LOG, LASTLOGIN) ride -- opens the file declaring the wrong record format (FAB\$C_VAR instead of FAB\$C_STMLF). Those files are stream-LF (one LF-terminated text record); read as VARIABLE, RMS takes the first two data bytes of each record as a binary record-length count, so every \$GET reframes the record into garbage and no record reads back byte-exact. The OPERATOR.LOG and LASTLOGIN read-backs therefore fail, which trips the suite's whole-suite gate (\"auth + boot writers are sourced from the ODS-2 volume via the ACP\") -- the exact property this reroute exists to provide (INV-6: a per-boot record is read byte-faithful from the ODS-2 platter through RMS-over-ACP, not a POSIX copy). The binary SYSUAF read rides the indexed \$UAFDEF engine (read_binary_sysuaf_system), NOT rms_textfile_open, so it is untouched; so are the \$CREATE/\$PUT that built the fixture, the OPERATOR.LOG/LASTLOGIN writers (their own \$PUT path), and the mount/dismount edges. The wrong-password and absent-account checks want a NEGATIVE result and still get one, so they stay green.";;
+        require_fail) cat <<'EOF'
+LOGINOUT auth + boot writers are sourced from the ODS-2 volume via the ACP
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+OPERATOR.LOG record read back byte-exact from the ODS-2 volume
+LASTLOGIN timestamp read back from the ODS-2 volume
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME MISFRAMED READER, SEEN AT EACH READ-BACK THAT RIDES rms_textfile_open().
+Once the reader opens as VARIABLE, every $GET misframes, so BOTH per-boot writer
+read-backs -- the OPERATOR.LOG record and the LASTLOGIN timestamp, each re-read
+through rms_textfile_open() -- redden (knock_on_fail); the whole-suite gate that
+asserts auth + writers are sourced from the ODS-2 volume (require_fail) reddens
+with them because it fires exactly when any earlier check failed. The binary
+SYSUAF read (read_binary_sysuaf_system over the $UAFDEF indexed engine) does NOT
+ride rms_textfile_open and stays green; the OPERATOR.LOG APPEND and LASTLOGIN
+WRITE themselves use $PUT/$CREATE (the writer path, untouched, still stream-LF)
+and stay green; and the dismounted-read, absent-file, and product-fail-honest
+checks all expect a NEGATIVE result (a NULL handle / not-found) and stay green
+regardless of record format.
+EOF
+                      ;;
+        esac;;
+
+    multiuser-stage-shared-not-peruser)
+        case "$_f" in
+        facility)     echo "per-user private image staging for a NON-ROOT VMS session (vms-a86f). LOGINOUT setuid()s a session onto its SYSUAF UIC (SYSTEM = uid 4), so a session is non-root; the atomic flip stages an image the kernel must execve() into OVMX_BOOT_STAGE_DIR, root-owned 0755. A non-root session cannot write that shared directory, so DCL's resolver stages a not-pre-staged image (SYS\$SYSTEM:PARTS.EXE the first \$ PARTS) into a PER-USER-owned /run/ovmx-boot/<uid>/ (0700) instead -- genuine ACP bytes, no world-writable dir. This is a userspace staging behaviour (the same product-half class as scratch-dir-owner-not-system), not a vms.ko facility, admitted here because tests/qemu/test_syssvc_multiuser_stage.c is discovered by the same test_syssvc_* glob cmd_coverage floors.";;
+        # NOT a src/kernel executive facility -- the QEMU KE rig never boots
+        # PID 1 / DCL, so dcl_resolve_activatable_acp is not linked into this
+        # suite's binary and a mutation to it cannot reach the suite (the same
+        # reason scratch-dir-owner-not-system targets its own test source). The
+        # suite carries the staging recipe itself (its own mkdir(0700) +
+        # rms_stage_over_acp to a per-user path), so THAT is the copy the
+        # mutation edits: it redirects the per-user stage back into the shared
+        # root-owned directory -- exactly the pre-fix behaviour -- and a non-root
+        # rms_stage_over_acp into a root-owned 0755 dir fails EACCES.
+        # ../ is relative to the src-root cmd_apply is given (src/), a sibling of
+        # tests/ in every checkout this runs against.
+        targets)      echo "../tests/qemu/test_syssvc_multiuser_stage.c";;
+        suites_red)   echo "test_syssvc_multiuser_stage";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "the suite stages the image into the shared root-owned OVMX_BOOT_STAGE_DIR instead of the per-user /run/ovmx-boot/<uid>/ it owns. As the non-root SYSTEM UIC, open(O_CREAT) in that root-owned 0755 directory is EACCES, so rms_stage_over_acp returns non-success and the per-user-staging-succeeds assertion reddens; the image never lands at the per-user path, so its owner and owner-exec read-backs redden too. The ACP READ probe (to owned /tmp) and the assertion that the shared-dir stage FAILS both want their existing outcomes and stay green; the per-user directory is still created 0700, so the not-world-writable assertion stays green.";;
+        require_fail) cat <<'EOF'
+non-root staging into per-user private /run/ovmx-boot/<uid>/ SUCCEEDS
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the per-user staged image is owned by the activating non-root uid
+the per-user staged image is owner-executable
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME MISDIRECTED STAGE, SEEN AT EACH READ-BACK OF THE PER-USER FILE. Once
+the per-user stage is redirected into the shared root-owned directory, the
+non-root open(O_CREAT) fails EACCES: the per-user-staging-succeeds check reddens
+(require_fail), and because nothing was written at the per-user path, the two
+stat()-based read-backs of that file -- its owner and its owner-exec bit
+(knock_on_fail) -- redden with it. The ACP read probe to /tmp still succeeds
+(non-root CAN read the volume), the shared-dir-stage-FAILS check still gets its
+negative outcome, and the per-user directory is still mkdir(0700)'d before the
+stage, so its not-world-writable check stays green -- so exactly these three
+assertions move, no more.
+EOF
+                      ;;
+        esac;;
+
+    imgact-acp-valid-bytes-offbyone)
+        case "$_f" in
+        facility)     echo "IMGACT image reads over the Files-11 (ODS-2) ACP -- the freestanding activator opens an image by IO\$_ACCESS (walking its directory chain) and reads its header + PT_LOAD segments by IO\$_READVBLK, decoding the accessed file's valid-byte count from its on-disk FH2 (efblk/ffbyte) so a read never over-reads past end-of-file, vms-3e8e, epic vms-208";;
+        targets)      echo "imgact/imgact_acp.c";;
+        suites_red)   echo "test_syssvc_imgact_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_access_name() -- the IO\$_ACCESS helper that decodes the accessed image file's total valid-byte count from its FH2 -- computes (efblk - 1) * 512 + ffbyte + 1, one byte too many. That count is the file window's extent the reader clamps every IO\$_READVBLK to, so IMGACT would believe the image is one byte longer than it is. The over-count is HARMLESS to every in-bounds read -- the ELF header, the program-header table and each PT_LOAD segment all lie well inside the real file, so each imgact_acp_pread still clamps to their own lengths and returns byte-exact data -- which is exactly why only the assertion that reads the valid count BACK off the accessed file can tell the difference: the byte-exact header/phdr/segment/whole-image reads, the directory-walk open, and the fail-honest NOSUCHFILE/NOSUCHDEV checks all stay green, and only the on-disk-geometry assertion reddens. INV-6's shape: the accessed file's real size is a fact the executive holds on disk, not a value the reader may inflate.";;
+        require_fail) cat <<'EOF'
+the accessed image's valid-byte count (1424) matches the on-disk FH2
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
         esac;;
 
     p0-map-not-recorded)
@@ -5214,6 +5327,26 @@ EOF
                       ;;
         knock_on_fail) echo "";;
         knock_on_why)  echo "";;
+        esac;;
+
+    proc-rundown-locks-not-released)
+        case "$_f" in
+        facility)     echo "process rundown: lock/EF/channel release at task death, via BOTH the /dev/vms .release path and the lazy reaper (vms_proc_free_claimed -> vms_proc_release_locks, vms-ff8)";;
+        targets)      echo "kernel/vms_module.c";;
+        suites_red)   echo "test_syssvc_rundown_ff8";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_proc_free_claimed() stops calling vms_proc_release_locks(proc), so the locks a dead subject held are NEVER released as its PCB is freed -- neither on the synchronous .release path (a subject that owns its /dev/vms channel exits) nor on the lazy vms_proc_reap_dead() path (a shared-fd subject reaped by a later process-table op). The PCB is still unhashed and freed and the sibling AST / common-EF / channel releases in the same function are untouched, so rundown still 'happens' -- only the dead subject's still-granted lock survives on the resource, so a conflicting \$ENQ from a live process is denied forever. This is the exact rundown-completeness property vms-ff8 characterized: rundown must RELEASE the resources, not merely unhash the entry. Only the two assertions that re-take the resource after the subject dies can tell the difference.";;
+        require_fail) cat <<'EOF'
+A: after a fresh-fd subject's exit, EX+NOQUEUE granted with NO table op (SYNCHRONOUS .release rundown)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+B2: after an unrelated process-table op reaps the dead subject, the SAME $ENQ is granted (held only until the reap)
+EOF
+                      ;;
+        knock_on_why)  echo "SAME DEFECT, OBSERVED ON THE OTHER RELEASE PATH. vms_proc_release_locks() is called once, from vms_proc_free_claimed(), which BOTH the synchronous .release (Part A, a fresh-fd subject's own exit) and the lazy reaper (Part B2, a shared-fd subject reaped by a later \$GETJPI) funnel through. With that one call removed, the fresh-fd subject's lock is not released at .release (require_fail) and the shared-fd subject's lock is not released when the reaper frees its PCB (this assertion) -- the two visible faces of the one skipped release, not two independent properties.";;
         esac;;
 
     imgact-p1-not-protected)
@@ -5467,8 +5600,8 @@ EOF
 
     rightslist-general-hex-as-decimal)
         case "$_f" in
-        facility)     echo "the rights database's GENERAL identifiers (RIGHTSLIST.DAT's %Xnnnnnnnn value notation, parse_value() in src/libvms/rtl/rightslist.c), vms-2f8";;
-        targets)      echo "libvms/rtl/rightslist.c";;
+        facility)     echo "the rights database's GENERAL identifiers -- the binary \$RDBDEF identifier VALUE decoded from RIGHTSLIST.DAT and returned by the executive \$ASCTOID (rightslist_live_asctoid_rf in src/vmsrms/rightslist_live.c), vms-2f8/vms-f15a";;
+        targets)      echo "vmsrms/rightslist_live.c";;
         # test_syssvc_ident.c's own LOCAL assertion (a GENERAL identifier,
         # same reader, same %X notation) is a genuine, measured knock-on --
         # see knock_on_why. Nothing else in this manifest's known suites
@@ -5481,7 +5614,7 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "parse_value()'s %Xnnnnnnnn branch -- the notation every GENERAL identifier in RIGHTSLIST.DAT (BATCH, DIALUP, INTERACTIVE, LOCAL, NETWORK, REMOTE) is written in -- stops reading the digits after %X as hexadecimal and reads them as decimal instead. The row is still FOUND (the colon-delimited scan, the name match and the case-insensitive compare are all untouched); only the value column is misread, so rightslist_name_to_value()/rightslist_value_to_name() answer a wrong number for every general identifier while the UIC branch ([g,m], a few lines below, OCTAL) is a completely different code path and is not reached by this edit at all.";;
+        why)          echo "RE-ANCHORED (vms-f15a flipped RIGHTSLIST to the binary \$RDBDEF; parse_value()'s ASCII %Xnnnnnnnn branch this defect used to mutate was DELETED with the ASCII reader). It now guards the equivalent binary-path invariant: the identifier VALUE the executive \$ASCTOID returns must be the exact 32-bit value stored in the \$RDBDEF record. rightslist_live_asctoid_rf() copies out rdb_ident_value(&rec) after a NAME-key hit; the mutation masks off bit 31 (\`& 0x7FFFFFFFu\`) on that egress, so every GENERAL identifier -- all of which are 0x8000000n (BATCH..REMOTE) -- resolves to a wrong, sign-bit-cleared value (0x80000004 -> 4) while the record is still FOUND (the NAME-key lookup and the case-insensitive upcase are untouched) and the UIC path (derived from SYSUAF, a completely separate reader) is not reached by this edit at all.";;
         require_fail) cat <<'EOF'
 oracle: DCL prints -2147483644
 EOF
@@ -5532,19 +5665,17 @@ EOF
         case "$_f" in
         facility)     echo "SYSUAF.DAT's UIC fields -- the shared read radix (SYSUAF_UIC_RADIX, src/libvms/include/sysuaf.h, consulted only by sysuaf_lookup()'s field parse in src/libvms/rtl/sysuaf.c), vms-e60";;
         targets)      echo "libvms/include/sysuaf.h";;
-        # test_syssvc_rightslist.c's OWN UIC checks (DEFAULT/GUEST, via
-        # sysuaf_lookup()), test_syssvc_ident.c's DEFAULT checks (via the
-        # same reader, one layer up through F$IDENTIFIER) and
-        # test_syssvc_setuai.c's UIC-write-back readback (scenario 4) are
-        # genuine, MEASURED knock-on -- see knock_on_why. This suites_red set
-        # was corrected after running run_facility_negctl.sh for real: an
-        # earlier draft predicted setuai would be untouched (sysuaf_format_
-        # record(), the WRITER, uses a literal %o and does not consult this
-        # constant) -- true for the WRITE, but scenario 4 also READS the row
-        # back afterward through the same mutated sysuaf_lookup(), and the
-        # real run reddened it. Declared here rather than left as an
-        # unattributed stray, per this manifest's own method rule.
-        suites_red)   echo "test_syssvc_sysuaf_uic_base test_syssvc_rightslist test_syssvc_ident test_syssvc_setuai";;
+        # test_syssvc_sysuaf_uic_base.c's OWN UIC checks (DEFAULT/GUEST, via
+        # sysuaf_lookup()) and test_syssvc_setuai.c's UIC-write-back readback
+        # (scenario 4, which reads USER1's row back through sysuaf_lookup())
+        # are the ONLY suites this mutation reddens. Since vms-930 the
+        # identifier-resolution suites test_syssvc_rightslist and
+        # test_syssvc_ident source UIC identifiers from the world-readable
+        # RIGHTSLIST.DAT (a binary $RDBDEF longword, no text radix), NOT from
+        # SYSUAF -- so mutating SYSUAF_UIC_RADIX no longer reaches them. They
+        # were dropped from this red set when rightslist.c's SYSUAF fallback
+        # was removed; see knock_on_why.
+        suites_red)   echo "test_syssvc_sysuaf_uic_base test_syssvc_setuai";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -5556,68 +5687,52 @@ EOF
         knock_on_fail) cat <<'EOF'
 the oracle's 8388736; decimal parsing gives 13107400
 DEFAULT is NOT 13107400 (the decimal misreading vms-e60 filed)
-oracle %X00800080 = [200,200] OCTAL; decimal gives 13107400
-a shipped account that was never in any hardcoded table
-reverse resolves (oracle round-trips it)
-OVMX answered 13107201, having read VMS's octal UIC as decimal group 200 member 1
-the direction an earlier round deliberately left unmapped rather than add on the strength of symmetry
 the rewritten UIC GROUP field still reads 200 (octal, vms-e60)
 the rewritten UIC MEMBER field still reads 202 (octal, vms-e60)
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
-SAME CONSTANT, OBSERVED AT EVERY UIC READER -- FOUR OF THEM, ONE FOUND BY
-RUNNING IT. test_syssvc_sysuaf_uic_base.c drives sysuaf_lookup() directly
-for DEFAULT and GUEST (require_fail names GUEST's own check; knock_on_fail's
-first two lines are DEFAULT's check and its own regression-naming assertion,
-which now reads exactly the decimal value it exists to rule out).
-test_syssvc_rightslist.c reaches the SAME sysuaf_lookup() one layer up,
-through rightslist_name_to_value()'s UIC branch, for the SAME two accounts --
-both directions of its check_roundtrip("DEFAULT", ...) and
-check_roundtrip("GUEST", ...): each account still RESOLVES (sysuaf_lookup
-still finds the record; only the value is wrong), so it is the value-match
-and reverse-lookup halves of check_roundtrip that redden, not the "resolved
-at all" branch (that one requires resolution to fail outright, which this
-mutation does not cause). test_syssvc_ident.c reaches it a THIRD time,
-through F$IDENTIFIER's live DCL.EXE path, for DEFAULT only (ident.c never
-probes GUEST).
+SAME CONSTANT, OBSERVED AT THE TWO SUITES THAT STILL READ SYSUAF's UIC TEXT
+FIELDS. test_syssvc_sysuaf_uic_base.c drives sysuaf_lookup() directly for
+DEFAULT and GUEST (require_fail names GUEST's own check; knock_on_fail's first
+two lines are DEFAULT's check and its own regression-naming assertion, which
+now reads exactly the decimal value it exists to rule out).
 
-test_syssvc_setuai.c's scenario 4 is the FOURTH, and it was NOT predicted --
-an earlier draft of this entry reasoned "the writer uses a literal %o, so
-nothing that only writes SYSUAF.DAT is reached" and left setuai out of
-suites_red entirely. Running run_facility_negctl.sh for real reddened it
-anyway: scenario 4 does not just $SETUAI a new UIC, it reads USER1's rewritten
-row BACK afterward (row_field() against the same sysuaf_lookup()-backed
-record the read side of this mutation touches) to prove the write landed --
-so its readback, not its write, hits the mutated radix. Two assertions
-redden ("4: the rewritten UIC GROUP field still reads 200" and its MEMBER
-sibling), because USER1 ships 200|202, and decimal-reading those digits
-produces a different string than octal does. This is exactly the discipline
-this manifest's own header describes: an unpredicted red is declared here,
-not narrowed away or left as an unattributed stray.
+test_syssvc_setuai.c's scenario 4 is the second: it does not just $SETUAI a
+new UIC, it reads USER1's rewritten row BACK afterward (row_field() against the
+same sysuaf_lookup()-backed record the read side of this mutation touches) to
+prove the write landed -- so its readback, not its write, hits the mutated
+radix. Two assertions redden ("4: the rewritten UIC GROUP field still reads
+200" and its MEMBER sibling), because USER1 ships 200|202, and decimal-reading
+those digits produces a different string than octal does.
 
-WHAT STAYS GREEN, AND WHY. SYSTEM's UIC ([1,4]) is identical in both bases
-in every suite that checks it -- explicitly labelled LIVENESS ONLY in each
-of their own comments, for exactly this reason. rightslist.c's GENERAL
-identifiers (BATCH/DIALUP/INTERACTIVE/LOCAL/NETWORK/REMOTE) and its
-check_miss_value() calls never reach sysuaf_lookup() at all.
-test_syssvc_ident.c's LOCAL checks are the general-identifier path,
-untouched here (see rightslist-general-hex-as-decimal, the sibling defect
-for that branch). test_syssvc_setuai's OTHER scenarios (1-3, the SYSPRV
-refusal/grant checks) never read a UIC field back and stay green.
+WHAT STAYS GREEN, AND WHY. SYSTEM's UIC ([1,4]) is identical in both bases in
+every suite that checks it -- explicitly labelled LIVENESS ONLY in each of
+their own comments, for exactly this reason. THE IDENTIFIER-RESOLUTION SUITES
+NO LONGER REACH THIS CONSTANT (vms-930): test_syssvc_rightslist.c and
+test_syssvc_ident.c source BOTH general and UIC identifiers from the
+world-readable RIGHTSLIST.DAT ($RDBDEF binary longword, no text radix) after
+rightslist.c's SYSUAF fallback was removed, so mutating SYSUAF_UIC_RADIX does
+not touch their DEFAULT/GUEST resolutions at all -- they were in this red set
+only while rightslist_name_to_value() fell through to sysuaf_lookup(), and were
+dropped with that fallback. rightslist.c's GENERAL identifiers
+(BATCH/DIALUP/INTERACTIVE/LOCAL/NETWORK/REMOTE) and its check_miss_value()
+calls never reached sysuaf_lookup() to begin with. test_syssvc_setuai's OTHER
+scenarios (1-3, the SYSPRV refusal/grant checks) never read a UIC field back
+and stay green.
 EOF
                       ;;
         esac;;
 
     sysuaf-uic-writeback-decimal)
         case "$_f" in
-        facility)     echo "SYSUAF.DAT's UIC WRITE-BACK -- sysuaf_format_record()'s octal (%o) formatting of the UIC_GROUP/UIC_MEMBER columns (src/libvms/rtl/sysuaf.c, vms-e60). The WRITER half, the complement of sysuaf-uic-radix-decimal (which mutates the READER): a record's UIC round-trips only if the writer emits the same base the reader parses.";;
+        facility)     echo "SYSUAF.DAT's UIC WRITE-BACK -- sysuaf_view_to_raw()'s pack of the UIC_GROUP/UIC_MEMBER view fields into the binary \$UAFDEF uaf\$l_uic longword (src/libvms/rtl/sysuaf.c, vms-e60/vms-d92). The WRITER half: a record's UIC round-trips only if the writer packs the same group/member the reader unpacked.";;
         targets)      echo "libvms/rtl/sysuaf.c";;
         suites_red)   echo "test_syssvc_setuai";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "sysuaf_format_record() formats the two UIC fields with %o (octal, from the same SYSUAF_UIC_RADIX the parse uses). The mutation flips both %o to %u, so a rewritten record whose UIC digits differ between octal and decimal is written in DECIMAL. \$SETUAI's scenario 4 (test_syssvc_setuai) rewrites USER1, whose shipped 200|202 parses to struct 128|130 (decimal): with %o the writer emits '200'|'202' (unchanged), with %u it emits '128'|'130'. The suite reads the rewritten row's FIELD TEXT back with row_field() and asserts it still reads 200 / 202 -- so the %u write reddens exactly those two assertions. MEASURED (vms-f57): strtoul(\"200\",8)=128, strtoul(\"202\",8)=130; snprintf %o of 128/130 = '200'/'202', %u = '128'/'130'. This is DISTINCT from sysuaf-uic-radix-decimal: that entry mutates the READER radix (8->10) so the same round-trip corrupts through the read side (read decimal 200, write %o -> '310'); this one holds the reader octal and proves the WRITER's %o is itself load-bearing. No other qemu suite writes a record via sysuaf_format_record() and then reads a UIC field back (test_syssvc_authorize's session only EXITs; scenario 4 is the sole UIC write-back readback in the suite set), so the mutation reddens nothing outside test_syssvc_setuai.";;
+        why)          echo "RE-ANCHORED (vms-d92 flipped SYSUAF to the binary \$UAFDEF; the ASCII sysuaf_format_record() %o UIC formatting this defect used to flip to %u was DELETED with the ASCII writer). It now guards the equivalent binary-path invariant: sysuaf_view_to_raw() must pack the account's own uic_group/uic_member back into uaf\$l_uic as ((group<<16)|member). \$SETUAI folds its text edits into the binary record through sysuaf_view_to_raw() before the ACP write-back (src/libvms/syssvc/sys_uai.c), so scenario 4's rewrite of USER1 rides it. The mutation SWAPS the two fields (packs ((member<<16)|group)), so USER1's struct 128|130 (which the shipped SYSUAF carries as octal 200|202) is written back with group and member exchanged -- the read-back then reports group 202 / member 200, reddening the suite's two field-text assertions (\"still reads 200\" / \"still reads 202\") exactly. Only \$SETUAI's UIC write-back reaches sysuaf_view_to_raw() and reads a UIC field back afterward, so the mutation reddens nothing outside test_syssvc_setuai. NOTE (teeth caveat, for CI/run_facility_negctl.sh): test_syssvc_setuai reads SYSUAF via the /vms passthrough while \$SETUAI now writes the binary record over the ACP -- if that passthrough-vs-ACP convergence is not what the suite fixture exercises, this control's end-to-end bite must be confirmed in CI (see vms-5f0 report).";;
         require_fail) cat <<'EOF'
 4: the rewritten UIC GROUP field still reads 200 (octal, vms-e60)
 4: the rewritten UIC MEMBER field still reads 202 (octal, vms-e60)
@@ -5717,34 +5832,18 @@ EOF
         esac;;
 
     # -------------------------------------------------------------------
-    # vms-6c6: two suites #284/#272 (vms-8b6, vms-cf62) left with NO
-    # per-facility negative control -- the same coverage-gate hole
-    # vms-6d6/#293 closed for the lnm search-list suites. Baselined before
-    # this change: `coverage` named both in "NAMED BY NO defect's suites_red"
-    # and "in-scope suite(s) with NO anchor at all". The THIRD suite in that
-    # baseline, test_kmod_vmsfs_sysgroup, is NOT anchored here: its property
-    # (the System-category SOGW decision) lives entirely in vmsfs.ko
-    # (kernel/vmsfs, SCOPE_OUT_UNIT_DIRS), which this executive gate declares
-    # out of scope, so it is moved to SCOPE_OUT_SUITES with its siblings --
-    # see the scope_out_why note and the vms-6c6 rd trail.
+    # vms-6c6 / vms-165: the two vms-8b6/#284 cross-process mount-visibility
+    # controls (vmsfs-mountvis-crossproc-resolve-disabled) and the
+    # kernel-resident ODS-2 content read control (ods2-read-content-vbn) were
+    # RETIRED with the vmsfs VFS driver: their anchor suites
+    # (test_kmod_vmsfs_mountvis, test_kmod_ods2_codec) are deleted, and the
+    # mount-visibility path they exercised is moot now that no unit can mount as
+    # a `vmsfs' type. The genuine ODS-2 content-read correctness is still
+    # POSITIVELY proven by the surviving test_syssvc_acp_* suites (acp_rw /
+    # acp_search read [OVMXDIR]HELLO.TXT through the executive ACP and byte-
+    # compare against the committed golden); re-adding an explicit fault-injection
+    # facility control anchored to those ACP suites is a tracked follow-up.
     # -------------------------------------------------------------------
-
-    vmsfs-mountvis-crossproc-resolve-disabled)
-        case "$_f" in
-        facility)     echo "cross-process device-mount VISIBILITY -- the executive/system-wide resolution of a MOUNTed unit through the kernel's own mount table (vmsfs_device_resolve_executive, src/vmsfs/vmsfs_device.c, vms-8b6). A VMS mount is EXECUTIVE state: a unit MOUNTed by one process must resolve for a SEPARATE process (an exec'd AUTHORIZE.EXE, SYSGEN.EXE, any RUN'd image). The per-process device_table cannot carry that, so a table miss consults /proc/mounts -- the kernel's own mount table, global and cross-process. This is the userspace consumer of that executive-owned state (the same product-half class as the devtab/rms translation entries, INV-6), not a vms.ko-dispatched ioctl.";;
-        targets)      echo "vmsfs/vmsfs_device.c";;
-        suites_red)   echo "test_kmod_vmsfs_mountvis";;
-        blind_suites) echo "";;
-        blind_why)    echo "";;
-        isolation)    echo "isolated";;
-        why)          echo "vmsfs_device_resolve_executive() stops consulting the kernel mount table on a per-process device_table miss: the guard \`if (!mount_table_has(mp))\` is forced true (\`if (1 || !mount_table_has(mp))\`), so every dynamically-MOUNTed unit resolves SS\$_NOSUCHDEV for a process that did not itself mount it -- the exact per-process view vms-8b6 converted away from. DCL.EXE (a separate process) can no longer resolve DKA100: mounted by the test process and falls back to the system disk, where the volume's distinctive HELLO.TXT does not exist. DKA0: never reaches this path (seeded into device_table at startup), so every suite that only touches the system disk stays green; the unmounted-unit negative control (DKA200:) still returns NOSUCHDEV, so nothing is fabricated. One guard forced true.";;
-        require_fail) cat <<'EOF'
-cross-process: DCL resolves DKA100: (mounted by another process) and reads HELLO.TXT off it -- the mounted unit is visible and readable
-EOF
-                      ;;
-        knock_on_fail) echo "";;
-        knock_on_why)  echo "";;
-        esac;;
 
     initialize-home-magic-not-written)
         case "$_f" in
@@ -5763,21 +5862,26 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
-    ods2-read-content-vbn)
+    dcl-acp-search-fid-fabricated)
         case "$_f" in
-        facility)     echo "genuine ODS-2 codec, kernel-resident CONTENT read (ods2_bdev_read_file over the block-backed reader compiled into vmsfs.ko's ods2ro presentation, rd vms-dcd)";;
-        targets)      echo "vmsfs/ods2/ods2_path.c";;
-        suites_red)   echo "test_kmod_ods2_codec";;
+        facility)     echo "DCL file access via RMS/\$QIO-to-ACP: DCL DIRECTORY /FULL and the F\$SEARCH lexical reach files through RMS \$SEARCH, which returns each wildcard match's GENUINE ODS-2 File ID from the executive directory context (rms_search_fid over vms_kif_acp_acpcontrol; src/vmsrms/rms_search.c, consumed by src/vmsdcl/dcl_filespec.c dcl_rms_dir_*), vms-481, epic vms-208";;
+        targets)      echo "vmsrms/rms_search.c";;
+        suites_red)   echo "test_syssvc_dcl_acp";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "ods2_bdev_read_file()'s per-extent loop reads each of a file's data blocks at its retrieval-pointer LBN (ext->lbn + k). The mutation reads ext->lbn + k + 1 -- one block too far -- so the KERNEL-RESIDENT codec returns the WRONG content bytes for [OVMXDIR]HELLO.TXT, while its length, its INDEXF.SYS header/FID lookup and the directory walk (all different code paths) stay correct: mount, both directory listings, stat size and read length all still pass. The read-back therefore differs from the COMMITTED golden (tests/ods2/ovmxdir_hello.golden, immune to this codec mutation because it is not regenerated from the codec), and ONLY the byte-identical assertion reddens. One wrong VBN in the content read.";;
+        why)          echo "rms_impl_search() records the match's File ID number the ACP directory search returned (\`ctx->fid_num = a.fid_num;\`) so rms_search_fid() can hand DIRECTORY /FULL the REAL id. The mutation adds one (\`ctx->fid_num = a.fid_num + 1;\`), so every File ID F\$SEARCH/DIRECTORY reports is fabricated one too high while the match NAME, VERSION and iteration ORDER (from the resultant name + out_version, untouched) stay correct. Only the assertions that check the File ID against the codec-deterministic fixture (A.TXT;3=14, ;2=13, ;1=12, B.TXT;1=16) redden; the RMS\$_NMF exhaustion, the SET DEFAULT directory check and the byte-exact TYPE/COPY/CREATE round-trips all read a DIFFERENT source (rms_file_attr / rms_io) and stay green -- which is exactly the point: the search FID is not synthesized, it is the on-disk one (INV-6). After substitution the original text is gone, so a second apply matches nothing (the no-op selftest requires).";;
         require_fail) cat <<'EOF'
-BYTE-IDENTICAL: kernel-resident codec read == committed golden
+F$SEARCH/DIRECTORY match 1 = A.TXT version 3, real File ID 14 (highest first)
 EOF
                       ;;
-        knock_on_fail) echo "";;
-        knock_on_why)  echo "";;
+        knock_on_fail) cat <<'EOF'
+F$SEARCH match 2 = A.TXT version 2, real File ID 13 (versions descending)
+F$SEARCH match 3 = A.TXT version 1, real File ID 12
+F$SEARCH match 4 = B.TXT version 1, real File ID 16 (B.LOG excluded by .TXT)
+EOF
+                      ;;
+        knock_on_why)  echo "the same fabricated-FID mutation shifts every match's reported File ID, so all four *.TXT matches read one too high; match 1 is the require_fail, the rest are its knock-ons.";;
         esac;;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
@@ -6243,14 +6347,28 @@ apply_edit() {
         sed -i 's|    if (chown(path, (uid_t)SYSTEM_UIC_MEMBER, (gid_t)SYSTEM_UIC_GROUP) != 0)|    if (chown(path, (uid_t)0, (gid_t)SYSTEM_UIC_GROUP) != 0) /* NEGCTL scratch-dir-owner-not-system: SYSTEM no longer owns [SYSTMP]/[USERS], only shares their group */|' "$_file";;
 
     rms-create-filespec-not-translated)
-        # Unique text in the file -- resolve_filename()'s own
-        # vmsfs_to_linux_path() success check, the exact line vms-221 fixed.
-        # Reverting $VMS_STATUS_SUCCESS(...) back to `== 0` (the original
-        # bug: vmsfs_to_linux_path() returns a VMS status code, SS$_NORMAL
-        # == 1 on success, never 0) makes the check never match again, so a
-        # second apply finds no $VMS_STATUS_SUCCESS(...) text left inside
-        # the `if (` and is the no-op selftest requires.
-        sed -i 's|if (\$VMS_STATUS_SUCCESS(vmsfs_to_linux_path(spec, linux_path, sizeof(linux_path)))) {|if (vmsfs_to_linux_path(spec, linux_path, sizeof(linux_path)) == 0) { /* NEGCTL rms-create-filespec-not-translated */|' "$_file";;
+        # RE-ANCHORED (vms-401/vms-5f0 atomic flip retired the POSIX $CREATE
+        # this defect used to mutate). The old mutation reverted
+        # resolve_filename()'s vmsfs_to_linux_path() `== 0` check in
+        # rms_posix_create() -- but the Rule-9 runtime, with /dev/vms present
+        # and DKA0: mounted, ALWAYS takes the Files-11 ACP create path
+        # (rms_impl_create, rms_acp_absent()==0), which never calls
+        # resolve_filename() at all, so the mutation could no longer redden
+        # the rewritten suite. It now mutates the EQUIVALENT live invariant:
+        # rms_acp_spec_parse()'s NAME component (rms_core.c) must be the
+        # post-split remainder of the filespec -- the device (DKA0:) and
+        # directory ([OVMXDIR]) split off, only the ODS-2 file name left --
+        # NOT the raw undivided literal. Taking the whole `spec` as the name
+        # instead of the split `p` is the exact vms-221 shape on the live
+        # ACP path: the VMS filespec treated as a literal, never translated.
+        # rms_impl_create copies sp.name into both fab->_resolved_path (the
+        # RESOLVED_PATH the suite asserts on) AND fop.name (the ACP create
+        # target), so the corruption is a genuine create-path defect, not a
+        # decorative echo. UNIQUE TEXT: `strncpy(rest, p, sizeof(rest) - 1);`
+        # occurs once, in rms_acp_spec_parse()'s NAME.TYP;VER split; a second
+        # apply finds no `strncpy(rest, p, ...)` left and is the no-op selftest
+        # requires.
+        sed -i 's|strncpy(rest, p, sizeof(rest) - 1);|strncpy(rest, spec, sizeof(rest) - 1); /* NEGCTL rms-create-filespec-not-translated: filespec taken undivided, not split/translated */|' "$_file";;
 
     lnm-delete-noop)
         # UNIQUE TEXT: `e->in_use = 0;` occurs only in vms_ioctl_lnm_delete.
@@ -6377,10 +6495,11 @@ apply_edit() {
 
     acp-assign-unmounted-fabricates-channel)
         # RANGE-ANCHORED to vms_ioctl_acp_assign's own body: the comment-bearing
-        # `args.status = SS__NOSUCHDEV;    /* not a mounted volume -- fail honest
-        # */` occurs exactly once, on the !vol (not-a-mounted-volume) path. The
-        # file's OTHER SS__NOSUCHDEV is in vms_ioctl_acp_dmount, a different
-        # handler, so the /^long vms_ioctl_acp_assign/,/^}$/ range confines the
+        # `args.status = SS__DEVNOTMOUNT;  /* device present, not a mounted volume
+        # -- fail honest (vms-03b: NOT executive-absent NOSUCHDEV) */` occurs
+        # exactly once, on the !vol (not-a-mounted-volume) path. The file's OTHER
+        # SS__DEVNOTMOUNT uses are in different handlers ($MOUNT/IO$_ACCESS/...),
+        # so the /^long vms_ioctl_acp_assign/,/^}$/ range confines the
         # substitution to $ASSIGN's own fail-honest answer. Flipping it to
         # SS__NORMAL makes $ASSIGN report success for a unit that is not a
         # mounted volume -- the INV-6 facade (a channel to a volume the executive
@@ -6388,7 +6507,7 @@ apply_edit() {
         # never runs), so only the two fail-honest assertions redden. The
         # replacement does not contain the original comment text, so a second
         # apply matches nothing (the no-op selftest requires).
-        sed -i '/^long vms_ioctl_acp_assign/,/^}$/ s|args.status = SS__NOSUCHDEV;    /\* not a mounted volume -- fail honest \*/|args.status = SS__NORMAL; /* NEGCTL acp-assign-unmounted-fabricates-channel (was SS__NOSUCHDEV) */|' "$_file";;
+        sed -i '/^long vms_ioctl_acp_assign/,/^}$/ s|args.status = SS__DEVNOTMOUNT;  /\* device present, not a mounted volume -- fail honest (vms-03b: NOT executive-absent NOSUCHDEV) \*/|args.status = SS__NORMAL; /* NEGCTL acp-assign-unmounted-fabricates-channel (was SS__DEVNOTMOUNT) */|' "$_file";;
 
     acp-mount-nonods2-accepted)
         # ANCHORED to the single acp_validate_ods2() call in vms_ioctl_acp_mount:
@@ -6465,6 +6584,18 @@ apply_edit() {
         # resolution assertions redden. After substitution the original text is
         # gone, so a second apply matches nothing (the no-op selftest requires).
         sed -i 's|for (uint8_t i = 0; i < n \&\& \*count < max_out; i++) {|for (uint8_t i = 0; i < 1 \&\& *count < max_out; i++) { /* NEGCTL dirlogical-compose-drops-common-member */|' "$_file";;
+
+    imgact-acp-valid-bytes-offbyone)
+        # UNIQUE TEXT, no range anchor needed: `(efblk - 1u) * 512u` is the only
+        # valid-byte-count decode in imgact_acp.c (acp_access_name). Dropping the
+        # `- 1u` makes the accessed file's valid count one block too high, so the
+        # reader believes the image is 512 bytes longer than it is. Every in-bounds
+        # read (header, phdr table, each PT_LOAD, the whole 1424-byte image) still
+        # clamps to its own length and returns byte-exact data, so only the suite's
+        # on-disk-geometry assertion (valid == 1424) reddens. After substitution
+        # the `(efblk - 1u)` text is gone, so a second apply matches nothing (the
+        # no-op selftest requires).
+        sed -i 's|(efblk - 1u) \* 512u|efblk * 512u /* NEGCTL imgact-acp-valid-bytes-offbyone: valid overcounts by a block */|' "$_file";;
 
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =
@@ -6557,6 +6688,18 @@ apply_edit() {
         # $_file for this defect (targets is kernel/vms_access.c), so it is
         # unaffected.
         sed -i 's|    vms_proc_rundown_locks(proc, rundown_mode);|    /* NEGCTL image-rundown-leaks-user-lock: image locks not released */|' "$_file";;
+
+    proc-rundown-locks-not-released)
+        # UNIQUE TEXT, no range anchor needed: vms_proc_release_locks(proc) is
+        # called exactly once in kernel/vms_module.c -- the release block of
+        # vms_proc_free_claimed(), the single teardown funnel reached by BOTH
+        # vms_dev_release() (synchronous .release) and vms_proc_reap_dead()
+        # (the lazy reaper). Replacing that one call with a comment leaves the
+        # sibling AST/common-EF/channel releases and the kfree_rcu untouched,
+        # so the PCB is still freed and unhashed; only the dead subject's locks
+        # stop being released. The definition in kernel/vms_lock.c is a
+        # different file, never $_file for this defect (targets kernel/vms_module.c).
+        sed -i 's|    vms_proc_release_locks(proc);|    /* NEGCTL proc-rundown-locks-not-released: dead proc locks not released */|' "$_file";;
 
     imgact-p1-not-protected)
         # UNIQUE TEXT, no range anchor needed: the RO protect is the only
@@ -6663,11 +6806,17 @@ apply_edit() {
         sed -i '/^    e->scope_key = scope_key;$/,/^    e->name_length/ s|^    e->num_equiv = a->num_equiv;$|    e->num_equiv = 1; /* NEGCTL lnm-searchlist-equiv-truncated */|' "$_file";;
 
     rightslist-general-hex-as-decimal)
-        # UNIQUE TEXT: this is the only strtoul(..., 16) call in the file --
-        # parse_value()'s %Xnnnnnnnn branch. The UIC branch a few lines below
-        # uses base 8 twice and is untouched. Idempotent: the edit removes
-        # the literal `16)` this pattern matches.
-        sed -i 's|strtoul(s + 2, \&end, 16);|strtoul(s + 2, \&end, 10); /* NEGCTL rightslist-general-hex-as-decimal */|' "$_file";;
+        # RE-ANCHORED (vms-f15a): the ASCII parse_value() %Xnnnnnnnn branch this
+        # used to mutate was DELETED with the ASCII rights reader when RIGHTSLIST
+        # flipped to the binary $RDBDEF. UNIQUE TEXT: the sole
+        # `*value = rdb_ident_value(&rec);` egress of rightslist_live_asctoid_rf()
+        # in rightslist_live.c -- where the executive $ASCTOID hands back the
+        # binary $RDBDEF identifier value after a NAME-key hit. Masking off bit 31
+        # turns every GENERAL identifier (all 0x8000000n) into a wrong value
+        # (0x80000004 -> 4) while the record is still FOUND. Idempotent: after the
+        # edit the `(&rec);` this pattern matches is gone (now
+        # `(&rec) & 0x7FFFFFFFu;`), so a second apply is a no-op.
+        sed -i 's|\*value = rdb_ident_value(&rec);|*value = rdb_ident_value(\&rec) \& 0x7FFFFFFFu; /* NEGCTL rightslist-general-hex-as-decimal */|' "$_file";;
 
     sysuaf-uic-radix-decimal)
         # UNIQUE TEXT: the sole #define. Both strtoul() call sites in
@@ -6677,13 +6826,16 @@ apply_edit() {
         sed -i 's|^#define SYSUAF_UIC_RADIX     8$|#define SYSUAF_UIC_RADIX     10  /* NEGCTL sysuaf-uic-radix-decimal */|' "$_file";;
 
     sysuaf-uic-writeback-decimal)
-        # Flip the WRITER's octal UIC formatting to decimal. UNIQUE TEXT: the
-        # two sysuaf_format_record() snprintf format strings are the only
-        # `%o|%o` in the file (the with-LGICMD and without-LGICMD variants).
-        # Idempotent: the edit removes the `%o|%o` each pattern matches, so a
-        # second apply finds nothing.
-        sed -i 's@"%s|%s|%o|%o|%s|%s|%s|%s"@"%s|%s|%u|%u|%s|%s|%s|%s" /* NEGCTL sysuaf-uic-writeback-decimal */@' "$_file"
-        sed -i 's@"%s|%s|%o|%o|%s|%s|%s"@"%s|%s|%u|%u|%s|%s|%s" /* NEGCTL sysuaf-uic-writeback-decimal */@' "$_file";;
+        # RE-ANCHORED (vms-d92): the ASCII sysuaf_format_record() %o UIC writer
+        # this used to flip to %u was DELETED with the ASCII writer when SYSUAF
+        # flipped to the binary $UAFDEF. UNIQUE TEXT: the sole UIC pack in
+        # sysuaf_view_to_raw() -- `((rec->uic_group & 0xffffu) << 16) |
+        # (rec->uic_member & 0xffffu))` occurs once in the file. Swapping the two
+        # fields writes the account's UIC back with group and member exchanged,
+        # so USER1's 200|202 read-back reports 202|200. Idempotent: after the edit
+        # the group-first pattern is gone (member is now the high half), so a
+        # second apply matches nothing -- BROKEN FIXTURE, as selftest requires.
+        sed -i 's@((rec->uic_group & 0xffffu) << 16) | (rec->uic_member & 0xffffu));@((rec->uic_member \& 0xffffu) << 16) | (rec->uic_group \& 0xffffu)); /* NEGCTL sysuaf-uic-writeback-decimal */@' "$_file";;
 
     bg-recv-length-zeroed)
         # RANGE-ANCHORED to vms_ioctl_bg_recv's own body: the 8-space
@@ -6729,15 +6881,6 @@ apply_edit() {
         # no-op -- BROKEN FIXTURE, as selftest requires.
         sed -i 's@args.sin_addr   = sin->sin_addr.s_addr;     /\* NEGCTL bgsock-getname-addr-zeroed \*/@args.sin_addr   = 0; /* NEGCTL bgsock-getname-addr-zeroed */@' "$_file";;
 
-    vmsfs-mountvis-crossproc-resolve-disabled)
-        # UNIQUE TEXT: vmsfs_device_resolve_executive's own /proc/mounts guard;
-        # `if (!mount_table_has(mp))` occurs once in the file. Forcing it true
-        # with `1 ||` makes every cross-process resolve of a MOUNTed unit return
-        # NOSUCHDEV. After substitution the guard reads
-        # `if (1 || !mount_table_has(mp))`, so a second apply finds no
-        # `if (!mount_table_has(mp))` left -- the no-op selftest requires.
-        sed -i 's|    if (!mount_table_has(mp))|    if (1 \|\| !mount_table_has(mp)) /* NEGCTL vmsfs-mountvis-crossproc-resolve-disabled */|' "$_file";;
-
     initialize-home-magic-not-written)
         # UNIQUE TEXT: the home-block magic write in format_volume
         # (`hb.hb_magic        = VMSFS_HOME_MAGIC;`) is the only occurrence of
@@ -6747,25 +6890,75 @@ apply_edit() {
         # requires.
         sed -i 's|hb.hb_magic        = VMSFS_HOME_MAGIC;|hb.hb_magic        = 0; /* NEGCTL initialize-home-magic-not-written */|' "$_file";;
 
-    ods2-read-content-vbn)
-        # UNIQUE TEXT: ods2_bdev_read_file()'s per-extent block read
-        # (`c->bv, ext->lbn + k,` -- the LBN argument to ods2_bdev_read_block)
-        # occurs once in ods2_path.c. Reading `ext->lbn + k + 1` returns the
-        # WRONG data block for a file's content while leaving length + metadata
-        # paths correct. After substitution no `c->bv, ext->lbn + k,` is left
-        # (now `+ k + 1,`) -- the no-op the idempotency selftest requires.
-        sed -i 's|c->bv, ext->lbn + k,|c->bv, ext->lbn + k + 1, /* NEGCTL ods2-read-content-vbn */|' "$_file";;
-
     acp-writevb-extend-alloc-offbyone)
         # UNIQUE TEXT: ods2_fh2_map_append()'s format-1 low-LBN word encode
-        # (`w1 = (uint16_t)(lbn & 0xFFFF);`) occurs once in ods2_edit.c. Encoding
-        # (lbn + 1) records the newly allocated extent ONE LBN too high in the
+        # (`w1 = (uint16_t)(cur_lbn & 0xFFFF);`) occurs once in ods2_edit.c. (The
+        # append loop splits a run into <=256-block format-1 pointers and advances
+        # cur_lbn per pointer; this is the per-pointer LBN low word.) Encoding
+        # (cur_lbn + 1) records the newly allocated extent ONE LBN too high in the
         # on-disk FH2 map, while the IO$_WRITEVBLK path writes the data (and its
         # in-memory channel window) at the correct LBN -- so only the re-ACCESS
         # read-back (window rebuilt from the corrupted on-disk map) reads the
-        # wrong block. After substitution no `(lbn & 0xFFFF)` is left (now
-        # `((lbn + 1u) & 0xFFFF)`) -- the no-op the idempotency selftest requires.
-        sed -i 's|w1 = (uint16_t)(lbn \& 0xFFFF);|w1 = (uint16_t)((lbn + 1u) \& 0xFFFF); /* NEGCTL acp-writevb-extend-alloc-offbyone */|' "$_file";;
+        # wrong block. After substitution no `(cur_lbn & 0xFFFF)` is left (now
+        # `((cur_lbn + 1u) & 0xFFFF)`) -- the no-op the idempotency selftest requires.
+        sed -i 's|w1 = (uint16_t)(cur_lbn \& 0xFFFF);|w1 = (uint16_t)((cur_lbn + 1u) \& 0xFFFF); /* NEGCTL acp-writevb-extend-alloc-offbyone */|' "$_file";;
+
+    rms-put-wrong-vbn)
+        # The `a.vbn = (cursor/512)+1u` line appears in BOTH rms_io_read_acp and
+        # rms_io_write_acp (the ACP backends; the public rms_io_write() is now a
+        # thin POSIX/ACP dispatch wrapper with no a.vbn of its own). Scope the
+        # mutation to the WRITE backend (/^static ssize_t rms_io_write_acp/,/^}$/)
+        # so ONLY the $PUT side is shifted -- the $GET side (rms_io_read_acp) must
+        # stay CORRECT or the round-trip could not catch it (both shifted would be
+        # self-consistent and escape). `+ 1u` -> `+ 2u` writes every record ONE
+        # VBN too high; the untouched read then finds the empty true VBN on
+        # re-$OPEN. A second apply finds no `+ 1u;` left in the range and is the
+        # no-op the idempotency selftest requires.
+        sed -i '/^static ssize_t rms_io_write_acp/,/^}$/ s|        a.vbn    = (uint32_t)(f->cursor / RMS_IO_BLK) + 1u;|        a.vbn    = (uint32_t)(f->cursor / RMS_IO_BLK) + 2u; /* NEGCTL rms-put-wrong-vbn */|' "$_file";;
+
+    p3-index-child-pointer-offbyone)
+        # UNIQUE TEXT: `p3_le16(bkt + off);` is the index-descent child-pointer
+        # decode in p3_descend() -- the only bare `p3_le16(bkt + off)` (all other
+        # sites carry a `+ P3_...` field offset). Reading `bkt + off + 1` mis-aligns
+        # the 2-byte child VBN, so the descent follows a garbage pointer and keyed
+        # reads miss. After substitution no `p3_le16(bkt + off);` is left (now
+        # `p3_le16(bkt + off + 1);`) -- the no-op the idempotency selftest requires.
+        sed -i 's|uint32_t child = p3_le16(bkt + off);|uint32_t child = p3_le16(bkt + off + 1); /* NEGCTL p3-index-child-pointer-offbyone */|' "$_file";;
+
+    dcl-acp-search-fid-fabricated)
+        # ANCHORED to the single match-FID record in rms_impl_search:
+        # `ctx->fid_num = a.fid_num;` occurs exactly once in rms_search.c.
+        # Adding one fabricates every File ID F$SEARCH/DIRECTORY reports (one too
+        # high), while the match name/version/order (resultant name + out_version,
+        # untouched) stay correct -- so only the fixture-FID assertions in
+        # test_syssvc_dcl_acp redden, and rms_file_attr / the byte-exact
+        # round-trips (a different source) stay green. After substitution no
+        # `= a.fid_num;` is left (now `= a.fid_num + 1;`) -- the no-op the
+        # idempotency selftest requires.
+        sed -i 's|ctx->fid_num = a.fid_num; ctx->fid_seq = a.fid_seq;|ctx->fid_num = a.fid_num + 1; ctx->fid_seq = a.fid_seq; /* NEGCTL dcl-acp-search-fid-fabricated */|' "$_file";;
+
+    loginout-acp-auth-from-ods2)
+        # `fab$b_rfm = FAB$C_STMLF;` appears in rms_textfile_open, _append_line
+        # and _write_line; scope the mutation to the READER (rms_textfile_open,
+        # /^rms_textfile_t \*rms_textfile_open/,/^}$/) so ONLY the read path
+        # misframes -- the writers must keep writing stream-LF or the record they
+        # store would not be the one a correct reader reads back. STMLF -> VAR
+        # makes RMS take each row's first two bytes as a length count, so the
+        # SYSUAF/LASTLOGIN read-backs reframe into garbage while the $PUT/$CREATE
+        # writers are untouched. After substitution no `FAB$C_STMLF` is left in
+        # the reader's range -- the no-op the idempotency selftest requires.
+        sed -i '/^rms_textfile_t \*rms_textfile_open/,/^}$/ s|    tf->fab.fab$b_rfm = FAB$C_STMLF;|    tf->fab.fab$b_rfm = FAB$C_VAR; /* NEGCTL loginout-acp-auth-from-ods2 */|' "$_file";;
+
+    multiuser-stage-shared-not-peruser)
+        # UNIQUE TEXT: `rms_stage_over_acp(IMG_SPEC, user_dest)` occurs once (the
+        # probe and shared-dir calls take `probe` / `shared_dest`). Redirecting
+        # the per-user stage back into the shared root-owned directory reproduces
+        # the pre-fix behaviour: as the non-root SYSTEM UIC, open(O_CREAT) in the
+        # root-owned 0755 dir is EACCES, so the per-user-succeeds assertion (and
+        # the two read-backs of the file that never landed) redden. After the
+        # substitution `, user_dest)` is gone -- a second apply is the no-op the
+        # idempotency selftest requires.
+        sed -i 's|st = rms_stage_over_acp(IMG_SPEC, user_dest);|st = rms_stage_over_acp(IMG_SPEC, shared_dest); /* NEGCTL multiuser-stage-shared-not-peruser */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
@@ -7437,12 +7630,11 @@ cmd_selftest() {
         # DCL/vmsfs-facing manager built on top of the executive-resident
         # LNM$SYSTEM), and a target this function cannot see would be
         # reported as a dead anchor on every run.
-        # vmsfs is copied too (vms-6c6): vmsfs-mountvis-crossproc-resolve-disabled
-        # targets vmsfs/vmsfs_device.c -- the userspace mount-visibility library
-        # (a product-half consumer of the kernel mount table, same class as the
-        # vmsrms/vmsdcl entries above), which vmsdcl links but is its own
-        # translation unit under src/vmsfs. Without it that defect's anchor would
-        # be reported as a dead fixture on every run.
+        # vmsfs is copied too: several defects target genuine ODS-2 codec
+        # translation units under src/vmsfs (e.g. acp-writevb-extend-alloc-offbyone
+        # -> vmsfs/ods2/ods2_edit.c, and the vmsfs/vmsfs_translate.c control) --
+        # product-half sources the executive ACP + RMS consume. Without this copy
+        # those defects' anchors would be reported as dead fixtures on every run.
         # vmstcpip is copied too (vms-6c6): tcpip-ftp-get-length-dropped targets
         # vmstcpip/services/tcpip_client.h -- the shared TCP/IP client engine
         # header the DCL FTP/TELNET verbs ship (a product-half consumer of the
@@ -7452,9 +7644,9 @@ cmd_selftest() {
         if ! cp -a "$_st_root/kernel" "$_st_root/kernel-core" \
                    "$_st_root/libvmssys" "$_st_root/libvms" \
                    "$_st_root/vmsdcl" "$_st_root/vmsrms" "$_st_root/vmslnm" \
-                   "$_st_root/vmsfs" "$_st_root/vmstcpip" \
+                   "$_st_root/vmsfs" "$_st_root/vmstcpip" "$_st_root/imgact" \
                    "$_st_tmp/tree/" 2>/dev/null; then
-            echo "FAIL: cannot copy $_st_root/{kernel,kernel-core,libvmssys,libvms,vmsdcl,vmsrms,vmslnm,vmsfs,vmstcpip} for the self-test"
+            echo "FAIL: cannot copy $_st_root/{kernel,kernel-core,libvmssys,libvms,vmsdcl,vmsrms,vmslnm,vmsfs,vmstcpip,imgact} for the self-test"
             rm -rf "$_st_tmp"
             return 2
         fi

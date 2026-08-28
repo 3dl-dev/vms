@@ -104,6 +104,14 @@ set -u
 SRC_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
 status=0
 
+# One work dir for the whole run: the per-file stripped buffer (see the scan
+# loop) and the obs/dec compare files (see comm below) all live here, cleaned
+# by a single trap. Done once so the negative control -- which runs this gate
+# 11 times over the full src/+tools/ tree -- does not pay for a second mktemp
+# and a trap override per invocation.
+WORK=$(mktemp -d) || exit 1
+trap 'rm -rf "$WORK"' EXIT INT TERM
+
 echo "vms-cb5 census gate: every writer and reader of the identity environment"
 echo "  variables, DERIVED from src/ AND tools/ (C comments stripped)"
 echo ""
@@ -183,19 +191,39 @@ FILES=$(find "$SRC_ROOT/src" "$SRC_ROOT/tools" \( -name '*.c' -o -name '*.h' \) 
 OBSERVED=""
 for f in $FILES; do
     [ -f "$f" ] || continue
+    # Cheap pre-filter: a file that mentions none of getenv/setenv/putenv
+    # ANYWHERE (the vast majority of the ~450 scanned) cannot contribute a
+    # census site, so skip the awk comment-strip and the 14 per-variable greps
+    # for it. This is a strict SUPERSET of the per-site patterns below (every
+    # one of them contains one of these three substrings), and comment
+    # stripping only removes characters, so a token absent from the raw file
+    # is absent after stripping too -- the observed census is identical, this
+    # just stops the scan from doing per-variable work on files that have no
+    # environment call at all.
+    grep -Eq 'getenv|setenv|putenv' "$f" || continue
     rel=${f#"$SRC_ROOT"/}
-    code=$(strip_comments "$f")
+    # Strip comments ONCE per file to a temp buffer, then grep that file
+    # directly. This is deliberately NOT `code=$(strip_comments) ; printf %s
+    # "$code" | grep`, which forked a subshell AND a printf for every one of
+    # the 14 greps below, per file -- ~29 processes per file over ~450 files,
+    # and this gate is itself run 11 times by the negative control, so that
+    # fork storm is what pushed env_identity_census_negctl past its CTest
+    # timeout on slower CI runners (vms-808). grep against the file sees the
+    # exact same stripped bytes as the old pipeline did (trailing blank lines
+    # that command substitution trimmed never match these patterns), so the
+    # observed census is unchanged -- only the process count drops by ~2x.
+    strip_comments "$f" > "$WORK/stripped"
     for v in $VARS; do
         # VMS_USERNAME_SIZE is a buffer-size macro, not the variable. The
         # trailing '"' in the patterns below already excludes it (the macro is
         # never written as VMS_USERNAME_SIZE" ), but the getenv/setenv verb is
         # what actually pins these to the environment API rather than to any
         # identifier that merely starts with the same characters.
-        if printf '%s\n' "$code" | grep -q "getenv( *\"$v\"\|getenv(\"$v\""; then
+        if grep -q "getenv( *\"$v\"\|getenv(\"$v\"" "$WORK/stripped"; then
             OBSERVED="$OBSERVED
 READ $rel $v"
         fi
-        if printf '%s\n' "$code" | grep -q "setenv( *\"$v\"\|setenv(\"$v\"\|putenv( *\"$v\|putenv(\"$v"; then
+        if grep -q "setenv( *\"$v\"\|setenv(\"$v\"\|putenv( *\"$v\|putenv(\"$v" "$WORK/stripped"; then
             OBSERVED="$OBSERVED
 WRITE $rel $v"
         fi
@@ -215,12 +243,11 @@ echo ""
 # 'Syntax error: "(" unexpected'. It did so INSIDE a pipeline, so `$?` was
 # the exit status of the last stage and the script still reported success.
 # Caught by running the file under dash on purpose; do not reintroduce.
-TMPD=$(mktemp -d) || exit 1
-trap 'rm -rf "$TMPD"' EXIT INT TERM
-printf '%s\n' "$OBS_SORTED" > "$TMPD/obs"
-printf '%s\n' "$DEC_SORTED" > "$TMPD/dec"
-UNDECLARED=$(comm -23 "$TMPD/obs" "$TMPD/dec")
-MISSING=$(comm -13 "$TMPD/obs" "$TMPD/dec")
+# ($WORK and its trap are set up once at the top of the file.)
+printf '%s\n' "$OBS_SORTED" > "$WORK/obs"
+printf '%s\n' "$DEC_SORTED" > "$WORK/dec"
+UNDECLARED=$(comm -23 "$WORK/obs" "$WORK/dec")
+MISSING=$(comm -13 "$WORK/obs" "$WORK/dec")
 
 if [ -n "$UNDECLARED" ]; then
     echo "FAIL: a writer or reader of an identity environment variable is not declared"

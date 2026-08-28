@@ -250,6 +250,43 @@ def main():
                 "/netbsd.GENERIC), flushed to disk; the next boot runs it")
             return 0
 
+        if mode == "purdy":
+            # Cross-width golden-vector gate (rd vms-b86). Mount the OVMX CD and
+            # run the static elf32-vax vmspurdy: it hashes the SEVEN real OpenVMS
+            # oracle vectors (the same table tests/libvms/test_purdy.c asserts on
+            # the host, LP64) and exits 0 iff every one is byte-exact on VAX
+            # (ILP32). This is the regression gate for the gcc-vax -O2 DImode
+            # miscompile that broke Purdy -- and thus VAX login -- until purdy.c's
+            # -O0 workaround. Pure userland: no module, no /dev/vms. DECISION is
+            # on rc (the real $?), never a substring of the echoed console.
+            rc, out = run(child,
+                          "ok=; for dev in /dev/racd0[a-z] /dev/racd1[a-z] "
+                          "/dev/cd0[a-z] /dev/cd1[a-z]; do "
+                          "  test -e $dev || continue; "
+                          "  if mount_cd9660 $dev /mnt 2>/dev/null; then "
+                          "    if test -f /mnt/vmspurdy; then ok=$dev; "
+                          "      cp /mnt/vmspurdy /root/vmspurdy && umount /mnt && "
+                          "      chmod +x /root/vmspurdy && break; "
+                          "    else umount /mnt 2>/dev/null; fi; "
+                          "  fi; done; "
+                          "test -n \"$ok\" || { echo NO_PURDY_CD; exit 1; }; "
+                          "/root/vmspurdy",
+                          cmd_timeout)
+            if rc != 0:
+                log("FAIL (rd vms-b86): vmspurdy returned nonzero -- the VAX Purdy "
+                    "hash diverges from the real OpenVMS oracle vectors on ILP32 "
+                    "(is purdy.c's -O0 workaround intact?). rc=%d" % rc)
+                return PROOF_FAILED
+            if "PURDY-VAX-PASS" not in out:
+                log("FAIL (rd vms-b86): vmspurdy exited 0 but PURDY-VAX-PASS was "
+                    "not in the output -- inconclusive")
+                return PROOF_FAILED
+            log("OK (rd vms-b86): PURDY-VAX-PASS -- all 7 real OpenVMS vectors "
+                "byte-exact on VAX/ILP32; the -O0 gcc-vax workaround holds and the "
+                "cross-width golden gate is green on both widths (host + VAX)")
+            run(child, "sync; mount -u -r / 2>/dev/null; sync", cmd_timeout)
+            return 0
+
         # ---- stage the artifacts from the OVMX CD --------------------------
         # Diagnostics first: MSCP CD naming on NetBSD/vax is not obvious, so log
         # the CD devices the kernel actually attached before we try to mount.

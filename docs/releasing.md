@@ -168,6 +168,50 @@ read by the site's drift gate at the tag, so they matter to a repo they do not
 live in. Do not remove or renumber them without matching the public Installation
 Guide's command block.
 
+## The downstream release cascade (every surface follows the tag)
+
+Cutting a tag is not the end of a release — a set of **public downstream
+surfaces** must reflect it too, or the project ships a cut that some surface
+silently contradicts. The **single source of truth is the newest release-like
+git tag** (the same set the Atom feed and `reconcile.py` derive from — there is
+no separate version ledger). Every surface below is either regenerated from that
+tag or verified against it; none is hand-maintained as its own record.
+
+| Surface | Where | Follows | Updated by |
+|---------|-------|---------|------------|
+| GitHub Release | `3dl-dev/vms` releases | the tag | `release.yml` on the tag push |
+| In-repo version | `src/libvms/include/ovmx_identity.h` | (drives the tag) | version-bump PR (INV-1) |
+| Atom release feed | `openvmx-site/atom.xml` | latest tag | `reconcile.py --feed-only` (in `track-release.yml`) |
+| Roadmap doc + site data | `docs/release-roadmap-to-1.0.md`, `openvmx-site/data/roadmap.json` | rd milestones | `reconcile.py` (conductor checkpoint) |
+| Product-edition labels | `openvmx-site` `index.html`, `docs/installation/index.html` (`data-ovmx-version`) | latest tag | `track-release.yml` label step |
+| In-browser demo image | `openvmx-site/boot/` (`DEPLOYED_TAG`, image, `qemu-worker.js` `PAYLOAD_VER`) | the tag it can be **cleanly captured** at | `track-release.yml` capture step (gated by `verify.js`) |
+| Visible demo badge | `openvmx-site` `index.html` (`data-demo-version`) | `boot/DEPLOYED_TAG` | `track-release.yml` capture step |
+
+**The demo may legitimately lag.** Its image is re-captured by snapshotting a
+running guest, and a cut whose first boot install-reboots can fail to produce a
+clean post-reboot login snapshot (`verify.js` refuses to ship a broken capture).
+When that happens the demo stays on the last-good release, and the lag must be
+made **explicit and tracked** in `openvmx-site/boot/DEMO_PIN.json`
+(`{pinned_to, blocked_from, reason, tracking}`) — never a silent stale. The
+label cascade is deliberately **decoupled** from the demo capture: a blocked
+demo never freezes the site's version text or feed.
+
+### Verification — `reconcile.py --check-cascade`
+
+```bash
+# From the vms repo root (needs the release tags fetched):
+python3 tools/roadmap/reconcile.py --check-cascade --site-dir ../openvmx-site
+```
+
+Given the latest tag, this asserts every surface above reports it — and that a
+demo behind the latest release carries a matching `DEMO_PIN.json` acknowledgment.
+It **exits non-zero** on any surface left behind, so "the demo shows V0.5 while
+V0.5-1 shipped" is a hard failure, not something a reader has to notice. The
+conductor runs it at each release checkpoint (alongside the `reconcile.py` site
+regen), and `openvmx-site/.github/workflows/cascade-verify.yml` runs it on every
+push/PR and on a schedule as a loud, build-free backstop (so a drift turns a
+commit status red rather than hiding in a failed capture job).
+
 ## Related
 
 - `docs/install-guide.md`, `docs/upgrade-guide.md` — the tested install/upgrade procedures.

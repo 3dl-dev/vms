@@ -24,7 +24,6 @@
  *   ovmx_boot_open_executive             -> open("/dev/vms", O_RDWR|O_CLOEXEC)
  *   ovmx_boot_system_disk_dev            -> "/dev/wd0"
  *   ovmx_boot_system_disk_present        -> stat("/dev/wd0") && S_ISBLK
- *   ovmx_boot_mount_system_disk          -> NetBSD mount(2) "vmsfs", fspec=dev
  *   ovmx_boot_power_off                  -> sync(); reboot(RB_HALT|RB_POWERDOWN)
  *
  * FAIL-HONEST (INV-6 / CLAUDE.md Rule 9). Exactly as on Linux, an op reports
@@ -486,32 +485,109 @@ int ovmx_boot_system_disk_present(void)
     return stat(OVMX_BOOT_SYSDISK_DEV, &st) == 0 && S_ISBLK(st.st_mode);
 }
 
-int ovmx_boot_mount_system_disk(const char *mountpoint)
+const char *ovmx_boot_system_disk_unit(void)
 {
-    /* NetBSD mount(2) carries the device INSIDE the fs args (fspec), unlike
-     * Linux's mount(dev, mp, type, ...). Every NetBSD disk filesystem's args
-     * struct begins with `char *fspec` (ffs / lfs / ext2fs / msdosfs / cd9660
-     * / ...); the OVMX ODS-2 vnode backend (rd vms-308 / vms-544d) uses exactly
-     * this shape -- `struct vmsfs_args { char *fspec; }`
-     * (src/kernel-netbsd/vmsfs/vmsfs_nb.h) -- so this modelled struct is the
-     * real args blob VFS_MOUNT consumes, byte-for-byte, not a stub.
-     *
-     * READ-WRITE (rd vms-e7a): the OVMX ODS-2 vnode backend now registers real
-     * write VOPs (VOP_SETATTR/WRITE/CREATE/MKDIR/REMOVE, alongside the
-     * existing VOP_LOOKUP/READ/READDIR/the exec-from-vmsfs pager), so the
-     * system volume mounts read-write here -- matching real VMS, which mounts
-     * its system disk read-write, and matching the Linux backend's mount mode.
-     * This is what lets PROVISION.EXE stamp UIC file ownership
-     * (provision_ownership()) and STARTUP write SYSUAF logs / account-dir
-     * files onto the mounted volume. tests/lab-vax/run-vmsfs.sh's read-only
-     * mount+read proof still passes MNT_RDONLY explicitly (a caller that asks
-     * for read-only still gets an honestly read-only mount: no bitmap load,
-     * every write VOP refuses with EROFS). A blank or unformatted volume still
-     * fails to mount (nonzero return), and PID 1 halts (it does NOT initialize
-     * or install -- design-init-scope.md §1). */
-    struct vmsfs_args { char *fspec; } args;
-    args.fspec = (char *)OVMX_BOOT_SYSDISK_DEV;
-    return mount("vmsfs", mountpoint, 0, &args, sizeof args);
+    return "DKA0:";
+}
+
+#if defined(OVMX_HAVE_ACP)
+#include "vms_kif.h"   /* vms_kif_acp_mount: $MOUNT over the executive ACP */
+#endif
+
+/* vms-d5d: $MOUNT SYS$DISK over the executive Files-11 ODS-2 ACP -- the VAX
+ * runtime re-target of the vms-5f0 flip. Mirrors ovmx_boot_linux.c's twin:
+ * vms_kif_acp_mount() the boot unit; an odd VMS status is success. On a non-ACP
+ * build there is no executive to mount against, so fail-honest (and never
+ * reached -- ovmx_init only takes the ACP mount when OVMX_HAVE_ACP). */
+int ovmx_boot_acp_mount_system_disk(void)
+{
+#if defined(OVMX_HAVE_ACP)
+    uint32_t st = vms_kif_acp_mount(ovmx_boot_system_disk_unit());
+    if (st & 1)          /* odd VMS status == success */
+        return 0;
+    return -1;
+#else
+    return -1;
+#endif
+}
+
+/* The boot path's whole system-disk mount, NetBSD side. Since vms-329 this is
+ * the executive ACP $MOUNT and NOTHING else: the vmsfs.ko load + VFS mount it
+ * used to perform are retired along with ovmx_boot_mount_system_disk() itself.
+ * There is deliberately NO fallback arm -- NetBSD's spec_vnops permits exactly
+ * ONE open of the backing block device, so the ACP $MOUNT and a vmsfs VFS mount
+ * of SYS$DISK can never coexist; a volume the ACP will not mount is a
+ * fail-honest halt in PID 1 (INV-6), never a quiet reversion to the retired
+ * path. */
+int ovmx_boot_mount_system_disk_native(void)
+{
+    return ovmx_boot_acp_mount_system_disk();
+}
+
+/*
+ * ovmx_boot_prepare_stage_dir - the NetBSD twin of the ACP-read boot bridge's
+ * writable staging directory (vms-8e8f, piece A of the VAX ACP flip vms-c45;
+ * Linux twin in ovmx_boot_linux.c).
+ *
+ * WHY A TWIN IS NEEDED AT ALL. The bridge itself is portable and SHARED: it
+ * reads each first-hop image off the genuine ODS-2 volume through the executive
+ * Files-11 ACP (IO$_ACCESS + IO$_READVBLK over /dev/vms, ovmx_boot_acp_read.c)
+ * and writes the bytes out with plain POSIX open/write. Exactly ONE thing about
+ * it is substrate-specific, and it is the reason ovmx_init.c cannot just call
+ * mkdir(): on Linux PID 1 boots on an initramfs that already IS a tmpfs, so the
+ * staging directory needs nothing but mkdir. On NetBSD/vax the root filesystem
+ * is a real on-disk FFS on wd0 -- staging the whole first-hop image set there
+ * would write the boot volume's shadow root on every boot. So this backend
+ * mounts a tmpfs OVER the directory, with the SAME ownership and mode the Linux
+ * initramfs gives it (root:wheel 0755), which is what the per-uid staging rules
+ * in ovmx_layout.h (ovmx_boot_stage_user_path, vms-a86f) assume: the shared
+ * directory is root-owned and NOT world-writable, so a non-root VMS session
+ * stages into its own 0700 subdirectory instead.
+ *
+ * Uses the same public, documented tmpfs_args(3)/mount(2) surface
+ * ovmx_boot_mount_kernel_filesystems() above already uses for /tmp and
+ * /dev/shm -- no new interface, no NetBSD source copied (CLAUDE.md Rule 8).
+ *
+ * FAIL-HONEST (INV-6): a directory that cannot be made, or a tmpfs that will
+ * not mount, returns -1 with the host's real errno and PID 1 halts. It never
+ * reports success on a directory the boot images cannot actually be written
+ * to -- that would surface three hops later as an unexplained execve failure.
+ * EBUSY from mount(2) means a tmpfs is already mounted there (this boot already
+ * ran the op), which is genuine success, not a fallback.
+ *
+ * READ-ONLY ROOT (vms-329). mount(2) never writes to the underlying filesystem,
+ * but mkdir(2) does. A NetBSD/vax root booted read-only therefore fails these
+ * two mkdirs with EROFS unless the mount point already exists -- so a shipped
+ * OVMX/NetBSD root carries /run/ovmx-boot the same way it carries /vms, /proc,
+ * /dev/pts and /dev/shm (tests/lab-vax/drive_boot_vax.py creates all five when
+ * it assembles the bootable disk). The mkdirs stay because a writable root is
+ * equally legal, and EROFS on a root that does NOT carry the directory still
+ * halts honestly rather than staging into nowhere.
+ *
+ * DEAD UNTIL WIRED: stage_boot_images() is compiled only when the ACP-read
+ * bridge TUs are linked in (OVMX_BOOT_ACP_BRIDGE), which the shipped VAX
+ * runtime recipe does not yet define -- the runtime cutover is vms-329. This
+ * op is proven to CROSS-COMPILE and be ILP32-clean for elf32-vax now
+ * (tools/cross-vax/build-acp-read-audit-vax.sh) so that cutover is a wiring
+ * change and not a compile hunt.
+ */
+int ovmx_boot_prepare_stage_dir(const char *dir)
+{
+    if (mkdir("/run", 0755) != 0 && errno != EEXIST)
+        return -1;
+    if (mkdir(dir, 0755) != 0 && errno != EEXIST)
+        return -1;
+
+    struct tmpfs_args ta;
+    memset(&ta, 0, sizeof ta);
+    ta.ta_version   = TMPFS_ARGS_VERSION;
+    ta.ta_root_uid  = 0;
+    ta.ta_root_gid  = 0;
+    ta.ta_root_mode = 0755;          /* root-owned, NOT world-writable */
+    if (mount("tmpfs", dir, 0, &ta, sizeof ta) != 0 && errno != EBUSY)
+        return -1;
+
+    return 0;
 }
 
 void ovmx_boot_power_off(void)

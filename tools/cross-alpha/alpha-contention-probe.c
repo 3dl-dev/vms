@@ -80,9 +80,9 @@ int main(void)
     setvbuf(stdout, NULL, _IONBF, 0);
 
     load_module("/vms.ko");
-    load_module("/vmsfs.ko");
-    int mrc = mount("/dev/vda", "/vms", "vmsfs", 0, NULL);
-    printf("HOLD: mounted rc=%d\n", mrc);
+    /* vms-165: no separate vmsfs.ko / `mount -t vmsfs` -- SYS$DISK is reached
+     * through the vms.ko Files-11 ODS-2 ACP over /dev/vms. This contention probe
+     * only needs the executive attachment held below. */
 
     /* Parent holds a /dev/vms executive attachment across the child's run --
      * the concurrent attachment that the lone-process probe lacked. */

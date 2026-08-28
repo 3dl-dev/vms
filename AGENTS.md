@@ -30,9 +30,9 @@ cd build && ctest --output-on-failure
 cmake -B build-static -DCMAKE_C_COMPILER=musl-gcc -DOVMX_STATIC=ON -DBUILD_TOOLS=ON
 cmake --build build-static -j$(nproc)
 
-# Kernel modules (need kernel headers)
+# Kernel module (needs kernel headers). vms.ko is the VMS executive; it carries
+# the Files-11 ODS-2 ACP (the legacy vmsfs.ko VFS driver was retired, vms-165).
 make -C src/kernel
-make -C src/kernel/vmsfs
 
 # QEMU kernel-module tests
 tests/qemu/run_tests.sh
@@ -67,6 +67,13 @@ accepted.
   generator and regenerate.
 - **VMS compatibility first.** When VMS behavior and implementation ease conflict, match VMS — or
   hide the difference honestly. See `docs/architecture.md`.
+- **Third-party software is a faithfulness ladder, not a vendor-and-adapt shortcut.** Do not vendor a
+  Linux program and minimally-adapt it to OVMX's surface. GCC, OpenSSH, and much else were *already
+  ported to VMS.* Build OVMX's VMS-compatibility surface (DECC$SHR/CRTL, RMS, the VMS socket API,
+  LINK.EXE/object/symbol-vector formats, TCP/IP services) **up the ladder until the existing VMS port
+  builds against it, unchanged.** A vendored-and-hacked Linux artifact is at best a *labelled
+  temporary bootstrap*; the deliverable is the VMS port compiling on OVMX. (tcc bootstraps the
+  userland today; binutils vendoring was ripped under this rule.)
 - **Conventions.** VMS status codes (odd = success) via `ssdef.h`; `src/libvmssys/` is freestanding
   (`-ffreestanding -fno-builtin`, no glibc); VMS naming (`sys$`, `lib$`, `str$`, `mth$`, `ots$`).
 

@@ -1,5 +1,15 @@
 # OpenSSH as a DE-VENEER map of the OVMX VMS-compat surface
 
+> **LADDER RECONCILE (operator 2026-08-22, Rule 1 / `vms-ports-build-ladder`):**
+> this map is exactly the right shape. The deliverable is *"the OpenVMS OpenSSH
+> port builds on OVMX over a VMS-faithful DECC\$SOCKET / \$QIO(BGn:) surface +
+> TCP/IP services (`vms-67f`)"* (`vms-9ef`) — build the compat ladder **up** until
+> the real VMS OpenSSH port links unchanged, never hand-roll a native SSH server
+> or minimally-adapt a Linux daemon down to an ad-hoc surface. The Tier A
+> de-veneer (`vms-4bf`, full DECC\$SOCKET surface so **unmodified** OpenSSH
+> dispatches every fd call to \$QIO) **is** the correct rung — keep and extend it
+> (`vms-99f`, `vms-9ac`, server path `vms-698`). Do not discard.
+
 > **STATUS (2026-08-15):** **Tier A LANDED** — the real DECC$SOCKET surface
 > (`getpeername`/`getsockname`/`setsockopt`/`getsockopt`/`fcntl O_NONBLOCK`)
 > resolves against the executive-resident kernel socket via `$QIO`

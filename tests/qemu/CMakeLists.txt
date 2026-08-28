@@ -73,7 +73,8 @@ function(qemu_syssvc_add_test name source)
         ${CMAKE_SOURCE_DIR}/src/vmstcpip/sockets
         # vmsfs_ondisk.h -- test_syssvc_initialize.c (vms-cf62) reads the raw
         # home block off the backing device to prove INITIALIZE wrote it there.
-        ${CMAKE_SOURCE_DIR}/src/kernel/vmsfs
+        # (relocated to src/vmsfs/include by vms-165.)
+        ${CMAKE_SOURCE_DIR}/src/vmsfs/include
         # ovmx_image.h / ovmx_symvec.h -- the OVMX symbol-vector image format the
         # in-process resident-import-binding test constructs against (vms-db2).
         # imgact_prodreg.h (a libvms public header) includes ovmx_image.h, so any
@@ -102,6 +103,113 @@ foreach(_src ${QEMU_SYSSVC_SOURCES})
     get_filename_component(_name ${_src} NAME_WE)
     qemu_syssvc_add_test(${_name} ${_src})
 endforeach()
+
+# test_arith_hparith (vms-db3, epic vms-8954): the Alpha FP-trap -> SS$_HPARITH
+# condition bridge. DELIBERATELY named test_arith_* (NOT test_syssvc_*): it is an
+# Alpha-only libvms RTL signal primitive, not a /dev/vms executive facility, so
+# it does not belong to the x86/arm per-facility negctl rig (which globs only
+# test_kmod_/test_syssvc_/test_imgact_ and has no qemu-system-alpha to run it).
+# It runs on the Alpha rig (tools/cross-alpha/run-syssvc-tests-alpha.sh), where
+# it is GREEN under the real kernel trap path. Registered explicitly here since
+# the test_syssvc_ glob above intentionally does not see it; the aggregate
+# qemu_syssvc_tests still builds it via the GLOBAL target list.
+qemu_syssvc_add_test(test_arith_hparith ${CMAKE_CURRENT_SOURCE_DIR}/test_arith_hparith.c)
+
+# ---------------------------------------------------------------------------
+# RMS-over-ACP force-bind (rms_acp_bind.c) -- OPT-IN, not blanket (vms-5f0).
+#
+# rms_acp_bind.c makes a STRONG reference to sys$open/$get/... so a suite that
+# reaches SYSUAF/RIGHTSLIST ONLY through the `#pragma weak` seam in
+# src/libvms/rtl/rms_textfile.c still pulls LIBVMSRMS in and reaches the real
+# ACP, instead of getting sys$open == NULL and failing every read as "not
+# found" (vms-058). See tests/qemu/rms_acp_bind.c for the full mechanism.
+#
+# WHY OPT-IN: a strong reference to the seven RMS entry points EXTRACTS the
+# whole vmsrms archive (RMS + the ODS-2 codec) into the static musl binary.
+# Applying it to ALL 31 syssvc suites via the shared recipe bloated the shared
+# kernel-test initramfs 31M->36M and overflowed the QEMU test-VM boot
+# ("Initramfs unpacking failed: write error", every shard died before shard
+# selection). So it is applied ONLY to the suites that (a) read an identity
+# file IN-PROCESS through the libvms reader AND (b) do NOT already carry a
+# strong sys$ RMS call of their own -- the four below. Suites that call
+# sys$create/$open directly (rms_acp, dcl_acp, scratch_writable, acp_*) already
+# pull vmsrms with no anchor; suites that read SYSUAF via a spawned external
+# image (ident->DCL.EXE, authorize/identcont->AUTHORIZE.EXE) need the bind in
+# that IMAGE's link script (mk_dcl.sh / mk_loginout.sh, the production seam,
+# vms-5f0 Fix 2), not in the test binary.
+#
+# test_syssvc_loginout_acp JOINED this list at vms-1df1. It USED to carry a
+# strong sys$create call (which pulled the RMS record services in for free), but
+# the vms-d92 atomic flip rewrote its SYSUAF authoring onto the binary $UAFDEF
+# engine (rms_open_named_handle + sysuaf_rms_*), so its ONLY remaining reach into
+# sys$create/$put/$open/$get/$connect is now the `#pragma weak` seam in
+# rms_textfile.c, used by the OPERATOR.LOG ($PUT-at-EOF) and LASTLOGIN
+# ($CREATE/$PUT) boot writers. Without the anchor those weak cells stay NULL,
+# rms_services_present() is FALSE, and both writers return -1 BEFORE any ACP call
+# -- the write assertions fail with no honest RMS status (the exact defect
+# rms_acp_bind.c closes). It already pulls the vmsrms archive + ODS-2 codec via
+# the $UAFDEF engine, so the anchor only adds the RMS record members (small).
+foreach(_anchored
+        test_syssvc_sysuaf_uic_base
+        test_syssvc_rightslist
+        test_syssvc_setuai
+        test_syssvc_loginout_acp)
+    if(TARGET ${_anchored})
+        target_sources(${_anchored} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/rms_acp_bind.c)
+    endif()
+endforeach()
+
+# test_arith_hparith (vms-db3, epic vms-8954): the Alpha FP-trap -> SS$_HPARITH
+# condition bridge, end to end under -static. Alpha-only (the test honest-skips
+# on other arches), so its two extra needs are guarded on the alpha target:
+#   1. arith_signal_bind.c as a PRIMARY object -- a strong ref to
+#      ovmx$arith_signal_anchor force-pulls src/libvms/rtl/arith_signal.o (and
+#      its image-start constructor) into the static image, the established
+#      -static weak-seam anchor pattern (src/vmslink/dcl_rms_bind.c). Without it
+#      the bridge's constructor is dropped and the auto-install CHECK fails.
+#   2. -mfp-trap-mode=sui so the test's FP divide is trap-enabling (a bare
+#      divide never traps regardless of FPCR), matching how a VMS image built
+#      for IEEE-trap FP compiles its arithmetic.
+if(TARGET test_arith_hparith AND CMAKE_SYSTEM_PROCESSOR STREQUAL "alpha")
+    target_sources(test_arith_hparith PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmslink/arith_signal_bind.c)
+    target_compile_options(test_arith_hparith PRIVATE -mieee -mfp-trap-mode=sui)
+endif()
+
+# test_syssvc_rms_p3_acp (vms-045) drives the runtime Prolog-3 indexed WRITE+READ
+# engine (src/vmsrms/rms_prolog3.c) over a real /dev/vms: it needs the engine's
+# private headers (rms_prolog3.h + rms_io.h, which define rms_file_t and the
+# create/put API) on its include path. The generic recipe links vmsrms already;
+# this only adds the src/vmsrms directory so the header resolves.
+if(TARGET test_syssvc_rms_p3_acp)
+    target_include_directories(test_syssvc_rms_p3_acp PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms
+        ${CMAKE_SOURCE_DIR}/src/kernel)
+endif()
+
+# test_syssvc_loginout_acp (vms-d92 atomic flip): authors + reads a BINARY
+# $UAFDEF SYSUAF over the ACP through the sysuaf_rms engine, so it needs the
+# engine's private headers (sysuaf_rms.h / rms_io.h) on its include path.
+if(TARGET test_syssvc_loginout_acp)
+    target_include_directories(test_syssvc_loginout_acp PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms)
+endif()
+
+# test_syssvc_imgact_acp (vms-3e8e) drives the EXACT freestanding ACP reader
+# IMGACT.EXE runs (src/imgact/imgact_acp.c) against a real /dev/vms: the generic
+# function above already registered the target off the glob, so augment it with
+# that one extra source and the imgact/kernel/qemu headers it needs
+# (imgact_acp.h, vms_ioctl.h + vms_acp.h, imgact_acp_fixture_elf.h). The test
+# provides the three host primitives imgact_acp.c calls on libc.
+if(TARGET test_syssvc_imgact_acp)
+    target_sources(test_syssvc_imgact_acp PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/imgact/imgact_acp.c)
+    target_include_directories(test_syssvc_imgact_acp PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/imgact
+        ${CMAKE_SOURCE_DIR}/src/kernel
+        ${CMAKE_CURRENT_SOURCE_DIR})
+endif()
 
 # ---------------------------------------------------------------------------
 # DEVICE-CORPUS PROGRAMS UNDER A REAL /dev/vms (vms-08c).
@@ -487,27 +595,15 @@ set_tests_properties(cluster_params_recnx_e2e PROPERTIES
     TIMEOUT 900)
 
 # ---------------------------------------------------------------------------
-# MOUNT/DISMOUNT ARE REAL mount(2)/umount(2) (vms-651).
-#
-# Boots the ACTUAL mastered bootable image TWICE against a SECOND, real
-# virtio disk (formatted VMSFS on the host first -- see run_mount_e2e.sh):
-# MOUNT DKA100:, CREATE a real file on it, DISMOUNT, re-MOUNT, then a full
-# QEMU process restart against the SAME disk file, proving the file landed
-# on the disk and not a tmpfs. See tests/qemu/test_mount_e2e.sh's header for
-# the full ground-source shape. Same opt-in convention as parts_demo_e2e
-# above, for the same reason (a real docker+QEMU boot, real minutes, must
-# not tax a bare `ctest` run's time budget).
-add_test(
-    NAME mount_e2e
-    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_mount_e2e.sh
-)
-set_tests_properties(mount_e2e PROPERTIES
-    LABELS "slow;qemu-full-boot"
-    SKIP_RETURN_CODE 77
-    TIMEOUT 900)
+# (vms-165: the mount_e2e ctest was retired with the vmsfs VFS driver. It drove
+# run_mount_e2e.sh / test_mount_e2e.sh, which formatted a second disk as the
+# legacy VMSFS type and MOUNTed it via a real mount(2)-as-vmsfs -- the exact path
+# vms-481 replaced with the executive Files-11 ACP $MOUNT and vms-165 deleted the
+# driver for. DCL MOUNT/DISMOUNT of a second ODS-2 volume through the ACP is
+# exercised by the QA-cluster acceptance gate and the sysboot proofs instead.)
 
 # ---------------------------------------------------------------------------
-# PRODUCT INSTALL onto a real vmsfs volume (vms-df9).
+# PRODUCT INSTALL onto a real ODS-2 volume (vms-df9).
 #
 # Boots the actual mastered bootable image, MOUNTs a second real virtio disk
 # (formatted VMSFS on the host first, same as mount_e2e above), PRODUCT
@@ -760,3 +856,30 @@ set_tests_properties(release_acceptance_e2e PROPERTIES
     LABELS "slow;qemu-full-boot"
     SKIP_RETURN_CODE 77
     TIMEOUT 2400)
+
+# ---------------------------------------------------------------------------
+# BOOT-AND-RUN-COMMANDS DCL/SHOW ACCEPTANCE GATE.
+#
+# THE HOLE THIS CLOSES: release_acceptance_e2e above boots, logs in, and then
+# checks only PRODUCT SHOW PRODUCT's version -- it never runs the commands a
+# user actually types. So V0.5-2 shipped with SHOW USERS empty, SHOW DEVICE
+# not Mounted, SHOW QUOTA fabricated, and WRITE F$xxx() printing the literal,
+# none caught. This gate boots the REAL runtime (the pre-mastered ODS-2
+# distribution disk), logs in SYSTEM/MANAGER, RUNS a battery of basic
+# DCL/SHOW commands, and asserts VMS-faithful output for each, with a
+# negative control per command segment. See test_dcl_acceptance_e2e.sh's
+# header for the battery and the bug each assertion guards.
+#
+# EXPECTED TO BE RED until the in-flight command fixes land; it must NOT be
+# weakened to go green. Same opt-in convention as the qemu-full-boot gates
+# above (OVMX_QEMU_FULL_E2E=1); .github/workflows/ci.yml's dcl-acceptance-e2e
+# job runs it for real on the release-cut path and treats a SKIP as a hard
+# failure.
+add_test(
+    NAME dcl_acceptance_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_dcl_acceptance_e2e.sh
+)
+set_tests_properties(dcl_acceptance_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 1200)

@@ -232,5 +232,23 @@ case "${MODE}" in
     fi
     die "NEGATIVE CONTROL DID NOT FAIL: harness passed (exit=${rc}) with the module unloaded -- no teeth"
     ;;
-  *) die "unknown mode '${MODE}' (want: prove | negctl)" ;;
+  purdy)
+    # Cross-width golden-vector gate (rd vms-b86): boot single-user + run the
+    # static elf32-vax vmspurdy; PURDY-VAX-PASS iff all 7 real OpenVMS oracle
+    # vectors are byte-exact on VAX/ILP32 (the same vectors tests/libvms/
+    # test_purdy.c asserts on the host, LP64). rc 0 = green. This is the
+    # regression gate that protects purdy.c's -O0 gcc-vax workaround.
+    rc=0
+    run_session purdy || rc=$?
+    if [ "${rc}" -eq 0 ]; then
+      log "======================================================================"
+      log "  PURDY-VAX PASSED (rd vms-b86): the 7 real OpenVMS Purdy vectors are"
+      log "  byte-exact on VAX/ILP32 -- the cross-width golden gate is green on"
+      log "  BOTH widths (host ctest test_purdy + this VAX run)."
+      log "======================================================================"
+      exit 0
+    fi
+    die "PURDY-VAX FAILED (driver exit=${rc}): VAX Purdy diverges from the real OpenVMS vectors -- is purdy.c's -O0 workaround intact? See console above"
+    ;;
+  *) die "unknown mode '${MODE}' (want: prove | negctl | purdy)" ;;
 esac

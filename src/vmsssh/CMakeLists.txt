@@ -2,6 +2,7 @@ add_executable(vmssshd
     vmssshd.c
     term_map.c
     cred_drop.c
+    ssh_ident.c
     ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_terminal.c
 )
 
@@ -19,6 +20,7 @@ target_include_directories(vmssshd PRIVATE
 target_link_libraries(vmssshd PRIVATE
     ssh       # libssh server-side SSH protocol
     vms       # VMS runtime (includes SYSUAF)
+    vmsrms    # SYSUAF auth reads via RMS $OPEN/$GET over the ODS-2 ACP (vms-274)
     vmsfs     # filespec translation
     vmslnm    # logical name resolution
     vmsprocess

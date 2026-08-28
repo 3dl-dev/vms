@@ -286,8 +286,17 @@ static const struct dcl_qual_def q_open[] = {
  * NO-undo path reconstructs it to name="NOWAIT" so the read matches -- which
  * ALSO repairs a latent bug where /NOWAIT never took effect pre-rollout. */
 static const struct dcl_qual_def q_spawn[] = {
-    { "NOWAIT", CDU_VT_NONE,  0,            NULL, NULL },
-    { "OUTPUT", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "NOWAIT",  CDU_VT_NONE,  0,            NULL, NULL },
+    { "OUTPUT",  CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    /* /PROCESS=name names the subprocess (OpenVMS DCL Dictionary, SPAWN
+     * /PROCESS): the handler reads dcl_qualifier_value(cmd,"PROCESS") and
+     * passes it to vms_kif_setprn, so the name must reach the handler rather
+     * than being rejected by the validator with %DCL-W-IVQUAL. VALREQ: a name
+     * is required. Only qualifiers the handler actually honors are declared
+     * (honest over-restriction, INV-DCL): the remaining VMS SPAWN qualifiers
+     * (/INPUT, /LOG, /SYMBOLS, /LOGICAL_NAMES, ...) stay %DCL-W-IVQUAL until
+     * the handler acts on them, never a fake accept. */
+    { "PROCESS", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
     QUAL_END
 };
 /* INQUIRE reads /NOPUNCTUATION literally (same NO-undo case as SPAWN's

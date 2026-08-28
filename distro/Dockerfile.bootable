@@ -10,7 +10,7 @@
 # (vms-2f0, docs/design-init-scope.md §6).
 #
 #   initramfs-ovmx.cpio.gz — bootstrap only. Contains: STARTUP.EXE (/init),
-#                            kernel modules (vms.ko, vmsfs.ko), minimal config
+#                            kernel module (vms.ko), minimal config
 #                            (SYSUAF, SYS$MANAGER files). NOT INITIALIZE.EXE
 #                            (mkfs belongs to the installed system + the
 #                            distribution disk, not the bootstrap) and none of
@@ -125,14 +125,15 @@ RUN set -e; \
 #   PGP-signed https://cdn.kernel.org/pub/linux/kernel/v6.x/sha256sums.asc
 #   (cross-checked against a live download of the tarball).
 #
-#   WHY 6.12 AND NOT THE NEWEST LTS (6.18): vmsfs.ko is written against the
-#   pre-6.14 VFS mount surface -- super_block.s_d_op (replaced by
-#   set_default_d_op() in 6.14) and mount_bdev()/mount_nodev() (removed for the
-#   fs_context get_tree_* API in 6.14). vms.ko builds clean on 6.18, but vmsfs.ko
-#   does not; porting it to the modern mount API is real, separate work tracked
-#   apart from this item (see PR). 6.12 LTS keeps BOTH modules building unchanged
-#   while still giving us a pinned, from-source, reproducible kernel -- which is
-#   what vms-448 is actually about. Advancing the floor is gated on that port.
+#   WHY 6.12 (an LTS floor, vms-448): the ORIGINAL constraint pinning 6.12 over
+#   the newest LTS was the vmsfs.ko VFS driver, written against the pre-6.14 VFS
+#   mount surface (super_block.s_d_op, mount_bdev()/mount_nodev()). vms-165
+#   RETIRED vmsfs.ko entirely -- the executive `vms.ko' (the only OVMX module
+#   now) builds clean on newer kernels -- so that specific blocker to advancing
+#   the floor is GONE. 6.12 LTS is kept here unchanged for THIS change (a
+#   from-source, reproducible, pinned kernel is what vms-448 is about); actually
+#   bumping the floor is now-unblocked but separate work (bump KERNEL_VERSION +
+#   KERNEL_SHA256 together, and re-run the from-source module build).
 #
 # This is BUILD tooling, not a runtime (CLAUDE.md Rule 9): the kernel-build
 # deps live only in this container stage; NOTHING is installed on the host.
@@ -289,7 +290,7 @@ RUN export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}")" && \
 # in-tree (vms-934) AND signed (vms-ff5) right here, fail-closed.
 #
 # GENERALIZED (vms-bae): this DISCOVERS every module the overlay built under
-# drivers/ovmx/*/*.ko rather than naming vms/vmsfs. A new OVMX module (a new
+# drivers/ovmx/*/*.ko rather than naming the module(s) literally. A new OVMX module (a new
 # drivers-ovmx/<mod>/ subdir + CONFIG_OVMX_<MOD>=m) is harvested, verified and
 # signed here with ZERO edits to this loop -- that is the "inherits intree=Y +
 # signing for free" property. Each .ko lands at /kernel-out/<mod>.ko.
@@ -325,12 +326,40 @@ RUN KEY=/usr/src/linux/ovmx-module-signing-key.pem; \
         echo "OK: ${ko}.ko intree=Y + signed by '$sg'"; \
         n=$((n + 1)); \
     done; \
-    [ "$n" -ge 2 ] || { echo "FAIL: harvested $n OVMX module(s); expected at least vms.ko + vmsfs.ko (vms-934)"; exit 1; }; \
-    [ -f /kernel-out/vms.ko ] && [ -f /kernel-out/vmsfs.ko ] || { echo "FAIL: vms.ko/vmsfs.ko not harvested (vms-934)"; exit 1; }; \
+    [ "$n" -ge 1 ] || { echo "FAIL: harvested $n OVMX module(s); expected at least vms.ko (vms-934)"; exit 1; }; \
+    [ -f /kernel-out/vms.ko ] || { echo "FAIL: vms.ko not harvested (vms-934)"; exit 1; }; \
     echo "OK: $n OVMX module(s) built IN-TREE (intree=Y, no TAINT_OUT_OF_TREE) and SIGNED (no TAINT_UNSIGNED_MODULE)"; \
-    nm /kernel-out/vmsfs.ko | grep -q ' vmsfs_ods2ro_register$' || { echo "FAIL: shipped vmsfs.ko is missing vmsfs_ods2ro_register -- the kernel-resident ODS-2 codec did NOT compile in (rd vms-4a8, epic vms-208); the OVMX_ODS2_KERNEL gate in vmsfs_super.c would be a dangling-symbol modpost break, not a clean build"; exit 1; }; \
-    nm /kernel-out/vmsfs.ko | grep -q ' ods2_bdev_finish_open$' || { echo "FAIL: shipped vmsfs.ko is missing the genuine ODS-2 codec symbols (ods2_*) -- codec NOT compiled in (rd vms-4a8)"; exit 1; }; \
-    echo "OK: shipped vmsfs.ko CARRIES the kernel-resident ODS-2 codec (vmsfs_ods2ro_register + ods2_* present; rd vms-4a8, epic vms-208)"
+    nm /kernel-out/vms.ko | grep -q ' ods2_home_parse$' || { echo "FAIL: shipped vms.ko is missing ods2_home_parse -- the kernel-resident ODS-2 codec the Files-11 ACP uses did NOT compile in (rd vms-4a8/vms-5f0, epic vms-208); acp_validate_ods2 in vmsfs_acp.c would be a dangling-symbol modpost break, not a clean build"; exit 1; }; \
+    nm /kernel-out/vms.ko | grep -q ' ods2_dir_insert_blocks$' || { echo "FAIL: shipped vms.ko is missing the genuine ODS-2 edit symbols (ods2_*) the IO\$_WRITEVBLK path uses -- codec NOT compiled in (rd vms-4a8/vms-5f0)"; exit 1; }; \
+    echo "OK: shipped vms.ko CARRIES the kernel-resident ODS-2 codec (ods2_home_parse + ods2_dir_insert_blocks present; the Files-11 ACP path, rd vms-4a8/vms-5f0, epic vms-208)"
+
+# NODEV negative-control stub (vms-165): harvest ONE real, self-contained stock
+# module from the from-source kernel to serve as "a module that loads but
+# registers no /dev/vms misc device". This is the module the NODEV initramfs
+# (builder stage, below) swaps in for vms.ko so
+# tests/qemu/test_executive_integral.sh Boot C can prove the DISTINCT fatal path
+# "finit_module() succeeds, /dev/vms still absent" -- as opposed to Boot B's
+# "module missing". Until vms-165 this role was played by the (now-deleted)
+# vmsfs.ko. Requirements the pick must meet: a real .ko with THIS kernel's
+# vermagic (guaranteed -- same build) and an EMPTY modinfo `depends` (so
+# finit_module, which resolves no dependencies, loads it in one shot rather than
+# failing -- a load failure would collapse Boot C into Boot B and prove nothing).
+# x86_64 defconfig builds many such modules; we take the first dependency-free
+# one deterministically. Signing is not required for the test (SIG_FORCE is off,
+# and the assertion is about /dev/vms absence, not taint) but we sign it with
+# the OVMX key for consistency with the harvested OVMX modules.
+RUN KEY=/usr/src/linux/ovmx-module-signing-key.pem; \
+    STUB=""; \
+    for ko in $(find . -name '*.ko' ! -name 'vms.ko' ! -path './drivers/ovmx/*' | sort); do \
+        [ -z "$(modinfo -F depends "$ko")" ] || continue; \
+        STUB="$ko"; break; \
+    done; \
+    [ -n "$STUB" ] || { echo "FAIL: no dependency-free stock .ko found for the NODEV negative control (vms-165); x86_64 defconfig should build several"; exit 1; }; \
+    cp "$STUB" /kernel-out/nodev-stub.ko; \
+    if [ -z "$(modinfo -F signer /kernel-out/nodev-stub.ko 2>/dev/null)" ]; then \
+        ./scripts/sign-file sha256 "$KEY" "$KEY" /kernel-out/nodev-stub.ko || { echo "FAIL: could not sign nodev-stub.ko (vms-165)"; exit 1; }; \
+    fi; \
+    echo "OK: NODEV negative-control stub = $(basename "$STUB") (real, dependency-free, registers no /dev/vms; vms-165)"
 
 FROM ubuntu:24.04 AS builder
 
@@ -355,7 +384,7 @@ ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 # supplies the UAPI headers musl-gcc needs for the userspace build below.
 # libelf1: the from-source kernel's objtool (copied in the built tree below)
 # is dynamically linked against libelf.so.1 and runs during the external
-# module build -- without it the vms.ko/vmsfs.ko compile dies with
+# module build -- without it the vms.ko compile dies with
 # "libelf.so.1: cannot open shared object file". (The stock-kernel path used to
 # get libelf transitively via linux-headers-generic, now dropped.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -396,18 +425,21 @@ RUN MUSL_INC=$(echo /usr/include/*-linux-musl) && \
 WORKDIR /src
 COPY . .
 
-# The VMS modules are now built IN-TREE by the kernel-build stage (vms-934,
-# parent vms-19e "owns-kernel"): vms.ko / vmsfs.ko come from drivers/ovmx/ of
-# OUR kernel tree and are stamped modinfo intree=Y (modpost), so finit_module()
-# at boot does NOT set TAINT_OUT_OF_TREE. Land them at the exact paths the
-# initramfs staging below already reads (src/kernel/vms.ko,
-# src/kernel/vmsfs/vmsfs.ko) so nothing downstream changes. `COPY . .` above
-# carries no *.ko (build artifacts, gitignored), so these overlay onto empty
-# slots. The standalone src/kernel Makefiles remain the canonical source of
-# record and still build these modules out-of-tree for the QEMU test harness
-# (tests/qemu/, src/kernel/Dockerfile) -- unchanged by this item.
+# The VMS executive module is now built IN-TREE by the kernel-build stage
+# (vms-934, parent vms-19e "owns-kernel"): vms.ko comes from drivers/ovmx/ of
+# OUR kernel tree and is stamped modinfo intree=Y (modpost), so finit_module()
+# at boot does NOT set TAINT_OUT_OF_TREE. Land it at the exact path the
+# initramfs staging below already reads (src/kernel/vms.ko) so nothing
+# downstream changes. `COPY . .` above carries no *.ko (build artifacts,
+# gitignored), so this overlays onto an empty slot. The standalone src/kernel
+# Makefile remains the canonical source of record and still builds this module
+# out-of-tree for the QEMU test harness (tests/qemu/, src/kernel/Dockerfile) --
+# unchanged by this item.
 COPY --from=kernel-build /kernel-out/vms.ko       /src/src/kernel/vms.ko
-COPY --from=kernel-build /kernel-out/vmsfs.ko     /src/src/kernel/vmsfs/vmsfs.ko
+# NODEV negative-control stub (vms-165) -- a real, dependency-free stock module
+# used ONLY to build the NODEV initramfs test artifact below; never staged into
+# a real boot image.
+COPY --from=kernel-build /kernel-out/nodev-stub.ko /src/nodev-stub.ko
 
 # The in-tree modules must carry a vermagic matching this kernel (or
 # finit_module() rejects them at boot), be stamped intree=Y (or loading them
@@ -416,7 +448,7 @@ COPY --from=kernel-build /kernel-out/vmsfs.ko     /src/src/kernel/vmsfs/vmsfs.ko
 # QEMU. intree=Y is the vms-934 acceptance property; the signature is the
 # vms-ff5 one; both re-checked on the exact artifact the initramfs will carry.
 RUN KVER=$(cat /tmp/kver) && \
-    for ko in src/kernel/vms.ko src/kernel/vmsfs/vmsfs.ko; do \
+    for ko in src/kernel/vms.ko; do \
         vm=$(modinfo -F vermagic "$ko" | awk '{print $1}'); \
         [ "$vm" = "$KVER" ] || { echo "FAIL: $ko vermagic '$vm' != kernel '$KVER'"; exit 1; }; \
         it=$(modinfo -F intree "$ko"); \
@@ -424,7 +456,7 @@ RUN KVER=$(cat /tmp/kver) && \
         sg=$(modinfo -F signer "$ko" 2>/dev/null); \
         [ -n "$sg" ] || { echo "FAIL: $ko carries NO signature -- would set TAINT_UNSIGNED_MODULE (vms-ff5)"; exit 1; }; \
     done && \
-    echo "OK: vms.ko + vmsfs.ko in-tree against OVMX kernel $KVER (vermagic matches, intree=Y, signed)"
+    echo "OK: vms.ko in-tree against OVMX kernel $KVER (vermagic matches, intree=Y, signed)"
 
 # Build OVMX userspace — static musl (no glibc dependency)
 RUN cmake -B build-static \
@@ -550,7 +582,6 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     chmod 4755 /system-stage/sbin/vms_mount_helper && \
     # Kernel modules
     cp src/kernel/vms.ko /system-stage/lib/modules/ && \
-    cp src/kernel/vmsfs/vmsfs.ko /system-stage/lib/modules/ && \
     # SYSKRNL distro metadata (rd vms-700/vms-296/vms-3de, GNU/Linux-style
     # dual identity) -- standard /etc/os-release naming the "OVMX/Linux"
     # SYSKRNL layer, distinct from the "OpenVMX" VMS-facing product identity
@@ -567,7 +598,24 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     # HELP built-in (src/vmsdcl/dcl_help.c) and HELP.EXE walk. Without it the
     # booted system's HELP has no library to read and every topic fails.
     cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSHLP/. /system-stage/vms/SYS0/SYSCOMMON/SYSHLP/ && \
+    # SYSUAF.DAT (vms-d92 atomic flip): the shipped distro/rootfs SYSUAF.DAT is
+    # now the GENUINE binary $UAFDEF RMS Prolog-3 indexed file (generated by
+    # tools/mksysuaf -- the seed's generator of record; run it to regenerate when
+    # the default account set changes), NOT an ASCII+SHA-256 file. It is the same
+    # bytes the runtime reads back over the ODS-2 ACP (the record format is
+    # substrate-agnostic). A single committed seed keeps every harness that copies
+    # it (qemu, alpha, native login) byte-identical to the runtime.
     cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    # RIGHTSLIST.DAT (vms-f15a atomic flip): the shipped distro/rootfs
+    # RIGHTSLIST.DAT is now the GENUINE binary $RDBDEF RMS Prolog-3 indexed file
+    # (generated by tools/mkrightslist -- the seed's generator of record; run it
+    # to regenerate when the shipped identifier set changes), NOT an ASCII
+    # colon-delimited file. It is the same bytes the runtime reads back over the
+    # ODS-2 ACP via $ASCTOID/$IDTOASC (rightslist_live.c). It carries BOTH
+    # general AND per-account UIC identifiers (vms-930) and is mastered
+    # WORLD-READABLE (World:R, vms-109), so an unprivileged F$IDENTIFIER
+    # resolves an identifier by reading it directly, without SYSPRV and without
+    # touching the protected (World:none) SYSUAF.
     cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # OVMXVMSSYS.PAR (vms-d34): the initial SYSGEN parameter file, seeded
     # with factory defaults (SCSNODE=OVMX). Staged UNVERSIONED, same
@@ -662,7 +710,14 @@ RUN mkdir -p /kit-stage/SYSEXE /kit-stage/SYSLIB /kit-stage/SYSMGR /kit-stage/SY
     # Ground-source gate: the kit manifest must actually name the images the
     # login chain depends on, not just carry a file count.
     LISTING=$(/src/build-static/bin/ovmx_kit_pack list /boot/ovmx-os.kit) && \
-    for name in "DCL.EXE" "LOGINOUT.EXE" "STARTUP.COM"; do \
+    # SYSGEN.EXE (vms-597): the install's SCS step now RUNs SYS$SYSTEM:SYSGEN.EXE
+    # and feeds it inline SYS$INPUT to configure SCSNODE/SCSSYSTEMID -- an
+    # UNATTENDED install cannot configure the node without this image on the kit.
+    # SYSGEN.EXE is copied best-effort above (2>/dev/null), which silently drops
+    # it where the static build did not produce it (notably some VAX cross
+    # configs); gate it here so the build FAILS HONESTLY rather than shipping a
+    # kit whose install cannot set the node name.
+    for name in "DCL.EXE" "LOGINOUT.EXE" "STARTUP.COM" "SYSGEN.EXE"; do \
         echo "$LISTING" | grep -q "$name" || { echo "FAIL: ovmx-os.kit manifest missing $name"; exit 1; }; \
         echo "OK: ovmx-os.kit manifest names $name"; \
     done && \
@@ -705,6 +760,30 @@ RUN mkdir -p /kit-stage/SYSEXE /kit-stage/SYSLIB /kit-stage/SYSMGR /kit-stage/SY
     cp /boot/ovmx-os.kit /system-stage/vms/SYS0/SYSCOMMON/SYSUPD/OVMX-OS.KIT && \
     echo "OK: ovmx-os.kit staged at SYS\$UPDATE:OVMX-OS.KIT for the distrib image"
 
+# vms-738 per-file protection PROOF fixture. Build a tiny second kit whose one
+# file (PROOFPROT.DAT, an ORDINARY name -> per-file CLASS default 0xAA00 =
+# G:RE,W:RE) is then OVERWRITTEN in the kit index to a DIVERGENT protection
+# 0xFF00 (S:RWED,O:RWED,G:,W: -- system+owner only), the case a real PCSI kit
+# authors and the case that DISTINGUISHES "installer honoured the kit's
+# ke_protection" from "installer took the create-time class default" (the two
+# coincide for every ordinary file, so only a divergent entry proves the fix).
+# ke_protection sits at byte 128 of the 160-byte entry; the index starts at the
+# 128-byte header end -> absolute offset 256 for a single-file kit. The `list`
+# re-read below is a FAIL-CLOSED guard: if that layout ever drifts, the image
+# build breaks here (loudly) rather than the e2e silently proving nothing.
+# tests/qemu/test_product_install_e2e.sh installs this over the ACP and asserts
+# the installed file's ODS-2 fh2_fileprot reads back 0xFF00, not the default.
+RUN mkdir -p /proof-stage/SYSEXE && \
+    printf 'vms-738 per-file protection proof fixture\n' > /proof-stage/SYSEXE/PROOFPROT.DAT && \
+    /src/build-static/bin/ovmx_kit_pack pack /boot/proof-prot.kit /proof-stage "PROOFPROT" && \
+    printf '\000\377' | dd of=/boot/proof-prot.kit bs=1 seek=256 count=2 conv=notrunc status=none && \
+    PROOFLINE=$(/src/build-static/bin/ovmx_kit_pack list /boot/proof-prot.kit | grep 'PROOFPROT.DAT') && \
+    echo "proof kit entry after patch: $PROOFLINE" && \
+    echo "$PROOFLINE" | grep -qF '(S:RWED,O:RWED,G:,W:)' \
+        || { echo "FAIL: proof-prot.kit patch did not yield the divergent 0xFF00 protection (kit layout drift?)"; exit 1; } && \
+    cp /boot/proof-prot.kit /system-stage/vms/SYS0/SYSCOMMON/SYSUPD/PROOF-PROT.KIT && \
+    echo "OK: proof-prot.kit staged at SYS\$UPDATE:PROOF-PROT.KIT (divergent 0xFF00, vms-738 proof)"
+
 # -- Distribution system-disk image (vms-8ab) ----------------------------------
 # Master a PRE-INSTALLED, bootable VMSFS system disk from the SAME populated
 # /vms system tree the system-tree staging stage just assembled above (/system-stage/vms:
@@ -715,67 +794,70 @@ RUN mkdir -p /kit-stage/SYSEXE /kit-stage/SYSLIB /kit-stage/SYSMGR /kit-stage/SY
 #
 # This is the artifact a §6-stripped PID 1 boots (mount-or-halt,
 # docs/design-init-scope.md §6): the disk arrives ALREADY installed, so no
-# self-install runs. The boot initramfs below (STARTUP.EXE + vms.ko + vmsfs.ko +
-# minimal config -- the ONLY initramfs, vms-1ab) mounts this image at /vms and
+# self-install runs. The boot initramfs below (STARTUP.EXE + vms.ko + minimal
+# config -- the ONLY initramfs, vms-1ab) mounts this image at /vms and
 # finds the full system on it.
 #
 # Clean-room Rule 8: vmsfs_master (tools/vmsfs_master.c) is factory BUILD
 # tooling — it is never shipped on the media, never given a VMS name, never run
-# at boot. The on-disk byte layout comes entirely from the single shared
-# description in src/kernel/vmsfs/vmsfs_ondisk.h (the same header vmsfs.ko and
-# INITIALIZE.EXE use); VMSFS is an OVMX design choice, labeled as such in that
-# header and in the tool — NOT presented as byte-authentic ODS-2. The mastering
+# at boot. The on-disk byte layout comes entirely from the shared ODS-2
+# description in src/vmsfs/include/vmsfs/ods2.h (the same header the vms.ko
+# Files-11 ACP and INITIALIZE.EXE use); the OVMX-specific mastering choices are
 # policy (SYSTEM UIC [1,4], every file version ;1, the OVMXSYS volume label) is
 # an OVMX build-tool choice, not a VMS-authentic fact.
 #
-# 64 MB matches the system-disk convention used everywhere else (boot.sh /
-# run-qemu.sh / test_persistent_boot.sh all size a blank DKA0: at 64M) and
-# leaves free space for runtime writes (e.g. PARTS creating its indexed data
-# file), while staying well above the tree's own footprint.
-RUN /src/build-static/bin/vmsfs_master master \
-        /boot/ovmx-distrib.img OVMXSYS /system-stage/vms 64 && \
-    /src/build-static/bin/vmsfs_master list /boot/ovmx-distrib.img && \
-    # Ground-source gate, baked into the build: extract the mastered image back
-    # out with the tool's round-trip reader and prove the login chain the boot
-    # depends on (LOGINOUT -> DCL, via IMGACT, established by PROVISION) is
-    # actually PRESENT on the disk and byte-identical to what the system-tree
-    # staging stage staged. A mastered image that does not carry these cannot
-    # reach a login prompt, so this is checked here, not merely asserted
-    # downstream.
-    rm -rf /tmp/distrib-verify && \
-    /src/build-static/bin/vmsfs_master extract /boot/ovmx-distrib.img /tmp/distrib-verify && \
+# 128 MB (vms-5f0): the genuine ODS-2 system volume must hold the full static
+# system tree PLUS the redundant SYS$UPDATE:OVMX-OS.KIT copy, which together sit
+# right at the old 64 MB edge and overflow it -- ODS-2 gives every file at least
+# one 512-byte block and no cross-file packing, so it needs a little more room
+# than the retired VMFS master did for the same tree. 128 MB clears the tree +
+# kit and still leaves free space for runtime writes (e.g. PARTS creating its
+# indexed data file). Blank DKA0: disks (boot.sh / run-qemu.sh /
+# test_persistent_boot.sh) stay 64M -- those hold no system tree.
+# ATOMIC FLIP (vms-5f0, epic vms-208): the boot master emits a GENUINE ODS-2
+# (DECFILE11B) volume by default (--ods2), NOT the bespoke OVMX VMFS format.
+# SYS$DISK is now $MOUNTed by the Files-11 ACP in the executive (ovmx_init.c),
+# so the disk the boot mounts must be real ODS-2. The ground-source gate reads
+# it back with the tool's GENUINE ODS-2 reader (`--ods2 list`, ods2_bdev_*) --
+# the same codec the ACP uses -- and proves the login chain (LOGINOUT -> DCL, via
+# IMGACT, established by PROVISION) is PRESENT on the ODS-2 volume. (Byte-exact
+# read-back off the ODS-2 volume is proven by the QEMU ACP tests
+# tests/qemu/test_syssvc_dirlogical_acp.c / _rms_acp.c against a real /dev/vms;
+# extract is VMFS-only, so the build gate here is a genuine-ODS-2 presence gate.)
+RUN /src/build-static/bin/vmsfs_master --ods2 master \
+        /boot/ovmx-distrib.img OVMXSYS /system-stage/vms 128 && \
+    /src/build-static/bin/vmsfs_master --ods2 list /boot/ovmx-distrib.img > /tmp/distrib-list.txt && \
+    cat /tmp/distrib-list.txt && \
     for name in DCL.EXE LOGINOUT.EXE IMGACT.EXE PROVISION.EXE SYSUAF.DAT; do \
-        SRC="/system-stage/vms/SYS0/SYSCOMMON/SYSEXE/$name" && \
-        OUT="/tmp/distrib-verify/SYS0/SYSCOMMON/SYSEXE/$name" && \
-        [ -f "$OUT" ] || { echo "FAIL: mastered ovmx-distrib.img missing SYS\$SYSTEM:$name"; exit 1; } && \
-        cmp -s "$SRC" "$OUT" || { echo "FAIL: mastered SYS\$SYSTEM:$name differs from staged bytes"; exit 1; } && \
-        echo "OK: ovmx-distrib.img carries SYS\$SYSTEM:$name (byte-identical to staged)"; \
+        grep -qi "\]$name;" /tmp/distrib-list.txt || { echo "FAIL: mastered ODS-2 ovmx-distrib.img missing SYS\$SYSTEM:$name"; exit 1; } && \
+        echo "OK: ovmx-distrib.img carries SYS\$SYSTEM:$name (genuine ODS-2)"; \
     done && \
-    [ -f /tmp/distrib-verify/SYS0/SYSCOMMON/SYSMGR/STARTUP.COM ] || { echo "FAIL: mastered image missing SYS\$MANAGER:STARTUP.COM"; exit 1; } && \
+    grep -qi "\]STARTUP.COM;" /tmp/distrib-list.txt || { echo "FAIL: mastered image missing SYS\$MANAGER:STARTUP.COM"; exit 1; } && \
     echo "OK: ovmx-distrib.img carries SYS\$MANAGER:STARTUP.COM" && \
     # vms-21a: STDRV's phase-driver data files must be on the mastered disk,
     # or every OPEN in STARTUP.COM's phase driver fails %RMS-E-FNF and no
     # phase (and no site file the driver invokes) ever runs.
-    [ -f "/tmp/distrib-verify/SYS0/SYSCOMMON/SYS\$STARTUP/VMS\$PHASES.DAT" ] || { echo "FAIL: mastered image missing SYS\$STARTUP:VMS\$PHASES.DAT"; exit 1; } && \
-    [ -f "/tmp/distrib-verify/SYS0/SYSCOMMON/SYS\$STARTUP/VMS\$VMS.DAT" ] || { echo "FAIL: mastered image missing SYS\$STARTUP:VMS\$VMS.DAT"; exit 1; } && \
+    grep -qi "\]VMS\$PHASES.DAT;" /tmp/distrib-list.txt || { echo "FAIL: mastered image missing SYS\$STARTUP:VMS\$PHASES.DAT"; exit 1; } && \
+    grep -qi "\]VMS\$VMS.DAT;" /tmp/distrib-list.txt || { echo "FAIL: mastered image missing SYS\$STARTUP:VMS\$VMS.DAT"; exit 1; } && \
     echo "OK: ovmx-distrib.img carries SYS\$STARTUP:VMS\$PHASES.DAT and VMS\$VMS.DAT" && \
-    [ -f /tmp/distrib-verify/SYS0/SYSCOMMON/SYSMGR/SYCONFIG.COM ] || { echo "FAIL: mastered image missing SYS\$MANAGER:SYCONFIG.COM"; exit 1; } && \
-    [ -f /tmp/distrib-verify/SYS0/SYSCOMMON/SYSMGR/SYLOGICALS.COM ] || { echo "FAIL: mastered image missing SYS\$MANAGER:SYLOGICALS.COM"; exit 1; } && \
+    grep -qi "\]SYCONFIG.COM;" /tmp/distrib-list.txt || { echo "FAIL: mastered image missing SYS\$MANAGER:SYCONFIG.COM"; exit 1; } && \
+    grep -qi "\]SYLOGICALS.COM;" /tmp/distrib-list.txt || { echo "FAIL: mastered image missing SYS\$MANAGER:SYLOGICALS.COM"; exit 1; } && \
     echo "OK: ovmx-distrib.img carries SYS\$MANAGER:SYCONFIG.COM and SYLOGICALS.COM" && \
     # The LARP config files this work deletes must never come back on the
     # mastered image -- a regression that recreates distro/rootfs/.../
     # OVMX.CONF would silently ship it again without this gate.
-    [ ! -f /tmp/distrib-verify/SYS0/SYSCOMMON/SYSMGR/OVMX.CONF ] || { echo "FAIL: mastered image carries deleted SYS\$MANAGER:OVMX.CONF"; exit 1; } && \
-    [ ! -f /tmp/distrib-verify/SYS0/SYSCOMMON/SYSMGR/SYLOGICALS.CONF ] || { echo "FAIL: mastered image carries deleted SYS\$MANAGER:SYLOGICALS.CONF"; exit 1; } && \
+    ! grep -qi "\]OVMX.CONF;" /tmp/distrib-list.txt || { echo "FAIL: mastered image carries deleted SYS\$MANAGER:OVMX.CONF"; exit 1; } && \
+    ! grep -qi "\]SYLOGICALS.CONF;" /tmp/distrib-list.txt || { echo "FAIL: mastered image carries deleted SYS\$MANAGER:SYLOGICALS.CONF"; exit 1; } && \
     echo "OK: ovmx-distrib.img carries neither OVMX.CONF nor SYLOGICALS.CONF" && \
     # The SYSTEM-writable persistent directories must be baked in: PID 1 no
     # longer creates them (vms-2f0), so if the mastering source ever loses them
     # SYS$SCRATCH:/SYS$LOGIN: writes fail at runtime (%RMS-E-DNF). Assert both
-    # are present so a regression is caught at BUILD, not in the PARTS demo.
-    [ -d /tmp/distrib-verify/SYSTMP ] || { echo "FAIL: mastered image missing [SYSTMP] (SYS\$SCRATCH:)"; exit 1; } && \
-    [ -d /tmp/distrib-verify/USERS ]  || { echo "FAIL: mastered image missing [USERS]"; exit 1; } && \
+    # are present (as ODS-2 directory files NAME.DIR) so a regression is caught
+    # at BUILD, not in the PARTS demo.
+    grep -qi "\]SYSTMP.DIR;" /tmp/distrib-list.txt || { echo "FAIL: mastered image missing [SYSTMP] (SYS\$SCRATCH:)"; exit 1; } && \
+    grep -qi "\]USERS.DIR;" /tmp/distrib-list.txt || { echo "FAIL: mastered image missing [USERS]"; exit 1; } && \
     echo "OK: ovmx-distrib.img carries SYSTEM-writable [SYSTMP] and [USERS]" && \
-    rm -rf /tmp/distrib-verify && \
+    rm -f /tmp/distrib-list.txt && \
     echo "DISTRIB image: $(ls -lh /boot/ovmx-distrib.img | awk '{print $5}')"
 
 # -- Negative-control distribution disk (vms-2a9) -------------------------------
@@ -800,9 +882,9 @@ RUN cp -r /system-stage/vms /system-stage-negctl-vms && \
     if grep -q 'JOB_CONTROL_STARTUP\.COM' "/system-stage-negctl-vms/SYS0/SYSCOMMON/SYS\$STARTUP/VMS\$VMS.DAT"; then \
         echo "FAIL: negctl VMS\$VMS.DAT still names JOB_CONTROL_STARTUP.COM"; exit 1; \
     fi && \
-    /src/build-static/bin/vmsfs_master master \
-        /boot/ovmx-distrib-negctl.img OVMXSYS /system-stage-negctl-vms 64 && \
-    /src/build-static/bin/vmsfs_master list /boot/ovmx-distrib-negctl.img && \
+    /src/build-static/bin/vmsfs_master --ods2 master \
+        /boot/ovmx-distrib-negctl.img OVMXSYS /system-stage-negctl-vms 128 && \
+    /src/build-static/bin/vmsfs_master --ods2 list /boot/ovmx-distrib-negctl.img && \
     rm -rf /system-stage-negctl-vms && \
     echo "NEGCTL DISTRIB image: $(ls -lh /boot/ovmx-distrib-negctl.img | awk '{print $5}')"
 
@@ -837,9 +919,9 @@ RUN cp -r /system-stage/vms /system-stage-install-media-vms && \
     echo "OK: install-media image's SYSTARTUP_VMS.COM invokes OVMX\$INSTALL.COM" && \
     ! grep -q 'OVMX\$INSTALL' /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
     echo "OK: ovmx-distrib.img's own SYSTARTUP_VMS.COM (unmodified /system-stage) does NOT invoke OVMX\$INSTALL.COM" && \
-    /src/build-static/bin/vmsfs_master master \
-        /boot/ovmx-install-media.img OVMXSYS /system-stage-install-media-vms 64 && \
-    /src/build-static/bin/vmsfs_master list /boot/ovmx-install-media.img && \
+    /src/build-static/bin/vmsfs_master --ods2 master \
+        /boot/ovmx-install-media.img OVMXSYS /system-stage-install-media-vms 128 && \
+    /src/build-static/bin/vmsfs_master --ods2 list /boot/ovmx-install-media.img && \
     rm -rf /system-stage-install-media-vms && \
     echo "INSTALL-MEDIA image: $(ls -lh /boot/ovmx-install-media.img | awk '{print $5}')"
 
@@ -869,12 +951,13 @@ RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
     chmod 4755 /initramfs-slim/sbin/vms_mount_helper && \
     # Kernel modules
     cp src/kernel/vms.ko /initramfs-slim/lib/modules/ && \
-    cp src/kernel/vmsfs/vmsfs.ko /initramfs-slim/lib/modules/ && \
     # SYSKRNL distro metadata (rd vms-700/vms-296/vms-3de) -- same
     # os-release as the system-tree stage, see its comment there.
     cp distro/rootfs/etc/os-release /initramfs-slim/etc/os-release && \
-    # Minimal config — SYSUAF + manager files (STARTUP.EXE reads these at boot)
-    cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT /initramfs-slim/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    # Minimal config — SYSUAF + manager files (STARTUP.EXE reads these at boot).
+    # vms-d92: use the BINARY $UAFDEF file mksysuaf generated into /system-stage
+    # above (never the retired ASCII rootfs file).
+    cp /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT /initramfs-slim/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/* /initramfs-slim/vms/SYS0/SYSCOMMON/SYSMGR/ && \
     # Pack the (only) boot initramfs. Reproducibility (vms-d73): normalize
     # every file's mtime to SOURCE_DATE_EPOCH (cp resets mtime to build
@@ -920,18 +1003,19 @@ RUN cp -a /initramfs-slim /initramfs-noexec && \
 
 # -- NODEV initramfs (negative control) -----------------------------------------
 # The (only) boot initramfs with /lib/modules/vms.ko REPLACED by a different,
-# real, loadable kernel module (vmsfs.ko's own binary) that registers no misc
-# device. finit_module() on it succeeds, but /dev/vms never appears in
-# devtmpfs -- the second reachable half of executive_attach()'s fatal path
-# (vms.ko itself is untouched; NOEXEC above already covers "module missing"
-# entirely). Exists so tests/qemu/test_executive_integral.sh Boot C can prove
-# that path is fatal too, and diagnosed honestly, rather than merely asserted
-# (vms-a35 round 2 / Rule 10). Rebuilt from the same bootstrap baseline as
-# NOEXEC above (vms-1ab).
+# real, loadable kernel module (nodev-stub.ko, a dependency-free stock module
+# harvested from this same kernel build -- vms-165; until then this role was
+# played by the now-deleted vmsfs.ko) that registers no misc device.
+# finit_module() on it succeeds, but /dev/vms never appears in devtmpfs -- the
+# second reachable half of executive_attach()'s fatal path (vms.ko itself is
+# untouched; NOEXEC above already covers "module missing" entirely). Exists so
+# tests/qemu/test_executive_integral.sh Boot C can prove that path is fatal too,
+# and diagnosed honestly, rather than merely asserted (vms-a35 round 2 / Rule
+# 10). Rebuilt from the same bootstrap baseline as NOEXEC above (vms-1ab).
 #
 # Test artifact, not a runtime -- same rule as NOEXEC above.
 RUN cp -a /initramfs-slim /initramfs-nodev && \
-    cp src/kernel/vmsfs/vmsfs.ko /initramfs-nodev/lib/modules/vms.ko && \
+    cp nodev-stub.ko /initramfs-nodev/lib/modules/vms.ko && \
     find /initramfs-nodev -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + && \
     cd /initramfs-nodev && find . | sort | cpio -o -H newc --reproducible 2>/dev/null | gzip -n > /boot/initramfs-ovmx-nodev.cpio.gz && \
     echo "NODEV initramfs: $(ls -lh /boot/initramfs-ovmx-nodev.cpio.gz | awk '{print $5}')"
@@ -969,7 +1053,7 @@ LABEL org.opencontainers.image.title="OVMX/Linux" \
 ENV DEBIAN_FRONTEND=noninteractive
 
 # kmod: provides `modinfo`, which tests/qemu/test_intree_modules.sh (vms-934)
-# runs on the shipped vms.ko/vmsfs.ko to prove they are stamped intree=Y. Test
+# runs on the shipped vms.ko to prove it is stamped intree=Y. Test
 # tooling only (CLAUDE.md Rule 9 distinction), like `expect` above.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     qemu-system-x86 qemu-system-arm qemu-efi-aarch64 cpio expect kmod \

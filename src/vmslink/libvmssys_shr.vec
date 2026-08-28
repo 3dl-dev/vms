@@ -149,3 +149,19 @@ vms_kif_acp_acpcontrol=PROCEDURE
 # -- a new universal never shifts an existing index. OVMX-UNWIRED (test-only)
 # today; exported so the vector is stable when RMS $CREATE/$ERASE/$EXTEND wire it.
 vms_kif_acp_fileop=PROCEDURE
+# --- $EXIT / $STATUS + CLI invocation context (vms-f60d). The userspace face of
+# the executive process-table facility VMS_IOCTL_SETEXIT..GETCLI: the exiting
+# image records its completion $STATUS (vms_kif_setexit) and the invoking CLI
+# reads it (vms_kif_getexit); the CLI records its command line (vms_kif_setcli)
+# and the activated image reads it (vms_kif_getcli). APPENDED at the end per the
+# append-only contract -- a new universal never shifts an existing index.
+vms_kif_setexit=PROCEDURE
+vms_kif_getexit=PROCEDURE
+vms_kif_setcli=PROCEDURE
+vms_kif_getcli=PROCEDURE
+# --- $GETDVI VOLUME items of a disk unit (vms-e6f): mount state, ODS-2 volume
+# label, size, cluster factor and free-block count of a mounted volume, read
+# from the executive-global mounted-volume table. SHOW DEVICE (DCL) reads this to
+# report a disk as Mounted with its label + free/total blocks. APPENDED at the
+# end per the append-only contract -- a new universal never shifts an existing index.
+vms_kif_getvol=PROCEDURE

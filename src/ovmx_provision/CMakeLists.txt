@@ -24,9 +24,20 @@ else()
     set(OVMX_PROVISION_BOOT_BACKEND_SRC ${CMAKE_SOURCE_DIR}/src/ovmx_init/ovmx_boot_linux.c ${CMAKE_SOURCE_DIR}/src/ovmx_init/opcom_kmsg.c)
 endif()
 
+# vms-aac: force the RMS record services (sys$open/$create/$put/...) into
+# PROVISION.EXE's static link closure so rms_textfile.c's weak seam binds and
+# opcom_kmsg_drain_ringbuffer() can $CREATE/$PUT SYS$MANAGER:OPERATOR.LOG over
+# the ACP. Linux only -- opcom_kmsg.c (and the drain) compile in only there.
+if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+    set(OVMX_PROVISION_RMS_BIND_SRC)
+else()
+    set(OVMX_PROVISION_RMS_BIND_SRC provision_rms_bind.c)
+endif()
+
 add_executable(ovmx_provision
     ovmx_provision.c
     ${OVMX_PROVISION_BOOT_BACKEND_SRC}
+    ${OVMX_PROVISION_RMS_BIND_SRC}
 )
 
 target_include_directories(ovmx_provision PRIVATE
@@ -56,7 +67,20 @@ else()
     )
 endif()
 
-target_link_libraries(ovmx_provision PRIVATE vms vmsfs vmslnm vmsprocess pthread)
+# vms-329: PROVISION's system-tree / account-home provisioning runs over the
+# executive Files-11 ACP (IO$_MODIFY / IO$_CREATE by FID) on EVERY runtime
+# substrate. Those arms used to be keyed on __linux__, which silently left the
+# netbsd-vax image on POSIX lchown()/mkdir(); they are keyed on OVMX_HAVE_ACP
+# now, so this target must define it (the netbsd-vax cross recipe,
+# tools/cross-vax/build-provision-vax.sh, passes the same -D). PROVISION.EXE is
+# a runtime image with no unit/standalone configuration, so it is unconditional
+# -- exactly like src/ovmx_init/CMakeLists.txt.
+target_compile_definitions(ovmx_provision PRIVATE OVMX_HAVE_ACP)
+
+# vms-d92: PROVISION enumerates the binary $UAFDEF SYSUAF through the RMS
+# Prolog-3 engine over the ODS-2 ACP (ovmx_sysuaf_enum, src/vmsrms/
+# sysuaf_live.c), so it links LIBVMSRMS.
+target_link_libraries(ovmx_provision PRIVATE vms vmsrms vmsfs vmslnm vmsprocess pthread)
 
 set_target_properties(ovmx_provision PROPERTIES
     OUTPUT_NAME "PROVISION"

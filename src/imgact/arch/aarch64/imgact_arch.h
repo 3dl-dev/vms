@@ -22,6 +22,7 @@
 #define SYS_close       57
 #define SYS_read        63
 #define SYS_pread64     67
+#define SYS_ioctl       29
 #define SYS_write       64
 #define SYS_mmap        222
 #define SYS_mprotect    226

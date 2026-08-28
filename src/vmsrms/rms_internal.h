@@ -48,4 +48,23 @@ ssize_t rms_read_exact(int fd, void *buf, size_t count);
  */
 int rms_write_exact(int fd, const void *buf, size_t count);
 
+#if defined(OVMX_HAVE_ACP)
+/*
+ * Files-11 (ODS-2) ACP directory-FID resolver (defined in rms_core.c, epic
+ * vms-208). Walks each "COMP" of a "A.B.C" directory path as "COMP.DIR" from
+ * the MFD ([000000], all-zero DID) via IO$_ACCESS on `chan`, returning the
+ * final directory's FID as {*dn,*ds,*dr,*dx}. Empty/[000000] path => the MFD
+ * (all-zero). Returns SS$_NORMAL or a fail-honest SS$_ (e.g. SS$_NOSUCHFILE).
+ * Shared with rms_search.c so $SEARCH reaches the same executive directory the
+ * $OPEN/$CREATE path does -- not vmsfs_to_linux_path (CLAUDE.md Rule 9/INV-6).
+ */
+uint32_t rms_acp_resolve_did(uint32_t chan, const char *dirpath,
+                             uint16_t *dn, uint16_t *ds,
+                             uint8_t *dr, uint8_t *dx);
+
+/* The boot volume unit RMS $ASSIGNs when a filespec names no device (the
+ * mounted SYS$DISK; DKA0: until the discovered-SYS$DISK logical is bound). */
+#define RMS_ACP_DEFAULT_DEV "DKA0:"
+#endif /* OVMX_HAVE_ACP */
+
 #endif /* RMS_INTERNAL_H */

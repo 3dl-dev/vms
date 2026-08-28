@@ -115,7 +115,12 @@ scored() { if [ "$1" -eq 0 ]; then echo "PASS: $2"; PASS=$((PASS + 1)); else ech
 # run_install_menu.sh / run_install_boot_e2e.sh (the menu's own INITIALIZE
 # branch is a filed gap, so PRESERVE needs a pre-formatted volume).
 format_blank_target() {
-    "$INIT_EXE" "$1" WORK 64 >/dev/null 2>&1 || { echo "FATAL: INITIALIZE of $1 failed"; exit 1; }
+    # --ods2: the atomic flip (vms-208) makes the runtime MOUNT a GENUINE
+    # Files-11/ODS-2 volume over the executive ACP. INITIALIZE defaults to the
+    # bespoke legacy vmsfs layout, which the ACP correctly refuses to mount
+    # (%OVMX-F-MOUNTFAIL); a real install target IS an ODS-2 volume, so format
+    # one (vms-37e).
+    "$INIT_EXE" --ods2 "$1" WORK 64 >/dev/null 2>&1 || { echo "FATAL: INITIALIZE of $1 failed"; exit 1; }
 }
 
 run_container() {  # run_container <name> <mode> <target-img> [extra -e...]

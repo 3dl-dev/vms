@@ -216,6 +216,54 @@ int vmsfs_device_resolve(const char *devname, char *mount_point, size_t size)
     return result;
 }
 
+/*
+ * vmsfs_device_spec_kernel_mounted - vms-b3e (cross-process mount visibility
+ * under the atomic flip, epic vms-208).
+ *
+ * Does the DEVICE named at the head of VMS filespec `spec` correspond to a unit
+ * genuinely mounted RIGHT NOW in the KERNEL's own mount table (/proc/mounts) at
+ * /mnt/<lowercase dev> -- i.e. a real, cross-process Linux VFS mount some OTHER
+ * process mounted? Returns 1 iff so. (vms-165 retired the vmsfs VFS driver, so
+ * nothing mounts as a `vmsfs' type any more and this fail-honest probe now only
+ * ever returns 0; the runtime reads every ODS-2 volume through the executive
+ * ACP, never a VFS mount. The check is kept as a fail-honest guard, never a
+ * fabricated success.)
+ *
+ * This reads the SAME global, cross-process /proc/mounts truth
+ * vmsfs_device_resolve_executive() consults (INV-6: the kernel is the source of
+ * truth for an executive facility). It exists so a caller that has just failed
+ * to reach a unit through the Files-11 ODS-2 ACP (which only owns volumes IT
+ * mounted) can tell a genuinely-mounted vmsfs unit apart from an absent one --
+ * and, crucially, from the seeded SYS$DISK passthrough (DKA0: -> SYSDISK_MOUNT,
+ * "/vms"): that unit is NOT a /mnt/<dev> mount, so this returns 0 for it and the
+ * caller never resurrects the /vms masquerade the atomic flip exists to kill.
+ * An UNMOUNTED unit (nothing in /proc/mounts) also returns 0 -- fail-honest, no
+ * fabricated mount.
+ */
+int vmsfs_device_spec_kernel_mounted(const char *spec)
+{
+    if (!spec || !spec[0])
+        return 0;
+
+    char normalized[VMS_DEVNAM_MAX + 1];
+    normalize_devname(spec, normalized, sizeof(normalized));
+    if (!normalized[0])
+        return 0;
+
+    /* /mnt/<lowercase devnam> -- the vmsfs mount-point convention (matches
+     * vmsfs_device_resolve_executive() above and mount_point_for_device in
+     * src/vmsdcl/dcl_cmd_misc.c). */
+    char mp[VMS_MOUNT_POINT_MAX];
+    char lower[VMS_DEVNAM_MAX + 1];
+    size_t i;
+    for (i = 0; normalized[i] && i < sizeof(lower) - 1; i++)
+        lower[i] = (char)tolower((unsigned char)normalized[i]);
+    lower[i] = '\0';
+    snprintf(mp, sizeof(mp), "/mnt/%s", lower);
+
+    return mount_table_has(mp);
+}
+
 int vmsfs_device_remove(const char *devname)
 {
     if (!devname)

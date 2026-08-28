@@ -56,3 +56,28 @@ set_tests_properties(ssh_cred_drop PROPERTIES
     LABELS "unit;ssh;security"
     TIMEOUT 10
 )
+
+# vms-6ae (Tier-0 security / INV-6): the SSH session identity fail-honest
+# decision. Like test_cred_drop above, this links the REAL product translation
+# unit (src/vmsssh/ssh_ident.c) directly -- it is dependency-free (no libssh,
+# no /dev/vms), so it builds and runs even where the vmssshd daemon does not.
+# The test injects a mock setident so it can prove the security-critical
+# property WITHOUT a live executive: when the executive REFUSES the identity
+# (even status, or /dev/vms absent), the session is DENIED (return -1, caller
+# must _exit) and NO local privileged fallback is constructed; when the
+# executive ACCEPTS (odd status), the session proceeds. This is the unit-test
+# proof that the audit's §3.7 soft-fail bypass is gone.
+add_executable(test_ssh_ident
+    test_ssh_ident.c
+    ${CMAKE_SOURCE_DIR}/src/vmsssh/ssh_ident.c
+)
+target_include_directories(test_ssh_ident PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsssh
+)
+add_test(NAME ssh_ident_fail_honest
+    COMMAND test_ssh_ident
+)
+set_tests_properties(ssh_ident_fail_honest PROPERTIES
+    LABELS "unit;ssh;security"
+    TIMEOUT 10
+)

@@ -17,8 +17,11 @@ ARCHDIR := arch/$(ARCH)
 # IMGACT.EXE is a freestanding static-PIE ELF interpreter that exports no
 # symbols (hidden visibility) and self-relocates. It links against nothing.
 IMGACT_CFLAGS := -std=gnu11 -O2 -Wall -Wextra \
+                 -Iinclude \
                  -I../vmslink/include \
                  -I../libvms/include \
+                 -I../kernel \
+                 -I../boundary_audit/include \
                  -fPIC -fvisibility=hidden -ffreestanding \
                  -fno-stack-protector -fno-builtin -fno-asynchronous-unwind-tables
 IMGACT_LDFLAGS := -nostdlib -nostartfiles -shared \
@@ -28,13 +31,26 @@ IMGACT_LDFLAGS := -nostdlib -nostartfiles -shared \
 # translation unit here so IMGACT.EXE can call known_images_lookup() (bead
 # vms-30d wiring); imgact.c provides the open/fstat/mmap/munmap/close/
 # strncpy/strncmp shim its libc calls need under -nostdlib.
-IMGACT_SRC := imgact.c known_images.c $(ARCHDIR)/start.S
+# Alpha-only: the VMS standard-call trampoline (imgact_vms_transfer, vms-f60d).
+ARCH_EXTRA_SRC :=
+ifeq ($(ARCH),alpha)
+ARCH_EXTRA_SRC := $(ARCHDIR)/vms_transfer.S
+endif
+
+# imgact_boundary_audit.c + the shared boundary_audit_filter.c (vms-617) are
+# compiled as extra freestanding TUs here, exactly like known_images.c: the
+# executive-boundary AUDIT tracer installed at the activation site. The shared
+# classifier/finding-format .c lives under src/boundary_audit so the hosted
+# unit-proof library and this freestanding path use the SAME code (no drift).
+IMGACT_SRC := imgact.c known_images.c imgact_acp.c imgact_xfer.c \
+              imgact_boundary_audit.c ../boundary_audit/boundary_audit_filter.c \
+              $(ARCHDIR)/start.S $(ARCH_EXTRA_SRC)
 
 .PHONY: all clean
 all: IMGACT.EXE
 
-IMGACT.EXE: $(IMGACT_SRC) $(ARCHDIR)/imgact_arch.h known_images.h
-	$(CC) $(IMGACT_CFLAGS) $(IMGACT_LDFLAGS) -o $@ imgact.c known_images.c $(ARCHDIR)/start.S
+IMGACT.EXE: $(IMGACT_SRC) $(ARCHDIR)/imgact_arch.h known_images.h imgact_acp.h imgact_xfer.h imgact_boundary_audit.h ../boundary_audit/include/boundary_audit_filter.h include/ovmx_activation.h
+	$(CC) $(IMGACT_CFLAGS) $(IMGACT_LDFLAGS) -o $@ $(IMGACT_SRC)
 
 clean:
 	rm -f IMGACT.EXE test/*.o test/test_prog 'test/LIBTEST$$SHR.EXE'

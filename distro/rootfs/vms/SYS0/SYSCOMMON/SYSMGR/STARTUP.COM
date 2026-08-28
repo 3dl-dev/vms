@@ -82,13 +82,17 @@ $! documented here rather than silent.
 $ DEFINE/SYSTEM SYS$STARTUP SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYS$STARTUP],SYS$MANAGER
 $ DEFINE/SYSTEM SYS$LOGIN SYS$MANAGER
 $!
-$! SYS$UPDATE -- [SYS0.SYSCOMMON.SYSUPD], the standard VMS home for
-$! pre-PCSI layered-product install kits and their SETUP.COM procedures
-$! (e.g. SYS$UPDATE:PARTS_SETUP.COM, vms-977/vms-2579). Not one of the
-$! logicals lnm_setup_defaults() hardcodes (src/vmslnm/lnm_defaults.c) --
-$! defined here, the same way SYS$STARTUP/SYS$LOGIN above are, rather than
-$! adding to that baseline table.
-$ DEFINE/SYSTEM SYS$UPDATE SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSUPD]
+$! SYS$UPDATE -- the standard VMS home for pre-PCSI layered-product install
+$! kits and their SETUP.COM procedures (e.g. SYS$UPDATE:PARTS_SETUP.COM,
+$! vms-977/vms-2579). It is NO LONGER (re)defined here: lnm_setup_defaults()
+$! (src/vmslnm/lnm_defaults.c) now seeds SYS$UPDATE = SYS$SYSROOT:[SYSUPD],
+$! COMPOSED onto the concealed rooted SYS$SYSROOT search list exactly like
+$! SYS$MANAGER/SYS$SYSTEM. The old flatten override here --
+$! "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSUPD]" -- was a stale pre-SYS$SYSROOT
+$! workaround that DEFEATED that composition, making SHOW LOGICAL and the
+$! DIRECTORY header render the flattened physical path instead of the
+$! authentic "[SYSUPD]". Dropped so SYS$UPDATE resolves the same rooted way
+$! as every other SYS$xxx directory logical (vms-9344).
 $!
 $! Login banners are NOT set here -- LOGINOUT reads SYS$ANNOUNCE and
 $! SYS$WELCOME, which a manager defines in SYS$MANAGER:SYLOGICALS.COM (run

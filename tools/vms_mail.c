@@ -39,14 +39,14 @@
 #include "ovmx_layout.h"
 #include "str_util.h"
 #include "vmsfs/device.h"
-#include "vmsfs/filespec.h"
 #include "vms/logical.h"
+/* SYSUAF is the sole VMS account database — binary indexed lookup (vms-d92). */
+#include "sysuaf.h"
 /* Whose mailbox this is comes from the executive (vms-a30). */
 #include "vms_kif.h"
 /* Shared mail storage layout + count/path helpers (vms-417): MAIL_SUBDIR,
  * MAIL_INDEX, get_user_homedir(), build_maildir(), mail_count_unread(). */
 #include "vms_mail_notify.h"
-#define SYSUAF_PATH     VMS_SYSUAF_PATH
 #define MAX_MESSAGES    1000
 #define MAX_SUBJECT     256
 #define MAX_USERNAME    64
@@ -115,36 +115,11 @@ static void vms_date_short(char *buf, size_t bufsiz)
 
 static int user_exists(const char *username)
 {
-    /* First check sysuaf.dat */
-    char sysuaf_linux[1024];
-    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux, sizeof(sysuaf_linux));
-    FILE *fp = fopen(sysuaf_linux, "r");
-    if (fp) {
-        char line[512];
-        while (fgets(line, sizeof(line), fp)) {
-            if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
-                continue;
-            str_trim(line);
-            /* First field is username (SYSUAF uses pipe delimiter) */
-            char *delim = strchr(line, '|');
-            if (delim) *delim = '\0';
-            char uname[MAX_USERNAME];
-            strncpy(uname, line, sizeof(uname) - 1);
-            uname[sizeof(uname) - 1] = '\0';
-            str_upcase(uname);
-            char search[MAX_USERNAME];
-            strncpy(search, username, sizeof(search) - 1);
-            search[sizeof(search) - 1] = '\0';
-            str_upcase(search);
-            if (strcmp(uname, search) == 0) {
-                fclose(fp);
-                return 1;
-            }
-        }
-        fclose(fp);
-    }
-
     /*
+     * SYSUAF is the sole VMS account database. The lookup is a binary
+     * indexed read (vms-d92) -- no ASCII pipe-parse. Existence is simply
+     * "the engine returned a record for this name".
+     *
      * DELETED, NOT REPLACED (vms-a30): a getpwnam(lowercased name) fall
      * back to /etc/passwd stood here. SYSUAF is the VMS account database;
      * consulting the host passwd file made every Linux login a VMS user
@@ -152,6 +127,9 @@ static int user_exists(const char *username)
      * does not exist (Rule 10 -- match VMS or make the condition
      * unreachable; a local guess is neither).
      */
+    sysuaf_record_t rec;
+    if (sysuaf_lookup(username, &rec) == 0)
+        return 1;
     return 0;
 }
 

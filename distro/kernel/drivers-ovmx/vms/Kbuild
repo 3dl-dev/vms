@@ -28,6 +28,18 @@ vms-y := vms_module.o \
          vms_lock.o \
          vms_mbx.o \
          vms_proctab.o \
-         vmsfs_acp.o
+         vmsfs_acp.o \
+         ods2_reader.o \
+         ods2_edit.o
 
-ccflags-y := -I $(src) -DOVMX_KBACKEND_LINUX
+# vms-5f0 (epic vms-208): the ATOMIC FLIP makes PID 1 $MOUNT SYS$DISK through
+# the Files-11 ACP, the FIRST product path to call the bootable ACP $MOUNT -- so
+# the shipped in-tree vms.ko must now carry the genuine ODS-2 codec (previously
+# only the out-of-tree QEMU-test vms.ko did, and the bootable ACP $MOUNT
+# fail-honestly refused with SS$_DEVNOTMOUNT). Mirrors src/kernel/Makefile's
+# vms-y (ods2_reader.o = the pure parse/validate surface acp_validate_ods2 uses:
+# home/FH2/SCB parse + FM2 map-walk; ods2_edit.o = the EDIT twins the IO$_WRITEVBLK
+# path uses). NOT the writer / block-I/O objects: vmsfs_acp.c does its own block
+# reads/writes through the exec_blockdev_*_block shim. Same flatten-safe codec
+# staging as vmsfs/Kbuild (sources.conf stages vmsfs/ods2.h at <moddir>/vmsfs/).
+ccflags-y := -I $(src) -DOVMX_KBACKEND_LINUX -DOVMX_ODS2_KERNEL

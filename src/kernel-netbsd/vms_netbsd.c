@@ -227,13 +227,21 @@ vms_proc_get(pid_t pid)
 	 * Files-11 (ODS-2) ACP file-class channels (rd vms-6a7f, epic vms-208) --
 	 * this process's (initially empty) file-channel ring, same chan_lock/
 	 * next_chan space as mbx_channels above. Only the list head is
-	 * initialized here: vmsfs_acp.c is not yet a TU of THIS module build
-	 * (tools/cross-vax/build-vms-module-vax.sh's SRCS), so its release-all
-	 * teardown call is deliberately NOT wired below (that link-in is the
-	 * later NetBSD-VAX ACP re-target, vms-d5d) -- an always-empty list is
-	 * harmless to drain-skip.
+	 * initialized here; vmsfs_acp.c is now a TU of this module (vms-d5d), so its
+	 * release-all teardown IS wired below: vms_proc_free_claimed() calls
+	 * vms_acp_release_all(proc) to $DASSGN every file channel at process death,
+	 * beside the mailbox release.
 	 */
 	exec_list_head_init(&np->file_channels);
+
+	/*
+	 * DEVICE channels (rd vms-618) -- this process's (initially empty) ring of
+	 * channels to executive device-table rows, on the SAME chan_lock/next_chan
+	 * space as the mailbox and file channels above. vms_proc_release_channels()
+	 * (src/kernel-core/vms_devtab.c) drains it at process death, and gives back
+	 * any DEVICE this process had $ALLOCated.
+	 */
+	exec_list_head_init(&np->channels);
 
 	/*
 	 * Lock-manager per-process state (P4-A, rd vms-ff7): this process's (initially
@@ -275,6 +283,104 @@ vms_proc_get(pid_t pid)
 }
 
 /*
+ * vms_proc_continue_identity - stamp the calling task's REAL PARENT's executive
+ * identity onto `proc' (a child PCB vms_proc_get() has just created and seeded
+ * fresh) for VMS_IOCTL_REGISTER_CONTINUE. This is the NetBSD twin of
+ * src/kernel/vms_module.c:vms_proc_continue_identity().
+ *
+ * WHY THIS EXISTS. On OpenVMS, RUN / a foreign command / a DCL utility
+ * activates an image IN the current process -- same PID, UIC, privileges. OVMX
+ * fork()s + execv()s instead (src/vmsdcl/dcl_cmd_process.c), and the child
+ * calls vms_kif_register_continue() BEFORE execv while it is still DCL's child.
+ * Without this the child's PCB carried the FRESH kauth-seeded mask
+ * vms_proc_get() derives (VMS_DEFAULT_PRIVS, plus VMS_PRV_M_ENFORCED for a
+ * root/kauth caller) -- which NEVER includes SYSPRV/BYPASS, since those arrive
+ * only via $SETIDENT (VMS_IOCTL_SETIDENT) after login. So SYSTEM's DCL, holding
+ * SYSPRV/BYPASS, activated AUTHORIZE/LOGINOUT into a child that did NOT, and the
+ * activated image could not open the World-denied SYSUAF.DAT: %UAF-E-NAOFIL,
+ * -RMS-E-PRV. The combined REGISTER/_CONTINUE case here fresh-seeded on BOTH
+ * paths -- it never once looked at the parent -- which is the fabrication this
+ * removes (INV-6): _CONTINUE claimed to continue the parent while handing back
+ * a fresh, differently-privileged identity.
+ *
+ * WHAT IT COPIES. The parent's identity fields (uic/username/prcnam/terminal),
+ * CLI invocation context (cli_present/length/command, so the image reads its
+ * OWN invoking DCL command line back), and BOTH privilege masks -- the parent's
+ * CURRENT (possibly $SETIDENT-reduced) cur_privs, so a non-privileged parent's
+ * child stays non-privileged and a setident-down cannot be undone by a fork.
+ * The child then SHARES the parent's vms_pid: to the rest of the executive DCL
+ * and the image it activated are ONE VMS process ($GETJPI resolves either to
+ * the same identity). Mirrors the Linux twin field-for-field; job_id is not
+ * copied because the NetBSD substrate has no job glue yet (it stays 0 here, as
+ * vms_proc_get leaves it -- honest omission, not a fake value).
+ *
+ * LOCKING. hash_lock (outer) covers the identity fields and vms_pid; each proc's
+ * mode_lock (inner) covers its 64-bit privilege masks -- taken outer-then-inner,
+ * the same order as elsewhere. The parent's masks are read into locals under the
+ * parent's mode_lock, then written to the child under the child's mode_lock, so
+ * the two mode_locks are never held at once and the 64-bit masks are never torn
+ * (which matters on 32-bit VAX, where a uint64_t store is two words).
+ *
+ * The parent is matched by pid NUMBER -- the same key vms_proc_get() and every
+ * walk of vms_proc_hash use on this substrate; the facility reaper clears a dead
+ * PCB before its pid can recycle, which is what makes the number a safe key.
+ *
+ * Returns the parent's VMS PID (nonzero) that the child now shares, or 0 when
+ * the task has no registered VMS parent to continue (0 is never a valid vms_pid;
+ * assign-side keys never hand it out). On the 0 return the child's fresh seed is
+ * left untouched and the caller fails the _CONTINUE honestly -- it does NOT
+ * silently substitute a fresh identity for a continuation that was asked for.
+ */
+static uint32_t
+vms_proc_continue_identity(struct vms_proc *proc, pid_t parent_pid)
+{
+	struct vms_proc *p, *parent = NULL;
+	uint64_t parent_perm, parent_cur;
+	uint32_t shared_vms_pid = 0;
+	int bkt;
+
+	if (parent_pid == 0)
+		return 0;
+
+	exec_lock(&vms_proc_hash_lock);
+	exec_hash_for_each(vms_proc_hash, bkt, p, hash_node) {
+		if (p->pid == parent_pid) {
+			parent = p;
+			break;
+		}
+	}
+	if (parent != NULL) {
+		/* Identity fields: read parent + write child under hash_lock. */
+		proc->uic = parent->uic;
+		memcpy(proc->username, parent->username, sizeof(proc->username));
+		memcpy(proc->prcnam,   parent->prcnam,   sizeof(proc->prcnam));
+		memcpy(proc->terminal, parent->terminal, sizeof(proc->terminal));
+		proc->cli_present = parent->cli_present;
+		proc->cli_length  = parent->cli_length;
+		memcpy(proc->cli_command, parent->cli_command,
+		       sizeof(proc->cli_command));
+
+		/* Privilege masks: read parent under its mode_lock into locals... */
+		exec_lock(&parent->mode_lock);
+		parent_perm = parent->perm_privs;
+		parent_cur  = parent->cur_privs;
+		exec_unlock(&parent->mode_lock);
+		/* ...then write the child under the child's mode_lock. */
+		exec_lock(&proc->mode_lock);
+		proc->perm_privs = parent_perm;
+		proc->cur_privs  = parent_cur;
+		exec_unlock(&proc->mode_lock);
+
+		/* One VMS process: the child SHARES the parent's VMS PID. */
+		proc->vms_pid  = parent->vms_pid;
+		shared_vms_pid = parent->vms_pid;
+	}
+	exec_unlock(&vms_proc_hash_lock);
+
+	return shared_vms_pid;
+}
+
+/*
  * vms_proc_free_claimed - tear down a PCB the facility's reaper has ALREADY
  * unlinked from vms_proc_hash under vms_proc_hash_lock (rd vms-ca7). That unlink
  * is the ownership claim (exactly one caller reaches here per entry), so this
@@ -311,7 +417,20 @@ vms_proc_free_claimed(struct vms_proc *proc)
 {
 	int m;
 
-	vms_mbx_release_all(proc);
+	/*
+	 * Release every DEVICE channel this process still held -- which ends any
+	 * ownership resting on those channels -- and give back any device it had
+	 * $ALLOCated (rd vms-618). vms_proc_release_channels() (vms_devtab.c) calls
+	 * vms_mbx_release_all() itself as its last step, so the mailbox release
+	 * that used to be here is INSIDE it now, not dropped. A device left owned
+	 * by a process that no longer exists is not a state VMS has.
+	 */
+	vms_proc_release_channels(proc);
+	/* Release every Files-11 ACP file-class channel this process still held
+	 * ($DASSGN-all at process death, vms-d5d) -- the file_channels twin of the
+	 * mailbox release above, mirroring the Linux vms.ko's vms_acp_release_all in
+	 * vms_module.c's proc free. */
+	vms_acp_release_all(proc);
 	/* Release every lock this process still held ($DEQ-all at process death, P4-A
 	 * rd vms-ff7). Runs while lock_list_lock is still alive, before it is
 	 * destroyed below -- mirrors the Linux vms.ko's vms_proc_release_locks call
@@ -372,7 +491,7 @@ vms_proctab_teardown(void)
 		 * event-flag teardown above (freed by vms_eflag_cleanup, not here). We
 		 * only destroy this process's lock_list_lock guard, which vms_lock_cleanup
 		 * did not own. */
-		vms_mbx_release_all(p);
+		vms_proc_release_channels(p);
 		vms_proc_rundown_asts(p, PSL_C_KERNEL);
 		exec_lock_destroy(&p->lock_list_lock);
 		exec_lock_destroy(&p->chan_lock);
@@ -389,25 +508,20 @@ vms_proctab_teardown(void)
 }
 
 /* ================================================================
- * Cross-facility image-rundown stubs (P4-A).
+ * Cross-facility image-rundown helpers (P4-A) -- ALL THREE NOW REAL.
  *
  * vms_ioctl_image_rundown() (src/kernel-core/vms_access.c) releases the image's
  * locks, channels and ASTs at rundown by calling three per-facility helpers.
- * vms_proc_rundown_asts is DEFINED (vms_ast.c) and vms_proc_rundown_locks is now
- * DEFINED (vms_lock.c, rd vms-ff7 -- locks joined this module's SRCS), so both
- * link to their real facility definitions. Only vms_proc_rundown_channels has no
- * definition: vms_mbx.c IS in SRCS but a mailbox channel is released at $DASSGN /
- * process death (vms_mbx_release_all), not at image rundown, so there is nothing
- * for it to run down. This WEAK no-op keeps the module link-coherent and would be
- * OVERRIDDEN by a real strong definition if one ever lands. This fabricates
- * nothing (INV-6 / Rule 11): a substrate with no image-rundown channel release
- * genuinely has no such resource to run down, so running down nothing is the
- * honest result, not a faked success.
+ * vms_proc_rundown_asts is DEFINED (vms_ast.c), vms_proc_rundown_locks is
+ * DEFINED (vms_lock.c, rd vms-ff7) and vms_proc_rundown_channels is DEFINED as
+ * of the device-table port (vms_devtab.c, rd vms-618) -- it deassigns the USER-
+ * mode DEVICE channels an activated image took. So the WEAK no-op stub this file
+ * used to carry for the third one is GONE: nothing here shadows a real facility
+ * any more. (Deleting it, rather than leaving it weak beside a strong twin, is
+ * deliberate -- the static-link weak-seam trap: a weak stub that wins the link
+ * makes a facility silently do nothing, which is the failure mode this project
+ * has already been bitten by once.)
  * ================================================================ */
-__attribute__((weak)) void
-vms_proc_rundown_channels(struct vms_proc *proc __unused, uint8_t min_acmode __unused)
-{
-}
 
 /* ================================================================
  * cdevsw
@@ -533,6 +647,68 @@ vms_mbx_bigio(struct lwp *l, void *data, size_t argsz,
 		r = -EFAULT;
 
 	exec_free(kbuf);
+	return vms_facility_errno(r);
+}
+
+/*
+ * vms_acp_rw_bounce - dispatch the Files-11 ACP READVBLK/WRITEVBLK, whose arg
+ * (vms_acp_rw_args) carries a SEPARATE user data-buffer POINTER (.buffer), not
+ * an inline payload like every other facility. NetBSD's cdevsw framework does
+ * exactly ONE user<->kernel boundary crossing -- for the _IOWR arg struct
+ * itself -- so the SHARED handler's exec_copyout(args.buffer, ...), an in-kernel
+ * memcpy on this backend, cannot reach that user address. We bounce the payload
+ * here with the SAME manual-copy technique vms_mbx_bigio() uses for the mailbox
+ * transfer ops: kmem a kernel buffer, rewrite args.buffer to it so the shared
+ * (BYTE-UNCHANGED) handler memcpys against the bounce, then copyout the result
+ * to the caller. DO NOT "simplify" this into the shared path: the shared handler
+ * is platform-agnostic by design, and this user-copy glue belongs in the
+ * platform dispatch, exactly where mbx's lives (vms-d5d).
+ */
+static int
+vms_acp_rw_bounce(struct lwp *l, void *data, int for_write)
+{
+	struct vms_acp_rw_args *a = (struct vms_acp_rw_args *)data;
+	void *ubuf = (void *)(uintptr_t)a->buffer;   /* caller's separate data buffer */
+	uint32_t len = a->length;
+	struct vms_proc *proc;
+	void *bounce = NULL;
+	long r;
+
+	proc = vms_proc_get(l->l_proc->p_pid);
+	if (proc == NULL)
+		return ENOMEM;
+
+	/*
+	 * Bounce only an in-range transfer. len == 0 moves nothing; len > 1 MiB
+	 * (ACP_RW_MAX_XFER) the shared handler rejects with SS$_BADPARAM BEFORE it
+	 * touches .buffer -- so both fall through with .buffer left as the user
+	 * pointer, and we never kmem an attacker-sized bounce.
+	 */
+	if (len > 0 && len <= (1u << 20)) {
+		bounce = exec_alloc(len);
+		if (bounce == NULL)
+			return ENOMEM;
+		if (for_write && ubuf != NULL && copyin(ubuf, bounce, len)) {
+			exec_free(bounce);
+			return EFAULT;
+		}
+		a->buffer = (uint64_t)(uintptr_t)bounce;   /* handler memcpys the bounce */
+	}
+
+	r = for_write ? vms_ioctl_acp_writevb(proc, (unsigned long)data)
+	              : vms_ioctl_acp_readvb(proc, (unsigned long)data);
+
+	if (!for_write && bounce != NULL && r == 0 && a->xferred > 0) {
+		uint32_t n = a->xferred > len ? len : a->xferred;
+		if (copyout(bounce, ubuf, n))
+			r = -EFAULT;
+	}
+	if (bounce != NULL) {
+		/* Restore the caller's pointer so the framework's arg copyout does not
+		 * leak the kernel bounce address back to userspace. */
+		a->buffer = (uint64_t)(uintptr_t)ubuf;
+		exec_free(bounce);
+	}
 	return vms_facility_errno(r);
 }
 
@@ -712,6 +888,168 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		    vms_ioctl_mbx_read);
 
 	/*
+	 * Files-11 (ODS-2) ACP file operations (vms-d5d, epic vms-208): the VAX
+	 * runtime reaches SYS$DISK over the executive ACP, not the vmsfs.ko VFS
+	 * mount. These are _IOWR and <= 344 bytes (fileop_args), so they ride the
+	 * framework pre-copy path -- hand `data' straight to the shared handler
+	 * (src/kernel-core/vmsfs_acp.c), identical to the Linux vms.ko dispatch
+	 * (vms_module.c). READVBLK/WRITEVBLK are the EXCEPTION: their arg carries a
+	 * separate user data-buffer pointer, so they route through vms_acp_rw_bounce.
+	 */
+	case VMS_IOCTL_ACP_MOUNT:
+	case VMS_IOCTL_ACP_DMOUNT:
+	case VMS_IOCTL_ACP_ASSIGN:
+	case VMS_IOCTL_ACP_ACCESS:
+	case VMS_IOCTL_ACP_DEACCESS:
+	case VMS_IOCTL_ACP_ACPCONTROL:
+	case VMS_IOCTL_ACP_FILEOP:
+	case VMS_IOCTL_GETVOL:
+	case VMS_IOCTL_DISK_RESOLVE:
+		uarg = data;
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+
+		switch (cmd) {
+		case VMS_IOCTL_ACP_MOUNT:
+			r = vms_ioctl_acp_mount(proc, (unsigned long)uarg);      break;
+		case VMS_IOCTL_ACP_DMOUNT:
+			r = vms_ioctl_acp_dmount(proc, (unsigned long)uarg);     break;
+		case VMS_IOCTL_ACP_ASSIGN:
+			r = vms_ioctl_acp_assign(proc, (unsigned long)uarg);     break;
+		case VMS_IOCTL_ACP_ACCESS:
+			r = vms_ioctl_acp_access(proc, (unsigned long)uarg);     break;
+		case VMS_IOCTL_ACP_DEACCESS:
+			r = vms_ioctl_acp_deaccess(proc, (unsigned long)uarg);   break;
+		case VMS_IOCTL_ACP_ACPCONTROL:
+			r = vms_ioctl_acp_acpcontrol(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_ACP_FILEOP:
+			r = vms_ioctl_acp_fileop(proc, (unsigned long)uarg);     break;
+		case VMS_IOCTL_GETVOL:
+			r = vms_ioctl_acp_getvol(proc, (unsigned long)uarg);     break;
+		case VMS_IOCTL_DISK_RESOLVE:
+			r = vms_ioctl_disk_resolve(proc, (unsigned long)uarg);   break;
+		default:
+			return ENOTTY;   /* unreachable */
+		}
+		return vms_facility_errno(r);
+
+	/*
+	 * VMS_IOCTL_REGISTER (vms-329): adopt-or-create this process's executive
+	 * PCB, FRESH-SEEDED. Every other ioctl path here does that implicitly
+	 * through vms_proc_get(), which is why the op was never wired -- but the
+	 * SHARED userspace ACP client (src/imgact/imgact_acp.c, used by IMGACT.EXE,
+	 * the RMS ACP arm and PID 1's boot bridge) opens every file with
+	 * acp_register() and treats a failure as fatal. Unanswered, it returned
+	 * ENOTTY -> SS$_NOSUCHDEV and NO ACP file open could ever succeed on this
+	 * substrate. This creates no new policy: it returns the PCB vms_proc_get()
+	 * builds anyway, matching the Linux twin's "hand back the process that
+	 * already exists" (vms_module.c). _IOWR, 8 bytes: `data' is the kernel
+	 * copy, answered in place.
+	 */
+	case VMS_IOCTL_REGISTER: {
+		struct vms_register_args *ra = (struct vms_register_args *)data;
+
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+		ra->vms_pid = proc->vms_pid;
+		ra->status  = SS__NORMAL;
+		return 0;
+	}
+
+	/*
+	 * VMS_IOCTL_REGISTER_CONTINUE (vms-381): register this task as a
+	 * CONTINUATION of its parent's VMS process, NOT a fresh identity. DCL
+	 * fork()s + execv()s to activate an image and the child calls this before
+	 * execv while it is still DCL's child; the activated image must run as the
+	 * SAME VMS process -- same UIC, user name, CLI context and, decisively, the
+	 * parent's CURRENT privilege masks (SYSPRV/BYPASS granted to SYSTEM's DCL
+	 * via $SETIDENT), so it can open the World-denied SYSUAF.DAT that AUTHORIZE
+	 * and LOGINOUT need. This case used to be folded in with REGISTER above and
+	 * fresh-seeded identically, so the child NEVER inherited SYSPRV/BYPASS and
+	 * install failed with %UAF-E-NAOFIL / -RMS-E-PRV. It now genuinely continues
+	 * the parent, mirroring src/kernel/vms_module.c's vms_proc_continue_identity
+	 * (INV-6: this REMOVES the fresh-seed fabrication on the continue path).
+	 *
+	 * The parent is the calling task's real parent, p_pptr->p_pid. If it has no
+	 * registered VMS PCB there is nothing to continue: fail honestly (ESRCH,
+	 * leaving vms_proc_get()'s fresh seed as this child's own top-level
+	 * identity) rather than pretend a continuation happened. REGISTER (above),
+	 * not _CONTINUE, is the fresh-seed path.
+	 */
+	case VMS_IOCTL_REGISTER_CONTINUE: {
+		struct vms_register_args *ra = (struct vms_register_args *)data;
+		struct proc *pp;
+		pid_t parent_pid;
+		uint32_t shared_vms_pid;
+
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+
+		pp = l->l_proc->p_pptr;
+		parent_pid = (pp != NULL) ? pp->p_pid : 0;
+		shared_vms_pid = vms_proc_continue_identity(proc, parent_pid);
+		if (shared_vms_pid == 0)
+			return ESRCH;   /* no registered VMS parent to continue */
+
+		ra->vms_pid = proc->vms_pid;   /* == the shared parent VMS PID */
+		ra->status  = SS__NORMAL;
+		return 0;
+	}
+
+	/*
+	 * DEVICE-TABLE facility (src/kernel-core/vms_devtab.c) -- rd vms-618, the
+	 * LAST executive facility to join this module. Same dispatch shape as every
+	 * other facility above: find-or-create the caller's proc, hand the
+	 * framework's kernel buffer `data' straight to the SHARED facility, map its
+	 * Linux-style return to a NetBSD errno. Nothing here interprets the
+	 * argument, and nothing here is substrate-local: $ALLOC's answer comes from
+	 * the ONE executive-resident device table every process on the node shares,
+	 * which is the whole point (INV-6 -- a substrate-local ALLOC that returned
+	 * success with no real table would pass every single-process test and still
+	 * be a facade; the decisive property is that a SECOND process is refused
+	 * SS$_DEVALLOC).
+	 *
+	 * $ALLOC (0x55) is the DCL MOUNT prerequisite: dcl_cmd_misc.c's cmd_mount()
+	 * calls vms_kif_alloc(dev) BEFORE vms_kif_acp_mount(), so while this
+	 * answered ENOTTY no MOUNT of any device could succeed on NetBSD/vax.
+	 *
+	 * $DASSGN (0x51, wired by vms-329) MOVES HERE from the substrate-local
+	 * fallback chain this file used to carry: vms_devtab.c's handler is a strict
+	 * superset -- device channels FIRST, then file-class (ACP), then mailbox --
+	 * so there is now exactly one $DASSGN implementation, and a device channel
+	 * (impossible before the table existed) is released correctly. A channel
+	 * that is none of the three still gets SS$_IVCHAN, never a fabricated
+	 * success.
+	 */
+	case VMS_IOCTL_DASSGN:
+	case VMS_IOCTL_ALLOC:
+	case VMS_IOCTL_DALLOC:
+		uarg = data;
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+
+		switch (cmd) {
+		case VMS_IOCTL_DASSGN:
+			r = vms_ioctl_dassgn(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_ALLOC:
+			r = vms_ioctl_alloc(proc, (unsigned long)uarg);  break;
+		case VMS_IOCTL_DALLOC:
+			r = vms_ioctl_dalloc(proc, (unsigned long)uarg); break;
+		default:
+			return ENOTTY;   /* unreachable */
+		}
+		return vms_facility_errno(r);
+
+	case VMS_IOCTL_ACP_READVBLK:
+		return vms_acp_rw_bounce(l, data, 0);
+	case VMS_IOCTL_ACP_WRITEVBLK:
+		return vms_acp_rw_bounce(l, data, 1);
+
+	/*
 	 * Process-table facility (src/kernel-core/vms_proctab.c) -- P4-A, rd
 	 * vms-ca7. Same dispatch shape as event flags: find-or-create the caller's
 	 * proc, hand the framework's kernel buffer `data' straight to the shared
@@ -735,6 +1073,10 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_ESTABLISH_SYSTEM:
 	case VMS_IOCTL_HIBER:
 	case VMS_IOCTL_WAKE:
+	case VMS_IOCTL_SETEXIT:
+	case VMS_IOCTL_GETEXIT:
+	case VMS_IOCTL_SETCLI:
+	case VMS_IOCTL_GETCLI:
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -755,6 +1097,15 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_hiber(proc, (unsigned long)uarg);            break;
 		case VMS_IOCTL_WAKE:
 			r = vms_ioctl_wake(proc, (unsigned long)uarg);             break;
+		/* $EXIT/$STATUS + CLI invocation context (vms-f60d) */
+		case VMS_IOCTL_SETEXIT:
+			r = vms_ioctl_setexit(proc, (unsigned long)uarg);          break;
+		case VMS_IOCTL_GETEXIT:
+			r = vms_ioctl_getexit(proc, (unsigned long)uarg);          break;
+		case VMS_IOCTL_SETCLI:
+			r = vms_ioctl_setcli(proc, (unsigned long)uarg);           break;
+		case VMS_IOCTL_GETCLI:
+			r = vms_ioctl_getcli(proc, (unsigned long)uarg);           break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}
@@ -901,9 +1252,38 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * a downstream SYS$SYSTEM resolution failure. */
 		vms_lnm_arena_selftest();
 
+		/*
+		 * Bring up the EXECUTIVE DEVICE TABLE (rd vms-618) BEFORE /dev/vms
+		 * exists, so no $ALLOC can race an uninitialised list guard. Two
+		 * steps, in the order a real VMS system initializes:
+		 *   1. vms_devtab_init() creates the console terminal OPA0: -- no
+		 *      process registers it; a process that never asked for it still
+		 *      sees it, exactly as the terminal driver creates the console
+		 *      unit during system initialization.
+		 *   2. vms_blockdev_netbsd_register_units() enters this node's DISK
+		 *      units from the device-native unit map (DKA0: -> ra1c,
+		 *      DKA100: -> ra2c), and ONLY for a device that really resolves
+		 *      -- an absent disk gets no row, so $ALLOC of it is an honest
+		 *      SS$_NOSUCHDEV rather than an invented unit (INV-6).
+		 * A failure here is out of memory: unwind exactly as the lnm arm above.
+		 */
+		error = vms_devtab_init();
+		if (error != 0) {
+			printf("vms: vms_devtab_init failed: %d\n", error);
+			vms_lnm_cleanup();
+			vms_eflag_cleanup();
+			vms_lock_cleanup();
+			vms_proctab_teardown();
+			vms_mbx_cleanup();
+			exec_lock_destroy(&vms_proc_hash_lock);
+			return ENOMEM;
+		}
+		vms_blockdev_netbsd_register_units();
+
 		error = devsw_attach("vms", NULL, &bmajor, &vms_cdevsw, &cmajor);
 		if (error != 0) {
 			printf("vms: devsw_attach failed: %d\n", error);
+			vms_devtab_cleanup();
 			vms_lnm_cleanup();
 			vms_eflag_cleanup();
 			vms_lock_cleanup();
@@ -915,6 +1295,11 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		/* The harness reads this line back from dmesg to mknod /dev/vms with
 		 * the dynamically assigned major. */
 		printf("vms: registered, char major %d\n", cmajor);
+		/* Bring up the Files-11 ODS-2 ACP global state (vms-d5d) AFTER the device
+		 * is attached: no ioctl can arrive until userspace opens /dev/vms, which
+		 * is after INIT returns, and vms_acp_init cannot fail (vmsfs_acp.c), so it
+		 * needs no unwind. Mirrors the Linux vms.ko init. */
+		vms_acp_init();
 		return 0;
 
 	case MODULE_CMD_FINI:
@@ -938,6 +1323,17 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		vms_lock_cleanup();
 		vms_proctab_teardown();
 		vms_mbx_cleanup();
+		/* Tear down the Files-11 ODS-2 ACP (vms-d5d): free its global volume/
+		 * channel state (each proc already gave back its file channels via
+		 * vms_proc_free_claimed above), then close the cached backing device
+		 * vnode the ACP $MOUNT opened. Mirrors the Linux vms.ko FINI. */
+		vms_acp_cleanup();
+		/* Free the device table's rows AFTER the procs are gone (rd vms-618):
+		 * vms_proctab_teardown above ran each proc's vms_proc_release_channels,
+		 * which unlinks its channels FROM these rows, so nothing points at a
+		 * device row by the time it is freed. */
+		vms_devtab_cleanup();
+		vms_blockdev_netbsd_release_all();
 		/* Free the logical-name arena LAST (rd vms-72da): no process can reach it
 		 * anymore (the device is detached) and no facility above references it. */
 		vms_lnm_cleanup();

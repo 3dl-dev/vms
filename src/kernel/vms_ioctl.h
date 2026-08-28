@@ -830,6 +830,49 @@ struct vms_diskresolve_args {
 #define VMS_IOCTL_DISK_RESOLVE _IOWR(VMS_IOC_MAGIC, 0x57, struct vms_diskresolve_args)
 
 /*
+ * $GETDVI for the VOLUME items of a mounted disk (vms-e6f). SHOW DEVICE's brief
+ * and /FULL listings report, for a mounted Files-11 disk, its mount state, the
+ * ODS-2 volume label, the volume size and the free-block count -- items that on
+ * real VMS come from $GETDVI (DVI$_MNT, DVI$_VOLNAM, DVI$_MAXBLOCK,
+ * DVI$_FREEBLOCKS, DVI$_CLUSTER). The base device table (struct vms_devinfo)
+ * carries none of these: they are the ACP's, held in the executive-global
+ * mounted-volume table a $MOUNT populates (src/kernel-core/vmsfs_acp.c). This
+ * ioctl reads THAT table -- so every process on the node sees the same mount
+ * state and the same label, never a per-process fake (CLAUDE.md Rule 11 / INV-6).
+ *
+ * A unit that is not a mounted ODS-2 volume returns SS$_NORMAL with mounted == 0
+ * (it is simply not mounted -- not an error, not a fabricated mount). The label,
+ * size, cluster factor and INDEXF geometry are the ones the executive VALIDATED
+ * and recorded at $MOUNT from the home block / SCB; freeblocks is counted, at
+ * call time, from the volume's BITMAP.SYS storage bitmap (the same bitmap the
+ * ACP allocator reads), so it is a genuine reading and never a stored guess.
+ * free_valid == 0 means the bitmap could not be read this call (a real I/O
+ * error) -- freeblocks is then unset and a reader prints no free-block count
+ * rather than the fabricated "0" (Rule 10).
+ *
+ * OVMX CONSTRUCT, labelled (CLAUDE.md Rule 8): OVMX reaches the executive over
+ * /dev/vms, not a byte-level $GETDVI itemlist, so this flat arg struct is an
+ * OVMX design choice. The DVI$_ items it carries and their MEANINGS are the
+ * public ones ($GETDVI in the VSI System Services Reference Manual); the
+ * VALUES are read from the genuine on-disk ODS-2 structures (the codec,
+ * src/vmsfs/ods2, validated against a real VAX volume).
+ */
+#define VMS_GETVOL_LABEL_SIZE 16
+struct vms_getvol_args {
+    char     devnam[VMS_DEVNAM_SIZE];   /* in: unit name, e.g. "DKA0:" */
+    uint32_t status;                    /* out: SS$_ status */
+    uint32_t mounted;                   /* out: 1 = a mounted ODS-2 volume */
+    uint32_t volsize;                   /* out: DVI$_MAXBLOCK, SCB volume size (blocks) */
+    uint32_t freeblocks;                /* out: DVI$_FREEBLOCKS (valid iff free_valid) */
+    uint32_t free_valid;                /* out: 1 = freeblocks was read this call */
+    uint32_t cluster;                   /* out: DVI$_CLUSTER, storage-bitmap cluster factor */
+    uint32_t transcnt;                  /* out: file-class channels assigned (Trans Count) */
+    char     volnam[VMS_GETVOL_LABEL_SIZE]; /* out: NUL-terminated ODS-2 volume label */
+};
+
+#define VMS_IOCTL_GETVOL _IOWR(VMS_IOC_MAGIC, 0x58, struct vms_getvol_args)
+
+/*
  * The kernel module and the userspace client compile these structures
  * separately, from this one header, and then pass them across the
  * /dev/vms boundary by raw address. If a field is ever reordered,
@@ -863,6 +906,8 @@ _Static_assert(sizeof(struct vms_alloc_args) == 24,
                "struct vms_alloc_args changed size -- $ALLOC/$DALLOC would decode at the wrong offsets");
 _Static_assert(sizeof(struct vms_diskresolve_args) == 48,
                "struct vms_diskresolve_args changed size -- disk unit resolution would decode at the wrong offsets");
+_Static_assert(sizeof(struct vms_getvol_args) == 60,
+               "struct vms_getvol_args changed size -- $GETDVI volume items would decode at the wrong offsets");
 
 _Static_assert(VMS_IOCTL_ASSIGN == 0xC0185650u,
                "VMS_IOCTL_ASSIGN encodes differently here than on the reference build");
@@ -880,6 +925,8 @@ _Static_assert(VMS_IOCTL_DALLOC == 0xC0185656u,
                "VMS_IOCTL_DALLOC encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_DISK_RESOLVE == 0xC0305657u,
                "VMS_IOCTL_DISK_RESOLVE encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_GETVOL == 0xC03C5658u,
+               "VMS_IOCTL_GETVOL encodes differently here than on the reference build");
 
 /* ================================================================
  * Process table (executive-resident PCB directory)
@@ -958,6 +1005,17 @@ _Static_assert(VMS_IOCTL_DISK_RESOLVE == 0xC0305657u,
 #define VMS_USERNAME_SIZE 32
 
 /*
+ * Invoking CLI command-line bound (vms-f60d). OVMX DESIGN CHOICE
+ * (CLAUDE.md Rule 8): 256 bytes holds the classic 255-character DCL
+ * command line the OpenVMS User's Manual documents, plus a NUL for C
+ * readers. Public docs give the SEMANTICS of a CLI command line and the
+ * $CLI get-command-line callback (ovmx_activation.h) but no byte-level
+ * wire format, so this size and the ioctl structs carrying it are OVMX's
+ * own -- not presented as VMS-authentic.
+ */
+#define VMS_CLI_CMDLINE_SIZE 256
+
+/*
  * The per-process QUOTA BLOCK (vms-a7e) -- the VMS Job Information Block
  * (JIB) limits SHOW PROCESS/QUOTAS, SHOW QUOTA and F$GETJPI report. The
  * field set and its F$GETJPI item codes are from the PUBLIC OpenVMS System
@@ -1023,6 +1081,32 @@ struct vms_jib_quota {
 #define VMS_PI_V_BUFIO      0x00000100u  /* bufio is sourced */
 #define VMS_PI_V_QUOTA      0x00000200u  /* quota block is sourced */
 
+/*
+ * proc_type values (vms-c17). The process CLASSIFICATION SHOW USERS uses to
+ * fill the Interactive/Subprocess/Batch columns, DECLARED by the executive
+ * rather than inferred by the reader -- the same discipline as `redacted` and
+ * `fields_valid`. A reader that has to GUESS from a zeroed field (is this the
+ * absence of a terminal, or a subprocess whose root it cannot see?) eventually
+ * guesses wrong, so the executive says which one it is.
+ *
+ * The discriminator is the PCB's job_id (vms_internal.h): a job root has
+ * job_id == vms_pid; a SPAWNed subprocess inherits its root's job_id. A row is
+ * INTERACTIVE when it is a terminal-bound job root, SUBPROCESS when its job
+ * root is terminal-bound, and OTHER when neither holds (a detached/system
+ * process -- not a "user"). See proc_fill_info() in
+ * src/kernel-core/vms_proctab.c for how the value is derived.
+ *
+ * BATCH IS RESERVED AND NEVER SET TODAY. OVMX has no batch EXECUTION engine
+ * (SUBMIT queues an entry but forks/execs nothing -- see the structural note
+ * in src/vmsdcl/dcl_cmd_show.c's cmd_show_users), so no row is ever a batch
+ * job. The value exists so the wire enum is complete and a future batch
+ * executor has a name to set, not because anything produces it now.
+ */
+#define VMS_PROC_T_OTHER        0u  /* detached / system process (not a "user") */
+#define VMS_PROC_T_INTERACTIVE  1u  /* job root with a terminal (login) */
+#define VMS_PROC_T_SUBPROCESS   2u  /* belongs to a parent's job (SPAWN) */
+#define VMS_PROC_T_BATCH        3u  /* batch job root (reserved -- no engine yet) */
+
 struct vms_procinfo {
     uint32_t vms_pid;                   /* VMS-style process ID */
     uint32_t linux_pid;                 /* Linux pid backing the process */
@@ -1049,7 +1133,13 @@ struct vms_procinfo {
      * ABI is unchanged -- the _Static_asserts below still hold.
      */
     uint8_t  redacted;
-    uint8_t  pad[2];
+    uint8_t  proc_type;   /* VMS_PROC_T_* -- process classification (vms-c17).
+                           * Withheld like the identity fields on a redacted
+                           * row (job membership is not enumeration): set only
+                           * below proc_fill_info()'s redaction early return,
+                           * so a redacted row carries the OTHER default. Fits
+                           * the existing padding -- struct stays 216 bytes. */
+    uint8_t  pad[1];
     uint64_t cur_privs;                 /* current (process) privileges */
     uint64_t perm_privs;                /* authorized (permanent) privileges */
     char     username[VMS_USERNAME_SIZE]; /* "" until an identity is stamped */
@@ -1443,6 +1533,84 @@ struct vms_wake_args {
     uint32_t status;            /* return: SS$_ status */
 };
 
+/*
+ * $EXIT / $STATUS (vms-f60d) -- the executive facility IMGACT calls when an
+ * activated VMS-standard image's crt0 (its main()) returns, so the returned
+ * VMS condition value becomes the process's real completion status instead of
+ * a fail-honest stub (imgact.c imgact_vms_exit; ovmx_activation.h).
+ *
+ * VMS_IOCTL_SETEXIT records `condition` as the calling process's image
+ * completion $STATUS in the executive PCB (proc->exit_status). The full
+ * longword IS $STATUS; bit<0> (STS$M_SUCCESS) is the success/fail bit that
+ * $STATUS carries and bits<2:0> (STS$V_SEVERITY) are the $SEVERITY, exactly
+ * as the OpenVMS DCL Dictionary defines $STATUS/$SEVERITY. The executive
+ * echoes those decoded fields back and, as an OVMX design choice (CLAUDE.md
+ * Rule 8 -- POSIX has no VMS counterpart), maps the condition to a Linux
+ * exit code the caller (IMGACT) then passes to exit_group(2): 0 on success
+ * (bit<0> set), else nonzero. The AUTHORITATIVE completion status is the
+ * recorded longword, not the lossy exit code.
+ */
+struct vms_exit_args {
+    uint32_t condition;         /* in:  VMS condition value to record as $STATUS */
+    uint32_t status;            /* out: SS$_ status of the record operation */
+    uint32_t exit_code;         /* out: OVMX POSIX exit code mapped from condition */
+    uint8_t  success;           /* out: bit<0> of condition (STS$M_SUCCESS) */
+    uint8_t  severity;          /* out: bits<2:0> of condition (STS$V_SEVERITY) */
+    uint8_t  pad[2];
+};
+
+/*
+ * VMS_IOCTL_GETEXIT reads back a process's recorded image completion status.
+ * select is VMS_JPI_SEL_SELF (the caller's own $STATUS -- the invoking CLI
+ * reading the status of the image it just ran) or VMS_JPI_SEL_PID (another
+ * process, by VMS PID). A cross-process read is AUTHORIZED, NOT FREE: it is
+ * gated by vms_proc_may_read() exactly like $GETJPI (same UIC group, or
+ * WORLD) and returns SS$_NOPRIV with no data otherwise. has_exited is 0 (and
+ * condition 0) when no image has recorded a status yet -- a reader must not
+ * infer "not exited" from a zero condition, since 0 is a legal (warning-
+ * severity) value. OVMX DESIGN CHOICE (Rule 8): the by-PID observation of a
+ * process's completion status and this struct's layout are OVMX's own.
+ */
+struct vms_getexit_args {
+    uint32_t select;            /* in:  VMS_JPI_SEL_SELF or VMS_JPI_SEL_PID */
+    uint32_t vms_pid;           /* in:  target VMS PID when select == SEL_PID */
+    uint32_t condition;         /* out: recorded $STATUS condition value */
+    uint32_t status;            /* out: SS$_ status of the read */
+    uint8_t  has_exited;        /* out: 1 iff an image completion status exists */
+    uint8_t  success;           /* out: bit<0> of condition (STS$M_SUCCESS) */
+    uint8_t  severity;          /* out: bits<2:0> of condition (STS$V_SEVERITY) */
+    uint8_t  pad;
+};
+
+/*
+ * CLI invocation context (vms-f60d) -- the executive source for IMGACT's
+ * cliflag and cli_util->get_command_line (ovmx_activation.h). The invoking
+ * CLI (DCL) records its command line and cliflag with VMS_IOCTL_SETCLI; the
+ * image it activates reads the SAME context back with VMS_IOCTL_GETCLI (self
+ * only -- an image asks for its OWN invoking command line), inheriting it
+ * from the CLI's PCB at VMS_IOCTL_REGISTER_CONTINUE time. This is why the
+ * command line lives in the executive rather than a Linux env var: it is a
+ * fact the executive owns and hands down, not a string the image declares
+ * about itself (conductor ruling, INV-6). cliflag == 0 means "no CLI"
+ * (GETCLI then returns cli_present 0 and a zero-length command line, and
+ * decc$main derives argv[0] from image_file_desc instead).
+ */
+struct vms_setcli_args {
+    uint8_t  cliflag;                     /* in:  1 = invoked from a CLI/DCL */
+    uint8_t  pad;
+    uint16_t length;                      /* in:  command-line length in bytes */
+    uint32_t status;                      /* out: SS$_ status */
+    char     command[VMS_CLI_CMDLINE_SIZE];  /* in:  invoking DCL command line */
+};
+
+struct vms_getcli_args {
+    uint8_t  cliflag;                     /* out: 1 = invoked from a CLI/DCL */
+    uint8_t  pad;
+    uint16_t length;                      /* out: command-line length in bytes */
+    uint32_t status;                      /* out: SS$_ status */
+    char     command[VMS_CLI_CMDLINE_SIZE];  /* out: invoking DCL command line */
+};
+
 #define VMS_IOCTL_SETPRN    _IOWR(VMS_IOC_MAGIC, 0x41, struct vms_setprn_args)
 #define VMS_IOCTL_GETJPI    _IOWR(VMS_IOC_MAGIC, 0x42, struct vms_getjpi_args)
 #define VMS_IOCTL_PROCSCAN  _IOWR(VMS_IOC_MAGIC, 0x43, struct vms_procscan_args)
@@ -1451,6 +1619,10 @@ struct vms_wake_args {
 #define VMS_IOCTL_ESTABLISH_SYSTEM  _IOWR(VMS_IOC_MAGIC, 0x46, struct vms_establish_system_args)
 #define VMS_IOCTL_HIBER     _IOWR(VMS_IOC_MAGIC, 0x47, struct vms_hiber_args)
 #define VMS_IOCTL_WAKE      _IOWR(VMS_IOC_MAGIC, 0x48, struct vms_wake_args)
+#define VMS_IOCTL_SETEXIT   _IOWR(VMS_IOC_MAGIC, 0x49, struct vms_exit_args)
+#define VMS_IOCTL_GETEXIT   _IOWR(VMS_IOC_MAGIC, 0x4A, struct vms_getexit_args)
+#define VMS_IOCTL_SETCLI    _IOWR(VMS_IOC_MAGIC, 0x4B, struct vms_setcli_args)
+#define VMS_IOCTL_GETCLI    _IOWR(VMS_IOC_MAGIC, 0x4C, struct vms_getcli_args)
 
 /*
  * ABI lock for the process-table ioctls (vms-8019).
@@ -1509,6 +1681,14 @@ _Static_assert(sizeof(struct vms_establish_system_args) == 8,
                "vms_establish_system_args layout changed: VMS_IOCTL_ESTABLISH_SYSTEM ABI break");
 _Static_assert(sizeof(struct vms_register_args) == 8,
                "vms_register_args layout changed: VMS_IOCTL_REGISTER ABI break");
+_Static_assert(sizeof(struct vms_exit_args) == 16,
+               "vms_exit_args layout changed: VMS_IOCTL_SETEXIT ABI break");
+_Static_assert(sizeof(struct vms_getexit_args) == 20,
+               "vms_getexit_args layout changed: VMS_IOCTL_GETEXIT ABI break");
+_Static_assert(sizeof(struct vms_setcli_args) == 8 + VMS_CLI_CMDLINE_SIZE,
+               "vms_setcli_args layout changed: VMS_IOCTL_SETCLI ABI break");
+_Static_assert(sizeof(struct vms_getcli_args) == 8 + VMS_CLI_CMDLINE_SIZE,
+               "vms_getcli_args layout changed: VMS_IOCTL_GETCLI ABI break");
 /*
  * The inbound transfer buffer must be strictly larger than the
  * executive's inspection window, or an oversized name would be clipped

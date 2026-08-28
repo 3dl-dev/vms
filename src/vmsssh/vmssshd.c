@@ -43,6 +43,7 @@
 #include "term_map.h"
 /* Credential drop to the authenticated UIC before execl (vms-49e). */
 #include "cred_drop.h"
+#include "ssh_ident.h"
 #include "vms/pcb.h"
 #include "vms/privs.h"
 #include "vms/logical.h"
@@ -58,6 +59,16 @@
 #include "ovmx_identity.h"
 #include "ovmx_banner.h"
 #define DCL_SHELL_PATH VMS_SYSTEM_DIR "/DCL.EXE"
+
+/*
+ * Production identity syscall table (vms-6ae): the real vms_kif_setident,
+ * behind the injectable seam so ssh_ident.c stays dependency-free and its
+ * fail-honest policy (refusal DENIES the session) is unit-testable without a
+ * live /dev/vms. See ssh_ident.h.
+ */
+const struct ovmx_ident_syscalls ovmx_ident_real_syscalls = {
+    .fn_setident = vms_kif_setident,
+};
 
 /* ------------------------------------------------------------------ */
 /* Constants                                                           */
@@ -405,7 +416,12 @@ static void handle_connection(ssh_session session)
             close(slave_fd);
 
         /* ---- Step 1: Initialize PCB with user identity ---- */
-        uint64_t user_privs = parse_privilege_string(sysuaf_rec.privileges);
+        /* vms-26a: take the persona mask from the binary $UAFDEF quadword,
+         * mirroring LOGINOUT (tools/vms_login.c). Re-parsing the rendered
+         * name string drops MOUNT and other privileges outside the string
+         * parser's 17-name subset. See sysuaf_record_privileges() in
+         * sysuaf.h. */
+        uint64_t user_privs = sysuaf_record_privileges(&sysuaf_rec);
 
         /*
          * ESTABLISH THE AUTHENTICATED IDENTITY IN THE EXECUTIVE (vms-2b8),
@@ -429,12 +445,39 @@ static void handle_connection(ssh_session session)
          * The drop is done AFTER this call because vms_ioctl_setident needs
          * the SETPRV the root-derived registration granted.
          */
+        /*
+         * FAIL-HONEST (vms-6ae, INV-6 / Rule 11). If the executive REFUSES
+         * this session's identity, the session is DENIED here -- we _exit(1)
+         * and construct NO local PCB. Previously this logged %OVMX-W-NOIDENT
+         * (a warning) and fell through to vms_pcb_init() + execl() below,
+         * i.e. a network service granting a privileged VMS session the
+         * executive had explicitly denied (docs/audit-vms-040-executive-
+         * boundary.md §3.7). That is the exact fabrication class the project
+         * forbids AND an auth bypass. This now mirrors LOGINOUT's
+         * %OVMX-F-NOIDENT/_exit(1) (tools/vms_login.c) exactly. The
+         * /dev/vms-absent case surfaces here too (the ioctl fails, status is
+         * even) and likewise denies the session rather than falling back to a
+         * local privileged identity (Rule 9). The decision is factored into
+         * ovmx_ssh_establish_identity() (src/vmsssh/ssh_ident.c) so a refusal
+         * can be injected in a unit test without a live executive
+         * (tests/vmsssh/test_ssh_ident.c).
+         *
+         * Note the diagnostic prints to the PTY slave (already this child's
+         * stdio) so the connecting client sees the refusal, and the child's
+         * _exit tears the session down; the parent reaps it (waitpid) and no
+         * shell is ever exec'd.
+         */
         {
             uint32_t ssh_uic = (sysuaf_rec.uic_group << 16) | sysuaf_rec.uic_member;
-            uint32_t ist = vms_kif_setident(sysuaf_rec.username, ssh_uic, user_privs);
-            if (!(ist & 1)) {
-                printf("%%OVMX-W-NOIDENT, the executive did not accept this "
-                       "session's identity (status %u)\n", (unsigned)ist);
+            uint32_t ist = 0;
+            if (ovmx_ssh_establish_identity(sysuaf_rec.username, ssh_uic,
+                                            user_privs,
+                                            &ovmx_ident_real_syscalls,
+                                            &ist) != 0) {
+                printf("%%OVMX-F-NOIDENT, the executive refused the "
+                       "authenticated identity (status %u)\n", (unsigned)ist);
+                fflush(stdout);
+                _exit(1);
             }
         }
 

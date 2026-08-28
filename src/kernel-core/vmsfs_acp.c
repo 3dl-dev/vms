@@ -42,19 +42,18 @@
 
 /*
  * The GENUINE ODS-2 codec, compiled kernel-resident (-DOVMX_ODS2_KERNEL), gives
- * $MOUNT its home-block/SCB validation (vms-127). It is present ONLY in the
- * out-of-tree QEMU-test vms.ko (src/kernel/Makefile links ods2_reader.o and
- * defines OVMX_ODS2_KERNEL); the in-tree BOOTABLE overlay (distro/kernel/
- * drivers-ovmx/vms) does NOT yet carry the codec, because it flattens sources to
- * basenames and the codec includes the public header as the subdir path
- * "vmsfs/ods2.h" (the same flatten-safe-include follow-up vmsfs.ko's bootable
- * build still owes -- distro/kernel/drivers-ovmx/vmsfs/Kbuild). So the codec use
- * BELOW is gated on OVMX_ODS2_KERNEL: with it, $MOUNT validates the volume for
- * real and rejects non-ODS-2 media; without it, $MOUNT fail-honestly refuses
- * (SS$_DEVNOTMOUNT) rather than recording an unvalidated volume -- a fake mount
- * is the exact INV-6 facade CLAUDE.md Rule 9 forbids. No product path calls the
- * bootable ACP $MOUNT yet (the ODS-2 runtime-flip capstone is a later rung), so
- * the refuse-without-codec branch is off every live path today.
+ * $MOUNT its home-block/SCB validation (vms-127). It is now present in BOTH the
+ * out-of-tree QEMU-test vms.ko (src/kernel/Makefile) AND the in-tree BOOTABLE
+ * overlay (distro/kernel/drivers-ovmx/vms/{Kbuild,sources.conf}) -- vms-5f0
+ * added ods2_reader.o + ods2_edit.o to the bootable module and made the codec's
+ * subdir'd public header "vmsfs/ods2.h" flatten-safe (the '->' staging
+ * convention vmsfs.ko already used), because the atomic flip makes PID 1 $MOUNT
+ * SYS$DISK via the ACP -- the FIRST product path to call the bootable ACP
+ * $MOUNT. The codec use BELOW is gated on OVMX_ODS2_KERNEL: with it (both
+ * modules now), $MOUNT validates the volume for real and rejects non-ODS-2
+ * media; without it (a hypothetical codec-less build), $MOUNT fail-honestly
+ * refuses (SS$_DEVNOTMOUNT) rather than recording an unvalidated volume -- a
+ * fake mount is the exact INV-6 facade CLAUDE.md Rule 9 forbids.
  */
 #if defined(OVMX_ODS2_KERNEL)
 #include "vmsfs/ods2.h"
@@ -86,6 +85,7 @@ struct vms_acp_volume {
     uint32_t         backing_minor;
     uint32_t         volsize;           /* SCB volume size, 512-byte blocks */
     uint16_t         struclev;          /* home/SCB structure level (0x0201) */
+    uint16_t         cluster;           /* SCB storage-bitmap cluster factor (vms-e6f) */
     char             volname[13];       /* NUL-terminated ODS-2 volume label */
     /*
      * INDEXF.SYS header base (vms-204): the LBN of the primary header for file
@@ -445,6 +445,7 @@ static uint32_t acp_validate_ods2(uint32_t major, uint32_t minor,
      * process's -- this row is executive-global). */
     out->struclev = s->home.hm2_struclev;
     out->volsize  = s->scb.scb_volsize;
+    out->cluster  = s->scb.scb_cluster; /* storage-bitmap cluster factor (vms-e6f) */
     out->idx_lbn  = idx_lbn;            /* INDEXF.SYS file-1 header base (vms-204) */
     out->ibmap_lbn = s->home.hm2_ibmaplbn;   /* index-bitmap base (vms-5303) */
     out->maxfiles  = s->home.hm2_maxfiles;   /* index-file capacity (vms-5303) */
@@ -639,10 +640,23 @@ out:
 /*
  * $ASSIGN a FILE-CLASS channel to a mounted ODS-2 volume (design §4.2). The
  * channel is the executive's -- bound to the mounted volume, drawn from the
- * caller's proc->next_chan space -- not a Linux fd. SS$_NOSUCHDEV when the unit
- * is not a mounted volume: the fail-honest answer, never a fabricated channel
- * to a volume the executive does not have (CLAUDE.md Rule 9 / INV-6). $DASSGN
- * releases it (vms_acp_dassgn(), reached from vms_ioctl_dassgn's fallback).
+ * caller's proc->next_chan space -- not a Linux fd. SS$_DEVNOTMOUNT when the
+ * unit is not a mounted volume: the fail-honest answer, never a fabricated
+ * channel to a volume the executive does not have (CLAUDE.md Rule 9 / INV-6).
+ *
+ * This status is DELIBERATELY DISTINCT from SS$_NOSUCHDEV (vms-03b). Reaching
+ * this handler at all proves /dev/vms -- the executive -- is present; the
+ * userspace KIF (vms_kif_acp_assign / acp_bind_ok) is the ONLY layer that
+ * returns SS$_NOSUCHDEV, and only when /dev/vms itself cannot be opened. So a
+ * unit with no volume mounted must NOT report SS$_NOSUCHDEV: that conflation
+ * let RMS's executive-presence probe read an unmounted (or non-DKA0:) unit as
+ * "executive absent" and silently defer file reads to the /vms POSIX
+ * passthrough -- the exact INV-6 masquerade the ACP exists to refuse. Real VMS
+ * never conflates them either: $ASSIGN to an EXISTING device succeeds
+ * regardless of mount state (the volume is discovered later at $QIO time), and
+ * SS$_NOSUCHDEV is reserved for a genuinely non-existent device.
+ *
+ * $DASSGN releases it (vms_acp_dassgn(), reached from vms_ioctl_dassgn's fallback).
  */
 long vms_ioctl_acp_assign(struct vms_proc *proc, unsigned long arg)
 {
@@ -673,7 +687,7 @@ long vms_ioctl_acp_assign(struct vms_proc *proc, unsigned long arg)
     if (!vol) {
         exec_unlock(&vms_acp_vol_lock);
         exec_free(ch);
-        args.status = SS__NOSUCHDEV;    /* not a mounted volume -- fail honest */
+        args.status = SS__DEVNOTMOUNT;  /* device present, not a mounted volume -- fail honest (vms-03b: NOT executive-absent NOSUCHDEV) */
         goto out;
     }
     vol->refcnt++;
@@ -755,6 +769,21 @@ static uint32_t acp_check_access(struct vms_proc *proc, const ods2_fh2_t *fh,
 
     if (want_write)
         want |= 0x2u;                   /* write */
+
+    /*
+     * DIRECTORY TRAVERSAL vs READ (vms-548b). The ACP opens a directory only to
+     * SEARCH it -- resolve the next path component's FID (rms_acp_resolve_did
+     * walks [SYS0.SYSCOMMON.SYSEXE] this way) -- which on VMS is an EXECUTE
+     * operation, not a READ: a World:E directory (the 0xBA00 the writer masters)
+     * lets an unprivileged process look up a KNOWN name without granting a
+     * listing. So for a read-only open of a directory the wanted right is
+     * EXECUTE (bit 2), not READ (bit 0) -- which is what lets an unprivileged
+     * F$IDENTIFIER traverse the concealed-rooted path to the world-readable
+     * RIGHTSLIST.DAT. A directory WRITE (create/rename enters a record) still
+     * needs write and is unaffected.
+     */
+    if (!want_write && (fh->fh2_filechar & ODS2_FH2_M_DIRECTORY))
+        want = 0x4u;                    /* execute (traversal) */
 
     /* BYPASS lifts every access control. READALL grants the read bit. */
     if (privs & ACP_PRV_M_BYPASS)
@@ -928,6 +957,22 @@ static int acp_winbuild_cb(const ods2_extent_t *ext, void *ctx)
 
     if (!ext || ext->count == 0)
         return 0;                       /* skip empty run */
+
+    /* COALESCE abutting runs (vms-3a8): a large contiguous file is stored on
+     * disk as back-to-back format-1 retrieval pointers (each <= 256 blocks --
+     * see ods2_fh2_map_append), so a multi-MB file yields many pointers whose
+     * LBNs abut. VMS maps such a file with ONE window turn, not one per pointer;
+     * fold each pointer that continues the previous run (physically AND
+     * VBN-contiguous) into the last window entry so the fixed 24-entry window
+     * never overflows on a file that is genuinely contiguous. */
+    if (w->n > 0 &&
+        w->win[w->n - 1].lbn + w->win[w->n - 1].count == ext->lbn &&
+        w->win[w->n - 1].start_vbn + w->win[w->n - 1].count == w->next_vbn) {
+        w->win[w->n - 1].count += ext->count;
+        w->next_vbn += ext->count;
+        return 0;
+    }
+
     if (w->n >= w->max) {
         w->overflow = 1;
         return 1;                       /* stop -- window is full */
@@ -937,6 +982,174 @@ static int acp_winbuild_cb(const ods2_extent_t *ext, void *ctx)
     w->win[w->n].count     = ext->count;
     w->next_vbn += ext->count;
     w->n++;
+    return 0;
+}
+
+#if defined(OVMX_ODS2_KERNEL)
+/*
+ * acp_count_free_blocks - count the FREE blocks of a mounted ODS-2 volume by
+ * reading its BITMAP.SYS storage bitmap (vms-e6f), the DVI$_FREEBLOCKS SHOW
+ * DEVICE reports. This is the READ-ONLY twin of acp_bitmap_alloc's scan: it
+ * builds BITMAP.SYS's VBN->LBN window (VBN1 = SCB, VBN2.. = storage-bitmap data
+ * blocks) and tallies the FREE (set) bits, one bitmap block read at a time.
+ * Every bit = one CLUSTER of `cluster` blocks (the SCB cluster factor), so the
+ * free-block total is free_bits * cluster -- matching how VMS accounts free
+ * space in whole clusters. Nothing is stored or guessed: this is a live reading
+ * of the same on-disk bitmap the allocator mutates (INV-6, CLAUDE.md Rule 10).
+ *
+ * SS$_NORMAL and *free_out set on success; SS$_DEVNOTMOUNT on a block-read or
+ * map failure (the caller then reports the volume as mounted but its free count
+ * as unavailable -- it does NOT fabricate a zero).
+ */
+static uint32_t acp_count_free_blocks(uint32_t major, uint32_t minor,
+                                      uint32_t idx_lbn, uint32_t volsize,
+                                      uint32_t cluster, uint32_t *free_out)
+{
+    struct acp_winbuild wb;
+    struct acp_win_ext  bmwin[ACP_WINDOW_MAX];
+    uint8_t *bmhdr, *bmblk;
+    uint32_t bmhdr_lbn, nbits, bit, cur_bmvbn = 0;
+    uint32_t free_bits = 0;
+    int loaded = 0;
+    uint32_t result = SS__DEVNOTMOUNT;
+
+    if (cluster == 0)
+        cluster = 1;                        /* a validated ODS-2 always has >= 1 */
+    nbits = volsize / cluster;              /* one bitmap bit per cluster */
+
+    /* Two 512-byte block buffers off the heap (the BITMAP.SYS header + one
+     * storage-bitmap data block) -- not the kernel stack (-Wframe-larger-than). */
+    bmhdr = exec_zalloc(ACP_BLOCK_SIZE);
+    bmblk = exec_zalloc(ACP_BLOCK_SIZE);
+    if (!bmhdr || !bmblk)
+        goto done;
+
+    /* BITMAP.SYS (FID 2) primary header, the INDEXF arithmetic (idx_lbn base). */
+    bmhdr_lbn = idx_lbn + (ODS2_FID_BITMAP - 1u);
+    if (exec_blockdev_read_block(major, minor, bmhdr_lbn, bmhdr, ACP_BLOCK_SIZE) != 0)
+        goto done;
+
+    wb.win = bmwin;
+    wb.max = ACP_WINDOW_MAX;
+    wb.n = 0;
+    wb.next_vbn = 1;
+    wb.overflow = 0;
+    if (ods2_fh2_map_walk(bmhdr, acp_winbuild_cb, &wb, NULL) != ODS2_OK || wb.n == 0)
+        goto done;
+
+    for (bit = 0; bit < nbits; bit++) {
+        uint32_t bmvbn = 2u + bit / ODS2_SBM_BITS_PER_BLOCK;
+
+        if (!loaded || bmvbn != cur_bmvbn) {
+            uint32_t lbn = acp_window_map_vbn(bmwin, wb.n, bmvbn);
+            if (lbn == 0)
+                break;                      /* past the bitmap's coverage */
+            if (exec_blockdev_read_block(major, minor, lbn, bmblk, ACP_BLOCK_SIZE) != 0)
+                goto done;
+            cur_bmvbn = bmvbn;
+            loaded = 1;
+        }
+        if (ods2_sbm_block_bit_free(bmblk, bit % ODS2_SBM_BITS_PER_BLOCK))
+            free_bits++;
+    }
+
+    *free_out = free_bits * cluster;
+    result = SS__NORMAL;
+
+done:
+    if (bmhdr) exec_free(bmhdr);
+    if (bmblk) exec_free(bmblk);
+    return result;
+}
+#endif /* OVMX_ODS2_KERNEL */
+
+/*
+ * VMS_IOCTL_GETVOL - $GETDVI for the VOLUME items of a mounted disk (vms-e6f):
+ * mount state, ODS-2 volume label, size, cluster factor and free blocks, read
+ * from the executive-global mounted-volume table (never a per-process fake --
+ * every process on the node reaches this SAME row, CLAUDE.md Rule 11 / INV-6).
+ * SHOW DEVICE (src/vmsdcl/dcl_cmd_show.c) is the reader.
+ *
+ * A unit that is not a mounted volume is reported honestly as mounted == 0 with
+ * SS$_NORMAL (it exists in the device table, it just is not mounted); nothing is
+ * invented for it. For a mounted volume the label/size/cluster come from the
+ * $MOUNT-time validated identity; freeblocks is counted live off BITMAP.SYS,
+ * and free_valid == 0 (with freeblocks unset) if that read fails, so the reader
+ * omits the free-block count rather than print a fabricated zero (Rule 10).
+ */
+long vms_ioctl_acp_getvol(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_getvol_args args;
+    struct vms_acp_volume *vol;
+    char devnam[VMS_DEVNAM_SIZE];
+    char volname[13];
+    uint32_t status, volsize = 0, idx_lbn = 0, cluster = 0, transcnt = 0;
+    uint32_t backing_major = 0, backing_minor = 0;
+    int mounted = 0;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    status = acp_normalize_devnam(args.devnam, devnam, sizeof(devnam));
+    if (status != SS__NORMAL) {
+        args.status = status;               /* SS$_IVDEVNAM / SS$_BADPARAM */
+        goto out;
+    }
+
+    /* Snapshot the volume identity under the table lock, then release it before
+     * any block I/O (the free-block scan sleeps) -- the mount handler validates
+     * unlocked for the same reason. */
+    exec_lock(&vms_acp_vol_lock);
+    vol = acp_vol_find_locked(devnam);
+    if (vol) {
+        mounted       = 1;
+        volsize       = vol->volsize;
+        idx_lbn       = vol->idx_lbn;
+        cluster       = vol->cluster;
+        transcnt      = vol->refcnt;
+        backing_major = vol->backing_major;
+        backing_minor = vol->backing_minor;
+        memcpy(volname, vol->volname, sizeof(volname));
+        volname[sizeof(volname) - 1] = '\0';
+    }
+    exec_unlock(&vms_acp_vol_lock);
+
+    if (!mounted) {
+        args.mounted = 0;                   /* exists but not a mounted volume */
+        args.status  = SS__NORMAL;
+        goto out;
+    }
+
+    args.mounted  = 1;
+    args.volsize  = volsize;
+    args.cluster  = cluster;
+    args.transcnt = transcnt;
+    memcpy(args.volnam, volname, sizeof(volname));
+    args.volnam[VMS_GETVOL_LABEL_SIZE - 1] = '\0';
+
+#if defined(OVMX_ODS2_KERNEL)
+    {
+        uint32_t freeblk = 0;
+        if (acp_count_free_blocks(backing_major, backing_minor, idx_lbn,
+                                  volsize, cluster, &freeblk) == SS__NORMAL) {
+            args.freeblocks = freeblk;
+            args.free_valid = 1;
+        } else {
+            args.free_valid = 0;            /* bitmap unreadable -- do not fake 0 */
+        }
+    }
+#else
+    (void)backing_major; (void)backing_minor; (void)idx_lbn;
+    args.free_valid = 0;                     /* no codec: cannot read the bitmap */
+#endif
+    args.status = SS__NORMAL;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
     return 0;
 }
 
@@ -1995,6 +2208,7 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
     uint32_t new_hiblk, new_valid, new_efblk, done_bytes;
     uint16_t new_ffbyte;
     uint32_t extended = 0;
+    uint32_t ext_lbn = 0, ext_count = 0; /* the run newly allocated by an extend */
     uint32_t wr_lkid = 0;               /* vms-233 DLM volume lock (0 = not held) */
     char     wr_resnam[32];
 
@@ -2069,25 +2283,43 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
         uint32_t need = last_vbn - old_hiblk;
         uint32_t alloc_lbn = 0;
 
-        if (lwin_n >= ACP_WINDOW_MAX) {
-            args.status = SS__DEVICEFULL;   /* window full -- cannot map more */
-            exec_free(s);
-            goto out;
-        }
         status = acp_bitmap_alloc(snap, s, need, &alloc_lbn);
         if (status != SS__NORMAL) {
             args.status = status;           /* SS$_DEVICEFULL / SS$_DEVNOTMOUNT */
             exec_free(s);
             goto out;
         }
-        /* Append the new extent to the local window (contiguous with the file's
-         * VBN space at old_hiblk+1). */
-        lwin[lwin_n].start_vbn = old_hiblk + 1u;
-        lwin[lwin_n].lbn       = alloc_lbn;
-        lwin[lwin_n].count     = need;
-        lwin_n++;
+        /* COALESCE (vms-401): the new run always begins at VBN old_hiblk+1, so
+         * the file's last window extent is VBN-contiguous by construction. When
+         * the freshly allocated LBNs are ALSO physically contiguous with that
+         * extent, grow it in place -- a file grown one bucket at a time is
+         * physically contiguous and VMS maps it with ONE retrieval pointer, not
+         * one window entry per block. Without this a block-at-a-time grower
+         * exhausts the fixed 24-entry window (ch->win) after 24 blocks and every
+         * further $PUT fails SS$_DEVICEFULL (measured: RMS$_WPL at record 65,
+         * the file capped at 24 blocks). Only a non-contiguous run needs a fresh
+         * window slot; a file with more than ACP_WINDOW_MAX real fragments is
+         * still an honest SS$_DEVICEFULL (extension-header retrieval is a
+         * separate rung). */
+        if (lwin_n > 0 &&
+            lwin[lwin_n - 1].lbn + lwin[lwin_n - 1].count == alloc_lbn &&
+            lwin[lwin_n - 1].start_vbn + lwin[lwin_n - 1].count == old_hiblk + 1u) {
+            lwin[lwin_n - 1].count += need;
+        } else {
+            if (lwin_n >= ACP_WINDOW_MAX) {
+                args.status = SS__DEVICEFULL;   /* window full -- cannot map more */
+                exec_free(s);
+                goto out;
+            }
+            lwin[lwin_n].start_vbn = old_hiblk + 1u;
+            lwin[lwin_n].lbn       = alloc_lbn;
+            lwin[lwin_n].count     = need;
+            lwin_n++;
+        }
         new_hiblk = last_vbn;
         extended  = need;
+        ext_lbn   = alloc_lbn;              /* the newly allocated run, for the */
+        ext_count = need;                   /* on-disk FH2 map + channel window */
 #else
         /* Codec-free overlay: no accessed file ever reaches here (ACCESS
          * refuses without the codec), so an extend is unreachable. Refuse. */
@@ -2174,8 +2406,7 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
             goto out;
         }
         if (extended &&
-            ods2_fh2_map_append(s->hdr, lwin[lwin_n - 1].lbn,
-                                lwin[lwin_n - 1].count) != ODS2_OK) {
+            ods2_fh2_map_append(s->hdr, ext_lbn, ext_count) != ODS2_OK) {
             args.status = SS__DEVICEFULL;   /* FH2 map area full */
             args.xferred = done_bytes;
             exec_free(s);
@@ -2202,9 +2433,23 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
         if (ch && ch->file_accessed &&
             ((uint32_t)ch->acc_fid_num | ((uint32_t)ch->acc_fid_nmx << 16))
                 == snap->fid_num) {
-            if (extended && ch->win_n < ACP_WINDOW_MAX) {
-                ch->win[ch->win_n] = lwin[lwin_n - 1];
-                ch->win_n++;
+            if (extended) {
+                /* Coalesce the new run into the channel's last extent when
+                 * physically contiguous (mirrors the lwin + FH2-map coalesce
+                 * above), so a contiguous grower keeps ONE window entry instead
+                 * of one per block. */
+                if (ch->win_n > 0 &&
+                    ch->win[ch->win_n - 1].lbn + ch->win[ch->win_n - 1].count
+                        == ext_lbn &&
+                    ch->win[ch->win_n - 1].start_vbn + ch->win[ch->win_n - 1].count
+                        == old_hiblk + 1u) {
+                    ch->win[ch->win_n - 1].count += ext_count;
+                } else if (ch->win_n < ACP_WINDOW_MAX) {
+                    ch->win[ch->win_n].start_vbn = old_hiblk + 1u;
+                    ch->win[ch->win_n].lbn       = ext_lbn;
+                    ch->win[ch->win_n].count     = ext_count;
+                    ch->win_n++;
+                }
             }
             ch->acc_efblk  = new_efblk;
             ch->acc_ffbyte = new_ffbyte;
@@ -2262,8 +2507,10 @@ struct acp_fileop_scratch {
     uint8_t    dirhdr[ACP_BLOCK_SIZE];
     uint8_t    filehdr[ACP_BLOCK_SIZE];
     uint8_t    ibblk[ACP_BLOCK_SIZE];  /* index-bitmap block RMW */
+    uint8_t    tdirhdr[ACP_BLOCK_SIZE];/* MODIFY!M_MOVE cross-dir target header (vms-de7) */
     ods2_fh2_t dfh;
     ods2_fh2_t fh;
+    ods2_fh2_t tfh;                    /* MODIFY!M_MOVE cross-dir target parse */
 };
 
 /* Little-endian 16-bit store into a raw FH2 field (fileprot/fileowner edits).
@@ -2662,6 +2909,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             ods2_uic_t owner;
             uint16_t fileprot = 0;
             int is_dir = (args.attr.filechar & ODS2_FH2_M_DIRECTORY) != 0;
+            uint32_t alloc_count;
 
             /* Resolve the directory (for the entry + version selection). */
             memset(&did, 0, sizeof(did));
@@ -2695,16 +2943,23 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             status = acp_fid_alloc(vol, sc->ibblk, &new_fidnum);
             if (status != SS__NORMAL) { args.status = status; goto free_sc; }
 
-            /* Optional initial allocation (FIB$L_EXSZ). */
-            if (args.exsz > 0) {
+            /* Optional initial allocation (FIB$L_EXSZ). A NEW DIRECTORY is
+             * always born as exactly one block (vms-3a8): the ODS-2 writer's
+             * ods2_wvolume_create_dir() does the same, and acp_dir_mutate --
+             * which the FIRST IO$M_CREATE into this directory drives -- requires
+             * at least one mapped data block (dl.n != 0) to insert into. Without
+             * this a directory created over the ACP had zero blocks and every
+             * create inside it failed SS$_DEVICEFULL. */
+            alloc_count = is_dir ? 1u : args.exsz;
+            if (alloc_count > 0) {
                 acp_snap_from_vol(&sc->snap, vol);
-                status = acp_bitmap_alloc(&sc->snap, &sc->rw, args.exsz, &alloc_lbn);
+                status = acp_bitmap_alloc(&sc->snap, &sc->rw, alloc_count, &alloc_lbn);
                 if (status != SS__NORMAL) {
                     (void)acp_fid_free(vol, new_fidnum, sc->ibblk);  /* roll back the FID */
                     args.status = status;
                     goto free_sc;
                 }
-                ext.lbn = alloc_lbn; ext.count = args.exsz; n_ext = 1;
+                ext.lbn = alloc_lbn; ext.count = alloc_count; n_ext = 1;
             }
 
             /* Build the FH2. Owner = the creating process's UIC (INV-6). */
@@ -2712,7 +2967,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 kind = ODS2_FK_DIR;
                 filechar = ODS2_FH2_M_DIRECTORY | ODS2_FH2_M_CONTIG;
             } else if (kind != ODS2_FK_DATA && kind != ODS2_FK_DATA_FIX &&
-                       kind != ODS2_FK_SYSTEM) {
+                       kind != ODS2_FK_DATA_STMLF && kind != ODS2_FK_SYSTEM) {
                 kind = ODS2_FK_DATA_FIX;    /* default: a fixed-record data file */
             }
             owner.uic_group  = (uint16_t)((proc->uic >> 16) & 0xFFFFu);
@@ -2739,6 +2994,25 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
              * EOF to the empty position so a later $PUT/WRITEVBLK extends from 0. */
             if (n_ext > 0 && !is_dir) {
                 (void)ods2_fh2_set_eof(sc->filehdr, args.exsz, 1, 0);
+                ods2_fh2_reseal(sc->filehdr);
+            } else if (is_dir) {
+                /* A new directory's single block is an EMPTY ODS-2 directory:
+                 * all-0xFF (ODS2_DIR_END at offset 0), exactly as the writer's
+                 * ods2_wvolume_create_dir does -- without the fill the first
+                 * IO$M_CREATE into it would misparse the uninitialised block.
+                 * EOF = one full block used (hiblk=1, efblk=2, ffbyte=0).
+                 * (vms-3a8; sc->tdirhdr is the MODIFY!M_MOVE scratch, unused on
+                 * the CREATE path, so borrowing it here clobbers nothing.) */
+                memset(sc->tdirhdr, 0xFF, ACP_BLOCK_SIZE);
+                if (exec_blockdev_write_block(vol->backing_major, vol->backing_minor,
+                                              alloc_lbn, sc->tdirhdr, ACP_BLOCK_SIZE) != 0) {
+                    (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
+                    if (n_ext > 0)
+                        (void)acp_free_file_blocks(vol, sc->filehdr, sc, 1);
+                    args.status = SS__DEVNOTMOUNT;
+                    goto free_sc;
+                }
+                (void)ods2_fh2_set_eof(sc->filehdr, 1, 2, 0);
                 ods2_fh2_reseal(sc->filehdr);
             }
 
@@ -2863,6 +3137,104 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 args.fid_num = file_fid.fid_num;
                 args.fid_nmx = file_fid.fid_nmx;
                 args.out_version = rver;
+                args.status = SS__NORMAL;
+                goto free_sc;
+            }
+
+            /* ---- IO$_MODIFY!IO$M_MOVE: rename / move the file (vms-de7) ----
+             * By NAME only: the source directory + name + version identify the
+             * entry to move (fidmode is refused -- without the source entry the
+             * old directory record cannot be located). Insert the NEW entry
+             * first (the file is never unreferenced), remove the OLD, then
+             * rewrite the file header's ident name (+ backlink on a cross-dir
+             * move). The file KEEPS its FID + allocation. This is the primitive
+             * $SETUAI / AUTHORIZE-seed use for create-tmp -> rename replace. */
+            if (args.modifiers & VMS_ACP_M_MOVE) {
+                ods2_fid_t tdid, backlink;
+                uint32_t tdid_num;
+                uint16_t new_version;
+                uint8_t *tdirhdr;
+                ods2_fh2_t *tfh;
+                int cross_dir, removed = 0;
+
+                if (args.fidmode || !have_dir || args.new_name[0] == '\0') {
+                    args.status = SS__BADPARAM;   /* rename is by-name; needs a target */
+                    goto free_sc;
+                }
+                /* Source directory write access (removing an entry). */
+                status = acp_check_access(proc, &sc->dfh, 1);
+                if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+
+                /* Target directory (new_did 0 => the same directory). */
+                memset(&tdid, 0, sizeof(tdid));
+                tdid.fid_num = args.new_did_num;
+                tdid.fid_nmx = args.new_did_nmx;
+                tdid_num = ods2_fid_number(&tdid);
+                if (tdid_num == 0)
+                    tdid_num = did_num;
+                cross_dir = (tdid_num != did_num);
+
+                if (cross_dir) {
+                    status = acp_read_header(vol, tdid_num, sc->tdirhdr, &sc->tfh);
+                    if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+                    if (!(sc->tfh.fh2_filechar & ODS2_FH2_M_DIRECTORY)) {
+                        args.status = SS__NOSUCHFILE;   /* target DID not a directory */
+                        goto free_sc;
+                    }
+                    status = acp_check_access(proc, &sc->tfh, 1);
+                    if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+                    tdirhdr = sc->tdirhdr;
+                    tfh = &sc->tfh;
+                } else {
+                    tdirhdr = sc->dirhdr;
+                    tfh = &sc->dfh;
+                }
+
+                /* New version: caller-given, else highest of new_name + 1. */
+                if (args.new_version != 0) {
+                    new_version = args.new_version;
+                } else {
+                    ods2_fid_t cur; uint16_t curver = 0;
+                    uint32_t fst = acp_dir_find(vol, tdirhdr, sc->rw.blk,
+                                                args.new_name, 0, &cur, &curver);
+                    new_version = (fst == SS__NORMAL) ? (uint16_t)(curver + 1u) : 1u;
+                }
+
+                /* Insert the NEW entry, then remove the OLD (crash-safe order). */
+                status = acp_dir_mutate(vol, sc, tdirhdr, tdid_num, /*insert*/1,
+                                        args.new_name,
+                                        (unsigned)strlen(args.new_name),
+                                        new_version, file_fid,
+                                        file_fidnum <= ODS2_RESFILES, NULL);
+                if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+
+                status = acp_dir_mutate(vol, sc, sc->dirhdr, did_num, /*remove*/0,
+                                        args.name, (unsigned)strlen(args.name),
+                                        rver, file_fid, 0, &removed);
+                if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+                if (!removed) { args.status = SS__NOSUCHFILE; goto free_sc; }
+
+                /* Rewrite the file header's ident name (+ cross-dir backlink). */
+                memset(&backlink, 0, sizeof(backlink));
+                backlink.fid_num = (uint16_t)(tdid_num & 0xFFFF);
+                backlink.fid_seq = tfh->fh2_fid.fid_seq;
+                backlink.fid_nmx = (uint8_t)(tdid_num >> 16);
+                if (ods2_fh2_rename(sc->filehdr, args.new_name, new_version,
+                                    cross_dir ? &backlink : NULL) != ODS2_OK) {
+                    args.status = SS__BADPARAM;
+                    goto free_sc;
+                }
+                ods2_fh2_reseal(sc->filehdr);
+                if (exec_blockdev_write_block(vol->backing_major, vol->backing_minor,
+                                              vol->idx_lbn + (file_fidnum - 1u),
+                                              sc->filehdr, ACP_BLOCK_SIZE) != 0) {
+                    args.status = SS__DEVNOTMOUNT;
+                    goto free_sc;
+                }
+
+                args.fid_num = file_fid.fid_num;
+                args.fid_nmx = file_fid.fid_nmx;
+                args.out_version = new_version;
                 args.status = SS__NORMAL;
                 goto free_sc;
             }

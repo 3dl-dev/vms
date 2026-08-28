@@ -311,6 +311,61 @@ static void vms_devtab_probe_disks(void)
 }
 
 /*
+ * vms_devtab_add_disk - enter ONE disk unit that the substrate, not the shared
+ * probe above, enumerated (rd vms-618).
+ *
+ * WHY. vms_devtab_probe_disks() enumerates the NAME SPACE Linux's virtio-blk
+ * driver uses (/dev/vda../dev/vdz). That name space does not exist on every
+ * substrate: on NetBSD/vax the node's disks are MSCP units (/dev/ra1c,
+ * /dev/ra2c under SIMH), and the executive's device-native unit map lives in
+ * that substrate's block backend (src/kernel-netbsd/vms_blockdev_netbsd.c,
+ * vms-47d). So the shared probe finds nothing there and the substrate enters
+ * its own units through this one entry point -- which is what VMS does anyway:
+ * "the DRIVER enters a unit in the I/O database at boot".
+ *
+ * Everything a device MEANS still lives here: the row, its ownership,
+ * allocation and reference count are this facility's, identical on every
+ * substrate. Only WHICH units exist is the substrate's to say (INV-6: a unit is
+ * entered only for a device that really resolved -- see the caller).
+ *
+ * Called from module init only, before /dev/vms exists, so no process can be
+ * reading the table. Returns 0, or -ENOMEM if the row could not be allocated.
+ */
+int vms_devtab_add_disk(const char *devnam, const char *backing,
+                        uint32_t backing_major, uint32_t backing_minor)
+{
+    struct vms_device *disk;
+
+    if (!devnam || !backing)
+        return -EINVAL;
+
+    /*
+     * shareable = 0 for the same honest reason the console and the probed
+     * Linux disks are (see vms_devtab_probe_disks above): no OVMX test
+     * exercises a shareable disk's ownership yet, and claiming shareable = 1
+     * without an assertion behind it would be an unmeasured claim.
+     */
+    disk = vms_devtab_create(devnam, DC__DISK, VMS_DT_UNKNOWN,
+                             0 /* shareable */, 0 /* devchar */,
+                             0 /* width */, 0 /* page */);
+    if (!disk) {
+        pr_warn("vms: out of memory creating disk unit %s (%s)\n",
+                devnam, backing);
+        return -ENOMEM;
+    }
+
+    exec_lock(&disk->lock);
+    strscpy(disk->backing, backing, sizeof(disk->backing));
+    disk->backing_major = backing_major;
+    disk->backing_minor = backing_minor;
+    exec_unlock(&disk->lock);
+
+    pr_info("vms: disk unit %s -> %s (%u:%u)\n",
+            devnam, backing, (unsigned)backing_major, (unsigned)backing_minor);
+    return 0;
+}
+
+/*
  * The NIC as a VMS device (vms-9d2, epic vms-67f L0 -- the device face the
  * TCP/IP and DECnet stacks layer over; design docs/design-tcpip-services-ovmx.md
  * §4 "L0 NIC as VMS device").
@@ -986,6 +1041,36 @@ out:
 }
 
 /*
+ * ================================================================
+ * SUBSTRATE DISK RESOLVE (rd vms-618)
+ * ================================================================
+ *
+ * The two functions below resolve a DISK unit to its backing block device by
+ * READING THIS TABLE. That is the whole job on Linux, where the block seam
+ * (exec_blockdev_read_block, exec_kbackend_linux.h) opens the device by dev_t
+ * for each I/O -- so a table read is a complete answer.
+ *
+ * On the NetBSD substrate it is NOT a complete answer, for a reason that is
+ * about the host kernel, not about VMS: NetBSD's block-device open is
+ * effectively single-holder (spec_vnops returns EBUSY on a second open -- the
+ * very constraint that forced the VAX ACP cutover to be ACP-ONLY, rd vms-329),
+ * and its block seam reads/writes through a CACHED device vnode. So on that
+ * substrate the resolve must ALSO lazily open and cache the vnode at $MOUNT
+ * time -- and must NOT hold the INITIALIZE target open, because INITIALIZE.EXE
+ * opens that device itself (rd vms-f60). Both are things a table read cannot
+ * do, so the NetBSD backend supplies its own definitions
+ * (src/kernel-netbsd/vms_blockdev_netbsd.c) and compiles these out by defining
+ * OVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE.
+ *
+ * WHAT IS *NOT* SUBSTRATE-LOCAL, and must never become so (INV-6): the DEVICE
+ * TABLE itself and everything ownership-shaped -- $ALLOC/$DALLOC/$ASSIGN/
+ * $DASSGN/$GETDVI/$DEVICE_SCAN. There is exactly ONE implementation of those,
+ * this file's, on every substrate. Only the host-kernel binding of "which real
+ * device backs this unit, and how do I hold it open" differs, which is exactly
+ * the kind of thing the kernel-backend seam exists to vary.
+ */
+#ifndef OVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE
+/*
  * vms_devtab_disk_backing - INTERNAL (non-ioctl) resolve of a DISK unit to its
  * backing (major, minor), for the Files-11 ODS-2 ACP $MOUNT (vms-127). The exact
  * lookup vms_ioctl_disk_resolve() does, minus the copyin/copyout: the caller is
@@ -1089,6 +1174,7 @@ out:
         return -EFAULT;
     return 0;
 }
+#endif /* !OVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE */
 
 /* Snapshot a device row for userspace. Takes dev->lock. */
 static void devinfo_fill(struct vms_device *dev, struct vms_devinfo *info)
@@ -1276,6 +1362,48 @@ long vms_ioctl_setterm(struct vms_proc *proc, unsigned long arg)
      */
     exec_lock(&vms_proc_hash_lock);
     strscpy(proc->terminal, devnam, sizeof(proc->terminal));
+
+    /*
+     * BINDING A TERMINAL MAKES THIS PROCESS AN INTERACTIVE JOB ROOT
+     * (vms-01f).
+     *
+     * SETTERM records "THIS JOB's terminal" (see the vms_kif_setterm call
+     * in src/ovmx_job_control/ovmx_job_control.c, and vms_ioctl.h) -- a
+     * process that owns a terminal is, by definition, the master process
+     * of an interactive job. On OpenVMS an interactive login created by the
+     * job controller is the top of its OWN job, not a member of the job
+     * controller's job (System Services Reference, $CREPRC / job trees).
+     *
+     * OVMX derives job_id from Linux task ancestry at registration
+     * (vms_proc_parent_job_id, src/kernel/vms_module.c): a task whose real
+     * parent already has a PCB inherits that parent's job. That rule is
+     * correct for a SPAWNed subprocess (its parent IS the interactive DCL),
+     * but WRONG for the console login: JOB_CONTROL is a real, registered,
+     * DETACHED process (test_job_control_console.sh proves SHOW SYSTEM
+     * lists it), so its fork()ed login child inherited JOB_CONTROL's job_id
+     * and became a "subprocess" of a terminal-LESS root -- which
+     * proc_fill_info() classifies OTHER, which SHOW USERS filters out. The
+     * whole interactive session, and every subprocess it later SPAWNs
+     * (they inherit ITS job), then vanished from SHOW USERS / SHOW USERS
+     * /FULL -- "Total number of users = 0" on a live console login
+     * (vms-01f). The mechanism was proven only by test_syssvc_spawn_users.c,
+     * which SIDESTEPS the defect by keeping its creator UNregistered so the
+     * session child becomes a job root for free -- exactly the condition the
+     * real boot does not meet.
+     *
+     * Promoting here, keyed on the OBSERVABLE fact that this process bound
+     * its own terminal, is faithful and forge-safe: job membership grants
+     * no identity or privilege (unlike UIC/username/privs, which stay
+     * derived, never asserted), it only scopes LNM$JOB (vms_lnm.c) and the
+     * SHOW USERS classification -- both of which are correct for a terminal
+     * owner to root. A detached process (JOB_CONTROL) never calls SETTERM
+     * and stays a terminal-less root; a subprocess (SPAWN) never calls it
+     * and stays in its creator's job. It also fixes a latent LNM$JOB bug:
+     * before this, every console login shared JOB_CONTROL's job table, so
+     * one session's SYS$LOGIN was visible to all; now each login job is its
+     * own LNM$JOB scope, as on VMS.
+     */
+    proc->job_id = proc->vms_pid;
     exec_unlock(&vms_proc_hash_lock);
 
     args.status = SS__NORMAL;

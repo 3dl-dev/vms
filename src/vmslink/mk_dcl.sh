@@ -102,7 +102,14 @@ WORK=${WORK:-/tmp/mk-dcl}
 mkdir -p "$WORK"
 
 CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics -U_FORTIFY_SOURCE}"
-DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE"
+# -DOVMX_HAVE_ACP (vms-329): dcl_script.c's @-procedure open and
+# dcl_cmd_process.c's activatable-image resolution ride the executive Files-11
+# ACP. Both arms USED to be gated on __linux__, which this recipe satisfied for
+# free; vms-329 re-keyed them to OVMX_HAVE_ACP so the netbsd-vax cross gets them
+# too, and this recipe must now say so explicitly or the NATIVE-LINK DCL.EXE
+# would silently lose the arms the CMake DCL.EXE keeps. Same definition
+# src/vmsdcl/CMakeLists.txt applies to the target.
+DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -DOVMX_HAVE_ACP"
 INCS="-I$DCL/include -I$REPO_SRC/libvms/include -I$REPO_SRC/vmsfs/include \
 -I$REPO_SRC/vmslnm/include -I$REPO_SRC/vmsrms/include \
 -I$REPO_SRC/vmsprocess/include -I$REPO_SRC/vmsqueue -I$REPO_SRC/libvmssys \
@@ -128,6 +135,19 @@ done
 echo "  cc vmsqueue.c"
 $CC $CFLAGS $DEFS $INCS -c -o "$WORK/vmsqueue.o" "$REPO_SRC/vmsqueue/vmsqueue.c"
 OBJS="$OBJS $WORK/vmsqueue.o"
+
+# dcl_rms_bind.c ($HERE/dcl_rms_bind.c) is the RMS force-bind anchor (vms-5f0): a
+# guarded, never-executed strong CALL to ovmx_rightslist_asctoid/_idtoasc so
+# LINK.EXE records a strong .vms$imp import naming the --use'd LIBVMSRMS$SHR and
+# IMGACT loads it, letting resolve_weak_imports() bind LIBVMS$SHR's weak RIGHTSLIST
+# seam at activation -- without which every F$IDENTIFIER goes dead (DCL makes NO
+# other strong RMS reference). Executable-local, like vmsqueue.o -- it exports
+# nothing; it only anchors the producer dependency.
+DCL_RMS_BIND="$HERE/dcl_rms_bind.c"
+[ -f "$DCL_RMS_BIND" ] || { echo "mk_dcl: required TU not found: $DCL_RMS_BIND"; exit 1; }
+echo "  cc dcl_rms_bind.c"
+$CC $CFLAGS $DEFS $INCS -c -o "$WORK/dcl_rms_bind.o" "$DCL_RMS_BIND"
+OBJS="$OBJS $WORK/dcl_rms_bind.o"
 
 echo "mk_dcl: LINK.EXE --executable --use {7 producers} -> $OUT"
 # shellcheck disable=SC2086

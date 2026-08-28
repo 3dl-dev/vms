@@ -502,6 +502,31 @@ static void eval_expr(struct dcl_context *ctx, const char *expr,
 }
 
 /*
+ * Evaluate a DCL expression to its string value (public wrapper).
+ *
+ * This routes through the SAME evaluator used for the right-hand side of an
+ * `=` assignment (parse_expr -> parse_primary), so callers such as WRITE and
+ * any other DCL comma-expression-list get identical semantics:
+ *   - "quoted"      -> literal string (quotes stripped),
+ *   - F$xxx(...)    -> lexical function evaluated,
+ *   - symbol / 'sym'-> resolved to the symbol value,
+ *   - a + b, a - b  -> string concatenation / substring removal,
+ *   - integer forms -> rendered as their decimal text.
+ * Do NOT reimplement expression handling in callers — call this. (vms-65f)
+ */
+void dcl_eval_expr_string(struct dcl_context *ctx, const char *expr,
+                          char *out, size_t outlen)
+{
+    if (!out || outlen == 0) return;
+    expr_val_t v;
+    eval_expr(ctx, expr, &v);
+    char tmp[64];
+    const char *s = val_to_str(&v, tmp, sizeof(tmp));
+    strncpy(out, s, outlen - 1);
+    out[outlen - 1] = '\0';
+}
+
+/*
  * Check whether a string contains any arithmetic operator outside of
  * quotes or parentheses. Used to decide whether to evaluate or assign
  * as a plain string.

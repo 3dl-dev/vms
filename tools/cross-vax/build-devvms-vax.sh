@@ -47,6 +47,8 @@ OBJDUMP="${TARGET}-objdump"
 SRC="$(pwd)"
 KMOD="$SRC/src/kernel-netbsd"
 CORE="$SRC/src/kernel-core"
+ODS2="$SRC/src/vmsfs/ods2"             # ACP on-disk EDIT helpers (vms-d5d)
+ODS2_INC="$SRC/src/vmsfs/include"      # the genuine ODS-2 codec header vmsfs/ods2.h
 LIBVMSSYS="$SRC/src/libvmssys"
 PROBE="$SRC/tests/netbsd/guest"
 NBSRC="${NBSRC:-/nbsrc}"
@@ -74,7 +76,7 @@ ln -sf "$SYS/arch/vax/include" "$KL/vax"
 # bsd.kmodule.mk adds -fno-pic for exactly this reason (share/mk/bsd.kmodule.mk),
 # and the vax kernel Makefile builds -fno-pic. -Werror so a warning is fatal.
 CFLAGS="-std=gnu99 -O2 -fno-pic -Werror -Wall -ffreestanding -fno-strict-aliasing -fno-omit-frame-pointer"
-CPPFLAGS="-DOVMX_KBACKEND_NETBSD -nostdinc -isystem $KL -isystem $SYS -isystem $SYS/arch -isystem $SYS/../common/include -D_KERNEL -D_MODULE -I$KMOD -I$CORE"
+CPPFLAGS="-DOVMX_KBACKEND_NETBSD -DOVMX_ODS2_KERNEL -DOVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE -nostdinc -isystem $KL -isystem $SYS -isystem $SYS/arch -isystem $SYS/../common/include -D_KERNEL -D_MODULE -I$KMOD -I$CORE -I$ODS2_INC"
 
 # EXACTLY src/kernel-netbsd/Makefile's SRCS (= B1's SRCS): the NetBSD backend
 # glue + OVMX intrusive containers + the SHARED executive facility sources.
@@ -89,7 +91,12 @@ SRCS="$KMOD/vms_netbsd.c \
       $CORE/vms_mbx.c \
       $CORE/vms_proctab.c \
       $CORE/vms_lock.c \
-      $CORE/vms_lnm.c"
+      $CORE/vms_lnm.c \
+      $CORE/vms_devtab.c \
+      $CORE/vmsfs_acp.c \
+      $ODS2/ods2_reader.c \
+      $ODS2/ods2_edit.c \
+      $KMOD/vms_blockdev_netbsd.c"
 
 echo "=== toolchain ==="; "$CC" --version | head -1; "$CC" -dumpmachine; echo
 
@@ -138,6 +145,34 @@ echo "=== build the userspace ping probe (static elf32-vax) ==="
 echo "  OK: vmsprobe (static elf32-vax)"
 echo
 
+echo "=== build the device-allocation probe (static elf32-vax, rd vms-618) ==="
+# The cross-process $ALLOC/$DALLOC test program. Same static link + same
+# transport seam as vmsprobe above; the harness runs it as SEPARATE guest
+# processes so a second process really is a second process (INV-6: the decisive
+# check is that process B is refused SS$_DEVALLOC for a device process A holds).
+"$CC" -O -Wall -Wextra -static \
+    -I"$LIBVMSSYS" -I"$KMOD" \
+    -o "$OUT/vmsdevalloc" \
+    "$PROBE/vmsdevalloc.c" "$LIBVMSSYS/kif_transport_netbsd.c"
+"$OBJDUMP" -f "$OUT/vmsdevalloc" | grep -qiF 'file format elf32-vax' || { echo "FAIL: vmsdevalloc not elf32-vax"; exit 1; }
+echo "  OK: vmsdevalloc (static elf32-vax)"
+echo
+
+echo "=== build the Purdy golden-vector gate (static elf32-vax, rd vms-b86) ==="
+# vmspurdy runs the 7 real OpenVMS oracle vectors (the same table test_purdy.c
+# asserts on the host, LP64) on VAX (ILP32) so the cross-width golden test is
+# proven on BOTH widths -- the regression gate for the gcc-vax -O2 DImode
+# miscompile that broke Purdy on VAX (rd vms-b86). Pure userland: no /dev/vms,
+# no transport seam. -O2 overall; purdy.c's own #pragma forces the arithmetic
+# core to -O0, so this exercises EXACTLY the shipped configuration.
+"$CC" -O2 -Wall -Wextra -static \
+    -I"$SRC/src/libvms/include" \
+    -o "$OUT/vmspurdy" \
+    "$SRC/tests/lab-vax/guest/vmspurdy.c" "$SRC/src/libvms/rtl/purdy.c"
+"$OBJDUMP" -f "$OUT/vmspurdy" | grep -qiF 'file format elf32-vax' || { echo "FAIL: vmspurdy not elf32-vax"; exit 1; }
+echo "  OK: vmspurdy (static elf32-vax)"
+echo
+
 echo "=== ARTIFACTS ==="
-ls -l "$OUT/vms.kmod" "$OUT/vmsprobe"
+ls -l "$OUT/vms.kmod" "$OUT/vmsprobe" "$OUT/vmsdevalloc" "$OUT/vmspurdy"
 echo "=== build-devvms-vax.sh: DONE (both elf32-vax artifacts ready for SIMH) ==="

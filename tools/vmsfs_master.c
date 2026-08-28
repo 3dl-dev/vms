@@ -3,9 +3,11 @@
  *
  * This is the "mkfs -d" / mastering step of the OVMX build: it takes a Linux
  * source directory tree (e.g. distro/rootfs/vms/...) and writes it into a
- * VMSFS/ODS-2-inspired block image with the files and directories in place,
- * ready to be mounted by vmsfs.ko at boot.  It extends the empty-volume writer
- * in tools/vms_initialize.c (INITIALIZE.EXE) to populate content.
+ * VMSFS/ODS-2-inspired block image with the files and directories in place.
+ * (The legacy VMSFS format's in-kernel reader was the vmsfs.ko VFS driver,
+ * retired by vms-165; this tool's --ods2 mode writes genuine ODS-2 volumes the
+ * executive Files-11 ACP reads.)  It extends the empty-volume writer in
+ * tools/vms_initialize.c (INITIALIZE.EXE) to populate content.
  *
  * It is factory BUILD tooling: never shipped on the media, never given a VMS
  * name, never run at boot (per docs/design-vms-faithful-install.md §3.3).
@@ -29,11 +31,12 @@
  * ----------------------------------------------------------------------------
  * Grounding (clean-room Rule 8):
  *   The on-disk byte layout is taken entirely from vmsfs_ondisk.h — the SAME
- *   header shared by vmsfs.ko and INITIALIZE.EXE, so the format has exactly one
- *   description.  The block-level semantics this tool writes to (home block at
- *   LBN 1, storage bitmap, one 512-byte file header per FID in the index area,
- *   88-byte directory entries with de_version==0 marking a directory) are what
- *   the kernel reader in src/kernel/vmsfs/vmsfs_blkdev.c consumes.
+ *   header shared by the VMFS host tools (INITIALIZE.EXE / ANALYZE), so the
+ *   format has exactly one description.  The block-level semantics this tool
+ *   writes to (home block at LBN 1, storage bitmap, one 512-byte file header per
+ *   FID in the index area, 88-byte directory entries with de_version==0 marking
+ *   a directory) are what those tools read back.  (The vmsfs.ko block-device
+ *   reader that once consumed this format was retired by vms-165.)
  *
  *   VMSFS is explicitly "not byte-compatible with real ODS-2" (vmsfs_ondisk.h
  *   header comment) — it is an OVMX design choice, not presented as
@@ -1069,6 +1072,14 @@ static int read_host_file(const char *path, uint64_t size,
     return 0;
 }
 
+/* ods2_type_is_binary_image() -- which file types stay RFM=FIXED (binary images:
+ * IMGACT/loaders read raw blocks, never line records) vs RFM=STMLF (everything
+ * else, a line-oriented text file). MOVED to vmsfs/ods2.h (vms-3a8) so the live
+ * PRODUCT INSTALL path (src/product/product.c) classifies files with the SAME
+ * list this master does -- the mastered distro disk and a live-installed target
+ * must carry identical per-file record formats. `type` is the file type
+ * (extension), no dot; content bytes are verbatim in BOTH cases. */
+
 /* Construct a node's on-disk directory-entry name: "NAME.DIR" for a directory,
  * "NAME.TYPE" (or bare "NAME" when the type is empty) for a file -- exactly the
  * spelling ods2_wvolume_create_dir/create_file_raw + dir_insert expect and the
@@ -1123,8 +1134,16 @@ static int emit_tree_ods2(ods2_wvolume_t *wvol, const struct node *dir,
                 return -1;
 
             ods2_fid_t file_fid;
-            st = ods2_wvolume_create_file_raw(wvol, entry, MASTER_FILE_VER,
-                                              data, dlen, dir_fid, &file_fid);
+            /* Binary images (.EXE ...) -> RFM=FIXED verbatim (create_file_raw);
+             * text files (.COM/.DAT/SYSUAF ...) -> RFM=STMLF verbatim
+             * (create_file_stmlf) so DCL/RMS read them one LF-record at a time
+             * instead of the whole file as one 512-byte record (vms-5f0). */
+            if (ods2_type_is_binary_image(c->type))
+                st = ods2_wvolume_create_file_raw(wvol, entry, MASTER_FILE_VER,
+                                                  data, dlen, dir_fid, &file_fid);
+            else
+                st = ods2_wvolume_create_file_stmlf(wvol, entry, MASTER_FILE_VER,
+                                                    data, dlen, dir_fid, &file_fid);
             free(data);
             if (st != ODS2_OK) {
                 fprintf(stderr, "%%MASTER-F-MKFILE, create %s failed: %s\n",

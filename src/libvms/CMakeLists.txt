@@ -84,6 +84,7 @@ add_library(vms ${OVMX_LIB_TYPE}
     rtl/lib_vm.c
     rtl/lib_output.c
     rtl/lib_signal.c
+    rtl/arith_signal.c
     rtl/lib_datetime.c
     rtl/lib_timer.c
     rtl/lib_misc.c
@@ -112,12 +113,28 @@ add_library(vms ${OVMX_LIB_TYPE}
     syssvc/sys_imgact.c
     syssvc/imgact_prodreg.c
     rtl/sha256.c
+    rtl/purdy.c
     rtl/sysuaf.c
     rtl/rightslist.c
+    rtl/rms_textfile.c
     rtl/str_util.c
     rtl/lib_cli.c
 )
 target_include_directories(vms PUBLIC include ${VMS_RMS_INCLUDE_DIR} ${VMS_FS_INCLUDE_DIR} ${VMS_LNM_INCLUDE_DIR} ${VMS_PROCESS_INCLUDE_DIR})
+
+# vms-329: rtl/rms_textfile.c (the SYSUAF / RIGHTSLIST / $GETUAI / OPERATOR.LOG
+# text-record layer) reaches its file through RMS-over-the-executive-ACP on
+# EVERY runtime substrate. It was keyed on __linux__ while the netbsd-vax
+# runtime still VFS-mounted SYS$DISK; the coupled VAX cutover retired that
+# mount, so the POSIX arm there would fopen() a /vms path that no longer exists
+# -- and a SYSUAF that reads as empty is worse than one that fails, because it
+# looks like "no such account". The STANDALONE (netbsd-vax cross) archive is the
+# libvms.a linked into the shipped VAX DCL/LOGINOUT/PROVISION/JOB_CONTROL, so it
+# gets the definition too -- the same reasoning src/vmsrms/CMakeLists.txt
+# records. The RMS services stay WEAK here (see rms_textfile.c): an image with
+# no LIBVMSRMS in its link closure still fails honestly rather than falling back
+# to POSIX (INV-6).
+target_compile_definitions(vms PRIVATE OVMX_HAVE_ACP)
 
 if(LIBVMS_STANDALONE)
     # Link-libc netbsd-vax cross: a clean libvms.a to arch-check with objdump/ar.

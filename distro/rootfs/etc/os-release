@@ -7,7 +7,7 @@
 # (systemd, package managers, `uname`-adjacent scripts) that inspects this
 # file sees an honest answer about the SYSKRNL layer (the Linux kernel).
 #
-# The VMS-compatible PRODUCT identity ("OpenVMX V0.3 - OpenVMS-compatible")
+# The VMS-compatible PRODUCT identity ("OpenVMX V0.5-2 - OpenVMS-compatible")
 # is a SEPARATE, VMS-facing surface -- SHOW SYSTEM, MONITOR, the DCL login
 # banner, sourced from src/libvms/include/ovmx_identity.h
 # (OVMX_PRODUCT_BANNER). It is deliberately NOT duplicated here: a VMS
@@ -17,10 +17,14 @@
 # NAME/VERSION_ID here are hand-maintained text, not generated from the
 # identity SSOT (this file predates any process boots enough Linux to run
 # a generator) -- keep VERSION_ID in step with OVMX_PRODUCT_VERSION in
-# ovmx_identity.h by hand when that changes.
+# ovmx_identity.h by hand when that changes. That "by hand" step silently
+# lapsed through V0.4/V0.5 (this file sat at 0.3 while the product shipped
+# V0.5-2), so it is now ENFORCED: tests/integration/test_identity_ssot.sh
+# fails the build if VERSION_ID drifts from OVMX_PRODUCT_VERSION (vms-8328).
+# VERSION_ID is OVMX_PRODUCT_VERSION with the leading "V" stripped.
 NAME="OVMX/Linux"
 ID=ovmx
 PRETTY_NAME="OVMX/Linux"
-VERSION="0.3 (SYSKRNL)"
-VERSION_ID="0.3"
+VERSION="0.5-5 (SYSKRNL)"
+VERSION_ID="0.5-5"
 HOME_URL="https://openvmx.3dl.dev"

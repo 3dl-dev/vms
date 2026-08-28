@@ -899,6 +899,25 @@ uint32_t vms_kif_disk_resolve(const char *devnam, char *backing,
     return args.status;
 }
 
+uint32_t vms_kif_getvol(const char *devnam, struct vms_getvol_args *out)
+{
+    struct vms_getvol_args args;
+
+    if (!devnam)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, VMS_DEVNAM_SIZE - 1);
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    KIF_CALL(VMS_IOCTL_GETVOL, &args);
+
+    if (out)
+        vms_memcpy(out, &args, sizeof(*out));
+
+    return args.status;
+}
+
 uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,
                            uint64_t setchar, uint64_t clrchar,
                            uint32_t width, uint32_t page)
@@ -1100,6 +1119,111 @@ uint32_t vms_kif_procscan(uint32_t *index, struct vms_procinfo *info)
     if (info)
         vms_memcpy(info, &args.info, sizeof(*info));
 
+    return args.status;
+}
+
+/* ================================================================
+ * $EXIT / $STATUS + CLI invocation context (vms-f60d)
+ *
+ * The executive owns the image-completion status ($STATUS/$SEVERITY) and the
+ * invoking CLI's command line, exactly as it owns the process name and
+ * identity above. These four wrappers are the userspace face of the executive
+ * facility the process-table half of PR #724 landed (VMS_IOCTL_SETEXIT..GETCLI):
+ * the exiting image RECORDS its completion status (vms_kif_setexit) and the
+ * invoking CLI READS it back (vms_kif_getexit); the CLI RECORDS its command
+ * line (vms_kif_setcli) and the activated image READS it back (vms_kif_getcli).
+ * INV-6: with no /dev/vms KIF_CALL returns the transport status (SS$_NOSUCHDEV)
+ * and NOTHING is faked -- the caller then behaves as "no executive-recorded
+ * status / no CLI line", never as a fabricated success.
+ * ================================================================ */
+
+/* $EXIT: record `condition` as this process's image-completion $STATUS in the
+ * executive PCB. On success *exit_code (if given) receives the OVMX POSIX exit
+ * code the executive mapped from the condition (0 iff STS$M_SUCCESS). */
+uint32_t vms_kif_setexit(uint32_t condition, uint32_t *exit_code)
+{
+    struct vms_exit_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.condition = condition;
+
+    KIF_CALL(VMS_IOCTL_SETEXIT, &args);
+
+    if (exit_code)
+        *exit_code = args.exit_code;
+    return args.status;
+}
+
+/* Read this process's recorded image-completion $STATUS (the invoking CLI
+ * reading the status of the image it just ran). *has_exited (if given) is set
+ * nonzero iff an image has actually recorded a status -- a caller MUST NOT
+ * infer "not exited" from a zero *condition, since 0 is a legal value. */
+uint32_t vms_kif_getexit(uint32_t *condition, int *has_exited)
+{
+    struct vms_getexit_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.select = VMS_JPI_SEL_SELF;
+
+    KIF_CALL(VMS_IOCTL_GETEXIT, &args);
+
+    if (condition)
+        *condition = args.condition;
+    if (has_exited)
+        *has_exited = (int)args.has_exited;
+    return args.status;
+}
+
+/* Record this (CLI) process's invoking command line + cliflag in the executive,
+ * so an image it activates reads the SAME context back (inherited from this
+ * PCB at REGISTER_CONTINUE time). cliflag == 0 means "no CLI" and the command
+ * is ignored. The command travels by length (it is not necessarily NUL-clean),
+ * clipped to the executive's window. */
+uint32_t vms_kif_setcli(uint32_t cliflag, const char *command)
+{
+    struct vms_setcli_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.cliflag = (uint8_t)(cliflag ? 1 : 0);
+
+    if (args.cliflag && command) {
+        vms_size_t len = vms_strlen(command);
+        if (len > VMS_CLI_CMDLINE_SIZE - 1)
+            len = VMS_CLI_CMDLINE_SIZE - 1;
+        vms_memcpy(args.command, command, len);
+        args.command[len] = '\0';
+        args.length = (uint16_t)len;
+    }
+
+    KIF_CALL(VMS_IOCTL_SETCLI, &args);
+
+    return args.status;
+}
+
+/* Read this process's own invoking CLI context. *cliflag (if given) is nonzero
+ * iff a CLI launched this image; command/command_size receive the NUL-terminated
+ * command line (clipped to command_size), and *length (if given) its true byte
+ * length as the executive holds it. */
+uint32_t vms_kif_getcli(uint32_t *cliflag, char *command,
+                        uint32_t command_size, uint32_t *length)
+{
+    struct vms_getcli_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+
+    KIF_CALL(VMS_IOCTL_GETCLI, &args);
+
+    if (cliflag)
+        *cliflag = args.cliflag;
+    if (length)
+        *length = args.length;
+    if (command && command_size) {
+        uint32_t n = args.length;
+        if (n > command_size - 1)
+            n = command_size - 1;
+        vms_memcpy(command, args.command, n);
+        command[n] = '\0';
+    }
     return args.status;
 }
 

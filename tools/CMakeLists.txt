@@ -4,6 +4,17 @@ add_executable(vms_login
     vms_login.c
     loginout_display.c   # OpenVMS-faithful login-info block (vms-417)
     mail_notify.c        # shared new-mail counter (vms-417)
+    # SYSUAF-engine anchor (vms-341, Alpha): sysuaf_lookup() reaches the binary
+    # $UAFDEF engine (ovmx_sysuaf_read_user) and the RMS $OPEN/$GET-over-ACP seam
+    # ONLY through #pragma weak cells, and under OVMX_STATIC a weak reference does
+    # not pull an archive member -- so on the Alpha build (which cannot use the
+    # LINK.EXE path that adds this same TU: src/vmslink/link.c rejects non-x86/arm
+    # objects, and mk_loginout.sh compiles it there) sysuaf_live.o was dropped from
+    # LOGINOUT.EXE, sysuaf_lookup returned -1 BEFORE any ACP read, and every login
+    # printed "User authorization failure". This is the SAME strong-anchor TU
+    # x86_64's LINK.EXE uses; compiling it here force-extracts the engine + RMS
+    # seam on the static CMake path too, mirroring the HELP.EXE anchor below.
+    ${CMAKE_SOURCE_DIR}/src/vmslink/loginout_rms_bind.c
 )
 
 target_include_directories(vms_login PRIVATE
@@ -19,7 +30,9 @@ target_compile_definitions(vms_login PRIVATE
     _DEFAULT_SOURCE
 )
 
-target_link_libraries(vms_login PRIVATE vms vmsfs vmslnm vmsprocess pthread)
+# vmsrms: SYSUAF/RIGHTSLIST authentication reads go through RMS $OPEN/$GET over
+# the Files-11 ODS-2 ACP now (vms-274) -- LOGINOUT must resolve sys$open/$get.
+target_link_libraries(vms_login PRIVATE vms vmsrms vmsfs vmslnm vmsprocess pthread)
 
 set_target_properties(vms_login PROPERTIES
     OUTPUT_NAME "LOGINOUT"
@@ -36,12 +49,22 @@ install(TARGETS vms_login RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 add_executable(vms_help
     vms_help.c
     ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_help.c
+    # vms-4ac: the ACP read seam dcl_help.c reaches through weak hooks -- reads
+    # SYS$HELP:HELPLIB.HLP over the Files-11 ACP (rms_textfile_*, LIBVMS) with a
+    # POSIX /vms fallback. Compiled in directly (not archive-gated) so the weak
+    # references resolve.
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_help_acp.c
+    # HELP.EXE is static, so this anchor force-extracts the RMS record services
+    # from vmsrms -- otherwise rms_textfile.c's weak sys$* cells stay NULL and
+    # HELP answers %HELP-E-OPENIN.
+    vms_help_rms_bind.c
 )
 
 target_include_directories(vms_help PRIVATE
     ${VMS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
     ${VMS_FS_INCLUDE_DIR}
+    ${VMS_RMS_INCLUDE_DIR}
     ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
 )
 
@@ -50,7 +73,10 @@ target_compile_definitions(vms_help PRIVATE
     _DEFAULT_SOURCE
 )
 
-target_link_libraries(vms_help PRIVATE vmsfs vmslnm)
+# vms-4ac: HELP now reads its library over the ACP, so it links the RMS stack
+# (rms_textfile.c lives in LIBVMS; the record engine in vmsrms) -- the same
+# closure PROVISION.EXE links for the same reason.
+target_link_libraries(vms_help PRIVATE vms vmsrms vmsfs vmslnm vmsprocess pthread)
 
 set_target_properties(vms_help PROPERTIES
     OUTPUT_NAME "HELP"
@@ -67,6 +93,7 @@ target_include_directories(vms_authorize PRIVATE
     ${VMS_PROCESS_INCLUDE_DIR}
     ${VMS_FS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/vmsrms   # sysuaf_rms.h / sysuaf_live.h (binary UAF)
 )
 
 # Feature-test macros. AUTHORIZE.EXE's SYSUAF file locking uses flock()/
@@ -87,13 +114,72 @@ target_compile_options(vms_authorize PRIVATE
     -Wall -Wextra
 )
 
-target_link_libraries(vms_authorize PRIVATE vms vmsfs vmslnm)
+# vms-d92: AUTHORIZE reads/writes the binary $UAFDEF SYSUAF through the RMS
+# Prolog-3 engine (sysuaf_rms / sysuaf_live over the ODS-2 ACP), so it links
+# LIBVMSRMS.
+target_link_libraries(vms_authorize PRIVATE vms vmsrms vmsfs vmslnm vmsprocess)
 
 set_target_properties(vms_authorize PROPERTIES
     OUTPUT_NAME "AUTHORIZE"
     SUFFIX ".EXE"
 )
 install(TARGETS vms_authorize RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+
+# mksysuaf - build-host SEED generator (vms-d92). Writes a binary $UAFDEF
+# SYSUAF.DAT that the distro ships in place of the retired ASCII file. Factory
+# tooling: plain host name, no .EXE, never installed onto the media.
+add_executable(mksysuaf
+    mksysuaf.c
+)
+
+target_include_directories(mksysuaf PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${VMS_PROCESS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/vmsrms   # sysuaf_rms.h / rms_io.h
+)
+
+target_compile_definitions(mksysuaf PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+target_compile_options(mksysuaf PRIVATE -Wall -Wextra)
+
+target_link_libraries(mksysuaf PRIVATE vms vmsrms vmsfs vmslnm vmsprocess)
+
+set_target_properties(mksysuaf PROPERTIES
+    OUTPUT_NAME "mksysuaf"
+)
+
+# mkrightslist - build-host SEED generator (vms-f15a). Writes a binary $RDBDEF
+# RIGHTSLIST.DAT that the distro ships in place of the retired ASCII file.
+# Factory tooling: plain host name, no .EXE, never installed onto the media.
+add_executable(mkrightslist
+    mkrightslist.c
+)
+
+target_include_directories(mkrightslist PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${VMS_PROCESS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/vmsrms   # rightslist_rms.h / rms_io.h
+)
+
+target_compile_definitions(mkrightslist PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+target_compile_options(mkrightslist PRIVATE -Wall -Wextra)
+
+target_link_libraries(mkrightslist PRIVATE vms vmsrms vmsfs vmslnm vmsprocess)
+
+set_target_properties(mkrightslist PROPERTIES
+    OUTPUT_NAME "mkrightslist"
+)
 
 add_executable(vms_mail
     vms_mail.c
@@ -112,7 +198,9 @@ target_compile_definitions(vms_mail PRIVATE
     _DEFAULT_SOURCE
 )
 
-target_link_libraries(vms_mail PRIVATE vms vmsfs vmslnm)
+# vms-d92: MAIL verifies recipients and resolves home directories through the
+# binary SYSUAF (sysuaf_lookup -> LIBVMSRMS), so it links vmsrms.
+target_link_libraries(vms_mail PRIVATE vms vmsrms vmsfs vmslnm vmsprocess)
 
 set_target_properties(vms_mail PROPERTIES
     OUTPUT_NAME "MAIL"
@@ -160,10 +248,9 @@ add_executable(vms_initialize
 )
 
 target_include_directories(vms_initialize PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/kernel/vmsfs
     ${CMAKE_SOURCE_DIR}/src/libvmssys
     ${VMS_INCLUDE_DIR}
-    ${VMS_FS_INCLUDE_DIR}   # vmsfs/ods2.h -- genuine ODS-2 writer (vms-6ef)
+    ${VMS_FS_INCLUDE_DIR}   # vmsfs_ondisk.h + vmsfs/ods2.h -- genuine ODS-2 writer (vms-6ef)
 )
 
 target_compile_definitions(vms_initialize PRIVATE
@@ -228,10 +315,17 @@ target_compile_options(vms_sysgen PRIVATE
     -Wall -Wextra
 )
 
-# vms-d34: USE/WRITE CURRENT now resolve SYS$SYSTEM:OVMXVMSSYS.PAR through
-# vmsfs (device/logical translation + real file-version creation), so the
-# tool needs the vmsfs link it didn't before.
-target_link_libraries(vms_sysgen PRIVATE vmsfs vmslnm)
+# vms-d34: USE/WRITE CURRENT resolve SYS$SYSTEM:OVMXVMSSYS.PAR through vmsfs.
+# vms-5f0: they now PERSIST it over the executive Files-11 ACP (RMS-over-ACP,
+# src/vmsrms/sysgen_acp.c) instead of a retired /vms fopen, so the tool links
+# vmsrms. --undefined forces sysgen_acp.o out of the static archive: SYSGEN's
+# references to ovmx_sysgen_acp_* are #pragma weak (the libvms-layer seam), and a
+# weak reference alone does not pull an archive member (build-static / OVMX_STATIC).
+target_link_libraries(vms_sysgen PRIVATE vmsrms vmsfs vmslnm)
+# Strong references to the ACP seam (OVMX_SYSGEN_ACP_STRONG): keeps LIBVMSRMS$SHR
+# from being dropped by `ld --as-needed` (weak refs do not mark a shared lib
+# needed) and pulls sysgen_acp.o from the static archive (build-static).
+target_compile_definitions(vms_sysgen PRIVATE OVMX_SYSGEN_ACP_STRONG)
 
 set_target_properties(vms_sysgen PROPERTIES
     OUTPUT_NAME "SYSGEN"
@@ -258,9 +352,11 @@ target_compile_options(vms_sysman PRIVATE
     -Wall -Wextra
 )
 
-# vms-d34: includes sysgen_params.h directly, which now calls through to
-# vmsfs for SYS$SYSTEM:OVMXVMSSYS.PAR version resolution.
-target_link_libraries(vms_sysman PRIVATE vmsfs vmslnm)
+# vms-d34: includes sysgen_params.h directly for SYS$SYSTEM:OVMXVMSSYS.PAR.
+# vms-5f0: PARAMETERS USE/WRITE now ride the executive Files-11 ACP (RMS-over-ACP)
+# instead of a /vms fopen -- link vmsrms + force sysgen_acp.o (weak-ref pull).
+target_link_libraries(vms_sysman PRIVATE vmsrms vmsfs vmslnm)
+target_compile_definitions(vms_sysman PRIVATE OVMX_SYSGEN_ACP_STRONG)
 
 set_target_properties(vms_sysman PROPERTIES
     OUTPUT_NAME "SYSMAN"
@@ -273,7 +369,7 @@ add_executable(vms_analyze
 )
 
 target_include_directories(vms_analyze PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/kernel/vmsfs
+    ${VMS_FS_INCLUDE_DIR}   # vmsfs_ondisk.h (relocated from src/kernel/vmsfs, vms-165)
 )
 
 target_compile_definitions(vms_analyze PRIVATE
@@ -297,15 +393,14 @@ install(TARGETS vms_analyze RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 # master dist/ovmx-distrib.img.  Per docs/design-vms-faithful-install.md §3.3
 # this is FACTORY tooling: it is NOT installed onto the media, keeps a plain
 # host name (no .EXE, no VMS name), and is never run at boot. Shares the single
-# format description in src/kernel/vmsfs/vmsfs_ondisk.h with INITIALIZE.EXE and
-# vmsfs.ko.
+# format description in src/vmsfs/include/vmsfs_ondisk.h (relocated there by
+# vms-165 when the vmsfs VFS driver was retired) with INITIALIZE.EXE.
 add_executable(vmsfs_master
     vmsfs_master.c
 )
 
 target_include_directories(vmsfs_master PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/kernel/vmsfs
-    ${VMS_FS_INCLUDE_DIR}   # vmsfs/ods2.h -- genuine ODS-2 writer/reader (vms-5eb R6-build)
+    ${VMS_FS_INCLUDE_DIR}   # vmsfs_ondisk.h + vmsfs/ods2.h -- genuine ODS-2 writer/reader (vms-5eb R6-build)
 )
 
 target_compile_definitions(vmsfs_master PRIVATE
@@ -382,8 +477,9 @@ add_executable(vms_mount_helper
 target_include_directories(vms_mount_helper PRIVATE
     ${VMS_INCLUDE_DIR}
     # readlabel (vms-f83) reads the vmsfs home block layout to pull the
-    # volume label MOUNT builds DISK$<label> from.
-    ${CMAKE_SOURCE_DIR}/src/kernel/vmsfs
+    # volume label MOUNT builds DISK$<label> from. vmsfs_ondisk.h relocated to
+    # src/vmsfs/include (vms-165).
+    ${VMS_FS_INCLUDE_DIR}
 )
 
 target_compile_definitions(vms_mount_helper PRIVATE

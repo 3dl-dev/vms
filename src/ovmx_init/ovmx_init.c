@@ -4,8 +4,9 @@
  * PID 1 / ENTRYPOINT for OVMX on its one runtime target: the real-kernel /
  * QEMU path (CLAUDE.md Rule 9). This is SYSBOOT + EXEC_INIT + SYSINIT and
  * NOTHING ELSE (docs/design-init-scope.md, operator ruling 2026-08-10 "STRIP
- * ALL OF IT"): mount the Linux base layer, attach the executive, load vmsfs.ko,
- * mount the system disk -- or halt -- hand off to STARTUP.COM, then wait.
+ * ALL OF IT"): mount the Linux base layer, attach the executive, mount the
+ * system disk through the executive Files-11 ACP -- or halt -- hand off to
+ * STARTUP.COM, then wait.
  *
  * IT DOES NOT INSTALL, INITIALIZE OR PROVISION ANYTHING. A booting VMS system
  * FINDS its system disk already installed or does not boot (design-init-scope.md
@@ -69,10 +70,13 @@
  * in OVMX_IMGACT mode), which is all this header-only reader needs. */
 #include "sysgen_params.h"
 /* SYSBOOT> conversational-boot prompt (vms-b81) -- operates on the SAME
- * SYS$SYSTEM:OVMXVMSSYS.PAR, just resolved to a raw Linux directory
- * (VMS_SYSTEM_DIR) instead of through vmsfs_to_linux_path(), because it has
- * to run before the device table exists -- see sysboot.h and
- * bare_metal_init() below. */
+ * SYS$SYSTEM:OVMXVMSSYS.PAR every other consumer uses. On the Linux atomic-flip
+ * runtime (vms-46c) it reaches that file over the executive Files-11 ACP, the
+ * same genuine ODS-2 volume the flagless path mounts -- NO /vms passthrough. The
+ * NetBSD-vax backend still resolves it to a raw Linux directory (VMS_SYSTEM_DIR)
+ * until its own flip (vms-d5d). Either way SYSBOOT runs before the device table
+ * exists, which is why it takes the physical path, not vmsfs_to_linux_path() --
+ * see sysboot.h and bare_metal_init() below. */
 #include "sysboot.h"
 /* Boot-plumbing substrate seam (vms-28f, epic vms-8e8): the ONE header PID 1
  * includes for the host-OS boot primitives it needs -- load-executive-module,
@@ -85,6 +89,25 @@
  * the NetBSD backend is vms-f2e. See ovmx_boot.h and docs/design-p4-netbsd-vax-
  * boot.md (GAP-C). */
 #include "ovmx_boot.h"
+#if defined(OVMX_BOOT_ACP_BRIDGE)
+/* ACP-read bootstrap bridge (vms-5f0): PID 1 stages the first-hop execve'd
+ * images (IMGACT/PROVISION/DCL/JOB_CONTROL/LOGINOUT) off the genuine ODS-2
+ * boot volume THROUGH the executive ACP into OVMX_BOOT_STAGE_DIR, so the host
+ * kernel can execve them with the /vms POSIX passthrough retired.
+ *
+ * OVMX_BOOT_ACP_BRIDGE means exactly one thing: "the ACP-read bridge
+ * translation units (ovmx_boot_acp_read.c + ovmx_boot_sysgen_acp.c +
+ * imgact_acp.c) are linked into THIS PID 1". It is defined by whichever build
+ * recipe puts them in the link -- src/ovmx_init/CMakeLists.txt's Linux branch
+ * (which sets OVMX_BOOT_BRIDGE_SRC), and the elf32-vax compile audit
+ * tools/cross-vax/build-acp-read-audit-vax.sh. It is deliberately NOT
+ * OVMX_BOOT_LINUX (which names the SUBSTRATE, not the link set): the bridge is
+ * substrate-neutral C, and the NetBSD-vax runtime cutover (vms-329) turns it on
+ * by adding these TUs + this macro to the VAX recipe -- a wiring change, with
+ * the compile already proven by vms-8e8f. Until then the VAX runtime does not
+ * define it and its boot behaviour is unchanged. */
+#include "ovmx_boot_acp_read.h"
+#endif
 
 /*
  * SYS$SYSTEM as a Linux path — initialized at runtime after the device table
@@ -93,6 +116,7 @@
  * off to STARTUP.COM.
  */
 static char sysexe_linux[512];
+static char syslib_linux[512];
 
 static const char *vms_months[] = {
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
@@ -144,6 +168,7 @@ static const char *vms_to_linux(const char *vms_spec, char *buf, size_t bufsz)
 static void init_search_paths(void)
 {
     vms_to_linux(VMS_SYSEXE, sysexe_linux, sizeof(sysexe_linux));
+    vms_to_linux(VMS_SYSLIB, syslib_linux, sizeof(syslib_linux));
 }
 
 static void sigterm_handler(int sig)
@@ -372,6 +397,45 @@ static void provision_disk_mount_points(void)
  */
 static int executive_fd = -1;
 
+/* When set before executive_attach(), the executive is attached SILENTLY: the
+ * %OVMX-I-EXEC console line is suppressed and executive_announce() emits it
+ * later. The conversational boot path (vms-46c) must attach the executive BEFORE
+ * the SYSBOOT> prompt -- the Files-11 ACP $MOUNT of the system disk needs it --
+ * but must emit NOTHING before "SYSBOOT> " (docs/design-boot-faithful.md §3.1),
+ * so it sets this, calls executive_attach(), and announces after the prompt.
+ * Every other path leaves it 0 and gets the announce inline from
+ * executive_attach(). It is a deferral of the ANNOUNCE only -- the executive
+ * guarantee (capture + halt-on-failure + pin) is unconditional either way. */
+static int executive_announce_deferred = 0;
+
+/* Emit the %OVMX-I-EXEC line for an executive executive_attach() opened while
+ * executive_announce_deferred was set (the conversational path, after SYSBOOT>). */
+static void executive_announce(void)
+{
+    printf("%%OVMX-I-EXEC, VMS executive attached on /dev/vms\n");
+}
+
+/*
+ * executive_attach - THE boot-time executive guarantee (Rule 9 / INV-6). PID 1
+ * loads vms.ko, opens /dev/vms through the boot seam, CAPTURES the descriptor,
+ * and HALTS if it cannot: OVMX refuses to run without its executive. executive_fd
+ * (file-static) is then pinned for the life of the system and never closed here,
+ * so vms.ko cannot be rmmod'd out from under a running OVMX.
+ *
+ * The guarantee lives in executive_attach() ITSELF, not in a helper it delegates
+ * to: tests/integration/test_runtime_target.sh inspects the body of the function
+ * literally named executive_attach() for the capture, the terminal-halt failure
+ * branch, and the pin. (vms-46c had split the capture+halt into a separate
+ * executive_attach_silent() to serve the conversational boot path, which moved
+ * the guarantee out of the function the gate reads and reddened it; the announce
+ * is deferred here with executive_announce_deferred instead, keeping the whole
+ * guarantee -- and the %OVMX-I-EXEC line the gate's close-pin control mutates --
+ * inside executive_attach().)
+ *
+ * Idempotent. With executive_announce_deferred set the attach is SILENT (the
+ * conversational path prints the %OVMX-I-EXEC line later via executive_announce());
+ * otherwise it is emitted inline here.
+ */
 static void executive_attach(void)
 {
     if (executive_fd >= 0)
@@ -397,6 +461,10 @@ static void executive_attach(void)
          * facility (Rule 10). */
         ovmx_exec_halt("VMS executive device /dev/vms did not open", strerror(errno));
     }
+
+    if (executive_announce_deferred)
+        return;                 /* conversational path: %OVMX-I-EXEC deferred to
+                                 * executive_announce() after the SYSBOOT> prompt */
     printf("%%OVMX-I-EXEC, VMS executive attached on /dev/vms\n");
 }
 
@@ -404,8 +472,9 @@ static void executive_attach(void)
  * report_kernel_taint() - OVMX taint-audit readout (rd vms-566, epic vms-19e
  * "owns-kernel").
  *
- * After BOTH OVMX kernel modules have loaded -- vms.ko via executive_attach()
- * and vmsfs.ko via ovmx_boot_load_module("vmsfs") -- read the REAL
+ * After the OVMX executive module has loaded -- vms.ko via executive_attach()
+ * (vms-165 retired the separate vmsfs.ko VFS module; the ODS-2 ACP is in vms.ko
+ * now) -- read the REAL
  * /proc/sys/kernel/tainted mask and, IF the boot-flag register (kernel cmdline)
  * carries the token "ovmx.taintreport", print it as an OVMX-facility line the
  * taint-clean acceptance gate scrapes (tests/qemu/test_kernel_taint.sh). This is
@@ -471,8 +540,8 @@ static void report_kernel_taint(void)
 
 /*
  * Bare-metal bootstrap: mount the Linux base layer, set hostname, attach the
- * executive, load vmsfs.ko, and MOUNT THE SYSTEM DISK OR HALT. Called when
- * running as PID 1 on bare metal or QEMU.
+ * executive, and MOUNT THE SYSTEM DISK (through the executive Files-11 ACP) OR
+ * HALT. Called when running as PID 1 on bare metal or QEMU.
  *
  * This is SYSINIT: it mounts the pre-installed system disk. It does NOT
  * install, initialize, or fall back to an ephemeral overlay -- a booting VMS
@@ -490,7 +559,7 @@ static void bare_metal_init(void)
     /*
      * The kernel-log -> operator-console bridge (vms-32a) starts as early as
      * /dev exists, ahead of BOTH boot branches below, so it is running
-     * before vms.ko/vmsfs.ko load in either one and replays their init-time
+     * before vms.ko loads in either one and replays its init-time
      * records rather than missing them. See docs/design-opcom-executive-
      * logging.md. Best-effort: the bridge never blocks or fails boot even if
      * the substrate's kernel-log source is unavailable.
@@ -546,21 +615,6 @@ static void bare_metal_init(void)
          * here, as root. */
         provision_disk_mount_points();
 
-        /* vmsfs.ko is the filesystem, not the executive; a failure here
-         * surfaces as the mount failure below, which halts honestly. The
-         * executive itself is loaded and pinned by executive_attach().
-         * OVMX-facility, not STARTUP: VMS never narrates a Linux kernel
-         * module load, so this is not dressed as a borrowed VMS message
-         * (vms-1fb facility audit, docs/design-boot-faithful.md). */
-        if (ovmx_boot_load_module("vmsfs") != 0 && errno != EEXIST) {
-            fprintf(stderr, "%%OVMX-W-MODFAIL, failed to load vmsfs.ko: %s\n",
-                    strerror(errno));
-        }
-
-        struct stat vms_st;
-        if (stat(SYSDISK_MOUNT, &vms_st) != 0)
-            return;  /* No system disk mount point in initramfs */
-
         /* The system disk must be a real block device. There is no overlay
          * and no auto-initialize fallback: if it is not here, the system does
          * not come up (design-init-scope.md §1). */
@@ -575,25 +629,39 @@ static void bare_metal_init(void)
 
         printf("%%OVMX-I-SYSDISK, mounting system disk DKA0:\n");
 
-        /* Mount the pre-installed disk, or halt. A blank or unformatted disk
-         * fails to mount as vmsfs -- and PID 1 does NOT initialize it (that
-         * is the installer spine's INITIALIZE/PCSI job, run out of band). */
-        if (ovmx_boot_mount_system_disk(SYSDISK_MOUNT) != 0) {
+        /* Mount the system disk via the substrate's own mechanism. The boot
+         * seam keeps ovmx_init.c substrate-neutral -- ONE source, no #ifdef
+         * (INV-DRIFT); the substrate split lives ONLY in ovmx_boot_linux.c /
+         * ovmx_boot_netbsd.c:
+         *   Linux  -- ATOMIC FLIP (vms-5f0, epic vms-208): $MOUNT the boot unit
+         *             through the Files-11 (ODS-2) ACP in the executive, NOT a
+         *             VFS mount of a bespoke-VMFS volume at /vms.
+         *             SYS$DISK is now a genuine ODS-2 block device the ACP owns;
+         *             every consumer (RMS/DCL/IMGACT/LOGINOUT) reaches it by
+         *             $ASSIGN + $QIO. The executive is already attached
+         *             (executive_attach() above), which the ACP $MOUNT requires.
+         *   NetBSD -- the SAME executive Files-11 ACP in the vms module
+         *             (vms-329 VAX ACP cutover; vms-165 retired the separate
+         *             vmsfs VFS module on both substrates).
+         * Either way a blank/unformatted or non-installed volume fails to mount
+         * and PID 1 halts here -- it does NOT initialize it (the installer
+         * spine's INITIALIZE/PCSI job runs out of band). */
+        if (ovmx_boot_mount_system_disk_native() != 0) {
             char msg[128];
             snprintf(msg, sizeof(msg),
-                     "system disk DKA0: (%s) would not mount",
-                     ovmx_boot_system_disk_dev());
+                     "system disk %s (%s) would not mount",
+                     ovmx_boot_system_disk_unit(), ovmx_boot_system_disk_dev());
             ovmx_sysinit_halt(
                 msg,
-                "the volume is not an installed VMSFS system disk; "
+                "the volume is not an installed genuine system disk; "
                 "OVMX does not initialize or install it at boot");
         }
 
         printf("%%OVMX-I-MOUNTED, system disk DKA0: mounted\n");
 
-        /* Both OVMX modules are loaded (vms.ko via executive_attach() above,
-         * vmsfs.ko just before the mount): the taint mask is now final.
-         * Emits ONLY under the ovmx.taintreport boot flag (vms-566). */
+        /* The OVMX executive module is loaded (vms.ko via executive_attach()
+         * above; vms-165 retired the separate vmsfs.ko): the taint mask is now
+         * final. Emits ONLY under the ovmx.taintreport boot flag (vms-566). */
         report_kernel_taint();
         return;
     }
@@ -601,83 +669,77 @@ static void bare_metal_init(void)
     /*
      * ---- Conversational boot path (vms-b81) ----
      *
-     * SYSBOOT needs the system disk mounted to read/write the real
-     * SYS$SYSTEM:OVMXVMSSYS.PAR (sysboot.h's header comment explains why it
-     * cannot go through the normal filespec translator this early). Mounting
-     * it needs only vmsfs.ko, not the executive -- unlike the flagless
-     * branch above, executive_attach() is deliberately NOT called until
-     * after the prompt returns.
-     *
-     * The diagnostic lines the flagless branch prints INLINE, as each step
-     * happens, are DEFERRED here to after the (optional) prompt instead:
-     * same text, same order relative to each other, just moved as a whole
-     * block -- because on this path they would otherwise print before
-     * SYSBOOT>, which the oracle capture (§3.1) shows nothing does. The
-     * banner (vms-1fb) is deferred the same way and for the same reason:
-     * §3.1 shows NOTHING preceding "SYSBOOT> ", not even the banner.
+     * SYSBOOT reads/writes the real SYS$SYSTEM:OVMXVMSSYS.PAR (sysboot.h's
+     * header explains why it cannot go through the normal filespec translator
+     * this early). The diagnostic lines the flagless branch prints INLINE are
+     * DEFERRED here to after the (optional) prompt -- same text, same order
+     * relative to each other, moved as a whole block -- because on this path
+     * they would otherwise print before "SYSBOOT> ", which the oracle capture
+     * (§3.1) shows nothing does. The banner (vms-1fb) and the %OVMX-I-EXEC line
+     * are deferred the same way and for the same reason.
      */
-    int vmsfs_load_failed =
-        (ovmx_boot_load_module("vmsfs") != 0 && errno != EEXIST);
-    int vmsfs_errno = errno;
+    /*
+     * ATOMIC FLIP (vms-46c): SYSBOOT reaches OVMXVMSSYS.PAR over the executive
+     * Files-11 (ODS-2) ACP -- the SAME genuine volume the flagless path mounts,
+     * with NO /vms passthrough (that residual is exactly what vms-46c excises).
+     * The ACP $MOUNT requires the executive, so it is attached HERE, before the
+     * prompt -- but SILENTLY (executive_announce_deferred): §3.1 shows NOTHING
+     * precedes "SYSBOOT> ", not even %OVMX-I-EXEC. A disk that is absent or will
+     * not ACP-mount is a fail-honest halt, exactly as on the flagless path --
+     * OVMX finds its installed system disk or does not boot (design-init-scope.md
+     * §1); it never legacy-mounts vmsfs or installs.
+     */
+    executive_announce_deferred = 1;   /* attach silently; announce after SYSBOOT> */
+    executive_attach();
 
-    struct stat vms_st;
-    if (stat(SYSDISK_MOUNT, &vms_st) == 0) {
-        if (!ovmx_boot_system_disk_present()) {
-            char msg[128];
-            snprintf(msg, sizeof(msg), "no system disk %s (DKA0:)",
-                     ovmx_boot_system_disk_dev());
-            ovmx_sysinit_halt(
-                msg,
-                "the system disk is not present; OVMX does not install one at boot");
-        }
-        if (ovmx_boot_mount_system_disk(SYSDISK_MOUNT) != 0) {
-            char msg[128];
-            snprintf(msg, sizeof(msg),
-                     "system disk DKA0: (%s) would not mount",
-                     ovmx_boot_system_disk_dev());
-            ovmx_sysinit_halt(
-                msg,
-                "the volume is not an installed VMSFS system disk; "
-                "OVMX does not initialize or install it at boot");
-        }
-
-        /* The disk is mounted and SYS$SYSTEM (VMS_SYSTEM_DIR, a raw Linux
-         * path -- ovmx_layout.h) is reachable. Load the real parameter file
-         * (or factory defaults if it is not there yet), run the prompt, and
-         * stash the result for read_boot_parameters(). */
-        sysboot_load_working_set(&conversational_boot_params, VMS_SYSTEM_DIR,
-                                  "OVMXVMSSYS", "PAR");
-        sysboot_run_prompt(&conversational_boot_params, VMS_SYSTEM_DIR,
-                            "OVMXVMSSYS", "PAR", VMS_STARTUP_PATH);
-        conversational_boot_result_valid = 1;
-
-        /* SYSBOOT (the prompt) has now handed over -- attach the executive
-         * and show the banner BEFORE the mount-narration messages below,
-         * mirroring the flagless branch's ordering (vms-1fb). */
-        executive_attach();
-        print_banner_once();
-
-        printf("%%OVMX-I-SYSDISK, mounting system disk DKA0:\n");
-        printf("%%OVMX-I-MOUNTED, system disk DKA0: mounted\n");
-
-        /* Both OVMX modules are loaded on this path too (vmsfs.ko above,
-         * vms.ko via the executive_attach() just before this block): emit the
-         * taint mask readout, gated on the ovmx.taintreport boot flag (vms-566). */
-        report_kernel_taint();
+    if (!ovmx_boot_system_disk_present()) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "no system disk %s (DKA0:)",
+                 ovmx_boot_system_disk_dev());
+        ovmx_sysinit_halt(
+            msg,
+            "the system disk is not present; OVMX does not install one at boot");
+    }
+    if (ovmx_boot_mount_system_disk_native() != 0) {
+        char msg[128];
+        snprintf(msg, sizeof(msg),
+                 "system disk %s (%s) would not mount",
+                 ovmx_boot_system_disk_unit(), ovmx_boot_system_disk_dev());
+        ovmx_sysinit_halt(
+            msg,
+            "the volume is not an installed genuine system disk; "
+            "OVMX does not initialize or install it at boot");
     }
 
-    if (vmsfs_load_failed)
-        fprintf(stderr, "%%OVMX-W-MODFAIL, failed to load vmsfs.ko: %s\n",
-                strerror(vmsfs_errno));
+    /* The system disk is ACP-mounted. Load the real parameter set over the ACP
+     * (or factory defaults if the volume has none yet), run the prompt, and
+     * stash the result for read_boot_parameters(). sysboot's ACP reader/writer
+     * is silent -- no output precedes "SYSBOOT> ". */
+    sysboot_load_working_set(&conversational_boot_params, VMS_SYSTEM_DIR,
+                              "OVMXVMSSYS", "PAR");
+    sysboot_run_prompt(&conversational_boot_params, VMS_SYSTEM_DIR,
+                        "OVMXVMSSYS", "PAR", VMS_STARTUP_PATH);
+    conversational_boot_result_valid = 1;
 
-    /* Idempotent fallbacks for the degenerate case where SYSDISK_MOUNT did
-     * not even exist above (the if-block never ran, so neither call site
-     * inside it did either): both functions no-op harmlessly if already
-     * done, so this is not a second attach or a second banner on the
-     * normal path. */
-    executive_attach();
+    /* SYSBOOT has handed over -- emit the deferred narration in the flagless
+     * branch's order (vms-1fb): the executive-attach line (already attached
+     * above, announced now), the banner, then the mount lines. */
+    executive_announce();
     print_banner_once();
+    printf("%%OVMX-I-SYSDISK, mounting system disk DKA0:\n");
+    printf("%%OVMX-I-MOUNTED, system disk DKA0: mounted\n");
+
+    /* vms.ko is loaded (executive_attach() above, silent); emit the taint mask
+     * readout, gated on the ovmx.taintreport boot flag (vms-566). */
+    report_kernel_taint();
+
     provision_disk_mount_points();
+    /* vms-329: there is no non-ACP arm here any more. The netbsd-vax #else
+     * branch that used to VFS-mount SYS$DISK with vmsfs.ko is GONE: the
+     * coupled cutover made the ACP $MOUNT the only mount on every runtime
+     * substrate, and NetBSD's spec_vnops allows exactly ONE open of the
+     * block device, so a VFS fallback could not coexist with it even if it
+     * were wanted. ACP or fail-honest (INV-6). */
 }
 
 /* ------------------------------------------------------------------ */
@@ -697,16 +759,226 @@ static void bare_metal_init(void)
  */
 static void require_installed_system(void)
 {
+    /*
+     * ATOMIC FLIP (vms-5f0): the marker is probed THROUGH THE EXECUTIVE ACP,
+     * not with a POSIX stat() of /vms. SYS$DISK is now a genuine ODS-2 volume
+     * the ACP owns ($MOUNTed in bare_metal_init); the /vms passthrough is
+     * retired, so DCL.EXE has no POSIX path to stat. ovmx_boot_acp_present()
+     * $ASSIGNs a file-class channel + IO$_ACCESSes the file over /dev/vms --
+     * the same file access IMGACT uses to activate it. Fail-honest: a missing
+     * file or an unreachable executive both read as "not installed", and the
+     * halt message is unchanged. NEVER a faked presence (INV-6).
+     */
     char path[512];
     snprintf(path, sizeof(path), "%s/DCL.EXE", sysexe_linux);
+#if defined(OVMX_BOOT_ACP_BRIDGE)
+    if (!ovmx_boot_acp_present(path)) {
+#else
+    /* No ACP-read bridge in this link (the pre-cutover VAX runtime, vms-329):
+     * unchanged POSIX presence probe. */
     struct stat st;
     if (stat(path, &st) != 0) {
+#endif
         ovmx_sysinit_halt(
             "system disk DKA0: is not an installed OVMX system volume",
             "SYS$SYSTEM:DCL.EXE is absent; install the system with the "
             "OVMX installer before booting -- PID 1 does not install one");
     }
 }
+
+#if defined(OVMX_BOOT_ACP_BRIDGE)
+
+/*
+ * stage_boot_images - ACP-read bootstrap bridge (vms-5f0).
+ *
+ * The boot chain fork()+execve()s a small first-hop set of images, and the
+ * host kernel maps each one's PT_LOAD and opens its PT_INTERP (IMGACT.EXE) BY
+ * POSIX PATH before any OVMX code runs. With the /vms passthrough retired those
+ * files have no POSIX home, so PID 1 reads each FROM THE GENUINE ODS-2 VOLUME
+ * THROUGH THE EXECUTIVE ACP (ovmx_boot_acp_stage -> IO$_ACCESS + IO$_READVBLK)
+ * and writes it into OVMX_BOOT_STAGE_DIR (a tmpfs). Every execve target that
+ * names a SYS$SYSTEM image is then rewritten there (ovmx_boot_stage_exec_path).
+ *
+ * The bytes come from the ACP, never a /vms read; tmpfs is only the host-exec
+ * handoff (the chicken-and-egg of activating image #1). Everything downstream
+ * of the first hop -- shareables, data files -- flows through the ACP
+ * in-process and is NOT staged here.
+ *
+ * SUBSTRATE-NEUTRAL (vms-8e8f): every line below is portable POSIX plus ACP
+ * calls, so ONE stage_boot_images() serves Linux and NetBSD-vax alike
+ * (INV-DRIFT). The single substrate-specific step -- where a writable staging
+ * filesystem comes from -- is behind ovmx_boot_prepare_stage_dir() in the
+ * ovmx_boot.h seam (Linux: two mkdirs on the initramfs tmpfs; NetBSD: the same
+ * two mkdirs plus a tmpfs mount over the FFS root).
+ *
+ * KERNEL-BINFMT ENDGAME (note, not built here): a kernel binfmt that activates
+ * a VMS image directly from the ACP would remove even this first-hop tmpfs. It
+ * is post-flip work; this bridge is the boot-path realisation the flip ships.
+ *
+ * Called after require_installed_system() has confirmed (over the ACP) that the
+ * volume is installed, so a staging read that fails here is an unexpected fault,
+ * not the "blank volume" condition -- it halts honestly.
+ */
+static void stage_boot_images(void)
+{
+    static const char *const images[] = {
+#if defined(OVMX_BOOT_LINUX)
+        /* IMGACT.EXE is the PT_INTERP the kernel opens for each execve -- but
+         * ONLY where OVMX images are IMGACT-activated. netbsd-vax activates
+         * through NetBSD's own /usr/libexec/ld.elf_so (Decision A, vms-42d: no
+         * OVMX-native VAX toolchain exists), so no VAX image carries an
+         * IMGACT.EXE PT_INTERP and the shipped VAX system volume does not
+         * carry the file at all. Demanding it there would halt every VAX boot
+         * on a file that is correctly absent -- the opposite of fail-honest.
+         * This keys off the SUBSTRATE macro, not the bridge macro, because it
+         * is a statement about the activation model, not about this link. */
+        "IMGACT.EXE",
+#endif
+        "PROVISION.EXE",   /* PID 1 forks this (the startup process)         */
+        "DCL.EXE",         /* PROVISION execve's this on STARTUP.COM         */
+        "JOB_CONTROL.EXE", /* RUN/DETACHED from the startup phase driver     */
+        "LOGINOUT.EXE",    /* JOB_CONTROL execve's this for the console login*/
+    };
+
+    if (ovmx_boot_prepare_stage_dir(OVMX_BOOT_STAGE_DIR) != 0)
+        ovmx_sysinit_halt("cannot create the boot-image staging directory",
+                          strerror(errno));
+
+    for (size_t i = 0; i < sizeof(images) / sizeof(images[0]); i++) {
+        char acp_path[512], dest[512];
+        snprintf(acp_path, sizeof(acp_path), "%s/%s", sysexe_linux, images[i]);
+        snprintf(dest, sizeof(dest), "%s/%s", OVMX_BOOT_STAGE_DIR, images[i]);
+
+        uint32_t st = ovmx_boot_acp_stage(acp_path, dest);
+        if (!$VMS_STATUS_SUCCESS(st)) {
+            char detail[256];
+            snprintf(detail, sizeof(detail),
+                     "SYS$SYSTEM:%s could not be read from the ODS-2 volume "
+                     "over the ACP (status %#x)", images[i], st);
+            ovmx_sysinit_halt("boot-image staging failed", detail);
+        }
+    }
+
+    /*
+     * SYS$SYSTEM UTILITY IMAGES (vms-37e). The five mandatory images above are
+     * the boot chain's own first hop. But DCL activates a SYS$SYSTEM utility
+     * (INSTALL, SYSGEN, AUTHORIZE, MAIL, ...) via dcl_exec_utility(), which
+     * fork()+execve()s the image so it can pass P1-P8 argv -- and in-process
+     * ACP activation (imgact_activate) carries NO argv, so those utilities
+     * cannot ride the in-process path and, exactly like the first hop, need a
+     * POSIX home the kernel can execve now that the /vms passthrough is retired.
+     * The bytes still come off the genuine ODS-2 volume THROUGH THE ACP (INV-6);
+     * only the Linux-exec handoff lives in tmpfs. dcl_exec_utility() rewrites its
+     * SYS$SYSTEM path here via ovmx_boot_stage_exec_path() when /vms is absent.
+     *
+     * BEST-EFFORT: unlike the first hop, a missing utility is NOT a boot-fatal
+     * condition (the OS kit stages several of these with `2>/dev/null` -- an
+     * install can legitimately omit one). ovmx_boot_acp_present() distinguishes
+     * "absent" (skip, honest) from a genuine read fault (halt) so an absent
+     * optional never masks a broken volume.
+     */
+    static const char *const utils[] = {
+        "INSTALL.EXE", "SYSGEN.EXE", "AUTHORIZE.EXE", "MAIL.EXE",
+        "MONITOR.EXE", "INITIALIZE.EXE", "PRODUCT.EXE", "LIBRARIAN.EXE",
+        "HELP.EXE", "SCSD.EXE",
+        /* OVMX-native toolchain (vms-104). BUILD.COM's self-host path defines
+         * TCC :== $SYS$SYSTEM:TCC.EXE and LNK :== $SYS$SYSTEM:LINK.EXE and
+         * fork()+execve()s each (a plain static image is not in-process-eligible,
+         * so dcl_activate_image forks it) -- exactly the SYSEXE-utility class
+         * above, so they stage the SAME way: bytes off the genuine ODS-2 volume
+         * through the ACP (INV-6), rewritten to the staged copy by
+         * dcl_resolve_activatable_acp / dcl_exec_utility when /vms is absent.
+         * BEST-EFFORT like the rest: a system disk that does not ship the
+         * toolchain (a minimal, non-self-hosting install) skips them honestly.
+         * LIBRARIAN.EXE is already staged above (it is also a SYSEXE utility). */
+        "TCC.EXE", "LINK.EXE",
+    };
+    for (size_t i = 0; i < sizeof(utils) / sizeof(utils[0]); i++) {
+        char acp_path[512], dest[512];
+        snprintf(acp_path, sizeof(acp_path), "%s/%s", sysexe_linux, utils[i]);
+        if (!ovmx_boot_acp_present(acp_path))
+            continue;                 /* optional utility not installed: skip */
+        snprintf(dest, sizeof(dest), "%s/%s", OVMX_BOOT_STAGE_DIR, utils[i]);
+        uint32_t st = ovmx_boot_acp_stage(acp_path, dest);
+        if (!$VMS_STATUS_SUCCESS(st)) {
+            char detail[256];
+            snprintf(detail, sizeof(detail),
+                     "SYS$SYSTEM:%s is present on the ODS-2 volume but could "
+                     "not be read over the ACP (status %#x)", utils[i], st);
+            ovmx_sysinit_halt("utility-image staging failed", detail);
+        }
+    }
+
+    /*
+     * SYS$SHARE SHAREABLE IMAGES (vms-0cb). SYSTARTUP_VMS.COM runs
+     * `INSTALL ADD SYS$SHARE:*$SHR.EXE` to register the shareables every
+     * dynamically-activated OVMX image depends on. INSTALL stat()s each one
+     * to record its path in the Known Image DB -- but with the /vms
+     * passthrough retired the SYS$SHARE shareables have no POSIX home, so
+     * INSTALL failed %INSTALL-E-FILNOTFND for every one (image activation
+     * itself still worked, via IMGACT's Priority-2 ACP fallback, but the
+     * boot printed seven honest errors and the Known Image DB stayed empty).
+     *
+     * Same reroute class as the SYSEXE utilities above: PID 1 stages each
+     * shareable off the genuine ODS-2 volume THROUGH THE ACP into the tmpfs
+     * so INSTALL.EXE (which cannot ride the in-process ACP path -- it needs a
+     * POSIX file to stat) resolves SYS$SHARE:<name> to the staged copy. The
+     * bytes come from the ACP, never a /vms read (INV-6). BEST-EFFORT, like
+     * the utilities: a shareable absent from the volume is skipped honestly
+     * (INSTALL then reports its own %INSTALL-E-FILNOTFND for that one) rather
+     * than masking a broken volume -- ovmx_boot_acp_present() distinguishes
+     * "absent" from a genuine read fault. This list is exactly the shareable
+     * set the distro SYSTARTUP_VMS.COM procedures INSTALL-ADD, and the
+     * Dockerfile.bootable "9 VMS-native artifacts" gate ships.
+     */
+    static const char *const shareables[] = {
+        "DECC$SHR.EXE", "LIBVMSSYS$SHR.EXE", "LIBVMS$SHR.EXE",
+        "LIBVMSPROCESS$SHR.EXE", "LIBVMSLNM$SHR.EXE", "LIBVMSFS$SHR.EXE",
+        "LIBVMSRMS$SHR.EXE",
+    };
+    for (size_t i = 0; i < sizeof(shareables) / sizeof(shareables[0]); i++) {
+        char acp_path[512], dest[512];
+        snprintf(acp_path, sizeof(acp_path), "%s/%s", syslib_linux, shareables[i]);
+        if (!ovmx_boot_acp_present(acp_path))
+            continue;                 /* optional shareable not installed: skip */
+        snprintf(dest, sizeof(dest), "%s/%s", OVMX_BOOT_STAGE_DIR, shareables[i]);
+        uint32_t st = ovmx_boot_acp_stage(acp_path, dest);
+        if (!$VMS_STATUS_SUCCESS(st)) {
+            char detail[256];
+            snprintf(detail, sizeof(detail),
+                     "SYS$SHARE:%s is present on the ODS-2 volume but could "
+                     "not be read over the ACP (status %#x)", shareables[i], st);
+            ovmx_sysinit_halt("shareable-image staging failed", detail);
+        }
+    }
+
+    /*
+     * SYS$SYSTEM:OVMXVMSSYS.PAR (vms-0cb). read_boot_parameters() reads the
+     * SCSNODE SYSGEN parameter from this file through the shared sysgen_params.h
+     * reader, which fopen()s a /vms path retired by the flip -- so the boot
+     * fell back to the default node name with %OVMX-W-NOPARAMS where the
+     * boot-console oracle expects %OVMX-I-SCSNODE. Stage the file off the ODS-2
+     * volume over the ACP (bytes from the ACP, INV-6) so read_boot_parameters()
+     * can point the reader at it (OVMX_SYSGEN_PATH). BEST-EFFORT: an absent or
+     * unreadable .PAR keeps the honest NOPARAMS fallback (an already-installed
+     * volume may legitimately lack it -- read_boot_parameters()'s header).
+     */
+    {
+        char acp_path[512], dest[512];
+        snprintf(acp_path, sizeof(acp_path), "%s/OVMXVMSSYS.PAR", sysexe_linux);
+        if (ovmx_boot_acp_present(acp_path)) {
+            snprintf(dest, sizeof(dest), "%s/OVMXVMSSYS.PAR", OVMX_BOOT_STAGE_DIR);
+            (void)ovmx_boot_acp_stage(acp_path, dest);  /* NOPARAMS on failure */
+        }
+    }
+}
+#else  /* !OVMX_BOOT_ACP_BRIDGE */
+/* No ACP-read bridge in this link: the pre-cutover NetBSD-vax runtime keeps
+ * its current boot model (no ACP-staging tmpfs). The cutover is vms-329;
+ * vms-8e8f already proved the body above cross-compiles ILP32-clean for
+ * elf32-vax. Staging is a no-op here. */
+static void stage_boot_images(void) { }
+#endif  /* OVMX_BOOT_ACP_BRIDGE */
 
 /* ------------------------------------------------------------------ */
 /* Boot parameters (vms-b6a7)                                         */
@@ -778,7 +1050,36 @@ static void read_boot_parameters(void)
 
     char node[SYSGEN_STRVAL_LEN];
 
-    if (sysgen_read_string("SCSNODE", node, sizeof(node)) == 0 && node[0] != '\0') {
+#if defined(OVMX_BOOT_ACP_BRIDGE)
+    /*
+     * ATOMIC FLIP (vms-0cb): the shared SYSGEN reader (sysgen_params.h
+     * sysgen_current_path) resolves SYS$SYSTEM:OVMXVMSSYS.PAR through
+     * vmsfs_to_linux_path and fopen()s the resulting /vms path -- retired by
+     * the flip, so the read failed and every boot fell to the default node
+     * name with %OVMX-W-NOPARAMS (the boot-console conformance oracle expects
+     * %OVMX-I-SCSNODE). PID 1 staged the file off the genuine ODS-2 volume
+     * over the ACP (stage_boot_images; INV-6, bytes from the ACP); point the
+     * reader at that staged copy via OVMX_SYSGEN_PATH. SCOPED TO THIS CALL and
+     * unset immediately below -- read_boot_parameters() runs before
+     * run_startup() forks PROVISION, so no child inherits a frozen params path
+     * (which would defeat SYSGEN's on-disk versioning). A genuinely absent
+     * staged file leaves the env unset and the honest NOPARAMS fallback
+     * intact. A link without the bridge keeps its pre-cutover read (vms-329).
+     */
+    int staged_params = (access(OVMX_BOOT_STAGE_DIR "/OVMXVMSSYS.PAR", R_OK) == 0);
+    if (staged_params)
+        setenv("OVMX_SYSGEN_PATH", OVMX_BOOT_STAGE_DIR "/OVMXVMSSYS.PAR", 1);
+#endif
+
+    int have_node =
+        (sysgen_read_string("SCSNODE", node, sizeof(node)) == 0 && node[0] != '\0');
+
+#if defined(OVMX_BOOT_ACP_BRIDGE)
+    if (staged_params)
+        unsetenv("OVMX_SYSGEN_PATH");
+#endif
+
+    if (have_node) {
         sethostname(node, strlen(node));
         printf("%%OVMX-I-SCSNODE, node name %s set from SYS$SYSTEM:OVMXVMSSYS.PAR\n",
                node);
@@ -846,6 +1147,18 @@ static void run_startup(void)
 {
     char provision_path[512];
     vms_to_linux(VMS_PROVISION_PATH, provision_path, sizeof(provision_path));
+    /* ATOMIC FLIP (vms-5f0): execve the copy PID 1 staged off the ODS-2 volume
+     * over the ACP into OVMX_BOOT_STAGE_DIR -- the /vms POSIX path no longer
+     * exists for the kernel to map. The staged file IS the volume's bytes.
+     * Self-guarding: use the staged copy only if it is actually present, so on
+     * a substrate that did not stage (NetBSD-vax, vms-d5d) the original path is
+     * kept unchanged. */
+    {
+        char staged[512];
+        if (ovmx_boot_stage_exec_path(provision_path, staged, sizeof(staged)) &&
+            access(staged, X_OK) == 0)
+            snprintf(provision_path, sizeof(provision_path), "%s", staged);
+    }
 
     struct stat st;
     if (stat(provision_path, &st) != 0)
@@ -1098,6 +1411,14 @@ int main(void)
      * does not boot -- so a mounted volume without SYS$SYSTEM:DCL.EXE is a
      * fail-honest halt, never a self-install. */
     require_installed_system();
+
+    /* Step 2a: ACP-read bootstrap bridge (vms-5f0). Stage the first-hop
+     * execve'd images (IMGACT/PROVISION/DCL/JOB_CONTROL/LOGINOUT) off the
+     * genuine ODS-2 volume THROUGH THE EXECUTIVE ACP into OVMX_BOOT_STAGE_DIR,
+     * so the Linux kernel can execve them now that the /vms POSIX passthrough
+     * is retired. Must run after require_installed_system() (volume confirmed
+     * installed over the ACP) and before run_startup() forks PROVISION.EXE. */
+    stage_boot_images();
 
     /* Step 2b: SYSBOOT's job -- read SYS$SYSTEM:OVMXVMSSYS.PAR and set the
      * system's identity (sethostname) from its SCSNODE parameter (vms-b6a7,

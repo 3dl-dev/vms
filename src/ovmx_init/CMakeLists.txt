@@ -14,10 +14,38 @@ else()
     set(OVMX_BOOT_BACKEND_SRC ovmx_boot_linux.c opcom_kmsg.c)
 endif()
 
+# ACP-read bootstrap bridge (vms-5f0): PID 1 stages the first-hop execve'd
+# images off the genuine ODS-2 boot volume THROUGH the executive ACP. The ACP
+# file-access walk is the SAME imgact_acp.c IMGACT.EXE and the QEMU test use --
+# ovmx_boot_acp_read.c only backs its three host primitives with libc.
+#
+# EVERY RUNTIME SUBSTRATE (vms-329, the coupled VAX cutover). This used to be
+# Linux-only while the NetBSD-vax boot path still VFS-mounted SYS$DISK. It no
+# longer does: ovmx_boot_mount_system_disk_native() ACP-mounts the boot unit on
+# both substrates, which retires the vmsfs.ko VFS mount (NetBSD's spec_vnops
+# allows exactly ONE open of the block device, so the two mounts cannot
+# coexist), and with no VFS mount PID 1 has no POSIX way to reach the first-hop
+# images at all -- the bridge IS the boot path here, not an enhancement.
+# vms-8e8f proved this whole TU set cross-compiles ILP32-clean for elf32-vax
+# and gates it standing (tools/cross-vax/build-acp-read-audit-vax.sh).
+#
+# Keep this set in lockstep with tools/cross-vax/build-ovmx-init-vax.sh, which
+# builds the SHIPPED VAX PID 1 (this target is the ovmx-images parity artifact);
+# the two recipes linking a different TU set is exactly the drift vms-8e8f's
+# handoff flagged.
+set(OVMX_BOOT_BRIDGE_SRC
+    ovmx_boot_acp_read.c
+    # vms-46c: the conversational SYSBOOT> path's OVMXVMSSYS.PAR read/write
+    # over the executive Files-11 ACP (the strong ovmx_sysgen_acp_* seam for
+    # PID 1, backed by imgact_acp.c -- no RMS pulled into the static image).
+    ovmx_boot_sysgen_acp.c
+    ${CMAKE_SOURCE_DIR}/src/imgact/imgact_acp.c)
+
 add_executable(ovmx_init
     ovmx_init.c
     ${OVMX_BOOT_BACKEND_SRC}
     sysboot.c
+    ${OVMX_BOOT_BRIDGE_SRC}
 )
 
 target_include_directories(ovmx_init PRIVATE
@@ -30,6 +58,10 @@ target_include_directories(ovmx_init PRIVATE
     # console and asks the executive to record it as the job's terminal
     # (vms-d0b).
     ${CMAKE_SOURCE_DIR}/src/libvmssys
+    # imgact_acp.h (the ACP file-access walk) + vms_ioctl.h (the ACP ioctl arg
+    # structs / request numbers) for the vms-5f0 boot-image staging bridge.
+    ${CMAKE_SOURCE_DIR}/src/imgact
+    ${CMAKE_SOURCE_DIR}/src/kernel
 )
 
 # Feature-test macros. On Linux (glibc) POSIX 2008 + _DEFAULT_SOURCE expose
@@ -45,8 +77,27 @@ else()
     target_compile_definitions(ovmx_init PRIVATE
         _POSIX_C_SOURCE=200809L
         _DEFAULT_SOURCE
+        # vms-5f0: names the SUBSTRATE, not the link set. Only two things still
+        # key off it: the Linux-only /dev/kmsg OPCOM bridge (opcom_kmsg.c) and
+        # the PT_INTERP staging of IMGACT.EXE, which exists only on the
+        # IMGACT-activated Linux path (netbsd-vax uses ld.elf_so -- Decision A,
+        # vms-42d -- and ships no IMGACT.EXE).
+        OVMX_BOOT_LINUX=1
     )
 endif()
+
+# vms-d5d/vms-329: the boot code reaches SYS$DISK via the executive ACP
+# (vms_kif_acp_*) on every runtime substrate, and the ACP-read bridge TUs
+# (OVMX_BOOT_BRIDGE_SRC above) are in EVERY link of this target. ovmx_init has
+# no standalone/unit build (only a substrate split), so both capability macros
+# are unconditional here:
+#   OVMX_HAVE_ACP        -- $MOUNT/read SYS$DISK over the executive ACP.
+#   OVMX_BOOT_ACP_BRIDGE -- "the bridge TUs are in THIS link", which is what
+#                           ovmx_init.c's stage_boot_images() and the
+#                           installed-system probe key off (they are
+#                           substrate-neutral C, so they must key off the LINK
+#                           SET, never the substrate).
+target_compile_definitions(ovmx_init PRIVATE OVMX_HAVE_ACP OVMX_BOOT_ACP_BRIDGE=1)
 
 if(OVMX_IMGACT)
     # Static PID-1 bootstrap: link the static twins, not the shareable images.

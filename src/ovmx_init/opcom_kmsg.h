@@ -111,4 +111,21 @@ int opcom_kmsg_classify(int pri, const char *text, char *out, size_t outsz);
  */
 void opcom_kmsg_start(void);
 
+/*
+ * opcom_kmsg_drain_ringbuffer - one-shot replay of the kernel ring buffer's
+ * kmsg records through opcom_kmsg_classify(), handing every routed line (as one
+ * stream-LF record's text, no trailing newline) to `emit`.
+ *
+ * This is how the genuine on-volume SYS$MANAGER:OPERATOR.LOG (Files-11 ODS-2,
+ * over the ACP) is seeded with the boot-time vms.ko/vmsfs.ko events post atomic
+ * flip (vms-aac, epic vms-208). PID 1 (STARTUP.EXE) is static and carries no
+ * RMS, so it cannot write the ACP log itself; PROVISION.EXE -- which links RMS
+ * and runs AFTER the SYS$DISK $MOUNT -- calls this with an `emit` that does
+ * rms_textfile_append_line(SYS$MANAGER:OPERATOR.LOG, line). Called then, every
+ * boot record is durably buffered and the volume is mounted, so the replay is
+ * race-free. Best-effort: emits nothing if /dev/kmsg cannot be opened; `emit`
+ * may be called zero or many times.
+ */
+void opcom_kmsg_drain_ringbuffer(void (*emit)(const char *line));
+
 #endif /* OVMX_OPCOM_KMSG_H */

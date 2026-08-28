@@ -20,12 +20,16 @@
 #include "dcl/parser.h"
 #include "dcl/symbol.h"
 #include "dcl/dcl_cmd.h"
+#include "dcl/dcl_rms.h"          /* vms-481: file commands reach files via RMS/ACP */
 #include "dcl/vms_messages.h"
 #include "ssdef.h"
 #include "stsdef.h"
 #include "rmsdef.h"
 #include "vmsfs/filespec.h"
 #include "vmsfs/version.h"
+#include "vmsfs/device.h"        /* vms-b3e: vmsfs_device_spec_kernel_mounted */
+#include "vmsfs/ods2.h"          /* vms-f05: ODS2_FH2_M_DIRECTORY (CREATE/DIRECTORY over ACP) */
+#include "vms_kif.h"             /* vms-f05: vms_kif_acp_* for CREATE/DIRECTORY over the ACP */
 #include "vmsqueue.h"
 
 /* Directory entry for sorting in DIRECTORY command */
@@ -39,6 +43,17 @@ struct dir_entry {
     int  has_btime;         /* 1 = btime is a genuine creation time; 0 = the
                              * backing volume records none, so DIRECTORY/FULL
                              * must NOT invent one (INV-6). */
+    /* vms-481: genuine ODS-2 header data when this entry came from the ACP
+     * (from_acp=1). The real File ID DIRECTORY /FULL emits, the on-disk
+     * protection/allocation, and the VMS 64-bit dates -- NOT stat()-derived. */
+    int      from_acp;      /* 1 = fields below are genuine ACP/ODS-2 data */
+    uint16_t fid_num, fid_seq;
+    uint8_t  fid_rvn;
+    uint16_t vms_prot;      /* ODS-2 file protection (4 nibbles S/O/G/W) */
+    long     alloc_blocks;  /* highest allocated VBN (allocation quantity) */
+    uint8_t  credate[8];    /* VMS 64-bit creation time (0 => not recorded) */
+    uint8_t  revdate[8];    /* VMS 64-bit revision time */
+    int      has_cre, has_rev;
 };
 
 /* /SIZE[=option] mode. VSI OpenVMS DCL Dictionary, DIRECTORY /SIZE: bare /SIZE
@@ -120,6 +135,33 @@ static void dir_format_vmsdate(struct timespec ts, char *buf, size_t bufsize)
     snprintf(buf, bufsize, "%2d-%s-%04d %02d:%02d:%02d.%02ld",
              tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
              tm.tm_hour, tm.tm_min, tm.tm_sec, cc);
+}
+
+/*
+ * dir_format_vmsbintime - vms-481: format a VMS 64-bit absolute time (the ODS-2
+ * ATR$C_CREDATE / _REVDATE the ACP returns) as "dd-MMM-yyyy hh:mm:ss.cc".
+ *
+ * A VMS binary time is 100-ns ticks since the Smithsonian base 17-NOV-1858
+ * (public, documented -- clean-room, Rule 8); Unix time subtracts the
+ * 3506716800-second offset to 01-JAN-1970. Converted inline to a timespec and
+ * handed to dir_format_vmsdate, so no new cross-image RTL symbol (sys$numtim)
+ * is added to the DCL native-link graph (same reason dir_format_vmsdate formats
+ * inline). Zero (unset) => 0 and the caller prints an honest "not recorded".
+ */
+#define DIR_VMS_UNIX_OFFSET_SEC 3506716800LL
+static int dir_format_vmsbintime(const uint8_t vt[8], char *buf, size_t bufsize)
+{
+    uint64_t ticks;
+    memcpy(&ticks, vt, 8);
+    if (ticks == 0) { snprintf(buf, bufsize, "<not recorded>"); return 0; }
+    long long secs = (long long)(ticks / 10000000ULL) - DIR_VMS_UNIX_OFFSET_SEC;
+    long nsec = (long)((ticks % 10000000ULL) * 100ULL);
+    if (secs < 0) { snprintf(buf, bufsize, "<not recorded>"); return 0; }
+    struct timespec ts;
+    ts.tv_sec = (time_t)secs;
+    ts.tv_nsec = nsec;
+    dir_format_vmsdate(ts, buf, bufsize);
+    return 1;
 }
 
 /* Per-category access bits within a VMS protection nibble (set = DENIED) and
@@ -377,6 +419,152 @@ static int dir_collect(const char *linux_dir, const char *pattern,
 }
 
 /*
+ * dir_collect_host - vms-5f0 executive-absent DIRECTORY defer. When /dev/vms /
+ * the Files-11 ACP is unreachable (host ctest, plain-container self-host/link
+ * gates -- rms_executive_absent()), DCL cannot list through the ACP, so it
+ * defers to the SAME legacy resolver RMS ($OPEN/$SEARCH) and IMGACT already fall
+ * back to: dcl_resolve_path() (the proven translator for logicals, the volume
+ * root "[000000]" and on-disk case) + the opendir()-based dir_collect() above,
+ * which synthesizes "NAME.DIR;1" for subdirectories and ";1" versions exactly as
+ * the pre-flip DIRECTORY did. `dirspec` names the directory (VMS "DEV:[DIR]" or
+ * default); `filepat` is the VMS file pattern to match, or NULL to list the
+ * whole directory (files AND subdirectories). This runs ONLY when the executive
+ * is absent; with /dev/vms present DIRECTORY stays on dir_collect_acp (INV-6).
+ */
+static int dir_collect_host(struct dcl_context *ctx, const char *dirspec,
+                            const char *filepat, char **excl_pats,
+                            int excl_count, struct dir_entry **out_entries,
+                            int *out_count)
+{
+    char linux_dir[1024];
+    if (dcl_resolve_path(ctx, (dirspec && dirspec[0]) ? dirspec : ctx->default_dir,
+                         linux_dir, sizeof(linux_dir)) != 0)
+        return SS$_NOSUCHFILE;
+
+    size_t dl = strlen(linux_dir);
+    if (dl > 0 && linux_dir[dl - 1] != '/' && dl < sizeof(linux_dir) - 1) {
+        linux_dir[dl] = '/';
+        linux_dir[dl + 1] = '\0';
+    }
+
+    /* An empty or version-only pattern lists the whole directory. */
+    const char *pat = (filepat && filepat[0]) ? filepat : NULL;
+    return dir_collect(linux_dir, pat, excl_pats, excl_count,
+                       out_entries, out_count);
+}
+
+/*
+ * dir_collect_acp - vms-481: collect one directory's matching entries through
+ * the Files-11 ODS-2 ACP (sys$parse + sys$search wildcard directory context)
+ * instead of opendir()/readdir()/stat() on a /vms passthrough. Each entry
+ * carries the GENUINE File ID the search returned and the on-disk header
+ * attributes (size/allocation/protection/owner/dates) read via rms_file_attr
+ * -- so DIRECTORY /FULL emits a real File ID, verified against the codec, not a
+ * synthesized one (INV-6). `vms_pattern` is a VMS wildcard filespec (e.g.
+ * "DKA0:[DIR]*.*;*"). Fail-honest: no ACP-mounted SYS$DISK => 0 entries.
+ *
+ * Returns SS$_NORMAL with *out_entries (malloc'd; caller frees) and *out_count.
+ */
+static int dir_collect_acp(struct dcl_context *ctx, const char *vms_pattern,
+                           char **excl_pats, int excl_count,
+                           struct dir_entry **out_entries, int *out_count)
+{
+    *out_entries = NULL;
+    *out_count = 0;
+
+    struct dcl_rms_dir *d = dcl_rms_dir_open(ctx, vms_pattern);
+    if (!d) return SS$_NOSUCHFILE;
+
+    int capacity = 256;
+    struct dir_entry *entries = malloc((size_t)capacity * sizeof(*entries));
+    if (!entries) { dcl_rms_dir_close(d); return SS$_INSFMEM; }
+    int entry_count = 0;
+
+    char match[1024];
+    uint16_t fnum, fseq; uint8_t frvn;
+    while (dcl_rms_dir_next(d, match, sizeof(match), &fnum, &fseq, &frvn)) {
+        /* Resultant is "DEV:[DIR]NAME.TYP;VER" -- take the NAME.TYP;VER tail. */
+        const char *nt = match;
+        const char *rb = strrchr(match, ']');
+        if (!rb) rb = strrchr(match, '>');
+        if (rb) nt = rb + 1;
+
+        /* /EXCLUDE: skip entries matching any exclusion spec (same VMS matcher). */
+        if (excl_count > 0) {
+            int excluded = 0;
+            for (int xi = 0; xi < excl_count; xi++) {
+                if (vmsfs_wildcard_match(excl_pats[xi], nt)) { excluded = 1; break; }
+            }
+            if (excluded) continue;
+        }
+
+        if (entry_count >= capacity) {
+            capacity *= 2;
+            struct dir_entry *tmp = realloc(entries,
+                                            (size_t)capacity * sizeof(*entries));
+            if (!tmp) { free(entries); dcl_rms_dir_close(d); return SS$_INSFMEM; }
+            entries = tmp;
+        }
+
+        struct dir_entry *e = &entries[entry_count];
+        memset(e, 0, sizeof(*e));
+        e->from_acp = 1;
+        e->fid_num = fnum; e->fid_seq = fseq; e->fid_rvn = frvn;
+        strncpy(e->vms_name, nt, sizeof(e->vms_name) - 1);
+        e->vms_name[sizeof(e->vms_name) - 1] = '\0';
+        strncpy(e->raw_name, nt, sizeof(e->raw_name) - 1);
+        e->raw_name[sizeof(e->raw_name) - 1] = '\0';
+        char *semi = strrchr(e->vms_name, ';');
+        e->version = (semi && semi[1]) ? (int)strtol(semi + 1, NULL, 10) : 1;
+
+        /* Genuine ODS-2 header attributes (real File ID we already have). */
+        struct rms_fileattr at;
+        if (rms_file_attr(match, &at) == RMS$_NORMAL) {
+            long used  = at.efblk ? (at.ffbyte ? (long)at.efblk
+                                                : (long)at.efblk - 1) : 0;
+            if (used < 0) used = 0;
+            e->blocks       = used;
+            e->alloc_blocks = (long)at.hiblk;
+            e->vms_prot     = at.fileprot;
+            e->st.st_size   = (off_t)used * 512 + at.ffbyte;
+            e->st.st_blocks = (blkcnt_t)at.hiblk;
+            e->st.st_gid    = at.uic_group;
+            e->st.st_uid    = at.uic_member;
+            e->st.st_mode   = at.is_directory ? (S_IFDIR | 0755) : (S_IFREG | 0644);
+            memcpy(e->credate, at.credate, 8);
+            memcpy(e->revdate, at.revdate, 8);
+            e->has_cre = (memcmp(at.credate, "\0\0\0\0\0\0\0\0", 8) != 0);
+            e->has_rev = (memcmp(at.revdate, "\0\0\0\0\0\0\0\0", 8) != 0);
+        } else {
+            e->st.st_mode = S_IFREG | 0644;
+        }
+
+        entry_count++;
+    }
+    /* Terminating $SEARCH status BEFORE close (close frees the context). VMS
+     * distinguishes a directory that does not exist (%RMS-E-DNF) from one that
+     * exists but matched nothing (%DIRECT-W-NOFILES); the ACP $SEARCH already
+     * returns RMS$_DNF vs RMS$_NMF for the two (src/vmsrms/rms_search.c), but
+     * dcl_rms_dir_next collapses both to a bare 0. When NO entry was collected,
+     * a DNF terminator means the directory itself is absent -- surface it as
+     * SS$_NOSUCHFILE so the caller prints %RMS-E-DNF, matching VMS (vms-96ec:
+     * DIRECTORY DKA100:[SYSEXE] on a rooted install, where [SYSEXE] does not
+     * exist, must say "directory not found", not "no files found"). */
+    uint32_t end_status = dcl_rms_dir_status(d);
+    dcl_rms_dir_close(d);
+
+    if (entry_count == 0 && end_status == (uint32_t)RMS$_DNF) {
+        free(entries);
+        return SS$_NOSUCHFILE;
+    }
+
+    qsort(entries, (size_t)entry_count, sizeof(struct dir_entry), dir_entry_cmp);
+    *out_entries = entries;
+    *out_count = entry_count;
+    return SS$_NORMAL;
+}
+
+/*
  * dir_print_entries - Print the file listing for one already-collected,
  * already-sorted directory, honoring the display qualifiers, and return the
  * listed file count and block totals. Shared by the single-directory and
@@ -431,11 +619,17 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
              * organization, record format/attributes, longest-record length)
              * are OMITTED rather than fabricated (INV-6 / vms-5eb) -- see the
              * vms-5e2 PR's source-and-gap table. */
-            long alloc = (long)st->st_blocks;   /* real on-disk allocation */
+            long alloc = e->from_acp ? e->alloc_blocks
+                                     : (long)st->st_blocks;   /* on-disk allocation */
 
-            /* Line 1: file name. (Real VMS also prints "File ID: (n,n,n)" here;
-             * omitted -- no genuine File ID exists for a passthrough file.) */
-            printf("%s\n", vms_name);
+            /* Line 1: file name, and -- when the entry came from the ACP -- the
+             * GENUINE ODS-2 File ID (num,seq,rvn) from the directory search, the
+             * fidelity gap the /vms passthrough could not fill (vms-481). */
+            if (e->from_acp)
+                printf("%-30s File ID:  (%u,%u,%u)\n",
+                       vms_name, e->fid_num, e->fid_seq, e->fid_rvn);
+            else
+                printf("%s\n", vms_name);
 
             /* Size (used/allocated) + Owner UIC [group,member]. */
             char sizebuf[32];
@@ -445,27 +639,41 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
                    (unsigned)(st->st_gid & 0377),
                    (unsigned)(st->st_uid & 0377));
 
-            /* Created: genuine birth time, or an honest gap marker when the
-             * backing volume records none. Revised: real mtime. Both carry the
-             * real .cc fraction (the vms-5e2 fidelity fix vs the old ".00"). */
+            /* Created / Revised. From the ACP these are the file header's real
+             * ODS-2 ATR$C_CREDATE / _REVDATE; from the passthrough they are the
+             * birth time (or an honest gap) and the real mtime. */
             char datebuf[40];
-            if (e->has_btime) {
-                dir_format_vmsdate(e->btime, datebuf, sizeof(datebuf));
-                printf("Created:  %s\n", datebuf);
+            if (e->from_acp) {
+                if (e->has_cre && dir_format_vmsbintime(e->credate, datebuf,
+                                                        sizeof(datebuf)))
+                    printf("Created:  %s\n", datebuf);
+                else
+                    printf("Created:  <not recorded>\n");
+                if (e->has_rev && dir_format_vmsbintime(e->revdate, datebuf,
+                                                        sizeof(datebuf)))
+                    printf("Revised:  %s\n", datebuf);
+                else
+                    printf("Revised:  <not recorded>\n");
             } else {
-                printf("Created:  <not recorded>\n");
+                if (e->has_btime) {
+                    dir_format_vmsdate(e->btime, datebuf, sizeof(datebuf));
+                    printf("Created:  %s\n", datebuf);
+                } else {
+                    printf("Created:  <not recorded>\n");
+                }
+                dir_format_vmsdate(st->st_mtim, datebuf, sizeof(datebuf));
+                printf("Revised:  %s\n", datebuf);
             }
-            dir_format_vmsdate(st->st_mtim, datebuf, sizeof(datebuf));
-            printf("Revised:  %s\n", datebuf);
 
-            /* Expiration/backup dates are genuinely unset for a passthrough
-             * file -- VMS prints exactly these strings for a file that has
-             * none, so this is faithful, not invented. */
+            /* Expiration/backup dates are genuinely unset here -- VMS prints
+             * exactly these strings for a file that has none. */
             printf("Expired:  <None specified>\n");
             printf("Backup:   <No backup recorded>\n");
 
-            /* File protection (long form) from the real st_mode. */
-            uint16_t vprot = vmsfs_mode_to_protection(st->st_mode);
+            /* File protection (long form): the genuine ODS-2 protection word
+             * from the ACP header, else derived from the passthrough st_mode. */
+            uint16_t vprot = e->from_acp ? e->vms_prot
+                                         : vmsfs_mode_to_protection(st->st_mode);
             char protbuf[80];
             dir_format_prot_full(vprot, protbuf, sizeof(protbuf));
             printf("File protection:    %s\n", protbuf);
@@ -489,9 +697,14 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
                 }
             }
             if (o->show_date) {
-                /* Real .cc fraction from the mtime, not a hardcoded ".00". */
                 char datebuf[40];
-                dir_format_vmsdate(st->st_mtim, datebuf, sizeof(datebuf));
+                if (e->from_acp) {
+                    if (!(e->has_rev && dir_format_vmsbintime(e->revdate, datebuf,
+                                                              sizeof(datebuf))))
+                        snprintf(datebuf, sizeof(datebuf), "<not recorded>");
+                } else {
+                    dir_format_vmsdate(st->st_mtim, datebuf, sizeof(datebuf));
+                }
                 printf("  %s", datebuf);
             }
             if (o->show_owner) {
@@ -500,7 +713,8 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
                        (unsigned)(st->st_uid & 0377));
             }
             if (o->show_protection) {
-                uint16_t vprot = vmsfs_mode_to_protection(st->st_mode);
+                uint16_t vprot = e->from_acp ? e->vms_prot
+                                             : vmsfs_mode_to_protection(st->st_mode);
                 char prot_buf[64];
                 vmsfs_format_protection(vprot, prot_buf, sizeof(prot_buf));
                 printf(" %s", prot_buf);
@@ -510,8 +724,23 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
             printf("%s\n", vms_name);
         } else {
             if (col_width < 1) col_width = 20;
-            printf("%-*s", col_width, vms_name);
-            col++;
+            /* A name as wide as (or wider than) a column occupies as many whole
+             * columns as it needs, padded to the next column STOP -- it is never
+             * butted directly against the following entry
+             * ("LASTLOGIN_SYSTEM.DAT;1LOGIN.COM;1"). VMS pads each name to a
+             * column boundary; the "+ 1" guarantees at least one trailing space
+             * even when the length is an exact multiple of the column width. */
+            size_t nlen = strlen(vms_name);
+            int cells = (int)(nlen / (size_t)col_width) + 1;
+            if (cells > o->columns) cells = o->columns;   /* clamp giant names */
+            /* A multi-column name that will not fit in the columns left on this
+             * row starts a fresh row, as VMS does, rather than overflowing. */
+            if (col > 0 && col + cells > o->columns) {
+                printf("\n");
+                col = 0;
+            }
+            printf("%-*s", cells * col_width, vms_name);
+            col += cells;
             if (col >= o->columns) {
                 printf("\n");
                 col = 0;
@@ -590,6 +819,129 @@ static void dir_gather_recurse(const char *d, char ***list, int *count, int *cap
 }
 
 /*
+ * dir_spec_child - vms-481: build the VMS directory spec of a subdirectory.
+ * base is "DEV:[DIR]" (or "DEV:[000000]" for the MFD); sub is the subdirectory
+ * NAME (from a "NAME.DIR" entry). Returns "DEV:[DIR.SUB]" (or "DEV:[SUB]" from
+ * the MFD). Returns 0 on success, -1 if base has no bracketed directory.
+ */
+static int dir_spec_child(const char *base, const char *sub,
+                          char *out, size_t outsz)
+{
+    const char *lb = strchr(base, '[');
+    const char *rb = lb ? strchr(lb, ']') : NULL;
+    if (!lb || !rb || rb <= lb) return -1;
+    char prefix[256];
+    size_t pl = (size_t)(lb - base);
+    if (pl >= sizeof(prefix)) pl = sizeof(prefix) - 1;
+    memcpy(prefix, base, pl); prefix[pl] = '\0';
+    char dir[512];
+    size_t dl = (size_t)(rb - lb - 1);
+    if (dl >= sizeof(dir)) dl = sizeof(dir) - 1;
+    memcpy(dir, lb + 1, dl); dir[dl] = '\0';
+    if (dir[0] == '\0' || strcmp(dir, "000000") == 0)
+        snprintf(out, outsz, "%s[%s]", prefix, sub);
+    else
+        snprintf(out, outsz, "%s[%s.%s]", prefix, dir, sub);
+    return 0;
+}
+
+/*
+ * dir_gather_acp - vms-481: depth-first collect a VMS directory spec plus every
+ * subdirectory below it, through the ACP wildcard search for "*.DIR" (the
+ * genuine ODS-2 directory tree, not opendir). This is the ellipsis "[...]" walk
+ * done the VMS way. Appends each directory spec (malloc'd) to *list.
+ */
+static void dir_gather_acp(struct dcl_context *ctx, const char *dirspec,
+                           char ***list, int *count, int *cap, int depth)
+{
+    if (depth > 32) return;   /* guard against a pathological / cyclic tree */
+
+    if (*count >= *cap) {
+        int nc = *cap ? *cap * 2 : 16;
+        char **tmp = realloc(*list, (size_t)nc * sizeof(char *));
+        if (!tmp) return;
+        *list = tmp; *cap = nc;
+    }
+    (*list)[(*count)++] = strdup(dirspec);
+
+    char subpat[1024];
+    snprintf(subpat, sizeof(subpat), "%s*.DIR;*", dirspec);
+    struct dcl_rms_dir *d = dcl_rms_dir_open(ctx, subpat);
+    if (!d) return;
+
+    char match[1024];
+    while (dcl_rms_dir_next(d, match, sizeof(match), NULL, NULL, NULL)) {
+        const char *nt = match;
+        const char *rb = strrchr(match, ']');
+        if (!rb) rb = strrchr(match, '>');
+        if (rb) nt = rb + 1;
+        /* nt is "NAME.DIR;VER" -- take NAME. */
+        char sub[256];
+        size_t i = 0;
+        for (; nt[i] && nt[i] != '.' && i < sizeof(sub) - 1; i++) sub[i] = nt[i];
+        sub[i] = '\0';
+        if (sub[0] == '\0') continue;
+        /* Skip the MFD self-reference 000000.DIR. */
+        if (strcasecmp(sub, "000000") == 0) continue;
+        char child[1024];
+        if (dir_spec_child(dirspec, sub, child, sizeof(child)) == 0)
+            dir_gather_acp(ctx, child, list, count, cap, depth + 1);
+    }
+    dcl_rms_dir_close(d);
+}
+
+/*
+ * dir_gather_host - vms-5f0 executive-absent counterpart to dir_gather_acp: the
+ * ellipsis "..." subtree walk when /dev/vms is unreachable. dir_gather_acp finds
+ * subdirectories by searching "*.DIR;*" through the ACP, but the /vms passthrough
+ * stores a subdirectory as a real POSIX directory (no "NAME.DIR" file), so that
+ * search returns nothing on host. Walk the real directory with opendir()/stat()
+ * instead -- the same on-disk depth-first traversal the pre-flip DIRECTORY used
+ * -- composing each child's VMS spec via dir_spec_child(). Runs ONLY when the
+ * executive is absent; with /dev/vms present the ACP walk is authoritative.
+ */
+static void dir_gather_host(struct dcl_context *ctx, const char *dirspec,
+                            char ***list, int *count, int *cap, int depth)
+{
+    if (depth > 32) return;   /* guard against a pathological / cyclic tree */
+
+    if (*count >= *cap) {
+        int nc = *cap ? *cap * 2 : 16;
+        char **tmp = realloc(*list, (size_t)nc * sizeof(char *));
+        if (!tmp) return;
+        *list = tmp; *cap = nc;
+    }
+    (*list)[(*count)++] = strdup(dirspec);
+
+    char linux_dir[1024];
+    if (dcl_resolve_path(ctx, dirspec, linux_dir, sizeof(linux_dir)) != 0)
+        return;
+    DIR *d = opendir(linux_dir);
+    if (!d) return;
+
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+        char full[2048];
+        snprintf(full, sizeof(full), "%s/%s", linux_dir, de->d_name);
+        struct stat st;
+        if (stat(full, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+
+        char sub[256];
+        size_t i = 0;
+        for (; de->d_name[i] && i < sizeof(sub) - 1; i++)
+            sub[i] = (char)toupper((unsigned char)de->d_name[i]);
+        sub[i] = '\0';
+        if (sub[0] == '\0' || strcasecmp(sub, "000000") == 0) continue;
+
+        char child[1024];
+        if (dir_spec_child(dirspec, sub, child, sizeof(child)) == 0)
+            dir_gather_host(ctx, child, list, count, cap, depth + 1);
+    }
+    closedir(d);
+}
+
+/*
  * dir_deellipsize - Rewrite a VMS directory spec that contains the "..."
  * ellipsis wildcard into a plain, resolvable directory spec naming the START
  * of the tree (the ellipsis and everything from it is dropped), and report
@@ -649,15 +1001,15 @@ int cmd_directory(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 
-    /* Determine the directory to list */
-    char linux_dir[1024];
-    const char *pattern = NULL;
+    /* vms-481: DIRECTORY lists through the Files-11 ODS-2 ACP (sys$parse +
+     * sys$search wildcard directory context + rms_file_attr), emitting the
+     * genuine File ID and on-disk attributes -- not opendir()/stat() on a /vms
+     * passthrough. The listing is resolved as a VMS filespec throughout. */
 
     /* Detect and strip a "..." ellipsis directory wildcard. `use_spec` is the
-     * spec with the ellipsis removed (naming the START of the tree); the
-     * resolution below treats it exactly like a non-ellipsis spec, and when
+     * spec with the ellipsis removed (naming the START of the tree); when
      * has_ellipsis is set the listing walks the resolved directory's whole
-     * subtree (see dir_deellipsize() / dir_gather_recurse()). */
+     * subtree via the ACP (dir_gather_acp). */
     char despec[1024];
     int has_ellipsis = 0;
     const char *use_spec = NULL;
@@ -666,37 +1018,41 @@ int cmd_directory(struct dcl_command *cmd)
         use_spec = despec;
     }
 
-    if (use_spec && use_spec[0] != '\0') {
-        dcl_resolve_path(ctx, use_spec, linux_dir, sizeof(linux_dir));
-        /* Check if this is a directory or a file pattern */
-        struct stat st;
-        if (stat(linux_dir, &st) == 0 && S_ISDIR(st.st_mode)) {
-            /* It's a directory */
-        } else {
-            /* Might be a wildcard pattern - split dir and pattern.
-             * Use the ORIGINAL filename+version text, not linux_dir's own
-             * basename — see dcl_filename_component()'s doc comment. */
-            const char *orig = dcl_filename_component(use_spec);
-            char *last_slash = strrchr(linux_dir, '/');
-            if (last_slash) {
-                pattern = strdup((orig && orig[0]) ? orig : last_slash + 1);
-                *(last_slash + 1) = '\0';
-            } else {
-                pattern = strdup((orig && orig[0]) ? orig : linux_dir);
-                vmsfs_to_linux_path(ctx->default_dir, linux_dir, sizeof(linux_dir));
-            }
-        }
-    } else {
-        vmsfs_to_linux_path(ctx->default_dir, linux_dir, sizeof(linux_dir));
+    /* The full VMS wildcard filespec the ACP search iterates. A spec ending in
+     * a directory/device terminator (']' '>' ':') lists all files there; an
+     * empty spec lists the process default directory. */
+    char vms_pattern[1024];
+    if (use_spec && use_spec[0] != '\0')
+        dcl_rms_effective_spec(ctx, use_spec, vms_pattern, sizeof(vms_pattern));
+    else
+        dcl_rms_effective_spec(ctx, "*.*;*", vms_pattern, sizeof(vms_pattern));
+    {
+        size_t L = strlen(vms_pattern);
+        char last = L ? vms_pattern[L - 1] : 0;
+        if (last == ']' || last == '>' || last == ':')
+            strncat(vms_pattern, "*.*;*", sizeof(vms_pattern) - L - 1);
     }
 
-    /* Ensure trailing slash */
-    size_t dlen = strlen(linux_dir);
-    if (dlen > 0 && linux_dir[dlen - 1] != '/') {
-        if (dlen < sizeof(linux_dir) - 1) {
-            linux_dir[dlen] = '/';
-            linux_dir[dlen + 1] = '\0';
+    /* Split the effective pattern into a directory-spec prefix and a file
+     * pattern (used by the ellipsis subtree walk to re-anchor per directory). */
+    char vms_base[1024], vms_filepat[256];
+    {
+        const char *rb = strrchr(vms_pattern, ']');
+        if (!rb) rb = strrchr(vms_pattern, '>');
+        if (!rb) { const char *cn = strrchr(vms_pattern, ':'); if (cn) rb = cn; }
+        if (rb) {
+            size_t pl = (size_t)(rb - vms_pattern) + 1;
+            if (pl >= sizeof(vms_base)) pl = sizeof(vms_base) - 1;
+            memcpy(vms_base, vms_pattern, pl); vms_base[pl] = '\0';
+            strncpy(vms_filepat, rb + 1, sizeof(vms_filepat) - 1);
+            vms_filepat[sizeof(vms_filepat) - 1] = '\0';
+        } else {
+            vms_base[0] = '\0';
+            strncpy(vms_filepat, vms_pattern, sizeof(vms_filepat) - 1);
+            vms_filepat[sizeof(vms_filepat) - 1] = '\0';
         }
+        if (vms_filepat[0] == '\0')
+            strncpy(vms_filepat, "*.*;*", sizeof(vms_filepat) - 1);
     }
 
     /* Check qualifiers */
@@ -812,15 +1168,33 @@ int cmd_directory(struct dcl_command *cmd)
         /* ---------------- Single-directory listing ---------------- */
         struct dir_entry *entries = NULL;
         int entry_count = 0;
-        int cst = dir_collect(linux_dir, pattern, excl_pats, excl_count,
-                              &entries, &entry_count);
+        int cst;
+        if (rms_executive_absent()) {
+            /* Executive absent (host ctest / self-host container): defer to the
+             * legacy opendir resolver (vms-5f0). A spec that names only a
+             * directory ("DEV:[DIR]", "[SUB]", empty=default) lists the WHOLE
+             * directory -- files AND "NAME.DIR;1" subdirectories -- so pass a
+             * NULL file pattern; an explicit file pattern is matched as given. */
+            int dir_target = (!use_spec || !use_spec[0]);
+            if (use_spec && use_spec[0]) {
+                size_t L = strlen(use_spec);
+                char lc = use_spec[L - 1];
+                dir_target = (lc == ']' || lc == '>' || lc == ':');
+            }
+            cst = dir_collect_host(ctx,
+                                   vms_base[0] ? vms_base : NULL,
+                                   dir_target ? NULL : vms_filepat,
+                                   excl_pats, excl_count,
+                                   &entries, &entry_count);
+        } else {
+            cst = dir_collect_acp(ctx, vms_pattern, excl_pats, excl_count,
+                                  &entries, &entry_count);
+        }
         if (cst == SS$_NOSUCHFILE) {
-            dcl_error("RMS", 2, "DNF", "directory not found - %s", linux_dir);
-            if (pattern) free((void *)pattern);
+            dcl_error("RMS", 2, "DNF", "directory not found - %s", vms_pattern);
             return SS$_NOSUCHFILE;
         }
         if (cst != SS$_NORMAL) {
-            if (pattern) free((void *)pattern);
             return cst;
         }
 
@@ -831,7 +1205,6 @@ int cmd_directory(struct dcl_command *cmd)
          * "%DIRECT-W-NOFILES, no files found". */
         if (entry_count == 0) {
             free(entries);
-            if (pattern) free((void *)pattern);
             dcl_error("DIRECT", STS$K_WARNING, "NOFILES", "no files found");
             return SS$_NOSUCHFILE;
         }
@@ -879,29 +1252,31 @@ int cmd_directory(struct dcl_command *cmd)
             printf("%s\n", vms_dir);
         }
 
-        if (pattern) free((void *)pattern);
         return SS$_NORMAL;
     }
 
     /* ---------------- Multi-directory ellipsis listing ----------------
      * The "..." wildcard names the start directory plus every subdirectory
-     * below it. Walk the real on-disk tree, list each directory that has at
-     * least one match with its own header + "Total of N files" subtotal, then
-     * emit a single "Grand total of D directories, F files[, M blocks]." line.
+     * below it. Walk the genuine ODS-2 directory tree through the ACP
+     * (dir_gather_acp: "*.DIR" search per level), list each directory that has
+     * at least one match with its own header + "Total of N files" subtotal,
+     * then emit a single "Grand total of D directories, F files[, M blocks]."
      * Grounded (clean-room, Rule 8): VSI OpenVMS DCL Dictionary, DIRECTORY —
      * ellipsis directory wildcard + the per-directory / Grand total layout. */
-    {
-        struct stat bst;
-        if (stat(linux_dir, &bst) != 0 || !S_ISDIR(bst.st_mode)) {
-            dcl_error("RMS", 2, "DNF", "directory not found - %s", linux_dir);
-            if (pattern) free((void *)pattern);
-            return SS$_NOSUCHFILE;
-        }
-    }
+    char ell_base[1024];
+    if (vms_base[0])
+        strncpy(ell_base, vms_base, sizeof(ell_base) - 1);
+    else
+        dcl_rms_effective_spec(ctx, "", ell_base, sizeof(ell_base));  /* default dir */
+    ell_base[sizeof(ell_base) - 1] = '\0';
 
     char **dirs = NULL;
     int ndirs = 0, dcap = 0;
-    dir_gather_recurse(linux_dir, &dirs, &ndirs, &dcap);
+    int exec_absent = rms_executive_absent();   /* vms-5f0 host defer */
+    if (exec_absent)
+        dir_gather_host(ctx, ell_base, &dirs, &ndirs, &dcap, 0);
+    else
+        dir_gather_acp(ctx, ell_base, &dirs, &ndirs, &dcap, 0);
 
     long grand_used = 0, grand_alloc = 0, grand_files = 0;
     int  grand_dirs = 0;
@@ -909,18 +1284,20 @@ int cmd_directory(struct dcl_command *cmd)
     for (int di = 0; di < ndirs; di++) {
         struct dir_entry *entries = NULL;
         int entry_count = 0;
-        int cst = dir_collect(dirs[di], pattern, excl_pats, excl_count,
-                              &entries, &entry_count);
+        char dpat[1200];
+        snprintf(dpat, sizeof(dpat), "%s%s", dirs[di], vms_filepat);
+        int cst;
+        if (exec_absent)
+            cst = dir_collect_host(ctx, dirs[di], vms_filepat, excl_pats,
+                                   excl_count, &entries, &entry_count);
+        else
+            cst = dir_collect_acp(ctx, dpat, excl_pats, excl_count,
+                                  &entries, &entry_count);
         if (cst != SS$_NORMAL) { free(entries); continue; }
         if (entry_count == 0) { free(entries); continue; }
 
-        char display_dir[1024];
-        strncpy(display_dir, dirs[di], sizeof(display_dir) - 1);
-        display_dir[sizeof(display_dir) - 1] = '\0';
-        size_t ddlen = strlen(display_dir);
-        if (ddlen > 1 && display_dir[ddlen - 1] == '/')
-            display_dir[ddlen - 1] = '\0';
-        dcl_format_directory(display_dir, vms_dir, sizeof(vms_dir));
+        strncpy(vms_dir, dirs[di], sizeof(vms_dir) - 1);
+        vms_dir[sizeof(vms_dir) - 1] = '\0';
 
         int file_count = 0;
         long used = 0, alloc = 0;
@@ -950,7 +1327,6 @@ int cmd_directory(struct dcl_command *cmd)
     free(dirs);
 
     if (grand_files == 0) {
-        if (pattern) free((void *)pattern);
         dcl_error("DIRECT", STS$K_WARNING, "NOFILES", "no files found");
         return SS$_NOSUCHFILE;
     }
@@ -967,7 +1343,6 @@ int cmd_directory(struct dcl_command *cmd)
         printf(", %ld block%s", grand_used, grand_used != 1 ? "s" : "");
     printf(".\n");
 
-    if (pattern) free((void *)pattern);
     return SS$_NORMAL;
 }
 
@@ -983,11 +1358,64 @@ int cmd_type(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    char linux_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
-
-    FILE *fp = fopen(linux_path, "r");
-    if (!fp) {
+    /* vms-481: TYPE reads the file through RMS ($OPEN + sequential $GET), which
+     * on the product runtime reaches the Files-11 ODS-2 ACP over /dev/vms -- not
+     * fopen() on a vmsfs_to_linux_path("/vms/...") path. Fail-honest: no
+     * ACP-mounted SYS$DISK => RMS$_FNF/ACC, never a silent POSIX read (INV-6). */
+    uint32_t rst = 0;
+    struct dcl_rms_reader *r = dcl_rms_read_open(ctx, cmd->params[0], &rst);
+    if (!r) {
+        /* -------- Legacy TYPE defer (vms-5f0, extended vms-b3e) --------
+         * RMS could not open it through the Files-11 ODS-2 ACP. Two honest
+         * fall-backs, BOTH reading only kernel mount truth, NEVER the /vms
+         * SYS$DISK passthrough the atomic flip forbids (INV-6):
+         *
+         *  (a) rms_executive_absent(): /dev/vms is unreachable (host ctest,
+         *      plain-container self-host/link gates), which also covers a
+         *      DEFINEd logical resolving OUTSIDE the SYSDISK root (the mkdtemp-
+         *      volume test convention) that RMS's $OPEN boundary refuses even
+         *      though the file is right there. Read it the pre-flip way.
+         *
+         *  (b) vmsfs_device_spec_kernel_mounted(): the executive IS present but
+         *      the named unit is a GENUINE cross-process vmsfs volume in
+         *      /proc/mounts (a raw `mount -t vmsfs`, e.g. the install target
+         *      vms-718 MOUNTs then RUNs AUTHORIZE against, or a loop-mounted
+         *      DKA100:) that the ACP does not own. A mounted unit is node-wide
+         *      executive state on VMS: every process must resolve it (vms-8b6 /
+         *      vms-b3e). The ACP only manages ODS-2 volumes IT mounted, so read
+         *      this one through its /mnt/<dev> mount. The gate matches ONLY a
+         *      real /proc/mounts entry -- the system disk (DKA0: -> ACP, or the
+         *      /vms passthrough) is never a /mnt/<dev> mount, so this can never
+         *      reopen the masquerade; an unmounted unit yields no fall-back and
+         *      the honest RMS$_FNF stands.
+         *
+         * In both cases dcl_resolve_path() honours the logical and an explicit
+         * ";N"; RMS stays the primary path so a genuine record-formatted /vms
+         * file is still decoded by $GET. */
+        if (rms_executive_absent() ||
+            vmsfs_device_spec_kernel_mounted(cmd->params[0])) {
+            char linux_path[1024];
+            dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
+            FILE *fp = fopen(linux_path, "r");
+            if (fp) {
+                int paged = dcl_has_qualifier(cmd, "PAGE");
+                int line_count = 0, page_size = 24;
+                char line[4096];
+                while (fgets(line, sizeof(line), fp)) {
+                    fputs(line, stdout);
+                    line_count++;
+                    if (paged && line_count >= page_size) {
+                        printf("Press RETURN to continue...");
+                        fflush(stdout);
+                        char buf[64];
+                        if (!fgets(buf, sizeof(buf), stdin)) break;
+                        line_count = 0;
+                    }
+                }
+                fclose(fp);
+                return SS$_NORMAL;
+            }
+        }
         dcl_error("RMS", 2, "FNF",
                   "file not found - %s", cmd->params[0]);
         return SS$_NOSUCHFILE;
@@ -999,8 +1427,10 @@ int cmd_type(struct dcl_command *cmd)
     int page_size = 24;
 
     char line[4096];
-    while (fgets(line, sizeof(line), fp)) {
-        fputs(line, stdout);
+    int eof = 0, len;
+    while ((len = dcl_rms_read_record(r, line, sizeof(line), &eof)) >= 0) {
+        fwrite(line, 1, (size_t)len, stdout);
+        fputc('\n', stdout);           /* RMS records carry no terminator */
         line_count++;
 
         if (paged && line_count >= page_size) {
@@ -1012,7 +1442,7 @@ int cmd_type(struct dcl_command *cmd)
         }
     }
 
-    fclose(fp);
+    dcl_rms_read_close(r);
     return SS$_NORMAL;
 }
 
@@ -1255,25 +1685,78 @@ static void map_out_field(const char *out_field, const char *in_field,
 }
 
 /*
- * copy_one - Byte-copy src_full to dst_full on the backing store.
- * Returns SS$_NORMAL, or a VMS error (message already emitted by caller path).
+ * copy_one_rms - vms-481: copy src_spec to dst_spec through RMS, record by
+ * record. Source is read via $OPEN + sequential $GET; the destination is minted
+ * via $CREATE (which, on the product runtime, allocates a real FID from
+ * INDEXF.SYS and enters a new highest version through the Files-11 ODS-2 ACP)
+ * and written via sequential $PUT. The destination inherits the source's record
+ * format/attributes (rfm/rat/mrs) from its ODS-2 header (rms_file_attr) so a
+ * copied file keeps its record structure -- not a raw byte stream. No fopen on a
+ * /vms passthrough; fail-honest on an absent ACP (INV-6).
+ *
+ * ctx is used only for device/directory defaulting; src_spec and dst_spec are
+ * VMS filespecs. Returns SS$_NORMAL, or a VMS error.
  */
-static int copy_one(const char *src_full, const char *dst_full)
+static int copy_one_rms(struct dcl_context *ctx,
+                        const char *src_spec, const char *dst_spec)
 {
-    FILE *src = fopen(src_full, "rb");
-    if (!src) return SS$_NOSUCHFILE;
-    FILE *dst = fopen(dst_full, "wb");
-    if (!dst) { fclose(src); return SS$_FILACCERR; }
+    struct rms_fileattr sattr;
+    uint8_t rfm = FAB$C_VAR, rat = 0;
+    uint16_t mrs = 0;
 
-    char buf[8192];
-    size_t nr;
-    int write_err = 0;
-    while ((nr = fread(buf, 1, sizeof(buf), src)) > 0) {
-        if (fwrite(buf, 1, nr, dst) != nr) { write_err = 1; break; }
+    /* Inherit the source record format where we can read it (genuine ODS-2
+     * header via the ACP); default to variable-length text otherwise. */
+    if (dcl_rms_attr(ctx, src_spec, &sattr) == RMS$_NORMAL && sattr.rfm) {
+        rfm = sattr.rfm;
+        rat = (uint8_t)sattr.rat;
+        mrs = sattr.mrs;
     }
-    fclose(src);
-    fclose(dst);
-    return write_err ? SS$_ABORT : SS$_NORMAL;
+
+    uint32_t rst = 0;
+    struct dcl_rms_reader *r = dcl_rms_read_open(ctx, src_spec, &rst);
+    if (!r) return SS$_NOSUCHFILE;
+
+    struct dcl_rms_writer *w = dcl_rms_write_create(ctx, dst_spec, rfm, rat, mrs, &rst);
+    if (!w) { dcl_rms_read_close(r); return SS$_FILACCERR; }
+
+    static char rec[65536];
+    int eof = 0, len, rc = SS$_NORMAL;
+    while ((len = dcl_rms_read_record(r, rec, sizeof(rec), &eof)) >= 0) {
+        if (dcl_rms_write_record(w, rec, (size_t)len) != 0) { rc = SS$_ABORT; break; }
+    }
+    if (!eof && rc == SS$_NORMAL && len < 0) rc = SS$_ABORT;   /* hard read error */
+
+    dcl_rms_read_close(r);
+    dcl_rms_write_close(w);
+    return rc;
+}
+
+/*
+ * copy_one_host - vms-5f0 executive-absent byte copy between two RESOLVED Linux
+ * paths. The COPY host defer (see cmd_copy) resolves source and destination via
+ * dcl_resolve_path() -- the same legacy resolver DELETE/RENAME use, which honours
+ * a DEFINEd logical to any directory (the test convention of a mkdtemp volume) --
+ * and copies the bytes directly, never re-parsing a VMS spec through RMS (whose
+ * SYSDISK-root boundary would reject an out-of-/vms logical target). Runs ONLY
+ * when the executive is absent; with /dev/vms present COPY goes through the ACP.
+ */
+static int copy_one_host(const char *src_full, const char *dst_full)
+{
+    FILE *in = fopen(src_full, "rb");
+    if (!in) return SS$_NOSUCHFILE;
+    FILE *out = fopen(dst_full, "wb");
+    if (!out) { fclose(in); return SS$_FILACCERR; }
+
+    char buf[65536];
+    size_t n;
+    int rc = SS$_NORMAL;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) { rc = SS$_ABORT; break; }
+    }
+    if (ferror(in)) rc = SS$_ABORT;
+    fclose(in);
+    if (fclose(out) != 0 && rc == SS$_NORMAL) rc = SS$_ABORT;
+    return rc;
 }
 
 /*
@@ -1345,124 +1828,250 @@ int cmd_copy(struct dcl_command *cmd)
     int do_confirm  = dcl_has_qualifier(cmd, "CONFIRM");
     int new_version = dcl_has_qualifier(cmd, "NEW_VERSION");
 
-    /* Source: directory + name.type pattern + version spec. */
-    char src_dir[1024], src_pat[512], src_vspec[64];
-    int  src_hasver;
-    split_file_spec(ctx, cmd->params[0], src_dir, sizeof(src_dir),
-                    src_pat, sizeof(src_pat),
-                    src_vspec, sizeof(src_vspec), &src_hasver);
+    (void)new_version;   /* RMS $CREATE mints a new highest version by default */
 
-    /* Destination: an existing directory takes name/type from each source
-     * (fields "*"); otherwise parse the destination name.type;ver fields. */
-    char dst_dir[1024];
-    char dname_pat[256] = "*", dtype_pat[256] = "*", dst_vspec[64] = "";
-    int  dst_hasver = 0;
+    /* -------- Executive-absent COPY defer (vms-5f0) --------
+     * With no /dev/vms, COPY cannot route through the ACP; and the RMS $OPEN/
+     * $CREATE path enforces the SYSDISK-root boundary, which rejects a DEFINEd
+     * logical that resolves outside /vms (the test convention of a mkdtemp
+     * volume). DELETE and RENAME already avoid this by resolving through
+     * dcl_resolve_path() + fm_collect() and operating on the on-disk files
+     * directly; COPY mirrors them here -- same source enumeration, the shared
+     * resolve_out_version() version defaulting, and a direct byte copy. With
+     * /dev/vms present the ACP path below runs unchanged (INV-6). */
+    if (rms_executive_absent()) {
+        char src_dir[1024], src_pat[512], src_vspec[64];
+        int  src_hasver;
+        split_file_spec(ctx, cmd->params[0], src_dir, sizeof(src_dir),
+                        src_pat, sizeof(src_pat),
+                        src_vspec, sizeof(src_vspec), &src_hasver);
 
-    char dst_resolved[1024];
-    dcl_resolve_path(ctx, cmd->params[1], dst_resolved, sizeof(dst_resolved));
-    struct stat dst_st;
-    int dst_is_dir = (stat(dst_resolved, &dst_st) == 0 && S_ISDIR(dst_st.st_mode));
+        /* Destination: an existing directory keeps each source name/type
+         * (fields "*"); otherwise parse the destination name.type;ver fields. */
+        char hdst_dir[1024];
+        char hdname_pat[256] = "*", hdtype_pat[256] = "*", hdst_vspec[64] = "";
+        int  hdst_hasver = 0;
 
-    if (dst_is_dir) {
-        size_t dl = strlen(dst_resolved);
-        strncpy(dst_dir, dst_resolved, sizeof(dst_dir) - 1);
-        dst_dir[sizeof(dst_dir) - 1] = '\0';
-        if (dl && dst_dir[dl - 1] != '/' && dl < sizeof(dst_dir) - 1) {
-            dst_dir[dl] = '/';
-            dst_dir[dl + 1] = '\0';
+        char hdst_resolved[1024];
+        dcl_resolve_path(ctx, cmd->params[1], hdst_resolved, sizeof(hdst_resolved));
+        struct stat hdst_st;
+        int hdst_is_dir = (stat(hdst_resolved, &hdst_st) == 0 &&
+                           S_ISDIR(hdst_st.st_mode));
+        if (hdst_is_dir) {
+            size_t dl = strlen(hdst_resolved);
+            strncpy(hdst_dir, hdst_resolved, sizeof(hdst_dir) - 1);
+            hdst_dir[sizeof(hdst_dir) - 1] = '\0';
+            if (dl && hdst_dir[dl - 1] != '/' && dl < sizeof(hdst_dir) - 1) {
+                hdst_dir[dl] = '/';
+                hdst_dir[dl + 1] = '\0';
+            }
+        } else {
+            char dnamepat[256];
+            split_file_spec(ctx, cmd->params[1], hdst_dir, sizeof(hdst_dir),
+                            dnamepat, sizeof(dnamepat),
+                            hdst_vspec, sizeof(hdst_vspec), &hdst_hasver);
+            split_name_type(dnamepat, hdname_pat, sizeof(hdname_pat),
+                            hdtype_pat, sizeof(hdtype_pat));
         }
-    } else {
-        char dnamepat[256];
-        split_file_spec(ctx, cmd->params[1], dst_dir, sizeof(dst_dir),
-                        dnamepat, sizeof(dnamepat),
-                        dst_vspec, sizeof(dst_vspec), &dst_hasver);
-        split_name_type(dnamepat, dname_pat, sizeof(dname_pat),
+
+        struct file_match *m = NULL;
+        int count = 0;
+        int st = fm_collect(src_dir, src_pat, &m, &count);
+        if (st != SS$_NORMAL) {
+            free(m);
+            dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
+            return SS$_NOSUCHFILE;
+        }
+
+        int copied = 0, matched = 0;
+        for (int i = 0; i < count; i++) {
+            if (!version_selected(m, i, count, src_hasver, src_vspec)) continue;
+            matched++;
+
+            char in_name[256], in_type[256];
+            split_name_type(m[i].base, in_name, sizeof(in_name),
+                            in_type, sizeof(in_type));
+            char out_name[256], out_type[256];
+            map_out_field(hdname_pat, in_name, out_name, sizeof(out_name));
+            map_out_field(hdtype_pat, in_type, out_type, sizeof(out_type));
+
+            int out_ver = 0;
+            if (!resolve_out_version(hdst_dir, out_name, out_type,
+                                     hdst_hasver, hdst_vspec, new_version,
+                                     &out_ver)) {
+                dcl_error("RMS", 2, "FEX",
+                          "file already exists, not superseded - %s.%s;%d",
+                          out_name, out_type, out_ver);
+                continue;
+            }
+
+            char dfile[600];
+            if (out_ver > 0) {
+                if (out_type[0])
+                    snprintf(dfile, sizeof(dfile), "%s.%s;%d",
+                             out_name, out_type, out_ver);
+                else
+                    snprintf(dfile, sizeof(dfile), "%s;%d", out_name, out_ver);
+            } else if (out_type[0]) {
+                snprintf(dfile, sizeof(dfile), "%s.%s", out_name, out_type);
+            } else {
+                snprintf(dfile, sizeof(dfile), "%s", out_name);
+            }
+
+            char src_full[2600], dst_full[2600];
+            snprintf(src_full, sizeof(src_full), "%s%s", src_dir, m[i].dname);
+            snprintf(dst_full, sizeof(dst_full), "%s%s", hdst_dir, dfile);
+
+            if (do_confirm) {
+                char vsrc[256], vdst[256];
+                dcl_format_filespec(src_full, vsrc, sizeof(vsrc));
+                dcl_format_filespec(dst_full, vdst, sizeof(vdst));
+                printf("COPY %s to %s ? [N]: ", vsrc, vdst);
+                fflush(stdout);
+                char resp[64];
+                if (!fgets(resp, sizeof(resp), stdin)) break;
+                if (toupper((unsigned char)resp[0]) != 'Y') continue;
+            }
+
+            int cst = copy_one_host(src_full, dst_full);
+            if (cst == SS$_NOSUCHFILE) {
+                dcl_error("RMS", 2, "FNF", "file not found - %s", src_full);
+                continue;
+            }
+            if (cst != SS$_NORMAL) {
+                dcl_error("RMS", 2, "WER", "write error - %s", dst_full);
+                continue;
+            }
+
+            copied++;
+            if (do_log) {
+                char vsrc[256], vdst[256];
+                dcl_format_filespec(src_full, vsrc, sizeof(vsrc));
+                dcl_format_filespec(dst_full, vdst, sizeof(vdst));
+                dcl_error("COPY", 1, "COPIED", "%s copied to %s", vsrc, vdst);
+            }
+        }
+        free(m);
+
+        if (matched == 0) {
+            dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
+            return SS$_NOSUCHFILE;
+        }
+        if (copied == 0)
+            return SS$_ABORT;
+        if (copied > 1)
+            dcl_error("COPY", 1, "NEWFILES", "%d files created", copied);
+        return SS$_NORMAL;
+    }
+
+    /*
+     * vms-481: COPY reaches files through RMS/$QIO-ACP. The source is enumerated
+     * by the executive wildcard search (sys$parse + sys$search over the ODS-2
+     * ACP -- genuine directory order, real FIDs), each file is copied record by
+     * record via RMS $GET/$PUT, and the destination is minted by $CREATE, which
+     * allocates a real FID and enters a NEW HIGHEST VERSION through the ACP (the
+     * VMS never-overwrite guarantee, now the executive's, not an opendir scan).
+     * No opendir/fopen on a /vms passthrough; fail-honest on an absent ACP.
+     */
+
+    /* Effective destination VMS spec. A destination that ends with ']' / '>' /
+     * ':' (a directory or device, no filename) receives each source's own
+     * name.type; otherwise it is an explicit output filespec (wildcards mapped
+     * from the source name/type). */
+    char dst_eff[1024];
+    dcl_rms_effective_spec(ctx, cmd->params[1], dst_eff, sizeof(dst_eff));
+    size_t del = strlen(dst_eff);
+    int dst_is_dir = (del > 0 && (dst_eff[del - 1] == ']' ||
+                                  dst_eff[del - 1] == '>' ||
+                                  dst_eff[del - 1] == ':'));
+
+    /* For an explicit output filespec, split it into a directory prefix and the
+     * output name/type pattern (which may carry "*"/"%" mapped from the source). */
+    char dst_prefix[1024] = "", dname_pat[256] = "*", dtype_pat[256] = "*";
+    if (!dst_is_dir) {
+        const char *nt = dst_eff;
+        const char *rb = strrchr(dst_eff, ']');
+        if (!rb) rb = strrchr(dst_eff, '>');
+        if (!rb) { const char *cn = strrchr(dst_eff, ':'); if (cn) rb = cn; }
+        if (rb) {
+            size_t pl = (size_t)(rb - dst_eff) + 1;
+            if (pl >= sizeof(dst_prefix)) pl = sizeof(dst_prefix) - 1;
+            memcpy(dst_prefix, dst_eff, pl); dst_prefix[pl] = '\0';
+            nt = rb + 1;
+        }
+        char ntbuf[300];
+        strncpy(ntbuf, nt, sizeof(ntbuf) - 1); ntbuf[sizeof(ntbuf) - 1] = '\0';
+        char *semi = strchr(ntbuf, ';'); if (semi) *semi = '\0';
+        split_name_type(ntbuf, dname_pat, sizeof(dname_pat),
                         dtype_pat, sizeof(dtype_pat));
     }
 
-    struct file_match *m = NULL;
-    int count = 0;
-    int st = fm_collect(src_dir, src_pat, &m, &count);
-    if (st != SS$_NORMAL) {
-        free(m);
+    struct dcl_rms_dir *d = dcl_rms_dir_open(ctx, cmd->params[0]);
+    if (!d) {
         dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
         return SS$_NOSUCHFILE;
     }
 
     int copied = 0, matched = 0;
-    for (int i = 0; i < count; i++) {
-        if (!version_selected(m, i, count, src_hasver, src_vspec)) continue;
+    char src_spec[1024];
+    while (dcl_rms_dir_next(d, src_spec, sizeof(src_spec), NULL, NULL, NULL)) {
         matched++;
 
+        /* Source name.type (strip device/dir and version). */
+        const char *snt = src_spec;
+        const char *srb = strrchr(src_spec, ']');
+        if (!srb) srb = strrchr(src_spec, '>');
+        if (srb) snt = srb + 1;
+        char in_nt[300];
+        strncpy(in_nt, snt, sizeof(in_nt) - 1); in_nt[sizeof(in_nt) - 1] = '\0';
+        char *isemi = strchr(in_nt, ';'); if (isemi) *isemi = '\0';
+
         char in_name[256], in_type[256];
-        split_name_type(m[i].base, in_name, sizeof(in_name),
+        split_name_type(in_nt, in_name, sizeof(in_name),
                         in_type, sizeof(in_type));
 
-        char out_name[256], out_type[256];
-        map_out_field(dname_pat, in_name, out_name, sizeof(out_name));
-        map_out_field(dtype_pat, in_type, out_type, sizeof(out_type));
-
-        int out_ver = 0;
-        if (!resolve_out_version(dst_dir, out_name, out_type,
-                                 dst_hasver, dst_vspec, new_version, &out_ver)) {
-            dcl_error("RMS", 2, "FEX",
-                      "file already exists, not superseded - %s.%s;%d",
-                      out_name, out_type, out_ver);
-            continue;
-        }
-
-        char dfile[600];
-        if (out_ver > 0) {
-            if (out_type[0])
-                snprintf(dfile, sizeof(dfile), "%s.%s;%d",
-                         out_name, out_type, out_ver);
-            else
-                snprintf(dfile, sizeof(dfile), "%s;%d", out_name, out_ver);
+        /* Destination filespec for this source. */
+        char dst_spec[1200];
+        if (dst_is_dir) {
+            snprintf(dst_spec, sizeof(dst_spec), "%s%s", dst_eff, in_nt);
         } else {
+            char out_name[256], out_type[256];
+            map_out_field(dname_pat, in_name, out_name, sizeof(out_name));
+            map_out_field(dtype_pat, in_type, out_type, sizeof(out_type));
             if (out_type[0])
-                snprintf(dfile, sizeof(dfile), "%s.%s", out_name, out_type);
+                snprintf(dst_spec, sizeof(dst_spec), "%s%s.%s",
+                         dst_prefix, out_name, out_type);
             else
-                snprintf(dfile, sizeof(dfile), "%s", out_name);
+                snprintf(dst_spec, sizeof(dst_spec), "%s%s", dst_prefix, out_name);
         }
-
-        char src_full[2600], dst_full[2600];
-        snprintf(src_full, sizeof(src_full), "%s%s", src_dir, m[i].dname);
-        snprintf(dst_full, sizeof(dst_full), "%s%s", dst_dir, dfile);
 
         if (do_confirm) {
-            char vsrc[256], vdst[256];
-            dcl_format_filespec(src_full, vsrc, sizeof(vsrc));
-            dcl_format_filespec(dst_full, vdst, sizeof(vdst));
-            printf("COPY %s to %s ? [N]: ", vsrc, vdst);
+            printf("COPY %s to %s ? [N]: ", src_spec, dst_spec);
             fflush(stdout);
             char resp[64];
             if (!fgets(resp, sizeof(resp), stdin)) break;
             if (toupper((unsigned char)resp[0]) != 'Y') continue;
         }
 
-        int cst = copy_one(src_full, dst_full);
+        int cst = copy_one_rms(ctx, src_spec, dst_spec);
         if (cst == SS$_NOSUCHFILE) {
-            dcl_error("RMS", 2, "FNF", "file not found - %s", m[i].dname);
+            dcl_error("RMS", 2, "FNF", "file not found - %s", src_spec);
             continue;
         }
         if (cst == SS$_FILACCERR) {
-            dcl_error("RMS", 2, "CRE", "cannot create - %s", dfile);
+            dcl_error("RMS", 2, "CRE", "cannot create - %s", dst_spec);
             continue;
         }
         if (cst == SS$_ABORT) {
-            dcl_error("RMS", 2, "WER", "write error - %s", dfile);
+            dcl_error("RMS", 2, "WER", "write error - %s", dst_spec);
             continue;
         }
 
         copied++;
-        if (do_log) {
-            char vsrc[256], vdst[256];
-            dcl_format_filespec(src_full, vsrc, sizeof(vsrc));
-            dcl_format_filespec(dst_full, vdst, sizeof(vdst));
-            dcl_error("COPY", 1, "COPIED", "%s copied to %s", vsrc, vdst);
-        }
+        if (do_log)
+            dcl_error("COPY", 1, "COPIED", "%s copied to %s", src_spec, dst_spec);
     }
-    free(m);
+    dcl_rms_dir_close(d);
 
     if (matched == 0) {
         dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
@@ -1482,6 +2091,130 @@ int cmd_copy(struct dcl_command *cmd)
 /*
  * DELETE - Delete a file, or (with /SYMBOL) delete a symbol.
  */
+/*
+ * delete_files_acp - vms-0a5: the DELETE file path over the Files-11 ODS-2 ACP
+ * (the product runtime, Rule 9/INV-6). It enumerates every version of the named
+ * file through the executive directory search ($PARSE/$SEARCH), applies the SAME
+ * version selection the POSIX path uses (version_selected), and $ERASEs each
+ * selected file over the ACP (IO$_DELETE, dcl_rms_erase) -- no unlink() on a
+ * /vms passthrough. This is what makes DELETE SYS$SYSTEM:PROVISION.EXE;*
+ * actually remove the image off the mounted ODS-2 volume -- the volume PID 1
+ * stages the boot images from (vms-5f0) -- rather than the passthrough copy the
+ * booted system never reads. `param` is the user's VMS filespec; the caller has
+ * already enforced the explicit-version guard.
+ */
+static int delete_files_acp(struct dcl_context *ctx, const char *param,
+                            int do_confirm, int do_log)
+{
+    /* Version spec the user typed (guaranteed present by the DELVER guard). */
+    char vspec[64];
+    int  has_version = 0;
+    {
+        const char *comp = dcl_filename_component(param);
+        const char *fcheck = (comp && comp[0]) ? comp : param;
+        const char *semi = strrchr(fcheck, ';');
+        if (semi) {
+            has_version = 1;
+            strncpy(vspec, semi + 1, sizeof(vspec) - 1);
+            vspec[sizeof(vspec) - 1] = '\0';
+        } else {
+            vspec[0] = '\0';
+        }
+    }
+
+    /* Search pattern: the user's spec with the version replaced by ";*" so the
+     * executive returns ALL versions and version_selected can pick the set. */
+    char searchpat[1024];
+    strncpy(searchpat, param, sizeof(searchpat) - 1);
+    searchpat[sizeof(searchpat) - 1] = '\0';
+    {
+        const char *comp = dcl_filename_component(param);
+        if (comp && comp[0]) {
+            const char *semi = strrchr(comp, ';');
+            if (semi) {
+                size_t off = (size_t)(semi - param);
+                if (off < sizeof(searchpat)) searchpat[off] = '\0';
+            }
+        }
+        size_t L = strlen(searchpat);
+        snprintf(searchpat + L, sizeof(searchpat) - L, ";*");
+    }
+
+    struct dcl_rms_dir *d = dcl_rms_dir_open(ctx, searchpat);
+    if (!d) {
+        dcl_error("RMS", 2, "FNF", "file not found - %s", param);
+        return SS$_NOSUCHFILE;
+    }
+
+    struct acp_del { char spec[1024]; struct file_match fm; };
+    int cap = 32, n = 0;
+    struct acp_del *arr = malloc((size_t)cap * sizeof(*arr));
+    if (!arr) { dcl_rms_dir_close(d); return SS$_INSFMEM; }
+
+    char rspec[1024];
+    while (dcl_rms_dir_next(d, rspec, sizeof(rspec), NULL, NULL, NULL)) {
+        if (n >= cap) {
+            cap *= 2;
+            struct acp_del *t = realloc(arr, (size_t)cap * sizeof(*arr));
+            if (!t) { free(arr); dcl_rms_dir_close(d); return SS$_INSFMEM; }
+            arr = t;
+        }
+        /* the full resultant "DEV:[DIR]NAME.TYP;VER" is the $ERASE target. */
+        strncpy(arr[n].spec, rspec, sizeof(arr[n].spec) - 1);
+        arr[n].spec[sizeof(arr[n].spec) - 1] = '\0';
+        /* name.type;ver tail for grouping + version selection. */
+        const char *nt = rspec;
+        const char *rb = strrchr(rspec, ']');
+        if (!rb) rb = strrchr(rspec, '>');
+        if (rb) nt = rb + 1;
+        strncpy(arr[n].fm.dname, nt, sizeof(arr[n].fm.dname) - 1);
+        arr[n].fm.dname[sizeof(arr[n].fm.dname) - 1] = '\0';
+        fm_split(nt, arr[n].fm.base, sizeof(arr[n].fm.base), &arr[n].fm.version);
+        n++;
+    }
+    dcl_rms_dir_close(d);
+
+    /* version_selected wants a contiguous file_match array. */
+    struct file_match *fms = malloc((size_t)(n > 0 ? n : 1) * sizeof(*fms));
+    if (!fms) { free(arr); return SS$_INSFMEM; }
+    for (int i = 0; i < n; i++) fms[i] = arr[i].fm;
+
+    int deleted = 0;
+    for (int i = 0; i < n; i++) {
+        if (!version_selected(fms, i, n, has_version, vspec)) continue;
+
+        if (do_confirm) {
+            printf("DELETE %s ? [N]: ", arr[i].spec);
+            fflush(stdout);
+            char resp[64];
+            if (!fgets(resp, sizeof(resp), stdin)) break;
+            if (toupper((unsigned char)resp[0]) != 'Y') continue;
+        }
+
+        uint32_t est = dcl_rms_erase(ctx, arr[i].spec);
+        if (est & 1) {
+            deleted++;
+            if (do_log)
+                dcl_error("DELETE", 3, "FILDEL", "%s deleted", arr[i].spec);
+        } else if (est == RMS$_PRV) {
+            /* Protection/privilege refusal: report per file, keep going -- the
+             * same shape a POSIX EACCES took (RMS$_PRV) before the flip. */
+            dcl_error("DELETE", 2, "PRV",
+                      "insufficient privilege or file protection violation for %s",
+                      arr[i].spec);
+        }
+    }
+
+    free(fms);
+    free(arr);
+
+    if (deleted == 0) {
+        dcl_error("RMS", 2, "FNF", "file not found - %s", param);
+        return SS$_NOSUCHFILE;
+    }
+    return SS$_NORMAL;
+}
+
 int cmd_delete(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -1576,6 +2309,18 @@ int cmd_delete(struct dcl_command *cmd)
                   cmd->params[0]);
         return SS$_BADPARAM;
     }
+
+    /*
+     * Product runtime (vms-0a5): DELETE removes files over the Files-11 ODS-2
+     * ACP -- $SEARCH to enumerate, $ERASE (IO$_DELETE) to remove. Only the
+     * executive-absent defer (host ctest / self-host container, where the ACP
+     * is unreachable) uses the legacy opendir()+unlink() path below. Mirrors
+     * exactly how DIRECTORY branches (dir_collect_acp vs dir_collect_host) and
+     * how RMS $ERASE itself branches (rms_impl_erase vs rms_posix_erase) --
+     * fail-honest on an absent executive, no silent passthrough (INV-6/Rule 9).
+     */
+    if (!rms_executive_absent())
+        return delete_files_acp(ctx, cmd->params[0], do_confirm, do_log);
 
     /* Directory + name.type pattern + version spec (the text after ';'). */
     char linux_dir[1024], name_pat[512], vspec[64];
@@ -1772,6 +2517,107 @@ int cmd_rename(struct dcl_command *cmd)
 }
 
 /*
+ * dcl_mkdir_acp - CREATE/DIRECTORY over the executive Files-11 ACP (vms-f05).
+ *
+ * Parse a resolved VMS spec "DEV:[A.B.C]" and create each NAME.DIR component
+ * under its parent over the ACP (IO$_CREATE with the FH2 directory bit), the
+ * same primitive PRODUCT INSTALL's tree creation uses (product.c
+ * pd_acp_mkdir_tree). Components that already exist are stepped over (their FID
+ * becomes the next parent DID); a genuinely-new leaf is created. Returns a VMS
+ * status: SS$_NORMAL on success, SS$_DUPLNAM if the target already exists (the
+ * ACP's honest duplicate-name answer), else the ACP's fail-honest status. Only
+ * called with the executive present (INV-6); no POSIX fallback here.
+ */
+static uint32_t dcl_mkdir_acp(const char *vspec)
+{
+    char dev[128] = "", dirtree[512] = "";
+    const char *colon = strchr(vspec, ':');
+    const char *lb    = strchr(vspec, '[');
+    const char *rb    = lb ? strchr(lb, ']') : NULL;
+
+    if (colon) {
+        size_t n = (size_t)(colon - vspec) + 1;   /* keep the ':' */
+        if (n > 0 && n < sizeof(dev)) { memcpy(dev, vspec, n); dev[n] = '\0'; }
+    }
+    if (lb && rb && rb > lb + 1) {
+        size_t n = (size_t)(rb - lb - 1);
+        if (n < sizeof(dirtree)) { memcpy(dirtree, lb + 1, n); dirtree[n] = '\0'; }
+    }
+    /* A rooted "[SYS0.]" or trailing dot leaves nothing to create. */
+    { size_t dl = strlen(dirtree); while (dl && dirtree[dl - 1] == '.') dirtree[--dl] = '\0'; }
+    if (!dev[0] || !dirtree[0])
+        return RMS$_SYN;
+
+    uint32_t chan = 0;
+    uint32_t st = vms_kif_acp_assign(dev, &chan);
+    if (!$VMS_STATUS_SUCCESS(st))
+        return st;
+
+    uint16_t pdn = 0, pds = 0;                  /* parent DID: start at the MFD */
+    uint8_t  pdr = 0, pdx = 0;
+    int created_leaf = 0;
+
+    char work[512];
+    snprintf(work, sizeof(work), "%s", dirtree);
+    char *save = NULL, *tok;
+    for (tok = strtok_r(work, ".", &save); tok; tok = strtok_r(NULL, ".", &save)) {
+        if (!tok[0]) continue;
+
+        char nm[VMS_ACP_NAME_SIZE];
+        size_t tl = strlen(tok);
+        if (tl > VMS_ACP_NAME_SIZE - 5) tl = VMS_ACP_NAME_SIZE - 5;
+        for (size_t i = 0; i < tl; i++) {
+            char c = tok[i];
+            if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+            nm[i] = c;
+        }
+        nm[tl] = '\0';
+        strncat(nm, ".DIR", sizeof(nm) - strlen(nm) - 1);
+
+        struct vms_acp_access_args a;
+        memset(&a, 0, sizeof(a));
+        a.chan = chan;
+        a.did_num = pdn; a.did_seq = pds; a.did_rvn = pdr; a.did_nmx = pdx;
+        a.version = 1;                          /* directories are version ;1 */
+        strncpy(a.name, nm, VMS_ACP_NAME_SIZE - 1);
+
+        st = vms_kif_acp_access(&a);
+        if ($VMS_STATUS_SUCCESS(st)) {
+            pdn = a.fid_num; pds = a.fid_seq; pdr = a.fid_rvn; pdx = a.fid_nmx;
+            vms_kif_acp_deaccess(chan);         /* only wanted its FID */
+            created_leaf = 0;
+            continue;
+        }
+        if (st != SS$_NOSUCHFILE) {             /* honest error, not "absent" */
+            vms_kif_dassgn(chan);
+            return st;
+        }
+
+        struct vms_acp_fileop_args fop;
+        memset(&fop, 0, sizeof(fop));
+        fop.chan      = chan;
+        fop.func      = VMS_ACP_FOP_CREATE;
+        fop.modifiers = VMS_ACP_M_CREATE;       /* enter it in the parent dir */
+        fop.did_num = pdn; fop.did_seq = pds; fop.did_rvn = pdr; fop.did_nmx = pdx;
+        fop.version   = 1;
+        fop.attr.filechar = ODS2_FH2_M_DIRECTORY;   /* => is_dir in the ACP */
+        strncpy(fop.name, nm, VMS_ACP_NAME_SIZE - 1);
+
+        st = vms_kif_acp_fileop(&fop);
+        if (!$VMS_STATUS_SUCCESS(st)) {
+            vms_kif_dassgn(chan);
+            return st;
+        }
+        pdn = fop.fid_num; pds = fop.fid_seq; pdr = fop.fid_rvn; pdx = fop.fid_nmx;
+        created_leaf = 1;
+    }
+
+    vms_kif_dassgn(chan);
+    /* Every component already existed => the directory is already there. */
+    return created_leaf ? SS$_NORMAL : SS$_DUPLNAM;
+}
+
+/*
  * CREATE - Create a new file, or (with /DIRECTORY) create a directory.
  */
 int cmd_create(struct dcl_command *cmd)
@@ -1783,6 +2629,35 @@ int cmd_create(struct dcl_command *cmd)
         if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
             dcl_error("DCL", 2, "NODIR", "missing directory specification");
             return SS$_BADPARAM;
+        }
+
+        /* vms-f05: with the executive present, MOUNT is pure ACP ($MOUNT over
+         * /dev/vms, vms-127) -- there is NO POSIX /mnt view of a mounted ODS-2
+         * volume -- so a mkdir(2) on a resolved host path never reaches the
+         * volume. Create the directory the VMS way: IO$_CREATE of each NAME.DIR
+         * component under its parent over the ACP, exactly as PRODUCT INSTALL's
+         * tree creation does (product.c pd_acp_mkdir_tree). The legacy POSIX
+         * mkdir below is the executive-absent host defer (plain ctest, INV-6). */
+        if (!rms_executive_absent()) {
+            char vspec[1024];
+            if (dcl_rms_effective_spec(ctx, cmd->params[0], vspec,
+                                       sizeof(vspec)) != 0) {
+                dcl_error("RMS", 2, "SYN", "file specification syntax error - %s",
+                          cmd->params[0]);
+                return SS$_BADPARAM;
+            }
+            uint32_t st = dcl_mkdir_acp(vspec);
+            if ($VMS_STATUS_SUCCESS(st))
+                return SS$_NORMAL;
+            if (st == SS$_DUPLNAM) {   /* already exists -- informational, not fatal */
+                dcl_error("DCL", 0, "CREATED",
+                          "directory already exists - %s", cmd->params[0]);
+                return SS$_NORMAL;
+            }
+            dcl_error("RMS", 2, "CRE",
+                      "cannot create directory - %s (0x%08X)",
+                      cmd->params[0], st);
+            return SS$_FILACCERR;
         }
 
         char linux_path[1024];
@@ -1839,60 +2714,30 @@ int cmd_create(struct dcl_command *cmd)
 
     /*
      * VMS CREATE mints a NEW version of the file — it never truncates an
-     * existing one. So the output version defaults exactly as COPY's does:
-     * one greater than the highest existing version of the same name.type
-     * (else the name is written unversioned when none exists yet), and an
-     * explicit output version ;n that already exists is refused rather than
-     * silently overwritten. This is the same never-overwrite rule COPY/RENAME
-     * already follow via resolve_out_version(), applied to CREATE.
+     * existing one. vms-481: CREATE now writes through RMS ($CREATE + sequential
+     * $PUT), which on the product runtime reaches the Files-11 ODS-2 ACP over
+     * /dev/vms. RMS/IO$_CREATE itself allocates a real FID from INDEXF.SYS and
+     * enters the file in its directory at a new HIGHEST version -- so the
+     * next-higher-version rule is now the executive's, not an opendir scan. An
+     * explicit output ;n that already exists is refused by the ACP as RMS$_FEX.
+     * Fail-honest: no ACP-mounted SYS$DISK => RMS$_CRE/ACC, never a silent
+     * fopen("w") truncate on a /vms passthrough (INV-6).
      *
      * Grounded (clean-room, Rule 8): VSI OpenVMS DCL Dictionary, CREATE —
      * "creates a sequential disk file" from SYS$INPUT and, like every RMS
-     * file creation, assigns the next-higher version; and VSI OpenVMS User's
-     * Manual, "Version Numbers" — creating a file whose name.type already
-     * exists produces a new, higher version rather than replacing the
-     * existing one. (Before this fix OVMX CREATE fopen("w")-truncated the
-     * resolved highest version, silently destroying its contents — vms-73b.)
+     * file creation, assigns the next-higher version.
      */
-    char cre_dir[1024], cre_pat[512], cre_vspec[64];
-    int  cre_hasver;
-    split_file_spec(ctx, cmd->params[0], cre_dir, sizeof(cre_dir),
-                    cre_pat, sizeof(cre_pat),
-                    cre_vspec, sizeof(cre_vspec), &cre_hasver);
-
-    char cre_name[256], cre_type[256];
-    split_name_type(cre_pat, cre_name, sizeof(cre_name),
-                    cre_type, sizeof(cre_type));
-
-    int cre_ver = 0;
-    if (!resolve_out_version(cre_dir, cre_name, cre_type,
-                             cre_hasver, cre_vspec, /*new_version=*/0,
-                             &cre_ver)) {
-        dcl_error("RMS", 2, "FEX",
-                  "file already exists, not superseded - %s.%s;%d",
-                  cre_name, cre_type, cre_ver);
-        return RMS$_FEX;
-    }
-
-    char cre_file[600];
-    if (cre_ver > 0) {
-        if (cre_type[0])
-            snprintf(cre_file, sizeof(cre_file), "%s.%s;%d",
-                     cre_name, cre_type, cre_ver);
-        else
-            snprintf(cre_file, sizeof(cre_file), "%s;%d", cre_name, cre_ver);
-    } else {
-        if (cre_type[0])
-            snprintf(cre_file, sizeof(cre_file), "%s.%s", cre_name, cre_type);
-        else
-            snprintf(cre_file, sizeof(cre_file), "%s", cre_name);
-    }
-
-    char linux_path[2600];   /* dir (<=1024) + name.type;ver (<=600), as COPY */
-    snprintf(linux_path, sizeof(linux_path), "%s%s", cre_dir, cre_file);
-
-    FILE *fp = fopen(linux_path, "w");
-    if (!fp) {
+    uint32_t cst = 0;
+    /* Text file: variable-length records, implied carriage return (VMS default
+     * for CREATE from SYS$INPUT). MRS 0 = no max. */
+    struct dcl_rms_writer *w =
+        dcl_rms_write_create(ctx, cmd->params[0], FAB$C_VAR, FAB$M_CR, 0, &cst);
+    if (!w) {
+        if (cst == RMS$_FEX) {
+            dcl_error("RMS", 2, "FEX",
+                      "file already exists, not superseded - %s", cmd->params[0]);
+            return RMS$_FEX;
+        }
         dcl_error("RMS", 2, "CRE", "cannot create - %s", cmd->params[0]);
         return SS$_FILACCERR;
     }
@@ -1906,19 +2751,24 @@ int cmd_create(struct dcl_command *cmd)
      * idiom, and the consumer of a DECK/EOD block. dcl_sysinput_setup() points
      * fd 0 at exactly that block (and is a no-op interactively), so the same
      * read loop serves both. Reference: DCL Dictionary, "CREATE" (input from
-     * SYS$INPUT); "DECK"/"EOD". (vms-3983) */
+     * SYS$INPUT); "DECK"/"EOD". (vms-3983) Each input line becomes one RMS
+     * record ($PUT), with the trailing newline stripped (RMS records carry no
+     * terminator; the RAT=CR attribute supplies it on read-back). */
     struct dcl_sysinput si;
     dcl_sysinput_setup(ctx, &si);
     if (ctx->interactive || ctx->proc_depth >= 0) {
         char line[4096];
         while (1) {
             if (!fgets(line, sizeof(line), stdin)) break;
-            fputs(line, fp);
+            size_t ll = strlen(line);
+            while (ll > 0 && (line[ll - 1] == '\n' || line[ll - 1] == '\r'))
+                ll--;
+            if (dcl_rms_write_record(w, line, ll) != 0) break;
         }
     }
     dcl_sysinput_restore(&si);
 
-    fclose(fp);
+    dcl_rms_write_close(w);
     return SS$_NORMAL;
 }
 

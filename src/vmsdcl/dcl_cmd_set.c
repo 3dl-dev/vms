@@ -24,6 +24,7 @@
 #include "dcl/symbol.h"
 #include "dcl/cdu.h"
 #include "dcl/dcl_cmd.h"
+#include "dcl/dcl_rms.h"          /* vms-481: SET DEFAULT verifies the dir via the ACP */
 #include "dcl/vms_messages.h"
 #include "ssdef.h"
 #include "vms/logical.h"
@@ -37,7 +38,6 @@
 #include "vms_kif.h"
 #include "sysuaf.h"
 #include "uaidef.h"    /* UAI$M_LOCKPWD (vms-c8fa) */
-#include "sha256.h"
 #include "ovmx_accounting.h"
 
 /* Forward declarations for queue subcommands (dcl_cmd_process.c) */
@@ -94,6 +94,79 @@ static uint64_t enforced_privs_held(void)
     return info.cur_privs & VMS_PRV_M_ENFORCED;
 }
 
+/*
+ * set_default_dir_exists - vms-481: verify a SET DEFAULT target directory
+ * through the Files-11 ACP, not stat() on a /vms passthrough. A VMS directory
+ * "DEV:[A.B.C]" is the file "DEV:[A.B]C.DIR" -- so read that .DIR file's header
+ * (rms_file_attr) and confirm it is a directory. The MFD ("[000000]" / no
+ * directory) always exists on a mounted volume; a device/logical-only or bare
+ * name is accepted (resolution is deferred, as on VMS). Returns 1 if the
+ * default may be set, 0 if the directory is genuinely absent.
+ */
+static int set_default_dir_exists(struct dcl_context *ctx, const char *dirspec)
+{
+    /* Executive-absent defer (vms-5f0): with no /dev/vms (host ctest / self-host
+     * container) the ".DIR-file" ACP model below cannot see a directory that
+     * lives as a real POSIX directory on the /vms passthrough. Verify it the
+     * legacy way -- dcl_resolve_path() + stat() for S_ISDIR -- exactly as the
+     * pre-flip SET DEFAULT did. Only runs when RMS itself would defer (INV-6). */
+    if (rms_executive_absent()) {
+        char linux_path[1024];
+        if (dcl_resolve_path(ctx, dirspec, linux_path, sizeof(linux_path)) != 0)
+            return 1;   /* unresolvable -> accept, as VMS defers resolution */
+        size_t n = strlen(linux_path);
+        while (n > 1 && linux_path[n - 1] == '/') linux_path[--n] = '\0';
+        struct stat st;
+        return (stat(linux_path, &st) == 0 && S_ISDIR(st.st_mode)) ? 1 : 0;
+    }
+
+    char eff[1024];
+    if (dcl_rms_effective_spec(ctx, dirspec, eff, sizeof(eff)) != 0)
+        return 1;
+
+    const char *lb = strchr(eff, '[');
+    const char *rb = lb ? strchr(lb, ']') : NULL;
+    if (!lb || !rb || rb <= lb + 1)
+        return 1;   /* device/logical only, or no bracketed dir -- accept */
+
+    char prefix[128];
+    size_t pl = (size_t)(lb - eff);
+    if (pl >= sizeof(prefix)) pl = sizeof(prefix) - 1;
+    memcpy(prefix, eff, pl); prefix[pl] = '\0';   /* "DEV:" */
+
+    char dir[512];
+    size_t dl = (size_t)(rb - lb - 1);
+    if (dl >= sizeof(dir)) dl = sizeof(dir) - 1;
+    memcpy(dir, lb + 1, dl); dir[dl] = '\0';       /* "A.B.C" */
+
+    if (dir[0] == '\0' || strcmp(dir, "000000") == 0)
+        return 1;   /* the MFD */
+
+    /* Split trailing component: parent "A.B", leaf "C". */
+    char parent[512], leaf[256];
+    char *lastdot = strrchr(dir, '.');
+    if (lastdot) {
+        size_t plp = (size_t)(lastdot - dir);
+        if (plp >= sizeof(parent)) plp = sizeof(parent) - 1;
+        memcpy(parent, dir, plp); parent[plp] = '\0';
+        strncpy(leaf, lastdot + 1, sizeof(leaf) - 1); leaf[sizeof(leaf) - 1] = '\0';
+    } else {
+        parent[0] = '\0';
+        strncpy(leaf, dir, sizeof(leaf) - 1); leaf[sizeof(leaf) - 1] = '\0';
+    }
+
+    char dirfile[1024];
+    if (parent[0])
+        snprintf(dirfile, sizeof(dirfile), "%s[%s]%s.DIR", prefix, parent, leaf);
+    else
+        snprintf(dirfile, sizeof(dirfile), "%s[000000]%s.DIR", prefix, leaf);
+
+    struct rms_fileattr fa;
+    if (rms_file_attr(dirfile, &fa) != RMS$_NORMAL)
+        return 0;                 /* the .DIR file is genuinely absent */
+    return fa.is_directory ? 1 : 0;
+}
+
 static int cmd_set_default(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -104,21 +177,11 @@ static int cmd_set_default(struct dcl_command *cmd)
     }
 
     const char *dirspec = cmd->params[1];
-    char linux_path[1024];
 
-    dcl_resolve_path(ctx, dirspec, linux_path, sizeof(linux_path));
-
-    /* Remove trailing slash for stat */
-    char check_path[1024];
-    strncpy(check_path, linux_path, sizeof(check_path) - 1);
-    check_path[sizeof(check_path) - 1] = '\0';
-    size_t cplen = strlen(check_path);
-    if (cplen > 1 && check_path[cplen - 1] == '/') {
-        check_path[cplen - 1] = '\0';
-    }
-
-    struct stat st;
-    if (stat(check_path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+    /* vms-481: the authoritative existence check is the ACP (the real MFD/ODS-2
+     * directory), not stat() on the /vms passthrough. Fail-honest: an absent
+     * directory (or no ACP-mounted SYS$DISK) => %SET-E-... invalid directory. */
+    if (!set_default_dir_exists(ctx, dirspec)) {
         dcl_error("DCL", 2, "DIRECT", "invalid directory - \\%s\\", dirspec);
         return SS$_NOSUCHFILE;
     }
@@ -147,8 +210,28 @@ static int cmd_set_default(struct dcl_command *cmd)
         else
             strncpy(ctx->default_dir, dirspec, sizeof(ctx->default_dir) - 1);
     } else {
-        /* Bare name — treat as logical or directory */
-        strncpy(ctx->default_dir, dirspec, sizeof(ctx->default_dir) - 1);
+        /*
+         * Bare name (no device/colon, no brackets) — on VMS this is a LOGICAL
+         * NAME, resolved at SET DEFAULT time. The per-user LOGIN.COM does
+         * "SET DEFAULT SYS$LOGIN", and SHOW DEFAULT on VMS then reports the
+         * RESOLVED directory, not the logical -- crucially, the STORED default
+         * must be a real "DEV:[DIR]" spec, because a later BARE "DIRECTORY"
+         * builds its pattern by concatenating the default with "*.*;*": storing
+         * the unresolved "SYS$LOGIN" yields the garbage pattern "SYS$LOGIN*.*;*"
+         * and %DIRECT-W-NOFILES. Translate the logical; if it resolves to a
+         * device/directory-bearing equivalence, store THAT (e.g. SYS$LOGIN ->
+         * SYS$SYSROOT:[SYSMGR] for SYSTEM). Only if it is not a logical do we
+         * keep the bare name (VMS defers such resolution). Clean-room, Rule 8:
+         * VSI OpenVMS DCL Dictionary, SET DEFAULT (a logical name is translated)
+         * + User's Manual, "Logical Names in File Specifications".
+         */
+        char equiv[256];
+        if (dcl_translate_logical(dirspec, equiv, sizeof(equiv)) == 0 &&
+            (strchr(equiv, '[') || strchr(equiv, ':'))) {
+            strncpy(ctx->default_dir, equiv, sizeof(ctx->default_dir) - 1);
+        } else {
+            strncpy(ctx->default_dir, dirspec, sizeof(ctx->default_dir) - 1);
+        }
         ctx->default_dir[sizeof(ctx->default_dir) - 1] = '\0';
     }
 
@@ -162,10 +245,9 @@ static int cmd_set_default(struct dcl_command *cmd)
      * surface. */
     vms_pcb_set_default_dir(ctx->default_dir);
 
-    /* Change the process working directory too */
-    if (chdir(check_path) != 0) {
-        /* Non-fatal - VMS default and Linux CWD diverge */
-    }
+    /* vms-481: the DCL default is now purely a VMS "DEV:[DIR]" spec resolved by
+     * the executive/ACP -- no Linux chdir() into a /vms passthrough (that host
+     * mount is retired with the ACP flip). */
 
     return SS$_NORMAL;
 }
@@ -254,24 +336,67 @@ static int cmd_set_terminal(struct dcl_command *cmd)
      * entered (VAX1 capture, dcl_cmd_process.c:726: "%DCL-W-IVQUAL,
      * unrecognized qualifier - check validity, spelling, and placement").
      */
-    static const char *const terminal_known_qualifiers[] = {
-        "WIDTH", "PAGE", "SPEED", "PARITY", "DEVICE_TYPE", "DEVICE",
-        "ECHO", "WRAP", "BROADCAST", "TYPEAHEAD", "HOSTSYNC", "TTSYNC",
-        "LINE_EDITING", "INSERT", "OVERSTRIKE", "SCOPE", "LOWERCASE",
-        "UPPERCASE", "TAB", "MECHTAB", "HOLDSCREEN", "EIGHTBIT",
-        "READSYNC", "PASTHRU", "ESCAPE", "FORM", "FULLDUP", "HALFDUP",
-        "MODEM", "PAGE_CHAR", "SECURE", "FALLBACK", "DIALUP", "OPER",
-        "ALTYPEAHD", "RUNOUT",
+    /*
+     * The boolean characteristic qualifiers. Declared HERE, above the IVQUAL
+     * validation, so validation and the apply loop further down share ONE
+     * source of truth for the qualifier set. Each pair: /NAME sets the bit,
+     * /NONAME clears it.
+     *
+     * (vms-16a hardening -- not the primary bug, which was the apply loop
+     * below. The prior validation used a hand-maintained positive-name
+     * allowlist; deriving it from this table instead keeps the validated set
+     * and the applied set from ever drifting apart. Note the parser strips a
+     * leading "NO", so a /NOxxx qualifier reaches validation under its base
+     * name and matches quals[].on here.)
+     */
+    static const struct { const char *on; const char *off; uint32_t bit; } quals[] = {
+        { "ECHO",          "NOECHO",          TT_ECHO          },
+        { "WRAP",          "NOWRAP",          TT_WRAP          },
+        { "BROADCAST",     "NOBROADCAST",     TT_BROADCAST     },
+        { "TYPEAHEAD",     "NOTYPEAHEAD",     TT_TYPEAHEAD     },
+        { "HOSTSYNC",      "NOHOSTSYNC",      TT_HOSTSYNC      },
+        { "TTSYNC",        "NOTTSYNC",        TT_TTSYNC        },
+        { "LINE_EDITING",  "NOLINE_EDITING",  TT_LINE_EDITING  },
+        { "INSERT",        "OVERSTRIKE",      TT_INSERT        },
+        { "SCOPE",         "NOSCOPE",         TT_SCOPE         },
+        { "LOWERCASE",     "UPPERCASE",       TT_LOWERCASE     },
+        { "TAB",           "NOTAB",           TT_TAB           },
+        { "MECHTAB",       "NOMECHTAB",       TT_MECHTAB       },
+        { "HOLDSCREEN",    "NOHOLDSCREEN",    TT_HOLDSCREEN    },
+        { "EIGHTBIT",      "NOEIGHTBIT",      TT_EIGHTBIT      },
+        { "READSYNC",      "NOREADSYNC",      TT_READSYNC      },
+        { "PASTHRU",       "NOPASTHRU",       TT_PASTHRU       },
+        { "ESCAPE",        "NOESCAPE",        TT_ESCAPE        },
+        { "FORM",          "NOFORM",          TT_FORM          },
+        { "FULLDUP",       "HALFDUP",         TT_FULLDUP       },
+        { "MODEM",         "NOMODEM",         TT_MODEM         },
+        { "PAGE_CHAR",     "NOPAGE_CHAR",     TT_PAGE          },
+        { "SECURE",        "NOSECURE",        TT_SECURE        },
+        { "FALLBACK",      "NOFALLBACK",      TT_FALLBACK      },
+        { "DIALUP",        "NODIALUP",        TT_DIALUP        },
+        { "OPER",          "NOOPER",          TT_OPER          },
+        { "ALTYPEAHD",     "NOALTYPEAHD",     TT_ALTYPEAHD     },
+        { "RUNOUT",        "NORUNOUT",        TT_RUNOUT        },
     };
+
+    /* Value-taking qualifiers (/NAME=value); each validated in its own block
+     * below. DEVICE is the accepted abbreviation of DEVICE_TYPE. */
+    static const char *const terminal_value_qualifiers[] = {
+        "WIDTH", "PAGE", "SPEED", "PARITY", "DEVICE_TYPE", "DEVICE",
+    };
+
     for (int qi = 0; qi < cmd->qualifier_count; qi++) {
         const char *qname = cmd->qualifiers[qi].name;
         int known = 0;
-        for (size_t k = 0; k < sizeof(terminal_known_qualifiers) /
-                                sizeof(terminal_known_qualifiers[0]); k++) {
-            if (strcasecmp(qname, terminal_known_qualifiers[k]) == 0) {
+        for (size_t k = 0; !known && k < sizeof(terminal_value_qualifiers) /
+                                sizeof(terminal_value_qualifiers[0]); k++) {
+            if (strcasecmp(qname, terminal_value_qualifiers[k]) == 0)
                 known = 1;
-                break;
-            }
+        }
+        for (size_t k = 0; !known && k < sizeof(quals)/sizeof(quals[0]); k++) {
+            if (strcasecmp(qname, quals[k].on) == 0 ||
+                strcasecmp(qname, quals[k].off) == 0)
+                known = 1;
         }
         if (!known) {
             dcl_error("DCL", 0, "IVQUAL",
@@ -353,48 +478,34 @@ static int cmd_set_terminal(struct dcl_command *cmd)
     }
 
     /*
-     * Boolean characteristic qualifiers.
-     * Each pair: /NAME sets bit, /NONAME clears bit.
-     * Check NO-form first so that if both are present, the positive wins.
+     * Apply the boolean characteristic qualifiers (quals[] declared above,
+     * shared with the IVQUAL validation).
+     *
+     * vms-16a: this must honour how the parser (dcl_parser.c) stores a /NOxxx
+     * qualifier. It STRIPS the "NO" and records the base name with .negated=1
+     * -- so /NOECHO arrives as name "ECHO", negated. The old loop looked up the
+     * literal off-name ("NOECHO"), which the parser never stores, and
+     * dcl_has_qualifier() returns 0 for a negated match anyway; /NOECHO (and
+     * every other /NOxxx) therefore set nothing, leaving echo on and printing
+     * the install's SYSTEM password in plaintext. Walk the parsed qualifiers
+     * directly so the .negated flag drives set-vs-clear. Explicit-antonym pairs
+     * (INSERT/OVERSTRIKE, LOWERCASE/UPPERCASE, FULLDUP/HALFDUP) do not start
+     * with "NO", so the parser stores them under their own literal name and the
+     * off-name branch resolves them. Last qualifier named wins (VMS order).
      */
-    static const struct { const char *on; const char *off; uint32_t bit; } quals[] = {
-        { "ECHO",          "NOECHO",          TT_ECHO          },
-        { "WRAP",          "NOWRAP",          TT_WRAP          },
-        { "BROADCAST",     "NOBROADCAST",     TT_BROADCAST     },
-        { "TYPEAHEAD",     "NOTYPEAHEAD",     TT_TYPEAHEAD     },
-        { "HOSTSYNC",      "NOHOSTSYNC",      TT_HOSTSYNC      },
-        { "TTSYNC",        "NOTTSYNC",        TT_TTSYNC        },
-        { "LINE_EDITING",  "NOLINE_EDITING",  TT_LINE_EDITING  },
-        { "INSERT",        "OVERSTRIKE",      TT_INSERT        },
-        { "SCOPE",         "NOSCOPE",         TT_SCOPE         },
-        { "LOWERCASE",     "UPPERCASE",       TT_LOWERCASE     },
-        { "TAB",           "NOTAB",           TT_TAB           },
-        { "MECHTAB",       "NOMECHTAB",       TT_MECHTAB       },
-        { "HOLDSCREEN",    "NOHOLDSCREEN",    TT_HOLDSCREEN    },
-        { "EIGHTBIT",      "NOEIGHTBIT",      TT_EIGHTBIT      },
-        { "READSYNC",      "NOREADSYNC",      TT_READSYNC      },
-        { "PASTHRU",       "NOPASTHRU",       TT_PASTHRU       },
-        { "ESCAPE",        "NOESCAPE",        TT_ESCAPE        },
-        { "FORM",          "NOFORM",          TT_FORM          },
-        { "FULLDUP",       "HALFDUP",         TT_FULLDUP       },
-        { "MODEM",         "NOMODEM",         TT_MODEM         },
-        { "PAGE_CHAR",     "NOPAGE_CHAR",     TT_PAGE          },
-        { "SECURE",        "NOSECURE",        TT_SECURE        },
-        { "FALLBACK",      "NOFALLBACK",      TT_FALLBACK      },
-        { "DIALUP",        "NODIALUP",        TT_DIALUP        },
-        { "OPER",          "NOOPER",          TT_OPER          },
-        { "ALTYPEAHD",     "NOALTYPEAHD",     TT_ALTYPEAHD     },
-        { "RUNOUT",        "NORUNOUT",        TT_RUNOUT        },
-    };
-
     for (unsigned i = 0; i < sizeof(quals)/sizeof(quals[0]); i++) {
-        if (dcl_has_qualifier(cmd, quals[i].off)) {
-            vms_terminal_set_char(term, quals[i].bit, 0);
-            changed = 1;
-        }
-        if (dcl_has_qualifier(cmd, quals[i].on)) {
-            vms_terminal_set_char(term, quals[i].bit, 1);
-            changed = 1;
+        for (int qi = 0; qi < cmd->qualifier_count; qi++) {
+            const char *qn = cmd->qualifiers[qi].name;
+            int neg = cmd->qualifiers[qi].negated;
+            if (strcasecmp(qn, quals[i].on) == 0) {
+                /* /ON sets the bit; the parser's /NO<on> arrives here negated. */
+                vms_terminal_set_char(term, quals[i].bit, neg ? 0 : 1);
+                changed = 1;
+            } else if (strcasecmp(qn, quals[i].off) == 0) {
+                /* Literal antonym (OVERSTRIKE/UPPERCASE/HALFDUP) clears the bit. */
+                vms_terminal_set_char(term, quals[i].bit, neg ? 1 : 0);
+                changed = 1;
+            }
         }
     }
 
@@ -571,10 +682,10 @@ static int dcl_read_noecho_line(char *buf, size_t bufsz)
  * INV-DCL (docs/design-dcl-fidelity.md sec 3): this used to print
  * "%SET-I-PASSWORD, password change not fully implemented" and return
  * SS$_NORMAL without touching SYSUAF -- a success-toned lie for a no-op.
- * It now verifies the old password against the real SYSUAF hash
- * (sysuaf_authenticate()) and, on match, writes a real new hash back through
- * the ONE shared writer (sysuaf_write_record() -> sysuaf_format_record(),
- * vms-9b7/INV-1) -- the same record format AUTHORIZE and $SETUAI use.
+ * It now verifies the old password against the real SYSUAF record
+ * (sysuaf_authenticate(), binary + Purdy) and, on match, writes a real new
+ * Purdy hash back through the ONE shared binary writer (sysuaf_set_password ->
+ * sysuaf_write_record, vms-d92) -- the same record AUTHORIZE and $SETUAI use.
  *
  * /SECONDARY and /SYSTEM are real VMS features OVMX does not implement
  * (no secondary-password field in sysuaf_record_t; no per-node system-
@@ -736,14 +847,18 @@ static int cmd_set_password(struct dcl_command *cmd)
     }
 #undef OVMX_PWDMINIMUM_DEFAULT
 
-    /* Real hash, real rewrite -- the same SHA256 scheme sysuaf_authenticate()
-     * checks against and the same shared writer AUTHORIZE/$SETUAI use
-     * (sysuaf_write_record() -> sysuaf_format_record(), INV-1: one format,
-     * one writer). */
-    char new_hash[65];
-    sha256_hex((const uint8_t *)new_pw, new_len, new_hash);
-    strncpy(rec.password_hash, new_hash, sizeof(rec.password_hash) - 1);
-    rec.password_hash[sizeof(rec.password_hash) - 1] = '\0';
+    /* Real Purdy hash, real rewrite (vms-d92 atomic flip). sysuaf_set_password
+     * computes the genuine UAI$C_PURDY_S quadword from (new_pw, this account's
+     * username, a fresh salt) into rec.raw's password area; sysuaf_write_record
+     * persists the binary $UAFDEF record in place through the ONE binary writer
+     * AUTHORIZE/$SETUAI use (ovmx_sysuaf_store_user -> $UPDATE over the ACP).
+     * No SHA-256, no ASCII. rec was read by sysuaf_lookup, so every other field
+     * of the record is already present -- only the password changes. */
+    if (sysuaf_set_password(&rec, new_pw) != 0) {
+        dcl_error("UAF", 2, "WRITEFAIL",
+                  "unable to hash new password - password not changed");
+        return SS$_FILACCERR;
+    }
 
     if (sysuaf_write_record(&rec) != 0) {
         dcl_error("UAF", 2, "WRITEFAIL",

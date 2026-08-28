@@ -411,7 +411,13 @@ target_include_directories(scsd_exe PRIVATE
 # scsd_exe needs the vmsfs/vmslnm link it previously didn't (see the
 # header-only claim at the top of this file -- no longer true).
 # vms-838: the raw-L2 transport backend (see vmsscs_datalink above).
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_quorum vmsscs_recnx vmsscs_mscp vmsscs_mscp_srv vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll vmsscs_rx vmsscs_credit vmsscs_datalink vmsfs vmslnm)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_quorum vmsscs_recnx vmsscs_mscp vmsscs_mscp_srv vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll vmsscs_rx vmsscs_credit vmsscs_datalink vmsrms vmsfs vmslnm)
+# vms-5f0/vms-c3b: SCSD reads SYS$SYSTEM:OVMXVMSSYS.PAR (SCSNODE/SCSSYSTEMID/
+# ALLOCLASS/RECNXINTERVAL) through sysgen_read_* -> the executive Files-11 ACP
+# (RMS-over-ACP), not the retired /vms passthrough. Link vmsrms; the strong-ref
+# macro keeps LIBVMSRMS$SHR from --as-needed drop and pulls sysgen_acp.o from
+# the static archive (build-static).
+target_compile_definitions(scsd_exe PRIVATE OVMX_SYSGEN_ACP_STRONG)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

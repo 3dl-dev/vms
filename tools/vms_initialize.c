@@ -580,10 +580,10 @@ int main(int argc, char *argv[])
      *   --vmfs   write OVMX's bespoke VMFS/VFH2 structure (the default)
      * plus OVMX_INIT_ODS2 in the environment (non-empty, != "0") as a default.
      *
-     * The default stays VMFS deliberately: the live guest MOUNT path
-     * (tools/vms_mount_helper.c -> vmsfs.ko block-device mode, which
-     * validates VMSFS_HOME_MAGIC in src/kernel/vmsfs/vmsfs_super.c), the
-     * INITIALIZE unit test (tests/qemu/test_syssvc_initialize.c), and the
+     * The default stays VMFS deliberately: the VMFS home-block format
+     * (VMSFS_HOME_MAGIC in src/vmsfs/include/vmsfs_ondisk.h; the vmsfs.ko
+     * block-device MOUNT path that once validated it was retired by vms-165),
+     * the INITIALIZE unit test (tests/qemu/test_syssvc_initialize.c), and the
      * install/upgrade e2e gates all still READ the VMFS structure. Flipping
      * the default to ODS-2 must land atomically with the ODS-2 read path
      * (epic vms-5eb R2/R3/R5/R6); doing it here would break those enforcing

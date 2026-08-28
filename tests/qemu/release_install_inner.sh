@@ -81,6 +81,15 @@
 
 set -uo pipefail
 
+# Never let a write to a DEAD qemu console (a boot that halted/powered off, so
+# the FIFO reader is gone) kill this harness with SIGPIPE before it can report
+# WHY. Without this, a container-2 boot that halts made the whole inner script
+# die silently on the next `send` -- the outer gate then saw a nonzero exit and
+# a near-empty console with no dump_and_die diagnostic (the exact way the R1
+# container-2 boot failure hid its own root cause). Ignoring SIGPIPE lets send()
+# fail harmlessly and the loops below detect the dead qemu and dump the console.
+trap '' PIPE
+
 MODE="${1:-}"
 case "$MODE" in
     install|verify) ;;
@@ -96,6 +105,14 @@ INSTALL_MEDIA=/boot/ovmx-install-media.img
 TARGET=/work/target.img
 INSTALL_PW="INSTALLPW1"     # the SYSTEM password SET during install; verify logs in with THIS
                            # (all-caps so AUTHORIZE-hash and login-hash agree regardless of case folding)
+# The SCSNODE/SCSSYSTEMID the install CONFIGURES on the target (vms-597). Shared
+# by both phases: `install` drives these into OVMX$INSTALL.COM's SCS step and
+# `verify` asserts the booted target reports node name $R1_SCSNODE from its own
+# OVMXVMSSYS.PAR. NON-BLANK on purpose -- the old gate answered blank, took the
+# SKIP_SCS path, and so never exercised OR proved the node configuration (the
+# LARP vms-597 closes). <= 6 chars, distinct from the OVMX kit default.
+R1_SCSNODE="OVMXR1"
+R1_SCSID="1025"
 ARCH=$(uname -m)
 
 if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
@@ -104,7 +121,14 @@ if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
     CONSOLE="console=ttyAMA0"
 else
     QEMU=qemu-system-x86_64
-    MACHINE=""
+    # KVM acceleration (vms-fb8): hardware virt when /dev/kvm is writable,
+    # else TCG software emulation (identical behavior, ~10x slower). See
+    # distro/boot/run-qemu.sh for the full rationale.
+    if [ -w /dev/kvm ]; then
+        MACHINE="-accel kvm -cpu host"
+    else
+        MACHINE="-accel tcg"
+    fi
     CONSOLE="console=ttyS0"
 fi
 
@@ -169,6 +193,12 @@ dump_and_die() {
 wake_for() {  # pattern
     local pat="$1" w=0
     until grep -qaF "$pat" "$LOG" 2>/dev/null || [ "$w" -ge 120 ]; do
+        # Stop the moment qemu is gone: a boot that halted/powered off will
+        # never print the pattern, and continuing to send() into a dead FIFO
+        # just wastes the whole 120s budget before the caller's wait_for finally
+        # dumps the console. Bail immediately so dump_and_die runs with the real
+        # halt diagnostic still on the log.
+        kill -0 "$QPID" 2>/dev/null || return 1
         send ''; sleep 1; w=$((w + 1))
     done
 }
@@ -280,8 +310,15 @@ if [ "$MODE" = "install" ]; then
     else
         dump_and_die "AUTHORIZE never reached UAF> against the target"
     fi
-    send "MODIFY SYSTEM/PASSWORD=$INSTALL_PW"
-    send "EXIT"
+    # The procedure drives AUTHORIZE NON-INTERACTIVELY via inline SYS$INPUT
+    # (vms-963): OVMX$INSTALL.COM feeds "MODIFY SYSTEM/PASSWORD='OVMX_PW1'" +
+    # EXIT as data lines after the RUN, and DCL apostrophe-substitutes the
+    # entered password ($INSTALL_PW, already answered above) into that line
+    # before AUTHORIZE reads it. There is no operator typing at UAF> -- so
+    # this driver does NOT send MODIFY/EXIT (a stray send here would sit
+    # unconsumed in the PTY and get eaten by the SCSNODE/SCSSYSTEMID prompts
+    # below); it asserts the write instead.
+    #
     # The write to the TARGET's SYSUAF must PERSIST -- AUTHORIZE saves on EXIT
     # when dirty and prints %UAF-I-SAVED on success, %UAF-E-SAVEFAIL on failure.
     # This is the in-container proof that the install-set password landed on the
@@ -315,11 +352,43 @@ if [ "$MODE" = "install" ]; then
     else
         echo "  NOTE (not scored): the SYSTEM password was not echoed (vms-dcf NOECHO display gap appears resolved)"
     fi
-    send ''    # SCSNODE blank -> skip
-    wait_for 'Enter SCSSYSTEMID' "$RUN_TIMEOUT" "$OFF" \
+    # Drive the SCS/SYSGEN step FOR REAL (vms-597): answer SCSNODE/SCSSYSTEMID
+    # NON-BLANK so OVMX$INSTALL.COM feeds SYSGEN its inline SYS$INPUT block and
+    # GENUINELY configures the node. The old gate answered blank here, took the
+    # SKIP_SCS path, and so never exercised OR proved the node configuration --
+    # the exact LARP vms-597 closes. Answering the two INQUIRE prompts is the
+    # whole operator interaction; the SYSGEN REPL is supplied by the procedure's
+    # own inline data block, NOT typed at the console.
+    SCS_OFF=$(wc -c <"$LOG")
+    send "$R1_SCSNODE"
+    wait_for 'Enter SCSSYSTEMID' "$RUN_TIMEOUT" "$SCS_OFF" \
         || dump_and_die "never asked for SCSSYSTEMID"
     ok "asks for SCSSYSTEMID"
-    send ''    # SCSSYSTEMID blank -> fall through to the procedure's own DISMOUNT
+    send "$R1_SCSID"
+    # ANTI-LARP (vms-dd15/INV-6): anchor on SYSGEN.EXE's runtime BANNER (emitted
+    # by the image itself, never by the procedure) -- NOT the bare "SYSGEN>"
+    # literal. Under the inline SYS$INPUT feed SYSGEN's stdin is a non-tty
+    # tmpfile, and vms_sysgen.c prints this banner unconditionally.
+    if wait_for 'OpenVMS System Generation Utility' "$RUN_TIMEOUT" "$SCS_OFF"; then
+        ok "SYSGEN.EXE activated against the rooted target via the procedure's inline SYS\$INPUT (runtime banner) -- no %DCL-E-IVIMAGE (vms-597)"
+    else
+        dump_and_die "SYSGEN.EXE did not start against the target (vms-597: %DCL-E-IVIMAGE / empty inline SYS\$INPUT -- no runtime banner)"
+    fi
+    # %SYSGEN-I-WRITTEN is printed only after WRITE CURRENT serializes the
+    # parameter set to the target's OVMXVMSSYS.PAR -- positive proof the inline
+    # feed reached and executed WRITE CURRENT against the target.
+    if wait_for '%SYSGEN-I-WRITTEN' "$RUN_TIMEOUT" "$SCS_OFF"; then
+        ok "SYSGEN's inline WRITE CURRENT wrote SCSNODE/SCSSYSTEMID to the target's OVMXVMSSYS.PAR (%SYSGEN-I-WRITTEN)"
+    else
+        dump_and_die "SYSGEN did not report %SYSGEN-I-WRITTEN -- the inline SYS\$INPUT never configured the node"
+    fi
+    SCS_SEG=$(segment_since "$SCS_OFF")
+    if printf '%s\n' "$SCS_SEG" | grep -qE '%DCL-E-IVIMAGE|%SYSGEN-[EF]-'; then
+        bad "the SCS/SYSGEN segment carries an IVIMAGE or a SYSGEN error"
+        printf '%s\n' "$SCS_SEG" | grep -E '%DCL-E-IVIMAGE|%SYSGEN-[EF]-'
+    else
+        ok "the SCS/SYSGEN segment carries no IVIMAGE and no SYSGEN error"
+    fi
 
     if wait_for '%DISMOUNT-I-DISMOUNTED' "$RUN_TIMEOUT" "$OFF"; then
         ok "the procedure DISMOUNTs the target (umount(2) flushes guest writes to the device)"
@@ -358,6 +427,19 @@ if printf '%s\n' "$(segment_since 0)" | grep -qF 'OVMX$INSTALL Option'; then
     bad "the booted target re-ran the install menu (SYSTARTUP variant leaked onto the target)"
 else
     ok "the booted target does NOT re-run the install menu"
+fi
+# END-TO-END vms-597: the SCSNODE the `install` phase wrote to the target's
+# OVMXVMSSYS.PAR (via SYSGEN's inline WRITE CURRENT through the rooted
+# SYS$SYSTEM redirect) MUST be what this booted target reports as its node
+# identity -- ovmx_init prints "%OVMX-I-SCSNODE, node name <X> set from
+# SYS$SYSTEM:OVMXVMSSYS.PAR". Seeing $R1_SCSNODE (not the OVMX kit default)
+# proves the install's SCS configuration reached and persisted to the target's
+# own parameter file across the container boundary. This is the assertion the
+# old gate skipped entirely by answering SCSNODE blank.
+if printf '%s\n' "$(segment_since 0)" | grep -qF "node name $R1_SCSNODE"; then
+    ok "the install-set SCSNODE ($R1_SCSNODE) persisted to the target and the booted target reads it from OVMXVMSSYS.PAR (end-to-end vms-597)"
+else
+    bad "the install-set SCSNODE ($R1_SCSNODE) did NOT appear on the target's boot -- SYSGEN WRITE CURRENT did not persist to the target's OVMXVMSSYS.PAR"
 fi
 # First-boot completion is a justified no-op for OVMX (vms-649): the target
 # must NOT run any self-install phase on this boot.

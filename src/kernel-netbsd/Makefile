@@ -46,10 +46,24 @@ SRCS=		vms_netbsd.c \
 		vms_mbx.c \
 		vms_proctab.c \
 		vms_lock.c \
-		vms_lnm.c
+		vms_lnm.c \
+		vms_devtab.c \
+		vmsfs_acp.c \
+		ods2_reader.c \
+		ods2_edit.c \
+		vms_blockdev_netbsd.c
+
+# vms-d5d: vmsfs_acp.c (the Files-11 ODS-2 ACP: channel + IO$_ACCESS/READVBLK/
+# WRITEVBLK/$MOUNT handlers) + ods2_edit.c (the pure on-disk EDIT helpers its
+# implicit-extend path calls) join the loadable module so the VAX runtime reads
+# SYS$DISK over the executive ACP, not the vmsfs.ko VFS mount. Their raw block
+# I/O rides vms_blockdev_netbsd.c (the exec_blockdev_* seam + single-unit
+# resolve). Built -DOVMX_ODS2_KERNEL (below); the SAME set the elf32-vax
+# compile-audit (tools/cross-vax/build-vms-module-vax.sh) proves ILP32-clean.
 
 # vms_eflag.c lives in the shared core dir; tell bmake where to find it.
 .PATH:		${.CURDIR}/../kernel-core
+.PATH:		${.CURDIR}/../vmsfs/ods2
 
 # -I${.CURDIR}            : this dir's headers -- the NetBSD backend
 #                          (exec_kbackend_netbsd.h, exec_list_netbsd.h), the
@@ -64,5 +78,18 @@ SRCS=		vms_netbsd.c \
 # -DOVMX_KBACKEND_NETBSD  : select the NetBSD backend inside exec_kbackend.h /
 #                          exec_list.h.
 CPPFLAGS+=	-I${.CURDIR} -I${.CURDIR}/../kernel-core -DOVMX_KBACKEND_NETBSD
+# vms-d5d: -DOVMX_ODS2_KERNEL selects the real block-I/O + ODS-2 validation in
+# vmsfs_acp.c/exec_kbackend_netbsd.h (fail-honest SS$_DEVNOTMOUNT otherwise);
+# -I../vmsfs/include supplies the genuine ODS-2 codec header vmsfs/ods2.h.
+CPPFLAGS+=	-DOVMX_ODS2_KERNEL -I${.CURDIR}/../vmsfs/include
+# vms-618: -DOVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE compiles OUT vms_devtab.c's two
+# TABLE-READ disk resolvers (vms_devtab_disk_backing / vms_ioctl_disk_resolve),
+# because this substrate needs resolvers that also lazily OPEN + cache the
+# backing device vnode (and that must NOT hold the INITIALIZE target open --
+# NetBSD allows one open of a block device). Those definitions live in
+# vms_blockdev_netbsd.c; the guard's full reasoning is in vms_devtab.c. NOTHING
+# ownership-shaped is substrate-local: the table itself and $ALLOC/$DALLOC/
+# $ASSIGN/$DASSGN/$GETDVI/$DEVICE_SCAN have exactly ONE implementation.
+CPPFLAGS+=	-DOVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE
 
 .include <bsd.kmodule.mk>

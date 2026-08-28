@@ -451,6 +451,7 @@ extern "C" {
  * ================================================================ */
 
 #define SS$_LKWSETFUL       404     /* Locked working set is full */
+#define SS$_HPARITH         1284    /* High performance arithmetic trap (Alpha V8.4 oracle; msgnum 160, immediately precedes SS$_ALIGN 161) */
 #define SS$_ALIGN           1292    /* Alignment fault */
 #define SS$_DEVALRALLOC     1601    /* Device already allocated */
 #define SS$_LOWPREC         1873    /* Low precision (Alpha V8.4 oracle) */

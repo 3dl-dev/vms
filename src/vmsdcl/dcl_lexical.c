@@ -32,6 +32,7 @@
 #include "dcl/context.h"
 #include "dcl/parser.h"
 #include "dcl/dcl_cmd.h"
+#include "dcl/dcl_rms.h"          /* vms-481: F$ file lexicals reach files via RMS/ACP */
 #include "dcl/symbol.h"
 #include "ssdef.h"
 /* Kernel-interface client: F$DEVICE enumerates the executive's device
@@ -758,15 +759,18 @@ static int lex_license(struct dcl_context *ctx, const char *args,
  * One slot per unique filespec (up to 8 concurrent searches).
  */
 #define FSEARCH_MAX_CTX  8
-#define FSEARCH_MAX_MATCHES 512
 
+/*
+ * vms-481: F$SEARCH iterates the Files-11 ODS-2 ACP wildcard directory context
+ * (sys$parse + sys$search over /dev/vms) instead of an opendir()/readdir()
+ * snapshot of a /vms passthrough. One slot per unique filespec holds the live
+ * executive search handle; each F$SEARCH call returns the NEXT match (genuine
+ * ODS-2 order, with a real File ID behind it), "" when the directory is
+ * exhausted (RMS$_NMF), restarting on the next call for the same spec.
+ */
 static struct fsearch_ctx {
-    char    filespec[512];  /* The VMS filespec pattern that opened this ctx */
-    char    dir_linux[512]; /* Linux directory being scanned */
-    char    pattern[256];   /* Wildcard filename pattern (fnmatch) */
-    char   *matches[FSEARCH_MAX_MATCHES];
-    int     match_count;
-    int     match_pos;
+    char    filespec[512];          /* the VMS filespec pattern (search key) */
+    struct dcl_rms_dir *dir;        /* the executive wildcard search over it */
 } fsearch_slots[FSEARCH_MAX_CTX];
 static int fsearch_initialized = 0;
 
@@ -788,71 +792,38 @@ static struct fsearch_ctx *fsearch_find(const char *filespec)
     return NULL;
 }
 
+static void fsearch_slot_clear(struct fsearch_ctx *fsc)
+{
+    if (fsc->dir) { dcl_rms_dir_close(fsc->dir); fsc->dir = NULL; }
+    fsc->filespec[0] = '\0';
+}
+
 static struct fsearch_ctx *fsearch_alloc(const char *filespec)
 {
-    /* Evict first free or oldest (slot 0) */
     for (int i = 0; i < FSEARCH_MAX_CTX; i++) {
         if (!fsearch_slots[i].filespec[0]) {
             strncpy(fsearch_slots[i].filespec, filespec,
                     sizeof(fsearch_slots[i].filespec) - 1);
+            fsearch_slots[i].dir = NULL;
             return &fsearch_slots[i];
         }
     }
-    /* No free slot — evict slot 0, shift */
-    struct fsearch_ctx *evict = &fsearch_slots[0];
-    for (int j = 0; j < evict->match_count; j++) {
-        free(evict->matches[j]);
-        evict->matches[j] = NULL;
-    }
+    /* No free slot — evict slot 0 (releasing its executive channel), shift. */
+    fsearch_slot_clear(&fsearch_slots[0]);
     memmove(&fsearch_slots[0], &fsearch_slots[1],
             sizeof(fsearch_slots[0]) * (FSEARCH_MAX_CTX - 1));
-    memset(&fsearch_slots[FSEARCH_MAX_CTX - 1], 0,
-           sizeof(fsearch_slots[0]));
+    memset(&fsearch_slots[FSEARCH_MAX_CTX - 1], 0, sizeof(fsearch_slots[0]));
     strncpy(fsearch_slots[FSEARCH_MAX_CTX - 1].filespec, filespec,
             sizeof(fsearch_slots[0].filespec) - 1);
     return &fsearch_slots[FSEARCH_MAX_CTX - 1];
 }
 
-static void fsearch_populate(struct fsearch_ctx *fsc)
-{
-    /* Free previous matches */
-    for (int i = 0; i < fsc->match_count; i++) {
-        free(fsc->matches[i]);
-        fsc->matches[i] = NULL;
-    }
-    fsc->match_count = 0;
-    fsc->match_pos   = 0;
-
-    DIR *d = opendir(fsc->dir_linux);
-    if (!d) return;
-
-    struct dirent *de;
-    while ((de = readdir(d)) != NULL && fsc->match_count < FSEARCH_MAX_MATCHES) {
-        if (de->d_name[0] == '.') continue;  /* skip hidden */
-        if (fnmatch(fsc->pattern, de->d_name, FNM_CASEFOLD) == 0) {
-            char *dup = strdup(de->d_name);
-            if (!dup) {
-                /* Out of memory — free what we have and bail */
-                for (int j = 0; j < fsc->match_count; j++) {
-                    free(fsc->matches[j]);
-                    fsc->matches[j] = NULL;
-                }
-                fsc->match_count = 0;
-                closedir(d);
-                return;
-            }
-            fsc->matches[fsc->match_count++] = dup;
-        }
-    }
-    closedir(d);
-}
-
 /*
- * F$SEARCH(filespec) - Iterative wildcard file search.
+ * F$SEARCH(filespec) - Iterative wildcard file search over the ACP.
  *
- * First call with a given filespec scans the directory and returns
- * the first match. Subsequent calls return subsequent matches.
- * Returns "" when exhausted.
+ * First call with a given filespec opens the executive search and returns the
+ * first match; subsequent calls return subsequent matches. Returns "" when
+ * exhausted.
  */
 static int lex_search(struct dcl_context *ctx, const char *args,
                       char *result, size_t result_size)
@@ -875,80 +846,27 @@ static int lex_search(struct dcl_context *ctx, const char *args,
         s[slen - 1] = '\0'; s++; slen -= 2;
     }
 
-    /* Uppercase for VMS canon */
+    /* Uppercase for the slot key (ODS-2 is case-insensitive). */
     char spec_upper[512];
     for (size_t i = 0; s[i] && i < sizeof(spec_upper) - 1; i++)
         spec_upper[i] = (char)toupper((unsigned char)s[i]);
-    spec_upper[slen] = '\0';
+    spec_upper[slen < sizeof(spec_upper) ? slen : sizeof(spec_upper) - 1] = '\0';
 
     struct fsearch_ctx *fsc = fsearch_find(spec_upper);
     if (!fsc) {
-        /* New filespec — open a fresh context */
         fsc = fsearch_alloc(spec_upper);
         if (!fsc) return 0;
-
-        /* Resolve the filespec to a linux path */
-        char linux_path[1024];
-        dcl_resolve_path(ctx, s, linux_path, sizeof(linux_path));
-
-        /* Split into directory + pattern */
-        char *slash = strrchr(linux_path, '/');
-        if (slash) {
-            size_t dlen = (size_t)(slash - linux_path);
-            memcpy(fsc->dir_linux, linux_path, dlen);
-            fsc->dir_linux[dlen] = '\0';
-            strncpy(fsc->pattern, slash + 1, sizeof(fsc->pattern) - 1);
-        } else {
-            vmsfs_to_linux_path(ctx->default_dir, fsc->dir_linux, sizeof(fsc->dir_linux));
-            strncpy(fsc->pattern, linux_path, sizeof(fsc->pattern) - 1);
-        }
-
-        /* Replace VMS wildcards with shell wildcards */
-        /* VMS uses * and % — % matches exactly one char (like shell ?) */
-        char pat2[256];
-        size_t pi = 0;
-        for (size_t i = 0; fsc->pattern[i] && pi < sizeof(pat2) - 1; i++) {
-            char c = fsc->pattern[i];
-            if (c == '%')
-                pat2[pi++] = '?';
-            else
-                pat2[pi++] = c;
-        }
-        pat2[pi] = '\0';
-        strncpy(fsc->pattern, pat2, sizeof(fsc->pattern) - 1);
-
-        fsearch_populate(fsc);
+        fsc->dir = dcl_rms_dir_open(ctx, s);
+        if (!fsc->dir) { fsearch_slot_clear(fsc); return 0; }
     }
 
-    /* Return next match */
-    if (fsc->match_pos >= fsc->match_count) {
-        /* Exhausted — clear context so a fresh call restarts */
-        for (int j = 0; j < fsc->match_count; j++) {
-            free(fsc->matches[j]);
-            fsc->matches[j] = NULL;
-        }
-        fsc->match_count = 0;
-        fsc->match_pos   = 0;
-        fsc->filespec[0] = '\0';
+    /* Next match. The resultant is already a full VMS spec
+     * "DEV:[DIR]NAME.TYP;VER" from the executive search. */
+    if (!dcl_rms_dir_next(fsc->dir, result, result_size, NULL, NULL, NULL)) {
+        fsearch_slot_clear(fsc);   /* exhausted -- a fresh call restarts */
+        result[0] = '\0';
         return 0;
     }
-
-    /* Build VMS-format result: DIR:[filename];1 */
-    char vms_dir[512];
-    dcl_format_directory(fsc->dir_linux, vms_dir, sizeof(vms_dir));
-
-    /* Strip trailing ] to append filename, then close */
-    size_t vlen = strlen(vms_dir);
-    if (vlen > 0 && vms_dir[vlen - 1] == ']') vms_dir[vlen - 1] = '\0';
-
-    const char *fname = fsc->matches[fsc->match_pos++];
-    /* Uppercase the filename part */
-    char fname_upper[256];
-    for (size_t i = 0; fname[i] && i < sizeof(fname_upper) - 1; i++)
-        fname_upper[i] = (char)toupper((unsigned char)fname[i]);
-    fname_upper[strlen(fname)] = '\0';
-
-    snprintf(result, result_size, "%s]%s;1", vms_dir, fname_upper);
     return 0;
 }
 
@@ -978,19 +896,55 @@ static int lex_parse(struct dcl_context *ctx, const char *args,
         spec[si] = '\0';
     }
 
-    /* For now, just resolve and format */
-    char linux_path[1024];
-    dcl_resolve_path(ctx, spec, linux_path, sizeof(linux_path));
+    /* vms-481: F$PARSE is a SYNTACTIC VMS operation -- it fills in the device
+     * and directory defaults and returns the requested field of the resulting
+     * filespec. Build the effective VMS spec (device/dir defaulted from the
+     * process default) WITHOUT touching the file system -- no stat() on a /vms
+     * passthrough (VSI OpenVMS DCL Dictionary, F$PARSE; clean-room Rule 8). */
+    char vspec[1024];
+    dcl_rms_effective_spec(ctx, spec, vspec, sizeof(vspec));
 
-    /* Check for field argument */
-    /* Skip to 4th argument if present */
+    /* Split the VMS spec "DEV:[DIR]NAME.TYP;VER" into components. */
+    char dev[64] = "SYS$DISK:", dir[512] = "", nm[256] = "", typ[128] = "";
+    {
+        const char *cur = vspec;
+        const char *lb = strchr(vspec, '[');
+        const char *colon = strchr(vspec, ':');
+        if (colon && (!lb || colon < lb)) {
+            size_t dl = (size_t)(colon - vspec) + 1;
+            if (dl < sizeof(dev)) { memcpy(dev, vspec, dl); dev[dl] = '\0'; }
+            cur = colon + 1;
+        }
+        lb = strchr(cur, '[');
+        const char *rb = lb ? strchr(lb, ']') : NULL;
+        if (lb && rb && rb > lb) {
+            size_t dl = (size_t)(rb - lb + 1);
+            if (dl >= sizeof(dir)) dl = sizeof(dir) - 1;
+            memcpy(dir, lb, dl); dir[dl] = '\0';
+            cur = rb + 1;
+        }
+        /* NAME.TYP;VER */
+        char nt[384];
+        strncpy(nt, cur, sizeof(nt) - 1); nt[sizeof(nt) - 1] = '\0';
+        char *semi = strchr(nt, ';'); if (semi) *semi = '\0';
+        char *dot = strrchr(nt, '.');
+        if (dot) {
+            size_t nl = (size_t)(dot - nt);
+            if (nl >= sizeof(nm)) nl = sizeof(nm) - 1;
+            memcpy(nm, nt, nl); nm[nl] = '\0';
+            strncpy(typ, dot, sizeof(typ) - 1); typ[sizeof(typ) - 1] = '\0';
+        } else {
+            strncpy(nm, nt, sizeof(nm) - 1); nm[sizeof(nm) - 1] = '\0';
+        }
+        for (size_t i = 0; nm[i]; i++)  nm[i]  = (char)toupper((unsigned char)nm[i]);
+        for (size_t i = 0; typ[i]; i++) typ[i] = (char)toupper((unsigned char)typ[i]);
+    }
+
+    /* Check for the 4th (field) argument. */
     int comma_count = 0;
     p = args;
     while (*p) {
-        if (*p == ',') {
-            comma_count++;
-            if (comma_count == 3) { p++; break; }
-        }
+        if (*p == ',') { comma_count++; if (comma_count == 3) { p++; break; } }
         p++;
     }
 
@@ -999,7 +953,6 @@ static int lex_parse(struct dcl_context *ctx, const char *args,
         char field[64];
         strncpy(field, p, sizeof(field) - 1);
         field[sizeof(field) - 1] = '\0';
-        /* Trim and unquote */
         size_t flen = strlen(field);
         while (flen > 0 && (field[flen - 1] == ' ' || field[flen - 1] == '\t'))
             field[--flen] = '\0';
@@ -1010,54 +963,21 @@ static int lex_parse(struct dcl_context *ctx, const char *args,
         for (size_t i = 0; field[i]; i++)
             field[i] = (char)toupper((unsigned char)field[i]);
 
-        if (strcmp(field, "NAME") == 0) {
-            const char *bn = strrchr(linux_path, '/');
-            if (bn) bn++; else bn = linux_path;
-            char *dot = strrchr((char *)bn, '.');
-            if (dot) {
-                size_t nlen = (size_t)(dot - bn);
-                if (nlen >= result_size) nlen = result_size - 1;
-                memcpy(result, bn, nlen);
-                result[nlen] = '\0';
-            } else {
-                strncpy(result, bn, result_size - 1);
-            }
-            /* Uppercase */
-            for (size_t i = 0; result[i]; i++)
-                result[i] = (char)toupper((unsigned char)result[i]);
-        } else if (strcmp(field, "TYPE") == 0) {
-            const char *bn = strrchr(linux_path, '/');
-            if (bn) bn++; else bn = linux_path;
-            const char *dot = strrchr(bn, '.');
-            if (dot) {
-                strncpy(result, dot, result_size - 1);
-                for (size_t i = 0; result[i]; i++)
-                    result[i] = (char)toupper((unsigned char)result[i]);
-            }
-        } else if (strcmp(field, "DIRECTORY") == 0) {
-            const char *bn = strrchr(linux_path, '/');
-            if (bn) {
-                char dirpath[1024];
-                size_t dlen = (size_t)(bn - linux_path);
-                memcpy(dirpath, linux_path, dlen);
-                dirpath[dlen] = '\0';
-                dcl_format_directory(dirpath, result, result_size);
-            }
-        } else if (strcmp(field, "DEVICE") == 0) {
-            strncpy(result, "SYS$DISK:", result_size - 1);
-        } else if (strcmp(field, "NODE") == 0) {
+        if (strcmp(field, "NAME") == 0)
+            strncpy(result, nm, result_size - 1);
+        else if (strcmp(field, "TYPE") == 0)
+            strncpy(result, typ, result_size - 1);
+        else if (strcmp(field, "DIRECTORY") == 0)
+            strncpy(result, dir, result_size - 1);
+        else if (strcmp(field, "DEVICE") == 0)
+            strncpy(result, dev, result_size - 1);
+        else if (strcmp(field, "NODE") == 0)
             result[0] = '\0';
-        } else {
-            /* Return full filespec */
-            char vms[1024];
-            dcl_format_directory(linux_path, vms, sizeof(vms));
-            strncpy(result, vms, result_size - 1);
-        }
+        else
+            strncpy(result, vspec, result_size - 1);
     } else {
-        /* No field specified - return full filespec */
-        char vms[1024];
-        dcl_format_directory(linux_path, vms, sizeof(vms));
-        strncpy(result, vms, result_size - 1);
+        /* No field specified - return the full expanded filespec. */
+        strncpy(result, vspec, result_size - 1);
     }
 
     result[result_size - 1] = '\0';
@@ -1111,39 +1031,101 @@ static int lex_file_attributes(struct dcl_context *ctx, const char *args,
     for (size_t i = 0; item[i]; i++)
         item[i] = (char)toupper((unsigned char)item[i]);
 
-    /* Resolve filespec */
-    char linux_path[1024];
-    dcl_resolve_path(ctx, spec, linux_path, sizeof(linux_path));
-
-    struct stat st;
-    if (stat(linux_path, &st) != 0) {
+    /* vms-481: read the genuine ODS-2 file header through the ACP (rms_file_attr
+     * -> IO$_ACCESS ATR list), not stat() on a /vms passthrough. Fail-honest: a
+     * file the ACP cannot access yields F$FILE_ATTRIBUTES's "not found" ("0"). */
+    struct rms_fileattr fa;
+    if (dcl_rms_attr(ctx, spec, &fa) != RMS$_NORMAL) {
         strncpy(result, "0", result_size - 1);
+        result[result_size - 1] = '\0';
         return 0;
     }
 
-    if (strcmp(item, "EOF") == 0 || strcmp(item, "ALQ") == 0 ||
-        strcmp(item, "MRS") == 0) {
-        /* Size in blocks (512 bytes) */
-        long blocks = (st.st_size + 511) / 512;
-        snprintf(result, result_size, "%ld", blocks);
+    if (strcmp(item, "EOF") == 0) {
+        /* End-of-file block: the EOF VBN from the file header FAT. */
+        snprintf(result, result_size, "%u", fa.efblk);
+    } else if (strcmp(item, "ALQ") == 0) {
+        /* Allocation quantity: highest allocated VBN. */
+        snprintf(result, result_size, "%u", fa.hiblk);
+    } else if (strcmp(item, "MRS") == 0) {
+        snprintf(result, result_size, "%u", fa.mrs);
     } else if (strcmp(item, "CDT") == 0 || strcmp(item, "RDT") == 0) {
-        /* Creation/revision date in VMS format */
-        struct tm tm;
-        localtime_r(&st.st_mtime, &tm);
-        snprintf(result, result_size, "%2d-%s-%04d %02d:%02d:%02d.00",
-                 tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
-                 tm.tm_hour, tm.tm_min, tm.tm_sec);
+        /* Creation/revision date from the header's ODS-2 64-bit time. A VMS
+         * binary time is 100-ns ticks since 17-NOV-1858; Unix subtracts the
+         * 3506716800-second offset (public/documented, clean-room Rule 8). */
+        const uint8_t *vt = (strcmp(item, "CDT") == 0) ? fa.credate : fa.revdate;
+        uint64_t ticks; memcpy(&ticks, vt, 8);
+        if (ticks == 0) { strncpy(result, "", result_size - 1); }
+        else {
+            long long secs = (long long)(ticks / 10000000ULL) - 3506716800LL;
+            long cc = (long)((ticks % 10000000ULL) / 100000ULL);
+            if (secs < 0) secs = 0;
+            time_t tt = (time_t)secs;
+            struct tm tm; localtime_r(&tt, &tm);
+            snprintf(result, result_size, "%2d-%s-%04d %02d:%02d:%02d.%02ld",
+                     tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
+                     tm.tm_hour, tm.tm_min, tm.tm_sec, cc);
+        }
     } else if (strcmp(item, "KNOWN") == 0) {
         snprintf(result, result_size, "TRUE");
     } else if (strcmp(item, "ORG") == 0) {
+        /* Sequential unless the FAT record format is not a record org OVMX
+         * distinguishes here (indexed/relative org is not carried in the ATR
+         * subset). */
         snprintf(result, result_size, "SEQ");
     } else if (strcmp(item, "RAT") == 0) {
-        snprintf(result, result_size, "CR");
+        /* Record attributes from the FAT fat_rattrib bits. */
+        char rbuf[16]; size_t ri = 0;
+        if (fa.rat & 0x02) rbuf[ri++] = 'C';   /* CR  (ODS2_RAT_CR)  */
+        if (fa.rat & 0x01 && ri < sizeof(rbuf) - 1) rbuf[ri++] = 'F'; /* FTN */
+        if (fa.rat & 0x04 && ri < sizeof(rbuf) - 1) rbuf[ri++] = 'P'; /* PRN */
+        if (fa.rat & 0x08 && ri < sizeof(rbuf) - 1) rbuf[ri++] = 'B'; /* BLK */
+        rbuf[ri] = '\0';
+        snprintf(result, result_size, "%s", rbuf);
     } else if (strcmp(item, "RFM") == 0) {
-        snprintf(result, result_size, "STMLF");
+        /* Record format from the FAT fat_rtype (FAB$C_* codes). */
+        static const char *rfm_name[] = {
+            "UDF", "FIX", "VAR", "VFC", "STM", "STMLF", "STMCR"
+        };
+        const char *nm = (fa.rfm <= 6) ? rfm_name[fa.rfm] : "UDF";
+        snprintf(result, result_size, "%s", nm);
     } else if (strcmp(item, "PRO") == 0) {
-        /* Protection string */
-        snprintf(result, result_size, "(S:RWED,O:RWED,G:RE,W:)");
+        /* Protection string from the genuine ODS-2 protection word (a clear bit
+         * = access allowed; VMS convention). */
+        static const char cat[4] = { 'S', 'O', 'G', 'W' };
+        static const int  shift[4] = { 0, 4, 8, 12 };
+        char pb[80]; size_t pi = 0;
+        /*
+         * Bounded accumulator (vms-5f0 / CodeQL): snprintf() returns the length
+         * it WOULD have written, so a raw `pi += snprintf(pb+pi, sizeof(pb)-pi,
+         * ...)` could drive pi past sizeof(pb); the next `sizeof(pb)-pi` would
+         * then underflow (unsigned) to a huge size and hand snprintf an out-of-
+         * bounds pointer + length. Guard every append with `pi < sizeof(pb)` so
+         * the subtraction is provably positive, and clamp pi to at most
+         * sizeof(pb)-1 on truncation. (The real content is <30 bytes, so this
+         * never truncates in practice -- it removes the theoretical overflow.)
+         */
+        #define PRO_APPEND(...) do {                                        \
+            if (pi < sizeof(pb)) {                                          \
+                size_t _rem = sizeof(pb) - pi;                              \
+                int _n = snprintf(pb + pi, _rem, __VA_ARGS__);             \
+                pi += (_n > 0)                                             \
+                        ? (((size_t)_n < _rem) ? (size_t)_n : (_rem - 1))  \
+                        : 0;                                               \
+            }                                                              \
+        } while (0)
+        PRO_APPEND("(");
+        for (int c = 0; c < 4; c++) {
+            uint16_t nib = (fa.fileprot >> shift[c]) & 0xF;
+            PRO_APPEND("%s%c:", c ? "," : "", cat[c]);
+            if (!(nib & 0x01)) PRO_APPEND("R");
+            if (!(nib & 0x02)) PRO_APPEND("W");
+            if (!(nib & 0x04)) PRO_APPEND("E");
+            if (!(nib & 0x08)) PRO_APPEND("D");
+        }
+        PRO_APPEND(")");
+        #undef PRO_APPEND
+        snprintf(result, result_size, "%s", pb);
     } else {
         snprintf(result, result_size, "0");
     }

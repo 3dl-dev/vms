@@ -1,0 +1,60 @@
+vms-f97: alpha-dec-vms — derive the "..en" procedure entry label from the
+resolved (transparent-alias-decorated) name, matching .ent/.pdesc.
+
+Operator-ruled (vms-f97) minimal codegen-consistency fix for the alpha-dec-vms
+GCC 14.2.0 port. When cc1 compiles a *definition* of a recognized OpenVMS C-RTL
+name (e.g. musl's strlen/malloc/memcpy/vsnprintf), the port's transparent alias
+(vms_patch_builtins / IDENTIFIER_TRANSPARENT_ALIAS, gcc/config/vms/vms.cc)
+redirects the name to its "decc$"-prefixed variant. assemble_name() applies that
+alias when it emits ".ent decc$strlen" and ".pdesc decc$strlen..en", but
+alpha_start_function built the entry label by appending "..en" to the RAW base
+name and emitting it through ASM_OUTPUT_FUNCTION_LABEL. assemble_name() cannot
+resolve the combined string "strlen..en" to an identifier, so the label came out
+as "strlen..en" while .pdesc referenced "decc$strlen..en" — a label that does
+not exist. GAS then rejects the object (~52% of musl: all decc$-recognized RTL
+definitions).
+
+Fix: resolve fnname via assemble_name_resolve() (the exact routine assemble_name
+uses) BEFORE appending "..en", so the entry label is "decc$strlen..en" for a
+recognized C-RTL name and unchanged ("myfunc..en") for every other name (base ==
+decorated). Guarded on TARGET_ABI_OPEN_VMS; the OSF path is untouched. The
+alloca sizing is widened to the resolved name so the longer "decc$" form fits.
+
+This is an internal-consistency fix only (entry label must match .ent/.pdesc);
+it does not change the decoration behavior itself. Sanctioned by the operator
+ruling to "make the port build" (path A to the Alpha DECC$SHR).
+
+Clean-room (Rule 8): derived from public GCC source structure + observed cc1
+assembly output only; no VSI/HPE source consulted.
+
+--- a/gcc/config/alpha/alpha.cc
++++ b/gcc/config/alpha/alpha.cc
+@@ -8008,7 +8008,18 @@
+   const HOST_WIDE_INT max_frame_size = HOST_WIDE_INT_1 << 31;
+   /* Offset from base reg to register save area.  */
+   HOST_WIDE_INT reg_offset;
+-  char *entry_label = (char *) alloca (strlen (fnname) + 6);
++  /* vms-f97 (OVMX): the procedure entry label ("..en") must be derived
++     from the SAME resolved name that .ent and .pdesc use.  On the
++     OpenVMS ABI a recognized C-RTL name is redirected to its
++     "decc$"-prefixed variant via IDENTIFIER_TRANSPARENT_ALIAS
++     (config/vms/vms.cc); assemble_name () applies that alias when it
++     emits .ent/.pdesc, but appending "..en" to the raw base name
++     before output defeats the alias lookup, so the label came out as
++     `strlen..en` while .pdesc referenced `decc$strlen..en` -> GAS
++     rejects the missing label.  Resolve first, then append "..en".  */
++  const char *resolved_fnname
++    = TARGET_ABI_OPEN_VMS ? assemble_name_resolve (fnname) : fnname;
++  char *entry_label = (char *) alloca (strlen (resolved_fnname) + 6);
+   char *tramp_label = (char *) alloca (strlen (fnname) + 6);
+   int i;
+ 
+@@ -8060,7 +8071,7 @@
+ 	fprintf (file, "\tldq $27,16($27)\n");
+      }
+ 
+-  strcpy (entry_label, fnname);
++  strcpy (entry_label, resolved_fnname);
+   if (TARGET_ABI_OPEN_VMS)
+     strcat (entry_label, "..en");
+ 

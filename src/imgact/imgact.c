@@ -358,6 +358,16 @@ static void die_tlserr(const char *name)
 	vms_fatal("TLSERR", "TLS initialization failed", name);
 	sys_exit(IMGACT_EXIT_FAIL);
 }
+/* A structurally corrupt on-disk header (e.g. a section table that would run
+ * past the readable image, a wrong e_shentsize, or an impossible section
+ * count). Fail honest per INV-6 -- NEVER a silent return that would misread
+ * bytes outside the image. No filename detail: the corruption is in the header
+ * itself, independent of any section being looked up. */
+static void die_badimghdr(void)
+{
+	vms_fatal("BADIMGHDR", "malformed image header (section table)", 0);
+	sys_exit(IMGACT_EXIT_FAIL);
+}
 
 /* --------------------------------------------------------------------------
  * Loaded-object model.
@@ -746,6 +756,34 @@ static void imgsrc_close(struct imgsrc *s)
 		return;
 	}
 	imgact_acp_close(&s->f);
+}
+/*
+ * Total readable byte length of the accessed image, used to bounds-check the
+ * on-disk section table before iterating it (INV-6: never read past the
+ * image). The ACP handle records it directly (f.valid = total valid bytes).
+ * On the executive-absent POSIX defer we fstat the fd: the Linux struct stat
+ * places st_size at byte offset 48 for both x86_64 and the asm-generic layout
+ * aarch64 uses (little-endian both), so read it there. Alpha's legacy struct
+ * stat differs, so its POSIX-defer size is reported unknown (0) and the caller
+ * falls back to the exact-count read bound (imgsrc_pread short-reads at EOF).
+ * The POSIX defer is host/test-only; the runtime image read is always the ACP
+ * path, where f.valid is exact. Returns 0 when the size is unknown.
+ */
+static unsigned long imgsrc_size(struct imgsrc *s)
+{
+	if (s->posix_fd < 0)
+		return s->f.valid;
+#if defined(__x86_64__) || defined(__aarch64__)
+	unsigned char st[160];
+	if (fstat(s->posix_fd, st) != 0)
+		return 0;
+	unsigned long sz = 0;
+	for (int i = 7; i >= 0; i--)          /* st_size @ offset 48, LE */
+		sz = (sz << 8) | st[48 + i];
+	return sz;
+#else
+	return 0;
+#endif
 }
 
 /* Map a shareable image file into memory; fill base/dyn. Returns obj index. */
@@ -1267,22 +1305,113 @@ static int ovmx_find_section(struct imgsrc *src, const char *want,
 	Elf64_Ehdr eh;
 	if (imgsrc_pread(src, &eh, sizeof eh, 0) != (long)sizeof eh)
 		return 0;
-	if (eh.e_shnum == 0 || eh.e_shnum > 64 || eh.e_shstrndx >= eh.e_shnum)
+	/* No section table at all: the image simply has no sections to match
+	 * (legitimate) -- soft "not found", not an error. */
+	if (eh.e_shoff == 0)
 		return 0;
-	Elf64_Shdr sh[64];
-	unsigned long ssz = (unsigned long)eh.e_shnum * sizeof(Elf64_Shdr);
-	if (imgsrc_pread(src, sh, ssz, (long)eh.e_shoff) != (long)ssz)
-		return 0;
-	static char strtab[2048];
-	unsigned long stsz = sh[eh.e_shstrndx].sh_size;
-	if (stsz > sizeof strtab)
-		return 0;
-	if (imgsrc_pread(src, strtab, stsz, (long)sh[eh.e_shstrndx].sh_offset) != (long)stsz)
-		return 0;
-	for (int i = 0; i < eh.e_shnum; i++) {
-		if (xstrcmp(strtab + sh[i].sh_name, want) == 0) {
-			*addr = sh[i].sh_addr;
-			*size = sh[i].sh_size;
+	/* A present section table must be ELF64-shaped. A wrong entry size means
+	 * we cannot walk it without misreading -> fail honest (INV-6). */
+	if (eh.e_shentsize != sizeof(Elf64_Shdr))
+		die_badimghdr();
+
+	/*
+	 * Section header 0 carries the ELF extended-numbering escapes (gABI,
+	 * "Number of Section Headers" / "Section Header String Table Index"):
+	 * when e_shnum == 0 the real count is section[0].sh_size, and when
+	 * e_shstrndx == SHN_XINDEX the real shstrtab index is section[0].sh_link.
+	 * Read it once and resolve both. (The genuine whole-archived alpha
+	 * DECC$SHR.EXE has 2083 section headers, which fits directly in e_shnum;
+	 * the escape is handled here for full robustness.)
+	 */
+	Elf64_Shdr sh0;
+	if (imgsrc_pread(src, &sh0, sizeof sh0, (long)eh.e_shoff) != (long)sizeof sh0)
+		die_badimghdr();
+	unsigned long count = eh.e_shnum;
+	if (count == 0)
+		count = sh0.sh_size;               /* extended section count */
+	unsigned long shstrndx = eh.e_shstrndx;
+	if (shstrndx == SHN_XINDEX)
+		shstrndx = sh0.sh_link;            /* extended shstrtab index */
+
+	if (count == 0)
+		return 0;                          /* genuinely no sections */
+	/*
+	 * Bound the iteration. A directly-encoded e_shnum is < SHN_LORESERVE
+	 * (0xff00); we cap the extended count at SHN_LORESERVE too -- far above
+	 * any real image and enough to bound the loop. The old arbitrary `> 64`
+	 * cap is removed: it wrongly rejected large-but-valid images such as
+	 * DECC$SHR.EXE, whose `.vms$sv` symbol vector then went unfound. A count
+	 * past the cap, or a shstrndx outside the table, is a corrupt header.
+	 */
+	if (count > SHN_LORESERVE || shstrndx >= count)
+		die_badimghdr();
+
+	/*
+	 * The section table must lie within the readable image (INV-6: never read
+	 * past it). imgsrc_size() gives the ACP handle's valid length; on the
+	 * Alpha POSIX defer it may be unknown (0), in which case the exact-count
+	 * reads below are the bound. Overflow-safe comparisons throughout.
+	 */
+	unsigned long imgsz     = imgsrc_size(src);
+	unsigned long tbl_bytes = count * sizeof(Elf64_Shdr);
+	if (imgsz && (eh.e_shoff > imgsz || tbl_bytes > imgsz - eh.e_shoff))
+		die_badimghdr();
+
+	/* Locate the section-header string table. */
+	Elf64_Shdr shstr;
+	if (imgsrc_pread(src, &shstr, sizeof shstr,
+			 (long)(eh.e_shoff + shstrndx * sizeof(Elf64_Shdr)))
+	    != (long)sizeof shstr)
+		die_badimghdr();
+	unsigned long stoff = shstr.sh_offset, stsz = shstr.sh_size;
+	if (imgsz && (stoff > imgsz || stsz > imgsz - stoff))
+		die_badimghdr();
+
+	/*
+	 * Fast path: load the whole shstrtab once when it fits a bounded static
+	 * buffer (the common case, DECC$SHR's included). Otherwise fall back to a
+	 * bounded per-name read so an unusually large table is still handled with
+	 * no unbounded buffer.
+	 */
+	static char strtab[65536];
+	const char *stab = 0;
+	if (stsz < sizeof strtab) {                /* reserve 1 byte for a sentinel */
+		if (stsz && imgsrc_pread(src, strtab, stsz, (long)stoff) != (long)stsz)
+			die_badimghdr();
+		strtab[stsz] = 0;                  /* bound xstrcmp on a corrupt table */
+		stab = strtab;
+	}
+
+	unsigned long wlen = xstrlen(want);
+	for (unsigned long i = 0; i < count; i++) {
+		Elf64_Shdr sh;
+		if (imgsrc_pread(src, &sh, sizeof sh,
+				 (long)(eh.e_shoff + i * sizeof(Elf64_Shdr)))
+		    != (long)sizeof sh)
+			die_badimghdr();
+		if (sh.sh_name >= stsz)
+			continue;                  /* name index outside strtab */
+		int match;
+		if (stab) {
+			match = (xstrcmp(stab + sh.sh_name, want) == 0);
+		} else {
+			/* Bounded on-demand read of just this one name. */
+			char nm[64];
+			unsigned long avail = stsz - sh.sh_name;
+			unsigned long rn = wlen + 1 < avail ? wlen + 1 : avail;
+			if (rn > sizeof nm)
+				rn = sizeof nm;
+			if (imgsrc_pread(src, nm, rn, (long)(stoff + sh.sh_name))
+			    != (long)rn)
+				die_badimghdr();
+			unsigned long L = 0;
+			while (L < rn && nm[L])
+				L++;
+			match = (L == wlen && L < rn && xstrcmp(nm, want) == 0);
+		}
+		if (match) {
+			*addr = sh.sh_addr;
+			*size = sh.sh_size;
 			return 1;
 		}
 	}

@@ -173,7 +173,7 @@ echo "verdict inputs:"
 echo "  A_VAXCLMEMBER=$A_VAXCLMEMBER  B_VAXCLMEMBER=$B_VAXCLMEMBER   (H2 join precondition)"
 echo "  A_SENT_ENQ=$A_SENT_ENQ   (node A issued the cross-node \$ENQ)"
 echo "  B_RECEIVED_ENQ=$B_RECEIVED_ENQ   (node B received it over SCS + dispatched to /dev/vms)"
-echo "  B_DISPATCH_STATUS=${B_DISPATCH_STATUS:-<none>}   (want ${STATUS_UNSUPPORTED}=2296, NOT ${STATUS_NOSUCHDEV}=2680)"
+echo "  B_DISPATCH_STATUS=${B_DISPATCH_STATUS:-<none>}   (want ${STATUS_NORMAL}=1 SS\$_NORMAL/GRANTED; NOT ${STATUS_UNSUPPORTED}=2296, NOT ${STATUS_NOSUCHDEV}=2680)"
 echo "  B_SENT_GRANT=$B_SENT_GRANT  A_ROUNDTRIP=$A_ROUNDTRIP  A_ROUNDTRIP_STATUS=${A_ROUNDTRIP_STATUS:-<none>}"
 echo ""
 

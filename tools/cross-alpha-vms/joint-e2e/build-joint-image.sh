@@ -58,6 +58,23 @@ esac
 test -f "$HERE/$JOINT_MAIN" || { echo "FAIL: JOINT_MAIN source '$JOINT_MAIN' not found in $HERE" >&2; exit 1; }
 mkdir -p "$OUT"
 
+# vms-430: the PT_INTERP LINK.EXE bakes into every joint_e2e.exe this script
+# produces. link.c's compiled-in DEFAULT is the native-toolchain path
+# /vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE, which is NOT resolvable on the
+# ACP-flipped bootable runtime (the /vms passthrough is retired, INV-6): DCL RUN
+# forks and execv()s the staged image, the kernel opens PT_INTERP, and /vms is
+# ENOENT -> the run fails. Every image the joint-e2e proof produces is meant to
+# be activated under that runtime (BOOT A stages JOINT_E2E.EXE onto the ODS-2
+# volume; the qemu-user LINK gate only readelf-checks EM_ALPHA/ET_DYN and never
+# executes it, so it is interp-agnostic), so DEFAULT the interp here to the
+# runtime stage dir where PID 1 stages IMGACT.EXE (ovmx_init.c) -- the SAME value
+# stock bootable images bake via src/vmslink/CMakeLists.txt:40. A caller that
+# needs a different interpreter (a bespoke initramfs proof staging IMGACT.EXE
+# elsewhere) still overrides IMGACT_INTERP_PATH in the environment. The stale
+# link.c DEFAULT itself is tracked separately as vms-06a (a broader design call).
+IMGACT_INTERP_PATH="${IMGACT_INTERP_PATH:-/run/ovmx-boot/IMGACT.EXE}"
+export IMGACT_INTERP_PATH
+
 # vms-e7c5: if the toolchain image is already present (a CI gate PULLED the
 # source-hash-keyed prebuilt image from ghcr, or a prior run built it), reuse
 # it — do NOT rebuild, which would re-fetch gcc from ftp.gnu.org and reintroduce
@@ -101,15 +118,14 @@ LIBGCC="$PREFIX/lib/libgcc.a"
 test -f "$LIBC" || { echo "FAIL: musl-alpha libc.a not built" >&2; exit 1; }
 
 # ---- 2. LINK.EXE (host tool) ----
-# vms-157: IMGACT_INTERP_PATH (optional, from the environment) overrides the
-# PT_INTERP LINK.EXE bakes into the joint_e2e image. The default is the native-
-# toolchain path /vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE, which is NOT a POSIX path
-# on the ACP-flipped bootable runtime (the /vms passthrough is retired) -- so the
-# kernel cannot open the interpreter and execve fails. The boot proof
-# (tools/cross-alpha/build-alpha-bootimage.sh) sets IMGACT_INTERP_PATH to the
-# bootable stage dir /run/ovmx-boot/IMGACT.EXE, where PID 1 stages IMGACT.EXE.
+# vms-157/vms-430: IMGACT_INTERP_PATH is the PT_INTERP LINK.EXE bakes into the
+# joint_e2e image. It is DEFAULTED to the ACP-flipped runtime stage dir
+# /run/ovmx-boot/IMGACT.EXE just above (see the vms-430 note next to JOINT_MAIN)
+# so the image is activatable under the bootable runtime out of the box; a caller
+# can still override it in the environment for a different interpreter layout.
+# (The link.c compiled-in default is itself the retired /vms path -- vms-06a.)
 # Passed as a BARE token (not a quoted string), per link.c: link.c stringifies it.
-echo "-- building LINK.EXE (IMGACT_INTERP_PATH=${IMGACT_INTERP_PATH:-<default /vms>}) --"
+echo "-- building LINK.EXE (IMGACT_INTERP_PATH=$IMGACT_INTERP_PATH) --"
 gcc -std=gnu11 -O2 ${IMGACT_INTERP_PATH:+-DIMGACT_INTERP_PATH=$IMGACT_INTERP_PATH} \
     -I/src/src/vmslink/include -o "$WORK/LINK.EXE" /src/src/vmslink/link.c
 

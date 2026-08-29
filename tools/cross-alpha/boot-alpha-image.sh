@@ -112,13 +112,17 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     # joint_e2e.exe, prebuilt by tools/cross-alpha-vms/joint-e2e/build-joint-image.sh
     # (real port crt0 + joint_main, linked strict/zero-deferred against the genuine
     # alpha DECC$SHR). It is NOT rebuilt here -- it is the finished VMS-native image.
-    #   readelf: EM_ALPHA ET_DYN, PT_INTERP=/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE
+    #   readelf: EM_ALPHA ET_DYN, PT_INTERP=/run/ovmx-boot/IMGACT.EXE (vms-430:
+    #     build-joint-image.sh now bakes the ACP-flipped runtime interp, matching
+    #     the ODS-2/BOOT-A staging; the retired /vms interp is dead).
     #   .vms$imp producers: DECC$SHR.EXE (decc$main/decc$malloc/decc$tprintf) ->
     #     LIBOTS_SHR.EXE (OTS$ int-divide/block-move), resolved by IMGACT from
     #     SYS$SHARE == IMGACT_FALLBACK_SYSLIB == /vms/SYS0/SYSCOMMON/SYSLIB.
-    # So stage: IMGACT.EXE at its baked interp path (SYSEXE); joint_e2e.exe as the
-    # image the init execs (/imgact-proof/test_prog_alpha); BOTH producers in SYSLIB
-    # (the port musl needs LIBOTS_SHR.EXE AND DECC$SHR.EXE staged in SYS$SHARE).
+    # So stage: IMGACT.EXE at its baked interp path (/run/ovmx-boot, where PID 1
+    # stages it on the real runtime); joint_e2e.exe as the image the init execs
+    # (/imgact-proof/test_prog_alpha); BOTH producers in SYSLIB (the port musl
+    # needs LIBOTS_SHR.EXE AND DECC$SHR.EXE staged in SYS$SHARE, the IMGACT
+    # compiled-in fallback path /vms/SYS0/SYSCOMMON/SYSLIB).
     $CC -static -O2 -Wall /tools/alpha-imgact-init.c -o /work/imgact-init
     alpha-linux-gnu-strip /work/imgact-init
 
@@ -138,9 +142,11 @@ dir /vms/SYS0 755 0 0
 dir /vms/SYS0/SYSCOMMON 755 0 0
 dir /vms/SYS0/SYSCOMMON/SYSEXE 755 0 0
 dir /vms/SYS0/SYSCOMMON/SYSLIB 755 0 0
+dir /run 755 0 0
+dir /run/ovmx-boot 755 0 0
 file /init /work/imgact-init 755 0 0
 file /vms.ko /vmsko/vms.ko 644 0 0
-file /vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE $PROOF/IMGACT.EXE 755 0 0
+file /run/ovmx-boot/IMGACT.EXE $PROOF/IMGACT.EXE 755 0 0
 file /imgact-proof/test_prog_alpha $JOINT/joint_e2e.exe 755 0 0
 file /vms/SYS0/SYSCOMMON/SYSLIB/DECC\$SHR.EXE $JOINT/DECC\$SHR.EXE 644 0 0
 file /vms/SYS0/SYSCOMMON/SYSLIB/LIBOTS_SHR.EXE $JOINT/LIBOTS_SHR.EXE 644 0 0

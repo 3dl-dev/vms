@@ -321,6 +321,26 @@ add_test(NAME test_imgact_publish COMMAND test_imgact_publish)
 set_tests_properties(test_imgact_bind test_imgact_publish PROPERTIES
     LABELS "userspace-imgact")
 
+# test_imgact_chunk (vms-1162) -- imgact_acp_pread() chunks a >1 MiB read into
+# <=1 MiB IO$_READVBLK QIOs so a producer/image with a single PT_LOAD larger
+# than the executive's per-QIO cap (ACP_RW_MAX_XFER, vmsfs_acp.c:1878) still
+# activates instead of dying %IMGACT-F-IMGNOTFND. Like test_imgact_bind above,
+# it is USERSPACE (no /dev/vms) and passes on ANY host -- so it too gets a real
+# ctest add_test(). It links the REAL src/imgact/imgact_acp.c (the code
+# IMGACT.EXE runs) and provides its OWN in-memory faithful ACP through the three
+# host primitives, exactly the seam test_syssvc_imgact_acp uses -- so it needs
+# src/imgact + src/kernel (imgact_acp.h, vms_ioctl.h + vms_acp.h) on its path.
+# Arch-independent (pure C over a buffer): runs identically on x86_64/Alpha/VAX.
+qemu_syssvc_add_test(test_imgact_chunk test_imgact_chunk.c)
+target_sources(test_imgact_chunk PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/imgact/imgact_acp.c)
+target_include_directories(test_imgact_chunk PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/imgact
+    ${CMAKE_SOURCE_DIR}/src/kernel)
+add_test(NAME test_imgact_chunk COMMAND test_imgact_chunk)
+set_tests_properties(test_imgact_chunk PROPERTIES
+    LABELS "userspace-imgact")
+
 # ---------------------------------------------------------------------------
 # TESTIMG.EXE -- the in-process-eligible image test_syssvc_imgact_inproc.c
 # activates in DCL's own process (vms-68f increment iv). A freestanding,

@@ -291,11 +291,24 @@ uint32_t imgact_acp_open(struct imgact_acp_file *f, const char *dev,
 	}
 }
 
+/*
+ * The executive caps a single IO$_READVBLK at ACP_RW_MAX_XFER (1 MiB) and
+ * rejects a longer length with SS$_BADPARAM (src/kernel-core/vmsfs_acp.c:1878
+ * and its check at ~:1972). That per-QIO bound is legitimate and stays; a
+ * caller reading more than 1 MiB in one logical read must chunk. Mirror the
+ * constant here (as rms_io.c does with RMS_IO_MAX_XFER) rather than reach into
+ * kernel-core, which is not on imgact's include path.
+ */
+#define IMGACT_ACP_RW_MAX_XFER (1u << 20)  /* mirror ACP_RW_MAX_XFER (vmsfs_acp.c:1878) */
+
 long imgact_acp_pread(struct imgact_acp_file *f, void *buf,
 		      unsigned long n, long off)
 {
-	struct vms_acp_rw_args r;
 	unsigned long avail;
+	unsigned long remaining;
+	unsigned long cur_off;
+	unsigned long xferred = 0;
+	uint8_t *dst = (uint8_t *)buf;
 
 	if (!f || !f->accessed || off < 0)
 		return -1;
@@ -308,20 +321,46 @@ long imgact_acp_pread(struct imgact_acp_file *f, void *buf,
 	if (n == 0)
 		return 0;
 
-	acp_memset(&r, 0, sizeof(r));
-	r.chan   = f->chan;
-	r.vbn    = (uint32_t)((unsigned long)off / 512u) + 1u;
-	r.offset = (uint32_t)((unsigned long)off % 512u);
-	r.length = (uint32_t)n;
-	r.buffer = (uint64_t)(uintptr_t)buf;
+	/*
+	 * Chunk the transfer into <= 1 MiB IO$_READVBLKs. A single PT_LOAD of a
+	 * producer/image (DECC$SHR is already ~1 MiB and grows with the CRTL)
+	 * exceeds the executive's per-QIO bound in one call; issuing it whole
+	 * drew SS$_BADPARAM -> IMGACT open failed with %IMGACT-F-IMGNOTFND
+	 * (vms-1162). vbn/offset are re-derived from the running byte cursor each
+	 * pass, so block-boundary crossing is handled exactly as the single call
+	 * did (the executive readvb itself spans blocks within a chunk).
+	 */
+	remaining = n;
+	cur_off   = (unsigned long)off;
+	while (remaining > 0) {
+		struct vms_acp_rw_args r;
+		uint32_t chunk = remaining > IMGACT_ACP_RW_MAX_XFER
+				     ? IMGACT_ACP_RW_MAX_XFER
+				     : (uint32_t)remaining;
 
-	if (imgact_acp_dev_ioctl(f->dev_fd, VMS_IOCTL_ACP_READVBLK, &r) < 0)
-		return -1;
-	if (r.status == SS$_ENDOFFILE)
-		return 0;
-	if (!$VMS_STATUS_SUCCESS(r.status))
-		return -1;
-	return (long)r.xferred;
+		acp_memset(&r, 0, sizeof(r));
+		r.chan   = f->chan;
+		r.vbn    = (uint32_t)(cur_off / 512u) + 1u;
+		r.offset = (uint32_t)(cur_off % 512u);
+		r.length = chunk;
+		r.buffer = (uint64_t)(uintptr_t)dst;
+
+		if (imgact_acp_dev_ioctl(f->dev_fd, VMS_IOCTL_ACP_READVBLK, &r) < 0)
+			return -1;
+		if (r.status == SS$_ENDOFFILE)
+			break;                /* clamped read shouldn't reach here, but stop */
+		if (!$VMS_STATUS_SUCCESS(r.status))
+			return -1;
+
+		xferred   += r.xferred;
+		dst       += r.xferred;
+		cur_off   += r.xferred;
+		remaining -= r.xferred;
+		if (r.xferred < chunk)
+			break;                /* short read -> EOF; return accumulated */
+	}
+
+	return (long)xferred;
 }
 
 void imgact_acp_close(struct imgact_acp_file *f)

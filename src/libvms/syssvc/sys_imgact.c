@@ -220,12 +220,66 @@ static volatile int          g_exit_code;
  * on a separate P0-window stack (auxv ABI) or the process stack ((a0,a1) ABI);
  * either way the fault here is a data write, so the handler's own frame is fine.
  */
+#if defined(__alpha__)
+/*
+ * DIAGNOSTIC (vms-430, revert-before-fix): this SYS$IMGACT SIGSEGV handler is
+ * installed LAST (after decc$main's disc handler in ovmx_decc_crtl.c:539) and
+ * therefore is the handler that actually catches the joint-e2e CRTL/RMS memset
+ * signal-11 -- the disc handler never sees it. So capture the faulting PC HERE,
+ * before the recovery longjmp abandons the image (%DCL-F-ABORT), so the rail
+ * finally sees WHERE the memset stores. The image runs inside LIBVMS$SHR.EXE's
+ * activation frame, so this compiles into LIBVMS$SHR.EXE (anti-trap target).
+ *
+ * Alpha trap PC is uc_mcontext.sc_pc (asm-alpha/sigcontext.h; a `long`), the
+ * same field the disc handler cites; visible because sys_imgact.c defines
+ * _GNU_SOURCE. Emitter is async-signal-safe: hand-rolled hex + write(2) to fd 2,
+ * matching the eputs/ovmx_disc_apphex style. __alpha__-only so other arches are
+ * byte-unchanged (they keep the plain sa_handler form below).
+ */
+static char *imgsegv_apphex(char *p, unsigned long v, int ndig)
+{
+    static const char hx[] = "0123456789abcdef";
+    for (int i = (ndig - 1) * 4; i >= 0; i -= 4)
+        *p++ = hx[(v >> i) & 0xf];
+    return p;
+}
+static char *imgsegv_appstr(char *p, const char *s) { while (*s) *p++ = *s++; return p; }
+static char *imgsegv_appdec(char *p, unsigned long v)
+{
+    char t[24]; int n = 0;
+    if (v == 0) { *p++ = '0'; return p; }
+    while (v) { t[n++] = (char)('0' + (v % 10)); v /= 10; }
+    while (n) *p++ = t[--n];
+    return p;
+}
+static void imgact_segv(int sig, siginfo_t *info, void *uctx)
+{
+    unsigned long addr = info ? (unsigned long)info->si_addr : 0UL;
+    unsigned long pc   = uctx ? (unsigned long)((ucontext_t *)uctx)->uc_mcontext.sc_pc : 0UL;
+    unsigned int  word = (pc > 4096) ? *(volatile unsigned int *)pc : 0u;
+    char b[160], *p = b;
+    p = imgsegv_appstr(p, "IMGSEGV-DISC: sig=");
+    p = imgsegv_appdec(p, (unsigned long)sig);
+    p = imgsegv_appstr(p, " si_addr=0x");
+    p = imgsegv_apphex(p, addr, 16);
+    p = imgsegv_appstr(p, " pc=0x");
+    p = imgsegv_apphex(p, pc, 16);
+    p = imgsegv_appstr(p, " word_at_pc=0x");
+    p = imgsegv_apphex(p, (unsigned long)word, 8);
+    *p++ = '\n';
+    (void)write(2, b, (unsigned long)(p - b));
+
+    g_faulted = 1;
+    longjmp(g_img_jb, IMGACT_JB_FAULT);
+}
+#else
 static void imgact_segv(int sig)
 {
     (void)sig;
     g_faulted = 1;
     longjmp(g_img_jb, IMGACT_JB_FAULT);
 }
+#endif
 
 /*
  * SYS$EXIT for an in-process image (imgact_activate.h). See that header for the
@@ -1118,9 +1172,17 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
         }
 
         memset(&sa, 0, sizeof sa);
-        sa.sa_handler = imgact_segv;
         sigemptyset(&sa.sa_mask);
+#if defined(__alpha__)
+        /* DIAGNOSTIC (vms-430): SA_SIGINFO 3-arg form so imgact_segv can read the
+         * trap PC (uc_mcontext.sc_pc) before the recovery longjmp. SA_SIGINFO on
+         * Alpha/OSF is 0x40 (the macro resolves correctly). */
+        sa.sa_sigaction = imgact_segv;
+        sa.sa_flags = SA_SIGINFO;
+#else
+        sa.sa_handler = imgact_segv;
         sa.sa_flags = 0;
+#endif
         sigaction(SIGSEGV, &sa, &old);
 
         g_faulted = 0;

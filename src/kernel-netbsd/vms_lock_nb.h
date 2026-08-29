@@ -179,6 +179,10 @@ struct vms_resmaster_args {
 #define VMS_DLM_OP_GRANT    2u   /* status response       <- master  */
 #define VMS_DLM_OP_DEQ      3u   /* dequeue request       -> master  */
 #define VMS_DLM_OP_BLKAST   4u   /* blocking-AST notify   <- master  */
+#define VMS_DLM_OP_REBUILD  5u   /* remaster lock-rebuild -> new master (H10b,
+                                  * rd vms-dca9) -- mirror of vms_ioctl.h; the
+                                  * shared vms_lock.c dispatch references it on
+                                  * BOTH backends, so it MUST exist here too. */
 
 struct vms_dlm_xnode_args {
 	uint32_t op;                /* in: VMS_DLM_OP_* */

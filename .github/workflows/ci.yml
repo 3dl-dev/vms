@@ -7824,6 +7824,83 @@ jobs:
         run: tools/cross-alpha/run-boot-alpha.sh acceptance
 
   # -----------------------------------------------------------------------
+  # alpha-module-gp-activation (vms-8208). The API-compat gate of the vms-5f5
+  # per-image module-GP program (#921/vms-095) -- the design-change cascade's
+  # API-compat leg (conductor-gated; do NOT auto-merge). A REAL regression test,
+  # not a does-it-link check: it proves the merged $15 module-GP mechanism does
+  # not break the single-proc __main / minimal image that activates today.
+  #
+  #   1. Step 0 runs the C3 objdump proof (run_module_gp_proof.sh) so the joint
+  #      image is CERTIFIED built by the merged $15 toolchain (a stale pre-#921
+  #      toolchain reds here, not silently below).
+  #   2. Builds the single-proc N=3 image (joint_main.c, return 3) + the
+  #      SS$_NORMAL control (joint_main_ok.c, return 0) with that toolchain,
+  #      stages them onto a MOUNTED ODS-2 volume, boots qemu-system-alpha + real
+  #      /dev/vms, and asserts the EXECUTIVE-recorded $STATUS = %X0035A019 (N=3 =
+  #      C$_EXIT1+(3-1)*8), the control anchors SS$_NORMAL, and no
+  #      activation-failure %-error appears. The K=0 no-op establish + the
+  #      always-present $15 save/restore must not regress activation.
+  #
+  # REAL executive, not qemu-user (INV-6/Rule 9): a qemu-user green has hidden a
+  # real-runtime activation fault before. HEAVY-EMULATOR TIER
+  # (schedule || workflow_dispatch), like alpha-boot-login: a full Alpha
+  # cross-build + a joint-image build + a pure-TCG qemu-system-alpha boot is
+  # ~60-100 min, off the fast PR wall; the conductor dispatches it on the frozen
+  # SHA as the cascade's API-compat leg. run-module-gp-activation-alpha.sh runs
+  # its own `selftest' (assert_activation can-fail proof) before the boot.
+  # -----------------------------------------------------------------------
+  alpha-module-gp-activation:
+    name: "OVMX/Alpha module-GP API-compat — single-proc N=3 image still activates on the real executive (vms-8208)"
+    needs: changes
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      # The kernel/userland/qemu-system-alpha image (build-alpha-bootimage.sh
+      # also rebuilds it, but pre-loading it via the gha layer cache makes that a
+      # cache hit).
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      # The MERGED alpha-dec-vms $15 toolchain that builds the joint image. Loaded
+      # so build-joint-image.sh + run_module_gp_proof.sh reuse it (vms-e7c5) --
+      # no ftp.gnu.org fetch, no silent pre-#921 stale image (step 0 would red).
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: "Module-GP API-compat gate — build the N=3 single-proc image with the merged $15 toolchain, activate it on qemu-system-alpha + real /dev/vms over the ODS-2 ACP, assert $STATUS=%X0035A019 + SS$_NORMAL control + no activation errors"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh gate
+
+  # -----------------------------------------------------------------------
   # alpha-arith-hparith (rd vms-db3, epic vms-8954). The STANDING green-by-SHA
   # gate for the Alpha fault->VMS-condition bridge: a trap-enabling FP
   # divide-by-zero on OVMX/Linux-Alpha must raise a faithful SS$_HPARITH (1284)

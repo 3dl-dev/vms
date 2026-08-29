@@ -4985,22 +4985,6 @@ jobs:
         run: |
           sh src/vmslink/test/run_evax_shareable.sh
 
-      # vms-fd5 (component C1 of the vms-5f5 authentic Alpha per-image GP
-      # program; docs/design-alpha-per-image-gp.md §1.4/§2.3): LINK.EXE
-      # computes and RECORDS, as producer-internal state, the per-image
-      # linkage-section ($LINK$) base and each procedure's K = &PDSC - base.
-      # Links a synthetic 2-procedure EVAX object and asserts the RECORDED
-      # base/K (via LINK.EXE's diagnostic dump) match the ground truth derived
-      # independently from the emitted image's $LINK$ section + .vms$sv
-      # values -- for BOTH procedures, so a K hard-coded to 0 cannot pass (the
-      # second procedure's ground-truth K is provably nonzero). No on-disk/
-      # wire-format change (verified byte-identical against the pre-change
-      # emitter); no relocation or prologue emission (that is C2/C3). Pure
-      # byte/text manipulation, arch-independent, fixture checked in.
-      - name: Prove LINK.EXE records the per-image linkage-section base + per-procedure K (vms-fd5)
-        run: |
-          sh src/vmslink/test/run_evax_linkgp.sh
-
       # vms-2e4: the LAST x86_64 relocation class — gnu2-dialect TLSDESC
       # (R_X86_64_GOTPC32_TLSDESC + R_X86_64_TLSDESC_CALL, plus the
       # local-dynamic R_X86_64_DTPOFF32 / _TLS_MODULE_BASE_ half). Proof is

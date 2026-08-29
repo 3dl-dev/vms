@@ -166,12 +166,19 @@ long vms_ioctl_bg_create(struct vms_proc *proc, unsigned long arg)
 }
 
 /*
- * IO$_SETMODE -- create the host socket on the channel (AF_INET/SOCK_STREAM).
- * Idempotent: a second SETMODE on a channel that already has a socket is a
- * success, not a leak (only the first create wins; a raced second socket is
- * released).
+ * IO$_SETMODE create, shared by the TCP-stream (vms_ioctl_bg_setmode) and the
+ * raw-ICMP (vms_ioctl_bg_setmode_icmp, vms-80b) entry points. `want_icmp`
+ * chooses which host socket kind the seam mints; everything else -- the
+ * idempotency, the race-drop of a spare, the channel install -- is identical, so
+ * the two socket kinds differ in exactly one line (the seam call) and share this
+ * whole body. Idempotent: a second SETMODE on a channel that already has a
+ * socket is a success, not a leak (only the first create wins; a raced second
+ * socket is released). NOTE: a channel's socket KIND is fixed at first create,
+ * so a SETMODE and a SETMODE_ICMP on the same channel both no-op after the first
+ * (a program $ASSIGNs a fresh channel per socket, exactly as on VMS).
  */
-long vms_ioctl_bg_setmode(struct vms_proc *proc, unsigned long arg)
+static long vms_bg_setmode_common(struct vms_proc *proc, unsigned long arg,
+                                  int want_icmp)
 {
     struct vms_bg_chanonly_args args;
     struct vms_bg_chan *ch;
@@ -192,7 +199,7 @@ long vms_ioctl_bg_setmode(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    rc = exec_socket_create(&sock);
+    rc = want_icmp ? exec_socket_create_icmp(&sock) : exec_socket_create(&sock);
     if (rc) {
         args.status = SS__ABORT;
         goto out;
@@ -214,6 +221,27 @@ out:
     if (copy_to_user((void __user *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
+}
+
+/*
+ * IO$_SETMODE -- create the host socket on the channel (AF_INET/SOCK_STREAM).
+ */
+long vms_ioctl_bg_setmode(struct vms_proc *proc, unsigned long arg)
+{
+    return vms_bg_setmode_common(proc, arg, 0 /* TCP stream */);
+}
+
+/*
+ * IO$_SETMODE (raw-ICMP subfunction) -- create a raw ICMP host socket on the
+ * channel, for PING (vms-80b). The socket is then connected to the target and
+ * driven by the ordinary connect/send/recv ioctls: the caller builds the ICMP
+ * echo-request datagram (and its checksum) itself, so no transport is
+ * reimplemented -- the host kernel's IP/ICMP path carries it, exactly the BGn:
+ * design posture for TCP.
+ */
+long vms_ioctl_bg_setmode_icmp(struct vms_proc *proc, unsigned long arg)
+{
+    return vms_bg_setmode_common(proc, arg, 1 /* raw ICMP */);
 }
 
 /*

@@ -787,6 +787,10 @@ uint32_t vms_kif_bg_create(uint32_t *exec_chan, uint32_t *unit,
                            char *devnam, uint32_t devnam_sz);
 /* IO$_SETMODE -- create the channel's host socket (AF_INET/SOCK_STREAM). */
 uint32_t vms_kif_bg_setmode(uint32_t exec_chan);
+/* IO$_SETMODE (raw-ICMP subfunction) -- create the channel's host socket as a
+ * raw ICMP socket for PING (vms-80b), then drive it with the ordinary
+ * connect/send/recv. Fails SS$_NOSUCHDEV with no executive. */
+uint32_t vms_kif_bg_setmode_icmp(uint32_t exec_chan);
 /* IO$_ACCESS -- connect to a peer (sockaddr_in fields, network byte order). */
 uint32_t vms_kif_bg_connect(uint32_t exec_chan, uint16_t family,
                             uint16_t port, uint32_t addr);

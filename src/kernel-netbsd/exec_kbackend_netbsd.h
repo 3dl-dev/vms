@@ -760,6 +760,7 @@ void  exec_arena_free(void *arena);
  * dependency -- they are the type-check contract only. */
 typedef struct exec_socket_holder *exec_socket_t;
 int  exec_socket_create(exec_socket_t *out);
+int  exec_socket_create_icmp(exec_socket_t *out);   /* raw ICMP for PING (vms-80b) */
 void exec_socket_get(exec_socket_t s);
 void exec_socket_release(exec_socket_t s);
 int  exec_socket_connect(exec_socket_t s, uint16_t family, uint16_t port_be, uint32_t addr_be);

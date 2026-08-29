@@ -321,8 +321,12 @@ static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
         case IO$_SETCHAR:
             /* Overloaded (vms-698): P1 != NULL -> bind (P1 = sockaddr; the
              * effective local address, incl. an ephemeral port, is written back);
-             * else P3 != 0 -> listen (P3 = backlog); else -> create the socket
-             * (the client path, AF_INET/SOCK_STREAM). */
+             * else P3 != 0 -> listen (P3 = backlog); else -> create the socket.
+             * The create path is further selected by P2 (the socket-kind
+             * selector, IO$K_SOCK_*, iodef.h, vms-80b): IO$K_SOCK_ICMP creates a
+             * raw ICMP socket for PING, anything else (0 = IO$K_SOCK_STREAM, what
+             * every existing caller passes) the default AF_INET/SOCK_STREAM TCP
+             * client socket. */
             if (p1) {
                 struct bg_sockaddr_in *sa = (struct bg_sockaddr_in *)p1;
                 uint16_t eport = 0;
@@ -332,6 +336,8 @@ static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
                 if (st & 1) { sa->port = eport; sa->addr = eaddr; }
             } else if (p3 != 0) {
                 st = vms_kif_bg_listen(exec_chan, (int)p3);
+            } else if (p2 == IO$K_SOCK_ICMP) {
+                st = vms_kif_bg_setmode_icmp(exec_chan);
             } else {
                 st = vms_kif_bg_setmode(exec_chan);
             }

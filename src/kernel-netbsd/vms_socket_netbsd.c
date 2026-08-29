@@ -72,6 +72,26 @@ exec_socket_create(exec_socket_t *out)
 	return 0;
 }
 
+/* Raw ICMP socket for PING (vms-80b): the SOCK_RAW/IPPROTO_ICMP twin of
+ * exec_socket_create. Contract-only until a runnable NetBSD BGn: (vms-024). */
+int
+exec_socket_create_icmp(exec_socket_t *out)
+{
+	struct exec_socket_holder *h;
+	struct socket *so;
+	int rc;
+
+	*out = NULL;
+	rc = socreate(AF_INET, &so, SOCK_RAW, IPPROTO_ICMP, curlwp, NULL);
+	if (rc)
+		return rc;
+	h = kmem_alloc(sizeof(*h), KM_SLEEP);
+	h->so = so;
+	h->refcnt = 1;                  /* the channel's reference */
+	*out = h;
+	return 0;
+}
+
 void
 exec_socket_get(exec_socket_t s)
 {

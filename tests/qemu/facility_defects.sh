@@ -524,6 +524,7 @@ sysuaf-uic-radix-decimal
 sysuaf-uic-writeback-decimal
 bg-recv-length-zeroed
 tcpip-ftp-get-length-dropped
+tcpip-ping-payload-dropped
 bgsock-recv-length-zeroed
 bgsock-poll-always-ready
 bgsock-getname-addr-zeroed
@@ -5829,6 +5830,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    tcpip-ping-payload-dropped)
+        case "$_f" in
+        facility)     echo "TCP/IP Services PING -- the ICMP echo round-trip of the shared PING engine (tcpip_ping_echo, src/vmstcpip/services/tcpip_ping.h, vms-80b), the header the DCL PING verb ships and test_syssvc_tcpip_ping proves. PING drives a RAW ICMP socket over the executive-resident INET pseudo-device BGn: (vms-527): \$ASSIGN TCPIP\$DEVICE:, IO\$_SETMODE with the P2 IO\$K_SOCK_ICMP selector (a raw AF_INET/SOCK_RAW/IPPROTO_ICMP host socket in vms.ko), then IO\$_ACCESS/WRITEVBLK/READVBLK -- no userspace socket stack, and the host kernel's own IP/ICMP path generates the reply. With no executive \$ASSIGN TCPIP\$DEVICE: fails SS\$_NOSUCHDEV honestly.";;
+        targets)      echo "vmstcpip/services/tcpip_ping.h";;
+        suites_red)   echo "test_syssvc_tcpip_ping";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tcpip_ping_echo() copies the caller's payload into the ICMP echo request with 'memcpy(pdu + TCPIP_ICMP_HDR_LEN, payload, payload_len);'. The mutation neutralises that copy to 'memset(pdu + TCPIP_ICMP_HDR_LEN, 0, payload_len);', so the request (and thus the echoed reply) carries ZEROED data while the ICMP id/seq/checksum are still correct -- so a matching echo REPLY still arrives with the right length (the round-trip assertion stays green) and only the byte-exact assertion reddens (the reply data is zeros, not the sent bytes). One statement neutralised.";;
+        require_fail) cat <<'EOF'
+PING receives the ICMP echo payload BYTE-EXACT from the executive raw socket
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     tcpip-config-hostaddr-not-defined)
         case "$_f" in
         facility)     echo "TCP/IP Services CONFIG/MANAGEMENT plane -- the config round-trip of tcpip_cfg_configure() (src/vmstcpip/mgmt/tcpip_config.h, vms-67f), the engine TCPIP\$CONFIG.COM and the DCL \`TCPIP SET/SHOW\` verbs drive and test_syssvc_tcpip_config proves. Configuring OVMX IP THE VMS WAY records the local host name/domain/address in the VMS-faithful TCPIP\$* SYSTEM logical names, which are EXECUTIVE-RESIDENT in LNM\$SYSTEM (shared cross-process over /dev/vms, vms-d37) -- not a per-process fake. With no executive the define fails SS\$_NOSUCHDEV honestly.";;
@@ -7038,6 +7056,16 @@ apply_edit() {
         # range anchor is needed; after substitution no 'total += take;' is left,
         # making a second apply the no-op the selftest requires.
         sed -i 's|total += take;          /\* NEGCTL tcpip-ftp-get-length-dropped \*/|total += 0; /* NEGCTL tcpip-ftp-get-length-dropped */|' "$_file";;
+
+    tcpip-ping-payload-dropped)
+        # Neutralise the payload copy in tcpip_ping_echo(): the caller's data is
+        # replaced by zeros in the ICMP echo request, so the reply echoes zeros.
+        # Anchored on its own NEGCTL comment so the text is unique; after
+        # substitution the original memcpy with that comment is gone, making a
+        # second apply the no-op the selftest requires. The id/seq/checksum stay
+        # correct, so a matching reply still arrives and only the byte-exact
+        # assertion reddens.
+        sed -i 's|memcpy(pdu + TCPIP_ICMP_HDR_LEN, payload, payload_len); /\* NEGCTL tcpip-ping-payload-dropped \*/|memset(pdu + TCPIP_ICMP_HDR_LEN, 0, payload_len); /* NEGCTL tcpip-ping-payload-dropped */|' "$_file";;
 
     tcpip-config-hostaddr-not-defined)
         # Drop the TCPIP$INET_HOSTADDR system-logical define in

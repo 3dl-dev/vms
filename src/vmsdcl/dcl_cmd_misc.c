@@ -62,6 +62,11 @@
  * new -I is needed and no new compiled object joins DCL.EXE's native link. */
 #include "../vmstcpip/services/tcpip_client.h"
 
+/* PING (ICMP echo) engine (vms-80b) -- the SAME header the QEMU proof
+ * (tests/qemu/test_syssvc_tcpip_ping.c) drives against a real /dev/vms, so the
+ * shipped PING verb and the proven code are identical. */
+#include "../vmstcpip/services/tcpip_ping.h"
+
 /* TCP/IP Services CONFIG plane (vms-67f) -- the SAME single-header engine the
  * QEMU proof (tests/qemu/test_syssvc_tcpip_config.c) drives against a real
  * /dev/vms. It records the VMS-faithful TCPIP$* SYSTEM logical names in the
@@ -3202,4 +3207,71 @@ int cmd_ftp(struct dcl_command *cmd)
         printf("%%FTP-S-STOR, %u bytes stored to %s\n", (unsigned)n, remote);
         return SS$_NORMAL;
     }
+}
+
+/*
+ * PING (ICMP echo) over TCP/IP Services BGn: (vms-80b). Drives the shared
+ * tcpip_ping_echo() engine -- $ASSIGN TCPIP$DEVICE: + IO$_SETMODE(raw ICMP) +
+ * $QIO -- the exact code path the QEMU proof exercises byte-exact against a real
+ * /dev/vms. Host must be a dotted-quad IPv4 literal (BIND resolver pending, like
+ * TELNET/FTP). /COUNT=n (default 4) sets how many echoes to send.
+ */
+int cmd_ping(struct dcl_command *cmd)
+{
+    /* A classic 56-byte ICMP data payload, seeded so an echo is verifiable. */
+    unsigned char payload[56];
+    unsigned char reply[sizeof(payload)];
+    uint32_t addr_be = 0;
+    uint16_t id;
+    int count = 4;
+    int i, replies = 0;
+    const char *cq;
+    size_t k;
+
+    if (cmd->param_count < 1) {
+        dcl_error("PING", 2, "NOHOST", "missing host - supply an address to ping");
+        return SS$_BADPARAM;
+    }
+    if (!tcpip_tool_resolve("PING", cmd->params[0], &addr_be))
+        return SS$_BADPARAM;
+
+    cq = dcl_qualifier_value(cmd, "COUNT");
+    if (cq && cq[0]) {
+        int n = atoi(cq);
+        if (n < 1 || n > 1000) {
+            dcl_error("PING", 2, "IVCOUNT", "invalid count - \\%s\\", cq);
+            return SS$_BADPARAM;
+        }
+        count = n;
+    }
+
+    for (k = 0; k < sizeof(payload); k++)
+        payload[k] = (unsigned char)(0x40u + (k & 0x3fu));
+    id = (uint16_t)(getpid() & 0xffffu);
+
+    printf("PING %s: %u data bytes\n", cmd->params[0], (unsigned)sizeof(payload));
+
+    for (i = 0; i < count; i++) {
+        uint32_t rlen = 0;
+        uint32_t st = tcpip_ping_echo(addr_be, id, (uint16_t)(i + 1),
+                                      payload, (uint32_t)sizeof(payload),
+                                      reply, (uint32_t)sizeof(reply), &rlen);
+        if (st == SS$_NOSUCHDEV) {
+            dcl_error("PING", 2, "NONET",
+                      "TCP/IP Services (BGn: executive device) is not available");
+            return st;
+        }
+        if ((st & 1) && rlen == sizeof(payload) &&
+            memcmp(reply, payload, sizeof(payload)) == 0) {
+            printf("%u bytes from %s: icmp_seq=%d\n",
+                   (unsigned)rlen, cmd->params[0], i + 1);
+            replies++;
+        } else {
+            printf("Request timeout for icmp_seq=%d\n", i + 1);
+        }
+    }
+
+    printf("--- %s ping statistics ---\n", cmd->params[0]);
+    printf("%d packets transmitted, %d packets received\n", count, replies);
+    return replies > 0 ? SS$_NORMAL : SS$_ABORT;
 }

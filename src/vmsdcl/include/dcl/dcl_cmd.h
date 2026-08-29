@@ -97,6 +97,7 @@ void dcl_recall_erase(void);
 int cmd_tcpip(struct dcl_command *cmd);
 int cmd_telnet(struct dcl_command *cmd);   /* TCP/IP client tool (vms-dbb) */
 int cmd_ftp(struct dcl_command *cmd);      /* TCP/IP client tool (vms-dbb) */
+int cmd_ping(struct dcl_command *cmd);     /* TCP/IP PING, ICMP echo (vms-80b) */
 int cmd_mount(struct dcl_command *cmd);
 int cmd_dismount(struct dcl_command *cmd);
 

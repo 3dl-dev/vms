@@ -419,4 +419,12 @@
 # root-owned shared /run/ovmx-boot. Anchors test_syssvc_multiuser_stage; the
 # mutation redirects the per-user stage back into the shared root-owned dir so
 # the non-root open(O_CREAT) fails EACCES.
-107
+# Raised to 108 by vms-80b's tcpip-ping-payload-dropped -- TCP/IP Services PING
+# (ICMP echo), the raw-ICMP socket facility on the vms-527 BGn: seam. The FIRST
+# defect targeting src/vmstcpip/services/tcpip_ping.h, the header the DCL PING
+# verb ships and test_syssvc_tcpip_ping proves against a real /dev/vms. The
+# mutation neutralises the payload copy in tcpip_ping_echo() (memcpy -> memset 0),
+# so the ICMP echo request/reply carry zeroed data while the id/seq/checksum stay
+# correct -- a matching reply still arrives (round-trip assertion green) and only
+# the byte-exact assertion reddens. See its entry in facility_defects.sh.
+108

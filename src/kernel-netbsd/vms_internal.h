@@ -848,6 +848,16 @@ uint32_t vms_devtab_disk_backing(const char *devnam,
                                  uint32_t *major_out, uint32_t *minor_out);
 
 /*
+ * Record ONE genuine device I/O error against the disk unit whose backing block
+ * device is (major,minor) -- the WRITER for the per-device errcnt SHOW ERROR and
+ * F$GETDVI(...,"ERRCNT") read (rd vms-5f82). Called from the ACP block-I/O path
+ * (kernel-core/vmsfs_acp.c) only on a real failure return from
+ * exec_blockdev_read_block/write_block; never speculatively (INV-6). Defined in
+ * the shared kernel-core, on every substrate.
+ */
+void vms_devtab_note_io_error(uint32_t major, uint32_t minor);
+
+/*
  * Transient twin of the above for INITIALIZE.EXE (rd vms-f60, vms_blockdev_
  * netbsd.c): resolves a VMS disk-unit name to the backing block-device NAME +
  * (major,minor) WITHOUT caching the vnode. Unlike $MOUNT's disk_backing, the

@@ -103,9 +103,16 @@ vms-y := vms_module.o \
 # -I$(src)/../vmsfs/include + -I$(src)/../vmsfs/ods2: the codec's public header
 #   ("vmsfs/ods2.h") and its private vocabulary header (ods2_kcompat.h), for the
 #   ods2_reader.o above and vmsfs_acp.c's codec use (vms-127).
+# -DOVMX_KTEST_FAULT_INJECT (rd vms-5f82): compiles the TEST-ONLY ACP block-I/O
+#   fault-injection knob into THIS out-of-tree QEMU-test module ONLY. The bootable
+#   overlay (distro/kernel/drivers-ovmx/vms/Kbuild) deliberately does NOT define
+#   it, so the shipped executive carries no fault-injection code. It lets a kernel
+#   test under a real /dev/vms force a genuine ACP block op to fail and observe the
+#   executive's REAL per-device error accounting (vms_device.errcnt) move -- the
+#   increment stays on the real error path; only the failure SOURCE is injected.
 ccflags-y := -I$(src) -I$(src)/../kernel-core \
              -I$(src)/../vmsfs/include -I$(src)/../vmsfs/ods2 \
-             -DOVMX_KBACKEND_LINUX -DOVMX_ODS2_KERNEL
+             -DOVMX_KBACKEND_LINUX -DOVMX_ODS2_KERNEL -DOVMX_KTEST_FAULT_INJECT
 
 # Default target: build against running kernel
 KDIR ?= /lib/modules/$(shell uname -r)/build

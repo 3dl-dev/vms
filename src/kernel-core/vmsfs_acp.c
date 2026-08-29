@@ -353,6 +353,110 @@ static uint32_t acp_window_map_vbn(const struct acp_win_ext *win, uint32_t n,
  * ================================================================ */
 #if defined(OVMX_ODS2_KERNEL)
 
+/* ================================================================
+ * Block-I/O with device error accounting (rd vms-5f82, epic vms-050)
+ * ================================================================
+ *
+ * The ACP is the disk unit's "driver": it reaches the raw backing block device
+ * one 512-byte LBN at a time through exec_blockdev_read_block/write_block. On
+ * real VMS the driver counts every hardware I/O error it sees on the unit, and
+ * that tally is what SHOW ERROR and F$GETDVI(...,"ERRCNT") report. OVMX had the
+ * READER (#892 walks vms_device.errcnt via $DEVICE_SCAN) but no WRITER, so the
+ * count was always zero -- the honest-but-empty state, never exercised.
+ *
+ * These two thin wrappers ARE the writer's trigger: every ACP block read/write
+ * goes through them, and on a genuine failure return from the underlying
+ * primitive they charge the error to the owning disk unit
+ * (vms_devtab_note_io_error, which maps the backing (major,minor) back to its
+ * DK unit row). The increment fires on the REAL error path -- the same nonzero
+ * return a bad sector, a device gone, or a read past the end of the medium
+ * produces -- never speculatively and never seeded (CLAUDE.md INV-6).
+ */
+
+#if defined(OVMX_KTEST_FAULT_INJECT)
+/*
+ * TEST-ONLY block-I/O fault injection (rd vms-5f82). Compiled in ONLY for the
+ * out-of-tree QEMU-test vms.ko (src/kernel/Makefile defines the macro; the
+ * bootable distro overlay does NOT), never in a shipped executive. It exists so
+ * a kernel-module test under a real /dev/vms can make a genuine ACP block op
+ * FAIL -- exactly as a bad sector would -- and then observe that the executive's
+ * real error accounting (errcnt) moved. It does NOT touch errcnt itself: it only
+ * forces the SAME nonzero return the underlying primitive gives on a real
+ * failure, so the increment below still fires on the real error path, not on a
+ * test poke. Armed from the Linux module rind (vms_module.c module_param), which
+ * forwards to vmsfs_acp_test_arm_bdev_fault(); default disarmed (count 0).
+ */
+static exec_lock_t acp_fault_lock;
+static int         acp_fault_lock_ready;
+static uint32_t    acp_fault_major;
+static uint32_t    acp_fault_minor;
+static uint32_t    acp_fault_count;   /* remaining ops to fail; 0 = disarmed */
+
+void vmsfs_acp_test_arm_bdev_fault(uint32_t major, uint32_t minor, uint32_t count)
+{
+    if (!acp_fault_lock_ready) {
+        exec_lock_init(&acp_fault_lock);
+        acp_fault_lock_ready = 1;
+    }
+    exec_lock(&acp_fault_lock);
+    acp_fault_major = major;
+    acp_fault_minor = minor;
+    acp_fault_count = count;
+    exec_unlock(&acp_fault_lock);
+}
+
+/* Take one armed fault for (major,minor): true (and decrement) if the next op on
+ * this device must report failure, false otherwise. */
+static int acp_fault_take(uint32_t major, uint32_t minor)
+{
+    int fire = 0;
+
+    if (!acp_fault_lock_ready)
+        return 0;
+    exec_lock(&acp_fault_lock);
+    if (acp_fault_count && acp_fault_major == major && acp_fault_minor == minor) {
+        acp_fault_count--;
+        fire = 1;
+    }
+    exec_unlock(&acp_fault_lock);
+    return fire;
+}
+#endif /* OVMX_KTEST_FAULT_INJECT */
+
+static int acp_bdev_read(uint32_t major, uint32_t minor, uint64_t lbn,
+                         void *buf, size_t buflen)
+{
+    int rc;
+
+#if defined(OVMX_KTEST_FAULT_INJECT)
+    if (acp_fault_take(major, minor))
+        rc = -1;                        /* test scaffold: simulate a bad read */
+    else
+#endif
+        rc = exec_blockdev_read_block(major, minor, lbn, buf, buflen);
+
+    if (rc != 0)
+        vms_devtab_note_io_error(major, minor);
+    return rc;
+}
+
+static int acp_bdev_write(uint32_t major, uint32_t minor, uint64_t lbn,
+                          const void *buf, size_t buflen)
+{
+    int rc;
+
+#if defined(OVMX_KTEST_FAULT_INJECT)
+    if (acp_fault_take(major, minor))
+        rc = -1;                        /* test scaffold: simulate a bad write */
+    else
+#endif
+        rc = exec_blockdev_write_block(major, minor, lbn, buf, buflen);
+
+    if (rc != 0)
+        vms_devtab_note_io_error(major, minor);
+    return rc;
+}
+
 /* Capture the FIRST allocated extent of a file header's FM2 retrieval map. */
 struct acp_first_extent { uint32_t lbn; int got; };
 static int acp_first_extent_cb(const ods2_extent_t *ext, void *ctx)
@@ -414,7 +518,7 @@ static uint32_t acp_validate_ods2(uint32_t major, uint32_t minor,
         return SS__DEVNOTMOUNT;         /* no memory -- cannot validate, refuse */
 
     /* --- (1) home block, LBN 1 --- */
-    if (exec_blockdev_read_block(major, minor, 1u, s->blk, sizeof(s->blk)) != 0)
+    if (acp_bdev_read(major, minor, 1u, s->blk, sizeof(s->blk)) != 0)
         goto done;
     st = ods2_home_parse(s->blk, sizeof(s->blk), &s->home, /*strict_level*/1);
     if (st != ODS2_OK)
@@ -423,7 +527,7 @@ static uint32_t acp_validate_ods2(uint32_t major, uint32_t minor,
     /* --- (2a) BITMAP.SYS (FID 2) primary header --- */
     idx_lbn        = s->home.hm2_ibmaplbn + s->home.hm2_ibmapsize;
     bitmap_hdr_lbn = idx_lbn + (ODS2_FID_BITMAP - 1u);
-    if (exec_blockdev_read_block(major, minor, bitmap_hdr_lbn, s->blk, sizeof(s->blk)) != 0)
+    if (acp_bdev_read(major, minor, bitmap_hdr_lbn, s->blk, sizeof(s->blk)) != 0)
         goto done;
     st = ods2_fh2_parse(s->blk, sizeof(s->blk), &s->bmhdr);   /* validates its checksum */
     if (st != ODS2_OK)
@@ -433,7 +537,7 @@ static uint32_t acp_validate_ods2(uint32_t major, uint32_t minor,
     st = ods2_fh2_map_walk(s->blk, acp_first_extent_cb, &fe, NULL);
     if (st != ODS2_OK || !fe.got)
         goto done;
-    if (exec_blockdev_read_block(major, minor, fe.lbn, s->blk, sizeof(s->blk)) != 0)
+    if (acp_bdev_read(major, minor, fe.lbn, s->blk, sizeof(s->blk)) != 0)
         goto done;
     st = ods2_scb_parse(s->blk, sizeof(s->blk), &s->scb);
     if (st != ODS2_OK)
@@ -822,7 +926,7 @@ static uint32_t acp_read_header(struct vms_acp_volume *vol, uint32_t fid_num,
     if (fid_num == 0)
         return SS__NOSUCHFILE;
     lbn = vol->idx_lbn + (fid_num - 1u);
-    if (exec_blockdev_read_block(vol->backing_major, vol->backing_minor,
+    if (acp_bdev_read(vol->backing_major, vol->backing_minor,
                                  lbn, raw, ACP_BLOCK_SIZE) != 0)
         return SS__NOSUCHFILE;
     if (ods2_fh2_parse(raw, ACP_BLOCK_SIZE, parsed) != ODS2_OK)
@@ -894,7 +998,7 @@ static int acp_dirwalk_map_cb(const ods2_extent_t *ext, void *ctx)
     uint32_t k;
 
     for (k = 0; k < ext->count; k++) {
-        if (exec_blockdev_read_block(w->vol->backing_major, w->vol->backing_minor,
+        if (acp_bdev_read(w->vol->backing_major, w->vol->backing_minor,
                                      ext->lbn + k, w->dblk, ACP_BLOCK_SIZE) != 0) {
             w->io_err = 1;
             return 1;                   /* stop the walk */
@@ -1026,7 +1130,7 @@ static uint32_t acp_count_free_blocks(uint32_t major, uint32_t minor,
 
     /* BITMAP.SYS (FID 2) primary header, the INDEXF arithmetic (idx_lbn base). */
     bmhdr_lbn = idx_lbn + (ODS2_FID_BITMAP - 1u);
-    if (exec_blockdev_read_block(major, minor, bmhdr_lbn, bmhdr, ACP_BLOCK_SIZE) != 0)
+    if (acp_bdev_read(major, minor, bmhdr_lbn, bmhdr, ACP_BLOCK_SIZE) != 0)
         goto done;
 
     wb.win = bmwin;
@@ -1044,7 +1148,7 @@ static uint32_t acp_count_free_blocks(uint32_t major, uint32_t minor,
             uint32_t lbn = acp_window_map_vbn(bmwin, wb.n, bmvbn);
             if (lbn == 0)
                 break;                      /* past the bitmap's coverage */
-            if (exec_blockdev_read_block(major, minor, lbn, bmblk, ACP_BLOCK_SIZE) != 0)
+            if (acp_bdev_read(major, minor, lbn, bmblk, ACP_BLOCK_SIZE) != 0)
                 goto done;
             cur_bmvbn = bmvbn;
             loaded = 1;
@@ -1412,7 +1516,7 @@ static int acp_search_map_cb(const ods2_extent_t *ext, void *ctx)
     uint32_t k;
 
     for (k = 0; k < ext->count; k++) {
-        if (exec_blockdev_read_block(m->vol->backing_major, m->vol->backing_minor,
+        if (acp_bdev_read(m->vol->backing_major, m->vol->backing_minor,
                                      ext->lbn + k, m->dblk, ODS2_BLOCK_SIZE) != 0) {
             m->io_err = 1;
             return 1;
@@ -2017,7 +2121,7 @@ long vms_ioctl_acp_readvb(struct vms_proc *proc, unsigned long arg)
             exec_free(snap);
             goto out;
         }
-        if (exec_blockdev_read_block(snap->backing_major, snap->backing_minor,
+        if (acp_bdev_read(snap->backing_major, snap->backing_minor,
                                      lbn, blk, ACP_BLOCK_SIZE) != 0) {
             args.status = SS__DEVNOTMOUNT;
             args.xferred = done_bytes;
@@ -2107,7 +2211,7 @@ static uint32_t acp_bitmap_alloc(const struct acp_chan_snap *snap,
 
     /* BITMAP.SYS (FID 2) primary header, the INDEXF arithmetic (idx_lbn base). */
     bmhdr_lbn = snap->idx_lbn + (ODS2_FID_BITMAP - 1u);
-    if (exec_blockdev_read_block(snap->backing_major, snap->backing_minor,
+    if (acp_bdev_read(snap->backing_major, snap->backing_minor,
                                  bmhdr_lbn, s->bmhdr, ACP_BLOCK_SIZE) != 0)
         return SS__DEVNOTMOUNT;             /* cannot read BITMAP.SYS header */
 
@@ -2131,7 +2235,7 @@ static uint32_t acp_bitmap_alloc(const struct acp_chan_snap *snap,
             lbn = acp_window_map_vbn(bmwin, wb.n, bmvbn);
             if (lbn == 0)
                 break;                      /* past the bitmap's coverage */
-            if (exec_blockdev_read_block(snap->backing_major, snap->backing_minor,
+            if (acp_bdev_read(snap->backing_major, snap->backing_minor,
                                          lbn, s->bmblk, ACP_BLOCK_SIZE) != 0)
                 return SS__DEVNOTMOUNT;
             cur_bmvbn = bmvbn;
@@ -2160,12 +2264,12 @@ static uint32_t acp_bitmap_alloc(const struct acp_chan_snap *snap,
         uint32_t lbn = acp_window_map_vbn(bmwin, wb.n, bmvbn);
 
         if (lbn == 0 ||
-            exec_blockdev_read_block(snap->backing_major, snap->backing_minor,
+            acp_bdev_read(snap->backing_major, snap->backing_minor,
                                      lbn, s->bmblk, ACP_BLOCK_SIZE) != 0) {
             return SS__DEVNOTMOUNT;
         }
         ods2_sbm_block_alloc(s->bmblk, bit % ODS2_SBM_BITS_PER_BLOCK);
-        if (exec_blockdev_write_block(snap->backing_major, snap->backing_minor,
+        if (acp_bdev_write(snap->backing_major, snap->backing_minor,
                                       lbn, s->bmblk, ACP_BLOCK_SIZE) != 0)
             return SS__DEVNOTMOUNT;
     }
@@ -2179,7 +2283,7 @@ static uint32_t acp_bitmap_alloc(const struct acp_chan_snap *snap,
      */
     memset(s->blk, 0, ACP_BLOCK_SIZE);
     for (i = 0; i < need; i++) {
-        if (exec_blockdev_write_block(snap->backing_major, snap->backing_minor,
+        if (acp_bdev_write(snap->backing_major, snap->backing_minor,
                                       run_start + i, s->blk, ACP_BLOCK_SIZE) != 0)
             return SS__DEVNOTMOUNT;
     }
@@ -2363,7 +2467,7 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
              * read-modified so bytes outside the write survive. */
             if (cur_vbn > old_hiblk)
                 memset(s->blk, 0, ACP_BLOCK_SIZE);
-            else if (exec_blockdev_read_block(snap->backing_major,
+            else if (acp_bdev_read(snap->backing_major,
                                               snap->backing_minor, lbn,
                                               s->blk, ACP_BLOCK_SIZE) != 0) {
                 args.status = SS__DEVNOTMOUNT;
@@ -2380,7 +2484,7 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
             exec_free(s);
             goto out;
         }
-        if (exec_blockdev_write_block(snap->backing_major, snap->backing_minor,
+        if (acp_bdev_write(snap->backing_major, snap->backing_minor,
                                       lbn, s->blk, ACP_BLOCK_SIZE) != 0) {
             args.status = SS__DEVNOTMOUNT;
             args.xferred = done_bytes;
@@ -2396,7 +2500,7 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
     if (extended || new_valid != old_valid) {
         uint32_t hdr_lbn = snap->idx_lbn + (snap->fid_num - 1u);
 
-        if (exec_blockdev_read_block(snap->backing_major, snap->backing_minor,
+        if (acp_bdev_read(snap->backing_major, snap->backing_minor,
                                      hdr_lbn, s->hdr, ACP_BLOCK_SIZE) != 0 ||
             acp_fh2_self_fidnum(s->hdr) != snap->fid_num) {
             /* torn/wrong header block -- refuse rather than reseal garbage */
@@ -2414,7 +2518,7 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
         }
         (void)ods2_fh2_set_eof(s->hdr, new_hiblk, new_efblk, new_ffbyte);
         ods2_fh2_reseal(s->hdr);
-        if (exec_blockdev_write_block(snap->backing_major, snap->backing_minor,
+        if (acp_bdev_write(snap->backing_major, snap->backing_minor,
                                       hdr_lbn, s->hdr, ACP_BLOCK_SIZE) != 0) {
             args.status = SS__DEVNOTMOUNT;
             args.xferred = done_bytes;
@@ -2551,7 +2655,7 @@ static uint32_t acp_fid_alloc(struct vms_acp_volume *vol, uint8_t *ibblk,
         uint32_t lbn = vol->ibmap_lbn + blkidx;
 
         if (blkidx != cur_block) {
-            if (exec_blockdev_read_block(vol->backing_major, vol->backing_minor,
+            if (acp_bdev_read(vol->backing_major, vol->backing_minor,
                                          lbn, ibblk, ACP_BLOCK_SIZE) != 0)
                 return SS__DEVNOTMOUNT;
             cur_block = blkidx;
@@ -2559,7 +2663,7 @@ static uint32_t acp_fid_alloc(struct vms_acp_volume *vol, uint8_t *ibblk,
         }
         if (!ods2_ifbm_block_fid_used(ibblk, bit % ODS2_SBM_BITS_PER_BLOCK)) {
             ods2_ifbm_block_alloc(ibblk, bit % ODS2_SBM_BITS_PER_BLOCK);
-            if (exec_blockdev_write_block(vol->backing_major, vol->backing_minor,
+            if (acp_bdev_write(vol->backing_major, vol->backing_minor,
                                           cur_lbn, ibblk, ACP_BLOCK_SIZE) != 0)
                 return SS__DEVNOTMOUNT;
             *fid_out = fidnum;
@@ -2579,11 +2683,11 @@ static uint32_t acp_fid_free(struct vms_acp_volume *vol, uint32_t fidnum,
 
     if (fidnum < 1 || fidnum > vol->maxfiles)
         return SS__BADPARAM;
-    if (exec_blockdev_read_block(vol->backing_major, vol->backing_minor,
+    if (acp_bdev_read(vol->backing_major, vol->backing_minor,
                                  lbn, ibblk, ACP_BLOCK_SIZE) != 0)
         return SS__DEVNOTMOUNT;
     ods2_ifbm_block_free(ibblk, bit % ODS2_SBM_BITS_PER_BLOCK);
-    if (exec_blockdev_write_block(vol->backing_major, vol->backing_minor,
+    if (acp_bdev_write(vol->backing_major, vol->backing_minor,
                                   lbn, ibblk, ACP_BLOCK_SIZE) != 0)
         return SS__DEVNOTMOUNT;
     return SS__NORMAL;
@@ -2612,7 +2716,7 @@ static uint32_t acp_free_file_blocks(struct vms_acp_volume *vol,
         return SS__DEVNOTMOUNT;
 
     bmhdr_lbn = vol->idx_lbn + (ODS2_FID_BITMAP - 1u);
-    if (exec_blockdev_read_block(vol->backing_major, vol->backing_minor,
+    if (acp_bdev_read(vol->backing_major, vol->backing_minor,
                                  bmhdr_lbn, sc->rw.bmhdr, ACP_BLOCK_SIZE) != 0)
         return SS__DEVNOTMOUNT;
     bwb.win = bmwin; bwb.max = ACP_WINDOW_MAX; bwb.n = 0; bwb.next_vbn = 1; bwb.overflow = 0;
@@ -2629,12 +2733,12 @@ static uint32_t acp_free_file_blocks(struct vms_acp_volume *vol,
                 continue;                    /* keep blocks before the truncate point */
             if (!loaded || bmvbn != cur_bmvbn) {
                 if (loaded &&
-                    exec_blockdev_write_block(vol->backing_major, vol->backing_minor,
+                    acp_bdev_write(vol->backing_major, vol->backing_minor,
                                               cur_bmlbn, sc->rw.bmblk, ACP_BLOCK_SIZE) != 0)
                     return SS__DEVNOTMOUNT;
                 cur_bmlbn = acp_window_map_vbn(bmwin, bwb.n, bmvbn);
                 if (cur_bmlbn == 0 ||
-                    exec_blockdev_read_block(vol->backing_major, vol->backing_minor,
+                    acp_bdev_read(vol->backing_major, vol->backing_minor,
                                              cur_bmlbn, sc->rw.bmblk, ACP_BLOCK_SIZE) != 0)
                     return SS__DEVNOTMOUNT;
                 cur_bmvbn = bmvbn;
@@ -2644,7 +2748,7 @@ static uint32_t acp_free_file_blocks(struct vms_acp_volume *vol,
         }
     }
     if (loaded &&
-        exec_blockdev_write_block(vol->backing_major, vol->backing_minor,
+        acp_bdev_write(vol->backing_major, vol->backing_minor,
                                   cur_bmlbn, sc->rw.bmblk, ACP_BLOCK_SIZE) != 0)
         return SS__DEVNOTMOUNT;
     return SS__NORMAL;
@@ -2694,7 +2798,7 @@ static uint32_t acp_dir_write_grown_map(struct vms_acp_volume *vol,
     }
     (void)ods2_fh2_set_eof(dirhdr, nblk, nblk + 1u, 0);   /* [F15]/[F17] dir EOF */
     ods2_fh2_reseal(dirhdr);
-    if (exec_blockdev_write_block(vol->backing_major, vol->backing_minor,
+    if (acp_bdev_write(vol->backing_major, vol->backing_minor,
                                   dir_hdr_lbn, dirhdr, ACP_BLOCK_SIZE) != 0)
         return SS__DEVNOTMOUNT;
     return SS__NORMAL;
@@ -2737,7 +2841,7 @@ static uint32_t acp_dir_mutate(struct vms_acp_volume *vol,
     }
 
     for (i = 0; i < nblk; i++) {
-        if (exec_blockdev_read_block(vol->backing_major, vol->backing_minor,
+        if (acp_bdev_read(vol->backing_major, vol->backing_minor,
                                      dl.lbn[i], inbuf + (size_t)i * ACP_BLOCK_SIZE,
                                      ACP_BLOCK_SIZE) != 0) {
             status = SS__DEVNOTMOUNT;
@@ -2783,7 +2887,7 @@ static uint32_t acp_dir_mutate(struct vms_acp_volume *vol,
 
     /* Write the (possibly grown) directory blocks. */
     for (i = 0; i < out_nblk; i++) {
-        if (exec_blockdev_write_block(vol->backing_major, vol->backing_minor,
+        if (acp_bdev_write(vol->backing_major, vol->backing_minor,
                                       dl.lbn[i], outbuf + (size_t)i * ACP_BLOCK_SIZE,
                                       ACP_BLOCK_SIZE) != 0) {
             status = SS__DEVNOTMOUNT;
@@ -3004,7 +3108,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                  * (vms-3a8; sc->tdirhdr is the MODIFY!M_MOVE scratch, unused on
                  * the CREATE path, so borrowing it here clobbers nothing.) */
                 memset(sc->tdirhdr, 0xFF, ACP_BLOCK_SIZE);
-                if (exec_blockdev_write_block(vol->backing_major, vol->backing_minor,
+                if (acp_bdev_write(vol->backing_major, vol->backing_minor,
                                               alloc_lbn, sc->tdirhdr, ACP_BLOCK_SIZE) != 0) {
                     (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
                     if (n_ext > 0)
@@ -3021,7 +3125,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
              * header one slot too high, so the created file is unreadable by its
              * own FID. */
             hdr_lbn = vol->idx_lbn + (new_fidnum - 1u);
-            if (exec_blockdev_write_block(vol->backing_major, vol->backing_minor,
+            if (acp_bdev_write(vol->backing_major, vol->backing_minor,
                                           hdr_lbn, sc->filehdr, ACP_BLOCK_SIZE) != 0) {
                 (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
                 args.status = SS__DEVNOTMOUNT;
@@ -3127,7 +3231,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                     if (status != SS__NORMAL) { args.status = status; goto free_sc; }
                     /* Invalidate the header so a later ACCESS is SS$_NOSUCHFILE. */
                     memset(sc->filehdr, 0, ACP_BLOCK_SIZE);
-                    if (exec_blockdev_write_block(vol->backing_major, vol->backing_minor,
+                    if (acp_bdev_write(vol->backing_major, vol->backing_minor,
                                                   vol->idx_lbn + (file_fidnum - 1u),
                                                   sc->filehdr, ACP_BLOCK_SIZE) != 0) {
                         args.status = SS__DEVNOTMOUNT;
@@ -3225,7 +3329,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                     goto free_sc;
                 }
                 ods2_fh2_reseal(sc->filehdr);
-                if (exec_blockdev_write_block(vol->backing_major, vol->backing_minor,
+                if (acp_bdev_write(vol->backing_major, vol->backing_minor,
                                               vol->idx_lbn + (file_fidnum - 1u),
                                               sc->filehdr, ACP_BLOCK_SIZE) != 0) {
                     args.status = SS__DEVNOTMOUNT;
@@ -3337,7 +3441,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 if (touched) {
                     (void)ods2_fh2_set_eof(sc->filehdr, new_hiblk, new_efblk, new_ffbyte);
                     ods2_fh2_reseal(sc->filehdr);
-                    if (exec_blockdev_write_block(vol->backing_major, vol->backing_minor,
+                    if (acp_bdev_write(vol->backing_major, vol->backing_minor,
                                                   vol->idx_lbn + (file_fidnum - 1u),
                                                   sc->filehdr, ACP_BLOCK_SIZE) != 0) {
                         args.status = SS__DEVNOTMOUNT;

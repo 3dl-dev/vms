@@ -155,6 +155,33 @@ OVMX's analogue of OSF `GPDISP`, with an OVMX wire encoding because EVAX publish
   new command (an unknown ETIR command is a hard error today, `evax_read.c:358-359`, so the recognizer
   must be taught it); the apply/patch step is added on the OVMX link side (C1/C2).
 
+#### 2.2.1 [OVMX] K resolution covers LOCAL and weak-overridden procedures (vms-095/C3)
+
+The operand's first u32 (originally a reserved `lkidx_or_0`, always 0) carries **`pdsc_offset`** — the
+enclosing procedure's PDSC offset within *its own object's* `$LINK$` psect (gas emits `sym->value`). The
+OVMX linker resolves K **from the placed PDSC**, not a name-keyed table:
+
+```
+placed_PDSC = in[ii].sec_base[$LINK$ of ii] + pdsc_offset
+placed_PDSC = evax_wredir_apply(placed_PDSC)     ; strong-over-weak (vms-430 / #899)
+K           = placed_PDSC − gp_linkage_base       ; merged $LINK$ base
+```
+
+This closes two gaps a global-symbol-name-keyed table (the initial C1 `evax_gp_entry`) could not:
+
+- **LOCAL/static procedures** (e.g. musl's `io_thread_func`) are absent from the EVAX **global** symbol
+  directory (EGSD), so a name lookup found nothing and hard-errored `%LINK-F-GPDISPUNDEF` — even though
+  the procedure IS defined, with a real PDSC and a real K, in the image. Carrying `pdsc_offset` resolves
+  it: the enclosing procedure is always defined in the reloc's own object, so its PDSC placement is known.
+- **Weak-overridden procedures**: a `.ovmx_gpdisp` in the object that holds the *weak* definition carries
+  that weak PDSC's offset; `evax_wredir_apply` retargets it to the **surviving strong** definition's PDSC,
+  so K is the strong def's — never the discarded weak one. Consistent with the strong-over-weak resolution
+  (#899). The deciding property is "does the procedure reference the linkage section," not its export or
+  binding — locals and weak-overridden both do, and both need the module-GP.
+
+The C1 `evax_gp_entry` table is retained but is now **diagnostic-only** (`%LINK-I-GPBASE` /
+`%LINK-I-GPENTRY`, asserted by C1's test); the apply no longer consumes it.
+
 ### 2.3 [OVMX] Linkage-section base recorded per image
 The OVMX shareable producer (link.c) must define and record the per-image linkage-section base and each
 procedure's `K`, so `EVAX_R_OVMX_GPDISP` can be resolved. This is C1 (vms-fd5). The DECC$SHR build

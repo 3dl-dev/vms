@@ -335,6 +335,37 @@ set_target_properties(vms_tcpip_inetd PROPERTIES
 )
 install(TARGETS vms_tcpip_inetd RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 
+# TCPIP$DAYTIME.EXE -- the RFC 867 Daytime service (rd vms-477): the first
+# GENUINE standalone service image the auxiliary server (TCPIP$INETD.EXE)
+# launches end to end over the executive. A ~40-line standalone image that
+# writes the RFC 867 daytime line to SYS$OUTPUT (fd 1 = the accepted connection
+# the auxiliary server hands it) and exits. It touches no executive API of its
+# own -- the whole network path lives in the auxiliary server -- so it links
+# nothing but the shared RFC 867 formatter header (src/vmstcpip/services/
+# tcpip_daytime.h), the same single-header engine the QEMU proof asserts against.
+add_executable(vms_tcpip_daytime
+    vms_tcpip_daytime.c
+)
+
+target_include_directories(vms_tcpip_daytime PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmstcpip/services
+)
+
+target_compile_definitions(vms_tcpip_daytime PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+target_compile_options(vms_tcpip_daytime PRIVATE
+    -Wall -Wextra
+)
+
+set_target_properties(vms_tcpip_daytime PROPERTIES
+    OUTPUT_NAME "TCPIP\$DAYTIME"
+    SUFFIX ".EXE"
+)
+install(TARGETS vms_tcpip_daytime RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+
 add_executable(vms_sysgen
     vms_sysgen.c
 )

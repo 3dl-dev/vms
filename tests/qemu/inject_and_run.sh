@@ -151,6 +151,16 @@ echo "--- rebuilding INITIALIZE.EXE (the subject test_syssvc_initialize drives) 
 ( cd /src/repo && cmake --build build-static --target vms_initialize \
                         --parallel "$(nproc)" ) || exit 4
 
+# TCPIP$DAYTIME.EXE is a SUBJECT test_syssvc_tcpip_daytime drives (vms-477), not
+# a suite, so nothing above builds it -- and tcpip-daytime-reply-not-formatted
+# targets src/vmstcpip/services/tcpip_daytime.h, compiled into TCPIP$DAYTIME.EXE.
+# Rebuilt unconditionally, same reason as DCL.EXE/MMK.EXE/INITIALIZE.EXE: a stale
+# image-build TCPIP$DAYTIME.EXE would emit the pristine RFC 867 line against a
+# real /dev/vms and the control could never go red.
+echo "--- rebuilding TCPIP\$DAYTIME.EXE (the subject test_syssvc_tcpip_daytime drives) ---"
+( cd /src/repo && cmake --build build-static --target vms_tcpip_daytime \
+                        --parallel "$(nproc)" ) || exit 4
+
 echo "--- re-staging the initramfs ---"
 cp /src/kernel/vms.ko /initramfs/lib/modules/ || exit 4
 # Absence is FATAL, never skipped, exactly as in the image build: a missing
@@ -196,6 +206,17 @@ cp /src/repo/build-static/bin/DCL.EXE \
    /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE || exit 4
 chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE \
          /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE || exit 4
+
+# TCPIP$DAYTIME.EXE at SYS$SYSTEM (vms-477) -- the SAME stale-binary trap the
+# MMK.EXE/DCL.EXE block above documents. test_syssvc_tcpip_daytime execs
+# TCPIP$DAYTIME.EXE from /vms/SYS0/SYSCOMMON/SYSEXE, so a defect in the RFC 867
+# formatter (tcpip_daytime.h -> TCPIP$DAYTIME.EXE) must refresh THIS copy or the
+# drive runs against the pristine image-build binary and the
+# tcpip-daytime-reply-not-formatted control could never go red. Absence is FATAL,
+# exactly as in the image build (tests/qemu/Dockerfile).
+cp '/src/repo/build-static/bin/TCPIP$DAYTIME.EXE' \
+   '/initramfs/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$DAYTIME.EXE' || exit 4
+chmod +x '/initramfs/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$DAYTIME.EXE' || exit 4
 for f in /src/tests/qemu/test_*; do
     [ -x "$f" ] && cp "$f" /initramfs/tests/
 done

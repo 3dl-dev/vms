@@ -539,7 +539,8 @@ dcl-acp-search-fid-fabricated
 loginout-acp-auth-from-ods2
 multiuser-stage-shared-not-peruser
 tcpip-config-hostaddr-not-defined
-tcpip-inetd-reply-not-connected"
+tcpip-inetd-reply-not-connected
+tcpip-daytime-reply-not-formatted"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -5882,6 +5883,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    tcpip-daytime-reply-not-formatted)
+        case "$_f" in
+        facility)     echo "TCP/IP Services DAYTIME (RFC 867) -- the RFC 867 line formatter of the shared daytime engine (tcpip_daytime_format, src/vmstcpip/services/tcpip_daytime.h, vms-477), compiled into the SHIPPED standalone image TCPIP\$DAYTIME.EXE (tools/vms_tcpip_daytime.c). This is the FIRST genuine separately-built service image the auxiliary server (TCPIP\$INETD, vms-cdb9) launches end to end over the executive: it binds DAYTIME's well-known port over the BGn: seam, accepts an inbound connection, MATERIALIZES it as a real executive-backed fd (ovmx_materialize_fd, vms-0cd), and fork()+execv()s TCPIP\$DAYTIME.EXE with that fd as SYS\$OUTPUT; the image writes the current date/time as a one-line RFC 867 string that transits the executive connection back to the client, proven by test_syssvc_tcpip_daytime. The whole network path is the auxiliary server's -- with no executive its ovmx_socket() fails SS\$_NOSUCHDEV -> ENODEV honestly, and the suite honest-skips 77.";;
+        targets)      echo "vmstcpip/services/tcpip_daytime.h";;
+        suites_red)   echo "test_syssvc_tcpip_daytime";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tcpip_daytime_format() builds the RFC 867 daytime line with 'n = strftime(out, outlen, TCPIP_DAYTIME_RFC867_FMT, &tmv);'. The mutation replaces that with 'n = (size_t)snprintf(out, outlen, \"X\");', so the shipped TCPIP\$DAYTIME.EXE still emits a NON-EMPTY line (\"X\" + the appended CR LF) and still exits 0 -- so the DB-parse, the accept-fires-and-image-spawned, the image-exited-cleanly, and the no-executive honest-skip assertions all stay green. Only the client's reply is no longer a well-formed RFC 867 daytime line (no weekday/month/HH:MM:SS/4-digit-year), so the independent RFC 867 shape oracle in test_syssvc_tcpip_daytime (which does NOT include the mutated formatter) reddens exactly the well-formed-reply invariant. One statement diverted, one property tripped.";;
+        require_fail) cat <<'EOF'
+the separately-built image's reply is a well-formed RFC 867 daytime line transited over the executive connection
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     bgsock-recv-length-zeroed)
         case "$_f" in
         facility)     echo "BSD-sockets RTL veneer over BGn: -- the ovmx_recv() receive path of the OVMX sockets veneer (src/vmstcpip/sockets/vms_bgsock.c, vms-22a prereq), the DECC\$SOCKET-equivalent middle layer between an application's standard socket()/send()/recv() and the executive-resident BGn: driver. The app speaks ONLY sockets; the veneer translates them into the public \$ASSIGN TCPIP\$DEVICE: + \$QIO ops. \$ASSIGN TCPIP\$DEVICE: fails SS\$_NOSUCHDEV with no executive (ovmx_socket -> ENODEV).";;
@@ -7106,6 +7124,19 @@ apply_edit() {
         # bytes (its stdin dup2 is untouched) and still exits 0, so only the
         # byte-exact round-trip assertion reddens.
         sed -i 's|if (dup2(rfd, STDOUT_FILENO) != STDOUT_FILENO) _exit(126); /\* NEGCTL tcpip-inetd-reply-not-connected \*/|if (dup2(rfd, STDERR_FILENO) != STDERR_FILENO) _exit(126); /* NEGCTL tcpip-inetd-reply-not-connected */|' "$_file";;
+
+    tcpip-daytime-reply-not-formatted)
+        # Corrupt the RFC 867 line formatter in tcpip_daytime_format(): the real
+        # strftime() call that builds "Www Mmm dd hh:mm:ss yyyy" is replaced by a
+        # constant 'snprintf(out, outlen, "X")', so the shipped TCPIP$DAYTIME.EXE
+        # emits a NON-EMPTY but malformed line ("X" + the appended CR LF) and
+        # still exits 0. Anchored on its own NEGCTL comment so the text is unique;
+        # after substitution the original strftime with that comment is gone,
+        # making a second apply the no-op the selftest requires. The image still
+        # spawns and exits cleanly, so only the independent RFC 867 shape oracle
+        # in test_syssvc_tcpip_daytime (which does not include this formatter)
+        # reddens the well-formed-reply assertion.
+        sed -i 's|n = strftime(out, outlen, TCPIP_DAYTIME_RFC867_FMT, &tmv); /\* NEGCTL tcpip-daytime-reply-not-formatted \*/|n = (size_t)snprintf(out, outlen, "X"); /* NEGCTL tcpip-daytime-reply-not-formatted */|' "$_file";;
 
     bgsock-recv-length-zeroed)
         # Zero the received byte count in ovmx_recv(), anchored on its own NEGCTL

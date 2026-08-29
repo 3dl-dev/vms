@@ -417,6 +417,15 @@ jobs:
               - 'tests/qemu/Dockerfile.dlm-harness-h6'
               - 'tests/qemu/init_dlm_h6.sh'
               - 'tests/qemu/run_dlm_harness_h6.sh'
+              # H7 (rd vms-1bba, DIRECTORY CONSISTENT MASTERING): two nodes, given
+              # the SAME static membership vector (dlm_member_csids=1030,1031),
+              # independently resolve the SAME directory + master for every resource
+              # name -- with NO communication (no SCS join, no shared netdev). Proves
+              # the DB rung: consistent mastering from a controlled membership vector.
+              - 'tests/qemu/Dockerfile.dlm-harness-h7'
+              - 'tests/qemu/init_dlm_h7.sh'
+              - 'tests/qemu/run_dlm_harness_h7.sh'
+              - 'tests/qemu/test_dlm_dir_h7.c'
               - 'tests/cluster/two-ovmx/mk_sysgen_scratch.py'
               - 'tests/cluster/two-ovmx/verdict.sh'
 
@@ -2826,6 +2835,77 @@ jobs:
         with:
           name: dlm-harness-h6-artifacts
           path: h6out/
+          if-no-files-found: ignore
+
+  # -----------------------------------------------------------------------
+  # Job 2g: DLM Harness H7 -- DIRECTORY CONSISTENT MASTERING (rd vms-1bba)
+  #
+  # Two nodes, given the SAME static membership vector, INDEPENDENTLY resolve the
+  # SAME master for a resource via the hashed directory -- WITHOUT communicating.
+  # tests/qemu/Dockerfile.dlm-harness-h7 builds the real executive (vms.ko) and a
+  # small freestanding proof driver (test_dlm_dir_h7, linked against
+  # src/libvmssys/vms_kif.c) and boots TWO QEMU nodes -- each with a real /dev/vms.
+  # There is NO shared L2, NO scsd, NO join: the DLM directory is a pure function
+  # of (resource name, membership vector), so the nodes need not talk. Each node
+  # insmods vms.ko with the SAME ordered vector (dlm_member_csids=1030,1031) and a
+  # distinct vms_local_csid (A=1030, B=1031). H7 PASS iff both nodes AGREE on dir +
+  # master for every name, the directory DISTRIBUTES across both members, and a
+  # LOCAL $ENQ for a remote-mastered name fails honestly with SS$_UNSUPPORTED
+  # (2296) while a local-mastered name succeeds. INV-6: no fabricated remote grant.
+  # -----------------------------------------------------------------------
+  dlm-harness-h7:
+    name: DLM Harness H7 (two nodes resolve the SAME master from a static membership vector, QEMU)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.dlm_harness == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build DLM harness H7 image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu/Dockerfile.dlm-harness-h7
+          push: false
+          load: true
+          tags: ovmx-dlm-h7:latest
+          cache-from: type=gha,scope=dlm-harness-h7
+          cache-to: type=gha,mode=max,scope=dlm-harness-h7
+
+      - name: Boot TWO QEMU nodes, verdict consistent mastering from the shared vector
+        run: |
+          set +e
+          KVM=""
+          [ -e /dev/kvm ] && KVM="--device /dev/kvm"
+          mkdir -p "$PWD/h7out"
+          RAW=$(docker run --rm $KVM -v "$PWD/h7out:/out" ovmx-dlm-h7:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: DLM harness H7 exited nonzero"
+            exit 1
+          fi
+          if printf '%s\n' "$OUTPUT" | grep -qE '^  DLM HARNESS H7 PASSED'; then
+            echo "PASS: two nodes independently resolved the SAME directory + master from the shared static membership vector, with an honest SS\$_UNSUPPORTED for remote-mastered names."
+          else
+            echo "FAIL: H7 verdict 'DLM HARNESS H7 PASSED' not found."
+            printf '%s\n' "$OUTPUT" | grep -E 'local_csid|per-name|directory distribution|saw_1030|saw_1031|H7-DRIVER-DONE|H7DIR|H7ENQ|MISS:|FAIL:' || true
+            exit 1
+          fi
+
+      - name: Upload H7 node logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dlm-harness-h7-artifacts
+          path: h7out/
           if-no-files-found: ignore
 
   # -----------------------------------------------------------------------

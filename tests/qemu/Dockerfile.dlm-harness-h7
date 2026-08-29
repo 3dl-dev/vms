@@ -1,0 +1,100 @@
+# Dockerfile.dlm-harness-h7 - DLM directory + CONSISTENT MASTERING harness, rung
+# H7 (rd vms-1bba, the "DB" rung): two nodes, given the SAME static membership
+# vector, INDEPENDENTLY resolve the SAME master for a resource via the hashed
+# directory -- WITHOUT communicating.
+#
+# The MINIMAL sibling of tests/qemu/Dockerfile.dlm-harness-h6. It builds the real
+# executive (vms.ko) and a small freestanding proof driver (test_dlm_dir_h7,
+# linked against src/libvmssys/vms_kif.c exactly as the test_kmod_* clients are in
+# tests/qemu/Dockerfile), assembles ONE symmetric initramfs, and boots TWO QEMU
+# nodes. Unlike H1-H6 there is NO shared L2, NO SCSD.EXE, NO sca_l2probe, NO SYSGEN
+# identity store and NO join sequencer: the DLM directory is a pure function of
+# (resource name, membership vector), so the two nodes need not talk. Each node
+# insmods vms.ko with the SAME ordered vector (dlm_member_csids=1030,1031) and a
+# distinct vms_local_csid (A=1030, B=1031), runs the driver, and emits its per-name
+# H7DIR/H7ENQ lines on ttyS1; the host verdict (run_dlm_harness_h7.sh) reads BOTH
+# nodes' lines and asserts they agree on dir + master for every name, that the
+# directory distributes across both members, and that a LOCAL $ENQ for a
+# remote-mastered name fails honestly with SS$_UNSUPPORTED (2296).
+#
+# WHAT H7 PROVES: consistent mastering from a controlled, static membership
+# vector -- the DB rung. DELIBERATELY NOT here (deferred to 0.4): the live
+# membership feed from the connection manager / SCS rejoin (DC) and remastering
+# (DD). See tests/qemu/init_dlm_h7.sh + run_dlm_harness_h7.sh + test_dlm_dir_h7.c.
+# Nothing here fabricates a remote grant or a shared state (INV-6): supplying
+# membership as a load-time input is honest configuration.
+#
+# Usage:
+#   docker build -f tests/qemu/Dockerfile.dlm-harness-h7 -t ovmx-dlm-h7 .
+#   docker run --rm --device /dev/kvm ovmx-dlm-h7     # --device optional (TCG fallback)
+# Exit 0 = H7 PASS (consistent mastering proven), 1 = FAIL.
+
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ]; then QEMU_PKG=qemu-system-arm; else QEMU_PKG=qemu-system-x86; fi && \
+    apt-get install -y --no-install-recommends \
+    make gcc libc6-dev kmod \
+    linux-headers-generic \
+    linux-image-virtual \
+    busybox-static \
+    cpio \
+    "$QEMU_PKG" \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN KVER=$(ls /lib/modules/ | sort -V | tail -1) && echo "$KVER" > /tmp/kver && echo "Kernel version: $KVER"
+
+# vms.ko: the real executive (same build as H1-H6).
+COPY src/kernel-core/ /src/kernel-core/
+COPY src/kernel/ /src/kernel/
+COPY src/vmsfs/include/ /src/vmsfs/include/
+COPY src/vmsfs/ods2/ /src/vmsfs/ods2/
+RUN KVER=$(cat /tmp/kver) && \
+    cd /src/kernel && \
+    make KDIR=/lib/modules/${KVER}/build 2>&1 && \
+    ls -la /src/kernel/vms.ko && \
+    modinfo /src/kernel/vms.ko && \
+    echo "--- vms.ko params (expect vms_local_csid + dlm_member_csids) ---" && \
+    modinfo -p /src/kernel/vms.ko | grep -E 'vms_local_csid|dlm_member_csids'
+
+# test_dlm_dir_h7: the proof driver, gcc -static against the REAL kernel-interface
+# client (src/libvmssys/vms_kif.c) -- the SAME link recipe tests/qemu/Dockerfile
+# uses for the test_kmod_* clients that #include "vms_kif.h". No musl, no cmake.
+COPY src/libvmssys/ /src/libvmssys/
+COPY tests/qemu/test_dlm_dir_h7.c /src/test_dlm_dir_h7.c
+RUN ARCH=$(uname -m) && \
+    gcc -static -O2 -Wall -Wextra -pthread -o /src/test_dlm_dir_h7 \
+        /src/test_dlm_dir_h7.c \
+        /src/libvmssys/vms_kif.c \
+        /src/libvmssys/kif_transport_linux.c \
+        /src/libvmssys/vms_string.c \
+        /src/libvmssys/arch/${ARCH}/syscall.S \
+        -I/src/kernel -I/src/libvmssys && \
+    { readelf -d /src/test_dlm_dir_h7 2>/dev/null | grep -q NEEDED && \
+        { echo "FATAL: test_dlm_dir_h7 is not static"; exit 1; } || true; } && \
+    ls -la /src/test_dlm_dir_h7
+
+RUN KVER=$(cat /tmp/kver) && \
+    if [ ! -e /boot/vmlinuz ]; then ln -s vmlinuz-${KVER} /boot/vmlinuz; fi && \
+    ls -la /boot/vmlinuz
+
+# Assemble ONE symmetric initramfs (busybox + vms.ko + the driver + the init).
+COPY tests/qemu/init_dlm_h7.sh /src/init_dlm_h7.sh
+RUN mkdir -p /initramfs/bin /initramfs/lib/modules \
+             /initramfs/dev /initramfs/proc /initramfs/sys /initramfs/tmp && \
+    cp /bin/busybox /initramfs/bin/busybox && \
+    ln -s busybox /initramfs/bin/sh && \
+    cp /src/kernel/vms.ko /initramfs/lib/modules/ && \
+    cp /src/test_dlm_dir_h7 /initramfs/bin/test_dlm_dir_h7 && \
+    chmod +x /initramfs/bin/test_dlm_dir_h7 && \
+    cp /src/init_dlm_h7.sh /initramfs/init && \
+    chmod +x /initramfs/init && \
+    cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /initramfs.cpio.gz && \
+    echo "Initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')"
+
+COPY tests/qemu/run_dlm_harness_h7.sh /run_dlm_harness_h7.sh
+RUN chmod +x /run_dlm_harness_h7.sh
+
+CMD ["/run_dlm_harness_h7.sh"]

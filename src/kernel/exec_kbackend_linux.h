@@ -256,7 +256,9 @@ static inline void exec_task_read_acct(exec_task_pin_t *pin,
 	struct mm_struct *mm;
 
 	out->cpu_ns      = task->utime + task->stime;
+	out->has_cpu     = 1;                          /* sourced from the task (vms-f62) */
 	out->page_faults = (u64)task->min_flt + (u64)task->maj_flt;
+	out->has_faults  = 1;                          /* sourced from the task (vms-f62) */
 
 	created_boot_ns = task->start_boottime;
 	now_boot_ns     = ktime_get_boottime_ns();
@@ -265,6 +267,7 @@ static inline void exec_task_read_acct(exec_task_pin_t *pin,
 	out->create_wall_ns = (now_boot_ns >= created_boot_ns)
 				? wall_now_ns - (now_boot_ns - created_boot_ns)
 				: wall_now_ns;
+	out->has_create = 1;                           /* sourced from the task (vms-f62) */
 
 	out->rss_pages = 0;
 	out->has_rss   = 0;

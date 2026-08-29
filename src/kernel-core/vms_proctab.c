@@ -345,24 +345,44 @@ static void fill_proc_acct(exec_task_pin_t *pin, struct vms_procinfo *info)
 
     exec_task_read_acct(pin, &acct);
 
+    /*
+     * EACH VALID BIT IS SET ONLY WHEN THE BACKEND SOURCED THE FIELD (rd
+     * vms-f62). A substrate whose host-task accounting read is not wired
+     * leaves the has_* flag 0, so the bit stays CLEAR and SHOW SYSTEM /
+     * $GETJPI report the field ABSENT (blank column) -- never the zero the
+     * scalar happens to hold. Before this the CPUTIM/PAGEFLTS/LOGINTIM bits
+     * were set UNCONDITIONALLY, so the NetBSD/vax backend's zero-stub
+     * (exec_kbackend_netbsd.h, host-task read a flagged vms-f62 follow-up) was
+     * rendered on the VAX pane as a fabricated "00:00:00.00 / 0 / 0" -- the
+     * false-zero lie-of-absence INV-6 forbids. The has_rss gate below always
+     * had this discipline; has_cpu/has_faults/has_create bring the other
+     * three fields into line.
+     */
+
     /* JPI$_CPUTIM -- CPU time in 10ms units, the quantity JPI$_CPUTIM counts.
      * acct.cpu_ns is the task's user+system time in nanoseconds. For a
      * single-threaded process (the DCL case) this is the whole-process figure;
      * a multithreaded image under-counts its sibling threads' time, an honest
      * approximation stated rather than hidden. */
-    info->cputim = (uint32_t)(acct.cpu_ns / 10000000ULL);   /* ns -> 10ms */
-    info->fields_valid |= VMS_PI_V_CPUTIM;
+    if (acct.has_cpu) {
+        info->cputim = (uint32_t)(acct.cpu_ns / 10000000ULL);   /* ns -> 10ms */
+        info->fields_valid |= VMS_PI_V_CPUTIM;
+    }
 
     /* JPI$_PAGEFLTS -- soft + hard faults taken by this process. */
-    info->pageflts = (uint32_t)acct.page_faults;
-    info->fields_valid |= VMS_PI_V_PAGEFLTS;
+    if (acct.has_faults) {
+        info->pageflts = (uint32_t)acct.page_faults;
+        info->fields_valid |= VMS_PI_V_PAGEFLTS;
+    }
 
     /* JPI$_LOGINTIM -- process creation time as a VMS quadword. acct.create_wall_ns
      * is nanoseconds since the Unix epoch (the backend did the host-clock
      * conversion); rebase to the VMS 100ns-since-1858 quadword here. */
-    info->logintim = acct.create_wall_ns / 100ULL
-                   + VMS_EPOCH_OFFSET_SEC * VMS_TIME_UNITS_PER_SEC;
-    info->fields_valid |= VMS_PI_V_LOGINTIM;
+    if (acct.has_create) {
+        info->logintim = acct.create_wall_ns / 100ULL
+                       + VMS_EPOCH_OFFSET_SEC * VMS_TIME_UNITS_PER_SEC;
+        info->fields_valid |= VMS_PI_V_LOGINTIM;
+    }
 
     /* JPI$_PPGCNT -- resident set size in pages. A process with no user address
      * space (has_rss == 0, e.g. a kernel thread) reports no page count rather

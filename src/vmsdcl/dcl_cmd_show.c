@@ -416,26 +416,40 @@ static int cmd_show_system(struct dcl_command *cmd)
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
 
-    /* Calculate uptime from /proc/uptime if available, else show --- */
+    /*
+     * UPTIME -- time since the system booted, from CLOCK_MONOTONIC (rd
+     * vms-f62). This replaces a /proc/uptime read, which is a Linux-ism:
+     * NetBSD/vax has no /proc, so fopen() failed there and the VAX pane
+     * printed "Uptime  ---". CLOCK_MONOTONIC is POSIX and boot-relative on
+     * both substrates (Linux: since boot; NetBSD: nanouptime(9), i.e. since
+     * boot), so the VAX pane now shows a real uptime and x86_64 is unchanged
+     * in value -- no /proc, no fabricated placeholder.
+     *
+     * NOT YET AN EXECUTIVE FACILITY. Ideally SHOW SYSTEM would read the
+     * executive's OWN boot instant (a SYI$_BOOTTIME the executive actually
+     * holds), the way it reads the executive process table for the rows -- a
+     * DCL clock read is still a second source (Rule 11). F$GETSYI("BOOTTIME")
+     * is itself a fabrication today (dcl_lexical.c returns the CURRENT time),
+     * so there is no faithful executive boot instant to route through yet.
+     * Wiring one -- and de-fabbing F$GETSYI BOOTTIME onto it -- is the
+     * flagged follow-up executive-accounting gap (rd vms-f62); until then
+     * CLOCK_MONOTONIC is a real, portable, non-fabricated uptime.
+     */
     char uptime_str[32];
     {
-        FILE *uf = fopen("/proc/uptime", "r");
-        if (uf) {
-            double up_secs = 0;
-            if (fscanf(uf, "%lf", &up_secs) == 1 && up_secs > 0) {
-                unsigned long up = (unsigned long)up_secs;
-                unsigned long days = up / 86400;
-                unsigned long hrs  = (up % 86400) / 3600;
-                unsigned long mins = (up % 3600) / 60;
-                unsigned long secs = up % 60;
-                snprintf(uptime_str, sizeof(uptime_str),
-                         "%lu %02lu:%02lu:%02lu", days, hrs, mins, secs);
-            } else {
-                snprintf(uptime_str, sizeof(uptime_str), "---");
-            }
-            fclose(uf);
+        struct timespec up_ts;
+        if (clock_gettime(CLOCK_MONOTONIC, &up_ts) == 0 && up_ts.tv_sec >= 0) {
+            unsigned long up   = (unsigned long)up_ts.tv_sec;
+            unsigned long days = up / 86400;
+            unsigned long hrs  = (up % 86400) / 3600;
+            unsigned long mins = (up % 3600) / 60;
+            unsigned long secs = up % 60;
+            snprintf(uptime_str, sizeof(uptime_str),
+                     "%lu %02lu:%02lu:%02lu", days, hrs, mins, secs);
         } else {
-            snprintf(uptime_str, sizeof(uptime_str), "---");
+            /* No monotonic clock -- honest omission, not a fabricated value.
+             * The label stays (VMS always prints Uptime); the value is blank. */
+            uptime_str[0] = '\0';
         }
     }
 

@@ -508,10 +508,34 @@
  * the includer (vms_internal.h pulls the host's fixed-width types before this).
  */
 struct exec_proc_acct {
-	uint64_t cpu_ns;         /* total CPU time (user+system), nanoseconds */
-	uint64_t page_faults;    /* soft + hard page faults taken by the process */
-	uint64_t create_wall_ns; /* creation time, ns since the Unix epoch (wall) */
+	uint64_t cpu_ns;         /* total CPU time (user+system), ns (valid iff has_cpu) */
+	uint64_t page_faults;    /* soft + hard faults taken (valid iff has_faults) */
+	uint64_t create_wall_ns; /* creation time, ns since Unix epoch (valid iff has_create) */
 	uint64_t rss_pages;      /* resident set size in pages (valid iff has_rss) */
+	/*
+	 * PER-FIELD PROVENANCE (rd vms-f62). A backend sets a has_* flag ONLY
+	 * for a field it genuinely sourced from the host task; fill_proc_acct
+	 * (src/kernel-core/vms_proctab.c) then sets the matching VMS_PI_V_* bit
+	 * ONLY when the flag is set, so a field the substrate cannot source
+	 * arrives with its valid bit CLEAR and SHOW SYSTEM blanks the column --
+	 * it is NEVER rendered as the zero the scalar happens to hold. This is
+	 * the same absent-is-not-zero discipline the `redacted` flag carries
+	 * (INV-6, CLAUDE.md Rule 10/11).
+	 *
+	 * WHY THIS EXISTS. The Linux backend reads all four fields from the
+	 * struct task_struct it pins, so it sets every flag and x86_64 SHOW
+	 * SYSTEM shows real CPU/Page-flts/Pages. The NetBSD/vax backend's
+	 * host-task accounting read is not yet wired (a flagged vms-f62
+	 * follow-up: it needs a proc reference held across the pin/read seam
+	 * plus p->p_lock for calcru), so it leaves these flags 0 and HONESTLY OMITS
+	 * the columns rather than printing the fabricated zeros the
+	 * unconditional valid bits used to produce (rd vms-f62 root cause).
+	 * has_rss predates this and already gated the resident-page column the
+	 * same way; has_cpu/has_faults/has_create extend it to the other three.
+	 */
+	int      has_cpu;        /* nonzero iff cpu_ns was sourced from the task */
+	int      has_faults;     /* nonzero iff page_faults was sourced */
+	int      has_create;     /* nonzero iff create_wall_ns was sourced */
 	int      has_rss;        /* nonzero iff the process has a user address space */
 };
 

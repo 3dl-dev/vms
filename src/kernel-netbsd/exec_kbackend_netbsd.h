@@ -352,18 +352,42 @@ static __inline void
 exec_task_read_acct(exec_task_pin_t *pin, struct exec_proc_acct *out)
 {
 	/*
-	 * vms-9dc binds these to the real NetBSD sources on the pinned proc:
-	 *   cpu_ns        <- calcru()/p_rusage user+system time
-	 *   page_faults   <- p_stats->p_ru.ru_minflt + ru_majflt
-	 *   create_wall_ns<- p_stats->p_start (a struct timeval, already wall)
-	 *   rss_pages     <- p_vmspace->vm_rssize
-	 * Until then, a compile-safe zero-fill (no struct proc deref, so no
-	 * field-spelling risk on the live event-flag build). Never reached today.
+	 * HONEST OMISSION UNTIL THE HOST-TASK READ IS WIRED (rd vms-f62).
+	 *
+	 * Every has_* flag is left 0, so fill_proc_acct (src/kernel-core/
+	 * vms_proctab.c) sets NO VMS_PI_V_* bit and the VAX SHOW SYSTEM row
+	 * BLANKS its CPU/Page-flts/Pages columns rather than printing the zeros
+	 * these scalars hold. That closes the vms-f62 root cause: fill_proc_acct
+	 * used to set those valid bits UNCONDITIONALLY, so this zero-fill was
+	 * rendered on the VAX pane as a fabricated "00:00:00.00 / 0 / 0" -- the
+	 * exact false-zero lie-of-absence INV-6 forbids. (The stub's old "never
+	 * reached today" note was stale: vms_proctab.c is in this module's SRCS,
+	 * so SHOW SYSTEM/$GETJPI reach this on every VAX row.)
+	 *
+	 * The follow-up bind (a flagged vms-f62 item) reads these from the real
+	 * NetBSD sources on the pinned proc and flips the flags on. Field
+	 * spellings are already verified against the NetBSD headers:
+	 *   cpu_ns        <- calcru()/p_rusage user+system time  (set has_cpu)
+	 *   page_faults   <- p_stats->p_ru.ru_minflt + ru_majflt (set has_faults)
+	 *   create_wall_ns<- p_stats->p_start (a struct timeval, wall) (set has_create)
+	 *   rss_pages     <- p_vmspace->vm_rssize                 (set has_rss)
+	 * The seam constraint that makes this its own item, not a one-liner here:
+	 * exec_task_read_acct runs AFTER vms_proc_hash_lock is dropped on a handle
+	 * this backend does not yet ref-hold, and calcru() KASSERTs p->p_lock is
+	 * owned and mutates the proc -- so the real read needs a proc reference
+	 * carried across the pin/read seam (or a snapshot taken under proc_lock at
+	 * pin time) before it can safely deref the proc. That is executive/kernel
+	 * work that must be proven on the VAX rail under Rule 6, not guessed here.
+	 * Until then, a compile-safe zero-fill with all flags 0 (no struct proc
+	 * deref, so no field-spelling risk on the live build).
 	 */
 	(void)pin;
 	out->cpu_ns = 0;
+	out->has_cpu = 0;
 	out->page_faults = 0;
+	out->has_faults = 0;
 	out->create_wall_ns = 0;
+	out->has_create = 0;
 	out->rss_pages = 0;
 	out->has_rss = 0;
 }

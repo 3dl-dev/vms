@@ -95,6 +95,24 @@ extern "C" {
 #define IO$M_DATACHECK      0x4000  /* Bit 14: data check (verify) */
 #define IO$M_SYNCSTS        0x8000  /* Bit 15: synchronous status */
 
+/*
+ * BGn: (INET pseudo-device) IO$_SETMODE socket-kind selector, passed in P2 when
+ * IO$_SETMODE creates the channel's socket (vms-80b). 0 (the default, and the
+ * value every existing caller already passes) selects the AF_INET/SOCK_STREAM
+ * TCP client socket; IO$K_SOCK_ICMP selects a raw ICMP socket for PING. The
+ * executive maps the selector to the concrete host socket the seam mints; the
+ * socket is thereafter driven by the ordinary IO$_ACCESS/WRITEVBLK/READVBLK.
+ *
+ * CLEAN-ROOM (CLAUDE.md Rule 8): OVMX DESIGN CHOICE, stated rather than implied.
+ * On VMS the socket type/protocol is a create-time socket CHARACTERISTIC; the
+ * public docs do not publish the byte-level IO$_SETMODE parameter layout, so
+ * OVMX defines its own selector (a P2 integer) and LABELS it as OVMX's, never
+ * presented as a VMS-authentic value -- the same posture vms_bg.h takes for its
+ * OVMX-defined transfer cap.
+ */
+#define IO$K_SOCK_STREAM    0   /* default: AF_INET/SOCK_STREAM TCP client */
+#define IO$K_SOCK_ICMP      1   /* AF_INET/SOCK_RAW/IPPROTO_ICMP (PING) */
+
 /* Network modifiers */
 #define IO$M_NOW            0x0040  /* Bit 6: immediate (no wait) */
 #define IO$M_INTERRUPT      0x0080  /* Bit 7: interrupt message */

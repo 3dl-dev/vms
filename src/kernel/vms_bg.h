@@ -256,6 +256,17 @@ struct vms_bg_datafd_args {
 #define VMS_IOCTL_BG_MATERIALIZE_FD _IOWR(VMS_IOC_MAGIC, 0x8d, struct vms_bg_datafd_args)
 
 /*
+ * IO$_SETMODE (raw-ICMP subfunction) -- create a raw ICMP host socket on the
+ * channel instead of the default TCP stream socket (vms-80b, PING). Same
+ * chan-only shape as VMS_IOCTL_BG_SETMODE, a distinct request number so the two
+ * socket kinds are unambiguous at the executive boundary; the socket is then
+ * driven by the ORDINARY connect/send/recv/deaccess/dassgn ioctls (a raw ICMP
+ * echo is a connected-datagram round-trip). The userspace $QIO surface selects
+ * this at IO$_SETMODE via the P2 socket-kind selector (IO$K_SOCK_ICMP, iodef.h).
+ */
+#define VMS_IOCTL_BG_SETMODE_ICMP _IOWR(VMS_IOC_MAGIC, 0x8e, struct vms_bg_chanonly_args)
+
+/*
  * Socket-name / socket-option surface for a MATERIALIZED [bgconn] fd (vms-0cd).
  * These are issued on the materialized data fd ITSELF (its .unlocked_ioctl), NOT on
  * /dev/vms: after a wrapped daemon dup2()s the connection onto stdin/stdout and

@@ -428,6 +428,19 @@
  *        Returns 0 + *out on success, nonzero on failure. MAY SLEEP.
  *        Linux: sock_create_kern(&init_net, ...) into a kref'd holder.
  *        NetBSD: socreate(AF_INET, ..., curlwp, NULL) (contract-only twin).
+ *   int  exec_socket_create_icmp(exec_socket_t *out)
+ *        create an AF_INET/SOCK_RAW/IPPROTO_ICMP host socket, ref count 1 -- the
+ *        raw ICMP socket a VMS PING drives (vms-80b): the caller builds the ICMP
+ *        echo-request datagram itself (type/code/checksum/id/seq/payload), then
+ *        connects it to the target and moves it with the ordinary
+ *        exec_socket_send / exec_socket_recv (a connected raw socket needs no
+ *        per-datagram destination). The ONLY thing that differs from
+ *        exec_socket_create is the socket's type/protocol; everything downstream
+ *        is shared. Same holder/refcount discipline and MAY SLEEP. Runs as the
+ *        kernel, so no CAP_NET_RAW gate applies. Returns 0 + *out / nonzero.
+ *        Linux: sock_create_kern(&init_net, AF_INET, SOCK_RAW, IPPROTO_ICMP, ...).
+ *        NetBSD: socreate(AF_INET, ..., SOCK_RAW, IPPROTO_ICMP, ...) (contract-only
+ *        twin; a runnable NetBSD BGn: raw socket rides vms-024 with the rest).
  *   void exec_socket_get(exec_socket_t s)
  *        take an ADDITIONAL reference (the Linux poll fd rind's second ref).
  *        Linux: kref_get. NetBSD: trivial (never called -- no poll fd).

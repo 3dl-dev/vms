@@ -1236,6 +1236,7 @@ void vms_acp_cleanup(void);
  */
 long vms_ioctl_bg_create(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_setmode(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_bg_setmode_icmp(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_connect(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_send(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_recv(struct vms_proc *proc, unsigned long arg);

@@ -390,6 +390,13 @@ static const struct dcl_qual_def q_backup[] = {
 /*                     Command Table                                   */
 /* ================================================================== */
 
+/* PING reads exactly /COUNT=n (how many echoes to send); every other qualifier
+ * is honestly %DCL-W-IVQUAL until implemented (vms-80b, INV-DCL sec 3). */
+static const struct dcl_qual_def q_ping[] = {
+    { "COUNT", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    QUAL_END
+};
+
 static struct dcl_verb builtin_verbs[] = {
     { "ACCOUNTING",  cmd_accounting,  CDU_F_ABBREV | CDU_F_QUALIFIER, 4,
       "Display login accounting information for the current user", q_none },
@@ -462,6 +469,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Open a file for reading or writing", q_open },
     { "PHONE",       cmd_phone,       CDU_F_ABBREV | CDU_F_PARAM, 3,
       "Phone utility for interactive conversation", q_none },
+    { "PING",        cmd_ping,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
+      "Send ICMP echo requests to a host (over TCP/IP Services BGn:)", q_ping },
     { "PIPE",        cmd_pipe,        CDU_F_ABBREV | CDU_F_PARAM, 3,
       "Execute a DCL pipeline (cmd1 | cmd2 | ...)", q_none },
     { "PRINT",       cmd_print,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,

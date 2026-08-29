@@ -2120,6 +2120,21 @@ uint32_t vms_kif_bg_setmode(uint32_t exec_chan)
     return args.status;
 }
 
+uint32_t vms_kif_bg_setmode_icmp(uint32_t exec_chan)
+{
+    struct vms_bg_chanonly_args args;
+
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+
+    KIF_CALL(VMS_IOCTL_BG_SETMODE_ICMP, &args);
+
+    return args.status;
+}
+
 uint32_t vms_kif_bg_connect(uint32_t exec_chan, uint16_t family,
                             uint16_t port, uint32_t addr)
 {

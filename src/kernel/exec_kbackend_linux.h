@@ -617,6 +617,33 @@ static inline int exec_socket_create(exec_socket_t *out)
 	return 0;
 }
 
+/* Raw ICMP socket for PING (vms-80b): identical holder discipline to
+ * exec_socket_create, only the type/protocol differ (SOCK_RAW/IPPROTO_ICMP).
+ * The caller builds the ICMP echo-request datagram and its checksum itself; a
+ * connected raw socket then sends/receives it through the shared
+ * exec_socket_send / exec_socket_recv. A kernel socket bypasses the CAP_NET_RAW
+ * check a userspace raw socket would face. */
+static inline int exec_socket_create_icmp(exec_socket_t *out)
+{
+	struct exec_socket_holder *h;
+	struct socket *sock;
+	int rc;
+
+	*out = NULL;
+	rc = sock_create_kern(&init_net, AF_INET, SOCK_RAW, IPPROTO_ICMP, &sock);
+	if (rc)
+		return rc;
+	h = kmalloc(sizeof(*h), GFP_KERNEL);
+	if (!h) {
+		sock_release(sock);
+		return -ENOMEM;
+	}
+	h->sock = sock;
+	kref_init(&h->kref);        /* the channel's reference */
+	*out = h;
+	return 0;
+}
+
 static inline void exec_socket_get(exec_socket_t s) { kref_get(&s->kref); }
 static inline void exec_socket_release(exec_socket_t s)
 {

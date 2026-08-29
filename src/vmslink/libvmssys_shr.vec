@@ -96,6 +96,7 @@ vms_kif_wake=PROCEDURE
 # (src/kernel/vms_bg.c); these are the userspace marshalling shims.
 vms_kif_bg_create=PROCEDURE
 vms_kif_bg_setmode=PROCEDURE
+vms_kif_bg_setmode_icmp=PROCEDURE
 vms_kif_bg_connect=PROCEDURE
 vms_kif_bg_send=PROCEDURE
 vms_kif_bg_recv=PROCEDURE

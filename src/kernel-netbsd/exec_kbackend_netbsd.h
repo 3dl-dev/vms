@@ -81,7 +81,8 @@
                               * so it is safe in this shared header -- unlike
                               * <uvm/uvm_extern.h>, which pulls sys/rbtree.h and
                               * collides with exec_rbtree_netbsd.h (that is why the
-                              * rss read stays a dedicated-TU follow-up). */
+                              * rss read is delegated to the dedicated uvm-TU
+                              * vms_acct_rss_netbsd.c, rd vms-601). */
 #include <sys/kauth.h>     /* kauth_cred_get, kauth_authorize_generic (Phase F) */
 #include <sys/errno.h>     /* EWOULDBLOCK, EINTR, ERESTART (Phase G cv timeout) */
 #include <sys/atomic.h>    /* membar_producer / membar_consumer (vms-d61) */
@@ -283,11 +284,13 @@ exec_free(void *p)
  * time (calcru), page faults (p_ru.ru_minflt+ru_majflt) and start wall time
  * (p_start) under proc_lock -> p_lock and sets the matching has_* flags, so
  * fill_proc_acct lights the VMS_PI_V_CPUTIM/PAGEFLTS/LOGINTIM columns. The
- * resident-set count (p_vmspace->vm_rssize -> "Pages") stays a flagged follow-up
- * because vm_rssize needs <uvm/uvm_extern.h>, which pulls sys/rbtree.h and
- * collides with exec_rbtree_netbsd.h in this shared header (a dedicated uvm-only
- * TU is required, as for vms_lnm_arena_netbsd.c); until then has_rss stays 0 and
- * the column is honestly OMITTED, never a fabricated zero (INV-6). */
+ * resident-set count ("Pages") is read via a dedicated uvm-only TU
+ * (vms_acct_rss_netbsd.c, rd vms-601): vm_resident_count() needs
+ * <uvm/uvm_extern.h>, which pulls sys/rbtree.h and collides with
+ * exec_rbtree_netbsd.h in this shared header, so it cannot be read inline here
+ * (same reason vms_lnm_arena_netbsd.c is its own TU). A proc with no address
+ * space leaves has_rss=0 -> the column is honestly OMITTED, never a fabricated
+ * zero (INV-6). */
 typedef struct { pid_t pid; } exec_task_ref_t;  /* PCB pid_ref: the process id */
 
 /*
@@ -301,7 +304,7 @@ struct exec_task_pin {
 	uint64_t cpu_ns;         /* user+system CPU time, ns (has_cpu) */
 	uint64_t page_faults;    /* ru_minflt + ru_majflt (has_faults) */
 	uint64_t create_wall_ns; /* p_start wall time, ns since Unix epoch (has_create) */
-	uint64_t rss_pages;      /* resident pages (has_rss; 0 until the uvm-TU bind) */
+	uint64_t rss_pages;      /* resident pages via the uvm-TU (has_rss; vms-601) */
 	int      has_cpu;
 	int      has_faults;
 	int      has_create;
@@ -355,6 +358,18 @@ exec_task_alive(exec_task_ref_t *ref)
 	return alive;
 }
 
+/*
+ * ovmx_task_rss_pages (rd vms-601): read the resident-set size (pages) of a
+ * pinned proc, p->p_vmspace->vm_rssize. DEFINED in the dedicated uvm-only TU
+ * vms_acct_rss_netbsd.c -- <uvm/uvm_extern.h> cannot be included in this shared
+ * header (it pulls <sys/rbtree.h>, whose rb_left/rb_right macros collide with
+ * exec_rbtree_netbsd.h). The caller MUST hold p->p_lock. Returns 1 and sets
+ * *pages_out when the proc has an address space; returns 0 (leaving *pages_out
+ * untouched) for a kernel thread / mid-exit proc with no vmspace -> the "Pages"
+ * column is then honestly omitted, never a fabricated 0.
+ */
+extern int ovmx_task_rss_pages(struct proc *p, uint64_t *pages_out);
+
 static __inline exec_task_pin_t *
 exec_task_pin(exec_task_ref_t *ref)
 {
@@ -405,6 +420,18 @@ exec_task_pin(exec_task_ref_t *ref)
 		pin->create_wall_ns =
 		    (uint64_t)p->p_stats->p_start.tv_sec * 1000000000ULL
 		    + (uint64_t)p->p_stats->p_start.tv_usec * 1000ULL;
+		/*
+		 * rss (resident pages -> SHOW SYSTEM "Pages" and SHOW WORKING_SET size)
+		 * is p->p_vmspace->vm_rssize, which lives behind <uvm/uvm_extern.h> --
+		 * that pulls <sys/rbtree.h> whose rb_left/rb_right macros collide with
+		 * exec_rbtree_netbsd.h in this shared header. So the read is delegated to a
+		 * dedicated uvm-only TU (vms_acct_rss_netbsd.c, the vms_lnm_arena pattern);
+		 * ovmx_task_rss_pages() reads vm_rssize under the p_lock we hold and returns
+		 * 0 for a proc with no address space (kernel thread / mid-exit) -> honest
+		 * omission, never a fabricated 0 (rd vms-601).
+		 */
+		if (ovmx_task_rss_pages(p, &pin->rss_pages))
+			pin->has_rss = 1;
 		mutex_exit(p->p_lock);
 
 		pin->cpu_ns = ((uint64_t)ru.ru_utime.tv_sec + (uint64_t)ru.ru_stime.tv_sec)
@@ -419,8 +446,8 @@ exec_task_pin(exec_task_ref_t *ref)
 	/*
 	 * p == NULL: the process exited between the hash snapshot and here -- leave
 	 * every has_*=0 so fill_proc_acct blanks its columns (honest omission), not a
-	 * fabricated zero. rss_pages/has_rss also stay 0: p_vmspace->vm_rssize needs
-	 * <uvm/uvm_extern.h> (rbtree collision -> dedicated-TU follow-up, rd vms-6cac).
+	 * fabricated zero. rss_pages/has_rss also stay 0 here: with no proc there is
+	 * no address space to read vm_resident_count() from (rd vms-601).
 	 */
 	mutex_exit(&proc_lock);
 	return pin;
@@ -435,8 +462,8 @@ exec_task_read_acct(exec_task_pin_t *pin, struct exec_proc_acct *out)
 	 * yields all-zero with every has_*=0, so fill_proc_acct (src/kernel-core/
 	 * vms_proctab.c) blanks the VAX SHOW SYSTEM CPU/Page-flts/Pages columns
 	 * rather than printing a fabricated 0 -- the INV-6 honest omission #887
-	 * established, now backed by the real bind (rd vms-6cac). has_rss is still 0
-	 * (the uvm rss read is a dedicated-TU follow-up), so "Pages" stays omitted.
+	 * established, now backed by the real bind (rd vms-6cac/vms-601). rss/has_rss
+	 * come from the uvm-TU; a proc with no address space still omits "Pages".
 	 */
 	if (pin == NULL) {
 		memset(out, 0, sizeof(*out));

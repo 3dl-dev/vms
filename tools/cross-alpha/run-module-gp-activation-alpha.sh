@@ -25,14 +25,16 @@
 #      SS$_NORMAL (%X00000001). A fixed constant, or an activation that never
 #      runs main, cannot satisfy BOTH the N=3 decode AND this anchor.
 #
-#   3. No NEW activation-failure %-errors appear for either image
-#      (%IMGACT-F / IMGNOTFND / DEVNOTMOUNT / NOSUCHFILE / ACCVIO) -- the
-#      pre-merge baseline for this single-proc image is a clean activation, so
-#      any such signature is a regression from the $15 save/restore or the
-#      no-op establish.  (%DCL-E-ABORT on the `return 3' image is EXPECTED and
-#      is NOT an activation error: DCL RUN's fork path maps a nonzero POSIX
-#      child exit to SS$_ABORT -- the known DCL-fidelity gap tracked separately;
-#      the EXECUTIVE seam value, not SHOW SYMBOL $STATUS, is the truth here.)
+#   3. No NEW activation-failure appears for either image -- neither an
+#      IMGACT-side error (%IMGACT-F / IMGNOTFND / DEVNOTMOUNT / NOSUCHFILE) NOR
+#      an ACTIVATED-BUT-CRASHED signature (%DCL-F-ABORT "terminated abnormally
+#      (signal N)", $STATUS=%X0000002C = SS$_ABORT). The pre-merge baseline for
+#      this single-proc image is a clean activation, so either is a regression
+#      from the $15 save/restore or the no-op establish.  (A clean `return 3'
+#      instead runs main, prints the crt0-join line + the seam, and only THEN
+#      maps the nonzero exit to a %DCL-E-ABORT -- Error severity, NOT the Fatal
+#      "terminated abnormally" crash; that E-severity case is EXPECTED and is
+#      the known DCL-fidelity gap. The EXECUTIVE seam value is the truth here.)
 #
 # TOOLCHAIN FRESHNESS (anti-stale, load-bearing).  build-joint-image.sh reuses
 # an already-present ovmx-cross-alpha-vms toolchain image (vms-e7c5). A STALE
@@ -55,8 +57,9 @@
 #
 # PROVE-CAN-FAIL.  `selftest' drives the SAME assert_activation() the real run
 # uses against crafted fixtures: a good transcript passes; a wrong sentinel, a
-# missing crt0-join line, a broken control anchor, and an IMGACT activation
-# failure each RED it. A gate that cannot fail certifies nothing.
+# missing crt0-join line, a broken control anchor, an IMGACT activation failure,
+# and an activated-but-crashed image (signal 11 / SS$_ABORT) each RED it. A gate
+# that cannot fail certifies nothing.
 #
 # Rule 9: BUILD/TEST tooling only, fully containerized; nothing here is a
 # runtime. All deps in the ovmx-cross-alpha / ovmx-cross-alpha-vms images.
@@ -134,12 +137,16 @@ assert_activation() {
   local ctl_ok=0
   [ -n "$ctl_hex" ] && [ "$(( ctl_hex ))" -eq 1 ] && ctl_ok=1
 
-  # (d) no NEW activation-failure %-error for either joint image. %DCL-E-ABORT on
-  # the return-3 image is EXPECTED (fork-path maps nonzero exit -> SS$_ABORT) and
-  # is deliberately NOT in this set; these are the signatures a wild module-GP /
-  # broken save-restore / failed IMGACT would raise.
+  # (d) no NEW activation-failure %-error for either joint image. A CLEAN return-3
+  # activation prints "OVMX crt0 join: activated" and the seam, and only THEN does
+  # the fork path map the nonzero exit to a %DCL-E-ABORT (Error severity, raw value
+  # 3 shown) -- that is EXPECTED and is deliberately NOT in this set. These are the
+  # signatures a wild module-GP / broken $15 save-restore / never-established $15 /
+  # failed IMGACT raises: a hard %DCL-F-ABORT "terminated abnormally (signal N)"
+  # CRASH (the image faulted before/at main), or an IMGACT-side activation error.
+  # A crash reads back an ACCVIO-class $STATUS (%X0000002C) and prints NO seam.
   local errs err_ok=1
-  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|IMGACT-F-" "$log" 2>/dev/null || true)
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
   [ -n "$errs" ] && err_ok=0
 
   echo "  (a) crt0 -> main ran   : milestone=$crt0_mile control=$crt0_ctl (want 1/1)"
@@ -290,33 +297,48 @@ selftest() {
 
   # 1. GOOD -> must PASS (exit 0).
   GOOD_FIXTURE > "$d/good.log"
-  echo "-- selftest 1/5: GOOD transcript must PASS --"
+  echo "-- selftest 1/6: GOOD transcript must PASS --"
   if assert_activation "$d/good.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: good transcript rejected"; fails=$((fails+1)); fi
 
   # 2. WRONG SENTINEL (N=4: 0x0035A021) -> must FAIL.
   GOOD_FIXTURE | sed 's/0x0035A019/0x0035A021/' > "$d/wrong.log"
-  echo "-- selftest 2/5: wrong sentinel (N=4) must FAIL --"
+  echo "-- selftest 2/6: wrong sentinel (N=4) must FAIL --"
   if assert_activation "$d/wrong.log" >/dev/null 2>&1; then echo "  FAIL: wrong sentinel accepted"; fails=$((fails+1)); else echo "  PASS (rejected)"; fi
 
   # 3. MISSING crt0-join (main never ran) -> must FAIL.
   GOOD_FIXTURE | grep -v "OVMX crt0 join: activated" > "$d/nocrt0.log"
-  echo "-- selftest 3/5: missing milestone crt0-join must FAIL --"
+  echo "-- selftest 3/6: missing milestone crt0-join must FAIL --"
   if assert_activation "$d/nocrt0.log" >/dev/null 2>&1; then echo "  FAIL: missing crt0-join accepted"; fails=$((fails+1)); else echo "  PASS (rejected)"; fi
 
   # 4. BROKEN CONTROL ANCHOR (control also reads 0x0035A019, i.e. a fixed
   #    constant, not value-sensitive) -> must FAIL.
   GOOD_FIXTURE | sed 's/image=JOINT_E2E_OK.EXE flavor=VMS_STD $STATUS=0x00000001/image=JOINT_E2E_OK.EXE flavor=VMS_STD $STATUS=0x0035A019/' > "$d/anchor.log"
-  echo "-- selftest 4/5: broken SS\$_NORMAL control anchor must FAIL --"
+  echo "-- selftest 4/6: broken SS\$_NORMAL control anchor must FAIL --"
   if assert_activation "$d/anchor.log" >/dev/null 2>&1; then echo "  FAIL: broken anchor accepted"; fails=$((fails+1)); else echo "  PASS (rejected)"; fi
 
   # 5. IMGACT ACTIVATION FAILURE (image not found on the ODS-2 volume) -> must FAIL.
   GOOD_FIXTURE | sed 's/OVMX-SEAM: image=JOINT_E2E.EXE flavor=VMS_STD $STATUS=0x0035A019/%IMGACT-F-IMGNOTFND, image SYS$SYSTEM:JOINT_E2E.EXE not found/' > "$d/imgact.log"
-  echo "-- selftest 5/5: IMGACT activation failure (IMGNOTFND) must FAIL --"
+  echo "-- selftest 5/6: IMGACT activation failure (IMGNOTFND) must FAIL --"
   if assert_activation "$d/imgact.log" >/dev/null 2>&1; then echo "  FAIL: activation failure accepted"; fails=$((fails+1)); else echo "  PASS (rejected)"; fi
+
+  # 6. ACTIVATED-BUT-CRASHED: the image is found + RUN over the ACP but SIGSEGVs
+  #    (%DCL-F-ABORT ... terminated abnormally (signal 11), $STATUS=%X0000002C =
+  #    SS$_ABORT 44), no crt0-join, no seam -- the exact signature of the merged
+  #    $15 mechanism regressing activation on the real executive. Must FAIL.
+  cat > "$d/crash.log" <<'EOF'
+JOINT-E2E-PROOF: === CONTROL: RUN JOINT_E2E_OK (main returns 0) ===
+%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E_OK terminated abnormally (signal 11)
+JOINT-E2E-PROOF: CONTROL-STATUS=%X0000002C SEVERITY=4
+JOINT-E2E-PROOF: === MILESTONE: RUN JOINT_E2E (main returns sentinel 3) ===
+%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)
+JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4
+EOF
+  echo "-- selftest 6/6: activated-but-crashed (signal 11 / SS\$_ABORT) must FAIL --"
+  if assert_activation "$d/crash.log" >/dev/null 2>&1; then echo "  FAIL: crash-on-activation accepted"; fails=$((fails+1)); else echo "  PASS (rejected)"; fi
 
   echo ""
   if [ "$fails" -eq 0 ]; then
-    echo "=== selftest: assert_activation() has teeth (good passes, all 4 breakages red) ==="
+    echo "=== selftest: assert_activation() has teeth (good passes, all 5 breakages red) ==="
     return 0
   fi
   echo "=== selftest FAILED: $fails case(s) wrong -- the gate cannot be trusted ==="

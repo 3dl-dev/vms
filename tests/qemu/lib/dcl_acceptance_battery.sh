@@ -306,21 +306,25 @@ run_dcl_acceptance_battery() {
         _i=$((_i + 1))
     done
     # Executive present: F$PID returned at least one real 8-hex VMS pid, not "".
+    # NOTE: this battery runs under `set -u`, so every literal F$PID inside a
+    # DOUBLE-quoted string is escaped F\$PID -- an unescaped $PID would expand to
+    # an unbound variable and abort the whole battery (the exact bug that reddened
+    # this gate's first cut). The existing F\$GETDVI/F\$GETSYI descs do the same.
     if printf '%s' "$FPID_ONE" | grep -qiE '^[0-9A-Fa-f]{8}$'; then
-        ok "F$PID [vms-050]: returns real 8-hex VMS pids from the executive process table ($FPID_ONE), not an empty/faked result"
+        ok "F\$PID [vms-050]: returns real 8-hex VMS pids from the executive process table ($FPID_ONE), not an empty/faked result"
     else
-        bad "F$PID [vms-050]: first F$PID call returned no executive pid [got '$FPID_ONE'] -- reader never reached vms_kif_procscan"
+        bad "F\$PID [vms-050]: first F\$PID call returned no executive pid [got '$FPID_ONE'] -- reader never reached vms_kif_procscan"
     fi
     # Set membership -- F$PID's pids ARE SHOW SYSTEM's pids (same executive source).
     if [ -n "$SYS_PID" ] && printf '%s\n' $FPID_SET | grep -qiF -- "$SYS_PID"; then
-        ok "F$PID [vms-050]: the SYSTEM login pid SHOW SYSTEM listed ($SYS_PID) appears in F$PID's walk -- one executive process table, not a Linux /proc snapshot"
+        ok "F\$PID [vms-050]: the SYSTEM login pid SHOW SYSTEM listed ($SYS_PID) appears in F\$PID's walk -- one executive process table, not a Linux /proc snapshot"
     else
-        bad "F$PID [vms-050]: SHOW SYSTEM's SYSTEM pid ($SYS_PID) is NOT in F$PID's set [$FPID_SET] -- F$PID is reading a different (fabricated) source"
+        bad "F\$PID [vms-050]: SHOW SYSTEM's SYSTEM pid ($SYS_PID) is NOT in F\$PID's set [$FPID_SET] -- F\$PID is reading a different (fabricated) source"
     fi
     if [ -n "$JC_PID" ] && printf '%s\n' $FPID_SET | grep -qiF -- "$JC_PID"; then
-        ok "F$PID [vms-050]: JOB_CONTROL's pid ($JC_PID) also appears in F$PID's walk -- the whole executive process set, not the caller's getpid()"
+        ok "F\$PID [vms-050]: JOB_CONTROL's pid ($JC_PID) also appears in F\$PID's walk -- the whole executive process set, not the caller's getpid()"
     else
-        bad "F$PID [vms-050]: JOB_CONTROL pid ($JC_PID) is NOT in F$PID's set [$FPID_SET]"
+        bad "F\$PID [vms-050]: JOB_CONTROL pid ($JC_PID) is NOT in F\$PID's set [$FPID_SET]"
     fi
 
     # --- SHOW PROCESS (current process works) -------------------------------

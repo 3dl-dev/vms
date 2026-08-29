@@ -297,6 +297,56 @@ int strncmp(const char *a, const char *b, unsigned long n)
 
 static void eputs(const char *s) { sys_write(2, s, xstrlen(s)); }
 
+#if defined(__alpha__)
+/* vms-430 BIND-DISC (DIAGNOSTIC, not for merge): log every Alpha cross-image
+ * import fill so the rail can see whether a given symbol-vector index's cell got
+ * a real code entry (quad0 = *(PV+8)) plus its PV (quad1 = PDSC) or 0/garbage.
+ * decc$_memset64 is sv#35 (a PDSC KIND-8 leaf proc); decc$_malloc64 is sv#29.
+ * Self-contained (no libc): builds the line by hand and sys_write's fd 2. */
+static char *xdisc_hex(char *p, unsigned long v)
+{
+	*p++ = '0'; *p++ = 'x';
+	for (int i = 15; i >= 0; i--) {
+		unsigned d = (unsigned)((v >> (i * 4)) & 0xfUL);
+		*p++ = (char)(d < 10 ? ('0' + d) : ('a' + (d - 10)));
+	}
+	return p;
+}
+static char *xdisc_dec(char *p, unsigned long v)
+{
+	char t[24]; int n = 0;
+	if (!v) t[n++] = '0';
+	while (v) { t[n++] = (char)('0' + (v % 10)); v /= 10; }
+	while (n) *p++ = t[--n];
+	return p;
+}
+static char *xdisc_str(char *p, const char *s) { while (*s) *p++ = *s++; return p; }
+static void imgact_bind_disc(unsigned idx, const char *soname, unsigned long sv,
+			     unsigned long form, unsigned long quad0,
+			     unsigned long quad1, unsigned long cell)
+{
+	char line[256];
+	char *p = line;
+	p = xdisc_str(p, "BIND-DISC: idx=");
+	p = xdisc_dec(p, idx);
+	p = xdisc_str(p, " name=");
+	p = xdisc_str(p, soname);           /* producer soname; per-import symbol   */
+	                                    /* name is not in .vms$imp — map sv#     */
+	p = xdisc_str(p, " sv=");
+	p = xdisc_dec(p, sv);
+	p = xdisc_str(p, " form=");
+	p = xdisc_hex(p, form);
+	p = xdisc_str(p, " quad0=");
+	p = xdisc_hex(p, quad0);            /* entry = *(PV+8)                       */
+	p = xdisc_str(p, " quad1=");
+	p = xdisc_hex(p, quad1);            /* PV = PDSC                             */
+	p = xdisc_str(p, " cell=");
+	p = xdisc_hex(p, cell);             /* linkage-cell address (base+patch_off) */
+	*p++ = '\n';
+	sys_write(2, line, (unsigned long)(p - line));
+}
+#endif  /* __alpha__ */
+
 /* Defined further down; forward-declared here because imgact_vms_exit (which
  * precedes the definition) reads it for the OVMX_IMGACT_SEAM $STATUS readback. */
 static const char *imgact_env_value(char **envp, const char *key);
@@ -1745,6 +1795,15 @@ static void bind_imports(unsigned long base, const struct ovmx_imp_header *ih,
 			sys_exit(IMGACT_EXIT_FAIL);
 		}
 		imgact_fill_import(base + ie[k].patch_off, PV, linkage, codeaddr);
+		/* vms-430 BIND-DISC: what this import's cell actually received. quad0
+		 * is the entry the linkage/codeaddr fill wrote (*(PV+8)); for a REFQUAD
+		 * fill the cell holds quad1 (PV) instead — quad0 is still logged as the
+		 * PDSC's entry for cross-ref. form = the sv_index top form bits. */
+		imgact_bind_disc(k, soname, sidx,
+				 (unsigned long)(ie[k].sv_index &
+						 (OVMX_IMP_LINKAGE | OVMX_IMP_CODEADDR)),
+				 PV ? imgact_sv_code_entry(PV) : 0UL, PV,
+				 base + ie[k].patch_off);
 #else
 		unsigned long addr = ovmx_sv_resolve(p->sv, ie[k].sv_index, p->base,
 						     ie[k].req_major, ie[k].req_minor);

@@ -375,21 +375,66 @@ static void ovmx_disc_puthex(char *p, unsigned long v)
     }
 }
 
+/* Async-signal-safe pointer-append builders (no libc), for the SIGILL-DISC
+ * line whose signo/word_at_pc fields are variable width. */
+static char *ovmx_disc_apphex(char *p, unsigned long v, int ndig)
+{
+    for (int i = ndig - 1; i >= 0; i--) {
+        unsigned d = (unsigned)((v >> (i * 4)) & 0xfUL);
+        *p++ = (char)(d < 10 ? ('0' + d) : ('a' + (d - 10)));
+    }
+    return p;
+}
+static char *ovmx_disc_appstr(char *p, const char *s) { while (*s) *p++ = *s++; return p; }
+static char *ovmx_disc_appdec(char *p, unsigned long v)
+{
+    char t[24]; int n = 0;
+    if (!v) t[n++] = '0';
+    while (v) { t[n++] = (char)('0' + (v % 10)); v /= 10; }
+    while (n) *p++ = t[--n];
+    return p;
+}
+
 static void ovmx_disc_segv(int sig, siginfo_t *info, void *uctx)
 {
-    (void)sig;
-    /* Fixed-width template; hex fields are overwritten in place.
-     *  idx 24 = first si_addr digit (after "si_addr=0x")
-     *  idx 46 = first pc digit       (after " pc=0x")            */
-    char line[] =
-        "SIGSEGV-DISC: si_addr=0x0000000000000000 pc=0x0000000000000000\n";
     unsigned long addr = info ? (unsigned long)info->si_addr : 0UL;
     unsigned long pc = 0UL;
     if (uctx)
         pc = (unsigned long)((ucontext_t *)uctx)->uc_mcontext.sc_pc;
-    ovmx_disc_puthex(line + 24, addr);
-    ovmx_disc_puthex(line + 46, pc);
-    (void)write(2, line, sizeof(line) - 1);
+
+    /* Legacy SIGSEGV-DISC line preserved for SIGSEGV/SIGBUS (cross-ref against
+     * readelf on JOINT_E2E.EXE / DECC$SHR.EXE). Fixed-width overwrite template:
+     *  idx 24 = first si_addr digit; idx 46 = first pc digit. */
+    if (sig == SIGSEGV || sig == SIGBUS) {
+        char line[] =
+            "SIGSEGV-DISC: si_addr=0x0000000000000000 pc=0x0000000000000000\n";
+        ovmx_disc_puthex(line + 24, addr);
+        ovmx_disc_puthex(line + 46, pc);
+        (void)write(2, line, sizeof(line) - 1);
+    }
+
+    /* SIGILL/SIGABRT/SIGTRAP (and, self-identifying via signo, every signal):
+     * additionally read the OPCODE WORD AT THE FAULTING PC. word_at_pc == 0
+     * -> jumped into a zero region (bad linkage cell / descriptor); a real
+     * opcode -> genuine illegal instruction at that address. pc <= a page is
+     * treated as unreadable (word stays 0) so a null pc cannot re-fault here. */
+    {
+        char b[128];
+        char *p = b;
+        unsigned int word = 0;
+        if (pc > 4096UL)
+            word = *(volatile unsigned int *)pc;
+        p = ovmx_disc_appstr(p, "SIGILL-DISC: signo=");
+        p = ovmx_disc_appdec(p, (unsigned long)sig);
+        p = ovmx_disc_appstr(p, " si_addr=0x");
+        p = ovmx_disc_apphex(p, addr, 16);
+        p = ovmx_disc_appstr(p, " pc=0x");
+        p = ovmx_disc_apphex(p, pc, 16);
+        p = ovmx_disc_appstr(p, " word_at_pc=0x");
+        p = ovmx_disc_apphex(p, (unsigned long)word, 8);
+        *p++ = '\n';
+        (void)write(2, b, (unsigned long)(p - b));
+    }
     _exit(42);
 }
 
@@ -403,6 +448,9 @@ static void ovmx_disc_install_segv(void)
     sa.sa_flags = SA_SIGINFO;              /* alpha 0x40, from bits/signal.h    */
     sigaction(SIGSEGV, &sa, 0);
     sigaction(SIGBUS,  &sa, 0);
+    sigaction(SIGILL,  &sa, 0);            /* the CRTL/RMS decc$_memset64 fault  */
+    sigaction(SIGABRT, &sa, 0);
+    sigaction(SIGTRAP, &sa, 0);
 }
 #endif /* __alpha__ */
 

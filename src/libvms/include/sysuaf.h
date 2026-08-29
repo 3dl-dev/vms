@@ -241,6 +241,20 @@ typedef struct {
     uint32_t wsextent;   /* JPI$_WSEXTENT  */
 } sysuaf_quota_t;
 
+/* WIDTH-INVARIANCE (vms-14a, 3-way gate {x86_64, VAX ILP32, Alpha LP64}).
+ * Every quota cell is a fixed-width uint32_t and every sub-offset is a byte
+ * constant, so the on-disk region and this codec decode BYTE-IDENTICALLY on
+ * ILP32 VAX and LP64 Alpha -- no field's position shifts with pointer width.
+ * These compile-time asserts are evaluated by EVERY TU including this header on
+ * WHATEVER arch is compiling, so a native long/pointer creeping into the struct
+ * (which WOULD shift the layout between arches) becomes a build failure on the
+ * per-PR co-release gate, not a silent runtime divergence. sizeof == 48 = the
+ * twelve longwords with no padding; the fixed-width sub-offsets are literal. */
+_Static_assert(sizeof(sysuaf_quota_t) == 48,
+               "sysuaf_quota_t must be 12 fixed uint32 cells (no native-width field) -- ILP32/LP64 layout would diverge");
+_Static_assert(UAF$K_QUO_ASTLM == 0x04 && UAF$K_QUO_WSEXTENT == 0x30,
+               "quota sub-offsets are fixed byte positions, arch-independent");
+
 static inline void sysuaf__put_le32(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)v;         p[1] = (uint8_t)(v >> 8);

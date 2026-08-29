@@ -1630,8 +1630,22 @@ static uint32_t vms_lock_dlm_xnode_deq(struct vms_dlm_xnode_args *req)
     res = lock->resource;
 
     exec_lock(&res->lock);
-    if ((lock->flags & LCK_M_VALBLK) && !lock->waiting)
-        memcpy(res->valblk, lock->valblk, LCK_VALBLK_SIZE);
+    /*
+     * LVB replication, cross-node WRITE (rd vms-d81, rung 6). A remote holder
+     * that wrote the value block on convert/$DEQ (LCK_M_VALBLK) sends the new
+     * 16 bytes on the $DEQ frame; scsd marshals them into req->valblk. When the
+     * releaser set the flag and is not a waiter, replicate that WIRE value into
+     * the MASTER resource so a subsequent $ENQ on this (the mastering) node
+     * reads the updated LVB -- "node A writes the LVB, node B reads it". This is
+     * req->valblk, NOT lock->valblk: the master lock's stored block is stale;
+     * the fresh value lives on the $DEQ request. Mirrors the single-node
+     * writeback in vms_deq_core, keyed on the releaser's write intent. (The
+     * symmetric case -- a client READING the master's LVB back over the wire on
+     * a cross-node $ENQ -- is a later rung: it needs the GRANT reply to carry
+     * the LVB and the requester's origin record to surface it.)
+     */
+    if ((req->flags & LCK_M_VALBLK) && !lock->waiting)
+        memcpy(res->valblk, req->valblk, LCK_VALBLK_SIZE);
     if (lock->waiting)
         exec_list_del(&lock->res_waiting);
     else

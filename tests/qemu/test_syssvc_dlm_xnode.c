@@ -48,10 +48,20 @@
  *       GRANT (mode EX) flips it NL->EX -- the status flip observed on the
  *       REQUESTER node, driven only by what the master sent over the wire, read
  *       back by GETLKI. INV-6: genuine executive state, no fabricated grant.
+ *   (3c) ⭐ THE BLKAST WIRE + HOLDER-SIDE RECEIVE (vms-76d, rung H6). The symmetric
+ *       mirror of (3b): an ENQ that queues behind a cross-node holder now REPORTS
+ *       blocking_req_lkid (the holder's requester-side handle, the BLKAST target).
+ *       A GRANT receive at a granted mode carrying a blocking-AST routine
+ *       establishes a HOLDER origin record; a BLKAST the master sends
+ *       (VMS_DLM_OP_BLKAST, was SS$_UNSUPPORTED) then FIRES that routine for real
+ *       -- a genuine user-mode AST queued to the holder's process, DRAINED back via
+ *       DELIVERAST with the exact astadr/astprm registered. INV-6: genuine
+ *       executive state, no fabricated AST.
  *   (4) SCOPE FENCE / INV-6: a wire NOQUEUE incompatible $ENQ still declines
  *       SS$_NOTQUEUED (honest); a $DEQ of a lock NOT held for the releasing node
- *       is refused SS$_IVLOCKID; BLKAST as a receive op still returns
- *       SS$_UNSUPPORTED -- the BLKAST WIRE is deferred honestly on this rung.
+ *       is refused SS$_IVLOCKID; a BLKAST naming a handle with no holder record or
+ *       no registered blocking-AST routine still returns SS$_UNSUPPORTED (honest,
+ *       no faked AST).
  *   (5) VALIDATION unchanged: a bad mode, a bad op, or an ENQ with an empty
  *       resource name is refused SS$_BADPARAM, not silently dropped.
  *
@@ -274,14 +284,45 @@ int main(void)
                            NULL, NULL, NULL, NULL, NULL, NULL);
     CHECK(st == SS_NORMAL, "second node's cross-node $DEQ -> SS$_NORMAL");
 
-    /* ---- 7. STILL FENCED: BLKAST receive (the BLKAST WIRE) is deferred ------
-     * The block-then-grant round-trip is proven WITHOUT the BLKAST wire (vms-6ca
-     * defers it honestly). BLKAST as a RECEIVE op still declines SS$_UNSUPPORTED
-     * -- never faked. */
-    st = vms_kif_dlm_xnode(VMS_DLM_OP_BLKAST, LCK_K_EXMODE, 0,
-                           0x00040011u, 0x00080002u, REQ_CSID_A, REQ_CSID_B, "", NULL,
-                           NULL, NULL, NULL, NULL, NULL, NULL);
-    CHECK(st == SS_UNSUPPORTED, "cross-node BLKAST (receive) -> SS$_UNSUPPORTED (wire deferred)");
+    /* ---- 7. ⭐ THE BLKAST WIRE: holder-side blocking-AST delivery (vms-76d, H6)
+     * The symmetric mirror of the requester-side GRANT RECEIVE. First a HOLDER
+     * origin record is established WITH a blocking-AST routine (a GRANT receive at
+     * a granted mode carrying blkastadr); then a BLKAST the master sent FIRES that
+     * routine for real -- a genuine user-mode AST queued to this process, DRAINED
+     * back via DELIVERAST with the exact astadr registered. INV-6: a BLKAST naming
+     * a handle with no holder record / no blocking-AST routine still declines
+     * SS$_UNSUPPORTED -- never a fabricated AST. */
+    const uint32_t HREQ_LKID = 0x000900A1u;   /* the holder's own request handle */
+    const uint64_t HBLKASTADR = 0xC0DE1234BEEF0000ull; /* the holder's BLKAST routine */
+    const uint64_t HBLKASTPRM = 0x00000000000000A1ull;
+    uint32_t delivered = 99;
+    /* (i) establish the HOLDER origin at EX WITH a blocking-AST routine. */
+    st = vms_kif_dlm_xnode_blkast(VMS_DLM_OP_GRANT, LCK_K_EXMODE,
+                                  HREQ_LKID, 0x00000909u, REQ_CSID_A, REQ_CSID_B,
+                                  "HORIGIN1", HBLKASTADR, HBLKASTPRM, NULL, NULL);
+    CHECK(st == SS_NORMAL, "holder-side GRANT establishes the origin at EX with a BLKAST routine");
+    /* (ii) a BLKAST naming an UNKNOWN handle still declines honestly (INV-6). */
+    st = vms_kif_dlm_xnode_blkast(VMS_DLM_OP_BLKAST, LCK_K_EXMODE,
+                                  0x00040011u, 0, REQ_CSID_A, REQ_CSID_B, "",
+                                  0, 0, NULL, &delivered);
+    CHECK(st == SS_UNSUPPORTED && delivered == 0,
+          "BLKAST for an unknown holder handle -> SS$_UNSUPPORTED (honest, no fake AST)");
+    /* (iii) ⭐ the real BLKAST: it FIRES the holder's blocking AST. */
+    delivered = 99;
+    st = vms_kif_dlm_xnode_blkast(VMS_DLM_OP_BLKAST, LCK_K_EXMODE,
+                                  HREQ_LKID, 0, REQ_CSID_A, REQ_CSID_B, "HORIGIN1",
+                                  0, 0, NULL, &delivered);
+    CHECK(st == SS_NORMAL && delivered == 1,
+          "holder-side BLKAST RECEIVE -> SS$_NORMAL, a real blocking AST queued (was SS$_UNSUPPORTED)");
+    /* (iv) ⭐⭐ DRAIN it: the AST genuinely landed on this process's USER queue,
+     * carrying the exact routine + parameter the holder registered. */
+    {
+        uint64_t d_astadr = 0, d_astprm = 0;
+        uint8_t d_acmode = 99;
+        int drc = vms_kif_deliverast(&d_astadr, &d_astprm, &d_acmode);
+        CHECK(drc == 0 && d_astadr == HBLKASTADR && d_astprm == HBLKASTPRM,
+              "DELIVERAST drains the blocking AST: astadr/astprm == the holder's registered routine (the AST really fired)");
+    }
 
     /* ---- 8. malformed requests are refused, not dropped ---- */
     st = vms_kif_dlm_xnode(VMS_DLM_OP_ENQ, LCK_K_EXMODE + 1, 0,

@@ -109,6 +109,18 @@ struct vms_dlm_origin {
                                       * once the master's GRANT arrives          */
     uint32_t         requested_mode; /* the mode we asked for                    */
     char             resnam[32];
+    /*
+     * BLKAST WIRE (rung H6, vms-76d). When this origin record proxies a HOLDER on
+     * this node (a GRANT receive established it AT a granted mode WITH a blocking-AST
+     * routine), blkastadr/blkastprm remember that routine so a BLKAST the master
+     * later sends over SCS fires a REAL user-mode AST on the holder's process.
+     * blkast_count counts genuine deliveries (0 until the first BLKAST fires).
+     * 0 blkastadr => no blocking AST was registered, so a BLKAST receive is a
+     * no-op that declines SS$_UNSUPPORTED rather than fabricating a delivery.
+     */
+    uint64_t         blkastadr;
+    uint64_t         blkastprm;
+    uint32_t         blkast_count;
 };
 
 exec_list_head_t vms_dlm_origin_list;
@@ -901,6 +913,9 @@ struct dlm_xnode_enq_out {
     int      queued;
     uint32_t blocking_csid;
     uint32_t blocking_master_lkid;
+    uint32_t blocking_req_lkid;    /* OUT: the blocking holder's REQUESTER-side lock
+                                    * handle -- the value a BLKAST names so the
+                                    * holder node finds its ORIGIN record (H6). */
 };
 
 static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
@@ -1116,6 +1131,10 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
                             g->req_csid != 0) {
                             xn->blocking_csid = g->req_csid;
                             xn->blocking_master_lkid = g->lkid;
+                            /* H6 (vms-76d): the holder's OWN (requester-side) lock
+                             * handle, so the daemon can address the BLKAST to the
+                             * holder node's ORIGIN record (keyed by req_lkid). */
+                            xn->blocking_req_lkid = g->req_lkid;
                             break;
                         }
                     }
@@ -1720,7 +1739,97 @@ static uint32_t vms_lock_dlm_xnode_grant_recv(struct vms_dlm_xnode_args *req)
         org->requested_mode = req->lkmode;
     org->granted_mode = req->lkmode;   /* NL on a queued-reply; EX on a grant */
 
+    /*
+     * BLKAST WIRE (rung H6, vms-76d). When this GRANT establishes the record as a
+     * HOLDER proxy (a real granted mode) AND the holder registered a blocking-AST
+     * routine, remember it so a BLKAST the master later sends over SCS can fire a
+     * genuine user-mode AST. Recorded ONLY from what the holder supplied on its own
+     * $ENQ (req->blkastadr) -- never fabricated. A queued-reply (NL) or a GRANT with
+     * no blkastadr leaves the record with no blocking AST, so a later BLKAST honestly
+     * declines rather than inventing a delivery (INV-6).
+     */
+    if (req->blkastadr != 0 && req->lkmode > LCK_K_NLMODE) {
+        org->blkastadr = req->blkastadr;
+        org->blkastprm = req->blkastprm;
+    }
+
     exec_unlock(&vms_dlm_origin_lock);
+    return SS__NORMAL;
+}
+
+/*
+ * vms_lock_dlm_xnode_blkast_recv - the HOLDER-SIDE BLOCKING-AST DELIVERY (rung H6,
+ * vms-76d). The symmetric mirror of vms_lock_dlm_xnode_grant_recv: a BLKAST the
+ * MASTER sent over SCS -- because a conflicting request queued behind this node's
+ * granted lock -- lands here and FIRES the holder's blocking AST for real.
+ *
+ * The record is the holder-side ORIGIN proxy the GRANT receive established (keyed
+ * by the holder's own req_lkid, which the BLKAST frame carries). If it exists and
+ * the holder registered a blocking-AST routine (org->blkastadr, from its own $ENQ),
+ * a REAL user-mode AST is queued to the delivering process's USER-mode AST queue --
+ * the SAME mechanism notify_blocking_asts/queue_completion_ast use -- so the holder
+ * genuinely receives the blocking AST (drainable via VMS_IOCTL_DELIVERAST), not a
+ * log line. `proc` is the holder node's registered delivery context (the daemon that
+ * both established the record and dispatches this BLKAST -- one process), so no stale
+ * proc pointer is stored on the record.
+ *
+ * Returns SS$_NORMAL and sets req->blkast_delivered=1 when an AST was genuinely
+ * queued. Returns SS$_UNSUPPORTED (never faked) when there is no holder record for
+ * the named handle or it carries no blocking-AST routine -- honest, per INV-6.
+ */
+static uint32_t vms_lock_dlm_xnode_blkast_recv(struct vms_proc *proc,
+                                               struct vms_dlm_xnode_args *req)
+{
+    struct vms_dlm_origin *org = NULL, *cur;
+    struct vms_ast_entry *ast;
+    struct vms_ast_state *ast_state;
+    uint64_t blkastadr = 0, blkastprm = 0;
+
+    if (proc == NULL)
+        return SS__BADPARAM;
+    if (req->req_lkid == 0)
+        return SS__BADPARAM;   /* a BLKAST must name the holder's own handle */
+
+    exec_lock(&vms_dlm_origin_lock);
+    exec_list_for_each_entry(cur, &vms_dlm_origin_list, list) {
+        if (cur->req_lkid == req->req_lkid && cur->blkastadr != 0) {
+            org = cur;
+            blkastadr = cur->blkastadr;
+            blkastprm = cur->blkastprm;
+            break;
+        }
+    }
+    if (org == NULL) {
+        exec_unlock(&vms_dlm_origin_lock);
+        return SS__UNSUPPORTED;   /* no holder record / no blocking AST -- honest */
+    }
+    org->blkast_count++;
+    exec_unlock(&vms_dlm_origin_lock);
+
+    /* Queue a REAL user-mode blocking AST to the holder's delivery process. Mirrors
+     * notify_blocking_asts: astprm is the holder's own request handle (VMS delivers
+     * the lock id as the blocking AST parameter unless the holder supplied one). */
+    ast = exec_zalloc_atomic(sizeof(*ast));
+    if (ast == NULL)
+        return SS__INSFMEM;
+    ast->astadr = blkastadr;
+    ast->astprm = blkastprm ? blkastprm : (uint64_t)req->req_lkid;
+    ast->acmode = PSL_C_USER;
+
+    ast_state = &proc->ast[PSL_C_USER];
+    exec_lock(&ast_state->lock);
+    if (ast_state->count < VMS_AST_MAX_PER_MODE) {
+        exec_list_add_tail(&ast->list, &ast_state->pending);
+        ast_state->count++;
+        exec_unlock(&ast_state->lock);
+        vms_ast_notify_arrival(proc);
+    } else {
+        exec_free(ast);
+        exec_unlock(&ast_state->lock);
+        return SS__INSFMEM;   /* queue full -- honest failure, no faked delivery */
+    }
+
+    req->blkast_delivered = 1;
     return SS__NORMAL;
 }
 
@@ -1786,10 +1895,16 @@ static int vms_lock_dlm_origin_getlki(uint32_t lkid, uint32_t *granted_mode,
  *     runs try_grant_waiters, so the blocked request GRANTS -- the block-then-grant
  *     flip, driven by a real $DEQ.
  *
+ * RUNG H6 -- THE BLKAST WIRE (vms-76d). VMS_DLM_OP_GRANT (requester-side GRANT
+ * receive, H5) and VMS_DLM_OP_BLKAST (holder-side blocking-AST delivery, H6) are
+ * both IMPLEMENTED RECEIVE ops now: a GRANT completes the requester's origin record,
+ * and a BLKAST fires the holder's blocking AST for real (a genuine user-mode AST on
+ * the holder's process). The ENQ path additionally reports blocking_req_lkid -- the
+ * blocking holder's requester-side handle -- so the daemon can address the BLKAST to
+ * the holder node's origin record. INV-6: a BLKAST with no matching holder record or
+ * no registered blocking-AST routine declines SS$_UNSUPPORTED, never a faked AST.
+ *
  * STILL FENCED HONESTLY (INV-6 -- SS$_UNSUPPORTED, never faked):
- *   - VMS_DLM_OP_GRANT / VMS_DLM_OP_BLKAST as RECEIVE ops: completing/notifying the
- *     ORIGINATING node's pending lock is the requester-side wiring, not routed
- *     through this master-centric executive path.
  *   - LVB replication (vms-d81), resource-directory consistency (vms-1bba),
  *     remastering (vms-6ee), distributed deadlock detection (vms-ec75).
  *
@@ -1811,6 +1926,8 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
     req->queued = 0;
     req->blocking_csid = 0;
     req->blocking_master_lkid = 0;
+    req->blocking_req_lkid = 0;   /* H6: the BLKAST target handle (ENQ fills it) */
+    req->blkast_delivered = 0;    /* H6: 1 only when a BLKAST receive fires an AST */
 
     switch (req->op) {
     case VMS_DLM_OP_ENQ: {
@@ -1849,6 +1966,7 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
         req->queued = xn.queued ? 1u : 0u;
         req->blocking_csid = xn.blocking_csid;
         req->blocking_master_lkid = xn.blocking_master_lkid;
+        req->blocking_req_lkid = xn.blocking_req_lkid; /* H6 BLKAST target handle */
 
         /* A queued request is a REAL lock on the waiting queue, not a grant. */
         if (xn.queued)
@@ -1867,11 +1985,15 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
          * observed on the requester node. Was SS$_UNSUPPORTED. */
         return vms_lock_dlm_xnode_grant_recv(req);
     case VMS_DLM_OP_BLKAST:
-        /* BLKAST RECEIVE is the holder-side blocking-AST delivery. The BLKAST
-         * WIRE (master -> holder) is deferred honestly on this rung (vms-6ca):
-         * the block-then-grant round-trip is proven without it (the holder
-         * releases on its own). Still SS$_UNSUPPORTED -- never faked. */
-        return SS__UNSUPPORTED;
+        /* HOLDER-SIDE BLKAST RECEIVE (rung H6, vms-76d). A BLKAST the master sent
+         * over SCS -- because a conflicting request queued behind this node's
+         * granted lock -- FIRES the holder's blocking AST for real: a genuine
+         * user-mode AST queued to the holder's process (drainable via
+         * VMS_IOCTL_DELIVERAST), the symmetric mirror of the requester-side GRANT
+         * RECEIVE. Was SS$_UNSUPPORTED (the wire was deferred at H5). Still
+         * SS$_UNSUPPORTED, never faked, when there is no holder record for the
+         * named handle or it registered no blocking-AST routine (INV-6). */
+        return vms_lock_dlm_xnode_blkast_recv(proc, req);
     default:
         return SS__BADPARAM;
     }

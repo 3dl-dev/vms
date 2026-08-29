@@ -544,7 +544,30 @@ struct vms_dlm_xnode_args {
     uint32_t queued;
     uint32_t blocking_csid;
     uint32_t blocking_master_lkid;
+    /*
+     * BLKAST WIRE (DLM epic vms-7fa rung H6, vms-76d). The holder-side blocking-AST
+     * delivery, the symmetric mirror of the requester-side GRANT RECEIVE (H5):
+     *   blocking_req_lkid  - return(ENQ): the blocking cross-node HOLDER's OWN
+     *                        (requester-side) lock handle -- the value a BLKAST
+     *                        must carry in req_lkid so the holder node finds its
+     *                        ORIGIN record. 0 when nothing blocks across nodes.
+     *   blkastadr/blkastprm - in(GRANT receive): when a GRANT establishes/updates a
+     *                        holder-side ORIGIN record, the holder's blocking-AST
+     *                        routine + parameter, remembered on the record so a
+     *                        later BLKAST can fire a REAL user-mode AST. 0 = none.
+     *   blkast_delivered   - return(BLKAST receive): 1 iff a genuine user-mode
+     *                        blocking AST was queued to the holder's process
+     *                        (INV-6: 0/SS$_UNSUPPORTED when there is no such
+     *                        holder record or no blkastadr -- never a faked AST).
+     */
+    uint32_t blocking_req_lkid;
+    uint64_t blkastadr;
+    uint64_t blkastprm;
+    uint32_t blkast_delivered;
+    uint32_t pad_blkast;
 };
+_Static_assert(sizeof(struct vms_dlm_xnode_args) == 120,
+               "vms_dlm_xnode_args changed size -- VMS_IOCTL_DLM_XNODE ABI break");
 #define VMS_IOCTL_DLM_XNODE _IOWR(VMS_IOC_MAGIC, 0x35, struct vms_dlm_xnode_args)
 
 /* ================================================================

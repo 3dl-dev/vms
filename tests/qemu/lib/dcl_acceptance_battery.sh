@@ -175,6 +175,33 @@ run_dcl_acceptance_battery() {
     must_not_have "$DKA0_LINE" 'Online' "SHOW DEVICE DKA0: [vms-e6f]: DKA0: status is not the bare 'Online' bug"
     negctl     "$SEG" 'SHOW DEVICE' "SHOW DEVICE DKA0:"
 
+    # --- F$GETDVI reads the SAME real executive device table (vms-050) -------
+    # F$GETDVI used to fabricate: EXISTS=TRUE for EVERY name, VOLNAM guessed from
+    # a name substring ("OVMXSYS"/"VOLUME"), DEVCLASS/DEVTYPE guessed the same
+    # way, MOUNTCNT a literal "1", and block counts from statvfs("/") on the
+    # Linux root. It now routes through vms_kif_getdvi_devnam + vms_kif_getvol --
+    # the SAME executive readers SHOW DEVICE (asserted just above) uses -- so a
+    # real device answers from the executive's I/O database and a nonexistent
+    # one answers the honest FALSE. This is the POSITIVE half of the de-fab that
+    # a userspace-only ctest cannot prove (no /dev/vms, Rule 9); the absence
+    # half is tests/dcl/test_getdvi_no_fabrication.sh.
+    run_cmd 'WRITE SYS$OUTPUT "GETDVIEXIST=" + F$GETDVI("DKA0:","EXISTS")'
+    must_have     "$SEG" 'GETDVIEXIST=TRUE' "F\$GETDVI EXISTS [vms-050]: the real system disk DKA0: exists -> TRUE, from the executive device table"
+    negctl        "$SEG" 'GETDVIEXIST' "F\$GETDVI EXISTS(real)"
+
+    run_cmd 'WRITE SYS$OUTPUT "GETDVIBOGUS=" + F$GETDVI("ZZZ999:","EXISTS")'
+    must_have     "$SEG" 'GETDVIBOGUS=FALSE' "F\$GETDVI EXISTS [vms-050]: a nonexistent device (ZZZ999:) -> honest FALSE (NOT the old unconditional TRUE)"
+    must_not_have "$SEG" 'GETDVIBOGUS=TRUE' "F\$GETDVI EXISTS [vms-050]: bogus device is NOT fabricated as existing"
+    negctl        "$SEG" 'GETDVIBOGUS' "F\$GETDVI EXISTS(bogus)"
+
+    run_cmd 'WRITE SYS$OUTPUT "GETDVIVOL=" + F$GETDVI("DKA0:","VOLNAM")'
+    must_have     "$SEG" "GETDVIVOL=$VOLUME_LABEL" "F\$GETDVI VOLNAM [vms-050]: reports the REAL mounted ODS-2 label '$VOLUME_LABEL' (same value SHOW DEVICE read above), not a fabricated constant"
+    negctl        "$SEG" 'GETDVIVOL' "F\$GETDVI VOLNAM"
+
+    run_cmd 'WRITE SYS$OUTPUT "GETDVICLS=" + F$GETDVI("DKA0:","DEVCLASS")'
+    must_have     "$SEG" 'GETDVICLS=1' "F\$GETDVI DEVCLASS [vms-050]: DKA0: is DC\$_DISK (1) from the executive, not a name-substring guess"
+    negctl        "$SEG" 'GETDVICLS' "F\$GETDVI DEVCLASS"
+
     # --- SHOW DEVICES (plural accepted) (vms-9344 surface) ------------------
     run_cmd 'SHOW DEVICES'
     must_have     "$SEG" 'DKA0' "SHOW DEVICES [vms-9344]: plural form is accepted and lists devices"

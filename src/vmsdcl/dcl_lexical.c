@@ -2455,7 +2455,98 @@ static int lex_device(struct dcl_context *ctx, const char *args,
 }
 
 /*
- * F$GETDVI(device, item) - Get device information.
+ * DVI$_DEVCHAR bits F$GETDVI reports (vms-050).
+ *
+ * PROVENANCE (CLAUDE.md Rule 8): the public docs available to this work do not
+ * publish the byte-level DEV$M_ layout, so these values are an OVMX design
+ * choice, deliberately IDENTICAL to the ones src/libvms/syssvc/sys_device.c's
+ * $GETDVI reader (fill_dvi_item) uses, so F$GETDVI and $GETDVI report the same
+ * DVI$_DEVCHAR longword for the same device. (A separate DEV$M_ table in
+ * src/libvms/include/devdef.h disagrees on these values; reconciling the two,
+ * against an oracle, is out of scope here and is filed as a follow-up. What
+ * matters for this de-fab is that the two DCL-visible readers agree and the
+ * value is derived from real executive state, never fabricated.)
+ */
+#define GETDVI_DEVCHAR_ALL   0x00000008u  /* device is allocated */
+#define GETDVI_DEVCHAR_AVL   0x00000020u  /* device is available */
+#define GETDVI_DEVCHAR_MNT   0x00000200u  /* a volume is mounted on it */
+
+/*
+ * Resolve a device name to its EXECUTIVE device-table row (vms-050).
+ *
+ * The lookup is vms_kif_getdvi_devnam() -- the SAME executive reader F$DEVICE
+ * and SHOW DEVICE use (src/vmsdcl/dcl_cmd_show.c) -- so the row is the one
+ * every process on the node sees, never a per-process guess (Rule 11 / INV-6).
+ * The executive table holds only physical unit names (OPA0:, DKA0:, ...), so a
+ * logical name -- SYS$SYSDEVICE:, the standard VMS idiom for the system disk --
+ * legitimately misses the first lookup; it is then translated through the DCL
+ * logical-name translator (the same one lex_trnlnm / SHOW LOGICAL use) and the
+ * physical lookup retried with the DEVICE field of the equivalence. A name that
+ * resolves to neither a unit nor a logical comes back SS$_NOSUCHDEV -- the
+ * honest "no such device", never a fabricated row.
+ *
+ * This mirrors src/libvms/syssvc/sys_device.c's device_lookup_translated(),
+ * which $GETDVI uses; F$GETDVI is documented as a $GETDVI wrapper, so it
+ * resolves the device the same way. That helper is static in another image;
+ * DCL translates with dcl_translate_logical() here rather than pull in a new
+ * cross-image symbol. Bounded against a translation loop.
+ */
+#define GETDVI_XLATE_MAX_DEPTH 8
+static uint32_t getdvi_resolve(const char *devnam_in, struct vms_devinfo *info)
+{
+    char cur[VMSFS_MAX_DEVICE + 1];
+    strncpy(cur, devnam_in, sizeof(cur) - 1);
+    cur[sizeof(cur) - 1] = '\0';
+
+    (void)vms_kif_open();
+
+    for (int depth = 0; depth < GETDVI_XLATE_MAX_DEPTH; depth++) {
+        uint32_t status = vms_kif_getdvi_devnam(cur, info);
+        if (status != SS$_NOSUCHDEV)
+            return status;   /* SS$_NORMAL, or a real failure (IVDEVNAM/...) */
+
+        /* Not a physical unit: try it as a logical name. The translator keys
+         * names WITHOUT a trailing colon, so strip one before the lookup. */
+        char key[VMSFS_MAX_DEVICE + 1];
+        strncpy(key, cur, sizeof(key) - 1);
+        key[sizeof(key) - 1] = '\0';
+        size_t klen = strlen(key);
+        if (klen > 0 && key[klen - 1] == ':')
+            key[--klen] = '\0';
+        if (klen == 0)
+            return SS$_NOSUCHDEV;
+
+        char equiv[256];
+        if (dcl_translate_logical(key, equiv, sizeof(equiv)) != 0)
+            return SS$_NOSUCHDEV;   /* no such logical: honest no-such-device */
+
+        vmsfs_filespec_t parts;
+        memset(&parts, 0, sizeof(parts));
+        if (!$VMS_STATUS_SUCCESS(vmsfs_parse_filespec(equiv, &parts)) ||
+            !parts.has_device || parts.device[0] == '\0')
+            return SS$_NOSUCHDEV;
+
+        if (strcmp(parts.device, cur) == 0)
+            return SS$_NOSUCHDEV;    /* fixed point: refuse to loop forever */
+        strncpy(cur, parts.device, sizeof(cur) - 1);
+        cur[sizeof(cur) - 1] = '\0';
+    }
+    return SS$_NOSUCHDEV;
+}
+
+/*
+ * F$GETDVI(device, item) - Get device information (vms-050).
+ *
+ * Reads the EXECUTIVE'S I/O database (getdvi_resolve() above, then
+ * vms_kif_getvol() for the mounted-volume items), exactly as VMS's F$GETDVI is
+ * a wrapper over $GETDVI. Every value returned is the executive's own; when the
+ * executive does not track an item (device type is Unknown, a device is not a
+ * mounted volume, ...) the honest VMS "not available" answer is returned -- an
+ * empty string or 0 per the public DCL Dictionary F$GETDVI semantics -- NEVER a
+ * plausible-looking constant. The prior implementation fabricated EXISTS=TRUE
+ * for every name, a name-substring-guessed DEVTYPE/DEVCLASS, VOLNAM="OVMXSYS",
+ * MOUNTCNT="1" and statvfs("/")-derived block counts; all of that is gone
+ * (INV-6).
  */
 static int lex_getdvi(struct dcl_context *ctx, const char *args,
                       char *result, size_t result_size)
@@ -2500,58 +2591,122 @@ static int lex_getdvi(struct dcl_context *ctx, const char *args,
     while (ilen > 0 && (item[ilen-1] == ' ' || item[ilen-1] == '\t'))
         item[--ilen] = '\0';
 
-    /* Determine which Linux path to stat */
-    const char *stat_path = "/";
-    int is_terminal = 0;
-    if (strstr(device, "OPA0") || strstr(device, "FTA0") ||
-        strstr(device, "TT") || strstr(device, "FT")) {
-        is_terminal = 1;
+    /* Resolve the device against the executive's device table. */
+    struct vms_devinfo info;
+    memset(&info, 0, sizeof(info));
+    uint32_t status = getdvi_resolve(device, &info);
+    int exists = (status == SS$_NORMAL);
+    if (exists)
+        info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    /*
+     * EXISTS is the one item defined for a device that does NOT exist: it
+     * returns the honest Boolean, never an error (public DCL Dictionary). A
+     * bogus device name therefore yields "FALSE", not the old unconditional
+     * "TRUE".
+     */
+    if (strcmp(item, "EXISTS") == 0) {
+        snprintf(result, result_size, exists ? "TRUE" : "FALSE");
+        return 0;
     }
 
-    if (strcmp(item, "DEVNAM") == 0) {
-        /* Return canonical device name */
-        if (strstr(device, "SYSDEVICE") || strstr(device, "SYS$SYSDEVICE")) {
-            snprintf(result, result_size, "_SYS$SYSDEVICE:");
-        } else {
-            snprintf(result, result_size, "_%s:", device);
-        }
-    } else if (strcmp(item, "EXISTS") == 0) {
-        /* Check if device exists — always TRUE for known devices */
-        snprintf(result, result_size, "TRUE");
+    /*
+     * For every other item the device must exist. VMS's F$GETDVI signals the
+     * executive's own diagnostic when it does not -- the same messages SHOW
+     * DEVICE emits (src/vmsdcl/dcl_cmd_show.c, oracle-pinned). The value stays
+     * empty and the call fails.
+     */
+    if (!exists) {
+        if (status == SS$_IVDEVNAM)
+            dcl_error("SYSTEM", 0, "IVDEVNAM", "invalid device name");
+        else
+            dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available");
+        result[0] = '\0';
+        return -1;
+    }
+
+    /* Mounted-volume items come from the ACP's executive-global mounted-volume
+     * table, read once here (a non-disk or unmounted unit yields mounted==0,
+     * which is the honest answer -- empty label, zero counts, never a fake). */
+    struct vms_getvol_args vol;
+    memset(&vol, 0, sizeof(vol));
+    (void)vms_kif_getvol(info.devnam, &vol);
+
+    if (strcmp(item, "DEVNAM") == 0 ||
+        strcmp(item, "FULLDEVNAM") == 0 ||
+        strcmp(item, "ALLDEVNAM") == 0) {
+        /* The executive's own physical name (e.g. "DKA0:"). Single node: the
+         * full/all name is the physical name -- a cluster node prefix is a
+         * documented remainder. No leading underscore is invented here (the
+         * executive does not store one, and F$DEVICE deliberately does not add
+         * one either -- see populate_device_list). */
+        snprintf(result, result_size, "%s", info.devnam);
     } else if (strcmp(item, "DEVCLASS") == 0) {
-        if (is_terminal)
-            snprintf(result, result_size, "66"); /* DC$_TERM */
-        else
-            snprintf(result, result_size, "1");  /* DC$_DISK */
+        snprintf(result, result_size, "%u", info.devclass);
     } else if (strcmp(item, "DEVTYPE") == 0) {
-        if (is_terminal)
-            snprintf(result, result_size, "112"); /* DT$_VT100 */
-        else
-            snprintf(result, result_size, "44");  /* DT$_RA92 */
+        /* Real device type code; 0 = Unknown, which is what the executive
+         * genuinely records for OVMX's console and disks (it does not model a
+         * VT-model or an RA-model), NOT the old fabricated DT$_VT100/DT$_RA92. */
+        snprintf(result, result_size, "%u", info.devtype);
+    } else if (strcmp(item, "DEVCHAR") == 0) {
+        uint32_t chars = GETDVI_DEVCHAR_AVL;      /* present in the I/O DB */
+        if (info.allocated) chars |= GETDVI_DEVCHAR_ALL;
+        if (vol.mounted)    chars |= GETDVI_DEVCHAR_MNT;
+        snprintf(result, result_size, "%u", chars);
+    } else if (strcmp(item, "UNIT") == 0) {
+        /* Trailing digits of the physical name (DKA100: -> 100). */
+        const char *d = info.devnam;
+        const char *q = d + strlen(d);
+        while (q > d && (q[-1] == ':')) q--;
+        const char *e = q;
+        while (q > d && isdigit((unsigned char)q[-1])) q--;
+        snprintf(result, result_size, "%u",
+                 (q < e) ? (unsigned)strtoul(q, NULL, 10) : 0u);
+    } else if (strcmp(item, "REFCNT") == 0) {
+        snprintf(result, result_size, "%u", info.refcnt);
+    } else if (strcmp(item, "ERRCNT") == 0) {
+        snprintf(result, result_size, "%u", info.errcnt);
+    } else if (strcmp(item, "OPCNT") == 0) {
+        snprintf(result, result_size, "%llu",
+                 (unsigned long long)info.opcnt);
+    } else if (strcmp(item, "PID") == 0) {
+        /* Owner PID, VMS's hexadecimal process-id form; 0 when unowned. */
+        snprintf(result, result_size, "%08X", info.owner_pid);
+    } else if (strcmp(item, "OWNUIC") == 0) {
+        snprintf(result, result_size, "%u", info.owner_uic);
+    } else if (strcmp(item, "AVAILABLE") == 0) {
+        /* A device the executive lists is available; it models no offline
+         * state yet, so "present" is the honest answer (a Boolean item). */
+        snprintf(result, result_size, "TRUE");
+    } else if (strcmp(item, "MNT") == 0) {
+        snprintf(result, result_size, vol.mounted ? "TRUE" : "FALSE");
     } else if (strcmp(item, "VOLNAM") == 0) {
-        if (strstr(device, "SYSDEVICE") || device[0] == '\0')
-            snprintf(result, result_size, "OVMXSYS");
-        else
-            snprintf(result, result_size, "VOLUME");
-    } else if (strcmp(item, "FREEBLOCKS") == 0) {
-        struct statvfs st;
-        if (statvfs(stat_path, &st) == 0) {
-            unsigned long free_blocks = (unsigned long)(st.f_bavail * st.f_frsize / 512);
-            snprintf(result, result_size, "%lu", free_blocks);
+        /* The mounted ODS-2 volume label, or empty when nothing is mounted --
+         * never the old fabricated "OVMXSYS"/"VOLUME". */
+        if (vol.mounted) {
+            vol.volnam[VMS_GETVOL_LABEL_SIZE - 1] = '\0';
+            snprintf(result, result_size, "%s", vol.volnam);
         } else {
-            snprintf(result, result_size, "0");
+            result[0] = '\0';
         }
     } else if (strcmp(item, "MAXBLOCK") == 0) {
-        struct statvfs st;
-        if (statvfs(stat_path, &st) == 0) {
-            unsigned long total_blocks = (unsigned long)(st.f_blocks * st.f_frsize / 512);
-            snprintf(result, result_size, "%lu", total_blocks);
-        } else {
-            snprintf(result, result_size, "0");
-        }
+        /* Volume size in blocks from the SCB, or 0 when not a mounted volume --
+         * never the old statvfs("/") figure for the Linux root. */
+        snprintf(result, result_size, "%u", vol.mounted ? vol.volsize : 0u);
+    } else if (strcmp(item, "FREEBLOCKS") == 0) {
+        /* Counted from the volume's storage bitmap at call time; 0 when not a
+         * mounted volume or the bitmap could not be read this call. */
+        snprintf(result, result_size, "%u",
+                 (vol.mounted && vol.free_valid) ? vol.freeblocks : 0u);
+    } else if (strcmp(item, "CLUSTER") == 0) {
+        snprintf(result, result_size, "%u", vol.mounted ? vol.cluster : 0u);
     } else if (strcmp(item, "MOUNTCNT") == 0) {
-        snprintf(result, result_size, "1");
+        /* Real mount state: 1 for a genuinely mounted volume (single node), 0
+         * for one that is not -- never the old unconditional "1". */
+        snprintf(result, result_size, "%u", vol.mounted ? 1u : 0u);
     } else {
+        /* An item the executive does not track here. Honest empty answer,
+         * never a fabricated value (Rule 10). */
         result[0] = '\0';
     }
 

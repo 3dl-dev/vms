@@ -119,10 +119,14 @@ output=$(echo "RETURN" | $VMSDCL 2>&1)
 check_vms_format "return without gosub" "$output"
 assert_ident "return without gosub" "%DCL-E-NOGOSUB" "$output"
 
-# Test 11: Unrecognized SHOW keyword -> %DCL-E-IVKEYW
+# Test 11: Unrecognized SHOW keyword -> %DCL-W-IVKEYW (severity WARNING, not
+# ERROR: oracle-confirmed on OpenVMS VAX V7.3 and Alpha V8.4, 2026-08-29,
+# vms-050 UX-fidelity. See tests/qemu/golden/show-version-* for the verbatim
+# capture; the full two-line message and its continuation line are asserted
+# byte-for-byte by tests/dcl/test_show_version_ivkeyw_golden.sh.)
 output=$(echo "SHOW XYZZY_INVALID" | $VMSDCL 2>&1)
 check_vms_format "show invalid keyword" "$output"
-assert_ident "show invalid keyword" "%DCL-E-IVKEYW" "$output"
+assert_ident "show invalid keyword" "%DCL-W-IVKEYW" "$output"
 
 # Test 12 (vms-a10): SET PROTECTION on a nonexistent file -> %RMS-E-PRV
 # (dcl_cmd_set.c cmd_set_protection: chmod() fails with ENOENT and the error

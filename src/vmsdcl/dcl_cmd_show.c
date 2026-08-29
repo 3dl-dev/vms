@@ -1511,6 +1511,14 @@ static int cmd_show_symbol(struct dcl_command *cmd)
                  * found. DCL integer width is ARCHITECTURE-INVARIANT at 32
                  * bits; it is not a VAX artefact that a 64-bit VMS widens.
                  *
+                 * The recorded transcript backing every value above -- captured
+                 * side by side on OpenVMS Alpha V8.4 and OpenVMS VAX V7.3, and
+                 * extended to F$INTEGER above 2^31 and the %X8000000N identifier
+                 * rendering (all likewise architecture-invariant) -- is
+                 * docs/oracle/alpha84-dcl-integer-widths.md (rd vms-580). Before
+                 * that capture this comment asserted the Alpha result without a
+                 * recorded oracle; the transcript closes that provenance hole.
+                 *
                  * "No divergence, measured on both" is a result, not a
                  * formality -- it is the difference between this rendering
                  * being correct and being accidentally correct on the only

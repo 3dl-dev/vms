@@ -362,6 +362,35 @@ else
     bad "SHOW SYSTEM lists only $ROW_COUNT row(s) -- JOB_CONTROL is not a separate process"
 fi
 
+# --- 4b. THE INTERACTIVE SESSION IS A DISTINCT EXECUTIVE PROCESS FROM
+#         JOB_CONTROL (vms-d4ef). On real OpenVMS the job controller $CREPRCs
+#         the console login as a genuinely NEW process with its OWN process id,
+#         DISTINCT from JOB_CONTROL's (oracle
+#         docs/oracle/vax73-show-system-process.md: JOB_CONTROL and the
+#         interactive SYSTEM session appear at different pids). Previously
+#         OVMX's login child called vms_kif_register_continue() and so SHARED
+#         JOB_CONTROL's vms_pid -- SHOW SYSTEM listed a JOB_CONTROL row and a
+#         SYSTEM row at the SAME pid. The child now registers FRESH (its own
+#         vms_pid) and re-establishes the SYSTEM identity via
+#         vms_kif_establish_system(), so the two are two processes at two pids.
+#
+#         This session logged in as SYSTEM, so its OWN row is named SYSTEM
+#         (tools/vms_login.c $SETPRN's the account username, oracle-confirmed).
+#         Its pid MUST differ from JOB_CONTROL's. This reads only the pid and
+#         name columns, so it is unaffected by the accounting columns the VAX
+#         lane restores to this table.
+SYS_ROW=$(printf '%s\n' "$SHOW_SEG" | grep -E '^[0-9A-Fa-f]{8} SYSTEM ' | head -1)
+if [ -n "$SYS_ROW" ]; then
+    SYS_PID=$(printf '%s' "$SYS_ROW" | cut -c1-8)
+    if [ "$SYS_PID" != "$JC_PID" ]; then
+        ok "the interactive SYSTEM session ($SYS_PID) is a DISTINCT process from JOB_CONTROL ($JC_PID) -- login is not a JOB_CONTROL continuation (vms-d4ef)"
+    else
+        bad "the SYSTEM session and JOB_CONTROL both show pid $JC_PID -- the login is still continuing JOB_CONTROL's identity (vms-d4ef regression)"
+    fi
+else
+    bad "SHOW SYSTEM listed no SYSTEM-named row for the logged-in interactive session (expected the \$SETPRN'd session row)"
+fi
+
 # --- 5. THE OPCOM RECORD FORMAT, oracle-exact (vms-32a) --------------------
 # docs/design-opcom-executive-logging.md sec6. REQUEST is the cheapest DCL
 # command that calls sys$sndopr (src/vmsdcl/dcl_cmd_misc.c cmd_request), so

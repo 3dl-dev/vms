@@ -32,7 +32,10 @@ FIRST_PROC..en:
 	## [OVMX] GP-establish pair for THIS procedure (FIRST_PROC): K==0 -> 0/0.
 	## The .ovmx_gpdisp directive EMITS the ldah/lda pair (ldah $29,0($27);
 	## lda $29,0($29)) and marks it with the OVMX GP-displacement relocation.
-	.ovmx_gpdisp FIRST_PROC
+	## vms-095 (C3) added the explicit module-GP register operand; this reloc-
+	## round-trip fixture keeps $29 (the register is content the linker never
+	## patches, so the .obj bytes are unchanged; OVMX cc1 itself uses $15).
+	.ovmx_gpdisp $29, FIRST_PROC
 	bis $31, 1, $0
 	ret $31, ($26), 1
 	.link
@@ -51,7 +54,7 @@ SECOND_PROC..en:
 	.prologue
 	## [OVMX] GP-establish pair for THIS procedure (SECOND_PROC): K!=0 -> -K.
 	## The .ovmx_gpdisp directive EMITS the ldah/lda pair and marks it.
-	.ovmx_gpdisp SECOND_PROC
+	.ovmx_gpdisp $29, SECOND_PROC
 	bis $31, 2, $0
 	ret $31, ($26), 1
 	.link

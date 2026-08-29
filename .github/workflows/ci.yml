@@ -5270,6 +5270,29 @@ jobs:
       - name: OTS$ runtime proof (LIBOTS$ links + DECC$SHR binds it + divide correct)
         run: IMG=ovmx-cross-alpha-vms:latest bash tools/cross-alpha-vms/ots/run_ots_proof.sh
 
+      # vms-095 (component C3 of vms-5f5): the per-image module-GP prologue. The
+      # port cc1 must establish each VMS procedure's module-GP in $15
+      # (ldah $15,0($27) / lda $15,0($15) = the `.ovmx_gpdisp $15' expansion),
+      # SAVE the caller's $15 on entry and RESTORE it before RET, and address the
+      # linkage section $15-relative (not $27/&PDSC, the crtl_rms N=7 skew). The
+      # proof compiles a multi-proc TU with the real cc1, objdump-asserts all of
+      # that, then PROVES THE GATE CAN FAIL by mutating the disassembly (drop the
+      # gpdisp / the $15 save / the $15 restore, or re-base the loads onto $27)
+      # and asserting each mutant is rejected. Reuses the toolchain image above.
+      - name: Per-image module-GP prologue proof ($15 established + saved/restored, loads $15-relative) (vms-095)
+        run: IMG=ovmx-cross-alpha-vms:latest bash tools/cross-alpha-vms/module-gp/run_module_gp_proof.sh
+
+      # vms-095 (C3): the OVMX linker must resolve the module-GP K for LOCAL/static
+      # and weak-overridden procedures, not only global universals -- the gap that
+      # made the real alpha DECC$SHR link hard-error %LINK-F-GPDISPUNDEF on a local
+      # musl proc (io_thread_func). Compiles a two-object fixture (a static proc, a
+      # PT_NULL-extern leaf, and a weak proc a strong def overrides), links it, and
+      # asserts every K resolves (zero GPDISPUNDEF) with the weak site redirected to
+      # the surviving strong def -- then mutates the diagnostics to prove the gate
+      # can fail. Reuses the toolchain image above.
+      - name: Per-image module-GP resolves LOCAL/static + weak-overridden procs (vms-095)
+        run: IMG=ovmx-cross-alpha-vms:latest bash tools/cross-alpha-vms/module-gp/run_module_gp_locals_proof.sh
+
   # Standing gate for vms-864: the genuine alpha DECC$SHR (musl-alpha universals
   # + the OVMX bootstrap surface from mk_decc_shr.sh's ALPHA branch) must link a
   # REAL alpha-dec-vms port crt0 (tools/cross-alpha-vms/joint-e2e/) with ZERO

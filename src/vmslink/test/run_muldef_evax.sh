@@ -101,19 +101,54 @@ EOF
 evax_cc "$WORK/weak_def.c" "$WORK/weak_def.obj"
 evax_cc "$WORK/strong_def.c" "$WORK/strong_def.obj"
 
-# weak object FIRST, strong object SECOND -> must SUCCEED (strong wins, no MULDEF)
-"$WORK/LINK.EXE" --shareable \
-    --symbol-vector "use_weak_side=PROCEDURE,use_strong_side=PROCEDURE" \
-    --gsmatch EQUAL,1,0 -o "$WORK/WEAKFIRST\$SHR.EXE" \
-    "$WORK/weak_def.obj" "$WORK/strong_def.obj" >/dev/null
-echo "weak-then-strong EVAX link OK (unchanged weak-override behavior)"
+# The CONTROL must prove RESOLUTION, not merely that the link succeeds: a plain
+# first-match resolver ALSO links a weak/strong pair without a MULDEF, so a
+# "does it link?" check passes on the buggy linker too (it did — that gap let the
+# decc$_malloc64/__simple_malloc header-less-allocator bug ship, vms-430). We
+# therefore EXPORT the contested `dup_sym` PLUS `use_strong_side` (defined ONLY
+# in strong_def.obj) and `use_weak_side` (defined ONLY in weak_def.obj), and read
+# each resolved .vms$sv value (%LINK-I-UNIV ... value=0x..). STRONG-over-WEAK
+# override means `dup_sym` must bind to the STRONG def, which lives in the SAME
+# object as `use_strong_side` (their procedure descriptors are laid out
+# together) — so the resolved dup_sym address sits CLOSER to use_strong_side than
+# to use_weak_side. That is layout-INVARIANT: it tests which OBJECT dup_sym
+# landed in, not any absolute address (absolute addresses shift with input order
+# as section placement follows link order). A first-match resolver in weak-first
+# order instead binds dup_sym to the weak def in weak_def.obj — closer to
+# use_weak_side — and the assertion fails (as it does on the pre-vms-430 linker).
+univ_val() {   # <link.log> <name> -> the resolved 0x.. value of universal <name>
+    grep -E "%LINK-I-UNIV,[[:space:]]+sv#[0-9]+[[:space:]]+$2[[:space:]]" "$1" \
+        | grep -oE "value=0x[0-9a-fA-F]+" | head -1 | sed 's/value=//'
+}
+# Assert dup_sym resolved into the STRONG object (closer to use_strong_side than
+# to use_weak_side). $1 = link log, $2 = human label for the input order.
+assert_strong_won() {
+    _d=$(univ_val "$1" dup_sym); _w=$(univ_val "$1" use_weak_side); _s=$(univ_val "$1" use_strong_side)
+    [ -n "$_d" ] && [ -n "$_w" ] && [ -n "$_s" ] \
+        || { echo "FAIL ($2): could not read resolved universals (dup_sym=$_d weak=$_w strong=$_s)"; exit 1; }
+    _dw=$(( _d > _w ? _d - _w : _w - _d ))
+    _ds=$(( _d > _s ? _d - _s : _s - _d ))
+    echo "  $2: dup_sym=$_d  use_weak_side=$_w  use_strong_side=$_s  (|d-weak|=$_dw |d-strong|=$_ds)"
+    [ "$_ds" -lt "$_dw" ] \
+        || { echo "FAIL ($2): STRONG-over-WEAK override broken — dup_sym bound to the WEAK def (closer to use_weak_side). A first-match resolver bound the header-less __simple_malloc-class def; every reference to an overridable weak_alias name (e.g. __libc_malloc_impl) would then split across two allocators (vms-430)."; exit 1; }
+}
 
-# strong object FIRST, weak object SECOND -> must ALSO succeed (order-independent)
+# weak object FIRST, strong object SECOND -> must SUCCEED and bind dup_sym STRONG
 "$WORK/LINK.EXE" --shareable \
-    --symbol-vector "use_weak_side=PROCEDURE,use_strong_side=PROCEDURE" \
+    --symbol-vector "use_weak_side=PROCEDURE,use_strong_side=PROCEDURE,dup_sym=PROCEDURE" \
+    --gsmatch EQUAL,1,0 -o "$WORK/WEAKFIRST\$SHR.EXE" \
+    "$WORK/weak_def.obj" "$WORK/strong_def.obj" >"$WORK/weakfirst.log" 2>&1
+echo "weak-then-strong EVAX link OK"
+assert_strong_won "$WORK/weakfirst.log" "weak-first"
+
+# strong object FIRST, weak object SECOND -> must ALSO bind dup_sym STRONG
+"$WORK/LINK.EXE" --shareable \
+    --symbol-vector "use_weak_side=PROCEDURE,use_strong_side=PROCEDURE,dup_sym=PROCEDURE" \
     --gsmatch EQUAL,1,0 -o "$WORK/STRONGFIRST\$SHR.EXE" \
-    "$WORK/strong_def.obj" "$WORK/weak_def.obj" >/dev/null
-echo "strong-then-weak EVAX link OK (unchanged weak-override behavior, order-independent)"
+    "$WORK/strong_def.obj" "$WORK/weak_def.obj" >"$WORK/strongfirst.log" 2>&1
+echo "strong-then-weak EVAX link OK"
+assert_strong_won "$WORK/strongfirst.log" "strong-first"
+echo "weak-override RESOLUTION verified: dup_sym binds to the STRONG def in BOTH input orders — order-independent (vms-430)"
 
 echo
 echo "== CONTROL 2: two STRONG defs in the SAME archive -> exempt (vms-f1a) =="

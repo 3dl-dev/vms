@@ -3278,16 +3278,45 @@ static int evax_is_debug(const char *n)
            strncmp(n, "$DST", 4) == 0;
 }
 
-/* Resolve a symbol NAME across all inputs to its defining symbol. Returns the
- * defining input index + symbol, or -1 if undefined. */
+/* EGSY symbol flag: a WEAK definition (include/vms/egsy.h EGSY$V_WEAK, bit 0).
+ * Mirrors evax_read.c's decode; `struct evax_symbol.flags` preserves the raw
+ * EGSY$V_* bits. Redeclared identically near the vms-f1a MULDEF pre-pass below
+ * (an identical macro redefinition is well-defined C). */
+#ifndef EGSY__V_WEAK
+#define EGSY__V_WEAK 0x0001
+#endif
+
+/* Resolve a name to a DEFINED EVAX symbol, honoring ELF-style STRONG-over-WEAK
+ * override (vms-430) — the Alpha/EVAX mirror of the ELF resolve_ref weak-override
+ * (vms-36a, link.c ~1600). A first-match-by-input-order scan (the previous
+ * behavior) is WRONG for musl's overridable weak_alias defs: `__libc_malloc_impl`
+ * is defined WEAK by lite_malloc.o (an alias of the header-less __simple_malloc
+ * bump allocator) and STRONG by mallocng's malloc.o (the real allocator). If the
+ * weak def is scanned first (archive-member order), every reference — the exported
+ * decc$_malloc64 universal AND default_malloc's intra-image call — binds to
+ * __simple_malloc, so a program's malloc'd buffers carry no mallocng metadata
+ * while musl's own stdio (fopen's FILE) allocates via mallocng: two uncoordinated
+ * allocators handing out OVERLAPPING low-heap memory, and free()'s get_meta traps
+ * (gdb-proven on the vms-864 alpha joint-e2e: decc$_malloc64(8192) landed a
+ * header-less block over a mallocng FILE header). Preferring the STRONG def routes
+ * every reference to mallocng — one coordinated heap, a proper header on every
+ * chunk. No asymptotic cost: this scan is already linear per call; it now returns
+ * on the first STRONG match and only falls back to a remembered WEAK def when no
+ * STRONG def exists (unchanged single-def / all-weak behavior). */
 static int evax_find_sym(struct evax_input *in, int nin, const char *name,
                          int *out_i, const struct evax_symbol **out_s)
 {
+    int wi = -1, ws = -1;   /* first WEAK-defined match (fallback), if any */
     for (int i = 0; i < nin; i++)
-        for (int s = 0; s < in[i].obj.nsym; s++)
-            if (in[i].obj.sym[s].defined && strcmp(in[i].obj.sym[s].name, name) == 0) {
-                *out_i = i; *out_s = &in[i].obj.sym[s]; return 0;
+        for (int s = 0; s < in[i].obj.nsym; s++) {
+            const struct evax_symbol *y = &in[i].obj.sym[s];
+            if (!y->defined || strcmp(y->name, name) != 0) continue;
+            if (!(y->flags & EGSY__V_WEAK)) {   /* STRONG def: overrides, wins now */
+                *out_i = i; *out_s = y; return 0;
             }
+            if (wi < 0) { wi = i; ws = s; }      /* remember only the first weak def */
+        }
+    if (wi >= 0) { *out_i = wi; *out_s = &in[wi].obj.sym[ws]; return 0; }
     return -1;
 }
 
@@ -3693,11 +3722,13 @@ store_target:;
  * pathological over a 1345-member whole-archive) hard-errors %LINK-F-MULDEF the
  * instant two DIFFERENT inputs both define a name and BOTH defs are STRONG.
  *
- * Semantics mirror sym_insert exactly: WEAK-vs-STRONG / WEAK-vs-WEAK / a single
- * def are UNCHANGED (strong/first still wins silently — correct VMS/ELF symbol
- * resolution, and load-bearing for musl-alpha's weak_alias overridable defs). A
- * name defined multiple times in the SAME input (same index) is not a
- * cross-object dup and is skipped.
+ * Semantics mirror sym_insert exactly: WEAK-vs-STRONG resolves to the STRONG def
+ * (now genuinely enforced in evax_find_sym's strong-preference scan, vms-430 —
+ * previously a first-match scan that bound to whichever came first by input
+ * order, a latent header-less-allocator bug); WEAK-vs-WEAK / a single def are
+ * UNCHANGED (first weak wins — correct VMS/ELF resolution, and load-bearing for
+ * musl-alpha's weak_alias overridable defs). A name defined multiple times in
+ * the SAME input (same index) is not a cross-object dup and is skipped.
  *
  * WHOLE-ARCHIVE-SAFE by construction (verified on the genuine alpha DECC$SHR,
  * vms-864 joint-e2e): a well-formed library carries NO strong-vs-strong dups —

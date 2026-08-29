@@ -7921,6 +7921,7 @@ struct scsd_dlm_held {
      * the holder node finds its ORIGIN record); blocking_csid names the holder. */
     uint32_t blocking_csid;
     uint32_t blocking_req_lkid;
+};
 
 /*
  * Deferred-GRANT report (DLM epic vms-7fa rung H5, vms-6ca). On a cross-node

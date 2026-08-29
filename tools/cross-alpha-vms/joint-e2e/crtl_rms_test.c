@@ -91,6 +91,35 @@ static void main_sp(const char *point)
     (void)write(2, b, (unsigned long long)(p - b));
 }
 
+/* vms-430 MALLOC discriminator (DIAGNOSTIC): emit the RAW 64-bit value a CRTL
+ * malloc returned, as full 16 hex digits, via the same decc$write path as
+ * main_sp (no stdio, no printf -- %lx would print only 32 bits since `long` is
+ * 32-bit on this LLP64 port). `v` is read as `unsigned long long` (a true
+ * 64-bit type on this target), so the RAW pointer is emitted UN-truncated.
+ * This lets the rail settle (a) vs (b):
+ *   - prints "buf=0x000000000000a000"  -> the bad low value was already in the
+ *     value malloc RETURNED (truncation at/inside malloc, i.e. the mmap-return
+ *     path), and main's own store/load is faithful.
+ *   - prints a full valid 64-bit addr but memset's a0 was 0xa000 -> truncation
+ *     happened on the LOAD into a0 (main codegen). Disasm shows stq/ldq here,
+ *     so this arm is not expected -- belt-and-suspenders. */
+static void main_ptr(const char *point, unsigned long long v)
+{
+    char b[80];
+    char *p = b;
+    const char *s = "MALLOC-DISC: ";
+    while (*s) *p++ = *s++;
+    while (*point) *p++ = *point++;
+    const char *h = "=0x";
+    while (*h) *p++ = *h++;
+    for (int i = 15; i >= 0; i--) {
+        unsigned d = (unsigned)((v >> (i * 4)) & 0xfULL);
+        *p++ = (char)(d < 10 ? ('0' + d) : ('a' + (d - 10)));
+    }
+    *p++ = '\n';
+    (void)write(2, b, (unsigned long long)(p - b));
+}
+
 #define PT_SIZE   8192          /* KB-scale buffer */
 #define PT_NAME   "PORTTEST.DAT"
 
@@ -107,6 +136,9 @@ int main(int argc, char **argv, char **envp)
     MARK("MAIN-DISC: pre-malloc\n");
     main_sp("pre-malloc");
     unsigned char *buf = (unsigned char *)malloc(PT_SIZE);
+    /* vms-430 MALLOC-DISC: emit the RAW 64-bit malloc return BEFORE the null
+     * check, so the rail sees whether malloc itself yielded 0xa000. */
+    main_ptr("buf", (unsigned long long)buf);
     if (!buf)
         return 1;
     MARK("MAIN-DISC: pre-memset\n");

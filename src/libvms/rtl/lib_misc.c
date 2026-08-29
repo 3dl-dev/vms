@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <stdio.h>
@@ -254,6 +255,34 @@ static struct dsc$descriptor_s spawn_dsc(const char *s)
     return d;
 }
 
+/*
+ * Create an exclusive scratch file for the subprocess's SYS$INPUT, filling
+ * `buf` with its path and returning an open write fd (or -1).
+ *
+ * WHY NOT mkstemp() (vms-e9a, VMS-native link). The VMS-native LIBVMS$SHR link
+ * binds every C-RTL call against DECC$SHR's symbol vector, which exports the
+ * bare universals open/close/write/unlink/getpid/snprintf but NOT bare mkstemp
+ * (only the decorated decc$mkstemp the GCC port uses) -- so a bare mkstemp()
+ * here is an unresolved external that breaks LIBVMS$SHR and every consumer of
+ * it. This builds a unique name from getpid() + a counter and opens it
+ * O_CREAT|O_EXCL (retrying on a name clash), using only exported universals --
+ * the same collision-safe guarantee mkstemp gave, with no unexported symbol.
+ */
+static int spawn_open_scratch(char *buf, size_t bufsz)
+{
+    static unsigned seq = 0;
+    for (int tries = 0; tries < 4096; tries++) {
+        snprintf(buf, bufsz, "/tmp/ovmx_spawn_cmd_%d_%u",
+                 (int)getpid(), seq++);
+        int fd = open(buf, O_CREAT | O_EXCL | O_WRONLY, 0600);
+        if (fd >= 0)
+            return fd;
+        if (errno != EEXIST)
+            return -1;             /* a real error, not a name clash */
+    }
+    return -1;
+}
+
 /* Resolve a VMS filespec to a Linux path for open()/freopen(); if translation
  * fails, fall back to the spec verbatim (mirrors ovmx_job_control's
  * vms_to_linux()), so a caller passing a bare Linux path still works. */
@@ -339,13 +368,13 @@ uint32_t lib$spawn(const struct dsc$descriptor_s *command,
      * descriptors as literal paths (no filespec translation of its own), so
      * they are handed already-resolved paths.
      */
-    char cmd_tmp[]     = "/tmp/ovmx_spawn_cmd_XXXXXX";
+    char cmd_tmp[256]  = "";
     char in_resv[1024] = "";
     int  have_tmp      = 0;
     const char *in_str = NULL;
 
     if (have_cmd) {
-        int tfd = mkstemp(cmd_tmp);
+        int tfd = spawn_open_scratch(cmd_tmp, sizeof(cmd_tmp));
         if (tfd < 0)
             return SS$_INSFMEM;
         have_tmp = 1;

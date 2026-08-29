@@ -2199,6 +2199,28 @@ int cmd_run(struct dcl_command *cmd)
  * SPAWN /NOWAIT cmd        — run DCL subprocess in background
  * SPAWN /OUTPUT=file cmd   — redirect subprocess stdout to file
  */
+/*
+ * Create an exclusive scratch SYS$INPUT file, filling `buf` and returning an
+ * open write fd (or -1). Uses only DECC$SHR-exported universals (getpid /
+ * snprintf / open) -- NOT mkstemp(), which the VMS-native link does not export
+ * as a bare universal (only the decorated decc$mkstemp), so a bare mkstemp()
+ * would be an unresolved external in every native-linked consumer (vms-e9a).
+ * O_CREAT|O_EXCL with a retry gives the same collision safety mkstemp gave.
+ */
+static int dcl_spawn_open_scratch(char *buf, size_t bufsz)
+{
+    static unsigned seq = 0;
+    for (int tries = 0; tries < 4096; tries++) {
+        snprintf(buf, bufsz, "/tmp/ovmx_dclspawn_%d_%u", (int)getpid(), seq++);
+        int fd = open(buf, O_CREAT | O_EXCL | O_WRONLY, 0600);
+        if (fd >= 0)
+            return fd;
+        if (errno != EEXIST)
+            return -1;
+    }
+    return -1;
+}
+
 int cmd_spawn(struct dcl_command *cmd)
 {
     struct dcl_context *spawn_ctx = dcl_get_context();
@@ -2284,12 +2306,12 @@ int cmd_spawn(struct dcl_command *cmd)
      * file after its own attached wait -- and asks lib$spawn only to CREATE
      * (CLI$M_NOWAIT), doing the waiting itself where Ctrl-Y/attach live.
      */
-    char cmd_tmp[]  = "/tmp/ovmx_dclspawn_XXXXXX";
+    char cmd_tmp[256] = "";
     int  have_tmp   = 0;
     struct dsc$descriptor_s in_d;
     const struct dsc$descriptor_s *in_arg = NULL;
     if (has_command) {
-        int tfd = mkstemp(cmd_tmp);
+        int tfd = dcl_spawn_open_scratch(cmd_tmp, sizeof(cmd_tmp));
         if (tfd < 0) {
             dcl_error("DCL", 4, "CREPRC", "cannot create process");
             return SS$_INSFMEM;

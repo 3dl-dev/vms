@@ -236,6 +236,24 @@ run_dcl_acceptance_battery() {
     must_not_have "$SEG" 'IVKEYW' "SHOW PROCESS: not rejected as an invalid keyword"
     negctl    "$SEG" 'SHOW PROCESS' "SHOW PROCESS"
 
+    # --- SHOW PROCESS/QUOTAS (de-fabbed: real header, no invented limits) ----
+    # vms-050 / INV-6: the quota block used to be seven HARDCODED lines (CPU
+    # limit Infinite, Direct I/O 40, Buffered I/O byte count 32768, ...),
+    # identical for every account, sourced from nowhere. It is now a reader of
+    # the executive's per-process JIB quota vector, each line gated by
+    # VMS_PI_V_QUOTA. OVMX has no quota facility yet, so the bit is clear and
+    # the limit lines are honestly OMITTED -- the real header + account name
+    # print (from a LIVE $GETJPI here), and NONE of the fabricated constants do.
+    # The de-fabbed reader emits no "CPU limit:" line at all (struct vms_jib_
+    # quota has no CPU-limit cell), so both markers are things ONLY the deleted
+    # fabrication printed -- durable even once real quota values are wired in.
+    run_cmd 'SHOW PROCESS/QUOTAS'
+    must_have     "$SEG" 'Process Quotas:' "SHOW PROCESS/QUOTAS [vms-050]: prints the real quota header"
+    must_have     "$SEG" 'SYSTEM' "SHOW PROCESS/QUOTAS [vms-050]: names the real account SYSTEM (from a live \$GETJPI)"
+    must_not_have "$SEG" 'CPU limit:' "SHOW PROCESS/QUOTAS [vms-050]: no fabricated 'CPU limit:' line (the deleted hardcoded block)"
+    must_not_have "$SEG" 'Infinite' "SHOW PROCESS/QUOTAS [vms-050]: does NOT print the fabricated 'Infinite' CPU limit"
+    negctl        "$SEG" 'Process Quotas' "SHOW PROCESS/QUOTAS"
+
     # --- SHOW DEFAULT (VMS filespec, no Unix path) --------------------------
     run_cmd 'SHOW DEFAULT'
     must_match    "$SEG" '[A-Z$_]+:\[[A-Z0-9._]+\]' "SHOW DEFAULT: prints a VMS device:[directory] filespec"

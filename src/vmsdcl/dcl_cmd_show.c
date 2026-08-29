@@ -2627,7 +2627,46 @@ static int cmd_show_process_privileges(struct dcl_context *ctx)
 
 
 /*
- * SHOW PROCESS /QUOTAS - Display process quotas.
+ * SHOW PROCESS /QUOTAS - Display the process's quotas.
+ *
+ * WHAT THIS USED TO BE, and why it was a lie (vms-050 / INV-6). The account
+ * name was read from the executive ($GETJPI), but every quota LINE below it
+ * was a hardcoded literal -- "CPU limit: Infinite", "Direct I/O limit: 40",
+ * "Buffered I/O byte count quota: 32768", ... -- the SAME seven lines on every
+ * system, for every account, read from NOWHERE. They happen to match one
+ * documented AUTHORIZE DEFAULT record, which is exactly what makes them
+ * dangerous: they pass a smoke test while telling the operator nothing true
+ * about THIS process's real limits (CLAUDE.md Rule 10 / INV-6 -- the same
+ * fabrication class SHOW SYSTEM's invented row and SHOW QUOTA's "[200,1]" were
+ * deleted for). A different account, or a re-quota'd one, would print these
+ * identical numbers regardless.
+ *
+ * WHAT IT IS NOW. The process quota block is the JIB quota vector the executive
+ * carries per process (struct vms_jib_quota, the JIB$ quota cells VMS copies
+ * from SYSUAF at login). Each line is printed ONLY when the executive sourced
+ * that block -- fields_valid & VMS_PI_V_QUOTA -- and the values come straight
+ * from info.quota, exactly as cmd_show_status prints CPU time / page faults
+ * only when their valid bits are set. This is the READER pattern of CLAUDE.md
+ * Rule 11: a VMS command reads an executive facility, it never fabricates.
+ *
+ * TODAY VMS_PI_V_QUOTA IS NEVER SET: OVMX has no quota facility yet -- the
+ * executive charges no JIB quota cells (src/kernel/vms_ioctl.h: the quota block
+ * is carried "structural", valid bit clear), and mksysuaf seeds the on-disk
+ * SYSUAF quota region as zeroes with no decoded sub-offsets. So the honest
+ * result is the header + the real account name, and the limit lines are
+ * OMITTED, never shown as a fabricated constant and never as a plausible zero
+ * (a zero would be the same lie in a different costume). The moment a future
+ * item makes the executive source real, oracle-grounded quota cells (capture
+ * SYSTEM's real SHOW PROCESS/QUOTAS on lab-2/lab-Alpha, seed mksysuaf, decode
+ * the SYSUAF quota region into the JIB at login, set VMS_PI_V_QUOTA) the lines
+ * below light up with the real values -- no code change here, and no
+ * fabrication ever. Follow-up: vms-050 quota-wiring (filed with this change).
+ *
+ * FORMAT (labels only, clean-room Rule 8): the quota label text is the public
+ * VSI OpenVMS DCL Dictionary SHOW PROCESS/QUOTAS label set. The exact column
+ * geometry is not pinned to an oracle capture yet (none was taken -- the
+ * 2026-08-29 lab consoles captured SHOW VERSION/TIME/USERS, not /QUOTAS); it
+ * is pinned when the values become real. No label is invented.
  */
 static int cmd_show_process_quotas(struct dcl_context *ctx)
 {
@@ -2646,16 +2685,30 @@ static int cmd_show_process_quotas(struct dcl_context *ctx)
 
     printf("Process Quotas:\n");
     printf(" Account name: %s\n", info.username);
-    printf(" CPU limit:                      Infinite"
-           "  Direct I/O limit:        40\n");
-    printf(" Buffered I/O byte count quota:    32768"
-           "  Buffered I/O limit:      40\n");
-    printf(" Timer queue entry quota:            30"
-           "  Open file quota:         40\n");
-    printf(" Paging file quota:              32768"
-           "  Subprocess quota:         8\n");
-    printf(" AST quota:                        40"
-           "  Enqueue quota:          300\n");
+
+    /* Quota lines: printed only when the executive sourced the JIB quota
+     * block. VMS_PI_V_QUOTA is clear today (no quota facility) so nothing
+     * below prints -- honest omission, not a fabricated constant. */
+    if (info.fields_valid & VMS_PI_V_QUOTA) {
+        printf(" Direct I/O limit:             %8u"
+               "  Buffered I/O limit:      %8u\n",
+               info.quota.diolm, info.quota.biolm);
+        printf(" Buffered I/O byte count quota:%8u"
+               "  Open file quota:         %8u\n",
+               info.quota.bytlm, info.quota.fillm);
+        printf(" Timer queue entry quota:      %8u"
+               "  Subprocess quota:        %8u\n",
+               info.quota.tqelm, info.quota.prclm);
+        printf(" Paging file quota:            %8u"
+               "  AST quota:               %8u\n",
+               info.quota.pgflquota, info.quota.astlm);
+        printf(" Enqueue quota:                %8u"
+               "  Default working set:     %8u\n",
+               info.quota.enqlm, info.quota.wsdefault);
+        printf(" Working set quota:            %8u"
+               "  Working set extent:      %8u\n",
+               info.quota.wsquota, info.quota.wsextent);
+    }
 
     return SS$_NORMAL;
 }

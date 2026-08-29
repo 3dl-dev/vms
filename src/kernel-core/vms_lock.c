@@ -406,24 +406,35 @@ static void resource_release(struct vms_lock_resource *res)
  */
 
 /*
- * Number of directory-participating nodes in the membership view. A stub-of-
- * one for local scaffolding; 0.4 (vms-ci.5 DC) feeds the live membership from
- * the connection manager / quorum (src/vmsscs/scs_quorum.c). Kept as a helper
- * so the directory hash below is written against a real member count, not a
- * hard-coded modulus that would have to change shape when membership grows.
+ * Number of directory-participating nodes in the membership view. Read from the
+ * CONTROLLED, STATIC membership vector supplied at load time (dlm_member_csids /
+ * dlm_member_count, vms-1bba "DB" rung -- an insmod module_param_array on Linux,
+ * a load-time symbol on NetBSD; see vms_internal.h). Empty (count 0, the
+ * default) falls back to a cluster-of-one, so an unconfigured node behaves
+ * exactly as the prior stub-of-one did -- single-node grants unchanged.
+ *
+ * This is NOT the live membership feed from the connection manager / quorum
+ * (src/vmsscs/scs_quorum.c): that dynamic feed is the 0.4 "DC" successor (and
+ * overlaps vms-2f3's rejoin). A static, harness/operator-supplied vector is an
+ * honest controlled input for the directory proof, never fabricated live state.
  */
 static unsigned int dlm_membership_count(void)
 {
-    return 1;
+    return dlm_member_count > 0 ? (unsigned int)dlm_member_count : 1u;
 }
 
 /*
- * The CSID of the idx-th member of the directory vector. Stub-of-one: the only
- * member is this node. 0.4 indexes the live membership table here.
+ * The CSID of the idx-th member of the directory vector. Reads the configured
+ * static vector; falls back to the local CSID when unconfigured or out of range
+ * (cluster-of-one). Every node given the SAME ordered vector maps idx -> CSID
+ * identically, which is what makes the directory (and this rung's master)
+ * resolution AGREE across nodes.
  */
 static uint32_t dlm_member_csid(unsigned int idx)
 {
-    (void)idx;
+    if (dlm_member_count > 0 && idx < (unsigned int)dlm_member_count &&
+        idx < VMS_DLM_MAX_MEMBERS)
+        return dlm_member_csids[idx];
     return vms_local_csid;
 }
 
@@ -1531,6 +1542,22 @@ long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg)
      */
     args.dir_csid = dlm_directory_csid(args.resnam);
 
+    /*
+     * Master resolution for the report (vms-1bba, DB rung). With no remastering
+     * yet (DD deferred to 0.4), the directory node genuinely IS the master, so
+     * report master == directory DETERMINISTICALLY -- independent of whether a
+     * resource block exists on THIS node. That is what makes every node resolve
+     * the SAME master for a name: dir_csid is a property of the name + the
+     * shared membership vector, identical on all nodes, so master_csid is too.
+     * A resource actually mastered on THIS node (the found branch below) carries
+     * master_csid == vms_local_csid == dir_csid, so it stays consistent; a real
+     * non-zero mastered value overrides the default but equals it here. This is
+     * NOT a fabricated remote grant -- it reports who the directory hash names as
+     * master, the same value the enqueue path masters through.
+     */
+    args.master_csid = args.dir_csid;
+    args.is_local_master = (args.dir_csid == vms_local_csid) ? 1 : 0;
+
     /* Read the resource block, if one exists, without creating it. */
     exec_lock(&vms_res_hash_lock);
     res = resource_find(args.resnam);
@@ -1540,9 +1567,11 @@ long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg)
 
         exec_lock(&res->lock);
         args.found = 1;
-        args.master_csid = res->master_csid;
-        args.is_local_master =
-            (res->master_csid != 0 && res->master_csid == vms_local_csid) ? 1 : 0;
+        if (res->master_csid != 0) {
+            args.master_csid = res->master_csid;
+            args.is_local_master =
+                (res->master_csid == vms_local_csid) ? 1 : 0;
+        }
         exec_list_for_each_entry(granted, &res->granted, res_granted) {
             n++;
             /*

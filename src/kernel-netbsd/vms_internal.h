@@ -441,6 +441,21 @@ struct vms_lock_resource {
 extern uint32_t vms_local_csid;
 
 /*
+ * DLM directory membership vector (rd vms-1bba, the "DB" rung). A CONTROLLED,
+ * STATIC configuration input supplied at load time (the Linux rind exposes it
+ * as a module_param_array; this NetBSD substrate defines the symbols with a
+ * cluster-of-one default). dlm_directory_csid() hashes a resource name across
+ * this vector to pick the directory node, so every node given the SAME vector
+ * resolves the SAME directory/master for a name. NOT the live membership feed
+ * (that is the 0.4 "DC" successor); an honest controlled input, never
+ * fabricated live state. dlm_member_count == 0 -> cluster-of-one on the local
+ * CSID (single-node behaviour preserved). Same order required on every node.
+ */
+#define VMS_DLM_MAX_MEMBERS 16
+extern uint32_t dlm_member_csids[VMS_DLM_MAX_MEMBERS];
+extern int      dlm_member_count;
+
+/*
  * Per-process control block. On Linux this is a large struct with the whole
  * executive's per-process state; on the NetBSD substrate the twin carries just
  * the state the facilities built for NetBSD touch -- event flags (ef, P2c),

@@ -28,6 +28,22 @@
 #include <sys/mman.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <unistd.h>              /* vms-430 discriminator: raw write(2) to the console */
+
+/* ---------------------------------------------------- vms-430 malloc32 discriminator
+ * DIAGNOSTIC-ONLY instrumentation (revert-before-fix; NOT a behavior change).
+ * Unconditional lines to fd 2 (SYS$ERROR / the boot console), matching imgact.c's
+ * eputs write-to-fd-2 style so they land even before the image's C stdio is fully
+ * up. Formatted with snprintf (no FILE lock/flush state) and flushed with a single
+ * raw write(2). Pins WHY the Alpha GCC-port image SIGSEGVs on first RUN: whether the
+ * <4 GB _malloc32 arena reservation fails on the real Alpha kernel and hands crt0 a
+ * NULL argv. Delete the P32-DISC / DECCMAIN-DISC lines + this helper with the fix. */
+static void p32disc_emit(const char *buf)
+{
+    unsigned long n = 0;
+    while (buf[n]) n++;
+    (void)write(2, buf, (size_t)n);
+}
 
 /* Canonical VMS image-activation context — single source of truth (INV-LEDGER):
  * dsc$descriptor_s (image_file_desc, arg 4), plus ovmx_imghdr (arg 3) and
@@ -116,15 +132,30 @@ static unsigned long   p32_off, p32_cap;
 
 static void *p32_arena_alloc(unsigned long size)
 {
+    char dbuf[160];                              /* vms-430 discriminator scratch */
     pthread_mutex_lock(&p32_lock);
     if (!p32_base) {
         static const unsigned long hints[] = {
             0x40000000UL, 0x50000000UL, 0x60000000UL, 0x30000000UL
         };
         unsigned long cap = 4UL * 1024 * 1024;   /* 4 MiB first-light arena */
+        /* vms-430: same flag value the mmap below actually uses, so the log can't
+         * drift from the call. The #867 bug class is a wrong per-arch flag NUMBER,
+         * so surface both the composite flags and MAP_FIXED_NOREPLACE itself. */
+        const int p32disc_flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE;
+        snprintf(dbuf, sizeof dbuf,
+                 "P32-DISC: MAP_FIXED_NOREPLACE=0x%x\n",
+                 (unsigned int)MAP_FIXED_NOREPLACE);
+        p32disc_emit(dbuf);
         for (unsigned i = 0; i < sizeof hints / sizeof hints[0] && !p32_base; i++) {
             void *p = mmap((void *)hints[i], (size_t)cap, PROT_READ | PROT_WRITE,
-                           MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+                           p32disc_flags, -1, 0);
+            int p32disc_errno = errno;           /* capture before any other call */
+            snprintf(dbuf, sizeof dbuf,
+                     "P32-DISC: mmap hint=0x%lx len=0x%lx flags=0x%x -> ret=0x%lx errno=%d\n",
+                     hints[i], cap, (unsigned int)p32disc_flags,
+                     (unsigned long)p, p32disc_errno);
+            p32disc_emit(dbuf);
             if (p == MAP_FAILED)
                 continue;                          /* hint occupied: try the next */
             if ((unsigned long)p < 0x100000000UL) {
@@ -133,6 +164,9 @@ static void *p32_arena_alloc(unsigned long size)
                 munmap(p, (size_t)cap);            /* honored elsewhere, not <4 GB */
             }
         }
+        snprintf(dbuf, sizeof dbuf,
+                 "P32-DISC: p32_base=0x%lx\n", (unsigned long)p32_base);
+        p32disc_emit(dbuf);
     }
     void *r = 0;
     if (p32_base) {
@@ -390,4 +424,25 @@ void ovmx_decc_main(void *progxfer, void *cli_util, void *imghdr,
     if (argc) *argc = 1;
     if (argv) *argv = av32;
     if (envp) *envp = ev32;
+
+    /* --- vms-430 discriminator: the 32-bit pointers decc$main hands crt0 __main.
+     * The finals of arena item-1 (name32/av32/ev32 live only here, in decc$main,
+     * not in p32_arena_alloc) plus the argv handoff. Under the hypothesis every
+     * _malloc32 returned 0, so all three are 0 and *argv==0 — the NULL argv __main
+     * then widens and dereferences. Delete with the fix. */
+    {
+        char dbuf[160];
+        snprintf(dbuf, sizeof dbuf,
+                 "P32-DISC: name32=0x%lx av32=0x%lx ev32=0x%lx\n",
+                 (unsigned long)(unsigned int)name32,
+                 (unsigned long)(unsigned int)av32,
+                 (unsigned long)(unsigned int)ev32);
+        p32disc_emit(dbuf);
+        snprintf(dbuf, sizeof dbuf,
+                 "DECCMAIN-DISC: malloc32_ret=0x%lx argv=0x%lx argc=%d\n",
+                 (unsigned long)(unsigned int)av32,
+                 (unsigned long)(unsigned int)(argv ? *argv : 0),
+                 argc ? *argc : -1);
+        p32disc_emit(dbuf);
+    }
 }

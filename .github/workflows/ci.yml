@@ -426,6 +426,14 @@ jobs:
               - 'tests/qemu/init_dlm_h7.sh'
               - 'tests/qemu/run_dlm_harness_h7.sh'
               - 'tests/qemu/test_dlm_dir_h7.c'
+              # H8 (rd vms-d81, THE LVB WIRE): a remote HOLDER on node A writes the
+              # 16-byte lock value block and releases with LCK_M_VALBLK; the master
+              # (node B) replicates the wire value into res->valblk and reads it back
+              # with a LOCAL $ENQ. Proves the LVB crossed the wire A->B: B's read ==
+              # A's write == the known pattern.
+              - 'tests/qemu/Dockerfile.dlm-harness-h8'
+              - 'tests/qemu/init_dlm_h8.sh'
+              - 'tests/qemu/run_dlm_harness_h8.sh'
               - 'tests/cluster/two-ovmx/mk_sysgen_scratch.py'
               - 'tests/cluster/two-ovmx/verdict.sh'
 
@@ -2906,6 +2914,77 @@ jobs:
         with:
           name: dlm-harness-h7-artifacts
           path: h7out/
+          if-no-files-found: ignore
+
+  # -----------------------------------------------------------------------
+  # Job 2g: DLM Harness H8 -- THE LVB WIRE (rd vms-d81)
+  #
+  # Cross-node lock-value-block replication: a remote HOLDER on node A writes the
+  # 16-byte LVB and releases with LCK_M_VALBLK; the MASTER (node B) replicates that
+  # wire value into res->valblk and reads it back with a LOCAL $ENQ.
+  # tests/qemu/Dockerfile.dlm-harness-h8 builds the SAME real-executive ingredients
+  # as H6 (vms.ko + SCSD.EXE static musl + sca_l2probe + the two OVMXA/OVMXB SYSGEN
+  # identity stores) and boots the SAME TWO QEMU nodes -- each with a real /dev/vms
+  # -- on one shared L2 via a QEMU `socket` (mcast) netdev. After the join, node A
+  # holds RLVB EX, WRITEs a known 16-byte value block, and releases with a
+  # cross-node $DEQ carrying LCK_M_VALBLK (SCSD-I-DLMLVBWR). Node B replicates it
+  # and reads it back (SCSD-I-DLMLVBRD). H8 PASS iff both markers are present AND
+  # A's written value == B's read value == the expected known pattern. INV-6: both
+  # markers are the REAL executive bytes, hex-encoded verbatim.
+  # -----------------------------------------------------------------------
+  dlm-harness-h8:
+    name: DLM Harness H8 (a remote holder writes the LVB, the master reads it back over the SCS wire, QEMU)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.dlm_harness == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build DLM harness H8 image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu/Dockerfile.dlm-harness-h8
+          push: false
+          load: true
+          tags: ovmx-dlm-h8:latest
+          cache-from: type=gha,scope=dlm-harness-h8
+          cache-to: type=gha,mode=max,scope=dlm-harness-h8
+
+      - name: Boot TWO QEMU nodes, drive the LVB wire (holder writes, master reads back)
+        run: |
+          set +e
+          KVM=""
+          [ -e /dev/kvm ] && KVM="--device /dev/kvm"
+          mkdir -p "$PWD/h8out"
+          RAW=$(docker run --rm $KVM -v "$PWD/h8out:/out" ovmx-dlm-h8:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: DLM harness H8 exited nonzero"
+            exit 1
+          fi
+          if printf '%s\n' "$OUTPUT" | grep -qE '^  DLM HARNESS H8 PASSED'; then
+            echo "PASS: a remote holder's LVB crossed the live SCS wire A->B and the master read it back (SCSD-I-DLMLVBWR == SCSD-I-DLMLVBRD == expected pattern)."
+          else
+            echo "FAIL: H8 verdict 'DLM HARNESS H8 PASSED' not found."
+            printf '%s\n' "$OUTPUT" | grep -E 'verdict inputs|A_WROTE|B_READ|A_VAL|B_VAL|EXPECT_VAL|highest join rung|VAXCLMEMBER|DLMLVBWR|DLMLVBRD|DLMENQ|H8-NODE|MISS:|FAIL:' || true
+            exit 1
+          fi
+
+      - name: Upload H8 pcap + node logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dlm-harness-h8-artifacts
+          path: h8out/
           if-no-files-found: ignore
 
   # -----------------------------------------------------------------------

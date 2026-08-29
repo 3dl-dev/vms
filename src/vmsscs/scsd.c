@@ -83,6 +83,17 @@
 #include "vms_ioctl.h"
 #endif
 
+/* The IOCTL value-block flag (vms_ioctl.h LCK_M_VALBLK == 0x08). The cross-node
+ * DLM wire flags field carries the IOCTL flag namespace -- scsd_dlm_dispatch_to_
+ * executive copies scs_dlm_msg.flags VERBATIM into vms_dlm_xnode_args.flags, and
+ * the executive's cross-node handlers test `req->flags & LCK_M_VALBLK` (NOT the
+ * starlet LCK$M_VALBLK == 0x0001). This fallback provides the same value under the
+ * SCSD_UNIT_TEST seam, which does not include vms_ioctl.h; the real build's
+ * vms_ioctl.h definition is identical (0x08), so this never diverges. */
+#ifndef LCK_M_VALBLK
+#define LCK_M_VALBLK 0x08
+#endif
+
 /* The DLM op vocabulary the executive expects (VMS_DLM_OP_*) MUST match the SCS
  * message opcodes (SCS_DLM_OP_*); scsd is the one place that includes both. */
 _Static_assert((int)SCS_DLM_OP_ENQ == 1 && (int)SCS_DLM_OP_GRANT == 2 &&
@@ -1007,6 +1018,14 @@ struct peer_state {
     int      dlm_holder_armed;     /* node-A: holder (#1) origin established w/ blkast */
     int      dlm_blkast_fired;     /* node-A: a received BLKAST fired a real AST here */
     int      dlm_blksent;          /* node-B: a BLKAST was WIREd to the holder */
+    /* rd vms-d81 (DLM rung H8): the LVB WIRE. Node A holds RESONE/RLVB EX
+     * (req_lkid 1), then WRITES a known 16-byte value block and releases with a
+     * cross-node $DEQ carrying LCK_M_VALBLK; the master (node B) replicates the
+     * wire value into res->valblk (vms_lock_dlm_xnode_deq) and a LOCAL $ENQ on B
+     * reads back the value A wrote. Independent of H5/H6 -- no contention, no
+     * BLKAST; a single ENQ then a value-block-carrying $DEQ. */
+    int      dlm_h8;               /* node-A: H8 LVB-wire armed (OVMX_DLM_H8) */
+    int      dlm_h8_read_done;     /* node-B: the LOCAL LVB read-back ran (one-shot) */
     /* vms-694 (§4(O.7)): OVMX's OWN model of "am I a connected VMS$VAXcluster
      * member of this peer", LATCHED the moment the VMS$VAXcluster SYSAP
      * connection (cdt_joiner, or cdt_member if it ever reaches OPEN) hits the
@@ -3644,6 +3663,17 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                                sequenced SCS traffic on a connection that cannot
  *                                exist before its circuit does, exactly like
  *                                scsd_dlm_send_enq above.
+ *
+ *   CHOKED, and new in vms-d81 (DLM rung H8):
+ *     scsd_dlm_client_send_deq_valblk()  node-A's cross-node $DEQ that WRITES the
+ *                                16-byte LVB. Same MTYPE-10 SYSAP message on the
+ *                                OPEN VMS$VAXcluster VC to the peer's OVMX$DLM
+ *                                server handle as scsd_dlm_client_send_op above,
+ *                                but it carries the value block with LCK_M_VALBLK
+ *                                set so the master replicates the wire value into
+ *                                res->valblk (vms_lock_dlm_xnode_deq). Ordinary
+ *                                sequenced SCS traffic on an already-open circuit;
+ *                                choked like every other DLM client send.
  *
  *   CHOKED, and new in vms-600:
  *     scsd_mscp_srv_xfer()       the live scs_mscp_srv_xfer_fn: the SCA
@@ -7939,6 +7969,74 @@ struct scsd_dlm_defer {
 };
 
 /*
+ * The known 16-byte LVB node A writes on the H8 rung (rd vms-d81). A fixed,
+ * addressable pattern so the host verdict can assert all three values equal --
+ * the bytes A wrote, the bytes B read, and this expected pattern. Hex:
+ * 4f564d584c56422d52554e4736000000 ("OVMXLVB-RUNG6" + 3 NULs). The run script's
+ * H8_EXPECT_HEX MUST track this array (there is no shared C/shell header). INV-6:
+ * the marker prints the REAL bytes lifted from the executive, never this literal.
+ */
+static const uint8_t scsd_h8_lvb[LCK$C_VALBLK_LEN] = {
+    'O','V','M','X','L','V','B','-','R','U','N','G','6', 0, 0, 0
+};
+
+/* scsd_hex16 - lower-case hex-encode a 16-byte block into a 33-byte buffer. */
+static void scsd_hex16(const uint8_t *b, char out[33])
+{
+    static const char h[] = "0123456789abcdef";
+    int i;
+    for (i = 0; i < 16; i++) {
+        out[2 * i]     = h[(b[i] >> 4) & 0xF];
+        out[2 * i + 1] = h[b[i] & 0xF];
+    }
+    out[32] = '\0';
+}
+
+/*
+ * scsd_dlm_local_read_valblk - node B's LOCAL LVB read (rd vms-d81, H8). After a
+ * remote holder's cross-node $DEQ replicated its value block into the master
+ * resource (res->valblk), this issues a LOCAL $ENQ (EX, LCK_M_VALBLK) on THIS
+ * node for the same resource and returns res->valblk. The input value block is
+ * left all-zero on purpose: the single-node $ENQ read path (vms_enq_core,
+ * has_val==0) copies res->valblk INTO args.valblk rather than overwriting the
+ * resource -- so this READS the LVB, it does not clobber it. Fail-honest
+ * (SS$_NOSUCHDEV) with an all-zero block when /dev/vms is absent or the ENQ
+ * fails (INV-6: an unset/failed read yields the real zero bytes, and the host
+ * verdict then MISMATCHES A's write -> FAIL, never a vacuous pass).
+ */
+static uint32_t scsd_dlm_local_read_valblk(const char *resnam,
+                                           uint8_t out[LCK$C_VALBLK_LEN])
+{
+    memset(out, 0, LCK$C_VALBLK_LEN);
+#ifdef SCSD_UNIT_TEST
+    (void)resnam;
+    return 2296u;
+#else
+    struct vms_enq_args args;
+    struct vms_register_args reg;
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0)
+        return 2680u;
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return 2680u; }
+
+    memset(&args, 0, sizeof(args));
+    args.lkmode = LCK$K_EXMODE;
+    args.flags = LCK_M_VALBLK;      /* read the LVB back (input block all-zero) */
+    if (resnam) {
+        strncpy(args.resnam, resnam, sizeof(args.resnam) - 1);
+        args.resnam[sizeof(args.resnam) - 1] = '\0';
+    }
+    if (ioctl(fd, VMS_IOCTL_ENQ, &args) < 0) { close(fd); return 2680u; }
+    if (args.status == 1u)
+        memcpy(out, args.valblk, LCK_VALBLK_SIZE);
+    uint32_t status = args.status;
+    close(fd);
+    return status;
+#endif
+}
+
+/*
  * scsd_dlm_dispatch_to_executive - hand ONE decoded cross-node DLM request to
  * the kernel lock manager over /dev/vms. Returns the executive status: a granted
  * cross-node $ENQ now yields SS$_NORMAL (1) (DLM rung 2, vms-e8f1); a later-rung
@@ -8409,6 +8507,30 @@ static void scsd_dlm_srv_msg_input(struct scs_cdt *cdt, const void *msg,
             fflush(stdout);
         }
     }
+
+    /* THE LVB WIRE, READER SIDE (rd vms-d81, H8). This node MASTERs the resource;
+     * a remote holder's cross-node $DEQ carrying LCK_M_VALBLK just replicated its
+     * value block into res->valblk (the executive dispatch above ran
+     * vms_lock_dlm_xnode_deq). Prove the value landed by reading it back with a
+     * LOCAL $ENQ on THIS node and printing it verbatim. Gated on OVMX_DLM_H8 and a
+     * $DEQ that actually carried the flag; independent of the wire-response gate
+     * (a local read originates no cross-node traffic). INV-6: the marker prints
+     * the REAL bytes the executive returned -- if the wire write never happened,
+     * this reads zeros and the host verdict FAILS on the mismatch, never passes. */
+    if (getenv("OVMX_DLM_H8") != NULL && v.msg.op == SCS_DLM_OP_DEQ &&
+        (v.msg.flags & LCK_M_VALBLK) && !ps->dlm_h8_read_done) {
+        ps->dlm_h8_read_done = 1;
+        uint8_t rdblk[LCK$C_VALBLK_LEN];
+        uint32_t rst = scsd_dlm_local_read_valblk((const char *)v.msg.resnam, rdblk);
+        char hx[33];
+        scsd_hex16(rdblk, hx);
+        log_ts(stdout);
+        printf(" SCSD-I-DLMLVBRD, name=%.*s val=%s -- LOCAL $ENQ on the master read"
+               " the value block a remote holder wrote over SCS (read rc=0x%08X);"
+               " the LVB replicated A->B (H8)\n",
+               (int)v.msg.namelen, v.msg.resnam, hx, (unsigned)rst);
+        fflush(stdout);
+    }
 }
 
 /*
@@ -8454,6 +8576,63 @@ static int scsd_dlm_client_send_op(struct scsd_rx *rx, struct peer_state *ps,
         m.namelen = (uint8_t)rl;
         memcpy(m.resnam, resname, rl);
     }
+
+    uint8_t frame[SCS_DLM_FRAME_LEN];
+    if (scs_dlm_build_frame(&p, &m, frame) == 0 &&
+        send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb, label, frame,
+                      sizeof(frame)) > 0)
+        return 1;
+    return 0;
+}
+
+/*
+ * scsd_dlm_client_send_deq_valblk - node A's cross-node $DEQ that WRITES the LVB
+ * (rd vms-d81, H8). Same DLM-server addressing as scsd_dlm_client_send_op, but it
+ * carries the 16-byte value block AND sets LCK_M_VALBLK so the master replicates
+ * the WIRE value into res->valblk (vms_lock_dlm_xnode_deq). The flag bit is the
+ * IOCTL LCK_M_VALBLK (0x08), not the starlet LCK$M_VALBLK (0x0001): the wire
+ * flags field is copied VERBATIM into vms_dlm_xnode_args.flags by
+ * scsd_dlm_dispatch_to_executive, and the executive's cross-node $DEQ handler
+ * tests `req->flags & LCK_M_VALBLK`. Returns 1 on send.
+ */
+static int scsd_dlm_client_send_deq_valblk(struct scsd_rx *rx, struct peer_state *ps,
+                                           uint32_t master_lkid, const char *resname,
+                                           const uint8_t valblk[LCK$C_VALBLK_LEN],
+                                           const char *label)
+{
+    if (rx == NULL || ps == NULL || ps->pb == NULL || ps->joiner_remote_conid == 0)
+        return 0;
+
+    uint32_t dlm_server = (ps->joiner_remote_conid & 0xFFFFFFF0u) |
+                          OVMX_CONID_CLS_DLMSRV;
+
+    struct scs_dlm_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, ps_port_addr(ps), 6);
+    memcpy(p.src_mac, rx->our_hw_mac, 6);
+    memcpy(p.src_logical, rx->our_src_logical, 6);
+    memcpy(p.peer_logical, ps_sys_addr(ps), 6);
+    p.local_conid = PS_DLM_CONID(ps);
+    p.remote_conid = dlm_server;
+    p.recv_ack = ps->vc.seq.recv_seq;
+    p.send_seq = scs_seq_advance(&ps->vc.seq);
+    p.incarnation = ps->incarnation;
+
+    struct scs_dlm_msg m;
+    memset(&m, 0, sizeof(m));
+    m.op = SCS_DLM_OP_DEQ;
+    m.mode = LCK$K_NLMODE;
+    m.flags = LCK_M_VALBLK;              /* IOCTL flag bit -- see comment above */
+    m.master_lkid = master_lkid;
+    m.req_csid = resolve_scssystemid();  /* the releasing node's identity */
+    if (resname != NULL) {
+        size_t rl = strlen(resname);
+        if (rl > SCS_DLM_RESNAM_MAX)
+            rl = SCS_DLM_RESNAM_MAX;
+        m.namelen = (uint8_t)rl;
+        memcpy(m.resnam, resname, rl);
+    }
+    memcpy(m.valblk, valblk, LCK$C_VALBLK_LEN);
 
     uint8_t frame[SCS_DLM_FRAME_LEN];
     if (scs_dlm_build_frame(&p, &m, frame) == 0 &&
@@ -8570,6 +8749,37 @@ static void scsd_dlm_cli_msg_input(struct scs_cdt *cdt, const void *msg,
                ? "cross-node lock GRANTED by the master (SS$_NORMAL)"
                : "lock NOT granted (honest)");
     fflush(stdout);
+
+    /* THE LVB WIRE, WRITER SIDE (rd vms-d81, H8). On the GRANT for our holder
+     * (#1), WRITE a known 16-byte value block and release it with a cross-node
+     * $DEQ carrying LCK_M_VALBLK -- the master (node B) replicates the wire value
+     * into res->valblk, and a LOCAL $ENQ on B then reads back exactly this value.
+     * Independent of the H5/H6 sequence (no contention, no BLKAST): a single ENQ
+     * then a value-block $DEQ. Emit the REAL bytes we wrote, hex-encoded (INV-6). */
+    if (ps->dlm_h8 && v.msg.op == SCS_DLM_OP_GRANT &&
+        v.msg.req_lkid == 1u && v.msg.status == 1u && !ps->dlm_deq1_sent) {
+        struct scsd_rx *rxh8 = scsd_rx_current.rx;
+        if (rxh8 != NULL && scsd_member_initiate_enabled()) {
+            ps->dlm_master_lkid1 = v.msg.master_lkid;
+            if (scsd_dlm_client_send_deq_valblk(rxh8, ps, ps->dlm_master_lkid1,
+                                                (const char *)v.msg.resnam,
+                                                scsd_h8_lvb,
+                                                "OVMX$DLM DEQ (H8 LVB write)")) {
+                ps->dlm_deq1_sent = 1;
+                char hx[33];
+                scsd_hex16(scsd_h8_lvb, hx);
+                log_ts(stdout);
+                printf(" SCSD-I-DLMLVBWR, name=%.*s val=%s -- wrote a 16-byte LVB"
+                       " and released the holder (master_lkid=0x%08X) with a"
+                       " cross-node $DEQ carrying LCK_M_VALBLK; the master"
+                       " replicates this into res->valblk (H8)\n",
+                       (int)v.msg.namelen, v.msg.resnam, hx,
+                       (unsigned)ps->dlm_master_lkid1);
+                fflush(stdout);
+            }
+        }
+        return;
+    }
 
     if (!ps->dlm_h5)
         return;   /* rung 1b only: no H5 sequence armed */
@@ -8724,6 +8934,12 @@ static void scsd_dlm_send_enq(struct scsd_rx *rx, struct peer_state *ps)
         ps->dlm_h5 = 1;
         ps->dlm_h6 = 1;
     }
+
+    /* rd vms-d81 (H8): arm the LVB wire. A single ENQ then a value-block $DEQ --
+     * NOT the H5/H6 contention/BLKAST sequence, so H8 does NOT set dlm_h5/dlm_h6.
+     * The cli input routine (dlm_h8 branch) drives the WRITE off the GRANT. */
+    if (getenv("OVMX_DLM_H8") != NULL)
+        ps->dlm_h8 = 1;
 
     uint32_t dlm_server = (ps->joiner_remote_conid & 0xFFFFFFF0u) |
                           OVMX_CONID_CLS_DLMSRV;

@@ -86,6 +86,16 @@ extern "C" {
 #define SCS_DLM_OP_GRANT    2u   /* status response       <- master           */
 #define SCS_DLM_OP_DEQ      3u   /* dequeue request       -> master           */
 #define SCS_DLM_OP_BLKAST   4u   /* blocking-AST notify   <- master           */
+#define SCS_DLM_OP_REBUILD  5u   /* remaster lock-rebuild -> new master (H10b, */
+                                 /* rd vms-dca9). A surviving holder re-registers */
+                                 /* its cross-node lock (req_lkid+mode+req_csid)  */
+                                 /* with the NEW master after the old master      */
+                                 /* departs, so res->granted is rebuilt from the  */
+                                 /* holder's REAL origin record. This op number   */
+                                 /* is an OVMX DESIGN CHOICE (CLAUDE.md Rule 8) -- */
+                                 /* the DLM SYSAP wire is OVMX's own, not a        */
+                                 /* VMS-authentic byte layout. Reuses the existing */
+                                 /* frame (resnam + req_lkid + mode + req_csid).   */
 
 /* --- DLM body field offsets (⚠ OVMX-derived byte layout, class (B)) --------
  *

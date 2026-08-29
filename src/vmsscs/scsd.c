@@ -97,7 +97,8 @@
 /* The DLM op vocabulary the executive expects (VMS_DLM_OP_*) MUST match the SCS
  * message opcodes (SCS_DLM_OP_*); scsd is the one place that includes both. */
 _Static_assert((int)SCS_DLM_OP_ENQ == 1 && (int)SCS_DLM_OP_GRANT == 2 &&
-               (int)SCS_DLM_OP_DEQ == 3 && (int)SCS_DLM_OP_BLKAST == 4,
+               (int)SCS_DLM_OP_DEQ == 3 && (int)SCS_DLM_OP_BLKAST == 4 &&
+               (int)SCS_DLM_OP_REBUILD == 5,
                "SCS_DLM_OP_* must match VMS_DLM_OP_* in vms_ioctl.h");
 #include "scs_rx.h"
 #include "scs_start.h"

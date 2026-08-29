@@ -500,6 +500,11 @@ struct vms_resmaster_args {
 #define VMS_DLM_OP_GRANT    2u   /* status response       <- master  */
 #define VMS_DLM_OP_DEQ      3u   /* dequeue request       -> master  */
 #define VMS_DLM_OP_BLKAST   4u   /* blocking-AST notify   <- master  */
+#define VMS_DLM_OP_REBUILD  5u   /* remaster lock-rebuild -> new master (H10b,
+                                  * vms-dca9): a surviving holder re-registers its
+                                  * cross-node lock on the new master after the old
+                                  * master departs. OVMX design choice (Rule 8);
+                                  * MUST match SCS_DLM_OP_REBUILD in scs_dlm.h. */
 
 /*
  * The `status` an ENQ dispatch returns when the request was QUEUED on the master
@@ -596,6 +601,32 @@ _Static_assert(sizeof(struct vms_dlm_depart_args) == 16,
 #define VMS_IOCTL_DLM_MEMBER_DEPART _IOWR(VMS_IOC_MAGIC, 0x36, struct vms_dlm_depart_args)
 _Static_assert(VMS_IOCTL_DLM_MEMBER_DEPART == 0xC0105636u,
                "VMS_IOCTL_DLM_MEMBER_DEPART encodes differently than the reference build");
+
+/*
+ * $DLM granted-lock readback (rd vms-dca9, DLM rung H10b). Reports the FIRST
+ * remote-held granted lock on a resource so a test can VALUE-VERIFY a rebuilt
+ * cross-node lock -- the holder's CSID, its OWN lock handle (req_lkid) and the
+ * granted mode -- not just that n_granted rose. GET_RESMASTER exposes the count
+ * + remote_holder_csid but neither the mode nor the holder's handle; this ioctl
+ * closes that gap so the H10b harness can assert the rebuilt lock EQUALS the one
+ * the holder really held pre-departure (h8/h9-style value equality). INV-6: real
+ * res->granted state; found=0 (all fields 0) when no such lock exists, never a
+ * plausible default.
+ */
+struct vms_dlm_granted_args {
+    char     resnam[32];        /* in: resource name (null-terminated) */
+    uint32_t found;             /* return: 1 iff a REMOTE-held granted lock exists */
+    uint32_t n_granted;         /* return: total granted locks on the resource */
+    uint32_t holder_csid;       /* return: the first remote holder's CSID (req_csid) */
+    uint32_t holder_req_lkid;   /* return: that holder's OWN lock handle (req_lkid) */
+    uint32_t granted_mode;      /* return: that lock's granted mode (LCK_K_*) */
+    uint32_t status;            /* return: SS$_ status */
+};
+_Static_assert(sizeof(struct vms_dlm_granted_args) == 56,
+               "vms_dlm_granted_args changed size -- VMS_IOCTL_DLM_GET_GRANTED ABI break");
+#define VMS_IOCTL_DLM_GET_GRANTED _IOWR(VMS_IOC_MAGIC, 0x37, struct vms_dlm_granted_args)
+_Static_assert(VMS_IOCTL_DLM_GET_GRANTED == 0xC0385637u,
+               "VMS_IOCTL_DLM_GET_GRANTED encodes differently than the reference build");
 
 /* ================================================================
  * Process registration

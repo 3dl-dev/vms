@@ -336,6 +336,20 @@ uint32_t vms_kif_dlm_member_depart(uint32_t departed_csid,
                                    uint32_t *out_members_live,
                                    uint32_t *out_found);
 
+/* Read the first REMOTE-held granted lock on a resource -- holder CSID, its own
+ * handle, and granted mode -- to value-verify a rebuilt cross-node lock (vms-dca9,
+ * DLM rung H10b).
+ * OVMX-UNWIRED: vms_kif_dlm_get_granted (vms-dca9) -- like vms_kif_dlm_member_depart
+ * above, scsd issues VMS_IOCTL_DLM_GET_GRANTED with a DIRECT POSIX ioctl (it is a
+ * glibc process), not this freestanding client; no sys$ service issues it. This
+ * wrapper exists so the readback is observable against a real /dev/vms (exercised
+ * by the 3-node H10b harness via scsd's direct ioctl). Wire it and delete this
+ * line if a product client ever issues it. */
+uint32_t vms_kif_dlm_get_granted(const char *resnam, uint32_t *out_found,
+                                 uint32_t *out_n_granted, uint32_t *out_holder_csid,
+                                 uint32_t *out_holder_req_lkid,
+                                 uint32_t *out_granted_mode);
+
 /*
  * vms_kif_dlm_xnode_blkast - the BLKAST-WIRE half of the cross-node DLM receive
  * (DLM epic vms-7fa rung H6, vms-76d). A focused wrapper that carries the two

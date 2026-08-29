@@ -974,6 +974,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
      * directory over the survivors (vms-2bf, DLM rung H10a). */
     case VMS_IOCTL_DLM_MEMBER_DEPART:
         return vms_ioctl_dlm_member_depart(proc, arg);
+    /* DLM granted-lock readback -> value-verify a rebuilt cross-node lock
+     * (vms-dca9, DLM rung H10b). */
+    case VMS_IOCTL_DLM_GET_GRANTED:
+        return vms_ioctl_dlm_get_granted(proc, arg);
     /* DLM cross-node lock-request dispatch (vms-94c, DLM epic vms-7fa rung 1):
      * a decoded remote DLM message reaches the cross-node handler, which
      * returns SS$_UNSUPPORTED (rung 1 transport; no fake grant). */

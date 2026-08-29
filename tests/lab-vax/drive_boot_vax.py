@@ -524,6 +524,20 @@ def do_assemble_single(a, single_img, artifacts_dir, src_iso, new_a_sectors,
         return PROOF_FAILED
     log("OK: /dev/ra1* present; target root FFS clean")
 
+    # 1a. GUARD (rd vms-c20): drop any leftover resize swap file that rode in with
+    #     the clone. The 384 MiB /swapfile enabled below (for resize_ffs headroom)
+    #     lives on the writable shared root and is removed only on the SUCCESS path
+    #     at the end -- so a FAILED assembly leaks it. The target root FFS here is a
+    #     CLONE of that shared root, so a leaked swapfile rides into THIS target and
+    #     pushes it past NEW_A_SECTORS, making the resize_ffs below fail
+    #     "out of data blocks" -- poisoning every subsequent clone until a manual
+    #     base rebuild. Removing it from the target before the shrink self-heals the
+    #     loop (resize then succeeds, the run completes, the success path cleans the
+    #     root). No-op on a clean clone.
+    run(child,
+        "mount /dev/ra1a /mnt && rm -f /mnt/swapfile && umount /mnt; true",
+        cmd_timeout)
+
     # 1b. ENABLE SWAP. resize_ffs on a 2 GiB FFS needs more memory than the 32 MB
     #     emulated VAX has, and single-user mode enables NO swap -- so an
     #     unswapped resize_ffs is OOM-killed within seconds ("UVM: ... out of

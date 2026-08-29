@@ -369,21 +369,15 @@ static int parse_etir(const uint8_t *rec, uint16_t rsz, struct evax_object *out,
             /* [OVMX] vms-4ed — the OVMX-private GP-displacement command. Operand
              * (all little-endian, evax_read.c framing: length includes the
              * 4-byte header, trailing bytes may be align padding and are ignored):
-             *   [u32 pdsc_offset][u32 psect][u64 ldah_vaddr][u32 lda_delta]
+             *   [u32 lkidx_or_0][u32 psect][u64 ldah_vaddr][u32 lda_delta]
              *   [u8 namelen][name]  = 20 fixed + 1 + namelen bytes.
              * The command does NOT advance vaddr: the ldah/lda instruction words
              * are ordinary STO_IMM content that the OVMX linker patches in place
-             * (link.c evax_apply_reloc). vms-095 (C3): `pdsc_offset` is the
-             * enclosing procedure's PDSC offset within its $LINK$ psect, from
-             * which the linker computes K = placed_PDSC - $LINK$ base (so a
-             * LOCAL/static proc resolves like a global); `name` is retained for
-             * diagnostics. The pair carries -K signed-split.
+             * (link.c evax_apply_reloc). `name` is the enclosing procedure whose
+             * PDSC offset K the linker looks up; the pair carries -K signed-split.
              * NOT VMS-authentic (EVAX has no GPDISP); see
              * docs/design-alpha-per-image-gp.md §2.2. */
             if (length < 4 + 20 + 1) { set_err("truncated OVMX_GPDISP"); return -1; }
-            uint32_t pdsc_off   = getl32(op + 0);   /* [OVMX] vms-095: enclosing
-                                                     * proc's PDSC offset in $LINK$
-                                                     * (was the unused lkidx_or_0) */
             uint32_t psect      = getl32(op + 4);
             uint64_t ldah_vaddr = getl64(op + 8);
             uint32_t lda_delta  = getl32(op + 16);
@@ -400,12 +394,11 @@ static int parse_etir(const uint8_t *rec, uint16_t rsz, struct evax_object *out,
             }
             struct evax_reloc *rr = &out->reloc[out->nreloc];
             memset(rr, 0, sizeof *rr);
-            rr->type        = EVAX_R_OVMX_GPDISP;
-            rr->psect       = (int)psect;
-            rr->address     = ldah_vaddr;
-            rr->addend      = lda_delta;    /* ldah_vaddr + addend = the lda word */
-            rr->to_section  = -1;
-            rr->gp_pdsc_off = pdsc_off;     /* [OVMX] vms-095: PDSC offset in $LINK$ */
+            rr->type       = EVAX_R_OVMX_GPDISP;
+            rr->psect      = (int)psect;
+            rr->address    = ldah_vaddr;
+            rr->addend     = lda_delta;    /* ldah_vaddr + addend = the lda word */
+            rr->to_section = -1;
             copy_name(rr->sym, name, namelen);
             out->nreloc++;
             /* No vaddr advance, no per-relocation state reset needed (this case

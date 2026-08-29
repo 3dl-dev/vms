@@ -3623,7 +3623,8 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
                              uint64_t **rel_off, int *nrel, int *rel_cap,
                              const struct evax_ldsym *ldsyms, int n_ldsyms,
                              const struct evax_wredir *redir, int nredir,
-                             uint64_t gp_linkage_base)
+                             const struct evax_gp_entry *gp_entries,
+                             int n_gp_entries)
 {
     struct evax_object *o = &in[ii].obj;
     if (r->psect < 0 || r->psect >= o->nsec) die("relocation names a bad psect index");
@@ -3655,42 +3656,15 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
      * unlike a REFQUAD — they are NOT recorded in .vms$rel. NOT VMS-authentic:
      * EVAX publishes no GP-displacement encoding. */
     if (r->type == EVAX_R_OVMX_GPDISP) {
-        /* [OVMX] vms-095 (component C3 of vms-5f5) — resolve K = the enclosing
-         * procedure's PDSC offset within the merged $LINK$ section, then patch
-         * -K into the ldah/lda pair.
-         *
-         * K is computed from the PLACED PDSC, not a name-keyed table: the reloc
-         * carries the enclosing proc's PDSC offset within ITS OWN object's $LINK$
-         * psect (r->gp_pdsc_off = the def's sym->value), so
-         *     placed_PDSC = in[ii].sec_base[$LINK$_of_ii] + gp_pdsc_off
-         *     K           = placed_PDSC - gp_linkage_base (merged $LINK$ base).
-         * This resolves LOCAL/static procedures (which have no global symbol to
-         * key on — the C1 evax_gp_entry table only held EGSD globals, so a local
-         * enclosing proc used to hard-error GPDISPUNDEF) identically to globals.
-         * evax_wredir_apply then retargets a weak enclosing-proc def that a strong
-         * def overrides to the SURVIVING strong def's PDSC (vms-430 / #899), so a
-         * weak-overridden proc's K is the strong def's — never the discarded weak
-         * one. No name lookup, no K-table: local, global, and weak-overridden all
-         * take one path. NOT VMS-authentic (EVAX has no GP-displacement encoding);
-         * see docs/design-alpha-per-image-gp.md §2.1/§2.2. */
-        int lk = -1;
-        for (int k = 0; k < in[ii].obj.nsec; k++)
-            if (!strcmp(in[ii].obj.sec[k].name, "$LINK$")) { lk = k; break; }
-        if (lk < 0) {
-            fprintf(stderr, "%%LINK-F-GPDISPUNDEF, EVAX_R_OVMX_GPDISP for procedure "
-                    "'%s' but its object defines no $LINK$ psect (no linkage "
-                    "section to place its PDSC in)\n", r->sym);
+        const struct evax_gp_entry *ge = NULL;
+        for (int gi = 0; gi < n_gp_entries; gi++)
+            if (strcmp(gp_entries[gi].name, r->sym) == 0) { ge = &gp_entries[gi]; break; }
+        if (!ge) {
+            fprintf(stderr, "%%LINK-F-GPDISPUNDEF, EVAX_R_OVMX_GPDISP names "
+                    "procedure '%s' with no recorded linkage-section K "
+                    "(not a defined procedure in this image)\n", r->sym);
             exit(1);
         }
-        uint64_t placed_pdsc_raw = in[ii].sec_base[lk] + r->gp_pdsc_off;
-        uint64_t placed_pdsc = evax_wredir_apply(redir, nredir, placed_pdsc_raw);
-        int64_t K = (int64_t)(placed_pdsc - gp_linkage_base);
-        /* [OVMX] vms-095: weak-overridden proc — the reloc's own object holds the
-         * WEAK def; evax_wredir retargeted it to the surviving STRONG def's PDSC,
-         * so K is the strong def's (not the discarded weak one, raw_k below). */
-        int gp_weakover = (placed_pdsc != placed_pdsc_raw);
-        int64_t gp_raw_k = (int64_t)(placed_pdsc_raw - gp_linkage_base);
-
         uint64_t ldah_off = r->address;
         uint64_t lda_off  = r->address + r->addend;   /* addend = lda delta */
         if (lda_off + 4 > sec->alloc || ldah_off + 4 > sec->alloc)
@@ -3701,7 +3675,7 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
         /* -K, signed-split. Masking after the shift makes the >>16 independent of
          * arithmetic-vs-logical shift (bits [15:0] come from bits [31:16] of
          * (-K + 0x8000) either way), so this is fully defined. */
-        uint64_t negK = (uint64_t)(-K);
+        uint64_t negK = (uint64_t)(-(int64_t)ge->k);
         uint16_t hi = (uint16_t)(((negK + 0x8000) >> 16) & 0xffff);
         uint16_t lo = (uint16_t)(negK & 0xffff);
 
@@ -3723,10 +3697,9 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
         uint64_t lda_va  = in[ii].sec_base[r->psect] + lda_off;
         fprintf(stderr, "%%LINK-I-GPDISP, EVAX_R_OVMX_GPDISP proc=%s K=0x%llx "
                 "ldah_imm=0x%04x lda_imm=0x%04x ldah_va=0x%llx lda_va=0x%llx "
-                "weakover=%d raw_k=0x%llx (patched -K, signed-split)\n",
-                r->sym, (unsigned long long)K, hi, lo,
-                (unsigned long long)ldah_va, (unsigned long long)lda_va,
-                gp_weakover, (unsigned long long)gp_raw_k);
+                "(patched -K, signed-split)\n",
+                r->sym, (unsigned long long)ge->k, hi, lo,
+                (unsigned long long)ldah_va, (unsigned long long)lda_va);
         return;
     }
 
@@ -4156,13 +4129,8 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
     for (int oi = 0; oi < nos; oi++)
         if (!strcmp(osec[oi].name, "$LINK$")) { gp_linkage_base = osec[oi].addr; break; }
 
-    /* This table records K per GLOBAL (EGSD) procedure for the %LINK-I-GPBASE /
-     * %LINK-I-GPENTRY diagnostics the C1 test (run_evax_linkgp.sh) asserts on.
-     * vms-095 (C3): the EVAX_R_OVMX_GPDISP apply NO LONGER consumes it — a
-     * name-keyed table cannot resolve a LOCAL/static enclosing proc (absent from
-     * EGSD, so it hard-errored GPDISPUNDEF). The apply now computes K from the
-     * PDSC placement carried in the reloc (gp_linkage_base + gp_pdsc_off) +
-     * evax_wredir, covering local, global, and weak-overridden uniformly. */
+    /* struct evax_gp_entry is now file-scope (above evax_apply_reloc) so C2's
+     * EVAX_R_OVMX_GPDISP apply can consume this table by procedure name. */
     int gp_cap = 0;
     for (int i = 0; i < nin; i++) gp_cap += in[i].obj.nsym;
     struct evax_gp_entry *gp_entries = gp_cap ? calloc((size_t)gp_cap, sizeof *gp_entries) : NULL;
@@ -4188,9 +4156,8 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
                         (unsigned long long)gp_entries[i].pdsc,
                         (unsigned long long)gp_entries[i].k);
     }
-    /* gp_entries is diagnostic-only now (see above); freed after the reloc-apply
-     * loop, which no longer reads it (the apply resolves K from the reloc's
-     * carried PDSC placement, not this table). */
+    /* NB: gp_entries is NOT freed here — C2's EVAX_R_OVMX_GPDISP apply below
+     * looks K up from it by procedure name. Freed after the reloc-apply loop. */
 
     /* ---- Synthesize the linker-defined section-boundary / _DYNAMIC symbols
      * (vms-838a) now that every psect is placed. Point each init/fini/preinit
@@ -4348,12 +4315,12 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
                              producers, np, &imp, &nimp, &imp_cap, &n_ximport,
                              &deferred, &n_linkage, &n_callsite,
                              &rel_off, &nrel, &rel_cap, ldsyms, n_ldsyms,
-                             wredir, n_wredir, gp_linkage_base);
+                             wredir, n_wredir, gp_entries, n_gp_entries);
             if (t == EVAX_R_REFLONG || t == EVAX_R_REFQUAD || t == EVAX_R_CODEADDR)
                 n_data++;
         }
-    /* C1's evax_gp_entry table (diagnostic-only since vms-095/C3) is done with
-     * once the reloc-apply loop finishes. */
+    /* C1's evax_gp_entry table (kept alive above so C2's EVAX_R_OVMX_GPDISP
+     * apply could consume it) is done with once the reloc-apply loop finishes. */
     free(gp_entries);
 
     /* ---- .vms$imp: cross-image imports bound to --use producers. Each record

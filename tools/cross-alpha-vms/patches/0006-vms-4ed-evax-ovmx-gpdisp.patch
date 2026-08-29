@@ -13,17 +13,13 @@ Wire form (OVMX): a new OVMX-private ETIR command ETIR__C_OVMX_GPDISP = 0xEF01
 object can never collide) with the standard cmd[2]+length[2] header (length incl.
 header) and operand, all little-endian:
 
-    [u32 pdsc_offset][u32 psect][u64 ldah_vaddr][u32 lda_delta][u8 namelen][name]
+    [u32 lkidx_or_0][u32 psect][u64 ldah_vaddr][u32 lda_delta][u8 namelen][name]
 
-pdsc_offset (vms-095/C3) = the enclosing procedure's PDSC offset within its own
-object's $LINK$ psect; the OVMX linker computes K = placed_PDSC - $LINK$ base
-from it, resolving LOCAL/static procedures (which have no global symbol to key a
-name lookup on) as well as globals.  name is retained for diagnostics.  -K is
-signed-split (ldah hi with the +0x8000 carry, lda lo) into the pair.
+name = the enclosing procedure symbol whose PDSC offset K the OVMX linker looks
+up; -K is signed-split (ldah hi with the +0x8000 carry, lda lo) into the pair.
 
-New assembler directive `.ovmx_gpdisp $<reg>, <procsym>` (the $<reg> operand was
-added by vms-095/C3; C2 shipped a fixed $29) EMITS the ldah/lda GP-establish pair
-itself and, on it, BFD_RELOC_ALPHA_OVMX_GPDISP (internal ALPHA_R_OVMX_GPDISP,
+New assembler directive `.ovmx_gpdisp <procsym>` is placed immediately after the
+ldah/lda pair; it emits BFD_RELOC_ALPHA_OVMX_GPDISP (internal ALPHA_R_OVMX_GPDISP,
 howto size 0 so the two instruction words stay ordinary content), which
 _bfd_vms_write_etir serializes as the command above.  The OVMX linker
 (src/vmslink/evax_read.c recognizer + link.c apply) resolves it; bfd never
@@ -108,23 +104,7 @@ and public OpenVMS docs; no VSI/HPE source or binary was consulted.
  
  /* These are used with DST_S_C_LINE_NUM.  */
  #define DST_S_C_LINE_NUM_HEADER_SIZE 4
-@@ -2577,6 +2577,15 @@
- 	    }
- 	  break;
- 
-+	case ETIR__C_OVMX_GPDISP:
-+	  /* [OVMX] vms-095 (component C3 of vms-5f5): OVMX-private GP-displacement
-+	     marker (0xEF01).  The ldah/lda GP-establish words are ordinary STO_IMM
-+	     content already placed in the section, so bfd tools (objdump, nm) need
-+	     take no action on the marker -- skip it so they can read OVMX objects
-+	     instead of failing with "reserved cmd".  Only OVMX's LINK.EXE resolves
-+	     it (patches -K); see docs/design-alpha-per-image-gp.md 2.2.  */
-+	  break;
-+
- 	default:
- 	  _bfd_error_handler (_("reserved cmd %d"), cmd);
- 	  return false;
-@@ -4274,6 +4279,30 @@
+@@ -4274,6 +4279,29 @@
  		  _bfd_vms_output_end_subrec (recwr);
  		  break;
  
@@ -133,17 +113,16 @@ and public OpenVMS docs; no VSI/HPE source or binary was consulted.
 +		     command marking the ldah/lda GP-establish pair.  size stays
 +		     0 (this howto has size 0) so the two instruction words remain
 +		     ordinary sto_imm content the OVMX linker patches in place.
-+		     Operand (all little-endian): [u32 pdsc_offset][u32 psect]
-+		     [u64 ldah_vaddr][u32 lda_delta][u8 namelen][name].  pdsc_offset
-+		     = sym->value (vms-095/C3): the enclosing procedure's PDSC offset
-+		     within its $LINK$ psect, so the OVMX linker resolves K for a
-+		     LOCAL/static proc too (no global symbol to key on).  NOT a
++		     Operand (all little-endian): [u32 lkidx_or_0][u32 psect]
++		     [u64 ldah_vaddr][u32 lda_delta][u8 namelen][name].  name = the
++		     enclosing procedure symbol whose PDSC offset K the OVMX linker
++		     looks up; -K is split into ldah(hi)/lda(lo) at link.  NOT a
 +		     VSI encoding; see docs/design-alpha-per-image-gp.md 2.2.  */
 +		  if (!etir_output_check (abfd, section, curr_addr,
 +					  32 + 1 + strlen ((char *) sym->name)))
 +		    return false;
 +		  _bfd_vms_output_begin_subrec (recwr, ETIR__C_OVMX_GPDISP);
-+		  _bfd_vms_output_long (recwr, (unsigned long) sym->value);  /* pdsc_offset */
++		  _bfd_vms_output_long (recwr, (unsigned long) 0);            /* lkidx_or_0 */
 +		  _bfd_vms_output_long (recwr,
 +					(unsigned long) section->target_index); /* psect */
 +		  _bfd_vms_output_quad (recwr, rptr->address);               /* ldah_vaddr */
@@ -190,32 +169,29 @@ and public OpenVMS docs; no VSI/HPE source or binary was consulted.
  	return NULL;
 --- a/gas/config/tc-alpha.c	2024-08-03 23:00:00.000000000 +0000
 +++ b/gas/config/tc-alpha.c	2026-08-29 15:19:10.241021144 +0000
-@@ -4827,6 +4827,82 @@
+@@ -4827,6 +4827,57 @@
    symbol_get_bfdsym (s)->flags |= BSF_FILE;
    demand_empty_rest_of_line ();
  }
 +
-+/* [OVMX] vms-4ed (component C2 of vms-5f5); reg operand added by vms-095 (C3) —
-+   parse `.ovmx_gpdisp $<reg>, <procsym>`.
++/* [OVMX] vms-4ed (component C2 of vms-5f5) — parse `.ovmx_gpdisp <procsym>`.
 +
 +   Emits the two-instruction [OVMX] GP-establish prologue pair for the enclosing
 +   procedure and marks it with the OVMX-private GP-displacement relocation:
 +
-+       ldah  <reg>, 0($27)        ; module-GP high half; base R27 = &PDSC
-+       lda   <reg>, 0(<reg>)      ; module-GP low half
++       ldah  $29, 0($27)        ; module-GP high half; base R27 = &PDSC
++       lda   $29, 0($29)        ; module-GP low half
 +
 +   Both 16-bit immediates are emitted as 0.  The pair is emitted by the directive
-+   itself (frag_more, like .linkage frag_more's its linkage pair) so the
-+   relocation site is unambiguous and independent of instruction-frag boundaries.
-+   The reloc target is <procsym> (the enclosing procedure); the OVMX linker looks
-+   up K = <procsym>'s PDSC offset within its module linkage section and patches
-+   the signed -K high/low halves into the ldah/lda immediates, so at run time
-+   <reg> = R27 + (-K) = &PDSC - K = module_GP.  <reg> is the OVMX module-GP
-+   register (OVMX cc1 supplies $15 — on this port $29 is the frame pointer, so
-+   the GP-establish register is caller-chosen) and R27 = the procedure value per
-+   the VMS Calling Standard 3.3; both, and the whole GP-displacement encoding,
-+   are OVMX design choices (EVAX publishes no GP-displacement relocation).  See
-+   docs/design-alpha-per-image-gp.md 2.1/2.2.
++   itself (as .linkage frag_more's its linkage pair) so the relocation site is
++   unambiguous and independent of instruction-frag boundaries.  The reloc target
++   is <procsym> (the enclosing procedure); the OVMX linker looks up
++   K = <procsym>'s PDSC offset within its module linkage section and patches the
++   signed -K high/low halves into the ldah/lda immediates, so at run time
++   $29 = R27 + (-K) = &PDSC - K = module_GP.  $29 is the OVMX module-GP register
++   and R27 = the procedure value per the VMS Calling Standard 3.3; both, and the
++   whole GP-displacement encoding, are OVMX design choices (EVAX publishes no
++   GP-displacement relocation).  See docs/design-alpha-per-image-gp.md 2.1/2.2.
 +
 +   Reloc: BFD_RELOC_ALPHA_OVMX_GPDISP, site = the ldah word, addend = the lda
 +   delta (4).  md_apply_fix leaves the two words untouched for the OVMX linker.  */
@@ -226,44 +202,22 @@ and public OpenVMS docs; no VSI/HPE source or binary was consulted.
 +  expressionS exp;
 +  char *p;
 +  fixS *fixp;
-+  unsigned int reg;
 +
 +#ifdef md_flush_pending_output
 +  md_flush_pending_output ();
 +#endif
-+
-+  /* [OVMX] vms-095 (C3 of vms-5f5): the directive takes an explicit module-GP
-+     register: `.ovmx_gpdisp $<reg>, <procsym>'.  On this port $29 is the frame
-+     pointer, so the GP-establish register is a caller-supplied reserved reg
-+     (OVMX cc1 uses $15).  Parse `$<reg>' then a `,' then the procedure symbol.  */
-+  SKIP_WHITESPACE ();
-+  if (*input_line_pointer == '$')
-+    {
-+      input_line_pointer++;
-+      if (*input_line_pointer == 'r')
-+	input_line_pointer++;
-+    }
-+  reg = get_absolute_expression ();
-+  if (reg > 31)
-+    as_fatal (_("Bad module-GP register $%u after .ovmx_gpdisp"), reg);
-+  SKIP_WHITESPACE ();
-+  if (*input_line_pointer != ',')
-+    as_fatal (_("Expected `,' after the module-GP register in .ovmx_gpdisp"));
-+  input_line_pointer++;
 +
 +  expression (&exp);
 +  if (exp.X_op != O_symbol)
 +    as_fatal (_("No procedure symbol after .ovmx_gpdisp"));
 +  else
 +    {
-+      /* ldah <reg>, 0($27) : opcode 0x09, Ra=reg, Rb=27, disp=0.
-+	 lda  <reg>, 0(<reg>): opcode 0x08, Ra=reg, Rb=reg, disp=0.
-+	 Alpha is little-endian; md_number_to_chars emits LE.  The register
-+	 fields are content the OVMX linker never touches (it patches only the
-+	 signed -K immediates), so the reloc/ETIR side stays register-agnostic.  */
++      /* ldah $29, 0($27) : opcode 0x09, Ra=29, Rb=27, disp=0.
++	 lda  $29, 0($29) : opcode 0x08, Ra=29, Rb=29, disp=0.
++	 Alpha is little-endian; md_number_to_chars emits LE.  */
 +      p = frag_more (8);
-+      md_number_to_chars (p, (0x09u << 26) | (reg << 21) | (27u << 16), 4);
-+      md_number_to_chars (p + 4, (0x08u << 26) | (reg << 21) | (reg << 16), 4);
++      md_number_to_chars (p, (0x09u << 26) | (29u << 21) | (27u << 16), 4);
++      md_number_to_chars (p + 4, (0x08u << 26) | (29u << 21) | (29u << 16), 4);
 +      fixp = fix_new_exp (frag_now, p - frag_now->fr_literal, 8, &exp, 0,
 +			  BFD_RELOC_ALPHA_OVMX_GPDISP);
 +      fixp->fx_offset = 4;   /* lda delta -> reloc addend */

@@ -171,6 +171,9 @@ jobs:
               - 'tests/qemu/test_cluster_params_recnx_e2e.sh'
               - 'tests/qemu/test_cluster_params_recnx_negctl.sh'
               - 'tests/qemu/run_cluster_params_recnx_e2e.sh'
+              - 'tests/qemu/test_cluster_param_adoption.sh'
+              - 'tests/qemu/test_cluster_param_adoption_negctl.sh'
+              - 'tests/qemu/run_cluster_param_adoption_e2e.sh'
               - 'tests/uat/**'
             # vms-707: the change classes that can regress the OVMX/Alpha
             # RUNTIME boot-to-mount (as distinct from the modpost-only vms-5af
@@ -2232,6 +2235,62 @@ jobs:
           rc=$?
           if [ "$rc" -eq 77 ]; then
             echo "FATAL: cluster_params_recnx_e2e SKIPPED in CI — this gate must actually run the real boot, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # Job 2f: cluster params ADOPTED ACROSS A REBOOT (vms-495, epic vms-098 R1.3)
+  #
+  # The R1 release proof: an operator authors the cluster identity/quorum set via
+  # SYSGEN.EXE + WRITE CURRENT on BOOT 1 of a PERSISTENT disk, the node is
+  # power-cycled, and a fresh executive on BOOT 2 of the SAME disk ADOPTS the
+  # authored SCSNODE=NODEB/SCSSYSTEMID=1026/VOTES/EXPECTED_VOTES (SCSD
+  # --show-identity + SYSGEN SHOW). A CONTROL disk authored NODEC/1027 boots with
+  # ITS OWN identity (bracket: the value came from the disk, not a canned NODEB).
+  # Distinct from cluster-params-recnx-e2e, which authors+reads back within ONE
+  # boot -- this gate proves the value SURVIVES the power cycle and is re-adopted.
+  # The runner runs the paired MEASURED negctl first (unauthored rebooted disk ->
+  # seed identity OVMX/0, never NODEB/1026) so the positive cannot pass wrongly.
+  #
+  # Heavier than the single-boot e2e gates (author-boot + adopt-boot per disk,
+  # plus the negctl's two boots), so a longer timeout than the 30m single-boot
+  # gates. Same SKIP_RETURN_CODE 77 => hard CI failure convention: never skip.
+  # -----------------------------------------------------------------------
+  cluster-param-adoption-e2e:
+    name: Rebooted executive adopts authored cluster params (vms-495 R1.3)
+    needs: changes
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only.
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Cluster-param adoption-on-reboot e2e — author boot1, reboot, adopt boot2 (+ negctl)
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_cluster_param_adoption_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: cluster_param_adoption_e2e SKIPPED in CI — this gate must actually run the real reboot, never skip silently." >&2
             exit 1
           fi
           exit "$rc"

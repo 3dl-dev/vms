@@ -2,10 +2,10 @@
 # TEST: New lexical functions F$PID, F$DEVICE, F$GETDVI, F$IDENTIFIER, F$CVUI work
 # EXPECT: regex:P =
 # EXPECT: regex:D =
-# EXPECT: contains:SYS$SYSDEVICE
 # EXPECT: regex:C = 65
 # EXPECT_NOT: contains:_OPA0:
 # EXPECT_NOT: contains:_FTA0:
+# EXPECT_NOT: contains:_SYS$SYSDEVICE:
 # EXPECT_NOT: contains:I = "[
 #
 # A SECOND ASSERTION CHANGED, SAME REASON AS THE FIRST (vms-2f8). This file
@@ -57,10 +57,32 @@
 # recorded in anything this work has, so it is not asserted either way
 # (CLAUDE.md rule 10 -- do not invent VMS behaviour to test against).
 #
-# The other four lexicals are untouched and their assertions are unchanged;
+# THE F$GETDVI ASSERTION CHANGED, SAME REASON AS F$DEVICE (vms-050). This file
+# used to carry
+#   # EXPECT: contains:SYS$SYSDEVICE
+# for the F$GETDVI("SYS$SYSDEVICE","DEVNAM") line, and the note here reported
+# that F$GETDVI was "still a fabricator ... not fixed here": lex_getdvi()
+# answered EXISTS=TRUE for every name, guessed DEVCLASS/DEVTYPE from a
+# name substring, returned VOLNAM="OVMXSYS"/MOUNTCNT="1" and statvfs("/")
+# block counts, and rendered DEVNAM as "_<whatever-you-typed>:" -- which is
+# why "SYS$SYSDEVICE" appeared whether or not any such device existed.
+#
+# F$GETDVI now reads the executive's device table (vms_kif_getdvi_devnam, the
+# same reader F$DEVICE and SHOW DEVICE use) and the ACP mounted-volume table
+# (vms_kif_getvol), so it returns the executive's own physical name (e.g.
+# "DKA0:") and real volume state -- and, exactly like F$DEVICE, NOTHING where
+# there is no executive to ask, as under ctest (it emits %SYSTEM-W-NOSUCHDEV
+# and leaves G empty). The assertion is inverted rather than dropped: the old
+# fabricated "_SYS$SYSDEVICE:" DEVNAM rendering must NOT appear, which stays
+# true in BOTH environments (a real executive returns the resolved physical
+# unit name, never the logical spelled back with an underscore). The POSITIVE
+# proof that F$GETDVI reads real data -- EXISTS=FALSE for a bogus device, real
+# VOLNAM/DEVTYPE for a real one -- runs against a real /dev/vms in
+# tests/dcl/test_getdvi_no_fabrication.sh (vms-050), which a userspace-only
+# ctest cannot stand in for (CLAUDE.md Rule 9).
+#
+# The other three lexicals are untouched and their assertions are unchanged;
 # they are what keeps this from becoming a test that passes because DCL
-# printed nothing. Note F$GETDVI is still a fabricator (it answers from
-# src/vmsdcl/dcl_lexical.c's own idea of a device, which is why
-# "SYS$SYSDEVICE" still appears) -- that is reported, not fixed here.
+# printed nothing.
 VMSDCL="${VMSDCL:-vmsdcl}"
 printf 'P = F$PID("")\nSHOW SYMBOL P\nD = F$DEVICE("*")\nSHOW SYMBOL D\nG = F$GETDVI("SYS$SYSDEVICE","DEVNAM")\nSHOW SYMBOL G\nI = F$IDENTIFIER(65540,"NUMBER_TO_NAME")\nSHOW SYMBOL I\nC = F$CVUI(0,8,"A")\nSHOW SYMBOL C\n' | $VMSDCL 2>&1

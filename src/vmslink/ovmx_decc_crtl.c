@@ -371,9 +371,13 @@ static inline void *p32_to_ptr(int a32)
  * a signal frame on the wild main stack -> double-fault -> terminate, so no PC
  * was ever emitted. Running the handler on this clean alt-stack (sigaltstack()
  * + SA_ONSTACK below) lets it survive a wild SP and print PC+SP. Fixed 65536
- * (bits/signal.h SIGSTKSZ is only 16384; a static buffer sidesteps any
- * SIGSTKSZ-as-function concern and gives head-room). */
-static char ovmx_disc_altstk[65536];
+ * (bits/signal.h SIGSTKSZ is only 16384; a fixed size sidesteps any
+ * SIGSTKSZ-as-function concern and gives head-room). The stack is allocated at
+ * install time via anonymous mmap (see ovmx_disc_install_segv) rather than a
+ * static array, so those 65536 bytes never land in DECC$SHR.EXE on disk — a
+ * static buffer pushed the image over the 2048-block producer-load cap and the
+ * discriminator failed to activate (%IMGNOTFND). vms-430. */
+#define OVMX_DISC_ALTSTK_SZ 65536
 
 /* Async-signal-safe 16-digit hex, MSB first, into p[0..15]. */
 static void ovmx_disc_puthex(char *p, unsigned long v)
@@ -478,13 +482,23 @@ static void ovmx_disc_install_segv(void)
     char *zz = (char *)&ss;
     for (unsigned i = 0; i < sizeof ss; i++)
         zz[i] = 0;
-    ss.ss_sp = ovmx_disc_altstk;
-    ss.ss_size = sizeof ovmx_disc_altstk;
-    ss.ss_flags = 0;
-    sigaltstack(&ss, 0);
+    /* Off-disk alt-stack: anonymous mmap (same syscall wrapper the P32 arena
+     * uses above) at install time, NOT a static array — keeps 65536 bytes out
+     * of the DECC$SHR.EXE image so it stays under the 2048-block cap. Install
+     * runs at decc$main, not in the handler, so a plain mmap here is fine. */
+    void *stk = mmap(NULL, OVMX_DISC_ALTSTK_SZ, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    int on_stack = 0;
+    if (stk != MAP_FAILED) {               /* guard: mmap failure -> no alt-stack, */
+        ss.ss_sp = stk;                    /* handlers still install on the main   */
+        ss.ss_size = OVMX_DISC_ALTSTK_SZ;  /* stack (as before), just without      */
+        ss.ss_flags = 0;                   /* SA_ONSTACK.                          */
+        sigaltstack(&ss, 0);
+        on_stack = 1;
+    }
 
     sa.sa_sigaction = ovmx_disc_segv;
-    sa.sa_flags = SA_SIGINFO | SA_ONSTACK; /* alpha 0x40|0x01, from bits/signal.h */
+    sa.sa_flags = SA_SIGINFO | (on_stack ? SA_ONSTACK : 0); /* alpha 0x40|0x01 */
     sigaction(SIGSEGV, &sa, 0);
     sigaction(SIGBUS,  &sa, 0);
     sigaction(SIGILL,  &sa, 0);            /* the CRTL/RMS decc$_memset64 fault  */

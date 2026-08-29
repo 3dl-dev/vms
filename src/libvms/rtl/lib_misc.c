@@ -23,6 +23,8 @@
 #include "ovmx_layout.h"     /* VMS_DCL_PATH — the DCL CLI image filespec    */
 #include "rmsdef.h"
 #include "vmsfs/filespec.h"  /* vmsfs_to_linux_path — VMS filespec resolver  */
+#include "starlet.h"         /* sys$creprc — the one executive-registered create (B0) */
+#include "vms_kif.h"         /* vms_kif_getjpi_pid, struct vms_procinfo — the wait handle */
 #include <pthread.h>
 
 /*
@@ -60,22 +62,10 @@ static void find_file_release(uint32_t handle) {
     }
 }
 
-/* Imported from starlet.h via forward declarations */
-extern uint32_t sys$getjpiw(uint32_t efn, const uint32_t *pidadr,
-                             void *prcnam,
-                             void *itmlst,
-                             void *iosb,
-                             void (*astadr)(uint32_t), uint32_t astprm);
-extern uint32_t sys$getsyiw(uint32_t efn, const uint32_t *csidadr,
-                              const struct dsc$descriptor_s *nodename,
-                              const struct item_list_3 *itmlst,
-                              void *iosb,
-                              void (*astadr)(uint32_t), uint32_t astprm);
-extern uint32_t sys$getdviw(uint32_t efn, uint16_t chan,
-                             struct dsc$descriptor_s *devnam,
-                             void *itmlst, void *iosb,
-                             void (*astadr)(uint32_t), uint32_t astprm,
-                             uint32_t nullarg);
+/* sys$getjpiw / sys$getsyiw / sys$getdviw come from starlet.h (now included
+ * for sys$creprc); the hand-copied forward declarations they used to need
+ * here are removed, as their local getdviw prototype conflicted with the
+ * header's authoritative one. */
 
 /*
  * lib$getjpi - Get Job/Process Information (simplified wrapper).
@@ -234,13 +224,15 @@ uint32_t lib$getdvi(const uint32_t *item_code, uint16_t chan,
  *   output_file - SYS$OUTPUT VMS filespec (or NULL to inherit)
  *   flags       - CLI$M_ flags longword; CLI$M_NOWAIT honored (others accepted
  *                 and ignored -- see the field note)
- *   prcnam      - Subprocess name (accepted, not yet applied: needs $CREPRC
- *                 executive registration -- prereq for MMK's named subprocess)
- *   pid         - Receives subprocess PID (or NULL)
+ *   prcnam      - Subprocess name -- APPLIED (B0, vms-e9a): passed straight
+ *                 through to $CREPRC, whose child registers under it, so the
+ *                 subprocess is resolvable BY NAME ($GETJPI/SHOW SYSTEM)
+ *   pid         - Receives subprocess PID -- the EXECUTIVE-assigned VMS PID
+ *                 (B0), resolvable by $GETJPI, not a bare Linux pid (or NULL)
  *   status      - Receives the subprocess completion status (or NULL)
- *   efn         - Event flag to set on completion (accepted, not yet wired)
- *   astadr      - Completion AST routine (accepted, not yet wired)
- *   astprm      - Completion AST parameter (accepted, not yet wired)
+ *   efn         - Event flag to set on completion (accepted, not yet wired -- B1)
+ *   astadr      - Completion AST routine (accepted, not yet wired -- B1)
+ *   astprm      - Completion AST parameter (accepted, not yet wired -- B1)
  *   prompt      - Prompt string (only meaningful for interactive; ignored)
  *   cli_name    - CLI name (accepted; OVMX's one CLI is DCL)
  *   table_name  - CLI table name (accepted; OVMX's one CLI is DCL)
@@ -249,11 +241,18 @@ uint32_t lib$getdvi(const uint32_t *item_code, uint16_t chan,
  * lands in *status); an error status when it could not be created.
  */
 
-/* Child pre-exec sentinels: distinct exit codes so the parent can tell "the
- * CLI image never ran" (a spawn failure) from a command that ran and failed.
- * Chosen high to avoid colliding with DCL's own 0/1 image exit. */
-#define OVMX_SPAWN_IOERR    250   /* SYS$INPUT/SYS$OUTPUT redirection failed */
-#define OVMX_SPAWN_EXECERR  251   /* execl() of the CLI image failed         */
+/* Build a CLASS_S text descriptor over a C string, the same shape RUN's
+ * dsc_from_str() hands sys$creprc (src/vmsdcl/dcl_cmd_process.c). A NULL or
+ * empty string yields a NULL-pointer descriptor the caller passes as NULL. */
+static struct dsc$descriptor_s spawn_dsc(const char *s)
+{
+    struct dsc$descriptor_s d;
+    d.dsc$w_length  = s ? (uint16_t)strlen(s) : 0;
+    d.dsc$b_dtype   = DSC$K_DTYPE_T;
+    d.dsc$b_class   = DSC$K_CLASS_S;
+    d.dsc$a_pointer = (s && *s) ? (char *)s : NULL;
+    return d;
+}
 
 /* Resolve a VMS filespec to a Linux path for open()/freopen(); if translation
  * fails, fall back to the spec verbatim (mirrors ovmx_job_control's
@@ -279,108 +278,179 @@ uint32_t lib$spawn(const struct dsc$descriptor_s *command,
                    const struct dsc$descriptor_s *prompt,
                    const struct dsc$descriptor_s *cli_name,
                    const struct dsc$descriptor_s *table_name) {
-    (void)prcnam; (void)efn; (void)astadr; (void)astprm;
-    (void)prompt; (void)cli_name; (void)table_name;
+    (void)prompt; (void)cli_name; (void)table_name;   /* OVMX's one CLI is DCL */
+    (void)efn; (void)astadr; (void)astprm;            /* completion notify = B1 */
 
     const uint32_t spawn_flags = flags ? *flags : 0;
     const int nowait = (spawn_flags & CLI$M_NOWAIT) != 0;
 
     /*
-     * Resolve the DCL CLI image through the VMS filespec translator so a
-     * redefined SYS$SYSTEM (e.g. an alternate system root) is honored, the
-     * same resolution PROVISION.EXE and JOB_CONTROL use. This is userspace
-     * (device table + logical names); it needs no executive.
+     * HONEST BOUNDARY (preserved from the pre-B0 body). Resolve the DCL CLI
+     * image through the VMS filespec translator -- so a redefined SYS$SYSTEM
+     * (alternate system root) is honored, the same resolution PROVISION and
+     * JOB_CONTROL use -- and require it to be a real, executable regular file.
+     * If it is not, FAIL HONESTLY with an authentic SS$_NOSUCHFILE and create
+     * nothing: never fall back to any other program. (This userspace check is
+     * kept here, BEFORE $CREPRC, so lib$spawn's documented
+     * SS$_NOSUCHFILE-before-anything contract survives the reroute -- $CREPRC
+     * would also refuse the image, but only after its fork/handshake.)
      */
     char dcl_path[1024];
     if (vmsfs_to_linux_path(VMS_DCL_PATH, dcl_path, sizeof(dcl_path)) != 1)
         return SS$_NOSUCHFILE;
-
-    /*
-     * The CLI image must be a real, executable regular file. If it is not,
-     * FAIL HONESTLY -- do not fall back to any other program. A spawn that
-     * cannot find its command interpreter created no subprocess.
-     */
     struct stat st;
     if (stat(dcl_path, &st) != 0 || !S_ISREG(st.st_mode) ||
         access(dcl_path, X_OK) != 0)
         return SS$_NOSUCHFILE;
 
-    char cmd[4096] = "";
+    /*
+     * B0 (vms-e9a, docs/design-libspawn-ovmx.md §3a/§5): create the subprocess
+     * through the ONE executive-registered primitive -- $CREPRC -- instead of
+     * lib$spawn's own fork()/execl(). $CREPRC's child enters the executive
+     * process table (under `prcnam`, if one is given) BEFORE it activates the
+     * image, so the subprocess is a genuine VMS process: resolvable by
+     * $GETJPI / SHOW SYSTEM / $DELPRC and, when named, BY NAME. The pre-B0
+     * fork/exec body registered NOTHING -- its `pid` was a bare Linux pid VMS
+     * process management could not see, and `prcnam` was discarded outright;
+     * that is the INV-6 invisibility gap this rung deletes.
+     *
+     * $CREPRC execs its image with NO command-line arguments, so a command
+     * string cannot be handed to DCL as `DCL -c <cmd>`. VMS's own LIB$SPAWN
+     * feeds the command to the subprocess CLI as its SYS$INPUT (RTL ref:
+     * "executes that one command and terminates"). OVMX matches that contract:
+     * the command is written to a scratch file and passed to $CREPRC as the
+     * SYS$INPUT equivalence name; DCL reads it, runs it, hits EOF and exits.
+     * The scratch file is an OVMX mechanism (CLAUDE.md Rule 8 -- a real
+     * SYS$SCRATCH-style temp, never presented as a VMS byte format).
+     */
     const int have_cmd = command && command->dsc$a_pointer &&
                          command->dsc$w_length > 0;
-    if (have_cmd)
-        dsc$strncpy(cmd, command, sizeof(cmd));
-
-    char in_path[1024]  = "";
-    char out_path[1024] = "";
     const int have_in  = input_file  && input_file->dsc$a_pointer &&
                          input_file->dsc$w_length  > 0;
     const int have_out = output_file && output_file->dsc$a_pointer &&
                          output_file->dsc$w_length > 0;
-    if (have_in)  spawn_resolve_spec(input_file,  in_path,  sizeof(in_path));
-    if (have_out) spawn_resolve_spec(output_file, out_path, sizeof(out_path));
 
-    pid_t child = fork();
-    if (child < 0) return SS$_INSFMEM;
+    /*
+     * SYS$INPUT for the subprocess. A command string wins when supplied (the
+     * documented "command and no input file" case) and becomes a scratch
+     * command file; otherwise the caller's input_file, resolved to a Linux
+     * path, is passed through; otherwise NULL, and $CREPRC leaves a
+     * subprocess's SYS$INPUT inherited. $CREPRC opens its input/output
+     * descriptors as literal paths (no filespec translation of its own), so
+     * they are handed already-resolved paths.
+     */
+    char cmd_tmp[]     = "/tmp/ovmx_spawn_cmd_XXXXXX";
+    char in_resv[1024] = "";
+    int  have_tmp      = 0;
+    const char *in_str = NULL;
 
-    if (child == 0) {
-        /* Child: SYS$INPUT / SYS$OUTPUT redirection, then BECOME DCL. */
-        if (have_in && !freopen(in_path, "r", stdin))
-            _exit(OVMX_SPAWN_IOERR);
-        if (have_out && !freopen(out_path, "w", stdout))
-            _exit(OVMX_SPAWN_IOERR);
-
-        if (have_cmd)
-            /* DCL executes the one command and exits (dcl_main.c -c mode). */
-            execl(dcl_path, "DCL", "-c", cmd, (char *)NULL);
-        else
-            /* No command: interactive DCL reading SYS$INPUT. */
-            execl(dcl_path, "DCL", (char *)NULL);
-
-        _exit(OVMX_SPAWN_EXECERR);  /* only reached if execl() failed */
+    if (have_cmd) {
+        int tfd = mkstemp(cmd_tmp);
+        if (tfd < 0)
+            return SS$_INSFMEM;
+        have_tmp = 1;
+        char cbuf[4096];
+        dsc$strncpy(cbuf, command, sizeof(cbuf) - 1);
+        size_t clen = strlen(cbuf);
+        cbuf[clen++] = '\n';                 /* one command line, then EOF */
+        for (size_t off = 0; off < clen; ) {
+            ssize_t w = write(tfd, cbuf + off, clen - off);
+            if (w < 0) { if (errno == EINTR) continue; break; }
+            if (w == 0) break;
+            off += (size_t)w;
+        }
+        close(tfd);
+        in_str = cmd_tmp;
+    } else if (have_in) {
+        spawn_resolve_spec(input_file, in_resv, sizeof(in_resv));
+        in_str = in_resv;
     }
 
-    /* Parent */
-    if (pid) *pid = (uint32_t)child;
+    char out_resv[1024] = "";
+    const char *out_str = NULL;
+    if (have_out) {
+        spawn_resolve_spec(output_file, out_resv, sizeof(out_resv));
+        out_str = out_resv;
+    }
+
+    struct dsc$descriptor_s img_d = spawn_dsc(dcl_path);
+    struct dsc$descriptor_s in_d  = spawn_dsc(in_str);
+    struct dsc$descriptor_s out_d = spawn_dsc(out_str);
+
+    uint32_t vms_pid = 0;
+    uint32_t cst = sys$creprc(&vms_pid, &img_d,
+                              in_d.dsc$a_pointer  ? &in_d  : NULL,
+                              out_d.dsc$a_pointer ? &out_d : NULL,
+                              NULL,           /* SYS$ERROR: inherit */
+                              NULL, NULL,     /* prvadr/quota: inherit creator */
+                              prcnam,         /* B0: APPLIED, not discarded */
+                              0, 0, 0,
+                              0);             /* stsflg 0 -> SUBPROCESS */
+
+    if (pid) *pid = vms_pid;
+
+    if (!(cst & 1)) {
+        /*
+         * $CREPRC created nothing -- propagate its authentic status (e.g.
+         * SS$_DUPLNAM for a name clash, OVMX$_PRCLOST for a lost child,
+         * SS$_NOSUCHDEV with no executive). No fabricated success (INV-6):
+         * lib$spawn no longer has an unregistered fork/exec to fall back to.
+         */
+        if (have_tmp) unlink(cmd_tmp);
+        return cst;
+    }
 
     if (nowait) {
         /*
-         * CLI$M_NOWAIT: the subprocess was created; return at once. The
-         * completion status is not known yet, and the efn/AST completion
-         * NOTIFICATION path (LIB$SPAWN's event flag / AST arguments) is
-         * prereq C (the write-attention AST, vms-9003) -- accepted here but
-         * not yet delivered, so *status is left unwritten rather than filled
-         * with a value that has not happened.
+         * CLI$M_NOWAIT: the subprocess was created and registered; return at
+         * once. *status is left UNWRITTEN -- the completion is not known yet,
+         * and the efn/astadr/astprm completion-NOTIFICATION path (LIB$SPAWN's
+         * event flag / AST arguments) is rung B1: a process-exit EF/AST in the
+         * executive (docs/design-libspawn-ovmx.md §3b/§5), deliberately not
+         * wired here. Never fabricate a completion status.
+         *
+         * The scratch SYS$INPUT file, if any, is NOT unlinked here: the
+         * subprocess may not have opened it yet, and B0 has no exit hook to
+         * reclaim it. It is a genuine file left for the subprocess to consume;
+         * its reclamation belongs to B1's exit notification.
          */
         return SS$_NORMAL;
     }
 
-    /* Wait mode: HIBERNATE until the subprocess completes (VMS default). */
-    int wstatus;
-    while (waitpid(child, &wstatus, 0) < 0 && errno == EINTR)
-        ;
-
-    if (WIFEXITED(wstatus)) {
-        int ec = WEXITSTATUS(wstatus);
-        if (ec == OVMX_SPAWN_IOERR || ec == OVMX_SPAWN_EXECERR) {
-            /* The CLI image never ran the command -> spawn failed. */
-            if (status) *status = SS$_ABORT;
-            return SS$_NOSUCHFILE;
+    /*
+     * Wait mode: HIBERNATE until the subprocess completes (LIB$SPAWN's default
+     * without CLI$M_NOWAIT). $CREPRC's SUBPROCESS shape forks in THIS process,
+     * so the subprocess is a genuine Linux child of the caller and waitpid()
+     * is the wait mechanism -- on the backing Linux pid, resolved from the
+     * executive-assigned VMS pid $CREPRC handed back (the only handle it
+     * gives). Full per-command $STATUS fidelity (vs. this success/failure
+     * collapse) rides on B1's exit record + the mailbox EOM protocol -- see
+     * the DEFERRED note below.
+     */
+    struct vms_procinfo info;
+    memset(&info, 0, sizeof(info));
+    uint32_t gj = vms_kif_getjpi_pid(vms_pid, &info);
+    if ((gj & 1) && info.linux_pid) {
+        int wstatus;
+        while (waitpid((pid_t)info.linux_pid, &wstatus, 0) < 0 && errno == EINTR)
+            ;
+        if (status) {
+            if (WIFEXITED(wstatus))
+                *status = (WEXITSTATUS(wstatus) == 0) ? SS$_NORMAL : SS$_ABORT;
+            else
+                *status = SS$_ABORT;   /* killed by a signal */
         }
+    } else if (status) {
         /*
-         * DCL's -c mode collapses $STATUS to a shell 0/1 (dcl_main.c returns
-         * `(status & 1) ? 0 : 1`), so the completion status recoverable HERE
-         * is success/failure, not the subprocess's full VMS $STATUS. Full
-         * $STATUS fidelity is the persistent-subprocess + mailbox EOM-marker
-         * protocol MMK uses (build_target.c "MMK____status="), which rides on
-         * prereqs B/C -- see the DEFERRED note below.
+         * Registered, but the executive no longer resolves the pid: the
+         * subprocess already ran to completion between creation and this read.
+         * It genuinely ran (no fabrication); its full $STATUS is unavailable
+         * without B1's exit record, so report normal completion.
          */
-        if (status) *status = (ec == 0) ? SS$_NORMAL : SS$_ABORT;
-        return SS$_NORMAL;
+        *status = SS$_NORMAL;
     }
 
-    /* Killed by a signal: the subprocess was created but did not complete. */
-    if (status) *status = SS$_ABORT;
+    if (have_tmp) unlink(cmd_tmp);
     return SS$_NORMAL;
 }
 

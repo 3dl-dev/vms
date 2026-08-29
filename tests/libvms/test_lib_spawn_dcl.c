@@ -1,42 +1,44 @@
 /*
- * test_lib_spawn_dcl.c - lib$spawn creates a REAL DCL subprocess (vms-98c)
+ * test_lib_spawn_dcl.c - lib$spawn's HONEST BOUNDARY on a host without the
+ * executive (vms-98c, updated for B0 vms-e9a)
  *
- * Self-host spine #4 (vms-ec70), exec-drive prereq A. Proves that lib$spawn
- * spawns the actual DCL command interpreter and that interpreter really runs
- * the command -- the fix for the facade this item removed, where lib$spawn
- * fork+exec'd `/bin/sh -c <command>` (the Unix Bourne shell) and reported
- * SS$_NORMAL for a "SHOW TIME" no DCL ever saw.
+ * B0 (docs/design-libspawn-ovmx.md §3a/§3d) rerouted lib$spawn through the ONE
+ * executive-registered creation primitive, $CREPRC (sys_process.c), so that a
+ * lib$spawn'd subprocess is a genuine VMS process the rest of process
+ * management can see ($GETJPI/SHOW SYSTEM/$DELPRC). That REGISTRATION needs the
+ * executive: lib$spawn now inherits $CREPRC's /dev/vms dependency and, without
+ * it, FAILS HONESTLY -- it no longer has an unregistered fork/exec to fall back
+ * to (design §3d: a subprocess VMS process management cannot see was never
+ * fully honest). The pre-B0 body fork+exec'd DCL directly with no executive at
+ * all; before THAT (the vms-98c facade this file was born to kill) it
+ * fork+exec'd `/bin/sh -c <command>` and reported SS$_NORMAL for a "SHOW TIME"
+ * no DCL ever saw.
  *
- * FAILS-ON-FACADE, TWO WAYS:
+ * WHERE THE POSITIVE PROOF LIVES NOW. "A real DCL child runs the command AND is
+ * executive-registered under its prcnam, resolvable by $GETJPI BY NAME" is the
+ * B0 anti-INV-6 assertion, and it can only be made against a real /dev/vms --
+ * so it lives in tests/qemu/test_syssvc_libspawn_reg.c, run under the booted
+ * executive. This host ctest proves the complementary property that needs NO
+ * executive:
  *
- *   (1) OBSERVABLE EFFECT FROM A REAL DCL CHILD. lib$spawn("SHOW TIME") with
- *       SYS$OUTPUT redirected to a file. The assertion is that the file holds
- *       the CURRENT YEAR -- taken independently from the C library clock in
- *       THIS process (the oracle), never from lib$spawn. Only DCL's SHOW TIME
- *       prints a VMS date carrying that year; /bin/sh -c "SHOW TIME" prints a
- *       "SHOW: not found" error and no year, so the pre-fix body fails this.
- *       The effect is sourced from the real child (its redirected SYS$OUTPUT),
- *       through the real lib$spawn resolve+fork+exec path, with no monkeypatch.
+ *   (1) NO EXECUTIVE -> HONEST FAILURE. With DCL.EXE resolvable+executable but
+ *       no /dev/vms, lib$spawn returns a VMS error (even status) and creates
+ *       nothing -- it does not run an unregistered subprocess and does not
+ *       report success. (When /dev/vms IS present -- unusual for a host ctest --
+ *       it instead runs the full positive proof: a real DCL SHOW TIME whose
+ *       output carries the current year, sourced independently from this
+ *       process's own clock.)
  *
- *   (2) HONEST FAILURE, NO /bin/sh FALLBACK. With the DCL CLI image absent,
- *       lib$spawn must return a VMS error and create NOTHING -- it must not
- *       substitute another program and must not report success. Asserts the
- *       return status is a failure (even) and the output file was never made.
+ *   (2) NO CLI IMAGE -> HONEST FAILURE, NO FALLBACK. With the DCL CLI image
+ *       absent, lib$spawn returns a VMS error and creates NOTHING -- it must
+ *       not substitute another program and must not report success. Independent
+ *       of the executive (the preflight image check fails first).
  *
- * MECHANISM UNDER TEST (hermetic, no shared /vms, no /dev/vms). lib$spawn
- * resolves the CLI image through the VMS filespec translator as
- * SYS$SYSTEM:DCL.EXE. This test redefines SYS$SYSTEM (LNM$PROCESS_TABLE, which
- * the LNM$FILE_DEV search list consults first) to a private temp directory and
- * stages the build's own DCL image (vmsdcl, passed in as VMSDCL_PATH) there as
- * DCL.EXE. So the real resolution path runs, but against a private tree -- the
- * same technique test_login_logicals uses for SYS$LOGIN. `vmsdcl -c "SHOW
- * TIME"` needs no executive (see tests/integration/test_dcl_basic.sh), so the
- * whole spawn->DCL->SHOW TIME path is provable on a host ctest.
- *
- * NOT COVERED HERE (prereqs B/C, vms-e0b + vms-9003): the persistent-
- * subprocess + mailbox + write-attention-AST protocol MMK's build_target.c
- * uses to stream many commands into one long-lived DCL and read each command's
- * full $STATUS back. This proves the create+run primitive that rides under it.
+ * MECHANISM (hermetic, no shared /vms). lib$spawn resolves the CLI image
+ * through the VMS filespec translator as SYS$SYSTEM:DCL.EXE. This test redefines
+ * SYS$SYSTEM (LNM$PROCESS_TABLE, first in LNM$FILE_DEV) to a private temp
+ * directory and stages the build's own DCL image (vmsdcl, OVMX_TEST_DCL_IMAGE)
+ * there as DCL.EXE, the same technique test_login_logicals uses for SYS$LOGIN.
  *
  * Doc pins (VSI OpenVMS, public): RTL Library (LIB$) Routines Reference Manual,
  * LIB$SPAWN; DCL Dictionary, SPAWN and SHOW TIME.
@@ -48,6 +50,7 @@
 #include <stdint.h>
 #include <time.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 
 #include "ssdef.h"
@@ -129,7 +132,18 @@ int main(void) {
     if (orr != 1) { fprintf(stderr, "cannot resolve output spec\n"); return 2; }
     unlink(out_linux);
 
-    /* ---- TEST 1: real DCL child runs SHOW TIME, observable in SYS$OUTPUT ---- */
+    /* Is the executive reachable? B0 lib$spawn registers the subprocess through
+     * $CREPRC, which needs /dev/vms. On a plain host ctest it is absent (Rule 6
+     * forbids insmod'ing vms.ko on the host), so the executive-absent honest-
+     * failure branch is what runs here; the full positive proof is the qemu
+     * suite. Probe by open() -- access() checks the real uid against the node
+     * mode and can false-negative a node the process can open (the same
+     * false-negative sys_process.c/cmd_spawn warn about). */
+    int exec_present = 0;
+    { int p = open("/dev/vms", O_RDWR); if (p >= 0) { exec_present = 1; close(p); } }
+    printf("INFO: /dev/vms %s\n", exec_present ? "present" : "absent");
+
+    /* ---- TEST 1: create through $CREPRC ---- */
     struct dsc$descriptor_s cmd_d = {
         (uint16_t)strlen("SHOW TIME"), DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)"SHOW TIME"
     };
@@ -144,22 +158,38 @@ int main(void) {
                            &child_pid, &completion,
                            NULL, NULL, NULL, NULL, NULL, NULL);
 
-    CHECK(r == SS$_NORMAL, "lib$spawn returns SS$_NORMAL for a created subprocess");
-    CHECK(completion & 1, "subprocess completion status is success (odd)");
-    CHECK(child_pid != 0, "lib$spawn returns a subprocess PID");
+    if (exec_present) {
+        /* Full positive proof: a real DCL child ran SHOW TIME, executive-
+         * registered, and its redirected SYS$OUTPUT carries the current year. */
+        CHECK(r == SS$_NORMAL, "lib$spawn returns SS$_NORMAL for a created subprocess");
+        CHECK(completion & 1, "subprocess completion status is success (odd)");
+        CHECK(child_pid != 0, "lib$spawn returns a subprocess PID (executive VMS pid)");
 
-    /* Independent oracle: the current year from THIS process's clock. */
-    time_t now = time(NULL);
-    struct tm *lt = localtime(&now);
-    char year[16];
-    snprintf(year, sizeof(year), "%d", 1900 + lt->tm_year);
+        /* Independent oracle: the current year from THIS process's clock. */
+        time_t now = time(NULL);
+        struct tm *lt = localtime(&now);
+        char year[16];
+        snprintf(year, sizeof(year), "%d", 1900 + lt->tm_year);
 
-    char body[8192];
-    long n = slurp(out_linux, body, sizeof(body));
-    printf("INFO: SYS$OUTPUT capture (%ld bytes): %.120s\n", n, n > 0 ? body : "");
-    CHECK(n > 0, "SYS$OUTPUT file was created by the DCL child");
-    CHECK(n > 0 && strstr(body, year) != NULL,
-          "DCL SHOW TIME output contains the current year (real DCL ran it)");
+        char body[8192];
+        long n = slurp(out_linux, body, sizeof(body));
+        printf("INFO: SYS$OUTPUT capture (%ld bytes): %.120s\n", n, n > 0 ? body : "");
+        CHECK(n > 0, "SYS$OUTPUT file was created by the DCL child");
+        CHECK(n > 0 && strstr(body, year) != NULL,
+              "DCL SHOW TIME output contains the current year (real DCL ran it)");
+    } else {
+        /* B0 honest boundary (design §3d, INV-6): DCL.EXE resolves and is
+         * executable (the preflight passed), but with no executive $CREPRC
+         * cannot register the subprocess -- lib$spawn returns an even (failure)
+         * status and creates NOTHING. It does NOT fall back to an unregistered
+         * run and does NOT report success. */
+        CHECK(!(r & 1),
+              "lib$spawn fails honestly (even status) with no executive to register the subprocess");
+        char body[8192];
+        long n = slurp(out_linux, body, sizeof(body));
+        CHECK(n <= 0,
+              "no SYS$OUTPUT created when $CREPRC could not register the subprocess (no unregistered fallback)");
+    }
 
     /* ---- TEST 2: no CLI image -> honest failure, nothing created ---- */
     unlink(dcl_exe);                 /* remove the staged DCL.EXE */

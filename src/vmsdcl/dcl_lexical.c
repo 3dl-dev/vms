@@ -2972,30 +2972,69 @@ static int lex_getqui(struct dcl_context *ctx, const char *args,
     while (itlen > 0 && (item_str[itlen-1] == ' ' || item_str[itlen-1] == '\t'))
         item_str[--itlen] = '\0';
 
-    /* Optional: id parameter */
+    /*
+     * Optional object-id parameter. In F$GETQUI this identifies WHICH object
+     * the caller is asking about (VSI OpenVMS DCL Dictionary, F$GETQUI): for
+     * DISPLAY_QUEUE it is the queue NAME (a string, e.g. "SYS$BATCH" or
+     * "SYS$PRINT" — the HELPLIB.HLP example shows exactly this form), and for
+     * DISPLAY_ENTRY it is the entry NUMBER. We keep the raw string (id_str)
+     * so DISPLAY_QUEUE can honour the requested queue, and the numeric
+     * derivation (entry_id) for DISPLAY_ENTRY.
+     *
+     * INV-6 / vms-050: the previous implementation DISCARDED this argument for
+     * DISPLAY_QUEUE and pinned the queue to "SYS$BATCH", so a caller asking
+     * about SYS$PRINT (or any other/absent queue) was answered with SYS$BATCH's
+     * data — a fabrication (right facility, wrong/ignored selection). We now
+     * look the requested queue up in the real queue state and, when it does not
+     * exist, return the honest no-such-queue status and an empty value rather
+     * than another queue's data.
+     */
+    char id_str[64] = {0};
     uint32_t entry_id = 0;
     if (*p == ',') {
         p++;
         while (*p == ' ') p++;
-        char id_buf[32] = {0};
         i = 0;
-        while (*p && *p != ',' && *p != ' ' && i < sizeof(id_buf) - 1) {
-            if (*p != '"') id_buf[i++] = *p;
+        in_quote = 0;
+        while (*p && i < sizeof(id_str) - 1) {
+            if (*p == '"') { in_quote = !in_quote; p++; continue; }
+            if ((*p == ',' || *p == ' ') && !in_quote) break;
+            id_str[i++] = *p;
             p++;
         }
-        id_buf[i] = '\0';
-        entry_id = (uint32_t)strtoul(id_buf, NULL, 0);
+        id_str[i] = '\0';
+        size_t idlen = strlen(id_str);
+        while (idlen > 0 && (id_str[idlen-1] == ' ' || id_str[idlen-1] == '\t'))
+            id_str[--idlen] = '\0';
+        entry_id = (uint32_t)strtoul(id_str, NULL, 0);
     }
 
+    /* The queue manager is always available on a running VMS system; bring
+     * QMAN$MASTER.DAT and the default queues up if a queue command has not
+     * already done so, so F$GETQUI can read real state standalone. */
+    ensure_queue_init();
+
     if (strcmp(func, "DISPLAY_QUEUE") == 0) {
-        /* Try to show queue info via vmsqueue API */
+        /*
+         * Honour the caller's queue selection. No object-id (and no queue
+         * named) means no queue is selected — OVMX does not implement the
+         * wildcard-context walk — so we fail honestly rather than defaulting
+         * to SYS$BATCH.
+         */
         struct vms_queue qinfo;
-        const char *qname = "SYS$BATCH";
-        int rc = vmsq_show_queue(qname, &qinfo);
-        if (rc != 1) {  /* SS$_NORMAL = 1 */
+        int rc = SS$_ITEMNOTFOUND;
+        if (id_str[0] != '\0')
+            rc = vmsq_show_queue(id_str, &qinfo);
+        if (rc != SS$_NORMAL) {
+            /* No such queue / no queue selected: VMS signals this in $STATUS
+             * (JBC$_NOSUCHQUE class; the queue layer reports SS$_ITEMNOTFOUND)
+             * and F$GETQUI returns the empty value. NEVER SYS$BATCH's data for
+             * a queue the caller did not ask about. */
+            if (ctx) ctx->last_status = rc;
             result[0] = '\0';
             return 0;
         }
+        if (ctx) ctx->last_status = SS$_NORMAL;
         if (strcmp(item_str, "QUEUE_NAME") == 0) {
             strncpy(result, qinfo.name, result_size - 1);
             result[result_size - 1] = '\0';
@@ -3007,10 +3046,12 @@ static int lex_getqui(struct dcl_context *ctx, const char *args,
     } else if (strcmp(func, "DISPLAY_ENTRY") == 0) {
         struct vms_queue_entry entry;
         int rc = vmsq_show_entry(entry_id, &entry);
-        if (rc != 1) {
+        if (rc != SS$_NORMAL) {
+            if (ctx) ctx->last_status = rc;
             result[0] = '\0';
             return 0;
         }
+        if (ctx) ctx->last_status = SS$_NORMAL;
         if (strcmp(item_str, "JOB_NAME") == 0) {
             strncpy(result, entry.job_name, result_size - 1);
             result[result_size - 1] = '\0';

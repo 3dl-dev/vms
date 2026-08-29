@@ -399,6 +399,19 @@ static char *ovmx_disc_apphex(char *p, unsigned long v, int ndig)
     }
     return p;
 }
+/* 64-bit-safe hex append. The plain ovmx_disc_apphex above takes `unsigned
+ * long`, which on this LLP64 port is only 32 bits -> it silently truncates a
+ * 64-bit address (e.g. the rail PV 0x200000bd510) to its low 32 bits. This
+ * variant takes `unsigned long long` (64 bits) so the disc prints the FULL
+ * quadword. (vms-430 PV-disc.) */
+static char *ovmx_disc_apphex64(char *p, unsigned long long v, int ndig)
+{
+    for (int i = ndig - 1; i >= 0; i--) {
+        unsigned d = (unsigned)((v >> (i * 4)) & 0xfULL);
+        *p++ = (char)(d < 10 ? ('0' + d) : ('a' + (d - 10)));
+    }
+    return p;
+}
 static char *ovmx_disc_appstr(char *p, const char *s) { while (*s) *p++ = *s++; return p; }
 static char *ovmx_disc_appdec(char *p, unsigned long v)
 {
@@ -465,6 +478,102 @@ static void ovmx_disc_segv(int sig, siginfo_t *info, void *uctx)
         q = ovmx_disc_apphex(q, sp, 16);
         *q++ = '\n';
         (void)write(2, sb, (unsigned long)(q - sb));
+    }
+
+    /* vms-430 PV discriminator (bifurcation: frame-clobber-here vs
+     * bad-pv-passed-from-caller). The rail fault is a symbol-call linkage
+     * trampoline `ldq r26,32(r27)` ACCVIOing on a stray $READONLY$ PV
+     * (r27=0x200000bd510). Two hypotheses:
+     *   (a) FRAME-CLOBBER-HERE: this function's own saved-PV slot 0(r29) was
+     *       overwritten (a VLA/alloca SP mis-move), so its post-call PV reload
+     *       loaded garbage.  -> pv==*(r29) and the slot holds the stray value.
+     *   (b) BAD-PV-FROM-CALLER: the function was ENTERED with a garbage PV
+     *       (its caller reloaded a clobbered slot and jsr'd here with a correct
+     *       target but a bad r27).  -> pv is garbage but *(r29) (this frame's
+     *       own saved slot, written by ITS prologue) is a SANE code pointer,
+     *       and the corruption is one frame UP.
+     * We also dump the trap RA (r26) and the two quadwords a VMS-Alpha frame
+     * saves at 8(r30)/0(r30) (RA + saved-PV) plus a short raw stack window, so
+     * the REAL caller is visible — decisive for whether crtl_rms's stdio path
+     * (fopen/fwrite) or the exec* cluster the faulting PC lands in is actually
+     * on the call stack. All reads are page-guarded (async-signal-safe, never
+     * re-faults). __alpha__ regs: r26=sc_regs[26], r27=sc_regs[27],
+     * r29=sc_regs[29]. */
+    if (uctx) {
+        /* Read the trap registers as full 64-bit quadwords. NOTE: this port's
+         * bits/signal.h declares `long sc_pc; long sc_regs[32];` and on LLP64
+         * `long` is only 32 bits, so both the FIELD WIDTH and every field
+         * OFFSET in struct sigcontext are wrong vs the 64-bit layout the
+         * Linux-Alpha kernel actually delivers. That means struct-member reads
+         * (sc_regs[i]) can land on the wrong quadword AND truncate. To be
+         * decisive regardless, we (1) read via the struct as a best-effort
+         * labelled value, and (2) ALSO emit a RAW UCTX window so the true
+         * PC/PV/SP are recoverable by inspection. The real fix is to widen
+         * struct sigcontext / greg_t to `long long` (another vms-430 LLP64
+         * long=32-bit truncation). */
+        volatile unsigned long long *mc =
+            (volatile unsigned long long *)&((ucontext_t *)uctx)->uc_mcontext;
+        unsigned long long r26 = (unsigned long long)((ucontext_t *)uctx)->uc_mcontext.sc_regs[26];
+        unsigned long long r27 = (unsigned long long)((ucontext_t *)uctx)->uc_mcontext.sc_regs[27];
+        unsigned long long r29 = (unsigned long long)((ucontext_t *)uctx)->uc_mcontext.sc_regs[29];
+        unsigned long long slot29 = 0ULL, slot_ra = 0ULL, slot_pv = 0ULL;
+        if (r29 > 4096ULL) slot29  = *(volatile unsigned long long *)(unsigned long long)r29;
+        if (sp  > 4096UL)  slot_ra = *(volatile unsigned long long *)(unsigned long long)(sp + 8);
+        if (sp  > 4096UL)  slot_pv = *(volatile unsigned long long *)(unsigned long long)sp;
+        {
+            char b[256];
+            char *p = b;
+            p = ovmx_disc_appstr(p, "PV-DISC: r27_pv=0x");
+            p = ovmx_disc_apphex64(p, r27, 16);
+            p = ovmx_disc_appstr(p, " r26_ra=0x");
+            p = ovmx_disc_apphex64(p, r26, 16);
+            p = ovmx_disc_appstr(p, " r29=0x");
+            p = ovmx_disc_apphex64(p, r29, 16);
+            p = ovmx_disc_appstr(p, " *r29=0x");
+            p = ovmx_disc_apphex64(p, slot29, 16);
+            p = ovmx_disc_appstr(p, " 0(sp)=0x");
+            p = ovmx_disc_apphex64(p, slot_pv, 16);
+            p = ovmx_disc_appstr(p, " 8(sp)=0x");
+            p = ovmx_disc_apphex64(p, slot_ra, 16);
+            *p++ = '\n';
+            (void)write(2, b, (unsigned long)(p - b));
+        }
+        /* RAW UCTX window: 40 quadwords from &uc_mcontext. Immune to the
+         * sigcontext-offset bug above — the true sc_pc / sc_regs[26,27,29,30]
+         * are locatable in this dump by cross-referencing the kernel's 64-bit
+         * sigcontext layout (sc_onstack, sc_mask, sc_pc, sc_ps, sc_regs[0..31],
+         * ...). */
+        {
+            char b[1024];
+            char *p = b;
+            int i;
+            p = ovmx_disc_appstr(p, "UCTX-DISC:");
+            for (i = 0; i < 40; i++) {
+                p = ovmx_disc_appstr(p, " 0x");
+                p = ovmx_disc_apphex64(p, mc[i], 16);
+            }
+            *p++ = '\n';
+            (void)write(2, b, (unsigned long)(p - b));
+        }
+        /* Raw stack window: 24 quadwords from the trap SP. Return-address /
+         * saved-PV slots here name the REAL call chain (image-relative PCs to
+         * cross against readelf on DECC$SHR.EXE), telling us whether the exec*
+         * cluster at the fault PC was genuinely reached from crtl_rms's stdio
+         * path or the control transfer into it was WILD. */
+        if (sp > 4096UL) {
+            char b[768];
+            char *p = b;
+            int i;
+            p = ovmx_disc_appstr(p, "STK-DISC:");
+            for (i = 0; i < 24; i++) {
+                unsigned long long w =
+                    *(volatile unsigned long long *)(unsigned long long)(sp + (unsigned long)i * 8UL);
+                p = ovmx_disc_appstr(p, " 0x");
+                p = ovmx_disc_apphex64(p, w, 16);
+            }
+            *p++ = '\n';
+            (void)write(2, b, (unsigned long)(p - b));
+        }
     }
     _exit(42);
 }

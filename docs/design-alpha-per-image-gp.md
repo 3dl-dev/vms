@@ -103,6 +103,39 @@ lda   <gpreg>, LOW(-K)(<gpreg>)   ; [OVMX] low half; <gpreg> now = module_GP = &
 signed range the `ldah` collapses to a no-op; when `K = 0` the whole sequence is a no-op-equivalent
 (§1.4 single-proc cascade).
 
+#### 2.1.1 [OVMX] `<gpreg>` = **$15**, a labeled OVMX divergence (Rule 8) — resolved in C3 (vms-095)
+
+C3 resolves `<gpreg>` to the reserved register **$15**, established by measurement against the actual
+`alpha-dec-vms` backend (not `alpha.h` in isolation):
+
+- **Authentic OpenVMS-Alpha uses R29 as GP.** On this GCC port, however, `gcc/config/alpha/vms.h`
+  `#undef`s and redefines **`HARD_FRAME_POINTER_REGNUM = 29`** (overriding `alpha.h`'s 15), and the VMS
+  prologue actively uses **$29 as the frame pointer** (`mov $30,$29`, `.frame $29`, saved/restored) in
+  every stack procedure — i.e. exactly the multi-procedure DECC$SHR functions this design targets. So
+  **$29 is not a free GP here**, and rebasing it, or establishing module_GP into it, corrupts the frame
+  pointer. (An earlier reading that took `alpha.h`'s `HARD_FRAME_POINTER_REGNUM = 15` at face value and
+  concluded "$29 is free" is refuted by the `vms.h` override; verified on emitted code.)
+- **R27 rebased-in-place does not survive calls.** On the VMS call path R27 (PV) is reloaded to the
+  callee's PV before each `jsr` and to the saved `&PDSC` after it, so a module_GP parked in R27 is
+  clobbered by every call.
+- **$15 is the free, call-saved register.** On this target `$2–$15` are callee-saved and `$15` is not the
+  frame pointer (the `vms.h` register-role comment "$15 (frame pointer)" is a stale OSF copy-over).
+  C3 reserves `$15` (`FIXED_REGISTERS[15] = 1`) as the OVMX module-GP and addresses the linkage section
+  through it (`.base $15`). **This `$15`-as-GP choice is an OVMX codegen divergence, labeled as such
+  (Rule 8): it is not VMS-authentic, and it is safe precisely because there is no VSI-binary interop —
+  every OVMX-built shareable uses `$15` consistently.**
+
+**No per-call GP reload is needed — and this is now general, not accidental.** Because `$15` is
+callee-saved, a callee that establishes its own module_GP first **saves the caller's `$15` on entry and
+restores it before `RET`** (C3 adds `$15` to the procedure's save mask). Therefore the caller's module_GP
+survives every call — intra-module, cross-module-intra-image (where caller and callee have *different*
+module_GPs), and cross-image alike. The earlier "no per-call reload" reasoning, written when `<gpreg>`
+was imagined as `$29`, was only accidentally true for same-image/same-linkage-section calls; with a
+reserved callee-saved `$15` plus mandatory save/restore it is **actually** true and general. The
+save/restore is load-bearing: omit it and a cross-module return resumes the caller with the callee's
+module_GP → wrong linkage base → silent corruption (this is the property C3's test asserts by objdumping
+both the `$15` save and the `$15` restore).
+
 ### 2.2 [OVMX] The GP-establishment relocation
 The two immediates above are **not** known to the compiler — only the OVMX linker knows each PDSC's final
 `K`. So gas emits, on the `ldah`/`lda` pair, an **OVMX-defined relocation** that the OVMX linker resolves

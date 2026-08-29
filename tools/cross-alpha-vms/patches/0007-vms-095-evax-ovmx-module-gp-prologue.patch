@@ -1,0 +1,300 @@
+vms-095 (component C3 of vms-5f5): OVMX per-image module-GP prologue for the
+alpha-dec-vms GCC port.
+
+[OVMX] Teaches the TARGET_ABI_OPEN_VMS backend to establish a per-image
+module-GP in the reserved register $15 at procedure entry and to address the
+linkage section through it, fixing the multi-procedure GP skew that is the
+crtl_rms N=7 blocker.
+
+Root cause (docs/design-alpha-per-image-gp.md 1.1-1.3): upstream cc1 establishes
+NO GP on the VMS ABI (alpha_expand_prologue's TARGET_ABI_OPEN_VMS path sets only
+reg_offset; gen_prologue_ldgp is TARGET_ABI_OSF-only) and emits `.base $27', so
+gas addresses every linkage/literal load relative to R27.  On entry R27 = &PDSC
+(VMS Calling Standard 3.1.1/3.3); for a multi-procedure image (DECC$SHR, LIBOTS)
+&PDSC of a procedure entered mid-section is skewed from the module linkage-
+section base by K = that procedure's PDSC offset, so every R27-relative static
+load (external addresses, large constants, linkage pairs -- and, via gas's
+load_expression, even `lda reg,extern') lands K bytes off.  Single-procedure/
+minimal (N<=3) images have K = 0 and are already correct.
+
+Register choice -- $15, an OVMX divergence (Rule 8): authentic OpenVMS-Alpha uses
+R29 as GP, but on this port $29 is the HARD FRAME POINTER (vms.h
+HARD_FRAME_POINTER_REGNUM=29, used as the frame pointer in every stack
+procedure), so $29 is NOT a free GP.  OVMX instead reserves the free call-saved
+$15 (vms.h: FIXED[15] flipped 0->1; it was already CALL_USED[15]=0) and uses it
+as the module-GP consistently across all OVMX-built shareables.  There is no
+VSI-binary interop in play.  Because $15 is call-saved, module_GP survives every
+call with NO per-call reload: an intra-module call shares the linkage section, a
+cross-module/cross-image callee saves+restores the caller's $15.
+
+Fix (docs/design-alpha-per-image-gp.md 1.4/2.1):  module_GP = &PDSC - K.
+  gcc/config/alpha/vms.h
+    - FIXED_REGISTERS: reserve $15 (position 15: 0->1).
+  gcc/config/alpha/alpha.md
+    - new UNSPECV_OVMX_GPDISP + define_insn "prologue_ovmx_gpdisp" (sets reg 15):
+      emits `.ovmx_gpdisp $15,<proc>' (binutils port patch 0006-vms-4ed), which
+      emits `ldah $15,0($27); lda $15,0($15)' and marks the pair
+      EVAX_R_OVMX_GPDISP for the OVMX linker to patch with -K.  K = 0 => no-op.
+  gcc/config/alpha/alpha.cc
+    - alpha_vms_needs_module_gp(): true iff the body references any symbol or
+      makes a call (== needs the linkage section).
+    - alpha_compute_frame_layout: when needed, add $15 to sa_mask (so the
+      caller's $15 is saved/restored by the generic loops) and force at least a
+      register procedure (a frame slot for the save).
+    - alpha_expand_prologue: emit gen_prologue_ovmx_gpdisp() as the LAST VMS
+      prologue insn -- after the register save loop has saved the caller's $15,
+      while R27 still holds &PDSC.
+    - alpha_start_function: emit `.base $15' (not `.base $vms_base_regno') when a
+      module-GP is established, so gas's alpha_gp_register -- the base for every
+      linkage/literal load -- is the module-GP.  vms_base_regno stays the RTL
+      frame/PV base (unaffected).
+    - alpha_output_ovmx_gpdisp: emits the directive with the procedure's PDSC
+      symbol (alpha_fnname).
+  gcc/config/alpha/alpha-protos.h
+    - prototype for alpha_output_ovmx_gpdisp.
+
+The epilogue restores the caller's $15 from its frame slot (generic sa_mask
+restore) before RET, so a caller resumes with its own module-GP after any call.
+IMGACT's quad[1]=&PDSC cross-image linkage pair is untouched (design 3).
+
+Clean-room (Rule 8): the module-GP model is derived only from the public VSI
+OpenVMS Calling Standard (3.1.1/3.3/3.6.2) and MACRO Compiler Porting and User's
+Guide (2.3.1); the `.ovmx_gpdisp' directive, EVAX_R_OVMX_GPDISP encoding, and the
+$15-as-module-GP register choice are OVMX design choices, labeled [OVMX]
+throughout and never presented as VMS-authentic.  No VSI/HPE source or binary was
+disassembled, decompiled, or consulted.
+
+--- a/gcc/config/alpha/alpha-protos.h	2026-08-29 16:50:30.599371629 +0000
++++ b/gcc/config/alpha/alpha-protos.h	2026-08-29 16:50:48.610113719 +0000
+@@ -70,6 +70,9 @@
+ 
+ extern void alpha_start_function (FILE *, const char *, tree);
+ extern void alpha_end_function (FILE *, const char *, tree);
++/* [OVMX] vms-095 (C3 of vms-5f5): output the `.ovmx_gpdisp $15,<proc>' directive
++   that establishes the per-image module-GP in $15 in the VMS prologue.  */
++extern const char *alpha_output_ovmx_gpdisp (void);
+ 
+ extern bool alpha_find_lo_sum_using_gp (rtx);
+ 
+--- a/gcc/config/alpha/vms.h	2026-08-29 16:50:30.604371557 +0000
++++ b/gcc/config/alpha/vms.h	2026-08-29 16:50:42.249204807 +0000
+@@ -51,9 +51,19 @@
+   ((flag_vms_malloc64 && flag_vms_pointer_size != VMS_POINTER_SIZE_NONE \
+    ? 16 : 8) * BITS_PER_UNIT)
+ 
++/* [OVMX] vms-095 (component C3 of vms-5f5; docs/design-alpha-per-image-gp.md
++   2.1): $15 is reserved as the OVMX per-image module-GP register (position 15
++   flipped 0->1 below).  On this port $29 is the hard frame pointer
++   (HARD_FRAME_POINTER_REGNUM=29 above) -- NOT a free GP -- so OVMX establishes
++   the linkage-section base in the free call-saved $15 instead.  This is an OVMX
++   codegen divergence (Rule 8): authentic OpenVMS-Alpha uses R29 as GP, but that
++   register is the frame pointer here; there is no VSI-binary interop in play,
++   and every OVMX-built shareable uses $15 consistently.  The "$15 (frame
++   pointer)" line in the register-role comment above is a stale OSF copy-over;
++   $15 is not the frame pointer on this target.  */
+ #undef FIXED_REGISTERS
+ #define FIXED_REGISTERS  \
+- {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, \
++ {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, \
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, \
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, \
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }
+--- a/gcc/config/alpha/alpha.cc	2026-08-29 16:50:30.586371815 +0000
++++ b/gcc/config/alpha/alpha.cc	2026-08-29 16:52:46.918419605 +0000
+@@ -203,6 +203,16 @@
+ #define REG_PV 27
+ #define REG_RA 26
+ 
++/* [OVMX] vms-095 (component C3 of vms-5f5; docs/design-alpha-per-image-gp.md
++   2.1): the OVMX per-image module-GP register.  On this VMS target $29 is the
++   hard frame pointer (vms.h HARD_FRAME_POINTER_REGNUM=29), not a free GP, so the
++   OVMX linkage-section base is established in the reserved free call-saved $15
++   (vms.h marks it fixed).  Each VMS procedure that touches the linkage section
++   sets $15 = R27(&PDSC) - K in its prologue and addresses the section through it
++   (`.base $15').  OVMX design divergence (Rule 8): authentic OpenVMS-Alpha uses
++   R29 as GP.  */
++#define OVMX_VMS_MODULE_GP_REGNO 15
++
+ /* Declarations of static functions.  */
+ static struct machine_function *alpha_init_machine_status (void);
+ static rtx alpha_emit_xfloating_compare (enum rtx_code *, rtx, rtx);
+@@ -7223,6 +7233,43 @@
+ /* Register number used to reference objects off our PV.  */
+ static int vms_base_regno;
+ 
++/* [OVMX] vms-095 (C3 of vms-5f5): nonzero when the current VMS procedure
++   references the linkage section and therefore establishes a module-GP in $15
++   (and must save/restore the caller's $15).  Set by alpha_compute_frame_layout,
++   read by alpha_expand_prologue and alpha_start_function.  */
++static int vms_module_gp_needed;
++
++/* [OVMX] vms-095 (C3 of vms-5f5; docs/design-alpha-per-image-gp.md 2.1): does
++   this VMS procedure need a per-image module-GP?  On the VMS ABI every external
++   or linkage reference is addressed GP-relative through the linkage section (gas
++   turns `lda reg,sym' into a `.base'-relative linkage load; a call loads its
++   linkage pair), so a procedure needs the module-GP iff its body references any
++   symbol or makes any call.  A procedure that needs it clobbers $15 and so must
++   save/restore the caller's $15 -- which requires a frame slot (see
++   alpha_compute_frame_layout).  */
++static bool
++alpha_vms_needs_module_gp (void)
++{
++  if (!TARGET_ABI_OPEN_VMS || cfun->is_thunk)
++    return false;
++
++  for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
++    {
++      if (!NONDEBUG_INSN_P (insn))
++	continue;
++      if (CALL_P (insn))
++	return true;
++      subrtx_iterator::array_type array;
++      FOR_EACH_SUBRTX (iter, array, PATTERN (insn), ALL)
++	{
++	  const_rtx x = *iter;
++	  if (x != NULL_RTX && GET_CODE (x) == SYMBOL_REF)
++	    return true;
++	}
++    }
++  return false;
++}
++
+ /* Compute register masks for saved registers, register save area size,
+    and total frame size.  */
+ static void
+@@ -7265,6 +7312,15 @@
+ 	sa_mask |= HOST_WIDE_INT_1U << REG_RA;
+     }
+ 
++  /* [OVMX] vms-095 (C3 of vms-5f5): reserve a save slot for the caller's $15
++     whenever this procedure establishes a module-GP in $15.  Add it to sa_mask
++     BEFORE the popcount (so it gets a frame slot and is saved/restored by the
++     generic save/restore loops) but AFTER the REG_RA logic above, so a
++     module-GP-only leaf is not misclassified as a call (stack) procedure.  */
++  vms_module_gp_needed = alpha_vms_needs_module_gp ();
++  if (vms_module_gp_needed)
++    sa_mask |= HOST_WIDE_INT_1U << OVMX_VMS_MODULE_GP_REGNO;
++
+   sa_size = popcount_hwi(sa_mask);
+   frame_size = get_frame_size ();
+ 
+@@ -7275,7 +7331,7 @@
+ 	 at least a slot, and with a null procedure in other cases.  */
+       if ((sa_mask >> REG_RA) & 1 || frame_pointer_needed)
+ 	alpha_procedure_type = PT_STACK;
+-      else if (frame_size != 0)
++      else if (frame_size != 0 || vms_module_gp_needed)
+ 	alpha_procedure_type = PT_REGISTER;
+       else
+ 	alpha_procedure_type = PT_NULL;
+@@ -7963,6 +8019,21 @@
+ 	     have emitted an FRP frame pointer update just before.  */
+ 	  RTX_FRAME_RELATED_P (seq) = ! frame_pointer_needed;
+ 	}
++
++      /* [OVMX] vms-095 (component C3 of vms-5f5; docs/design-alpha-per-image-gp.md
++	 2.1): establish this image's module-GP in $15.  Emitted as the LAST
++	 prologue insn so the caller's $15 has already been saved by the register
++	 save loop above (vms_module_gp_needed added $15 to sa_mask); R27 still
++	 holds &PDSC here (the frame stores it but never overwrites it), so the
++	 `.ovmx_gpdisp' pair computes $15 = R27(&PDSC) - K = the module linkage-
++	 section base.  The body then addresses the linkage section $15-relative
++	 (`.base $15', alpha_start_function).  $15 is a fixed, call-saved register
++	 (vms.h): saved here, restored by the epilogue, so the caller's $15 (its
++	 own module-GP) survives every call -- no per-call reload is needed.  For
++	 a single-procedure module K = 0, so the pair is a no-op-equivalent
++	 ($15 = $27 = the linkage base) and N=3 minimal images are unchanged.  */
++      if (vms_module_gp_needed)
++	emit_insn (gen_prologue_ovmx_gpdisp ());
+     }
+   else
+     {
+@@ -7996,6 +8067,28 @@
+ /* Count the number of .file directives, so that .loc is up to date.  */
+ int num_source_filenames = 0;
+ 
++/* [OVMX] vms-095 (component C3 of vms-5f5; docs/design-alpha-per-image-gp.md
++   2.1): output the `.ovmx_gpdisp $15, <proc>' directive that establishes this
++   procedure's per-image module-GP in $15.  The patched alpha-dec-vms gas
++   (binutils port patch 0006-vms-4ed) expands the directive to the
++   ldah $15,0($27) / lda $15,0($15) pair and marks it EVAX_R_OVMX_GPDISP; the
++   OVMX linker patches the signed -K (K = the procedure's PDSC offset within its
++   module linkage section), so at run time $15 = R27(&PDSC) - K = the module
++   linkage-section base.  The register operand is the reserved OVMX module-GP
++   register; the symbol operand is this procedure's PDSC symbol, which is the
++   label the epilogue emits for `.pdesc' -- i.e. alpha_fnname.  Emitted from the
++   prologue_ovmx_gpdisp insn (alpha.md).  Rule 8: OVMX design choice (EVAX
++   publishes no GP-displacement encoding; $15-as-GP is an OVMX divergence).  */
++
++const char *
++alpha_output_ovmx_gpdisp (void)
++{
++  fprintf (asm_out_file, "\t.ovmx_gpdisp $%d, ", OVMX_VMS_MODULE_GP_REGNO);
++  assemble_name (asm_out_file, alpha_fnname);
++  fputc ('\n', asm_out_file);
++  return "";
++}
++
+ /* Output the textual info surrounding the prologue.  */
+ 
+ void
+@@ -8068,7 +8161,19 @@
+   inside_function = TRUE;
+ 
+   if (TARGET_ABI_OPEN_VMS)
+-    fprintf (file, "\t.base $%d\n", vms_base_regno);
++    /* [OVMX] vms-095 (component C3 of vms-5f5): when this procedure establishes
++       a module-GP, address the linkage section through $15 (the module-GP set by
++       the prologue `.ovmx_gpdisp' pair) rather than R27 (= &PDSC), which is
++       skewed by this procedure's PDSC offset K for any procedure past the first
++       in a multi-procedure image (the crtl_rms N=7 root cause;
++       docs/design-alpha-per-image-gp.md 1.3/2.1).  gas's `.base' sets the GP
++       base register (alpha_gp_register in tc-alpha.c) used for every linkage/
++       literal load.  A procedure that references nothing external needs no
++       module-GP and keeps the stock base (no linkage load is emitted either
++       way).  vms_base_regno remains the RTL frame/PV base (unaffected -- those
++       references carry explicit base registers).  */
++    fprintf (file, "\t.base $%d\n",
++	     vms_module_gp_needed ? OVMX_VMS_MODULE_GP_REGNO : vms_base_regno);
+ 
+   if (TARGET_ABI_OSF
+       && TARGET_IEEE_CONFORMANT
+--- a/gcc/config/alpha/alpha.md	2026-08-29 16:50:30.593371714 +0000
++++ b/gcc/config/alpha/alpha.md	2026-08-29 16:53:04.489168004 +0000
+@@ -75,6 +75,7 @@
+   UNSPECV_FORCE_MOV
+   UNSPECV_LDGP1
+   UNSPECV_PLDGP2	; prologue ldgp
++  UNSPECV_OVMX_GPDISP	; [OVMX] vms-095: per-image module-GP establish
+   UNSPECV_SET_TP
+   UNSPECV_RPCC
+   UNSPECV_SETJMPR_ER	; builtin_setjmp_receiver fragment
+@@ -4956,6 +4957,28 @@
+   ""
+  )
+ 
++;; [OVMX] vms-095 (component C3 of vms-5f5; docs/design-alpha-per-image-gp.md
++;; 2.1): establish this image's per-image module-GP in the TARGET_ABI_OPEN_VMS
++;; prologue.  Emits `.ovmx_gpdisp $15, <proc>' (added to the alpha-dec-vms gas by
++;; binutils port patch 0006-vms-4ed), which itself emits
++;;      ldah $15,0($27)   ; $15 = high part of (&PDSC - K)
++;;      lda  $15,0($15)   ; $15 = &PDSC - K = module_GP
++;; and marks the pair EVAX_R_OVMX_GPDISP so the OVMX linker patches the signed
++;; -K (K = this procedure's PDSC offset within its module linkage section).  On
++;; entry R27 = &PDSC (VMS Calling Standard 3.1.1/3.3).  $15 is the reserved,
++;; fixed, call-saved OVMX module-GP register (vms.h); on this port $29 is the
++;; hard frame pointer, so $15 -- not $29 -- carries the GP (OVMX divergence,
++;; Rule 8).  The caller's $15 is saved/restored around this (sa_mask), so it
++;; survives calls with no per-call reload.  Single-procedure module: K = 0, the
++;; pair is a no-op-equivalent.  The directive text is produced by
++;; alpha_output_ovmx_gpdisp (operand = the procedure's PDSC symbol, alpha_fnname).
++(define_insn "prologue_ovmx_gpdisp"
++  [(set (reg:DI 15)
++	(unspec_volatile:DI [(reg:DI 27)] UNSPECV_OVMX_GPDISP))]
++  "TARGET_ABI_OPEN_VMS"
++  "* return alpha_output_ovmx_gpdisp ();"
++  [(set_attr "cannot_copy" "true")])
++
+ ;; The _mcount profiling hook has special calling conventions, and
+ ;; does not clobber all the registers that a normal call would.  So
+ ;; hide the fact this is a call at all.

@@ -188,6 +188,45 @@ int main(void)
         int wst; while (waitpid((pid_t)sub.linux_pid, &wst, 0) < 0 && errno == EINTR) ;
     }
 
+    /*
+     * POSITIVE PROOF: lib$spawn actually RUNS the DCL command, and its output is
+     * OBSERVABLE. This is the "SPAWN runs a command" proof MOVED here from the
+     * plain-host dcl suite (conductor ruling, vms-e9a): SPAWN/lib$spawn require
+     * the executive ($CREPRC), so that proof can only be made on THIS harness --
+     * the plain-host suite now asserts the honest %DCL-F-CREPRC failure instead.
+     * A real DCL child runs WRITE SYS$OUTPUT with SYS$OUTPUT redirected to a
+     * file; lib$spawn WAITs for completion; the file must carry the marker --
+     * sourced from the child's redirected output, never fabricated here.
+     */
+    {
+        const char *OUT = "/tmp/ovmx_lspwn_out.txt";
+        unlink(OUT);
+        struct dsc$descriptor_s runcmd = dsc("WRITE SYS$OUTPUT \"LSPWN_RAN_OK\"");
+        struct dsc$descriptor_s outf   = dsc(OUT);
+        uint32_t rpid = 0, rcomp = 0;
+        uint32_t rr = lib$spawn(&runcmd, NULL, &outf, NULL, NULL,
+                                &rpid, &rcomp, NULL, NULL, NULL, NULL, NULL, NULL);
+        CHECK(rr == SS$_NORMAL,
+              "lib$spawn (wait) runs a DCL command to completion under the executive");
+
+        char body[4096];
+        long n = -1;
+        int ofd = open(OUT, O_RDONLY);
+        if (ofd >= 0) {
+            n = 0;
+            for (;;) {
+                ssize_t g = read(ofd, body + n, sizeof(body) - 1 - (size_t)n);
+                if (g <= 0) break;
+                n += g;
+            }
+            body[n > 0 ? n : 0] = '\0';
+            close(ofd);
+        }
+        CHECK(n > 0 && strstr(body, "LSPWN_RAN_OK") != NULL,
+              "the DCL command's SYS$OUTPUT carries its output (the command really ran)");
+        unlink(OUT);
+    }
+
     printf("=== test_syssvc_libspawn_reg: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;
 }

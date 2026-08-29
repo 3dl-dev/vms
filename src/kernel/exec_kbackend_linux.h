@@ -332,6 +332,33 @@ static inline unsigned int exec_blockdev_minor(exec_dev_t dev) { return MINOR(de
  * symbol the bootable 6.12 kernel lacks would break the bootable modpost even
  * unused (the #623 class of breakage), so the guard is mandatory, not cosmetic.
  */
+/*
+ * exec_bdev_get_cached / exec_bdev_cache_release_all (rd vms-648) -- the
+ * BACKING-DEVICE HANDLE CACHE the two block primitives below draw on. DEFINED in
+ * src/kernel/vms_module.c (Linux module core, linked into both the out-of-tree
+ * QEMU-test vms.ko and the in-tree bootable vms.ko), DECLARED here because the
+ * inline primitives call it.
+ *
+ * WHY (the vms-648 flake): the ODS-2 ACP reaches the raw disk one 512-byte LBN
+ * per call, and opening+closing the block device on EVERY block
+ * (bdev_file_open_by_dev + fput) is pathologically slow -- a PRODUCT INSTALL
+ * writes thousands of blocks through the ACP, and on a slow single-CPU TCG CI
+ * runner the per-block open/close pushed the R1 release-install e2e's install
+ * step past its timeout (the install "hung" at PCSI Configuring). The NetBSD twin
+ * (vms_blockdev_netbsd.c) already caches its backing vnode and reads/writes off
+ * it; this is the missing Linux equivalent. exec_bdev_get_cached opens each
+ * backing device ONCE (READ|WRITE, non-exclusive) and hands back the cached
+ * struct block_device for reuse; the handle is released at module exit
+ * (exec_bdev_cache_release_all from vms_exit), the OS-lifetime analogue of
+ * NetBSD's release-at-detach. Only the OPEN is amortized -- every block is still
+ * a real synchronous bio to a real device (INV-6 / Rule 8, public block-layer
+ * APIs only). A miss the cache cannot hold (table full, or the open fails)
+ * returns NULL, and the primitives fall back to the original open-per-call path,
+ * so correctness never depends on the cache.
+ */
+struct block_device *exec_bdev_get_cached(dev_t devt);
+void exec_bdev_cache_release_all(void);
+
 static inline int exec_blockdev_read_block(unsigned int major, unsigned int minor,
 					   uint64_t lbn, void *buf, size_t buflen)
 {
@@ -350,6 +377,25 @@ static inline int exec_blockdev_read_block(unsigned int major, unsigned int mino
 	if (!buf || buflen < 512)
 		return -1;
 
+	/* Fast path (vms-648): reuse the cached, already-open backing handle. */
+	bdev = exec_bdev_get_cached(devt);
+	if (bdev) {
+		page = alloc_page(GFP_KERNEL);
+		if (page) {
+			bio_init(&bio, bdev, &bvec, 1, REQ_OP_READ);
+			bio.bi_iter.bi_sector = (sector_t)lbn;   /* 512-byte units == ODS-2 LBN */
+			__bio_add_page(&bio, page, 512, 0);
+			if (submit_bio_wait(&bio) == 0) {
+				memcpy(buf, page_address(page), 512);
+				ret = 0;
+			}
+			bio_uninit(&bio);
+			__free_page(page);
+		}
+		return ret;
+	}
+
+	/* Fallback: the cache could not hold this device -- open per call. */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
 	bf = bdev_file_open_by_dev(devt, BLK_OPEN_READ, NULL, NULL);
 	if (IS_ERR(bf))
@@ -419,6 +465,24 @@ static inline int exec_blockdev_write_block(unsigned int major, unsigned int min
 	if (!buf || buflen < 512)
 		return -1;
 
+	/* Fast path (vms-648): reuse the cached, already-open backing handle. */
+	bdev = exec_bdev_get_cached(devt);
+	if (bdev) {
+		page = alloc_page(GFP_KERNEL);
+		if (page) {
+			memcpy(page_address(page), buf, 512);
+			bio_init(&bio, bdev, &bvec, 1, REQ_OP_WRITE);
+			bio.bi_iter.bi_sector = (sector_t)lbn;   /* 512-byte units == ODS-2 LBN */
+			__bio_add_page(&bio, page, 512, 0);
+			if (submit_bio_wait(&bio) == 0)
+				ret = 0;
+			bio_uninit(&bio);
+			__free_page(page);
+		}
+		return ret;
+	}
+
+	/* Fallback: the cache could not hold this device -- open per call. */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
 	bf = bdev_file_open_by_dev(devt, BLK_OPEN_WRITE, NULL, NULL);
 	if (IS_ERR(bf))

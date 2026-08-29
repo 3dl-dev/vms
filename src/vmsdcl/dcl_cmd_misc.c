@@ -1981,8 +1981,8 @@ static int cmd_tcpip_show_configuration(struct dcl_command *cmd)
             printf("%-16s%s\n", items[i].label, "(not configured)");
     }
     if (any_noexec)
-        printf("%%TCPIP-W-NOEXEC, executive absent -- TCPIP$ SYSTEM logicals "
-               "are not readable without /dev/vms\n");
+        printf("%%TCPIP-W-UNAVAIL, TCP/IP Services executive is not running -- "
+               "the TCPIP$ SYSTEM logicals cannot be read\n");
     printf("\n");
     return SS$_NORMAL;
 }

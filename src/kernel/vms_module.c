@@ -1324,6 +1324,111 @@ static int __init vms_init(void)
     return 0;
 }
 
+/* ---- ODS-2 ACP backing-device handle cache (rd vms-648) ------------------
+ * See exec_kbackend_linux.h for the full rationale. The Files-11 ODS-2 ACP
+ * reaches the raw disk one 512-byte LBN per call; opening+closing the block
+ * device on EVERY block (bdev_file_open_by_dev + fput) is pathologically slow
+ * and pushed the R1 release-install e2e's install step past its timeout on a
+ * slow single-CPU TCG runner (the install "hung" at PCSI Configuring). Cache
+ * each backing device's open handle (READ|WRITE, non-exclusive), keyed by
+ * dev_t, and reuse it -- the Linux analogue of the NetBSD twin's cached backing
+ * vnode (vms_blockdev_netbsd.c). Slots are only ADDED during the OS's life and
+ * released together at module exit (no runtime eviction), so a struct
+ * block_device* handed back stays valid for the module's life -- no
+ * use-after-free even though the bio runs outside this lock. A full table or a
+ * failed open returns NULL and the caller falls back to open-per-call, so
+ * correctness never depends on the cache. Only the OPEN is amortized: every
+ * block is still a real synchronous bio to a real device (INV-6 / Rule 8).
+ */
+#define OVMX_BDEV_CACHE_SLOTS 8
+struct ovmx_bdev_cslot {
+    dev_t devt;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+    struct file *bf;
+#else
+    struct bdev_handle *bh;
+#endif
+    struct block_device *bdev;
+    bool valid;
+};
+static struct ovmx_bdev_cslot ovmx_bdev_cache[OVMX_BDEV_CACHE_SLOTS];
+static DEFINE_MUTEX(ovmx_bdev_cache_lock);
+
+struct block_device *exec_bdev_get_cached(dev_t devt)
+{
+    struct block_device *bdev = NULL;
+    int i, freeslot = -1;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+    struct file *bf;
+#else
+    struct bdev_handle *bh;
+#endif
+
+    mutex_lock(&ovmx_bdev_cache_lock);
+    for (i = 0; i < OVMX_BDEV_CACHE_SLOTS; i++) {
+        if (ovmx_bdev_cache[i].valid) {
+            if (ovmx_bdev_cache[i].devt == devt) {
+                bdev = ovmx_bdev_cache[i].bdev;
+                mutex_unlock(&ovmx_bdev_cache_lock);
+                return bdev;
+            }
+        } else if (freeslot < 0) {
+            freeslot = i;
+        }
+    }
+    if (freeslot < 0) {
+        /* Full -- caller falls back to open-per-call (rare: the ACP touches at
+         * most SYS$DISK + the install target). */
+        mutex_unlock(&ovmx_bdev_cache_lock);
+        return NULL;
+    }
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+    bf = bdev_file_open_by_dev(devt, BLK_OPEN_READ | BLK_OPEN_WRITE, NULL, NULL);
+    if (IS_ERR(bf)) {
+        mutex_unlock(&ovmx_bdev_cache_lock);
+        return NULL;
+    }
+    bdev = file_bdev(bf);
+    ovmx_bdev_cache[freeslot].bf = bf;
+#else
+    bh = bdev_open_by_dev(devt, BLK_OPEN_READ | BLK_OPEN_WRITE, NULL, NULL);
+    if (IS_ERR(bh)) {
+        mutex_unlock(&ovmx_bdev_cache_lock);
+        return NULL;
+    }
+    bdev = bh->bdev;
+    ovmx_bdev_cache[freeslot].bh = bh;
+#endif
+    ovmx_bdev_cache[freeslot].devt = devt;
+    ovmx_bdev_cache[freeslot].bdev = bdev;
+    ovmx_bdev_cache[freeslot].valid = true;
+    mutex_unlock(&ovmx_bdev_cache_lock);
+    return bdev;
+}
+
+void exec_bdev_cache_release_all(void)
+{
+    int i;
+
+    mutex_lock(&ovmx_bdev_cache_lock);
+    for (i = 0; i < OVMX_BDEV_CACHE_SLOTS; i++) {
+        if (!ovmx_bdev_cache[i].valid)
+            continue;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+        fput(ovmx_bdev_cache[i].bf);
+        ovmx_bdev_cache[i].bf = NULL;
+#else
+        bdev_release(ovmx_bdev_cache[i].bh);
+        ovmx_bdev_cache[i].bh = NULL;
+#endif
+        ovmx_bdev_cache[i].bdev = NULL;
+        ovmx_bdev_cache[i].devt = 0;
+        ovmx_bdev_cache[i].valid = false;
+    }
+    mutex_unlock(&ovmx_bdev_cache_lock);
+}
+
 static void __exit vms_exit(void)
 {
     struct vms_proc *proc;
@@ -1353,6 +1458,7 @@ static void __exit vms_exit(void)
     vms_lnm_cleanup();
     vms_mbx_cleanup();
     vms_acp_cleanup();
+    exec_bdev_cache_release_all();   /* rd vms-648: close cached ACP backing handles */
 
     kmem_cache_destroy(vms_proc_cache);
 

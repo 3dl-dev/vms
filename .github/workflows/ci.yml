@@ -442,6 +442,16 @@ jobs:
               - 'tests/qemu/Dockerfile.dlm-harness-h9'
               - 'tests/qemu/init_dlm_h9.sh'
               - 'tests/qemu/run_dlm_harness_h9.sh'
+              # H10a (rd vms-2bf, THE GRACEFUL-DEPARTURE DIRECTORY INGRESS): three
+              # nodes A/B/C join one cluster with a static 3-member DLM vector; node
+              # C departs gracefully; the survivors' executives drop C's CSID from
+              # the LIVE directory membership (SCSD-I-DLMDEPART found=1 live=2) and
+              # RES_C's directory re-resolves off C onto a survivor (SCSD-I-DLMREMASTER
+              # dir_before=1032 dir_after in {1030,1031}). Foundation only -- the
+              # cross-node lock-STATE rebuild is H10b (vms-dca9).
+              - 'tests/qemu/Dockerfile.dlm-harness-h10'
+              - 'tests/qemu/init_dlm_h10.sh'
+              - 'tests/qemu/run_dlm_harness_h10.sh'
               - 'tests/cluster/two-ovmx/mk_sysgen_scratch.py'
               - 'tests/cluster/two-ovmx/verdict.sh'
 
@@ -3065,6 +3075,78 @@ jobs:
         with:
           name: dlm-harness-h9-artifacts
           path: h9out/
+          if-no-files-found: ignore
+
+  # -----------------------------------------------------------------------
+  # Job 2i: DLM Harness H10 -- THE GRACEFUL-DEPARTURE DIRECTORY INGRESS (rd vms-2bf)
+  #
+  # THREE nodes A/B/C (the first 3-node DLM harness; H2-H9 were two) join one
+  # cluster with the SAME static 3-member DLM vector (dlm_member_csids=
+  # 1030,1031,1032, each node's SCSSYSTEMID == its DLM CSID). node C departs
+  # GRACEFULLY (shorter duration -> its scsd emits the class-0x04 self-departure
+  # last-gasp first). Nodes A and B observe it and each call the LOCAL depart ioctl
+  # (VMS_IOCTL_DLM_MEMBER_DEPART) -> their executives drop C's CSID from the LIVE
+  # DLM directory membership (SCSD-I-DLMDEPART csid=1032 found=1 live=2). node A
+  # re-resolves RES_C's directory, chosen so exec_jhash(RES_C)%3==2 hashes it to C
+  # over the full set, onto a survivor once the set shrinks (SCSD-I-DLMREMASTER
+  # dir_before=1032 dir_after in {1030,1031}). H10 PASS iff all three joined AND
+  # both survivors shrank membership AND RES_C deterministically remastered off C.
+  # INV-6: every value is the REAL executive read. Foundation only -- the
+  # cross-node lock-STATE rebuild (COLLECT) is the H10b rung (vms-dca9).
+  # -----------------------------------------------------------------------
+  dlm-harness-h10:
+    name: DLM Harness H10 (3-node; node C departs gracefully, survivors shrink DLM membership + RES_C remasters, QEMU)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.dlm_harness == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build DLM harness H10 image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu/Dockerfile.dlm-harness-h10
+          push: false
+          load: true
+          tags: ovmx-dlm-h10:latest
+          cache-from: type=gha,scope=dlm-harness-h10
+          cache-to: type=gha,mode=max,scope=dlm-harness-h10
+
+      - name: Boot THREE QEMU nodes, depart node C gracefully, verdict the DLM directory remaster
+        run: |
+          set +e
+          KVM=""
+          [ -e /dev/kvm ] && KVM="--device /dev/kvm"
+          mkdir -p "$PWD/h10out"
+          RAW=$(docker run --rm $KVM -v "$PWD/h10out:/out" ovmx-dlm-h10:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: DLM harness H10 exited nonzero"
+            exit 1
+          fi
+          if printf '%s\n' "$OUTPUT" | grep -qE '^  DLM HARNESS H10 PASSED'; then
+            echo "PASS: node C departed gracefully; survivors A/B shrank the DLM directory membership and RES_C's directory deterministically remastered off C onto a survivor."
+          else
+            echo "FAIL: H10 verdict 'DLM HARNESS H10 PASSED' not found."
+            printf '%s\n' "$OUTPUT" | grep -E 'verdict inputs|VAXCLMEMBER|DLMDIRBEFORE|DLMDEPART|DLMREMASTER|dir_before|dir_after|highest join rung|H10-NODE|FAIL:' || true
+            exit 1
+          fi
+
+      - name: Upload H10 pcap + node logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dlm-harness-h10-artifacts
+          path: h10out/
           if-no-files-found: ignore
 
   # -----------------------------------------------------------------------

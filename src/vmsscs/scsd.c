@@ -1396,6 +1396,11 @@ static uint16_t peer_node_number(const struct peer_state *ps)
     return (uint16_t)(ps_sys_addr(ps)[4] | ((uint16_t)ps_sys_addr(ps)[5] << 8));
 }
 
+/* Forward decl: DLM rung H10a graceful-departure directory ingress (rd vms-2bf).
+ * DEFINED beside the other DLM drives (near the H9 seed/read helpers); CALLED
+ * from the class-0x04 self-departure receive path far above that definition. */
+static void scsd_dlm_h10_depart_ingress(struct peer_state *ps);
+
 /*
  * cm_pick_coordinator - vms-760: choose the ONE peer that receives our deferred
  * op 0x02.
@@ -7359,6 +7364,13 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                             ovmx_cluster_relearn(pop, xtime,
                                                  "class-0x04 departure, no barrier follows");
                             ps->pending_state = 0;
+                            /* DLM rung H10a (rd vms-2bf): a GRACEFUL class-0x04
+                             * self-departure is the departure INGRESS. Tell THIS
+                             * node's executive to drop the departed peer's CSID
+                             * from the LIVE DLM directory membership (LOCAL ioctl,
+                             * not a new cross-node send). A no-op unless armed for
+                             * the H10 harness (OVMX_DLM_H10). */
+                            scsd_dlm_h10_depart_ingress(ps);
                         }
                     }
                     /* The role slot is a CROSS-CHECK, never a gate. Gating the
@@ -8439,6 +8451,186 @@ static void scsd_dlm_h9_seed(struct scsd_rx *rx, struct peer_state *ps)
            " PERSISTS for node A's cross-node $ENQ to read (H9, the read crossing)\n",
            hex, (unsigned)st);
     fflush(stdout);
+}
+
+/* ============================================================================
+ * DLM rung H10a (rd vms-2bf) -- GRACEFUL-DEPARTURE DIRECTORY INGRESS.
+ *
+ * When scsd observes a GRACEFUL cluster departure (SCS_MEMBER_OP_DEPART, the
+ * class-0x04 self-departure a leaving node opens on the VC), it hands THIS
+ * node's executive the departed CSID via the LOCAL ioctl
+ * VMS_IOCTL_DLM_MEMBER_DEPART. The executive drops that CSID from the LIVE DLM
+ * directory membership and invalidates cached directories, so a resource whose
+ * directory hashed to the departed node DETERMINISTICALLY re-resolves to a
+ * survivor (dlm_directory_csid re-hashes over the shrunk set). This is a LOCAL
+ * ioctl to our OWN /dev/vms -- it adds NO new cross-node send (no send_frame_vc
+ * site); the cross-node lock-STATE rebuild (COLLECT) is the H10b rung.
+ *
+ * The departed CSID is READ from the departing peer's own wire identity: its SCA
+ * src-logical address is aa:00:04:00:<LE16(SCSSYSTEMID)> (scs_config.h), and the
+ * H10 harness sets each node's SCSSYSTEMID equal to its DLM CSID, so
+ * peer_node_number(ps) -- the low 16 bits of that address -- IS the departing
+ * node's DLM CSID. INV-6: the markers carry the REAL executive-returned values
+ * (found/live/dir_before/dir_after), never fabricated; fail-honest with no
+ * /dev/vms (SS$_NOSUCHDEV 2680).
+ * ==========================================================================*/
+
+/*
+ * scsd_dlm_h10_read_dir - LOCAL GET_RESMASTER: report the executive's directory
+ * CSID for a resource NAME. dir_csid is a pure property of (name, live
+ * membership) -- the resource need not exist (see vms_ioctl_get_resmaster). On
+ * success *out_dir/*out_local carry the REAL dir_csid/local_csid. Fail-honest.
+ */
+static uint32_t scsd_dlm_h10_read_dir(const char *resnam, uint32_t *out_dir,
+                                      uint32_t *out_local)
+{
+    if (out_dir) *out_dir = 0;
+    if (out_local) *out_local = 0;
+#ifdef SCSD_UNIT_TEST
+    (void)resnam;
+    return 2296u;
+#else
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0)
+        return 2680u; /* SS$_NOSUCHDEV -- honest, no fabricated directory */
+    struct vms_register_args reg;
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return 2680u; }
+    struct vms_resmaster_args rm;
+    memset(&rm, 0, sizeof(rm));
+    strncpy(rm.resnam, resnam, sizeof(rm.resnam) - 1);
+    rm.resnam[sizeof(rm.resnam) - 1] = '\0';
+    if (ioctl(fd, VMS_IOCTL_GET_RESMASTER, &rm) < 0) { close(fd); return 2680u; }
+    if (out_dir)   *out_dir   = rm.dir_csid;
+    if (out_local) *out_local = rm.local_csid;
+    uint32_t st = rm.status;
+    close(fd);
+    return st;
+#endif
+}
+
+/*
+ * scsd_dlm_member_depart_ioctl - LOCAL VMS_IOCTL_DLM_MEMBER_DEPART: tell our
+ * executive that departed_csid left the cluster. *out_live/*out_found receive the
+ * executive's REAL post-shrink live directory-member count + the found flag
+ * (1 iff departed_csid was a configured member). Fail-honest (SS$_NOSUCHDEV).
+ */
+static uint32_t scsd_dlm_member_depart_ioctl(uint32_t departed_csid,
+                                             uint32_t *out_live,
+                                             uint32_t *out_found)
+{
+    if (out_live)  *out_live  = 0;
+    if (out_found) *out_found = 0;
+#ifdef SCSD_UNIT_TEST
+    (void)departed_csid;
+    return 2296u;
+#else
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0)
+        return 2680u; /* SS$_NOSUCHDEV -- honest, no fabricated membership change */
+    struct vms_register_args reg;
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return 2680u; }
+    struct vms_dlm_depart_args da;
+    memset(&da, 0, sizeof(da));
+    da.departed_csid = departed_csid;
+    if (ioctl(fd, VMS_IOCTL_DLM_MEMBER_DEPART, &da) < 0) { close(fd); return 2680u; }
+    if (out_live)  *out_live  = da.members_live;
+    if (out_found) *out_found = da.found;
+    uint32_t st = da.status;
+    close(fd);
+    return st;
+#endif
+}
+
+/*
+ * Node A's H10a readback baseline. scsd_dlm_h10_before_read latches, once, the
+ * directory CSID of the tracked resource (OVMX_DLM_H10_RES) over the FULL
+ * membership -- BEFORE any departure. scsd_dlm_h10_depart_ingress reads it again
+ * AFTER the departure ioctl shrank the membership and emits the before/after
+ * remaster proof. Both values are REAL executive reads (INV-6).
+ */
+static char     scsd_h10_res[32];
+static uint32_t scsd_h10_dir_before;
+static int      scsd_h10_before_latched;
+
+static void scsd_dlm_h10_before_read(void)
+{
+    const char *res = getenv("OVMX_DLM_H10_RES");
+    if (res == NULL || res[0] == '\0')
+        return;                 /* only the readback node (node A) arms this */
+    if (scsd_h10_before_latched || !scsd_member_initiate_enabled())
+        return;                 /* one-shot, and only in member-driving mode */
+
+    uint32_t dir = 0, local = 0;
+    uint32_t st = scsd_dlm_h10_read_dir(res, &dir, &local);
+    strncpy(scsd_h10_res, res, sizeof(scsd_h10_res) - 1);
+    scsd_h10_res[sizeof(scsd_h10_res) - 1] = '\0';
+    scsd_h10_dir_before = dir;
+    scsd_h10_before_latched = 1;   /* one-shot regardless of outcome */
+
+    log_ts(stdout);
+    printf(" SCSD-I-DLMDIRBEFORE name=%s dir_before=%u local=%u (rc=0x%08X)"
+           " -- directory of %s over the FULL DLM membership, read before any"
+           " departure (H10a readback baseline)\n",
+           scsd_h10_res, (unsigned)dir, (unsigned)local, (unsigned)st, scsd_h10_res);
+    fflush(stdout);
+}
+
+/* Definition (forward-declared above): the graceful-departure directory ingress. */
+static void scsd_dlm_h10_depart_ingress(struct peer_state *ps)
+{
+    if (ps == NULL)
+        return;
+    if (getenv("OVMX_DLM_H10") == NULL)
+        return;                 /* armed only in the H10 harness (real DLM membership) */
+
+    /* The departing peer's DLM CSID == the low 16 bits of its SCA src-logical
+     * address (aa:00:04:00:<LE16(SCSSYSTEMID)>), which the H10 harness sets equal
+     * to the DLM CSID. A real departed CSID, read off the departing node's own
+     * wire identity -- never fabricated. */
+    uint32_t departed = peer_node_number(ps);
+    if (departed == 0)
+        return;                 /* no real departed CSID -> nothing to shrink */
+
+    /* One-shot per departed CSID: a retransmitted class-0x04 open must not
+     * re-drive the ioctl or re-emit the markers. Sized to the executive's
+     * VMS_DLM_MAX_MEMBERS (16, vms_internal.h) -- a userspace-local copy, as that
+     * kernel constant is not exposed through vms_ioctl.h. */
+    enum { SCSD_H10_MAX_DEPARTED = 16 };
+    static uint32_t seen[SCSD_H10_MAX_DEPARTED];
+    static int      nseen;
+    for (int i = 0; i < nseen; i++)
+        if (seen[i] == departed)
+            return;
+    if (nseen < (int)(sizeof(seen) / sizeof(seen[0])))
+        seen[nseen++] = departed;
+
+    uint32_t live = 0, found = 0;
+    uint32_t st = scsd_dlm_member_depart_ioctl(departed, &live, &found);
+    log_ts(stdout);
+    printf(" SCSD-I-DLMDEPART csid=%u live=%u found=%u (rc=0x%08X) -- graceful"
+           " class-0x04 departure ingress: executive dropped the CSID from the LIVE"
+           " DLM directory membership (H10a, rd vms-2bf)\n",
+           (unsigned)departed, (unsigned)live, (unsigned)found, (unsigned)st);
+    fflush(stdout);
+
+    /* Readback node (node A, OVMX_DLM_H10_RES set): re-read the tracked
+     * resource's directory now the membership shrank, and emit the before/after
+     * remaster proof. Gated on found==1 so we only claim a remaster after a REAL
+     * membership shrink. */
+    if (found == 1u && scsd_h10_before_latched && scsd_h10_res[0] != '\0') {
+        uint32_t dir_after = 0, local = 0;
+        uint32_t rst = scsd_dlm_h10_read_dir(scsd_h10_res, &dir_after, &local);
+        log_ts(stdout);
+        printf(" SCSD-I-DLMREMASTER name=%s dir_before=%u dir_after=%u"
+               " (departed=%u local=%u rc=0x%08X) -- the resource's directory"
+               " DETERMINISTICALLY re-resolved to a survivor after the departure"
+               " (H10a directory re-resolution; lock-state rebuild is H10b)\n",
+               scsd_h10_res, (unsigned)scsd_h10_dir_before, (unsigned)dir_after,
+               (unsigned)departed, (unsigned)local, (unsigned)rst);
+        fflush(stdout);
+    }
 }
 
 /*
@@ -13070,6 +13262,11 @@ static void scsd_join_retx_tick(struct scsd_rx *rx, uint64_t now_ms)
          * A no-op on node A (OVMX_DLM_ENQ set) and without OVMX_DLM_H9. */
         scsd_dlm_h9_seed(rx, ps);
     }
+    /* vms-2bf (DLM rung H10a): node A latches the tracked resource's directory
+     * CSID over the FULL membership, once, before any departure. Not per-peer --
+     * a local read of our own executive; self-latches and is a no-op unless
+     * OVMX_DLM_H10_RES names a resource (the readback node). */
+    scsd_dlm_h10_before_read();
 }
 
 /*

@@ -1036,6 +1036,7 @@ uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid);
  * hand-set structure.
  */
 long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg);
 /* vms-94c (DLM epic vms-7fa rung 1): the cross-node DLM RECEIVE handler and its
  * ioctl wrapper. Rung 1 delivers a decoded remote DLM request TO the handler,
  * which returns SS$_UNSUPPORTED (no fabricated cross-node grant, INV-6). */

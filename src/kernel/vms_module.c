@@ -970,6 +970,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
     /* DLM resource-directory + mastering readback (vms-ci.5 DB) */
     case VMS_IOCTL_GET_RESMASTER:
         return vms_ioctl_get_resmaster(proc, arg);
+    /* DLM graceful member departure -> shrink live membership + re-resolve the
+     * directory over the survivors (vms-2bf, DLM rung H10a). */
+    case VMS_IOCTL_DLM_MEMBER_DEPART:
+        return vms_ioctl_dlm_member_depart(proc, arg);
     /* DLM cross-node lock-request dispatch (vms-94c, DLM epic vms-7fa rung 1):
      * a decoded remote DLM message reaches the cross-node handler, which
      * returns SS$_UNSUPPORTED (rung 1 transport; no fake grant). */

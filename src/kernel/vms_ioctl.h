@@ -570,6 +570,33 @@ _Static_assert(sizeof(struct vms_dlm_xnode_args) == 120,
                "vms_dlm_xnode_args changed size -- VMS_IOCTL_DLM_XNODE ABI break");
 #define VMS_IOCTL_DLM_XNODE _IOWR(VMS_IOC_MAGIC, 0x35, struct vms_dlm_xnode_args)
 
+/*
+ * $DLM member departure (rd vms-2bf, DLM rung H10a). scsd calls this when it
+ * observes a GRACEFUL cluster departure (SCS_MEMBER_OP_DEPART): the executive
+ * marks departed_csid gone from the LIVE directory membership -- the static
+ * dlm_member_csids insmod vector (0444) is NOT mutated; a runtime departed-set
+ * filters it -- and invalidates the cached directory so resolution re-runs over
+ * the shrunk set. A departed master's resources then remaster to a survivor
+ * (dlm_directory_csid re-hashes over fewer members). members_live returns the
+ * post-shrink directory-member count; found is 1 iff departed_csid was a
+ * configured member. INV-6: this reflects a REAL departure the connection
+ * manager (scsd) observed and reported, never a fabricated membership change;
+ * with no /dev/vms there is no executive to shrink (honest SS$_NOSUCHDEV).
+ * (Supersedes the note above that remaster adds no ioctl -- the departure
+ * INGRESS is this ioctl; the cross-node lock-rebuild send is the H10b rung.)
+ */
+struct vms_dlm_depart_args {
+    uint32_t departed_csid;   /* in: the CSID that left the cluster */
+    uint32_t members_live;    /* return: live directory-member count after shrink */
+    uint32_t found;           /* return: 1 iff departed_csid was a configured member */
+    uint32_t status;          /* return: SS$_ status */
+};
+_Static_assert(sizeof(struct vms_dlm_depart_args) == 16,
+               "vms_dlm_depart_args changed size -- VMS_IOCTL_DLM_MEMBER_DEPART ABI break");
+#define VMS_IOCTL_DLM_MEMBER_DEPART _IOWR(VMS_IOC_MAGIC, 0x36, struct vms_dlm_depart_args)
+_Static_assert(VMS_IOCTL_DLM_MEMBER_DEPART == 0xC0105636u,
+               "VMS_IOCTL_DLM_MEMBER_DEPART encodes differently than the reference build");
+
 /* ================================================================
  * Process registration
  * ================================================================ */

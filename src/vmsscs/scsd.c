@@ -1034,6 +1034,16 @@ struct peer_state {
      * LOCAL GETLKI on its OWN request handle -- the master's LVB, over the wire. */
     int      dlm_h9;               /* node-A: H9 LVB-read crossing armed (OVMX_DLM_H9) */
     int      dlm_h9_read_done;     /* node-A: the LVB read-back completed (one-shot) */
+    /* rd vms-dca9 (DLM rung H10b): the REMASTER LOCK REBUILD. Node A holds
+     * RES_C EX (req_lkid 1, mastered by C) BEFORE C departs; when C departs
+     * gracefully, A re-registers that SAME lock on RES_C's new directory
+     * master -- a TARGETED SCS_DLM_OP_REBUILD send, resolved by peer_by_csid --
+     * so the new master reconstructs res->granted from A's REAL origin state.
+     * Independent of H5/H6/H8/H9. */
+    int      dlm_h10b;                  /* node-A: H10b hold+rebuild armed (OVMX_DLM_H10B) */
+    int      dlm_h10b_hold_established; /* node-A: our pre-departure hold is GRANTED */
+    char     dlm_h10b_resnam[32];       /* node-A: the resource name we hold (from the GRANT) */
+    int      dlm_h10b_rebuild_sent;     /* node-A: the REBUILD send ran (one-shot) */
     /* vms-694 (§4(O.7)): OVMX's OWN model of "am I a connected VMS$VAXcluster
      * member of this peer", LATCHED the moment the VMS$VAXcluster SYSAP
      * connection (cdt_joiner, or cdt_member if it ever reaches OPEN) hits the
@@ -1401,6 +1411,12 @@ static uint16_t peer_node_number(const struct peer_state *ps)
  * DEFINED beside the other DLM drives (near the H9 seed/read helpers); CALLED
  * from the class-0x04 self-departure receive path far above that definition. */
 static void scsd_dlm_h10_depart_ingress(struct peer_state *ps);
+
+/* Forward decl: DLM rung H10b remaster lock rebuild, holder side (rd vms-dca9).
+ * Same shape as the H10a forward decl above -- DEFINED beside the other DLM
+ * drives, CALLED from the SAME class-0x04 self-departure receive path,
+ * immediately after scsd_dlm_h10_depart_ingress(). */
+static void scsd_dlm_h10b_rebuild_on_depart(struct peer_state *ps);
 
 /*
  * cm_pick_coordinator - vms-760: choose the ONE peer that receives our deferred
@@ -3688,6 +3704,18 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                                sequenced SCS traffic on an already-open circuit;
  *                                choked like every other DLM client send.
  *
+ *   CHOKED, and new in vms-dca9 (DLM rung H10b):
+ *     scsd_dlm_client_send_rebuild()  node-A's REMASTER LOCK REBUILD send: a
+ *                                TARGETED SCS_DLM_OP_REBUILD to a peer resolved
+ *                                by CSID (peer_by_csid), not the peer whose own
+ *                                per-peer join-tick context drove the call --
+ *                                the resource's NEW directory master after its
+ *                                old master's departure. Same MTYPE-10 SYSAP
+ *                                framing and DLM-server addressing as every
+ *                                sibling DLM client send above; ordinary
+ *                                sequenced SCS traffic on a connection that
+ *                                cannot exist before its circuit does.
+ *
  *   CHOKED, and new in vms-600:
  *     scsd_mscp_srv_xfer()       the live scs_mscp_srv_xfer_fn: the SCA
  *                                block-transfer frames a READ streams before
@@ -5629,6 +5657,29 @@ static struct peer_state *scsd_peer_by_sys(struct scsd_rx *rx, const uint8_t nod
     return NULL;
 }
 
+/*
+ * peer_by_csid - the live peer whose DLM CSID (peer_node_number(), the low 16
+ * bits of its SCA src-logical address) is target_csid. NULL if no such peer is
+ * live. rd vms-dca9 (DLM rung H10b): the REMASTER REBUILD send is the first DLM
+ * sender that must reach a peer OTHER than the one whose join tick drove the
+ * call -- the resource's NEW directory master, not the departed one -- so it
+ * looks the target up BY CSID, mirroring scsd_peer_by_sys's by-identity lookup
+ * immediately above.
+ */
+static struct peer_state *peer_by_csid(struct scsd_rx *rx, uint32_t target_csid)
+{
+    if (rx == NULL || target_csid == 0) {
+        return NULL;
+    }
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        struct peer_state *ps = &rx->peers[i];
+        if (ps->pb != NULL && (uint32_t)peer_node_number(ps) == target_csid) {
+            return ps;
+        }
+    }
+    return NULL;
+}
+
 /* Fill the shared envelope every poller frame needs from a peer. */
 static void scsd_poll_dir_params(struct scsd_rx *rx, struct peer_state *ps,
                                  struct scs_dir_params *dp)
@@ -7372,6 +7423,12 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                              * not a new cross-node send). A no-op unless armed for
                              * the H10 harness (OVMX_DLM_H10). */
                             scsd_dlm_h10_depart_ingress(ps);
+                            /* DLM rung H10b (rd vms-dca9): if THIS node holds a
+                             * cross-node lock on RES_C via the departing peer,
+                             * re-register it on the resource's NEW directory
+                             * master. A no-op on any node that never
+                             * established the hold (see the function). */
+                            scsd_dlm_h10b_rebuild_on_depart(ps);
                         }
                     }
                     /* The role slot is a CROSS-CHECK, never a gate. Gating the
@@ -8634,6 +8691,216 @@ static void scsd_dlm_h10_depart_ingress(struct peer_state *ps)
     }
 }
 
+/* ============================================================================
+ * DLM rung H10b (rd vms-dca9) -- THE REMASTER LOCK REBUILD.
+ *
+ * H10a proves the departure INGRESS (membership shrink + deterministic
+ * directory re-resolution). H10b proves that a cross-node LOCK survives the
+ * departure of its master: node A holds RES_C EX (mastered by C) BEFORE C
+ * departs; when C departs gracefully, A re-registers that SAME lock -- its
+ * REAL req_lkid/mode/req_csid, read fresh off its own executive-resident
+ * origin record, never assumed -- on RES_C's NEW directory master (a TARGETED
+ * SCS_DLM_OP_REBUILD send, resolved by peer_by_csid, not the untargeted
+ * per-peer sends every earlier DLM rung used). The new master reconstructs
+ * res->granted DIRECTLY from that real state (vms_lock_dlm_xnode_rebuild,
+ * src/kernel-core/vms_lock.c) and the harness VALUE-VERIFIES the rebuilt lock
+ * -- read back via VMS_IOCTL_DLM_GET_GRANTED -- equals the one A held
+ * pre-departure. INV-6: every value on the wire and in every marker is a REAL
+ * executive read; a failed dispatch or an absent peer is reported honestly
+ * (rc field / sent=0), never faked as a rebuild that did not happen.
+ * ==========================================================================*/
+
+/*
+ * scsd_dlm_h10b_read_own_mode - LOCAL GETLKI: the REAL granted mode our own
+ * origin record holds for `lkid`, read fresh at rebuild time (never the mode we
+ * assumed when we sent the original $ENQ). Mirrors scsd_dlm_h9_read_valblk's
+ * REGISTER+GETLKI shape. Fail-honest (SS$_NOSUCHDEV) with no /dev/vms.
+ */
+static uint32_t scsd_dlm_h10b_read_own_mode(uint32_t lkid, uint32_t *out_mode)
+{
+    if (out_mode)
+        *out_mode = 0;
+#ifdef SCSD_UNIT_TEST
+    (void)lkid;
+    return 2296u;
+#else
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0)
+        return 2680u; /* SS$_NOSUCHDEV -- honest, no fabricated mode */
+    struct vms_register_args reg;
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return 2680u; }
+    struct vms_getlki_args gl;
+    memset(&gl, 0, sizeof(gl));
+    gl.lkid = lkid;
+    if (ioctl(fd, VMS_IOCTL_GETLKI, &gl) < 0) { close(fd); return 2680u; }
+    if (out_mode)
+        *out_mode = gl.granted_mode;
+    uint32_t st = gl.status;
+    close(fd);
+    return st;
+#endif
+}
+
+/*
+ * scsd_dlm_h10b_get_granted - LOCAL VMS_IOCTL_DLM_GET_GRANTED: the new master's
+ * readback of the first remote-held granted lock on `resnam` -- the value-verify
+ * proof that the rebuild genuinely landed in res->granted. Fail-honest, all
+ * fields zero with no /dev/vms.
+ */
+static uint32_t scsd_dlm_h10b_get_granted(const char *resnam, uint32_t *out_found,
+                                          uint32_t *out_n_granted,
+                                          uint32_t *out_holder_csid,
+                                          uint32_t *out_holder_lkid,
+                                          uint32_t *out_mode)
+{
+    if (out_found) *out_found = 0;
+    if (out_n_granted) *out_n_granted = 0;
+    if (out_holder_csid) *out_holder_csid = 0;
+    if (out_holder_lkid) *out_holder_lkid = 0;
+    if (out_mode) *out_mode = 0;
+#ifdef SCSD_UNIT_TEST
+    (void)resnam;
+    return 2296u;
+#else
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0)
+        return 2680u; /* SS$_NOSUCHDEV -- honest, no fabricated readback */
+    struct vms_register_args reg;
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return 2680u; }
+    struct vms_dlm_granted_args g;
+    memset(&g, 0, sizeof(g));
+    if (resnam != NULL) {
+        strncpy(g.resnam, resnam, sizeof(g.resnam) - 1);
+        g.resnam[sizeof(g.resnam) - 1] = '\0';
+    }
+    if (ioctl(fd, VMS_IOCTL_DLM_GET_GRANTED, &g) < 0) { close(fd); return 2680u; }
+    if (out_found) *out_found = g.found;
+    if (out_n_granted) *out_n_granted = g.n_granted;
+    if (out_holder_csid) *out_holder_csid = g.holder_csid;
+    if (out_holder_lkid) *out_holder_lkid = g.holder_req_lkid;
+    if (out_mode) *out_mode = g.granted_mode;
+    uint32_t st = g.status;
+    close(fd);
+    return st;
+#endif
+}
+
+/*
+ * scsd_dlm_client_send_rebuild - node A's REMASTER LOCK REBUILD send (rd
+ * vms-dca9, rung H10b). A TARGETED SEND to a peer resolved by CSID
+ * (peer_by_csid), not the peer whose per-peer join-tick context drove the
+ * call -- every earlier DLM client sender (scsd_dlm_send_enq,
+ * scsd_dlm_client_send_op, scsd_dlm_client_send_deq_valblk) addresses the SAME
+ * peer its own `ps` already belongs to; this is the first that must reach a
+ * DIFFERENT peer (the resource's NEW directory master), which is why it is a
+ * NEW send site rather than a reuse of one of those. Same MTYPE-10 SYSAP
+ * framing, same DLM-server addressing (PS_DLM_CONID/PS_DLM_SERVER_CONID) as
+ * every sibling. Carries the holder's REAL req_lkid/mode/req_csid (INV-6: never
+ * a fabricated or defaulted lock). Returns 1 on send.
+ */
+static int scsd_dlm_client_send_rebuild(struct scsd_rx *rx, struct peer_state *ps,
+                                        const char *resname, uint32_t req_lkid,
+                                        uint8_t mode)
+{
+    if (rx == NULL || ps == NULL || ps->pb == NULL || ps->joiner_remote_conid == 0)
+        return 0;
+
+    uint32_t dlm_server = (ps->joiner_remote_conid & 0xFFFFFFF0u) |
+                          OVMX_CONID_CLS_DLMSRV;
+
+    struct scs_dlm_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, ps_port_addr(ps), 6);
+    memcpy(p.src_mac, rx->our_hw_mac, 6);
+    memcpy(p.src_logical, rx->our_src_logical, 6);
+    memcpy(p.peer_logical, ps_sys_addr(ps), 6);
+    p.local_conid = PS_DLM_CONID(ps);
+    p.remote_conid = dlm_server;
+    p.recv_ack = ps->vc.seq.recv_seq;
+    p.send_seq = scs_seq_advance(&ps->vc.seq);
+    p.incarnation = ps->incarnation;
+
+    struct scs_dlm_msg m;
+    memset(&m, 0, sizeof(m));
+    m.op = SCS_DLM_OP_REBUILD;
+    m.mode = mode;
+    m.req_lkid = req_lkid;
+    m.req_csid = resolve_scssystemid();   /* the surviving holder's identity */
+    if (resname != NULL) {
+        size_t rl = strlen(resname);
+        if (rl > SCS_DLM_RESNAM_MAX)
+            rl = SCS_DLM_RESNAM_MAX;
+        m.namelen = (uint8_t)rl;
+        memcpy(m.resnam, resname, rl);
+    }
+
+    uint8_t frame[SCS_DLM_FRAME_LEN];
+    if (scs_dlm_build_frame(&p, &m, frame) == 0 &&
+        send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
+                      "OVMX$DLM REBUILD (H10b remaster)", frame,
+                      sizeof(frame)) > 0)
+        return 1;
+    return 0;
+}
+
+/*
+ * scsd_dlm_h10b_rebuild_on_depart - THE REMASTER REBUILD SEND, holder side (rd
+ * vms-dca9, DLM rung H10b). Fires from the SAME class-0x04 self-departure hook
+ * H10a's ingress uses (`ps` is the DEPARTING peer's own state -- the peer this
+ * node's PRE-DEPARTURE HOLD was established against, scsd_dlm_h10b_hold_established
+ * above), so it runs ONLY on the node that actually holds the lock (node A); on
+ * a node that never sent the hold ENQ (node B), dlm_h10b_hold_established is
+ * never set and this is a no-op.
+ *
+ *   1. Read our own origin's REAL granted mode fresh, via GETLKI on our own
+ *      handle (req_lkid=1) -- never the mode we ASSUMED when we sent the ENQ.
+ *   2. Re-resolve the resource's directory over the shrunk membership (the
+ *      SAME LOCAL GET_RESMASTER read h10a's ingress uses) -- N, the new master.
+ *   3. Look N up as a live peer (peer_by_csid) and send it a targeted
+ *      SCS_DLM_OP_REBUILD carrying our REAL req_lkid/mode/req_csid.
+ *
+ * One-shot (dlm_h10b_rebuild_sent). Gated on OVMX_DLM_H10B; a no-op without it
+ * even if a hold somehow got established (defence in depth, every other H10b
+ * gate does the same).
+ */
+static void scsd_dlm_h10b_rebuild_on_depart(struct peer_state *ps)
+{
+    if (ps == NULL || !ps->dlm_h10b_hold_established || ps->dlm_h10b_rebuild_sent)
+        return;
+    if (getenv("OVMX_DLM_H10B") == NULL)
+        return;
+    ps->dlm_h10b_rebuild_sent = 1;   /* one-shot regardless of outcome below */
+
+    const uint32_t our_lkid = 1u;   /* the SAME handle convention every DLM
+                                      * rung's node-A holder uses (req_lkid=1) */
+    uint32_t mode = 0;
+    uint32_t gst = scsd_dlm_h10b_read_own_mode(our_lkid, &mode);
+
+    uint32_t new_master = 0, local = 0;
+    uint32_t rst = scsd_dlm_h10_read_dir(ps->dlm_h10b_resnam, &new_master, &local);
+
+    struct scsd_rx *rx = scsd_rx_current.rx;
+    struct peer_state *target = (rx != NULL) ? peer_by_csid(rx, new_master) : NULL;
+
+    int sent = 0;
+    if (rx != NULL && target != NULL && new_master != 0 && new_master != local &&
+        gst == 1u) {
+        sent = scsd_dlm_client_send_rebuild(rx, target, ps->dlm_h10b_resnam,
+                                            our_lkid, (uint8_t)mode);
+    }
+
+    log_ts(stdout);
+    printf(" SCSD-I-DLMREBUILDSENT csid=%u lkid=0x%08X mode=%s (getlki_rc=0x%08X"
+           " dir_rc=0x%08X sent=%d) -- surviving holder re-registers its"
+           " cross-node lock on the NEW master after the old master's departure"
+           " (H10b, rd vms-dca9)\n",
+           (unsigned)new_master, (unsigned)our_lkid, scs_dlm_mode_name((uint8_t)mode),
+           (unsigned)gst, (unsigned)rst, sent);
+    fflush(stdout);
+}
+
 /*
  * scsd_dlm_srv_msg_input - the DLM server CDT's message input routine. Reads the
  * received frame from scsd_rx_current (the same OVMX design choice
@@ -8654,6 +8921,46 @@ static void scsd_dlm_srv_msg_input(struct scs_cdt *cdt, const void *msg,
     if (ps == NULL || cur.frame == NULL ||
         scs_dlm_parse(cur.frame, (size_t)cur.len, &v) != 0) {
         return; /* not a well-formed DLM-over-SCS frame -- nothing to dispatch */
+    }
+
+    /* THE REMASTER LOCK REBUILD, NEW-MASTER SIDE (rd vms-dca9, rung H10b). A
+     * surviving holder re-registers its cross-node lock here after THIS node
+     * became the resource's new directory master (its old master departed).
+     * Dispatch op=REBUILD into OUR executive -- vms_lock_dlm_xnode_rebuild
+     * reconstructs the holder's REAL prior grant DIRECTLY into res->granted,
+     * never re-deriving it through the enqueue/grant core (INV-6) -- then read
+     * the rebuilt lock BACK via VMS_IOCTL_DLM_GET_GRANTED so the harness can
+     * VALUE-VERIFY it equals what the holder sent. Distinct from the ENQ/DEQ
+     * request/response leg below: REBUILD gets NO wire reply (the holder
+     * already holds the lock; it is not waiting on one). Gated on
+     * OVMX_DLM_H10B so a node without it armed is byte-identical to before
+     * this rung existed. */
+    if (v.msg.op == SCS_DLM_OP_REBUILD) {
+        if (getenv("OVMX_DLM_H10B") == NULL)
+            return;
+        uint32_t status = scsd_dlm_dispatch_to_executive(&v.msg, NULL, NULL, NULL);
+        log_ts(stdout);
+        printf(" SCSD-I-DLMRX, cross-node REBUILD from CSID=%u resnam='%.*s'"
+               " -> executive status=0x%08X\n",
+               (unsigned)v.msg.req_csid, (int)v.msg.namelen, v.msg.resnam,
+               (unsigned)status);
+        fflush(stdout);
+
+        uint32_t found = 0, n_granted = 0, holder_csid = 0, holder_lkid = 0, mode = 0;
+        uint32_t rst = scsd_dlm_h10b_get_granted((const char *)v.msg.resnam, &found,
+                                                  &n_granted, &holder_csid,
+                                                  &holder_lkid, &mode);
+        log_ts(stdout);
+        printf(" SCSD-I-DLMREBUILT found=%u n_granted=%u holder_csid=%u lkid=0x%08X"
+               " mode=%s (rebuild_rc=0x%08X readback_rc=0x%08X) -- this node is"
+               " now the resource's master; the surviving holder's lock was"
+               " RECONSTRUCTED from its REAL origin state, read back from"
+               " res->granted (H10b, rd vms-dca9)\n",
+               (unsigned)found, (unsigned)n_granted, (unsigned)holder_csid,
+               (unsigned)holder_lkid, scs_dlm_mode_name((uint8_t)mode),
+               (unsigned)status, (unsigned)rst);
+        fflush(stdout);
+        return;
     }
 
     /* Only a REQUEST (ENQ/DEQ) is dispatched + answered here. A GRANT/BLKAST is
@@ -9158,6 +9465,31 @@ static void scsd_dlm_cli_msg_input(struct scs_cdt *cdt, const void *msg,
         return;
     }
 
+    /* THE HOLD, REQUESTER SIDE (rd vms-dca9, rung H10b). Our cross-node $ENQ
+     * (#1, EX) to RES_C's master (node C) was GRANTED. Dispatch the GRANT into
+     * OUR executive so our origin record genuinely reflects the held lock --
+     * this is the PRE-DEPARTURE HOLD that must SURVIVE C's remaster. The
+     * departure hook (scsd_dlm_h10b_rebuild_on_depart) re-reads it fresh via
+     * GETLKI and re-registers it on the new master. */
+    if (ps->dlm_h10b && !ps->dlm_h10b_hold_established &&
+        v.msg.req_lkid == 1u && v.msg.status == 1u) {
+        ps->dlm_h10b_hold_established = 1;
+        (void)scsd_dlm_dispatch_to_executive(&v.msg, NULL, NULL, NULL);
+        size_t rl = v.msg.namelen;
+        if (rl > sizeof(ps->dlm_h10b_resnam) - 1)
+            rl = sizeof(ps->dlm_h10b_resnam) - 1;
+        memcpy(ps->dlm_h10b_resnam, v.msg.resnam, rl);
+        ps->dlm_h10b_resnam[rl] = '\0';
+        log_ts(stdout);
+        printf(" SCSD-I-DLMHOLDOK name=%.*s master_csid=%u req_lkid=1 mode=%s --"
+               " our cross-node lock is GRANTED and held; the PRE-DEPARTURE hold"
+               " that must survive the master's remaster (H10b, rd vms-dca9)\n",
+               (int)v.msg.namelen, v.msg.resnam, (unsigned)v.msg.master_csid,
+               scs_dlm_mode_name(v.msg.mode));
+        fflush(stdout);
+        return;
+    }
+
     if (!ps->dlm_h5)
         return;   /* rung 1b only: no H5 sequence armed */
 
@@ -9283,6 +9615,22 @@ static void scsd_dlm_send_enq(struct scsd_rx *rx, struct peer_state *ps)
     if (resname == NULL || resname[0] == '\0' || !scsd_member_initiate_enabled()) {
         return;
     }
+    /* rd vms-dca9 (H10b): in a >2-node cluster the ENQ must reach the
+     * resource's REAL directory master, not whichever peer's join tick
+     * happens to fire first -- vms_lock_dlm_xnode_dispatch() masters
+     * UNCONDITIONALLY whatever ENQ it receives (there is no receive-side
+     * mastership check), so an untargeted send in a 3-node harness would also
+     * hand a bogus master role to a peer that is not RES_C's directory.
+     * Opt-in and additive: absent (every H5-H9 harness is two-node, so every
+     * peer was always a legal target), every peer is still a legal target,
+     * byte-identical to before this rung existed. */
+    const char *target_csid_env = getenv("OVMX_DLM_ENQ_CSID");
+    if (target_csid_env != NULL && target_csid_env[0] != '\0') {
+        uint32_t want_csid = (uint32_t)strtoul(target_csid_env, NULL, 10);
+        if ((uint32_t)peer_node_number(ps) != want_csid) {
+            return;
+        }
+    }
     /* Only after the join is complete: JOINBOUND taught us joiner_remote_conid,
      * which anchors the peer's Con.ID base+slot. */
     if (!ps->joiner_connected || ps->joiner_remote_conid == 0 || ps->dlm_enq_sent) {
@@ -9324,6 +9672,15 @@ static void scsd_dlm_send_enq(struct scsd_rx *rx, struct peer_state *ps)
      * the cli input routine then GETLKIs our own handle and reads the LVB. */
     if (getenv("OVMX_DLM_H9") != NULL)
         ps->dlm_h9 = 1;
+
+    /* rd vms-dca9 (H10b): arm the PRE-DEPARTURE HOLD + REMASTER REBUILD.
+     * Node A's cross-node $ENQ to RES_C's master must SURVIVE that master's
+     * departure -- INDEPENDENT of H5/H6/H8/H9 (no contention, no VALBLK). The
+     * GRANT branch in scsd_dlm_cli_msg_input establishes the real origin
+     * record; the departure hook (scsd_dlm_h10b_rebuild_on_depart) drives the
+     * rebuild send. */
+    if (getenv("OVMX_DLM_H10B") != NULL)
+        ps->dlm_h10b = 1;
 
     uint32_t dlm_server = (ps->joiner_remote_conid & 0xFFFFFFF0u) |
                           OVMX_CONID_CLS_DLMSRV;

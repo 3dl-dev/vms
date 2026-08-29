@@ -83,7 +83,7 @@ only our forks target.
 
 ## Live status — generated
 
-> Reconciled from rd (source of truth) **as of 2026-08-28** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
+> Reconciled from rd (source of truth) **as of 2026-08-29** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
 
 ### Milestone ladder
 
@@ -213,6 +213,7 @@ only our forks target.
 
 ### Shipped releases (git tags)
 
+- **V0.5-9** — Point release.
 - **V0.5-8** — Point release.
 - **V0.5-7** — The GCC-port-on-the-real-executive release. The genuine alpha-dec-vms OpenVMS GCC port runs as an OVMX-Alpha image on the live /dev/vms executive — a P1 milestone up the do-it-like-VMS ladder: activated via IMGACT over the mounted ODS-2 ACP, decc$main binds its producers (DECC$SHR/LIBOTS) over the ACP, and crt0->main returns the executive sentinel $STATUS=0x0035A019 (faithful C$_EXIT1(3), control-verified). The last three activation gaps close honestly against the real runtime — LIBOTS OTS$ register-preservation, the C-RTL auxv/R0 path, and the wired alpha-dec-vms musl syscall backend (callsys ABI, native Alpha syscall numbers, wruniq TP) — with the faithfulness lock catching four real gaps that qemu-user had hidden. Cluster: the OVMX<->OVMX member/initiator role is complete — two OVMX nodes form a VMScluster against each other (rung-0 solicit, rung-VC 0x41 START initiate, rung-ADD 0x5b joiner accept) — and a live cross-node $ENQ round-trip A->B->A over SCS works through the distributed lock manager (granting nothing, INV-6). Networking: a real OpenSSH sshd session rides entirely on the executive's own primitives over BGn: — bind/listen/accept over BGn:, a materialized [bgconn] fd for the session, getpeername/setsockopt answered from the executive socket, and byte-exact data through IO$_READVBLK/WRITEVBLK, with no AF_UNIX and no raw host socket. QA'd under KVM boot-to-login with the full SHOW battery VMS-faithful (42/42 acceptance); the frozen-verify red legs confirmed no-new-vs-baseline (TCG-flake, vms-898a).
 - **V0.5-6** — Image activation proven end-to-end, and the filesystem converges on a single executive path. The do-it-like-VMS image activation now runs end-to-end against a real /dev/vms — a VMS-standard activation context on the live executive, not a userspace stand-in — the Tier-1 flagship for the runtime. Filesystem convergence: the legacy ODS-2 VFS driver is atomically retired across Linux, NetBSD, and the shared core (~16k lines removed), leaving a single Files-11 ACP executive path. Toolchain hardening up the do-it-like-VMS ladder: the Alpha and VAX cross toolchains now pull source-hash-keyed prebuilt images from ghcr (killing the ftp.gnu.org build flake), the Alpha DECC$SHR vector is enumerated from the linker's own EVAX read view, and the multi-TU LINK.EXE self-host fixpoint is ported from BUILD.COM to MMK (additive, gen2==gen3 proven). VAX substrate: the exec_socket_* seam moves BGn: networking into kernel-core with Linux and NetBSD backends, and vms_stdio/vms_futex build on VAX to close the freestanding-facility gap. Cut through the all-architectures gate (x86_64, aarch64, VAX, and Alpha green-by-SHA on the tagged commit).
@@ -224,7 +225,6 @@ only our forks target.
 - **V0.5** — The authenticity flip: RMS reads and writes genuine Files-11 ODS-2 over the executive ACP (the /vms passthrough retired on the runtime path); binary $UAFDEF SYSUAF + Purdy login proven on x86_64 and Alpha LP64; and the shipped MMK.EXE self-hosts the userland in-guest (TCC->LIBRARIAN->LINK->activate, zero bash, byte-identical). The NetBSD/VAX substrate runs on the Files-11 VFS/POSIX path; wiring the VAX runtime onto the executive ACP is tracked as vms-d5d/vms-049 (V0.5-2+).
 - **V0.4-6** — Real OpenSSH key exchange over the executive network path, genuine ODS-2 read/write/INITIALIZE foundations, cluster rejoin proof, VAX co-release, and a sharded kernel-executive gate.
 - **V0.4-5** — Feature pack marching toward 0.5.
-- **V0.4-4** — Feature pack marching toward 0.5.
 
 ### rd-labeling gaps (fix these to keep the source accurate)
 

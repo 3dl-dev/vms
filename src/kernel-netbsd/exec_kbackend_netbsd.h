@@ -76,6 +76,12 @@
 #include <sys/condvar.h>   /* kcondvar_t, cv_* */
 #include <sys/kmem.h>      /* kmem_alloc/zalloc/free, KM_SLEEP/KM_NOSLEEP */
 #include <sys/proc.h>      /* struct proc, curproc, proc_find, p_pid (Phase F) */
+#include <sys/resourcevar.h> /* calcru, struct pstats {p_ru, p_start} (vms-6cac).
+                              * rbtree-CLEAN (pulls only sys/mutex.h + sys/resource.h),
+                              * so it is safe in this shared header -- unlike
+                              * <uvm/uvm_extern.h>, which pulls sys/rbtree.h and
+                              * collides with exec_rbtree_netbsd.h (that is why the
+                              * rss read stays a dedicated-TU follow-up). */
 #include <sys/kauth.h>     /* kauth_cred_get, kauth_authorize_generic (Phase F) */
 #include <sys/errno.h>     /* EWOULDBLOCK, EINTR, ERESTART (Phase G cv timeout) */
 #include <sys/atomic.h>    /* membar_producer / membar_consumer (vms-d61) */
@@ -271,17 +277,36 @@ exec_free(void *p)
  * authorization -- the analogue of Linux capable(CAP_SYS_ADMIN). The liveness
  * handle is the process id; exec_task_alive/pin resolve it with proc_find(9).
  *
- * COMPILE STATUS: vms_proctab.c is not yet in this module's SRCS (only
- * vms_eflag.c is), so these are TYPE-CHECKED but never called on NetBSD. The
- * identity/liveness/privilege ops carry their real mapping; the ACCOUNTING read
- * is a compile-safe documented stub -- it deliberately touches NO struct proc
- * internals (whose exact field spellings the proctab-on-NetBSD/VAX proof, rd
- * vms-9dc, will bind) and returns zeros, naming the real sources in the
- * comment. That is the "stub that is clearly a real mapping" the phase allows;
- * accounting is not part of the design record's shim sketch and is never
- * fabricated on a live path. */
+ * ACCOUNTING (rd vms-6cac, epic vms-f62). vms_proctab.c IS in this module's
+ * SRCS, so SHOW SYSTEM / $GETJPI reach exec_task_read_acct on every VAX row.
+ * The read is now a REAL bind: exec_task_pin snapshots the pinned proc's CPU
+ * time (calcru), page faults (p_ru.ru_minflt+ru_majflt) and start wall time
+ * (p_start) under proc_lock -> p_lock and sets the matching has_* flags, so
+ * fill_proc_acct lights the VMS_PI_V_CPUTIM/PAGEFLTS/LOGINTIM columns. The
+ * resident-set count (p_vmspace->vm_rssize -> "Pages") stays a flagged follow-up
+ * because vm_rssize needs <uvm/uvm_extern.h>, which pulls sys/rbtree.h and
+ * collides with exec_rbtree_netbsd.h in this shared header (a dedicated uvm-only
+ * TU is required, as for vms_lnm_arena_netbsd.c); until then has_rss stays 0 and
+ * the column is honestly OMITTED, never a fabricated zero (INV-6). */
 typedef struct { pid_t pid; } exec_task_ref_t;  /* PCB pid_ref: the process id */
-struct exec_task_pin;                            /* opaque pinned-proc handle */
+
+/*
+ * The pinned-proc handle is a SNAPSHOT of the accounting captured at pin time,
+ * no longer an alias of struct proc. calcru() KASSERTs p_lock owned and the read
+ * runs after vms_proc_hash_lock is dropped on a handle this backend does not
+ * ref-hold, so exec_task_pin reads the values while the proc is provably alive
+ * and stashes them here; exec_task_read_acct copies them out later (rd vms-6cac).
+ */
+struct exec_task_pin {
+	uint64_t cpu_ns;         /* user+system CPU time, ns (has_cpu) */
+	uint64_t page_faults;    /* ru_minflt + ru_majflt (has_faults) */
+	uint64_t create_wall_ns; /* p_start wall time, ns since Unix epoch (has_create) */
+	uint64_t rss_pages;      /* resident pages (has_rss; 0 until the uvm-TU bind) */
+	int      has_cpu;
+	int      has_faults;
+	int      has_create;
+	int      has_rss;
+};
 typedef struct exec_task_pin exec_task_pin_t;
 
 static __inline int
@@ -334,16 +359,69 @@ static __inline exec_task_pin_t *
 exec_task_pin(exec_task_ref_t *ref)
 {
 	exec_task_pin_t *pin;
+	struct proc *p;
 
 	if (ref == NULL)
 		return NULL;
-	/* Same proc_lock(9) contract as exec_task_alive: the lookup MUST run
-	 * under proc_lock. The accounting read (exec_task_read_acct) is a
-	 * documented zero-stub that never dereferences this handle, so no proc
-	 * reference is carried past the lookup yet (vms-9dc will take one); the
-	 * cast keeps the handle opaque. */
+	/*
+	 * Allocate the snapshot BEFORE proc_lock. exec_task_pin runs under the
+	 * caller's vms_proc_hash_lock and MUST NOT sleep (vms_proctab.c), so use the
+	 * atomic (KM_NOSLEEP) allocator; a NULL here degrades to honest omission
+	 * (exec_task_read_acct sees NULL -> all has_*=0), never a fabricated zero.
+	 */
+	pin = exec_zalloc_atomic(sizeof(*pin));
+	if (pin == NULL)
+		return NULL;
+	/*
+	 * Snapshot the real accounting while the proc is provably alive. proc_lock
+	 * -> p_lock is the NetBSD lock order; the caller already holds
+	 * vms_proc_hash_lock, so the full nesting is hash_lock -> proc_lock ->
+	 * p_lock, a clean deepening of the proc_lock lookup exec_task_alive/pin
+	 * already did. calcru() KASSERTs p_lock owned and mutates the proc, so the
+	 * read MUST run here, not after the locks drop -- that seam is exactly what
+	 * this bind closes (rd vms-6cac/vms-f62). Field spellings verified against
+	 * the vendored NetBSD headers (sys/resourcevar.h, sys/resource.h).
+	 */
 	mutex_enter(&proc_lock);
-	pin = (exec_task_pin_t *)proc_find(ref->pid);
+	p = proc_find(ref->pid);
+	if (p != NULL && p->p_stats != NULL) {
+		struct rusage ru;
+
+		/*
+		 * Replicate NetBSD's getrusage(RUSAGE_SELF) aggregation
+		 * (kern_resource.c getrusage1): p_ru holds rusage accumulated from
+		 * ALREADY-EXITED LWPs only; calcru() overlays the real total CPU time,
+		 * and rulwps() adds the RUNNING LWPs' l_ru. This is essential for the
+		 * fault count: page faults are tallied per-LWP (uvm_fault.c does
+		 * curlwp->l_ru.ru_minflt++), so p_ru.ru_minflt alone reads ~0 for a live
+		 * process -- rulwps() is what rolls in the live counts. calcru() and
+		 * rulwps() both KASSERT p_lock owned (which we hold); rulwps/ruadd are
+		 * declared in <sys/resourcevar.h>.
+		 */
+		mutex_enter(p->p_lock);
+		memcpy(&ru, &p->p_stats->p_ru, sizeof(ru));
+		calcru(p, &ru.ru_utime, &ru.ru_stime, NULL, NULL);
+		rulwps(p, &ru);
+		pin->create_wall_ns =
+		    (uint64_t)p->p_stats->p_start.tv_sec * 1000000000ULL
+		    + (uint64_t)p->p_stats->p_start.tv_usec * 1000ULL;
+		mutex_exit(p->p_lock);
+
+		pin->cpu_ns = ((uint64_t)ru.ru_utime.tv_sec + (uint64_t)ru.ru_stime.tv_sec)
+		                  * 1000000000ULL
+		            + ((uint64_t)ru.ru_utime.tv_usec + (uint64_t)ru.ru_stime.tv_usec)
+		                  * 1000ULL;
+		pin->has_cpu = 1;
+		pin->page_faults = (uint64_t)ru.ru_minflt + (uint64_t)ru.ru_majflt;
+		pin->has_faults = 1;
+		pin->has_create = 1;
+	}
+	/*
+	 * p == NULL: the process exited between the hash snapshot and here -- leave
+	 * every has_*=0 so fill_proc_acct blanks its columns (honest omission), not a
+	 * fabricated zero. rss_pages/has_rss also stay 0: p_vmspace->vm_rssize needs
+	 * <uvm/uvm_extern.h> (rbtree collision -> dedicated-TU follow-up, rd vms-6cac).
+	 */
 	mutex_exit(&proc_lock);
 	return pin;
 }
@@ -352,50 +430,37 @@ static __inline void
 exec_task_read_acct(exec_task_pin_t *pin, struct exec_proc_acct *out)
 {
 	/*
-	 * HONEST OMISSION UNTIL THE HOST-TASK READ IS WIRED (rd vms-f62).
-	 *
-	 * Every has_* flag is left 0, so fill_proc_acct (src/kernel-core/
-	 * vms_proctab.c) sets NO VMS_PI_V_* bit and the VAX SHOW SYSTEM row
-	 * BLANKS its CPU/Page-flts/Pages columns rather than printing the zeros
-	 * these scalars hold. That closes the vms-f62 root cause: fill_proc_acct
-	 * used to set those valid bits UNCONDITIONALLY, so this zero-fill was
-	 * rendered on the VAX pane as a fabricated "00:00:00.00 / 0 / 0" -- the
-	 * exact false-zero lie-of-absence INV-6 forbids. (The stub's old "never
-	 * reached today" note was stale: vms_proctab.c is in this module's SRCS,
-	 * so SHOW SYSTEM/$GETJPI reach this on every VAX row.)
-	 *
-	 * The follow-up bind (a flagged vms-f62 item) reads these from the real
-	 * NetBSD sources on the pinned proc and flips the flags on. Field
-	 * spellings are already verified against the NetBSD headers:
-	 *   cpu_ns        <- calcru()/p_rusage user+system time  (set has_cpu)
-	 *   page_faults   <- p_stats->p_ru.ru_minflt + ru_majflt (set has_faults)
-	 *   create_wall_ns<- p_stats->p_start (a struct timeval, wall) (set has_create)
-	 *   rss_pages     <- p_vmspace->vm_rssize                 (set has_rss)
-	 * The seam constraint that makes this its own item, not a one-liner here:
-	 * exec_task_read_acct runs AFTER vms_proc_hash_lock is dropped on a handle
-	 * this backend does not yet ref-hold, and calcru() KASSERTs p->p_lock is
-	 * owned and mutates the proc -- so the real read needs a proc reference
-	 * carried across the pin/read seam (or a snapshot taken under proc_lock at
-	 * pin time) before it can safely deref the proc. That is executive/kernel
-	 * work that must be proven on the VAX rail under Rule 6, not guessed here.
-	 * Until then, a compile-safe zero-fill with all flags 0 (no struct proc
-	 * deref, so no field-spelling risk on the live build).
+	 * Copy the snapshot exec_task_pin captured under proc_lock -> p_lock. A NULL
+	 * pin (atomic allocation failed, or the proc had already exited at pin time)
+	 * yields all-zero with every has_*=0, so fill_proc_acct (src/kernel-core/
+	 * vms_proctab.c) blanks the VAX SHOW SYSTEM CPU/Page-flts/Pages columns
+	 * rather than printing a fabricated 0 -- the INV-6 honest omission #887
+	 * established, now backed by the real bind (rd vms-6cac). has_rss is still 0
+	 * (the uvm rss read is a dedicated-TU follow-up), so "Pages" stays omitted.
 	 */
-	(void)pin;
-	out->cpu_ns = 0;
-	out->has_cpu = 0;
-	out->page_faults = 0;
-	out->has_faults = 0;
-	out->create_wall_ns = 0;
-	out->has_create = 0;
-	out->rss_pages = 0;
-	out->has_rss = 0;
+	if (pin == NULL) {
+		memset(out, 0, sizeof(*out));
+		return;
+	}
+	out->cpu_ns = pin->cpu_ns;
+	out->has_cpu = pin->has_cpu;
+	out->page_faults = pin->page_faults;
+	out->has_faults = pin->has_faults;
+	out->create_wall_ns = pin->create_wall_ns;
+	out->has_create = pin->has_create;
+	out->rss_pages = pin->rss_pages;
+	out->has_rss = pin->has_rss;
 }
 
 static __inline void
 exec_task_unpin(exec_task_pin_t *pin)
 {
-	(void)pin;   /* vms-9dc: release the proc reference taken by exec_task_pin */
+	/*
+	 * Free the snapshot exec_task_pin allocated (rd vms-6cac). No proc reference
+	 * is held -- the accounting was captured under proc_lock at pin time -- so
+	 * there is nothing else to drop. exec_free tolerates NULL.
+	 */
+	exec_free(pin);
 }
 
 /* ---- 6. RCU-lite deferred reclaim (Phase F; see exec_kbackend.h) ----

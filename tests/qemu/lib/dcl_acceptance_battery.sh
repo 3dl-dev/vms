@@ -316,12 +316,15 @@ run_dcl_acceptance_battery() {
     # --- SHOW SYSTEM (real processes + distinct-pid set + honest accounting) ---
     # The golden the SHOW-SYSTEM-accounting work (vms-f62/#887) defers to, grounded
     # on the OpenVMS VAX V7.3 oracle (docs/oracle/vax73-show-system-process.md).
-    # This asserts the HONEST-OMISSION INTERIM: the executive-sourced facts that
-    # are real today, and the honest omissions #887 makes (INV-6) -- NOT fabricated
-    # values. It OMITS CPU time / Page flts / Pages (real on x86_64, honestly blank
-    # on VAX until the accounting bind vms-6cac lands -- asserting either would fail
-    # one arch), and asserts NO State/Pri column (the executive holds no VMS
-    # scheduler state; those arrive with vms-6cac, and the golden updates then).
+    # This asserts the executive-sourced facts that are real: distinct pids (#883),
+    # real Uptime (#887), and -- now that vms-6cac wired the VAX host-task accounting
+    # -- real CPU time (calcru) and Page faults (rulwps live-LWP aggregation), the
+    # columns #887 had honestly blanked on VAX. Those two are ARCH-COMMON: x86_64/
+    # Alpha sourced them all along, VAX now does too. It does NOT assert the "Pages"
+    # (rss) column -- real on x86_64/Alpha, still honestly omitted on VAX until the
+    # uvm-TU bind (vms-601), so asserting it either way would fail one arch. It
+    # asserts NO State/Pri column on ANY arch: the executive holds no VMS scheduler
+    # state, and fabricating one is the exact tell INV-6 forbids.
     run_cmd 'SHOW SYSTEM'
     must_have  "$SEG" 'SYSTEM' "SHOW SYSTEM: lists the SYSTEM process"
     must_have  "$SEG" 'JOB_CONTROL' "SHOW SYSTEM [vms-f62]: lists the JOB_CONTROL process (the boot's job controller)"
@@ -340,10 +343,42 @@ run_dcl_acceptance_battery() {
     # Linux-ism that printed "Uptime  ---" on the VAX substrate.
     must_match    "$SEG" 'Uptime[[:space:]]+[0-9]' "SHOW SYSTEM [vms-f62]: reports a real Uptime value (not the '---'/blank Linux-ism)"
     must_not_have "$SEG" 'Uptime  ---' "SHOW SYSTEM [vms-f62]: Uptime is not the old '---' (/proc/uptime absent on the substrate)"
+    # vms-6cac: SHOW SYSTEM now renders REAL accounting -- the CPU/Page-flts columns
+    # #887 honestly blanked on VAX are wired to the NetBSD host task via the
+    # getrusage(RUSAGE_SELF) aggregation (calcru + rulwps). ARCH-COMMON (x86_64/Alpha
+    # sourced them already; VAX now does too).
+    # (a) the CPU column renders the VMS HH:MM:SS.CC format -- the centiseconds
+    #     distinguish it from the Uptime figure above (which has none).
+    must_match "$SEG" '[0-9]+ [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{2}' "SHOW SYSTEM [vms-6cac]: CPU column renders real VMS CPU time (calcru bind)"
+    # (b) the SYSTEM login -- which has run this whole battery by now -- shows a
+    #     NON-ZERO CPU time and a NON-ZERO Page-fault count. This is the real-vs-
+    #     fabricated proof: a fabricated read shows 00:00:00.00 / 0; calcru+rulwps
+    #     show the genuine cost. (rulwps is essential -- page faults tally per-LWP in
+    #     l_ru, so p_ru alone reads ~0 for a live process.)
+    local SYS_ROW SYS_FLTS
+    # The SYSTEM *process row* -- anchored on its 8-hex VMS pid so the match is the
+    # data row (e.g. "00000068 SYSTEM ..."), NOT the "SHOW SYSTEM" command echo,
+    # which also contains the word SYSTEM.
+    SYS_ROW=$(printf '%s\n' "$SEG" | grep -iE '[0-9A-Fa-f]{8}[[:space:]]+SYSTEM([^A-Za-z_]|$)' | grep -viE 'JOB_CONTROL' | head -1)
+    if printf '%s' "$SYS_ROW" | grep -qE '[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{2}' && ! printf '%s' "$SYS_ROW" | grep -qE ' 00:00:00\.00'; then
+        ok "SHOW SYSTEM [vms-6cac]: the SYSTEM process shows NON-ZERO CPU time -- a real calcru read, not a fabricated 00:00:00.00 [$SYS_ROW]"
+    else
+        bad "SHOW SYSTEM [vms-6cac]: the SYSTEM process CPU is zero/blank -- accounting not wired [row='$SYS_ROW']"
+    fi
+    # faults = the integer immediately AFTER the CPU time. Anchor on the CPU field,
+    # NOT the trailing number: on x86_64/Alpha a Pages number follows faults, so the
+    # trailing number there is Pages (VAX omits Pages, so faults IS its trailing one).
+    SYS_FLTS=$(printf '%s' "$SYS_ROW" | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{2}[[:space:]]+[0-9]+' | grep -oE '[0-9]+$')
+    if [ -n "$SYS_FLTS" ] && [ "$SYS_FLTS" -gt 0 ] 2>/dev/null; then
+        ok "SHOW SYSTEM [vms-6cac]: SYSTEM shows a NON-ZERO Page-fault count ($SYS_FLTS) -- rulwps live-LWP aggregation (not p_ru's dead-LWP ~0)"
+    else
+        bad "SHOW SYSTEM [vms-6cac]: Page-flts zero/blank for SYSTEM [row='$SYS_ROW'] -- faults not live-aggregated"
+    fi
     # vms-f62 honest omission (INV-6): the executive has no VMS scheduler state, so
-    # SHOW SYSTEM prints NO State column -- fabricating one would be the same tell
-    # the accounting de-fab kills. Real State/Pri arrive with the scheduler bind (vms-6cac).
-    must_not_have "$SEG" 'State' "SHOW SYSTEM [vms-f62]: no fabricated State column (executive holds no VMS scheduler state -- honest omission until vms-6cac)"
+    # SHOW SYSTEM prints NO State/Pri column on ANY arch -- fabricating one is the
+    # same tell the accounting de-fab kills. (State/Pri are NOT in vms-6cac's scope:
+    # it wired accounting, not a scheduler; they stay omitted, not "coming later".)
+    must_not_have "$SEG" 'State' "SHOW SYSTEM [vms-f62]: no fabricated State column (executive holds no VMS scheduler state -- permanent honest omission)"
     negctl     "$SEG" 'SHOW SYSTEM' "SHOW SYSTEM"
 
     # --- F$PID reads the SAME executive process table as SHOW SYSTEM (vms-050) --

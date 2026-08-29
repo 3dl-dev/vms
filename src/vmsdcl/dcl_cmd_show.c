@@ -1534,15 +1534,18 @@ static int cmd_show_symbol(struct dcl_command *cmd)
 }
 
 /*
- * SHOW VERIFY - Display verification state.
+ * SHOW VERIFY does NOT exist in OpenVMS (vms-050 UX-fidelity, oracle-driven).
+ *
+ * Captured verbatim on the reference labs 2026-08-29:
+ *   OpenVMS VAX V7.3  (lab-2 vaxlab-0)   -- SHOW VERIFY -> %DCL-W-IVKEYW
+ *   OpenVMS Alpha V8.4 (lab-Alpha alphalab-0) -- SHOW VERIFY -> %DCL-W-IVKEYW
+ * On real VMS the DCL SHOW command has no VERIFY keyword: it is unrecognized
+ * and falls through to the IVKEYW message below, exactly as VERSION does.
+ * The verify state is instead read with the F$VERIFY() lexical (SET VERIFY
+ * -> F$VERIFY()=1, SET NOVERIFY -> F$VERIFY()=0, confirmed on both oracles).
+ * A former cmd_show_verify() that printed "VERIFY = ON/OFF" was a fabrication
+ * and was removed; do not re-add it. Golden: tests/qemu/golden/show-*.
  */
-static int cmd_show_verify(struct dcl_command *cmd)
-{
-    (void)cmd;
-    struct dcl_context *ctx = dcl_get_context();
-    printf("  VERIFY = %s\n", ctx->verify ? "ON" : "OFF");
-    return SS$_NORMAL;
-}
 
 /*
  * SHOW PROTECTION - Display process default protection.
@@ -3268,8 +3271,10 @@ int cmd_show(struct dcl_command *cmd)
         return cmd_show_users(cmd);
     if (dcl_match_command(subcmd, "SYMBOL", 3))
         return cmd_show_symbol(cmd);
-    if (dcl_match_command(subcmd, "VERIFY", 3))
-        return cmd_show_verify(cmd);
+    /* No VERIFY / VERSION keyword: OpenVMS has neither (oracle-confirmed on
+     * VAX V7.3 and Alpha V8.4, vms-050). They fall through to IVKEYW below --
+     * which also makes the abbreviation SH VER unrecognized on real VMS,
+     * rather than resolving to a (non-existent) SHOW VERIFY. */
     if (dcl_match_command(subcmd, "PROTECTION", 3))
         return cmd_show_protection(cmd);
     /* DEVICES is a VMS synonym for DEVICE (vms-9344a): both the singular and
@@ -3314,6 +3319,26 @@ int cmd_show(struct dcl_command *cmd)
     if (dcl_match_command(subcmd, "INTRUSION", 3))
         return cmd_show_intrusion(cmd);
 
-    dcl_error("DCL", 2, "IVKEYW", "unrecognized SHOW keyword - \\%s\\", subcmd);
+    /* Oracle-faithful IVKEYW (vms-050). Verbatim on VAX V7.3 and Alpha V8.4:
+     *
+     *   %DCL-W-IVKEYW, unrecognized keyword - check validity and spelling
+     *    \VERSION\
+     *
+     * Fidelity points measured against both labs, each a fix vs the prior text
+     * "%DCL-E-IVKEYW, unrecognized SHOW keyword - \version\":
+     *   - severity is WARNING (-W-), not ERROR (-E-);
+     *   - the text is the generic "unrecognized keyword - check validity and
+     *     spelling" (no "SHOW"); the offending keyword is not in this line;
+     *   - the keyword appears UPCASED on a continuation line as " \KW\", even
+     *     when the user typed it in lower case ("show version" -> \VERSION\).
+     */
+    char kw[256];
+    for (size_t i = 0; i + 1 < sizeof(kw); i++) {
+        kw[i] = (char)toupper((unsigned char)subcmd[i]);
+        if (subcmd[i] == '\0') break;
+    }
+    kw[sizeof(kw) - 1] = '\0';
+    dcl_error("DCL", 0, "IVKEYW",
+              "unrecognized keyword - check validity and spelling\n \\%s\\", kw);
     return SS$_IVKEYW;
 }

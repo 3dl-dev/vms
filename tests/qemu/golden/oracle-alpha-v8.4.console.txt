@@ -1,0 +1,38 @@
+OpenVMS Alpha V8.4 -- verbatim console capture (clean-room Rule 8: display
+observation only). Oracle: lab-Alpha alphalab-0 (tests/lab-alpha/), 2026-08-29.
+SYSTEM login on OPA0:. Surfaces for epic vms-050 UX-fidelity. The 64-bit oracle
+AGREES with the VAX V7.3 32-bit oracle on every surface below.
+======================================================================
+
+   Welcome to OpenVMS (TM) Alpha Operating System, Version V8.4
+    Last interactive login on Friday, 28-AUG-2026 18:49:02.15
+
+$ SHOW VERSION
+%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling
+ \VERSION\
+$ SH VER
+%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling
+ \VER\
+$ SHOW VERIFY
+%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling
+ \VERIFY\
+$ SH VERI
+%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling
+ \VERI\
+$ SHOW TIME
+  29-AUG-2026 00:58:19
+$ SHOW USERS
+      OpenVMS User Processes at 29-AUG-2026 00:58:21.67
+    Total number of users = 1,  number of processes = 1
+
+ Username     Interactive  Subprocess   Batch
+ SYSTEM            1
+$ show version                              ! lower case -> keyword UPCASED in echo
+%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling
+ \VERSION\
+
+! Verify state -- read with a lexical, there is no SHOW VERIFY:
+$ SET VERIFY    $ X = F$VERIFY()            ! X = 1
+$ SET NOVERIFY  $ Y = F$VERIFY()            ! Y = 0
+$ SET NOVERIFY  ! F$ENVIRONMENT("VERIFY_PROCEDURE") -> FALSE
+$ SET VERIFY    ! F$ENVIRONMENT("VERIFY_PROCEDURE") -> TRUE

@@ -1,0 +1,28 @@
+OpenVMS VAX V7.3 -- verbatim console capture (clean-room Rule 8: display
+observation only). Oracle: lab-2 vaxlab-0 (tests/lab/), 2026-08-29.
+SYSTEM login on OPA0:. Surfaces for epic vms-050 UX-fidelity.
+======================================================================
+
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAX1
+    Last interactive login on Friday, 28-AUG-2026 01:02:...
+
+$ SHOW VERSION
+%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling
+ \VERSION\
+$ SH VER
+%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling
+ \VER\
+$ SHOW VERIFY
+%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling
+ \VERIFY\
+$ SH VERI
+%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling
+ \VERI\
+$ SHOW TIME
+  29-AUG-2026 00:56:01
+$ SHOW USERS
+      OpenVMS User Processes at 29-AUG-2026 00:56:05.42
+    Total number of users = 1,  number of processes = 1
+
+ Username  Node     Interactive  Subprocess   Batch
+ SYSTEM     VAX1            1

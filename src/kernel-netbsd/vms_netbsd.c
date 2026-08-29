@@ -1205,6 +1205,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_GETLKI:
 	case VMS_IOCTL_GET_RESMASTER:
 	case VMS_IOCTL_DLM_MEMBER_DEPART:
+	case VMS_IOCTL_DLM_GET_GRANTED:
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -1223,6 +1224,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_get_resmaster(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_DLM_MEMBER_DEPART:
 			r = vms_ioctl_dlm_member_depart(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_DLM_GET_GRANTED:
+			r = vms_ioctl_dlm_get_granted(proc, (unsigned long)uarg); break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}

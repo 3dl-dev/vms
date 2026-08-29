@@ -454,6 +454,16 @@ jobs:
               - 'tests/qemu/run_dlm_harness_h10.sh'
               - 'tests/cluster/two-ovmx/mk_sysgen_scratch.py'
               - 'tests/cluster/two-ovmx/verdict.sh'
+              # H10b (rd vms-dca9, THE REMASTER LOCK REBUILD): node A holds a
+              # cross-node lock on RES_C (mastered by C); C departs gracefully;
+              # A re-registers the SAME lock -- its REAL req_lkid/mode/req_csid --
+              # on RES_C's new directory master (a TARGETED SCS_DLM_OP_REBUILD,
+              # peer_by_csid), which reconstructs it DIRECTLY into res->granted
+              # (vms_lock_dlm_xnode_rebuild) and VALUE-VERIFIES the readback
+              # (VMS_IOCTL_DLM_GET_GRANTED) against what A sent.
+              - 'tests/qemu/Dockerfile.dlm-harness-h10b'
+              - 'tests/qemu/init_dlm_h10b.sh'
+              - 'tests/qemu/run_dlm_harness_h10b.sh'
 
       - name: Decide (force every output true on non-PR events)
         id: decide
@@ -3147,6 +3157,83 @@ jobs:
         with:
           name: dlm-harness-h10-artifacts
           path: h10out/
+          if-no-files-found: ignore
+
+  # -----------------------------------------------------------------------
+  # Job 2c: DLM Harness H10b (rd vms-dca9, DLM epic vms-7fa rung H10b: THE
+  # REMASTER LOCK REBUILD). Layers on H10a's graceful-departure directory
+  # ingress with the same THREE real-executive QEMU nodes A/B/C, the same
+  # static 3-member DLM vector, and the same graceful class-0x04 self-
+  # departure of node C -- but node A additionally HOLDS a cross-node lock on
+  # RES_C (mastered by C, a targeted $ENQ EX -- SCSD-I-DLMHOLDOK) BEFORE C
+  # departs. When C departs, A re-registers that SAME lock -- its REAL
+  # req_lkid/mode/req_csid, read fresh via GETLKI, never assumed -- on RES_C's
+  # new directory master (a TARGETED SCS_DLM_OP_REBUILD, peer_by_csid, distinct
+  # from every earlier DLM sender's untargeted per-peer send). The new master
+  # (B) reconstructs the lock DIRECTLY into res->granted from A's real state
+  # (vms_lock_dlm_xnode_rebuild, src/kernel-core/vms_lock.c) and reads it back
+  # via VMS_IOCTL_DLM_GET_GRANTED (SCSD-I-DLMREBUILT). H10b PASS iff all three
+  # joined, A's pre-departure hold was genuinely granted, both survivors shrank
+  # membership (the H10a foundation), A sent the targeted rebuild to the
+  # SURVIVOR (never back to the departed node), B's readback is present with
+  # found=1, and a THREE-WAY value equality holds: A's sent lkid/mode ==
+  # B's read-back lkid/mode, and B's read-back holder_csid == A's own CSID.
+  # INV-6: every value is the REAL executive read; a zero/NL rebuild is refused
+  # by the executive itself, so an EX readback proves a genuine reconstruction.
+  # -----------------------------------------------------------------------
+  dlm-harness-h10b:
+    name: DLM Harness H10b (3-node; a cross-node lock survives its master's departure via a remaster rebuild, QEMU)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.dlm_harness == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build DLM harness H10b image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu/Dockerfile.dlm-harness-h10b
+          push: false
+          load: true
+          tags: ovmx-dlm-h10b:latest
+          cache-from: type=gha,scope=dlm-harness-h10b
+          cache-to: type=gha,mode=max,scope=dlm-harness-h10b
+
+      - name: Boot THREE QEMU nodes, hold + depart + remaster-rebuild, verdict the value equality
+        run: |
+          set +e
+          KVM=""
+          [ -e /dev/kvm ] && KVM="--device /dev/kvm"
+          mkdir -p "$PWD/h10bout"
+          RAW=$(docker run --rm $KVM -v "$PWD/h10bout:/out" ovmx-dlm-h10b:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: DLM harness H10b exited nonzero"
+            exit 1
+          fi
+          if printf '%s\n' "$OUTPUT" | grep -qE '^  DLM HARNESS H10b PASSED'; then
+            echo "PASS: node A's cross-node lock on RES_C survived node C's graceful departure -- it was re-registered on the new master B and value-verified three-way."
+          else
+            echo "FAIL: H10b verdict 'DLM HARNESS H10b PASSED' not found."
+            printf '%s\n' "$OUTPUT" | grep -E 'verdict inputs|VAXCLMEMBER|DLMHOLDOK|DLMDEPART|DLMREBUILDSENT|DLMREBUILT|highest join rung|H10B-NODE|FAIL:' || true
+            exit 1
+          fi
+
+      - name: Upload H10b pcap + node logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dlm-harness-h10b-artifacts
+          path: h10bout/
           if-no-files-found: ignore
 
   # -----------------------------------------------------------------------

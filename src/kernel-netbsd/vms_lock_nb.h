@@ -179,6 +179,10 @@ struct vms_resmaster_args {
 #define VMS_DLM_OP_GRANT    2u   /* status response       <- master  */
 #define VMS_DLM_OP_DEQ      3u   /* dequeue request       -> master  */
 #define VMS_DLM_OP_BLKAST   4u   /* blocking-AST notify   <- master  */
+#define VMS_DLM_OP_REBUILD  5u   /* remaster lock-rebuild -> new master (H10b,
+                                  * rd vms-dca9) -- mirror of vms_ioctl.h; the
+                                  * shared vms_lock.c dispatch references it on
+                                  * BOTH backends, so it MUST exist here too. */
 
 struct vms_dlm_xnode_args {
 	uint32_t op;                /* in: VMS_DLM_OP_* */
@@ -228,6 +232,19 @@ struct vms_dlm_depart_args {
 	uint32_t status;          /* return: SS$_ status */
 };
 
+/* $DLM granted-lock readback (rd vms-dca9, DLM rung H10b). MUST match
+ * src/kernel/vms_ioctl.h byte-for-byte -- the value-verify readback for a
+ * rebuilt cross-node lock (holder CSID + its own handle + granted mode). */
+struct vms_dlm_granted_args {
+	char     resnam[32];        /* in: resource name */
+	uint32_t found;             /* return: 1 iff a REMOTE-held granted lock exists */
+	uint32_t n_granted;         /* return: total granted locks on the resource */
+	uint32_t holder_csid;       /* return: first remote holder's CSID (req_csid) */
+	uint32_t holder_req_lkid;   /* return: that holder's own lock handle (req_lkid) */
+	uint32_t granted_mode;      /* return: that lock's granted mode */
+	uint32_t status;            /* return: SS$_ status */
+};
+
 /* ================================================================
  * Request numbers. All five are _IOWR carrying the SAME structs and NR bytes as
  * src/kernel/vms_ioctl.h (0x30-0x34, magic 'V'), so their command words are
@@ -241,6 +258,7 @@ struct vms_dlm_depart_args {
 #define VMS_IOCTL_GET_RESMASTER _IOWR(VMS_LOCK_IOC_MAGIC, 0x34, struct vms_resmaster_args)
 #define VMS_IOCTL_DLM_XNODE     _IOWR(VMS_LOCK_IOC_MAGIC, 0x35, struct vms_dlm_xnode_args)
 #define VMS_IOCTL_DLM_MEMBER_DEPART _IOWR(VMS_LOCK_IOC_MAGIC, 0x36, struct vms_dlm_depart_args)
+#define VMS_IOCTL_DLM_GET_GRANTED   _IOWR(VMS_LOCK_IOC_MAGIC, 0x37, struct vms_dlm_granted_args)
 
 /*
  * Freeze the shared layouts -- see the other _nb.h contracts' identical asserts:
@@ -260,5 +278,7 @@ _Static_assert(sizeof(struct vms_dlm_xnode_args) == 120,
                "vms_dlm_xnode_args changed size -- VMS_IOCTL_DLM_XNODE ABI break");
 _Static_assert(sizeof(struct vms_dlm_depart_args) == 16,
                "vms_dlm_depart_args changed size -- VMS_IOCTL_DLM_MEMBER_DEPART ABI break");
+_Static_assert(sizeof(struct vms_dlm_granted_args) == 56,
+               "vms_dlm_granted_args changed size -- VMS_IOCTL_DLM_GET_GRANTED ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

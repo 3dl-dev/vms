@@ -1622,6 +1622,61 @@ long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg)
     return 0;
 }
 
+/*
+ * vms_ioctl_dlm_get_granted - $DLM granted-lock readback (rd vms-dca9, H10b).
+ * Report the FIRST remote-held granted lock on a resource (req_csid != 0) -- its
+ * holder CSID, the holder's OWN lock handle (req_lkid) and the granted mode -- so
+ * a test can VALUE-VERIFY a rebuilt cross-node lock EQUALS the one the holder
+ * really held pre-departure, not merely that n_granted rose. INV-6: reports the
+ * REAL res->granted state; found=0 (fields 0) when no remote-held lock exists.
+ */
+long vms_ioctl_dlm_get_granted(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_dlm_granted_args args;
+    struct vms_lock_resource *res;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    args.resnam[sizeof(args.resnam) - 1] = '\0';
+    if (args.resnam[0] == '\0') {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+
+    exec_lock(&vms_res_hash_lock);
+    res = resource_find(args.resnam);
+    if (res) {
+        struct vms_lock_entry *granted;
+        uint32_t n = 0;
+
+        exec_lock(&res->lock);
+        exec_list_for_each_entry(granted, &res->granted, res_granted) {
+            n++;
+            /* First REMOTE-held granted lock (held FOR a peer, req_csid != 0) --
+             * the rebuilt cross-node lock the H10b harness value-verifies. */
+            if (granted->req_csid != 0 && args.found == 0) {
+                args.found = 1;
+                args.holder_csid = granted->req_csid;
+                args.holder_req_lkid = granted->req_lkid;
+                args.granted_mode = granted->granted_mode;
+            }
+        }
+        args.n_granted = n;
+        exec_unlock(&res->lock);
+    }
+    exec_unlock(&vms_res_hash_lock);
+
+    args.status = SS__NORMAL;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
 long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_resmaster_args args;
@@ -2043,6 +2098,62 @@ static int vms_lock_dlm_origin_getlki(uint32_t lkid, uint32_t *granted_mode,
 }
 
 /*
+ * vms_lock_dlm_xnode_rebuild - remaster lock reconstruction (rd vms-dca9, rung
+ * H10b). A surviving holder (req->req_csid) re-registers its cross-node lock on
+ * THIS node -- the NEW master, after the old master gracefully departed and the
+ * directory re-resolved the resource here. RECONSTRUCT the holder's EXACT prior
+ * grant DIRECTLY into res->granted -- like vms_lock_dlm_xnode_deq manipulates the
+ * queues directly, NOT through the enqueue/grant core: re-running the core would
+ * re-derive a grant against this node's (empty) queue and lock_compatible rather
+ * than preserve the holder's REAL pre-departure lock. The mode (req->lkmode), the
+ * holder's identity (req->req_csid) and its own handle (req->req_lkid) are the
+ * REAL values from the holder's origin record (it read them via GETLKI before
+ * pushing this REBUILD), transported over SCS -- never a fabricated or defaulted
+ * lock (INV-6). This node becomes the resource's master. Returns the new master's
+ * handle for the rebuilt lock in req->master_lkid.
+ */
+static uint32_t vms_lock_dlm_xnode_rebuild(struct vms_proc *proc,
+                                           struct vms_dlm_xnode_args *req)
+{
+    struct vms_lock_resource *res;
+    struct vms_lock_entry *lock;
+
+    /* A rebuild MUST name a real remote holder + its own handle + a grant mode;
+     * a zero/NL rebuild would fabricate a lock, which INV-6 forbids. */
+    if (req->req_csid == 0 || req->req_lkid == 0 || req->lkmode == LCK_K_NLMODE)
+        return SS__BADPARAM;
+
+    res = resource_find_or_create(req->resnam);   /* +1 refcount, held by lock */
+    if (!res)
+        return SS__INSFMEM;
+
+    lock = exec_zalloc(sizeof(struct vms_lock_entry));
+    if (!lock) {
+        resource_release(res);
+        return SS__INSFMEM;
+    }
+
+    lock->refcount = 1;
+    lock->granted_mode = req->lkmode;      /* the mode the holder REALLY held */
+    lock->requested_mode = req->lkmode;
+    lock->resource = res;
+    lock->proc = proc;                     /* the delivering (scsd) proc */
+    lock->waiting = 0;
+    exec_cv_init(&lock->wait_wq);
+    lock->req_csid = req->req_csid;        /* held FOR this remote holder */
+    lock->req_lkid = req->req_lkid;        /* the holder's OWN handle */
+    lock_insert_id(lock);                  /* a fresh local lkid on the new master */
+
+    exec_lock(&res->lock);
+    res->master_csid = vms_local_csid;     /* this node is now the master */
+    exec_list_add_tail(&lock->res_granted, &res->granted);
+    exec_unlock(&res->lock);
+
+    req->master_lkid = lock->lkid;
+    return SS__NORMAL;
+}
+
+/*
  * vms_lock_dlm_xnode_dispatch - the cross-node DLM RECEIVE handler
  * (vms-94c transport; DLM epic vms-7fa).
  *
@@ -2184,6 +2295,15 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
          * SS$_UNSUPPORTED, never faked, when there is no holder record for the
          * named handle or it registered no blocking-AST routine (INV-6). */
         return vms_lock_dlm_xnode_blkast_recv(proc, req);
+    case VMS_DLM_OP_REBUILD:
+        /* REMASTER LOCK REBUILD (rd vms-dca9, rung H10b). A surviving holder
+         * re-registers its cross-node lock on THIS node -- the NEW master after
+         * the old master gracefully departed and the directory re-resolved here.
+         * Reconstruct the holder's REAL pre-departure grant DIRECTLY into
+         * res->granted (never re-derive it through the enqueue/grant core). */
+        if (req->resnam[0] == '\0')
+            return SS__BADPARAM;
+        return vms_lock_dlm_xnode_rebuild(proc, req);
     default:
         return SS__BADPARAM;
     }

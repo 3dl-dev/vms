@@ -827,6 +827,35 @@ uint32_t vms_kif_dlm_member_depart(uint32_t departed_csid,
     return args.status;
 }
 
+/*
+ * vms_kif_dlm_get_granted - read the first remote-held granted lock on a resource
+ * to value-verify a rebuilt cross-node lock (vms-dca9, DLM rung H10b). OVMX-UNWIRED
+ * (see the header): scsd issues VMS_IOCTL_DLM_GET_GRANTED directly; this wrapper
+ * exists so the readback is observable against a real /dev/vms.
+ */
+uint32_t vms_kif_dlm_get_granted(const char *resnam, uint32_t *out_found,
+                                 uint32_t *out_n_granted, uint32_t *out_holder_csid,
+                                 uint32_t *out_holder_req_lkid,
+                                 uint32_t *out_granted_mode)
+{
+    struct vms_dlm_granted_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    if (resnam) {
+        vms_strncpy(args.resnam, resnam, sizeof(args.resnam) - 1);
+        args.resnam[sizeof(args.resnam) - 1] = '\0';
+    }
+
+    KIF_CALL(VMS_IOCTL_DLM_GET_GRANTED, &args);
+
+    if (out_found)          *out_found = args.found;
+    if (out_n_granted)      *out_n_granted = args.n_granted;
+    if (out_holder_csid)    *out_holder_csid = args.holder_csid;
+    if (out_holder_req_lkid) *out_holder_req_lkid = args.holder_req_lkid;
+    if (out_granted_mode)   *out_granted_mode = args.granted_mode;
+    return args.status;
+}
+
 uint32_t vms_kif_dlm_xnode_blkast(uint32_t op, uint32_t lkmode,
                                   uint32_t req_lkid, uint32_t master_lkid,
                                   uint32_t req_csid, uint32_t master_csid,

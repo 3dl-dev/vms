@@ -202,6 +202,37 @@ run_dcl_acceptance_battery() {
     must_have     "$SEG" 'GETDVICLS=1' "F\$GETDVI DEVCLASS [vms-050]: DKA0: is DC\$_DISK (1) from the executive, not a name-substring guess"
     negctl        "$SEG" 'GETDVICLS' "F\$GETDVI DEVCLASS"
 
+    # --- F$GETQUI honours the caller's queue selection (vms-050) ------------
+    # NOTE: this battery runs under `set -u`, so every literal F$GETQUI inside a
+    # DOUBLE-quoted ok/bad description string is written F\$GETQUI -- an
+    # unescaped F$GETQUI would expand $GETQUI (unbound) and abort the battery.
+    # The single-quoted run_cmd DCL lines are unaffected.
+    #
+    # F$GETQUI's DISPLAY_QUEUE handler used to read real queue state BUT pin the
+    # queue name to a hardcoded "SYS$BATCH", discarding the caller's object-id --
+    # so a SYS$PRINT query answered "SYS$BATCH" and a bogus query answered
+    # "SYS$BATCH" too (a fabrication: SYS$BATCH's data reported as the requested
+    # queue). It now looks the requested queue up in the same vmsq state the
+    # SUBMIT/PRINT/SHOW QUEUE verbs read. OVMX has BOTH SYS$BATCH and SYS$PRINT,
+    # so the selection is observable on the live system: SYS$PRINT -> SYS$PRINT,
+    # SYS$BATCH -> SYS$BATCH, a nonexistent queue -> the empty value (never
+    # another queue's name). The value is bracketed ([GQxxx:...:]) so the
+    # assertion matches the OUTPUT line, not the echoed command. The absence half
+    # (mutation-proven) is tests/dcl/test_getqui_no_fabrication.sh.
+    run_cmd 'WRITE SYS$OUTPUT "[GQBATCH:" + F$GETQUI("DISPLAY_QUEUE","QUEUE_NAME","SYS$BATCH") + ":]"'
+    must_have     "$SEG" '[GQBATCH:SYS$BATCH:]' "F\$GETQUI [vms-050]: DISPLAY_QUEUE of SYS\$BATCH returns its own real name SYS\$BATCH"
+    negctl        "$SEG" 'GQBATCH' "F\$GETQUI(SYS\$BATCH)"
+
+    run_cmd 'WRITE SYS$OUTPUT "[GQPRINT:" + F$GETQUI("DISPLAY_QUEUE","QUEUE_NAME","SYS$PRINT") + ":]"'
+    must_have     "$SEG" '[GQPRINT:SYS$PRINT:]' "F\$GETQUI [vms-050]: DISPLAY_QUEUE of SYS\$PRINT returns SYS\$PRINT -- the caller's selection is HONOURED, not the old pinned SYS\$BATCH"
+    must_not_have "$SEG" '[GQPRINT:SYS$BATCH:]' "F\$GETQUI [vms-050]: a SYS\$PRINT query is NOT answered with SYS\$BATCH's data"
+    negctl        "$SEG" 'GQPRINT' "F\$GETQUI(SYS\$PRINT)"
+
+    run_cmd 'WRITE SYS$OUTPUT "[GQBOGUS:" + F$GETQUI("DISPLAY_QUEUE","QUEUE_NAME","BOGUS$NOSUCHQUE") + ":]"'
+    must_have     "$SEG" '[GQBOGUS::]' "F\$GETQUI [vms-050]: a nonexistent queue returns the honest empty value (NOT fabricated SYS\$BATCH data)"
+    must_not_have "$SEG" '[GQBOGUS:SYS$BATCH:]' "F\$GETQUI [vms-050]: a bogus queue is NOT answered with SYS\$BATCH's data"
+    negctl        "$SEG" 'GQBOGUS' "F\$GETQUI(bogus)"
+
     # --- SHOW DEVICES (plural accepted) (vms-9344 surface) ------------------
     run_cmd 'SHOW DEVICES'
     must_have     "$SEG" 'DKA0' "SHOW DEVICES [vms-9344]: plural form is accepted and lists devices"

@@ -139,9 +139,12 @@ int main(void)
     /*
      * ESTABLISH JOB_CONTROL'S SYSTEM IDENTITY IN THE EXECUTIVE (vms-d31d).
      *
-     * JOB_CONTROL is a SYSTEM-owned detached process, and every login session
-     * it creates below inherits ITS executive identity via
-     * vms_kif_register_continue() (the child's line, ~below). LOGINOUT then has
+     * JOB_CONTROL is a SYSTEM-owned detached process. Each login session it
+     * creates below is a DISTINCT executive process (vms-d4ef) that
+     * independently establishes this SAME SYSTEM identity on its own fresh PCB
+     * (the child's vms_kif_establish_system() line, ~below) rather than
+     * continuing JOB_CONTROL's -- so the two hold system identity by the same
+     * privilege-gated primitive but at different vms_pids. LOGINOUT then has
      * to read the World-denied SYS$SYSTEM:SYSUAF.DAT (fh2_fileprot 0xFF88;
      * acp_check_access() in src/kernel-core/vmsfs_acp.c grants that read only to
      * a caller in the SYSTEM protection category -- UIC group <= MAXSYSGROUP, or
@@ -224,74 +227,91 @@ int main(void)
         pid_t child = fork();
         if (child == 0) {
             /*
-             * THE LOGIN SESSION CONTINUES JOB_CONTROL'S EXECUTIVE IDENTITY
-             * (vms-d4ef, Wall 6). LOGINOUT must read SYS$SYSTEM:SYSUAF.DAT to
-             * authenticate a not-yet-authenticated user, and SYSUAF is
-             * World-denied (fh2_fileprot 0xFF88 -- S:RWE, O:RWE, G:none,
-             * W:none; ods2_class_fileprot(), oracle vax73-authorize-privilege.
-             * md). The Files-11 protection gate (acp_check_access() in
-             * src/kernel-core/vmsfs_acp.c) grants that read only to a caller
-             * that qualifies for the SYSTEM protection category -- a UIC group
-             * <= MAXSYSGROUP, or SYSPRV/BYPASS/READALL.
+             * THE LOGIN SESSION IS A DISTINCT EXECUTIVE PROCESS (vms-d4ef).
              *
-             * JOB_CONTROL already holds such an identity: it is created with
-             * $CREPRC (SYS$STARTUP:JOB_CONTROL_STARTUP.COM's RUN/DETACHED),
-             * which stamps the child's UIC/username/privileges through the
-             * executive (sys$creprc -> vms_pcb_set_identity, src/libvms/syssvc/
-             * sys_process.c), inheriting the system identity of the STARTUP.COM
-             * process that created it. But LOGINOUT is NOT created through
-             * $CREPRC -- it is reached by the fork()+execl() below -- so
-             * WITHOUT this call it never inherits that identity. Instead its
-             * first executive call lazily REGISTERs a FRESH process whose UIC
-             * is derived from the substrate's OS credentials (vms_proc_register
-             * / vms_proc_get, uic = (gid<<16)|uid). On the QEMU/Linux runtime
-             * those credentials are root, so the fresh UIC is group 0, which is
-             * <= MAXSYSGROUP and qualifies for SYSTEM by luck of the
-             * environment -- which is why x86_64 reads SYSUAF today. On the
-             * NetBSD/VAX substrate the login process's credentials are NOT
-             * privileged, so the fresh PCB is a non-SYSTEM, non-privileged
-             * process and the ACP denies the SYSUAF read (0xFF88 -> RMS$_PRV),
-             * surfacing as the clean "User authorization failure" LOGINOUT
-             * prints when sysuaf_lookup() cannot open the file.
+             * On real OpenVMS the interactive session created by the job
+             * controller is a genuinely NEW process -- JOB_CONTROL $CREPRCs
+             * LOGINOUT.EXE, so the session is the top of its OWN job with its
+             * OWN process ID, DISTINCT from JOB_CONTROL's (oracle
+             * docs/oracle/vax73-show-system-process.md: JOB_CONTROL and the
+             * interactive SYSTEM session appear at different PIDs). It is NOT a
+             * continuation of JOB_CONTROL.
              *
-             * vms_kif_register_continue() -- the SAME executive call DCL's RUN
-             * path makes in its forked child before execv (src/vmsdcl/
-             * dcl_cmd_process.c, and what let SYSTEM's RUN AUTHORIZE open the
-             * World-denied SYSUAF, vms-381) -- registers THIS task as a
-             * continuation of its VMS parent (JOB_CONTROL) while it is still
-             * JOB_CONTROL's child, so the executive reads JOB_CONTROL's row and
-             * copies its genuine UIC and CURRENT privilege masks onto this
-             * task. The PCB is keyed on the thread group and survives the
-             * execl() below, so LOGINOUT.EXE runs with the continued system
-             * identity and reads SYSUAF the same authentic way on every
-             * substrate -- an executive-mediated inheritance of a real system
-             * identity, never a blanket grant, and it weakens no protection:
-             * the World-deny stands, and a caller the executive did not stamp
-             * with a system identity is still refused.
+             * This child therefore does NOT continue JOB_CONTROL's identity.
+             * With no vms_kif_register_continue() call, its first executive
+             * call lazily REGISTERs a FRESH process: assign_vms_pid()
+             * (src/kernel/vms_module.c) mints a vms_pid unique among live
+             * processes, instead of copying JOB_CONTROL's. That is the whole
+             * point of this change -- SHOW SYSTEM previously listed JOB_CONTROL
+             * and the console SYSTEM session at the SAME pid because the login
+             * child continued JOB_CONTROL's identity; now they are two
+             * processes with two pids, matching the oracle.
              *
-             * It runs FIRST, before the $ASSIGN/setterm below, so the console
-             * channel and terminal are recorded on the continued PCB rather
-             * than on a fresh one the continuation would then replace. Its
-             * status is not examined for the same reason the setterm calls
-             * below are not: the executive is pinned open for the life of the
-             * system (PID 1's executive_attach()) and JOB_CONTROL, whose row
-             * this continues, was created by that same executive; a failure
-             * here leaves LOGINOUT with no continued identity and the SYSUAF
-             * read then fails honestly, which is the outcome the reader already
-             * renders.
+             * WALL-6 IDENTITY GUARD (vms-d4ef, was the reason continue was
+             * added). LOGINOUT must read SYS$SYSTEM:SYSUAF.DAT to authenticate a
+             * not-yet-authenticated user, and SYSUAF is World-denied
+             * (fh2_fileprot 0xFF88 -- S:RWE, O:RWE, G:none, W:none;
+             * ods2_class_fileprot(), oracle vax73-authorize-privilege.md). The
+             * Files-11 protection gate (acp_check_access() in
+             * src/kernel-core/vmsfs_acp.c) grants that read only to a caller in
+             * the SYSTEM protection category -- a UIC group <= MAXSYSGROUP, or
+             * SYSPRV/BYPASS/READALL. A FRESH registration derives its UIC from
+             * the substrate's OS credentials (vms_proc_register, uic =
+             * (gid<<16)|uid): on the QEMU/Linux runtime those are root -> group
+             * 0 <= MAXSYSGROUP, which reads SYSUAF by luck of the environment;
+             * on NetBSD/VAX they are a non-system group and the ACP denies the
+             * read (0xFF88 -> RMS$_PRV), surfacing as LOGINOUT's clean "User
+             * authorization failure". A distinct fresh process would therefore
+             * REGRESS VAX login -- the exact Wall-6 trap.
              *
-             * FAITHFULNESS NOTE (vms-d4ef follow-up). On real OpenVMS the
-             * interactive session is a genuinely NEW process ($CREPRC'ing
-             * LOGINOUT.EXE, an image INSTALLed /PRIVILEGED with SYSPRV), not a
-             * continuation of JOB_CONTROL. OVMX reaches the console session by
-             * fork()+execl() rather than $CREPRC, so this continues
-             * JOB_CONTROL's identity instead of modelling installed-image
-             * privilege -- consistent across substrates and enough to unblock
-             * Wall 6, but the installed-privileged-LOGINOUT model (and a
-             * $CREPRC'd console session with its own VMS PID) is the authentic
-             * shape and is filed as follow-up, not done here.
+             * So immediately, before any other work, this child asks the
+             * executive to ESTABLISH THE SYSTEM IDENTITY on its fresh PCB:
+             * vms_kif_establish_system() (src/kernel-core/vms_proctab.c) stamps
+             * the fixed SYSTEM identity -- UIC [1,4], the enforced SYSTEM
+             * privilege set, user name "SYSTEM" -- and is GATED on the caller's
+             * real host privilege (exec_current_is_privileged()). This is the
+             * SAME executive primitive JOB_CONTROL uses above to become SYSTEM
+             * without a SYSUAF read, and the same one PROVISION.EXE uses.
+             * JOB_CONTROL genuinely holds that host privilege (it registered
+             * with the enforced set), and this fork()ed child inherits the host
+             * credential across fork(), so this is a privilege-checked
+             * establishment of a real system identity on EVERY substrate, NOT a
+             * blanket grant and NOT the root->group-0 crutch -- it makes the
+             * authentic SYSTEM identity load-bearing on VAX as well as x86_64,
+             * with no continuation of JOB_CONTROL's pid.
+             *
+             * It runs FIRST, before the $ASSIGN/setterm below, so the SYSTEM
+             * identity is on the PCB before LOGINOUT touches SYSUAF. (SETTERM
+             * below then promotes this terminal owner to its own INTERACTIVE
+             * job root, job_id == its own vms_pid -- src/kernel-core/
+             * vms_devtab.c -- which is correct precisely because that vms_pid
+             * is now distinct.)
+             *
+             * INV-6 / fail-honest: if the executive refuses (no host privilege)
+             * or is absent, the child is left non-system and the SYSUAF read
+             * then fails honestly, exactly as JOB_CONTROL's own establish does
+             * -- nothing here fabricates the identity. The status is checked and
+             * a diagnostic printed so a regression is never silent.
+             *
+             * FAITHFULNESS NOTE (vms-d4ef follow-up). The MOST faithful shape
+             * routes LOGINOUT through the real sys$creprc as an image INSTALLed
+             * /PRIVILEGED with SYSPRV -- its own pid, own job, privilege from
+             * installed-image activation rather than an establish_system() call.
+             * OVMX still reaches the console session by fork()+execl() rather
+             * than $CREPRC; the fresh-registration + establish_system pairing
+             * here is the smaller, lower-risk step that already yields the
+             * distinct pid the oracle shows. The installed-privileged-LOGINOUT
+             * $CREPRC model remains the authentic-shape follow-up.
              */
-            (void)vms_kif_register_continue();
+            {
+                uint32_t est = vms_kif_establish_system();
+                if (!(est & 1))
+                    fprintf(stderr,
+                            "%%JBC-W-NOSYSID, console login could not establish "
+                            "its SYSTEM identity (status %08X); "
+                            "SYS$SYSTEM:SYSUAF.DAT read will be refused\n",
+                            (unsigned)est);
+            }
 
             /*
              * DELETED, NOT REPLACED (vms-fb9): setenv("VMS_TERMINAL",

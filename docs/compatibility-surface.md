@@ -5,16 +5,16 @@
 
 ## Inventory
 
-**407 surfaces catalogued** across 9 domains, each with a per-surface status.
+**408 surfaces catalogued** across 9 domains, each with a per-surface status.
 
 > This register is an **inventory, not a percentage.** The total VMS compatibility surface has **no known denominator** — it is not version-scoped and cannot be counted — so no "% compatible" is claimed or computable. The catalogue is **incomplete by construction** and grows as surfaces are identified. Below are absolute counts; V1 progress is tracked separately against the commitment set we define, and is never conflated with the whole surface.
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 24 | | real | 230 |
-| 🟢 implemented | 206 | | n/a | 99 |
+| ✅ verified | 24 | | real | 232 |
+| 🟢 implemented | 207 | | n/a | 99 |
 | 🟡 partial | 45 | | advisory | 34 |
-| 🟠 stub | 19 | | facade-risk | 44 |
+| 🟠 stub | 19 | | facade-risk | 43 |
 | 🔵 designed | 2 | |  |  |
 | ⬜ absent | 111 | |  |  |
 
@@ -24,8 +24,8 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **365 committed** — **230 met** (implemented/verified), 44 in progress (partial), 91 not started (absent/stub/designed).
-- ⚠ **42 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
+- **366 committed** — **231 met** (implemented/verified), 44 in progress (partial), 91 not started (absent/stub/designed).
+- ⚠ **41 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 8 out · 25 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 
 _These are counts against an enumerable commitment list, deliberately not a percentage of VMS. If a surface is later ruled into V1, it joins the denominator at whatever status it actually has — cataloguing more of VMS makes the picture look less complete, never more._
@@ -1068,7 +1068,7 @@ Universal symbol vectors (position-bound binding), GSMATCH (ALWAYS/EQUAL/LEQUAL,
 
 _TCP/IP Services (UCX), DECnet Phase IV, LAT, SSH._
 
-`🟢🟢🟢🟡🟡🟡🟠🟠🟠⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  9 surfaces catalogued (1 met · 1 in progress · 7 not started) · V1: 8 committed, 1 met · ⚠ 1 facade-risk
+`🟢🟢🟢🟢🟢🟡🟡🟠🟠⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  10 surfaces catalogued (2 met · 1 in progress · 7 not started) · V1: 9 committed, 2 met
 
 ### decnet — DECnet Phase IV (NSP, Task-to-Task, SET HOST)
 <sub>scope: in · plan: vms-30e · ref: DECnet for OpenVMS Networking Manual · reviewed 2026-08-13</sub>
@@ -1111,18 +1111,19 @@ SSH login to an authenticated interactive (DCL) session, as VSI OpenVMS provides
  |
 
 ### tcpip-services — TCP/IP Services (UCX QIO + Sockets + EWA0:/BGn:)
-<sub>scope: in · plan: vms-67f · ref: OpenVMS TCP/IP Services for OpenVMS (UCX) manuals · reviewed 2026-08-13</sub>
+<sub>scope: in · plan: vms-67f · ref: OpenVMS TCP/IP Services for OpenVMS (UCX) manuals · reviewed 2026-08-28</sub>
 
-Design-only, nothing built. No BG: device, no QIO network path, no usable socket API. The current DCL TCPIP verb is a facade — it opens a Linux AF_INET SOCK_DGRAM socket only to issue SIOCGIF* ioctls (interface introspection), configures nothing durable, and gives VMS code no stack. A NIC as a VMS device (EWA0:/BGn:) is also absent — QEMU boots with `-nic none`. 1.0 blocker (vms-67f).
+Data half built (BGn: sockets veneer + QIO path + client tools, vms-843/ vms-22a/vms-dbb) and now the CONFIG/MANAGEMENT half (vms-67f): OVMX IP can be configured the VMS way — TCPIP$CONFIG core-environment procedure + `TCPIP SET INTERFACE`/`SHOW CONFIGURATION` record the local host name, domain and interface address in the VMS-faithful TCPIP$INET_HOST/DOMAIN/ HOSTADDR SYSTEM logicals (executive-resident LNM$SYSTEM, shared cross-process over /dev/vms) and apply the address to the interface over the substrate stack. INV-6 honest: with no executive the config fails SS$_NOSUCHDEV, never a per-process fake. Deferred rungs (honestly): DHCP, multiple interfaces / TCPIP$INET_HOSTADDRn, the persistent service/proxy databases, a NIC as a VMS device (EWA0:). 1.0 blocker (vms-67f).
 
 
-<sub>3 items · 1 met · 0 in progress · 2 not started · ⚠ 1 facade-risk</sub>
+<sub>4 items · 2 met · 0 in progress · 2 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
 | ⬜ | `tcpip-services$ucx-qio-socket-api` | feature | UCX QIO-based / C-socket network API for VMS programs | absent | n/a | in | `docs/design-tcpip-services-ovmx.md` — No src/vmstcpip/. No BG: device, no QIO network path, no usable socket API. |
 | ⬜ | `tcpip-services$nic-device` | feature | NIC exposed as VMS device EWA0:/BGn: | absent | n/a | in | `distro/boot/run-qemu.sh:70` — QEMU boots with -nic none (also distro/Dockerfile.bootable:773); no network device path into the VM at all. |
-| 🟢⚠ | `tcpip-services$dcl-tcpip-verb` | command | DCL TCPIP verb (show interface/route/host/version, set host) | implemented | facade-risk | in | `src/vmsdcl/dcl_cmd_misc.c:1093` — Opens a Linux AF_INET SOCK_DGRAM socket only for SIOCGIF* ioctls (host interface introspection); configures nothing durable and gives VMS code no stack. Cross-listed to Draper register (INV-6 facade-risk). |
+| 🟢 | `tcpip-services$dcl-tcpip-verb` | command | DCL TCPIP verb (show interface/route/host/version/configuration, set host/interface/route/name_service) | implemented | real | in | `src/vmsdcl/dcl_cmd_misc.c` — SHOW INTERFACE/ROUTE is Linux-substrate introspection (SIOCGIF*/proc). SET INTERFACE now applies the address to the interface AND records TCPIP$INET_HOSTADDR in the executive-resident LNM$SYSTEM table; SHOW CONFIGURATION reads the TCPIP$ SYSTEM logicals back (honest %TCPIP-W-NOEXEC with no executive). The durable config path is authentic (vms-67f); the introspection commands remain substrate-sourced. |
+| 🟢 | `tcpip-services$config-plane` | feature | TCPIP$CONFIG core config + TCPIP$INET_HOST/DOMAIN/HOSTADDR SYSTEM logicals | implemented | real | in | `src/vmstcpip/mgmt/tcpip_config.h` — Config/management half of vms-67f. Host name/domain/address configured the VMS way land in the executive-resident LNM$SYSTEM table (shared cross-process over /dev/vms), read back through the independent sys$trnlnm, and the address is applied to the interface over the substrate stack. INV-6: SS$_NOSUCHDEV with no executive, never a per-process fake. Proven against a real /dev/vms (test_syssvc_tcpip_config) + a host honest-degradation DCL test. |
 
 ## H. Executive
 
@@ -1258,7 +1259,6 @@ Surfaces that report success without doing the real work, or fake shared state p
 | `sysuaf$captive` | sysuaf | absent | `src/libvms/include/uaidef.h:133` — Bit defined, zero readers |
 | `sysuaf$pwd_expired` | sysuaf | absent | `src/libvms/include/uaidef.h:154` — Bit defined, zero readers; no login-limit enforcement either |
 | `sysuaf$ssh_credential_drop` | sysuaf | absent | `src/vmsssh/vmssshd.c` — Console LOGINOUT drops correctly via vms_kif_setident; vmssshd.c authenticates against SYSUAF (sysuaf_authenticate(), line ~237) but never calls setuid/setgid/seteuid — zero hits in the file. Transport mechanics are networking's; this is the SYSUAF-side credential-drop failure. |
-| `tcpip-services$dcl-tcpip-verb` | tcpip-services | implemented | `src/vmsdcl/dcl_cmd_misc.c:1093` — Opens a Linux AF_INET SOCK_DGRAM socket only for SIOCGIF* ioctls (host interface introspection); configures nothing durable and gives VMS code no stack. Cross-listed to Draper register (INV-6 facade-risk). |
 | `utilities$sort` | utilities | partial | `src/vmsdcl/dcl_cmd_misc.c` — Whole-line qsort only; no /KEY field-based sort. No companion MERGE utility. |
 | `utilities$convert` | utilities | partial | `src/vmsdcl/dcl_cmd_misc.c` — /FDL accepted but ignored; body is a line-by-line copy, not a real record-format conversion. |
 

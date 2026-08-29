@@ -62,6 +62,14 @@
  * new -I is needed and no new compiled object joins DCL.EXE's native link. */
 #include "../vmstcpip/services/tcpip_client.h"
 
+/* TCP/IP Services CONFIG plane (vms-67f) -- the SAME single-header engine the
+ * QEMU proof (tests/qemu/test_syssvc_tcpip_config.c) drives against a real
+ * /dev/vms. It records the VMS-faithful TCPIP$* SYSTEM logical names in the
+ * executive-resident LNM$SYSTEM table (honest, cross-process; SS$_NOSUCHDEV
+ * with no executive), so `TCPIP SET INTERFACE` durably records the host
+ * address the ordinary VMS way and `TCPIP SHOW CONFIGURATION` reads it back. */
+#include "../vmstcpip/mgmt/tcpip_config.h"
+
 #ifdef HAVE_READLINE
 #include <readline/readline.h>
 #include <readline/history.h>
@@ -1921,7 +1929,61 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
         fclose(fp);
     }
 
+    /* Record the host address in the VMS-faithful TCPIP$INET_HOSTADDR SYSTEM
+     * logical, the ordinary VMS way (TCPIP$CONFIG defines exactly this name).
+     * This is executive-resident shared state, not the .DAT file above: any
+     * process -- and the sockets veneer/tools -- reads the same value back via
+     * TCPIP SHOW CONFIGURATION. INV-6: if /dev/vms is absent the define fails
+     * SS$_NOSUCHDEV and we say so honestly rather than fake a durable logical. */
+    {
+        uint32_t lst = tcpip_cfg_define_system(TCPIP_LNM_INET_HOSTADDR, host_ip);
+        if (!(lst & 1)) {
+            if (lst == SS$_NOSUCHDEV)
+                printf("%%TCPIP-W-NOEXEC, executive absent -- TCPIP$INET_HOSTADDR "
+                       "not recorded (address applied to the interface only)\n");
+            else
+                printf("%%TCPIP-W-LNMERR, could not record TCPIP$INET_HOSTADDR "
+                       "(status %u)\n", lst);
+        }
+    }
+
     printf("%%TCPIP-I-INFO, interface configured\n");
+    return SS$_NORMAL;
+}
+
+/*
+ * TCPIP SHOW CONFIGURATION - Display the core IP configuration recorded in the
+ * VMS-faithful TCPIP$* SYSTEM logical names (host name, domain, host address).
+ * Reads the executive-resident LNM$SYSTEM values through the config engine --
+ * the same shared state TCPIP$CONFIG / TCPIP SET INTERFACE wrote, not a
+ * per-process copy. With no executive it says so honestly.
+ */
+static int cmd_tcpip_show_configuration(struct dcl_command *cmd)
+{
+    (void)cmd;
+    struct { const char *lnm; const char *label; } items[] = {
+        { TCPIP_LNM_INET_HOST,     "Host name" },
+        { TCPIP_LNM_INET_DOMAIN,   "Domain"    },
+        { TCPIP_LNM_INET_HOSTADDR, "Host address" },
+    };
+    char val[256];
+    int any_noexec = 0;
+
+    printf("\n");
+    printf("%-16s%s\n", "Item", "Value");
+    for (size_t i = 0; i < sizeof(items) / sizeof(items[0]); i++) {
+        uint32_t st = tcpip_cfg_translate_system(items[i].lnm, val, sizeof(val));
+        if (st & 1)
+            printf("%-16s%s\n", items[i].label, val);
+        else if (st == SS$_NOSUCHDEV)
+            any_noexec = 1;
+        else
+            printf("%-16s%s\n", items[i].label, "(not configured)");
+    }
+    if (any_noexec)
+        printf("%%TCPIP-W-UNAVAIL, TCP/IP Services executive is not running -- "
+               "the TCPIP$ SYSTEM logicals cannot be read\n");
+    printf("\n");
     return SS$_NORMAL;
 }
 
@@ -2040,6 +2102,8 @@ int cmd_tcpip(struct dcl_command *cmd)
             return cmd_tcpip_show_host(cmd);
         if (dcl_match_command(what, "VERSION", 3))
             return cmd_tcpip_show_version(cmd);
+        if (dcl_match_command(what, "CONFIGURATION", 4))
+            return cmd_tcpip_show_configuration(cmd);
 
         dcl_error("TCPIP", 2, "IVKEYW",
                   "unrecognized TCPIP SHOW keyword - \\%s\\", what);

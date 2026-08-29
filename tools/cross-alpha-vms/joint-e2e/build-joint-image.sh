@@ -27,18 +27,16 @@
 # OUTDIR (default /tmp/joint-e2e-out) receives: LINK.EXE, LIBOTS_SHR.EXE,
 # 'DECC$SHR.EXE', crt0.obj, joint_main.obj, joint_e2e.exe, and build.log.
 #
-# crt0 is compiled FRESH from the GCC-port's own vms-ucrt0.c (GPLv3 + GCC RLE,
-# gcc-14.2.0 — libgcc/config/vms/vms-ucrt0.c, checked in beside this script) by
-# the REAL alpha-dec-vms cross cc1 on EVERY run — NOT a frozen crt0.s capture.
-# (It WAS a frozen crt0.s until vms-8208: #921/vms-095 made cc1 establish a
-# per-image module-GP in $15, and the pre-$15 frozen .s — `.base $27', no $15
-# establish/save/restore — was non-conformant with the merged $15 shareables and
-# CRASHED on activation. Compiling from source keeps the entry stub in lockstep
-# with the toolchain; run_module_gp_proof.sh guards $15 drift.) The bare cross
-# cc1 ships no libc headers and vms-ucrt0.c needs only NULL/size_t from
-# <stdlib.h>, so freestanding-include/stdlib.h supplies exactly those. No binary
-# object is checked in. joint_main.c is trivial hand-written OVMX proof code,
-# compiled fresh by the REAL alpha-dec-vms cc1 on every run.
+# crt0.s here is a REAL alpha-dec-vms cc1 -mpointer-size=64 compile of the
+# GCC-port's own libgcc/config/vms/vms-ucrt0.c (GPLv3, gcc-14.2.0 — the exact
+# vintage this toolchain builds; see tools/cross-alpha-vms/README.md for the
+# pinned version) — captured as source (.s, text) rather than regenerated on
+# every run, since the full GCC source tree that produced it is deliberately
+# NOT kept in the built toolchain image (Dockerfile: "rm -rf ... gcc-*" after
+# `make install-gcc`, to keep the image small). Assembled fresh here by the
+# REAL alpha-dec-vms cross `as` on every run — no binary object is checked in.
+# joint_main.c is trivial hand-written OVMX proof code, compiled fresh by the
+# REAL alpha-dec-vms cc1 on every run.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 TC_DIR=$(cd "$HERE/.." && pwd)              # tools/cross-alpha-vms
@@ -169,22 +167,8 @@ OVMX_DECC_ARCH=alpha \
 #         by the REAL alpha-dec-vms cross toolchain (no object blobs checked
 #         into the repo — only the .s/.c sources under tools/cross-alpha-vms/
 #         joint-e2e/) ----
-# vms-8208: compile crt0 FRESH from vms-ucrt0.c on EVERY run with the CURRENT
-# cross cc1 -- never a frozen crt0.s capture. #921/vms-095 made the port cc1
-# establish a per-image module-GP in the reserved $15 (ldah $15,0($27)/lda +
-# mandatory $15 save/restore, linkage loads $15-relative). A pre-$15 frozen
-# crt0.s (.base $27, no $15 establish/save/restore) is NON-CONFORMANT with the
-# merged $15 shareables: on the real executive it activates and then CRASHES
-# before main (wild $15 in the DECC$SHR call chain -> wild SP -> %DCL-F-ABORT
-# signal 11, $STATUS=SS$_ABORT %X0000002C) -- the API-compat regression vms-8208
-# caught. Compiling from source keeps the entry stub in lockstep with the
-# toolchain (the module-GP objdump proof, run_module_gp_proof.sh, guards $15
-# drift). vms-ucrt0.c is GPLv3 + GCC RLE (gcc-14.2.0), self-contained except
-# <stdlib.h> for NULL/size_t, which the bare cross cc1 lacks -> the minimal
-# freestanding-include/stdlib.h shim supplies exactly those.
-echo "-- compiling crt0.obj FRESH from real port vms-ucrt0.c (cross cc1, -mpointer-size=64, \$15 module-GP) --"
-"$ALPHA_CC" -mpointer-size=64 -g0 -I /joint/freestanding-include \
-    -c /joint/vms-ucrt0.c -o "$OUT/crt0.obj"
+echo "-- assembling crt0.obj (real port vms-ucrt0.c -> crt0.s, cross as) --"
+"$ALPHA_AS" -o "$OUT/crt0.obj" /joint/crt0.s
 
 JOINT_MAIN=${JOINT_MAIN:-joint_main.c}
 echo "-- compiling joint_main.obj from $JOINT_MAIN (cross cc1, -mpointer-size=64) --"

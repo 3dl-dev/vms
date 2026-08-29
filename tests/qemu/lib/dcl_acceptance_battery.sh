@@ -161,7 +161,62 @@ run_dcl_acceptance_battery() {
     must_match    "$SEG" '(interactive users = [1-9]|number of users = [1-9])' "SHOW USERS [vms-01f/72c]: reports >= 1 user (real VMS: 'Total number of interactive users = 1')"
     must_not_have "$SEG" 'users = 0' "SHOW USERS [vms-01f/72c]: does NOT report 0 users (the shipped-empty bug)"
     must_not_have "$SEG" 'No interactive users' "SHOW USERS [vms-01f/72c]: does NOT print 'No interactive users'"
+    # COLUMN LAYOUT (vms-050): grounded byte-for-byte in a live OpenVMS VAX V7.3
+    # capture (docs/oracle/vax73-show-users.md). The default table's header is a
+    # STATIC literal, so its exact internal spacing is a deterministic gate. The
+    # discriminating substring is everything from 'Username' onward -- 2 spaces
+    # after Username, 5 before Interactive, 3 before Batch. The prior layout
+    # (5 spaces after Username, a 6-space row indent) fails this exact-substring
+    # match, so a revert reds the gate.
+    must_have  "$SEG" 'Username  Node     Interactive  Subprocess   Batch' "SHOW USERS [vms-050]: default column header matches the live VAX V7.3 spacing (Username/Node/Interactive/Subprocess/Batch)"
+    # 1-space row indent (not the retired 6-space indent): the SYSTEM row begins
+    # with exactly one space. '^ SYSTEM ' matches a single leading space; a
+    # 6-space-indented row does not.
+    must_match "$SEG" '^ SYSTEM ' "SHOW USERS [vms-050]: the SYSTEM row uses the live 1-space indent, not the retired 6-space indent"
     negctl        "$SEG" 'SHOW USERS' "SHOW USERS"
+
+    # --- SHOW USERS/FULL (vms-050: per-process columns, live VAX V7.3) --------
+    # docs/oracle/vax73-show-users.md pins the /FULL header and the per-row field
+    # widths (username %-11s, node %-6s, process-name %-14s, PID %08X, terminal).
+    run_cmd 'SHOW USERS/FULL'
+    must_have  "$SEG" 'Username  Node   Process Name    PID     Terminal' "SHOW USERS/FULL [vms-050]: column header matches the live VAX V7.3 spacing (Username/Node/Process Name/PID/Terminal)"
+    must_match "$SEG" '^ SYSTEM ' "SHOW USERS/FULL [vms-050]: the SYSTEM row uses the live 1-space indent"
+    # The /FULL row carries an 8-hex VMS PID and the terminal it is bound to --
+    # both read from the executive process table, not fabricated.
+    must_match "$SEG" '^ SYSTEM .*[0-9A-Fa-f]{8}.*OPA0' "SHOW USERS/FULL [vms-050]: the SYSTEM row shows an 8-hex PID and the OPA0: terminal (executive process table, not a facade)"
+    negctl     "$SEG" 'Process Name' "SHOW USERS/FULL"
+
+    # --- SHOW MEMORY (vms-050: Physical Memory Usage column geometry) ---------
+    # docs/oracle/vax73-show-memory.md: on a live VAX V7.3 the Physical Memory
+    # Usage value columns right-justify to cols 40/52/64/76. VMS pads the header
+    # label to 30 and its FIRST value field to 10, so 'Total' shows with exactly
+    # 5 leading spaces. The retired layout used a 12-wide first field (7 leading
+    # spaces), pushing every value 2 columns right; this exact header substring
+    # reds that regression. The header is static, so this is deterministic.
+    run_cmd 'SHOW MEMORY'
+    must_have "$SEG" 'System Memory Resources on' "SHOW MEMORY [vms-050]: prints the report banner"
+    must_have "$SEG" 'Physical Memory Usage (pages):     Total        Free      In Use    Modified' "SHOW MEMORY [vms-050]: Physical Memory Usage header matches the live VAX V7.3 column geometry (Total right edge on col 40, 5 leading spaces -- not the retired 7)"
+    # The Main Memory data row is real (/proc/meminfo): a nonzero page total.
+    must_match "$SEG" 'Main Memory \(.*Mb\) +[1-9][0-9]{3,}' "SHOW MEMORY [vms-050]: Main Memory row shows a real nonzero page total (from /proc/meminfo, not a fabricated constant)"
+    # Sections OVMX has no faithful source for are HONESTLY OMITTED (INV-6):
+    # the substrate has no VMS XFC cache and no balance-set slot table.
+    must_not_have "$SEG" 'Virtual I/O Cache Usage' "SHOW MEMORY [vms-050]: no fabricated Virtual I/O Cache section (honestly omitted -- no XFC on the substrate)"
+    must_not_have "$SEG" 'Slot Usage' "SHOW MEMORY [vms-050]: no fabricated Slot Usage section (honestly omitted -- no VMS balance-set slot table)"
+    negctl "$SEG" 'Physical Memory Usage' "SHOW MEMORY"
+
+    # --- F$ lexicals (vms-050: verified MATCH vs the same VAX V7.3 oracle) -----
+    # F$MODE / F$ENVIRONMENT / F$DIRECTORY return the exact strings the oracle
+    # returned for an interactive SYSTEM session. Bracketed so a trailing-space
+    # or empty-string regression is visible.
+    run_cmd 'WRITE SYS$OUTPUT "[" + F$MODE() + "]"'
+    must_have "$SEG" '[INTERACTIVE]' "F\$MODE [vms-050]: returns 'INTERACTIVE' for an interactive job (matches VAX V7.3 oracle)"
+    run_cmd 'WRITE SYS$OUTPUT "[" + F$ENVIRONMENT("INTERACTIVE") + "]"'
+    must_have "$SEG" '[TRUE]' "F\$ENVIRONMENT(\"INTERACTIVE\") [vms-050]: returns 'TRUE' for an interactive job"
+    run_cmd 'WRITE SYS$OUTPUT "[" + F$ENVIRONMENT("VERIFY_IMAGE") + "]"'
+    must_have "$SEG" '[FALSE]' "F\$ENVIRONMENT(\"VERIFY_IMAGE\") [vms-050]: returns 'FALSE' with verify off (VAX V7.3 wording, not 0/1)"
+    run_cmd 'WRITE SYS$OUTPUT "[" + F$DIRECTORY() + "]"'
+    must_match "$SEG" '\[\[[A-Z0-9.]+\]\]' "F\$DIRECTORY [vms-050]: returns a VMS bracketed directory like '[SYSMGR]' (matches the oracle's [dir] form)"
+    negctl "$SEG" 'F$DIRECTORY' "F\$ lexicals"
 
     # --- SHOW DEVICE DKA0: (vms-e6f: shipped bare "Online", no Mounted/label)
     run_cmd 'SHOW DEVICE DKA0:'

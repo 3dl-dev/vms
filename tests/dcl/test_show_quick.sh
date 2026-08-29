@@ -7,7 +7,15 @@
 # EXPECT: contains:Node: OVMX
 # EXPECT: contains:Device Error Count Summary
 # EXPECT: contains:No errors logged.
-# EXPECT: contains:Working Set
+# vms-050 / INV-6: SHOW WORKING_SET no longer prints an unconditional
+# "Working Set" line. It used to, only because the line was FABRICATED -- a
+# hardcoded 8192 quota and a quota*2 extent read from the DCL ctx, not the
+# executive. It is now a $GETJPI reader (cmd_show_working_set): on a host with
+# no /dev/vms (as here under ctest -- Rule 9) $GETJPI fails and the command
+# honestly prints NOTHING rather than a fabricated quota. So "Working Set" is
+# no longer asserted here. The POSITIVE proof (real "/Limit=" from a live
+# executive) is in tests/qemu/lib/dcl_acceptance_battery.sh, and the
+# no-fabrication guard is tests/dcl/test_show_working_set_no_fabrication.sh.
 # EXPECT: contains:Accounting is currently disabled.
 # EXPECT: contains:SYS$MANAGER:ACCOUNTNG.DAT
 # EXPECT: contains:security auditing is currently disabled.

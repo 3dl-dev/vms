@@ -434,6 +434,22 @@ run_dcl_acceptance_battery() {
     else
         bad "F\$PID [vms-050]: JOB_CONTROL pid ($JC_PID) is NOT in F\$PID's set [$FPID_SET]"
     fi
+    # vms-9357: the CLASSIC idiom is an ASSIGNMENT -- PID = F$PID(context) -- not a
+    # WRITE expression. That path must ALSO preserve the %08X pid; it used to coerce
+    # via strtol base-0, which collapses "00000001" -> 1 AND mis-reads the leading
+    # zero as OCTAL ("00000067" -> 55). Assert the assigned symbol holds an 8-hex
+    # executive pid (single-quoted run_cmd so the literal F$PID is not shell-expanded
+    # under set -u -- same rule as the block above).
+    run_cmd 'GPCTX = ""'
+    run_cmd 'GPID = F$PID(GPCTX)'
+    run_cmd 'WRITE SYS$OUTPUT "GPIDVAL=[" + GPID + "]"'
+    local GPID_VAL
+    GPID_VAL=$(printf '%s\n' "$SEG" | grep -oiE 'GPIDVAL=\[[0-9A-Fa-f]*\]' | head -1 | sed -E 's/GPIDVAL=\[([0-9A-Fa-f]*)\]/\1/')
+    if printf '%s' "$GPID_VAL" | grep -qiE '^[0-9A-Fa-f]{8}$'; then
+        ok "F\$PID [vms-9357]: PID = F\$PID(ctx) ASSIGNMENT preserves the 8-hex pid ($GPID_VAL) -- the classic idiom, not octal-collapsed by strtol base-0"
+    else
+        bad "F\$PID [vms-9357]: PID = F\$PID(ctx) assignment gave '$GPID_VAL' -- the %08X pid was mangled (int/octal coercion on the assignment path)"
+    fi
 
     # --- SHOW PROCESS (current process works) -------------------------------
     run_cmd 'SHOW PROCESS'

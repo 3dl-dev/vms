@@ -128,6 +128,31 @@ long dcl_parse_int(const char *s, int *ok)
 }
 
 /*
+ * dcl_lexical_result_is_int (rd vms-dee/vms-9357): decide whether a lexical
+ * function's string result should be treated as an INTEGER. It should ONLY when
+ * the string is the CANONICAL representation of that integer -- i.e. it round-
+ * trips through %ld. A formatted/zero-padded result like F$PID's %08X pid
+ * "00000068" parses as 68 but "68" != "00000068", so it stays a STRING and its
+ * form is preserved (collapsing it drops the leading zeros so it no longer
+ * matches SHOW SYSTEM's hex pid, and the first pid "00000001" would render as the
+ * bare "1"). Canonical ints (F$LENGTH -> "5") round-trip and coerce. This is the
+ * ONE place that rule lives, shared by parse_primary() (expression context) and
+ * the SYM = F$xxx assignment paths -- the latter previously used strtol base-0,
+ * which ALSO mis-read the leading-zero pid as OCTAL (00000067 -> 55).
+ */
+static int dcl_lexical_result_is_int(const char *result, long *iv_out)
+{
+    int iok;
+    long iv = dcl_parse_int(result, &iok);
+    if (!iok) return 0;
+    char canon[32];
+    snprintf(canon, sizeof(canon), "%ld", iv);
+    if (strcmp(canon, result) != 0) return 0;
+    if (iv_out) *iv_out = iv;
+    return 1;
+}
+
+/*
  * Refresh $STATUS and $SEVERITY after a command completes. VMS stores $STATUS
  * as the 32-bit condition value rendered "%Xhhhhhhhh" (SHOW SYMBOL $STATUS
  * shows exactly that) and $SEVERITY as the low three bits in decimal. The two
@@ -299,25 +324,12 @@ static expr_val_t parse_primary(expr_parser_t *ep)
         result[0] = '\0';
         if (ep->ctx)
             dcl_eval_lexical(ep->ctx, buf, result, sizeof(result));
-        int iok;
-        long iv = dcl_parse_int(result, &iok);
-        /*
-         * Coerce a lexical's result to an integer ONLY when the string is the
-         * CANONICAL representation of that integer. A FORMATTED result -- e.g.
-         * F$PID's zero-padded %08X pid "00000068", or its first pid "00000001" --
-         * parses as an int (68, 1) but must be preserved as a STRING: collapsing
-         * it drops the leading zeros so it no longer matches SHOW SYSTEM's hex pid
-         * (and "00000001" renders as the bare "1"). Only "68"==itself round-trips;
-         * "00000068"!="68" does not, so the pad is kept. rd vms-dee (NOT a VAX
-         * arch-asymmetry -- this coercion is arch-neutral and stripped F$PID's
-         * format on every arch). Canonical ints (F$LENGTH -> "5") still coerce.
-         */
-        if (iok) {
-            char canon[32];
-            snprintf(canon, sizeof(canon), "%ld", iv);
-            if (strcmp(canon, result) == 0)
-                return make_int(iv);
-        }
+        /* Coerce to int only for a CANONICAL integer; a formatted/zero-padded
+         * lexical result (F$PID's %08X pid) stays a string. Shared rule:
+         * dcl_lexical_result_is_int (rd vms-dee/vms-9357). */
+        long iv;
+        if (dcl_lexical_result_is_int(result, &iv))
+            return make_int(iv);
         return make_str(result);
     }
 
@@ -386,7 +398,23 @@ static expr_val_t parse_primary(expr_parser_t *ep)
         if (val) {
             int iok;
             long iv = dcl_parse_int(val, &iok);
-            if (iok) return make_int(iv);
+            if (iok) {
+                /* Coerce a symbol ref to int when its value is a CANONICAL integer
+                 * OR an explicit radix/signed literal -- $STATUS is stored
+                 * "%X00000001" and MUST stay int-usable for IF/arithmetic. A plain
+                 * zero-padded decimal string (F$PID's pid "00000001", no radix
+                 * marker) is a STRING and its form is preserved, so PID = F$PID(ctx)
+                 * then using PID keeps the %08X pid instead of collapsing to 1.
+                 * rd vms-9357. */
+                const char *t = val;
+                while (*t == ' ' || *t == '\t') t++;
+                int radix = (t[0] == '%') || (t[0] == '+') || (t[0] == '-') ||
+                            (t[0] == '0' && (t[1] == 'x' || t[1] == 'X'));
+                char canon[32];
+                snprintf(canon, sizeof(canon), "%ld", iv);
+                if (radix || strcmp(canon, val) == 0)
+                    return make_int(iv);
+            }
             return make_str(val);
         }
         /* Not a symbol - treat as string literal */
@@ -1015,10 +1043,11 @@ static int exec_assign(struct dcl_context *ctx, struct dcl_command *cmd)
         if (strncasecmp(trimmed, "F$", 2) == 0 && !has_arith_op(trimmed)) {
             char result[DCL_MAX_VALUE];
             dcl_eval_lexical(ctx, trimmed, result, sizeof(result));
-            /* Try to store as integer */
-            char *endp;
-            long val = strtol(result, &endp, 0);
-            if (*endp == '\0' && result[0] != '\0')
+            /* Store as int only if the result is a CANONICAL integer; F$PID's
+             * %08X pid stays a STRING. The old base-0 strtol here additionally
+             * octal-mis-read the leading-zero pid (00000067 -> 55). rd vms-9357. */
+            long val;
+            if (dcl_lexical_result_is_int(result, &val))
                 dcl_sym_set_int(cmd->verb, (int32_t)val, scope);
             else
                 dcl_sym_set(cmd->verb, result, scope);
@@ -1053,9 +1082,10 @@ static int exec_assign(struct dcl_context *ctx, struct dcl_command *cmd)
             if (!was_quoted && strncasecmp(sv, "F$", 2) == 0) {
                 char result[DCL_MAX_VALUE];
                 dcl_eval_lexical(ctx, sv, result, sizeof(result));
-                char *endp;
-                long val = strtol(result, &endp, 0);
-                if (*endp == '\0' && result[0] != '\0')
+                /* Canonical-int-only coercion; F$PID's %08X pid stays a STRING
+                 * (the old base-0 strtol octal-mis-read it). rd vms-9357. */
+                long val;
+                if (dcl_lexical_result_is_int(result, &val))
                     dcl_sym_set_int(cmd->verb, (int32_t)val, scope);
                 else
                     dcl_sym_set(cmd->verb, result, scope);

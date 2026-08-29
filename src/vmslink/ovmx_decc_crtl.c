@@ -365,6 +365,16 @@ static inline void *p32_to_ptr(int a32)
 #include <signal.h>
 #include <unistd.h>
 
+/* vms-430 SP discriminator: a DEDICATED signal-handler stack. The prior run
+ * installed the handler and proved it reachable (MAIN-DISC printed) but it
+ * NEVER RAN on the memset crash: SP was so corrupted the kernel could not push
+ * a signal frame on the wild main stack -> double-fault -> terminate, so no PC
+ * was ever emitted. Running the handler on this clean alt-stack (sigaltstack()
+ * + SA_ONSTACK below) lets it survive a wild SP and print PC+SP. Fixed 65536
+ * (bits/signal.h SIGSTKSZ is only 16384; a static buffer sidesteps any
+ * SIGSTKSZ-as-function concern and gives head-room). */
+static char ovmx_disc_altstk[65536];
+
 /* Async-signal-safe 16-digit hex, MSB first, into p[0..15]. */
 static void ovmx_disc_puthex(char *p, unsigned long v)
 {
@@ -399,8 +409,13 @@ static void ovmx_disc_segv(int sig, siginfo_t *info, void *uctx)
 {
     unsigned long addr = info ? (unsigned long)info->si_addr : 0UL;
     unsigned long pc = 0UL;
-    if (uctx)
+    unsigned long sp = 0UL;
+    if (uctx) {
         pc = (unsigned long)((ucontext_t *)uctx)->uc_mcontext.sc_pc;
+        /* R30 = SP on Alpha. Integer regs are uc_mcontext.sc_regs[0..31]
+         * (bits/signal.h: long sc_regs[32]); the trap SP is sc_regs[30]. */
+        sp = (unsigned long)((ucontext_t *)uctx)->uc_mcontext.sc_regs[30];
+    }
 
     /* Legacy SIGSEGV-DISC line preserved for SIGSEGV/SIGBUS (cross-ref against
      * readelf on JOINT_E2E.EXE / DECC$SHR.EXE). Fixed-width overwrite template:
@@ -435,6 +450,18 @@ static void ovmx_disc_segv(int sig, siginfo_t *info, void *uctx)
         *p++ = '\n';
         (void)write(2, b, (unsigned long)(p - b));
     }
+
+    /* vms-430 SP discriminator: the faulting SP itself (sc_regs[30]). A wild
+     * or non-16-byte-aligned value here is the direct signature of the SP
+     * corruption that killed the previous (main-stack) handler run. */
+    {
+        char sb[64];
+        char *q = sb;
+        q = ovmx_disc_appstr(q, "FAULT-SP: sp=0x");
+        q = ovmx_disc_apphex(q, sp, 16);
+        *q++ = '\n';
+        (void)write(2, sb, (unsigned long)(q - sb));
+    }
     _exit(42);
 }
 
@@ -444,13 +471,43 @@ static void ovmx_disc_install_segv(void)
     char *z = (char *)&sa;                 /* zero without a memset dependency */
     for (unsigned i = 0; i < sizeof sa; i++)
         z[i] = 0;
+    /* Register the dedicated alt-stack FIRST, then ask the kernel to deliver on
+     * it (SA_ONSTACK). Without this the handler runs on the (wild) main SP and
+     * double-faults — exactly why the prior run emitted no PC. */
+    stack_t ss;
+    char *zz = (char *)&ss;
+    for (unsigned i = 0; i < sizeof ss; i++)
+        zz[i] = 0;
+    ss.ss_sp = ovmx_disc_altstk;
+    ss.ss_size = sizeof ovmx_disc_altstk;
+    ss.ss_flags = 0;
+    sigaltstack(&ss, 0);
+
     sa.sa_sigaction = ovmx_disc_segv;
-    sa.sa_flags = SA_SIGINFO;              /* alpha 0x40, from bits/signal.h    */
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK; /* alpha 0x40|0x01, from bits/signal.h */
     sigaction(SIGSEGV, &sa, 0);
     sigaction(SIGBUS,  &sa, 0);
     sigaction(SIGILL,  &sa, 0);            /* the CRTL/RMS decc$_memset64 fault  */
     sigaction(SIGABRT, &sa, 0);
     sigaction(SIGTRAP, &sa, 0);
+}
+
+/* vms-430 SP discriminator: log SP ($30) at the crt0->decc$main->crt0 boundary.
+ * If SP is already imbalanced / mis-aligned at "entry" the fault predates C main
+ * (crt0 / 6-arg transfer bug); if entry==ret is balanced the imbalance is main's
+ * own frame codegen. Read $30 with inline asm; reuses the async-safe builders. */
+static void ovmx_disc_sp_line(const char *point)
+{
+    unsigned long sp;
+    __asm__ volatile("mov $30,%0" : "=r"(sp));
+    char b[64];
+    char *p = b;
+    p = ovmx_disc_appstr(p, "DECCMAIN-SP: ");
+    p = ovmx_disc_appstr(p, point);
+    p = ovmx_disc_appstr(p, " sp=0x");
+    p = ovmx_disc_apphex(p, sp, 16);
+    *p++ = '\n';
+    (void)write(2, b, (unsigned long)(p - b));
 }
 #endif /* __alpha__ */
 
@@ -466,6 +523,7 @@ void ovmx_decc_main(void *progxfer, void *cli_util, void *imghdr,
 {
 #if defined(__alpha__)
     ovmx_disc_install_segv();   /* vms-430 PC discriminator (diagnostic) */
+    ovmx_disc_sp_line("entry"); /* SP at the crt0->decc$main boundary        */
 #endif
     (void)progxfer;   /* the transfer address — not consumed here      */
     (void)imghdr;     /* {version,flags,image_base}; flags unused first-light */
@@ -509,4 +567,8 @@ void ovmx_decc_main(void *progxfer, void *cli_util, void *imghdr,
     if (argc) *argc = 1;
     if (argv) *argv = av32;
     if (envp) *envp = ev32;
+
+#if defined(__alpha__)
+    ovmx_disc_sp_line("ret");   /* SP just before returning to crt0->__main   */
+#endif
 }

@@ -5,11 +5,22 @@
 # EXPECT: contains:%SYSTEM-I-NOTMEMBER
 # EXPECT: regex:OVMX TCP/IP Services V[0-9]+\.[0-9]+
 # EXPECT: contains:Node: OVMX
-# EXPECT: contains:Device Error Count Summary
-# EXPECT: contains:No errors logged.
+# vms-050: SHOW ERROR de-fabbed (#892). It used to print a hardcoded "Device
+# Error Count Summary" banner ending in "No errors logged." REGARDLESS of the
+# real per-device error counts -- a constant lie (INV-6). It now READS the
+# executive device table's errcnt (vms_kif_devscan, the same field F$GETDVI
+# ERRCNT and SHOW DEVICE read) and lists only devices whose count > 0. This
+# suite runs with NO executive (/dev/vms absent, CLAUDE.md Rule 9), so -- exactly
+# like the de-fabbed SHOW DEVICE (tests/integration/test_show_device_rows.sh) --
+# the read fails honestly and SHOW ERROR prints nothing, $STATUS carrying the
+# failure. The assertion here is therefore that the fabricated banner is GONE;
+# the real reading is proven against a real /dev/vms by
+# tests/dcl/test_show_error_no_fabrication.sh and the acceptance battery.
+# EXPECT_NOT: contains:Device Error Count Summary
+# EXPECT_NOT: contains:No errors logged.
 # vms-050 / INV-6: SHOW WORKING_SET no longer prints an unconditional
-# "Working Set" line. It used to, only because the line was FABRICATED -- a
-# hardcoded 8192 quota and a quota*2 extent read from the DCL ctx, not the
+# "Working Set" line (#890). It used to, only because the line was FABRICATED --
+# a hardcoded 8192 quota and a quota*2 extent read from the DCL ctx, not the
 # executive. It is now a $GETJPI reader (cmd_show_working_set): on a host with
 # no /dev/vms (as here under ctest -- Rule 9) $GETJPI fails and the command
 # honestly prints NOTHING rather than a fabricated quota. So "Working Set" is

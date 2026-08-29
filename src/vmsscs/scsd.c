@@ -3664,6 +3664,17 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                                exist before its circuit does, exactly like
  *                                scsd_dlm_send_enq above.
  *
+ *   CHOKED, and new in vms-d81 (DLM rung H8):
+ *     scsd_dlm_client_send_deq_valblk()  node-A's cross-node $DEQ that WRITES the
+ *                                16-byte LVB. Same MTYPE-10 SYSAP message on the
+ *                                OPEN VMS$VAXcluster VC to the peer's OVMX$DLM
+ *                                server handle as scsd_dlm_client_send_op above,
+ *                                but it carries the value block with LCK_M_VALBLK
+ *                                set so the master replicates the wire value into
+ *                                res->valblk (vms_lock_dlm_xnode_deq). Ordinary
+ *                                sequenced SCS traffic on an already-open circuit;
+ *                                choked like every other DLM client send.
+ *
  *   CHOKED, and new in vms-600:
  *     scsd_mscp_srv_xfer()       the live scs_mscp_srv_xfer_fn: the SCA
  *                                block-transfer frames a READ streams before

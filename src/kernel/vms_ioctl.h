@@ -1720,6 +1720,33 @@ struct vms_getcli_args {
     char     command[VMS_CLI_CMDLINE_SIZE];  /* out: invoking DCL command line */
 };
 
+/*
+ * System memory statistics ($GETSYI-style, the reader behind SHOW MEMORY's
+ * "Physical Memory Usage" section -- rd vms-a3cd). System-wide, so unlike the
+ * $GETJPI process row it carries no per-process identity and needs no target
+ * selector. The executive reports two figures it can source honestly from the
+ * host VM system: total managed physical memory and current free memory, both
+ * in BYTES -- arch-neutral, because the kernel converts its own page count with
+ * its own PAGE_SIZE, so no VMS/host page-size skew crosses the wire. Fields VMS
+ * also shows but OVMX has no faithful source for (the Modified page list, VIO
+ * cache, pool, paging-file usage) are NOT carried here -- the renderer omits
+ * those sections rather than fabricate them (INV-6).
+ */
+struct vms_syi_meminfo {
+    uint64_t total_bytes;    /* out: total managed physical memory (bytes) */
+    uint64_t free_bytes;     /* out: current free memory (bytes) */
+    uint32_t fields_valid;   /* out: VMS_SYIMEM_V_* -- which figures are real */
+    uint32_t reserved;       /* must be zero */
+};
+
+#define VMS_SYIMEM_V_PHYS 0x00000001u  /* total_bytes/free_bytes are measured */
+
+struct vms_getsyi_mem_args {
+    struct vms_syi_meminfo info;   /* out: the memory figures */
+    uint32_t status;               /* return: SS$_ status */
+    uint32_t reserved;             /* must be zero */
+};
+
 #define VMS_IOCTL_SETPRN    _IOWR(VMS_IOC_MAGIC, 0x41, struct vms_setprn_args)
 #define VMS_IOCTL_GETJPI    _IOWR(VMS_IOC_MAGIC, 0x42, struct vms_getjpi_args)
 #define VMS_IOCTL_PROCSCAN  _IOWR(VMS_IOC_MAGIC, 0x43, struct vms_procscan_args)
@@ -1732,6 +1759,8 @@ struct vms_getcli_args {
 #define VMS_IOCTL_GETEXIT   _IOWR(VMS_IOC_MAGIC, 0x4A, struct vms_getexit_args)
 #define VMS_IOCTL_SETCLI    _IOWR(VMS_IOC_MAGIC, 0x4B, struct vms_setcli_args)
 #define VMS_IOCTL_GETCLI    _IOWR(VMS_IOC_MAGIC, 0x4C, struct vms_getcli_args)
+/* System-info facility ($GETSYI-style; SHOW MEMORY physical section, vms-a3cd) */
+#define VMS_IOCTL_GETSYIMEM _IOWR(VMS_IOC_MAGIC, 0x68, struct vms_getsyi_mem_args)
 
 /*
  * ABI lock for the process-table ioctls (vms-8019).
@@ -1820,6 +1849,10 @@ _Static_assert(VMS_IOCTL_ESTABLISH_SYSTEM == 0xC0085646u,
                "VMS_IOCTL_ESTABLISH_SYSTEM encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_REGISTER == 0xC0085640u,
                "VMS_IOCTL_REGISTER encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_getsyi_mem_args) == 32,
+               "vms_getsyi_mem_args layout changed: VMS_IOCTL_GETSYIMEM ABI break");
+_Static_assert(VMS_IOCTL_GETSYIMEM == 0xC0205668u,
+               "VMS_IOCTL_GETSYIMEM encodes differently here than on the reference build");
 
 /* ================================================================
  * P0 program region (vms-68f.i, in-process image activation foundation)

@@ -370,6 +370,19 @@ exec_task_alive(exec_task_ref_t *ref)
  */
 extern int ovmx_task_rss_pages(struct proc *p, uint64_t *pages_out);
 
+/*
+ * ovmx_sysmem_bytes (rd vms-a3cd): read the system-wide physical memory totals
+ * SHOW MEMORY's "Physical Memory Usage" section reports -- total managed memory
+ * and current free memory, in BYTES. DEFINED in the dedicated uvm-only TU
+ * vms_sysmem_netbsd.c (<uvm/uvm_extern.h> cannot be included in this shared
+ * header -- rbtree macro collision, same as ovmx_task_rss_pages). Needs no proc
+ * and no lock: it reads the global uvmexp counters via the maintained accessor
+ * uvm_availmem(true). Returns 1 and sets both out-params when uvm is
+ * up; returns 0 (leaving them untouched) before uvm init -> the Physical Memory
+ * section is then honestly omitted, never a fabricated 0.
+ */
+extern int ovmx_sysmem_bytes(uint64_t *total_bytes, uint64_t *free_bytes);
+
 static __inline exec_task_pin_t *
 exec_task_pin(exec_task_ref_t *ref)
 {

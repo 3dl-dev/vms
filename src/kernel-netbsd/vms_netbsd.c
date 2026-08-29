@@ -743,6 +743,34 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		return 0;
 
 	/*
+	 * System memory statistics ($GETSYI-style; SHOW MEMORY's "Physical Memory
+	 * Usage" section, rd vms-a3cd). System-wide, so -- like PING above and
+	 * unlike the process-table group below -- it needs no proc lookup: it reads
+	 * the global uvm counters directly. _IOWR, so `data' is the kernel-resident
+	 * copy NetBSD copies back out on return 0. ovmx_sysmem_bytes() (the
+	 * dedicated uvm-only TU vms_sysmem_netbsd.c) sources total/free physical
+	 * memory in bytes via the MAINTAINED accessor uvm_availmem(true); when uvm
+	 * is not yet up it returns 0 and we leave VMS_SYIMEM_V_PHYS clear so the
+	 * renderer honestly omits the section (INV-6), never a fabricated 0. */
+	case VMS_IOCTL_GETSYIMEM: {
+		struct vms_getsyi_mem_args *ma = (struct vms_getsyi_mem_args *)data;
+		uint64_t total_b = 0, free_b = 0;
+
+		ma->info.total_bytes  = 0;
+		ma->info.free_bytes   = 0;
+		ma->info.fields_valid = 0;
+		ma->info.reserved     = 0;
+		ma->reserved          = 0;
+		if (ovmx_sysmem_bytes(&total_b, &free_b)) {
+			ma->info.total_bytes  = total_b;
+			ma->info.free_bytes   = free_b;
+			ma->info.fields_valid = VMS_SYIMEM_V_PHYS;
+		}
+		ma->status = VMS_SS_NORMAL;
+		return 0;
+	}
+
+	/*
 	 * Event-flag facility. These are _IOWR: NetBSD has already copied the
 	 * caller's argument into the kernel buffer `data' and will copy our answer
 	 * back out after we return. We hand `data' straight to the shared facility,

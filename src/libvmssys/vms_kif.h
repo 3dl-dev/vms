@@ -461,6 +461,20 @@ uint32_t vms_kif_setprn(const char *prcnam);
 /* Read this process's row from the executive process table. */
 uint32_t vms_kif_getjpi_self(struct vms_procinfo *info);
 
+/* Read the executive's system-wide physical memory figures (SHOW MEMORY's
+ * "Physical Memory Usage" section). info->fields_valid & VMS_SYIMEM_V_PHYS is
+ * set only when total_bytes/free_bytes carry real executive data.
+ *
+ * OVMX-UNWIRED: vms_kif_getsyi_memory (vms-a3cd) -- wired ONLY on the
+ * NetBSD/VAX SHOW MEMORY path (cmd_show_memory's #if defined(__NetBSD__)
+ * branch, src/vmsdcl/dcl_cmd_show.c), where /proc/meminfo is absent. On the
+ * census arch (x86_64) that branch is preprocessed out -- SHOW MEMORY there
+ * reads /proc/meminfo directly -- so the product emits no call to this entry
+ * point on x86_64. It is genuinely wired on VAX (proven by the VAX rail
+ * acceptance battery), just not on the arch the census compiles. Same footing
+ * as vms_kif_dlm_xnode. */
+uint32_t vms_kif_getsyi_memory(struct vms_syi_meminfo *info);
+
 /* Resolve a process by VMS PID. SS$_NONEXPR if no such process. */
 uint32_t vms_kif_getjpi_pid(uint32_t vms_pid, struct vms_procinfo *info);
 

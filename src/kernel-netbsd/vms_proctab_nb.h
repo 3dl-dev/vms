@@ -223,6 +223,25 @@ struct vms_getjpi_args {
 	char     sel_prcnam[VMS_PRCNAM_XFER]; /* in: name selector, untruncated */
 };
 
+/* System memory statistics ($GETSYI-style; SHOW MEMORY physical section,
+ * vms-a3cd). MUST match src/kernel/vms_ioctl.h byte-for-byte. Bytes cross the
+ * wire (arch-neutral); no per-process identity. See vms_ioctl.h for the field
+ * rationale and the INV-6 honest-omission contract. */
+struct vms_syi_meminfo {
+	uint64_t total_bytes;    /* out: total managed physical memory (bytes) */
+	uint64_t free_bytes;     /* out: current free memory (bytes) */
+	uint32_t fields_valid;   /* out: VMS_SYIMEM_V_* -- which figures are real */
+	uint32_t reserved;       /* must be zero */
+};
+
+#define VMS_SYIMEM_V_PHYS 0x00000001u  /* total_bytes/free_bytes are measured */
+
+struct vms_getsyi_mem_args {
+	struct vms_syi_meminfo info;   /* out: the memory figures */
+	uint32_t status;               /* return: SS$_ status */
+	uint32_t reserved;             /* must be zero */
+};
+
 struct vms_procscan_args {
 	uint32_t index;                     /* in: cursor; out: next cursor */
 	uint32_t status;                    /* return: SS$_ status */
@@ -375,6 +394,8 @@ struct vms_dassgn_args {
 #define VMS_IOCTL_GETEXIT           _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x4A, struct vms_getexit_args)
 #define VMS_IOCTL_SETCLI            _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x4B, struct vms_setcli_args)
 #define VMS_IOCTL_GETCLI            _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x4C, struct vms_getcli_args)
+/* System-info facility ($GETSYI-style; SHOW MEMORY physical section, vms-a3cd) */
+#define VMS_IOCTL_GETSYIMEM         _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x68, struct vms_getsyi_mem_args)
 
 /*
  * Freeze the shared layouts -- the SAME sizes src/kernel/vms_ioctl.h freezes.
@@ -385,6 +406,8 @@ _Static_assert(sizeof(struct vms_procinfo) == 216,
                "vms_procinfo layout changed: process-table ioctl ABI break");
 _Static_assert(sizeof(struct vms_getjpi_args) == 288,
                "vms_getjpi_args layout changed: VMS_IOCTL_GETJPI ABI break");
+_Static_assert(sizeof(struct vms_getsyi_mem_args) == 32,
+               "vms_getsyi_mem_args layout changed: VMS_IOCTL_GETSYIMEM ABI break");
 _Static_assert(sizeof(struct vms_procscan_args) == 224,
                "vms_procscan_args layout changed: VMS_IOCTL_PROCSCAN ABI break");
 _Static_assert(sizeof(struct vms_setprn_args) == 72,
@@ -428,6 +451,8 @@ _Static_assert(VMS_IOCTL_SETPRN == 0xC0485641u,
                "VMS_IOCTL_SETPRN encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_GETJPI == 0xC1205642u,
                "VMS_IOCTL_GETJPI encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_GETSYIMEM == 0xC0205668u,
+               "VMS_IOCTL_GETSYIMEM encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_PROCSCAN == 0xC0E05643u,
                "VMS_IOCTL_PROCSCAN encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_SETIDENT == 0xC0685644u,

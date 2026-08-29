@@ -66,9 +66,12 @@ OpenVMS.`
   arch-specific** (vms-a3cd): x86_64/Alpha read Linux `/proc/meminfo`
   (MemTotal/MemFree/Dirty); NetBSD-VAX reads the executive's uvm counters through
   a `$GETSYI`-style KIF (see Section 4) -- `/proc/meminfo` is absent on VAX, and
-  reading it unconditionally printed all-zeros (the bug vms-a3cd fixes). On VAX
-  the **Modified** column has no maintained source and is honestly omitted, so
-  the VAX row is Total/Free/In Use only.
+  reading it unconditionally printed all-zeros (the bug vms-a3cd fixes). VMS
+  always shows the **Modified** column, so VAX prints it too (same 4-column
+  geometry as the Linux arches), but its data cell is left honestly **blank** --
+  no maintained NetBSD source for the VMS modified page-list, and a blank cell
+  says "no value" distinctly from the Linux path's real measured 0 (Dirty=0),
+  never a fabricated number.
 - **Paging File Usage**: rendered from `/proc/swaps` on the Linux arches
   (Reservable == Free -- OVMX tracks no page-file reservations, so every free
   block is reservable, a real free count, not a fabricated reservation figure).
@@ -101,7 +104,8 @@ maintains, not the raw field a map names), and what it omits:
   (`npages * PAGE_SIZE`), so no VMS/host page-size skew crosses the wire; the
   renderer divides by 512 for VMS pages.
 - **Modified** -- the VMS modified page-list has no maintained NetBSD-VAX analogue,
-  so the column is **honestly omitted** on VAX (not fabricated).
+  so the column HEADER is shown (VMS always shows it -- the 4-column format #915
+  owns) but its data cell is left **honestly blank** on VAX (not a fabricated 0).
 - **Slot Usage / Dynamic Memory / Virtual I/O Cache / Paging File** -- no faithful
   NetBSD-VAX source -> honestly omitted (INV-6). Only a section whose figures are
   real is rendered.

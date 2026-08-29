@@ -308,6 +308,30 @@ run_dcl_acceptance_battery() {
     must_not_have "$SEG" 'Infinite' "SHOW PROCESS/QUOTAS [vms-050]: does NOT print the fabricated 'Infinite' CPU limit"
     negctl        "$SEG" 'Process Quotas' "SHOW PROCESS/QUOTAS"
 
+    # --- SHOW WORKING_SET (de-fabbed: real WS size, no invented limits) ------
+    # vms-050 / INV-6: SHOW WORKING_SET used to print
+    #   Working Set  [current,quota,extent] = [8192,8192,16384]
+    #   Adjustment enabled  Authorized Quota = 8192  Authorized Extent = 16384
+    # where the quota DEFAULTED to a hardcoded 8192 (the DCL ctx value is 0 for
+    # a real login) and the extent was an INVENTED quota*2 formula -- a
+    # plausible constant and arithmetic read from the DCL context, not the
+    # executive. It is now a $GETJPI reader: the current working-set size
+    # (JPI$_PPGCNT) prints as the real VMS "Working Set  /Limit=" field, and the
+    # /Quota, /Extent and "Adjustment ... Authorized" limits print ONLY when the
+    # executive sourced the JIB quota block (VMS_PI_V_QUOTA). OVMX has no quota
+    # facility yet, so those are honestly OMITTED. Here, against a LIVE
+    # executive, the real "Working Set  /Limit=<n>" prints and NONE of the
+    # fabricated numbers do. The markers below are things only the deleted
+    # fabrication printed (the 8192 default, the quota*2 16384 extent, the old
+    # "[current,quota,extent]" shape), so they stay durable once real quota
+    # values are wired in.
+    run_cmd 'SHOW WORKING_SET'
+    must_match    "$SEG" 'Working Set +/Limit= *[0-9]+' "SHOW WORKING_SET [vms-050]: prints the real 'Working Set  /Limit=<n>' from a live \$GETJPI"
+    must_not_have "$SEG" '[current,quota,extent]' "SHOW WORKING_SET [vms-050]: does NOT print the deleted fabricated '[current,quota,extent]' shape"
+    must_not_have "$SEG" 'Authorized Quota = 8192' "SHOW WORKING_SET [vms-050]: does NOT print the fabricated 8192 authorized quota"
+    must_not_have "$SEG" 'Authorized Extent = 16384' "SHOW WORKING_SET [vms-050]: does NOT print the fabricated quota*2 (16384) authorized extent"
+    negctl        "$SEG" 'Working Set' "SHOW WORKING_SET"
+
     # --- SHOW DEFAULT (VMS filespec, no Unix path) --------------------------
     run_cmd 'SHOW DEFAULT'
     must_match    "$SEG" '[A-Z$_]+:\[[A-Z0-9._]+\]' "SHOW DEFAULT: prints a VMS device:[directory] filespec"

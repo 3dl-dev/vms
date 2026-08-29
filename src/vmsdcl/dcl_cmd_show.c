@@ -2982,18 +2982,74 @@ static int cmd_show_error(struct dcl_command *cmd)
 }
 
 /*
- * SHOW WORKING_SET - Display working set quotas.
+ * SHOW WORKING_SET - the calling process's working-set limits, read out of the
+ * executive (vms-050 / INV-6).
+ *
+ * WHAT IT USED TO BE. It printed
+ *     Working Set  [current,quota,extent] = [8192,8192,16384]
+ *     Adjustment enabled  Authorized Quota = 8192  Authorized Extent = 16384
+ * where `quota` DEFAULTED to a hardcoded 8192 (ctx->ws_quota is 0 for a real
+ * login, so the default is what every process printed) and `extent` was an
+ * INVENTED quota*2 formula. Neither number came from the executive: a
+ * plausible-looking constant and a bit of arithmetic were presented as THIS
+ * process's real working-set limits -- the exact fabrication class SHOW
+ * PROCESS/QUOTAS' seven hardcoded quota lines and SHOW SYSTEM's invented row
+ * were deleted for (CLAUDE.md Rule 10 / INV-6). The
+ * "[current,quota,extent] = [...]" shape is not the VMS SHOW WORKING_SET
+ * layout either.
+ *
+ * WHAT IT IS NOW. A READER of the executive's $GETJPI row for this process
+ * (vms_kif_getjpi_self, the SAME source SHOW STATUS, SHOW PROCESS and SHOW
+ * SYSTEM read). The one working-set number OVMX genuinely tracks is the
+ * CURRENT working-set size -- JPI$_PPGCNT, the resident page count
+ * (info.pages, VMS_PI_V_PAGES) -- so that is what prints, as the /Limit field.
+ * The working-set QUOTA and EXTENT limits live in the per-process JIB quota
+ * vector (info.quota.wsquota / wsextent, gated by VMS_PI_V_QUOTA); OVMX has no
+ * quota facility yet, so that bit is CLEAR -- exactly as in SHOW
+ * PROCESS/QUOTAS -- and the /Quota, /Extent fields and the whole
+ * "Adjustment ... Authorized" line are honestly OMITTED, never fabricated and
+ * never shown as a plausible zero. The moment a future item makes the
+ * executive source real JIB quota cells (vms-050 quota-wiring) those fields
+ * light up with the real values -- no code change here, and no fabrication
+ * ever.
+ *
+ * FORMAT (labels only, clean-room Rule 8): "Working Set", "/Limit=", "/Quota=",
+ * "/Extent=", "Adjustment enabled", "Authorized Quota =" and
+ * "Authorized Extent =" are the public VSI OpenVMS DCL Dictionary SHOW
+ * WORKING_SET label set. No label is invented; the exact column geometry is
+ * pinned to an oracle capture when the quota values become real.
  */
 static int cmd_show_working_set(struct dcl_command *cmd)
 {
     (void)cmd;
-    struct dcl_context *ctx = dcl_get_context();
-    int quota = ctx->ws_quota > 0 ? ctx->ws_quota : 8192;
-    int extent = quota * 2;
-    printf("  Working Set  [current,quota,extent] = [%d,%d,%d]\n",
-           quota, quota, extent);
-    printf("  Adjustment enabled  Authorized Quota = %d  Authorized Extent = %d\n",
-           quota, extent);
+
+    struct vms_procinfo info;
+    memset(&info, 0, sizeof(info));
+    uint32_t jst = vms_kif_getjpi_self(&info);
+    if (!(jst & 1))
+        return (int)jst;
+
+    if (info.fields_valid & VMS_PI_V_QUOTA) {
+        /* Executive sources the JIB working-set quota cells: the full VMS
+         * line plus the Authorized limits, every field real. The current WS
+         * size (JPI$_PPGCNT) is the /Limit; if the executive did not source
+         * it, fall back to the JIB default working-set size. */
+        printf("  Working Set  /Limit= %-6u /Quota= %-6u /Extent= %u\n",
+               (info.fields_valid & VMS_PI_V_PAGES) ? info.pages
+                                                    : info.quota.wsdefault,
+               info.quota.wsquota, info.quota.wsextent);
+        printf("  Adjustment enabled  Authorized Quota = %u  "
+               "Authorized Extent = %u\n",
+               info.quota.wsquota, info.quota.wsextent);
+    } else if (info.fields_valid & VMS_PI_V_PAGES) {
+        /* No WS-quota facility yet (VMS_PI_V_QUOTA clear): print the one real
+         * number -- the current working-set size, JPI$_PPGCNT -- as /Limit,
+         * and OMIT /Quota, /Extent and the Authorized line rather than
+         * fabricate an 8192 / quota*2 that names nothing true about this
+         * process. */
+        printf("  Working Set  /Limit= %u\n", info.pages);
+    }
+
     return SS$_NORMAL;
 }
 

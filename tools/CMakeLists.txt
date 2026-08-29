@@ -296,6 +296,45 @@ set_target_properties(vms_tcpip_config PROPERTIES
 )
 install(TARGETS vms_tcpip_config RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 
+# TCPIP$INETD.EXE -- the TCP/IP Services auxiliary server (rd vms-cdb9): the
+# master listener that reads TCPIP$SERVICE.DAT, binds each service's well-known
+# port over the executive BGn: seam, and spawns the configured service image on
+# an inbound connection. A thin image over the shared engine
+# (src/vmstcpip/services/tcpip_inetd.h) atop the proven server veneer
+# (src/vmstcpip/sockets/vms_bgsock.c, ovmx_bind/listen/accept + materialize_fd).
+# It links `vms` (which brings vmssys transitively for vms_kif_bg_* and provides
+# vms_pcb_init); the veneer object is compiled straight in so no separate library
+# is needed. Same rationale as the QEMU test's local vmsbgsock lib: the veneer is
+# deliberately NOT part of libvms's native-link symbol-vector graph.
+add_executable(vms_tcpip_inetd
+    vms_tcpip_inetd.c
+    ${CMAKE_SOURCE_DIR}/src/vmstcpip/sockets/vms_bgsock.c
+)
+
+target_include_directories(vms_tcpip_inetd PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/libvmssys
+    ${CMAKE_SOURCE_DIR}/src/vmstcpip/sockets
+    ${CMAKE_SOURCE_DIR}/src/vmstcpip/services
+)
+
+target_compile_definitions(vms_tcpip_inetd PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+target_compile_options(vms_tcpip_inetd PRIVATE
+    -Wall -Wextra
+)
+
+target_link_libraries(vms_tcpip_inetd PRIVATE vms pthread)
+
+set_target_properties(vms_tcpip_inetd PROPERTIES
+    OUTPUT_NAME "TCPIP\$INETD"
+    SUFFIX ".EXE"
+)
+install(TARGETS vms_tcpip_inetd RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+
 add_executable(vms_sysgen
     vms_sysgen.c
 )

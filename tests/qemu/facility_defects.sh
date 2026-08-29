@@ -538,7 +538,8 @@ dirlogical-compose-drops-common-member
 dcl-acp-search-fid-fabricated
 loginout-acp-auth-from-ods2
 multiuser-stage-shared-not-peruser
-tcpip-config-hostaddr-not-defined"
+tcpip-config-hostaddr-not-defined
+tcpip-inetd-reply-not-connected"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -5864,6 +5865,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    tcpip-inetd-reply-not-connected)
+        case "$_f" in
+        facility)     echo "TCP/IP Services AUXILIARY SERVER (TCPIP\$INETD-equivalent) -- the connection-to-service handoff of the inetd engine (tcpip_inetd_spawn, src/vmstcpip/services/tcpip_inetd.h, vms-cdb9), the header the shipped TCPIP\$INETD.EXE image runs and test_syssvc_tcpip_inetd proves. The auxiliary server binds a well-known port over the executive BGn: seam (the proven veneer ovmx_bind/listen/accept, vms-698), accepts an inbound connection, MATERIALIZES it as a real executive-backed fd (ovmx_materialize_fd, vms-0cd), and fork()+execv()s the configured service image with that fd as its SYS\$INPUT/SYS\$OUTPUT -- the inetd contract, the mechanism that unblocks VMSSSHD launched by the auxiliary server (vms-9ef). With no executive ovmx_socket() fails SS\$_NOSUCHDEV -> ENODEV honestly.";;
+        targets)      echo "vmstcpip/services/tcpip_inetd.h";;
+        suites_red)   echo "test_syssvc_tcpip_inetd";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tcpip_inetd_spawn() wires the accepted connection onto the spawned service image's stdout with 'if (dup2(rfd, STDOUT_FILENO) != STDOUT_FILENO) _exit(126);' so the image's reply goes back over the connection. The mutation redirects that dup2 to STDERR_FILENO, leaving the child's stdout at the auxiliary server's inherited console instead of the connection; the service still reads the client's bytes from stdin (that dup2 is untouched), still runs, and still exits 0 -- so the accept-fires-and-image-spawned and the image-exited-cleanly assertions stay green, and the service-DB parse and the no-executive honest-skip stay green. Only the reply never reaches the connection, so the client's recv times out and the byte-exact round-trip assertion reddens. One dup2 target diverted.";;
+        require_fail) cat <<'EOF'
+the service's reply came back BYTE-EXACT over the connection -- the accepted connection is the spawned service image's SYS$OUTPUT
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     bgsock-recv-length-zeroed)
         case "$_f" in
         facility)     echo "BSD-sockets RTL veneer over BGn: -- the ovmx_recv() receive path of the OVMX sockets veneer (src/vmstcpip/sockets/vms_bgsock.c, vms-22a prereq), the DECC\$SOCKET-equivalent middle layer between an application's standard socket()/send()/recv() and the executive-resident BGn: driver. The app speaks ONLY sockets; the veneer translates them into the public \$ASSIGN TCPIP\$DEVICE: + \$QIO ops. \$ASSIGN TCPIP\$DEVICE: fails SS\$_NOSUCHDEV with no executive (ovmx_socket -> ENODEV).";;
@@ -7076,6 +7094,18 @@ apply_edit() {
         # the no-op the selftest requires. configure() still returns success, so
         # only the TCPIP$INET_HOSTADDR read-back assertion reddens.
         sed -i 's|st = tcpip_cfg_define_system(TCPIP_LNM_INET_HOSTADDR, addr); /\* NEGCTL tcpip-config-hostaddr-not-defined \*/|st = SS$_NORMAL; /* NEGCTL tcpip-config-hostaddr-not-defined */|' "$_file";;
+
+    tcpip-inetd-reply-not-connected)
+        # Divert the accepted connection AWAY from the spawned service image's
+        # stdout in tcpip_inetd_spawn(): the child's SYS$OUTPUT dup2 targets
+        # STDERR_FILENO instead of STDOUT_FILENO, so the image's reply goes to
+        # the auxiliary server's inherited console, not the connection. Anchored
+        # on its own NEGCTL comment so the text is unique; after substitution the
+        # original STDOUT dup2 with that comment is gone, making a second apply
+        # the no-op the selftest requires. The service still reads the client's
+        # bytes (its stdin dup2 is untouched) and still exits 0, so only the
+        # byte-exact round-trip assertion reddens.
+        sed -i 's|if (dup2(rfd, STDOUT_FILENO) != STDOUT_FILENO) _exit(126); /\* NEGCTL tcpip-inetd-reply-not-connected \*/|if (dup2(rfd, STDERR_FILENO) != STDERR_FILENO) _exit(126); /* NEGCTL tcpip-inetd-reply-not-connected */|' "$_file";;
 
     bgsock-recv-length-zeroed)
         # Zero the received byte count in ovmx_recv(), anchored on its own NEGCTL

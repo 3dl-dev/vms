@@ -66,12 +66,46 @@ cp -v  "${OVERLAY}/src/setjmp/${TARGET}/"* "src/setjmp/${TARGET}/"
 mkdir -p "src/thread/${TARGET}"
 cp -v  "${OVERLAY}/src/thread/${TARGET}/"* "src/thread/${TARGET}/"
 cp -v  "${OVERLAY}/src/internal/vms_alpha_syscall.c" "src/internal/"
+# vms-430: LLP64 syscall RETURN-leg width fix. syscall_ret.c is a full overlay
+# (widened __syscall_ret to long long / unsigned long long). Its declaration in
+# syscall.h and the one truncating local in mmap.c are one-line widenings patched
+# below — stock musl is pinned + checksum-verified, so exact-text sed is safe and
+# reviewable (same idiom as the configure ARCH sed).
+cp -v  "${OVERLAY}/src/internal/syscall_ret.c" "src/internal/"
 
 # ---- teach configure the triplet -> ARCH mapping (idempotent) ----
 if ! grep -q "ARCH=alpha-dec-vms" configure; then
 	sed -i 's#^unknown) fail#alpha*) ARCH=alpha-dec-vms ;;\nunknown) fail#' configure
 fi
 grep -n "ARCH=alpha-dec-vms" configure
+
+# ==========================================================================
+# vms-430: widen the syscall RETURN leg to 64-bit (LLP64 return-leg fix).
+# ==========================================================================
+# On this LLP64 port `long` is 32 bits but pointers / the Linux-Alpha result
+# register are 64 bits. The syscall-ARGUMENT width was fixed in syscall_arch.h
+# (__scc / syscall_arg_t == long long); this is the RETURN counterpart. The raw
+# __syscallN return was widened in the syscall_arch.h overlay and __syscall_ret
+# in the syscall_ret.c overlay copied above; here we widen the two stock-musl
+# sites that would otherwise re-narrow a 64-bit pointer result to `long`(32):
+#   (1) the __syscall_ret DECLARATION in src/internal/syscall.h (must match the
+#       widened overlay definition, and widen every call site's return/arg), and
+#   (2) mmap()'s `long ret` local, which holds the raw 64-bit mmap address before
+#       the (void*)__syscall_ret cast.
+# Both patches are idempotent (guarded on the post-state) and hard-fail if the
+# pinned musl text ever drifts out from under them.
+if ! grep -q 'long long __syscall_ret' src/internal/syscall.h; then
+	sed -i 's/hidden long __syscall_ret(unsigned long),/hidden long long __syscall_ret(unsigned long long);\nhidden long/' src/internal/syscall.h
+fi
+grep -q 'long long __syscall_ret(unsigned long long)' src/internal/syscall.h || {
+	echo "vms-430 PATCH FAIL: could not widen __syscall_ret decl in syscall.h" >&2; exit 7; }
+
+if ! grep -q 'long long ret;' src/mman/mmap.c; then
+	sed -i 's/\tlong ret;/\tlong long ret;/' src/mman/mmap.c
+fi
+grep -q 'long long ret;' src/mman/mmap.c || {
+	echo "vms-430 PATCH FAIL: could not widen 'long ret' in mmap.c" >&2; exit 7; }
+echo "== vms-430 return-leg widening applied (syscall.h decl + mmap.c local) =="
 
 # ==========================================================================
 # PREFLIGHT: assert the ABI model the arch overlay assumes, against the REAL

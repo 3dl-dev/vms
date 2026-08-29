@@ -46,33 +46,48 @@ long long __vms_alpha_syscall(long long n, long long a1, long long a2,
 #define __SYSCALL_LL_E(x) (x)
 #define __SYSCALL_LL_O(x) (x)
 
-static inline long __syscall0(long long n)
+/*
+ * vms-430 -- 64-bit syscall RETURN ABI, the return-leg counterpart of the
+ * 64-bit ARGUMENT ABI above (__scc / syscall_arg_t == long long).
+ *
+ * On this LLP64 port `long` is only 32 bits, but the Linux-Alpha kernel returns
+ * a full 64-bit register: pointer-returning syscalls (mmap/mremap/brk) hand back
+ * a 64-bit address. A `long`-typed __syscallN would narrow that address to its
+ * low 32 bits (the compiler emits stl/ldl/sextl), so a genuine mmap result like
+ * 0x2000_0000_a000 collapses to 0xa000 -- and every mmap-backed malloc (musl
+ * mallocng behind decc$_malloc64) then memsets a bogus low address and SIGSEGVs.
+ * The backend __vms_alpha_syscall() already returns `long long`; keep that width
+ * all the way out by typing the raw return here as `long long` too. (The shared
+ * __syscall_ret is widened to match in src/internal/syscall_ret.c + syscall.h.)
+ * The argument side (__scc/syscall_arg_t) is unchanged.
+ */
+static inline long long __syscall0(long long n)
 {
 	return __vms_alpha_syscall(n, 0, 0, 0, 0, 0, 0);
 }
-static inline long __syscall1(long long n, long long a)
+static inline long long __syscall1(long long n, long long a)
 {
 	return __vms_alpha_syscall(n, a, 0, 0, 0, 0, 0);
 }
-static inline long __syscall2(long long n, long long a, long long b)
+static inline long long __syscall2(long long n, long long a, long long b)
 {
 	return __vms_alpha_syscall(n, a, b, 0, 0, 0, 0);
 }
-static inline long __syscall3(long long n, long long a, long long b, long long c)
+static inline long long __syscall3(long long n, long long a, long long b, long long c)
 {
 	return __vms_alpha_syscall(n, a, b, c, 0, 0, 0);
 }
-static inline long __syscall4(long long n, long long a, long long b, long long c,
+static inline long long __syscall4(long long n, long long a, long long b, long long c,
 			     long long d)
 {
 	return __vms_alpha_syscall(n, a, b, c, d, 0, 0);
 }
-static inline long __syscall5(long long n, long long a, long long b, long long c,
+static inline long long __syscall5(long long n, long long a, long long b, long long c,
 			     long long d, long long e)
 {
 	return __vms_alpha_syscall(n, a, b, c, d, e, 0);
 }
-static inline long __syscall6(long long n, long long a, long long b, long long c,
+static inline long long __syscall6(long long n, long long a, long long b, long long c,
 			     long long d, long long e, long long f)
 {
 	return __vms_alpha_syscall(n, a, b, c, d, e, f);

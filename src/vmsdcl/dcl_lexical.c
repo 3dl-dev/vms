@@ -2240,37 +2240,63 @@ static int lex_unique(struct dcl_context *ctx, const char *args,
  * When no more processes: returns "".
  * PIDs returned as 8-digit hex strings (VMS format).
  */
+/*
+ * WHERE F$PID's PIDS COME FROM (vms-050, INV-6 / Rule 9).
+ *
+ * F$PID used to snapshot Linux /proc: opendir("/proc"), take every numeric
+ * entry as a "PID", and print it as %08X -- so it returned the Linux kernel's
+ * pids dressed as VMS process IDs, and on an opendir() failure it fell back to
+ * getpid(). Both are fabrication: a VMS pid is EXECUTIVE-allocated (the
+ * process table row's vms_pid, distinct per process since #883/vms-d4ef), not
+ * the substrate's task pid, and F$PID is the DCL Dictionary's window onto the
+ * VMS process list -- successive calls return successive VMS pids, "" when the
+ * list is exhausted.
+ *
+ * It now snapshots the SAME executive process table SHOW SYSTEM and SHOW USERS
+ * read: vms_kif_procscan() (src/kernel-core/vms_proctab.c), walked in full,
+ * storing each row's vms_pid in cursor order. Every pid F$PID returns is
+ * therefore a pid SHOW SYSTEM would also list -- one executive source, not two.
+ * Redacted rows are kept: SHOW SYSTEM renders the pid on every row procscan
+ * returns (redaction hides identity fields, not existence), so F$PID enumerates
+ * the same set.
+ *
+ * NO EXECUTIVE, NO FABRICATION. Under ctest (and anywhere /dev/vms is absent --
+ * the only OVMX runtime is the kernel/QEMU path, Rule 9) the first procscan
+ * cannot reach the executive: its status has bit 0 clear and is NOT SS$_NONEXPR
+ * (a present-but-empty table). pid_count stays 0, the walk yields "", and
+ * nothing is invented -- no /proc read, no getpid() fallback. pid_scan_status
+ * carries that first status so lex_pid can surface an honest $STATUS.
+ */
 #define MAX_PID_LIST 256
-static pid_t pid_list[MAX_PID_LIST];
+static uint32_t pid_list[MAX_PID_LIST];
 static int pid_count = 0;
 static int pid_index = 0;
+static uint32_t pid_scan_status = SS$_NORMAL;
 
 static void populate_pid_list(void)
 {
     pid_count = 0;
     pid_index = 0;
-    DIR *d = opendir("/proc");
-    if (!d) {
-        /* Fallback: just return our own PID */
-        pid_list[pid_count++] = getpid();
-        return;
+
+    uint32_t scan_index = 0;
+    struct vms_procinfo info;
+    memset(&info, 0, sizeof(info));
+
+    /* First contact with the executive. A readable table (SS$_NORMAL rows, or
+     * SS$_NONEXPR once exhausted) is the honest source; anything else is the
+     * executive being unreachable, and leaves the list empty. */
+    uint32_t st = vms_kif_procscan(&scan_index, &info);
+    pid_scan_status = st;
+
+    while ((st & 1) && pid_count < MAX_PID_LIST) {
+        pid_list[pid_count++] = info.vms_pid;
+        st = vms_kif_procscan(&scan_index, &info);
     }
-    struct dirent *ent;
-    while ((ent = readdir(d)) != NULL && pid_count < MAX_PID_LIST) {
-        /* Only numeric entries are PIDs */
-        char *endp;
-        long p = strtol(ent->d_name, &endp, 10);
-        if (*endp == '\0' && p > 0) {
-            pid_list[pid_count++] = (pid_t)p;
-        }
-    }
-    closedir(d);
 }
 
 static int lex_pid(struct dcl_context *ctx, const char *args,
                    char *result, size_t result_size)
 {
-    (void)ctx;
     result[0] = '\0';
     if (!args) { populate_pid_list(); }
 
@@ -2299,14 +2325,25 @@ static int lex_pid(struct dcl_context *ctx, const char *args,
     }
 
     if (pid_index >= pid_count) {
-        /* No more processes */
+        /* End of the list: the documented "" terminator. $STATUS distinguishes
+         * a genuine end-of-walk (SS$_NORMAL) from a list that was empty because
+         * the executive was unreachable -- the honest executive-absent signal,
+         * never masked as a normal empty walk (INV-6 / Rule 9). */
         result[0] = '\0';
         if (sym_name[0] != '\0')
             dcl_sym_set(sym_name, "", DCL_SYM_LOCAL);
+        if (ctx) {
+            if (pid_count == 0 && !(pid_scan_status & 1) &&
+                pid_scan_status != SS$_NONEXPR)
+                ctx->last_status = pid_scan_status;
+            else
+                ctx->last_status = SS$_NORMAL;
+        }
         return 0;
     }
 
     snprintf(result, result_size, "%08X", (unsigned)pid_list[pid_index++]);
+    if (ctx) ctx->last_status = SS$_NORMAL;
 
     /* Update context symbol with current index */
     if (sym_name[0] != '\0') {

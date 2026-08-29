@@ -1543,20 +1543,25 @@ long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg)
     args.dir_csid = dlm_directory_csid(args.resnam);
 
     /*
-     * Master resolution for the report (vms-1bba, DB rung). With no remastering
-     * yet (DD deferred to 0.4), the directory node genuinely IS the master, so
-     * report master == directory DETERMINISTICALLY -- independent of whether a
-     * resource block exists on THIS node. That is what makes every node resolve
-     * the SAME master for a name: dir_csid is a property of the name + the
-     * shared membership vector, identical on all nodes, so master_csid is too.
-     * A resource actually mastered on THIS node (the found branch below) carries
-     * master_csid == vms_local_csid == dir_csid, so it stays consistent; a real
-     * non-zero mastered value overrides the default but equals it here. This is
-     * NOT a fabricated remote grant -- it reports who the directory hash names as
-     * master, the same value the enqueue path masters through.
+     * Master reporting is AUTHENTIC, not directory-deterministic (vms-1bba). The
+     * DIRECTORY node for a name is a deterministic property of the name + the
+     * membership vector (dir_csid above -- identical on every node given the same
+     * vector). The MASTER is NOT: on VMS a resource is UNMASTERED until its first
+     * $ENQ (master_csid 0, is_local_master 0), then mastered ON FIRST USE -- and
+     * the master need not be the directory node. So report the REAL mastering
+     * state: 0/unmastered until a lock block exists here, the genuine
+     * res->master_csid once it does (set in the found branch below; master_csid
+     * and is_local_master default to 0 from the memset at entry). This preserves
+     * the authentic "unmastered until locked" invariant (test_kmod_resdir).
+     *
+     * The cross-node CONSISTENCY this DB rung proves does NOT live in a
+     * synthesized master field: it lives in dir_csid (every node computes the
+     * SAME directory for a name) and in the enqueue split (a node grants/masters
+     * a resource iff it is the directory -- else SS$_UNSUPPORTED). Reporting
+     * dir_csid AS the master for an unmastered resource would conflate "who the
+     * directory says is responsible" with "who actually masters it yet", and
+     * fabricate a master where VMS has none.
      */
-    args.master_csid = args.dir_csid;
-    args.is_local_master = (args.dir_csid == vms_local_csid) ? 1 : 0;
 
     /* Read the resource block, if one exists, without creating it. */
     exec_lock(&vms_res_hash_lock);
@@ -1567,11 +1572,9 @@ long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg)
 
         exec_lock(&res->lock);
         args.found = 1;
-        if (res->master_csid != 0) {
-            args.master_csid = res->master_csid;
-            args.is_local_master =
-                (res->master_csid == vms_local_csid) ? 1 : 0;
-        }
+        args.master_csid = res->master_csid;
+        args.is_local_master =
+            (res->master_csid != 0 && res->master_csid == vms_local_csid) ? 1 : 0;
         exec_list_for_each_entry(granted, &res->granted, res_granted) {
             n++;
             /*

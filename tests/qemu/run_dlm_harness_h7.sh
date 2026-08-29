@@ -144,12 +144,25 @@ for n in $NAMES; do
         FAIL=1
     else
         AGREE_CHECKED=$((AGREE_CHECKED + 1))
+        # (a) DIRECTORY AGREEMENT -- the core DB proof: both nodes compute the
+        # SAME directory node for a name (deterministic hash over the shared
+        # membership vector).
         if [ "$ad" != "$bd" ]; then
             echo "      FAIL: $n DIRECTORY disagrees (A=$ad B=$bd) -- nodes did not resolve the same directory"
             FAIL=1
         fi
-        if [ "$am" != "$bm" ]; then
-            echo "      FAIL: $n MASTER disagrees (A=$am B=$bm) -- nodes did not resolve the same master"
+        # (a') AUTHENTIC MASTER: a resource not yet locked is UNMASTERED on VMS
+        # (master_csid 0) even though its directory is known -- the directory
+        # RECORDS a master, first-$ENQ ASSIGNS one; the master need not be the
+        # directory node. GET_RESMASTER is read BEFORE this driver's own $ENQ, so
+        # both nodes MUST report master 0: the directory does not fabricate a
+        # master for an unlocked resource (the same invariant test_kmod_resdir
+        # guards, proven here cross-node). Consistent MASTERING is proven by the
+        # $ENQ split below -- through real lock behaviour -- not by a synthesized
+        # master field. First-use mastering (master != directory) is the deferred
+        # DD/case-3 rung.
+        if [ "$am" != "0" ] || [ "$bm" != "0" ]; then
+            echo "      FAIL: $n master must be 0/unmastered before any \$ENQ (A=$am B=$bm) -- a not-yet-locked resource has no master; reporting the directory as master fabricates state"
             FAIL=1
         fi
         [ "$ad" = "1030" ] && SEEN_1030=1
@@ -200,12 +213,16 @@ echo "=========================================="
 if [ "$FAIL" = 0 ]; then
     echo "  DLM HARNESS H7 PASSED: two nodes, given the SAME static membership vector"
     echo "  (dlm_member_csids=1030,1031) and distinct local CSIDs, INDEPENDENTLY resolved"
-    echo "  the SAME directory AND master for every resource name -- with NO communication"
-    echo "  between them (no SCS join, no shared netdev). The directory genuinely"
-    echo "  distributed mastering across both members (some names -> 1030, some -> 1031),"
-    echo "  and each node's LOCAL \$ENQ succeeded for a name it masters and failed honestly"
-    echo "  with SS\$_UNSUPPORTED (2296) for a name the OTHER node masters -- forwarding is"
-    echo "  deferred (DC, 0.4), not fabricated. INV-6: no faked remote grant."
+    echo "  the SAME DIRECTORY node for every resource name -- with NO communication"
+    echo "  between them (no SCS join, no shared netdev), the directory being a pure"
+    echo "  function of name + membership. It distributed across both members (some"
+    echo "  names -> 1030, some -> 1031). Master is reported AUTHENTICALLY -- 0/unmastered"
+    echo "  before any \$ENQ (a not-yet-locked resource has no master; first-use mastering"
+    echo "  is the deferred DD rung) -- so no master is fabricated. CONSISTENT MASTERING is"
+    echo "  proven through REAL lock behaviour: each node's LOCAL \$ENQ succeeded for a name"
+    echo "  it is the directory for and failed honestly with SS\$_UNSUPPORTED (2296) for a"
+    echo "  name the OTHER node is the directory for -- mastering follows the directory,"
+    echo "  forwarding deferred (DC, 0.4). INV-6: no faked remote grant, no synthesized master."
     echo "=========================================="
     exit 0
 else

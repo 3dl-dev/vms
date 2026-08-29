@@ -62,6 +62,37 @@ module_param(vms_local_csid, uint, 0444);
 MODULE_PARM_DESC(vms_local_csid,
     "OVMX DLM: this node's cluster system ID (local scaffolding; the connection manager assigns the real CSID at cluster join in 0.4)");
 
+#if defined(OVMX_KTEST_FAULT_INJECT)
+/*
+ * TEST-ONLY: arm ACP block-I/O fault injection (rd vms-5f82). Compiled in ONLY
+ * for the out-of-tree QEMU-test vms.ko (src/kernel/Makefile defines the macro),
+ * never in the bootable executive (its distro Kbuild does not). The knob lets a
+ * kernel-module test under a real /dev/vms make a genuine ACP block op FAIL --
+ * exactly as a bad sector would -- so the executive's REAL per-device error
+ * accounting (vms_device.errcnt, which SHOW ERROR / F$GETDVI ERRCNT read) can be
+ * exercised end to end. Write "major:minor:count" to arm the next `count` block
+ * ops on that backing device to report failure; "M:N:0" disarms. Write-only, and
+ * a module-lifecycle facility, so it lives HERE in the Linux rind and forwards
+ * to the substrate-agnostic core, exactly as vms_local_csid above does.
+ */
+static int vms_ktest_bdev_fault_set(const char *val, const struct kernel_param *kp)
+{
+    unsigned int maj = 0, min = 0, cnt = 0;
+
+    (void)kp;
+    if (!val || sscanf(val, "%u:%u:%u", &maj, &min, &cnt) < 3)
+        return -EINVAL;
+    vmsfs_acp_test_arm_bdev_fault(maj, min, cnt);
+    return 0;
+}
+static const struct kernel_param_ops vms_ktest_bdev_fault_ops = {
+    .set = vms_ktest_bdev_fault_set,
+};
+module_param_cb(vms_ktest_bdev_fault, &vms_ktest_bdev_fault_ops, NULL, 0200);
+MODULE_PARM_DESC(vms_ktest_bdev_fault,
+    "TEST-ONLY (rd vms-5f82): arm ACP block-I/O fault injection as \"major:minor:count\"; count 0 disarms");
+#endif /* OVMX_KTEST_FAULT_INJECT */
+
 /* ================================================================
  * Process management
  * ================================================================ */

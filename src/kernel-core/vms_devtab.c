@@ -1069,6 +1069,48 @@ out:
  * device backs this unit, and how do I hold it open" differs, which is exactly
  * the kind of thing the kernel-backend seam exists to vary.
  */
+
+/*
+ * vms_devtab_note_io_error - RECORD one genuine device I/O error against the
+ * unit whose backing block device is (major, minor). This is the WRITER for the
+ * per-device error count SHOW ERROR and F$GETDVI(...,"ERRCNT") read (the errcnt
+ * field devinfo_fill() snapshots into vms_devinfo, sourced from this row): on
+ * real VMS ERRCNT is the driver's tally of hardware I/O errors on the unit, and
+ * OVMX's disk "driver" is the ACP's raw block access, so every FAILED block
+ * read/write to a unit's backing device is a device error for that unit.
+ *
+ * Called from the executive's block-I/O path (kernel-core/vmsfs_acp.c) ONLY on
+ * a genuine failure return from exec_blockdev_read_block/write_block -- never
+ * speculatively and never seeded, so the count is a true reading of real I/O
+ * errors and nothing else (CLAUDE.md INV-6). A count with no matching disk unit
+ * (a backing dev_t not enumerated as a DK unit) is silently dropped -- there is
+ * no row to charge it to, and inventing one would be the fabrication this
+ * accounting exists to avoid.
+ *
+ * Substrate-agnostic: a pure walk of the executive-global device table under the
+ * same lock order (list lock, then row lock) vms_devtab_disk_backing() uses, so
+ * it lives OUTSIDE the OVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE guard and is the ONE
+ * implementation on every substrate. errcnt is a fixed-width uint32_t, so the
+ * increment is width-identical on ILP32 (VAX) and LP64 (Alpha) alike.
+ */
+void vms_devtab_note_io_error(uint32_t major, uint32_t minor)
+{
+    struct vms_device *dev;
+
+    exec_lock(&vms_device_list_lock);
+    exec_list_for_each_entry(dev, &vms_device_list, list) {
+        if (dev->devclass != DC__DISK)
+            continue;
+        if (dev->backing_major != major || dev->backing_minor != minor)
+            continue;
+        exec_lock(&dev->lock);
+        dev->errcnt++;
+        exec_unlock(&dev->lock);
+        break;                  /* one unit per backing dev_t */
+    }
+    exec_unlock(&vms_device_list_lock);
+}
+
 #ifndef OVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE
 /*
  * vms_devtab_disk_backing - INTERNAL (non-ioctl) resolve of a DISK unit to its

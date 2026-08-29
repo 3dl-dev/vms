@@ -1077,6 +1077,25 @@ long vms_ioctl_disk_resolve(struct vms_proc *proc, unsigned long arg);
  */
 uint32_t vms_devtab_disk_backing(const char *devnam,
                                  uint32_t *major_out, uint32_t *minor_out);
+/*
+ * Record ONE genuine device I/O error against the disk unit whose backing block
+ * device is (major,minor) -- the WRITER for the per-device errcnt SHOW ERROR and
+ * F$GETDVI(...,"ERRCNT") read (rd vms-5f82). Called from the ACP block-I/O path
+ * (kernel-core/vmsfs_acp.c) only on a real failure return from
+ * exec_blockdev_read_block/write_block; never speculatively (INV-6). Defined in
+ * kernel-core, on every substrate.
+ */
+void vms_devtab_note_io_error(uint32_t major, uint32_t minor);
+#if defined(OVMX_KTEST_FAULT_INJECT)
+/*
+ * TEST-ONLY: arm block-I/O fault injection for the QEMU-test vms.ko so a real
+ * ACP block op can be made to FAIL (exactly as a bad sector would) and the real
+ * errcnt accounting observed. Compiled in ONLY when src/kernel/Makefile defines
+ * OVMX_KTEST_FAULT_INJECT (never in the bootable executive). Armed from the
+ * Linux module rind (vms_module.c module_param); count 0 = disarmed.
+ */
+void vmsfs_acp_test_arm_bdev_fault(uint32_t major, uint32_t minor, uint32_t count);
+#endif
 /* The job-to-terminal binding. Lives with the channel machinery because
  * its argument is a channel; the value it writes is process-table
  * state (struct vms_proc::terminal). */

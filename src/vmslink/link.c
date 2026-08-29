@@ -4035,6 +4035,57 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         }
     }
 
+    /* ---- vms-fd5 (component C1 of the vms-5f5 authentic Alpha per-image GP
+     * program; docs/design-alpha-per-image-gp.md §1.4/§2.3): compute and RECORD
+     * the per-image linkage-section base and each procedure's K = &PDSC - base.
+     *
+     * Per the MACRO Compiler Porting and User's Guide §2.3.1, a module's linkage
+     * section (EVAX psect $LINK$) holds MANY procedure descriptors (one per
+     * routine) plus external-address cells and linkage pairs; a callee
+     * establishes its own addressability as module_GP = &PDSC - K, where K is
+     * THIS procedure's offset from the linkage-section base. Only the linker
+     * (here) knows the final placed layout, so only the linker can compute K.
+     * This is producer-INTERNAL state ONLY: no on-disk/wire-format change (that
+     * is C2, vms-4ed's EVAX_R_OVMX_GPDISP relocation) and no prologue emission
+     * (that is C3, vms-095) — this block exists purely so a later component has
+     * something authentic to consume. Every psect named "$LINK$" is placed at
+     * `evax_rank` 2 above (all of them merged into ONE output section per the
+     * placement loop's "same-named psects merge across objects" rule), so the
+     * per-image base is simply that merged output section's address — 0 when
+     * the image defines no $LINK$ psect at all (an image with no procedures,
+     * never hit by a real Alpha object, kept only as a defensive default). */
+    uint64_t gp_linkage_base = 0;
+    for (int oi = 0; oi < nos; oi++)
+        if (!strcmp(osec[oi].name, "$LINK$")) { gp_linkage_base = osec[oi].addr; break; }
+
+    struct evax_gp_entry { char name[EVAX_NAME_MAX]; uint64_t pdsc; uint64_t k; };
+    int gp_cap = 0;
+    for (int i = 0; i < nin; i++) gp_cap += in[i].obj.nsym;
+    struct evax_gp_entry *gp_entries = gp_cap ? calloc((size_t)gp_cap, sizeof *gp_entries) : NULL;
+    int n_gp_entries = 0;
+    for (int i = 0; i < nin; i++)
+        for (int s = 0; s < in[i].obj.nsym; s++) {
+            struct evax_symbol *sy = &in[i].obj.sym[s];
+            if (!sy->defined || !sy->is_proc) continue;   /* only real PDSC-bearing procs */
+            uint64_t pdsc_addr = evax_sym_value_addr(in, i, sy);
+            snprintf(gp_entries[n_gp_entries].name, sizeof gp_entries[n_gp_entries].name,
+                     "%s", sy->name);
+            gp_entries[n_gp_entries].pdsc = pdsc_addr;
+            gp_entries[n_gp_entries].k    = pdsc_addr - gp_linkage_base;
+            n_gp_entries++;
+        }
+    if (n_gp_entries) {
+        fprintf(stderr, "%%LINK-I-GPBASE, EVAX linkage-section ($LINK$) base=0x%llx "
+                "count=%d\n", (unsigned long long)gp_linkage_base, n_gp_entries);
+        if (getenv("OVMX_LINK_DUMP_GP"))
+            for (int i = 0; i < n_gp_entries; i++)
+                fprintf(stderr, "%%LINK-I-GPENTRY, proc=%s pdsc=0x%llx k=0x%llx\n",
+                        gp_entries[i].name,
+                        (unsigned long long)gp_entries[i].pdsc,
+                        (unsigned long long)gp_entries[i].k);
+    }
+    free(gp_entries);
+
     /* ---- Synthesize the linker-defined section-boundary / _DYNAMIC symbols
      * (vms-838a) now that every psect is placed. Point each init/fini/preinit
      * boundary at the real bounds of its placed array psect; an absent psect

@@ -1112,10 +1112,13 @@ static int cmd_show_process(struct dcl_command *cmd)
  * the whole argument.
  *
  * ================================================================
- * FORMAT, GROUNDED (vms-086). No oracle capture exists for SHOW USERS
- * (docs/oracle/ has none), so this is grounded in the public VSI/HPE
- * OpenVMS DCL Dictionary SHOW USERS entry (CLAUDE.md Rule 8):
- *   https://www0.mi.infn.it/~calcolo/OpenVMS/ssb71/9996/9996p060.htm
+ * FORMAT, GROUNDED (vms-086, vms-050). A LIVE OpenVMS VAX V7.3 SHOW USERS
+ * and SHOW USERS/FULL capture now exists (docs/oracle/vax73-show-users.md,
+ * 2026-08-29, lab-2) and pins the exact column layout -- see the per-branch
+ * comments below. The wording of the summary line was previously grounded
+ * in the public VSI/HPE OpenVMS DCL Dictionary SHOW USERS entry (CLAUDE.md
+ * Rule 8, https://www0.mi.infn.it/~calcolo/OpenVMS/ssb71/9996/9996p060.htm)
+ * and the live capture confirms it verbatim.
  * ================================================================
  *
  * THE SUMMARY LINE'S REAL WORDING, independently confirmed by three
@@ -1312,8 +1315,16 @@ static int cmd_show_users(struct dcl_command *cmd)
          * subprocess has no terminal of its own, so its Terminal column is
          * blank; that is the honest value, and it is now visible here where
          * the old terminal[0] filter dropped the row entirely. */
-        printf("      Username     Node       Process Name      PID        "
-               "Terminal\n");
+        /* Column layout grounded in a LIVE OpenVMS VAX V7.3 SHOW USERS/FULL
+         * capture (docs/oracle/vax73-show-users.md, 2026-08-29). It replaces
+         * the earlier layout, which the code above noted was derived from the
+         * PRINTED DCL Dictionary example because "no oracle capture exists";
+         * one now does, and a live console is the more authoritative Rule 8
+         * source. Measured field widths: 1 leading space, username %-11s
+         * (cols 2-12), node %-6s (13-18), process-name %-14s (19-32), PID
+         * %08X (33-40), two spaces, terminal. The header is a hand-spaced
+         * literal, distinct from the data field widths, exactly as VMS emits. */
+        printf(" Username  Node   Process Name    PID     Terminal\n");
 
         index = 0;
         while (vms_kif_procscan(&index, &info) & 1) {
@@ -1326,7 +1337,7 @@ static int cmd_show_users(struct dcl_command *cmd)
                 upper_name[i] = (char)toupper((unsigned char)info.username[i]);
             upper_name[i] = '\0';
 
-            printf("      %-12s %-10s %-16s  %08X   %-15s\n",
+            printf(" %-11s%-6s%-14s%08X  %s\n",
                    upper_name, node, info.prcnam, (unsigned)info.vms_pid,
                    info.terminal);
         }
@@ -1336,8 +1347,12 @@ static int cmd_show_users(struct dcl_command *cmd)
          * column BLANK, not "0", so each count prints only when non-zero
          * and lands under its own heading. Batch is always zero today (no
          * batch execution engine, see above), so that column stays blank. */
-        printf("      Username     Node       Interactive  Subprocess     "
-               "Batch\n");
+        /* Live VAX V7.3 layout (docs/oracle/vax73-show-users.md): 1 leading
+         * space, username %-11s (cols 2-12), node %-6s (13-18), then the three
+         * counts right-justified with the Interactive value's right edge on
+         * col 29 -- %11s (19-29), %12s (30-41), %8s (42-49). A zero column
+         * renders blank (VMS blank-zero), never a literal "0". */
+        printf(" Username  Node     Interactive  Subprocess   Batch\n");
 
         for (int i = 0; i < seen_count; i++) {
             char upper_name[VMS_USERNAME_SIZE];
@@ -1346,13 +1361,10 @@ static int cmd_show_users(struct dcl_command *cmd)
                 upper_name[j] = (char)toupper((unsigned char)seen_users[i][j]);
             upper_name[j] = '\0';
 
-            /* Each count right-justifies to the END of its heading word.
-             * Against the heading
-             *   "      Username     Node       Interactive  Subprocess     Batch"
-             * the "%-12s %-10s " prefix reproduces everything up to (and
-             * including the space before) "Interactive", after which the three
-             * value columns are %11s (ends under Interactive), %12s (ends under
-             * Subprocess) and %10s (ends under Batch). A zero column is the
+            /* Value columns (live VAX V7.3 capture): the " %-11s%-6s" prefix
+             * places username (cols 2-12) and node (13-18); the three counts
+             * then right-justify as %11s (Interactive value's right edge on
+             * col 29), %12s (Subprocess), %8s (Batch). A zero column is the
              * empty string, so it renders as blanks -- VMS's blank-zero, never
              * a literal "0". */
             char icol[12] = "", scol[12] = "", bcol[12] = "";
@@ -1363,7 +1375,7 @@ static int cmd_show_users(struct dcl_command *cmd)
             if (seen_batch[i])
                 snprintf(bcol, sizeof(bcol), "%d", seen_batch[i]);
 
-            printf("      %-12s %-10s %11s%12s%10s\n",
+            printf(" %-11s%-6s%11s%12s%8s\n",
                    upper_name, node, icol, scol, bcol);
         }
     }
@@ -2092,10 +2104,18 @@ static int cmd_show_memory(struct dcl_command *cmd)
         char label[48];
         snprintf(label, sizeof(label), "  Main Memory (%.2fMb)", total_mb);
 
-        printf("%-30s%12s%12s%12s%12s\n",
+        /* Column widths grounded in a LIVE OpenVMS VAX V7.3 SHOW MEMORY
+         * capture (docs/oracle/vax73-show-memory.md, 2026-08-29), which
+         * supersedes the earlier guess: the value columns right-justify to
+         * cols 40/52/64/76. VMS pads the HEADER label to 30 and its first
+         * value field to 10 (30+10=40); the DATA label to 28 and every value
+         * field to 12 (28+12=40) -- so both rows land Total's right edge on
+         * col 40 despite the "Physical Memory Usage (pages):" header being two
+         * columns longer than the "  Main Memory (...)" data label. */
+        printf("%-30s%10s%12s%12s%12s\n",
                "Physical Memory Usage (pages):",
                "Total", "Free", "In Use", "Modified");
-        printf("%-30s%12ld%12ld%12ld%12ld\n",
+        printf("%-28s%12ld%12ld%12ld%12ld\n",
                label, total_pages, free_pages, inuse_pages, modified_pages);
     }
 

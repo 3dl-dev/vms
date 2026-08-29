@@ -330,7 +330,14 @@ uint32_t vms_kif_dlm_xnode(uint32_t op, uint32_t lkmode, uint32_t flags,
  * reports 1 iff a genuine user-mode blocking AST was queued to the holder proc).
  * Also returns blocking_req_lkid for an ENQ. Exercised by
  * tests/qemu/test_syssvc_dlm_xnode.c against a real /dev/vms; the product carrier
- * (scsd) builds the ioctl struct directly, as it does for the other DLM ops. */
+ * (scsd) builds the ioctl struct directly, as it does for the other DLM ops.
+ *
+ * OVMX-UNWIRED: vms_kif_dlm_xnode_blkast (vms-76d) -- like vms_kif_dlm_xnode, the
+ * BLKAST-wire carrier is scsd, a glibc process that reaches /dev/vms with direct
+ * POSIX ioctls (scsd_dlm_holder_establish / scsd_dlm_blkast_fire), not this
+ * freestanding client; no sys$ service issues it. This wrapper exists only so the
+ * holder-side BLKAST receive is observable against a real /dev/vms from the
+ * freestanding syssvc test. */
 uint32_t vms_kif_dlm_xnode_blkast(uint32_t op, uint32_t lkmode,
                                   uint32_t req_lkid, uint32_t master_lkid,
                                   uint32_t req_csid, uint32_t master_csid,

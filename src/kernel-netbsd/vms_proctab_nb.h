@@ -235,11 +235,19 @@ struct vms_setprn_args {
 	uint32_t pad;
 };
 
+/* Byte-for-byte the same as src/kernel/vms_ioctl.h. The JIB quota block rides
+ * SETIDENT (vms-14a): identity and the authorized quota set arrive together
+ * from the SYSUAF record LOGINOUT authenticated. Growing this struct moves
+ * VMS_IOCTL_SETIDENT's request number deliberately (the shared
+ * kernel-core/vms_proctab.c reads args.quota_valid/args.quota). */
 struct vms_ident_args {
 	char     username[VMS_USERNAME_SIZE]; /* authenticated user name */
 	uint32_t uic;                         /* (group << 16) | member */
 	uint32_t status;                      /* return: SS$_ status */
 	uint64_t authorized_privs;            /* SYSUAF uaf$q_priv */
+	uint32_t quota_valid;                 /* 1 = quota below is sourced */
+	uint32_t quota_pad;                   /* keep the quota block size stable */
+	struct vms_jib_quota quota;           /* authorized JIB quota set (SYSUAF) */
 };
 
 struct vms_establish_system_args {
@@ -381,7 +389,7 @@ _Static_assert(sizeof(struct vms_procscan_args) == 224,
                "vms_procscan_args layout changed: VMS_IOCTL_PROCSCAN ABI break");
 _Static_assert(sizeof(struct vms_setprn_args) == 72,
                "vms_setprn_args layout changed: VMS_IOCTL_SETPRN ABI break");
-_Static_assert(sizeof(struct vms_ident_args) == 48,
+_Static_assert(sizeof(struct vms_ident_args) == 104,
                "vms_ident_args layout changed: VMS_IOCTL_SETIDENT ABI break");
 _Static_assert(sizeof(struct vms_establish_system_args) == 8,
                "vms_establish_system_args layout changed: VMS_IOCTL_ESTABLISH_SYSTEM ABI break");
@@ -422,7 +430,7 @@ _Static_assert(VMS_IOCTL_GETJPI == 0xC1205642u,
                "VMS_IOCTL_GETJPI encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_PROCSCAN == 0xC0E05643u,
                "VMS_IOCTL_PROCSCAN encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_SETIDENT == 0xC0305644u,
+_Static_assert(VMS_IOCTL_SETIDENT == 0xC0685644u,
                "VMS_IOCTL_SETIDENT encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_ESTABLISH_SYSTEM == 0xC0085646u,
                "VMS_IOCTL_ESTABLISH_SYSTEM encodes differently here than on the reference build");

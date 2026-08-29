@@ -113,6 +113,16 @@ uint32_t vms_kif_register_continue(void);
 uint32_t vms_kif_setident(const char *username, uint32_t uic,
                           uint64_t authorized_privs);
 
+/* As vms_kif_setident(), but also establishes the authorized JIB quota set the
+ * account carries (vms-14a). LOGINOUT uses this so identity and quota arrive in
+ * one SETIDENT, from the same SYSUAF record it authenticated. quota == NULL is
+ * identical to plain vms_kif_setident() (no sourced quota, executive omits
+ * VMS_PI_V_QUOTA -- honest omission, INV-6). vms_kif_setident() is this with
+ * quota == NULL, so the ~30 identity-only callers are unaffected. */
+uint32_t vms_kif_setident_quota(const char *username, uint32_t uic,
+                                uint64_t authorized_privs,
+                                const struct vms_jib_quota *quota);
+
 /* Construct the SYSTEM identity onto this process (vms-a17e). The
  * OPA0:-style counterpart to vms_kif_setident() above: no username, uic,
  * or privilege mask to supply -- SYSTEM/[1,4]/ALL are constants the

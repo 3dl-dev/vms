@@ -293,6 +293,26 @@ target_link_libraries(test_libvms_sysuaf_priv_persona PRIVATE
 add_test(NAME test_libvms_sysuaf_priv_persona
          COMMAND test_libvms_sysuaf_priv_persona)
 
+# vms-14a — the [OVMX] SYSUAF quota region codec (sysuaf_quota_encode/decode).
+# Proves SYSTEM's oracle-grounded authorized JIB quota set round-trips
+# losslessly (the seed and LOGINOUT ends of the SETIDENT wire agree) and that
+# an unseeded record decodes as NOT present, so the executive honestly omits
+# VMS_PI_V_QUOTA rather than reporting a zeroed block as measured (INV-6). The
+# end-to-end "real values on a live executive" proof is the QEMU acceptance
+# battery; this is the host-side layout guard.
+add_executable(test_libvms_sysuaf_quota_codec
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_quota_codec.c)
+target_include_directories(test_libvms_sysuaf_quota_codec PRIVATE
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_libvms_sysuaf_quota_codec PRIVATE
+    vms
+    pthread
+    m
+)
+add_test(NAME test_libvms_sysuaf_quota_codec
+         COMMAND test_libvms_sysuaf_quota_codec)
+
 # Tests vms-e60 (SYSUAF.DAT UIC fields are OCTAL) and vms-2f8 (F$IDENTIFIER
 # READS the rights database) MIGRATED to the QEMU kernel-executive harness by
 # vms-d37: tests/qemu/test_syssvc_sysuaf_uic_base.c and

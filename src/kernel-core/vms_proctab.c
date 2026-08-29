@@ -270,6 +270,23 @@ static void proc_fill_info(const struct vms_proc *proc,
      */
     info->p1_base = proc->p1_base;
     info->p1_limit = proc->p1_limit;
+
+    /*
+     * Authorized JIB quota set (vms-14a). Copied out with the rest of the
+     * identity -- below the redaction early return, so a row the caller may not
+     * $GETJPI never reaches this line: SHOW PROCESS/QUOTAS is a per-process
+     * $GETJPI and the oracle refused every item on a cross-group process
+     * without WORLD (docs/oracle/vax73-privileges.md §5), so quota follows
+     * username/uic, not vms_pid/prcnam. VMS_PI_V_QUOTA is set ONLY when the
+     * process's identity actually carried a sourced quota (quota_valid): an
+     * unstamped or quota-less process leaves the bit clear and the reader omits
+     * the lines rather than printing a zeroed block as a measured limit
+     * (the fabrication class #884 deleted -- INV-6).
+     */
+    if (proc->quota_valid) {
+        info->quota = proc->quota;
+        info->fields_valid |= VMS_PI_V_QUOTA;
+    }
 }
 
 /*
@@ -930,6 +947,18 @@ long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg)
      * single uaf$q_priv quadword, so OVMX has one mask.
      */
     proc->cur_privs  = args.authorized_privs;
+
+    /*
+     * Authorized JIB quota set (vms-14a). Stamped with the rest of the identity
+     * under both locks, so a reader never sees this process's new quota beside
+     * its old name. quota_valid gates it: a caller with no SYSUAF quota to
+     * establish (quota_valid == 0) leaves the process's quota block unsourced,
+     * and proc_fill_info omits VMS_PI_V_QUOTA rather than reporting a zeroed
+     * block as measured (INV-6).
+     */
+    proc->quota_valid = args.quota_valid ? 1 : 0;
+    if (proc->quota_valid)
+        proc->quota = args.quota;
 
     exec_unlock(&proc->mode_lock);
     exec_unlock(&vms_proc_hash_lock);

@@ -483,6 +483,15 @@ struct vms_proc {
 	uint64_t            perm_privs;       /* permanent (authorized) privileges */
 	exec_lock_t         mode_lock;        /* guards current_mode/privs/image_* */
 
+	/* Authorized JIB quota set (vms-14a) -- byte-twin of the Linux struct
+	 * vms_proc field. Stamped by the SHARED kernel-core/vms_proctab.c
+	 * vms_ioctl_setident() under hash_lock+mode_lock, read by its
+	 * proc_fill_info(). quota is meaningful only when quota_valid == 1;
+	 * otherwise proc_fill_info leaves VMS_PI_V_QUOTA clear (honest omission,
+	 * INV-6). OVMX shows the configured quota, it does not enforce/charge it. */
+	uint8_t             quota_valid;      /* 1 = quota below is sourced */
+	struct vms_jib_quota quota;           /* authorized JIB quota set (SYSUAF) */
+
 	/* AST queues + hibernate/wake (src/kernel-core/vms_ast.c + vms_proctab.c). */
 	struct vms_ast_state ast[4];          /* one queue per access mode 0..3 */
 	exec_cv_t           hiber_wq;         /* $HIBER waiter cv; broadcast on AST arrival */

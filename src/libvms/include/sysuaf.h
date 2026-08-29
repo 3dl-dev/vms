@@ -99,6 +99,44 @@
 #define UAF$K_PWD_LENGTH_OFF 0x16A
 #define UAF$K_PWD2_OFF       0x16C
 
+/* =========================================================================
+ * [OVMX] SYSUAF QUOTA REGION SUB-LAYOUT (vms-14a) — CLAUDE.md Rule 8.
+ *
+ * The 132-byte uaf$r_quota region (@0x200, below) is OVMX-DEFINED, not
+ * VSI-authentic: the oracle located the region's VALUES (a real SYSTEM
+ * account's authorized quota set, docs/oracle/vax73-show-process-quotas.md
+ * §4) but the public $UAFDEF documentation does NOT publish the byte-level
+ * sub-offsets of the SYSUAF quota cells, so OVMX lays them out itself and
+ * LABELS the layout [OVMX]. Never presented as the on-disk VMS format.
+ *
+ * The region-relative sub-offsets below carry a PRESENCE MARKER then twelve
+ * little-endian longwords in EXACTLY struct vms_jib_quota's field order
+ * (src/kernel/vms_ioctl.h), so the seed (mksysuaf), the login decode
+ * (vms_login) and the executive's JIB block agree cell-for-cell. LE byte
+ * order and byte-array access match the rest of the substrate-agnostic
+ * $UAFDEF record (§ SUBSTRATE-AGNOSTIC above): identical on ILP32 VAX and
+ * LP64 Alpha, never a native long.
+ *
+ * PRESENCE IS DECLARED, NOT INFERRED FROM ZERO. A record whose region marker
+ * is not 1 (an unseeded account, or a legacy record) decodes as "no quota
+ * sourced" and the executive leaves VMS_PI_V_QUOTA clear — the same
+ * anti-"zero-means-absent" discipline `fields_valid` enforces at the wire.
+ * A genuinely-configured account has the marker set; a zero longword under a
+ * set marker is a real configured zero (e.g. a CPU limit of none). */
+#define UAF$K_QUO_PRESENT    0x00   /* u8: 1 = quota seeded, else unseeded    */
+#define UAF$K_QUO_ASTLM      0x04   /* LE u32, region-relative                */
+#define UAF$K_QUO_BIOLM      0x08
+#define UAF$K_QUO_BYTLM      0x0C
+#define UAF$K_QUO_DIOLM      0x10
+#define UAF$K_QUO_ENQLM      0x14
+#define UAF$K_QUO_FILLM      0x18
+#define UAF$K_QUO_PGFLQUOTA  0x1C
+#define UAF$K_QUO_PRCLM      0x20
+#define UAF$K_QUO_TQELM      0x24
+#define UAF$K_QUO_WSDEFAULT  0x28
+#define UAF$K_QUO_WSQUOTA    0x2C
+#define UAF$K_QUO_WSEXTENT   0x30   /* last cell ends @0x34 of the 132-byte region */
+
 /*
  * UAF$B_ENCRYPT algorithm byte values come from $UAIDEF (uaidef.h, included
  * above) so there is ONE definition of UAI$C_PURDY_S across the writer
@@ -172,6 +210,91 @@ _Static_assert(offsetof(sysuaf_rms_record_t, uaf$b_pwd_length) == UAF$K_PWD_LENG
                "UAF$B_PWD_LENGTH must be at 0x16A (oracle [PIN])");
 _Static_assert(offsetof(sysuaf_rms_record_t, uaf$q_pwd2) == UAF$K_PWD2_OFF,
                "UAF$Q_PWD2 must be at 0x16C (oracle [PIN])");
+/* The [OVMX] quota region is real estate inside the 644-byte record; the last
+   cell (UAF$K_QUO_WSEXTENT @0x30 + 4) must fit the 132-byte region. */
+_Static_assert(UAF$K_QUO_WSEXTENT + 4 <= 132,
+               "[OVMX] quota sub-offsets overflow uaf$r_quota[132]");
+
+/* =========================================================================
+ * [OVMX] SYSUAF QUOTA CODEC (vms-14a) — encode/decode the uaf$r_quota region.
+ *
+ * sysuaf_quota_t is the twelve authorized JIB quota cells, in EXACTLY struct
+ * vms_jib_quota's field order (src/kernel/vms_ioctl.h). mksysuaf encodes a
+ * seed row into the record; vms_login decodes the record and hands the block
+ * to the executive via VMS_IOCTL_SETIDENT, where it becomes the process's JIB
+ * quota vector and lights VMS_PI_V_QUOTA. Header-inline so no shared-image
+ * export / symbol-vector entry is required, exactly like
+ * sysuaf_record_privileges() above.
+ * ========================================================================= */
+typedef struct {
+    uint32_t astlm;      /* JPI$_ASTLM     */
+    uint32_t biolm;      /* JPI$_BIOLM     */
+    uint32_t bytlm;      /* JPI$_BYTLM     */
+    uint32_t diolm;      /* JPI$_DIOLM     */
+    uint32_t enqlm;      /* JPI$_ENQLM     */
+    uint32_t fillm;      /* JPI$_FILLM     */
+    uint32_t pgflquota;  /* JPI$_PGFLQUOTA */
+    uint32_t prclm;      /* JPI$_PRCLM     */
+    uint32_t tqelm;      /* JPI$_TQCNT     */
+    uint32_t wsdefault;  /* JPI$_DFWSCNT   */
+    uint32_t wsquota;    /* JPI$_WSQUOTA   */
+    uint32_t wsextent;   /* JPI$_WSEXTENT  */
+} sysuaf_quota_t;
+
+static inline void sysuaf__put_le32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)v;         p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+static inline uint32_t sysuaf__get_le32(const uint8_t *p)
+{
+    return  (uint32_t)p[0]        | ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/* Write the twelve quota cells and set the presence marker. */
+static inline void sysuaf_quota_encode(sysuaf_rms_record_t *raw,
+                                       const sysuaf_quota_t *q)
+{
+    uint8_t *r = raw->uaf$r_quota;
+    r[UAF$K_QUO_PRESENT] = 1;
+    sysuaf__put_le32(r + UAF$K_QUO_ASTLM,     q->astlm);
+    sysuaf__put_le32(r + UAF$K_QUO_BIOLM,     q->biolm);
+    sysuaf__put_le32(r + UAF$K_QUO_BYTLM,     q->bytlm);
+    sysuaf__put_le32(r + UAF$K_QUO_DIOLM,     q->diolm);
+    sysuaf__put_le32(r + UAF$K_QUO_ENQLM,     q->enqlm);
+    sysuaf__put_le32(r + UAF$K_QUO_FILLM,     q->fillm);
+    sysuaf__put_le32(r + UAF$K_QUO_PGFLQUOTA, q->pgflquota);
+    sysuaf__put_le32(r + UAF$K_QUO_PRCLM,     q->prclm);
+    sysuaf__put_le32(r + UAF$K_QUO_TQELM,     q->tqelm);
+    sysuaf__put_le32(r + UAF$K_QUO_WSDEFAULT, q->wsdefault);
+    sysuaf__put_le32(r + UAF$K_QUO_WSQUOTA,   q->wsquota);
+    sysuaf__put_le32(r + UAF$K_QUO_WSEXTENT,  q->wsextent);
+}
+
+/* Decode the twelve quota cells. Returns 1 if the record carries a seeded
+   quota block (presence marker == 1), else 0 and *q is left untouched. A
+   caller that gets 0 MUST leave VMS_PI_V_QUOTA clear (honest omission). */
+static inline int sysuaf_quota_decode(const sysuaf_rms_record_t *raw,
+                                      sysuaf_quota_t *q)
+{
+    const uint8_t *r = raw->uaf$r_quota;
+    if (r[UAF$K_QUO_PRESENT] != 1)
+        return 0;
+    q->astlm     = sysuaf__get_le32(r + UAF$K_QUO_ASTLM);
+    q->biolm     = sysuaf__get_le32(r + UAF$K_QUO_BIOLM);
+    q->bytlm     = sysuaf__get_le32(r + UAF$K_QUO_BYTLM);
+    q->diolm     = sysuaf__get_le32(r + UAF$K_QUO_DIOLM);
+    q->enqlm     = sysuaf__get_le32(r + UAF$K_QUO_ENQLM);
+    q->fillm     = sysuaf__get_le32(r + UAF$K_QUO_FILLM);
+    q->pgflquota = sysuaf__get_le32(r + UAF$K_QUO_PGFLQUOTA);
+    q->prclm     = sysuaf__get_le32(r + UAF$K_QUO_PRCLM);
+    q->tqelm     = sysuaf__get_le32(r + UAF$K_QUO_TQELM);
+    q->wsdefault = sysuaf__get_le32(r + UAF$K_QUO_WSDEFAULT);
+    q->wsquota   = sysuaf__get_le32(r + UAF$K_QUO_WSQUOTA);
+    q->wsextent  = sysuaf__get_le32(r + UAF$K_QUO_WSEXTENT);
+    return 1;
+}
 
 /* Primary key = 32-byte username @0x04; secondary key = UIC longword @0x24. */
 #define SYSUAF_KEY_USERNAME_POS  UAF$K_USERNAME_OFF

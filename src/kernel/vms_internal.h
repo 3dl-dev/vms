@@ -583,6 +583,20 @@ struct vms_proc {
     spinlock_t          mode_lock;
 
     /*
+     * Authorized JIB quota set (vms-14a). LOGINOUT copies the account's SYSUAF
+     * quota cells here via VMS_IOCTL_SETIDENT, alongside username/uic/privs and
+     * under the SAME hash_lock+mode_lock the rest of the identity is stamped
+     * under -- one indivisible identity, never observed half-updated. quota is
+     * meaningful only when quota_valid == 1; a process whose identity carried no
+     * quota (a $CREPRC subprocess that did not re-read SYSUAF) has quota_valid
+     * == 0 and proc_fill_info leaves VMS_PI_V_QUOTA clear (honest omission,
+     * INV-6). OVMX shows the CONFIGURED quota; it does not ENFORCE/charge it
+     * (enforcement is a separate facility -- vms-14a spec).
+     */
+    uint8_t             quota_valid;    /* 1 = quota below is sourced */
+    struct vms_jib_quota quota;         /* authorized JIB quota set (SYSUAF) */
+
+    /*
      * Controlled mode-transition pairing (vms-68f.iii, in-process image
      * activation foundation, increment (iii) -- docs/design-in-process-
      * activation.md Part II §A.1.3, §A.2.3). VMS_IOCTL_ENTER_IMAGE sets

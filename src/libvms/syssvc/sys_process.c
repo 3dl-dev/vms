@@ -884,6 +884,11 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          * success (INV-6, CLAUDE.md Rule 9).
          */
         if ((rep.status & 1) && child_username[0]) {
+            /* $CREPRC stamps identity only (vms-14a): a subprocess's identity
+             * is inherited/supplied, not authenticated against SYSUAF here, so
+             * the plain (quota-less) SETIDENT is used and the executive omits
+             * VMS_PI_V_QUOTA rather than invent a quota block. JIB quota
+             * inheritance is a separate facility increment. */
             uint32_t ist = vms_kif_setident(child_username, child_uic,
                                             child_privs);
             if (!(ist & 1))

@@ -70,18 +70,31 @@ items:
       rung; H5 proves the same-peer case. No fabricated wire reply or grant (INV-6).
   - id: cluster-dlm$remaster-lvb-deadlock
     kind: feature
-    status: absent
+    status: partial
     authenticity: real
     vms: "Resource-directory consistency, dynamic remastering, LVB replication, distributed deadlock detection"
     evidence: src/kernel-core/vms_lock.c
     notes: >
-      Still honestly out of scope, above the contention rung: resource-directory
-      consistency (vms-1bba), remastering on membership change (vms-6ee), LVB
-      replication (vms-d81), and distributed deadlock detection (vms-ec75). The
-      cross-node ENQ carries no VALBLK and the queue path skips the single-node
-      (proc-keyed) deadlock detector, both by design — SS$_UNSUPPORTED / omission,
-      never a fabricated answer. A non-local directory/master on the SEND side
-      still fails SS$_UNSUPPORTED (dlm_resolve_master). Gap is authentic (real).
+      Partial, and each sub-part is honest about what it does and does not do.
+      RESOURCE-DIRECTORY CONSISTENCY (vms-1bba) and LVB REPLICATION over the wire
+      (vms-d81/vms-eeb, the H8 write + H9 read crossings) are present on their own
+      rungs. DYNAMIC REMASTERING now has its FOUNDATION: the graceful-departure
+      directory INGRESS (vms-2bf, DLM rung H10a). On a graceful cluster departure
+      (SCS_MEMBER_OP_DEPART class-0x04) scsd calls the LOCAL ioctl
+      VMS_IOCTL_DLM_MEMBER_DEPART with the departed CSID; the executive drops it
+      from the LIVE directory membership (the static insmod dlm_member_csids vector
+      is not mutated — a runtime departed-set filters it) and invalidates cached
+      res->dir_csid, so dlm_directory_csid re-resolves over the survivors and a
+      resource whose directory hashed to the departed node deterministically
+      re-masters to a survivor. Proven on a THREE-node live A/B/C QEMU harness with
+      real /dev/vms on all three (tests/qemu/run_dlm_harness_h10.sh: node C departs,
+      survivors emit SCSD-I-DLMDEPART found=1 live=2, node A emits SCSD-I-DLMREMASTER
+      dir_before=1032 dir_after in {1030,1031}). STILL ABSENT above this foundation:
+      the cross-node lock-STATE rebuild (COLLECTing survivors' origin records and
+      reconstructing res->granted — H10b, vms-dca9), and distributed DEADLOCK
+      detection (vms-ec75; the queue path skips the single-node proc-keyed detector
+      by design). H10a re-resolves the DIRECTORY, not the granted lock state — an
+      honest omission, never a fabricated remaster (INV-6).
   - id: cluster-dlm$scs-transport
     kind: feature
     status: partial

@@ -217,6 +217,17 @@ struct vms_dlm_xnode_args {
  */
 #define VMS_DLM_STS_QUEUED  0u
 
+/* $DLM member departure (rd vms-2bf, DLM rung H10a). MUST match src/kernel/
+ * vms_ioctl.h byte-for-byte. See there for the semantics + INV-6 contract:
+ * scsd reports a graceful departure, the executive shrinks live membership and
+ * re-resolves the directory over the survivors. */
+struct vms_dlm_depart_args {
+	uint32_t departed_csid;   /* in: the CSID that left the cluster */
+	uint32_t members_live;    /* return: live directory-member count after shrink */
+	uint32_t found;           /* return: 1 iff departed_csid was a configured member */
+	uint32_t status;          /* return: SS$_ status */
+};
+
 /* ================================================================
  * Request numbers. All five are _IOWR carrying the SAME structs and NR bytes as
  * src/kernel/vms_ioctl.h (0x30-0x34, magic 'V'), so their command words are
@@ -229,6 +240,7 @@ struct vms_dlm_xnode_args {
 #define VMS_IOCTL_GETLKI        _IOWR(VMS_LOCK_IOC_MAGIC, 0x33, struct vms_getlki_args)
 #define VMS_IOCTL_GET_RESMASTER _IOWR(VMS_LOCK_IOC_MAGIC, 0x34, struct vms_resmaster_args)
 #define VMS_IOCTL_DLM_XNODE     _IOWR(VMS_LOCK_IOC_MAGIC, 0x35, struct vms_dlm_xnode_args)
+#define VMS_IOCTL_DLM_MEMBER_DEPART _IOWR(VMS_LOCK_IOC_MAGIC, 0x36, struct vms_dlm_depart_args)
 
 /*
  * Freeze the shared layouts -- see the other _nb.h contracts' identical asserts:
@@ -246,5 +258,7 @@ _Static_assert(sizeof(struct vms_resmaster_args) == 64,
                "vms_resmaster_args changed size -- VMS_IOCTL_GET_RESMASTER ABI break");
 _Static_assert(sizeof(struct vms_dlm_xnode_args) == 120,
                "vms_dlm_xnode_args changed size -- VMS_IOCTL_DLM_XNODE ABI break");
+_Static_assert(sizeof(struct vms_dlm_depart_args) == 16,
+               "vms_dlm_depart_args changed size -- VMS_IOCTL_DLM_MEMBER_DEPART ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

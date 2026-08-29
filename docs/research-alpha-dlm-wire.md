@@ -164,6 +164,23 @@ unmastered), `is_local_master`, `local_csid`, `n_granted`. This is exactly the
 "resource-directory / mastering lookup" the oracle must ground: OVMX resolves the
 master via `GET_RESMASTER` before it can send an ENQ to the right node.
 
+**Membership change — the departure INGRESS [DOCUMENTED↔code], `vms-2bf` (H10a).**
+When a member LEAVES the cluster, the directory vector shrinks and every name
+re-hashes over the survivors, so a resource whose directory (or master) resolved
+to the departed node must re-resolve. In OVMX the **graceful-departure directory
+re-resolution** is the departure INGRESS, and it rides **NO new wire op**: scsd,
+observing the connection manager's own graceful class-0x04 self-departure
+(`SCS_MEMBER_OP_DEPART`) on the VC, issues the **LOCAL** ioctl
+`VMS_IOCTL_DLM_MEMBER_DEPART` to its own executive with the departed CSID. The
+executive marks that CSID gone from the LIVE directory membership (the static
+`dlm_member_csids` vector is not mutated — a runtime departed-set filters it) and
+invalidates cached `res->dir_csid`, so `dlm_directory_csid` re-resolves over the
+survivors on next use and a departed master's resources re-master to a survivor.
+This is the DIRECTORY re-resolution only; the cross-node **lock-STATE rebuild** —
+COLLECTing survivors' origin records and reconstructing `res->granted`, which IS a
+new SCS message class — is the **H10b** rung (`vms-dca9`). Proven on the 3-node
+`tests/qemu/run_dlm_harness_h10.sh` live harness (real `/dev/vms` on all three).
+
 ---
 
 ## 4. Cross-node message flow — [DOCUMENTED] semantics, [OBSERVED/RE] bytes

@@ -428,23 +428,55 @@ static void resource_release(struct vms_lock_resource *res)
  * overlaps vms-2f3's rejoin). A static, harness/operator-supplied vector is an
  * honest controlled input for the directory proof, never fabricated live state.
  */
+/*
+ * Runtime departure set (rd vms-2bf, DLM rung H10a). The configured membership
+ * vector (dlm_member_csids) is a STATIC insmod param a graceful departure cannot
+ * mutate; instead the executive marks a member departed HERE, via
+ * VMS_IOCTL_DLM_MEMBER_DEPART, and the LIVE membership the directory hashes over
+ * is the configured set MINUS the departed. dlm_member_departed[i] == 1 means
+ * the i-th configured member left the cluster. Departure is MONOTONIC in this
+ * rung (a member departs and does not rejoin -- rejoin is 0.4/vms-2f3), so the
+ * flag only ever goes 0 -> 1; readers need no lock (a concurrent enqueue sees
+ * either the pre- or post-departure membership, both consistent, self-healing on
+ * the next call). The ioctl mutates it under vms_res_hash_lock together with the
+ * directory-cache invalidation it drives. INV-6: set only from a REAL departure
+ * the connection manager (scsd) reported, never fabricated.
+ */
+static uint8_t dlm_member_departed[VMS_DLM_MAX_MEMBERS];
+
 static unsigned int dlm_membership_count(void)
 {
-    return dlm_member_count > 0 ? (unsigned int)dlm_member_count : 1u;
+    unsigned int i, n = 0;
+
+    if (dlm_member_count <= 0)
+        return 1u;   /* cluster-of-one fallback (unconfigured) */
+    for (i = 0; i < (unsigned int)dlm_member_count && i < VMS_DLM_MAX_MEMBERS; i++)
+        if (!dlm_member_departed[i])
+            n++;
+    return n > 0 ? n : 1u;
 }
 
 /*
- * The CSID of the idx-th member of the directory vector. Reads the configured
- * static vector; falls back to the local CSID when unconfigured or out of range
- * (cluster-of-one). Every node given the SAME ordered vector maps idx -> CSID
- * identically, which is what makes the directory (and this rung's master)
- * resolution AGREE across nodes.
+ * The CSID of the idx-th LIVE member of the directory vector (departed members
+ * skipped). Reads the configured static vector minus the runtime departure set;
+ * falls back to the local CSID when unconfigured or out of range (cluster-of-
+ * one). Every node given the SAME ordered vector AND the same departures maps
+ * idx -> CSID identically, which is what keeps directory/master resolution in
+ * agreement across nodes as membership shrinks.
  */
 static uint32_t dlm_member_csid(unsigned int idx)
 {
-    if (dlm_member_count > 0 && idx < (unsigned int)dlm_member_count &&
-        idx < VMS_DLM_MAX_MEMBERS)
-        return dlm_member_csids[idx];
+    unsigned int i, live = 0;
+
+    if (dlm_member_count > 0) {
+        for (i = 0; i < (unsigned int)dlm_member_count && i < VMS_DLM_MAX_MEMBERS; i++) {
+            if (dlm_member_departed[i])
+                continue;
+            if (live == idx)
+                return dlm_member_csids[i];
+            live++;
+        }
+    }
     return vms_local_csid;
 }
 
@@ -1529,6 +1561,67 @@ out:
  * test can call it before and after an $ENQ to prove the local-master path
  * actually mastered the resource, instead of asserting a hand-set structure.
  */
+/*
+ * vms_ioctl_dlm_member_depart - $DLM graceful member departure (rd vms-2bf,
+ * DLM rung H10a). scsd calls this when it observes a graceful cluster departure
+ * (SCS_MEMBER_OP_DEPART). Mark departed_csid gone from the LIVE directory
+ * membership, then invalidate every resource's cached directory (res->dir_csid)
+ * -- and a master that resolved to the departed node (res->master_csid ==
+ * departed_csid) -- so the next resolution re-runs over the shrunk set:
+ * dlm_directory_csid re-hashes % the smaller live count, and a departed master's
+ * resources remaster to a survivor. A lock's STATE is NOT reconstructed here --
+ * that (collecting survivors' origin records + rebuilding res->granted) is the
+ * H10b rung (vms-dca9). Returns members_live (post-shrink directory count) and
+ * found (1 iff departed_csid was a configured member). INV-6: reflects a REAL
+ * departure the connection manager reported; nothing fabricated.
+ */
+long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_dlm_depart_args args;
+    struct vms_lock_resource *res;
+    unsigned int i;
+    int bkt;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    exec_lock(&vms_res_hash_lock);
+
+    /* Mark the departed CSID gone from the LIVE membership (the configured set
+     * minus the runtime departure flags). CSID 0 is reserved ("unmastered") and
+     * is never a member, so it never matches. */
+    if (dlm_member_count > 0 && args.departed_csid != 0) {
+        for (i = 0; i < (unsigned int)dlm_member_count && i < VMS_DLM_MAX_MEMBERS; i++) {
+            if (dlm_member_csids[i] == args.departed_csid) {
+                dlm_member_departed[i] = 1;
+                args.found = 1;
+            }
+        }
+    }
+
+    /* Re-resolve the directory: the membership modulus changed, so every cached
+     * res->dir_csid is stale -- clear it so dlm_directory_csid recomputes over
+     * the shrunk set on next use. A resource mastered ON the departed node loses
+     * its master (re-master on first use); one mastered on a survivor keeps it. */
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        exec_lock(&res->lock);
+        res->dir_csid = 0;
+        if (res->master_csid == args.departed_csid)
+            res->master_csid = 0;
+        exec_unlock(&res->lock);
+    }
+
+    args.members_live = dlm_membership_count();
+    exec_unlock(&vms_res_hash_lock);
+
+    args.status = SS__NORMAL;
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
 long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_resmaster_args args;

@@ -251,10 +251,37 @@ run_dcl_acceptance_battery() {
     must_not_have "$SEG" '[200,1]' "SHOW QUOTA [vms-73c4]: does NOT print the fabricated UIC '[200,1]' (the shipped bug)"
     negctl        "$SEG" 'SHOW QUOTA' "SHOW QUOTA"
 
-    # --- SHOW SYSTEM (lists the real processes) -----------------------------
+    # --- SHOW SYSTEM (real processes + distinct-pid set + honest accounting) ---
+    # The golden the SHOW-SYSTEM-accounting work (vms-f62/#887) defers to, grounded
+    # on the OpenVMS VAX V7.3 oracle (docs/oracle/vax73-show-system-process.md).
+    # This asserts the HONEST-OMISSION INTERIM: the executive-sourced facts that
+    # are real today, and the honest omissions #887 makes (INV-6) -- NOT fabricated
+    # values. It OMITS CPU time / Page flts / Pages (real on x86_64, honestly blank
+    # on VAX until the accounting bind vms-6cac lands -- asserting either would fail
+    # one arch), and asserts NO State/Pri column (the executive holds no VMS
+    # scheduler state; those arrive with vms-6cac, and the golden updates then).
     run_cmd 'SHOW SYSTEM'
     must_have  "$SEG" 'SYSTEM' "SHOW SYSTEM: lists the SYSTEM process"
+    must_have  "$SEG" 'JOB_CONTROL' "SHOW SYSTEM [vms-f62]: lists the JOB_CONTROL process (the boot's job controller)"
     must_match "$SEG" '[0-9A-Fa-f]{8}' "SHOW SYSTEM: shows 8-hex-digit VMS PIDs"
+    # vms-d4ef/#883: JOB_CONTROL and the interactive SYSTEM login are DISTINCT
+    # executive processes -- distinct PIDs, not the old fork+execl shared-pid alias.
+    local JC_PID SYS_PID
+    JC_PID=$(printf '%s\n' "$SEG" | grep -iE 'JOB_CONTROL' | grep -oiE '[0-9A-Fa-f]{8}' | head -1)
+    SYS_PID=$(printf '%s\n' "$SEG" | grep -iE '(^|[^A-Za-z_])SYSTEM([^A-Za-z_]|$)' | grep -viE 'JOB_CONTROL' | grep -oiE '[0-9A-Fa-f]{8}' | head -1)
+    if [ -n "$JC_PID" ] && [ -n "$SYS_PID" ] && [ "$JC_PID" != "$SYS_PID" ]; then
+        ok "SHOW SYSTEM [vms-f62/#883]: JOB_CONTROL ($JC_PID) and the SYSTEM login ($SYS_PID) are DISTINCT executive processes (not a shared-pid alias)"
+    else
+        bad "SHOW SYSTEM [vms-f62/#883]: JOB_CONTROL and the SYSTEM login must have DISTINCT pids [JC='$JC_PID' SYS='$SYS_PID']"
+    fi
+    # vms-f62: real Uptime via CLOCK_MONOTONIC (portable) -- NOT the old /proc/uptime
+    # Linux-ism that printed "Uptime  ---" on the VAX substrate.
+    must_match    "$SEG" 'Uptime[[:space:]]+[0-9]' "SHOW SYSTEM [vms-f62]: reports a real Uptime value (not the '---'/blank Linux-ism)"
+    must_not_have "$SEG" 'Uptime  ---' "SHOW SYSTEM [vms-f62]: Uptime is not the old '---' (/proc/uptime absent on the substrate)"
+    # vms-f62 honest omission (INV-6): the executive has no VMS scheduler state, so
+    # SHOW SYSTEM prints NO State column -- fabricating one would be the same tell
+    # the accounting de-fab kills. Real State/Pri arrive with the scheduler bind (vms-6cac).
+    must_not_have "$SEG" 'State' "SHOW SYSTEM [vms-f62]: no fabricated State column (executive holds no VMS scheduler state -- honest omission until vms-6cac)"
     negctl     "$SEG" 'SHOW SYSTEM' "SHOW SYSTEM"
 
     # --- SHOW PROCESS (current process works) -------------------------------

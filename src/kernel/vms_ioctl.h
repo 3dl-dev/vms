@@ -1516,11 +1516,27 @@ struct vms_setprn_args {
  * has one mask and authorized == default. Labelled here rather than
  * silently conflated.
  */
+/*
+ * THE JIB QUOTA BLOCK RIDES SETIDENT (vms-14a). Identity and the authorized
+ * quota set arrive together, from the same SYSUAF record LOGINOUT just
+ * authenticated, exactly as they do on OpenVMS where LOGINOUT copies the
+ * account's quota cells into the JIB while establishing the process. quota is
+ * used only when quota_valid == 1; a caller with no quota to establish (a
+ * $CREPRC subprocess that does not re-read SYSUAF) passes quota_valid == 0 and
+ * the executive leaves VMS_PI_V_QUOTA clear on that process (honest omission,
+ * INV-6). Growing this struct deliberately moves VMS_IOCTL_SETIDENT's request
+ * number (the size folds into the _IOC encoding) -- the kernel module and
+ * every userspace client are rebuilt together from this one header, so it is a
+ * compile-time event, exactly like the procinfo growth documented below.
+ */
 struct vms_ident_args {
     char     username[VMS_USERNAME_SIZE]; /* authenticated user name */
     uint32_t uic;                         /* (group << 16) | member */
     uint32_t status;                      /* return: SS$_ status */
     uint64_t authorized_privs;            /* SYSUAF uaf$q_priv */
+    uint32_t quota_valid;                 /* 1 = quota below is sourced */
+    uint32_t quota_pad;                   /* keep the quota block 4-aligned/size stable */
+    struct vms_jib_quota quota;           /* authorized JIB quota set (SYSUAF) */
 };
 
 /*
@@ -1768,7 +1784,7 @@ _Static_assert(sizeof(struct vms_procscan_args) == 224,
                "vms_procscan_args layout changed: VMS_IOCTL_PROCSCAN ABI break");
 _Static_assert(sizeof(struct vms_setterm_args) == 8,
                "vms_setterm_args layout changed: VMS_IOCTL_SETTERM ABI break");
-_Static_assert(sizeof(struct vms_ident_args) == 48,
+_Static_assert(sizeof(struct vms_ident_args) == 104,
                "vms_ident_args layout changed: VMS_IOCTL_SETIDENT ABI break");
 _Static_assert(sizeof(struct vms_establish_system_args) == 8,
                "vms_establish_system_args layout changed: VMS_IOCTL_ESTABLISH_SYSTEM ABI break");
@@ -1796,7 +1812,7 @@ _Static_assert(VMS_IOCTL_GETJPI == 0xC1205642u,
                "VMS_IOCTL_GETJPI encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_PROCSCAN == 0xC0E05643u,
                "VMS_IOCTL_PROCSCAN encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_SETIDENT == 0xC0305644u,
+_Static_assert(VMS_IOCTL_SETIDENT == 0xC0685644u,
                "VMS_IOCTL_SETIDENT encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_SETTERM == 0xC0085645u,
                "VMS_IOCTL_SETTERM encodes differently here than on the reference build");

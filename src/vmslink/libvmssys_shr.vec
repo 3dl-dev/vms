@@ -183,3 +183,10 @@ vms_kif_dlm_xnode=PROCEDURE
 # real VMS condition value -- not a success/fail collapse of the POSIX exit.
 # APPENDED per the append-only contract -- a new universal never shifts an index.
 vms_kif_getexit_linux=PROCEDURE
+# SETIDENT variant that also establishes the authorized JIB quota set the
+# account carries (vms-14a): LOGINOUT decodes the [OVMX] SYSUAF quota region and
+# hands it to the executive with the identity so SHOW PROCESS/QUOTAS reads real
+# configured values. The 3-arg vms_kif_setident (index above) is this with a
+# NULL quota, so identity-only callers are unaffected. APPENDED per the
+# append-only contract -- a new universal never shifts an existing index.
+vms_kif_setident_quota=PROCEDURE

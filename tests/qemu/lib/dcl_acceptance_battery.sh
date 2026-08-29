@@ -395,22 +395,38 @@ run_dcl_acceptance_battery() {
     must_not_have "$SEG" 'IVKEYW' "SHOW PROCESS: not rejected as an invalid keyword"
     negctl    "$SEG" 'SHOW PROCESS' "SHOW PROCESS"
 
-    # --- SHOW PROCESS/QUOTAS (de-fabbed: real header, no invented limits) ----
-    # vms-050 / INV-6: the quota block used to be seven HARDCODED lines (CPU
-    # limit Infinite, Direct I/O 40, Buffered I/O byte count 32768, ...),
-    # identical for every account, sourced from nowhere. It is now a reader of
-    # the executive's per-process JIB quota vector, each line gated by
-    # VMS_PI_V_QUOTA. OVMX has no quota facility yet, so the bit is clear and
-    # the limit lines are honestly OMITTED -- the real header + account name
-    # print (from a LIVE $GETJPI here), and NONE of the fabricated constants do.
-    # The de-fabbed reader emits no "CPU limit:" line at all (struct vms_jib_
-    # quota has no CPU-limit cell), so both markers are things ONLY the deleted
-    # fabrication printed -- durable even once real quota values are wired in.
+    # --- SHOW PROCESS/QUOTAS (REAL seeded quotas -- vms-14a wired the source) -
+    # vms-050 -> vms-14a / INV-6: the quota block used to be seven HARDCODED
+    # lines (CPU limit Infinite, Direct I/O 40, ...), identical for every
+    # account, sourced from nowhere. #884 de-fabbed it into a reader of the
+    # executive's per-process JIB quota vector, each line gated by
+    # VMS_PI_V_QUOTA, and HONESTLY OMITTED the lines while no quota source
+    # existed. vms-14a built that source: mksysuaf seeds SYSTEM's authorized
+    # quota set into the [OVMX] SYSUAF quota region, LOGINOUT decodes it and
+    # hands it to the executive (VMS_IOCTL_SETIDENT), and proc_fill_info sets
+    # VMS_PI_V_QUOTA -- so the lines now print SYSTEM's REAL configured values.
+    #
+    # The values are oracle-grounded: docs/oracle/vax73-show-process-quotas.md
+    # §4, the AUTHORIZED limits captured with F$GETJPI on a real OpenVMS VAX
+    # V7.3 SYSTEM session (OVMX does not charge quotas, so remaining ==
+    # authorized). NOT hardcoded in the display -- decoded from the seeded
+    # SYSUAF record; change the seed and these change.
+    #
+    # The de-fabbed reader still emits NO "CPU limit:" line (struct
+    # vms_jib_quota has no CPU-limit cell -- an honestly-omitted field, oracle
+    # §5), so 'CPU limit:'/'Infinite' remain durable markers of ONLY the
+    # deleted fabrication.
     run_cmd 'SHOW PROCESS/QUOTAS'
-    must_have     "$SEG" 'Process Quotas:' "SHOW PROCESS/QUOTAS [vms-050]: prints the real quota header"
-    must_have     "$SEG" 'SYSTEM' "SHOW PROCESS/QUOTAS [vms-050]: names the real account SYSTEM (from a live \$GETJPI)"
-    must_not_have "$SEG" 'CPU limit:' "SHOW PROCESS/QUOTAS [vms-050]: no fabricated 'CPU limit:' line (the deleted hardcoded block)"
-    must_not_have "$SEG" 'Infinite' "SHOW PROCESS/QUOTAS [vms-050]: does NOT print the fabricated 'Infinite' CPU limit"
+    must_have     "$SEG" 'Process Quotas:' "SHOW PROCESS/QUOTAS [vms-14a]: prints the real quota header"
+    must_have     "$SEG" 'SYSTEM' "SHOW PROCESS/QUOTAS [vms-14a]: names the real account SYSTEM (from a live \$GETJPI)"
+    must_match    "$SEG" 'Buffered I/O byte count quota: *47872' "SHOW PROCESS/QUOTAS [vms-14a]: real seeded BYTLM 47872 (oracle \$4)"
+    must_match    "$SEG" 'Paging file quota: *40960' "SHOW PROCESS/QUOTAS [vms-14a]: real seeded PGFLQUOTA 40960 (oracle \$4)"
+    must_match    "$SEG" 'AST quota: *100' "SHOW PROCESS/QUOTAS [vms-14a]: real seeded ASTLM 100 (oracle \$4)"
+    must_match    "$SEG" 'Open file quota: *300' "SHOW PROCESS/QUOTAS [vms-14a]: real seeded FILLM 300 (oracle \$4)"
+    must_match    "$SEG" 'Enqueue quota: *200' "SHOW PROCESS/QUOTAS [vms-14a]: real seeded ENQLM 200 (oracle \$4)"
+    must_match    "$SEG" 'Subprocess quota: *10' "SHOW PROCESS/QUOTAS [vms-14a]: real seeded PRCLM 10 (oracle \$4)"
+    must_not_have "$SEG" 'CPU limit:' "SHOW PROCESS/QUOTAS [vms-14a]: no fabricated 'CPU limit:' line (honestly-omitted field, oracle \$5)"
+    must_not_have "$SEG" 'Infinite' "SHOW PROCESS/QUOTAS [vms-14a]: does NOT print a fabricated 'Infinite' CPU limit"
     negctl        "$SEG" 'Process Quotas' "SHOW PROCESS/QUOTAS"
 
     # --- SHOW WORKING_SET (de-fabbed: real WS size, no invented limits) ------
@@ -430,11 +446,24 @@ run_dcl_acceptance_battery() {
     # fabrication printed (the 8192 default, the quota*2 16384 extent, the old
     # "[current,quota,extent]" shape), so they stay durable once real quota
     # values are wired in.
+    #
+    # vms-14a wired the JIB WS quota cells: with VMS_PI_V_QUOTA now set, the
+    # /Quota, /Extent and "Authorized" limits print SYSTEM's REAL seeded values
+    # -- /Quota=1024, /Extent=28700 (oracle SHOW WORKING_SET, docs/oracle/
+    # vax73-show-process-quotas.md \$2/\$4). /Limit is the live JPI\$_PPGCNT
+    # (current WS size), which is runtime-variable, so it is asserted as a
+    # number, not a fixed value. The 8192/16384 markers are the deleted
+    # fabrication's constants and differ from the real 1024/28700, so they stay
+    # durable bug guards.
     run_cmd 'SHOW WORKING_SET'
-    must_match    "$SEG" 'Working Set +/Limit= *[0-9]+' "SHOW WORKING_SET [vms-050]: prints the real 'Working Set  /Limit=<n>' from a live \$GETJPI"
-    must_not_have "$SEG" '[current,quota,extent]' "SHOW WORKING_SET [vms-050]: does NOT print the deleted fabricated '[current,quota,extent]' shape"
-    must_not_have "$SEG" 'Authorized Quota = 8192' "SHOW WORKING_SET [vms-050]: does NOT print the fabricated 8192 authorized quota"
-    must_not_have "$SEG" 'Authorized Extent = 16384' "SHOW WORKING_SET [vms-050]: does NOT print the fabricated quota*2 (16384) authorized extent"
+    must_match    "$SEG" 'Working Set +/Limit= *[0-9]+' "SHOW WORKING_SET [vms-14a]: prints the real 'Working Set  /Limit=<n>' from a live \$GETJPI"
+    must_match    "$SEG" '/Quota= *1024' "SHOW WORKING_SET [vms-14a]: real seeded WSQUOTA 1024 (oracle \$2)"
+    must_match    "$SEG" '/Extent= *28700' "SHOW WORKING_SET [vms-14a]: real seeded WSEXTENT 28700 (oracle \$2)"
+    must_match    "$SEG" 'Authorized Quota = *1024' "SHOW WORKING_SET [vms-14a]: real Authorized Quota 1024 (oracle \$2)"
+    must_match    "$SEG" 'Authorized Extent = *28700' "SHOW WORKING_SET [vms-14a]: real Authorized Extent 28700 (oracle \$2)"
+    must_not_have "$SEG" '[current,quota,extent]' "SHOW WORKING_SET [vms-14a]: does NOT print the deleted fabricated '[current,quota,extent]' shape"
+    must_not_have "$SEG" 'Authorized Quota = 8192' "SHOW WORKING_SET [vms-14a]: does NOT print the fabricated 8192 authorized quota"
+    must_not_have "$SEG" 'Authorized Extent = 16384' "SHOW WORKING_SET [vms-14a]: does NOT print the fabricated quota*2 (16384) authorized extent"
     negctl        "$SEG" 'Working Set' "SHOW WORKING_SET"
 
     # --- SHOW DEFAULT (VMS filespec, no Unix path) --------------------------

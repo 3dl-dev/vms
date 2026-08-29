@@ -50,6 +50,32 @@ struct seed_acct {
     const char *flags;      /* UAI flag names (empty for none)                 */
     const char *priv;       /* privilege names, or "ALL"                       */
     const char *pw;         /* plaintext password, or NULL for "cannot log in" */
+    const sysuaf_quota_t *quota; /* authorized JIB quota set, or NULL to omit  */
+};
+
+/*
+ * SYSTEM's authorized JIB quota set, oracle-grounded (vms-14a).
+ * docs/oracle/vax73-show-process-quotas.md §4 — captured with F$GETJPI on a
+ * real OpenVMS VAX V7.3 SYSTEM ([1,4]) session, the AUTHORIZED limits (not the
+ * charge-dependent SHOW PROCESS/QUOTAS remaining snapshot). OVMX does not
+ * charge quotas, so remaining == authorized and these are what SHOW
+ * PROCESS/QUOTAS / SHOW WORKING_SET display. NOT fabricated: every value has a
+ * real source in the oracle transcript. Accounts with no captured oracle set
+ * keep quota == NULL (presence marker stays 0 -> honest omission, INV-6).
+ */
+static const sysuaf_quota_t g_quota_system = {
+    .astlm     = 100,
+    .biolm     = 100,
+    .bytlm     = 47872,
+    .diolm     = 100,
+    .enqlm     = 200,
+    .fillm     = 300,
+    .pgflquota = 40960,
+    .prclm     = 10,
+    .tqelm     = 30,
+    .wsdefault = 512,
+    .wsquota   = 1024,
+    .wsextent  = 28700,
 };
 
 static const struct seed_acct g_seed[] = {
@@ -61,12 +87,12 @@ static const struct seed_acct g_seed[] = {
      * the rooted [SYS0.SYSCOMMON.SYSMGR] -- so a freshly-logged-in SYSTEM's bare
      * DIRECTORY found no files. SYS$SYSROOT:[SYSMGR] resolves through the search
      * list to the populated common directory (same target as SYS$MANAGER:). */
-    { "SYSTEM",   1,   4,   "SYS$SYSROOT:[SYSMGR]",          "", "ALL",                     "MANAGER" },
-    { "OPERATOR", 1,   6,   "SYS$SYSROOT:[SYSMGR]",          "", "OPER,SYSPRV,TMPMBX,NETMBX", NULL     },
-    { "DEFAULT",  128, 128, "SYS$SYSDEVICE:[USERS.DEFAULT]", "", "TMPMBX,NETMBX",           NULL     },
-    { "GUEST",    128, 129, "SYS$SYSDEVICE:[USERS.GUEST]",   "", "TMPMBX",                  "GUEST"  },
-    { "USER1",    128, 130, "SYS$SYSDEVICE:[USERS.USER1]",   "", "TMPMBX,NETMBX",           NULL     },
-    { "USER2",    128, 131, "SYS$SYSDEVICE:[USERS.USER2]",   "", "TMPMBX,NETMBX",           NULL     },
+    { "SYSTEM",   1,   4,   "SYS$SYSROOT:[SYSMGR]",          "", "ALL",                     "MANAGER", &g_quota_system },
+    { "OPERATOR", 1,   6,   "SYS$SYSROOT:[SYSMGR]",          "", "OPER,SYSPRV,TMPMBX,NETMBX", NULL,    NULL },
+    { "DEFAULT",  128, 128, "SYS$SYSDEVICE:[USERS.DEFAULT]", "", "TMPMBX,NETMBX",           NULL,      NULL },
+    { "GUEST",    128, 129, "SYS$SYSDEVICE:[USERS.GUEST]",   "", "TMPMBX",                  "GUEST",   NULL },
+    { "USER1",    128, 130, "SYS$SYSDEVICE:[USERS.USER1]",   "", "TMPMBX,NETMBX",           NULL,      NULL },
+    { "USER2",    128, 131, "SYS$SYSDEVICE:[USERS.USER2]",   "", "TMPMBX,NETMBX",           NULL,      NULL },
 };
 
 /* Build one $UAFDEF record from a seed row. */
@@ -103,6 +129,12 @@ static void build_record(const struct seed_acct *a, sysuaf_rms_record_t *out)
         sysuaf_set_password_salt(&v, a->pw, salt);
     }
     /* else: no PURDY_S credential -> uaf$b_encrypt stays 0 -> refuses login. */
+
+    /* Authorized JIB quota set (vms-14a). Encoded into the [OVMX] quota region
+     * only for accounts with a captured oracle set; NULL leaves the presence
+     * marker 0 so the executive omits VMS_PI_V_QUOTA (honest omission). */
+    if (a->quota)
+        sysuaf_quota_encode(&v.raw, a->quota);
 
     *out = v.raw;
 }

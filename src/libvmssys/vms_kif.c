@@ -1114,8 +1114,9 @@ uint32_t vms_kif_getjpi_prcnam(const char *prcnam, struct vms_procinfo *info)
  * binds before its ioctl; the same probe now returns status=1
  * (SS$_NORMAL). See tests/qemu/test_kmod_bind.c suite 0.
  */
-uint32_t vms_kif_setident(const char *username, uint32_t uic,
-                          uint64_t authorized_privs)
+uint32_t vms_kif_setident_quota(const char *username, uint32_t uic,
+                                uint64_t authorized_privs,
+                                const struct vms_jib_quota *quota)
 {
     struct vms_ident_args args;
 
@@ -1127,10 +1128,24 @@ uint32_t vms_kif_setident(const char *username, uint32_t uic,
     args.username[VMS_USERNAME_SIZE - 1] = '\0';
     args.uic = uic;
     args.authorized_privs = authorized_privs;
+    /* Authorized JIB quota set rides the identity (vms-14a). NULL => the
+     * process gets no sourced quota and the executive omits VMS_PI_V_QUOTA. */
+    if (quota) {
+        args.quota_valid = 1;
+        args.quota = *quota;
+    }
 
     KIF_CALL(VMS_IOCTL_SETIDENT, &args);
 
     return args.status;
+}
+
+/* Identity-only entry point: no quota to establish. The ~30 callers that only
+ * stamp an identity use this; it is vms_kif_setident_quota() with quota NULL. */
+uint32_t vms_kif_setident(const char *username, uint32_t uic,
+                          uint64_t authorized_privs)
+{
+    return vms_kif_setident_quota(username, uic, authorized_privs, NULL);
 }
 
 /*

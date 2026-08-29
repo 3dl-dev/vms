@@ -195,7 +195,26 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
          * what produced %SYSTEM-F-NOPRIV on MOUNT after the SYSUAF flip.
          * See sysuaf_record_privileges() in sysuaf.h. */
         uint64_t login_privs = sysuaf_record_privileges(rec);
-        uint32_t ist = vms_kif_setident(rec->username, login_uic, login_privs);
+        /* Authorized JIB quota set (vms-14a): decode the account's [OVMX]
+         * SYSUAF quota region and hand it to the executive with the identity,
+         * exactly as LOGINOUT copies the SYSUAF quota cells into the JIB. If
+         * the record carries no seeded quota (presence marker clear), pass NULL
+         * so the executive omits VMS_PI_V_QUOTA -- honest omission, never a
+         * fabricated block (INV-6). Field order matches struct vms_jib_quota. */
+        sysuaf_quota_t uq;
+        struct vms_jib_quota jq;
+        const struct vms_jib_quota *jqp = NULL;
+        if (sysuaf_quota_decode(&rec->raw, &uq)) {
+            jq.astlm     = uq.astlm;     jq.biolm    = uq.biolm;
+            jq.bytlm     = uq.bytlm;     jq.diolm    = uq.diolm;
+            jq.enqlm     = uq.enqlm;     jq.fillm    = uq.fillm;
+            jq.pgflquota = uq.pgflquota; jq.prclm    = uq.prclm;
+            jq.tqelm     = uq.tqelm;     jq.wsdefault = uq.wsdefault;
+            jq.wsquota   = uq.wsquota;   jq.wsextent = uq.wsextent;
+            jqp = &jq;
+        }
+        uint32_t ist = vms_kif_setident_quota(rec->username, login_uic,
+                                              login_privs, jqp);
         if (!(ist & 1)) {
             printf("%%OVMX-F-NOIDENT, the executive refused the "
                    "authenticated identity (status %u)\n", (unsigned)ist);

@@ -1,5 +1,15 @@
 # Design: Authentic OpenVMS-Alpha Per-Image GP Establishment (D0)
 
+> **⚠ REVERTED — premise refuted at runtime (vms-8208, 2026-08-29).** §1.3 assumes cc1 computes
+> linkage-section offsets **from the section base**; the real executive proved they are
+> **`&PDSC`-relative** (per procedure). Establishing `module_GP = &PDSC − K` therefore shifts the
+> base off `&PDSC` while the offsets stay `&PDSC`-relative → every `K≠0` procedure loads a cell `K`
+> bytes off (NULL) and the image **crashes on activation** (gdb-pinned: correct cell `&PDSC−64`
+> valid, `$15−64` NULL, delta `== K`). C1/C2/C3 (#910/#913/#921) were **reverted**; the working
+> model is the pre-`$15` `.base $27` (base `== &PDSC`). Do not re-attempt this design as written; a
+> re-land needs a base model consistent with compile-time `&PDSC`-relative offsets. Kept for the
+> historical record.
+
 **Status:** design, conductor-gated (2026-08-29). Blocks all implementation components of vms-5f5.
 **Scope:** the callee-side global-pointer / linkage-section addressability model for OVMX
 alpha-dec-vms code, so cross-image calls into multi-procedure shareables (DECC$SHR, LIBOTS)

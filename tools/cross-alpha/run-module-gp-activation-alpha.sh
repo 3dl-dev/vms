@@ -1,48 +1,44 @@
 #!/usr/bin/env bash
 #
-# run-module-gp-activation-alpha.sh -- vms-8208, the API-compat gate of the
-# vms-5f5 per-image module-GP program (the design-change cascade's API-compat
-# leg; conductor-gated).
+# run-module-gp-activation-alpha.sh -- vms-8208, the OVMX/Alpha single-proc N=3
+# activation gate.
 #
-# WHAT IT PROVES (a REAL regression test, not a does-it-link check): the merged
-# per-image module-GP mechanism (#921/vms-095: every TARGET_ABI_OPEN_VMS
-# procedure establishes a per-image module-GP in the reserved call-saved
-# register $15 via a `.ovmx_gpdisp $15,<proc>' prologue, saves/restores the
-# caller's $15, and addresses the linkage section $15-relative) does NOT break
-# the images that activate today. Concretely:
+# HISTORY / WHY THIS EXISTS.  This began as the API-compat leg of the vms-5f5
+# per-image module-GP program (#921/vms-095: establish a per-image module-GP in
+# $15, `.ovmx_gpdisp $15', linkage loads $15-relative).  Run on the REAL
+# executive it caught a REAL regression: the $15 build activates and then
+# CRASHES before main (SIGSEGV, $STATUS=SS$_ABORT) because the module-GP
+# establish moved the linkage base off &PDSC while the compiler's linkage
+# offsets stay &PDSC-relative -- a K-shift that is fatal for every K!=0
+# procedure (gdb-pinned: correct cell &PDSC-64 valid, $15-64 NULL, delta == K
+# exactly).  The per-image-GP program (C1/C2/C3) was reverted as premise-wrong
+# (design doc 1.3 refuted at runtime); this SAME gate now proves the RESTORED
+# pre-$15 behavior -- cc1's `.base $27' (base == &PDSC), which the pre-$15
+# differential already showed activates cleanly.
 #
-#   1. A single-proc __main / minimal image built with the MERGED $15 toolchain
-#      ACTIVATES on the REAL OVMX/Alpha executive (qemu-system-alpha + real
-#      vms.ko / /dev/vms, image staged in SYS$SYSEXE on a MOUNTED ODS-2 volume,
-#      read by IMGACT over the Files-11 ACP), crt0 -> decc$main -> main runs,
-#      and the EXECUTIVE-recorded completion $STATUS is %X0035A019 (N=3 =
-#      C$_EXIT1 + (3-1)*8, C$_EXIT1 = 0x0035A009).  For this single-procedure
-#      image the module-GP displacement K is 0 (module_GP == &PDSC == the
-#      linkage-section base), so the $15 gpdisp pair is a no-op that leaves
-#      $15 == $27; the always-present $15 save/restore must not regress this.
+# WHAT IT PROVES (a REAL activation test, not a does-it-link check):
+#
+#   1. A single-proc __main / minimal image ACTIVATES on the REAL OVMX/Alpha
+#      executive (qemu-system-alpha + real vms.ko / /dev/vms, image staged in
+#      SYS$SYSEXE on a MOUNTED ODS-2 volume, read by IMGACT over the Files-11
+#      ACP), crt0 -> decc$main -> main runs, and the EXECUTIVE-recorded
+#      completion $STATUS is %X0035A019 (N=3 = C$_EXIT1 + (3-1)*8, C$_EXIT1 =
+#      0x0035A009).  With `.base $27' the base IS &PDSC, so the &PDSC-relative
+#      linkage loads hit their cells -- the model that works.
 #
 #   2. The value-sensitivity CONTROL (same image, main returns 0) reads back
 #      SS$_NORMAL (%X00000001). A fixed constant, or an activation that never
 #      runs main, cannot satisfy BOTH the N=3 decode AND this anchor.
 #
-#   3. No NEW activation-failure appears for either image -- neither an
-#      IMGACT-side error (%IMGACT-F / IMGNOTFND / DEVNOTMOUNT / NOSUCHFILE) NOR
-#      an ACTIVATED-BUT-CRASHED signature (%DCL-F-ABORT "terminated abnormally
-#      (signal N)", $STATUS=%X0000002C = SS$_ABORT). The pre-merge baseline for
-#      this single-proc image is a clean activation, so either is a regression
-#      from the $15 save/restore or the no-op establish.  (A clean `return 3'
-#      instead runs main, prints the crt0-join line + the seam, and only THEN
-#      maps the nonzero exit to a %DCL-E-ABORT -- Error severity, NOT the Fatal
-#      "terminated abnormally" crash; that E-severity case is EXPECTED and is
-#      the known DCL-fidelity gap. The EXECUTIVE seam value is the truth here.)
-#
-# TOOLCHAIN FRESHNESS (anti-stale, load-bearing).  build-joint-image.sh reuses
-# an already-present ovmx-cross-alpha-vms toolchain image (vms-e7c5). A STALE
-# pre-#921 image would silently build the joint image with the OLD .base-$27
-# codegen and defeat this regression test. So step 0 runs the C3 objdump proof
-# (run_module_gp_proof.sh): it reds unless the toolchain under test actually
-# emits the $15 module-GP prologue -- i.e. it certifies the image we then
-# activate WAS built by the merged mechanism.
+#   3. No activation-failure appears for either image -- neither an IMGACT-side
+#      error (%IMGACT-F / IMGNOTFND / DEVNOTMOUNT / NOSUCHFILE) NOR an
+#      ACTIVATED-BUT-CRASHED signature (%DCL-F-ABORT "terminated abnormally
+#      (signal N)", $STATUS=%X0000002C = SS$_ABORT -- the exact tell of the
+#      reverted $15 K-shift).  (A clean `return 3' instead runs main, prints the
+#      crt0-join line + the seam, and only THEN maps the nonzero exit to a
+#      %DCL-E-ABORT -- Error severity, NOT the Fatal "terminated abnormally"
+#      crash; that E-severity case is EXPECTED and is the known DCL-fidelity
+#      gap. The EXECUTIVE seam value is the truth here.)
 #
 # THE REAL EXECUTIVE, NOT qemu-user (INV-6 / Rule 9).  The definitive assertion
 # runs on qemu-system-alpha with a real /dev/vms executive and the image on a
@@ -161,17 +157,6 @@ assert_activation() {
     return 0
   fi
   return 1
-}
-
-# ---------------------------------------------------------------------------
-# ensure_toolchain_is_merged -- step 0. The C3 objdump proof reds unless the
-# ovmx-cross-alpha-vms toolchain emits the $15 module-GP prologue, so a green
-# here certifies the joint image we build next is the MERGED mechanism.
-# ---------------------------------------------------------------------------
-ensure_toolchain_is_merged() {
-  log "step 0: proving the alpha-dec-vms toolchain emits the merged \$15 module-GP (C3 objdump proof)"
-  IMG="$VMS_IMG" bash "$REPO/tools/cross-alpha-vms/module-gp/run_module_gp_proof.sh" \
-    || die "the \$15 module-GP C3 proof failed -- the toolchain under test is NOT the merged mechanism (stale pre-#921 image?). Rebuild ovmx-cross-alpha-vms."
 }
 
 # ---------------------------------------------------------------------------
@@ -354,7 +339,6 @@ case "$MODE" in
     log "verifying the gate can fail (selftest) before the real boot"
     selftest || die "selftest failed -- assert_activation() cannot be trusted; aborting before the boot"
     echo ""
-    ensure_toolchain_is_merged
     build_joint_images
     assemble_boot_image
     log "step 3: BOOT A -- activate the single-proc N=3 image on the REAL executive"

@@ -7824,33 +7824,32 @@ jobs:
         run: tools/cross-alpha/run-boot-alpha.sh acceptance
 
   # -----------------------------------------------------------------------
-  # alpha-module-gp-activation (vms-8208). The API-compat gate of the vms-5f5
-  # per-image module-GP program (#921/vms-095) -- the design-change cascade's
-  # API-compat leg (conductor-gated; do NOT auto-merge). A REAL regression test,
-  # not a does-it-link check: it proves the merged $15 module-GP mechanism does
-  # not break the single-proc __main / minimal image that activates today.
+  # alpha-module-gp-activation (vms-8208). The OVMX/Alpha single-proc N=3
+  # activation gate. It began as the per-image module-GP (#921/vms-095) API-compat
+  # leg and CAUGHT that program's runtime regression on the real executive (the
+  # $15 module-GP shifts the linkage base off &PDSC while cc1's linkage offsets
+  # stay &PDSC-relative -> a K-shift crash on every K!=0 proc). C1/C2/C3 were
+  # reverted as premise-wrong; this gate now proves the RESTORED pre-$15 `.base
+  # $27' behavior (base == &PDSC) activates cleanly -- i.e. it GATES the revert.
   #
-  #   1. Step 0 runs the C3 objdump proof (run_module_gp_proof.sh) so the joint
-  #      image is CERTIFIED built by the merged $15 toolchain (a stale pre-#921
-  #      toolchain reds here, not silently below).
-  #   2. Builds the single-proc N=3 image (joint_main.c, return 3) + the
-  #      SS$_NORMAL control (joint_main_ok.c, return 0) with that toolchain,
-  #      stages them onto a MOUNTED ODS-2 volume, boots qemu-system-alpha + real
-  #      /dev/vms, and asserts the EXECUTIVE-recorded $STATUS = %X0035A019 (N=3 =
-  #      C$_EXIT1+(3-1)*8), the control anchors SS$_NORMAL, and no
-  #      activation-failure %-error appears. The K=0 no-op establish + the
-  #      always-present $15 save/restore must not regress activation.
+  #   Builds the single-proc N=3 image (joint_main.c, return 3) + the SS$_NORMAL
+  #   control (joint_main_ok.c, return 0) with the (now reverted) alpha-dec-vms
+  #   toolchain, stages them onto a MOUNTED ODS-2 volume, boots qemu-system-alpha
+  #   + real /dev/vms, and asserts the EXECUTIVE-recorded $STATUS = %X0035A019
+  #   (N=3 = C$_EXIT1+(3-1)*8), the control anchors SS$_NORMAL, and no
+  #   activation-failure %-error appears (a %DCL-F-ABORT signal-11 crash is the
+  #   exact tell of the reverted $15 K-shift; it must NOT reappear).
   #
   # REAL executive, not qemu-user (INV-6/Rule 9): a qemu-user green has hidden a
   # real-runtime activation fault before. HEAVY-EMULATOR TIER
   # (schedule || workflow_dispatch), like alpha-boot-login: a full Alpha
   # cross-build + a joint-image build + a pure-TCG qemu-system-alpha boot is
   # ~60-100 min, off the fast PR wall; the conductor dispatches it on the frozen
-  # SHA as the cascade's API-compat leg. run-module-gp-activation-alpha.sh runs
-  # its own `selftest' (assert_activation can-fail proof) before the boot.
+  # SHA. run-module-gp-activation-alpha.sh runs its own `selftest'
+  # (assert_activation can-fail proof) before the boot.
   # -----------------------------------------------------------------------
   alpha-module-gp-activation:
-    name: "OVMX/Alpha module-GP API-compat — single-proc N=3 image still activates on the real executive (vms-8208)"
+    name: "OVMX/Alpha single-proc N=3 image activates on the real executive (vms-8208, gates the per-image-GP revert)"
     needs: changes
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -7883,9 +7882,9 @@ jobs:
           cache-from: type=gha,scope=cross-alpha
           cache-to: type=gha,mode=max,scope=cross-alpha
 
-      # The MERGED alpha-dec-vms $15 toolchain that builds the joint image. Loaded
-      # so build-joint-image.sh + run_module_gp_proof.sh reuse it (vms-e7c5) --
-      # no ftp.gnu.org fetch, no silent pre-#921 stale image (step 0 would red).
+      # The alpha-dec-vms toolchain that builds the joint image (post-revert: cc1
+      # back to `.base $27'). Loaded so build-joint-image.sh reuses it (vms-e7c5)
+      # -- no ftp.gnu.org fetch.
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
         with:
@@ -7897,7 +7896,7 @@ jobs:
           cache-from: type=gha,scope=cross-alpha-vms
           cache-to: type=gha,mode=max,scope=cross-alpha-vms
 
-      - name: "Module-GP API-compat gate — build the N=3 single-proc image with the merged $15 toolchain, activate it on qemu-system-alpha + real /dev/vms over the ODS-2 ACP, assert $STATUS=%X0035A019 + SS$_NORMAL control + no activation errors"
+      - name: "N=3 activation gate — build the single-proc image with the (reverted) toolchain, activate it on qemu-system-alpha + real /dev/vms over the ODS-2 ACP, assert $STATUS=%X0035A019 + SS$_NORMAL control + no activation errors"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh gate
 
   # -----------------------------------------------------------------------

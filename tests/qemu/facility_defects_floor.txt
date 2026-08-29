@@ -427,4 +427,14 @@
 # so the ICMP echo request/reply carry zeroed data while the id/seq/checksum stay
 # correct -- a matching reply still arrives (round-trip assertion green) and only
 # the byte-exact assertion reddens. See its entry in facility_defects.sh.
-108
+# Raised to 109 by vms-cdb9's tcpip-inetd-reply-not-connected -- the TCP/IP
+# Services AUXILIARY SERVER (TCPIP$INETD-equivalent), the master listener that
+# binds a well-known port over the proven BGn: server veneer and spawns the
+# configured service image on connect. The FIRST defect targeting
+# src/vmstcpip/services/tcpip_inetd.h, the header the shipped TCPIP$INETD.EXE
+# image runs and test_syssvc_tcpip_inetd proves against a real /dev/vms. The
+# mutation diverts the accepted connection away from the spawned service image's
+# stdout (dup2 STDOUT_FILENO -> STDERR_FILENO), so the reply never reaches the
+# connection while the accept/spawn/exit assertions stay green and only the
+# byte-exact round-trip assertion reddens. See its entry in facility_defects.sh.
+109

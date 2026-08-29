@@ -1,0 +1,31 @@
+!
+! TCPIP$SERVICE.DAT - TCP/IP Services for OVMX auxiliary-server (TCPIP$INETD)
+! service database (rd vms-cdb9).
+!
+! OVMX-DEFINED FORMAT (CLAUDE.md Rule 8): only the auxiliary-server BEHAVIOUR
+! (a master listener that binds each enabled service's well-known port and
+! spawns the service's image on an inbound connection) is observed from the
+! public VSI OpenVMS TCP/IP Services documentation. VSI does NOT publish the
+! byte-level layout of its internal service store, so THIS LINE FORMAT is an
+! OVMX invention -- the same whitespace-separated text idiom as
+! SYS$STARTUP:VMS$VMS.DAT -- parsed by tcpip_inetd_parse_db()
+! (src/vmstcpip/services/tcpip_inetd.h). It is NOT presented as VMS-authentic.
+!
+! One ENABLED service per line:
+!
+!     service-name  port  image-filespec  [image-args...]
+!
+! separated by whitespace. "port" is the decimal TCP port the auxiliary server
+! binds over the executive BGn: seam; "image-filespec" is the service image the
+! auxiliary server runs on an inbound connection (with the accepted connection
+! as its SYS$INPUT/SYS$OUTPUT); any trailing tokens are passed to the image as
+! arguments. Lines beginning with "!" and blank lines are comments/ignored.
+!
+! To enable a service, add its line here; the auxiliary server binds it when
+! @SYS$STARTUP:TCPIP$STARTUP starts TCPIP$INETD.EXE.
+!
+! SSH is delivered by VMSSSHD.EXE, launched by the auxiliary server (rd vms-9ef).
+! It is listed here but commented out until VMSSSHD.EXE ships in the bootable
+! image; uncomment to enable once present (do NOT fake an unbound service).
+!
+! SSH   22  SYS$SYSTEM:VMSSSHD.EXE

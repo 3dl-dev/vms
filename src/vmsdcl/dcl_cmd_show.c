@@ -2969,16 +2969,90 @@ static int cmd_show_network(struct dcl_command *cmd)
 }
 
 /*
- * SHOW ERROR - Display device error summary.
+ * SHOW ERROR - the per-device hardware error counts, READ from the executive
+ * I/O database (vms-050 de-fabrication).
+ *
+ * WHAT THIS USED TO BE, AND WHY IT WAS A LIE. The former body ignored the
+ * system entirely and unconditionally printed a three-line "Device Error
+ * Count Summary" banner ending in "No errors logged." -- a constant, whatever
+ * the real device error counts were. A node whose disk or port device HAD
+ * logged errors still reported "No errors logged." That is the exact
+ * report-success-while-reading-nothing defect the authenticity invariants
+ * exist to kill (CLAUDE.md INV-6): the command was not a reader of any state.
+ *
+ * WHAT IT IS NOW. It walks the executive-resident device table with
+ * vms_kif_devscan() -- the SAME scan cmd_show_device() uses and the SAME
+ * errcnt field F$GETDVI(...,"ERRCNT") reads (src/vmsdcl/dcl_lexical.c),
+ * sourced from struct vms_device.errcnt in src/kernel-core/vms_devtab.c --
+ * and prints one row per device whose error count is greater than zero. Every
+ * number printed is a genuine executive reading; nothing is fabricated. If
+ * the count is genuinely zero for every device (OVMX's normal state -- the
+ * executive increments errcnt only on a real device error), the listing under
+ * the header is empty, which is the honest report, not a hardcoded string.
+ *
+ * FORMAT + FILTERING PROVENANCE (CLAUDE.md Rule 8, clean-room). Measured on
+ * the lab-2 OpenVMS VAX V7.3 reference cluster on 2026-08-29 and recorded in
+ * docs/oracle/vax73-show-error.md:
+ *
+ *   - The header is the single line "Device" (columns 0-5) with "Error Count"
+ *     beginning at column 33, and each data row is the device name
+ *     left-justified with the count right-justified so its units digit lands
+ *     at column 41 -- "%-33s%9u" reproduces every measured row byte-for-byte,
+ *     the short "PUA0:" and the long "$2$DUA0: (VAX1, VAX2)" alike.
+ *   - Bare SHOW ERROR lists ONLY devices with a NON-ZERO count: the reference
+ *     node's DUA0: read F$GETDVI ERRCNT = 0 and was absent from the listing,
+ *     while PUA0:/PTA0: (count 1) appeared. VMS's own HELP SHOW ERROR states
+ *     it "Displays the error count for all devices with error counts greater
+ *     than zero." (The /FULL form, which additionally lists zero-count devices
+ *     plus CPU/MEMORY pseudo-devices, is a separate rung and is not rendered
+ *     here; a bare SHOW ERROR is what this function answers.)
+ *
+ * NOT LAB-PINNED, and deliberately not guessed at (Rule 10). The reference
+ * cluster's port devices always carry a cluster-traffic error, so an
+ * all-zero SHOW ERROR could not be captured there; whether VMS emits a
+ * distinct "no errors" message in that case is therefore unmeasured. Rather
+ * than re-invent the "No errors logged." string this rewrite deletes, the
+ * empty set is reported by the header alone with no rows beneath it -- the
+ * documented semantic ("devices with a count greater than zero") applied to
+ * an empty set, fabricating no message. Pinning the all-zero wording to a
+ * capture is a follow-up (vms-050).
  */
 static int cmd_show_error(struct dcl_command *cmd)
 {
     (void)cmd;
-    printf("\n         Device Error Count Summary\n");
-    printf("         Device   Error Count\n");
-    printf("         ------   -----------\n");
-    printf("No errors logged.\n");
-    return SS$_NORMAL;
+
+    /* Belt-and-braces open of the executive channel, exactly as
+     * cmd_show_device() does it: kif_bind() completes the open->register
+     * sequence before every ioctl, so this is not required, and its result
+     * is deliberately not tested -- an unreachable executive is a state PID 1
+     * refuses to boot into (src/ovmx_init/ovmx_init.c), not one to handle
+     * here. If an ioctl fails for a real reason $STATUS carries it and nothing
+     * is invented to cover it up. */
+    (void)vms_kif_open();
+
+    struct vms_devinfo info;
+    uint32_t index = 0;
+    uint32_t status;
+    int rows = 0;
+
+    while ((status = vms_kif_devscan(&index, &info)) == SS$_NORMAL) {
+        info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+        if (info.errcnt == 0)
+            continue;                 /* HELP: only devices with count > 0 */
+        if (rows == 0)
+            printf("Device                           Error Count\n");
+        printf("%-33s%9u\n", info.devnam, info.errcnt);
+        rows++;
+    }
+
+    /* A bare header with no rows when every device reads zero (rows == 0) is
+     * the honest empty report; see the provenance note above. A scan that
+     * stopped short of SS$_NOMOREDEV hit an ioctl-level failure -- silent,
+     * $STATUS carries it, nothing is fabricated to paper over it. */
+    if (rows == 0 && status == SS$_NOMOREDEV)
+        printf("Device                           Error Count\n");
+
+    return (status == SS$_NOMOREDEV) ? SS$_NORMAL : status;
 }
 
 /*

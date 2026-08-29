@@ -209,6 +209,37 @@ run_dcl_acceptance_battery() {
     must_not_have "$SEG" 'IVVERB' "SHOW DEVICES [vms-9344]: not rejected with %DCL-*-IVVERB"
     negctl        "$SEG" 'SHOW DEVICES' "SHOW DEVICES"
 
+    # --- SHOW ERROR reads the REAL executive device-error counts (vms-050) --
+    # SHOW ERROR used to be a constant: it ignored the system and always printed
+    # a "Device Error Count Summary" banner ending in "No errors logged.",
+    # whatever the real per-device error counts were (INV-6 / Rule 11). It now
+    # walks the executive device table with vms_kif_devscan() -- the SAME scan
+    # SHOW DEVICE (asserted above) uses and the SAME errcnt field F$GETDVI ERRCNT
+    # reads -- and lists ONLY devices whose error count is greater than zero
+    # (VMS HELP SHOW ERROR; format + filtering in docs/oracle/vax73-show-error.md,
+    # captured on the lab-2 VAX V7.3 reference cluster).
+    #
+    # This is the POSITIVE half a userspace-only ctest cannot prove (no /dev/vms,
+    # Rule 9; the absence half is tests/dcl/test_show_error_no_fabrication.sh).
+    # On this runtime the executive increments errcnt only on a real device error
+    # and none has occurred, so every real device reads zero: the listing under
+    # the header is empty. Two things are therefore asserted, and together they
+    # pin the de-fab:
+    #   1. the report HEADER is printed -- proof the scan ran to completion
+    #      against the real table (an early-return / do-nothing mutant prints no
+    #      header and reds here);
+    #   2. OPA0:, the real console SHOW DEVICE lists just above and whose error
+    #      count is genuinely zero, is ABSENT -- proof SHOW ERROR filtered it on
+    #      the real errcnt, not that it read nothing (a mutant that lists every
+    #      device regardless of count would surface OPA0: here and red);
+    # and the fabricated banner strings are gone (a reverted body reds on those).
+    run_cmd 'SHOW ERROR'
+    must_have     "$SEG" 'Error Count' "SHOW ERROR [vms-050]: prints the real report header (the executive device scan ran to completion)"
+    must_not_have "$SEG" 'OPA0' "SHOW ERROR [vms-050]: the real zero-error console OPA0: is OMITTED (errcnt filter reads the real count, not a fabricated 'everything is fine')"
+    must_not_have "$SEG" 'No errors logged.' "SHOW ERROR [vms-050]: the old hardcoded 'No errors logged.' banner is GONE"
+    must_not_have "$SEG" 'Summary' "SHOW ERROR [vms-050]: the old fabricated 'Device Error Count Summary' title is GONE"
+    negctl        "$SEG" 'Error Count' "SHOW ERROR"
+
     # --- WRITE SYS$OUTPUT F$GETSYI("VERSION") (vms-65f: prints the literal) --
     run_cmd 'WRITE SYS$OUTPUT F$GETSYI("VERSION")'
     must_have     "$SEG" "$EXPECTED_COMPAT_VERSION" "WRITE F\$GETSYI [vms-65f]: emits the real VMS version '$EXPECTED_COMPAT_VERSION'"

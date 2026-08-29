@@ -301,7 +301,23 @@ static expr_val_t parse_primary(expr_parser_t *ep)
             dcl_eval_lexical(ep->ctx, buf, result, sizeof(result));
         int iok;
         long iv = dcl_parse_int(result, &iok);
-        if (iok) return make_int(iv);
+        /*
+         * Coerce a lexical's result to an integer ONLY when the string is the
+         * CANONICAL representation of that integer. A FORMATTED result -- e.g.
+         * F$PID's zero-padded %08X pid "00000068", or its first pid "00000001" --
+         * parses as an int (68, 1) but must be preserved as a STRING: collapsing
+         * it drops the leading zeros so it no longer matches SHOW SYSTEM's hex pid
+         * (and "00000001" renders as the bare "1"). Only "68"==itself round-trips;
+         * "00000068"!="68" does not, so the pad is kept. rd vms-dee (NOT a VAX
+         * arch-asymmetry -- this coercion is arch-neutral and stripped F$PID's
+         * format on every arch). Canonical ints (F$LENGTH -> "5") still coerce.
+         */
+        if (iok) {
+            char canon[32];
+            snprintf(canon, sizeof(canon), "%ld", iv);
+            if (strcmp(canon, result) == 0)
+                return make_int(iv);
+        }
         return make_str(result);
     }
 

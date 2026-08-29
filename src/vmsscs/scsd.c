@@ -1026,6 +1026,13 @@ struct peer_state {
      * BLKAST; a single ENQ then a value-block-carrying $DEQ. */
     int      dlm_h8;               /* node-A: H8 LVB-wire armed (OVMX_DLM_H8) */
     int      dlm_h8_read_done;     /* node-B: the LOCAL LVB read-back ran (one-shot) */
+    /* vms-eeb (DLM rung H9): the LVB READ crossing -- the MIRROR of the H8 write
+     * crossing (vms-d81). Node B (the master) SEEDS a known 16-byte value block
+     * into RRD's resource value block; node A does a cross-node $ENQ (EX, VALBLK),
+     * the master's GRANT carries its res->valblk back, and node A reads it via a
+     * LOCAL GETLKI on its OWN request handle -- the master's LVB, over the wire. */
+    int      dlm_h9;               /* node-A: H9 LVB-read crossing armed (OVMX_DLM_H9) */
+    int      dlm_h9_read_done;     /* node-A: the LVB read-back completed (one-shot) */
     /* vms-694 (§4(O.7)): OVMX's OWN model of "am I a connected VMS$VAXcluster
      * member of this peer", LATCHED the moment the VMS$VAXcluster SYSAP
      * connection (cdt_joiner, or cdt_member if it ever reaches OPEN) hits the
@@ -7951,6 +7958,12 @@ struct scsd_dlm_held {
      * the holder node finds its ORIGIN record); blocking_csid names the holder. */
     uint32_t blocking_csid;
     uint32_t blocking_req_lkid;
+    /* LVB read crossing (rd vms-eeb, rung H9): the master's current 16-byte value
+     * block, read back from the executive after a cross-node $ENQ grant and
+     * carried into the GRANT reply frame so the requester's $ENQ reads the
+     * master's LVB. A READ of real executive state (vms_dlm_xnode_args.valblk),
+     * never fabricated (INV-6). */
+    uint8_t  valblk[16];
 };
 
 /*
@@ -8122,6 +8135,13 @@ static uint32_t scsd_dlm_dispatch_to_executive(const struct scs_dlm_msg *m,
     if (held != NULL)
         held->master_lkid = args.master_lkid;
 
+    /* LVB read crossing (rd vms-eeb, rung H9): carry the master's value block,
+     * which the executive returned in args.valblk after resolving this cross-node
+     * $ENQ (the read of res->valblk on grant), up to the GRANT reply builder so
+     * it rides back to the requester. A READ of real executive state, never faked. */
+    if (held != NULL)
+        memcpy(held->valblk, args.valblk, sizeof(held->valblk));
+
     /* BLKAST WIRE (vms-76d, H6): on an ENQ that QUEUED behind a cross-node holder,
      * carry the executive's blocking-AST directive up so the server leg can WIRE a
      * BLKAST to that holder. A READ of the executive's genuine decision (INV-6). */
@@ -8289,6 +8309,139 @@ static uint32_t scsd_dlm_blkast_fire(uint32_t req_lkid, const char *resnam,
 }
 
 /*
+ * H9 known LVB pattern (rd vms-eeb) -- "OVMXLVB-READ9" NUL-padded to 16 bytes.
+ * DISTINCT from the H8 write-crossing pattern (vms-d81 used "OVMXLVB-RUNG6"), so a
+ * cross-run bleed cannot masquerade as a pass. The host runner pins the SAME 32
+ * hex digits (H9_EXPECT_HEX) and asserts A_read == B_seed == this pattern.
+ */
+static const uint8_t scsd_h9_known_block[16] = {
+    'O','V','M','X','L','V','B','-','R','E','A','D','9', 0, 0, 0
+};
+
+/*
+ * scsd_dlm_h9_seed_valblk - node B (the master) SEEDS RRD's resource value block
+ * (rd vms-eeb, rung H9). A LOCAL $ENQ (EX, LCK_M_VALBLK) with a NON-ZERO input
+ * block writes it to res->valblk (the single-node core, vms_lock.c: on grant with
+ * a user-supplied block, res->valblk <- lock->valblk); a LOCAL $DEQ (LCK_M_VALBLK,
+ * same block) then releases the lock while res->valblk PERSISTS -- the core keeps
+ * a resource whose value block is non-zero. So a later cross-node $ENQ from node A
+ * reads the seeded LVB back. out_readback receives the block the executive confirms
+ * it granted (its REAL res->valblk), never a fabricated one (INV-6). Fail-honest
+ * (SS$_NOSUCHDEV) when /dev/vms is absent.
+ */
+static uint32_t scsd_dlm_h9_seed_valblk(const char *resnam,
+                                        const uint8_t *block,
+                                        uint8_t *out_readback)
+{
+    if (out_readback)
+        memset(out_readback, 0, LCK$C_VALBLK_LEN);
+#ifdef SCSD_UNIT_TEST
+    (void)resnam; (void)block;
+    return 2296u; /* SS$_UNSUPPORTED, as the rung-1 stubs return */
+#else
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0)
+        return 2680u; /* SS$_NOSUCHDEV -- honest, no fake seed */
+    struct vms_register_args reg;
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return 2680u; }
+
+    /* LOCAL $ENQ RRD (EX, VALBLK) with the known block: writes it to res->valblk. */
+    struct vms_enq_args e;
+    memset(&e, 0, sizeof(e));
+    e.lkmode = LCK_K_EXMODE;
+    e.flags  = LCK_M_VALBLK;
+    strncpy(e.resnam, resnam, sizeof(e.resnam) - 1);
+    e.resnam[sizeof(e.resnam) - 1] = '\0';
+    memcpy(e.valblk, block, LCK_VALBLK_SIZE);
+    if (ioctl(fd, VMS_IOCTL_ENQ, &e) < 0 || e.status != 1u) {
+        uint32_t st = e.status ? e.status : 2680u;
+        close(fd);
+        return st;
+    }
+    if (out_readback)
+        memcpy(out_readback, e.valblk, LCK_VALBLK_SIZE);
+
+    /* LOCAL $DEQ RRD (VALBLK, same non-zero block): release the lock; res->valblk
+     * persists (a non-zero LVB keeps the resource alive across the DEQ). */
+    struct vms_deq_args d;
+    memset(&d, 0, sizeof(d));
+    d.lkid  = e.lkid;
+    d.flags = LCK_M_VALBLK;
+    memcpy(d.valblk, block, LCK_VALBLK_SIZE);
+    (void)ioctl(fd, VMS_IOCTL_DEQ, &d);
+
+    close(fd);
+    return e.status; /* SS$_NORMAL on a real grant */
+#endif
+}
+
+/*
+ * scsd_dlm_h9_read_valblk - node A reads back the LVB the master's GRANT delivered
+ * (rd vms-eeb, rung H9). A LOCAL GETLKI on node A's OWN request handle (the
+ * req_lkid it enqueued with) surfaces the value block grant_recv stored on the
+ * origin record -- the master's res->valblk, transported B->A over SCS on the
+ * GRANT. out_valblk receives the REAL executive bytes (zeros if the executive
+ * never stored an LVB -> the runner FAILs, correctly). Fail-honest when /dev/vms
+ * is absent.
+ */
+static uint32_t scsd_dlm_h9_read_valblk(uint32_t lkid, uint8_t *out_valblk)
+{
+    if (out_valblk)
+        memset(out_valblk, 0, LCK$C_VALBLK_LEN);
+#ifdef SCSD_UNIT_TEST
+    (void)lkid;
+    return 2296u;
+#else
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0)
+        return 2680u;
+    struct vms_register_args reg;
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return 2680u; }
+    struct vms_getlki_args gl;
+    memset(&gl, 0, sizeof(gl));
+    gl.lkid = lkid;
+    if (ioctl(fd, VMS_IOCTL_GETLKI, &gl) < 0) { close(fd); return 2680u; }
+    if (out_valblk)
+        memcpy(out_valblk, gl.valblk, LCK_VALBLK_SIZE);
+    close(fd);
+    return gl.status;
+#endif
+}
+
+/*
+ * scsd_dlm_h9_seed - node B's one-shot LVB seed (rd vms-eeb, rung H9), fired from
+ * the join retx tick once this node is a cluster member. Only the master (node B:
+ * OVMX_DLM_H9 set, OVMX_DLM_ENQ UNSET) seeds; it runs ONCE (static latch) and BEFORE
+ * node A's cross-node $ENQ can arrive (A's $ENQ waits on A's own join). Emits
+ * SCSD-I-DLMLVBSEED with the REAL seeded LVB hex-encoded verbatim (INV-6).
+ */
+static void scsd_dlm_h9_seed(struct scsd_rx *rx, struct peer_state *ps)
+{
+    static int h9_seeded = 0;
+    if (rx == NULL || ps == NULL)
+        return;
+    if (getenv("OVMX_DLM_H9") == NULL || getenv("OVMX_DLM_ENQ") != NULL)
+        return; /* only the master/server side seeds */
+    if (h9_seeded || !scsd_member_initiate_enabled())
+        return;
+
+    uint8_t readback[LCK$C_VALBLK_LEN];
+    uint32_t st = scsd_dlm_h9_seed_valblk("RRD", scsd_h9_known_block, readback);
+    h9_seeded = 1; /* one-shot regardless of outcome; a failure emits real zeros */
+
+    char hex[33];
+    scsd_hex16(readback, hex);
+    log_ts(stdout);
+    printf(" SCSD-I-DLMLVBSEED name=RRD val=%s (LOCAL $ENQ EX+VALBLK then $DEQ,"
+           " rc=0x%08X) -- master seeded RRD's resource value block; res->valblk"
+           " PERSISTS for node A's cross-node $ENQ to read (H9, the read crossing)\n",
+           hex, (unsigned)st);
+    fflush(stdout);
+}
+
+/*
  * scsd_dlm_srv_msg_input - the DLM server CDT's message input routine. Reads the
  * received frame from scsd_rx_current (the same OVMX design choice
  * scsd_mscp_srv_msg_input uses), decodes it with scs_dlm_parse, and dispatches
@@ -8389,6 +8542,11 @@ static void scsd_dlm_srv_msg_input(struct scs_cdt *cdt, const void *msg,
     g.master_csid = resolve_scssystemid();        /* this node mastered the request */
     g.namelen = v.msg.namelen;
     memcpy(g.resnam, v.msg.resnam, sizeof(g.resnam));
+    /* LVB read crossing (rd vms-eeb, rung H9): the GRANT reply carries the
+     * master's current value block back to the requester, so its cross-node
+     * $ENQ reads the master's LVB. held.valblk is the executive's real
+     * res->valblk (read above), never a fabricated block (INV-6). */
+    memcpy(g.valblk, held.valblk, sizeof(g.valblk));
 
     uint8_t frame[SCS_DLM_FRAME_LEN];
     if (scs_dlm_build_frame(&gp, &g, frame) == 0 &&
@@ -8781,6 +8939,32 @@ static void scsd_dlm_cli_msg_input(struct scs_cdt *cdt, const void *msg,
         return;
     }
 
+    /* THE LVB READ CROSSING, REQUESTER SIDE (rd vms-eeb, rung H9). Our cross-node
+     * $ENQ (#1, EX, VALBLK) was GRANTED and the GRANT frame carried the master's
+     * value block. DISPATCH the grant into OUR executive so grant_recv stores that
+     * LVB on our origin record, then GETLKI our OWN request handle and read it back
+     * -- the master's res->valblk, transported B->A over SCS. The bytes are the
+     * REAL executive state (zeros if none was delivered -> the runner FAILs). */
+    if (ps->dlm_h9 && !ps->dlm_h9_read_done &&
+        v.msg.req_lkid == 1u && v.msg.status == 1u) {
+        ps->dlm_h9_read_done = 1;
+        /* Store the GRANT's LVB into our executive-resident origin record. */
+        (void)scsd_dlm_dispatch_to_executive(&v.msg, NULL, NULL, NULL);
+        uint8_t lvb[LCK$C_VALBLK_LEN];
+        uint32_t st = scsd_dlm_h9_read_valblk(v.msg.req_lkid, lvb);
+        char hex[33];
+        scsd_hex16(lvb, hex);
+        log_ts(stdout);
+        printf(" SCSD-I-DLMLVBRD9 name=%.*s val=%s (GETLKI req_lkid=0x%08X"
+               " rc=0x%08X) -- read the master's LVB back from OUR executive after"
+               " a cross-node $ENQ; the value block crossed the wire B->A on the"
+               " GRANT (H9, the read crossing, mirror of the H8 write crossing)\n",
+               (int)v.msg.namelen, v.msg.resnam, hex,
+               (unsigned)v.msg.req_lkid, (unsigned)st);
+        fflush(stdout);
+        return;
+    }
+
     if (!ps->dlm_h5)
         return;   /* rung 1b only: no H5 sequence armed */
 
@@ -8941,6 +9125,13 @@ static void scsd_dlm_send_enq(struct scsd_rx *rx, struct peer_state *ps)
     if (getenv("OVMX_DLM_H8") != NULL)
         ps->dlm_h8 = 1;
 
+    /* vms-eeb (H9): arm the LVB READ crossing -- INDEPENDENT of H5/H6 (no
+     * contention, no BLKAST). Node A does ONE cross-node $ENQ (EX) that carries
+     * LCK_M_VALBLK so the master READS its res->valblk back into the GRANT reply;
+     * the cli input routine then GETLKIs our own handle and reads the LVB. */
+    if (getenv("OVMX_DLM_H9") != NULL)
+        ps->dlm_h9 = 1;
+
     uint32_t dlm_server = (ps->joiner_remote_conid & 0xFFFFFFF0u) |
                           OVMX_CONID_CLS_DLMSRV;
 
@@ -8960,6 +9151,11 @@ static void scsd_dlm_send_enq(struct scsd_rx *rx, struct peer_state *ps)
     memset(&m, 0, sizeof(m));
     m.op = SCS_DLM_OP_ENQ;
     m.mode = LCK$K_EXMODE;
+    /* vms-eeb (H9): carry LCK_M_VALBLK (the IOCTL flag 0x08, NOT starlet 0x0001)
+     * so the master READS its res->valblk back into the GRANT reply. A zero input
+     * block means "read the master's LVB", not "write mine". */
+    if (ps->dlm_h9)
+        m.flags |= LCK_M_VALBLK;
     m.req_lkid = 1;                        /* our local lock handle for this request */
     m.req_csid = resolve_scssystemid();    /* our node identity */
     size_t rl = strlen(resname);
@@ -12869,6 +13065,10 @@ static void scsd_join_retx_tick(struct scsd_rx *rx, uint64_t now_ms)
          * the one-shot cross-node $ENQ if OVMX_DLM_ENQ names a resource. A no-op
          * with the lab switch or the member-role flag absent. */
         scsd_dlm_send_enq(rx, ps);
+        /* vms-eeb (DLM rung H9): node B (the master) SEEDS RRD's resource value
+         * block once, at/after join, BEFORE node A's cross-node $ENQ can arrive.
+         * A no-op on node A (OVMX_DLM_ENQ set) and without OVMX_DLM_H9. */
+        scsd_dlm_h9_seed(rx, ps);
     }
 }
 

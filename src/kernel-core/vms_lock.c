@@ -121,6 +121,16 @@ struct vms_dlm_origin {
     uint64_t         blkastadr;
     uint64_t         blkastprm;
     uint32_t         blkast_count;
+    /*
+     * LVB read-crossing (rd vms-eeb, rung H9). When the master's GRANT reply
+     * carries its resource value block (the master read res->valblk on the
+     * cross-node grant), grant_recv stores those 16 bytes here so GETLKI on this
+     * origin record surfaces them to the requester's $ENQ -- the mirror of the
+     * write crossing (vms-d81). valblk_valid is set only when a real GRANT
+     * delivered a block, so GETLKI reports an unset LVB honestly (zeros) rather
+     * than fabricating one. */
+    uint8_t          valblk[LCK_VALBLK_SIZE];
+    uint32_t         valblk_valid;
 };
 
 exec_list_head_t vms_dlm_origin_list;
@@ -128,7 +138,7 @@ exec_lock_t vms_dlm_origin_lock;
 
 static int vms_lock_dlm_origin_getlki(uint32_t lkid, uint32_t *granted_mode,
                                       uint32_t *requested_mode, char *resnam,
-                                      size_t resnam_len);
+                                      size_t resnam_len, uint8_t *valblk);
 
 int vms_lock_init(void)
 {
@@ -1474,11 +1484,14 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg)
          */
         uint32_t org_granted = 0, org_requested = 0;
         if (vms_lock_dlm_origin_getlki(args.lkid, &org_granted, &org_requested,
-                                       args.resnam, sizeof(args.resnam))) {
+                                       args.resnam, sizeof(args.resnam),
+                                       args.valblk)) {
             args.granted_mode = org_granted;
             args.requested_mode = org_requested;
             args.parent_id = 0;
-            memset(args.valblk, 0, LCK_VALBLK_SIZE);
+            /* args.valblk was filled by origin_getlki: the master's LVB the
+             * GRANT delivered (rd vms-eeb), or zeros if none -- the read
+             * crossing surfacing the master's value block to this requester. */
             args.status = SS__NORMAL;
             goto out;
         }
@@ -1786,6 +1799,20 @@ static uint32_t vms_lock_dlm_xnode_grant_recv(struct vms_dlm_xnode_args *req)
     org->granted_mode = req->lkmode;   /* NL on a queued-reply; EX on a grant */
 
     /*
+     * LVB read crossing (rd vms-eeb, rung H9). A real GRANT (a non-NL granted
+     * mode) carries the master's resource value block in the reply; store it on
+     * the origin record so GETLKI(req_lkid) surfaces it to the requester's $ENQ
+     * caller -- the mirror of the write crossing (vms-d81). A queued-reply (NL)
+     * delivers no LVB, so valblk_valid stays clear and GETLKI reports zeros
+     * honestly rather than a stale block. The bytes are the master's real
+     * res->valblk transported over SCS, never fabricated (INV-6).
+     */
+    if (req->lkmode > LCK_K_NLMODE) {
+        memcpy(org->valblk, req->valblk, LCK_VALBLK_SIZE);
+        org->valblk_valid = 1;
+    }
+
+    /*
      * BLKAST WIRE (rung H6, vms-76d). When this GRANT establishes the record as a
      * HOLDER proxy (a real granted mode) AND the holder registered a blocking-AST
      * routine, remember it so a BLKAST the master later sends over SCS can fire a
@@ -1887,7 +1914,7 @@ static uint32_t vms_lock_dlm_xnode_blkast_recv(struct vms_proc *proc,
  */
 static int vms_lock_dlm_origin_getlki(uint32_t lkid, uint32_t *granted_mode,
                                       uint32_t *requested_mode, char *resnam,
-                                      size_t resnam_len)
+                                      size_t resnam_len, uint8_t *valblk)
 {
     struct vms_dlm_origin *cur;
     int found = 0;
@@ -1903,6 +1930,17 @@ static int vms_lock_dlm_origin_getlki(uint32_t lkid, uint32_t *granted_mode,
                 *requested_mode = cur->requested_mode;
             if (resnam && resnam_len)
                 strscpy(resnam, cur->resnam, resnam_len);
+            /*
+             * LVB read crossing (rd vms-eeb): surface the value block the
+             * master's GRANT delivered (valblk_valid), else zeros -- an
+             * unset LVB is reported honestly, never a stale/fabricated block.
+             */
+            if (valblk) {
+                if (cur->valblk_valid)
+                    memcpy(valblk, cur->valblk, LCK_VALBLK_SIZE);
+                else
+                    memset(valblk, 0, LCK_VALBLK_SIZE);
+            }
             found = 1;
             break;
         }
@@ -1989,16 +2027,26 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
          * on this (the mastering) node, in CROSS-NODE mode (xn): the lock is held
          * FOR the remote requester's cluster identity (owner_csid), local deadlock
          * detection is skipped (distributed, rung 7), and a blocked request is
-         * QUEUED -- not declined. Only NOQUEUE is honored from the wire flags; no
-         * LCK_M_SYNC (must never block the delivery thread) and no VALBLK (LVB is
-         * a later rung).
+         * QUEUED -- not declined. NOQUEUE is honored from the wire flags; so is
+         * VALBLK (the lock value block read crossing, rd vms-eeb -- see below);
+         * LCK_M_SYNC is not (it must never block the delivery thread).
          */
         memset(&a, 0, sizeof(a));
         a.lkmode = req->lkmode;
-        a.flags = req->flags & LCK_M_NOQUEUE;
+        a.flags = req->flags & (LCK_M_NOQUEUE | LCK_M_VALBLK);
         memcpy(a.resnam, req->resnam, sizeof(a.resnam));
         a.resnam[sizeof(a.resnam) - 1] = '\0';
         a.owner_csid = req->req_csid;   /* held FOR the remote requester */
+        /*
+         * LVB READ crossing (rd vms-eeb, rung H9). Carry the requester's inbound
+         * value block into the single-node core: with LCK_M_VALBLK set and a zero
+         * inbound block, vms_enq_core_ex's grant path READS the master's current
+         * res->valblk back into a.valblk. That read-back is copied into the reply
+         * below, so the GRANT the master sends over SCS carries its LVB to the
+         * requester -- "node B reads the master's updated LVB on a cross-node
+         * $ENQ", the mirror of vms-d81's write crossing.
+         */
+        memcpy(a.valblk, req->valblk, sizeof(a.valblk));
 
         memset(&xn, 0, sizeof(xn));
         xn.req_lkid = req->req_lkid;    /* stamp the master lock with the
@@ -2008,6 +2056,9 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
         /* Hand the master's lock id back (the GRANT reply's master_lkid) and the
          * contention outputs. On a NOQUEUE decline a.lkid is 0. */
         req->master_lkid = a.lkid;
+        /* Return the master's current value block to the requester (rd vms-eeb).
+         * The GRANT reply builder in scsd copies this into the wire frame. */
+        memcpy(req->valblk, a.valblk, sizeof(req->valblk));
         req->master_csid = vms_local_csid; /* this node mastered the request */
         req->queued = xn.queued ? 1u : 0u;
         req->blocking_csid = xn.blocking_csid;

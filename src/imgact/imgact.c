@@ -347,6 +347,178 @@ static void imgact_bind_disc(unsigned idx, const char *soname, unsigned long sv,
 }
 #endif  /* __alpha__ */
 
+#if defined(__alpha__)
+/* ======================= vms-430 CHILD-DISC =============================
+ * DIAGNOSTIC (NOT for merge; revert-before-fix). A SA_SIGINFO fault handler
+ * armed in THIS process -- the fork-CHILD standalone interpreter (IMGACT.EXE),
+ * which is the process that actually runs crt0 -> decc$main -> main -> the
+ * crtl_rms memset that SIGSEGVs. The earlier imgact_segv upgrade lived in
+ * sys_imgact.c (the IN-PROCESS path compiled into DCL.EXE, the fork PARENT),
+ * so it never fired on the child's fault. This handler is installed LAST, in
+ * imgact_vms_standard_activate immediately before imgact_vms_transfer() jumps
+ * to the image entry, so nothing between here and the fault resets it.
+ *
+ * Freestanding: IMGACT.EXE is -nostdlib, so this uses the raw syscall layer
+ * (SYS_rt_sigaction / SYS_sigaltstack) and structs laid out to match the
+ * Linux/Alpha KERNEL ABI, NOT libc's. Cited sources (linux-6.6.52):
+ *   - struct sigcontext (sc_pc = 3rd long; sc_regs[30]=R30=SP):
+ *       arch/alpha/include/uapi/asm/sigcontext.h
+ *   - struct ucontext (uc_osf_sigmask BEFORE uc_stack -> uc_mcontext at
+ *     uc-offset 48; kernel asserts frame offset 176):
+ *       arch/alpha/include/asm/ucontext.h
+ *   - kernel-internal struct sigaction copy_from_user reads {handler,flags,mask}
+ *     (alpha sets neither __ARCH_HAS_SA_RESTORER nor __ARCH_HAS_IRIX_SIGACTION):
+ *       include/linux/signal_types.h
+ *   - rt_sigaction is 5-arg (sig,act,oact,sigsetsize,restorer), sigsetsize==8:
+ *       arch/alpha/kernel/signal.c SYSCALL_DEFINE5(rt_sigaction,...)
+ *   - SA_ONSTACK=0x1, SA_SIGINFO=0x40, SIGILL=4/SIGBUS=10/SIGSEGV=11:
+ *       arch/alpha/include/uapi/asm/signal.h
+ * NOTE: the musl-arch bits/signal.h ucontext_t used by DECC$SHR's
+ * ovmx_disc_segv places uc_stack/uc_sigmask before uc_mcontext (musl order,
+ * NOT the kernel's), so its sc_pc read is at the WRONG offset -- see report.
+ */
+#ifndef SYS_rt_sigaction
+#define SYS_rt_sigaction 352
+#endif
+#ifndef SYS_sigaltstack
+#define SYS_sigaltstack 235
+#endif
+#define OVMX_SA_ONSTACK 0x00000001UL
+#define OVMX_SA_SIGINFO 0x00000040UL
+#define OVMX_SIGILL     4
+#define OVMX_SIGBUS     10
+#define OVMX_SIGSEGV    11
+#define OVMX_CHILD_DISC_ALTSTK_SZ 65536UL
+
+struct ovmx_k_sigaction {
+	void          *sa_handler;   /* sa_sigaction under SA_SIGINFO */
+	unsigned long  sa_flags;
+	unsigned long  sa_mask;      /* sigset_t: _NSIG_WORDS==1 on alpha */
+};
+struct ovmx_k_stack {
+	void          *ss_sp;
+	int            ss_flags;
+	unsigned long  ss_size;
+};
+struct ovmx_k_sigcontext {
+	long sc_onstack;
+	long sc_mask;
+	long sc_pc;                  /* the faulting PC */
+	long sc_ps;
+	long sc_regs[32];            /* sc_regs[30] == SP */
+};
+struct ovmx_k_ucontext {
+	unsigned long             uc_flags;
+	void                     *uc_link;
+	unsigned long             uc_osf_sigmask;   /* old_sigset_t (alpha-only) */
+	struct ovmx_k_stack       uc_stack;
+	struct ovmx_k_sigcontext  uc_mcontext;      /* lands at uc-offset 48 */
+};
+struct ovmx_k_siginfo {                          /* generic 64-bit _sigfault */
+	int   si_signo;
+	int   si_errno;
+	int   si_code;
+	int   _pad0;
+	void *si_addr;                               /* offset 16 */
+};
+
+/* async-signal-safe 8-digit hex (word_at_pc). */
+static char *xdisc_hex8(char *p, unsigned int v)
+{
+	for (int i = 7; i >= 0; i--) {
+		unsigned d = (unsigned)((v >> (i * 4)) & 0xfU);
+		*p++ = (char)(d < 10 ? ('0' + d) : ('a' + (d - 10)));
+	}
+	return p;
+}
+
+static void imgact_child_disc(int sig, void *infop, void *uctx)
+{
+	struct ovmx_k_siginfo *info = (struct ovmx_k_siginfo *)infop;
+	unsigned long addr = info ? (unsigned long)info->si_addr : 0UL;
+	unsigned long pc = 0UL;
+	unsigned long sp = 0UL;
+	if (uctx) {
+		struct ovmx_k_ucontext *uc = (struct ovmx_k_ucontext *)uctx;
+		pc = (unsigned long)uc->uc_mcontext.sc_pc;
+		sp = (unsigned long)uc->uc_mcontext.sc_regs[30];
+	}
+
+	/* Safety line FIRST -- emitted before touching pc memory, so the PC is
+	 * captured even if the word-at-pc read below itself re-faults. */
+	{
+		char b[96];
+		char *p = b;
+		p = xdisc_str(p, "IMGSEGV-PC: sig=");
+		p = xdisc_dec(p, (unsigned long)sig);
+		p = xdisc_str(p, " si_addr=");
+		p = xdisc_hex(p, addr);          /* "0x" + 16 digits */
+		p = xdisc_str(p, " pc=");
+		p = xdisc_hex(p, pc);
+		p = xdisc_str(p, " sp=");
+		p = xdisc_hex(p, sp);
+		*p++ = '\n';
+		sys_write(2, b, (unsigned long)(p - b));
+	}
+
+	unsigned int word = 0;
+	if (pc > 4096UL)
+		word = *(volatile unsigned int *)pc;   /* opcode/word at the fault PC */
+
+	{
+		char line[128];
+		char *p = line;
+		p = xdisc_str(p, "IMGSEGV-DISC: sig=");
+		p = xdisc_dec(p, (unsigned long)sig);
+		p = xdisc_str(p, " si_addr=");
+		p = xdisc_hex(p, addr);
+		p = xdisc_str(p, " pc=");
+		p = xdisc_hex(p, pc);
+		p = xdisc_str(p, " word_at_pc=0x");
+		p = xdisc_hex8(p, word);
+		*p++ = '\n';
+		sys_write(2, line, (unsigned long)(p - line));
+	}
+
+	sys_exit(43);   /* distinct from DECC$SHR ovmx_disc_segv's _exit(42) */
+}
+
+static void imgact_install_child_disc(void)
+{
+	/* Off-image alt-stack via the loader's own runtime mmap (never a static
+	 * array -> IMGACT.EXE on disk is byte-unchanged; the static DECC$SHR
+	 * alt-stack is what pushed that image past the producer-load cap, vms-430).
+	 * SA_ONSTACK lets the handler run on a clean stack and survive a wild SP --
+	 * the exact failure that produced NO PC when the handler ran on the main
+	 * stack. */
+	struct ovmx_k_stack ss;
+	ss.ss_sp = 0;
+	ss.ss_flags = 0;
+	ss.ss_size = 0;
+	void *stk = sys_mmap(0, OVMX_CHILD_DISC_ALTSTK_SZ, PROT_READ | PROT_WRITE,
+			     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	unsigned long on_stack = 0;
+	if (stk != MAP_FAILED) {
+		ss.ss_sp = stk;
+		ss.ss_size = OVMX_CHILD_DISC_ALTSTK_SZ;
+		ss.ss_flags = 0;
+		syscall6(SYS_sigaltstack, (long)&ss, 0, 0, 0, 0, 0);
+		on_stack = 1;
+	}
+
+	struct ovmx_k_sigaction sa;
+	sa.sa_handler = (void *)imgact_child_disc;
+	sa.sa_flags = OVMX_SA_SIGINFO | (on_stack ? OVMX_SA_ONSTACK : 0UL);
+	sa.sa_mask = 0;
+
+	/* Alpha rt_sigaction: 5-arg, sigsetsize == sizeof(sigset_t) == 8; restorer
+	 * = 0 (the handler sys_exit()s, so the return trampoline is never taken). */
+	syscall6(SYS_rt_sigaction, OVMX_SIGSEGV, (long)&sa, 0, 8, 0, 0);
+	syscall6(SYS_rt_sigaction, OVMX_SIGBUS,  (long)&sa, 0, 8, 0, 0);
+	syscall6(SYS_rt_sigaction, OVMX_SIGILL,  (long)&sa, 0, 8, 0, 0);
+}
+#endif  /* __alpha__ */
+
 /* Defined further down; forward-declared here because imgact_vms_exit (which
  * precedes the definition) reads it for the OVMX_IMGACT_SEAM $STATUS readback. */
 static const char *imgact_env_value(char **envp, const char *key);
@@ -2579,6 +2751,14 @@ static void imgact_vms_standard_activate(unsigned long exe_base,
 	/* R25 = AI, built explicitly by the documented Argument-Information
 	 * layout (six 64-bit args), never a hard-coded 6. */
 	unsigned long ai = OVMX_AI_VMS_ACTIVATION;
+
+	/* vms-430 CHILD-DISC (diagnostic, revert-before-fix): arm the SA_SIGINFO
+	 * fault handler LAST -- this is the final interp code in the fork-child
+	 * before control transfers to the image entry (crt0 -> decc$main -> main ->
+	 * the crtl_rms memset that faults). Installed here so nothing resets it
+	 * before the fault, and so it fires from IMGACT.EXE -- the process that
+	 * actually runs memset. See imgact_child_disc above. */
+	imgact_install_child_disc();
 
 	unsigned long cond = imgact_vms_transfer(pv, ai, args);
 

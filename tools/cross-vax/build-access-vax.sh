@@ -87,6 +87,7 @@ CPPFLAGS="-DOVMX_KBACKEND_NETBSD -nostdinc -isystem $KL -isystem $SYS -isystem $
 SRCS="$KMOD/vms_netbsd.c \
       $KMOD/vms_lnm_arena_netbsd.c \
       $KMOD/vms_acct_rss_netbsd.c \
+      $KMOD/vms_sysmem_netbsd.c \
       $KMOD/exec_list_netbsd.c \
       $KMOD/exec_hash_netbsd.c \
       $KMOD/exec_rbtree_netbsd.c \

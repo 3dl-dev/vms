@@ -1068,6 +1068,29 @@ uint32_t vms_kif_setprn(const char *prcnam)
 }
 
 /*
+ * vms_kif_getsyi_memory - read the executive's system-wide physical memory
+ * figures (the reader behind SHOW MEMORY's "Physical Memory Usage" section,
+ * rd vms-a3cd). System-wide, so no selector. On success `info->fields_valid'
+ * says whether the figures are real (VMS_SYIMEM_V_PHYS): the caller renders the
+ * section only when that bit is set, honestly omitting it otherwise (INV-6).
+ * Returns the operation status, or the transport status (e.g. SS$_NOSUCHDEV
+ * with no /dev/vms) when the call could not be delivered.
+ */
+uint32_t vms_kif_getsyi_memory(struct vms_syi_meminfo *info)
+{
+    struct vms_getsyi_mem_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+
+    KIF_CALL(VMS_IOCTL_GETSYIMEM, &args);
+
+    if (info)
+        vms_memcpy(info, &args.info, sizeof(*info));
+
+    return args.status;
+}
+
+/*
  * getjpi_common - issue one VMS_IOCTL_GETJPI with a prepared selector.
  */
 static uint32_t getjpi_common(struct vms_getjpi_args *args,

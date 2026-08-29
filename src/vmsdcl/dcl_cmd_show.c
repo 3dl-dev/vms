@@ -2095,6 +2095,50 @@ static int cmd_show_memory(struct dcl_command *cmd)
 
     /* ---- Physical Memory Usage (pages) -------------------------------- */
     if (show_phys) {
+#if defined(__NetBSD__)
+        /*
+         * NetBSD/VAX (rd vms-a3cd): the physical-memory figures come from the
+         * executive's uvm counters via $GETSYI (vms_kif_getsyi_memory), NOT
+         * Linux /proc/meminfo -- that file is absent here, and the old
+         * unconditional meminfo_kb() path returned all zeros (INV-6
+         * lie-of-absence). The executive sources Total and Free honestly
+         * (uvmexp.npages / uvm_availmem(true), converted to 512-byte VMS pages);
+         * In Use is their difference. VMS's "Modified" page-list column has NO
+         * maintained NetBSD analogue, so it is honestly OMITTED rather than
+         * fabricated. If the executive cannot source the figures at all
+         * (fields_valid clear, or the call could not be delivered), the whole
+         * section is omitted -- never a fabricated all-zero row.
+         */
+        struct vms_syi_meminfo mi;
+        memset(&mi, 0, sizeof(mi));
+        uint32_t mst = vms_kif_getsyi_memory(&mi);
+        if ((mst & 1) && (mi.fields_valid & VMS_SYIMEM_V_PHYS)) {
+            /* bytes -> VMS 512-byte pages */
+            long total_pages = (long)(mi.total_bytes / 512ULL);
+            long free_pages  = (long)(mi.free_bytes  / 512ULL);
+            long inuse_pages = total_pages - free_pages;
+            double total_mb  = (double)mi.total_bytes / (1024.0 * 1024.0);
+
+            char label[48];
+            snprintf(label, sizeof(label), "  Main Memory (%.2fMb)", total_mb);
+
+            /* SAME 4-column header + geometry as the /proc path below (#915,
+             * oracle docs/oracle/vax73-show-memory.md §2): header %-30s + first
+             * value %10s, data label %-28s + values %12, Total's right edge on
+             * col 40. VMS always shows the Modified column, so VAX prints it too
+             * -- but the VMS modified page-list has NO maintained NetBSD source,
+             * so its DATA CELL is left honestly BLANK (%12s of ""), never a
+             * fabricated 0. A blank cell is distinct from the Linux path's real
+             * measured 0 (Dirty=0): it says "no value", not "measured zero"
+             * (INV-6). Total/Free/In Use are the real executive uvm figures. */
+            printf("%-30s%10s%12s%12s%12s\n",
+                   "Physical Memory Usage (pages):",
+                   "Total", "Free", "In Use", "Modified");
+            printf("%-28s%12ld%12ld%12ld%12s\n",
+                   label, total_pages, free_pages, inuse_pages, "");
+        }
+        /* else: no real executive source -> section honestly omitted. */
+#else
         long total_kb    = meminfo_kb("MemTotal");
         long free_kb     = meminfo_kb("MemFree");
         long modified_kb = meminfo_kb("Dirty");
@@ -2125,6 +2169,7 @@ static int cmd_show_memory(struct dcl_command *cmd)
                "Total", "Free", "In Use", "Modified");
         printf("%-28s%12ld%12ld%12ld%12ld\n",
                label, total_pages, free_pages, inuse_pages, modified_pages);
+#endif
     }
 
     /* ---- Paging File Usage (pages) ------------------------------------ */

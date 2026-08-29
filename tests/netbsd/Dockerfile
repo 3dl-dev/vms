@@ -114,6 +114,7 @@ COPY src/kernel-netbsd/exec_rbtree_netbsd.c  /netbsd/guest-src/kmod/exec_rbtree_
 COPY src/kernel-netbsd/vms_lnm_nb.h          /netbsd/guest-src/kmod/vms_lnm_nb.h
 COPY src/kernel-netbsd/vms_lnm_arena_netbsd.c /netbsd/guest-src/kmod/vms_lnm_arena_netbsd.c
 COPY src/kernel-netbsd/vms_acct_rss_netbsd.c /netbsd/guest-src/kmod/vms_acct_rss_netbsd.c
+COPY src/kernel-netbsd/vms_sysmem_netbsd.c   /netbsd/guest-src/kmod/vms_sysmem_netbsd.c
 # --- kernel-core/: the shared, substrate-agnostic facility + shim contracts ---
 COPY src/kernel-core/vms_eflag.c             /netbsd/guest-src/kernel-core/vms_eflag.c
 COPY src/kernel-core/exec_kbackend.h         /netbsd/guest-src/kernel-core/exec_kbackend.h

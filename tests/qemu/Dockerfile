@@ -255,7 +255,7 @@ RUN cd /src/repo && \
         -DOVMX_STATIC=ON \
         -DBUILD_TESTS=ON \
         -DBUILD_TOOLS=ON \
-    && cmake --build build-static --target qemu_syssvc_tests vmsdcl vms_authorize vms_initialize mmk_native vmslibrarian vmslink --parallel $(nproc) 2>&1 && \
+    && cmake --build build-static --target qemu_syssvc_tests vmsdcl vms_authorize vms_initialize mmk_native vmslibrarian vmslink vms_tcpip_daytime --parallel $(nproc) 2>&1 && \
     echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
     ls -la build-static/bin/test_syssvc_* && \
     # MMK.EXE (vms-b23, self-host spine #4): the shipped MadGoat MMK built as an
@@ -322,7 +322,15 @@ RUN cd /src/repo && \
     # activates -- TESTREAL plus its own PT_TLS reached through the biased .vms$tls
     # TLSDESC path. Same aggregate (qemu_syssvc_tests DEPENDS on testtls_inproc).
     echo "--- TESTTLS.EXE (the own-PT_TLS in-process flip subject, test_syssvc_imgact_tls) ---" && \
-    ls -la build-static/bin/TESTTLS.EXE
+    ls -la build-static/bin/TESTTLS.EXE && \
+    # TCPIP$DAYTIME.EXE (vms-477): the REAL, separately-built RFC 867 Daytime
+    # service image the auxiliary server launches end to end over the executive,
+    # the subject test_syssvc_tcpip_daytime.c drives (staged at SYS$SYSTEM
+    # below). Built by the tools/ target (BUILD_TOOLS=ON, OVMX_STATIC -> static
+    # musl). Absence is FATAL, not skipped: a missing subject would turn the
+    # aux-server-launches-a-real-image assertions into no-ops with the job green.
+    echo "--- TCPIP\$DAYTIME.EXE (the standalone RFC 867 service the aux server launches, test_syssvc_tcpip_daytime) ---" && \
+    ls -la 'build-static/bin/TCPIP$DAYTIME.EXE'
 
 # TCC.EXE (vms-d1b, self-host spine #6): tinycc built as a PLAIN STATIC (musl)
 # foreign-command image -- the compiler test_syssvc_mmk_build.c drives from MMK's
@@ -641,6 +649,17 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE && \
     cp /initramfs/bin/DCL.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE && \
     chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE && \
+    # TCPIP$DAYTIME.EXE at SYS$SYSTEM (vms-477) -- the REAL standalone RFC 867
+    # service image the auxiliary server launches; test_syssvc_tcpip_daytime.c
+    # execs it from this path (OVMX_DAYTIME default
+    # /vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$DAYTIME.EXE). It matches no test_* glob, so
+    # init.sh never runs it as a suite -- it is the subject the suite drives.
+    # Absence is FATAL, not skipped: a missing subject would turn the
+    # aux-server-launches-a-real-image round-trip assertion into a no-op with the
+    # job still green (same rule the MMK.EXE/DCL.EXE subjects carry above).
+    { cp '/src/repo/build-static/bin/TCPIP$DAYTIME.EXE' '/initramfs/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$DAYTIME.EXE' || \
+      { echo "FATAL: TCPIP\$DAYTIME.EXE was not built into the static tree -- the auxiliary server's launch of a real shipped image would go unproven against a real executive"; exit 1; }; } && \
+    chmod +x '/initramfs/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$DAYTIME.EXE' && \
     # TCC.EXE at SYS$SYSTEM (vms-d1b, self-host spine #6) -- the compiler
     # test_syssvc_mmk_build.c drives from MMK's persistent mailbox DCL. Its
     # descrip.mms defines TCC :== $/vms/SYS0/SYSCOMMON/SYSEXE/TCC.EXE (an absolute

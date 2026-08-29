@@ -29,3 +29,11 @@
 ! image; uncomment to enable once present (do NOT fake an unbound service).
 !
 ! SSH   22  SYS$SYSTEM:VMSSSHD.EXE
+!
+! DAYTIME (RFC 867), rd vms-477 -- the first ENABLED service: a genuine
+! standalone image (TCPIP$DAYTIME.EXE) the auxiliary server launches end to end
+! over the executive. On an inbound connection to port 13 the auxiliary server
+! spawns TCPIP$DAYTIME.EXE with the accepted connection as its SYS$INPUT/
+! SYS$OUTPUT; the image writes the current date/time as a one-line ASCII string
+! (RFC 867) and exits.
+DAYTIME 13 SYS$SYSTEM:TCPIP$DAYTIME.EXE

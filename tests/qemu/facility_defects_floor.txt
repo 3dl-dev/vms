@@ -437,4 +437,13 @@
 # stdout (dup2 STDOUT_FILENO -> STDERR_FILENO), so the reply never reaches the
 # connection while the accept/spawn/exit assertions stay green and only the
 # byte-exact round-trip assertion reddens. See its entry in facility_defects.sh.
-109
+# Raised to 110 by vms-477's tcpip-daytime-reply-not-formatted -- the TCP/IP
+# Services DAYTIME service (RFC 867), the FIRST genuine SEPARATELY-BUILT service
+# image (TCPIP$DAYTIME.EXE) the auxiliary server launches end to end over the
+# executive. The FIRST defect targeting src/vmstcpip/services/tcpip_daytime.h,
+# the RFC 867 formatter compiled into the shipped image test_syssvc_tcpip_daytime
+# drives against a real /dev/vms. The mutation replaces the strftime() line build
+# with a constant "X", so the image emits a non-empty malformed line and still
+# exits cleanly while the accept/spawn/exit assertions stay green and only the
+# independent RFC 867 shape assertion reddens. See its entry in facility_defects.sh.
+110

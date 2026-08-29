@@ -80,21 +80,6 @@ clean-room (Rule 8: derived from public GCC source + observed cc1 output only).
   map, so its `%s..en` emits the decorated name. Only the two `concat(…"..en")`
   sites above needed the fix.)
 
-- **`0006-vms-4ed-evax-ovmx-gpdisp.patch`** (vms-4ed, component C2 of vms-5f5) —
-  a **binutils** patch (unlike 0001/0002, which patch GCC): it adds the
-  OVMX-private `EVAX_R_OVMX_GPDISP` relocation so gas can mark a callee's
-  `ldah`/`lda` GP-establish prologue pair for the OVMX linker to patch with `-K`
-  (K = the enclosing procedure's PDSC offset within its module linkage section).
-  New assembler directive `.ovmx_gpdisp <procsym>` emits the pair plus the reloc,
-  which `bfd/vms-alpha.c` serializes as the OVMX-private ETIR command
-  `ETIR__C_OVMX_GPDISP = 0xEF01` (OVMX-private ETIR range 0xEF00–0xEFFF, outside
-  VSI's opcode space). **`[OVMX]`, not VMS-authentic** — EVAX publishes no
-  GP-displacement encoding (Rule 8); see `docs/design-alpha-per-image-gp.md`
-  §2.1/§2.2. Touches `include/vms/etir.h`, `bfd/{bfd-in2.h,reloc.c,vms-alpha.c}`,
-  `gas/config/tc-alpha.c`. Regenerates the checked-in fixture
-  `src/vmslink/test/evax-fixtures/linkgp_gpdisp.obj`; verified byte-inert for all
-  other fixtures (same-name reassembly is byte-identical to the unpatched `as`).
-
 ## Why real objects, not reasoning
 
 Reasoning about "what the port needs" from source alone produced a **false gap**

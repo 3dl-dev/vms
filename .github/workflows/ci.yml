@@ -5001,22 +5001,6 @@ jobs:
         run: |
           sh src/vmslink/test/run_evax_linkgp.sh
 
-      # vms-4ed (component C2 of vms-5f5): the OVMX-labeled EVAX_R_OVMX_GPDISP
-      # relocation round-trip. The checked-in fixture linkgp_gpdisp.obj was
-      # assembled by the PATCHED alpha-dec-vms gas (the .ovmx_gpdisp directive
-      # emits the OVMX-private ETIR__C_OVMX_GPDISP command); this test links it
-      # (OVMX LINK.EXE reads the command + applies the patch) and asserts the two
-      # patched ldah/lda immediates decode to exactly -K (signed-split), where K
-      # is each procedure's PDSC offset in its module linkage section, derived
-      # INDEPENDENTLY from the emitted image's $LINK$ base + .vms$sv values.
-      # FIRST_PROC (K=0) must patch to 0/0; SECOND_PROC (K!=0) to HIGH(-K)/LOW(-K)
-      # -- so a stubbed or wrong-value apply cannot pass. Pure byte/text
-      # manipulation, arch-independent, fixture checked in (no Alpha toolchain at
-      # test time; regenerate with the patched as if linkgp_gpdisp.s changes).
-      - name: Prove the OVMX EVAX_R_OVMX_GPDISP reloc round-trips (gas emit -> read -> apply -K) (vms-4ed)
-        run: |
-          sh src/vmslink/test/run_evax_linkgp_gpdisp.sh
-
       # vms-2e4: the LAST x86_64 relocation class — gnu2-dialect TLSDESC
       # (R_X86_64_GOTPC32_TLSDESC + R_X86_64_TLSDESC_CALL, plus the
       # local-dynamic R_X86_64_DTPOFF32 / _TLS_MODULE_BASE_ half). Proof is

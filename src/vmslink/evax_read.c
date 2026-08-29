@@ -80,16 +80,6 @@
 #define ETIR__C_STC_BSR_GBL 207  /* call-site relaxation -> BSR               */
 #define ETIR__C_STC_LDA_GBL 209  /* call-site relaxation -> LDA               */
 #define ETIR__C_STC_BOH_GBL 211  /* call-site relaxation -> BOH               */
-/* [OVMX] vms-4ed (component C2 of vms-5f5): OVMX-private ETIR command for the
- * OVMX GP-displacement relocation. EVAX/VSI publishes NO GP-displacement
- * encoding, so OVMX defines its own and reserves the private ETIR command range
- * 0xEF00-0xEFFF for OVMX use. This value is OUTSIDE VSI's own opcode space
- * (which tops out near ETIR__C_MAXSTCCOD = 214), so a real VSI object can never
- * collide with it, and it is NOT a VSI-authentic command. Must match the
- * assembler's define (tools/cross-alpha-vms/patches/0006-vms-4ed-…, which adds
- * the identical ETIR__C_OVMX_GPDISP to binutils include/vms/etir.h). See
- * docs/design-alpha-per-image-gp.md §2.2. */
-#define ETIR__C_OVMX_GPDISP 0xEF01
 
 static char g_err[256];
 static void set_err(const char *m) { snprintf(g_err, sizeof g_err, "%s", m); }
@@ -364,46 +354,6 @@ static int parse_etir(const uint8_t *rec, uint16_t rsz, struct evax_object *out,
             st->cur_sym    = op + 32;
             if (etir_emit(out, st, t, payload_addr, end) < 0) return -1;
             emitted = 1; break;
-        }
-        case ETIR__C_OVMX_GPDISP: {
-            /* [OVMX] vms-4ed — the OVMX-private GP-displacement command. Operand
-             * (all little-endian, evax_read.c framing: length includes the
-             * 4-byte header, trailing bytes may be align padding and are ignored):
-             *   [u32 lkidx_or_0][u32 psect][u64 ldah_vaddr][u32 lda_delta]
-             *   [u8 namelen][name]  = 20 fixed + 1 + namelen bytes.
-             * The command does NOT advance vaddr: the ldah/lda instruction words
-             * are ordinary STO_IMM content that the OVMX linker patches in place
-             * (link.c evax_apply_reloc). `name` is the enclosing procedure whose
-             * PDSC offset K the linker looks up; the pair carries -K signed-split.
-             * NOT VMS-authentic (EVAX has no GPDISP); see
-             * docs/design-alpha-per-image-gp.md §2.2. */
-            if (length < 4 + 20 + 1) { set_err("truncated OVMX_GPDISP"); return -1; }
-            uint32_t psect      = getl32(op + 4);
-            uint64_t ldah_vaddr = getl64(op + 8);
-            uint32_t lda_delta  = getl32(op + 16);
-            uint8_t  namelen    = op[20];
-            const uint8_t *name = op + 21;
-            if (name + namelen > ptr + length) {
-                set_err("OVMX_GPDISP name overruns command"); return -1;
-            }
-            if (out->nreloc >= EVAX_MAX_RELOCS) {
-                set_err("too many relocations"); return -1;
-            }
-            if ((int)psect >= out->nsec) {
-                set_err("OVMX_GPDISP names a bad psect index"); return -1;
-            }
-            struct evax_reloc *rr = &out->reloc[out->nreloc];
-            memset(rr, 0, sizeof *rr);
-            rr->type       = EVAX_R_OVMX_GPDISP;
-            rr->psect      = (int)psect;
-            rr->address    = ldah_vaddr;
-            rr->addend     = lda_delta;    /* ldah_vaddr + addend = the lda word */
-            rr->to_section = -1;
-            copy_name(rr->sym, name, namelen);
-            out->nreloc++;
-            /* No vaddr advance, no per-relocation state reset needed (this case
-             * uses none of the STA/OPR stacking state). */
-            break;
         }
         default:
             set_err("unknown ETIR command"); return -1;

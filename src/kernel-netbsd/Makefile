@@ -37,6 +37,7 @@ KMOD=		vms
 # would collide), listed with the other _netbsd backend TUs above.)
 SRCS=		vms_netbsd.c \
 		vms_lnm_arena_netbsd.c \
+		vms_acct_rss_netbsd.c \
 		exec_list_netbsd.c \
 		exec_hash_netbsd.c \
 		exec_rbtree_netbsd.c \

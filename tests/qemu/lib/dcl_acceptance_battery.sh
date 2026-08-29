@@ -320,11 +320,11 @@ run_dcl_acceptance_battery() {
     # real Uptime (#887), and -- now that vms-6cac wired the VAX host-task accounting
     # -- real CPU time (calcru) and Page faults (rulwps live-LWP aggregation), the
     # columns #887 had honestly blanked on VAX. Those two are ARCH-COMMON: x86_64/
-    # Alpha sourced them all along, VAX now does too. It does NOT assert the "Pages"
-    # (rss) column -- real on x86_64/Alpha, still honestly omitted on VAX until the
-    # uvm-TU bind (vms-601), so asserting it either way would fail one arch. It
-    # asserts NO State/Pri column on ANY arch: the executive holds no VMS scheduler
-    # state, and fabricating one is the exact tell INV-6 forbids.
+    # Alpha sourced them all along, VAX now does too. It ALSO asserts the "Pages"
+    # (rss) column -- now that vms-601 wired the VAX resident-set read via the uvm-TU
+    # (vm_resident_count), Pages is ARCH-COMMON like CPU/faults (x86_64/Alpha always
+    # populated it). It asserts NO State/Pri column on ANY arch: the executive holds
+    # no VMS scheduler state, and fabricating one is the exact tell INV-6 forbids.
     run_cmd 'SHOW SYSTEM'
     must_have  "$SEG" 'SYSTEM' "SHOW SYSTEM: lists the SYSTEM process"
     must_have  "$SEG" 'JOB_CONTROL' "SHOW SYSTEM [vms-f62]: lists the JOB_CONTROL process (the boot's job controller)"
@@ -365,14 +365,25 @@ run_dcl_acceptance_battery() {
     else
         bad "SHOW SYSTEM [vms-6cac]: the SYSTEM process CPU is zero/blank -- accounting not wired [row='$SYS_ROW']"
     fi
-    # faults = the integer immediately AFTER the CPU time. Anchor on the CPU field,
-    # NOT the trailing number: on x86_64/Alpha a Pages number follows faults, so the
-    # trailing number there is Pages (VAX omits Pages, so faults IS its trailing one).
+    # faults = the FIRST integer after the CPU time. Anchor on the CPU field, NOT the
+    # trailing number: a Pages number now follows faults on every arch (VAX via
+    # vms-601), so the trailing number is Pages, not faults.
     SYS_FLTS=$(printf '%s' "$SYS_ROW" | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{2}[[:space:]]+[0-9]+' | grep -oE '[0-9]+$')
     if [ -n "$SYS_FLTS" ] && [ "$SYS_FLTS" -gt 0 ] 2>/dev/null; then
         ok "SHOW SYSTEM [vms-6cac]: SYSTEM shows a NON-ZERO Page-fault count ($SYS_FLTS) -- rulwps live-LWP aggregation (not p_ru's dead-LWP ~0)"
     else
         bad "SHOW SYSTEM [vms-6cac]: Page-flts zero/blank for SYSTEM [row='$SYS_ROW'] -- faults not live-aggregated"
+    fi
+    # vms-601: the "Pages" (resident set) column now renders on VAX too -- the
+    # dedicated uvm-TU reads vm_resident_count(). It is the SECOND integer after the
+    # CPU time (CPU, then faults, then Pages). SYSTEM has a real resident set, so it
+    # is non-zero. ARCH-COMMON now (x86_64/Alpha always populated Pages).
+    local SYS_PAGES
+    SYS_PAGES=$(printf '%s' "$SYS_ROW" | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{2}[[:space:]]+[0-9]+[[:space:]]+[0-9]+' | grep -oE '[0-9]+$')
+    if [ -n "$SYS_PAGES" ] && [ "$SYS_PAGES" -gt 0 ] 2>/dev/null; then
+        ok "SHOW SYSTEM [vms-601]: SYSTEM shows a non-zero resident Pages count ($SYS_PAGES) -- real vm_resident_count() via the uvm-TU (was honestly omitted on VAX)"
+    else
+        bad "SHOW SYSTEM [vms-601]: Pages zero/blank for SYSTEM [row='$SYS_ROW'] -- rss not wired on this arch"
     fi
     # vms-f62 honest omission (INV-6): the executive has no VMS scheduler state, so
     # SHOW SYSTEM prints NO State/Pri column on ANY arch -- fabricating one is the

@@ -190,4 +190,116 @@ grep -q "%LINK-F-MULDEF" "$WORK/xarch.err" \
 echo "cross-archive strong dup correctly REJECTED (exemption is same-archive-member-only)"
 
 echo
+echo "== CONTROL 3: whole-archive INTRA-IMAGE weak self-bind redirect (vms-430) =="
+# The decc$_malloc64/__simple_malloc header-less-allocator bug in miniature — the
+# case the CONTROL above did NOT catch. The CONTROL exports the contested symbol
+# and checks the exported vector binds strong; that exercises evax_find_sym's
+# reference resolver. But the ACTUAL failing binding in DECC$SHR is an
+# INTRA-object call: musl's lite_malloc.o defines contested (__libc_malloc_impl)
+# WEAK via weak_alias to a static header-less bump allocator, AND in the SAME TU
+# default_malloc (== the exported decc$_malloc64) calls it. The alpha-dec-vms back
+# end binds that same-TU call as a SECTION-RELATIVE linkage pair into the object's
+# own $CODE$/$LINK$ — it never NAMES the symbol, so evax_find_sym's strong
+# preference cannot reach it. mallocng/malloc.o STRONGLY defines the same symbol.
+# Pre-fix result: the app's malloc reaches the header-less bump allocator while
+# musl's stdio reaches mallocng — two allocators over overlapping heap, free()
+# traps (vms-864). The fix records the weak def a strong def overrides and
+# retargets the section-relative linkage onto the strong def at apply time.
+#
+# selfbind.c mirrors lite_malloc.o (weak contested + same-TU self_caller); ngdef.c
+# mirrors mallocng/malloc.o (STRONG contested). Whole-archived BOTH orders. We
+# assert (a) the linker emits the strong-over-weak redirect, and (b) after the
+# link NO live pointer still targets the weak descriptor where the strong should
+# be — i.e. self_caller's intra-image call linkage was retargeted to the strong
+# def. (b) is what fails on origin/main's linker: there self_caller's linkage
+# still points at the header-less weak def (verified manually; see the PR).
+cat > "$WORK/selfbind.c" <<'EOF'
+/* mirror of musl lite_malloc.o: WEAK contested (header-less bump), plus a
+ * same-TU caller that the back end binds SECTION-RELATIVE to the local weak def. */
+#define weak_alias(old, new) extern __typeof(old) new __attribute__((weak, alias(#old)))
+static void *__hl_bump(unsigned long n) {
+    static char b[65536]; static unsigned long o;
+    void *p = b + o; o += (n + 15) & ~15UL; return p;   /* header-LESS */
+}
+weak_alias(__hl_bump, contested_malloc);                /* WEAK def */
+void *contested_malloc(unsigned long n);
+void *self_caller(unsigned long n) { return contested_malloc(n); }  /* intra-TU */
+EOF
+cat > "$WORK/ngdef.c" <<'EOF'
+/* mirror of mallocng/malloc.o: STRONG contested (header'd). */
+void *contested_malloc(unsigned long n) {                /* STRONG def */
+    static char b[65536]; static unsigned long o;
+    char *p = b + o + 16; o += (n + 31) & ~31UL;
+    ((unsigned long *)p)[-2] = 0x4d4c4c4f; return p;      /* header present */
+}
+void *other_caller(void) { return contested_malloc(1); }
+EOF
+evax_cc "$WORK/selfbind.c" "$WORK/selfbind.obj"
+evax_cc "$WORK/ngdef.c"    "$WORK/ngdef.obj"
+
+# 8-aligned LE-u64 pointer scanner (endianness-correct: the host that runs this
+# is the same host whose LINK.EXE wrote the little-endian image).
+cat > "$WORK/scanptr.c" <<'EOF'
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+int main(int c, char **v) {
+    FILE *f = fopen(v[1], "rb"); if (!f) return 2;
+    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
+    uint8_t *b = malloc(n); if (fread(b, 1, n, f) != (size_t)n) return 2; fclose(f);
+    uint64_t t = strtoull(v[2], 0, 0); int hits = 0;
+    for (long o = 0; o + 8 <= n; o += 8) { uint64_t q; memcpy(&q, b + o, 8); if (q == t) hits++; }
+    printf("%d\n", hits); return 0;
+}
+EOF
+$CC -O2 -w -o "$WORK/scanptr" "$WORK/scanptr.c"
+
+SV3="self_caller=PROCEDURE,other_caller=PROCEDURE,contested_malloc=PROCEDURE"
+uval3() {  # <log> <name> -> resolved 0x.. value of universal <name>
+    grep -E "%LINK-I-UNIV,[[:space:]]+sv#[0-9]+[[:space:]]+$2[[:space:]]" "$1" \
+        | grep -oE "value=0x[0-9a-fA-F]+" | head -1 | sed 's/value=//'
+}
+assert_selfbind_strong() {   # <objs...> after a fixed label $1, order label $2
+    _log="$WORK/selfbind_$2.log"
+    OVMX_LINK_DUMP_WEAKOVR=1 "$WORK/LINK.EXE" --shareable \
+        --symbol-vector "$SV3" --gsmatch EQUAL,1,0 -o "$WORK/SELF_$2\$SHR.EXE" \
+        "$WORK/$3.a" >"$_log" 2>&1
+    _rc=$?
+    [ "$_rc" -eq 0 ] || { echo "FAIL ($2): whole-archive link failed rc=$_rc"; cat "$_log"; exit 1; }
+    grep -q "%LINK-I-WEAKOVR," "$_log" \
+        || { echo "FAIL ($2): linker did not emit a strong-over-weak redirect — the section-relative self-bind is unhandled (this is the pre-vms-430 bug: default_malloc still reaches the header-less allocator)"; cat "$_log"; exit 1; }
+    # Layout-invariant: contested binds into the STRONG object (closer to
+    # other_caller than to self_caller).
+    _c=$(uval3 "$_log" contested_malloc); _s=$(uval3 "$_log" self_caller); _o=$(uval3 "$_log" other_caller)
+    [ -n "$_c" ] && [ -n "$_s" ] && [ -n "$_o" ] \
+        || { echo "FAIL ($2): could not read universals (contested=$_c self=$_s other=$_o)"; exit 1; }
+    _dc_s=$(( _c > _s ? _c - _s : _s - _c )); _dc_o=$(( _c > _o ? _c - _o : _o - _c ))
+    [ "$_dc_o" -lt "$_dc_s" ] \
+        || { echo "FAIL ($2): contested_malloc bound to the WEAK object (closer to self_caller)"; exit 1; }
+    # Pointer-flip (the decisive intra-image check): STRONG contested descriptor
+    # (== contested universal value) is the redirect target; the matching weak
+    # descriptor is the WEAKOVR 'from' whose 'to' equals it. After the fix the
+    # image carries MORE live pointers to the strong descriptor than to the weak
+    # one — self_caller's section-relative linkage now targets the strong def.
+    _strong="$_c"
+    _weak=$(grep -E "%LINK-I-WEAKOVR, redirect from=0x[0-9a-f]+ to=$_strong$" "$_log" \
+            | grep -oE "from=0x[0-9a-f]+" | head -1 | sed 's/from=//')
+    [ -n "$_weak" ] || { echo "FAIL ($2): no descriptor redirect to the strong contested def (to=$_strong) in the WEAKOVR dump"; cat "$_log"; exit 1; }
+    _sh=$("$WORK/scanptr" "$WORK/SELF_$2\$SHR.EXE" "$_strong")
+    _wh=$("$WORK/scanptr" "$WORK/SELF_$2\$SHR.EXE" "$_weak")
+    echo "  $2: contested(strong)=$_strong weak_desc=$_weak  live-pointers strong=$_sh weak=$_wh"
+    { [ "$_sh" -ge 2 ] && [ "$_sh" -gt "$_wh" ]; } \
+        || { echo "FAIL ($2): intra-image references were NOT redirected to the strong def (strong ptrs=$_sh, weak ptrs=$_wh) — self_caller still reaches the header-less weak allocator"; exit 1; }
+}
+
+# weak object FIRST (the archive-order that binds weak on a first-match linker)
+ar rcs "$WORK/self_wf.a" "$WORK/selfbind.obj" "$WORK/ngdef.obj"
+assert_selfbind_strong strong weakfirst self_wf
+# strong object FIRST — must ALSO redirect (order-independent)
+ar rcs "$WORK/self_sf.a" "$WORK/ngdef.obj" "$WORK/selfbind.obj"
+assert_selfbind_strong strong strongfirst self_sf
+echo "intra-image weak self-bind REDIRECTED to the strong def in BOTH orders — the decc\$_malloc64/mallocng unification (vms-430)"
+
+echo
 echo "ALL LINK.EXE EVAX MULDEF CHECKS PASSED"

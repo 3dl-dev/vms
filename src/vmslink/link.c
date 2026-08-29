@@ -3332,6 +3332,78 @@ static uint64_t evax_sym_code_addr(struct evax_input *in, int di, const struct e
     return in[di].sec_base[s->code_psindx] + s->code_value;
 }
 
+/* ---- Weak-definition override redirect map (vms-430) ---------------------
+ *
+ * THE GAP evax_find_sym's strong-preference (above) does NOT close: a NAMED
+ * reference to __libc_malloc_impl from ANOTHER object resolves through
+ * evax_find_sym and now binds STRONG. But the alpha-dec-vms GNU back end binds
+ * an INTRA-object reference to a same-TU WEAK definition as a SECTION-RELATIVE
+ * relocation (r->to_section into the object's own $CODE$/$LINK$, r->sym EMPTY) —
+ * it never names the symbol, so no symbol-resolution layer (neither the
+ * reference resolver nor a definition-insertion merge) can see or redirect it.
+ *
+ * musl's lite_malloc.o is exactly this: `weak_alias(__simple_malloc,
+ * __libc_malloc_impl)` (WEAK) plus, in the SAME TU, `default_malloc` (== the
+ * exported decc$_malloc64) calling __libc_malloc_impl. That call compiles to a
+ * section-relative linkage pair (quad0 = $CODE$+0 = __simple_malloc's code,
+ * quad1 = $LINK$+0x10 = the weak descriptor) pointing at lite_malloc.o's OWN
+ * header-less bump allocator — while mallocng/malloc.o STRONGLY defines
+ * __libc_malloc_impl. Result: the app's malloc (decc$_malloc64 -> default_malloc
+ * -> the weak self-bind) reaches __simple_malloc, but musl's stdio reaches
+ * mallocng: two uncoordinated allocators over overlapping heap, free()'s
+ * get_meta traps (vms-864). The evax_find_sym fix redirected the stdio side to
+ * mallocng but left default_malloc's self-bind weak — so the split PERSISTED.
+ *
+ * THE FIX (order-independent, no codegen): after placement, record every WEAK
+ * definition that a STRONG definition of the same name overrides, mapping the
+ * weak def's PLACED procedure-descriptor and code-entry addresses to the strong
+ * def's. evax_apply_reloc then retargets any resolved address (symbol OR
+ * section-relative) that lands on an overridden weak descriptor/code to the
+ * strong def. This is standard strong-over-weak, enforced at the only layer that
+ * can see a section-relative self-bind: the resolved image address. A weak def a
+ * strong def overrides is dead by definition, so redirecting every reference to
+ * its storage — including same-object aliases (__simple_malloc) — is correct and
+ * mirrors ELF's static-link weak override. */
+struct evax_wredir { uint64_t from, to; };
+
+/* Build the weak->strong placed-address redirect map. For each WEAK defined
+ * procedure/data symbol that a STRONG definition of the same name overrides
+ * (evax_find_sym returns the strong def), map the weak def's descriptor and
+ * code-entry placed addresses to the strong def's. Runs AFTER placement (every
+ * sec_base final). `redir` is caller-sized to >= 2*max-symbols. */
+static int evax_build_weak_redir(struct evax_input *in, int nin,
+                                 struct evax_wredir *redir, int cap)
+{
+    int n = 0;
+    for (int i = 0; i < nin; i++)
+        for (int s = 0; s < in[i].obj.nsym; s++) {
+            const struct evax_symbol *w = &in[i].obj.sym[s];
+            if (!w->defined || !(w->flags & EGSY__V_WEAK)) continue;
+            /* Does a STRONG def of this name exist? evax_find_sym prefers it. */
+            int di; const struct evax_symbol *ds;
+            if (evax_find_sym(in, nin, w->name, &di, &ds) < 0) continue;
+            if (ds->flags & EGSY__V_WEAK) continue;   /* no strong override */
+            if (ds == w) continue;                    /* found itself (no strong) */
+            /* Map descriptor addr and code-entry addr (may coincide for data). */
+            uint64_t wv = evax_sym_value_addr(in, i, w),  sv = evax_sym_value_addr(in, di, ds);
+            uint64_t wc = evax_sym_code_addr(in, i, w),   sc = evax_sym_code_addr(in, di, ds);
+            if (wv != sv && n < cap) redir[n++] = (struct evax_wredir){ wv, sv };
+            if (wc != sc && wc != wv && n < cap) redir[n++] = (struct evax_wredir){ wc, sc };
+        }
+    return n;
+}
+
+/* Apply the weak->strong redirect to one resolved image address. A section-
+ * relative linkage-pair quad or descriptor pointer that lands on an overridden
+ * weak def's storage is retargeted to the strong def (vms-430). Exact-match
+ * only: the map keys are the precise placed addresses of overridden weak
+ * descriptors/code entries, so a hit means the slot points AT that weak def. */
+static uint64_t evax_wredir_apply(const struct evax_wredir *redir, int nredir, uint64_t a)
+{
+    for (int i = 0; i < nredir; i++) if (redir[i].from == a) return redir[i].to;
+    return a;
+}
+
 /* Ensure a psect's content buffer exists (zeroed to alloc) so a relocation
  * store slot can be patched into it. */
 static uint8_t *evax_ensure_content(struct evax_section *sec)
@@ -3541,7 +3613,8 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
                              long *deferred, int *n_linkage_applied,
                              int *n_callsite_conservative,
                              uint64_t **rel_off, int *nrel, int *rel_cap,
-                             const struct evax_ldsym *ldsyms, int n_ldsyms)
+                             const struct evax_ldsym *ldsyms, int n_ldsyms,
+                             const struct evax_wredir *redir, int nredir)
 {
     struct evax_object *o = &in[ii].obj;
     if (r->psect < 0 || r->psect >= o->nsec) die("relocation names a bad psect index");
@@ -3625,6 +3698,19 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
         codeS_placed = (in[di].sec_base[ds->code_psindx] != 0);
     }
 store_target:;
+
+    /* vms-430: strong-over-weak override for a SECTION-RELATIVE self-bind. The
+     * alpha-dec-vms back end binds a same-TU reference to a WEAK definition as a
+     * section-relative reloc that never names the symbol, so evax_find_sym's
+     * strong preference cannot reach it. If this resolved target (procedure
+     * descriptor S or code entry code_S) lands on a weak def that a strong def
+     * overrides, retarget it to the strong def — the only layer that can see a
+     * section-relative linkage-pair quad pointing at the overridden weak def
+     * (e.g. default_malloc's self-bind to __simple_malloc, redirected to
+     * mallocng). No-op for a symbol target (already strong via evax_find_sym) and
+     * for any address not naming an overridden weak def. */
+    S      = evax_wredir_apply(redir, nredir, S);
+    if (have_code) code_S = evax_wredir_apply(redir, nredir, code_S);
 
     /* Image-relative offset of the store slot (the site), for the .vms$rel table. */
     uint64_t rel_site = in[ii].sec_base[r->psect] + r->address;
@@ -4060,6 +4146,27 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         osec[oi].addr = off_sv; osec[oi].size = sv_size; osec[oi].nobits = 0;
     }
 
+    /* ---- Weak-override redirect map (vms-430): now every psect is placed,
+     * record each WEAK definition a STRONG def overrides -> the strong def's
+     * placed descriptor/code addresses, so evax_apply_reloc can retarget a
+     * section-relative self-bind (e.g. default_malloc -> __simple_malloc) onto
+     * the strong def (mallocng). Sized to 2 entries (descriptor + code) per
+     * input symbol — the upper bound. ---- */
+    int wredir_cap = 0;
+    for (int i = 0; i < nin; i++) wredir_cap += 2 * in[i].obj.nsym;
+    struct evax_wredir *wredir = wredir_cap ? calloc((size_t)wredir_cap, sizeof *wredir) : NULL;
+    int n_wredir = wredir ? evax_build_weak_redir(in, nin, wredir, wredir_cap) : 0;
+    if (n_wredir) {
+        fprintf(stderr, "%%LINK-I-WEAKOVR, %d strong-over-weak redirect slot%s "
+                "(overridden weak descriptor/code -> strong def)\n",
+                n_wredir, n_wredir == 1 ? "" : "s");
+        if (getenv("OVMX_LINK_DUMP_WEAKOVR"))
+            for (int i = 0; i < n_wredir; i++)
+                fprintf(stderr, "%%LINK-I-WEAKOVR, redirect from=0x%llx to=0x%llx\n",
+                        (unsigned long long)wredir[i].from,
+                        (unsigned long long)wredir[i].to);
+    }
+
     /* ---- Apply all relocations into the psect content buffers. Cross-image
      * references (an undefined symbol a --use'd producer exports) are collected
      * as imports here; their .vms$imp table is laid out right after. ---- */
@@ -4083,7 +4190,8 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
             evax_apply_reloc(in, nin, i, &in[i].obj.reloc[r], allow_undef,
                              producers, np, &imp, &nimp, &imp_cap, &n_ximport,
                              &deferred, &n_linkage, &n_callsite,
-                             &rel_off, &nrel, &rel_cap, ldsyms, n_ldsyms);
+                             &rel_off, &nrel, &rel_cap, ldsyms, n_ldsyms,
+                             wredir, n_wredir);
             if (t == EVAX_R_REFLONG || t == EVAX_R_REFQUAD || t == EVAX_R_CODEADDR)
                 n_data++;
         }

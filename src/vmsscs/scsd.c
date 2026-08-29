@@ -998,6 +998,15 @@ struct peer_state {
     int      dlm_deq1_sent;        /* node-A: the holder's $DEQ sent */
     int      dlm_pend_seen;        /* node-A: the queued-reply for #2 landed (pending) */
     int      dlm_flip_seen;        /* node-A: #2's origin record flipped to granted */
+    /* vms-76d (DLM rung H6): the BLKAST WIRE, layered on H5. When armed, node A
+     * establishes its holder (#1) WITH a blocking-AST routine; node B, on queuing
+     * the incompatible #2, WIREs a BLKAST to A; A RECEIVES it and FIRES a real
+     * blocking AST on its own executive (drained via DELIVERAST), THEN releases #1
+     * -- the holder releases in genuine RESPONSE to the BLKAST, not on its own. */
+    int      dlm_h6;               /* node-A: H6 BLKAST-wire armed (OVMX_DLM_H6) */
+    int      dlm_holder_armed;     /* node-A: holder (#1) origin established w/ blkast */
+    int      dlm_blkast_fired;     /* node-A: a received BLKAST fired a real AST here */
+    int      dlm_blksent;          /* node-B: a BLKAST was WIREd to the holder */
     /* vms-694 (§4(O.7)): OVMX's OWN model of "am I a connected VMS$VAXcluster
      * member of this peer", LATCHED the moment the VMS$VAXcluster SYSAP
      * connection (cdt_joiner, or cdt_member if it ever reaches OPEN) hits the
@@ -7906,6 +7915,12 @@ struct scsd_dlm_held {
     uint32_t master_lkid;     /* the master's lock handle for the dispatched req
                                * (vms-6ca, H5): sent back so the requester can name
                                * the holder in a later $DEQ. */
+    /* BLKAST WIRE (vms-76d, H6): when this ENQ QUEUED behind a cross-node holder,
+     * the executive named the holder that must receive a BLKAST. blocking_req_lkid
+     * is the holder's REQUESTER-side handle (the value the BLKAST frame carries so
+     * the holder node finds its ORIGIN record); blocking_csid names the holder. */
+    uint32_t blocking_csid;
+    uint32_t blocking_req_lkid;
 };
 
 /*
@@ -8009,6 +8024,14 @@ static uint32_t scsd_dlm_dispatch_to_executive(const struct scs_dlm_msg *m,
     if (held != NULL)
         held->master_lkid = args.master_lkid;
 
+    /* BLKAST WIRE (vms-76d, H6): on an ENQ that QUEUED behind a cross-node holder,
+     * carry the executive's blocking-AST directive up so the server leg can WIRE a
+     * BLKAST to that holder. A READ of the executive's genuine decision (INV-6). */
+    if (held != NULL && args.op == VMS_DLM_OP_ENQ && args.queued == 1u) {
+        held->blocking_csid = args.blocking_csid;
+        held->blocking_req_lkid = args.blocking_req_lkid;
+    }
+
     /* DLM rung 2 (vms-e8f1): if the master GRANTED this cross-node $ENQ, read its
      * OWN resource DB back on the SAME registered fd so the caller can prove the
      * grant is genuine -- the resource is mastered here and a lock is held FOR
@@ -8057,6 +8080,113 @@ static uint32_t scsd_dlm_dispatch_to_executive(const struct scs_dlm_msg *m,
 
     close(fd);
     return args.status;
+#endif
+}
+
+/*
+ * scsd_dlm_blkast_handler - node A's holder-side blocking-AST routine (vms-76d,
+ * H6). Its ADDRESS is what node A registers as the holder's blkastadr; a real
+ * user-mode function so the address round-trips genuinely through the executive's
+ * AST queue and DELIVERAST. It is never called in the harness (delivery is proven
+ * by DRAINING the queued AST, not by an in-process trap), but it must be a real,
+ * addressable routine -- not a fabricated pointer.
+ */
+static volatile unsigned long scsd_dlm_blkast_calls;
+static void scsd_dlm_blkast_handler(unsigned long astprm)
+{
+    scsd_dlm_blkast_calls += astprm ? astprm : 1;
+}
+
+/*
+ * scsd_dlm_holder_establish - node A's HOLDER ORIGIN, WITH a blocking-AST routine
+ * (vms-76d, H6). Dispatches a GRANT receive (mode EX, blkastadr set) into A's
+ * executive so the holder (#1) origin record can later receive a real BLKAST.
+ * Mirrors scsd_dlm_dispatch_to_executive's REGISTER handshake. Returns the exec
+ * status; fail-honest (SS$_NOSUCHDEV) when /dev/vms is absent (INV-6).
+ */
+static uint32_t scsd_dlm_holder_establish(uint32_t req_lkid, uint8_t mode,
+                                          uint32_t master_lkid, const char *resnam,
+                                          uint64_t blkastadr)
+{
+#ifdef SCSD_UNIT_TEST
+    (void)req_lkid; (void)mode; (void)master_lkid; (void)resnam; (void)blkastadr;
+    return 2296u;
+#else
+    struct vms_dlm_xnode_args args;
+    struct vms_register_args reg;
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0)
+        return 2680u;
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return 2680u; }
+
+    memset(&args, 0, sizeof(args));
+    args.op = VMS_DLM_OP_GRANT;
+    args.lkmode = mode;
+    args.req_lkid = req_lkid;
+    args.master_lkid = master_lkid;
+    args.req_csid = resolve_scssystemid();
+    args.blkastadr = blkastadr;
+    args.blkastprm = (uint64_t)req_lkid;
+    if (resnam) {
+        strncpy(args.resnam, resnam, sizeof(args.resnam) - 1);
+        args.resnam[sizeof(args.resnam) - 1] = '\0';
+    }
+    if (ioctl(fd, VMS_IOCTL_DLM_XNODE, &args) < 0) { close(fd); return 2680u; }
+    close(fd);
+    return args.status;
+#endif
+}
+
+/*
+ * scsd_dlm_blkast_fire - node A's holder-side BLKAST RECEIVE (vms-76d, H6). A
+ * BLKAST node B sent over SCS is dispatched into A's executive, which FIRES the
+ * holder's blocking AST for real; this then DRAINS the queued AST via DELIVERAST
+ * and returns the drained routine address, PROVING the AST genuinely landed on A's
+ * process (INV-6: the executive really queued a user-mode AST, not a log line).
+ * *out_delivered = the executive's blkast_delivered flag; *out_drained = the
+ * astadr DELIVERAST handed back (0 if none). Returns the exec status.
+ */
+static uint32_t scsd_dlm_blkast_fire(uint32_t req_lkid, const char *resnam,
+                                     uint32_t *out_delivered,
+                                     uint64_t *out_drained)
+{
+    if (out_delivered) *out_delivered = 0;
+    if (out_drained) *out_drained = 0;
+#ifdef SCSD_UNIT_TEST
+    (void)req_lkid; (void)resnam;
+    return 2296u;
+#else
+    struct vms_dlm_xnode_args args;
+    struct vms_register_args reg;
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0)
+        return 2680u;
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return 2680u; }
+
+    memset(&args, 0, sizeof(args));
+    args.op = VMS_DLM_OP_BLKAST;
+    args.req_lkid = req_lkid;
+    args.req_csid = resolve_scssystemid();
+    if (resnam) {
+        strncpy(args.resnam, resnam, sizeof(args.resnam) - 1);
+        args.resnam[sizeof(args.resnam) - 1] = '\0';
+    }
+    if (ioctl(fd, VMS_IOCTL_DLM_XNODE, &args) < 0) { close(fd); return 2680u; }
+    if (out_delivered) *out_delivered = args.blkast_delivered;
+
+    /* DRAIN the AST the BLKAST just queued -- proof it genuinely landed. Same
+     * registered proc (keyed by tgid), so the AST queued above is drainable here. */
+    if (args.status == 1u && args.blkast_delivered) {
+        struct vms_ast_args ast;
+        memset(&ast, 0, sizeof(ast));
+        if (ioctl(fd, VMS_IOCTL_DELIVERAST, &ast) == 0 && out_drained)
+            *out_drained = ast.astadr;
+    }
+    uint32_t status = args.status;
+    close(fd);
+    return status;
 #endif
 }
 
@@ -8176,6 +8306,54 @@ static void scsd_dlm_srv_msg_input(struct scs_cdt *cdt, const void *msg,
                status == 1u ? "cross-node lock GRANTED (held for requester)"
                             : "honest response, request not granted");
         fflush(stdout);
+    }
+
+    /* THE BLKAST WIRE (vms-76d, DLM epic vms-7fa rung H6). If THIS $ENQ QUEUED
+     * behind a cross-node HOLDER, the executive named that holder (held.blocking_*)
+     * -- it must receive a blocking AST. WIRE a real SCS_DLM_OP_BLKAST to it,
+     * naming the holder's OWN (requester-side) lock handle so the holder node finds
+     * its ORIGIN record and fires the AST. This is the master genuinely delivering
+     * the blocking-AST decision over the wire (INV-6: held.blocking_* is a READ of
+     * the executive's directive, never fabricated). Same-peer scope, exactly as the
+     * deferred GRANT below: the holder (#1) and the contender (#2) share this VC. */
+    if (held.blocking_req_lkid != 0) {
+        struct scs_dlm_params bp;
+        memset(&bp, 0, sizeof(bp));
+        memcpy(bp.dst_mac, ps_port_addr(ps), 6);
+        memcpy(bp.src_mac, rx->our_hw_mac, 6);
+        memcpy(bp.src_logical, rx->our_src_logical, 6);
+        memcpy(bp.peer_logical, ps_sys_addr(ps), 6);
+        bp.local_conid = PS_DLM_SERVER_CONID(ps);
+        bp.remote_conid = v.local_conid;          /* the holder's DLM client handle */
+        bp.recv_ack = ps->vc.seq.recv_seq;
+        bp.send_seq = scs_seq_advance(&ps->vc.seq);
+        bp.incarnation = ps->incarnation;
+
+        struct scs_dlm_msg bm;
+        memset(&bm, 0, sizeof(bm));
+        bm.op = SCS_DLM_OP_BLKAST;
+        bm.mode = v.msg.mode;                     /* the conflicting requested mode */
+        bm.req_lkid = held.blocking_req_lkid;     /* the HOLDER's own handle (target) */
+        bm.master_lkid = held.master_lkid;
+        bm.status = 1u;
+        bm.req_csid = held.blocking_csid;         /* the holder to notify */
+        bm.master_csid = resolve_scssystemid();
+        bm.namelen = v.msg.namelen;
+        memcpy(bm.resnam, v.msg.resnam, sizeof(bm.resnam));
+
+        uint8_t bframe[SCS_DLM_FRAME_LEN];
+        if (scs_dlm_build_frame(&bp, &bm, bframe) == 0 &&
+            send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
+                          "OVMX$DLM BLKAST (H6)", bframe, sizeof(bframe)) > 0) {
+            ps->dlm_srv_responses++;
+            ps->dlm_blksent = 1;
+            log_ts(stdout);
+            printf(" SCSD-I-DLMBLKSENT, WIRED BLKAST to holder req_lkid=0x%08X"
+                   " CSID=%u -- a queued cross-node request blocks this holder; the"
+                   " master fires its blocking AST over SCS (H6)\n",
+                   (unsigned)held.blocking_req_lkid, (unsigned)held.blocking_csid);
+            fflush(stdout);
+        }
     }
 
     /* THE DEFERRED GRANT (vms-6ca, DLM epic vms-7fa rung H5). If THIS $DEQ
@@ -8316,9 +8494,69 @@ static void scsd_dlm_cli_msg_input(struct scs_cdt *cdt, const void *msg,
 
     if (ps == NULL || cur.frame == NULL ||
         scs_dlm_parse(cur.frame, (size_t)cur.len, &v) != 0 ||
-        v.msg.op != SCS_DLM_OP_GRANT) {
+        (v.msg.op != SCS_DLM_OP_GRANT && v.msg.op != SCS_DLM_OP_BLKAST)) {
         return;
     }
+
+    /* THE BLKAST WIRE, HOLDER SIDE (vms-76d, H6). A BLKAST node B sent because a
+     * conflicting request queued behind our held #1 lands here. Dispatch it into
+     * OUR executive, which FIRES the blocking AST on our holder process for real
+     * (drained + proven by scsd_dlm_blkast_fire), THEN release the holder (#1) --
+     * the holder releases in genuine RESPONSE to the BLKAST, not on its own. */
+    if (v.msg.op == SCS_DLM_OP_BLKAST) {
+        struct scsd_rx *rxb = scsd_rx_current.rx;
+        if (rxb == NULL || !scsd_member_initiate_enabled() || !ps->dlm_h6)
+            return;
+        log_ts(stdout);
+        printf(" SCSD-I-DLMBLKAST, RECEIVED BLKAST from master CSID=%u for holder"
+               " req_lkid=0x%08X resnam='%.*s' -- a cross-node request blocks our"
+               " held lock; firing our blocking AST\n",
+               (unsigned)v.msg.master_csid, (unsigned)v.msg.req_lkid,
+               (int)v.msg.namelen, v.msg.resnam);
+        fflush(stdout);
+
+        uint32_t delivered = 0;
+        uint64_t drained = 0;
+        uint32_t st = scsd_dlm_blkast_fire(v.msg.req_lkid, (const char *)v.msg.resnam,
+                                           &delivered, &drained);
+        if (st == 1u && delivered && drained != 0) {
+            ps->dlm_blkast_fired = 1;
+            log_ts(stdout);
+            printf(" SCSD-I-DLMBLKFIRE, blocking AST DELIVERED on this node: BLKAST"
+                   " receive rc=0x%08X delivered=%u drained astadr=0x%016llX -- a"
+                   " REAL user-mode AST fired on the holder's executive, drained via"
+                   " DELIVERAST (H6 proof, not the holder-releases-on-its-own"
+                   " shortcut)\n",
+                   (unsigned)st, (unsigned)delivered,
+                   (unsigned long long)drained);
+            fflush(stdout);
+        } else {
+            log_ts(stdout);
+            printf(" SCSD-W-DLMBLKAST, BLKAST receive did NOT fire an AST"
+                   " (rc=0x%08X delivered=%u drained=0x%016llX) -- honest, no fake\n",
+                   (unsigned)st, (unsigned)delivered, (unsigned long long)drained);
+            fflush(stdout);
+        }
+
+        /* Now release the holder (#1) in RESPONSE to the BLKAST -- the real $DEQ
+         * that unblocks the queued #2 and drives the H5 deferred-grant flip. */
+        if (!ps->dlm_deq1_sent && ps->dlm_master_lkid1 != 0) {
+            if (scsd_dlm_client_send_op(rxb, ps, SCS_DLM_OP_DEQ, LCK$K_NLMODE,
+                                        0, ps->dlm_master_lkid1,
+                                        (const char *)v.msg.resnam,
+                                        "OVMX$DLM DEQ #1 (H6 release on BLKAST)")) {
+                ps->dlm_deq1_sent = 1;
+                log_ts(stdout);
+                printf(" SCSD-I-DLMDEQ1, released holder #1 (master_lkid=0x%08X) in"
+                       " RESPONSE to the BLKAST -- expect the master to GRANT #2 and"
+                       " WIRE the deferred GRANT (H6)\n",
+                       (unsigned)ps->dlm_master_lkid1);
+                fflush(stdout);
+            }
+        }
+        return;
+    }
+
     ps->dlm_grant_recv = 1;
     ps->dlm_grant_status = v.msg.status;
     log_ts(stdout);
@@ -8343,6 +8581,31 @@ static void scsd_dlm_cli_msg_input(struct scs_cdt *cdt, const void *msg,
     /* GRANT for our holder (#1): remember B's master handle, then contend (#2). */
     if (v.msg.req_lkid == 1u && v.msg.status == 1u) {
         ps->dlm_master_lkid1 = v.msg.master_lkid;
+        /* H6 (vms-76d): establish our holder (#1) ORIGIN record WITH a blocking-AST
+         * routine, so the BLKAST the master will send when #2 contends can fire a
+         * REAL AST on us. (H5 never dispatched #1's grant -- the holder released on
+         * its own; H6 makes the holder a genuine BLKAST target.) */
+        if (ps->dlm_h6 && !ps->dlm_holder_armed) {
+            uint64_t blkastadr = (uint64_t)(uintptr_t)&scsd_dlm_blkast_handler;
+            uint32_t est = scsd_dlm_holder_establish(1u, LCK$K_EXMODE,
+                                                     ps->dlm_master_lkid1,
+                                                     (const char *)v.msg.resnam,
+                                                     blkastadr);
+            if (est == 1u) {
+                ps->dlm_holder_armed = 1;
+                log_ts(stdout);
+                printf(" SCSD-I-DLMHOLDARM, holder #1 origin established WITH a"
+                       " blocking-AST routine (blkastadr=0x%016llX rc=0x%08X) -- ready"
+                       " to receive a BLKAST over SCS (H6)\n",
+                       (unsigned long long)blkastadr, (unsigned)est);
+                fflush(stdout);
+            } else {
+                log_ts(stdout);
+                printf(" SCSD-W-DLMHOLDARM, holder #1 origin establish rc=0x%08X"
+                       " (no blkast target) -- honest\n", (unsigned)est);
+                fflush(stdout);
+            }
+        }
         if (!ps->dlm_enq2_sent) {
             if (scsd_dlm_client_send_op(rx, ps, SCS_DLM_OP_ENQ, LCK$K_EXMODE,
                                         2u /*req_lkid*/, 0, (const char *)v.msg.resnam,
@@ -8375,8 +8638,11 @@ static void scsd_dlm_cli_msg_input(struct scs_cdt *cdt, const void *msg,
                    " -- genuine block, read from OUR executive\n",
                    (unsigned)st, scs_dlm_mode_name((uint8_t)origin_mode));
             fflush(stdout);
-            /* Release the holder (#1): the real $DEQ that unblocks #2. */
-            if (!ps->dlm_deq1_sent && ps->dlm_master_lkid1 != 0) {
+            /* Release the holder (#1): the real $DEQ that unblocks #2. In H6 this
+             * is DEFERRED until the BLKAST arrives (the holder releases in RESPONSE
+             * to the blocking AST, driven from the BLKAST branch above); H5 releases
+             * here (no BLKAST wire, the holder releases on its own). */
+            if (!ps->dlm_h6 && !ps->dlm_deq1_sent && ps->dlm_master_lkid1 != 0) {
                 if (scsd_dlm_client_send_op(rx, ps, SCS_DLM_OP_DEQ, LCK$K_NLMODE,
                                             0, ps->dlm_master_lkid1, (const char *)v.msg.resnam,
                                             "OVMX$DLM DEQ #1 (H5 release holder)")) {
@@ -8450,6 +8716,14 @@ static void scsd_dlm_send_enq(struct scsd_rx *rx, struct peer_state *ps)
      * flip) off the GRANT replies. A no-op without OVMX_DLM_H5 (rung 1b only). */
     if (getenv("OVMX_DLM_H5") != NULL)
         ps->dlm_h5 = 1;
+
+    /* vms-76d (H6): arm the BLKAST wire, layered on H5. H6 implies the H5 sequence
+     * (holder + contend + block-then-grant); it ADDS establishing the holder WITH a
+     * blocking-AST routine and driving the holder's release off a RECEIVED BLKAST. */
+    if (getenv("OVMX_DLM_H6") != NULL) {
+        ps->dlm_h5 = 1;
+        ps->dlm_h6 = 1;
+    }
 
     uint32_t dlm_server = (ps->joiner_remote_conid & 0xFFFFFFF0u) |
                           OVMX_CONID_CLS_DLMSRV;

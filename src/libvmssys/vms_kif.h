@@ -321,6 +321,31 @@ uint32_t vms_kif_dlm_xnode(uint32_t op, uint32_t lkmode, uint32_t flags,
                            uint32_t *out_blocking_master_lkid,
                            uint32_t *out_req_lkid, uint32_t *out_lkmode);
 
+/*
+ * vms_kif_dlm_xnode_blkast - the BLKAST-WIRE half of the cross-node DLM receive
+ * (DLM epic vms-7fa rung H6, vms-76d). A focused wrapper that carries the two
+ * fields the generic vms_kif_dlm_xnode above does not: `blkastadr`/`blkastprm`
+ * (in -- a GRANT receive that establishes a HOLDER origin record registers the
+ * holder's blocking-AST routine) and `out_blkast_delivered` (a BLKAST receive
+ * reports 1 iff a genuine user-mode blocking AST was queued to the holder proc).
+ * Also returns blocking_req_lkid for an ENQ. Exercised by
+ * tests/qemu/test_syssvc_dlm_xnode.c against a real /dev/vms; the product carrier
+ * (scsd) builds the ioctl struct directly, as it does for the other DLM ops.
+ *
+ * OVMX-UNWIRED: vms_kif_dlm_xnode_blkast (vms-76d) -- like vms_kif_dlm_xnode, the
+ * BLKAST-wire carrier is scsd, a glibc process that reaches /dev/vms with direct
+ * POSIX ioctls (scsd_dlm_holder_establish / scsd_dlm_blkast_fire), not this
+ * freestanding client; no sys$ service issues it. This wrapper exists only so the
+ * holder-side BLKAST receive is observable against a real /dev/vms from the
+ * freestanding syssvc test. */
+uint32_t vms_kif_dlm_xnode_blkast(uint32_t op, uint32_t lkmode,
+                                  uint32_t req_lkid, uint32_t master_lkid,
+                                  uint32_t req_csid, uint32_t master_csid,
+                                  const char *resnam,
+                                  uint64_t blkastadr, uint64_t blkastprm,
+                                  uint32_t *out_blocking_req_lkid,
+                                  uint32_t *out_blkast_delivered);
+
 /* ================================================================
  * Device table (executive-resident I/O database)
  *

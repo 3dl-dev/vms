@@ -196,6 +196,17 @@ struct vms_dlm_xnode_args {
 	uint32_t queued;            /* return: 1 = queued on the master (blocked) */
 	uint32_t blocking_csid;     /* return: cross-node holder to BLKAST (0 = none) */
 	uint32_t blocking_master_lkid; /* return: that holder's master lock handle */
+	/* BLKAST WIRE (DLM epic vms-7fa rung H6, vms-76d) -- mirror of src/kernel/
+	 * vms_ioctl.h. blocking_req_lkid: the blocking holder's REQUESTER-side lock
+	 * handle (BLKAST target names the holder's ORIGIN record). blkastadr/blkastprm:
+	 * in(GRANT receive) the holder's blocking-AST routine/param, remembered on the
+	 * origin record. blkast_delivered: return(BLKAST receive) 1 iff a real user-mode
+	 * blocking AST was queued to the holder proc (INV-6: never a faked AST). */
+	uint32_t blocking_req_lkid;
+	uint64_t blkastadr;
+	uint64_t blkastprm;
+	uint32_t blkast_delivered;
+	uint32_t pad_blkast;
 };
 
 /*
@@ -233,7 +244,7 @@ _Static_assert(sizeof(struct vms_getlki_args) == 72,
                "vms_getlki_args changed size -- VMS_IOCTL_GETLKI ABI break");
 _Static_assert(sizeof(struct vms_resmaster_args) == 64,
                "vms_resmaster_args changed size -- VMS_IOCTL_GET_RESMASTER ABI break");
-_Static_assert(sizeof(struct vms_dlm_xnode_args) == 92,
+_Static_assert(sizeof(struct vms_dlm_xnode_args) == 120,
                "vms_dlm_xnode_args changed size -- VMS_IOCTL_DLM_XNODE ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

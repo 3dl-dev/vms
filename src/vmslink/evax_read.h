@@ -91,20 +91,6 @@ enum evax_reloc_type {
     EVAX_R_BSR,       /* call-site relaxation (STC_BSR_GBL)           */
     EVAX_R_LDA,       /* call-site relaxation (STC_LDA_GBL)           */
     EVAX_R_BOH,       /* call-site relaxation (STC_BOH_GBL)           */
-    /* [OVMX] vms-4ed (component C2 of vms-5f5): the OVMX-private
-     * GP-displacement relocation. Marks a callee's ldah/lda GP-establish
-     * prologue pair; the OVMX linker patches the signed -K immediate, where
-     * K = the enclosing procedure's PDSC offset within its module linkage
-     * section (C1's evax_gp_entry table). NOT a VMS-authentic reloc — EVAX
-     * publishes no GP-displacement encoding (OSF/Alpha uses ldgp/GPDISP), so
-     * this is OVMX's analogue with an OVMX wire form. See
-     * docs/design-alpha-per-image-gp.md §2.1/§2.2. For a reloc of this type the
-     * struct evax_reloc fields carry: `psect` = the code psect index of the
-     * pair, `address` = the ldah word's psect-relative offset (ldah_vaddr),
-     * `addend` = the lda delta (ldah_vaddr + addend locates the lda word,
-     * normally 4), `sym` = the enclosing procedure name (the evax_gp_entry key),
-     * `to_section` = -1. */
-    EVAX_R_OVMX_GPDISP,
 };
 
 /* One relocation: patch `address` bytes within psect index `psect`. The target
@@ -117,12 +103,6 @@ struct evax_reloc {
     int      to_section;   /* target psect index, or -1 for a symbol     */
     char     sym[EVAX_NAME_MAX];
     uint64_t addend;
-    /* [OVMX] vms-095 (C3 of vms-5f5): for EVAX_R_OVMX_GPDISP only — the enclosing
-     * procedure's PDSC offset within its $LINK$ psect (the gas operand's first
-     * u32, formerly the unused lkidx_or_0).  The linker resolves K =
-     * placed_PDSC - $LINK$ base from this, so a LOCAL/static procedure (which has
-     * no global symbol to key a name lookup on) resolves just like a global. */
-    uint64_t gp_pdsc_off;
 };
 
 struct evax_object {

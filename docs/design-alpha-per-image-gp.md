@@ -1,5 +1,15 @@
 # Design: Authentic OpenVMS-Alpha Per-Image GP Establishment (D0)
 
+> **⚠ REVERTED — premise refuted at runtime (vms-8208, 2026-08-29).** §1.3 assumes cc1 computes
+> linkage-section offsets **from the section base**; the real executive proved they are
+> **`&PDSC`-relative** (per procedure). Establishing `module_GP = &PDSC − K` therefore shifts the
+> base off `&PDSC` while the offsets stay `&PDSC`-relative → every `K≠0` procedure loads a cell `K`
+> bytes off (NULL) and the image **crashes on activation** (gdb-pinned: correct cell `&PDSC−64`
+> valid, `$15−64` NULL, delta `== K`). C1/C2/C3 (#910/#913/#921) were **reverted**; the working
+> model is the pre-`$15` `.base $27` (base `== &PDSC`). Do not re-attempt this design as written; a
+> re-land needs a base model consistent with compile-time `&PDSC`-relative offsets. Kept for the
+> historical record.
+
 **Status:** design, conductor-gated (2026-08-29). Blocks all implementation components of vms-5f5.
 **Scope:** the callee-side global-pointer / linkage-section addressability model for OVMX
 alpha-dec-vms code, so cross-image calls into multi-procedure shareables (DECC$SHR, LIBOTS)
@@ -103,39 +113,6 @@ lda   <gpreg>, LOW(-K)(<gpreg>)   ; [OVMX] low half; <gpreg> now = module_GP = &
 signed range the `ldah` collapses to a no-op; when `K = 0` the whole sequence is a no-op-equivalent
 (§1.4 single-proc cascade).
 
-#### 2.1.1 [OVMX] `<gpreg>` = **$15**, a labeled OVMX divergence (Rule 8) — resolved in C3 (vms-095)
-
-C3 resolves `<gpreg>` to the reserved register **$15**, established by measurement against the actual
-`alpha-dec-vms` backend (not `alpha.h` in isolation):
-
-- **Authentic OpenVMS-Alpha uses R29 as GP.** On this GCC port, however, `gcc/config/alpha/vms.h`
-  `#undef`s and redefines **`HARD_FRAME_POINTER_REGNUM = 29`** (overriding `alpha.h`'s 15), and the VMS
-  prologue actively uses **$29 as the frame pointer** (`mov $30,$29`, `.frame $29`, saved/restored) in
-  every stack procedure — i.e. exactly the multi-procedure DECC$SHR functions this design targets. So
-  **$29 is not a free GP here**, and rebasing it, or establishing module_GP into it, corrupts the frame
-  pointer. (An earlier reading that took `alpha.h`'s `HARD_FRAME_POINTER_REGNUM = 15` at face value and
-  concluded "$29 is free" is refuted by the `vms.h` override; verified on emitted code.)
-- **R27 rebased-in-place does not survive calls.** On the VMS call path R27 (PV) is reloaded to the
-  callee's PV before each `jsr` and to the saved `&PDSC` after it, so a module_GP parked in R27 is
-  clobbered by every call.
-- **$15 is the free, call-saved register.** On this target `$2–$15` are callee-saved and `$15` is not the
-  frame pointer (the `vms.h` register-role comment "$15 (frame pointer)" is a stale OSF copy-over).
-  C3 reserves `$15` (`FIXED_REGISTERS[15] = 1`) as the OVMX module-GP and addresses the linkage section
-  through it (`.base $15`). **This `$15`-as-GP choice is an OVMX codegen divergence, labeled as such
-  (Rule 8): it is not VMS-authentic, and it is safe precisely because there is no VSI-binary interop —
-  every OVMX-built shareable uses `$15` consistently.**
-
-**No per-call GP reload is needed — and this is now general, not accidental.** Because `$15` is
-callee-saved, a callee that establishes its own module_GP first **saves the caller's `$15` on entry and
-restores it before `RET`** (C3 adds `$15` to the procedure's save mask). Therefore the caller's module_GP
-survives every call — intra-module, cross-module-intra-image (where caller and callee have *different*
-module_GPs), and cross-image alike. The earlier "no per-call reload" reasoning, written when `<gpreg>`
-was imagined as `$29`, was only accidentally true for same-image/same-linkage-section calls; with a
-reserved callee-saved `$15` plus mandatory save/restore it is **actually** true and general. The
-save/restore is load-bearing: omit it and a cross-module return resumes the caller with the callee's
-module_GP → wrong linkage base → silent corruption (this is the property C3's test asserts by objdumping
-both the `$15` save and the `$15` restore).
-
 ### 2.2 [OVMX] The GP-establishment relocation
 The two immediates above are **not** known to the compiler — only the OVMX linker knows each PDSC's final
 `K`. So gas emits, on the `ldah`/`lda` pair, an **OVMX-defined relocation** that the OVMX linker resolves
@@ -154,33 +131,6 @@ OVMX's analogue of OSF `GPDISP`, with an OVMX wire encoding because EVAX publish
 - **[OVMX] recognizer + apply:** `evax_read.c`'s ETIR dispatch (`switch(cmd)`, `evax_read.c:286`) gains the
   new command (an unknown ETIR command is a hard error today, `evax_read.c:358-359`, so the recognizer
   must be taught it); the apply/patch step is added on the OVMX link side (C1/C2).
-
-#### 2.2.1 [OVMX] K resolution covers LOCAL and weak-overridden procedures (vms-095/C3)
-
-The operand's first u32 (originally a reserved `lkidx_or_0`, always 0) carries **`pdsc_offset`** — the
-enclosing procedure's PDSC offset within *its own object's* `$LINK$` psect (gas emits `sym->value`). The
-OVMX linker resolves K **from the placed PDSC**, not a name-keyed table:
-
-```
-placed_PDSC = in[ii].sec_base[$LINK$ of ii] + pdsc_offset
-placed_PDSC = evax_wredir_apply(placed_PDSC)     ; strong-over-weak (vms-430 / #899)
-K           = placed_PDSC − gp_linkage_base       ; merged $LINK$ base
-```
-
-This closes two gaps a global-symbol-name-keyed table (the initial C1 `evax_gp_entry`) could not:
-
-- **LOCAL/static procedures** (e.g. musl's `io_thread_func`) are absent from the EVAX **global** symbol
-  directory (EGSD), so a name lookup found nothing and hard-errored `%LINK-F-GPDISPUNDEF` — even though
-  the procedure IS defined, with a real PDSC and a real K, in the image. Carrying `pdsc_offset` resolves
-  it: the enclosing procedure is always defined in the reloc's own object, so its PDSC placement is known.
-- **Weak-overridden procedures**: a `.ovmx_gpdisp` in the object that holds the *weak* definition carries
-  that weak PDSC's offset; `evax_wredir_apply` retargets it to the **surviving strong** definition's PDSC,
-  so K is the strong def's — never the discarded weak one. Consistent with the strong-over-weak resolution
-  (#899). The deciding property is "does the procedure reference the linkage section," not its export or
-  binding — locals and weak-overridden both do, and both need the module-GP.
-
-The C1 `evax_gp_entry` table is retained but is now **diagnostic-only** (`%LINK-I-GPBASE` /
-`%LINK-I-GPENTRY`, asserted by C1's test); the apply no longer consumes it.
 
 ### 2.3 [OVMX] Linkage-section base recorded per image
 The OVMX shareable producer (link.c) must define and record the per-image linkage-section base and each

@@ -203,6 +203,7 @@ echo "--- DISK A / BOOT 1: author NODEB/1026 VOTES=2 EXPECTED_VOTES=2 ALLOCLASS=
 qemu_launch "$DISK_A" /tmp/adopt-a-b1.log /tmp/adopt-a-b1.in
 login_system "A boot1"
 author_identity NODEB 1026 2 2 7 "A boot1"
+A_SEG_A="$A_SEG"   # preserve disk A's authoring transcript (A_SEG is reused for disk B)
 qemu_halt
 
 echo ""
@@ -284,7 +285,7 @@ qemu_halt
 
 echo ""
 echo "=== transcript: DISK A boot1 authoring ==="
-printf '%s\n' "$A_SEG" | grep -E '%SYSGEN|SCSNODE|SCSSYSTEMID|VOTES|ALLOCLASS' | sed 's/^/  /' | head -20
+printf '%s\n' "$A_SEG_A" | grep -E '%SYSGEN|SCSNODE|SCSSYSTEMID|VOTES|ALLOCLASS' | sed 's/^/  /' | head -20
 echo "=== transcript: DISK A boot2 SCSD --show-identity (adoption) ==="
 printf '%s\n' "$SA_SEG" | grep -E 'SCSD-I-IDENT|SCSD-W' | sed 's/^/  /'
 echo "=== transcript: DISK B boot2 SCSD --show-identity (control) ==="

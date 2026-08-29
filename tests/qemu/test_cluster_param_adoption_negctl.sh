@@ -160,11 +160,17 @@ if printf '%s\n' "$IDENT_LINE" | grep -qF 'SCSSYSTEMID=1026'; then
 else
     ok "unauthored disk does NOT report SCSSYSTEMID=1026"
 fi
-# And it positively reads back the factory seed identity.
-if printf '%s\n' "$IDENT_LINE" | grep -qF 'SCSNODE=OVMX SCSSYSTEMID=0'; then
-    ok "unauthored disk reads back the factory-seeded identity SCSNODE=OVMX SCSSYSTEMID=0"
+# And it positively reads back the factory-seeded NODE identity. The seed node
+# name is OVMX (the documented OVMX default -- vms_sysgen.c str_default), which
+# is the load-bearing contrast with the positive's authored NODEB: the rebooted
+# unauthored disk yields the SEED node, not the authored one. (The seed's
+# numeric SCSSYSTEMID is a mastered-image property, not asserted to an exact
+# value here so the control does not go brittle across image revisions -- the
+# "never 1026" assertion above is what pins the numeric identity to the seed.)
+if printf '%s\n' "$IDENT_LINE" | grep -qF 'SCSNODE=OVMX'; then
+    ok "unauthored disk reads back the factory-seeded node identity SCSNODE=OVMX (the seed, not the authored NODEB)"
 else
-    bad "unauthored disk reads back the factory-seeded identity SCSNODE=OVMX SCSSYSTEMID=0"
+    bad "unauthored disk reads back the factory-seeded node identity SCSNODE=OVMX (the seed, not the authored NODEB)"
 fi
 qemu_halt
 

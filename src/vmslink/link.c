@@ -3586,6 +3586,14 @@ static int evax_ldsym_find(const struct evax_ldsym *ld, int nld, const char *nam
     return 0;
 }
 
+/* [OVMX] vms-4ed (component C2 of vms-5f5): one recorded per-procedure GP entry.
+ * Produced by C1 (vms-fd5) — `name` = the procedure, `pdsc` = its placed PDSC
+ * address, `k` = pdsc - the module linkage-section ($LINK$) base. C2's
+ * EVAX_R_OVMX_GPDISP apply CONSUMES `k` by procedure name (never recomputes it).
+ * Lifted to file scope from the C1 block so evax_apply_reloc can take the table.
+ * See docs/design-alpha-per-image-gp.md §1.4/§2.3. */
+struct evax_gp_entry { char name[EVAX_NAME_MAX]; uint64_t pdsc; uint64_t k; };
+
 /* Apply one relocation into its psect's content buffer. `site_va` is only used
  * for diagnostics; the write lands in the content buffer at r->address. An
  * undefined reference that a --use'd producer EXPORTS binds as a cross-image
@@ -3614,7 +3622,9 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
                              int *n_callsite_conservative,
                              uint64_t **rel_off, int *nrel, int *rel_cap,
                              const struct evax_ldsym *ldsyms, int n_ldsyms,
-                             const struct evax_wredir *redir, int nredir)
+                             const struct evax_wredir *redir, int nredir,
+                             const struct evax_gp_entry *gp_entries,
+                             int n_gp_entries)
 {
     struct evax_object *o = &in[ii].obj;
     if (r->psect < 0 || r->psect >= o->nsec) die("relocation names a bad psect index");
@@ -3629,6 +3639,67 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
     if (r->type == EVAX_R_NOP || r->type == EVAX_R_BSR ||
         r->type == EVAX_R_LDA || r->type == EVAX_R_BOH) {
         (*n_callsite_conservative)++;
+        return;
+    }
+
+    /* [OVMX] vms-4ed (component C2 of vms-5f5) — apply the OVMX-private
+     * GP-displacement relocation. Look up K for the enclosing procedure named by
+     * the reloc from C1's evax_gp_entry table (K = the PDSC's offset within the
+     * module linkage section; do NOT recompute it) and patch -K, signed-split,
+     * into the ldah/lda GP-establish pair:
+     *     hi = ((-K + 0x8000) >> 16) & 0xffff  -> ldah immediate @ r->address
+     *     lo = (-K) & 0xffff                   -> lda  immediate @ r->address + r->addend
+     * so at run time <gpreg> = R27 + (sext16(hi) << 16) + sext16(lo) = &PDSC - K =
+     * module_GP (docs/design-alpha-per-image-gp.md §2.1/§2.2). A name ABSENT from
+     * the table is a HARD link error, never a silent 0. These immediates are a
+     * link-time constant (a relative displacement, not an image address), so —
+     * unlike a REFQUAD — they are NOT recorded in .vms$rel. NOT VMS-authentic:
+     * EVAX publishes no GP-displacement encoding. */
+    if (r->type == EVAX_R_OVMX_GPDISP) {
+        const struct evax_gp_entry *ge = NULL;
+        for (int gi = 0; gi < n_gp_entries; gi++)
+            if (strcmp(gp_entries[gi].name, r->sym) == 0) { ge = &gp_entries[gi]; break; }
+        if (!ge) {
+            fprintf(stderr, "%%LINK-F-GPDISPUNDEF, EVAX_R_OVMX_GPDISP names "
+                    "procedure '%s' with no recorded linkage-section K "
+                    "(not a defined procedure in this image)\n", r->sym);
+            exit(1);
+        }
+        uint64_t ldah_off = r->address;
+        uint64_t lda_off  = r->address + r->addend;   /* addend = lda delta */
+        if (lda_off + 4 > sec->alloc || ldah_off + 4 > sec->alloc)
+            die("EVAX_R_OVMX_GPDISP site past psect end");
+        uint8_t *c = evax_ensure_content(sec);
+        if (!c) die("EVAX_R_OVMX_GPDISP into a zero-length psect");
+
+        /* -K, signed-split. Masking after the shift makes the >>16 independent of
+         * arithmetic-vs-logical shift (bits [15:0] come from bits [31:16] of
+         * (-K + 0x8000) either way), so this is fully defined. */
+        uint64_t negK = (uint64_t)(-(int64_t)ge->k);
+        uint16_t hi = (uint16_t)(((negK + 0x8000) >> 16) & 0xffff);
+        uint16_t lo = (uint16_t)(negK & 0xffff);
+
+        /* Alpha memory-format instruction: bits [15:0] are the 16-bit signed
+         * displacement; patch only those, preserving opcode/Ra/Rb. */
+        uint32_t iw_ldah = (uint32_t)c[ldah_off] | ((uint32_t)c[ldah_off + 1] << 8)
+                         | ((uint32_t)c[ldah_off + 2] << 16) | ((uint32_t)c[ldah_off + 3] << 24);
+        uint32_t iw_lda  = (uint32_t)c[lda_off]  | ((uint32_t)c[lda_off + 1] << 8)
+                         | ((uint32_t)c[lda_off + 2] << 16) | ((uint32_t)c[lda_off + 3] << 24);
+        iw_ldah = (iw_ldah & 0xffff0000u) | hi;
+        iw_lda  = (iw_lda  & 0xffff0000u) | lo;
+        putl32(c + ldah_off, iw_ldah);
+        putl32(c + lda_off,  iw_lda);
+
+        /* Image-relative addresses of the two patched words, for the C2 verifier
+         * to LOCATE (not to trust the value: it re-derives -K independently from
+         * the image's $LINK$ base + .vms$sv and asserts the on-image bytes). */
+        uint64_t ldah_va = in[ii].sec_base[r->psect] + ldah_off;
+        uint64_t lda_va  = in[ii].sec_base[r->psect] + lda_off;
+        fprintf(stderr, "%%LINK-I-GPDISP, EVAX_R_OVMX_GPDISP proc=%s K=0x%llx "
+                "ldah_imm=0x%04x lda_imm=0x%04x ldah_va=0x%llx lda_va=0x%llx "
+                "(patched -K, signed-split)\n",
+                r->sym, (unsigned long long)ge->k, hi, lo,
+                (unsigned long long)ldah_va, (unsigned long long)lda_va);
         return;
     }
 
@@ -4058,7 +4129,8 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
     for (int oi = 0; oi < nos; oi++)
         if (!strcmp(osec[oi].name, "$LINK$")) { gp_linkage_base = osec[oi].addr; break; }
 
-    struct evax_gp_entry { char name[EVAX_NAME_MAX]; uint64_t pdsc; uint64_t k; };
+    /* struct evax_gp_entry is now file-scope (above evax_apply_reloc) so C2's
+     * EVAX_R_OVMX_GPDISP apply can consume this table by procedure name. */
     int gp_cap = 0;
     for (int i = 0; i < nin; i++) gp_cap += in[i].obj.nsym;
     struct evax_gp_entry *gp_entries = gp_cap ? calloc((size_t)gp_cap, sizeof *gp_entries) : NULL;
@@ -4084,7 +4156,8 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
                         (unsigned long long)gp_entries[i].pdsc,
                         (unsigned long long)gp_entries[i].k);
     }
-    free(gp_entries);
+    /* NB: gp_entries is NOT freed here — C2's EVAX_R_OVMX_GPDISP apply below
+     * looks K up from it by procedure name. Freed after the reloc-apply loop. */
 
     /* ---- Synthesize the linker-defined section-boundary / _DYNAMIC symbols
      * (vms-838a) now that every psect is placed. Point each init/fini/preinit
@@ -4242,10 +4315,13 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
                              producers, np, &imp, &nimp, &imp_cap, &n_ximport,
                              &deferred, &n_linkage, &n_callsite,
                              &rel_off, &nrel, &rel_cap, ldsyms, n_ldsyms,
-                             wredir, n_wredir);
+                             wredir, n_wredir, gp_entries, n_gp_entries);
             if (t == EVAX_R_REFLONG || t == EVAX_R_REFQUAD || t == EVAX_R_CODEADDR)
                 n_data++;
         }
+    /* C1's evax_gp_entry table (kept alive above so C2's EVAX_R_OVMX_GPDISP
+     * apply could consume it) is done with once the reloc-apply loop finishes. */
+    free(gp_entries);
 
     /* ---- .vms$imp: cross-image imports bound to --use producers. Each record
      * names {producer soname, symbol-vector index, patch_off}; IMGACT resolves

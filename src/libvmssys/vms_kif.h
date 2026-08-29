@@ -321,6 +321,21 @@ uint32_t vms_kif_dlm_xnode(uint32_t op, uint32_t lkmode, uint32_t flags,
                            uint32_t *out_blocking_master_lkid,
                            uint32_t *out_req_lkid, uint32_t *out_lkmode);
 
+/* Report a graceful cluster departure to the executive: shrink the LIVE DLM
+ * directory membership + re-resolve the directory over the survivors (vms-2bf,
+ * DLM rung H10a).
+ * OVMX-UNWIRED: vms_kif_dlm_member_depart (vms-2bf) -- the departure INGRESS
+ * reaches the executive here, but the daemon that observes a peer's graceful
+ * class-0x04 self-departure (scsd) is a glibc process and issues
+ * VMS_IOCTL_DLM_MEMBER_DEPART with a DIRECT POSIX ioctl, not this freestanding
+ * client; and no sys$ service issues it. Same footing as vms_kif_dlm_xnode
+ * above: this wrapper exists so the ioctl is observable against a real /dev/vms
+ * (exercised by the 3-node H10 harness via scsd's direct ioctl). Wire it and
+ * delete this line if a product client ever issues it. */
+uint32_t vms_kif_dlm_member_depart(uint32_t departed_csid,
+                                   uint32_t *out_members_live,
+                                   uint32_t *out_found);
+
 /*
  * vms_kif_dlm_xnode_blkast - the BLKAST-WIRE half of the cross-node DLM receive
  * (DLM epic vms-7fa rung H6, vms-76d). A focused wrapper that carries the two

@@ -801,6 +801,32 @@ uint32_t vms_kif_dlm_xnode(uint32_t op, uint32_t lkmode, uint32_t flags,
     return args.status;
 }
 
+/*
+ * vms_kif_dlm_member_depart - report a graceful cluster departure so the
+ * executive shrinks its live DLM directory membership + re-resolves the
+ * directory over the survivors (vms-2bf, DLM rung H10a). OVMX-UNWIRED (see the
+ * header): scsd issues VMS_IOCTL_DLM_MEMBER_DEPART with a direct POSIX ioctl,
+ * not this freestanding client; this wrapper exists so the ioctl is observable
+ * against a real /dev/vms.
+ */
+uint32_t vms_kif_dlm_member_depart(uint32_t departed_csid,
+                                   uint32_t *out_members_live,
+                                   uint32_t *out_found)
+{
+    struct vms_dlm_depart_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.departed_csid = departed_csid;
+
+    KIF_CALL(VMS_IOCTL_DLM_MEMBER_DEPART, &args);
+
+    if (out_members_live)
+        *out_members_live = args.members_live;
+    if (out_found)
+        *out_found = args.found;
+    return args.status;
+}
+
 uint32_t vms_kif_dlm_xnode_blkast(uint32_t op, uint32_t lkmode,
                                   uint32_t req_lkid, uint32_t master_lkid,
                                   uint32_t req_csid, uint32_t master_csid,

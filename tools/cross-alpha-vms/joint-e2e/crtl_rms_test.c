@@ -50,6 +50,17 @@ extern int   printf(const char *, ...);
 extern int   fprintf(void *, const char *, ...);
 extern void *stderr;   /* the FILE* stream DATA universal exported by DECC$SHR */
 
+/* vms-430 PC discriminator (DIAGNOSTIC, not for merge): raw MAIN-DISC brackets.
+ * write() is the DEC C RTL decc$write universal (musl-alpha's write, exported by
+ * DECC$SHR) — a thin syscall wrapper, NOT the buffered stdio path under suspicion,
+ * so a bracket prints even if the CRTL call it precedes is the one that faults.
+ * The 3rd arg is size_t (64-bit on this LLP64 target: unsigned long long); the
+ * return is ssize_t (ignored). MARK() emits a fixed literal (compile-time length).
+ * These land in the JOINT image (JOINT_E2E.EXE), independent of the DECC$SHR
+ * handler above. */
+extern long long write(int, const void *, unsigned long long);
+#define MARK(s) ((void)write(2, (s), sizeof(s) - 1))
+
 #define PT_SIZE   8192          /* KB-scale buffer */
 #define PT_NAME   "PORTTEST.DAT"
 
@@ -57,39 +68,54 @@ int main(int argc, char **argv, char **envp)
 {
     (void)argv; (void)envp;
 
+    /* vms-430: prove control reached main BEFORE any CRTL call. Its presence
+     * splits handoff-crash (absent) from in-main crash (present). */
+    MARK("MAIN-DISC: entered\n");
+
     /* 1. heap: allocate + fill with a known deterministic pattern. */
+    MARK("MAIN-DISC: pre-malloc\n");
     unsigned char *buf = (unsigned char *)malloc(PT_SIZE);
     if (!buf)
         return 1;
+    MARK("MAIN-DISC: pre-memset\n");
     memset(buf, 0, PT_SIZE);
     for (int i = 0; i < PT_SIZE; i++)
         buf[i] = (unsigned char)((i * 7 + 3) & 0xFF);
 
     /* 2. RMS file I/O: create + write the buffer. */
+    MARK("MAIN-DISC: pre-fopen-w\n");
     void *wf = fopen(PT_NAME, "w");
     if (!wf) { free(buf); return 2; }
+    MARK("MAIN-DISC: pre-fwrite\n");
     if (fwrite(buf, 1, PT_SIZE, wf) != (ovmx_size_t)PT_SIZE) {
         fclose(wf); free(buf); return 3;
     }
+    MARK("MAIN-DISC: pre-fclose-w\n");
     fclose(wf);
 
     /* 3. RMS file I/O: reopen + read it back + verify the pattern. */
+    MARK("MAIN-DISC: pre-fopen-r\n");
     void *rf = fopen(PT_NAME, "r");
     if (!rf) { free(buf); return 4; }
+    MARK("MAIN-DISC: pre-malloc2\n");
     unsigned char *rbuf = (unsigned char *)malloc(PT_SIZE);
     if (!rbuf) { fclose(rf); free(buf); return 5; }
+    MARK("MAIN-DISC: pre-fread\n");
     if (fread(rbuf, 1, PT_SIZE, rf) != (ovmx_size_t)PT_SIZE) {
         fclose(rf); free(rbuf); free(buf); return 6;
     }
     fclose(rf);
 
+    MARK("MAIN-DISC: pre-memcmp\n");
     if (memcmp(buf, rbuf, PT_SIZE) != 0) {
         free(rbuf); free(buf); return 8;
     }
 
     /* 4. stdio variety: fprintf to stderr + printf to stdout. */
+    MARK("MAIN-DISC: pre-fprintf-stderr\n");
     fprintf(stderr, "OVMX CRTL/RMS port test: wrote+read %d bytes via '%s', pattern verified\n",
             PT_SIZE, PT_NAME);
+    MARK("MAIN-DISC: pre-printf\n");
     printf("OVMX CRTL/RMS port test: OK (heap+RMS+stdio) argc=%d\n", argc);
 
     /* 5. release the heap + return the full-success sentinel. */

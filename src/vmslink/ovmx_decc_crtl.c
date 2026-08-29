@@ -21,6 +21,12 @@
  * the symbols below are exported as universals by mk_decc_shr.sh.
  */
 
+/* vms-430 PC discriminator (DIAGNOSTIC, not for merge): the SIGSEGV handler
+ * below reads the Alpha faulting PC from the named sigcontext field, which the
+ * alpha-dec-vms musl signal.h only exposes under a feature macro (the mcontext_t
+ * with sc_pc is gated on _GNU_SOURCE||_BSD_SOURCE). Additive; keep it first. */
+#define _GNU_SOURCE 1
+
 #include <stddef.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -338,6 +344,68 @@ static inline void *p32_to_ptr(int a32)
     return (void *)(unsigned long)(unsigned int)a32;
 }
 
+/* ============================ vms-430 PC discriminator =====================
+ * DIAGNOSTIC (NOT for merge). A SIGSEGV/SIGBUS handler that pins the faulting
+ * PC + si_addr of the alpha joint-e2e CRTL/RMS crash and then _exit(42) so the
+ * fault cannot recurse. Installed at the TOP of decc$main (below) — which is
+ * proven-reached on the rail (the DECCMAIN-DISC marker) and runs BEFORE the
+ * crt0->main handoff and before main's body, so it covers BOTH sub-hypotheses:
+ * a handoff crash (jsr main) AND an in-main CRTL-body crash. Lands in
+ * DECC$SHR.EXE. write()/_exit() here are INTRA-DECC$SHR musl calls (resolved
+ * inside the shareable, never imports), so the handler is self-sufficient no
+ * matter what the joint image links against.
+ *
+ * Alpha faulting-PC field: on alpha-dec-vms musl, mcontext_t IS struct
+ * sigcontext and the trap PC is uc_mcontext.sc_pc (a `long`). Cited source:
+ * tools/cross-alpha-vms/musl-arch/arch/alpha-dec-vms/bits/signal.h. On that
+ * same header SA_SIGINFO is 0x40 (the Alpha/OSF value, NOT the generic 0x04) —
+ * using the <signal.h> macro (not a literal) picks up the right bit. Guarded
+ * __alpha__-only so x86_64/aarch64 DECC$SHR builds are byte-unchanged. */
+#if defined(__alpha__)
+#include <signal.h>
+#include <unistd.h>
+
+/* Async-signal-safe 16-digit hex, MSB first, into p[0..15]. */
+static void ovmx_disc_puthex(char *p, unsigned long v)
+{
+    for (int i = 15; i >= 0; i--) {
+        unsigned d = (unsigned)(v & 0xfUL);
+        p[i] = (char)(d < 10 ? ('0' + d) : ('a' + (d - 10)));
+        v >>= 4;
+    }
+}
+
+static void ovmx_disc_segv(int sig, siginfo_t *info, void *uctx)
+{
+    (void)sig;
+    /* Fixed-width template; hex fields are overwritten in place.
+     *  idx 24 = first si_addr digit (after "si_addr=0x")
+     *  idx 46 = first pc digit       (after " pc=0x")            */
+    char line[] =
+        "SIGSEGV-DISC: si_addr=0x0000000000000000 pc=0x0000000000000000\n";
+    unsigned long addr = info ? (unsigned long)info->si_addr : 0UL;
+    unsigned long pc = 0UL;
+    if (uctx)
+        pc = (unsigned long)((ucontext_t *)uctx)->uc_mcontext.sc_pc;
+    ovmx_disc_puthex(line + 24, addr);
+    ovmx_disc_puthex(line + 46, pc);
+    (void)write(2, line, sizeof(line) - 1);
+    _exit(42);
+}
+
+static void ovmx_disc_install_segv(void)
+{
+    struct sigaction sa;
+    char *z = (char *)&sa;                 /* zero without a memset dependency */
+    for (unsigned i = 0; i < sizeof sa; i++)
+        z[i] = 0;
+    sa.sa_sigaction = ovmx_disc_segv;
+    sa.sa_flags = SA_SIGINFO;              /* alpha 0x40, from bits/signal.h    */
+    sigaction(SIGSEGV, &sa, 0);
+    sigaction(SIGBUS,  &sa, 0);
+}
+#endif /* __alpha__ */
+
 /* decc$main's emitted symbol carries the VMS `$`; the C name is ovmx_decc_main. */
 void ovmx_decc_main(void *progxfer, void *cli_util, void *imghdr,
                     void *image_file_desc, unsigned int linkflag,
@@ -348,6 +416,9 @@ void ovmx_decc_main(void *progxfer, void *cli_util, void *imghdr,
                     void *image_file_desc, unsigned int linkflag,
                     unsigned int cliflag, int *argc, int *argv, int *envp)
 {
+#if defined(__alpha__)
+    ovmx_disc_install_segv();   /* vms-430 PC discriminator (diagnostic) */
+#endif
     (void)progxfer;   /* the transfer address — not consumed here      */
     (void)imghdr;     /* {version,flags,image_base}; flags unused first-light */
     (void)linkflag;   /* passed 0; decc$main does not branch on it (§4b.8) */

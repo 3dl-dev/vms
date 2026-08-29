@@ -502,6 +502,7 @@ acp-fileop-no-dlm-lock
 rms-put-wrong-vbn
 p3-index-child-pointer-offbyone
 imgact-acp-valid-bytes-offbyone
+imgact-acp-read-unchunked
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -5161,6 +5162,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    imgact-acp-read-unchunked)
+        case "$_f" in
+        facility)     echo "IMGACT image reads over the Files-11 (ODS-2) ACP -- CHUNKING a read larger than the executive's per-QIO bound. The executive caps a single IO\$_READVBLK at ACP_RW_MAX_XFER = 1 MiB and rejects a longer length with SS\$_BADPARAM (kernel-core/vmsfs_acp.c:1878, checked ~:1972). imgact_acp_pread() must therefore split a read of a whole PT_LOAD (DECC\$SHR is already ~1 MiB and grows with the CRTL) into <=1 MiB QIOs, or the activation of any image/producer with a >1 MiB single PT_LOAD fails %IMGACT-F-IMGNOTFND (vms-1162)";;
+        targets)      echo "imgact/imgact_acp.c";;
+        suites_red)   echo "test_imgact_chunk";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "imgact_acp_pread()'s chunk cap IMGACT_ACP_RW_MAX_XFER (which mirrors the executive's ACP_RW_MAX_XFER, vmsfs_acp.c:1878) is raised from 1 MiB to 1 GiB, so the chunk loop's chunk = min(remaining, cap) collapses to the whole remaining length and the function issues ONE IO\$_READVBLK for the entire segment again -- the exact pre-fix behaviour. That single QIO's length exceeds the executive's real 1-MiB per-QIO bound, so a faithful ACP rejects it SS\$_BADPARAM and the read returns -1. A read of exactly 1 MiB or less is untouched (its one QIO is still within the cap), which is why the boundary case stays green and only the property that a >1 MiB read is chunked byte-exact reddens. INV-6's shape: the executive's per-QIO bound is a real limit the reader must respect by chunking, not one it may pretend away by asking for more than a QIO can carry.";;
+        require_fail) cat <<'EOF'
+imgact_acp_pread chunks every >1 MiB read into <=1 MiB QIOs, byte-exact across the boundary
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -6748,6 +6766,19 @@ apply_edit() {
         # the `(efblk - 1u)` text is gone, so a second apply matches nothing (the
         # no-op selftest requires).
         sed -i 's|(efblk - 1u) \* 512u|efblk * 512u /* NEGCTL imgact-acp-valid-bytes-offbyone: valid overcounts by a block */|' "$_file";;
+
+    imgact-acp-read-unchunked)
+        # UNIQUE TEXT, no range anchor needed: `#define IMGACT_ACP_RW_MAX_XFER
+        # (1u << 20)` is the only per-QIO chunk cap in imgact_acp.c. Raising it
+        # to (1u << 30) makes the chunk loop's chunk = min(remaining, cap)
+        # collapse to the whole remaining length, so imgact_acp_pread issues ONE
+        # IO$_READVBLK for the entire segment again -- the exact pre-fix bug. A
+        # >1 MiB read's single QIO then exceeds the executive's real 1-MiB bound
+        # and a faithful ACP rejects it SS$_BADPARAM, so only the property that a
+        # >1 MiB read is chunked byte-exact reddens (the <=1 MiB boundary case is
+        # untouched). After substitution the `(1u << 20)` text is gone, so a
+        # second apply matches nothing (the no-op selftest requires).
+        sed -i 's|#define IMGACT_ACP_RW_MAX_XFER (1u << 20)|#define IMGACT_ACP_RW_MAX_XFER (1u << 30) /* NEGCTL imgact-acp-read-unchunked: cap raised so the whole >1 MiB segment goes in ONE over-cap QIO */|' "$_file";;
 
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =

@@ -106,6 +106,17 @@ exec_lock_t vms_proc_hash_lock;
 uint32_t vms_local_csid = 1;
 
 /*
+ * dlm_member_csids[] / dlm_member_count - the DLM directory membership vector
+ * (rd vms-1bba, "DB" rung), read by the shared lock manager through the extern
+ * in vms_internal.h. On Linux these are a module_param_array (harness-supplied);
+ * this NetBSD substrate defines them with a cluster-of-one default (count 0 ->
+ * the directory helpers fall back to vms_local_csid). A static controlled input,
+ * NOT the live 0.4/DC membership feed.
+ */
+uint32_t dlm_member_csids[VMS_DLM_MAX_MEMBERS];
+int      dlm_member_count;
+
+/*
  * vms_proc_get - find (or create) the vms_proc for `pid'. The shared facilities
  * need a stable per-process struct across a process's ioctls, keyed by pid; it
  * lives until the facility reaper reclaims it (its backing task has exited) or

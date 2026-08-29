@@ -1054,6 +1054,28 @@ long vms_ioctl_dlm_xnode(struct vms_proc *proc, unsigned long arg);
  */
 extern uint32_t vms_local_csid;
 
+/*
+ * DLM directory membership vector (rd vms-1bba, the "DB" rung). A CONTROLLED,
+ * STATIC configuration input -- the operator/harness supplies the ordered
+ * cluster-member CSID vector at insmod time (module_param_array in the Linux
+ * rind, src/kernel/vms_module.c), the same footing as vms_local_csid above.
+ * dlm_directory_csid() hashes a resource name across THIS vector to pick the
+ * directory node, so every node given the SAME vector resolves the SAME
+ * directory (and, this rung, master) for a name.
+ *
+ * This is NOT the live membership feed from the connection manager / SCS
+ * rejoin -- that is the 0.4 "DC" successor (and overlaps vms-2f3's rejoin
+ * territory). This static vector is an honest controlled input for the DB
+ * directory proof, never fabricated live cluster state. dlm_member_count == 0
+ * (the default) means "not configured" -> the helpers fall back to a
+ * cluster-of-one on the local CSID, preserving single-node behaviour. The
+ * vector must be supplied in the SAME order on every node (the directory index
+ * is position-based); the harness passes one canonical vector to all nodes.
+ */
+#define VMS_DLM_MAX_MEMBERS 16
+extern uint32_t dlm_member_csids[VMS_DLM_MAX_MEMBERS];
+extern int      dlm_member_count;
+
 /* Device table (executive-resident I/O database) */
 long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dassgn(struct vms_proc *proc, unsigned long arg);

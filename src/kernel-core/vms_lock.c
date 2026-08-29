@@ -406,24 +406,35 @@ static void resource_release(struct vms_lock_resource *res)
  */
 
 /*
- * Number of directory-participating nodes in the membership view. A stub-of-
- * one for local scaffolding; 0.4 (vms-ci.5 DC) feeds the live membership from
- * the connection manager / quorum (src/vmsscs/scs_quorum.c). Kept as a helper
- * so the directory hash below is written against a real member count, not a
- * hard-coded modulus that would have to change shape when membership grows.
+ * Number of directory-participating nodes in the membership view. Read from the
+ * CONTROLLED, STATIC membership vector supplied at load time (dlm_member_csids /
+ * dlm_member_count, vms-1bba "DB" rung -- an insmod module_param_array on Linux,
+ * a load-time symbol on NetBSD; see vms_internal.h). Empty (count 0, the
+ * default) falls back to a cluster-of-one, so an unconfigured node behaves
+ * exactly as the prior stub-of-one did -- single-node grants unchanged.
+ *
+ * This is NOT the live membership feed from the connection manager / quorum
+ * (src/vmsscs/scs_quorum.c): that dynamic feed is the 0.4 "DC" successor (and
+ * overlaps vms-2f3's rejoin). A static, harness/operator-supplied vector is an
+ * honest controlled input for the directory proof, never fabricated live state.
  */
 static unsigned int dlm_membership_count(void)
 {
-    return 1;
+    return dlm_member_count > 0 ? (unsigned int)dlm_member_count : 1u;
 }
 
 /*
- * The CSID of the idx-th member of the directory vector. Stub-of-one: the only
- * member is this node. 0.4 indexes the live membership table here.
+ * The CSID of the idx-th member of the directory vector. Reads the configured
+ * static vector; falls back to the local CSID when unconfigured or out of range
+ * (cluster-of-one). Every node given the SAME ordered vector maps idx -> CSID
+ * identically, which is what makes the directory (and this rung's master)
+ * resolution AGREE across nodes.
  */
 static uint32_t dlm_member_csid(unsigned int idx)
 {
-    (void)idx;
+    if (dlm_member_count > 0 && idx < (unsigned int)dlm_member_count &&
+        idx < VMS_DLM_MAX_MEMBERS)
+        return dlm_member_csids[idx];
     return vms_local_csid;
 }
 
@@ -1530,6 +1541,27 @@ long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg)
      * masters through.
      */
     args.dir_csid = dlm_directory_csid(args.resnam);
+
+    /*
+     * Master reporting is AUTHENTIC, not directory-deterministic (vms-1bba). The
+     * DIRECTORY node for a name is a deterministic property of the name + the
+     * membership vector (dir_csid above -- identical on every node given the same
+     * vector). The MASTER is NOT: on VMS a resource is UNMASTERED until its first
+     * $ENQ (master_csid 0, is_local_master 0), then mastered ON FIRST USE -- and
+     * the master need not be the directory node. So report the REAL mastering
+     * state: 0/unmastered until a lock block exists here, the genuine
+     * res->master_csid once it does (set in the found branch below; master_csid
+     * and is_local_master default to 0 from the memset at entry). This preserves
+     * the authentic "unmastered until locked" invariant (test_kmod_resdir).
+     *
+     * The cross-node CONSISTENCY this DB rung proves does NOT live in a
+     * synthesized master field: it lives in dir_csid (every node computes the
+     * SAME directory for a name) and in the enqueue split (a node grants/masters
+     * a resource iff it is the directory -- else SS$_UNSUPPORTED). Reporting
+     * dir_csid AS the master for an unmastered resource would conflate "who the
+     * directory says is responsible" with "who actually masters it yet", and
+     * fabricate a master where VMS has none.
+     */
 
     /* Read the resource block, if one exists, without creating it. */
     exec_lock(&vms_res_hash_lock);

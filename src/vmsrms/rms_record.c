@@ -219,12 +219,23 @@ static uint32_t rms_reclock_after_locate(struct FAB *fab, struct RAB *rab,
 }
 
 /*
- * rms_reclock_after_put - $PUT takes an EX lock on the freshly written
- * record's locator: nobody else can have named this resource before the
- * write minted it, but the seam is honored uniformly for consistency with
- * $GET/$UPDATE/$DELETE (a subsequent $UPDATE on this same stream operates
- * against the lock this stashes). Best-effort: an unexpected $ENQ failure
- * does not un-write the record that already committed to disk.
+ * rms_reclock_after_put - $PUT does NOT hold a persistent record lock. It
+ * RELEASES the stream's current-record lock (a $PUT moves the stream off any
+ * record a prior $GET held) and takes none of its own.
+ *
+ * Why not lock the written record: the org $PUT handlers do not populate a
+ * per-record locator (rms_seq_put never sets _last_rec_offset -- the same
+ * rab$w_rfa gap the design doc notes for $GET), so a $PUT lock would name a
+ * STALE/colliding resource (every sequential $PUT would collide on offset 0).
+ * Worse, because a record lock outlives the file lock (the parent-child
+ * auto-release cascade is deferred, vms-489) and $CLOSE cannot reach the RAB
+ * to release it (vms-3ce), a stashed $PUT lock LEAKS across a file
+ * close+reopen and then spuriously blocks the read-back's own $GET (the exact
+ * test_syssvc_rms_acp regression). A record lock a subsequent $UPDATE needs is
+ * taken by the $GET that precedes it, which is the VMS pattern the
+ * done-condition exercises. A held $PUT lock (for $PUT-then-$UPDATE on the same
+ * stream without an intervening $GET) waits on per-record put locators +
+ * vms-489, tracked in vms-3ce.
  */
 static uint32_t rms_reclock_after_put(struct FAB *fab, struct RAB *rab,
                                        uint32_t status_in)
@@ -233,16 +244,7 @@ static uint32_t rms_reclock_after_put(struct FAB *fab, struct RAB *rab,
     if (!h || !h->access_lkid)
         return status_in;
 
-    rms_reclock_release(rab);
-
-    char resnam[32];
-    rms_record_lock_resnam(h, (uint64_t)rab->_last_rec_offset, resnam);
-
-    uint32_t lkid = 0;
-    uint32_t st = vms_kif_enq(0, LCK_K_EXMODE, LCK_M_NOQUEUE, resnam,
-                              h->access_lkid, 0, 0, 0, &lkid, NULL);
-    if ($VMS_STATUS_SUCCESS(st))
-        rab->_rec_lock_lkid = lkid;
+    rms_reclock_release(rab);   /* $PUT holds no record lock (see above) */
     return status_in;
 }
 

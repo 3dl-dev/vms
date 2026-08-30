@@ -1,0 +1,13 @@
+surface: alpha-dcl-integer-widths
+arch: alpha
+description: DCL integer width on Alpha: SHOW SYMBOL hex/octal longword rendering + 2147483647+1 wrap (vms-580/vms-26b)
+oracle: OpenVMS Alpha V8.4 (lab alphalab/alpha1, isolated replica alphalab-0)
+captured: 2026-08-30T14:06:30Z
+method: capture_oracle.sh -- FIFO console drive, marker-sliced display (CLAUDE.md Rule 8 observation)
+normalize: (none -- byte-exact)
+commands:
+  - IDENT_L = %X80000004
+  - SHOW SYMBOL IDENT_L
+  - X = 2147483647
+  - Y = X + 1
+  - SHOW SYMBOL Y

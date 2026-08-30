@@ -85,7 +85,7 @@ diagnosis, not yet golden-gated; `pending` = not yet triaged/captured.
 1. **`SHOW USERS`** (vms-6a1/vms-8146) — the highest-priority suspected fabrication; capture the real VAX layout, then `diff_surface` will classify OVMX's as HOLLOW/ARTIFICE and drive the fix.
 2. `SHOW TERMINAL`, `SHOW TIME` — thin deterministic surfaces.
 3. `DIRECTORY` (a listing surface — needs a stable test directory + normalization of dates/sizes).
-4. Alpha-side re-capture of the above (HELD on the 99% disk; AXPbox last).
+4. Alpha-side captures (the disk hold cleared 2026-08-30; the capture harness's Alpha path is now proven — `capture_oracle.sh` routes `ARCH=alpha` to lab-Alpha V8.4 with the nested console path + a boot-robust `wait_boot`, vms-26b). **First landed: `alpha-dcl-integer-widths`** — byte-identical to the VAX golden, confirming DCL integer width is the arch-invariant 32-bit longword on Alpha too (formalizes the vms-580/#917 result into the standing gate). Next Alpha analogs (deterministic, byte-exact, same 2-arch method): `$GETSYI` item widths, `F$INTEGER`/`F$FAO !SL/!UL`, UIC/identifier `%X8000000N` renderings; the `vax-show-*` analogs carry their `NORMALIZE` masks over.
 
 ## Cross-references
 

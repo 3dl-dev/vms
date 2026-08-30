@@ -64,6 +64,13 @@ struct RAB {
     int      _eof;              /* EOF indicator */
     off_t    _last_rec_offset;  /* Offset of last record accessed */
     uint16_t _last_rec_size;    /* Size of last record accessed */
+    /* vms-0dd (docs/design-rms-record-lock.md): the DLM lkid this stream
+     * currently holds on its "current record" (a CHILD of the FAB's
+     * access_lkid), 0 if none. Set by a default (locking) $get/$find that
+     * granted; $update/$delete operate against it; released by the next
+     * $get/$find, RAB$M_NLK, or sys$disconnect. Never set by RAB$M_RLK
+     * (read-through holds nothing). */
+    uint32_t _rec_lock_lkid;
 };
 
 /* Initialization macro matching VMS cc$rms_rab */

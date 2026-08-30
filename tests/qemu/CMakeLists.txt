@@ -206,6 +206,14 @@ if(TARGET test_syssvc_rms_filelock)
         ${CMAKE_SOURCE_DIR}/src/vmsrms)
 endif()
 
+# test_syssvc_rms_reclock (vms-0dd): the record-locking sibling of
+# test_syssvc_rms_filelock above -- same private-header need (rms_io.h,
+# rms_file_t.access_lkid) plus struct RAB._rec_lock_lkid (rms/rab.h, public).
+if(TARGET test_syssvc_rms_reclock)
+    target_include_directories(test_syssvc_rms_reclock PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms)
+endif()
+
 # test_syssvc_dlm_xnode (vms-94c / vms-17c) drives the cross-node DLM RECEIVE
 # handler (vms_lock_dlm_xnode_dispatch) through VMS_IOCTL_DLM_XNODE + a raw
 # VMS_IOCTL_REGISTER, so it needs src/kernel on its include path for

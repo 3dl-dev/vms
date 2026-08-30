@@ -708,6 +708,36 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
 }
 
 /*
+ * vms_kif_getlki_parent (vms-0dd) -- a sibling of vms_kif_getlki that ALSO
+ * surfaces args.parent_id. Same VMS_IOCTL_GETLKI ioctl, same kernel handler
+ * (no new op/ABI addition -- ca673c87 already wired the kernel side to fill
+ * args.parent_id from lock->parent_id; only the original wrapper dropped it
+ * on the floor). Added as a separate entry point rather than widening
+ * vms_kif_getlki's signature so every existing caller (the H0->H11 DLM
+ * harness, vms-50e's file-lock test, the negctl dead-helper generator)
+ * keeps compiling unchanged -- the regression net vms-0dd must not disturb.
+ */
+uint32_t vms_kif_getlki_parent(uint32_t lkid, uint32_t *granted_mode,
+                                uint32_t *requested_mode, char *resnam,
+                                uint8_t *valblk, uint32_t *parent_id)
+{
+    struct vms_getlki_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.lkid = lkid;
+
+    KIF_CALL(VMS_IOCTL_GETLKI, &args);
+
+    if (granted_mode) *granted_mode = args.granted_mode;
+    if (requested_mode) *requested_mode = args.requested_mode;
+    if (resnam) vms_strncpy(resnam, args.resnam, 32);
+    if (valblk) vms_memcpy(valblk, args.valblk, LCK_VALBLK_SIZE);
+    if (parent_id) *parent_id = args.parent_id;
+
+    return args.status;
+}
+
+/*
  * vms_kif_get_resmaster - read a resource's DLM directory + mastering state
  * (vms-ci.5 DB). Issues VMS_IOCTL_GET_RESMASTER, the read-only diagnostic that
  * reports which node is the directory for the name, which node masters the

@@ -96,6 +96,7 @@ jobs:
       openssh: ${{ steps.decide.outputs.openssh }}
       alpha_toolchain: ${{ steps.decide.outputs.alpha_toolchain }}
       alpha_boot_runtime: ${{ steps.decide.outputs.alpha_boot_runtime }}
+      alpha_activation: ${{ steps.decide.outputs.alpha_activation }}
       vax_toolchain: ${{ steps.decide.outputs.vax_toolchain }}
       dlm_harness: ${{ steps.decide.outputs.dlm_harness }}
     steps:
@@ -187,6 +188,30 @@ jobs:
               - 'src/libvmssys/**'
               - 'src/ovmx_init/**'
               - 'tools/cross-alpha/**'
+            # vms-c54: the Alpha N=3 ACTIVATION surface -- every change class that
+            # can regress single-proc image activation on the real OVMX/Alpha
+            # executive (the #921 module-GP regression class). A SUPERSET of
+            # alpha_boot_runtime (the runtime executive + PID 1 + boot tooling that
+            # activation runs AGAINST) PLUS the parts that PRODUCE and ACTIVATE the
+            # image: the alpha-dec-vms toolchain that emits the linkage
+            # (tools/cross-alpha-vms/**, incl. the cc1/gcc patches), LINK.EXE
+            # (src/vmslink/**), and IMGACT (src/imgact/**). The misleadingly-named
+            # alpha_toolchain filter is ONLY the cross-alpha-vms docker-image
+            # sources -- it does NOT cover src/vmslink or src/imgact, so #921's
+            # LINK.EXE side would slip a boot_runtime||toolchain gate. This filter
+            # fires the per-PR alpha-boot-mount N=3 activation gate + the cheap
+            # alpha-activation-selftest below. Kept scoped so non-Alpha PRs pay
+            # nothing.
+            alpha_activation:
+              - '.github/workflows/**'
+              - 'src/kernel/**'
+              - 'src/kernel-core/**'
+              - 'src/libvmssys/**'
+              - 'src/ovmx_init/**'
+              - 'tools/cross-alpha/**'
+              - 'tools/cross-alpha-vms/**'
+              - 'src/vmslink/**'
+              - 'src/imgact/**'
             release:
               - '.github/workflows/**'
               - 'tools/cut-release.sh'
@@ -503,6 +528,7 @@ jobs:
               echo "openssh=${{ steps.filter.outputs.openssh }}"
               echo "alpha_toolchain=${{ steps.filter.outputs.alpha_toolchain }}"
               echo "alpha_boot_runtime=${{ steps.filter.outputs.alpha_boot_runtime }}"
+              echo "alpha_activation=${{ steps.filter.outputs.alpha_activation }}"
               echo "vax_toolchain=${{ steps.filter.outputs.vax_toolchain }}"
               echo "dlm_harness=${{ steps.filter.outputs.dlm_harness }}"
             } >> "$GITHUB_OUTPUT"
@@ -522,6 +548,7 @@ jobs:
               echo "openssh=true"
               echo "alpha_toolchain=true"
               echo "alpha_boot_runtime=true"
+              echo "alpha_activation=true"
               echo "vax_toolchain=true"
               echo "dlm_harness=true"
             } >> "$GITHUB_OUTPUT"
@@ -8132,13 +8159,29 @@ jobs:
   # the same wall time -- no separate boot-to-mount subset buys anything.) PR-ONLY
   # by design: on schedule/workflow_dispatch the fuller alpha-boot-login and
   # alpha-dcl-acceptance legs already run, so this job does not duplicate them.
+  #
+  # vms-c54 UPGRADE: this gate now runs the N=3 ACTIVATION proof
+  # (run-module-gp-activation-alpha.sh) instead of the boot-to-mount proof.
+  # Activation REQUIRES the mounted ODS-2 volume + a DCL context, so the single
+  # boot SUBSUMES the old DKA0: $MOUNT assertion (a mount regression still reds
+  # it -- it never reaches activation) and ADDS the executive-recorded
+  # $STATUS=%X0035A019 N=3 check -- closing the #921 module-GP activation-crash
+  # class PER-PR (it was schedule/workflow_dispatch-only). Trigger widened from
+  # alpha_boot_runtime to the dedicated alpha_activation filter, which adds
+  # src/vmslink + src/imgact + tools/cross-alpha-vms: #921's LINK.EXE/cc1 side is
+  # NOT in alpha_boot_runtime and would otherwise slip. Enforcement stays the
+  # conductor reap-by-SHA (the repo has zero branch-protection-required checks);
+  # this makes the N=3 proof AUTOMATIC + visible on every activation-surface PR.
   # -----------------------------------------------------------------------
   alpha-boot-mount:
-    name: "OVMX/Alpha per-PR boot gate — boots + mounts DKA0: (vms-707)"
+    name: "OVMX/Alpha per-PR activation gate — boots, mounts DKA0:, activates the N=3 image, asserts $STATUS=%X0035A019 (vms-707/vms-c54)"
     needs: changes
-    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_boot_runtime == 'true' }}
+    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # vms-c54: 150 (was 120) — the N=3 activation gate adds the alpha-dec-vms
+    # toolchain build + joint-image build + activation on top of the boot, so it
+    # matches the alpha-module-gp-activation dispatch job's budget.
+    timeout-minutes: 150
 
     steps:
       - name: Checkout
@@ -8168,8 +8211,49 @@ jobs:
           cache-from: type=gha,scope=cross-alpha
           cache-to: type=gha,mode=max,scope=cross-alpha
 
-      - name: "Boot gate — qemu-system-alpha boots the assembled OVMX/Alpha runtime and mounts the ODS-2 system disk on DKA0: (reds on the #853 mount-halt class)"
-        run: tools/cross-alpha/run-boot-alpha.sh gate
+      # vms-c54: the alpha-dec-vms toolchain that builds the N=3 joint image
+      # (joint_main.c return 3 + the SS$_NORMAL control). gha-cached so a cache
+      # hit makes this near-free; build-joint-image.sh reuses it (no ftp.gnu.org
+      # fetch), mirroring the alpha-module-gp-activation dispatch job.
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: "Activation gate — qemu-system-alpha boots the assembled OVMX/Alpha runtime, mounts DKA0:, activates the single-proc N=3 image on the real /dev/vms executive over the ODS-2 ACP, asserts $STATUS=%X0035A019 + SS$_NORMAL control (reds on the #853 mount-halt class AND the #921 activation-crash class; runs its own can-fail selftest before the boot)"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh gate
+
+  # -----------------------------------------------------------------------
+  # alpha-activation-selftest (vms-c54). The CHEAP per-PR half of the N=3
+  # activation guard: run-module-gp-activation-alpha.sh `selftest' drives the
+  # SAME assert_activation() the heavy boot uses against crafted transcript
+  # fixtures -- a good one passes; a wrong sentinel, a missing crt0-join, a
+  # broken SS$_NORMAL anchor, an IMGACT failure, and an activated-but-crashed
+  # (signal 11 / SS$_ABORT) image each RED it. Pure bash, no toolchain image, no
+  # boot -> seconds. It proves the gate's TEETH are intact on every
+  # activation-surface PR immediately, independent of the ~90 min heavy boot
+  # (Rule 7: an enforcement mechanism ships its own rejection test). Same
+  # alpha_activation scope-gate; a non-activation PR skips it.
+  # -----------------------------------------------------------------------
+  alpha-activation-selftest:
+    name: "OVMX/Alpha N=3 activation gate — assert_activation() can-fail proof (vms-c54, Rule 7)"
+    needs: changes
+    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: "Selftest — the N=3 activation assertion rejects a wrong sentinel, a missing crt0-join, a broken SS$_NORMAL anchor, an IMGACT activation failure, and an activated-but-crashed image (no build, no boot, seconds)"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh selftest
 
   # -----------------------------------------------------------------------
   # alpha-dcl-acceptance (rd vms-f2c, epic vms-8954). Co-release ACCEPTANCE

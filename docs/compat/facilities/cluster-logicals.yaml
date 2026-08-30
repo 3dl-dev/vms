@@ -15,7 +15,7 @@ items:
     status: absent
     authenticity: n/a
     vms: "LNM$M_CLUSTERWIDE table replication across cluster members"
-    evidence: src/kernel/vms_lnm.c
+    evidence: src/kernel-core/vms_lnm.c
     notes: "Degrades to system-wide scope (per docs/compatibility-contract.md); no cluster-wide replication built."
 
   - id: cluster-logicals$global-sections

@@ -1,6 +1,6 @@
 # SYS$ Logical-Name Services. See docs/design-compat-surface-register.md.
 # Not covered by the supplied census transcript; measured directly against
-# src/libvms/syssvc/sys_logical.c and src/kernel/vms_lnm.c on origin/main.
+# src/libvms/syssvc/sys_logical.c and src/kernel-core/vms_lnm.c on origin/main.
 facility: sys-logicalnames
 name: "SYS$ Logical-Name Services"
 domain: programming-interfaces

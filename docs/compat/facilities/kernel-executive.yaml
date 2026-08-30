@@ -50,7 +50,7 @@ items:
     status: implemented
     authenticity: real
     vms: "LNM$SYSTEM / LNM$GROUP / LNM$JOB kernel-resident logical-name arena"
-    evidence: src/kernel/vms_lnm.c
+    evidence: src/kernel-core/vms_lnm.c
     notes: "mmap-backed shared arena, not a per-process fake table."
 
   - id: kernel-executive$access-modes

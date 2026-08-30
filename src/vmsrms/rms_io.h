@@ -76,6 +76,13 @@ typedef struct rms_file {
      * highest+1) this is the version the ACP minted (fop.out_version), which
      * SYSGEN WRITE CURRENT reports as "...OVMXVMSSYS.PAR;N". 0 when unset. */
     uint16_t version;
+    /* vms-50e (docs/design-rms-file-lock.md): the file-access $ENQ lock ID this
+     * open instance holds on the FID-named resource "RMS$<fid>.<seq>.<rvn>",
+     * taken by rms_impl_open/rms_impl_create right after IO$_ACCESS/IO$_CREATE
+     * succeeds and $DEQ'd by rms_impl_close. 0 means "no lock held" (ACP
+     * absent, or this handle predates the lock seam -- rms_open_named_handle's
+     * internal binary opens never set it). */
+    uint32_t access_lkid;
     /* POSIX backend (non-__linux__ / netbsd-vax standalone cross) only: the
      * bare fd the handle now owns in place of the retired FAB._linux_fd. Unused
      * by the ACP backend. */

@@ -31,18 +31,37 @@ A run writes:
 A **surface** is a small sourced data file, `tools/oracle/surfaces/<name>.surface`:
 
 ```sh
-ARCH=vax            # vax | alpha
+ARCH=vax                    # vax | alpha
 DESC="one line"
+NORMALIZE='s/[0-9]/#/g'     # OPTIONAL: a sed program masking volatile fields
 COMMANDS=(
-  'IDENT_L = %X80000004'
-  'SHOW SYMBOL IDENT_L'
+  'SHOW MEMORY'
 )
 ```
 
 `capture_oracle` runs `COMMANDS` between unique markers and slices the transcript
-byte-exactly (`extract_golden`, proven by `selftest`). Prefer **deterministic**
-surfaces (fixed inputs) so the golden is reproducible; a surface with live
-numbers (free pages, times) pins layout/labels, not the varying digits.
+byte-exactly (`extract_golden`, proven by `selftest`), then applies the surface's
+`NORMALIZE` mask (identity if unset).
+
+**Deterministic surfaces** (fixed inputs — `SHOW SYMBOL` of a constant, `F$`
+functions) set no `NORMALIZE` and stay byte-exact.
+
+**Volatile surfaces** (`SHOW MEMORY`, `SHOW SYSTEM` — live free-page counts,
+timestamps, PIDs) set `NORMALIZE` so the golden is the reproducible **layout**
+(section/column headers, row labels, geometry) rather than the varying values.
+The digit-mask `s/[0-9]/#/g` replaces every digit with `#`, which preserves
+column width/alignment while masking the values — so two captures from different
+boots normalize identically (verified). The mask is **symmetric**: the `vms-c38`
+golden-comparison gate applies the *same* surface mask to OVMX's own output
+before diffing, so a volatile field can never red a layout-fidelity diff — only a
+real structural divergence does:
+
+```sh
+capture_oracle.sh normalize <surface> < ovmx_output | diff - docs/oracle/golden/<surface>.golden
+```
+
+The `.golden.meta` records the exact `NORMALIZE` mask used, so the gate stays in
+sync with the capture.
 
 ## Lab traps this respects (so you don't have to relearn them)
 

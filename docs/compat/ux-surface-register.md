@@ -43,9 +43,9 @@ diagnosis, not yet golden-gated; `pending` = not yet triaged/captured.
 | show-device | `SHOW DEVICE` | golden-seeded (2-line column header + status) | `vax-show-device` | vms-ddc, vms-e6f, vms-f4b, vms-fe0 |
 | show-process | `SHOW PROCESS` | golden-seeded (field layout) | `vax-show-process` | vms-1f7, vms-c47 |
 | show-quota | `SHOW QUOTA` | **fixed** — oracle-faithful `%SYSTEM-F-QFNOTACT` (was a NODISKQUOTA fabrication) | — (deterministic) | vms-73c4 (#939) |
-| directory | `DIRECTORY` | suspected-FORMAT-DIVERGENT — header leaks the `/vms` mount as `[VMS.]`; wildcard/ellipsis uniformity | pending | vms-38d, vms-28c |
+| directory | `DIRECTORY` | leak premise **REFUTED** (measure-first, 2026-08-30) — header derives `DEV:[DIR]` from VMS-side inputs via `dcl_directory_header_spec` (vms-272), no `/vms`/`[VMS.]` leak; zero-match = honest `%DIRECT-W-NOFILES`. Byte-fidelity still wants a golden. | pending (Alpha capture) | vms-38d, vms-28c |
 | set-default | `SET DEFAULT` / `SHOW DEFAULT` | pending — concealed-form round-trip canonicalizer | pending | vms-ee0 |
-| set-verbs | `SET` (real mutations, not fake-success) | suspected-ARTIFICE — some `SET`/`ASSIGN` are fake-success | pending | vms-6ad, vms-ee0 |
+| set-verbs | `SET` (real mutations, not fake-success) | **fixed** — measure-first vs origin/main (2026-08-30): all fake-success facades remediated, 0 live-fab (ASSIGN→real LNM, MOUNT→ACP, PRODUCT, SET ACCOUNTING/PASSWORD real, SET AUDIT→`SS$_UNSUPPORTED`, HELP/STOP/INQUIRE real; INV-DCL sweep) | — (deterministic) | vms-6ad (closed) |
 
 ## Priority 3 — thinner SHOW commands, F$ lexicals, utilities, banner
 

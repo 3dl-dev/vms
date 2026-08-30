@@ -31,13 +31,13 @@ not brand, and are pinned by `tests/integration/test_frozen_identity_tokens.sh`.
 
 All VMScluster wire-protocol work in OVMX (SCS / NISCA / NISCS / MSCP / distributed lock
 manager) is **clean-room**: it is derived **only** from (a) observing traffic on the SIMH
-reference lab (`~/vax/cluster/`) and (b) public OpenVMS documentation and documented tool
+reference lab (`/data/training/vax/cluster/`) and (b) public OpenVMS documentation and documented tool
 output (SDA, SYSGEN, SYSMAN; the *OpenVMS Cluster Systems* manual, IDSM, `$SSDEF`/`$LCKDEF`).
 We **never** disassemble, decompile, or copy VSI/HPE source or binaries, and never paste
 leaked VMS source. This is the legal footing for interoperability reverse-engineering
 (DMCA §1201(f), EU Software Directive Art. 6) and is a hard, non-negotiable project
 invariant — see rule 8 in `CLAUDE.md`. Captured protocol specimens and their decode live in
-`~/vax/cluster/captures/` (`RE-specimens-2026-07-26.md`).
+`/data/training/vax/cluster/captures/` (`RE-specimens-2026-07-26.md`).
 
 ## Component Layers
 
@@ -72,7 +72,7 @@ Layer 1 ─ Process Management
 
 Layer 0 ─ Syscall Abstraction
            Freestanding, no glibc, direct Linux syscalls
-           [libvmssys + arch/x86_64 + arch/aarch64]
+           [libvmssys + arch/x86_64 + arch/aarch64 + arch/alpha + arch/vax]
 ```
 
 ## Dependency Graph

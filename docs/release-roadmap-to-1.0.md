@@ -8,15 +8,15 @@
 >
 > **This document supersedes `docs/release-plan-0.2-to-0.5.md`** (a local, untracked
 > Aug-8 predecessor). That plan's *cadence* (weekly Fridays, 0.2 = Aug 14) and its
-> *0.2→0.5 framing* are obsolete — we have already shipped through **0.3-4**. What it
-> got right and this document keeps: the merge-safety / file-ownership-lane model and
-> the epic-status structure (§4–§5 below).
+> *0.2→0.5 framing* are obsolete — we have already shipped through **V0.6** (the
+> cluster-correctness milestone). What it got right and this document keeps: the
+> merge-safety / file-ownership-lane model and the epic-status structure (§4–§5 below).
 >
-> **Owed correction (Rule 10 — downstream artifact contradicts operator source):**
-> `docs/roadmap-v1.md §4` still declares self-hosting "a north star, **not** a release
-> gate." Operator ruling 2026-08-09 (`vms-678`) makes **Build-native self-hosting an
-> explicit 1.0 gate**. roadmap-v1 must be rewritten to match; this document treats
-> self-hosting as a gate. Do not rewrite roadmap-v1 from here — file/route that edit.
+> **Rule-10 note (resolved):** an earlier version flagged that `docs/roadmap-v1.md §4`
+> declared self-hosting "a north star, **not** a release gate," contradicting operator
+> ruling 2026-08-09 (`vms-678`) which makes **Build-native self-hosting an explicit 1.0
+> gate**. roadmap-v1 §4 now carries that correction inline; this document has always
+> treated self-hosting as a gate.
 
 ---
 
@@ -91,12 +91,12 @@ only our forks target.
 |---|---|---|---:|---:|---:|---:|
 | **0.3** | A real system — the command language, file system, system services, and kernel executive stand on their own. | SHIPPED | 0 | 0 | 0 | — |
 | **0.4** | Installs and boots faithfully — the product installs to a target disk and reboots into a login. | SHIPPED | 0 | 0 | 0 | — |
-| **0.5** | The authenticity flip — RMS reads and writes genuine Files-11 ODS-2 over the executive ACP (the /vms passthrough retired on the runtime path), binary SYSUAF and Purdy login, and a userland that builds itself in-guest. | SHIPPED | 14 | 18 | 5 | 44% |
-| **0.6** | Cluster correctness — quorum and reconfiguration, a real distributed lock manager, and cluster membership resident in the executive. | COMPLETE | 5 | 0 | 0 | 100% |
+| **0.5** | The authenticity flip — RMS reads and writes genuine Files-11 ODS-2 over the executive ACP (the /vms passthrough retired on the runtime path), binary SYSUAF and Purdy login, and a userland that builds itself in-guest. | SHIPPED | 14 | 15 | 5 | 48% |
+| **0.6** | Cluster correctness — a real distributed lock manager over the SCS wire, RMS behind the DLM, and cluster membership resident in the executive. | SHIPPED | 11 | 0 | 0 | 100% |
 | **0.7** | Cluster wire fidelity — the SCS/MSCP connection manager answers a real VAX byte-for-byte. | planned | 0 | 6 | 0 | 0% |
-| **0.8** | Rejoin and satellite boot — a removed node rejoins under its own identity; diskless satellites boot from a served disk. | in progress | 1 | 3 | 0 | 25% |
+| **0.8** | Rejoin and satellite boot — a removed node rejoins under its own identity; diskless satellites boot from a served disk. | planned | 0 | 3 | 0 | 0% |
 | **0.9** | Feature-complete — a voting member joins, serves genuine ODS-2 storage, holds locks, and evacuates a live node; TCP/IP, DECnet, and the self-hosting toolchain reach done. The last features land here. | planned | 0 | 0 | 0 | — |
-| **1.0** | Hardened and proven — feature-frozen on 0.9: authenticity enforced by the executive, not by convention, and the whole system proven on real hardware and in extended cluster interop against a real VAX. The release you trust; fixes only. | 1.0 goal | 24 | 12 | 4 | 67% |
+| **1.0** | Hardened and proven — feature-frozen on 0.9: authenticity enforced by the executive, not by convention, and the whole system proven on real hardware and in extended cluster interop against a real VAX. The release you trust; fixes only. | 1.0 goal | 24 | 15 | 4 | 62% |
 
 ### 1.0-gate workstreams (epic rollups)
 
@@ -113,11 +113,10 @@ only our forks target.
 
 ### Per-milestone items (rd)
 
-**0.5** — rel-0.5 (14/32 done)
+**0.5** — rel-0.5 (14/29 done)
 
 - `vms-098` [inbox] VMS-faithful cluster configuration: operator provisions a node into a cluster the VMS way (SYSGEN -> MODPARAMS/AUTOGEN -> CLUSTER_AUTHORIZE -> CLUSTER_CONFIG_LAN.COM)
 - `vms-195` [done] DCL prompt/echo race (d$ ir): async mailbox prompt vs tty echo
-- `vms-19e` [inbox] OVMX owns its kernel: self-built + curated + untainted + signed, with an in-tree home for VMS modules
 - `vms-24d` [blocked] AUTOGEN generates a new versioned .PAR from defaults + MODPARAMS.DAT
 - `vms-272` [done] DCL SET DEFAULT corrupts volume root [000000] to [VMS] + silent no-op
 - `vms-3251` [blocked] Cluster docs: write + keep current the Cluster Systems manual and the Installation Guide clustering sections as cluster-config UX lands (release engineering owns)
@@ -127,8 +126,6 @@ only our forks target.
 - `vms-47d` [inbox] DESIGN CHANGE: device-native-naming — VMS-visible device names track the NATIVE KERNEL device name (Linux: sda→SDA0:, eth0→ETH0:; NetBSD names on the NetBSD SYSKRNL), VMS logical layer intact
 - `vms-495` [done] A rebooted OVMX executive adopts operator-authored cluster identity/quorum params (R1 release proof)
 - `vms-544d` [done] the ODS-2 system disk MOUNTS + READS on netbsd-vax under SIMH (satisfies the PID-1 /vms mount)
-- `vms-678` [inbox] 1.0 GATE: self-hosting (Build-native) — OVMX builds OVMX from within, no bash in the build path, agent drives OVMX-native toolchain via DCL
-- `vms-67f` [inbox] TCP/IP Services for OVMX — VMS-faithful IP networking layered product
 - `vms-6b8` [active] THE EXECUTIVE GAP: OVMX has no shared system state — build a system-state substrate
 - `vms-6c6` [done] Per-Facility negctl meta-check RED on main — unanchored suites (tcpip/vmsfs/initialize) block clean release
 - `vms-732` [inbox] RE gap: CLUSTER_AUTHORIZE credential/nonce derivation — the (group#,password)->nonce hash is NOT recoverable from passive capture
@@ -148,13 +145,19 @@ only our forks target.
 - `vms-eb8` [done] DCL DIRECTORY [SUB] relative bracketed arg lists against SYS$DISK not current default device
 - `vms-f4c` [blocked] R2: MODPARAMS.DAT + AUTOGEN drive cluster SYSGEN params (edit MODPARAMS -> AUTOGEN -> new .PAR version adopted at boot)
 
-**0.6** — rel-0.6 (5/5 done)
+**0.6** — rel-0.6 (11/11 done)
 
+- `vms-065c` [done] Wire crtl_rms→N=7 joint-e2e as a per-PR CI leg (gated on link.c/toolchain/crtl changes)
+- `vms-1ef` [done] crtl_rms N=7: DECC$SHR internal static-const-data anchor cell mis-placed — mallocng size_classes/debruijn32 ref crashes at 0x20334
 - `vms-2d6` [done] Quorum loss: killing the only voting node produces NO reconfiguration -- survivors go silent (run q1)
+- `vms-2f3` [done] OVMX cannot REJOIN a cluster it was just removed from, under the same SCSNODE/SCSSYSTEMID
 - `vms-407` [done] RMS reaches no arbitrator: FAB share/access and RAB record locking have no lock manager behind them
 - `vms-551` [done] Cluster membership crosses into the executive: SHOW CLUSTER / $GETSYI / cluster-wide locking see a real cluster through /dev/vms
+- `vms-5919` [done] vms-551 follow-on: $GETSYI SYI$_CLUSTER_MEMBER/CLUSTER_NODES read the executive membership block, not the file
 - `vms-6d5` [done] EPIC: Rooted/concealed system-disk logicals + boot-derived root (kill the flattened SYS0 fabrication)
 - `vms-7fa` [done] OVMX holds real distributed lock state and answers ENQ-class DLM requests
+- `vms-967d` [done] vms-551 follow-on: retire the userspace cluster-membership FILE bridge (both readers cut over)
+- `vms-c38` [done] Standing golden-comparison CI gate — diff OVMX vs oracle-captured golden CONTINUOUSLY (upgrade the tests/qemu DCL/SHOW acceptance battery from HAND-WRITTEN expectations to oracle golden); new surface->capture golden->held. Done (enforcement, both proofs): the gate REDS on an injected divergence AND GREENS on a matching surface.
 
 **0.7** — rel-0.7 (0/6 done)
 
@@ -165,16 +168,16 @@ only our forks target.
 - `vms-7f4` [inbox] vms-a61 audit: removing scs_credit_header_offset's redundant pre-gate lets a conformant-but-non-allowlisted MTYPE-10 frame silently debit Send Credit and zero Pending Receive Credit with nothing transmitted
 - `vms-abd` [inbox] A real VAX REFUSES OVMX's DISCONNECT_REQ: Inappropriate SCA Control Message
 
-**0.8** — rel-0.8 (1/4 done)
+**0.8** — rel-0.8 (0/3 done)
 
 - `vms-2248` [inbox] op 0x02 REJOIN: member declines to reciprocate config on the joiner VC — the rejoin readmission blocker (NOT the op 0x02 body)
-- `vms-2f3` [done] OVMX cannot REJOIN a cluster it was just removed from, under the same SCSNODE/SCSSYSTEMID
 - `vms-4838` [inbox] REJOIN: drive op 0x02 CM readmission on the MEMBER-INITIATED VMS$VAXcluster connection (rejoiner=TARGET), not OVMX's own outbound joiner VC
 - `vms-ce7` [inbox] Complete diskless satellite boot: NISCS boot-time disk-server VC formation (no MOP load — VMB is ROM-resident) -> pure MSCP-served-disk-over-NISCA capture
 
-**1.0** — rel-1.0 (24/36 done)
+**1.0** — rel-1.0 (24/39 done)
 
 - `vms-065` [done] Runtime parity: the VAX boot-to-DCL SIMH proof joins the release acceptance gate so every co-release includes a working VAX runtime
+- `vms-19e` [inbox] OVMX owns its kernel: self-built + curated + untainted + signed, with an in-tree home for VMS modules
 - `vms-1bd` [done] ODS-2 writer completeness: multi-block directories + created-file VAR records round-trip
 - `vms-30e` [inbox] DECnet Phase IV for OVMX — clean-room VMS-faithful networking layered product
 - `vms-476` [done] P4-B: the OVMX executive builds + loads on NetBSD-VAX under SIMH (/dev/vms live)
@@ -185,6 +188,8 @@ only our forks target.
 - `vms-5eb` [done] Runtime SYS$DISK is host-FS passthrough, not real ODS-2 (faithfulness gap)
 - `vms-600` [blocked] OVMX becomes a real MSCP$DISK server: a VAX joins the cluster and mounts a disk served by OVMX
 - `vms-63a` [done] exec-from-vmsfs on netbsd-vax: a real vmsfs vnode pager (VOP_BMAP over the shared kernel-core retrieval-map + VOP_STRATEGY to devvp + UBC/getpages) so an ELF32-vax image (PROVISION.EXE) demand-pages + RUNS off the mounted ODS-2 volume — replaces vop_getpages_desc=genfs_eopnotsupp in vmsfs_vfsops.c
+- `vms-678` [inbox] 1.0 GATE: self-hosting (Build-native) — OVMX builds OVMX from within, no bash in the build path, agent drives OVMX-native toolchain via DCL
+- `vms-67f` [inbox] TCP/IP Services for OVMX — VMS-faithful IP networking layered product
 - `vms-69a` [done] VAX installer: PRODUCT.EXE cross-builds for elf32-vax (Decision A static-link)
 - `vms-6cb` [done] Block-backed ODS-2 reader: genuine reader operates over a real block device (/dev/vms), not in-memory only
 - `vms-6ef` [done] INITIALIZE writes a genuine ODS-2 volume (retire the VMFS/VFH2 bespoke writer)
@@ -213,7 +218,7 @@ only our forks target.
 
 ### Shipped releases (git tags)
 
-- **V0.6** — Point release.
+- **V0.6** — Cluster correctness, complete: OVMX is now a genuine VMScluster participant. The distributed lock manager runs the full H0–H11 ladder on the real executive over the SCS wire — cross-node $ENQ grant, contention and block-then-grant, BLKAST delivery, resource mastering and remastering, LVB replication, and distributed deadlock detection — and RMS file-share and record locking reach the real DLM arbitrator on real /dev/vms (INV-6, no flock fallback). Cluster membership now lives in the executive: SHOW CLUSTER and $GETSYI read the real member block and the userspace file-facade is fully excised, with rejoin and parameter adoption proven. Plus the oracle-driven UX-fidelity gate: a continuous, structure-tolerant golden-diff of DCL/SHOW output against byte-exact real-VMS captures, with the SHOW family proven fabrication-free and real structural gaps tracked as an honest, gated backlog. (Quorum, votes, and MSCP-served volumes remain post-0.6.)
 - **V0.5-11** — The VAX DCL/SHOW acceptance battery goes fully green (101 of 101) — every VAX user-visible surface is now faithful. Real per-process accounting binds to the kernel's maintained accessors (calcru CPU, rulwps live-aggregated page faults, vm_resident_count resident pages), the SYSUAF quota facility returns real SHOW PROCESS/QUOTAS values, F$PID preserves its %08X pid format across every DCL coercion path, and a device error-count writer records genuine block-I/O errors. Plus the Alpha decc$_malloc64 allocator unifies with mallocng (EVAX strong-over-weak), rail-proven. Accounting reads the value the kernel's own ps/kinfo path reads, never a raw struct field a map names (INV-6, no false-zeros).
 - **V0.5-10** — The UX-fidelity de-fabrication batch completes: every confirmed hollow or fabricated SHOW/F$ surface is now real executive data or an honest omission (INV-6) — SHOW SYSTEM with an oracle-captured golden, SHOW WORKING_SET's real working-set size, F$PID's real executive pids, SHOW ERROR's real per-device error counts, and F$GETQUI honoring the caller's queue. Plus a chunked producer-load cap and the Alpha LLP64 malloc-width fix, both rail-proven on the real /dev/vms executive.
 - **V0.5-9** — A broad batch: oracle-driven UX-fidelity de-fabrications held to live-VMS goldens, the distributed lock manager's H5 two-node SCS-wire milestone, the TCP/IP Services configuration plane (TCPIP$CONFIG, TCPIP$ logicals, SET/SHOW INTERFACE), and further GCC-port toolchain rungs up the do-it-like-VMS ladder.
@@ -489,6 +494,6 @@ memory is downstream of rd).
    a gate; the operator made it a 1.0 gate. This doc treats it as gate **R7**;
    roadmap-v1 owes the rewrite. *(Downstream artifact contradicts operator source.)*
 2. **`release-plan-0.2-to-0.5.md` cadence vs reality** — that plan's 0.2=Aug-14 weekly
-   cadence is obsolete; we shipped through 0.3-4. This doc supersedes it.
+   cadence is obsolete; we shipped through V0.6. This doc supersedes it.
 3. **MEMORY.md "open operator decisions" vs rd** — `vms-c90` and `vms-f81` are listed as
    open but are `done`. Memory is stale; rd is authoritative.

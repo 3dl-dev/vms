@@ -368,10 +368,12 @@ run_dcl_acceptance_battery() {
 
     # --- SHOW QUOTA (vms-73c4: fabricated "[200,1]") ------------------------
     run_cmd 'SHOW QUOTA'
-    # VMS-faithful: either the real current UIC ([1,4] for SYSTEM) OR an honest
-    # %SYSTEM-F-NODISKQUOTA when no quota is enabled -- NOT a fabricated UIC.
-    # Accept [1,4] or the zero-padded [001,004] form OVMX prints elsewhere.
-    must_match    "$SEG" '(\[0*1,0*4\]|NODISKQUOTA)' "SHOW QUOTA [vms-73c4]: shows the real SYSTEM UIC [1,4] OR an honest %SYSTEM-F-NODISKQUOTA"
+    # VMS-faithful: either the real current UIC ([1,4] for SYSTEM, once a real
+    # quota facility exists) OR an honest %SYSTEM-F-QFNOTACT -- the error a real
+    # VAX returns for a quotas-not-enabled volume (oracle-triggered on live VAX
+    # V7.3, vms-73c4) -- NOT a fabricated UIC, and NOT the wrong-condition
+    # NODISKQUOTA. Accept [1,4] or the zero-padded [001,004] form.
+    must_match    "$SEG" '(\[0*1,0*4\]|QFNOTACT)' "SHOW QUOTA [vms-73c4]: shows the real SYSTEM UIC [1,4] OR an honest %SYSTEM-F-QFNOTACT"
     must_not_have "$SEG" '[200,1]' "SHOW QUOTA [vms-73c4]: does NOT print the fabricated UIC '[200,1]' (the shipped bug)"
     negctl        "$SEG" 'SHOW QUOTA' "SHOW QUOTA"
 

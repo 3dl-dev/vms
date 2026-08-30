@@ -20,15 +20,15 @@
 # reaches Username:), green after.
 #
 # WHAT IT PROVES (nothing earlier does):
-#   BOOT 1 (fat initramfs, distrib DKA0: + a blank INITIALIZEd DKA100:):
-#     log in, MOUNT DKA100:, PRODUCT INSTALL the real OS kit onto it with
-#     /DESTINATION=DKA100:, then INDEPENDENTLY confirm the login chain
+#   BOOT 1 (fat initramfs, distrib VDA0: + a blank INITIALIZEd VDA100:):
+#     log in, MOUNT VDA100:, PRODUCT INSTALL the real OS kit onto it with
+#     /DESTINATION=VDA100:, then INDEPENDENTLY confirm the login chain
 #     (DCL.EXE + LOGINOUT.EXE) landed at the ROOTED path
-#     DKA100:[SYS0.SYSCOMMON.SYSEXE], and that the OLD FLAT path
-#     DKA100:[SYSEXE] is EMPTY (the regression this bead fixes would have
+#     VDA100:[SYS0.SYSCOMMON.SYSEXE], and that the OLD FLAT path
+#     VDA100:[SYSEXE] is EMPTY (the regression this bead fixes would have
 #     put the files there). DISMOUNT so the volume flushes cleanly.
 #   BOOT 2 (SLIM bootstrap initramfs, the JUST-INSTALLED disk as the SOLE
-#     DKA0: system disk): the slim initramfs carries NO DCL/LOGINOUT/SYSLIB
+#     VDA0: system disk): the slim initramfs carries NO DCL/LOGINOUT/SYSLIB
 #     (asserted from its cpio listing, same guard as test_distrib_boot.sh),
 #     so reaching a login prompt and logging SYSTEM in is functional proof
 #     the whole login chain came off the /DESTINATION-INSTALLED disk. This
@@ -50,7 +50,7 @@ KERNEL=/boot/vmlinuz
 FAT_INITRD=/boot/initramfs-ovmx.cpio.gz
 SLIM_INITRD=/boot/initramfs-ovmx-slim.cpio.gz
 DISTRIB_IMG=/boot/ovmx-distrib.img
-DKA100_SRC=/work/dka100.img
+VDA100_SRC=/work/dka100.img
 ARCH=$(uname -m)
 
 if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
@@ -63,7 +63,7 @@ else
     CONSOLE="console=ttyS0"
 fi
 
-for f in "$KERNEL" "$FAT_INITRD" "$SLIM_INITRD" "$DISTRIB_IMG" "$DKA100_SRC"; do
+for f in "$KERNEL" "$FAT_INITRD" "$SLIM_INITRD" "$DISTRIB_IMG" "$VDA100_SRC"; do
     [ -f "$f" ] || { echo "FATAL: $f not found - run this inside the ovmx-boot image with /work bind-mounted (see header)"; exit 1; }
 done
 command -v "$QEMU" >/dev/null 2>&1 || { echo "FATAL: $QEMU not available"; exit 1; }
@@ -78,9 +78,9 @@ echo "arch=$ARCH qemu=$QEMU kernel=$KERNEL"
 
 WORKDIR=$(mktemp -d)
 DISK0="$WORKDIR/dka0.img"       # distrib boot disk for BOOT 1
-TARGET="$WORKDIR/target.img"    # blank -> installed -> booted as DKA0: in BOOT 2
+TARGET="$WORKDIR/target.img"    # blank -> installed -> booted as VDA0: in BOOT 2
 cp "$DISTRIB_IMG" "$DISK0"
-cp "$DKA100_SRC" "$TARGET"
+cp "$VDA100_SRC" "$TARGET"
 
 QPID=""
 cleanup() { [ -n "$QPID" ] && kill "$QPID" 2>/dev/null; rm -rf "$WORKDIR"; }
@@ -153,7 +153,7 @@ login() {  # login <log-file>  -- SYSTEM/MANAGER, leaves a live DCL session
 }
 
 # =====================================================================
-# BOOT 1 -- fat initramfs, distrib DKA0: + blank DKA100:: MOUNT + INSTALL
+# BOOT 1 -- fat initramfs, distrib VDA0: + blank VDA100:: MOUNT + INSTALL
 # =====================================================================
 LOG="$WORKDIR/boot1.log"
 FIFO="$WORKDIR/boot1.in"
@@ -173,18 +173,18 @@ login "$LOG"
 
 # --- MOUNT the blank target ------------------------------------------
 OFF=$(wc -c <"$LOG")
-send 'MOUNT DKA100: WORK'
-if wait_for '%MOUNT-I-MOUNTED, WORK mounted on _DKA100:' "$RUN_TIMEOUT" "$OFF"; then
-    ok "MOUNT DKA100: (blank install target) succeeds"
+send 'MOUNT VDA100: WORK'
+if wait_for '%MOUNT-I-MOUNTED, WORK mounted on _VDA100:' "$RUN_TIMEOUT" "$OFF"; then
+    ok "MOUNT VDA100: (blank install target) succeeds"
 else
-    dump_and_die "MOUNT DKA100: did not report success within ${RUN_TIMEOUT}s"
+    dump_and_die "MOUNT VDA100: did not report success within ${RUN_TIMEOUT}s"
 fi
 
 # --- PRODUCT INSTALL the real OS kit onto the blank target -----------
 OFF=$(wc -c <"$LOG")
-send 'PRODUCT INSTALL VMS /SOURCE=SYS$UPDATE:OVMX-OS.KIT /DESTINATION=DKA100:'
+send 'PRODUCT INSTALL VMS /SOURCE=SYS$UPDATE:OVMX-OS.KIT /DESTINATION=VDA100:'
 if wait_for '%PCSI-I-DONE' "$RUN_TIMEOUT" "$OFF"; then
-    ok "PRODUCT INSTALL /DESTINATION=DKA100: reports %PCSI-I-DONE"
+    ok "PRODUCT INSTALL /DESTINATION=VDA100: reports %PCSI-I-DONE"
 else
     dump_and_die "PRODUCT INSTALL did not reach %PCSI-I-DONE within ${RUN_TIMEOUT}s"
 fi
@@ -204,14 +204,14 @@ fi
 # flat one below contains a '$', so wait_for '$'/'Total of' waits for the
 # command to COMPLETE, not the leftover prompt before it.)
 OFF=$(wc -c <"$LOG")
-send 'DIRECTORY DKA100:[SYS0.SYSCOMMON.SYSEXE]DCL.EXE'
+send 'DIRECTORY VDA100:[SYS0.SYSCOMMON.SYSEXE]DCL.EXE'
 wait_for 'Total of' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
 if printf '%s\n' "$SEG" | grep -qF 'DCL.EXE;' \
     && printf '%s\n' "$SEG" | grep -qE 'Total of [1-9]'; then
-    ok "install landed DCL.EXE at rooted DKA100:[SYS0.SYSCOMMON.SYSEXE]"
+    ok "install landed DCL.EXE at rooted VDA100:[SYS0.SYSCOMMON.SYSEXE]"
 else
-    bad "rooted DKA100:[SYS0.SYSCOMMON.SYSEXE]DCL.EXE not listed"
+    bad "rooted VDA100:[SYS0.SYSCOMMON.SYSEXE]DCL.EXE not listed"
     echo "$SEG"
 fi
 
@@ -220,22 +220,22 @@ fi
 # rooted directory reports %RMS-E-DNF (directory not found); a present file
 # would instead print a "Total of N" listing.
 OFF=$(wc -c <"$LOG")
-send 'DIRECTORY DKA100:[SYSEXE]DCL.EXE'
+send 'DIRECTORY VDA100:[SYSEXE]DCL.EXE'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
 if printf '%s\n' "$SEG" | grep -qE '%RMS-E-DNF|%RMS-E-FNF|no such file|not found'; then
-    ok "old flat DKA100:[SYSEXE]DCL.EXE is correctly ABSENT (rooted, not flat)"
+    ok "old flat VDA100:[SYSEXE]DCL.EXE is correctly ABSENT (rooted, not flat)"
 elif printf '%s\n' "$SEG" | grep -qE 'Total of [1-9]'; then
-    bad "flat DKA100:[SYSEXE]DCL.EXE resolves -- install wrote the flat layout"
+    bad "flat VDA100:[SYSEXE]DCL.EXE resolves -- install wrote the flat layout"
     echo "$SEG"
 else
-    bad "flat DKA100:[SYSEXE]DCL.EXE check inconclusive (no listing, no RMS error)"
+    bad "flat VDA100:[SYSEXE]DCL.EXE check inconclusive (no listing, no RMS error)"
     echo "$SEG"
 fi
 
 # --- DISMOUNT so the volume flushes before the kill ------------------
 OFF=$(wc -c <"$LOG")
-send 'DISMOUNT DKA100:'
+send 'DISMOUNT VDA100:'
 wait_for '%DISMOUNT-I-DISMOUNTED' "$RUN_TIMEOUT" "$OFF"
 
 exec 4>&- 2>/dev/null || true

@@ -18,10 +18,10 @@
 #   1. INITIALIZE (host-side, like test_mount_e2e.sh) + MOUNT (real DCL,
 #      real mount(2) through the executive) a SECOND, blank virtio disk.
 #   2. PRODUCT INSTALL the REAL OS kit onto the mounted target, reading it
-#      from SYS$UPDATE:OVMX-OS.KIT on the ALREADY-MOUNTED boot disk (DKA0:,
+#      from SYS$UPDATE:OVMX-OS.KIT on the ALREADY-MOUNTED boot disk (VDA0:,
 #      the distrib image) -- distro/Dockerfile.bootable's kit-stage builds
 #      and byte-verifies /boot/ovmx-os.kit from the SAME tree that masters
-#      DKA0:, then stages a copy onto the distrib image itself at
+#      VDA0:, then stages a copy onto the distrib image itself at
 #      SYS$UPDATE:. NOT a raw third virtio disk: devtmpfs creates block
 #      device nodes root:root mode 0600 with no udev in this minimal
 #      initramfs to relax them, so SYSTEM (uid 4/gid 1, its real UIC) gets
@@ -30,12 +30,12 @@
 #      the kit as an ordinary SYSTEM-owned file on the boot disk instead
 #      sidesteps that rather than faking a permission OVMX doesn't have.
 #   3. THE ANTI-LARP CRUX: RUN the INSTALLED HELP.EXE *from the target
-#      device* (DKA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE) and see real output. A kit that
+#      device* (VDA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE) and see real output. A kit that
 #      only wrote a manifest, or wrote corrupted/truncated bytes, cannot
 #      pass this -- IMGACT would refuse to activate it.
 #   4. `$ SHOW SYMBOL $STATUS` / grep for %PCSI-E-/%PCSI-F- immediately
 #      after INSTALL: no error escaped.
-#   5. `PRODUCT SHOW PRODUCT /DESTINATION=DKA100:` lists the installed kit
+#   5. `PRODUCT SHOW PRODUCT /DESTINATION=VDA100:` lists the installed kit
 #      by the NAME BAKED INTO THE KIT ITSELF (not the DCL command's own
 #      product-name parameter), proving it read the real product database
 #      this bead wrote, not an echo of the command line.
@@ -70,7 +70,7 @@ RUN_TIMEOUT="${RUN_TIMEOUT:-90}"
 KERNEL=/boot/vmlinuz
 INITRD=/boot/initramfs-ovmx.cpio.gz
 DISTRIB_IMG=/boot/ovmx-distrib.img
-DKA100_SRC=/work/dka100.img
+VDA100_SRC=/work/dka100.img
 ARCH=$(uname -m)
 
 if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
@@ -83,7 +83,7 @@ else
     CONSOLE="console=ttyS0"
 fi
 
-for f in "$KERNEL" "$INITRD" "$DISTRIB_IMG" "$DKA100_SRC"; do
+for f in "$KERNEL" "$INITRD" "$DISTRIB_IMG" "$VDA100_SRC"; do
     [ -f "$f" ] || { echo "FATAL: $f not found - run this inside the ovmx-boot image with /work bind-mounted (see header)"; exit 1; }
 done
 command -v "$QEMU" >/dev/null 2>&1 || { echo "FATAL: $QEMU not available"; exit 1; }
@@ -100,7 +100,7 @@ WORKDIR=$(mktemp -d)
 DISK0="$WORKDIR/dka0.img"
 DISK1="$WORKDIR/dka100.img"
 cp "$DISTRIB_IMG" "$DISK0"
-cp "$DKA100_SRC" "$DISK1"
+cp "$VDA100_SRC" "$DISK1"
 
 QPID=""
 cleanup() { [ -n "$QPID" ] && kill "$QPID" 2>/dev/null; rm -rf "$WORKDIR"; }
@@ -183,11 +183,11 @@ login "$LOG"
 
 # --- 1. MOUNT the pre-formatted second disk ----------------------------
 OFF=$(wc -c <"$LOG")
-send 'MOUNT DKA100: WORK'  # GUIDE-STEP (docs/install-guide.md, tools/check_guide_drift.py)
-if wait_for '%MOUNT-I-MOUNTED, WORK mounted on _DKA100:' "$RUN_TIMEOUT" "$OFF"; then
-    ok "MOUNT DKA100: succeeds (real mount(2) via the executive)"
+send 'MOUNT VDA100: WORK'  # GUIDE-STEP (docs/install-guide.md, tools/check_guide_drift.py)
+if wait_for '%MOUNT-I-MOUNTED, WORK mounted on _VDA100:' "$RUN_TIMEOUT" "$OFF"; then
+    ok "MOUNT VDA100: succeeds (real mount(2) via the executive)"
 else
-    dump_and_die "MOUNT DKA100: did not report success within ${RUN_TIMEOUT}s"
+    dump_and_die "MOUNT VDA100: did not report success within ${RUN_TIMEOUT}s"
 fi
 
 # --- 2. Current-tree NOTIMPL still fires honestly for a genuinely
@@ -204,9 +204,9 @@ else
     echo "$SEG"
 fi
 
-# --- 3. PRODUCT INSTALL the real kit from SYS$UPDATE: onto DKA100: -----
+# --- 3. PRODUCT INSTALL the real kit from SYS$UPDATE: onto VDA100: -----
 OFF=$(wc -c <"$LOG")
-send 'PRODUCT INSTALL VMS /SOURCE=SYS$UPDATE:OVMX-OS.KIT /DESTINATION=DKA100:'  # GUIDE-STEP (docs/install-guide.md, tools/check_guide_drift.py)
+send 'PRODUCT INSTALL VMS /SOURCE=SYS$UPDATE:OVMX-OS.KIT /DESTINATION=VDA100:'  # GUIDE-STEP (docs/install-guide.md, tools/check_guide_drift.py)
 if wait_for '%PCSI-I-DONE' "$RUN_TIMEOUT" "$OFF"; then
     ok "PRODUCT INSTALL reports %PCSI-I-DONE"
 else
@@ -220,7 +220,7 @@ else
     ok "PRODUCT INSTALL's transcript carries no %PCSI-E-/%PCSI-F- error"
 fi
 
-# --- 4. DIRECTORY independently confirms real files landed on DKA100: ---
+# --- 4. DIRECTORY independently confirms real files landed on VDA100: ---
 # The kit lands in the ROOTED, concealed system-disk structure
 # [SYS0.SYSCOMMON.SYSEXE] (vms-96ec), NOT a flat [SYSEXE] -- that is what
 # makes a /DESTINATION-installed volume bootable as its own system disk
@@ -228,14 +228,14 @@ fi
 # target). Assert the rooted path, matching where a mastered ovmx-distrib.img
 # already places DCL.EXE/HELP.EXE.
 OFF=$(wc -c <"$LOG")
-send 'DIRECTORY DKA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE'
+send 'DIRECTORY VDA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE'
 wait_for 'Total of' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
 if printf '%s\n' "$SEG" | grep -qE 'Total of [1-9][0-9]* files?[.,]' \
     && printf '%s\n' "$SEG" | grep -qF 'HELP.EXE'; then
-    ok "DIRECTORY independently confirms DKA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE exists"
+    ok "DIRECTORY independently confirms VDA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE exists"
 else
-    bad "DIRECTORY does not confirm HELP.EXE landed on DKA100:"
+    bad "DIRECTORY does not confirm HELP.EXE landed on VDA100:"
     echo "$SEG"
 fi
 
@@ -248,9 +248,9 @@ fi
 # (dcl_exec_foreign_command(), src/vmsdcl/dcl_exec.c), which is what makes
 # HELP.EXE take its non-interactive "HELP topic" branch and actually exit.
 OFF=$(wc -c <"$LOG")
-send 'RUNHELP :== $DKA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE'
+send 'RUNHELP :== $VDA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE'
 # NOTE: the symbol-definition command's own echo contains a literal '$'
-# (the "$DKA100:..." image-spec), so a wait_for '$' issued for the NEXT
+# (the "$VDA100:..." image-spec), so a wait_for '$' issued for the NEXT
 # command against this SAME offset would match that leftover byte
 # instantly instead of actually waiting -- each send below gets its own
 # fresh offset, same as every other step in this script.
@@ -271,14 +271,14 @@ fi
 #        keyed by the kit's OWN embedded name (not the DCL command's
 #        product-name parameter "VMS") ------------------------------------
 OFF=$(wc -c <"$LOG")
-send 'PRODUCT SHOW PRODUCT /DESTINATION=DKA100:'  # GUIDE-STEP (docs/install-guide.md, tools/check_guide_drift.py)
+send 'PRODUCT SHOW PRODUCT /DESTINATION=VDA100:'  # GUIDE-STEP (docs/install-guide.md, tools/check_guide_drift.py)
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 SHOW_SEG_BEFORE=$(segment_since "$OFF")
 if printf '%s\n' "$SHOW_SEG_BEFORE" | grep -qiE 'X86VMS VMS' \
     && printf '%s\n' "$SHOW_SEG_BEFORE" | grep -qF 'Installed'; then
-    ok "PRODUCT SHOW PRODUCT /DESTINATION=DKA100: lists the kit's own product name as Installed"
+    ok "PRODUCT SHOW PRODUCT /DESTINATION=VDA100: lists the kit's own product name as Installed"
 else
-    bad "PRODUCT SHOW PRODUCT /DESTINATION=DKA100: does not list the installed kit"
+    bad "PRODUCT SHOW PRODUCT /DESTINATION=VDA100: does not list the installed kit"
     echo "$SHOW_SEG_BEFORE"
 fi
 
@@ -294,7 +294,7 @@ fi
 #        -- proof the file's protection came from the kit metadata and was
 #        stamped into the ODS-2 header over the ACP, NOT a chmod / class default.
 OFF=$(wc -c <"$LOG")
-send 'PRODUCT INSTALL PROOFPROT /SOURCE=SYS$UPDATE:PROOF-PROT.KIT /DESTINATION=DKA100:'
+send 'PRODUCT INSTALL PROOFPROT /SOURCE=SYS$UPDATE:PROOF-PROT.KIT /DESTINATION=VDA100:'
 if wait_for '%PCSI-I-DONE' "$RUN_TIMEOUT" "$OFF"; then
     ok "PRODUCT INSTALL of the per-file-protection proof kit reports %PCSI-I-DONE"
 else
@@ -302,7 +302,7 @@ else
 fi
 
 OFF=$(wc -c <"$LOG")
-send 'DIRECTORY DKA100:[SYS0.SYSCOMMON.SYSEXE]PROOFPROT.DAT /FULL'
+send 'DIRECTORY VDA100:[SYS0.SYSCOMMON.SYSEXE]PROOFPROT.DAT /FULL'
 wait_for 'File protection' "$RUN_TIMEOUT" "$OFF"
 PROT_SEG=$(segment_since "$OFF")
 PROT_LINE=$(printf '%s\n' "$PROT_SEG" | grep 'File protection')
@@ -319,7 +319,7 @@ fi
 # ke_protection is the class default must read back World:RE -- the installer
 # writes each file's own ke_protection into the header, ordinary or divergent.
 OFF=$(wc -c <"$LOG")
-send 'DIRECTORY DKA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE /FULL'
+send 'DIRECTORY VDA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE /FULL'
 wait_for 'File protection' "$RUN_TIMEOUT" "$OFF"
 HPROT_SEG=$(segment_since "$OFF")
 HPROT_LINE=$(printf '%s\n' "$HPROT_SEG" | grep 'File protection')
@@ -334,7 +334,7 @@ fi
 # DISMOUNT before killing QEMU so umount(2) flushes the volume cleanly
 # (same reasoning as test_mount_e2e.sh).
 OFF=$(wc -c <"$LOG")
-send 'DISMOUNT DKA100:'  # GUIDE-STEP (docs/install-guide.md, tools/check_guide_drift.py)
+send 'DISMOUNT VDA100:'  # GUIDE-STEP (docs/install-guide.md, tools/check_guide_drift.py)
 wait_for '%DISMOUNT-I-DISMOUNTED' "$RUN_TIMEOUT" "$OFF"
 
 kill "$QPID" 2>/dev/null; wait "$QPID" 2>/dev/null; QPID=""
@@ -348,15 +348,15 @@ boot_qemu "$LOG" "$WORKDIR/boot2.in"
 login "$LOG"
 
 OFF=$(wc -c <"$LOG")
-send 'MOUNT DKA100: WORK'
-if wait_for '%MOUNT-I-MOUNTED, WORK mounted on _DKA100:' "$RUN_TIMEOUT" "$OFF"; then
-    ok "MOUNT DKA100: succeeds again after a full QEMU restart"
+send 'MOUNT VDA100: WORK'
+if wait_for '%MOUNT-I-MOUNTED, WORK mounted on _VDA100:' "$RUN_TIMEOUT" "$OFF"; then
+    ok "MOUNT VDA100: succeeds again after a full QEMU restart"
 else
-    dump_and_die "MOUNT DKA100: did not report success on the restarted boot"
+    dump_and_die "MOUNT VDA100: did not report success on the restarted boot"
 fi
 
 OFF=$(wc -c <"$LOG")
-send 'DIRECTORY DKA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE'
+send 'DIRECTORY VDA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE'
 wait_for 'Total of' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
 if printf '%s\n' "$SEG" | grep -qE 'Total of [1-9][0-9]* files?[.,]' \
@@ -368,7 +368,7 @@ else
 fi
 
 OFF=$(wc -c <"$LOG")
-send 'RUNHELP :== $DKA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE'
+send 'RUNHELP :== $VDA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 OFF=$(wc -c <"$LOG")
 send 'RUNHELP MOUNT'
@@ -383,7 +383,7 @@ else
 fi
 
 OFF=$(wc -c <"$LOG")
-send 'PRODUCT SHOW PRODUCT /DESTINATION=DKA100:'
+send 'PRODUCT SHOW PRODUCT /DESTINATION=VDA100:'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
 if printf '%s\n' "$SEG" | grep -qiE 'X86VMS VMS' && printf '%s\n' "$SEG" | grep -qF 'Installed'; then

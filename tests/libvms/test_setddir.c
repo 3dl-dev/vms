@@ -121,14 +121,14 @@ int main(void)
 
     /* ---- Full device:[dir] spec is stored verbatim. ---- */
     {
-        char newbuf[] = "DKA100:[SYS0.SYSMGR]";
+        char newbuf[] = "VDA100:[SYS0.SYSMGR]";
         struct dsc$descriptor_s nd;
         mkdesc(&nd, newbuf);
 
         /* Set-only form: old_len / old_dir omitted (MMK's restore path). */
         uint32_t st = sys$setddir(&nd, NULL, NULL);
         CHECK($VMS_STATUS_SUCCESS(st), "set full spec (set-only form) succeeds");
-        CHECK(strcmp(pcb->default_dir, "DKA100:[SYS0.SYSMGR]") == 0,
+        CHECK(strcmp(pcb->default_dir, "VDA100:[SYS0.SYSMGR]") == 0,
               "full device:[dir] spec stored verbatim in PCB store");
     }
 
@@ -137,7 +137,7 @@ int main(void)
         unsigned short len = 0;
         uint32_t st = sys$setddir(NULL, &len, NULL);
         CHECK($VMS_STATUS_SUCCESS(st), "read-only, len-only call succeeds");
-        CHECK(len == (unsigned short)strlen("DKA100:[SYS0.SYSMGR]"),
+        CHECK(len == (unsigned short)strlen("VDA100:[SYS0.SYSMGR]"),
               "len-only reports full current directory length");
     }
 

@@ -8,7 +8,7 @@
  * WHAT THIS PROVES, through the public RMS system services (sys$create /
  * sys$put / sys$get / sys$close / sys$open / sys$extend / sys$erase,
  * src/vmsrms/rms_core.c + rms_seq.c + rms_io.c) against the real-VAX ODS-2
- * fixture the harness mounts WRITABLE on DKA0::
+ * fixture the harness mounts WRITABLE on VDA0::
  *
  *   1. SEQUENTIAL $CREATE + $PUT lands records ON DISK via IO$_WRITEVBLK. A
  *      sys$create of [OVMXDIR]<name> assigns a real FID (IO$_CREATE from
@@ -24,7 +24,7 @@
  *   5. $ERASE deletes it (IO$_DELETE): a following sys$open is RMS$_FNF.
  *
  * NAME->FID VIA THE ACP. resolve_filename no longer calls vmsfs_to_linux_path;
- * "DKA0:[OVMXDIR]<name>" is resolved by $ASSIGNing DKA0: and walking the
+ * "VDA0:[OVMXDIR]<name>" is resolved by $ASSIGNing VDA0: and walking the
  * directory to a FID through IO$_ACCESS -- exercised here every open/create.
  *
  * NO /dev/vms -> honest SKIP (77), never a fake pass (Rule 9): RMS is now an
@@ -50,7 +50,7 @@
 #include "rms/rms.h"
 
 #define EXIT_SKIP  77
-#define ODS2_UNIT  "DKA0:"
+#define ODS2_UNIT  "VDA0:"
 
 static int pass = 0;
 static int fail = 0;
@@ -235,9 +235,9 @@ int main(void)
         return EXIT_SKIP;
     }
 
-    /* Mount the ODS-2 volume on DKA0: executive-global so $ASSIGN sees it. */
+    /* Mount the ODS-2 volume on VDA0: executive-global so $ASSIGN sees it. */
     st = vms_kif_acp_mount(ODS2_UNIT);   /* idempotent */
-    check($VMS_STATUS_SUCCESS(st), "DKA0: mounted executive-global for RMS");
+    check($VMS_STATUS_SUCCESS(st), "VDA0: mounted executive-global for RMS");
 
     rfm_roundtrip("RMSVAR.DAT",  FAB$C_VAR,   0);
     rfm_roundtrip("RMSSTM.DAT",  FAB$C_STMLF, 0);

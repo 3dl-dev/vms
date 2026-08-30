@@ -8,7 +8,7 @@
 #
 # WHY THIS PROOF EXISTS. DCL's cmd_mount() (src/vmsdcl/dcl_cmd_misc.c) calls
 # vms_kif_alloc(dev) BEFORE vms_kif_acp_mount(), so the installer's
-# "$ MOUNT DKA100: WORK" could not get past $ALLOC while VMS_IOCTL_ALLOC
+# "$ MOUNT DUA100: WORK" could not get past $ALLOC while VMS_IOCTL_ALLOC
 # answered ENOTTY on this substrate. The tempting "fix" -- a local ALLOC that
 # returns SS$_NORMAL -- is the exact INV-6 fabrication class this project
 # exists to excise: it would pass every single-process test and still be a
@@ -21,27 +21,27 @@
 # other lab-vax proofs use; every step is a SEPARATE guest process, so "another
 # process" really is another process):
 #   0. modload vms.kmod + mknod /dev/vms, and read back the executive's own
-#      unit-enumeration console lines -- positive evidence that DKA0: was
-#      entered in the table FROM THE REAL DEVICE ra1c, and that DKA100:, whose
+#      unit-enumeration console lines -- positive evidence that DUA0: was
+#      entered in the table FROM THE REAL DEVICE ra1c, and that DUA100:, whose
 #      device is NOT attached in this boot, was NOT entered at all.
 #   1. TEETH: alloc ZZZ0: -- a name that is no device. MUST be SS$_NOSUCHDEV
 #      (2680). A rubber-stamp ALLOC would say NORMAL here.
-#   1b. TEETH: alloc DKA100: -- a unit the substrate knows the NAME of but
+#   1b. TEETH: alloc DUA100: -- a unit the substrate knows the NAME of but
 #      whose device is absent. MUST also be SS$_NOSUCHDEV.
-#   2. A: alloc_hold DKA0: -- $ALLOC succeeds (SS$_NORMAL), A holds it.
-#   3. B (a DIFFERENT process, while A holds): alloc DKA0: -- MUST be
+#   2. A: alloc_hold DUA0: -- $ALLOC succeeds (SS$_NORMAL), A holds it.
+#   3. B (a DIFFERENT process, while A holds): alloc DUA0: -- MUST be
 #      SS$_DEVALLOC (2112). This is the decisive step.
 #   4. A releases it with an explicit $DALLOC (SS$_NORMAL) and exits.
-#   5. C (a THIRD process, after the release): alloc DKA0: -- MUST now be
+#   5. C (a THIRD process, after the release): alloc DUA0: -- MUST now be
 #      SS$_NORMAL, then $DALLOC SS$_NORMAL. So the release was real and
 #      cross-process visible; the refusal in step 3 was about state, not a
 #      blanket "no".
-#   6. D (a FOURTH process, holding nothing): dalloc DKA0: -- MUST be
+#   6. D (a FOURTH process, holding nothing): dalloc DUA0: -- MUST be
 #      SS$_DEVNOTALLOC (2136), the oracle's %SYSTEM-W-DEVNOTALLOC.
 #
-# DKA100: (the unit the installer MOUNTs) is covered end-to-end by the sibling
+# DUA100: (the unit the installer MOUNTs) is covered end-to-end by the sibling
 # proof tests/lab-vax/run-boot.sh install, where it IS attached: the executive
-# logs "disk unit DKA100: -> ra2c" and the menu's MOUNT reaches
+# logs "disk unit DUA100: -> ra2c" and the menu's MOUNT reaches
 # %MOUNT-I-MOUNTED. Here it plays the opposite, equally necessary role -- the
 # unit that must NOT exist because its device does not.
 #   7. The console terminal OPA0: -- created by the executive at module init,
@@ -74,14 +74,14 @@ SS_DEVALLOC = 2112       # device already allocated to another user
 SS_DEVNOTALLOC = 2136    # device not allocated (by this process)
 SS_NOSUCHDEV = 2680      # no such device available
 
-TARGET = "DKA0:"         # a REAL disk unit, entered from the real device ra1c
+TARGET = "DUA0:"         # a REAL disk unit, entered from the real device ra1c
 CONSOLE = "OPA0:"        # the executive-created console terminal
 ABSENT = "ZZZ0:"         # a name that is no unit at all -- the teeth
 # A unit that IS in the substrate's device-native map but whose device is NOT
 # attached in this boot. The executive must enter NO row for it -- a second,
 # sharper set of teeth than ZZZ0:, because a fabricating implementation would
 # happily "have" a unit it knows the name of.
-ABSENT_UNIT = "DKA100:"
+ABSENT_UNIT = "DUA100:"
 
 HOLD_SECS = 20
 
@@ -139,7 +139,7 @@ def main():
     sets = env("SETS", "kern-GENERIC,base,etc").split(",")
 
     artifacts_dir = env("OVMX_ARTIFACTS", "/artifacts")
-    dka0_img = env("OVMX_DKA0_IMG", "/cache/ovmx-ods2-vax.img")
+    dka0_img = env("OVMX_DUA0_IMG", "/cache/ovmx-ods2-vax.img")
     src_iso = env("OVMX_SRC_ISO", "/tmp/ovmx-devalloc-src.iso")
 
     boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "1800"))
@@ -191,16 +191,16 @@ def main():
         log("ensuring the cached NetBSD/vax disk is present (no reinstall)...")
         a.install()
 
-        # rq1 -> ra1 -> DKA0: is the only MSCP DISK attached; the artifact CD
+        # rq1 -> ra1 -> DUA0: is the only MSCP DISK attached; the artifact CD
         # takes rq2 (anita itself attaches the NetBSD ISO on rq3, so rq3 is not
         # ours to use). Leaving rq2 free of a DISK is deliberate: /dev/ra2c then
-        # has no attached device, so the executive must enter NO DKA100: row --
+        # has no attached device, so the executive must enter NO DUA100: row --
         # the second set of teeth below.
         vmm_args = [
             "set rq1 ra92", "attach rq1 " + os.path.abspath(dka0_img),
             "set rq2 cdrom", "attach -r rq2 " + os.path.abspath(src_iso),
         ]
-        log("booting MODULAR kernel SINGLE-USER; rq1 -> ra1 (DKA0:), "
+        log("booting MODULAR kernel SINGLE-USER; rq1 -> ra1 (DUA0:), "
             "artifact CD on rq2 (deadline %ds)..." % boot_deadline)
 
         a.dist.set_workdir(a.workdir)
@@ -266,18 +266,18 @@ def main():
         rc, out = run(child, "dmesg | grep -i 'vms: ' | tail -20", cmd_timeout)
         log("executive console lines:\n%s" % out)
         # POSITIVE EVIDENCE the table was populated from REAL devices.
-        if re.search(r"disk unit DKA0:\s*->\s*ra1c", out):
-            ok("the executive entered DKA0: from the REAL device ra1c "
+        if re.search(r"disk unit DUA0:\s*->\s*ra1c", out):
+            ok("the executive entered DUA0: from the REAL device ra1c "
                "(device-native unit map, not a literal)")
         else:
-            bad("no 'disk unit DKA0: -> ra1c' line -- the device table was not "
+            bad("no 'disk unit DUA0: -> ra1c' line -- the device table was not "
                 "populated from a real device")
-        if re.search(r"disk unit DKA100: no backing device", out):
-            ok("the executive entered NO DKA100: row -- /dev/ra2c has no "
+        if re.search(r"disk unit DUA100: no backing device", out):
+            ok("the executive entered NO DUA100: row -- /dev/ra2c has no "
                "attached device in this boot, and a unit is entered ONLY for a "
                "device that really resolves (INV-6: nothing is invented)")
         else:
-            bad("the executive did not report DKA100: as having no backing "
+            bad("the executive did not report DUA100: as having no backing "
                 "device, even though no disk is attached on rq2 -- a unit may "
                 "have been invented")
 
@@ -315,7 +315,7 @@ def main():
 
         # ==============================================================
         # STEP 2/3 -- THE DECISIVE CROSS-PROCESS CHECK.
-        # A holds DKA100:; B, a DIFFERENT process, must be refused.
+        # A holds DUA100:; B, a DIFFERENT process, must be refused.
         # ==============================================================
         rc, out = run(child,
                       "rm -f /tmp/a.log; %s alloc_hold %s %d > /tmp/a.log 2>&1 & "

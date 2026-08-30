@@ -103,13 +103,13 @@
  * (RMS$_FNF -> MMK__NOOPNDSC, "cannot open description file"). They must live on
  * a genuine mounted ODS-2 volume, exactly as a real VMS MMK build reads its
  * description off a real Files-11 disk. This suite therefore authors its build
- * files on the harness's writable DKA0: fixture (the same volume+directory
+ * files on the harness's writable VDA0: fixture (the same volume+directory
  * test_syssvc_rms_acp.c / test_syssvc_dcl_acp.c create files on) through the
  * public RMS services, and hands MMK full ODS-2 filespecs -- NOT a passthrough
  * (which the flip deleted) and NOT a loosened assertion. The DCL action the
  * drive runs is pure (arithmetic + WRITE SYS$OUTPUT), so nothing here needs a
  * POSIX working file. */
-#define ODS2_UNIT  "DKA0:"
+#define ODS2_UNIT  "VDA0:"
 /* WHERE the build files live, and the two DISTINCT filespec forms this needs.
  *
  * The atomic flip (epic vms-208) made OVMX RMS ACP-ONLY when /dev/vms is present
@@ -118,13 +118,13 @@
  * MMK.EXE opens its description / rules through that SAME RMS (readdesc.c
  * file_open -> sys$open), so those files must live on a genuine mounted ODS-2
  * volume -- exactly as a real VMS MMK reads its description off a real Files-11
- * disk. This suite authors them on the harness's writable DKA0: fixture (the
+ * disk. This suite authors them on the harness's writable VDA0: fixture (the
  * SAME volume+directory test_syssvc_rms_acp.c / test_syssvc_dcl_acp.c create
  * files on), through the public RMS services. That is NOT a passthrough (the
  * flip deleted it) and NOT a loosened assertion.
  *
  * TWO forms are needed, and they are not interchangeable:
- *  - ODS2_DIR ("DKA0:[OVMXDIR]") -- a FULL device+directory spec. Used for the
+ *  - ODS2_DIR ("VDA0:[OVMXDIR]") -- a FULL device+directory spec. Used for the
  *    test's own sys$create/$erase and for MMK's /DESCRIPTION= and /RULES_FILE=
  *    QUALIFIER VALUES, which the CLI parses as $FILE values (never as MMS rule
  *    text). [OVMXDIR] is the writable directory the fixture provides; the volume
@@ -134,11 +134,11 @@
  *    rule with lib$tparse, whose grammar accepts ONLY bare names: a device colon
  *    reads as the rule separator and a '[' is not a filespec token, so either
  *    reddens MMK__PARSERR. A bare target resolves through RMS to the MFD
- *    (DKA0:[000000]), where it does NOT exist -> MMK builds it (a READ/stat of
+ *    (VDA0:[000000]), where it does NOT exist -> MMK builds it (a READ/stat of
  *    the MFD, which succeeds; only CREATES in the MFD are refused). The rule is
  *    deliberately DEPENDENCY-FREE so nothing forces a bare-named file to EXIST
  *    in the MFD -- the target is simply always built, running the action. */
-#define ODS2_DIR   "DKA0:[OVMXDIR]"
+#define ODS2_DIR   "VDA0:[OVMXDIR]"
 
 /* Failure bound (ms) on how long the parent waits for MMK to spawn a DCL, drive
  * one action command through the mailbox, echo the computed result marker, AND run
@@ -273,7 +273,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Mount the writable ODS-2 fixture on DKA0: executive-global so MMK's forked
+    /* Mount the writable ODS-2 fixture on VDA0: executive-global so MMK's forked
      * DCL and MMK itself both reach it through the ACP (idempotent -- another
      * suite in this VM may have mounted it already). This is the SAME volume the
      * flip's RMS/DCL ACP suites author files on. */
@@ -284,7 +284,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Author the description + rules files in DKA0:[OVMXDIR] through RMS
+    /* Author the description + rules files in VDA0:[OVMXDIR] through RMS
      * ($CREATE/$PUT -> the Files-11 ACP). The rule target is a BARE name (all
      * MMK's lib$tparse accepts) and the rule is DEPENDENCY-FREE, so MMK just
      * builds it (its MFD stat misses -> out of date) without needing any bare
@@ -326,7 +326,7 @@ int main(int argc, char **argv)
          * the description off the ODS-2 volume through RMS, opens the persistent
          * DCL, and drives the action over the mailbox. /DESCRIPTION + /RULES_FILE
          * are qualifier VALUES (not rule-parsed) so they carry the device+MFD
-         * spec; the P1 target is bare (resolving to DKA0:'s MFD like the rule). */
+         * spec; the P1 target is bare (resolving to VDA0:'s MFD like the rule). */
         dup2(outpipe[1], STDOUT_FILENO);
         dup2(outpipe[1], STDERR_FILENO);
         close(outpipe[0]); close(outpipe[1]);
@@ -457,7 +457,7 @@ int main(int argc, char **argv)
     close(outpipe[0]);
 
     /* Cleanup: $ERASE the build files off the ODS-2 volume (each service
-     * $DASSGNs its own channel). DKA0: is SYS$SYSDEVICE and is left MOUNTED --
+     * $DASSGNs its own channel). VDA0: is SYS$SYSDEVICE and is left MOUNTED --
      * sibling suites depend on it and the mount is executive-global + idempotent,
      * so dismounting it here would be both unnecessary and hostile to them. */
     erase_ods2(ODS2_DIR "OVMXB23.MMS");

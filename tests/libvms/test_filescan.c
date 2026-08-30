@@ -89,15 +89,15 @@ static uint32_t scan_all(const char *spec, ILE2 list[10], uint32_t *flags)
 
 static void test_full_spec(void)
 {
-    printf("Test: full spec  DKA0:[SYS0.SYSMGR]LOGIN.COM;3\n");
-    const char *spec = "DKA0:[SYS0.SYSMGR]LOGIN.COM;3";
+    printf("Test: full spec  VDA0:[SYS0.SYSMGR]LOGIN.COM;3\n");
+    const char *spec = "VDA0:[SYS0.SYSMGR]LOGIN.COM;3";
     ILE2 l[10]; uint32_t flags = 0;
     uint32_t st = scan_all(spec, l, &flags);
     check($VMS_STATUS_SUCCESS(st), "status success");
 
     expect_field("NODE",      spec, &l[0], NULL);
     expect_field("NODE_ACS",  spec, &l[1], NULL);
-    expect_field("DEVICE",    spec, &l[2], "DKA0:");
+    expect_field("DEVICE",    spec, &l[2], "VDA0:");
     expect_field("ROOT",      spec, &l[3], NULL);
     expect_field("DIRECTORY", spec, &l[4], "[SYS0.SYSMGR]");
     expect_field("NAME",      spec, &l[5], "LOGIN");
@@ -142,15 +142,15 @@ static void test_wildcard(void)
 
 static void test_node_and_version(void)
 {
-    printf("Test: node  BOSTON::DKA100:[DIR]FILE.DAT;7\n");
-    const char *spec = "BOSTON::DKA100:[DIR]FILE.DAT;7";
+    printf("Test: node  BOSTON::VDA100:[DIR]FILE.DAT;7\n");
+    const char *spec = "BOSTON::VDA100:[DIR]FILE.DAT;7";
     ILE2 l[10]; uint32_t flags = 0;
     uint32_t st = scan_all(spec, l, &flags);
     check($VMS_STATUS_SUCCESS(st), "status success");
 
     expect_field("NODE",      spec, &l[0], "BOSTON::");
     expect_field("NODE_ACS",  spec, &l[1], NULL);
-    expect_field("DEVICE",    spec, &l[2], "DKA100:");
+    expect_field("DEVICE",    spec, &l[2], "VDA100:");
     expect_field("DIRECTORY", spec, &l[4], "[DIR]");
     expect_field("NAME",      spec, &l[5], "FILE");
     expect_field("TYPE",      spec, &l[6], ".DAT");
@@ -160,15 +160,15 @@ static void test_node_and_version(void)
 
 static void test_node_access_control(void)
 {
-    printf("Test: node ACS  MARS\"SMITH PWD\"::DKA0:[X]A.B\n");
-    const char *spec = "MARS\"SMITH PWD\"::DKA0:[X]A.B";
+    printf("Test: node ACS  MARS\"SMITH PWD\"::VDA0:[X]A.B\n");
+    const char *spec = "MARS\"SMITH PWD\"::VDA0:[X]A.B";
     ILE2 l[10]; uint32_t flags = 0;
     uint32_t st = scan_all(spec, l, &flags);
     check($VMS_STATUS_SUCCESS(st), "status success");
 
     expect_field("NODE",      spec, &l[0], "MARS\"SMITH PWD\"::");
     expect_field("NODE_ACS",  spec, &l[1], "\"SMITH PWD\"");
-    expect_field("DEVICE",    spec, &l[2], "DKA0:");
+    expect_field("DEVICE",    spec, &l[2], "VDA0:");
     expect_field("DIRECTORY", spec, &l[4], "[X]");
     expect_field("NAME",      spec, &l[5], "A");
     expect_field("TYPE",      spec, &l[6], ".B");
@@ -194,13 +194,13 @@ static void test_rooted_directory(void)
 
 static void test_device_and_dir_only(void)
 {
-    printf("Test: dir only  DKA0:[MMK.SRC]\n");
-    const char *spec = "DKA0:[MMK.SRC]";
+    printf("Test: dir only  VDA0:[MMK.SRC]\n");
+    const char *spec = "VDA0:[MMK.SRC]";
     ILE2 l[10]; uint32_t flags = 0;
     uint32_t st = scan_all(spec, l, &flags);
     check($VMS_STATUS_SUCCESS(st), "status success");
 
-    expect_field("DEVICE",    spec, &l[2], "DKA0:");
+    expect_field("DEVICE",    spec, &l[2], "VDA0:");
     expect_field("ROOT",      spec, &l[3], NULL);
     expect_field("DIRECTORY", spec, &l[4], "[MMK.SRC]");
     expect_field("NAME",      spec, &l[5], NULL);
@@ -228,7 +228,7 @@ static void test_errors(void)
     printf("Test: error paths\n");
     ILE2 l[3];
     struct dsc$descriptor_s d;
-    const char *spec = "DKA0:[X]A.B";
+    const char *spec = "VDA0:[X]A.B";
     d.dsc$w_length = (uint16_t)strlen(spec);
     d.dsc$b_dtype = DSC$K_DTYPE_T;
     d.dsc$b_class = DSC$K_CLASS_S;
@@ -248,7 +248,7 @@ static void test_errors(void)
     check(sys$filescan(&d, l, NULL) == SS$_BADPARAM, "bad item code -> BADPARAM");
 
     /* Unbalanced bracket -> BADPARAM */
-    const char *bad = "DKA0:[UNCLOSED";
+    const char *bad = "VDA0:[UNCLOSED";
     d.dsc$w_length = (uint16_t)strlen(bad);
     d.dsc$a_pointer = (char *)bad;
     l[0] = (ILE2){ 0, FSCN$_DIRECTORY, NULL };

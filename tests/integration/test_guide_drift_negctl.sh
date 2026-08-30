@@ -94,15 +94,15 @@ expect_drift_caught() {
 # INSTALL GUIDE: wrong command text on the very first step.
 # ---------------------------------------------------------------------------
 expect_drift_caught "$INSTALL_GUIDE" "$INSTALL_GATE" \
-    's/MOUNT DKA100: WORK/MOUNT DKA100: WRONG/' \
+    's/MOUNT VDA100: WORK/MOUNT VDA100: WRONG/' \
     "install-guide: mutated device label caught as drift" \
-    "MOUNT DKA100: WORK"
+    "MOUNT VDA100: WORK"
 
 # INSTALL GUIDE: a step silently dropped (the DISMOUNT at the end).
 expect_drift_caught "$INSTALL_GUIDE" "$INSTALL_GATE" \
-    '/^\$ DISMOUNT DKA100:$/d' \
+    '/^\$ DISMOUNT VDA100:$/d' \
     "install-guide: dropped DISMOUNT step caught as drift" \
-    "DISMOUNT DKA100:"
+    "DISMOUNT VDA100:"
 
 # ---------------------------------------------------------------------------
 # UPGRADE GUIDE: the upgrade kit name quietly reverted to the baseline kit --
@@ -117,9 +117,9 @@ expect_drift_caught "$UPGRADE_GUIDE" "$UPGRADE_GATE" \
 # UPGRADE GUIDE: two steps reordered (kit carrier mounted after the target,
 # instead of before) -- order matters and must be checked, not just membership.
 expect_drift_caught "$UPGRADE_GUIDE" "$UPGRADE_GATE" \
-    '1h;1!H;$!d;x;s/\$ MOUNT DKA200: KITS\n\$ MOUNT DKA100: WORK/$ MOUNT DKA100: WORK\n$ MOUNT DKA200: KITS/' \
+    '1h;1!H;$!d;x;s/\$ MOUNT VDA200: KITS\n\$ MOUNT VDA100: WORK/$ MOUNT VDA100: WORK\n$ MOUNT VDA200: KITS/' \
     "upgrade-guide: MOUNT steps reordered caught as drift" \
-    "MOUNT DKA200: KITS"
+    "MOUNT VDA200: KITS"
 
 # ---------------------------------------------------------------------------
 # FIXTURE-ERROR PATH: a guide with no GUIDE-STEPS block at all is a distinct

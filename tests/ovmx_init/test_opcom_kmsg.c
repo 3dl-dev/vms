@@ -118,8 +118,8 @@ int main(void)
                         6, "vms: /dev/vms registered successfully",
                         "%OVMX-I-KMOD, /dev/vms registered successfully\n");
     check_operator_log("vms: disk unit mapping -> OPERATOR.LOG, DEVTAB, info",
-                        6, "vms: disk unit vda -> DKA0: (0:0)",
-                        "%OVMX-I-DEVTAB, disk unit vda -> DKA0: (0:0)\n");
+                        6, "vms: disk unit vda -> VDA0: (0:0)",
+                        "%OVMX-I-DEVTAB, disk unit vda -> VDA0: (0:0)\n");
     check_operator_log("vms: console terminal created -> OPERATOR.LOG, DEVTAB, info",
                         6, "vms: device table initialized, console terminal OPA0: created",
                         "%OVMX-I-DEVTAB, device table initialized, console terminal OPA0: created\n");
@@ -144,8 +144,8 @@ int main(void)
                         3, "vms: failed to register /dev/vms: -16",
                         "%OVMX-E-KMOD, failed to register /dev/vms: -16\n");
     check_operator_log("vms: pr_warn -> OPERATOR.LOG, W severity",
-                        4, "vms: out of memory creating disk unit vdb (DKA100:)",
-                        "%OVMX-W-DEVTAB, out of memory creating disk unit vdb (DKA100:)\n");
+                        4, "vms: out of memory creating disk unit vdb (VDA100:)",
+                        "%OVMX-W-DEVTAB, out of memory creating disk unit vdb (VDA100:)\n");
     check_operator_log("vmsfs: pr_err -> OPERATOR.LOG, E severity",
                         3, "vmsfs: unable to read home block",
                         "%OVMX-E-VMSFS, unable to read home block\n");

@@ -119,7 +119,7 @@
  * (readdesc.c file_open -> sys$open), so those files must live on a genuine
  * mounted ODS-2 volume, not a Linux /tmp tmpfs (MMK's $OPEN would walk the volume
  * and honestly miss them -> RMS$_FNF -> MMK__NOOPNDSC). This suite authors the
- * description + rules on the harness's writable DKA0: fixture (the same volume
+ * description + rules on the harness's writable VDA0: fixture (the same volume
  * test_syssvc_rms_acp.c uses) through the public RMS services, and hands MMK a
  * full ODS-2 /DESCRIPTION= spec. The DRIVEN TOOLCHAIN is unaffected: TCC.EXE /
  * LIBRARIAN.EXE / LINK.EXE are fork()+execve()'d native images doing their own
@@ -128,8 +128,8 @@
  * free and its target is a BARE name (all MMK's lib$tparse accepts; a device or
  * directory token reddens MMK__PARSERR), so MMK just builds it -- its MFD stat
  * misses (the MFD is read-only, but a stat is a READ) -> it runs the action. */
-#define ODS2_UNIT  "DKA0:"
-#define ODS2_DIR   "DKA0:[OVMXDIR]"
+#define ODS2_UNIT  "VDA0:"
+#define ODS2_DIR   "VDA0:[OVMXDIR]"
 
 /* THE SYSTEM VOLUME the produced image is ACTIVATED off (vms-104 rungs
  * ii/iii/iv). The atomic flip made IMGACT read every image (the main image + its
@@ -142,9 +142,9 @@
  * staged copy with OVMX_SYSDEVICE pointing IMGACT at THIS volume -- IMGACT's
  * imgsrc_map_staged() rewrites the staged path back to the SYS$SYSTEM volume
  * location and reads the GENUINE bytes over the ACP. DECC$SHR.EXE lives on this
- * volume too (mastered by mkimage_ods2_sysvol). The clean-room real-VAX DKA0:
+ * volume too (mastered by mkimage_ods2_sysvol). The clean-room real-VAX VDA0:
  * fixture is NEVER mutated with OVMX toolchain/image files (vms-29ff). */
-#define SYSVOL_UNIT       "DKA300:"
+#define SYSVOL_UNIT       "VDA300:"
 #define SYSVOL_IMAGE_NAME "OVMXRT.EXE"
 /* The staged POSIX copy the kernel execs; imgsrc_map_staged() maps the
  * OVMX_BOOT_STAGE_PREFIX back to /vms/SYS0/SYSCOMMON/SYSEXE/ and IMGACT then
@@ -187,7 +187,7 @@
  *
  * The descrip.mms names the toolchain + the C run-time shareable by VMS logical
  * spec -- NOT the /vms POSIX passthrough the atomic flip retired. SYS$SYSTEM: /
- * SYS$SHARE: resolve to the mounted ODS-2 system volume (OVMX_SYSDEVICE=DKA300:,
+ * SYS$SHARE: resolve to the mounted ODS-2 system volume (OVMX_SYSDEVICE=VDA300:,
  * where rung ii mastered them), and:
  *   - a foreign-command TOOL (TCC/LIBRARIAN/LINK.EXE) is resolved by the DCL
  *     foreign-command resolver, which reads its GENUINE bytes off the volume
@@ -824,7 +824,7 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
     char workdir[] = "/tmp/mmk725_XXXXXX";
     if (!mkdtemp(workdir)) return;
 
-    /* Mount the writable ODS-2 fixture on DKA0: executive-global so MMK reaches
+    /* Mount the writable ODS-2 fixture on VDA0: executive-global so MMK reaches
      * its description through the ACP (idempotent). */
     if (!$VMS_STATUS_SUCCESS(vms_kif_acp_mount(ODS2_UNIT)))
         return;
@@ -1081,7 +1081,7 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
     }
 
     /* Cleanup: the toolchain's Linux work files, plus the description/rules
-     * authored on the ODS-2 volume (DKA0: is left mounted for sibling suites). */
+     * authored on the ODS-2 volume (VDA0: is left mounted for sibling suites). */
     const char *rm[] = { "VMS_STRING.C", "OVMXRTRUN.C",
                          "VMS_STRING.OBJ", "OVMXRTRUN.OBJ",
                          "OVMXRT.OLB", "OVMXRT.EXE", "vms_string.h",
@@ -1137,7 +1137,7 @@ int main(int argc, char **argv)
 
     /* Point IMGACT at the generated ODS-2 system volume (vms-29ff): the produced
      * image + its DECC$SHR are read over the ACP off SYSVOL_UNIT, NOT the
-     * clean-room DKA0: fixture. Every fork+exec below inherits this env; only the
+     * clean-room VDA0: fixture. Every fork+exec below inherits this env; only the
      * IMGACT-activated OVMXRT.EXE reads it (the static toolchain images do not). */
     setenv("OVMX_SYSDEVICE", SYSVOL_UNIT, 1);
 

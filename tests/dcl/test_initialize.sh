@@ -20,6 +20,6 @@ VMSDCL="${VMSDCL:-vmsdcl}"
 # Test 1: INITIALIZE without parameters shows %INIT-E-NODEV
 # Test 2: INITIALIZE with only device shows %INIT-E-NOLABEL
 # Test 3: INIT abbreviation works (shows %INIT-E-NODEV like full verb)
-# Use VMS filespec format for device (DKA0:, DUA0:, etc.)
+# Use VMS filespec format for device (VDA0:, DUA0:, etc.)
 printf 'INITIALIZE\nINITIALIZE DUA0:\nINIT\n' | $VMSDCL 2>&1
 

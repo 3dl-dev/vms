@@ -64,7 +64,7 @@ fi
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
 
-echo "--- formatting the second disk (DKA100:, label WORK) with $INIT_EXE ---"
+echo "--- formatting the second disk (VDA100:, label WORK) with $INIT_EXE ---"
 # --ods2: the runtime MOUNTs a GENUINE ODS-2 volume over the ACP (atomic flip,
 # vms-208); INITIALIZE's default legacy vmsfs layout is refused (%OVMX-F-
 # MOUNTFAIL). A real install target is an ODS-2 volume -- format one (vms-37e).

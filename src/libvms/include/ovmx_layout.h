@@ -5,7 +5,7 @@
  * SYSDISK_MOUNT used to bootstrap the device table.
  *
  * Consumers call vmsfs_to_linux_path() at the point of each syscall.
- * The device table (DKA0: → mount point) is populated at boot by
+ * The device table (SYS$SYSDEVICE → mount point) is populated at boot by
  * STARTUP.EXE and at session start by DCL.
  *
  * VMS Directory Hierarchy:
@@ -28,15 +28,28 @@
 
 /*
  * System disk mount point — the ONE Linux path in the entire system.
- * Used only to bootstrap the device table: DKA0: → SYSDISK_MOUNT.
+ * Used only to bootstrap the device table: SYSDISK_DEVICE → SYSDISK_MOUNT.
  */
 #define SYSDISK_MOUNT    "/vms"
 
 /*
- * System disk device name.
- * Matches the device table entry that maps to SYSDISK_MOUNT.
+ * System disk device name (DEVICE-NATIVE, vms-9f5). This is the COMPILE-TIME
+ * DEFAULT for the substrate; the real system device is discovered at boot and
+ * published as OVMX_SYSDEVICE (see lnm_defaults.c / ovmx_boot_*.c), so this is
+ * only the fallback when nothing was discovered. It must MATCH the name the
+ * executive gives the boot disk on this substrate (vms_devtab.c for virtio,
+ * vms_blockdev_netbsd.c for VAX MSCP), so SYS$SYSDEVICE and SHOW DEVICE / $GETDVI
+ * byte-match:
+ *   - VAX (NetBSD/SIMH): the boot disk is an MSCP/RQDX3 unit -> DUA0: (the
+ *     authentic VMS name; DU == MSCP/UDA disk).
+ *   - virtio (x86_64, Alpha): OVMX's device-native name for a virtio-blk disk
+ *     -> VDA0: (VD == OVMX "Virtual Disk", a labelled OVMX design choice, Rule 8).
  */
-#define SYSDISK_DEVICE   "DKA0"
+#if defined(__vax__)
+#define SYSDISK_DEVICE   "DUA0"
+#else
+#define SYSDISK_DEVICE   "VDA0"
+#endif
 
 /*
  * Console terminal device name (vms-d0b).

@@ -16,7 +16,7 @@
  * vms_kif_acp_fileop(), whose `func` field carries the $QIO function code.
  *
  * WHAT THIS SUITE PROVES, through the sys$/kif API against a real /dev/vms, over
- * the real-VAX ODS-2 fixture the harness seeds WRITABLE on DKA0::
+ * the real-VAX ODS-2 fixture the harness seeds WRITABLE on VDA0::
  *
  *   1. IO$_CREATE ALLOCATES A REAL FILE. Creating [OVMXDIR]CREAT.TST assigns a
  *      genuine FID from INDEXF.SYS's index bitmap (a new file number, distinct
@@ -51,7 +51,7 @@
  *      reachable here. The protection GATE itself is exercised by the (already
  *      green) acp_access/acp_rw suites' NOPRIV assertions.
  *
- * ORDERING / ISOLATION. This suite MUTATES its DKA0: fixture COPY: it creates
+ * ORDERING / ISOLATION. This suite MUTATES its VDA0: fixture COPY: it creates
  * files in [OVMXDIR] under UNIQUE names (CREAT.TST / MODF.TST / RENM.TST ->
  * RENM2.TST -- never HELLO.TXT,
  * which the acp_access / acp_rw suites read) and DELETES every file it creates,
@@ -77,7 +77,7 @@
 #include "vmsfs/ods2.h"   /* ODS2_FK_* file-kind selectors for CREATE */
 
 #define EXIT_SKIP 77
-#define ODS2_UNIT       "DKA0:"
+#define ODS2_UNIT       "VDA0:"
 #define OVMXDIR_FID_NUM 11u     /* [OVMXDIR] in the real-VAX fixture */
 
 static int pass = 0;

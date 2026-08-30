@@ -15,7 +15,7 @@
  * drives vms_kif_acp_mount().
  *
  * WHAT THIS SUITE PROVES, through the sys$/kif API against a real /dev/vms, over
- * the real-VAX ODS-2 fixture the harness seeds on DKA0: (run_tests.sh, from the
+ * the real-VAX ODS-2 fixture the harness seeds on VDA0: (run_tests.sh, from the
  * staged /ods2_real.img == tests/ods2/real_vax_ods2.dsk):
  *
  *   1. OPEN A DIRECTORY BY NAME. IO$_ACCESS of "OVMXDIR.DIR" in the MFD
@@ -52,7 +52,7 @@
  *      userspace allow could never show.
  *
  *   7. PER-FILE-CLASS PROTECTION (vms-109/vms-548b). On the generated
- *      system-disk volume (DKA300:), the three security-sensitive SYS$SYSTEM
+ *      system-disk volume (VDA300:), the three security-sensitive SYS$SYSTEM
  *      files are mastered with DIFFERENT protections by file class:
  *      SYSUAF.DAT World:none (0xFF88 -- its Purdy hashes must not leak),
  *      RIGHTSLIST.DAT World:R (0xEE00 -- the world-readable rights database),
@@ -89,8 +89,8 @@
 
 #define EXIT_SKIP 77
 
-/* DKA0: (vda) carries the genuine real-VAX ODS-2 volume in the QEMU harness. */
-#define ODS2_UNIT  "DKA0:"
+/* VDA0: (vda) carries the genuine real-VAX ODS-2 volume in the QEMU harness. */
+#define ODS2_UNIT  "VDA0:"
 
 /* Ground truth read off tests/ods2/real_vax_ods2.dsk (userspace codec dump). */
 #define OVMXDIR_FID_NUM   11u    /* [000000]OVMXDIR.DIR;1  FID (11,1,0) */
@@ -107,11 +107,11 @@
 #define UNPRIV_GID 100
 #define UNPRIV_UID 100
 
-/* DKA300: (vdd) carries the GENERATED system-disk ODS-2 volume (mkimage_ods2_
+/* VDA300: (vdd) carries the GENERATED system-disk ODS-2 volume (mkimage_ods2_
  * sysvol.c) holding SYS$SYSTEM:{SYSUAF.DAT,RIGHTSLIST.DAT,DCL.EXE}. The
  * PER-FILE-CLASS protection proof (vms-109/vms-548b) reads these three files
  * over the same acp_check_access gate, at [SYS0.SYSCOMMON.SYSEXE]. */
-#define SYSVOL_UNIT  "DKA300:"
+#define SYSVOL_UNIT  "VDA300:"
 
 /* The per-file-class fh2_fileprot each of the three files is mastered with
  * (ods2_class_fileprot(), ods2.h). Nibbles S/O/G/W low->high, SET bit DENIES. */
@@ -171,7 +171,7 @@ static int run_noprivchild(int b2a_write)
         return 1;
     }
 
-    /* The parent has already $MOUNTed DKA0: executive-global; the child sees it. */
+    /* The parent has already $MOUNTed VDA0: executive-global; the child sees it. */
     rep.assign_status = vms_kif_acp_assign(ODS2_UNIT, &chan);
     if (!$VMS_STATUS_SUCCESS(rep.assign_status) || chan == 0) {
         (void)!write(b2a_write, &rep, sizeof(rep));
@@ -310,7 +310,7 @@ int main(int argc, char **argv)
         return EXIT_SKIP;
     }
 
-    /* Precondition: DKA0: mounted executive-global, and a file-class channel. */
+    /* Precondition: VDA0: mounted executive-global, and a file-class channel. */
     st = vms_kif_acp_mount(ODS2_UNIT);
     check($VMS_STATUS_SUCCESS(st), "$MOUNT of the genuine ODS-2 " ODS2_UNIT " (precondition)");
     st = vms_kif_acp_assign(ODS2_UNIT, &chan);

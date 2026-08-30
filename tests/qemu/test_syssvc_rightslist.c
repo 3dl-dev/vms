@@ -3,7 +3,7 @@
  * (vms-2f8), proven against a real /dev/vms (vms-d37).
  *
  * MIGRATED FROM tests/libvms/test_rightslist.c. The host version staged the
- * shipped RIGHTSLIST.DAT/SYSUAF.DAT under a private root, pointed DKA0: at it,
+ * shipped RIGHTSLIST.DAT/SYSUAF.DAT under a private root, pointed VDA0: at it,
  * and located SYS$SYSTEM:RIGHTSLIST.DAT by resolving the SYS$SYSTEM logical IN
  * THIS PROCESS -- which only worked because lnm_seed_system_locating() reseeded
  * the executive-resident LNM$SYSTEM names into LNM$PROCESS_TABLE when there was
@@ -44,7 +44,7 @@
 #include "vms_kif.h"
 
 #define EXIT_SKIP 77
-#define ODS2_UNIT "DKA300:"    /* vdd: the generated system-disk ODS-2 fixture */
+#define ODS2_UNIT "VDA300:"    /* vdd: the generated system-disk ODS-2 fixture */
 
 /* Seed the concealed-rooted system logicals pointed at ODS2_UNIT into the
  * process table (identical to test_syssvc_dirlogical_acp.c). This is what the
@@ -154,10 +154,10 @@ int main(void)
 
     /*
      * Bootstrap the VMS namespace the way the booted system does: seed the
-     * concealed-rooted system logicals on DKA300: and $MOUNT the generated
+     * concealed-rooted system logicals on VDA300: and $MOUNT the generated
      * system-disk ODS-2 fixture. rightslist_name_to_value() then opens
      * SYS$SYSTEM:RIGHTSLIST.DAT -> RMS-over-ACP $OPEN composes
-     * DKA300:[SYS0.SYSCOMMON.SYSEXE]RIGHTSLIST.DAT and reads the REAL shipped
+     * VDA300:[SYS0.SYSCOMMON.SYSEXE]RIGHTSLIST.DAT and reads the REAL shipped
      * rows off the ODS-2 platter; UIC identifiers derive from SYSUAF.DAT read the
      * same way. NO /vms passthrough (Rule 9 / INV-6).
      */

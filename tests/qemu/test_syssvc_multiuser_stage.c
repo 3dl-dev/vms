@@ -33,11 +33,11 @@
  * ACP (INV-6) -- only the Linux-exec handoff path is per-user-owned.
  *
  * WHAT THIS SUITE ASSERTS, all AS A NON-ROOT uid, over a REAL /dev/vms and the
- * committed ODS-2 fixture on DKA400: (tests/qemu/mkimage_ods2_imgact.c, the
+ * committed ODS-2 fixture on VDA400: (tests/qemu/mkimage_ods2_imgact.c, the
  * same fixture test_syssvc_imgact_acp uses):
  *
  *   1. ACP READ WORKS FOR A NON-ROOT SESSION. rms_stage_over_acp() of
- *      DKA400:[IMGACT]TESTIMG.EXE to a path the non-root uid owns (/tmp)
+ *      VDA400:[IMGACT]TESTIMG.EXE to a path the non-root uid owns (/tmp)
  *      succeeds -- so any staging failure below is a DESTINATION-permission
  *      problem, never "non-root cannot read the volume".
  *
@@ -73,9 +73,9 @@
 
 #define EXIT_SKIP 77
 
-/* DKA400: (vde) carries the generated ODS-2 fixture with [IMGACT]TESTIMG.EXE. */
-#define ODS2_UNIT   "DKA400:"
-#define IMG_SPEC    "DKA400:[IMGACT]TESTIMG.EXE"
+/* VDA400: (vde) carries the generated ODS-2 fixture with [IMGACT]TESTIMG.EXE. */
+#define ODS2_UNIT   "VDA400:"
+#define IMG_SPEC    "VDA400:[IMGACT]TESTIMG.EXE"
 
 /* A non-root identity the SYSTEM session stands in for. Any non-zero uid/gid
  * exercises the same EACCES the real SYSTEM UIC [1,4] hits against a root-owned

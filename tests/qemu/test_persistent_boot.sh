@@ -172,7 +172,7 @@ echo "[... truncated ...]"
 echo ""
 
 check "positive: executive attached"          "$OUT_POS" "%OVMX-I-EXEC"
-check "positive: system disk DKA0: mounted"    "$OUT_POS" "%OVMX-I-MOUNTED"
+check "positive: system disk VDA0: mounted"    "$OUT_POS" "%OVMX-I-MOUNTED"
 check "positive: STDRV begun printed"          "$OUT_POS" "%STDRV-I-STARTUP, OpenVMX startup begun"
 check "positive: reaches the login prompt"     "$OUT_POS" "Username:"
 # The strip: none of the install/initialize/overlay lines may appear.
@@ -252,8 +252,8 @@ check "negative: executive attached (halt is AFTER the executive)" "$OUT_NEG" "%
 check "negative: honest OVMX-facility SYSINIT halt"                 "$OUT_NEG" "%OVMX-F-SYSINIT"
 # Either honest halt is acceptable: the blank disk fails to mount as vmsfs, or
 # (were an empty volume to mount) it carries no SYS$SYSTEM:DCL.EXE. Both name
-# the system disk DKA0: and both are ovmx_sysinit_halt — neither installs it.
-check "negative: halt names the system disk DKA0:"                 "$OUT_NEG" "system disk DKA0:"
+# the system disk VDA0: and both are ovmx_sysinit_halt — neither installs it.
+check "negative: halt names the system disk VDA0:"                 "$OUT_NEG" "system disk VDA0:"
 # The strip: the blank disk must NOT be initialized, installed, or overlaid,
 # and the boot must NOT reach a login prompt.
 check "negative: NO blank-disk initialize"       "$OUT_NEG" "%STARTUP-I-INIT"       absent

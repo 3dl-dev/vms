@@ -18,16 +18,16 @@
  *   - sys$create/$connect/$put                 : the CREATE / COPY-dest substrate.
  *
  * WHAT THIS PROVES (against real /dev/vms):
- *   1. DIRECTORY/F$SEARCH: sys$search over DKA200:[SRCH]*.TXT returns the
+ *   1. DIRECTORY/F$SEARCH: sys$search over VDA200:[SRCH]*.TXT returns the
  *      genuine ODS-2 order A.TXT;3, A.TXT;2, A.TXT;1, B.TXT;1 (name asc,
  *      version desc -- NOT POSIX readdir) then RMS$_NMF, and rms_search_fid
  *      hands back the REAL File IDs (14,13,12,16) DIRECTORY /FULL prints --
  *      verified against the codec-deterministic fixture, not a synthesized id.
- *   2. DIRECTORY /FULL + F$FILE_ATTRIBUTES: rms_file_attr("DKA200:[SRCH]A.TXT;3")
+ *   2. DIRECTORY /FULL + F$FILE_ATTRIBUTES: rms_file_attr("VDA200:[SRCH]A.TXT;3")
  *      returns the SAME real FID (14), the resolved version (3), a non-directory
  *      file characteristic, and header attributes -- from the ODS-2 header, not
  *      a stat().
- *   3. TYPE/COPY/CREATE byte-exactness: a $CREATE + $PUT on the writable DKA0:
+ *   3. TYPE/COPY/CREATE byte-exactness: a $CREATE + $PUT on the writable VDA0:
  *      volume lands records via the ACP; $CLOSE + re-$OPEN + $GET reads them
  *      back byte/record-exact (what TYPE would print), and a record-by-record
  *      RMS copy to a second file re-reads byte-exact (what COPY writes).
@@ -35,7 +35,7 @@
  *      file return RMS$_FNF-class errors, never a silent success; and with no
  *      /dev/vms the whole suite SKIPs (77) -- never a fake pass.
  *
- * ISOLATION: created files use a unique name in DKA0:[OVMXDIR] and are ERASED
+ * ISOLATION: created files use a unique name in VDA0:[OVMXDIR] and are ERASED
  * before exit (same discipline as test_syssvc_rms_acp.c).
  */
 
@@ -51,10 +51,10 @@
 #include "rms/rms.h"
 
 #define EXIT_SKIP  77
-#define SRCH_UNIT  "DKA200:"   /* generated multi-version fixture (mkimage_ods2_search.c) */
-#define RW_UNIT    "DKA0:"     /* real-vax fixture, mounted WRITABLE                     */
+#define SRCH_UNIT  "VDA200:"   /* generated multi-version fixture (mkimage_ods2_search.c) */
+#define RW_UNIT    "VDA0:"     /* real-vax fixture, mounted WRITABLE                     */
 
-/* Ground truth: DKA200:[SRCH] entries (mkimage_ods2_search.c deterministic). */
+/* Ground truth: VDA200:[SRCH] entries (mkimage_ods2_search.c deterministic). */
 #define A_V1_FID  12u
 #define A_V2_FID  13u
 #define A_V3_FID  14u

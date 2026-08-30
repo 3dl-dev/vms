@@ -44,10 +44,10 @@ int main(void)
 {
     /* Same two-line bootstrap test_syssvc_rightslist.c and
      * test_syssvc_setuai.c use: the device table entry SYS$SYSDEVICE's
-     * value names (DKA0: -> SYSDISK_MOUNT), then the logical itself. */
+     * value names (VDA0: -> SYSDISK_MOUNT), then the logical itself. */
     vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
     lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
 
-    printf("corpus_seed_lnm: LNM$SYSTEM seeded (SYS$SYSDEVICE -> DKA0: and friends)\n");
+    printf("corpus_seed_lnm: LNM$SYSTEM seeded (SYS$SYSDEVICE -> VDA0: and friends)\n");
     return 0;
 }

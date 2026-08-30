@@ -36,10 +36,14 @@
 #include "ovmx_layout.h"
 #include "imgact_acp.h"
 #include "ovmx_boot_acp_read.h"
+#include "ovmx_boot.h"          /* ovmx_boot_system_disk_unit() -- the DISCOVERED unit */
 
-/* The ACP-mounted boot/system unit (DKA0:). Same unit PID 1 $MOUNTs via
- * ovmx_boot_acp_mount_system_disk() and IMGACT.EXE activates images from. */
-#define OVMX_BOOT_SYSDISK_UNIT  SYSDISK_DEVICE ":"
+/* The ACP-mounted boot/system unit -- the DISCOVERED device (vms-9f5), the SAME
+ * unit PID 1 $MOUNTs via ovmx_boot_acp_mount_system_disk() and IMGACT.EXE
+ * activates images from. NOT the compile-time SYSDISK_DEVICE default: when the
+ * boot volume is a non-default disk (e.g. VDA100:), $ASSIGNing the compile
+ * default (VDA0:) would probe an unmounted device and every image would read as
+ * absent -- ovmx_boot_system_disk_unit() returns whatever PID 1 actually mounted. */
 
 /* --------------------------------------------------------------------------
  * imgact_acp.c host primitives, libc-backed (the freestanding/hosted seam).
@@ -73,7 +77,7 @@ long imgact_acp_dev_ioctl(int fd, unsigned long req, void *arg)
 int ovmx_boot_acp_present(const char *acp_path)
 {
     struct imgact_acp_file f;
-    uint32_t st = imgact_acp_open(&f, OVMX_BOOT_SYSDISK_UNIT, acp_path);
+    uint32_t st = imgact_acp_open(&f, ovmx_boot_system_disk_unit(), acp_path);
     if ($VMS_STATUS_SUCCESS(st)) {
         imgact_acp_close(&f);
         return 1;
@@ -90,7 +94,7 @@ int ovmx_boot_acp_present(const char *acp_path)
 uint32_t ovmx_boot_acp_stage(const char *acp_path, const char *dest)
 {
     struct imgact_acp_file f;
-    uint32_t st = imgact_acp_open(&f, OVMX_BOOT_SYSDISK_UNIT, acp_path);
+    uint32_t st = imgact_acp_open(&f, ovmx_boot_system_disk_unit(), acp_path);
     if (!$VMS_STATUS_SUCCESS(st))
         return st;
 

@@ -3,7 +3,7 @@
 # system disk from the OVMX build and boot it UNATTENDED under SIMH with ovmx_init
 # (STARTUP.EXE) as PID 1 (init), reaching the boot milestone
 #   kernel up -> vms.kmod loaded (/dev/vms live) -> OpenVMX banner -> vmsfs.kmod
-#   loaded -> OVMX ODS-2 system disk (DKA0:) mounted.
+#   loaded -> OVMX ODS-2 system disk (DUA0:) mounted.
 # Reaching a full DCL prompt is the SEPARATE capstone (vms-d59); this stops at the
 # banner+mount milestone (epic vms-8e8, parent vms-c99).
 #
@@ -34,9 +34,9 @@
 #   6. COPY (host): clone the shared (MODULAR-kernel) disk to boot-work/wd0.img.
 #   7. INSTALL-BOOT (ovmx-vax-lab): boot the COPY single-user, install STARTUP.EXE
 #      as /sbin/init, place the modules in the module_path, pre-create /dev/vms +
-#      the ra1 (DKA0:) node + the boot mount points. Once (marker).
+#      the ra1 (DUA0:) node + the boot mount points. Once (marker).
 #   8. PROVE (ovmx-vax-lab): boot the assembled COPY; ovmx_init runs as PID 1 with
-#      the ODS-2 volume on rq1 -> ra1 -> DKA0:; assert the milestone lines; plus
+#      the ODS-2 volume on rq1 -> ra1 -> DUA0:; assert the milestone lines; plus
 #      the negctl (no ODS-2 volume -> the MOUNTED milestone must NOT appear).
 #
 # Nothing installed on the host (Rule 9). Reuses the cached disk; never reinstalls.
@@ -65,7 +65,7 @@
 # test_install_boot_e2e.sh + test_product_install_e2e.sh). It builds the real
 # vax image set + OVMX-OS-VAX.KIT, masters the DISTRIBUTION volume (which boots
 # into OVMX$INSTALL.COM), formats a BLANK ODS-2 target, then boots the
-# distribution volume (rq1 -> DKA0:) with the blank target (rq2 -> DKA100:) and
+# distribution volume (rq1 -> DUA0:) with the blank target (rq2 -> DUA100:) and
 # drives the menu's PRESERVE path to install OVMX onto the target, asserting a
 # rooted, genuinely-activatable system tree AND a real on-disk write (sha256
 # before/after, INV-6 teeth), via tests/lab-vax/drive_install_vax.py:
@@ -127,7 +127,7 @@ SYSNEG_IMG="${SYSNEG_IMG:-${CACHE_DIR}/ovmx-sysneg-vax.img}"
 
 # vms-7b15: the SINGLE-disk artifact -- ONE labeled MSCP disk that VMB boots the
 # NetBSD root off partition 'a' AND from which the executive mounts the OVMX
-# ODS-2 system volume off partition 'e' (DKA0: -> ra0e), with NO rq1. The slim
+# ODS-2 system volume off partition 'e' (DUA0: -> ra0e), with NO rq1. The slim
 # artifact for the PCjs browser demo. SINGLE_A_SECTORS is what the root FFS is
 # resize_ffs'd to; SINGLE_TOTAL_SECTORS is the slim whole-disk size the image is
 # truncated to; SINGLE_RQ0_TYPE is the SIMH MSCP drive type sized to match (a
@@ -697,7 +697,7 @@ run_sysboot_negctl() {
 
 # vms-d0e5 rung G: the two-disk INSTALL proof. Build the real vax image set + OS
 # kit, master the distribution volume, format a blank ODS-2 target, then boot the
-# distribution volume (rq1 -> DKA0:) with the blank target (rq2 -> DKA100:) and
+# distribution volume (rq1 -> DUA0:) with the blank target (rq2 -> DUA100:) and
 # drive OVMX$INSTALL.COM to install onto it (drive_install_vax.py). sha256 the
 # target before/after so the install's real block writes are PROVEN to land (the
 # same INV-6 hash-diff teeth run_sysboot_positive applies to the RW system volume:
@@ -734,7 +734,7 @@ run_install() {
     return 1
   fi
   log "OK (rd vms-d0e5): the install target's on-disk bytes CHANGED -- REAL block"
-  log "  writes hit DKA100: (not a silently-faked/no-op write; INV-6 teeth)."
+  log "  writes hit DUA100: (not a silently-faked/no-op write; INV-6 teeth)."
   log "======================================================================"
   log "  INSTALL-VAX PASSED: the OVMX/NetBSD-vax DISTRIBUTION volume booted into"
   log "  OVMX\$INSTALL.COM, the PRESERVE path installed OVMX onto a BLANK ODS-2"
@@ -752,7 +752,7 @@ run_install() {
 # ODS-2 partition 'e', slim geometry), injects the mastered ODS-2 SYSTEM volume
 # into 'e', and truncates the image to the slim disk size.
 build_single_disk() {
-  # 1. Rebuild the ra0e-aware vms.kmod into ARTIFACTS_DIR (the DKA0: single-disk
+  # 1. Rebuild the ra0e-aware vms.kmod into ARTIFACTS_DIR (the DUA0: single-disk
   #    discovery lives in src/kernel-netbsd/vms_blockdev_netbsd.c). The artifact
   #    CD assemble-single builds carries THIS build; the two-disk boot-work disk
   #    keeps its own already-installed kmod (the change is backward-compatible --
@@ -793,7 +793,7 @@ build_single_disk() {
   log "SLIM SINGLE DISK ready: ${SINGLE_IMG} (${bytes} bytes, $((bytes/1048576)) MiB)"
 }
 
-# vms-7b15: boot the slim SINGLE disk and prove it reaches Username: with DKA0:
+# vms-7b15: boot the slim SINGLE disk and prove it reaches Username: with DUA0:
 # bound to the boot disk's ODS-2 PARTITION (ra0e), NO rq1. sha256 before/after so
 # the ODS-2 RW during PROVISION is a proven real on-disk write (INV-6 teeth, the
 # same hash-diff the two-disk sysboot applies).
@@ -816,12 +816,12 @@ run_sysboot_single() {
     return 1
   fi
   log "OK (rd vms-7b15): the single disk's on-disk bytes CHANGED during the boot"
-  log "  -- REAL block writes hit the ODS-2 partition (DKA0: -> ra0e), not a no-op."
+  log "  -- REAL block writes hit the ODS-2 partition (DUA0: -> ra0e), not a no-op."
   log "======================================================================"
   log "  SYSBOOT-SINGLE PASSED: ONE slim disk booted ovmx_init as PID 1 on"
   log "  NetBSD/vax -- VMB booted the root off partition 'a' AND the executive"
   log "  mounted the OVMX ODS-2 SYSTEM volume off partition 'e' of the SAME disk"
-  log "  (DKA0: -> ra0e, NO rq1), reached a real interactive Username: prompt,"
+  log "  (DUA0: -> ra0e, NO rq1), reached a real interactive Username: prompt,"
   log "  and PROVISION's writes really hit the ODS-2 partition on disk."
   log "  ARTIFACT: ${SINGLE_IMG} ($(stat -c%s "${SINGLE_IMG}") bytes)"
   log "======================================================================"
@@ -833,7 +833,7 @@ case "${MODE}" in
     if run_session prove /cache/boot-work; then
       log "======================================================================"
       log "  BOOT-VAX PASSED: ovmx_init boots as PID 1 on NetBSD/vax under SIMH"
-      log "  (executive on /dev/vms, OpenVMX banner, ODS-2 DKA0: mounted)"
+      log "  (executive on /dev/vms, OpenVMX banner, ODS-2 DUA0: mounted)"
       log "======================================================================"
       exit 0
     fi
@@ -884,7 +884,7 @@ case "${MODE}" in
     # vms-7b15: the SLIM SINGLE-disk proof. Build the mastered ODS-2 SYSTEM
     # volume (same as two-disk sysboot), assemble ONE slim disk that carries both
     # the NetBSD boot root AND that volume in a partition, then boot it with a
-    # single `attach rq0' (NO rq1) and prove it reaches Username: with DKA0:
+    # single `attach rq0' (NO rq1) and prove it reaches Username: with DUA0:
     # bound to the boot disk's ODS-2 partition (ra0e).
     #   tests/lab-vax/run-boot.sh sysboot-single
     build_boot_image_set

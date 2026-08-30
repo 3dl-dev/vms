@@ -61,7 +61,7 @@
 #include "vms/logical.h"     /* lnm_create + LNM$JOB (vms-586 ACP mount)     */
 
 #define EXIT_SKIP 77
-#define ODS2_UNIT "DKA300:"  /* vdd: the generated system-disk ODS-2 fixture */
+#define ODS2_UNIT "VDA300:"  /* vdd: the generated system-disk ODS-2 fixture */
 
 static int pass = 0;
 static int fail = 0;
@@ -221,11 +221,11 @@ int main(void)
      *      inherits its job_id (the LNM$JOB scope key);
      *   2. $MOUNT the system-disk ODS-2 fixture (executive-global, reachable by
      *      an $ASSIGN of the unit from the child);
-     *   3. define SYS$SYSDEVICE=DKA300: in LNM$JOB. The child's own
-     *      lnm_setup_defaults re-seeds SYS$SYSDEVICE=DKA0: only into LNM$SYSTEM,
+     *   3. define SYS$SYSDEVICE=VDA300: in LNM$JOB. The child's own
+     *      lnm_setup_defaults re-seeds SYS$SYSDEVICE=VDA0: only into LNM$SYSTEM,
      *      but LNM$JOB is searched BEFORE LNM$SYSTEM (first match wins), so the
      *      job entry shadows it and the whole SYS$SYSTEM->SYS$SYSROOT->
-     *      SYS$SYSDEVICE chain composes onto DKA300: over the ACP.
+     *      SYS$SYSDEVICE chain composes onto VDA300: over the ACP.
      * With no mounted SYSUAF the admitted (SYSPRV) session's ovmx_sysuaf_enum
      * failed and AUTHORIZE exited 1; the non-SYSPRV refusal is decided earlier by
      * AUTHORIZE's executive SYSPRV gate and is unaffected by the mount.

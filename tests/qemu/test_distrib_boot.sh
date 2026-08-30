@@ -193,7 +193,7 @@ record "executive attached (slim boot on mastered disk)" "$rc"
 if [ "$OK" -eq 1 ]; then
     # The disk mounted and STARTUP found a real system on it (no install ran).
     if wait_for '%OVMX-I-MOUNTED' 30; then rc=0; else rc=1; fi
-    record "system disk DKA0: mounted (pre-installed, no self-install)" "$rc"
+    record "system disk VDA0: mounted (pre-installed, no self-install)" "$rc"
     # A mastered disk must NOT trip PID 1's install path: it already has DCL.EXE.
     if grep -qF '%STARTUP-I-INSTALL, installing' "$CONSOLE_LOG"; then rc=1; else rc=0; fi
     record "no install ran (disk arrived pre-installed)" "$rc"

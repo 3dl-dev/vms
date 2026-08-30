@@ -46,6 +46,7 @@
 #include "vms/pcb.h"
 #include "vms_kif.h"
 #include "ovmx_console.h"   /* vms-948: single OPA0:/TT: -> console resolver */
+#include "ovmx_layout.h"    /* vms-9f5: SYSDISK_DEVICE -- the native boot unit */
 
 /*
  * VMS device resolution result.
@@ -186,15 +187,16 @@ static int resolve_vms_device(const char *name, struct vms_device_result *result
 
     /* Default disk - use process default directory from PCB */
     /*
-     * vms-149: the Files-11 (ODS-2) ACP boot unit -- the system disk, named
-     * DKA0: (device-native default, epic vms-47d) or by the SYS$SYSDEVICE
-     * spelling. $ASSIGN of it must obtain an EXECUTIVE channel bound to the
-     * mounted ODS-2 volume, so it is recognized here and handled by the
-     * is_file path in sys$assign (vms_kif_acp_assign), not opened as a POSIX
-     * path. `upper` has had its trailing ':' stripped above. This is distinct
-     * from SYS$DISK below, which is the process default-directory passthrough.
+     * vms-149: the Files-11 (ODS-2) ACP boot unit -- the system disk, named by
+     * its device-native physical name (SYSDISK_DEVICE: VDA0: on virtio, DUA0:
+     * on VAX MSCP -- vms-9f5/epic vms-47d) or by the SYS$SYSDEVICE spelling.
+     * $ASSIGN of it must obtain an EXECUTIVE channel bound to the mounted ODS-2
+     * volume, so it is recognized here and handled by the is_file path in
+     * sys$assign (vms_kif_acp_assign), not opened as a POSIX path. `upper` has
+     * had its trailing ':' stripped above. This is distinct from SYS$DISK below,
+     * which is the process default-directory passthrough.
      */
-    if (strcmp(upper, "DKA0") == 0 || strcmp(upper, "_DKA0") == 0 ||
+    if (strcmp(upper, SYSDISK_DEVICE) == 0 || strcmp(upper, "_" SYSDISK_DEVICE) == 0 ||
         strcmp(upper, "SYS$SYSDEVICE") == 0) {
         result->is_file = 1;
         return 1;

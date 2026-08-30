@@ -147,7 +147,7 @@ static uint32_t del(const char *table, const char *name)
  * the DEFINE/SYSTEM (as STARTUP would) and stages the install procedure; the
  * CHILD -- which never defines the name -- resolves SYS$UPDATE:PARTS_SETUP.COM
  * through vmsfs (the @-command path) and OPENS it. The definition crosses
- * processes only through the executive; the device table (DKA0: -> the mount,
+ * processes only through the executive; the device table (VDA0: -> the mount,
  * the ONE Unix-path bridge) is legitimately per-process, so each registers it.
  */
 #define SYSUPD_VMS_DIR   "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSUPD]"
@@ -223,7 +223,7 @@ static int run_child(int c2p_write, int p2c_read)
         /*
          * THE 0.2 DEMO PROOF (vms-96e2). The parent DEFINE/SYSTEM'd SYS$UPDATE
          * (and SYS$SYSDEVICE it resolves through) and staged PARTS_SETUP.COM.
-         * This child never defined either name. It registers only DKA0: (the
+         * This child never defined either name. It registers only VDA0: (the
          * per-process Unix-path bridge), then:
          *   (a) SHOW LOGICAL / F$TRNLNM path: sys$trnlnm(SYS$UPDATE) resolves;
          *   (b) @-command path: vmsfs resolves SYS$UPDATE:PARTS_SETUP.COM and

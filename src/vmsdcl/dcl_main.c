@@ -427,8 +427,9 @@ static void setup_session(struct dcl_context *ctx)
         if (!vms_root) vms_root = SYSDISK_MOUNT;
 
         /* Register the system disk in the device table before LNM setup.
-         * DKA0: → vms_root is the ONE place a Unix path enters the namespace. */
-        vmsfs_device_add("DKA0", vms_root);
+         * SYSDISK_DEVICE → vms_root is the ONE place a Unix path enters the
+         * namespace (device-native, vms-9f5: VDA0: on virtio, DUA0: on VAX). */
+        vmsfs_device_add(SYSDISK_DEVICE, vms_root);
 
         lnm_setup_defaults(mgr, vms_root);
 

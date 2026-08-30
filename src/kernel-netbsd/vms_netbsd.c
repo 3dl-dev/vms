@@ -1348,8 +1348,8 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 *      sees it, exactly as the terminal driver creates the console
 		 *      unit during system initialization.
 		 *   2. vms_blockdev_netbsd_register_units() enters this node's DISK
-		 *      units from the device-native unit map (DKA0: -> ra1c,
-		 *      DKA100: -> ra2c), and ONLY for a device that really resolves
+		 *      units from the device-native unit map (DUA0: -> ra1c,
+		 *      DUA100: -> ra2c), and ONLY for a device that really resolves
 		 *      -- an absent disk gets no row, so $ALLOC of it is an honest
 		 *      SS$_NOSUCHDEV rather than an invented unit (INV-6).
 		 * A failure here is out of memory: unwind exactly as the lnm arm above.

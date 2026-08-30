@@ -479,7 +479,7 @@ COPY tests/ods2/ovmxdir_hello.golden /hello.golden
 # SAME byte-genuine writer the real fixture and vms_initialize --ods2 use
 # (src/vmsfs/ods2/*, staged at /src/vmsfs above) -- [SRCH] carrying A.TXT at
 # versions 1/2/3, B.LOG;1, B.TXT;1, README.DAT;1. Staged as /ods2_search.img,
-# which run_tests.sh copies onto DKA200: (vdc). test_syssvc_acp_search reads it.
+# which run_tests.sh copies onto VDA200: (vdc). test_syssvc_acp_search reads it.
 COPY tests/qemu/mkimage_ods2_search.c /src/tests/qemu/
 RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_search \
         /src/tests/qemu/mkimage_ods2_search.c \
@@ -494,7 +494,7 @@ RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_search \
 # concealed-rooted layout [SYS0.SYSCOMMON.{SYSEXE,SYSMGR,SYSLIB}] holding the
 # REAL shipped SYSUAF.DAT / RIGHTSLIST.DAT (copied VERBATIM from the product's
 # own distro/rootfs, so the suites assert against what actually boots). Staged as
-# /ods2_sysvol.img, which run_tests.sh copies onto DKA300: (vdd).
+# /ods2_sysvol.img, which run_tests.sh copies onto VDA300: (vdd).
 # test_syssvc_dirlogical_acp composes SYS$SYSTEM:SYSUAF.DAT and walks the ACP
 # MFD->[SYS0]->[SYSCOMMON]->[SYSEXE] to the file FID, then reads it byte-exact;
 # test_syssvc_sysuaf_uic_base / test_syssvc_rightslist $MOUNT the volume and read
@@ -518,7 +518,7 @@ RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_sysvol \
 # IMGACT-over-ACP proof (vms-3e8e, epic vms-208). mkimage_ods2_imgact.c lays the
 # deterministic fixture ELF (tests/qemu/imgact_acp_fixture_elf.h) down with the
 # SAME byte-genuine ODS-2 writer the other fixtures use. Staged as
-# /ods2_imgact.img, which run_tests.sh copies onto DKA400: (vde);
+# /ods2_imgact.img, which run_tests.sh copies onto VDA400: (vde);
 # test_syssvc_imgact_acp $MOUNTs it and reads the image header + PT_LOAD
 # segments over IO$_ACCESS + IO$_READVBLK.
 COPY tests/qemu/mkimage_ods2_imgact.c /src/tests/qemu/

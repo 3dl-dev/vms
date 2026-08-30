@@ -1834,23 +1834,23 @@ EOF
         # the facade shape (reports success, shares nothing) on the one fact
         # this facility exists to carry. test_kmod_disk is the only suite that
         # calls vms_kif_disk_resolve, so this reddens it alone -- its two
-        # backing-name assertions (DKA0:->vda, DKA100:->vdb), while the
+        # backing-name assertions (VDA0:->vda, VDA100:->vdb), while the
         # resolve-status, dev_t-match and negative-control assertions stay
         # green because none of them reads the backing NAME.
         suites_red)   echo "test_kmod_disk";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_ioctl_disk_resolve() still looks the unit up, still checks it is a DISK, still returns SS\$_NORMAL and still fills in the backing dev_t (major/minor) -- it just hands back an EMPTY backing device NAME. So a process is told DKA0: resolved and given no device to open: the INV-6 facade shape (success reported, the fact not shared), isolated to the ONE field this facility exists to carry. The resolve status, the dev_t match against /dev/vda, and the NOSUCHDEV / IVDEVNAM negative controls are all untouched -- none of them reads the backing name -- so only the two backing-name assertions can tell the difference.";;
+        why)          echo "vms_ioctl_disk_resolve() still looks the unit up, still checks it is a DISK, still returns SS\$_NORMAL and still fills in the backing dev_t (major/minor) -- it just hands back an EMPTY backing device NAME. So a process is told VDA0: resolved and given no device to open: the INV-6 facade shape (success reported, the fact not shared), isolated to the ONE field this facility exists to carry. The resolve status, the dev_t match against /dev/vda, and the NOSUCHDEV / IVDEVNAM negative controls are all untouched -- none of them reads the backing name -- so only the two backing-name assertions can tell the difference.";;
         require_fail) cat <<'EOF'
-DKA0: backing device is vda (the executive's enumeration)
+VDA0: backing device is vda (the executive's enumeration)
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-DKA100: backing device is vdb (the executive's enumeration)
+VDA100: backing device is vdb (the executive's enumeration)
 EOF
                       ;;
-        knock_on_why)  echo "the SAME empty-name defect, observed a second time on the second disk: the mutation zeroes the ONE strscpy every resolve passes through, so DKA100:'s backing name comes back empty exactly as DKA0:'s does. Both are the one skipped name-copy observed on the two units, not two independent properties -- the dev_t match for both disks stays green because major/minor are still copied, which is what shows this is the NAME write and not the whole resolve.";;
+        knock_on_why)  echo "the SAME empty-name defect, observed a second time on the second disk: the mutation zeroes the ONE strscpy every resolve passes through, so VDA100:'s backing name comes back empty exactly as VDA0:'s does. Both are the one skipped name-copy observed on the two units, not two independent properties -- the dev_t match for both disks stays green because major/minor are still copied, which is what shows this is the NAME write and not the whole resolve.";;
         esac;;
 
     setterm-binding-not-recorded)
@@ -4201,30 +4201,30 @@ EOF
 
     rms-create-filespec-not-translated)
         case "$_f" in
-        facility)     echo "RMS VMS-filespec translation on create -- rms_acp_spec_parse() (src/vmsrms/rms_core.c), which splits a filespec (DKA0:[OVMXDIR]VMS221.DAT) into device / directory / ODS-2 name before the Files-11 ACP \$CREATE. RE-ANCHORED from resolve_filename() (retired with the POSIX \$CREATE by the vms-401/vms-5f0 flip); the Rule-9 ACP create path is the live consumer of this translation, the same product-half class as the dcl-fident-*/dcl-fuser-* entries above, not a vms.ko-dispatched ioctl";;
+        facility)     echo "RMS VMS-filespec translation on create -- rms_acp_spec_parse() (src/vmsrms/rms_core.c), which splits a filespec (VDA0:[OVMXDIR]VMS221.DAT) into device / directory / ODS-2 name before the Files-11 ACP \$CREATE. RE-ANCHORED from resolve_filename() (retired with the POSIX \$CREATE by the vms-401/vms-5f0 flip); the Rule-9 ACP create path is the live consumer of this translation, the same product-half class as the dcl-fident-*/dcl-fuser-* entries above, not a vms.ko-dispatched ioctl";;
         targets)      echo "vmsrms/rms_core.c";;
         suites_red)   echo "test_syssvc_rms_scratch_create";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "rms_acp_spec_parse() stops taking the ODS-2 NAME.TYP component from the post-split remainder \`p\` (device and [directory] already stripped) and takes the whole undivided filespec \`spec\` instead -- so DKA0:[OVMXDIR]VMS221.DAT resolves to a name of \"DKA0:[OVMXDIR]VMS221.DAT\" rather than \"VMS221.DAT\". This is the live-ACP shape of the exact vms-221 regression: a VMS filespec treated as a LITERAL instead of being translated/split. rms_impl_create copies that name into BOTH fab->_resolved_path (the RESOLVED_PATH the suite reads back) AND fop.name (the actual IO\$_CREATE target), so it is a genuine create-path defect, not a decorative echo. The old mutation reverted resolve_filename()'s \`== 0\` check, but with /dev/vms present and DKA0: mounted the create path is ACP-only (rms_acp_absent()==0) and never reaches resolve_filename(), so it could no longer redden the flip-rewritten suite.";;
+        why)          echo "rms_acp_spec_parse() stops taking the ODS-2 NAME.TYP component from the post-split remainder \`p\` (device and [directory] already stripped) and takes the whole undivided filespec \`spec\` instead -- so VDA0:[OVMXDIR]VMS221.DAT resolves to a name of \"VDA0:[OVMXDIR]VMS221.DAT\" rather than \"VMS221.DAT\". This is the live-ACP shape of the exact vms-221 regression: a VMS filespec treated as a LITERAL instead of being translated/split. rms_impl_create copies that name into BOTH fab->_resolved_path (the RESOLVED_PATH the suite reads back) AND fop.name (the actual IO\$_CREATE target), so it is a genuine create-path defect, not a decorative echo. The old mutation reverted resolve_filename()'s \`== 0\` check, but with /dev/vms present and VDA0: mounted the create path is ACP-only (rms_acp_absent()==0) and never reaches resolve_filename(), so it could no longer redden the flip-rewritten suite.";;
         require_fail) cat <<'EOF'
-sys$create() did NOT fall back to treating the raw VMS spec string as a literal path (no './' prefix, no undivided 'DKA0:...' device left glued to the name)
+sys$create() did NOT fall back to treating the raw VMS spec string as a literal path (no './' prefix, no undivided 'VDA0:...' device left glued to the name)
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-sys$create() parsed the filespec through the Files-11 ACP path (rms_acp_specs_from_fab): the device (DKA0:) and directory ([OVMXDIR]) were split off and the ODS-2 file name resolved to VMS221.DAT -- NOT treated as a literal Linux/relative path. The vms-221 regression (resolve_filename() checking vmsfs_to_linux_path()'s VMS status code with `== 0`, so odd=success never matched and every VMS spec fell through to a literal path) belongs to the retired POSIX $CREATE (rms_posix_create); the Rule-9 runtime creates on the mounted volume over the ACP, which is what this proves.
+sys$create() parsed the filespec through the Files-11 ACP path (rms_acp_specs_from_fab): the device (VDA0:) and directory ([OVMXDIR]) were split off and the ODS-2 file name resolved to VMS221.DAT -- NOT treated as a literal Linux/relative path. The vms-221 regression (resolve_filename() checking vmsfs_to_linux_path()'s VMS status code with `== 0`, so odd=success never matched and every VMS spec fell through to a literal path) belongs to the retired POSIX $CREATE (rms_posix_create); the Rule-9 runtime creates on the mounted volume over the ACP, which is what this proves.
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
 ONE PROPERTY -- "the VMS filespec is TRANSLATED (device/dir/name split off),
 not treated as a raw literal" -- read through BOTH of the suite's RESOLVED_PATH
 echoes. require_fail reads it one way: the resolved path must NOT be the
-undivided "DKA0:..." literal. This knock-on reads the SAME corrupted
+undivided "VDA0:..." literal. This knock-on reads the SAME corrupted
 fab->_resolved_path the other way: it must positively equal "VMS221.DAT", the
 split-off ODS-2 name. With rms_acp_spec_parse() taking the whole spec as the
-name, _resolved_path becomes "DKA0:[OVMXDIR]VMS221.DAT" -- so the "== VMS221.DAT"
-check fails at the same instant the "no DKA0: literal" check does. It is one
+name, _resolved_path becomes "VDA0:[OVMXDIR]VMS221.DAT" -- so the "== VMS221.DAT"
+check fails at the same instant the "no VDA0: literal" check does. It is one
 mis-split observed twice, not a second defect. (The downstream create/connect/
 put/close/readback stages may also redden if the ACP rejects the malformed
 name; per vms-49f the exact red-set equality is a non-gating lint and the
@@ -4806,25 +4806,25 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_ioctl_acp_mount() stops VALIDATING the media: the acp_validate_ods2() call that reads the home block + SCB and returns SS\$_DEVNOTMOUNT for non-ODS-2 media is replaced by an unconditional SS\$_NORMAL, so \$MOUNT records ANY unit -- including the BLANK, all-zero DKA100: -- as a mounted ODS-2 volume. That is the exact INV-6 facade the ACP exists to refuse: a mount table that admits a non-ODS-2 blob reports a volume the executive never validated. Every assertion about the GENUINE DKA0: volume (mount succeeds, idempotent, cross-process visible, dismount) stays green -- it really is a valid ODS-2 volume -- so only the fail-honest-REJECT assertions on the blank DKA100: can tell the difference, which is precisely the 'report success while sharing nothing' shape CLAUDE.md Rule 9 exists to catch.";;
+        why)          echo "vms_ioctl_acp_mount() stops VALIDATING the media: the acp_validate_ods2() call that reads the home block + SCB and returns SS\$_DEVNOTMOUNT for non-ODS-2 media is replaced by an unconditional SS\$_NORMAL, so \$MOUNT records ANY unit -- including the BLANK, all-zero VDA100: -- as a mounted ODS-2 volume. That is the exact INV-6 facade the ACP exists to refuse: a mount table that admits a non-ODS-2 blob reports a volume the executive never validated. Every assertion about the GENUINE VDA0: volume (mount succeeds, idempotent, cross-process visible, dismount) stays green -- it really is a valid ODS-2 volume -- so only the fail-honest-REJECT assertions on the blank VDA100: can tell the difference, which is precisely the 'report success while sharing nothing' shape CLAUDE.md Rule 9 exists to catch.";;
         require_fail) cat <<'EOF'
-$MOUNT of the BLANK DKA100: is REJECTED SS$_DEVNOTMOUNT -- non-ODS-2 media, not recorded
+$MOUNT of the BLANK VDA100: is REJECTED SS$_DEVNOTMOUNT -- non-ODS-2 media, not recorded
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-$DISMOUNT of the rejected DKA100: is SS$_NOSUCHDEV (the reject recorded nothing)
+$DISMOUNT of the rejected VDA100: is SS$_NOSUCHDEV (the reject recorded nothing)
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
 THE SAME ONE ROOT, OBSERVED A SECOND TIME. With validation bypassed, $MOUNT of
-the blank DKA100: now SUCCEEDS and RECORDS the unit as a mounted volume. So the
+the blank VDA100: now SUCCEEDS and RECORDS the unit as a mounted volume. So the
 require_fail assertion (the mount must be REJECTED SS$_DEVNOTMOUNT) goes red --
 and the very next assertion, which checks that the reject recorded nothing by
-$DISMOUNTing DKA100: and expecting SS$_NOSUCHDEV, ALSO goes red: DKA100: is now
+$DISMOUNTing VDA100: and expecting SS$_NOSUCHDEV, ALSO goes red: VDA100: is now
 in the mounted-volume table, so its $DISMOUNT returns SS$_NORMAL instead. One
 deleted validation explains exactly these two reds -- the recording of media the
 executive never validated, seen once at the mount and once at the dismount --
-and no others: the genuine DKA0: volume validates and behaves identically either
+and no others: the genuine VDA0: volume validates and behaves identically either
 way.
 EOF
                       ;;
@@ -6055,7 +6055,7 @@ EOF
 
     initialize-home-magic-not-written)
         case "$_f" in
-        facility)     echo "INITIALIZE writing a VALID vmsfs home block to the executive-RESOLVED real backing device (format_volume, tools/vms_initialize.c, vms-cf62). INITIALIZE.EXE resolves DKA100: through the executive (vms_kif_disk_resolve, the same authoritative path MOUNT uses) to its backing block device and formats THAT store -- the anti-facade property (INV-6, CLAUDE.md Rule 9): the real device is actually formatted, not merely reported so. A userspace consumer of the executive disk-resolution facility, the same product-half class as the devtab entries.";;
+        facility)     echo "INITIALIZE writing a VALID vmsfs home block to the executive-RESOLVED real backing device (format_volume, tools/vms_initialize.c, vms-cf62). INITIALIZE.EXE resolves VDA100: through the executive (vms_kif_disk_resolve, the same authoritative path MOUNT uses) to its backing block device and formats THAT store -- the anti-facade property (INV-6, CLAUDE.md Rule 9): the real device is actually formatted, not merely reported so. A userspace consumer of the executive disk-resolution facility, the same product-half class as the devtab entries.";;
         targets)      echo "../tools/vms_initialize.c";;
         suites_red)   echo "test_syssvc_initialize";;
         blind_suites) echo "";;
@@ -6575,12 +6575,12 @@ apply_edit() {
         # this defect used to mutate). The old mutation reverted
         # resolve_filename()'s vmsfs_to_linux_path() `== 0` check in
         # rms_posix_create() -- but the Rule-9 runtime, with /dev/vms present
-        # and DKA0: mounted, ALWAYS takes the Files-11 ACP create path
+        # and VDA0: mounted, ALWAYS takes the Files-11 ACP create path
         # (rms_impl_create, rms_acp_absent()==0), which never calls
         # resolve_filename() at all, so the mutation could no longer redden
         # the rewritten suite. It now mutates the EQUIVALENT live invariant:
         # rms_acp_spec_parse()'s NAME component (rms_core.c) must be the
-        # post-split remainder of the filespec -- the device (DKA0:) and
+        # post-split remainder of the filespec -- the device (VDA0:) and
         # directory ([OVMXDIR]) split off, only the ODS-2 file name left --
         # NOT the raw undivided literal. Taking the whole `spec` as the name
         # instead of the split `p` is the exact vms-221 shape on the live
@@ -6740,9 +6740,9 @@ apply_edit() {
         # `acp_validate_ods2(uint32_t major, uint32_t minor, ...)` -- so there is
         # no second textual match). Replacing the CALL with an unconditional
         # `status = SS__NORMAL;` makes $MOUNT skip validation entirely and record
-        # ANY unit -- including the blank, non-ODS-2 DKA0: -- as a mounted volume,
+        # ANY unit -- including the blank, non-ODS-2 VDA0: -- as a mounted volume,
         # the INV-6 facade (a volume the executive never validated). The genuine
-        # DKA100: path is untouched (it validated anyway), so only the blank-media
+        # VDA100: path is untouched (it validated anyway), so only the blank-media
         # REJECT assertions redden. After substitution the original call text is
         # gone, so a second apply matches nothing (the no-op selftest requires).
         sed -i 's|status = acp_validate_ods2(backing_major, backing_minor, vol);|status = SS__NORMAL; /* NEGCTL acp-mount-nonods2-accepted (was acp_validate_ods2) */|' "$_file";;

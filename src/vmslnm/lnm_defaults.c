@@ -138,10 +138,11 @@ static const char *lnm_system_root_token(void)
  * @mgr:      Manager instance
  * @vms_root: Root directory for VMS file tree (Linux mount point)
  *
- * First registers DKA0: in the device table (the ONE place a Unix
- * path is stored), then creates logicals with VMS equivalences:
+ * First registers the system device in the device table (the ONE place a Unix
+ * path is stored), then creates logicals with VMS equivalences (SYS$SYSDEVICE
+ * is the DISCOVERED boot device -- VDA0: on virtio, DUA0: on VAX MSCP):
  *
- *   SYS$SYSDEVICE -> DKA0:
+ *   SYS$SYSDEVICE -> (discovered, e.g. VDA0:)
  *   SYS$SYSROOT   -> SYS$SYSDEVICE:[SYS0.], SYS$SYSDEVICE:[SYS0.SYSCOMMON.]
  *                    (concealed rooted search list)
  *   SYS$COMMON    -> SYS$SYSDEVICE:[SYS0.SYSCOMMON.]  (concealed rooted)
@@ -176,14 +177,15 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
      * not a hard literal. The boot chain / the image activator publish the unit
      * the system volume is mounted on as OVMX_SYSDEVICE (imgact.c reads the same
      * variable, rung iii); honour it here so SYS$SYSTEM:/SYS$SHARE: resolve over
-     * the Files-11 ACP to the ACTUAL mounted system volume (e.g. DKA300: on the
-     * self-host toolchain harness) rather than a compile-time DKA0: guess. Absent
-     * the variable, fall back to the historical DKA0: default (unchanged).
+     * the Files-11 ACP to the ACTUAL mounted system volume (e.g. VDA300: on the
+     * self-host toolchain harness) rather than a compile-time guess. Absent the
+     * variable, fall back to the substrate's compile-time SYSDISK_DEVICE default
+     * (VDA0: on virtio, DUA0: on VAX MSCP -- vms-9f5), never a hard DKA0: literal.
      */
     {
         const char *sysdev = getenv("OVMX_SYSDEVICE");
         lnm_seed_system_locating(mgr, "SYS$SYSDEVICE",
-                                 (sysdev && sysdev[0]) ? sysdev : "DKA0:",
+                                 (sysdev && sysdev[0]) ? sysdev : SYSDISK_DEVICE ":",
                                  LNM_ATTR_TERMINAL);
     }
 

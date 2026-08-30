@@ -95,22 +95,22 @@ KCMD_SHARD="ovmx.shard=$SHARD_INDEX ovmx.shards=$SHARD_TOTAL"
 ASSERT_TRANSCRIPT=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 
 # Five virtio disks (vms-3e8 + vms-0044 + vms-3e8e). The executive enumerates the
-# node's virtio block devices into DK units (DKA0: from vda, DKA100: from vdb,
-# DKA200: from vdc, DKA300: from vdd, DKA400: from vde) at module init -- test_kmod_disk asserts the
+# node's virtio block devices into DK units (VDA0: from vda, VDA100: from vdb,
+# VDA200: from vdc, VDA300: from vdd, VDA400: from vde) at module init -- test_kmod_disk asserts the
 # vda/vdb mapping against a real vms.ko, so the guest must actually HAVE the
 # disks. Cleaned up with the transcript below (ONE trap, all temp files -- see
 # the trap note further down).
 #
-#   vda (DKA0:)   -- a GENUINE real-VAX ODS-2 volume: the SYSTEM DISK. The
+#   vda (VDA0:)   -- a GENUINE real-VAX ODS-2 volume: the SYSTEM DISK. The
 #                    Files-11 ACP $MOUNT VALIDATES a real Files-11 structure (home
 #                    block + SCB) against a real /dev/vms and records it
-#                    executive-global; $ASSIGN of DKA0:/SYS$SYSDEVICE then reaches
+#                    executive-global; $ASSIGN of VDA0:/SYS$SYSDEVICE then reaches
 #                    it (sys_assign.c routes the boot unit to the ACP). The
 #                    fixture /ods2_real.img is staged by tests/qemu/Dockerfile
 #                    (COPY tests/ods2/real_vax_ods2.dsk /ods2_real.img); it is
 #                    copied to a writable temp so QEMU's raw block open never
 #                    touches the staged image. (test_syssvc_acp_{channel,mount}.)
-#   vdb (DKA100:) -- BLANK 16M: the non-ODS-2 media the ACP $MOUNT must REJECT
+#   vdb (VDA100:) -- BLANK 16M: the non-ODS-2 media the ACP $MOUNT must REJECT
 #                    fail-honest (its home block is all-zero, so ods2_home_parse
 #                    fails the "DECFILE11B  " format check), AND the scratch unit
 #                    test_syssvc_initialize.c formats. test_kmod_disk reads only
@@ -125,13 +125,13 @@ if [ -f "$OVMX_ODS2_SRC" ]; then
     cp "$OVMX_ODS2_SRC" "$OVMX_DISK0"
 else
     echo "run_tests.sh: FATAL: ODS-2 fixture $OVMX_ODS2_SRC missing -- the Files-11" >&2
-    echo "                ACP mount test (vms-127) needs a genuine ODS-2 volume on DKA0: (vda)" >&2
+    echo "                ACP mount test (vms-127) needs a genuine ODS-2 volume on VDA0: (vda)" >&2
     exit 2
 fi
-#   vdc (DKA200:) -- a GENERATED multi-version genuine ODS-2 volume (from
+#   vdc (VDA200:) -- a GENERATED multi-version genuine ODS-2 volume (from
 #                    /ods2_search.img == tests/qemu/mkimage_ods2_search.c). Its
 #                    [SRCH] directory carries a name at several versions, which
-#                    the real-VAX fixture on DKA0: does not; the IO$_ACPCONTROL
+#                    the real-VAX fixture on VDA0: does not; the IO$_ACPCONTROL
 #                    wildcard directory search test (test_syssvc_acp_search,
 #                    vms-a0b) $MOUNTs it and iterates the versions.
 OVMX_ODS2_SEARCH_SRC=/ods2_search.img
@@ -139,10 +139,10 @@ if [ -f "$OVMX_ODS2_SEARCH_SRC" ]; then
     cp "$OVMX_ODS2_SEARCH_SRC" "$OVMX_DISK2"
 else
     echo "run_tests.sh: FATAL: ODS-2 search fixture $OVMX_ODS2_SEARCH_SRC missing --" >&2
-    echo "                the \$SEARCH test (vms-a0b) needs a multi-version ODS-2 volume on DKA200: (vdc)" >&2
+    echo "                the \$SEARCH test (vms-a0b) needs a multi-version ODS-2 volume on VDA200: (vdc)" >&2
     exit 2
 fi
-#   vdd (DKA300:) -- a GENERATED genuine ODS-2 SYSTEM-DISK tree (from
+#   vdd (VDA300:) -- a GENERATED genuine ODS-2 SYSTEM-DISK tree (from
 #                    /ods2_sysvol.img == tests/qemu/mkimage_ods2_sysvol.c). It
 #                    carries [SYS0.SYSCOMMON.{SYSEXE,SYSMGR,SYSLIB}] with the REAL
 #                    shipped SYSUAF.DAT / RIGHTSLIST.DAT (verbatim from
@@ -152,7 +152,7 @@ fi
 #                    the login/rights suites (test_syssvc_sysuaf_uic_base,
 #                    test_syssvc_rightslist, vms-5f0) read the real records back
 #                    through the RMS-over-ACP rooted-logical $OPEN.
-#   vde (DKA400:) -- a GENERATED genuine ODS-2 volume carrying [IMGACT]TESTIMG.EXE
+#   vde (VDA400:) -- a GENERATED genuine ODS-2 volume carrying [IMGACT]TESTIMG.EXE
 #                    (a real ELF image) from /ods2_imgact.img ==
 #                    tests/qemu/mkimage_ods2_imgact.c. test_syssvc_imgact_acp
 #                    (vms-3e8e) $MOUNTs it and has IMGACT's freestanding ACP
@@ -164,7 +164,7 @@ if [ -f "$OVMX_ODS2_SYSVOL_SRC" ]; then
     cp "$OVMX_ODS2_SYSVOL_SRC" "$OVMX_DISK3"
 else
     echo "run_tests.sh: FATAL: ODS-2 sysvol fixture $OVMX_ODS2_SYSVOL_SRC missing --" >&2
-    echo "                the directory-logical test (vms-0044) needs a system-disk ODS-2 volume on DKA300: (vdd)" >&2
+    echo "                the directory-logical test (vms-0044) needs a system-disk ODS-2 volume on VDA300: (vdd)" >&2
     exit 2
 fi
 OVMX_ODS2_IMGACT_SRC=/ods2_imgact.img
@@ -172,7 +172,7 @@ if [ -f "$OVMX_ODS2_IMGACT_SRC" ]; then
     cp "$OVMX_ODS2_IMGACT_SRC" "$OVMX_DISK4"
 else
     echo "run_tests.sh: FATAL: ODS-2 imgact fixture $OVMX_ODS2_IMGACT_SRC missing --" >&2
-    echo "                the IMGACT-over-ACP test (vms-3e8e) needs an ODS-2 image volume on DKA400: (vde)" >&2
+    echo "                the IMGACT-over-ACP test (vms-3e8e) needs an ODS-2 image volume on VDA400: (vde)" >&2
     exit 2
 fi
 trap 'rm -f "$ASSERT_TRANSCRIPT" "$OVMX_DISK0" "$OVMX_DISK1" "$OVMX_DISK2" "$OVMX_DISK3" "$OVMX_DISK4"' EXIT

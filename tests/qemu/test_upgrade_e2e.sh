@@ -11,14 +11,14 @@
 # REAL cut-release.sh bundles (never hand-faked "0.N"/"0.N+1" versions) and
 # a real PRODUCT INSTALL of each, in sequence, onto the SAME volume.
 #
-# THREE VIRTIO DISKS (vms-3e8: DKA0: vda, DKA100: vdb, DKA200: vdc):
-#   DKA0:   the UPGRADE release's own vmlinuz/initramfs/ovmx-distrib.img --
+# THREE VIRTIO DISKS (vms-3e8: VDA0: vda, VDA100: vdb, VDA200: vdc):
+#   VDA0:   the UPGRADE release's own vmlinuz/initramfs/ovmx-distrib.img --
 #           this is simply a running OVMX system to drive DCL/PRODUCT.EXE
-#           from; which release boots DKA0: is not otherwise significant.
-#   DKA100: a BLANK disk, INITIALIZEd on the HOST (same convention as
-#           test_product_install_e2e.sh's DKA100_SRC) -- the volume the
+#           from; which release boots VDA0: is not otherwise significant.
+#   VDA100: a BLANK disk, INITIALIZEd on the HOST (same convention as
+#           test_product_install_e2e.sh's VDA100_SRC) -- the volume the
 #           whole install -> upgrade sequence runs against.
-#   DKA200: a "kit carrier" disk, MASTERED on the HOST via vmsfs_master
+#   VDA200: a "kit carrier" disk, MASTERED on the HOST via vmsfs_master
 #           (also pure userspace, no vmsfs.ko, same as INITIALIZE.EXE) and
 #           populated with BOTH release's ovmx-os.kit files, named
 #           OVMX-OS-BASELINE.KIT and OVMX-OS-UPGRADE.KIT. This sidesteps
@@ -29,17 +29,17 @@
 #           block-device read.
 #
 # GROUND-SOURCE SHAPE, all against the REAL system, no mocks:
-#   1. MOUNT DKA200: and DKA100:.
-#   2. PRODUCT INSTALL the BASELINE kit onto DKA100: (a real PRODUCT.EXE
+#   1. MOUNT VDA200: and VDA100:.
+#   2. PRODUCT INSTALL the BASELINE kit onto VDA100: (a real PRODUCT.EXE
 #      run, vms-df9's mechanism, unmodified).
 #   3. Write USER STATE onto the freshly-installed volume: a real DCL
-#      OPEN/WRITE/CLOSE creates DKA100:[USER]DATA.TXT with known content
+#      OPEN/WRITE/CLOSE creates VDA100:[USER]DATA.TXT with known content
 #      (not a file the kit ships -- nothing upstream of this test ever
 #      writes to [USER]), and a real DCL OPEN/APPEND/WRITE/CLOSE appends a
-#      site-customization marker line to DKA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM
+#      site-customization marker line to VDA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM
 #      (a file the kit DOES ship, exactly the file a site is expected to
 #      customize on real OpenVMS).
-#   4. PRODUCT INSTALL the UPGRADE kit onto the SAME DKA100: -- the upgrade.
+#   4. PRODUCT INSTALL the UPGRADE kit onto the SAME VDA100: -- the upgrade.
 #   5. Assert: (a) the user data file survives byte-identical, (b) the site
 #      customization marker survives, (c) PRODUCT SHOW PRODUCT now reports
 #      the UPGRADE version, not the BASELINE one.
@@ -96,8 +96,8 @@ RUN_TIMEOUT="${RUN_TIMEOUT:-90}"
 KERNEL=/upgrade-release/vmlinuz
 INITRD=/upgrade-release/initramfs-ovmx-slim.cpio.gz
 DISTRIB_IMG=/upgrade-release/ovmx-distrib.img
-DKA100_SRC=/work/dka100.img
-DKA200_SRC=/work/dka200.img
+VDA100_SRC=/work/dka100.img
+VDA200_SRC=/work/dka200.img
 ARCH=$(uname -m)
 
 USER_DATA_CONTENT="VMS-F05-USER-DATA-MUST-SURVIVE-UPGRADE-$$"
@@ -113,7 +113,7 @@ else
     CONSOLE="console=ttyS0"
 fi
 
-for f in "$KERNEL" "$INITRD" "$DISTRIB_IMG" "$DKA100_SRC" "$DKA200_SRC"; do
+for f in "$KERNEL" "$INITRD" "$DISTRIB_IMG" "$VDA100_SRC" "$VDA200_SRC"; do
     [ -f "$f" ] || { echo "FATAL: $f not found - run this inside the ovmx-boot image with /upgrade-release and /work bind-mounted (see header)"; exit 1; }
 done
 command -v "$QEMU" >/dev/null 2>&1 || { echo "FATAL: $QEMU not available"; exit 1; }
@@ -131,8 +131,8 @@ DISK0="$WORKDIR/dka0.img"
 DISK1="$WORKDIR/dka100.img"
 DISK2="$WORKDIR/dka200.img"
 cp "$DISTRIB_IMG" "$DISK0"
-cp "$DKA100_SRC" "$DISK1"
-cp "$DKA200_SRC" "$DISK2"
+cp "$VDA100_SRC" "$DISK1"
+cp "$VDA200_SRC" "$DISK2"
 
 QPID=""
 cleanup() { [ -n "$QPID" ] && kill "$QPID" 2>/dev/null; rm -rf "$WORKDIR"; }
@@ -213,24 +213,24 @@ login "$LOG"
 
 # --- 1. MOUNT the kit carrier and the blank target ----------------------
 OFF=$(wc -c <"$LOG")
-send 'MOUNT DKA200: KITS'  # GUIDE-STEP (docs/upgrade-guide.md, tools/check_guide_drift.py)
-if wait_for '%MOUNT-I-MOUNTED, KITS mounted on _DKA200:' "$RUN_TIMEOUT" "$OFF"; then
-    ok "MOUNT DKA200: (kit carrier) succeeds"
+send 'MOUNT VDA200: KITS'  # GUIDE-STEP (docs/upgrade-guide.md, tools/check_guide_drift.py)
+if wait_for '%MOUNT-I-MOUNTED, KITS mounted on _VDA200:' "$RUN_TIMEOUT" "$OFF"; then
+    ok "MOUNT VDA200: (kit carrier) succeeds"
 else
-    dump_and_die "MOUNT DKA200: did not report success within ${RUN_TIMEOUT}s"
+    dump_and_die "MOUNT VDA200: did not report success within ${RUN_TIMEOUT}s"
 fi
 
 OFF=$(wc -c <"$LOG")
-send 'MOUNT DKA100: WORK'  # GUIDE-STEP (docs/upgrade-guide.md, tools/check_guide_drift.py)
-if wait_for '%MOUNT-I-MOUNTED, WORK mounted on _DKA100:' "$RUN_TIMEOUT" "$OFF"; then
-    ok "MOUNT DKA100: (upgrade target) succeeds"
+send 'MOUNT VDA100: WORK'  # GUIDE-STEP (docs/upgrade-guide.md, tools/check_guide_drift.py)
+if wait_for '%MOUNT-I-MOUNTED, WORK mounted on _VDA100:' "$RUN_TIMEOUT" "$OFF"; then
+    ok "MOUNT VDA100: (upgrade target) succeeds"
 else
-    dump_and_die "MOUNT DKA100: did not report success within ${RUN_TIMEOUT}s"
+    dump_and_die "MOUNT VDA100: did not report success within ${RUN_TIMEOUT}s"
 fi
 
 # --- 2. PRODUCT INSTALL the BASELINE kit onto the blank target -----------
 OFF=$(wc -c <"$LOG")
-send 'PRODUCT INSTALL VMS /SOURCE=DKA200:[SYSUPD]OVMX-OS-BASELINE.KIT /DESTINATION=DKA100:'
+send 'PRODUCT INSTALL VMS /SOURCE=VDA200:[SYSUPD]OVMX-OS-BASELINE.KIT /DESTINATION=VDA100:'
 if wait_for '%PCSI-I-DONE' "$RUN_TIMEOUT" "$OFF"; then
     ok "PRODUCT INSTALL (BASELINE) reports %PCSI-I-DONE"
 else
@@ -242,7 +242,7 @@ if printf '%s\n' "$BASE_INSTALL_SEG" | grep -qiE '%PCSI-[EF]-'; then
 fi
 
 OFF=$(wc -c <"$LOG")
-send 'PRODUCT SHOW PRODUCT /DESTINATION=DKA100:'
+send 'PRODUCT SHOW PRODUCT /DESTINATION=VDA100:'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 BASE_SHOW=$(segment_since "$OFF")
 echo "$BASE_SHOW"
@@ -254,15 +254,15 @@ fi
 
 # --- 3. Write USER STATE onto the freshly-installed volume ---------------
 OFF=$(wc -c <"$LOG")
-send 'CREATE/DIRECTORY DKA100:[USER]'
+send 'CREATE/DIRECTORY VDA100:[USER]'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
 if printf '%s\n' "$SEG" | grep -qiE '%CREATE-[EF]-|%DCL-[EF]-|%RMS-[EF]-'; then
-    dump_and_die "CREATE/DIRECTORY DKA100:[USER] failed: $SEG"
+    dump_and_die "CREATE/DIRECTORY VDA100:[USER] failed: $SEG"
 fi
 
 OFF=$(wc -c <"$LOG")
-send 'OPEN/WRITE UD DKA100:[USER]DATA.TXT'
+send 'OPEN/WRITE UD VDA100:[USER]DATA.TXT'
 wait_for '$' 20 "$OFF"
 OFF=$(wc -c <"$LOG")
 send "WRITE UD \"$USER_DATA_CONTENT\""
@@ -272,19 +272,19 @@ send 'CLOSE UD'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 
 OFF=$(wc -c <"$LOG")
-send 'TYPE DKA100:[USER]DATA.TXT'
+send 'TYPE VDA100:[USER]DATA.TXT'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
-USER_CMD='TYPE DKA100:[USER]DATA.TXT'
+USER_CMD='TYPE VDA100:[USER]DATA.TXT'
 USER_BEFORE=$(segment_since "$OFF" | grep -vF "$USER_CMD")
 if printf '%s' "$USER_BEFORE" | grep -qF "$USER_DATA_CONTENT"; then
-    ok "DKA100:[USER]DATA.TXT carries the expected content before the upgrade"
+    ok "VDA100:[USER]DATA.TXT carries the expected content before the upgrade"
 else
-    dump_and_die "DKA100:[USER]DATA.TXT does not carry the expected content before the upgrade: $USER_BEFORE"
+    dump_and_die "VDA100:[USER]DATA.TXT does not carry the expected content before the upgrade: $USER_BEFORE"
 fi
 
 # --- 4. Write a SITE CONFIG customization onto a file the kit ships ------
 OFF=$(wc -c <"$LOG")
-send 'OPEN/APPEND SC DKA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM'
+send 'OPEN/APPEND SC VDA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM'
 wait_for '$' 20 "$OFF"
 OFF=$(wc -c <"$LOG")
 send "WRITE SC \"$SITE_MARKER\""
@@ -294,12 +294,12 @@ send 'CLOSE SC'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 
 OFF=$(wc -c <"$LOG")
-send 'TYPE DKA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM'
+send 'TYPE VDA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
-SITE_CMD='TYPE DKA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM'
+SITE_CMD='TYPE VDA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM'
 SITE_BEFORE=$(segment_since "$OFF" | grep -vF "$SITE_CMD")
 if printf '%s' "$SITE_BEFORE" | grep -qF "$SITE_MARKER"; then
-    ok "DKA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM carries the site marker before the upgrade"
+    ok "VDA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM carries the site marker before the upgrade"
 else
     dump_and_die "site marker did not land in SYSTARTUP_VMS.COM before the upgrade: $SITE_BEFORE"
 fi
@@ -308,7 +308,7 @@ fi
 # THE UPGRADE
 # =====================================================================
 OFF=$(wc -c <"$LOG")
-send 'PRODUCT INSTALL VMS /SOURCE=DKA200:[SYSUPD]OVMX-OS-UPGRADE.KIT /DESTINATION=DKA100:'  # GUIDE-STEP (docs/upgrade-guide.md, tools/check_guide_drift.py)
+send 'PRODUCT INSTALL VMS /SOURCE=VDA200:[SYSUPD]OVMX-OS-UPGRADE.KIT /DESTINATION=VDA100:'  # GUIDE-STEP (docs/upgrade-guide.md, tools/check_guide_drift.py)
 if wait_for '%PCSI-I-DONE' "$RUN_TIMEOUT" "$OFF"; then
     ok "PRODUCT INSTALL (UPGRADE) reports %PCSI-I-DONE"
 else
@@ -321,19 +321,19 @@ fi
 
 # --- (a) user data survives byte-identical --------------------------------
 OFF=$(wc -c <"$LOG")
-send 'TYPE DKA100:[USER]DATA.TXT'
+send 'TYPE VDA100:[USER]DATA.TXT'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 USER_AFTER=$(segment_since "$OFF" | grep -vF "$USER_CMD")
 if [ "$(printf '%s' "$USER_AFTER" | tr -d '[:space:]')" = "$(printf '%s' "$USER_BEFORE" | tr -d '[:space:]')" ] \
     && printf '%s' "$USER_AFTER" | grep -qF "$USER_DATA_CONTENT"; then
-    ok "(a) DKA100:[USER]DATA.TXT survives the upgrade byte-identical"
+    ok "(a) VDA100:[USER]DATA.TXT survives the upgrade byte-identical"
 else
-    dump_and_die "(a) DKA100:[USER]DATA.TXT did NOT survive the upgrade identically -- before: $USER_BEFORE / after: $USER_AFTER"
+    dump_and_die "(a) VDA100:[USER]DATA.TXT did NOT survive the upgrade identically -- before: $USER_BEFORE / after: $USER_AFTER"
 fi
 
 # --- (b) site config survives (vms-2c9: seed-once preservation) ----------
 OFF=$(wc -c <"$LOG")
-send 'TYPE DKA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM'
+send 'TYPE VDA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 SITE_AFTER=$(segment_since "$OFF" | grep -vF "$SITE_CMD")
 if printf '%s' "$SITE_AFTER" | grep -qF "$SITE_MARKER"; then
@@ -344,7 +344,7 @@ fi
 
 # --- (c) the version advanced ---------------------------------------------
 OFF=$(wc -c <"$LOG")
-send 'PRODUCT SHOW PRODUCT /DESTINATION=DKA100:'  # GUIDE-STEP (docs/upgrade-guide.md, tools/check_guide_drift.py)
+send 'PRODUCT SHOW PRODUCT /DESTINATION=VDA100:'  # GUIDE-STEP (docs/upgrade-guide.md, tools/check_guide_drift.py)
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 UPG_SHOW=$(segment_since "$OFF")
 echo "$UPG_SHOW"
@@ -356,10 +356,10 @@ fi
 
 # DISMOUNT before killing QEMU so umount(2) flushes the volumes cleanly.
 OFF=$(wc -c <"$LOG")
-send 'DISMOUNT DKA100:'  # GUIDE-STEP (docs/upgrade-guide.md, tools/check_guide_drift.py)
+send 'DISMOUNT VDA100:'  # GUIDE-STEP (docs/upgrade-guide.md, tools/check_guide_drift.py)
 wait_for '%DISMOUNT-I-DISMOUNTED' "$RUN_TIMEOUT" "$OFF"
 OFF=$(wc -c <"$LOG")
-send 'DISMOUNT DKA200:'  # GUIDE-STEP (docs/upgrade-guide.md, tools/check_guide_drift.py)
+send 'DISMOUNT VDA200:'  # GUIDE-STEP (docs/upgrade-guide.md, tools/check_guide_drift.py)
 wait_for '%DISMOUNT-I-DISMOUNTED' "$RUN_TIMEOUT" "$OFF"
 
 kill "$QPID" 2>/dev/null; wait "$QPID" 2>/dev/null; QPID=""
@@ -374,26 +374,26 @@ login "$LOG"
 ok "(d) the system still boots to a login prompt after the upgrade (full QEMU restart)"
 
 OFF=$(wc -c <"$LOG")
-send 'MOUNT DKA100: WORK'
-if wait_for '%MOUNT-I-MOUNTED, WORK mounted on _DKA100:' "$RUN_TIMEOUT" "$OFF"; then
-    ok "MOUNT DKA100: succeeds again after a full QEMU restart"
+send 'MOUNT VDA100: WORK'
+if wait_for '%MOUNT-I-MOUNTED, WORK mounted on _VDA100:' "$RUN_TIMEOUT" "$OFF"; then
+    ok "MOUNT VDA100: succeeds again after a full QEMU restart"
 else
-    dump_and_die "MOUNT DKA100: did not report success on the restarted boot"
+    dump_and_die "MOUNT VDA100: did not report success on the restarted boot"
 fi
 
 OFF=$(wc -c <"$LOG")
-send 'TYPE DKA100:[USER]DATA.TXT'
+send 'TYPE VDA100:[USER]DATA.TXT'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 USER_RESTART=$(segment_since "$OFF" | grep -vF "$USER_CMD")
 if [ "$(printf '%s' "$USER_RESTART" | tr -d '[:space:]')" = "$(printf '%s' "$USER_BEFORE" | tr -d '[:space:]')" ] \
     && printf '%s' "$USER_RESTART" | grep -qF "$USER_DATA_CONTENT"; then
-    ok "(a) DKA100:[USER]DATA.TXT survives a full QEMU restart after the upgrade"
+    ok "(a) VDA100:[USER]DATA.TXT survives a full QEMU restart after the upgrade"
 else
-    dump_and_die "(a) DKA100:[USER]DATA.TXT did NOT survive the QEMU restart: $USER_RESTART"
+    dump_and_die "(a) VDA100:[USER]DATA.TXT did NOT survive the QEMU restart: $USER_RESTART"
 fi
 
 OFF=$(wc -c <"$LOG")
-send 'PRODUCT SHOW PRODUCT /DESTINATION=DKA100:'
+send 'PRODUCT SHOW PRODUCT /DESTINATION=VDA100:'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
 if printf '%s\n' "$SEG" | grep -qF "$EXPECTED_UPGRADE_VERSION"; then

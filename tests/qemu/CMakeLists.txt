@@ -709,7 +709,7 @@ set_tests_properties(product_install_e2e PROPERTIES
 # ([SYSEXE]) instead of the rooted, concealed [SYS0.SYSCOMMON.SYSEXE] a
 # bootable system disk needs (a flat target halts %OVMX-F-SYSINIT). This gate
 # closes that gap: it installs onto a blank INITIALIZEd disk, then boots THAT
-# disk as the sole DKA0: system disk with the bootstrap-only slim initramfs
+# disk as the sole VDA0: system disk with the bootstrap-only slim initramfs
 # and reaches a SYSTEM login -- red on the unfixed tree, green after vms-96ec.
 # CI runs it for real (never opt-in cover): see the install-boot-e2e job in
 # .github/workflows/ci.yml, which treats a SKIP as a hard failure. Same

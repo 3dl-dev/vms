@@ -87,7 +87,7 @@ int main(void)
 
     /* --- Establish this user's identity logicals from a SYSUAF default
      *     device/directory (as LOGINOUT does at login). --- */
-    const char *home = "DKA100:[SMITH]";
+    const char *home = "VDA100:[SMITH]";
     /* Host ctest: exercise the establishment against LNM$PROCESS_TABLE (no
      * executive needed). Production passes LNM_JOB_TABLE -- see the file header
      * and the PARTS demo e2e. */
@@ -109,7 +109,7 @@ int main(void)
     /* SYS$LOGIN_DEVICE == the device field of the default directory. */
     check(trnlnm(mgr, "SYS$LOGIN_DEVICE", val, sizeof(val)) == 0,
           "SYS$LOGIN_DEVICE resolves");
-    check(strcmp(val, "DKA100:") == 0,
+    check(strcmp(val, "VDA100:") == 0,
           "F$TRNLNM(SYS$LOGIN_DEVICE) == device of SYSUAF home");
 
     /* SYS$SCRATCH is DELIBERATELY left at OVMX's system-wide scratch
@@ -135,16 +135,16 @@ int main(void)
     sysuaf_record_t rec;
     memset(&rec, 0, sizeof(rec));
     strncpy(rec.username, "SMITH", sizeof(rec.username) - 1);
-    strncpy(rec.default_dir, "DKA100:[SMITH]", sizeof(rec.default_dir) - 1);
-    strncpy(rec.lgicmd, "DKA100:[SMITH]LOGIN_CUSTOM.COM",
+    strncpy(rec.default_dir, "VDA100:[SMITH]", sizeof(rec.default_dir) - 1);
+    strncpy(rec.lgicmd, "VDA100:[SMITH]LOGIN_CUSTOM.COM",
             sizeof(rec.lgicmd) - 1);
-    check(strcmp(rec.default_dir, "DKA100:[SMITH]") == 0, "default_dir set");
-    check(strcmp(rec.lgicmd, "DKA100:[SMITH]LOGIN_CUSTOM.COM") == 0,
+    check(strcmp(rec.default_dir, "VDA100:[SMITH]") == 0, "default_dir set");
+    check(strcmp(rec.lgicmd, "VDA100:[SMITH]LOGIN_CUSTOM.COM") == 0,
           "LGICMD field set");
 
     char cmdfile[256];
     sysuaf_login_command_file(&rec, cmdfile, sizeof(cmdfile));
-    check(strcmp(cmdfile, "DKA100:[SMITH]LOGIN_CUSTOM.COM") == 0,
+    check(strcmp(cmdfile, "VDA100:[SMITH]LOGIN_CUSTOM.COM") == 0,
           "login command file honours the SYSUAF LGICMD field");
 
     /* An account with an EMPTY LGICMD falls back to the documented default
@@ -152,7 +152,7 @@ int main(void)
     sysuaf_record_t rec7;
     memset(&rec7, 0, sizeof(rec7));
     strncpy(rec7.username, "JONES", sizeof(rec7.username) - 1);
-    strncpy(rec7.default_dir, "DKA100:[JONES]", sizeof(rec7.default_dir) - 1);
+    strncpy(rec7.default_dir, "VDA100:[JONES]", sizeof(rec7.default_dir) - 1);
     check(rec7.lgicmd[0] == '\0', "record with no LGICMD has empty field");
     sysuaf_login_command_file(&rec7, cmdfile, sizeof(cmdfile));
     check(strcmp(cmdfile, "SYS$LOGIN:LOGIN.COM") == 0,

@@ -26,7 +26,7 @@
  * are plain file I/O plus SYS$MANAGER: path resolution -- no /dev/vms
  * needed, same reasoning as test_sysuaf_write_veracity.c. This test
  * bootstraps its OWN private VMS namespace (a throwaway temp directory
- * registered as DKA0:, the same pattern that test uses) rather than
+ * registered as VDA0:, the same pattern that test uses) rather than
  * touching the real /vms mount, so it cannot race or collide with any
  * other test or a real boot's SYS$MANAGER:ACCOUNTNG.ENB.
  *

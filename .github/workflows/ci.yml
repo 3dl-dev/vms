@@ -161,6 +161,7 @@ jobs:
               - 'tests/qemu/test_release_e2e.sh'
               - 'tests/qemu/test_executive_integral.sh'
               - 'tests/qemu/test_distrib_boot.sh'
+              - 'tests/qemu/test_boot_alternate_disk.sh'
               - 'tests/qemu/test_virtio_nic.sh'
               - 'tests/qemu/test_startup_phase_driver.sh'
               - 'tests/qemu/test_boot_conformance.sh'
@@ -1874,6 +1875,53 @@ jobs:
             exit 1
           fi
           exit "$rc"
+
+  # vms-9f5 device-discovery proof, per-PR. Device-native naming makes the
+  # system disk DISCOVERED, not compile-frozen. The DEFAULT discovery path
+  # (PID 1 select-default -> mount VDA0: -> publish OVMX_SYSDEVICE) is already
+  # exercised per-PR by console-newline-spam-e2e and the Alpha activation gate,
+  # so a bug there reds those. THIS focused job proves the NON-DEFAULT SELECTION
+  # -- the headline capability and the vms-9f5 DONE-condition -- per-PR: it boots
+  # the mastered system as the SECOND virtio disk (vdb -> VDA100:), selected by
+  # an ovmx.sysdev=VDA100: kernel-cmdline token, and reaches login (impossible on
+  # pristine main, which always mounts vda), plus an anti-LARP control (same two
+  # disks, no selector, must NOT log in -- proving the selector, not QEMU disk
+  # ordering, reaches the second disk). Tightly gated (honours the vms-fb8
+  # tier-split): runs on PR ONLY when the naming (kernel/toolchain) or the boot/
+  # discovery (boot) sources change, never on an unrelated PR; the heavy full
+  # boot/e2e battery stays in the non-PR persistent-boot tier.
+  device-discovery-alternate-disk-e2e:
+    name: "Alternate-disk boot — 2nd-disk device discovery reaches login (vms-9f5)"
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.boot == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image (qemu tooling + the pre-mastered distribution disk)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Alternate-disk boot — system on the second disk reaches login (vms-9f5)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_boot_alternate_disk.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
 
   # -----------------------------------------------------------------------
   # cut-release-vax-gate (rd vms-ca5, epic vms-f10; "R2 release parity",

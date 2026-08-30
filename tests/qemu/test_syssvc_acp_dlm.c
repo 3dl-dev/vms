@@ -15,7 +15,7 @@
  * cluster-wide sync point).
  *
  * WHAT THIS SUITE PROVES, against a real /dev/vms, over the real-VAX ODS-2
- * fixture the harness seeds WRITABLE on DKA0::
+ * fixture the harness seeds WRITABLE on VDA0::
  *
  *   N_WORKERS unrelated processes (fork + re-exec, EACH re-registering with the
  *   executive and $ASSIGNing its OWN file-class channel) are released from a
@@ -69,7 +69,7 @@
 #include "vmsfs/ods2.h"   /* ODS2_FK_* file-kind selectors for CREATE */
 
 #define EXIT_SKIP 77
-#define ODS2_UNIT       "DKA0:"
+#define ODS2_UNIT       "VDA0:"
 #define OVMXDIR_FID_NUM 11u     /* [OVMXDIR] in the real-VAX fixture */
 
 #define N_WORKERS  8            /* concurrent, unrelated writer processes */

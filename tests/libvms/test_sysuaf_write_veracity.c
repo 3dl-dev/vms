@@ -18,7 +18,7 @@
  * WHY A HOST TEST. The whole path needs no /dev/vms: with the executive absent
  * the binary engine's legacy defer serves SYSUAF over POSIX (vms-5f0). The test
  * bootstraps its OWN private VMS namespace (a throwaway temp dir registered as
- * DKA0:, the pattern AUTHORIZE's main() uses) so it cannot race the real /vms.
+ * VDA0:, the pattern AUTHORIZE's main() uses) so it cannot race the real /vms.
  */
 
 #include <stdio.h>

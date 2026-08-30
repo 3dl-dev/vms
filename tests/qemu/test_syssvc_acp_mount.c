@@ -12,13 +12,13 @@
  *
  * WHAT THIS SUITE PROVES, through the PUBLIC sys$/kif API against a real /dev/vms:
  *
- *   1. VALIDATION ACCEPTS GENUINE ODS-2. $MOUNT of DKA100: -- a real-VAX ODS-2
+ *   1. VALIDATION ACCEPTS GENUINE ODS-2. $MOUNT of VDA100: -- a real-VAX ODS-2
  *      volume the harness seeds on vdb (tests/qemu/run_tests.sh, from the staged
  *      /ods2_real.img fixture) -- SUCCEEDS: the executive read the home block +
  *      SCB off the device and they validated ("DECFILE11B  ", structure level
  *      0x0201, checksums).
  *
- *   2. VALIDATION REJECTS NON-ODS-2 MEDIA, FAIL-HONEST. $MOUNT of DKA0: -- a
+ *   2. VALIDATION REJECTS NON-ODS-2 MEDIA, FAIL-HONEST. $MOUNT of VDA0: -- a
  *      BLANK 16M virtio disk (vda), all-zero home block -- is REFUSED with
  *      SS$_DEVNOTMOUNT and NOT recorded. This is the INV-6 heart of the rung: a
  *      mount that admitted a non-ODS-2 blob would be the "report success while
@@ -30,7 +30,7 @@
  *
  *   3. THE MOUNT IS EXECUTIVE-GLOBAL. A SECOND, unrelated process -- a fork that
  *      holds no channel, fd, or pipe to the volume, and never calls $MOUNT
- *      itself -- $ASSIGNs DKA100: and gets an executive file channel, because it
+ *      itself -- $ASSIGNs VDA100: and gets an executive file channel, because it
  *      sees the SAME mounted volume the FIRST process mounted. If the mount were
  *      per-process (the userspace OVMX_SYSDISK_DEV passthrough this rung
  *      deletes), the child's $ASSIGN would fail (SS$_DEVNOTMOUNT). Nothing crosses
@@ -59,14 +59,14 @@
 #define EXIT_SKIP 77
 
 /*
- * DKA0: (vda) is the genuine ODS-2 SYSTEM disk; DKA100: (vdb) is blank (non-ODS-2).
- * The ODS-2 unit is DKA0: because $ASSIGN routes only the boot unit
- * (DKA0:/SYS$SYSDEVICE) to the ACP today (src/libvms/syssvc/sys_assign.c), so the
+ * VDA0: (vda) is the genuine ODS-2 SYSTEM disk; VDA100: (vdb) is blank (non-ODS-2).
+ * The ODS-2 unit is VDA0: because $ASSIGN routes only the boot unit
+ * (VDA0:/SYS$SYSDEVICE) to the ACP today (src/libvms/syssvc/sys_assign.c), so the
  * cross-process $ASSIGN proof must ride the boot unit; the blank/reject media is
- * therefore DKA100:.
+ * therefore VDA100:.
  */
-#define ODS2_UNIT  "DKA0:"
-#define BLANK_UNIT "DKA100:"
+#define ODS2_UNIT  "VDA0:"
+#define BLANK_UNIT "VDA100:"
 
 /* Internal channel-class reader (declared extern exactly as the channel suite
  * and sys_qio.c's siblings are): proves the child's $ASSIGN handed back the
@@ -131,7 +131,7 @@ struct child_rep {
  * make "a second process sees it" indistinguishable from the parent seeing its
  * own mount; the re-exec is what makes the executive-global claim real (the same
  * discipline test_syssvc_mbx_crossproc.c uses). It never mounts anything: it
- * waits for the parent to signal "DKA100: is mounted", then $ASSIGNs DKA100: and
+ * waits for the parent to signal "VDA100: is mounted", then $ASSIGNs VDA100: and
  * reports what it saw. Success here can ONLY come from seeing the parent's
  * executive-global mount.
  */
@@ -150,7 +150,7 @@ static int run_child(int a2b_read, int b2a_write)
         return 1;
     }
 
-    /* Wait for the parent to finish mounting DKA100:. */
+    /* Wait for the parent to finish mounting VDA100:. */
     if (read_exact(a2b_read, &go, 1) != 0 || go != 'M') {
         (void)!write(b2a_write, &rep, sizeof(rep));
         return 1;
@@ -214,7 +214,7 @@ int main(int argc, char **argv)
     st = vms_kif_acp_mount(BLANK_UNIT);
     /* negctl: acp-mount-nonods2-accepted */
     check(st == SS$_DEVNOTMOUNT,
-          "$MOUNT of the BLANK DKA100: is REJECTED SS$_DEVNOTMOUNT -- non-ODS-2 media, not recorded");
+          "$MOUNT of the BLANK VDA100: is REJECTED SS$_DEVNOTMOUNT -- non-ODS-2 media, not recorded");
 
     /* And the reject really did not record it: $DISMOUNT of the blank unit is
      * SS$_NOSUCHDEV, exactly as for a unit that was never mounted. (Via the KIF
@@ -222,7 +222,7 @@ int main(int argc, char **argv)
      * to the ACP today -- see the ODS2_UNIT note above.) */
     st = vms_kif_acp_dmount(BLANK_UNIT);
     check(st == SS$_NOSUCHDEV,
-          "$DISMOUNT of the rejected DKA100: is SS$_NOSUCHDEV (the reject recorded nothing)");
+          "$DISMOUNT of the rejected VDA100: is SS$_NOSUCHDEV (the reject recorded nothing)");
 
     /* --- (3) the mount is EXECUTIVE-GLOBAL: a second process sees it ------ */
     if (pipe(a2b) < 0 || pipe(b2a) < 0) {
@@ -247,7 +247,7 @@ int main(int argc, char **argv)
         _exit(1);
     }
 
-    /* Parent. DKA100: is already mounted (step 1). Tell the child to go. */
+    /* Parent. VDA100: is already mounted (step 1). Tell the child to go. */
     close(a2b[0]);
     close(b2a[1]);
     (void)send_token(a2b[1], 'M');

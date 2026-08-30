@@ -7,7 +7,7 @@
  * THE GAP THIS PROVES FIXED. A logical defined
  * /TRANSLATION_ATTRIBUTES=CONCEALED (LNM$M_CONCEALED) is a *concealed device*;
  * when its equivalence names a *rooted directory* -- a '.' immediately before
- * the closing ']', e.g. DISK$USER -> DKA100:[USERS.] -- it is a rooted
+ * the closing ']', e.g. DISK$USER -> VDA100:[USERS.] -- it is a rooted
  * concealed device (VSI OpenVMS DCL Dictionary, DEFINE
  * /TRANSLATION_ATTRIBUTES; VSI OpenVMS User's Manual, "Rooted Directories").
  * VMS $PARSE must:
@@ -16,8 +16,8 @@
  *       NAM$M_ROOT_DIR when the concealed equivalence is rooted
  *       (VSI OpenVMS RMS Reference, NAM block nam$l_fnb); and
  *   (2) compose a subdirectory onto the root STRUCTURALLY per the rooted rule
- *       -- WORK:[SMITH]FOO.DAT (WORK -> DKA100:[USERS.]) resolves to
- *       DKA100:[USERS.SMITH]FOO.DAT (physical .../users/smith/foo.dat), a
+ *       -- WORK:[SMITH]FOO.DAT (WORK -> VDA100:[USERS.]) resolves to
+ *       VDA100:[USERS.SMITH]FOO.DAT (physical .../users/smith/foo.dat), a
  *       single contiguous merge, not a trailing-dot string coincidence.
  *
  * Before vms-d8e, $PARSE never consulted the logical's attributes, so it set

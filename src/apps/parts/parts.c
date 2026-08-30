@@ -39,7 +39,7 @@
 #define PARTS_DEFAULT_COUNT 10000
 #endif
 
-#define PARTS_DEFAULT_SPEC "DKA0:[USERS]PARTS.DAT"
+#define PARTS_DEFAULT_SPEC "SYS$SYSDEVICE:[USERS]PARTS.DAT"
 
 /* Fabricate a deterministic part record for ordinal i (1-based). */
 static void make_record(struct part_record *rec, unsigned i)
@@ -232,7 +232,7 @@ int main(int argc, char **argv)
     static const char *candidates[] = {
         "SYS$SCRATCH:PARTS.DAT",
         "SYS$LOGIN:PARTS.DAT",
-        "DKA0:[USERS]PARTS.DAT",
+        "SYS$SYSDEVICE:[USERS]PARTS.DAT",
         "SYS$SYSDEVICE:[SYSTMP]PARTS.DAT",
         "/tmp/PARTS.DAT",
     };

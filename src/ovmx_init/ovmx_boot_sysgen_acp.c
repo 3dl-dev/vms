@@ -67,10 +67,13 @@
  * three host primitives (imgact_acp_dev_open/close/ioctl) are libc-backed in
  * ovmx_boot_acp_read.c. Reuse both for the read path and the raw write ioctls. */
 #include "imgact_acp.h"
+#include "ovmx_boot.h"       /* ovmx_boot_system_disk_unit() -- the DISCOVERED unit */
 
-/* The ACP-mounted boot/system unit (DKA0:) -- the same unit PID 1 $MOUNTs and
- * IMGACT.EXE activates images from. */
-#define BOOT_SYSDISK_UNIT   SYSDISK_DEVICE ":"
+/* The ACP-mounted boot/system unit -- the DISCOVERED device (vms-9f5), the same
+ * unit PID 1 $MOUNTs and IMGACT.EXE activates from, NOT the compile-time
+ * SYSDISK_DEVICE default: a non-default boot disk (e.g. VDA100:) is $ASSIGNed by
+ * the unit PID 1 actually mounted, never the unmounted VDA0: default. */
+#define BOOT_SYSDISK_UNIT   ovmx_boot_system_disk_unit()
 
 /* SYS$SYSTEM as a '/'-separated ODS-2 path into the boot volume, plus the
  * parameter file. VMS_SYSTEM_DIR is SYSDISK_MOUNT "/SYS0/SYSCOMMON/SYSEXE";

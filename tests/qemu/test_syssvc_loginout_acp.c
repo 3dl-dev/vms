@@ -4,7 +4,7 @@
  * epic vms-208).
  *
  * WHAT THIS PROVES, against a real /dev/vms on the ACP-mounted ODS-2 volume the
- * harness stages on DKA0::
+ * harness stages on VDA0::
  *
  *   1. THE AUTH PATH READS SYSUAF FROM ODS-2. sysuaf_lookup() +
  *      sysuaf_authenticate() -- the exact pair LOGINOUT (tools/vms_login.c) and
@@ -57,7 +57,7 @@
 #include "rms_textfile.h"  /* still used for the genuine text log files    */
 
 #define EXIT_SKIP  77
-#define ODS2_UNIT  "DKA0:"
+#define ODS2_UNIT  "VDA0:"
 
 static int pass = 0;
 static int fail = 0;
@@ -157,7 +157,7 @@ int main(void)
     }
 
     st = vms_kif_acp_mount(ODS2_UNIT);   /* idempotent */
-    check($VMS_STATUS_SUCCESS(st), "DKA0: mounted executive-global for the ACP");
+    check($VMS_STATUS_SUCCESS(st), "VDA0: mounted executive-global for the ACP");
 
     /*
      * SUBSTRATE GAP (flagged; the boot flip must close it). The product opens
@@ -168,11 +168,11 @@ int main(void)
      * directory. So SYS$SYSTEM: cannot yet resolve to a concrete on-volume
      * directory, and the MFD ([000000]) is not writable through the ACP. This
      * test therefore exercises the REROUTE MECHANISM against a concrete
-     * DKA0:[OVMXDIR] spec -- the writable scratch directory the fixture carries
+     * VDA0:[OVMXDIR] spec -- the writable scratch directory the fixture carries
      * -- which is byte-for-byte the code sysuaf_scan/find_uaf_record run once a
      * spec is resolved, and asserts the product logical paths FAIL HONESTLY
      * until that resolution lands (no POSIX fallback, INV-6). */
-#define UAF_SPEC "DKA0:[OVMXDIR]SYSUAF.DAT"
+#define UAF_SPEC "VDA0:[OVMXDIR]SYSUAF.DAT"
 
     /* Author a genuine BINARY $UAFDEF SYSUAF over the ACP (vms-d92 atomic flip):
      * the same create+$PUT+Purdy path the seed and AUTHORIZE use -- no ASCII row,
@@ -204,12 +204,12 @@ int main(void)
               "with the volume DISMOUNTED, the SYSUAF read fails-honest (no POSIX copy)");
     }
     st = vms_kif_acp_mount(ODS2_UNIT);   /* remount for the remaining proofs + cleanup */
-    check($VMS_STATUS_SUCCESS(st), "DKA0: remounted");
+    check($VMS_STATUS_SUCCESS(st), "VDA0: remounted");
 
     /* ---- (3) absent file / account fails honestly (no fabricated record) ---- */
     {
         sysuaf_record_t nrec;
-        check(read_binary_sysuaf_system("DKA0:[OVMXDIR]NOSUCH.DAT", &nrec) != 0,
+        check(read_binary_sysuaf_system("VDA0:[OVMXDIR]NOSUCH.DAT", &nrec) != 0,
               "opening an absent SYSUAF fails-honest (RMS$_FNF, no fallback)");
     }
 
@@ -226,10 +226,10 @@ int main(void)
      *           through the reroute reader ($GET over the ACP window). */
     {
         const char *oprline = "%%OPCOM  1-JAN-2026 00:00:00.00  %%%%%%%%%%%%  operator log test";
-        int rc = rms_textfile_append_line("DKA0:[OVMXDIR]OPERATOR.LOG", oprline);
+        int rc = rms_textfile_append_line("VDA0:[OVMXDIR]OPERATOR.LOG", oprline);
         check(rc == 0, "OPERATOR.LOG append via RMS $PUT-at-EOF over the ACP");
         char back[256] = ""; int too_long = 0;
-        rms_textfile_t *tf = rms_textfile_open("DKA0:[OVMXDIR]OPERATOR.LOG");
+        rms_textfile_t *tf = rms_textfile_open("VDA0:[OVMXDIR]OPERATOR.LOG");
         int got = tf && rms_textfile_getline(tf, back, sizeof(back), &too_long);
         if (tf) rms_textfile_close(tf);
         check(got && strstr(back, "operator log test") != NULL,
@@ -242,10 +242,10 @@ int main(void)
     {
         char ts[32];
         snprintf(ts, sizeof(ts), "%lld", (long long)time(NULL));
-        int rc = rms_textfile_write_line("DKA0:[OVMXDIR]LASTLOGIN_SYSTEM.DAT", ts);
+        int rc = rms_textfile_write_line("VDA0:[OVMXDIR]LASTLOGIN_SYSTEM.DAT", ts);
         check(rc == 0, "ovmx_accounting_record_login writes LASTLOGIN via RMS $CREATE/$PUT");
         char back[64] = ""; int too_long = 0;
-        rms_textfile_t *tf = rms_textfile_open("DKA0:[OVMXDIR]LASTLOGIN_SYSTEM.DAT");
+        rms_textfile_t *tf = rms_textfile_open("VDA0:[OVMXDIR]LASTLOGIN_SYSTEM.DAT");
         int got = tf && rms_textfile_getline(tf, back, sizeof(back), &too_long);
         if (tf) rms_textfile_close(tf);
         long long rbts = 0;
@@ -255,8 +255,8 @@ int main(void)
 
     /* ---- cleanup: restore the directory to its prior state ---- */
     erase_file(UAF_SPEC);
-    erase_file("DKA0:[OVMXDIR]OPERATOR.LOG");
-    erase_file("DKA0:[OVMXDIR]LASTLOGIN_SYSTEM.DAT");
+    erase_file("VDA0:[OVMXDIR]OPERATOR.LOG");
+    erase_file("VDA0:[OVMXDIR]LASTLOGIN_SYSTEM.DAT");
 
     /* If the auth reader ever read from a private POSIX copy instead of the ACP
      * window, the DISMOUNTED-read check above would still succeed -- so this

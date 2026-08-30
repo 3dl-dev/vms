@@ -13,8 +13,8 @@
 # DURING install actually lands on the TARGET's own SYSUAF (as opposed to
 # the distribution disk's).
 #
-#   1. Boot the DISTRIBUTION image (DKA0:) plus a second, blank-but-
-#      formatted disk (DKA100:, label WORK -- pre-formatted on the HOST
+#   1. Boot the DISTRIBUTION image (VDA0:) plus a second, blank-but-
+#      formatted disk (VDA100:, label WORK -- pre-formatted on the HOST
 #      with a real INITIALIZE.EXE, same convention as test_mount_e2e.sh /
 #      test_product_install_e2e.sh, and for the same reason: OVMX's own
 #      INITIALIZE DCL verb does not resolve a VMS device name to its
@@ -36,7 +36,7 @@
 #      below.
 #   5. Dismount, kill QEMU.
 #   6. Boot a FRESH qemu-system process against ONLY the target disk
-#      (DKA100:, now DKA0: to that boot) using the ordinary initramfs --
+#      (VDA100:, now VDA0: to that boot) using the ordinary initramfs --
 #      i.e. boot it exactly like any other OVMX system disk, no
 #      distribution disk involved. Proves the target's own
 #      SYSTARTUP_VMS.COM does NOT run the install menu (the two-variant
@@ -50,8 +50,8 @@
 #   (a) INITIALIZE <device>: <label> does not resolve a VMS device name to
 #       its backing block device (cmd_initialize never calls
 #       vms_kif_disk_resolve() the way cmd_mount does). Directly on the
-#       host: `INITIALIZE.EXE DKA100: LABEL 8` creates and formats a
-#       REGULAR FILE literally named "DKA100:" in the current directory
+#       host: `INITIALIZE.EXE VDA100: LABEL 8` creates and formats a
+#       REGULAR FILE literally named "VDA100:" in the current directory
 #       and reports %INIT-I-COMPLETE -- a silent fake success. Blocks
 #       proving the INITIALIZE branch (only PRESERVE is exercised here).
 #
@@ -65,7 +65,7 @@
 #
 #   (c) Independently of (b): plain RMS/POSIX file CREATE on a REAL
 #       vmsfs.ko-mounted volume was found to fail outright in this
-#       investigation -- `CREATE DKA0:[SYSEXE]PROBE.TXT` on the
+#       investigation -- `CREATE VDA0:[SYSEXE]PROBE.TXT` on the
 #       DISTRIBUTION disk itself (no target, no redirection) returns
 #       %RMS-E-CRE. SET PASSWORD (which does not fork) hits the same
 #       wall via sysuaf_write_record()'s fopen()+rename() and reports
@@ -101,7 +101,7 @@ RUN_TIMEOUT="${RUN_TIMEOUT:-90}"
 KERNEL=/boot/vmlinuz
 INITRD=/boot/initramfs-ovmx.cpio.gz
 DISTRIB_IMG=/boot/ovmx-install-media.img
-DKA100_SRC=/work/dka100.img
+VDA100_SRC=/work/dka100.img
 ARCH=$(uname -m)
 NEW_PASSWORD="NEWSYSPW1"
 
@@ -115,7 +115,7 @@ else
     CONSOLE="console=ttyS0"
 fi
 
-for f in "$KERNEL" "$INITRD" "$DISTRIB_IMG" "$DKA100_SRC"; do
+for f in "$KERNEL" "$INITRD" "$DISTRIB_IMG" "$VDA100_SRC"; do
     [ -f "$f" ] || { echo "FATAL: $f not found - run this inside the ovmx-boot image with /work bind-mounted (see header)"; exit 1; }
 done
 command -v "$QEMU" >/dev/null 2>&1 || { echo "FATAL: $QEMU not available"; exit 1; }
@@ -132,7 +132,7 @@ WORKDIR=$(mktemp -d)
 DISK0="$WORKDIR/dka0.img"
 DISK1="$WORKDIR/dka100.img"
 cp "$DISTRIB_IMG" "$DISK0"
-cp "$DKA100_SRC" "$DISK1"
+cp "$VDA100_SRC" "$DISK1"
 
 QPID=""
 # kill_boot - kill a boot_qemu background job AND the real qemu-system-*
@@ -265,7 +265,7 @@ else
 fi
 
 OFF=$(wc -c <"$LOG")
-send 'DKA100:'
+send 'VDA100:'
 if wait_for 'Enter volume label for target system disk' "$RUN_TIMEOUT" "$OFF"; then
     ok "target device accepted, asks for the volume label (oracle sec3a)"
 else
@@ -280,7 +280,7 @@ else
     dump_and_die "did not reach the confirmation gate"
 fi
 GATE_SEG=$(segment_since "$OFF")
-if printf '%s\n' "$GATE_SEG" | grep -qF 'DKA100:'; then
+if printf '%s\n' "$GATE_SEG" | grep -qF 'VDA100:'; then
     ok "the confirmation gate names the target device (naming the operation, per item spec)"
 else
     bad "the confirmation gate does not name the target device"

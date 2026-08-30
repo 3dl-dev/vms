@@ -14,7 +14,7 @@
  * carries uaf$q_priv = all-bits; that renders to the EXPANDED name list, never
  * the literal "ALL" the parser special-cases -- so the re-parse silently
  * dropped MOUNT (and ~19 other privileges). SYSTEM logged in without MOUNT and
- * `MOUNT DKA100:` returned %SYSTEM-F-NOPRIV.
+ * `MOUNT VDA100:` returned %SYSTEM-F-NOPRIV.
  *
  * THE FIX. sysuaf_record_privileges() (sysuaf.h, header-inline) returns the
  * authoritative uaf$q_priv quadword straight from the binary record. This test

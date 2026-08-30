@@ -339,17 +339,17 @@ check_lists_console() {
 
 # --- Property 3b: with an executive, the DISK units are listed too --------
 # The executive enumerates the node's virtio disks into DK units at module init
-# (vms-3e8: DKA0: from vda, DKA100: from vdb, ...) and SHOW DEVICE reads them
+# (vms-3e8: VDA0: from vda, VDA100: from vdb, ...) and SHOW DEVICE reads them
 # from the SAME table the console comes from -- a disk row is not invented by
 # DCL any more than OPA0: is. Asserted only on a guest that actually has a disk
 # unit: this gate also runs where no virtio disk is attached, and a device that
-# cannot exist there must not be required. When a DKA unit IS present it must be
+# cannot exist there must not be required. When a VDA unit IS present it must be
 # a real row (name in columns 0-23, "Online" status), exactly like OPA0:.
 check_lists_disk() {
     label="$1"; cmdline="$2"
     run_show "$cmdline"
-    if grep -q '^DKA[0-9]*: ' "$WORK/out"; then
-        first=$(grep -m1 '^DKA[0-9]*: ' "$WORK/out")
+    if grep -q '^VDA[0-9]*: ' "$WORK/out"; then
+        first=$(grep -m1 '^VDA[0-9]*: ' "$WORK/out")
         if printf '%s' "$first" | grep -q 'Online'; then
             echo "  OK: $label listed an executive disk unit ($(printf '%s' "$first" | awk '{print $1}')) as a real row"
         else

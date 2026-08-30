@@ -244,7 +244,7 @@
 # assertion added to test_syssvc_ast_secmode's PART B (the credential-dropped
 # USER-mode child). See its own entry in facility_defects.sh.
 # Raised to 85 by vms-3e8's disk-backing-not-resolved -- the executive now
-# enumerates the node's virtio disks into DK units (DKA0:/DKA100:/...) at
+# enumerates the node's virtio disks into DK units (VDA0:/VDA100:/...) at
 # module init and resolves a unit to its backing Linux block device
 # (VMS_IOCTL_DISK_RESOLVE, kernel/vms_devtab.c). The mutation zeroes the one
 # backing-name copy in vms_ioctl_disk_resolve() -- success reported, the name

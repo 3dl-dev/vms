@@ -64,7 +64,7 @@
 #include "vms_kif.h"
 #include "vms/logical.h"     /* lnm_create + LNM$JOB (vms-586 ACP mount)     */
 
-#define ODS2_UNIT "DKA300:"  /* vdd: the generated system-disk ODS-2 fixture */
+#define ODS2_UNIT "VDA300:"  /* vdd: the generated system-disk ODS-2 fixture */
 
 #define EXIT_SKIP 77
 
@@ -622,12 +622,12 @@ static char *const g_env[] = {
 };
 
 /* The files SUBMIT and PRINT queue, named as VMS filespecs:
- * dcl_resolve_path() maps DKA0: to SYSDISK_MOUNT, so DKA0:[OVMXCB5] is
+ * dcl_resolve_path() maps VDA0: to SYSDISK_MOUNT, so VDA0:[OVMXCB5] is
  * /vms/OVMXCB5 in the guest. A Linux path was tried first and did not
  * survive DCL's parser, which reads '/' as the start of a qualifier --
  * measured on the host build, 'PRINT ./x.txt' answers
  * '%RMS-E-FNF, file not found - .'. */
-#define G_VMSDIR "DKA0:[OVMXCB5]"
+#define G_VMSDIR "VDA0:[OVMXCB5]"
 #define G_LNXDIR "/vms/OVMXCB5"
 
 /*
@@ -669,7 +669,7 @@ static char *const g_env[] = {
  * WHERE sys$sndopr'S RECORD LANDS. src/libvms/syssvc/sys_operator.c writes
  * SYS$MANAGER:OPERATOR.LOG and falls back to /tmp/OPERATOR.LOG when that
  * cannot be opened. SYS$MANAGER is SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSMGR]
- * (src/vmslnm/lnm_defaults.c) and DKA0: is SYSDISK_MOUNT, so the primary is
+ * (src/vmslnm/lnm_defaults.c) and VDA0: is SYSDISK_MOUNT, so the primary is
  * the path below. BOTH are staged and BOTH are read: which one wins is a
  * property of the image, and a check that guessed wrong would pass by looking
  * at an empty file.
@@ -907,10 +907,10 @@ static int run_g_subprocess(const char *script, char *out, size_t outsz)
             /* vms-586: point SYS$SYSDEVICE at the $MOUNTed ODS-2 fixture in
              * LNM$JOB, keyed to THIS subprocess's job_id. The DCL.EXE this
              * process execve's into is the SAME process (same job_id), and its
-             * own lnm_setup_defaults re-seeds SYS$SYSDEVICE=DKA0: only into
+             * own lnm_setup_defaults re-seeds SYS$SYSDEVICE=VDA0: only into
              * LNM$SYSTEM -- searched AFTER LNM$JOB -- so this job entry shadows
              * it and F$IDENTIFIER composes SYS$SYSTEM:{RIGHTSLIST,SYSUAF}.DAT
-             * onto DKA300: over the ACP. */
+             * onto VDA300: over the ACP. */
             lnm_create(lnm_get_manager(), LNM_JOB_TABLE, "SYS$SYSDEVICE",
                        ODS2_UNIT, LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
             /* The Linux account name the deleted getpwuid() branch would
@@ -1502,11 +1502,11 @@ int main(void)
      * SYS$SYSTEM:RIGHTSLIST.DAT and SYSUAF.DAT as BINARY files over the Files-11
      * ACP now, not a /vms POSIX passthrough. The spawned DCL.EXE is a fork+execle
      * descendant of THIS registered process, so it inherits this job_id -- define
-     * SYS$SYSDEVICE=DKA300: in LNM$JOB, which the child cannot re-seed (its own
-     * lnm_setup_defaults writes SYS$SYSDEVICE=DKA0: only into LNM$SYSTEM, and
+     * SYS$SYSDEVICE=VDA300: in LNM$JOB, which the child cannot re-seed (its own
+     * lnm_setup_defaults writes SYS$SYSDEVICE=VDA0: only into LNM$SYSTEM, and
      * LNM$JOB is searched first). That moves the whole SYS$SYSTEM->SYS$SYSROOT->
      * SYS$SYSDEVICE chain onto the $MOUNTed ODS-2 volume, so the DCL child's
-     * rights/UIC lookups compose DKA300:[SYS0.SYSCOMMON.SYSEXE]{RIGHTSLIST,SYSUAF}
+     * rights/UIC lookups compose VDA300:[SYS0.SYSCOMMON.SYSEXE]{RIGHTSLIST,SYSUAF}
      * .DAT and $ASSIGN the unit over the ACP. Without this the engine (now
      * anchored into DCL.EXE) has no mounted volume to read and every
      * F$IDENTIFIER answers empty.
@@ -1519,7 +1519,7 @@ int main(void)
             printf("=== test_syssvc_ident: 0 passed, 1 failed ===\n");
             return 1;
         }
-        /* The LNM$JOB SYS$SYSDEVICE=DKA300: override is defined by scenario G's
+        /* The LNM$JOB SYS$SYSDEVICE=VDA300: override is defined by scenario G's
          * OWN subprocess right before it execs DCL.EXE (run_g_subprocess), keyed
          * to that subprocess's job_id -- which the execve'd DCL shares as the
          * same process -- so it does not depend on job_id inheritance surviving

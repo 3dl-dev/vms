@@ -81,7 +81,7 @@
 #include "vms/logical.h"
 
 #define EXIT_SKIP 77
-#define ODS2_UNIT "DKA300:"  /* vdd: the generated system-disk ODS-2 fixture */
+#define ODS2_UNIT "VDA300:"  /* vdd: the generated system-disk ODS-2 fixture */
 
 static int pass = 0;
 static int fail = 0;
@@ -128,7 +128,7 @@ struct probe_result {
 
 /*
  * Seed the concealed-rooted system logicals so SYS$SYSTEM: composes to
- * DKA300:[SYS0.SYSCOMMON.SYSEXE] over the ACP-mounted ODS-2 volume -- the SAME
+ * VDA300:[SYS0.SYSCOMMON.SYSEXE] over the ACP-mounted ODS-2 volume -- the SAME
  * namespace the passing in-process reader suites (test_syssvc_sysuaf_uic_base,
  * test_syssvc_rightslist) use. This is what makes sysuaf_lookup() read the real
  * binary $UAFDEF record off the mounted platter via RMS-over-ACP rather than a
@@ -305,7 +305,7 @@ int main(void)
     /*
      * Bootstrap the VMS namespace the way the shipped runtime does after boot:
      * $MOUNT the system-disk ODS-2 volume and seed the concealed-rooted system
-     * logicals so SYS$SYSTEM:SYSUAF.DAT composes to DKA300:[SYS0.SYSCOMMON.SYSEXE]
+     * logicals so SYS$SYSTEM:SYSUAF.DAT composes to VDA300:[SYS0.SYSCOMMON.SYSEXE]
      * and resolves through RMS-over-ACP -- the same path the passing
      * test_syssvc_sysuaf_uic_base suite proves. $SETUAI writes, and sysuaf_lookup
      * reads back, the REAL binary $UAFDEF record on that mounted platter (no

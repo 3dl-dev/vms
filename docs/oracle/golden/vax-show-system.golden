@@ -1,0 +1,3 @@
+$ SHOW SYSTEM
+OpenVMS V#.#  on node VAX#  ##-AUG-#### ##:##:##.##  Uptime  # ##:##:##
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages

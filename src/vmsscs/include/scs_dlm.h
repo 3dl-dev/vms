@@ -96,6 +96,39 @@ extern "C" {
                                  /* the DLM SYSAP wire is OVMX's own, not a        */
                                  /* VMS-authentic byte layout. Reuses the existing */
                                  /* frame (resnam + req_lkid + mode + req_csid).   */
+#define SCS_DLM_OP_DLKSRCH  6u   /* distributed deadlock search (rung H11, rd    */
+                                 /* vms-ec75). An edge-chasing probe (Chandy-     */
+                                 /* Misra-Haas) that follows the cross-node wait- */
+                                 /* for edges to detect a cluster-wide deadlock   */
+                                 /* CYCLE and abort exactly one victim's queued   */
+                                 /* $ENQ with SS$_DEADLOCK. One op, three         */
+                                 /* directions via the `flags` field (SEARCH-     */
+                                 /* HOLDER / SEARCH-RESOURCE / VICTIM below).      */
+                                 /* OVMX DESIGN CHOICE (Rule 8), see              */
+                                 /* docs/design-dlm-distributed-deadlock.md.      */
+
+/* --- DLKSRCH phase (⚠ OVMX-derived): which leg of the edge-chase a DLKSRCH
+ * frame carries. Rides in the `flags` field of the frame (not the LCK$M_ ENQ
+ * flags, which a DLKSRCH never uses). See docs/design-dlm-distributed-deadlock.md
+ * §2 (chase, home<->master alternation) and §3 (victim). */
+#define SCS_DLM_DLK_SEARCH_HOLDER  0u  /* "you are holder Hk -- enumerate your waits" */
+#define SCS_DLM_DLK_SEARCH_RESOURCE 1u /* "you master resnam -- who holds it? then chase" */
+#define SCS_DLM_DLK_VICTIM         2u  /* "abort victim=(victim_csid,victim_lkid)"     */
+
+/* --- DLKSRCH scalar-slot reuse (⚠ OVMX-derived, class (B) byte layout). A
+ * DLKSRCH frame reuses the existing scs_dlm_msg fields with this meaning:
+ *   req_csid    = initiator_csid   (the CSID whose blocked request began the search)
+ *   req_lkid    = initiator_lkid   (that request's requester-side handle; cycle-close)
+ *   master_csid = blocked_csid     (SEARCH-HOLDER: Hk being chased; VICTIM: victim's master)
+ *   master_lkid = blocked_lkid     (SEARCH-HOLDER: Hk's holder handle; else unused)
+ *   status      = ttl              (hop budget, MAX_DEADLOCK_DEPTH..0; status is free
+ *                                   here -- a DLKSRCH is not a GRANT, and ttl>5 would
+ *                                   be rejected in the authentic `mode` slot)
+ *   valblk[0:4] = victim_csid       running MIN over the cycle's request ids (LE)
+ *   valblk[4:8] = victim_lkid       tiebreak of the lexicographic (csid,lkid) min (LE)
+ *   valblk[8:12]= victim_master_csid the node that MASTERS the victim's queued request
+ *   resnam      = the resource under contention / (SEARCH-RESOURCE) the one to look up
+ * mode is left 0 (a DLKSRCH carries no grant mode). */
 
 /* --- DLM body field offsets (⚠ OVMX-derived byte layout, class (B)) --------
  *

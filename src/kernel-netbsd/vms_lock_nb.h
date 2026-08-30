@@ -183,6 +183,15 @@ struct vms_resmaster_args {
                                   * rd vms-dca9) -- mirror of vms_ioctl.h; the
                                   * shared vms_lock.c dispatch references it on
                                   * BOTH backends, so it MUST exist here too. */
+#define VMS_DLM_OP_DLKSRCH  6u   /* distributed deadlock search (H11, vms-ec75) --
+                                  * mirror of vms_ioctl.h. The shared vms_lock.c
+                                  * dispatch handles the VICTIM leg, so it MUST exist
+                                  * here too (the #928 amd64-green-≠-twin trap). */
+
+/* DLKSRCH phase (mirror of vms_ioctl.h). Only VICTIM reaches the executive. */
+#define VMS_DLM_DLK_SEARCH_HOLDER   0u
+#define VMS_DLM_DLK_SEARCH_RESOURCE 1u
+#define VMS_DLM_DLK_VICTIM          2u
 
 struct vms_dlm_xnode_args {
 	uint32_t op;                /* in: VMS_DLM_OP_* */
@@ -245,6 +254,26 @@ struct vms_dlm_granted_args {
 	uint32_t status;            /* return: SS$_ status */
 };
 
+/* $DLM pending-wait enumeration (rd vms-ec75, DLM rung H11) -- the HOME authority
+ * for distributed deadlock search. MUST match src/kernel/vms_ioctl.h byte-for-byte;
+ * the shared vms_lock.c enumerates NL origins into this. See vms_ioctl.h for the
+ * full contract + INV-6 note. */
+#define VMS_DLM_ENUM_WAITS_MAX 8u
+struct vms_dlm_wait_ent {
+	char     resnam[32];
+	uint32_t master_csid;
+	uint32_t req_lkid;
+	uint32_t req_csid;
+	uint32_t granted_mode;
+};
+struct vms_dlm_enum_waits_args {
+	uint32_t count;
+	uint32_t total;
+	uint32_t status;
+	uint32_t pad;
+	struct vms_dlm_wait_ent ent[VMS_DLM_ENUM_WAITS_MAX];
+};
+
 /* ================================================================
  * Request numbers. All five are _IOWR carrying the SAME structs and NR bytes as
  * src/kernel/vms_ioctl.h (0x30-0x34, magic 'V'), so their command words are
@@ -259,6 +288,7 @@ struct vms_dlm_granted_args {
 #define VMS_IOCTL_DLM_XNODE     _IOWR(VMS_LOCK_IOC_MAGIC, 0x35, struct vms_dlm_xnode_args)
 #define VMS_IOCTL_DLM_MEMBER_DEPART _IOWR(VMS_LOCK_IOC_MAGIC, 0x36, struct vms_dlm_depart_args)
 #define VMS_IOCTL_DLM_GET_GRANTED   _IOWR(VMS_LOCK_IOC_MAGIC, 0x37, struct vms_dlm_granted_args)
+#define VMS_IOCTL_DLM_ENUM_WAITS    _IOWR(VMS_LOCK_IOC_MAGIC, 0x38, struct vms_dlm_enum_waits_args)
 
 /*
  * Freeze the shared layouts -- see the other _nb.h contracts' identical asserts:
@@ -280,5 +310,7 @@ _Static_assert(sizeof(struct vms_dlm_depart_args) == 16,
                "vms_dlm_depart_args changed size -- VMS_IOCTL_DLM_MEMBER_DEPART ABI break");
 _Static_assert(sizeof(struct vms_dlm_granted_args) == 56,
                "vms_dlm_granted_args changed size -- VMS_IOCTL_DLM_GET_GRANTED ABI break");
+_Static_assert(sizeof(struct vms_dlm_enum_waits_args) == 16 + 48 * 8,
+               "vms_dlm_enum_waits_args changed size -- VMS_IOCTL_DLM_ENUM_WAITS ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

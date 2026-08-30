@@ -505,6 +505,20 @@ struct vms_resmaster_args {
                                   * cross-node lock on the new master after the old
                                   * master departs. OVMX design choice (Rule 8);
                                   * MUST match SCS_DLM_OP_REBUILD in scs_dlm.h. */
+#define VMS_DLM_OP_DLKSRCH  6u   /* distributed deadlock search (H11, vms-ec75): the
+                                  * VICTIM leg is dispatched here -- it aborts a queued
+                                  * cross-node waiter named (req_csid,req_lkid) and
+                                  * completes it with SS$_DEADLOCK. OVMX design choice
+                                  * (Rule 8); MUST match SCS_DLM_OP_DLKSRCH in
+                                  * scs_dlm.h. The SEARCH legs are orchestrated in scsd
+                                  * over the two readback ioctls (GET_GRANTED +
+                                  * DLM_ENUM_WAITS) and never enter the executive. */
+
+/* DLKSRCH phase, carried in vms_dlm_xnode_args.flags (mirror of SCS_DLM_DLK_* in
+ * scs_dlm.h). Only VICTIM ever reaches the executive dispatch. */
+#define VMS_DLM_DLK_SEARCH_HOLDER   0u
+#define VMS_DLM_DLK_SEARCH_RESOURCE 1u
+#define VMS_DLM_DLK_VICTIM          2u
 
 /*
  * The `status` an ENQ dispatch returns when the request was QUEUED on the master
@@ -627,6 +641,40 @@ _Static_assert(sizeof(struct vms_dlm_granted_args) == 56,
 #define VMS_IOCTL_DLM_GET_GRANTED _IOWR(VMS_IOC_MAGIC, 0x37, struct vms_dlm_granted_args)
 _Static_assert(VMS_IOCTL_DLM_GET_GRANTED == 0xC0385637u,
                "VMS_IOCTL_DLM_GET_GRANTED encodes differently than the reference build");
+
+/*
+ * $DLM pending-wait enumeration (rd vms-ec75, DLM rung H11) -- the HOME authority
+ * for distributed deadlock search. Enumerates THIS node's outstanding cross-node
+ * requests that are still PENDING (granted_mode == NL): each is a requester-side
+ * ORIGIN record (vms_dlm_origin) this node's scsd created from a queued-reply.
+ * For the edge-chase, "what is CSID H waiting for?" is answered by asking H's home
+ * node to run this: every returned entry names a resource H waits on (resnam), the
+ * node mastering it (master_csid), and H's own requester-side handle for the wait
+ * (req_lkid) -- exactly one outgoing wait-for edge. INV-6: a READ of real
+ * vms_dlm_origin_list state; count=0 when nothing is pending, never a fabricated
+ * edge. This surfaces EXISTING executive state (the origin list H5's grant_recv
+ * already builds), so no wait-for graph is stored or guessed.
+ */
+#define VMS_DLM_ENUM_WAITS_MAX 8u   /* entries returned per call (a chase visits few) */
+struct vms_dlm_wait_ent {
+    char     resnam[32];        /* resource this node waits on (its origin's resnam) */
+    uint32_t master_csid;       /* the node mastering that resource                  */
+    uint32_t req_lkid;          /* this node's requester-side handle for the wait    */
+    uint32_t req_csid;          /* this node's own CSID (the waiter)                 */
+    uint32_t granted_mode;      /* LCK_K_NLMODE while pending (always NL here)        */
+};
+struct vms_dlm_enum_waits_args {
+    uint32_t count;             /* return: pending waits filled (<= VMS_DLM_ENUM_WAITS_MAX) */
+    uint32_t total;             /* return: total pending origins (may exceed count)  */
+    uint32_t status;            /* return: SS$_ status                               */
+    uint32_t pad;               /* zero                                              */
+    struct vms_dlm_wait_ent ent[VMS_DLM_ENUM_WAITS_MAX];
+};
+_Static_assert(sizeof(struct vms_dlm_enum_waits_args) == 16 + 48 * 8,
+               "vms_dlm_enum_waits_args changed size -- VMS_IOCTL_DLM_ENUM_WAITS ABI break");
+#define VMS_IOCTL_DLM_ENUM_WAITS _IOWR(VMS_IOC_MAGIC, 0x38, struct vms_dlm_enum_waits_args)
+_Static_assert(VMS_IOCTL_DLM_ENUM_WAITS == 0xC1905638u,
+               "VMS_IOCTL_DLM_ENUM_WAITS encodes differently than the reference build");
 
 /* ================================================================
  * Process registration

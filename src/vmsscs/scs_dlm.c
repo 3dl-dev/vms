@@ -99,7 +99,7 @@ int scs_dlm_build_body(const struct scs_dlm_msg *m, uint8_t *body, size_t body_l
     /* op must be one of the four rung-1 kinds. */
     if (m->op != SCS_DLM_OP_ENQ && m->op != SCS_DLM_OP_GRANT &&
         m->op != SCS_DLM_OP_DEQ && m->op != SCS_DLM_OP_BLKAST &&
-        m->op != SCS_DLM_OP_REBUILD) {
+        m->op != SCS_DLM_OP_REBUILD && m->op != SCS_DLM_OP_DLKSRCH) {
         return -1;
     }
     /* mode is an authentic $LCKDEF grant mode, 0..LCK$K_EXMODE. */
@@ -260,6 +260,7 @@ const char *scs_dlm_op_name(uint8_t op)
     case SCS_DLM_OP_DEQ:    return "DEQ";
     case SCS_DLM_OP_BLKAST: return "BLKAST";
     case SCS_DLM_OP_REBUILD: return "REBUILD";
+    case SCS_DLM_OP_DLKSRCH: return "DLKSRCH";
     default:                break;
     }
     return "?";

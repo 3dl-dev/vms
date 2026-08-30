@@ -795,6 +795,7 @@ uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid);
 long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_get_granted(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_dlm_enum_waits(struct vms_proc *proc, unsigned long arg);
 
 /* ----------------------------------------------------------------
  * LOGICAL-NAME facility (LNM$SYSTEM/GROUP/JOB, rd vms-72da) -- DEFINED in

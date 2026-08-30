@@ -1677,6 +1677,136 @@ out:
     return 0;
 }
 
+/*
+ * vms_ioctl_dlm_enum_waits - $DLM pending-wait enumeration (rd vms-ec75, H11).
+ * The HOME authority for distributed deadlock search: enumerate THIS node's
+ * outstanding cross-node requests that are still PENDING (a requester-side origin
+ * record with granted_mode == NL). Each names a resource this node waits on
+ * (resnam), the node mastering it (master_csid), and this node's own requester-side
+ * handle for the wait (req_lkid) -- one outgoing wait-for edge for the edge-chase.
+ * INV-6: a READ of the REAL vms_dlm_origin_list state H5's grant_recv built; count
+ * 0 when nothing is pending, never a fabricated edge. Surfaces EXISTING executive
+ * state -- no wait-for graph is stored or guessed.
+ */
+long vms_ioctl_dlm_enum_waits(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_dlm_enum_waits_args args;
+    struct vms_dlm_origin *org;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+
+    exec_lock(&vms_dlm_origin_lock);
+    exec_list_for_each_entry(org, &vms_dlm_origin_list, list) {
+        if (org->granted_mode != LCK_K_NLMODE)
+            continue;                 /* pending (NL) waits only -- a granted origin
+                                       * is a HOLD, not a wait-for edge */
+        args.total++;
+        if (args.count < VMS_DLM_ENUM_WAITS_MAX) {
+            struct vms_dlm_wait_ent *e = &args.ent[args.count];
+            memcpy(e->resnam, org->resnam, sizeof(e->resnam));
+            e->resnam[sizeof(e->resnam) - 1] = '\0';
+            e->master_csid = org->master_csid;
+            e->req_lkid = org->req_lkid;
+            e->req_csid = org->req_csid;
+            e->granted_mode = org->granted_mode;
+            args.count++;
+        }
+    }
+    exec_unlock(&vms_dlm_origin_lock);
+
+    args.status = SS__NORMAL;
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_lock_dlm_xnode_dlksrch - the distributed deadlock search VICTIM leg (rd
+ * vms-ec75, DLM rung H11). The SEARCH legs of the edge-chase are pure reads
+ * orchestrated in scsd over the two readback ioctls (DLM_ENUM_WAITS home authority
+ * + DLM_GET_GRANTED master authority); only the VICTIM leg mutates executive state,
+ * so only it is dispatched here.
+ *
+ * When a probe closes a cycle, the detecting node names the GLOBAL-min victim
+ * (req->req_csid, req->req_lkid) and sends this to the node that MASTERS the
+ * victim's queued request. That master aborts it: find the queued cross-node waiter
+ * (a res->waiting entry with req_csid == victim_csid && req_lkid == victim_lkid),
+ * remove it, and complete it with SS$_DEADLOCK exactly as the local detector's
+ * unwind does. IDEMPOTENT (design §3): a second VICTIM naming an already-aborted
+ * request finds no waiter and is a no-op (status SS$_NORMAL, queued 0), so a
+ * concurrent A- and B-initiated search that agree on the victim abort it once.
+ *
+ * INV-6: aborts a REAL queued waiter read off res->waiting; when none matches it
+ * fabricates nothing (queued 0). Returns via req->status: SS$_DEADLOCK when a
+ * waiter was aborted this call, SS$_NORMAL when none matched (idempotent no-op).
+ */
+static uint32_t vms_lock_dlm_xnode_dlksrch(struct vms_dlm_xnode_args *req)
+{
+    struct vms_lock_resource *res;
+    struct vms_lock_entry *victim = NULL;
+    struct vms_lock_resource *victim_res = NULL;
+    uint32_t victim_csid = req->req_csid;
+    uint32_t victim_lkid = req->req_lkid;
+    int bkt;
+
+    req->queued = 0;
+
+    /* Only the VICTIM leg reaches the executive; a SEARCH leg dispatched here is a
+     * scsd bug (SEARCH is read-only orchestration), refused honestly. */
+    if (req->flags != VMS_DLM_DLK_VICTIM)
+        return SS__BADPARAM;
+    if (victim_lkid == 0)
+        return SS__BADPARAM;
+
+    /* Scan every resource's waiting queue for the named cross-node waiter. The
+     * victim's request carries req_csid == victim_csid (its home node), so a match
+     * is (req_csid,req_lkid)-exact -- a REAL queued lock, not a guess. */
+    exec_lock(&vms_res_hash_lock);
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        struct vms_lock_entry *w;
+        exec_lock(&res->lock);
+        exec_list_for_each_entry(w, &res->waiting, res_waiting) {
+            if (w->waiting && w->req_csid == victim_csid &&
+                w->req_lkid == victim_lkid) {
+                /* Remove the victim from the waiting queue under res->lock. A
+                 * waiter blocks nobody (only granted holders do), so its removal
+                 * grants no one here: the cycle breaks when the victim's PROCESS
+                 * releases the lock it HELD (application back-off, the VMS
+                 * contract), not by this abort. goto exits BOTH the bucket and the
+                 * chain loop of the nested exec_hash_for_each cleanly. */
+                victim = w;
+                victim_res = res;
+                exec_list_del(&victim->res_waiting);
+                victim->waiting = 0;
+                exec_unlock(&res->lock);
+                goto found;
+            }
+        }
+        exec_unlock(&res->lock);
+    }
+found:
+    exec_unlock(&vms_res_hash_lock);
+
+    if (!victim)
+        return SS__NORMAL;    /* idempotent: nothing to abort (already gone) */
+
+    /* Detach the aborted request from its owning proc and free it -- the same
+     * unwind the local detector runs when check_deadlock trips (vms_enq_core_ex). */
+    if (victim->proc) {
+        exec_lock(&victim->proc->lock_list_lock);
+        exec_list_del(&victim->proc_list);
+        victim->proc->lock_count--;
+        exec_unlock(&victim->proc->lock_list_lock);
+    }
+    lock_remove_id(victim);
+    resource_release(victim_res);
+    lock_entry_free(victim);
+
+    req->queued = 1;          /* aborted this call (distinct from the idempotent no-op) */
+    return SS__DEADLOCK;
+}
+
 long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_resmaster_args args;
@@ -2304,6 +2434,15 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
         if (req->resnam[0] == '\0')
             return SS__BADPARAM;
         return vms_lock_dlm_xnode_rebuild(proc, req);
+    case VMS_DLM_OP_DLKSRCH:
+        /* DISTRIBUTED DEADLOCK SEARCH, VICTIM leg (rd vms-ec75, rung H11). A probe
+         * that closed a cross-node deadlock cycle named the global-min victim; this
+         * node MASTERS the victim's queued request and aborts it, completing that
+         * $ENQ with SS$_DEADLOCK. The SEARCH legs never reach here -- they are
+         * read-only orchestration in scsd over DLM_ENUM_WAITS + DLM_GET_GRANTED.
+         * Idempotent (a second VICTIM finds no waiter -> no-op). INV-6: aborts a
+         * REAL queued waiter read off res->waiting, never a fabricated cycle. */
+        return vms_lock_dlm_xnode_dlksrch(req);
     default:
         return SS__BADPARAM;
     }

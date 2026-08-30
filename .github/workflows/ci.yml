@@ -474,6 +474,15 @@ jobs:
               - 'tests/qemu/Dockerfile.dlm-harness-e84'
               - 'tests/qemu/init_dlm_e84.sh'
               - 'tests/qemu/run_dlm_harness_e84.sh'
+              # ec75 (rd vms-ec75, DLM rung H11 -- DISTRIBUTED DEADLOCK DETECTION,
+              # the LAST DLM rung): a genuine cross-node wait-for cycle (A<->B,
+              # resources mastered by C) is detected by the executive's edge-chasing
+              # search over REAL state (res->granted + pending origins), and EXACTLY
+              # ONE deterministic global-min victim's $ENQ is aborted with
+              # SS$_DEADLOCK while the other stays queued.
+              - 'tests/qemu/Dockerfile.dlm-harness-ec75'
+              - 'tests/qemu/init_dlm_ec75.sh'
+              - 'tests/qemu/run_dlm_harness_ec75.sh'
 
       - name: Decide (force every output true on non-PR events)
         id: decide
@@ -3315,6 +3324,61 @@ jobs:
         with:
           name: dlm-harness-e84-artifacts
           path: e84out/
+          if-no-files-found: ignore
+
+  dlm-harness-ec75:
+    name: DLM Harness ec75 (3-node; a cross-node deadlock CYCLE is detected and ONE victim aborted with SS$_DEADLOCK, QEMU)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.dlm_harness == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build DLM harness ec75 image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu/Dockerfile.dlm-harness-ec75
+          push: false
+          load: true
+          tags: ovmx-dlm-ec75:latest
+          cache-from: type=gha,scope=dlm-harness-ec75
+          cache-to: type=gha,mode=max,scope=dlm-harness-ec75
+
+      - name: Boot THREE QEMU nodes, verdict the distributed deadlock detection + single-victim abort
+        run: |
+          set +e
+          KVM=""
+          [ -e /dev/kvm ] && KVM="--device /dev/kvm"
+          mkdir -p "$PWD/ec75out"
+          RAW=$(docker run --rm $KVM -v "$PWD/ec75out:/out" ovmx-dlm-ec75:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: DLM harness ec75 exited nonzero"
+            exit 1
+          fi
+          if printf '%s\n' "$OUTPUT" | grep -qE '^  DLM HARNESS ec75 PASSED'; then
+            echo "PASS: a genuine cross-node deadlock cycle was detected by the executive's edge-chase and exactly one victim's \$ENQ was aborted with SS\$_DEADLOCK — the last DLM rung, proven on the wire."
+          else
+            echo "FAIL: ec75 verdict 'DLM HARNESS ec75 PASSED' not found."
+            printf '%s\n' "$OUTPUT" | grep -E 'VAXCLMEMBER|DLKCYCLE|DLKVICTIM|DLKSRCH|FAIL:' || true
+            exit 1
+          fi
+
+      - name: Upload ec75 node logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dlm-harness-ec75-artifacts
+          path: ec75out/
           if-no-files-found: ignore
 
   # -----------------------------------------------------------------------

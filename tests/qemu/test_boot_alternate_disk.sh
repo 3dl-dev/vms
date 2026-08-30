@@ -39,6 +39,11 @@
 # Exit code 0 = all checks pass, 1 = failures.
 
 set -uo pipefail
+# A boot that HALTS (Case C, by design; or a failing discovery) makes QEMU exit,
+# after which the wake_login CRs write to a closed console FIFO. Ignore SIGPIPE
+# so that broken-pipe write fails quietly (EPIPE) instead of killing the script
+# with exit 141 -- the case must be REPORTED (PASS/FAIL), never crash the harness.
+trap '' PIPE
 
 TIMEOUT=90
 DISTRIB_IMG=/boot/ovmx-distrib.img
@@ -129,13 +134,26 @@ cleanup() {
     rm -f "$FIFO"
 }
 
-send() { printf '%s\r' "$1" >&4; }
+send() { printf '%s\r' "$1" >&4 2>/dev/null || true; }
 
 wake_login() {
     local logf="$1" w=0
-    until grep -qaF 'Username:' "$logf" 2>/dev/null || [ "$w" -ge 100 ]; do
+    # Stop as soon as the prompt appears, the budget is spent, OR QEMU has
+    # exited (a halted boot -- Case C by design, or a failed discovery): keep
+    # writing CRs into a dead console's FIFO otherwise, which is the SIGPIPE the
+    # top-of-file `trap '' PIPE` now also neutralises.
+    until grep -qaF 'Username:' "$logf" 2>/dev/null || [ "$w" -ge 100 ] \
+          || ! kill -0 "$QEMU_PID" 2>/dev/null; do
         send ''; sleep 1; w=$((w + 1))
     done
+}
+
+# Dump the tail of the boot console for a case that did not go as expected, so a
+# CI failure is DIAGNOSABLE (which unit PID 1 selected/mounted, where it halted).
+dump_console() {
+    echo "  --- boot console (tail) for: $1 ---"
+    tail -n 40 "$CONSOLE_LOG" 2>/dev/null | sed 's/\r$//; s/^/    | /' || true
+    echo "  --- end console ---"
 }
 
 wait_for() {
@@ -167,6 +185,7 @@ boot_case "" "${VDA_REAL[@]}"
 trap cleanup EXIT
 if reaches_login; then rc=0; else rc=1; fi
 record "Case A: default boot reaches login (VDA0:, zero-regression)" "$rc"
+[ "$rc" -ne 0 ] && dump_console "Case A"
 cleanup; trap - EXIT
 echo ""
 
@@ -179,6 +198,7 @@ record "Case B: boots the SECOND disk (VDA100:) to login — fails on pristine m
 # Corroborate: the mount narration names the selected unit, not VDA0:.
 if grep -qaF 'system disk VDA100: mounted' "$CONSOLE_LOG"; then mrc=0; else mrc=1; fi
 record "Case B: %OVMX-I-MOUNTED names the discovered unit VDA100:" "$mrc"
+{ [ "$rc" -ne 0 ] || [ "$mrc" -ne 0 ]; } && dump_console "Case B"
 cleanup; trap - EXIT
 echo ""
 
@@ -188,6 +208,7 @@ boot_case "" "${VDB_LAYOUT[@]}"
 trap cleanup EXIT
 if reaches_login; then rc=1; else rc=0; fi   # inverted: login here would mean vda!=decoy
 record "Case C: default picks the blank vda and halts (no login) — proves the decoy is on vda" "$rc"
+[ "$rc" -ne 0 ] && dump_console "Case C"
 cleanup; trap - EXIT
 echo ""
 

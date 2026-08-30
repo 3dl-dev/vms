@@ -1,0 +1,14 @@
+# vms-277 (SHOW CPU matches oracle): SHOW CPU layout on OpenVMS VAX V7.3.
+# SHOW CPU output is deterministic here (static uniprocessor config), so the golden
+# is reproducible as captured. The digit-mask 's/[0-9]/#/g' additionally masks the
+# CPU numbers, node index and model number so the vms-c38 gate TOLERATES OVMX's
+# own values (different CPU count / node / not a VAXserver) while still pinning the
+# stable STRUCTURE: the multiprocessing-state line and the PRIMARY/Active/Configured
+# CPU labels. (The node/model TEXT is machine-specific; the gate compares the
+# labelled structure, not the model string.)
+ARCH=vax
+DESC="SHOW CPU layout — multiprocessing state + PRIMARY/Active/Configured CPU labels (numbers masked)"
+NORMALIZE='s/[0-9]/#/g'
+COMMANDS=(
+  'SHOW CPU'
+)

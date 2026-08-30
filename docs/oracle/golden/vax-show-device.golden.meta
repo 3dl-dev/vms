@@ -1,0 +1,10 @@
+surface: vax-show-device
+arch: vax
+description: SHOW DEVICE D disk layout — the 2-line column header + Mounted/Online status (device names/counts masked)
+oracle: OpenVMS VAX V7.3 (lab vaxlab/vax1, isolated replica vaxlab-2)
+captured: 2026-08-30T05:22:16Z
+method: capture_oracle.sh -- FIFO console drive, marker-sliced display (CLAUDE.md Rule 8 observation)
+normalize: 's/[0-9]/#/g'   # SYMMETRIC mask -- the vms-c38 gate applies the IDENTICAL
+                          # mask to OVMX output: capture_oracle.sh normalize vax-show-device < ovmx_output
+commands:
+  - SHOW DEVICE D

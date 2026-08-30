@@ -1,0 +1,8 @@
+$ SHOW DEVICE D
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$#$DUA#:        (VAX#)  Mounted              #  SYSDSK#        #######   ###   #
+$#$DUA#:        (VAX#)  Mounted              #  VAX#DATA       #######     #   #
+$#$DUA#:        (VAX#)  Online               #
+$#$DUA#:        (VAX#)  Online               #

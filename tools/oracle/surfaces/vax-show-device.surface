@@ -1,0 +1,17 @@
+# vms-ddc (SHOW DEVICES matches oracle): SHOW DEVICE D (disk) layout on VAX V7.3.
+# The device SET is stable on a given node (so the golden is reproducible across
+# boots); the volatile fields are Free Blocks / Trans Count. The digit-mask
+# 's/[0-9]/#/g' masks those AND the device unit numbers / node index / label
+# digits, so the vms-c38 gate tolerates OVMX's own values. The PRIMARY fidelity
+# artifact this pins is the exact 2-line COLUMN HEADER (Device Name / Device Status
+# / Error Count / Volume Label / Free Blocks / Trans Count / Mnt Cnt) and the
+# status column (Mounted/Online). NB: VMS device names are $n$DUAn: and OVMX's are
+# native-derived (DKAn:/VDAn:), so the device-NAME column legitimately differs by
+# scheme (vms-47d device-native-naming) — the gate reconciles the header+status
+# structure, not the name string.
+ARCH=vax
+DESC="SHOW DEVICE D disk layout — the 2-line column header + Mounted/Online status (device names/counts masked)"
+NORMALIZE='s/[0-9]/#/g'
+COMMANDS=(
+  'SHOW DEVICE D'
+)

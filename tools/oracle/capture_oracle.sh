@@ -163,12 +163,23 @@ lab_for_arch() {
 
 kexec() { kubectl -n "$NS" exec "$1" -- sh -c "$2"; }
 
+# Console-log base path for (pod, node), WITHOUT the .in/.log suffix. VAX (SIMH)
+# keeps a node's logs flat under the pod: /lab/k8s-labs/<pod>/logs/<node>.log.
+# Alpha (AXPbox) NESTS them under a per-node subdir:
+# /lab/k8s-labs/<pod>/<node>/logs/<node>.log -- observed on lab-Alpha V8.4 by the
+# vms-580 hand-capture. ARCH is the surface's global. Callers append .in (input
+# FIFO) or .log (output). Computed locally; sent to the pod as a literal path.
+log_base() {  # pod node
+    if [ "$ARCH" = alpha ]; then echo "/lab/k8s-labs/$1/$2/logs/$2"
+    else echo "/lab/k8s-labs/$1/logs/$2"; fi
+}
+
 fifo_send() {   # pod node line
     local b; b="$(printf '%s' "$3" | base64 -w0)"
-    kexec "$1" "{ echo $b | base64 -d; echo; } > /lab/k8s-labs/$1/logs/$2.log.in"
+    kexec "$1" "{ echo $b | base64 -d; echo; } > $(log_base "$1" "$2").log.in"
 }
 console_tail() { # pod node n
-    kexec "$1" "cat /lab/k8s-labs/$1/logs/$2.log 2>/dev/null | tr -cd '[:print:]\n\r' | tr '\r' '\n' | tail -${3:-6}" 2>/dev/null || true
+    kexec "$1" "cat $(log_base "$1" "$2").log 2>/dev/null | tr -cd '[:print:]\n\r' | tr '\r' '\n' | tail -${3:-6}" 2>/dev/null || true
 }
 
 # scale_up_isolated <sts> -- scales the sts by +1 and sets the GLOBALS
@@ -194,7 +205,17 @@ wait_boot() {  # pod node  (up to ~7 min)
     for i in $(seq 1 42); do
         t="$(console_tail "$pod" "$node" 15)"
         if printf '%s' "$t" | grep -qE 'Username:|job terminated'; then return 0; fi
-        if printf '%s' "$t" | grep -qE 'Bugcheck|P00>>>'; then die "node $node unhealthy (halted at SRM/bugcheck)"; fi
+        if printf '%s' "$t" | grep -qE 'Bugcheck'; then die "node $node bugchecked during boot"; fi
+        # The Alpha SRM prompt 'P00>>>' is TRANSIENT during a normal boot -- SRM
+        # auto-boots past it within seconds -- so it must NOT fast-fail a booting
+        # node (an eager die here killed a healthy Alpha whose first console read
+        # caught the SRM banner: vms-26b). A healthy node reaches 'job terminated'
+        # in <~90s and returns above; only a node still sitting at 'P00>>>' past
+        # the grace window (~2 min) is genuinely halted at SRM (auto_action=HALT /
+        # boot failure), so gate the SRM-halt die on that.
+        if [ "$i" -ge 12 ] && printf '%s' "$t" | grep -qE 'P00>>>'; then
+            die "node $node halted at the SRM console (P00>>>) -- did not auto-boot"
+        fi
         sleep 10
     done
     die "node $node did not reach login within timeout"
@@ -292,7 +313,7 @@ fifo_send "$POD" "$NODE" "WRITE SYS\$OUTPUT \"$END_MARK\""; sleep 3
 # Pipe the raw console straight into extract_golden -- extract_golden's tr -cd
 # drops the console's control/NUL bytes, so GOLD is clean text (capturing the
 # raw log into a $() variable first would strip NULs with a noisy warning).
-GOLD="$(kexec "$POD" "cat /lab/k8s-labs/$POD/logs/$NODE.log" 2>/dev/null | extract_golden | apply_normalize || true)"
+GOLD="$(kexec "$POD" "cat $(log_base "$POD" "$NODE").log" 2>/dev/null | extract_golden | apply_normalize || true)"
 [ -n "$GOLD" ] || die "empty capture -- markers not found in the console log (boot/login race?)"
 
 mkdir -p "$GOLDEN_DIR"

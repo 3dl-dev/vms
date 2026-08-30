@@ -1,0 +1,17 @@
+# vms-26b surface: DCL integer width on OpenVMS Alpha V8.4 -- SHOW SYMBOL hex/octal
+# longword rendering + arithmetic wrap. Deterministic (fixed inputs), so the golden
+# is byte-exact reproducible. The Alpha analog of vax-dcl-integer-widths: DCL's
+# integer is a 32-bit LONGWORD on Alpha too (architecture-invariant, NOT widened to
+# the 64-bit quadword), so this golden's body is expected byte-identical to the VAX
+# one -- the banked vms-580/#917 result (docs/oracle/alpha84-dcl-integer-widths.md).
+# Capturing it here formalizes that result into the standing gate and proves the
+# capture harness's Alpha/LP64 path (ARCH=alpha -> lab-Alpha, nested console path).
+ARCH=alpha
+DESC="DCL integer width on Alpha: SHOW SYMBOL hex/octal longword rendering + 2147483647+1 wrap (vms-580/vms-26b)"
+COMMANDS=(
+  'IDENT_L = %X80000004'
+  'SHOW SYMBOL IDENT_L'
+  'X = 2147483647'
+  'Y = X + 1'
+  'SHOW SYMBOL Y'
+)

@@ -61,6 +61,12 @@
 # --- assertion helpers (arch-independent; operate on a captured console SEGMENT)
 ok()  { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
+# note: a LOUD, logged observation that does NOT touch PASS/FAIL -- for the vms-c38
+# golden gate's REPORT-only surfaces (a not-yet-faithful surface's classification is
+# tracked + routed to its fidelity item, but must not hard-fail the required leg;
+# conductor ruling 2026-08-30, Option A). NEVER use it to silence a CLAIMED-FAITHFUL
+# surface -- that would be the allowlist-cheat INV-6 forbids.
+note() { echo "  NOTE: $1"; }
 # must_have: a VMS-faithful substring MUST be present.
 must_have() { local seg="$1" pat="$2" desc="$3"
     if printf '%s\n' "$seg" | grep -qiF -- "$pat"; then ok "$desc"
@@ -87,6 +93,72 @@ negctl() { local seg="$1" present="$2" desc="$3"
     else
         bad "NEGCTL $desc: search is vacuous (present-token found=$([ $a -eq 0 ] && echo yes || echo NO), sentinel rejected=$([ $b -eq 1 ] && echo yes || echo NO)) -- assertions above cannot be trusted"
     fi; }
+
+# --- vms-c38: oracle golden-diff gate ------------------------------------------
+# The OVMX side of the oracle program: capture_oracle captured the real-VMS layout
+# golden; tools/oracle/diff_surface.sh applies the SAME NORMALIZE mask to OVMX's
+# output + grounded MAY_OMIT (substrate-absent sections) and classifies MATCH /
+# MISSING / HOLLOW / ARTIFICE-TELL / FORMAT-DIVERGENT. This UPGRADES the piecewise
+# hand-written must_haves above to a continuous golden-diff for the seeded surfaces.
+# The acceptance test runs in a Docker container where only the battery + test.sh
+# are mounted (run_dcl_acceptance_e2e.sh), so the repo-relative path can't reach
+# tools/oracle. run_dcl_acceptance_e2e.sh mounts the oracle tooling + goldens at a
+# repo-root-like /oracle prefix and passes OVMX_ORACLE_DIR; the relative path is
+# the fallback for a local (checked-out-tree) run.
+_ORACLE_DIR="${OVMX_ORACLE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../tools/oracle" 2>/dev/null && pwd || true)}"
+# _golden_run <surface> -> sets _GD_ACC (the surface's own commands' console) and
+# _GD_CLS/_GD_RC (diff_surface classification of OVMX vs the golden). Shared by the
+# hard-gate and report-only forms so both classify identically.
+_golden_run() {
+    local surface="$1" surf c; _GD_ACC=""; _GD_CLS=""; _GD_RC=99
+    surf="$_ORACLE_DIR/surfaces/$surface.surface"
+    if [ -z "$_ORACLE_DIR" ] || [ ! -f "$surf" ]; then return 1; fi
+    local -a cmds
+    mapfile -t cmds < <( ARCH=; NORMALIZE=; MAY_OMIT=; MACHINE_MASK=; ARTIFICE_TELL=; COMMANDS=(); . "$surf"; printf '%s\n' "${COMMANDS[@]}" )
+    for c in "${cmds[@]}"; do run_cmd "$c"; _GD_ACC+="$SEG"$'\n'; done
+    _GD_CLS="$(printf '%s' "$_GD_ACC" | "$_ORACLE_DIR/diff_surface.sh" "$surface" 2>&1)"; _GD_RC=$?
+    return 0
+}
+
+# golden_diff <surface> -- HARD-GATE a CLAIMED-FAITHFUL surface (vms-c38, Option A).
+# OVMX MUST MATCH the oracle golden (modulo grounded MAY_OMIT + machine-masks);
+# a divergence is a real REGRESSION and FAILS the leg. Only surfaces proven
+# genuinely faithful graduate here -- the gate then protects them from regressing.
+golden_diff() {
+    local surface="$1"
+    if ! _golden_run "$surface"; then bad "GOLDEN-DIFF [$surface]: surface/tooling not found"; return; fi
+    # GREENS: OVMX output MATCHes the oracle golden.
+    if [ "$_GD_RC" -eq 0 ]; then ok "GOLDEN-DIFF [$surface] (vms-c38): OVMX MATCHes the oracle golden (CLAIMED-FAITHFUL, regression-gated)"
+    else
+        bad "GOLDEN-DIFF [$surface] (vms-c38): REGRESSION -- $(printf '%s' "$_GD_CLS" | grep -m1 -oE 'MISSING|HOLLOW|ARTIFICE-TELL|FORMAT-DIVERGENT' || echo diverges) vs the oracle golden (was faithful)"
+        printf '%s\n' "$_GD_CLS" | sed 's/^/      DIFF| /' | head -60
+    fi
+    # REDS negctl: an injected divergence into the SAME output must NOT MATCH --
+    # proves this golden gate can actually go red, not vacuously always-green.
+    printf '%s\n  ZZ_GOLDEN_NEGCTL_%s_ZZ  9\n' "$_GD_ACC" "$RANDOM" | "$_ORACLE_DIR/diff_surface.sh" "$surface" >/dev/null 2>&1
+    if [ $? -ne 0 ]; then ok "GOLDEN-DIFF-NEGCTL [$surface] (vms-c38): an injected divergence does NOT MATCH (the golden gate can fail)"
+    else bad "GOLDEN-DIFF-NEGCTL [$surface] (vms-c38): injected divergence still MATCHed -- the golden gate is vacuous"; fi
+}
+
+# golden_diff_report <surface> <expected-class> <fidelity-item> -- REPORT-ONLY a
+# NOT-yet-faithful surface (vms-c38, Option A). The gate CLASSIFIES OVMX vs the
+# golden and logs it LOUDLY + routes it to its fidelity item, but does NOT hard-fail
+# the required leg (so a known gap can't permanently-red main's green-by-SHA). This
+# is the anti-LARP DRIVER, not an allowlist-cheat: it tracks + names the gap every
+# run, never silently passes it. A surface GRADUATES to golden_diff (hard-gate) once
+# <fidelity-item> lands and it genuinely MATCHes. If a report-only surface instead
+# MATCHes NOW, that is loudly flagged as ready-to-graduate.
+golden_diff_report() {
+    local surface="$1" expect="$2" item="$3" got
+    if ! _golden_run "$surface"; then note "GOLDEN-REPORT [$surface]: surface/tooling not found"; return; fi
+    if [ "$_GD_RC" -eq 0 ]; then
+        note "GOLDEN-REPORT [$surface] (vms-c38): now MATCHes the golden -- READY TO GRADUATE onto the hard-gate list ($item)"
+        return
+    fi
+    got="$(printf '%s' "$_GD_CLS" | grep -m1 -oE 'MISSING|HOLLOW|ARTIFICE-TELL|FORMAT-DIVERGENT' || echo diverges)"
+    note "GOLDEN-REPORT [$surface] (vms-c38): $got vs the oracle golden -- KNOWN GAP (expected $expect), tracked by $item (NOT gated; drives vms-050 fidelity backlog)"
+    printf '%s\n' "$_GD_CLS" | sed 's/^/      RPT| /' | head -40
+}
 
 # run_dcl_acceptance_battery -- the login + basic-command battery + assertions.
 # See the caller-provided contract above for the primitives/vars it requires.
@@ -620,6 +692,31 @@ run_dcl_acceptance_battery() {
     must_match "$SEG" 'Directory ' "DIRECTORY: prints a VMS 'Directory <spec>' header"
     must_not_have "$SEG" '/tmp' "DIRECTORY: no Unix path leaks into the listing"
     negctl     "$SEG" 'DIRECTORY' "DIRECTORY"
+
+    # --- vms-c38: the STANDING oracle golden-diff gate over the seeded SHOW-family
+    # goldens (conductor ruling 2026-08-30, Option A). Structure-tolerant compare
+    # (diff_surface structure_norm): a byte-exact column-geometry gate is impossible
+    # cross-system, so it proves STRUCTURAL fidelity -- same sections/labels/headers/
+    # field-structure -- value-tolerant (wider numbers, different machine strings),
+    # but NOT of a missing or HOLLOW field.
+    #
+    # HARD-GATE only CLAIMED-FAITHFUL surfaces (regression-proof). REPORT-only the
+    # not-yet-faithful ones: their classification is logged LOUD + routed to a real
+    # fidelity item every run (drives the vms-050 backlog) but does NOT hard-fail the
+    # required leg -- so a known gap can't permanently-red main's green-by-SHA. Round
+    # 3's diff proved the divergence is MIXED (value/machine-string AND real gaps);
+    # masking the real gaps green would be the exact INV-6 cheat this refuses.
+    #
+    # CLAIMED-FAITHFUL (hard-gated) -- proven genuinely faithful, greens through the
+    # full pipeline (model/MP-state/CPU-list are machine-varying values, masked; the
+    # labelled structure MATCHes the oracle; DCL-Dictionary-pinned format):
+    golden_diff        vax-show-cpu
+    # NOT-yet-faithful (report-only) -- real structural gaps found by round-3's diff,
+    # each routed to its fidelity item; graduates to the hard-gate list on the fix:
+    golden_diff_report vax-show-memory  HOLLOW  vms-352   # missing Dynamic Memory + Paging File sections (OVMX has pool+pagefile)
+    golden_diff_report vax-show-system  HOLLOW  vms-6b8e  # SHOW SYSTEM omits the State/Pri/I/O columns
+    golden_diff_report vax-show-device  MISSING vms-ddc   # %SYSTEM-W-NOSUCHDEV (device-name model, ties vms-9f5)
+    golden_diff_report vax-show-process HOLLOW  vms-1f7   # omits Terminal/Base priority/Devices allocated; UIC not resolved to [SYSTEM]
 
     return 0
 }

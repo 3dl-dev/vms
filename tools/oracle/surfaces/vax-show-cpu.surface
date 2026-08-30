@@ -9,6 +9,28 @@
 ARCH=vax
 DESC="SHOW CPU layout — multiprocessing state + PRIMARY/Active/Configured CPU labels (numbers masked)"
 NORMALIZE='s/[0-9]/#/g'
+# MACHINE_MASK (vms-c38): the three SHOW CPU fields that legitimately vary by machine
+# — masked so the gate compares the LABELLED STRUCTURE cross-system, not the values.
+# Each s/// preserves the structural label and replaces only a NON-EMPTY value, so a
+# blank/absent field still reds (guardrail: a mask means "this value varies", never
+# "ignore this line"). Grounded, per src/vmsdcl/dcl_cmd_show.c (DCL-Dictionary-pinned,
+# clean-room Rule 8) + the round-3 oracle diff:
+#   1. the model-identity line — VAX "VAX1, a VAXserver 3900 Series" vs OVMX's own
+#      "OVMX, an OVMX x86_64 system" (INV-1: OVMX keeps its real identity, never a
+#      fabricated VMS model);
+#   2. "Multiprocessing is ..." — ENABLED/DISABLED depends on the CPU count (a
+#      machine fact), and VMS prints the "Uniprocessing synchronization image loaded"
+#      clause only in the uniprocessor case (OVMX honestly omits it, INV-6);
+#   3. "Active/Configured CPUs:" — a space-separated CPU-ID LIST whose length is the
+#      CPU count (VAX uni = "01"; OVMX 2-way = "00 01"). DCL-Dictionary format.
+# The labels (Multiprocessing is / PRIMARY CPU = / Active CPUs: / Configured CPUs:)
+# are NOT masked and MUST match — that is the structure the gate pins.
+# NB: every value-mask requires a NON-EMPTY value so a blank/hollow field still reds
+# (guardrail): the model mask is bounded by the required ' (Series|system)$' suffix,
+# the CPU-list masks by '[#0-9 ]+', and the MP-state mask by '.+' (NOT '.*', which
+# would match an empty value and let a hollow 'Multiprocessing is ' pass -- VAX-lane
+# review catch, vms-c38).
+MACHINE_MASK='s/^[A-Z0-9#]+, an? .* (Series|system)$/<CPU-MODEL>/; s/^(Multiprocessing is ).+/\1<MP-STATE>/; s/(Active CPUs: +)[#0-9 ]+$/\1<CPU-LIST>/; s/(Configured CPUs: +)[#0-9 ]+$/\1<CPU-LIST>/'
 COMMANDS=(
   'SHOW CPU'
 )

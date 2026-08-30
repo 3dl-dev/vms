@@ -72,6 +72,47 @@ apply_may_omit() {
           print }'
 }
 
+# strip_console -- stdin -> stdout, dropping the command-ECHO lines (a COMMANDS
+# entry, with or without a leading "$ " prompt) and bare "$ " prompt lines. The
+# oracle capture and the battery's run_cmd echo/prompt DIFFERENTLY: the golden is
+# `$ SHOW MEMORY\n<output>` (capture_oracle's "$ CMD" echo, no trailing prompt)
+# while run_cmd's $SEG is `SHOW MEMORY\n<output>\n$ ` (bare echo + returned
+# prompt). Stripping both to the pure OUTPUT BODY makes the gate compare LAYOUT,
+# not console framing. COMMANDS is global (from the sourced surface); with none
+# set it strips only bare prompts (leaving fixture echoes for the selftest).
+strip_console() {
+    if [ "${#COMMANDS[@]}" -eq 0 ]; then grep -vE '^\$[[:space:]]*$' || true; return; fi
+    grep -vxF -f <(for c in "${COMMANDS[@]}"; do printf '%s\n$ %s\n' "$c" "$c"; done) \
+      | grep -vE '^\$[[:space:]]*$' || true
+}
+
+# structure_norm -- stdin -> stdout. The CROSS-SYSTEM structure-tolerant transform
+# (vms-c38, conductor ruling 2026-08-30). A byte-exact column-geometry gate is
+# IMPOSSIBLE cross-system: OVMX's VALUES legitimately differ from the VAX/Alpha
+# oracle's -- wider numbers (OVMX has more RAM/pages than a VAXserver 3900) and
+# different machine strings (CPU model, node name, device names). So the gate
+# proves STRUCTURAL fidelity: same sections, labels, headers, and FIELD STRUCTURE,
+# tolerant of legitimate value differences -- NOT of a missing or HOLLOW field.
+# Three transforms, applied to BOTH golden and OVMX (symmetric, like NORMALIZE):
+#   1. MACHINE_MASK (per-surface, grounded): sed s/// program masking fields that
+#      legitimately vary by machine (CPU model, node, device name). Each s///
+#      replaces a NON-EMPTY match with a fixed token, so a blank/absent field does
+#      NOT match and STILL REDS -- a machine-mask means "this value varies, don't
+#      compare it," NEVER "ignore this field" (INV-6, same discipline as MAY_OMIT).
+#   2. collapse a digit-mask RUN to ONE token ('#+' -> '#'): any-width masked number
+#      -> the same token, so a 6-digit VAX count and an 8-digit OVMX count compare
+#      equal. ⚠ A BLANK stays blank (no '#'), so a HOLLOW numeric field STILL REDS.
+#   3. whitespace-normalize (runs -> one space, trim): shifted column positions
+#      (from differing value widths) compare equal by structure.
+# Applied LAST, after apply_may_omit/strip_console, so those still match literal
+# section headers / command echoes on the un-collapsed text.
+structure_norm() {
+    local mm="${MACHINE_MASK:-}"
+    { [ -n "$mm" ] && sed -E "$mm" || cat; } \
+      | sed -E 's/#+/#/g' \
+      | sed -E 's/[[:space:]]+/ /g; s/^[[:space:]]+//; s/[[:space:]]+$//'
+}
+
 # classify <surface> <ovmx_file> <golden_file> <normalize_cmd...>
 # echoes the classification report to stdout, returns the class exit code.
 classify() {
@@ -110,8 +151,8 @@ classify() {
     # strip declared substrate-absent sections (MAY_OMIT) from BOTH before compare.
     ovmx_norm="$("$@" < "$ovmx")"
     local ovmx_cmp golden_cmp
-    ovmx_cmp="$(printf '%s\n' "$ovmx_norm" | apply_may_omit)"
-    golden_cmp="$(apply_may_omit < "$golden")"
+    ovmx_cmp="$(printf '%s\n' "$ovmx_norm" | apply_may_omit | strip_console | structure_norm)"
+    golden_cmp="$(apply_may_omit < "$golden" | strip_console | structure_norm)"
     if [ "$ovmx_cmp" = "$golden_cmp" ]; then
         echo "MATCH: '$surface' is VMS-faithful${MAY_OMIT:+ (modulo grounded substrate-omissions: $MAY_OMIT)}."
         return 0
@@ -123,6 +164,7 @@ classify() {
 }
 
 selftest() {
+    COMMANDS=(); MACHINE_MASK=""   # strip_console/structure_norm read them; unset trips set -u before main inits
     echo "=== diff_surface selftest: each class fires on a crafted fixture ==="
     local fails=0 tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
 
@@ -166,6 +208,52 @@ selftest() {
         echo "  FAIL: undeclared omission passed as MATCH [$o]"; fails=$((fails+1)); fi
     MAY_OMIT=''
 
+    # structure_norm (vms-c38): the CROSS-SYSTEM value-tolerant compare.
+    # (i) a digit-mask WIDTH difference (VAX 6-digit vs OVMX 8-digit) now MATCHes
+    #     -- the whole reason a byte-exact digit-mask can't gate cross-system.
+    printf '%s\n' '$ SHOW MEMORY' '  Main Memory   ####   ####' > "$tmp/gw"
+    printf '%s\n' '$ SHOW MEMORY' '  Main Memory   262144   99'  > "$tmp/wwide"
+    o="$(classify sfc "$tmp/wwide" "$tmp/gw" "${NORM[@]}")"; rc=$?
+    if [ "$rc" -eq 0 ]; then echo "  PASS: structure_norm tolerates a digit-WIDTH difference (6- vs 2-digit -> MATCH)"; else
+        echo "  FAIL: width-difference not MATCH: rc=$rc [$o]"; fails=$((fails+1)); fi
+    # (ii) GUARDRAIL 1: a BLANK where the golden has a number must STILL RED (a
+    #      hollow numeric field is not a value difference -- collapse keeps it red).
+    printf '%s\n' '$ SHOW MEMORY' '  Main Memory' > "$tmp/wblank"
+    o="$(classify sfc "$tmp/wblank" "$tmp/gw" "${NORM[@]}")"; rc=$?
+    if [ "$rc" -ne 0 ]; then echo "  PASS: structure_norm keeps a HOLLOW numeric field RED (blank != number-token, rc=$rc)"; else
+        echo "  FAIL: hollow-numeric passed as MATCH -- guardrail 1 broken [$o]"; fails=$((fails+1)); fi
+    # (iii) MACHINE_MASK: a grounded per-field mask lets a legitimately-varying
+    #       machine string (node name) MATCH, but GUARDRAIL 3 -- a blank/absent
+    #       masked field must STILL RED (mask means "value varies," not "ignore").
+    printf '%s\n' '$ SHOW CPU' '  Node: VAX#' > "$tmp/gm"
+    printf '%s\n' '$ SHOW CPU' '  Node: OVMX' > "$tmp/mreal"
+    printf '%s\n' '$ SHOW CPU' '  Node:'      > "$tmp/mblank"
+    # ⚠ masks run on DIGIT-MASKED text -- a field with digits reads as '#', so the
+    #   char class must include '#' (node 'VAX#' = 'VAX' + a masked digit).
+    MACHINE_MASK='s/Node: [A-Z0-9#]+/Node: <NODE>/'
+    o="$(classify sfc "$tmp/mreal" "$tmp/gm" "${NORM[@]}")"; rc=$?
+    if [ "$rc" -eq 0 ]; then echo "  PASS: MACHINE_MASK matches a present+non-empty varying field (Node OVMX vs VAX# -> MATCH)"; else
+        echo "  FAIL: machine-mask real-field not MATCH: rc=$rc [$o]"; fails=$((fails+1)); fi
+    o="$(classify sfc "$tmp/mblank" "$tmp/gm" "${NORM[@]}")"; rc=$?
+    if [ "$rc" -ne 0 ]; then echo "  PASS: MACHINE_MASK keeps a BLANK masked field RED (guardrail 3: mask != ignore, rc=$rc)"; else
+        echo "  FAIL: blank masked field passed as MATCH -- guardrail 3 broken [$o]"; fails=$((fails+1)); fi
+    # (iv) GUARDRAIL 3, a '.+'-terminated value mask (the SHOW CPU MP-STATE style,
+    #      'Label: <free text>'): must require NON-EMPTY too. A '.*' terminator would
+    #      match an empty value and let a hollow 'Multiprocessing is ' PASS -- this
+    #      case reds a blank ONLY if the mask uses '.+' (VAX-lane review catch, so a
+    #      future regression back to '.*' fails here).
+    printf '%s\n' '$ SHOW CPU' 'Multiprocessing is #'       > "$tmp/gmp"
+    printf '%s\n' '$ SHOW CPU' 'Multiprocessing is ENABLED.' > "$tmp/mp_real"
+    printf '%s\n' '$ SHOW CPU' 'Multiprocessing is '        > "$tmp/mp_blank"
+    MACHINE_MASK='s/^(Multiprocessing is ).+/\1<MP-STATE>/'
+    o="$(classify sfc "$tmp/mp_real" "$tmp/gmp" "${NORM[@]}")"; rc=$?
+    if [ "$rc" -eq 0 ]; then echo "  PASS: '.+' value mask matches a present+non-empty MP-state (ENABLED vs # -> MATCH)"; else
+        echo "  FAIL: .+ mask real-field not MATCH: rc=$rc [$o]"; fails=$((fails+1)); fi
+    o="$(classify sfc "$tmp/mp_blank" "$tmp/gmp" "${NORM[@]}")"; rc=$?
+    if [ "$rc" -ne 0 ]; then echo "  PASS: '.+' value mask keeps a BLANK MP-state RED (rejects '.*'-matches-empty hollow, rc=$rc)"; else
+        echo "  FAIL: blank MP-state passed as MATCH -- '.+' guardrail broken (mask uses '.*'?) [$o]"; fails=$((fails+1)); fi
+    MACHINE_MASK=''
+
     echo "=== $( [ $fails -eq 0 ] && echo 'selftest OK' || echo "selftest FAILED ($fails)" ) ==="
     return $fails
 }
@@ -180,7 +268,7 @@ GOLDEN="$GOLDEN_DIR/$SURFACE.golden"
 [ -f "$SURF_FILE" ] || die "no surface '$SURFACE' ($SURF_FILE)"
 [ -f "$GOLDEN" ]    || die "no golden for '$SURFACE' ($GOLDEN) -- capture it first with capture_oracle.sh"
 
-ARCH=""; DESC=""; NORMALIZE=""; ARTIFICE_TELL=""; MAY_OMIT=""; COMMANDS=()
+ARCH=""; DESC=""; NORMALIZE=""; ARTIFICE_TELL=""; MAY_OMIT=""; MACHINE_MASK=""; COMMANDS=()
 # shellcheck disable=SC1090
 . "$SURF_FILE"
 

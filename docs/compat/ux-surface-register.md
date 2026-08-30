@@ -19,7 +19,24 @@ Once a surface has an oracle golden, `diff_surface` classifies OVMX's output
 where the oracle has data — INV-6 lie-of-absence), **ARTIFICE-TELL** (matches a
 declared fabrication signature), **FORMAT-DIVERGENT** (real data, wrong shape),
 **MATCH** (VMS-faithful). Until then a row carries a *suspected* status from its
-rd item. **Hollow-first**: suspected HOLLOW/ARTIFICE surfaces are Priority 1 —
+rd item.
+
+The compare is **structure-tolerant** (`diff_surface` `structure_norm`): a
+byte-exact column-geometry gate is impossible cross-system (OVMX's values
+legitimately differ from the VAX/Alpha oracle — wider numbers, different machine
+strings), so the gate proves **structural fidelity** — same sections, labels,
+headers, field-structure — tolerant of value differences via digit-run collapse +
+whitespace-normalize + grounded per-surface `MACHINE_MASK`, but **never** of a
+missing or HOLLOW field (a blank keeps no digits → still reds; a masked field that
+is blank/absent → still reds).
+
+The `vms-c38` gate runs in two tiers (conductor ruling 2026-08-30, Option A):
+**hard-gated** surfaces are proven genuinely faithful and a divergence FAILS the
+leg (regression-proof); **report-only** surfaces are not-yet-faithful — the gate
+classifies + logs them LOUD and routes each to its fidelity item every run (driving
+this backlog) but does not hard-fail the required leg, so a known gap can't
+permanently-red main. A surface graduates to hard-gated when its fidelity item
+lands and it genuinely MATCHes. **Hollow-first**: suspected HOLLOW/ARTIFICE surfaces are Priority 1 —
 they are the fabrications the operator's "Apple II BASIC clone of VMS" concern
 names, and the ones a hand-written `must_have` passes vacuously on.
 
@@ -32,16 +49,16 @@ diagnosis, not yet golden-gated; `pending` = not yet triaged/captured.
 | surface | VMS command | status | golden | rd item |
 |---|---|---|---|---|
 | show-users | `SHOW USERS` | **suspected-HOLLOW/ARTIFICE** — fabricates a user-process summary with no executive | — (capture next) | vms-6a1, vms-8146 |
-| show-memory | `SHOW MEMORY` | golden-seeded | `vax-show-memory` | vms-352 |
-| show-system | `SHOW SYSTEM` | golden-seeded (banner+column geometry) | `vax-show-system` | vms-6b8e |
-| show-cpu | `SHOW CPU` | golden-seeded | `vax-show-cpu` | vms-277 |
+| show-memory | `SHOW MEMORY` | **HOLLOW** (vms-c38 round-3 diff) — OVMX omits the Dynamic Memory + Paging File sections + the "permanently allocated" footer, though it HAS pool + a pagefile → real lie-of-absence, not substrate-absent. Gate REPORT-only, routed. | `vax-show-memory` | vms-352 |
+| show-system | `SHOW SYSTEM` | **HOLLOW** (vms-c38 round-3 diff) — column header omits the State/Pri/I/O columns; banner (OpenVMX/node/version) is machine-varying (fine). Gate REPORT-only, routed. | `vax-show-system` | vms-6b8e |
+| show-cpu | `SHOW CPU` | **fixed — HARD-GATED** (vms-c38): genuinely faithful, greens through the full pipeline (model / MP-state / CPU-ID-list are machine-varying values, masked; the labelled structure MATCHes the DCL-Dictionary-pinned oracle). Regression-proof. | `vax-show-cpu` | vms-277 |
 
 ## Priority 2 — the rest of the SHOW battery + DIRECTORY/SET
 
 | surface | VMS command | status | golden | rd item |
 |---|---|---|---|---|
-| show-device | `SHOW DEVICE` | golden-seeded (2-line column header + status) | `vax-show-device` | vms-ddc, vms-e6f, vms-f4b, vms-fe0 |
-| show-process | `SHOW PROCESS` | golden-seeded (field layout) | `vax-show-process` | vms-1f7, vms-c47 |
+| show-device | `SHOW DEVICE` | **MISSING** (vms-c38 round-3 diff) — OVMX returns `%SYSTEM-W-NOSUCHDEV` for the queried device (device-name model: golden's `$1$DUAn:` vs OVMX's `DKA0:`/`VDA0:`, ties vms-9f5). Gate REPORT-only, routed. | `vax-show-device` | vms-ddc, vms-9f5, vms-e6f, vms-f4b, vms-fe0 |
+| show-process | `SHOW PROCESS` | **HOLLOW** (vms-c38 round-3 diff) — omits Terminal / Base priority / Devices allocated lines, and shows a numeric UIC `[n,n]` not resolved to the identifier name `[SYSTEM]`; node is machine-varying (fine). Gate REPORT-only, routed. | `vax-show-process` | vms-1f7, vms-c47 |
 | show-quota | `SHOW QUOTA` | **fixed** — oracle-faithful `%SYSTEM-F-QFNOTACT` (was a NODISKQUOTA fabrication) | — (deterministic) | vms-73c4 (#939) |
 | directory | `DIRECTORY` | leak premise **REFUTED** (measure-first, 2026-08-30) — header derives `DEV:[DIR]` from VMS-side inputs via `dcl_directory_header_spec` (vms-272), no `/vms`/`[VMS.]` leak; zero-match = honest `%DIRECT-W-NOFILES`. Byte-fidelity still wants a golden. | pending (Alpha capture) | vms-38d, vms-28c |
 | set-default | `SET DEFAULT` / `SHOW DEFAULT` | pending — concealed-form round-trip canonicalizer | pending | vms-ee0 |

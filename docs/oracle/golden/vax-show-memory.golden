@@ -1,0 +1,22 @@
+$ SHOW MEMORY
+              System Memory Resources on ##-AUG-#### ##:##:##.##
+
+Physical Memory Usage (pages):     Total        Free      In Use    Modified
+  Main Memory (###.##Mb)          ######      ######       #####        ####
+
+Virtual I/O Cache Usage (pages):   Total        Free      In Use     Maximum
+  Cache Memory                      ####          ##        ####      ######
+
+Slot Usage (slots):                Total        Free    Resident     Swapped
+  Process Entry Slots                ###         ###          ##           #
+  Balance Set Slots                  ###         ###          ##           #
+
+Dynamic Memory Usage (bytes):      Total        Free      In Use     Largest
+  Nonpaged Dynamic Memory        #######     #######     #######     #######
+  Paged Dynamic Memory           #######     #######      ######     #######
+
+Paging File Usage (pages):                      Free  Reservable       Total
+  DISK$SYSDSK#:[SYS#.SYSEXE]SWAPFILE.SYS       #####       #####       #####    
+  DISK$SYSDSK#:[SYS#.SYSEXE]PAGEFILE.SYS      ######       #####      ######    
+
+Of the physical pages in use, ##### pages are permanently allocated to OpenVMS.

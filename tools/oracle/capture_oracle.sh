@@ -69,6 +69,21 @@ extract_golden() {
       | grep -v 'OVMX-ORACLE-' || true
 }
 
+# ---------------------------------------------------------------------------
+# apply_normalize -- stdin -> stdout, applying the surface's NORMALIZE sed
+# program (identity when unset, so byte-exact surfaces are unchanged). This is
+# the SYMMETRIC mask: capture applies it to the oracle display, and the vms-c38
+# golden-comparison gate applies the IDENTICAL mask to OVMX's own output before
+# diffing (via `capture_oracle.sh normalize <surface> < ovmx_output`), so a
+# volatile field (a free-page count, a timestamp, a PID) can never red a
+# LAYOUT-fidelity diff -- only a real structural divergence (a missing section,
+# a renamed column, a shifted width) does. A deterministic surface sets no
+# NORMALIZE and stays byte-exact.
+# ---------------------------------------------------------------------------
+apply_normalize() {
+    if [ -n "${NORMALIZE:-}" ]; then sed "$NORMALIZE"; else cat; fi
+}
+
 selftest() {
     echo "=== capture_oracle selftest: extract_golden() slices byte-exactly ==="
     local fails=0 tmp got want
@@ -111,6 +126,24 @@ selftest() {
   X = 1'
     if [ "$got" = "$want" ]; then echo "  PASS: CR-LF endings do not insert blank lines"; else
         echo "  FAIL: CR-LF doubled: [$got]"; fails=$((fails+1)); fi
+
+    # NORMALIZE digit-mask: masks every value BUT preserves column alignment
+    # (same width), so two captures with different numbers normalize identically.
+    local memrow='  Main Memory (128.00Mb)          262144      217508'
+    got="$(NORMALIZE='s/[0-9]/#/g'; printf '%s\n' "$memrow" | apply_normalize)"
+    want='  Main Memory (###.##Mb)          ######      ######'
+    if [ "$got" = "$want" ]; then echo "  PASS: digit-mask masks values, preserves alignment"; else
+        echo "  FAIL: digit-mask: [$got]"; fails=$((fails+1)); fi
+    # Two different-number rows normalize to the SAME masked form (reproducible).
+    local a b
+    a="$(NORMALIZE='s/[0-9]/#/g'; printf '%s\n' '  Free  217508  Modified  2646' | apply_normalize)"
+    b="$(NORMALIZE='s/[0-9]/#/g'; printf '%s\n' '  Free  191204  Modified  3901' | apply_normalize)"
+    if [ "$a" = "$b" ]; then echo "  PASS: differing volatile fields normalize identically"; else
+        echo "  FAIL: not reproducible under mask: [$a] vs [$b]"; fails=$((fails+1)); fi
+    # Identity when NORMALIZE is unset (byte-exact surfaces unchanged).
+    got="$(NORMALIZE=''; printf '%s\n' "$memrow" | apply_normalize)"
+    if [ "$got" = "$memrow" ]; then echo "  PASS: no NORMALIZE -> byte-exact passthrough"; else
+        echo "  FAIL: identity broken: [$got]"; fails=$((fails+1)); fi
 
     echo "=== $( [ $fails -eq 0 ] && echo 'selftest OK' || echo "selftest FAILED ($fails)" ) ==="
     return $fails
@@ -206,14 +239,26 @@ login() {  # pod node user pass -- prompt-synchronised, one line at a time
 case "$1" in
   selftest) selftest; exit $? ;;
   list) ls "$SURF_DIR"/*.surface 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.surface$//' || echo "(no surfaces)"; exit 0 ;;
+  normalize)
+    # capture_oracle.sh normalize <surface> < input  -- apply the surface's mask
+    # to stdin (what the vms-c38 gate runs on OVMX output, symmetric with the
+    # oracle capture). Prints stdin unchanged for a byte-exact surface.
+    [ $# -ge 2 ] || die "usage: capture_oracle.sh normalize <surface> < input"
+    nsurf="$SURF_DIR/$2.surface"
+    [ -f "$nsurf" ] || die "no surface '$2' ($nsurf)"
+    NORMALIZE=""
+    # shellcheck disable=SC1090
+    . "$nsurf"
+    apply_normalize
+    exit $? ;;
 esac
 
 SURFACE="$1"; KEEP_LAB=0; [ "${2:-}" = "--keep-lab" ] && KEEP_LAB=1
 SURF_FILE="$SURF_DIR/$SURFACE.surface"
 [ -f "$SURF_FILE" ] || die "no surface '$SURFACE' ($SURF_FILE). Try: capture_oracle.sh list"
 
-# surface file: ARCH=, DESC=, and COMMANDS=( 'DCL 1' 'DCL 2' ... )
-ARCH=""; DESC=""; COMMANDS=()
+# surface file: ARCH=, DESC=, COMMANDS=( 'DCL 1' ... ), optional NORMALIZE=sed
+ARCH=""; DESC=""; NORMALIZE=""; COMMANDS=()
 # shellcheck disable=SC1090
 . "$SURF_FILE"
 [ -n "$ARCH" ] && [ "${#COMMANDS[@]}" -gt 0 ] || die "surface '$SURFACE' must set ARCH and COMMANDS"
@@ -247,7 +292,7 @@ fifo_send "$POD" "$NODE" "WRITE SYS\$OUTPUT \"$END_MARK\""; sleep 3
 # Pipe the raw console straight into extract_golden -- extract_golden's tr -cd
 # drops the console's control/NUL bytes, so GOLD is clean text (capturing the
 # raw log into a $() variable first would strip NULs with a noisy warning).
-GOLD="$(kexec "$POD" "cat /lab/k8s-labs/$POD/logs/$NODE.log" 2>/dev/null | extract_golden || true)"
+GOLD="$(kexec "$POD" "cat /lab/k8s-labs/$POD/logs/$NODE.log" 2>/dev/null | extract_golden | apply_normalize || true)"
 [ -n "$GOLD" ] || die "empty capture -- markers not found in the console log (boot/login race?)"
 
 mkdir -p "$GOLDEN_DIR"
@@ -259,7 +304,13 @@ printf '%s\n' "$GOLD" > "$OUT"
   echo "description: ${DESC:-}"
   echo "oracle: OpenVMS $( [ "$ARCH" = vax ] && echo 'VAX V7.3' || echo 'Alpha V8.4' ) (lab $STS/$NODE, isolated replica $POD)"
   echo "captured: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  echo "method: capture_oracle.sh -- FIFO console drive, marker-sliced, byte-exact display (CLAUDE.md Rule 8 observation)"
+  echo "method: capture_oracle.sh -- FIFO console drive, marker-sliced display (CLAUDE.md Rule 8 observation)"
+  if [ -n "$NORMALIZE" ]; then
+    echo "normalize: '$NORMALIZE'   # SYMMETRIC mask -- the vms-c38 gate applies the IDENTICAL"
+    echo "                          # mask to OVMX output: capture_oracle.sh normalize $SURFACE < ovmx_output"
+  else
+    echo "normalize: (none -- byte-exact)"
+  fi
   echo "commands:"; for c in "${COMMANDS[@]}"; do echo "  - $c"; done
 } > "$OUT.meta"
 

@@ -1,0 +1,14 @@
+# vms-b0f (via vms-35b): SHOW MEMORY section/column LAYOUT on OpenVMS VAX V7.3.
+# NON-deterministic (free/modified pages, cache, dynamic-memory bytes, paging-file
+# counts, and the header timestamp all vary run-to-run), so it uses the digit-mask
+# NORMALIZE: every digit -> '#', which preserves column width/alignment while
+# masking the volatile values. The golden is thus the reproducible LAYOUT (section
+# headers, column headers, row labels, geometry). The vms-c38 gate applies the
+# SAME mask to OVMX's SHOW MEMORY before diffing:
+#   capture_oracle.sh normalize vax-show-memory < ovmx_show_memory_output
+ARCH=vax
+DESC="SHOW MEMORY section/column layout (digit-masked; free/pages/times volatile)"
+NORMALIZE='s/[0-9]/#/g'
+COMMANDS=(
+  'SHOW MEMORY'
+)

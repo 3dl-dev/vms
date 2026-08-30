@@ -227,11 +227,13 @@ static uint32_t rms_reclock_after_locate(struct FAB *fab, struct RAB *rab,
  * per-record locator (rms_seq_put never sets _last_rec_offset -- the same
  * rab$w_rfa gap the design doc notes for $GET), so a $PUT lock would name a
  * STALE/colliding resource (every sequential $PUT would collide on offset 0).
- * Worse, because a record lock outlives the file lock (the parent-child
- * auto-release cascade is deferred, vms-489) and $CLOSE cannot reach the RAB
- * to release it (vms-3ce), a stashed $PUT lock LEAKS across a file
- * close+reopen and then spuriously blocks the read-back's own $GET (the exact
- * test_syssvc_rms_acp regression). A record lock a subsequent $UPDATE needs is
+ * Worse, a $PUT lock would name a stale/colliding resource that the read-back's
+ * own $GET then re-derives and blocks on (the exact test_syssvc_rms_acp
+ * regression). (The executive now cascades child record locks when their file
+ * lock is $DEQ'd at $CLOSE -- release_child_locks, vms_lock.c -- so a held
+ * record lock no longer OUTLIVES its file; but a $PUT still holds none, both
+ * because its locator is unreliable and because a fresh append needs no hold.)
+ * A record lock a subsequent $UPDATE needs is
  * taken by the $GET that precedes it, which is the VMS pattern the
  * done-condition exercises. A held $PUT lock (for $PUT-then-$UPDATE on the same
  * stream without an intervening $GET) waits on per-record put locators +

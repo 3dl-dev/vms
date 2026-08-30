@@ -42,6 +42,9 @@
 #include <sys/ioctl.h>
 #include "vms_ioctl.h"
 #include "vms_kif.h"
+#include "starlet.h"
+#include "syidef.h"
+#include "lnmdef.h"
 
 #define SS_NORMAL   1u
 #define EXIT_SKIP    77
@@ -114,6 +117,32 @@ int main(void)
         CHECK(strcmp(members[ic].state, "BRK_NON") == 0, "NODEC: state (BRK_NON) matches");
     }
 
+    /* ---- 2b. $GETSYI cutover (vms-5919): CLUSTER_NODES/CLUSTER_MEMBER  --
+     * read the SAME executive block this suite just SET via the ioctl,
+     * NOT scsd's published membership file (there is no membership file in
+     * this harness at all -- only the executive-resident block). The item
+     * list below is the real public $GETSYI entry point
+     * (src/libvms/syssvc/sys_misc.c), driven exactly as a VMS program would
+     * drive it (struct item_list_3, tests/corpus/tier1-examples/
+     * sys_getsyi.c's pattern) -- this is the cutover proof, not a re-test
+     * of the ioctl plumbing above. */
+    {
+        uint32_t cluster_nodes = 0xffffffffu, cluster_member = 0xffffffffu;
+        struct item_list_3 getsyi_itms[] = {
+            { sizeof(cluster_nodes),  SYI$_CLUSTER_NODES,  &cluster_nodes,  NULL },
+            { sizeof(cluster_member), SYI$_CLUSTER_MEMBER, &cluster_member, NULL },
+            { 0, 0, NULL, NULL }
+        };
+        uint32_t gst = sys$getsyi(0, 0, 0, getsyi_itms, 0, 0, 0);
+        CHECK(gst == SS_NORMAL, "$GETSYI(CLUSTER_NODES, CLUSTER_MEMBER) -> SS$_NORMAL");
+        CHECK(cluster_nodes == 3,
+              "$GETSYI CLUSTER_NODES == 3 -- read from the executive block this "
+              "suite SET, not a membership file (none exists here)");
+        CHECK(cluster_member == 1,
+              "$GETSYI CLUSTER_MEMBER == 1 (a member) -- same executive-block "
+              "read, cutover proven");
+    }
+
     /* ---- 3. A repeat SET on an existing csid UPDATES, not appends ---- */
     st = vms_kif_cluster_member_set(CSID_B, 1026u, "NODEB", "BRK_NON");
     CHECK(st == SS_NORMAL, "re-SET NODEB with a new state -> SS$_NORMAL");
@@ -156,6 +185,27 @@ int main(void)
     st = vms_kif_cluster_get_members(members, VMS_CLUSTER_MEMBER_MAX, &n);
     CHECK(st == SS_NORMAL && n == 0,
           "GET after cleanup: back to n_members==0 (NOTMEMBER, SS$_NORMAL)");
+
+    /* ---- 6. $GETSYI cutover, NOTMEMBER side: with the executive block back
+     * to n_members==0, CLUSTER_NODES falls back to 1 (this node only) and
+     * CLUSTER_MEMBER reports 0 (NOTMEMBER) -- $GETSYI tracks the LIVE
+     * executive state, not a cached/stale view from the earlier SETs. */
+    {
+        uint32_t cluster_nodes = 0xffffffffu, cluster_member = 0xffffffffu;
+        struct item_list_3 getsyi_itms[] = {
+            { sizeof(cluster_nodes),  SYI$_CLUSTER_NODES,  &cluster_nodes,  NULL },
+            { sizeof(cluster_member), SYI$_CLUSTER_MEMBER, &cluster_member, NULL },
+            { 0, 0, NULL, NULL }
+        };
+        uint32_t gst = sys$getsyi(0, 0, 0, getsyi_itms, 0, 0, 0);
+        CHECK(gst == SS_NORMAL, "$GETSYI(CLUSTER_NODES, CLUSTER_MEMBER) after cleanup -> SS$_NORMAL");
+        CHECK(cluster_nodes == 1,
+              "$GETSYI CLUSTER_NODES == 1 (this node only) once the executive "
+              "block is back to no members");
+        CHECK(cluster_member == 0,
+              "$GETSYI CLUSTER_MEMBER == 0 (NOTMEMBER) -- tracks the live "
+              "executive state, not a stale view from the earlier SETs");
+    }
 
     printf("=== test_syssvc_cluster_member: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

@@ -1,0 +1,8 @@
+$ SHOW CPU
+
+VAX#, a VAXserver #### Series
+Multiprocessing is DISABLED. Uniprocessing synchronization image loaded.
+
+PRIMARY CPU = ##
+Active CPUs:      ##
+Configured CPUs:  ##

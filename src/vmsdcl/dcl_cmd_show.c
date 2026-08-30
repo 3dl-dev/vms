@@ -43,6 +43,9 @@
 #include "vmsqueue.h"
 #include "descrip.h"
 #include "jpidef.h"
+#include "rightslist.h" /* rightslist_value_to_name -- resolve UIC -> identifier
+                         * name for SHOW PROCESS "User Identifier:" (vms-2e48),
+                         * the same resolver F$IDENTIFIER uses in dcl_lexical.c */
 #include "dcdef.h"       /* DC$_DISK / DC$_TERM -- SHOW DEVICE groups by class (vms-e6f) */
 /* The kernel-interface client: SHOW SYSTEM enumerates the executive process
  * table through it, and SHOW DEVICE reads the executive's device table
@@ -761,12 +764,15 @@ static const char *show_process_target_qual(const struct dcl_command *cmd)
  *                      for every process on every system. DELETED.
  *                      cmd_show_process_quotas() is untouched.
  *
- * User Identifier: IS printed, from JPI$_UIC, as the octal
- * [group,member]. VMS shows the RIGHTS IDENTIFIER ([SYSTEM]) when the
- * UIC has one; OVMX has no RIGHTSLIST. That divergence pre-dates this
- * item, is recorded in vax73-privileges.md Section 6 (4), and is not
- * vms-6a7's -- what IS vms-6a7's is that the numbers now come from the
- * TARGET's executive row instead of the caller's getgid()/getuid().
+ * User Identifier: IS printed, from JPI$_UIC. VMS shows the RIGHTS
+ * IDENTIFIER ([SYSTEM]) when the UIC has one; OVMX now does the same,
+ * resolving the UIC through rightslist_value_to_name -- the resolver
+ * F$IDENTIFIER uses (dcl_lexical.c) -- against the real binary
+ * RIGHTSLIST.DAT (vms-f15a/vms-d0c), and falling back to the octal
+ * [group,member] on a miss, which is itself VMS-faithful when the UIC has
+ * no identifier (vax73-privileges.md Section 6 (4)). vms-6a7 made the
+ * numbers come from the TARGET's executive row instead of the caller's
+ * getgid()/getuid(); vms-2e48 added the identifier resolve.
  */
 static int cmd_show_process(struct dcl_command *cmd)
 {
@@ -1003,10 +1009,27 @@ static int cmd_show_process(struct dcl_command *cmd)
     printf("\n");
 
     /* Body labels sit in a 20-column field -- values start at column 20. */
-    char uicbuf[32];
-    snprintf(uicbuf, sizeof(uicbuf), "[%03o,%03o]",
-             (unsigned)((tgt_uic >> 16) & 0xFFFFu),
-             (unsigned)(tgt_uic & 0xFFFFu));
+    char uicbuf[RIGHTSLIST_NAME_MAX + 2];
+    char uic_ident[RIGHTSLIST_NAME_MAX];
+    if (rightslist_value_to_name((uint32_t)tgt_uic, uic_ident,
+                                 sizeof(uic_ident)) == 0) {
+        /*
+         * VMS resolves the UIC to its rights identifier and BRACKETS it
+         * (e.g. [SYSTEM]) -- this is $IDTOASC of the UIC value, exactly the
+         * resolve F$IDENTIFIER performs (dcl_lexical.c), but F$IDENTIFIER
+         * returns the bare name where SHOW PROCESS wraps it in brackets.
+         */
+        snprintf(uicbuf, sizeof(uicbuf), "[%s]", uic_ident);
+    } else {
+        /*
+         * The miss: the UIC has no identifier. VMS shows the numeric
+         * [group,member] in that case, so the octal form is the faithful
+         * fallback -- kept, not fabricated.
+         */
+        snprintf(uicbuf, sizeof(uicbuf), "[%03o,%03o]",
+                 (unsigned)((tgt_uic >> 16) & 0xFFFFu),
+                 (unsigned)(tgt_uic & 0xFFFFu));
+    }
     printf("%-20s%s\n", "User Identifier:", uicbuf);
 
     /*
@@ -1049,8 +1072,12 @@ static int cmd_show_process(struct dcl_command *cmd)
      *                       not the wider accounting set VMS prints here;
      *                       a partial block dressed as the whole would be
      *                       an invention.
-     *   Process/System rights: OVMX has no RIGHTSLIST (the same reason
-     *                       User Identifier prints octal, not [SYSTEM]).
+     *   Process/System rights: the executive carries no per-process runtime
+     *                       rights vector to print. (A binary RIGHTSLIST.DAT
+     *                       does exist and now resolves the UIC identifier --
+     *                       see User Identifier -- but the rights a process
+     *                       HOLDS at runtime are separate state the executive
+     *                       does not keep, so these blocks stay omitted.)
      *   Auto-unshelve / Image Dump / Scheduling class / Dynamic Memory /
      *   job process list:   no executive facility backs any of these.
      *

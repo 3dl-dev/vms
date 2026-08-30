@@ -53,6 +53,25 @@ body_of() { grep -vE '^\$ |^\$[[:space:]]*$|^[[:space:]]*$' || true; }
 # MISSING signatures: OVMX rejected/never-implemented the command.
 MISSING_RE='%DCL-[WEF]-(IVVERB|IVKEYW|NOCMD|ABVERB|IVQUAL|SYNTAX)|%SYSTEM-[WEF]-(UNSUPPORTED|NOSUCHDEV)|-RMS-[EF]-|[Nn]ot implemented|SS\$_UNSUPPORTED'
 
+# apply_may_omit -- stdin -> stdout, removing each declared substrate-ABSENT
+# SECTION: a header line matching a MAY_OMIT pattern plus its data rows up to (and
+# including) the next blank line. Applied to BOTH the golden AND OVMX before the
+# MATCH compare, so a GROUNDED omission (the substrate genuinely lacks the
+# facility -- vms-8019 honest-omission) does not red the diff. An UNDECLARED
+# omission leaves the golden's section in place and reds (HOLLOW/FORMAT-DIVERGENT).
+# ⚠ MAY_OMIT is for substrate-ABSENT facilities ONLY -- a field OVMX could source
+# but doesn't render is a real HOLLOW gap and must NEVER be listed here; that is
+# the allowlist-to-pass INV-6 forbids. Each surface's MAY_OMIT is grounded in its
+# .surface file against the battery's existing must_not_have.
+apply_may_omit() {
+    if [ -z "${MAY_OMIT:-}" ]; then cat; return; fi
+    awk -v pats="$MAY_OMIT" '
+        BEGIN { n = split(pats, a, "|") }
+        skip  { if ($0 ~ /^[[:space:]]*$/) skip = 0; next }
+        { for (i = 1; i <= n; i++) if (a[i] != "" && index($0, a[i])) { skip = 1; next }
+          print }'
+}
+
 # classify <surface> <ovmx_file> <golden_file> <normalize_cmd...>
 # echoes the classification report to stdout, returns the class exit code.
 classify() {
@@ -87,15 +106,19 @@ classify() {
         return 4
     fi
 
-    # 4/5. MATCH vs FORMAT-DIVERGENT -- normalize both sides symmetrically.
+    # 4/5. MATCH vs FORMAT-DIVERGENT -- normalize both sides symmetrically, then
+    # strip declared substrate-absent sections (MAY_OMIT) from BOTH before compare.
     ovmx_norm="$("$@" < "$ovmx")"
-    if [ "$ovmx_norm" = "$(cat "$golden")" ]; then
-        echo "MATCH: '$surface' is VMS-faithful (normalized OVMX == golden)."
+    local ovmx_cmp golden_cmp
+    ovmx_cmp="$(printf '%s\n' "$ovmx_norm" | apply_may_omit)"
+    golden_cmp="$(apply_may_omit < "$golden")"
+    if [ "$ovmx_cmp" = "$golden_cmp" ]; then
+        echo "MATCH: '$surface' is VMS-faithful${MAY_OMIT:+ (modulo grounded substrate-omissions: $MAY_OMIT)}."
         return 0
     fi
 
-    echo "FORMAT-DIVERGENT: '$surface' has data but the wrong shape (normalized diff, golden < vs OVMX >):"
-    diff <(cat "$golden") <(printf '%s\n' "$ovmx_norm") | sed 's/^/    /' | head -40
+    echo "FORMAT-DIVERGENT: '$surface' has data but the wrong shape (normalized diff after grounded MAY_OMIT, golden < vs OVMX >):"
+    diff <(printf '%s\n' "$golden_cmp") <(printf '%s\n' "$ovmx_cmp") | sed 's/^/    /' | head -40
     return 5
 }
 
@@ -127,6 +150,22 @@ selftest() {
     local m; m="$(classify sfc "$tmp/match" "$tmp/golden" "${NORM[@]}")"
     if echo "$m" | grep -q '^MATCH'; then echo "  PASS: NEGCTL match!=missing/hollow"; else echo "  FAIL: negctl match misclassified [$m]"; fails=$((fails+1)); fi
 
+    # MAY_OMIT: a 3-section golden (single-digit fields keep the mask widths
+    # equal). A DECLARED substrate-absent section (Virtual I/O Cache) omitted by
+    # OVMX -> MATCH; an UNDECLARED omission (Dynamic) -> reds.
+    printf '%s\n' '$ SHOW MEMORY' '  Physical   #   #' '' '  Virtual I/O Cache   #   #' '' '  Dynamic   #   #' > "$tmp/g3"
+    printf '%s\n' '$ SHOW MEMORY' '  Physical   1   2' '' '  Dynamic   7   8' > "$tmp/omit_ok"
+    printf '%s\n' '$ SHOW MEMORY' '  Physical   1   2' > "$tmp/omit_bad"
+    local o rc
+    MAY_OMIT='Virtual I/O Cache'
+    o="$(classify sfc "$tmp/omit_ok" "$tmp/g3" "${NORM[@]}")"; rc=$?
+    if [ "$rc" -eq 0 ]; then echo "  PASS: MAY_OMIT tolerates the DECLARED substrate-absent section -> MATCH"; else
+        echo "  FAIL: MAY_OMIT declared-omit not MATCH: rc=$rc [$o]"; fails=$((fails+1)); fi
+    o="$(classify sfc "$tmp/omit_bad" "$tmp/g3" "${NORM[@]}")"; rc=$?
+    if [ "$rc" -ne 0 ]; then echo "  PASS: MAY_OMIT does NOT tolerate an UNDECLARED omission (Dynamic dropped -> red rc=$rc)"; else
+        echo "  FAIL: undeclared omission passed as MATCH [$o]"; fails=$((fails+1)); fi
+    MAY_OMIT=''
+
     echo "=== $( [ $fails -eq 0 ] && echo 'selftest OK' || echo "selftest FAILED ($fails)" ) ==="
     return $fails
 }
@@ -141,7 +180,7 @@ GOLDEN="$GOLDEN_DIR/$SURFACE.golden"
 [ -f "$SURF_FILE" ] || die "no surface '$SURFACE' ($SURF_FILE)"
 [ -f "$GOLDEN" ]    || die "no golden for '$SURFACE' ($GOLDEN) -- capture it first with capture_oracle.sh"
 
-ARCH=""; DESC=""; NORMALIZE=""; ARTIFICE_TELL=""; COMMANDS=()
+ARCH=""; DESC=""; NORMALIZE=""; ARTIFICE_TELL=""; MAY_OMIT=""; COMMANDS=()
 # shellcheck disable=SC1090
 . "$SURF_FILE"
 

@@ -297,17 +297,17 @@ run_dcl_acceptance_battery() {
     #   must_match "$SEG" '\[\[[A-Z0-9.]+\]\]' "F\$DIRECTORY [vms-050]: returns a VMS bracketed directory like '[SYSMGR]' (matches the oracle's [dir] form)"
     #   negctl "$SEG" 'F$DIRECTORY' "F\$ lexicals"
 
-    # --- SHOW DEVICE DKA0: (vms-e6f: shipped bare "Online", no Mounted/label)
-    run_cmd 'SHOW DEVICE DKA0:'
-    # The DKA0: DATA line, not the echoed command 'SHOW DEVICE DKA0:' (which also
-    # contains 'DKA0'): exclude any line naming the SHOW verb.
-    local DKA0_LINE; DKA0_LINE=$(printf '%s\n' "$SEG" | grep -i 'DKA0:' | grep -iv 'SHOW ' | head -1)
-    must_have  "$SEG" 'DKA0' "SHOW DEVICE DKA0: [vms-e6f]: names the device DKA0:"
-    must_have  "$DKA0_LINE" 'Mounted' "SHOW DEVICE DKA0: [vms-e6f]: device status is 'Mounted' (NOT bare 'Online')"
-    must_have  "$DKA0_LINE" "$VOLUME_LABEL" "SHOW DEVICE DKA0: [vms-e6f]: shows the volume label '$VOLUME_LABEL'"
-    must_match "$DKA0_LINE" '[1-9][0-9]{3,}' "SHOW DEVICE DKA0: [vms-e6f]: shows a nonzero free-block count (128MB ODS-2 volume has thousands free)"
-    must_not_have "$DKA0_LINE" 'Online' "SHOW DEVICE DKA0: [vms-e6f]: DKA0: status is not the bare 'Online' bug"
-    negctl     "$SEG" 'SHOW DEVICE' "SHOW DEVICE DKA0:"
+    # --- SHOW DEVICE VDA0: (vms-e6f: shipped bare "Online", no Mounted/label)
+    run_cmd 'SHOW DEVICE VDA0:'
+    # The VDA0: DATA line, not the echoed command 'SHOW DEVICE VDA0:' (which also
+    # contains 'VDA0'): exclude any line naming the SHOW verb.
+    local VDA0_LINE; VDA0_LINE=$(printf '%s\n' "$SEG" | grep -i 'VDA0:' | grep -iv 'SHOW ' | head -1)
+    must_have  "$SEG" 'VDA0' "SHOW DEVICE VDA0: [vms-e6f]: names the device VDA0:"
+    must_have  "$VDA0_LINE" 'Mounted' "SHOW DEVICE VDA0: [vms-e6f]: device status is 'Mounted' (NOT bare 'Online')"
+    must_have  "$VDA0_LINE" "$VOLUME_LABEL" "SHOW DEVICE VDA0: [vms-e6f]: shows the volume label '$VOLUME_LABEL'"
+    must_match "$VDA0_LINE" '[1-9][0-9]{3,}' "SHOW DEVICE VDA0: [vms-e6f]: shows a nonzero free-block count (128MB ODS-2 volume has thousands free)"
+    must_not_have "$VDA0_LINE" 'Online' "SHOW DEVICE VDA0: [vms-e6f]: VDA0: status is not the bare 'Online' bug"
+    negctl     "$SEG" 'SHOW DEVICE' "SHOW DEVICE VDA0:"
 
     # --- SHOW DEVICE/FULL OPA0: (vms-bed: the deferred terminal /FULL rung,
     # oracle docs/oracle/vax73-terminal-device.md §5). Was falling through to the
@@ -335,8 +335,8 @@ run_dcl_acceptance_battery() {
     # one answers the honest FALSE. This is the POSITIVE half of the de-fab that
     # a userspace-only ctest cannot prove (no /dev/vms, Rule 9); the absence
     # half is tests/dcl/test_getdvi_no_fabrication.sh.
-    run_cmd 'WRITE SYS$OUTPUT "GETDVIEXIST=" + F$GETDVI("DKA0:","EXISTS")'
-    must_have     "$SEG" 'GETDVIEXIST=TRUE' "F\$GETDVI EXISTS [vms-050]: the real system disk DKA0: exists -> TRUE, from the executive device table"
+    run_cmd 'WRITE SYS$OUTPUT "GETDVIEXIST=" + F$GETDVI("VDA0:","EXISTS")'
+    must_have     "$SEG" 'GETDVIEXIST=TRUE' "F\$GETDVI EXISTS [vms-050]: the real system disk VDA0: exists -> TRUE, from the executive device table"
     negctl        "$SEG" 'GETDVIEXIST' "F\$GETDVI EXISTS(real)"
 
     run_cmd 'WRITE SYS$OUTPUT "GETDVIBOGUS=" + F$GETDVI("ZZZ999:","EXISTS")'
@@ -344,12 +344,12 @@ run_dcl_acceptance_battery() {
     must_not_have "$SEG" 'GETDVIBOGUS=TRUE' "F\$GETDVI EXISTS [vms-050]: bogus device is NOT fabricated as existing"
     negctl        "$SEG" 'GETDVIBOGUS' "F\$GETDVI EXISTS(bogus)"
 
-    run_cmd 'WRITE SYS$OUTPUT "GETDVIVOL=" + F$GETDVI("DKA0:","VOLNAM")'
+    run_cmd 'WRITE SYS$OUTPUT "GETDVIVOL=" + F$GETDVI("VDA0:","VOLNAM")'
     must_have     "$SEG" "GETDVIVOL=$VOLUME_LABEL" "F\$GETDVI VOLNAM [vms-050]: reports the REAL mounted ODS-2 label '$VOLUME_LABEL' (same value SHOW DEVICE read above), not a fabricated constant"
     negctl        "$SEG" 'GETDVIVOL' "F\$GETDVI VOLNAM"
 
-    run_cmd 'WRITE SYS$OUTPUT "GETDVICLS=" + F$GETDVI("DKA0:","DEVCLASS")'
-    must_have     "$SEG" 'GETDVICLS=1' "F\$GETDVI DEVCLASS [vms-050]: DKA0: is DC\$_DISK (1) from the executive, not a name-substring guess"
+    run_cmd 'WRITE SYS$OUTPUT "GETDVICLS=" + F$GETDVI("VDA0:","DEVCLASS")'
+    must_have     "$SEG" 'GETDVICLS=1' "F\$GETDVI DEVCLASS [vms-050]: VDA0: is DC\$_DISK (1) from the executive, not a name-substring guess"
     negctl        "$SEG" 'GETDVICLS' "F\$GETDVI DEVCLASS"
 
     # --- F$GETQUI honours the caller's queue selection (vms-050) ------------
@@ -385,7 +385,7 @@ run_dcl_acceptance_battery() {
 
     # --- SHOW DEVICES (plural accepted) (vms-9344 surface) ------------------
     run_cmd 'SHOW DEVICES'
-    must_have     "$SEG" 'DKA0' "SHOW DEVICES [vms-9344]: plural form is accepted and lists devices"
+    must_have     "$SEG" 'VDA0' "SHOW DEVICES [vms-9344]: plural form is accepted and lists devices"
     must_not_have "$SEG" 'IVKEYW' "SHOW DEVICES [vms-9344]: not rejected with %DCL-*-IVKEYW"
     must_not_have "$SEG" 'IVVERB' "SHOW DEVICES [vms-9344]: not rejected with %DCL-*-IVVERB"
     negctl        "$SEG" 'SHOW DEVICES' "SHOW DEVICES"

@@ -110,7 +110,7 @@ for n in ${NODES}; do
   #   ide, CD as SLAVE on the system disk's channel (disk0.1 -> DQA1): the SRM
   #     reads block 0, calls it a valid boot block, then fails the very next
   #     multi-block read. Never reaches VMS.
-  #   scsi, sym53c895 (DKA0 + DKA600): media reads fine and OpenVMS 8.4 loads
+  #   scsi, sym53c895 (VDA0 + VDA600): media reads fine and OpenVMS 8.4 loads
   #     its executive, then bugchecks INVEXCEPTN before the installer.
   #   ide, CD as MASTER on the SECOND channel (disk1.0 -> DQB0): installs.
   # `icache` is deliberately absent: v1.2.0 rejects it as unrecognised.

@@ -161,6 +161,7 @@ jobs:
               - 'tests/qemu/test_release_e2e.sh'
               - 'tests/qemu/test_executive_integral.sh'
               - 'tests/qemu/test_distrib_boot.sh'
+              - 'tests/qemu/test_boot_alternate_disk.sh'
               - 'tests/qemu/test_virtio_nic.sh'
               - 'tests/qemu/test_startup_phase_driver.sh'
               - 'tests/qemu/test_boot_conformance.sh'
@@ -1092,6 +1093,22 @@ jobs:
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_distrib_boot.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-9f5. Reuses the image built above (no extra build). Device-native
+      # naming makes the system disk DISCOVERED, not compile-frozen to vda/DKA0:.
+      # This boots the mastered system disk as the SECOND virtio disk (vdb ->
+      # VDA100:), selected by an ovmx.sysdev=VDA100: kernel-cmdline token, and
+      # reaches login — impossible on pristine main, which always mounts vda. A
+      # blank decoy on vda + an anti-LARP control case (same disks, no selector,
+      # must NOT log in) prove the selector, not QEMU disk ordering, is what
+      # reaches the second disk. THE "boot from a non-default disk" DONE-condition.
+      - name: Alternate-disk boot — system on the second disk reaches login (vms-9f5)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_boot_alternate_disk.sh:/test.sh:ro \
             --entrypoint bash \
             ovmx-boot:latest \
             /test.sh

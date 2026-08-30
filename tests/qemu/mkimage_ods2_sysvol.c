@@ -6,7 +6,7 @@
  * /dev/vms:
  *
  *     SYS$SYSTEM:SYSUAF.DAT
- *       -> lnm+$PARSE compose -> DKA300:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT;
+ *       -> lnm+$PARSE compose -> VDA300:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT;
  *       -> the Files-11 ACP walks MFD -> [SYS0] -> [SYSCOMMON] -> [SYSEXE]
  *          -> SYSUAF.DAT, returning the file FID; $GET reads it byte-exact.
  *
@@ -38,7 +38,7 @@
  * distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/ -- the exact files ovmx_init
  * provisions onto the system disk on the real boot -- so the login/rights suites
  * that read them back through the RMS-over-ACP rooted-logical open
- * (SYS$SYSTEM:SYSUAF.DAT -> DKA300:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT) assert
+ * (SYS$SYSTEM:SYSUAF.DAT -> VDA300:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT) assert
  * against what actually boots, not a fixture invented for the harness. They are
  * written stream-LF verbatim (add_raw), which is byte-identical to what a real
  * $CREATE/$PUT of the same text would lay down (one line == one LF-delimited
@@ -60,7 +60,7 @@
  * the MMK-driven image THROUGH THE ACP off this generated system volume -- the
  * OVMX-native toolchain (TCC/LIBRARIAN/LINK.EXE) and the C run-time shareable
  * (DECC$SHR.EXE) IMGACT binds -- WITHOUT ever mastering OVMX images onto the
- * clean-room real-VAX DKA0: fixture (vms-29ff). Multi-MB binaries are handled by
+ * clean-room real-VAX VDA0: fixture (vms-29ff). Multi-MB binaries are handled by
  * the same byte-genuine ODS-2 writer (its >256-block retrieval-map split landed
  * in ods2_edit.c, vms-3a8); raise <size-in-MB> to fit them.
  */

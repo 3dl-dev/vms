@@ -35,7 +35,7 @@
  * SYSTEM genuinely creates + fills the indexed file over the ACP.
  *
  * This rig insmods vms.ko directly and never runs PID 1, so it MOUNTS the ODS-2
- * SYSTEM DISK on DKA0: itself (the boot-time precondition) and creates in the
+ * SYSTEM DISK on VDA0: itself (the boot-time precondition) and creates in the
  * real fixture directory [OVMXDIR] -- the same idiom test_syssvc_rms_acp.c uses.
  *
  * Requires a real, insmod'd vms.ko at /dev/vms: exits EXIT_SKIP (77) in the
@@ -292,7 +292,7 @@ static void child_main(int wfd, const char *vms_spec)
     (void)!write(wfd, msg, strlen(msg));
 
     /* ISOLATION: erase the file (IO$_DELETE) so the net [OVMXDIR] state is
-     * restored for any later suite booted in the same VM against this DKA0:
+     * restored for any later suite booted in the same VM against this VDA0:
      * -- the same discipline test_syssvc_rms_acp.c / test_syssvc_acp_create.c
      * keep. Best-effort; not asserted. */
     {
@@ -393,24 +393,24 @@ int main(void)
             printf("  DIAG: stat(%s) failed: %s\n", p, strerror(errno));
     }
 
-    /* Mount the ODS-2 SYSTEM DISK executive-global on DKA0: so the child's
+    /* Mount the ODS-2 SYSTEM DISK executive-global on VDA0: so the child's
      * sys$create()'s $ASSIGN sees a mounted volume (vms-401). PID 1 does this at
      * boot; this rig insmods vms.ko directly and never runs the boot sequence,
      * so it stands up the precondition itself -- the same idiom every ACP suite
      * uses (test_syssvc_rms_acp.c, test_syssvc_acp_create.c). Executive-global,
      * so the post-fork child (dropped to SYSTEM) sees the same mounted volume. */
     {
-        uint32_t mst = vms_kif_acp_mount("DKA0:");
-        printf("  DIAG: vms_kif_acp_mount(DKA0:)=%u (%s)\n", (unsigned)mst,
+        uint32_t mst = vms_kif_acp_mount("VDA0:");
+        printf("  DIAG: vms_kif_acp_mount(VDA0:)=%u (%s)\n", (unsigned)mst,
                $VMS_STATUS_SUCCESS(mst) ? "OK" : "FAIL");
         CHECK($VMS_STATUS_SUCCESS(mst),
-              "the ODS-2 SYSTEM DISK mounted executive-global on DKA0: (the ACP "
+              "the ODS-2 SYSTEM DISK mounted executive-global on VDA0: (the ACP "
               "precondition PID 1 satisfies at boot; this rig mounts it itself, "
               "same idiom as test_syssvc_rms_acp.c)");
     }
 
     static char out[8192];
-    if (run_scenario("DKA0:[OVMXDIR]VMS221.DAT", out, sizeof(out)) != 0) {
+    if (run_scenario("VDA0:[OVMXDIR]VMS221.DAT", out, sizeof(out)) != 0) {
         CHECK(0, "could not run the SYSTEM sys$create scenario");
         printf("=== test_syssvc_rms_scratch_create: %d passed, %d failed ===\n", pass, fail);
         return fail > 0 ? 1 : 0;
@@ -421,7 +421,7 @@ int main(void)
           "SYSTEM's credential drop to UIC [1,4] succeeded");
     CHECK(strstr(out, "RESOLVED_PATH=VMS221.DAT") != NULL,
           "sys$create() parsed the filespec through the Files-11 ACP path "
-          "(rms_acp_specs_from_fab): the device (DKA0:) and directory "
+          "(rms_acp_specs_from_fab): the device (VDA0:) and directory "
           "([OVMXDIR]) were split off and the ODS-2 file name resolved to "
           "VMS221.DAT -- NOT treated as a literal Linux/relative path. The "
           "vms-221 regression (resolve_filename() checking vmsfs_to_linux_path()'s "
@@ -431,9 +431,9 @@ int main(void)
           "volume over the ACP, which is what this proves.");
     /* negctl: rms-create-filespec-not-translated */
     CHECK(strstr(out, "RESOLVED_PATH=./") == NULL &&
-          strstr(out, "RESOLVED_PATH=DKA0") == NULL,
+          strstr(out, "RESOLVED_PATH=VDA0") == NULL,
           "sys$create() did NOT fall back to treating the raw VMS spec "
-          "string as a literal path (no './' prefix, no undivided 'DKA0:...' "
+          "string as a literal path (no './' prefix, no undivided 'VDA0:...' "
           "device left glued to the name)");
     CHECK(field_is_ok(out, "CREATE_STATUS="),
           "sys$create() of the RMS indexed file on the mounted ODS-2 volume "
@@ -457,12 +457,12 @@ int main(void)
     /* vms-401: the created indexed file is a real, re-readable Prolog-3 image. */
     CHECK(strstr(out, "READBACK_BY_KEY_FAIL=0 ") != NULL &&
           strstr(out, "READBACK_BY_KEY_OK=0 ") == NULL,
-          "ROUND-TRIP: every record $PUT into DKA0:[OVMXDIR]VMS221.DAT reads back "
+          "ROUND-TRIP: every record $PUT into VDA0:[OVMXDIR]VMS221.DAT reads back "
           "BY KEY byte-for-byte through the genuine Prolog-3 index over the ACP "
           "(no sidecar) -- 205 records cross both periodic split points and a "
           "root-level growth (multi-level index, vms-5a3)");
 
-    vms_kif_acp_dmount("DKA0:");
+    vms_kif_acp_dmount("VDA0:");
 
     printf("=== test_syssvc_rms_scratch_create: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

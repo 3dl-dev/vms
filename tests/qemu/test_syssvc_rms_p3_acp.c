@@ -8,7 +8,7 @@
  *
  * WHAT THIS PROVES, through the runtime write engine (src/vmsrms/rms_prolog3.c:
  * rms_p3_create / rms_p3_put / rms_p3_get_by_key) against the real-VAX ODS-2
- * fixture the harness mounts WRITABLE on DKA0::
+ * fixture the harness mounts WRITABLE on VDA0::
  *
  *   1. IO$_CREATE lands a versioned directory entry for a fresh file in
  *      [OVMXDIR] and IO$_ACCESS builds a WRITE window on the channel.
@@ -48,7 +48,7 @@
 #include "rmsdef.h"
 
 #define EXIT_SKIP        77
-#define ODS2_UNIT        "DKA0:"
+#define ODS2_UNIT        "VDA0:"
 #define OVMXDIR_FID_NUM  11u          /* [OVMXDIR] directory FID (fixture) */
 #define TESTNAME         "P3IDX.TST"
 
@@ -323,7 +323,7 @@ int main(void)
         return EXIT_SKIP;
     }
 
-    /* Provision the writable ACP volume the WRITE engine needs (vms-757). DKA0:
+    /* Provision the writable ACP volume the WRITE engine needs (vms-757). VDA0:
      * is a genuine real-VAX ODS-2 fixture the harness stages WRITABLE per boot
      * (run_tests.sh), but the executive-global mounted-volume table is per-boot
      * state a sibling suite may have left DISMOUNTED (each ACP suite $DMOUNTs on
@@ -334,10 +334,10 @@ int main(void)
      * home block + SCB and records the volume executive-global, so the $ASSIGN
      * below reaches a genuine writable volume (never a fabricated channel). */
     st = vms_kif_acp_mount(ODS2_UNIT);
-    check($VMS_STATUS_SUCCESS(st), "DKA0: mounted writable for the ACP (executive-global)");
+    check($VMS_STATUS_SUCCESS(st), "VDA0: mounted writable for the ACP (executive-global)");
 
     st = vms_kif_acp_assign(ODS2_UNIT, &chan);
-    check($VMS_STATUS_SUCCESS(st), "$ASSIGN DKA0:");
+    check($VMS_STATUS_SUCCESS(st), "$ASSIGN VDA0:");
     if (!$VMS_STATUS_SUCCESS(st)) { printf("  abort\n"); return 1; }
 
     /* best-effort: remove any stale copy from a prior aborted run */

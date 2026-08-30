@@ -124,8 +124,8 @@ SYSTEM_CMDS=(
     'SHOW USERS/FULL'
     'SHOW TERMINAL'
     'SHOW DEVICE'
-    'SHOW DEVICE DKA0:'
-    'SHOW DEVICE/FULL DKA0:'
+    'SHOW DEVICE VDA0:'
+    'SHOW DEVICE/FULL VDA0:'
     'HELP SHOW'
 )
 
@@ -1354,24 +1354,24 @@ check_response 'SHOW TERMINAL' '^Terminal: _OPA0:'
 check_response 'SHOW DEVICE' '^OPA0: +Online'
 
 # THE MOUNTED SYSTEM DISK REFLECTS ITS REAL MOUNT STATE (vms-e6f). The boot
-# $MOUNTs DKA0: (the OVMXSYS ODS-2 volume) into the executive-global ACP
+# $MOUNTs VDA0: (the OVMXSYS ODS-2 volume) into the executive-global ACP
 # mounted-volume table; SHOW DEVICE reads that table through VMS_IOCTL_GETVOL and
-# must report DKA0: as Mounted with its volume label and free-block count -- not
+# must report VDA0: as Mounted with its volume label and free-block count -- not
 # the bare "Online" it printed before this fix, when it read only the device
 # table (which carries no mount state). Anchored to each command's own response.
 # The label and the free count are the executive/ACP's genuine readings (the
 # OVMXSYS home block + a live BITMAP.SYS scan), never fabricated (INV-6).
 #
-# Bare SHOW DEVICE now groups by class: the disk section (DKA0: Mounted) then the
+# Bare SHOW DEVICE now groups by class: the disk section (VDA0: Mounted) then the
 # terminal section (OPA0: Online, asserted above) -- so the same listing proves
 # both a mounted disk and the console terminal read from the executive.
-check_response 'SHOW DEVICE'            '^DKA0: +Mounted'
-check_response 'SHOW DEVICE DKA0:'      '^DKA0: +Mounted'
-check_response 'SHOW DEVICE DKA0:'      'OVMXSYS'
-check_response 'SHOW DEVICE/FULL DKA0:' 'is online, mounted'
-check_response 'SHOW DEVICE/FULL DKA0:' 'Volume label +OVMXSYS'
-check_response 'SHOW DEVICE/FULL DKA0:' 'Free blocks +[0-9]'
-check_response 'SHOW DEVICE/FULL DKA0:' 'Maximum blocks +[0-9]'
+check_response 'SHOW DEVICE'            '^VDA0: +Mounted'
+check_response 'SHOW DEVICE VDA0:'      '^VDA0: +Mounted'
+check_response 'SHOW DEVICE VDA0:'      'OVMXSYS'
+check_response 'SHOW DEVICE/FULL VDA0:' 'is online, mounted'
+check_response 'SHOW DEVICE/FULL VDA0:' 'Volume label +OVMXSYS'
+check_response 'SHOW DEVICE/FULL VDA0:' 'Free blocks +[0-9]'
+check_response 'SHOW DEVICE/FULL VDA0:' 'Maximum blocks +[0-9]'
 
 # HELP should produce output. Anchored to HELP SHOW's own response (not the
 # whole log) because the command text itself contains 'SHOW' -- an unanchored

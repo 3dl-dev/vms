@@ -6,10 +6,10 @@
  *     SYS$SYSTEM:SYSUAF.DAT
  *       (1) lnm + $PARSE compose, through the concealed rooted search list
  *           (SYS$SYSTEM = SYS$SYSROOT:[SYSEXE]; SYS$SYSROOT = SYS$SYSDEVICE:
- *           [SYS0.], SYS$SYSDEVICE:[SYS0.SYSCOMMON.]; SYS$SYSDEVICE = DKA300:),
+ *           [SYS0.], SYS$SYSDEVICE:[SYS0.SYSCOMMON.]; SYS$SYSDEVICE = VDA300:),
  *           to the two ordered candidates
- *               DKA300:[SYS0.SYSEXE]SYSUAF.DAT            (node member, first)
- *               DKA300:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT  (common member, second)
+ *               VDA300:[SYS0.SYSEXE]SYSUAF.DAT            (node member, first)
+ *               VDA300:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT  (common member, second)
  *       (2) the Files-11 ACP walks each candidate: MFD [000000] -> [SYS0] ->
  *           [SYSCOMMON] -> [SYSEXE] via IO$_ACCESS-by-name, each level's
  *           <comp>.DIR entry giving the next directory FID, then SYSUAF.DAT
@@ -28,7 +28,7 @@
  * footing every ACP-QIO rung sits on until the RMS-over-ACP $OPEN flip wires it
  * into resolve_filename (held capstone; see the PR notes).
  *
- * GROUND TRUTH. DKA300: (vdd) carries the generated system-disk fixture
+ * GROUND TRUTH. VDA300: (vdd) carries the generated system-disk fixture
  * (tests/qemu/mkimage_ods2_sysvol.c, staged /ods2_sysvol.img). SYSUAF.DAT is a
  * 512-byte RFM=FIXED file whose bytes are 0x5A ^ (i*3) -- the writer wrote them
  * verbatim, so IO$_READVBLK reads them back unchanged (byte-exact discriminator).
@@ -57,7 +57,7 @@
 #include "vmsfs/device.h"
 
 #define EXIT_SKIP 77
-#define ODS2_UNIT  "DKA300:"     /* vdd: the generated system-disk fixture */
+#define ODS2_UNIT  "VDA300:"     /* vdd: the generated system-disk fixture */
 
 /* SYSUAF.DAT on this fixture is now the REAL shipped file (vms-5f0 atomic flip):
  * the sysvol master copies distro/rootfs/.../SYSUAF.DAT verbatim, so the
@@ -94,7 +94,7 @@ static int executive_present(void)
 
 /* Seed the concealed-rooted system logicals, pointed at ODS2_UNIT, into the
  * process table -- the exact shape lnm_setup_defaults() seeds, but on the test
- * fixture device rather than the boot default DKA0:. Process-table scope needs
+ * fixture device rather than the boot default VDA0:. Process-table scope needs
  * no executive LNM writes and is what the compose path reads (PROCESS first). */
 static void seed_system_logicals(lnm_manager_t *mgr)
 {

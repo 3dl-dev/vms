@@ -241,7 +241,7 @@ fi
 # ovmx_boot_mute_kernel_console() (src/ovmx_init/ovmx_boot_linux.c, called
 # from bare_metal_init() before any kernel module loads) vms.ko's
 # pr_info lifecycle lines -- "vms: initializing VMS kernel module",
-# "vms: disk unit DKA0: -> vda (253:0)", the kernel's own module-taint
+# "vms: disk unit VDA0: -> vda (253:0)", the kernel's own module-taint
 # warning, etc. -- interleaved directly with the VMS boot banner. These two
 # checks assert the SPECIFIC shapes the operator saw, independent of the
 # curated noise list tests/qemu/test_job_control_console.sh already checks:

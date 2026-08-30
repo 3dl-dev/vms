@@ -275,7 +275,7 @@ add_test(NAME test_libvms_sysuaf_auth COMMAND test_libvms_sysuaf_auth)
 # quadword (sysuaf_record_privileges), NOT a re-parse of the rendered name
 # string. The atomic flip's expanded name string, fed back through the
 # 17-name parse_privilege_string() table (no MOUNT row), silently dropped
-# MOUNT so SYSTEM logged in without it and `MOUNT DKA100:` returned NOPRIV.
+# MOUNT so SYSTEM logged in without it and `MOUNT VDA100:` returned NOPRIV.
 # Builds the seed SYSTEM record exactly as tools/mksysuaf.c does and asserts
 # the persona mask carries MOUNT while the old string path does not. Needs the
 # vmsprocess include for the OLD path (vms/privs.h) it contrasts against.
@@ -366,7 +366,7 @@ libvms_add_test(test_libvms_lock_flag_bits
 # vmslnm (lnm_setup_defaults) to resolve SYS$SYSTEM: the same way AUTHORIZE
 # and LOGIN do -- not via libvms_add_test(), same reason
 # test_libvms_identity above isn't. Bootstraps its own throwaway temp root
-# as DKA0: (never the real /vms mount), so it cannot race any other test.
+# as VDA0: (never the real /vms mount), so it cannot race any other test.
 add_executable(test_libvms_sysuaf_write_veracity
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_write_veracity.c)
 target_include_directories(test_libvms_sysuaf_write_veracity PRIVATE
@@ -398,7 +398,7 @@ add_test(NAME test_libvms_sysuaf_write_veracity
 # appears. Needs vmsfs (vmsfs_to_linux_path/device table) and vmslnm
 # (lnm_setup_defaults) to resolve SYS$MANAGER: the same way AUTHORIZE and
 # LOGIN do -- same reason test_libvms_sysuaf_write_veracity above isn't via
-# libvms_add_test(). Bootstraps its own throwaway temp root as DKA0: (never
+# libvms_add_test(). Bootstraps its own throwaway temp root as VDA0: (never
 # the real /vms mount), so it cannot race any other test.
 add_executable(test_libvms_accounting_veracity
     ${CMAKE_CURRENT_SOURCE_DIR}/test_accounting_veracity.c)

@@ -123,13 +123,13 @@ echo "  PARTS stand-in:   $PARTS_STANDIN"
 # (src/vmsfs/vmsfs_translate.c, unrelated to vms-48ab) -- which is the
 # AMBIENT /vms, not this gate's isolated $VROOT, silently breaking the
 # isolation this gate depends on (COPY would report success while writing
-# outside $VROOT). Defining SYS$SYSDEVICE as DKA0: here routes resolution
+# outside $VROOT). Defining SYS$SYSDEVICE as VDA0: here routes resolution
 # through the device table instead, which dcl_main.c's setup_session() DOES
 # map to $VROOT (via the VMS_ROOT env var) -- so this is not working around
 # a gap, it is giving this DCL session the pieces of the real boot-time
 # logical environment its device-table mapping already depends on.
 VMS_ROOT="$VROOT" "$DCL" >"$WORK/out" 2>"$WORK/err" <<'DCLCMDS'
-DEFINE SYS$SYSDEVICE DKA0:
+DEFINE SYS$SYSDEVICE VDA0:
 DEFINE SYS$SYSTEM SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSEXE]
 DEFINE SYS$UPDATE SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSUPD]
 @SYS$UPDATE:PARTS_SETUP.COM

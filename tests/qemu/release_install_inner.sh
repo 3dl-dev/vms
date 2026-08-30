@@ -11,8 +11,8 @@
 #
 # Two modes:
 #
-#   install   Boot the DISTRIBUTION install media (DKA0:) plus the blank,
-#             host-mounted, pre-INITIALIZEd target (DKA100: = /work/target.img)
+#   install   Boot the DISTRIBUTION install media (VDA0:) plus the blank,
+#             host-mounted, pre-INITIALIZEd target (VDA100: = /work/target.img)
 #             and drive OVMX$INSTALL.COM's full menu over the console exactly as
 #             an operator would (PRESERVE / target / label / confirmation gate /
 #             real MOUNT / real PRODUCT INSTALL / SYSTEM password prompts /
@@ -23,7 +23,7 @@
 #             for the install to survive into the next container -- see the
 #             WRITEBACK-CACHE LESSON block below.
 #
-#   verify    Boot ONLY the host-mounted target (DKA0: = /work/target.img) with
+#   verify    Boot ONLY the host-mounted target (VDA0: = /work/target.img) with
 #             the bootstrap initramfs -- no install media attached, a genuinely
 #             separate container -- log in as SYSTEM, and prove the installed OS
 #             is really on the target: PRODUCT SHOW PRODUCT lists the OS kit
@@ -225,8 +225,8 @@ if [ "$MODE" = "install" ]; then
     echo "=== release-install (container 1): drive OVMX\$INSTALL.COM menu onto the host-mounted target ==="
     echo "arch=$ARCH qemu=$QEMU local_target=${LOCAL_TARGET:-0}"
 
-    # DKA0: install media (container-local copy -- writes to it need not
-    # persist); DKA100: the HOST-MOUNTED target, written through to the host
+    # VDA0: install media (container-local copy -- writes to it need not
+    # persist); VDA100: the HOST-MOUNTED target, written through to the host
     # file. cache=writethrough on BOTH is the kept vms-9b7 lesson.
     #
     # NEGATIVE CONTROL (OVMX_NEGCTL_LOCAL_TARGET=1): install onto a
@@ -266,7 +266,7 @@ if [ "$MODE" = "install" ]; then
         || dump_and_die "did not reach the target-device prompt after PRESERVE"
     ok "PRESERVE accepted, asks for the target device"
 
-    OFF=$(wc -c <"$LOG"); send 'DKA100:'
+    OFF=$(wc -c <"$LOG"); send 'VDA100:'
     wait_for 'Enter volume label for target system disk' "$RUN_TIMEOUT" "$OFF" \
         || dump_and_die "did not reach the volume-label prompt"
     ok "target device accepted, asks for the volume label"

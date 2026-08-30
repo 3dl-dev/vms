@@ -59,13 +59,13 @@
 #include "vms_kif.h"
 
 #define EXIT_SKIP 77
-#define ODS2_UNIT "DKA300:"    /* vdd: the generated system-disk ODS-2 fixture */
+#define ODS2_UNIT "VDA300:"    /* vdd: the generated system-disk ODS-2 fixture */
 
 /* Seed the concealed-rooted system logicals pointed at ODS2_UNIT into the
  * process table -- the exact shape lnm_setup_defaults() seeds, but on the test
- * fixture device rather than the boot default DKA0:. This is what the
+ * fixture device rather than the boot default VDA0:. This is what the
  * RMS-over-ACP $OPEN composes (SYS$SYSTEM:SYSUAF.DAT -> the two ordered
- * candidates DKA300:[SYS0.SYSEXE]... / DKA300:[SYS0.SYSCOMMON.SYSEXE]...), so
+ * candidates VDA300:[SYS0.SYSEXE]... / VDA300:[SYS0.SYSCOMMON.SYSEXE]...), so
  * sysuaf_lookup() reads the REAL shipped SYSUAF.DAT off the mounted ODS-2 volume
  * through the ACP, not any /vms passthrough. Identical to
  * test_syssvc_dirlogical_acp.c's seed_system_logicals(). */
@@ -154,10 +154,10 @@ int main(void)
 
     /*
      * Bootstrap the VMS namespace the way the booted system does: seed the
-     * concealed-rooted system logicals (SYS$SYSDEVICE=DKA300:, SYS$SYSROOT,
+     * concealed-rooted system logicals (SYS$SYSDEVICE=VDA300:, SYS$SYSROOT,
      * SYS$SYSTEM=SYS$SYSROOT:[SYSEXE]) and $MOUNT the generated system-disk
-     * ODS-2 fixture on DKA300:. sysuaf_lookup() then opens SYS$SYSTEM:SYSUAF.DAT
-     * -> RMS-over-ACP $OPEN composes DKA300:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT and
+     * ODS-2 fixture on VDA300:. sysuaf_lookup() then opens SYS$SYSTEM:SYSUAF.DAT
+     * -> RMS-over-ACP $OPEN composes VDA300:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT and
      * $GET reads the REAL shipped record off the ODS-2 platter -- the exact login
      * read path, with NO /vms passthrough (Rule 9 / INV-6).
      */

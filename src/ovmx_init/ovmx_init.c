@@ -332,8 +332,8 @@ static void ovmx_sysinit_halt(const char *what, const char *detail)
  * that already exists.
  *
  * The disk units come from the executive's own enumeration
- * (vms_kif_devscan(), src/kernel/vms_devtab.c -- vda -> DKA0:, vdb ->
- * DKA100:, ...), not a second, independent scan of /dev (Rule 11): PID 1
+ * (vms_kif_devscan(), src/kernel/vms_devtab.c -- vda -> VDA0:, vdb ->
+ * VDA100:, ...), not a second, independent scan of /dev (Rule 11): PID 1
  * asks the SAME table MOUNT will ask.
  */
 static void provision_disk_mount_points(void)
@@ -667,14 +667,15 @@ static void bare_metal_init(void)
          * not come up (design-init-scope.md §1). */
         if (!ovmx_boot_system_disk_present()) {
             char msg[128];
-            snprintf(msg, sizeof(msg), "no system disk %s (DKA0:)",
-                     ovmx_boot_system_disk_dev());
+            snprintf(msg, sizeof(msg), "no system disk %s (%s)",
+                     ovmx_boot_system_disk_dev(), ovmx_boot_system_disk_unit());
             ovmx_sysinit_halt(
                 msg,
                 "the system disk is not present; OVMX does not install one at boot");
         }
 
-        printf("%%OVMX-I-SYSDISK, mounting system disk DKA0:\n");
+        printf("%%OVMX-I-SYSDISK, mounting system disk %s\n",
+               ovmx_boot_system_disk_unit());
 
         /* Mount the system disk via the substrate's own mechanism. The boot
          * seam keeps ovmx_init.c substrate-neutral -- ONE source, no #ifdef
@@ -704,7 +705,14 @@ static void bare_metal_init(void)
                 "OVMX does not initialize or install it at boot");
         }
 
-        printf("%%OVMX-I-MOUNTED, system disk DKA0: mounted\n");
+        printf("%%OVMX-I-MOUNTED, system disk %s mounted\n",
+               ovmx_boot_system_disk_unit());
+
+        /* Publish the DISCOVERED system device (vms-9f5) so every child --
+         * imgact.c, lnm_defaults.c, DCL -- resolves SYS$SYSDEVICE to the disk
+         * PID 1 actually mounted, not a compile-time guess. This is the boot
+         * chain fulfilling the OVMX_SYSDEVICE contract those readers assume. */
+        setenv("OVMX_SYSDEVICE", ovmx_boot_system_disk_unit(), 1);
 
         /* The OVMX executive module is loaded (vms.ko via executive_attach()
          * above; vms-165 retired the separate vmsfs.ko): the taint mask is now
@@ -741,8 +749,8 @@ static void bare_metal_init(void)
 
     if (!ovmx_boot_system_disk_present()) {
         char msg[128];
-        snprintf(msg, sizeof(msg), "no system disk %s (DKA0:)",
-                 ovmx_boot_system_disk_dev());
+        snprintf(msg, sizeof(msg), "no system disk %s (%s)",
+                 ovmx_boot_system_disk_dev(), ovmx_boot_system_disk_unit());
         ovmx_sysinit_halt(
             msg,
             "the system disk is not present; OVMX does not install one at boot");
@@ -757,6 +765,8 @@ static void bare_metal_init(void)
             "the volume is not an installed genuine system disk; "
             "OVMX does not initialize or install it at boot");
     }
+    /* Publish the discovered system device (vms-9f5), as on the flagless path. */
+    setenv("OVMX_SYSDEVICE", ovmx_boot_system_disk_unit(), 1);
 
     /* The system disk is ACP-mounted. Load the real parameter set over the ACP
      * (or factory defaults if the volume has none yet), run the prompt, and
@@ -780,8 +790,10 @@ static void bare_metal_init(void)
      * above, announced now), the banner, then the mount lines. */
     executive_announce();
     print_banner_once();
-    printf("%%OVMX-I-SYSDISK, mounting system disk DKA0:\n");
-    printf("%%OVMX-I-MOUNTED, system disk DKA0: mounted\n");
+    printf("%%OVMX-I-SYSDISK, mounting system disk %s\n",
+           ovmx_boot_system_disk_unit());
+    printf("%%OVMX-I-MOUNTED, system disk %s mounted\n",
+           ovmx_boot_system_disk_unit());
 
     /* vms.ko is loaded (executive_attach() above, silent); emit the taint mask
      * readout, gated on the ovmx.taintreport boot flag (vms-566). */
@@ -824,6 +836,7 @@ static void require_installed_system(void)
      * halt message is unchanged. NEVER a faked presence (INV-6).
      */
     char path[512];
+    char halt[128];
     snprintf(path, sizeof(path), "%s/DCL.EXE", sysexe_linux);
 #if defined(OVMX_BOOT_ACP_BRIDGE)
     if (!ovmx_boot_acp_present(path)) {
@@ -833,8 +846,11 @@ static void require_installed_system(void)
     struct stat st;
     if (stat(path, &st) != 0) {
 #endif
+        snprintf(halt, sizeof(halt),
+                 "system disk %s is not an installed OVMX system volume",
+                 ovmx_boot_system_disk_unit());
         ovmx_sysinit_halt(
-            "system disk DKA0: is not an installed OVMX system volume",
+            halt,
             "SYS$SYSTEM:DCL.EXE is absent; install the system with the "
             "OVMX installer before booting -- PID 1 does not install one");
     }

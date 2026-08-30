@@ -487,7 +487,13 @@ int ovmx_boot_system_disk_present(void)
 
 const char *ovmx_boot_system_disk_unit(void)
 {
-    return "DKA0:";
+    /* Device-native (vms-9f5): the VAX boot disk is an MSCP/RQDX3 unit, so the
+     * authentic VMS name is DUA0: (SYSDISK_DEVICE == "DUA0" on __vax__). VMB
+     * boots exactly one system disk, so unlike the virtio path there is no
+     * cmdline selector here. Honour OVMX_SYSDEVICE if the boot chain set one
+     * (same var imgact.c / lnm_defaults.c read), else the substrate default. */
+    const char *env = getenv("OVMX_SYSDEVICE");
+    return (env && env[0]) ? env : SYSDISK_DEVICE ":";
 }
 
 #if defined(OVMX_HAVE_ACP)

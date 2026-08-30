@@ -46,7 +46,7 @@
 #define EXIT_SKIP 77
 
 /*
- * The boot unit under the device-native default naming (epic vms-47d). DKA0:
+ * The boot unit under the device-native default naming (epic vms-47d). VDA0:
  * (vda) carries a GENUINE real-VAX ODS-2 volume in the QEMU harness
  * (tests/qemu/run_tests.sh seeds it from the staged /ods2_real.img fixture),
  * because $MOUNT now VALIDATES the media is genuine Files-11 ODS-2 (vms-127) and
@@ -54,7 +54,7 @@
  * is proven by test_syssvc_acp_mount; here it is only the precondition for a
  * mounted volume to $ASSIGN a file channel to.
  */
-#define ACP_BOOT_UNIT "DKA0:"
+#define ACP_BOOT_UNIT "VDA0:"
 
 /*
  * Internal channel-class reader, declared extern exactly as sys_qio.c declares

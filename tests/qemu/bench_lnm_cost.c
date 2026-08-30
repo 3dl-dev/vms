@@ -307,7 +307,7 @@ int main(int argc, char **argv)
     }
     lnm_setup_defaults(mgr, NULL);
     /* One process-table name, so the "cheapest hit" case is real. */
-    lnm_create(mgr, LNM_PROCESS_TABLE, "BENCH$PROC", "DKA0:[BENCH]",
+    lnm_create(mgr, LNM_PROCESS_TABLE, "BENCH$PROC", "VDA0:[BENCH]",
                LNM_ATTR_TERMINAL, LNM_MODE_USER);
 
     /* Sanity: the names we time must resolve the way we claim. */

@@ -59,7 +59,7 @@ int main(void)
     lnm_manager_t *mgr = lnm_get_manager();
     if (!mgr) { printf("  FAIL: no LNM manager\n"); return 2; }
 
-    /* Seed the shipped system logicals (SYS$SYSDEVICE=DKA0:, SYS$MANAGER, ...) */
+    /* Seed the shipped system logicals (SYS$SYSDEVICE=VDA0:, SYS$MANAGER, ...) */
     lnm_setup_defaults(mgr, NULL);
 
     /* Reproduce STARTUP.COM:82 exactly: a PLAIN (non-concealed) two-member
@@ -84,15 +84,15 @@ int main(void)
     for (int i = 0; i < n; i++)
         printf("        [%d] %s\n", i, cands[i]);
 
-    /* Member 0's chain (SYS$SYSDEVICE -> DKA0:, [SYS0.SYSCOMMON.SYS$STARTUP])
+    /* Member 0's chain (SYS$SYSDEVICE -> VDA0:, [SYS0.SYSCOMMON.SYS$STARTUP])
      * resolves to the file the boot OPEN targets -- note the '$' in both the
      * logical NAME and the directory COMPONENT resolve through cleanly. */
     CHECK(n >= 1,
           "a plain search list composes at least the first member");
-    CHECK(has_candidate(cands, n, "DKA0:[SYS0.SYSCOMMON.SYS$STARTUP]VMS$PHASES.DAT"),
-          "member-0 composes to DKA0:[SYS0.SYSCOMMON.SYS$STARTUP]VMS$PHASES.DAT (boot open target)");
+    CHECK(has_candidate(cands, n, "VDA0:[SYS0.SYSCOMMON.SYS$STARTUP]VMS$PHASES.DAT"),
+          "member-0 composes to VDA0:[SYS0.SYSCOMMON.SYS$STARTUP]VMS$PHASES.DAT (boot open target)");
     CHECK(n >= 1 &&
-          strcasecmp(cands[0], "DKA0:[SYS0.SYSCOMMON.SYS$STARTUP]VMS$PHASES.DAT") == 0,
+          strcasecmp(cands[0], "VDA0:[SYS0.SYSCOMMON.SYS$STARTUP]VMS$PHASES.DAT") == 0,
           "member-0 is FIRST (search order: the node/common member the file lives in wins)");
 
     (void)lnm_delete(mgr, LNM_PROCESS_TABLE, "SYS$STARTUP", LNM_MODE_EXEC);

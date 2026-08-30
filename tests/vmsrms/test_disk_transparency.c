@@ -22,8 +22,8 @@
  * PART 1 assertions FAIL there and PASS once MOUNT defines DISK$.
  *
  * PART 2 -- a concealed rooted device is addressable as a virtual disk root:
- * FOO:[000000] names the root of the concealed device (FOO -> DKA100:[USERS.])
- * -- i.e. DKA100:[USERS] -- and FOO:[000000]FILE a file at that root, rather
+ * FOO:[000000] names the root of the concealed device (FOO -> VDA100:[USERS.])
+ * -- i.e. VDA100:[USERS] -- and FOO:[000000]FILE a file at that root, rather
  * than appending a literal "000000" subdirectory (VSI OpenVMS Guide to OpenVMS
  * File Applications, concealed/rooted devices; VSI OpenVMS User's Manual,
  * "Rooted Directories"). This composes on the concealed/rooted machinery
@@ -106,18 +106,18 @@ int main(void)
               "INV-DCL: a >12-char label (not a valid volume label) produces no DISK$ name");
     }
 
-    /* A real directory tree standing in for the mounted volume DKA100:. */
+    /* A real directory tree standing in for the mounted volume VDA100:. */
     char base[] = "/tmp/ovmxf83_XXXXXX";
     if (!mkdtemp(base)) { perror("mkdtemp"); return 2; }
     char file_root[600];
     snprintf(file_root, sizeof(file_root), "%s/mounttst.txt", base);
     { FILE *f = fopen(file_root, "w"); if (f) { fputs("payload\n", f); fclose(f); } }
 
-    /* Emulate what a successful MOUNT DKA100: (label WORK) establishes: the
+    /* Emulate what a successful MOUNT VDA100: (label WORK) establishes: the
      * filespec translator entry + the device logical, then the DISK$<label>
      * logical from dcl_mount_define_disk() -- the exact call cmd_mount() makes. */
-    vmsfs_device_add("DKA100", base);
-    lnm_create(mgr, LNM_PROCESS_TABLE, "DKA100", base,
+    vmsfs_device_add("VDA100", base);
+    lnm_create(mgr, LNM_PROCESS_TABLE, "VDA100", base,
                LNM_ATTR_TERMINAL, LNM_MODE_USER);
 
     /* Before the DISK$ define, F$TRNLNM(DISK$WORK) is empty -- the pre-fix
@@ -129,17 +129,17 @@ int main(void)
               "before MOUNT defines it, F$TRNLNM(\"DISK$WORK\") is empty (the pre-fix state)");
     }
 
-    uint32_t dst = dcl_mount_define_disk(mgr, LNM_PROCESS_TABLE, "WORK", "DKA100:");
+    uint32_t dst = dcl_mount_define_disk(mgr, LNM_PROCESS_TABLE, "WORK", "VDA100:");
     CHECK(dst == SS$_NORMAL || dst == SS$_SUPERSEDE,
-          "dcl_mount_define_disk(\"WORK\", \"DKA100:\") succeeds (the DEFINE MOUNT does)");
+          "dcl_mount_define_disk(\"WORK\", \"VDA100:\") succeeds (the DEFINE MOUNT does)");
 
     /* F$TRNLNM(DISK$WORK) now resolves to the device. */
     {
         char eq[256];
         trnlnm(mgr, "DISK$WORK", eq, sizeof(eq));
         printf("  INFO: F$TRNLNM(\"DISK$WORK\") -> \"%s\"\n", eq);
-        CHECK(strcmp(eq, "DKA100:") == 0,
-              "VERACITY: F$TRNLNM(\"DISK$WORK\") resolves to DKA100: after MOUNT");
+        CHECK(strcmp(eq, "VDA100:") == 0,
+              "VERACITY: F$TRNLNM(\"DISK$WORK\") resolves to VDA100: after MOUNT");
     }
 
     /* DISK$WORK:[000000]MOUNTTST.TXT opens the file -- proof the DISK$ name is
@@ -177,11 +177,11 @@ int main(void)
     mkdir(dir_users, 0755);
     { FILE *f = fopen(file_at_root, "w"); if (f) { fputs("root\n", f); fclose(f); } }
 
-    /* USERDISK: concealed AND rooted -> DKA100:[USERS.] */
+    /* USERDISK: concealed AND rooted -> VDA100:[USERS.] */
     uint32_t c = lnm_create(mgr, LNM_PROCESS_TABLE, "USERDISK",
-                            "DKA100:[USERS.]", LNM_ATTR_CONCEALED, LNM_MODE_USER);
+                            "VDA100:[USERS.]", LNM_ATTR_CONCEALED, LNM_MODE_USER);
     CHECK(c == SS$_NORMAL || c == SS$_SUPERSEDE,
-          "DEFINE/TRANS=CONCEALED USERDISK DKA100:[USERS.] (a rooted concealed device) succeeds");
+          "DEFINE/TRANS=CONCEALED USERDISK VDA100:[USERS.] (a rooted concealed device) succeeds");
 
     /* USERDISK:[000000] addresses the ROOT of the concealed device -- the
      * physical .../users -- not .../users/000000. */
@@ -213,8 +213,8 @@ int main(void)
 
     /* Cleanup best-effort. */
     (void)lnm_delete(mgr, LNM_PROCESS_TABLE, "USERDISK", LNM_MODE_USER);
-    (void)lnm_delete(mgr, LNM_PROCESS_TABLE, "DKA100", LNM_MODE_USER);
-    (void)vmsfs_device_remove("DKA100");
+    (void)lnm_delete(mgr, LNM_PROCESS_TABLE, "VDA100", LNM_MODE_USER);
+    (void)vmsfs_device_remove("VDA100");
 
     printf("=== test_disk_transparency: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

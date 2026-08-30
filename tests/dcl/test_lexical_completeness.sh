@@ -80,7 +80,7 @@ printf '%s\n' \
   'SHOW SYMBOL CS1' \
   'BAD = F$CSID()' \
   'MC = 0' \
-  'MP1 = F$MULTIPATH("DKA0","MP_PATHNAME",MC)' \
+  'MP1 = F$MULTIPATH("VDA0","MP_PATHNAME",MC)' \
   'SHOW SYMBOL MP1' \
   'SP1 = F$SETPRV("NOOPER,GROUP")' \
   'SHOW SYMBOL SP1' \

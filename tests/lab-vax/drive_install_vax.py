@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 #
 # drive_install_vax.py - vms-d0e5 rung G: the two-disk SIMH INSTALL proof for
-# the OVMX/NetBSD-vax runtime. Boots the OVMX DISTRIBUTION volume (DKA0:) with
-# a BLANK ODS-2 target attached (DKA100:), drives OVMX$INSTALL.COM's PRESERVE
+# the OVMX/NetBSD-vax runtime. Boots the OVMX DISTRIBUTION volume (DUA0:) with
+# a BLANK ODS-2 target attached (DUA100:), drives OVMX$INSTALL.COM's PRESERVE
 # path over the console to install OVMX onto the blank target, and asserts the
 # install landed a bootable, rooted, genuinely-activatable system tree on that
 # target.
@@ -17,8 +17,8 @@
 #                                       PRODUCT INSTALL + the SYSTEM-password /
 #                                       SCSNODE steps for real underneath.
 #   * test_install_boot_e2e.sh      -- the kit landed at the ROOTED path
-#                                       DKA100:[SYS0.SYSCOMMON.SYSEXE] and the
-#                                       OLD FLAT DKA100:[SYSEXE] is ABSENT
+#                                       DUA100:[SYS0.SYSCOMMON.SYSEXE] and the
+#                                       OLD FLAT DUA100:[SYSEXE] is ABSENT
 #                                       (rooted-not-flat -> a bootable layout).
 #   * test_product_install_e2e.sh   -- THE ANTI-LARP CRUX: an installed image
 #                                       RUN *from the target* really activates
@@ -36,15 +36,15 @@
 # same way the x86_64 install e2e drives its QEMU serial with send()/wait_for().
 #
 # THE TWO DISKS (mirrors do_sysboot's single-disk vmm_args, doubled):
-#   rq1 -> ra1 -> DKA0:    the DISTRIBUTION ODS-2 volume (ovmx-distrib-vax.img):
+#   rq1 -> ra1 -> DUA0:    the DISTRIBUTION ODS-2 volume (ovmx-distrib-vax.img):
 #                          the mastered system tree PLUS the OS kit at
 #                          SYS$UPDATE:OVMX-OS-VAX.KIT and the distribution
 #                          SYSTARTUP_VMS.COM that @'s OVMX$INSTALL.COM at boot.
-#   rq2 -> ra2 -> DKA100:  the BLANK, freshly-formatted ODS-2 target the install
+#   rq2 -> ra2 -> DUA100:  the BLANK, freshly-formatted ODS-2 target the install
 #                          writes onto (src/kernel-netbsd/vms_blockdev_netbsd.c's
-#                          unit map: DKA100:/DUA100: -> ra2c).
-# BOTH attached WITHOUT `-r' -- the install's real block writes to DKA100: (and
-# PROVISION's ownership writes to DKA0:) must LAND in the host image files, so
+#                          unit map: DUA100:/DUA100: -> ra2c).
+# BOTH attached WITHOUT `-r' -- the install's real block writes to DUA100: (and
+# PROVISION's ownership writes to DUA0:) must LAND in the host image files, so
 # run-boot.sh's sha256 before/after diff on the target has teeth (INV-6).
 #
 # TOOLING, NOT A RUNTIME (CLAUDE.md Rule 9): booting a real NetBSD/vax under
@@ -100,7 +100,7 @@ PASSWORD   = "Password:"
 WELCOME    = "Welcome to OpenVMX"
 
 # The install-set values driven into the menu.
-TARGET_DEV   = "DKA100:"
+TARGET_DEV   = "DUA100:"
 TARGET_LABEL = "WORK"
 SYS_PASSWORD = "OVMXTEST1"
 SCS_NODE     = "OVMXVAX"          # <= 6 chars (SCSNODE max)
@@ -112,7 +112,7 @@ SCS_ID       = "1025"
 # distribution disk we log into for the inspection session.
 DISTRIB_SYS_PW = "MANAGER"
 
-# The DCL interactive prompt. The echoed foreign-command "$DKA100:..." image
+# The DCL interactive prompt. The echoed foreign-command "$DUA100:..." image
 # spec contains "$D" (dollar-D), never "$ " (dollar-space), so a "\n$ " prompt
 # match never false-fires off a command echo.
 DCL_PROMPT = r"\r?\n\$ "
@@ -130,8 +130,8 @@ def _send(child, s):
 
 
 def do_install(a, distrib_img, blank_img, boot_deadline):
-    """Boot the DISTRIBUTION volume (rq1 -> DKA0:) with the BLANK target
-    (rq2 -> DKA100:), drive OVMX$INSTALL.COM's PRESERVE path to install OVMX
+    """Boot the DISTRIBUTION volume (rq1 -> DUA0:) with the BLANK target
+    (rq2 -> DUA100:), drive OVMX$INSTALL.COM's PRESERVE path to install OVMX
     onto the target, then -- from an interactive DCL session with the target
     re-MOUNTed -- assert the install landed a rooted, activatable system tree.
     Returns 0 on all-pass, PROOF_FAILED otherwise."""
@@ -144,8 +144,8 @@ def do_install(a, distrib_img, blank_img, boot_deadline):
     # vmm_args, with the second MSCP disk added.
     vmm_args = ["set rq1 ra92", "attach rq1 " + distrib_abs,
                 "set rq2 ra92", "attach rq2 " + blank_abs]
-    log("INSTALL: distribution volume on rq1 -> ra1 -> DKA0:, blank target on "
-        "rq2 -> ra2 -> DKA100: (deadline %ds)" % boot_deadline)
+    log("INSTALL: distribution volume on rq1 -> ra1 -> DUA0:, blank target on "
+        "rq2 -> ra2 -> DUA100: (deadline %ds)" % boot_deadline)
 
     npass = [0]
     nfail = [0]
@@ -323,7 +323,7 @@ def do_install(a, distrib_img, blank_img, boot_deadline):
             bad("could not re-MOUNT %s for inspection" % TARGET_DEV)
             return _verdict(npass, nfail)
 
-        # ROOTED: DCL.EXE landed at DKA100:[SYS0.SYSCOMMON.SYSEXE] (bootable).
+        # ROOTED: DCL.EXE landed at DUA100:[SYS0.SYSCOMMON.SYSEXE] (bootable).
         # "Total of [1-9]" only prints after a real successful listing; match the
         # versioned "DCL.EXE;" so the echoed command text cannot false-pass.
         _send(child, "DIRECTORY %s[SYS0.SYSCOMMON.SYSEXE]DCL.EXE" % TARGET_DEV)

@@ -162,7 +162,7 @@ int main(void)
     lnm_setup_defaults(g_mgr, NULL);
 
     /* A process-level override, exactly as SET DEFAULT / login would make. */
-    lnm_create(g_mgr, LNM_PROCESS_TABLE, "SYS$LOGIN", "DKA0:[USERS.SYSTEM]",
+    lnm_create(g_mgr, LNM_PROCESS_TABLE, "SYS$LOGIN", "VDA0:[USERS.SYSTEM]",
                0, LNM_MODE_USER);
 
     /* Representative opens, in rough order of how often DCL/RMS does them.
@@ -171,7 +171,7 @@ int main(void)
     measure("system image (SYS$SYSTEM)", "SYS$SYSTEM:LOGINOUT.EXE",     3, 3);
     measure("shareable (SYS$LIBRARY)",   "SYS$LIBRARY:DECC$SHR.EXE",    3, 3);
     measure("login-relative file",       "SYS$LOGIN:LOGIN.COM",         2, 1);
-    measure("explicit device",           "DKA0:[USERS.SYSTEM]FOO.DAT", 1, 1);
+    measure("explicit device",           "VDA0:[USERS.SYSTEM]FOO.DAT", 1, 1);
     measure("help library (SYS$HELP)",   "SYS$HELP:HELPLIB.HLB",       3, 3);
     measure("device-less, dir only",     "[USERS.SYSTEM]BAR.TXT",      0, 0);
 

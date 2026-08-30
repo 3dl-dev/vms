@@ -70,7 +70,7 @@
 # F$GETDVI now reads the executive's device table (vms_kif_getdvi_devnam, the
 # same reader F$DEVICE and SHOW DEVICE use) and the ACP mounted-volume table
 # (vms_kif_getvol), so it returns the executive's own physical name (e.g.
-# "DKA0:") and real volume state -- and, exactly like F$DEVICE, NOTHING where
+# "VDA0:") and real volume state -- and, exactly like F$DEVICE, NOTHING where
 # there is no executive to ask, as under ctest (it emits %SYSTEM-W-NOSUCHDEV
 # and leaves G empty). The assertion is inverted rather than dropped: the old
 # fabricated "_SYS$SYSDEVICE:" DEVNAM rendering must NOT appear, which stays

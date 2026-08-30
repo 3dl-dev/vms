@@ -4,10 +4,10 @@
  * name -- it never formats a bogus local file and reports success (vms-cf62).
  *
  * THE DEFECT THIS EXISTS TO KILL. tools/vms_initialize.c used to treat its
- * first argument as a literal filesystem path. `INITIALIZE DKA100: OVMX 100`
- * therefore did stat("DKA100:") (no such file), took the create-a-file branch,
- * and formatted a brand-new local file literally named "DKA100:" in the
- * current directory -- reporting %INIT success. The real disk DKA100: names
+ * first argument as a literal filesystem path. `INITIALIZE VDA100: OVMX 100`
+ * therefore did stat("VDA100:") (no such file), took the create-a-file branch,
+ * and formatted a brand-new local file literally named "VDA100:" in the
+ * current directory -- reporting %INIT success. The real disk VDA100: names
  * (the second virtio unit, vdb) was never touched. The install menu's
  * INITIALIZE step "succeeded" and initialized nothing. That is the INV-6
  * fake-success class exactly (CLAUDE.md Rule 9): a facility that reports
@@ -15,7 +15,7 @@
  *
  * WHAT IS PROVEN HERE, against a real /dev/vms and a real virtio disk:
  *
- *   1. `INITIALIZE DKA100: TESTVOL` resolves DKA100: through the executive
+ *   1. `INITIALIZE VDA100: TESTVOL` resolves VDA100: through the executive
  *      (vms_kif_disk_resolve, the same path MOUNT uses) to its backing block
  *      device and writes the vmsfs home block to THAT device. Proven A/B:
  *      the backing device carries NO home block before, and a valid one --
@@ -36,8 +36,8 @@
  * without insmod'ing vms.ko): the executive is absent, which is not a product
  * state (vms-0ff). With no executive to resolve the unit, INITIALIZE cannot
  * know a backing device -- and the property that must hold regardless is that
- * it does NOT fake success: `INITIALIZE DKA100: TESTVOL` must exit non-zero
- * and leave no bogus "DKA100:" file. The suite asserts that, then exits
+ * it does NOT fake success: `INITIALIZE VDA100: TESTVOL` must exit non-zero
+ * and leave no bogus "VDA100:" file. The suite asserts that, then exits
  * EXIT_SKIP (77) -- never a fake pass -- matching the honest-skip contract
  * ci.yml's kernel-executive-negative-control job holds every test_syssvc_* to.
  */
@@ -135,7 +135,7 @@ int main(void)
     setvbuf(stdout, NULL, _IOLBF, 0);
     struct stat st;
 
-    printf("=== test_syssvc_initialize (INITIALIZE resolves DKA100: to the real backing device) ===\n");
+    printf("=== test_syssvc_initialize (INITIALIZE resolves VDA100: to the real backing device) ===\n");
 
     if (stat(init_path(), &st) != 0) {
         printf("  FAIL: %s is not staged in the initramfs -- this suite cannot\n",
@@ -154,11 +154,11 @@ int main(void)
      * holds regardless -- INITIALIZE of a device name must not fake success.
      * -------------------------------------------------------------- */
     if (vms_kif_open() < 0) {
-        char *av[] = { (char *)init_path(), (char *)"DKA100:",
+        char *av[] = { (char *)init_path(), (char *)"VDA100:",
                        (char *)"TESTVOL", NULL };
         int rc = run_init(av);
         CHECK(rc != 0,
-              "with no executive, INITIALIZE DKA100: fails honestly -- it does NOT fake success");
+              "with no executive, INITIALIZE VDA100: fails honestly -- it does NOT fake success");
         CHECK(stat(bogus_file, &st) != 0,
               "with no executive, INITIALIZE created no bogus local file");
 
@@ -168,22 +168,22 @@ int main(void)
     }
 
     /* --------------------------------------------------------------
-     * Discover, from the executive itself, the backing device DKA100:
+     * Discover, from the executive itself, the backing device VDA100:
      * resolves to -- the device INITIALIZE is supposed to write.
      * -------------------------------------------------------------- */
     char backing[VMS_BACKING_SIZE];
     memset(backing, 0, sizeof(backing));
-    uint32_t rst = vms_kif_disk_resolve("DKA100:", backing, sizeof(backing),
+    uint32_t rst = vms_kif_disk_resolve("VDA100:", backing, sizeof(backing),
                                         NULL, NULL);
     CHECK(rst == SS$_NORMAL,
-          "DKA100: resolves to a backing block device through the executive");
+          "VDA100: resolves to a backing block device through the executive");
     if (rst != SS$_NORMAL) {
         printf("=== test_syssvc_initialize: %d passed, %d failed ===\n", pass, fail);
         return 1;
     }
     char devpath[VMS_BACKING_SIZE + 8];
     snprintf(devpath, sizeof(devpath), "/dev/%s", backing);
-    printf("  INFO: DKA100: -> %s\n", devpath);
+    printf("  INFO: VDA100: -> %s\n", devpath);
 
     /* --------------------------------------------------------------
      * A: the backing device carries NO vmsfs home block before INITIALIZE.
@@ -194,20 +194,20 @@ int main(void)
           "before INITIALIZE, the backing device has no vmsfs home block");
 
     /* --------------------------------------------------------------
-     * Run INITIALIZE DKA100: TESTVOL (no size arg -- the device geometry is
+     * Run INITIALIZE VDA100: TESTVOL (no size arg -- the device geometry is
      * authoritative). Must succeed.
      * -------------------------------------------------------------- */
     {
-        char *av[] = { (char *)init_path(), (char *)"DKA100:",
+        char *av[] = { (char *)init_path(), (char *)"VDA100:",
                        (char *)"TESTVOL", NULL };
         int rc = run_init(av);
-        CHECK(rc == 0, "INITIALIZE DKA100: TESTVOL succeeds against the real unit");
+        CHECK(rc == 0, "INITIALIZE VDA100: TESTVOL succeeds against the real unit");
     }
 
     /* --------------------------------------------------------------
      * B: the SAME backing device now carries a valid home block with the
      * label this command wrote. This is what proves the real store was
-     * formatted -- not a local file named "DKA100:".
+     * formatted -- not a local file named "VDA100:".
      * -------------------------------------------------------------- */
     char volname[16];
     uint32_t magic_after = home_block_magic(devpath, volname, sizeof(volname));
@@ -217,13 +217,13 @@ int main(void)
     CHECK(strncmp(volname, "TESTVOL", 7) == 0,
           "the home block on the backing device carries the label INITIALIZE was given");
 
-    /* A local file named "DKA100:" must NOT have been created by the old
+    /* A local file named "VDA100:" must NOT have been created by the old
      * create-a-file path. */
     {
         char df[64];
-        snprintf(df, sizeof(df), "%s/DKA100:", WORKDIR);
+        snprintf(df, sizeof(df), "%s/VDA100:", WORKDIR);
         CHECK(stat(df, &st) != 0,
-              "INITIALIZE DKA100: created NO bogus local file named \"DKA100:\"");
+              "INITIALIZE VDA100: created NO bogus local file named \"VDA100:\"");
     }
 
     /* --------------------------------------------------------------

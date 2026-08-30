@@ -69,18 +69,18 @@ static void test_parse_filespec(void)
     check(r.version == 2, "version is 2");
 
     /* With device and directory */
-    st = vmsfs_parse_filespec("DKA0:[USERS.BARON]LOGIN.COM;1", &r);
-    check(st == SS$_NORMAL, "parse DKA0:[USERS.BARON]LOGIN.COM;1");
-    check(r.has_device && strcmp(r.device, "DKA0") == 0, "device is DKA0");
+    st = vmsfs_parse_filespec("VDA0:[USERS.BARON]LOGIN.COM;1", &r);
+    check(st == SS$_NORMAL, "parse VDA0:[USERS.BARON]LOGIN.COM;1");
+    check(r.has_device && strcmp(r.device, "VDA0") == 0, "device is VDA0");
     check(r.has_directory && strcmp(r.directory, "USERS.BARON") == 0,
           "directory is USERS.BARON");
     check(r.has_name && strcmp(r.name, "LOGIN") == 0, "name is LOGIN");
 
     /* With node */
-    st = vmsfs_parse_filespec("REMOTE::DKA0:[DIR]FILE.DAT;0", &r);
+    st = vmsfs_parse_filespec("REMOTE::VDA0:[DIR]FILE.DAT;0", &r);
     check(st == SS$_NORMAL, "parse with node REMOTE::");
     check(r.has_node && strcmp(r.node, "REMOTE") == 0, "node is REMOTE");
-    check(r.has_device && strcmp(r.device, "DKA0") == 0, "device is DKA0 with node");
+    check(r.has_device && strcmp(r.device, "VDA0") == 0, "device is VDA0 with node");
 
     /* Version ;0 means highest */
     st = vmsfs_parse_filespec("TEST.DAT;0", &r);
@@ -133,12 +133,12 @@ static void test_compose_filespec(void)
     int st;
 
     /* Round-trip: parse then compose */
-    st = vmsfs_parse_filespec("DKA0:[USERS.BARON]LOGIN.COM;1", &r);
+    st = vmsfs_parse_filespec("VDA0:[USERS.BARON]LOGIN.COM;1", &r);
     check(st == SS$_NORMAL, "parse for compose round-trip");
 
     st = vmsfs_compose_filespec(&r, out, sizeof(out));
     check(st == SS$_NORMAL, "compose returns SS$_NORMAL");
-    check(strcmp(out, "DKA0:[USERS.BARON]LOGIN.COM;1") == 0,
+    check(strcmp(out, "VDA0:[USERS.BARON]LOGIN.COM;1") == 0,
           "compose output matches original");
 
     /* Simple name.type;version */

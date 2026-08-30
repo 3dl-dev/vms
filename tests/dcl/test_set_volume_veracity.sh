@@ -7,7 +7,7 @@
 # EXPECT: contains:DCL-ALIVE
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \BOGUS\
 # EXPECT: contains:$STATUS = "%X000008F0"
-# EXPECT: contains:%SET-E-DEVNOTMNT, device is not mounted - _DKA300:
+# EXPECT: contains:%SET-E-DEVNOTMNT, device is not mounted - _VDA300:
 # EXPECT: contains:$STATUS = "%X00000A80"
 # EXPECT_NOT: contains:%SET-I-NOTIMPL
 # EXPECT_NOT: contains:SET VOLUME requires a mounted VMSFS volume
@@ -23,8 +23,8 @@
 # THIS IS THE TRIPWIRE. Revert cmd_set_volume() to the old body and both
 # assertions above fail: no %DCL-W-IVQUAL ever fires (the old handler took
 # `(void)cmd` and never looked at qualifiers at all), and $STATUS after
-# SET VOLUME DKA300: is 1 (SS$_NORMAL), not 2688 (SS$_DEVNOTMOUNT) --
-# DKA300: is never mounted anywhere this suite runs (CLAUDE.md Rule 9: no
+# SET VOLUME VDA300: is 1 (SS$_NORMAL), not 2688 (SS$_DEVNOTMOUNT) --
+# VDA300: is never mounted anywhere this suite runs (CLAUDE.md Rule 9: no
 # /dev/vms on host ctest), so a real "is it mounted" check MUST fail here.
 #
 # WHY THIS IS HOST-TESTABLE WITHOUT /dev/vms (unlike tests/dcl/test_mount.sh's
@@ -38,8 +38,8 @@
 # blanket success. The paired POSITIVE -- a genuinely mounted volume, so
 # the per-qualifier honest refusals below the mount check (including
 # /LABEL) are reached -- is tests/qemu/test_mount_e2e.sh, which mounts a
-# real DKA100: through vmsfs.ko and then issues SET VOLUME DKA100:/LABEL=…
-# and SET VOLUME DKA100:/BOGUS against it.
+# real VDA100: through vmsfs.ko and then issues SET VOLUME VDA100:/LABEL=…
+# and SET VOLUME VDA100:/BOGUS against it.
 #
 # Qualifier grammar and /LABEL semantics grounded to the public OpenVMS
 # DCL Dictionary SET VOLUME entry (<https://wiki.vmssoftware.com/SET_VOLUME>,
@@ -51,4 +51,4 @@
 # not a facade success).
 VMSDCL="${VMSDCL:-vmsdcl}"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
-printf 'WRITE SYS$OUTPUT "DCL-ALIVE"\nSET VOLUME DKA300:/BOGUS\nSHOW SYMBOL $STATUS\nSET VOLUME DKA300:/LABEL=NEWLABEL\nSHOW SYMBOL $STATUS\n' | $VMSDCL 2>&1
+printf 'WRITE SYS$OUTPUT "DCL-ALIVE"\nSET VOLUME VDA300:/BOGUS\nSHOW SYMBOL $STATUS\nSET VOLUME VDA300:/LABEL=NEWLABEL\nSHOW SYMBOL $STATUS\n' | $VMSDCL 2>&1

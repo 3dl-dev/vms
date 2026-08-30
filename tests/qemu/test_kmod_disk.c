@@ -2,10 +2,10 @@
  * test_kmod_disk.c - the executive names the machine's disks (vms-3e8)
  *
  * A VMS disk unit is a thing the EXECUTIVE knows about. On real VMS a disk
- * driver enters DKA0:, DKA100:, ... in the I/O database at boot, and from that
+ * driver enters VDA0:, VDA100:, ... in the I/O database at boot, and from that
  * moment every process on the node can name them. OVMX's executive does the
  * same thing at module init: it enumerates the node's virtio block devices and
- * creates a DK-class unit for each -- DKA0: for vda, DKA100: for vdb, and so on
+ * creates a DK-class unit for each -- VDA0: for vda, VDA100: for vdb, and so on
  * (src/kernel/vms_devtab.c). This suite proves that against a REAL vms.ko in
  * QEMU, with TWO attached virtio disks (run_tests.sh wires /dev/vda and
  * /dev/vdb), because there is no way to fake it: the units either exist in the
@@ -14,8 +14,8 @@
  * THE DECISIVE CHECK is that the unit resolves to the RIGHT backing block
  * device, cross-checked against the ground truth userspace can read for itself:
  * stat("/dev/vda") gives the dev_t the kernel assigned vda, and the executive
- * must hand back that same major:minor for DKA0:. A resolver that returned a
- * plausible constant would pass "DKA0: resolves" and fail this.
+ * must hand back that same major:minor for VDA0:. A resolver that returned a
+ * plausible constant would pass "VDA0: resolves" and fail this.
  *
  * The process NEVER scans /sys/block: it asks the executive
  * (vms_kif_disk_resolve), which is the whole point -- the fact lives in the
@@ -84,7 +84,7 @@ int main(void)
     }
 
     /* The ground truth, read independently of the executive. run_tests.sh
-     * attaches FIVE virtio disks (vms-3e8e added vde -> DKA400:, the ODS-2 image
+     * attaches FIVE virtio disks (vms-3e8e added vde -> VDA400:, the ODS-2 image
      * volume the IMGACT-over-ACP test mounts), so all five nodes must be present
      * in devtmpfs. */
     have_vda = (stat_devt("/dev/vda", &vda_maj, &vda_min) == 0);
@@ -99,75 +99,75 @@ int main(void)
     CHECK(have_vde, "/dev/vde is present (fifth virtio disk attached to the guest)");
 
     /* --------------------------------------------------------------
-     * 1. DKA0: exists in the executive's table -- nothing in this
+     * 1. VDA0: exists in the executive's table -- nothing in this
      *    process created it -- and it resolves to vda's real dev_t.
      * -------------------------------------------------------------- */
     memset(backing, 0, sizeof(backing));
-    status = vms_kif_disk_resolve("DKA0:", backing, sizeof(backing), &maj, &min);
+    status = vms_kif_disk_resolve("VDA0:", backing, sizeof(backing), &maj, &min);
     CHECK(status == SS_NORMAL,
-          "DKA0: exists in the executive's table without any process creating it");
+          "VDA0: exists in the executive's table without any process creating it");
     /* negctl: disk-backing-not-resolved */
     CHECK(strcmp(backing, "vda") == 0,
-          "DKA0: backing device is vda (the executive's enumeration)");
+          "VDA0: backing device is vda (the executive's enumeration)");
     CHECK(have_vda && maj == vda_maj && min == vda_min,
-          "DKA0: backing dev_t matches /dev/vda as userspace stat()s it");
+          "VDA0: backing dev_t matches /dev/vda as userspace stat()s it");
 
     /* --------------------------------------------------------------
-     * 2. DKA100: is the second disk, vdb.
+     * 2. VDA100: is the second disk, vdb.
      * -------------------------------------------------------------- */
     memset(backing, 0, sizeof(backing));
     maj = min = 0;
-    status = vms_kif_disk_resolve("DKA100:", backing, sizeof(backing), &maj, &min);
+    status = vms_kif_disk_resolve("VDA100:", backing, sizeof(backing), &maj, &min);
     CHECK(status == SS_NORMAL,
-          "DKA100: exists in the executive's table (the second disk)");
+          "VDA100: exists in the executive's table (the second disk)");
     /* negctl-knockon: disk-backing-not-resolved */
     CHECK(strcmp(backing, "vdb") == 0,
-          "DKA100: backing device is vdb (the executive's enumeration)");
+          "VDA100: backing device is vdb (the executive's enumeration)");
     CHECK(have_vdb && maj == vdb_maj && min == vdb_min,
-          "DKA100: backing dev_t matches /dev/vdb as userspace stat()s it");
+          "VDA100: backing dev_t matches /dev/vdb as userspace stat()s it");
 
     /* --------------------------------------------------------------
-     * 3. DKA200: is the third disk, vdc (the generated multi-version ODS-2
+     * 3. VDA200: is the third disk, vdc (the generated multi-version ODS-2
      *    volume the $SEARCH test mounts; vms-a0b added it to run_tests.sh).
      * -------------------------------------------------------------- */
     memset(backing, 0, sizeof(backing));
     maj = min = 0;
-    status = vms_kif_disk_resolve("DKA200:", backing, sizeof(backing), &maj, &min);
+    status = vms_kif_disk_resolve("VDA200:", backing, sizeof(backing), &maj, &min);
     CHECK(status == SS_NORMAL,
-          "DKA200: exists in the executive's table (the third disk)");
+          "VDA200: exists in the executive's table (the third disk)");
     CHECK(strcmp(backing, "vdc") == 0,
-          "DKA200: backing device is vdc (the executive's enumeration)");
+          "VDA200: backing device is vdc (the executive's enumeration)");
     CHECK(have_vdc && maj == vdc_maj && min == vdc_min,
-          "DKA200: backing dev_t matches /dev/vdc as userspace stat()s it");
+          "VDA200: backing dev_t matches /dev/vdc as userspace stat()s it");
 
     /* --------------------------------------------------------------
-     * 4. DKA300: is the fourth disk, vdd (the generated system-disk ODS-2
+     * 4. VDA300: is the fourth disk, vdd (the generated system-disk ODS-2
      *    volume the directory-logical resolution test mounts; vms-0044 added
      *    it to run_tests.sh).
      * -------------------------------------------------------------- */
     memset(backing, 0, sizeof(backing));
     maj = min = 0;
-    status = vms_kif_disk_resolve("DKA300:", backing, sizeof(backing), &maj, &min);
+    status = vms_kif_disk_resolve("VDA300:", backing, sizeof(backing), &maj, &min);
     CHECK(status == SS_NORMAL,
-          "DKA300: exists in the executive's table (the fourth disk)");
+          "VDA300: exists in the executive's table (the fourth disk)");
     CHECK(strcmp(backing, "vdd") == 0,
-          "DKA300: backing device is vdd (the executive's enumeration)");
+          "VDA300: backing device is vdd (the executive's enumeration)");
     CHECK(have_vdd && maj == vdd_maj && min == vdd_min,
-          "DKA300: backing dev_t matches /dev/vdd as userspace stat()s it");
+          "VDA300: backing dev_t matches /dev/vdd as userspace stat()s it");
 
     /* --------------------------------------------------------------
-     * 5. DKA400: is the fifth disk, vde (the generated ODS-2 image volume the
+     * 5. VDA400: is the fifth disk, vde (the generated ODS-2 image volume the
      *    IMGACT-over-ACP test mounts; vms-3e8e added it to run_tests.sh).
      * -------------------------------------------------------------- */
     memset(backing, 0, sizeof(backing));
     maj = min = 0;
-    status = vms_kif_disk_resolve("DKA400:", backing, sizeof(backing), &maj, &min);
+    status = vms_kif_disk_resolve("VDA400:", backing, sizeof(backing), &maj, &min);
     CHECK(status == SS_NORMAL,
-          "DKA400: exists in the executive's table (the fifth disk)");
+          "VDA400: exists in the executive's table (the fifth disk)");
     CHECK(strcmp(backing, "vde") == 0,
-          "DKA400: backing device is vde (the executive's enumeration)");
+          "VDA400: backing device is vde (the executive's enumeration)");
     CHECK(have_vde && maj == vde_maj && min == vde_min,
-          "DKA400: backing dev_t matches /dev/vde as userspace stat()s it");
+          "VDA400: backing dev_t matches /dev/vde as userspace stat()s it");
 
     /* --------------------------------------------------------------
      * 6. Negative controls -- a resolver that always succeeded would be
@@ -175,7 +175,7 @@ int main(void)
      * -------------------------------------------------------------- */
     /* Five disks are attached (vda..vde), so there is no sixth unit. */
     memset(backing, 0, sizeof(backing));
-    status = vms_kif_disk_resolve("DKA500:", backing, sizeof(backing), &maj, &min);
+    status = vms_kif_disk_resolve("VDA500:", backing, sizeof(backing), &maj, &min);
     CHECK(status == SS_NOSUCHDEV,
           "a disk unit that does not exist reports SS$_NOSUCHDEV (no sixth disk attached)");
 

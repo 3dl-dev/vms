@@ -28,7 +28,7 @@ gate script (or vice versa) — see that script's header and
 - A booted OVMX system (`./boot.sh`, or a bootable image built from
   `distro/Dockerfile.bootable`), logged in as `SYSTEM`.
 - A blank target volume, already `INITIALIZE`d and attached as a virtio disk
-  (e.g. `DKA100:`). `tools/cut-release.sh`'s output ships everything needed
+  (e.g. `VDA100:`). `tools/cut-release.sh`'s output ships everything needed
   to build a bootable image; the target volume for `PRODUCT INSTALL` is a
   second, separate disk you provide.
 - The product kit itself, `OVMX-OS.KIT`, staged at `SYS$UPDATE:` on the
@@ -50,10 +50,10 @@ gate script (or vice versa) — see that script's header and
 
 <!-- ovmx:guide-steps:begin -->
 ```dcl
-$ MOUNT DKA100: WORK
-$ PRODUCT INSTALL VMS /SOURCE=SYS$UPDATE:OVMX-OS.KIT /DESTINATION=DKA100:
-$ PRODUCT SHOW PRODUCT /DESTINATION=DKA100:
-$ DISMOUNT DKA100:
+$ MOUNT VDA100: WORK
+$ PRODUCT INSTALL VMS /SOURCE=SYS$UPDATE:OVMX-OS.KIT /DESTINATION=VDA100:
+$ PRODUCT SHOW PRODUCT /DESTINATION=VDA100:
+$ DISMOUNT VDA100:
 ```
 <!-- ovmx:guide-steps:end -->
 

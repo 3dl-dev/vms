@@ -25,7 +25,7 @@
  *                             -> immediately $DEQ'd (RLK holds nothing).
  *
  * WHAT THIS PROVES, against the real-VAX ODS-2 fixture the harness mounts
- * WRITABLE on DKA0: (same fixture test_syssvc_rms_filelock.c drives), through
+ * WRITABLE on VDA0: (same fixture test_syssvc_rms_filelock.c drives), through
  * the public RMS system services + a direct GETLKI (vms_kif_getlki_parent) on
  * the lkid the RAB stashes internally (RAB._rec_lock_lkid, exposed here via
  * the private rms/rab.h struct definition every RMS test already includes):
@@ -69,7 +69,7 @@
 #include "rms_io.h"   /* rms_file_t + ->access_lkid: the file-access lock rms-50e stashes */
 
 #define EXIT_SKIP  77
-#define ODS2_UNIT  "DKA0:"
+#define ODS2_UNIT  "VDA0:"
 #define CELL_MRS   32
 #define CELL_MRN   8
 
@@ -317,7 +317,7 @@ int main(void)
     }
 
     st = vms_kif_acp_mount(ODS2_UNIT);   /* idempotent */
-    check($VMS_STATUS_SUCCESS(st), "DKA0: mounted executive-global for RMS");
+    check($VMS_STATUS_SUCCESS(st), "VDA0: mounted executive-global for RMS");
 
     test_reclock();
 

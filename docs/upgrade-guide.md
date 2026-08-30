@@ -28,7 +28,7 @@ gate script (or vice versa) — see that script's header and
 ## Prerequisites
 
 - A running OVMX system with an existing install already on its target
-  volume (e.g. `DKA100:`, unmounted at the start of this procedure).
+  volume (e.g. `VDA100:`, unmounted at the start of this procedure).
 - The **upgrade** product kit (a newer `ovmx-os.kit`, cut by
   `tools/cut-release.sh` from a later commit) staged on a kit-carrier
   volume, in `[SYSUPD]`, as `OVMX-OS-UPGRADE.KIT`. `tests/qemu/
@@ -52,12 +52,12 @@ gate script (or vice versa) — see that script's header and
 
 <!-- ovmx:guide-steps:begin -->
 ```dcl
-$ MOUNT DKA200: KITS
-$ MOUNT DKA100: WORK
-$ PRODUCT INSTALL VMS /SOURCE=DKA200:[SYSUPD]OVMX-OS-UPGRADE.KIT /DESTINATION=DKA100:
-$ PRODUCT SHOW PRODUCT /DESTINATION=DKA100:
-$ DISMOUNT DKA100:
-$ DISMOUNT DKA200:
+$ MOUNT VDA200: KITS
+$ MOUNT VDA100: WORK
+$ PRODUCT INSTALL VMS /SOURCE=VDA200:[SYSUPD]OVMX-OS-UPGRADE.KIT /DESTINATION=VDA100:
+$ PRODUCT SHOW PRODUCT /DESTINATION=VDA100:
+$ DISMOUNT VDA100:
+$ DISMOUNT VDA200:
 ```
 <!-- ovmx:guide-steps:end -->
 

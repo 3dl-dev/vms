@@ -14,7 +14,7 @@
  * the executive over /dev/vms via vms_kif_acp_readvb()/_writevb().
  *
  * WHAT THIS SUITE PROVES, through the sys$/kif API against a real /dev/vms, over
- * the real-VAX ODS-2 fixture the harness seeds on DKA0: (run_tests.sh, from the
+ * the real-VAX ODS-2 fixture the harness seeds on VDA0: (run_tests.sh, from the
  * staged /ods2_real.img == tests/ods2/real_vax_ods2.dsk, copied to a WRITABLE
  * temp so the write below never touches the committed fixture):
  *
@@ -43,14 +43,14 @@
  *        - a bad byte-offset (>= 512) is SS$_BADPARAM.
  *
  * ORDERING / ISOLATION. This suite MUTATES [OVMXDIR]HELLO.TXT (and allocates a
- * BITMAP.SYS block) on its DKA0: fixture COPY. That is safe: init.sh runs every
+ * BITMAP.SYS block) on its VDA0: fixture COPY. That is safe: init.sh runs every
  * test_kmod_* before every test_syssvc_*, and globs sort, so both HELLO.TXT
  * content readers -- test_kmod_ods2_codec (kmod group) and test_syssvc_acp_access
  * (alphabetically before "_rw") -- run BEFORE this suite, and each shard boots
  * its OWN fresh writable fixture copy (run_tests.sh cp per boot). So no reader
  * ever observes this suite's mutation. (The by-the-book isolation is a dedicated
- * scratch volume; DKA0: is reused here to avoid a third virtio disk, which would
- * break the DKA200: "no third disk" negative controls in test_kmod_disk /
+ * scratch volume; VDA0: is reused here to avoid a third virtio disk, which would
+ * break the VDA200: "no third disk" negative controls in test_kmod_disk /
  * test_kmod_vmsfs_mountvis.)
  *
  * NO /dev/vms -> honest SKIP (77), never a fake pass: the ACP, the window, and
@@ -72,7 +72,7 @@
 
 #define EXIT_SKIP 77
 
-#define ODS2_UNIT       "DKA0:"
+#define ODS2_UNIT       "VDA0:"
 #define GOLDEN_PATH     "/test_data/hello.golden"
 
 /* Ground truth read off tests/ods2/real_vax_ods2.dsk (see acp_access suite). */
@@ -174,7 +174,7 @@ int main(void)
         }
     }
 
-    /* Precondition: DKA0: mounted executive-global + a file-class channel. */
+    /* Precondition: VDA0: mounted executive-global + a file-class channel. */
     st = vms_kif_acp_mount(ODS2_UNIT);
     check($VMS_STATUS_SUCCESS(st), "$MOUNT of the genuine ODS-2 " ODS2_UNIT " (precondition)");
     st = vms_kif_acp_assign(ODS2_UNIT, &chan);

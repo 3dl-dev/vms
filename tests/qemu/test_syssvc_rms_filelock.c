@@ -6,7 +6,7 @@
  * $ENQ named by the file's FID, and sys$close $DEQs it.
  *
  * WHAT THIS PROVES, against the real-VAX ODS-2 fixture the harness mounts
- * WRITABLE on DKA0: (same fixture test_syssvc_rms_acp.c drives), through the
+ * WRITABLE on VDA0: (same fixture test_syssvc_rms_acp.c drives), through the
  * public RMS system services + a direct GETLKI on the lock ID rms_core.c
  * stashes on the internal handle (rms_file_t.access_lkid, exposed here via
  * the private rms_io.h -- the same header test_syssvc_rms_p3_acp.c already
@@ -49,7 +49,7 @@
 #include "rms_io.h"   /* rms_file_t + ->access_lkid: the internal handle vms-50e stashes the lkid on */
 
 #define EXIT_SKIP  77
-#define ODS2_UNIT  "DKA0:"
+#define ODS2_UNIT  "VDA0:"
 
 static int pass = 0;
 static int fail = 0;
@@ -241,7 +241,7 @@ int main(void)
     }
 
     st = vms_kif_acp_mount(ODS2_UNIT);   /* idempotent */
-    check($VMS_STATUS_SUCCESS(st), "DKA0: mounted executive-global for RMS");
+    check($VMS_STATUS_SUCCESS(st), "VDA0: mounted executive-global for RMS");
 
     test_conflicting_share();
     test_compatible_share();

@@ -12,9 +12,9 @@
  * is a pass of the activator's real ACP path, not a re-implementation.
  *
  * WHAT THIS PROVES, against a real /dev/vms over the generated ODS-2 fixture the
- * harness seeds on DKA400: (vde, from tests/qemu/mkimage_ods2_imgact.c):
+ * harness seeds on VDA400: (vde, from tests/qemu/mkimage_ods2_imgact.c):
  *
- *   1. OPEN BY FILESPEC + DIRECTORY WALK. imgact_acp_open("DKA400:",
+ *   1. OPEN BY FILESPEC + DIRECTORY WALK. imgact_acp_open("VDA400:",
  *      "/IMGACT/TESTIMG.EXE") $ASSIGNs a file-class channel, walks [IMGACT] as
  *      an ODS-2 directory (IO$_ACCESS "IMGACT.DIR", DID-chaining to its FID),
  *      then IO$_ACCESSes TESTIMG.EXE -- resolving the real image file and its
@@ -62,8 +62,8 @@
 
 #define EXIT_SKIP 77
 
-/* DKA400: (vde) carries the generated ODS-2 fixture with [IMGACT]TESTIMG.EXE. */
-#define ODS2_UNIT   "DKA400:"
+/* VDA400: (vde) carries the generated ODS-2 fixture with [IMGACT]TESTIMG.EXE. */
+#define ODS2_UNIT   "VDA400:"
 #define IMG_PATH    "/IMGACT/TESTIMG.EXE"
 
 /* --------------------------------------------------------------------------
@@ -224,7 +224,7 @@ int main(void)
 		      "an image name not on the volume is SS$_NOSUCHFILE (no POSIX fallback, INV-6)");
 		imgact_acp_close(&nf);
 
-		st = imgact_acp_open(&nf, "DKA999:", IMG_PATH);
+		st = imgact_acp_open(&nf, "VDA999:", IMG_PATH);
 		check(st == SS$_DEVNOTMOUNT,
 		      "a unit that is not an ACP-mounted volume is SS$_DEVNOTMOUNT (executive present, no volume; no POSIX fallback, INV-6)");
 		imgact_acp_close(&nf);

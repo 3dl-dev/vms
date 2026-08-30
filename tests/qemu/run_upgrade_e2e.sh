@@ -130,22 +130,22 @@ fi
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
 
-echo "--- formatting the blank upgrade target (DKA100:, label WORK) with $INIT_EXE ---"
+echo "--- formatting the blank upgrade target (VDA100:, label WORK) with $INIT_EXE ---"
 # --ods2: the runtime MOUNTs a GENUINE ODS-2 volume over the ACP (atomic flip,
 # vms-208); INITIALIZE's default legacy vmsfs layout is refused (%OVMX-F-
 # MOUNTFAIL). A real upgrade target is an ODS-2 volume -- format one (vms-37e).
 "$INIT_EXE" --ods2 "$WORKDIR/dka100.img" WORK 16 || { echo "FAIL: INITIALIZE of the target disk"; exit 1; }
 
-echo "--- mastering the kit-carrier disk (DKA200:, label KITS) with $MASTER_EXE ---"
+echo "--- mastering the kit-carrier disk (VDA200:, label KITS) with $MASTER_EXE ---"
 KITSTAGE="$WORKDIR/kitstage/SYSUPD"
 mkdir -p "$KITSTAGE"
 cp "$BASELINE_DIR/ovmx-os.kit" "$KITSTAGE/OVMX-OS-BASELINE.KIT"
 cp "$UPGRADE_DIR/ovmx-os.kit"  "$KITSTAGE/OVMX-OS-UPGRADE.KIT"
 # --ods2: the runtime MOUNTs GENUINE ODS-2 volumes over the ACP only (atomic
 # flip, vms-208) -- a legacy vmsfs layout is refused (%OVMX-F-MOUNTFAIL,
-# "DKA200: would not mount as ODS-2"), exactly as the DKA100 target above notes.
+# "VDA200: would not mount as ODS-2"), exactly as the VDA100 target above notes.
 # The kit carrier is a real mounted disk the guest reads OVMX-OS-*.KIT off of,
-# so it must be a genuine ODS-2 volume just like DKA100:, not the master tool's
+# so it must be a genuine ODS-2 volume just like VDA100:, not the master tool's
 # default legacy layout.
 "$MASTER_EXE" --ods2 master "$WORKDIR/dka200.img" KITS "$WORKDIR/kitstage" \
     || { echo "FAIL: mastering the kit-carrier disk"; exit 1; }

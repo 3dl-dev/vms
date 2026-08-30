@@ -13,10 +13,10 @@
  * WHAT IT PROVES:
  *   SYS$SYSTEM:SYSUAF.DAT  composes, through the concealed rooted search-list
  *   chain (SYS$SYSTEM = SYS$SYSROOT:[SYSEXE]; SYS$SYSROOT = SYS$SYSDEVICE:[SYS0.],
- *   SYS$SYSDEVICE:[SYS0.SYSCOMMON.]; SYS$SYSDEVICE = DKA0:), to the two ordered
+ *   SYS$SYSDEVICE:[SYS0.SYSCOMMON.]; SYS$SYSDEVICE = VDA0:), to the two ordered
  *   candidates
- *       DKA0:[SYS0.SYSEXE]SYSUAF.DAT            (node-specific member, first)
- *       DKA0:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT  (common member, second)
+ *       VDA0:[SYS0.SYSEXE]SYSUAF.DAT            (node-specific member, first)
+ *       VDA0:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT  (common member, second)
  *   -- NOT a pre-flattened string, and in the search order a running system disk
  *   presents (VSI OpenVMS System Manager's Manual, Vol. 1, "The System Disk").
  *   SYS$MANAGER: and SYS$LIBRARY: compose the same way onto [SYSMGR]/[SYSLIB].
@@ -86,13 +86,13 @@ int main(void)
         printf("        [%d] %s\n", i, cands[i]);
 
     CHECK(n >= 2, "SYS$SYSTEM:SYSUAF.DAT composes to >=2 search-list candidates");
-    CHECK(has_candidate(cands, n, "DKA0:[SYS0.SYSEXE]SYSUAF.DAT"),
-          "node-specific candidate DKA0:[SYS0.SYSEXE]SYSUAF.DAT is composed");
-    CHECK(has_candidate(cands, n, "DKA0:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT"),
-          "common candidate DKA0:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT is composed");
+    CHECK(has_candidate(cands, n, "VDA0:[SYS0.SYSEXE]SYSUAF.DAT"),
+          "node-specific candidate VDA0:[SYS0.SYSEXE]SYSUAF.DAT is composed");
+    CHECK(has_candidate(cands, n, "VDA0:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT"),
+          "common candidate VDA0:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT is composed");
     {
-        int inode = index_of(cands, n, "DKA0:[SYS0.SYSEXE]SYSUAF.DAT");
-        int icomn = index_of(cands, n, "DKA0:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT");
+        int inode = index_of(cands, n, "VDA0:[SYS0.SYSEXE]SYSUAF.DAT");
+        int icomn = index_of(cands, n, "VDA0:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT");
         CHECK(inode >= 0 && icomn >= 0 && inode < icomn,
               "SEARCH ORDER: the node-specific member composes BEFORE the common member");
     }
@@ -100,18 +100,18 @@ int main(void)
     /* ---- SYS$MANAGER: and SYS$LIBRARY: compose the same way --------------- */
     n = vmsfs_compose_ods2_candidates("SYS$MANAGER:STARTUP.COM", cands,
                                       LNM_MAX_SEARCHLIST);
-    CHECK(has_candidate(cands, n, "DKA0:[SYS0.SYSCOMMON.SYSMGR]STARTUP.COM"),
+    CHECK(has_candidate(cands, n, "VDA0:[SYS0.SYSCOMMON.SYSMGR]STARTUP.COM"),
           "SYS$MANAGER:STARTUP.COM composes onto the common [SYS0.SYSCOMMON.SYSMGR]");
 
     n = vmsfs_compose_ods2_candidates("SYS$LIBRARY:STARLET.OLB", cands,
                                       LNM_MAX_SEARCHLIST);
-    CHECK(has_candidate(cands, n, "DKA0:[SYS0.SYSCOMMON.SYSLIB]STARLET.OLB"),
+    CHECK(has_candidate(cands, n, "VDA0:[SYS0.SYSCOMMON.SYSLIB]STARLET.OLB"),
           "SYS$LIBRARY:STARLET.OLB composes onto the common [SYS0.SYSCOMMON.SYSLIB]");
 
     /* ---- a plain device (already physical) passes through --------------- */
-    n = vmsfs_compose_ods2_candidates("DKA0:[MYDIR]FILE.DAT", cands,
+    n = vmsfs_compose_ods2_candidates("VDA0:[MYDIR]FILE.DAT", cands,
                                       LNM_MAX_SEARCHLIST);
-    CHECK(n == 1 && strcasecmp(cands[0], "DKA0:[MYDIR]FILE.DAT") == 0,
+    CHECK(n == 1 && strcasecmp(cands[0], "VDA0:[MYDIR]FILE.DAT") == 0,
           "an already-physical spec composes to exactly itself");
 
     /* ---- FAIL-HONEST: an unresolvable device logical composes nothing ---- */
@@ -135,8 +135,8 @@ int main(void)
                                           LNM_MAX_SEARCHLIST);
         CHECK(has_candidate(cands, n, "DKB100:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT"),
               "VERACITY: SYS$SYSTEM relocated LIVE with SYS$SYSDEVICE (composed, not memorized)");
-        CHECK(!has_candidate(cands, n, "DKA0:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT"),
-              "VERACITY: no stale DKA0: candidate survives the relocation");
+        CHECK(!has_candidate(cands, n, "VDA0:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT"),
+              "VERACITY: no stale VDA0: candidate survives the relocation");
     }
 
     printf("=== test_dirlogical_compose: %d passed, %d failed ===\n", pass, fail);

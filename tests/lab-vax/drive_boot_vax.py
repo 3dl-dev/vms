@@ -8,7 +8,7 @@
 #     kernel up
 #       -> vms.kmod  loaded, /dev/vms live     (executive attached)
 #       -> OpenVMX product banner emitted       (SYSBOOT hand-over)
-#       -> vmsfs.kmod loaded, OVMX ODS-2 system disk (DKA0:) mounted
+#       -> vmsfs.kmod loaded, OVMX ODS-2 system disk (DUA0:) mounted
 #
 # This is the VAX capstone-minus-one: it proves ovmx_init RUNS AS INIT on real
 # NetBSD/vax under SIMH and drives its own NetBSD boot seam (ovmx_boot_netbsd.c).
@@ -39,7 +39,7 @@
 #                 pre-create /dev/vms, MAKEDEV the ra1 system-disk node, create
 #                 the boot mount points, then halt.
 #   prove         Boot that assembled disk single-user with the mastered ODS-2
-#                 volume on rq1 (-> ra1 -> DKA0:). The kernel execs /sbin/init =
+#                 volume on rq1 (-> ra1 -> DUA0:). The kernel execs /sbin/init =
 #                 ovmx_init as PID 1; assert the milestone lines appear on the
 #                 console. UNATTENDED: no shell is driven -- ovmx_init IS init.
 #   negctl        Same as prove but WITHOUT the ODS-2 volume attached: the mount
@@ -76,16 +76,16 @@ from vaxharness import HARNESS_ERROR, PROOF_FAILED
 MS_SYSKRNL = "OVMX/NetBSD"                                   # SYSKRNL identity
 MS_EXEC    = "VMS executive attached on /dev/vms"           # /dev/vms open
 MS_BANNER  = "OpenVMS-compatible"                           # product banner
-MS_MOUNTED = "system disk DKA0: mounted"                    # ODS-2 mounted
+MS_MOUNTED = "system disk DUA0: mounted"                    # ODS-2 mounted
 
 # vms-7b15: the SINGLE-disk evidence line. In the single-disk layout the ODS-2
 # volume is PARTITION 'e' of the same MSCP disk (ra0) VMB booted the NetBSD root
 # ('a') off of -- NOT a second disk (ra1). vms_blockdev_netbsd.c's
 # register_units() prints this the moment vms.kmod loads (during ovmx_init's
-# modctl(MODCTL_LOAD,"vms"), BEFORE MS_EXEC), naming the backing DKA0: bound to.
+# modctl(MODCTL_LOAD,"vms"), BEFORE MS_EXEC), naming the backing DUA0: bound to.
 # Seeing "-> ra0e" (not "-> ra1c") is the deterministic proof the system disk
 # came off the SAME disk that booted, with NO rq1 attached.
-MS_DKA0_RA0E = r"disk unit DKA0: -> ra0e"
+MS_DUA0_RA0E = r"disk unit DUA0: -> ra0e"
 
 # vms-d9c: the milestones PAST the mount, on a real installed OVMX SYSTEM volume
 # (the sysboot mode). require_installed_system() halts %OVMX-F-SYSINIT with this
@@ -407,13 +407,13 @@ def do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
     log("OK: vms.kmod bare-name modloads cleanly; /dev/vms pre-created")
 
     # 4. Create the system-disk device node (ra1 = the ODS-2 volume on rq1) AND
-    #    the second MSCP disk node (ra2 = the install TARGET on rq2 -> DKA100:,
+    #    the second MSCP disk node (ra2 = the install TARGET on rq2 -> DUA100:,
     #    vms_blockdev_netbsd.c's unit map), plus the boot mount points ovmx_init's
     #    seam expects (all pre-created so the read-only-root boot needs no writes).
     #    ra2 is harmless for every non-install mode (nothing is attached on rq2
     #    there, so /dev/ra2c simply never opens); the two-disk install proof
     #    (drive_install_vax.py, vms-d0e5 rung G) attaches the blank target on rq2
-    #    and MOUNTs DKA100: -> /dev/ra2c, so the node must already exist.
+    #    and MOUNTs DUA100: -> /dev/ra2c, so the node must already exist.
     #
     #    /run/ovmx-boot (vms-329) joins that list for the SAME reason the other
     #    four are here. It is OVMX_BOOT_STAGE_DIR (src/libvms/include/
@@ -436,7 +436,7 @@ def do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
     if rc != 0:
         log("FAIL: could not MAKEDEV ra1/ra2 / create the boot mount points")
         return PROOF_FAILED
-    log("OK: /dev/ra1c (DKA0:) + /dev/ra2c (DKA100:) nodes + boot mount points created")
+    log("OK: /dev/ra1c (DUA0:) + /dev/ra2c (DUA100:) nodes + boot mount points created")
 
     # 5. Install STARTUP.EXE as /sbin/init (keep the NetBSD init as a backup).
     #    LAST, so the running assembly shell keeps its NetBSD init for this
@@ -483,7 +483,7 @@ def do_assemble_single(a, single_img, artifacts_dir, src_iso, new_a_sectors,
     stock NetBSD /sbin/init gives a real shell -- the boot-work copy's is
     ovmx_init, which is why the shared disk is the one we boot here), with the
     target single-disk image on rq1 and the OVMX artifact CD (the freshly-built
-    vms.kmod, carrying the DKA0:->ra0e single-disk discovery) on rq2. Against the
+    vms.kmod, carrying the DUA0:->ra0e single-disk discovery) on rq2. Against the
     target (ra1) it:
 
       1. resize_ffs -s NEW_A_SECTORS /dev/rra1a  -- SHRINK the root FFS so a
@@ -657,7 +657,7 @@ def do_prove(a, ods2_img, negctl, boot_deadline):
         ods2_abs = os.path.abspath(ods2_img)
         vmm_args = ["set rq1 ra92", "attach rq1 " + ods2_abs]
         log("booting the assembled disk: ovmx_init as PID 1, ODS-2 system disk "
-            "on rq1 -> ra1 -> DKA0: (deadline %ds)..." % boot_deadline)
+            "on rq1 -> ra1 -> DUA0: (deadline %ds)..." % boot_deadline)
 
     a.dist.set_workdir(a.workdir)
     a.n_cdrom = 0
@@ -727,7 +727,7 @@ def do_prove(a, ods2_img, negctl, boot_deadline):
 def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
                single_rq0_type=None):
     """vms-d9c: boot the assembled vms-7b1 disk (ovmx_init as PID 1) with a real
-    MASTERED OVMX SYSTEM volume on rq1 (-> ra1 -> DKA0:), and assert the boot
+    MASTERED OVMX SYSTEM volume on rq1 (-> ra1 -> DUA0:), and assert the boot
     proceeds PAST ovmx_init's installed-system gate and reaches the point where
     PID 1 execs SYS$SYSTEM:PROVISION.EXE.
 
@@ -761,7 +761,7 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
 
     if single:
         # vms-7b15: SINGLE disk. The ODS-2 SYSTEM volume is PARTITION 'e' of the
-        # SAME disk anita booted on rq0 (ra0) -- there is NO rq1. DKA0: resolves
+        # SAME disk anita booted on rq0 (ra0) -- there is NO rq1. DUA0: resolves
         # to /dev/ra0e via the candidate fallback in vms_blockdev_netbsd.c.
         # The slim artifact is a custom-sized MSCP disk (RAUSER=<MB>), so override
         # anita's hardcoded `set rq0 ra92' (the LAST `set rq0' before `attach rq0'
@@ -771,7 +771,7 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
             vmm_args = ["set rq0 " + single_rq0_type]
         log("SYSBOOT-SINGLE: booting ONE disk on rq0 (%s) -- VMB boots the NetBSD "
             "root ('a') AND the executive mounts the ODS-2 SYSTEM volume from "
-            "PARTITION 'e' of the SAME disk (DKA0: -> ra0e), NO rq1 (deadline "
+            "PARTITION 'e' of the SAME disk (DUA0: -> ra0e), NO rq1 (deadline "
             "%ds)" % (single_rq0_type or "default", boot_deadline))
     else:
         ods2_abs = os.path.abspath(sysvol_img)
@@ -782,7 +782,7 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
                 "'%s' MUST NOT appear" % MS_STDRV)
         else:
             log("SYSBOOT: booting the assembled disk with the MASTERED OVMX "
-                "system volume on rq1 -> ra1 -> DKA0: (deadline %ds); expecting "
+                "system volume on rq1 -> ra1 -> DUA0: (deadline %ds); expecting "
                 "the boot to pass the installed-system gate and reach the "
                 "PROVISION.EXE exec" % boot_deadline)
 
@@ -796,13 +796,13 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
         child.send("B/R5:2 DUA0\r")
 
         # Pre-mount milestones, same order as do_prove. In single-disk mode the
-        # "DKA0: -> ra0e" backing line is inserted between MS_SYSKRNL and MS_EXEC
+        # "DUA0: -> ra0e" backing line is inserted between MS_SYSKRNL and MS_EXEC
         # (vms.kmod's register_units prints it during the modctl load, before
         # ovmx_init emits the executive-attached line) -- deterministic proof the
         # system disk bound to a PARTITION of the boot disk, not a second disk.
         premount = [("syskrnl", MS_SYSKRNL)]
         if single:
-            premount.append(("dka0_ra0e", MS_DKA0_RA0E))
+            premount.append(("dka0_ra0e", MS_DUA0_RA0E))
         premount += [("exec", MS_EXEC), ("banner", MS_BANNER),
                      ("mounted", MS_MOUNTED)]
         for key, pat in premount:
@@ -863,7 +863,7 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
                     tail = _console_text(child)[-1500:]
                     # HONEST diagnosis (rd vms-72da): the volume + vnode pager are
                     # FINE -- require_installed_system() already resolved DCL.EXE via
-                    # the DEVICE-TABLE path (DKA0:[SYS0.SYSCOMMON.SYSEXE], no logical),
+                    # the DEVICE-TABLE path (DUA0:[SYS0.SYSCOMMON.SYSEXE], no logical),
                     # and run-boot.sh's content gate proved PROVISION.EXE + OVMXVMSSYS.PAR
                     # are ON the mastered volume. read_boot_parameters (OVMXVMSSYS.PAR)
                     # and run_startup (PROVISION.EXE) resolve the "SYS$SYSTEM:" LOGICAL;
@@ -1036,7 +1036,7 @@ def do_acceptance(a, boot_deadline, single_rq0_type):
     """rd vms-f2c (VAX half of co-release acceptance parity). Boot the SLIM
     SINGLE disk EXACTLY as do_sysboot(single=True) does -- ONE `attach rq0'
     (RAUSER=<MB>), VMB boots the NetBSD root off partition 'a' and the executive
-    mounts the ODS-2 SYSTEM volume off partition 'e' (DKA0: -> ra0e) -- but
+    mounts the ODS-2 SYSTEM volume off partition 'e' (DUA0: -> ra0e) -- but
     instead of this Python driver asserting boot milestones, it BRIDGES the SIMH
     console to a bash caller so the SAME shared DCL/SHOW acceptance battery
     x86_64 and Alpha run (tests/qemu/lib/dcl_acceptance_battery.sh) drives the
@@ -1246,13 +1246,13 @@ def main():
                     "(executive attach + banner + MOUNTED); saw=%s" % sorted(seen))
                 return PROOF_FAILED
 
-            # vms-7b15: the single-disk proof additionally REQUIRES that DKA0:
+            # vms-7b15: the single-disk proof additionally REQUIRES that DUA0:
             # bound to /dev/ra0e (a PARTITION of the boot disk), not ra1c (a
             # second disk) -- the whole point of the single-disk layout.
             if sb_single and not seen.get("dka0_ra0e"):
-                log("SYSBOOT-SINGLE FAILED: the executive did NOT bind DKA0: to "
+                log("SYSBOOT-SINGLE FAILED: the executive did NOT bind DUA0: to "
                     "/dev/ra0e (the ODS-2 partition on the boot disk) -- expected "
-                    "the %r evidence line; saw=%s" % (MS_DKA0_RA0E, sorted(seen)))
+                    "the %r evidence line; saw=%s" % (MS_DUA0_RA0E, sorted(seen)))
                 return PROOF_FAILED
 
             if sb_negctl:
@@ -1378,13 +1378,13 @@ def main():
                 log("  SYSBOOT-SINGLE PASSED: ovmx_init booted as PID 1 on NetBSD/vax")
                 log("  from ONE disk -- VMB booted the NetBSD root off partition 'a' AND")
                 log("  the executive mounted the OVMX ODS-2 system volume from partition")
-                log("  'e' of the SAME disk (DKA0: -> ra0e, NO rq1), passed the installed-")
+                log("  'e' of the SAME disk (DUA0: -> ra0e, NO rq1), passed the installed-")
                 log("  system gate, PROVISION.EXE DEMAND-PAGED + RAN (SYSTEM identity),")
                 log("  stamped UIC file ownership with ZERO %%OVMX-W-OWNER warnings,")
                 log("  STARTUP.COM was seen ACTIVELY EXECUTING, LOGINOUT reached the")
                 log("  console prompt, AND SYSTEM/MANAGER AUTHENTICATED to a DCL $ prompt")
                 log("  (vms-494: the SYSUAF engine is wired into LOGINOUT).")
-                log("  *** vms-7b15/vms-494: a SINGLE disk both VMB-boots AND carries DKA0:,")
+                log("  *** vms-7b15/vms-494: a SINGLE disk both VMB-boots AND carries DUA0:,")
                 log("  *** to a real interactive Username: prompt AND a usable DCL $. ***")
             else:
                 log("  SYSBOOT PASSED: ovmx_init booted as PID 1 on NetBSD/vax, mounted the")
@@ -1427,7 +1427,7 @@ def main():
         log("======================================================================")
         log("  BOOT-VAX PASSED: ovmx_init ran as PID 1 on NetBSD/vax under SIMH,")
         log("  attached the executive on /dev/vms, emitted the OpenVMX banner,")
-        log("  and mounted the OVMX ODS-2 system disk (DKA0:) -- UNATTENDED.")
+        log("  and mounted the OVMX ODS-2 system disk (DUA0:) -- UNATTENDED.")
         log("======================================================================")
         return 0
 

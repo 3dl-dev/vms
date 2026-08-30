@@ -222,23 +222,38 @@ static struct vms_device *vms_devtab_create(const char *devnam,
 }
 
 /*
- * Disk unit naming (vms-3e8).
+ * Disk unit naming (vms-3e8, DEVICE-NATIVE per vms-47d / vms-9f5).
  *
  * PROVENANCE (CLAUDE.md Rule 8, published-doc-derived). A VMS device name is
  * "ddcu:" -- a two-letter device code, a controller letter, and a unit number
  * (VSI OpenVMS I/O User's Reference Manual; OpenVMS User's Manual, "Devices").
- * DK is the device code for a direct-access DISK on a generic/SCSI controller,
- * A is the first controller, and for such disks the unit number encodes the
- * SCSI target as target*100 (+LUN) -- so the first target is DKA0:, the second
- * DKA100:, the third DKA200:, which is the numbering documented for SCSI disks
- * and observed on SCSI-based OpenVMS systems. None of this is copied from VSI
- * source; it is the published external naming convention.
+ * The device CODE names the class of hardware: DU is an MSCP/UDA disk, DK a
+ * direct-access SCSI/RK disk, DA a DSA disk, and so on. A is the first
+ * controller, and for such disks the unit number encodes the target as
+ * target*100 (+LUN) -- the first target 0, the second 100, the third 200 --
+ * which is the numbering documented for SCSI disks and observed on SCSI-based
+ * OpenVMS systems. None of this is copied from VSI source; it is the published
+ * external naming convention.
  *
- * WHAT IS AN OVMX DESIGN CHOICE, labelled as such (Rule 8): virtio-blk has no
- * SCSI target, so mapping "the Nth virtio block device (vd[a-z]) to SCSI target
- * N" -- vda->DKA0:, vdb->DKA100:, vdc->DKA200: -- is OVMX's, not VMS's. It is
- * the natural positional mapping, and it is stable (a device's letter fixes its
- * unit), but it is not presented as VMS-authentic.
+ * DEVICE-NATIVE NAMING (vms-9f5). A device is named by its NATIVE kernel
+ * identity, never a single hardcoded code: the executive that probes a real
+ * MSCP disk calls it DUxu:, a real SCSI disk DKxu:, exactly as VMS would. The
+ * unit map is per-substrate -- the VAX MSCP/RQDX3 backend enters its disks as
+ * DUA0:/DUA100: (src/kernel-netbsd/vms_blockdev_netbsd.c, the authentic MSCP
+ * name), and this shared probe, which enumerates the virtio-blk name space,
+ * names those VDA0:/VDA100:.
+ *
+ * WHAT IS AN OVMX DESIGN CHOICE, labelled as such (Rule 8): virtio-blk is not
+ * VMS hardware and has no VMS device code. OVMX assigns it the code VD (a
+ * "Virtual Disk"), controller A, and maps "the Nth virtio block device
+ * (vd[a-z]) to target N" -- vda->VDA0:, vdb->VDA100:, vdc->VDA200:. The code
+ * and the positional mapping are OVMX's, not VMS's; they are stable (a device's
+ * letter fixes its unit) but are not presented as VMS-authentic. The parallel
+ * native codes for other Linux substrates -- SATA/SCSI sd* -> SDA, NVMe nvme*
+ * -> NVME -- are the documented scheme for when such a substrate exists; this
+ * probe does not invent a unit for a device it cannot see (INV-6), so those
+ * codes are named by their own probe when that hardware is actually present,
+ * never by a speculative, untested branch here.
  *
  * ENUMERATION. The block layer exports no module-callable iterator over its
  * gendisks, so the executive enumerates the virtio-blk NAME SPACE it can name:
@@ -274,7 +289,7 @@ static void vms_devtab_probe_disks(void)
         if (exec_blockdev_lookup(path, &dev) != 0)
             continue;
 
-        snprintf(devnam,  sizeof(devnam),  "DKA%u:", (unsigned)i * 100u);
+        snprintf(devnam,  sizeof(devnam),  "VDA%u:", (unsigned)i * 100u);
         snprintf(backing, sizeof(backing), "vd%c", 'a' + i);
 
         /*
@@ -502,8 +517,9 @@ int vms_devtab_init(void)
 
     /*
      * Enumerate the node's disks the way a VMS driver enters its units at boot
-     * (vms-3e8): DKA0: for the first virtio block device, DKA100: for the
-     * second, and so on. Like the console above, no process introduces these
+     * (vms-3e8): VDA0: for the first virtio block device, VDA100: for the
+     * second, and so on (device-native naming, vms-9f5). Like the console
+     * above, no process introduces these
      * -- they exist in the executive's I/O database before /dev/vms does.
      */
     vms_devtab_probe_disks();

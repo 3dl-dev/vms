@@ -16,9 +16,9 @@
  * test_syssvc_acp_access drives vms_kif_acp_access().
  *
  * WHAT THIS SUITE PROVES, through the sys$/kif API against a real /dev/vms, over
- * a GENERATED multi-version ODS-2 volume the harness seeds on DKA200: (vdc, from
+ * a GENERATED multi-version ODS-2 volume the harness seeds on VDA200: (vdc, from
  * /ods2_search.img == tests/qemu/mkimage_ods2_search.c -- the real-VAX fixture
- * on DKA0: carries only single versions, so this proof needs a directory with a
+ * on VDA0: carries only single versions, so this proof needs a directory with a
  * name at several versions):
  *
  *   Directory [SRCH] (FID 11), on-disk records (name ascending, versions
@@ -65,8 +65,8 @@
 
 #define EXIT_SKIP 77
 
-/* DKA200: (vdc) carries the generated multi-version ODS-2 volume. */
-#define ODS2_UNIT  "DKA200:"
+/* VDA200: (vdc) carries the generated multi-version ODS-2 volume. */
+#define ODS2_UNIT  "VDA200:"
 
 /* Ground truth: [SRCH] and its entries (mkimage_ods2_search.c deterministic). */
 #define SRCH_FID_NUM   11u

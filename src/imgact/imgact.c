@@ -73,12 +73,18 @@
  * activation, e.g. the KE harness, sets it to whatever volume carries the image
  * + its shareables), and falls back to this default only when it is unset. This
  * kills the compile-time disk literal and advances device-native naming (epic
- * vms-47d). The QEMU boot maps the system disk to DKA0:; the KE toolchain
- * harness (tests/qemu/test_syssvc_mmk_build.c) points it at the generated
- * ODS-2 system volume so the clean-room real-VAX DKA0: fixture is never mutated
- * with OVMX toolchain images (vms-104/vms-29ff). */
+ * vms-47d / vms-9f5). The QEMU boot maps the system disk to VDA0: (virtio); the
+ * KE toolchain harness (tests/qemu/test_syssvc_mmk_build.c) points it at the
+ * generated ODS-2 system volume so the clean-room real-VAX fixture is never
+ * mutated with OVMX toolchain images (vms-104/vms-29ff). The fallback below is
+ * the substrate-native default -- VDA0: on virtio, DUA0: on VAX MSCP -- used
+ * only when OVMX_SYSDEVICE is unset (e.g. a unit test that does not boot). */
 #ifndef IMGACT_ACP_SYSDEVICE_DEFAULT
-#define IMGACT_ACP_SYSDEVICE_DEFAULT "DKA0:"
+#  if defined(__vax__)
+#    define IMGACT_ACP_SYSDEVICE_DEFAULT "DUA0:"
+#  else
+#    define IMGACT_ACP_SYSDEVICE_DEFAULT "VDA0:"
+#  endif
 #endif
 
 /* Runtime-discovered system device (OVMX_SYSDEVICE or the default above).

@@ -213,7 +213,7 @@ set_tests_properties(vmsrms_sysroot_pernode PROPERTIES
 
 # vms-0044: concealed-rooted directory-logical chain composes to concrete
 # on-volume ODS-2 candidate specs (SYS$SYSTEM:SYSUAF.DAT ->
-# DKA0:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT) -- the input the Files-11 ACP
+# VDA0:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT) -- the input the Files-11 ACP
 # directory walk consumes (flip-blocker, epic vms-208). Host LNM$PROCESS, no
 # /dev/vms needed; the ACP walk + byte-exact read is the paired positive in
 # tests/qemu/test_syssvc_dirlogical_acp.c.

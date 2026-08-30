@@ -26,14 +26,15 @@
  *
  * DEVICE-NATIVE RESOLVE (vms-47d). The VMS unit NAME is a label; the resolve
  * binds it to the REAL NetBSD block device (/dev/ra1c, the 2nd MSCP disk under
- * SIMH that carries the mastered OVMX ODS-2 volume -- PR #606). The current
- * boot unit name "DKA0:" is a placeholder: a real VMS-VAX calls an MSCP/RQ disk
- * DUxn: (DUA0:), not DKA0: (DK == SCSI/RK). The DKA0:->DUA0: rename is tracked
- * as vms-47d; this resolve accepts BOTH so it stays correct across that rename.
+ * SIMH that carries the mastered OVMX ODS-2 volume -- PR #606). The boot unit
+ * is now named DUA0: (vms-9f5): a real VMS-VAX calls an MSCP/RQ disk DUxn:
+ * (DUA0:), not DKA0: (DK == SCSI/RK), so DUA0: is the authentic name and the
+ * ENTERED unit. The former placeholder DKA0: remains only as a resolver-only
+ * alias so a stale reference still resolves across the cutover.
  * The unit map is a single entry today but a TABLE, so a future multi-unit VAX
  * extends without a rewrite (conductor caveat, vms-d5d).
  *
- * SINGLE-DISK DISCOVERY (vms-7b15). SYS$DISK (DKA0:) now carries a LIST of
+ * SINGLE-DISK DISCOVERY (vms-7b15). SYS$DISK (DUA0:) now carries a LIST of
  * candidate backing devices, tried in order, first that OPENS wins:
  *
  *   1. /dev/ra1c  -- the two-disk layout: the ODS-2 volume is a WHOLE separate
@@ -41,7 +42,7 @@
  *   2. /dev/ra0e  -- the SINGLE-disk layout: the ODS-2 volume is a PARTITION
  *                    ('e') of the SAME MSCP disk (rq0/ra0) that VMB booted the
  *                    NetBSD root ('a') off of -- one disk that VMB boots AND
- *                    that carries DKA0:, the foundation for a single browser-demo
+ *                    that carries DUA0:, the foundation for a single browser-demo
  *                    (PCjs) artifact.
  *
  * The order makes this ZERO-REGRESSION for the two-disk proof: when rq1 is
@@ -137,15 +138,18 @@ static const struct ovmx_acp_unit {
 	const char *backings[OVMX_ACP_MAX_CANDIDATES];	/* parallel to devpaths */
 	int	    primary;		/* 1 = the name this unit is ENTERED under */
 } ovmx_acp_unitmap[] = {
-	/* DKA0:/DUA0: -- two-disk /dev/ra1c first (unchanged), single-disk
-	 * /dev/ra0e (the ODS-2 partition on the boot disk) as the fallback. */
-	{ "DKA0",   { "/dev/ra1c", "/dev/ra0e", NULL },
-		    { "ra1c",      "ra0e",      NULL }, 1 },
+	/* DUA0:/DKA0: -- two-disk /dev/ra1c first (unchanged), single-disk
+	 * /dev/ra0e (the ODS-2 partition on the boot disk) as the fallback.
+	 * DUA0: is PRIMARY (vms-9f5): the authentic MSCP name is the entered
+	 * unit; DKA0: stays a resolver-only alias so a stale reference still
+	 * resolves across the cutover (retired by vms-47d's follow-on). */
 	{ "DUA0",   { "/dev/ra1c", "/dev/ra0e", NULL },
+		    { "ra1c",      "ra0e",      NULL }, 1 },
+	{ "DKA0",   { "/dev/ra1c", "/dev/ra0e", NULL },
 		    { "ra1c",      "ra0e",      NULL }, 0 },
-	/* DKA100:/DUA100: -- the 2nd MSCP disk = INITIALIZE target (rq2). */
-	{ "DKA100", { "/dev/ra2c", NULL }, { "ra2c", NULL }, 1 },
-	{ "DUA100", { "/dev/ra2c", NULL }, { "ra2c", NULL }, 0 },
+	/* DUA100:/DKA100: -- the 2nd MSCP disk = INITIALIZE target (rq2). */
+	{ "DUA100", { "/dev/ra2c", NULL }, { "ra2c", NULL }, 1 },
+	{ "DKA100", { "/dev/ra2c", NULL }, { "ra2c", NULL }, 0 },
 };
 
 /*
@@ -183,14 +187,15 @@ ovmx_acp_open_candidate(const struct ovmx_acp_unit *u, int *which_out)
 
 /*
  * WHY `primary' (rd vms-618). The map has FOUR rows but names only TWO disks:
- * DUA0:/DUA100: are the correct MSCP names for the same units the runtime still
- * calls DKA0:/DKA100: (the vms-47d rename is open), and the two RESOLVERS below
- * accept either spelling so they stay correct across that rename. The executive
- * DEVICE TABLE cannot: a table row carries OWNERSHIP, so entering both spellings
- * would create two independently-allocatable devices for one physical disk --
- * ALLOCATE DKA100: would not conflict with ALLOCATE DUA100:, which is a lie
- * about the hardware (INV-6). So exactly the `primary' rows are ENTERED, and the
- * alias stays a resolver-only spelling until the rename lands and the flag moves.
+ * DUA0:/DUA100: are the correct MSCP names, and DKA0:/DKA100: are the retired
+ * placeholder spellings the runtime used before the vms-9f5 rename landed. The
+ * two RESOLVERS below accept either spelling so a stale reference still resolves
+ * across the cutover. The executive DEVICE TABLE cannot enter both: a table row
+ * carries OWNERSHIP, so entering both spellings would create two
+ * independently-allocatable devices for one physical disk -- ALLOCATE DKA100:
+ * would not conflict with ALLOCATE DUA100:, which is a lie about the hardware
+ * (INV-6). So exactly the `primary' rows are ENTERED -- now the authentic DUA*
+ * rows (the rename landed, vms-9f5) -- and the DKA* alias stays resolver-only.
  */
 
 /* Open-once-per-volume cache: bound at $MOUNT, reused by every block op, closed
@@ -439,7 +444,7 @@ vms_ioctl_disk_resolve(struct vms_proc *proc, unsigned long arg)
  * resolve is vms_devtab_disk_resolve() above -- a real open of the real block
  * device to read its dev_t, closed again immediately -- so an absent disk (e.g.
  * a single-disk sysboot with no rq2 attached) simply has NO table row, and
- * $ALLOC DKA100: is then an honest SS$_NOSUCHDEV. Nothing is invented for a
+ * $ALLOC DUA100: is then an honest SS$_NOSUCHDEV. Nothing is invented for a
  * device that is not there.
  *
  * TRANSIENT open, DELIBERATELY. NetBSD allows effectively one open of a block
@@ -472,7 +477,7 @@ vms_blockdev_netbsd_register_units(void)
 
 		/* Name the backing that won (vms-7b15): "ra1c" (two-disk) or
 		 * "ra0e" (single-disk ODS-2 partition on the boot disk). The
-		 * single-disk proof greps this line for evidence DKA0: bound to
+		 * single-disk proof greps this line for evidence DUA0: bound to
 		 * a PARTITION of the boot disk, not a second disk. */
 		printf("vms: disk unit %s: -> %s\n",
 		    ovmx_acp_unitmap[i].vmsname, backing);

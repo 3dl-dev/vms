@@ -29,10 +29,10 @@
  *      mount failures. This is the INV-6 assertion -- errcnt is never seeded and
  *      never bumped speculatively.
  *
- * The trigger is $MOUNT of DKA100: (vdb, a blank non-ODS-2 unit run_tests.sh
+ * The trigger is $MOUNT of VDA100: (vdb, a blank non-ODS-2 unit run_tests.sh
  * attaches). $MOUNT reads the home block at LBN 1 off the backing device before
  * anything else; armed, that read fails and the mount is refused fail-honest,
- * and the failed read is charged to DKA100:. DKA100: is non-ODS-2 so it is never
+ * and the failed read is charged to VDA100:. VDA100: is non-ODS-2 so it is never
  * recorded in the mount table -- every attempt re-reads the disk, so the trigger
  * is deterministic regardless of what other suites in this boot did.
  *
@@ -51,7 +51,7 @@
 #define SS_DEVNOTMOUNT  2688    /* SS$_DEVNOTMOUNT -- not a mountable ODS-2 volume */
 #define SS_NOMOREDEV    2648    /* SS$_NOMOREDEV -- $DEVICE_SCAN exhausted */
 
-#define TARGET_DEV      "DKA100:"   /* vdb: the blank, non-ODS-2 unit */
+#define TARGET_DEV      "VDA100:"   /* vdb: the blank, non-ODS-2 unit */
 
 #define FAULT_PARAM     "/sys/module/vms/parameters/vms_ktest_bdev_fault"
 
@@ -137,7 +137,7 @@ int main(void)
     memset(backing, 0, sizeof(backing));
     status = vms_kif_disk_resolve(TARGET_DEV, backing, sizeof(backing), &maj, &min);
     CHECK(status == SS_NORMAL,
-          "DKA100: resolves to its backing block device (executive enumeration)");
+          "VDA100: resolves to its backing block device (executive enumeration)");
     if (status != SS_NORMAL) {
         printf("=== test_kmod_errcnt: %d passed, %d failed ===\n", pass, fail);
         vms_kif_close();
@@ -148,19 +148,19 @@ int main(void)
      * the proof does not depend on test ordering. */
     base = errcnt_of(TARGET_DEV);
     CHECK(base != (uint32_t)-1,
-          "DKA100: ERRCNT is readable via $GETDVI (the field SHOW ERROR reads)");
+          "VDA100: ERRCNT is readable via $GETDVI (the field SHOW ERROR reads)");
 
     /* (2) Force ONE genuine ACP block read to fail, then mount -- $MOUNT reads the
      * home block at LBN 1 first, so the injected failure lands on a real read and
      * the mount is refused fail-honest. */
     CHECK(arm_fault(maj, min, 1) == 0,
-          "armed test-only block-I/O fault injection for DKA100: backing device");
+          "armed test-only block-I/O fault injection for VDA100: backing device");
     status = vms_kif_acp_mount(TARGET_DEV);
     CHECK(status == SS_DEVNOTMOUNT,
-          "$MOUNT of DKA100: with a failing home-block read is refused SS$_DEVNOTMOUNT");
+          "$MOUNT of VDA100: with a failing home-block read is refused SS$_DEVNOTMOUNT");
     after1 = errcnt_of(TARGET_DEV);
     CHECK(after1 == base + 1,
-          "one genuine ACP block-read failure incremented DKA100: ERRCNT by exactly one");
+          "one genuine ACP block-read failure incremented VDA100: ERRCNT by exactly one");
 
     /* (3) A second injected error -- prove it is a counter, not a set-once flag. */
     CHECK(arm_fault(maj, min, 1) == 0,
@@ -168,13 +168,13 @@ int main(void)
     (void)vms_kif_acp_mount(TARGET_DEV);
     after2 = errcnt_of(TARGET_DEV);
     CHECK(after2 == base + 2,
-          "a second block-read failure moved DKA100: ERRCNT to +2 (a real counter)");
+          "a second block-read failure moved VDA100: ERRCNT to +2 (a real counter)");
 
     /* (4) $DEVICE_SCAN -- the SAME reader cmd_show_error() uses -- reports the
      * non-zero count, so SHOW ERROR's non-zero-row path is now runtime-reachable. */
     scanned = errcnt_via_devscan(TARGET_DEV);
     CHECK(scanned == after2,
-          "$DEVICE_SCAN reports DKA100: with the same non-zero ERRCNT SHOW ERROR would print");
+          "$DEVICE_SCAN reports VDA100: with the same non-zero ERRCNT SHOW ERROR would print");
 
     /* (5) INV-6 -- disarm and mount again: the read now SUCCEEDS (blank, non-ODS-2
      * media), the mount still fails, but ERRCNT does NOT move. The count tracks
@@ -183,7 +183,7 @@ int main(void)
           "disarmed the fault injection");
     status = vms_kif_acp_mount(TARGET_DEV);
     CHECK(status == SS_DEVNOTMOUNT,
-          "$MOUNT of the blank DKA100: still refused (non-ODS-2), now with a SUCCESSFUL read");
+          "$MOUNT of the blank VDA100: still refused (non-ODS-2), now with a SUCCESSFUL read");
     disarmed = errcnt_of(TARGET_DEV);
     CHECK(disarmed == after2,
           "a mount whose block read SUCCEEDED did NOT change ERRCNT (INV-6: no fabricated errors)");

@@ -63,8 +63,10 @@ uint32_t rms_acp_resolve_did(uint32_t chan, const char *dirpath,
                              uint8_t *dr, uint8_t *dx);
 
 /* The boot volume unit RMS $ASSIGNs when a filespec names no device (the
- * mounted SYS$DISK; DKA0: until the discovered-SYS$DISK logical is bound). */
-#define RMS_ACP_DEFAULT_DEV "DKA0:"
+ * mounted SYS$DISK, until the discovered-SYS$DISK logical is bound). Device-
+ * native (vms-9f5): the substrate default -- VDA0: on virtio, DUA0: on VAX. */
+#include "ovmx_layout.h"
+#define RMS_ACP_DEFAULT_DEV SYSDISK_DEVICE ":"
 #endif /* OVMX_HAVE_ACP */
 
 #endif /* RMS_INTERNAL_H */

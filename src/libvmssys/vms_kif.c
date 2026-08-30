@@ -906,6 +906,113 @@ uint32_t vms_kif_dlm_enum_waits(uint32_t *out_count, uint32_t *out_total)
     return args.status;
 }
 
+/*
+ * cluster_bind_ok - same technique as mbx_bind_ok()/bg_bind_ok() above: bind
+ * (open + register) and report whether /dev/vms is actually reachable, so
+ * the cluster-membership calls can fail honestly with SS$_NOSUCHDEV rather
+ * than let a bad-fd ioctl fall through kif_call()'s generic errno mapping to
+ * SS$_BUGCHECK. This is the DISTINCTION cmd_show_cluster's NOTMEMBER !=
+ * NOSUCHDEV contract depends on (vms-551, vms-8d4 precedent): the GET
+ * wrapper must return SS$_NOSUCHDEV here, never SS$_NORMAL with a zeroed
+ * view, when there is no executive to ask.
+ */
+static int cluster_bind_ok(void)
+{
+    kif_bind();
+    return vms_dev_fd >= 0;
+}
+
+/*
+ * vms_kif_cluster_member_set - insert-or-update one member by csid in the
+ * executive's cluster-membership block (vms-551). OVMX-UNWIRED (see the
+ * header): scsd issues VMS_IOCTL_CLUSTER_MEMBER_SET with a direct POSIX
+ * ioctl from scsd_publish_membership, not this freestanding client.
+ */
+uint32_t vms_kif_cluster_member_set(uint32_t csid, uint32_t sysid,
+                                    const char *scsnode, const char *state)
+{
+    struct vms_cluster_member_set_args args;
+
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.csid = csid;
+    args.sysid = sysid;
+    if (scsnode) {
+        vms_strncpy(args.scsnode, scsnode, sizeof(args.scsnode) - 1);
+        args.scsnode[sizeof(args.scsnode) - 1] = '\0';
+    }
+    if (state) {
+        vms_strncpy(args.state, state, sizeof(args.state) - 1);
+        args.state[sizeof(args.state) - 1] = '\0';
+    }
+
+    KIF_CALL(VMS_IOCTL_CLUSTER_MEMBER_SET, &args);
+
+    return args.status;
+}
+
+/*
+ * vms_kif_cluster_member_clear - remove one member by csid (vms-551).
+ * OVMX-UNWIRED (see the header): scsd issues VMS_IOCTL_CLUSTER_MEMBER_CLEAR
+ * with a direct POSIX ioctl on departure, not this freestanding client.
+ */
+uint32_t vms_kif_cluster_member_clear(uint32_t csid)
+{
+    struct vms_cluster_member_clear_args args;
+
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.csid = csid;
+
+    KIF_CALL(VMS_IOCTL_CLUSTER_MEMBER_CLEAR, &args);
+
+    return args.status;
+}
+
+/*
+ * vms_kif_cluster_get_members - SHOW CLUSTER's read of the executive
+ * membership block (vms-551). WIRED: cmd_show_cluster calls this directly.
+ * SS$_NOSUCHDEV when /dev/vms is unreachable (out_n_members left at 0, but
+ * the CALLER must distinguish this status from a genuine SS$_NORMAL/n==0
+ * NOTMEMBER view -- never render the same message for both, vms-8d4).
+ */
+uint32_t vms_kif_cluster_get_members(struct vms_cluster_member *out_members,
+                                     uint32_t max_members,
+                                     uint32_t *out_n_members)
+{
+    /* 3848 bytes -- this freestanding client has no heap (libvmssys is
+     * -ffreestanding), but a normal process stack (unlike the kernel's) has
+     * ample room for one, so it is stack-local like every other args struct
+     * in this file. */
+    struct vms_cluster_member_get_args args;
+    uint32_t status;
+    uint32_t n, copy_n;
+
+    if (out_n_members)
+        *out_n_members = 0;
+
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+
+    status = kif_call(VMS_IOCTL_CLUSTER_MEMBER_GET, &args);
+    if (status)
+        return status;
+
+    n = args.n_members;
+    copy_n = (out_members && max_members < n) ? max_members : n;
+    if (out_members && copy_n)
+        vms_memcpy(out_members, args.members, copy_n * sizeof(*out_members));
+    if (out_n_members)
+        *out_n_members = n;
+    return args.status;
+}
+
 uint32_t vms_kif_dlm_xnode_blkast(uint32_t op, uint32_t lkmode,
                                   uint32_t req_lkid, uint32_t master_lkid,
                                   uint32_t req_csid, uint32_t master_csid,

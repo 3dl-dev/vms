@@ -1050,6 +1050,12 @@ long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_get_granted(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_enum_waits(struct vms_proc *proc, unsigned long arg);
+/* Cluster membership crosses into the executive (rd vms-551): the SET/CLEAR/
+ * GET handlers for the module-global membership block (vms_lock.c). SET/
+ * CLEAR are scsd's local-ioctl populate path; GET is SHOW CLUSTER's read. */
+long vms_ioctl_cluster_member_set(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_cluster_member_clear(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_cluster_member_get(struct vms_proc *proc, unsigned long arg);
 /* vms-94c (DLM epic vms-7fa rung 1): the cross-node DLM RECEIVE handler and its
  * ioctl wrapper. Rung 1 delivers a decoded remote DLM request TO the handler,
  * which returns SS$_UNSUPPORTED (no fabricated cross-node grant, INV-6). */

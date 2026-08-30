@@ -1207,6 +1207,9 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_DLM_MEMBER_DEPART:
 	case VMS_IOCTL_DLM_GET_GRANTED:
 	case VMS_IOCTL_DLM_ENUM_WAITS:
+	case VMS_IOCTL_CLUSTER_MEMBER_SET:
+	case VMS_IOCTL_CLUSTER_MEMBER_CLEAR:
+	case VMS_IOCTL_CLUSTER_MEMBER_GET:
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -1229,6 +1232,12 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_dlm_get_granted(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_DLM_ENUM_WAITS:
 			r = vms_ioctl_dlm_enum_waits(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_CLUSTER_MEMBER_SET:
+			r = vms_ioctl_cluster_member_set(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_CLUSTER_MEMBER_CLEAR:
+			r = vms_ioctl_cluster_member_clear(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_CLUSTER_MEMBER_GET:
+			r = vms_ioctl_cluster_member_get(proc, (unsigned long)uarg); break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}

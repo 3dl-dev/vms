@@ -676,6 +676,85 @@ _Static_assert(sizeof(struct vms_dlm_enum_waits_args) == 16 + 48 * 8,
 _Static_assert(VMS_IOCTL_DLM_ENUM_WAITS == 0xC1905638u,
                "VMS_IOCTL_DLM_ENUM_WAITS encodes differently than the reference build");
 
+/*
+ * Cluster membership crosses into the executive (rd vms-551,
+ * docs/design-cluster-membership-executive.md). vms.ko owns a small
+ * module-global membership block -- one entry per node the connection
+ * manager (scsd) currently sees -- so SHOW CLUSTER (and, later, $GETSYI)
+ * reads a REAL executive view through /dev/vms instead of scsd's peer
+ * table publishing a file straight to another userspace process (the
+ * INV-6/Rule-9 LARP class). SEPARATE from dlm_member_csids (vms_lock.c):
+ * that vector is a STATIC 0444 insmod param, CSID-only, for DLM directory
+ * hashing (vms-50e is active on it); this block is SCSNODE-name
+ * membership state, mutable at runtime by scsd.
+ *
+ * NOTMEMBER != NOSUCHDEV, and this struct pair is what keeps them distinct:
+ * the executive reachable with n_members==0 is SS$_NORMAL (a genuine
+ * NOTMEMBER view); the executive UNREACHABLE (no /dev/vms) is the transport
+ * failure SS$_NOSUCHDEV a caller sees from KIF_CALL itself, never from these
+ * args. Never conflate the two (vms-8d4 precedent).
+ */
+struct vms_cluster_member {
+    uint32_t csid;               /* cluster system id (SCS low-16 identity) */
+    uint32_t sysid;              /* SCSSYSTEMID */
+    char     scsnode[16];        /* SCSNODE name, NUL-padded ("" until learned) */
+    char     state[16];          /* "MEMBER", "BRK_NON", ... */
+};
+#define VMS_CLUSTER_MEMBER_MAX 96u   /* VMScluster tops out at 96 nodes */
+
+/*
+ * VMS_IOCTL_CLUSTER_MEMBER_SET (rd vms-551). scsd (a direct POSIX ioctl
+ * issuer, like VMS_IOCTL_DLM_MEMBER_DEPART) inserts-or-updates one member by
+ * csid: csid already present -> update sysid/scsnode/state in place; csid
+ * absent -> append (refused SS$_INSFMEM if the block is full).
+ */
+struct vms_cluster_member_set_args {
+    uint32_t csid;                /* in: the member's csid (the key)     */
+    uint32_t sysid;               /* in: SCSSYSTEMID                     */
+    char     scsnode[16];         /* in: SCSNODE name, NUL-padded        */
+    char     state[16];           /* in: "MEMBER", "BRK_NON", ...        */
+    uint32_t status;              /* return: SS$_ status                 */
+};
+_Static_assert(sizeof(struct vms_cluster_member_set_args) == 44,
+               "vms_cluster_member_set_args changed size -- VMS_IOCTL_CLUSTER_MEMBER_SET ABI break");
+#define VMS_IOCTL_CLUSTER_MEMBER_SET _IOWR(VMS_IOC_MAGIC, 0x39, struct vms_cluster_member_set_args)
+_Static_assert(VMS_IOCTL_CLUSTER_MEMBER_SET == 0xC02C5639u,
+               "VMS_IOCTL_CLUSTER_MEMBER_SET encodes differently than the reference build");
+
+/*
+ * VMS_IOCTL_CLUSTER_MEMBER_CLEAR (rd vms-551). scsd removes one member by
+ * csid (compacting the array). Idempotent: a csid not present is a no-op,
+ * SS$_NORMAL -- a departure the executive never SET is not an error.
+ */
+struct vms_cluster_member_clear_args {
+    uint32_t csid;                 /* in: the member's csid to remove */
+    uint32_t status;               /* return: SS$_ status             */
+};
+_Static_assert(sizeof(struct vms_cluster_member_clear_args) == 8,
+               "vms_cluster_member_clear_args changed size -- VMS_IOCTL_CLUSTER_MEMBER_CLEAR ABI break");
+#define VMS_IOCTL_CLUSTER_MEMBER_CLEAR _IOWR(VMS_IOC_MAGIC, 0x3a, struct vms_cluster_member_clear_args)
+_Static_assert(VMS_IOCTL_CLUSTER_MEMBER_CLEAR == 0xC008563Au,
+               "VMS_IOCTL_CLUSTER_MEMBER_CLEAR encodes differently than the reference build");
+
+/*
+ * VMS_IOCTL_CLUSTER_MEMBER_GET (rd vms-551). SHOW CLUSTER's read: copies out
+ * the live view (up to VMS_CLUSTER_MEMBER_MAX members) + the live count.
+ * n_members==0 is a valid SS$_NORMAL (NOTMEMBER), never an error -- see the
+ * NOTMEMBER != NOSUCHDEV note above. 3848 bytes total, under NetBSD's
+ * one-page IOCPARM_MAX (4096), so this rides the same pre-copy _IOWR path as
+ * the other DLM ioctls above (no IOC_VOID big-io shape needed).
+ */
+struct vms_cluster_member_get_args {
+    uint32_t n_members;           /* return: live member count (0 == NOTMEMBER) */
+    uint32_t status;               /* return: SS$_ status (always SS$_NORMAL)   */
+    struct vms_cluster_member members[VMS_CLUSTER_MEMBER_MAX];  /* return: the view */
+};
+_Static_assert(sizeof(struct vms_cluster_member_get_args) == 3848,
+               "vms_cluster_member_get_args changed size -- VMS_IOCTL_CLUSTER_MEMBER_GET ABI break");
+#define VMS_IOCTL_CLUSTER_MEMBER_GET _IOWR(VMS_IOC_MAGIC, 0x3b, struct vms_cluster_member_get_args)
+_Static_assert(VMS_IOCTL_CLUSTER_MEMBER_GET == 0xCF08563Bu,
+               "VMS_IOCTL_CLUSTER_MEMBER_GET encodes differently than the reference build");
+
 /* ================================================================
  * Process registration
  * ================================================================ */

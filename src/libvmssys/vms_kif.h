@@ -372,6 +372,39 @@ uint32_t vms_kif_dlm_get_granted(const char *resnam, uint32_t *out_found,
  * product client ever issues it. */
 uint32_t vms_kif_dlm_enum_waits(uint32_t *out_count, uint32_t *out_total);
 
+/* Cluster membership crosses into the executive (rd vms-551,
+ * docs/design-cluster-membership-executive.md). SET/CLEAR insert-or-update /
+ * remove one member by csid; GET copies out the live view.
+ * OVMX-UNWIRED: vms_kif_cluster_member_set (vms-551) -- like
+ * vms_kif_dlm_member_depart above, scsd (a glibc process) issues
+ * VMS_IOCTL_CLUSTER_MEMBER_SET with a DIRECT POSIX ioctl from
+ * scsd_publish_membership, not this freestanding client; no sys$ service
+ * issues it. This wrapper exists so SET is observable against a real
+ * /dev/vms from the freestanding syssvc test. Wire it and delete this line
+ * if a product client ever issues it. */
+uint32_t vms_kif_cluster_member_set(uint32_t csid, uint32_t sysid,
+                                    const char *scsnode, const char *state);
+
+/* OVMX-UNWIRED: vms_kif_cluster_member_clear (vms-551) -- same footing as
+ * vms_kif_cluster_member_set above: scsd issues VMS_IOCTL_CLUSTER_MEMBER_CLEAR
+ * with a direct POSIX ioctl on departure, not this freestanding client. This
+ * wrapper exists so CLEAR is observable against a real /dev/vms from the
+ * freestanding syssvc test. Wire it and delete this line if a product
+ * client ever issues it. */
+uint32_t vms_kif_cluster_member_clear(uint32_t csid);
+
+/*
+ * vms_kif_cluster_get_members - SHOW CLUSTER's read of the executive
+ * membership block (vms-551). WIRED: DCL's cmd_show_cluster
+ * (src/vmsdcl/dcl_cmd_show.c) calls this directly, so it satisfies the kif
+ * caller census as a real product path. Fails honestly with SS$_NOSUCHDEV
+ * when /dev/vms is unreachable (never conflated with a genuine NOTMEMBER
+ * view, which is SS$_NORMAL with *out_n_members==0).
+ */
+uint32_t vms_kif_cluster_get_members(struct vms_cluster_member *out_members,
+                                     uint32_t max_members,
+                                     uint32_t *out_n_members);
+
 /*
  * vms_kif_dlm_xnode_blkast - the BLKAST-WIRE half of the cross-node DLM receive
  * (DLM epic vms-7fa rung H6, vms-76d). A focused wrapper that carries the two

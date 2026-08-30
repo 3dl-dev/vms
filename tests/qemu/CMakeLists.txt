@@ -226,6 +226,16 @@ if(TARGET test_syssvc_dlm_xnode)
         ${CMAKE_SOURCE_DIR}/src/kernel)
 endif()
 
+# test_syssvc_cluster_member (rd vms-551, docs/design-cluster-membership-
+# executive.md) drives VMS_IOCTL_CLUSTER_MEMBER_SET/CLEAR/GET through the
+# vms_kif client + a raw VMS_IOCTL_REGISTER-adjacent struct layout, so it
+# needs src/kernel on its include path for vms_ioctl.h -- same footing as
+# test_syssvc_dlm_xnode above.
+if(TARGET test_syssvc_cluster_member)
+    target_include_directories(test_syssvc_cluster_member PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/kernel)
+endif()
+
 # test_syssvc_imgact_acp (vms-3e8e) drives the EXACT freestanding ACP reader
 # IMGACT.EXE runs (src/imgact/imgact_acp.c) against a real /dev/vms: the generic
 # function above already registered the target off the glob, so augment it with

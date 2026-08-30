@@ -982,6 +982,14 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
      * search (rd vms-ec75, DLM rung H11). */
     case VMS_IOCTL_DLM_ENUM_WAITS:
         return vms_ioctl_dlm_enum_waits(proc, arg);
+    /* Cluster membership crosses into the executive (vms-551): scsd's local
+     * populate path (SET/CLEAR) and SHOW CLUSTER's read (GET). */
+    case VMS_IOCTL_CLUSTER_MEMBER_SET:
+        return vms_ioctl_cluster_member_set(proc, arg);
+    case VMS_IOCTL_CLUSTER_MEMBER_CLEAR:
+        return vms_ioctl_cluster_member_clear(proc, arg);
+    case VMS_IOCTL_CLUSTER_MEMBER_GET:
+        return vms_ioctl_cluster_member_get(proc, arg);
     /* DLM cross-node lock-request dispatch (vms-94c, DLM epic vms-7fa rung 1):
      * a decoded remote DLM message reaches the cross-node handler, which
      * returns SS$_UNSUPPORTED (rung 1 transport; no fake grant). */

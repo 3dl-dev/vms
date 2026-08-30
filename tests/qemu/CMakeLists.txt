@@ -196,6 +196,16 @@ if(TARGET test_syssvc_loginout_acp)
         ${CMAKE_SOURCE_DIR}/src/vmsrms)
 endif()
 
+# test_syssvc_rms_filelock (vms-50e): proves RMS's file-access $ENQ/$DEQ
+# against a real /dev/vms lock manager. It reads the internal handle's
+# stashed lkid (rms_file_t.access_lkid) straight off fab._rms_file to drive
+# GETLKI, so it needs rms_io.h -- the same private-header need as the two
+# targets above.
+if(TARGET test_syssvc_rms_filelock)
+    target_include_directories(test_syssvc_rms_filelock PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms)
+endif()
+
 # test_syssvc_dlm_xnode (vms-94c / vms-17c) drives the cross-node DLM RECEIVE
 # handler (vms_lock_dlm_xnode_dispatch) through VMS_IOCTL_DLM_XNODE + a raw
 # VMS_IOCTL_REGISTER, so it needs src/kernel on its include path for

@@ -501,6 +501,85 @@ static void rms_acp_close_handle(rms_file_t *h)
 }
 
 /*
+ * rms_fileshare_mode - RMS file-level share arbitration behind the DLM
+ * (vms-50e, docs/design-rms-file-lock.md). Maps a FAB's access intent
+ * (fab$b_fac) and share intent (fab$b_shr) to the LCK$K_ mode the
+ * file-access $ENQ takes, against the executive's 6-mode compatibility
+ * matrix (NL,CR,CW,PR,PW,EX). Clean-room note (Rule 8): the access/share
+ * COMPATIBILITY semantics are public (Guide to OpenVMS File Applications);
+ * this specific mapping onto one 6-mode DLM lock is OVMX's own construction
+ * over that public matrix, not a disclosed VMS-internal table.
+ *
+ *   no sharing at all (shr==FAB$M_NIL, or shr==0 on a WRITE open)  -> EX
+ *   read-only (no PUT/UPD/DEL/TRN), no SHRPUT/SHRUPD               -> PR
+ *   read-only, SHRPUT or SHRUPD set                                -> CR
+ *   write (PUT/UPD/DEL/TRN), SHRPUT or SHRUPD set                  -> CW
+ *   write, neither SHRPUT nor SHRUPD                               -> PW
+ *
+ * EX conflicts with everything; PR/PR is compatible but PR excludes any
+ * writer; CW/CW is compatible (shared writers at the FILE level -- per-record
+ * conflicts are RECORD locking, vms-0dd, out of scope here); CR is
+ * compatible with everything but EX (a tolerant reader coexists with a
+ * writer that permits it); PW excludes a strict reader (PR) but admits a
+ * tolerant one (CR).
+ */
+static uint32_t rms_fileshare_mode(uint8_t fac, uint8_t shr)
+{
+    int write = (fac & (FAB$M_PUT | FAB$M_UPD | FAB$M_DEL | FAB$M_TRN)) != 0;
+    int shr_write = (shr & (FAB$M_SHRPUT | FAB$M_SHRUPD)) != 0;
+
+    if (shr == FAB$M_NIL || (write && shr == 0))
+        return LCK_K_EXMODE;
+    if (!write)
+        return shr_write ? LCK_K_CRMODE : LCK_K_PRMODE;
+    return shr_write ? LCK_K_CWMODE : LCK_K_PWMODE;
+}
+
+/* rms_file_lock_resnam - the FID-named file-access resource: two opens of the
+ * SAME file (same FID) contend on the SAME resource; different files never
+ * do. "RMS$" + hex(fid_num|(fid_nmx<<16)) + "." + hex(fid_seq) + "." +
+ * hex(fid_rvn), well under the 32-byte (incl. NUL) DLM resnam width. */
+static void rms_file_lock_resnam(const rms_file_t *h, char out[32])
+{
+    unsigned fidhi = (unsigned)h->fid_num | ((unsigned)h->fid_nmx << 16);
+    snprintf(out, 32, "RMS$%X.%X.%X", fidhi,
+             (unsigned)h->fid_seq, (unsigned)h->fid_rvn);
+}
+
+/*
+ * rms_file_lock_acquire - the sys$open/sys$create seam: take the file-access
+ * $ENQ named by the handle's FID, mode from rms_fileshare_mode(), NOQUEUE (a
+ * conflict returns SS$_NOTQUEUED immediately rather than blocking). On grant,
+ * stashes the lock ID on the handle (h->access_lkid) for rms_impl_close to
+ * $DEQ. Returns the raw executive status: SS$_NORMAL on grant, SS$_NOTQUEUED
+ * on a real DLM conflict, or the honest SS$_ error vms_kif_enq returned if
+ * /dev/vms went away mid-open (never a silent local allow -- INV-6).
+ */
+static uint32_t rms_file_lock_acquire(rms_file_t *h, uint8_t fac, uint8_t shr)
+{
+    char resnam[32];
+    uint32_t mode = rms_fileshare_mode(fac, shr);
+    uint32_t lkid = 0, st;
+
+    rms_file_lock_resnam(h, resnam);
+    st = vms_kif_enq(0, mode, LCK_M_NOQUEUE, resnam, 0, 0, 0, 0, &lkid, NULL);
+    if ($VMS_STATUS_SUCCESS(st))
+        h->access_lkid = lkid;
+    return st;
+}
+
+/* rms_file_lock_release - the sys$close seam: $DEQ the file-access lock this
+ * handle holds (if any) and clear it. A handle that never acquired one (ACP
+ * absent, or an internal rms_open_named_handle binary open) is a no-op. */
+static void rms_file_lock_release(rms_file_t *h)
+{
+    if (h && h->access_lkid) {
+        vms_kif_deq(h->access_lkid, NULL, 0);
+        h->access_lkid = 0;
+    }
+}
+
+/*
  * rms_acp_absent - vms-5f0 executive-presence probe. A cheap $ASSIGN that comes
  * back SS$_NOSUCHDEV -- and ONLY that status -- means /dev/vms / the Files-11 ACP
  * is unreachable (host ctest, plain-container self-host/link gates); RMS then
@@ -1638,6 +1717,30 @@ static uint32_t rms_impl_open(void *fab_ptr)
         }
         fab->_rms_file = h;
 
+        /* vms-50e (docs/design-rms-file-lock.md): the file-access $ENQ, right
+         * after IO$_ACCESS -- the FID is now in hand (h->fid_*). A real DLM
+         * conflict turns the accessor away with RMS$_SHR before anything else
+         * (indexed prolog bind, record I/O) happens on the file; an honest
+         * executive failure surfaces its own status. Never a userspace flag
+         * (INV-6). */
+        {
+            uint32_t lst = rms_file_lock_acquire(h, fab->fab$b_fac, fab->fab$b_shr);
+            if (lst == SS$_NOTQUEUED) {
+                rms_acp_close_handle(h);
+                fab->_rms_file = NULL;
+                fab->fab$l_stv = lst;
+                fab->fab$l_sts = RMS$_SHR;
+                return RMS$_SHR;
+            }
+            if (!$VMS_STATUS_SUCCESS(lst)) {
+                rms_acp_close_handle(h);
+                fab->_rms_file = NULL;
+                fab->fab$l_stv = lst;
+                fab->fab$l_sts = rms_acp_open_status(lst);
+                return fab->fab$l_sts;
+            }
+        }
+
         /* Indexed-over-ACP (vms-5f0, epic vms-d0c): the data fork is ACCESSed;
          * bind the genuine Prolog-3 prologue (VBN 1 fixed prolog + key
          * descriptors) read via IO$_READVBLK. This SUPERSEDES the old
@@ -1949,6 +2052,33 @@ static uint32_t rms_impl_create(void *fab_ptr)
         h->hiblk = fop.new_hiblk;
         fab->_rms_file = h;
 
+        /* vms-50e (docs/design-rms-file-lock.md): same file-access $ENQ as
+         * rms_impl_open, now that IO$_CREATE minted the FID. A fresh FID
+         * conflicting with an existing lock is pathological (nothing else can
+         * have named it before this create), but honor it the same way: turn
+         * the accessor away with RMS$_SHR rather than proceed. The just-created
+         * (empty) file is left on disk on this path -- deleting a partially
+         * created file it does not itself hold a delete-lock for is out of
+         * scope for this minimal slice; sys$erase's own interlock is the
+         * follow-up (part B, vms-0dd). */
+        {
+            uint32_t lst = rms_file_lock_acquire(h, fab->fab$b_fac, fab->fab$b_shr);
+            if (lst == SS$_NOTQUEUED) {
+                rms_acp_close_handle(h);
+                fab->_rms_file = NULL;
+                fab->fab$l_stv = lst;
+                fab->fab$l_sts = RMS$_SHR;
+                return RMS$_SHR;
+            }
+            if (!$VMS_STATUS_SUCCESS(lst)) {
+                rms_acp_close_handle(h);
+                fab->_rms_file = NULL;
+                fab->fab$l_stv = lst;
+                fab->fab$l_sts = rms_acp_open_status(lst);
+                return fab->fab$l_sts;
+            }
+        }
+
         /* Indexed-over-ACP (vms-401, epic vms-d0c): author the genuine Files-11
          * Prolog-3 image on the fresh data fork -- real prologue, root index +
          * data buckets over IO$_WRITEVBLK -- and bind the WRITABLE ctx into
@@ -2139,6 +2269,10 @@ static uint32_t rms_impl_close(void *fab_ptr)
     } else if (fab->_rms_file) {
         /* --- ACP path (vms-bc7): IO$_DEACCESS + $DASSGN (+ IO$_DELETE on DLT/TMD) --- */
         rms_file_t *h = (rms_file_t *)fab->_rms_file;
+        /* vms-50e: $DEQ the file-access lock this open instance holds, before
+         * anything else -- a real executive release, so a conflicting accessor
+         * queued behind it (or a fresh NOQUEUE attempt) can now succeed. */
+        rms_file_lock_release(h);
         rms_io_fsync(h);                       /* WRITEVBLK is write-through */
         if (deleting) {
             /* Release the window, then deallocate the file by FID. */

@@ -1,0 +1,12 @@
+# vms-1f7 (SHOW PROCESS matches oracle): SHOW PROCESS field layout on VAX V7.3.
+# Volatile: the header date/time and the hex Process ID (e.g. 2020021A — its
+# trailing nibble can be A-F, which a bare digit-mask would NOT catch, so it is
+# masked as a whole hex token first). The rest (User/Node/priority) is digit-
+# masked. This pins the field-label layout (User:/Process ID:/Node:/Process name:/
+# Terminal:/User Identifier:/Base priority:/Default file spec:/Devices allocated:).
+ARCH=vax
+DESC="SHOW PROCESS field layout (date + hex PID + node/priority masked)"
+NORMALIZE='s/\(Process ID: *\)[0-9A-F][0-9A-F]*/\1########/; s/[0-9]/#/g'
+COMMANDS=(
+  'SHOW PROCESS'
+)

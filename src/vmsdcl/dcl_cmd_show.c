@@ -1729,6 +1729,53 @@ static void show_device_disk_full(const struct vms_devinfo *info,
     }
 }
 
+/* terminal_owner_name is defined later (with the SHOW TERMINAL renderer);
+ * forward-declared so SHOW DEVICE/FULL can reuse it for the owner field. */
+static void terminal_owner_name(uint32_t owner_pid, char *out, size_t outsz);
+
+/*
+ * SHOW DEVICE/FULL for a terminal -- the deferred "section 5" rung (vms-bed),
+ * oracle docs/oracle/vax73-terminal-device.md sec 5. Renders ONLY fields OVMX
+ * can source honestly from vms_devinfo; any oracle-listed field with no real
+ * source is OMITTED (INV-6, never fabricated):
+ *   - Dev Prot: OVMX implements no device-protection gate (oracle sec 7.2).
+ *   - "enabled as operator terminal": no operator-flag source (the legitimate
+ *     VAX2 case -- the clause is simply absent, not replaced).
+ *   - Default buffer size: info->width is the terminal COLUMN width, a DIFFERENT
+ *     attribute than the record buffer size -- rendering width as buffer size
+ *     would be a wrong-field fabrication.
+ *   - "carriage control": a per-device characteristic not verified from devchar
+ *     here ("record-oriented device" is a DC$_TERM class certainty and is kept).
+ * Owner lines print only for an owned device (owner_pid != 0); ownership is not
+ * allocation (oracle sec 4). owner_uic is the owner's real caller_uic(), shown
+ * [g,m] octal (the numeric UIC VMS accepts; a name form would need a lookup OVMX
+ * lacks here). Device type is "unknown" -- OVMX's console type is genuinely
+ * unidentified (oracle sec 3).
+ */
+static void show_device_terminal_full(const struct vms_devinfo *info)
+{
+    printf("\nTerminal %s, device type unknown, is online, record-oriented device.\n\n",
+           info->devnam);
+
+    printf("    Error count            %10u    Operations completed   %10llu\n",
+           info->errcnt, (unsigned long long)info->opcnt);
+
+    if (info->owner_pid != 0) {
+        char owner[VMS_USERNAME_SIZE];
+        char qowner[VMS_USERNAME_SIZE + 2];
+        unsigned g = (info->owner_uic >> 16) & 0xffff;
+        unsigned m = info->owner_uic & 0xffff;
+
+        terminal_owner_name(info->owner_pid, owner, sizeof(owner));
+        snprintf(qowner, sizeof(qowner), "\"%s\"", owner);
+        printf("    Owner process       %12s    Owner UIC              [%03o,%03o]\n",
+               qowner, g, m);
+        printf("    Owner process ID      %08X\n", info->owner_pid);
+    }
+
+    printf("    Reference count        %10u\n", info->refcnt);
+}
+
 /*
  * DELETED (vms-fb9 r5): show_device_exec_failed() used to print an
  * invented "%OVMX-F-EXECDEV, the executive did not answer" for this
@@ -1899,10 +1946,13 @@ static int cmd_show_device(struct dcl_command *cmd)
                 else
                     show_device_disk_row(&info, &vol, &rows);
             } else {
-                /* Non-disk (the console terminal): the oracle-pinned brief row.
-                 * Terminal /FULL is a separate rung (oracle section 5) and is
-                 * not rendered here; the brief row is printed either way. */
-                show_device_row(&info, &rows);
+                /* Non-disk (the console terminal). Terminal /FULL is its own
+                 * rung (oracle section 5, vms-bed): the full block with the
+                 * owner fields; otherwise the oracle-pinned brief row. */
+                if (full)
+                    show_device_terminal_full(&info);
+                else
+                    show_device_row(&info, &rows);
             }
             return SS$_NORMAL;
         case SS$_IVDEVNAM:

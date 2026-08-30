@@ -237,6 +237,22 @@ run_dcl_acceptance_battery() {
     must_not_have "$DKA0_LINE" 'Online' "SHOW DEVICE DKA0: [vms-e6f]: DKA0: status is not the bare 'Online' bug"
     negctl     "$SEG" 'SHOW DEVICE' "SHOW DEVICE DKA0:"
 
+    # --- SHOW DEVICE/FULL OPA0: (vms-bed: the deferred terminal /FULL rung,
+    # oracle docs/oracle/vax73-terminal-device.md §5). Was falling through to the
+    # BRIEF row even with /FULL; now renders the full block. Owner fields come
+    # from the real executive owner_pid/owner_uic; INV-6 OMITS the fields OVMX
+    # cannot source (Dev Prot, Default buffer size, operator clause) -- they must
+    # NOT appear as fabricated values.
+    run_cmd 'SHOW DEVICE/FULL OPA0:'
+    must_have  "$SEG" 'Terminal OPA0' "SHOW DEVICE/FULL OPA0: [vms-bed]: renders the terminal /FULL header (was the brief row)"
+    must_have  "$SEG" 'Error count' "SHOW DEVICE/FULL OPA0: [vms-bed]: shows Error count from the executive"
+    must_have  "$SEG" 'Reference count' "SHOW DEVICE/FULL OPA0: [vms-bed]: shows Reference count from the executive"
+    must_have  "$SEG" 'Owner process' "SHOW DEVICE/FULL OPA0: [vms-bed]: shows the Owner process block (OPA0: is owned by the interactive session, oracle §5)"
+    must_match "$SEG" 'Owner process ID.*[0-9A-Fa-f]{8}' "SHOW DEVICE/FULL OPA0: [vms-bed]: Owner process ID is a real 8-hex PID, not fabricated"
+    must_not_have "$SEG" 'Dev Prot' "SHOW DEVICE/FULL OPA0: [vms-bed]: no fabricated Dev Prot (OVMX has no device-protection gate -- INV-6 honest omission)"
+    must_not_have "$SEG" 'Default buffer size' "SHOW DEVICE/FULL OPA0: [vms-bed]: no fabricated Default buffer size (info->width is column width, not buffer size -- INV-6 honest omission)"
+    negctl     "$SEG" 'SHOW DEVICE' "SHOW DEVICE/FULL OPA0:"
+
     # --- F$GETDVI reads the SAME real executive device table (vms-050) -------
     # F$GETDVI used to fabricate: EXISTS=TRUE for EVERY name, VOLNAM guessed from
     # a name substring ("OVMXSYS"/"VOLUME"), DEVCLASS/DEVTYPE guessed the same

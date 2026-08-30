@@ -401,6 +401,15 @@ struct vms_lock_entry {
 	                                     * can name the requester's original
 	                                     * request when this lock's release grants
 	                                     * a queued cross-node waiter. */
+	uint32_t            parent_id;      /* the lkid of this lock's PARENT lock, or
+	                                     * 0 for a root (parentless) lock. Set from
+	                                     * vms_enq_args.parid at creation; reported
+	                                     * by GETLKI. RMS record locks (vms-0dd)
+	                                     * carry the file-access lock (vms-50e) as
+	                                     * parent. Purely additive (existing $ENQ
+	                                     * passes parid=0); the auto-release cascade
+	                                     * is a follow-on (vms-489). Mirror of the
+	                                     * Linux vms_internal.h field. */
 };
 
 /* Lock resource -- a named resource in the lock database. */

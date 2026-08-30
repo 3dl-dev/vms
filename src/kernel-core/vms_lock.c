@@ -1045,6 +1045,14 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
     exec_cv_init(&lock->wait_wq);
     lock->grant_state = 0;
     /*
+     * The PARENT lock (vms-0dd). 0 for a root lock -- every existing $ENQ leaves
+     * args.parid 0 (the memset default), so parentless locks are unchanged. RMS
+     * record locks pass the file-access lock's lkid so a record lock is
+     * getlki-visible UNDER its file lock. Stored only; the parent-child
+     * auto-release cascade is a follow-on (vms-489).
+     */
+    lock->parent_id = args.parid;
+    /*
      * The cluster identity this lock is held FOR. 0 for an ordinary $ENQ (a
      * local process on this node owns the lock -- args.owner_csid is 0, the
      * memset default every userspace caller leaves in place). Non-zero only on
@@ -1533,7 +1541,7 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg)
 
     args.granted_mode = lock->granted_mode;
     args.requested_mode = lock->waiting ? lock->requested_mode : lock->granted_mode;
-    args.parent_id = 0; /* TODO: parent lock support */
+    args.parent_id = lock->parent_id; /* the lock's PARENT lkid (vms-0dd), 0 if root */
 
     if (lock->resource) {
         strscpy(args.resnam, lock->resource->name, sizeof(args.resnam));

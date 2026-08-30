@@ -71,9 +71,9 @@ MILESTONES = [
      "The authenticity flip — RMS reads and writes genuine Files-11 ODS-2 over the "
      "executive ACP (the /vms passthrough retired on the runtime path), binary SYSUAF "
      "and Purdy login, and a userland that builds itself in-guest."),
-    ("0.6", "active",
-     "Cluster correctness — quorum and reconfiguration, a real distributed lock manager, "
-     "and cluster membership resident in the executive."),
+    ("0.6", "shipped",
+     "Cluster correctness — a real distributed lock manager over the SCS wire, "
+     "RMS behind the DLM, and cluster membership resident in the executive."),
     ("0.7", "planned",
      "Cluster wire fidelity — the SCS/MSCP connection manager answers a real VAX "
      "byte-for-byte."),
@@ -127,6 +127,7 @@ GATE_IDS = [g[0] for g in GATE_EPICS]
 
 # Editorial release notes, tag -> one line. Tags without an entry get a generic note.
 RELEASE_NOTES = {
+    "V0.6": "Cluster correctness, complete: OVMX is now a genuine VMScluster participant. The distributed lock manager runs the full H0–H11 ladder on the real executive over the SCS wire — cross-node $ENQ grant, contention and block-then-grant, BLKAST delivery, resource mastering and remastering, LVB replication, and distributed deadlock detection — and RMS file-share and record locking reach the real DLM arbitrator on real /dev/vms (INV-6, no flock fallback). Cluster membership now lives in the executive: SHOW CLUSTER and $GETSYI read the real member block and the userspace file-facade is fully excised, with rejoin and parameter adoption proven. Plus the oracle-driven UX-fidelity gate: a continuous, structure-tolerant golden-diff of DCL/SHOW output against byte-exact real-VMS captures, with the SHOW family proven fabrication-free and real structural gaps tracked as an honest, gated backlog. (Quorum, votes, and MSCP-served volumes remain post-0.6.)",
     "V0.5-11": "The VAX DCL/SHOW acceptance battery goes fully green (101 of 101) — every VAX user-visible surface is now faithful. Real per-process accounting binds to the kernel's maintained accessors (calcru CPU, rulwps live-aggregated page faults, vm_resident_count resident pages), the SYSUAF quota facility returns real SHOW PROCESS/QUOTAS values, F$PID preserves its %08X pid format across every DCL coercion path, and a device error-count writer records genuine block-I/O errors. Plus the Alpha decc$_malloc64 allocator unifies with mallocng (EVAX strong-over-weak), rail-proven. Accounting reads the value the kernel's own ps/kinfo path reads, never a raw struct field a map names (INV-6, no false-zeros).",
     "V0.5-10": "The UX-fidelity de-fabrication batch completes: every confirmed hollow or fabricated SHOW/F$ surface is now real executive data or an honest omission (INV-6) — SHOW SYSTEM with an oracle-captured golden, SHOW WORKING_SET's real working-set size, F$PID's real executive pids, SHOW ERROR's real per-device error counts, and F$GETQUI honoring the caller's queue. Plus a chunked producer-load cap and the Alpha LLP64 malloc-width fix, both rail-proven on the real /dev/vms executive.",
     "V0.5-9": "A broad batch: oracle-driven UX-fidelity de-fabrications held to live-VMS goldens, the distributed lock manager's H5 two-node SCS-wire milestone, the TCP/IP Services configuration plane (TCPIP$CONFIG, TCPIP$ logicals, SET/SHOW INTERFACE), and further GCC-port toolchain rungs up the do-it-like-VMS ladder.",

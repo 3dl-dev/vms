@@ -1,5 +1,9 @@
 # OVMX Lane Ownership Registry (cross-session coordination bus)
 
+> **Internal orchestration state — not product documentation.** This registry coordinates
+> the OVMX agent-swarm's hot-file ownership, not the OVMX product. It lives under
+> `docs/internal/`; do not cite it from user-facing docs.
+
 **Every session — the main conductor AND any mustered peer — MUST read this before dispatching
 into a lane, and MUST claim a lane before touching its hot files.** The merge-safe design (one
 owner per hot file) only holds if ALL sessions honor one registry. Advisory (no hard enforcement).
@@ -9,7 +13,7 @@ Rule: one owner per hot-file surface at a time. To take a lane, set Owner + a li
 dispatch into its files — coordinate with that owner or wait. Re-derive the *live* status from
 `ListAgents` + `gh pr list` each tick; the table below is the durable ownership map, not live status.
 
-_See `docs/orchestration-conductor.md` (runbook + operating model) and `docs/conductor-state.md`
+_See `docs/internal/orchestration-conductor.md` (runbook + operating model) and `docs/internal/conductor-state.md`
 (the live pointer). Convergence program: `vms-1d6`. Release-eng: `vms-a84`._
 
 | Lane | Owned surface (hot files) | Owner role | Domain |

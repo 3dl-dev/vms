@@ -1,5 +1,9 @@
 # OVMX Multi-Agent Conductor — Runbook (BOOT FROM HERE)
 
+> **Internal orchestration process — not product documentation.** This runbook describes
+> the OVMX agent-swarm operating model, not the OVMX product. It lives under
+> `docs/internal/`; do not cite it from user-facing docs.
+
 This file is **static** (the operating model + invariants). Live state is re-derived from ground
 truth every tick, never trusted from a stored field. Read this to boot as the **main conductor**,
 to onboard as a **new peer lane**, or to resume a lane that was restarted/RL-killed/compacted.
@@ -36,8 +40,8 @@ drifted — pull it back to delegation.
 This is waking from sleep, not being born. The first question is "what was I executing?" — answer
 it by RE-DERIVING from ground truth, never by trusting a remembered or stored status field.
 
-1. Read this runbook, then `docs/lane-ownership.md` (which lane is yours / claim one), then
-   `docs/conductor-state.md` (the live execution pointer). AGENTS.md is the contributor-surface
+1. Read this runbook, then `docs/internal/lane-ownership.md` (which lane is yours / claim one), then
+   `docs/internal/conductor-state.md` (the live execution pointer). AGENTS.md is the contributor-surface
    truth; rd is the private work ledger.
 2. **Re-derive the live world** (do not trust any state file's status):
    - `rd ready` / `rd list --json` — what's claimed / ready, per lane
@@ -65,7 +69,7 @@ is a durability bug: fix the externalized state, not the conductor's memory.)
 4. **ESCALATE.** Reserved decisions (below) → tee up the question + your recommendation + what you'll
    do absent an answer, then proceed on everything that doesn't depend on it.
 5. **REPORT.** To the operator: the number/headline, not the narration.
-6. **PERSIST.** Rewrite `docs/conductor-state.md` to the new pointer; re-arm the wake.
+6. **PERSIST.** Rewrite `docs/internal/conductor-state.md` to the new pointer; re-arm the wake.
 
 ## Standing directives (invariants — check every tick, never assume)
 
@@ -99,7 +103,7 @@ exposure, spend, external comms); security posture; weakening/skipping a test; h
 ## Mustering a new peer lane
 
 The operator spins up a peer session; it becomes a sub-conductor for a domain. To onboard: it runs
-the boot sequence above, claims a lane in `docs/lane-ownership.md` (one owner per hot file — honor
+the boot sequence above, claims a lane in `docs/internal/lane-ownership.md` (one owner per hot file — honor
 it or two lanes will clobber each other), reads `rd ready` for its domain, and starts ticking. The
 main conductor release-gates its shared-core work and reaps its PRs green-by-SHA. Adding an Nth peer
 is: claim a lane + start the tick loop — no other setup. Foreign-arch/heavy work still goes to that

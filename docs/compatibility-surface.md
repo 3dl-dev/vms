@@ -885,7 +885,7 @@ Not separately evidenced as built. Cluster-wide logical-name scope degrades to s
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
-| ⬜ | `cluster-logicals$clusterwide-logical-names` | feature | LNM$M_CLUSTERWIDE table replication across cluster members | absent | n/a | in | `src/kernel/vms_lnm.c` — Degrades to system-wide scope (per docs/compatibility-contract.md); no cluster-wide replication built. |
+| ⬜ | `cluster-logicals$clusterwide-logical-names` | feature | LNM$M_CLUSTERWIDE table replication across cluster members | absent | n/a | in | `src/kernel-core/vms_lnm.c` — Degrades to system-wide scope (per docs/compatibility-contract.md); no cluster-wide replication built. |
 | ⬜ | `cluster-logicals$global-sections` | feature | Cluster-wide global sections ($MGBLSC / $CRMPSC with cluster scope) | absent | n/a | in | Absent; not evidenced in the current tree. |
 
 ### connection-manager — Connection manager / membership / quorum / rejoin
@@ -1145,7 +1145,7 @@ The kernel-mediated substrate SYS$ system services are built on: event flags, lo
 | 🟢 | `kernel-executive$lock-manager` | feature | $ENQ/$DEQ/$CVT: hierarchical resource trees, value blocks, blocking AST | implemented | real | in | `src/kernel-core/vms_lock.c` — Single-node. ioctls 0x30-0x34. See cluster-dlm.yaml for the cross-node gap. |
 | 🟢 | `kernel-executive$ast-delivery` | feature | 4-level K/E/S/U AST queue delivery | implemented | real | in | `src/kernel-core/vms_ast.c` — ioctls 0x10-0x12. Prior SIGUSR1-based facade fixed (vms-as1). |
 | 🟢 | `kernel-executive$mailboxes` | feature | Mailbox devices (MBAn:), $CREMBX/$QIO read-write | implemented | real | in | `src/kernel-core/vms_mbx.c` — Replaced an earlier AF_UNIX socketpair facade. |
-| 🟢 | `kernel-executive$logical-name-store` | feature | LNM$SYSTEM / LNM$GROUP / LNM$JOB kernel-resident logical-name arena | implemented | real | in | `src/kernel/vms_lnm.c` — mmap-backed shared arena, not a per-process fake table. |
+| 🟢 | `kernel-executive$logical-name-store` | feature | LNM$SYSTEM / LNM$GROUP / LNM$JOB kernel-resident logical-name arena | implemented | real | in | `src/kernel-core/vms_lnm.c` — mmap-backed shared arena, not a per-process fake table. |
 | 🟢 | `kernel-executive$access-modes` | feature | K/E/S/U access-mode enforcement + CMKRNL/CMEXEC mode change | implemented | real | in | `src/kernel-core/vms_access.c` — ioctls 0x01-0x04. SETPRV bit-position bug caught and fixed via lab-VAX SDA comparison. |
 | 🟡⚠ | `kernel-executive$pcb` | struct | Process Control Block: identity, privilege mask, quotas | partial | facade-risk | in | `src/kernel-core/vms_proctab.c` — Legacy dead AST-queue fields orphaned. See kernel-executive$process-control for the process-create/delete facade-risk this feeds. |
 | 🟡⚠ | `kernel-executive$process-control` | feature | $CREPRC / $DELPRC process creation and deletion | partial | facade-risk | in | `src/kernel-core/vms_proctab.c` — Privileges/UIC copied PCB-to-PCB only; not visible cluster-wide (vms-afd). $WAKE/$DELPRC/$FORCEX cast the VMS pid straight into a Linux kill() (vms-pt1). |

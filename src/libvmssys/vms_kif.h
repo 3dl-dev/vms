@@ -287,6 +287,17 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
                           uint32_t *requested_mode, char *resnam,
                           uint8_t *valblk);
 
+/* vms_kif_getlki_parent -- vms_kif_getlki plus the lock's PARENT lkid (0 for
+ * a root lock), the #GETLKI field ca673c87 wired the kernel to fill but the
+ * original wrapper never surfaced. Same ioctl, no new op.
+ * OVMX-UNWIRED: vms_kif_getlki_parent (vms-0dd) -- sys$getlki does not exist
+ * in src/libvms (see vms_kif_getlki's own OVMX-UNWIRED note above); this
+ * sibling wrapper has the same non-existent product caller, exercised only
+ * by tests/qemu/test_syssvc_rms_reclock.c. */
+uint32_t vms_kif_getlki_parent(uint32_t lkid, uint32_t *granted_mode,
+                                uint32_t *requested_mode, char *resnam,
+                                uint8_t *valblk, uint32_t *parent_id);
+
 /* Read a resource's DLM directory + mastering state (vms-ci.5 DB).
  * OVMX-UNWIRED: vms_kif_get_resmaster (vms-ci.5) -- a READ-ONLY DLM
  * resource-master diagnostic with no product path: no sys$ service issues it.

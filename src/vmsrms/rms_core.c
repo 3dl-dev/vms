@@ -56,13 +56,20 @@
  * OVMX-PARTIAL: sys$extend (vms-bc7) -- exec: IO$_MODIFY allocates fab$l_alq
  *     more blocks (BITMAP.SYS + FH2 retrieval-pointer append) without moving EOF.
  * OVMX-LOCAL: sys$extend -- validates the caller's own FAB before the request.
- * OVMX-USERSPACE: sys$connect (vms-407) -- initializes the stream-position
- *     fields (_current_offset/_eof/_last_rec_offset/_last_rec_size/rab$w_isi)
+ * OVMX-PARTIAL: sys$connect (vms-407) -- exec: $DEQs the RAB's
+ *     stashed record lkid (_rec_lock_lkid) if a prior lock survived from
+ *     before this $CONNECT, a real vms_kif_deq -- guards a reconnect without
+ *     an intervening $DISCONNECT, never a silent local clear.
+ * OVMX-LOCAL: sys$connect -- initializes the stream-position fields
+ *     (_current_offset/_eof/_last_rec_offset/_last_rec_size/rab$w_isi)
  *     directly inside the caller's own RAB. Measured: it never allocates;
  *     the RAB's rab->_rms_stream pointer sys$disconnect frees is never set
  *     by this function or anywhere else in the tree.
- * OVMX-USERSPACE: sys$disconnect (vms-407) -- resets those same fields and
- *     frees rab->_rms_stream if non-NULL, which measurement shows is always
+ * OVMX-PARTIAL: sys$disconnect (vms-407) -- exec: $DEQs the RAB's
+ *     stashed record lkid (_rec_lock_lkid), if any -- a real vms_kif_deq,
+ *     one of the release points docs/design-rms-record-lock.md names.
+ * OVMX-LOCAL: sys$disconnect -- resets the stream-position fields and frees
+ *     rab->_rms_stream if non-NULL, which measurement shows is always
  *     NULL -- no code path in the tree ever assigns it.
  * OVMX-USERSPACE: sys$display (vms-407) -- fills XAB fields from FAB/handle
  *     state in this process; it issues no ACP $QIO.
@@ -2474,6 +2481,16 @@ static uint32_t rms_impl_connect(void *rab_ptr)
         return RMS$_ACC;
     }
 
+#if defined(OVMX_HAVE_ACP)
+    /* vms-0dd: a fresh $CONNECT starts with no "current record" lock. Release
+     * (real $DEQ) rather than a silent clear, in case this RAB is being
+     * reconnected without an intervening $DISCONNECT. */
+    if (rab->_rec_lock_lkid) {
+        vms_kif_deq(rab->_rec_lock_lkid, NULL, 0);
+        rab->_rec_lock_lkid = 0;
+    }
+#endif
+
     /* Initialize stream state */
     rab->_current_offset = 0;
     rab->_eof = 0;
@@ -2515,6 +2532,16 @@ static uint32_t rms_impl_disconnect(void *rab_ptr)
         free(rab->_rms_stream);
         rab->_rms_stream = NULL;
     }
+
+#if defined(OVMX_HAVE_ACP)
+    /* vms-0dd: $DISCONNECT releases the stream's "current record" lock --
+     * a real $DEQ (INV-6), one of the release points docs/design-rms-record-
+     * lock.md names alongside the next $get/$find and RAB$M_NLK. */
+    if (rab->_rec_lock_lkid) {
+        vms_kif_deq(rab->_rec_lock_lkid, NULL, 0);
+        rab->_rec_lock_lkid = 0;
+    }
+#endif
 
     rab->_current_offset = 0;
     rab->_eof = 0;

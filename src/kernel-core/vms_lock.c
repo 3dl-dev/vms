@@ -815,6 +815,37 @@ void vms_proc_release_locks(struct vms_proc *proc)
 }
 
 /*
+ * release_child_locks - the parent-child AUTO-RELEASE CASCADE (vms-0dd / vms-489):
+ * releasing a lock releases its child SUBLOCKS. RMS record locks carry their file-
+ * access lock as parent (parent_id), so a $CLOSE that $DEQs the file lock releases
+ * every record lock still held under it -- WITHOUT this, a record lock outlives its
+ * file (the userspace RAB that held the lkid was re-initialized on reopen and lost
+ * it), and the leaked lock then blocks the file's own re-read (the real correctness
+ * bug test_syssvc_dcl_acp's copy-reopen-reread exercises). A child belongs to the
+ * SAME process as its parent (RMS holds file + record locks in one process), so the
+ * sweep is over proc->locks, mirroring vms_proc_release_locks' safe iteration. One
+ * level is enough for record-under-file, but children are released depth-first so a
+ * deeper tree unwinds too. Every release is a REAL teardown, never a fabricated
+ * clear (INV-6).
+ */
+static void release_child_locks(struct vms_proc *proc, uint32_t parent_lkid)
+{
+    struct vms_lock_entry *lock, *tmp;
+
+    if (parent_lkid == 0)
+        return;
+
+    exec_lock(&proc->lock_list_lock);
+    exec_list_for_each_entry_safe(lock, tmp, &proc->locks, proc_list) {
+        if (lock->parent_id != parent_lkid)
+            continue;
+        proc->lock_count--;
+        lock_teardown_locked(lock);   /* frees `lock`; the _safe cursor holds `tmp` */
+    }
+    exec_unlock(&proc->lock_list_lock);
+}
+
+/*
  * vms_proc_rundown_locks - image rundown's lock release (vms-68f.v).
  *
  * Dequeue only the locks this process enqueued at access mode >= min_acmode
@@ -1044,6 +1075,14 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
     lock->waiting = 0;
     exec_cv_init(&lock->wait_wq);
     lock->grant_state = 0;
+    /*
+     * The PARENT lock (vms-0dd). 0 for a root lock -- every existing $ENQ leaves
+     * args.parid 0 (the memset default), so parentless locks are unchanged. RMS
+     * record locks pass the file-access lock's lkid so a record lock is
+     * getlki-visible UNDER its file lock. Stored only; the parent-child
+     * auto-release cascade is a follow-on (vms-489).
+     */
+    lock->parent_id = args.parid;
     /*
      * The cluster identity this lock is held FOR. 0 for an ordinary $ENQ (a
      * local process on this node owns the lock -- args.owner_csid is 0, the
@@ -1301,6 +1340,13 @@ static long vms_deq_core(struct vms_proc *proc, struct vms_deq_args *io)
     lock_put(lock);  /* drop lock_find_by_id reference */
     lock_put(lock);  /* drop "exists in system" reference — triggers free */
 
+    /* Parent-child cascade (vms-0dd/vms-489): releasing this lock releases any
+     * child sublocks held under it (RMS record locks under a file-access lock),
+     * so a $CLOSE that $DEQs the file lock does not leak its record locks. Runs
+     * after this lock is torn down and holds no other lock, so it nests nothing;
+     * a leaf lock (no children) makes the sweep a cheap no-op. */
+    release_child_locks(proc, args.lkid);
+
     args.status = SS__NORMAL;
 
 out:
@@ -1533,7 +1579,7 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg)
 
     args.granted_mode = lock->granted_mode;
     args.requested_mode = lock->waiting ? lock->requested_mode : lock->granted_mode;
-    args.parent_id = 0; /* TODO: parent lock support */
+    args.parent_id = lock->parent_id; /* the lock's PARENT lkid (vms-0dd), 0 if root */
 
     if (lock->resource) {
         strscpy(args.resnam, lock->resource->name, sizeof(args.resnam));

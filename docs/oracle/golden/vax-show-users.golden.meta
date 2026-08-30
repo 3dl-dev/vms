@@ -1,0 +1,11 @@
+surface: vax-show-users
+arch: vax
+description: SHOW USERS + /FULL banner, counts line, and both column headers (date/PID/counts masked)
+oracle: OpenVMS VAX V7.3 (lab vaxlab/vax1, isolated replica vaxlab-2)
+captured: 2026-08-30T05:56:36Z
+method: capture_oracle.sh -- FIFO console drive, marker-sliced display (CLAUDE.md Rule 8 observation)
+normalize: 's/[0-9A-F]\{8\}/########/g; s/[0-9]/#/g'   # SYMMETRIC mask -- the vms-c38 gate applies the IDENTICAL
+                          # mask to OVMX output: capture_oracle.sh normalize vax-show-users < ovmx_output
+commands:
+  - SHOW USERS
+  - SHOW USERS/FULL

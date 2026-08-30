@@ -1,0 +1,12 @@
+$ SHOW USERS
+      OpenVMS User Processes at ##-AUG-#### ##:##:##.##
+    Total number of users = #,  number of processes = #
+
+ Username  Node     Interactive  Subprocess   Batch
+ SYSTEM     VAX#            #
+$ SHOW USERS/FULL
+      OpenVMS User Processes at ##-AUG-#### ##:##:##.##
+    Total number of users = #,  number of processes = #
+
+ Username  Node   Process Name    PID     Terminal
+ SYSTEM     VAX#  SYSTEM        ########  OPA#:    

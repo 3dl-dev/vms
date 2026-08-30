@@ -27,20 +27,28 @@ org handler when it locates the record). E.g. `"RMSR" + hex(fid_num|nmx<<16) + "
 vms-50e). The record lock is a CHILD of the file lock, so `$GETLKI` on the record
 lkid reports `parent_id` = the file lock — "the record held UNDER its file lock".
 
-**Mode from `rab$l_rop`** (public record-locking semantics, Guide to OpenVMS File
-Applications):
+**Behavior from `rab$l_rop`** — CRITICAL: `RAB$M_NLK`/`RAB$M_RLK` are NOT lock
+modes, they are read MODIFIERS (Guide to OpenVMS File Applications; the RMS status
+codes below are the oracle). Getting this wrong is a plausible-but-wrong mapping —
+the exact class the fidelity program exists to kill. The DOCUMENTED semantics:
 
-| rop | mode | meaning |
+| rop on a `$get` | what it means | DLM realization |
 |---|---|---|
-| `RAB$M_NLK` (0x0080) set | *(no lock)* | dirty read — take NO `$ENQ` |
-| `RAB$M_RLK` (0x0100) set | **PR** | shared read lock — other readers coexist (PR/PR), a writer conflicts |
-| neither (default) | **EX** | exclusive — the record is locked for a possible `$update`/`$delete` |
-| `$put` / `$update` / `$delete` | **EX** | exclusive on the target record |
+| neither (default) | LOCK the record so it can be `$update`/`$delete`d | take a real **EX** `$ENQ` on the record (parid = file lock). Another stream's default `$get` of that record → `RMS$_RLK`. |
+| `RAB$M_NLK` (0x0080) | "no lock" — retrieve the record WITHOUT locking it | take **NO** `$ENQ`. A non-locking read; the stream holds nothing, so it never blocks and is never blocked. Returns `SS$_NORMAL`. |
+| `RAB$M_RLK` (0x0100) | "read locked record" — read the record EVEN IF another stream has it LOCKED (read-through), and don't lock it yourself | take no lock; PROBE the record's real lock state (a `LCK_M_NOQUEUE` EX `$ENQ`: if it is refused `SS$_NOTQUEUED`, the record is genuinely locked by another → read the data + return **`RMS$_OK_RLK`**; if it grants, `$DEQ` it immediately — RLK holds nothing — and return `SS$_NORMAL`). The OK_RLK-vs-NORMAL distinction is decided by REAL DLM state, never a userspace guess (INV-6). |
+| `$put` / `$update` / `$delete` | lock the target record exclusively | **EX** `$ENQ`; `$update`/`$delete` operate on the record the stream already holds locked from its prior `$get`. |
 
-Against the 6-mode matrix: default-EX vs anything → conflict (`RMS$_RLK`); PR/PR →
-coexist (two shared readers); PR vs EX → conflict. So the done-condition's "RAB1
-`$get(RLK)` (PR) then RAB2 `$get` (default EX) on the same record → `RMS$_RLK`"
-holds.
+Status codes are the oracle: `RMS$_RLK` (98986, "record locked" — the conflict a
+default `$get` hits on a record another stream locked); `RMS$_OK_RLK` (98337,
+"record successfully read, record locked" — an RLK read-through of a locked
+record); `RMS$_OK_WAT` (98401, honored only if a wait is requested — the minimal
+slice uses NOQUEUE). OVMX's `rab.h` defines only `NLK` and `RLK` (no `ULK`/`WAT`
+bits), so those two + the default are this rung's surface.
+
+So the core conflict is DEFAULT-vs-DEFAULT (both take EX, second → `RMS$_RLK`); RLK
+and NLK are the read-modifier VARIANTS that must ALSO be proven, not just the
+default conflict.
 
 ## The seam — `src/vmsrms/rms_record.c` (dispatch level)
 

@@ -8278,6 +8278,62 @@ jobs:
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh gate
 
   # -----------------------------------------------------------------------
+  # vms-065c: the vms-1ef crtl_rms->N=7 runtime proof as a per-PR gate. Same
+  # real-executive boot as alpha-boot-mount, but the MILESTONE image is
+  # crtl_rms_test.c (heap malloc->mallocng + RMS file I/O + stdio, returns
+  # sentinel 7). vms-1ef #958 root-caused + fixed a LINK.EXE weak-alias-thunk
+  # descriptor-export bug whose ONLY runtime proof was a MANUAL joint-e2e boot;
+  # this gate makes that proof automatic on every activation-surface PR so a
+  # future LINK.EXE / toolchain / CRTL change cannot silently re-break the
+  # malloc->mallocng activation path with no CI tell. Same alpha_activation
+  # scope-gate + budget as the N=3 gate (it reuses the identical build+boot).
+  # -----------------------------------------------------------------------
+  alpha-crtl-rms-n7:
+    name: "OVMX/Alpha crtl_rms -> N=7 activation gate — boots, activates the crtl_rms heap+RMS+stdio image on the real /dev/vms executive, asserts $STATUS=%X0035A039 (vms-1ef/vms-065c)"
+    needs: changes
+    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: "crtl_rms N=7 gate — qemu-system-alpha boots the assembled OVMX/Alpha runtime, activates the crtl_rms port image (heap malloc->mallocng + RMS + stdio) on the real /dev/vms executive over the ODS-2 ACP, asserts the heap+RMS+stdio port-test OK + $STATUS=%X0035A039 (sentinel 7); runs its own can-fail selftest before the boot"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-gate
+
+  # -----------------------------------------------------------------------
   # alpha-activation-selftest (vms-c54). The CHEAP per-PR half of the N=3
   # activation guard: run-module-gp-activation-alpha.sh `selftest' drives the
   # SAME assert_activation() the heavy boot uses against crafted transcript

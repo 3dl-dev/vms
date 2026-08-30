@@ -72,6 +72,20 @@ apply_may_omit() {
           print }'
 }
 
+# strip_console -- stdin -> stdout, dropping the command-ECHO lines (a COMMANDS
+# entry, with or without a leading "$ " prompt) and bare "$ " prompt lines. The
+# oracle capture and the battery's run_cmd echo/prompt DIFFERENTLY: the golden is
+# `$ SHOW MEMORY\n<output>` (capture_oracle's "$ CMD" echo, no trailing prompt)
+# while run_cmd's $SEG is `SHOW MEMORY\n<output>\n$ ` (bare echo + returned
+# prompt). Stripping both to the pure OUTPUT BODY makes the gate compare LAYOUT,
+# not console framing. COMMANDS is global (from the sourced surface); with none
+# set it strips only bare prompts (leaving fixture echoes for the selftest).
+strip_console() {
+    if [ "${#COMMANDS[@]}" -eq 0 ]; then grep -vE '^\$[[:space:]]*$' || true; return; fi
+    grep -vxF -f <(for c in "${COMMANDS[@]}"; do printf '%s\n$ %s\n' "$c" "$c"; done) \
+      | grep -vE '^\$[[:space:]]*$' || true
+}
+
 # classify <surface> <ovmx_file> <golden_file> <normalize_cmd...>
 # echoes the classification report to stdout, returns the class exit code.
 classify() {
@@ -110,8 +124,8 @@ classify() {
     # strip declared substrate-absent sections (MAY_OMIT) from BOTH before compare.
     ovmx_norm="$("$@" < "$ovmx")"
     local ovmx_cmp golden_cmp
-    ovmx_cmp="$(printf '%s\n' "$ovmx_norm" | apply_may_omit)"
-    golden_cmp="$(apply_may_omit < "$golden")"
+    ovmx_cmp="$(printf '%s\n' "$ovmx_norm" | apply_may_omit | strip_console)"
+    golden_cmp="$(apply_may_omit < "$golden" | strip_console)"
     if [ "$ovmx_cmp" = "$golden_cmp" ]; then
         echo "MATCH: '$surface' is VMS-faithful${MAY_OMIT:+ (modulo grounded substrate-omissions: $MAY_OMIT)}."
         return 0
@@ -123,6 +137,7 @@ classify() {
 }
 
 selftest() {
+    COMMANDS=()   # strip_console reads it; unset would trip set -u before main inits it
     echo "=== diff_surface selftest: each class fires on a crafted fixture ==="
     local fails=0 tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
 

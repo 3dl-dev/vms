@@ -88,6 +88,31 @@ negctl() { local seg="$1" present="$2" desc="$3"
         bad "NEGCTL $desc: search is vacuous (present-token found=$([ $a -eq 0 ] && echo yes || echo NO), sentinel rejected=$([ $b -eq 1 ] && echo yes || echo NO)) -- assertions above cannot be trusted"
     fi; }
 
+# --- vms-c38: oracle golden-diff gate ------------------------------------------
+# The OVMX side of the oracle program: capture_oracle captured the real-VMS layout
+# golden; tools/oracle/diff_surface.sh applies the SAME NORMALIZE mask to OVMX's
+# output + grounded MAY_OMIT (substrate-absent sections) and classifies MATCH /
+# MISSING / HOLLOW / ARTIFICE-TELL / FORMAT-DIVERGENT. This UPGRADES the piecewise
+# hand-written must_haves above to a continuous golden-diff for the seeded surfaces.
+_ORACLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../tools/oracle" 2>/dev/null && pwd || true)"
+golden_diff() {  # <surface> -- run the surface's OWN commands, diff $SEG vs golden; + a can-fail negctl
+    local surface="$1" surf acc="" c rc cls
+    surf="$_ORACLE_DIR/surfaces/$surface.surface"
+    if [ -z "$_ORACLE_DIR" ] || [ ! -f "$surf" ]; then bad "GOLDEN-DIFF [$surface]: surface/tooling not found"; return; fi
+    local -a cmds
+    mapfile -t cmds < <( ARCH=; NORMALIZE=; MAY_OMIT=; ARTIFICE_TELL=; COMMANDS=(); . "$surf"; printf '%s\n' "${COMMANDS[@]}" )
+    for c in "${cmds[@]}"; do run_cmd "$c"; acc+="$SEG"$'\n'; done
+    # GREENS: OVMX output MATCHes the oracle golden (modulo grounded MAY_OMIT).
+    cls="$(printf '%s' "$acc" | "$_ORACLE_DIR/diff_surface.sh" "$surface" 2>&1)"; rc=$?
+    if [ "$rc" -eq 0 ]; then ok "GOLDEN-DIFF [$surface] (vms-c38): OVMX MATCHes the oracle golden (modulo grounded MAY_OMIT)"
+    else bad "GOLDEN-DIFF [$surface] (vms-c38): $(printf '%s' "$cls" | grep -m1 -oE 'MISSING|HOLLOW|ARTIFICE-TELL|FORMAT-DIVERGENT' || echo diverges) vs the oracle golden -- $(printf '%s' "$cls" | grep -m1 -E '^(MISSING|HOLLOW|ARTIFICE-TELL|FORMAT-DIVERGENT)' | cut -c1-120)"; fi
+    # REDS negctl: an injected divergence into the SAME output must NOT MATCH --
+    # proves this golden gate can actually go red, not vacuously always-green.
+    printf '%s\n  ZZ_GOLDEN_NEGCTL_%s_ZZ  9\n' "$acc" "$RANDOM" | "$_ORACLE_DIR/diff_surface.sh" "$surface" >/dev/null 2>&1
+    if [ $? -ne 0 ]; then ok "GOLDEN-DIFF-NEGCTL [$surface] (vms-c38): an injected divergence does NOT MATCH (the golden gate can fail)"
+    else bad "GOLDEN-DIFF-NEGCTL [$surface] (vms-c38): injected divergence still MATCHed -- the golden gate is vacuous"; fi
+}
+
 # run_dcl_acceptance_battery -- the login + basic-command battery + assertions.
 # See the caller-provided contract above for the primitives/vars it requires.
 run_dcl_acceptance_battery() {
@@ -620,6 +645,17 @@ run_dcl_acceptance_battery() {
     must_match "$SEG" 'Directory ' "DIRECTORY: prints a VMS 'Directory <spec>' header"
     must_not_have "$SEG" '/tmp' "DIRECTORY: no Unix path leaks into the listing"
     negctl     "$SEG" 'DIRECTORY' "DIRECTORY"
+
+    # --- vms-c38: continuous oracle golden-diff gate over the seeded SHOW-family
+    # goldens. Each surface: OVMX MATCHes the real-VMS oracle golden (modulo
+    # grounded substrate-omissions) AND an injected divergence reds -- the two
+    # required proofs (GREENS + REDS), per surface, replacing the piecewise
+    # must_haves with a whole-layout diff.
+    golden_diff vax-show-memory
+    golden_diff vax-show-system
+    golden_diff vax-show-cpu
+    golden_diff vax-show-device
+    golden_diff vax-show-process
 
     return 0
 }

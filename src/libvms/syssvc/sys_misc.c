@@ -39,8 +39,7 @@
 #include "vms/pcb.h"
 #include "sysgen_params.h"
 #include "ovmx_identity.h"
-#include "vms_kif.h"        /* the executive OWNS privilege state (vms-pv1) */
-#include "scs_membership.h" /* vms-8d4: live cluster membership from SCSD */
+#include "vms_kif.h"        /* the executive OWNS privilege + cluster membership */
 
 /*
  * sys$setprv - Set or clear process privileges.
@@ -256,33 +255,48 @@ uint32_t sys$getsyi(uint32_t efn, const uint32_t *csidadr,
             }
 
             case SYI$_CLUSTER_MEMBER: {
-                /* vms-8d4: the LIVE fact, read from SCSD's published member set
-                 * (scs_membership.h) — not the static SYSGEN VAXCLUSTER config
-                 * flag, which said "member" whenever clustering was enabled even
-                 * with no cluster formed. A node is a member iff the connection
-                 * manager has admitted it into a cluster (>=1 published member).
-                 * This keeps F$GETSYI consistent with DCL SHOW CLUSTER. */
-                struct scs_cluster_view view;
-                uint32_t member =
-                    (scs_membership_read(&view) > 0 && view.n_members >= 1)
-                        ? 1 : 0;
-                if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                    *(uint32_t *)item->bufaddr = member;
-                if (item->retlen) *item->retlen = sizeof(uint32_t);
+                /* vms-5919 (cutover from vms-8d4): read the LIVE member set from
+                 * the EXECUTIVE membership block (vms_cluster_members via
+                 * /dev/vms, vms-551), NOT SCSD's published file -- the exact
+                 * userspace-to-userspace facade vms-551 excised from the DCL
+                 * surface. A node is a member iff the executive holds >=1 member.
+                 * Absent /dev/vms the block is unreachable (SS$_NOSUCHDEV): answer
+                 * HONESTLY by leaving the item unretrieved -- never the file,
+                 * never a fabricated flag (Rule 9/INV-6, vms-b44). On the real
+                 * runtime /dev/vms is always present. Mirrors cmd_show_cluster. */
+                struct vms_cluster_member members[VMS_CLUSTER_MEMBER_MAX];
+                uint32_t n = 0;
+                uint32_t st =
+                    vms_kif_cluster_get_members(members, VMS_CLUSTER_MEMBER_MAX, &n);
+                if (st == SS$_NORMAL) {
+                    uint32_t member = (n >= 1) ? 1 : 0;
+                    if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+                        *(uint32_t *)item->bufaddr = member;
+                    if (item->retlen) *item->retlen = sizeof(uint32_t);
+                } else {
+                    /* no executive -> no answer (honest), not the file, not a fab */
+                    if (item->retlen) *item->retlen = 0;
+                }
                 break;
             }
 
             case SYI$_CLUSTER_NODES: {
-                /* vms-8d4: live cluster node count from SCSD's published member
-                 * set; 1 (this node only) when not a member. Was hardcoded to
-                 * 1 unconditionally (vms-ci.3), which lied on a real cluster. */
-                struct scs_cluster_view view;
-                uint32_t nodes =
-                    (scs_membership_read(&view) > 0 && view.n_members >= 1)
-                        ? (uint32_t)view.n_members : 1;
-                if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                    *(uint32_t *)item->bufaddr = nodes;
-                if (item->retlen) *item->retlen = sizeof(uint32_t);
+                /* vms-5919 (cutover): live node count from the EXECUTIVE block;
+                 * this node only (1) when the executive holds no cluster members.
+                 * Absent /dev/vms -> honest unretrieved item (never a fabricated
+                 * 1, never the file). Mirrors SYI$_CLUSTER_MEMBER above. */
+                struct vms_cluster_member members[VMS_CLUSTER_MEMBER_MAX];
+                uint32_t n = 0;
+                uint32_t st =
+                    vms_kif_cluster_get_members(members, VMS_CLUSTER_MEMBER_MAX, &n);
+                if (st == SS$_NORMAL) {
+                    uint32_t nodes = (n >= 1) ? n : 1;
+                    if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+                        *(uint32_t *)item->bufaddr = nodes;
+                    if (item->retlen) *item->retlen = sizeof(uint32_t);
+                } else {
+                    if (item->retlen) *item->retlen = 0;
+                }
                 break;
             }
 

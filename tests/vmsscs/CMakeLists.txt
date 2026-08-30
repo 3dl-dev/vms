@@ -1432,15 +1432,8 @@ set_tests_properties(scs_mscp_srv_mutants PROPERTIES
     TIMEOUT 600
 )
 
-# vms-8d4 - the SCSD<->consumer membership IPC (scs_membership.h): the real
-# boundary the SHOW CLUSTER facade-kill turns on. Header-only, so the test
-# needs only the include dir and no vmsscs link dependency.
-add_executable(test_scs_membership test_scs_membership.c)
-target_include_directories(test_scs_membership PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
-)
-add_test(NAME vmsscs_membership_unit COMMAND test_scs_membership)
-set_tests_properties(vmsscs_membership_unit PROPERTIES
-    LABELS "unit;scs;cluster"
-    TIMEOUT 30
-)
+# vms-8d4's SCSD<->consumer membership file bridge (scs_membership.h) was
+# retired by vms-967d once both readers (SHOW CLUSTER, F$GETSYI) cut over to
+# the executive membership block -- test_scs_membership.c tested that file
+# I/O and was removed with it. See tests/integration/test_show_cluster_membership.sh
+# for the still-live proof that SHOW CLUSTER reads the executive.

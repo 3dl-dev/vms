@@ -83,9 +83,9 @@ CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mn
 INCS="-I$SRC/include -I$HERE/../libvmssys \
 -I$HERE/../vmsprocess/include -I$HERE/../vmslnm/include \
 -I$HERE/../vmsfs/include -I$HERE/../vmsrms/include \
--I$HERE/../vmsscs/include \
 -I$HERE/include"   # ovmx_image.h/ovmx_symvec.h for sys_imgact + imgact_prodreg (vms-db2)
-                   # vmsscs/include: scs_membership.h for F$GETSYI CLUSTER_* (vms-8d4)
+                   # vmsscs/include dropped by vms-967d -- F$GETSYI CLUSTER_* reads
+                   # the executive (vms_kif.h) directly, no longer scs_membership.h
 
 echo "mk_libvms_shr: LINK.EXE=$LINK_EXE  CC=$CC  GSMATCH=$GSMATCH"
 echo "mk_libvms_shr: src=$SRC"

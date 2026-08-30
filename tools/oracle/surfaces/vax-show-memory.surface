@@ -6,9 +6,23 @@
 # headers, column headers, row labels, geometry). The vms-c38 gate applies the
 # SAME mask to OVMX's SHOW MEMORY before diffing:
 #   capture_oracle.sh normalize vax-show-memory < ovmx_show_memory_output
+#
+# MAY_OMIT (vms-c38, GROUNDED substrate-absent sections) -- diff_surface strips
+# these whole sections from BOTH the golden and OVMX before the MATCH compare, so
+# OVMX honestly omitting a facility the substrate genuinely lacks is faithful, not
+# a red. Each entry is grounded in the acceptance battery's EXISTING, reviewed
+# must_not_have assertions (a reviewed reality, not a new hole):
+#   - "Virtual I/O Cache Usage" -- no XFC (extended file cache) on the substrate;
+#      dcl_acceptance_battery.sh: must_not_have 'Virtual I/O Cache Usage'.
+#   - "Slot Usage"              -- no VMS balance-set slot table on the substrate;
+#      dcl_acceptance_battery.sh: must_not_have 'Slot Usage'.
+# ⚠ MAY_OMIT is for substrate-ABSENT facilities ONLY. A section OVMX could source
+# but doesn't render (e.g. if Physical Memory went missing) stays a real HOLLOW
+# gap and MUST red -- never add it here to silence a genuine divergence (INV-6).
 ARCH=vax
 DESC="SHOW MEMORY section/column layout (digit-masked; free/pages/times volatile)"
 NORMALIZE='s/[0-9]/#/g'
+MAY_OMIT='Virtual I/O Cache Usage|Slot Usage'
 COMMANDS=(
   'SHOW MEMORY'
 )

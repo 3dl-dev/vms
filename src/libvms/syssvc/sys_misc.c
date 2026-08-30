@@ -13,12 +13,23 @@
  * tests/integration/test_userspace_service_register.sh
  *
  * OVMX-EXECUTIVE: sys$setprv (vms-pv1) proof=tests/qemu/test_syssvc_setprv.c -- the privilege mutation is the executive's: sys$setprv routes to vms_kif_setprv (VMS_IOCTL_SETPRV -> vms_ioctl_setprv, kernel/vms_access.c), which authorizes the grant against this process's AUTHORIZED mask (a caller without SETPRV cannot widen past it -- SS$_NOTALLPRIV/SS$_NOPRIV) and OWNS the result. A process can no longer award itself a privilege by writing pcb->cur_privs (the vms-b2e LARP class this closes). The PCB masks below are only a COPY of the executive's, re-read via $GETJPI-self for the two remaining in-process readers (sys_process.c fork inheritance, vmsprocess/access_modes.c's CMKRNL/CMEXEC mode gate) -- not part of the answer sys$setprv returns, which is wholly the executive's.
- * OVMX-USERSPACE: sys$getsyi (vms-642) -- answers from uname() and host
- *     sysconf() values, not from an executive system block. csidadr and
- *     nodename are both discarded ((void)csidadr; (void)nodename;), so a
- *     request aimed at another cluster node is answered with this machine's
- *     numbers as though it had been aimed here.
- * OVMX-USERSPACE: sys$getsyiw (vms-642) -- the wait form of the same answer.
+ * OVMX-PARTIAL: sys$getsyi (vms-5919) -- exec: SYI$_CLUSTER_MEMBER and
+ *     SYI$_CLUSTER_NODES now read the EXECUTIVE cluster-membership block
+ *     (vms_kif_cluster_get_members -> VMS_IOCTL_CLUSTER_MEMBER_GET, the vms-551
+ *     block on /dev/vms), so F$GETSYI sees the same real member set as SHOW
+ *     CLUSTER; absent /dev/vms those two items are left unretrieved (honest, not
+ *     the old SCSD file). No fabricated membership.
+ * OVMX-LOCAL: sys$getsyi -- the REMAINING items (NODENAME/VERSION/SCSNODE/
+ *     SCSSYSTEMID/... ) answer from uname()/host sysconf(), not an executive
+ *     system block. csidadr and nodename are still discarded
+ *     ((void)csidadr; (void)nodename;), so a request aimed at another cluster
+ *     node is answered with this machine's numbers as though aimed here (vms-642
+ *     open; the cluster-item cutover above is the first executive-backed slice).
+ * OVMX-PARTIAL: sys$getsyiw (vms-5919) -- exec: the same SYI$_CLUSTER_MEMBER /
+ *     SYI$_CLUSTER_NODES executive cluster-block read as sys$getsyi above (this
+ *     is the wait form of the same service).
+ * OVMX-LOCAL: sys$getsyiw -- the remaining items answer from uname()/host
+ *     sysconf(), as sys$getsyi's local half.
  * OVMX-USERSPACE: sys$setddir (vms-947) -- the process default directory is a
  *     per-process construct on real VMS too (the RMS default-directory string
  *     held in P1 process space), not a shared executive resource. OVMX keeps it
@@ -39,8 +50,7 @@
 #include "vms/pcb.h"
 #include "sysgen_params.h"
 #include "ovmx_identity.h"
-#include "vms_kif.h"        /* the executive OWNS privilege state (vms-pv1) */
-#include "scs_membership.h" /* vms-8d4: live cluster membership from SCSD */
+#include "vms_kif.h"        /* the executive OWNS privilege + cluster membership */
 
 /*
  * sys$setprv - Set or clear process privileges.
@@ -256,33 +266,48 @@ uint32_t sys$getsyi(uint32_t efn, const uint32_t *csidadr,
             }
 
             case SYI$_CLUSTER_MEMBER: {
-                /* vms-8d4: the LIVE fact, read from SCSD's published member set
-                 * (scs_membership.h) — not the static SYSGEN VAXCLUSTER config
-                 * flag, which said "member" whenever clustering was enabled even
-                 * with no cluster formed. A node is a member iff the connection
-                 * manager has admitted it into a cluster (>=1 published member).
-                 * This keeps F$GETSYI consistent with DCL SHOW CLUSTER. */
-                struct scs_cluster_view view;
-                uint32_t member =
-                    (scs_membership_read(&view) > 0 && view.n_members >= 1)
-                        ? 1 : 0;
-                if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                    *(uint32_t *)item->bufaddr = member;
-                if (item->retlen) *item->retlen = sizeof(uint32_t);
+                /* vms-5919 (cutover from vms-8d4): read the LIVE member set from
+                 * the EXECUTIVE membership block (vms_cluster_members via
+                 * /dev/vms, vms-551), NOT SCSD's published file -- the exact
+                 * userspace-to-userspace facade vms-551 excised from the DCL
+                 * surface. A node is a member iff the executive holds >=1 member.
+                 * Absent /dev/vms the block is unreachable (SS$_NOSUCHDEV): answer
+                 * HONESTLY by leaving the item unretrieved -- never the file,
+                 * never a fabricated flag (Rule 9/INV-6, vms-b44). On the real
+                 * runtime /dev/vms is always present. Mirrors cmd_show_cluster. */
+                struct vms_cluster_member members[VMS_CLUSTER_MEMBER_MAX];
+                uint32_t n = 0;
+                uint32_t st =
+                    vms_kif_cluster_get_members(members, VMS_CLUSTER_MEMBER_MAX, &n);
+                if (st == SS$_NORMAL) {
+                    uint32_t member = (n >= 1) ? 1 : 0;
+                    if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+                        *(uint32_t *)item->bufaddr = member;
+                    if (item->retlen) *item->retlen = sizeof(uint32_t);
+                } else {
+                    /* no executive -> no answer (honest), not the file, not a fab */
+                    if (item->retlen) *item->retlen = 0;
+                }
                 break;
             }
 
             case SYI$_CLUSTER_NODES: {
-                /* vms-8d4: live cluster node count from SCSD's published member
-                 * set; 1 (this node only) when not a member. Was hardcoded to
-                 * 1 unconditionally (vms-ci.3), which lied on a real cluster. */
-                struct scs_cluster_view view;
-                uint32_t nodes =
-                    (scs_membership_read(&view) > 0 && view.n_members >= 1)
-                        ? (uint32_t)view.n_members : 1;
-                if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                    *(uint32_t *)item->bufaddr = nodes;
-                if (item->retlen) *item->retlen = sizeof(uint32_t);
+                /* vms-5919 (cutover): live node count from the EXECUTIVE block;
+                 * this node only (1) when the executive holds no cluster members.
+                 * Absent /dev/vms -> honest unretrieved item (never a fabricated
+                 * 1, never the file). Mirrors SYI$_CLUSTER_MEMBER above. */
+                struct vms_cluster_member members[VMS_CLUSTER_MEMBER_MAX];
+                uint32_t n = 0;
+                uint32_t st =
+                    vms_kif_cluster_get_members(members, VMS_CLUSTER_MEMBER_MAX, &n);
+                if (st == SS$_NORMAL) {
+                    uint32_t nodes = (n >= 1) ? n : 1;
+                    if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+                        *(uint32_t *)item->bufaddr = nodes;
+                    if (item->retlen) *item->retlen = sizeof(uint32_t);
+                } else {
+                    if (item->retlen) *item->retlen = 0;
+                }
                 break;
             }
 

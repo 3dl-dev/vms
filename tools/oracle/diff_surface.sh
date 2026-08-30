@@ -237,6 +237,21 @@ selftest() {
     o="$(classify sfc "$tmp/mblank" "$tmp/gm" "${NORM[@]}")"; rc=$?
     if [ "$rc" -ne 0 ]; then echo "  PASS: MACHINE_MASK keeps a BLANK masked field RED (guardrail 3: mask != ignore, rc=$rc)"; else
         echo "  FAIL: blank masked field passed as MATCH -- guardrail 3 broken [$o]"; fails=$((fails+1)); fi
+    # (iv) GUARDRAIL 3, a '.+'-terminated value mask (the SHOW CPU MP-STATE style,
+    #      'Label: <free text>'): must require NON-EMPTY too. A '.*' terminator would
+    #      match an empty value and let a hollow 'Multiprocessing is ' PASS -- this
+    #      case reds a blank ONLY if the mask uses '.+' (VAX-lane review catch, so a
+    #      future regression back to '.*' fails here).
+    printf '%s\n' '$ SHOW CPU' 'Multiprocessing is #'       > "$tmp/gmp"
+    printf '%s\n' '$ SHOW CPU' 'Multiprocessing is ENABLED.' > "$tmp/mp_real"
+    printf '%s\n' '$ SHOW CPU' 'Multiprocessing is '        > "$tmp/mp_blank"
+    MACHINE_MASK='s/^(Multiprocessing is ).+/\1<MP-STATE>/'
+    o="$(classify sfc "$tmp/mp_real" "$tmp/gmp" "${NORM[@]}")"; rc=$?
+    if [ "$rc" -eq 0 ]; then echo "  PASS: '.+' value mask matches a present+non-empty MP-state (ENABLED vs # -> MATCH)"; else
+        echo "  FAIL: .+ mask real-field not MATCH: rc=$rc [$o]"; fails=$((fails+1)); fi
+    o="$(classify sfc "$tmp/mp_blank" "$tmp/gmp" "${NORM[@]}")"; rc=$?
+    if [ "$rc" -ne 0 ]; then echo "  PASS: '.+' value mask keeps a BLANK MP-state RED (rejects '.*'-matches-empty hollow, rc=$rc)"; else
+        echo "  FAIL: blank MP-state passed as MATCH -- '.+' guardrail broken (mask uses '.*'?) [$o]"; fails=$((fails+1)); fi
     MACHINE_MASK=''
 
     echo "=== $( [ $fails -eq 0 ] && echo 'selftest OK' || echo "selftest FAILED ($fails)" ) ==="

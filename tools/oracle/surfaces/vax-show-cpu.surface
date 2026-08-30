@@ -25,7 +25,12 @@ NORMALIZE='s/[0-9]/#/g'
 #      CPU count (VAX uni = "01"; OVMX 2-way = "00 01"). DCL-Dictionary format.
 # The labels (Multiprocessing is / PRIMARY CPU = / Active CPUs: / Configured CPUs:)
 # are NOT masked and MUST match — that is the structure the gate pins.
-MACHINE_MASK='s/^[A-Z0-9#]+, an? .* (Series|system)$/<CPU-MODEL>/; s/^(Multiprocessing is ).*/\1<MP-STATE>/; s/(Active CPUs: +)[#0-9 ]+$/\1<CPU-LIST>/; s/(Configured CPUs: +)[#0-9 ]+$/\1<CPU-LIST>/'
+# NB: every value-mask requires a NON-EMPTY value so a blank/hollow field still reds
+# (guardrail): the model mask is bounded by the required ' (Series|system)$' suffix,
+# the CPU-list masks by '[#0-9 ]+', and the MP-state mask by '.+' (NOT '.*', which
+# would match an empty value and let a hollow 'Multiprocessing is ' pass -- VAX-lane
+# review catch, vms-c38).
+MACHINE_MASK='s/^[A-Z0-9#]+, an? .* (Series|system)$/<CPU-MODEL>/; s/^(Multiprocessing is ).+/\1<MP-STATE>/; s/(Active CPUs: +)[#0-9 ]+$/\1<CPU-LIST>/; s/(Configured CPUs: +)[#0-9 ]+$/\1<CPU-LIST>/'
 COMMANDS=(
   'SHOW CPU'
 )

@@ -110,7 +110,13 @@ golden_diff() {  # <surface> -- run the surface's OWN commands, diff $SEG vs gol
     # GREENS: OVMX output MATCHes the oracle golden (modulo grounded MAY_OMIT).
     cls="$(printf '%s' "$acc" | "$_ORACLE_DIR/diff_surface.sh" "$surface" 2>&1)"; rc=$?
     if [ "$rc" -eq 0 ]; then ok "GOLDEN-DIFF [$surface] (vms-c38): OVMX MATCHes the oracle golden (modulo grounded MAY_OMIT)"
-    else bad "GOLDEN-DIFF [$surface] (vms-c38): $(printf '%s' "$cls" | grep -m1 -oE 'MISSING|HOLLOW|ARTIFICE-TELL|FORMAT-DIVERGENT' || echo diverges) vs the oracle golden -- $(printf '%s' "$cls" | grep -m1 -E '^(MISSING|HOLLOW|ARTIFICE-TELL|FORMAT-DIVERGENT)' | cut -c1-120)"; fi
+    else
+        bad "GOLDEN-DIFF [$surface] (vms-c38): $(printf '%s' "$cls" | grep -m1 -oE 'MISSING|HOLLOW|ARTIFICE-TELL|FORMAT-DIVERGENT' || echo diverges) vs the oracle golden"
+        # Log the FULL diff_surface output (the normalized golden < vs OVMX >
+        # diff) so a red round is diagnosable -- which section/line diverges tells
+        # substrate-absent-omission (grounded MAY_OMIT) from a real gap.
+        printf '%s\n' "$cls" | sed 's/^/      DIFF| /' | head -60
+    fi
     # REDS negctl: an injected divergence into the SAME output must NOT MATCH --
     # proves this golden gate can actually go red, not vacuously always-green.
     printf '%s\n  ZZ_GOLDEN_NEGCTL_%s_ZZ  9\n' "$acc" "$RANDOM" | "$_ORACLE_DIR/diff_surface.sh" "$surface" >/dev/null 2>&1

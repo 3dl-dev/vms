@@ -840,6 +840,54 @@ struct vms_register_args {
 #define VMS_IOCTL_REGISTER_CONTINUE \
                             _IOWR(VMS_IOC_MAGIC, 0x41, struct vms_register_args)
 
+/*
+ * VMS_IOCTL_REGISTER_SUBPROCESS - register a GENUINELY NEW VMS process that
+ * INHERITS its creator's executive identity (vms-19e9, "$CREPRC identity
+ * propagation").
+ *
+ * WHY THIS EXISTS, and why it is NOT VMS_IOCTL_REGISTER_CONTINUE. SPAWN /
+ * $CREPRC create a SUBPROCESS: a genuinely new VMS process, with its OWN
+ * distinct VMS PID, that inherits the CREATOR's UIC, user name and privileges
+ * (OpenVMS System Services Reference, $CREPRC: the created process gets the
+ * creator's privileges/UIC/user name by default). OVMX fork()s the child, and
+ * the child touches the executive BEFORE image activation -- so it used to
+ * register via VMS_IOCTL_REGISTER (a fresh, capable()-DERIVED identity: empty
+ * user name, no SETPRV), then try to STAMP the creator's identity onto itself
+ * with VMS_IOCTL_SETIDENT. That stamp is a self-declaration, and the setident
+ * guard correctly REFUSES it for a non-root child (the runtime's interactive
+ * DCL runs at the user's UIC after LOGINOUT's credential drop): SS$_NOPRIV,
+ * surfaced as %DCL-F-CREPRC. SPAWN was dead in the booted runtime.
+ *
+ * The fix is inheritance by CONTINUATION, not by self-declaration: the
+ * executive derives the child's identity from its UNFORGEABLE real_parent (the
+ * SPAWNing DCL) -- exactly as VMS_IOCTL_REGISTER_CONTINUE does for image
+ * activation -- so no privileged name is ever self-declared. The ONE
+ * difference from _CONTINUE, and the reason this is a separate opcode: a
+ * subprocess is a DISTINCT VMS process, so it is MINTED A FRESH VMS PID rather
+ * than sharing its parent's. Sharing the PID (as _CONTINUE does, because DCL
+ * and the image it activates ARE one VMS process) would make $GETJPI-by-PID
+ * ambiguous between DCL and its subprocess -- which is precisely what
+ * lib$spawn's wait resolves the child's backing Linux pid through.
+ *
+ * NOTHING is read from args (output-only, like VMS_IOCTL_REGISTER); the struct
+ * returns the FRESH VMS PID.
+ *
+ * SECURITY. Identical posture to _CONTINUE: the identity is the parent's
+ * CURRENT masks (a setident'd-DOWN parent cannot resurrect a privilege in its
+ * child), and the caller cannot pick its parent -- the executive reads
+ * real_parent, never anything the caller declares. This is not a path to
+ * borrow an unrelated privileged process's identity, and it does NOT weaken
+ * the VMS_IOCTL_SETIDENT guard, which still refuses a self-declared privileged
+ * name (test_syssvc_creprc_inherit.c pins both halves).
+ *
+ * NR 0x42 with the 8-byte struct -> command word 0xC0085642, distinct from
+ * VMS_IOCTL_GETJPI's 0xC1205642 (same NR, larger struct): the same NR-sharing
+ * the register family already carries (REGISTER_CONTINUE 0x41 shares its NR
+ * with SETPRN), the encoded size keeping the words apart.
+ */
+#define VMS_IOCTL_REGISTER_SUBPROCESS \
+                            _IOWR(VMS_IOC_MAGIC, 0x42, struct vms_register_args)
+
 /* ================================================================
  * Device table (executive-resident I/O database)
  *
@@ -2057,6 +2105,10 @@ _Static_assert(VMS_IOCTL_ESTABLISH_SYSTEM == 0xC0085646u,
                "VMS_IOCTL_ESTABLISH_SYSTEM encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_REGISTER == 0xC0085640u,
                "VMS_IOCTL_REGISTER encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_REGISTER_CONTINUE == 0xC0085641u,
+               "VMS_IOCTL_REGISTER_CONTINUE encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_REGISTER_SUBPROCESS == 0xC0085642u,
+               "VMS_IOCTL_REGISTER_SUBPROCESS encodes differently here than on the reference build");
 _Static_assert(sizeof(struct vms_getsyi_mem_args) == 32,
                "vms_getsyi_mem_args layout changed: VMS_IOCTL_GETSYIMEM ABI break");
 _Static_assert(VMS_IOCTL_GETSYIMEM == 0xC0205668u,

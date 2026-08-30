@@ -561,11 +561,15 @@ static void scenario_e_a_writes_b_reads(void)
  * THE STATE IS REACHABLE WITHOUT PRIVILEGE, and that is why this is a
  * defect rather than a curiosity: vms_proc_register() (src/kernel/
  * vms_module.c) zeroes the username of every newly registered task and
- * inherits nothing from the parent's row (src/kernel/vms_proctab.c), so
- * any SPAWNed subprocess of an ordinary login is in it. The repo already
- * asserts that blank out loud at tests/uat/vms_session_qemu.sh
- * ('User: +Process ID:'), where it is filed against $CREPRC identity
- * propagation (vms-afd).
+ * inherits nothing -- so ANY process that reaches the executive through the
+ * RAW register() path, without an established identity, holds an unnamed row,
+ * and F$USER must not fabricate a name for it. (A real SPAWN subprocess is NO
+ * LONGER such a process: vms-19e9 gave $CREPRC identity propagation via
+ * vms_kif_register_subprocess, so a SPAWNed subprocess inherits the creator's
+ * name -- proven in test_syssvc_creprc_inherit.c and pinned by
+ * tests/uat/vms_session_qemu.sh 'SPAWN SHOW PROCESS' -> User: SYSTEM. This
+ * scenario deliberately forks + register()s to MANUFACTURE the nameless row
+ * F$USER's fallback defect needs, which is exactly what it still does.)
  *
  * CROSS-PROCESS BY CONSTRUCTION. The shape is LOGINOUT's, as scenario D:
  * a session establishes an authenticated identity through the executive,
@@ -1033,13 +1037,16 @@ static void scenario_g_unnamed_row_reports_nothing(void)
     /* cmd_show_process's own field: "User: %-17sProcess ID:". */
     snprintf(want, sizeof(want), "User: %-17sProcess ID:", "");
     CHECK(strstr(outg, want) != NULL,
-          "G: SHOW PROCESS in the subprocess reports an EMPTY user name -- "
-          "the known state tests/uat/vms_session_qemu.sh already pins, filed "
-          "as vms-afd");
+          "G: a subprocess that registers through the RAW vms_kif_register() "
+          "path reports an EMPTY user name -- an unnamed row, correctly, "
+          "because plain register() derives identity and inherits no name");
     CHECK(strstr(outg, "User: " G_NAME) == NULL,
-          "G: the subprocess does NOT report the SESSION's name -- OVMX has "
-          "no $CREPRC identity propagation yet (vms-afd); when it lands this "
-          "line goes red and whoever lands it deletes it");
+          "G: the raw-register() subprocess does NOT report the SESSION's name "
+          "-- register() never inherits. (A REAL SPAWN subprocess now DOES "
+          "inherit the creator's identity via vms_kif_register_subprocess, "
+          "vms-19e9: proven in test_syssvc_creprc_inherit.c and pinned by "
+          "tests/uat/vms_session_qemu.sh 'SPAWN SHOW PROCESS' -> User: SYSTEM. "
+          "This scenario exercises register(), not $CREPRC, so it stays green.)");
 
     /* --- F$USER (vms-f39) -------------------------------------------- */
     CHECK(strstr(outg, "G_SUB_PWNAM=" G_PWNAME "\n") != NULL,

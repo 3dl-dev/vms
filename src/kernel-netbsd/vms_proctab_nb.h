@@ -362,6 +362,15 @@ struct vms_register_args {
 
 #define VMS_IOCTL_REGISTER          _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x40, struct vms_register_args)
 #define VMS_IOCTL_REGISTER_CONTINUE _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x41, struct vms_register_args)
+/*
+ * VMS_IOCTL_REGISTER_SUBPROCESS (vms-19e9) -- SPAWN/$CREPRC: a genuinely new
+ * VMS process (FRESH PID) that INHERITS its creator's identity by continuation
+ * from real_parent, unlike _CONTINUE which shares the parent's PID. NR 0x42
+ * with the 8-byte struct -> 0xC0085642 (same NR as GETJPI, kept apart by the
+ * encoded size), the register family's own next number. Mirrors
+ * src/kernel/vms_ioctl.h byte for byte (asserted below).
+ */
+#define VMS_IOCTL_REGISTER_SUBPROCESS _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x42, struct vms_register_args)
 
 /*
  * VMS_IOCTL_DASSGN (vms-329) -- $DASSGN, release one assigned channel. Also
@@ -445,6 +454,8 @@ _Static_assert(VMS_IOCTL_REGISTER == 0xC0085640u,
                "VMS_IOCTL_REGISTER encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_REGISTER_CONTINUE == 0xC0085641u,
                "VMS_IOCTL_REGISTER_CONTINUE encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_REGISTER_SUBPROCESS == 0xC0085642u,
+               "VMS_IOCTL_REGISTER_SUBPROCESS encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_DASSGN == 0xC0085651u,
                "VMS_IOCTL_DASSGN encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_SETPRN == 0xC0485641u,

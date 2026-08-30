@@ -197,3 +197,10 @@ vms_kif_setident_quota=PROCEDURE
 # OVMX-UNWIRED, not called through a wrapper, so they are NOT exported here.)
 # APPENDED per the append-only contract -- never shifts an existing index.
 vms_kif_cluster_get_members=PROCEDURE
+# vms-19e9: $CREPRC's forked child (sys_process.c, VMS-native-linked) inherits
+# the SPAWNing creator's executive identity by CONTINUATION through this WIRED
+# kif wrapper (VMS_IOCTL_REGISTER_SUBPROCESS) -- a genuinely new VMS process
+# with a FRESH PID, so SPAWN works for a non-root named session without a
+# self-declared setident the executive would refuse. Must be a LIBVMSSYS$SHR
+# universal. APPENDED per the append-only contract -- never shifts an index.
+vms_kif_register_subprocess=PROCEDURE

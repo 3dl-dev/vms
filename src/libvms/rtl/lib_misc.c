@@ -327,9 +327,29 @@ uint32_t lib$spawn(const struct dsc$descriptor_s *command,
     char dcl_path[1024];
     if (vmsfs_to_linux_path(VMS_DCL_PATH, dcl_path, sizeof(dcl_path)) != 1)
         return SS$_NOSUCHFILE;
+    /*
+     * CHECK THE ACTUAL EXECVE TARGET, NOT THE RETIRED /vms PATH (vms-19e9).
+     *
+     * With the /vms passthrough retired (Files-11 ODS-2 ACP flip), a SYS$SYSTEM
+     * image no longer exists as a POSIX file at the translated path
+     * (/vms/SYS0/SYSCOMMON/SYSEXE/dcl.exe) -- it lives on the ODS-2 volume and is
+     * execve'd from the boot-staging tmpfs. This pre-check used to stat() that
+     * retired path, which now ENOENTs for EVERY spawn, so lib$spawn returned
+     * SS$_NOSUCHFILE before $CREPRC and SPAWN was dead in the booted runtime.
+     *
+     * Validate the SAME target $CREPRC will exec: the boot-staged copy for a
+     * SYSEXE image (ovmx_boot_stage_exec_path, as sys$creprc uses), the raw path
+     * otherwise. The SS$_NOSUCHFILE-before-anything contract is preserved -- it
+     * now fires on a genuinely absent image, not on a path the architecture
+     * stopped using.
+     */
+    char dcl_staged[1024];
+    const char *dcl_check =
+        (ovmx_boot_stage_exec_path(dcl_path, dcl_staged, sizeof(dcl_staged)) &&
+         access(dcl_staged, X_OK) == 0) ? dcl_staged : dcl_path;
     struct stat st;
-    if (stat(dcl_path, &st) != 0 || !S_ISREG(st.st_mode) ||
-        access(dcl_path, X_OK) != 0)
+    if (stat(dcl_check, &st) != 0 || !S_ISREG(st.st_mode) ||
+        access(dcl_check, X_OK) != 0)
         return SS$_NOSUCHFILE;
 
     /*

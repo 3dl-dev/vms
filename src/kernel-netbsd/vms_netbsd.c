@@ -342,16 +342,17 @@ vms_proc_get(pid_t pid)
  * left untouched and the caller fails the _CONTINUE honestly -- it does NOT
  * silently substitute a fresh identity for a continuation that was asked for.
  */
-static uint32_t
-vms_proc_continue_identity(struct vms_proc *proc, pid_t parent_pid)
+static bool
+vms_proc_continue_identity(struct vms_proc *proc, pid_t parent_pid,
+    bool share_pid)
 {
 	struct vms_proc *p, *parent = NULL;
 	uint64_t parent_perm, parent_cur;
-	uint32_t shared_vms_pid = 0;
+	bool inherited = false;
 	int bkt;
 
 	if (parent_pid == 0)
-		return 0;
+		return false;
 
 	exec_lock(&vms_proc_hash_lock);
 	exec_hash_for_each(vms_proc_hash, bkt, p, hash_node) {
@@ -382,13 +383,20 @@ vms_proc_continue_identity(struct vms_proc *proc, pid_t parent_pid)
 		proc->cur_privs  = parent_cur;
 		exec_unlock(&proc->mode_lock);
 
-		/* One VMS process: the child SHARES the parent's VMS PID. */
-		proc->vms_pid  = parent->vms_pid;
-		shared_vms_pid = parent->vms_pid;
+		/*
+		 * SHARE the parent's VMS PID only for an image-activation CONTINUE
+		 * (share_pid). A SUBPROCESS (_SUBPROCESS, vms-19e9) inherits the
+		 * identity above but KEEPS the fresh vms_pid vms_proc_get() minted --
+		 * a genuinely new VMS process, as $CREPRC creates. The Linux twin
+		 * mirror.
+		 */
+		if (share_pid)
+			proc->vms_pid = parent->vms_pid;
+		inherited = true;
 	}
 	exec_unlock(&vms_proc_hash_lock);
 
-	return shared_vms_pid;
+	return inherited;
 }
 
 /*
@@ -1021,7 +1029,6 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		struct vms_register_args *ra = (struct vms_register_args *)data;
 		struct proc *pp;
 		pid_t parent_pid;
-		uint32_t shared_vms_pid;
 
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -1029,11 +1036,41 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 
 		pp = l->l_proc->p_pptr;
 		parent_pid = (pp != NULL) ? pp->p_pid : 0;
-		shared_vms_pid = vms_proc_continue_identity(proc, parent_pid);
-		if (shared_vms_pid == 0)
+		/* share_pid = true: DCL and the image it activated are ONE VMS
+		 * process, so the child adopts the parent's VMS PID. */
+		if (!vms_proc_continue_identity(proc, parent_pid, true))
 			return ESRCH;   /* no registered VMS parent to continue */
 
 		ra->vms_pid = proc->vms_pid;   /* == the shared parent VMS PID */
+		ra->status  = SS__NORMAL;
+		return 0;
+	}
+
+	/*
+	 * VMS_IOCTL_REGISTER_SUBPROCESS (vms-19e9): SPAWN/$CREPRC. A genuinely
+	 * new VMS process that INHERITS the creator's identity by continuation
+	 * from its real parent but KEEPS the fresh VMS PID vms_proc_get() minted
+	 * -- a distinct VMS process, unlike _CONTINUE. Mirrors the Linux twin
+	 * (src/kernel/vms_module.c). Unlike _CONTINUE, a task with no registered
+	 * VMS parent does NOT fail: it keeps vms_proc_get()'s fresh, honestly
+	 * credential-derived identity (a top-level process), so SPAWN never
+	 * fails merely because the creator was not registered.
+	 */
+	case VMS_IOCTL_REGISTER_SUBPROCESS: {
+		struct vms_register_args *ra = (struct vms_register_args *)data;
+		struct proc *pp;
+		pid_t parent_pid;
+
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+
+		pp = l->l_proc->p_pptr;
+		parent_pid = (pp != NULL) ? pp->p_pid : 0;
+		/* share_pid = false: inherit identity, keep the fresh VMS PID. */
+		(void)vms_proc_continue_identity(proc, parent_pid, false);
+
+		ra->vms_pid = proc->vms_pid;   /* the FRESH, distinct VMS PID */
 		ra->status  = SS__NORMAL;
 		return 0;
 	}

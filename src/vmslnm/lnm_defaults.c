@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <unistd.h>
 #include <pwd.h>
 #include <limits.h>
@@ -81,6 +82,54 @@ static void lnm_seed_system_locating_multi(lnm_manager_t *mgr, const char *name,
     if (st == SS$_NOSUCHDEV)
         lnm_create_multi(mgr, LNM_PROCESS_TABLE, name, values, nvalues,
                          attr, LNM_MODE_EXEC);
+}
+
+/*
+ * lnm_system_root_token - the node's system-root token ("0","1","11",...): the
+ * [SYSn] root this node boots from on the (possibly shared) system disk.
+ *
+ * In OpenVMS the boot root is an INDEPENDENT boot property -- the SYSBOOT R5
+ * root / the boot command's root number, assigned per node by CLUSTER_CONFIG --
+ * NOT a function of SCSSYSTEMID. Measured on the reference lab (vms-a01): sysids
+ * 1025/1026/1027 boot roots SYS0/SYS1/SYS11, which is no arithmetic relation
+ * (sysid & 1023 = 1/2/3, not 0/1/11); and there is no sysid->root mapping in the
+ * tree. OVMX therefore surfaces the root index the same DISCLOSED way it
+ * surfaces the system DEVICE (OVMX_SYSDEVICE, vms-47d): the boot chain publishes
+ * OVMX_SYSROOT_INDEX; absent it, default "0" (SYS0), byte-identical to the
+ * historical single-root behaviour.
+ *
+ * NB: OVMX_SYSROOT_INDEX-via-env is the DERIVATION MECHANISM (proven by
+ * tests/vmsrms/test_sysroot_pernode.c). Production per-node wiring -- a real
+ * cluster deriving its index at boot from a SYSGEN param / CLUSTER_CONFIG, not
+ * an env var -- is the deferred family-2 follow-on (rd vms-a01). Rule 8: the
+ * index TRANSPORT is an OVMX design choice, not a VMS-authentic byte format.
+ *
+ * Oracle (docs/oracle/vax73-system-root-logicals.md, live VAX V7.3): node N sees
+ * SYS$SYSROOT = "dev:[SYSn.]","SYS$COMMON:" and SYS$COMMON =
+ * "dev:[SYSn.SYSCOMMON.]" -- both the node root and the common carry the per-node
+ * token n. (The authentic SYS$SYSROOT member-2 is the LOGICAL "SYS$COMMON:", not
+ * a literal path; keeping the shipped literal composition is a separate fidelity
+ * follow-on, rd vms-a01.)
+ *
+ * The token is validated as 1-4 hex digits (the VMS root range [SYS0]..[SYSFFFF])
+ * so a stray value can never inject into the composed filespec; anything else
+ * falls back to "0".
+ */
+static const char *lnm_system_root_token(void)
+{
+    const char *tok = getenv("OVMX_SYSROOT_INDEX");
+    if (tok && tok[0]) {
+        size_t n = strlen(tok);
+        if (n >= 1 && n <= 4) {
+            size_t i;
+            for (i = 0; i < n; i++)
+                if (!isxdigit((unsigned char)tok[i]))
+                    break;
+            if (i == n)
+                return tok;   /* valid: "0","1","11","1A",... */
+        }
+    }
+    return "0";               /* SYS0 -- unchanged default */
 }
 
 /*
@@ -156,10 +205,22 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
      * physical files live under [SYS0.SYSCOMMON.*], so the common member wins.
      * Nothing here is pre-flattened -- the SYS$xxx paths are DERIVED live.
      */
-    static const char *sysroot_members[] = {
-        "SYS$SYSDEVICE:[SYS0.]",
-        "SYS$SYSDEVICE:[SYS0.SYSCOMMON.]"
-    };
+    /*
+     * vms-a01: the node-specific root [SYSn.] and the common root
+     * [SYSn.SYSCOMMON.] carry this node's boot-root token (default "0" -> SYS0,
+     * byte-identical to the historical single-root default). Oracle-grounded on
+     * live VAX V7.3 -- SYS$SYSROOT member 0 = "dev:[SYSn.]" and SYS$COMMON =
+     * "dev:[SYSn.SYSCOMMON.]" both move with the node index n
+     * (docs/oracle/vax73-system-root-logicals.md).
+     */
+    const char *root_tok = lnm_system_root_token();
+    char sysroot_self[64];
+    char syscommon_root[64];
+    snprintf(sysroot_self, sizeof sysroot_self,
+             "SYS$SYSDEVICE:[SYS%s.]", root_tok);
+    snprintf(syscommon_root, sizeof syscommon_root,
+             "SYS$SYSDEVICE:[SYS%s.SYSCOMMON.]", root_tok);
+    const char *sysroot_members[2] = { sysroot_self, syscommon_root };
     lnm_seed_system_locating_multi(mgr, "SYS$SYSROOT", sysroot_members, 2,
                                    LNM_ATTR_CONCEALED);
 
@@ -171,7 +232,7 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
      * composition base in its own right (e.g. DECC$LIBRARY_INCLUDE below).
      */
     lnm_seed_system_locating(mgr, "SYS$COMMON",
-                             "SYS$SYSDEVICE:[SYS0.SYSCOMMON.]",
+                             syscommon_root,
                              LNM_ATTR_CONCEALED);
 
     /*

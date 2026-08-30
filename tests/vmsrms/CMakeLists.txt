@@ -194,6 +194,23 @@ set_tests_properties(vmsrms_sysroot_composed PROPERTIES
     TIMEOUT 30
 )
 
+# vms-a01: SYS$SYSROOT / SYS$COMMON derive the per-node system-root token
+# (OVMX_SYSROOT_INDEX=11 -> [SYS11.]) instead of a hardcoded SYS0; the default
+# (no env) staying [SYS0.] is covered by test_sysroot_composed above.
+add_executable(test_sysroot_pernode test_sysroot_pernode.c)
+target_include_directories(test_sysroot_pernode PRIVATE
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_sysroot_pernode PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_sysroot_pernode COMMAND test_sysroot_pernode)
+set_tests_properties(vmsrms_sysroot_pernode PROPERTIES
+    LABELS "unit;rms;lnm"
+    TIMEOUT 30
+)
+
 # vms-0044: concealed-rooted directory-logical chain composes to concrete
 # on-volume ODS-2 candidate specs (SYS$SYSTEM:SYSUAF.DAT ->
 # DKA0:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT) -- the input the Files-11 ACP

@@ -1,0 +1,16 @@
+# vms-6b8e (SHOW SYSTEM matches oracle): the SHOW SYSTEM BANNER + COLUMN geometry
+# on OpenVMS VAX V7.3. The process-list ROWS are inherently non-reproducible (the
+# process set, PIDs, I/O, CPU, order all vary run-to-run -- even between fresh
+# boots), so this surface pins only the STABLE layout: the banner structure
+# (OpenVMS V#.# on node ... <date> Uptime <time>) and the fixed column-header row.
+# NORMALIZE: digit-mask (masks the volatile date/uptime/version in the banner) AND
+# drop the data rows (4,$d) -- leaving echo + banner + column header. The vms-c38
+# gate applies the SAME mask to OVMX's SHOW SYSTEM before diffing (its process set
+# also varies), so only a real banner/column-geometry divergence reds it. Per-row
+# field geometry is separately documented in docs/oracle/vax73-show-system-process.md.
+ARCH=vax
+DESC="SHOW SYSTEM banner + column geometry (process rows dropped, volatile fields masked)"
+NORMALIZE='s/[0-9]/#/g; 4,$d'
+COMMANDS=(
+  'SHOW SYSTEM'
+)

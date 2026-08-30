@@ -1,0 +1,10 @@
+surface: vax-show-system
+arch: vax
+description: SHOW SYSTEM banner + column geometry (process rows dropped, volatile fields masked)
+oracle: OpenVMS VAX V7.3 (lab vaxlab/vax1, isolated replica vaxlab-2)
+captured: 2026-08-30T05:09:23Z
+method: capture_oracle.sh -- FIFO console drive, marker-sliced display (CLAUDE.md Rule 8 observation)
+normalize: 's/[0-9]/#/g; 4,$d'   # SYMMETRIC mask -- the vms-c38 gate applies the IDENTICAL
+                          # mask to OVMX output: capture_oracle.sh normalize vax-show-system < ovmx_output
+commands:
+  - SHOW SYSTEM

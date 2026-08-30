@@ -1,0 +1,119 @@
+# Dockerfile.dlm-harness-e84 - DLM cross-node harness, rd vms-e84 -- THE
+# DIRECTORY-OWNERSHIP REFUSAL: a cross-node $ENQ targeted at a node that is
+# NOT the resource's directory must be REFUSED there (SS$_UNSUPPORTED), while
+# the SAME resource $ENQ'd on its REAL directory node IS granted. Copy-extends
+# Dockerfile.dlm-harness-h10b with the same three nodes A/B/C and the same
+# real static 3-member DLM vector; the ONLY delta is init_dlm_e84.sh, which
+# drives ONE targeted cross-node $ENQ from node A per boot (no departure, no
+# rebuild) and reads ovmx.dlmtarget=<csid> off the kernel cmdline so the SAME
+# image can be booted twice by the runner with a different target.
+#
+# It builds the SAME real-executive ingredients as Dockerfile.dlm-harness-h10b
+# -- vms.ko (unmodified DLM dispatch: vms_lock_dlm_xnode_dispatch ->
+# vms_enq_core_ex -> dlm_resolve_master, the SAME directory check every other
+# DLM rung already runs through) + SCSD.EXE (static musl; the only C change
+# for vms-e84 is one existing printf -- SCSD-I-DLMDONE now also logs
+# master_lkid, a field it had already decoded off the wire) + bakes the SAME
+# three per-node SYSGEN identity stores (OVMXA/OVMXB/OVMXC, SCSSYSTEMID ==
+# DLM CSID 1030/1031/1032), assembles ONE symmetric initramfs, and boots
+# THREE QEMU nodes wired on one shared L2 by a QEMU `socket` (mcast) netdev --
+# NO host bridge, NO privilege.
+#
+# WHAT e84 PROVES: node B (not RES_C's directory) refuses a targeted
+# cross-node $ENQ for RES_C with the REAL executive status SS$_UNSUPPORTED
+# (SCSD-I-E84REFUSED); the SAME $ENQ targeted at node C (RES_C's real
+# directory) is GRANTED (SCSD-I-E84GRANTED). See tests/qemu/init_dlm_e84.sh +
+# run_dlm_harness_e84.sh. INV-6: nothing here fabricates a refusal or a grant
+# -- the markers are the REAL executive values, read off two separate boots
+# of the SAME image.
+#
+# Usage:
+#   docker build -f tests/qemu/Dockerfile.dlm-harness-e84 -t ovmx-dlm-e84 .
+#   docker run --rm --device /dev/kvm ovmx-dlm-e84     # --device optional (TCG fallback)
+# Exit 0 = e84 PASS (the directory-ownership refusal proven), 1 = FAIL.
+
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ]; then QEMU_PKG=qemu-system-arm; else QEMU_PKG=qemu-system-x86; fi && \
+    apt-get install -y --no-install-recommends \
+    make gcc libc6-dev kmod \
+    linux-headers-generic \
+    linux-image-virtual \
+    busybox-static \
+    cpio \
+    python3 \
+    cmake musl-tools linux-libc-dev \
+    "$QEMU_PKG" \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN KVER=$(ls /lib/modules/ | sort -V | tail -1) && echo "$KVER" > /tmp/kver && echo "Kernel version: $KVER"
+
+# vms.ko: the real executive.
+COPY src/kernel-core/ /src/kernel-core/
+COPY src/kernel/ /src/kernel/
+COPY src/vmsfs/include/ /src/vmsfs/include/
+COPY src/vmsfs/ods2/ /src/vmsfs/ods2/
+RUN KVER=$(cat /tmp/kver) && \
+    cd /src/kernel && \
+    make KDIR=/lib/modules/${KVER}/build 2>&1 && \
+    ls -la /src/kernel/vms.ko && \
+    modinfo /src/kernel/vms.ko
+
+# musl UAPI header symlinks.
+RUN MUSL_INC=$(echo /usr/include/*-linux-musl) && \
+    ARCH_INC=$(echo /usr/include/*-linux-gnu) && \
+    ln -s /usr/include/linux "$MUSL_INC/linux" && \
+    ln -s /usr/include/asm-generic "$MUSL_INC/asm-generic" && \
+    ln -s "$ARCH_INC/asm" "$MUSL_INC/asm"
+
+# SCSD.EXE, static musl (OVMX_STATIC=ON) -- the real SCS datalink daemon.
+COPY . /src/repo/
+RUN cd /src/repo && \
+    cmake -B build-static \
+        -DCMAKE_C_COMPILER=musl-gcc \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DOVMX_STATIC=ON \
+    && cmake --build build-static --target scsd_exe --parallel $(nproc) 2>&1 && \
+    { [ -f build-static/bin/SCSD.EXE ] || { echo "FATAL: SCSD.EXE was not built"; exit 1; }; } && \
+    ls -la build-static/bin/SCSD.EXE && \
+    { readelf -d build-static/bin/SCSD.EXE 2>/dev/null | grep -q NEEDED && \
+        { echo "FATAL: staged SCSD.EXE is not static"; exit 1; } || true; }
+
+# The THREE per-node SYSGEN identity stores. CRITICAL: SCSSYSTEMID == the DLM CSID
+# (1030/1031/1032), so each node advertises aa:00:04:00:<LE16(csid)> as its SCA
+# src-logical and a peer's DLM CSID is read straight off the wire (peer_node_number).
+RUN mkdir -p /src/sysgen && \
+    python3 /src/repo/tests/cluster/two-ovmx/mk_sysgen_scratch.py /src/sysgen/sysgen-A.dat OVMXA 1030 1 20 && \
+    python3 /src/repo/tests/cluster/two-ovmx/mk_sysgen_scratch.py /src/sysgen/sysgen-B.dat OVMXB 1031 1 20 && \
+    python3 /src/repo/tests/cluster/two-ovmx/mk_sysgen_scratch.py /src/sysgen/sysgen-C.dat OVMXC 1032 1 20
+
+RUN KVER=$(cat /tmp/kver) && \
+    if [ ! -e /boot/vmlinuz ]; then ln -s vmlinuz-${KVER} /boot/vmlinuz; fi && \
+    ls -la /boot/vmlinuz
+
+# Assemble ONE symmetric initramfs (all three nodes boot the same image; the
+# kernel cmdline ovmx.node=A|B|C selects the identity + role, ovmx.dlmtarget=
+# <csid> selects node A's ENQ target for this boot).
+COPY tests/qemu/init_dlm_e84.sh /src/init_dlm_e84.sh
+RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/etc/ovmx \
+             /initramfs/dev /initramfs/proc /initramfs/sys /initramfs/tmp && \
+    cp /bin/busybox /initramfs/bin/busybox && \
+    ln -s busybox /initramfs/bin/sh && \
+    cp /src/kernel/vms.ko /initramfs/lib/modules/ && \
+    cp /src/repo/build-static/bin/SCSD.EXE /initramfs/bin/SCSD.EXE && \
+    chmod +x /initramfs/bin/SCSD.EXE && \
+    cp /src/sysgen/sysgen-A.dat /initramfs/etc/ovmx/sysgen-A.dat && \
+    cp /src/sysgen/sysgen-B.dat /initramfs/etc/ovmx/sysgen-B.dat && \
+    cp /src/sysgen/sysgen-C.dat /initramfs/etc/ovmx/sysgen-C.dat && \
+    cp /src/init_dlm_e84.sh /initramfs/init && \
+    chmod +x /initramfs/init && \
+    cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /initramfs.cpio.gz && \
+    echo "Initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')"
+
+COPY tests/qemu/run_dlm_harness_e84.sh /run_dlm_harness_e84.sh
+RUN chmod +x /run_dlm_harness_e84.sh
+
+CMD ["/run_dlm_harness_e84.sh"]

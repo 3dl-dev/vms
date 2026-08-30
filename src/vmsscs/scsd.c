@@ -9397,12 +9397,19 @@ static void scsd_dlm_cli_msg_input(struct scs_cdt *cdt, const void *msg,
     ps->dlm_grant_recv = 1;
     ps->dlm_grant_status = v.msg.status;
     log_ts(stdout);
+    /* rd vms-e84: master_lkid added to this existing print (not a new send
+     * site -- v.msg.master_lkid was already decoded off the wire by
+     * scs_dlm_parse() above, just not previously logged here) so the e84
+     * directory-refusal harness can report the REAL granted lock id on the
+     * positive control without a separate GETLKI round-trip. 0 on a refusal
+     * (dlm_resolve_master's early return never allocates a lock -- honest). */
     printf(" SCSD-I-DLMDONE, cross-node $ENQ round-trip COMPLETE: peer"
            " (master CSID=%u) answered GRANT status=0x%08X resnam='%.*s'"
-           " req_lkid=0x%08X mode=%s -- LIVE A->B->A transport proven; %s\n",
+           " req_lkid=0x%08X master_lkid=0x%08X mode=%s -- LIVE A->B->A"
+           " transport proven; %s\n",
            (unsigned)v.msg.master_csid, (unsigned)v.msg.status,
            (int)v.msg.namelen, v.msg.resnam, (unsigned)v.msg.req_lkid,
-           scs_dlm_mode_name(v.msg.mode),
+           (unsigned)v.msg.master_lkid, scs_dlm_mode_name(v.msg.mode),
            v.msg.status == 1u
                ? "cross-node lock GRANTED by the master (SS$_NORMAL)"
                : "lock NOT granted (honest)");
@@ -9615,15 +9622,26 @@ static void scsd_dlm_send_enq(struct scsd_rx *rx, struct peer_state *ps)
     if (resname == NULL || resname[0] == '\0' || !scsd_member_initiate_enabled()) {
         return;
     }
-    /* rd vms-dca9 (H10b): in a >2-node cluster the ENQ must reach the
-     * resource's REAL directory master, not whichever peer's join tick
-     * happens to fire first -- vms_lock_dlm_xnode_dispatch() masters
-     * UNCONDITIONALLY whatever ENQ it receives (there is no receive-side
-     * mastership check), so an untargeted send in a 3-node harness would also
-     * hand a bogus master role to a peer that is not RES_C's directory.
-     * Opt-in and additive: absent (every H5-H9 harness is two-node, so every
-     * peer was always a legal target), every peer is still a legal target,
-     * byte-identical to before this rung existed. */
+    /* rd vms-dca9 (H10b) / CORRECTED vms-e84: in a >2-node cluster the ENQ must
+     * reach the resource's REAL directory node, not whichever peer's join tick
+     * happens to fire first. The reason is NOT that the receiver would falsely
+     * master a resource it doesn't own -- vms_lock_dlm_xnode_dispatch() grants
+     * through vms_enq_core_ex() -> dlm_resolve_master(), which ALREADY refuses a
+     * non-directory node (dir_csid != vms_local_csid -> SS$_UNSUPPORTED, well
+     * before it masters). That refusal is RUNTIME-PROVEN on a 3-node rail by
+     * tests/qemu/run_dlm_harness_e84.sh (RES_C sent to non-directory B answers
+     * SS$_UNSUPPORTED=0x8F8; sent to directory C answers SS$_NORMAL). The
+     * earlier H10b note here CLAIMED the receiver masters unconditionally with
+     * "no receive-side mastership check" -- that was FALSE (a code-read error
+     * caught + refuted under vms-e84); this comment corrects the record.
+     * So the targeting is for DETERMINISM: address the ENQ to the directory so
+     * it is GRANTED rather than honestly refused, which is what a harness that
+     * must ESTABLISH a real cross-node hold needs. Opt-in and additive: absent
+     * (every H5-H9 harness is two-node, so every peer was always the directory
+     * for the name), every peer is still a legal target, byte-identical to
+     * before this rung existed. Directory REDIRECT -- forwarding a mis-addressed
+     * ENQ to the real directory instead of refusing it, which would let a
+     * harness drop this targeting crutch -- is the deferred follow-on to e84. */
     const char *target_csid_env = getenv("OVMX_DLM_ENQ_CSID");
     if (target_csid_env != NULL && target_csid_env[0] != '\0') {
         uint32_t want_csid = (uint32_t)strtoul(target_csid_env, NULL, 10);

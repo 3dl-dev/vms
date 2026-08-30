@@ -464,6 +464,16 @@ jobs:
               - 'tests/qemu/Dockerfile.dlm-harness-h10b'
               - 'tests/qemu/init_dlm_h10b.sh'
               - 'tests/qemu/run_dlm_harness_h10b.sh'
+              # e84 (rd vms-e84, RUNTIME PROOF of the receive-side directory
+              # refusal): node A sends the SAME cross-node $ENQ EX on RES_C to a
+              # NON-directory node B (answers SS$_UNSUPPORTED -- B does NOT
+              # self-master a resource it doesn't own) and to RES_C's real
+              # directory C (answers SS$_NORMAL). Proves on the wire that
+              # dlm_resolve_master()'s directory check is real -- refuting the
+              # H10b comment that claimed unconditional mastering.
+              - 'tests/qemu/Dockerfile.dlm-harness-e84'
+              - 'tests/qemu/init_dlm_e84.sh'
+              - 'tests/qemu/run_dlm_harness_e84.sh'
 
       - name: Decide (force every output true on non-PR events)
         id: decide
@@ -3234,6 +3244,77 @@ jobs:
         with:
           name: dlm-harness-h10b-artifacts
           path: h10bout/
+          if-no-files-found: ignore
+
+  # -----------------------------------------------------------------------
+  # Job 2d: DLM Harness e84 (rd vms-e84 — RUNTIME PROOF of the receive-side
+  # directory-ownership refusal). vms-e84 was filed on an H10b harness comment
+  # claiming vms_lock_dlm_xnode_dispatch() "masters unconditionally … no
+  # receive-side mastership check". A code-read said the opposite —
+  # vms_enq_core_ex() → dlm_resolve_master() already refuses a non-directory
+  # node (dir_csid != vms_local_csid → SS$_UNSUPPORTED) before mastering. A
+  # code-read cannot arbitrate a claimed observation, so this job PROVES it on a
+  # real 3-node vms.ko rail: node A sends the SAME targeted cross-node $ENQ EX on
+  # RES_C twice — to non-directory node B (must answer SS$_UNSUPPORTED = 0x8F8,
+  # SCSD-I-E84REFUSED) and to RES_C's real directory node C (must answer
+  # SS$_NORMAL with a real lock id, SCSD-I-E84GRANTED). e84 PASS iff B refused
+  # and C granted, both statuses read verbatim off the nodes' own SCSD output
+  # (INV-6). No executive change — this hardens an ASSUMED-correct guard into a
+  # PROVEN one and refutes the false comment (corrected under this item).
+  # -----------------------------------------------------------------------
+  dlm-harness-e84:
+    name: DLM Harness e84 (3-node; a non-directory node REFUSES a cross-node $ENQ, the directory GRANTS it, QEMU)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.dlm_harness == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build DLM harness e84 image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu/Dockerfile.dlm-harness-e84
+          push: false
+          load: true
+          tags: ovmx-dlm-e84:latest
+          cache-from: type=gha,scope=dlm-harness-e84
+          cache-to: type=gha,mode=max,scope=dlm-harness-e84
+
+      - name: Boot THREE QEMU nodes twice, verdict the refuse-vs-grant directory decision
+        run: |
+          set +e
+          KVM=""
+          [ -e /dev/kvm ] && KVM="--device /dev/kvm"
+          mkdir -p "$PWD/e84out"
+          RAW=$(docker run --rm $KVM -v "$PWD/e84out:/out" ovmx-dlm-e84:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: DLM harness e84 exited nonzero"
+            exit 1
+          fi
+          if printf '%s\n' "$OUTPUT" | grep -qE '^  DLM HARNESS e84 PASSED'; then
+            echo "PASS: a non-directory node refused the cross-node \$ENQ with SS\$_UNSUPPORTED; the directory node granted it with SS\$_NORMAL — the receive-side directory check is real, proven on the wire."
+          else
+            echo "FAIL: e84 verdict 'DLM HARNESS e84 PASSED' not found."
+            printf '%s\n' "$OUTPUT" | grep -E 'verdict inputs|VAXCLMEMBER|E84REFUSED|E84GRANTED|E84UNEXPECTED|FAIL:' || true
+            exit 1
+          fi
+
+      - name: Upload e84 pcap + node logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dlm-harness-e84-artifacts
+          path: e84out/
           if-no-files-found: ignore
 
   # -----------------------------------------------------------------------

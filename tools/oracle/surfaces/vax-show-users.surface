@@ -1,0 +1,14 @@
+# vms-6a1/vms-8146 (SHOW USERS): SHOW USERS + /FULL layout on VAX V7.3. Volatile =
+# the title date/time and the 8-hex Process ID in /FULL (2020021A -- its trailing
+# nibble can be A-F, so it is masked as a whole 8-hex token before the digit-mask).
+# The user/process COUNTS are 1 on a single-user boot (stable, masked to #). Pins:
+# the "OpenVMS User Processes at" banner, the "Total number of users / processes"
+# line, and BOTH column headers (default: Username/Node/Interactive/Subprocess/
+# Batch; /FULL: Username/Node/Process Name/PID/Terminal) + the SYSTEM row shape.
+ARCH=vax
+DESC="SHOW USERS + /FULL banner, counts line, and both column headers (date/PID/counts masked)"
+NORMALIZE='s/[0-9A-F]\{8\}/########/g; s/[0-9]/#/g'
+COMMANDS=(
+  'SHOW USERS'
+  'SHOW USERS/FULL'
+)

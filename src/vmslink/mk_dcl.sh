@@ -113,8 +113,9 @@ DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -DOVMX_HAVE_ACP"
 INCS="-I$DCL/include -I$REPO_SRC/libvms/include -I$REPO_SRC/vmsfs/include \
 -I$REPO_SRC/vmslnm/include -I$REPO_SRC/vmsrms/include \
 -I$REPO_SRC/vmsprocess/include -I$REPO_SRC/vmsqueue -I$REPO_SRC/libvmssys \
--I$REPO_SRC/vmsscs/include \
--I$REPO_SRC/vmslink/include"   # scs_membership.h (SHOW CLUSTER, vms-8d4); ovmx_olb.h (LIBRARY/OBJECT, vms-ca9)
+-I$REPO_SRC/vmslink/include"   # ovmx_olb.h (LIBRARY/OBJECT, vms-ca9); vmsscs/include dropped
+                                # by vms-967d -- SHOW CLUSTER reads the executive, no longer
+                                # scs_membership.h
 
 # The vmsdcl TUs (== src/vmsdcl/CMakeLists.txt, minus readline convenience).
 # dcl_mbx added by vms-786 (mailbox-backed SYS$INPUT/SYS$OUTPUT).

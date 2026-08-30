@@ -43,17 +43,14 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     if(NOT DEFINED VMS_PROCESS_INCLUDE_DIR)
         set(VMS_PROCESS_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../vmsprocess/include)
     endif()
-    # vms_kif.h (libvmssys), the vmslink symbol-vector headers, and the vmsscs
-    # membership header are peer dirs of this one; the in-tree build reaches them
-    # via ${CMAKE_SOURCE_DIR}/src/... (repo root), unavailable standalone.
+    # vms_kif.h (libvmssys) and the vmslink symbol-vector headers are peer dirs
+    # of this one; the in-tree build reaches them via
+    # ${CMAKE_SOURCE_DIR}/src/... (repo root), unavailable standalone.
     if(NOT DEFINED VMS_SYS_INCLUDE_DIR)
         set(VMS_SYS_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../libvmssys)
     endif()
     if(NOT DEFINED VMS_LINK_INCLUDE_DIR)
         set(VMS_LINK_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../vmslink/include)
-    endif()
-    if(NOT DEFINED VMS_SCS_INCLUDE_DIR)
-        set(VMS_SCS_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../vmsscs/include)
     endif()
 endif()
 
@@ -139,12 +136,11 @@ target_compile_definitions(vms PRIVATE OVMX_HAVE_ACP)
 if(LIBVMS_STANDALONE)
     # Link-libc netbsd-vax cross: a clean libvms.a to arch-check with objdump/ar.
     # sys_imgact.c/imgact_prodreg.c need the vmslink symbol-vector headers;
-    # F$GETSYI needs the vmsscs membership header; sys_lock.c/sys_qio.c need
-    # vms_kif.h (libvmssys). All header-only compile deps -- no link edge.
+    # sys_lock.c/sys_qio.c/F$GETSYI need vms_kif.h (libvmssys). All
+    # header-only compile deps -- no link edge.
     target_include_directories(vms PRIVATE
         ${VMS_SYS_INCLUDE_DIR}
-        ${VMS_LINK_INCLUDE_DIR}
-        ${VMS_SCS_INCLUDE_DIR})
+        ${VMS_LINK_INCLUDE_DIR})
     # Ordinary hosted compile against the NetBSD sysroot (toolchain provides
     # CMAKE_SYSROOT). No VMS image naming; the gate wants a plain archive.
     target_link_libraries(vms PUBLIC pthread m)
@@ -154,9 +150,6 @@ else()
     # (ovmx_image.h / ovmx_symvec.h) -- the same single-source-of-truth headers
     # LINK.EXE and IMGACT.EXE share (vms-db2). PRIVATE: only these TUs need them.
     target_include_directories(vms PRIVATE ${CMAKE_SOURCE_DIR}/src/vmslink/include)
-    # F$GETSYI CLUSTER_MEMBER/CLUSTER_NODES read SCSD's live membership publication
-    # (vms-8d4): src/vmsscs/include/scs_membership.h -- header-only, no link dep.
-    target_include_directories(vms PRIVATE ${CMAKE_SOURCE_DIR}/src/vmsscs/include)
     # vmssys provides vms_kif_* (the /dev/vms ioctl wrappers used by sys_lock.c
     # to reach the kernel lock manager).
     target_link_libraries(vms PUBLIC vmsprocess vmsfs vmssys pthread m)

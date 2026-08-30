@@ -119,10 +119,6 @@ target_include_directories(vmsdcl PRIVATE
     # kernel-interface client (vms-fb9): src/libvmssys/vms_kif.h, which
     # pulls src/kernel/vms_ioctl.h for the shared ioctl structures.
     ${OVMX_SRC_ROOT}/libvmssys
-    # SHOW CLUSTER reads the SCS daemon's live membership publication
-    # (vms-8d4): src/vmsscs/include/scs_membership.h -- a header-only IPC,
-    # so no vmsscs link dependency is added.
-    ${OVMX_SRC_ROOT}/vmsscs/include
     # LIBRARY/OBJECT (.OLB) shares the ar-container reader/writer with
     # LIBRARIAN.EXE: src/vmslink/include/ovmx_olb.h -- a header-only format
     # module, so no vmslink link dependency is added. (vms-ca9)

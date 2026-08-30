@@ -70,7 +70,7 @@
 #include "scs_poll.h"
 #include "scs_quorum.h" /* vms-7a9: CEVOTES/QUORUM computation + quorum gate */
 #include "scs_recnx.h"  /* vms-c7d: CSB connectivity states + RECNXINTERVAL reconnect loop */
-#include "scs_membership.h"  /* vms-8d4: publish live membership for DCL SHOW CLUSTER */
+#include "scs_membership.h"  /* struct scs_cluster_view/member -- vms-967d: struct-only, no file I/O */
 #include "scs_reason.h"
 #include "scs_env.h" /* vms-ec7: THE shared SCS message envelope (build + parse + dispatch) */
 #include "scs_dlm.h" /* vms-94c: the DLM SYSAP message class (ENQ/GRANT/DEQ/BLKAST) */
@@ -14338,10 +14338,13 @@ static void scsd_join_retx_tick(struct scsd_rx *rx, uint64_t now_ms)
  * stops any peer ever entering WAIT, so this tick has nothing to act on.
  */
 /*
- * scsd_publish_membership - vms-8d4: publish the connection manager's LIVE
- * member set so DCL SHOW CLUSTER (a separate process) reads reality instead of
- * a hardcoded NOTMEMBER. See scs_membership.h for the IPC contract and Rule 8
- * clean-room note.
+ * scsd_publish_membership - vms-8d4: drive the executive's cluster-membership
+ * block (VMS_IOCTL_CLUSTER_MEMBER_SET/CLEAR) from the connection manager's LIVE
+ * member set, so DCL SHOW CLUSTER and F$GETSYI (both separate processes, both
+ * reading /dev/vms) see reality instead of a hardcoded NOTMEMBER. vms-551 (then
+ * vms-5919) cut both readers over to the executive; vms-967d retired the
+ * earlier userspace file bridge this function used to also publish to -- see
+ * scs_membership.h for what remains of that contract (struct-only now).
  *
  * WHAT COUNTS AS A MEMBER. A peer is a member iff its VMS$VAXcluster connection
  * has reached OPEN (ps->vaxcluster_open_reached, the "honest membership fact"
@@ -14351,7 +14354,8 @@ static void scsd_join_retx_tick(struct scsd_rx *rx, uint64_t now_ms)
  * Those are the two signals the code already trusts to mean "OVMX is admitted".
  * When at least one peer qualifies we are in a cluster, so the LOCAL node is a
  * member too and leads the list. When NONE qualify we are not (yet) a member:
- * clear the file so SHOW CLUSTER honestly reports NOTMEMBER.
+ * CLEAR every executive entry this function last SET, so SHOW CLUSTER honestly
+ * reports NOTMEMBER.
  *
  * Throttled to ~1 Hz off the main loop's clock -- membership changes are rare
  * and a reader only needs current-within-a-second state.
@@ -14395,12 +14399,12 @@ static void scsd_publish_membership(struct scsd_rx *rx, uint64_t now_ms)
 
     /*
      * Cluster membership crosses into the executive (rd vms-551,
-     * docs/design-cluster-membership-executive.md). This function ALSO
-     * drives the executive's membership block via SET/CLEAR (a LOCAL ioctl
-     * on our own /dev/vms -- no new SCS wire send, so no CHOKED send-site
-     * table entry), alongside the file publish above/below, which this
-     * slice keeps unchanged: SHOW CLUSTER is the only reader cut over to
-     * the executive this slice (dcl_cmd_show.c cmd_show_cluster).
+     * docs/design-cluster-membership-executive.md). This function drives the
+     * executive's membership block via SET/CLEAR (a LOCAL ioctl on our own
+     * /dev/vms -- no new SCS wire send, so no CHOKED send-site table entry).
+     * vms-967d retired the userspace file bridge this function used to also
+     * publish to; both readers (SHOW CLUSTER, F$GETSYI) read the executive
+     * block exclusively now (vms-551, vms-5919).
      *
      * CSID convention: this node's own identity convention already treats
      * the SCSSYSTEMID-derived low-16 wire address as the DLM CSID (see
@@ -14420,7 +14424,6 @@ static void scsd_publish_membership(struct scsd_rx *rx, uint64_t now_ms)
 
     if (peer_members == 0) {
         /* Not a member of any cluster right now -> NOTMEMBER is the truth. */
-        scs_membership_clear();
         for (int i = 0; i < scsd_membership_last_n; i++) {
             (void)scsd_cluster_member_clear_ioctl(scsd_membership_last_csids[i]);
         }
@@ -14437,8 +14440,6 @@ static void scsd_publish_membership(struct scsd_rx *rx, uint64_t now_ms)
     local->sysid = rx->vc_ctx->scssystemid;
     strncpy(local->state, "MEMBER", sizeof(local->state) - 1);
     view.n_members = 1 + peer_members;
-
-    (void)scs_membership_publish(&view);
 
     /* Drive the executive: SET every live member this cycle, then CLEAR any
      * csid that was live last cycle and is not live this cycle -- a real
@@ -16118,9 +16119,10 @@ int main(int argc, char **argv)
          * WAIT/RECONNECT. OVMX_NO_RECNX_TICK=1 disables it. */
         scsd_recnx_tick(&rx, monotonic_ms());
 
-        /* --- vms-8d4: publish the live member set (throttled to ~1 Hz inside)
-         * so DCL SHOW CLUSTER reads real membership instead of a hardcoded
-         * NOTMEMBER. See scs_membership.h / docs/design-cluster-node.md §3.1. */
+        /* --- vms-8d4: drive the executive's live member set (throttled to
+         * ~1 Hz inside) so SHOW CLUSTER / F$GETSYI read real membership
+         * instead of a hardcoded NOTMEMBER. See docs/design-cluster-node.md
+         * §3.1 and docs/design-cluster-membership-executive.md (vms-551). */
         scsd_publish_membership(&rx, monotonic_ms());
 
         /* --- DISK DISCOVERY HAS EXACTLY ONE TRIGGER, AND THIS CALL IS IT.
@@ -16158,10 +16160,6 @@ int main(int argc, char **argv)
 
     /* vms-591: disconnect before vanishing. Bounded; see the function. */
     scsd_shutdown_teardown(&rx, buf, sizeof(buf));
-
-    /* vms-8d4: we are leaving the cluster -- retract our published membership so
-     * a later SHOW CLUSTER on this node honestly reports NOTMEMBER. */
-    scs_membership_clear();
 
     scsd_exit_summary(&rx, stderr);
 

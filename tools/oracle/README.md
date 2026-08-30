@@ -85,3 +85,30 @@ sync with the capture.
 No Docker build — it drives the already-running lab StatefulSets, so it is
 disk-safe. AXPbox/SIMH boot is ~1–2 min, so a capture takes a few minutes; run it
 detached if your shell has a short command timeout.
+
+## Comparing OVMX against the golden — `diff_surface` (vms-d008)
+
+`tools/oracle/diff_surface.sh` is the OVMX-side complement: it applies the
+**same** surface NORMALIZE mask to OVMX's output and classifies it against the
+golden, so the `vms-c38` gate can turn the hand-written DCL/SHOW acceptance
+assertions into a continuous golden-diff.
+
+```sh
+<ovmx_output> | tools/oracle/diff_surface.sh <surface>   # classify OVMX vs golden
+tools/oracle/diff_surface.sh <surface> --golden-self     # sanity: golden -> MATCH
+tools/oracle/diff_surface.sh selftest                    # classifier can-fail proof
+```
+
+Classification (most-damning first) and exit code:
+
+| class | meaning | exit |
+|---|---|---|
+| `MATCH` | normalized OVMX == golden — VMS-faithful | 0 |
+| `MISSING` | OVMX doesn't implement it (`%DCL-W-IVVERB`, `SS$_UNSUPPORTED`, …) | 2 |
+| `HOLLOW` | OVMX runs it but emits **no data** where the oracle has data (INV-6 lie-of-absence) | 3 |
+| `ARTIFICE-TELL` | OVMX matches the surface's declared `ARTIFICE_TELL='regex'` fabrication signature | 4 |
+| `FORMAT-DIVERGENT` | real data, wrong shape — the normalized diff is emitted | 5 |
+
+`MISSING`/`HOLLOW`/`ARTIFICE-TELL` are the INV-6 tells a hand-written `must_have`
+could pass vacuously on; the classifier names them explicitly so the gate (and
+the `vms-05a` surface register) can drive the hollow-first fix backlog.

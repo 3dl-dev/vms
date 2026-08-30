@@ -1,30 +1,27 @@
 #!/bin/sh
 #
-# test_show_cluster_membership.sh - BEHAVIOURAL gate (vms-8d4, INV-DCL): DCL
-# SHOW CLUSTER reflects the SCS daemon's REAL membership, and prints
-# %SYSTEM-I-NOTMEMBER only when this node is genuinely not a member.
+# test_show_cluster_membership.sh - HONEST-ABSENCE gate (vms-8d4 -> CONVERTED by
+# vms-551, INV-6 / Rule 9): DCL SHOW CLUSTER reads cluster membership from the
+# EXECUTIVE (the vms.ko membership block, via /dev/vms), NOT from a userspace
+# file. On a host with NO /dev/vms it must FAIL HONESTLY with %SYSTEM-W-NOSUCHDEV
+# and must NOT fabricate a member view -- and specifically must NOT read the old
+# scsd-published membership file even when one is present.
 #
-# WHY THIS EXISTS. cmd_show_cluster() used to hardcode "%SYSTEM-I-NOTMEMBER"
-# unconditionally -- so a genuinely-clustered node lied about being standalone,
-# even though src/vmsscs/ implements the full SCS stack. The fix wires SHOW
-# CLUSTER to the connection manager's live member set, which SCSD publishes to a
-# well-known file (src/vmsscs/include/scs_membership.h). That file IS the real
-# boundary between the daemon and the DCL process; this gate drives the REAL
-# cmd_show_cluster against a membership file written in the SAME format SCSD
-# writes -- it does NOT mock the function under test.
+# WHY THIS CHANGED (vms-551). SHOW CLUSTER used to read the SCSD-published FILE
+# (/var/run/ovmx/cluster_state, scs_membership.h) -- a userspace-to-userspace
+# path with nothing in the executive behind it (the exact facade Rule 9 names:
+# "a silent userspace fallback for an executive facility"). vms-551 moved the
+# live member set INTO the executive (vms_cluster_members[], read via
+# VMS_IOCTL_CLUSTER_MEMBER_GET / vms_kif_cluster_get_members). The conductor
+# ruling: absent /dev/vms -> honest SS$_NOSUCHDEV, never a file fallback.
 #
-#   - No published membership (daemon down / not joined) -> NOTMEMBER, and
-#     nothing else. This is the honest standalone answer.
-#   - A published two-node member set -> the member NODES and STATUS are shown,
-#     and NOTMEMBER must NOT appear.
-#   - An unknown-name peer (SCSD could not learn its SCSNODE) is identified by
-#     its SCSSYSTEMID, never dropped.
-#
-# The membership FILE FORMAT is an OVMX invention (Rule 8); the SHOW CLUSTER
-# DISPLAY fields (NODE/SOFTWARE/STATUS banner) are modeled on the public
-# OpenVMS SHOW CLUSTER utility. Full fidelity against a live 2-node cluster is
-# verified on lab-2 (see the note at the end); this gate proves the wiring and
-# the honest standalone/member split without needing a cluster.
+# WHERE THE POSITIVE PROOF LIVES NOW. The MEMBER-column / NOTMEMBER-with-members
+# behaviour (a real member set rendered, distinct from NOTMEMBER) is proven
+# against a REAL /dev/vms in the QEMU path -- tests/qemu/test_syssvc_cluster_member.c
+# (SET/GET/CLEAR the executive block, 26 assertions) plus the real DCL.EXE
+# SHOW CLUSTER drive in that harness. That is the Rule-9 proof ("not done until
+# exercised against real /dev/vms"). THIS host gate keeps the cheap, worth-having
+# anti-LARP half: SHOW CLUSTER fails honestly without the executive.
 #
 # Usage: test_show_cluster_membership.sh [PATH_TO_DCL.EXE]
 
@@ -44,7 +41,7 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT INT TERM
 STATE="$WORK/cluster_state"
 
-echo "vms-8d4 behavioural gate: SHOW CLUSTER reflects real SCS membership"
+echo "vms-551 honest-absence gate: SHOW CLUSTER reads the executive, fails honestly without /dev/vms"
 
 if [ ! -x "$DCL" ]; then
     echo "FAIL: DCL.EXE not found (looked at '$DCL')"
@@ -52,9 +49,10 @@ if [ ! -x "$DCL" ]; then
     exit 1
 fi
 
-# run SHOW CLUSTER with the membership file resolved to $STATE (absent or
-# present per the case). A liveness marker follows so we can tell "empty
-# output" from "DCL never ran".
+# This gate runs on a plain host (no vms.ko / no /dev/vms), so
+# vms_kif_cluster_get_members() returns SS$_NOSUCHDEV and cmd_show_cluster()
+# renders "%SYSTEM-W-NOSUCHDEV". OVMX_CLUSTER_STATE_PATH still points at $STATE so
+# we can prove the file is IGNORED (Case 2), not read.
 run_cluster() {
     printf 'SHOW CLUSTER\nWRITE SYS$OUTPUT "%s"\n' "$MARK" \
         | env OVMX_CLUSTER_STATE_PATH="$STATE" "$DCL" \
@@ -68,94 +66,54 @@ fail() {
     status=1
 }
 
-# --- Case A: no published membership -> NOTMEMBER (genuinely standalone) ----
+# --- Case 1: no /dev/vms -> honest NOSUCHDEV, no fabricated member view ------
 rm -f "$STATE"
 run_cluster
 if ! grep -qF "$MARK" "$WORK/out"; then
     fail "DCL did not run to completion (no liveness marker on stdout)" \
          "stdout was:" "$(sed 's/^/       | /' "$WORK/out")"
-elif grep -q 'NOTMEMBER, this system is not a member of a VMScluster' "$WORK/out"; then
+elif grep -q 'NOSUCHDEV' "$WORK/out"; then
     if grep -q 'View of Cluster' "$WORK/out"; then
-        fail "standalone SHOW CLUSTER printed NOTMEMBER AND a member view" \
+        fail "SHOW CLUSTER printed NOSUCHDEV AND a member view (fabricated)" \
              "stdout was:" "$(sed 's/^/       | /' "$WORK/out")"
     else
-        echo "  OK: with no published membership, SHOW CLUSTER reports NOTMEMBER"
+        echo "  OK: with no /dev/vms, SHOW CLUSTER fails honestly (%SYSTEM-W-NOSUCHDEV), no member view"
     fi
 else
-    fail "standalone SHOW CLUSTER did not report NOTMEMBER" \
-         "with no membership file this node is not a member; NOTMEMBER is the" \
-         "honest answer. stdout was:" "$(sed 's/^/       | /' "$WORK/out")"
+    fail "SHOW CLUSTER did not report NOSUCHDEV without the executive" \
+         "membership is executive-resident (vms-551); absent /dev/vms the honest" \
+         "answer is %SYSTEM-W-NOSUCHDEV, never a file-derived member table." \
+         "stdout was:" "$(sed 's/^/       | /' "$WORK/out")"
 fi
 
-# --- Case B: a live two-node member set -> members shown, NO NOTMEMBER ------
-# Written in SCSD's own publication format (scs_membership.h): the local node
-# leads, then peers. This is the exact file SCSD's scsd_publish_membership()
-# produces on a real join.
+# --- Case 2 (ANTI-FACADE): a membership FILE is present, but SHOW CLUSTER must
+# IGNORE it and still report NOSUCHDEV -- proving it reads the executive, not the
+# file. This is the exact facade vms-551 excised: a populated file must NOT
+# resurrect a member view when the executive is absent.
 cat > "$STATE" <<'EOF'
 version=1
 member=VAX3 1027 MEMBER
 member=VAX1 1025 MEMBER
 EOF
 run_cluster
-if grep -q 'NOTMEMBER' "$WORK/out"; then
-    fail "clustered SHOW CLUSTER still reported NOTMEMBER" \
-         "a two-node member set is published; NOTMEMBER is a lie here." \
+if ! grep -qF "$MARK" "$WORK/out"; then
+    fail "DCL did not run to completion in Case 2" \
          "stdout was:" "$(sed 's/^/       | /' "$WORK/out")"
+elif grep -q 'VAX3' "$WORK/out" || grep -q 'VAX1' "$WORK/out" || grep -q 'View of Cluster' "$WORK/out"; then
+    fail "SHOW CLUSTER read the membership FILE (facade not excised)" \
+         "a populated cluster_state file must NOT produce a member view; SHOW" \
+         "CLUSTER reads the executive (vms-551), and with no /dev/vms the answer" \
+         "is NOSUCHDEV. stdout was:" "$(sed 's/^/       | /' "$WORK/out")"
+elif grep -q 'NOSUCHDEV' "$WORK/out"; then
+    echo "  OK: a populated membership file is IGNORED -- SHOW CLUSTER still reports NOSUCHDEV (reads the executive, not the file)"
 else
-    ok=1
-    grep -q 'View of Cluster from system ID 1027 node: VAX3' "$WORK/out" || {
-        ok=0
-        fail "clustered SHOW CLUSTER did not name the local node in the banner" \
-             "expected 'View of Cluster from system ID 1027 node: VAX3'." \
-             "stdout was:" "$(sed 's/^/       | /' "$WORK/out")"
-    }
-    grep -q 'VAX3' "$WORK/out" && grep -q 'VAX1' "$WORK/out" || {
-        ok=0
-        fail "clustered SHOW CLUSTER did not list both member nodes" \
-             "expected VAX3 and VAX1 rows. stdout was:" \
-             "$(sed 's/^/       | /' "$WORK/out")"
-    }
-    grep -q 'MEMBER' "$WORK/out" || {
-        ok=0
-        fail "clustered SHOW CLUSTER showed no MEMBER status column" \
-             "stdout was:" "$(sed 's/^/       | /' "$WORK/out")"
-    }
-    [ "$ok" -eq 1 ] && echo "  OK: a published two-node member set is rendered, no NOTMEMBER"
-fi
-
-# --- Case C: an unknown-name peer is identified by its SCSSYSTEMID ----------
-# SCSD writes "?" for a peer whose SCSNODE it has not learned; the row must
-# still appear, keyed on the SCSSYSTEMID, never silently dropped.
-cat > "$STATE" <<'EOF'
-version=1
-member=VAX3 1027 MEMBER
-member=? 1026 MEMBER
-EOF
-run_cluster
-if grep -q 'NOTMEMBER' "$WORK/out"; then
-    fail "SHOW CLUSTER reported NOTMEMBER with an unknown-name peer present" \
-         "stdout was:" "$(sed 's/^/       | /' "$WORK/out")"
-elif grep -q '1026' "$WORK/out"; then
-    echo "  OK: an unknown-name peer is shown by its SCSSYSTEMID (1026)"
-else
-    fail "SHOW CLUSTER dropped the unknown-name peer" \
-         "expected its SCSSYSTEMID 1026 in the output. stdout was:" \
-         "$(sed 's/^/       | /' "$WORK/out")"
-fi
-
-# --- Case D: a file with no member lines -> NOTMEMBER ----------------------
-printf 'version=1\n' > "$STATE"
-run_cluster
-if grep -q 'NOTMEMBER' "$WORK/out" && ! grep -q 'View of Cluster' "$WORK/out"; then
-    echo "  OK: a membership file with zero members reports NOTMEMBER"
-else
-    fail "SHOW CLUSTER did not report NOTMEMBER for an empty member set" \
+    fail "SHOW CLUSTER neither showed the file's members nor reported NOSUCHDEV" \
          "stdout was:" "$(sed 's/^/       | /' "$WORK/out")"
 fi
 
 if [ "$status" -eq 0 ]; then
-    echo "vms-8d4 behavioural gate: PASS"
+    echo "vms-551 honest-absence gate: PASS"
 else
-    echo "vms-8d4 behavioural gate: FAIL"
+    echo "vms-551 honest-absence gate: FAIL"
 fi
 exit $status

@@ -53,12 +53,19 @@ or carried in its scalar slots):
 | field            | meaning                                                             |
 |------------------|--------------------------------------------------------------------|
 | `initiator_csid` | CSID of the node whose blocked request started the search          |
-| `initiator_lkid` | that blocked request's requester-side handle (identifies the victim)|
+| `initiator_lkid` | that blocked request's requester-side handle (cycle-close test)     |
 | `blocked_csid`   | CSID currently being chased (the holder we ask "are you blocked?")  |
 | `blocked_lkid`   | that holder's lock handle on its own node                          |
+| `victim_csid`    | running MIN CSID over requests chased so far (global victim, §3)     |
+| `victim_lkid`    | running MIN lkid (tiebreak) — the `(csid,lkid)` lexicographic min    |
 | `ttl`            | hop budget, initialised to `MAX_DEADLOCK_DEPTH` (16), decremented   |
 | `flag`           | `SEARCH` (forward) vs `VICTIM` (cycle confirmed — abort)            |
 | `resnam`         | the resource under contention (for logging / correlation)          |
+
+The cycle-close test uses `(initiator_csid, initiator_lkid)` — the probe has
+returned to where it began — but the ABORTED request is `(victim_csid,
+victim_lkid)`, the global min, which is identical for every probe traversing the
+same cycle. Never conflate the two: closing on the initiator, aborting the min.
 
 One op, two directions via `flag`, so the "op in N places" cost is paid once.
 
@@ -89,23 +96,46 @@ Because every edge is a real queued-request→real-holder relationship read from
 `res->granted` / `res->waiting`, a detected cycle is a REAL cycle (INV-6): the
 detector never guesses "probably deadlocked".
 
-### 3. Victim (deterministic — the initiator)
+### 3. Victim (GLOBALLY deterministic — min over the cycle, NOT the initiator)
 
-The initiator's blocked request is the single victim (deterministic ⇒ no
-double-abort). The detecting node sends `DLKSRCH(VICTIM, initiator=(…),
-blocked=(…))` to the node that MASTERS the victim's queued request (the master
-where `initiator`'s request is parked — reachable because the victim request
-carries `req_csid = initiator_csid`). That master:
+**The double-victim hazard.** "The victim is the initiator" is WRONG: in a 2-node
+cycle BOTH ends can initiate a search simultaneously (A probes, B probes); each
+probe returns to its own initiator ⇒ both would declare deadlock and both would
+abort ⇒ **two** processes killed when exactly **one** should be. That double-abort
+is the data-integrity failure this rung exists to prevent. The victim MUST be
+chosen by a rule both nodes compute **identically**, independent of who initiated.
 
-1. Finds the queued request `req_csid == initiator_csid && req_lkid ==
-   initiator_lkid` on the contended resource's `waiting` queue.
+**The rule — global minimum over the cycle's real request ids.** Edge-chasing
+traverses the ENTIRE cycle before a probe returns to its start, so every probe
+(whichever node launched it) visits the SAME set of requests. The frame therefore
+carries a running candidate `victim = (victim_csid, victim_lkid)`: at each hop the
+chasing node updates it with `min((victim_csid, victim_lkid), (this waiting
+request's req_csid, req_lkid))` lexicographically. When the cycle closes, that
+accumulated minimum is the victim — the same value for an A-initiated and a
+B-initiated probe, so at most one request is ever aborted even if both fire.
+
+The detecting node sends `DLKSRCH(VICTIM, victim=(victim_csid, victim_lkid))` to
+the node that MASTERS the victim's queued request (reachable because that request
+carries `req_csid = victim_csid`). That master:
+
+1. Finds the queued request `req_csid == victim_csid && req_lkid == victim_lkid`
+   on its `waiting` queue.
 2. Removes it and completes it with `SS$_DEADLOCK` via the **existing GRANT-reply
-   path** (`SCS_DLM_OP_GRANT` with `status = SS$_DEADLOCK`) — the requester's
+   path** (`SCS_DLM_OP_GRANT` with `status = SS$_DEADLOCK`) — that requester's
    `$ENQ` returns `SS$_DEADLOCK`, exactly as the local detector already does.
+   Idempotent: a second VICTIM naming an already-aborted request is a no-op, so a
+   concurrent A- and B-initiated search that agree on the victim abort it once.
 
 The other request in the cycle is **not** aborted; it stays queued and grants once
 the victim's process releases the lock it held (application-driven back-off, the
-VMS contract). So the cycle is broken by exactly one `SS$_DEADLOCK`.
+VMS contract). So the cycle is broken by exactly one `SS$_DEADLOCK`, even under
+concurrent bidirectional initiation.
+
+> Harness: prove the single-initiator cycle as the minimal slice. The
+> concurrent-both-initiate case (A and B both waiting+searching → still exactly
+> one `SS$_DEADLOCK`) is the strongest proof of the global rule; prove it here if
+> it does not balloon the slice, else file a follow-on (Rule 5) — but the
+> SELECTION LOGIC ships as the global-min rule regardless, never local-initiator.
 
 ## Minimal faithful proof (harness)
 

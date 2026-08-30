@@ -98,7 +98,7 @@
  * message opcodes (SCS_DLM_OP_*); scsd is the one place that includes both. */
 _Static_assert((int)SCS_DLM_OP_ENQ == 1 && (int)SCS_DLM_OP_GRANT == 2 &&
                (int)SCS_DLM_OP_DEQ == 3 && (int)SCS_DLM_OP_BLKAST == 4 &&
-               (int)SCS_DLM_OP_REBUILD == 5,
+               (int)SCS_DLM_OP_REBUILD == 5 && (int)SCS_DLM_OP_DLKSRCH == 6,
                "SCS_DLM_OP_* must match VMS_DLM_OP_* in vms_ioctl.h");
 #include "scs_rx.h"
 #include "scs_start.h"
@@ -1044,6 +1044,24 @@ struct peer_state {
     int      dlm_h10b_hold_established; /* node-A: our pre-departure hold is GRANTED */
     char     dlm_h10b_resnam[32];       /* node-A: the resource name we hold (from the GRANT) */
     int      dlm_h10b_rebuild_sent;     /* node-A: the REBUILD send ran (one-shot) */
+    /* rd vms-ec75 (DLM rung H11): DISTRIBUTED DEADLOCK SEARCH. A contender node
+     * holds one resource (mastered by C) and $ENQs a second that QUEUES behind the
+     * other contender -- a genuine cross-node wait-for cycle. When the wait queues,
+     * the MASTER (C) initiates an edge-chasing DLKSRCH probe that detects the cycle
+     * over the two readback authorities (DLM_ENUM_WAITS home + DLM_GET_GRANTED
+     * master) and aborts the GLOBAL-min victim with SS$_DEADLOCK. These fields drive
+     * a contender's timed hold-then-wait sequence to C. */
+    int      dlm_ec75;                  /* contender: H11 armed (OVMX_DLM_EC75) */
+    uint64_t dlm_ec75_join_ms;          /* contender: ms clock when the DLM VC to C was ready */
+    int      dlm_ec75_hold_sent;        /* contender: the HOLD $ENQ (#1) was sent to C */
+    int      dlm_ec75_wait_sent;        /* contender: the WAIT $ENQ (#2) was sent to C */
+    int      dlm_ec75_victim_seen;      /* contender: our WAIT $ENQ returned SS$_DEADLOCK */
+    int      dlm_ec75_search_sent;      /* master(C): the one-shot search was initiated  */
+    uint32_t dlm_ec75_init_conid;       /* master(C): the initiator's DLM client conid --
+                                         * the unprompted victim GRANT's dest (learned
+                                         * from the initiator's WAIT $ENQ frame). */
+    uint32_t dlm_ec75_init_csid;        /* master(C): the initiator's CSID              */
+    char     dlm_ec75_init_resnam[32];  /* master(C): the resource the initiator waits on */
     /* vms-694 (§4(O.7)): OVMX's OWN model of "am I a connected VMS$VAXcluster
      * member of this peer", LATCHED the moment the VMS$VAXcluster SYSAP
      * connection (cdt_joiner, or cdt_member if it ever reaches OPEN) hits the
@@ -3715,6 +3733,20 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                                sibling DLM client send above; ordinary
  *                                sequenced SCS traffic on a connection that
  *                                cannot exist before its circuit does.
+ *
+ *   CHOKED, and new in vms-ec75 (DLM rung H11): the TWO distributed-deadlock-search
+ *   senders. Both are MTYPE-10 SYSAP messages on the OPEN VMS$VAXcluster VC to a
+ *   peer resolved by CSID (peer_by_csid), ordinary sequenced SCS traffic like every
+ *   sibling DLM send above:
+ *     scsd_dlm_send_dlksrch()    the DLKSRCH PROBE: a SEARCH-HOLDER / SEARCH-RESOURCE
+ *                                (and, in the multi-hop victim case, VICTIM) leg of
+ *                                the edge-chase, forwarded home->master->home along
+ *                                the cross-node wait-for edges to detect the cycle.
+ *     scsd_dlm_send_victim_grant()  the VICTIM SIGNAL: an unprompted
+ *                                SCS_DLM_OP_GRANT carrying status=SS$_DEADLOCK to the
+ *                                victim node's DLM client, completing its queued
+ *                                cross-node $ENQ with the deadlock abort (structurally
+ *                                the H5 deferred GRANT, deadlock status).
  *
  *   CHOKED, and new in vms-600:
  *     scsd_mscp_srv_xfer()       the live scs_mscp_srv_xfer_fn: the SCA
@@ -8901,6 +8933,476 @@ static void scsd_dlm_h10b_rebuild_on_depart(struct peer_state *ps)
     fflush(stdout);
 }
 
+/* Forward decls: the H11 contender drive (below) reuses the generic DLM client
+ * sender and binds the client input routine, both defined further down. */
+static int scsd_dlm_client_send_op(struct scsd_rx *rx, struct peer_state *ps,
+                                   uint8_t op, uint8_t mode, uint32_t req_lkid,
+                                   uint32_t master_lkid, const char *resname,
+                                   const char *label);
+static void scsd_dlm_cli_msg_input(struct scs_cdt *cdt, const void *msg,
+                                   size_t msglen, void *ctx);
+
+/* ==================== DLM rung H11 (rd vms-ec75): DISTRIBUTED DEADLOCK ==========
+ * Edge-chasing distributed deadlock detection. See
+ * docs/design-dlm-distributed-deadlock.md. The chase reads two authorities over
+ * /dev/vms -- the HOME (VMS_IOCTL_DLM_ENUM_WAITS: "what does CSID H wait for?") and
+ * the MASTER (VMS_IOCTL_DLM_GET_GRANTED: "who holds resource R?") -- and bounces
+ * home<->master by CSID (peer_by_csid) until a probe returns to the initiator's own
+ * held lock (CYCLE) or dead-ends (drop). On a cycle the GLOBAL-min victim is aborted
+ * with SS$_DEADLOCK (the VICTIM leg, dispatched into the master's executive), and
+ * the master completes that queued $ENQ by wiring an unprompted GRANT(SS$_DEADLOCK)
+ * to the requester. Every hop reads REAL executive state (INV-6): a dropped/
+ * ttl-expired probe reports no deadlock, never a fabricated cycle. */
+
+static void scsd_ec75_put_le32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)(v & 0xFF);        p[1] = (uint8_t)((v >> 8) & 0xFF);
+    p[2] = (uint8_t)((v >> 16) & 0xFF); p[3] = (uint8_t)((v >> 24) & 0xFF);
+}
+static uint32_t scsd_ec75_get_le32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/*
+ * scsd_dlm_send_dlksrch - the DLKSRCH PROBE send (SEARCH-HOLDER / SEARCH-RESOURCE /
+ * VICTIM forward). A TARGETED send to a peer resolved by CSID (peer_by_csid), like
+ * scsd_dlm_client_send_rebuild. CHOKED (send_frame_vc) -- new in vms-ec75, listed in
+ * the SEND SITE TABLE. The victim ids ride the valblk slots (design §wire). Returns
+ * 1 on send.
+ */
+static int scsd_dlm_send_dlksrch(struct scsd_rx *rx, struct peer_state *ps,
+                                 uint8_t phase, uint32_t init_csid, uint32_t init_lkid,
+                                 uint32_t blocked_csid, uint32_t victim_csid,
+                                 uint32_t victim_lkid, uint32_t victim_master,
+                                 uint32_t ttl, const char *resnam)
+{
+    if (rx == NULL || ps == NULL || ps->pb == NULL || ps->joiner_remote_conid == 0)
+        return 0;
+
+    uint32_t dlm_server = (ps->joiner_remote_conid & 0xFFFFFFF0u) |
+                          OVMX_CONID_CLS_DLMSRV;
+
+    struct scs_dlm_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, ps_port_addr(ps), 6);
+    memcpy(p.src_mac, rx->our_hw_mac, 6);
+    memcpy(p.src_logical, rx->our_src_logical, 6);
+    memcpy(p.peer_logical, ps_sys_addr(ps), 6);
+    p.local_conid = PS_DLM_CONID(ps);
+    p.remote_conid = dlm_server;
+    p.recv_ack = ps->vc.seq.recv_seq;
+    p.send_seq = scs_seq_advance(&ps->vc.seq);
+    p.incarnation = ps->incarnation;
+
+    struct scs_dlm_msg m;
+    memset(&m, 0, sizeof(m));
+    m.op = SCS_DLM_OP_DLKSRCH;
+    m.flags = phase;                 /* SCS_DLM_DLK_* */
+    m.req_csid = init_csid;          /* initiator (cycle-close identity) */
+    m.req_lkid = init_lkid;
+    m.master_csid = blocked_csid;    /* SEARCH-HOLDER: Hk being chased */
+    m.status = ttl;                  /* hop budget */
+    scsd_ec75_put_le32(m.valblk + 0, victim_csid);   /* running MIN victim */
+    scsd_ec75_put_le32(m.valblk + 4, victim_lkid);
+    scsd_ec75_put_le32(m.valblk + 8, victim_master);
+    if (resnam != NULL) {
+        size_t rl = strlen(resnam);
+        if (rl > SCS_DLM_RESNAM_MAX) rl = SCS_DLM_RESNAM_MAX;
+        m.namelen = (uint8_t)rl;
+        memcpy(m.resnam, resnam, rl);
+    }
+
+    uint8_t frame[SCS_DLM_FRAME_LEN];
+    if (scs_dlm_build_frame(&p, &m, frame) == 0 &&
+        send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb, "OVMX$DLM DLKSRCH (H11)",
+                      frame, sizeof(frame)) > 0)
+        return 1;
+    return 0;
+}
+
+/*
+ * scsd_dlm_send_victim_grant - the VICTIM SIGNAL: an unprompted SCS_DLM_OP_GRANT
+ * carrying status=SS$_DEADLOCK to the victim node's DLM CLIENT, completing its
+ * queued cross-node $ENQ with SS$_DEADLOCK -- exactly as the local detector's $ENQ
+ * returns SS$_DEADLOCK. Structurally the H5 deferred GRANT, but the status is the
+ * deadlock abort and the dest Con.ID is the requester's DLM client handle learned
+ * when its WAIT $ENQ queued here (stashed on its peer_state). CHOKED (send_frame_vc)
+ * -- new in vms-ec75, listed in the SEND SITE TABLE. Returns 1 on send.
+ */
+#define SS_DEADLOCK_VMS 3594u   /* SS$_DEADLOCK (odd=... even=error; 3594=0xE0A) */
+static int scsd_dlm_send_victim_grant(struct scsd_rx *rx, struct peer_state *ps,
+                                      uint32_t dest_client_conid, uint32_t victim_csid,
+                                      uint32_t victim_lkid, const char *resnam)
+{
+    if (rx == NULL || ps == NULL || ps->pb == NULL || dest_client_conid == 0)
+        return 0;
+
+    struct scs_dlm_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, ps_port_addr(ps), 6);
+    memcpy(p.src_mac, rx->our_hw_mac, 6);
+    memcpy(p.src_logical, rx->our_src_logical, 6);
+    memcpy(p.peer_logical, ps_sys_addr(ps), 6);
+    p.local_conid = PS_DLM_SERVER_CONID(ps);   /* from our DLM server (we mastered it) */
+    p.remote_conid = dest_client_conid;        /* the victim's DLM client handle */
+    p.recv_ack = ps->vc.seq.recv_seq;
+    p.send_seq = scs_seq_advance(&ps->vc.seq);
+    p.incarnation = ps->incarnation;
+
+    struct scs_dlm_msg g;
+    memset(&g, 0, sizeof(g));
+    g.op = SCS_DLM_OP_GRANT;
+    g.mode = (uint8_t)LCK$K_NLMODE;   /* NOT granted -- aborted */
+    g.req_lkid = victim_lkid;         /* the victim's own request handle */
+    g.status = SS_DEADLOCK_VMS;       /* SS$_DEADLOCK -- the honest abort status */
+    g.req_csid = victim_csid;
+    g.master_csid = resolve_scssystemid();
+    if (resnam != NULL) {
+        size_t rl = strlen(resnam);
+        if (rl > SCS_DLM_RESNAM_MAX) rl = SCS_DLM_RESNAM_MAX;
+        g.namelen = (uint8_t)rl;
+        memcpy(g.resnam, resnam, rl);
+    }
+
+    uint8_t frame[SCS_DLM_FRAME_LEN];
+    if (scs_dlm_build_frame(&p, &g, frame) == 0 &&
+        send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
+                      "OVMX$DLM GRANT (H11 victim SS$_DEADLOCK)", frame,
+                      sizeof(frame)) > 0)
+        return 1;
+    return 0;
+}
+
+/*
+ * scsd_dlm_ec75_enum_waits - LOCAL VMS_IOCTL_DLM_ENUM_WAITS: the HOME authority read.
+ * Returns the FIRST pending (NL) cross-node wait this node owns -- resource, master,
+ * this node's own request handle + CSID. Fail-honest (all zero) with no /dev/vms.
+ */
+static uint32_t scsd_dlm_ec75_enum_waits(char *out_resnam, uint32_t *out_master,
+                                         uint32_t *out_lkid, uint32_t *out_csid,
+                                         uint32_t *out_count)
+{
+    if (out_resnam) out_resnam[0] = '\0';
+    if (out_master) *out_master = 0;
+    if (out_lkid) *out_lkid = 0;
+    if (out_csid) *out_csid = 0;
+    if (out_count) *out_count = 0;
+#ifdef SCSD_UNIT_TEST
+    return 2296u;
+#else
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0)
+        return 2680u;
+    struct vms_register_args reg;
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return 2680u; }
+    struct vms_dlm_enum_waits_args a;
+    memset(&a, 0, sizeof(a));
+    if (ioctl(fd, VMS_IOCTL_DLM_ENUM_WAITS, &a) < 0) { close(fd); return 2680u; }
+    if (out_count) *out_count = a.count;
+    if (a.count > 0) {
+        if (out_resnam) { memcpy(out_resnam, a.ent[0].resnam, 31); out_resnam[31] = '\0'; }
+        if (out_master) *out_master = a.ent[0].master_csid;
+        if (out_lkid) *out_lkid = a.ent[0].req_lkid;
+        if (out_csid) *out_csid = a.ent[0].req_csid;
+    }
+    uint32_t st = a.status;
+    close(fd);
+    return st;
+#endif
+}
+
+/*
+ * scsd_dlm_ec75_abort_victim - LOCAL DLKSRCH VICTIM dispatch: this node masters the
+ * victim's queued request; abort it (remove from res->waiting, complete with
+ * SS$_DEADLOCK). Idempotent. Returns the executive status (SS$_DEADLOCK when a
+ * waiter was aborted this call, SS$_NORMAL when none matched -- already gone).
+ */
+static uint32_t scsd_dlm_ec75_abort_victim(uint32_t victim_csid, uint32_t victim_lkid,
+                                           uint32_t *out_aborted)
+{
+    if (out_aborted) *out_aborted = 0;
+#ifdef SCSD_UNIT_TEST
+    (void)victim_csid; (void)victim_lkid;
+    return 2296u;
+#else
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0)
+        return 2680u;
+    struct vms_register_args reg;
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return 2680u; }
+    struct vms_dlm_xnode_args args;
+    memset(&args, 0, sizeof(args));
+    args.op = VMS_DLM_OP_DLKSRCH;
+    args.flags = VMS_DLM_DLK_VICTIM;
+    args.req_csid = victim_csid;
+    args.req_lkid = victim_lkid;
+    if (ioctl(fd, VMS_IOCTL_DLM_XNODE, &args) < 0) { close(fd); return 2680u; }
+    if (out_aborted) *out_aborted = args.queued;   /* 1 iff a waiter was aborted now */
+    uint32_t st = args.status;
+    close(fd);
+    return st;
+#endif
+}
+
+/* Forward: the SEARCH-RESOURCE processing (also reached by a SEARCH-HOLDER whose
+ * waited resource this node itself masters -- the home==master collapse). */
+static void scsd_dlm_ec75_process_resource(struct scsd_rx *rx, const char *resnam,
+                                           uint32_t init_csid, uint32_t init_lkid,
+                                           uint32_t victim_csid, uint32_t victim_lkid,
+                                           uint32_t victim_master, uint32_t ttl);
+
+/*
+ * scsd_dlm_ec75_deliver_victim - the cycle is confirmed; abort the GLOBAL-min victim.
+ * If THIS node masters the victim's request (victim_master == us), abort it in the
+ * executive and wire the GRANT(SS$_DEADLOCK) to the requester. Otherwise forward a
+ * DLKSRCH(VICTIM) to the victim's master (the multi-hop case).
+ */
+static void scsd_dlm_ec75_deliver_victim(struct scsd_rx *rx, uint32_t init_csid,
+                                         uint32_t init_lkid, uint32_t victim_csid,
+                                         uint32_t victim_lkid, uint32_t victim_master,
+                                         const char *resnam)
+{
+    uint32_t us = resolve_scssystemid();
+    if (victim_master == us) {
+        uint32_t aborted = 0;
+        uint32_t st = scsd_dlm_ec75_abort_victim(victim_csid, victim_lkid, &aborted);
+        struct peer_state *vp = peer_by_csid(rx, victim_csid);
+        uint32_t dest = vp ? vp->dlm_ec75_init_conid : 0;
+        const char *vres = (vp && vp->dlm_ec75_init_resnam[0]) ?
+                           vp->dlm_ec75_init_resnam : resnam;
+        int sent = (vp != NULL) ?
+            scsd_dlm_send_victim_grant(rx, vp, dest, victim_csid, victim_lkid, vres) : 0;
+        log_ts(stdout);
+        printf(" SCSD-I-DLKVICTIM, victim=(csid=%u,lkid=0x%08X) ABORTED with"
+               " SS$_DEADLOCK (abort_rc=0x%08X aborted=%u); GRANT(SS$_DEADLOCK)"
+               " %s to the victim's $ENQ -- the cross-node cycle is broken by"
+               " exactly one victim (H11, rd vms-ec75)\n",
+               (unsigned)victim_csid, (unsigned)victim_lkid, (unsigned)st,
+               (unsigned)aborted, sent ? "WIRED" : "NOT wired");
+        fflush(stdout);
+    } else {
+        struct peer_state *mp = peer_by_csid(rx, victim_master);
+        int sent = (mp != NULL) ?
+            scsd_dlm_send_dlksrch(rx, mp, SCS_DLM_DLK_VICTIM, init_csid, init_lkid, 0,
+                                  victim_csid, victim_lkid, victim_master, 1, resnam) : 0;
+        log_ts(stdout);
+        printf(" SCSD-I-DLKVICTIM, forwarding VICTIM to master CSID=%u for"
+               " victim=(csid=%u,lkid=0x%08X) sent=%d (H11)\n",
+               (unsigned)victim_master, (unsigned)victim_csid,
+               (unsigned)victim_lkid, sent);
+        fflush(stdout);
+    }
+}
+
+static void scsd_dlm_ec75_process_resource(struct scsd_rx *rx, const char *resnam,
+                                           uint32_t init_csid, uint32_t init_lkid,
+                                           uint32_t victim_csid, uint32_t victim_lkid,
+                                           uint32_t victim_master, uint32_t ttl)
+{
+    uint32_t found = 0, n = 0, holder_csid = 0, holder_lkid = 0, mode = 0;
+    uint32_t rc = scsd_dlm_h10b_get_granted(resnam, &found, &n, &holder_csid,
+                                            &holder_lkid, &mode);
+    log_ts(stdout);
+    printf(" SCSD-I-DLKSRCH, SEARCH-RESOURCE resnam='%s' -> master read holder"
+           " csid=%u lkid=0x%08X (found=%u get_granted_rc=0x%08X) initiator=%u"
+           " ttl=%u (H11)\n",
+           resnam ? resnam : "", (unsigned)holder_csid, (unsigned)holder_lkid,
+           (unsigned)found, (unsigned)rc, (unsigned)init_csid, (unsigned)ttl);
+    fflush(stdout);
+
+    if (!found || holder_csid == 0)
+        return;   /* dead end -- resource unheld; no cycle on this path (drop) */
+
+    if (holder_csid == init_csid) {
+        /* The chase returned to the initiator's OWN held lock -- CYCLE. */
+        log_ts(stdout);
+        printf(" SCSD-I-DLKCYCLE, DISTRIBUTED DEADLOCK DETECTED: probe from"
+               " initiator CSID=%u closed on holder CSID=%u of resnam='%s';"
+               " global-min victim=(csid=%u,lkid=0x%08X) -- a REAL cross-node"
+               " wait-for cycle read off res->granted + pending origins (H11,"
+               " rd vms-ec75)\n",
+               (unsigned)init_csid, (unsigned)holder_csid, resnam ? resnam : "",
+               (unsigned)victim_csid, (unsigned)victim_lkid);
+        fflush(stdout);
+        scsd_dlm_ec75_deliver_victim(rx, init_csid, init_lkid, victim_csid,
+                                     victim_lkid, victim_master, resnam);
+        return;
+    }
+
+    /* Not the initiator -- chase the next holder: forward SEARCH-HOLDER. */
+    if (ttl == 0)
+        return;
+    struct peer_state *hp = peer_by_csid(rx, holder_csid);
+    if (hp != NULL) {
+        scsd_dlm_send_dlksrch(rx, hp, SCS_DLM_DLK_SEARCH_HOLDER, init_csid, init_lkid,
+                              holder_csid, victim_csid, victim_lkid, victim_master,
+                              ttl - 1, resnam);
+    }
+}
+
+/*
+ * scsd_dlm_ec75_handle_search - orchestrate a received DLKSRCH SEARCH leg. Reads the
+ * two authorities and forwards / detects / drops. Delegates every SEND to
+ * scsd_dlm_send_dlksrch / scsd_dlm_send_victim_grant, so this function itself never
+ * calls send_frame_vc (it is not a SEND SITE).
+ */
+static void scsd_dlm_ec75_handle_search(struct scsd_rx *rx, const struct scs_dlm_view *v)
+{
+    uint8_t phase = (uint8_t)v->msg.flags;
+    uint32_t init_csid = v->msg.req_csid;
+    uint32_t init_lkid = v->msg.req_lkid;
+    uint32_t ttl = v->msg.status;
+    uint32_t victim_csid = scsd_ec75_get_le32(v->msg.valblk + 0);
+    uint32_t victim_lkid = scsd_ec75_get_le32(v->msg.valblk + 4);
+    uint32_t victim_master = scsd_ec75_get_le32(v->msg.valblk + 8);
+    char resnam[32];
+    size_t rl = v->msg.namelen; if (rl > 31) rl = 31;
+    memcpy(resnam, v->msg.resnam, rl); resnam[rl] = '\0';
+    uint32_t us = resolve_scssystemid();
+
+    if (ttl == 0) {
+        log_ts(stdout);
+        printf(" SCSD-I-DLKSRCH, probe ttl EXPIRED (initiator=%u) -- bounded search,"
+               " no deadlock found (drop, H11)\n", (unsigned)init_csid);
+        fflush(stdout);
+        return;
+    }
+
+    if (phase == SCS_DLM_DLK_VICTIM) {
+        /* We MASTER the victim's request (multi-hop victim routing). */
+        scsd_dlm_ec75_deliver_victim(rx, init_csid, init_lkid, victim_csid,
+                                     victim_lkid, victim_master, resnam);
+        return;
+    }
+
+    if (phase == SCS_DLM_DLK_SEARCH_HOLDER) {
+        /* We are Hk: enumerate OUR pending waits (HOME authority). */
+        char wres[32]; uint32_t wmaster = 0, wlkid = 0, wcsid = 0, wcount = 0;
+        uint32_t rc = scsd_dlm_ec75_enum_waits(wres, &wmaster, &wlkid, &wcsid, &wcount);
+        log_ts(stdout);
+        printf(" SCSD-I-DLKSRCH, SEARCH-HOLDER at CSID=%u: pending waits=%u"
+               " first='%s' master=%u lkid=0x%08X (enum_rc=0x%08X) initiator=%u"
+               " ttl=%u (H11)\n",
+               (unsigned)us, (unsigned)wcount, wcount ? wres : "", (unsigned)wmaster,
+               (unsigned)wlkid, (unsigned)rc, (unsigned)init_csid, (unsigned)ttl);
+        fflush(stdout);
+        if (wcount == 0)
+            return;   /* not blocked -- dead end on this path (drop) */
+        /* Update the running GLOBAL-min victim with OUR waiting request's id. */
+        if (wcsid < victim_csid || (wcsid == victim_csid && wlkid < victim_lkid)) {
+            victim_csid = wcsid; victim_lkid = wlkid; victim_master = wmaster;
+        }
+        if (wmaster == us) {
+            /* We also master the waited resource -- collapse the hop locally. */
+            scsd_dlm_ec75_process_resource(rx, wres, init_csid, init_lkid,
+                                           victim_csid, victim_lkid, victim_master,
+                                           ttl - 1);
+        } else {
+            struct peer_state *mp = peer_by_csid(rx, wmaster);
+            if (mp != NULL)
+                scsd_dlm_send_dlksrch(rx, mp, SCS_DLM_DLK_SEARCH_RESOURCE, init_csid,
+                                      init_lkid, 0, victim_csid, victim_lkid,
+                                      victim_master, ttl - 1, wres);
+        }
+        return;
+    }
+
+    if (phase == SCS_DLM_DLK_SEARCH_RESOURCE) {
+        /* We master resnam -- who holds it? (MASTER authority). */
+        scsd_dlm_ec75_process_resource(rx, resnam, init_csid, init_lkid,
+                                       victim_csid, victim_lkid, victim_master, ttl);
+        return;
+    }
+}
+
+/*
+ * scsd_dlm_ec75_drive - a CONTENDER's timed hold-then-wait sequence to the master C.
+ * On the DLM VC to C being ready, phase 1 (immediately): $ENQ the HOLD resource EX
+ * (req_lkid 1). Phase 2 (after a settle window, so BOTH contenders' holds are
+ * established at C before either WAIT arrives): $ENQ the WAIT resource EX
+ * (req_lkid 2), which QUEUES behind the other contender -- the cross-node wait-for
+ * edge. The settle window is the only timing dependence and is generous; the cycle
+ * detection itself is event-driven off the queued-reply. Gated on OVMX_DLM_EC75 +
+ * the target CSID (OVMX_DLM_EC75_MASTER); a no-op on the master node.
+ */
+#define OVMX_EC75_WAIT_SETTLE_MS 6000u
+static void scsd_dlm_ec75_drive(struct scsd_rx *rx, struct peer_state *ps, uint64_t now_ms)
+{
+    if (rx == NULL || ps == NULL || ps->pb == NULL || !scsd_member_initiate_enabled())
+        return;
+    if (getenv("OVMX_DLM_EC75") == NULL)
+        return;
+    /* Mark the H11 role armed on this peer, so the client input's contender-side
+     * handling (queued-reply -> pending origin, victim GRANT -> SS$_DEADLOCK) fires
+     * on the replies this drive's sends elicit. */
+    ps->dlm_ec75 = 1;
+    if (!ps->joiner_connected || ps->joiner_remote_conid == 0)
+        return;
+
+    const char *hold = getenv("OVMX_DLM_EC75_HOLD");
+    const char *wait = getenv("OVMX_DLM_EC75_WAIT");
+    const char *master_env = getenv("OVMX_DLM_EC75_MASTER");
+    if (hold == NULL || wait == NULL || master_env == NULL)
+        return;
+    uint32_t master_csid = (uint32_t)strtoul(master_env, NULL, 10);
+    if ((uint32_t)peer_node_number(ps) != master_csid)
+        return;   /* only drive toward the master node C */
+
+    /* Make sure our DLM client CDT is bound (mirrors scsd_dlm_send_enq). */
+    struct scs_cdt *cli = scs_cdl_lookup(&scsd_cdl, PS_DLM_CONID(ps));
+    if (cli == NULL)
+        cli = scs_cdl_alloc_conid(&scsd_cdl, PS_DLM_CONID(ps), "OVMX$DLM",
+                                  "OVMX$DLM", ps->pb);
+    if (cli != NULL)
+        scs_cdt_set_handlers(cli, scsd_dlm_cli_msg_input, NULL, NULL, ps);
+
+    if (ps->dlm_ec75_join_ms == 0)
+        ps->dlm_ec75_join_ms = now_ms;
+
+    /* Phase 1: HOLD (req_lkid 1). */
+    if (!ps->dlm_ec75_hold_sent) {
+        if (scsd_dlm_client_send_op(rx, ps, SCS_DLM_OP_ENQ, LCK$K_EXMODE, 1u, 0,
+                                    hold, "OVMX$DLM ENQ HOLD (H11)")) {
+            ps->dlm_ec75_hold_sent = 1;
+            log_ts(stdout);
+            printf(" SCSD-I-DLKENQ, sent HOLD $ENQ EX resnam='%s' (req_lkid=1) to"
+                   " master CSID=%u -- our end of the cross-node cycle (H11)\n",
+                   hold, (unsigned)master_csid);
+            fflush(stdout);
+        }
+        return;
+    }
+
+    /* Phase 2: WAIT (req_lkid 2), after the settle window. The window is
+     * env-tunable per node (OVMX_DLM_EC75_WAIT_MS) so the harness can STAGGER the
+     * two contenders: the designated initiator waits LONGER, so by the time its
+     * WAIT queues (and the master initiates the search) the OTHER contender's WAIT
+     * has already queued and its PENDING origin exists -- else a SEARCH-HOLDER
+     * probe could reach a node before it recorded the wait-for edge and dead-end
+     * on a false negative. Both windows exceed the (sub-second) hold-grant time. */
+    uint64_t settle = OVMX_EC75_WAIT_SETTLE_MS;
+    const char *wms = getenv("OVMX_DLM_EC75_WAIT_MS");
+    if (wms != NULL && wms[0] != '\0')
+        settle = (uint64_t)strtoul(wms, NULL, 10);
+    if (!ps->dlm_ec75_wait_sent &&
+        now_ms - ps->dlm_ec75_join_ms >= settle) {
+        if (scsd_dlm_client_send_op(rx, ps, SCS_DLM_OP_ENQ, LCK$K_EXMODE, 2u, 0,
+                                    wait, "OVMX$DLM ENQ WAIT (H11)")) {
+            ps->dlm_ec75_wait_sent = 1;
+            log_ts(stdout);
+            printf(" SCSD-I-DLKENQ, sent WAIT $ENQ EX resnam='%s' (req_lkid=2) to"
+                   " master CSID=%u -- expect it to QUEUE behind the peer holder;"
+                   " the master then initiates the deadlock search (H11)\n",
+                   wait, (unsigned)master_csid);
+            fflush(stdout);
+        }
+    }
+}
+
 /*
  * scsd_dlm_srv_msg_input - the DLM server CDT's message input routine. Reads the
  * received frame from scsd_rx_current (the same OVMX design choice
@@ -8960,6 +9462,25 @@ static void scsd_dlm_srv_msg_input(struct scs_cdt *cdt, const void *msg,
                (unsigned)holder_lkid, scs_dlm_mode_name((uint8_t)mode),
                (unsigned)status, (unsigned)rst);
         fflush(stdout);
+        return;
+    }
+
+    /* DISTRIBUTED DEADLOCK SEARCH (rd vms-ec75, rung H11). A DLKSRCH probe -- a
+     * SEARCH-HOLDER / SEARCH-RESOURCE / VICTIM leg -- rides the DLM SYSAP to this
+     * node's server handle. Orchestrate it over the two readback authorities; every
+     * hop reads REAL executive state (INV-6). Gated on OVMX_DLM_EC75 so a node
+     * without it armed is byte-identical to before this rung. */
+    if (v.msg.op == SCS_DLM_OP_DLKSRCH) {
+        if (getenv("OVMX_DLM_EC75") == NULL || !scsd_member_initiate_enabled())
+            return;
+        log_ts(stdout);
+        printf(" SCSD-I-DLKSRCH, RECEIVED probe phase=%u from CSID=%u initiator=%u"
+               " ttl=%u resnam='%.*s' (H11)\n",
+               (unsigned)v.msg.flags, (unsigned)peer_node_number(ps),
+               (unsigned)v.msg.req_csid, (unsigned)v.msg.status,
+               (int)v.msg.namelen, v.msg.resnam);
+        fflush(stdout);
+        scsd_dlm_ec75_handle_search(scsd_rx_current.rx, &v);
         return;
     }
 
@@ -9109,6 +9630,55 @@ static void scsd_dlm_srv_msg_input(struct scs_cdt *cdt, const void *msg,
                    " master fires its blocking AST over SCS (H6)\n",
                    (unsigned)held.blocking_req_lkid, (unsigned)held.blocking_csid);
             fflush(stdout);
+        }
+    }
+
+    /* INITIATE THE DISTRIBUTED DEADLOCK SEARCH (rd vms-ec75, rung H11). This ENQ
+     * QUEUED behind a cross-node HOLDER (held.blocking_csid != 0) -- exactly the
+     * first wait-for edge the search chases. When THIS node masters the queued
+     * request and it belongs to the designated INITIATOR (OVMX_DLM_EC75_INIT), send
+     * one SEARCH-HOLDER probe to the blocking holder's node. Single-initiator by
+     * design (the minimal faithful slice): only the initiator's queued wait fires a
+     * search, though the global-min victim rule the search ships is correct under
+     * concurrent bidirectional initiation too. Stash the requester's DLM client
+     * Con.ID + waited resource so the eventual victim GRANT can reach it. */
+    if (getenv("OVMX_DLM_EC75") != NULL && held.blocking_csid != 0 &&
+        held.blocking_req_lkid != 0) {
+        ps->dlm_ec75 = 1;   /* mark the master role armed for the client input, too */
+        const char *init_env = getenv("OVMX_DLM_EC75_INIT");
+        uint32_t init_csid = init_env ? (uint32_t)strtoul(init_env, NULL, 10) : 0;
+        if (init_csid != 0 && v.msg.req_csid == init_csid && !ps->dlm_ec75_search_sent) {
+            /* Remember how to reach the initiator's $ENQ for the victim GRANT. */
+            ps->dlm_ec75_init_conid = v.local_conid;
+            ps->dlm_ec75_init_csid = v.msg.req_csid;
+            {
+                size_t rl = v.msg.namelen;
+                if (rl > sizeof(ps->dlm_ec75_init_resnam) - 1)
+                    rl = sizeof(ps->dlm_ec75_init_resnam) - 1;
+                memcpy(ps->dlm_ec75_init_resnam, v.msg.resnam, rl);
+                ps->dlm_ec75_init_resnam[rl] = '\0';
+            }
+            struct peer_state *hp = peer_by_csid(scsd_rx_current.rx, held.blocking_csid);
+            if (hp != NULL &&
+                scsd_dlm_send_dlksrch(scsd_rx_current.rx, hp,
+                                      SCS_DLM_DLK_SEARCH_HOLDER,
+                                      v.msg.req_csid, v.msg.req_lkid,
+                                      held.blocking_csid,
+                                      /* seed victim = the initiator's own request */
+                                      v.msg.req_csid, v.msg.req_lkid,
+                                      resolve_scssystemid(),
+                                      16u /* ttl = MAX_DEADLOCK_DEPTH */,
+                                      (const char *)v.msg.resnam)) {
+                ps->dlm_ec75_search_sent = 1;
+                log_ts(stdout);
+                printf(" SCSD-I-DLKSRCH, INITIATED search: initiator=(csid=%u,"
+                       " lkid=0x%08X) waits '%.*s' behind holder CSID=%u; chasing the"
+                       " cross-node wait-for edge (H11, rd vms-ec75)\n",
+                       (unsigned)v.msg.req_csid, (unsigned)v.msg.req_lkid,
+                       (int)v.msg.namelen, v.msg.resnam,
+                       (unsigned)held.blocking_csid);
+                fflush(stdout);
+            }
         }
     }
 
@@ -9414,6 +9984,38 @@ static void scsd_dlm_cli_msg_input(struct scs_cdt *cdt, const void *msg,
                ? "cross-node lock GRANTED by the master (SS$_NORMAL)"
                : "lock NOT granted (honest)");
     fflush(stdout);
+
+    /* DISTRIBUTED DEADLOCK SEARCH, CONTENDER SIDE (rd vms-ec75, rung H11).
+     *   - Our WAIT $ENQ (#2) QUEUED (status VMS_DLM_STS_QUEUED, mode NL): dispatch
+     *     the queued-reply into OUR executive so grant_recv creates the PENDING
+     *     origin record -- the wait-for edge VMS_IOCTL_DLM_ENUM_WAITS later surfaces
+     *     when this node is chased. INV-6: a REAL origin, from the master's genuine
+     *     queued reply, never a fabricated pending state.
+     *   - Our WAIT $ENQ (#2) was ABORTED (status SS$_DEADLOCK): the master detected
+     *     a cross-node deadlock cycle and chose us as the global-min victim; our
+     *     $ENQ completes with SS$_DEADLOCK, exactly as the local detector's would. */
+    if (ps->dlm_ec75 && v.msg.req_lkid == 2u) {
+        if (v.msg.status == 0u) {   /* VMS_DLM_STS_QUEUED: pending, not granted */
+            (void)scsd_dlm_dispatch_to_executive(&v.msg, NULL, NULL, NULL);
+            log_ts(stdout);
+            printf(" SCSD-I-DLKPEND, WAIT $ENQ '%.*s' QUEUED on the master; PENDING"
+                   " origin recorded on this node (the wait-for edge the search"
+                   " chases) -- read from OUR executive (H11)\n",
+                   (int)v.msg.namelen, v.msg.resnam);
+            fflush(stdout);
+        } else if (v.msg.status == SS_DEADLOCK_VMS) {
+            ps->dlm_ec75_victim_seen = 1;
+            log_ts(stdout);
+            printf(" SCSD-I-DLKVICTIM, our WAIT $ENQ '%.*s' (req_lkid=0x%08X)"
+                   " returned status=0x%08X SS$_DEADLOCK -- this node is the"
+                   " deterministic global-min victim; the distributed deadlock is"
+                   " broken by aborting exactly this one request (H11, rd vms-ec75)\n",
+                   (int)v.msg.namelen, v.msg.resnam, (unsigned)v.msg.req_lkid,
+                   (unsigned)v.msg.status);
+            fflush(stdout);
+        }
+        return;
+    }
 
     /* THE LVB WIRE, WRITER SIDE (rd vms-d81, H8). On the GRANT for our holder
      * (#1), WRITE a known 16-byte value block and release it with a cross-node
@@ -13637,6 +14239,10 @@ static void scsd_join_retx_tick(struct scsd_rx *rx, uint64_t now_ms)
          * block once, at/after join, BEFORE node A's cross-node $ENQ can arrive.
          * A no-op on node A (OVMX_DLM_ENQ set) and without OVMX_DLM_H9. */
         scsd_dlm_h9_seed(rx, ps);
+        /* rd vms-ec75 (DLM rung H11): a contender's timed hold-then-wait sequence
+         * to the master C -- establishes its end of the cross-node deadlock cycle.
+         * A no-op on the master node and without OVMX_DLM_EC75. */
+        scsd_dlm_ec75_drive(rx, ps, now_ms);
     }
     /* vms-2bf (DLM rung H10a): node A latches the tracked resource's directory
      * CSID over the FULL membership, once, before any departure. Not per-peer --

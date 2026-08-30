@@ -351,6 +351,17 @@ uint32_t vms_kif_dlm_get_granted(const char *resnam, uint32_t *out_found,
                                  uint32_t *out_granted_mode);
 
 /*
+ * vms_kif_dlm_enum_waits - enumerate this node's pending (NL) cross-node waits, the
+ * HOME authority for distributed deadlock search (vms-ec75, DLM rung H11).
+ * OVMX-UNWIRED: vms_kif_dlm_enum_waits (vms-ec75) -- like vms_kif_dlm_get_granted
+ * above, scsd issues VMS_IOCTL_DLM_ENUM_WAITS with a DIRECT POSIX ioctl in its chase
+ * orchestration, not this freestanding client; no sys$ service issues it. This
+ * wrapper exists so the readback is observable against a real /dev/vms (exercised by
+ * the DLM H11 harness via scsd's direct ioctl). Wire it and delete this line if a
+ * product client ever issues it. */
+uint32_t vms_kif_dlm_enum_waits(uint32_t *out_count, uint32_t *out_total);
+
+/*
  * vms_kif_dlm_xnode_blkast - the BLKAST-WIRE half of the cross-node DLM receive
  * (DLM epic vms-7fa rung H6, vms-76d). A focused wrapper that carries the two
  * fields the generic vms_kif_dlm_xnode above does not: `blkastadr`/`blkastprm`

@@ -856,6 +856,26 @@ uint32_t vms_kif_dlm_get_granted(const char *resnam, uint32_t *out_found,
     return args.status;
 }
 
+/*
+ * vms_kif_dlm_enum_waits - enumerate this node's pending (NL) cross-node waits,
+ * the HOME authority for distributed deadlock search (rd vms-ec75, DLM rung H11).
+ * OVMX-UNWIRED (see the header): scsd issues VMS_IOCTL_DLM_ENUM_WAITS directly in
+ * its chase orchestration; this wrapper exists so the readback is observable
+ * against a real /dev/vms (and to hold the opcode in the kif kernel-floor census).
+ */
+uint32_t vms_kif_dlm_enum_waits(uint32_t *out_count, uint32_t *out_total)
+{
+    struct vms_dlm_enum_waits_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+
+    KIF_CALL(VMS_IOCTL_DLM_ENUM_WAITS, &args);
+
+    if (out_count) *out_count = args.count;
+    if (out_total) *out_total = args.total;
+    return args.status;
+}
+
 uint32_t vms_kif_dlm_xnode_blkast(uint32_t op, uint32_t lkmode,
                                   uint32_t req_lkid, uint32_t master_lkid,
                                   uint32_t req_csid, uint32_t master_csid,

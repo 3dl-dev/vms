@@ -51,12 +51,15 @@ fi
 
 # This gate runs on a plain host (no vms.ko / no /dev/vms), so
 # vms_kif_cluster_get_members() returns SS$_NOSUCHDEV and cmd_show_cluster()
-# renders "%SYSTEM-W-NOSUCHDEV". OVMX_CLUSTER_STATE_PATH still points at $STATE so
-# we can prove the file is IGNORED (Case 2), not read.
+# renders "%SYSTEM-W-NOSUCHDEV" -- on SYS$ERROR (stderr), like every VMS
+# condition message, NOT SYS$OUTPUT. So capture BOTH streams into $WORK/out
+# (2>&1): the liveness marker (SYS$OUTPUT) and the NOSUCHDEV message (SYS$ERROR)
+# both land there. OVMX_CLUSTER_STATE_PATH still points at $STATE so we can prove
+# the file is IGNORED (Case 2), not read.
 run_cluster() {
     printf 'SHOW CLUSTER\nWRITE SYS$OUTPUT "%s"\n' "$MARK" \
         | env OVMX_CLUSTER_STATE_PATH="$STATE" "$DCL" \
-              >"$WORK/out" 2>"$WORK/err"
+              >"$WORK/out" 2>&1
 }
 
 fail() {

@@ -2,7 +2,13 @@
 # TEST: SHOW quick-win subcommands produce correct VMS-format output
 # EXPECT: contains:OVMX
 # EXPECT: contains:OVMX-TCPIP
-# EXPECT: contains:%SYSTEM-I-NOTMEMBER
+# vms-551: SHOW CLUSTER now reads cluster membership from the EXECUTIVE (the
+# vms.ko block via /dev/vms), not the SCSD-published file. This suite runs with
+# NO executive (/dev/vms absent, Rule 9), so -- exactly like the de-fabbed SHOW
+# ERROR/DEVICE above -- the read fails honestly with %SYSTEM-W-NOSUCHDEV rather
+# than a file-derived NOTMEMBER/member view. The real NOTMEMBER/member-set proof
+# moved to the /dev/vms path (tests/qemu/test_syssvc_cluster_member.c).
+# EXPECT: contains:%SYSTEM-W-NOSUCHDEV
 # EXPECT: regex:OVMX TCP/IP Services V[0-9]+\.[0-9]+
 # EXPECT: contains:Node: OVMX
 # vms-050: SHOW ERROR de-fabbed (#892). It used to print a hardcoded "Device

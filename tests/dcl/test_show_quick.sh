@@ -31,7 +31,14 @@
 # EXPECT: contains:SYS$MANAGER:ACCOUNTNG.DAT
 # EXPECT: contains:security auditing is currently disabled.
 # EXPECT: contains:SYS$MANAGER:AUDIT.LOG
-# EXPECT: contains:%SYSTEM-F-NODISKQUOTA
+# EXPECT: contains:%SYSTEM-F-QFNOTACT
+# EXPECT: contains:disk quotas not enabled on this volume
+# EXPECT_NOT: contains:User [200,1]
+# EXPECT_NOT: contains:NODISKQUOTA
+# (SHOW QUOTA on OVMX's quotas-off volumes returns %SYSTEM-F-QFNOTACT, oracle-
+#  verbatim from live VAX V7.3 — vms-73c4. Corrected from the wrong-condition
+#  NODISKQUOTA draft; the negative asserts lock out the old [200,1] fab AND the
+#  wrong NODISKQUOTA condition.)
 # EXPECT: contains:System root is SYS$SYSDEVICE:[SYS0.SYSCOMMON.]
 #
 # vms-17d (INV-DCL): SHOW ACCOUNTING now reads a REAL, system-wide,

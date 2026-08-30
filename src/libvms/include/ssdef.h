@@ -82,6 +82,10 @@ extern "C" {
 #define SS$_BADPARAM        20      /* Bad parameter value */
 #define SS$_EXQUOTA         28      /* Exceeded quota */
 #define SS$_NOPRIV          36      /* No privilege for attempted operation */
+/* ORACLE-PINNED (vms-73c4, Rule 8): SHOW QUOTA on a quotas-off volume, triggered
+ * verbatim on live OpenVMS VAX V7.3 (lab-2 vaxlab-2). %SYSTEM-F-QFNOTACT, "disk
+ * quotas not enabled on this volume". $STATUS = %X000003D4 (low 3 bits = 4 = F). */
+#define SS$_QFNOTACT        980     /* Disk quotas not enabled on this volume (%SYSTEM-F-QFNOTACT) */
 #define SS$_ABORT           44      /* Abort */
 
 /* ================================================================

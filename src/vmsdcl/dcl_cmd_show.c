@@ -3246,29 +3246,31 @@ static int cmd_show_audit(struct dcl_command *cmd)
  * fabrication class INV-6 exists to kill: a command reporting invented state
  * that passes a smoke test while telling the operator nothing true.
  *
- * WHAT IT IS NOW. A disk quota entry lives in a volume's QUOTA.SYS, charged
- * per-UIC by the Files-11 ACP. OVMX has NO disk-quota facility: the ODS-2
- * volumes it mounts carry no QUOTA.SYS (src/vmsfs/ods2/ods2_writer.c records
- * QUOTA.SYS by-name lookups failing not-found on a clean volume), and the
- * executive charges no per-UIC disk blocks. There is therefore no real quota
- * entry to report, and the honest answer is the error VMS itself returns when
- * the running UIC has no disk quota entry -- never an invented one (Rule 10).
+ * WHAT IT IS NOW. Disk quotas live in a volume's QUOTA.SYS, charged per-UIC by
+ * the Files-11 ACP. OVMX has NO disk-quota facility: the ODS-2 volumes it mounts
+ * carry no QUOTA.SYS (src/vmsfs/ods2/ods2_writer.c records QUOTA.SYS by-name
+ * lookups failing not-found on a clean volume), i.e. disk quotas are NOT ENABLED
+ * on the volume. The honest answer is the error a real VAX actually returns for
+ * that case -- %SYSTEM-F-QFNOTACT, "disk quotas not enabled on this volume"
+ * (Rule 10, never an invented one).
+ *
+ * ORACLE-GROUNDED (Rule 8, vms-73c4): captured by TRIGGERING SHOW QUOTA on a
+ * live OpenVMS VAX V7.3 volume with quotas off (lab-2 vaxlab-2) -- message
+ * verbatim, $STATUS = %X000003D4 = 980 (SS$_QFNOTACT, severity F). This CORRECTS
+ * the prior draft, which assumed %SYSTEM-F-NODISKQUOTA: that is a DIFFERENT
+ * condition ("no disk quota ENTRY for a UIC" on a quotas-ENABLED volume, per
+ * HELP/MESSAGE) which OVMX never hits -- reasoned, but the oracle refuted it.
  *
  * When OVMX grows a real disk-quota facility (a QUOTA.SYS the ACP maintains),
  * this becomes a genuine $QIO/IO$_ACPCONTROL query keyed on the current
- * process's real UIC.
- *
- * $STATUS stand-in: the numeric SS$_NODISKQUOTA value is not yet grounded to
- * an oracle capture, so the returned condition uses the defined fatal
- * SS$_ABORT; the human-visible message is the faithful %SYSTEM-F-NODISKQUOTA
- * text. Grounding the numeric code is flagged for the conductor.
+ * process's real UIC (and NODISKQUOTA becomes reachable for a UIC with no entry).
  */
 static int cmd_show_quota(struct dcl_command *cmd)
 {
     (void)cmd;
-    dcl_error("SYSTEM", 4, "NODISKQUOTA",
-              "no disk quota entry for this UIC");
-    return SS$_ABORT;
+    dcl_error("SYSTEM", 4, "QFNOTACT",
+              "disk quotas not enabled on this volume");
+    return SS$_QFNOTACT;
 }
 
 /*

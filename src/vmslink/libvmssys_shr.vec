@@ -191,3 +191,9 @@ vms_kif_getexit_linux=PROCEDURE
 # NULL quota, so identity-only callers are unaffected. APPENDED per the
 # append-only contract -- a new universal never shifts an existing index.
 vms_kif_setident_quota=PROCEDURE
+# vms-551: SHOW CLUSTER (DCL.EXE, VMS-native-linked) reads the executive's live
+# cluster membership block through this WIRED kif GET wrapper, so it must be a
+# LIBVMSSYS$SHR universal. (CLUSTER_MEMBER_SET/CLEAR are scsd-direct ioctls =
+# OVMX-UNWIRED, not called through a wrapper, so they are NOT exported here.)
+# APPENDED per the append-only contract -- never shifts an existing index.
+vms_kif_cluster_get_members=PROCEDURE

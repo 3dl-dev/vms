@@ -96,6 +96,14 @@ TIMEOUT_GRACE="${TIMEOUT_GRACE:-30}"
 # return N>=2 -> C$_EXIT1 + (N-1)*8.  So N=3 -> 0x0035A019.
 CEXIT1=$((0x35a009))
 WANT_SENTINEL=3
+# vms-065c: which single-proc MILESTONE image the gate builds + activates. The
+# default joint_main.c returns sentinel 3 (N=3, $STATUS=0x0035A019). The
+# `crtl-rms-gate' mode overrides this to crtl_rms_test.c, which exercises the
+# heap (malloc -> mallocng), RMS file I/O and stdio and returns sentinel 7
+# (N=7, $STATUS=0x0035A039) -- the vms-1ef crtl_rms runtime proof, now gated
+# per-PR so a future LINK.EXE / toolchain / CRTL change cannot silently
+# re-break the malloc->mallocng activation path with no CI tell.
+MILESTONE_MAIN=joint_main.c
 
 log() { echo "[modgp-activation] $*"; }
 die() { echo "[modgp-activation] FATAL: $*" >&2; exit 1; }
@@ -159,6 +167,47 @@ assert_activation() {
   return 1
 }
 
+# assert_crtl_rms <console-log> -- THE TEETH for the vms-1ef crtl_rms->N=7 proof
+# (`crtl-rms-gate' mode). The crtl_rms port image (crtl_rms_test.c) does NOT
+# print joint_main.c's "OVMX crt0 join" milestone line, so assert_activation
+# does not apply; the crtl_rms proof is instead (a) the heap+RMS+stdio port-test
+# OK line -- the malloc(8192)->mallocng path that SIGSEGV'd before vms-1ef #958,
+# now completing -- (b) the executive-recorded $STATUS decoding to sentinel 7
+# (0x0035A039), and (c) no activation-failure %-error. Pure function over the
+# console transcript; shared verbatim by the real BOOT-A run and the can-fail
+# selftest so the self-test exercises the exact gating logic.
+assert_crtl_rms() {
+  local log="$1"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+
+  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
+  port_ok=$(grep -qaE "OVMX CRTL/RMS port test: OK \(heap\+RMS\+stdio\)" "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 7 ] && mile_ok=1
+    fi
+  fi
+
+  # A crash before/at main reads back an ACCVIO-class $STATUS (%X0000002C) and
+  # prints NO port-test line -- the exact pre-vms-1ef malloc->mallocng SIGSEGV.
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+
+  echo "  (a) crtl_rms heap+RMS+stdio OK : port_ok=$port_ok (want 1)"
+  echo "  (b) N=7 milestone seam         : ${seam:-<ABSENT>}"
+  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
+  echo "  (c) no activation err          : ok=$err_ok"
+  [ "$err_ok" -eq 0 ] && echo "      offending: $(printf '%s' "$errs" | tr '\n' '|')"
+
+  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # build_joint_images -- build the N=3 milestone image (joint_main.c -> return 3)
 # and the SS$_NORMAL control (joint_main_ok.c -> return 0) with the SAME merged
@@ -172,11 +221,11 @@ build_joint_images() {
   out_ok="$GATE_ROOT/joint-ok"
   rm -rf "$out_n3" "$out_ok"; mkdir -p "$out_n3" "$out_ok"
 
-  log "step 1a: build the N=3 single-proc image (joint_main.c, return 3) with the merged toolchain"
-  JOINT_MAIN=joint_main.c IMG="$VMS_IMG" bash "$bji" "$out_n3" \
-    || die "build-joint-image.sh (N=3) failed -- see $out_n3/build.log"
+  log "step 1a: build the milestone single-proc image ($MILESTONE_MAIN, sentinel $WANT_SENTINEL) with the merged toolchain"
+  JOINT_MAIN="$MILESTONE_MAIN" IMG="$VMS_IMG" bash "$bji" "$out_n3" \
+    || die "build-joint-image.sh (milestone $MILESTONE_MAIN) failed -- see $out_n3/build.log"
   grep -q 'LINK-S-CREATED' "$out_n3/build.log" \
-    || die "N=3 image did not link (no %LINK-S-CREATED) -- see $out_n3/build.log"
+    || die "milestone image did not link (no %LINK-S-CREATED) -- see $out_n3/build.log"
 
   log "step 1b: build the SS\$_NORMAL control image (joint_main_ok.c, return 0) with the merged toolchain"
   JOINT_MAIN=joint_main_ok.c IMG="$VMS_IMG" bash "$bji" "$out_ok" \
@@ -367,7 +416,62 @@ case "$MODE" in
     grep -aE "%IMGACT|%RUN-|%DCL-|IMGNOTFND|NOSUCHFILE|DEVNOTMOUNT|ACCVIO|SS\\\$_" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -20 || echo "  (none captured)"
     exit 1
     ;;
+  crtl-rms-gate)
+    # vms-065c: the vms-1ef crtl_rms->N=7 runtime proof as a per-PR gate. Same
+    # real-executive boot as `gate', but the MILESTONE image is crtl_rms_test.c
+    # (heap malloc->mallocng + RMS file I/O + stdio, returns sentinel 7). A
+    # LINK.EXE / toolchain / CRTL change that re-breaks the malloc->mallocng
+    # activation path (vms-1ef #958) reds HERE instead of only in a manual boot.
+    MILESTONE_MAIN=crtl_rms_test.c
+    WANT_SENTINEL=7
+
+    # Prove assert_crtl_rms has teeth before trusting a green boot (mirrors the
+    # `gate' selftest discipline): a clean crtl_rms proof passes; the pre-vms-1ef
+    # SIGSEGV signature (no port-test line + ACCVIO $STATUS) reds.
+    _st=$(mktemp -d); _fails=0
+    cat > "$_st/pass.log" <<'EOF'
+OVMX CRTL/RMS port test: wrote+read 8192 bytes via 'PORTTEST.DAT', pattern verified
+OVMX CRTL/RMS port test: OK (heap+RMS+stdio) argc=1
+OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039
+EOF
+    cat > "$_st/crash.log" <<'EOF'
+%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)
+JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4
+EOF
+    echo "-- crtl-rms selftest 1/2: clean heap+RMS+stdio N=7 proof must PASS --"
+    if assert_crtl_rms "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
+    echo "-- crtl-rms selftest 2/2: pre-vms-1ef malloc->mallocng SIGSEGV must FAIL --"
+    if assert_crtl_rms "$_st/crash.log" >/dev/null 2>&1; then echo "  FAIL: crash accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "crtl-rms selftest failed -- assert_crtl_rms cannot be trusted; aborting before the boot"
+    echo ""
+
+    build_joint_images
+    assemble_boot_image
+    log "step 3: BOOT A -- activate the crtl_rms N=7 image (heap+RMS+stdio) on the REAL executive"
+    run_boot_a
+    echo ""
+    echo "========================================================================"
+    echo "== vms-1ef crtl_rms -> N=7: heap(malloc->mallocng)+RMS+stdio activation on"
+    echo "== the real OVMX/Alpha executive (qemu-system-alpha + /dev/vms, ODS-2 ACP)"
+    echo "========================================================================"
+    grep -aE "JOINT-E2E-PROOF:|OVMX-SEAM:|OVMX CRTL/RMS|%IMGACT|%DCL-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    echo "------------------------------------------------------------------------"
+    if assert_crtl_rms "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: the crtl_rms port image ACTIVATED on the real executive over the mounted"
+      echo "      ODS-2 ACP; heap(malloc->mallocng)+RMS+stdio round-tripped and \$STATUS ="
+      echo "      %X0035A039 (N=7). The vms-1ef thunk->strong-descriptor fix holds at runtime."
+      exit 0
+    fi
+    echo ""
+    echo "FAIL: the crtl_rms N=7 image did NOT cleanly activate (heap+RMS+stdio + sentinel 7)"
+    echo "      -- a REAL regression of the vms-1ef malloc->mallocng activation path. Full log:"
+    echo "      $WORK/modgpA.log"
+    grep -aE "%IMGACT|%RUN-|%DCL-|IMGNOTFND|NOSUCHFILE|DEVNOTMOUNT|ACCVIO|SS\\\$_" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -20 || echo "  (none captured)"
+    exit 1
+    ;;
   *)
-    die "unknown mode '$MODE' (use: gate | selftest)"
+    die "unknown mode '$MODE' (use: gate | crtl-rms-gate | selftest)"
     ;;
 esac

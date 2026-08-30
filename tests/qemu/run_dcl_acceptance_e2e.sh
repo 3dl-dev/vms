@@ -79,8 +79,11 @@ exec docker run --rm \
     -e "BOOT_TIMEOUT=${BOOT_TIMEOUT:-180}" \
     -e "CMD_TIMEOUT=${CMD_TIMEOUT:-30}" \
     -e "OVMX_BATTERY_LIB=/lib/dcl_acceptance_battery.sh" \
+    -e "OVMX_ORACLE_DIR=/oracle/tools/oracle" \
     -v "$REPO_ROOT/tests/qemu/test_dcl_acceptance_e2e.sh:/test.sh:ro" \
     -v "$REPO_ROOT/tests/qemu/lib/dcl_acceptance_battery.sh:/lib/dcl_acceptance_battery.sh:ro" \
+    -v "$REPO_ROOT/tools/oracle:/oracle/tools/oracle:ro" \
+    -v "$REPO_ROOT/docs/oracle/golden:/oracle/docs/oracle/golden:ro" \
     --entrypoint bash \
     "$IMAGE" \
     /test.sh

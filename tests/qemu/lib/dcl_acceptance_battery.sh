@@ -94,7 +94,12 @@ negctl() { local seg="$1" present="$2" desc="$3"
 # output + grounded MAY_OMIT (substrate-absent sections) and classifies MATCH /
 # MISSING / HOLLOW / ARTIFICE-TELL / FORMAT-DIVERGENT. This UPGRADES the piecewise
 # hand-written must_haves above to a continuous golden-diff for the seeded surfaces.
-_ORACLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../tools/oracle" 2>/dev/null && pwd || true)"
+# The acceptance test runs in a Docker container where only the battery + test.sh
+# are mounted (run_dcl_acceptance_e2e.sh), so the repo-relative path can't reach
+# tools/oracle. run_dcl_acceptance_e2e.sh mounts the oracle tooling + goldens at a
+# repo-root-like /oracle prefix and passes OVMX_ORACLE_DIR; the relative path is
+# the fallback for a local (checked-out-tree) run.
+_ORACLE_DIR="${OVMX_ORACLE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../tools/oracle" 2>/dev/null && pwd || true)}"
 golden_diff() {  # <surface> -- run the surface's OWN commands, diff $SEG vs golden; + a can-fail negctl
     local surface="$1" surf acc="" c rc cls
     surf="$_ORACLE_DIR/surfaces/$surface.surface"

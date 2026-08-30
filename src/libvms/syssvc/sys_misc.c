@@ -13,12 +13,23 @@
  * tests/integration/test_userspace_service_register.sh
  *
  * OVMX-EXECUTIVE: sys$setprv (vms-pv1) proof=tests/qemu/test_syssvc_setprv.c -- the privilege mutation is the executive's: sys$setprv routes to vms_kif_setprv (VMS_IOCTL_SETPRV -> vms_ioctl_setprv, kernel/vms_access.c), which authorizes the grant against this process's AUTHORIZED mask (a caller without SETPRV cannot widen past it -- SS$_NOTALLPRIV/SS$_NOPRIV) and OWNS the result. A process can no longer award itself a privilege by writing pcb->cur_privs (the vms-b2e LARP class this closes). The PCB masks below are only a COPY of the executive's, re-read via $GETJPI-self for the two remaining in-process readers (sys_process.c fork inheritance, vmsprocess/access_modes.c's CMKRNL/CMEXEC mode gate) -- not part of the answer sys$setprv returns, which is wholly the executive's.
- * OVMX-USERSPACE: sys$getsyi (vms-642) -- answers from uname() and host
- *     sysconf() values, not from an executive system block. csidadr and
- *     nodename are both discarded ((void)csidadr; (void)nodename;), so a
- *     request aimed at another cluster node is answered with this machine's
- *     numbers as though it had been aimed here.
- * OVMX-USERSPACE: sys$getsyiw (vms-642) -- the wait form of the same answer.
+ * OVMX-PARTIAL: sys$getsyi (vms-5919) -- exec: SYI$_CLUSTER_MEMBER and
+ *     SYI$_CLUSTER_NODES now read the EXECUTIVE cluster-membership block
+ *     (vms_kif_cluster_get_members -> VMS_IOCTL_CLUSTER_MEMBER_GET, the vms-551
+ *     block on /dev/vms), so F$GETSYI sees the same real member set as SHOW
+ *     CLUSTER; absent /dev/vms those two items are left unretrieved (honest, not
+ *     the old SCSD file). No fabricated membership.
+ * OVMX-LOCAL: sys$getsyi -- the REMAINING items (NODENAME/VERSION/SCSNODE/
+ *     SCSSYSTEMID/... ) answer from uname()/host sysconf(), not an executive
+ *     system block. csidadr and nodename are still discarded
+ *     ((void)csidadr; (void)nodename;), so a request aimed at another cluster
+ *     node is answered with this machine's numbers as though aimed here (vms-642
+ *     open; the cluster-item cutover above is the first executive-backed slice).
+ * OVMX-PARTIAL: sys$getsyiw (vms-5919) -- exec: the same SYI$_CLUSTER_MEMBER /
+ *     SYI$_CLUSTER_NODES executive cluster-block read as sys$getsyi above (this
+ *     is the wait form of the same service).
+ * OVMX-LOCAL: sys$getsyiw -- the remaining items answer from uname()/host
+ *     sysconf(), as sys$getsyi's local half.
  * OVMX-USERSPACE: sys$setddir (vms-947) -- the process default directory is a
  *     per-process construct on real VMS too (the RMS default-directory string
  *     held in P1 process space), not a shared executive resource. OVMX keeps it

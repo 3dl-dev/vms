@@ -829,12 +829,13 @@ check_response 'SHOW PROCESS' 'Node: +OVMX'
 # (LOGINOUT) now calls vms_kif_setident() directly for ITS OWN session
 # (this item's central mechanism), which stamps the executive row before
 # DCL ever reads it -- independent of $CREPRC inheritance entirely.
-# vms-afd is about a DIFFERENT code path (sys$creprc-created subprocesses,
-# e.g. SPAWN), and that path is UNCHANGED: see the SPAWN assertions below,
-# which still correctly pin the empty-user state for a spawned subprocess
-# on this same run. So this is the VMS-matching assertion the old
-# tripwire's comment said to install once its pattern went red, but it is
-# NOT evidence vms-afd has landed -- do not close vms-afd from this.
+# vms-afd/vms-19e9 is a DIFFERENT code path (sys$creprc-created subprocesses,
+# e.g. SPAWN). That path has NOW ALSO landed: vms-19e9 gave $CREPRC identity
+# propagation (vms_kif_register_subprocess), so the SPAWN assertions below now
+# pin the SUBPROCESS reporting User: SYSTEM too -- inherited from the creator by
+# continuation, not stamped by LOGINOUT. This assertion (the login session's
+# own SHOW PROCESS) is independent of that: LOGINOUT stamps the session's row
+# directly, whether or not $CREPRC inheritance exists.
 check_response 'SHOW PROCESS' 'User: +SYSTEM +Process ID:'
 
 # THE PROCESS NAME IS NOW POPULATED FOR THE LOGIN SESSION (vms-72c),
@@ -1041,54 +1042,52 @@ check_not_response 'SET PROCESS/PRIVILEGES=(OPER)' 'NOPRIV'
 # disclosure text, which only the privilege-check branch prints.
 check_response 'SET TIME 1-JAN-2030:00:00:00' 'no privilege for SET TIME'
 
-# THE SESSION REALLY IS THE AUTHENTICATED USER AT THE OS LEVEL (vms-2b8
-# round 6). This is the only externally observable proof that
-# tools/vms_login.c's credential drop happened, and it is why the
-# assertion is on a SPAWNed subprocess rather than on the session itself.
+# THE SUBPROCESS INHERITS THE CREATOR'S IDENTITY (vms-19e9).
 #
-# The session's own UIC comes from the row LOGINOUT stamped out of
-# SYSUAF, so SHOW PROCESS reports [001,004] whether or not the drop
-# occurred -- it cannot distinguish. A SUBPROCESS is different: it
-# registers with the executive on its own, and vms_proc_register() in
-# src/kernel/vms_module.c derives its UIC from the task's REAL Linux
-# credentials, inheriting nothing. So the subprocess's UIC is a direct
-# readout of what the session is running as:
-#   drop performed  -> [001,004]   (setgid(1), setuid(4) from SYSUAF)
-#   drop absent     -> [000,000]   (root, as every session used to be)
+# A SPAWNed subprocess of the SYSTEM session now inherits SYSTEM's UIC by
+# CONTINUATION from its unforgeable creator (vms_kif_register_subprocess), so
+# its SHOW PROCESS 'User Identifier:' field resolves to the SAME named
+# identifier the session shows -- [SYSTEM] -- exactly as OpenVMS reports a
+# subprocess of SYSTEM. Before vms-19e9 the subprocess registered FRESH with a
+# capable()-derived, UNNAMED UIC that displayed as the raw octal [001,004]; the
+# fix makes it a real inherited identity, so it now shows the identifier NAME.
 #
-# That difference is not cosmetic. While sessions ran as root, every
-# subprocess also registered holding CMKRNL|CMEXEC|SYSNAM|GRPNAM|SETPRV|WORLD, and
-# SETPRV is what VMS_IOCTL_SETIDENT requires to claim any identity at
-# all -- an ordinary user's subprocess could stamp itself SYSTEM with
-# SYSUAF's privilege ALL (reproduced against a real /dev/vms; the refusal is
-# asserted in tests/qemu/test_syssvc_ident.c scenario D).
+# The negative still guards the broken/root shape: [000,000] would appear only
+# if the subprocess fell back to a root, unauthenticated identity (the pre-drop
+# world, or a fix that failed to inherit). The Linux credential drop itself is
+# proven by the write-permission tests below (a genuinely non-root session
+# cannot write the root-owned system tree) and, at the executive layer, by
+# tests/qemu/test_syssvc_creprc_inherit.c scenario A (the subprocess is
+# euid != 0 AND inherits SYSTEM), which also pins that the SETIDENT guard still
+# refuses a non-root SELF-declared privileged identity (scenario B; the same
+# guard test_syssvc_ident.c scenario D asserts).
 #
-# Anchored to SPAWN's own response segment, not the whole log: '[001,004]'
+# Anchored to SPAWN's own response segment, not the whole log: '[SYSTEM]'
 # also appears in the SHOW PROCESS response earlier in the same session.
-check_response 'SPAWN SHOW PROCESS' '\[001,004\]'
+check_response 'SPAWN SHOW PROCESS' '\[SYSTEM\]'
 check_not_response 'SPAWN SHOW PROCESS' '\[000,000\]'
 
-# KNOWN DIVERGENCE FROM VMS, ASSERTED OUT LOUD RATHER THAN STEPPED AROUND
-# (vms-afd).
+# SPAWN INHERITS THE CREATOR'S USER NAME (vms-19e9, was vms-afd).
 #
-# The display the two assertions above read is, on this line, WRONG: OVMX
-# prints 'User:' followed by nothing for a spawned subprocess. VMS has no
-# process without a user name -- measured on the oracle in this item's own
-# session (VAX1, OpenVMS VAX V7.3): SPAWN there answers '%DCL-S-SPAWNED,
-# process SYSTEM_1 spawned', a subprocess inheriting the creator's
-# username. OVMX's src/kernel/vms_module.c zeroes proc->username at
-# registration and inherits nothing, so every SPAWNed process in the
-# product reports blank. The credential drop this item lands does not
-# cause it, but it makes it reachable for every spawned process rather
-# than theoretical.
+# This line used to PIN a known divergence: OVMX printed 'User:' followed by
+# nothing for a spawned subprocess, because the child registered fresh
+# (src/kernel/vms_module.c zeroes proc->username) and then FAILED to stamp the
+# creator's identity -- a non-root DCL cannot self-declare a privileged name
+# through vms_kif_setident (SS$_NOPRIV -> %DCL-F-CREPRC), so in the booted
+# runtime SPAWN was dead. vms-19e9 fixes $CREPRC identity propagation: the
+# child inherits the creator's identity by CONTINUATION from its unforgeable
+# real_parent (vms_kif_register_subprocess), so a subprocess of the SYSTEM
+# session IS SYSTEM in the executive table -- matching the oracle (VAX1,
+# OpenVMS VAX V7.3): SPAWN there answers '%DCL-S-SPAWNED, process SYSTEM_1
+# spawned', a subprocess inheriting the creator's username.
 #
-# The fix is $CREPRC identity propagation, filed as vms-afd and entangled
-# with vms-8019's in-flight work on the executive process table, so it is
-# not built here. What is NOT acceptable is asserting around it in silence
-# -- that is how a facade survives. This assertion PINS the blank, so the
-# day vms-afd makes SPAWN inherit a user name this line goes red and
-# whoever lands it has to come and delete it.
-check_response 'SPAWN SHOW PROCESS' 'User: +Process ID:'
+# So this now asserts the CORRECT, positive behaviour: SHOW PROCESS in the
+# subprocess reports 'User:' followed by the inherited SYSTEM name, not blank.
+# Paired with the [SYSTEM] / not-[000,000] assertions above, it says the
+# subprocess carries the creator's UIC AND user name -- a parent-derived
+# identity, not a self-declared one (the SS$_NOPRIV self-declaration guard is
+# UNCHANGED; tests/qemu/test_syssvc_creprc_inherit.c pins both halves).
+check_response 'SPAWN SHOW PROCESS' 'User: +SYSTEM'
 
 # SPAWN WORKS MORE THAN ONCE PER SESSION (rd vms-00e).
 #

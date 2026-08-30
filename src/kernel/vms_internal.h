@@ -965,7 +965,15 @@ struct vms_proc *vms_proc_find_or_err(void);
  */
 /* The VMS process ID is assigned by the executive (vms-2b8), so there is
  * no vms_pid parameter to pass: read proc->vms_pid afterwards. */
-struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity);
+/*
+ * inherit_identity: replace the fresh, credential-derived identity with the
+ *   registering task's real_parent's executive identity (UIC/user name/privs).
+ * share_pid: when inheriting, ALSO adopt the parent's VMS PID (image
+ *   activation, _CONTINUE) rather than minting a fresh one (a subprocess,
+ *   _SUBPROCESS). Ignored when inherit_identity is false.
+ */
+struct vms_proc *vms_proc_register(pid_t pid, bool inherit_identity,
+                                   bool share_pid);
 void vms_proc_free(struct vms_proc *proc);
 /* Tear down an entry the caller has ALREADY unlinked under
  * vms_proc_hash_lock (the unlink is the ownership claim). */

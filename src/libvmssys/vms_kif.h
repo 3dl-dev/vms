@@ -90,6 +90,17 @@ uint32_t vms_kif_register(uint32_t *vms_pid);
  * new VMS processes and use vms_kif_register(). */
 uint32_t vms_kif_register_continue(void);
 
+/* Register the CALLING task as a genuinely NEW VMS process (a fresh, distinct
+ * VMS PID) that INHERITS its creator's executive identity -- UIC, user name and
+ * privileges -- from its real_parent (vms-19e9). $CREPRC's forked child calls
+ * this before it execs, so a SPAWNed subprocess of a NON-ROOT named session
+ * (the interactive DCL after LOGINOUT's credential drop) becomes that session's
+ * identity by CONTINUATION -- which vms_kif_setident() cannot do, since the
+ * executive refuses a non-root self-declared privileged name. This is $CREPRC /
+ * SPAWN; image activation (same VMS process, shared PID) uses
+ * vms_kif_register_continue() instead. */
+uint32_t vms_kif_register_subprocess(void);
+
 /* Stamp an AUTHENTICATED identity onto this process ($GETJPI reads it
  * back, from any process). The caller must already hold SETPRV to
  * establish an identity that is not a weakening of its own -- so this

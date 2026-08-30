@@ -197,6 +197,43 @@ uint32_t vms_kif_register_continue(void)
 }
 
 /*
+ * vms_kif_register_subprocess - register the CALLING task as a genuinely NEW
+ * VMS process that INHERITS its creator's executive identity (vms-19e9).
+ *
+ * $CREPRC's forked child (src/libvms/syssvc/sys_process.c) calls this BEFORE it
+ * touches any other executive facility and before it execs its image, while its
+ * real_parent is still the CREATOR (the SPAWNing DCL). The executive reads the
+ * creator's row and copies its UIC, user name and privileges onto this task --
+ * so a subprocess of the interactive SYSTEM session IS SYSTEM in the executive
+ * table -- but mints this task a FRESH, distinct VMS PID (a subprocess is a new
+ * VMS process, unlike an image activation, which shares the PID via
+ * vms_kif_register_continue()). Identity is parent-DERIVED, never self-declared:
+ * this is what a non-root child could NOT achieve with vms_kif_setident(), which
+ * the executive correctly refuses a non-root self-declared privileged name
+ * (CLAUDE.md Rule 10 / INV-6).
+ *
+ * Same fd discipline as vms_kif_register_continue(): the /dev/vms descriptor in
+ * TLS belongs to the PARENT (dup'd across fork), so it is dropped and a fresh
+ * one taken -- this child is accounted separately even though it inherits the
+ * parent's identity. The O_CLOEXEC creation-handshake pipe $CREPRC uses to
+ * report back is a DIFFERENT descriptor and is untouched here.
+ *
+ * Returns the registration status; on success vms_bound_pid is set so a
+ * subsequent kif_bind() (e.g. inside vms_kif_setprn) is a no-op adopt.
+ */
+uint32_t vms_kif_register_subprocess(void)
+{
+    if (vms_dev_fd >= 0) {
+        kif_xport_dev_close(vms_dev_fd);
+        vms_dev_fd = -1;
+    }
+    vms_bound_pid = 0;
+
+    (void)vms_kif_open();
+    return kif_register_req(VMS_IOCTL_REGISTER_SUBPROCESS, (uint32_t *)0);
+}
+
+/*
  * kif_bind - complete the documented open -> register sequence for the
  * calling task, once, before any ioctl that needs a registered process.
  *

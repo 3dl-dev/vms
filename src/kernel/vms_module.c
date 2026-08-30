@@ -259,19 +259,26 @@ static uint32_t assign_vms_pid(void)
  * vms_ioctl_setident(), so an identity is never torn. proc is not yet in
  * the hash, so its own fields need no lock.
  *
- * Returns the parent's VMS PID (nonzero) to be SHARED by this child, or 0
- * when the task has no registered VMS parent -- in which case the caller
- * derives an identity and mints a fresh VMS PID the ordinary way. 0 is not
- * a valid VMS PID (assign_vms_pid never hands it out), so it is an
- * unambiguous "no parent" sentinel.
+ * Returns TRUE when a registered VMS parent was found and its identity was
+ * copied onto `proc`, FALSE when the task has no registered VMS parent -- in
+ * which case the caller derives an identity the ordinary way. Independently,
+ * *shared_vms_pid_out is set to the parent's VMS PID when share_pid is true and
+ * a parent was found (the child SHARES it -- image activation, _CONTINUE), and
+ * left 0 otherwise (the caller then mints a FRESH VMS PID -- a genuinely new
+ * subprocess that inherits identity but NOT the PID, _SUBPROCESS/vms-19e9). The
+ * "inherited" answer is returned SEPARATELY from the shared PID precisely
+ * because the subprocess case inherits identity yet shares no PID: a 0 shared
+ * PID no longer means "did not inherit."
  */
-static uint32_t vms_proc_continue_identity(struct vms_proc *proc)
+static bool vms_proc_continue_identity(struct vms_proc *proc, bool share_pid,
+                                       uint32_t *shared_vms_pid_out)
 {
     struct task_struct *rp;
     struct pid *parent_pid = NULL;
     pid_t parent_tgid = 0;
     struct vms_proc *parent;
     uint32_t shared_vms_pid = 0;
+    bool inherited = false;
 
     rcu_read_lock();
     rp = rcu_dereference(current->real_parent);
@@ -281,7 +288,9 @@ static uint32_t vms_proc_continue_identity(struct vms_proc *proc)
     }
     if (!parent_pid) {
         rcu_read_unlock();
-        return 0;
+        if (shared_vms_pid_out)
+            *shared_vms_pid_out = 0;
+        return false;
     }
 
     spin_lock(&vms_proc_hash_lock);
@@ -322,13 +331,24 @@ static uint32_t vms_proc_continue_identity(struct vms_proc *proc)
         proc->cur_privs  = parent->cur_privs;
         spin_unlock(&parent->mode_lock);
 
-        shared_vms_pid = parent->vms_pid;
+        /*
+         * SHARE the parent's VMS PID only for an image-activation CONTINUE
+         * (share_pid). A subprocess (_SUBPROCESS, vms-19e9) inherits the
+         * identity above but leaves shared_vms_pid 0, so the caller mints it a
+         * FRESH, distinct VMS PID -- a genuinely new VMS process, as $CREPRC
+         * creates.
+         */
+        if (share_pid)
+            shared_vms_pid = parent->vms_pid;
+        inherited = true;
         break;
     }
     spin_unlock(&vms_proc_hash_lock);
     rcu_read_unlock();
 
-    return shared_vms_pid;
+    if (shared_vms_pid_out)
+        *shared_vms_pid_out = shared_vms_pid;
+    return inherited;
 }
 
 /*
@@ -487,10 +507,12 @@ static void vms_proc_inherit_channels(struct vms_proc *child)
     rcu_read_unlock();
 }
 
-struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity)
+struct vms_proc *vms_proc_register(pid_t pid, bool inherit_identity,
+                                   bool share_pid)
 {
     struct vms_proc *existing, *proc;
     uint32_t shared_vms_pid = 0;
+    bool inherited = false;
     uint32_t parent_job_id;
     int i;
 
@@ -566,22 +588,28 @@ struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity)
      * VMS reports them -- but they are never conjured at registration.
      */
     /*
-     * CONTINUE THE PARENT, OR DERIVE (vms-4d7, Option B).
+     * INHERIT THE PARENT'S IDENTITY, OR DERIVE (vms-4d7 Option B; vms-19e9).
      *
-     * When this registration is an IMAGE ACTIVATION continuing an
-     * already-registered VMS process (VMS_IOCTL_REGISTER_CONTINUE), the
-     * identity above is REPLACED by the parent's -- UIC, user name,
-     * process name, terminal and both privilege masks -- and this child
-     * SHARES the parent's VMS PID, so to the rest of the system DCL and
-     * the image it activated are one VMS process. See
-     * vms_proc_continue_identity(); it reads the parent's row, never the
-     * caller's word, and copies the parent's CURRENT (possibly reduced)
-     * masks so a setident-down cannot be undone by a fork.
+     * When this registration inherits an already-registered VMS parent's
+     * identity, the identity above is REPLACED by the parent's -- UIC, user
+     * name, process name, terminal and both privilege masks. Two shapes:
+     *   - IMAGE ACTIVATION (VMS_IOCTL_REGISTER_CONTINUE): share_pid true, so
+     *     the child ALSO shares the parent's VMS PID -- DCL and the image it
+     *     activated are one VMS process.
+     *   - SUBPROCESS (VMS_IOCTL_REGISTER_SUBPROCESS, SPAWN/$CREPRC): share_pid
+     *     false, so the child inherits the identity but is minted a FRESH,
+     *     distinct VMS PID below -- a genuinely new VMS process.
+     * See vms_proc_continue_identity(); it reads the parent's row, never the
+     * caller's word, and copies the parent's CURRENT (possibly reduced) masks
+     * so a setident-down cannot be undone by a fork. `inherited` (not a zero
+     * shared PID) is what says the identity came from the parent: a subprocess
+     * inherits identity yet shares no PID.
      */
-    if (continue_identity)
-        shared_vms_pid = vms_proc_continue_identity(proc);
+    if (inherit_identity)
+        inherited = vms_proc_continue_identity(proc, share_pid,
+                                               &shared_vms_pid);
 
-    if (shared_vms_pid == 0) {
+    if (!inherited) {
         proc->perm_privs = capable(CAP_SYS_ADMIN)
                          ? (VMS_PRV_M_ENFORCED | VMS_DEFAULT_PRIVS)
                          : VMS_DEFAULT_PRIVS;
@@ -730,7 +758,8 @@ struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity)
      */
     pr_debug("vms: registered process pid=%d vms_pid=0x%08x uic=[%o,%o] job=0x%08x privs=0x%llx (%s)\n",
              pid, proc->vms_pid, proc->uic >> 16, proc->uic & 0xFFFFu,
-             proc->job_id, proc->perm_privs, shared_vms_pid ? "continued" : "derived");
+             proc->job_id, proc->perm_privs,
+             shared_vms_pid ? "continued" : (inherited ? "subprocess" : "derived"));
 
     return proc;
 }
@@ -819,7 +848,8 @@ void vms_proc_free(struct vms_proc *proc)
  * ioctl dispatch
  * ================================================================ */
 
-static long vms_ioctl_register(unsigned long arg, bool continue_identity)
+static long vms_ioctl_register(unsigned long arg, bool inherit_identity,
+                               bool share_pid)
 {
     struct vms_register_args args;
     struct vms_proc *proc;
@@ -873,7 +903,7 @@ static long vms_ioctl_register(unsigned long arg, bool continue_identity)
 
     /* current->tgid, not current->pid: one PCB per process, shared by
      * every thread in it (see vms_proc_find_or_err). */
-    proc = vms_proc_register(current->tgid, continue_identity);
+    proc = vms_proc_register(current->tgid, inherit_identity, share_pid);
     if (IS_ERR(proc)) {
         if (PTR_ERR(proc) != -EEXIST)
             return PTR_ERR(proc);   /* -ENOMEM -> SS$_INSFMEM at the boundary */
@@ -904,11 +934,15 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
 
     /* REGISTER doesn't require an existing proc. REGISTER_CONTINUE is the
      * image-activation variant (vms-4d7): it continues the caller's already-
-     * registered VMS parent instead of deriving a fresh identity. */
+     * registered VMS parent (identity AND shared PID). REGISTER_SUBPROCESS
+     * (vms-19e9) is the SPAWN/$CREPRC variant: it inherits the parent's
+     * identity but mints a FRESH VMS PID -- a genuinely new VMS process. */
     if (cmd == VMS_IOCTL_REGISTER)
-        return vms_ioctl_register(arg, false);
+        return vms_ioctl_register(arg, false, false);
     if (cmd == VMS_IOCTL_REGISTER_CONTINUE)
-        return vms_ioctl_register(arg, true);
+        return vms_ioctl_register(arg, true, true);
+    if (cmd == VMS_IOCTL_REGISTER_SUBPROCESS)
+        return vms_ioctl_register(arg, true, false);
 
     /* All other ioctls require a registered process */
     proc = vms_proc_find_or_err();

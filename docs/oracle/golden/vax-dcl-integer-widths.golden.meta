@@ -1,0 +1,12 @@
+surface: vax-dcl-integer-widths
+arch: vax
+description: DCL integer width: SHOW SYMBOL hex/octal longword rendering + 2147483647+1 wrap (vms-580)
+oracle: OpenVMS VAX V7.3 (lab vaxlab/vax1, isolated replica vaxlab-2)
+captured: 2026-08-30T04:20:29Z
+method: capture_oracle.sh -- FIFO console drive, marker-sliced, byte-exact display (CLAUDE.md Rule 8 observation)
+commands:
+  - IDENT_L = %X80000004
+  - SHOW SYMBOL IDENT_L
+  - X = 2147483647
+  - Y = X + 1
+  - SHOW SYMBOL Y

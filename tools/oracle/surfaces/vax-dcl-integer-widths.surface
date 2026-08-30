@@ -1,0 +1,12 @@
+# vms-55d surface: DCL integer width on OpenVMS VAX V7.3 -- SHOW SYMBOL hex/octal
+# longword rendering + arithmetic wrap. Deterministic (fixed inputs), so the
+# golden is byte-exact reproducible. Cross-checks docs/oracle/alpha84-dcl-integer-widths.md.
+ARCH=vax
+DESC="DCL integer width: SHOW SYMBOL hex/octal longword rendering + 2147483647+1 wrap (vms-580)"
+COMMANDS=(
+  'IDENT_L = %X80000004'
+  'SHOW SYMBOL IDENT_L'
+  'X = 2147483647'
+  'Y = X + 1'
+  'SHOW SYMBOL Y'
+)

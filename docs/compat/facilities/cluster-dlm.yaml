@@ -6,106 +6,123 @@ vms_ref: "OpenVMS Cluster Systems manual; $ENQ/$DEQ/$GETLKI system services"
 scope_1_0: in
 plan_ref: vms-694
 summary: >
-  A cross-node $ENQ now GRANTS, BLOCKS, and GRANTS-on-release on the mastering
-  node — the DLM's core contention behaviour — while resource remastering, LVB
-  replication, and distributed deadlock detection remain absent, that absence
-  authentic (SS$_UNSUPPORTED, never a fabricated answer). Rung 1 (vms-94c) built
-  the DLM message TRANSPORT (a DLM SYSAP SCS connection + the ENQ/GRANT/DEQ/BLKAST
-  message class). Rung 2 (vms-e8f1) made the RECEIVE handler grant a compatible
-  cross-node $ENQ, held for the remote requester's CSID. Rung 3 (vms-904c) lifts
-  the ENQ scope-fence: an incompatible request now QUEUES on the master's real
-  waiting queue (VMS_DLM_STS_QUEUED, not a grant, not a NOQUEUE decline), the
-  master FIRES a blocking-AST decision naming the remote holder, and a real
-  cross-node $DEQ releases and grants the blocked request (block-then-grant).
-  Rung H5 (vms-6ca) carries the async replies over the real SCS wire: the master
-  WIREs the queued-reply and — on a real $DEQ — the deferred GRANT, and the
-  REQUESTER-SIDE GRANT RECEIVE (was SS$_UNSUPPORTED) completes an
-  executive-resident origin record on the requesting node, so the block-then-grant
-  status flip (NL->EX) is observed on the REQUESTER across the wire, not just in
-  the master's local state. The BLKAST wire is deferred honestly (the holder
-  releases on its own). See kernel-executive.yaml for the single-node lock manager
-  this builds on.
-last_reviewed: 2026-08-28
+  The ENQ-class distributed lock manager is COMPLETE and every rung is proven on a
+  real /dev/vms executive (the vms-7fa ladder H0→H11). A cross-node $ENQ GRANTS,
+  BLOCKS, and GRANTS-on-release on the mastering node; the blocking-AST fires over
+  the wire on the real holder (H6, vms-76d/#918); the lock value block replicates
+  both ways (H8 write vms-d81/#923, H9 read vms-eeb/#925); a resource dynamically
+  REMASTERS to a survivor on graceful departure — its directory re-resolves (H10a,
+  vms-2bf/#927) AND its cross-node lock STATE is rebuilt on the new master from the
+  survivors' real origin records (H10b, vms-dca9/#928); a node refuses to master a
+  resource it is not the directory for (proven, e84 vms-e84/#929); and a cross-node
+  DEADLOCK cycle is detected by a distributed edge-chasing search with a globally
+  deterministic single victim aborted SS$_DEADLOCK (H11, vms-ec75/#930). Rung 0
+  (vms-4b6) added the REGISTER-after-open handshake so scsd genuinely reaches the
+  lock manager; rungs 1-3/H5 (vms-94c/e8f1/904c/6ca) built the transport, the
+  receive-side grant, the block-then-grant queue, and the async reply wire. All
+  DLM state is real executive state (resource blocks, granted/waiting queues,
+  origin records) — no per-process fake ever answers (INV-6); absence is always an
+  honest SS$_UNSUPPORTED. See kernel-executive.yaml for the single-node lock
+  manager this builds on. Remaining work is DEPTH beyond the ENQ-class engine, not
+  engine gaps: the concurrent-both-initiate deadlock proof (vms-04f — the
+  global-min selection logic ships and is code-verified; the harness proves the
+  deterministic single-initiator slice), directory REDIRECT of a mis-addressed ENQ
+  (vms-b96 — today verify-and-reject), and a real app-process cross-node lock
+  ACQUISITION path (vms-d1f, post-1.0 — today cross-node locks are daemon-
+  choreographed and CSID-keyed; an application $ENQ of a remotely-mastered resource
+  still returns the honest SS$_UNSUPPORTED "0.4" stub).
+last_reviewed: 2026-08-30
 items:
   - id: cluster-dlm$cross-node-lock
     kind: feature
-    status: partial
+    status: verified
     authenticity: real
-    vms: "Cross-node $ENQ grant / block-then-grant / blocking-AST on the mastering node"
+    vms: "Cross-node $ENQ grant / block-then-grant / blocking-AST delivered on the mastering node + real holder"
     evidence: src/kernel-core/vms_lock.c
+    verified_against: "tests/qemu/test_syssvc_dlm_xnode.c (x86_64 + Alpha LP64); tests/qemu/run_dlm_harness_h5.sh + run_dlm_harness_h6.sh (block-then-grant + BLKAST wire on real /dev/vms)"
     notes: >
-      vms-94c/vms-e8f1/vms-904c. vms_lock_dlm_xnode_dispatch runs a decoded
-      cross-node $ENQ through the real lock manager on the mastering node, held
-      FOR the remote requester's CSID: a compatible request GRANTS (SS$_NORMAL,
-      GET_RESMASTER shows held_for=<peer>); an incompatible one QUEUES on the real
-      waiting queue (VMS_DLM_STS_QUEUED, GETLKI shows granted NL / requested EX)
-      and the master emits the BLKAST directive (blocking_csid) for the remote
-      holder; a cross-node $DEQ (vms_lock_dlm_xnode_deq, authorized by CSID)
-      releases and grants the blocked request (GETLKI flips NL->EX). Proven on a
-      real /dev/vms (tests/qemu/test_syssvc_dlm_xnode.c, x86_64 + Alpha LP64). No
-      fake grants OR blocks — a queued request is a real lock on the master's
-      queue that releases only on a real $DEQ (INV-6).
+      vms-94c/vms-e8f1/vms-904c + BLKAST wire H6 (vms-76d/#918).
+      vms_lock_dlm_xnode_dispatch runs a decoded cross-node $ENQ through the real
+      lock manager on the mastering node, held FOR the remote requester's CSID: a
+      compatible request GRANTS (SS$_NORMAL, GET_RESMASTER shows held_for=<peer>);
+      an incompatible one QUEUES on the real waiting queue (VMS_DLM_STS_QUEUED,
+      GETLKI shows granted NL / requested EX) and the master fires the blocking-AST
+      decision. The BLKAST is now DELIVERED over SCS and fires a genuine user-mode
+      AST on the remote holder's process (H6, was deferred); a cross-node $DEQ
+      (vms_lock_dlm_xnode_deq, authorized by CSID) releases and grants the blocked
+      request (GETLKI flips NL->EX). Proven on real /dev/vms
+      (tests/qemu/test_syssvc_dlm_xnode.c x86_64 + Alpha LP64; the multi-node H5/H6
+      QEMU harnesses). No fake grants OR blocks — a queued request is a real lock on
+      the master's queue that releases only on a real $DEQ (INV-6).
   - id: cluster-dlm$async-reply-wire
     kind: feature
-    status: partial
+    status: verified
     authenticity: real
     vms: "Async DLM replies (queued-reply + deferred GRANT) delivered over SCS; requester-side completion"
     evidence: src/vmsscs/scsd.c
+    verified_against: "tests/qemu/run_dlm_harness_h5.sh (two-node A<->B live /dev/vms: SCSD-I-DLMPEND, SCSD-I-DLMDEFER, SCSD-I-DLMH5FLIP granted_mode=EX)"
     notes: >
       vms-6ca rung H5. The master's async replies ride the live SCS wire: node B
       WIREs the queued-reply (granted mode NL — the requester stays genuinely
       pending) and, on a real cross-node $DEQ that flips a queued waiter to
       granted, WIREs an unprompted deferred GRANT (SS$_NORMAL, the granted mode)
       to that requester (vms_lock_dlm_xnode_deq reports the flipped waiter). The
-      REQUESTER-SIDE GRANT RECEIVE (VMS_DLM_OP_GRANT, was SS$_UNSUPPORTED)
-      completes an executive-resident ORIGIN record on the requesting node, whose
-      granted mode is set ONLY from what the master sent over SCS; GETLKI reads
-      the NL->EX flip back on the REQUESTER. Proven on a two-node live A<->B QEMU
-      harness with real /dev/vms on both (tests/qemu/run_dlm_harness_h5.sh:
-      SCSD-I-DLMPEND, SCSD-I-DLMDEFER, SCSD-I-DLMH5FLIP granted_mode=EX). The
-      BLKAST wire (master -> holder) is deferred honestly on this rung — BLKAST as
-      a receive op still returns SS$_UNSUPPORTED; the block-then-grant is proven
-      without it (the holder releases on its own). Multi-peer routing of a deferred
-      grant by CSID (releaser and queued waiter on different nodes) is a later
-      rung; H5 proves the same-peer case. No fabricated wire reply or grant (INV-6).
+      REQUESTER-SIDE GRANT RECEIVE (VMS_DLM_OP_GRANT) completes an
+      executive-resident ORIGIN record on the requesting node, whose granted mode
+      is set ONLY from what the master sent over SCS; GETLKI reads the NL->EX flip
+      back on the REQUESTER. This origin record is the requester-side wait-for
+      state H11's distributed deadlock search reads (VMS_IOCTL_DLM_ENUM_WAITS).
+      Proven on a two-node live A<->B QEMU harness with real /dev/vms on both
+      (tests/qemu/run_dlm_harness_h5.sh: SCSD-I-DLMPEND, SCSD-I-DLMDEFER,
+      SCSD-I-DLMH5FLIP granted_mode=EX). No fabricated wire reply or grant (INV-6).
   - id: cluster-dlm$remaster-lvb-deadlock
     kind: feature
-    status: partial
+    status: verified
     authenticity: real
-    vms: "Resource-directory consistency, dynamic remastering, LVB replication, distributed deadlock detection"
+    vms: "LVB replication, dynamic remastering (directory + lock state), directory-ownership guard, distributed deadlock detection"
     evidence: src/kernel-core/vms_lock.c
+    verified_against: "tests/qemu/run_dlm_harness_h8.sh, _h9.sh (LVB write/read), _h10.sh (H10a directory remaster), _h10b.sh (H10b lock-state rebuild), _e84.sh (directory-ownership refusal), _ec75.sh (H11 distributed deadlock) — all multi-node real /dev/vms"
     notes: >
-      Partial, and each sub-part is honest about what it does and does not do.
-      RESOURCE-DIRECTORY CONSISTENCY (vms-1bba) and LVB REPLICATION over the wire
-      (vms-d81/vms-eeb, the H8 write + H9 read crossings) are present on their own
-      rungs. DYNAMIC REMASTERING now has its FOUNDATION: the graceful-departure
-      directory INGRESS (vms-2bf, DLM rung H10a). On a graceful cluster departure
-      (SCS_MEMBER_OP_DEPART class-0x04) scsd calls the LOCAL ioctl
-      VMS_IOCTL_DLM_MEMBER_DEPART with the departed CSID; the executive drops it
-      from the LIVE directory membership (the static insmod dlm_member_csids vector
-      is not mutated — a runtime departed-set filters it) and invalidates cached
-      res->dir_csid, so dlm_directory_csid re-resolves over the survivors and a
-      resource whose directory hashed to the departed node deterministically
-      re-masters to a survivor. Proven on a THREE-node live A/B/C QEMU harness with
-      real /dev/vms on all three (tests/qemu/run_dlm_harness_h10.sh: node C departs,
-      survivors emit SCSD-I-DLMDEPART found=1 live=2, node A emits SCSD-I-DLMREMASTER
-      dir_before=1032 dir_after in {1030,1031}). STILL ABSENT above this foundation:
-      the cross-node lock-STATE rebuild (COLLECTing survivors' origin records and
-      reconstructing res->granted — H10b, vms-dca9), and distributed DEADLOCK
-      detection (vms-ec75; the queue path skips the single-node proc-keyed detector
-      by design). H10a re-resolves the DIRECTORY, not the granted lock state — an
-      honest omission, never a fabricated remaster (INV-6).
+      The former "remain absent" cluster of the DLM epic, now COMPLETE and each
+      part proven on a live multi-node /dev/vms rail. LVB REPLICATION both ways:
+      the H8 write crossing (vms-d81/#923) and the H9 read crossing (vms-eeb/#925).
+      DYNAMIC REMASTERING on graceful departure: the directory INGRESS re-resolves
+      a departed node's resources onto a survivor (H10a, vms-2bf/#927,
+      VMS_IOCTL_DLM_MEMBER_DEPART + a runtime departed-set filtering the static
+      dlm_member_csids vector), AND the cross-node lock STATE is rebuilt on the new
+      master from the surviving holder's REAL origin record over a targeted
+      SCS_DLM_OP_REBUILD, reconstructed directly into res->granted and value-verified
+      (H10b, vms-dca9/#928, run_dlm_harness_h10b.sh three-way equality). DIRECTORY
+      OWNERSHIP: a node refuses to master a resource it is not the directory for —
+      dlm_resolve_master returns SS$_UNSUPPORTED — proven on the wire (e84,
+      vms-e84/#929, run_dlm_harness_e84.sh: non-directory node answers 0x8F8,
+      directory node GRANTS). DISTRIBUTED DEADLOCK DETECTION: a cross-node cycle is
+      found by an edge-chasing search over the real distributed wait-for graph
+      (home pending origins via VMS_IOCTL_DLM_ENUM_WAITS + master res->granted via
+      VMS_IOCTL_DLM_GET_GRANTED), and a globally-deterministic single victim
+      (lexicographic-min over the cycle) is aborted with SS$_DEADLOCK via the
+      GRANT-reply path, idempotently (H11, vms-ec75/#930, run_dlm_harness_ec75.sh:
+      cycle detected, exactly one victim, the other stays queued). Every edge is a
+      real queue/origin read; a dropped/ttl-expired probe reports no-deadlock, never
+      a fabricated cycle (INV-6). DEPTH deferred beyond the engine (honest, tracked):
+      the concurrent-both-initiate deadlock proof (vms-04f — logic shipped +
+      code-verified), directory REDIRECT (vms-b96), and a real app-process
+      cross-node acquisition path replacing the SS$_UNSUPPORTED "0.4" stub
+      (vms-d1f, post-1.0).
   - id: cluster-dlm$scs-transport
     kind: feature
-    status: partial
+    status: verified
     authenticity: real
-    vms: "DLM SYSAP SCS connection + lock-request message class (ENQ/GRANT/DEQ/BLKAST) between cluster nodes"
+    vms: "DLM SYSAP SCS connection + lock-request message class (ENQ/GRANT/DEQ/BLKAST/REBUILD/DLKSRCH) between cluster nodes"
     evidence: src/vmsscs/scs_dlm.c
+    verified_against: "tests/qemu/run_dlm_harness_h0.sh..ec75 (H0..H11 on real /dev/vms); src/vmsscs codec ctests (scs_dlm frame encode/decode + op-name validators)"
     notes: >
-      vms-94c rung 1. A DLM message rides as a p.4-13 SCS application message
-      (MTYPE 10) with its body at SCA content offset 58 (the scs_mscp.c
-      nesting). The message TRANSPORT is real; the message HANDLER does not yet
-      grant (rung 2).
+      vms-94c rung 1, extended through H11. A DLM message rides as a p.4-13 SCS
+      application message (MTYPE 10) with its body at SCA content offset 58 (the
+      scs_mscp.c nesting). The transport is real and the receive handler GRANTS,
+      QUEUES, delivers BLKAST, rebuilds on remaster, and runs the deadlock search —
+      the full ENQ-class op set is handled on a real /dev/vms executive across every
+      DLM QEMU harness (H0..H11).
     wire_format:
       provenance: >
         TWO provenance classes, kept distinct (Rule 8). (A) SEMANTIC field
@@ -125,7 +142,7 @@ items:
         reference lab (the field SET is stable; only the offsets change). NOT
         VMS-authentic; never described as such.
       transport: "Ethernet(14) + NISCA seq-msg header [0:42] + SCS envelope [42:58] (MTYPE 10, Con.ID pair) + DLM body [58:138]. Header+envelope byte-identical to every SYSAP application message."
-      opcodes: "OVMX-derived: ENQ=1, GRANT=2, DEQ=3, BLKAST=4."
+      opcodes: "OVMX-derived: ENQ=1, GRANT=2, DEQ=3, BLKAST=4, REBUILD=5 (H10b remaster lock rebuild), DLKSRCH=6 (H11 distributed deadlock search, SEARCH/VICTIM)."
       body_layout: >
         OVMX-derived, little-endian, body-relative offsets (body base = SCA
         content 58): [0]u8 op; [1]u8 mode (LCK$K_); [2:4]u16 flags (LCK$M_);
@@ -134,3 +151,6 @@ items:
         [24]u8 namelen(0..31); [25]u8 parent-present; [26:28]u16 reserved;
         [28:32]u32 parent lock handle; [32:48] 16-byte value block;
         [48:80] 32-byte resource name. Body length 80; SCA content length 138.
+        (H10b/H11 reuse this frame; the deadlock search carries the initiator,
+        chased-holder, and running-min victim ids in the handle/CSID and value-block
+        slots — an OVMX design choice, Rule 8.)

@@ -1,0 +1,11 @@
+$ SHOW PROCESS
+
+##-AUG-#### ##:##:##.##   User: SYSTEM           Process ID:   ########
+                          Node: VAX#             Process name: "SYSTEM"
+
+Terminal:           OPA#:
+User Identifier:    [SYSTEM]
+Base priority:      #
+Default file spec:  SYS$SYSROOT:[SYSMGR]
+
+Devices allocated:  VAX#$OPA#:

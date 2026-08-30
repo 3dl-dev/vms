@@ -40,7 +40,6 @@
 #include "vms/pcb.h"
 #include "ovmx_identity.h"
 #include "ovmx_accounting.h"
-#include "scs_membership.h"  /* vms-8d4: read SCSD's live cluster membership */
 #include "vmsqueue.h"
 #include "descrip.h"
 #include "jpidef.h"
@@ -2956,12 +2955,24 @@ static int cmd_show_license(struct dcl_command *cmd)
  *
  * vms-8d4 (INV-DCL facade-kill): this used to hardcode "%SYSTEM-I-NOTMEMBER"
  * unconditionally, so a genuinely-clustered node lied about being standalone.
- * It now reads the connection manager's LIVE member set, published by the SCS
- * daemon (src/vmsscs/scsd.c -> scs_membership.h). When the daemon has admitted
- * this node into a cluster it renders the real member list; when this node is
- * not a member -- daemon not running, or not (yet) joined -- there is no
- * published membership and NOTMEMBER is the honest answer, exactly as a real
- * non-member VMS node reports.
+ * It then read the connection manager's LIVE member set from a FILE scsd
+ * published (src/vmsscs/scsd.c -> scs_membership.h) -- a userspace-to-
+ * userspace path with nothing in the executive behind it.
+ *
+ * vms-551 (docs/design-cluster-membership-executive.md) crosses this into
+ * the executive: vms.ko now owns a membership block scsd populates via
+ * VMS_IOCTL_CLUSTER_MEMBER_SET/CLEAR, and this reads it back through
+ * /dev/vms with vms_kif_cluster_get_members() -- the same executive-backed
+ * shape the DLM lock manager already has (Rule 9, consistent with vms-7fa).
+ *
+ * TWO DISTINCT non-member-list outcomes, never conflated:
+ *   - executive REACHABLE, n_members==0 (SS$_NORMAL) -> NOTMEMBER: the
+ *     genuine "no cluster to report" answer a real non-member VMS node
+ *     gives.
+ *   - executive UNREACHABLE (SS$_NOSUCHDEV, no /dev/vms) -> the SAME
+ *     "%SYSTEM-W-NOSUCHDEV" rendering cmd_show_device() already uses for
+ *     that condition (vms-8d4 precedent) -- a transport failure, not a
+ *     cluster fact.
  *
  * The display fields (the "View of Cluster from system ID N node: X" banner and
  * the NODE / SOFTWARE / STATUS columns) are modeled on the public OpenVMS SHOW
@@ -2972,22 +2983,31 @@ static int cmd_show_cluster(struct dcl_command *cmd)
 {
     (void)cmd;
 
-    struct scs_cluster_view view;
-    int rc = scs_membership_read(&view);
+    struct vms_cluster_member members[VMS_CLUSTER_MEMBER_MAX];
+    uint32_t n_members = 0;
+    uint32_t status = vms_kif_cluster_get_members(members, VMS_CLUSTER_MEMBER_MAX,
+                                                  &n_members);
 
-    if (rc <= 0 || view.n_members < 1) {
-        /* Not a member: no live membership published. This is the truth for a
-         * standalone node and for a node whose connection manager is not up. */
+    if (status == SS$_NOSUCHDEV) {
+        /* Executive unreachable: honest transport failure, DISTINCT from
+         * NOTMEMBER (vms-551 / vms-8d4). */
+        dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available");
+        return SS$_NOSUCHDEV;
+    }
+
+    if (status != SS$_NORMAL || n_members < 1) {
+        /* Executive reachable, genuinely no cluster to report -- the truth
+         * for a standalone node. */
         printf("%%SYSTEM-I-NOTMEMBER, this system is not a member of a "
                "VMScluster\n");
         return SS$_NORMAL;
     }
 
-    /* members[0] is the local node, as published by SCSD. */
-    const struct scs_cluster_member *local = &view.members[0];
+    /* members[0] is the local node, as SET by scsd's publish path. */
+    const struct vms_cluster_member *local = &members[0];
     const char *local_node =
-        (local->node[0] != '\0' && strcmp(local->node, "?") != 0)
-            ? local->node : "OVMX";
+        (local->scsnode[0] != '\0' && strcmp(local->scsnode, "?") != 0)
+            ? local->scsnode : "OVMX";
 
     char tbuf[64];
     time_t now = time(NULL);
@@ -3012,11 +3032,11 @@ static int cmd_show_cluster(struct dcl_command *cmd)
     printf("|--------------------------+----------------------|\n");
     printf("| NODE   | SOFTWARE        | STATUS               |\n");
     printf("|--------+-----------------+----------------------|\n");
-    for (int i = 0; i < view.n_members; i++) {
-        const struct scs_cluster_member *m = &view.members[i];
-        char nodecol[SCS_MEMBERSHIP_NODE_LEN];
-        if (m->node[0] != '\0' && strcmp(m->node, "?") != 0) {
-            snprintf(nodecol, sizeof(nodecol), "%s", m->node);
+    for (uint32_t i = 0; i < n_members; i++) {
+        const struct vms_cluster_member *m = &members[i];
+        char nodecol[sizeof(m->scsnode)];
+        if (m->scsnode[0] != '\0' && strcmp(m->scsnode, "?") != 0) {
+            snprintf(nodecol, sizeof(nodecol), "%s", m->scsnode);
         } else {
             /* Peer SCSNODE name not learned: identify it by SCSSYSTEMID. */
             snprintf(nodecol, sizeof(nodecol), "%u", (unsigned)m->sysid);

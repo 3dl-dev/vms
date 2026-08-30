@@ -8634,6 +8634,70 @@ static uint32_t scsd_dlm_member_depart_ioctl(uint32_t departed_csid,
 }
 
 /*
+ * scsd_cluster_member_set_ioctl - LOCAL VMS_IOCTL_CLUSTER_MEMBER_SET (rd
+ * vms-551): tell our executive to insert-or-update this member in the
+ * cluster-membership block (docs/design-cluster-membership-executive.md).
+ * Same direct-POSIX-ioctl shape as scsd_dlm_member_depart_ioctl above --
+ * this is a LOCAL ioctl to our OWN /dev/vms, not a new SCS wire send.
+ * Fail-honest (SS$_NOSUCHDEV).
+ */
+static uint32_t scsd_cluster_member_set_ioctl(uint32_t csid, uint32_t sysid,
+                                              const char *scsnode,
+                                              const char *state)
+{
+#ifdef SCSD_UNIT_TEST
+    (void)csid; (void)sysid; (void)scsnode; (void)state;
+    return 2296u;
+#else
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0)
+        return 2680u; /* SS$_NOSUCHDEV -- honest, no fabricated membership */
+    struct vms_register_args reg;
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return 2680u; }
+    struct vms_cluster_member_set_args sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.csid = csid;
+    sa.sysid = sysid;
+    if (scsnode)
+        strncpy(sa.scsnode, scsnode, sizeof(sa.scsnode) - 1);
+    if (state)
+        strncpy(sa.state, state, sizeof(sa.state) - 1);
+    if (ioctl(fd, VMS_IOCTL_CLUSTER_MEMBER_SET, &sa) < 0) { close(fd); return 2680u; }
+    uint32_t st = sa.status;
+    close(fd);
+    return st;
+#endif
+}
+
+/*
+ * scsd_cluster_member_clear_ioctl - LOCAL VMS_IOCTL_CLUSTER_MEMBER_CLEAR (rd
+ * vms-551): tell our executive this csid left. Idempotent -- an absent csid
+ * is SS$_NORMAL, not an error. Same shape as the SET helper above.
+ */
+static uint32_t scsd_cluster_member_clear_ioctl(uint32_t csid)
+{
+#ifdef SCSD_UNIT_TEST
+    (void)csid;
+    return 2296u;
+#else
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0)
+        return 2680u; /* SS$_NOSUCHDEV -- honest, no fabricated membership */
+    struct vms_register_args reg;
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return 2680u; }
+    struct vms_cluster_member_clear_args ca;
+    memset(&ca, 0, sizeof(ca));
+    ca.csid = csid;
+    if (ioctl(fd, VMS_IOCTL_CLUSTER_MEMBER_CLEAR, &ca) < 0) { close(fd); return 2680u; }
+    uint32_t st = ca.status;
+    close(fd);
+    return st;
+#endif
+}
+
+/*
  * Node A's H10a readback baseline. scsd_dlm_h10_before_read latches, once, the
  * directory CSID of the tracked resource (OVMX_DLM_H10_RES) over the FULL
  * membership -- BEFORE any departure. scsd_dlm_h10_depart_ingress reads it again
@@ -14329,9 +14393,38 @@ static void scsd_publish_membership(struct scsd_rx *rx, uint64_t now_ms)
         peer_members++;
     }
 
+    /*
+     * Cluster membership crosses into the executive (rd vms-551,
+     * docs/design-cluster-membership-executive.md). This function ALSO
+     * drives the executive's membership block via SET/CLEAR (a LOCAL ioctl
+     * on our own /dev/vms -- no new SCS wire send, so no CHOKED send-site
+     * table entry), alongside the file publish above/below, which this
+     * slice keeps unchanged: SHOW CLUSTER is the only reader cut over to
+     * the executive this slice (dcl_cmd_show.c cmd_show_cluster).
+     *
+     * CSID convention: this node's own identity convention already treats
+     * the SCSSYSTEMID-derived low-16 wire address as the DLM CSID (see
+     * scsd_dlm_h10_depart_ingress above, departed = peer_node_number(ps)).
+     * The same value is exactly what this loop already stores in
+     * m->sysid for both the local node (rx->vc_ctx->scssystemid) and every
+     * peer (peer_node_number(ps)), so csid == sysid here -- one identity,
+     * not two independent ones to keep synchronized.
+     *
+     * scsd_membership_last_csids/_last_n remember what THIS function last
+     * SET, purely to detect a departure (a csid that was SET last cycle and
+     * is no longer live) and CLEAR exactly that -- CLEAR is idempotent, so
+     * this diffing is an efficiency choice, not a correctness requirement.
+     */
+    static uint32_t scsd_membership_last_csids[SCS_MEMBERSHIP_MAX_NODES];
+    static int scsd_membership_last_n;
+
     if (peer_members == 0) {
         /* Not a member of any cluster right now -> NOTMEMBER is the truth. */
         scs_membership_clear();
+        for (int i = 0; i < scsd_membership_last_n; i++) {
+            (void)scsd_cluster_member_clear_ioctl(scsd_membership_last_csids[i]);
+        }
+        scsd_membership_last_n = 0;
         return;
     }
 
@@ -14346,6 +14439,32 @@ static void scsd_publish_membership(struct scsd_rx *rx, uint64_t now_ms)
     view.n_members = 1 + peer_members;
 
     (void)scs_membership_publish(&view);
+
+    /* Drive the executive: SET every live member this cycle, then CLEAR any
+     * csid that was live last cycle and is not live this cycle -- a real
+     * departure, never a fabricated one (INV-6). */
+    uint32_t cur_csids[SCS_MEMBERSHIP_MAX_NODES];
+    int n_cur = 0;
+    for (int i = 0; i < view.n_members && i < SCS_MEMBERSHIP_MAX_NODES; i++) {
+        struct scs_cluster_member *m = &view.members[i];
+        (void)scsd_cluster_member_set_ioctl(m->sysid, m->sysid, m->node, m->state);
+        cur_csids[n_cur++] = m->sysid;
+    }
+    for (int i = 0; i < scsd_membership_last_n; i++) {
+        uint32_t old_csid = scsd_membership_last_csids[i];
+        int still_present = 0;
+        for (int j = 0; j < n_cur; j++) {
+            if (cur_csids[j] == old_csid) {
+                still_present = 1;
+                break;
+            }
+        }
+        if (!still_present) {
+            (void)scsd_cluster_member_clear_ioctl(old_csid);
+        }
+    }
+    memcpy(scsd_membership_last_csids, cur_csids, sizeof(uint32_t) * (size_t)n_cur);
+    scsd_membership_last_n = n_cur;
 }
 
 static void scsd_recnx_tick(struct scsd_rx *rx, uint64_t now_ms)

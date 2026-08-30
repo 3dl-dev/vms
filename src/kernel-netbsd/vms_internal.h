@@ -805,6 +805,12 @@ long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_get_granted(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_enum_waits(struct vms_proc *proc, unsigned long arg);
+/* Cluster membership crosses into the executive (rd vms-551): the SET/CLEAR/
+ * GET handlers for the module-global membership block (vms_lock.c). SET/
+ * CLEAR are scsd's local-ioctl populate path; GET is SHOW CLUSTER's read. */
+long vms_ioctl_cluster_member_set(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_cluster_member_clear(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_cluster_member_get(struct vms_proc *proc, unsigned long arg);
 
 /* ----------------------------------------------------------------
  * LOGICAL-NAME facility (LNM$SYSTEM/GROUP/JOB, rd vms-72da) -- DEFINED in

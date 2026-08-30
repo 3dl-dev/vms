@@ -274,10 +274,44 @@ struct vms_dlm_enum_waits_args {
 	struct vms_dlm_wait_ent ent[VMS_DLM_ENUM_WAITS_MAX];
 };
 
+/* Cluster membership crosses into the executive (rd vms-551). MUST match
+ * src/kernel/vms_ioctl.h byte-for-byte. SEPARATE from dlm_member_csids
+ * above (that vector is CSID-only, static, for DLM directory hashing; this
+ * is SCSNODE-name membership state, mutable at runtime by scsd). See
+ * vms_ioctl.h for the full semantics + the NOTMEMBER != NOSUCHDEV contract. */
+struct vms_cluster_member {
+	uint32_t csid;
+	uint32_t sysid;
+	char     scsnode[16];
+	char     state[16];
+};
+#define VMS_CLUSTER_MEMBER_MAX 96u
+
+struct vms_cluster_member_set_args {
+	uint32_t csid;
+	uint32_t sysid;
+	char     scsnode[16];
+	char     state[16];
+	uint32_t status;
+};
+
+struct vms_cluster_member_clear_args {
+	uint32_t csid;
+	uint32_t status;
+};
+
+struct vms_cluster_member_get_args {
+	uint32_t n_members;
+	uint32_t status;
+	struct vms_cluster_member members[VMS_CLUSTER_MEMBER_MAX];
+};
+
 /* ================================================================
- * Request numbers. All five are _IOWR carrying the SAME structs and NR bytes as
- * src/kernel/vms_ioctl.h (0x30-0x34, magic 'V'), so their command words are
- * identical across substrates (framework pre-copy path; none exceeds one page).
+ * Request numbers. All eight are _IOWR carrying the SAME structs and NR bytes
+ * as src/kernel/vms_ioctl.h (0x30-0x3b, magic 'V'), so their command words are
+ * identical across substrates (framework pre-copy path; none exceeds one page
+ * -- the largest, vms_cluster_member_get_args at 3848 bytes, is still under
+ * NetBSD's one-page IOCPARM_MAX of 4096).
  * VMS_IOCTL_CONVERT reuses struct vms_enq_args, exactly as on Linux.
  * ================================================================ */
 #define VMS_IOCTL_ENQ           _IOWR(VMS_LOCK_IOC_MAGIC, 0x30, struct vms_enq_args)
@@ -289,6 +323,9 @@ struct vms_dlm_enum_waits_args {
 #define VMS_IOCTL_DLM_MEMBER_DEPART _IOWR(VMS_LOCK_IOC_MAGIC, 0x36, struct vms_dlm_depart_args)
 #define VMS_IOCTL_DLM_GET_GRANTED   _IOWR(VMS_LOCK_IOC_MAGIC, 0x37, struct vms_dlm_granted_args)
 #define VMS_IOCTL_DLM_ENUM_WAITS    _IOWR(VMS_LOCK_IOC_MAGIC, 0x38, struct vms_dlm_enum_waits_args)
+#define VMS_IOCTL_CLUSTER_MEMBER_SET   _IOWR(VMS_LOCK_IOC_MAGIC, 0x39, struct vms_cluster_member_set_args)
+#define VMS_IOCTL_CLUSTER_MEMBER_CLEAR _IOWR(VMS_LOCK_IOC_MAGIC, 0x3a, struct vms_cluster_member_clear_args)
+#define VMS_IOCTL_CLUSTER_MEMBER_GET   _IOWR(VMS_LOCK_IOC_MAGIC, 0x3b, struct vms_cluster_member_get_args)
 
 /*
  * Freeze the shared layouts -- see the other _nb.h contracts' identical asserts:
@@ -312,5 +349,11 @@ _Static_assert(sizeof(struct vms_dlm_granted_args) == 56,
                "vms_dlm_granted_args changed size -- VMS_IOCTL_DLM_GET_GRANTED ABI break");
 _Static_assert(sizeof(struct vms_dlm_enum_waits_args) == 16 + 48 * 8,
                "vms_dlm_enum_waits_args changed size -- VMS_IOCTL_DLM_ENUM_WAITS ABI break");
+_Static_assert(sizeof(struct vms_cluster_member_set_args) == 44,
+               "vms_cluster_member_set_args changed size -- VMS_IOCTL_CLUSTER_MEMBER_SET ABI break");
+_Static_assert(sizeof(struct vms_cluster_member_clear_args) == 8,
+               "vms_cluster_member_clear_args changed size -- VMS_IOCTL_CLUSTER_MEMBER_CLEAR ABI break");
+_Static_assert(sizeof(struct vms_cluster_member_get_args) == 3848,
+               "vms_cluster_member_get_args changed size -- VMS_IOCTL_CLUSTER_MEMBER_GET ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

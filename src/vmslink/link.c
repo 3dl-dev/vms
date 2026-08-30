@@ -3404,6 +3404,61 @@ static uint64_t evax_wredir_apply(const struct evax_wredir *redir, int nredir, u
     return a;
 }
 
+/* ---- Thunk-redirect map (vms-1ef) ----------------------------------------
+ *
+ * A weak_alias thunk (musl `default_malloc` = `decc$_malloc64`: a tiny
+ * `lda PV,-N(PV); bsr __libc_malloc_impl` forwarder, weak_alias'd to
+ * __libc_malloc_impl) has its OWN procedure descriptor whose entry-field is a
+ * SECTION-RELATIVE ref into its own $CODE$. When a STRONG def (mallocng)
+ * overrides __libc_malloc_impl, the weak def sits at OFFSET 0 of that $CODE$, so
+ * the section BASE == the overridden weak code entry == a wredir 'from'. The
+ * strong-over-weak reloc (evax_apply_reloc) applies the redirect to that section
+ * BASE before adding the addend, so the thunk's descriptor entry-field resolves
+ * onto the STRONG code (mallocng+offset) — correct routing — but the .vms$sv
+ * export still hands consumers the thunk's OWN cell-less descriptor as the PV.
+ * The shared strong code then does its r27-relative linkage loads against the
+ * wrong descriptor (no size_classes anchor) and SEGVs (the crtl_rms N=7 crash).
+ *
+ * FIX: pair each overridden weak proc's placed CODE ENTRY with the strong def's
+ * placed DESCRIPTOR. A procedure universal whose defining symbol's code-section
+ * base equals such a weak code entry is a redirected thunk — export the STRONG
+ * descriptor as its PV (real entry + PV + linkage cells), so the shared code
+ * runs with the descriptor that carries its anchors. Defined key: PDSC$Q_ENTRY /
+ * evax_sym_code_addr + the weak->strong pairing; no undefined descriptor offset.
+ * A normal proc's section base is not an overridden weak code entry, so it is
+ * left exactly as evax_sym_value_addr resolves it (no mis-fire). */
+struct evax_thunk_redir { uint64_t from_code, to_desc; };
+
+static int evax_build_thunk_redir(struct evax_input *in, int nin,
+                                  struct evax_thunk_redir *tr, int cap)
+{
+    int n = 0;
+    for (int i = 0; i < nin; i++)
+        for (int s = 0; s < in[i].obj.nsym; s++) {
+            const struct evax_symbol *w = &in[i].obj.sym[s];
+            if (!w->defined || !(w->flags & EGSY__V_WEAK) || !w->is_proc) continue;
+            int di; const struct evax_symbol *ds;
+            if (evax_find_sym(in, nin, w->name, &di, &ds) < 0) continue;
+            if (ds->flags & EGSY__V_WEAK) continue;   /* no strong override */
+            if (ds == w) continue;                    /* found itself       */
+            uint64_t wc = evax_sym_code_addr(in, i, w);   /* weak code entry (== the
+                                                           * over-redirected base) */
+            uint64_t sv = evax_sym_value_addr(in, di, ds);/* strong descriptor       */
+            if (n < cap) tr[n++] = (struct evax_thunk_redir){ wc, sv };
+        }
+    return n;
+}
+
+/* If `base` (a defining symbol's code-section base) is an overridden weak proc's
+ * code entry, return 1 and set *out to the strong def's descriptor. */
+static int evax_thunk_redir_find(const struct evax_thunk_redir *tr, int ntr,
+                                 uint64_t base, uint64_t *out)
+{
+    for (int i = 0; i < ntr; i++)
+        if (tr[i].from_code == base) { *out = tr[i].to_desc; return 1; }
+    return 0;
+}
+
 /* Ensure a psect's content buffer exists (zeroed to alloc) so a relocation
  * store slot can be patched into it. */
 static uint8_t *evax_ensure_content(struct evax_section *sec)
@@ -4100,6 +4155,16 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         snprintf(osec[oi].name, sizeof osec[oi].name, "%s", OVMX_XFER_SECTION);
         osec[oi].addr = xfer_addr; osec[oi].size = xfer_size; osec[oi].nobits = 0;
     } else {
+        /* vms-1ef: build the thunk-redirect map now that every psect is placed
+         * (sec_base final) — a redirected weak_alias thunk universal must export
+         * the STRONG def's descriptor, not its own cell-less one. Sized to one
+         * entry per input symbol (upper bound). */
+        int thunkr_cap = 0;
+        for (int i = 0; i < nin; i++) thunkr_cap += in[i].obj.nsym;
+        struct evax_thunk_redir *thunkr = thunkr_cap
+            ? calloc((size_t)thunkr_cap, sizeof *thunkr) : NULL;
+        int n_thunkr = thunkr ? evax_build_thunk_redir(in, nin, thunkr, thunkr_cap) : 0;
+
         /* .vms$sv: resolve each declared universal to its DEFINING EVAX symbol's
          * image-relative address (PROCEDURE -> code entry point, DATA -> value
          * address), a GLOBALVALUE to its preset absolute constant, RETIRED to 0.
@@ -4131,8 +4196,26 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
              * reached only via input_is_evax() dispatch (~link.c:4485); the
              * x86-64/aarch64 SV emit is the separate emit_shareable() path
              * (uv[i].value set at ~2484/2490) and stays byte-identical. */
-            uv[i].value = evax_sym_value_addr(in, di, ds);
+            /* vms-1ef: a WEAK weak_alias thunk (decc$_malloc64) whose descriptor
+             * entry-field was redirected onto a strong def by the #899
+             * weak-override base-redirect (its code-section base is an overridden
+             * weak proc's code entry) must export the STRONG descriptor, so the
+             * shared code's r27-relative linkage loads reach the real anchor
+             * cells. The EGSY__V_WEAK guard is load-bearing: a STRONG function
+             * that merely shares that $CODE$ section (its base coincides with the
+             * offset-0 overridden weak def) is NOT a forwarder — it must export
+             * its OWN descriptor unchanged (proven by run_muldef_evax.sh's
+             * weak-first use_weak_side). Normal procs miss the map entirely. */
+            uint64_t redirected_desc;
+            if (ds->is_proc && (ds->flags & EGSY__V_WEAK) &&
+                evax_thunk_redir_find(thunkr, n_thunkr,
+                                      in[di].sec_base[ds->code_psindx],
+                                      &redirected_desc))
+                uv[i].value = redirected_desc;
+            else
+                uv[i].value = evax_sym_value_addr(in, di, ds);
         }
+        free(thunkr);
         for (int i = 0; i < nuniv; i++)
             sv_names_size += (uint32_t)strlen(uv[i].name) + 1;
         sv_names_o = sizeof(struct ovmx_sv_header)

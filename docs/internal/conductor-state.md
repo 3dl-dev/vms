@@ -1,5 +1,9 @@
 # Conductor — live pointer (re-derive the rest from rd / gh / git; do not maintain a parallel state layer)
 
+> **Internal orchestration state — not product documentation.** This file is the OVMX
+> agent-swarm's live execution pointer, not documentation of the OVMX product. It lives
+> under `docs/internal/`; do not cite it from user-facing docs.
+
 **ENGINE RULE (why it once went idle):** keep every lane with a next item queued (never idle-waiting
 on the conductor); push-first agents (commit+push before any long build); delegate build-heavy work
 to ephemeral sub-agents; short heartbeat. Never narrow to one item + a long wait.
@@ -25,4 +29,4 @@ build-time reduction (`vms-8a4`), release-eng (`vms-a84`), authenticity/executiv
 **Open operator-reserved:** shared-host RAM pressure (the enterprise-ai tenant vs the k3s rail for
 heavy builds); any product-scope / test-weakening / external-exposure call.
 
-**Runbook + invariants:** `docs/orchestration-conductor.md`. Lane registry: `docs/lane-ownership.md`.
+**Runbook + invariants:** `docs/internal/orchestration-conductor.md`. Lane registry: `docs/internal/lane-ownership.md`.

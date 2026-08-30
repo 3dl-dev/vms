@@ -1,5 +1,19 @@
 # Installing OVMX 0.1
 
+> **SUPERSEDED (as of 0.6).** This is the frozen 0.1 install note and is kept
+> for historical reference only. **For the current, correct getting-started
+> path — build, boot, log in, run DCL — read
+> [`docs/getting-started.md`](getting-started.md).** For installing a product
+> kit onto a target volume with `PRODUCT INSTALL`, read
+> [`docs/install-guide.md`](install-guide.md) (CI-gated).
+>
+> Two things below are stale and are corrected in `getting-started.md`:
+> the **fat/slim initramfs** distinction (there is now exactly **one**
+> initramfs — vms-1ab — and the `--slim` flag is gone; `boot.sh` today takes
+> `--distrib` instead), and the multi-boot install/slim-reboot proof sequence.
+> The blessed one-command path is now simply `./boot.sh`. Where this note and
+> `getting-started.md` disagree, `getting-started.md` is correct.
+
 This is a light release-eng guide: download (build) the bootable image, boot
 it, let it install itself to a system disk, reboot into the slim runtime,
 and log in to DCL. It covers the **0.1** install/boot/login path only —

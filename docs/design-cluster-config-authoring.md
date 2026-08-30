@@ -4,6 +4,18 @@
 > config-**authoring** gap in the clustering program. Source-of-truth for the
 > `vms-cfgcluster` epic (see rd). Written 2026-08-13.
 
+> **Milestone reconciliation (2026-08-30, vms-d1e — Rule 10).** The original
+> release ladder below marked R1 and R2 as shipping at **0.5** ("operator
+> authors cluster identity/votes the VMS way; node adopts on reboot"). As of
+> **0.6 that surface has NOT shipped**: config *reading* is done (see below), but
+> the VMS-way *authoring* path (SYSMAN string params `vms-8da`, `.PAR` write /
+> conversational SYSBOOT `vms-46c`, VOTES wire reconciliation `vms-41d`,
+> AUTOGEN/`MODPARAMS.DAT`) is not, and none of R1's dependencies have landed. The
+> rung markers and the milestone table have been corrected to reflect real
+> rd/git status. At 0.6 operators configure a node by editing the **pre-seeded**
+> `OVMXVMSSYS.PAR` (see `docs/cluster-configuration-guide.md`), not by authoring
+> it the VMS way.
+
 ## The gap (measured)
 
 Config **reading** is faithful and DONE (`vms-ci.8`, merged d76a0c2): `scsd`
@@ -35,7 +47,8 @@ Principle (operator 2026-08-13): each minor release **demonstrates what
 already exists in code**. Acceptance of each rung *is* a console/CI proof, not a
 separate tracking item.
 
-- **R1 — cluster SYSGEN params authored the VMS way, adopted on reboot.** `→ 0.5`
+- **R1 — cluster SYSGEN params authored the VMS way, adopted on reboot.**
+  `→ deferred (NOT shipped as of 0.6; reading ships, authoring does not)`
   SYSGEN.EXE / SYSMAN PARAMETERS SET/SHOW/WRITE for the cluster param set
   (SCSNODE, SCSSYSTEMID, VOTES, EXPECTED_VOTES, RECNXINTERVAL, ALLOCLASS),
   persisted to the `.PAR` store. **Demonstrates the `vms-ci.8` reading that
@@ -43,7 +56,8 @@ separate tracking item.
   `vms-41d` (VOTES reconciles on the VC). Proof: set params → WRITE CURRENT →
   reboot → `scsd`/`SHOW CLUSTER` reflect them, bracketed against a control.
 
-- **R2 — MODPARAMS.DAT + AUTOGEN drive cluster params.** `→ 0.5`
+- **R2 — MODPARAMS.DAT + AUTOGEN drive cluster params.**
+  `→ deferred (NOT shipped as of 0.6)`
   The VMS feedback pipeline: edit MODPARAMS.DAT, run AUTOGEN, a new `.PAR`
   version is generated and adopted at boot. Dep: R1.
 
@@ -63,7 +77,8 @@ separate tracking item.
 
 | Milestone | Lands | Demonstrates |
 |---|---|---|
-| **0.5** | R1, R2 | operator authors cluster identity/votes the VMS way; node adopts on reboot |
+| **0.5 / 0.6 (shipped)** | config **reading** only (`vms-ci.8`) | `scsd` reads SCSNODE/SCSSYSTEMID/ALLOCLASS/RECNXINTERVAL from the pre-seeded `.PAR` and adopts them on (re)boot; operator authors by editing the pre-seeded store |
+| **deferred (NOT shipped 0.6)** | R1, R2 | operator authors cluster identity/votes *the VMS way* (SYSMAN string params, `.PAR` write / SYSBOOT, AUTOGEN); node adopts on reboot — depends on `vms-8da`, `vms-46c`, `vms-41d`, none landed |
 | **1.0** | R3, R4 | arbitrary-cluster authentication + one-command `CLUSTER_CONFIG_LAN.COM` provisioning → join |
 
 ## Operator-reserved call (default chosen, proceeding)

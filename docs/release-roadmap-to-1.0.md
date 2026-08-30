@@ -18,6 +18,31 @@
 > gate**. roadmap-v1 §4 now carries that correction inline; this document has always
 > treated self-hosting as a gate.
 
+> **Roadmap of record.** This document is the single entry point for OVMX release status
+> and the 1.0 gate set. Its **Live status** block below is generated from rd (the source
+> of truth) + git tags by `tools/roadmap/reconcile.py` — never hand-edit between the
+> `GENERATED:BEGIN`/`GENERATED:END` markers. The hand-written narrative (§1a–§7, the
+> appendix) is curation and is safe to edit.
+
+### The roadmap doc set — what to read, and what each companion is for
+
+Five roadmap docs live under `docs/`. This one is authoritative; the others are either
+the tooling that maintains it or pre-pivot design history. Read them in this order:
+
+| Doc | Status | Read it for |
+|---|---|---|
+| **`release-roadmap-to-1.0.md`** (this file) | **Roadmap of record** | Current release status, the 1.0 gate set (R1–R7), the faithfulness ladder, epic placement + sequencing. Start here. |
+| `roadmap-reconcile-workflow.md` | **Active tooling** | How the generated status block and the public-site data are regenerated each checkpoint (`tools/roadmap/reconcile.py`). This is the maintenance procedure *for this file*. |
+| `roadmap-v1.md` | Historical (pre-pivot) | The origin of the R1–R6 gate framing that §3 still builds on, plus the pre-pivot rail / critical-path design history. Self-marked superseded; re-derive any status from rd. |
+| `roadmap-source-compat.md` | Historical (pre-pivot) | The old Phase 8–13 source-compatibility plan (CHF / CRTL / Fortran / BASIC / DECnet deliverable detail). Superseded *as a roadmap* by R2 / the `vms-801` corpus program; retained as design reference (cited by `design-self-host-mmk-spine.md`, `design-decnet-ovmx.md`). |
+| `roadmap-waves.md` | Historical (pre-pivot) | The old swarm wave-dispatch DAG plan (Rail A / Rail B). Superseded by the rd dependency graph + `docs/internal/orchestration-conductor.md`; carries stale invariants (aarch64-first, the `~/vax` lab path). Retire candidate. |
+
+The three *Historical* companions are kept as pre-pivot design context, not as live
+status — each already carries a superseded banner pointing here. Nothing in this set
+overrides an operator ruling: the live gate set (self-hosting is a 1.0 gate per
+`vms-678`; the platform target set with AXP first-class per `vms-8ce`) is defined in this
+file and in rd, not in the historical docs.
+
 ---
 
 ## 1. Where we actually are

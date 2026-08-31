@@ -429,6 +429,29 @@ endnodes exchanged 60-byte HELLOs on the T3 cadence and each listed the other in
 NODES. **Deferred to children of `vms-30e`:** the NSP logical-link connection service (rd
 `vms-c23`) and the live-VAX oracle adjacency bracket (rd `vms-aac0`, the §4.4 done-bar).
 
+**Engine rung 2 landed (rd `vms-c23`).** The NSP **logical-link connection service** on top of the
+rung-2 NSP codec (`vms-6986`): `src/vmsdecnet/nsp/dnet_link.{c,h}` — a pure, clock-injected NSP
+connection state machine (`CLOSED → CI_SENT/CR_RCVD → RUN → DI_SENT → CLOSED`) that establishes
+(Connect Initiate/Confirm), runs (a data segment carried with its explicit acknowledgement and
+in-order sequencing), and tears down (Disconnect Initiate/**Confirm**) a single logical link — wired
+into `dnet_engine` (a Phase IV **long-data-packet routing header** carrier + one embedded link +
+`link_open/accept/send/close/rx` wrappers) so `DECNETD.EXE` can OPEN a link to a peer node over the
+adjacency it already forms. Proven two ways: two `dnet_link` FSMs drive the full choreography
+deterministically (`tests/vmsdecnet/test_dnet_link.c`), and two **engines** open a link, move a data
+segment + ack, and disconnect as full on-wire data frames over a real `socketpair(2)` (also runnable
+via `DECNETD.EXE --nsp-selftest`, no `CAP_NET_RAW`), with the payload round-tripping byte-identical.
+**Honest oracle scope (Rule 8).** Only the **Connect Initiate** bytes are oracle-verified (the codec,
+§4.6 specimen #3). The **CC / data / ack / DI / DC choreography is SPEC-DERIVED** from the public DNA
+Phase IV NSP spec and proven only by the two-endpoint round-trip — the §4.6 capture never completed a
+handshake (VAX2 unconfigured), so no completed-link bytes exist to ground it, and none are fabricated.
+Two connection parameters ARE oracle-informed: the **CI retransmit interval** (~5.5 s — §4.6 specimens
+#3→#4 are 5.504 s apart) and the **give-up count** (8 retransmits — §4.6 records VAX1 abandoning SET
+HOST after 8). The **Disconnect Confirm (DC, MSGFLG `0x48`)** added to the codec and the OVMX
+long-data routing header (built without the optional Phase IV padding field the specimen carried as
+`0x81`) are labelled spec-derived/OVMX choices, never presented as oracle-observed. **Deferred to
+children of `vms-30e`:** SET HOST / CTERM (rd `vms-4d2`), file transfer / FAL·DAP (`COPY NODE::`, rd
+`vms-8c2`) — the layered products that ride on the logical link — and the live-VAX bracket (`vms-aac0`).
+
 ### 6.1 Open `verify:` items (resolve before the claims they gate ship)
 
 | # | Verify | Gates | Source to confirm from |

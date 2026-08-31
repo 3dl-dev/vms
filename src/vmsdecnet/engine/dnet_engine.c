@@ -248,6 +248,234 @@ int dnet_engine_tick(struct dnet_engine *e, dnet_tick_t now)
     return gone;
 }
 
+/* --- NSP logical-link data frames (routing-layer carrier for NSP PDUs) ---- */
+
+int dnet_engine_build_data_frame(const struct dnet_engine *e,
+                                 const uint8_t dst_id[DNET_ADDR_LEN],
+                                 const uint8_t *nsp_pdu, size_t pdu_len,
+                                 uint8_t *frame_out, size_t cap, size_t *len_out)
+{
+    if (!e || !dst_id || (!nsp_pdu && pdu_len) || !frame_out)
+        return DNET_ENGINE_EINVAL;
+    size_t total = DNET_DATA_NSP_OFF + pdu_len;
+    if (total > 0xffff)                       /* length prefix is 16-bit */
+        return DNET_ENGINE_EINVAL;
+    if (cap < total)
+        return DNET_ENGINE_ENOSPACE;
+
+    /* Ethernet II header. */
+    memcpy(frame_out, dst_id, DNET_ADDR_LEN);          /* dst = peer id */
+    memcpy(frame_out + 6, e->my_id, DNET_ADDR_LEN);    /* src = our id  */
+    frame_out[12] = (uint8_t)((DNET_ETHERTYPE >> 8) & 0xff);
+    frame_out[13] = (uint8_t)(DNET_ETHERTYPE & 0xff);
+
+    uint8_t *p = frame_out + DNET_ETH_HDRLEN;
+    /* Data-link 2-byte LE length prefix = routing header + NSP PDU (everything
+     * after the prefix), matching the specimen-#3 framing. */
+    uint16_t rlen = (uint16_t)(DNET_DATA_RHDR_LEN + pdu_len);
+    p[0] = (uint8_t)(rlen & 0xff);
+    p[1] = (uint8_t)((rlen >> 8) & 0xff);
+    p += DNET_DATA_LENPREFIX;
+
+    /* 21-byte long-data routing header. */
+    p[0] = DNET_RFLAG_LONG_DATA;      /* RFLG */
+    p[1] = 0; p[2] = 0;               /* destination reserved */
+    memcpy(p + 3, dst_id, DNET_ADDR_LEN);       /* DSTID */
+    p[9] = 0; p[10] = 0;              /* source reserved */
+    memcpy(p + 11, e->my_id, DNET_ADDR_LEN);    /* SRCID */
+    p[17] = 0;                        /* nextl / forwarding */
+    p[18] = 0;                        /* visit count */
+    p[19] = 0;                        /* service class */
+    p[20] = 0;                        /* protocol type */
+    p += DNET_DATA_RHDR_LEN;
+
+    if (pdu_len)
+        memcpy(p, nsp_pdu, pdu_len);
+
+    if (len_out)
+        *len_out = total;
+    return DNET_ENGINE_OK;
+}
+
+int dnet_engine_parse_data_frame(const uint8_t *frame, size_t len,
+                                 uint8_t src_id_out[DNET_ADDR_LEN],
+                                 uint8_t dst_id_out[DNET_ADDR_LEN],
+                                 const uint8_t **nsp_pdu, size_t *pdu_len)
+{
+    if (!frame || !nsp_pdu || !pdu_len)
+        return DNET_ENGINE_EINVAL;
+    if (len < DNET_DATA_NSP_OFF)
+        return DNET_ENGINE_EINVAL;
+    uint16_t etype = (uint16_t)((frame[12] << 8) | frame[13]);
+    if (etype != DNET_ETHERTYPE)
+        return DNET_ENGINE_EINVAL;
+
+    const uint8_t *p = frame + DNET_ETH_HDRLEN;
+    uint16_t rlen = (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
+    p += DNET_DATA_LENPREFIX;
+    if (p[0] != DNET_RFLAG_LONG_DATA)     /* not a long-data frame (e.g. a HELLO) */
+        return DNET_ENGINE_EINVAL;
+    /* The declared routing length must cover the fixed header and fit the frame. */
+    if (rlen < DNET_DATA_RHDR_LEN ||
+        (size_t)DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX + rlen > len)
+        return DNET_ENGINE_EINVAL;
+
+    if (dst_id_out)
+        memcpy(dst_id_out, p + 3, DNET_ADDR_LEN);
+    if (src_id_out)
+        memcpy(src_id_out, p + 11, DNET_ADDR_LEN);
+
+    *nsp_pdu = p + DNET_DATA_RHDR_LEN;
+    *pdu_len = (size_t)(rlen - DNET_DATA_RHDR_LEN);
+    return DNET_ENGINE_OK;
+}
+
+/* --- single-link connection wrappers (what DECNETD drives) ---------------- */
+
+/* Wrap an NSP message the link FSM produced into a full data frame to the peer
+ * identified by the link's remote_node. */
+static int engine_wrap_pdu(struct dnet_engine *e, const struct dnet_nsp_msg *msg,
+                           uint8_t *frame_out, size_t cap, size_t *len_out)
+{
+    uint8_t pdu[DNET_NSP_MAX_DATA + 16];
+    size_t pdu_len = 0;
+    if (dnet_nsp_encode(msg, pdu, sizeof(pdu), &pdu_len) != DNET_NSP_OK)
+        return DNET_ENGINE_EINVAL;
+    uint8_t dst_id[DNET_ADDR_LEN];
+    if (dnet_id_from_addr(dnet_area_of(e->link.remote_node),
+                          dnet_node_of(e->link.remote_node),
+                          dst_id) != DNET_ENGINE_OK)
+        return DNET_ENGINE_EINVAL;
+    return dnet_engine_build_data_frame(e, dst_id, pdu, pdu_len,
+                                        frame_out, cap, len_out);
+}
+
+int dnet_engine_link_open(struct dnet_engine *e,
+                          unsigned remote_area, unsigned remote_node,
+                          uint16_t local_lla,
+                          const uint8_t *conn_data, size_t conn_len,
+                          uint16_t segsize, uint8_t services, uint8_t info,
+                          uint8_t *frame_out, size_t cap, size_t *len_out,
+                          dnet_tick_t now)
+{
+    if (!e || !frame_out || remote_area > 63 || remote_node > 1023)
+        return DNET_ENGINE_EINVAL;
+    if (e->link_active)
+        return DNET_ENGINE_EINVAL;   /* one active link per instance (rung-2 scope) */
+    uint16_t rnode = (uint16_t)((remote_area << 10) | remote_node);
+    if (dnet_link_init(&e->link, local_lla, rnode, now) != DNET_LINK_OK)
+        return DNET_ENGINE_EINVAL;
+
+    struct dnet_nsp_msg ci;
+    if (dnet_link_connect(&e->link, conn_data, conn_len, segsize, services, info,
+                          &ci, now) != DNET_LINK_OK)
+        return DNET_ENGINE_EINVAL;
+    e->link_active = 1;
+    return engine_wrap_pdu(e, &ci, frame_out, cap, len_out);
+}
+
+int dnet_engine_link_accept(struct dnet_engine *e, uint16_t local_lla,
+                            uint8_t *frame_out, size_t cap, size_t *len_out,
+                            dnet_tick_t now)
+{
+    if (!e || !frame_out || !e->link_active)
+        return DNET_ENGINE_EINVAL;
+    /* If the inbound CI arrived on a fresh link, adopt our chosen logical-link
+     * address before confirming. */
+    if (e->link.local_addr == 0)
+        e->link.local_addr = local_lla;
+    struct dnet_nsp_msg cc;
+    if (dnet_link_accept(&e->link, &cc, now) != DNET_LINK_OK)
+        return DNET_ENGINE_EINVAL;
+    return engine_wrap_pdu(e, &cc, frame_out, cap, len_out);
+}
+
+int dnet_engine_link_send(struct dnet_engine *e, const uint8_t *data, size_t len,
+                          uint8_t *frame_out, size_t cap, size_t *len_out,
+                          dnet_tick_t now)
+{
+    if (!e || !frame_out || !e->link_active)
+        return DNET_ENGINE_EINVAL;
+    struct dnet_nsp_msg d;
+    if (dnet_link_send_data(&e->link, data, len, &d, now) != DNET_LINK_OK)
+        return DNET_ENGINE_EINVAL;
+    return engine_wrap_pdu(e, &d, frame_out, cap, len_out);
+}
+
+int dnet_engine_link_close(struct dnet_engine *e, uint16_t reason,
+                           uint8_t *frame_out, size_t cap, size_t *len_out,
+                           dnet_tick_t now)
+{
+    if (!e || !frame_out || !e->link_active)
+        return DNET_ENGINE_EINVAL;
+    struct dnet_nsp_msg di;
+    if (dnet_link_disconnect(&e->link, reason, &di, now) != DNET_LINK_OK)
+        return DNET_ENGINE_EINVAL;
+    return engine_wrap_pdu(e, &di, frame_out, cap, len_out);
+}
+
+int dnet_engine_link_rx(struct dnet_engine *e, dnet_tick_t now,
+                        const uint8_t *frame, size_t len,
+                        uint8_t *reply_frame, size_t cap, size_t *reply_len,
+                        int *has_reply, enum dnet_link_event *event)
+{
+    if (!e || !frame)
+        return DNET_ENGINE_EINVAL;
+    if (has_reply)
+        *has_reply = 0;
+    if (event)
+        *event = DNET_LINK_EV_NONE;
+
+    uint8_t src_id[DNET_ADDR_LEN];
+    const uint8_t *pdu = NULL;
+    size_t pdu_len = 0;
+    if (dnet_engine_parse_data_frame(frame, len, src_id, NULL, &pdu, &pdu_len)
+            != DNET_ENGINE_OK) {
+        e->nsp_frames_dropped++;
+        return DNET_ENGINE_OK;
+    }
+    struct dnet_nsp_msg in;
+    if (dnet_nsp_decode(pdu, pdu_len, &in, NULL) != DNET_NSP_OK) {
+        e->nsp_frames_dropped++;
+        return DNET_ENGINE_OK;
+    }
+
+    /* A Connect Initiate may open a fresh link on this engine. */
+    if (in.type == DNET_NSP_T_CI && !e->link_active) {
+        dnet_link_init(&e->link, 0, dnet_addr_from_id(src_id), now);
+        e->link_active = 1;
+    }
+    if (!e->link_active) {
+        e->nsp_frames_dropped++;
+        return DNET_ENGINE_OK;
+    }
+    /* Keep the link's routing peer in sync with the frame we heard it on. */
+    if (in.type == DNET_NSP_T_CI)
+        e->link.remote_node = dnet_addr_from_id(src_id);
+
+    e->nsp_frames_recv++;
+    struct dnet_nsp_msg reply;
+    int rep = 0;
+    enum dnet_link_event ev = DNET_LINK_EV_NONE;
+    dnet_link_rx(&e->link, &in, now, &reply, &rep, &ev);
+
+    if (ev == DNET_LINK_EV_DATA) {
+        e->rx_datalen = (in.datalen > DNET_NSP_MAX_DATA)
+                            ? DNET_NSP_MAX_DATA : in.datalen;
+        if (e->rx_datalen)
+            memcpy(e->rx_data, in.data, e->rx_datalen);
+    }
+    if (event)
+        *event = ev;
+
+    if (rep && reply_frame) {
+        int rc = engine_wrap_pdu(e, &reply, reply_frame, cap, reply_len);
+        if (rc == DNET_ENGINE_OK && has_reply)
+            *has_reply = 1;
+    }
+    return DNET_ENGINE_OK;
+}
+
 /* --- VMS-faithful presentation surface ---------------------------------- */
 
 static const char *state_name(enum dnet_adj_state s)

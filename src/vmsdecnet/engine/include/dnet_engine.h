@@ -48,6 +48,8 @@
 
 #include "dnet_hello.h"
 #include "dnet_adjacency.h"
+#include "dnet_link.h"      /* the NSP logical-link connection service (rung 2) */
+#include "dnet_nsp.h"       /* the NSP transport codec */
 
 #ifdef __cplusplus
 extern "C" {
@@ -64,6 +66,25 @@ extern "C" {
  * oracle-captured (vms-3be specimen #1 dst) and DNA-documented. Defined in the
  * .c so it has a single storage definition. */
 extern const uint8_t DNET_HELLO_MCAST[DNET_ADDR_LEN];
+
+/*
+ * Phase IV LONG DATA PACKET routing header (the header that carries an NSP PDU
+ * node-to-node, as distinct from the endnode-HELLO control frame). Grounded on
+ * the vms-3be NSP capture (docs/decnet-provenance-register.md sec 4.6, specimen
+ * #3): the 21-byte long-data header preceding that Connect Initiate is
+ *   RFLG(1)=0x2e  D-reserved(2)=00 00  DSTID(6)  S-reserved(2)=00 00  SRCID(6)
+ *   nextl(1)  visit(1)  svc-class(1)  proto(1).
+ * OVMX builds this minimal single-hop form (no optional Phase IV padding field,
+ * which the specimen carried as 0x81 -- an OVMX-labelled omission, not a
+ * protocol requirement between two OVMX endnodes; multi-hop forwarding / the
+ * full routing-data codec is a later routing rung). The NSP PDU (dnet_nsp)
+ * follows the header. Data-link 2-byte LE length prefix precedes the header,
+ * exactly as the endnode-HELLO frame carries one. */
+#define DNET_RFLAG_LONG_DATA    0x2e   /* long data packet routing flags (specimen #3) */
+#define DNET_DATA_LENPREFIX     2      /* data-link LE length prefix */
+#define DNET_DATA_RHDR_LEN      21     /* RFLG+2+DSTID(6)+2+SRCID(6)+nextl+visit+svc+proto */
+/* Byte offset of the NSP PDU within a full data frame we build/parse. */
+#define DNET_DATA_NSP_OFF       (DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX + DNET_DATA_RHDR_LEN)
 
 /* NCP node names are 1..6 characters (DNA Phase IV). +1 for the NUL. */
 #define DNET_NODENAME_MAX   6
@@ -98,6 +119,19 @@ struct dnet_engine {
 
     /* --- routing/adjacency state machine (rung-3 codec) --- */
     struct dnet_adjacency adj;
+
+    /* --- NSP logical-link connection service (rung 2, rd vms-c23) ---
+     * One active logical link per engine instance is the rung-2 scope (a multi-
+     * link port table is a later rung; OVMX design choice, not a protocol
+     * limit). `link_active` gates the wrappers below. Data delivered by an
+     * inbound segment is copied into rx_data/rx_datalen for the caller to read
+     * after a DNET_LINK_EV_DATA event. */
+    struct dnet_link link;
+    int              link_active;
+    uint8_t          rx_data[DNET_NSP_MAX_DATA];
+    uint16_t         rx_datalen;
+    unsigned long    nsp_frames_recv;   /* NSP data frames handed to link_rx */
+    unsigned long    nsp_frames_dropped;/* undecodable / not-for-us NSP frames */
 
     /* --- honest counters (reported on the VMS surface; no fabrication) --- */
     unsigned long hello_sent;
@@ -177,6 +211,93 @@ void dnet_engine_hello_emitted(struct dnet_engine *e, dnet_tick_t now);
  * (also folded into adj_down_events), or DNET_ENGINE_EINVAL on a null argument.
  */
 int dnet_engine_tick(struct dnet_engine *e, dnet_tick_t now);
+
+/* --- NSP logical-link data frames (routing-layer carrier for NSP PDUs) ----
+ *
+ * These assemble/parse the Phase IV long-data-packet routing header (above) that
+ * carries an NSP PDU node-to-node. They are the data-plane analogue of
+ * build_hello_frame/rx_frame (which handle the HELLO control plane). */
+
+/*
+ * dnet_engine_build_data_frame - wrap an already-encoded NSP PDU
+ * (nsp_pdu[0..pdu_len-1], MSGFLG onward) in a full on-wire data frame addressed
+ * to the peer whose DECnet Ethernet id is dst_id: Ethernet header (dst=dst_id,
+ * src=our id, 0x6003) + the 2-byte length prefix + the 21-byte long-data routing
+ * header (DSTID=dst_id, SRCID=our id) + the NSP PDU. Writes the total length to
+ * *len_out. Returns DNET_ENGINE_OK, DNET_ENGINE_ENOSPACE, or DNET_ENGINE_EINVAL.
+ */
+int dnet_engine_build_data_frame(const struct dnet_engine *e,
+                                 const uint8_t dst_id[DNET_ADDR_LEN],
+                                 const uint8_t *nsp_pdu, size_t pdu_len,
+                                 uint8_t *frame_out, size_t cap, size_t *len_out);
+
+/*
+ * dnet_engine_parse_data_frame - validate a received full data frame and locate
+ * its NSP PDU. Checks the 0x6003 ethertype and the long-data RFLG, extracts the
+ * sender's and destination's Ethernet ids, and on success points *nsp_pdu at the
+ * NSP PDU inside `frame` (no copy) with its length in *pdu_len. `src_id_out` /
+ * `dst_id_out` (each DNET_ADDR_LEN, may be NULL) receive the routing ids.
+ * Returns DNET_ENGINE_OK, or DNET_ENGINE_EINVAL if it is not a well-formed
+ * Phase IV long-data frame (a HELLO control frame returns EINVAL here -- feed
+ * those to dnet_engine_rx_frame instead).
+ */
+int dnet_engine_parse_data_frame(const uint8_t *frame, size_t len,
+                                 uint8_t src_id_out[DNET_ADDR_LEN],
+                                 uint8_t dst_id_out[DNET_ADDR_LEN],
+                                 const uint8_t **nsp_pdu, size_t *pdu_len);
+
+/* --- single-link connection wrappers (what DECNETD drives) -----------------
+ *
+ * Each builds the outbound frame (NSP PDU + routing header) for the operation
+ * into frame_out and returns its length in *len_out. The engine owns the one
+ * embedded struct dnet_link. */
+
+/*
+ * Open a logical link to peer node remote_area.remote_node, using local_lla as
+ * our NSP logical-link address. Builds the Connect Initiate data frame. The
+ * connect payload (session-control access control, may be NULL/0), segsize,
+ * services and info fill the CI. Sets link_active. Returns DNET_ENGINE_OK,
+ * DNET_ENGINE_ENOSPACE/EINVAL, or DNET_ENGINE_EINVAL if a link is already active.
+ */
+int dnet_engine_link_open(struct dnet_engine *e,
+                          unsigned remote_area, unsigned remote_node,
+                          uint16_t local_lla,
+                          const uint8_t *conn_data, size_t conn_len,
+                          uint16_t segsize, uint8_t services, uint8_t info,
+                          uint8_t *frame_out, size_t cap, size_t *len_out,
+                          dnet_tick_t now);
+
+/* Accept the pending inbound connection (link in CR_RCVD after an rx CI): builds
+ * the Connect Confirm data frame. Returns DNET_ENGINE_OK / EINVAL. */
+int dnet_engine_link_accept(struct dnet_engine *e, uint16_t local_lla,
+                            uint8_t *frame_out, size_t cap, size_t *len_out,
+                            dnet_tick_t now);
+
+/* Send a data segment on the running link: builds the data frame. */
+int dnet_engine_link_send(struct dnet_engine *e, const uint8_t *data, size_t len,
+                          uint8_t *frame_out, size_t cap, size_t *len_out,
+                          dnet_tick_t now);
+
+/* Disconnect the link: builds the Disconnect Initiate data frame. */
+int dnet_engine_link_close(struct dnet_engine *e, uint16_t reason,
+                           uint8_t *frame_out, size_t cap, size_t *len_out,
+                           dnet_tick_t now);
+
+/*
+ * dnet_engine_link_rx - consume a received full NSP data frame at time `now`:
+ * parse the routing header, decode the NSP PDU, and drive the embedded link
+ * FSM. If the FSM produced a protocol reply (a data acknowledgement, or a
+ * Disconnect Confirm), builds it into reply_frame and sets *has_reply = 1.
+ * *event (may be NULL) receives the higher-layer event; on DNET_LINK_EV_DATA the
+ * delivered payload is in e->rx_data / e->rx_datalen. On an inbound Connect
+ * Initiate the peer node id from the frame is adopted as the link's remote node.
+ * Returns DNET_ENGINE_OK (frame consumed or honestly dropped) or
+ * DNET_ENGINE_EINVAL.
+ */
+int dnet_engine_link_rx(struct dnet_engine *e, dnet_tick_t now,
+                        const uint8_t *frame, size_t len,
+                        uint8_t *reply_frame, size_t cap, size_t *reply_len,
+                        int *has_reply, enum dnet_link_event *event);
 
 /* --- the VMS-faithful presentation surface (NCP SHOW ..., the hidden-socket
  * face) -------------------------------------------------------------------- */

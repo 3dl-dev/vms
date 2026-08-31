@@ -62,6 +62,7 @@ static uint8_t nsp_classify(uint8_t msgflg)
         case (DNET_NSP_MSGFLG_CI & DNET_NSP_CTL_SUBMASK): return DNET_NSP_T_CI;
         case (DNET_NSP_MSGFLG_CC & DNET_NSP_CTL_SUBMASK): return DNET_NSP_T_CC;
         case (DNET_NSP_MSGFLG_DI & DNET_NSP_CTL_SUBMASK): return DNET_NSP_T_DI;
+        case (DNET_NSP_MSGFLG_DC & DNET_NSP_CTL_SUBMASK): return DNET_NSP_T_DC;
         default: return 0;
         }
     default:
@@ -112,8 +113,10 @@ int dnet_nsp_decode(const uint8_t *buf, size_t len,
         remain = 0;
         break;
     }
-    case DNET_NSP_T_DI: {
-        /* REASON(2) then opaque disconnect data. */
+    case DNET_NSP_T_DI:
+    case DNET_NSP_T_DC: {
+        /* REASON(2) then opaque disconnect data. DC (the confirm) uses the same
+         * layout as DI; it normally carries just the reason, no data. */
         if (remain < 2)
             return DNET_NSP_ETRUNC;
         out->reason = rd_le16(p);
@@ -195,6 +198,7 @@ int dnet_nsp_encode(const struct dnet_nsp_msg *msg,
         need += 4 + msg->datalen;             /* SERVICES INFO SEGSIZE + data */
         break;
     case DNET_NSP_T_DI:
+    case DNET_NSP_T_DC:
         need += 2 + msg->datalen;             /* REASON + data */
         break;
     case DNET_NSP_T_DATA:
@@ -228,6 +232,7 @@ int dnet_nsp_encode(const struct dnet_nsp_msg *msg,
         p += msg->datalen;
         break;
     case DNET_NSP_T_DI:
+    case DNET_NSP_T_DC:
         wr_le16(p, msg->reason);
         p += 2;
         if (msg->datalen)

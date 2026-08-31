@@ -80,12 +80,19 @@
  *      5    2    ACKNUM  LE  acknowledgement field (bit15 QUAL, bit12 NAK)
  *     [2]        ACKOTH  LE  OPTIONAL cross-subchannel (other-data) ack
  *
- *   Disconnect Initiate (MSGFLG 0x38):
- *      0    1    MSGFLG      0x38
+ *   Disconnect Initiate (MSGFLG 0x38) / Disconnect Confirm (MSGFLG 0x48):
+ *      0    1    MSGFLG      0x38 DI / 0x48 DC
  *      1    2    DSTADDR LE
  *      3    2    SRCADDR LE
- *      5    2    REASON  LE  disconnect reason code
- *      7   var   DATA        disconnect data / session-control (opaque)
+ *      5    2    REASON  LE  disconnect reason code (DC: 42 = disconnect complete)
+ *      7   var   DATA        disconnect data / session-control (opaque; DC: none)
+ *
+ * Disconnect Confirm (DC) is the responder's terminal acknowledgement of a
+ * Disconnect Initiate: the DI sender waits for it before the logical link is
+ * fully closed (DNA Phase IV NSP disconnect handshake). SPEC-DERIVED, NOT
+ * oracle-verified -- the vms-3be capture never completed a link so no DC was
+ * observed; its layout mirrors DI (REASON + optional data) per the public NSP
+ * spec, proven only by codec self round-trip. No specimen bytes are fabricated.
  */
 #ifndef DNET_NSP_H
 #define DNET_NSP_H
@@ -115,6 +122,11 @@ extern "C" {
 #define DNET_NSP_MSGFLG_CI      0x18    /* connect initiate  (oracle-verified) */
 #define DNET_NSP_MSGFLG_CC      0x28    /* connect confirm   (spec-derived) */
 #define DNET_NSP_MSGFLG_DI      0x38    /* disconnect initiate (spec-derived) */
+#define DNET_NSP_MSGFLG_DC      0x48    /* disconnect confirm  (spec-derived) */
+
+/* A standard NSP disconnect-complete reason code (DNA Phase IV NSP), carried in
+ * the DC REASON field when a Disconnect Initiate is confirmed normally. */
+#define DNET_NSP_REASON_DISC_COMPLETE  42
 
 /* Field-level bits. */
 #define DNET_NSP_DATA_BOM       0x20    /* MSGFLG: beginning of message */
@@ -133,7 +145,8 @@ enum dnet_nsp_type {
     DNET_NSP_T_ACK,         /* data acknowledgement */
     DNET_NSP_T_CI,          /* connect initiate */
     DNET_NSP_T_CC,          /* connect confirm */
-    DNET_NSP_T_DI           /* disconnect initiate */
+    DNET_NSP_T_DI,          /* disconnect initiate */
+    DNET_NSP_T_DC           /* disconnect confirm */
 };
 
 /* Generous cap on the opaque higher-layer payload an NSP PDU can carry. */

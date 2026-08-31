@@ -216,6 +216,28 @@ static void test_spec_derived(void)
     struct dnet_nsp_msg di2 = di;
     di2.datalen = 0;
     roundtrip_selfcheck(&di2, "disconnect-initiate-bare");
+
+    /* Disconnect Confirm (rd vms-c23): the responder's terminal ack of a DI.
+     * SPEC-DERIVED, self round-trip only; classified distinctly from DI. */
+    struct dnet_nsp_msg dc;
+    memset(&dc, 0, sizeof(dc));
+    dc.type = DNET_NSP_T_DC;
+    dc.msgflg = DNET_NSP_MSGFLG_DC;
+    dc.dstaddr = 8193;
+    dc.srcaddr = 8194;
+    dc.reason = DNET_NSP_REASON_DISC_COMPLETE;
+    roundtrip_selfcheck(&dc, "disconnect-confirm");
+    /* And that a DC decodes back as a DC, not confused with a DI. */
+    {
+        uint8_t b[16];
+        size_t bl = 0;
+        struct dnet_nsp_msg back;
+        check(dnet_nsp_encode(&dc, b, sizeof(b), &bl) == DNET_NSP_OK &&
+              b[0] == DNET_NSP_MSGFLG_DC &&
+              dnet_nsp_decode(b, bl, &back, NULL) == DNET_NSP_OK &&
+              back.type == DNET_NSP_T_DC && back.reason == DNET_NSP_REASON_DISC_COMPLETE,
+              "disconnect-confirm classifies as DC (distinct from DI)");
+    }
 }
 
 static void test_negatives(void)

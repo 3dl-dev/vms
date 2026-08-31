@@ -18,8 +18,10 @@ add_library(vmsdecnet_engine STATIC dnet_engine.c)
 target_include_directories(vmsdecnet_engine PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-# The engine core consumes the rung-1 HELLO codec and the rung-3 adjacency SM.
-target_link_libraries(vmsdecnet_engine PUBLIC vmsdecnet_routing)
+# The engine core consumes the rung-1 HELLO codec + the rung-3 adjacency SM
+# (vmsdecnet_routing) and, for the rung-2 NSP logical-link connection service,
+# the NSP transport codec + logical-link FSM (vmsdecnet_nsp).
+target_link_libraries(vmsdecnet_engine PUBLIC vmsdecnet_routing vmsdecnet_nsp)
 
 # decnetd -- THE DAEMON. The DECnet analogue of scsd_exe: the ONLY place the raw
 # datalink (scs_datalink_{open,send,recv}, the generic raw-L2 abstraction from

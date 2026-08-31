@@ -232,6 +232,114 @@ done:
     return 0;
 }
 
+/*
+ * ========================== --nsp-selftest ===========================
+ * A no-privilege, no-netdev proof of the NSP LOGICAL-LINK connection service
+ * (rd vms-c23, engine rung 2): two engines OPEN a logical link, exchange a data
+ * segment with its acknowledgement, and DISCONNECT cleanly -- all as full
+ * on-wire data frames (Ethernet + Phase IV long-data routing header + NSP PDU)
+ * shuttled over a real socketpair(2). It exercises the exact
+ * link_open/link_send/link_close -> build_data_frame -> wire -> link_rx path a
+ * live datalink uses, so a green run is a real connection-service proof, not a
+ * facade (INV-6). Returns 0 on PASS, 1 on FAIL.
+ */
+static int move_frame(int wfd, int rfd, const uint8_t *frame, size_t flen,
+                      uint8_t *rxbuf, size_t rxcap, size_t *rxlen)
+{
+    if (write(wfd, frame, flen) != (ssize_t)flen)
+        return -1;
+    ssize_t n = read(rfd, rxbuf, rxcap);
+    if (n <= 0)
+        return -1;
+    *rxlen = (size_t)n;
+    return 0;
+}
+
+static int run_nsp_selftest(void)
+{
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
+        fprintf(stderr, "DECNETD-E-SELFTEST, socketpair failed: %s\n", strerror(errno));
+        return 1;
+    }
+    const uint8_t hwL[6] = { 0x02,0,0,0,0,0x01 };
+    const uint8_t hwR[6] = { 0x02,0,0,0,0,0x02 };
+    struct dnet_engine L, R;   /* L = 1.10 originator, R = 1.11 responder */
+    if (dnet_engine_init(&L, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0) != 0 ||
+        dnet_engine_init(&R, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) != 0) {
+        fprintf(stderr, "DECNETD-E-SELFTEST, engine init failed\n");
+        close(sv[0]); close(sv[1]);
+        return 1;
+    }
+
+    uint8_t frame[DNET_FRAME_MAX], rxbuf[DNET_FRAME_MAX], reply[DNET_FRAME_MAX];
+    size_t flen = 0, rlen = 0, rxlen = 0;
+    int has_reply = 0, fail = 0;
+    enum dnet_link_event ev = DNET_LINK_EV_NONE;
+    const char *payload = "$ DIRECTORY OVMXR::SYS$LOGIN:";
+
+    /* 1) L opens a logical link to R (node 1.11) -> CI frame -> R connect ind. */
+    if (dnet_engine_link_open(&L, 1, 11, 0x2001, NULL, 0, 1459, 1,
+                              DNET_NSP_VER_41, frame, sizeof(frame), &flen, 10) != 0 ||
+        move_frame(sv[0], sv[1], frame, flen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
+        dnet_engine_link_rx(&R, 10, rxbuf, rxlen, reply, sizeof(reply), &rlen,
+                            &has_reply, &ev) != 0 || ev != DNET_LINK_EV_CONNECT_IND) {
+        fprintf(stderr, "DECNETD-E-SELFTEST, connect-initiate did not reach R\n");
+        fail = 1; goto done;
+    }
+    /* 2) R accepts -> CC frame -> L sees the link RUN. */
+    if (dnet_engine_link_accept(&R, 0x2002, reply, sizeof(reply), &rlen, 11) != 0 ||
+        move_frame(sv[1], sv[0], reply, rlen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
+        dnet_engine_link_rx(&L, 11, rxbuf, rxlen, frame, sizeof(frame), &flen,
+                            &has_reply, &ev) != 0 || ev != DNET_LINK_EV_CONNECT_CONF ||
+        !dnet_link_is_up(&L.link) || !dnet_link_is_up(&R.link)) {
+        fprintf(stderr, "DECNETD-E-SELFTEST, connect-confirm did not bring the link UP\n");
+        fail = 1; goto done;
+    }
+    /* 3) L sends data -> R delivers it byte-identical + acks -> L absorbs it. */
+    if (dnet_engine_link_send(&L, (const uint8_t *)payload, strlen(payload),
+                              frame, sizeof(frame), &flen, 12) != 0 ||
+        move_frame(sv[0], sv[1], frame, flen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
+        dnet_engine_link_rx(&R, 12, rxbuf, rxlen, reply, sizeof(reply), &rlen,
+                            &has_reply, &ev) != 0 || ev != DNET_LINK_EV_DATA ||
+        R.rx_datalen != strlen(payload) ||
+        memcmp(R.rx_data, payload, R.rx_datalen) != 0 || !has_reply) {
+        fprintf(stderr, "DECNETD-E-SELFTEST, data segment did not round-trip\n");
+        fail = 1; goto done;
+    }
+    if (move_frame(sv[1], sv[0], reply, rlen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
+        dnet_engine_link_rx(&L, 13, rxbuf, rxlen, frame, sizeof(frame), &flen,
+                            &has_reply, &ev) != 0 || ev != DNET_LINK_EV_ACK) {
+        fprintf(stderr, "DECNETD-E-SELFTEST, data ack did not return\n");
+        fail = 1; goto done;
+    }
+    /* 4) L disconnects -> R confirms (DC) -> both CLOSED. */
+    if (dnet_engine_link_close(&L, DNET_LINK_REASON_NORMAL, frame, sizeof(frame),
+                               &flen, 14) != 0 ||
+        move_frame(sv[0], sv[1], frame, flen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
+        dnet_engine_link_rx(&R, 14, rxbuf, rxlen, reply, sizeof(reply), &rlen,
+                            &has_reply, &ev) != 0 || ev != DNET_LINK_EV_DISCONNECT ||
+        dnet_link_state_of(&R.link) != DNET_LINK_CLOSED || !has_reply ||
+        move_frame(sv[1], sv[0], reply, rlen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
+        dnet_engine_link_rx(&L, 15, rxbuf, rxlen, frame, sizeof(frame), &flen,
+                            &has_reply, &ev) != 0 || ev != DNET_LINK_EV_DISCONNECT_CONF ||
+        dnet_link_state_of(&L.link) != DNET_LINK_CLOSED) {
+        fprintf(stderr, "DECNETD-E-SELFTEST, disconnect handshake did not close cleanly\n");
+        fail = 1; goto done;
+    }
+
+done:
+    close(sv[0]); close(sv[1]);
+    if (fail) {
+        printf("DECNETD-NSP-SELFTEST: FAIL\n");
+        return 1;
+    }
+    printf("DECNETD-I-NSPSELFTEST, NSP logical-link connection proof PASSED"
+           " (link OPEN -> data segment+ack -> clean DISCONNECT over a real"
+           " socketpair; CI/CC + DI/DC choreography, payload byte-identical)\n");
+    return 0;
+}
+
 static void usage(const char *argv0)
 {
     fprintf(stderr,
@@ -249,7 +357,10 @@ static void usage(const char *argv0)
         "  --self-test         run the in-process tx/rx/adjacency proof and exit\n"
         "                      (no CAP_NET_RAW, no netdev -- moves a real HELLO\n"
         "                      frame over a socketpair; DECnet analogue of\n"
-        "                      scsd --dlm-selftest)\n",
+        "                      scsd --dlm-selftest)\n"
+        "  --nsp-selftest      run the NSP logical-link connection proof and exit\n"
+        "                      (no CAP_NET_RAW -- two engines OPEN a link, move a\n"
+        "                      data segment+ack, and DISCONNECT over a socketpair)\n",
         argv0, DECNETD_DEFAULT_IFACE, (unsigned)DNET_T3_DEFAULT);
 }
 
@@ -264,6 +375,7 @@ int main(int argc, char **argv)
     int duration = 0;
     int show_executor_only = 0;
     int self_test = 0;
+    int nsp_self_test = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--address") && i + 1 < argc)      addr_s = argv[++i];
@@ -277,6 +389,7 @@ int main(int argc, char **argv)
             duration = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--show-executor")) show_executor_only = 1;
         else if (!strcmp(argv[i], "--self-test"))     self_test = 1;
+        else if (!strcmp(argv[i], "--nsp-selftest"))  nsp_self_test = 1;
         else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             usage(argv[0]);
             return 0;
@@ -289,6 +402,8 @@ int main(int argc, char **argv)
 
     if (self_test)
         return run_self_test();
+    if (nsp_self_test)
+        return run_nsp_selftest();
 
     /* Identity is required and never invented (INV-6; the scsd
      * resolve_node_identity discipline: a wrong identity must never be made up). */

@@ -318,6 +318,25 @@ struct vms_setcli_args {
 	char     command[VMS_CLI_CMDLINE_SIZE];  /* in:  invoking DCL command line */
 };
 
+/*
+ * /NOWAIT subprocess-exit completion arm (vms-e9a B1). Same wire struct the
+ * shared handler (src/kernel-core/vms_proctab.c) copies in and out on both
+ * substrates. See src/kernel/vms_ioctl.h for the full field semantics.
+ */
+#ifndef VMS_EF_NONE
+#define VMS_EF_NONE 0xFFFFFFFFu           /* efn sentinel: no completion flag */
+#endif
+
+struct vms_spawn_notify_args {
+	uint32_t child_vms_pid; /* in:  VMS PID of the /NOWAIT-spawned subprocess */
+	uint32_t efn;           /* in:  parent EF to set on exit, or VMS_EF_NONE  */
+	uint64_t astadr;        /* in:  parent completion AST routine (0 = none)  */
+	uint64_t astprm;        /* in:  parameter passed to the completion AST    */
+	uint32_t status;        /* out: SS$_ status of the arm operation          */
+	uint8_t  completed;     /* out: 1 = child had already exited (delivered)  */
+	uint8_t  pad[3];
+};
+
 struct vms_getcli_args {
 	uint8_t  cliflag;     /* out: 1 = invoked from a CLI/DCL */
 	uint8_t  pad;
@@ -403,6 +422,8 @@ struct vms_dassgn_args {
 #define VMS_IOCTL_GETEXIT           _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x4A, struct vms_getexit_args)
 #define VMS_IOCTL_SETCLI            _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x4B, struct vms_setcli_args)
 #define VMS_IOCTL_GETCLI            _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x4C, struct vms_getcli_args)
+/* /NOWAIT subprocess-exit completion arm (vms-e9a B1, LIB$SPAWN efn/astadr) */
+#define VMS_IOCTL_SPAWN_NOTIFY      _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x4D, struct vms_spawn_notify_args)
 /* System-info facility ($GETSYI-style; SHOW MEMORY physical section, vms-a3cd) */
 #define VMS_IOCTL_GETSYIMEM         _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x68, struct vms_getsyi_mem_args)
 
@@ -437,6 +458,8 @@ _Static_assert(sizeof(struct vms_setcli_args) == 8 + VMS_CLI_CMDLINE_SIZE,
                "vms_setcli_args layout changed: VMS_IOCTL_SETCLI ABI break");
 _Static_assert(sizeof(struct vms_getcli_args) == 8 + VMS_CLI_CMDLINE_SIZE,
                "vms_getcli_args layout changed: VMS_IOCTL_GETCLI ABI break");
+_Static_assert(sizeof(struct vms_spawn_notify_args) == 32,
+               "vms_spawn_notify_args layout changed: VMS_IOCTL_SPAWN_NOTIFY ABI break");
 _Static_assert(VMS_PRCNAM_XFER > VMS_PRCNAM_SIZE,
                "VMS_PRCNAM_XFER must exceed VMS_PRCNAM_SIZE or oversized names get truncated into valid ones");
 
@@ -478,5 +501,7 @@ _Static_assert(VMS_IOCTL_SETCLI == 0xC108564Bu,
                "VMS_IOCTL_SETCLI encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_GETCLI == 0xC108564Cu,
                "VMS_IOCTL_GETCLI encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_SPAWN_NOTIFY == 0xC020564Du,
+               "VMS_IOCTL_SPAWN_NOTIFY encodes differently here than on the reference build");
 
 #endif /* _VMS_PROCTAB_NB_H */

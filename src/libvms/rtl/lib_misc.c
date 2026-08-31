@@ -308,7 +308,8 @@ uint32_t lib$spawn(const struct dsc$descriptor_s *command,
                    const struct dsc$descriptor_s *cli_name,
                    const struct dsc$descriptor_s *table_name) {
     (void)prompt; (void)cli_name; (void)table_name;   /* OVMX's one CLI is DCL */
-    (void)efn; (void)astadr; (void)astprm;            /* completion notify = B1 */
+    /* efn/astadr/astprm: the /NOWAIT completion-notification path, wired in the
+     * CLI$M_NOWAIT branch below via vms_kif_spawn_notify (B1). */
 
     const uint32_t spawn_flags = flags ? *flags : 0;
     const int nowait = (spawn_flags & CLI$M_NOWAIT) != 0;
@@ -452,16 +453,34 @@ uint32_t lib$spawn(const struct dsc$descriptor_s *command,
     if (nowait) {
         /*
          * CLI$M_NOWAIT: the subprocess was created and registered; return at
-         * once. *status is left UNWRITTEN -- the completion is not known yet,
-         * and the efn/astadr/astprm completion-NOTIFICATION path (LIB$SPAWN's
-         * event flag / AST arguments) is rung B1: a process-exit EF/AST in the
-         * executive (docs/design-libspawn-ovmx.md §3b/§5), deliberately not
-         * wired here. Never fabricate a completion status.
+         * once. *status is left UNWRITTEN -- the completion is not known yet.
          *
+         * B1 (vms-e9a, docs/design-libspawn-ovmx.md §3b): if the caller asked
+         * for completion notification (an event flag and/or a completion AST),
+         * ARM it in the executive against this subprocess's VMS PID. The
+         * executive sets the caller's `efn` and/or queues the caller's
+         * `astadr`/`astprm` AST when the subprocess records its exit status
+         * ($EXIT) -- a real cross-process process-exit signal, not a userspace
+         * waitpid poll. The arm is best-effort with respect to LIB$SPAWN's
+         * return: the subprocess is already created, so a failed arm (e.g. the
+         * child raced to completion is handled inside the executive, which then
+         * delivers immediately) does not undo the create. With no /dev/vms the
+         * arm returns SS$_NOSUCHDEV and nothing is faked (INV-6) -- consistent
+         * with $CREPRC itself already requiring the executive.
+         */
+        const uint32_t efn_val = efn ? *efn : VMS_EF_NONE;
+        if (efn_val != VMS_EF_NONE || astadr != NULL) {
+            (void)vms_kif_spawn_notify(vms_pid, efn_val,
+                                       (uint64_t)(uintptr_t)astadr,
+                                       (uint64_t)(uintptr_t)astprm,
+                                       NULL);
+        }
+
+        /*
          * The scratch SYS$INPUT file, if any, is NOT unlinked here: the
-         * subprocess may not have opened it yet, and B0 has no exit hook to
-         * reclaim it. It is a genuine file left for the subprocess to consume;
-         * its reclamation belongs to B1's exit notification.
+         * subprocess may not have opened it yet, and lib$spawn has no exit hook
+         * to reclaim it. It is a genuine file left for the subprocess to
+         * consume.
          */
         return SS$_NORMAL;
     }

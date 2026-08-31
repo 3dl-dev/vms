@@ -1632,6 +1632,33 @@ uint32_t vms_kif_getcli(uint32_t *cliflag, char *command,
     return args.status;
 }
 
+/* Arm a /NOWAIT subprocess-exit completion (vms-e9a B1). The caller is the
+ * parent of a subprocess it created /NOWAIT (child_vms_pid, the VMS PID $CREPRC
+ * handed back); it asks the executive to set event flag `efn` (VMS_EF_NONE for
+ * none) and/or queue completion AST `astadr`/`astprm` (astadr 0 for none) in
+ * THIS process when the child records its exit status. On success *completed
+ * (if given) is nonzero iff the child had ALREADY exited and the notification
+ * was delivered immediately. INV-6: with no /dev/vms KIF_CALL returns
+ * SS$_NOSUCHDEV and NOTHING is armed -- the caller learns no completion will
+ * arrive, never a fabricated success. */
+uint32_t vms_kif_spawn_notify(uint32_t child_vms_pid, uint32_t efn,
+                              uint64_t astadr, uint64_t astprm, int *completed)
+{
+    struct vms_spawn_notify_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.child_vms_pid = child_vms_pid;
+    args.efn = efn;
+    args.astadr = astadr;
+    args.astprm = astprm;
+
+    KIF_CALL(VMS_IOCTL_SPAWN_NOTIFY, &args);
+
+    if (completed)
+        *completed = args.completed;
+    return args.status;
+}
+
 /* ================================================================
  * P0 program region (vms-68f.i, in-process image activation foundation)
  * ================================================================ */

@@ -588,6 +588,21 @@ struct vms_proc {
 	char                cli_command[VMS_CLI_CMDLINE_SIZE];
 
 	/*
+	 * /NOWAIT subprocess-exit completion registration (vms-e9a B1). Lives on
+	 * the CHILD's PCB; vms_ioctl_setexit() delivers it (parent EF + AST) when
+	 * this process records its exit. Same field set and meaning as
+	 * src/kernel/vms_internal.h's Linux struct vms_proc, so the one shared
+	 * facility source (src/kernel-core/vms_proctab.c) compiles identically here.
+	 * Guarded by vms_proc_hash_lock, alongside exit_status.
+	 */
+	uint8_t             compl_armed;
+	uint8_t             compl_acmode;
+	uint32_t            compl_parent_pid;
+	uint32_t            compl_efn;
+	uint64_t            compl_astadr;
+	uint64_t            compl_astprm;
+
+	/*
 	 * Host-task liveness handle (P4-A, rd vms-ca7). The facility tests
 	 * proc->pid_ref for whole-process liveness (exec_task_alive) and pins it to
 	 * read accounting (exec_task_pin), never dereferencing it -- it is opaque.
@@ -731,6 +746,10 @@ void vms_eflag_init(void);
 void vms_eflag_cleanup(void);
 void vms_proc_release_common_ef(struct vms_proc *proc);
 
+/* Cross-process completion-EF primitive (vms-e9a B1): set a resolvable event
+ * flag on an arbitrary target proc, waking its waiters. 0 if set, -1 if the efn
+ * does not resolve on `target`. Shared source in src/kernel-core/vms_eflag.c. */
+int vms_ef_set_for(struct vms_proc *target, uint32_t efn);
 long vms_ioctl_setef(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_clref(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_waitfr(struct vms_proc *proc, unsigned long arg);
@@ -995,5 +1014,7 @@ long vms_ioctl_setexit(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getexit(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
+/* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */
+long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg);
 
 #endif /* _VMS_INTERNAL_H */

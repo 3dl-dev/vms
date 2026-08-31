@@ -204,3 +204,10 @@ vms_kif_cluster_get_members=PROCEDURE
 # self-declared setident the executive would refuse. Must be a LIBVMSSYS$SHR
 # universal. APPENDED per the append-only contract -- never shifts an index.
 vms_kif_register_subprocess=PROCEDURE
+# vms-e9a B1: LIB$SPAWN/NOWAIT's completion notification (efn/astadr). The parent
+# (lib_misc.c, VMS-native-linked) arms an executive process-exit notification on
+# its subprocess through this WIRED kif wrapper (VMS_IOCTL_SPAWN_NOTIFY); the
+# executive sets the parent's event flag / queues its completion AST when the
+# subprocess $EXITs. Must be a LIBVMSSYS$SHR universal. APPENDED per the
+# append-only contract -- never shifts an existing index.
+vms_kif_spawn_notify=PROCEDURE

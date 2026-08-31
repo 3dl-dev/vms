@@ -1081,6 +1081,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
     case VMS_IOCTL_GETCLI:
         return vms_ioctl_getcli(proc, arg);
 
+    /* /NOWAIT subprocess-exit completion arm (vms-e9a B1, LIB$SPAWN efn/astadr) */
+    case VMS_IOCTL_SPAWN_NOTIFY:
+        return vms_ioctl_spawn_notify(proc, arg);
+
     /* Logical name tables (executive-resident LNM$SYSTEM, vms-d37) */
     case VMS_IOCTL_LNM_DEFINE:
         return vms_ioctl_lnm_define(proc, arg);

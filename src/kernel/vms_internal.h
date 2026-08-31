@@ -784,6 +784,24 @@ struct vms_proc {
     uint8_t             has_exit_status;  /* 1 once SETEXIT recorded a value */
 
     /*
+     * /NOWAIT subprocess-exit completion registration (vms-e9a B1,
+     * docs/design-libspawn-ovmx.md §3b). Lives on the CHILD's PCB: a parent
+     * that spawned this subprocess /NOWAIT (LIB$SPAWN with efn/astadr) arms it
+     * through VMS_IOCTL_SPAWN_NOTIFY, and vms_ioctl_setexit() delivers it -- set
+     * the parent's completion event flag and/or queue the parent's completion
+     * AST -- when THIS process records its exit status. One-shot: compl_armed is
+     * cleared as the notification is delivered. All fields guarded by
+     * vms_proc_hash_lock, the same lock exit_status is written under, so the
+     * exit and its notification are one indivisible event.
+     */
+    uint8_t             compl_armed;      /* 1 = a parent awaits this proc's exit */
+    uint8_t             compl_acmode;     /* access mode to queue the AST at */
+    uint32_t            compl_parent_pid; /* VMS PID to notify on exit */
+    uint32_t            compl_efn;        /* parent EF to set, or VMS_EF_NONE */
+    uint64_t            compl_astadr;     /* parent completion AST routine (0=none) */
+    uint64_t            compl_astprm;     /* parameter for the completion AST */
+
+    /*
      * CLI invocation context -- the executive source for IMGACT's
      * cliflag / cli_util->get_command_line (vms-f60d, ovmx_activation.h).
      * cli_present is the cliflag: 1 iff this image was invoked from a
@@ -1026,6 +1044,11 @@ long vms_ioctl_hiber(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_wake(struct vms_proc *proc, unsigned long arg);
 
 /* Event flags (3c) */
+/* Set a resolvable event flag on an ARBITRARY target proc and wake its waiters
+ * -- the cross-process completion-EF primitive (vms-e9a B1) the /NOWAIT spawn
+ * exit path uses to set the PARENT's flag from the CHILD's exit. Returns 0 if
+ * set, -1 if `efn` does not resolve on `target`. */
+int vms_ef_set_for(struct vms_proc *target, uint32_t efn);
 long vms_ioctl_setef(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_clref(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_waitfr(struct vms_proc *proc, unsigned long arg);
@@ -1169,6 +1192,8 @@ long vms_ioctl_setexit(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getexit(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
+/* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */
+long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg);
 /* Construct the SYSTEM identity onto the caller (vms-a17e) -- the
  * OPA0:-style counterpart to vms_ioctl_setident() that takes no
  * caller-supplied username/uic/privs; see VMS_SYSTEM_UIC's comment. */

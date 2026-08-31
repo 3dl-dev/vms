@@ -8,6 +8,16 @@ add_executable(test_dnet_nsp test_dnet_nsp.c)
 target_link_libraries(test_dnet_nsp PRIVATE vmsdecnet_nsp)
 add_test(NAME vmsdecnet_nsp_unit COMMAND test_dnet_nsp)
 
+# rd vms-c23, engine rung 2: the NSP LOGICAL-LINK connection service. Two links
+# establish (CI/CC), run (data segment + ack), and tear down (DI/DC); a fresh CI
+# retransmits and abandons as UNREACHABLE after the oracle-informed budget; and
+# two ENGINES open a link + move a data segment over a real socketpair(2)
+# exercising the full build_data_frame -> wire -> link_rx path DECNETD uses.
+add_executable(test_dnet_link test_dnet_link.c)
+target_link_libraries(test_dnet_link PRIVATE vmsdecnet_engine)
+target_compile_options(test_dnet_link PRIVATE -Werror)
+add_test(NAME vmsdecnet_link_unit COMMAND test_dnet_link)
+
 # rd vms-b15, rung 3: routing adjacency state machine (hello cadence + listen
 # timer + up/down). Warning-clean under -Wall -Wextra -Werror.
 add_executable(test_dnet_adjacency test_dnet_adjacency.c)

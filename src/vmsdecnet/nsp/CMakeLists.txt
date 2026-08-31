@@ -7,7 +7,11 @@
 # -- it links equally into the forward-ported in-kernel net/decnet validation
 # harness or the design sec-4b userspace fallback engine. Round-trips the
 # vms-3be lab-oracle NSP Connect Initiate specimen (register sec 4.6, #3).
-add_library(vmsdecnet_nsp STATIC dnet_nsp.c)
+# dnet_link (rd vms-c23, engine rung 2): the NSP LOGICAL-LINK connection state
+# machine built on the codec -- establish (CI/CC), run (data segment + ack), and
+# tear down (DI/DC) a single logical link. Pure deterministic FSM over an
+# injected clock, same discipline as the codec + the adjacency SM.
+add_library(vmsdecnet_nsp STATIC dnet_nsp.c dnet_link.c)
 target_include_directories(vmsdecnet_nsp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )

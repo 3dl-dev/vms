@@ -1504,26 +1504,28 @@ uint32_t sys$setexv(
  * to an earlier call frame instead of returning normally to the point
  * where the condition was signaled.
  *
- * IMPLEMENTATION NOTE: OVMX's condition-handling model (lib_signal.c)
- * invokes established handlers as ordinary in-process function calls
- * from within lib$signal/lib$stop, rather than a hardware exception
- * dispatch with saved per-frame register/PC state to unwind through.
- * There is therefore no machine frame for sys$unwind to transfer control
- * to at an arbitrary newpc - that argument is accepted for source
- * compatibility but not acted upon. What OVMX DOES perform, matching
- * real SYS$UNWIND's documented side effect, is popping condition
- * handlers off the handler chain (down to the target depth) so that
- * lib$establish/lib$revert bookkeeping stays consistent across the
- * unwind - the same class of honest, partial simplification already
- * used for LIB$SET_SYMBOL/LIB$GET_SYMBOL (see the file-header comment
- * in lib_symbol.c).
+ * rung-2 (vms-8802): a real machine-frame-transfer unwind. As on VMS the
+ * transfer is DEFERRED - sys$unwind records the request and returns to the
+ * handler; the CHF dispatcher (lib_signal.c) performs it when the handler
+ * returns, calling each intervening handler once with CHF$V_UNWINDING set
+ * and transferring control (setjmp/longjmp) to the target frame's armed
+ * resume anchor (VMS$UNWIND_ANCHOR, chfdef.h), abandoning the intervening
+ * machine frames and honouring newpc.
+ *
+ * Compatibility: a NULL depadr, a target frame that armed no anchor, or a
+ * call made outside an active dispatch keeps the historical pop-only
+ * handler-chain contract (rung-1 / test_lib_fb3). Resuming into an
+ * un-anchored ancestor frame (the real Alpha invocation-context walk) is
+ * rung-3 (vms-1fa).
  *
  * @param depadr  Optional pointer to the target call depth (as obtained
  *                from a chf$mech_array's chf$is_mch_depth field - see
  *                chfdef.h). NULL means "unwind one level" (pop the
  *                currently executing handler and return to the frame
- *                that established it).
- * @param newpc   Ignored - see IMPLEMENTATION NOTE above.
+ *                that established it); this form never transfers.
+ * @param newpc   Resume PC selector honoured on a frame transfer; readable
+ *                at the resume site via vms$$unwind_newpc(). 0 resumes at
+ *                the target frame's armed anchor with no selector.
  *
  * @return  SS$_NORMAL
  */

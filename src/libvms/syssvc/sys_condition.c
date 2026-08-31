@@ -5,61 +5,49 @@
  * condition-handling routines (lib$establish/lib$signal/lib$stop/
  * lib$revert - see rtl/lib_signal.c).
  *
- * See the sys$unwind doc comment in starlet.h for the honest
- * simplification this implementation makes: OVMX's condition-handling
- * model invokes established handlers as ordinary in-process function
- * calls from within lib$signal/lib$stop rather than a hardware
- * exception dispatch with saved per-frame register/PC state, so there
- * is no machine frame to transfer control to at an arbitrary newpc.
- * What this DOES do, matching real SYS$UNWIND's documented side
- * effect, is pop condition handlers off the handler chain maintained
- * by lib_signal.c down to the target depth.
+ * rung-2 (vms-8802, docs/design-chf-condition-handling.md): SYS$UNWIND is
+ * now a real machine-frame-transfer unwind. Like real VMS, it does NOT
+ * transfer control immediately - it records a deferred unwind request and
+ * returns to the calling handler; the CHF dispatcher (lib_signal.c) performs
+ * the transfer when the handler returns, running each intervening handler
+ * once with CHF$V_UNWINDING set and longjmp-ing to the target frame's armed
+ * resume anchor (VMS$UNWIND_ANCHOR), honouring newpc, abandoning the
+ * intervening machine frames.
+ *
+ * Compatibility: when depadr is NULL, or the named target frame armed no
+ * resume anchor, or sys$unwind is called outside an active dispatch, the
+ * historical pop-only handler-chain contract is preserved (rung-1 /
+ * test_lib_fb3). The resume-into-an-un-anchored ancestor frame case (the
+ * real Alpha invocation-context walk) is rung-3 (vms-1fa).
  */
 
 /*
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * $UNWIND cited vms-5b4 until vms-fab; it is closed. vms-f90 owns it with the
- * other compute-only services, and its question here is a real one: OVMX has no
- * executive exception dispatch with saved per-frame state (see the file comment
- * above), so what this service does and what SYS$UNWIND does have never been
- * put side by side against the oracle.
- *
- * OVMX-USERSPACE: sys$unwind (vms-f90) -- unwinds the process-local handler
- *     stack kept in handler_count/handler_stack in src/libvms/rtl/lib_signal.c;
- *     there is no executive condition-dispatch frame, so nothing outside this
- *     process participates in or observes the unwind.
+ * OVMX-USERSPACE: sys$unwind (vms-f90) -- records a deferred unwind against
+ *     the process-local frame-handler chain kept in lib_signal.c and, on the
+ *     handler's return, transfers control (setjmp/longjmp) to the target
+ *     frame's armed anchor. There is no executive condition-dispatch frame,
+ *     so nothing outside this process participates in or observes the unwind.
  */
 
 #include <stdint.h>
 #include "starlet.h"
 
-/* Imported from rtl/lib_signal.c - see the doc comment there. */
-extern int vms$$handler_depth(void);
-extern int vms$$handler_unwind_to(int target_depth);
+/* Imported from rtl/lib_signal.c - see the doc comments there. */
+extern uint32_t vms$$unwind_request(const uint32_t *depadr, void *newpc);
 
 /*
- * sys$unwind - Unwind the condition-handler chain to a target depth.
+ * sys$unwind - Unwind the condition-handler chain, transferring control to
+ *              a target frame (rung-2).
+ *
+ * Records the deferred unwind (target depth from depadr, newpc) and returns
+ * SS$_NORMAL. The actual frame transfer is performed by the dispatcher when
+ * the requesting handler returns. See the file comment above and
+ * lib_signal.c:perform_unwind / vms$$unwind_request.
  */
 uint32_t sys$unwind(const uint32_t *depadr, void *newpc)
 {
-    (void)newpc;  /* no machine frame to transfer control to - see above */
-
-    int current = vms$$handler_depth();
-    int target;
-
-    if (depadr) {
-        target = (int)*depadr;
-        if (target < 0) target = 0;
-        if (target > current) target = current;  /* can't unwind outward */
-    } else {
-        /* NULL depadr: unwind one level (pop the currently executing
-         * handler, returning to the frame that established it). */
-        target = (current > 0) ? current - 1 : 0;
-    }
-
-    vms$$handler_unwind_to(target);
-
-    return SS$_NORMAL;
+    return vms$$unwind_request(depadr, newpc);
 }

@@ -154,6 +154,44 @@ struct chf$handler_block {
 #define CHF$M_UNWINDING     (1u << CHF$V_UNWINDING)
 
 /* ================================================================
+ * VMS$UNWIND_ANCHOR - arm a machine-frame-transfer resume point (vms-8802
+ * rung-2).
+ *
+ * A procedure that establishes a condition handler and wants SYS$UNWIND to
+ * be able to transfer control back INTO its own frame (abandoning the
+ * intervening frames between the point of signal and this frame) places
+ * VMS$UNWIND_ANCHOR() immediately after lib$establish(). It arms a resume
+ * anchor for the most recently established handler's frame and evaluates,
+ * setjmp-style, to:
+ *
+ *   0        - on the arming call (fall through to the protected region);
+ *   non-zero - when a later SYS$UNWIND transferred control back to this
+ *              point. Read vms$$unwind_newpc() for the newpc that was
+ *              requested (NULL when the unwind passed newpc == 0).
+ *
+ * Usage:
+ *
+ *   (void)lib$establish(my_handler);
+ *   if (VMS$UNWIND_ANCHOR()) {
+ *       // control returned here via SYS$UNWIND: intervening frames abandoned
+ *   } else {
+ *       // protected region; nested calls may signal a condition
+ *   }
+ *
+ * The macro MUST expand in the establisher's own frame (that is what makes
+ * the setjmp resumable), which is why it is a macro over setjmp rather than
+ * a library call. On the host this is the resume mechanism; the real Alpha
+ * invocation-context walk (resuming into an ancestor that armed no anchor)
+ * is rung-3 (vms-1fa). Include <setjmp.h> before using it.
+ * ================================================================ */
+
+extern void *vms$$unwind_anchor_buf(void);  /* really a jmp_buf* (see setjmp.h) */
+extern void *vms$$unwind_newpc(void);
+
+#define VMS$UNWIND_ANCHOR() \
+    (setjmp(*(jmp_buf *)vms$$unwind_anchor_buf()))
+
+/* ================================================================
  * SYS$SETEXV software exception vector selectors (vms-2e72 rung-1)
  *
  * The OpenVMS exception dispatcher consults three per-access-mode

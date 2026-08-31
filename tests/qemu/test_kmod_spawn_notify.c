@@ -59,10 +59,13 @@
  * flags and the common clusters) and AST cookies. */
 #define EFN_A       40u
 #define EFN_B       45u
+#define EFN_C       50u         /* arm-then-SIGKILL completion flag (vms-2a4) */
 #define COOKIE_A    0xA5A5A5A5A5A5A5A5ull
 #define PRM_A       0x1111222233334444ull
 #define COOKIE_B    0x5A5A5A5A5A5A5A5Aull
 #define PRM_B       0x4444333322221111ull
+#define COOKIE_C    0xC0FFEE00C0FFEE00ull
+#define PRM_C       0xDEADBEEFCAFEF00Dull
 
 static int pass = 0, fail = 0;
 
@@ -279,6 +282,72 @@ int main(void)
             (void)!write(p2c[1], "g", 1);              /* release the child */
             waitpid(kid, NULL, 0);
             close(c2p[0]); close(p2c[1]);
+        }
+    }
+
+    /* --- Path 3: ARM-then-SIGKILL (abnormal deletion, vms-2a4) --------- */
+    printf("--- arm-then-SIGKILL: completion fires on a subprocess killed WITHOUT $EXIT ---\n");
+    {
+        /*
+         * The vms-e9a B1 edge: vms_ioctl_setexit delivers an armed completion
+         * only when the subprocess records its exit via $EXIT. A subprocess
+         * KILLED before that (SIGKILL here; equally a crash / segfault) never
+         * reaches SETEXIT, so B1 alone would leave compl_armed set on the dead
+         * PCB and the parent's $WAITFR / completion AST would hang forever. The
+         * executive must instead deliver the completion when it reclaims the
+         * dead child -- with a synthesized abnormal $STATUS (SS$_ABORT), as real
+         * VMS notifies the creator on abnormal subprocess deletion. This proves
+         * the EF is set and the AST is queued even though the child $EXITed
+         * nothing.
+         */
+        int c2p[2];
+        if (pipe(c2p) != 0) {
+            CHECK(0, "pipe() for arm-then-SIGKILL test");
+        } else {
+            pid_t kid = fork();
+            if (kid == 0) {
+                /* CHILD (process A): register, hand its VMS PID to the parent,
+                 * then block FOREVER -- it must be KILLED, never $EXIT. */
+                close(c2p[0]);
+                int cfd = open("/dev/vms", O_RDWR);
+                uint32_t cpid = (cfd >= 0) ? do_register(cfd) : 0;
+                (void)!write(c2p[1], &cpid, sizeof cpid);
+                for (;;)
+                    pause();               /* wait to be SIGKILLed; no SETEXIT */
+                _exit(0);                  /* not reached */
+            }
+            close(c2p[1]);
+            uint32_t cpid = 0;
+            ssize_t n = read(c2p[0], &cpid, sizeof cpid);
+            CHECK(n == (ssize_t)sizeof cpid && cpid != 0,
+                  "child (process A) registered and reported its VMS PID");
+
+            int completed = -1;
+            uint32_t st = do_spawn_notify(fd, cpid, EFN_C, COOKIE_C, PRM_C, &completed);
+            CHECK(st == SS_NORMAL, "parent arms VMS_IOCTL_SPAWN_NOTIFY on the child");
+            CHECK(completed == 0, "arm reports completed == 0 (child still running)");
+
+            /* Kill the child WITHOUT letting it record an exit, then reap the
+             * Linux zombie so its PCB is reclaimed by the executive. */
+            kill(kid, SIGKILL);
+            waitpid(kid, NULL, 0);
+
+            /* The executive delivered the completion when it reclaimed the dead
+             * PCB (abnormal-deletion path). $WAITFR must therefore return -- if
+             * the fix is missing, this hangs and the watchdog fails the test. */
+            uint32_t wst = do_waitfr(fd, EFN_C);
+            CHECK(wst == SS_NORMAL,
+                  "$WAITFR returns after the child is KILLED without $EXIT");
+            CHECK(do_readef_set(fd, EFN_C) == 1,
+                  "the executive SET the parent's completion flag on abnormal deletion");
+
+            uint64_t da = 0, dp = 0;
+            int drc = do_deliverast(fd, &da, &dp);
+            CHECK(drc == 0, "a completion AST was queued despite the child never $EXITing");
+            CHECK(drc == 0 && da == COOKIE_C && dp == PRM_C,
+                  "the completion AST carries the armed astadr/astprm");
+
+            close(c2p[0]);
         }
     }
 

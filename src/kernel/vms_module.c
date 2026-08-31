@@ -839,6 +839,16 @@ void vms_proc_free(struct vms_proc *proc)
         return;
     }
     hash_del_rcu(&proc->hash_node);
+    /*
+     * /NOWAIT spawn completion on ABNORMAL subprocess deletion (vms-2a4). This
+     * is the claim point a SIGKILLed/crashed subprocess reaches FIRST on Linux:
+     * do_exit closes its /dev/vms channel -> vms_dev_release -> here, before the
+     * lazy reaper ever runs. If the dying process never recorded an exit but a
+     * parent armed a completion on it, fire it now under the SAME hash_lock that
+     * unlinked it (one-shot; a no-op if already delivered). Without this the
+     * common Linux SIGKILL case would drop the notification and hang the parent.
+     */
+    vms_proc_deliver_abnormal_completion(proc);
     spin_unlock(&vms_proc_hash_lock);
 
     vms_proc_free_claimed(proc);

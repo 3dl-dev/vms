@@ -999,6 +999,13 @@ void vms_proc_free_claimed(struct vms_proc *proc);
  * vms_proc_may_read are used cross-file on Linux; here they are simply part of
  * the compiled facility. The ioctl entry points are dispatched by vms_netbsd.c. */
 void vms_proc_reap_dead(void);
+
+/* Facility-provided (src/kernel-core/vms_proctab.c): deliver a /NOWAIT spawn
+ * completion for a subprocess reclaimed WITHOUT a recorded exit (SIGKILL/crash),
+ * synthesizing an abnormal $STATUS (vms-2a4). Caller holds vms_proc_hash_lock and
+ * has already unlinked `child`. Called from the reaper; on NetBSD the reaper is
+ * the only mid-life claim point (there is no channel-release free path). */
+void vms_proc_deliver_abnormal_completion(struct vms_proc *child);
 bool vms_proc_may_read(const struct vms_proc *caller, const struct vms_proc *target);
 
 long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg);

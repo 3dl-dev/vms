@@ -108,6 +108,9 @@
 #ifndef SS__IVLOGNAM
 #define SS__IVLOGNAM  340        /* SS$_IVLOGNAM -- invalid name string */
 #endif
+#ifndef SS__ABORT
+#define SS__ABORT     44         /* SS$_ABORT -- abnormal subprocess deletion (vms-2a4) */
+#endif
 
 /* ================================================================
  * Privilege bits the process table gates on. VMS_PRV_M_SETPRV comes from

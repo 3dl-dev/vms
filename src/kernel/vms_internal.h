@@ -1000,6 +1000,11 @@ void vms_proc_free_claimed(struct vms_proc *proc);
 /* Drop table entries whose backing task no longer exists. */
 void vms_proc_reap_dead(void);
 
+/* Deliver a /NOWAIT spawn completion for a subprocess reclaimed WITHOUT a
+ * recorded exit (SIGKILL/crash), synthesizing an abnormal $STATUS (vms-2a4).
+ * Caller holds vms_proc_hash_lock and has already unlinked `child`. */
+void vms_proc_deliver_abnormal_completion(struct vms_proc *child);
+
 /* ================================================================
  * Subsystem ioctl handlers
  * ================================================================ */

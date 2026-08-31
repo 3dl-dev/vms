@@ -149,7 +149,7 @@ sed -i "s#^CPPFLAGS=#CPPFLAGS=-DCUSTOM_SYS_AUTH_PASSWD #" Makefile
 
 # OVMX-free helper halves, hosted CFLAGS + the OVMX include set (mirrors the
 # vmssshd CMake target's includes).
-OVMXINC="-I$ROOT/src/vmsssh -I$ROOT/src/libvms/include -I$ROOT/src/vmsprocess/include -I$ROOT/src/vmsfs/include -I$ROOT/src/vmsrms/include -I$ROOT/src/libvmssys"
+OVMXINC="-I$ROOT/src/vmsssh -I$ROOT/src/libvms/include -I$ROOT/src/vmsprocess/include -I$ROOT/src/vmsfs/include -I$ROOT/src/vmsrms/include -I$ROOT/src/vmslnm/include -I$ROOT/src/libvmssys"
 "$CC" -O2 $OVMXINC -c "$ROOT/src/vmsssh/sshd_auth.c"    -o "$WORK/ov_sshd_auth.o"
 "$CC" -O2 $OVMXINC -c "$ROOT/src/vmsssh/sshd_session.c" -o "$WORK/ov_sshd_session.o"
 "$CC" -O2 $OVMXINC -c "$ROOT/src/vmsssh/ssh_ident.c"    -o "$WORK/ov_ssh_ident.o"

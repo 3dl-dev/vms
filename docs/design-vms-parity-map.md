@@ -81,7 +81,7 @@ the concealed/rooted attributes are dead constants** — `LNM$M_CONCEALED` (`lnm
 | `SYS$SYSROOT` = **two-element search list of concealed rooted devices** (`[SYS0.]` specific over `[SYSCOMMON.]` common) | the one structure that makes a common/specific (cluster-shareable) system disk work | **flattened**: single `SYS$SYSDEVICE:[SYS0.]`, attr `0` (not concealed, not a search list). `SYS$COMMON`/`SYS$SPECIFIC` **absent** (`lnm_defaults.c:110`) |
 | `SYS$SYSTEM`/`LIBRARY`/`MANAGER`/`HELP` = `SYS$SYSROOT:[…]` (ride the root) | redefine the root, everything follows | **pre-flattened** full paths `SYS$SYSDEVICE:[SYS0.SYSCOMMON.…]` that **dodge composition** — redefining `SYS$SYSROOT` changes nothing (`lnm_defaults.c:119-146`) |
 | Search-list read | `$TRNLNM` returns index 0,1,2…; file open tries each | engine exists but **every read collapses to `equiv[0]`** (`vms_kif.c:1411`) — see `vms-ed7`/`vms-b12` |
-| `DISK$<label>` auto-logical on MOUNT | reference a disk by volume label, unit-independent | **absent** — `cmd_mount` mounts but defines no logical (`dcl_cmd_misc.c:1739`); `SET VOLUME/LABEL` stubbed |
+| `DISK$<label>` auto-logical on MOUNT | reference a disk by volume label, unit-independent | **absent** — `cmd_mount` mounts but defines no logical (`dcl_cmd_misc.c:1739`); `SET VOLUME/LABEL` label write-back not implemented (honest `SS$_UNSUPPORTED` refusal since vms-309, no longer the old success-toned no-op facade) |
 | Concealed rooted logical as virtual disk root (`FOO:[000000]`) | subtree presents as a disk | **absent** — attrs read nowhere; `DEFINE` can't even set them (see §4.1) |
 | **LD** (Logical Disk) — container file as `LDA0:` | file-as-disk virtualization | **absent** — no LDDRIVER/LD anywhere |
 

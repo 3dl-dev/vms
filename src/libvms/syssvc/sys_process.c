@@ -989,8 +989,6 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          * creator as a short read, i.e. as OVMX$_PRCLOST for a running
          * process. */
         ssize_t w = creprc_write_all(namefd[1], &rep, sizeof(rep));
-        { char b[96]; int n=snprintf(b,sizeof b,"\nVMSDBG C det=%d w=%zd st=0x%08X nfd1=%d vpid=%u\n", detached, w, rep.status, namefd[1], rep.vms_pid); ssize_t q=write(2,b,(size_t)(n>0?n:0)); (void)q; }
-        (void)w;
         close(namefd[1]);
         /* A report the creator never received describes a process the
          * creator does not know exists. The creator reads a short transfer
@@ -1073,7 +1071,6 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
      * before reporting" -- the precondition of both the OVMX$_PRCLOST
      * return and the unconditional waitpid() below. */
     ssize_t r = creprc_read_all(namefd[0], &rep, sizeof(rep));
-    { char b[96]; int n=snprintf(b,sizeof b,"\nVMSDBG P det=%d r=%zd st=0x%08X pid=%d nfd0=%d\n", detached, r, rep.status, (int)pid, namefd[0]); ssize_t q=write(2,b,(size_t)(n>0?n:0)); (void)q; }
     close(namefd[0]);
 
     /*

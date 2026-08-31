@@ -181,7 +181,12 @@ def alloc(prefix, dirname):
     # Bound the scan: `or sysid >= 65536` here would never terminate, because
     # incrementing past the bound keeps the condition true forever and the die()
     # below becomes unreachable (caught by execution -- a real hang).
-    while sysid < 65536 and sysid in ids:
+    # Also skip any multiple of 1024: the cluster LAN logical address is
+    # aa:00:04:00:<LE16(sysid)>, a DECnet area*1024+node address, and sysid %% 1024
+    # == 0 is node 0 -- illegal, and a real VAX won't solicit a node-0 joiner
+    # (pcap-proven on lab-2, vms-a84d). The default empty-registry base 1024 is
+    # itself node 0, so this also lifts an empty alloc off the bad value.
+    while sysid < 65536 and (sysid in ids or sysid % 1024 == 0):
         sysid += 1
     if sysid >= 65536:
         die("no free SCSSYSTEMID below 65536 in %s" % dirname)

@@ -42,6 +42,18 @@ lj_guard_identity() {  # <scssystemid>  -> 0 ok, 1 reserved/invalid (msg on stde
         echo "labjoin: FATAL -- SCSSYSTEMID $sysid out of range (1..65535)" >&2
         return 1
     fi
+    # The cluster LAN logical address is aa:00:04:00:<LE16(SCSSYSTEMID)>, i.e. a
+    # DECnet Phase IV address = area*1024 + node. An SCSSYSTEMID that is a multiple
+    # of 1024 maps to node 0, an ILLEGAL DECnet node number: a real VAX drops a
+    # HELLO whose source logical address is node 0, so it never solicits the joiner
+    # and the join sequencer stays JS_IDLE. pcap-proven on lab-2 (vms-a84d): OVMXJ0
+    # minted at 1024 (= area 1, node 0) got zero directed solicit from vaxlab-2.
+    if [ $(( sysid % 1024 )) -eq 0 ]; then
+        echo "labjoin: FATAL -- SCSSYSTEMID $sysid maps to DECnet node 0 (area $(( sysid / 1024 ))," \
+             "node 0), an illegal cluster LAN logical address (aa:00:04:00:...). A real VAX won't" \
+             "solicit a node-0 joiner -- pick an id whose low 10 bits are non-zero, e.g. $(( sysid + 4 ))." >&2
+        return 1
+    fi
     for r in $LJ_RESERVED_IDS; do
         if [ "$sysid" = "$r" ]; then
             echo "labjoin: FATAL -- SCSSYSTEMID $sysid collides with a lab-2 pod VAX id" \

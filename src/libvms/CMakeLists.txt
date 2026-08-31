@@ -82,6 +82,7 @@ add_library(vms ${OVMX_LIB_TYPE}
     rtl/lib_output.c
     rtl/lib_signal.c
     rtl/arith_signal.c
+    rtl/lib_invo.c
     rtl/lib_datetime.c
     rtl/lib_timer.c
     rtl/lib_misc.c

@@ -58,6 +58,8 @@
 #include "stsdef.h"
 #include "descrip.h"
 #include "chfdef.h"
+#include "libicb.h"
+#include "pdscdef.h"
 #include "lib$routines.h"
 
 /* Imported from status.c */
@@ -282,6 +284,29 @@ static void perform_unwind(struct chf$signal_array *sigarray)
         uw_newpc = newpc;   /* readable at the resume site */
         longjmp(*anchor, 1);
         /* not reached */
+    }
+
+    /* rung-3 (vms-1fa): the target frame armed NO resume anchor - the literal
+     * "return to main", a bare caller of the establisher, a libgcc EH landing
+     * pad. Reconstruct that frame's real saved context by walking the genuine
+     * Alpha invocation chain (procedure descriptors + register save areas) to
+     * the frame whose PC matches the target establisher's return PC, then ask
+     * vms$$invo_transfer() to restore its registers and resume there. On the
+     * Alpha runtime this IS the anchorless transfer; on the host there is no
+     * Alpha machine context to restore into, so vms$$invo_transfer() reports
+     * "not transferred" and the rung-1 pop-only unwind (already done above)
+     * stands. The reconstruction itself is host-proven (test_invo_context). */
+    if (target >= 0 && target < MAX_HANDLERS && handler_stack[target].est_pc) {
+        INVO_CONTEXT_BLK ticb;
+        uint64_t target_pc =
+            (uint64_t)(uintptr_t)handler_stack[target].est_pc;
+        if (vms$$invo_reconstruct_target(target_pc, &ticb) == SS$_NORMAL) {
+            uw_newpc = newpc;               /* readable at the resume site */
+            if (vms$$invo_transfer(&ticb, newpc)) {
+                /* not reached: control resumed in the reconstructed frame */
+            }
+            /* else: fall through to the pop-only contract below. */
+        }
     }
     /* No anchor armed: pop-only unwind already done above (rung-1 contract). */
     (void)newpc;

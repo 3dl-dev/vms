@@ -180,13 +180,32 @@ RMS was already assessed as **strong, not the predicted first wall** in the
   (`rms_next_version()` = highest+1, explicit `;N` honored); record formats FIX/
   VAR/VFC/STM/STMLF/STMCR; orgs SEQ/REL/IDX; temp/delete-on-close
   (`FAB$M_TMP/TMD/DLT`).
-- **RMS-over-ACP route-through, PROVEN (runtime):** the CRTL's `fopen`/`fwrite`/
-  `fread`/`fclose` (Axis-1 "R2" of the original doc) genuinely reaches RMS/ACP —
-  not a POSIX bypass. `crtl_rms_test.c`'s 8KB write+read+pattern-verify round-trip
-  and `crtl_rms2_test.c`'s line I/O both completed to `$STATUS` N=7 on real
-  qemu-alpha `/dev/vms` over the mounted ODS-2 ACP (`vms-1ef`, #958,
-  2026-08-30T15:44Z). This closes the R2 design question ("route-through, no
-  shim") the operator ruled 2026-08-22 — genuinely, not by assertion.
+- **RMS ENGINE reaches the ACP, PROVEN (runtime):** the public RMS services
+  `sys$create`/`sys$open`/`sys$connect`/`sys$put`/`sys$get`/`sys$close`/
+  `sys$extend`/`sys$erase` issue genuine `$QIO`s (IO$_ACCESS/CREATE/READVBLK/
+  WRITEVBLK/MODIFY/DELETE) to the executive Files-11 ACP over `/dev/vms` — no
+  POSIX bypass — proven by `tests/qemu/test_syssvc_rms_acp.c` (single-version
+  create/put/get/close/reopen/extend/erase, RFM VAR/STMLF/FIX) and, for the
+  compiler-driver **workload** (multi-version create, directory enumeration via
+  `sys$parse`+`sys$search`, `rms_file_attr`, erase), by
+  `tests/qemu/test_syssvc_rms_workload.c` (vms-1b5). This is the RMS ENGINE the
+  compiler's file ops route THROUGH.
+- **⚠ CORRECTION (2026-08-31, vms-1b5, trace-grounded):** an earlier revision of
+  this bullet claimed the alpha PORT image's `crtl_rms_test.c`
+  `fopen`/`fwrite`/`fread`/`fclose` "genuinely reaches RMS/ACP — not a POSIX
+  bypass", citing the N=7 runtime proof (`vms-1ef`, #958). That is **overstated**.
+  DECC$SHR is whole-archived musl-alpha; those calls are musl POSIX whose `open()`
+  is a raw Alpha `callsys` into the Linux-Alpha kernel → the process's **ramfs**
+  CWD, never `/dev/vms` (`mk_decc_shr.sh:875-876`, `decc_crtl_map.txt:16-18`:
+  "Semantics are musl/POSIX UNTIL R2 routes the file entries through RMS/ACP
+  (vms-dfb)"). The N=7 gate checks console text + `$STATUS` only; it would pass
+  **identically over ramfs**, so it does not prove route-through. `vms-dfb`
+  ("R2: DECC$SHR C-RTL file layer routes through RMS/ACP") was closed on this
+  overstated evidence — the port-image CRTL→RMS binding is **still open**, tracked
+  as `vms-47e` (build a CRTL→RMS file layer per `ovmx_link_rms_io.c`, produce
+  LIBVMSRMS$SHR, `--use` it in the port link, and verify PORTTEST lands on the
+  ODS-2 volume independently). The RMS ENGINE readiness above is genuine; the
+  PORT's binding TO it is the remaining R2 work.
 - **Locking, landed in V0.6:** RMS file-level share arbitration behind the DLM
   (`vms-50e`, #932) and RMS record-level locking behind the DLM (`vms-0dd`, #935)
   — real cross-node lock semantics, not local-only.
@@ -194,14 +213,22 @@ RMS was already assessed as **strong, not the predicted first wall** in the
 ### 3.2 Confirmed gaps (RMS)
 
 Nothing in the original Axis-3 "primitives absent" list stands anymore — the
-remaining gap is **workload coverage**, not missing RMS mechanism:
+remaining gap is **workload coverage**, not missing RMS mechanism. The
+compiler-driver workload is now proven **at the RMS ENGINE level** over the real
+ACP by `tests/qemu/test_syssvc_rms_workload.c` (vms-1b5); the remaining hole is
+the alpha PORT image's CRTL binding to that engine (still musl-POSIX → ramfs, see
+the §3.1 correction — `vms-47e`).
 
-| Gap | Why it matters for the GCC driver | rd item |
+> **rd-ID caveat (Rule 10):** this table's "rd item" column reads `vms-1b5`, but
+> in rd `vms-1b5` is actually the *decc$feature* item; the RMS-beyond-stdio item
+> is **`vms-2e72`**. Doc↔rd cross-wiring for the conductor to reconcile.
+
+| Gap | Status | rd item |
 |---|---|---|
-| Directory enumeration (`opendir`/`readdir`/`stat`-class) over RMS/ACP | A build driver finds headers/libraries this way; current CRTL scope (`ovmx_decc_crtl.c`, `mk_decc_shr.sh`) shows no evidence this class routes through RMS rather than staying POSIX-passthrough | `vms-1b5` |
-| Listing-file (`.LIS`) semantics | The compiler driver's diagnostic/preprocessed-output path | `vms-1b5` |
-| Multi-stage temp-file lifecycle (create→use→delete across `cpp→cc1→as→ld`) | `FAB$M_TMP/TMD/DLT` exist but were only exercised as a single fopen/fclose round-trip, never a driver-realistic pipeline | `vms-1b5` |
-| CRTL-driven version bump (`;N` → `;N+1` on a second create) | `crtl_rms_test.c` only ever created `PORTTEST.DAT` once; the RMS-core versioning logic is proven at the RMS-API level (`rms_core.c`), not yet proven reachable a second time through the CRTL path specifically | `vms-1b5` |
+| Directory enumeration (`opendir`/`readdir`/`stat`-class) over RMS/ACP | **ENGINE PROVEN** — `sys$parse`+`sys$search` wildcard enumeration with genuine ODS-2 File IDs (`rms_search_fid`) + `rms_file_attr`, `test_syssvc_rms_workload.c` (B/C). PORT CRTL `opendir`/`readdir` still musl-POSIX → `vms-47e` | `vms-1b5`/`vms-2e72` |
+| Listing-file (`.LIS`) semantics | The compiler driver's diagnostic/preprocessed-output path — a `.LIS` is just a sequential file; the create/put/version/enumerate machinery it needs is engine-proven above. No distinct RMS gap; folds into the PORT-CRTL binding | `vms-47e` |
+| Multi-stage temp-file lifecycle (create→use→delete) | **ENGINE PROVEN** — create/put/get/close/reopen/erase (`test_syssvc_rms_acp.c`) + driver-shaped create→version→enumerate→erase→restore pipeline (`test_syssvc_rms_workload.c`, A/D) | `vms-1b5`/`vms-2e72` |
+| RMS-layer version bump (`;N` → `;N+1` on a second create) | **ENGINE PROVEN** — `sys$create` of the same name twice yields coexisting `;1`/`;2`, versionless open resolves `;2`, explicit `;1` still resolves `;1` (the teeth a POSIX overwrite cannot fake), `test_syssvc_rms_workload.c` (A). Reaching it through the PORT CRTL specifically → `vms-47e` | `vms-1b5`/`vms-2e72` |
 
 ---
 

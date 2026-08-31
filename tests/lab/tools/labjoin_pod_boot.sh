@@ -99,6 +99,32 @@ mapfile -t NET_ARGS < <(lj_tap_netdev_args "$OVMX_TAP" "$OVMX_MAC")
 : > "$OUT_LOG"
 echo "=== booted-OVMX node: SCSNODE=$SCSNODE SCSSYSTEMID=$SCSSYSID tap=$OVMX_TAP mac=$OVMX_MAC qemu=$QEMU (TCG) ===" | tee -a "$OUT_LOG"
 
+# --- Open the FIFO read-write, up front, before backgrounding the reader ----
+# ⚠ THE BUG THIS FIXES (vms-4363). A FIFO opened O_RDONLY blocks in open(2)
+# until a writer exists, and that block happens while the shell sets up the
+# background command's redirections -- BEFORE it execve()s anything. This used
+# to open the write side (`exec 4>"$FIFO"`) only AFTER backgrounding the qemu
+# job, so the qemu-launch job sat blocked on open("$FIFO") for read, still just
+# a fork of THIS script's own pre-drop process -- it had not yet execve'd
+# capsh/timeout/qemu at all. Sampling /proc/$QP/status in that window (the old
+# code did, immediately after backgrounding) therefore captured THIS script's
+# own undropped, ambient capability set, not the booted node's -- the leg (e)
+# evidence was stale by construction, independent of whether the drop itself
+# ever worked. Reproduced: with the writer opened late, CapEff/CapBnd read back
+# with CAP_NET_RAW STILL SET (…a80435fb).
+#
+# Simply moving the writer-open earlier (`exec 4>"$FIFO"` before backgrounding)
+# just flips which side deadlocks: O_WRONLY also blocks until a reader exists,
+# and now nothing has opened the read side yet. The fix is to open O_RDWR
+# instead (`4<>`) -- an O_RDWR open of a FIFO never blocks in Linux, and having
+# it open for the life of the script also means there is ALWAYS at least one
+# writer present, so the qemu job's own independent `<"$FIFO"` (O_RDONLY) open
+# succeeds immediately instead of blocking. The exec chain (capsh -> bash ->
+# timeout -> qemu) therefore completes before we ever read /proc/$QP/status,
+# so the sampled caps reflect the real drop (…a80415fb, net_raw clear).
+exec 4<>"$FIFO"
+send() { printf '%s\r' "$1" >&4; }
+
 # ovmx.flags=0,1 halts at SYSBOOT> pre-banner so we can author the cluster
 # identity (SET/WRITE/CONTINUE), exactly as tests/qemu/test_sysboot_cluster_
 # params_e2e.sh does. -serial stdio carries the console; stdin comes from the FIFO.
@@ -119,21 +145,45 @@ QP=$!
 # grades what really ran -- not what we intended. $QP is the root of the QEMU
 # subtree (capsh -> exec'd command); its CapEff/CapBnd apply to every descendant.
 # Written to the tank-visible $CAP_EVID so labjoin_booted.sh can read it host-side.
+# The writer is already open (above) so $QP is no longer blocked in open(2) on
+# the FIFO; give the exec chain a little headroom anyway (up to 2s) in case
+# capsh/bash/timeout haven't finished their chained execve()s yet.
 : > "$CAP_EVID"
 {
     echo "# CAP_NET_RAW evidence for booted-OVMX node pid=$QP (OVMX_DROP_NET_RAW=$OVMX_DROP_NET_RAW)"
-    for _try in 1 2 3 4 5; do
+    for _try in 1 2 3 4 5 6 7 8 9 10; do
         if [ -r "/proc/$QP/status" ]; then
             grep -E 'Cap(Inh|Prm|Eff|Bnd|Amb)' "/proc/$QP/status" 2>/dev/null && break
         fi
-        sleep 0.3
+        sleep 0.2
     done
 } >> "$CAP_EVID" 2>/dev/null
 echo "[node] recorded CAP_NET_RAW evidence -> $CAP_EVID:" | tee -a "$OUT_LOG"
 sed 's/^/[node]   /' "$CAP_EVID" | tee -a "$OUT_LOG"
 
-exec 4>"$FIFO"
-send() { printf '%s\r' "$1" >&4; }
+# --- FAIL-HONEST: abort now if a requested drop did not actually land -------
+# Do not wait for the after-the-fact gate verdict (labjoin_booted.sh, run only
+# once this whole boot finishes) to notice the crutch is present -- that would
+# spend the entire TCG boot budget on a run that was never going to prove
+# anything. Reuse lj_cap_denied_verdict (the SAME function the final gate
+# grades with) so this early check can never drift from the real verdict.
+if [ "$OVMX_DROP_NET_RAW" = "1" ]; then
+    if ! lj_cap_denied_verdict "$(cat "$CAP_EVID")" > /tmp/ovmx-node-$$.capverdict 2>&1; then
+        sed 's/^/[node] /' /tmp/ovmx-node-$$.capverdict | tee -a "$OUT_LOG"
+        echo "[node] FATAL -- OVMX_DROP_NET_RAW=1 was requested but CAP_NET_RAW is not verified" \
+             "clear on the booted-node process (see leg (e) reason above). Aborting rather than" \
+             "booting with the ambient-cap crutch possibly still present -- a green here would be" \
+             "exactly the 0.6 fabrication this gate exists to catch." | tee -a "$OUT_LOG"
+        rm -f /tmp/ovmx-node-$$.capverdict
+        kill -9 "$QP" 2>/dev/null; wait "$QP" 2>/dev/null
+        exec 4>&-
+        rm -f "$FIFO" "$DISK"
+        echo "=== node boot driver done (rc=4) ===" | tee -a "$OUT_LOG"
+        exit 4
+    fi
+    sed 's/^/[node] /' /tmp/ovmx-node-$$.capverdict | tee -a "$OUT_LOG"
+    rm -f /tmp/ovmx-node-$$.capverdict
+fi
 
 waitfor() {  # <pattern> <limit-seconds>
     local pat="$1" lim="${2:-120}" w=0
@@ -170,11 +220,28 @@ if [ "$rc" -eq 0 ]; then
         send 'SYSTEM'; sleep 2
         send 'MANAGER'; sleep 2
         waitfor 'Welcome to OpenVMX' 120 || true
-        # Give an auto-started SCS component time to complete its join over the
-        # tap L2 before we sample membership (TCG + real cluster handshake).
-        sleep 60
         send 'SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST'; sleep 2
-        send 'SHOW CLUSTER'; sleep 8
+        # Poll membership ACROSS the join window instead of sampling once. The
+        # NEW->MEMBER join sequencer + the real-VAX cluster handshake take tens
+        # of seconds under TCG; the old code slept a fixed 60s then sampled a
+        # single SHOW CLUSTER and logged out, tearing the node down before a
+        # join could ever complete (and hiding any NOTMEMBER->MEMBER transition).
+        # Poll SHOW CLUSTER every ~20s up to JOIN_POLL seconds, scoping each read
+        # to the text after that poll's marker, and break as soon as a poll's
+        # SHOW CLUSTER no longer reports %SYSTEM-I-NOTMEMBER (the one membership
+        # signal SHOW CLUSTER reliably emits while not joined). qemu's own
+        # BOOT_TO timeout bounds the loop; kill -0 breaks it if qemu exits.
+        JOIN_POLL="${JOIN_POLL:-240}"; pw=0; joined=0
+        while [ "$pw" -lt "$JOIN_POLL" ]; do
+            kill -0 "$QP" 2>/dev/null || break
+            send "WRITE SYS\$OUTPUT \"OVMX-POLL-$pw\""; sleep 1
+            send 'SHOW CLUSTER'; sleep 8
+            if ! awk "/OVMX-POLL-$pw/{f=1} f" "$OUT_LOG" | grep -qaF 'NOTMEMBER'; then
+                joined=1; break
+            fi
+            sleep 11; pw=$((pw + 20))
+        done
+        echo "[node] join-poll ended after ~${pw}s (joined=$joined)" | tee -a "$OUT_LOG"
         send 'WRITE SYS$OUTPUT "OVMX-SC-DONE"'; sleep 3
         waitfor 'OVMX-SC-DONE' 30 || true
     else

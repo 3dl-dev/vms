@@ -873,6 +873,34 @@ if(BUILD_TESTS)
     set_tests_properties(lab_identity_unique_gate PROPERTIES
         LABELS "integration;cluster" TIMEOUT 60)
 
+    # Booted-OVMX-joins-a-real-VAX acceptance harness plumbing (vms-fa1a, parent
+    # vms-110b, enables vms-5a23): the harness that proves a BOOTED OVMX node
+    # joins a real lab-2 VAX VMScluster (tests/lab/tools/labjoin_booted.sh) can
+    # only run against lab-2 (a genuine OpenVMS VAX V7.3 pod + a slow in-pod TCG
+    # boot) -- it is NOT a GitHub-CI gate. But every DECISION the harness makes is
+    # pure text: the identity collision guard (refuse the pod's reserved VAX ids),
+    # the CN_2 precheck (never join a broken pod), the QEMU tap-arg contract
+    # (byte-identical to distro/boot/run-qemu.sh OVMX_NET_MODE=tap), and the
+    # four-leg acceptance verdict (OVMX sees the VAX, the VAX sees OVMX,
+    # CLUSTER_NODES=3, join captured on the wire). This gate proves that logic
+    # here with no lab, no k3s, no VAX, no boot -- so the instrument that grades
+    # the real lab-2 run is itself proven correct. Hermetic; mocks kubectl the way
+    # test_lab2run_staging.sh does.
+    add_test(NAME labjoin_booted_plumbing
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab/tests/test_labjoin_booted_plumbing.sh)
+    set_tests_properties(labjoin_booted_plumbing PROPERTIES
+        LABELS "integration;cluster" TIMEOUT 120)
+
+    # Its can-fail twin (Rule 7): flip each leg of a real join and assert the
+    # acceptance verdict goes RED -- the anti-fabrication instrument must have
+    # teeth. Case (a) is exactly the pre-vms-5ad reality (booted OVMX never
+    # auto-starts SCS -> SHOW CLUSTER reports NOSUCHDEV), and the verdict
+    # correctly FAILS it, which is why the real gate is honestly RED today.
+    add_test(NAME labjoin_booted_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab/tests/test_labjoin_booted_negctl.sh)
+    set_tests_properties(labjoin_booted_negctl PROPERTIES
+        LABELS "integration;cluster" TIMEOUT 60)
+
     # x86_64 relocation survey freshness (vms-680, under vms-bdf): the
     # committed docs/design-link-x86_64-relocs.md is GENERATED, not hand-typed
     # -- tools/survey_x86_64_relocs.sh cross-compiles the vms-b65.1-.6 object

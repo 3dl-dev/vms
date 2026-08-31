@@ -116,6 +116,16 @@ void vms_proc_reap_dead(void)
                 break;
             }
         }
+        /*
+         * /NOWAIT spawn completion on ABNORMAL subprocess deletion (vms-2a4,
+         * the vms-e9a B1 edge): a subprocess KILLED without recording an exit
+         * ($EXIT/SETEXIT) -- SIGKILL, a crash, a segfault -- is reclaimed here
+         * with its parent's completion still armed. Fire it now (under the SAME
+         * hash_lock that unlinked the victim) so the parent's $WAITFR / AST does
+         * not hang. See vms_proc_deliver_abnormal_completion().
+         */
+        if (victim)
+            vms_proc_deliver_abnormal_completion(victim);
         exec_unlock(&vms_proc_hash_lock);
 
         if (!victim)
@@ -1179,6 +1189,58 @@ static void spawn_notify_deliver(struct vms_proc *parent, uint32_t efn,
 
     if (efn != VMS_EF_NONE)
         (void)vms_ef_set_for(parent, efn);
+}
+
+/*
+ * vms_proc_deliver_abnormal_completion - deliver a /NOWAIT spawn completion for
+ * a subprocess being reclaimed WITHOUT having recorded an exit (vms-2a4, the
+ * vms-e9a B1 edge). vms_ioctl_setexit delivers an armed completion only on the
+ * $EXIT/SETEXIT path; a subprocess KILLED before that -- SIGKILL, a crash, a
+ * segfault -- would otherwise be freed with compl_armed still set and its
+ * parent's $WAITFR / completion AST would hang forever. Real VMS notifies the
+ * creator on abnormal subprocess deletion too (termination mailbox / $DELPRC),
+ * so this synthesizes an abnormal $STATUS (SS$_ABORT) as the child's completion
+ * condition -- it never recorded one of its own -- and fires the same EF-set +
+ * AST-queue delivery vms_ioctl_setexit uses.
+ *
+ * CALLER MUST HOLD vms_proc_hash_lock and must have ALREADY UNLINKED `child`
+ * from vms_proc_hash (the ownership claim). Called from exactly the two
+ * mid-life reclaim claim points -- the lazy reaper (vms_proc_reap_dead, here)
+ * and the channel-release free of an exiting task (vms_proc_free, per backend)
+ * -- both of which unlink under this lock. Holding hash_lock keeps the parent
+ * PCB alive across the lookup + delivery, exactly as vms_ioctl_setexit's in-band
+ * delivery relies on. One-shot: compl_armed is cleared as it fires, so whichever
+ * claim point reaches the entry first delivers and the other is a no-op -- the
+ * already-exited / exited-then-reaped races never double-deliver. A parent that
+ * has itself exited (find returns NULL) simply has nothing to notify -- no
+ * fabrication, no hang.
+ *
+ * Recording the synthesized status on `child` before delivery keeps the PCB
+ * self-consistent for the brief window before it is freed.
+ */
+void vms_proc_deliver_abnormal_completion(struct vms_proc *child)
+{
+    struct vms_proc *parent;
+    uint32_t c_efn;
+    uint64_t c_astadr, c_astprm;
+    uint8_t  c_acmode;
+
+    if (!child->compl_armed)
+        return;
+
+    parent   = find_by_vms_pid(child->compl_parent_pid);
+    c_efn    = child->compl_efn;
+    c_astadr = child->compl_astadr;
+    c_astprm = child->compl_astprm;
+    c_acmode = child->compl_acmode;
+
+    child->compl_armed = 0;
+    if (!child->has_exit_status) {
+        child->exit_status     = SS__ABORT;
+        child->has_exit_status = 1;
+    }
+    if (parent)
+        spawn_notify_deliver(parent, c_efn, c_astadr, c_astprm, c_acmode);
 }
 
 /*

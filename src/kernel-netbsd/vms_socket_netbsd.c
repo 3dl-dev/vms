@@ -336,3 +336,62 @@ exec_socket_accept(exec_socket_t s, exec_socket_t *out)
 	*out = h;
 	return 0;
 }
+
+/* ---- SS13: host AF_PACKET raw datalink socket (vms-7eb) -------------------
+ *
+ * CONTRACT-ONLY STUBS (see the header comment beside these declarations in
+ * exec_kbackend_netbsd.h for why): NetBSD has no in-kernel socket(9) domain
+ * for raw Ethernet frames -- the real NetBSD primitive is BPF, a different
+ * attach-to-interface design entirely, not a socket. Each stub touches no
+ * device internals and reports failure honestly (INV-6 / Rule 11), exactly
+ * like exec_blockdev_read_block's contract-only stub (exec_kbackend_netbsd.h)
+ * before devtab joined this module's SRCS. Unreferenced today: the only
+ * caller, src/kernel-core/vms_l2.c, is not in this module's SRCS (vms_l2.c
+ * stays a Linux build for now, exactly as vms_bg.c does). A genuinely
+ * runnable NetBSD L2 datalink -- wiring BPF, and struct vms_proc's
+ * l2_channels list on this substrate -- is a later item alongside the
+ * runnable NetBSD BGn: work (vms-024). */
+
+int
+exec_l2_open(const char *ifname, uint16_t ethertype, uint32_t *out_ifindex,
+    exec_socket_t *out)
+{
+	(void)ifname;
+	(void)ethertype;
+	(void)out_ifindex;
+	*out = NULL;
+	return -1;   /* not implemented on this substrate (contract-only twin) */
+}
+
+int
+exec_l2_hwaddr(const char *ifname, uint8_t mac[6])
+{
+	(void)ifname;
+	(void)mac;
+	return -1;   /* not implemented on this substrate (contract-only twin) */
+}
+
+long
+exec_l2_send(exec_socket_t s, int ifindex, uint16_t ethertype,
+    const uint8_t dst_mac[6], const void *frame, size_t len)
+{
+	(void)s;
+	(void)ifindex;
+	(void)ethertype;
+	(void)dst_mac;
+	(void)frame;
+	(void)len;
+	return -1;   /* not implemented on this substrate (contract-only twin) */
+}
+
+int
+exec_l2_recv(exec_socket_t s, void *buf, size_t buf_len, uint32_t timeout_ms,
+    size_t *out_len)
+{
+	(void)s;
+	(void)buf;
+	(void)buf_len;
+	(void)timeout_ms;
+	(void)out_len;
+	return -1;   /* not implemented on this substrate (contract-only twin) */
+}

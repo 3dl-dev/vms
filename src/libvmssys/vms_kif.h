@@ -994,6 +994,52 @@ uint32_t vms_kif_bg_accept(uint32_t listen_exec_chan, uint32_t accept_exec_chan,
                            uint16_t *family, uint16_t *port, uint32_t *addr);
 
 /* ================================================================
+ * L2 (raw datalink) socket surface (vms-7eb, auth slice of vms-1e4)
+ *
+ * Marshalling wrappers over the VMS_IOCTL_L2_* driver in vms.ko
+ * (src/kernel-core/vms_l2.c). Gives a NON-ROOT VMS process kernel-owned raw
+ * L2 I/O for the SCS cluster wire (ethertype 0x6007): the kernel opens the
+ * AF_PACKET socket (no CAP_NET_RAW needed), gated on the caller holding the
+ * VMS PHY_IO privilege. Every one binds to /dev/vms and returns
+ * SS$_NOSUCHDEV if the executive is absent (INV-6), never a userspace raw-
+ * socket fallback.
+ * ================================================================ */
+
+/* Open a kernel AF_PACKET socket bound to `ifname`/`ethertype` (host order).
+ * Requires PHY_IO -- without it, SS$_NOPRIV. On success, *out_handle gets this
+ * process's L2 handle, *out_ifindex the resolved interface index, and hwaddr
+ * (if non-NULL) the interface's MAC. Any out param may be NULL if not wanted.
+ * OVMX-UNWIRED: vms_kif_l2_open (vms-7eb) -- PIECE 1 of the executive L2
+ * datalink: the raw kernel primitive + the PHY_IO auth gate only. No sys$
+ * service or product daemon issues it yet -- the SCS cluster-wire consumer
+ * (scsd/vmsscs) that will drive this is later work under the vms-1e4
+ * umbrella. Exercised directly by tests/qemu/test_syssvc_l2_datalink.c
+ * against a real /dev/vms, the same footing as vms_kif_get_resmaster above. */
+uint32_t vms_kif_l2_open(const char *ifname, uint16_t ethertype,
+                         uint32_t *out_handle, uint32_t *out_ifindex,
+                         uint8_t hwaddr[6]);
+/* Send one frame (<= VMS_L2_MAXLEN bytes) out `handle` to `dst_mac` on
+ * `ifindex` (from OPEN), tagged `ethertype` (host order). No connect step --
+ * every send names its destination. *actlen (if non-NULL) gets the bytes
+ * actually sent.
+ * OVMX-UNWIRED: vms_kif_l2_send (vms-7eb) -- same footing as vms_kif_l2_open
+ * above; no product caller until the SCS cluster-wire consumer lands. */
+uint32_t vms_kif_l2_send(uint32_t handle, uint32_t ifindex, uint16_t ethertype,
+                         const uint8_t dst_mac[6], const void *frame, uint32_t len,
+                         uint32_t *actlen);
+/* Receive one frame from `handle` into `buf` (the caller must supply at least
+ * VMS_L2_MAXLEN bytes of capacity), honoring `timeout_ms` (0 = block
+ * indefinitely). *actlen (if non-NULL) gets the received frame length.
+ * OVMX-UNWIRED: vms_kif_l2_recv (vms-7eb) -- same footing as vms_kif_l2_open
+ * above; no product caller until the SCS cluster-wire consumer lands. */
+uint32_t vms_kif_l2_recv(uint32_t handle, uint32_t timeout_ms, void *buf,
+                         uint32_t *actlen);
+/* Release the handle and its host socket.
+ * OVMX-UNWIRED: vms_kif_l2_close (vms-7eb) -- same footing as vms_kif_l2_open
+ * above; no product caller until the SCS cluster-wire consumer lands. */
+uint32_t vms_kif_l2_close(uint32_t handle);
+
+/* ================================================================
  * Files-11 (ODS-2) ACP -- channel + mount front-end (vms-149, epic vms-208)
  *
  * The executive owns the mounted-volume table (src/kernel-core/vmsfs_acp.c): a

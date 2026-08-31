@@ -696,6 +696,18 @@ struct vms_proc {
     struct list_head    bg_channels;    /* struct vms_bg_chan */
 
     /*
+     * L2 (raw datalink) socket handles (vms-7eb, auth slice of vms-1e4). A
+     * separate list, NOT drawn from next_chan/chan_lock -- an L2 handle is an
+     * OVMX-local number, not a $ASSIGN channel (see vms_l2.h's NAMING note):
+     * L2 is not a VMS device class, so $DASSGN never touches it. A dedicated
+     * lock, same posture as p0_lock/p1_lock: this list has no ordering
+     * dependency on chan_lock's contents. Released at process teardown by
+     * vms_l2_release_all().
+     */
+    struct list_head    l2_channels;    /* struct vms_l2_handle */
+    spinlock_t          l2_lock;
+
+    /*
      * Files-11 (ODS-2) ACP file-class channels (vms-149, epic vms-208). A
      * separate list, same chan_lock and next_chan counter as the device,
      * mailbox and BG channels above -- a file channel is bound to a mounted
@@ -1338,6 +1350,22 @@ void vms_bg_release_all(struct vms_proc *proc);
  * vms_proc_hash_lock (keeps parent alive); child is not yet published.
  */
 void vms_bg_inherit(struct vms_proc *child, struct vms_proc *parent);
+
+/*
+ * L2 (raw datalink) socket surface (vms-7eb, auth slice of vms-1e4; vms_l2.h).
+ * Like BGn:, the L2 driver is Linux host-socket glue (src/kernel/
+ * exec_kbackend_linux.h's exec_l2_* seam), so vms_module.c dispatches its
+ * ioctls and calls vms_l2_release_all at process teardown directly. Unlike
+ * BGn: there is no fork/exec inheritance for L2 handles in this increment --
+ * out of scope for the auth-gate slice (vms-1e4); a process that forks starts
+ * with none, exactly as a freshly registered process does today.
+ */
+long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_l2_send(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_l2_recv(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_l2_close(struct vms_proc *proc, unsigned long arg);
+/* Give back every L2 handle (and its host socket) a dying process holds. */
+void vms_l2_release_all(struct vms_proc *proc);
 
 /*
  * Eager fork-time BG channel inheritance (vms-0cd), Linux rind

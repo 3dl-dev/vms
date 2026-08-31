@@ -23,6 +23,7 @@ vms-y := vms_module.o \
          vms_bg_pollfd.o \
          vms_bg_forkinherit.o \
          vms_bg_datafd.o \
+         vms_l2.o \
          vms_access.o \
          vms_ast.o \
          vms_devtab.o \

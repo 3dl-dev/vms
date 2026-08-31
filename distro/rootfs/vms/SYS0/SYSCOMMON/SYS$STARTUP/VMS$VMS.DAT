@@ -16,6 +16,21 @@
 ! (with @) when its phase comes up in the driver loop. Lines beginning with
 ! "!" and blank lines are comments/ignored.
 !
+! SCS (vms-5ad, child of vms-110b) is registered at CONFIG, the fourth of
+! the nine phases -- after DEVICES (so the executive's device table has
+! already surfaced ETH0:, the NIC SCSD self-resolves and binds -- see
+! SYS$STARTUP:SCS_STARTUP.COM's own header) and well before the
+! layered-product/site phases (LPBEGIN/LPMAIN/LPBETA). SCS/cluster
+! connection management is core infrastructure, not a layered product or a
+! site choice, so it belongs early -- the same reasoning JOB_CONTROL's
+! header below gives for CONFIG being tried first there. UNLIKE
+! JOB_CONTROL, that early placement is NOT reverted here: JOB_CONTROL had
+! to move to END because its child LOGINOUT session prompts on the shared
+! OPA0: console while STARTUP.COM is still writing to it (see below) --
+! SCSD is DETACHED with its output routed to a LOG file
+! (SYS$MANAGER:SCSD.OUT), never to OPA0:, so that console-interleave
+! defect does not apply to it and CONFIG is safe.
+!
 ! JOB_CONTROL (vms-2a9, docs/design-boot-faithful.md sec3.8/sec4.5) is
 ! OVMX's first real component registration: SYS$STARTUP:JOB_CONTROL_
 ! STARTUP.COM, which RUN/DETACHED's JOB_CONTROL.EXE, the process that owns
@@ -51,4 +66,5 @@
 ! ever being created (tests/qemu/test_job_control_negctl.sh proves exactly
 ! that against a real boot).
 !
+CONFIG SYS$STARTUP:SCS_STARTUP.COM
 END SYS$STARTUP:JOB_CONTROL_STARTUP.COM

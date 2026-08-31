@@ -24,6 +24,7 @@
 
 #include <arpa/inet.h>
 #include <net/if.h>
+#include <net/if_arp.h>  /* ARPHRD_ETHER -- scs_datalink_primary_iface() (vms-5ad) */
 #include <netpacket/packet.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -85,6 +86,55 @@ int scs_datalink_get_hwaddr(const char *ifname, uint8_t mac_out[6])
     return 0;
 }
 
+int scs_datalink_primary_iface(char *out, size_t n)
+{
+    struct if_nameindex *list = if_nameindex();
+    if (list == NULL) {
+        return -1;
+    }
+
+    int found = -1;
+    for (struct if_nameindex *p = list; p->if_name != NULL; p++) {
+        int s = socket(AF_INET, SOCK_DGRAM, 0);
+        if (s < 0) {
+            continue;
+        }
+
+        struct ifreq ifr;
+        memset(&ifr, 0, sizeof(ifr));
+        strncpy(ifr.ifr_name, p->if_name, IFNAMSIZ - 1);
+        if (ioctl(s, SIOCGIFFLAGS, &ifr) < 0 || (ifr.ifr_flags & IFF_LOOPBACK)) {
+            close(s);
+            continue; /* vms-9d2 twin: skip loopback exactly as
+                       * for_each_netdev's IFF_LOOPBACK check does */
+        }
+
+        memset(&ifr, 0, sizeof(ifr));
+        strncpy(ifr.ifr_name, p->if_name, IFNAMSIZ - 1);
+        if (ioctl(s, SIOCGIFHWADDR, &ifr) < 0) {
+            close(s);
+            continue;
+        }
+        close(s);
+        if (ifr.ifr_hwaddr.sa_family != ARPHRD_ETHER) {
+            continue; /* require Ethernet, exactly as the executive does */
+        }
+
+        if (out != NULL && n > 0) {
+            strncpy(out, p->if_name, n - 1);
+            out[n - 1] = '\0';
+        }
+        found = 0;
+        break;
+    }
+
+    if_freenameindex(list);
+    if (found != 0) {
+        errno = ENODEV;
+    }
+    return found;
+}
+
 /*
  * datalink_send_linux - THE Linux transport primitive. Kept as its own
  * named function (rather than inlined into scs_datalink_send() below) so a
@@ -134,6 +184,7 @@ int scs_datalink_set_recv_timeout(int fd, int seconds)
 #include <net/bpf.h>
 #include <net/if.h>
 #include <net/if_dl.h>
+#include <net/if_types.h>  /* IFT_ETHER -- scs_datalink_primary_iface() (vms-5ad) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/ioctl.h>
@@ -323,6 +374,40 @@ int scs_datalink_get_hwaddr(const char *ifname, uint8_t mac_out[6])
             continue;
         }
         memcpy(mac_out, LLADDR(sdl), 6);
+        found = 1;
+        break;
+    }
+    freeifaddrs(ifap);
+    if (!found) {
+        errno = ENODEV;
+        return -1;
+    }
+    return 0;
+}
+
+int scs_datalink_primary_iface(char *out, size_t n)
+{
+    struct ifaddrs *ifap = NULL;
+    if (getifaddrs(&ifap) < 0) {
+        return -1;
+    }
+    int found = 0;
+    for (struct ifaddrs *p = ifap; p != NULL; p = p->ifa_next) {
+        if (p->ifa_addr == NULL || p->ifa_addr->sa_family != AF_LINK) {
+            continue;
+        }
+        if (p->ifa_flags & IFF_LOOPBACK) {
+            continue; /* vms-9d2 twin: skip loopback exactly as
+                       * IFNET_READER_FOREACH's IFT_LOOP check does */
+        }
+        struct sockaddr_dl *sdl = (struct sockaddr_dl *)(void *)p->ifa_addr;
+        if (sdl->sdl_type != IFT_ETHER) {
+            continue; /* require Ethernet, exactly as the executive does */
+        }
+        if (out != NULL && n > 0) {
+            strncpy(out, p->ifa_name, n - 1);
+            out[n - 1] = '\0';
+        }
         found = 1;
         break;
     }

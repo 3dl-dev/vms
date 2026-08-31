@@ -32,14 +32,19 @@ $!            VAXCLUSTER 0 then reboot.
 $!   CREATE a duplicate system disk / satellite roots - not available; no
 $!            satellite/duplicate-disk facility at this edition.
 $!
-$! HONESTY (CLAUDE.md INV-6). Only SCSNODE and SCSSYSTEMID are read by the
-$! cluster daemon today and change the real wire identity -- those are
-$! effectual. VOTES / EXPECTED_VOTES / VAXCLUSTER / ALLOCLASS are authored into
-$! the .PAR the VMS way and persist (SYSGEN SHOW reads them back), but the V0.6
-$! daemon does not yet enforce votes/quorum (it joins non-voting; quorum is
-$! computed-and-logged only). This procedure records them and says so at the
-$! prompt -- it never claims they gate anything. See the Cluster Systems manual,
-$! "Not yet available at V0.6".
+$! HONESTY (CLAUDE.md INV-6). SCSNODE and SCSSYSTEMID are read by the cluster
+$! daemon and change the real wire identity; VAXCLUSTER is read too, as of
+$! vms-5ad -- it is the boot-time self-gate SCSD.EXE's BOOT-CLUSTER MODE
+$! reads off this SAME .PAR (sysgen_read_param("VAXCLUSTER",...), scsd.c):
+$! VAXCLUSTER=0 (the shipped default) means SCSD declines to run at all on
+$! the next boot; any nonzero value means it self-starts persistently. All
+$! three are therefore effectual. VOTES / EXPECTED_VOTES / ALLOCLASS are
+$! authored into the .PAR the VMS way and persist (SYSGEN SHOW reads them
+$! back), but the V0.6 daemon does not yet enforce votes/quorum (it joins
+$! non-voting; quorum is computed-and-logged only) and ALLOCLASS is reported
+$! only. This procedure records all five and says so at the prompt -- it
+$! never claims VOTES/EXPECTED_VOTES/ALLOCLASS gate anything. See the
+$! Cluster Systems manual, "Not yet available at V0.6".
 $!
 $! MECHANISM. SYSGEN is driven NON-INTERACTIVELY via inline SYS$INPUT, the same
 $! idiom OVMX$INSTALL.COM proved (vms-597): the non-$ data lines after RUN

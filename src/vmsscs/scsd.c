@@ -15633,6 +15633,32 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
 }
 
 
+/*
+ * resolve_cluster_iface - vms-5ad: resolve the interface SCSD binds when it
+ * is started with NO wire-mode flags at all ("boot-cluster mode" -- see
+ * main()'s comment below). OVMX RUN /DETACHED passes no argv
+ * (dcl_cmd_process.c's qualifier table has no /PARAMETERS), so a booted SCSD
+ * cannot be told --iface on the command line; it must self-resolve the same
+ * NIC the executive's device table names ETH0:.
+ *
+ * MIRRORS exec_netdev_primary() (src/kernel-core/exec_kbackend.h sec 11,
+ * lines 392-401): "find the host's PRIMARY (first, in kernel enumeration
+ * order) non-loopback Ethernet net device." scs_datalink_primary_iface()
+ * (scs_datalink.c) is the userspace twin of that exact rule -- if_nameindex +
+ * SIOCGIFFLAGS/SIOCGIFHWADDR on Linux, getifaddrs+AF_LINK on NetBSD -- so
+ * SCSD binds the SAME device the device table surfaced as ETH0:, without
+ * asking the executive (SCSD is a userspace daemon; it has no /dev/vms
+ * dependency of its own).
+ *
+ * Returns 0 and fills iface_out on success, -1 (errno set, ENODEV if no
+ * interface qualifies) on failure -- the honest "no NIC" case. Never invents
+ * an interface name (INV-6).
+ */
+static int resolve_cluster_iface(char *iface_out, size_t iface_out_len)
+{
+    return scs_datalink_primary_iface(iface_out, iface_out_len);
+}
+
 #ifdef SCSD_UNIT_TEST
 /* vms-7be: tests/vmsscs/test_scsd_wire.c #includes this file and supplies its own
  * main(). The daemon entry point is RENAMED, not compiled out, so every static
@@ -15777,10 +15803,77 @@ int main(int argc, char **argv)
                     "                      VMS_IOCTL_DLM_XNODE) and print the status;\n"
                     "                      SS$_UNSUPPORTED(2296) on a real executive,\n"
                     "                      SS$_NOSUCHDEV(2680) fail-honest without one.\n"
-                    "                      Opens no socket (vms-4b6, DLM harness H0)\n",
+                    "                      Opens no socket (vms-4b6, DLM harness H0)\n"
+                    "  (no arguments)      BOOT-CLUSTER MODE (vms-5ad): self-configure from\n"
+                    "                      the SYSGEN store and run --connect persistently\n"
+                    "                      on the primary Ethernet NIC iff VAXCLUSTER!=0;\n"
+                    "                      exits 0 doing nothing on a standalone node\n"
+                    "                      (VAXCLUSTER==0). This is what OVMX RUN /DETACHED\n"
+                    "                      starts at boot, which can pass no argv.\n",
                     argv[0], SCA_ETHERTYPE, HELLO_DEFAULT_INTERVAL_SEC);
             return 0;
         }
+    }
+
+    /* vms-5ad: BOOT-CLUSTER MODE. When SCSD is invoked with NO wire-mode
+     * flags at all (argc==1 -- exactly what OVMX RUN /DETACHED gives it: its
+     * qualifier table has no /PARAMETERS, dcl_cmd_process.c), it is a
+     * detached system process started from SCS_STARTUP.COM at boot, not the
+     * lab probe (which always passes explicit flags -- --show-identity in
+     * the bootable Dockerfile's self-check, --connect/--iface/etc. in the
+     * lab harness). Every explicit-flag branch above is UNCHANGED; this path
+     * is reached only when none of them fired.
+     *
+     * The node self-gates on VAXCLUSTER (VMS SYSGEN parameter semantics:
+     * 0=disabled, 1=AUTO, 2=ALWAYS -- VSI OpenVMS System Management
+     * Utilities Reference Manual; OVMX treats any nonzero value as
+     * "participate," matching AUTO/ALWAYS both meaning the node forms or
+     * joins a cluster). A standalone node (VAXCLUSTER==0, the shipped
+     * OVMXVMSSYS.PAR default) prints an honest line and exits 0 -- SCSD
+     * declining to run is not an error on a standalone system, and staying
+     * silent instead would be the INV-6 fabrication (a "cluster service" that
+     * quietly does nothing looks identical to one that never ran). Any
+     * nonzero VAXCLUSTER self-configures and runs the --connect path
+     * persistently (duration stays 0: run until SIGINT/SIGTERM, i.e. until
+     * $ STOP or a reboot -- the same lifetime as any other detached system
+     * process). */
+    if (argc == 1) {
+        uint32_t vaxcluster = 0;
+        if (sysgen_read_param("VAXCLUSTER", &vaxcluster) != 0 || vaxcluster == 0) {
+            log_ts(stdout);
+            printf(" SCSD-I-STANDALONE, VAXCLUSTER=%u: node is standalone,"
+                   " cluster connection manager not started\n",
+                   (unsigned)vaxcluster);
+            fflush(stdout);
+            return 0;
+        }
+
+        /* vms-5ad: resolve the same NIC the executive's device table (vms_devtab.c)
+         * names ETH0: -- see resolve_cluster_iface()'s header, above. Fail
+         * honest (INV-6): a cluster-participating node with no Ethernet net
+         * device to bind is a real misconfiguration, not something to paper
+         * over with a fake or defaulted interface name. */
+        static char boot_iface[IFNAMSIZ];
+        if (resolve_cluster_iface(boot_iface, sizeof(boot_iface)) != 0) {
+            fprintf(stderr,
+                    "SCSD-E-NONIC, no Ethernet interface backs ETH0: (VAXCLUSTER=%u"
+                    " names this node a cluster member, but no non-loopback"
+                    " Ethernet net device was found to bind)\n",
+                    (unsigned)vaxcluster);
+            return 1;
+        }
+        ifname = boot_iface;
+        do_connect = 1; /* implies respond -> emit_hello, below, exactly as
+                          * an explicit --connect does */
+
+        char boot_node[SYSGEN_STRVAL_LEN];
+        (void)resolve_node_identity(boot_node, sizeof(boot_node));
+        log_ts(stdout);
+        printf(" SCSD-I-BOOTCLUSTER, VAXCLUSTER=%u: starting cluster connection"
+               " manager on %s, SCSNODE=%s SCSSYSTEMID=%u\n",
+               (unsigned)vaxcluster, ifname, boot_node,
+               (unsigned)resolve_scssystemid());
+        fflush(stdout);
     }
 
     /* vms-760: the NEW->MEMBER join SEQUENCER (full dir-CLIENT choreography) is

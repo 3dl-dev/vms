@@ -99,6 +99,29 @@ void scs_datalink_close(int fd);
 int scs_datalink_get_hwaddr(const char *ifname, uint8_t mac_out[6]);
 
 /*
+ * scs_datalink_primary_iface - vms-5ad: resolve the host's PRIMARY (first,
+ * enumeration order) non-loopback Ethernet net device -- the userspace twin
+ * of the executive's exec_netdev_primary() (src/kernel-core/exec_kbackend.h
+ * sec 11, src/kernel/exec_kbackend_linux.h's for_each_netdev/ARPHRD_ETHER
+ * walk), used by SCSD's boot-cluster mode (scsd.c) to bind the same NIC the
+ * device table names ETH0: without SCSD having to ask the executive or take
+ * any argv (OVMX RUN /DETACHED passes none).
+ *
+ *   Linux:  if_nameindex(3) walk + SIOCGIFFLAGS (skip IFF_LOOPBACK) +
+ *           SIOCGIFHWADDR (require ARPHRD_ETHER) -- the userspace mirror of
+ *           for_each_netdev's IFF_LOOPBACK/ARPHRD_ETHER filter.
+ *   NetBSD: getifaddrs(3) walk + the AF_LINK entry per interface, skipping
+ *           IFF_LOOPBACK (ifa_flags) and requiring sdl_type == IFT_ETHER --
+ *           the userspace mirror of IFNET_READER_FOREACH/IFT_ETHER.
+ *
+ * Copies the interface name (NUL-terminated, truncated to n-1) into `out`
+ * when one exists and `out`/`n` are given. Returns 0 on success, -1 with
+ * errno set (or ENODEV if no such interface exists) on failure -- the honest
+ * "no NIC" case; the caller must never invent an interface name (INV-6).
+ */
+int scs_datalink_primary_iface(char *out, size_t n);
+
+/*
  * scs_datalink_send - transmit a fully-built Ethernet frame (scsd.c's
  * frame builders already set every header field, including the source and
  * destination MAC) out `fd`.

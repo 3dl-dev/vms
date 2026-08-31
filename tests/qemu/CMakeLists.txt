@@ -1026,3 +1026,32 @@ set_tests_properties(console_boot_no_newline_spam_e2e PROPERTIES
     LABELS "slow;qemu-full-boot"
     SKIP_RETURN_CODE 77
     TIMEOUT 1200)
+
+# ---------------------------------------------------------------------------
+# SCS BOOT-AUTOSTART, END TO END (vms-5ad, child of vms-110b).
+#
+# Boots the real mastered bootable image across THREE arms / FIVE boots and
+# proves: (ARM N) the shipped default VAXCLUSTER=0 leaves SCSD self-gated off
+# with no detached process; (ARM P) authoring VAXCLUSTER=2 and rebooting
+# creates a real, persistent SCS_SERVER detached process bound to a real
+# Ethernet NIC (never the lab default "br0"); (ARM R) removing
+# SCS_STARTUP.COM's CONFIG-phase STDRV registration (a SECOND mastered image,
+# /boot/ovmx-distrib-scs-negctl.img) stops SCSD from ever being created even
+# with VAXCLUSTER=2 authored -- the registration, not the daemon's own
+# self-gate, is what actually creates it. See test_scs_autostart.sh's header
+# for the full reasoning, including a grounded, flagged limitation around
+# single-node SHOW CLUSTER membership.
+#
+# Same opt-in/SKIP convention as the other qemu-full-boot gates: real
+# docker + QEMU (KVM-accelerated -- see the test's own header) boot, gated
+# behind OVMX_QEMU_FULL_E2E=1 so it does not run under a bare `ctest`. Three
+# arms / five boots is more than any single-boot gate above, so this gets a
+# longer TIMEOUT.
+add_test(
+    NAME scs_autostart_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_scs_autostart_e2e.sh
+)
+set_tests_properties(scs_autostart_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 1800)

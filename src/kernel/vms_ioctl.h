@@ -167,6 +167,19 @@ struct vms_mode_args {
                                  * either. */
 #define VMS_PRV_V_OPER      18
 #define VMS_PRV_V_NETMBX    20
+#define VMS_PRV_V_PHY_IO    22  /* may do physical I/O (vms-7eb; gates
+                                 * VMS_IOCTL_L2_OPEN). Public $PRVDEF
+                                 * documentation bit position (VSI OpenVMS
+                                 * System Services Reference Manual / Guide to
+                                 * System Security) -- oracle-observed too:
+                                 * docs/oracle/vax73-privileges.md's SHOW
+                                 * PROCESS/PRIVILEGES transcript names PHY_IO
+                                 * "may do physical i/o" at this position.
+                                 * src/libvms/include/prvdef.h already carried
+                                 * PRV$V_PHY_IO=22 from before this item; the
+                                 * _Static_assert in prv_agreement.c is what
+                                 * makes this copy agree with that one, same
+                                 * discipline as PRMMBX/MOUNT above. */
 #define VMS_PRV_V_SYSPRV    28
 #define VMS_PRV_V_BYPASS    29
 #define VMS_PRV_V_GRPPRV    34
@@ -217,6 +230,7 @@ struct vms_mode_args {
 #define VMS_PRV_M_WORLD     (1ULL << VMS_PRV_V_WORLD)
 #define VMS_PRV_M_MOUNT     (1ULL << VMS_PRV_V_MOUNT)
 #define VMS_PRV_M_NETMBX    (1ULL << VMS_PRV_V_NETMBX)
+#define VMS_PRV_M_PHY_IO    (1ULL << VMS_PRV_V_PHY_IO)
 #define VMS_PRV_M_SYSPRV    (1ULL << VMS_PRV_V_SYSPRV)
 #define VMS_PRV_M_GRPPRV    (1ULL << VMS_PRV_V_GRPPRV)
 
@@ -241,6 +255,13 @@ struct vms_mode_args {
  *           i.e. THIS check against proc->cur_privs -- before mount(2)/
  *           umount(2)ing a volume (vms-651). Real kernel-enforced state,
  *           not a userspace getuid() check.
+ *   PHY_IO  vms_ioctl_l2_open (src/kernel-core/vms_l2.c) -- opening a
+ *           kernel-owned raw AF_PACKET/L2 socket for the SCS cluster wire
+ *           (vms-7eb, auth slice of vms-1e4). This IS the real VMS
+ *           physical-I/O privilege, standing in for the Linux CAP_NET_RAW a
+ *           userspace raw socket would otherwise need -- the kernel owns the
+ *           socket, so the gate is the VMS privilege check, not a Linux
+ *           capability.
  * Bits outside this set are STORED and REPORTED (they come from SYSUAF
  * and VMS reports them) but nothing in this tree gates on them. Adding
  * a privilege here without adding the check it names is the defect this
@@ -269,7 +290,7 @@ struct vms_mode_args {
 #define VMS_PRV_M_ENFORCED  (VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | \
                              VMS_PRV_M_SETPRV | VMS_PRV_M_WORLD | \
                              VMS_PRV_M_SYSNAM | VMS_PRV_M_GRPNAM | \
-                             VMS_PRV_M_MOUNT)
+                             VMS_PRV_M_MOUNT  | VMS_PRV_M_PHY_IO)
 
 struct vms_priv_args {
     uint64_t mask;          /* privilege mask to set/clear/check */
@@ -2398,5 +2419,16 @@ _Static_assert(VMS_IOCTL_IMAGE_RUNDOWN == 0xC0085667u,
  * every consumer, kernel and userspace, on either architecture.
  * ================================================================ */
 #include "vms_acp.h"
+
+/* ================================================================
+ * L2 (raw datalink) socket surface (vms-7eb, auth slice of vms-1e4).
+ *
+ * The ioctl structures and request numbers live in vms_l2.h, included here
+ * for the same reason as vms_lnm.h / vms_mbx.h / vms_bg.h / vms_acp.h above:
+ * one frozen definition for every consumer, kernel and userspace, on either
+ * architecture. Gives a NON-ROOT VMS process kernel-owned raw L2 I/O for the
+ * SCS cluster wire (ethertype 0x6007), gated on VMS_PRV_M_PHY_IO below.
+ * ================================================================ */
+#include "vms_l2.h"
 
 #endif /* _VMS_IOCTL_H */

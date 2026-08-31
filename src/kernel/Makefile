@@ -57,12 +57,17 @@ obj-m := vms.o
 # coupled), and vms_bg_pollfd.c (the BGn: readiness poll fd, vms-22a -- pure
 # Linux anon_inode/->poll fd machinery with no NetBSD analogue; the rest of BGn:
 # moved to ../kernel-core/vms_bg.c behind the exec_socket_* seam, vms-9951).
+# vms_l2.c (rd vms-7eb, auth slice of vms-1e4) joins kernel-core alongside
+# vms_bg.c and for the SAME reason stays Linux-only for now (see its own
+# header): a host-socket-coupled per-process handle list not yet ported to
+# the exec_list_*/exec_lock_* seam. It is NOT in the NetBSD kmodule's SRCS.
 vms-y := vms_module.o \
          ../kernel-core/vms_access.o \
          ../kernel-core/vms_ast.o \
          ../kernel-core/vms_bg.o \
          ../kernel-core/vms_devtab.o \
          ../kernel-core/vms_eflag.o \
+         ../kernel-core/vms_l2.o \
          ../kernel-core/vms_lnm.o \
          ../kernel-core/vms_lock.o \
          ../kernel-core/vms_mbx.o \

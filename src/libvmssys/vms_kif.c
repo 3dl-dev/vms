@@ -2773,6 +2773,125 @@ uint32_t vms_kif_bg_getsockopt(uint32_t exec_chan, int level, int optname,
 }
 
 /* ================================================================
+ * L2 (raw datalink) socket surface (vms-7eb, auth slice of vms-1e4)
+ *
+ * Thin marshalling wrappers over the VMS_IOCTL_L2_* driver in vms.ko
+ * (src/kernel-core/vms_l2.c), the exact analogue of the vms_kif_bg_* wrappers
+ * above: bind to /dev/vms (honest SS$_NOSUCHDEV if the executive is absent --
+ * INV-6, never a userspace raw-socket fallback), issue one ioctl, hand back
+ * the driver's own status. There is NO userspace socket here; the AF_PACKET
+ * socket lives in the executive, opened only if the caller holds PHY_IO
+ * (vms_l2.c's auth gate -- a caller without it gets SS$_NOPRIV from OPEN).
+ * ================================================================ */
+
+/*
+ * These four bind-and-check inline at each entry point (kif_bind() then test
+ * vms_dev_fd) rather than through a shared static helper like bg_bind_ok():
+ * a small standalone helper with no product caller of its own is exactly what
+ * the vms_kif caller census (tests/integration/test_kif_caller_census.sh)
+ * exists to catch -- bg_bind_ok/mbx_bind_ok/etc. escape it only because SOME
+ * sibling wrapper in their family already has a product caller, keeping the
+ * whole family (helper included) reachable; this family does not yet. SS$_
+ * NOSUCHDEV when /dev/vms is absent is the honest state for an executive
+ * device whose driver is unreachable (INV-6).
+ */
+
+uint32_t vms_kif_l2_open(const char *ifname, uint16_t ethertype,
+                         uint32_t *out_handle, uint32_t *out_ifindex,
+                         uint8_t hwaddr[6])
+{
+    struct vms_l2_open_args args;
+
+    if (!ifname)
+        return SS$_BADPARAM;
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.ifname, ifname, sizeof(args.ifname) - 1);
+    args.ethertype = ethertype;
+
+    KIF_CALL(VMS_IOCTL_L2_OPEN, &args);
+
+    if (args.status & 1) {
+        if (out_handle)  *out_handle  = args.handle;
+        if (out_ifindex) *out_ifindex = args.ifindex;
+        if (hwaddr)       vms_memcpy(hwaddr, args.hwaddr, sizeof(args.hwaddr));
+    }
+    return args.status;
+}
+
+uint32_t vms_kif_l2_send(uint32_t handle, uint32_t ifindex, uint16_t ethertype,
+                         const uint8_t dst_mac[6], const void *frame, uint32_t len,
+                         uint32_t *actlen)
+{
+    struct vms_l2_send_args args;   /* on-stack, like vms_kif_bg_send's args
+                                      * (VMS_BG_IOCTL_MAXLEN is the same shape) */
+
+    if (!frame || !dst_mac)
+        return SS$_BADPARAM;
+    if (len > VMS_L2_MAXLEN)
+        return SS$_BADPARAM;
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.handle = handle;
+    args.ifindex = ifindex;
+    args.ethertype = ethertype;
+    vms_memcpy(args.dst_mac, dst_mac, sizeof(args.dst_mac));
+    args.len = len;
+    vms_memcpy(args.data, frame, len);
+
+    KIF_CALL(VMS_IOCTL_L2_SEND, &args);
+
+    if ((args.status & 1) && actlen) *actlen = args.len;
+    return args.status;
+}
+
+uint32_t vms_kif_l2_recv(uint32_t handle, uint32_t timeout_ms, void *buf,
+                         uint32_t *actlen)
+{
+    struct vms_l2_recv_args args;   /* on-stack, like vms_kif_bg_recv's args */
+
+    if (!buf)
+        return SS$_BADPARAM;
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.handle = handle;
+    args.timeout_ms = timeout_ms;
+
+    KIF_CALL(VMS_IOCTL_L2_RECV, &args);
+
+    if (args.status & 1) {
+        vms_memcpy(buf, args.data, args.len);
+        if (actlen) *actlen = args.len;
+    }
+    return args.status;
+}
+
+uint32_t vms_kif_l2_close(uint32_t handle)
+{
+    struct vms_l2_close_args args;
+
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.handle = handle;
+
+    KIF_CALL(VMS_IOCTL_L2_CLOSE, &args);
+
+    return args.status;
+}
+
+/* ================================================================
  * Files-11 (ODS-2) ACP -- channel + mount front-end (vms-149, epic vms-208)
  *
  * See vms_kif.h for the residency story and the no-fallback (INV-6) contract.

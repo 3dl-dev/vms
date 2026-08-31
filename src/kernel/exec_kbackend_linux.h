@@ -68,6 +68,9 @@
 /* vms-9951 (host TCP client socket -> BGn:) backing headers. */
 #include <linux/net.h>            /* struct socket, sock_create_kern, kernel_* */
 #include <linux/in.h>             /* struct sockaddr_in, IPPROTO_TCP/IP */
+/* vms-7eb (host AF_PACKET raw datalink socket -> L2) backing headers. */
+#include <linux/if_packet.h>      /* struct sockaddr_ll, AF_PACKET/SOCK_RAW */
+#include <linux/if_ether.h>       /* ETH_ALEN */
 #include <linux/socket.h>         /* AF_INET, SOL_SOCKET, SHUT_RDWR */
 #include <linux/kref.h>           /* kref (the exec_socket_t refcount) */
 #include <net/sock.h>             /* sock_release, sock_setsockopt, sock_flag, sock_error, KERNEL_SOCKPTR */
@@ -799,5 +802,192 @@ static inline int exec_socket_accept(exec_socket_t s, exec_socket_t *out)
  * the raw host socket for ->ops->poll delegation. NOT part of the substrate-
  * neutral seam -- no NetBSD counterpart (NetBSD uses kqueue; see vms-024). */
 static inline struct socket *exec_socket_raw(exec_socket_t s) { return s->sock; }
+
+/* ================================================================
+ * SS13  Host AF_PACKET raw datalink socket (vms-7eb, auth slice of vms-1e4;
+ * BGn:'s sibling one layer down -- the SCS cluster wire, ethertype 0x6007).
+ *
+ * Reuses exec_socket_t / struct exec_socket_holder (SS12 above) unchanged:
+ * same kref discipline, same holder shape. Only the socket DOMAIN differs
+ * (AF_PACKET/SOCK_RAW instead of AF_INET/SOCK_STREAM etc.), so a channel with an L2 socket
+ * and a channel with a TCP/ICMP socket are interchangeable at the seam's type
+ * level -- only the facility that opened it (vms_l2.c vs vms_bg.c) knows
+ * which. A kernel socket bypasses the CAP_NET_RAW check a userspace raw
+ * socket would face, exactly the exec_socket_create_icmp precedent (SS12).
+ * ================================================================ */
+
+/* Open a kernel AF_PACKET/SOCK_RAW socket bound to `ifname`/`ethertype` (host
+ * order; converted to network order here for both the socket's own protocol
+ * and the sockaddr_ll bind -- struct sock's sk_protocol field mirrors AF_PACKET
+ * convention: a raw packet socket dispatches by network-order ethertype).
+ * *out gets a fresh holder (ref count 1, the caller's channel reference);
+ * *out_ifindex gets the resolved interface index (dev_get_by_name), which the
+ * caller needs again for exec_l2_send's destination sockaddr_ll. Returns 0 on
+ * success, a negative errno otherwise (-ENODEV: no such interface). MAY SLEEP
+ * (dev_get_by_name, kernel_bind). */
+static inline int exec_l2_open(const char *ifname, uint16_t ethertype,
+				uint32_t *out_ifindex, exec_socket_t *out)
+{
+	struct exec_socket_holder *h;
+	struct socket *sock;
+	struct net_device *dev;
+	struct sockaddr_ll sll;
+	int rc;
+
+	*out = NULL;
+	rc = sock_create_kern(&init_net, AF_PACKET, SOCK_RAW, htons(ethertype), &sock);
+	if (rc)
+		return rc;
+
+	dev = dev_get_by_name(&init_net, ifname);
+	if (!dev) {
+		sock_release(sock);
+		return -ENODEV;
+	}
+
+	/* vms-7eb: the executive OWNS this datalink, so it brings the interface
+	 * up when SCS opens it -- exactly as PEDRIVER brings up the LAN adapter
+	 * when the cluster starts. Without this, bind() succeeds on an
+	 * administratively-down NIC but the first send fails ENETDOWN. Idempotent
+	 * (a no-op when already up); needs the RTNL lock, as any flag change from
+	 * kernel context does. */
+	if (!(dev->flags & IFF_UP)) {
+		rtnl_lock();
+		rc = dev_change_flags(dev, dev->flags | IFF_UP, NULL);
+		rtnl_unlock();
+		if (rc) {
+			dev_put(dev);
+			sock_release(sock);
+			return rc;
+		}
+	}
+
+	memset(&sll, 0, sizeof(sll));
+	sll.sll_family = AF_PACKET;
+	sll.sll_protocol = htons(ethertype);
+	sll.sll_ifindex = dev->ifindex;
+
+	rc = kernel_bind(sock, (struct sockaddr *)&sll, sizeof(sll));
+	if (rc) {
+		dev_put(dev);
+		sock_release(sock);
+		return rc;
+	}
+
+	h = kmalloc(sizeof(*h), GFP_KERNEL);
+	if (!h) {
+		dev_put(dev);
+		sock_release(sock);
+		return -ENOMEM;
+	}
+	h->sock = sock;
+	kref_init(&h->kref);            /* the caller's channel reference */
+	*out = h;
+	if (out_ifindex)
+		*out_ifindex = (uint32_t)dev->ifindex;
+	dev_put(dev);
+	return 0;
+}
+
+/* Report `ifname`'s hardware (MAC) address. Independent of any open socket --
+ * a plain interface-table lookup, exactly like exec_netdev_primary's classify
+ * step above -- so a caller can re-query it without reopening. 0 (+ *mac) on
+ * success, -ENODEV if no such interface. */
+static inline int exec_l2_hwaddr(const char *ifname, uint8_t mac[6])
+{
+	struct net_device *dev;
+
+	dev = dev_get_by_name(&init_net, ifname);
+	if (!dev)
+		return -ENODEV;
+	memcpy(mac, dev->dev_addr, ETH_ALEN);
+	dev_put(dev);
+	return 0;
+}
+
+/* Send one frame's payload out `s` to `dst_mac` on `ifindex`, tagged with
+ * `ethertype` (host order). Every send names its destination (sendto-style,
+ * via msg_name) -- an L2 socket carries no connect step.
+ *
+ * SOCK_RAW (unlike SOCK_DGRAM) does NOT synthesize a link-layer header from
+ * sll_addr/sll_protocol on send -- the caller's buffer IS the wire frame, so
+ * this function builds the 14-byte Ethernet header (dst_mac, this interface's
+ * OWN hardware address as src, ethertype) itself and sends it as a SEPARATE
+ * leading kvec ahead of the caller's payload -- one kernel_sendmsg call, no
+ * extra copy of the (possibly large) payload. sll_addr/sll_halen/sll_protocol
+ * are still filled (some drivers' xmit path reads them; harmless either way).
+ * Returns the PAYLOAD byte count sent (i.e. `len`'s counterpart, not
+ * including the 14-byte header this function added), or negative on error.
+ * MAY SLEEP (dev_get_by_index). Linux: kernel_sendmsg with a sockaddr_ll
+ * msg_name, the datalink twin of exec_socket_send. */
+static inline long exec_l2_send(exec_socket_t s, int ifindex, uint16_t ethertype,
+				 const uint8_t dst_mac[6], const void *frame, size_t len)
+{
+	struct net_device *dev;
+	struct sockaddr_ll sll;
+	struct msghdr msg;
+	struct kvec vec[2];
+	uint8_t ehdr[ETH_ALEN * 2 + 2];
+	__be16 be_ethertype = htons(ethertype);
+	long n;
+
+	dev = dev_get_by_index(&init_net, ifindex);
+	if (!dev)
+		return -ENODEV;
+	memcpy(ehdr, dst_mac, ETH_ALEN);
+	memcpy(ehdr + ETH_ALEN, dev->dev_addr, ETH_ALEN);
+	memcpy(ehdr + ETH_ALEN * 2, &be_ethertype, sizeof(be_ethertype));
+	dev_put(dev);
+
+	memset(&sll, 0, sizeof(sll));
+	sll.sll_family = AF_PACKET;
+	sll.sll_ifindex = ifindex;
+	sll.sll_halen = ETH_ALEN;
+	sll.sll_protocol = be_ethertype;
+	memcpy(sll.sll_addr, dst_mac, ETH_ALEN);
+
+	memset(&msg, 0, sizeof(msg));
+	msg.msg_name = &sll;
+	msg.msg_namelen = sizeof(sll);
+	vec[0].iov_base = ehdr;
+	vec[0].iov_len = sizeof(ehdr);
+	vec[1].iov_base = (void *)frame;
+	vec[1].iov_len = len;
+	n = kernel_sendmsg(s->sock, &msg, vec, 2, sizeof(ehdr) + len);
+	if (n < 0)
+		return n;
+	return (n <= (long)sizeof(ehdr)) ? 0 : n - (long)sizeof(ehdr);
+}
+
+/* Receive one frame off `s` into `buf` (up to `buf_len`), honoring
+ * `timeout_ms` (0 = block indefinitely). Sets sk_rcvtimeo directly on the raw
+ * socket before the call -- the same field-level socket-state access already
+ * established for the whitelisted getopt reads above (SO_KEEPALIVE/
+ * TCP_NODELAY/...), not a new pattern. Returns 0 (+ *out_len) on success, a
+ * negative errno on error or timeout (-EAGAIN). MAY SLEEP. */
+static inline int exec_l2_recv(exec_socket_t s, void *buf, size_t buf_len,
+				uint32_t timeout_ms, size_t *out_len)
+{
+	struct msghdr msg;
+	struct kvec vec;
+	long n;
+
+	if (s->sock->sk)
+		s->sock->sk->sk_rcvtimeo = timeout_ms
+			? msecs_to_jiffies(timeout_ms) : MAX_SCHEDULE_TIMEOUT;
+
+	memset(&msg, 0, sizeof(msg));
+	vec.iov_base = buf;
+	vec.iov_len = buf_len;
+	n = kernel_recvmsg(s->sock, &msg, &vec, 1, buf_len, 0);
+	if (n < 0)
+		return (int)n;
+	*out_len = (size_t)n;
+	return 0;
+}
+
+/* exec_l2_close is deliberately NOT a distinct primitive: an L2 handle's
+ * socket is released exactly like a TCP/ICMP one -- exec_socket_release
+ * (SS12) drops the reference and, on the last drop, sock_release()s it. */
 
 #endif /* OVMX_EXEC_KBACKEND_LINUX_H */

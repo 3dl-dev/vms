@@ -496,6 +496,50 @@
  *        Linux: kernel_accept into a fresh kref'd holder. NetBSD: soqremque +
  *        soaccept off so_q (contract-only twin; the queue wait is vms-024).
  *
+ * 13. Host AF_PACKET raw datalink socket (vms-7eb, auth slice of vms-1e4;
+ *    called ONLY from src/kernel-core/vms_l2.c -- the executive-resident L2
+ *    facility, BGn:'s sibling one layer down for the SCS cluster wire,
+ *    ethertype 0x6007). Reuses exec_socket_t / the SS12 holder unchanged
+ *    (same kref discipline); only the socket domain differs. A kernel socket
+ *    bypasses the CAP_NET_RAW check a userspace raw socket would face -- the
+ *    same posture exec_socket_create_icmp (SS12) established for raw ICMP.
+ *
+ *   int  exec_l2_open(const char *ifname, uint16_t ethertype,
+ *                     uint32_t *out_ifindex, exec_socket_t *out)
+ *        open an AF_PACKET/SOCK_RAW socket bound to ifname/ethertype (host
+ *        order). *out gets a fresh holder (ref count 1); *out_ifindex gets
+ *        the resolved interface index. 0 / negative errno (-ENODEV: no such
+ *        interface). MAY SLEEP. Linux: sock_create_kern(AF_PACKET,SOCK_RAW,
+ *        htons(ethertype)) + dev_get_by_name + a sockaddr_ll kernel_bind.
+ *        NetBSD: no in-kernel AF_PACKET equivalent (BPF is a different
+ *        design, out of this increment's scope) -- contract-only twin that
+ *        honestly fails (-1), never fabricates a bound socket.
+ *   int  exec_l2_hwaddr(const char *ifname, uint8_t mac[6])
+ *        report ifname's hardware (MAC) address, independent of any open
+ *        socket. 0 (+ *mac) / -ENODEV. Linux: dev_get_by_name + dev->dev_addr.
+ *        NetBSD: contract-only twin (-1).
+ *   long exec_l2_send(exec_socket_t s, int ifindex, uint16_t ethertype,
+ *                     const uint8_t dst_mac[6], const void *frame, size_t len)
+ *        send one frame's payload to dst_mac on ifindex, tagged ethertype
+ *        (host order); every send names its destination (sendto-style) --
+ *        an L2 socket carries no connect step. SOCK_RAW builds no header of
+ *        its own on send, so the backend synthesizes the 14-byte Ethernet
+ *        header (dst_mac / this interface's own hwaddr / ethertype) ahead of
+ *        the caller's payload. Returns the PAYLOAD byte count sent (not
+ *        counting that header), or negative on error. MAY SLEEP. Linux:
+ *        kernel_sendmsg with a leading header kvec + a sockaddr_ll msg_name.
+ *        NetBSD: contract-only twin (-1).
+ *   int  exec_l2_recv(exec_socket_t s, void *buf, size_t buf_len,
+ *                     uint32_t timeout_ms, size_t *out_len)
+ *        receive one frame (up to buf_len), honoring timeout_ms (0 = block
+ *        indefinitely). 0 (+ *out_len) / negative errno (-EAGAIN: timeout).
+ *        MAY SLEEP. Linux: sets sk_rcvtimeo then kernel_recvmsg. NetBSD:
+ *        contract-only twin (-1).
+ *
+ *   There is no exec_l2_close: an L2 handle's socket is released exactly
+ *   like a TCP/ICMP one, through exec_socket_release (SS12) -- the last
+ *   reference drop closes it. No new primitive needed.
+ *
  *   WHERE THE READINESS POLL FD IS **NOT**. VMS_IOCTL_BG_POLLFD hands userspace a
  *   real Linux fd whose .poll delegates to the host socket's ->poll (OpenSSH's
  *   event loop, vms-22a). anon_inode_getfile / fd_install / EPOLL / ->ops->poll

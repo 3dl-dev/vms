@@ -219,3 +219,13 @@ vms_kif_spawn_notify=PROCEDURE
 # to decide whether to launch the next stage. Must be a LIBVMSSYS$SHR universal.
 # APPENDED per the append-only contract -- never shifts an existing index.
 vms_kif_getexit_pid=PROCEDURE
+# vms-7eb (auth slice of vms-1e4): the L2 (raw datalink) socket surface --
+# kernel-owned AF_PACKET I/O for the SCS cluster wire, gated on PHY_IO. Any
+# VMS-native-linked consumer driving raw L2 (the cluster wire's future
+# scsd/vmsscs transport) reaches vms.ko through these WIRED kif wrappers, so
+# they must be LIBVMSSYS$SHR universals. APPENDED per the append-only
+# contract -- never shifts an existing index.
+vms_kif_l2_open=PROCEDURE
+vms_kif_l2_send=PROCEDURE
+vms_kif_l2_recv=PROCEDURE
+vms_kif_l2_close=PROCEDURE

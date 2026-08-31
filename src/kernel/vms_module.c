@@ -664,6 +664,12 @@ struct vms_proc *vms_proc_register(pid_t pid, bool inherit_identity,
      * list on the same chan_lock and next_chan counter (vms_acp.h). */
     INIT_LIST_HEAD(&proc->file_channels);
 
+    /* L2 (raw datalink) socket handles (vms-7eb, auth slice of vms-1e4) -- a
+     * separate list on its OWN dedicated lock, NOT the chan_lock/next_chan
+     * space above (an L2 handle is not a $ASSIGN channel; see vms_l2.h). */
+    INIT_LIST_HEAD(&proc->l2_channels);
+    spin_lock_init(&proc->l2_lock);
+
     /* P0 program region (vms-68f.i): unmapped until VMS_IOCTL_P0_MAP
      * records an extent. kmem_cache_zalloc() above already zeroed
      * p0_base/p0_limit; only the lock needs initializing. */
@@ -808,6 +814,10 @@ void vms_proc_free_claimed(struct vms_proc *proc)
      * substrate-agnostic core must not name -- see vms_bg.c's header.
      */
     vms_bg_release_all(proc);
+
+    /* Give back every L2 handle (and its host socket) too (vms-7eb) -- exactly
+     * as the BG channels above, on its own dedicated lock. */
+    vms_l2_release_all(proc);
 
     /* Give back this process's Files-11 ACP file-class channels too (vms-149),
      * dropping each mounted volume's assigned-channel refcount -- exactly as
@@ -1173,6 +1183,18 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_bg_accept(proc, arg);
     case VMS_IOCTL_BG_MATERIALIZE_FD:
         return vms_ioctl_bg_materialize_fd(proc, arg);
+
+    /* L2 (raw datalink) socket surface (vms-7eb, auth slice of vms-1e4): a
+     * kernel-owned AF_PACKET socket for the SCS cluster wire, gated on the
+     * VMS PHY_IO privilege at OPEN (src/kernel-core/vms_l2.c). */
+    case VMS_IOCTL_L2_OPEN:
+        return vms_ioctl_l2_open(proc, arg);
+    case VMS_IOCTL_L2_SEND:
+        return vms_ioctl_l2_send(proc, arg);
+    case VMS_IOCTL_L2_RECV:
+        return vms_ioctl_l2_recv(proc, arg);
+    case VMS_IOCTL_L2_CLOSE:
+        return vms_ioctl_l2_close(proc, arg);
 
     /* P0 program region (vms-68f.i, in-process image activation foundation) */
     case VMS_IOCTL_P0_MAP:

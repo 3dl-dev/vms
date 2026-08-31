@@ -1927,10 +1927,16 @@ int main(void)
          * for it. The render loop walks bits 0..63 in ascending order
          * (src/vmsdcl/dcl_lexical.c lex_getjpi()), so MOUNT (17) renders
          * immediately after WORLD (16). */
+        /* vms-7eb added PRV$M_PHY_IO (bit 22) to VMS_PRV_M_ENFORCED -- the
+         * executive now really gates opening the L2 SCS datalink on it
+         * (vms_ioctl_l2_open, src/kernel-core/vms_l2.c), exactly as vms-651
+         * did for MOUNT, so it is no longer merely stored and reported; it
+         * belongs in the enforced set F$GETJPI CURPRIV walks. PHY_IO (22)
+         * renders after MOUNT (17) in the ascending bit walk. */
         /* negctl-knockon: bind-client-no-register */
-        CHECK(strstr(outf, "IDENT_CURPRIV = \"CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD,MOUNT\"") != NULL,
+        CHECK(strstr(outf, "IDENT_CURPRIV = \"CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD,MOUNT,PHY_IO\"") != NULL,
               "F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced "
-              "privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD,MOUNT), "
+              "privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD,MOUNT,PHY_IO), "
               "not merely completes without rendering anything");
     }
 

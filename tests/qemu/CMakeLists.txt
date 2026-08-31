@@ -236,6 +236,16 @@ if(TARGET test_syssvc_cluster_member)
         ${CMAKE_SOURCE_DIR}/src/kernel)
 endif()
 
+# test_syssvc_l2_datalink (rd vms-7eb, auth slice of vms-1e4) drives
+# VMS_IOCTL_L2_OPEN/SEND/RECV/CLOSE through the vms_kif client + VMS_PRV_M_PHY_IO
+# (for its $SETPRV negctl), so it needs src/kernel on its include path for
+# vms_ioctl.h -- same footing as test_syssvc_dlm_xnode / test_syssvc_cluster_member
+# above.
+if(TARGET test_syssvc_l2_datalink)
+    target_include_directories(test_syssvc_l2_datalink PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/kernel)
+endif()
+
 # test_syssvc_imgact_acp (vms-3e8e) drives the EXACT freestanding ACP reader
 # IMGACT.EXE runs (src/imgact/imgact_acp.c) against a real /dev/vms: the generic
 # function above already registered the target off the glob, so augment it with

@@ -86,7 +86,8 @@ extract_and_configure() {  # $1 = build dir, $2 = runtime libexecdir, $3 = runti
     # vms-0cd 3c: the sshd auth/session adapter TUs (only linked in the SERVER
     # tree, but copied into both -- harmless in the KEX tree, which does not
     # compile them).
-    cp "$HERE/ovmx/ovmx_sshd_auth.c" "$HERE/ovmx/ovmx_sshd_session.c" "$SRCDIR/ovmx/"
+    cp "$HERE/ovmx/ovmx_sshd_auth.c" "$HERE/ovmx/ovmx_sshd_session.c" \
+       "$HERE/ovmx/ovmx_sshd_exec.c" "$SRCDIR/ovmx/"
     mkdir -p "$_libexec" "$_priv"
     cd "$SRCDIR"
     CC="$CC" CFLAGS="-O2" LDFLAGS="-static" \
@@ -159,6 +160,8 @@ OVMXINC="-I$ROOT/src/vmsssh -I$ROOT/src/libvms/include -I$ROOT/src/vmsprocess/in
     -c "$SRV_SRC/ovmx/ovmx_sshd_auth.c"    -o "$WORK/ov_adapt_auth.o"
 "$CC" $OSSH_CFLAGS $OSSH_CPPFLAGS -I"$SRV_SRC" -I"$ROOT/src/vmsssh" \
     -c "$SRV_SRC/ovmx/ovmx_sshd_session.c" -o "$WORK/ov_adapt_session.o"
+"$CC" $OSSH_CFLAGS $OSSH_CPPFLAGS -I"$SRV_SRC" -I"$ROOT/src/vmsssh" \
+    -c "$SRV_SRC/ovmx/ovmx_sshd_exec.c"    -o "$WORK/ov_adapt_exec.o"
 
 # The OVMX static archives the SYSUAF/RMS/executive stack links from -- built by
 # the earlier build-static (OVMX_STATIC musl) stage this harness's Dockerfile
@@ -185,7 +188,18 @@ while IFS= read -r _f; do
     OVMXLIBS="$OVMXLIBS $WORK/ovmxarch_$_n.a"
 done < "$WORK/ovmx_arch_candidates"
 [ -n "$OVMXLIBS" ] || { echo "FAIL: no OVMX static archives found under $ROOT/build-static (the OVMX_STATIC build-static stage must precede the SSH harness)"; exit 1; }
-OVMX_SSHD_OBJS="$WORK/ov_adapt_auth.o $WORK/ov_adapt_session.o $WORK/ov_sshd_auth.o $WORK/ov_sshd_session.o $WORK/ov_ssh_ident.o"
+# The adapters + helpers go into an ARCHIVE (not force-linked .o's) so each
+# server binary pulls ONLY the members it references: the sshd listener never
+# calls permanently_set_uid (uidswap.o is not in its link), so __wrap_permanently_
+# set_uid -- with its __real_permanently_set_uid reference -- must NOT be dragged
+# into it; an archive leaves it out, while sshd-session (which links uidswap.o)
+# pulls it. (__wrap_execve lives in its own object so pulling it for execve --
+# referenced everywhere -- does not drag the permanently_set_uid wrap along.)
+OVMX_SSHD_AR="$WORK/libovmxsshd.a"
+rm -f "$OVMX_SSHD_AR"
+ar rcs "$OVMX_SSHD_AR" \
+    "$WORK/ov_adapt_auth.o" "$WORK/ov_adapt_session.o" "$WORK/ov_adapt_exec.o" \
+    "$WORK/ov_sshd_auth.o" "$WORK/ov_sshd_session.o" "$WORK/ov_ssh_ident.o"
 # --wrap adds the 3c auth/session interposers on top of the transport wraps.
 OVMX_SSHD_WRAP="-Wl,--wrap=getpwnam -Wl,--wrap=getpwuid -Wl,--wrap=execve -Wl,--wrap=permanently_set_uid"
 
@@ -207,7 +221,10 @@ done
 # (freestanding vms_kif/vms_string) satisfies those symbols first, so the same
 # objects in libvmssys.a are not pulled (no duplicate-symbol clash); the OVMX
 # archives (SYSUAF/RMS/accounting/purdy/...) resolve in a --start-group cycle.
-sed -i "s#^LIBS=#LIBS=$SERVER_WRAP $OVMX_SSHD_WRAP $WORK/ov_wrap_srv.o $OVMX_SSHD_OBJS $VENEER -Wl,--start-group $OVMXLIBS -Wl,--end-group -lm #" Makefile
+# ov_wrap_srv.o stays force-linked (the listener's transport wraps, proven). The
+# adapter archive + veneer + OVMX archives share ONE --start-group so on-demand
+# members and their cross-references (adapter -> sysuaf -> kif) all resolve.
+sed -i "s#^LIBS=#LIBS=$SERVER_WRAP $OVMX_SSHD_WRAP $WORK/ov_wrap_srv.o -Wl,--start-group $OVMX_SSHD_AR $VENEER $OVMXLIBS -Wl,--end-group -lm #" Makefile
 echo "== SERVER: make sshd sshd-session sshd-auth (WRAPPED over BGn:) =="
 make -j"$(nproc 2>/dev/null || echo 2)" sshd sshd-session sshd-auth \
     >"$WORK/srv/make-server.log" 2>&1 || { echo "FAIL: SERVER make"; tail -50 "$WORK/srv/make-server.log"; exit 1; }

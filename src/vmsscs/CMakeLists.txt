@@ -27,6 +27,23 @@ target_include_directories(vmsscs_datalink PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+# vms-7eb piece 2: the booted OVMX runtime routes the raw L2 SCS wire through
+# the EXECUTIVE (/dev/vms VMS_IOCTL_L2_*), so a non-root SCSD needs no
+# CAP_NET_RAW -- the kernel owns the socket. OVMX_SCS_DATALINK_EXECUTIVE=ON
+# compiles ONLY that backend into scs_datalink.c; the direct-AF_PACKET probe
+# code is #ifdef'd out entirely, so a booted SCSD.EXE is PHYSICALLY INCAPABLE of
+# opening a raw socket (the anti-fabrication separation the milestone gate
+# rests on). Default OFF keeps the AF_PACKET PROBE backend -- the clean-room
+# RE/oracle instrument the lab kubectl-exec's -- for dev/test/lab builds. The
+# bootable image (distro/Dockerfile.bootable) sets it ON.
+option(OVMX_SCS_DATALINK_EXECUTIVE
+    "Route SCSD's raw L2 datalink through the executive (/dev/vms) instead of a userspace AF_PACKET socket"
+    OFF)
+if(OVMX_SCS_DATALINK_EXECUTIVE)
+    target_compile_definitions(vmsscs_datalink PRIVATE SCS_DATALINK_VIA_EXECUTIVE)
+    target_include_directories(vmsscs_datalink PRIVATE ${CMAKE_SOURCE_DIR}/src/kernel)
+endif()
+
 # vms-ec7 (MSCP epic Phase A) - THE SCS MESSAGE ENVELOPE, as a layer. One build
 # path, one parse path, one set of offsets, one MTYPE namespace, shared by every
 # SCS message OVMX emits or receives. Pure: no socket, no allocation, no

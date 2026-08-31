@@ -480,6 +480,7 @@ RUN cmake -B build-static \
     -DOVMX_STATIC=ON \
     -DBUILD_TESTS=OFF \
     -DBUILD_TOOLS=ON \
+    -DOVMX_SCS_DATALINK_EXECUTIVE=ON \
     && cmake --build build-static --parallel $(nproc) 2>&1
 
 # -- System tree staging (OS kit + distribution image source) -----------------
@@ -903,6 +904,30 @@ RUN cp -r /system-stage/vms /system-stage-negctl-vms && \
     rm -rf /system-stage-negctl-vms && \
     echo "NEGCTL DISTRIB image: $(ls -lh /boot/ovmx-distrib-negctl.img | awk '{print $5}')"
 
+# -- SCS component-registration negative-control disk (vms-5ad) -----------------
+# A THIRD mastered disk, built from the SAME staged system tree
+# (/system-stage/vms) as ovmx-distrib.img, with exactly one line removed:
+# SYS$STARTUP:VMS$VMS.DAT's CONFIG-phase `SCS_STARTUP.COM` registration.
+# Nothing else differs. Mirrors the JOB_CONTROL negative-control disk just
+# above, applied to the SCS cluster connection manager instead: the negative
+# half of vms-5ad's ground-source proof (tests/qemu/test_scs_autostart.sh) --
+# boot it with VAXCLUSTER authored nonzero (so SCS WOULD start if only the
+# VAXCLUSTER gate mattered) and prove SCSD.EXE is never RUN/DETACHED anyway,
+# because the STDRV registration that creates it is what actually gates
+# creation, not just the VAXCLUSTER self-check inside scsd.c.
+RUN cp -r /system-stage/vms /system-stage-scs-negctl-vms && \
+    grep -v 'SCS_STARTUP\.COM' \
+        "/system-stage/vms/SYS0/SYSCOMMON/SYS\$STARTUP/VMS\$VMS.DAT" \
+        > "/system-stage-scs-negctl-vms/SYS0/SYSCOMMON/SYS\$STARTUP/VMS\$VMS.DAT" && \
+    if grep -q 'SCS_STARTUP\.COM' "/system-stage-scs-negctl-vms/SYS0/SYSCOMMON/SYS\$STARTUP/VMS\$VMS.DAT"; then \
+        echo "FAIL: scs-negctl VMS\$VMS.DAT still names SCS_STARTUP.COM"; exit 1; \
+    fi && \
+    /src/build-static/bin/vmsfs_master --ods2 master \
+        /boot/ovmx-distrib-scs-negctl.img OVMXSYS /system-stage-scs-negctl-vms 128 && \
+    /src/build-static/bin/vmsfs_master --ods2 list /boot/ovmx-distrib-scs-negctl.img && \
+    rm -rf /system-stage-scs-negctl-vms && \
+    echo "SCS NEGCTL DISTRIB image: $(ls -lh /boot/ovmx-distrib-scs-negctl.img | awk '{print $5}')"
+
 # -- Install-media distribution disk (vms-dcf) ----------------------------------
 # A SEPARATE THIRD mastered disk, built from the SAME staged system tree
 # (/system-stage/vms) as ovmx-distrib.img above, with exactly one file
@@ -1088,6 +1113,10 @@ COPY --from=builder /boot/ovmx-distrib.img /boot/ovmx-distrib.img
 # STDRV component registration removed. Consumed only by
 # tests/qemu/test_job_control_negctl.sh -- never booted by anything else.
 COPY --from=builder /boot/ovmx-distrib-negctl.img /boot/ovmx-distrib-negctl.img
+# SCS component-registration negative-control disk (vms-5ad): same tree,
+# SCS_STARTUP.COM's STDRV component registration removed. Consumed only by
+# tests/qemu/test_scs_autostart.sh -- never booted by anything else.
+COPY --from=builder /boot/ovmx-distrib-scs-negctl.img /boot/ovmx-distrib-scs-negctl.img
 # Install-media distribution disk (vms-dcf): same tree as ovmx-distrib.img,
 # SYSTARTUP_VMS.COM swapped for the variant that runs the install menu.
 # Consumed only by tests/qemu/test_install_menu.sh -- ovmx-distrib.img

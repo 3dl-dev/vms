@@ -16,6 +16,27 @@
 ! (with @) when its phase comes up in the driver loop. Lines beginning with
 ! "!" and blank lines are comments/ignored.
 !
+! SCS (vms-5ad, child of vms-110b) is registered at CONFIG, the fourth of
+! the nine phases -- after DEVICES (so the executive's device table has
+! already surfaced ETH0:, the NIC SCSD self-resolves and binds -- see
+! SYS$STARTUP:SCS_STARTUP.COM's own header) and well before the
+! layered-product/site phases (LPBEGIN/LPMAIN/LPBETA). SCS/cluster
+! connection management is core infrastructure, not a layered product or a
+! site choice, so it belongs early -- the same reasoning JOB_CONTROL's
+! header below gives for CONFIG being tried first there. UNLIKE
+! JOB_CONTROL, that early placement is NOT reverted here: JOB_CONTROL had
+! to move to END because its child LOGINOUT session prompts on the shared
+! OPA0: console AND KEEPS the console (an interactive login loop) while
+! STARTUP.COM is still writing to it (see below). SCSD is different: it is a
+! detached daemon that writes only a couple of SCSD-I-* startup lines to
+! OPA0: (cluster state is OPCOM/operator-console traffic on real VMS) and
+! then goes quiet on the wire -- the brief interleave with STARTUP.COM's
+! CONFIG-phase output is the same interleave real VMS cluster startup has,
+! an accepted reality rather than the persistent garble a login loop causes,
+! so CONFIG is safe. (SCSD cannot log to a file instead: a detached
+! process's $CREPRC /OUTPUT is a raw open() that cannot create a file on the
+! ACP-served ODS-2 system disk -- tracked as a vms-7eb follow-up.)
+!
 ! JOB_CONTROL (vms-2a9, docs/design-boot-faithful.md sec3.8/sec4.5) is
 ! OVMX's first real component registration: SYS$STARTUP:JOB_CONTROL_
 ! STARTUP.COM, which RUN/DETACHED's JOB_CONTROL.EXE, the process that owns
@@ -51,4 +72,5 @@
 ! ever being created (tests/qemu/test_job_control_negctl.sh proves exactly
 ! that against a real boot).
 !
+CONFIG SYS$STARTUP:SCS_STARTUP.COM
 END SYS$STARTUP:JOB_CONTROL_STARTUP.COM

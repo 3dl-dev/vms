@@ -10,7 +10,7 @@ summary: >
   VMS ships ~10 event-flag services; OVMX declares 10, all implemented and
   real, backed by vms.ko and cross-process proven. SYS$DCLEF (declare/create
   a common event-flag cluster) is absent.
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-31
 items:
   - {id: sys$setef, kind: routine, status: implemented, authenticity: real, vms: "Set an event flag", evidence: src/libvms/syssvc/sys_event.c, notes: "cross-process proven via vms.ko"}
   - {id: sys$clref, kind: routine, status: implemented, authenticity: real, vms: "Clear an event flag", evidence: src/libvms/syssvc/sys_event.c}

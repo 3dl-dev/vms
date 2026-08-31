@@ -9,7 +9,7 @@ plan_ref: vms-801
 summary: >
   VMS ships ~2 mailbox-creation services; OVMX implements both, real,
   vms.ko-resident. Replaced an earlier AF_UNIX facade.
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-31
 items:
   - {id: sys$crembx, kind: routine, status: implemented, authenticity: real, vms: "Create a mailbox device", evidence: src/libvms/syssvc/sys_mailbox.c, notes: "vms.ko-resident; replaced an earlier AF_UNIX facade"}
   - {id: sys$delmbx, kind: routine, status: implemented, authenticity: real, vms: "Delete a mailbox device", evidence: src/libvms/syssvc/sys_mailbox.c}

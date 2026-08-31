@@ -8,11 +8,15 @@ tier: 1
 plan_ref: vms-801
 summary: >
   GETJPI/GETJPIW/GETSYI/GETSYIW are all implemented and real for most
-  JPI$_/SYI$_ item codes.
-last_reviewed: 2026-08-13
+  JPI$_/SYI$_ item codes. GETJPI resolves its target through the executive
+  (vms_kif_getjpi_prcnam by name within the caller's UIC group, or
+  vms_kif_getjpi_pid by VMS PID, or self) — cross-process, not a per-process
+  fake. GETSYI cluster items (SCSNODE/SCSSYSTEMID/CLUSTER_MEMBER) read the
+  executive membership block.
+last_reviewed: 2026-08-31
 items:
-  - {id: sys$getjpi, kind: routine, status: implemented, authenticity: real, vms: "Get job/process information (single item)", evidence: src/libvms/syssvc/sys_misc.c}
-  - {id: sys$getjpiw, kind: routine, status: implemented, authenticity: real, vms: "Get job/process information (waits for completion)", evidence: src/libvms/syssvc/sys_misc.c}
+  - {id: sys$getjpi, kind: routine, status: implemented, authenticity: real, vms: "Get job/process information (single item)", evidence: src/libvms/syssvc/sys_process.c, notes: "target resolved through the executive by prcnam (caller's UIC group), VMS PID, or self"}
+  - {id: sys$getjpiw, kind: routine, status: implemented, authenticity: real, vms: "Get job/process information (waits for completion)", evidence: src/libvms/syssvc/sys_process.c}
   - {id: sys$getsyi, kind: routine, status: implemented, authenticity: real, vms: "Get system information (single item)", evidence: src/libvms/syssvc/sys_misc.c}
   - {id: sys$getsyiw, kind: routine, status: implemented, authenticity: real, vms: "Get system information (waits for completion)", evidence: src/libvms/syssvc/sys_misc.c}
-  - {id: jpi_syi_item_codes, kind: struct, status: partial, authenticity: real, vms: "JPI$_*/SYI$_* item-code coverage consumed by GETJPI(W)/GETSYI(W)", evidence: src/libvms/syssvc/sys_misc.c, notes: "most common item codes implemented; not exhaustive vs VMS's full set"}
+  - {id: jpi_syi_item_codes, kind: struct, status: partial, authenticity: real, vms: "JPI$_*/SYI$_* item-code coverage consumed by GETJPI(W)/GETSYI(W)", evidence: src/libvms/syssvc/sys_process.c, notes: "most common item codes implemented; not exhaustive vs VMS's full set (JPI in sys_process.c, SYI in sys_misc.c)"}

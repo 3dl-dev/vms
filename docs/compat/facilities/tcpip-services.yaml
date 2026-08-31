@@ -1,25 +1,34 @@
 # Source of truth for the TCP/IP Services row of the Compatibility Surface Register.
 facility: tcpip-services
-name: "TCP/IP Services (UCX QIO + Sockets + EWA0:/BGn:)"
+name: "TCP/IP Services (UCX QIO + Sockets + BGn:/ETH0:)"
 domain: networking
 vms_ref: "OpenVMS TCP/IP Services for OpenVMS (UCX) manuals"
 scope_1_0: in
 plan_ref: vms-67f
 summary: >
-  Data half built (BGn: sockets veneer + QIO path + client tools, vms-843/
-  vms-22a/vms-dbb) and now the CONFIG/MANAGEMENT half (vms-67f): OVMX IP can
-  be configured the VMS way — TCPIP$CONFIG core-environment procedure +
-  `TCPIP SET INTERFACE`/`SHOW CONFIGURATION` record the local host name,
-  domain and interface address in the VMS-faithful TCPIP$INET_HOST/DOMAIN/
-  HOSTADDR SYSTEM logicals (executive-resident LNM$SYSTEM, shared cross-process
-  over /dev/vms) and apply the address to the interface over the substrate
-  stack. INV-6 honest: with no executive the config fails SS$_NOSUCHDEV, never
-  a per-process fake. Deferred rungs (honestly): DHCP, multiple interfaces /
-  TCPIP$INET_HOSTADDRn, the persistent service/proxy databases, a NIC as a
-  VMS device (EWA0:). 1.0 blocker (vms-67f).
-last_reviewed: 2026-08-28
+  Both halves are now substantially real. DATA PLANE: a VMS program reaches
+  TCP the ordinary VMS way — $ASSIGN TCPIP$DEVICE: then $QIO on the
+  executive-resident INET pseudo-device BGn: (src/kernel/vms_bg*, socket lives
+  in vms.ko over the host in-kernel socket API, no userspace stack), proven
+  end-to-end against a real /dev/vms and guarded by a negctl defect gate. A
+  BSD-sockets RTL veneer (DECC$SOCKET-equivalent) rides that path, and the
+  client TOOLS (DCL TELNET/FTP + PING), the TCPIP$INETD auxiliary server and a
+  DAYTIME service are real. The NIC now surfaces as the VMS device ETH0: and
+  QEMU provides a virtio-net-pci device (default user-mode NAT). CONFIG PLANE
+  (vms-67f): host name/domain/address land in the executive-resident
+  TCPIP$INET_HOST/DOMAIN/HOSTADDR SYSTEM logicals. INV-6 honest throughout:
+  no /dev/vms => SS$_NOSUCHDEV, never a per-process fake. Deferred honestly:
+  DHCP, multiple interfaces / TCPIP$INET_HOSTADDRn, persistent service/proxy
+  databases, a raw NIC-as-VMS-device data path (EWA0:).
+last_reviewed: 2026-08-31
 items:
-  - {id: tcpip-services$ucx-qio-socket-api, kind: feature, status: absent, authenticity: n/a, vms: "UCX QIO-based / C-socket network API for VMS programs", evidence: "docs/design-tcpip-services-ovmx.md", scope_1_0: in, notes: "No src/vmstcpip/. No BG: device, no QIO network path, no usable socket API."}
-  - {id: tcpip-services$nic-device, kind: feature, status: absent, authenticity: n/a, vms: "NIC exposed as VMS device EWA0:/BGn:", evidence: "distro/boot/run-qemu.sh:70", scope_1_0: in, notes: "QEMU boots with -nic none (also distro/Dockerfile.bootable:773); no network device path into the VM at all."}
-  - {id: tcpip-services$dcl-tcpip-verb, kind: command, status: implemented, authenticity: real, vms: "DCL TCPIP verb (show interface/route/host/version/configuration, set host/interface/route/name_service)", evidence: "src/vmsdcl/dcl_cmd_misc.c", scope_1_0: in, notes: "SHOW INTERFACE/ROUTE is Linux-substrate introspection (SIOCGIF*/proc). SET INTERFACE now applies the address to the interface AND records TCPIP$INET_HOSTADDR in the executive-resident LNM$SYSTEM table; SHOW CONFIGURATION reads the TCPIP$ SYSTEM logicals back (honest %TCPIP-W-NOEXEC with no executive). The durable config path is authentic (vms-67f); the introspection commands remain substrate-sourced."}
-  - {id: tcpip-services$config-plane, kind: feature, status: implemented, authenticity: real, vms: "TCPIP$CONFIG core config + TCPIP$INET_HOST/DOMAIN/HOSTADDR SYSTEM logicals", evidence: "src/vmstcpip/mgmt/tcpip_config.h", scope_1_0: in, notes: "Config/management half of vms-67f. Host name/domain/address configured the VMS way land in the executive-resident LNM$SYSTEM table (shared cross-process over /dev/vms), read back through the independent sys$trnlnm, and the address is applied to the interface over the substrate stack. INV-6: SS$_NOSUCHDEV with no executive, never a per-process fake. Proven against a real /dev/vms (test_syssvc_tcpip_config) + a host honest-degradation DCL test."}
+  - {id: tcpip-services$bg-inet-device, kind: feature, status: verified, authenticity: real, vms: "INET pseudo-device BGn: — $ASSIGN TCPIP$DEVICE: + $QIO (IO$_SETMODE/IO$_ACCESS/IO$_READVBLK/IO$_WRITEVBLK/IO$_DEACCESS) TCP socket path, executive-resident", evidence: "src/kernel/vms_bg_datafd.c", verified_against: "tests/qemu/test_syssvc_bg_echo.c — a VMS program TCP round-trips a loopback echo via the public system services against a REAL /dev/vms (honest SS$_NOSUCHDEV/EXIT_SKIP with no executive); + the facility_defects negctl gate 'bg-recv-length-zeroed' (vms-527)", notes: "The socket is executive-resident (vms.ko), the analogue of the executive mailbox; no userspace socket, exactly as VMS BGn: is a driver not a library."}
+  - {id: tcpip-services$sockets-veneer, kind: feature, status: implemented, authenticity: real, vms: "BSD-sockets RTL veneer (DECC$SOCKET) — socket/connect/send/recv translated to $QIO on BGn:", evidence: "src/vmstcpip/sockets/vms_bgsock.c", notes: "707-line veneer; app speaks only BSD sockets, never BGn:/$QIO. Exercised by the qemu harness (tests/qemu/CMakeLists.txt) alongside the BGn: driver; used by the wrapped OpenSSH clients/daemon."}
+  - {id: tcpip-services$client-tools, kind: utility, status: implemented, authenticity: real, vms: "TCP/IP client TOOLS — DCL TELNET + FTP over BGn:", evidence: "src/vmstcpip/services/tcpip_client.h", notes: "TELNET/FTP protocol engines driving BGn: the ordinary $ASSIGN/$QIO way; header-only static-inline so the test exercises the real product logic. Guarded by the negctl gate 'tcpip-ftp-get-length-dropped' (vms-dbb). Honest SS$_NOSUCHDEV with no executive."}
+  - {id: tcpip-services$ping, kind: utility, status: implemented, authenticity: real, vms: "PING (ICMP echo) over BGn: raw socket", evidence: "src/vmstcpip/services/tcpip_ping.h", notes: "IO$_SETMODE P2=IO$K_SOCK_ICMP mints a raw AF_INET/SOCK_RAW/IPPROTO_ICMP executive socket; same public services as the TCP tools (vms-80b). Was the one tool tcpip_client.h honestly deferred as a NOOP."}
+  - {id: tcpip-services$inetd, kind: subsystem, status: implemented, authenticity: real, vms: "TCPIP$INETD auxiliary server — bind/listen each enabled service's port and hand the connection to its service image", evidence: "src/vmstcpip/services/tcpip_inetd.h", notes: "Proven against a real /dev/vms by tests/qemu/test_syssvc_tcpip_inetd.c (vms-cdb9). The precondition that unblocks the OpenSSH sshd ladder (vms-9ef)."}
+  - {id: tcpip-services$daytime-service, kind: feature, status: implemented, authenticity: real, vms: "DAYTIME service (RFC 867) launched by the auxiliary server", evidence: "src/vmstcpip/services/tcpip_daytime.h", notes: "First genuine standalone service image INETD launches end to end; proven by tests/qemu/test_syssvc_tcpip_daytime.c against a real /dev/vms (vms-477)."}
+  - {id: tcpip-services$nic-device, kind: feature, status: implemented, authenticity: real, vms: "NIC exposed as a VMS device (ETH0:, DVI$_DEVCLASS = DC$_SCOM)", evidence: "src/kernel-core/vms_devtab.c", notes: "The Linux net device roots at 'eth' so the native-rooted VMS name is ETH0: (device-native naming, vms-9d2). QEMU now provides ONE virtio-net-pci device; OVMX_NET_MODE defaults to user-mode NAT (SLIRP), with tap/bridge/none options (vms-7bd). A raw NIC-as-VMS-device I/O path (EWA0:) is still deferred; the TCP data path rides BGn:."}
+  - {id: tcpip-services$config-plane, kind: feature, status: implemented, authenticity: real, vms: "TCPIP$CONFIG core config + TCPIP$INET_HOST/DOMAIN/HOSTADDR SYSTEM logicals + TCPIP SET INTERFACE/SHOW CONFIGURATION", evidence: "src/vmstcpip/mgmt/tcpip_config.h", notes: "Host name/domain/address configured the VMS way land in the executive-resident LNM$SYSTEM table (shared cross-process over /dev/vms), read back through the independent sys$trnlnm, and the address is applied to the interface over the substrate stack. Proven against a real /dev/vms (tests/qemu/test_syssvc_tcpip_config) + a host honest-degradation DCL test; SS$_NOSUCHDEV with no executive (vms-67f)."}
+  - {id: tcpip-services$dcl-tcpip-verb, kind: command, status: implemented, authenticity: real, vms: "DCL TCPIP verb (show interface/route/host/version/configuration, set host/interface/route/name_service)", evidence: "src/vmsdcl/dcl_cmd_misc.c", notes: "SHOW INTERFACE/ROUTE is Linux-substrate introspection (SIOCGIF*/proc). SET INTERFACE applies the address AND records TCPIP$INET_HOSTADDR in the executive; SHOW CONFIGURATION reads the TCPIP$ SYSTEM logicals back (honest %TCPIP-W-NOEXEC with no executive)."}
+  - {id: tcpip-services$deferred-rungs, kind: feature, status: absent, authenticity: n/a, vms: "DHCP client, multiple interfaces / TCPIP$INET_HOSTADDRn, persistent service/proxy databases", evidence: "docs/design-tcpip-services-ovmx.md", scope_1_0: stretch, notes: "Honestly deferred; single static interface + in-memory service enablement today."}

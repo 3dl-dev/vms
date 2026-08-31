@@ -7,13 +7,14 @@ scope_1_0: in
 plan_ref: vms-8ad
 summary: >
   All 39 VMS privilege bits are defined. Mode-transition and SETPRV
-  enforcement in the kernel executive are real — including a bit-position
-  bug (SETPRV mismapped to DETACH) caught and fixed against lab-VAX SDA.
-  File-access privilege overrides (SYSPRV/BYPASS/READALL/GRPPRV) are never
-  consulted by the filesystem permission hook — a distinct, unfixed gap.
-last_reviewed: 2026-08-13
+  enforcement in the kernel executive are real and verified — including a
+  bit-position bug (SETPRV mismapped to DETACH) caught and fixed against
+  lab-VAX SDA. File-access privilege overrides are now PARTLY real: the
+  Files-11 ACP honors BYPASS, READALL, and SYSPRV in its access check
+  (vms-165); GRPPRV is the one override still not consulted.
+last_reviewed: 2026-08-31
 items:
   - {id: prvdef$bits,          kind: struct,   status: implemented, authenticity: n/a,         vms: "39 VMS privilege bit definitions", evidence: src/libvms/include/prvdef.h}
-  - {id: sys$mode_transition,  kind: feature,  status: verified,    authenticity: real,         vms: "Privilege-checked mode escalation gate", evidence: "src/kernel-core/vms_access.c:108-130", verified_against: "lab-VAX SDA (docs/oracle/vax73-privileges.md §2) — caught SETPRV mismapped to DETACH bit, fixed"}
-  - {id: sys$setprv,           kind: routine,  status: verified,    authenticity: real,         vms: "$SETPRV — enable/disable process privileges within the authorized mask", evidence: "src/kernel-core/vms_access.c:290", verified_against: "lab-VAX SDA READ SYS$SYSTEM:SYSDEF.STB (docs/oracle/vax73-privileges.md §2)", notes: "SETPRV can only narrow within the authorized mask, never exceed it."}
-  - {id: privs$file_access_override, kind: feature, status: absent, authenticity: facade-risk, vms: "SYSPRV/BYPASS/READALL/GRPPRV override normal file protection checks", evidence: "src/kernel-core/vmsfs_acp.c", scope_1_0: in, notes: "vms-165 retired the vmsfs_blkdev_permission() enforcement this entry described (uid==0/gid only, zero SYSPRV refs); the Files-11 ACP's acp_check_access now gates file access and DOES reference SYSPRV (ACP_PRV_M_SYSPRV). STATUS/AUTHENTICITY NEEDS A COMPAT-REFRESH RE-CENSUS against origin/main — the override may now be partly implemented. Tracked vms-f15/vms-36d. Cross-listed to protection-acl."}
+  - {id: sys$mode_transition,  kind: feature,  status: verified,    authenticity: real,         vms: "Privilege-checked access-mode escalation gate ($SETMODE)", evidence: "src/kernel-core/vms_access.c:93", verified_against: "lab-VAX SDA (docs/oracle/vax73-privileges.md §2) — caught SETPRV mismapped to DETACH bit, fixed", notes: "vms_ioctl_setmode; re-census 2026-08-31 refreshed the line ref (was :108-130)."}
+  - {id: sys$setprv,           kind: routine,  status: verified,    authenticity: real,         vms: "$SETPRV — enable/disable process privileges within the authorized mask", evidence: "src/kernel-core/vms_access.c:320", verified_against: "lab-VAX SDA READ SYS$SYSTEM:SYSDEF.STB (docs/oracle/vax73-privileges.md §2)", notes: "vms_ioctl_setprv; SETPRV can only narrow within the authorized mask, never exceed it. Re-census 2026-08-31 refreshed the line ref (was :290)."}
+  - {id: privs$file_access_override, kind: feature, status: partial, authenticity: real, vms: "SYSPRV/BYPASS/READALL/GRPPRV override normal file protection checks", evidence: "src/kernel-core/vmsfs_acp.c:861", scope_1_0: in, notes: "RE-CENSUS 2026-08-31: was absent/facade-risk. vms-165 retired the old vmsfs_blkdev_permission() (uid==0/gid only) and the Files-11 ACP's acp_check_access (vmsfs_acp.c:861) now applies privilege overrides: BYPASS (bit 29) lifts all access control, READALL (bit 35) grants read, SYSPRV (bit 28) confers the SYSTEM protection category. GRPPRV is NOT handled — hence partial, not implemented. Real (does the real thing for the three it honors), so no longer facade-risk. Tracked vms-f15/vms-36d. Cross-listed to protection-acl."}

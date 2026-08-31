@@ -2,17 +2,23 @@
 facility: object-format
 name: "Object File Format"
 domain: toolchain
-vms_ref: "VSI OpenVMS Linker Utility Manual (object module format)"
+vms_ref: "VSI OpenVMS Linker Utility Manual (object module format); binutils include/vms (public GPL) EVAX record layouts"
 scope_1_0: in
 plan_ref: vms-ade
 summary: >
-  LINK.EXE ingests standard ELF relocatable objects and `ar` whole-archive
-  containers, not VAX/Alpha OBJ$ record-based object modules. Symbol
-  resolution and relocation semantics are real; the on-disk object container
-  is OVMX's own (ELF) where VMS's OBJ$ record format is not published at
-  byte level (Rule 8) — not presented as VMS-authentic.
-last_reviewed: 2026-08-13
+  LINK.EXE ingests two object inputs. (1) Standard ELF relocatable objects
+  and `ar` whole-archive containers — the OVMX self-host path; the container
+  is OVMX's own (ELF) where VMS's OBJ$ record format is not published at byte
+  level (Rule 8). (2) NEW: native Alpha/VMS "EVAX" object modules produced by
+  the `alpha-dec-vms` GCC/binutils port — the linker reads that intrinsic VMS
+  object format UNCHANGED (records, EGSD psects+symbols, ETIR reloc
+  stack-machine, materialized psect content), so the port keeps its VMS
+  identity rather than being forced to emit ELF. EVAX layouts are clean-room
+  from the public binutils include/vms headers and verified byte-exact against
+  fixtures the reference `alpha-dec-vms-as` emits. VAX OBJ$ records remain out.
+last_reviewed: 2026-08-31
 items:
-  - {id: object-format$elf-object-ingest, kind: feature, status: implemented, authenticity: advisory, vms: "LINK.EXE ingestion of relocatable object modules for linking", evidence: "src/vmslink/link.c", notes: "Consumes ELF .o objects, not VMS OBJ$ records; relocation/symbol-resolution semantics real, container format is OVMX-original (Rule 8), not VMS-authentic byte layout."}
-  - {id: object-format$ar-whole-archive, kind: feature, status: implemented, authenticity: real, vms: "Whole-archive object-library consumption", evidence: "src/vmslink/link.c:2112", notes: "Standard `ar` archive; consumption logic real. Precursor for LIBRARIAN .OLB support (see librarian facility) — LINK.EXE already ingests ar, so .OLB consumption needs no new LINK.EXE code."}
-  - {id: object-format$vms-obj-records, kind: struct, status: absent, authenticity: n/a, vms: "VAX/Alpha OBJ$ record-based object format (module header, GSD, TIR, EPM records)", scope_1_0: out, notes: "Not pursued — OVMX's self-host toolchain uses ELF internally; true VMS object-interchange byte format is out of scope."}
+  - {id: object-format$elf-object-ingest, kind: feature, status: implemented, authenticity: advisory, vms: "LINK.EXE ingestion of relocatable object modules for linking", evidence: "src/vmslink/link.c", notes: "Consumes ELF .o objects (OVMX self-host path); relocation/symbol-resolution semantics real, container format is OVMX-original (Rule 8), not VMS-authentic byte layout."}
+  - {id: object-format$ar-whole-archive, kind: feature, status: implemented, authenticity: real, vms: "Whole-archive object-library consumption", evidence: "src/vmslink/link.c", notes: "Standard `ar` archive (load_archive/load_archive_selective); consumption logic real. .OLB (see librarian facility) is an ar container — LINK.EXE already ingests it with no format bridge."}
+  - {id: object-format$evax-object-ingest, kind: feature, status: verified, authenticity: real, vms: "LINK.EXE reads native Alpha/VMS (EVAX) object modules from the alpha-dec-vms GCC/binutils port — records, EGSD psects/symbols, ETIR relocations, materialized content", evidence: "src/vmslink/evax_read.c", verified_against: "binutils-2.43 alpha-dec-vms-as EVAX fixtures round-tripped byte-exact and checked vs alpha-dec-vms-objdump — src/vmslink/test/run_evax_read.sh, run_evax_link.sh, run_evax_shareable.sh, run_evax_vmsrel.sh, run_evax_ximport.sh, run_evax_gvalfold.sh, run_muldef_evax.sh (rd vms-cbe/vms-e06)", notes: "The native VMS object format (not ELF) — read unchanged so the Alpha GCC port keeps its VMS identity. Field layouts clean-room from public binutils include/vms (Rule 8). Reader front end (evax_read.c) + reloc application/format dispatch in link.c."}
+  - {id: object-format$vms-obj-records, kind: struct, status: absent, authenticity: n/a, vms: "VAX-era OBJ$ record-based object format (module header, GSD, TIR, EPM records)", scope_1_0: out, notes: "VAX OBJ$ interchange byte format not pursued. (The Alpha native VMS object format IS now read — see object-format$evax-object-ingest.)"}

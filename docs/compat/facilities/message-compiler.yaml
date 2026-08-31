@@ -7,8 +7,10 @@ scope_1_0: in
 plan_ref: vms-801
 summary: >
   The MESSAGE compiler (.MSG source -> generated facility status-code
-  header) is entirely absent — no implementation found anywhere on
-  origin/main.
-last_reviewed: 2026-08-13
+  header/object) is entirely absent — no implementation anywhere on
+  origin/main. (dcl_messages.c is the DCL SET MESSAGE / message-display path,
+  not a .MSG compiler.) Corpus that ships .MSG sources (e.g. tier4-mx) has no
+  native compiler to build them.
+last_reviewed: 2026-08-31
 items:
-  - {id: message-compiler$msg-utility, kind: utility, status: absent, authenticity: n/a, vms: "MESSAGE utility — compiles .MSG source into facility status-code definitions", scope_1_0: in, notes: "No implementation anywhere on origin/main."}
+  - {id: message-compiler$msg-utility, kind: utility, status: absent, authenticity: n/a, vms: "MESSAGE utility — compiles .MSG source into facility status-code definitions", scope_1_0: in, notes: "No implementation anywhere on origin/main; .MSG corpus sources present but unbuildable natively."}

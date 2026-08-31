@@ -7,7 +7,7 @@ scope_1_0: out
 summary: >
   Absent. docs/compatibility-contract.md lists host-based (DSSA) volume
   shadowing as permanently out of scope.
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-31
 items:
   - id: shadowing$host-based-shadowing
     kind: feature

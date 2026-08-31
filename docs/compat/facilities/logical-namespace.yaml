@@ -11,7 +11,7 @@ summary: >
   search-list logicals. System/Group/Job are executive-resident (vms.ko, no host
   fallback per INV-6) and QEMU-verified cross-process; Process is correctly local
   (VMS scopes it per-process too). $CRELNT is not yet declared.
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-31
 items:
   - {id: lnm$table_system,  kind: feature, status: verified, authenticity: real, vms: "SYSTEM logical-name table", evidence: src/vmslnm/lnm_table.c, verified_against: "tests/qemu/test_syssvc_lnm_crossproc.c, tests/qemu/test_syssvc_lnm_system.c", notes: "reaches vms.ko; no host fallback (INV-6)"}
   - {id: lnm$table_group,   kind: feature, status: verified, authenticity: real, vms: "GROUP logical-name table", evidence: src/vmslnm/lnm_table.c, verified_against: "tests/qemu/test_syssvc_lnm_groupjob.c", notes: "reaches vms.ko; no host fallback (INV-6)"}

@@ -8,19 +8,19 @@ tier: 1
 plan_ref: vms-8ad
 summary: >
   The queue manager itself is real (binary QMAN$MASTER.DAT, flock-serialized,
-  VMS binary time), and SUBMIT/PRINT can enqueue real entries — but nothing
-  ever dequeues and runs a batch job. Queue-management verb syntax deviates
-  from VMS (SET QUEUE/START etc rather than START/QUEUE).
-last_reviewed: 2026-08-13
+  VMS binary time), and SUBMIT/PRINT enqueue real entries — but nothing ever
+  dequeues and runs a batch job, so this facility is partial and no item is
+  verified. Queue-management verb syntax deviates from VMS (SET QUEUE/START
+  etc. rather than START/QUEUE).
+last_reviewed: 2026-08-31
 items:
   - id: queues$manager
     kind: subsystem
-    status: verified
+    status: implemented
     authenticity: real
     vms: "Queue manager — create/delete/submit/hold/release/status queue entries"
     evidence: src/vmsqueue/vmsqueue.c
-    verified_against: tests/vmsqueue/test_vmsqueue.c
-    notes: "Real QMAN$MASTER.DAT binary file, flock-serialized, VMS binary time — not an in-memory placeholder."
+    notes: "Real QMAN$MASTER.DAT binary file, flock-serialized, VMS binary time — not an in-memory placeholder; persistence across close/reopen exercised by tests/vmsqueue/test_vmsqueue.c. Implemented (not verified): plain local self-test, and the facility is partial (no batch engine)."
 
   - id: queues$submit
     kind: command
@@ -28,9 +28,7 @@ items:
     authenticity: real
     vms: "SUBMIT — queue a command procedure as a batch job"
     evidence: src/vmsdcl/dcl_builtin.c
-    verified_against: tests/dcl/test_print_submit_coverage.sh
-    status: verified
-    notes: "Submit-only; see queues$batch-engine — nothing ever runs the submitted job."
+    notes: "Submit-only; see queues$batch-engine — nothing ever runs the submitted job. Exercised by tests/dcl/test_print_submit_coverage.sh (a plain self-test)."
 
   - id: queues$print
     kind: command
@@ -38,33 +36,31 @@ items:
     authenticity: real
     vms: "PRINT — queue a file to a print queue"
     evidence: src/vmsdcl/dcl_builtin.c
-    verified_against: tests/dcl/test_print_submit_coverage.sh
-    status: verified
-    notes: "Submit-only, same as SUBMIT."
+    notes: "Submit-only, same as SUBMIT. Exercised by tests/dcl/test_print_submit_coverage.sh."
 
   - id: queues$batch-engine
     kind: feature
     status: absent
-    authenticity: real
+    authenticity: n/a
     vms: "Batch execution engine — dequeues and runs submitted batch jobs"
     evidence: src/vmsqueue/vmsqueue.c
-    notes: "Honestly documented absence, not a facade: jobs queue but are never dequeued/run. Any software or SYSTARTUP procedure that submits a batch job and waits on it hangs forever."
+    notes: "Honestly documented absence: jobs queue but are never dequeued/run (no dequeue-and-execute path in vmsqueue or ovmx_job_control, which is boot plumbing). Any software or SYSTARTUP procedure that submits a batch job and waits on it hangs forever. The 1.0 gap for this facility."
 
   - id: queues$queue-verb-syntax
     kind: command
     status: partial
-    authenticity: facade-risk
+    authenticity: advisory
     vms: "START/QUEUE, STOP/QUEUE, INITIALIZE/QUEUE — real VMS queue-management verb syntax"
     evidence: src/vmsdcl/dcl_cmd_set.c
-    notes: "Reshaped as SET QUEUE/START, /STOP, /PAUSE. The underlying function is real; the surface syntax deviates from authentic VMS verbs."
+    notes: "Reshaped as SET QUEUE/START,/STOP,/PAUSE (cmd_set_queue). The underlying function is real; typing the VMS spelling START/QUEUE fails honestly with %DCL-W-IVVERB (no silent fake), so this is a documented syntax deviation — advisory, not facade-risk."
 
   - id: queues$show-queue-entry
     kind: command
-    status: verified
+    status: implemented
     authenticity: real
     vms: "SHOW QUEUE / SHOW QUEUE/ENTRY — display queue and entry status"
     evidence: src/vmsdcl/dcl_cmd_show.c
-    verified_against: tests/dcl/test_show_queue_entry.sh
+    notes: "Reads real queue/entry state. Exercised by tests/dcl/test_show_queue_entry.sh (plain self-test), so implemented not verified."
 
   - id: queues$job-control
     kind: subsystem

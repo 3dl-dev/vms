@@ -7,15 +7,20 @@ scope_1_0: in
 tier: 1
 plan_ref: vms-801
 summary: >
-  SYS$SETPRV is implemented but advisory: privileges are tracked in the PCB
-  with no privileged-mode transition unless already privileged. SYS$CHKPRO
-  is implemented with correct SOGW protection-check logic but advisory
-  because zero OVMX callers currently invoke it. SYS$CHECK_ACCESS (a legacy
-  second-opinion access check) was deliberately removed by design (vms-2b8)
-  as a good anti-facade precedent, not a gap to fill. Rights-database and
-  auditing services belong to other facilities (system-management domain).
-last_reviewed: 2026-08-13
+  SYS$SETPRV is now executive-authoritative (vms-pv1): the mask change routes
+  through /dev/vms (vms_kif_setprv), which authorizes the request against this
+  process's permanent/authorized mask — a caller reaching outside it gets the
+  authorized subset with SS$_NOTALLPRIV and cannot widen the authorized mask
+  (SS$_NOPRIV) — and owns the resulting state; if /dev/vms is unreachable it
+  fails honestly (no per-process fake grant, INV-6). The PCB is now a cache of
+  executive-owned state, not the authority. SYS$CHKPRO is implemented with
+  correct SOGW protection-check logic but advisory because zero OVMX callers
+  currently invoke it. SYS$CHECK_ACCESS (a legacy second-opinion access check)
+  was deliberately removed by design (vms-2b8) as a good anti-facade precedent,
+  not a gap to fill. Rights-database and auditing services belong to other
+  facilities (system-management domain).
+last_reviewed: 2026-08-31
 items:
-  - {id: sys$setprv, kind: routine, status: implemented, authenticity: advisory, vms: "Enable/disable process privileges", evidence: src/libvms/syssvc/sys_security.c, notes: "privileges tracked in the PCB; no privileged-mode transition unless already privileged"}
+  - {id: sys$setprv, kind: routine, status: implemented, authenticity: real, vms: "Enable/disable process privileges", evidence: src/libvms/syssvc/sys_misc.c, notes: "executive-authoritative via vms_kif_setprv: authorizes against the permanent/authorized mask (SS$_NOTALLPRIV / SS$_NOPRIV), owns the state, fails honestly if /dev/vms unreachable (INV-6); PCB is a cache, not the authority"}
   - {id: sys$chkpro, kind: routine, status: implemented, authenticity: advisory, vms: "Check protection (system/owner/group/world) against an access mask", evidence: "src/libvms/syssvc/sys_security.c:151", notes: "correct SOGW compute logic; zero OVMX callers currently invoke it"}
   - {id: sys$check_access, kind: routine, status: absent, authenticity: n/a, vms: "Secondary/legacy access-check opinion", scope_1_0: out, plan_ref: vms-2b8, notes: "deliberately removed by design (vms-2b8) — anti-facade precedent, not a gap to fill"}

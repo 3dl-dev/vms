@@ -10,11 +10,11 @@ summary: >
   FAO (SYS$FAO/SYS$FAOL + LIB$ wrapper forms): 3/3 implemented, real. Message
   services: 2/4 partial. SYS$PUTMSG silently discards its facnam argument
   (facade-risk). SYS$SNDJBC is absent.
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-31
 items:
   - {id: sys$fao, kind: routine, status: implemented, authenticity: real, vms: "Formatted ASCII output (buffer form)", evidence: src/libvms/syssvc/sys_fao.c}
   - {id: sys$faol, kind: routine, status: implemented, authenticity: real, vms: "Formatted ASCII output (arg-list form)", evidence: src/libvms/syssvc/sys_fao.c}
   - {id: lib$_fao_forms, kind: routine, status: implemented, authenticity: real, vms: "LIB$ wrapper forms of FAO (LIB$FAO, LIB$FAOL)", evidence: src/libvms/syssvc/sys_fao.c}
-  - {id: sys$getmsg, kind: routine, status: implemented, authenticity: real, vms: "Get formatted message text for a condition code", evidence: src/libvms/syssvc/sys_msg.c}
+  - {id: sys$getmsg, kind: routine, status: implemented, authenticity: real, vms: "Get formatted message text for a condition code", evidence: src/libvms/syssvc/sys_msg.c, notes: "reads the compiled-in known_codes[] table in status.c (51 codes); a code absent decodes honestly to 'unknown status code'"}
   - {id: sys$putmsg, kind: routine, status: partial, authenticity: facade-risk, vms: "Output a formatted message via the condition-handling mechanism", evidence: src/libvms/syssvc/sys_msg.c, notes: "facnam argument silently discarded, (void)facnam"}
   - {id: sys$sndjbc, kind: routine, status: absent, authenticity: n/a, vms: "Send a message to the job controller"}

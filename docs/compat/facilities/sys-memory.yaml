@@ -14,7 +14,7 @@ summary: >
   out of scope for 1.0. SYS$ADJSTK and SYS$UPDSEC are absent. SYS$LCKPAG
   (lock pages in physical memory) is absent and permanently out of scope
   (kernel-mode/PFN).
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-31
 items:
   - {id: sys$cretva, kind: routine, status: implemented, authenticity: real, vms: "Create a virtual address region", evidence: src/libvms/syssvc/sys_memory.c}
   - {id: sys$deltva, kind: routine, status: implemented, authenticity: real, vms: "Delete a virtual address region", evidence: src/libvms/syssvc/sys_memory.c}

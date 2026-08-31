@@ -10,8 +10,10 @@ summary: >
   Standalone utility images invoked as DCL verbs. Most core system-management
   utilities are real; the record/data utilities (SORT, BACKUP, CONVERT) are
   honestly partial or facade-risk on their advanced qualifiers rather than
-  full VMS-parity implementations.
-last_reviewed: 2026-08-13
+  full VMS-parity implementations. Re-censused 2026-08-31: SYSGEN and EDIT
+  downgraded verified->implemented (their tests are plain functional
+  self-tests, not oracles); CONVERT/FDL note refreshed.
+last_reviewed: 2026-08-31
 items:
   - id: utilities$authorize
     kind: utility
@@ -22,11 +24,11 @@ items:
 
   - id: utilities$sysgen
     kind: utility
-    status: verified
+    status: implemented
     authenticity: real
     vms: "SYSGEN — system parameter/generation utility"
     evidence: tools/vms_sysgen.c
-    verified_against: tests/dcl/test_sysgen.sh
+    notes: "SET/SHOW round-trips a real parameter and enforces its range (tests/dcl/test_sysgen.sh). Downgraded verified->implemented 2026-08-31: that test is a plain local self-test, not an oracle/negctl gate."
 
   - id: utilities$sysman
     kind: utility
@@ -111,8 +113,8 @@ items:
     status: partial
     authenticity: facade-risk
     vms: "CONVERT — file/record-format conversion utility"
-    evidence: src/vmsdcl/dcl_cmd_misc.c
-    notes: "/FDL accepted but ignored; body is a line-by-line copy, not a real record-format conversion."
+    evidence: src/vmsdcl/dcl_cmd_misc.c:2604
+    notes: "/FDL now emits an honest %CONVERT-I-FDL 'accepted but ignored' informational, but the body is still a line-by-line fgets/fputs copy that then prints '%CONVERT-S-CONVERTED, N records converted' — reporting a record-format conversion it did not perform. Still facade-risk."
 
   - id: utilities$analyze-disk-structure
     kind: utility
@@ -167,12 +169,11 @@ items:
 
   - id: utilities$edit
     kind: utility
-    status: verified
+    status: implemented
     authenticity: real
     vms: "EDIT/EDT — line-mode text editor"
     evidence: src/vmsdcl/dcl_editor.c
-    verified_against: tests/dcl/test_edit_command.sh
-    notes: "Minimal line-mode EDT; no screen mode."
+    notes: "Minimal line-mode EDT; no screen mode. Exercised by tests/dcl/test_edit_command.sh. Downgraded verified->implemented 2026-08-31: plain local self-test, not an oracle/negctl gate."
 
   - id: utilities$edit-tpu
     kind: utility

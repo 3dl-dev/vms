@@ -9,11 +9,13 @@ tier: 1
 plan_ref: vms-801
 summary: >
   Record Management Services entry points, FAB/RAB/NAM/XAB control blocks, and the
-  three file organizations. Sequential and Relative are real end to end. Indexed is
-  single-key only. Cross-process record/file locking is the one gap that shadows the
-  whole facility: sys$get/put/update/delete/find dispatch for real but nothing serializes
-  two processes touching the same file.
-last_reviewed: 2026-08-13
+  three file organizations. Sequential and Relative are real end to end. Cross-process
+  locking, formerly the facility-wide gap (vms-407), is now real on the ACP path:
+  file-level share arbitration (vms-50e) and per-record locking (vms-0dd) both run
+  through the executive DLM ($ENQ/$DEQ, RMS$_RLK on conflict). The remaining material
+  gap is Indexed, which is single-key only — a multi-key ISAM program silently sees the
+  primary key alone. (Non-ACP/POSIX-defer handles hold no lock, honestly documented.)
+last_reviewed: 2026-08-31
 items:
   # --- Entry points: open/create/erase ---
   - {id: sys$open,       kind: routine, status: implemented, authenticity: real, vms: "Open an existing file", evidence: src/vmsrms/rms_core.c, notes: "local open() on caller fd; filespec resolves via executive LNM$SYSTEM (vms-96e2)"}
@@ -26,17 +28,19 @@ items:
   - {id: sys$rewind,     kind: routine, status: implemented, authenticity: real, vms: "Rewind to start of file", evidence: src/vmsrms/rms_core.c}
   - {id: sys$flush,      kind: routine, status: implemented, authenticity: real, vms: "Flush buffers to disk", evidence: src/vmsrms/rms_core.c}
   - {id: sys$display,    kind: routine, status: implemented, authenticity: real, vms: "Report FAB/RAB/XAB fields to caller", evidence: src/vmsrms/rms_core.c, notes: "walks XABKEY/XABDAT/XABPRO only — see rms$xab_silent_unsupported"}
-  # --- Entry points: record I/O (facade-risk: no cross-process serialization) ---
-  - {id: sys$get,        kind: routine, status: implemented, authenticity: facade-risk, vms: "Read next/keyed record", evidence: src/vmsrms/rms_record.c, notes: "dispatch is real; two processes reading/writing the same file are not serialized (vms-407)"}
-  - {id: sys$put,        kind: routine, status: implemented, authenticity: facade-risk, vms: "Write a new record", evidence: src/vmsrms/rms_record.c, notes: "same locking gap as sys$get (vms-407)"}
-  - {id: sys$update,     kind: routine, status: implemented, authenticity: facade-risk, vms: "Rewrite current record", evidence: src/vmsrms/rms_record.c, notes: "same locking gap as sys$get (vms-407)"}
-  - {id: sys$delete,     kind: routine, status: implemented, authenticity: facade-risk, vms: "Delete current record", evidence: src/vmsrms/rms_record.c, notes: "same locking gap as sys$get (vms-407)"}
-  - {id: sys$find,       kind: routine, status: implemented, authenticity: facade-risk, vms: "Locate a record without transferring data", evidence: src/vmsrms/rms_record.c, notes: "same locking gap as sys$get (vms-407)"}
+  - {id: sys$extend,     kind: routine, status: partial, authenticity: real, vms: "Extend a file's allocation (fab$l_alq blocks)", evidence: src/vmsrms/rms_core.c, notes: "vms-bc7: exec IO$_MODIFY allocates fab$l_alq more blocks (BITMAP.SYS + FH2 retrieval-pointer append) without moving EOF; caller-FAB validation is local"}
+  # --- Entry points: record I/O (record locking now real via the DLM on the ACP path) ---
+  - {id: sys$get,        kind: routine, status: implemented, authenticity: real, vms: "Read next/keyed record", evidence: src/vmsrms/rms_record.c, notes: "reads the record's VBNs through the ACP window; a default $GET takes a real per-record $ENQ (EX, child of the FAB file-access lock) — RMS$_RLK on a live conflict; RAB$M_NLK/RAB$M_RLK read modifiers honored (vms-0dd)"}
+  - {id: sys$put,        kind: routine, status: implemented, authenticity: real, vms: "Write a new record", evidence: src/vmsrms/rms_record.c, notes: "writes the record's VBNs through the ACP window; holds no persistent record lock, matching VMS $PUT (vms-0dd)"}
+  - {id: sys$update,     kind: routine, status: implemented, authenticity: real, vms: "Rewrite current record", evidence: src/vmsrms/rms_record.c, notes: "gated on the stream holding its record lock (rms_reclock_require_held); serialized by the DLM (vms-0dd)"}
+  - {id: sys$delete,     kind: routine, status: implemented, authenticity: real, vms: "Delete current record", evidence: src/vmsrms/rms_record.c, notes: "gated on the held record lock like sys$update (vms-0dd)"}
+  - {id: sys$find,       kind: routine, status: implemented, authenticity: real, vms: "Locate a record without transferring data", evidence: src/vmsrms/rms_record.c, notes: "same record-lock seam as sys$get (vms-0dd)"}
   # --- Entry points: parse/search ---
-  - {id: sys$parse,      kind: routine, status: partial, authenticity: real, vms: "Parse a filespec against defaults", evidence: src/vmsrms/rms_parse.c, notes: "concealed/rooted device attrs reach the executive (vms-d8e); no executive device/volume DB behind it"}
-  - {id: sys$search,     kind: routine, status: implemented, authenticity: real, vms: "Wildcard directory search", evidence: src/vmsrms/rms_search.c, notes: "readdir+fnmatch, private per-process snapshot"}
-  # --- Named gap: cross-process locking (root cause of the get/put/update/delete/find facade-risk tag) ---
-  - {id: rms$record_locking, kind: feature, status: absent, authenticity: facade-risk, vms: "Cross-process record/file locking and share-access arbitration (FAB share flags)", evidence: src/vmsrms/rms_core.c, notes: "two processes opening/reading/writing the same file are not serialized by anything RMS does (vms-407)"}
+  - {id: sys$parse,      kind: routine, status: partial, authenticity: real, vms: "Parse a filespec against defaults", evidence: src/vmsrms/rms_parse.c, notes: "device-field logical names resolve iteratively through the executive LNM$FILE_DEV incl. concealed/rooted attrs (vms-d8e, vms-240); remaining gap is an executive device/volume DB (vms-dv1)"}
+  - {id: sys$search,     kind: routine, status: implemented, authenticity: real, vms: "Wildcard directory search", evidence: src/vmsrms/rms_search.c, notes: "ACP $SEARCH; distinguishes RMS$_DNF (no such dir) from RMS$_NMF (no match)"}
+  # --- Cross-process locking (was the facility-wide gap; now real on the ACP path) ---
+  - {id: rms$file_share_locking, kind: feature, status: implemented, authenticity: real, vms: "File-level share/access arbitration (FAB fac/shr flags)", evidence: src/vmsrms/rms_core.c, notes: "vms-50e: sys$open/create map fab$b_fac/fab$b_shr to a DLM lock mode (NL/CR/CW/PR/PW/EX) $ENQ'd on the file's FID with NOQUEUE; RMS$_FLK on a real conflict, $DEQ'd at sys$close"}
+  - {id: rms$record_locking, kind: feature, status: implemented, authenticity: real, vms: "Cross-process record locking (RAB rop modifiers)", evidence: src/vmsrms/rms_record.c, notes: "vms-0dd: per-record $ENQ, a child of the FAB file-access lock, arbitrated by the executive DLM; the one honest degradation is the non-ACP/POSIX-defer handle (access_lkid==0), which holds nothing and passes status through"}
   # --- Control blocks ---
   - {id: fab,     kind: struct, status: implemented, authenticity: real, vms: "File Access Block", evidence: src/vmsrms/include/rms/fab.h, notes: "all 3 orgs SEQ/REL/IDX, all 7 record formats UDF/FIX/VAR/VFC/STM/STMLF/STMCR"}
   - {id: rab,     kind: struct, status: implemented, authenticity: real, vms: "Record Access Block", evidence: src/vmsrms/include/rms/rab.h, notes: "RAB$M_FDL bit defined but no FDL behind it"}
@@ -50,6 +54,6 @@ items:
   - {id: rms$xab_silent_unsupported, kind: feature, status: implemented, authenticity: facade-risk, vms: "sys$display/connect silently skip unrecognized XABs instead of erroring", evidence: src/vmsrms/rms_core.c, notes: "a program requesting XAB$C_FHC/XAB$C_ALL gets silence, not an error"}
   # --- File organizations ---
   - {id: rms$org_sequential, kind: feature, status: implemented, authenticity: real, vms: "Sequential file organization", evidence: src/vmsrms/rms_seq.c, notes: "all 7 record formats incl. VFC control area, VAR word-alignment"}
-  - {id: rms$org_relative,   kind: feature, status: implemented, authenticity: real, vms: "Relative file organization", evidence: src/vmsrms/rms_rel.c, notes: "status-byte cells; no locking (see rms$record_locking)"}
+  - {id: rms$org_relative,   kind: feature, status: implemented, authenticity: real, vms: "Relative file organization", evidence: src/vmsrms/rms_rel.c, notes: "status-byte cells; record locking now via the DLM (see rms$record_locking)"}
   - {id: rms$org_indexed,    kind: feature, status: partial, authenticity: facade-risk, vms: "Indexed (ISAM) file organization", evidence: src/vmsrms/rms_idx.c, notes: "primary key only per rms_idx.c's own header comment"}
   - {id: rms$isam_alternate_key, kind: feature, status: absent, authenticity: facade-risk, vms: "ISAM alternate-key access (RAB$B_REF)", evidence: src/vmsrms/rms_idx.c, notes: "entirely unimplemented (zero hits) — a multi-key ISAM program silently only ever sees the primary key, breaking common COBOL/DIBOL business-app patterns"}

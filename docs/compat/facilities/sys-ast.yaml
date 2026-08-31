@@ -9,7 +9,7 @@ plan_ref: vms-801
 summary: >
   VMS ships ~4 AST-related services; OVMX declares 2, both implemented and
   real, kernel-queued via vms.ko.
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-31
 items:
   - {id: sys$dclast, kind: routine, status: implemented, authenticity: real, vms: "Declare an AST for the calling process", evidence: src/libvms/syssvc/sys_ast.c, notes: "kernel-queued via vms.ko"}
   - {id: sys$setast, kind: routine, status: implemented, authenticity: real, vms: "Enable/disable AST delivery", evidence: src/libvms/syssvc/sys_ast.c}

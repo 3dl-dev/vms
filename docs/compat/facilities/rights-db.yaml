@@ -6,10 +6,12 @@ vms_ref: "OpenVMS Guide to System Security ch. 4 (Identifiers)"
 scope_1_0: in
 plan_ref: vms-8ad
 summary: >
-  RIGHTSLIST.DAT identifiers are read and resolved for real. Object ACEs
-  (the rights-DB-adjacent half of access control) are not built — see
-  protection-acl for the fuller ACL gap; this file covers identifiers only.
-last_reviewed: 2026-08-13
+  RIGHTSLIST.DAT identifiers are read and resolved for real, and the real
+  record is read back through the executive/ACP under the QEMU harness
+  (test_syssvc_rightslist). Object ACEs (the rights-DB-adjacent half of access
+  control) are not built — see protection-acl for the fuller ACL gap; this file
+  covers identifiers only.
+last_reviewed: 2026-08-31
 items:
-  - {id: rightslist$identifiers, kind: feature, status: implemented, authenticity: real, vms: "RIGHTSLIST.DAT identifier storage + resolution (vms-2f8)", evidence: src/libvms/rtl/rightslist.c}
+  - {id: rightslist$identifiers, kind: feature, status: implemented, authenticity: real, vms: "RIGHTSLIST.DAT identifier storage + resolution (vms-2f8)", evidence: src/libvms/rtl/rightslist.c, notes: "RE-CENSUS 2026-08-31: unchanged. The world-readable RIGHTSLIST.DAT is read back through the ACP over a real /dev/vms (tests/qemu/test_syssvc_rightslist.c, vms-5f0); F$IDENTIFIER traverses the concealed-rooted path to it."}
   - {id: rightslist$aces,        kind: feature, status: absent,      authenticity: n/a,   vms: "Object ACEs (identifier-based access control entries)", evidence: src/libvms/include/acldef.h, scope_1_0: stretch, notes: "acldef.h constants only; no ACL/ACE machinery built. Full ACL gap tracked under protection-acl."}

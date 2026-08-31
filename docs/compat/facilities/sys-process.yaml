@@ -7,23 +7,31 @@ scope_1_0: in
 tier: 1
 plan_ref: vms-801
 summary: >
-  VMS ships ~25 process-control services; OVMX declares 14. CREPRC/DELPRC/
-  HIBER/EXIT are real. WAKE/SUSPND/RESUME/SETPRI/FORCEX all silently discard
-  their prcnam argument and act on the calling Linux PID only (facade-risk).
+  VMS ships ~25 process-control services; OVMX declares 14 (all in sys_process.c
+  now — the routines moved out of sys_misc.c). CREPRC/DELPRC/HIBER/EXIT are real
+  and executive-backed: $CREPRC genuinely fork()+execve()s and registers the
+  child in the executive process table with inherited identity, handing back the
+  executive-assigned VMS PID; $DELPRC resolves its target through the executive
+  (by prcnam within the caller's UIC group, or by VMS PID) before terminating.
+  WAKE routes through the executive (vms_kif_wake) by PID or self. FORCEX/SUSPND/
+  RESUME deliver a signal to the pidadr or, with none, the caller; all four of
+  these discard prcnam — a caller targeting by NAME alone silently acts on the
+  caller (advisory, documented). SETPRI discards BOTH pidadr and prcnam and
+  always changes the CALLER's priority while returning success (facade-risk).
   SYS$CANCEL is a literal no-op returning SS$_NORMAL (facade-risk). SYS$SETPRN
   and SYS$PROCESS_SCAN are absent.
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-31
 items:
-  - {id: sys$creprc, kind: routine, status: implemented, authenticity: real, vms: "Create a process", evidence: src/libvms/syssvc/sys_process.c}
-  - {id: sys$delprc, kind: routine, status: implemented, authenticity: real, vms: "Delete a process", evidence: src/libvms/syssvc/sys_process.c}
+  - {id: sys$creprc, kind: routine, status: implemented, authenticity: real, vms: "Create a process", evidence: src/libvms/syssvc/sys_process.c, notes: "fork()+execve() + executive PCB registration; inherits identity; returns the executive-assigned VMS PID in pidadr"}
+  - {id: sys$delprc, kind: routine, status: implemented, authenticity: real, vms: "Delete a process", evidence: src/libvms/syssvc/sys_process.c, notes: "target resolved through the executive by prcnam (caller's UIC group) or VMS PID; executive SS$_NONEXPR, never a raw kill on a Linux pid"}
   - {id: sys$hiber, kind: routine, status: implemented, authenticity: real, vms: "Hibernate the calling process", evidence: src/libvms/syssvc/sys_process.c}
-  - {id: sys$exit, kind: routine, status: implemented, authenticity: real, vms: "Exit the calling process/image", evidence: src/libvms/syssvc/sys_process.c}
-  - {id: sys$wake, kind: routine, status: implemented, authenticity: facade-risk, vms: "Wake a hibernating/suspended process, by process name or ID", evidence: src/libvms/syssvc/sys_misc.c, notes: "prcnam argument silently discarded; acts on the calling Linux PID only"}
-  - {id: sys$suspnd, kind: routine, status: implemented, authenticity: facade-risk, vms: "Suspend a process", evidence: src/libvms/syssvc/sys_misc.c, notes: "prcnam argument silently discarded; acts on the calling Linux PID only"}
-  - {id: sys$resume, kind: routine, status: implemented, authenticity: facade-risk, vms: "Resume a suspended process", evidence: src/libvms/syssvc/sys_misc.c, notes: "prcnam argument silently discarded; acts on the calling Linux PID only"}
-  - {id: sys$setpri, kind: routine, status: implemented, authenticity: facade-risk, vms: "Set process scheduling priority", evidence: src/libvms/syssvc/sys_misc.c, notes: "prcnam argument silently discarded; acts on the calling Linux PID only"}
-  - {id: sys$forcex, kind: routine, status: implemented, authenticity: facade-risk, vms: "Force a process to exit", evidence: src/libvms/syssvc/sys_misc.c, notes: "prcnam argument silently discarded; acts on the calling Linux PID only"}
+  - {id: sys$exit, kind: routine, status: implemented, authenticity: real, vms: "Exit the calling process/image", evidence: src/libvms/syssvc/sys_process.c, notes: "runs sys$dclexh exit handlers LIFO"}
+  - {id: sys$wake, kind: routine, status: implemented, authenticity: advisory, vms: "Wake a hibernating/suspended process, by process name or ID", evidence: src/libvms/syssvc/sys_process.c, notes: "routes through the executive (vms_kif_wake) by pidadr or self; prcnam-by-name is not resolved (documented gap)"}
+  - {id: sys$suspnd, kind: routine, status: implemented, authenticity: advisory, vms: "Suspend a process", evidence: src/libvms/syssvc/sys_process.c, notes: "kill(SIGSTOP) on pidadr, or the caller when none; prcnam-only targeting silently acts on the caller (documented gap)"}
+  - {id: sys$resume, kind: routine, status: implemented, authenticity: advisory, vms: "Resume a suspended process", evidence: src/libvms/syssvc/sys_process.c, notes: "kill(SIGCONT) on pidadr, or the caller when none; prcnam-only targeting silently acts on the caller (documented gap)"}
+  - {id: sys$forcex, kind: routine, status: implemented, authenticity: advisory, vms: "Force a process to exit", evidence: src/libvms/syssvc/sys_process.c, notes: "kill(SIGUSR1) on pidadr, or sys$exit on the caller when none; prcnam-only targeting silently acts on the caller (documented gap)"}
+  - {id: sys$setpri, kind: routine, status: implemented, authenticity: facade-risk, vms: "Set process scheduling priority", evidence: src/libvms/syssvc/sys_process.c, notes: "discards BOTH pidadr and prcnam; always sets the CALLER's priority (getpriority/setpriority on self) yet returns success for any target"}
   - {id: sys$cancel, kind: routine, status: stub, authenticity: facade-risk, vms: "Cancel all I/O on all channels of the calling process", evidence: src/libvms/syssvc/sys_process.c, notes: "literal no-op, returns SS$_NORMAL unconditionally"}
-  - {id: sys$setprn, kind: routine, status: absent, authenticity: n/a, vms: "Set the calling process's name"}
+  - {id: sys$setprn, kind: routine, status: absent, authenticity: n/a, vms: "Set the calling process's name", notes: "no $SETPRN service; only an internal vms_kif_setprn used by $CREPRC to stamp the child name"}
   - {id: sys$process_scan, kind: routine, status: absent, authenticity: n/a, vms: "Scan for processes matching selection criteria"}
   - {id: sys$_other, kind: routine, status: absent, authenticity: n/a, vms: "Remaining SYS$ process-control services beyond the routines named above (VMS ships ~25 total)"}

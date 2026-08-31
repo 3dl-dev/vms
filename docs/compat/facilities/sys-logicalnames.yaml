@@ -18,7 +18,7 @@ summary: >
   process-private in a local logical_table[] array; JOB/GROUP executive
   residency (making them visible across the processes of a job/group, as on
   real VMS) is the deferred half of vms-d37.
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-31
 items:
   - {id: sys$crelnm, kind: routine, status: partial, authenticity: real, vms: "Create or supersede a logical name in a table", evidence: src/libvms/syssvc/sys_logical.c, notes: "LNM$SYSTEM is executive-resident via /dev/vms; LNM$PROCESS/JOB/GROUP remain process-private (JOB/GROUP executive residency deferred)"}
   - {id: sys$dellnm, kind: routine, status: partial, authenticity: real, vms: "Delete a logical name from a table", evidence: src/libvms/syssvc/sys_logical.c, notes: "same LNM$SYSTEM-executive / PROCESS-JOB-GROUP-local split as sys$crelnm"}

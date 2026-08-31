@@ -9,8 +9,9 @@ plan_ref: vms-8ad
 summary: >
   41 of VMS's ~43 F$ lexical functions are present and real. Only
   F$FID_TO_NAME is absent. The unknown-lexical error path returns an
-  authentic %DCL-W-IVFNAM, oracle-grounded.
-last_reviewed: 2026-08-13
+  authentic %DCL-W-IVFNAM, oracle-grounded. Re-censused 2026-08-31: the 41
+  registered F$ functions and the single F$FID_TO_NAME gap are unchanged.
+last_reviewed: 2026-08-31
 items:
   - id: lexicals$breadth
     kind: feature

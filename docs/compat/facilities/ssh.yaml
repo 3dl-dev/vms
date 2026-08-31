@@ -1,7 +1,6 @@
 # Source of truth for the SSH row of the Compatibility Surface Register.
-# SSH is a VSI OpenVMS surface (OpenSSH shipped as part of TCP/IP Services). It is
-# wholly downstream of TCP/IP Services — there is no stack, so there is no SSH.
-# sshd comes along when TCP/IP Services lands; init-wiring is not a surface.
+# SSH is a VSI OpenVMS surface (OpenSSH shipped as part of TCP/IP Services),
+# downstream of TCP/IP Services. It rides the executive BGn: socket path.
 facility: ssh
 name: "SSH remote login"
 domain: networking
@@ -9,22 +8,19 @@ vms_ref: "VSI OpenVMS TCP/IP Services — SSH server (OpenSSH port)"
 scope_1_0: in
 plan_ref: vms-67f
 summary: >
-  SSH login to an authenticated interactive (DCL) session, as VSI OpenVMS
-  provides through TCP/IP Services. Absent because OVMX has no TCP/IP stack yet;
-  it is entirely gated on the networking lane and arrives with it.
-last_reviewed: 2026-08-13
+  Now reachable and proven end-to-end (was fully blocked/absent at the last
+  census). VMSSSHD.EXE is built and installed to SYS$SYSTEM; a wrapped OpenSSH
+  sshd binds and accepts inbound connections over the executive BGn: socket
+  path, and a STOCK ssh client connects, completes the SSH-2 handshake +
+  pubkey auth, and runs a remote command whose output returns byte-exact —
+  against a real /dev/vms. The session drops credentials to the authenticated
+  SYSUAF UIC (OpenSSH permanently_set_uid seam; SYSUAF lookup + ident/terminal
+  mapping all unit-tested). Remaining gap (honest): the SSH service is still
+  commented out in TCPIP$SERVICE.DAT, so a shipped bootable does not yet
+  auto-launch VMSSSHD.EXE via the auxiliary server (vms-9ef).
+last_reviewed: 2026-08-31
 items:
-  - id: ssh$remote-login
-    kind: feature
-    status: absent
-    authenticity: real
-    scope_1_0: in
-    vms: "SSH in and get an authenticated interactive DCL/LOGINOUT session"
-    evidence: docs/design-tcpip-services-ovmx.md
-    notes: >
-      No TCP/IP stack, no NIC → SSH does not function. Blocked entirely on TCP/IP
-      Services (tcpip-services, vms-67f); sshd comes along when the stack lands.
-      Not faked — it simply is not reachable. (Implementation aside for whoever
-      lands it: vmsshd code exists but currently runs the session euid=0 with no
-      credential drop to the user's UIC — that must be fixed then, the way console
-      LOGINOUT already drops identity via vms_kif_setident.)
+  - {id: ssh$remote-login, kind: feature, status: implemented, authenticity: real, vms: "SSH in and get an authenticated interactive DCL/LOGINOUT session", evidence: "src/vmsssh/sshd_session.c", notes: "Wrapped OpenSSH sshd runs a full authenticated session over BGn:, proven end-to-end by tests/qemu/test_syssvc_ssh_server.c (stock client, remote command byte-exact) + test_syssvc_ssh_kex.c, against a real /dev/vms (honest Rule-9 skip with no executive; rd vms-0cd). Not yet verified-status: the SSH service is disabled in TCPIP$SERVICE.DAT so the shipped bootable does not auto-launch it (vms-9ef)."}
+  - {id: ssh$server-daemon, kind: utility, status: implemented, authenticity: real, vms: "VMSSSHD.EXE — the OVMX SSH server image", evidence: "src/vmsssh/vmssshd.c", notes: "Built + installed to SYS$SYSTEM (src/vmsssh/CMakeLists.txt); wraps unmodified OpenSSH behind the BGn: sockets veneer."}
+  - {id: ssh$cred-drop, kind: feature, status: implemented, authenticity: real, vms: "SSH session credential drop to the authenticated SYSUAF UIC", evidence: "src/vmsssh/cred_drop.c", notes: "Ordered, permanent, fail-closed drop (setgroups/setgid/setuid) exercised as the real product logic by tests/vmsssh/test_cred_drop.c; the wrapped-sshd path uses OpenSSH's own permanently_set_uid from the SYSUAF UIC (sshd_auth.c). Fixes the earlier euid=0 no-drop gap (vms-49e)."}
+  - {id: ssh$identity-terminal-map, kind: feature, status: implemented, authenticity: real, vms: "SYSUAF authentication + VMS identity / terminal mapping for the session", evidence: "src/vmsssh/sshd_auth.c", notes: "sshd_auth.c (SYSUAF lookup -> struct passwd), ssh_ident.c (vms_kif_setident), term_map.c — each unit-tested (tests/vmsssh/test_sshd_auth.c, test_ssh_ident.c, test_term_mapping.c)."}

@@ -7,11 +7,14 @@ scope_1_0: in
 plan_ref: vms-6b8
 summary: >
   The kernel-mediated substrate SYS$ system services are built on: event flags,
-  lock manager, ASTs, mailboxes, and access modes are real and kernel-resident
-  behind /dev/vms (vms_kif). Process control (PCB) is partial with a facade-risk
-  gap on cross-process privilege visibility; scheduling is honestly stubbed —
-  OVMX has no VMS priority scheduler.
-last_reviewed: 2026-08-13
+  lock manager, ASTs, mailboxes, logical-name store, and access modes are real
+  and kernel-resident behind /dev/vms (vms_kif). Process control (PCB) is partial
+  and honestly advisory: the PCB is executive-resident and shared (not a
+  per-process fake), $WAKE/$HIBER are executive-resident, and $DELPRC resolves
+  its target in the executive under an oracle-grounded WORLD-privilege gate — the
+  terminate itself is a real Linux SIGTERM (OVMX-LOCAL, documented). Scheduling is
+  honestly stubbed — OVMX has no VMS priority scheduler.
+last_reviewed: 2026-08-31
 items:
   - id: kernel-executive$event-flags
     kind: feature
@@ -27,7 +30,7 @@ items:
     authenticity: real
     vms: "$ENQ/$DEQ/$CVT: hierarchical resource trees, value blocks, blocking AST"
     evidence: src/kernel-core/vms_lock.c
-    notes: "Single-node. ioctls 0x30-0x34. See cluster-dlm.yaml for the cross-node gap."
+    notes: "Single-node engine. ioctls 0x30-0x34. cluster-dlm.yaml covers the cross-node DLM built on this (now COMPLETE through H11)."
 
   - id: kernel-executive$ast-delivery
     kind: feature
@@ -35,7 +38,7 @@ items:
     authenticity: real
     vms: "4-level K/E/S/U AST queue delivery"
     evidence: src/kernel-core/vms_ast.c
-    notes: "ioctls 0x10-0x12. Prior SIGUSR1-based facade fixed (vms-as1)."
+    notes: "ioctls 0x10-0x12. Prior SIGUSR1-based facade fixed (vms-as1). Executive-resident async delivery — a queued AST interrupts $HIBER cross-process (vms-feb)."
 
   - id: kernel-executive$mailboxes
     kind: feature
@@ -43,7 +46,7 @@ items:
     authenticity: real
     vms: "Mailbox devices (MBAn:), $CREMBX/$QIO read-write"
     evidence: src/kernel-core/vms_mbx.c
-    notes: "Replaced an earlier AF_UNIX socketpair facade."
+    notes: "Replaced an earlier AF_UNIX socketpair facade. IO$M_NOW non-blocking dequeue honored (vms-5df)."
 
   - id: kernel-executive$logical-name-store
     kind: feature
@@ -51,7 +54,7 @@ items:
     authenticity: real
     vms: "LNM$SYSTEM / LNM$GROUP / LNM$JOB kernel-resident logical-name arena"
     evidence: src/kernel-core/vms_lnm.c
-    notes: "mmap-backed shared arena, not a per-process fake table."
+    notes: "mmap-backed shared arena, not a per-process fake table. Cluster-wide scope is a separate absent surface (see cluster-logicals.yaml)."
 
   - id: kernel-executive$access-modes
     kind: feature
@@ -64,22 +67,37 @@ items:
   - id: kernel-executive$pcb
     kind: struct
     status: partial
-    authenticity: facade-risk
+    authenticity: advisory
     vms: "Process Control Block: identity, privilege mask, quotas"
     evidence: src/kernel-core/vms_proctab.c
-    notes: "Legacy dead AST-queue fields orphaned. See kernel-executive$process-control for the process-create/delete facade-risk this feeds."
+    notes: >
+      Executive-resident, module-global PCB table shared across processes via
+      /dev/vms — NOT a per-process fake. The $GETJPI privilege-visibility gate is
+      oracle-grounded (docs/oracle/vax73-privileges.md §5, measured on VAX1 /
+      OpenVMS VAX V7.3): a same-group read needs no privilege, cross-group withholds
+      under WORLD/GROUP. Privilege bits are tracked (cur_privs/perm_privs) and
+      consulted, but enforcement across the full operation matrix is advisory, not a
+      complete privilege model. Single-node: no cluster-wide PCB view (see
+      connection-manager$executive-membership for the cluster-member readout).
 
   - id: kernel-executive$process-control
     kind: feature
     status: partial
-    authenticity: facade-risk
-    vms: "$CREPRC / $DELPRC process creation and deletion"
+    authenticity: advisory
+    vms: "$CREPRC / $DELPRC / $WAKE / $FORCEX process creation, deletion, and control"
     evidence: src/kernel-core/vms_proctab.c
-    notes: "Privileges/UIC copied PCB-to-PCB only; not visible cluster-wide (vms-afd). $WAKE/$DELPRC/$FORCEX cast the VMS pid straight into a Linux kill() (vms-pt1)."
+    notes: >
+      $WAKE/$HIBER are executive-resident (vms-feb): a sticky wake bit re-tested
+      under hiber_lock, cross-process, no Linux-signal shim. $DELPRC resolves its
+      target in the executive (by pid, any group, gated by WORLD — the same
+      cross-process control gate $GETJPI uses) and the terminate itself is a real
+      SIGTERM (OVMX-LOCAL, honestly labelled in sys_process.c — the process genuinely
+      dies). Single-node scope; not visible cluster-wide.
 
   - id: kernel-executive$scheduling
     kind: feature
     status: stub
     authenticity: advisory
     vms: "Priority scheduling (0-31), COM/COMO process states"
+    evidence: src/kernel-core/vms_proctab.c
     notes: "Honestly absent: OVMX has no VMS scheduler. Advisory, not faked — no fabricated priority effects."

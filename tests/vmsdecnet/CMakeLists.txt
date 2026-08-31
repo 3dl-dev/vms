@@ -14,3 +14,10 @@ add_executable(test_dnet_adjacency test_dnet_adjacency.c)
 target_link_libraries(test_dnet_adjacency PRIVATE vmsdecnet_routing)
 target_compile_options(test_dnet_adjacency PRIVATE -Werror)
 add_test(NAME vmsdecnet_adjacency_unit COMMAND test_dnet_adjacency)
+
+# rd vms-0aba: Ethernet Router Hello codec, sibling of the endnode-hello
+# codec. SPEC-DERIVED (no committed oracle specimen) -- self round-trip test.
+add_executable(test_dnet_router_hello test_dnet_router_hello.c)
+target_link_libraries(test_dnet_router_hello PRIVATE vmsdecnet_routing)
+target_compile_options(test_dnet_router_hello PRIVATE -Werror)
+add_test(NAME vmsdecnet_router_hello_unit COMMAND test_dnet_router_hello)

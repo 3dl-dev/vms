@@ -438,17 +438,27 @@ RUN cd /src/repo && \
     # AddressFamily inet: the wrapped socket()/bind() ride BGn:, which is AF_INET
     # only -- keep sshd off any AF_INET6 listener attempt. LogLevel DEBUG1 so a
     # bind/listen failure over the veneer is fully traced in the captured stderr.
+    # PubkeyAuthentication yes keeps the transport proof; PasswordAuthentication
+    # yes activates the vms-0cd 3c SYSUAF/Purdy auth (the wrapped sshd links our
+    # sys_auth_passwd via -DCUSTOM_SYS_AUTH_PASSWD -- a link failure there would
+    # fail the build, so a running wrapped sshd already proves the shim is in).
+    # UsePAM no: we build --without-pam, and SYSUAF is the only account authority.
     printf '%s\n' \
         'Port 2223' 'ListenAddress 127.0.0.1' 'AddressFamily inet' \
         'HostKey /ovmxsshsrv/etc/hostkey' \
         'PidFile /ovmxsshsrv/sshd.pid' 'AuthorizedKeysFile /ovmxsshsrv/etc/authorized_keys' \
-        'StrictModes no' 'PubkeyAuthentication yes' 'PasswordAuthentication no' \
+        'StrictModes no' 'PubkeyAuthentication yes' 'PasswordAuthentication yes' \
+        'PermitRootLogin yes' 'UsePAM no' 'KbdInteractiveAuthentication no' \
         'LogLevel DEBUG1' 'Subsystem sftp internal-sftp' \
         > /ovmxsshsrv/etc/sshd_config && \
     printf '%s\n' \
         'Host srvpeer' '  HostName 127.0.0.1' '  Port 2223' '  User root' \
         '  IdentityFile /ovmxsshsrv/etc/userkey' '  StrictHostKeyChecking no' \
         '  UserKnownHostsFile /dev/null' '  IdentitiesOnly yes' \
+        'Host srvpw' '  HostName 127.0.0.1' '  Port 2223' \
+        '  PreferredAuthentications password' '  PubkeyAuthentication no' \
+        '  StrictHostKeyChecking no' '  UserKnownHostsFile /dev/null' \
+        '  NumberOfPasswordPrompts 1' \
         > /ovmxsshsrv/etc/ssh_config && \
     echo "--- /ovmxssh (KEX 2222) + /ovmxsshsrv (server 2223) staged ---" && \
     ls -la /ovmxssh /ovmxsshsrv && \

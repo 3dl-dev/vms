@@ -83,6 +83,10 @@ extract_and_configure() {  # $1 = build dir, $2 = runtime libexecdir, $3 = runti
     mkdir -p "$SRCDIR/ovmx"
     cp "$ROOT/src/vmstcpip/sockets/vms_bgsock.h" "$SRCDIR/ovmx/"
     cp "$HERE/ovmx/ovmx_ssh_wrap.c" "$SRCDIR/ovmx/"
+    # vms-0cd 3c: the sshd auth/session adapter TUs (only linked in the SERVER
+    # tree, but copied into both -- harmless in the KEX tree, which does not
+    # compile them).
+    cp "$HERE/ovmx/ovmx_sshd_auth.c" "$HERE/ovmx/ovmx_sshd_session.c" "$SRCDIR/ovmx/"
     mkdir -p "$_libexec" "$_priv"
     cd "$SRCDIR"
     CC="$CC" CFLAGS="-O2" LDFLAGS="-static" \
@@ -126,6 +130,55 @@ make -j"$(nproc 2>/dev/null || echo 2)" ssh ssh-keygen \
 [ -x "$SRV_SRC/ssh" ] || { echo "FAIL: SERVER stock ssh not produced" >&2; exit 1; }
 "$CC" $OSSH_CFLAGS $OSSH_CPPFLAGS -DOVMX_WRAP -DOVMX_WRAP_SERVER -I"$SRV_SRC" \
     -c "$SRV_SRC/ovmx/ovmx_ssh_wrap.c" -o "$WORK/ov_wrap_srv.o"
+
+# ===== vms-0cd RUNG-3 step 3c: SYSUAF password auth + LOGINOUT/DCL session =====
+# The wrapped sshd now authenticates against the BINARY SYSUAF (Purdy) and runs
+# a LOGINOUT->DCL session instead of a shell, via UNMODIFIED OpenSSH + two shims:
+#   AUTH:    -DCUSTOM_SYS_AUTH_PASSWD selects our sys_auth_passwd (SYSUAF/Purdy)
+#            and --wrap=getpwnam resolves the login account from SYSUAF (UIC ->
+#            uid/gid, pw_shell = DCL) so OpenSSH's own permanently_set_uid drops
+#            to the UIC.
+#   SESSION: --wrap=permanently_set_uid runs the LOGINOUT pre-drop (executive
+#            setident fail-closed + banner + accounting) while still root, and
+#            --wrap=execve rewrites the DCL exec into `vmsdcl --login --lgicmd`.
+# The VMS logic lives in src/vmsssh/{sshd_auth,sshd_session,ssh_ident}.c (the
+# unit-tested, OpenSSH-free halves); the adapters bridge OpenSSH's call sites.
+# -DCUSTOM_SYS_AUTH_PASSWD must reach auth-passwd.c too (it drops its default
+# sys_auth_passwd under the define), so inject it into the tree's CPPFLAGS.
+sed -i "s#^CPPFLAGS=#CPPFLAGS=-DCUSTOM_SYS_AUTH_PASSWD #" Makefile
+
+# OVMX-free helper halves, hosted CFLAGS + the OVMX include set (mirrors the
+# vmssshd CMake target's includes).
+OVMXINC="-I$ROOT/src/vmsssh -I$ROOT/src/libvms/include -I$ROOT/src/vmsprocess/include -I$ROOT/src/vmsfs/include -I$ROOT/src/vmsrms/include -I$ROOT/src/libvmssys"
+"$CC" -O2 $OVMXINC -c "$ROOT/src/vmsssh/sshd_auth.c"    -o "$WORK/ov_sshd_auth.o"
+"$CC" -O2 $OVMXINC -c "$ROOT/src/vmsssh/sshd_session.c" -o "$WORK/ov_sshd_session.o"
+"$CC" -O2 $OVMXINC -c "$ROOT/src/vmsssh/ssh_ident.c"    -o "$WORK/ov_ssh_ident.o"
+# The two OpenSSH adapters (macro-clean: only src/vmsssh on the OVMX side, so no
+# OVMX header shadows an OpenSSH one). Auth adapter needs the CUSTOM define.
+"$CC" $OSSH_CFLAGS $OSSH_CPPFLAGS -DCUSTOM_SYS_AUTH_PASSWD -I"$SRV_SRC" -I"$ROOT/src/vmsssh" \
+    -c "$SRV_SRC/ovmx/ovmx_sshd_auth.c"    -o "$WORK/ov_adapt_auth.o"
+"$CC" $OSSH_CFLAGS $OSSH_CPPFLAGS -I"$SRV_SRC" -I"$ROOT/src/vmsssh" \
+    -c "$SRV_SRC/ovmx/ovmx_sshd_session.c" -o "$WORK/ov_adapt_session.o"
+
+# The OVMX static archives the SYSUAF/RMS/executive stack links from -- built by
+# the earlier build-static (OVMX_STATIC musl) stage this harness's Dockerfile
+# runs first. The in-tree build names them by VMS convention (e.g. LIBVMS$SHR.EXE)
+# even when they are static ar archives, so we DISCOVER every real `ar` archive
+# under build-static by its `!<arch>` magic (name-independent, robust to a
+# rename) and link them ALL in a --start-group: a static archive contributes
+# objects only for still-unresolved symbols, so the unused ones cost nothing and
+# the SYSUAF/RMS/accounting/purdy/kif objects resolve wherever they live. ABSENCE
+# is fatal (a missing archive would leave sysuaf_lookup an unresolved symbol, not
+# a silent no-op).
+OVMXLIBS=$(find "$ROOT/build-static" -type f \( -name '*.a' -o -name '*.EXE' \) 2>/dev/null | \
+    while IFS= read -r _f; do
+        if [ "$(head -c 7 "$_f" 2>/dev/null)" = "!<arch>" ]; then printf '%s ' "$_f"; fi
+    done)
+[ -n "$OVMXLIBS" ] || { echo "FAIL: no OVMX static archives found under $ROOT/build-static (the OVMX_STATIC build-static stage must precede the SSH harness)"; exit 1; }
+OVMX_SSHD_OBJS="$WORK/ov_adapt_auth.o $WORK/ov_adapt_session.o $WORK/ov_sshd_auth.o $WORK/ov_sshd_session.o $WORK/ov_ssh_ident.o"
+# --wrap adds the 3c auth/session interposers on top of the transport wraps.
+OVMX_SSHD_WRAP="-Wl,--wrap=getpwnam -Wl,--wrap=getpwuid -Wl,--wrap=execve -Wl,--wrap=permanently_set_uid"
+
 SERVER_WRAP=""
 # dup2/dup: the session handoff (vms-0cd RUNG-3 completion). sshd dup2()s the
 # accepted connection (a veneer handle) onto stdin/stdout before execv()'ing
@@ -140,7 +193,11 @@ done
 # do the connection I/O on the inherited veneer handle) ALL get the wraps -- every
 # link rule pulls $(LIBS). ssh is already built (stock, above) and is not a dep, so
 # it stays stock.
-sed -i "s#^LIBS=#LIBS=$SERVER_WRAP $WORK/ov_wrap_srv.o $VENEER #" Makefile
+# The 3c objects/archives go BEFORE the veneer + OVMX archive group: the veneer
+# (freestanding vms_kif/vms_string) satisfies those symbols first, so the same
+# objects in libvmssys.a are not pulled (no duplicate-symbol clash); the OVMX
+# archives (SYSUAF/RMS/accounting/purdy/...) resolve in a --start-group cycle.
+sed -i "s#^LIBS=#LIBS=$SERVER_WRAP $OVMX_SSHD_WRAP $WORK/ov_wrap_srv.o $OVMX_SSHD_OBJS $VENEER -Wl,--start-group $OVMXLIBS -Wl,--end-group -lm #" Makefile
 echo "== SERVER: make sshd sshd-session sshd-auth (WRAPPED over BGn:) =="
 make -j"$(nproc 2>/dev/null || echo 2)" sshd sshd-session sshd-auth \
     >"$WORK/srv/make-server.log" 2>&1 || { echo "FAIL: SERVER make"; tail -50 "$WORK/srv/make-server.log"; exit 1; }

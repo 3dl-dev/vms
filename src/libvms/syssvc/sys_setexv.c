@@ -36,6 +36,18 @@
  *
  * Reference: OpenVMS System Services Reference Manual, $SETEXV;
  *            OpenVMS Calling Standard, "Exception Vectors".
+ *
+ * OVMX userspace service register (rd vms-5b4) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * OVMX-USERSPACE: sys$setexv (vms-2e72) -- establishes/clears the primary,
+ *     secondary and last-chance software exception vectors in the thread-local
+ *     exc_vector[] table in this file, which the condition dispatcher in
+ *     src/libvms/rtl/lib_signal.c consults (via vms$$exc_vector_get) around the
+ *     lib$establish frame-handler chain. No executive condition-dispatch frame
+ *     participates today (single-mode userspace model - see the file header and
+ *     docs/design-chf-condition-handling.md); a future rung that moves condition
+ *     dispatch into /dev/vms moves the vectors with it.
  */
 
 #include <stdint.h>

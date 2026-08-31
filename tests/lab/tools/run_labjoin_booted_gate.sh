@@ -15,6 +15,15 @@
 # OVMX never spawns SCS, so it never joins and this gate FAILS honestly -- the
 # anti-fabrication instrument working as intended. It goes GREEN when 110b.1 lands.
 #
+# ANTI-FABRICATION TEETH (vms-fa1a leg (e)): the booted-OVMX node runs with
+# CAP_NET_RAW DROPPED from its whole QEMU subtree (labjoin_pod_boot.sh via capsh),
+# and the verdict (lj_booted_gate_verdict) requires BOTH the four-leg join AND
+# that dropped-cap evidence. A green therefore CANNOT be the 0.6 crutch (a probe
+# riding the pod's ambient CAP_NET_RAW): with the cap denied a userspace AF_PACKET
+# raw open EPERMs, so a real join can only be the executive's KERNEL socket doing
+# the L2 I/O. Requires the lab image built with libcap2-bin (capsh); the run
+# FATALs honestly if capsh is absent rather than launching without the drop.
+#
 # Env:
 #   OVMX_LAB2_JOIN   must be "1" or this SKIPs (exit 77).
 #   LAB2_POD         target pod (default: vaxlab-0). MUST be a healthy CN_2 pod.

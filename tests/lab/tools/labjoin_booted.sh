@@ -126,6 +126,8 @@ log "staged artifacts + drivers at $RDIR (vmlinuz md5=$K_MD5, verified in-pod)"
 # SESSION OPEN: foreground exec, backgrounded on the HOST side (lab2run.sh).
 NODE_LOG="$L/ovmx-node-$TAG.log"              # pod path
 HOST_NODE_LOG="$HOSTL/ovmx-node-$TAG.log"     # tank path (host-readable)
+CAP_EVID="$L/ovmx-node-$TAG.caps"            # pod path: CAP_NET_RAW evidence (leg e)
+HOST_CAP_EVID="$HOSTL/ovmx-node-$TAG.caps"   # tank path (host-readable)
 PCAP="$L/join-$TAG.pcap"
 HOST_PCAP="$HOSTL/join-$TAG.pcap"
 kubectl -n "$NS" exec "$POD" -- timeout $((DUR + 120)) \
@@ -134,8 +136,12 @@ TCPD=$!
 sleep 2
 
 # --- 6. Boot + drive the OVMX node inside the pod (foreground, host-bg) -----
+# OVMX_DROP_NET_RAW=1: run the booted node with CAP_NET_RAW dropped from its
+# whole process subtree (anti-fabrication teeth, leg (e)) -- a join under this is
+# proof the executive did the L2 I/O, not the pod's ambient cap. CAP_EVID is where
+# labjoin_pod_boot.sh records the actual capability set for the verdict to grade.
 kubectl -n "$NS" exec "$POD" -- sh -c \
-    "cd $RDIR && ART_DIR=$RDIR OUT_LOG=$NODE_LOG SCSNODE=$SCSNODE SCSSYSID=$SCSSYSID OVMX_TAP=$OVMX_TAP BOOT_TO=$((DUR + 60)) ./labjoin_pod_boot.sh" \
+    "cd $RDIR && ART_DIR=$RDIR OUT_LOG=$NODE_LOG CAP_EVID=$CAP_EVID OVMX_DROP_NET_RAW=1 SCSNODE=$SCSNODE SCSSYSID=$SCSSYSID OVMX_TAP=$OVMX_TAP BOOT_TO=$((DUR + 60)) ./labjoin_pod_boot.sh" \
     >/dev/null 2>&1 &
 NODEP=$!
 log "OVMX node booting in $POD (exec sessions held open: tcpdump=$TCPD node=$NODEP)"
@@ -162,15 +168,17 @@ wait "$NODEP" 2>/dev/null
 wait "$TCPD" 2>/dev/null
 
 # --- 9. Verdict: read every transcript from the tank volume, grade all four --
+# join legs AND the cap-denied teeth (leg e) -- the gate is the AND of both.
 OVMX_SC="$(lj_clean "$HOST_NODE_LOG" 2>/dev/null)"
 CN_FINAL="$(vclean | lj_parse_cn)"
 [ -z "$CN_FINAL" ] && CN_FINAL="$CN0"
+CAP_EVIDENCE="$(cat "$HOST_CAP_EVID" 2>/dev/null)"
 
 echo ""
 echo "=========================================="
 echo "  identity on the wire: $(strings -a "$HOST_PCAP" 2>/dev/null | grep -oE 'OVMX[A-Z0-9]{2,}' | sort -u | tr '\n' ' ')"
-echo "  artifacts: node=$HOST_NODE_LOG  pcap=$HOST_PCAP  vax1=$HOSTL/vax1.log"
-lj_verdict "$SCSNODE" "$OVMX_SC" "$VAX_SC" "$CN_FINAL" "$HOST_PCAP"
+echo "  artifacts: node=$HOST_NODE_LOG  pcap=$HOST_PCAP  caps=$HOST_CAP_EVID  vax1=$HOSTL/vax1.log"
+lj_booted_gate_verdict "$SCSNODE" "$OVMX_SC" "$VAX_SC" "$CN_FINAL" "$HOST_PCAP" "$CAP_EVIDENCE"
 V=$?
 echo "=========================================="
 exit "$V"

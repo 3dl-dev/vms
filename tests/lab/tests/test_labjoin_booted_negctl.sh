@@ -71,6 +71,72 @@ must_fail "leg (d): empty join pcap" \
 must_pass "positive control: all four legs present" \
     OVMXJ0 "$OVMX_JOINED" "$VAX_SEES_OVMX" 3 "$PCAP_GOOD"
 
+# ---------------------------------------------------------------------------
+# CAP-DENIED TEETH (leg (e), the anti-fabrication instrument for THIS PR). The
+# gate must (a) refuse a run where CAP_NET_RAW was still present in the booted
+# node's context -- that is exactly the ambient-cap crutch the 0.6 LARP rode --
+# and (b) refuse a run with no cap evidence at all (fail-closed). Below, flip the
+# cap evidence and assert lj_cap_denied_verdict / lj_booted_gate_verdict go RED.
+#
+# Fixtures are real /proc/<pid>/status Cap masks (verified in a root container):
+#   a80415fb = pod default set + NET_ADMIN, with CAP_NET_RAW (bit 13) DROPPED.
+#   a80435fb = same but WITH CAP_NET_RAW present (the crutch).
+# ---------------------------------------------------------------------------
+CAP_DENIED='CapInh: 0000000000000000
+CapPrm: 00000000a80415fb
+CapEff: 00000000a80415fb
+CapBnd: 00000000a80415fb
+CapAmb: 0000000000000000'
+CAP_CRUTCH='CapInh: 0000000000000000
+CapPrm: 00000000a80435fb
+CapEff: 00000000a80435fb
+CapBnd: 00000000a80435fb
+CapAmb: 0000000000000000'
+CAP_CRUTCH_BND='CapInh: 0000000000000000
+CapPrm: 00000000a80415fb
+CapEff: 00000000a80415fb
+CapBnd: 00000000a80435fb
+CapAmb: 0000000000000000'
+
+capmust_fail() {  # <desc> <evidence>
+    local d="$1"
+    if lj_cap_denied_verdict "$2" >"$TMP/o" 2>&1; then
+        echo "  FAIL: $d -- cap verdict PASSED but should have FAILED"; sed 's/^/      /' "$TMP/o"; FAIL=$((FAIL+1))
+    else
+        echo "  PASS: $d -- cap verdict correctly FAILED"; PASS=$((PASS+1))
+    fi
+}
+echo "--- cap-denied teeth (leg e): the crutch must never pass ---"
+# THE core teeth: CAP_NET_RAW present in effective -> the crutch could be back -> RED.
+capmust_fail "leg (e): CAP_NET_RAW present in CapEff (the ambient crutch)" "$CAP_CRUTCH"
+# Bounding-set net_raw (a descendant could regain it) -> RED.
+capmust_fail "leg (e): CAP_NET_RAW present in CapBnd only (regainable)" "$CAP_CRUTCH_BND"
+# No evidence recorded at all -> fail-closed.
+capmust_fail "leg (e): no cap evidence recorded (fail-closed)" ""
+capmust_fail "leg (e): cap evidence with no CapEff/CapBnd mask (unparseable)" "garbage no masks here"
+# Positive control: net_raw cleared -> the cap verdict PASSES (not vacuously red).
+if lj_cap_denied_verdict "$CAP_DENIED" >"$TMP/o" 2>&1; then
+    echo "  PASS: leg (e) positive control -- cap-denied evidence correctly PASSED"; PASS=$((PASS+1))
+else
+    echo "  FAIL: leg (e) positive control did not PASS"; sed 's/^/      /' "$TMP/o"; FAIL=$((FAIL+1))
+fi
+
+echo "--- full gate = join AND cap-denied: crutch fails even a perfect join ---"
+# A PERFECT four-leg join but WITH the cap crutch present -> the full gate is RED.
+# This is the exact fabrication the PR exists to catch: green membership riding
+# the ambient cap. The join legs all pass; leg (e) drags it red.
+if lj_booted_gate_verdict OVMXJ0 "$OVMX_JOINED" "$VAX_SEES_OVMX" 3 "$PCAP_GOOD" "$CAP_CRUTCH" >"$TMP/o" 2>&1; then
+    echo "  FAIL: full gate PASSED a perfect join that rode the ambient CAP_NET_RAW crutch"; sed 's/^/      /' "$TMP/o"; FAIL=$((FAIL+1))
+else
+    echo "  PASS: full gate FAILS a perfect join when CAP_NET_RAW was NOT denied (teeth)"; PASS=$((PASS+1))
+fi
+# And a perfect join WITH the cap properly denied -> the full gate PASSES.
+if lj_booted_gate_verdict OVMXJ0 "$OVMX_JOINED" "$VAX_SEES_OVMX" 3 "$PCAP_GOOD" "$CAP_DENIED" >"$TMP/o" 2>&1; then
+    echo "  PASS: full gate PASSES a real join with CAP_NET_RAW denied (executive did the I/O)"; PASS=$((PASS+1))
+else
+    echo "  FAIL: full gate wrongly FAILED a real join with the cap denied"; sed 's/^/      /' "$TMP/o"; FAIL=$((FAIL+1))
+fi
+
 echo ""
 echo "  RESULTS: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] && { echo "  LABJOIN NEGCTL: PASS (verdict has teeth)"; exit 0; }

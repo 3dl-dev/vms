@@ -380,7 +380,56 @@ The L3–L6 userspace surface (NCP, session, FAL, DCL/RMS integration) is stream
 
 ---
 
-## 6. Open `verify:` items (resolve before the claims they gate ship)
+## 6. Engine decision — **RESOLVED: Option B (userspace NSP/AF_PACKET)**, and open `verify:` items
+
+### 6.0 The §4.5 go/no-go verdict (rd `vms-a1c`, operator-ruled 2026-08-31)
+
+**RULED — Option B (userspace NSP + Phase IV routing over `AF_PACKET SOCK_RAW`), the §4.5 NO-GO /
+fallback path — is the DECnet engine of record.** The go/no-go analysis is
+`docs/design-decnet-engine-go-nogo.md` (rd `vms-a1c`, now **done**). Recorded here per §4.5's
+"Decision recording: the go/no-go verdict … reflected in §6, never a silent greenfield."
+
+**Verdict.** Do NOT forward-port the mainline-removed Linux `net/decnet` (Option A / stream (ii));
+build the engine as an OVMX-userspace daemon over `AF_PACKET SOCK_RAW` (ethertype `0x6003`,
+`AA-00-04-00-xx-yy` MAC, `AB-00-00-03-00-00` Phase IV multicast), **forking the proven
+`src/vmsscs/scsd.c` raw-Ethernet datalink pattern** (`scs_datalink.h`, written engine-agnostic for
+exactly this second consumer).
+
+**Rationale (why this is not a loosening of any invariant):**
+
+1. **scsd precedent — the pattern already ships, rated real.** `src/vmsscs/scsd.c` is a userspace
+   `AF_PACKET SOCK_RAW` raw-Ethernet daemon for the cluster SCS/NISCA wire, rated
+   *implemented/real* in `docs/compatibility-surface.md`, **not** a facade. The DECnet engine is
+   the same architecture for a second DEC L2 protocol.
+2. **No live in-kernel stack to ride — so this is NOT a Rule-9/`networking-kernel-driver-model`
+   violation.** That ruling (BGn:/TCP-IP: "no userspace socket layer") forbids reimplementing a
+   stack the host kernel *already runs in-kernel* (`AF_INET`). On a 6.8+ kernel **no live in-kernel
+   DECnet stack exists to ride** — `AF_DECnet` was removed in 6.1 — so the rationale does not
+   transfer. Fail-honest still holds (INV-6): the daemon opens a real datalink or exits with a
+   real error; it never fakes per-process success.
+3. **Rule 1 — the mechanism is HIDDEN behind a VMS-authentic surface.** The `AF_PACKET` socket and
+   the Linux/NetBSD interface name are never exposed. The OVMX side sees the DECnet routing surface
+   an NCP user sees — an **executor node** (`area.node` + name + `State = on`), a **circuit** over
+   the datalink device, and **SHOW ADJACENT NODES** — exactly as scsd hides its SCA socket behind
+   the SCS surface.
+4. **No longer greenfield.** The three engine-agnostic codecs (HELLO `vms-851`/PR #964, NSP
+   `vms-6986`, adjacency `vms-b15`) already landed and are oracle-tested; Option B binds them, so
+   most of its unique work was already built and lab-grounded.
+
+**Engine rung 1 landed (rd `vms-449d`).** `src/vmsdecnet/engine/` — `dnet_engine.{c,h}` (the
+socketless engine core: HELLO tx-build + rx-decode + adjacency-SM drive + the VMS presentation
+surface) and `decnetd.c` (**`DECNETD.EXE`**, the daemon that owns the datalink via
+`scs_datalink_*`, the DECnet analogue of `SCSD.EXE`). Proven three ways:
+(a) the engine's built endnode-HELLO for node 1.1 is **byte-identical to the §4.6 specimen #1
+VAX capture** (`tests/vmsdecnet/test_dnet_engine.c`, Rule-8 oracle proof);
+(b) two engine instances drive `DOWN→INITIALIZING→UP→DOWN` over a real `socketpair(2)` and via the
+runnable `DECNETD.EXE --self-test` (no `CAP_NET_RAW`);
+(c) a live `AF_PACKET` on-wire bracket over a `veth` pair in an isolated netns — two `DECNETD.EXE`
+endnodes exchanged 60-byte HELLOs on the T3 cadence and each listed the other in SHOW ADJACENT
+NODES. **Deferred to children of `vms-30e`:** the NSP logical-link connection service (rd
+`vms-c23`) and the live-VAX oracle adjacency bracket (rd `vms-aac0`, the §4.4 done-bar).
+
+### 6.1 Open `verify:` items (resolve before the claims they gate ship)
 
 | # | Verify | Gates | Source to confirm from |
 |---|---|---|---|

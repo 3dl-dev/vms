@@ -67,6 +67,103 @@ lj_tap_netdev_args() {  # <tap-ifname> <mac>  -> prints the -netdev/-device toke
         "-device" "virtio-net-pci,netdev=net0,romfile=,mac=${mac}"
 }
 
+# ---------------------------------------------------------------------------
+# CAP_NET_RAW DENIAL -- the anti-fabrication TEETH (rd vms-fa1a, leg (e)).
+#
+# THE LIE THIS KILLS. 0.6 was sold as the cluster milestone on a probe that never
+# was a booted node: a bare SCSD.EXE ELF run IN THE POD, opening an AF_PACKET raw
+# socket on br0 directly -- and it only worked because the k3s pod's root process
+# carries CAP_NET_RAW in its ambient/default container cap set. That ambient cap
+# was the crutch: the "join" rode the pod's caps, not the OVMX executive.
+#
+# THE FAITHFUL FIX (peer, vms-7eb + piece-2). The executive owns the L2 datalink
+# as a KERNEL socket (sock_create_kern(AF_PACKET,SOCK_RAW), src/kernel-core/
+# vms_l2.c) -- a kernel socket is NOT subject to any userspace process's caps --
+# and the booted SCSD.EXE is compiled with its direct-AF_PACKET path #ifdef'd
+# out. So a booted node's join goes through the executive, needing ZERO Linux
+# caps in userspace.
+#
+# THE ASSERTION. Run the whole booted-OVMX node process subtree (the in-pod QEMU
+# and everything under it) with CAP_NET_RAW DROPPED from its capability set. Then:
+#   - a real join via the executive kernel socket still works (kernel unaffected);
+#   - a probe-style userspace direct AF_PACKET raw socket gets EPERM.
+# A GREEN gate with the cap denied is therefore PROOF the executive did the I/O,
+# not an ambient cap. If the cap were still present, the crutch could be back and
+# the gate must FLAG it (that is leg (e), fail-closed).
+#
+# CAP_NET_RAW is capability number 13; its bit in a CapEff/CapBnd mask is 1<<13.
+# ---------------------------------------------------------------------------
+LJ_CAP_NET_RAW_BIT="${LJ_CAP_NET_RAW_BIT:-13}"
+
+# The privilege-dropping argv PREFIX for launching the booted-OVMX node process
+# with CAP_NET_RAW stripped from every capability set (effective, permitted,
+# bounding) of the process AND its whole descendant subtree. Prepended to the
+# QEMU command by labjoin_pod_boot.sh. capsh --drop removes cap_net_raw from the
+# bounding set AND clears it from the effective/permitted sets of the launched
+# process (verified: a root container's a80435fb -> a80415fb, net_raw bit gone),
+# so no process in the subtree can hold it -- a userspace AF_PACKET SOCK_RAW open
+# then EPERMs, while the executive's KERNEL socket is unaffected. CAP_NET_ADMIN
+# (the tap the guest NIC rides) is retained. `-- -c 'exec "$@"' _` execs the
+# argv that follows the prefix, array-safe (no re-quoting of the QEMU args).
+lj_netraw_deny_argv() {  # -> prints the capsh drop-prefix tokens, one per line
+    printf '%s\n' \
+        "capsh" "--drop=cap_net_raw" "--" "-c" 'exec "$@"' "_"
+}
+
+# Does a CapEff/CapBnd hex mask have CAP_NET_RAW set? Input: the bare hex digits
+# (e.g. 00000000a80435fb). Return 0 (true) if net_raw is PRESENT, 1 if CLEAR/
+# unparseable. The gate uses this to REFUSE a run whose booted-node context still
+# had the crutch.
+lj_mask_has_netraw() {  # <hexmask>  -> 0 if net_raw present, 1 if clear/bad
+    local hex="$1"
+    hex="${hex#0x}"
+    case "$hex" in ''|*[!0-9a-fA-F]*) return 1 ;; esac
+    # bash arithmetic is 64-bit; CapEff is a 64-bit mask.
+    if [ $(( (16#$hex >> LJ_CAP_NET_RAW_BIT) & 1 )) -eq 1 ]; then
+        return 0
+    fi
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# LEG (e) VERDICT: was CAP_NET_RAW denied to the booted-OVMX node's process
+# context during the run? Reads the capability EVIDENCE recorded by
+# labjoin_pod_boot.sh -- the booted-node process's /proc/<pid>/status Cap* lines,
+# captured live after launch. PASS iff the evidence is present AND both CapEff and
+# CapBnd have net_raw CLEAR. FAIL-CLOSED: missing/empty/unparseable evidence, or
+# net_raw present in either set, FAILS. A gate cannot prove the executive did the
+# I/O if it cannot even show the crutch was absent.
+# ---------------------------------------------------------------------------
+lj_cap_denied_verdict() {  # <cap-evidence-text>  -> 0 PASS, 1 FAIL (reason on stdout)
+    local evid="$1"
+    local eff bnd
+    if [ -z "${evid//[[:space:]]/}" ]; then
+        echo "  verdict: (e) FAIL -- no CAP_NET_RAW evidence recorded for the booted node"
+        echo "                       (fail-closed: cannot prove the ambient-cap crutch was absent)"
+        return 1
+    fi
+    eff="$(printf '%s\n' "$evid" | grep -aoiE 'CapEff:[[:space:]]*[0-9a-fA-F]+' | head -1 | grep -aoE '[0-9a-fA-F]+$')"
+    bnd="$(printf '%s\n' "$evid" | grep -aoiE 'CapBnd:[[:space:]]*[0-9a-fA-F]+' | head -1 | grep -aoE '[0-9a-fA-F]+$')"
+    if [ -z "$eff" ] || [ -z "$bnd" ]; then
+        echo "  verdict: (e) FAIL -- CAP_NET_RAW evidence has no CapEff/CapBnd mask (unparseable)"
+        return 1
+    fi
+    if lj_mask_has_netraw "$eff"; then
+        echo "  verdict: (e) FAIL -- booted node ran WITH CAP_NET_RAW in effective set (CapEff=$eff):"
+        echo "                       the ambient-cap crutch was present -- a join here is NOT proof the"
+        echo "                       executive did the I/O. Drop CAP_NET_RAW from the booted-OVMX run."
+        return 1
+    fi
+    if lj_mask_has_netraw "$bnd"; then
+        echo "  verdict: (e) FAIL -- CAP_NET_RAW present in the booted node's bounding set (CapBnd=$bnd):"
+        echo "                       a descendant could regain it. Drop it from the whole subtree."
+        return 1
+    fi
+    echo "  verdict: (e) PASS -- CAP_NET_RAW denied to the booted node (CapEff=$eff CapBnd=$bnd, net_raw clear):"
+    echo "                       a userspace AF_PACKET raw open would EPERM, so a join proves the executive did it"
+    return 0
+}
+
 # Strip NULs + ANSI escapes from a raw VMS console log (from lab2run.sh clean()).
 lj_clean() {  # <file>  -> cleaned text on stdout
     tr -d '\000' < "$1" 2>/dev/null | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g'
@@ -142,4 +239,31 @@ lj_verdict() {  # <ovmx_node> <ovmx_showcluster_txt> <vax_showcluster_txt> <cn> 
         echo "  BOOTED-OVMX CLUSTER JOIN: FAIL -- not all four legs proven (see reasons above)."
     fi
     return "$ok"
+}
+
+# ---------------------------------------------------------------------------
+# THE FULL 0.6 GATE VERDICT = the four-leg join (lj_verdict) AND the cap-denied
+# teeth (lj_cap_denied_verdict). This is what labjoin_booted.sh grades. The join
+# proves membership happened; the cap-denied leg proves it happened WITHOUT the
+# ambient-CAP_NET_RAW crutch that the shipped LARP relied on -- i.e. that the
+# executive kernel socket did the L2 I/O. BOTH are required. Either one failing
+# fails the gate. That is the anti-fabrication contract: a green here cannot be
+# the crutch, because the crutch was provably denied.
+# ---------------------------------------------------------------------------
+lj_booted_gate_verdict() {  # <node> <ovmx_sc> <vax_sc> <cn> <pcap> <cap-evidence>
+    local node="$1" ovmx_sc="$2" vax_sc="$3" cn="$4" pcap="$5" cap_evid="$6"
+    local join=1 cap=1
+
+    lj_verdict "$node" "$ovmx_sc" "$vax_sc" "$cn" "$pcap"; join=$?
+    echo "  --- anti-fabrication teeth: was CAP_NET_RAW denied to the booted node? ---"
+    lj_cap_denied_verdict "$cap_evid"; cap=$?
+
+    if [ "$join" = 0 ] && [ "$cap" = 0 ]; then
+        echo "  BOOTED-OVMX CLUSTER JOIN (cap-denied): PASS -- joined a real VAX cluster with"
+        echo "  CAP_NET_RAW dropped: the OVMX executive did the L2 I/O, not an ambient Linux cap."
+        return 0
+    fi
+    echo "  BOOTED-OVMX CLUSTER JOIN (cap-denied): FAIL -- join=$( [ "$join" = 0 ] && echo PASS || echo FAIL )" \
+         "cap-denied=$( [ "$cap" = 0 ] && echo PASS || echo FAIL ) (see reasons above)."
+    return 1
 }

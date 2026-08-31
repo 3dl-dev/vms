@@ -895,7 +895,11 @@ if(BUILD_TESTS)
     # acceptance verdict goes RED -- the anti-fabrication instrument must have
     # teeth. Case (a) is exactly the pre-vms-5ad reality (booted OVMX never
     # auto-starts SCS -> SHOW CLUSTER reports NOSUCHDEV), and the verdict
-    # correctly FAILS it, which is why the real gate is honestly RED today.
+    # correctly FAILS it, which is why the real gate is honestly RED today. Also
+    # covers leg (e), the CAP_NET_RAW teeth (vms-fa1a): a perfect four-leg join
+    # that ran WITH the pod's ambient CAP_NET_RAW (the crutch the 0.6 LARP rode)
+    # is dragged RED, so a green can only be the executive kernel socket doing
+    # the L2 I/O -- never an ambient cap.
     add_test(NAME labjoin_booted_negctl
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab/tests/test_labjoin_booted_negctl.sh)
     set_tests_properties(labjoin_booted_negctl PROPERTIES

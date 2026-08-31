@@ -78,6 +78,29 @@ else
     bad "verdict wrongly FAILED a fully-joined transcript"; sed 's/^/    /' "$TMP/v.out"
 fi
 
+# --- 4b. CAP_NET_RAW deny prefix + bit-parse + full-gate (anti-fabrication) --
+# The cap-drop prefix labjoin_pod_boot.sh prepends to the QEMU launch must be the
+# capsh net_raw drop, exec-passthrough form (array-safe). This is a contract test
+# against the exact tokens shipped -- it can't silently become a no-op.
+DENY="$(lj_netraw_deny_argv | tr '\n' ' ')"
+if printf '%s' "$DENY" | grep -qF 'capsh --drop=cap_net_raw -- -c exec "$@" _'; then
+    ok "cap-drop prefix is capsh --drop=cap_net_raw exec-passthrough (denies AF_PACKET raw)"
+else
+    bad "cap-drop prefix drifted: '$DENY'"
+fi
+# Bit-parse: CAP_NET_RAW is bit 13. a80435fb has it (crutch); a80415fb cleared.
+if lj_mask_has_netraw 00000000a80435fb; then ok "lj_mask_has_netraw detects net_raw present (a80435fb)"; else bad "missed net_raw in a80435fb"; fi
+if lj_mask_has_netraw 00000000a80415fb; then bad "false-positive net_raw in a80415fb"; else ok "lj_mask_has_netraw sees net_raw CLEAR (a80415fb)"; fi
+if lj_mask_has_netraw ''; then bad "empty mask should not read as net_raw-present"; else ok "lj_mask_has_netraw fail-safe on empty mask"; fi
+# Full gate PASS requires BOTH a real join AND cap denied.
+CAP_OK='CapEff: 00000000a80415fb
+CapBnd: 00000000a80415fb'
+if lj_booted_gate_verdict OVMXJ0 "$OVMX_SC" "$VAX_SC" 3 "$PCAP" "$CAP_OK" >"$TMP/g.out" 2>&1; then
+    ok "full gate PASSES a real join with CAP_NET_RAW denied"
+else
+    bad "full gate wrongly FAILED a real join + cap-denied evidence"; sed 's/^/    /' "$TMP/g.out"
+fi
+
 # --- 5. labjoin_booted.sh refuses a reserved identity (mock kubectl) ---------
 mkkubectl() {  # writes a mock kubectl into $TMP/bin that reads $TMP/pod as the pod fs
 cat >"$TMP/bin/kubectl" <<'MOCK'

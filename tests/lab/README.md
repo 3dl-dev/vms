@@ -316,16 +316,22 @@ harness that proves it real lives beside `lab2run.sh`:
 | file | role |
 |---|---|
 | `tools/labjoin_booted.sh` | host orchestrator — mints a collision-free identity, **prechecks the pod is CN_2**, creates `tap4` on the pod's `br0`, stages the boot artifacts (md5-verified in-pod), runs the OVMX node + `tcpdump` on `br0`, drives both consoles, and grades the verdict |
-| `tools/labjoin_pod_boot.sh` | runs **inside the pod** — boots the shipped `distro/Dockerfile.bootable` image under QEMU/**TCG** with its NIC bridged to `tap4`, authors `SCSNODE`/`SCSSYSTEMID`/`VAXCLUSTER=2` at `SYSBOOT>`, logs in, runs `SHOW CLUSTER` |
-| `tools/labjoin_lib.sh` | pure verdict/guard logic (identity guard, tap args, four-leg verdict) |
+| `tools/labjoin_pod_boot.sh` | runs **inside the pod** — boots the shipped `distro/Dockerfile.bootable` image under QEMU/**TCG** with its NIC bridged to `tap4` **and `CAP_NET_RAW` dropped from its process subtree (`capsh`)**, authors `SCSNODE`/`SCSSYSTEMID`/`VAXCLUSTER=2` at `SYSBOOT>`, logs in, runs `SHOW CLUSTER`, and records the node's capability set as evidence |
+| `tools/labjoin_lib.sh` | pure verdict/guard logic (identity guard, tap args, four-leg verdict, **cap-denied teeth**) |
 | `tools/run_labjoin_booted_gate.sh` | opt-in wrapper (`OVMX_LAB2_JOIN=1`); SKIPs (77) without lab-2 |
 | `tests/test_labjoin_booted_plumbing.sh` / `_negctl.sh` | **hermetic** ctest gates (`labjoin_booted_plumbing` / `labjoin_booted_negctl`) — prove the verdict/guard logic and its teeth with no lab, k3s, VAX or boot |
 
-**The verdict** (`lj_verdict`) — a booted OVMX joined a real VAX cluster iff **all
-four**: (a) the OVMX node's `SHOW CLUSTER` lists a VAX (executive membership, not
-`NOSUCHDEV`); (b) `vax1`'s `SHOW CLUSTER` lists the OVMX node (the VAX oracle
-vouches); (c) `vax1` `CLUSTER_NODES=3`; (d) the join is captured on `br0`'s
-`0x6007` pcap under the OVMX identity.
+**The verdict** (`lj_booted_gate_verdict`) — a booted OVMX joined a real VAX
+cluster iff **all four join legs AND the cap-denied leg**: (a) the OVMX node's
+`SHOW CLUSTER` lists a VAX (executive membership, not `NOSUCHDEV`); (b) `vax1`'s
+`SHOW CLUSTER` lists the OVMX node (the VAX oracle vouches); (c) `vax1`
+`CLUSTER_NODES=3`; (d) the join is captured on `br0`'s `0x6007` pcap under the
+OVMX identity; **(e) the booted node ran with `CAP_NET_RAW` DENIED** (its recorded
+`CapEff`/`CapBnd` have `net_raw` clear). Leg (e) is the anti-fabrication teeth:
+the 0.6 LARP was a probe riding the pod's *ambient* `CAP_NET_RAW`, so with that
+cap dropped a userspace `AF_PACKET` raw open `EPERM`s — a real join can then only
+be the executive's **kernel** socket (`vms_l2.c`) doing the L2 I/O. A perfect
+four-leg join that still carried the cap is dragged **RED**.
 
 **Constraints baked in** (coordinator lab intel): the OVMX node runs *inside* the
 pod (same placement the SCSD probe used); the pod has **no `/dev/kvm`** so the

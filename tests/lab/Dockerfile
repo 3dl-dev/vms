@@ -51,7 +51,14 @@ FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 iproute2 bridge-utils iputils-ping tcpdump libpcap0.8 \
         libpcre3 libedit2 zlib1g ca-certificates \
+        libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
+# libcap2-bin provides capsh, used by the booted-cluster-join gate (vms-fa1a) to
+# DROP CAP_NET_RAW from the booted-OVMX QEMU subtree (labjoin_pod_boot.sh). That
+# is the anti-fabrication teeth: with net_raw denied, a userspace AF_PACKET raw
+# socket EPERMs, so a real join can only be the executive's KERNEL socket doing
+# the L2 I/O -- never the pod's ambient CAP_NET_RAW (the crutch 0.6 rode). Without
+# capsh the gate FATALs honestly rather than run without the drop.
 # x86_64 system emulator for the booted-OVMX cluster-join node (vms-bd3). The
 # `qemu-system-x86` package (not the arch-fat `qemu-system`) keeps this lean: it
 # provides /usr/bin/qemu-system-x86_64 plus SeaBIOS firmware -- all the harness

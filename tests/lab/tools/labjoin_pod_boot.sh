@@ -37,6 +37,14 @@ SCSSYSID="${SCSSYSID:?SCSSYSID required}"
 OVMX_TAP="${OVMX_TAP:-tap4}"
 OVMX_MAC="${OVMX_MAC:-52:54:00:00:00:f4}"
 BOOT_TO="${BOOT_TO:-900}"
+# Anti-fabrication teeth (rd vms-fa1a leg (e)): drop CAP_NET_RAW from the booted-
+# OVMX node process subtree, and record the resulting capability set as evidence.
+# Default ON -- a green gate with the cap denied proves the executive did the L2
+# I/O, not the pod's ambient CAP_NET_RAW (the crutch the 0.6 LARP rode). Setting
+# OVMX_DROP_NET_RAW=0 is a DELIBERATE control (used only by the negctl to model
+# "the crutch is present"); the real gate never does.
+OVMX_DROP_NET_RAW="${OVMX_DROP_NET_RAW:-1}"
+CAP_EVID="${CAP_EVID:-${OUT_LOG%.log}.caps}"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=labjoin_lib.sh
@@ -58,6 +66,26 @@ command -v "$QEMU" >/dev/null 2>&1 || {
     exit 3
 }
 
+# --- CAP_NET_RAW drop prefix (anti-fabrication teeth) ----------------------
+# Build the argv prefix that strips CAP_NET_RAW from the QEMU process subtree.
+# capsh (libcap2-bin) is required when dropping; FATAL-honest if absent rather
+# than silently launching WITH the crutch (which would let the gate lie green).
+DROP_PREFIX=()
+if [ "$OVMX_DROP_NET_RAW" = "1" ]; then
+    command -v capsh >/dev/null 2>&1 || {
+        echo "labjoin_pod_boot: FATAL -- capsh (libcap2-bin) not found in the pod, but the" \
+             "cap-denied gate requires dropping CAP_NET_RAW from the booted-OVMX node so a" \
+             "join PROVES the executive did the L2 I/O (not the pod's ambient CAP_NET_RAW)." \
+             "Install libcap2-bin in tests/lab/Dockerfile and rebuild the lab image. Refusing" \
+             "to run WITHOUT the drop -- a green there would be exactly the 0.6 fabrication." | tee -a "$OUT_LOG"
+        exit 3
+    }
+    mapfile -t DROP_PREFIX < <(lj_netraw_deny_argv)
+    echo "[node] CAP_NET_RAW will be DROPPED from the booted-OVMX subtree (capsh --drop=cap_net_raw)" | tee -a "$OUT_LOG"
+else
+    echo "[node] ⚠ OVMX_DROP_NET_RAW=0 -- booted node runs WITH ambient caps (control only; NOT the gate)" | tee -a "$OUT_LOG"
+fi
+
 # A per-node working copy of the distribution disk (SYSBOOT> WRITE mints a new
 # OVMXVMSSYS.PAR version onto it; never mutate the staged golden image).
 DISK="/tmp/ovmx-node-$$.img"
@@ -74,8 +102,10 @@ echo "=== booted-OVMX node: SCSNODE=$SCSNODE SCSSYSTEMID=$SCSSYSID tap=$OVMX_TAP
 # ovmx.flags=0,1 halts at SYSBOOT> pre-banner so we can author the cluster
 # identity (SET/WRITE/CONTINUE), exactly as tests/qemu/test_sysboot_cluster_
 # params_e2e.sh does. -serial stdio carries the console; stdin comes from the FIFO.
+# The DROP_PREFIX (capsh --drop=cap_net_raw -- -c 'exec "$@"' _) runs the whole
+# QEMU subtree with CAP_NET_RAW stripped; empty when OVMX_DROP_NET_RAW=0.
 # shellcheck disable=SC2086
-timeout -k 15 "$BOOT_TO" "$QEMU" -accel tcg \
+"${DROP_PREFIX[@]}" timeout -k 15 "$BOOT_TO" "$QEMU" -accel tcg \
     -kernel "$KERNEL" -initrd "$INITRD" \
     -nographic -append "console=ttyS0 loglevel=3 net.ifnames=0 ovmx.flags=0,1" \
     -m 512M -smp 1 -nodefaults -serial stdio \
@@ -83,6 +113,25 @@ timeout -k 15 "$BOOT_TO" "$QEMU" -accel tcg \
     -drive file="$DISK",format=raw,if=virtio,cache=writethrough \
     -no-reboot <"$FIFO" >>"$OUT_LOG" 2>&1 &
 QP=$!
+
+# --- Record the cap EVIDENCE for the acceptance verdict (leg (e)) -----------
+# Capture the booted-node process's actual capability sets, live, so the verdict
+# grades what really ran -- not what we intended. $QP is the root of the QEMU
+# subtree (capsh -> exec'd command); its CapEff/CapBnd apply to every descendant.
+# Written to the tank-visible $CAP_EVID so labjoin_booted.sh can read it host-side.
+: > "$CAP_EVID"
+{
+    echo "# CAP_NET_RAW evidence for booted-OVMX node pid=$QP (OVMX_DROP_NET_RAW=$OVMX_DROP_NET_RAW)"
+    for _try in 1 2 3 4 5; do
+        if [ -r "/proc/$QP/status" ]; then
+            grep -E 'Cap(Inh|Prm|Eff|Bnd|Amb)' "/proc/$QP/status" 2>/dev/null && break
+        fi
+        sleep 0.3
+    done
+} >> "$CAP_EVID" 2>/dev/null
+echo "[node] recorded CAP_NET_RAW evidence -> $CAP_EVID:" | tee -a "$OUT_LOG"
+sed 's/^/[node]   /' "$CAP_EVID" | tee -a "$OUT_LOG"
+
 exec 4>"$FIFO"
 send() { printf '%s\r' "$1" >&4; }
 

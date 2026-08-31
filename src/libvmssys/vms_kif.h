@@ -636,6 +636,16 @@ uint32_t vms_kif_getexit(uint32_t *condition, int *has_exited);
 uint32_t vms_kif_getexit_linux(uint32_t linux_pid, uint32_t *condition,
                                int *has_exited);
 
+/* Read the image-completion $STATUS of a subprocess named by its executive-
+ * assigned VMS PID (vms-e9a B2). A /NOWAIT-spawn pipeline driver (the GCC
+ * cpp/cc1/as/ld hook) uses this to recover a completed stage's $STATUS after its
+ * B1 spawn-notify completion fires, before launching the next stage. Gated like
+ * $GETJPI (SS$_NOPRIV cross-group without WORLD; a same-group parent reading its
+ * own subprocess needs none). Must be called BEFORE the subprocess is reaped.
+ * *has_exited (optional) is nonzero iff an image actually recorded a status. */
+uint32_t vms_kif_getexit_pid(uint32_t vms_pid, uint32_t *condition,
+                             int *has_exited);
+
 /* Record this CLI process's invoking command line + cliflag, for an activated
  * image to inherit and read back. cliflag == 0 means "no CLI". */
 uint32_t vms_kif_setcli(uint32_t cliflag, const char *command);

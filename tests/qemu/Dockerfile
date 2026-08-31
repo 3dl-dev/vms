@@ -258,6 +258,8 @@ RUN cd /src/repo && \
     && cmake --build build-static --target qemu_syssvc_tests vmsdcl vms_authorize vms_initialize mmk_native vmslibrarian vmslink vms_tcpip_daytime --parallel $(nproc) 2>&1 && \
     echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
     ls -la build-static/bin/test_syssvc_* && \
+    echo "--- PIPESTAGE.EXE (the stage image test_syssvc_spawn_pipeline drives, vms-e9a B2) ---" && \
+    ls -la build-static/bin/PIPESTAGE.EXE && \
     # MMK.EXE (vms-b23, self-host spine #4): the shipped MadGoat MMK built as an
     # OVMX image. test_syssvc_mmk_drive.c runs it against a real /dev/vms to
     # prove MMK drives a real build through its persistent mailbox-driven DCL
@@ -644,6 +646,16 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
       { echo "FATAL: DCL.EXE was not built into the static tree -- SHOW SYSTEM would go unproven against a real executive"; exit 1; }; } && \
     chmod +x /initramfs/bin/DCL.EXE && \
     cp /initramfs/bin/DCL.EXE /initramfs/tests/DCL.EXE && \
+    # PIPESTAGE.EXE (vms-e9a B2): the representative pipeline-stage image
+    # test_syssvc_spawn_pipeline.c $CREPRC's as a stand-in for a real GCC stage.
+    # Staged at /bin/PIPESTAGE.EXE (the path the suite hard-codes). It matches no
+    # test_* glob, so init.sh never runs it as a suite -- it is the subject the
+    # pipeline suite drives. Absence is FATAL, not skipped: a missing subject
+    # would silently turn the multi-stage-pipeline assertions into a no-op SKIP
+    # with the job still green.
+    { cp /src/repo/build-static/bin/PIPESTAGE.EXE /initramfs/bin/PIPESTAGE.EXE || \
+      { echo "FATAL: PIPESTAGE.EXE was not built into the static tree -- the /NOWAIT-chained pipeline would go unproven against a real executive"; exit 1; }; } && \
+    chmod +x /initramfs/bin/PIPESTAGE.EXE && \
     # MMK.EXE + DCL.EXE at SYS$SYSTEM (vms-b23, self-host spine #4). MMK.EXE is
     # the subject test_syssvc_mmk_drive.c execs (OVMX_MMK default
     # /vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE); DCL.EXE is staged at that SAME

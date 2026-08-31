@@ -211,3 +211,11 @@ vms_kif_register_subprocess=PROCEDURE
 # subprocess $EXITs. Must be a LIBVMSSYS$SHR universal. APPENDED per the
 # append-only contract -- never shifts an existing index.
 vms_kif_spawn_notify=PROCEDURE
+# vms-e9a B2: read a /NOWAIT-spawned subprocess's completion $STATUS by its
+# executive-assigned VMS PID. The GCC cpp/cc1/as/ld pipeline driver (the authored
+# VMS-host hook, src/gcc_host/ovmx_spawn_pipeline.c, VMS-native-linked as a
+# LIBVMSSYS$SHR consumer) reads a completed stage's $STATUS through this WIRED kif
+# wrapper (VMS_IOCTL_GETEXIT, SEL_PID) after its B1 spawn-notify completion fires,
+# to decide whether to launch the next stage. Must be a LIBVMSSYS$SHR universal.
+# APPENDED per the append-only contract -- never shifts an existing index.
+vms_kif_getexit_pid=PROCEDURE

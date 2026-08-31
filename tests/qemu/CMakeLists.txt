@@ -521,12 +521,38 @@ target_link_options(testtls_inproc PRIVATE
 set_target_properties(testtls_inproc PROPERTIES
     PREFIX "" OUTPUT_NAME "TESTTLS" SUFFIX ".EXE")
 
+# PIPESTAGE.EXE (vms-e9a B2) -- the representative pipeline-stage image
+# test_syssvc_spawn_pipeline.c chains as a stand-in for a real GCC stage
+# (cpp/cc1/as/ld) until the alpha-dec-vms port is buildable (vms-fd1, blocked).
+# A NORMAL static musl image (NOT a freestanding-PIE testimg): $CREPRC execve's
+# it directly and it reads SYS$INPUT (fd 0) / writes SYS$OUTPUT (fd 1) / records
+# its $STATUS via a raw VMS_IOCTL_SETEXIT on /dev/vms (vms_ioctl.h from src/kernel).
+# It matches no test_* glob, so init.sh never runs it as a suite -- it is the
+# subject the suite drives, staged at /bin/PIPESTAGE.EXE by tests/qemu/Dockerfile.
+add_executable(pipe_stage pipe_stage.c)
+target_include_directories(pipe_stage PRIVATE ${CMAKE_SOURCE_DIR}/src/kernel)
+set_target_properties(pipe_stage PROPERTIES
+    PREFIX "" OUTPUT_NAME "PIPESTAGE" SUFFIX ".EXE")
+
+# test_syssvc_spawn_pipeline.c drives the reusable pipeline orchestrator, which
+# lives in the GCC-lane's authored VMS-host layer (design §5, NOT src/libvms).
+# Pull that one source into the suite binary (the same target_sources seam
+# rms_acp_bind.c / the imgact extra source above use) and put its header on the
+# path. The orchestrator's sys$creprc + vms_kif_* calls resolve against the `vms`
+# library the suite already links.
+if(TARGET test_syssvc_spawn_pipeline)
+    target_sources(test_syssvc_spawn_pipeline PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/gcc_host/ovmx_spawn_pipeline.c)
+    target_include_directories(test_syssvc_spawn_pipeline PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/gcc_host/include)
+endif()
+
 # Single build target covering every registered test_syssvc_* binary, so
 # callers (tests/qemu/Dockerfile) never need to name a specific test. It also
 # pulls in TESTIMG.EXE so a `--target qemu_syssvc_tests` build stages the
 # subject alongside its suite.
 get_property(_qemu_syssvc_test_targets GLOBAL PROPERTY QEMU_SYSSVC_TEST_TARGETS)
-add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets} testimg_inproc testreal_inproc testextern_inproc testextern_foreign testprod_shr testnonres_inproc testtls_inproc)
+add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets} testimg_inproc testreal_inproc testextern_inproc testextern_foreign testprod_shr testnonres_inproc testtls_inproc pipe_stage)
 
 # ---------------------------------------------------------------------------
 # TORN OUT AS GATES (vms-49f), per the CLAUDE.md Rule 9 amendment.

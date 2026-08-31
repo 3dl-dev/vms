@@ -360,6 +360,27 @@ convergence gate before merge, same as any other shared executive change.
    `LIB$SPAWN`/`$CREPRC` directly (§3c default sequential/temp-file shape).
    Consumer of B0+B1, lives in the GCC-lane's own authored VMS-host layer,
    not in `src/libvms`/`src/vmsdcl`.
+
+   **Landed (representative), vms-e9a B2.** The reusable orchestration is
+   `src/gcc_host/ovmx_spawn_pipeline.c` (+ `include/ovmx_spawn_pipeline.h`) —
+   the GCC-lane authored VMS-host layer, per this ladder's placement rule. It
+   runs a chain of image stages, each created `/NOWAIT` via `$CREPRC` (B0),
+   each stage's completion delivered through `VMS_IOCTL_SPAWN_NOTIFY` (B1) and
+   waited on with an event flag (no userspace `waitpid` as the signal), each
+   stage's `$STATUS` read by VMS PID (new thin `vms_kif_getexit_pid`, reusing
+   the existing `VMS_IOCTL_GETEXIT` `SEL_PID` — **not** a new ioctl) and gated
+   before the next stage launches; inter-stage output rides an RMS scratch
+   file (§3c default transport). Proven end-to-end against a real `/dev/vms` by
+   `tests/qemu/test_syssvc_spawn_pipeline.c` (a 4-stage all-success run whose
+   ordered markers prove each stage consumed the prior's output, plus a
+   mid-chain-failure run that stops the pipeline and never launches the later
+   stages). Because the real `alpha-dec-vms` GCC port is not yet buildable on
+   OVMX (`vms-fd1`, blocked on `vms-126`/`vms-3e4`/`vms-5b7e`), the stages are
+   a representative stand-in image (`tests/qemu/pipe_stage.c` → `PIPESTAGE.EXE`:
+   reads SYS$INPUT, writes SYS$OUTPUT, records a real `$EXIT` `$STATUS`). The
+   mechanism is generic and complete; wiring the real cpp/cc1/as/ld filespecs
+   into `ovmx_spawn_pipeline()` is the deferred follow-on rung (`vms-1eb`,
+   child of `vms-e9a`, blocked by `vms-fd1`).
 4. **B3 (stretch, deferred)** — mailbox-pipe concurrent-stage transport
    (§3c stretch), generalizing the MMK exec-drive machinery beyond DCL.
 

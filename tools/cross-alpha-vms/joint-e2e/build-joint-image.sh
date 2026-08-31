@@ -56,6 +56,22 @@ case "$JOINT_MAIN" in
     */*) echo "FAIL: JOINT_MAIN must be a bare basename beside this script, got '$JOINT_MAIN'" >&2; exit 1;;
 esac
 test -f "$HERE/$JOINT_MAIN" || { echo "FAIL: JOINT_MAIN source '$JOINT_MAIN' not found in $HERE" >&2; exit 1; }
+
+# JOINT_EXTRA (vms-bdd): space-separated bare basenames of ADDITIONAL .c sources
+# beside this script, each compiled by the SAME real alpha-dec-vms cross cc1 into
+# its OWN object and added to the STRICT link alongside crt0.obj + joint_main.obj.
+# This is what makes the multi-.o rung real: mf_main.c (JOINT_MAIN) calls across
+# a genuine .o boundary into mf_util.c (JOINT_EXTRA), and LINK.EXE must resolve
+# both the intra-image cross-.o refs AND the decc$ imports each TU pulls in. Empty
+# by default, so the N=3 (joint_main.c) and N=7 (crtl_rms_test.c) gates build
+# byte-identically to before.
+JOINT_EXTRA=${JOINT_EXTRA:-}
+for _e in $JOINT_EXTRA; do
+    case "$_e" in
+        */*) echo "FAIL: JOINT_EXTRA entries must be bare basenames beside this script, got '$_e'" >&2; exit 1;;
+    esac
+    test -f "$HERE/$_e" || { echo "FAIL: JOINT_EXTRA source '$_e' not found in $HERE" >&2; exit 1; }
+done
 mkdir -p "$OUT"
 
 # vms-430: the PT_INTERP LINK.EXE bakes into every joint_e2e.exe this script
@@ -94,6 +110,7 @@ docker run --rm \
     -v "$OUT:/out" \
     -e IMGACT_INTERP_PATH \
     -e JOINT_MAIN \
+    -e JOINT_EXTRA \
     "$IMG" bash -c '
 set -euxo pipefail
 OUT=/out
@@ -174,6 +191,19 @@ JOINT_MAIN=${JOINT_MAIN:-joint_main.c}
 echo "-- compiling joint_main.obj from $JOINT_MAIN (cross cc1, -mpointer-size=64) --"
 "$ALPHA_CC" -mpointer-size=64 -g0 -c "/joint/$JOINT_MAIN" -o "$OUT/joint_main.obj"
 
+# vms-bdd: JOINT_EXTRA additional objects — each compiled by the SAME cross cc1
+# into its OWN .obj, added to the STRICT link below. This is the multi-.o rung:
+# mf_main.obj calls across the boundary into mf_util.obj, and both pull decc$
+# imports from the genuine DECC$SHR. EXTRA_OBJS accumulates the /out paths.
+EXTRA_OBJS=""
+JOINT_EXTRA=${JOINT_EXTRA:-}
+for _e in $JOINT_EXTRA; do
+    _obj="$OUT/${_e%.c}.obj"
+    echo "-- compiling extra $_obj from $_e (cross cc1, -mpointer-size=64) --"
+    "$ALPHA_CC" -mpointer-size=64 -g0 -c "/joint/$_e" -o "$_obj"
+    EXTRA_OBJS="$EXTRA_OBJS $_obj"
+done
+
 # ---- 6. the JOINT-E2E IMAGE: real crt0 + real main, --use the genuine
 #         alpha DECC$SHR *and* LIBOTS$SHR, STRICT (no --allow-undefined;
 #         expect zero deferred) ----
@@ -188,7 +218,7 @@ echo "-- compiling joint_main.obj from $JOINT_MAIN (cross cc1, -mpointer-size=64
 # that emit no OTS$ call, and closes the gap for those that do.
 "$WORK/LINK.EXE" --transfer __main \
     --use "$WORK/DECC\$SHR.EXE" --use "$WORK/libots/LIBOTS_SHR.EXE" \
-    -o "$OUT/joint_e2e.exe" "$OUT/crt0.obj" "$OUT/joint_main.obj"
+    -o "$OUT/joint_e2e.exe" "$OUT/crt0.obj" "$OUT/joint_main.obj" $EXTRA_OBJS
 
 cp "$WORK/LINK.EXE" "$WORK/DECC\$SHR.EXE" "$WORK/libots/LIBOTS_SHR.EXE" "$OUT/"
 echo "== joint-e2e image built (genuine alpha path, vms-864) =="

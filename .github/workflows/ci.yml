@@ -8334,6 +8334,64 @@ jobs:
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-gate
 
   # -----------------------------------------------------------------------
+  # alpha-mf-multifile (vms-bdd): the MULTI-.O STRICT-link + activation gate --
+  # the rung above alpha-crtl-rms-n7 (which is single-object). The milestone
+  # image is a genuine multi-object program: mf_main.obj calls ACROSS the .o
+  # boundary into mf_util.obj (mf_dup/mf_len/mf_eq/mf_free), which in turn pulls
+  # malloc/free/memcpy/strlen/strcmp from the genuine alpha DECC$SHR. This is the
+  # exact shape that hit `%LINK-F-UNDEF decc$free` before PR #795 (a SEPARATE
+  # object referencing free() under a STRICT no-allow-undefined link); it now
+  # links zero-deferred and activates to sentinel 5 ($STATUS=%X0035A029). A
+  # LINK.EXE / mk_decc_shr.sh regression that re-breaks the multi-.o STRICT link
+  # (or the weak-alias decc$ export class) reds HERE. Same alpha_activation
+  # scope-gate + build+boot path as the N=3 / N=7 gates.
+  # -----------------------------------------------------------------------
+  alpha-mf-multifile:
+    name: "OVMX/Alpha multi-.o STRICT-link activation gate — boots, activates a real multi-object program (mf_main.obj + mf_util.obj, cross-.o malloc/free/strlen/strcmp/memcpy) on the real /dev/vms executive, asserts $STATUS=%X0035A029 (vms-bdd)"
+    needs: changes
+    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: "multi-.o STRICT-link gate — qemu-system-alpha boots the assembled OVMX/Alpha runtime, STRICT-links (no --allow-undefined) a real multi-object program (mf_main.obj + mf_util.obj across a .o boundary, cross-.o malloc/free/strlen/strcmp/memcpy resolved incl. the ex-blocker decc$free), activates it on the real /dev/vms executive over the ODS-2 ACP, asserts the cross-.o port-test OK + $STATUS=%X0035A029 (sentinel 5); runs its own can-fail selftest before the boot"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate
+
+  # -----------------------------------------------------------------------
   # alpha-activation-selftest (vms-c54). The CHEAP per-PR half of the N=3
   # activation guard: run-module-gp-activation-alpha.sh `selftest' drives the
   # SAME assert_activation() the heavy boot uses against crafted transcript

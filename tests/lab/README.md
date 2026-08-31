@@ -303,3 +303,48 @@ detail.
    console free, and VMS prints the entire membership dialogue to OPCOM there.
 
 Full guardrail list: `docs/HANDOFF-vms-2f3.md` §7.
+
+---
+
+## Booted-OVMX joins a real VAX cluster — the 0.6 acceptance gate (`vms-fa1a` → `vms-5a23`, closes `vms-110b`)
+
+`tools/lab2run.sh` above joins a **bare SCSD.EXE probe** to a lab-2 pod. The 0.6
+cluster milestone was sold on a booted node joining — but a *booted OVMX has
+never actually joined* (memory: "a booted node is not a cluster member"). The
+harness that proves it real lives beside `lab2run.sh`:
+
+| file | role |
+|---|---|
+| `tools/labjoin_booted.sh` | host orchestrator — mints a collision-free identity, **prechecks the pod is CN_2**, creates `tap4` on the pod's `br0`, stages the boot artifacts (md5-verified in-pod), runs the OVMX node + `tcpdump` on `br0`, drives both consoles, and grades the verdict |
+| `tools/labjoin_pod_boot.sh` | runs **inside the pod** — boots the shipped `distro/Dockerfile.bootable` image under QEMU/**TCG** with its NIC bridged to `tap4`, authors `SCSNODE`/`SCSSYSTEMID`/`VAXCLUSTER=2` at `SYSBOOT>`, logs in, runs `SHOW CLUSTER` |
+| `tools/labjoin_lib.sh` | pure verdict/guard logic (identity guard, tap args, four-leg verdict) |
+| `tools/run_labjoin_booted_gate.sh` | opt-in wrapper (`OVMX_LAB2_JOIN=1`); SKIPs (77) without lab-2 |
+| `tests/test_labjoin_booted_plumbing.sh` / `_negctl.sh` | **hermetic** ctest gates (`labjoin_booted_plumbing` / `labjoin_booted_negctl`) — prove the verdict/guard logic and its teeth with no lab, k3s, VAX or boot |
+
+**The verdict** (`lj_verdict`) — a booted OVMX joined a real VAX cluster iff **all
+four**: (a) the OVMX node's `SHOW CLUSTER` lists a VAX (executive membership, not
+`NOSUCHDEV`); (b) `vax1`'s `SHOW CLUSTER` lists the OVMX node (the VAX oracle
+vouches); (c) `vax1` `CLUSTER_NODES=3`; (d) the join is captured on `br0`'s
+`0x6007` pcap under the OVMX identity.
+
+**Constraints baked in** (coordinator lab intel): the OVMX node runs *inside* the
+pod (same placement the SCSD probe used); the pod has **no `/dev/kvm`** so the
+nested QEMU is TCG (all timeouts sized for it); the minted `SCSSYSTEMID` must not
+collide with the pod's reused VAX ids (`1025/1026/1027`) — the guard refuses them
+by name; and the pod is verified CN_2 before joining (a CN_1 pod fails for
+unrelated reasons).
+
+> **EXPECTED STATE: RED until `vms-5ad` (booted OVMX auto-starts SCS) lands.**
+> Today a booted OVMX only *stages* `SCSD.EXE` (`ovmx_init.c:953`) and never
+> spawns it, so its `SHOW CLUSTER` reports `NOSUCHDEV` and the verdict FAILS leg
+> (a) honestly. This is the anti-fabrication instrument working — it is **not
+> stubbed green** and it goes GREEN when 110b.1 makes the node auto-start SCS.
+> The heavy lab-2 run is coordinator-owned; do not monopolize lab-2.
+
+```bash
+# hermetic logic gates (run anywhere, in ctest):
+ctest -R 'labjoin_booted_(plumbing|negctl)'
+# the real gate (coordinator, against lab-2 — RED pending vms-5ad):
+OVMX_LAB2_JOIN=1 LAB2_POD=vaxlab-0 ART_DIR=/tmp/ovmx-boot-art \
+    tests/lab/tools/run_labjoin_booted_gate.sh
+```

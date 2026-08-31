@@ -1977,6 +1977,46 @@ struct vms_getcli_args {
 };
 
 /*
+ * VMS_IOCTL_SPAWN_NOTIFY - arm a /NOWAIT subprocess-exit completion (vms-e9a
+ * B1, docs/design-libspawn-ovmx.md §3b). The CALLER (the parent of a subprocess
+ * it created via $CREPRC / LIB$SPAWN/NOWAIT) asks the executive to notify it
+ * when that subprocess records its image completion status ($EXIT ->
+ * VMS_IOCTL_SETEXIT). This is the executive-resident half of LIB$SPAWN's
+ * efn/astadr/astprm completion contract: a /NOWAIT spawn returns immediately,
+ * and the parent later learns the subprocess finished because the executive
+ * SET the parent's event flag and/or QUEUED the parent's completion AST at the
+ * child's exit -- cross-process delivery no per-process fake could carry (Rule
+ * 9 / INV-6).
+ *
+ * child_vms_pid names the subprocess (the VMS PID $CREPRC handed back). efn is
+ * the parent event flag to set on the child's exit, or VMS_EF_NONE when no flag
+ * was requested. astadr/astprm are the completion AST routine + parameter (both
+ * opaque userspace values, queued into the parent's AST queue at the parent's
+ * current access mode), or astadr == 0 for no AST. The registration is one-shot
+ * (delivered once, at the child's exit) and mirrors the mailbox write-attention
+ * AST (vms-9003): the AST lands in the parent's own executive AST queue and is
+ * drained via $SETAST/DELIVERAST, the same 4-level queue $DCLAST uses.
+ *
+ * If the child has ALREADY recorded its exit status when the parent arms
+ * (a fast subprocess that finished before the parent got here), the executive
+ * delivers the notification IMMEDIATELY and sets completed = 1, so no
+ * completion is ever lost to that race. A cross-process arm is AUTHORIZED, NOT
+ * FREE: gated by vms_proc_may_read() (same UIC group, or WORLD) exactly like
+ * $WAKE/$GETJPI, SS$_NONEXPR for no such process, SS$_NOPRIV when refused.
+ */
+#define VMS_EF_NONE 0xFFFFFFFFu           /* efn sentinel: no completion flag */
+
+struct vms_spawn_notify_args {
+    uint32_t child_vms_pid;   /* in:  VMS PID of the /NOWAIT-spawned subprocess */
+    uint32_t efn;             /* in:  parent EF to set on exit, or VMS_EF_NONE  */
+    uint64_t astadr;          /* in:  parent completion AST routine (0 = none)  */
+    uint64_t astprm;          /* in:  parameter passed to the completion AST    */
+    uint32_t status;          /* out: SS$_ status of the arm operation          */
+    uint8_t  completed;       /* out: 1 = child had already exited (delivered)  */
+    uint8_t  pad[3];
+};
+
+/*
  * System memory statistics ($GETSYI-style, the reader behind SHOW MEMORY's
  * "Physical Memory Usage" section -- rd vms-a3cd). System-wide, so unlike the
  * $GETJPI process row it carries no per-process identity and needs no target
@@ -2015,6 +2055,8 @@ struct vms_getsyi_mem_args {
 #define VMS_IOCTL_GETEXIT   _IOWR(VMS_IOC_MAGIC, 0x4A, struct vms_getexit_args)
 #define VMS_IOCTL_SETCLI    _IOWR(VMS_IOC_MAGIC, 0x4B, struct vms_setcli_args)
 #define VMS_IOCTL_GETCLI    _IOWR(VMS_IOC_MAGIC, 0x4C, struct vms_getcli_args)
+/* /NOWAIT subprocess-exit completion arm (vms-e9a B1, LIB$SPAWN efn/astadr) */
+#define VMS_IOCTL_SPAWN_NOTIFY _IOWR(VMS_IOC_MAGIC, 0x4D, struct vms_spawn_notify_args)
 /* System-info facility ($GETSYI-style; SHOW MEMORY physical section, vms-a3cd) */
 #define VMS_IOCTL_GETSYIMEM _IOWR(VMS_IOC_MAGIC, 0x68, struct vms_getsyi_mem_args)
 
@@ -2083,6 +2125,8 @@ _Static_assert(sizeof(struct vms_setcli_args) == 8 + VMS_CLI_CMDLINE_SIZE,
                "vms_setcli_args layout changed: VMS_IOCTL_SETCLI ABI break");
 _Static_assert(sizeof(struct vms_getcli_args) == 8 + VMS_CLI_CMDLINE_SIZE,
                "vms_getcli_args layout changed: VMS_IOCTL_GETCLI ABI break");
+_Static_assert(sizeof(struct vms_spawn_notify_args) == 32,
+               "vms_spawn_notify_args layout changed: VMS_IOCTL_SPAWN_NOTIFY ABI break");
 /*
  * The inbound transfer buffer must be strictly larger than the
  * executive's inspection window, or an oversized name would be clipped

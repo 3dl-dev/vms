@@ -36,6 +36,7 @@
                                * the C-string + fixed-width vocabulary */
 #include "exec_kbackend.h"    /* exec_lock/copy/current/task/rcu/mutex */
 #include "exec_hash.h"        /* exec_hash_for_each[_safe] / exec_hash_del_rcu */
+#include "exec_list.h"        /* exec_list_add_tail -- /NOWAIT completion AST queue */
 
 /* Serializes reaping so two callers cannot claim the same victim. Held across
  * the per-victim teardown, which may sleep, so it is an exec_mutex (sleepable),
@@ -1124,6 +1125,139 @@ out:
 #define VMS_STS_M_SEVERITY 0x7u
 
 /*
+ * spawn_notify_deliver - deliver a /NOWAIT spawn completion to `parent`
+ * (vms-e9a B1, docs/design-libspawn-ovmx.md §3b): queue the parent's completion
+ * AST (if one was armed) and set the parent's completion event flag (if one was
+ * armed). This is the executive-resident half of LIB$SPAWN's efn/astadr
+ * contract -- the parent asked to be told when its subprocess exits, and this
+ * is the moment the executive tells it, across the process boundary no
+ * per-process fake could cross (Rule 9 / INV-6).
+ *
+ * CALLER MUST HOLD vms_proc_hash_lock. That is what keeps `parent` alive across
+ * the delivery -- the same reason vms_ioctl_wake takes hash_lock across waking
+ * its target: a concurrent reap must not free the PCB in the gap. The AST entry
+ * is therefore allocated with the ATOMIC allocator (hash_lock is a spinlock on
+ * Linux), exactly as the mailbox write-attention path (vms_mbx.c) allocates
+ * under mbx->lock.
+ *
+ * LOCK ORDER under the held hash_lock: parent->ast[mode].lock (innermost, then
+ * dropped) BEFORE vms_ast_notify_arrival takes parent->hiber_lock -- the same
+ * ast_state->lock -> hiber_lock ordering every enqueue path observes; and
+ * hiber_lock nested under hash_lock is the established edge vms_ioctl_wake uses.
+ * The completion EF set (vms_ef_set_for -> parent->ef.lock) is an independent
+ * leaf under hash_lock, taken after the AST work is done.
+ */
+static void spawn_notify_deliver(struct vms_proc *parent, uint32_t efn,
+                                 uint64_t astadr, uint64_t astprm, uint8_t acmode)
+{
+    if (astadr != 0 && acmode <= PSL_C_USER) {
+        struct vms_ast_entry *ast = exec_zalloc_atomic(sizeof(*ast));
+        if (ast) {
+            struct vms_ast_state *ast_state = &parent->ast[acmode];
+
+            ast->astadr = astadr;
+            ast->astprm = astprm;
+            ast->acmode = acmode;
+
+            exec_lock(&ast_state->lock);
+            if (ast_state->count < VMS_AST_MAX_PER_MODE) {
+                exec_list_add_tail(&ast->list, &ast_state->pending);
+                ast_state->count++;
+                exec_unlock(&ast_state->lock);
+                /* Wake the parent if it is hibernating so its $HIBER drains and
+                 * RUNS the completion AST (vms-feb), rather than waiting for an
+                 * explicit $SETAST(1). Done after ast_state->lock is dropped. */
+                vms_ast_notify_arrival(parent);
+            } else {
+                /* Parent's AST quota for this mode is full: drop the AST, as the
+                 * mailbox write-attention path treats a full queue. */
+                exec_free(ast);
+                exec_unlock(&ast_state->lock);
+            }
+        }
+    }
+
+    if (efn != VMS_EF_NONE)
+        (void)vms_ef_set_for(parent, efn);
+}
+
+/*
+ * vms_ioctl_spawn_notify - arm a /NOWAIT subprocess-exit completion (vms-e9a
+ * B1). The CALLER is the parent of a subprocess it created via $CREPRC /
+ * LIB$SPAWN/NOWAIT; it registers the efn/astadr/astprm completion notification
+ * on the CHILD's PCB, and vms_ioctl_setexit() delivers it when the child records
+ * its exit. See struct vms_spawn_notify_args in vms_ioctl.h for the contract.
+ *
+ * The AST, when it later runs, runs in the PARENT at the parent's CURRENT
+ * access mode -- captured here, exactly as $DCLAST queues at the caller's mode.
+ */
+long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_spawn_notify_args args;
+    struct vms_proc *child;
+    uint8_t acmode;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    exec_lock(&proc->mode_lock);
+    acmode = proc->current_mode;
+    exec_unlock(&proc->mode_lock);
+
+    /* An out-of-range event flag is an illegal request (matches $SETEF). */
+    if (args.efn != VMS_EF_NONE && args.efn >= 128) {
+        args.status = SS__ILLEFC;
+        goto out;
+    }
+
+    vms_proc_reap_dead();
+
+    exec_lock(&vms_proc_hash_lock);
+    child = find_by_vms_pid(args.child_vms_pid);
+    if (!child) {
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__NONEXPR;
+        goto out;
+    }
+    /* Arming a completion on another process is AUTHORIZED, NOT FREE -- the same
+     * GROUP/WORLD gate $WAKE and $GETJPI use (vms_proc_may_read). A subprocess
+     * the caller created is in the caller's own UIC group, so this passes for
+     * the intended use; a cross-group arm is refused, exactly as a cross-group
+     * $WAKE is. */
+    if (!vms_proc_may_read(proc, child)) {
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+
+    if (child->has_exit_status) {
+        /* The subprocess finished before the parent got here: deliver the
+         * completion NOW, to the parent (the caller), so this race never drops a
+         * notification. Nothing is stored -- there is nothing left to wait for. */
+        spawn_notify_deliver(proc, args.efn, args.astadr, args.astprm, acmode);
+        args.completed = 1;
+    } else {
+        /* Record the request on the CHILD; vms_ioctl_setexit delivers it when
+         * the child records its exit status. One-shot; a re-arm overwrites. */
+        child->compl_armed      = 1;
+        child->compl_acmode     = acmode;
+        child->compl_parent_pid = proc->vms_pid;
+        child->compl_efn        = args.efn;
+        child->compl_astadr     = args.astadr;
+        child->compl_astprm     = args.astprm;
+        args.completed = 0;
+    }
+    exec_unlock(&vms_proc_hash_lock);
+    args.status = SS__NORMAL;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * vms_ioctl_setexit - record `condition` as the caller's image completion
  * $STATUS and report the derived success/severity + POSIX exit code.
  *
@@ -1150,6 +1284,27 @@ long vms_ioctl_setexit(struct vms_proc *proc, unsigned long arg)
     exec_lock(&vms_proc_hash_lock);
     proc->exit_status = args.condition;
     proc->has_exit_status = 1;
+    /*
+     * /NOWAIT spawn completion (vms-e9a B1): if a parent armed a completion on
+     * this subprocess (VMS_IOCTL_SPAWN_NOTIFY), deliver it now -- set the
+     * parent's event flag and queue its completion AST -- as an indivisible part
+     * of recording the exit, under the SAME hash_lock. Holding hash_lock across
+     * the lookup + delivery keeps the parent PCB alive through it (as
+     * vms_ioctl_wake relies on for its target). One-shot: compl_armed is cleared
+     * as it fires. A parent that has since exited (find returns NULL) simply has
+     * nothing to notify -- no fabrication, no hang.
+     */
+    if (proc->compl_armed) {
+        struct vms_proc *parent = find_by_vms_pid(proc->compl_parent_pid);
+        uint32_t c_efn    = proc->compl_efn;
+        uint64_t c_astadr = proc->compl_astadr;
+        uint64_t c_astprm = proc->compl_astprm;
+        uint8_t  c_acmode = proc->compl_acmode;
+
+        proc->compl_armed = 0;
+        if (parent)
+            spawn_notify_deliver(parent, c_efn, c_astadr, c_astprm, c_acmode);
+    }
     exec_unlock(&vms_proc_hash_lock);
 
     args.success  = (uint8_t)(args.condition & VMS_STS_M_SUCCESS);

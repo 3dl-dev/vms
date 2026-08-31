@@ -646,6 +646,16 @@ uint32_t vms_kif_setcli(uint32_t cliflag, const char *command);
 uint32_t vms_kif_getcli(uint32_t *cliflag, char *command,
                         uint32_t command_size, uint32_t *length);
 
+/* Arm a /NOWAIT subprocess-exit completion (vms-e9a B1, LIB$SPAWN efn/astadr).
+ * The caller is the parent of a subprocess it created /NOWAIT; the executive
+ * sets event flag `efn` (VMS_EF_NONE = none) and/or queues completion AST
+ * `astadr`/`astprm` (astadr 0 = none) in this process when the child (named by
+ * VMS PID) records its exit. *completed (optional) is nonzero iff the child had
+ * already exited and the notification fired immediately. INV-6: no /dev/vms ->
+ * SS$_NOSUCHDEV, nothing armed. */
+uint32_t vms_kif_spawn_notify(uint32_t child_vms_pid, uint32_t efn,
+                              uint64_t astadr, uint64_t astprm, int *completed);
+
 /* ================================================================
  * P0 program region (vms-68f.i, in-process image activation foundation)
  *

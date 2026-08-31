@@ -304,6 +304,50 @@ out:
 }
 
 /*
+ * vms_ef_set_for - set an event flag on an ARBITRARY target process (vms-e9a
+ * B1). This is vms_ioctl_setef's flag-setting core, addressed at `target`
+ * rather than the ioctl caller and with no copyin/out: it is the cross-process
+ * completion-EF primitive the /NOWAIT subprocess-exit path uses to set the
+ * PARENT's event flag from the CHILD's exit (docs/design-libspawn-ovmx.md §3b).
+ *
+ * The set + wake happen under the SAME guard the matching wait handler holds
+ * across its exec_cv_wait -- proc->ef.lock for a local flag (0-63), the common
+ * cluster's own lock for 64-127 -- so the wake cannot be lost against a
+ * $WAITFR/$WFLOR/$WFLAND already blocked on `target`'s flag word (the cv
+ * contract, exec_kbackend.h), exactly as vms_ioctl_setef guarantees for the
+ * self case. `target` is kept alive by the caller (the exit path holds
+ * vms_proc_hash_lock across this call, as vms_ioctl_wake does for its target).
+ *
+ * Returns 0 when the flag was resolved and set; -1 when `efn` names a common
+ * cluster `target` is not associated with (or an out-of-range flag) -- the
+ * caller treats that as "no EF delivered", never fabricating one.
+ */
+int vms_ef_set_for(struct vms_proc *target, uint32_t efn)
+{
+    uint32_t *flags;
+    exec_cv_t *waitcv;
+    exec_lock_t *guard;
+    int bit;
+
+    exec_lock(&target->ef.lock);
+    if (efn_resolve(target, efn, &flags, &waitcv, &bit, &guard) < 0) {
+        exec_unlock(&target->ef.lock);
+        return -1;
+    }
+
+    if (guard != &target->ef.lock)
+        exec_lock(guard);
+
+    *flags |= (1U << bit);
+    exec_cv_broadcast(waitcv);
+
+    if (guard != &target->ef.lock)
+        exec_unlock(guard);
+    exec_unlock(&target->ef.lock);
+    return 0;
+}
+
+/*
  * vms_ioctl_clref - Clear event flag
  */
 long vms_ioctl_clref(struct vms_proc *proc, unsigned long arg)

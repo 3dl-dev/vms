@@ -45,7 +45,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: vaxlab
-          image: 192.168.2.43:30500/ovmx-vaxlab:3
+          image: 192.168.2.43:30500/ovmx-vaxlab:4   # :4 adds qemu-system-x86 for the booted-OVMX join node (vms-bd3)
           imagePullPolicy: IfNotPresent
           env:
             - name: POD_NAME

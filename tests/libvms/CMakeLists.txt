@@ -117,6 +117,15 @@ libvms_add_test(test_libvms_lib_symtab
 libvms_add_test(test_libvms_lib_fb3
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_fb3.c)
 
+# Test 8b: vms-2e72 rung-1 — real VMS condition-handling dispatch (CHF). Proves
+# SYS$SETEXV primary/secondary/last-chance exception vectors, the authentic
+# dispatch search order (primary -> frame chain innermost-to-outermost ->
+# secondary -> last-chance), and a mechanism array carrying the REAL establisher
+# frame pointer + chain depth. Replaces the handler-stack emulation's fabricated
+# NULL frame / placeholder depth. See docs/design-chf-condition-handling.md.
+libvms_add_test(test_libvms_condition_dispatch
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_condition_dispatch.c)
+
 # Test 9: vms-f88 (epic vms-d0c) — the REAL binary $UAFDEF SYSUAF record over
 # the genuine Files-11 Prolog-3 indexed engine (supersedes the ASCII+SHA-256 /
 # 368-byte facade). Locks the 644-byte oracle layout, then authors a binary

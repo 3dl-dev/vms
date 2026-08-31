@@ -15674,6 +15674,10 @@ int main(int argc, char **argv)
     int emit_hello = 0;
     int respond = 0;      /* vms-5fe: reply to directed HELLOs (channel formation) */
     int do_connect = 0;   /* vms-5fe: also drive the VMS$VAXcluster SCS connect */
+    int boot_cluster_mode = 0; /* vms-a84d: set only by argc==1 boot-cluster mode --
+                                * a booted cluster participant must DRIVE the full
+                                * NEW->MEMBER join sequencer (send the membership
+                                * request), not merely beacon HELLOs. */
     int hello_interval = HELLO_DEFAULT_INTERVAL_SEC;
 
     for (int i = 1; i < argc; i++) {
@@ -15865,6 +15869,18 @@ int main(int argc, char **argv)
         ifname = boot_iface;
         do_connect = 1; /* implies respond -> emit_hello, below, exactly as
                           * an explicit --connect does */
+        boot_cluster_mode = 1; /* vms-a84d: drive the NEW->MEMBER join sequencer
+                                * below. A booted node with VAXCLUSTER!=0 is trying
+                                * to JOIN, so it must send the membership request,
+                                * not just HELLO-beacon. RUN /DETACHED passes no
+                                * env, so we cannot rely on OVMX_JOIN_SEQ here --
+                                * this is the in-code equivalent. (The join
+                                * sequencer currently reaches step 6/8 and stalls
+                                * at JS_MSCP_CONNECT vs a real V7.3 VAX, the
+                                * vms-2f3 completion RE -- see scsd.c's join_step
+                                * comments; enabling it here turns "HELLO-only, no
+                                * request" into "drives the join, stalls at 6/8",
+                                * honest progress toward 8/8.) */
 
         char boot_node[SYSGEN_STRVAL_LEN];
         (void)resolve_node_identity(boot_node, sizeof(boot_node));
@@ -15886,7 +15902,7 @@ int main(int argc, char **argv)
      * which needs an established-join MSCP capture to ground. With the flag OFF,
      * OVMX keeps the proven VC-connect-first path that reaches SHOW CLUSTER status
      * NEW (Rule 9: no regression). See docs/design-cluster-join-choreography.md. */
-    int join_seq_enabled = (getenv("OVMX_JOIN_SEQ") != NULL);
+    int join_seq_enabled = (getenv("OVMX_JOIN_SEQ") != NULL) || boot_cluster_mode;
 
     /* --connect implies --respond implies --emit-hello (a beacon is what makes
      * the peer VAX send us the directed HELLO we reply to). */

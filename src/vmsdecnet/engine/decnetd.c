@@ -42,6 +42,7 @@
 #include <unistd.h>
 
 #include "dnet_engine.h"
+#include "dnet_cterm.h"     /* CTERM terminal-service protocol (--set-host-selftest) */
 #include "scs_datalink.h"   /* the shared raw-L2 datalink (src/vmsscs) */
 
 /* Default datalink interface, matching scsd's br0 default (the lab-2 pod
@@ -340,6 +341,186 @@ done:
     return 0;
 }
 
+/*
+ * ======================== --set-host-selftest ========================
+ * A no-privilege, no-netdev proof of the CTERM (Command Terminal) protocol
+ * behind $ SET HOST (rd vms-4d2, engine rung 3): two engines open an NSP logical
+ * link to the CTERM object (42) and carry a WHOLE terminal session over it --
+ * Bind -> Bind Accept -> terminal characteristics -> a host screen Write -> a
+ * terminal keystroke Read Data -> an out-of-band ^Y -> Unbind -> link teardown --
+ * as real on-wire NSP data frames shuttled over a socketpair(2), every CTERM
+ * payload round-tripping byte-identical. It exercises the exact
+ * cterm_* -> link_send -> build_data_frame -> wire -> link_rx -> cterm_rx path a
+ * live $ SET HOST uses, so a green run is a real terminal-service proof, not a
+ * facade (INV-6). CLEAN-ROOM (Rule 8): CTERM is spec-derived (no oracle
+ * specimen). Returns 0 on PASS, 1 on FAIL.
+ */
+/* Send a CTERM PDU as an NSP data segment L->R (dir=0) or R->L (dir=1), deliver
+ * it to the peer CTERM session, and absorb the NSP ack the segment generates.
+ * Returns the CTERM event, or a negative value on a wire/protocol failure. */
+static int sethost_ship(int sv[2], int dir, struct dnet_engine *tx,
+                        struct dnet_engine *rx, struct dnet_cterm_session *rx_sess,
+                        const uint8_t *pdu, size_t plen, dnet_tick_t now)
+{
+    uint8_t frame[DNET_FRAME_MAX], rxbuf[DNET_FRAME_MAX], reply[DNET_FRAME_MAX];
+    size_t flen = 0, rlen = 0, rxlen = 0;
+    int has_reply = 0, wfd = sv[dir], rfd = sv[dir ^ 1];
+    enum dnet_link_event lev = DNET_LINK_EV_NONE;
+    enum dnet_cterm_event cev = DNET_CTERM_EV_NONE;
+
+    if (dnet_engine_link_send(tx, pdu, plen, frame, sizeof(frame), &flen, now) != 0 ||
+        move_frame(wfd, rfd, frame, flen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
+        dnet_engine_link_rx(rx, now, rxbuf, rxlen, reply, sizeof(reply), &rlen,
+                            &has_reply, &lev) != 0 || lev != DNET_LINK_EV_DATA)
+        return -1;
+    if (dnet_cterm_rx(rx_sess, rx->rx_data, rx->rx_datalen, &cev) != DNET_CTERM_OK)
+        return -1;
+    /* Absorb the NSP data-ack back to the sender so sequencing stays honest. */
+    if (has_reply) {
+        if (move_frame(rfd, wfd, reply, rlen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
+            dnet_engine_link_rx(tx, now, rxbuf, rxlen, frame, sizeof(frame), &flen,
+                                &has_reply, &lev) != 0)
+            return -1;
+    }
+    return (int)cev;
+}
+
+static int run_sethost_selftest(void)
+{
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
+        fprintf(stderr, "DECNETD-E-SELFTEST, socketpair failed: %s\n", strerror(errno));
+        return 1;
+    }
+    const uint8_t hwL[6] = { 0x02,0,0,0,0,0x01 };
+    const uint8_t hwR[6] = { 0x02,0,0,0,0,0x02 };
+    struct dnet_engine L, R;   /* L = 2.10 SET HOST initiator, R = 2.11 host */
+    struct dnet_cterm_session term, host;
+    if (dnet_engine_init(&L, 2, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0) != 0 ||
+        dnet_engine_init(&R, 2, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) != 0 ||
+        dnet_cterm_session_init(&term, DNET_CTERM_ROLE_TERMINAL) != 0 ||
+        dnet_cterm_session_init(&host, DNET_CTERM_ROLE_HOST) != 0) {
+        fprintf(stderr, "DECNETD-E-SELFTEST, init failed\n");
+        close(sv[0]); close(sv[1]);
+        return 1;
+    }
+
+    uint8_t frame[DNET_FRAME_MAX], rxbuf[DNET_FRAME_MAX], reply[DNET_FRAME_MAX];
+    uint8_t cpdu[DNET_CTERM_MAX_PDU], sc[128];
+    size_t flen = 0, rlen = 0, rxlen = 0, clen = 0, sclen = 0;
+    int has_reply = 0, fail = 0;
+    enum dnet_link_event lev = DNET_LINK_EV_NONE;
+    dnet_tick_t t = 100;
+
+    /* 1) open the logical link to the CTERM object (CI carries SC connect #42). */
+    if (dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, "SYSTEM", "", "",
+                                    sc, sizeof(sc), &sclen) != 0 ||
+        dnet_engine_link_open(&L, 2, 11, 0x2001, sc, sclen, 1459, 1,
+                              DNET_NSP_VER_41, frame, sizeof(frame), &flen, t) != 0 ||
+        move_frame(sv[0], sv[1], frame, flen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
+        dnet_engine_link_rx(&R, t, rxbuf, rxlen, reply, sizeof(reply), &rlen,
+                            &has_reply, &lev) != 0 || lev != DNET_LINK_EV_CONNECT_IND ||
+        dnet_cterm_sc_connect_object(R.link.conn_data, R.link.conn_len) != DNET_CTERM_OBJECT) {
+        fprintf(stderr, "DECNETD-E-SETHOST, connect to the CTERM object failed\n");
+        fail = 1; goto done;
+    }
+    /* R accepts -> CC -> L link RUN. */
+    if (dnet_engine_link_accept(&R, 0x2002, reply, sizeof(reply), &rlen, t) != 0 ||
+        move_frame(sv[1], sv[0], reply, rlen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
+        dnet_engine_link_rx(&L, t, rxbuf, rxlen, frame, sizeof(frame), &flen,
+                            &has_reply, &lev) != 0 || lev != DNET_LINK_EV_CONNECT_CONF ||
+        !dnet_link_is_up(&L.link) || !dnet_link_is_up(&R.link)) {
+        fprintf(stderr, "DECNETD-E-SETHOST, logical link did not come UP\n");
+        fail = 1; goto done;
+    }
+    t++;
+
+    /* 2) CTERM Bind / Bind Accept -> both sessions BOUND. */
+    if (dnet_cterm_bind(&term, "OVMXL$RTA1:", cpdu, sizeof(cpdu), &clen) != 0 ||
+        sethost_ship(sv, 0, &L, &R, &host, cpdu, clen, t) != DNET_CTERM_EV_BIND_IND) {
+        fprintf(stderr, "DECNETD-E-SETHOST, CTERM Bind did not reach the host\n");
+        fail = 1; goto done;
+    }
+    t++;
+    if (dnet_cterm_bind_accept(&host, "OVMXR", cpdu, sizeof(cpdu), &clen) != 0 ||
+        sethost_ship(sv, 1, &R, &L, &term, cpdu, clen, t) != DNET_CTERM_EV_BOUND ||
+        !dnet_cterm_is_bound(&term) || !dnet_cterm_is_bound(&host)) {
+        fprintf(stderr, "DECNETD-E-SETHOST, CTERM session did not bind\n");
+        fail = 1; goto done;
+    }
+    t++;
+
+    /* 3) terminal characteristics; host screen output; terminal keystrokes; OOB. */
+    if (dnet_cterm_send_characteristics(&term, 4, 132, 24,
+            DNET_CTERM_CH_ECHO | DNET_CTERM_CH_WRAP, cpdu, sizeof(cpdu), &clen) != 0 ||
+        sethost_ship(sv, 0, &L, &R, &host, cpdu, clen, t) != DNET_CTERM_EV_CHARACTERISTICS ||
+        host.width != 132 || host.page != 24) {
+        fprintf(stderr, "DECNETD-E-SETHOST, characteristics negotiation failed\n");
+        fail = 1; goto done;
+    }
+    t++;
+    const char *banner = "    OpenVMS VAX V7.3\r\nUsername: ";
+    if (dnet_cterm_write(&host, (const uint8_t *)banner, strlen(banner),
+            DNET_CTERM_WR_NOFORMAT, cpdu, sizeof(cpdu), &clen) != 0 ||
+        sethost_ship(sv, 1, &R, &L, &term, cpdu, clen, t) != DNET_CTERM_EV_WRITE ||
+        term.last.datalen != strlen(banner) ||
+        memcmp(term.last.data, banner, term.last.datalen) != 0) {
+        fprintf(stderr, "DECNETD-E-SETHOST, host screen output did not round-trip\n");
+        fail = 1; goto done;
+    }
+    t++;
+    const char *keys = "SYSTEM";
+    if (dnet_cterm_read_data(&term, (const uint8_t *)keys, strlen(keys), 0x0d,
+            cpdu, sizeof(cpdu), &clen) != 0 ||
+        sethost_ship(sv, 0, &L, &R, &host, cpdu, clen, t) != DNET_CTERM_EV_READ_DATA ||
+        host.last.datalen != strlen(keys) ||
+        memcmp(host.last.data, keys, host.last.datalen) != 0) {
+        fprintf(stderr, "DECNETD-E-SETHOST, terminal keystrokes did not round-trip\n");
+        fail = 1; goto done;
+    }
+    t++;
+    if (dnet_cterm_oob(&term, 0x19, cpdu, sizeof(cpdu), &clen) != 0 ||
+        sethost_ship(sv, 0, &L, &R, &host, cpdu, clen, t) != DNET_CTERM_EV_OOB ||
+        host.last.oob_char != 0x19) {
+        fprintf(stderr, "DECNETD-E-SETHOST, out-of-band did not round-trip\n");
+        fail = 1; goto done;
+    }
+    t++;
+
+    /* 4) host unbinds; then tear the NSP logical link down (DI/DC). */
+    if (dnet_cterm_unbind(&host, DNET_CTERM_UNBIND_NORMAL, cpdu, sizeof(cpdu), &clen) != 0 ||
+        sethost_ship(sv, 1, &R, &L, &term, cpdu, clen, t) != DNET_CTERM_EV_UNBOUND ||
+        dnet_cterm_state_of(&term) != DNET_CTERM_S_UNBOUND) {
+        fprintf(stderr, "DECNETD-E-SETHOST, Unbind did not release the session\n");
+        fail = 1; goto done;
+    }
+    t++;
+    if (dnet_engine_link_close(&L, DNET_LINK_REASON_NORMAL, frame, sizeof(frame), &flen, t) != 0 ||
+        move_frame(sv[0], sv[1], frame, flen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
+        dnet_engine_link_rx(&R, t, rxbuf, rxlen, reply, sizeof(reply), &rlen,
+                            &has_reply, &lev) != 0 || lev != DNET_LINK_EV_DISCONNECT ||
+        move_frame(sv[1], sv[0], reply, rlen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
+        dnet_engine_link_rx(&L, t, rxbuf, rxlen, frame, sizeof(frame), &flen,
+                            &has_reply, &lev) != 0 || lev != DNET_LINK_EV_DISCONNECT_CONF ||
+        dnet_link_state_of(&L.link) != DNET_LINK_CLOSED) {
+        fprintf(stderr, "DECNETD-E-SETHOST, logical link did not tear down cleanly\n");
+        fail = 1; goto done;
+    }
+
+done:
+    close(sv[0]); close(sv[1]);
+    if (fail) {
+        printf("DECNETD-SETHOST-SELFTEST: FAIL\n");
+        return 1;
+    }
+    printf("DECNETD-I-SETHOSTSELFTEST, $ SET HOST / CTERM terminal-service proof"
+           " PASSED (link to CTERM object 42 -> Bind/Accept -> characteristics ->"
+           " screen output + keystrokes + out-of-band -> Unbind -> clean"
+           " disconnect over a real socketpair; every CTERM payload"
+           " byte-identical)\n");
+    return 0;
+}
+
 static void usage(const char *argv0)
 {
     fprintf(stderr,
@@ -360,7 +541,12 @@ static void usage(const char *argv0)
         "                      scsd --dlm-selftest)\n"
         "  --nsp-selftest      run the NSP logical-link connection proof and exit\n"
         "                      (no CAP_NET_RAW -- two engines OPEN a link, move a\n"
-        "                      data segment+ack, and DISCONNECT over a socketpair)\n",
+        "                      data segment+ack, and DISCONNECT over a socketpair)\n"
+        "  --set-host-selftest run the $ SET HOST / CTERM terminal-service proof\n"
+        "                      and exit (no CAP_NET_RAW -- two engines carry a\n"
+        "                      whole terminal session: Bind, characteristics,\n"
+        "                      screen output, keystrokes, out-of-band, Unbind,\n"
+        "                      over a socketpair; every payload byte-identical)\n",
         argv0, DECNETD_DEFAULT_IFACE, (unsigned)DNET_T3_DEFAULT);
 }
 
@@ -376,6 +562,7 @@ int main(int argc, char **argv)
     int show_executor_only = 0;
     int self_test = 0;
     int nsp_self_test = 0;
+    int sethost_self_test = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--address") && i + 1 < argc)      addr_s = argv[++i];
@@ -390,6 +577,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--show-executor")) show_executor_only = 1;
         else if (!strcmp(argv[i], "--self-test"))     self_test = 1;
         else if (!strcmp(argv[i], "--nsp-selftest"))  nsp_self_test = 1;
+        else if (!strcmp(argv[i], "--set-host-selftest")) sethost_self_test = 1;
         else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             usage(argv[0]);
             return 0;
@@ -404,6 +592,8 @@ int main(int argc, char **argv)
         return run_self_test();
     if (nsp_self_test)
         return run_nsp_selftest();
+    if (sethost_self_test)
+        return run_sethost_selftest();
 
     /* Identity is required and never invented (INV-6; the scsd
      * resolve_node_identity discipline: a wrong identity must never be made up). */

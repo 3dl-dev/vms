@@ -32,9 +32,13 @@ target_link_libraries(vmsdecnet_engine PUBLIC vmsdecnet_routing vmsdecnet_nsp)
 add_executable(decnetd_exe decnetd.c)
 target_include_directories(decnetd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src/vmsscs/include   # scs_datalink.h
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include            # scs_datalink.h
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/cterm/include   # dnet_cterm.h (--set-host-selftest)
 )
-target_link_libraries(decnetd_exe PRIVATE vmsdecnet_engine vmsscs_datalink)
+# vmsdecnet_cterm: the CTERM terminal-service protocol (rd vms-4d2) that rides on
+# the logical link -- the daemon's --set-host-selftest proves a full $ SET HOST
+# terminal session over a socketpair.
+target_link_libraries(decnetd_exe PRIVATE vmsdecnet_engine vmsdecnet_cterm vmsscs_datalink)
 set_target_properties(decnetd_exe PROPERTIES
     OUTPUT_NAME "DECNETD"
     SUFFIX ".EXE"

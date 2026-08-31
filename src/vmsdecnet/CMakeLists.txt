@@ -14,6 +14,12 @@
 add_subdirectory(routing)
 add_subdirectory(nsp)
 
+# CTERM layer (rd vms-4d2, rung 3): the Command Terminal protocol behind
+# $ SET HOST -- the terminal-service layered product that rides on an
+# established NSP logical link (nsp/dnet_link). Pure codec + session FSM,
+# entirely SPEC-DERIVED (no oracle specimen; register sec 4.7).
+add_subdirectory(cterm)
+
 # Engine rung 1 (rd vms-449d): the userspace routing ENGINE that MOVES FRAMES
 # using the engine-agnostic codecs above -- AF_PACKET SOCK_RAW over the shared
 # src/vmsscs raw-L2 datalink (operator ruling vms-a1c, Option B), with the

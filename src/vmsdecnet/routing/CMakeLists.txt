@@ -8,7 +8,10 @@
 # dnet_adjacency (rd vms-b15, rung 3): a pure, clock-injectable adjacency state
 # machine + hello-cadence/listen-timer engine over dnet_hello. Same engine-
 # agnostic, no-socket/no-thread/no-alloc discipline as the codec.
-add_library(vmsdecnet_routing STATIC dnet_hello.c dnet_adjacency.c)
+# dnet_router_hello (rd vms-0aba): sibling Ethernet Router Hello codec (rflags
+# 0x0b, msg type 5) -- SPEC-DERIVED (no oracle specimen committed, see the
+# provenance note in dnet_router_hello.h), same pure byte-layout discipline.
+add_library(vmsdecnet_routing STATIC dnet_hello.c dnet_adjacency.c dnet_router_hello.c)
 target_include_directories(vmsdecnet_routing PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )

@@ -160,6 +160,18 @@ foreach(_anchored
     endif()
 endforeach()
 
+# test_syssvc_crtl_rms_veneer (vms-47e): the C RTL stdio->RMS veneer proof.
+# The suite drives src/vmsrms/crtl_rms_stdio.c (ovmx_crtl_fopen/fwrite/fread/
+# fclose -> sys$create/$put/$get/$close), so compile that veneer TU into this
+# ONE target -- it is the same reusable source the alpha DECC$SHR re-point will
+# whole-archive (the vms-47e child), kept out of the shipped vmsrms archive /
+# LIBVMSRMS$SHR vector here so this proof adds zero blast radius to producers.
+# Its strong sys$create reference pulls the vmsrms archive with no extra anchor.
+if(TARGET test_syssvc_crtl_rms_veneer)
+    target_sources(test_syssvc_crtl_rms_veneer PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_rms_stdio.c)
+endif()
+
 # test_arith_hparith (vms-db3, epic vms-8954): the Alpha FP-trap -> SS$_HPARITH
 # condition bridge, end to end under -static. Alpha-only (the test honest-skips
 # on other arches), so its two extra needs are guarded on the alpha target:

@@ -206,6 +206,39 @@ RMS was already assessed as **strong, not the predicted first wall** in the
   LIBVMSRMS$SHR, `--use` it in the port link, and verify PORTTEST lands on the
   ODS-2 volume independently). The RMS ENGINE readiness above is genuine; the
   PORT's binding TO it is the remaining R2 work.
+- **CRTL→RMS stdio VENEER, PROVEN (runtime) + landed (`vms-47e`, 2026-08-31):**
+  the genuine veneer now exists as a reusable TU — `src/vmsrms/crtl_rms_stdio.c`
+  (`ovmx_crtl_fopen`/`fwrite`/`fread`/`fclose` → `sys$create`/`$connect`/`$put`/
+  `$get`/`$close`, byte-exact FIX mrs=0 put / mrs=1 get, the mechanical mirror of
+  the proven `ovmx_link_rms_io.c`, fail-honest with NO POSIX fallback). It is
+  proven **un-fakeably** by `tests/qemu/test_syssvc_crtl_rms_veneer.c`: a file
+  written through the veneer's `fopen`/`fwrite` is then read back by a **DIFFERENT
+  reader** — the executive ACP directory search (`sys$parse`+`sys$search`, genuine
+  ODS-2 File ID via `rms_search_fid`) and the on-disk header (`rms_file_attr`,
+  IO$_ACCESS) — which see it on the real Files-11 volume with a `;1` version. A
+  ramfs POSIX write can produce NEITHER an ODS-2 File ID NOR a version, so this is
+  the teeth the alpha N=7 same-CRTL round-trip lacks. This closes the veneer
+  MECHANISM; it is the exact source the alpha DECC$SHR re-point will whole-archive.
+- **REMAINING (the `vms-47e` child — the ALPHA port wiring, a build sub-project,
+  NOT a same-session re-point):** re-pointing the alpha PORT IMAGE's
+  `decc$fopen`/… onto the veneer needs infrastructure that does not exist yet in
+  the alpha-dec-vms port world. Trace-grounded blocker (2026-08-31): the
+  alpha-dec-vms port musl (`tools/cross-alpha-vms/musl-arch`) has **no `vms_kif`
+  and no `vms_ioctl`** — its syscall backend is a raw Alpha `callsys` into the
+  Linux-Alpha kernel — and **LIBVMSRMS$SHR is built only for the host executive
+  arch, never for the alpha-dec-vms port toolchain** (the port link `--use`s only
+  DECC$SHR + LIBOTS). So the child must, in order: (1) build the RMS engine +
+  `vms_kif`/ACP `ioctl(/dev/vms)` transport for the alpha-dec-vms musl world as an
+  alpha LIBVMSRMS$SHR; (2) compile `crtl_rms_stdio.c` into the alpha DECC$SHR and
+  suppress musl-alpha's own `decc$fopen`/… from the export vector so the veneer's
+  aliases win (`mk_decc_shr.sh` ALPHA branch); (3) `--use LIBVMSRMS$SHR` in the
+  port link + stage it in SYS$SHARE for IMGACT to bind; (4) upgrade the
+  `alpha-crtl-rms` boot gate (`tools/cross-alpha/run-module-gp-activation-alpha.sh`)
+  to write onto a WRITABLE mounted ODS-2 volume and add the independent-reader
+  step (a `$ DIRECTORY DKA0:[…]PORTTEST.DAT` / `sys$search` after the write). Until
+  then the alpha port image's file writes still reach the Linux-Alpha VFS, and the
+  N=7 gate remains a same-CRTL round-trip (honest label; the gate name is a
+  required-check and is left stable — the claim is corrected here, not the name).
 - **Locking, landed in V0.6:** RMS file-level share arbitration behind the DLM
   (`vms-50e`, #932) and RMS record-level locking behind the DLM (`vms-0dd`, #935)
   — real cross-node lock semantics, not local-only.
@@ -214,10 +247,15 @@ RMS was already assessed as **strong, not the predicted first wall** in the
 
 Nothing in the original Axis-3 "primitives absent" list stands anymore — the
 remaining gap is **workload coverage**, not missing RMS mechanism. The
-compiler-driver workload is now proven **at the RMS ENGINE level** over the real
-ACP by `tests/qemu/test_syssvc_rms_workload.c` (vms-1b5); the remaining hole is
-the alpha PORT image's CRTL binding to that engine (still musl-POSIX → ramfs, see
-the §3.1 correction — `vms-47e`).
+compiler-driver workload is proven **at the RMS ENGINE level** over the real ACP
+by `tests/qemu/test_syssvc_rms_workload.c` (vms-1b5), and the **CRTL→RMS stdio
+veneer** that binds `fopen`/`fwrite`/`fread`/`fclose` to those services is now
+landed + proven un-fakeably against the ODS-2 volume by
+`tests/qemu/test_syssvc_crtl_rms_veneer.c` (vms-47e, see the §3.1 veneer bullet).
+The remaining hole is **narrow and specific**: wiring that veneer into the alpha
+PORT image's DECC$SHR (a build sub-project — the alpha-dec-vms port world has no
+`vms_kif`/RMS substrate yet; the `vms-47e` child, §3.1). Until that lands, the
+alpha port image's own file writes are still musl-POSIX → Linux-Alpha VFS.
 
 > **rd-ID caveat (Rule 10):** this table's "rd item" column reads `vms-1b5`, but
 > in rd `vms-1b5` is actually the *decc$feature* item; the RMS-beyond-stdio item
@@ -273,6 +311,20 @@ this evidence were left on both items (2026-08-31) recommending the conductor cl
 or retarget them; not closed here — this was a read-only analysis pass, and by-SHA
 gate/close authority for this lane belongs to the conductor per those items' own
 history.
+
+**`vms-47e` (CRTL→RMS binding) — split (2026-08-31).** This PR lands + proves the
+reusable CRTL→RMS stdio veneer (`src/vmsrms/crtl_rms_stdio.c`) with an un-fakeable
+independent-ODS-2 proof (`tests/qemu/test_syssvc_crtl_rms_veneer.c`), on the host
+executive harness where a real `/dev/vms` + mounted ODS-2 + independent ACP reader
+exist today (§3.1 veneer bullet). The remaining **alpha PORT-image wiring** is a
+build sub-project (no alpha-dec-vms `vms_kif`/RMS substrate exists yet) — the
+four-step plan in the §3.1 REMAINING bullet. Conductor to file it as the `vms-47e`
+child (this lane is read-only on rd): "vms-47e.1 — wire crtl_rms_stdio.c into the
+alpha DECC$SHR: build alpha LIBVMSRMS$SHR (+ vms_kif/ACP ioctl transport for the
+alpha-dec-vms musl world), suppress musl-alpha's decc$fopen/… so the veneer aliases
+win, `--use` it in the port link + stage in SYS$SHARE, and upgrade the alpha
+crtl_rms boot gate to write onto a WRITABLE ODS-2 volume + assert an independent
+`$ DIRECTORY`/`sys$search` sees PORTTEST.DAT with a real File ID + `;1`."
 
 ## 6. New rd items filed (this pass, 2026-08-31)
 

@@ -61,6 +61,34 @@ and the `<4 GB decc$malloc` are the OVMX bootstrap surface
 mk_decc_shr.sh's ALPHA branch). `C$_EXIT1` folds to a link-time absolute
 (`0x35a009`, oracle-grounded on lab-Alpha) — never an activation import.
 
+## Multi-.o variant (vms-bdd) — `JOINT_EXTRA`
+
+`JOINT_MAIN` selects the main source; `JOINT_EXTRA` (space-separated bare
+basenames beside this script) adds MORE objects to the SAME STRICT link. That
+is the multi-file rung: `mf_main.c` (JOINT_MAIN) calls ACROSS a genuine `.o`
+boundary into `mf_util.c` (JOINT_EXTRA) — `mf_dup`/`mf_len`/`mf_eq`/`mf_free`,
+defined in `mf_util.obj`, referenced from `mf_main.obj` — and `mf_util.c` in
+turn pulls `malloc`/`free`/`memcpy`/`strlen`/`strcmp` from the genuine alpha
+DECC$SHR. LINK.EXE must resolve BOTH the intra-image cross-`.o` refs (at link
+time) AND the `decc$` imports (at activation):
+
+```sh
+JOINT_MAIN=mf_main.c JOINT_EXTRA=mf_util.c IMG=ovmx-cross-alpha-vms \
+    tools/cross-alpha-vms/joint-e2e/build-joint-image.sh [OUTDIR]
+```
+
+This is the exact shape that hit `%LINK-F-UNDEF, EVAX: undefined symbol
+'decc$free' referenced by mf_util.obj` before PR #795 — musl-alpha defines
+`free = weak_alias(__libc_free, free)`, an equate `nm` did not report, so the
+ALPHA branch never exported `decc$free`, and a SEPARATE object referencing
+`free()` deferred it under a STRICT (no `--allow-undefined`) link. PR #795
+exports the whole weak-alias-equate class; this variant STRICT-links
+zero-deferred and (via the `mf-gate` mode of
+`tools/cross-alpha/run-module-gp-activation-alpha.sh`) activates on the real
+executive to sentinel 5 (`$STATUS = C$_EXIT1 + (5-1)*8 = 0x0035A029`). Leaving
+`JOINT_EXTRA` empty builds the N=3 (`joint_main.c`) and N=7 (`crtl_rms_test.c`)
+gates byte-identically to before.
+
 ## The activation round-trip (conductor / Alpha path, unchanged from before)
 
 1. IMGACT activates joint_e2e.exe; fills `.vms$imp` (`decc$main`,

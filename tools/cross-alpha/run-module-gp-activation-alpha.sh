@@ -63,6 +63,8 @@
 # USAGE:
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh            # gate (default)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh gate        # same, explicit
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-gate # crtl_rms heap+RMS+stdio -> N=7
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate       # multi-.o cross-boundary -> N=5 (vms-bdd)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh selftest     # can-fail proof, no boot
 #
 # EXIT: 0 iff the merged-$15 single-proc image activates N=3 on the real
@@ -104,6 +106,10 @@ WANT_SENTINEL=3
 # per-PR so a future LINK.EXE / toolchain / CRTL change cannot silently
 # re-break the malloc->mallocng activation path with no CI tell.
 MILESTONE_MAIN=joint_main.c
+# MILESTONE_EXTRA (vms-bdd): additional .c objects STRICT-linked with the milestone
+# main. Empty for the N=3 / N=7 single-object gates; the `mf-gate' mode sets it to
+# mf_util.c so the multi-.o cross-boundary program (mf_main.c) is built + activated.
+MILESTONE_EXTRA=""
 
 log() { echo "[modgp-activation] $*"; }
 die() { echo "[modgp-activation] FATAL: $*" >&2; exit 1; }
@@ -208,6 +214,48 @@ assert_crtl_rms() {
   return 1
 }
 
+# assert_mf <console-log> -- THE TEETH for the vms-bdd multi-.o proof (`mf-gate'
+# mode). The mf_main image (mf_main.obj + mf_util.obj, STRICT-linked) calls
+# ACROSS the .o boundary into mf_util (mf_dup/mf_len/mf_eq/mf_free), which pulls
+# malloc/free/memcpy/strlen/strcmp from the genuine DECC$SHR -- the decc$free-
+# class weak-alias export (PR #795) that a SEPARATE object referencing free()
+# needs. The proof is (a) the multi-file port-test OK line -- the cross-.o
+# round-trip completed on the real executive -- (b) the executive-recorded
+# $STATUS decoding to sentinel 5 (0x0035A029), and (c) no activation-failure
+# %-error. Pure function over the console transcript; shared verbatim by the real
+# BOOT-A run and the can-fail selftest.
+assert_mf() {
+  local log="$1"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+
+  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
+  port_ok=$(grep -qaE "OVMX multi-file port test: OK \(cross-\.o " "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 5 ] && mile_ok=1
+    fi
+  fi
+
+  # A crash before/at main (or a broken cross-.o resolution / unresolved decc$free
+  # regression) reads back an ACCVIO-class $STATUS and prints NO port-test line.
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+
+  echo "  (a) multi-.o cross-boundary OK : port_ok=$port_ok (want 1)"
+  echo "  (b) N=5 milestone seam         : ${seam:-<ABSENT>}"
+  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 5; ok=$mile_ok)"
+  echo "  (c) no activation err          : ok=$err_ok"
+  [ "$err_ok" -eq 0 ] && echo "      offending: $(printf '%s' "$errs" | tr '\n' '|')"
+
+  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # build_joint_images -- build the N=3 milestone image (joint_main.c -> return 3)
 # and the SS$_NORMAL control (joint_main_ok.c -> return 0) with the SAME merged
@@ -221,8 +269,13 @@ build_joint_images() {
   out_ok="$GATE_ROOT/joint-ok"
   rm -rf "$out_n3" "$out_ok"; mkdir -p "$out_n3" "$out_ok"
 
-  log "step 1a: build the milestone single-proc image ($MILESTONE_MAIN, sentinel $WANT_SENTINEL) with the merged toolchain"
-  JOINT_MAIN="$MILESTONE_MAIN" IMG="$VMS_IMG" bash "$bji" "$out_n3" \
+  # MILESTONE_EXTRA (vms-bdd): space-separated ADDITIONAL .c sources compiled into
+  # their own objects and STRICT-linked alongside the milestone main -- the multi-.o
+  # rung (`mf-gate' sets MILESTONE_MAIN=mf_main.c MILESTONE_EXTRA=mf_util.c so
+  # mf_main.obj calls across the boundary into mf_util.obj). Empty for the N=3 and
+  # N=7 gates, so they build byte-identically.
+  log "step 1a: build the milestone image ($MILESTONE_MAIN${MILESTONE_EXTRA:+ + $MILESTONE_EXTRA}, sentinel $WANT_SENTINEL) with the merged toolchain"
+  JOINT_MAIN="$MILESTONE_MAIN" JOINT_EXTRA="${MILESTONE_EXTRA:-}" IMG="$VMS_IMG" bash "$bji" "$out_n3" \
     || die "build-joint-image.sh (milestone $MILESTONE_MAIN) failed -- see $out_n3/build.log"
   grep -q 'LINK-S-CREATED' "$out_n3/build.log" \
     || die "milestone image did not link (no %LINK-S-CREATED) -- see $out_n3/build.log"
@@ -471,7 +524,72 @@ EOF
     grep -aE "%IMGACT|%RUN-|%DCL-|IMGNOTFND|NOSUCHFILE|DEVNOTMOUNT|ACCVIO|SS\\\$_" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -20 || echo "  (none captured)"
     exit 1
     ;;
+  mf-gate)
+    # vms-bdd: the multi-.o STRICT-link + activation rung. Same real-executive
+    # boot as `crtl-rms-gate', but the MILESTONE image is a genuine MULTI-object
+    # program: mf_main.obj calls ACROSS the .o boundary into mf_util.obj, which
+    # pulls malloc/free/memcpy/strlen/strcmp from the genuine DECC$SHR. This is
+    # the exact shape that hit %LINK-F-UNDEF decc$free before PR #795 (a SEPARATE
+    # object referencing free() under a STRICT link); it now links zero-deferred
+    # and must activate to sentinel 5. A LINK.EXE / mk_decc_shr.sh regression that
+    # re-breaks the multi-.o STRICT link (or the weak-alias export) reds HERE.
+    MILESTONE_MAIN=mf_main.c
+    MILESTONE_EXTRA=mf_util.c
+    WANT_SENTINEL=5
+
+    # Prove assert_mf has teeth before trusting a green boot (mirrors the
+    # crtl-rms-gate selftest discipline).
+    _st=$(mktemp -d); _fails=0
+    cat > "$_st/pass.log" <<'EOF'
+OVMX multi-file port test: OK (cross-.o malloc/free/strlen/strcmp/memcpy) argc=1
+OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a029
+EOF
+    cat > "$_st/crash.log" <<'EOF'
+%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)
+JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4
+EOF
+    cat > "$_st/wrong.log" <<'EOF'
+OVMX multi-file port test: OK (cross-.o malloc/free/strlen/strcmp/memcpy) argc=1
+OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039
+EOF
+    echo "-- mf selftest 1/3: clean multi-.o N=5 proof must PASS --"
+    if assert_mf "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
+    echo "-- mf selftest 2/3: activation crash (no port line + ACCVIO) must FAIL --"
+    if assert_mf "$_st/crash.log" >/dev/null 2>&1; then echo "  FAIL: crash accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- mf selftest 3/3: wrong sentinel (N=7 not 5) must FAIL --"
+    if assert_mf "$_st/wrong.log" >/dev/null 2>&1; then echo "  FAIL: wrong sentinel accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "mf selftest failed -- assert_mf cannot be trusted; aborting before the boot"
+    echo ""
+
+    build_joint_images
+    assemble_boot_image
+    log "step 3: BOOT A -- activate the multi-.o N=5 image (cross-.o libc surface) on the REAL executive"
+    run_boot_a
+    echo ""
+    echo "========================================================================"
+    echo "== vms-bdd multi-.o -> N=5: STRICT-linked multi-object program (mf_main +"
+    echo "== mf_util, cross-.o malloc/free/strlen/strcmp/memcpy) activation on the"
+    echo "== real OVMX/Alpha executive (qemu-system-alpha + /dev/vms, ODS-2 ACP)"
+    echo "========================================================================"
+    grep -aE "JOINT-E2E-PROOF:|OVMX-SEAM:|OVMX multi-file|%IMGACT|%DCL-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    echo "------------------------------------------------------------------------"
+    if assert_mf "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: the multi-.o port image ACTIVATED on the real executive over the mounted"
+      echo "      ODS-2 ACP; the cross-.o malloc/free/strlen/strcmp/memcpy round-trip"
+      echo "      completed and \$STATUS = %X0035A029 (N=5). The STRICT multi-object link"
+      echo "      (decc\$free export PR #795 + thunk-descriptor PR #958) holds at runtime."
+      exit 0
+    fi
+    echo ""
+    echo "FAIL: the multi-.o N=5 image did NOT cleanly activate (cross-.o libc + sentinel 5)"
+    echo "      -- a REAL regression of the multi-object STRICT-link / activation path. Full log:"
+    echo "      $WORK/modgpA.log"
+    grep -aE "%IMGACT|%RUN-|%DCL-|IMGNOTFND|NOSUCHFILE|DEVNOTMOUNT|ACCVIO|SS\\\$_" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -20 || echo "  (none captured)"
+    exit 1
+    ;;
   *)
-    die "unknown mode '$MODE' (use: gate | crtl-rms-gate | selftest)"
+    die "unknown mode '$MODE' (use: gate | crtl-rms-gate | mf-gate | selftest)"
     ;;
 esac

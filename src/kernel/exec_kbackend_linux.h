@@ -845,6 +845,23 @@ static inline int exec_l2_open(const char *ifname, uint16_t ethertype,
 		return -ENODEV;
 	}
 
+	/* vms-7eb: the executive OWNS this datalink, so it brings the interface
+	 * up when SCS opens it -- exactly as PEDRIVER brings up the LAN adapter
+	 * when the cluster starts. Without this, bind() succeeds on an
+	 * administratively-down NIC but the first send fails ENETDOWN. Idempotent
+	 * (a no-op when already up); needs the RTNL lock, as any flag change from
+	 * kernel context does. */
+	if (!(dev->flags & IFF_UP)) {
+		rtnl_lock();
+		rc = dev_change_flags(dev, dev->flags | IFF_UP, NULL);
+		rtnl_unlock();
+		if (rc) {
+			dev_put(dev);
+			sock_release(sock);
+			return rc;
+		}
+	}
+
 	memset(&sll, 0, sizeof(sll));
 	sll.sll_family = AF_PACKET;
 	sll.sll_protocol = htons(ethertype);

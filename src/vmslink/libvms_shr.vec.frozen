@@ -366,3 +366,5 @@ sysuaf_set_password_salt=PROCEDURE
 sysuaf_view_to_raw=PROCEDURE
 vms$$chan_is_bg=PROCEDURE
 vms$$chan_is_file=PROCEDURE
+sys$setexv=PROCEDURE
+vms$$exc_vector_get=PROCEDURE

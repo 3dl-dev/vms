@@ -43,6 +43,7 @@
 
 #include "dnet_engine.h"
 #include "dnet_cterm.h"     /* CTERM terminal-service protocol (--set-host-selftest) */
+#include "ovmx_identity.h"  /* INV-1 identity SSOT: human banner = OVMX product id */
 #include "scs_datalink.h"   /* the shared raw-L2 datalink (src/vmsscs) */
 
 /* Default datalink interface, matching scsd's br0 default (the lab-2 pod
@@ -459,7 +460,13 @@ static int run_sethost_selftest(void)
         fail = 1; goto done;
     }
     t++;
-    const char *banner = "    OpenVMS VAX V7.3\r\nUsername: ";
+    /* The host's login banner is a HUMAN surface: INV-1 says it derives from the
+     * identity SSOT, and INV-0 says an OVMX node announces its OWN product
+     * identity ("OpenVMX ... - OpenVMS-compatible"), never bare "OpenVMS", which
+     * would be passing-off. (When the peer is a REAL VMS host the banner is
+     * whatever that host sends -- CTERM carries it verbatim; here the host is an
+     * OVMX node, so it announces OVMX.) */
+    const char *banner = "    " OVMX_PRODUCT_BANNER "\r\nUsername: ";
     if (dnet_cterm_write(&host, (const uint8_t *)banner, strlen(banner),
             DNET_CTERM_WR_NOFORMAT, cpdu, sizeof(cpdu), &clen) != 0 ||
         sethost_ship(sv, 1, &R, &L, &term, cpdu, clen, t) != DNET_CTERM_EV_WRITE ||

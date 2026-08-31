@@ -34,6 +34,8 @@ target_include_directories(decnetd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/vmsscs/include            # scs_datalink.h
     ${CMAKE_SOURCE_DIR}/src/vmsdecnet/cterm/include   # dnet_cterm.h (--set-host-selftest)
+    ${CMAKE_SOURCE_DIR}/src/libvms/include            # ovmx_identity.h (INV-1 banner SSOT)
+    ${CMAKE_SOURCE_DIR}/src/vmsfs/include             # transitive header of ovmx_identity.h
 )
 # vmsdecnet_cterm: the CTERM terminal-service protocol (rd vms-4d2) that rides on
 # the logical link -- the daemon's --set-host-selftest proves a full $ SET HOST

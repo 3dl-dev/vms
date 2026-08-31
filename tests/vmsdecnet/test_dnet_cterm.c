@@ -44,6 +44,8 @@
 
 #include "dnet_cterm.h"
 #include "dnet_engine.h"
+#include "ovmx_identity.h"  /* INV-1/INV-0: a self-announcing banner is the OVMX
+                             * product identity, never a bare "OpenVMS" literal */
 
 static int failures = 0;
 static void check(int cond, const char *what)
@@ -123,7 +125,7 @@ static void test_codec(void)
 
     memset(&m, 0, sizeof(m));
     m.type = DNET_CTERM_MSG_WRITE; m.wr_flags = DNET_CTERM_WR_POSTFIX_NL;
-    const char *scr = "OpenVMS VAX V7.3   Node VAX1\r\n";
+    const char *scr = OVMX_PRODUCT_BANNER "   Node OVMXR\r\n";
     m.datalen = (uint16_t)strlen(scr); memcpy(m.data, scr, m.datalen);
     rt(&m, "Write encodes");
     { uint8_t b[DNET_CTERM_MAX_PDU]; size_t n; struct dnet_cterm_msg o;
@@ -195,7 +197,7 @@ static void test_session(void)
           "host negotiated width 80 / page 24");
 
     /* host writes a banner (screen output down). */
-    const char *banner = "Welcome to OpenVMS (TM) VAX Operating System\r\n";
+    const char *banner = "Welcome to " OVMX_PRODUCT_BANNER "\r\n";
     check(dnet_cterm_write(&host, (const uint8_t *)banner, strlen(banner),
               DNET_CTERM_WR_NOFORMAT, pdu, sizeof(pdu), &n) == DNET_CTERM_OK,
           "host builds Write (banner)");
@@ -369,7 +371,7 @@ static void test_engine_e2e(void)
     t++;
 
     /* --- host writes a login banner (screen output down) --- */
-    const char *banner = "    OpenVMS VAX V7.3\r\nUsername: ";
+    const char *banner = "    " OVMX_PRODUCT_BANNER "\r\nUsername: ";
     check(dnet_cterm_write(&host, (const uint8_t *)banner, strlen(banner),
               DNET_CTERM_WR_NOFORMAT, cterm, sizeof(cterm), &clen) == DNET_CTERM_OK,
           "host builds Write (login banner)");

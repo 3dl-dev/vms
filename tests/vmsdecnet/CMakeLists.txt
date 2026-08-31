@@ -28,6 +28,9 @@ add_test(NAME vmsdecnet_link_unit COMMAND test_dnet_link)
 # specimen; register sec 4.7). Warning-clean under -Werror.
 add_executable(test_dnet_cterm test_dnet_cterm.c)
 target_link_libraries(test_dnet_cterm PRIVATE vmsdecnet_engine vmsdecnet_cterm)
+target_include_directories(test_dnet_cterm PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/libvms/include    # ovmx_identity.h (INV-1 banner SSOT)
+    ${CMAKE_SOURCE_DIR}/src/vmsfs/include)     # transitive header of ovmx_identity.h
 target_compile_options(test_dnet_cterm PRIVATE -Werror)
 add_test(NAME vmsdecnet_cterm_unit COMMAND test_dnet_cterm)
 

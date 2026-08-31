@@ -877,58 +877,111 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          * creator. It keeps the SETIDENT stamp path below, with the identity
          * $CREPRC computed in the creator (child_username/child_uic/child_privs).
          */
-        rep.status = SS$_NORMAL;
-        if (!detached)
-            rep.status = vms_kif_register_subprocess();
-
-        if ((rep.status & 1) && child_prcnam[0])
-            rep.status = vms_kif_setprn(child_prcnam);
-
-        if (rep.status & 1) {
-            uint32_t gst = vms_kif_getjpi_self(&self_info);
-            if (gst & 1)
-                rep.vms_pid = self_info.vms_pid;
-            else
-                rep.status = gst;
-        }
         /*
-         * STAMP AN EXPLICIT /UIC or /PRIVILEGES OVERRIDE (vms-d31d), OR -- for a
-         * DETACHED process -- THE WHOLE CREATOR-COMPUTED IDENTITY.
+         * DECIDE STAMP-VS-REFUSE BEFORE THE PROCESS IS NAMED OR REGISTERED
+         * (vms-8be).
          *
-         * For a subprocess the identity was already inherited by continuation
-         * above, so vms_kif_setident() is needed ONLY when the caller asked for
-         * an EXPLICIT override (uic != 0 or prvadr). The child now holds the
-         * creator's privilege masks, so a creator that holds SETPRV can make the
-         * override and one that cannot is refused (SS$_NOPRIV) -- exactly the
-         * $CREPRC/AUTHORIZE rule vms_ioctl_setident enforces. For a detached
-         * process there was no continuation, so the stamp still establishes the
-         * whole identity (SYSTEM's [1,4] UIC and privileges reading its own
-         * World-denied SYSUAF), as before.
+         * `engage` decides whether an identity establishment is even attempted:
+         * a subprocess inherits by continuation and needs it only for an
+         * explicit override, a detached process always establishes the
+         * creator-computed identity. `child_username[0]` then splits
+         * stamp-vs-refuse. The CLAIMED-BUT-INEFFECTIVE guard (vms-bbd, INV-6):
+         * an override with no executive user name to stamp it under (the
+         * unauthenticated boot STARTUP-DCL, vms-a2d1) cannot reach the row
+         * through SETIDENT (which refuses an empty name), so it is refused
+         * (SS$_NOPRIV) rather than silently dropped while the caller is told
+         * %RUN-S-PROC_ID.
          *
-         * `engage` decides whether an identity establishment is even attempted;
-         * `child_username[0]` then splits stamp-vs-refuse. The CLAIMED-BUT-
-         * INEFFECTIVE guard is preserved (vms-bbd, INV-6): an override with no
-         * executive user name to stamp it under (the unauthenticated boot
-         * STARTUP-DCL, vms-a2d1) cannot reach the row through SETIDENT (which
-         * refuses an empty name), so it is refused (SS$_NOPRIV) rather than
-         * silently dropped while the caller is told %RUN-S-PROC_ID.
+         * This refusal is a function of the ARGUMENTS ALONE, so it is taken
+         * HERE -- before vms_kif_setprn / vms_kif_register_subprocess enter
+         * this task in the executive's process table. A refused override
+         * therefore NAMES nothing and REGISTERS nothing: it leaves NO live PCB
+         * behind (vms-8be), rather than registering a named row and then
+         * racing vms_proc_reap_dead() to tear it down once the refusal is
+         * already a foregone conclusion. A caller that probes the refused name
+         * finds no process, which is what the LARP guard must guarantee.
          */
-        {
-            int override_asked = (uic != 0 || prvadr != NULL);
-            int engage = detached ? (child_username[0] != 0 || override_asked)
-                                  : override_asked;
+        int override_asked = (uic != 0 || prvadr != NULL);
+        int engage = detached ? (child_username[0] != 0 || override_asked)
+                              : override_asked;
+
+        rep.status = SS$_NORMAL;
+        if (engage && child_username[0] == 0) {
+            /* Override asked with no user name to stamp it under: refuse
+             * before touching the executive, so nothing is registered or
+             * named under the refused identity (vms-8be). */
+            rep.status = SS$_NOPRIV;
+        } else {
+            /*
+             * ESTABLISH THE CHILD'S EXECUTIVE IDENTITY BY CONTINUATION
+             * (vms-19e9).
+             *
+             * A SUBPROCESS ($CREPRC/SPAWN -- non-detached) inherits the
+             * CREATOR's executive identity from its UNFORGEABLE real_parent,
+             * which is still the process running this $CREPRC.
+             * vms_kif_register_subprocess() is issued BEFORE any other
+             * executive facility: the executive reads the creator's row and
+             * copies its UIC, user name and privileges onto this child, and
+             * mints it a FRESH, distinct VMS PID (a subprocess is a new VMS
+             * process, so -- unlike image activation -- it does not share the
+             * creator's PID; that keeps $GETJPI-by-PID, which lib$spawn's wait
+             * resolves the child's Linux pid through, unambiguous). This is
+             * what makes SPAWN work in the booted runtime, where the
+             * interactive DCL runs NON-ROOT after LOGINOUT's credential drop:
+             * the child becomes the creator's identity WITHOUT self-declaring
+             * a privileged name, which the executive would refuse a non-root
+             * caller (vms_ioctl_setident's guard, unchanged). Identity is
+             * parent-DERIVED, never asserted (Rule 10/INV-6).
+             *
+             * A DETACHED process (RUN/DETACHED) is NOT its creator's child
+             * after the setsid()+fork() above -- its real_parent is the
+             * exiting intermediate, which has no executive row -- so
+             * continuation cannot reach the creator. It keeps the SETIDENT
+             * stamp path below, with the identity $CREPRC computed in the
+             * creator (child_username/child_uic/child_privs).
+             */
+            if (!detached)
+                rep.status = vms_kif_register_subprocess();
+
+            if ((rep.status & 1) && child_prcnam[0])
+                rep.status = vms_kif_setprn(child_prcnam);
+
+            if (rep.status & 1) {
+                uint32_t gst = vms_kif_getjpi_self(&self_info);
+                if (gst & 1)
+                    rep.vms_pid = self_info.vms_pid;
+                else
+                    rep.status = gst;
+            }
+
+            /*
+             * STAMP AN EXPLICIT /UIC or /PRIVILEGES OVERRIDE (vms-d31d), OR --
+             * for a DETACHED process -- THE WHOLE CREATOR-COMPUTED IDENTITY.
+             *
+             * For a subprocess the identity was already inherited by
+             * continuation above, so vms_kif_setident() is needed ONLY when
+             * the caller asked for an EXPLICIT override (uic != 0 or prvadr).
+             * The child now holds the creator's privilege masks, so a creator
+             * that holds SETPRV can make the override and one that cannot is
+             * refused (SS$_NOPRIV) -- exactly the $CREPRC/AUTHORIZE rule
+             * vms_ioctl_setident enforces. For a detached process there was no
+             * continuation, so the stamp still establishes the whole identity
+             * (SYSTEM's [1,4] UIC and privileges reading its own World-denied
+             * SYSUAF), as before. The no-user-name override was already
+             * refused above, so `child_username[0]` is non-empty whenever
+             * `engage` is set here.
+             *
+             * $CREPRC stamps identity only (vms-14a): a subprocess's identity
+             * is inherited/supplied, not authenticated against SYSUAF here, so
+             * the plain (quota-less) SETIDENT is used and the executive omits
+             * VMS_PI_V_QUOTA rather than invent a quota block. JIB quota
+             * inheritance is a separate facility increment.
+             */
             if ((rep.status & 1) && engage && child_username[0]) {
-                /* $CREPRC stamps identity only (vms-14a): a subprocess's
-                 * identity is inherited/supplied, not authenticated against
-                 * SYSUAF here, so the plain (quota-less) SETIDENT is used and
-                 * the executive omits VMS_PI_V_QUOTA rather than invent a quota
-                 * block. JIB quota inheritance is a separate facility increment. */
                 uint32_t ist = vms_kif_setident(child_username, child_uic,
                                                 child_privs);
                 if (!(ist & 1))
                     rep.status = ist;
-            } else if ((rep.status & 1) && engage) {
-                rep.status = SS$_NOPRIV;
             }
         }
         /* Retried on EINTR and on a short write: an interrupted report

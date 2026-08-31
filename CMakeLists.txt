@@ -233,6 +233,13 @@ add_subdirectory(src/vmsscs)
 # docs/design-executive-boundary-audit-tracer.md.
 add_subdirectory(src/boundary_audit)
 
+# vmsdecnet - DECnet Phase IV for OVMX (rd epic vms-30e, rung 1 = vms-851).
+# Rung 1 lands only the routing-layer Ethernet Endnode Hello codec: a pure,
+# engine-agnostic byte-layout library (plain stdint + memcpy, no OVMX-chain
+# dependency), validated against the vms-3be lab-oracle specimen. Builds
+# unconditionally like vmsscs. docs/design-decnet-ovmx.md.
+add_subdirectory(src/vmsdecnet)
+
 # NetBSD/vax facility guest test tools (vmseflag/vmsaccess/vmsproctab/vmsmbx
 # + their width-safety negctl teeth) -- vms-74b, epic vms-509 "unified
 # cross-platform build" Rung D, docs/design-unified-cross-build.md §5/§8.
@@ -266,6 +273,7 @@ if(BUILD_TESTS)
     add_subdirectory(tests/vmsqueue)
     add_subdirectory(tests/dcl)
     add_subdirectory(tests/vmsscs)
+    add_subdirectory(tests/vmsdecnet)  # DECnet Phase IV codec (vms-851)
     add_subdirectory(tests/ovmx_init)
     add_subdirectory(tests/tools)
 

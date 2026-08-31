@@ -49,6 +49,11 @@
  * stays green.
  *
  * SYNCHRONISATION: pipes only, no sleeps; every cross-process wait is bounded.
+ * A and B are forked concurrently (A must $HIBER, so it cannot be the
+ * coordinator the way test_syssvc_mbx_wrtattn's A is), so the coordinator gates
+ * B's $ASSIGN-by-name on A's "mailbox created + logical name published" token --
+ * without that barrier B could translate the name before A publishes it and the
+ * cross-process $ASSIGN would flake (vms-eac).
  */
 
 #include <stdio.h>
@@ -135,7 +140,8 @@ static int executive_present(void)
  * process_b - the WRITER. Assigns the named mailbox (never creates it, never
  * arms any AST, never drains anything) and writes one message when asked. It
  * shares nothing with A but the name.
- *   p2c ('W' = write now, 'Q' = quit) from coordinator
+ *   p2c ('S' = A has created the mailbox and published its logical name, assign
+ *        now; 'W' = write now; 'Q' = quit) from coordinator
  *   c2p (uint32 assign status once, then a 'd' byte after each write)
  */
 static int process_b(int p2c_read, int c2p_write)
@@ -147,6 +153,19 @@ static int process_b(int p2c_read, int c2p_write)
         assign_status = SS$_BADPARAM;
         (void)!write(c2p_write, &assign_status, sizeof(assign_status));
         return 1;
+    }
+
+    /* Barrier before $ASSIGN-by-name (vms-eac): A and B are forked concurrently
+     * by the coordinator, so without this B could $ASSIGN(MBX_LOGNAME) before
+     * A's $CREMBX has published that name in LNM$SYSTEM -- the translation would
+     * miss and this cross-process $ASSIGN would intermittently fail. The
+     * coordinator sends 'S' only after A reports the mailbox+LNM are up, making
+     * the publish strictly-happen-before this assign. Deterministic, no sleep. */
+    {
+        char go;
+        if (read(p2c_read, &go, 1) != 1) return 1;
+        if (go == 'Q') return 0;   /* released during an early-failure teardown */
+        if (go != 'S') return 1;   /* protocol error */
     }
 
     struct dsc$descriptor_s namdsc = mkdsc(MBX_LOGNAME);
@@ -290,6 +309,24 @@ int main(int argc, char **argv)
      * reported (got == 1) and kill it if it deadlocked in $HIBER. */
     int got = 0;
 
+    /* Wait for A to CREATE the named mailbox, PUBLISH its logical name in
+     * LNM$SYSTEM, and arm its write-attention AST. A sends 'A' only after
+     * $CREMBX (which publishes the name) and the $SETMODE arm have both
+     * succeeded, so receiving it here means the name B is about to translate now
+     * exists. This must precede B's $ASSIGN -- A and B were forked concurrently,
+     * so gating B on this token is what removes the publish-vs-translate race
+     * (vms-eac). Bounded wait: a stuck A is a named FAIL, not a QEMU-wide hang. */
+    char armed = 0;
+    if (read_bounded(a2c[0], &armed, 1, PEER_TIMEOUT_MS) != 1 || armed != 'A') {
+        printf("  FAIL: A never reported arming its write-attention AST\n"); fail++; goto teardown1;
+    }
+    CHECK(1, "A: created the named mailbox, published its LNM, armed the write-attention AST and entered $HIBER (no explicit $SETAST drain)");
+
+    /* Only now release B to $ASSIGN by name -- the name is guaranteed published. */
+    if (send_token(p2c[1], 'S') != 0) {
+        printf("  FAIL: could not release B to assign\n"); fail++; goto teardown1;
+    }
+
     /* B reports its $ASSIGN status. */
     uint32_t b_assign = 0;
     if (read_bounded(c2p[0], &b_assign, sizeof(b_assign), PEER_TIMEOUT_MS) != 1) {
@@ -297,13 +334,6 @@ int main(int argc, char **argv)
     }
     CHECK(b_assign & 1, "B: $ASSIGN A's mailbox by LOGICAL NAME cross-process");
     if (!(b_assign & 1)) goto teardown1;
-
-    /* Wait for A to arm its write-attention AST and enter $HIBER. */
-    char armed = 0;
-    if (read_bounded(a2c[0], &armed, 1, PEER_TIMEOUT_MS) != 1 || armed != 'A') {
-        printf("  FAIL: A never reported arming its write-attention AST\n"); fail++; goto teardown1;
-    }
-    CHECK(1, "A: armed write-attention AST and entered $HIBER (no explicit $SETAST drain)");
 
     /* Release B to write. Its write queues the AST into A's executive queue --
      * A must be woken out of $HIBER to run it. */

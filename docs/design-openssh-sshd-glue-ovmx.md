@@ -149,6 +149,36 @@ The console login (`vms_login.c`) is the working reference for the whole flow.
   over BGn: and lands in DCL) is RUNG 3 step 3d — it needs the transport + fork
   feature, so it gates on those, not on this doc.
 
+## Implementation status (LANDED)
+
+3c is implemented on this design, unmodified OpenSSH + linker `--wrap`:
+
+- **AUTH.** `-DCUSTOM_SYS_AUTH_PASSWD` selects `sys_auth_passwd`
+  (`third-party/openssh/ovmx/ovmx_sshd_auth.c`), a thin adapter over
+  `ovmx_sshd_sysuaf_auth()` (`src/vmsssh/sshd_auth.c`): upcase → `sysuaf_lookup`
+  (binary SYSUAF via the RMS engine) → `sysuaf_authenticate` (Purdy) →
+  `sysuaf_interactive_login_permitted` (DISUSER/DISACNT). `--wrap=getpwnam`
+  resolves the login account from SYSUAF (UIC→uid/gid, `pw_shell`=DCL); non-SYSUAF
+  names fall through to the real getpwnam (privsep 'sshd'/'root').
+- **SESSION.** `--wrap=permanently_set_uid` runs the LOGINOUT pre-drop
+  (`ovmx_sshd_pre_drop_pw`, `src/vmsssh/sshd_session.c`) while still root —
+  executive `setident` **fail-closed** (`%OVMX-F-NOIDENT`+`_exit`), banner,
+  accounting — then OpenSSH's own `permanently_set_uid` performs the ordered,
+  permanent, fail-closed drop to the UIC (so `cred_drop.c` is not re-linked
+  here). `--wrap=execve` rewrites the DCL exec into
+  `vmsdcl --login [--captive] --lgicmd <f>`.
+- **Build.** `third-party/openssh/build-ssh-harness.sh` compiles the two adapters
+  + the OpenSSH-free helper TUs and links the OVMX static archives (SYSUAF/RMS/
+  purdy/accounting) from the `build-static` stage into the wrapped
+  sshd/sshd-session/sshd-auth.
+- **Proof.** The login DECISION (Purdy + flag enforcement, fail-closed on an
+  absent binary SYSUAF) is unit-tested over binary `$UAFDEF` records in
+  `tests/vmsssh/test_sshd_auth.c`. The wired, fail-closed SYSUAF *password* path
+  is driven end-to-end (a password login of an unknown SYSUAF user is refused)
+  in `tests/qemu/test_syssvc_ssh_server.c`. The **positive** "valid SYSUAF user →
+  lands in DCL" e2e is step 3d (it needs a SYSTARTUP-provisioned SYS$SYSTEM: with
+  a seeded SYSUAF over the ACP + DCL.EXE).
+
 ## Dependency summary
 
 3c (this design) is transport-independent and rework-safe. Sequencing:

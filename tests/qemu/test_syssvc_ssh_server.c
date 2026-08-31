@@ -162,6 +162,70 @@ static void dump_sshd_log(void)
     fclose(f);
 }
 
+/*
+ * vms-0cd RUNG-3 step 3c: the wrapped sshd now authenticates PASSWORDS against
+ * the BINARY SYSUAF (Purdy) via our sys_auth_passwd shim, selected at build with
+ * -DCUSTOM_SYS_AUTH_PASSWD (so a link that did NOT provide the shim would fail
+ * the build outright -- a running wrapped sshd already proves the shim is
+ * linked). This drives the negative, runtime-light half of the proof end to
+ * end: a PASSWORD login for a user with NO SYSUAF record must be REJECTED
+ * (fail-closed, INV-6). It needs only /dev/vms -- no provisioned SYS$SYSTEM: /
+ * DCL.EXE; the positive "valid SYSUAF user -> lands in DCL" proof is the
+ * SYSTARTUP-provisioned 3d e2e (it needs a mounted SYS$SYSTEM: with a seeded
+ * SYSUAF over the ACP + DCL.EXE). Returns 1 if the unknown-user password login
+ * was correctly refused, 0 if it slipped through (a fabricated accept).
+ */
+static int password_login_of_unknown_user_is_refused(void)
+{
+    const char *askpass = "/tmp/ovmx_askpass";
+    int pfd[2];
+    pid_t cp;
+    char buf[512];
+    size_t got = 0;
+    int cst = 0;
+
+    /* Stage the askpass helper (SSH_ASKPASS_REQUIRE=force makes the stock ssh
+     * client read the password from it with no controlling tty). */
+    {
+        FILE *f = fopen(askpass, "w");
+        if (!f) return 0;
+        fputs("#!/bin/sh\nprintf '%s\\n' 'no-such-purdy-password'\n", f);
+        fclose(f);
+        chmod(askpass, 0755);
+    }
+
+    if (pipe(pfd) != 0) return 0;
+    cp = fork();
+    if (cp == 0) {
+        setsid();                       /* no controlling tty -> use askpass */
+        setenv("SSH_ASKPASS", askpass, 1);
+        setenv("SSH_ASKPASS_REQUIRE", "force", 1);
+        setenv("DISPLAY", ":0", 1);
+        dup2(pfd[1], 1);
+        dup2(pfd[1], 2);
+        close(pfd[0]); close(pfd[1]);
+        char *av[] = { (char *)SRV_SSH, "-F", (char *)SRV_SSHCFG,
+                       (char *)"-l", (char *)"NOSUCHVMSUSER",
+                       (char *)"srvpw", (char *)"echo SHOULD_NOT_RUN", NULL };
+        execv(SRV_SSH, av);
+        _exit(127);
+    }
+    close(pfd[1]);
+    for (;;) {
+        ssize_t n = read(pfd[0], buf + got, sizeof(buf) - 1 - got);
+        if (n <= 0) break;
+        got += (size_t)n;
+        if (got >= sizeof(buf) - 1) break;
+    }
+    buf[got] = '\0';
+    close(pfd[0]);
+    waitpid(cp, &cst, 0);
+
+    /* Refused == the client did NOT exit 0 AND no session command ran. */
+    return !(WIFEXITED(cst) && WEXITSTATUS(cst) == 0)
+           && strstr(buf, "SHOULD_NOT_RUN") == NULL;
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -251,6 +315,13 @@ int main(void)
 
     CHECK(!proc_has_afunix_socket(sd),
           "no AF_UNIX socket fd in the wrapped sshd process -- its listener, accepted connection, and materialized session fd are executive-resident, no fabricated socketpair (vms-0cd / INV-6)");
+
+    /* vms-0cd 3c: SYSUAF password auth is wired and fail-closed. A running
+     * wrapped sshd already proves the sys_auth_passwd shim linked (the build
+     * used -DCUSTOM_SYS_AUTH_PASSWD, which drops OpenSSH's own definition); this
+     * drives it: a password login for an unknown SYSUAF user is REFUSED. */
+    CHECK(password_login_of_unknown_user_is_refused(),
+          "a PASSWORD login for a user with no SYSUAF record is REFUSED by the wrapped sshd -- SYSUAF/Purdy auth is wired and fails closed, no fabricated accept (vms-0cd 3c / INV-6)");
 
     if (fail) {
         if (strstr(buf, "OVMX_SRV_OK") == NULL)

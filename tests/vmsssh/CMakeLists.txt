@@ -81,3 +81,32 @@ set_tests_properties(ssh_ident_fail_honest PROPERTIES
     LABELS "unit;ssh;security"
     TIMEOUT 10
 )
+
+# vms-0cd (RUNG-3 step 3c): the wrapped-OpenSSH-sshd SYSUAF LOGIN DECISION. Like
+# the two tests above, this links the REAL product translation unit
+# (src/vmsssh/sshd_auth.c) directly -- the OpenSSH-independent half of the sshd
+# auth seam. It builds binary $UAFDEF records in memory (via libvms's SYSUAF view
+# API + the real Purdy hash) and asserts the security-critical policy
+# ovmx_sshd_check_login enforces after sys_auth_passwd reads a record: Purdy
+# verify AND login-flag enforcement (DISUSER/DISACNT refused), fail closed. It
+# also pins the fail-closed contract of the sys_auth_passwd / getpwnam bodies
+# when the binary SYSUAF engine is absent (host ctest links no LIBVMSRMS, so the
+# weak sysuaf_lookup engine is NULL -> -1 -> REJECT, never a fabricated accept).
+# The full sysuaf_lookup-over-ACP + SSH handshake is the qemu e2e
+# (tests/qemu/test_syssvc_ssh_server.c) against a real /dev/vms.
+add_executable(test_sshd_auth
+    test_sshd_auth.c
+    ${CMAKE_SOURCE_DIR}/src/vmsssh/sshd_auth.c
+)
+target_include_directories(test_sshd_auth PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsssh
+    ${CMAKE_SOURCE_DIR}/src/libvms/include
+)
+target_link_libraries(test_sshd_auth PRIVATE vms pthread m)
+add_test(NAME ssh_sshd_auth
+    COMMAND test_sshd_auth
+)
+set_tests_properties(ssh_sshd_auth PROPERTIES
+    LABELS "unit;ssh;security"
+    TIMEOUT 10
+)

@@ -20,51 +20,37 @@
 #include <string.h>
 #include <unistd.h>
 
-#ifdef __linux__
+#if defined(__linux__)
 
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <net/if_arp.h>  /* ARPHRD_ETHER -- scs_datalink_primary_iface() (vms-5ad) */
-#include <netpacket/packet.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 
-int scs_datalink_open(const char *ifname, uint16_t ethertype)
-{
-    int s = socket(AF_PACKET, SOCK_RAW, htons(ethertype));
-    if (s < 0) {
-        return -1;
-    }
+/* ============================================================================
+ * TWO Linux backends, selected at COMPILE time (vms-7eb piece 2):
+ *
+ *   SCS_DATALINK_VIA_EXECUTIVE defined  -> the EXECUTIVE backend, and ONLY it.
+ *       The booted OVMX runtime builds this. The raw 0x6007 wire is carried by
+ *       a KERNEL AF_PACKET socket the executive owns (src/kernel-core/vms_l2.c,
+ *       exec_l2_*), reached by direct /dev/vms VMS_IOCTL_L2_* ioctls. A booted,
+ *       non-root VMS process therefore needs ZERO Linux capabilities -- the
+ *       executive does the privileged I/O, gated on the VMS PHY_IO privilege.
+ *       The direct-AF_PACKET code is #ifdef'd OUT of this build, so a booted
+ *       SCSD.EXE is PHYSICALLY INCAPABLE of opening a raw socket itself (the
+ *       anti-fabrication separation the milestone gate depends on).
+ *
+ *   SCS_DATALINK_VIA_EXECUTIVE undefined -> the AF_PACKET PROBE backend, a
+ *       clean-room RE / oracle instrument ONLY (see its banner below).
+ *
+ * The MAC / interface lookups are SHARED: they use SOCK_DGRAM + getifaddrs,
+ * which need no CAP_NET_RAW, so a non-root process runs them under either
+ * backend. Only the raw-L2 open/send/recv/close/timeout differ.
+ * ==========================================================================*/
 
-    unsigned ifindex = if_nametoindex(ifname);
-    if (ifindex == 0) {
-        int e = errno ? errno : ENODEV;
-        close(s);
-        errno = e;
-        return -1;
-    }
-
-    struct sockaddr_ll sll;
-    memset(&sll, 0, sizeof(sll));
-    sll.sll_family = AF_PACKET;
-    sll.sll_protocol = htons(ethertype);
-    sll.sll_ifindex = (int)ifindex;
-
-    if (bind(s, (struct sockaddr *)&sll, sizeof(sll)) < 0) {
-        int e = errno;
-        close(s);
-        errno = e;
-        return -1;
-    }
-
-    return s;
-}
-
-void scs_datalink_close(int fd)
-{
-    close(fd);
-}
+/* ---- SHARED non-privileged interface lookups (both backends) ------------- */
 
 int scs_datalink_get_hwaddr(const char *ifname, uint8_t mac_out[6])
 {
@@ -135,6 +121,174 @@ int scs_datalink_primary_iface(char *out, size_t n)
     return found;
 }
 
+#if defined(SCS_DATALINK_VIA_EXECUTIVE)
+
+/* ---- EXECUTIVE backend: the raw L2 wire routes through /dev/vms ---------- */
+
+#include "vms_ioctl.h"   /* VMS_IOCTL_L2_* + struct vms_l2_*_args + VMS_IOCTL_REGISTER */
+#include <fcntl.h>
+
+/* SCSD opens exactly one datalink for its whole run; a small fd->handle table
+ * (sized like the NetBSD bpf table) keeps the executive handle + recv timeout
+ * the /dev/vms fd alone cannot carry. */
+#define SCS_DATALINK_MAX_OPEN 4
+struct l2_slot { int in_use; int fd; uint32_t handle; uint32_t timeout_ms; };
+static struct l2_slot g_l2[SCS_DATALINK_MAX_OPEN];
+
+static struct l2_slot *l2_find(int fd)
+{
+    for (int i = 0; i < SCS_DATALINK_MAX_OPEN; i++)
+        if (g_l2[i].in_use && g_l2[i].fd == fd) return &g_l2[i];
+    return NULL;
+}
+static struct l2_slot *l2_alloc(int fd, uint32_t handle)
+{
+    for (int i = 0; i < SCS_DATALINK_MAX_OPEN; i++)
+        if (!g_l2[i].in_use) {
+            g_l2[i].in_use = 1; g_l2[i].fd = fd;
+            g_l2[i].handle = handle; g_l2[i].timeout_ms = 0;
+            return &g_l2[i];
+        }
+    return NULL;
+}
+
+int scs_datalink_open(const char *ifname, uint16_t ethertype)
+{
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0)
+        return -1;                     /* no executive -> honest failure, never
+                                        * a silent AF_PACKET fallback: that code
+                                        * is not compiled into this binary. */
+    /* The executive resolves the caller's process (vms_proc_find_or_err) from
+     * its registration, then gates L2_OPEN on PHY_IO -- register first, exactly
+     * as scsd's DLM path does (scsd.c). */
+    struct vms_register_args reg;
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return -1; }
+
+    struct vms_l2_open_args a;
+    memset(&a, 0, sizeof(a));
+    strncpy(a.ifname, ifname, sizeof(a.ifname) - 1);
+    a.ethertype = ethertype;
+    if (ioctl(fd, VMS_IOCTL_L2_OPEN, &a) < 0) { close(fd); return -1; }
+    if (a.status != 1u) {          /* SS$_NORMAL == 1; anything else is honest
+                                    * refusal (SS$_NOPRIV without PHY_IO,
+                                    * SS$_NOSUCHDEV 2680 for an absent iface). */
+        close(fd);
+        errno = (a.status == 2680u) ? ENODEV : EACCES;
+        return -1;
+    }
+    if (l2_alloc(fd, a.handle) == NULL) { close(fd); errno = ENOMEM; return -1; }
+    return fd;
+}
+
+void scs_datalink_close(int fd)
+{
+    struct l2_slot *s = l2_find(fd);
+    if (s != NULL) {
+        struct vms_l2_close_args a;
+        memset(&a, 0, sizeof(a));
+        a.handle = s->handle;
+        (void)ioctl(fd, VMS_IOCTL_L2_CLOSE, &a);
+        memset(s, 0, sizeof(*s));
+    }
+    close(fd);
+}
+
+ssize_t scs_datalink_send(int fd, int ifindex, uint16_t ethertype,
+                          const uint8_t dst_mac[6],
+                          const uint8_t *frame, size_t len)
+{
+    struct l2_slot *s = l2_find(fd);
+    if (s == NULL) { errno = EBADF; return -1; }
+    if (len > VMS_L2_MAXLEN) { errno = EMSGSIZE; return -1; }
+    struct vms_l2_send_args a;
+    memset(&a, 0, sizeof(a));
+    a.handle = s->handle;
+    a.ifindex = (uint32_t)ifindex;
+    a.ethertype = ethertype;
+    memcpy(a.dst_mac, dst_mac, 6);
+    a.len = (uint32_t)len;
+    memcpy(a.data, frame, len);
+    if (ioctl(fd, VMS_IOCTL_L2_SEND, &a) < 0) return -1;
+    if (a.status != 1u) { errno = EIO; return -1; }
+    return (ssize_t)a.len;
+}
+
+ssize_t scs_datalink_recv(int fd, uint8_t *buf, size_t buf_len)
+{
+    struct l2_slot *s = l2_find(fd);
+    if (s == NULL) { errno = EBADF; return -1; }
+    struct vms_l2_recv_args a;
+    memset(&a, 0, sizeof(a));
+    a.handle = s->handle;
+    a.timeout_ms = s->timeout_ms;
+    if (ioctl(fd, VMS_IOCTL_L2_RECV, &a) < 0) return -1;
+    if (a.status != 1u) { errno = EAGAIN; return -1; }  /* nothing before the
+                                        * timeout -> the same "come back later"
+                                        * the AF_PACKET recv() path signals. */
+    size_t n = a.len;
+    if (n > buf_len) n = buf_len;
+    memcpy(buf, a.data, n);
+    return (ssize_t)n;
+}
+
+int scs_datalink_set_recv_timeout(int fd, int seconds)
+{
+    struct l2_slot *s = l2_find(fd);
+    if (s == NULL) { errno = EBADF; return -1; }
+    s->timeout_ms = (uint32_t)seconds * 1000u;
+    return 0;
+}
+
+#else  /* !SCS_DATALINK_VIA_EXECUTIVE -- the AF_PACKET PROBE backend */
+
+/* ---- AF_PACKET PROBE backend: a clean-room RE / ORACLE INSTRUMENT ONLY ----
+ * This opens a userspace AF_PACKET raw socket directly, which needs CAP_NET_RAW
+ * (or the ambient capabilities a lab pod grants an exec'd process). It is the
+ * kubectl-exec'd wire-mining tool that OBSERVES a real VAX's cluster wire -- it
+ * is NOT "OVMX running", and a run of it NEVER counts as a booted OVMX joining
+ * a cluster. The booted runtime compiles SCS_DATALINK_VIA_EXECUTIVE above
+ * instead, and this raw-socket code is then absent from that binary entirely. */
+
+#include <netpacket/packet.h>
+
+int scs_datalink_open(const char *ifname, uint16_t ethertype)
+{
+    int s = socket(AF_PACKET, SOCK_RAW, htons(ethertype));
+    if (s < 0) {
+        return -1;
+    }
+
+    unsigned ifindex = if_nametoindex(ifname);
+    if (ifindex == 0) {
+        int e = errno ? errno : ENODEV;
+        close(s);
+        errno = e;
+        return -1;
+    }
+
+    struct sockaddr_ll sll;
+    memset(&sll, 0, sizeof(sll));
+    sll.sll_family = AF_PACKET;
+    sll.sll_protocol = htons(ethertype);
+    sll.sll_ifindex = (int)ifindex;
+
+    if (bind(s, (struct sockaddr *)&sll, sizeof(sll)) < 0) {
+        int e = errno;
+        close(s);
+        errno = e;
+        return -1;
+    }
+
+    return s;
+}
+
+void scs_datalink_close(int fd)
+{
+    close(fd);
+}
+
 /*
  * datalink_send_linux - THE Linux transport primitive. Kept as its own
  * named function (rather than inlined into scs_datalink_send() below) so a
@@ -176,6 +330,8 @@ int scs_datalink_set_recv_timeout(int fd, int seconds)
     tv.tv_usec = 0;
     return setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 }
+
+#endif  /* SCS_DATALINK_VIA_EXECUTIVE (executive backend) vs AF_PACKET probe */
 
 #elif defined(__NetBSD__)
 

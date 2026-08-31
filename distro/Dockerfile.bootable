@@ -480,6 +480,7 @@ RUN cmake -B build-static \
     -DOVMX_STATIC=ON \
     -DBUILD_TESTS=OFF \
     -DBUILD_TOOLS=ON \
+    -DOVMX_SCS_DATALINK_EXECUTIVE=ON \
     && cmake --build build-static --parallel $(nproc) 2>&1
 
 # -- System tree staging (OS kit + distribution image source) -----------------

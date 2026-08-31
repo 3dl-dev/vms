@@ -21,3 +21,13 @@ add_executable(test_dnet_router_hello test_dnet_router_hello.c)
 target_link_libraries(test_dnet_router_hello PRIVATE vmsdecnet_routing)
 target_compile_options(test_dnet_router_hello PRIVATE -Werror)
 add_test(NAME vmsdecnet_router_hello_unit COMMAND test_dnet_router_hello)
+
+# rd vms-449d, engine rung 1: the routing ENGINE that MOVES FRAMES. Proves the
+# HELLO the engine builds is byte-identical to the vms-3be VAX capture (Rule-8
+# oracle), then shuttles built HELLO frames between two engine instances over a
+# real socketpair(2) to drive the adjacency SM DOWN->INITIALIZING->UP->DOWN --
+# the datalink + HELLO tx/rx + adjacency-drive end to end, no CAP_NET_RAW.
+add_executable(test_dnet_engine test_dnet_engine.c)
+target_link_libraries(test_dnet_engine PRIVATE vmsdecnet_engine)
+target_compile_options(test_dnet_engine PRIVATE -Werror)
+add_test(NAME vmsdecnet_engine_unit COMMAND test_dnet_engine)

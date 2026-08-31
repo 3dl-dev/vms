@@ -1579,6 +1579,38 @@ uint32_t vms_kif_getexit_linux(uint32_t linux_pid, uint32_t *condition,
     return args.status;
 }
 
+/* Read the image-completion $STATUS of a subprocess named by its EXECUTIVE-
+ * assigned VMS PID (vms-e9a B2). This is how a /NOWAIT-spawn DRIVER -- the GCC
+ * cpp/cc1/as/ld pipeline hook -- recovers a completed pipeline stage's true
+ * $STATUS after its B1 spawn-notify completion fires, to decide whether to
+ * launch the next stage. Unlike vms_kif_getexit_linux (which names a child that
+ * SHARES the caller's VMS PID via REGISTER_CONTINUE, so only its Linux pid is
+ * unambiguous), a $CREPRC/LIB$SPAWN subprocess is a genuinely NEW VMS process
+ * with its OWN distinct VMS PID, which names its PCB directly. The read is gated
+ * by the executive exactly like $GETJPI (SS$_NOPRIV cross-UIC-group without
+ * WORLD; a same-group parent reading its own subprocess needs no privilege).
+ * Must be called BEFORE the subprocess is reaped (its PCB row survives as long
+ * as its Linux task is not yet released -- a zombie still names it). *has_exited
+ * (optional) is nonzero iff an image actually recorded a status. INV-6: no
+ * /dev/vms -> SS$_NOSUCHDEV, nothing read. */
+uint32_t vms_kif_getexit_pid(uint32_t vms_pid, uint32_t *condition,
+                             int *has_exited)
+{
+    struct vms_getexit_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.select  = VMS_JPI_SEL_PID;
+    args.vms_pid = vms_pid;
+
+    KIF_CALL(VMS_IOCTL_GETEXIT, &args);
+
+    if (condition)
+        *condition = args.condition;
+    if (has_exited)
+        *has_exited = (int)args.has_exited;
+    return args.status;
+}
+
 /* Record this (CLI) process's invoking command line + cliflag in the executive,
  * so an image it activates reads the SAME context back (inherited from this
  * PCB at REGISTER_CONTINUE time). cliflag == 0 means "no CLI" and the command

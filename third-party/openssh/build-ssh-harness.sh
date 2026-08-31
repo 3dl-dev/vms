@@ -170,10 +170,20 @@ OVMXINC="-I$ROOT/src/vmsssh -I$ROOT/src/libvms/include -I$ROOT/src/vmsprocess/in
 # the SYSUAF/RMS/accounting/purdy/kif objects resolve wherever they live. ABSENCE
 # is fatal (a missing archive would leave sysuaf_lookup an unresolved symbol, not
 # a silent no-op).
-OVMXLIBS=$(find "$ROOT/build-static" -type f \( -name '*.a' -o -name '*.EXE' \) 2>/dev/null | \
-    while IFS= read -r _f; do
-        if [ "$(head -c 7 "$_f" 2>/dev/null)" = "!<arch>" ]; then printf '%s ' "$_f"; fi
-    done)
+# NB: the archives are named by VMS convention with a literal '$' (e.g.
+# LIBVMS$SHR.EXE). A '$' in a path injected into the Makefile LIBS= line is
+# EATEN by make + shell variable expansion (LIBVMS$SHR.EXE -> LIBVMSHR.EXE -> ld
+# "No such file"), so COPY each discovered archive to a '$'-free name under $WORK
+# (which has none) and link the copies.
+OVMXLIBS=""
+_n=0
+find "$ROOT/build-static" -type f \( -name '*.a' -o -name '*.EXE' \) 2>/dev/null > "$WORK/ovmx_arch_candidates"
+while IFS= read -r _f; do
+    [ "$(head -c 7 "$_f" 2>/dev/null)" = "!<arch>" ] || continue
+    _n=$((_n + 1))
+    cp "$_f" "$WORK/ovmxarch_$_n.a"
+    OVMXLIBS="$OVMXLIBS $WORK/ovmxarch_$_n.a"
+done < "$WORK/ovmx_arch_candidates"
 [ -n "$OVMXLIBS" ] || { echo "FAIL: no OVMX static archives found under $ROOT/build-static (the OVMX_STATIC build-static stage must precede the SSH harness)"; exit 1; }
 OVMX_SSHD_OBJS="$WORK/ov_adapt_auth.o $WORK/ov_adapt_session.o $WORK/ov_sshd_auth.o $WORK/ov_sshd_session.o $WORK/ov_ssh_ident.o"
 # --wrap adds the 3c auth/session interposers on top of the transport wraps.

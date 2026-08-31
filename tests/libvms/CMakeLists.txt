@@ -135,6 +135,18 @@ libvms_add_test(test_libvms_condition_dispatch
 libvms_add_test(test_libvms_condition_unwind
     ${CMAKE_CURRENT_SOURCE_DIR}/test_condition_unwind.c)
 
+# Test 8d: vms-1fa rung-3 — Alpha invocation-context primitives (LIB$GET_INVO_*).
+# Constructs a faithful Alpha frame chain (procedure descriptors + register save
+# areas per the Calling Standard) and proves the PDSC/RSA walk reconstructs each
+# caller's PC, frame pointer, stack pointer, established-handler flag and
+# bottom-of-stack marker, the invocation-handle round-trip, the register-frame
+# hop, and the anchorless-target reconstruction perform_unwind() consults. The
+# host proves the walk engine (arch-generic control flow, 64-bit like Alpha);
+# real Alpha capture + machine transfer are deferred children. See
+# docs/design-chf-condition-handling.md rung-3.
+libvms_add_test(test_libvms_invo_context
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_invo_context.c)
+
 # Test 9: vms-f88 (epic vms-d0c) — the REAL binary $UAFDEF SYSUAF record over
 # the genuine Files-11 Prolog-3 indexed engine (supersedes the ASCII+SHA-256 /
 # 368-byte facade). Locks the 644-byte oracle layout, then authors a binary

@@ -1,7 +1,11 @@
 # Design: Real VMS Condition-Handling Dispatch (CHF)
 
 - **rd item:** `vms-2e72` (gap register R8 — see `docs/design-gcc-port-surface-gaps-register.md`)
-- **Status:** rung-1 + rung-2 landed; rungs 3–5 filed as children of `vms-2e72`.
+- **Status:** rung-1, rung-2 and rung-3 landed (rung-3 = the host-proven Alpha
+  invocation-context walk engine + primitives + the anchorless-unwind wiring;
+  the real Alpha register-file capture and the machine register-restore transfer
+  are the deferred Alpha-runtime children); rungs 4–5 filed as children of
+  `vms-2e72`.
 - **Rule:** VMS-compatibility-first (Rule 1, "do it like VMS"); Rule 9 / INV-6
   (real executive path, no per-process fake); clean-room (Rule 8 — this design is
   from the public OpenVMS Programming Concepts Manual + Calling Standard + System
@@ -83,7 +87,7 @@ Gap versus the target, itemised:
 | G2 | mechanism array carries the **real** establisher frame + depth + saved regs | `NULL` frame, `handler_count` as depth, zero regs |
 | G3 | handler search follows the **real invocation (frame) chain** | walks a side array unrelated to actual frames |
 | G4 | `SYS$UNWIND` runs intervening handlers in `CHF$V_UNWINDING` mode and **transfers control** to a target frame at `newpc` | **closed (rung-2)** for an anchored target frame: deferred unwind, intervening `CHF$V_UNWINDING` calls, `setjmp`/`longjmp` transfer, `newpc` honoured, frames abandoned. Resuming into an *un-anchored* ancestor frame → rung-3 (G5). |
-| G5 | Alpha ICB primitives (`LIB$GET_INVO_*`) expose the chain | absent |
+| G5 | Alpha ICB primitives (`LIB$GET_INVO_*`) expose the chain | **closed (rung-3)** on the host: real PDSC/RSA walk (`rtl/lib_invo.c`) reconstructs each caller's PC/FP/SP/handler/bottom from constructed Alpha frames; `perform_unwind` consults it on the anchorless path. Real Alpha register capture + the machine transfer are the deferred children. |
 | G6 | one dispatcher serves both software signals **and** hardware exceptions | software path only; the `SS$_HPARITH` bridge (`vms-db3`/GAP3) proves the HW→condition→handler-chain pattern for one code but is not unified |
 
 The narrower `SS$_HPARITH` FP-trap bridge (`src/libvms/rtl/arith_signal.c`,
@@ -202,14 +206,41 @@ each intervening non-active handler once with `CHF$V_UNWINDING` set, honouring
 > target frame's saved context (explicit anchor now vs. walked invocation chain in
 > rung-3) differs.
 
-### Rung-3 — Alpha invocation-context primitives *(child: G5)*
+### Rung-3 — Alpha invocation-context primitives *(landed; G5)*
 
-`LIB$GET_INVO_CONTEXT` / `LIB$GET_PREV_INVO_CONTEXT` / `LIB$GET_INVO_HANDLE` over
-an invocation-context block, walking the **genuine** Alpha frame chain (procedure
-descriptors / register save areas per the Calling Standard), so the handler search
-and unwind consult the real chain rather than the `lib$establish` side-chain.
-Width-sensitive → 3-way / Alpha-LP64 gated. **Test:** an Alpha-rig program that
-walks its own invocation chain and matches frame count/handles against the oracle.
+`LIB$GET_CURR_INVO_CONTEXT` / `LIB$GET_PREV_INVO_CONTEXT` /
+`LIB$GET_INVO_CONTEXT` / `LIB$GET_INVO_HANDLE` / `LIB$GET_PREV_INVO_HANDLE`
+(`src/libvms/rtl/lib_invo.c`, structures in `src/libvms/include/pdscdef.h`) walk
+the **genuine** Alpha call chain — procedure descriptors (PDSC) + register save
+areas (RSA) per the Alpha Calling Standard — so the runtime can reconstruct any
+frame's saved context (PC, FP=R29, SP=R30, preserved registers, established
+handler) rather than only the `lib$establish` side-chain.
+
+- **Walk engine (host-proven).** `vms$$invo_walk_prev` dispatches on the PDSC
+  kind: a **register-frame** (leaf) procedure's caller PC comes from the
+  return-address register (R26); a **stack-frame** procedure's caller is
+  reconstructed from the RSA at `frame_base + pdsc$w_rsa_offset` — the saved
+  return address plus every integer register named in `pdsc$l_ireg_mask`,
+  restored in ascending register order (recovering the caller's FP). Bottom of
+  stack is a 0 saved-return or an unresolved PC. A pluggable PDSC resolver is
+  the image-linkage seam (real image lookup on Alpha; a constructed table under
+  the host test). This is pure 64-bit control flow — proven host-side against
+  faithfully constructed Alpha frames (`tests/libvms/test_invo_context.c`,
+  28/28: stack walk, FP/handler/bottom reconstruction, handle round-trip,
+  register-frame hop, anchorless reconstruction).
+- **Anchorless-unwind wiring.** `perform_unwind` (rung-2, `lib_signal.c`), on a
+  target frame that armed **no** `VMS$UNWIND_ANCHOR`, now calls
+  `vms$$invo_reconstruct_target` to walk to that frame and rebuild its context,
+  then `vms$$invo_transfer` to resume there. On the host `vms$$invo_transfer`
+  honestly reports it cannot machine-restore an Alpha frame, so the rung-1
+  pop-only contract stands (`test_lib_fb3` 29/29, `test_condition_unwind` 13/13
+  unchanged).
+- **Deferred to the Alpha-runtime children (`vms-cc8` bracket / `vms-8e8c`):**
+  `LIB$GET_CURR_INVO_CONTEXT` capturing a **real** Alpha register file, the
+  genuine image PDSC-lookup resolver, and the machine register-restore + jump in
+  `vms$$invo_transfer` — proven on qemu-alpha with an Alpha-rig program that
+  walks its own chain and matches frame count/handles against the oracle, and
+  the libgcc-EH landing-pad resume that this enables.
 
 ### Rung-4 — unify hardware-exception dispatch *(child: G6)*
 

@@ -303,6 +303,36 @@ void *lib$establish(
 uint32_t lib$revert(void);
 
 /* ================================================================
+ * Alpha invocation-context primitives (vms-1fa, CHF rung-3).
+ *
+ * Walk the genuine Alpha call chain (procedure descriptors + register save
+ * areas per the Alpha Calling Standard) so a program - and CHF's own unwind -
+ * can inspect and reconstruct any frame's context. Operate on an Invocation
+ * Context Block (INVO_CONTEXT_BLK, libicb.h) and an invocation handle
+ * (INVO_HANDLE, pdscdef.h). See src/libvms/rtl/lib_invo.c and
+ * docs/design-chf-condition-handling.md rung-3.
+ * ================================================================ */
+
+struct _invo_context_blk;   /* full definition in libicb.h */
+
+/* Fill an ICB from the current context. */
+uint32_t lib$get_curr_invo_context(struct _invo_context_blk *icb);
+
+/* Walk an ICB one frame outward (to the caller), in place. Returns SS$_NORMAL
+ * for a produced caller (libicb$v_bottom_of_stack set at the base) or
+ * LIBICB$_NOMOREFRAMES when there is no caller. */
+uint32_t lib$get_prev_invo_context(struct _invo_context_blk *icb);
+
+/* Fill an ICB for the frame named by an invocation handle. */
+uint32_t lib$get_invo_context(uint64_t handle, struct _invo_context_blk *icb);
+
+/* The invocation handle for the frame an ICB describes. */
+uint64_t lib$get_invo_handle(struct _invo_context_blk *icb);
+
+/* The handle of the caller of the invocation named by `handle`. */
+uint64_t lib$get_prev_invo_handle(uint64_t handle);
+
+/* ================================================================
  * String Formatting Routines
  * ================================================================ */
 

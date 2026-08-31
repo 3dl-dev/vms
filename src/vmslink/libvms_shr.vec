@@ -425,3 +425,19 @@ vms$$chan_is_file=PROCEDURE
 # END (append-only rule: never insert mid-list, it would shift bound indices).
 sys$setexv=PROCEDURE
 vms$$exc_vector_get=PROCEDURE
+# vms-1fa rung-3: Alpha invocation-context primitives (LIB$GET_INVO_*) +
+# the invocation-chain walk/resolver helpers (rtl/lib_invo.c). Appended at the
+# manifest END (append-only rule: never insert mid-list, it would shift bound
+# indices). lib$ universals are exported; the vms$$invo_* helpers are the walk
+# engine + resolver/transfer seams the CHF dispatcher (rtl/lib_signal.c) and the
+# host walk-engine test consult.
+lib$get_curr_invo_context=PROCEDURE
+lib$get_invo_context=PROCEDURE
+lib$get_invo_handle=PROCEDURE
+lib$get_prev_invo_context=PROCEDURE
+lib$get_prev_invo_handle=PROCEDURE
+vms$$invo_reconstruct_target=PROCEDURE
+vms$$invo_set_curr_context=PROCEDURE
+vms$$invo_set_pdsc_resolver=PROCEDURE
+vms$$invo_transfer=PROCEDURE
+vms$$invo_walk_prev=PROCEDURE

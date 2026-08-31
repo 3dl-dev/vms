@@ -220,15 +220,14 @@ echo "--- ARM N: shipped default VAXCLUSTER=0 (unauthored) -- SCSD must self-gat
 qemu_launch "$DISK_N" /tmp/scs-n-boot.log /tmp/scs-n-boot.in
 login_system "ARM N"
 
-N_OFF=$(wc -c <"$LOG")
-send 'TYPE SYS$MANAGER:SCSD.OUT'
-wait_for '$' 20 "$N_OFF"
-N_SEG=$(segment_since "$N_OFF")
+# SCSD's SCSD-I-* startup lines go to OPA0: during the CONFIG phase (before
+# login), so they are already in this boot's captured console -- read it whole.
+N_SEG=$(tr -d '\r' <"$LOG")
 if printf '%s\n' "$N_SEG" | grep -qF 'SCSD-I-STANDALONE, VAXCLUSTER=0'; then
     ok "ARM N: SCSD ran at boot and self-gated off honestly (SCSD-I-STANDALONE, VAXCLUSTER=0)"
 else
-    bad "ARM N: SCSD.OUT never showed SCSD-I-STANDALONE, VAXCLUSTER=0"
-    printf '%s\n' "$N_SEG" | sed 's/^/    seen: /'
+    bad "ARM N: boot console never showed SCSD-I-STANDALONE, VAXCLUSTER=0"
+    tail -40 "$LOG" | tr -d '\r' | sed 's/^/    seen: /'
 fi
 
 N2_OFF=$(wc -c <"$LOG")
@@ -284,15 +283,15 @@ else
     printf '%s\n' "$P_SEG" | sed 's/^/    seen: /'
 fi
 
-P2_OFF=$(wc -c <"$LOG")
-send 'TYPE SYS$MANAGER:SCSD.OUT'
-wait_for '$' 20 "$P2_OFF"
-P2_SEG=$(segment_since "$P2_OFF")
+# SCSD's SCSD-I-* startup lines go to OPA0: during CONFIG (before login), so
+# they are already in this boot's captured console -- read it whole (the
+# br0/NONIC checks below reuse P2_SEG against the same console).
+P2_SEG=$(tr -d '\r' <"$LOG")
 if printf '%s\n' "$P2_SEG" | grep -qE 'SCSD-I-BOOTCLUSTER, VAXCLUSTER=2: starting cluster connection manager on [^ ]+, SCSNODE='; then
-    ok "ARM P boot2: SCSD.OUT shows SCSD-I-BOOTCLUSTER (self-configured from VAXCLUSTER=2)"
+    ok "ARM P boot2: boot console shows SCSD-I-BOOTCLUSTER (self-configured from VAXCLUSTER=2)"
 else
-    bad "ARM P boot2: SCSD.OUT never showed SCSD-I-BOOTCLUSTER"
-    printf '%s\n' "$P2_SEG" | sed 's/^/    seen: /'
+    bad "ARM P boot2: boot console never showed SCSD-I-BOOTCLUSTER"
+    tail -40 "$LOG" | tr -d '\r' | sed 's/^/    seen: /'
 fi
 if printf '%s\n' "$P2_SEG" | grep -qE 'SCSD-I-LISTEN, raw socket bound to .br0.'; then
     bad "ARM P boot2: SCSD bound the lab default 'br0' instead of resolving a real NIC"

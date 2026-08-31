@@ -34,21 +34,24 @@ $!      VMS device family the executive already established, never a Linux
 $!      interface name on this surface -- exactly as JOB_CONTROL_STARTUP.COM
 $!      above names OPA0:, the VMS console device, never a host tty path.
 $!
-$! WHY /OUTPUT AND /ERROR NAME A LOG, NOT OPA0:. Unlike JOB_CONTROL (which
-$! OWNS the console login loop and therefore needs the real console),
-$! SCSD's boot-time run log has no interactive purpose -- it exists so an
-$! operator can `TYPE SYS$MANAGER:SCSD.OUT` after the fact. Routing it to
-$! OPA0: instead would interleave SCSD's own SCSD-I-* startup lines with
-$! whatever STARTUP.COM (CONFIG phase runs early, alongside SYCONFIG.COM)
-$! is still writing to that same console -- the EXACT garbled-output defect
-$! JOB_CONTROL_STARTUP.COM's header describes for a different phase. A log
-$! file sidesteps the interleave entirely rather than needing a late phase
-$! to avoid it, which is what lets SCS run at CONFIG (see VMS$VMS.DAT's own
-$! comment on why CONFIG is right for this component) instead of END.
+$! WHY /OUTPUT AND /ERROR NAME OPA0:, THE OPERATOR CONSOLE. Cluster state
+$! transitions are OPCOM/operator-console events on real VMS, so SCSD's
+$! SCSD-I-* startup lines belong on OPA0: -- the same device JOB_CONTROL_
+$! STARTUP.COM names, resolved the same way (ovmx_console_terminal_path). A
+$! private log file is NOT an option here: a detached process's /OUTPUT is
+$! created by $CREPRC with a raw open() (src/libvms/syssvc/sys_process.c),
+$! which cannot create a file on the ODS-2 system disk the executive ACP
+$! serves -- SYS$MANAGER:SCSD.OUT comes back %RMS-E-FNF (the file is never
+$! made). Wiring $CREPRC /OUTPUT through RMS/the ACP so a detached process
+$! CAN log to an ODS-2 file is a real gap, tracked separately (vms-7eb
+$! follow-up); it does not gate cluster boot. The few SCSD-I lines may
+$! interleave with STARTUP.COM's CONFIG-phase console output, exactly as
+$! cluster messages interleave during a real VMS boot -- an accepted
+$! reality, not a defect, and each line is a single flushed write.
 $!
 $ SET NOON
 $ RUN /DETACHED -
       /PROCESS_NAME=SCS_SERVER -
-      /OUTPUT=SYS$MANAGER:SCSD.OUT /ERROR=SYS$MANAGER:SCSD.OUT -
+      /OUTPUT=OPA0: /ERROR=OPA0: -
       SYS$SYSTEM:SCSD.EXE
 $ EXIT

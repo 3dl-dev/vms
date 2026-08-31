@@ -107,6 +107,7 @@ add_library(vms ${OVMX_LIB_TYPE}
     syssvc/sys_device.c
     syssvc/sys_operator.c
     syssvc/sys_condition.c
+    syssvc/sys_setexv.c
     syssvc/sys_imgact.c
     syssvc/imgact_prodreg.c
     rtl/sha256.c

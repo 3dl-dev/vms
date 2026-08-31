@@ -421,3 +421,7 @@ sysuaf_set_password_salt=PROCEDURE
 sysuaf_view_to_raw=PROCEDURE
 vms$$chan_is_bg=PROCEDURE
 vms$$chan_is_file=PROCEDURE
+# vms-2e72 rung-1: real CHF condition dispatch. Appended at the frozen block's
+# END (append-only rule: never insert mid-list, it would shift bound indices).
+sys$setexv=PROCEDURE
+vms$$exc_vector_get=PROCEDURE

@@ -139,6 +139,44 @@ struct chf$handler_block {
 /* Maximum number of condition handlers in the chain */
 #define CHF$K_MAX_HANDLERS  64
 
+/* ================================================================
+ * Mechanism-array flag bits (chf$is_mch_flags)
+ *
+ * OpenVMS Calling Standard mechanism-array flags. A handler tests
+ * CHF$V_UNWINDING to distinguish a normal signal delivery (search
+ * for a handler that will resume) from an unwind delivery (the
+ * dispatcher is unwinding the stack and is calling this handler one
+ * last time so it can release resources before its frame is
+ * abandoned). See rung-2 in docs/design-chf-condition-handling.md.
+ * ================================================================ */
+
+#define CHF$V_UNWINDING     0           /* bit 0: an unwind is in progress */
+#define CHF$M_UNWINDING     (1u << CHF$V_UNWINDING)
+
+/* ================================================================
+ * SYS$SETEXV software exception vector selectors (vms-2e72 rung-1)
+ *
+ * The OpenVMS exception dispatcher consults three per-access-mode
+ * software exception vectors in a fixed order relative to the
+ * call-frame handler search:
+ *
+ *   1. PRIMARY      vector  (searched BEFORE the frame-handler chain)
+ *   2. call-frame handlers  (innermost frame -> outermost frame)
+ *   3. SECONDARY    vector  (searched AFTER  the frame-handler chain)
+ *   4. LAST-CHANCE  vector  (the final handler before the catch-all)
+ *
+ * A vectored handler has the same (signal-array, mechanism-array)
+ * prototype as a frame handler and returns SS$_CONTINUE / SS$_RESIGNAL
+ * identically. These selector codes are passed as SYS$SETEXV's first
+ * argument. Reference: OpenVMS Calling Standard, "Exception Vectors";
+ * OpenVMS System Services Reference, $SETEXV.
+ * ================================================================ */
+
+#define CHF$K_PRIMARY_VECTOR        0   /* primary exception vector */
+#define CHF$K_SECONDARY_VECTOR      1   /* secondary exception vector */
+#define CHF$K_LAST_CHANCE_VECTOR    2   /* last-chance exception vector */
+#define CHF$K_VECTOR_COUNT          3
+
 #ifdef __cplusplus
 }
 #endif

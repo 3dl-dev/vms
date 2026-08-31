@@ -1471,6 +1471,32 @@ uint32_t sys$brkthruw(
  * ================================================================ */
 
 /**
+ * sys$setexv - Set (or clear) a software exception vector (vms-2e72).
+ *
+ * Establishes one of the three per-access-mode software exception
+ * vectors the OpenVMS condition dispatcher consults around the
+ * call-frame handler search (see chfdef.h for the CHF$K_*_VECTOR
+ * selectors and docs/design-chf-condition-handling.md for the search
+ * order). A vectored handler has the same prototype as a frame handler
+ * (uint32_t h(struct chf$signal_array *, struct chf$mech_array *)) and
+ * returns SS$_CONTINUE / SS$_RESIGNAL identically.
+ *
+ * @param vector  CHF$K_PRIMARY_VECTOR / _SECONDARY_ / _LAST_CHANCE_.
+ * @param addres  New handler address, or NULL to clear the vector.
+ * @param acmode  Access mode (validated; single-mode userspace model).
+ * @param prvhnd  Optional out; receives the previously established
+ *                handler for this vector (NULL if none).
+ *
+ * @return SS$_NORMAL, or SS$_BADPARAM for an out-of-range selector.
+ */
+uint32_t sys$setexv(
+    uint32_t vector,
+    void *addres,
+    uint32_t acmode,
+    void **prvhnd
+);
+
+/**
  * sys$unwind - Unwind the call stack, invoking intervening handlers
  *
  * Called from within a condition handler (see lib$establish/lib$signal

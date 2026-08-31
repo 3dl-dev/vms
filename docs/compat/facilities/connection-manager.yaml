@@ -7,11 +7,14 @@ scope_1_0: in
 plan_ref: vms-694
 summary: >
   Full HELLO/disconnect/reconnect/depart finite-state machines, byte-exact
-  against mined wire captures. Quorum recompute (including quorum disk) is
-  real. Membership/rejoin is a single 3-party member-driven join FSM — VMS's
-  own model has no distinct rejoin state either, and §4(O.38) proved OVMX's
-  rejoin is 4/5 member-oracle reliable once its own self-verdict bug was fixed.
-last_reviewed: 2026-08-13
+  against mined wire captures. Quorum recompute (including quorum disk) is real,
+  driven by wire-grounded per-node VOTES — daemon-resident (scsd), executive
+  cutover deferred. Cluster membership now crosses into the executive: vms.ko
+  owns a real membership block that scsd populates from its live connection view
+  and SHOW CLUSTER reads through /dev/vms (the userspace file bridge is retired).
+  Membership/rejoin is a single 3-party member-driven join FSM — VMS's own model
+  has no distinct rejoin state either.
+last_reviewed: 2026-08-31
 items:
   - id: connection-manager$hello-protocol
     kind: protocol
@@ -28,6 +31,13 @@ items:
     authenticity: real
     vms: "CEVOTES/QUORUM recompute, including quorum disk as a virtual voting member"
     evidence: src/vmsscs/scs_quorum.c
+    notes: >
+      The documented connection-manager quorum arithmetic (VMScluster Systems for
+      OpenVMS sec 2.3.5; mined CM transcript 5-node worked example reproduced in the
+      unit test). Per-node VOTES are wire-grounded from the peer's own report
+      (cm_quorum_note_peer_votes reads the peer's mv.votes), not fabricated. Computed
+      daemon-resident in scsd, not yet executive-resident — the votes/quorum cutover
+      into vms.ko is deferred (vms-551 follow-on).
 
   - id: connection-manager$membership-rejoin
     kind: feature
@@ -35,4 +45,27 @@ items:
     authenticity: real
     vms: "Cluster membership join / rejoin"
     evidence: src/vmsscs/scsd.c
-    notes: "3-party member-driven join FSM (scsd.c enum join_step); no distinct rejoin state, matching VMS's own model. §4(O.38): 4/5 member-oracle reliable after fixing OVMX's own XITDONE self-verdict bug; residual 1/5 is real member-side loss, not an OVMX defect (operator call)."
+    notes: >
+      3-party member-driven join FSM (scsd.c enum join_step); no distinct rejoin
+      state, matching VMS's own model. §4(O.38): 4/5 member-oracle reliable after
+      fixing OVMX's own XITDONE self-verdict bug; residual 1/5 is real member-side
+      loss, not an OVMX defect (operator call).
+
+  - id: connection-manager$executive-membership
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "Cluster membership visible to the executive ($GETSYI/SHOW CLUSTER see a real cluster)"
+    evidence: src/kernel-core/vms_lock.c
+    notes: >
+      vms-551 / vms-967d / vms-8d4. vms.ko owns a module-global membership block
+      (struct vms_cluster_member{csid,sysid,scsnode[16],state}, up to 96 nodes,
+      separate from the CSID-only dlm_member_csids), populated by scsd's
+      scsd_publish_membership via VMS_IOCTL_CLUSTER_MEMBER_SET/CLEAR (0x39/0x3a) and
+      read by SHOW CLUSTER via the wired CLUSTER_MEMBER_GET (0x3b) — the userspace
+      /var/run/ovmx/cluster_state file bridge (an INV-6/Rule-9 userspace-to-userspace
+      path) is fully retired (vms-967d). NOTMEMBER (executive reachable, 0 members,
+      SS$_NORMAL) is honestly distinct from NOSUCHDEV (executive unreachable, 2680).
+      Proven on real 2/3-node QEMU + tests/integration/test_show_cluster_membership.sh.
+      Not verified: votes/quorum and $GETSYI cutover into the executive remain
+      deferred; today's membership block carries no votes field.

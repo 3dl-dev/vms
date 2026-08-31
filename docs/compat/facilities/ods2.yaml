@@ -11,14 +11,14 @@ summary: >
   ACP (in vms.ko), byte-exact-verified against a real OpenVMS VAX volume from lab-2.
   (The former OVMX runtime filesystem — a separate vmsfs.ko VFS driver with its own
   honestly-labeled non-byte-compatible format — was retired by vms-165 when the ACP
-  became the sole runtime SYS$DISK path.) File versioning is real and wired to DCL;
-  COPY/CREATE has a versioning-semantics gap.
-last_reviewed: 2026-08-27
+  became the sole runtime SYS$DISK path.) File versioning is real and wired to DCL, and
+  COPY now honors VMS output version-defaulting (highest+1, never a silent overwrite).
+last_reviewed: 2026-08-31
 items:
   - {id: vmsfs$runtime_fs, kind: subsystem, status: implemented, authenticity: real, vms: "SYS$DISK runtime file system — genuine Files-11 ODS-2 over the executive ACP", evidence: src/kernel-core/vmsfs_acp.c, notes: "vms-165 retired the legacy vmsfs.ko VFS driver (its own VMFS/VFH2 format); the runtime now reads/writes a real ODS-2 volume via $ASSIGN + IO$_ACCESS/READVBLK/WRITEVBLK through the ACP, with per-file SOGW protection enforced in acp_check_access"}
   - {id: ods2$reader, kind: feature, status: verified, authenticity: real, vms: "Files-11 L2 (ODS-2) volume reader", evidence: src/vmsfs/ods2/ods2_reader.c, verified_against: "real OpenVMS VAX V7.3 ODS-2 volume, tests/ods2/real_vax_ods2.dsk (see tests/ods2/PROVENANCE-real_vax_ods2.md)", notes: "byte-exact: home block, INDEXF.SYS, BITMAP.SYS, FH2 headers, FM2 retrieval pointers, directory listing"}
-  - {id: ods2$writer, kind: feature, status: implemented, authenticity: real, vms: "Files-11 L2 (ODS-2) volume writer", evidence: src/vmsfs/ods2/ods2_writer.c, notes: "not yet oracle round-tripped; some fields are [OVMX-inferred] rather than VSI-doc-cited"}
+  - {id: ods2$writer, kind: feature, status: implemented, authenticity: real, vms: "Files-11 L2 (ODS-2) volume writer", evidence: src/vmsfs/ods2/ods2_writer.c, notes: "home-block pair, index bitmap, ten reserved system files, BITMAP.SYS accounting, MFD, caller files/dirs with real FM2 pointers; block-device-backed mode added (vms-6d3b). Not yet oracle round-tripped; some fields are [OVMX-inferred] rather than VSI-doc-cited"}
   - {id: ods2$versioning, kind: feature, status: implemented, authenticity: real, vms: "File versioning (;N)", evidence: src/vmsrms/rms_core.c, notes: "rms_next_version; wired to DCL via dcl_filespec.c's resolve_version_suffix — bare names resolve to highest ;N"}
   - {id: ods2$case_fold, kind: feature, status: implemented, authenticity: real, vms: "Filename case-fold", evidence: src/vmsfs/vmsfs_translate.c}
   - {id: ods2$protection, kind: feature, status: implemented, authenticity: real, vms: "SOGW protection mapping", evidence: src/vmsfs/vmsfs_protect.c, notes: "pinned to VSI wiki; second-opinion check deleted (vms-2b8); enforcement solely at syscall layer, matching VMS delegation to the executive"}
-  - {id: ods2$copy_overwrite, kind: feature, status: implemented, authenticity: facade-risk, vms: "COPY/CREATE overwrite behavior vs. versioning", evidence: src/vmsdcl/dcl_cmd_file.c:538, notes: "cmd_copy uses fopen(\"wb\") on the existing highest version in place instead of creating ;N+1 — breaks VMS ODS-2 versioning semantics"}
+  - {id: ods2$copy_versioning, kind: feature, status: implemented, authenticity: real, vms: "COPY output version-defaulting vs. ODS-2 versioning", evidence: src/vmsdcl/dcl_cmd_file.c, notes: "resolve_out_version (cmd_copy): no output version -> highest+1 (unversioned if none existed), never a silent overwrite; explicit ;n that exists is an error unless /NEW_VERSION bumps to highest+1 — the old in-place fopen(\"wb\") facade is gone (VSI DCL Dictionary COPY/RENAME defaulting)"}

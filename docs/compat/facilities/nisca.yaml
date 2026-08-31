@@ -8,7 +8,7 @@ plan_ref: vms-694
 summary: >
   The LAN transport under SCS: genuine raw-Ethernet frames on the LAVC/SCA
   ethertype, not a UDP/IP tunnel standing in for the real wire.
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-31
 items:
   - id: nisca$lan-transport
     kind: protocol
@@ -16,4 +16,4 @@ items:
     authenticity: real
     vms: "NISCA/SCA raw-Ethernet transport, ethertype 0x6007 (LAVC/SCA)"
     evidence: src/vmsscs/scs_hello.c
-    notes: "AF_PACKET/SOCK_RAW genuine raw frames (requires CAP_NET_RAW) — not UDP/IP."
+    notes: "AF_PACKET/SOCK_RAW genuine raw frames (requires CAP_NET_RAW) — not UDP/IP. Raw-L2 datalink API closes the SCSD.EXE VAX build (vms-838)."

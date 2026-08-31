@@ -11,7 +11,7 @@ summary: >
   implemented, wrapping libm and broadly real. MTH$INIT_RANDOM_NUMBER_GENERATOR
   is absent. MTH$RANDOM uses an OVMX-invented LCG that has not been validated
   against VMS's actual PRNG algorithm.
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-31
 items:
   - {id: mth$_trig_transcendental, kind: routine, status: implemented, authenticity: real, vms: "Trigonometric/exponential/log/power group (MTH$SIN, MTH$COS, MTH$EXP, MTH$LOG, MTH$SQRT, ...; VMS ships ~45 total)", evidence: src/libvms/rtl/mth_routines.c, notes: "42/45 declared, wraps libm"}
   - {id: mth$random, kind: routine, status: implemented, authenticity: advisory, vms: "Pseudo-random number generator", evidence: src/libvms/rtl/mth_routines.c, notes: "OVMX-invented LCG, not validated against VMS's own PRNG algorithm"}

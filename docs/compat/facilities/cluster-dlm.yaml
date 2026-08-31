@@ -31,7 +31,7 @@ summary: >
   ACQUISITION path (vms-d1f, post-1.0 — today cross-node locks are daemon-
   choreographed and CSID-keyed; an application $ENQ of a remotely-mastered resource
   still returns the honest SS$_UNSUPPORTED "0.4" stub).
-last_reviewed: 2026-08-30
+last_reviewed: 2026-08-31
 items:
   - id: cluster-dlm$cross-node-lock
     kind: feature

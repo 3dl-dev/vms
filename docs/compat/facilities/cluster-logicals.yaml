@@ -7,8 +7,10 @@ scope_1_0: in
 plan_ref: vms-694
 summary: >
   Not separately evidenced as built. Cluster-wide logical-name scope degrades
-  to system-wide; cluster-wide global sections are absent.
-last_reviewed: 2026-08-13
+  to system-wide; cluster-wide global sections are absent. (The executive
+  logical-name store itself is real but node-local — see
+  kernel-executive$logical-name-store.)
+last_reviewed: 2026-08-31
 items:
   - id: cluster-logicals$clusterwide-logical-names
     kind: feature
@@ -16,7 +18,7 @@ items:
     authenticity: n/a
     vms: "LNM$M_CLUSTERWIDE table replication across cluster members"
     evidence: src/kernel-core/vms_lnm.c
-    notes: "Degrades to system-wide scope (per docs/compatibility-contract.md); no cluster-wide replication built."
+    notes: "Degrades to system-wide scope (per docs/compatibility-contract.md); no cluster-wide replication built — grep of vms_lnm.c on origin/main finds no CLUSTERWIDE path."
 
   - id: cluster-logicals$global-sections
     kind: feature

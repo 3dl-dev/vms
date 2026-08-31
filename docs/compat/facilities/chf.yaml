@@ -14,7 +14,7 @@ summary: >
   zeroed placeholders (facade-risk for handlers that read them). SYS$UNWIND
   and SYS$DCLEXH are documented simplified stubs. SYS$EXIV and SYS$SETEXV
   are absent.
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-31
 items:
   - {id: lib$establish, kind: routine, status: implemented, authenticity: advisory, vms: "Establish a condition handler", evidence: src/libvms/rtl/lib_signal.c, notes: "thread-local handler_stack walked in-process, not real machine-frame unwind"}
   - {id: lib$revert, kind: routine, status: implemented, authenticity: advisory, vms: "Revert to the previous condition handler", evidence: src/libvms/rtl/lib_signal.c}

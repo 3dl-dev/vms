@@ -12,7 +12,7 @@ summary: >
   COBOL/BASIC varying-string corpus. ~30 DSC$K_DTYPE_* data-type codes are all
   defined and real; VAX F/D/G/H floating dtypes are defined but nothing consumes
   them arithmetically. 6 copy/alloc helpers in descrip.c are implemented and real.
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-31
 items:
   - {id: dsc$k_class_s,  kind: struct, status: implemented, authenticity: real, vms: "Fixed-length (static) string descriptor class", evidence: src/libvms/include/descrip.h}
   - {id: dsc$k_class_d,  kind: struct, status: implemented, authenticity: real, vms: "Dynamic string descriptor class", evidence: src/libvms/include/descrip.h}

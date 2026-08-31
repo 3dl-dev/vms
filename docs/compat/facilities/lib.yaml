@@ -14,7 +14,7 @@ summary: >
   groups. Notable named gaps: LIB$ISHFT/ISHFTC, LIB$TRIM, LIB$DO_COMMAND,
   LIB$SFREE_WAIT. LIB$TPARSE/LIB$TABLE_PARSE — formerly the known gap — are
   now a real FSM with backtracking (vms-9f6, CLOSED).
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-31
 items:
   - {id: lib$_arith_bitops, kind: routine, status: partial, authenticity: real, vms: "Arithmetic/bit-manipulation group (LIB$ADDX, LIB$SUBX, LIB$BBSS/BBCC, LIB$EMUL, ...; VMS ships ~16)", evidence: src/libvms/rtl/lib_arith.c, notes: "14/16 present"}
   - {id: lib$ishft, kind: routine, status: absent, authenticity: n/a, vms: "Arithmetic/logical shift"}

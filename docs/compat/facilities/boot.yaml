@@ -10,7 +10,7 @@ summary: >
   9-phase STDRV phased driver startup, PID 1 sequencing through
   STARTUP.COM-equivalent, and an OPCOM operator-log bridge. SYSGEN
   parameters consumed at boot are only as complete as the sysgen facility.
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-31
 items:
   - {id: sysboot$conversational, kind: feature, status: implemented, authenticity: real, vms: "Conversational SYSBOOT> — halt, SHOW/SET/USE/WRITE, CONTINUE", evidence: src/ovmx_init/sysboot.c}
   - {id: stdrv$phased_startup,   kind: feature, status: implemented, authenticity: real, vms: "STDRV phased driver startup — 9 phases via VMS$PHASES.DAT + VMS$VMS.DAT registry", evidence: "distro/rootfs/vms/SYS0/SYSCOMMON/SYS$STARTUP/VMS$PHASES.DAT", plan_ref: vms-21a}

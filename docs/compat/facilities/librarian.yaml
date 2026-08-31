@@ -1,17 +1,22 @@
 # Source of truth for the LIBRARIAN row of the Compatibility Surface Register.
 facility: librarian
-name: "LIBRARIAN (.OLB Object Libraries)"
+name: "LIBRARIAN (.OLB Object Libraries + .TLB/.HLB)"
 domain: toolchain
-vms_ref: "OpenVMS LIBRARIAN Utility Reference Manual"
+vms_ref: "OpenVMS LIBRARIAN Utility Reference Manual; VSI OpenVMS DCL Dictionary (LIBRARY)"
 scope_1_0: in
 plan_ref: vms-59a
 summary: >
-  No LIBRARIAN.EXE binary exists yet — design-only. The plan is an `ar`
-  whole-archive container as the .OLB representation (Rule-8 labeled — VMS's
-  .OLB byte format is not reproduced); LINK.EXE already ingests `ar`
-  archives (see object-format), so .OLB consumption needs no new LINK.EXE
-  code — only a LIBRARIAN.EXE image and its native-link wiring
-  (mk_librarian.sh) remain. Self-host gate (vms-59a).
-last_reviewed: 2026-08-13
+  LIBRARIAN.EXE now EXISTS and is built + installed to SYS$SYSTEM (was
+  design-only at the last census). It creates/maintains .OLB object libraries
+  — an OVMX-labeled `ar` container of .OBJ (ELF) members (Rule 8: VMS's LBR
+  byte layout is unpublished) — with /CREATE /INSERT /DELETE /LIST /EXTRACT,
+  and LINK.EXE resolves undefined symbols by selectively pulling members. The
+  DCL LIBRARY command drives the same .OLB path plus OVMX text/help libraries
+  (.TLB/.HLB, an OVMX "LBRO" format, Rule 8). Proven end-to-end (build .OLB →
+  link → activate → run) and byte-identical-twice (reproducible archives).
+last_reviewed: 2026-08-31
 items:
-  - {id: librarian$olb-container-decision, kind: subsystem, status: designed, authenticity: n/a, vms: "LIBRARIAN.EXE — build/maintain .OLB object libraries", evidence: "src/vmslink/link.c:2112", scope_1_0: in, notes: "Decision made: ar whole-archive as .OLB container (Rule 8, VMS .OLB byte format not reproduced). LINK.EXE already ingests ar archives at this evidence line, covering .OLB consumption once wired; no LIBRARIAN.EXE binary, no mk_librarian.sh yet."}
+  - {id: librarian$olb-utility, kind: utility, status: implemented, authenticity: real, vms: "LIBRARIAN.EXE — build/maintain .OLB object libraries (/CREATE /INSERT /DELETE /LIST /EXTRACT)", evidence: "src/vmslink/librarian.c", notes: "337-line SYS$SYSTEM image; operations real. Proven end-to-end by src/imgact/test/run_olb_native.sh (LIBRARIAN → LINK selective pull → IMGACT activate → runs) and the ctest toolchain-olb-roundtrip; byte-identical determinism by tests/toolchain/run_mmk_component_build.sh. .OLB container is Rule-8 (see olb-container item)."}
+  - {id: librarian$dcl-library-cmd, kind: command, status: implemented, authenticity: real, vms: "DCL LIBRARY command — /CREATE /INSERT /EXTRACT /LIST (/DELETE for .OLB) across .OLB/.TLB/.HLB", evidence: "src/vmsdcl/dcl_library.c", notes: "Shares the .OLB reader/writer with LIBRARIAN.EXE via ovmx_olb.h. HELP reads the compiled .HLB directly (dcl_help.c)."}
+  - {id: librarian$olb-container, kind: struct, status: implemented, authenticity: advisory, vms: ".OLB object-library on-disk container", evidence: "src/vmslink/include/ovmx_olb.h", notes: "Standard `ar` archive of ELF .OBJ members — an OVMX design choice (Rule 8), NOT the unpublished VMS LBR byte layout. Inspectable by stock `ar t` (used as an independent test oracle); consumed by LINK.EXE's own ar reader."}
+  - {id: librarian$text-help-container, kind: struct, status: implemented, authenticity: advisory, vms: ".TLB text / .HLB help library on-disk format", evidence: "src/vmsdcl/include/dcl/hlb.h", notes: "OVMX 'LBRO' key-indexed binary format (magic/type/module table) — an OVMX design choice (Rule 8), not VMS binary-compatible. Real create/insert/extract/list + HELP consumption."}

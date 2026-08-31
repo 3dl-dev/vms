@@ -7,16 +7,18 @@ scope_1_0: in
 tier: 1
 plan_ref: vms-801
 summary: >
-  VMS ships ~10 channel/QIO services; OVMX declares 6. Only the console
-  channel is executive-routed and fully real; other channels are private
-  per-process file descriptors, invisible cross-process (advisory). The 6th
-  named routine, SYS$CANCEL (process-wide I/O cancellation), is registered
-  under the sys-process facility to avoid a duplicate row.
-last_reviewed: 2026-08-13
+  VMS ships ~10 channel/QIO services; OVMX declares 6. Executive-issued
+  channels are real and cross-process: the console terminal (OPA0:), mailbox
+  channels (vms_mbx.c) and BGn: sockets (vms_bg.c) route their QIOs into the
+  executive. Channels assigned to ordinary/private devices remain per-process
+  file descriptors, invisible cross-process (advisory). The 6th named routine,
+  SYS$CANCEL (process-wide I/O cancellation), is registered under the
+  sys-process facility to avoid a duplicate row.
+last_reviewed: 2026-08-31
 items:
-  - {id: sys$assign, kind: routine, status: implemented, authenticity: advisory, vms: "Assign an I/O channel to a device", evidence: src/libvms/syssvc/sys_assign.c, notes: "console channel executive-routed (real); other channels are private per-process fds, invisible cross-process"}
-  - {id: sys$dassgn, kind: routine, status: implemented, authenticity: advisory, vms: "Deassign an I/O channel", evidence: src/libvms/syssvc/sys_assign.c, notes: "same console/other-channel split as sys$assign"}
-  - {id: sys$qio, kind: routine, status: implemented, authenticity: advisory, vms: "Queue an I/O request (asynchronous)", evidence: src/libvms/syssvc/sys_qio.c, notes: "console channel executive-routed (real); other channels are private per-process fds"}
-  - {id: sys$qiow, kind: routine, status: implemented, authenticity: advisory, vms: "Queue an I/O request (waits for completion)", evidence: src/libvms/syssvc/sys_qio.c, notes: "same console/other-channel split as sys$qio"}
+  - {id: sys$assign, kind: routine, status: implemented, authenticity: advisory, vms: "Assign an I/O channel to a device", evidence: src/libvms/syssvc/sys_assign.c, notes: "console/mailbox/BGn: channels executive-routed (real, cross-process); ordinary channels are private per-process fds"}
+  - {id: sys$dassgn, kind: routine, status: implemented, authenticity: advisory, vms: "Deassign an I/O channel", evidence: src/libvms/syssvc/sys_assign.c, notes: "same executive/private-channel split as sys$assign"}
+  - {id: sys$qio, kind: routine, status: implemented, authenticity: advisory, vms: "Queue an I/O request (asynchronous)", evidence: src/libvms/syssvc/sys_qio.c, notes: "console/mailbox/BGn: channels executive-routed (real); ordinary channels are private per-process fds with no cross-process I/O queue"}
+  - {id: sys$qiow, kind: routine, status: implemented, authenticity: advisory, vms: "Queue an I/O request (waits for completion)", evidence: src/libvms/syssvc/sys_qio.c, notes: "same executive/private-channel split as sys$qio"}
   - {id: sys$device_scan, kind: routine, status: implemented, authenticity: real, vms: "Scan for devices matching selection criteria", evidence: src/libvms/syssvc/sys_device.c}
   - {id: sys$_other, kind: routine, status: absent, authenticity: n/a, vms: "Remaining SYS$ I/O channel/QIO services beyond assign/dassgn/qio/qiow/device_scan (VMS ships ~10 total for the QIO/channel surface)"}

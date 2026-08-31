@@ -6,12 +6,15 @@ vms_ref: "OpenVMS Guide to System Security ch. 7-8 (Auditing, Break-In Evasion)"
 scope_1_0: stretch
 plan_ref: vms-8ad
 summary: >
-  Entire facility group is unbuilt — no security-audit journal, no break-in
+  The auditing subsystem is unbuilt — no security-audit journal, no break-in
   evasion (login-failure throttling/lockout), no OPCOM security-class alarms.
-  Not a 1.0 blocker on current evidence; flagged for an operator scope call
-  since it borders the DISUSER/CAPTIVE login-enforcement gap in sysuaf.
-last_reviewed: 2026-08-13
+  The DCL verb SET AUDIT exists but is an HONEST stub: it changes no state and
+  says so (a deliberate de-facade, vms-6f4). Not a 1.0 blocker on current
+  evidence; flagged for an operator scope call since it borders the
+  password-expiration/login-limit gap in sysuaf.
+last_reviewed: 2026-08-31
 items:
-  - {id: audit$security_journal, kind: feature, status: absent, authenticity: n/a, vms: "Security audit journal (SET AUDIT / SYS$AUDIT_EVENT)", evidence: "", scope_1_0: stretch, notes: "No implementation found; entire facility not built"}
-  - {id: audit$breakin_evasion,  kind: feature, status: absent, authenticity: n/a, vms: "Break-in evasion — login-failure throttling and account lockout", evidence: "", scope_1_0: stretch, notes: "No implementation found. Related to, but distinct from, the sysuaf DISUSER/login-limit gap"}
+  - {id: dcl$set_audit,          kind: command, status: stub,   authenticity: advisory, vms: "SET AUDIT /ENABLE /DISABLE — toggle security auditing", evidence: "src/vmsdcl/dcl_cmd_set.c:1772", notes: "RE-CENSUS 2026-08-31: cmd_set_audit() is a real, privileged DCL verb that HONESTLY refuses — it changes no state and reports 'security auditing is not implemented in OVMX - no state changed' (vms-6f4 Phase 0 replaced the old ctx->audit_enabled per-process facade). Anti-facade posture, not a lie; the subsystem behind it is absent."}
+  - {id: audit$security_journal, kind: feature, status: absent, authenticity: n/a, vms: "Security audit journal (SET AUDIT/ALARM /AUDIT, SYS$AUDIT_EVENT)", evidence: "", scope_1_0: stretch, notes: "No journal implementation found; SET AUDIT is an honest stub (see dcl$set_audit)."}
+  - {id: audit$breakin_evasion,  kind: feature, status: absent, authenticity: n/a, vms: "Break-in evasion — login-failure throttling and account lockout", evidence: "", scope_1_0: stretch, notes: "No implementation found. Related to, but distinct from, the sysuaf password-expiration/login-limit gap."}
   - {id: audit$opcom_alarms,     kind: feature, status: absent, authenticity: n/a, vms: "OPCOM security-class operator alarms (SECURITY, LOGIN-class messages)", evidence: "", scope_1_0: stretch, notes: "OPCOM operator-log bridge exists for boot messages (see boot facility) but no security-alarm class is wired"}

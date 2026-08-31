@@ -6,7 +6,7 @@ vms_ref: "DECnet/OSI... / LAT protocol reference (DEC)"
 scope_1_0: stretch
 plan_ref: vms-67f
 summary: >
-  No implementation anywhere. Not a 1.0 blocker.
-last_reviewed: 2026-08-13
+  No implementation anywhere on origin/main. Not a 1.0 blocker.
+last_reviewed: 2026-08-31
 items:
   - {id: lat$protocol, kind: protocol, status: absent, authenticity: n/a, vms: "LAT (Local Area Transport) protocol", scope_1_0: stretch, notes: "No implementation found anywhere on origin/main."}

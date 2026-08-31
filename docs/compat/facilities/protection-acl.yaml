@@ -6,17 +6,20 @@ vms_ref: "OpenVMS Guide to System Security ch. 5 (Protecting Data)"
 scope_1_0: in
 plan_ref: vms-8ad
 summary: >
-  SOGW/UIC protection is kernel-enforced and real for the common case. The
-  Delete bit is advisory-only. $CHKPRO computes correctly but nothing calls
-  it. The legacy $CHECK_ACCESS 2nd-opinion routine was deliberately removed
-  (vms-2b8) rather than left as a facade — a precedent, not a gap. ACLs are
-  undefined beyond constants. SYSPRV/BYPASS/READALL override is absent
+  SOGW/UIC protection is kernel-enforced by the Files-11 ACP and now VERIFIED
+  against a real /dev/vms over a real-VAX ODS-2 fixture (test_syssvc_acp_access):
+  a genuinely unprivileged non-owner is refused SS$_NOPRIV where a system-group
+  process succeeds — same code, opposite verdict. The Delete bit is not enforced
+  in the ACP check (advisory). $CHKPRO computes correctly but nothing calls it.
+  The legacy $CHECK_ACCESS 2nd-opinion routine was deliberately removed (vms-2b8)
+  rather than left as a facade. ACLs are undefined beyond constants. Privilege
+  overrides (BYPASS/READALL/SYSPRV) are now honored in the ACP; GRPPRV is not
   (cross-ref privileges).
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-31
 items:
-  - {id: fileprot$sogw_uic,     kind: feature, status: implemented, authenticity: real,        vms: "SOGW protection mask, UIC-based, executive-enforced (denies on category miss)", evidence: "src/kernel-core/vmsfs_acp.c", notes: "vms-165: SOGW enforcement moved from the retired vmsfs.ko vmsfs_blkdev_permission() into the Files-11 ACP's acp_check_access (with SYSPRV/GRPPRV handling); a compat-refresh should re-census the exact category logic"}
-  - {id: fileprot$delete_bit,   kind: feature, status: stub,        authenticity: advisory,     vms: "Delete (D) protection bit", evidence: "src/kernel-core/vmsfs_acp.c", notes: "vms-165 moved protection enforcement into the ACP (was vmsfs_blkdev.c); D-bit enforcement status needs a compat-refresh re-census against the ACP path"}
-  - {id: sys$chkpro,            kind: routine, status: implemented, authenticity: advisory,     vms: "$CHKPRO — compute-only SOGW protection check helper", evidence: src/libvms/syssvc/sys_security.c, notes: "Correct logic, zero OVMX callers — computed but unused, honestly inert"}
-  - {id: sys$check_access,      kind: routine, status: absent,      authenticity: n/a,          vms: "$CHECK_ACCESS legacy 2nd-opinion access check", evidence: "", notes: "Deliberately removed (vms-2b8) rather than kept as a redundant/driftable facade — represented as absent by design, a positive anti-facade precedent, not a gap to close"}
-  - {id: acldef$acls,           kind: feature, status: absent,      authenticity: n/a,          vms: "Access Control List entries (ACEs) on files/objects", evidence: src/libvms/include/acldef.h, scope_1_0: stretch, notes: "Constants only, not built"}
-  - {id: fileprot$priv_override, kind: feature, status: absent,     authenticity: facade-risk,  vms: "SYSPRV/BYPASS/READALL/GRPPRV override of normal SOGW checks", evidence: "src/kernel-core/vmsfs_acp.c", scope_1_0: in, notes: "vms-165 moved enforcement into the ACP (acp_check_access references SYSPRV); status may now be partly implemented — needs a compat-refresh re-census. Tracked vms-f15/vms-36d. Full detail under privileges; cross-listed here as the file-access-facing half."}
+  - {id: fileprot$sogw_uic,     kind: feature, status: verified, authenticity: real, vms: "SOGW protection mask, UIC-based, executive-enforced (denies on category miss)", evidence: "src/kernel-core/vmsfs_acp.c:861", verified_against: "tests/qemu/test_syssvc_acp_access.c — SOGW/UIC enforcement proven against a real /dev/vms over the real-VAX ODS-2 fixture (tests/ods2/real_vax_ods2.dsk). Point 6: a re-exec'd child that setgid/setuid'd to [100,100] is refused SS$_NOPRIV where the system-group parent succeeds; point 7: per-file-class protections (SYSUAF World:none, RIGHTSLIST World:R, DCL.EXE World:RE) each pinned. Built by CMake glob + run by tests/qemu/init.sh against a real vms.ko in the positive kernel-executive CI job.", notes: "RE-CENSUS 2026-08-31: upgraded implemented->verified. vms-165 moved SOGW/UIC enforcement into acp_check_access (nibble-per-category System/Owner/Group/World, set-bit-denies; directory read maps to EXECUTE traversal, vms-548b)."}
+  - {id: fileprot$delete_bit,   kind: feature, status: stub,     authenticity: advisory, vms: "Delete (D) protection bit", evidence: "src/kernel-core/vmsfs_acp.c:861", notes: "RE-CENSUS 2026-08-31: acp_check_access wants only Read/Write (and Execute for directory traversal); the Delete bit is never a wanted right in the check, so it is not enforced — advisory. Unchanged in effect since 2026-08-13, now confirmed against the ACP path."}
+  - {id: sys$chkpro,            kind: routine, status: implemented, authenticity: advisory, vms: "$CHKPRO — compute-only SOGW protection check helper", evidence: src/libvms/syssvc/sys_security.c, notes: "RE-CENSUS 2026-08-31: correct logic, still ZERO OVMX callers (only starlet.h decl + shr.vec export) — computed but unused, honestly inert. The ACP enforces access directly (fileprot$sogw_uic), not via $CHKPRO."}
+  - {id: sys$check_access,      kind: routine, status: absent,   authenticity: n/a,      vms: "$CHECK_ACCESS legacy 2nd-opinion access check", evidence: "", notes: "Deliberately removed (vms-2b8) rather than kept as a redundant/driftable facade — represented as absent by design, a positive anti-facade precedent, not a gap to close"}
+  - {id: acldef$acls,           kind: feature, status: absent,   authenticity: n/a,      vms: "Access Control List entries (ACEs) on files/objects", evidence: src/libvms/include/acldef.h, scope_1_0: stretch, notes: "Constants only, not built"}
+  - {id: fileprot$priv_override, kind: feature, status: partial, authenticity: real,     vms: "SYSPRV/BYPASS/READALL/GRPPRV override of normal SOGW checks", evidence: "src/kernel-core/vmsfs_acp.c:861", scope_1_0: in, notes: "RE-CENSUS 2026-08-31: was absent/facade-risk. acp_check_access now honors BYPASS (lifts all), READALL (grants read), and SYSPRV (SYSTEM category) — real. GRPPRV is not consulted, hence partial. Tracked vms-f15/vms-36d. Full detail under privileges; cross-listed here as the file-access-facing half."}

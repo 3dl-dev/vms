@@ -7,18 +7,18 @@ scope_1_0: in
 tier: 1
 plan_ref: vms-801
 summary: >
-  ~50 OTS$ routines header-declared; 32 of 43 are implemented, broadly real.
+  ~50 OTS$ routines header-declared; 33 of 43 are implemented, broadly real.
   Gaps: packed-decimal conversions (OTS$CVT_T_P/CVT_P_T, blocking COBOL/DIBOL
   decimal), the comparison family (OTS$CMP_GTR/GEQ/...), and string-descriptor
   management (OTS$SCOPY_DXDX/SCOPY_R_DX/SFREE1_DD/SFREEN_DD/SGET1_DD) — all
   declared in the header but with zero implementation, a pure stub gap.
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-31
 items:
   - {id: ots$cvt_l_ti, kind: routine, status: implemented, authenticity: real, vms: "Convert longword to trimmed integer string", evidence: src/libvms/rtl/ots_routines.c}
   - {id: ots$cvt_ti_l, kind: routine, status: implemented, authenticity: real, vms: "Convert trimmed integer string to longword", evidence: src/libvms/rtl/ots_routines.c}
   - {id: ots$cvt_l_tz, kind: routine, status: implemented, authenticity: real, vms: "Convert longword to zero-filled string", evidence: src/libvms/rtl/ots_routines.c}
   - {id: ots$cvt_l_to, kind: routine, status: implemented, authenticity: real, vms: "Convert longword to octal string", evidence: src/libvms/rtl/ots_routines.c}
-  - {id: ots$_other_implemented, kind: routine, status: implemented, authenticity: real, vms: "Remaining implemented OTS$ numeric<->string conversion routines beyond the four named above (32/43 declared routines are implemented; VMS ships ~50 total)", evidence: src/libvms/rtl/ots_routines.c}
+  - {id: ots$_other_implemented, kind: routine, status: implemented, authenticity: real, vms: "Remaining implemented OTS$ numeric<->string conversion routines beyond the four named above (33/43 declared routines are implemented; VMS ships ~50 total)", evidence: src/libvms/rtl/ots_routines.c}
   - {id: ots$cvt_t_p, kind: routine, status: absent, authenticity: n/a, vms: "Convert text to packed decimal", notes: "blocks COBOL/DIBOL decimal corpus"}
   - {id: ots$cvt_p_t, kind: routine, status: absent, authenticity: n/a, vms: "Convert packed decimal to text", notes: "blocks COBOL/DIBOL decimal corpus"}
   - {id: ots$_cmp_family, kind: routine, status: absent, authenticity: n/a, vms: "Comparison family (OTS$CMP_GTR, OTS$CMP_GEQ, ...)"}

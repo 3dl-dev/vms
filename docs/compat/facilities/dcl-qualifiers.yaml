@@ -7,28 +7,38 @@ scope_1_0: in
 tier: 1
 plan_ref: vms-8ad
 summary: >
-  Engine A: per-verb qualifier validation. 28 of 55 builtin verbs carry real
-  CLD-style qualifier tables (hand-written C, not CDU-generated); the
-  remaining 9 accept-all legacy verbs perform zero qualifier validation. A
-  real CLI$-callable CDU compiler exists for external images but is not yet
-  used to generate the 55 builtin verb tables.
-last_reviewed: 2026-08-13
+  Per-verb qualifier validation (Phase 1, vms-097). The parser now rejects any
+  qualifier not in a verb's table with the authentic %DCL-W-IVQUAL (or
+  %DCL-W-IVKEYW) BEFORE the handler runs, structurally — 46 of the 58 builtin
+  verbs carry a validating table (29 real q_* tables + 17 q_none reject-all);
+  12 verbs remain accept-all (quals == NULL). A real CLI$-callable CDU compiler
+  exists for external images but is not used to generate the builtin tables.
+last_reviewed: 2026-08-31
 items:
+  - id: dcl-qualifiers$ivqual-enforcement
+    kind: feature
+    status: verified
+    authenticity: real
+    vms: "Unknown /QUALIFIER on a verb -> %DCL-W-IVQUAL; bad keyword -> %DCL-W-IVKEYW, before the handler runs"
+    evidence: src/vmsdcl/dcl_parser.c:448
+    verified_against: "tests/dcl/test_ivqual_gate_structural.sh — anti-cheat tripwire: revert the .quals wiring and every IVQUAL/IVKEYW assertion goes red; positive controls (real /LOG,/KEEP,/REVERSE,/DATE=MODIFIED still pass) plus authentic $STATUS %X000008F0 (IVQUAL) / %X000008F4 (IVKEYW)"
+    notes: "dcl_validate_qualifiers() (dcl_parser.c) is the structural enforcement point; called from dispatch (dcl_exec.c) before every handler. Closes the universal silent-accept hole for the retrofit tranche."
+
   - id: dcl-qualifiers$verb-coverage
     kind: feature
     status: partial
     authenticity: real
     vms: "Per-verb qualifier tables validating every DCL verb's /QUALIFIER grammar"
     evidence: src/vmsdcl/dcl_builtin.c
-    notes: "28 of 55 builtin verbs have real qualifier tables (ANALYZE, ASSIGN, ATTACH, BACKUP, CONVERT, COPY, CREATE, DEASSIGN, DEFINE, DELETE, DIRECTORY, DUMP, INQUIRE, LINK, MOUNT, OPEN, PRINT, PRODUCT, PURGE, RECALL, RENAME, REPLY, SEARCH, SORT, SPAWN, STOP, SUBMIT, TYPE)."
+    notes: "29 verbs carry a real q_* qualifier table (ANALYZE ASSIGN ATTACH BACKUP CONVERT COPY CREATE DEASSIGN DEFINE DELETE DIRECTORY DUMP INQUIRE LINK MOUNT OPEN PING PRINT PRODUCT PURGE RECALL RENAME REPLY SEARCH SORT SPAWN STOP SUBMIT TYPE); 17 more use q_none (empty table = reject-all, honest over-restriction for verbs whose VMS qualifiers OVMX has not retrofit). 46 of 58 validate."
 
   - id: dcl-qualifiers$zero-validation-verbs
     kind: feature
     status: absent
     authenticity: facade-risk
-    vms: "Qualifier validation for SET, SHOW, TCPIP, RUN, LIBRARY, READ, WRITE, INSTALL, MAIL"
-    evidence: src/vmsdcl/dcl_builtin.c
-    notes: "9 legacy accept-all verbs (quals == NULL in builtin_verbs[]): any /QUALIFIER is silently accepted rather than rejected with IVQUAL."
+    vms: "Qualifier validation for the accept-all verbs (SET, SHOW, RUN, MAIL, READ, WRITE, INSTALL, LIBRARY, TCPIP, TELNET, FTP, HELP)"
+    evidence: src/vmsdcl/dcl_parser.c:451
+    notes: "12 verbs still have quals == NULL in builtin_verbs[]; dcl_validate_qualifiers() returns SS$_NORMAL for them ('not retrofit'), so any /QUALIFIER is silently accepted rather than rejected with IVQUAL. SET/SHOW mitigate at the sub-verb level (cmd_set_password/accounting/volume run their own shim validators; unknown SET/SHOW keywords still get IVKEYW), and HELP is deliberately accept-all. The remaining ~10 are the Phase-1 follow-up (vms-097)."
 
   - id: dcl-qualifiers$per-verb-depth
     kind: feature
@@ -36,7 +46,7 @@ items:
     authenticity: real
     vms: "Full per-verb qualifier set depth (VMS DIRECTORY alone has dozens)"
     evidence: src/vmsdcl/dcl_builtin.c
-    notes: "Depth still a fraction of VMS: DIRECTORY 13 quals, DELETE 5, PRINT/SUBMIT 3 each, PURGE 3, COPY 2."
+    notes: "Per INV-DCL a table lists ONLY implemented qualifiers, so depth is honestly a fraction of VMS (DIRECTORY carries /DATE=MODIFIED,/SIZE,/OWNER,/PROTECTION,... but not the full VMS set); qualifiers VMS accepts that OVMX does not implement are honestly rejected (over-restriction, not a lie)."
 
   - id: dcl-qualifiers$cdu-compiler
     kind: routine
@@ -44,5 +54,5 @@ items:
     authenticity: real
     vms: "CLI$COMPILE_CLD — compile CLD source into a callable command table"
     evidence: src/libvms/rtl/lib_cli.c
-    verified_against: "tests/libvms/test_lib_cli.c compiling tests/corpus/tier3-mmk/mmk_cld.cld"
-    notes: "Real CDU compiler, CLI$-callable, proven against an external image's CLD — but the 55 builtin verbs still use hand-written C tables, not CDU-generated ones."
+    verified_against: "tests/libvms/test_lib_cli.c compiling the real external CLD tests/corpus/tier3-mmk/mmk_cld.cld (corpus conformance, not a synthetic input)"
+    notes: "Real CDU compiler, CLI$-callable, proven against an external image's CLD — but the 58 builtin verbs still use hand-written C tables, not CDU-generated ones."

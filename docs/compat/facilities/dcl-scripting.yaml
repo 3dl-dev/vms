@@ -7,20 +7,21 @@ scope_1_0: in
 tier: 1
 plan_ref: vms-8ad
 summary: >
-  Command-procedure control flow: IF/THEN/GOTO/GOSUB are real; the condition
-  model, symbol scoping, and $STATUS reporting have material honesty gaps, the
-  worst of which ($STATUS never refreshed on command-not-found inside a
-  procedure) silently swallows typo'd commands in any .COM.
-last_reviewed: 2026-08-13
+  Command-procedure control flow. Since the last census the four worst honesty
+  gaps closed: $STATUS is now stored/shown VMS-style ("%Xhhhhhhhh") and is
+  refreshed on command-not-found on the shared dispatch path (so a typo'd
+  command in a .COM now trips IF .NOT.$STATUS); CALL/SUBROUTINE and DECK/EOD
+  landed as real constructs; and local symbols now get a real per-command-level
+  frame (vms-2af). F$MODE remains the one narrow gap.
+last_reviewed: 2026-08-31
 items:
   - id: dcl-scripting$if-then-goto
     kind: feature
-    status: verified
+    status: implemented
     authenticity: real
     vms: "IF/THEN, GOTO, GOSUB, labels"
     evidence: src/vmsdcl/dcl_script.c
-    verified_against: "tests/dcl/test_if_then.sh, tests/dcl/test_parser_goto.sh, tests/dcl/test_script_labels.sh"
-    notes: "Covered by parser + script test suites."
+    notes: "Real. Exercised by tests/dcl/test_if_then.sh, test_parser_goto.sh, test_script_labels.sh — plain functional self-tests, not an oracle, so implemented (not verified) per the credibility rule."
 
   - id: dcl-scripting$on-condition
     kind: feature
@@ -32,47 +33,48 @@ items:
 
   - id: dcl-scripting$call-subroutine
     kind: command
-    status: absent
-    authenticity: n/a
+    status: implemented
+    authenticity: real
     vms: "CALL / SUBROUTINE / ENDSUBROUTINE"
-    notes: "See dcl-verbs.yaml dcl-verbs$call-subroutine for the verb-family entry."
+    evidence: src/vmsdcl/dcl_exec.c:1354
+    notes: "Landed since last census. CALL gives the subroutine a new command level with its own P1-P8 and local-symbol frame; RETURN pops it and propagates status (dcl_script.c:231/271/302). Exercised by tests/dcl/test_scripting_status_call_deck.sh (SUB_P1P2, RETURN_STATUS_PROPAGATED)."
 
   - id: dcl-scripting$deck-eod
     kind: feature
-    status: absent
-    authenticity: facade-risk
+    status: implemented
+    authenticity: real
     vms: "DECK / $EOD in-stream data"
-    evidence: src/vmsdcl/dcl_exec.c
-    notes: "In-stream data is parsed as commands, cascading IVVERB errors rather than an honest not-supported error."
+    evidence: src/vmsdcl/dcl_cmd_process.c:1659
+    notes: "Landed since last census (vms-3983). A DECK block reads in-stream lines verbatim to the EOD sentinel instead of parsing them as commands; former facade-risk retired. Exercised by test_scripting_status_call_deck.sh (DOLLAR_DATA_LINE_KEPT, AFTER_DECK)."
 
   - id: dcl-scripting$symbol-scoping
     kind: feature
-    status: absent
-    authenticity: facade-risk
+    status: implemented
+    authenticity: real
     vms: "Per-procedure local symbol scope"
-    evidence: src/vmsdcl/dcl_symbol.c
-    notes: "Single flat local-symbol table; an inner procedure's LOCAL symbols leak into the caller's scope instead of being torn down on return."
+    evidence: src/vmsdcl/dcl_symbol.c:33
+    notes: "Landed since last census (vms-2af frames). Each @ invocation / CALL gets its own local-symbol frame (SYM_MAX_FRAMES), inner levels read outer locals, the frame is torn down on RETURN, and SET SYMBOL/SCOPE=([NO]LOCAL,[NO]GLOBAL) is honoured. Former facade-risk (flat leaking table) retired. Exercised by test_symbol_scope.sh / test_symbol_scope_domain.sh with EXPECT_NOT isolation controls."
 
   - id: dcl-scripting$status-format
     kind: feature
     status: implemented
-    authenticity: facade-risk
+    authenticity: real
     vms: "$STATUS holds a VMS condition code, conventionally displayed %Xhhhhhhhh"
-    evidence: src/vmsdcl/dcl_exec.c:1207
-    notes: "$STATUS is stored/formatted as plain decimal (%d), not the VMS hex condition-code representation."
+    evidence: src/vmsdcl/dcl_exec.c:98
+    notes: "Fixed since last census: $STATUS is stored VMS-style as the 32-bit condition value and rendered %Xhhhhhhhh (dcl_exec.c:98/157); IF/arithmetic reads it radix-aware. Former facade-risk (plain decimal) retired."
 
   - id: dcl-scripting$status-refresh
     kind: feature
-    status: partial
-    authenticity: facade-risk
+    status: implemented
+    authenticity: real
     vms: "$STATUS is set after every command, including an unrecognized verb (IVVERB)"
-    evidence: src/vmsdcl/dcl_exec.c:1209
-    notes: "HIGHEST-IMPACT bug: only the interactive REPL refreshes $STATUS on command-not-found; the command-procedure execution path never does, so IF .NOT.$STATUS THEN GOTO err silently misses a typo'd command anywhere in a .COM."
+    evidence: src/vmsdcl/dcl_exec.c:1531
+    notes: "Fixed since last census — the highest-impact former bug. Command-not-found now calls dcl_set_status(ctx, SS$_IVVERB) on the single shared dispatch path used by both the REPL and .COM execution, so IF .NOT.$STATUS THEN GOTO err catches a typo'd command anywhere. Verb handlers and qualifier validation also set $STATUS. Exercised by test_scripting_status_call_deck.sh (STATUS_FALSE_ON_ERROR)."
 
   - id: dcl-scripting$f-mode
     kind: lexical
     status: partial
-    authenticity: facade-risk
+    authenticity: advisory
     vms: "F$MODE reports INTERACTIVE/BATCH/OTHER/NETWORK per the actual process context"
-    evidence: src/vmsdcl/dcl_lexical.c
-    notes: "Advisory-adjacent: misreports script (command-procedure) execution as BATCH."
+    evidence: src/vmsdcl/dcl_lexical.c:624
+    notes: "Reports only INTERACTIVE vs BATCH from ctx->interactive; NETWORK/OTHER modes not distinguished. Honest two-value report of what OVMX tracks, not a fabrication — advisory, not facade-risk."

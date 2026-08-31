@@ -7,13 +7,15 @@ scope_1_0: in
 tier: 1
 plan_ref: vms-8ad
 summary: >
-  The HELP verb and its topic/library content. Real, tested.
-last_reviewed: 2026-08-13
+  The HELP verb and its topic/library content. Real: walks a hierarchical help
+  library (real topic tree, not a shim) with keyword lookup. Well tested, but
+  the tests are plain functional self-tests rather than an oracle.
+last_reviewed: 2026-08-31
 items:
   - id: help$verb
     kind: command
-    status: verified
+    status: implemented
     authenticity: real
     vms: "HELP — hierarchical topic help, keyword lookup"
     evidence: src/vmsdcl/dcl_help.c
-    verified_against: tests/dcl/test_help_engine.c, tests/dcl/test_help_content.sh
+    notes: "Real HLB-backed help library walk (tests/dcl/test_help_engine.c, test_help_content.sh assert HELP_TOPLEVEL_LISTS / HELP_TOPIC_TEXT_OK against the real topic tree, and test_help_hlb.sh the library). Downgraded verified->implemented 2026-08-31: those are plain local self-tests, not an oracle/negctl gate."

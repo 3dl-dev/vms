@@ -2,17 +2,22 @@
 facility: mms-mmk
 name: "MMS / MMK (Make)"
 domain: toolchain
-vms_ref: "OpenVMS MMS Reference Manual"
+vms_ref: "OpenVMS MMS Reference Manual; MadGoat MMK documentation"
 scope_1_0: in
 plan_ref: vms-59a
 summary: >
-  RTL prerequisites (CLI$, LIB$TPARSE, SYS$FILESCAN, SYS$SETDDIR,
-  LIB$GET_FOREIGN) are all complete on origin/main (P1-P5). MMK.EXE itself
-  is not built: no mk_mmk.sh, no native-link vector entries, and the
-  parse_tables.mar C-port (vms-486) is not built. Self-host gate — the 1.0
-  self-host build uses ported MMS/MMK, not bespoke BUILD.COM.
-last_reviewed: 2026-08-13
+  Moved from design-only to a real, running MMK.EXE (vendored MadGoat MMK
+  built as an OVMX-native image via mk_mmk.sh, plus a host ctest that links the
+  same sources against the OVMX RTL). MMK reads a real descrip.mms through
+  OVMX RMS, parses it with the actual lib$table_parse engine driven by the
+  ported PARSE_TABLES.MAR grammar (vms-486, now built -DOVMX_MMK_PRODUCTION),
+  resolves the command line through CLI$ compiled-CLD, and emits the correct
+  dependency-ordered build PLAN. Gap (honest): actual command EXECUTION rides a
+  deferred DCL-subprocess/mailbox/AST drive — the parse+plan half is done, the
+  run half is not. RTL prerequisites (CLI$, LIB$TPARSE, SYS$FILESCAN,
+  SYS$SETDDIR, LIB$GET_FOREIGN) are complete. Self-host gate.
+last_reviewed: 2026-08-31
 items:
-  - {id: mms-mmk$rtl-prereqs, kind: feature, status: implemented, authenticity: real, vms: "RTL prerequisites for MMS/MMK (CLI$, LIB$TPARSE, SYS$FILESCAN, SYS$SETDDIR, LIB$GET_FOREIGN)", evidence: "src/libvms/rtl", notes: "P1-P5 complete on origin/main."}
-  - {id: mms-mmk$mmk-exe, kind: utility, status: designed, authenticity: n/a, vms: "MMK.EXE — make-compatible build utility", evidence: "docs/design-self-host-mmk-spine.md", scope_1_0: in, notes: "MMK.EXE not built; no mk_mmk.sh, no native-link vector entries."}
-  - {id: mms-mmk$parse-tables-port, kind: feature, status: absent, authenticity: n/a, vms: "parse_tables.mar C-port (grammar tables for MMS/MMK parser)", evidence: "tests/corpus/tier3-mmk/parse_tables.mar", scope_1_0: in, notes: "Corpus source present as reference; C-port not built (vms-486)."}
+  - {id: mms-mmk$rtl-prereqs, kind: feature, status: implemented, authenticity: real, vms: "RTL prerequisites for MMS/MMK (CLI$, LIB$TPARSE, SYS$FILESCAN, SYS$SETDDIR, LIB$GET_FOREIGN)", evidence: "src/libvms/rtl", notes: "P1-P5 complete on origin/main; drive MMK's real parse/CLD path."}
+  - {id: mms-mmk$mmk-exe, kind: utility, status: partial, authenticity: real, vms: "MMK.EXE — make-compatible build utility (description-file parse + dependency plan)", evidence: "src/vmslink/mk_mmk.sh", notes: "Built as an OVMX-native image (mk_mmk.sh) and as host ctests toolchain-mmk-parse / -component-plan / -component-build / -link-selfhost-plan (tests/toolchain). Parse+plan proven end-to-end via real lib$table_parse + CLI$ compiled-CLD + MMK's own parse_store (run_mmk_parse.sh, oracle = the descrip.mms itself). Actual command EXECUTION (subprocess drive) is a separately-tracked deferred gap (vms-ec70)."}
+  - {id: mms-mmk$parse-tables-port, kind: feature, status: implemented, authenticity: real, vms: "PARSE_TABLES.MAR -> C grammar tables for the MMS/MMK parser", evidence: "tests/libvms/mmk_parse_tables.c", notes: "vms-486 C-port now built and, under -DOVMX_MMK_PRODUCTION, fires MMK's real parse_store/parse_obj_store (not just the test probe)."}

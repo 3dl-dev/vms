@@ -8,10 +8,11 @@ plan_ref: vms-8ad
 summary: >
   A thin, real slice: per-user last-login timestamps and a persisted,
   system-wide accounting-enabled flag that SET/SHOW ACCOUNTING and the
-  record path both honor. No ACCOUNTING.DAT journal — login/logout,
-  process, and image accounting records are not implemented.
-last_reviewed: 2026-08-13
+  record path both honor (vms-17d moved this from a per-DCL-context facade to
+  a real, shared flag). No ACCOUNTING.DAT journal — login/logout, process,
+  and image accounting records are not implemented.
+last_reviewed: 2026-08-31
 items:
   - {id: accounting$last_login,   kind: feature, status: implemented, authenticity: real, vms: "Per-user last-login timestamp tracking", evidence: src/libvms/rtl/ovmx_accounting.c}
-  - {id: accounting$enabled_flag, kind: feature, status: implemented, authenticity: real, vms: "SET ACCOUNTING/SHOW ACCOUNTING enabled state — real, persisted, system-wide (gates the record path, not a per-context bool)", evidence: src/libvms/include/ovmx_accounting.h, plan_ref: vms-17d}
+  - {id: accounting$enabled_flag, kind: feature, status: implemented, authenticity: real, vms: "SET ACCOUNTING/SHOW ACCOUNTING enabled state — real, persisted, system-wide (gates the record path, not a per-context bool)", evidence: src/libvms/rtl/ovmx_accounting.c, plan_ref: vms-17d, notes: "RE-CENSUS 2026-08-31: unchanged. ovmx_accounting_set_enabled()/is_enabled() persist a real system-wide flag; SET ACCOUNTING in dcl_cmd_set.c (~line 1793) drives it and ovmx_accounting_record_login() honors it — no longer the per-context INV-DCL facade it replaced."}
   - {id: accounting$journal,      kind: feature, status: absent,      authenticity: n/a,  vms: "ACCOUNTING.DAT journal — login/logout, process, image, print accounting records", evidence: "", notes: "No live accounting daemon or record journal; only last-login + enabled-flag exist"}

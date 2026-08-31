@@ -6,10 +6,13 @@ vms_ref: "VSI OpenVMS Linker Utility Manual"
 scope_1_0: in
 plan_ref: vms-ade
 summary: >
-  LINK.EXE is a real, substantial implementation (2197 lines, 11 test
-  scripts): symbol resolution, relocation, symbol-vector binding, GSMATCH,
-  ar whole-archive ingestion. Targets EM_X86_64 and EM_AARCH64 only — no
-  Alpha (EM_ALPHA) or VAX backend exists on origin/main yet.
-last_reviewed: 2026-08-13
+  LINK.EXE is a real, substantial implementation (~4860 lines): symbol
+  resolution, relocation, symbol-vector binding, GSMATCH, ar whole-archive
+  ingestion, selective member pull, and — new since the last census — a full
+  Alpha/VMS (EVAX) object backend (reads native alpha-dec-vms objects, applies
+  the Alpha linkage/reloc set, emits shareable+executable images). Emits
+  EM_X86_64, EM_AARCH64 and Alpha (EVAX); no VAX backend on origin/main yet.
+last_reviewed: 2026-08-31
 items:
-  - {id: link$core-linker, kind: utility, status: implemented, authenticity: real, vms: "LINK.EXE image linker — symbol resolution, relocation, image build", evidence: "src/vmslink/link.c", notes: "2197 lines; 11 test scripts. Semantics real; image-container byte layout Rule-8-labeled (see image-activation/symbol-vectors). Emits x86_64/aarch64 only — which host architectures OVMX targets is a platform/roadmap concern (release dimension), not a VMS surface."}
+  - {id: link$core-linker, kind: utility, status: implemented, authenticity: real, vms: "LINK.EXE image linker — symbol resolution, relocation, image build (executable + shareable)", evidence: "src/vmslink/link.c", notes: "~4860 lines; ELF (x86_64/aarch64) + EVAX (Alpha) object loaders, selective ar pull. Semantics real; image-container byte layout Rule-8-labeled (see image-activation/symbol-vectors). Which host architectures OVMX targets is a platform/roadmap concern (release dimension), not a VMS surface."}
+  - {id: link$evax-backend, kind: feature, status: verified, authenticity: real, vms: "Link native Alpha/VMS (EVAX) objects into shareable/executable images", evidence: "src/vmslink/link.c", verified_against: "src/vmslink/test/run_evax_link.sh, run_evax_shareable.sh, run_muldef_evax.sh, run_evax_ximport.sh — against binutils-2.43 alpha-dec-vms fixtures (rd vms-e06); EVAX object ingest itself is object-format$evax-object-ingest.", notes: "Applies the ETIR reloc stack-machine incl. Alpha linkage pairs; produces symbol-vectored shareables the activator loads."}

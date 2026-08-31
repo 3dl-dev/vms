@@ -8,10 +8,9 @@ plan_ref: vms-694
 summary: >
   The SCS message/connection layer OVMX's cluster wire stack is built on.
   Connection Descriptor Table and message service are real and wired
-  end-to-end into scsd.c (src/vmsscs is ~19,800 LOC across 24 .c + scsd.c).
-  The datagram (class 2) service is real internal logic with zero production
-  callers — unwired dead code, self-labeled as such.
-last_reviewed: 2026-08-13
+  end-to-end into scsd.c. The datagram (class 2) service is real internal
+  logic with zero production callers — unwired dead code, self-labeled as such.
+last_reviewed: 2026-08-31
 items:
   - id: scs$cdt-message-service
     kind: feature

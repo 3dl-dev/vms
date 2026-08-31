@@ -112,16 +112,28 @@ cited to a file or a commit, not recalled.
 | — | **`decc$feature_*` runtime switches** (`DECC$UNIX_LEVEL`, `DECC$EFS_CHARSET`, POSIX-vs-VMS filename mode) — not emulated at all; plus the crtlmap coverage delta (597-of-~900 as of the last audit, 2026-08-22) has never been re-measured against current DECC$SHR | `grep -rn "decc\$feature" origin/main -- src/` = 0 hits | `vms-06d` |
 | R8 | **Real VMS condition-handling dispatch** — `SYS$SETEXV`, `chf$signal_array`/`chf$mech_array`/`CHFCTX`, `LIB$GET_INVO_HANDLE`/`LIB$GET_INVO_CONTEXT`/`LIB$GET_PREV_INVO_CONTEXT`, real frame-transfer unwind (`sys$unwind`'s `newpc` is currently ignored — `sys_condition.c:44-68`). `src/libvms/rtl/lib_signal.c` is a thread-local handler-stack **emulation**, not CHF dispatch. The narrower `SS$_HPARITH` FP-trap bridge (`vms-db3`/GAP3, done) proves the *pattern* (`lib$signal`→handler-chain search→`$STATUS`) works for one condition, but the port's own `libgcc/config/alpha/vms-unwind.h` needs the full CHF/invocation-context machinery for real EH/error unwinding | `lib_signal.c`, `sys_condition.c:44-68`, `vms-db3` (done, narrower) | `vms-2e72` |
 
-### 1.3 Toolchain correctness debt found along the way (not a surface gap)
+### 1.3 Data-model gotcha found along the way (NOT a compiler bug — RESOLVED)
 
-`crtl_cc1fp_test.c` found that the alpha-dec-vms **cross cc1 itself** (GCC 14.2.0)
-silently miscompiles a conditional branch controlled by a union type-punned member
-at `-O0` — drops both the compare+branch and the fall-through, no diagnostic
-(`ef249e5a`/`2b1c80d1`, #871). This is not a DECC$SHR/RMS/LINK gap — it lives in the
-compiler binary itself — but it directly threatens `vms-fd1`'s "builds unchanged,
-zero port-source hacks" bar for any real C source using this common pattern. Filed
-as `vms-4b5` (parented under `vms-da0`, not `vms-3e4`, since it isn't an OVMX-surface
-item) so it isn't lost.
+`crtl_cc1fp_test.c` was originally read as evidence that the alpha-dec-vms **cross
+cc1** (GCC 14.2.0) "silently miscompiles" a branch controlled by a union
+type-punned member at `-O0`. **Root-cause (`vms-4b5`) proved that WRONG — it is not
+a codegen bug at all, it is the OpenVMS C data model.** On alpha-dec-vms `long` is
+**32-bit** (only `long long` and, with `-mpointer-size=64`, pointers are 64-bit — an
+LLP64-shaped model matching real DEC C / VSI C), and the test punned a 64-bit
+`double` through an `unsigned long` member — capturing only the low 32 bits. A
+branch comparing that (zero-extended) 32-bit value against the 64-bit constant
+`0x3FF0000000000000` is provably-false, and GCC correctly folds an out-of-range
+comparison away even at `-O0` (an in-range constant, or a runtime comparand, keeps
+the branch). Widening the member to `unsigned long long` makes the pun full-width
+and the branch codegens and evaluates correctly (real `ldq` + `cmpeq` + branch).
+
+**Lesson (the load-bearing one for the whole GCC-port lane): the alpha-dec-vms
+target is NOT LP64.** Any port source that assumes `sizeof(long)==8` will produce
+"phantom compiler bugs" like this one. This is a behavior-compat class, not a bug
+class — see `docs/design-decc-bug-compat-architecture.md`. `crtl_cc1fp_test.c` now
+uses `unsigned long long` and branches on the punned member as a positive
+regression. `vms-4b5` closed as not-a-bug (`fixed`), root-caused
+(`ef249e5a`/`2b1c80d1`, #871).
 
 ---
 
@@ -213,9 +225,10 @@ rd-item creation order:
    static C++ ctors compiled by the real port, not OVMX's own C++-first-light
    `.init_array` proof which used a different codegen path). Verify with the
    alpha cross toolchain.
-5. **`vms-4b5` (cc1 union-pun-branch miscompile)** — root-cause before it hits
-   real port source; not urgent today (crtl_cc1fp_test.c avoids the pattern), but
-   silent-wrong-codegen is the worst class of blocker to discover late.
+5. **`vms-4b5` (cc1 union-pun-branch "miscompile")** — RESOLVED / not-a-bug: it
+   was the OpenVMS 32-bit-`long` data model, not a codegen fault (§1.3). The real
+   standing risk it exposed is broader — DEC C behavior/data-model compatibility,
+   tracked in `docs/design-decc-bug-compat-architecture.md`.
 6. **`vms-2e72` (real CHF/condition-handling dispatch)** — the deepest, most
    architectural remaining rung (OVMX-Alpha runtime/ABI territory, conductor-owned
    per the original doc's Axis-5 routing). Lowest urgency only because nothing

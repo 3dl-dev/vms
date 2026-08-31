@@ -41,7 +41,12 @@
  *   8 = large-switch / recursion mismatch
  */
 
-/* alpha-dec-vms is LP64 (-mpointer-size=64): long/pointer are 64-bit. No libc
+/* alpha-dec-vms uses the OpenVMS C data model, NOT LP64. `-mpointer-size=64`
+ * makes POINTERS 64-bit, but `int` AND `long` stay 32-bit and only `long long`
+ * (and 64-bit pointers) are 64-bit — i.e. an LLP64-shaped model that matches
+ * real DEC C / VSI C on OpenVMS Alpha (long==32; see vms-4b5). Any 64-bit
+ * type-pun of a `double` MUST therefore go through `unsigned long long`, not
+ * `unsigned long` (which would silently capture only the low 32 bits). No libc
  * headers are set up in the cross image, so declare every reference as an
  * extern — the symbol NAMES are what matter; the cross cc1 decorates them to
  * the decc$ surface at codegen (printf -> decc$tprintf, etc.). */
@@ -101,7 +106,7 @@ static const struct node node_table[] = {
     { { 10.0, 0.25 }, "gamma" },
 };
 
-union fpbits { double d; unsigned long u; };
+union fpbits { double d; unsigned long long u; };   /* u MUST be 64-bit to pun a double (long is 32-bit on VMS) */
 
 struct packed_flags {
     unsigned int a : 3;
@@ -211,17 +216,23 @@ int main(int argc, char **argv, char **envp)
     for (int i = 0; i < 3; i++) { sx += node_table[i].p.x; sy += node_table[i].p.y; }
     if (!near(sx, 14.5) || !near(sy, 0.75))    /* 1+3.5+10 ; 2-1.5+0.25 */
         return 5;
-    /* NB: reading the type-punned union member fb.u is exercised (its bit
-     * pattern is carried into the final printf below), but we deliberately do
-     * NOT branch on it: the alpha-dec-vms cc1 (GCC 14.2.0) SILENTLY MISCOMPILES
-     * a conditional branch controlled by a union type-punned member — it drops
-     * the compare+branch and the fall-through path, at -O0, with no diagnostic
-     * (isolated + reported separately as the NEXT cc1-codegen rung). A plain
-     * (non-union) branch and a non-branching union read both codegen correctly,
-     * so this variant stays on the clean side of that fault. */
+    /* Type-pun a double through the union and BRANCH on the punned member.
+     * A prior revision claimed the alpha-dec-vms cc1 "silently miscompiles" a
+     * branch controlled by a union type-punned member at -O0. That was a
+     * MISDIAGNOSIS (vms-4b5, root-caused): the earlier union used `unsigned
+     * long` (32-bit on VMS) to hold a 64-bit double, so the pun captured only
+     * the low 32 bits, and comparing that against the full 64-bit constant
+     * 0x3FF0000000000000 is provably-false for a zero-extended 32-bit value —
+     * which GCC correctly folds away even at -O0 (an out-of-range comparison,
+     * not a codegen fault). With the member widened to `unsigned long long`
+     * (above), the pun is full-width and the branch codegens and evaluates
+     * correctly. `base` is volatile-seeded, so the comparand cannot be
+     * constant-folded and a real ldq + cmpeq + branch is emitted. */
     union fpbits fb;
     fb.d = base;                               /* IEEE-754 1.0 = 0x3FF0000000000000 */
-    unsigned long fbits = fb.u;                /* punned read (used, not branched) */
+    unsigned long long fbits = fb.u;           /* full 64-bit punned read */
+    if (fbits != 0x3FF0000000000000ULL)        /* branch ON the punned member */
+        return 5;
 
     struct packed_flags pf = { 0, 0, 0, 0 };
     pf.a = 5 + seed; pf.b = 21; pf.c = 1; pf.s = -3;
@@ -252,7 +263,7 @@ int main(int argc, char **argv, char **envp)
     /* -- all stages verified: report (carrying the punned union bits) +
      *    return the full-success sentinel -- */
     printf("OVMX cc1/FP toolchain-stress port test: OK "
-           "(fp+u64cvt+math+fmt+aggregate+fnptr+switch) argc=%d fbits=0x%lx\n",
+           "(fp+u64cvt+math+fmt+aggregate+fnptr+switch) argc=%d fbits=0x%llx\n",
            argc, fbits);
     return 7;   /* distinctive success -> $STATUS = C$_EXIT1 + (7-1)*8 */
 }

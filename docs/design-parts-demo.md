@@ -19,8 +19,13 @@ RMS system services, nothing more:
 | `sys$get`    | **keyed random** lookup by part number (`RAB$C_KEY`) |
 | `sys$disconnect` / `sys$close` | tear down                     |
 
-It is **single-user**: RMS record locking is unwired in OVMX (`vms-407`), so the
-file is opened `FAB$M_NIL` (no sharing) and no shared-record lock is taken.
+It is **single-user by design**: the demo opens the file with `fab$b_shr =
+FAB$M_NIL` (no sharing) and takes no shared-record lock — a single loader/lookup
+program has no second accessor to arbitrate with. (This is a choice of the demo,
+not a platform limitation: RMS file-share and record locking are now real on the
+ACP path — `rms$file_share_locking` and `rms$record_locking` = implemented/real,
+vms-50e / vms-0dd. The former `vms-407` "record locking is unwired" justification
+is obsolete.)
 
 ### Record and key layout (`src/apps/parts/parts.h`)
 

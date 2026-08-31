@@ -4,6 +4,21 @@
 decode the unidentified SCA message types and decide what OVMX must serve).
 Blocks: vms-ecff (type 10), vms-07a (types 8/9).
 
+> **UPDATE 2026-08-31 (register re-census #992).** Several forward-looking
+> "deferred/unimplemented" statements below have since been overtaken by
+> implementation and are corrected inline:
+> - **MSCP disk-serve READ/WRITE is now implemented and real**
+>   (`mscp-serve$disk-read-write` = implemented/real): real `pread()`/`pwrite()`
+>   against the node's actual served volume, `src/vmsscs/scs_mscp_srv.c` (vms-4e31).
+>   `vms-941` (block data transfer) is **no longer deferred**.
+> - **Runtime SYS$DISK is now a genuine Files-11 ODS-2 volume** read/written
+>   through the executive ACP (`vmsfs$runtime_fs` = implemented/real;
+>   `ods2$reader` = verified/real, byte-exact vs a real VAX volume). vms-165
+>   retired the legacy `vmsfs.ko` VFS driver and its non-genuine VMFS/VFH2 format.
+> - Still legitimately open: **ONLINE END** (`mscp-serve$online-end`) remains a
+>   `stub` — book-only, no byte-exact oracle capture — and **TMSCP tape serving**
+>   is absent. Those are correct as written.
+
 **Sources.** (a) *VAXcluster Principles* (Roy G. Davis, Digital Press, 1993),
 chapters 4 ("Digital Storage Architecture") and 5 ("Disk Storage Options"),
 transcribed 2026-08-05 to `~/cluster/transcript/ch4-5-part01..10.md` +
@@ -347,19 +362,27 @@ by AA-L619A-TK, all three recorded as observations rather than named, and
 `P.CNTF` notably **not** an echo of what the class driver requested.
 
 Two design decisions worth carrying forward. **The backing store is a raw block
-image and OVMX's `vmsfs` is deliberately not used**: MSCP is a block protocol
-and `vmsfs_ondisk.h` states it is not byte-compatible with real ODS-2, so a
-served volume's *content* must be a genuine VMS-made ODS-2 volume while OVMX
-serves its blocks verbatim — which keeps Phase D on the protocol and leaves the
-on-disk format story untouched. **v1 is read-only and says so on the wire**
+image served verbatim**: MSCP is a block protocol, so a served volume's *content*
+is a genuine ODS-2 volume while OVMX serves its blocks byte-for-byte — which keeps
+Phase D on the protocol and leaves the on-disk format story to the ODS-2 layer.
+(This aside originally read that OVMX's `vmsfs` was "deliberately not used" because
+`vmsfs_ondisk.h` was not byte-compatible with real ODS-2. **Corrected 2026-08-31:**
+that non-genuine VMFS/VFH2 driver was retired by vms-165; runtime SYS$DISK is now a
+genuine byte-exact ODS-2 volume via the executive ACP — `vmsfs$runtime_fs` =
+implemented/real, `ods2$reader` = verified/real — so an OVMX-made ODS-2 volume can
+itself be the served content.) **v1 is read-only and says so on the wire**
 (`UF.WPS` advertised; WRITE answered Write Protected `0x1006`).
 
-**WHAT PART 1 DOES NOT DO.** Block data transfer is still unimplemented, so a
-READ with no transfer hook returns Controller Error and a zero byte count
-rather than a Success it cannot back up. `vms-941` (block data transfer) and
-`vms-61b2` (LISTEN registration) both stay open behind that — registering
-`MSCP$DISK` before the responder can honour a mount is the exact facade
-`vms-61b2` refused to build.
+**WHAT PART 1 DID NOT DO (since resolved).** At the time of Part 1, block data
+transfer was unimplemented, so a READ with no transfer hook returned Controller
+Error and a zero byte count rather than a Success it could not back up. `vms-941`
+(block data transfer) and `vms-61b2` (LISTEN registration) both stayed open
+behind that — registering `MSCP$DISK` before the responder could honour a mount
+is the exact facade `vms-61b2` refused to build. **UPDATE 2026-08-31:** MSCP
+disk-serve READ/WRITE is now implemented and real (`mscp-serve$disk-read-write` =
+implemented/real; real `pread()`/`pwrite()` against the served volume,
+`src/vmsscs/scs_mscp_srv.c`, vms-4e31), so `vms-941` is no longer deferred and a
+real responder now stands behind the LISTEN registration.
 
 **THE TWO WIRE-FIDELITY GAPS ARE CLOSED — BY MEASUREMENT, NOT BY THE BOOK.**
 Part 1's first draft carried two gaps that blocked a real MOUNT and that
@@ -468,7 +491,9 @@ layer up. The minimal responder answers SCC with a well-formed end message and
 GUS with "no unit" status — a truthful "member that serves no disk", matching
 the book's model where serving is optional (§4.8). Full serving (READ/WRITE,
 block data, DSRV/UQB/HQB/HRB machinery, vms-941 un-deferral, vms-61b2 LISTEN
-registration) stays deferred until OVMX has a disk to serve and a reason to.
+registration) was deferred until OVMX had a disk to serve and a reason to —
+**READ/WRITE has since landed (mscp-serve$disk-read-write = implemented/real,
+vms-941 un-deferred, 2026-08-31; see the update banner at the top).**
 Alternatives teed up in the gate: (a) permanent "serves no disk" with the
 connect *refused* instead of accepted; (b) full server build now. Absent an
 answer, work proceeds on Phases A–C only, which no option forecloses.
@@ -566,7 +591,10 @@ number/password or CLUSTER_AUTHORIZE.DAT — so the join-nonce derivation gap in
 - vms-abd: type 7 exists in-corpus (§1.4); re-run teardown comparison with the
   8/9 exchange present vs absent.
 - vms-1d2: the Phase C capture is the same experiment; potential double close.
-- vms-941 stays deferred; vms-61b2 stays blocked on a real responder.
+- ~~vms-941 stays deferred; vms-61b2 stays blocked on a real responder.~~
+  **RESOLVED 2026-08-31:** MSCP disk-serve READ/WRITE is implemented/real
+  (`mscp-serve$disk-read-write`, vms-4e31); vms-941 is no longer deferred and
+  the responder is real. (ONLINE END remains a legitimate `stub`.)
 - vms-c11 discipline held: censuses here were length-unrestricted; the type
   field was histogrammed over *all* short classes plus the 190-content class.
 

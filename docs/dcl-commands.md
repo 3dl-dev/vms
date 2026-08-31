@@ -773,11 +773,14 @@ Configure security auditing (stub).
 
 ### SET ACCOUNTING
 
-Configure accounting (stub).
+Enable or disable system accounting. The enabled state is a real, persisted,
+system-wide flag that gates the accounting record path (not a per-process
+value). The ACCOUNTING.DAT record journal itself is not yet implemented.
 
 ### SET VOLUME
 
-Set volume characteristics (stub).
+Set volume characteristics. Dispatches a real SET VOLUME sub-handler with its
+own keyword validation, short of VMS's full option set.
 
 ### SET ON / SET NOON
 
@@ -1177,7 +1180,7 @@ Send and receive electronic mail messages.
 MAIL [recipient]
 ```
 
-**VMS Compatibility:** Stub. Launches host `mail` command if available.
+**VMS Compatibility:** Implemented. Native MAIL utility (`tools/vms_mail.c`).
 
 ### MONITOR
 
@@ -1187,7 +1190,7 @@ Display real-time system activity statistics.
 MONITOR class
 ```
 
-**VMS Compatibility:** Stub.
+**VMS Compatibility:** Implemented. Native MONITOR utility (`tools/vms_monitor.c`).
 
 ### MOUNT
 
@@ -1233,7 +1236,9 @@ Software product management.
 PRODUCT subcommand
 ```
 
-**VMS Compatibility:** Stub.
+**VMS Compatibility:** Implemented. PRODUCT/PCSI kit reader; INSTALL, SHOW
+PRODUCT, and SHOW HISTORY are real, with rooted-layout install proven
+end-to-end in CI.
 
 ### RECALL
 
@@ -1288,7 +1293,9 @@ Invoke SYSGEN system parameter utility.
 SYSGEN
 ```
 
-**VMS Compatibility:** Stub. Shows "not implemented" message.
+**VMS Compatibility:** Implemented (thin). SET/SHOW round-trips a real,
+file-backed parameter and enforces its range; ~6 of ~600 VMS tunables are
+present. AUTOGEN is not implemented.
 
 ### SYSMAN
 
@@ -1298,7 +1305,7 @@ Invoke SYSMAN system management utility.
 SYSMAN [subcommand]
 ```
 
-**VMS Compatibility:** Stub.
+**VMS Compatibility:** Partial.
 
 ---
 
@@ -1306,9 +1313,9 @@ SYSMAN [subcommand]
 
 **Fully compatible commands** -- These behave identically to their VMS counterparts for standard usage: APPEND, CLOSE, CONTINUE, COPY, CREATE, DEFINE, DEASSIGN, DELETE, DIRECTORY, EXIT, HELP, INQUIRE, LOGOUT, OPEN, PIPE, PRINT, PURGE, READ, RECALL, RUN, SEARCH, SET DEFAULT, SET VERIFY, SHOW DEFAULT, SHOW LOGICAL, SHOW TIME, SPAWN, SUBMIT, TYPE, WAIT, WRITE.
 
-**Partially compatible commands** -- These work but lack some VMS-specific features: ANALYZE, ASSIGN (single table), ATTACH, BACKUP, CONVERT, DIFFERENCES, DUMP, EDIT, INSTALL, LIBRARY, LINK, MAIL, MOUNT/DISMOUNT, REPLY/REQUEST, SORT, SET (various subcommands), SHOW (various subcommands), TCPIP.
+**Partially compatible commands** -- These work but lack some VMS-specific features: ANALYZE, ASSIGN (single table), ATTACH, BACKUP, CONVERT, DIFFERENCES, DUMP, EDIT, INSTALL, LIBRARY, LINK, MAIL, MONITOR, MOUNT/DISMOUNT, PRODUCT, REPLY/REQUEST, SORT, SYSGEN, SYSMAN, SET (various subcommands), SHOW (various subcommands), TCPIP.
 
-**Stub commands** -- These are recognized but provide minimal or no functionality: MONITOR, PHONE, PRODUCT, SYSGEN, SYSMAN.
+**Stub commands** -- These are recognized but provide minimal or no functionality: PHONE.
 
 ### Abbreviation Rules
 

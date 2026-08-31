@@ -27,11 +27,25 @@
  *   builtins), not the NULL/placeholder values the previous handler-stack
  *   emulation reported.
  *
- *   rung-2 (NOT yet): true machine-frame-transfer SYS$UNWIND (honouring
- *   newpc and running intervening handlers in CHF$V_UNWINDING mode). Today
- *   handlers are still invoked as ordinary nested calls from within
- *   lib$signal, so an unwind pops the chain but does not abandon
- *   intervening machine frames. See the design doc for the plan.
+ *   rung-2 (this change): true machine-frame-transfer SYS$UNWIND. When a
+ *   handler calls sys$unwind(depadr, newpc) naming a target frame that has
+ *   armed a resume anchor (VMS$UNWIND_ANCHOR, see chfdef.h), the dispatcher
+ *   defers the unwind (as real VMS does - $UNWIND takes effect when the
+ *   handler returns to the dispatcher), then walks the chain from the
+ *   requesting handler's frame outward to the target: it calls each
+ *   intervening established handler ONCE with CHF$V_UNWINDING set, pops the
+ *   chain, and TRANSFERS control (setjmp/longjmp) to the target frame's
+ *   armed anchor - abandoning the intervening machine frames, honouring
+ *   newpc. When no anchor is armed for the target (or depadr is NULL /
+ *   sys$unwind is called outside an active dispatch) the historical
+ *   pop-only contract is preserved for source/behaviour compatibility
+ *   (test_lib_fb3). See docs/design-chf-condition-handling.md rung-2.
+ *
+ *   Host scope note: the target frame must have armed a resume anchor. The
+ *   real Alpha machine invocation-context walk (resuming into an ancestor
+ *   frame that armed no anchor, e.g. a bare caller of the establisher) is
+ *   rung-3 (vms-1fa, LIB$GET_INVO_*); until then a target frame declares
+ *   its resumability with VMS$UNWIND_ANCHOR().
  */
 
 #include <stdint.h>
@@ -39,6 +53,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <setjmp.h>
 #include "ssdef.h"
 #include "stsdef.h"
 #include "descrip.h"
@@ -68,10 +83,27 @@ struct handler_record {
     void           *est_frame;      /* real frame address of establisher */
     void           *est_pc;         /* return address into establisher */
     int             active;         /* re-entrancy guard: handler running */
+    int             has_anchor;     /* rung-2: resume_ctx armed for transfer */
+    jmp_buf         resume_ctx;     /* rung-2: setjmp'd in establisher frame */
 };
 
 static _Thread_local struct handler_record handler_stack[MAX_HANDLERS];
 static _Thread_local int handler_count = 0;
+
+/* ================================================================
+ * rung-2: deferred-unwind request state (thread-local).
+ *
+ * Real VMS SYS$UNWIND does not transfer control immediately; it marks the
+ * unwind and the dispatcher performs it when the handler returns. We mirror
+ * that: sys$unwind records the request here and returns to the handler; the
+ * dispatcher (dispatch_condition) acts on it after the handler returns.
+ * ================================================================ */
+
+static _Thread_local int   uw_dispatching = 0;  /* inside dispatch_condition */
+static _Thread_local int   uw_pending     = 0;  /* an unwind was requested */
+static _Thread_local int   uw_target      = 0;  /* target depth (handlers kept) */
+static _Thread_local void *uw_newpc       = NULL;
+static _Thread_local int   uw_requester   = -1; /* index of requesting handler */
 
 /* ================================================================
  * lib$establish - Establish a condition handler
@@ -102,10 +134,11 @@ void *lib$establish(void *handler) {
     void *est_frame = __builtin_frame_address(1);
     void *est_pc    = __builtin_return_address(0);
 
-    handler_stack[handler_count].handler   = (chf$handler_t)handler;
-    handler_stack[handler_count].est_frame = est_frame;
-    handler_stack[handler_count].est_pc    = est_pc;
-    handler_stack[handler_count].active    = 0;
+    handler_stack[handler_count].handler    = (chf$handler_t)handler;
+    handler_stack[handler_count].est_frame  = est_frame;
+    handler_stack[handler_count].est_pc     = est_pc;
+    handler_stack[handler_count].active     = 0;
+    handler_stack[handler_count].has_anchor = 0;
     handler_count++;
 
     return previous;
@@ -179,6 +212,81 @@ static uint32_t invoke_vector(int which,
  *   SS$_RESIGNAL : nobody claimed it (caller applies default handling)
  * ================================================================ */
 
+/* ================================================================
+ * perform_unwind - execute a deferred SYS$UNWIND request (rung-2).
+ *
+ * Called by the dispatcher once the handler that requested the unwind has
+ * returned. Walks the frame-handler chain from the requesting handler's
+ * frame outward toward the target depth, calling each intervening,
+ * not-currently-active established handler ONCE with CHF$V_UNWINDING set so
+ * it can release resources, then pops the chain to the target depth and
+ * TRANSFERS control to the target frame's armed resume anchor
+ * (setjmp/longjmp) - abandoning the intervening machine frames. Does not
+ * return when an anchor is armed (longjmp). Returns normally (pop-only)
+ * when the target frame armed no anchor.
+ * ================================================================ */
+
+static void perform_unwind(struct chf$signal_array *sigarray)
+{
+    int target    = uw_target;
+    int requester = uw_requester;
+
+    /* Snapshot the target frame's resume anchor BEFORE popping. The record
+     * memory in handler_stack[] persists across the pop (only the count is
+     * decremented), so the jmp_buf stays valid to longjmp into. */
+    jmp_buf *anchor = NULL;
+    if (target >= 0 && target < handler_count && handler_stack[target].has_anchor) {
+        anchor = &handler_stack[target].resume_ctx;
+    }
+
+    /* Call each intervening handler once in unwind mode: from the frame just
+     * below the requester's frame down to (but not including) the target
+     * frame, which survives. The requester itself is skipped (it is the
+     * running handler and its frame is being abandoned by the transfer). */
+    struct chf$mech_array mech;
+    memset(&mech, 0, sizeof(mech));
+    mech.chf$is_mch_args  = 5;
+    mech.chf$is_mch_flags = CHF$M_UNWINDING;   /* CHF$V_UNWINDING set */
+
+    for (int i = requester - 1; i > target; i--) {
+        struct handler_record *rec = &handler_stack[i];
+        if (rec->handler == NULL || rec->active) {
+            continue;
+        }
+        mech.chf$ph_mch_frame = rec->est_frame;
+        mech.chf$is_mch_depth = (uint32_t)i;
+        mech.chf$is_mch_flags = CHF$M_UNWINDING;
+        rec->active = 1;
+        (void)rec->handler(sigarray, &mech);   /* return value ignored in unwind */
+        rec->active = 0;
+    }
+
+    /* Pop the chain down to the target depth (the abandoned frames' handlers
+     * are gone; the target frame will re-establish if it wants one). */
+    if (target < 0) target = 0;
+    while (handler_count > target) {
+        handler_count--;
+    }
+
+    /* Clear the pending state before transferring. */
+    void *newpc = uw_newpc;
+    uw_pending   = 0;
+    uw_requester = -1;
+    uw_newpc     = NULL;
+
+    if (anchor) {
+        /* Transfer control to the target frame. newpc is stashed so the
+         * resume site can read it via vms$$unwind_newpc(); longjmp delivers
+         * a fixed non-zero token so the VMS$UNWIND_ANCHOR() setjmp returns
+         * non-zero (0 is reserved for the arming call). */
+        uw_newpc = newpc;   /* readable at the resume site */
+        longjmp(*anchor, 1);
+        /* not reached */
+    }
+    /* No anchor armed: pop-only unwind already done above (rung-1 contract). */
+    (void)newpc;
+}
+
 static uint32_t dispatch_condition(struct chf$signal_array *sigarray)
 {
     struct chf$mech_array mecharray;
@@ -191,9 +299,19 @@ static uint32_t dispatch_condition(struct chf$signal_array *sigarray)
     mecharray.chf$is_mch_savr0 = 0;
     mecharray.chf$is_mch_savr1 = 0;
 
+    int prev_dispatching = uw_dispatching;
+    uw_dispatching = 1;
+    uw_requester = -1;   /* no frame handler running yet */
+
     /* 1. PRIMARY exception vector. */
     uint32_t r = invoke_vector(CHF$K_PRIMARY_VECTOR, sigarray, &mecharray);
+    if (uw_pending) {
+        perform_unwind(sigarray);   /* vector requested a transfer */
+        uw_dispatching = prev_dispatching;
+        return SS$_CONTINUE;
+    }
     if (r == SS$_CONTINUE) {
+        uw_dispatching = prev_dispatching;
         return SS$_CONTINUE;
     }
 
@@ -210,14 +328,28 @@ static uint32_t dispatch_condition(struct chf$signal_array *sigarray)
         mecharray.chf$is_mch_flags = 0;
 
         rec->active = 1;
+        uw_requester = i;   /* frame the handler could unwind from */
         uint32_t result = rec->handler(sigarray, &mecharray);
         rec->active = 0;
 
+        /* rung-2: the handler may have called sys$unwind, which deferred a
+         * transfer. Perform it now (as real VMS does on handler return). If
+         * an anchor is armed, perform_unwind() does not return (longjmp). */
+        if (uw_pending) {
+            perform_unwind(sigarray);
+            /* pop-only fallthrough (no anchor): resume the search as CONTINUE
+             * so the establishing frame regains control normally. */
+            uw_dispatching = prev_dispatching;
+            return SS$_CONTINUE;
+        }
+
         if (result == SS$_CONTINUE) {
+            uw_dispatching = prev_dispatching;
             return SS$_CONTINUE;
         }
         /* SS$_RESIGNAL (or anything else) -> next handler outward. */
     }
+    uw_dispatching = prev_dispatching;
 
     /* 3. SECONDARY exception vector. */
     mecharray.chf$ph_mch_frame = NULL;
@@ -348,4 +480,86 @@ int vms$$handler_unwind_to(int target_depth) {
         handler_count--;
     }
     return handler_count;
+}
+
+/* ================================================================
+ * rung-2 frame-transfer SYS$UNWIND support (used by sys_condition.c and
+ * the VMS$UNWIND_ANCHOR() macro in chfdef.h).
+ * ================================================================ */
+
+/*
+ * vms$$unwind_anchor_buf - arm a resume anchor for the current innermost
+ * (most recently established) frame handler and hand back its jmp_buf so
+ * the caller's VMS$UNWIND_ANCHOR() macro can setjmp into it, IN the
+ * establisher's own frame. Returns a throwaway static buffer if no handler
+ * is established (the setjmp is then a harmless no-op that never receives a
+ * transfer).
+ */
+void *vms$$unwind_anchor_buf(void)
+{
+    static _Thread_local jmp_buf dummy;
+    if (handler_count <= 0) {
+        return &dummy;
+    }
+    struct handler_record *rec = &handler_stack[handler_count - 1];
+    rec->has_anchor = 1;
+    return &rec->resume_ctx;
+}
+
+/*
+ * vms$$unwind_newpc - the newpc argument passed to the SYS$UNWIND that
+ * transferred control to the current resume site (NULL if none / newpc==0).
+ * A resume site reads this after VMS$UNWIND_ANCHOR() returns non-zero to
+ * honour the target PC selection.
+ */
+void *vms$$unwind_newpc(void)
+{
+    return uw_newpc;
+}
+
+/*
+ * vms$$unwind_request - record a deferred SYS$UNWIND (called by sys$unwind).
+ *
+ * Deferred-unwind model (real VMS): the transfer happens when the handler
+ * returns to the dispatcher, not here. We only decide whether this call is a
+ * real frame-transfer request (armed target anchor + inside an active
+ * dispatch) or the historical pop-only contract, then either arm the pending
+ * state or pop immediately.
+ *
+ *   depadr == NULL : pop one level (rung-1 contract), never a transfer.
+ *   depadr != NULL : target depth = *depadr. If a frame handler at that depth
+ *                    has an armed anchor and we are inside a dispatch, defer a
+ *                    real frame transfer; otherwise pop to the target depth.
+ */
+uint32_t vms$$unwind_request(const uint32_t *depadr, void *newpc)
+{
+    int current = handler_count;
+    int target;
+
+    if (depadr) {
+        target = (int)*depadr;
+        if (target < 0) target = 0;
+        if (target > current) target = current;   /* cannot unwind outward */
+    } else {
+        target = (current > 0) ? current - 1 : 0;  /* pop one level */
+    }
+
+    int can_transfer =
+        uw_dispatching && depadr &&
+        target >= 0 && target < current &&
+        handler_stack[target].has_anchor;
+
+    if (can_transfer) {
+        /* Defer: the dispatcher performs the transfer when the requesting
+         * handler returns (perform_unwind). */
+        uw_pending   = 1;
+        uw_target    = target;
+        uw_newpc     = newpc;
+        /* uw_requester is set by the dispatcher to the running frame index. */
+        return SS$_NORMAL;
+    }
+
+    /* Pop-only contract (no armed target / NULL depadr / outside dispatch). */
+    vms$$handler_unwind_to(target);
+    return SS$_NORMAL;
 }

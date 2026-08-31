@@ -126,6 +126,15 @@ libvms_add_test(test_libvms_lib_fb3
 libvms_add_test(test_libvms_condition_dispatch
     ${CMAKE_CURRENT_SOURCE_DIR}/test_condition_dispatch.c)
 
+# Test 8c: vms-8802 rung-2 — real machine-frame-transfer SYS$UNWIND. Proves the
+# deferred unwind honours newpc, calls each intervening handler once with
+# CHF$V_UNWINDING set, and transfers control (setjmp/longjmp) to the target
+# frame's armed anchor, abandoning the intervening machine frames (the corpus
+# "After abort" that never prints). Also asserts the pop-only compatibility
+# contract (NULL depadr) is preserved. See docs/design-chf-condition-handling.md.
+libvms_add_test(test_libvms_condition_unwind
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_condition_unwind.c)
+
 # Test 9: vms-f88 (epic vms-d0c) — the REAL binary $UAFDEF SYSUAF record over
 # the genuine Files-11 Prolog-3 indexed engine (supersedes the ASCII+SHA-256 /
 # 368-byte facade). Locks the 644-byte oracle layout, then authors a binary

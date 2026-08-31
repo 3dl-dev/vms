@@ -1,7 +1,7 @@
 # Design: Real VMS Condition-Handling Dispatch (CHF)
 
 - **rd item:** `vms-2e72` (gap register R8 — see `docs/design-gcc-port-surface-gaps-register.md`)
-- **Status:** rung-1 landed; rungs 2–5 filed as children of `vms-2e72`.
+- **Status:** rung-1 + rung-2 landed; rungs 3–5 filed as children of `vms-2e72`.
 - **Rule:** VMS-compatibility-first (Rule 1, "do it like VMS"); Rule 9 / INV-6
   (real executive path, no per-process fake); clean-room (Rule 8 — this design is
   from the public OpenVMS Programming Concepts Manual + Calling Standard + System
@@ -82,7 +82,7 @@ Gap versus the target, itemised:
 | G1 | primary/secondary/last-chance vectors via `SYS$SETEXV`, searched around the frame chain | absent entirely |
 | G2 | mechanism array carries the **real** establisher frame + depth + saved regs | `NULL` frame, `handler_count` as depth, zero regs |
 | G3 | handler search follows the **real invocation (frame) chain** | walks a side array unrelated to actual frames |
-| G4 | `SYS$UNWIND` runs intervening handlers in `CHF$V_UNWINDING` mode and **transfers control** to a target frame at `newpc` | pops the side array; `newpc` ignored; intervening frames not abandoned |
+| G4 | `SYS$UNWIND` runs intervening handlers in `CHF$V_UNWINDING` mode and **transfers control** to a target frame at `newpc` | **closed (rung-2)** for an anchored target frame: deferred unwind, intervening `CHF$V_UNWINDING` calls, `setjmp`/`longjmp` transfer, `newpc` honoured, frames abandoned. Resuming into an *un-anchored* ancestor frame → rung-3 (G5). |
 | G5 | Alpha ICB primitives (`LIB$GET_INVO_*`) expose the chain | absent |
 | G6 | one dispatcher serves both software signals **and** hardware exceptions | software path only; the `SS$_HPARITH` bridge (`vms-db3`/GAP3) proves the HW→condition→handler-chain pattern for one code but is not unified |
 
@@ -160,20 +160,47 @@ mechanism-array construction, and adds the missing exception-vector service.
 
 Closes G1, G2, and G3 for the software-signal path.
 
-### Rung-2 — real machine-frame-transfer `SYS$UNWIND` *(child: G4)*
+### Rung-2 — real machine-frame-transfer `SYS$UNWIND` *(landed; G4)*
 
-Make `sys$unwind(depadr, newpc)` abandon intervening machine frames and resume in
-the target frame, running each intervening non-active handler once with
-`CHF$V_UNWINDING` set. Because OVMX invokes handlers as nested calls from within
-`lib$signal`, a faithful transfer needs a resumable context anchored at the
-**establisher** frame. Approach: `lib$establish` captures a resumable context for
-the establisher frame (a `sigjmp_buf`-class save via a thin establish shim that
-runs in the establisher's frame, preserving the `lib$establish(handler)` source
-signature); `sys$unwind` runs the unwinding handlers, pops the chain, then
-transfers to the target frame's saved context (`newpc` honoured when non-zero).
-**Test:** port `tests/corpus/tier1-examples/sys_unwind.c` to an executable
-assertion — the `SS$_ABORT` case must NOT print "After abort" (control returns to
-`main`), which the current pop-only emulation cannot achieve.
+`sys$unwind(depadr, newpc)` now performs a real machine-frame transfer: it
+abandons the intervening machine frames and resumes in the target frame, running
+each intervening non-active handler once with `CHF$V_UNWINDING` set, honouring
+`newpc`.
+
+- **Deferred-unwind model.** As on real VMS, `sys$unwind` does **not** transfer
+  immediately — it records the request (target depth + `newpc`) and returns to the
+  handler; the dispatcher (`dispatch_condition`) performs the transfer when the
+  handler returns (`perform_unwind`, `src/libvms/rtl/lib_signal.c`). This is what
+  keeps a handler that ends `sys$unwind(...); return SS$_CONTINUE;` (as the corpus
+  and `test_lib_fb3` both do) well-defined.
+- **Resume anchor.** Because OVMX invokes handlers as nested calls from within
+  `lib$signal`, the transfer target is a resumable context **anchored in the
+  target frame**. A procedure that wants `SYS$UNWIND` to transfer back into its
+  frame arms one with `VMS$UNWIND_ANCHOR()` (a `setjmp` macro that runs in the
+  establisher's own frame — `chfdef.h`) right after `lib$establish`. The
+  dispatcher `longjmp`s to it, abandoning the intervening frames. `newpc` is
+  carried through and readable at the resume site via `vms$$unwind_newpc()`.
+- **Compatibility.** A `NULL` `depadr`, a target frame that armed no anchor, or a
+  `sys$unwind` call made outside an active dispatch keeps the historical pop-only
+  handler-chain contract — so `test_lib_fb3` (29/29) is unchanged.
+- **Test:** `tests/libvms/test_condition_unwind.c` — the executable-assertion port
+  of `tests/corpus/tier1-examples/sys_unwind.c`. The `SS$_ABORT` case asserts the
+  code after the signal does **not** run (the corpus's "After abort" that never
+  prints), that intervening frames are abandoned, that an intervening handler is
+  called once with `CHF$V_UNWINDING`, and that `newpc` is honoured.
+
+> **Honest host scope (→ rung-3).** The target frame must have armed a resume
+> anchor. Resuming into an ancestor frame that armed **no** anchor — e.g. the
+> corpus's literal "return to `main`", a bare caller of the establisher that has
+> no OVMX hook — needs the real machine invocation-context walk (procedure
+> descriptors / register save areas) so the runtime can reconstruct and restore
+> that frame's context. That is exactly rung-3 (`vms-1fa`, `LIB$GET_INVO_*`);
+> until it lands, a target frame declares its resumability with
+> `VMS$UNWIND_ANCHOR()`. No silent scope drop: the frame-transfer *mechanism*
+> (deferred unwind, intervening `CHF$V_UNWINDING` calls, `longjmp` transfer,
+> `newpc`, chain pop) is real and complete on the host; only the source of the
+> target frame's saved context (explicit anchor now vs. walked invocation chain in
+> rung-3) differs.
 
 ### Rung-3 — Alpha invocation-context primitives *(child: G5)*
 

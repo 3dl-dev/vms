@@ -11303,6 +11303,60 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                             } else {
                                 conn_step(tgt, cev, NULL);
                             }
+                        } else if (cev == SCS_CONN_EV_RCV_REJECT_REQ) {
+                            /* vms-2f3: ANSWER a connect-collision REJECT_REQ with
+                             * the op-5 REJECT_RSP the FSM requires
+                             * (SCS_CONN_ACT_SEND_REJECT_RSP, scs_conn.c p.2-24).
+                             * Until now the CONNFSM produced that action but NO
+                             * emitter built the frame (SCSD-W-CONNNOACT), so OVMX
+                             * left the losing joiner connect un-acked. A real VAX,
+                             * never getting its REJECT_RSP, holds that dangling half
+                             * BROKEN and keeps the node at BRK_NON instead of MEMBER
+                             * even after CMREADMIT completes the member half --
+                             * measured on run milestone-1021 (549 config re-probes
+                             * on the broken conid). The op-5 REJECT_RSP is byte-exact
+                             * to what scs_dir_build_mscp_confirm5() emits (grounded
+                             * 696 REJECT_REQ->RSP pairs, spec 4h(1b)) -- the SAME
+                             * builder the MSCP op-4 reject path uses. Address it to
+                             * the losing connection's conid pair, then step the FSM
+                             * WITH the emitted frame so it reaches CLOSED cleanly and
+                             * CONNNOACT no longer fires. */
+                            struct peer_state *rps =
+                                peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
+                            const char *rej_emitted = NULL;
+                            if (rps != NULL) {
+                                struct scs_dir_params r5;
+                                memset(&r5, 0, sizeof(r5));
+                                memcpy(r5.dst_mac, ps_port_addr(rps), 6);
+                                memcpy(r5.src_mac, rx->our_hw_mac, 6);
+                                memcpy(r5.src_logical, rx->our_src_logical, 6);
+                                memcpy(r5.peer_logical, ps_sys_addr(rps), 6);
+                                r5.remote_conid = h.src_conid;     /* peer's handle, its REJECT_REQ */
+                                r5.local_conid = tgt->local_conid; /* the losing connection's own handle */
+                                r5.incarnation = rps->incarnation;
+                                r5.recv_ack = rps->vc.seq.recv_seq;
+                                r5.send_seq = scs_seq_advance(&rps->vc.seq);
+                                uint8_t rf5[SCS_DIR_CONFIRM5_FRAME_LEN];
+                                if (scs_dir_build_mscp_confirm5(&r5, rf5) == 0 &&
+                                    send_frame_vc(rx->sock, rx->ifindex, rps, rps->pb,
+                                                  "VMS$VAXcluster op=5 REJECT_RSP",
+                                                  rf5, sizeof(rf5)) > 0) {
+                                    rej_emitted = "VMS$VAXcluster op=5 REJECT_RSP";
+                                    log_ts(stdout);
+                                    printf(" SCSD-I-REJECTRSP, answered peer's"
+                                           " connect-collision REJECT_REQ with op-5"
+                                           " REJECT_RSP (local=0x%08X remote=0x%08X"
+                                           " send_seq=%u) -- closing the losing"
+                                           " VMS$VAXcluster connect cleanly so the"
+                                           " peer stops holding it BROKEN (vms-2f3)\n",
+                                           (unsigned)tgt->local_conid,
+                                           (unsigned)h.src_conid, r5.send_seq);
+                                    fflush(stdout);
+                                }
+                            }
+                            /* Step WITH the emitted frame (or NULL if build/send
+                             * failed -- then CONNNOACT correctly still fires). */
+                            conn_step(tgt, cev, rej_emitted);
                         } else {
                             struct scs_conn_transition ct = conn_step(tgt, cev, NULL);
                             /* vms-257: THE HONEST MSCPSRVOK. The member's op=3

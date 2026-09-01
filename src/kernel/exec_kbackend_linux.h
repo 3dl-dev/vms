@@ -587,13 +587,31 @@ static inline void  exec_arena_free(void *arena) { vfree(arena); }
  * Addresses cross the seam as raw network-order fields (no struct sockaddr_in in
  * shared core -- the backend builds the sockaddr).
  * ================================================================ */
-struct exec_socket_holder { struct socket *sock; struct kref kref; };
+struct exec_socket_holder {
+	struct socket *sock;
+	struct kref kref;
+	int promisc_ifindex;   /* vms-a84d: nonzero if exec_l2_open put this ifindex
+				* into promiscuous mode (so a directed cluster HELLO to
+				* the aa:00:04:00:<sysid> logical addr reaches the NIC
+				* whose real MAC differs); decremented on free. 0 for
+				* TCP/ICMP holders. */
+};
 typedef struct exec_socket_holder *exec_socket_t;
 
 static inline void exec_socket_holder_free(struct kref *kref)
 {
 	struct exec_socket_holder *h =
 		container_of(kref, struct exec_socket_holder, kref);
+	if (h->promisc_ifindex) {
+		struct net_device *dev =
+			dev_get_by_index(&init_net, h->promisc_ifindex);
+		if (dev) {
+			rtnl_lock();
+			dev_set_promiscuity(dev, -1);
+			rtnl_unlock();
+			dev_put(dev);
+		}
+	}
 	if (h->sock)
 		sock_release(h->sock);
 	kfree(h);
@@ -615,6 +633,7 @@ static inline int exec_socket_create(exec_socket_t *out)
 		return -ENOMEM;
 	}
 	h->sock = sock;
+	h->promisc_ifindex = 0;     /* vms-a84d: TCP/ICMP holders never go promisc */
 	kref_init(&h->kref);        /* the channel's reference */
 	*out = h;
 	return 0;
@@ -642,6 +661,7 @@ static inline int exec_socket_create_icmp(exec_socket_t *out)
 		return -ENOMEM;
 	}
 	h->sock = sock;
+	h->promisc_ifindex = 0;     /* vms-a84d: TCP/ICMP holders never go promisc */
 	kref_init(&h->kref);        /* the channel's reference */
 	*out = h;
 	return 0;
@@ -881,7 +901,27 @@ static inline int exec_l2_open(const char *ifname, uint16_t ethertype,
 		return -ENOMEM;
 	}
 	h->sock = sock;
+	h->promisc_ifindex = 0;
 	kref_init(&h->kref);            /* the caller's channel reference */
+
+	/* vms-a84d: put the NIC in PROMISCUOUS mode so a directed cluster HELLO
+	 * addressed to OUR logical addr aa:00:04:00:<LE16(SCSSYSTEMID)> reaches us.
+	 * The guest NIC's real MAC differs from that SCA address, so without
+	 * promisc the hardware filter silently drops the peer member's directed
+	 * solicit -- and then the VC never forms (start_acked stays 0, the
+	 * NEW->MEMBER join sequencer never leaves JS_IDLE). Ref-counted;
+	 * exec_socket_holder_free decrements it on close. */
+	rtnl_lock();
+	rc = dev_set_promiscuity(dev, 1);
+	rtnl_unlock();
+	if (rc) {
+		kfree(h);
+		dev_put(dev);
+		sock_release(sock);
+		return rc;
+	}
+	h->promisc_ifindex = dev->ifindex;
+
 	*out = h;
 	if (out_ifindex)
 		*out_ifindex = (uint32_t)dev->ifindex;
@@ -923,40 +963,34 @@ static inline int exec_l2_hwaddr(const char *ifname, uint8_t mac[6])
 static inline long exec_l2_send(exec_socket_t s, int ifindex, uint16_t ethertype,
 				 const uint8_t dst_mac[6], const void *frame, size_t len)
 {
-	struct net_device *dev;
 	struct sockaddr_ll sll;
 	struct msghdr msg;
-	struct kvec vec[2];
-	uint8_t ehdr[ETH_ALEN * 2 + 2];
-	__be16 be_ethertype = htons(ethertype);
+	struct kvec vec;
 	long n;
 
-	dev = dev_get_by_index(&init_net, ifindex);
-	if (!dev)
-		return -ENODEV;
-	memcpy(ehdr, dst_mac, ETH_ALEN);
-	memcpy(ehdr + ETH_ALEN, dev->dev_addr, ETH_ALEN);
-	memcpy(ehdr + ETH_ALEN * 2, &be_ethertype, sizeof(be_ethertype));
-	dev_put(dev);
-
+	/* vms-a84d: `frame` is ALREADY a complete ethernet frame. scsd.c's
+	 * send_frame_raw() hands the datalink a fully-built frame (dst@0, src@6,
+	 * ethertype@12, then the SCA payload), exactly as the AF_PACKET probe
+	 * transmits it. A SOCK_RAW socket sends the caller's link-layer header
+	 * VERBATIM -- we must NOT prepend our own. The earlier version built and
+	 * prepended a second [dst|dev_addr|ethertype] header, double-encapsulating
+	 * every frame with a 14-byte duplicate eth header (byte-identical to the
+	 * real one) that a peer's NISCA/PEDRIVER input validator silently drops --
+	 * which is why a real VAX never solicited a booted OVMX node. The dst and
+	 * ethertype are already in `frame`; sll only names the egress interface. */
+	(void)dst_mac;
 	memset(&sll, 0, sizeof(sll));
 	sll.sll_family = AF_PACKET;
 	sll.sll_ifindex = ifindex;
-	sll.sll_halen = ETH_ALEN;
-	sll.sll_protocol = be_ethertype;
-	memcpy(sll.sll_addr, dst_mac, ETH_ALEN);
+	sll.sll_protocol = htons(ethertype);
 
 	memset(&msg, 0, sizeof(msg));
 	msg.msg_name = &sll;
 	msg.msg_namelen = sizeof(sll);
-	vec[0].iov_base = ehdr;
-	vec[0].iov_len = sizeof(ehdr);
-	vec[1].iov_base = (void *)frame;
-	vec[1].iov_len = len;
-	n = kernel_sendmsg(s->sock, &msg, vec, 2, sizeof(ehdr) + len);
-	if (n < 0)
-		return n;
-	return (n <= (long)sizeof(ehdr)) ? 0 : n - (long)sizeof(ehdr);
+	vec.iov_base = (void *)frame;
+	vec.iov_len = len;
+	n = kernel_sendmsg(s->sock, &msg, &vec, 1, len);
+	return n;   /* full frame bytes sent, or negative errno */
 }
 
 /* Receive one frame off `s` into `buf` (up to `buf_len`), honoring

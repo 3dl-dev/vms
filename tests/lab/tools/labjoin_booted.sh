@@ -166,20 +166,28 @@ for i in $(seq 1 "$DUR_POLL"); do
     n="$(vclean | lj_parse_cn)"
     vsay 'SHOW CLUSTER' 6
     sc="$(vclean)"
-    st="$(printf '%s\n' "$sc" | grep -aiE "$NODE_UP" | grep -aoiE 'MEMBER|BRK_[A-Z]+|NEW|OPEN[A-Z]*' | head -1)"
+    st="$(lj_node_status "$sc" "$NODE_UP")"   # column-exact status, not a loose match
     log "  t+$((i*15))s CLUSTER_NODES=${n:-?}  ${NODE_UP}-status=${st:-absent}"
-    if printf '%s\n' "$sc" | grep -aiE "$NODE_UP" | grep -qaiE 'MEMBER'; then
-        VAX_SC="$sc"; [ "$joined" = 0 ] && log "  VAX ORACLE ADMITS $NODE_UP AS MEMBER (authentic admission)"; joined=1
-    elif [ -z "$VAX_SC" ] || printf '%s\n' "$sc" | grep -qaiE "$NODE_UP"; then
-        VAX_SC="$sc"   # remember the latest snapshot that at least names OVMXJ0
+    # Keep the LATEST snapshot that names the node -- the verdict grades the
+    # SUSTAINED/final state, NEVER a transient early hit. The old code latched
+    # joined=1 on the first line that merely contained MEMBER (a mis-parse of a
+    # NEW node then carried a false cut, lab-2 vms-a84d). joined tracks only the
+    # CURRENT iteration; a full member requires STATUS==MEMBER AND CN=3, sustained
+    # to the final read the verdict actually grades.
+    if [ -n "$st" ] || [ -z "$VAX_SC" ]; then VAX_SC="$sc"; fi
+    if [ "$st" = "MEMBER" ] && [ "$n" = "3" ]; then
+        [ "$joined" = 0 ] && log "  ${NODE_UP} STATUS==MEMBER at CN=3 -- watching whether it SUSTAINS to window end"
+        joined=1
+    else
+        joined=0   # not a full member this sample; only a SUSTAINED member at the end counts
     fi
     kill -0 "$NODEP" 2>/dev/null || { log "OVMX node driver exited"; break; }
 done
 
-# --- 8. Final authoritative snapshot of vax1's SHOW CLUSTER (keep the best) --
+# --- 8. Final authoritative snapshot of vax1's SHOW CLUSTER (grade the FINAL state) --
 vsay 'SHOW CLUSTER' 6
 last_sc="$(vclean)"
-if printf '%s\n' "$last_sc" | grep -aiE "$NODE_UP" | grep -qaiE 'MEMBER'; then VAX_SC="$last_sc"; fi
+[ -n "$(lj_node_status "$last_sc" "$NODE_UP")" ] && VAX_SC="$last_sc"
 [ -z "$VAX_SC" ] && VAX_SC="$last_sc"
 
 # Wind down the node + capture.

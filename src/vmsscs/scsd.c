@@ -373,6 +373,8 @@ static void ovmx_cluster_logical(uint16_t sysid, uint8_t out[6])
 /* --- vms-5fe: directed-HELLO / SCS-connect responder state --- */
 
 #define OVMX_MAX_PEERS 4
+/* vms-7e2 (db20-b): cap on distinct resources NL-registered to one member. */
+#define OVMX_DLM_NL_MAX 48
 
 /* vms-298 / vms-584 item 5: THE CON.ID HIGH WORD IS PER-BOOT, NOT COMPILE-TIME.
  *
@@ -1049,6 +1051,10 @@ struct peer_state {
      * body[6:8] counter is ps->own_cksum (shared with the barrier steps); the
      * txn tag is the SCSD_DLM_DIR_TAG constant. */
     int      dlm_selfreg_sent;          /* one-shot: self-reg emitted for the current epoch */
+    /* vms-7e2 (db20-b): resources already NL-registered to this member (dedup --
+     * register each shown cluster resource once, honest NL participation). */
+    char     dlm_nl_reg[OVMX_DLM_NL_MAX][16];
+    int      dlm_nl_reg_n;
     /* rd vms-ec75 (DLM rung H11): DISTRIBUTED DEADLOCK SEARCH. A contender node
      * holds one resource (mastered by C) and $ENQs a second that QUEUES behind the
      * other contender -- a genuine cross-node wait-for cycle. When the wait queues,
@@ -3673,6 +3679,11 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                             between barrier steps 4 and 5 on the one CM send_seq
  *                             stream; a null-value-block directory record, CHOKED
  *                             like every other sequenced VC message
+ *     cm_send_dlm_nl_register() the cat-0x02 op-0x01 NULL-mode DLM registration
+ *                             (vms-7e2/db20-b) OVMX originates to a non-coordinator
+ *                             member for each cluster resource it is shown -- honest
+ *                             NL directory participation (mode hard-pinned NL, holds
+ *                             nothing); CHOKED like every other sequenced VC message
  *     scs_reflect_credit()    the op8->op9 / op6->op7 credit handshake reply
  *     scs_send_disconnect_self() self-directed teardown, hand-built frame
  *
@@ -6478,6 +6489,80 @@ static int cm_send_dlm_selfreg(int sock, int ifindex, struct peer_state *ps,
 }
 
 /*
+ * dlm_nl_reg_add - record that we have NL-registered resource `res16` (the 16-byte
+ * fixed name field) to this member; returns 1 if it is NEW (register it now), 0 if
+ * already registered or the per-member cap is reached (skip). Dedup so each shown
+ * resource is registered once (db20-b).
+ */
+static int dlm_nl_reg_add(struct peer_state *ps, const char res16[16])
+{
+    for (int i = 0; i < ps->dlm_nl_reg_n; i++) {
+        if (memcmp(ps->dlm_nl_reg[i], res16, 16) == 0) {
+            return 0;
+        }
+    }
+    if (ps->dlm_nl_reg_n >= OVMX_DLM_NL_MAX) {
+        return 0;
+    }
+    memcpy(ps->dlm_nl_reg[ps->dlm_nl_reg_n++], res16, 16);
+    return 1;
+}
+
+/*
+ * cm_send_dlm_nl_register - originate an honest NULL-mode DLM registration (cat
+ * 0x02 op 0x01 ENQ, mode NL) for a resource a non-coordinator member has shown us
+ * (db20-b, vms-7e2). Modelled on cm_send_dlm_selfreg; the frame is built by
+ * scs_member_build_dlm_nl_enq, which HARD-PINS the mode to NL -- OVMX holds no
+ * locks, so it registers only directory participation (holding nothing), never a
+ * held-mode ENQ or an op-07 convert. The reference joiner runs this rebuild
+ * exchange with each non-coordinator member; VAX1's SCA$TRANSPORT probe (the
+ * member-set trigger) follows it draining.
+ */
+static int cm_send_dlm_nl_register(int sock, int ifindex, struct peer_state *ps,
+                                   const uint8_t our_hw_mac[6],
+                                   const uint8_t our_src_logical[6],
+                                   uint16_t dir_hash, uint16_t member_count,
+                                   const char *resname, uint8_t namelen)
+{
+    if (ps->cm_local_conid == 0) {
+        return 0;
+    }
+    struct scs_member_params bp;
+    memset(&bp, 0, sizeof(bp));
+    memcpy(bp.dst_mac, ps_port_addr(ps), 6);
+    memcpy(bp.src_mac, our_hw_mac, 6);
+    memcpy(bp.src_logical, our_src_logical, 6);
+    memcpy(bp.peer_logical, ps_sys_addr(ps), 6);
+    bp.remote_conid = ps->cm_remote_conid;
+    bp.local_conid = ps->cm_local_conid;
+    bp.incarnation = ps->incarnation;
+    bp.recv_ack = ps->vc.seq.recv_seq;
+    bp.send_seq = scs_seq_advance(&ps->vc.seq);
+    if (ps->sysap_send == 0) {
+        ps->sysap_send = 1;
+    }
+    bp.sysap_send_msg = ps->sysap_send++;
+    bp.sysap_ack_msg = ps->sysap_recv;
+    bp.txn = SCSD_DLM_DIR_TAG;        /* per-VC directory tree tag */
+    bp.checksum = ++ps->own_cksum;     /* per-VC monotonic counter, contiguous */
+    bp.member_count = member_count;    /* the count the member showed us (honest) */
+    uint8_t dframe[SCS_MEMBER_FRAME_LEN];
+    if (scs_member_build_dlm_nl_enq(&bp, dir_hash, resname, namelen, dframe) == 0 &&
+        send_frame_vc(sock, ifindex, ps, ps->pb,
+                      "CM DLM NL registration (cat 0x02 op 0x01, mode NL)",
+                      dframe, sizeof(dframe)) > 0) {
+        scs_vc_record_sent(&ps->vc, bp.send_seq, monotonic_ms());
+        log_ts(stdout);
+        printf(" SCSD-I-DLMNLREG, originated NL-mode DLM registration"
+               " (cat 0x02 op 0x01 NL, res='%.*s' hash=0x%04x cksum=0x%04x seq=%u)\n",
+               (int)namelen, resname, dir_hash, bp.checksum, bp.send_seq);
+        fflush(stdout);
+        return 1;
+    }
+    return 0;
+}
+
+/*
  * cm_send_ack - emit one category-0x04 SYSAP acknowledgement naming our current
  * high-water mark on the VC the connection-manager dialogue is riding.
  *
@@ -7927,6 +8012,38 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                                cm_shape == CM_RSP_TOKEN ? "token-only" : (cm_shape == CM_RSP_DLM ? "dlm-echo" : "echoed"),
                                mp.sysap_send_msg, mp.sysap_ack_msg);
                         fflush(stdout);
+
+                        /* vms-7e2 (db20-b): having echoed a non-coordinator
+                         * member's op-0d rebuild record, register honest NL
+                         * participation in that resource -- the directory-rebuild
+                         * exchange the member needs before it advances to the
+                         * SCA$TRANSPORT member-STATUS probe. NL only (holding
+                         * nothing); OVMX invents nothing -- the resource name and
+                         * its directory hash come from the record we were shown. */
+                        if (cm_shape == CM_RSP_DLM &&
+                            !cm_peer_is_coordinator(rx->peers, ps)) {
+                            const uint8_t *qb = buf + 72;
+                            char res16[16];
+                            memcpy(res16, qb + 20, 16); /* op-0d resource-name field */
+                            /* real resource names begin with a letter (VCC$, CACHE$,
+                             * F11B$, SCS$...); anything else is not a name -- skip. */
+                            if (res16[0] >= 'A' && res16[0] <= 'Z' &&
+                                dlm_nl_reg_add(ps, res16)) {
+                                uint8_t nl = 16;
+                                while (nl > 0 && (res16[nl - 1] == ' ' ||
+                                                  res16[nl - 1] == '\0')) {
+                                    nl--;
+                                }
+                                uint16_t dh = (uint16_t)qb[10] |
+                                              ((uint16_t)qb[11] << 8);
+                                uint16_t mc = (uint16_t)qb[14] |
+                                              ((uint16_t)qb[15] << 8);
+                                cm_send_dlm_nl_register(rx->sock, (int)rx->ifindex,
+                                                        ps, rx->our_hw_mac,
+                                                        rx->our_src_logical,
+                                                        dh, mc, res16, nl);
+                            }
+                        }
                     }
                 }
             }

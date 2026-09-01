@@ -213,21 +213,39 @@ lj_verdict() {  # <ovmx_node> <ovmx_showcluster_txt> <vax_showcluster_txt> <cn> 
     local a=0 b=0 c=0 d=0
     node="$(printf '%s' "$node" | tr '[:lower:]' '[:upper:]' | cut -c1-6)"
 
-    # (a) OVMX side sees a VAX member, executive present.
+    # (a) OVMX side sees a VAX PEER as a member (executive membership present).
+    # OVMX may render peers by node name (VAX1) or by numeric SCSSYSTEMID
+    # (1025/1026) -- accept either shown as MEMBER. This is OVMX's OWN reciprocal
+    # view; it is NOT the admission authority. OVMX can self-report MEMBER ahead of
+    # the real VAX (an over-claim) -- that is caught by leg (b), which reads the
+    # VAX's authoritative view. So (a) AND (b) = OVMX sees the VAXes AND the VAX
+    # admits OVMX; (a) alone can never carry a cut.
+    local vaxids
+    vaxids="$(printf '%s' "${LJ_RESERVED_IDS:-1025 1026 1027}" | tr -s ' ' '|')"
     if grep -qaiE 'NOSUCHDEV' <<<"$ovmx_sc"; then
         echo "  verdict: (a) FAIL -- OVMX SHOW CLUSTER reported NOSUCHDEV: the executive/SCS is"
         echo "                       not up (expected pre-vms-5ad: booted node does not auto-start SCS yet)"
-    elif grep -qaiE 'VAX[0-9]' <<<"$ovmx_sc"; then
-        a=1; echo "  verdict: (a) PASS -- OVMX SHOW CLUSTER lists a VAX member (executive membership)"
+    elif printf '%s\n' "$ovmx_sc" | grep -aiE "VAX[0-9]|(${vaxids})" | grep -qaiE 'MEMBER'; then
+        a=1; echo "  verdict: (a) PASS -- OVMX SHOW CLUSTER lists a VAX peer (by name or SCSSYSTEMID) as MEMBER"
     else
-        echo "  verdict: (a) FAIL -- OVMX SHOW CLUSTER shows no VAX member (not joined from the OVMX side)"
+        echo "  verdict: (a) FAIL -- OVMX SHOW CLUSTER shows no VAX peer as MEMBER (not joined from OVMX's side)"
     fi
 
-    # (b) VAX side (the oracle) lists the OVMX node.
-    if grep -qaF "$node" <<<"$vax_sc"; then
-        b=1; echo "  verdict: (b) PASS -- vax1 SHOW CLUSTER lists the OVMX node $node (the VAX oracle sees it)"
+    # (b) VAX side (the oracle) lists the OVMX node AS A MEMBER. Presence alone is
+    # NOT admission: a real VAX creates a CSB for -- and counts in CLUSTER_NODES --
+    # any node it has merely HEARD, showing it BRK_NON/NEW until it actually
+    # promotes it to MEMBER. Only STATUS==MEMBER on the VAX's OWN SHOW CLUSTER is
+    # the authentic admission (lab-2 vms-a84d: OVMXJ0 showed BRK_NON = known, not
+    # admitted, while OVMX self-rendered MEMBER ahead of the VAX). This is the
+    # authoritative gate -- it also catches an OVMX-side over-claim, since it reads
+    # the VAX's view, not OVMX's self-report.
+    if printf '%s\n' "$vax_sc" | grep -aiE "$node" | grep -qaiE 'MEMBER'; then
+        b=1; echo "  verdict: (b) PASS -- vax1 SHOW CLUSTER lists $node as MEMBER (the real VAX ADMITTED it)"
+    elif grep -qaiF "$node" <<<"$vax_sc"; then
+        echo "  verdict: (b) FAIL -- vax1 SHOW CLUSTER lists $node but NOT as MEMBER (known/BRK_NON --"
+        echo "                       the VAX heard OVMX + made a CSB but never promoted it to MEMBER)"
     else
-        echo "  verdict: (b) FAIL -- vax1 SHOW CLUSTER does not list $node (the real VAX never admitted it)"
+        echo "  verdict: (b) FAIL -- vax1 SHOW CLUSTER does not list $node (the real VAX never heard it)"
     fi
 
     # (c) cluster grew to 3.

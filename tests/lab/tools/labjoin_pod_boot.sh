@@ -226,22 +226,26 @@ if [ "$rc" -eq 0 ]; then
         # of seconds under TCG; the old code slept a fixed 60s then sampled a
         # single SHOW CLUSTER and logged out, tearing the node down before a
         # join could ever complete (and hiding any NOTMEMBER->MEMBER transition).
-        # Poll SHOW CLUSTER every ~20s up to JOIN_POLL seconds, scoping each read
-        # to the text after that poll's marker, and break as soon as a poll's
-        # SHOW CLUSTER no longer reports %SYSTEM-I-NOTMEMBER (the one membership
-        # signal SHOW CLUSTER reliably emits while not joined). qemu's own
-        # BOOT_TO timeout bounds the loop; kill -0 breaks it if qemu exits.
-        JOIN_POLL="${JOIN_POLL:-240}"; pw=0; joined=0
+        # Poll SHOW CLUSTER across the FULL window and KEEP THE NODE UP the whole
+        # time -- do NOT break early on the first non-NOTMEMBER sample, and do NOT
+        # log out until the window ends. Two reasons, both learned on lab-2
+        # (vms-a84d): (1) OVMX renders the cluster-view header (no NOTMEMBER) the
+        # moment it *thinks* it joined -- but that self-report can run AHEAD of the
+        # real VAX's BRK_NON->MEMBER promotion (OVMX rendered itself MEMBER while
+        # the authoritative VAX still had it BRK_NON). Breaking on the OVMX self-
+        # report tears the node down before the VAX actually admits it -- and before
+        # an independent VAX-side watch can catch OVMXJ0 STATUS==MEMBER live. The
+        # teardown must be gated by the VAX-side MEMBER verdict, never an OVMX self-
+        # report. (2) both-sides-by-eye needs a sustained LIVE member to observe.
+        # qemu's BOOT_TO bounds it; kill -0 breaks if qemu exits.
+        JOIN_POLL="${JOIN_POLL:-240}"; pw=0
         while [ "$pw" -lt "$JOIN_POLL" ]; do
             kill -0 "$QP" 2>/dev/null || break
             send "WRITE SYS\$OUTPUT \"OVMX-POLL-$pw\""; sleep 1
             send 'SHOW CLUSTER'; sleep 8
-            if ! awk "/OVMX-POLL-$pw/{f=1} f" "$OUT_LOG" | grep -qaF 'NOTMEMBER'; then
-                joined=1; break
-            fi
             sleep 11; pw=$((pw + 20))
         done
-        echo "[node] join-poll ended after ~${pw}s (joined=$joined)" | tee -a "$OUT_LOG"
+        echo "[node] join-poll held the node LIVE ~${pw}s (full window; teardown is gated by the VAX-side STATUS==MEMBER verdict, not an OVMX self-report)" | tee -a "$OUT_LOG"
         send 'WRITE SYS$OUTPUT "OVMX-SC-DONE"'; sleep 3
         waitfor 'OVMX-SC-DONE' 30 || true
     else

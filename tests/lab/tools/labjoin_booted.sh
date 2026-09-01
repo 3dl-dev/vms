@@ -141,26 +141,46 @@ sleep 2
 # proof the executive did the L2 I/O, not the pod's ambient cap. CAP_EVID is where
 # labjoin_pod_boot.sh records the actual capability set for the verdict to grade.
 kubectl -n "$NS" exec "$POD" -- sh -c \
-    "cd $RDIR && ART_DIR=$RDIR OUT_LOG=$NODE_LOG CAP_EVID=$CAP_EVID OVMX_DROP_NET_RAW=1 SCSNODE=$SCSNODE SCSSYSID=$SCSSYSID OVMX_TAP=$OVMX_TAP BOOT_TO=$((DUR + 60)) ./labjoin_pod_boot.sh" \
+    "cd $RDIR && ART_DIR=$RDIR OUT_LOG=$NODE_LOG CAP_EVID=$CAP_EVID OVMX_DROP_NET_RAW=1 SCSNODE=$SCSNODE SCSSYSID=$SCSSYSID OVMX_TAP=$OVMX_TAP JOIN_POLL=$DUR BOOT_TO=$((DUR + 120)) ./labjoin_pod_boot.sh" \
     >/dev/null 2>&1 &
 NODEP=$!
 log "OVMX node booting in $POD (exec sessions held open: tcpdump=$TCPD node=$NODEP)"
 
-# --- 7. Poll the VAX oracle for the join (CN_3) while the node boots --------
+# --- 7. Poll the VAX oracle THROUGH the window for a REAL MEMBER admission --
+# Do NOT stop at CLUSTER_NODES=3. F$GETSYI("CLUSTER_NODES") counts a BRK_NON CSB
+# -- a node the VAX has HEARD (created a CSB for) but has NOT admitted -- so CN=3
+# alone is not admission (lab-2 vms-a84d: OVMXJ0 appeared in CN=3 while the VAX
+# held it BRK_NON, and OVMX self-rendered MEMBER ahead of the VAX's real
+# promotion). The authentic signal is the VAX's OWN SHOW CLUSTER listing OVMXJ0
+# with STATUS == MEMBER. Each iteration, capture vax1 SHOW CLUSTER + OVMXJ0's
+# status; keep the STRONGEST snapshot seen (a MEMBER one if it ever appears, else
+# the latest that names OVMXJ0). Keep polling through the window so the node stays
+# LIVE for an independent VAX-side eye -- never tear down on CN=3 or an OVMX self-
+# report; only the node exiting on its own ends the poll early.
 joined=0
+VAX_SC=""
+NODE_UP="$(printf '%s' "$SCSNODE" | tr '[:lower:]' '[:upper:]' | cut -c1-6)"
 for i in $(seq 1 "$DUR_POLL"); do
     sleep 15
     vsay "WRITE SYS\$OUTPUT \"CN_\"+F\$STRING(F\$GETSYI(\"CLUSTER_NODES\"))" 3
     n="$(vclean | lj_parse_cn)"
-    log "  t+$((i*18))s CLUSTER_NODES=${n:-?}"
-    if [ "$n" = "3" ]; then joined=1; log "JOINED per VAX oracle -- CLUSTER_NODES=3"; fi
+    vsay 'SHOW CLUSTER' 6
+    sc="$(vclean)"
+    st="$(printf '%s\n' "$sc" | grep -aiE "$NODE_UP" | grep -aoiE 'MEMBER|BRK_[A-Z]+|NEW|OPEN[A-Z]*' | head -1)"
+    log "  t+$((i*15))s CLUSTER_NODES=${n:-?}  ${NODE_UP}-status=${st:-absent}"
+    if printf '%s\n' "$sc" | grep -aiE "$NODE_UP" | grep -qaiE 'MEMBER'; then
+        VAX_SC="$sc"; [ "$joined" = 0 ] && log "  VAX ORACLE ADMITS $NODE_UP AS MEMBER (authentic admission)"; joined=1
+    elif [ -z "$VAX_SC" ] || printf '%s\n' "$sc" | grep -qaiE "$NODE_UP"; then
+        VAX_SC="$sc"   # remember the latest snapshot that at least names OVMXJ0
+    fi
     kill -0 "$NODEP" 2>/dev/null || { log "OVMX node driver exited"; break; }
-    [ "$joined" -eq 1 ] && break
 done
 
-# --- 8. Snapshot vax1's SHOW CLUSTER (the oracle's view of membership) ------
+# --- 8. Final authoritative snapshot of vax1's SHOW CLUSTER (keep the best) --
 vsay 'SHOW CLUSTER' 6
-VAX_SC="$(vclean)"
+last_sc="$(vclean)"
+if printf '%s\n' "$last_sc" | grep -aiE "$NODE_UP" | grep -qaiE 'MEMBER'; then VAX_SC="$last_sc"; fi
+[ -z "$VAX_SC" ] && VAX_SC="$last_sc"
 
 # Wind down the node + capture.
 kx pkill -f qemu-system 2>/dev/null

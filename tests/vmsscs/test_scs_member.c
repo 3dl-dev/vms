@@ -953,6 +953,49 @@ static void test_dlm_selfreg_null_guards(void)
     CHECK(scs_member_build_dlm_selfreg(&mp, NULL) == -1, "build_dlm_selfreg NULL out");
 }
 
+/*
+ * vms-cn3: the rebuild-COMPLETION pair (op-04 + op-03 COMMIT) OVMX drives to the
+ * coordinator must be HONEST BY CONSTRUCTION -- no named resource, no held-lock
+ * handle. OVMX holds no persistent cluster lock, so the completion asserts
+ * "done, holding nothing". This pins that guarantee: resname@48 zeroed, per-lock
+ * handles@20:28 zeroed, mode@30 zeroed (NL). If any of those ever carries a value
+ * it would be claiming a lock OVMX cannot honestly back -- a fabrication, caught
+ * here rather than on the wire.
+ */
+static void test_dlm_completion_holds_nothing(void)
+{
+    struct scs_member_params mp;
+    joiner_params(&mp, 0, 0, 0x0064, 0x0113);
+    mp.txn = 0x0003;
+    mp.checksum = 0x0100;
+
+    uint8_t op04[SCS_MEMBER_FRAME_LEN], op03[SCS_MEMBER_FRAME_LEN];
+    CHECK(scs_member_build_dlm_op04(&mp, op04) == 0, "build_dlm_op04 ok");
+    CHECK(scs_member_build_dlm_commit(&mp, op03) == 0, "build_dlm_commit ok");
+
+    const uint8_t *b4 = op04 + 72;
+    const uint8_t *b3 = op03 + 72;
+
+    CHECK(b4[8] == 0x02 && b4[9] == 0x04, "op-04: cat 0x02 op 0x04");
+    CHECK(b3[8] == 0x02 && b3[9] == 0x03, "op-03: cat 0x02 op 0x03 (COMMIT)");
+
+    /* THE HONESTY GUARDRAIL -- no resource, no held handle, no held mode. */
+    for (int i = 48; i < 64; i++) {
+        CHECK(b4[i] == 0 && b3[i] == 0, "completion: resname@48 is ZEROED (no named resource)");
+    }
+    for (int i = 20; i < 28; i++) {
+        CHECK(b4[i] == 0 && b3[i] == 0, "completion: lock handles@20:28 are ZEROED (no held lock, INV-6)");
+    }
+    CHECK(b4[30] == 0 && b3[30] == 0, "completion: mode@30 is 0x00 (NL -- holds nothing)");
+
+    /* The SYSAP envelope + minted per-VC fields are laid down (real send). */
+    CHECK((uint16_t)(b4[4] | (b4[5] << 8)) == 0x0003, "op-04: dir-tree tag minted");
+    CHECK((uint16_t)(b4[6] | (b4[7] << 8)) == 0x0100, "op-04: per-VC counter minted");
+
+    CHECK(scs_member_build_dlm_op04(NULL, op04) == -1, "build_dlm_op04 NULL p");
+    CHECK(scs_member_build_dlm_commit(&mp, NULL) == -1, "build_dlm_commit NULL out");
+}
+
 int main(void)
 {
     test_op14_byte_exact();
@@ -974,6 +1017,7 @@ int main(void)
     test_params_member_vs_joiner_form();
     test_dlm_selfreg_byte_exact();
     test_dlm_selfreg_null_guards();
+    test_dlm_completion_holds_nothing();
 
     if (failures == 0) {
         printf("test_scs_member: ALL PASSED\n");

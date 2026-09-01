@@ -752,6 +752,76 @@ int scs_member_build_dlm_selfreg(const struct scs_member_params *p,
     return 0;
 }
 
+/*
+ * scs_member_build_dlm_op04 / scs_member_build_dlm_commit - the joiner's
+ * rebuild-COMPLETION pair (cat 0x02 op 0x04, then op 0x03 COMMIT) that a real
+ * joiner drives to the COORDINATOR after its op-01 registrations, closing the
+ * directory-rebuild transaction (vms-cn3 minimal-completion test). OVMX drives
+ * the completion but registers NOTHING HELD: it holds no persistent cluster
+ * lock (its DLM takes only transient RMS/ACP locks -- scsd.c:1631 "OVMX holds no
+ * locks... revisit when it has a real lock manager to answer FROM"), so this is
+ * the honest "my rebuild contribution is complete, I hold nothing" signal.
+ *
+ * The frame STRUCTURE is reproduced from the coordinator-rebuild specimens
+ * (JOIN->COORD F11B$aSYSDSK1, member-body layout validated by db20-b -- cat@8
+ * op@9, the 0x00030001 status word @12:16, mode@30, resname@48, per-lock handles
+ * @20:24 + @24:28). INV-6 / honesty guardrail, enforced by construction:
+ *   - resname (body[48:]) is ZEROED   -> claims NO named resource.
+ *   - the per-lock handle words (body[20:28]) are ZEROED -> claims NO held lock.
+ * i.e. the completion carries no resource and no lock handle OVMX cannot honestly
+ * back. Everything else replays the specimen's opaque structural bytes (Rule 8:
+ * reproduce the frame shape, invent nothing). If the coordinator counts OVMX off
+ * this content-free completion, completion alone suffices (OPT A); if not, the
+ * standing system-lock set is genuinely required (OPT B, a completeness call).
+ */
+static const uint8_t dlm_op04_struct[40] = {
+    /* body[ 8:16] */ 0x02, 0x04, 0x00, 0x00, 0x01, 0x00, 0x03, 0x00,
+    /* body[16:24] */ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* [20:24] handle ZEROED */
+    /* body[24:32] */ 0x00, 0x00, 0x00, 0x00, 0x4b, 0x00, 0x00, 0x00, /* [24:28] handle ZEROED */
+    /* body[32:40] */ 0x02, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00,
+    /* body[40:48] */ 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* [47] len ZEROED (no resname) */
+};
+static const uint8_t dlm_commit_struct[40] = {
+    /* body[ 8:16] */ 0x02, 0x03, 0x00, 0x00, 0x01, 0x00, 0x03, 0x00,
+    /* body[16:24] */ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* [20:24] handle ZEROED */
+    /* body[24:32] */ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* [24:28] handle ZEROED */
+    /* body[32:40] */ 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    /* body[40:48] */ 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    /* op-03 commits BY HANDLE with no resname; here the handle is null too. */
+};
+
+static int build_dlm_completion(const struct scs_member_params *p,
+                                const uint8_t struct40[40],
+                                uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    build_common(p, member_config_tmpl, SCS_MEMBER_ENV_CREDIT_CONFIG, out);
+    uint8_t *body = out + 72;
+    memset(body + 4, 0, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF - 4);
+    put_le16(body + 0, p->sysap_send_msg);
+    put_le16(body + 2, p->sysap_ack_msg);
+    put_le16(body + 4, p->txn);          /* per-VC directory-tree tag (opaque, minted) */
+    put_le16(body + 6, p->checksum);     /* per-VC monotonic counter (opaque, minted) */
+    memcpy(body + 8, struct40, 40);      /* body[8:48] structural template */
+    /* body[30] MODE stays 0x00 (NL) and body[48:] resname stays 0 from the memset:
+     * no held mode, no named resource -- the honest content-free completion. */
+    return 0;
+}
+
+int scs_member_build_dlm_op04(const struct scs_member_params *p,
+                              uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    return build_dlm_completion(p, dlm_op04_struct, out);
+}
+
+int scs_member_build_dlm_commit(const struct scs_member_params *p,
+                                uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    return build_dlm_completion(p, dlm_commit_struct, out);
+}
+
 int scs_member_build_response(const struct scs_member_params *p,
                               const uint8_t *req_frame, size_t req_len,
                               uint8_t out[SCS_MEMBER_FRAME_LEN])

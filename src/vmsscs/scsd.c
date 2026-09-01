@@ -1049,6 +1049,7 @@ struct peer_state {
      * body[6:8] counter is ps->own_cksum (shared with the barrier steps); the
      * txn tag is the SCSD_DLM_DIR_TAG constant. */
     int      dlm_selfreg_sent;          /* one-shot: self-reg emitted for the current epoch */
+    int      dlm_completion_sent;       /* one-shot: op-04+op-03 rebuild completion driven to the coordinator (vms-cn3) */
     /* rd vms-ec75 (DLM rung H11): DISTRIBUTED DEADLOCK SEARCH. A contender node
      * holds one resource (mastered by C) and $ENQs a second that QUEUES behind the
      * other contender -- a genuine cross-node wait-for cycle. When the wait queues,
@@ -3673,6 +3674,11 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                             between barrier steps 4 and 5 on the one CM send_seq
  *                             stream; a null-value-block directory record, CHOKED
  *                             like every other sequenced VC message
+ *     cm_send_dlm_completion() the cat-0x02 op-0x04 + op-0x03 COMMIT pair that
+ *                             CLOSES the rebuild transaction the self-reg opened,
+ *                             driven to the coordinator after its op-06 admission
+ *                             burst (vms-cn3); content-free (OVMX holds nothing),
+ *                             two sequenced VC messages, CHOKED like the self-reg
  *     scs_reflect_credit()    the op8->op9 / op6->op7 credit handshake reply
  *     scs_send_disconnect_self() self-directed teardown, hand-built frame
  *
@@ -6478,6 +6484,73 @@ static int cm_send_dlm_selfreg(int sock, int ifindex, struct peer_state *ps,
 }
 
 /*
+ * cm_send_dlm_completion - drive the joiner's rebuild-COMPLETION pair (cat 0x02
+ * op 0x04, then op 0x03 COMMIT) to the COORDINATOR, closing the directory-rebuild
+ * transaction the self-registration opened (vms-cn3). A real joiner runs this
+ * after its op-01 registrations; OVMX registers NOTHING HELD (it holds no
+ * persistent cluster lock -- scsd.c documents this), so both frames carry no
+ * named resource and no lock handle: the honest "my rebuild contribution is
+ * complete, I hold nothing" signal. This is the minimal A/B test -- if the
+ * coordinator counts OVMX off a content-free completion, completion alone
+ * suffices; if not, the standing system-lock set is genuinely required.
+ *
+ * Both frames are SEQUENCED SCS messages on the coordinator's OPEN VC, choked
+ * through send_frame_vc() like the self-reg and barrier steps (spec 4h lockstep).
+ */
+static int cm_send_dlm_completion(int sock, int ifindex, struct peer_state *ps,
+                                  const uint8_t our_hw_mac[6],
+                                  const uint8_t our_src_logical[6])
+{
+    if (ps->cm_local_conid == 0) {
+        return 0;
+    }
+    int sent = 0;
+    /* op 0x04 completion, then op 0x03 COMMIT -- two frames, in order, on the
+     * one CM send_seq stream (continuous cksum, as the barrier + self-reg). */
+    static const struct {
+        int (*build)(const struct scs_member_params *, uint8_t *);
+        const char *what;
+        const char *op;
+    } steps[2] = {
+        { scs_member_build_dlm_op04,   "CM DLM rebuild completion (cat 0x02 op 0x04)", "0x04" },
+        { scs_member_build_dlm_commit, "CM DLM rebuild COMMIT (cat 0x02 op 0x03)",     "0x03" },
+    };
+    for (int i = 0; i < 2; i++) {
+        struct scs_member_params bp;
+        memset(&bp, 0, sizeof(bp));
+        memcpy(bp.dst_mac, ps_port_addr(ps), 6);
+        memcpy(bp.src_mac, our_hw_mac, 6);
+        memcpy(bp.src_logical, our_src_logical, 6);
+        memcpy(bp.peer_logical, ps_sys_addr(ps), 6);
+        bp.remote_conid = ps->cm_remote_conid;
+        bp.local_conid = ps->cm_local_conid;
+        bp.incarnation = ps->incarnation;
+        bp.recv_ack = ps->vc.seq.recv_seq;
+        bp.send_seq = scs_seq_advance(&ps->vc.seq);
+        if (ps->sysap_send == 0) {
+            ps->sysap_send = 1;
+        }
+        bp.sysap_send_msg = ps->sysap_send++;
+        bp.sysap_ack_msg = ps->sysap_recv;
+        bp.txn = SCSD_DLM_DIR_TAG;      /* SCS$DIRECTORY tree tag, as the self-reg */
+        bp.checksum = ++ps->own_cksum;  /* continuous per-VC counter */
+        uint8_t dframe[SCS_MEMBER_FRAME_LEN];
+        if (steps[i].build(&bp, dframe) == 0 &&
+            send_frame_vc(sock, ifindex, ps, ps->pb, steps[i].what,
+                          dframe, sizeof(dframe)) > 0) {
+            scs_vc_record_sent(&ps->vc, bp.send_seq, monotonic_ms());
+            sent++;
+            log_ts(stdout);
+            printf(" SCSD-I-DLMCOMPLETE, originated rebuild completion %s to the"
+                   " coordinator (holding nothing; cksum=0x%04x seq=%u)\n",
+                   steps[i].op, bp.checksum, bp.send_seq);
+            fflush(stdout);
+        }
+    }
+    return sent;
+}
+
+/*
  * cm_send_ack - emit one category-0x04 SYSAP acknowledgement naming our current
  * high-water mark on the VC the connection-manager dialogue is riding.
  *
@@ -7296,6 +7369,21 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                                ps_port_addr(ps)[4], ps_port_addr(ps)[5]);
                         fflush(stdout);
                     }
+                    /* vms-cn3: having received the coordinator's op-06 admission
+                     * burst, CLOSE the directory-rebuild transaction OVMX opened
+                     * with its self-registration -- drive the op-04 completion +
+                     * op-03 COMMIT to the coordinator, the frames a real joiner
+                     * sends after its op-01 registrations and that OVMX currently
+                     * never originates (it drives ~0 cat-02 to the coordinator).
+                     * Content-free (OVMX holds no cluster lock -- honest "done,
+                     * holding nothing"); one-shot per epoch. ps IS the coordinator
+                     * here (the op-06 membership burst is its publication). This is
+                     * the minimal A/B test: does completing the handshake count us? */
+                    if (!ps->dlm_completion_sent) {
+                        ps->dlm_completion_sent = 1;
+                        cm_send_dlm_completion(rx->sock, (int)rx->ifindex, ps,
+                                               rx->our_hw_mac, rx->our_src_logical);
+                    }
                 }
 
                 /* vms-c21 (spec §4(O.33)): the cat 0x01 op 0x04 role 0x50 CM
@@ -7545,6 +7633,7 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                      * the SCS$DIRECTORY self-registration is re-emitted at this
                      * barrier's start (cm_send_dlm_selfreg). */
                     ps->dlm_selfreg_sent = 0;
+                    ps->dlm_completion_sent = 0; /* vms-cn3: re-arm the rebuild-completion one-shot */
                     /* vms-584: the open carries the post-transition cluster
                      * facts. Latch them now, apply them when the transition
                      * is real (see ovmx_cluster_relearn). */

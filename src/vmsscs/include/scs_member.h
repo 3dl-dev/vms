@@ -338,6 +338,16 @@ int scs_member_build_dlm_response(const struct scs_member_params *p,
 int scs_member_build_dlm_selfreg(const struct scs_member_params *p,
                                  uint8_t out[SCS_MEMBER_FRAME_LEN]);
 
+/* The joiner's rebuild-COMPLETION pair driven to the coordinator after the
+ * self-registration: cat 0x02 op 0x04 (completion), then op 0x03 COMMIT. OVMX
+ * registers NOTHING HELD (resname + per-lock handles zeroed) -- the honest
+ * "rebuild contribution complete, I hold nothing" signal (vms-cn3). See
+ * scs_member.c for the INV-6 guardrail. */
+int scs_member_build_dlm_op04(const struct scs_member_params *p,
+                              uint8_t out[SCS_MEMBER_FRAME_LEN]);
+int scs_member_build_dlm_commit(const struct scs_member_params *p,
+                                uint8_t out[SCS_MEMBER_FRAME_LEN]);
+
 /* Current time as a VMS 64-bit absolute time (100 ns since 17-NOV-1858). */
 uint64_t scs_member_vms_time_now(void);
 

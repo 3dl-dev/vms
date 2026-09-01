@@ -1053,7 +1053,7 @@ struct peer_state {
     int      dlm_selfreg_sent;          /* one-shot: self-reg emitted for the current epoch */
     /* vms-7e2 (db20-b): resources already NL-registered to this member (dedup --
      * register each shown cluster resource once, honest NL participation). */
-    char     dlm_nl_reg[OVMX_DLM_NL_MAX][16];
+    char     dlm_nl_reg[OVMX_DLM_NL_MAX][32];
     int      dlm_nl_reg_n;
     /* rd vms-ec75 (DLM rung H11): DISTRIBUTED DEADLOCK SEARCH. A contender node
      * holds one resource (mastered by C) and $ENQs a second that QUEUES behind the
@@ -6489,22 +6489,52 @@ static int cm_send_dlm_selfreg(int sock, int ifindex, struct peer_state *ps,
 }
 
 /*
- * dlm_nl_reg_add - record that we have NL-registered resource `res16` (the 16-byte
- * fixed name field) to this member; returns 1 if it is NEW (register it now), 0 if
- * already registered or the per-member cap is reached (skip). Dedup so each shown
- * resource is registered once (db20-b).
+ * dlm_op0d_resname - extract the DLM lock resource name from a received op-0d
+ * rebuild record's SYSAP body (body = frame + 72). The name is ASCII at
+ * SCS_DLM_B_RESNAM (48) -- a VMS resource name of 1..31 bytes, space/NUL-padded
+ * (corroborated by the DLM field map in scs_dlm.h, scs_member.c's own "RESOURCE
+ * in ASCII at body[48:]" handler, and a live dump of VAX1's op-0d records:
+ * VCC$vSYSDSK1, F11B$bSYSDSK1, CACHE$cmSYSDSK1, SYS$_$2$DUA0). Writes a 32-byte
+ * pad-preserving copy to out[32] (stable dedup key) and returns the trimmed name
+ * length, or 0 if body[48] does not begin with A-Z (not a resource name).
+ *
+ * This is its own function so the offset is unit-testable: the db20-b origin bug
+ * read the name from body[20] (SCS_DLM_B_MASTER_CSID, a u32 -- never a letter),
+ * so the guard silently skipped every record and NO NL registration ever fired.
+ * A pure extractor turns that class of offset error into a failing assertion
+ * (test_scsd_wire) instead of a silent runtime no-op.
  */
-static int dlm_nl_reg_add(struct peer_state *ps, const char res16[16])
+static uint8_t dlm_op0d_resname(const uint8_t *body, char out[32])
+{
+    memset(out, 0, 32);
+    memcpy(out, body + SCS_DLM_B_RESNAM, 31);
+    if (!(out[0] >= 'A' && out[0] <= 'Z')) {
+        return 0;
+    }
+    uint8_t nl = 31;
+    while (nl > 0 && (out[nl - 1] == ' ' || out[nl - 1] == '\0')) {
+        nl--;
+    }
+    return nl;
+}
+
+/*
+ * dlm_nl_reg_add - record that we have NL-registered resource `res` (a 32-byte
+ * space/NUL-padded name field; a VMS resource name is 1..31 bytes) to this member;
+ * returns 1 if it is NEW (register it now), 0 if already registered or the per-member
+ * cap is reached (skip). Dedup so each shown resource is registered once (db20-b).
+ */
+static int dlm_nl_reg_add(struct peer_state *ps, const char res[32])
 {
     for (int i = 0; i < ps->dlm_nl_reg_n; i++) {
-        if (memcmp(ps->dlm_nl_reg[i], res16, 16) == 0) {
+        if (memcmp(ps->dlm_nl_reg[i], res, 32) == 0) {
             return 0;
         }
     }
     if (ps->dlm_nl_reg_n >= OVMX_DLM_NL_MAX) {
         return 0;
     }
-    memcpy(ps->dlm_nl_reg[ps->dlm_nl_reg_n++], res16, 16);
+    memcpy(ps->dlm_nl_reg[ps->dlm_nl_reg_n++], res, 32);
     return 1;
 }
 
@@ -8023,17 +8053,22 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                         if (cm_shape == CM_RSP_DLM &&
                             !cm_peer_is_coordinator(rx->peers, ps)) {
                             const uint8_t *qb = buf + 72;
-                            char res16[16];
-                            memcpy(res16, qb + 20, 16); /* op-0d resource-name field */
-                            /* real resource names begin with a letter (VCC$, CACHE$,
-                             * F11B$, SCS$...); anything else is not a name -- skip. */
-                            if (res16[0] >= 'A' && res16[0] <= 'Z' &&
-                                dlm_nl_reg_add(ps, res16)) {
-                                uint8_t nl = 16;
-                                while (nl > 0 && (res16[nl - 1] == ' ' ||
-                                                  res16[nl - 1] == '\0')) {
-                                    nl--;
-                                }
+                            /* Resource name is ASCII at body[48] (see
+                             * dlm_op0d_resname); nl==0 means body[48] is not a
+                             * plausible name -- skip. Dedup so each shown resource
+                             * registers once. */
+                            char res[32];
+                            uint8_t nl = dlm_op0d_resname(qb, res);
+                            if (nl > 0 && dlm_nl_reg_add(ps, res)) {
+                                /* dir_hash / member_count: the op-0d record read
+                                 * offsets are NOT yet ground-truthed (the emit-side
+                                 * op-01 uses body[10]/[14], but VAX1's op-0d layout
+                                 * is unconfirmed -- cksum sits at body[6:8]). These
+                                 * fields do NOT gate whether the NL registration
+                                 * fires; they refine the emitted frame. Read
+                                 * PROVISIONALLY pending pcap confirmation; correct
+                                 * the two offsets once the live op-0d field map is
+                                 * pinned. */
                                 uint16_t dh = (uint16_t)qb[10] |
                                               ((uint16_t)qb[11] << 8);
                                 uint16_t mc = (uint16_t)qb[14] |
@@ -8041,7 +8076,7 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                                 cm_send_dlm_nl_register(rx->sock, (int)rx->ifindex,
                                                         ps, rx->our_hw_mac,
                                                         rx->our_src_logical,
-                                                        dh, mc, res16, nl);
+                                                        dh, mc, res, nl);
                             }
                         }
                     }

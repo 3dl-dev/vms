@@ -7053,18 +7053,8 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                 sysap_cm_messages++;
                 /* Track the member's SYSAP send-msg# high-water (our ack
                  * target). Only category-0x01 config messages carry the
-                 * membership dialogue; DLM (cat 0x02) rides here later.
-                 *
-                 * vms-2f3: NEVER advance the high-water on a cat-0x04 ACK frame.
-                 * An ack is not a sequenced SYSAP message -- folding its
-                 * sysap_send_msg into our ack target makes cm_send_ack NAME it,
-                 * i.e. OVMX ACKS AN ACK. Measured on run milestone-1025: 137
-                 * cat-0x04 op-0x06 ack-of-acks across the select->member ADD
-                 * transition (SCSD-W-STRAYACK "...ACK-OF-ACK"), which the
-                 * reference never sends. The high-water is the cumulative
-                 * received-DATA sequence; acks (cat 0x04) do not belong in it. */
-                if (mv.category != SCS_MEMBER_CAT_ACK &&
-                    mv.sysap_send_msg > ps->sysap_recv) {
+                 * membership dialogue; DLM (cat 0x02) rides here later. */
+                if (mv.sysap_send_msg > ps->sysap_recv) {
                     ps->sysap_recv = mv.sysap_send_msg;
                     /* vms-584: remember what advanced it, so an ack can say
                      * which frame it names and how stale that frame was. */

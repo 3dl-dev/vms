@@ -3095,19 +3095,21 @@ static int cmd_show_cluster(struct dcl_command *cmd)
     for (char *p = tbuf; *p; p++) *p = (char)toupper((unsigned char)*p);
 
     /* THIS node's cluster software identity MUST match what we broadcast on the
-     * SCS wire: "VMX V0.1" (src/vmsscs/include/scs_start.h SCS_START_SW_VERSION,
-     * substituted into the START/config handshake by scs_start.c). Rendering a
-     * VMS version here was a local masquerade -- the real VAX correctly reads us
-     * as "VMX V0.1", so our own SHOW CLUSTER must not contradict the wire by
-     * claiming "VMS <ovmx_compat_version()>" (Baron's honest-OS-identity ruling,
-     * vms-a84d). ovmx_compat_version() stays the VMS-compat version for
-     * F$GETSYI/software compatibility -- a distinct concern from node identity.
+     * SCS wire: OVMX_CLUSTER_SW_VERSION ("VMX V0.1"), the identity SSOT in
+     * ovmx_identity.h, mirrored byte-for-byte on the wire by scs_start.c's
+     * SCS_START_SW_VERSION. Rendering a VMS version here was a local masquerade
+     * -- the real VAX correctly reads us as "VMX V0.1", so our own SHOW CLUSTER
+     * must not contradict the wire by claiming "VMS <ovmx_compat_version()>"
+     * (Baron's honest-OS-identity ruling, vms-a84d). Reference the SSOT macro,
+     * never a version literal (INV-1 identity SSOT gate). ovmx_compat_version()
+     * stays the VMS-compat version for F$GETSYI/software compatibility -- a
+     * distinct concern from node identity.
      *
      * Peer rows still show the bare family ("VMS") without a version we cannot
      * vouch for: the membership publication carries no per-peer software, and
      * Rule 8 / INV-DCL forbids stating a fact we did not observe. */
     char local_software[24];
-    snprintf(local_software, sizeof(local_software), "VMX V0.1");
+    snprintf(local_software, sizeof(local_software), "%s", OVMX_CLUSTER_SW_VERSION);
 
     printf("View of Cluster from system ID %u node: %-6s   %s\n\n",
            (unsigned)local->sysid, local_node, tbuf);

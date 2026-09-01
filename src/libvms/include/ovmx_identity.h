@@ -94,6 +94,20 @@
 #define OVMX_PRODUCT_VERSION    "V0.6-10"
 
 /*
+ * Cluster software-version identity -- the string OVMX presents AS A CLUSTER
+ * NODE (SHOW CLUSTER software column, and the SCS START/config wire field).
+ * Deliberately "VMX V0.x", NOT "VMS V<n>" and NOT OVMX_PRODUCT_VERSION: it is a
+ * fixed 8-byte, blank-padded wire field (SCS_START_NODENAME_LEN) that the real
+ * VAX renders verbatim, so it is width-constrained and versioned independently
+ * of the product version above. This is the SSOT for that identity; the wire
+ * copy in src/vmsscs/include/scs_start.h (SCS_START_SW_VERSION) MUST stay
+ * byte-identical to it (that header is the gate-exempt wire surface, so it holds
+ * its own 8-byte literal -- keep the two in sync). Authenticity INV-0 /
+ * trademark-ceiling: OVMX is OpenVMS-COMPATIBLE, it never claims to BE OpenVMS.
+ */
+#define OVMX_CLUSTER_SW_VERSION "VMX V0.1"
+
+/*
  * INV-0 badge. Attached to human-facing identity so the answer to "what is
  * this" is honest: an OpenVMS-COMPATIBLE system, not OpenVMS. If VSI ever
  * objects to the mark in the badge, the fallback is the hacker-tradition

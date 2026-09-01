@@ -222,17 +222,49 @@ lj_node_status() {
     # line + keyword-after-node is what stops the cross-line / wrapped-console
     # false-match ("MEMBERS" header, a different node's MEMBER) that latched a false
     # admission. "MEMBERS" (plural) never matches the exact "MEMBER".
+    # Return the LAST matching row's status (the console log is cumulative -- many
+    # SHOW CLUSTER dumps concatenated -- so the most recent one is authoritative).
     printf '%s\n' "$1" | tr -d '\r' | tr '|' ' ' | awk -v n="$2" '
         {
             nn=toupper(n); found=0
             for (i=1;i<=NF;i++) {
                 tok=toupper($i)
                 if (found==1 && (tok=="MEMBER"||tok=="NEW"||tok=="REMOVED"||tok=="OPENING"||tok=="OPEN"||tok ~ /^BRK/)) {
-                    print tok; exit
+                    last=tok; break
                 }
                 if (tok==nn) found=1
             }
-        }'
+        }
+        END { if (last!="") print last }'
+}
+
+# lj_csb_status <sda_showcluster_txt> <node> -> that node's SDA CSB Status flags
+# (lower-case), empty if absent. SDA (ANALYZE/SYSTEM -> SHOW CLUSTER) is the ORACLE
+# that survives when the interactive DCL SHOW CLUSTER WEDGES mid-transition (the DCL
+# table degrades to empty/blocks while a CSB is transitioning). The CSB summary row
+# is "<8hexAddr>  <Node>  <CSID>  <Votes>  <State>  <Status-flags>", e.g.
+#   879BCAC0  OVMXJ0  00010004  0  wait   long_break,removed   (broken -> NOT member)
+#   8794EC40  VAX2    00010002  0  open   member               (admitted)
+# A node is an ADMITTED MEMBER iff its CSB Status carries the "member" flag and NOT a
+# break/removed flag (long_break/break/removed = the un-acked-reject broken state).
+lj_csb_status() {
+    printf '%s\n' "$1" | tr -d '\r' | awk -v n="$2" '
+        $1 ~ /^[0-9A-Fa-f]{8}$/ && toupper($2)==toupper(n) { last=tolower($NF) }
+        END { if (last!="") print last }'
+}
+
+# lj_csb_is_member <sda_showcluster_txt> <node> -> exit 0 if the node is an admitted
+# cluster MEMBER per its SDA CSB (member flag present, no break/removed).
+lj_csb_is_member() {
+    local st; st="$(lj_csb_status "$1" "$2")"
+    case ",$st," in
+        *,member,*|*,member) : ;;   # carries the member flag
+        *) return 1 ;;
+    esac
+    case "$st" in
+        *long_break*|*break*|*removed*) return 1 ;;   # broken/removed -> not clean member
+    esac
+    return 0
 }
 
 lj_verdict() {  # <ovmx_node> <ovmx_showcluster_txt> <vax_showcluster_txt> <cn> <pcap>
@@ -275,15 +307,29 @@ lj_verdict() {  # <ovmx_node> <ovmx_showcluster_txt> <vax_showcluster_txt> <cn> 
     # admitted, while OVMX self-rendered MEMBER ahead of the VAX). This is the
     # authoritative gate -- it also catches an OVMX-side over-claim, since it reads
     # the VAX's view, not OVMX's self-report.
-    local vstat
-    vstat="$(lj_node_status "$vax_sc" "$node")"
-    if [ "$vstat" = "MEMBER" ]; then
-        b=1; echo "  verdict: (b) PASS -- vax1 SHOW CLUSTER shows $node STATUS==MEMBER (the real VAX ADMITTED it)"
-    elif [ -n "$vstat" ]; then
-        echo "  verdict: (b) FAIL -- vax1 SHOW CLUSTER shows $node STATUS=$vstat, not MEMBER (known/NEW/BRK_NON"
-        echo "                       -- the VAX heard OVMX + made a CSB but never promoted it to MEMBER)"
+    # PREFER the SDA CSB (ANALYZE/SYSTEM -> SHOW CLUSTER): it is the oracle that
+    # survives DCL SHOW CLUSTER wedging mid-transition, and its "member" flag is the
+    # true admitted-member signal ("long_break"/"removed"/"new" = not admitted, e.g.
+    # the un-acked-reject broken state lab-2 vms-2f3 held OVMXJ0 in). Fall back to the
+    # DCL STATUS column only when no SDA CSB row for the node is present.
+    local vstat csbstat
+    csbstat="$(lj_csb_status "$vax_sc" "$node")"
+    if [ -n "$csbstat" ]; then
+        if lj_csb_is_member "$vax_sc" "$node"; then
+            b=1; echo "  verdict: (b) PASS -- vax1 SDA CSB shows $node admitted MEMBER (flags: $csbstat)"
+        else
+            echo "  verdict: (b) FAIL -- vax1 SDA CSB shows $node NOT admitted (flags: $csbstat -- long_break/removed/new;"
+            echo "                       the VAX made a CSB but never promoted it to a clean MEMBER)"
+        fi
     else
-        echo "  verdict: (b) FAIL -- vax1 SHOW CLUSTER does not list $node (the real VAX never heard it)"
+        vstat="$(lj_node_status "$vax_sc" "$node")"
+        if [ "$vstat" = "MEMBER" ]; then
+            b=1; echo "  verdict: (b) PASS -- vax1 SHOW CLUSTER shows $node STATUS==MEMBER (the real VAX ADMITTED it)"
+        elif [ -n "$vstat" ]; then
+            echo "  verdict: (b) FAIL -- vax1 SHOW CLUSTER shows $node STATUS=$vstat, not MEMBER (known/NEW/BRK_NON)"
+        else
+            echo "  verdict: (b) FAIL -- vax1 shows no admitted $node (SDA CSB absent + DCL table has no $node row)"
+        fi
     fi
 
     # (c) cluster grew to 3.

@@ -1089,12 +1089,11 @@ struct peer_state {
                                     * peer-initiated connection and answer its config reactively
                                     * on the member VC, like OVMX_PURE_SERVER. */
     int      joiner_cfg2_sent;     /* vms-760: the DEFERRED op 0x02 config/topology went out */
-    int      cfg2_reemit_pending;  /* vms-a84d: a FRESH op 0x02 is armed for this (coordinator)
-                                    * peer, to be sent at the transition moment so the
-                                    * coordinator relays us (op 0x12) into the other members'
-                                    * rebuild set. Same content as the deferred op 0x02. */
-    uint32_t cfg2_reemit_epoch;    /* vms-a84d: the ADD-transition epoch we last armed a
-                                    * re-emit for (one re-emit per epoch, never per frame). */
+    uint32_t cfg2_reemit_epoch;    /* vms-a84d: the ADD-transition epoch we last SENT a fresh
+                                    * op 0x02 re-emit for (one per epoch, never per frame). The
+                                    * re-emit is sent SYNCHRONOUSLY in the XITION handler so it
+                                    * precedes the coordinator's barrier fan-out (a poll-loop
+                                    * deferral lands ~4s late, after the barrier commits). */
     int      rejoin_credit_first_sent; /* vms-46f: OVMX's op-6 special-credit request rode the
                                     * coordinator's SCS$DIRECTORY connection AHEAD of op 0x02
                                     * (spec 4(O.17), Davis pp. 2-43/2-44). Gates the deferred
@@ -7564,18 +7563,56 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                     rx->do_connect && !ps->appeared_after_join &&
                     ps->barrier_epoch != 0) {
                     struct peer_state *coord = cm_pick_coordinator(rx->peers);
-                    if (coord != NULL && coord->cfg_sent &&
+                    if (coord != NULL && coord->cfg_sent && coord->pb != NULL &&
+                        coord->cfg_remote_conid != 0 &&
                         coord->cfg2_reemit_epoch != ps->barrier_epoch) {
-                        coord->cfg2_reemit_epoch = ps->barrier_epoch;
-                        coord->cfg2_reemit_pending = 1;
-                        log_ts(stdout);
-                        printf(" SCSD-I-CFG2REEMIT, ADD transition epoch=0x%08X"
-                               " opened -- arming a FRESH op 0x02 to coordinator"
-                               " node %u so it relays us into the other members'"
-                               " rebuild set (vms-a84d)\n",
-                               (unsigned)ps->barrier_epoch,
-                               (unsigned)(peer_node_number(coord) & 0x03ff));
-                        fflush(stdout);
+                        /* Send the fresh op 0x02 SYNCHRONOUSLY here, in the
+                         * frame-receive path, the instant the ADD XITION opens --
+                         * so it precedes the coordinator's barrier fan-out. The
+                         * reference joiner's relay-triggering op 0x02 is 0.04s
+                         * BEFORE the barrier (vax3-2to3: op 0x02 +34.7634 ->
+                         * barrier +34.807); a poll-loop-deferred send lands ~4s
+                         * LATE, after the barrier commits at step 5, and the
+                         * coordinator ignores it (#1029b: re-emit @+35.26, barrier
+                         * stalled @+31.2). Content byte-identical to the deferred
+                         * op 0x02 -- only the timing changes. Rides the SAME VC the
+                         * coordinator's config burst used (cfg_*_conid). */
+                        struct scs_member_params mp;
+                        memset(&mp, 0, sizeof(mp));
+                        memcpy(mp.dst_mac, ps_port_addr(coord), 6);
+                        memcpy(mp.src_mac, rx->our_hw_mac, 6);
+                        memcpy(mp.src_logical, rx->our_src_logical, 6);
+                        memcpy(mp.peer_logical, ps_sys_addr(coord), 6);
+                        mp.remote_conid = coord->cfg_remote_conid;
+                        mp.local_conid = coord->cfg_local_conid;
+                        mp.incarnation = coord->incarnation;
+                        mp.recv_ack = coord->vc.seq.recv_seq;
+                        mp.send_seq = scs_seq_advance(&coord->vc.seq);
+                        mp.sysap_send_msg = coord->sysap_send++;
+                        mp.sysap_ack_msg = coord->sysap_recv;
+                        cm_apply_rejoin_form(&mp); /* vms-2f3 */
+                        uint8_t rframe[SCS_MEMBER_FRAME_LEN];
+                        if (scs_member_build_config(&mp, rframe) == 0 &&
+                            send_frame_vc(rx->sock, (int)rx->ifindex, coord, coord->pb,
+                                          "transition-phase RE-EMIT op 0x02 (config/topology)",
+                                          rframe, sizeof(rframe)) > 0) {
+                            scs_vc_record_sent(&coord->vc, mp.send_seq, monotonic_ms());
+                            coord->cfg2_reemit_epoch = ps->barrier_epoch;
+                            rx->cm_config_frames++;
+                            log_ts(stdout);
+                            printf(" SCSD-I-CFG2REEMIT, ADD transition epoch=0x%08X"
+                                   " opened -- sent a FRESH op 0x02 to coordinator node"
+                                   " %u SYNCHRONOUSLY (before the barrier fan-out) on VC"
+                                   " local=0x%08X remote=0x%08X (send_msg=%u) so it"
+                                   " relays us into the other members' rebuild set"
+                                   " (vms-a84d)\n",
+                                   (unsigned)ps->barrier_epoch,
+                                   (unsigned)(peer_node_number(coord) & 0x03ff),
+                                   (unsigned)coord->cfg_local_conid,
+                                   (unsigned)coord->cfg_remote_conid,
+                                   mp.sysap_send_msg);
+                            fflush(stdout);
+                        }
                     }
                 }
                 /* vms-e81 (T1.1): the barrier must arm for EVERY transition,
@@ -11958,51 +11995,6 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                                                : "OUR joiner",
                        (unsigned)ps->cfg_local_conid, (unsigned)ps->cfg_remote_conid,
                        mp.sysap_send_msg, mp.sysap_ack_msg);
-                fflush(stdout);
-            }
-        }
-
-        /* vms-a84d: the transition-phase RE-EMIT of op 0x02, armed by the
-         * ADD-XITION handler. Fires a FRESH op 0x02 to the coordinator so it emits
-         * the op 0x12 relay for THIS epoch (the deferred one-shot already went out
-         * for an earlier one). Same content + same VC as the deferred op 0x02 --
-         * honest, re-timed. Independent of joiner_cfg2_sent so it survives the
-         * one-shot latch; guarded once-per-epoch by cfg2_reemit_epoch in the arm. */
-        if (rx->do_connect && !ps->appeared_after_join &&
-            ps->cfg_sent && ps->cfg2_reemit_pending &&
-            (getenv("OVMX_CFG2_ALL") != NULL ||
-             cm_pick_coordinator(rx->peers) == ps)) {
-            struct scs_member_params mp;
-            memset(&mp, 0, sizeof(mp));
-            memcpy(mp.dst_mac, ps_port_addr(ps), 6);
-            memcpy(mp.src_mac, rx->our_hw_mac, 6);
-            memcpy(mp.src_logical, rx->our_src_logical, 6);
-            memcpy(mp.peer_logical, ps_sys_addr(ps), 6);
-            mp.remote_conid = ps->cfg_remote_conid;
-            mp.local_conid = ps->cfg_local_conid;
-            mp.incarnation = ps->incarnation;
-            mp.recv_ack = ps->vc.seq.recv_seq;
-            mp.send_seq = scs_seq_advance(&ps->vc.seq);
-            mp.sysap_send_msg = ps->sysap_send++;
-            mp.sysap_ack_msg = ps->sysap_recv;
-            cm_apply_rejoin_form(&mp); /* vms-2f3 */
-            uint8_t rframe[SCS_MEMBER_FRAME_LEN];
-            if (scs_member_build_config(&mp, rframe) == 0 &&
-                send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
-                              "transition-phase RE-EMIT op 0x02 (config/topology)",
-                              rframe, sizeof(rframe)) > 0) {
-                scs_vc_record_sent(&ps->vc, mp.send_seq, monotonic_ms());
-                ps->cfg2_reemit_pending = 0;
-                rx->cm_config_frames++;
-                log_ts(stdout);
-                printf(" SCSD-I-CFG2REEMIT, sent FRESH op 0x02 to coordinator node %u"
-                       " at the transition (epoch=0x%08X) on VC local=0x%08X"
-                       " remote=0x%08X (send_msg=%u) -- expect its op 0x12 relay to"
-                       " the other member(s) so they rebuild toward us (vms-a84d)\n",
-                       (unsigned)(peer_node_number(ps) & 0x03ff),
-                       (unsigned)ps->cfg2_reemit_epoch,
-                       (unsigned)ps->cfg_local_conid, (unsigned)ps->cfg_remote_conid,
-                       mp.sysap_send_msg);
                 fflush(stdout);
             }
         }

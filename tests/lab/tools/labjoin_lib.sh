@@ -248,9 +248,21 @@ lj_node_status() {
 # A node is an ADMITTED MEMBER iff its CSB Status carries the "member" flag and NOT a
 # break/removed flag (long_break/break/removed = the un-acked-reject broken state).
 lj_csb_status() {
+    # Scope to the LIVE (highest) csid: each join gets a fresh incrementing csid, and
+    # departed runs leave STALE residual CSBs (e.g. 00010003/00010004 at long_break,
+    # removed) that pile up. Grading a stale residual would mis-verdict, so pick the
+    # node's MAX-csid row. Status = the flag field(s) after State; when the summary
+    # Status column is empty (State=open, a selected-not-yet-member transitional), fall
+    # back to the State token so the read is still informative (and is_member correctly
+    # sees no "member" flag).
     printf '%s\n' "$1" | tr -d '\r' | awk -v n="$2" '
-        $1 ~ /^[0-9A-Fa-f]{8}$/ && toupper($2)==toupper(n) { last=tolower($NF) }
-        END { if (last!="") print last }'
+        $1 ~ /^[0-9A-Fa-f]{8}$/ && toupper($2)==toupper(n) {
+            csid=$3; st=""
+            for (i=6;i<=NF;i++) st=st (st==""?"":" ") $i
+            if (st=="") st=$5
+            if (csid > maxcsid) { maxcsid=csid; maxst=tolower(st) }
+        }
+        END { if (maxcsid!="") print maxst }'
 }
 
 # lj_csb_is_member <sda_showcluster_txt> <node> -> exit 0 if the node is an admitted

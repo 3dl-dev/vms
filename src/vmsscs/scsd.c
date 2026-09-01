@@ -1083,6 +1083,11 @@ struct peer_state {
     uint32_t joiner_remote_conid;  /* the member's Con.ID on OUR connection (from its response) */
     int      joiner_cm_sent;       /* we sent the add-member burst on our own connection */
     long     joiner_cm_ms;         /* monotonic_ms() when that burst went out */
+    int      joiner_rejected;      /* vms-2f3: the peer REJECTED our outgoing VMS$VAXcluster
+                                    * connect (connect-collision loss, cdt_joiner CLOSED while
+                                    * cdt_member is OPEN). We then complete the join off the
+                                    * peer-initiated connection and answer its config reactively
+                                    * on the member VC, like OVMX_PURE_SERVER. */
     int      joiner_cfg2_sent;     /* vms-760: the DEFERRED op 0x02 config/topology went out */
     int      rejoin_credit_first_sent; /* vms-46f: OVMX's op-6 special-credit request rode the
                                     * coordinator's SCS$DIRECTORY connection AHEAD of op 0x02
@@ -10541,6 +10546,70 @@ static void scsd_join_retx_for_peer(struct scsd_rx *rx, struct peer_state *ps, l
                 fflush(stdout);
             }
         }
+    }
+
+    /* vms-2f3 CONNECT-COLLISION RECOVERY (the fresh-join NEW-hang fix). A real
+     * VAX keeps exactly ONE VMS$VAXcluster SCS connection per node pair and
+     * resolves a simultaneous connect by REJECTING one side. When the peer
+     * opens its VMS$VAXcluster connect to US first (cdt_member reaches OPEN) it
+     * then answers OUR outgoing connect (cdt_joiner) with REJECT_REQ -- so
+     * cdt_joiner never reaches OPEN, the receive-path completion at the
+     * RCV_ACCEPT_REQ site never runs, and JS_VC_CONNECT retransmits to
+     * exhaustion (js_retx -> JOIN_RETX_MAX) then freezes: no VAXCLMEMBER, no
+     * add-member burst, no op-0x0c barrier -> the VAX holds us at NEW forever
+     * (measured: sustain-run milestone-1018-1788226536, 6-min NEW-hang, both
+     * VAXes). OVMX-vs-OVMX never hits this because OVMX runs no connect-
+     * collision resolution, so both nodes' outgoing connects are accepted (H2).
+     *
+     * Recovery is CACHE-AND-COMPLETE. Grounded ORDERING (pcap, sustain-run
+     * milestone-1018-1788226536): the peer sends its 4x 190-byte member config
+     * on cdt_member FIRST (OVMX learns member-form cluster state, SCSD-I-CLUSTATE)
+     * ~0.08 s BEFORE it rejects our joiner connect -- and that config is a
+     * ONE-TIME burst, never re-sent through the whole 6-min window. So a purely
+     * reactive "answer a fresh config after the reject" loses the race: by the
+     * time cdt_joiner is CLOSED the config is already consumed and will not come
+     * again. Instead: once our outgoing connect is CLOSED (rejected) while the
+     * peer's INCOMING VMS$VAXcluster connection (cdt_member) is OPEN, complete the
+     * join off the state we ALREADY hold -- latch VMS$VAXcluster-connected off
+     * cdt_member (ps_note_vaxcluster_open accepts either direction) and drive OUR
+     * add-member burst on the surviving member VC now, then advance to
+     * JS_ADD_MEMBER so the retransmit stops and the peer reciprocates.
+     *
+     * This does NOT hit the vms-760 "bursting proactively left the member silent"
+     * failure: that was bursting BEFORE the member's config; here the member has
+     * already spoken (config received + CLUSTATE learned), so our burst is
+     * correctly ordered AFTER it, on the connection the peer KEPT (it rejected
+     * our joiner VC, so it expects the exchange on its own). Additive: the
+     * receive-path success path (cdt_joiner reaches OPEN, 12641) is untouched, so
+     * H2 (OVMX-OVMX, both outgoing win, cdt_joiner never CLOSED) is unaffected --
+     * this fires ONLY on a real collision loss. Runs BEFORE the retx guard so it
+     * is not gated by js_retx (the freeze survives retx exhaustion). */
+    if (rx->do_connect && ps->start_acked &&
+        ps->join_step == JS_VC_CONNECT && !ps->joiner_rejected &&
+        ps->cdt_joiner != NULL &&
+        scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_CLOSED &&
+        ps->cdt_member != NULL &&
+        scs_conn_state_of(ps->cdt_member) == SCS_CONN_OPEN) {
+        ps->joiner_rejected = 1;
+        ps_note_vaxcluster_open(ps);
+        int c = 0;
+        if (!ps->cm_config_sent) {
+            c = cm_send_config_burst(rx->sock, (int)rx->ifindex, ps,
+                                     rx->our_hw_mac, rx->our_src_logical,
+                                     PS_LOCAL_CONID(ps), ps->remote_conid);
+            rx->cm_config_frames += c;
+        }
+        ps->join_step = JS_ADD_MEMBER;
+        log_ts(stdout);
+        printf(" SCSD-I-CMREADMIT, CONNECT-COLLISION: our outgoing VMS$VAXcluster"
+               " connect lost the race (peer REJECTED it -> CDT CLOSED); completed"
+               " the join off the peer-initiated VMS$VAXcluster connection"
+               " local=0x%08X remote=0x%08X -- latched VAXCLMEMBER + drove OUR"
+               " add-member burst (%d frames) on the surviving member VC (the"
+               " member already sent its config; step 8/8, spec 4(O.11))\n",
+               (unsigned)PS_LOCAL_CONID(ps), (unsigned)ps->remote_conid, c);
+        fflush(stdout);
+        return;
     }
 
     /* vms-760: the join SEQUENCER drives each step's PROMPT send from the

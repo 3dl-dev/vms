@@ -752,6 +752,58 @@ int scs_member_build_dlm_selfreg(const struct scs_member_params *p,
     return 0;
 }
 
+/*
+ * scs_member_build_dlm_nl_enq - originate an honest NULL-mode (NL) DLM
+ * registration (category 0x02, op 0x01 ENQ, mode NL) for a resource OVMX has been
+ * SHOWN, toward a non-coordinator member's DLM VC (db20-b, vms-7e2).
+ *
+ * INV-6 GUARANTEE, ENFORCED BY CONSTRUCTION: the lock mode (body[30]) is
+ * HARD-PINNED to 0x00 (NL / null lock). This function has NO mode parameter and
+ * can NEVER emit a held mode (CR/CW/PR/PW/EX) or an op-07 convert. NL asserts
+ * directory participation holding NOTHING -- INV-6-safe by construction (vms-199).
+ * The reference joiner sends 3152 HELD-mode ENQs to VAX1 because it genuinely
+ * holds those locks; OVMX holds none, so it registers ONLY NL participation in the
+ * resources the cluster has shown it (from the pushed op-0d rebuild records OVMX
+ * already echoes) -- it invents nothing and never claims its own held resources
+ * (it has none).
+ *
+ * Grounded from a VAX3->VAX1 NL op-01 ENQ in vax3-2to3 (resource VCC$vSYSDSK1).
+ * The resource name and its directory hash come from the discovered record; every
+ * ungrounded per-message field is zero-filled; the value block is null. body[4:8]
+ * (per-VC tag + counter) and the SCS envelope are minted per send.
+ */
+int scs_member_build_dlm_nl_enq(const struct scs_member_params *p,
+                                uint16_t dir_hash,
+                                const char *resname, uint8_t namelen,
+                                uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    if (p == NULL || out == NULL || resname == NULL) {
+        return -1;
+    }
+    if (namelen == 0 || namelen > 31) {   /* a VMS resource name is 1..31 bytes */
+        return -1;
+    }
+    build_common(p, member_config_tmpl, SCS_MEMBER_ENV_CREDIT_CONFIG, out);
+
+    uint8_t *body = out + 72;
+    memset(body + 4, 0, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF - 4);
+    put_le16(body + 0, p->sysap_send_msg);
+    put_le16(body + 2, p->sysap_ack_msg);
+    put_le16(body + 4, p->txn);           /* per-VC directory tag (opaque, minted) */
+    put_le16(body + 6, p->checksum);      /* per-VC monotonic counter (opaque, minted) */
+    body[8]  = SCS_MEMBER_CAT_DLM;         /* 0x02 */
+    body[9]  = 0x01;                       /* op 0x01 = ENQ */
+    put_le16(body + 10, dir_hash);         /* per-resource directory hash (from the discovered record) */
+    body[12] = 0x01;                       /* node-independent constant */
+    put_le16(body + 14, p->member_count);  /* post-transition member count */
+    /* body[16:30] zero -- ungrounded per-message ids (INV-6: never replay VAX3's). */
+    body[30] = 0x00;                       /* == NL. HARD-PINNED -- the INV-6 guarantee. */
+    /* body[31:47] zero. */
+    body[47] = namelen;                    /* resource-name length */
+    memcpy(body + 48, resname, namelen);   /* the discovered resource name; value block stays null */
+    return 0;
+}
+
 int scs_member_build_response(const struct scs_member_params *p,
                               const uint8_t *req_frame, size_t req_len,
                               uint8_t out[SCS_MEMBER_FRAME_LEN])

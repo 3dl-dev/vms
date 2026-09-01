@@ -953,6 +953,42 @@ static void test_dlm_selfreg_null_guards(void)
     CHECK(scs_member_build_dlm_selfreg(&mp, NULL) == -1, "build_dlm_selfreg NULL out");
 }
 
+/* db20-b: the honest NL-mode DLM registration. The mode byte MUST be NL (0x00) --
+ * the INV-6 guarantee -- and the frame is cat 0x02 op 0x01 ENQ carrying the
+ * discovered resource name; every ungrounded field is zero. */
+static void test_dlm_nl_enq_is_null_mode(void)
+{
+    struct scs_member_params mp;
+    joiner_params(&mp, 0, 0, 0x00d8, 0x00de); /* sysap send/ack */
+    mp.member_count = 3;
+    mp.txn = 0x0004;
+    mp.checksum = 0x07f4;
+
+    uint8_t out[SCS_MEMBER_FRAME_LEN];
+    const char *res = "VCC$vSYSDSK1";
+    CHECK(scs_member_build_dlm_nl_enq(&mp, 0x5041, res, (uint8_t)strlen(res), out) == 0,
+          "build_dlm_nl_enq ok");
+    const uint8_t *body = out + 14 + SCS_MEMBER_BODY_OFF; /* SCA[58] = abs 72 */
+
+    CHECK(body[8] == 0x02, "cat 0x02 (DLM)");
+    CHECK(body[9] == 0x01, "op 0x01 (ENQ)");
+    CHECK(body[30] == 0x00, "body[30] == NL (0x00) -- INV-6 guarantee: never a held mode");
+    CHECK(body[10] == 0x41 && body[11] == 0x50, "body[10:12] = per-resource directory hash");
+    CHECK(body[14] == 0x03 && body[15] == 0x00, "body[14:16] = member count");
+    CHECK(body[47] == (uint8_t)strlen(res), "body[47] = resource-name length");
+    CHECK(memcmp(body + 48, res, strlen(res)) == 0, "body[48:] = discovered resource name");
+    /* value block after the name is null. */
+    int vlb_nz = 0;
+    for (size_t i = 48 + strlen(res); i < (size_t)(SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF); i++) {
+        if (body[i] != 0) { vlb_nz = 1; }
+    }
+    CHECK(!vlb_nz, "value block null (NL asserts no held value)");
+    /* the builder has NO mode parameter, so a held mode is structurally un-emittable. */
+    CHECK(scs_member_build_dlm_nl_enq(NULL, 0, res, 4, out) == -1, "nl_enq NULL p");
+    CHECK(scs_member_build_dlm_nl_enq(&mp, 0, res, 0, out) == -1, "nl_enq rejects zero namelen");
+    CHECK(scs_member_build_dlm_nl_enq(&mp, 0, res, 32, out) == -1, "nl_enq rejects oversized namelen");
+}
+
 int main(void)
 {
     test_op14_byte_exact();
@@ -974,6 +1010,7 @@ int main(void)
     test_params_member_vs_joiner_form();
     test_dlm_selfreg_byte_exact();
     test_dlm_selfreg_null_guards();
+    test_dlm_nl_enq_is_null_mode();
 
     if (failures == 0) {
         printf("test_scs_member: ALL PASSED\n");

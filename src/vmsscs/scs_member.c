@@ -698,6 +698,60 @@ int scs_member_build_dlm_response(const struct scs_member_params *p,
     return 0;
 }
 
+/*
+ * scs_member_build_dlm_selfreg - originate the joiner's SCS$DIRECTORY self-
+ * registration (category 0x02, op 0x0d), the ONE cat-0x02 frame a real joiner
+ * emits toward the coordinator during an add-transition (vms-db20).
+ *
+ * GROUNDED byte-for-byte against the joiner frame in vax3-2to3-established-join
+ * (idx 698, VAX3->VAX2 coordinator, t=34.813s). It registers the joining node's
+ * own SCSSYSTEMID into the cluster resource directory under the well-known
+ * resource SCS$DIRECTORY / sub-name SYS$SYS_ID, carrying a NULL value block --
+ * it asserts NO held lock state (INV-6 clear); it is a directory-participation
+ * record, not an $ENQ. The coordinator answers with a verbatim cat-0x82 op-0x0d
+ * echo + body[34]=0xf9 (the mirror of scs_member_build_dlm_response), so it
+ * validates NONE of body[4:8] -- those are the originator's opaque transaction
+ * fields, minted from local state by the caller:
+ *   body[0:2] sysap_send_msg, body[2:4] sysap_ack_msg  (this VC's SYSAP counters)
+ *   body[4:6] p->txn      -- a fixed nonzero per-VC directory-tree tag
+ *   body[6:8] p->checksum -- a per-VC monotonic DLM counter (NOT a CRC: refuted
+ *                            across 4 CRC-16 variants x 9 spans; it increments
+ *                            across frames whose resource names differ).
+ * body[58:60] is the node's OWN SCSSYSTEMID, taken from the low two bytes of the
+ * source cluster-logical address (aa:00:04:00:<lo>:<hi>) exactly as the reference
+ * joiner carried its own (VAX3 sysid 1027 -> logical ...:03:04 -> body 03 04).
+ * Everything else is a replayed constant classified as non-identity on the wire.
+ */
+static const uint8_t dlm_selfreg_const[52] = {
+    /* body[ 8:20] */ 0x02, 0x0d, 0x52, 0x5f, 0x01, 0x00, 0x03, 0x00, 0x10, 0x02, 0x01, 0x00,
+    /* body[20:36] */ 'S','C','S','$','D','I','R','E','C','T','O','R','Y',' ',' ',' ',
+    /* body[36:46] */ 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    /* body[46:48] */ 0x01, 0x10,
+    /* body[48:58] */ 'S','Y','S','$','S','Y','S','_','I','D',
+    /* body[58:60] */ 0x00, 0x00,  /* SCSSYSTEMID -- substituted from src_logical */
+};
+
+int scs_member_build_dlm_selfreg(const struct scs_member_params *p,
+                                 uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    build_common(p, member_config_tmpl, SCS_MEMBER_ENV_CREDIT_CONFIG, out);
+
+    uint8_t *body = out + 72;
+    memset(body + 4, 0, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF - 4);
+    put_le16(body + 0, p->sysap_send_msg);
+    put_le16(body + 2, p->sysap_ack_msg);
+    put_le16(body + 4, p->txn);       /* per-VC directory-tree tag (opaque, echoed) */
+    put_le16(body + 6, p->checksum);  /* per-VC monotonic DLM counter (opaque, echoed) */
+    memcpy(body + 8, dlm_selfreg_const, sizeof dlm_selfreg_const);
+    /* body[58:60]: our own SCSSYSTEMID == low two bytes of the source logical. */
+    body[58] = p->src_logical[4];
+    body[59] = p->src_logical[5];
+    return 0;
+}
+
 int scs_member_build_response(const struct scs_member_params *p,
                               const uint8_t *req_frame, size_t req_len,
                               uint8_t out[SCS_MEMBER_FRAME_LEN])

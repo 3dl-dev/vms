@@ -330,6 +330,14 @@ int scs_member_build_dlm_response(const struct scs_member_params *p,
                                   const uint8_t *req_frame, size_t req_len,
                                   uint8_t out[SCS_MEMBER_FRAME_LEN]);
 
+/* vms-db20: originate the joiner's SCS$DIRECTORY / SYS$SYS_ID self-registration
+ * (cat 0x02 op 0x0d, null value block) toward the coordinator during an
+ * add-transition -- the one cat-0x02 frame a real joiner emits. body[4:8] are
+ * minted by the caller (opaque, echoed by the coordinator); body[58:60] is the
+ * node's own SCSSYSTEMID from the source logical. See scs_member.c. */
+int scs_member_build_dlm_selfreg(const struct scs_member_params *p,
+                                 uint8_t out[SCS_MEMBER_FRAME_LEN]);
+
 /* Current time as a VMS 64-bit absolute time (100 ns since 17-NOV-1858). */
 uint64_t scs_member_vms_time_now(void);
 

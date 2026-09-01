@@ -888,6 +888,71 @@ static void test_params_member_vs_joiner_form(void)
           "version token 'V7.3    ' byte-exact in both forms");
 }
 
+/* vms-db20: the op 0x0d SCS$DIRECTORY self-registration a real joiner originates
+ * toward the coordinator. ORACLE = the SYSAP body of the captured joiner frame in
+ * vax3-2to3-established-join (idx 698, VAX3 sysid 1027 -> VAX2 coordinator,
+ * t=34.813s). The joiner MINTS body[4:8] (the coordinator echoes them opaquely --
+ * proven by its verbatim cat-0x82 op-0x0d reply), so the test reproduces the
+ * captured frame given the same minted (txn, counter) and asserts a NULL value
+ * block (no held-lock claim, INV-6). */
+static const uint8_t vax3_logical[6] = {0xaa,0x00,0x04,0x00,0x03,0x04};
+
+static const uint8_t golden_dlm_selfreg_body[64] = {
+    0x64,0x00,0x13,0x01,0x03,0x00,0xf9,0x07,0x02,0x0d,0x52,0x5f,0x01,0x00,0x03,0x00,
+    0x10,0x02,0x01,0x00,0x53,0x43,0x53,0x24,0x44,0x49,0x52,0x45,0x43,0x54,0x4f,0x52,
+    0x59,0x20,0x20,0x20,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x10,
+    0x53,0x59,0x53,0x24,0x53,0x59,0x53,0x5f,0x49,0x44,0x03,0x04,0x00,0x00,0x00,0x00,
+};
+
+static void test_dlm_selfreg_byte_exact(void)
+{
+    struct scs_member_params mp;
+    joiner_params(&mp, 0, 0, 0x0064, 0x0113);
+    memcpy(mp.src_logical, vax3_logical, 6); /* joiner VAX3 -> sysid 03 04 */
+    mp.txn = 0x0003;      /* the minted directory-tree tag the reference carried */
+    mp.checksum = 0x07f9; /* the minted per-VC DLM counter the reference carried */
+
+    uint8_t out[SCS_MEMBER_FRAME_LEN];
+    CHECK(scs_member_build_dlm_selfreg(&mp, out) == 0, "build_dlm_selfreg ok");
+
+    const uint8_t *body = out + 14 + SCS_MEMBER_BODY_OFF; /* SCA[58] = abs 72 */
+    CHECK(memcmp(body, golden_dlm_selfreg_body, sizeof golden_dlm_selfreg_body) == 0,
+          "dlm selfreg body[0:64] reproduces the captured joiner frame byte-for-byte");
+
+    int lvb_nonzero = 0;
+    for (int i = 64; i < (SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF); i++) {
+        if (body[i] != 0) { lvb_nonzero = 1; }
+    }
+    CHECK(!lvb_nonzero, "dlm selfreg value block is null (asserts no held lock, INV-6)");
+
+    CHECK(body[8] == 0x02, "cat 0x02 (DLM request)");
+    CHECK(body[9] == SCS_MEMBER_OP_DLM_REBUILD, "op 0x0d");
+    CHECK(body[4] == 0x03 && body[5] == 0x00, "body[4:6] = minted dir-tree tag (echoed, not computed)");
+    CHECK(body[6] == 0xf9 && body[7] == 0x07, "body[6:8] = minted per-VC counter (NOT a CRC)");
+
+    /* body[58:60] tracks the node's OWN sysid from the source logical. */
+    struct scs_member_params mp2;
+    joiner_params(&mp2, 0, 0, 1, 0); /* src_logical = vax2 -> sysid 02 04 */
+    mp2.txn = 0x0003; mp2.checksum = 0x0001;
+    uint8_t out2[SCS_MEMBER_FRAME_LEN];
+    CHECK(scs_member_build_dlm_selfreg(&mp2, out2) == 0, "build_dlm_selfreg vax2 ok");
+    const uint8_t *body2 = out2 + 14 + SCS_MEMBER_BODY_OFF;
+    CHECK(body2[58] == 0x02 && body2[59] == 0x04,
+          "sysid at body[58:60] follows the source logical (VAX2 -> 02 04)");
+    /* The rest of the record is identical regardless of node (constants). */
+    CHECK(memcmp(body2 + 8, golden_dlm_selfreg_body + 8, 50) == 0,
+          "body[8:58] constants are node-independent");
+}
+
+static void test_dlm_selfreg_null_guards(void)
+{
+    struct scs_member_params mp;
+    uint8_t out[SCS_MEMBER_FRAME_LEN];
+    joiner_params(&mp, 0, 0, 1, 0);
+    CHECK(scs_member_build_dlm_selfreg(NULL, out) == -1, "build_dlm_selfreg NULL p");
+    CHECK(scs_member_build_dlm_selfreg(&mp, NULL) == -1, "build_dlm_selfreg NULL out");
+}
+
 int main(void)
 {
     test_op14_byte_exact();
@@ -907,6 +972,8 @@ int main(void)
     test_op0f_echoes_response_marker();
     test_build_depart_self_departure_open();
     test_params_member_vs_joiner_form();
+    test_dlm_selfreg_byte_exact();
+    test_dlm_selfreg_null_guards();
 
     if (failures == 0) {
         printf("test_scs_member: ALL PASSED\n");

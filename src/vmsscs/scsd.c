@@ -1044,6 +1044,11 @@ struct peer_state {
     int      dlm_h10b_hold_established; /* node-A: our pre-departure hold is GRANTED */
     char     dlm_h10b_resnam[32];       /* node-A: the resource name we hold (from the GRANT) */
     int      dlm_h10b_rebuild_sent;     /* node-A: the REBUILD send ran (one-shot) */
+    /* vms-db20: the faithful joiner SCS$DIRECTORY self-registration origination
+     * (cat 0x02 op 0x0d) toward the coordinator, once per add-transition. */
+    uint16_t dlm_dir_tag;               /* per-VC directory-tree tag (body[4:6]); assigned once */
+    uint16_t dlm_send_cksum;            /* per-VC monotonic DLM counter (body[6:8]) */
+    int      dlm_selfreg_sent;          /* one-shot: self-reg emitted for the current epoch */
     /* rd vms-ec75 (DLM rung H11): DISTRIBUTED DEADLOCK SEARCH. A contender node
      * holds one resource (mastered by C) and $ENQs a second that QUEUES behind the
      * other contender -- a genuine cross-node wait-for cycle. When the wait queues,
@@ -3662,6 +3667,11 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *   THE CONNECTION MANAGER:
  *     cm_send_ack()           the cat-0x04 ack that names the watermark
  *     cm_send_barrier_step()  the sec 4(p) barrier step request
+ *     cm_send_dlm_selfreg()   the cat-0x02 op-0x0d SCS$DIRECTORY self-
+ *                             registration (vms-db20) -- the one DLM frame a real
+ *                             joiner originates toward the coordinator, at barrier
+ *                             start; a null-value-block directory record, CHOKED
+ *                             like every other sequenced VC message
  *     scs_reflect_credit()    the op8->op9 / op6->op7 credit handshake reply
  *     scs_send_disconnect_self() self-directed teardown, hand-built frame
  *
@@ -6404,6 +6414,64 @@ static int cm_send_barrier_step(int sock, int ifindex, struct peer_state *ps,
     return 0;
 }
 
+/* vms-db20: the per-VC directory-tree tag OVMX stamps at body[4:6] of the DLM
+ * self-registration. Any consistent nonzero value works (the coordinator echoes
+ * it opaquely); we use the reference joiner's value. */
+#define SCSD_DLM_DIR_TAG 0x0003
+
+/*
+ * cm_send_dlm_selfreg - originate the faithful SCS$DIRECTORY self-registration
+ * (cat 0x02 op 0x0d) on the coordinator's VMS$VAXcluster VC (vms-db20). This is
+ * the one cat-0x02 frame a real joiner emits during an add-transition; it is a
+ * null-value-block directory record (asserts no held lock, INV-6 clear). Being a
+ * SEQUENCED frame it advances our send_seq on the coordinator's VC -- the same
+ * lockstep the barrier and DLM echoes ride (spec 4h). Modelled on
+ * cm_send_barrier_step(); body[4:8] are minted from local per-VC state.
+ */
+static int cm_send_dlm_selfreg(int sock, int ifindex, struct peer_state *ps,
+                               const uint8_t our_hw_mac[6],
+                               const uint8_t our_src_logical[6])
+{
+    if (ps->cm_local_conid == 0) {
+        return 0;
+    }
+    struct scs_member_params bp;
+    memset(&bp, 0, sizeof(bp));
+    memcpy(bp.dst_mac, ps_port_addr(ps), 6);
+    memcpy(bp.src_mac, our_hw_mac, 6);
+    memcpy(bp.src_logical, our_src_logical, 6);
+    memcpy(bp.peer_logical, ps_sys_addr(ps), 6);
+    bp.remote_conid = ps->cm_remote_conid;
+    bp.local_conid = ps->cm_local_conid;
+    bp.incarnation = ps->incarnation;
+    bp.recv_ack = ps->vc.seq.recv_seq;
+    bp.send_seq = scs_seq_advance(&ps->vc.seq);
+    if (ps->sysap_send == 0) {
+        ps->sysap_send = 1;
+    }
+    bp.sysap_send_msg = ps->sysap_send++;
+    bp.sysap_ack_msg = ps->sysap_recv;
+    if (ps->dlm_dir_tag == 0) {
+        ps->dlm_dir_tag = SCSD_DLM_DIR_TAG; /* per-VC tree tag, assigned once */
+    }
+    bp.txn = ps->dlm_dir_tag;
+    bp.checksum = ++ps->dlm_send_cksum; /* per-VC monotonic DLM counter */
+    uint8_t dframe[SCS_MEMBER_FRAME_LEN];
+    if (scs_member_build_dlm_selfreg(&bp, dframe) == 0 &&
+        send_frame_vc(sock, ifindex, ps, ps->pb,
+                      "CM DLM self-reg (cat 0x02 op 0x0d)", dframe, sizeof(dframe)) > 0) {
+        scs_vc_record_sent(&ps->vc, bp.send_seq, monotonic_ms());
+        log_ts(stdout);
+        printf(" SCSD-I-DLMSELFREG, originated SCS$DIRECTORY self-registration"
+               " (cat 0x02 op 0x0d, sysid=0x%02x%02x tag=0x%04x cksum=0x%04x seq=%u)\n",
+               our_src_logical[5], our_src_logical[4],
+               bp.txn, bp.checksum, bp.send_seq);
+        fflush(stdout);
+        return 1;
+    }
+    return 0;
+}
+
 /*
  * cm_send_ack - emit one category-0x04 SYSAP acknowledgement naming our current
  * high-water mark on the VC the connection-manager dialogue is riding.
@@ -7468,6 +7536,10 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                                         ((uint32_t)buf[86] << 16) |
                                         ((uint32_t)buf[87] << 24);
                     ps->xition_class = buf[72 + SCS_MEMBER_CLASS_BODYOFF];
+                    /* vms-db20: a fresh transition opens -- re-arm the one-shot so
+                     * the SCS$DIRECTORY self-registration is re-emitted at this
+                     * barrier's start (cm_send_dlm_selfreg). */
+                    ps->dlm_selfreg_sent = 0;
                     /* vms-584: the open carries the post-transition cluster
                      * facts. Latch them now, apply them when the transition
                      * is real (see ovmx_cluster_relearn). */
@@ -11739,6 +11811,17 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
         if (ps->barrier_go_pending &&
             (monotonic_ms() - ps->barrier_go_ms) >= (long)JOIN_BARRIER_GO_DELAY_MS) {
             ps->barrier_go_pending = 0;
+            /* vms-db20: originate the faithful SCS$DIRECTORY self-registration to
+             * the coordinator once per transition, at barrier start -- the one
+             * cat-0x02 op-0x0d frame a real joiner emits (ref vax3-2to3 idx698).
+             * OVMX otherwise originates ZERO cat-0x02 DLM traffic; this null-LVB
+             * directory record (INV-6 clear) is the first, and being sequenced it
+             * advances our send_seq on the coordinator's VC. One-shot per epoch. */
+            if (!ps->dlm_selfreg_sent) {
+                ps->dlm_selfreg_sent = 1;
+                cm_send_dlm_selfreg(rx->sock, (int)rx->ifindex, ps,
+                                    rx->our_hw_mac, rx->our_src_logical);
+            }
             cm_send_barrier_step(rx->sock, (int)rx->ifindex, ps, rx->our_hw_mac,
                                  rx->our_src_logical, ps->barrier_step);
         }

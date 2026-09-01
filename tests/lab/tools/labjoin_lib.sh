@@ -207,27 +207,83 @@ lj_parse_cn() {  # reads console text on stdin -> prints N (or empty)
 #
 # Any missing leg => FAIL, with the reason printed. Returns 0 only on PASS.
 # ---------------------------------------------------------------------------
+# lj_node_status <showcluster_txt> <node-or-id> -> prints that node's STATUS column
+# (upper-case), empty if the node is not in the table. Parses the VMS SHOW CLUSTER
+# table row "| NODE | SOFTWARE | STATUS |" by COLUMN -- never a loose "MEMBER
+# appears somewhere on/near the line" match. The old grep-MEMBER-on-the-line check
+# false-passed by matching the "| MEMBERS |" header or a wrapped/garbled console
+# frame, and by treating a transient hit as admission (lab-2 vms-a84d: it reported
+# OVMXJ0=member while every sustained read was NEW). Column extraction makes NEW /
+# BRK_NON / OPENING distinguishable from MEMBER, which is the whole point.
+lj_node_status() {
+    # Normalise pipe-table ("| OVMXJ0 | VMX V0.1 | NEW |") and bare space-separated
+    # ("OVMXJ0 MEMBER") rows alike: pipes -> spaces, then on the node's OWN line find
+    # the FIRST status keyword AFTER the node token. Restricting to the node's own
+    # line + keyword-after-node is what stops the cross-line / wrapped-console
+    # false-match ("MEMBERS" header, a different node's MEMBER) that latched a false
+    # admission. "MEMBERS" (plural) never matches the exact "MEMBER".
+    printf '%s\n' "$1" | tr -d '\r' | tr '|' ' ' | awk -v n="$2" '
+        {
+            nn=toupper(n); found=0
+            for (i=1;i<=NF;i++) {
+                tok=toupper($i)
+                if (found==1 && (tok=="MEMBER"||tok=="NEW"||tok=="REMOVED"||tok=="OPENING"||tok=="OPEN"||tok ~ /^BRK/)) {
+                    print tok; exit
+                }
+                if (tok==nn) found=1
+            }
+        }'
+}
+
 lj_verdict() {  # <ovmx_node> <ovmx_showcluster_txt> <vax_showcluster_txt> <cn> <pcap>
     local node="$1" ovmx_sc="$2" vax_sc="$3" cn="$4" pcap="$5"
     local ok=1
     local a=0 b=0 c=0 d=0
     node="$(printf '%s' "$node" | tr '[:lower:]' '[:upper:]' | cut -c1-6)"
 
-    # (a) OVMX side sees a VAX member, executive present.
+    # (a) OVMX side sees a VAX PEER as a member (executive membership present).
+    # OVMX may render peers by node name (VAX1) or by numeric SCSSYSTEMID
+    # (1025/1026) -- accept either shown as MEMBER. This is OVMX's OWN reciprocal
+    # view; it is NOT the admission authority. OVMX can self-report MEMBER ahead of
+    # the real VAX (an over-claim) -- that is caught by leg (b), which reads the
+    # VAX's authoritative view. So (a) AND (b) = OVMX sees the VAXes AND the VAX
+    # admits OVMX; (a) alone can never carry a cut.
+    local peer peerstat a_peer=""
     if grep -qaiE 'NOSUCHDEV' <<<"$ovmx_sc"; then
         echo "  verdict: (a) FAIL -- OVMX SHOW CLUSTER reported NOSUCHDEV: the executive/SCS is"
         echo "                       not up (expected pre-vms-5ad: booted node does not auto-start SCS yet)"
-    elif grep -qaiE 'VAX[0-9]' <<<"$ovmx_sc"; then
-        a=1; echo "  verdict: (a) PASS -- OVMX SHOW CLUSTER lists a VAX member (executive membership)"
     else
-        echo "  verdict: (a) FAIL -- OVMX SHOW CLUSTER shows no VAX member (not joined from the OVMX side)"
+        # A VAX peer must appear with STATUS==MEMBER in OVMX's own table (by node
+        # name VAX1/VAX2 or by SCSSYSTEMID 1025/1026). Column-exact -- not a loose
+        # MEMBER match. (a) is only OVMX's reciprocal view; (b) is the authority.
+        for peer in VAX1 VAX2 ${LJ_RESERVED_IDS:-1025 1026 1027}; do
+            peerstat="$(lj_node_status "$ovmx_sc" "$peer")"
+            [ "$peerstat" = "MEMBER" ] && { a_peer="$peer"; break; }
+        done
+        if [ -n "$a_peer" ]; then
+            a=1; echo "  verdict: (a) PASS -- OVMX SHOW CLUSTER lists VAX peer $a_peer as MEMBER (executive membership)"
+        else
+            echo "  verdict: (a) FAIL -- OVMX SHOW CLUSTER shows no VAX peer with STATUS==MEMBER (not joined from OVMX's side)"
+        fi
     fi
 
-    # (b) VAX side (the oracle) lists the OVMX node.
-    if grep -qaF "$node" <<<"$vax_sc"; then
-        b=1; echo "  verdict: (b) PASS -- vax1 SHOW CLUSTER lists the OVMX node $node (the VAX oracle sees it)"
+    # (b) VAX side (the oracle) lists the OVMX node AS A MEMBER. Presence alone is
+    # NOT admission: a real VAX creates a CSB for -- and counts in CLUSTER_NODES --
+    # any node it has merely HEARD, showing it BRK_NON/NEW until it actually
+    # promotes it to MEMBER. Only STATUS==MEMBER on the VAX's OWN SHOW CLUSTER is
+    # the authentic admission (lab-2 vms-a84d: OVMXJ0 showed BRK_NON = known, not
+    # admitted, while OVMX self-rendered MEMBER ahead of the VAX). This is the
+    # authoritative gate -- it also catches an OVMX-side over-claim, since it reads
+    # the VAX's view, not OVMX's self-report.
+    local vstat
+    vstat="$(lj_node_status "$vax_sc" "$node")"
+    if [ "$vstat" = "MEMBER" ]; then
+        b=1; echo "  verdict: (b) PASS -- vax1 SHOW CLUSTER shows $node STATUS==MEMBER (the real VAX ADMITTED it)"
+    elif [ -n "$vstat" ]; then
+        echo "  verdict: (b) FAIL -- vax1 SHOW CLUSTER shows $node STATUS=$vstat, not MEMBER (known/NEW/BRK_NON"
+        echo "                       -- the VAX heard OVMX + made a CSB but never promoted it to MEMBER)"
     else
-        echo "  verdict: (b) FAIL -- vax1 SHOW CLUSTER does not list $node (the real VAX never admitted it)"
+        echo "  verdict: (b) FAIL -- vax1 SHOW CLUSTER does not list $node (the real VAX never heard it)"
     fi
 
     # (c) cluster grew to 3.

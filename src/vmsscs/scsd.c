@@ -6575,7 +6575,10 @@ static int cm_send_dlm_nl_register(int sock, int ifindex, struct peer_state *ps,
     bp.sysap_ack_msg = ps->sysap_recv;
     bp.txn = SCSD_DLM_DIR_TAG;        /* per-VC directory tree tag */
     bp.checksum = ++ps->own_cksum;     /* per-VC monotonic counter, contiguous */
-    bp.member_count = member_count;    /* the count the member showed us (honest) */
+    bp.member_count = member_count;    /* OVMX's OWN true membership count (caller
+                                        * passes ovmx_cluster.member_count) -- NOT
+                                        * read from the peer's lock record, which has
+                                        * no such field. INV-6: our fact, not theirs. */
     uint8_t dframe[SCS_MEMBER_FRAME_LEN];
     if (scs_member_build_dlm_nl_enq(&bp, dir_hash, resname, namelen, dframe) == 0 &&
         send_frame_vc(sock, ifindex, ps, ps->pb,
@@ -8048,8 +8051,9 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                          * participation in that resource -- the directory-rebuild
                          * exchange the member needs before it advances to the
                          * SCA$TRANSPORT member-STATUS probe. NL only (holding
-                         * nothing); OVMX invents nothing -- the resource name and
-                         * its directory hash come from the record we were shown. */
+                         * nothing); OVMX invents nothing -- the resource NAME comes
+                         * from the record we were shown, and every other field is
+                         * either OVMX's own true state or an honest zero (INV-6). */
                         if (cm_shape == CM_RSP_DLM &&
                             !cm_peer_is_coordinator(rx->peers, ps)) {
                             const uint8_t *qb = buf + 72;
@@ -8060,19 +8064,24 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                             char res[32];
                             uint8_t nl = dlm_op0d_resname(qb, res);
                             if (nl > 0 && dlm_nl_reg_add(ps, res)) {
-                                /* dir_hash / member_count: the op-0d record read
-                                 * offsets are NOT yet ground-truthed (the emit-side
-                                 * op-01 uses body[10]/[14], but VAX1's op-0d layout
-                                 * is unconfirmed -- cksum sits at body[6:8]). These
-                                 * fields do NOT gate whether the NL registration
-                                 * fires; they refine the emitted frame. Read
-                                 * PROVISIONALLY pending pcap confirmation; correct
-                                 * the two offsets once the live op-0d field map is
-                                 * pinned. */
-                                uint16_t dh = (uint16_t)qb[10] |
-                                              ((uint16_t)qb[11] << 8);
-                                uint16_t mc = (uint16_t)qb[14] |
-                                              ((uint16_t)qb[15] << 8);
+                                /* member_count: OVMX's OWN true membership count,
+                                 * NEVER the wire. The received op-0d is a LOCK
+                                 * record (scs_dlm.h: master_lkid@8:12, status@12:16,
+                                 * resnam@48:80) -- it carries NO member_count field,
+                                 * so any read from it would FABRICATE the count
+                                 * (INV-6 violation). member_count is a membership
+                                 * fact OVMX already holds (ovmx_cluster.member_count,
+                                 * the same source op-01 PARAMS uses).
+                                 *
+                                 * dir_hash: honest ZERO. A SCS$DIRECTORY dir-hash is
+                                 * COMPUTED from the resource name, not carried in a
+                                 * peer's lock ENQ; the op-0d record has no such field
+                                 * to echo, and OVMX does not (yet) compute the VMS
+                                 * hash. 0 is the ungrounded sentinel -- honest
+                                 * omission over an invented value (INV-6). */
+                                uint16_t dh = 0;
+                                uint16_t mc = ovmx_cluster.known ?
+                                              ovmx_cluster.member_count : 0;
                                 cm_send_dlm_nl_register(rx->sock, (int)rx->ifindex,
                                                         ps, rx->our_hw_mac,
                                                         rx->our_src_logical,

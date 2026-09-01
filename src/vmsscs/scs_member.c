@@ -768,9 +768,14 @@ int scs_member_build_dlm_selfreg(const struct scs_member_params *p,
  * (it has none).
  *
  * Grounded from a VAX3->VAX1 NL op-01 ENQ in vax3-2to3 (resource VCC$vSYSDSK1).
- * The resource name and its directory hash come from the discovered record; every
- * ungrounded per-message field is zero-filled; the value block is null. body[4:8]
- * (per-VC tag + counter) and the SCS envelope are minted per send.
+ * Only the resource NAME comes from the discovered record. member_count is OVMX's
+ * OWN true count (the caller sources it from ovmx_cluster.member_count, never from
+ * the peer's lock record -- which carries no member_count field). dir_hash is an
+ * honest ZERO: a SCS$DIRECTORY dir-hash is computed from the resource name, not
+ * echoed from a peer's ENQ, and OVMX does not compute the VMS hash -- so it omits
+ * it (0) rather than invent one (INV-6). Every other per-message field is zero-
+ * filled; the value block is null. body[4:8] (per-VC tag + counter) and the SCS
+ * envelope are minted per send.
  */
 int scs_member_build_dlm_nl_enq(const struct scs_member_params *p,
                                 uint16_t dir_hash,
@@ -793,9 +798,9 @@ int scs_member_build_dlm_nl_enq(const struct scs_member_params *p,
     put_le16(body + 6, p->checksum);      /* per-VC monotonic counter (opaque, minted) */
     body[8]  = SCS_MEMBER_CAT_DLM;         /* 0x02 */
     body[9]  = 0x01;                       /* op 0x01 = ENQ */
-    put_le16(body + 10, dir_hash);         /* per-resource directory hash (from the discovered record) */
+    put_le16(body + 10, dir_hash);         /* SCS$DIRECTORY dir-hash: honest 0 (computed from the name, not echoed; OVMX omits rather than invents -- INV-6) */
     body[12] = 0x01;                       /* node-independent constant */
-    put_le16(body + 14, p->member_count);  /* post-transition member count */
+    put_le16(body + 14, p->member_count);  /* OVMX's own true post-transition member count */
     /* body[16:30] zero -- ungrounded per-message ids (INV-6: never replay VAX3's). */
     body[30] = 0x00;                       /* == NL. HARD-PINNED -- the INV-6 guarantee. */
     /* body[31:47] zero. */

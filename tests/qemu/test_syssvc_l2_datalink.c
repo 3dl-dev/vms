@@ -142,16 +142,23 @@ int main(void)
     /* ---- 2. SEND a small frame to the broadcast address ---------------- */
     if (st == SS_NORMAL) {
         static const uint8_t bcast[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
-        /* 46 bytes: with the 14-byte Ethernet header exec_l2_send adds, this
-         * totals 60 bytes -- the minimum standard Ethernet frame size, so a
-         * driver enforcing that minimum on transmit cannot reject it. */
-        uint8_t frame[46];
+        /* vms-a84d: the datalink contract is a FULLY-BUILT Ethernet frame --
+         * the executive sends it VERBATIM (scsd.c already builds the header;
+         * exec_l2_send no longer prepends one). So build a complete 60-byte
+         * frame here: dst | src | ethertype | payload (60 = the minimum
+         * standard Ethernet frame). Sending a bare payload would now go on the
+         * wire as a malformed short frame. */
+        uint8_t frame[60];
         uint32_t actlen = 0;
 
-        memset(frame, 0xA5, sizeof(frame));
+        memset(frame, 0, sizeof(frame));
+        memcpy(frame + 0, bcast, 6);       /* dst = broadcast */
+        memcpy(frame + 6, hwaddr, 6);      /* src = our resolved MAC (from L2_OPEN) */
+        frame[12] = 0x60; frame[13] = 0x07;/* ethertype 0x6007, network order */
+        memset(frame + 14, 0xA5, sizeof(frame) - 14); /* payload */
         st = vms_kif_l2_send(handle, ifindex, 0x6007u, bcast, frame,
                              (uint32_t)sizeof(frame), &actlen);
-        CHECK(st == SS_NORMAL, "L2_SEND a broadcast frame -> SS$_NORMAL");
+        CHECK(st == SS_NORMAL, "L2_SEND a full broadcast frame -> SS$_NORMAL");
         CHECK(actlen == sizeof(frame), "L2_SEND reports the full frame length sent");
 
         /* ---- 3. CLOSE -------------------------------------------------- */

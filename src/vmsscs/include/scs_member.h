@@ -338,6 +338,15 @@ int scs_member_build_dlm_response(const struct scs_member_params *p,
 int scs_member_build_dlm_selfreg(const struct scs_member_params *p,
                                  uint8_t out[SCS_MEMBER_FRAME_LEN]);
 
+/* db20-b (vms-7e2): originate an honest NULL-mode DLM registration (cat 0x02 op
+ * 0x01 ENQ, mode NL) for a discovered resource, toward a non-coordinator member.
+ * INV-6 by construction: NO mode parameter -- the mode byte is hard-pinned to NL
+ * (0x00), so a held mode can never be emitted. See scs_member.c. */
+int scs_member_build_dlm_nl_enq(const struct scs_member_params *p,
+                                uint16_t dir_hash,
+                                const char *resname, uint8_t namelen,
+                                uint8_t out[SCS_MEMBER_FRAME_LEN]);
+
 /* Current time as a VMS 64-bit absolute time (100 ns since 17-NOV-1858). */
 uint64_t scs_member_vms_time_now(void);
 

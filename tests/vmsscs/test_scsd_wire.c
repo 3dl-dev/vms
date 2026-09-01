@@ -10838,6 +10838,52 @@ static void test_dlm_message_reaches_the_lock_handler_over_scs(void)
           "the decoded value block did not match");
 }
 
+/*
+ * db20-b (vms-7e2): the op-0d resource-name extractor must read body[48]
+ * (SCS_DLM_B_RESNAM), NOT body[20]. The origin bug read body[20] -- which is
+ * SCS_DLM_B_MASTER_CSID, a u32 whose first byte is never A-Z -- so the guard
+ * silently skipped EVERY rebuild record and no NL registration ever fired
+ * (DLMNLREG=0 in the lab, even with the hook precondition met). This pins the
+ * offset so that class of bug fails a check instead of vanishing at runtime.
+ */
+static void test_dlm_op0d_resname_reads_body48(void)
+{
+    uint8_t body[132];
+    memset(body, 0, sizeof(body));
+    /* A CSID-shaped nonzero value at body[20] (byte 0 = '@', exactly what the
+     * live VAX1 op-0d dump showed there) -- the old, wrong read site. */
+    body[20] = 0x40; body[21] = 0x00; body[22] = 0x11; body[23] = 0x00;
+    /* The real resource name at SCS_DLM_B_RESNAM (48), space-padded. */
+    const char *name = "VCC$vSYSDSK1";
+    memset(body + SCS_DLM_B_RESNAM, ' ', 31);
+    memcpy(body + SCS_DLM_B_RESNAM, name, strlen(name));
+
+    char out[32];
+    uint8_t nl = dlm_op0d_resname(body, out);
+    CHECK(nl == (uint8_t)strlen(name),
+          "dlm_op0d_resname must return the trimmed name length %zu, got %u",
+          strlen(name), (unsigned)nl);
+    CHECK(memcmp(out, name, strlen(name)) == 0,
+          "dlm_op0d_resname must read the name from body[48], not body[20]");
+
+    /* An empty body[48] (whatever sits at body[20]) is rejected -> the guard
+     * fires nothing. This is the exact condition the origin bug hit for all 177
+     * records: body[48] blank, so no false registration. */
+    memset(body + SCS_DLM_B_RESNAM, 0, 31);
+    memcpy(body + 20, "GARBAGE", 7);
+    CHECK(dlm_op0d_resname(body, out) == 0,
+          "dlm_op0d_resname must ignore body[20]; only body[48] holds the name");
+
+    /* A full-width 31-byte name is preserved (no 16-byte truncation). */
+    memset(body, 0, sizeof(body));
+    const char *longname = "ABCDEFGHIJKLMNOPQRSTUVWXYZ01234"; /* 31 chars */
+    memcpy(body + SCS_DLM_B_RESNAM, longname, 31);
+    nl = dlm_op0d_resname(body, out);
+    CHECK(nl == 31 && memcmp(out, longname, 31) == 0,
+          "dlm_op0d_resname must preserve a full 31-byte name, got len %u",
+          (unsigned)nl);
+}
+
 int main(void)
 {
     /* THE FAILURE STREAM, taken before anything can dup2() over fd 2. See
@@ -11022,6 +11068,8 @@ int main(void)
     test_poll_refresh_tick_drives_the_daemon_loop();
     /* vms-f61 (spec §4(O.21)): the readmission-map verdict classifier. */
     test_readmit_verdict_classifies_the_rejoin_frontier();
+    /* db20-b (vms-7e2): the op-0d resource-name offset -- body[48], not body[20]. */
+    test_dlm_op0d_resname_reads_body48();
 
     CHECK(peer_logical_offset > 0,
           "the peer-logical offset was never located -- the offset-dependent"

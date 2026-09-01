@@ -973,12 +973,13 @@ check_response_at "$IDX_PRIORITY_SET" 'NOPRIV'
 # SYSNAM/GRPNAM (bit positions 2/3, between CMEXEC and SETPRV) joined
 # VMS_PRV_M_ENFORCED in vms-5b7 (LNM$SYSTEM/LNM$GROUP privilege
 # enforcement); MOUNT (bit position 17, right after WORLD) joined it in
-# vms-651 (cmd_mount/cmd_dismount really gate on it) -- this literal is
-# DERIVED from that mask's current definition, not a number owned by this
-# test; update it again whenever VMS_PRV_M_ENFORCED (src/kernel/
-# vms_ioctl.h) changes.
-check_response 'SHOW SYMBOL IDENT_CURPRIV' 'IDENT_CURPRIV = "CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD,MOUNT"'
-check_response 'SHOW SYMBOL IDENT_AUTHPRIV' 'IDENT_AUTHPRIV = "CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD,MOUNT"'
+# vms-651 (cmd_mount/cmd_dismount really gate on it); PHY_IO (bit position
+# 22, after MOUNT) joined it in vms-7eb (#1009 -- the executive L2 datalink
+# gates opening the SCS socket on PHY_IO) -- this literal is DERIVED from
+# that mask's current definition, not a number owned by this test; update it
+# again whenever VMS_PRV_M_ENFORCED (src/kernel/vms_ioctl.h) changes.
+check_response 'SHOW SYMBOL IDENT_CURPRIV' 'IDENT_CURPRIV = "CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD,MOUNT,PHY_IO"'
+check_response 'SHOW SYMBOL IDENT_AUTHPRIV' 'IDENT_AUTHPRIV = "CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD,MOUNT,PHY_IO"'
 
 # SET PROCESS/PRIVILEGES IS NOW WIRED TO THE EXECUTIVE (vms-e5d7). It used to
 # be a HIDE stub that printed %OVMX-I-NOSETPRV and changed nothing; it now

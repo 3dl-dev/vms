@@ -18,6 +18,22 @@ target_link_libraries(test_dnet_link PRIVATE vmsdecnet_engine)
 target_compile_options(test_dnet_link PRIVATE -Werror)
 add_test(NAME vmsdecnet_link_unit COMMAND test_dnet_link)
 
+# rd vms-4d2, engine rung 3: the CTERM (Command Terminal) protocol behind
+# $ SET HOST. Proves (1) every CTERM message type round-trips encode->decode,
+# (2) a terminal + host session bind/negotiate/carry-I/O/unbind on raw PDUs, and
+# (3) two ENGINES carry a WHOLE $ SET HOST terminal session -- Bind, terminal-
+# characteristics, host screen output (Write), terminal keystrokes (Read Data) +
+# an out-of-band ^Y, and Unbind -- as real on-wire NSP data frames over a
+# socketpair, every CTERM payload byte-identical. SPEC-DERIVED (no oracle
+# specimen; register sec 4.7). Warning-clean under -Werror.
+add_executable(test_dnet_cterm test_dnet_cterm.c)
+target_link_libraries(test_dnet_cterm PRIVATE vmsdecnet_engine vmsdecnet_cterm)
+target_include_directories(test_dnet_cterm PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/libvms/include    # ovmx_identity.h (INV-1 banner SSOT)
+    ${CMAKE_SOURCE_DIR}/src/vmsfs/include)     # transitive header of ovmx_identity.h
+target_compile_options(test_dnet_cterm PRIVATE -Werror)
+add_test(NAME vmsdecnet_cterm_unit COMMAND test_dnet_cterm)
+
 # rd vms-b15, rung 3: routing adjacency state machine (hello cadence + listen
 # timer + up/down). Warning-clean under -Wall -Wextra -Werror.
 add_executable(test_dnet_adjacency test_dnet_adjacency.c)

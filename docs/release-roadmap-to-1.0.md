@@ -108,7 +108,7 @@ only our forks target.
 
 ## Live status — generated
 
-> Reconciled from rd (source of truth) **as of 2026-08-31** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
+> Reconciled from rd (source of truth) **as of 2026-09-01** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
 
 ### Milestone ladder
 

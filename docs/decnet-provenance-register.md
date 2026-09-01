@@ -362,6 +362,46 @@ benefit to this capture. The VAX oracle alone satisfies the done-condition (a VA
 confirmed running Phase IV); Alpha-side DECnet observation is deferred, tracked by this note, not
 a new item — pursue only if a future need specifically requires the 64-bit answer.
 
+### 4.7 CTERM (Command Terminal / `$ SET HOST`) — provenance (`vms-4d2`, rung 3)
+
+**Landed:** `src/vmsdecnet/cterm/dnet_cterm.{c,h}` — the CTERM terminal-service protocol behind
+`$ SET HOST 0::NODE`, the layered product that rides on an established NSP logical link
+(`nsp/dnet_link`, §4.6). It carries a full interactive terminal session: **Bind / Bind Accept /
+Unbind** (session setup), **Characteristics** (terminal type / width / page / mode-flag
+negotiation), **Start Read** + **Read Data** (input solicitation ↔ keystrokes up), **Write** +
+**Write Complete** (screen output down), and **Out-of-Band** (`^C`/`^Y` interrupts). A `terminal`
+(the SET HOST initiator, i.e. the slave terminal) and a `host` (the remote node running DCL)
+session FSM drive each other CLOSED → BINDING/BOUND → UNBOUND. The `$ SET HOST` Connect Initiate
+addresses the well-known **CTERM Session Control object 42** via a minimal SC connect message
+(`dnet_cterm_sc_connect_build`), whose access-control username field is the one specimen #3 (§4.6)
+observed carrying plaintext `SYSTEM`.
+
+**Honest oracle scope (Rule 8) — CTERM is ENTIRELY SPEC-DERIVED. There is NO oracle specimen for
+it.** The §4.6 lab capture recorded only Connect Initiate frames: VAX1's `SET HOST VAX2` never
+completed a logical link (VAX2's permanent database was unconfigured), so **no CTERM byte ever
+crossed the captured wire**. Therefore the message SET and their FUNCTION mirror the public DEC DNA
+Phase IV **Command Terminal (CTERM) Message Protocol Functional Specification**, but the specific
+numeric message-type codes and body field layouts are an **OVMX-assigned, self-consistent CTERM
+namespace** derived from that public description — LABELLED spec-derived / OVMX-assigned in the
+header, never presented as oracle-verified VMS-authentic bytes, and no specimen bytes fabricated.
+The well-known **object number 42** is a published DNA well-known object number (not oracle bytes).
+This is exactly the discipline §4.6 applied to the spec-derived CC/data/DI/DC choreography.
+
+**Proven (`tests/vmsdecnet/test_dnet_cterm.c`, also runnable as `DECNETD.EXE --set-host-selftest`):**
+(1) every CTERM message type round-trips encode→decode; (2) a terminal + host session
+bind/negotiate/carry-I/O/unbind on raw PDUs; (3) two **engines** carry a WHOLE `$ SET HOST` terminal
+session — link to object 42 → Bind/Accept → characteristics → host banner Write → terminal keystroke
+Read Data → an OOB `^Y` → Unbind → clean NSP link teardown — as real on-wire NSP data frames over a
+`socketpair(2)`, every CTERM payload round-tripping **byte-identical**. Proof is of internal
+protocol consistency + the layered-product path, NOT of wire-fidelity to VMS (no oracle to check
+against). When the **`vms-aac0` live bracket** captures a real CTERM session from the lab VAX, these
+layouts become oracle-checkable and any delta is a tracked fix.
+
+**Deferred to children of `vms-30e`:** wiring the CTERM **server** to a real login — an inbound Bind
+spawning a PTY + LOGINOUT/DCL and bridging it to the Write/Read-Data/OOB messages, the way
+`src/vmsssh/vmssshd.c` `forkpty()`s `vmsdcl --login` — and the live `$ SET HOST` vs a real lab
+VAX/Alpha (the `vms-aac0`-class bracket, a coordinated lab run).
+
 ---
 
 ## 5. Fallback provenance regime (if NO-GO)

@@ -57,6 +57,14 @@ kx()  { kubectl -n "$NS" exec "$POD" -- "$@"; }
 # Drive vax1's console via its input FIFO; read its console log from the volume.
 vsay() { kubectl -n "$NS" exec "$POD" -- sh -c "printf '%s\\r' '$1' > $L/vax1.log.in"; sleep "${2:-2}"; }
 vclean() { lj_clean "$HOSTL/vax1.log"; }
+# vsda(): take an SDA CSB snapshot (ANALYZE/SYSTEM -> SHOW CLUSTER -> EXIT) and echo
+# the cleaned console tail. SDA is the ORACLE that survives when the interactive DCL
+# SHOW CLUSTER WEDGES mid-transition (the exact failure the vax2 watch hit on the
+# BRK_NON->MEMBER flip). The CSB summary rows carry the true admitted-member flag.
+vsda() {
+    vsay 'ANALYZE/SYSTEM' 5; vsay 'SHOW CLUSTER' 8; vsay 'EXIT' 2
+    vclean
+}
 log() { echo "[$(date +%T)] $*"; }
 
 kubectl -n "$NS" get pod "$POD" >/dev/null 2>&1 || { echo "labjoin: FATAL -- no pod $POD in ns $NS" >&2; exit 2; }
@@ -164,10 +172,21 @@ for i in $(seq 1 "$DUR_POLL"); do
     sleep 15
     vsay "WRITE SYS\$OUTPUT \"CN_\"+F\$STRING(F\$GETSYI(\"CLUSTER_NODES\"))" 3
     n="$(vclean | lj_parse_cn)"
+    # SDA CSB is the ORACLE (survives DCL SHOW CLUSTER wedging mid-transition); DCL
+    # SHOW CLUSTER is the human-legible corroborator. Grade OVMXJ0 off the SDA CSB
+    # when it names the node, else the DCL table. VAX_SC carries BOTH for the verdict.
+    csb="$(vsda)"
     vsay 'SHOW CLUSTER' 6
     sc="$(vclean)"
-    st="$(lj_node_status "$sc" "$NODE_UP")"   # column-exact status, not a loose match
-    log "  t+$((i*15))s CLUSTER_NODES=${n:-?}  ${NODE_UP}-status=${st:-absent}"
+    if [ -n "$(lj_csb_status "$csb" "$NODE_UP")" ]; then
+        if lj_csb_is_member "$csb" "$NODE_UP"; then st="MEMBER"; else st="$(lj_csb_status "$csb" "$NODE_UP")"; fi
+        src=SDA
+    else
+        st="$(lj_node_status "$sc" "$NODE_UP")"; src=DCL
+    fi
+    sc="$csb
+$sc"
+    log "  t+$((i*15))s CLUSTER_NODES=${n:-?}  ${NODE_UP}-status=${st:-absent} ($src)"
     # Keep the LATEST snapshot that names the node -- the verdict grades the
     # SUSTAINED/final state, NEVER a transient early hit. The old code latched
     # joined=1 on the first line that merely contained MEMBER (a mis-parse of a
@@ -184,10 +203,12 @@ for i in $(seq 1 "$DUR_POLL"); do
     kill -0 "$NODEP" 2>/dev/null || { log "OVMX node driver exited"; break; }
 done
 
-# --- 8. Final authoritative snapshot of vax1's SHOW CLUSTER (grade the FINAL state) --
+# --- 8. Final authoritative snapshot: SDA CSB (oracle) + DCL, grade the FINAL state --
+csb="$(vsda)"
 vsay 'SHOW CLUSTER' 6
-last_sc="$(vclean)"
-[ -n "$(lj_node_status "$last_sc" "$NODE_UP")" ] && VAX_SC="$last_sc"
+last_sc="$csb
+$(vclean)"
+{ [ -n "$(lj_csb_status "$last_sc" "$NODE_UP")" ] || [ -n "$(lj_node_status "$last_sc" "$NODE_UP")" ]; } && VAX_SC="$last_sc"
 [ -z "$VAX_SC" ] && VAX_SC="$last_sc"
 
 # Wind down the node + capture.

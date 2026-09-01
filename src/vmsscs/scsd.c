@@ -7691,6 +7691,20 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                         gowait.tv_nsec = (long)JOIN_BARRIER_GO_DELAY_MS * 1000000L;
                         nanosleep(&gowait, NULL);
                         ps->barrier_go_pending = 0;
+                        /* vms-db20: originate the faithful SCS$DIRECTORY self-
+                         * registration to the coordinator ONCE per transition,
+                         * immediately before step 1 -- the one cat-0x02 op-0x0d a
+                         * real joiner emits (ref vax3-2to3 idx698), a null-LVB
+                         * directory record (INV-6 clear). This is the PRIMARY
+                         * step-1 path (the deferred poll-loop block below is only a
+                         * belt-and-braces fallback and does not run once this has
+                         * cleared barrier_go_pending); the one-shot dlm_selfreg_sent
+                         * (reset at the op-0x09 epoch latch) keeps it to one emit. */
+                        if (!ps->dlm_selfreg_sent) {
+                            ps->dlm_selfreg_sent = 1;
+                            cm_send_dlm_selfreg(rx->sock, (int)rx->ifindex, ps,
+                                                rx->our_hw_mac, rx->our_src_logical);
+                        }
                         cm_send_barrier_step(rx->sock, (int)rx->ifindex, ps, rx->our_hw_mac,
                                              rx->our_src_logical, ps->barrier_step);
                     } else if (tag == (uint16_t)((SCS_MEMBER_CLASS_DEPART << 8) |

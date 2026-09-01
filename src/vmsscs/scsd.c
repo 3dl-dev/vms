@@ -6490,6 +6490,52 @@ static int cm_send_ack(int sock, int ifindex, struct peer_state *ps,
     return 0;
 }
 
+/*
+ * scsd_ack_flush_tick - vms-2f3: flush every peer's PENDING cat-0x04 ack from the
+ * MAIN-LOOP clock, so a burst's cumulative ack is sent PROMPTLY instead of
+ * waiting for the next inbound frame.
+ *
+ * THE BUG THIS FIXES (grounded on run milestone-1022, member VC 0x31300001). The
+ * only non-op-0x06 ack-flush site lives inside scsd_handle_frame (the "residual
+ * cat-0x04 ack backlog" flush) and therefore only fires when the NEXT frame from
+ * that peer arrives; the timer section had no ack flush at all. During the
+ * select->member config/commit stage the VAX sends 190-byte config/status bursts
+ * with ~2.5-3 s GAPS between them, so a burst's last frame's cumulative ack sat
+ * unsent for the whole gap -- OVMX acked ~4 s late (SCSD-W-STRAYACK: "arrived
+ * 3797 ms ago -- the reference acks within ~1 ms"). The VAX, not acked within its
+ * retransmit window, resends (msgtype 0x7b) and the op-0x02 -> op-0x04 -> op-0x03
+ * commit never closes -> the selected member VC starves -> long_break -> the VAX
+ * never promotes selected->member (measured: OVMXJ0 reaches selected,status_rcvd
+ * then breaks, CLUSTER_NODES stays 2).
+ *
+ * Because the main loop runs the timer section at the TOP of every iteration,
+ * BEFORE the blocking recv, this tick flushes the last frame's pending ack ~one
+ * iteration (ms) after it was handled -- matching the reference's prompt (~1 ms),
+ * cumulative, one-ack-per-burst cadence. It is idempotent: cm_send_ack sets
+ * sysap_acked = sysap_recv, so it fires at most once per burst (nothing new to
+ * ack afterwards -- it does NOT beacon acks into a quiet gap). Same per-peer guard
+ * as the in-handler flush (do_connect, an open CM conid, a real backlog, not a
+ * rejoin standalone hold, and the SCS_CM_ACK_FLUSH_MS batching floor).
+ */
+static void scsd_ack_flush_tick(struct scsd_rx *rx, long now_ms)
+{
+    if (rx == NULL || rx->peers == NULL || !rx->do_connect) {
+        return;
+    }
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        struct peer_state *ps = &rx->peers[i];
+        if (ps->pb == NULL || ps->cm_local_conid == 0) {
+            continue;
+        }
+        if (ps->sysap_recv != ps->sysap_acked &&
+            !rejoin_hold_standalone_ack(ps) &&
+            (now_ms - (long)ps->cm_last_ack_ms) >= (long)SCS_CM_ACK_FLUSH_MS) {
+            cm_send_ack(rx->sock, (int)rx->ifindex, ps, rx->our_hw_mac,
+                        rx->our_src_logical);
+        }
+    }
+}
+
 /* vms-a58 RULING -- WHAT THIS FUNCTION IS HALF OF, AND WHAT IS MISSING.
  *
  * The "op8" this answers is SCS message type 8 at SCA [46:48]. It is now
@@ -16356,6 +16402,14 @@ int main(int argc, char **argv)
          * instead of a hardcoded NOTMEMBER. See docs/design-cluster-node.md
          * §3.1 and docs/design-cluster-membership-executive.md (vms-551). */
         scsd_publish_membership(&rx, monotonic_ms());
+
+        /* --- vms-2f3: flush any peer's PENDING cat-0x04 ack now, from the loop
+         * clock, so a member-VC config/commit burst's cumulative ack goes out
+         * PROMPTLY (this iteration, before the next blocking recv) instead of
+         * waiting ~2.5-3 s for the next inbound frame -- the late ack that
+         * stalled the op-0x02/0x04/0x03 commit and left OVMXJ0 selected-not-
+         * member. See scsd_ack_flush_tick(). */
+        scsd_ack_flush_tick(&rx, (long)monotonic_ms());
 
         /* --- DISK DISCOVERY HAS EXACTLY ONE TRIGGER, AND THIS CALL IS IT.
          * vms-ebb moved the body into scsd_diskrun_ungate_tick() so a test can

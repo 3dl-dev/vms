@@ -101,7 +101,11 @@ extern "C" {
  * trademark-ceiling: OVMX is OpenVMS-COMPATIBLE, it never claims to BE OpenVMS).
  * GROUNDED (vms-d94, live on VAX 7.3): the field is display-only -- the member
  * does NOT validate it for cluster admission (OVMX still reaches SHOW CLUSTER
- * status NEW advertising this). Must be exactly SCS_START_NODENAME_LEN bytes. */
+ * status NEW advertising this). Must be exactly SCS_START_NODENAME_LEN bytes.
+ * SSOT: this is the gate-exempt wire surface, so it holds its own 8-byte
+ * literal, but it MUST stay byte-identical to OVMX_CLUSTER_SW_VERSION in
+ * src/libvms/include/ovmx_identity.h (the identity SSOT the SHOW CLUSTER
+ * software column reads). Change the version in BOTH places. */
 #define SCS_START_SW_VERSION    "VMX V0.1"
 
 /*

@@ -9196,6 +9196,70 @@ static void test_matching_disconnect_rsp_closes_the_connection(void)
 }
 
 /*
+ * vms-2f3: a received DISCONNECT_RSP arms a SEQUENCED recv_ack obligation, and a
+ * cat-0x04 on the CM VC clears it. OVMX otherwise answers a peer's teardown only
+ * with a 0x48 credit-return (send_seq==0), which VMS does NOT count as the ack for
+ * the sequenced DISCONNECT_RSP -- so the peer retransmits it every ~3s (SDA
+ * "Unacked messages 1") and the cluster transition never commits. Confirmed on the
+ * lab-2 wire: OVMX went sequenced-silent to VAX1 after the teardown (0 sequenced
+ * frames +20->110s) while a real joiner's ongoing sequenced traffic covers it.
+ * This is that fix as a test: the DISC_RSP arms the obligation on the VC recv_seq,
+ * and any cat-0x04 (which carries recv_ack=vc.seq.recv_seq) satisfies + clears it.
+ */
+static void test_disconnect_rsp_arms_and_a_cat04_clears_the_sequenced_ack(void)
+{
+    struct rxworld r;
+    struct scs_cdt *cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        return;
+    }
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+    if (scs_conn_state_of(cdt) != SCS_CONN_DISC_MATCH) {
+        return;
+    }
+    struct peer_state *rps =
+        peer_find_or_add(&r.w.cfg, &r.w.pdt, r.w.peers, ovmx760_member_mac);
+    CHECK(rps != NULL, "peer slot for the answering peer");
+    if (rps == NULL) {
+        return;
+    }
+    /* No obligation yet, and no SYSAP ack owed -- so only the DISC_RSP path can
+     * arm the sequenced-ack obligation. */
+    rps->vc_owe_seq_ack = 0;
+    rps->sysap_acked = rps->sysap_recv;
+
+    rx_feed(&r, cap_disc_rsp_to_ovmx, sizeof(cap_disc_rsp_to_ovmx));
+
+    /* ARM (scsd_disconnect_dialogue): the received DISCONNECT_RSP advanced the VC
+     * recv_seq and armed the sequenced-ack obligation. A 0x48 credit-return alone
+     * does not clear VMS's unacked for a sequenced frame; a piggybacked recv_ack
+     * on a sequenced frame does. */
+    CHECK(rps->vc_owe_seq_ack == 1,
+          "a received DISCONNECT_RSP did not arm the sequenced-ack obligation "
+          "(vc_owe_seq_ack=%d) -- OVMX would answer only with an uncounted 0x48 "
+          "credit and the peer would retransmit forever", rps->vc_owe_seq_ack);
+    CHECK(rps->vc_owe_seq_ack_seq == rps->vc.seq.recv_seq,
+          "owed-ack seq %u != advanced VC recv_seq %u",
+          rps->vc_owe_seq_ack_seq, rps->vc.seq.recv_seq);
+
+    /* FIRE + DISARM: a cat-0x04 on the CM VC (what scsd_ack_flush_tick's new branch
+     * emits) carries recv_ack=vc.seq.recv_seq (>= the DISCONNECT_RSP send_seq) and
+     * clears the obligation, so it fires at most once per teardown. */
+    rps->cm_local_conid = 0x08000002u;  /* CM VC up, as when a teardown blocks the join */
+    rps->cm_remote_conid = 0xD6000002u;
+    long acks_before = rps->cm_acks;
+    (void)cm_send_ack(r.rx.sock, r.rx.ifindex, rps, r.rx.our_hw_mac,
+                      r.rx.our_src_logical);
+    CHECK(rps->cm_acks == acks_before + 1,
+          "the sequenced cat-0x04 ack did not go out (cm_acks %ld -> %ld)",
+          acks_before, rps->cm_acks);
+    CHECK(rps->vc_owe_seq_ack == 0,
+          "the cat-0x04 did not clear the sequenced-ack obligation "
+          "(vc_owe_seq_ack=%d) -- it would re-fire every tick",
+          rps->vc_owe_seq_ack);
+}
+
+/*
  * (3) THE p. 2-27 SIMULTANEOUS CASE. "When each node receives the
  * DISCONNECT_REQ from the other node, it replies with a DISCONNECT_RSP. It
  * then transitions ... to DISCONNECT MATCH since it has seen a matching
@@ -10999,6 +11063,7 @@ int main(void)
      * OLD gate would have refused outright. */
     test_control_dispatch_survives_a_frame_the_legacy_marker_would_have_refused();
     test_matching_disconnect_rsp_closes_the_connection();
+    test_disconnect_rsp_arms_and_a_cat04_clears_the_sequenced_ack();
     test_simultaneous_disconnect_sends_no_second_request();
     test_shutdown_disconnects_every_open_connection();
     test_clean_shutdown_kill_switch_through_the_daemon();

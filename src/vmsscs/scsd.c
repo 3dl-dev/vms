@@ -1096,6 +1096,16 @@ struct peer_state {
     uint16_t sysap_acked;          /* vms-760: highest peer send-msg# we have cat-0x04 acked */
     long     cm_acks;              /* cat-0x04 acks emitted to this peer */
     long     cm_last_ack_ms;       /* monotonic_ms() of our last cat-0x04 ack */
+    /* vms-2f3: a peer's DISCONNECT_RSP advanced our VC recv_seq while OVMX is
+     * otherwise sequenced-silent to that peer. A standalone 0x48 credit-return
+     * (send_seq==0) does NOT clear VMS's "unacked" for a sequenced control frame;
+     * only a recv_ack piggybacked on a SEQUENCED frame (send_seq!=0) does. So OVMX
+     * owes the peer one sequenced cat-0x04 ack, else the peer retransmits its
+     * DISCONNECT_RSP every ~3s forever (SDA "Unacked messages 1") and the cluster
+     * transition never commits. Armed on the received DISCONNECT_RSP, fired by
+     * scsd_ack_flush_tick on the still-open CM VC, disarmed by any cat-0x04. */
+    int      vc_owe_seq_ack;
+    uint16_t vc_owe_seq_ack_seq;   /* the VC recv_seq the owed ack must cover (for the log line) */
     /* vms-760: cluster-wide state-transition barrier (spec 4p). */
     uint32_t barrier_epoch;        /* body[12:16] latched from the coordinator's op 0x09 */
     uint8_t  xition_class;         /* vms-e4b: body[17] of the transition-open in
@@ -5207,6 +5217,15 @@ static int scsd_disconnect_dialogue(int sock, int ifindex, struct peer_state *ps
         disc_req_recv++;
     } else {
         disc_rsp_recv++;
+        /* vms-2f3: a received DISCONNECT_RSP has already advanced ps->vc.seq.recv_seq
+         * (the credit block runs before this control dispatch). OVMX will otherwise
+         * answer only with a 0x48 credit-return, which VMS does NOT count as the ack
+         * for this sequenced frame -- so arm a SEQUENCED cat-0x04 recv_ack on the
+         * still-open CM VC (same per-peer VC) to cover it. Without this the peer
+         * retransmits the DISCONNECT_RSP every ~3s (Unacked=1) and blocks the
+         * transition commit; a real joiner's ongoing sequenced traffic covers it. */
+        ps->vc_owe_seq_ack = 1;
+        ps->vc_owe_seq_ack_seq = ps->vc.seq.recv_seq;
     }
 
     /* Step 1. Answering a peer's DISCONNECT_REQ is an answer, not an
@@ -6447,6 +6466,12 @@ static int cm_send_ack(int sock, int ifindex, struct peer_state *ps,
         ps->sysap_acked = ps->sysap_recv;
         ps->cm_last_ack_ms = monotonic_ms();
         ps->cm_acks++;
+        /* vms-2f3: ANY cat-0x04 carries recv_ack=vc.seq.recv_seq, which satisfies a
+         * pending DISCONNECT_RSP sequenced-ack obligation -- so if an organic ack
+         * (op-0x06 burst etc.) already fired, the standalone disc-ack never emits.
+         * At most one extra cat-0x04 per teardown, and none when other sequenced
+         * traffic exists. */
+        ps->vc_owe_seq_ack = 0;
         /* vms-584 STRAY-ACK INSTRUMENTATION. A 26-capture census of the
          * reference gives a rule we do NOT currently match:
          *
@@ -6530,6 +6555,26 @@ static void scsd_ack_flush_tick(struct scsd_rx *rx, long now_ms)
         if (ps->sysap_recv != ps->sysap_acked &&
             !rejoin_hold_standalone_ack(ps) &&
             (now_ms - (long)ps->cm_last_ack_ms) >= (long)SCS_CM_ACK_FLUSH_MS) {
+            cm_send_ack(rx->sock, (int)rx->ifindex, ps, rx->our_hw_mac,
+                        rx->our_src_logical);
+        } else if (ps->vc_owe_seq_ack) {
+            /* vms-2f3: OVMX owes this peer a SEQUENCED recv_ack for a received
+             * DISCONNECT_RSP (see peer_state.vc_owe_seq_ack). Fire PROMPTLY (no
+             * flush timer) so the peer's ~3s retransmit loop never even starts.
+             * cm_send_ack emits a cat-0x04 carrying recv_ack = vc.seq.recv_seq
+             * (>= the DISCONNECT_RSP send_seq) on the still-open CM VC -- the same
+             * per-peer VC the directory teardown rode -- and disarms the flag on
+             * success. NARROW BY CONSTRUCTION: armed ONLY by a DISCONNECT_RSP,
+             * keyed on the VC recv_seq, never on ps->sysap_recv -- so it is a
+             * different axis from the op-0x06/join ack cadence above and cannot
+             * perturb the currently-working path (STRAYACK census, cm_send_ack). */
+            log_ts(stdout);
+            printf(" SCSD-I-DISCSEQACK, owe a sequenced recv_ack for a peer's"
+                   " DISCONNECT_RSP (VC recv_seq=%u) -- emitting a cat-0x04 on the"
+                   " CM VC so VMS counts it, else the peer retransmits +"
+                   " Unacked=1 blocks the transition commit (vms-2f3)\n",
+                   (unsigned)ps->vc_owe_seq_ack_seq);
+            fflush(stdout);
             cm_send_ack(rx->sock, (int)rx->ifindex, ps, rx->our_hw_mac,
                         rx->our_src_logical);
         }

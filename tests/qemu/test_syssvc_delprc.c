@@ -65,6 +65,7 @@ static int fail = 0;
 #define TARGET_NAME     "OVMX1A8TGT1"   /* P1: stopped by name */
 #define TARGET2_NAME    "OVMX1A8TGT2"   /* P2: stopped by /IDENTIFICATION */
 #define TARGET3_NAME    "OVMX1A8TGT3"   /* P3: privless refusal target */
+#define TARGET_SIG_NAME "OVMX904SIG"    /* P6: suspnd/resume/forcex by VMS pid */
 #define ABSENT_NAME     "OVMX1A8NONE"   /* never created */
 
 static struct dsc$descriptor_s str_dsc(const char *s)
@@ -100,6 +101,40 @@ static uint32_t linux_pid_of(uint32_t vms_pid)
     if (!(vms_kif_getjpi_pid(vms_pid, &info) & 1))
         return 0;
     return info.linux_pid;
+}
+
+/* proc_state - the single state character from /proc/<lpid>/stat. The comm
+ * field is parenthesized and may itself contain spaces/parens, so the state
+ * is the character two past the LAST ')'. Returns 0 if it cannot be read. */
+static char proc_state(uint32_t lpid)
+{
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%u/stat", (unsigned)lpid);
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
+    char buf[512];
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return 0;
+    buf[n] = '\0';
+    char *rp = strrchr(buf, ')');
+    if (!rp || !rp[1] || !rp[2]) return 0;
+    return rp[2];               /* ") <state>" */
+}
+
+/* wait_proc_stopped - a bounded poll (OBSERVED condition, never a fixed sleep,
+ * matching wait_for_exec above) for the target's Linux task to reach ('T')
+ * or leave (running/sleeping) the stopped state after a SIGSTOP/SIGCONT is
+ * delivered asynchronously. Returns 0 on success, -1 on timeout. */
+static int wait_proc_stopped(uint32_t lpid, int want_stopped)
+{
+    for (int i = 0; i < 400; i++) {          /* up to ~10s at 25ms */
+        char s = proc_state(lpid);
+        int stopped = (s == 'T' || s == 't');
+        if (stopped == want_stopped) return 0;
+        usleep(25000);
+    }
+    return -1;
 }
 
 static int comm_of(uint32_t pid, char *out, size_t outsz)
@@ -379,6 +414,59 @@ int main(void)
         CHECK(st == SS$_NONEXPR,
               "P4: sys$delprc(pid) on a nonexistent process returns "
               "SS$_NONEXPR");
+    }
+
+    /* ---- P5 (vms-904): sys$forcex/suspnd/resume on a NONEXISTENT VMS pid
+     * draw the same authentic SS$_NONEXPR. They used to cast the VMS pid
+     * straight into kill() and return a fake SS$_NORMAL after signalling an
+     * unrelated Linux process (or nothing). ---- */
+    {
+        uint32_t bogus_pid = 0xEFFFFFFFu;
+        uint32_t st = sys$forcex(&bogus_pid, NULL, 0);
+        CHECK(st == SS$_NONEXPR,
+              "P5: sys$forcex(nonexistent VMS pid) returns SS$_NONEXPR, not a "
+              "fake SS$_NORMAL from a mis-cast kill() (vms-904)");
+        st = sys$suspnd(&bogus_pid, NULL);
+        CHECK(st == SS$_NONEXPR,
+              "P5: sys$suspnd(nonexistent VMS pid) returns SS$_NONEXPR (vms-904)");
+        st = sys$resume(&bogus_pid, NULL);
+        CHECK(st == SS$_NONEXPR,
+              "P5: sys$resume(nonexistent VMS pid) returns SS$_NONEXPR (vms-904)");
+    }
+
+    /* ---- P6 (vms-904): sys$suspnd/resume/forcex BY VMS PID signal the
+     * target's REAL Linux pid (executive-resolved), not the process at the
+     * numeric value of the VMS pid. VMS pid != Linux pid, so the old mis-cast
+     * signalled a different process (or nothing) and lied SS$_NORMAL. ---- */
+    {
+        uint32_t vms_pid = 0, lpid = 0;
+        uint32_t cst = spawn_named(TARGET_SIG_NAME, &vms_pid);
+        CHECK(cst & 1, "P6: $CREPRC creates the signal target");
+        lpid = linux_pid_of(vms_pid);
+        CHECK(lpid != 0, "P6: the target resolves to a real Linux pid");
+        CHECK(wait_for_exec(lpid, "sh") == 0,
+              "P6: the target reached its sh image");
+        CHECK((uint32_t)lpid != vms_pid,
+              "P6: VMS pid != Linux pid -- the numeric value the old mis-cast "
+              "would have signalled is a DIFFERENT process");
+
+        uint32_t sst = sys$suspnd(&vms_pid, NULL);
+        CHECK(sst == SS$_NORMAL, "P6: sys$suspnd(child VMS pid) returns SS$_NORMAL");
+        CHECK(wait_proc_stopped(lpid, 1) == 0,
+              "P6: the child's REAL Linux process is STOPPED -- SIGSTOP hit the "
+              "executive-resolved pid, not the mis-cast VMS-pid value");
+
+        uint32_t rst = sys$resume(&vms_pid, NULL);
+        CHECK(rst == SS$_NORMAL, "P6: sys$resume(child VMS pid) returns SS$_NORMAL");
+        CHECK(wait_proc_stopped(lpid, 0) == 0,
+              "P6: the child's REAL Linux process RESUMED -- SIGCONT hit the "
+              "resolved pid");
+
+        uint32_t fst = sys$forcex(&vms_pid, NULL, 0);
+        CHECK(fst == SS$_NORMAL, "P6: sys$forcex(child VMS pid) returns SS$_NORMAL");
+
+        kill((pid_t)lpid, SIGKILL);
+        reap(lpid);
     }
 
     printf("=== test_syssvc_delprc: %d passed, %d failed ===\n", pass, fail);

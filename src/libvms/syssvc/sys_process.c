@@ -71,8 +71,17 @@
  *     pcb->exit_handlers[] in the per-process PCB, then _exit()s.
  * OVMX-USERSPACE: sys$dclexh (vms-pt1) -- appends to that same per-process
  *     array; no executive records that the process has an exit handler.
- * OVMX-USERSPACE: sys$forcex (vms-pt1) -- with no pidadr it degenerates to
- *     sys$exit on the caller; otherwise kill() by Linux pid. prcnam discarded.
+ * OVMX-PARTIAL: sys$forcex (vms-pt1) -- exec: with no pidadr/prcnam it
+ *     degenerates to sys$exit on the caller; otherwise the target is RESOLVED in
+ *     the executive (by prcnam or by VMS pid, the same way sys$delprc resolves),
+ *     authorized (GROUP/WORLD for another process, else SS$_NOPRIV), and a target
+ *     the executive does not carry is SS$_NONEXPR. No longer a raw kill() on a
+ *     VMS pid mis-cast as a Linux pid (vms-904).
+ * OVMX-LOCAL: sys$forcex -- the forced exit itself is still a signal (SIGUSR1)
+ *     to the resolved Linux pid; OVMX has no executive-side force-exit primitive
+ *     of its own, so the signal is the mechanism, same as sys$delprc's SIGTERM.
+ *     What changed is that this now signals the process the EXECUTIVE named, not
+ *     whatever Linux pid number a caller's argument happened to be.
  * OVMX-PARTIAL: sys$delprc (vms-1a8) -- exec: the target is now RESOLVED in
  *     the executive, by prcnam (within the caller's UIC group) or by VMS
  *     pid (any group, gated by WORLD -- see sys$delprc's own comment), the
@@ -103,9 +112,22 @@
  *     process before the call, and $WAKE by process NAME is not resolved (prcnam
  *     discarded, redirecting a named target to self); those are not the
  *     executive's.
- * OVMX-USERSPACE: sys$suspnd (vms-pt1) -- kill(SIGSTOP), same shape.
- * OVMX-USERSPACE: sys$suspend (vms-pt1) -- tail-calls sys$suspnd.
- * OVMX-USERSPACE: sys$resume (vms-pt1) -- kill(SIGCONT), same shape.
+ * OVMX-PARTIAL: sys$suspnd (vms-pt1) -- exec: the target is RESOLVED in the
+ *     executive (prcnam / VMS pid / self) and authorized (GROUP/WORLD for another
+ *     process) the same way sys$delprc and sys$forcex resolve; SS$_NONEXPR for a
+ *     process the executive does not carry (vms-904).
+ * OVMX-LOCAL: sys$suspnd -- SIGSTOP is delivered to the resolved Linux pid; the
+ *     signal is the suspend mechanism, same as sys$delprc's SIGTERM, now aimed at
+ *     the process the executive named rather than a mis-cast VMS pid.
+ * OVMX-PARTIAL: sys$suspend (vms-pt1) -- exec: a pure backwards-compat alias
+ *     that tail-calls sys$suspnd, so the executive resolution + authorization of
+ *     the target are sys$suspnd's (vms-904).
+ * OVMX-LOCAL: sys$suspend -- the SIGSTOP delivery to the resolved Linux pid is
+ *     sys$suspnd's too; both halves are inherited from sys$suspnd.
+ * OVMX-PARTIAL: sys$resume (vms-pt1) -- exec: same executive resolution +
+ *     authorization as sys$suspnd; SS$_NONEXPR for an absent target (vms-904).
+ * OVMX-LOCAL: sys$resume -- SIGCONT to the resolved Linux pid, same shape as
+ *     sys$suspnd's SIGSTOP.
  * OVMX-USERSPACE: sys$setpri (vms-pt1) -- getpriority/setpriority on the
  *     CALLING process; pidadr as well as prcnam is discarded, so it cannot
  *     change any other process's priority however it is invoked.
@@ -1299,6 +1321,57 @@ uint32_t sys$dclexh(void *desblk) {
 }
 
 /*
+ * signal_target_process - resolve a VMS process target the executive way (by
+ * name, by VMS pid, or self), authorize a cross-process signal the way
+ * sys$delprc does, and deliver `sig` to the target's REAL Linux pid.
+ *
+ * vms-904: sys$forcex/suspnd/resume used to cast their pidadr (a VMS pid)
+ * straight to a pid_t and kill() it -- so a VMS pid, which is NOT the target's
+ * Linux pid, signalled an unrelated Linux process (or nothing) and the service
+ * still returned SS$_NORMAL. This routes them through the SAME executive
+ * PID<->process map sys$delprc and $GETJPI use: no such process -> the honest
+ * SS$_NONEXPR (never a raw kill() on a mis-cast pid); self is always permitted;
+ * a different process needs WORLD (any group) or GROUP|WORLD (same group),
+ * matching sys$delprc and OpenVMS's $FORCEX/$SUSPND/$RESUME privilege model.
+ */
+static uint32_t signal_target_process(const uint32_t *pidadr,
+                                      const struct dsc$descriptor_s *prcnam,
+                                      int sig) {
+    struct vms_procinfo target, self_info;
+    uint32_t status;
+
+    if (prcnam && prcnam->dsc$a_pointer && prcnam->dsc$w_length > 0) {
+        char key[VMS_PRCNAM_XFER];
+        dsc$strncpy(key, prcnam, sizeof(key));
+        status = vms_kif_getjpi_prcnam(key, &target);
+    } else if (pidadr && *pidadr != 0) {
+        status = vms_kif_getjpi_pid(*pidadr, &target);
+    } else {
+        status = vms_kif_getjpi_self(&target);
+    }
+    if (!(status & 1))
+        return status;
+
+    status = vms_kif_getjpi_self(&self_info);
+    if (!(status & 1))
+        return status;
+
+    if (target.vms_pid != self_info.vms_pid) {
+        int same_group = ((target.uic >> 16) == (self_info.uic >> 16));
+        uint64_t authorized = self_info.cur_privs &
+            (same_group ? (PRV$M_GROUP | PRV$M_WORLD) : PRV$M_WORLD);
+        if (!authorized)
+            return SS$_NOPRIV;
+    }
+
+    /* A race where the target exits between resolution and this kill() is
+     * reported the way VMS reports "not there any more": SS$_NONEXPR. */
+    if (kill((pid_t)target.linux_pid, sig) < 0)
+        return SS$_NONEXPR;
+    return SS$_NORMAL;
+}
+
+/*
  * sys$forcex - Force image exit on another process.
  *
  * Sends SIGUSR1 to the target process to force it to exit.
@@ -1308,23 +1381,13 @@ uint32_t sys$dclexh(void *desblk) {
 uint32_t sys$forcex(const uint32_t *pidadr,
                     const struct dsc$descriptor_s *prcnam,
                     uint32_t code) {
-    (void)prcnam;
-
     /* If no target specified, force exit on current process */
     if (!pidadr && !prcnam) {
         return sys$exit(code);
     }
 
-    pid_t pid;
-    if (pidadr) {
-        pid = (pid_t)*pidadr;
-    } else {
-        pid = getpid();
-    }
-
-    /* Send SIGUSR1 to force the target process to exit */
-    if (kill(pid, SIGUSR1) < 0) return SS$_NONEXPR;
-    return SS$_NORMAL;
+    /* Force the RESOLVED target's real Linux pid, not a mis-cast VMS pid. */
+    return signal_target_process(pidadr, prcnam, SIGUSR1);
 }
 
 /*
@@ -1338,17 +1401,9 @@ uint32_t sys$forcex(const uint32_t *pidadr,
  */
 uint32_t sys$suspnd(const uint32_t *pidadr,
                     const struct dsc$descriptor_s *prcnam) {
-    (void)prcnam;
-
-    pid_t pid;
-    if (pidadr) {
-        pid = (pid_t)*pidadr;
-    } else {
-        pid = getpid();
-    }
-
-    if (kill(pid, SIGSTOP) < 0) return SS$_NONEXPR;
-    return SS$_NORMAL;
+    /* Suspend the RESOLVED target's real Linux pid, not a mis-cast VMS pid
+     * (vms-904); no pidadr/prcnam resolves to self. */
+    return signal_target_process(pidadr, prcnam, SIGSTOP);
 }
 
 /*
@@ -1369,17 +1424,9 @@ uint32_t sys$suspend(const uint32_t *pidadr,
  */
 uint32_t sys$resume(const uint32_t *pidadr,
                     const struct dsc$descriptor_s *prcnam) {
-    (void)prcnam;
-
-    pid_t pid;
-    if (pidadr) {
-        pid = (pid_t)*pidadr;
-    } else {
-        pid = getpid();
-    }
-
-    if (kill(pid, SIGCONT) < 0) return SS$_NONEXPR;
-    return SS$_NORMAL;
+    /* Resume the RESOLVED target's real Linux pid, not a mis-cast VMS pid
+     * (vms-904); no pidadr/prcnam resolves to self. */
+    return signal_target_process(pidadr, prcnam, SIGCONT);
 }
 
 /*

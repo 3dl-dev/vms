@@ -112,20 +112,28 @@ int opcom_kmsg_classify(int pri, const char *text, char *out, size_t outsz);
 void opcom_kmsg_start(void);
 
 /*
- * opcom_kmsg_drain_ringbuffer - one-shot replay of the kernel ring buffer's
- * kmsg records through opcom_kmsg_classify(), handing every routed line (as one
- * stream-LF record's text, no trailing newline) to `emit`.
+ * opcom_kmsg_seed_operator_log - one-shot replay of the bridge's durable seed
+ * spool (every routed kmsg record since boot) to `emit`, one classified record
+ * per call with no trailing newline.
  *
  * This is how the genuine on-volume SYS$MANAGER:OPERATOR.LOG (Files-11 ODS-2,
  * over the ACP) is seeded with the boot-time vms.ko/vmsfs.ko events post atomic
  * flip (vms-aac, epic vms-208). PID 1 (STARTUP.EXE) is static and carries no
  * RMS, so it cannot write the ACP log itself; PROVISION.EXE -- which links RMS
  * and runs AFTER the SYS$DISK $MOUNT -- calls this with an `emit` that does
- * rms_textfile_append_line(SYS$MANAGER:OPERATOR.LOG, line). Called then, every
- * boot record is durably buffered and the volume is mounted, so the replay is
- * race-free. Best-effort: emits nothing if /dev/kmsg cannot be opened; `emit`
- * may be called zero or many times.
+ * rms_textfile_append_line(SYS$MANAGER:OPERATOR.LOG, line).
+ *
+ * The seed source is the append-only spool, not the kernel ring buffer: the ring
+ * is fixed-size and can evict early boot records before provision runs (the
+ * vms-98c2 flake), while the spool never wraps -- so no routed record is lost
+ * between boot and provision and the seed is deterministic. Best-effort: emits
+ * nothing if the spool cannot be opened; `emit` may be called zero or many times.
+ *
+ * opcom_kmsg_seed_operator_log_from takes the spool path explicitly so the seed
+ * logic is unit-testable against a temp file.
  */
-void opcom_kmsg_drain_ringbuffer(void (*emit)(const char *line));
+void opcom_kmsg_seed_operator_log(void (*emit)(const char *line));
+void opcom_kmsg_seed_operator_log_from(const char *path,
+                                       void (*emit)(const char *line));
 
 #endif /* OVMX_OPCOM_KMSG_H */

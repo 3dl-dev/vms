@@ -435,17 +435,15 @@ fi
 
 # --- 6. THE /dev/kmsg BRIDGE'S LINES ACTUALLY LAND IN OPERATOR.LOG
 # (vms-32a, round 3) -- the positive half of "console is silent, but the
-# information is not lost." OPERATOR.LOG accumulates from the start of
-# boot (opened "a"), so this same TYPE dump (OPLOG_SEG, above) also carries
-# whatever the bridge wrote minutes earlier during bare_metal_init() --
-# MEASURED reliably present across repeated manual boots, not assumed:
-# vms.ko's device-table/identity/logical-name/mailbox events and vmsfs.ko's
-# own mount events. (The very first one or two records emitted in the brief
-# window before vmsfs's path resolution comes up can land in the /tmp
-# fallback instead -- same disclosed timing edge sys$sndopr's own writer
-# has always had, see sys_operator.c -- so this checks the idents observed
-# reliably present, not literally every one of the ~10 vms.ko/vmsfs.ko
-# lines a boot emits.)
+# information is not lost." The bridge's reader thread captures every routed
+# vms.ko/vmsfs.ko event to a durable append-only seed spool from the start of
+# boot, and PROVISION.EXE seeds the on-volume OPERATOR.LOG from that spool
+# (opcom_kmsg_seed_operator_log). The spool never wraps, so this is
+# DETERMINISTIC -- every routed record is present in this TYPE dump (OPLOG_SEG,
+# above), not "usually present". Before vms-98c2 the log was seeded by re-reading
+# the fixed-size kernel ring buffer, which could evict early SYSID/LNM/MBX
+# records before provision ran (worse under a slow CI boot), so these lines went
+# intermittently missing -- that flake is what the seed-from-spool fix removed.
 for MUST_HAVE in '^%OVMX-I-SYSID, ' '^%OVMX-I-LNM, ' '^%OVMX-I-MBX, ' \
                   '^%OVMX-I-VMSFS, '; do
     if printf '%s\n' "$OPLOG_SEG" | grep -qE "$MUST_HAVE"; then

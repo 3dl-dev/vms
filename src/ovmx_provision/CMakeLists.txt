@@ -26,8 +26,8 @@ endif()
 
 # vms-aac: force the RMS record services (sys$open/$create/$put/...) into
 # PROVISION.EXE's static link closure so rms_textfile.c's weak seam binds and
-# opcom_kmsg_drain_ringbuffer() can $CREATE/$PUT SYS$MANAGER:OPERATOR.LOG over
-# the ACP. Linux only -- opcom_kmsg.c (and the drain) compile in only there.
+# opcom_kmsg_seed_operator_log() can $CREATE/$PUT SYS$MANAGER:OPERATOR.LOG over
+# the ACP. Linux only -- opcom_kmsg.c (and the seed) compile in only there.
 if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
     set(OVMX_PROVISION_RMS_BIND_SRC)
 else()

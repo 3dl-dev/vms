@@ -331,6 +331,32 @@ int main(void)
               "a spec with a missing directory level (...[SYS0.NOSUCH.SYSEXE]...) is RMS$_DNF (fail-honest)");
     }
 
+    /* --- (E) vms-0782: a PLAIN (non-rooted) multi-member search list resolves
+     * PAST a non-mountable member 0 to member 1 over the ACP. Define OVMXSL0782
+     * as {VDA999: (absent), <the mounted fixture unit>}: compose_ods2_candidates
+     * must fan out BOTH members (the ODS-2-path fan-out this item landed), then
+     * the walk falls through the unmountable member 0 and resolves on member 1.
+     * Before the fan-out, only member 0 was emitted and this resolve failed
+     * outright -- so a regression to equiv[0]-only reddens right here. -------- */
+    {
+        const char *sl[2] = { "VDA999:", ODS2_UNIT };   /* [0] absent, [1] mounted */
+        uint32_t dst = lnm_create_multi(mgr, LNM_PROCESS_TABLE, "OVMXSL0782",
+                                        sl, 2, 0, LNM_MODE_EXEC);
+        check($VMS_STATUS_SUCCESS(dst),
+              "DEFINE OVMXSL0782 {VDA999:," ODS2_UNIT "} (plain two-member search list)");
+
+        uint32_t chan = 0;
+        uint16_t fnum = 0, fseq = 0, efblk = 0; uint8_t fnmx = 0; int which = -1;
+        uint32_t rs = resolve_logical("OVMXSL0782:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT",
+                                      &chan, &fnum, &fseq, &fnmx, &efblk, &which);
+        check($VMS_STATUS_SUCCESS(rs) && chan != 0,
+              "OVMXSL0782:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT resolves over the ACP via the plain search list");
+        check($VMS_STATUS_SUCCESS(rs) && which == 1,
+              "the walk FELL THROUGH the non-mountable member 0 (VDA999:) to member 1 (vms-0782 fan-out)");
+        if (chan != 0) { (void)vms_kif_acp_deaccess(chan); (void)vms_kif_dassgn(chan); }
+        (void)lnm_delete(mgr, LNM_PROCESS_TABLE, "OVMXSL0782", LNM_MODE_EXEC);
+    }
+
     /* --- cleanup ---------------------------------------------------------- */
     st = vms_kif_acp_dmount(ODS2_UNIT);
     check($VMS_STATUS_SUCCESS(st), "$DISMOUNT removes the ODS-2 volume");

@@ -856,20 +856,58 @@ static void compose_ods2_r(const vmsfs_filespec_t *parsed,
         return;
     }
 
-    /* A plain device/logical equivalence (SYS$SYSDEVICE -> DKA0:): swap the
-     * device, keep the caller's directory, and re-resolve. */
+    /* A plain device/logical equivalence (SYS$SYSDEVICE -> DKA0:), POSSIBLY a
+     * SEARCH LIST (DEFINE FOO DKA100:,DKA200:): fan out every member in search
+     * order and re-resolve each, so $OPEN/$SEARCH FOO:X.DAT emits a candidate on
+     * each member -- the ODS-2/ACP-path analogue of the rooted fan-out above,
+     * and of the POSIX-path fan-out in vmsfs_to_linux_path (vms-0782). Before,
+     * only equiv[0] was taken, so a file living on member 1 was never found on
+     * the ACP path. A single-valued logical yields n==1 and behaves exactly as
+     * the old code did. A directory-bearing member folds its directory under the
+     * caller's, mirroring the directory-bearing branch above. */
     {
-        vmsfs_filespec_t nxt = *parsed;
-        char e2[VMSFS_MAX_DEVICE + 1];
-        strncpy(e2, equiv, sizeof(e2) - 1);
-        e2[sizeof(e2) - 1] = '\0';
-        size_t l2 = strlen(e2);
-        if (l2 > 0 && e2[l2 - 1] == ':')
-            e2[l2 - 1] = '\0';
-        strncpy(nxt.device, e2, sizeof(nxt.device) - 1);
-        nxt.device[sizeof(nxt.device) - 1] = '\0';
-        nxt.has_device = 1;
-        compose_ods2_r(&nxt, out, count, max_out, depth + 1);
+        char vals[LNM_MAX_SEARCHLIST][LNM_MAX_VALUE + 1];
+        uint8_t n = 0;
+        if (lnm_translate_searchlist(mgr, dev_up, vals, LNM_MAX_SEARCHLIST,
+                                     &n, NULL) != SS$_NORMAL || n == 0) {
+            /* Fall back to the single equivalence already translated above. */
+            strncpy(vals[0], equiv, LNM_MAX_VALUE);
+            vals[0][LNM_MAX_VALUE] = '\0';
+            n = 1;
+        }
+        for (uint8_t i = 0; i < n && *count < max_out; i++) {
+            vmsfs_filespec_t nxt = *parsed;         /* keep name/type/version */
+            if (strchr(vals[i], '[')) {
+                /* directory-bearing member: fold its directory under the
+                 * caller's, keep its device (mirrors the branch above). */
+                vmsfs_filespec_t e;
+                if (!$VMS_STATUS_SUCCESS(vmsfs_parse_filespec(vals[i], &e)) ||
+                    !e.has_device || !e.device[0])
+                    continue;
+                strncpy(nxt.device, e.device, sizeof(nxt.device) - 1);
+                nxt.device[sizeof(nxt.device) - 1] = '\0';
+                nxt.has_device = 1;
+                char merged[VMSFS_MAX_DIRECTORY + 1];
+                dir_concat(e.has_directory ? e.directory : "",
+                           parsed->has_directory ? parsed->directory : "",
+                           merged, sizeof(merged));
+                strncpy(nxt.directory, merged, sizeof(nxt.directory) - 1);
+                nxt.directory[sizeof(nxt.directory) - 1] = '\0';
+                nxt.has_directory = (merged[0] != '\0');
+            } else {
+                /* plain device member: swap the device, keep the directory. */
+                char e2[VMSFS_MAX_DEVICE + 1];
+                strncpy(e2, vals[i], sizeof(e2) - 1);
+                e2[sizeof(e2) - 1] = '\0';
+                size_t l2 = strlen(e2);
+                if (l2 > 0 && e2[l2 - 1] == ':')
+                    e2[l2 - 1] = '\0';
+                strncpy(nxt.device, e2, sizeof(nxt.device) - 1);
+                nxt.device[sizeof(nxt.device) - 1] = '\0';
+                nxt.has_device = 1;
+            }
+            compose_ods2_r(&nxt, out, count, max_out, depth + 1);
+        }
     }
 }
 

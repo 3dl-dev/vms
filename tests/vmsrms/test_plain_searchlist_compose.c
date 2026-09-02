@@ -97,6 +97,39 @@ int main(void)
 
     (void)lnm_delete(mgr, LNM_PROCESS_TABLE, "SYS$STARTUP", LNM_MODE_EXEC);
 
+    /* ---- vms-0782: a PLAIN two-member DEVICE search list fans out BOTH members
+     * on the ODS-2/ACP compose path, in search order. Before, compose_ods2_r's
+     * plain-device branch took only equiv[0], so a file living on member 1 was
+     * never emitted as a candidate and $OPEN/$SEARCH on the ACP path could not
+     * find it. DKB100:/DKB200: are physical (non-logical) devices, so each member
+     * composes verbatim -- the cleanest possible witness of the fan-out. ---- */
+    {
+        const char *dev_members[2] = { "DKB100:", "DKB200:" };
+        uint32_t dst = lnm_create_multi(mgr, LNM_PROCESS_TABLE, "OVMXSL0782",
+                                        dev_members, 2, 0, LNM_MODE_EXEC);
+        CHECK($VMS_STATUS_SUCCESS(dst),
+              "DEFINE OVMXSL0782 {DKB100:,DKB200:} (plain two-member device search list)");
+
+        char c2[LNM_MAX_SEARCHLIST][VMSFS_MAX_FILESPEC];
+        int m = vmsfs_compose_ods2_candidates("OVMXSL0782:[TMP]X.DAT", c2,
+                                              LNM_MAX_SEARCHLIST);
+        printf("  INFO: OVMXSL0782:[TMP]X.DAT -> %d candidate(s)\n", m);
+        for (int i = 0; i < m; i++)
+            printf("        [%d] %s\n", i, c2[i]);
+
+        CHECK(m >= 2,
+              "a plain two-member search list composes BOTH members (vms-0782 fan-out)");
+        CHECK(has_candidate(c2, m, "DKB100:[TMP]X.DAT"),
+              "member-0 composes to DKB100:[TMP]X.DAT");
+        CHECK(has_candidate(c2, m, "DKB200:[TMP]X.DAT"),
+              "member-1 composes to DKB200:[TMP]X.DAT -- resolves PAST equiv[0] "
+              "(the exact vms-0782 residual: the ODS-2-path collapse)");
+        CHECK(m >= 1 && strcasecmp(c2[0], "DKB100:[TMP]X.DAT") == 0,
+              "member-0 is FIRST (search order preserved)");
+
+        (void)lnm_delete(mgr, LNM_PROCESS_TABLE, "OVMXSL0782", LNM_MODE_EXEC);
+    }
+
     printf("=== test_plain_searchlist_compose: %d passed, %d failed ===\n",
            pass, fail);
     return fail > 0 ? 1 : 0;

@@ -753,6 +753,51 @@ int scs_member_build_dlm_selfreg(const struct scs_member_params *p,
 }
 
 /*
+ * scs_member_build_dlm_nl_enq - originate an honest NULL-mode (NL) DLM registration
+ * (cat 0x02 op 0x01 ENQ) for a resource a non-coordinator member has SHOWN OVMX in
+ * its op-0d directory-rebuild record (db20-b, vms-7e2). The RESPOND-to-rebuild model
+ * VAX1 granted 48/48: OVMX accepts directory-node participation in the resource the
+ * cluster asked it to rebuild, holding NOTHING (mode hard-pinned NL). INV-6: the
+ * resource NAME comes from the shown record; every other field is OVMX's own true
+ * state (txn tag, its per-VC counter, its own member_count) or an honest ZERO
+ * (dir_hash -- a SCS$DIRECTORY hash is computed from the name, not echoed, and OVMX
+ * does not compute the VMS hash; omit rather than invent). body[4:6]=txn,
+ * body[6:8]=the per-VC counter (the granted frame's incrementing field) -- NEVER a
+ * node-index (0x0003 there is the DIR_TAG, coincident with OVMX being node 3).
+ */
+int scs_member_build_dlm_nl_enq(const struct scs_member_params *p,
+                                uint16_t dir_hash,
+                                const char *resname, uint8_t namelen,
+                                uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    if (p == NULL || out == NULL || resname == NULL) {
+        return -1;
+    }
+    if (namelen == 0 || namelen > 31) {   /* a VMS resource name is 1..31 bytes */
+        return -1;
+    }
+    build_common(p, member_config_tmpl, SCS_MEMBER_ENV_CREDIT_CONFIG, out);
+
+    uint8_t *body = out + 72;
+    memset(body + 4, 0, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF - 4);
+    put_le16(body + 0, p->sysap_send_msg);
+    put_le16(body + 2, p->sysap_ack_msg);
+    put_le16(body + 4, p->txn);           /* per-VC directory tag (opaque, minted) */
+    put_le16(body + 6, p->checksum);      /* per-VC monotonic counter (opaque, minted) */
+    body[8]  = SCS_MEMBER_CAT_DLM;         /* 0x02 */
+    body[9]  = 0x01;                       /* op 0x01 = ENQ */
+    put_le16(body + 10, dir_hash);         /* honest 0 -- computed from the name, not echoed (INV-6) */
+    body[12] = 0x01;                       /* node-independent constant */
+    put_le16(body + 14, p->member_count);  /* OVMX's own true post-transition member count */
+    /* body[16:30] zero -- ungrounded per-message ids (INV-6: never replay VAX3's). */
+    body[30] = 0x00;                       /* == NL. HARD-PINNED -- the INV-6 guarantee. */
+    /* body[31:47] zero. */
+    body[47] = namelen;                    /* resource-name length */
+    memcpy(body + 48, resname, namelen);   /* the discovered resource name; value block stays null */
+    return 0;
+}
+
+/*
  * scs_member_build_dlm_op04 / scs_member_build_dlm_commit - the joiner's
  * rebuild-COMPLETION pair (cat 0x02 op 0x04, then op 0x03 COMMIT) that a real
  * joiner drives to the COORDINATOR after its op-01 registrations, closing the

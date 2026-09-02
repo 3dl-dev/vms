@@ -338,6 +338,16 @@ int scs_member_build_dlm_response(const struct scs_member_params *p,
 int scs_member_build_dlm_selfreg(const struct scs_member_params *p,
                                  uint8_t out[SCS_MEMBER_FRAME_LEN]);
 
+/* The honest NULL-mode (NL) DLM registration OVMX originates for a resource a
+ * non-coordinator member showed it in an op-0d rebuild record (db20-b, vms-7e2):
+ * cat 0x02 op 0x01 ENQ, mode hard-pinned NL (holds nothing), resource name from
+ * the shown record, dir_hash an honest 0. The respond-to-rebuild frame VAX1
+ * granted 48/48. See scs_member.c. */
+int scs_member_build_dlm_nl_enq(const struct scs_member_params *p,
+                                uint16_t dir_hash,
+                                const char *resname, uint8_t namelen,
+                                uint8_t out[SCS_MEMBER_FRAME_LEN]);
+
 /* The joiner's rebuild-COMPLETION pair driven to the coordinator after the
  * self-registration: cat 0x02 op 0x04 (completion), then op 0x03 COMMIT. OVMX
  * registers NOTHING HELD (resname + per-lock handles zeroed) -- the honest

@@ -86,6 +86,69 @@
  *                                          cannot risk an ABBA block. Linux:
  *                                          spin_trylock. NetBSD: mutex_tryenter.
  *
+ * 1b. Receive-level lock  (FC-P0.16, design SS3.2.3 RULING). exec_lock_t is
+ *   unsafe at receive level on EITHER substrate: a Linux spin_lock() (not
+ *   _irqsave) held by process context can deadlock against a same-CPU softirq
+ *   that takes the same lock, and a NetBSD kmutex at IPL_NONE is a panic if
+ *   entered above IPL_NONE. The seam therefore gains ONE receive-level lock
+ *   class, used by the core for EXACTLY ONE object -- the cluster fork queue
+ *   (vms_cluster_fork.c). See CONTRACT RULE 14.1 below for what may run under
+ *   it and the lock order.
+ *
+ *   Types (concrete per substrate):
+ *     exec_rxlock_t    Linux: spinlock_t.  NetBSD: kmutex_t, a SPIN mutex
+ *                      initialized at EXEC_LAN_RX_IPL (not IPL_NONE).
+ *     exec_rxflags_t   Linux: unsigned long (the irqsave flags word).
+ *                      NetBSD: unused (the IPL is captured in the mutex
+ *                      itself); the type still exists so a caller's code is
+ *                      identical on both substrates.
+ *
+ *   #define EXEC_LAN_RX_IPL <binding>
+ *        NetBSD: the highest IPL at which exec_lan rx callbacks may run
+ *        (IPL_NET, unless a P0.3 spike finding records qe/xq input running
+ *        above it -- see exec_kbackend_netbsd.h). Linux: a no-op constant
+ *        (irqsave already covers every level a softirq can run at).
+ *
+ *   void exec_rxlock_init(exec_rxlock_t *)
+ *        Linux: spin_lock_init. NetBSD: mutex_init(l, MUTEX_DEFAULT,
+ *        EXEC_LAN_RX_IPL) -- IPL != IPL_NONE makes this a SPIN mutex (kmutex(9)).
+ *   void exec_rxlock_destroy(exec_rxlock_t *)
+ *        Linux: no-op. NetBSD: mutex_destroy (a kmutex owns resources).
+ *   void exec_rxlock_acquire(exec_rxlock_t *, exec_rxflags_t *)
+ *        Legal from ANY context -- receive, timer, process, or the fork
+ *        thread. Linux: spin_lock_irqsave(l, *flags) (disables local IRQs, so
+ *        a same-CPU receive interrupt cannot preempt the holder -- this is
+ *        the whole fix). NetBSD: mutex_spin_enter(l) (a spin kmutex raises the
+ *        CPU to its IPL for the duration, the same protection by construction).
+ *   void exec_rxlock_release(exec_rxlock_t *, exec_rxflags_t *)
+ *        Linux: spin_unlock_irqrestore(l, *flags). NetBSD: mutex_spin_exit(l).
+ *   int  exec_cv_wait_rx(exec_cv_t *cv, exec_rxlock_t *l, exec_rxflags_t *flags)
+ *        THREAD CONTEXT ONLY (never receive or timer level -- this one sleeps).
+ *        The SS2 cv contract with the rxlock as the interlock: enqueue on `cv`
+ *        while `l` is held, atomically release `l` (restoring the saved
+ *        flags/IPL) and sleep, then re-acquire `l` before returning. Always
+ *        returns 0 -- no signal semantics: the fork thread is a plain kthread
+ *        and "stop" is a predicate the caller re-tests, exactly like SS2's
+ *        cv_wait. Linux: prepare_to_wait(TASK_INTERRUPTIBLE) ->
+ *        spin_unlock_irqrestore -> schedule() -> finish_wait ->
+ *        spin_lock_irqsave -- TASK_INTERRUPTIBLE, not TASK_UNINTERRUPTIBLE:
+ *        see exec_kbackend_linux.h's exec_cv_wait_rx comment for why (found by
+ *        the FC-P0.16 R3 hammer: wake_up_interruptible, which
+ *        exec_cv_broadcast/_signal stay on per "UNCHANGED" below, only wakes
+ *        TASK_INTERRUPTIBLE sleepers; TASK_UNINTERRUPTIBLE here would be a
+ *        lost wakeup by construction). Observationally identical for this
+ *        thread: the fork kthread never allow_signal()s, so
+ *        signal_pending(current) is never true and the "always returns 0"
+ *        promise holds either way. NetBSD: cv_wait(cv, l) with the spin mutex
+ *        as the interlock (cv_wait itself does the atomic
+ *        release/sleep/reacquire; NetBSD condvars have no interruptible/
+ *        uninterruptible wake-target split, so this substrate was never at
+ *        risk of the same bug).
+ *
+ *   exec_cv_signal / exec_cv_broadcast (SS2) are UNCHANGED and are legal from
+ *   receive level when the caller already holds the rxlock the cv is paired
+ *   with -- CONTRACT RULE 14.1(a) below.
+ *
  * 2. Wait / wake  --  cv(9)-SHAPED CONTRACT.  READ THIS BEFORE USING.
  *
  *   void exec_cv_init(exec_cv_t *)
@@ -679,6 +742,50 @@
  *        a bare int so "the port is not open" is distinguishable from "the link
  *        is down" -- the CNXMAN reconnect loop must not read the second as the
  *        first. Linux: netif_carrier_ok. NetBSD: ifp->if_link_state.
+ *
+ * -------- CONTRACT RULE 14.1 -- RECEIVE-LEVEL SYNCHRONIZATION -------------
+ * (design SS3.2.3 RULING, FC-P0.16; pasted verbatim as the SS14-SS16 doc-
+ * comment the ruling calls for.)
+ *
+ *   RECEIVE-LEVEL SYNCHRONIZATION. Exactly one executive object is shared
+ *   between the substrate's receive context and thread context: the cluster
+ *   fork queue (vms_cluster_fork.c: input-frame list, posted-work list, stop
+ *   flag, and the pool freelist that rx pops buffers from). It is guarded by
+ *   ONE exec_rxlock_t (SS1b) and ONE exec_cv_t paired with it.
+ *
+ *   (a) Receive level -- the SS14 rx callback and SS16 timer callbacks -- may
+ *       take ONLY the rxlock: pop a pool buffer / copy / enqueue /
+ *       exec_cv_signal / release. O(1), no allocation, no sleep, no
+ *       exec_lock_t, no exec_mutex_t, no call into protocol code. Empty pool
+ *       => drop + counter.
+ *   (b) Thread context takes the rxlock only to splice the whole queue into a
+ *       private list, to post work, or to sleep via exec_cv_wait_rx; it never
+ *       runs protocol code under it. All protocol state (PE/SCS/CNXMAN/DLM)
+ *       is guarded by the fork mutex (exec_mutex_t), held by the fork thread
+ *       across a dispatch batch. Lock order: fork mutex -> rxlock; rxlock ->
+ *       any other lock is forbidden (the rxlock is a leaf).
+ *   (c) exec_lock_t / exec_mutex_t are never taken at receive level.
+ *   (d) The fork thread's sleep predicate ("input empty AND work empty AND
+ *       NOT stop") is tested under the rxlock and every mutation of it
+ *       happens under the rxlock -- the SS2 lost-wakeup-free contract with
+ *       the rxlock as the shared interlock.
+ *
+ *   Who takes what:
+ *     rx callback (Linux softirq / NetBSD softint or EXEC_LAN_RX_IPL) ->
+ *         rxlock only (acquire/release around an O(1) enqueue + signal);
+ *         never exec_lock_t/exec_mutex_t, allocation, or protocol code.
+ *     timer callback (SS16) -> rxlock only (post a work item + signal); same
+ *         restrictions as the rx callback.
+ *     fork thread -> the fork mutex across a dispatch batch; the rxlock only
+ *         briefly, to splice/post/wait; never protocol code under the rxlock.
+ *     process-context posters (a $ENQ needing the wire, MOUNT, an ioctl
+ *         control) -> the rxlock briefly (post + signal), then sleep on their
+ *         OWN object's cv/exec_lock_t; never the fork mutex while holding the
+ *         rxlock.
+ *     snapshot readers (diagnostic ioctls) -> the fork mutex for protocol
+ *         state; queue-depth counters are plain integers read under the
+ *         rxlock.
+ * ----------------------------------------------------------------------------
  *
  * 15. Cluster fork context (design SS3.2.2 SS15; called ONLY from
  *    src/kernel-core/vms_cluster_fork.c). ONE kthread per node -- "the CNXMAN

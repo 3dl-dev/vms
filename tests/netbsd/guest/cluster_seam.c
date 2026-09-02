@@ -51,10 +51,36 @@
  *
  * Clean-room (CLAUDE.md Rule 8): calls only the OVMX seam ops
  * (exec_kbackend.h); no NetBSD or VSI/HPE source is copied.
+ *
+ * FC-P0.16 ADDITION -- the receive-level lock conformance same-CPU hammer
+ * (design SS3.2.3 RULING / CONTRACT RULE 14.1). cluster_seam_test_fork_hammer
+ * below stands up the REAL cluster fork context (vms_cluster_fork_start --
+ * exec_rxlock_init/exec_cv_init/the real kthread(9) path this item lands) and
+ * hammers its ONE shared object, the fork queue, from two kthreads running
+ * concurrently: a SIMULATED receive-level producer calling cf_rx_deliver()
+ * directly, and a process-context poster calling cf_post(). "Same-CPU" is
+ * true by HARDWARE CONSTRUCTION here, more strongly than the Linux -smp 1
+ * harness: VAX has no SMP at all, so every kthread on this node shares the
+ * one and only CPU, always.
+ *
+ * WHY "SIMULATED" RECEIVE LEVEL, NOT A REAL 0x6007 FLOOD. This file's own
+ * NOTE above already establishes that rx delivery is a genuinely two-endpoint
+ * property this single-node self-test cannot prove alone (no peer to send
+ * from). cf_rx_deliver() is itself the ENTIRE permitted repertoire of a real
+ * receive callback (CONTRACT RULE 1: copy/enqueue/wake, nothing else) --
+ * calling it directly from a dedicated kthread exercises the EXACT SAME
+ * exec_rxlock_t/exec_cv_wait_rx code path a real rx_cb would drive, honestly
+ * labeled as a stand-in for the receive callback rather than a claim of wire
+ * traffic. This is the strongest same-CPU contention check this single-node
+ * harness supports; the genuine 0x6007-over-the-wire flood needs the second
+ * bridged NetBSD-VAX node the file header NOTE already names as missing.
  */
 
 #include "vms_internal.h"        /* SS$_/exec_lock_t vocabulary, printf/memset */
 #include "exec_kbackend.h"       /* the SS14..SS18 ops under test */
+#include "vms_cluster.h"         /* struct vms_cluster (FC-P0.16 hammer) */
+#include "vms_cluster_fork.h"    /* cf_rx_deliver/cf_post/vms_cluster_fork_start --
+				   * the REAL FC-P0.16 rxlock/cv path */
 
 static unsigned int g_pass, g_fail, g_skip;
 
@@ -305,6 +331,220 @@ cluster_seam_test_lan(void)
 }
 
 /*
+ * ---- FC-P0.16 receive-level lock conformance same-CPU hammer -------------
+ * See the file header's "FC-P0.16 ADDITION" note for why this drives
+ * cf_rx_deliver() directly rather than a real 0x6007 flood.
+ */
+
+#define CS_HAMMER_DURATION_MS 2000u   /* modest: this self-test runs at every module load */
+
+struct cluster_seam_hammer_flood_ctx {
+	exec_kthread_t           self;
+	struct vms_cluster_fork *fork;
+	uint64_t                 deadline_ms;
+	unsigned int              sent;
+};
+
+/*
+ * The SIMULATED receive-level producer: calls cf_rx_deliver() directly, the
+ * ENTIRE permitted repertoire of a real rx_cb (CONTRACT RULE 1 / 14.1(a)) --
+ * copy/enqueue/wake, nothing else, exactly what this call does.
+ */
+static int
+cluster_seam_hammer_flood_fn(void *arg)
+{
+	struct cluster_seam_hammer_flood_ctx *fc = arg;
+	uint8_t frame[32];
+	uint32_t seq = 0;
+
+	memset(frame, 0, sizeof(frame));
+	frame[12] = 0x60; frame[13] = 0x07;   /* shape only -- no NIC involved here */
+
+	while (!exec_kthread_should_stop(&fc->self) &&
+	    exec_ticks_ms() < fc->deadline_ms) {
+		seq++;
+		frame[14] = (uint8_t)(seq);
+		frame[15] = (uint8_t)(seq >> 8);
+		(void)cf_rx_deliver(fc->fork, frame, sizeof(frame));
+		fc->sent++;
+		if ((seq & 0xffu) == 0)
+			kpause("clsseamfl", false, 1, NULL);   /* a brief, periodic yield */
+	}
+	return 0;
+}
+
+struct cluster_seam_hammer_post_ctx {
+	exec_kthread_t           self;
+	struct vms_cluster_fork *fork;
+	uint64_t                 deadline_ms;
+	unsigned int              accepted;
+	unsigned int              dropped_nobuf;
+};
+
+/*
+ * The PROCESS-CONTEXT producer: cf_post() in a tight loop -- CONTRACT RULE
+ * 14.1's "process-context posters ... rxlock briefly (post + signal)" row,
+ * on the SAME (only) CPU the flood above runs on: VAX has no SMP.
+ */
+static int
+cluster_seam_hammer_post_fn(void *arg)
+{
+	struct cluster_seam_hammer_post_ctx *pc = arg;
+	struct cf_work w;
+	uint32_t seq = 0;
+
+	memset(&w, 0, sizeof(w));
+	w.owner = CF_OWNER_PE;
+	w.kind  = 1;      /* a private "hammer post" kind; never CF_WORK_TIMER */
+
+	while (!exec_kthread_should_stop(&pc->self) &&
+	    exec_ticks_ms() < pc->deadline_ms) {
+		cf_status_t st;
+
+		seq++;
+		w.arg0 = seq;
+		st = cf_post(pc->fork, &w);
+		if (st == CF_OK)
+			pc->accepted++;
+		else if (st == CF_E_NOBUF)
+			pc->dropped_nobuf++;
+		if ((seq & 0xffu) == 0)
+			kpause("clsseampo", false, 1, NULL);
+	}
+	return 0;
+}
+
+/* Single-writer counters: both run under the fork mutex, one dispatch at a
+ * time (design SS3.3), so no lock of their own is needed. */
+static unsigned int cs_hammer_rx_delivered;
+static unsigned int cs_hammer_work_delivered;
+
+static void
+cluster_seam_hammer_rx_handler(void *ctx, const uint8_t *frame, uint32_t len)
+{
+	(void)ctx; (void)frame; (void)len;
+	cs_hammer_rx_delivered++;
+}
+
+static void
+cluster_seam_hammer_work_handler(void *ctx, const struct cf_work *w)
+{
+	(void)ctx; (void)w;
+	cs_hammer_work_delivered++;
+}
+
+static void
+cluster_seam_test_fork_hammer(void)
+{
+	struct vms_cluster *cl;
+	struct cluster_seam_hammer_flood_ctx fc;
+	struct cluster_seam_hammer_post_ctx pc;
+	struct cf_stats st;
+	int rv;
+	uint64_t deadline;
+
+	/* Heap, not stack (design SS3.9's coding rule: no sizeable structs on
+	 * the small VAX kernel stack -- pool/heap-allocated, passed by
+	 * pointer). */
+	cl = (struct vms_cluster *)exec_zalloc(sizeof(*cl));
+	if (!cl) {
+		CS_SKIP("FC-P0.16 same-CPU hammer", "exec_zalloc failed for the vms_cluster stub");
+		return;
+	}
+	cs_hammer_rx_delivered = 0;
+	cs_hammer_work_delivered = 0;
+
+	rv = vms_cluster_fork_start(cl, NULL);
+	CS_CHECK(rv == SS__NORMAL,
+	    "FC-P0.16: vms_cluster_fork_start ran the REAL exec_rxlock_init/"
+	    "exec_cv_init/kthread(9) path");
+	if (rv != SS__NORMAL) {
+		CS_SKIP("FC-P0.16 same-CPU hammer", "vms_cluster_fork_start failed");
+		exec_free(cl);
+		return;
+	}
+
+	cf_set_rx_handler(cl->fork, cluster_seam_hammer_rx_handler, NULL);
+	(void)cf_set_work_handler(cl->fork, CF_OWNER_PE,
+	    cluster_seam_hammer_work_handler, NULL);
+
+	deadline = exec_ticks_ms() + CS_HAMMER_DURATION_MS;
+
+	memset(&fc, 0, sizeof(fc));
+	fc.fork = cl->fork;
+	fc.deadline_ms = deadline;
+	rv = exec_kthread_create(&fc.self, cluster_seam_hammer_flood_fn, &fc,
+	    "clsseamfl");
+	CS_CHECK(rv == 0, "FC-P0.16: the simulated receive-level producer kthread started");
+
+	memset(&pc, 0, sizeof(pc));
+	pc.fork = cl->fork;
+	pc.deadline_ms = deadline;
+	rv = exec_kthread_create(&pc.self, cluster_seam_hammer_post_fn, &pc,
+	    "clsseampo");
+	CS_CHECK(rv == 0, "FC-P0.16: the process-context poster kthread started -- "
+	    "same CPU as the receive-level producer (VAX has no SMP)");
+
+	/* Wait out the hammer's own deadline before signalling a stop --
+	 * exec_kthread_stop() actively requests an exit, it does not merely
+	 * join, so calling it early would cut the hammer short. */
+	while (exec_ticks_ms() < deadline)
+		kpause("clsseamhm", false, mstohz(10), NULL);
+
+	exec_kthread_stop(&fc.self);
+	exec_kthread_stop(&pc.self);
+
+	/* Bounded drain: cf_stats' dispatched counters must catch up with what
+	 * was actually enqueued/posted -- "every posted item observed within
+	 * one scheduling latency", made concrete (design SS3.2.3 / FC-P0.16
+	 * plan row). */
+	{
+		uint64_t drain_deadline = exec_ticks_ms() + 2000u;
+
+		for (;;) {
+			cf_stats_get(cl->fork, &st);
+			if (st.rx_dispatched >= st.rx_enqueued &&
+			    st.work_dispatched >= st.work_posted)
+				break;
+			if (exec_ticks_ms() >= drain_deadline)
+				break;
+			kpause("clsseamdr", false, 1, NULL);
+		}
+	}
+
+	CS_CHECK(fc.sent > 0,
+	    "FC-P0.16: the simulated receive-level producer drove cf_rx_deliver() for real");
+	CS_CHECK(st.rx_enqueued > 0,
+	    "FC-P0.16: at least one simulated frame was enqueued under the real exec_rxlock_t");
+	CS_CHECK(pc.accepted > 0,
+	    "FC-P0.16: the process-context poster's cf_post() calls were accepted on the SAME CPU");
+	CS_CHECK(st.rx_dispatched == st.rx_enqueued,
+	    "FC-P0.16: every enqueued item was dispatched exactly once (no lost wakeup)");
+	CS_CHECK(st.work_dispatched == st.work_posted,
+	    "FC-P0.16: every posted work item was dispatched exactly once (no lost wakeup)");
+	CS_CHECK(st.waits > 0,
+	    "FC-P0.16: the fork thread actually slept via exec_cv_wait_rx and was actually woken");
+	CS_CHECK((unsigned long long)cs_hammer_rx_delivered == st.rx_dispatched,
+	    "FC-P0.16: the fork thread's own rx handler saw every dispatched item");
+	CS_CHECK((unsigned long long)cs_hammer_work_delivered == st.work_dispatched,
+	    "FC-P0.16: the fork thread's own work handler saw every dispatched item");
+
+	printf("vms: cluster_seam: FC-P0.16 hammer info sent=%u rx_enqueued=%llu "
+	    "rx_dispatched=%llu posts_accepted=%u work_posted=%llu work_dispatched=%llu "
+	    "waits=%llu\n",
+	    fc.sent, (unsigned long long)st.rx_enqueued,
+	    (unsigned long long)st.rx_dispatched, pc.accepted,
+	    (unsigned long long)st.work_posted, (unsigned long long)st.work_dispatched,
+	    (unsigned long long)st.waits);
+
+	/* THE genuine lockup detector: a real rxlock regression makes THIS
+	 * call hang -- honestly, under the harness's own boot timeout -- not
+	 * report a fabricated pass. */
+	vms_cluster_fork_stop(cl);
+	exec_free(cl);
+}
+
+/*
  * vms_cluster_seam_selftest - called once from vms_netbsd.c's
  * MODULE_CMD_INIT, mirroring vms_lnm_arena_selftest's "prove the seam at
  * module load" pattern for a different facility. Never fails module load: a
@@ -322,6 +562,7 @@ vms_cluster_seam_selftest(void)
 	cluster_seam_test_kthread();
 	cluster_seam_test_timer();
 	cluster_seam_test_lan();
+	cluster_seam_test_fork_hammer();
 
 	printf("vms: cluster_seam: DONE pass=%u fail=%u skip=%u %s\n",
 	    g_pass, g_fail, g_skip, (g_fail == 0) ? "OVERALL-PASS" : "OVERALL-FAIL");

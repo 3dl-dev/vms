@@ -81,6 +81,22 @@ case "$SHARD_TOTAL" in ''|*[!0-9]*|0) SHARD_TOTAL=1 ;; esac
 case "$SHARD_INDEX" in ''|*[!0-9]*) SHARD_INDEX=0 ;; esac
 KCMD_SHARD="ovmx.shard=$SHARD_INDEX ovmx.shards=$SHARD_TOTAL"
 
+# FC-P0.16 R3 same-CPU hammer duration override (design SS3.2.3 RULING /
+# CONTRACT RULE 14.1). test_kmod_cluster_fork_hammer.c reads ovmx_hammer_ms=
+# off /proc/cmdline; UNSET (the default -- every existing caller) means the
+# token below is empty and the kernel-side default (3000ms) applies, exactly
+# as today. Set via `OVMX_HAMMER_MS=60000 run_tests.sh` (or the dedicated
+# tests/qemu/run_cluster_fork_hammer_60s.sh wrapper) to drive the genuine
+# design-doc 60s figure from a SEPARATE, non-default invocation -- never
+# inside the default per-PR battery's shared wall.
+KCMD_HAMMER=""
+if [ -n "${OVMX_HAMMER_MS:-}" ]; then
+    case "$OVMX_HAMMER_MS" in
+    ''|*[!0-9]*) ;;
+    *) KCMD_HAMMER="ovmx_hammer_ms=$OVMX_HAMMER_MS" ;;
+    esac
+fi
+
 # ASSERTION TRANSCRIPT (vms-b5b round 2). ttyS0 (below) carries the boot
 # banner, kernel printk and init.sh's own aggregate lines -- exactly what it
 # always has. A SECOND serial port, ttyS1, is wired to a plain file so that
@@ -238,7 +254,7 @@ OUTPUT=$(timeout "$TIMEOUT" $QEMU \
     -kernel "$KERNEL" \
     -initrd "$INITRD" \
     -nographic \
-    -append "$CONSOLE panic=-1 loglevel=4 $KCMD_SHARD" \
+    -append "$CONSOLE panic=-1 loglevel=4 $KCMD_SHARD $KCMD_HAMMER" \
     -m 512M \
     -no-reboot \
     -smp 1 \

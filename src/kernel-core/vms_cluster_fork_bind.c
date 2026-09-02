@@ -9,7 +9,7 @@
  *
  *   vms_cluster_fork.c   the queues, the dispatch, the timer bookkeeping --
  *                        pure, host-testable (rung R1), no substrate type.
- *   THIS FILE            exec_lock_t / exec_cv_t / exec_mutex_t /
+ *   THIS FILE            exec_rxlock_t / exec_cv_t / exec_mutex_t /
  *                        exec_kthread_t / exec_timer_t, the thread entry, the
  *                        timer callbacks, and start/stop. It is the ONLY file
  *                        in the cluster stack that names §15 or §16 (design
@@ -18,14 +18,26 @@
  *
  * THE FOUR SUBSTRATE OBJECTS AND WHY EACH IS THE TYPE IT IS
  *
- *   qlock   (§1 exec_lock_t)   the receive-IPL queue lock of CONTRACT RULE
- *                              1(b). Non-sleeping, held for a bounded copy and
+ *   qlock   (§1b exec_rxlock_t) the receive-level queue lock of CONTRACT RULE
+ *                              14.1 (design §3.2.3 RULING, FC-P0.16). Legal
+ *                              from ANY context -- receive, timer, process, or
+ *                              the fork thread -- held for a bounded copy and
  *                              a few pointer moves, a LEAF in the lock order.
+ *                              qflags carries the Linux irqsave word (unused
+ *                              on NetBSD, where the IPL lives in the mutex);
+ *                              exactly one holder exists at a time by
+ *                              construction, so ONE scratch field in this
+ *                              struct is enough to carry it across the
+ *                              matching acquire/release (or acquire/wait/
+ *                              release) pair.
  *   qcv     (§2 exec_cv_t)     paired with qlock, and ONLY with qlock -- a
  *                              wait/wake pair whose two sides use different
  *                              locks is outside the seam's contract and loses
- *                              wakeups. cf_run's waiter and every cf_post /
- *                              cf_rx_deliver waker share it.
+ *                              wakeups. cf_run's waiter (via exec_cv_wait_rx,
+ *                              §1b, thread context only) and every cf_post /
+ *                              cf_rx_deliver waker (exec_cv_signal/broadcast,
+ *                              legal from receive level under the rxlock)
+ *                              share it.
  *   forkmtx (§7 exec_mutex_t)  `vms_cluster_fork_mutex' itself: VMS's fork-IPL
  *                              serialisation. SLEEPABLE, because a dispatched
  *                              handler may allocate, may cancel a timer and may
@@ -43,38 +55,12 @@
  * cf_request_stop() -- which mutates the predicate and broadcasts under qlock,
  * the seam's lost-wakeup-free idiom -- and only THEN joins.
  *
- * ------------------------------------------------------------------------
- * OPEN HAZARD FOR FC-P0.2 / FC-P0.4 -- THE QUEUE LOCK'S RECEIVE IPL
- * ------------------------------------------------------------------------
- * exec_kbackend.h CONTRACT RULE 1(b) says the receive callback enqueues "under
- * an exec_lock_t the BINDING initialized at the receive IPL". Today the seam
- * has ONE lock flavour and no way for a binding to say which IPL a given
- * exec_lock_t must be safe at:
- *
- *   Linux   exec_lock_t is spinlock_t and exec_lock() is spin_lock(), NOT
- *           spin_lock_bh(). rx_cb runs in softirq. If this thread (process
- *           context) holds qlock when a softirq runs on the SAME CPU and that
- *           softirq calls cf_rx_deliver(), the softirq spins on a lock its own
- *           CPU holds -- a hard lockup, not a slow path.
- *   NetBSD  exec_lock_t is a kmutex at IPL_NONE. The rail's qe/xq drivers
- *           deliver input at device interrupt level, above IPL_NONE, so the
- *           same enqueue needs a mutex initialised at (at least) IPL_NET.
- *
- * THE CORE CANNOT FIX THIS: which IPL a lock must be safe at is a property of
- * the substrate, and this file may only call exec_lock/exec_unlock. It is a
- * SEAM question -- either the §14 binding owns the input queue's lock, or
- * families §1/§14 gain an explicitly receive-IPL-safe lock. It costs nothing
- * today, because both bindings' exec_lan_open() returns SS$_NOSUCHDEV and no
- * frame is ever received; it must be settled BEFORE FC-P0.2's first real
- * dev_add_pack, and it is written here rather than in a note because this is
- * the file whose lock it is.
- *
  * INCLUDES: exec_kbackend.h plus kernel-core headers, nothing else
  * (tools/ci/cluster_core_includes_gate.sh).
  */
 
 #include "vms_internal.h"    /* the SS$_ vocabulary + the host's fixed-width types */
-#include "exec_kbackend.h"   /* §1 §2 §4 §7 §15 §16: this file's whole world */
+#include "exec_kbackend.h"   /* §1b §2 §4 §7 §15 §16: this file's whole world */
 #include "vms_cluster.h"
 #include "vms_cluster_fork.h"
 
@@ -116,7 +102,8 @@ struct cf_timer_bind {
 };
 
 struct cf_bind {
-	exec_lock_t    qlock;
+	exec_rxlock_t  qlock;
+	exec_rxflags_t qflags;  /* scratch for the one live holder (§1b) */
 	exec_cv_t      qcv;
 	exec_mutex_t   forkmtx;
 	exec_kthread_t thread;
@@ -140,14 +127,34 @@ static struct cf_bind *bind_of(struct vms_cluster *cl)
  * 2. The ops -- one line each, straight onto the seam
  * ==================================================================== */
 
-static void cfb_lock(void *ctx)   { exec_lock(&((struct cf_bind *)ctx)->qlock); }
-static void cfb_unlock(void *ctx) { exec_unlock(&((struct cf_bind *)ctx)->qlock); }
+/*
+ * §1b: legal from ANY context (receive, timer, process, or the fork thread).
+ * qflags is safe as a single scratch field because the rxlock itself
+ * guarantees exactly one live holder at a time -- the same reasoning
+ * spin_lock_irqsave's caller-supplied flags word relies on, just stored in
+ * the binding instead of a caller's stack local so cfb_wait can reach it too.
+ */
+static void cfb_lock(void *ctx)
+{
+	struct cf_bind *b = (struct cf_bind *)ctx;
 
+	exec_rxlock_acquire(&b->qlock, &b->qflags);
+}
+
+static void cfb_unlock(void *ctx)
+{
+	struct cf_bind *b = (struct cf_bind *)ctx;
+
+	exec_rxlock_release(&b->qlock, &b->qflags);
+}
+
+/* THREAD CONTEXT ONLY (§1b): cf_wait_ready, the sole caller of ops->wait, runs
+ * only inside cf_run -- the fork thread. */
 static int cfb_wait(void *ctx)
 {
 	struct cf_bind *b = (struct cf_bind *)ctx;
 
-	return exec_cv_wait(&b->qcv, &b->qlock);
+	return exec_cv_wait_rx(&b->qcv, &b->qlock, &b->qflags);
 }
 
 /* Broadcast, not signal: the fork thread is the only sleeper today, but a
@@ -281,7 +288,7 @@ static void cfb_free_bind(struct cf_bind *b)
 	cfb_timers_destroy(b);
 	exec_mutex_destroy(&b->forkmtx);
 	exec_cv_destroy(&b->qcv);
-	exec_lock_destroy(&b->qlock);
+	exec_rxlock_destroy(&b->qlock);
 	exec_free(b);
 }
 
@@ -302,7 +309,7 @@ int vms_cluster_fork_start(struct vms_cluster *cl, const struct cf_config *cfg)
 	b = (struct cf_bind *)exec_zalloc(sizeof(*b));
 	if (!b)
 		return SS__INSFMEM;
-	exec_lock_init(&b->qlock);
+	exec_rxlock_init(&b->qlock);
 	exec_cv_init(&b->qcv);
 	exec_mutex_init(&b->forkmtx);
 

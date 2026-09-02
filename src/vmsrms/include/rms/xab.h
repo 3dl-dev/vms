@@ -106,6 +106,48 @@ struct XABPRO {
     uint32_t xab$l_uic;       /* UIC of file owner */
 };
 
+/*
+ * File-header-characteristics XAB (output on $OPEN/$DISPLAY). RMS fills these
+ * from the file's ODS-2 FAT (ATR$C_RECATTR); every field has a genuine on-disk
+ * source read over the executive ACP -- vms-dfa. OVMX-native field layout
+ * (Rule 8), like XABKEY/XABDAT/XABPRO; the semantics are the real header values.
+ */
+struct XABFHC {
+    uint8_t  xab$b_cod;       /* XAB$C_FHC */
+    uint8_t  xab$b_bln;       /* Block length */
+    void    *xab$l_nxt;       /* Next XAB in chain */
+    uint8_t  xab$b_rfm;       /* Record format (FAB$C_FIX/VAR/STMLF/...) */
+    uint8_t  xab$b_atr;       /* Record attributes */
+    uint16_t xab$w_lrl;       /* Longest record length */
+    uint32_t xab$l_hbk;       /* Highest allocated VBN (highest block) */
+    uint32_t xab$l_ebk;       /* End-of-file block (VBN) */
+    uint16_t xab$w_ffb;       /* First free byte in the EOF block */
+    uint8_t  xab$b_bkz;       /* Bucket size (blocks) */
+    uint16_t xab$w_mrz;       /* Maximum record size */
+    uint16_t xab$w_dxq;       /* Default extension quantity */
+    uint16_t xab$w_gbc;       /* Global buffer count */
+    uint16_t xab$w_verlimit;  /* Version limit */
+};
+
+/*
+ * Allocation-control XAB. Input controls (aop/aln/loc/...) drive $CREATE; on
+ * $OPEN/$DISPLAY RMS reports the file's realized allocation (alq/bkz/deq) from
+ * the ODS-2 FAT over the ACP -- vms-dfa. Fields with no on-disk source (the
+ * create-time input controls) are left 0/default (honest).
+ */
+struct XABALL {
+    uint8_t  xab$b_cod;       /* XAB$C_ALL */
+    uint8_t  xab$b_bln;       /* Block length */
+    void    *xab$l_nxt;       /* Next XAB in chain */
+    uint8_t  xab$b_aop;       /* Allocation options (input) */
+    uint8_t  xab$b_aln;       /* Alignment boundary type (input) */
+    uint8_t  xab$b_bkz;       /* Bucket size (blocks) */
+    uint32_t xab$l_alq;       /* Allocation quantity (blocks) */
+    uint16_t xab$w_deq;       /* Default extension quantity */
+    uint32_t xab$l_loc;       /* Location (input: start VBN/LBN) */
+    uint16_t xab$w_vol;       /* Related volume number (input) */
+};
+
 /* Initialization macros */
 #define cc$rms_xabkey (struct XABKEY){ \
     .xab$b_cod = XAB$C_KEY, \
@@ -123,6 +165,16 @@ struct XABPRO {
     .xab$b_cod = XAB$C_PRO, \
     .xab$b_bln = sizeof(struct XABPRO), \
     .xab$w_pro = 0xFF00 \
+}
+
+#define cc$rms_xabfhc (struct XABFHC){ \
+    .xab$b_cod = XAB$C_FHC, \
+    .xab$b_bln = sizeof(struct XABFHC) \
+}
+
+#define cc$rms_xaball (struct XABALL){ \
+    .xab$b_cod = XAB$C_ALL, \
+    .xab$b_bln = sizeof(struct XABALL) \
 }
 
 #endif /* __RMS_XAB_H */

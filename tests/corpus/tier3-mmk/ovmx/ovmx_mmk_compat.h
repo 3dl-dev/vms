@@ -109,17 +109,17 @@
 #define JPI$_BIOCNT     0x040b   /* $GETJPI: buffered-I/O count */
 #endif
 
-/* --- 2d. XABFHC / XABRDT record-attribute XABs.  MMK chains these off its FAB
- *         to read a file's longest-record-length (xab$w_lrl) and revision
- *         date/time (xab$q_rdt).  OVMX RMS does not consume the XAB chain, so
- *         these are MMK-local structures carrying exactly the fields MMK
- *         touches; the fields stay zero (MMK's own `== 0 ? default` fallbacks
- *         then apply — a big read buffer, and an RDT of 0 == "always stale",
- *         which is correct for a from-scratch build).  See the deferred-gap
- *         note in the PR: precise LRL/RDT would need OVMX RMS XAB support. -- */
-struct XABFHC { uint16_t xab$w_lrl; uint32_t xab$l_ebk; uint16_t xab$w_ffb; };
+/* --- 2d. XABRDT record-attribute XAB.  MMK chains this off its FAB to read a
+ *         file's revision date/time (xab$q_rdt).  It is an MMK-local structure
+ *         carrying exactly the fields MMK touches; the fields stay zero (MMK's
+ *         own `== 0 ? default` fallback then applies — an RDT of 0 == "always
+ *         stale", correct for a from-scratch build).
+ *
+ *         XABFHC is now provided by the real OVMX rms/xab.h (via <rms.h> above)
+ *         and OVMX RMS fills it from the ODS-2 FAT over the ACP (vms-dfa), so
+ *         this header no longer defines its own placeholder -- MMK's xab$w_lrl /
+ *         xab$l_ebk / xab$w_ffb reads bind to the real struct's fields. -- */
 struct XABRDT { uint8_t  xab$q_rdt[8]; uint16_t xab$w_rvn; };
-#define cc$rms_xabfhc  ((struct XABFHC){0})
 #define cc$rms_xabrdt  ((struct XABRDT){{0}})
 #ifndef cc$rms_xabpro
 /* (cc$rms_xabpro exists in OVMX rms.h if MMK ever needs it; guard only.) */

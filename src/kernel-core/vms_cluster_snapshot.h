@@ -205,16 +205,35 @@ _Static_assert(sizeof(struct vms_scs_view) == 32,
 
 /*
  * The CSB's ten connectivity states (design SS3.4: "CSB per remote CM (ten
- * connectivity states NEW..LOCAL, flags member/selected/status_rcvd)"). The two
- * endpoints of the range are the ones the design names; the intermediate names
- * are pinned by FC-P3.6, which ports the existing CSB ladder tests against SDA's
- * own spelling. Until then a layer stores the ORDINAL it observed and the view
- * reports it -- it never invents a name for a state it has not confirmed, so
- * this enum deliberately declares only the two ends plus the count.
+ * connectivity states NEW..LOCAL, flags member/selected/status_rcvd)").
+ *
+ * PINNED BY FC-P3.6, as the frozen contract said it would be -- and pinned from
+ * the PUBLISHED DESCRIPTION, not from wire inference: *VAXcluster Principles*
+ * (Davis 1993) pp. 7-23/7-24 enumerates the ten states of "the SCS connection
+ * between the local SYS$CLUSTER and the SYS$CLUSTER residing in the system
+ * associated with the CSB", in this order, with NEW first and LOCAL last. The
+ * two ordinals the contract already froze (NEW = 0, LOCAL = 9, ten states) are
+ * exactly what that enumeration yields, so no ABI value moved; the eight names
+ * between them are now spelled instead of left as bare ordinals.
+ *
+ * Each state's one-line gloss is the book's own sense, in this file's words:
+ * the transcript is copyrighted and host-only (page cites, never text).
  */
 enum vms_cnxman_csb_state {
-	VMS_CNXMAN_CSB_NEW   = 0,   /* first sight; no CSID assigned yet */
-	VMS_CNXMAN_CSB_LOCAL = 9,   /* fully connected member (the ladder's top) */
+	VMS_CNXMAN_CSB_NEW        = 0,  /* just allocated: a newly discovered CM,
+					 * or one that left and is returning (7-23) */
+	VMS_CNXMAN_CSB_CONNECT    = 1,  /* our initial SCS CONNECT has been sent (7-24) */
+	VMS_CNXMAN_CSB_ACCEPT     = 2,  /* an initial inbound CONNECT is being accepted */
+	VMS_CNXMAN_CSB_OPEN       = 3,  /* the SCS connection exists: the NORMAL state */
+	VMS_CNXMAN_CSB_DISCONNECT = 4,  /* an SCS DISCONNECT is in progress */
+	VMS_CNXMAN_CSB_WAIT       = 5,  /* connectivity lost; a timeout is running,
+					 * at whose end a reconnect is attempted */
+	VMS_CNXMAN_CSB_RECONNECT  = 6,  /* a reconnect attempt is in progress */
+	VMS_CNXMAN_CSB_REACCEPT   = 7,  /* we are accepting the peer's reconnect */
+	VMS_CNXMAN_CSB_DEAD       = 8,  /* a NEW INCARNATION of that system has been
+					 * seen; this CSB is the old incarnation */
+	VMS_CNXMAN_CSB_LOCAL      = 9,  /* reserved for the LOCAL connection manager's
+					 * own CSB -- never a connection subject */
 	VMS_CNXMAN_CSB_STATE__COUNT = 10
 };
 
@@ -253,9 +272,11 @@ _Static_assert(sizeof(struct vms_csb_view) == 52,
 
 /* The membership bitmap's width on the wire is UNDETERMINED (design SS3.4:
  * "store >= 32 slots and reconcile"), so the CLUB keeps 128 slots and the view
- * reports how many of them the cluster has actually spoken about. */
-#define VMS_CLUB_BITMAP_SLOTS 128
-#define VMS_CLUB_BITMAP_WORDS (VMS_CLUB_BITMAP_SLOTS / 32)
+ * reports how many of them the cluster has actually spoken about.
+ * VMS_CLUB_BITMAP_SLOTS/_WORDS moved to vms_cluster.h with FC-P3.6, beside the
+ * struct vms_club that HOLDS the bitmap, so the CLUB and its view cannot drift
+ * apart; the values are unchanged and this header includes that one, so every
+ * consumer still sees them here. */
 
 struct vms_club_view {
 	uint32_t local_csid;                        /* LEARNED from the membership records */

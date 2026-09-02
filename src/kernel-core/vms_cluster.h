@@ -46,6 +46,12 @@
 
 #if defined(OVMX_CLUSTER_HOST)
 #  include <stdint.h>
+   /* NULL and size_t, for the pure layer TUs (FC-P3.6's CLUB/CSB model is the
+    * first) that take pointers. <stddef.h> is a FREESTANDING ISO C header on
+    * the same footing as <stdint.h> above -- it names no host kernel type and
+    * no substrate idiom -- and is on the include gate's allowlist for exactly
+    * that reason. The kernel branch below gets both from vms_internal.h. */
+#  include <stddef.h>
 #else
 #  include "vms_internal.h"
 #endif
@@ -172,11 +178,226 @@ enum vms_cluster_state {
 };
 
 /* ==========================================================================
- * 4. The per-node context
+ * 4. CLUB and CSB -- the connection manager's data model (FC-P3.6)
+ *
+ * GROUNDING. These are the two structures *VAXcluster Principles* (Davis 1993)
+ * SS7.9 names, and every field below cites the page that describes it. The
+ * transcript is host-only and copyrighted: page cites only, never text.
+ *
+ *   CSB (Cluster System Block), p. 7-23: "Associated with each VMS system in a
+ *   VAXcluster configuration is a CSB", holding that system's VOTES,
+ *   EXPECTED_VOTES and QDSKVOTES for the quorum algorithm, its LOCKDIRWT (the
+ *   connection manager rebuilds the lock directory weight vector), a set of
+ *   status flags, and the state of the SCS connection between the local
+ *   SYS$CLUSTER and the SYS$CLUSTER in that system -- the TEN connectivity
+ *   states, pp. 7-23/7-24. SHOW CLUSTER's MEMBERS class comes from the CSBs
+ *   (p. 7-24).
+ *
+ *   CLUB (Cluster Block), p. 7-26: what pertains to the cluster AS A WHOLE --
+ *   total votes from the current members, the number of members, computed
+ *   expected votes and quorum, quorum-disk votes, the time the cluster was
+ *   formed and the time of the last state transition; plus the transition
+ *   working set (coordinator identity, phase, and the PROPOSED data cells,
+ *   p. 7-48, which are ignored outside a transition and copied to the effective
+ *   cells only if it is not abandoned, p. 7-49). All CSBs hang off the CLUB
+ *   (Figure 7-4, p. 7-28), and the CLUB also holds the local system's CSB.
+ *   SHOW CLUSTER's CLUSTER class comes from the CLUB (p. 7-26).
+ *
+ * WHY THEY LIVE HERE AND NOT BEHIND struct vms_cnxman. They are the node's
+ * cluster DATA MODEL, not one layer's private working state: $GETSYI, SHOW
+ * CLUSTER, the quorum arithmetic (FC-P3.7) and the DLM's rebuild (P5) all read
+ * them, exactly as SYS$CLUSTER's CLUB is system-wide on VMS. The connection
+ * manager's own FSM contexts (join, barrier, coordinator) stay opaque.
+ *
+ * INV-6 THROUGHOUT. Every value a PEER advertises carries a `_valid` companion
+ * and is honestly absent until a real record supplies it. A zero CSID is "not
+ * yet learned", never "node zero"; a zero LOCKDIRWT is not asserted until
+ * FC-P3.2 pins which byte carries it. Nothing here has a default.
+ * ========================================================================== */
+
+/*
+ * CSB status flags (p. 7-23: "a set of flags reflecting various forms of status
+ * information about the system with which it is associated", enumerating
+ * cluster-membership status, quorum-disk name agreement, the peer's
+ * CLUSTER_SHUTDOWN notification, and whether the CSB is the local node).
+ * MEMBER/SELECTED/STATUS_RCVD are also the spelling SDA prints for a CSB
+ * (design SS3.4), so a lab comparison is a string match.
+ */
+#define VMS_CSB_F_MEMBER      0x0001u  /* member of the LOCAL cluster (p. 7-23) */
+#define VMS_CSB_F_SELECTED    0x0002u  /* selected for the cluster (p. 7-49) */
+#define VMS_CSB_F_STATUS_RCVD 0x0004u  /* a status message from it has arrived */
+#define VMS_CSB_F_SHUTDOWN    0x0008u  /* it invoked CLUSTER_SHUTDOWN (p. 7-49) */
+#define VMS_CSB_F_QDISK_AGREE 0x0010u  /* agrees on the quorum-disk name (p. 7-23) */
+#define VMS_CSB_F_LOCAL       0x0020u  /* the CSB IS the local node (p. 7-23) */
+#define VMS_CSB_F_REMOVED     0x0040u  /* removed from the local cluster (p. 7-23) */
+
+/*
+ * The membership bitmap the transition messages carry. Its width on the wire is
+ * UNDETERMINED (design SS3.4: "store >= 32 slots and reconcile"), so the CLUB
+ * keeps 128 slots and records how many the cluster has actually spoken about.
+ * Defined HERE, beside the CLUB that holds the bitmap, and re-used by
+ * vms_cluster_snapshot.h's view of it (which includes this header).
+ */
+#define VMS_CLUB_BITMAP_SLOTS 128
+#define VMS_CLUB_BITMAP_WORDS (VMS_CLUB_BITMAP_SLOTS / 32)
+
+/*
+ * How many CSBs the CLUB can hold. VMS reaches a CSB from a CSID through the
+ * Cluster System Vector (p. 7-25: the low 16 bits of the CSID index the CSV,
+ * entry 0 is never used, entries are handed out round-robin and the high 16 bits
+ * are a reuse sequence number). OVMX does NOT model the CSV: building one means
+ * ASSIGNING CSIDs, and this node learns its own CSID from the cluster and never
+ * assigns anybody's (design SS3.4). A flat table walked by SCSSYSTEMID or CSID is
+ * what a node that only ever LEARNS needs, and 96 is the cluster scale the book
+ * contemplates ("30, 40, or even 96 systems", p. 7-13) -- the same bound the
+ * retired vms_cluster_members[96] mirror used, so no readback shrinks.
+ */
+#define VMS_CLUB_MAX_CSB 96
+
+/*
+ * One CSB: the connection manager's block for ONE system, local or remote.
+ * Allocated by cnxman_club_alloc_csb() (vms_cnxman_csb.h) when a connection
+ * manager is first discovered; the state machine there walks `state` through the
+ * ten p. 7-23/7-24 connectivity states.
+ */
+struct vms_csb {
+	uint8_t  in_use;          /* 0 = a free slot, not "a CSB for system 0" */
+	uint8_t  state;           /* enum vms_cnxman_csb_state, pp. 7-23/7-24 */
+	uint8_t  scsnode_len;     /* significant characters in scsnode[] */
+	uint8_t  pad0;
+	uint16_t flags;           /* VMS_CSB_F_*, p. 7-23 */
+	uint16_t pad1;
+
+	/* ---- identity ---- */
+	vms_csid_t      csid;        /* ASSIGNED BY THE CLUSTER; see csid_valid */
+	uint8_t         csid_valid;  /* 0 = not learned yet. NOT "csid 0" */
+	uint8_t         sysid_valid; /* 0 until a real record carried the sysid */
+	uint8_t         scsnode[VMS_SCSNODE_MAX + 2];
+	vms_scs_sysid_t sysid;       /* the system's SCSSYSTEMID */
+
+	/* ---- the quorum-algorithm parameters the CSB carries (p. 7-23) ---- */
+	uint16_t votes;             /* VOTES */
+	uint16_t expected_votes;    /* EXPECTED_VOTES */
+	uint16_t qdskvotes;         /* QDSKVOTES */
+	uint8_t  params_valid;      /* 0 until the peer's PARAMS record arrived */
+	uint8_t  lockdirwt;         /* LOCKDIRWT: the CM rebuilds the weight vector */
+	uint8_t  lockdirwt_valid;   /* 0 until FC-P3.2 pins the wire byte */
+	uint8_t  pad2[3];
+
+	/* ---- the SCS connection this CSB's state describes (p. 7-23) ---- */
+	uint32_t sw_version;        /* software version as advertised, 0 if unknown */
+	uint32_t cdt_conid;         /* our VMS$VAXcluster CDT to this CM */
+	uint64_t incarnation;       /* the peer's incarnation (spec SS4(i).B) */
+	uint32_t last_status_ms;    /* ops.now_ms of the last CM message from it */
+
+	/*
+	 * ---- reconnect state (p. 7-23: CNXMAN "is also responsible for
+	 * performing reconnect attempts if any of those SCS connections are
+	 * lost"; the timing rules are p. 7-30) ----
+	 * All three stamps are in the injected millisecond clock's units and are
+	 * compared wrap-safely; none is meaningful unless `state` is WAIT or
+	 * RECONNECT or REACCEPT.
+	 */
+	uint32_t remote_port_secs;   /* the number the REMOTE CM supplies (p. 7-30) */
+	uint8_t  remote_port_valid;  /* 0 = not supplied; the local value stands alone */
+	uint8_t  pad3[3];
+	uint32_t lost_ms;            /* when connectivity was lost */
+	uint32_t deadline_ms;        /* lost_ms + the p. 7-30 reconnect period */
+	uint32_t next_attempt_ms;    /* the once-a-second beat's next due time */
+	uint32_t attempts;           /* reconnect attempts issued for this break */
+	uint32_t reconnects;         /* breaks this CSB recovered from */
+	uint32_t transitions_proposed; /* transitions THIS CSB's loss caused us to propose */
+};
+
+/*
+ * The CLUB. One per node (p. 7-26), embedded in struct vms_cluster below.
+ */
+struct vms_club {
+	/* ---- this node's own identity within the cluster ---- */
+	vms_csid_t local_csid;       /* LEARNED from the membership records */
+	uint8_t    local_csid_valid; /* 0 = still NEW; issues no DLM traffic */
+	uint8_t    shutdown;         /* the CLUB's SHUTDOWN flag (p. 7-49) */
+	uint8_t    quorum_lost;      /* CEVOTES < QUORUM right now (FC-P3.7 sets) */
+	uint8_t    pad0;
+	int32_t    local_csb;        /* index of the local system's CSB, -1 = none */
+
+	/* ---- effective quorum data (p. 7-26/7-49). FC-P3.7 computes these;
+	 * FC-P3.6 does not write them, so nothing here is a fabricated zero
+	 * standing in for arithmetic that has not run. ---- */
+	uint32_t cluster_nodes;      /* members = CSBs with SELECTED set (p. 7-49) */
+	uint16_t cevotes;            /* total votes from the current members */
+	uint16_t quorum;             /* cluster quorum */
+	uint16_t expected_votes;     /* computed expected votes */
+	uint16_t qdisk_votes;        /* votes assigned to the quorum disk */
+
+	/* ---- proposed data cells (p. 7-48): written during a transition,
+	 * ignored outside one, copied to the effective cells above at Phase 2
+	 * and discarded if the transition is abandoned. ---- */
+	uint16_t proposed_cevotes;
+	uint16_t proposed_quorum;
+	uint16_t proposed_qdisk_votes;
+	uint16_t proposed_members;
+	uint8_t  proposed_valid;     /* 0 outside a transition */
+	uint8_t  pad1[3];
+
+	/*
+	 * ---- this node's half of p. 7-30's reconnect period ----
+	 * RECNXINTERVAL, in seconds, copied from the SYSGEN parameters at
+	 * cnxman_club_init() so the CSB ladder can size a reconnect window
+	 * without reaching back out of the CLUB. `recnxinterval_defaulted` is 1
+	 * when SYSGEN carried no value and the published OpenVMS default stood
+	 * in -- recorded rather than hidden, so a diagnostic can say so.
+	 */
+	uint16_t recnxinterval;
+	uint8_t  recnxinterval_defaulted;
+	uint8_t  pad4;
+
+	/* ---- times (p. 7-26) ---- */
+	uint64_t ftime;              /* when the cluster was formed, VMS absolute */
+	uint64_t fsysid;             /* the founding member's SCSSYSTEMID */
+	uint8_t  ftime_valid;
+	uint8_t  fsysid_valid;
+	uint8_t  pad2[2];
+	uint32_t last_transition_ms; /* when the last state transition occurred */
+
+	/* ---- the transition in progress (p. 7-26: coordinator identity, the
+	 * current phase) ---- */
+	uint8_t    transition_active;
+	uint8_t    transition_class;     /* enum vms_cnxman_transition_class */
+	uint8_t    barrier_step;         /* 0..12 of the 12-step barrier */
+	uint8_t    coordinator_valid;    /* 0 = no coordinator identified yet */
+	uint8_t    we_coordinate;        /* nonzero iff THIS node drives it */
+	uint8_t    pad3[3];
+	vms_csid_t coordinator_csid;
+	uint32_t   epoch;
+	uint32_t   outstanding_rebuild;  /* op-0d records still unanswered */
+	uint32_t   reformations;         /* transitions this node has seen */
+
+	/* ---- the membership bitmap as the wire delivered it ---- */
+	uint32_t bitmap[VMS_CLUB_BITMAP_WORDS];
+	uint32_t bitmap_slots_seen;
+
+	/*
+	 * OVMX instrumentation, not a VMS field: how many CSB events the ten-
+	 * state ladder ignored because the published description names no such
+	 * edge. Counted rather than guessed (design SS3.9 rule 3 forbids a
+	 * global to hold it), and a rising count in the lab is a question for a
+	 * capture.
+	 */
+	uint32_t csb_ignored_events;
+
+	/* ---- the CSB table (Figure 7-4: all CSBs hang off the CLUB) ---- */
+	uint32_t       n_csb;        /* high-water: slots 0..n_csb-1 may be in use */
+	struct vms_csb csb[VMS_CLUB_MAX_CSB];
+};
+
+/* ==========================================================================
+ * 5. The per-node context
  *
  * Layer contexts are OPAQUE here: vms_cluster.h is included by every layer, so
  * exposing one layer's struct would let another reach into it. Each layer's own
- * header declares its accessors; nobody dereferences a neighbour.
+ * header declares its accessors; nobody dereferences a neighbour. The CLUB is
+ * the deliberate exception and is NOT a layer context -- see section 4.
  * ========================================================================== */
 struct vms_pe;
 struct vms_scs;
@@ -211,6 +432,15 @@ struct vms_cluster {
 	struct vms_cluster_params params;  /* SYSGEN + CLUSTER_AUTHORIZE (FC-P0.10) */
 
 	enum vms_cluster_state state;
+
+	/*
+	 * The Cluster Block (SS4). One per node, as on VMS -- the connection
+	 * manager maintains it, but $GETSYI, SHOW CLUSTER, the quorum arithmetic
+	 * and the DLM's rebuild all read it, so it is per-node context and not
+	 * struct vms_cnxman's private state. Zeroed at allocation and made a
+	 * CLUB by cnxman_club_init(), which is what creates the local CSB.
+	 */
+	struct vms_club club;
 
 	/*
 	 * The host interface name the port is bound to -- the name the SS11

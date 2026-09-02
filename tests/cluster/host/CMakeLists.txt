@@ -57,10 +57,44 @@ cluster_host_test(test_fixture_loader   test_fixture_loader.c)
 cluster_host_test(test_codec_roundtrip  test_codec_roundtrip.c)
 cluster_host_test(fuzz_codec_seed       fuzz_codec_seed.c)
 
+# ---- FC-P3.6: the CLUB/CSB model, the ten-state ladder, the reconnect FSM ----
+# Built from src/kernel-core with -DOVMX_CLUSTER_HOST -- the SAME sources both
+# kmods compile, with no kernel headers and no seam. That is the whole point of
+# the pure-TU rule (design sec 3.9): a twenty-second RECNXINTERVAL window is
+# exercised here in microseconds on an injected clock, instead of only against a
+# live VAX at rung 5.
+set(OVMX_CLUSTER_CORE_DIR ${CMAKE_SOURCE_DIR}/src/kernel-core)
+
+add_library(cluster_host_cnxman STATIC
+    ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_csb.c
+    ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_recnx_fsm.c
+)
+target_include_directories(cluster_host_cnxman PUBLIC ${OVMX_CLUSTER_CORE_DIR})
+target_compile_definitions(cluster_host_cnxman PUBLIC OVMX_CLUSTER_HOST)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(cluster_host_cnxman PRIVATE -Wall -Wextra -Werror)
+endif()
+
+function(cluster_host_cnxman_test name)
+    add_executable(${name} ${ARGN})
+    target_link_libraries(${name} PRIVATE cluster_host_cnxman)
+    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${name} PRIVATE -Wall -Wextra -Werror)
+    endif()
+    add_test(NAME cluster_host_${name} COMMAND ${name})
+    set_tests_properties(cluster_host_${name} PROPERTIES
+        LABELS "unit;cluster;cluster_host;cnxman"
+        TIMEOUT 30
+    )
+endfunction()
+
+cluster_host_cnxman_test(test_cnxman_csb   test_cnxman_csb.c)
+cluster_host_cnxman_test(test_cnxman_recnx test_cnxman_recnx.c)
+
 # ---- FC-P0.1: the pure inter-layer headers must be host-includable ----
 # Everything below builds with -DOVMX_CLUSTER_HOST, which routes vms_cluster.h
-# to <stdint.h> instead of vms_internal.h.
-set(OVMX_CLUSTER_CORE_DIR ${CMAKE_SOURCE_DIR}/src/kernel-core)
+# to <stdint.h> instead of vms_internal.h. (OVMX_CLUSTER_CORE_DIR is set above.)
 
 # One object per pure header, compiled ALONE (see hdr_alone_*.c's own comment):
 # each proves that header needs nothing but the six of them plus
@@ -73,6 +107,8 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_scs.c
     hdr_alone_vms_cnxman.c
     hdr_alone_vms_dlm_scs.c
+    hdr_alone_vms_cnxman_csb.c        # FC-P3.6
+    hdr_alone_vms_cnxman_recnx_fsm.c  # FC-P3.6
 )
 target_include_directories(cluster_host_hdr_alone PRIVATE ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_hdr_alone PRIVATE OVMX_CLUSTER_HOST)

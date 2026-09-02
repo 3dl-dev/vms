@@ -336,18 +336,6 @@ uint32_t vms_kif_get_resmaster(const char *resnam, uint32_t *found,
  * Layer 3 wires scsd (else the census flags a stale marker). */
 uint32_t vms_kif_dlm_enum_standing(struct vms_dlm_enum_standing_args *out);
 
-/* Push this node's REAL cluster identity (local_csid = SCSSYSTEMID) + live member
- * CSIDs into the executive's DLM directory so dlm_directory_csid picks the same
- * master every cluster node does (vms-655). Replaces the insmod cluster-of-one
- * placeholder; fail-honest (SS$_NOSUCHDEV) when /dev/vms is absent.
- *
- * OVMX-UNWIRED: vms_kif_dlm_directory_set (vms-655) -- the directory-adoption
- * INGRESS. scsd (a glibc process) issues VMS_IOCTL_DLM_DIRECTORY_SET with a
- * direct POSIX ioctl (scsd_push_dlm_directory), not this freestanding client;
- * this wrapper exists so the ioctl is observable against a real /dev/vms. */
-uint32_t vms_kif_dlm_directory_set(uint32_t local_csid, const uint32_t *members,
-                                   uint32_t member_count);
-
 /* Dispatch a decoded cross-node DLM request to the kernel lock manager's
  * cross-node handler (vms-94c, DLM epic vms-7fa rung 1).
  * OVMX-UNWIRED: vms_kif_dlm_xnode (vms-94c) -- the DLM message TRANSPORT reaches

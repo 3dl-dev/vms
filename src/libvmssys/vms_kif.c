@@ -922,33 +922,6 @@ uint32_t vms_kif_dlm_member_depart(uint32_t departed_csid,
 }
 
 /*
- * vms_kif_dlm_directory_set - push this node's REAL cluster identity + live
- * membership into the executive's DLM directory (vms-655). OVMX-UNWIRED (see the
- * header): scsd issues VMS_IOCTL_DLM_DIRECTORY_SET with a direct POSIX ioctl
- * (scsd_push_dlm_directory), not this freestanding client; this wrapper exists so
- * the ioctl is observable against a real /dev/vms. Copies member CSIDs one at a
- * time (never a bulk struct/array copy the freestanding link cannot lower).
- */
-uint32_t vms_kif_dlm_directory_set(uint32_t local_csid, const uint32_t *members,
-                                   uint32_t member_count)
-{
-    struct vms_dlm_directory_set_args args;
-    uint32_t i;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.local_csid = local_csid;
-    if (member_count > 16u)
-        member_count = 16u;
-    args.member_count = member_count;
-    for (i = 0; i < member_count; i++)
-        args.members[i] = members ? members[i] : 0u;
-
-    KIF_CALL(VMS_IOCTL_DLM_DIRECTORY_SET, &args);
-
-    return args.status;
-}
-
-/*
  * vms_kif_dlm_get_granted - read the first remote-held granted lock on a resource
  * to value-verify a rebuilt cross-node lock (vms-dca9, DLM rung H10b). OVMX-UNWIRED
  * (see the header): scsd issues VMS_IOCTL_DLM_GET_GRANTED directly; this wrapper

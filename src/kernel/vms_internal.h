@@ -1293,10 +1293,6 @@ long vms_ioctl_acp_dmount(struct vms_proc *proc, unsigned long arg);
  * entry (resname + local lkid + mode) per mounted volume holding its F11B$v lock.
  * A READ of real lock state for scsd's directory-rebuild registration. */
 long vms_ioctl_dlm_enum_standing(struct vms_proc *proc, unsigned long arg);
-/* VMS_IOCTL_DLM_DIRECTORY_SET (vms-655): scsd pushes the node's REAL cluster
- * identity + live membership into the DLM directory so dlm_directory_csid picks
- * the same master every cluster node does. Replaces the insmod placeholder. */
-long vms_ioctl_dlm_directory_set(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_assign(struct vms_proc *proc, unsigned long arg);
 /*
  * IO$_ACCESS / IO$_DEACCESS (vms-204): open a file by name or by FID on a

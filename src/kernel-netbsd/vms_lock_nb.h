@@ -292,16 +292,6 @@ struct vms_dlm_enum_standing_args {
 	struct vms_dlm_standing_ent ent[VMS_DLM_ENUM_STANDING_MAX];
 };
 
-/* DLM directory identity + live membership adoption (rd vms-655). MUST match
- * src/kernel/vms_ioctl.h byte-for-byte. scsd pushes the node's REAL SCSSYSTEMID
- * + cluster member CSIDs so the directory picks the same master every node does. */
-struct vms_dlm_directory_set_args {
-	uint32_t local_csid;
-	uint32_t member_count;
-	uint32_t members[16];
-	uint32_t status;
-};
-
 /* Cluster membership crosses into the executive (rd vms-551). MUST match
  * src/kernel/vms_ioctl.h byte-for-byte. SEPARATE from dlm_member_csids
  * above (that vector is CSID-only, static, for DLM directory hashing; this
@@ -355,7 +345,6 @@ struct vms_cluster_member_get_args {
 #define VMS_IOCTL_CLUSTER_MEMBER_CLEAR _IOWR(VMS_LOCK_IOC_MAGIC, 0x3a, struct vms_cluster_member_clear_args)
 #define VMS_IOCTL_CLUSTER_MEMBER_GET   _IOWR(VMS_LOCK_IOC_MAGIC, 0x3b, struct vms_cluster_member_get_args)
 #define VMS_IOCTL_DLM_ENUM_STANDING    _IOWR(VMS_LOCK_IOC_MAGIC, 0x3c, struct vms_dlm_enum_standing_args)
-#define VMS_IOCTL_DLM_DIRECTORY_SET    _IOWR(VMS_LOCK_IOC_MAGIC, 0x3d, struct vms_dlm_directory_set_args)
 
 /*
  * Freeze the shared layouts -- see the other _nb.h contracts' identical asserts:
@@ -375,8 +364,6 @@ _Static_assert(sizeof(struct vms_dlm_xnode_args) == 120,
                "vms_dlm_xnode_args changed size -- VMS_IOCTL_DLM_XNODE ABI break");
 _Static_assert(sizeof(struct vms_dlm_depart_args) == 16,
                "vms_dlm_depart_args changed size -- VMS_IOCTL_DLM_MEMBER_DEPART ABI break");
-_Static_assert(sizeof(struct vms_dlm_directory_set_args) == 76,
-               "vms_dlm_directory_set_args changed size -- VMS_IOCTL_DLM_DIRECTORY_SET ABI break");
 _Static_assert(sizeof(struct vms_dlm_granted_args) == 56,
                "vms_dlm_granted_args changed size -- VMS_IOCTL_DLM_GET_GRANTED ABI break");
 _Static_assert(sizeof(struct vms_dlm_enum_waits_args) == 16 + 48 * 8,

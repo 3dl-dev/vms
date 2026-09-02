@@ -733,40 +733,6 @@ _Static_assert(VMS_IOCTL_DLM_ENUM_STANDING == 0xC290563Cu,
                "VMS_IOCTL_DLM_ENUM_STANDING encodes differently than the reference build");
 
 /*
- * $DLM directory identity + live membership adoption (rd vms-655). The DLM
- * directory (dlm_directory_csid) hashes a resource name over THIS node's CSID
- * (vms_local_csid) and the member-CSID vector (dlm_member_csids) to pick the
- * directory master -- but both are insmod module params (0444) that default to
- * a cluster-of-one {1}. A joining node does not learn its real cluster identity
- * (its SCSSYSTEMID) or the live membership until AFTER boot, during the SCS
- * join, so at insmod the executive cannot know them. scsd -- which resolves
- * SCSSYSTEMID and learns the members from the join -- pushes the REAL values
- * here so the directory computes the SAME master every other cluster node
- * computes (Rule of Total Connectivity). Without this, GET_RESMASTER returns
- * dir_csid=1 (the phantom) and the coordinator DROPS the node's op-01 lock
- * registration -- the node never counts (measured 2026-09-02). This is the live
- * "connection-manager feed" the static-vector comment in vms_lock.c anticipates.
- * INV-6: local_csid is the node's REAL resolved SCSSYSTEMID and members[] are
- * the REAL CSIDs of nodes the CM sees in the cluster -- never fabricated. The
- * cached directory is invalidated so resolution re-runs over the new set;
- * pushing also clears any prior runtime departed-set (a fresh membership view).
- * With no /dev/vms there is no executive to configure (honest SS$_NOSUCHDEV in
- * scsd); a malformed vector (local_csid 0, count 0, or count > max) is rejected
- * with SS$_BADPARAM rather than adopting a bogus identity.
- */
-struct vms_dlm_directory_set_args {
-    uint32_t local_csid;                     /* in: this node's REAL cluster CSID (SCSSYSTEMID) */
-    uint32_t member_count;                   /* in: valid entries in members[] (1..VMS_DLM_MAX_MEMBERS) */
-    uint32_t members[16];                    /* in: the live cluster member CSIDs */
-    uint32_t status;                         /* return: SS$_ status */
-};
-_Static_assert(sizeof(struct vms_dlm_directory_set_args) == 76,
-               "vms_dlm_directory_set_args changed size -- VMS_IOCTL_DLM_DIRECTORY_SET ABI break");
-#define VMS_IOCTL_DLM_DIRECTORY_SET _IOWR(VMS_IOC_MAGIC, 0x3d, struct vms_dlm_directory_set_args)
-_Static_assert(VMS_IOCTL_DLM_DIRECTORY_SET == 0xC04C563Du,
-               "VMS_IOCTL_DLM_DIRECTORY_SET encodes differently than the reference build");
-
-/*
  * Cluster membership crosses into the executive (rd vms-551,
  * docs/design-cluster-membership-executive.md). vms.ko owns a small
  * module-global membership block -- one entry per node the connection

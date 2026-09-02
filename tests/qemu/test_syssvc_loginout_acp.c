@@ -33,9 +33,12 @@
  *
  * ISOLATION. Every file this test creates lives under [OVMXDIR] (the writable
  * scratch directory the real-VAX fixture carries) and is ERASED before exit.
- * SYS$SYSTEM / SYS$MANAGER are defined as executive logicals pointing at
- * [OVMXDIR] so the product's own SYS$SYSTEM:SYSUAF.DAT / SYS$MANAGER:*.* specs
- * resolve onto the scratch directory -- the same resolution $PARSE performs.
+ * This suite addresses its own SYSUAF by the concrete VDA0:[OVMXDIR] spec; it
+ * does NOT redefine SYS$SYSTEM: / SYS$MANAGER:. The product's own
+ * SYS$SYSTEM:SYSUAF.DAT does compose (rms_acp_specs_from_fab), but this
+ * fixture has no [SYS0.SYSCOMMON.SYSEXE] system tree, so that path resolves
+ * fail-honest here (assertion 4) -- the positive resolve is proven against the
+ * system-tree fixture in test_syssvc_sysuaf_uic_base / _dirlogical_acp (vms-6a49).
  */
 
 #include <stdio.h>
@@ -160,18 +163,29 @@ int main(void)
     check($VMS_STATUS_SUCCESS(st), "VDA0: mounted executive-global for the ACP");
 
     /*
-     * SUBSTRATE GAP (flagged; the boot flip must close it). The product opens
-     * SYS$SYSTEM:SYSUAF.DAT / SYS$MANAGER:*.* -- directory-bearing rooted
-     * logicals. lnm_translate_filespec substitutes a PLAIN device but LEAVES a
-     * directory-bearing equivalence "to the filespec layer", and the
-     * RMS-over-ACP path (rms_acp_spec_from_fab, #649) does not yet compose that
-     * directory. So SYS$SYSTEM: cannot yet resolve to a concrete on-volume
-     * directory, and the MFD ([000000]) is not writable through the ACP. This
-     * test therefore exercises the REROUTE MECHANISM against a concrete
-     * VDA0:[OVMXDIR] spec -- the writable scratch directory the fixture carries
-     * -- which is byte-for-byte the code sysuaf_scan/find_uaf_record run once a
-     * spec is resolved, and asserts the product logical paths FAIL HONESTLY
-     * until that resolution lands (no POSIX fallback, INV-6). */
+     * WHY A CONCRETE [OVMXDIR] SPEC HERE, NOT SYS$SYSTEM:. The product opens
+     * SYS$SYSTEM:SYSUAF.DAT / SYS$MANAGER:*.* -- concealed-rooted directory
+     * logicals. That composition IS wired into the RMS-over-ACP open path
+     * (rms_acp_specs_from_fab -> vmsfs_compose_ods2_candidates, src/vmsrms/
+     * rms_core.c) and is PROVEN end-to-end on a live executive elsewhere:
+     * test_syssvc_sysuaf_uic_base / _rightslist / _setuai do a real RMS $OPEN of
+     * SYS$SYSTEM:SYSUAF.DAT (via sysuaf_lookup / rms_open_named_handle) and read
+     * the real record off the ACP, and test_syssvc_dirlogical_acp walks the
+     * concealed-rooted chain to the file FID (teeth: dirlogical-compose-drops-
+     * common-member). Earlier revisions of THIS comment claimed the compose "does
+     * not yet" happen (the stale #649 caveat that misled vms-058); that is no
+     * longer true (vms-6a49).
+     *
+     * This suite instead stages its own SYSUAF under VDA0:[OVMXDIR] because its
+     * fixture is the real-VAX disk, whose only writable directory is [OVMXDIR] --
+     * it carries NO [SYS0.SYSCOMMON.SYSEXE] system tree, so the product
+     * SYS$SYSTEM:SYSUAF.DAT composes to on-volume candidates that are absent on
+     * THIS volume and so resolve fail-honest (RMS$_FNF) -- see assertion (4).
+     * That is a property of this fixture, not a missing compose. The full
+     * boot-time login through the product's own SYS$SYSTEM: against a real system
+     * tree is vms-ead's (a full-boot proof). Here we exercise byte-for-byte the
+     * same sysuaf reader/writer once a spec is resolved, against a concrete
+     * [OVMXDIR] spec, with no /vms POSIX fallback (INV-6). */
 #define UAF_SPEC "VDA0:[OVMXDIR]SYSUAF.DAT"
 
     /* Author a genuine BINARY $UAFDEF SYSUAF over the ACP (vms-d92 atomic flip):
@@ -213,13 +227,17 @@ int main(void)
               "opening an absent SYSUAF fails-honest (RMS$_FNF, no fallback)");
     }
 
-    /* ---- (4) the product SYS$SYSTEM: path has no SYSUAF in this fixture, so a
-     *          product sysuaf_lookup fails HONESTLY (RMS$_FNF) -- never a silent
-     *          POSIX/ASCII success (INV-6). */
+    /* ---- (4) the product SYS$SYSTEM: path COMPOSES (rms_acp_specs_from_fab ->
+     *          vmsfs_compose_ods2_candidates), but this real-VAX fixture carries
+     *          no [SYS0.SYSCOMMON.SYSEXE] system tree, so the composed on-volume
+     *          candidates are absent HERE and sysuaf_lookup resolves fail-honest
+     *          (RMS$_FNF) -- never a silent POSIX/ASCII success (INV-6). The
+     *          positive resolve-through-SYS$SYSTEM: proof lives in
+     *          test_syssvc_sysuaf_uic_base against the system-tree fixture. */
     {
         sysuaf_record_t prec;
         check(sysuaf_lookup("SYSTEM", &prec) != 0,
-              "product sysuaf_lookup(SYS$SYSTEM:) fails-honest with no SYSUAF in this fixture");
+              "product sysuaf_lookup(SYS$SYSTEM:) fails-honest -- composes, but this fixture has no [SYS0.SYSCOMMON.SYSEXE] tree");
     }
 
     /* ---- (5a) OPERATOR.LOG append lands a genuine ODS-2 record, read back

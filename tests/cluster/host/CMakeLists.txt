@@ -24,6 +24,11 @@ add_library(cluster_host_codec STATIC
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_scs.c
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_cm.c
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_mscp.c
+    # FC-P3.4: the MSCP disk-client discovery FSM is PURE (no seam call, no
+    # kernel headers -- see vms_mscp_cl_fsm.h), so it builds on exactly the
+    # same terms as the codec TUs above rather than needing its own
+    # -DOVMX_CLUSTER_HOST library.
+    ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_mscp_cl_fsm.c
 )
 target_include_directories(cluster_host_codec PUBLIC
     ${CMAKE_SOURCE_DIR}/src/kernel-core
@@ -119,6 +124,7 @@ cluster_host_cnxman_test(test_cnxman_barrier test_cnxman_barrier.c)  # FC-P3.5
 cluster_host_test(test_codec_scs        test_codec_scs.c)
 cluster_host_test(test_codec_cm         test_codec_cm.c)
 cluster_host_test(test_codec_mscp       test_codec_mscp.c)
+cluster_host_test(test_mscp_cl_fsm      test_mscp_cl_fsm.c)  # FC-P3.4
 
 # ---- FC-P3.7: quorum arithmetic (tracking only) + the $GETSYI cluster
 # item-code projection. Same host-pure discipline as FC-P3.6 above: both new

@@ -1683,6 +1683,13 @@ static struct {
      * SDA on both VAX1 and VAX3 reports `Found Node SYSID 000000000401` = 1025.
      * Learned, never computed (Rule 10). */
     uint16_t founding_sysid;
+    /* vms-655: OVMX's OWN cluster-assigned CSID (0x000X000X form), learned by
+     * IDENTITY from the cat-01 op-05 per-member membership record whose sysid
+     * matches our SCSSYSTEMID. Its low 16 bits are OVMX's node-index, which a
+     * granted op-01 req_lkid MUST carry (a VAX rejects a lock id whose
+     * node-index != the sender's). 0 until learned. Learned off the wire, never
+     * computed or hardcoded (Rule 10 / the operator's real-CN=3 bar). */
+    uint32_t assigned_csid;
 } ovmx_cluster;
 
 /*
@@ -6593,40 +6600,6 @@ static void cm_dlm_frame_common(struct peer_state *ps, const uint8_t our_hw_mac[
 }
 
 /*
- * scsd_res_dir_info - read a resource's DIRECTORY-master csid + granted count from
- * the executive (GET_RESMASTER over /dev/vms), for the full per-lock op-01 record
- * (Layer 3, vms-74f). *dir_csid = OVMX's own dir_csid for the resource it masters;
- * *n_granted = the granted-lock count. Both 0 on any failure -- a read of real DLM
- * state, never fabricated. Direct ioctl (scsd is glibc); test-stub yields zeroes.
- */
-static void scsd_res_dir_info(const char *resnam, uint32_t *dir_csid,
-                              uint32_t *n_granted)
-{
-    if (dir_csid)  *dir_csid = 0;
-    if (n_granted) *n_granted = 0;
-#ifndef SCSD_UNIT_TEST
-    struct vms_resmaster_args args;
-    struct vms_register_args reg;
-    int fd = open("/dev/vms", O_RDWR);
-    if (fd < 0) {
-        return;
-    }
-    memset(&reg, 0, sizeof(reg));
-    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return; }
-    memset(&args, 0, sizeof(args));
-    strncpy(args.resnam, resnam, sizeof(args.resnam) - 1);
-    args.resnam[sizeof(args.resnam) - 1] = '\0';
-    if (ioctl(fd, VMS_IOCTL_GET_RESMASTER, &args) == 0) {
-        if (dir_csid)  *dir_csid = args.dir_csid;
-        if (n_granted) *n_granted = args.n_granted;
-    }
-    close(fd);
-#else
-    (void)resnam;
-#endif
-}
-
-/*
  * cm_send_dlm_registration - drive OVMX's REAL standing-lock registrations to the
  * COORDINATOR (Layer 3, vms-74f). Enumerate the node's standing locks (the
  * F11B$v<label> volume lock a MOUNT holds -- vms-25e/1f4) and originate one cat-02
@@ -6661,26 +6634,30 @@ static int cm_send_dlm_registration(int sock, int ifindex, struct peer_state *ps
         struct scs_member_params bp;
         cm_dlm_frame_common(ps, our_hw_mac, our_src_logical, &bp);
         /*
-         * The per-lock DLM record from OVMX's REAL lock state (run 9c: a skeletal
-         * req_lkid+resname op-01 is dropped). Every field is a genuine attribute of
-         * the standing lock OVMX holds, in OVMX's own executive encoding (INV-6):
-         *   req_lkid + lock_id = OVMX's real lock handle;
-         *   mode = NL (the mode OVMX genuinely holds);
-         *   n_granted (lockmgmt count) = OVMX's real granted-lock count (GET_RESMASTER).
-         * dir_csid stays 0 -- OVMX asserts NO directory opinion (see the header:
-         * exec_jhash != VMS's hash, self-mastering broke the cluster). flags/lockmgmt
-         * are structural DLM lock-mgmt words (secondary iterate-suspects if a re-fire
-         * drops). GET_RESMASTER is read ONLY for n_granted; its dir_csid is discarded. */
-        uint32_t n_granted = 0;
-        scsd_res_dir_info(locks[i].resnam, NULL, &n_granted);
+         * The op-01 record, matched to db20-b's GRANTED baseline (VAX granted it
+         * 48/48) with ONE honest correction measured on the 5360671a drop:
+         *   req_lkid = (OVMX's real lock handle << 16) | OVMX's node-index. A VAX
+         *     rejects a lock id whose LOW 16 bits (the node-index) aren't the
+         *     sender's; 5360671a sent the executive's raw lkid (low16=1, a wrong
+         *     node) and was dropped. The node-index is OVMX's cluster-assigned CSID
+         *     & 0xffff, LEARNED by identity from the op-05 record (never hardcoded).
+         *   dir_csid = 0 -- OVMX asserts no directory opinion (exec_jhash != VMS's
+         *     hash; self-mastering broke the cluster in 90b3bbbd).
+         *   lock_id / flags / lockmgmt = 0 -- db20-b was GRANTED with these zeroed;
+         *     add back only if the completion proves to need them.
+         *   mode = NL (the mode OVMX genuinely holds).
+         * INV-6: req_lkid is OVMX's REAL handle carried in OVMX's REAL (wire-learned)
+         * node-index; nothing fabricated. The caller fires only once assigned_csid
+         * is known, so node_index is always the real value here. */
+        uint32_t node_index = ovmx_cluster.assigned_csid & 0xffffu;
         struct scs_dlm_reg_fields f;
         memset(&f, 0, sizeof(f));
-        f.req_lkid = locks[i].lkid;
-        f.dir_csid = 0;                             /* NEVER computed -- master is the granter (measured) */
-        f.lock_id  = locks[i].lkid;                 /* OVMX's real per-lock id */
+        f.req_lkid = ((locks[i].lkid & 0xffffu) << 16) | node_index;
+        f.dir_csid = 0;                             /* master is the granter (measured) */
+        f.lock_id  = 0;                             /* match db20-b granted baseline */
         f.mode     = 0;                             /* NL -- the mode OVMX holds */
-        f.flags    = 0x007d;                        /* structural DLM lock-flags word (secondary) */
-        f.lockmgmt = 0x00010000u | (n_granted & 0xffffu); /* count = OVMX's real n_granted */
+        f.flags    = 0;                             /* match db20-b granted baseline */
+        f.lockmgmt = 0;                             /* match db20-b granted baseline */
         uint8_t dframe[SCS_MEMBER_FRAME_LEN];
         if (scs_member_build_dlm_reg_enq(&bp, locks[i].resnam, locks[i].namelen,
                                          &f, dframe) == 0 &&
@@ -6691,9 +6668,11 @@ static int cm_send_dlm_registration(int sock, int ifindex, struct peer_state *ps
             sent++;
             log_ts(stdout);
             printf(" SCSD-I-DLMREGENQ, registered a REAL standing lock to the"
-                   " connected member (cat 0x02 op 0x01, res='%.*s' lkid=0x%08x"
-                   " dir_csid=0 [master is the granter] cksum=0x%04x seq=%u)\n",
-                   (int)locks[i].namelen, locks[i].resnam, locks[i].lkid,
+                   " connected member (cat 0x02 op 0x01, res='%.*s'"
+                   " req_lkid=0x%08x [handle 0x%04x, node-index 0x%04x] dir_csid=0"
+                   " [master is the granter] cksum=0x%04x seq=%u)\n",
+                   (int)locks[i].namelen, locks[i].resnam, f.req_lkid,
+                   (unsigned)(locks[i].lkid & 0xffffu), (unsigned)node_index,
                    bp.checksum, bp.send_seq);
             fflush(stdout);
         }
@@ -7410,6 +7389,38 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                     ps->cm_last_recv_op = mv.opcode;
                 }
 
+                /* vms-655: LEARN OVMX's OWN cluster-assigned CSID from the
+                 * cat-0x01 op-0x05 per-member membership record, matched BY
+                 * IDENTITY (the record whose sysid == our own SCSSYSTEMID). The
+                 * record is {sysid @ body[20], csid @ body[36]} (csid = sysid+16,
+                 * verified across all three cluster nodes). Its low 16 bits are
+                 * OVMX's node-index, which a granted op-01 req_lkid must carry (a
+                 * VAX rejects a lock id whose node-index != the sender's, measured
+                 * on the 5360671a drop). Matching by our own sysid makes this
+                 * immune to offset drift -- a wrong offset simply never matches,
+                 * so we fail honest (no CSID learned) rather than fabricate one.
+                 * Learned off the wire, never computed/hardcoded (Rule 10). */
+                if (!mv.is_response && mv.category == SCS_MEMBER_CAT_CONFIG &&
+                    mv.opcode == SCS_MEMBER_OP_LOCKRB &&
+                    ovmx_cluster.assigned_csid == 0 && n >= 72 + 40) {
+                    const uint8_t *rb = buf + 72;
+                    uint32_t rec_sysid = (uint32_t)rb[20] | ((uint32_t)rb[21] << 8) |
+                                         ((uint32_t)rb[22] << 16) | ((uint32_t)rb[23] << 24);
+                    if (rec_sysid == (uint32_t)resolve_scssystemid()) {
+                        ovmx_cluster.assigned_csid =
+                            (uint32_t)rb[36] | ((uint32_t)rb[37] << 8) |
+                            ((uint32_t)rb[38] << 16) | ((uint32_t)rb[39] << 24);
+                        log_ts(stdout);
+                        printf(" SCSD-I-CSIDLEARN, learned OVMX's cluster-assigned"
+                               " CSID 0x%08x (node-index 0x%04x) from the op-05"
+                               " membership record matching our SCSSYSTEMID %u\n",
+                               ovmx_cluster.assigned_csid,
+                               ovmx_cluster.assigned_csid & 0xffffu,
+                               (unsigned)resolve_scssystemid());
+                        fflush(stdout);
+                    }
+                }
+
                 /* vms-7a9: consume the peer's advertised VOTES from its
                  * cat-0x01 op-0x01 cluster-parameters message (grounded LE u16
                  * at VC body[22:24], spec sec 4j) and fold it into the quorum
@@ -7618,10 +7629,23 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                      * One-shot per epoch; ps IS the coordinator (op-06 is its own
                      * membership publication).
                      */
-                    if (!ps->dlm_reg_sent) {
+                    /* vms-655: fire ONLY once OVMX's cluster-assigned CSID is
+                     * known (learned from the op-05 record above -- op-05 precedes
+                     * op-06 in the choreography: op-03 COMMIT -> op-05 rebuild ->
+                     * op-06 MEMB). Without it we cannot form a req_lkid a VAX will
+                     * accept, and must never fabricate a node-index -- so defer
+                     * (dlm_reg_sent stays 0) and fire on a later op-06 once learned,
+                     * rather than send a droppable/dishonest op-01. */
+                    if (!ps->dlm_reg_sent && ovmx_cluster.assigned_csid != 0) {
                         ps->dlm_reg_sent = 1;
                         cm_send_dlm_registration(rx->sock, (int)rx->ifindex, ps,
                                                  rx->our_hw_mac, rx->our_src_logical);
+                    } else if (!ps->dlm_reg_sent) {
+                        log_ts(stdout);
+                        printf(" SCSD-I-DLMREGDEFER, op-06 seen but OVMX's"
+                               " cluster-assigned CSID not yet learned (no matching"
+                               " op-05 record) -- deferring op-01 registration\n");
+                        fflush(stdout);
                     }
                 }
 

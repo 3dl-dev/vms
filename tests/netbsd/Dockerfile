@@ -152,6 +152,18 @@ COPY src/vmsfs/ods2/ods2_edit.c              /netbsd/guest-src/vmsfs/ods2/ods2_e
 COPY src/vmsfs/ods2/ods2_kcompat.h           /netbsd/guest-src/vmsfs/ods2/ods2_kcompat.h
 COPY src/vmsfs/ods2/ods2_block.h             /netbsd/guest-src/vmsfs/ods2/ods2_block.h
 COPY src/vmsfs/include/vmsfs/ods2.h          /netbsd/guest-src/vmsfs/include/vmsfs/ods2.h
+# --- FC-P0.1: the executive-resident VMScluster stack's LAN port layer + the
+# NetBSD half of the cluster seam (exec_kbackend.h families SS14..SS18). vms_pe.c
+# is in src/kernel-netbsd/Makefile's SRCS from its first commit, so the in-guest
+# module build needs it and its kernel-core headers staged. ---
+COPY src/kernel-core/vms_pe.c                /netbsd/guest-src/kernel-core/vms_pe.c
+COPY src/kernel-core/vms_pe.h                /netbsd/guest-src/kernel-core/vms_pe.h
+COPY src/kernel-core/vms_scs.h               /netbsd/guest-src/kernel-core/vms_scs.h
+COPY src/kernel-core/vms_cnxman.h            /netbsd/guest-src/kernel-core/vms_cnxman.h
+COPY src/kernel-core/vms_dlm_scs.h           /netbsd/guest-src/kernel-core/vms_dlm_scs.h
+COPY src/kernel-core/vms_cluster.h           /netbsd/guest-src/kernel-core/vms_cluster.h
+COPY src/kernel-core/vms_cluster_snapshot.h  /netbsd/guest-src/kernel-core/vms_cluster_snapshot.h
+COPY src/kernel-netbsd/vms_lan_netbsd.c      /netbsd/guest-src/kmod/vms_lan_netbsd.c
 # --- probe/: the userspace tools + the NetBSD transport seam ---
 COPY tests/netbsd/guest/vmsprobe.c           /netbsd/guest-src/probe/vmsprobe.c
 COPY tests/netbsd/guest/vmseflag.c           /netbsd/guest-src/probe/vmseflag.c

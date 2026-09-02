@@ -549,6 +549,225 @@
  *   through a Linux-only accessor. NetBSD BGn: is therefore NOT feature-complete
  *   for a poll()-driven client until a kqueue equivalent lands (vms-024); the
  *   NetBSD backend is the type-checked contract-only twin until then.
+ *
+ * ================================================================
+ * THE CLUSTER SEAM -- families 14..18 (FC-P0.1)
+ * ================================================================
+ *
+ * Design: docs/design-faithful-cluster-executive.md SS3.2.1 (the substrate
+ * contract, both bindings designed together) and SS3.2.2 (the seam as a
+ * deliverable, with the leak table). Families 14..18 are the COMPLETE set of
+ * host primitives the executive-resident VMScluster stack (PEDRIVER/SCS/CNXMAN/
+ * the DLM's distributed arm/MSCP) is allowed to touch -- nothing else. Together
+ * with families 1, 2, 4, 6, 7, 8, 9 and 11 (already above) they are the whole
+ * substrate surface of ~13 500 lines of shared cluster code; the Linux and
+ * NetBSD bindings are ~300 lines each.
+ *
+ * WHY THESE FIVE AND NOT MORE. The executive had NO active execution context
+ * before this seam: no thread, no timer, and no unsolicited-receive hook. A port
+ * driver that must emit a HELLO every ~2 s, retransmit a sequenced message, time
+ * a virtual circuit out and run a transition barrier cannot exist without them.
+ * Everything else the stack needs it already has: locks (SS1), condition
+ * variables (SS2), allocation (SS4), the block seam for the MSCP server (SS8),
+ * barriers (SS9) and the primary-netdev lookup that names ETH0: (SS11).
+ *
+ * -------- THE TWO CONTRACT RULES (read these before writing a binding) -------
+ *
+ * CONTRACT RULE 1 -- THE RECEIVE CALLBACK IS NOT PROTOCOL CONTEXT.
+ *   exec_lan_open()'s rx_cb runs in the substrate's receive context: a Linux
+ *   softirq (dev_add_pack's ->func), a NetBSD softint (if_percpuq /
+ *   IPL_SOFTNET), or -- on the VAX qe/xq drivers -- the driver's own interrupt.
+ *   In that context rx_cb MAY do exactly three things and nothing else:
+ *     (a) COPY the frame bytes into a buffer the CORE already owns (an
+ *         exec_lanbuf_t taken from the port's pre-allocated pool),
+ *     (b) ENQUEUE that buffer on the port's input queue under an exec_lock_t
+ *         the BINDING initialized at the receive IPL, and
+ *     (c) WAKE the cluster fork thread (exec_cv_signal).
+ *   It MUST NOT allocate, MUST NOT sleep, MUST NOT take the fork mutex, and
+ *   MUST NOT run one line of protocol code. If the pool is empty the frame is
+ *   DROPPED and counted -- a dropped frame is a retransmit, a blocked softirq is
+ *   a dead node. This rule is what makes the same core correct on a substrate
+ *   whose IPL rules the core never names.
+ *
+ * CONTRACT RULE 2 -- A TIMER CALLBACK ONLY POSTS AND WAKES.
+ *   exec_timer_init()'s cb runs in a no-sleep context (Linux timer softirq,
+ *   NetBSD callout softint). It MAY only post a work item to the fork queue and
+ *   wake the fork thread; the FSM handler for the expiry runs later, in the fork
+ *   thread, under the fork mutex, like every other event. No layer arms an
+ *   exec_timer directly: they all go through vms_cluster_fork.c's cf_timer_*
+ *   wrappers (FC-P0.5), so this rule is enforced in one place and timer idioms
+ *   never spread through the stack.
+ *
+ * Both rules exist so that the ONE serialization VMS has -- fork IPL, a single
+ * logical thread mutating the PB/VC/CDT/CSB/RSB databases -- is what OVMX has
+ * too, on both substrates, with no per-substrate reasoning in the core
+ * (design SS3.3).
+ *
+ * -------- STATUS CONVENTION FOR FAMILIES 14..18 ----------------------------
+ * Every int-returning op below returns 0 on success. A NONZERO return is the
+ * VMS condition value (an SS$_ code) the executive will report to the
+ * personality -- so a binding that has no such interface returns
+ * EXEC_SS_NOSUCHDEV (SS$_NOSUCHDEV, 2680) and VMS_IOCTL_CLUSTER_START fails
+ * honestly with it (Rule 9: fail-honest, never a simulated port). This is the
+ * same 0 == success / nonzero == failure shape families 8, 11, 12 and 13 use;
+ * families 14..18 additionally fix WHICH nonzero value, because their failure
+ * is a VMS-visible device status, not an internal errno.
+ *
+ * 14. LAN port (design SS3.2.2 SS14; called ONLY from src/kernel-core/vms_pe.c,
+ *    the PEDRIVER-role port driver that owns PEA0:). One node has exactly one
+ *    cluster port, bound to the netif SS11 resolved for ETH0:, so these ops name
+ *    no handle: the binding owns at most one open port and exec_lan_close()
+ *    closes it. (The core's per-node state lives in struct vms_cluster, not in
+ *    the seam.)
+ *
+ *    Types:
+ *      exec_lanbuf_t   a core-owned receive buffer {data, len, cap}. Defined
+ *                      BELOW in this header, not per substrate: it holds no
+ *                      host type by construction (that is the entire point --
+ *                      see the leak table row "Frame buffers"). The core
+ *                      pre-allocates a pool of them; rx_cb copies into one.
+ *      exec_lan_rx_cb_t  void (*)(void *ctx, const uint8_t *frame, uint32_t len)
+ *
+ *    THE FRAME IS THE WHOLE ETHERNET FRAME, both directions: byte 0 is the
+ *    destination MAC, byte 12..13 the ethertype, byte 14 the first protocol
+ *    byte. No skb, no mbuf, no offset base other than the wire's own -- so the
+ *    codec's absolute offsets are the same numbers a pcap shows (the cluster
+ *    spec is written in those offsets; a base change would silently re-map every
+ *    field). The binding strips/builds its own host buffer around this.
+ *
+ *   int exec_lan_open(const char *ifname, uint16_t ethertype,
+ *                     exec_lan_rx_cb_t rx_cb, void *ctx)
+ *        Bind to host interface `ifname` (the name SS11 reported for ETH0:) and
+ *        register for UNSOLICITED receipt of every frame whose ethertype is
+ *        `ethertype` (host order; 0x6007 for SCA). rx_cb is then called per
+ *        frame under CONTRACT RULE 1. Returns 0, or SS$_NOSUCHDEV when the
+ *        interface does not exist (the honest "no NIC" case: no PEA0:, no
+ *        HELLO). MAY SLEEP; called from process context at CLUSTER_START.
+ *        Linux: dev_get_by_name + dev_add_pack(.type = htons(ethertype),
+ *        .dev = ndev). NetBSD: the link-layer interposition the FC-P0.3 spike
+ *        picks -- pfil(9) on ifp->if_pfil, or an ifp->if_input shim that peeks
+ *        the ethertype and chains the rest to the saved input routine.
+ *   void exec_lan_close(void)
+ *        Unregister and drop the interface reference. After it returns, rx_cb is
+ *        guaranteed not to be running or to be entered again. MAY SLEEP.
+ *        Linux: dev_remove_pack + dev_put. NetBSD: pfil_remove_hook / restore
+ *        ifp->if_input.
+ *   int exec_lan_xmit(const uint8_t *frame, uint32_t len)
+ *        Transmit ONE complete Ethernet frame (see above; the source MAC is
+ *        already in bytes 6..11 -- the port driver sets it from
+ *        exec_lan_hwaddr, because NISCA also carries a LOGICAL address that is
+ *        NOT the source MAC and only the core knows which is which). Returns 0
+ *        or an SS$_ status. Called from the fork thread (process context);
+ *        MUST NOT be called from rx_cb. Linux: alloc_skb + skb_put + skb->dev +
+ *        dev_queue_xmit. NetBSD: m_gethdr/m_copyback + (*ifp->if_transmit)(),
+ *        bypassing ether_output's ARP/sockaddr path.
+ *   int exec_lan_mc_add(const uint8_t mac[6])
+ *   int exec_lan_mc_del(const uint8_t mac[6])
+ *        Join / leave one Ethernet multicast group (the cluster HELLO group
+ *        AB-00-04-01-<group>). 0 or an SS$_ status. Linux: dev_mc_add/del.
+ *        NetBSD: sockaddr_dl + if_mcast_op(SIOCADDMULTI/SIOCDELMULTI).
+ *   int exec_lan_hwaddr(uint8_t out[6])
+ *        The bound interface's REAL hardware address. 0 or an SS$_ status; on
+ *        failure `out` is untouched (INV-6: the port driver never sends a frame
+ *        with a fabricated source MAC). Linux: ndev->dev_addr.
+ *        NetBSD: CLLADDR(ifp->if_sadl).
+ *   int exec_lan_mtu(uint32_t *out)
+ *        The bound interface's MTU, which clamps NISCS_MAX_PKTSZ. 0 or an SS$_
+ *        status. Linux: ndev->mtu. NetBSD: ifp->if_mtu.
+ *   int exec_lan_link_up(int *out)
+ *        *out = nonzero iff the carrier is up. Reported as a status rather than
+ *        a bare int so "the port is not open" is distinguishable from "the link
+ *        is down" -- the CNXMAN reconnect loop must not read the second as the
+ *        first. Linux: netif_carrier_ok. NetBSD: ifp->if_link_state.
+ *
+ * 15. Cluster fork context (design SS3.2.2 SS15; called ONLY from
+ *    src/kernel-core/vms_cluster_fork.c). ONE kthread per node -- "the CNXMAN
+ *    fork" -- is the executive ACTOR: it drains received frames, expired timers
+ *    and work posted from process context, strictly one at a time under the fork
+ *    mutex, and it is the only context that runs protocol code.
+ *
+ *    Type: exec_kthread_t, an opaque handle the core stores BY VALUE inside its
+ *    fork context and NEVER dereferences (the exec_lock_t / exec_socket_t
+ *    precedent). Linux: a struct task_struct *. NetBSD: an lwp * plus the stop
+ *    flag and the condvar kthread_join needs.
+ *
+ *   int  exec_kthread_create(exec_kthread_t *t, int (*fn)(void *), void *arg,
+ *                            const char *name)
+ *        Start one kernel thread running fn(arg) and name it. Returns 0 (+ *t
+ *        initialized) or an SS$_ status; on failure no thread exists. MAY SLEEP.
+ *        Linux: kthread_run. NetBSD: kthread_create(PRI_NONE, KTHREAD_MPSAFE,
+ *        NULL, fn, arg, &l, name).
+ *   void exec_kthread_stop(exec_kthread_t *t)
+ *        Ask the thread to stop AND WAIT for it to exit (join). Idempotent on an
+ *        already-stopped handle. MAY SLEEP; never called from the thread itself.
+ *        Linux: kthread_stop. NetBSD: set the stop flag, cv_signal, kthread_join.
+ *   int  exec_kthread_should_stop(exec_kthread_t *t)
+ *        Nonzero iff a stop was requested; the fork loop tests it once per
+ *        iteration. Takes the handle (Linux's kthread_should_stop() reads
+ *        `current` and ignores it; NetBSD reads the flag out of it) -- the
+ *        portable superset, so the core writes one loop.
+ *
+ *    NOT A FAMILY: the fork WORK QUEUE. Posting and waiting are a thin
+ *    composition of SS1 + SS2 (a list under an exec_lock_t, an exec_cv_t to
+ *    sleep on) that vms_cluster_fork.c builds once; adding an exec_workq_*
+ *    family would put queue policy in the bindings, where a reviewer cannot
+ *    compare it. The design's SS3.2.1 table lists exec_workq_post/wait in the
+ *    same row as "already-present exec_lock_t/exec_cv families are reused"; the
+ *    SS3.2.2 family inventory (the normative list) does not name a workq family.
+ *    Resolved in favour of the inventory: NO new seam family for the queue.
+ *
+ * 16. Timers (design SS3.2.2 SS16; called ONLY from vms_cluster_fork.c's
+ *    cf_timer_* wrappers -- see CONTRACT RULE 2).
+ *
+ *    Type: exec_timer_t, stored BY VALUE by the core, never dereferenced.
+ *    Linux: struct timer_list + the {cb, ctx} pair. NetBSD: struct callout + the
+ *    same pair.
+ *
+ *   void exec_timer_init(exec_timer_t *t, void (*cb)(void *), void *ctx)
+ *        Prepare `t` to call cb(ctx) after a later _arm. Does not arm.
+ *        Linux: timer_setup. NetBSD: callout_init(CALLOUT_MPSAFE) +
+ *        callout_setfunc.
+ *   void exec_timer_arm(exec_timer_t *t, uint32_t ms)
+ *        (Re-)arm to fire once, `ms` milliseconds from now; arming an armed
+ *        timer moves it (Linux mod_timer / NetBSD callout_schedule semantics --
+ *        the HELLO cadence re-arms every tick, so this must not stack).
+ *   void exec_timer_cancel(exec_timer_t *t)
+ *        Cancel and WAIT OUT a callback already running (Linux del_timer_sync /
+ *        NetBSD callout_halt), so a cancelled timer can never touch state the
+ *        caller is about to free. MAY SLEEP; call from the fork thread or
+ *        process context, never from a timer callback.
+ *   void exec_timer_destroy(exec_timer_t *t)
+ *        Release the timer's substrate resources after a final _cancel. A no-op
+ *        on Linux; NetBSD callout_destroy(9) is MANDATORY, so the op exists for
+ *        the same reason exec_lock_destroy / exec_mutex_destroy do.
+ *
+ * 17. Time (design SS3.2.2 SS17; called from the codec (incarnation, boot time)
+ *    and, through injected ops only, by the FSMs -- an FSM NEVER calls these
+ *    directly, so a host test can drive time, design SS3.9 rule 6).
+ *
+ *   uint64_t exec_time_now_vms(void)
+ *        VMS absolute time: 100-nanosecond ticks since 00:00 17-NOV-1858 (the
+ *        Smithsonian base date; the published VMS system-time representation).
+ *        Backs the VC incarnation quadword, CLUSTER_FTIME and the SYS$GETTIM
+ *        lineage. Linux: ktime_get_real_ns() + the epoch offset.
+ *        NetBSD: getnanotime() + the same offset.
+ *   uint64_t exec_ticks_ms(void)
+ *        A MONOTONIC millisecond counter with an arbitrary origin -- never wall
+ *        clock. All deadlines (HELLO cadence, TIMVCFAIL, RECNXINTERVAL,
+ *        retransmit) are computed from this, so a wall-clock step cannot expire
+ *        a virtual circuit. Linux: ktime_get_ns()/1000000. NetBSD:
+ *        getnanouptime()/1000000.
+ *
+ * 18. Console (design SS3.2.2 SS18; called from vms_cnxman.c for the OPCOM-class
+ *    %CNXMAN / %VAXcluster lines the operator and the lab harness read on OPA0:).
+ *
+ *   void exec_console_printf(const char *fmt, ...)
+ *        Emit one line on the node's console. Format-checked at the call site on
+ *        both substrates. Linux: printk at KERN_ERR -- KERN_INFO is suppressed
+ *        at the QEMU console loglevel, so an INFO-level cluster line is invisible
+ *        exactly where the harness reads it (memory forking-daemon-over-bgn-
+ *        ladder). NetBSD: printf(9). This op EXISTS so the cluster stack stops
+ *        using pr_info(), a Linux idiom the NetBSD twin has to #define away.
  */
 
 #ifndef OVMX_EXEC_KBACKEND_H
@@ -595,6 +814,53 @@ struct exec_proc_acct {
 	int      has_create;     /* nonzero iff create_wall_ns was sourced */
 	int      has_rss;        /* nonzero iff the process has a user address space */
 };
+
+/*
+ * ================================================================
+ * SS14 substrate-neutral types (see the SS14 contract above)
+ * ================================================================
+ *
+ * These live HERE, in the contract header, rather than in each backend, for the
+ * same reason struct exec_proc_acct does: they name no host type, so a
+ * per-substrate copy could only diverge. exec_lanbuf_t in particular is the
+ * whole "Frame buffers" row of the leak table -- the core never sees an sk_buff
+ * or an mbuf because the buffer it receives into is its own.
+ */
+
+/* SS$_NOSUCHDEV, the honest "this substrate has no such device" status families
+ * 14..18 return. Spelled out here so a backend header needs no VMS header; both
+ * vms_internal.h twins define SS__NOSUCHDEV to the same 2680, and
+ * src/kernel-core/vms_pe.c carries the _Static_assert that ties the two
+ * spellings together (single lineage -- one value, asserted, not two constants
+ * that happen to match today). */
+#define EXEC_SS_NOSUCHDEV 2680u
+
+/*
+ * A receive buffer the CORE owns. The port driver pre-allocates a pool of these
+ * (exec_zalloc at CLUSTER_START, never in rx context) and CONTRACT RULE 1's
+ * rx_cb copies one frame into one buffer:
+ *
+ *   data  the buffer, at least `cap` bytes, allocated and freed by the core
+ *   cap   its capacity in bytes (NISCS_MAX_PKTSZ clamped to the interface MTU)
+ *   len   the bytes actually present, 0 when the buffer is free
+ *
+ * uint32_t, not size_t: the same 4-byte field on ILP32 VAX and LP64 x86_64, so a
+ * snapshot or a queue head has one layout everywhere (leak table, "Word width").
+ */
+typedef struct exec_lanbuf {
+	uint8_t  *data;
+	uint32_t  cap;
+	uint32_t  len;
+} exec_lanbuf_t;
+
+/*
+ * The unsolicited-receive callback. `frame` points at the COMPLETE Ethernet
+ * frame (byte 0 = destination MAC) and is valid ONLY for the duration of the
+ * call -- it is the substrate's buffer, so the callback copies out of it or
+ * loses it. `ctx` is the pointer passed to exec_lan_open. Runs under CONTRACT
+ * RULE 1.
+ */
+typedef void (*exec_lan_rx_cb_t)(void *ctx, const uint8_t *frame, uint32_t len);
 
 /*
  * Backend selection. Each substrate's build defines its own macro

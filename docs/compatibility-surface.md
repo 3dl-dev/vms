@@ -11,10 +11,10 @@
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 25 | | real | 284 |
-| 🟢 implemented | 248 | | n/a | 91 |
-| 🟡 partial | 45 | | advisory | 43 |
-| 🟠 stub | 20 | | facade-risk | 13 |
+| ✅ verified | 25 | | real | 285 |
+| 🟢 implemented | 249 | | n/a | 91 |
+| 🟡 partial | 44 | | advisory | 43 |
+| 🟠 stub | 20 | | facade-risk | 12 |
 | 🔵 designed | 0 | |  |  |
 | ⬜ absent | 93 | |  |  |
 
@@ -24,8 +24,8 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **387 committed** — **273 met** (implemented/verified), 44 in progress (partial), 70 not started (absent/stub/designed).
-- ⚠ **11 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
+- **387 committed** — **274 met** (implemented/verified), 43 in progress (partial), 70 not started (absent/stub/designed).
+- ⚠ **10 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 8 out · 27 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 
 _These are counts against an enumerable commitment list, deliberately not a percentage of VMS. If a surface is later ruled into V1, it joins the denominator at whatever status it actually has — cataloguing more of VMS makes the picture look less complete, never more._
@@ -569,7 +569,7 @@ SYS$DISK is a genuine Files-11 ODS-2 volume read and written through the executi
 
 _DCL verbs and scripting, qualifier grammar, F$ lexicals, utilities, HELP, queues._
 
-`✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟡🟠⬜⬜⬜⬜⬜`  —  65 surfaces catalogued (36 met · 13 in progress · 16 not started) · V1: 58 committed, 36 met · ⚠ 3 facade-risk
+`✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟠⬜⬜⬜⬜⬜`  —  65 surfaces catalogued (37 met · 12 in progress · 16 not started) · V1: 58 committed, 37 met · ⚠ 2 facade-risk
 
 ### dcl-qualifiers — DCL Qualifier Grammar (Engine A / CLD tables)
 <sub>scope: in · tier 1 · plan: vms-8ad · ref: OpenVMS Command Definition Utility (CDU) Manual; DCL Dictionary · reviewed 2026-08-31</sub>
@@ -681,10 +681,10 @@ The queue manager itself is real (binary QMAN$MASTER.DAT, flock-serialized, VMS 
 ### utilities — Utility Images (AUTHORIZE, BACKUP, SORT, ANALYZE, …)
 <sub>scope: in · tier 1 · plan: vms-8ad · ref: OpenVMS System Management Utilities Reference Manual; OpenVMS Utility Routines Manual · reviewed 2026-08-31</sub>
 
-Standalone utility images invoked as DCL verbs. Most core system-management utilities are real; the record/data utilities (SORT, BACKUP, CONVERT) are honestly partial or facade-risk on their advanced qualifiers rather than full VMS-parity implementations. Re-censused 2026-08-31: SYSGEN and EDIT downgraded verified->implemented (their tests are plain functional self-tests, not oracles); CONVERT/FDL note refreshed.
+Standalone utility images invoked as DCL verbs. Most core system-management utilities are real; SORT now does real /KEY field-based sorting (vms-e76), and the remaining record/data utilities (BACKUP, CONVERT) are honestly partial on their advanced qualifiers rather than full VMS-parity implementations. Re-censused 2026-08-31: SYSGEN and EDIT downgraded verified->implemented (their tests are plain functional self-tests, not oracles); CONVERT/FDL note refreshed.
 
 
-<sub>24 items · 12 met · 6 in progress · 6 not started · ⚠ 2 facade-risk</sub>
+<sub>24 items · 13 met · 5 in progress · 6 not started · ⚠ 1 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -698,7 +698,7 @@ Standalone utility images invoked as DCL verbs. Most core system-management util
 | 🟡≈ | `utilities$library` | utility | LIBRARY — object/text librarian utility | partial | advisory | in | `src/vmsdcl/dcl_library.c` — Routes by parameter count rather than the full LIBRARIAN grammar; documented, not a lie. Partial slice exercised by tests/dcl/test_library.sh (not a full-coverage oracle). |
 | 🟡≈ | `utilities$backup` | utility | BACKUP — file/volume backup and restore utility | partial | advisory | in | `src/vmsdcl/dcl_backup.c` — Only /SAVE_SET and /LIST qualifiers real; /REWIND and other qualifiers honestly deferred, not faked. Slice exercised by tests/dcl/test_backup.sh (not a full-coverage oracle). |
 | ✅ | `utilities$product` | utility | PRODUCT / PCSI — software product installation utility | verified | real | in | `tools/ovmx_kit_pack.c` — INSTALL/SHOW PRODUCT/SHOW HISTORY real; rooted-layout install proven end-to-end. |
-| 🟡⚠ | `utilities$sort` | utility | SORT — record sort utility with /KEY=(position,size,datatype) | partial | facade-risk | in | `src/vmsdcl/dcl_cmd_misc.c` — Whole-line qsort only; no /KEY field-based sort. No companion MERGE utility. |
+| 🟢 | `utilities$sort` | utility | SORT — record sort utility with /KEY=(position,size,datatype) | implemented | real | in | `src/vmsdcl/dcl_cmd_misc.c` — SORT/KEY=(POSITION:n,SIZE:m[,DESCENDING]) sorts on the [pos,size] field, not the whole line; /KEY is a declared CDU_VT_LIST qualifier and is no longer silently ignored (vms-e76). /REVERSE and whole-line (no /KEY) unchanged. Follow-ups (documented gaps, not facades): secondary keys (multiple /KEY tie-breaking) use the first key only, and MERGE is a separate absent utility. |
 | 🟡≈ | `utilities$differences` | utility | DIFFERENCES — file comparison utility | partial | advisory | in | `src/vmsdcl/dcl_cmd_misc.c` — Slice exercised by tests/dcl/test_differences.sh (not a full-coverage oracle). |
 | 🟡⚠ | `utilities$convert` | utility | CONVERT — file/record-format conversion utility | partial | facade-risk | in | `src/vmsdcl/dcl_cmd_misc.c:2604` — /FDL now emits an honest %CONVERT-I-FDL 'accepted but ignored' informational, but the body is still a line-by-line fgets/fputs copy that then prints '%CONVERT-S-CONVERTED, N records converted' — reporting a record-format conversion it did not perform. Still facade-risk. |
 | 🟢 | `utilities$analyze-disk-structure` | utility | ANALYZE/DISK_STRUCTURE — ODS-2 volume structure analysis | implemented | real | in | `tools/vms_analyze.c` |
@@ -1256,7 +1256,6 @@ Surfaces that report success without doing the real work, or fake shared state p
 | `sys$ulwset` | sys-memory | stub | `src/libvms/syssvc/sys_memory.c` — kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done |
 | `sys$cancel` | sys-process | stub | `src/libvms/syssvc/sys_process.c` — literal no-op, returns SS$_NORMAL unconditionally |
 | `sysuaf$pwd_expired` | sysuaf | absent | `src/libvms/include/uaidef.h:154` — Bit defined (uaidef.h:154), still ZERO readers — no password-expiration or login-limit enforcement. A stale/expired password logs in normally. The only remaining sysuaf login-flag facade after vms-c8fa. |
-| `utilities$sort` | utilities | partial | `src/vmsdcl/dcl_cmd_misc.c` — Whole-line qsort only; no /KEY field-based sort. No companion MERGE utility. |
 | `utilities$convert` | utilities | partial | `src/vmsdcl/dcl_cmd_misc.c:2604` — /FDL now emits an honest %CONVERT-I-FDL 'accepted but ignored' informational, but the body is still a line-by-line fgets/fputs copy that then prints '%CONVERT-S-CONVERTED, N records converted' — reporting a record-format conversion it did not perform. Still facade-risk. |
 
 ## Not yet catalogued

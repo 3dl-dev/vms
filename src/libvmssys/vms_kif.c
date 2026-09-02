@@ -813,6 +813,33 @@ uint32_t vms_kif_get_resmaster(const char *resnam, uint32_t *found,
 }
 
 /*
+ * vms_kif_dlm_enum_standing - enumerate this node's STANDING cluster-registrable
+ * system locks over /dev/vms (vms-1f4): on return *out holds up to
+ * VMS_DLM_ENUM_STANDING_MAX entries (out->count filled, out->total held), each
+ * the resource name + local lkid + mode of a lock the executive genuinely holds
+ * (the F11B$v volume lock a MOUNT holds). scsd registers these to the coordinator
+ * during a directory rebuild. Fail-honest (SS$_NOSUCHDEV) when /dev/vms is absent
+ * (KIF_CALL); a READ of real lock state, never a fabricated lock (INV-6).
+ */
+uint32_t vms_kif_dlm_enum_standing(struct vms_dlm_enum_standing_args *out)
+{
+    if (!out)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    /*
+     * Write STRAIGHT into the caller's buffer -- no local copy. A local
+     * `struct ... args; ...; *out = args;` would lower the 656-byte struct
+     * assignment to a libc memcpy() call, which the freestanding libvmssys
+     * shareable cannot resolve (DECC$SHR exports no memcpy -- vms-61f). The
+     * KIF_CALL copyout fills *out directly; vms_memset (a local shim, not libc)
+     * zeroes it first so a pre-ioctl failure leaves a clean all-zero block.
+     */
+    vms_memset(out, 0, sizeof(*out));
+    KIF_CALL(VMS_IOCTL_DLM_ENUM_STANDING, out);
+    return out->status;
+}
+
+/*
  * vms_kif_dlm_xnode - dispatch a decoded cross-node DLM request to the kernel
  * lock manager's cross-node handler (vms-94c, DLM epic vms-7fa rung 1). Issues
  * VMS_IOCTL_DLM_XNODE, which reaches vms_lock_dlm_xnode_dispatch(): rung 1 the

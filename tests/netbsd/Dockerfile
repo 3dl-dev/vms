@@ -161,6 +161,7 @@ COPY src/kernel-core/vms_pe.h                /netbsd/guest-src/kernel-core/vms_p
 COPY src/kernel-core/vms_scs.h               /netbsd/guest-src/kernel-core/vms_scs.h
 COPY src/kernel-core/vms_cnxman.h            /netbsd/guest-src/kernel-core/vms_cnxman.h
 COPY src/kernel-core/vms_dlm_scs.h           /netbsd/guest-src/kernel-core/vms_dlm_scs.h
+COPY src/kernel-core/vms_dlm_proxy.h         /netbsd/guest-src/kernel-core/vms_dlm_proxy.h
 COPY src/kernel-core/vms_cluster.h           /netbsd/guest-src/kernel-core/vms_cluster.h
 COPY src/kernel-core/vms_cluster_snapshot.h  /netbsd/guest-src/kernel-core/vms_cluster_snapshot.h
 # --- FC-P3.6: the CLUB/CSB model + the CSB ten-state ladder, and the

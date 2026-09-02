@@ -190,6 +190,37 @@ int main(int argc, char **argv)
 
     st = vms_kif_acp_mount(ODS2_UNIT);
     check($VMS_STATUS_SUCCESS(st), "$MOUNT of the genuine ODS-2 " ODS2_UNIT " (precondition)");
+
+    /*
+     * vms-25e: $MOUNT holds the STANDING volume lock (F11B$v<label>) for the whole
+     * mount life -- the cluster-registration presence marker a faithful VMS MOUNT
+     * holds and the connection manager registers to the coordinator on join
+     * (distinct from the transient per-write F11B$s sync lock the workers below
+     * exercise). PROVE it is genuinely held: read the mounted volume's label (the
+     * SAME vol->volname the executive built the resource name from -- vmsfs_acp.c
+     * getvol copies it verbatim, so this reconstruction is byte-exact), form the
+     * F11B$v resource name, and assert the executive's DLM reports a granted lock
+     * on it. This is a READ of real GET_RESMASTER lock-manager state, never a fake
+     * (INV-6): a real standing lock the executive holds on a real mounted volume.
+     */
+    {
+        struct vms_getvol_args gv;
+        memset(&gv, 0, sizeof(gv));
+        st = vms_kif_getvol(ODS2_UNIT, &gv);
+        check($VMS_STATUS_SUCCESS(st) && gv.mounted && gv.volnam[0] != '\0',
+              "read the mounted volume label for the standing-lock proof");
+        if ($VMS_STATUS_SUCCESS(st) && gv.volnam[0] != '\0') {
+            char vresnam[32];
+            snprintf(vresnam, sizeof(vresnam), "F11B$v%s", gv.volnam);
+            uint32_t found = 0, lc = 0, dc = 0, mc = 0, ilm = 0, ng = 0, rh = 0;
+            uint32_t rst = vms_kif_get_resmaster(vresnam, &found, &lc, &dc, &mc,
+                                                 &ilm, &ng, &rh);
+            check($VMS_STATUS_SUCCESS(rst) && found && ng >= 1,
+                  "the STANDING F11B$v<label> volume lock is HELD after $MOUNT "
+                  "(vms-25e: GET_RESMASTER found, n_granted >= 1)");
+        }
+    }
+
     st = vms_kif_acp_assign(ODS2_UNIT, &chan);
     check($VMS_STATUS_SUCCESS(st) && chan != 0, "$ASSIGN a file-class channel (precondition)");
     if (chan == 0) {

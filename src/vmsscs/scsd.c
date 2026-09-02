@@ -6527,7 +6527,7 @@ static int scsd_enum_standing_locks(struct scsd_standing_lock *out, int max)
 {
 #ifdef SCSD_UNIT_TEST
     (void)out; (void)max;
-    return 0;   /* the wire test seam is executive-resident; no /dev/vms here */
+    return 0;   /* wire test seam: executive-resident, the ioctl path is unexercised */
 #else
     struct vms_dlm_enum_standing_args args;
     struct vms_register_args reg;

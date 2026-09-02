@@ -57,6 +57,8 @@ SRCS=		vms_netbsd.c \
 		vms_pe.c \
 		vms_cnxman_csb.c \
 		vms_cnxman_recnx_fsm.c \
+		vms_cnxman_quorum.c \
+		vms_cluster_api.c \
 		vmsfs_acp.c \
 		ods2_reader.c \
 		ods2_edit.c \
@@ -79,6 +81,11 @@ SRCS=		vms_netbsd.c \
 # RECNXINTERVAL/TIMVCFAIL reconnect loop and the last-gasp decision). Both are
 # PURE -- they reach nothing but their injected ops -- so there is no NetBSD half
 # to write and no reason for them to arrive here later than on Linux.
+#
+# FC-P3.7 joins the same way: ../kernel-core/vms_cnxman_quorum.c (the Quorum
+# Algorithm, CEVOTES/QUORUM tracking only) and ../kernel-core/vms_cluster_api.c
+# (the $GETSYI cluster item-code projection). Both PURE, both here from their
+# first commit.
 #
 # FC-P0.5 adds the cluster fork context on the same terms: vms_cluster_fork.c is
 # pure (queues, dispatch, timer bookkeeping -- host-unit-tested with no kernel at

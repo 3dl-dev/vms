@@ -106,7 +106,9 @@ SRCS="$KMOD/vms_netbsd.c \
       $CORE/vms_cluster_fork_bind.c \
       $CORE/vms_pe.c \
       $CORE/vms_cnxman_csb.c \
-      $CORE/vms_cnxman_recnx_fsm.c"
+      $CORE/vms_cnxman_recnx_fsm.c \
+      $CORE/vms_cnxman_quorum.c \
+      $CORE/vms_cluster_api.c"
 
 echo "=== toolchain ==="; "$CC" --version | head -1; "$CC" -dumpmachine; echo
 

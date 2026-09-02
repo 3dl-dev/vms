@@ -733,14 +733,14 @@ void cnxman_csb_project(const struct vms_csb *csb, struct vms_csb_view *out)
 	 * so the reader blanks the column instead of printing a number nobody
 	 * claimed (snapshot rule 2).
 	 *
-	 * KNOWN GAP, flagged rather than papered over: the frozen
-	 * struct vms_csb_view has `lockdirwt_valid` but no `votes_valid`, so an
-	 * un-advertised VOTES is indistinguishable from an advertised 0 on the
-	 * far side of the ioctl. FC-P3.7 owns the votes column; if a blank is
-	 * needed there, the view needs the companion flag.
+	 * `votes_valid` closes the gap FC-P3.6 flagged here: an un-advertised
+	 * VOTES is now distinguishable from an advertised 0 on the far side of
+	 * the ioctl (FC-P3.7).
 	 */
-	if (csb->params_valid)
+	if (csb->params_valid) {
 		out->votes = csb->votes;
+		out->votes_valid = 1u;
+	}
 	out->lockdirwt = csb->lockdirwt_valid ? csb->lockdirwt : 0u;
 	out->lockdirwt_valid = csb->lockdirwt_valid;
 

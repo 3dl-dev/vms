@@ -171,6 +171,13 @@ COPY src/kernel-core/vms_cnxman_csb.c        /netbsd/guest-src/kernel-core/vms_c
 COPY src/kernel-core/vms_cnxman_csb.h        /netbsd/guest-src/kernel-core/vms_cnxman_csb.h
 COPY src/kernel-core/vms_cnxman_recnx_fsm.c  /netbsd/guest-src/kernel-core/vms_cnxman_recnx_fsm.c
 COPY src/kernel-core/vms_cnxman_recnx_fsm.h  /netbsd/guest-src/kernel-core/vms_cnxman_recnx_fsm.h
+# --- FC-P3.7: quorum arithmetic (tracking only) + the $GETSYI cluster
+# item-code projection. Same reason as FC-P3.6 above: both are in SRCS from
+# their first commit, so the in-guest module build needs them staged. ---
+COPY src/kernel-core/vms_cnxman_quorum.c     /netbsd/guest-src/kernel-core/vms_cnxman_quorum.c
+COPY src/kernel-core/vms_cnxman_quorum.h     /netbsd/guest-src/kernel-core/vms_cnxman_quorum.h
+COPY src/kernel-core/vms_cluster_api.c       /netbsd/guest-src/kernel-core/vms_cluster_api.c
+COPY src/kernel-core/vms_cluster_api.h       /netbsd/guest-src/kernel-core/vms_cluster_api.h
 COPY src/kernel-netbsd/vms_lan_netbsd.c      /netbsd/guest-src/kmod/vms_lan_netbsd.c
 # FC-P0.4: cluster_seam.c (the R3 substrate-contract self-test for the cluster
 # seam, called from vms_netbsd.c's MODULE_CMD_INIT) lives under

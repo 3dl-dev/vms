@@ -81,6 +81,8 @@ set(OVMX_CLUSTER_CORE_DIR ${CMAKE_SOURCE_DIR}/src/kernel-core)
 add_library(cluster_host_cnxman STATIC
     ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_csb.c
     ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_recnx_fsm.c
+    ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_quorum.c   # FC-P3.7
+    ${OVMX_CLUSTER_CORE_DIR}/vms_cluster_api.c      # FC-P3.7
 )
 target_include_directories(cluster_host_cnxman PUBLIC ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_cnxman PUBLIC OVMX_CLUSTER_HOST)
@@ -106,6 +108,13 @@ cluster_host_cnxman_test(test_cnxman_csb   test_cnxman_csb.c)
 cluster_host_cnxman_test(test_cnxman_recnx test_cnxman_recnx.c)
 cluster_host_test(test_codec_scs        test_codec_scs.c)
 cluster_host_test(test_codec_cm         test_codec_cm.c)
+
+# ---- FC-P3.7: quorum arithmetic (tracking only) + the $GETSYI cluster
+# item-code projection. Same host-pure discipline as FC-P3.6 above: both new
+# TUs build with -DOVMX_CLUSTER_HOST and no kernel headers, so they join the
+# same cluster_host_cnxman library.
+cluster_host_cnxman_test(test_cnxman_quorum      test_cnxman_quorum.c)
+cluster_host_cnxman_test(test_cluster_api_getsyi test_cluster_api_getsyi.c)
 
 # ---- FC-P0.5: the cluster fork context, built with NO kernel headers ----
 # The SHIPPING translation unit (src/kernel-core/vms_cluster_fork.c), not a copy
@@ -162,6 +171,8 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_cnxman_csb.c        # FC-P3.6
     hdr_alone_vms_cnxman_recnx_fsm.c  # FC-P3.6
     hdr_alone_vms_cluster_fork.c
+    hdr_alone_vms_cnxman_quorum.c     # FC-P3.7
+    hdr_alone_vms_cluster_api.c       # FC-P3.7
 )
 target_include_directories(cluster_host_hdr_alone PRIVATE ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_hdr_alone PRIVATE OVMX_CLUSTER_HOST)

@@ -256,9 +256,13 @@ struct vms_csb_view {
 	uint8_t  scsnode_len;
 	uint8_t  scsnode[VMS_SCSNODE_MAX + 2];  /* as the peer advertised it */
 	uint16_t votes;                         /* the peer's advertised VOTES */
+	uint8_t  votes_valid;                   /* 0 until a PARAMS record arrived
+						  * (FC-P3.7 closes the gap FC-P3.6
+						  * flagged: an un-advertised VOTES
+						  * is not an advertised 0, INV-6) */
 	uint8_t  lockdirwt;                     /* the peer's advertised LOCKDIRWT ... */
 	uint8_t  lockdirwt_valid;               /* ... 0 until FC-P3.2 pins the byte */
-	uint8_t  pad0[2];
+	uint8_t  pad0;
 	uint32_t peer_sysid_lo;                 /* the peer's SCSSYSTEMID */
 	uint32_t peer_sysid_hi;
 	uint32_t sw_version;                    /* software version as advertised */

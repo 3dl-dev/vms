@@ -78,6 +78,13 @@ obj-m := vms.o
 # host unit tests and the rung-2 simulator link. Their consumer, the connection
 # manager's glue, arrives with FC-P3.8.
 #
+# FC-P3.7 adds two more, same terms again: vms_cnxman_quorum.o (the Quorum
+# Algorithm -- CEVOTES/QUORUM from the CLUB's own SELECTED CSBs, tracking
+# only) and vms_cluster_api.o (the $GETSYI cluster item-code projection this
+# item owns). Both PURE, both in the NetBSD SRCS and both elf32-vax gates from
+# this commit; their seam-facing consumer (the ioctl + sys$getsyi cutover)
+# also arrives with FC-P3.8/FC-P3.9.
+#
 # vms_cluster_fork.c + vms_cluster_fork_bind.c (FC-P0.5) are the cluster FORK
 # CONTEXT -- the one kthread per node that runs every line of cluster protocol,
 # and its substrate binding. Same rule as vms_pe.c: BOTH are in the NetBSD
@@ -99,6 +106,8 @@ vms-y := vms_module.o \
          ../kernel-core/vms_pe.o \
          ../kernel-core/vms_cnxman_csb.o \
          ../kernel-core/vms_cnxman_recnx_fsm.o \
+         ../kernel-core/vms_cnxman_quorum.o \
+         ../kernel-core/vms_cluster_api.o \
          ../kernel-core/vms_proctab.o \
          ../kernel-core/vmsfs_acp.o \
          ../vmsfs/ods2/ods2_reader.o \

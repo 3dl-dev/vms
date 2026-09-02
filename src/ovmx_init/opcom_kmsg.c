@@ -45,12 +45,12 @@
  *
  * TWO honest destinations therefore split the job (Rule 9 / INV-6 -- no /vms
  * passthrough write anywhere):
- *   - the PID-1 follower thread appends routed lines to a local /tmp spool
+ *   - the PID-1 follower thread appends routed lines to a private durable spool
  *     (opcom_kmsg_append_operator_log() below) -- a best-effort host-side copy
  *     and the pre-mount buffer, which NEVER masquerades as the on-volume log; and
- *   - opcom_kmsg_drain_ringbuffer() (below) lets an RMS-capable process
- *     (PROVISION.EXE, which runs after the SYS$DISK $MOUNT) replay the kernel
- *     ring buffer's boot records into the real OPERATOR.LOG over the ACP.
+ *   - opcom_kmsg_seed_operator_log() (below) lets an RMS-capable process
+ *     (PROVISION.EXE, which runs after the SYS$DISK $MOUNT) replay that spool's
+ *     boot records into the real OPERATOR.LOG over the ACP.
  */
 #include "ovmx_layout.h"
 
@@ -248,24 +248,37 @@ static int parse_kmsg_record(const char *raw, size_t rawlen,
  * lines, on tmpfs, that PID 1 can always write without RMS. Deliberately a /tmp
  * path, NOT a /vms passthrough path -- the passthrough is retired (Rule 9).
  */
-#define OPCOM_KMSG_OPLOG_FALLBACK "/tmp/OPERATOR.LOG"
+/*
+ * OPCOM_KMSG_SEED_SPOOL - the PID-1 bridge's OWN durable, append-only capture of
+ * every routed /dev/kmsg record, from boot. PRIVATE (0600, PID-1/root-owned) and
+ * DISTINCT from the world-writable /tmp/OPERATOR.LOG that sys$sndopr uses as its
+ * pre-mount fallback: PROVISION.EXE seeds the genuine on-volume OPERATOR.LOG from
+ * THIS file (opcom_kmsg_seed_operator_log()), so it must not be a path another
+ * process can plant lines into -- that would be a log-injection vector into the
+ * executive log. (The kernel ring buffer, the old seed source, could not be
+ * injected; a world-writable spool can -- vms-887.) A dotfile keeps it out of a
+ * bare listing of /tmp; the 0600 create keeps it PID-1-private.
+ */
+#define OPCOM_KMSG_SEED_SPOOL "/tmp/.ovmx-opcom-seed.log"
 
 /*
- * opcom_kmsg_append_operator_log - append one already-formatted line to the
- * PID-1 local spool. Opens/appends/closes per call (best-effort; a failure
- * never blocks or fails boot -- see opcom_kmsg_start()'s comment). The genuine
- * on-volume OPERATOR.LOG over the ACP is seeded from the ring buffer by
- * opcom_kmsg_drain_ringbuffer() (run from PROVISION.EXE) and appended live by
- * sys$sndopr; this spool does not, and must not, stand in for it (INV-6).
+ * opcom_kmsg_append_operator_log - append one already-formatted routed line to
+ * the bridge's private seed spool. Opens/appends/closes per call with a 0600
+ * create (best-effort; a failure never blocks or fails boot -- see
+ * opcom_kmsg_start()'s comment). This spool is the COMPLETE record of the
+ * bridge's routed lines -- an append-only file never wraps, unlike the kernel
+ * ring buffer -- and is what seeds the genuine on-volume OPERATOR.LOG at
+ * provision (opcom_kmsg_seed_operator_log()); it does not, and must not, stand
+ * in for that log to a reader (INV-6).
  */
 static void opcom_kmsg_append_operator_log(const char *line)
 {
-    FILE *f = fopen(OPCOM_KMSG_OPLOG_FALLBACK, "a");
-    if (!f)
+    int fd = open(OPCOM_KMSG_SEED_SPOOL, O_WRONLY | O_APPEND | O_CREAT, 0600);
+    if (fd < 0)
         return;  /* best-effort -- see opcom_kmsg_start()'s comment */
 
-    fputs(line, f);
-    fclose(f);
+    (void)write(fd, line, strlen(line));
+    close(fd);
 }
 
 static void *opcom_kmsg_thread_main(void *arg)
@@ -348,73 +361,58 @@ void opcom_kmsg_start(void)
 }
 
 /*
- * opcom_kmsg_drain_ringbuffer - synchronously replay every kmsg record still
- * in the kernel ring buffer through the SAME classify() the follower uses, and
- * hand each routed line to `emit` (with the trailing '\n' stripped -- one
- * stream-LF record's worth of text, ready for RMS $PUT).
+ * opcom_kmsg_seed_operator_log_from - replay every complete record in `path`
+ * (the bridge's append-only seed spool, one classified line each) through
+ * `emit`, with the trailing '\n' stripped -- one record's worth of text, ready
+ * for RMS $PUT. A trailing partial line (the reader thread caught mid-write) has
+ * no '\n' and is skipped. Split out with an explicit path so the seed logic is
+ * unit-testable against a temp file without touching the live spool.
  *
- * This is the seam that puts the boot-time vms.ko/vmsfs.ko events (and any
- * re-styled SYSKRNL warning) into the genuine Files-11 OPERATOR.LOG over the
- * ACP: PID 1 cannot do that write itself (no RMS -- see this file's top
- * comment), so PROVISION.EXE -- which links RMS and runs AFTER the SYS$DISK
- * $MOUNT -- calls this with an `emit` that does rms_textfile_append_line(
- * SYS$MANAGER:OPERATOR.LOG, line). By then every boot record is durably in the
- * ring buffer and the volume is mounted, so the replay is race-free and lands
- * on the real platter (read back by TYPE). One-shot: it drains what is present
- * and returns; it does not follow live.
- *
- * Best-effort and side-effect-free on failure: if /dev/kmsg cannot be opened it
- * simply emits nothing. `emit` must tolerate being called zero or many times.
+ * Best-effort and side-effect-free on failure: if `path` cannot be opened it
+ * emits nothing. `emit` must tolerate being called zero or many times.
  */
-void opcom_kmsg_drain_ringbuffer(void (*emit)(const char *line))
+void opcom_kmsg_seed_operator_log_from(const char *path,
+                                       void (*emit)(const char *line))
 {
-    int kfd;
-    char raw[8192];
+    FILE *f;
+    char line[640];
 
-    if (!emit)
+    if (!emit || !path)
         return;
 
-    kfd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK);
-    if (kfd < 0)
+    f = fopen(path, "r");
+    if (!f)
         return;
 
-    /* Start at the oldest record the ring buffer still holds. */
-    lseek(kfd, 0, SEEK_SET);
-
-    for (;;) {
-        ssize_t n = read(kfd, raw, sizeof(raw) - 1);
-        if (n < 0) {
-            if (errno == EINTR)
-                continue;
-            /* EAGAIN: caught up with the buffer's current end -- done draining.
-             * EPIPE: fell behind and some records were overwritten; the ones
-             * still present after it are handled on the next read, so keep
-             * going until EAGAIN. */
-            if (errno == EPIPE)
-                continue;
-            break;   /* EAGAIN or any other error ends the one-shot drain */
-        }
-        if (n == 0)
-            break;
-        raw[n] = '\0';
-
-        int pri;
-        char msg[512];
-        char line[600];
-
-        if (parse_kmsg_record(raw, (size_t)n, &pri, msg, sizeof(msg)) != 0)
-            continue;
-        if (opcom_kmsg_classify(pri, msg, line, sizeof(line)) == OPCOM_KMSG_DROP)
-            continue;
-
-        /* classify() emits "...text\n"; RMS $PUT wants the record without the
-         * caller newline, so strip the single trailing '\n'. */
+    while (fgets(line, sizeof(line), f)) {
         size_t llen = strlen(line);
-        if (llen > 0 && line[llen - 1] == '\n')
-            line[llen - 1] = '\0';
-
+        if (llen == 0 || line[llen - 1] != '\n')
+            continue;   /* incomplete trailing record -- not fully written yet */
+        line[llen - 1] = '\0';   /* RMS $PUT wants the record without the LF */
         emit(line);
     }
 
-    close(kfd);
+    fclose(f);
+}
+
+/*
+ * opcom_kmsg_seed_operator_log - seed the genuine Files-11 OPERATOR.LOG from the
+ * bridge's durable seed spool. This is the seam that puts the boot-time
+ * vms.ko/vmsfs.ko events (and any re-styled SYSKRNL warning) into the on-volume
+ * OPERATOR.LOG over the ACP: PID 1 cannot do that write itself (no RMS -- see
+ * this file's top comment), so PROVISION.EXE -- which links RMS and runs AFTER
+ * the SYS$DISK $MOUNT -- calls this with an `emit` that does
+ * rms_textfile_append_line(SYS$MANAGER:OPERATOR.LOG, line).
+ *
+ * The source is the append-only seed spool, NOT the kernel ring buffer. The ring
+ * is fixed-size and can EVICT the earliest boot records before provision runs --
+ * that was the vms-98c2 flake: SYSID/LNM/MBX intermittently missing from
+ * OPERATOR.LOG because the ring wrapped between boot and the once-only drain,
+ * worse under a slow (TCG) boot. The spool never wraps, so every routed record
+ * survives boot -> provision and the seed is deterministic. One-shot: it replays
+ * what the spool holds and returns; it does not follow live.
+ */
+void opcom_kmsg_seed_operator_log(void (*emit)(const char *line))
+{
+    opcom_kmsg_seed_operator_log_from(OPCOM_KMSG_SEED_SPOOL, emit);
 }

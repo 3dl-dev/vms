@@ -60,7 +60,9 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "opcom_kmsg.h"
 
@@ -104,6 +106,72 @@ static void check_operator_log(const char *label, int pri, const char *text,
 static void check_drop(const char *label, int pri, const char *text)
 {
     check_dest(label, pri, text, OPCOM_KMSG_DROP, NULL);
+}
+
+/* --- seed-path capture (vms-98c2) ------------------------------------------
+ * opcom_kmsg_seed_operator_log_from() replays the bridge's durable spool into an
+ * `emit` callback. The callback has no context arg, so capture into a global. */
+static char seed_cap[16][640];
+static int  seed_n = 0;
+
+static void seed_capture_emit(const char *line)
+{
+    if (seed_n < (int)(sizeof(seed_cap) / sizeof(seed_cap[0])))
+        snprintf(seed_cap[seed_n], sizeof(seed_cap[0]), "%s", line);
+    seed_n++;
+}
+
+/*
+ * The genuine OPERATOR.LOG is seeded from the bridge's append-only spool, not
+ * the fixed-size kernel ring buffer that could evict early boot records before
+ * provision ran (the vms-98c2 flake). Prove the seed replays EVERY complete
+ * spool record verbatim with the trailing LF stripped, skips a trailing partial
+ * line (the reader thread caught mid-write), and emits nothing for a missing
+ * spool -- all against a temp file, never the live spool.
+ */
+static void test_seed_from_spool(void)
+{
+    char path[] = "/tmp/opcom_seed_test_XXXXXX";
+    int fd = mkstemp(path);
+    if (fd < 0) {
+        printf("  FAIL: seed test could not mkstemp\n");
+        failures++;
+        return;
+    }
+    const char *body =
+        "%OVMX-I-SYSID, OpenVMX node OVMX\n"
+        "%OVMX-I-LNM, logical names established\n"
+        "%OVMX-I-MBX, mailbox subsystem ready\n"
+        "%OVMX-I-VMSFS, mount in progr";   /* partial: no trailing '\n' */
+    (void)write(fd, body, strlen(body));
+    close(fd);
+
+    seed_n = 0;
+    opcom_kmsg_seed_operator_log_from(path, seed_capture_emit);
+    unlink(path);
+
+    if (seed_n != 3) {
+        printf("  FAIL: seed replayed %d records, expected 3 "
+               "(the trailing partial line must be skipped)\n", seed_n);
+        failures++;
+    } else if (strcmp(seed_cap[0], "%OVMX-I-SYSID, OpenVMX node OVMX") != 0 ||
+               strcmp(seed_cap[1], "%OVMX-I-LNM, logical names established") != 0 ||
+               strcmp(seed_cap[2], "%OVMX-I-MBX, mailbox subsystem ready") != 0) {
+        printf("  FAIL: seed did not replay the spool records verbatim (LF-stripped)\n");
+        failures++;
+    } else {
+        printf("  PASS: seed replays every complete spool record (LF-stripped), "
+               "skips the partial (vms-98c2)\n");
+    }
+
+    seed_n = 0;
+    opcom_kmsg_seed_operator_log_from("/tmp/opcom_seed_absent_zzzzzz", seed_capture_emit);
+    if (seed_n != 0) {
+        printf("  FAIL: seed emitted %d records from a nonexistent spool\n", seed_n);
+        failures++;
+    } else {
+        printf("  PASS: seed from a missing spool emits nothing (best-effort)\n");
+    }
 }
 
 int main(void)
@@ -204,6 +272,9 @@ int main(void)
     check_drop("empty text is never routed", 6, "");
     check_drop("bare 'vms: ' with no body text is never routed", 6, "vms: ");
     check_drop("bare 'vmsfs: ' with no body text is never routed", 6, "vmsfs: ");
+
+    /* --- 7. the seed path: spool -> genuine OPERATOR.LOG, lossless (vms-98c2) - */
+    test_seed_from_spool();
 
     printf("\n=== test_opcom_kmsg: %d failed ===\n", failures);
     return failures == 0 ? 0 : 1;

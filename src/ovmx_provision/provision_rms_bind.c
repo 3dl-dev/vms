@@ -10,7 +10,7 @@
  * boot initramfs -- see src/ovmx_init/opcom_kmsg.c's top comment). So the boot-
  * time kmsg records are written into the genuine on-volume OPERATOR.LOG by
  * PROVISION.EXE, which links RMS and runs AFTER the SYS$DISK $MOUNT: main()
- * calls opcom_kmsg_drain_ringbuffer() with an emit that does
+ * calls opcom_kmsg_seed_operator_log() with an emit that does
  * rms_textfile_append_line(SYS$MANAGER:OPERATOR.LOG, line).
  *
  * THE DEFECT THIS CLOSES. rms_textfile.c (in LIBVMS) reaches the RMS services

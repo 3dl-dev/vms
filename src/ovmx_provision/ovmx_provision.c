@@ -743,12 +743,14 @@ int main(void)
      * /dev/kmsg bridge routed vms.ko/vmsfs.ko's boot lifecycle events, but PID 1
      * is static and has no RMS to write the on-volume OPERATOR.LOG. We do -- and
      * the SYS$DISK is mounted (PID 1 mounted it before exec'ing us) and the
-     * namespace is up (the two calls just above), so this replays the ring
-     * buffer's boot records into SYS$MANAGER:OPERATOR.LOG over the ACP now,
-     * race-free, before STARTUP.COM runs. sys$sndopr appends live records to the
-     * same file thereafter.
+     * namespace is up (the two calls just above), so this replays the bridge's
+     * durable seed spool into SYS$MANAGER:OPERATOR.LOG over the ACP now, before
+     * STARTUP.COM runs. sys$sndopr appends live records to the same file
+     * thereafter. The source is the append-only spool, not the kernel ring
+     * buffer: the ring can evict early boot records before we run, which lost
+     * SYSID/LNM/MBX from the log intermittently (vms-98c2); the spool never wraps.
      */
-    opcom_kmsg_drain_ringbuffer(provision_oplog_emit);
+    opcom_kmsg_seed_operator_log(provision_oplog_emit);
 #endif
 
     /*

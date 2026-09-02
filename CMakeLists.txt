@@ -277,6 +277,11 @@ if(BUILD_TESTS)
     # inter-layer headers (FC-P0.1) and the wire codec (FC-P0.6) both compile
     # with a plain host compiler and NO kernel headers. `ctest -R cluster_host`.
     add_subdirectory(tests/cluster/host)
+    # Rung-2 host cluster simulator (FC-P1.4): N instances of the same pure
+    # stack on a virtual LAN with a virtual clock. `ctest -R cluster_sim`.
+    # Must follow tests/cluster/host: it links that directory's cluster_host_pe
+    # (the SHIPPING vms_pe_fsm.c) rather than compiling a copy.
+    add_subdirectory(tests/cluster/sim)
     add_subdirectory(tests/vmsdecnet)  # DECnet Phase IV codec (vms-851)
     add_subdirectory(tests/ovmx_init)
     add_subdirectory(tests/tools)

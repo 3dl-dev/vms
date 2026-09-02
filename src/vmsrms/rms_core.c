@@ -452,12 +452,30 @@ static uint32_t rms_acp_open_status(uint32_t ss)
     }
 }
 
-/* Seed the handle's cached EOF/HIBLK from an IO$_ACCESS/IO$_CREATE attr block. */
+/* Seed the handle's cached EOF/HIBLK from an IO$_ACCESS/IO$_CREATE attr block,
+ * and retain the file-header characteristics decoded from the ODS-2 FAT so
+ * $DISPLAY can fill an XABFHC/XABALL from the real header without re-ACCESSing
+ * (vms-dfa). Every retained field has a genuine on-disk (FAT) source. */
 static void rms_acp_seed_handle(rms_file_t *h, const struct vms_acp_fileattr *at)
 {
     uint32_t efblk = at->efblk;
     h->eof = (uint64_t)(efblk ? (efblk - 1u) : 0) * 512u + at->ffbyte;
     h->hiblk = at->hiblk;
+
+    h->fhc_ebk = efblk;
+    h->fhc_ffb = at->ffbyte;
+    {
+        const struct ods2_recattr *fat =
+            (const struct ods2_recattr *)at->recattr;
+        h->fhc_rfm      = fat->fat_rtype;
+        h->fhc_rat      = fat->fat_rattrib;
+        h->fhc_lrl      = fat->fat_rsize;
+        h->fhc_mrz      = fat->fat_maxrec;
+        h->fhc_dxq      = fat->fat_defext;
+        h->fhc_gbc      = fat->fat_gbc;
+        h->fhc_verlimit = fat->fat_versions;
+        h->fhc_bkz      = fat->fat_bktsize;
+    }
 }
 
 /* $ASSIGN + resolve DID + IO$_ACCESS a file by name; fills *hp with a fresh
@@ -2591,6 +2609,41 @@ static uint32_t rms_impl_display(void *fab_ptr)
 
     /* Reload metadata from sidecar */
     load_metadata(fab);
+
+    /* Fill file-header-characteristics (XABFHC) and allocation (XABALL) XABs
+     * from the ODS-2 FAT retained on the OPEN handle at $OPEN (vms-dfa): the
+     * real record format, EOF/highest block, longest record, allocation, etc.,
+     * read off the executive ACP. Previously these XABs were walked over and
+     * silently left untouched (the rms$xab_silent_unsupported facade). Driven by
+     * the handle, not a POSIX stat, so it is correct on the ACP path where
+     * _resolved_path is not set. */
+    {
+        rms_file_t *h = fab->_rms_file;
+        if (h) {
+            for (struct XABKEY *xab = fab->fab$l_xab; xab;
+                 xab = (struct XABKEY *)xab->xab$l_nxt) {
+                if (xab->xab$b_cod == XAB$C_FHC) {
+                    struct XABFHC *fhc = (struct XABFHC *)xab;
+                    fhc->xab$b_rfm      = h->fhc_rfm;
+                    fhc->xab$b_atr      = h->fhc_rat;
+                    fhc->xab$w_lrl      = h->fhc_lrl;
+                    fhc->xab$l_hbk      = h->hiblk;
+                    fhc->xab$l_ebk      = h->fhc_ebk;
+                    fhc->xab$w_ffb      = h->fhc_ffb;
+                    fhc->xab$b_bkz      = h->fhc_bkz;
+                    fhc->xab$w_mrz      = h->fhc_mrz;
+                    fhc->xab$w_dxq      = h->fhc_dxq;
+                    fhc->xab$w_gbc      = h->fhc_gbc;
+                    fhc->xab$w_verlimit = h->fhc_verlimit;
+                } else if (xab->xab$b_cod == XAB$C_ALL) {
+                    struct XABALL *all = (struct XABALL *)xab;
+                    all->xab$l_alq = h->hiblk;   /* blocks realized on disk */
+                    all->xab$b_bkz = h->fhc_bkz;
+                    all->xab$w_deq = h->fhc_dxq;
+                }
+            }
+        }
+    }
 
     /* Fill in date/time XAB if present in the XAB chain */
     if (fab->_resolved_path[0]) {

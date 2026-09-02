@@ -67,6 +67,19 @@ typedef struct rms_file {
     uint64_t cursor;      /* byte cursor (emulates the POSIX fd position)       */
     uint64_t eof;         /* valid byte length (efblk/ffbyte-derived)          */
     uint32_t hiblk;       /* highest allocated VBN                             */
+    /* File-header characteristics decoded from the ODS-2 FAT at $OPEN (vms-dfa)
+     * so $DISPLAY can fill an XABFHC/XABALL from the real header without
+     * re-ACCESSing. Zero on the POSIX backend / before the first ACP open. */
+    uint32_t fhc_ebk;     /* end-of-file VBN                                    */
+    uint16_t fhc_ffb;     /* first free byte in the EOF block                  */
+    uint8_t  fhc_rfm;     /* record format (FAB$C_*)                            */
+    uint8_t  fhc_rat;     /* record attributes                                 */
+    uint16_t fhc_lrl;     /* longest record length                            */
+    uint16_t fhc_mrz;     /* maximum record size                              */
+    uint16_t fhc_dxq;     /* default extension quantity                        */
+    uint16_t fhc_gbc;     /* global buffer count                              */
+    uint16_t fhc_verlimit;/* version limit                                    */
+    uint8_t  fhc_bkz;     /* bucket size (blocks)                             */
     /* FID of the accessed file (IO$_DELETE by-FID, diagnostics). */
     uint16_t fid_num;
     uint16_t fid_seq;

@@ -11,12 +11,12 @@
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 25 | | real | 281 |
-| 🟢 implemented | 246 | | n/a | 93 |
+| ✅ verified | 25 | | real | 284 |
+| 🟢 implemented | 248 | | n/a | 91 |
 | 🟡 partial | 45 | | advisory | 43 |
-| 🟠 stub | 20 | | facade-risk | 14 |
+| 🟠 stub | 20 | | facade-risk | 13 |
 | 🔵 designed | 0 | |  |  |
-| ⬜ absent | 95 | |  |  |
+| ⬜ absent | 93 | |  |  |
 
 Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 designed · ⬜ absent · ⚠ facade-risk (INV-6/Draper) · ≈ advisory.
 
@@ -24,8 +24,8 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **387 committed** — **271 met** (implemented/verified), 44 in progress (partial), 72 not started (absent/stub/designed).
-- ⚠ **12 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
+- **387 committed** — **273 met** (implemented/verified), 44 in progress (partial), 70 not started (absent/stub/designed).
+- ⚠ **11 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 8 out · 27 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 
 _These are counts against an enumerable commitment list, deliberately not a percentage of VMS. If a surface is later ruled into V1, it joins the denominator at whatever status it actually has — cataloguing more of VMS makes the picture look less complete, never more._
@@ -34,7 +34,7 @@ _These are counts against an enumerable commitment list, deliberately not a perc
 
 _The C source-compatibility surface: descriptors, status codes, system services, RTL, condition handling, RMS programmatic API._
 
-`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠⬜⬜⬜⬜⬜`  —  207 surfaces catalogued (138 met · 15 in progress · 54 not started) · V1: 198 committed, 138 met · ⚠ 9 facade-risk
+`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠⬜⬜⬜⬜⬜`  —  207 surfaces catalogued (140 met · 15 in progress · 52 not started) · V1: 198 committed, 140 met · ⚠ 8 facade-risk
 
 ### chf — Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND)
 <sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS Programming Concepts Manual — Condition Handling; OpenVMS RTL LIB$ Manual · reviewed 2026-08-31</sub>
@@ -161,7 +161,7 @@ VMS ships ~45 MTH$ routines; 42 are declared in the OVMX header and implemented,
 Record Management Services entry points, FAB/RAB/NAM/XAB control blocks, and the three file organizations. Sequential and Relative are real end to end. Cross-process locking, formerly the facility-wide gap (vms-407), is now real on the ACP path: file-level share arbitration (vms-50e) and per-record locking (vms-0dd) both run through the executive DLM ($ENQ/$DEQ, RMS$_RLK on conflict). The remaining material gap is Indexed, which is single-key only — a multi-key ISAM program silently sees the primary key alone. (Non-ACP/POSIX-defer handles hold no lock, honestly documented.)
 
 
-<sub>33 items · 26 met · 3 in progress · 4 not started · ⚠ 3 facade-risk</sub>
+<sub>33 items · 28 met · 3 in progress · 2 not started · ⚠ 2 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -173,7 +173,7 @@ Record Management Services entry points, FAB/RAB/NAM/XAB control blocks, and the
 | 🟢 | `sys$disconnect` | routine | Disconnect a RAB | implemented | real | in | `src/vmsrms/rms_core.c` |
 | 🟢 | `sys$rewind` | routine | Rewind to start of file | implemented | real | in | `src/vmsrms/rms_core.c` |
 | 🟢 | `sys$flush` | routine | Flush buffers to disk | implemented | real | in | `src/vmsrms/rms_core.c` |
-| 🟢 | `sys$display` | routine | Report FAB/RAB/XAB fields to caller | implemented | real | in | `src/vmsrms/rms_core.c` — walks XABKEY/XABDAT/XABPRO only — see rms$xab_silent_unsupported |
+| 🟢 | `sys$display` | routine | Report FAB/RAB/XAB fields to caller | implemented | real | in | `src/vmsrms/rms_core.c` — walks XABKEY/XABDAT/XABPRO and now XABFHC/XABALL, filled from the ODS-2 FAT retained on the open handle over the ACP (vms-dfa) |
 | 🟡 | `sys$extend` | routine | Extend a file's allocation (fab$l_alq blocks) | partial | real | in | `src/vmsrms/rms_core.c` — vms-bc7: exec IO$_MODIFY allocates fab$l_alq more blocks (BITMAP.SYS + FH2 retrieval-pointer append) without moving EOF; caller-FAB validation is local |
 | 🟢 | `sys$get` | routine | Read next/keyed record | implemented | real | in | `src/vmsrms/rms_record.c` — reads the record's VBNs through the ACP window; a default $GET takes a real per-record $ENQ (EX, child of the FAB file-access lock) — RMS$_RLK on a live conflict; RAB$M_NLK/RAB$M_RLK read modifiers honored (vms-0dd) |
 | 🟢 | `sys$put` | routine | Write a new record | implemented | real | in | `src/vmsrms/rms_record.c` — writes the record's VBNs through the ACP window; holds no persistent record lock, matching VMS $PUT (vms-0dd) |
@@ -190,10 +190,10 @@ Record Management Services entry points, FAB/RAB/NAM/XAB control blocks, and the
 | 🟢 | `xab$key` | struct | XAB — key definition | implemented | real | in | `src/vmsrms/include/rms/xab.h` |
 | 🟢 | `xab$dat` | struct | XAB — date/time | implemented | real | in | `src/vmsrms/include/rms/xab.h` |
 | 🟢 | `xab$pro` | struct | XAB — protection | implemented | real | in | `src/vmsrms/include/rms/xab.h` |
-| ⬜ | `xab$fhc` | struct | XAB — file header characteristics | absent | n/a | in | `src/vmsrms/include/rms/xab.h` — XAB$C_FHC=29 declared, no struct behind it |
-| ⬜ | `xab$all` | struct | XAB — allocation attributes | absent | n/a | in | `src/vmsrms/include/rms/xab.h` — XAB$C_ALL=20 declared, no struct behind it |
+| 🟢 | `xab$fhc` | struct | XAB — file header characteristics | implemented | real | in | `src/vmsrms/include/rms/xab.h` — struct XABFHC defined; $OPEN retains the ODS-2 FAT (rfm/rat/lrl/ebk/ffb/hbk/bkz/mrz/dxq/gbc/verlimit) on the handle and $DISPLAY fills it from the real header over the ACP (vms-dfa) |
+| 🟢 | `xab$all` | struct | XAB — allocation attributes | implemented | real | in | `src/vmsrms/include/rms/xab.h` — struct XABALL defined; $DISPLAY reports realized allocation (alq=hiblk, bkz, deq) from the ODS-2 FAT over the ACP; create-time input controls (aop/aln/loc) left 0 (honest) (vms-dfa) |
 | ⬜ | `xab$_other` | struct | Remaining XAB types (SUM, RDT, ITM, TRM, RU) | absent | n/a | stretch | not declared |
-| 🟢⚠ | `rms$xab_silent_unsupported` | feature | sys$display/connect silently skip unrecognized XABs instead of erroring | implemented | facade-risk | in | `src/vmsrms/rms_core.c` — a program requesting XAB$C_FHC/XAB$C_ALL gets silence, not an error |
+| 🟢 | `rms$xab_silent_unsupported` | feature | sys$display fills the XABs the caller chains | implemented | real | in | `src/vmsrms/rms_core.c` — XAB$C_FHC/XAB$C_ALL are now filled from the real ODS-2 FAT over the ACP, not silently skipped (vms-dfa). XABITM and other cods remain walked-over (documented, narrower than the old FHC/ALL facade) |
 | 🟢 | `rms$org_sequential` | feature | Sequential file organization | implemented | real | in | `src/vmsrms/rms_seq.c` — all 7 record formats incl. VFC control area, VAR word-alignment |
 | 🟢 | `rms$org_relative` | feature | Relative file organization | implemented | real | in | `src/vmsrms/rms_rel.c` — status-byte cells; record locking now via the DLM (see rms$record_locking) |
 | 🟡⚠ | `rms$org_indexed` | feature | Indexed (ISAM) file organization | partial | facade-risk | in | `src/vmsrms/rms_idx.c` — primary key only per rms_idx.c's own header comment |
@@ -1247,7 +1247,6 @@ Surfaces that report success without doing the real work, or fake shared state p
 |---|---|---|---|
 | `chf$mech_array` | chf | stub | `src/libvms/rtl/lib_signal.c` — savr0/savr1/frame are zeroed placeholders; a handler reading them gets fake data |
 | `dcl-qualifiers$zero-validation-verbs` | dcl-qualifiers | absent | `src/vmsdcl/dcl_parser.c:451` — 12 verbs still have quals == NULL in builtin_verbs[]; dcl_validate_qualifiers() returns SS$_NORMAL for them ('not retrofit'), so any /QUALIFIER is silently accepted rather than rejected with IVQUAL. SET/SHOW mitigate at the sub-verb level (cmd_set_password/accounting/volume run their own shim validators; unknown SET/SHOW keywords still get IVKEYW), and HELP is deliberately accept-all. The remaining ~10 are the Phase-1 follow-up (vms-097). |
-| `rms$xab_silent_unsupported` | rms-api | implemented | `src/vmsrms/rms_core.c` — a program requesting XAB$C_FHC/XAB$C_ALL gets silence, not an error |
 | `rms$org_indexed` | rms-api | partial | `src/vmsrms/rms_idx.c` — primary key only per rms_idx.c's own header comment |
 | `rms$isam_alternate_key` | rms-api | absent | `src/vmsrms/rms_idx.c` — entirely unimplemented (zero hits) — a multi-key ISAM program silently only ever sees the primary key, breaking common COBOL/DIBOL business-app patterns |
 | `scs$datagram-service` | scs | stub | `src/vmsscs/scs_dgram.c` — Self-labeled: scs_dgram.h documents it never routes a datagram and the run log prints zeros — an honest state, but flagged facade-risk because it is real logic with zero production callers, the exact unwired-dead-code shape the Draper register hunts. |

@@ -273,6 +273,68 @@ int main(void)
     check(fail == 0,
           "RMS-over-ACP: all records round-tripped byte-exact through the ACP window");
 
+    /* ---- vms-dfa: $DISPLAY fills XABFHC (file-header characteristics) and
+     * XABALL (allocation) from the REAL ODS-2 FAT over the ACP -- previously an
+     * XABFHC/XABALL chained onto the FAB was silently walked over (the
+     * rms$xab_silent_unsupported facade). Create a FIX file, close it, then
+     * reopen with both XABs chained and read back the real header. Self-
+     * contained: the rfm_roundtrip files above are erased, so this stages its
+     * own XABFHC.DAT and erases it. ---- */
+    {
+        struct FAB fab = cc$rms_fab;
+        struct RAB rab;
+        char spec[128];
+        snprintf(spec, sizeof(spec), "%s[OVMXDIR]XABFHC.DAT", ODS2_UNIT);
+        fab.fab$l_fna = spec;
+        fab.fab$b_fns = (uint8_t)strlen(spec);
+        fab.fab$b_org = FAB$C_SEQ;
+        fab.fab$b_rfm = FAB$C_FIX;
+        fab.fab$w_mrs = 20;
+        fab.fab$b_fac = FAB$M_PUT | FAB$M_GET;
+
+        uint32_t st = sys$create(&fab, 0, 0);
+        check(st == RMS$_NORMAL, "vms-dfa: sys$create XABFHC.DAT (FIX/20) over the ACP");
+        if (st == RMS$_NORMAL) {
+            rab = cc$rms_rab;
+            rab.rab$l_fab = &fab;
+            sys$connect(&rab, 0, 0);
+            char rec[20];
+            memset(rec, ' ', sizeof(rec));
+            memcpy(rec, "XABREC", 6);
+            for (int i = 0; i < 4; i++) {
+                rab.rab$l_rbf = rec;
+                rab.rab$w_rsz = 20;
+                sys$put(&rab, 0, 0);
+            }
+            sys$close(&fab, 0, 0);
+
+            /* Reopen with XABFHC + XABALL chained; $DISPLAY fills them. */
+            struct XABFHC fhc = cc$rms_xabfhc;
+            struct XABALL all = cc$rms_xaball;
+            fhc.xab$l_nxt = &all;
+            fab.fab$l_xab = (struct XABKEY *)&fhc;
+            fab.fab$b_fac = FAB$M_GET;
+
+            st = sys$open(&fab, 0, 0);
+            check(st == RMS$_NORMAL, "vms-dfa: sys$open XABFHC.DAT over the ACP -> NORMAL");
+            if (st == RMS$_NORMAL) {
+                check(sys$display(&fab, 0, 0) == RMS$_NORMAL, "vms-dfa: sys$display -> NORMAL");
+                /* Teeth: the old silent-skip left the XABFHC at its cc$rms init
+                 * (xab$b_rfm == 0); a real FAT read yields FAB$C_FIX (== 1). */
+                check(fhc.xab$b_rfm == FAB$C_FIX,
+                      "vms-dfa: XABFHC xab$b_rfm == FAB$C_FIX read from the ODS-2 FAT (not silently skipped)");
+                check(fhc.xab$l_ebk >= 1,
+                      "vms-dfa: XABFHC xab$l_ebk is a real end-of-file VBN off the FAT");
+                check(fhc.xab$l_hbk >= fhc.xab$l_ebk,
+                      "vms-dfa: XABFHC xab$l_hbk (allocated) >= xab$l_ebk (EOF)");
+                check(all.xab$l_alq >= 1 && all.xab$l_alq == fhc.xab$l_hbk,
+                      "vms-dfa: XABALL xab$l_alq == the file's realized allocation (hiblk)");
+                sys$close(&fab, 0, 0);
+            }
+            sys$erase(&fab, 0, 0);
+        }
+    }
+
     vms_kif_acp_dmount(ODS2_UNIT);
 
     printf("=== RMS-over-ACP: %d passed, %d failed ===\n", pass, fail);

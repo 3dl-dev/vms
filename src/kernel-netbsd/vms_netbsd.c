@@ -1239,6 +1239,10 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	 * that in-kernel wait can return -ERESTARTSYS, which vms_facility_errno maps
 	 * to ERESTART so the ioctl restarts, exactly as the event-flag WAITFR path
 	 * does. GET_RESMASTER is a read-only DLM directory/mastering view.
+	 * DLM_XNODE (FC-P0.12, dispatch parity with the Linux vms_module.c switch,
+	 * vms-94c/DLM epic vms-7fa rung 1) delivers a decoded remote DLM request to
+	 * vms_lock_dlm_xnode_dispatch; rung 1 returns SS$_UNSUPPORTED (no fabricated
+	 * cross-node grant, INV-6).
 	 */
 	case VMS_IOCTL_ENQ:
 	case VMS_IOCTL_DEQ:
@@ -1249,6 +1253,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_DLM_GET_GRANTED:
 	case VMS_IOCTL_DLM_ENUM_WAITS:
 	case VMS_IOCTL_DLM_ENUM_STANDING:
+	case VMS_IOCTL_DLM_XNODE:
 	case VMS_IOCTL_CLUSTER_MEMBER_SET:
 	case VMS_IOCTL_CLUSTER_MEMBER_CLEAR:
 	case VMS_IOCTL_CLUSTER_MEMBER_GET:
@@ -1276,6 +1281,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_dlm_enum_waits(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_DLM_ENUM_STANDING:
 			r = vms_ioctl_dlm_enum_standing(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_DLM_XNODE:
+			r = vms_ioctl_dlm_xnode(proc, (unsigned long)uarg);      break;
 		case VMS_IOCTL_CLUSTER_MEMBER_SET:
 			r = vms_ioctl_cluster_member_set(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_CLUSTER_MEMBER_CLEAR:

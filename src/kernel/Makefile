@@ -123,9 +123,15 @@ vms-y := vms_module.o \
 #   test under a real /dev/vms force a genuine ACP block op to fail and observe the
 #   executive's REAL per-device error accounting (vms_device.errcnt) move -- the
 #   increment stays on the real error path; only the failure SOURCE is injected.
+# -DOVMX_KTEST_CLUSTER_SEAM (FC-P0.2, rung R3): compiles the TEST-ONLY cluster
+#   substrate-contract self-test knob (vms_ktest_cluster_seam_run/_result module
+#   params, vms_module.c) into THIS out-of-tree QEMU-test module ONLY, same
+#   posture as OVMX_KTEST_FAULT_INJECT above -- the bootable overlay does NOT
+#   define it, so the shipped executive carries no test-only cluster-seam code.
 ccflags-y := -I$(src) -I$(src)/../kernel-core \
              -I$(src)/../vmsfs/include -I$(src)/../vmsfs/ods2 \
-             -DOVMX_KBACKEND_LINUX -DOVMX_ODS2_KERNEL -DOVMX_KTEST_FAULT_INJECT
+             -DOVMX_KBACKEND_LINUX -DOVMX_ODS2_KERNEL -DOVMX_KTEST_FAULT_INJECT \
+             -DOVMX_KTEST_CLUSTER_SEAM
 
 # Default target: build against running kernel
 KDIR ?= /lib/modules/$(shell uname -r)/build

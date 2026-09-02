@@ -32,6 +32,14 @@
 #include "vms_internal.h"
 #include "vms_bg_core.h"    /* vms_bg_capture_channels -- fork-inherit snapshot (vms-0cd) */
 
+#if defined(OVMX_KTEST_CLUSTER_SEAM)
+#include <linux/completion.h>   /* struct completion (post-and-wake proofs) */
+#include <linux/delay.h>        /* msleep */
+#include "exec_kbackend.h"      /* SS13 exec_l2_* (already real) + SS14..SS18
+				  * (FC-P0.2) -- the ONLY substrate surface the
+				  * cluster-seam self-test below touches */
+#endif
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("OVMX Project");
 MODULE_DESCRIPTION("VMS subsystem kernel module");
@@ -115,6 +123,334 @@ module_param_cb(vms_ktest_bdev_fault, &vms_ktest_bdev_fault_ops, NULL, 0200);
 MODULE_PARM_DESC(vms_ktest_bdev_fault,
     "TEST-ONLY (rd vms-5f82): arm ACP block-I/O fault injection as \"major:minor:count\"; count 0 disarms");
 #endif /* OVMX_KTEST_FAULT_INJECT */
+
+#if defined(OVMX_KTEST_CLUSTER_SEAM)
+/*
+ * TEST-ONLY: the FC-P0.2 substrate contract self-test (rung R3, design
+ * docs/design-faithful-cluster-executive.md SS3.9). Compiled in ONLY for the
+ * out-of-tree QEMU-test vms.ko (src/kernel/Makefile defines the macro), never
+ * the bootable executive (distro Kbuild does not) -- the same posture as
+ * OVMX_KTEST_FAULT_INJECT above. Exercises the REAL Linux binding of
+ * exec_kbackend.h SS14..SS18 (dev_add_pack/dev_queue_xmit/dev_mc_add/kthread/
+ * timer_list/ktime) against a veth pair the harness has already created, using
+ * the already-real SS13 exec_l2_* AF_PACKET primitives on the PEER interface
+ * as the test's own verification oracle -- no protocol-layer code (vms_pe.c,
+ * FC-P0.9) is on this path, only the seam itself. Write-triggered
+ * (vms_ktest_cluster_seam_run="ifname_a:ifname_b"), the same
+ * arm-then-read-back shape as vms_ktest_bdev_fault above; results are read
+ * back as KEY=VAL tokens from vms_ktest_cluster_seam_result.
+ */
+struct vms_ktest_seam_result {
+	int done, open_ok, mc_add_ok, mc_del_ok, close_ok, hwaddr_ok, mtu_ok, link_ok;
+	int link_up, rx_ok, tx_ok, kthread_ok, kthread_iters;
+	int timer_ok, time_mono_ok, ticks_mono_ok;
+	uint8_t mc_mac[6], hwaddr[6];
+	uint32_t mtu, rx_len, tx_len;
+	char rx_payload[32], tx_payload[32];
+};
+static struct vms_ktest_seam_result vms_ktest_seam_res;
+static DEFINE_MUTEX(vms_ktest_seam_mtx);
+
+struct vms_ktest_seam_rx_ctx {
+	struct completion got;
+	uint8_t buf[128];
+	uint32_t len;
+};
+
+/* CONTRACT RULE 1 in miniature: this rx_cb, standing in for the core's own,
+ * only copies into a buffer it owns and wakes a waiter -- no protocol code. */
+static void vms_ktest_seam_rx_cb(void *ctx, const uint8_t *frame, uint32_t len)
+{
+	struct vms_ktest_seam_rx_ctx *rc = ctx;
+	uint32_t n = len < sizeof(rc->buf) ? len : sizeof(rc->buf);
+
+	memcpy(rc->buf, frame, n);
+	rc->len = len;
+	complete(&rc->got);
+}
+
+struct vms_ktest_seam_kt_ctx {
+	atomic_t iters;
+	struct completion started;
+};
+
+static int vms_ktest_seam_kt_fn(void *arg)
+{
+	struct vms_ktest_seam_kt_ctx *kc = arg;
+
+	while (!exec_kthread_should_stop(NULL)) {
+		if (atomic_inc_return(&kc->iters) == 1)
+			complete(&kc->started);
+		msleep(20);
+	}
+	return 0;
+}
+
+/* CONTRACT RULE 2 in miniature: this cb only "posts and wakes" -- complete()
+ * is this test's stand-in for the real fork queue post+wake (FC-P0.5). */
+static void vms_ktest_seam_timer_cb(void *ctx)
+{
+	complete((struct completion *)ctx);
+}
+
+/* Probe the four read-only SS14 accessors on the just-opened port. */
+static void vms_ktest_seam_probe_port(struct vms_ktest_seam_result *res,
+				       uint8_t hwaddr_out[6])
+{
+	if (exec_lan_hwaddr(hwaddr_out) == 0) {
+		res->hwaddr_ok = 1;
+		memcpy(res->hwaddr, hwaddr_out, 6);
+	}
+	res->mtu_ok = (exec_lan_mtu(&res->mtu) == 0 && res->mtu > 0);
+	res->link_ok = (exec_lan_link_up(&res->link_up) == 0);
+
+	res->mc_mac[0] = 0xab; res->mc_mac[1] = 0x00; res->mc_mac[2] = 0x04;
+	res->mc_mac[3] = 0x01; res->mc_mac[4] = 0x00; res->mc_mac[5] = 0x2a;
+	res->mc_add_ok = (exec_lan_mc_add(res->mc_mac) == 0);
+}
+
+/* RX proof: inject a 0x6007 frame from the PEER interface (via the already-
+ * real SS13 exec_l2_send) addressed to the port's own hwaddr, and confirm
+ * exec_lan_open's rx_cb (registered on THIS interface) saw it -- the veth-
+ * pair softirq-delivery proof the design's R3 rung names. */
+static void vms_ktest_seam_do_rx(struct vms_ktest_seam_result *res,
+				  struct vms_ktest_seam_rx_ctx *rx_ctx,
+				  exec_socket_t peer_sock, uint32_t peer_ifindex,
+				  const uint8_t hwaddr_a[6])
+{
+	static const char want[] = "OVMXSEAMRX";
+	uint8_t frame[64];
+
+	memset(frame, 0, sizeof(frame));
+	memcpy(frame + 0, hwaddr_a, 6);
+	frame[12] = 0x60; frame[13] = 0x07;         /* ethertype 0x6007 (SCA) */
+	memcpy(frame + 14, want, sizeof(want));
+	exec_l2_send(peer_sock, (int)peer_ifindex, 0x6007u, hwaddr_a,
+		     frame, 14 + sizeof(want));
+
+	res->rx_ok = wait_for_completion_timeout(&rx_ctx->got, HZ) != 0;
+	if (res->rx_ok && rx_ctx->len > 14) {
+		uint32_t n = rx_ctx->len - 14;
+
+		if (n > sizeof(res->rx_payload) - 1)
+			n = sizeof(res->rx_payload) - 1;
+		res->rx_len = rx_ctx->len;
+		memcpy(res->rx_payload, rx_ctx->buf + 14, n);
+	}
+}
+
+/* TX proof: exec_lan_xmit a frame out the port and confirm the PEER
+ * interface's (already-real SS13) exec_l2_recv captures it. */
+static void vms_ktest_seam_do_tx(struct vms_ktest_seam_result *res,
+				  exec_socket_t peer_sock,
+				  const uint8_t hwaddr_a[6])
+{
+	static const char payload[] = "OVMXSEAMTX";
+	uint8_t frame[64], rxbuf[128];
+	size_t out_len = 0;
+
+	memset(frame, 0xff, 6);                     /* broadcast dst */
+	memcpy(frame + 6, hwaddr_a, 6);
+	frame[12] = 0x60; frame[13] = 0x07;
+	memcpy(frame + 14, payload, sizeof(payload));
+
+	if (exec_lan_xmit(frame, 14 + sizeof(payload)) != 0)
+		return;
+	if (exec_l2_recv(peer_sock, rxbuf, sizeof(rxbuf), 1000, &out_len) != 0)
+		return;
+	if (out_len < 14 + sizeof(payload) ||
+	    memcmp(rxbuf + 14, payload, sizeof(payload)) != 0)
+		return;
+
+	res->tx_ok = 1;
+	res->tx_len = (uint32_t)out_len;
+	memcpy(res->tx_payload, rxbuf + 14, sizeof(payload));
+}
+
+static void vms_ktest_seam_do_kthread(struct vms_ktest_seam_result *res)
+{
+	struct vms_ktest_seam_kt_ctx kt_ctx;
+	exec_kthread_t kt = NULL;
+
+	atomic_set(&kt_ctx.iters, 0);
+	init_completion(&kt_ctx.started);
+	if (exec_kthread_create(&kt, vms_ktest_seam_kt_fn, &kt_ctx, "vms_seam_kt") != 0)
+		return;
+	res->kthread_ok = wait_for_completion_timeout(&kt_ctx.started, HZ) != 0;
+	exec_kthread_stop(&kt);
+	res->kthread_iters = atomic_read(&kt_ctx.iters);
+	res->kthread_ok = res->kthread_ok && res->kthread_iters > 0;
+}
+
+static void vms_ktest_seam_do_timer(struct vms_ktest_seam_result *res)
+{
+	struct completion fired;
+	exec_timer_t timer;
+
+	init_completion(&fired);
+	exec_timer_init(&timer, vms_ktest_seam_timer_cb, &fired);
+	exec_timer_arm(&timer, 50);
+	res->timer_ok = wait_for_completion_timeout(&fired, HZ) != 0;
+	exec_timer_cancel(&timer);
+	exec_timer_destroy(&timer);
+}
+
+static void vms_ktest_seam_do_time(struct vms_ktest_seam_result *res)
+{
+	uint64_t t1 = exec_time_now_vms();
+	uint64_t k1 = exec_ticks_ms();
+
+	msleep(15);
+	res->time_mono_ok = (t1 != 0 && exec_time_now_vms() > t1);
+	res->ticks_mono_ok = (exec_ticks_ms() > k1);
+}
+
+/*
+ * The port and its multicast membership are DELIBERATELY left open on return
+ * (no exec_lan_mc_del / exec_lan_close here): the R3 done-condition requires
+ * "multicast add visible in `ip maddr`" as an assertion the CALLER makes from
+ * userspace, external to this module, AFTER vms_ktest_cluster_seam_run
+ * returns -- tearing the join down before the caller can look would make that
+ * assertion untestable. vms_ktest_cluster_seam_teardown (below) closes it.
+ */
+static int vms_ktest_cluster_seam_run(const char *ifname_a, const char *ifname_b)
+{
+	struct vms_ktest_seam_result res;
+	struct vms_ktest_seam_rx_ctx rx_ctx;
+	exec_socket_t peer_sock = NULL;
+	uint32_t peer_ifindex = 0;
+	uint8_t hwaddr_a[6] = {0};
+
+	memset(&res, 0, sizeof(res));
+	init_completion(&rx_ctx.got);
+	rx_ctx.len = 0;
+
+	if (exec_lan_open(ifname_a, 0x6007u, vms_ktest_seam_rx_cb, &rx_ctx) != 0) {
+		res.open_ok = 0;
+		goto record;    /* honest: nothing else is meaningful with no port */
+	}
+	res.open_ok = 1;
+	vms_ktest_seam_probe_port(&res, hwaddr_a);
+
+	if (res.hwaddr_ok &&
+	    exec_l2_open(ifname_b, 0x6007u, &peer_ifindex, &peer_sock) == 0) {
+		vms_ktest_seam_do_rx(&res, &rx_ctx, peer_sock, peer_ifindex, hwaddr_a);
+		vms_ktest_seam_do_tx(&res, peer_sock, hwaddr_a);
+		exec_socket_release(peer_sock);
+	}
+
+	vms_ktest_seam_do_kthread(&res);
+	vms_ktest_seam_do_timer(&res);
+	vms_ktest_seam_do_time(&res);
+
+record:
+	res.done = 1;
+	mutex_lock(&vms_ktest_seam_mtx);
+	vms_ktest_seam_res = res;
+	mutex_unlock(&vms_ktest_seam_mtx);
+	return 0;
+}
+
+/* Written second, after the caller has inspected the live multicast join
+ * (/proc/net/dev_mcast == what `ip maddr` reads) and the open port: tears
+ * the SS14 state down and records mc_del_ok/close in the result. */
+static int vms_ktest_cluster_seam_teardown(void)
+{
+	struct vms_ktest_seam_result res;
+
+	mutex_lock(&vms_ktest_seam_mtx);
+	res = vms_ktest_seam_res;
+	mutex_unlock(&vms_ktest_seam_mtx);
+
+	if (res.open_ok) {
+		res.mc_del_ok = (exec_lan_mc_del(res.mc_mac) == 0);
+		exec_lan_close();
+		res.close_ok = 1;
+	}
+
+	mutex_lock(&vms_ktest_seam_mtx);
+	vms_ktest_seam_res = res;
+	mutex_unlock(&vms_ktest_seam_mtx);
+	return 0;
+}
+
+static int vms_ktest_cluster_seam_set(const char *val, const struct kernel_param *kp)
+{
+	char ifname_a[IFNAMSIZ] = {0};
+	char ifname_b[IFNAMSIZ] = {0};
+	const char *sep;
+	size_t blen;
+
+	(void)kp;
+	if (!val)
+		return -EINVAL;
+	sep = strchr(val, ':');
+	if (!sep || (size_t)(sep - val) >= sizeof(ifname_a))
+		return -EINVAL;
+	memcpy(ifname_a, val, sep - val);
+
+	blen = strlen(sep + 1);
+	if (blen && (sep + 1)[blen - 1] == '\n')
+		blen--;                          /* strip a sysfs-write newline */
+	if (blen >= sizeof(ifname_b))
+		return -EINVAL;
+	memcpy(ifname_b, sep + 1, blen);
+
+	return vms_ktest_cluster_seam_run(ifname_a, ifname_b);
+}
+static const struct kernel_param_ops vms_ktest_cluster_seam_run_ops = {
+	.set = vms_ktest_cluster_seam_set,
+};
+module_param_cb(vms_ktest_cluster_seam_run, &vms_ktest_cluster_seam_run_ops, NULL, 0200);
+MODULE_PARM_DESC(vms_ktest_cluster_seam_run,
+    "TEST-ONLY (rd FC-P0.2): run the SS14..SS18 substrate contract self-test against a veth pair \"ifname_a:ifname_b\"; leaves the port + multicast join OPEN for inspection until _teardown is written");
+
+static int vms_ktest_cluster_seam_teardown_set(const char *val, const struct kernel_param *kp)
+{
+	(void)val;
+	(void)kp;
+	return vms_ktest_cluster_seam_teardown();
+}
+static const struct kernel_param_ops vms_ktest_cluster_seam_teardown_ops = {
+	.set = vms_ktest_cluster_seam_teardown_set,
+};
+module_param_cb(vms_ktest_cluster_seam_teardown, &vms_ktest_cluster_seam_teardown_ops, NULL, 0200);
+MODULE_PARM_DESC(vms_ktest_cluster_seam_teardown,
+    "TEST-ONLY (rd FC-P0.2): close the port opened by vms_ktest_cluster_seam_run (any value written triggers it)");
+
+static int vms_ktest_cluster_seam_result_get(char *buf, const struct kernel_param *kp)
+{
+	struct vms_ktest_seam_result res;
+
+	(void)kp;
+	mutex_lock(&vms_ktest_seam_mtx);
+	res = vms_ktest_seam_res;
+	mutex_unlock(&vms_ktest_seam_mtx);
+
+	return scnprintf(buf, PAGE_SIZE,
+	    "DONE=%d OPEN=%d MC_ADD=%d MC_DEL=%d CLOSE=%d MC_MAC=%02x:%02x:%02x:%02x:%02x:%02x "
+	    "HWADDR=%d HWADDR_VAL=%02x:%02x:%02x:%02x:%02x:%02x MTU=%d MTU_VAL=%u "
+	    "LINK=%d LINK_UP=%d RX=%d RX_LEN=%u RX_PAYLOAD=%s "
+	    "TX=%d TX_LEN=%u TX_PAYLOAD=%s KTHREAD=%d KTHREAD_ITERS=%d "
+	    "TIMER=%d TIME_MONO=%d TICKS_MONO=%d\n",
+	    res.done, res.open_ok, res.mc_add_ok, res.mc_del_ok, res.close_ok,
+	    res.mc_mac[0], res.mc_mac[1], res.mc_mac[2],
+	    res.mc_mac[3], res.mc_mac[4], res.mc_mac[5],
+	    res.hwaddr_ok, res.hwaddr[0], res.hwaddr[1], res.hwaddr[2],
+	    res.hwaddr[3], res.hwaddr[4], res.hwaddr[5],
+	    res.mtu_ok, res.mtu, res.link_ok, res.link_up,
+	    res.rx_ok, res.rx_len, res.rx_payload,
+	    res.tx_ok, res.tx_len, res.tx_payload,
+	    res.kthread_ok, res.kthread_iters,
+	    res.timer_ok, res.time_mono_ok, res.ticks_mono_ok);
+}
+static const struct kernel_param_ops vms_ktest_cluster_seam_result_ops = {
+	.get = vms_ktest_cluster_seam_result_get,
+};
+module_param_cb(vms_ktest_cluster_seam_result, &vms_ktest_cluster_seam_result_ops, NULL, 0444);
+MODULE_PARM_DESC(vms_ktest_cluster_seam_result,
+    "TEST-ONLY (rd FC-P0.2): read the last vms_ktest_cluster_seam_run result as KEY=VAL tokens");
+#endif /* OVMX_KTEST_CLUSTER_SEAM */
 
 /* ================================================================
  * Process management

@@ -1056,6 +1056,37 @@ static void test_dlm_reg_enq_carries_real_values(void)
     CHECK(scs_member_build_dlm_reg_enq(&mp, res, 32, &f, out) == -1, "build_dlm_reg_enq namelen > 31 guarded");
 }
 
+/*
+ * The coordinator's cat-0x82 op-01 GRANT for our standing-lock registration.
+ * scs_member_parse stores the RAW category byte (body[8]) -- so a response frame
+ * carries the 0x80 bit IN v.category, and v.is_response is derived from it. Any
+ * consumer that classifies category MUST mask with & 0x7f: a bare
+ * `v.category == SCS_MEMBER_CAT_DLM` is UNSATISFIABLE for a response (0x82 != 0x02).
+ * This locks that contract -- the exact trap that silenced scsd.c's grant-detect
+ * (cm_send_dlm_completion trigger, vms-74f): a GRANT that never fires the op-04/
+ * op-03 completion dangles indistinguishably from a DROP.
+ */
+static void test_dlm_grant_response_needs_masking(void)
+{
+    uint8_t frame[SCS_MEMBER_FRAME_LEN];
+    struct scs_member_view v;
+
+    /* Start from a valid config frame, then stamp a cat-0x82 op-01 grant. */
+    make_frame(frame, golden_op01);
+    uint8_t *b = frame + 72;
+    b[8] = (uint8_t)(SCS_MEMBER_CAT_DLM | SCS_MEMBER_RESPONSE_BIT); /* 0x82 */
+    b[9] = 0x01;
+
+    CHECK(scs_member_parse(frame, sizeof(frame), &v) == 0, "parse cat-82 op-01 grant ok");
+    CHECK(v.is_response == 1, "grant: is_response set from the 0x80 bit");
+    CHECK(v.opcode == 0x01, "grant: opcode 0x01");
+    CHECK(v.category == 0x82, "grant: RAW category retains the response bit (0x82)");
+    CHECK(v.category != SCS_MEMBER_CAT_DLM,
+          "grant: a BARE `category == CAT_DLM` FAILS on a response (the silenced-trigger trap)");
+    CHECK((v.category & 0x7f) == SCS_MEMBER_CAT_DLM,
+          "grant: the MASKED category is DLM -- what the grant-detect must test");
+}
+
 int main(void)
 {
     test_op14_byte_exact();
@@ -1079,6 +1110,7 @@ int main(void)
     test_dlm_selfreg_null_guards();
     test_dlm_completion_holds_nothing();
     test_dlm_reg_enq_carries_real_values();
+    test_dlm_grant_response_needs_masking();
 
     if (failures == 0) {
         printf("test_scs_member: ALL PASSED\n");

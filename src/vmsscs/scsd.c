@@ -7507,7 +7507,12 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                  * grant before committing is the OPT-A insurance -- a commit with no
                  * grant behind it reformed the cluster.
                  */
-                if (mv.is_response && mv.category == SCS_MEMBER_CAT_DLM &&
+                if (mv.is_response &&
+                    /* scs_member_parse keeps the RAW category, so a response
+                     * carries the 0x80 bit here (0x82) -- MUST mask with & 0x7f;
+                     * a bare `== CAT_DLM` never matches a grant (regression:
+                     * test_dlm_grant_response_needs_masking). */
+                    (mv.category & 0x7f) == SCS_MEMBER_CAT_DLM &&
                     mv.opcode == 0x01 && ps->dlm_reg_sent &&
                     !ps->dlm_completion_sent &&
                     cm_peer_is_coordinator(rx->peers, ps)) {

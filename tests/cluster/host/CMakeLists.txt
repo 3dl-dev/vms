@@ -23,6 +23,7 @@ add_library(cluster_host_codec STATIC
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_dlm.c
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_scs.c
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_cm.c
+    ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_mscp.c
 )
 target_include_directories(cluster_host_codec PUBLIC
     ${CMAKE_SOURCE_DIR}/src/kernel-core
@@ -106,6 +107,7 @@ cluster_host_cnxman_test(test_cnxman_csb   test_cnxman_csb.c)
 cluster_host_cnxman_test(test_cnxman_recnx test_cnxman_recnx.c)
 cluster_host_test(test_codec_scs        test_codec_scs.c)
 cluster_host_test(test_codec_cm         test_codec_cm.c)
+cluster_host_test(test_codec_mscp       test_codec_mscp.c)
 
 # ---- FC-P0.5: the cluster fork context, built with NO kernel headers ----
 # The SHIPPING translation unit (src/kernel-core/vms_cluster_fork.c), not a copy

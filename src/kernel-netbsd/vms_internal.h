@@ -820,6 +820,13 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
 uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
                              uint32_t *lkid_out);
 uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid);
+/* The STANDING per-volume lock a faithful MOUNT holds for the whole mount life
+ * (vms-25e): an NL-mode $ENQ on the F11B$v<label> resource, held from $MOUNT to
+ * $DISMOUNT as the cluster-registration presence marker. Released with
+ * vms_lock_acp_vol_release. Mirror of the src/kernel/vms_internal.h decl (#928:
+ * kernel-core lock ops must be declared in BOTH the Linux and NetBSD headers). */
+uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
+                                   uint32_t *lkid_out);
 long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_get_granted(struct vms_proc *proc, unsigned long arg);
@@ -866,6 +873,11 @@ void vms_acp_init(void);
 void vms_acp_cleanup(void);
 long vms_ioctl_acp_mount(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_dmount(struct vms_proc *proc, unsigned long arg);
+/* Enumerate this node's standing cluster-registrable system locks (vms-1f4): one
+ * entry (resname + local lkid + mode) per mounted volume holding its F11B$v lock.
+ * A READ of real lock state for scsd's directory-rebuild registration. Mirror of
+ * the src/kernel/vms_internal.h decl (#928: kernel-core ops in BOTH headers). */
+long vms_ioctl_dlm_enum_standing(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_assign(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg);

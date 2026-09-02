@@ -1036,6 +1036,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
      * search (rd vms-ec75, DLM rung H11). */
     case VMS_IOCTL_DLM_ENUM_WAITS:
         return vms_ioctl_dlm_enum_waits(proc, arg);
+    case VMS_IOCTL_DLM_ENUM_STANDING:
+        return vms_ioctl_dlm_enum_standing(proc, arg);
     /* Cluster membership crosses into the executive (vms-551): scsd's local
      * populate path (SET/CLEAR) and SHOW CLUSTER's read (GET). */
     case VMS_IOCTL_CLUSTER_MEMBER_SET:

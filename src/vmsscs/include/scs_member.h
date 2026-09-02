@@ -338,6 +338,58 @@ int scs_member_build_dlm_response(const struct scs_member_params *p,
 int scs_member_build_dlm_selfreg(const struct scs_member_params *p,
                                  uint8_t out[SCS_MEMBER_FRAME_LEN]);
 
+/* Build the cat-82 op-01 GRANT reply to an inbound cat-02 op-01 lock request, from
+ * OVMX's REAL master lock state (vms-16c, faithful DLM). Rewrites the body[20:56]
+ * lock-DB window from real state (master_lkid for held modes, 0 for NL) -- NOT an
+ * echo; measured against VAX1's own accepted grant format. See scs_member.c. */
+int scs_member_build_dlm_enq_response(const struct scs_member_params *p,
+                                      const uint8_t *req_frame, size_t req_len,
+                                      uint32_t master_lkid, uint8_t granted_mode,
+                                      uint8_t out[SCS_MEMBER_FRAME_LEN]);
+
+/* The honest NULL-mode (NL) DLM registration OVMX originates for a resource a
+ * non-coordinator member showed it in an op-0d rebuild record (db20-b, vms-7e2):
+ * cat 0x02 op 0x01 ENQ, mode hard-pinned NL (holds nothing), resource name from
+ * the shown record, dir_hash an honest 0. The respond-to-rebuild frame VAX1
+ * granted 48/48. See scs_member.c. */
+int scs_member_build_dlm_nl_enq(const struct scs_member_params *p,
+                                uint16_t dir_hash,
+                                const char *resname, uint8_t namelen,
+                                uint8_t out[SCS_MEMBER_FRAME_LEN]);
+
+/* The requester's rebuild-COMPLETION pair driven to the MASTER after its op-01
+ * registrations were granted: cat 0x02 op 0x04 (completion), then op 0x03 COMMIT.
+ * body[20:24] = the MASTER's granted lock handle (from OVMX's executive origin
+ * record, grant_recv->GETLKI; caller passes 0 and MUST NOT send when there is no
+ * real grant -- honest omission), body[24:28] = OVMX's own requester lkid. See
+ * scs_member.c for the INV-6 guardrail (vms-16c). */
+int scs_member_build_dlm_op04(const struct scs_member_params *p, uint32_t master_lkid,
+                              uint32_t req_lkid, uint8_t out[SCS_MEMBER_FRAME_LEN]);
+int scs_member_build_dlm_commit(const struct scs_member_params *p, uint32_t master_lkid,
+                                uint32_t req_lkid, uint8_t out[SCS_MEMBER_FRAME_LEN]);
+
+/* The FULL per-lock DLM record OVMX carries in its op-01 ENQ registration (Layer
+ * 3, vms-74f) -- every field a REAL attribute of the standing lock OVMX genuinely
+ * holds, in OVMX's own executive encoding (INV-6, no fabrication). A skeletal
+ * record is dropped by the coordinator (run 9c); the coordinator needs the full
+ * per-lock context every real ENQ carries. */
+struct scs_dlm_reg_fields {
+    uint32_t req_lkid;    /* body[4:8]   OVMX's own lock handle */
+    uint32_t dir_csid;    /* body[20:24] the resource's directory-master csid (OVMX's dir_csid) */
+    uint32_t lock_id;     /* body[24:28] OVMX's unique per-lock id */
+    uint16_t flags;       /* body[28:30] lock flags */
+    uint8_t  mode;        /* body[30]    granted mode (NL for the volume presence lock) */
+    uint32_t lockmgmt;    /* body[32:36] lock-mgmt count/flags word */
+};
+
+/* The cat 0x02 op 0x01 ENQ that REGISTERS one of OVMX's REAL standing system
+ * locks to the coordinator (Layer 3, vms-74f): the full per-lock record from
+ * OVMX's genuine lock state. See scs_member.c. */
+int scs_member_build_dlm_reg_enq(const struct scs_member_params *p,
+                                 const char *resname, uint8_t namelen,
+                                 const struct scs_dlm_reg_fields *f,
+                                 uint8_t out[SCS_MEMBER_FRAME_LEN]);
+
 /* Current time as a VMS 64-bit absolute time (100 ns since 17-NOV-1858). */
 uint64_t scs_member_vms_time_now(void);
 

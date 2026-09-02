@@ -155,6 +155,32 @@ int main(void)
     CHECK(st == SS_NORMAL && gm == LCK_K_EXMODE,
           "GETLKI: the holder's lock is granted at EX");
 
+    /* ---- 1c. ⭐ RETRANSMIT IDEMPOTENCY (vms-16c): the SAME cross-node ENQ
+     * (same req_csid + req_lkid, mode still covered) returns the SAME master
+     * handle and does NOT mint a second lock record. A cluster member that never
+     * saw a STABLE granted handle re-sent op-01 forever; before this fix each
+     * re-send minted a fresh lkid, so the member could not correlate a held lock
+     * -- the measured ~35/sec retransmit storm that pinned the cluster at 2 nodes.
+     * A real VMS master is idempotent to a retransmit. ------------------------ */
+    uint32_t lkid_a2 = 0, queued2 = 0;
+    st = vms_kif_dlm_xnode(VMS_DLM_OP_ENQ, LCK_K_EXMODE, 0,
+                           0x00040011u /*SAME req_lkid*/, 0 /*master_lkid*/,
+                           REQ_CSID_A, 0 /*master_csid: resolve*/, res, NULL,
+                           &lkid_a2, &queued2, NULL, NULL, NULL, NULL);
+    CHECK(st == SS_NORMAL, "retransmit of the granted cross-node ENQ -> SS$_NORMAL");
+    CHECK(queued2 == 0, "the retransmit was NOT queued");
+    CHECK(lkid_a2 == lkid_a,
+          "the retransmit returns the SAME stable master handle (idempotent)");
+
+    uint32_t found2 = 0, lc2 = 0, dc2 = 0, mc2 = 0, ilm2 = 0,
+             n_granted2 = 0, held_for2 = 0;
+    st = vms_kif_get_resmaster(res, &found2, &lc2, &dc2, &mc2, &ilm2,
+                               &n_granted2, &held_for2);
+    CHECK(st == SS_NORMAL && n_granted2 == 1,
+          "still exactly ONE grant after the retransmit (no duplicate lock record)");
+    CHECK(held_for2 == REQ_CSID_A,
+          "the single grant is still held FOR the original requester's CSID");
+
     /* ---- 2. ⭐ CONTENTION: a SECOND, INCOMPATIBLE cross-node ENQ BLOCKS ------
      * EX over the held EX, no NOQUEUE. The master QUEUES it on its real waiting
      * queue (contention rung, vms-904c): the dispatch returns VMS_DLM_STS_QUEUED

@@ -699,6 +699,69 @@ int scs_member_build_dlm_response(const struct scs_member_params *p,
 }
 
 /*
+ * scs_member_build_dlm_enq_response - build the cat-82 op-01 GRANT reply to an
+ * inbound cat-02 op-01 lock request, from OVMX's REAL master lock state (vms-16c,
+ * faithful DLM). Unlike scs_member_build_dlm_response (echo-only), this REWRITES the
+ * body[20:56] lock-DB window from real state -- the field set the "silence" comment
+ * said needs a real lock manager. Measured against VAX1's OWN grant format (the one
+ * VAX1/VAX2 produce and accept, 2f2025a7 ENQ->GRANT diff), NOT the varied reference:
+ *   body[0:4]  OVMX's SYSAP send/ack counters (NOT a lock handle -- scs_member.h
+ *              body[0:2]=send-msg#, [2:4]=ack-msg#; the grant ACKs the ENQ's send).
+ *   body[4:8]  the requester's req_lkid, ECHOED unchanged.
+ *   body[8]    category | 0x80 (granted bit); body[9] opcode 0x01 echoed.
+ *   body[12:16] 0x00030001 granted status (request carried 0x00020001).
+ *   body[28:30] master lock handle (16-bit): OVMX's real master_lkid for a HELD
+ *              mode, 0 for pure-NL (the rebuild grant is NL -> 0, as VAX1's NL grants).
+ *   body[30]   GRANTED mode (1-5), honored from the inbound request -- NOT NL. The
+ *              handle field is 16-bit precisely so it does not overrun into this byte:
+ *              writing it as le32 put the handle's high zero byte here and clobbered
+ *              every grant to NL, so VAX (asking PR/CR) was never satisfied and
+ *              re-requested forever (the measured retransmit storm, vms-16c).
+ *   body[32:36] 0x00fe0000 master-state marker (low bits = record index).
+ *   resname + L1 region ECHOED. INV-6: every rewritten field is OVMX's REAL lock
+ *   state (from the executive grant), never fabricated; body[28]=0 for NL carries
+ *   no dangling handle (the a554e7ce failure mode).
+ */
+int scs_member_build_dlm_enq_response(const struct scs_member_params *p,
+                                      const uint8_t *req_frame, size_t req_len,
+                                      uint32_t master_lkid, uint8_t granted_mode,
+                                      uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    if (p == NULL || req_frame == NULL || out == NULL) {
+        return -1;
+    }
+    if (req_len < SCS_MEMBER_FRAME_LEN) {
+        return -1;
+    }
+    uint16_t lenword = get_le16(req_frame + 14);
+    if ((uint16_t)(lenword + 2) != SCS_MEMBER_SCA_LEN) {
+        return -1;
+    }
+    build_common(p, member_config_tmpl, SCS_MEMBER_ENV_CREDIT_CONFIG, out);
+    uint8_t *obody = out + 72;
+    const uint8_t *rbody = req_frame + 72;
+    memcpy(obody, rbody, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF); /* echo body */
+    put_le16(obody + 0, p->sysap_send_msg);      /* SYSAP send-msg# (NOT a handle) */
+    put_le16(obody + 2, p->sysap_ack_msg);       /* SYSAP ack-msg# */
+    obody[8] = (uint8_t)(rbody[8] | SCS_MEMBER_RESPONSE_BIT); /* 0x02 -> 0x82 granted */
+    put_le32(obody + 12, 0x00030001u);           /* granted status */
+    /* body[20:56] rewritten from REAL master state (not echoed). The master handle
+     * is a 16-bit field at body[28:30]: writing it as le32 overran into the MODE
+     * byte at body[30] and, for every handle < 0x10000, the handle's high zero byte
+     * clobbered the mode to NL -- the exact "grant carries NL, VAX never satisfied,
+     * re-requests forever" retransmit storm the re-fire measured (vms-16c). Keep the
+     * handle in [28:30]; carry the GRANTED mode (1-5, honored from the request) at
+     * [30]. Both are OVMX's REAL executive lock state (INV-6). */
+    if (granted_mode > 0)                         /* held mode -> the real master handle */
+        put_le16(obody + 28, (uint16_t)master_lkid);
+    else
+        put_le16(obody + 28, 0u);                 /* pure-NL grant: no held handle (as VAX1) */
+    put_le16(obody + 30, (uint16_t)granted_mode); /* GRANTED mode at [30]; [31]=0 */
+    put_le32(obody + 32, 0x00fe0000u);            /* master-state marker */
+    return 0;
+}
+
+/*
  * scs_member_build_dlm_selfreg - originate the joiner's SCS$DIRECTORY self-
  * registration (category 0x02, op 0x0d), the ONE cat-0x02 frame a real joiner
  * emits toward the coordinator during an add-transition (vms-db20).
@@ -749,6 +812,203 @@ int scs_member_build_dlm_selfreg(const struct scs_member_params *p,
     /* body[58:60]: our own SCSSYSTEMID == low two bytes of the source logical. */
     body[58] = p->src_logical[4];
     body[59] = p->src_logical[5];
+    return 0;
+}
+
+/*
+ * scs_member_build_dlm_nl_enq - originate an honest NULL-mode (NL) DLM registration
+ * (cat 0x02 op 0x01 ENQ) for a resource a non-coordinator member has SHOWN OVMX in
+ * its op-0d directory-rebuild record (db20-b, vms-7e2). The RESPOND-to-rebuild model
+ * VAX1 granted 48/48: OVMX accepts directory-node participation in the resource the
+ * cluster asked it to rebuild, holding NOTHING (mode hard-pinned NL). INV-6: the
+ * resource NAME comes from the shown record; every other field is OVMX's own true
+ * state (txn tag, its per-VC counter, its own member_count) or an honest ZERO
+ * (dir_hash -- a SCS$DIRECTORY hash is computed from the name, not echoed, and OVMX
+ * does not compute the VMS hash; omit rather than invent). body[4:6]=txn,
+ * body[6:8]=the per-VC counter (the granted frame's incrementing field) -- NEVER a
+ * node-index (0x0003 there is the DIR_TAG, coincident with OVMX being node 3).
+ */
+int scs_member_build_dlm_nl_enq(const struct scs_member_params *p,
+                                uint16_t dir_hash,
+                                const char *resname, uint8_t namelen,
+                                uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    if (p == NULL || out == NULL || resname == NULL) {
+        return -1;
+    }
+    if (namelen == 0 || namelen > 31) {   /* a VMS resource name is 1..31 bytes */
+        return -1;
+    }
+    build_common(p, member_config_tmpl, SCS_MEMBER_ENV_CREDIT_CONFIG, out);
+
+    uint8_t *body = out + 72;
+    memset(body + 4, 0, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF - 4);
+    put_le16(body + 0, p->sysap_send_msg);
+    put_le16(body + 2, p->sysap_ack_msg);
+    put_le16(body + 4, p->txn);           /* per-VC directory tag (opaque, minted) */
+    put_le16(body + 6, p->checksum);      /* per-VC monotonic counter (opaque, minted) */
+    body[8]  = SCS_MEMBER_CAT_DLM;         /* 0x02 */
+    body[9]  = 0x01;                       /* op 0x01 = ENQ */
+    put_le16(body + 10, dir_hash);         /* honest 0 -- computed from the name, not echoed (INV-6) */
+    body[12] = 0x01;                       /* node-independent constant */
+    put_le16(body + 14, p->member_count);  /* OVMX's own true post-transition member count */
+    /* body[16:30] zero -- ungrounded per-message ids (INV-6: never replay VAX3's). */
+    body[30] = 0x00;                       /* == NL. HARD-PINNED -- the INV-6 guarantee. */
+    /* body[31:47] zero. */
+    body[47] = namelen;                    /* resource-name length */
+    memcpy(body + 48, resname, namelen);   /* the discovered resource name; value block stays null */
+    return 0;
+}
+
+/*
+ * scs_member_build_dlm_op04 / scs_member_build_dlm_commit - the joiner's
+ * rebuild-COMPLETION pair (cat 0x02 op 0x04, then op 0x03 COMMIT) that a real
+ * joiner drives to the COORDINATOR after its op-01 registrations, closing the
+ * directory-rebuild transaction (vms-cn3 minimal-completion test). OVMX drives
+ * the completion but registers NOTHING HELD: it holds no persistent cluster
+ * lock (its DLM takes only transient RMS/ACP locks -- scsd.c:1631 "OVMX holds no
+ * locks... revisit when it has a real lock manager to answer FROM"), so this is
+ * the honest "my rebuild contribution is complete, I hold nothing" signal.
+ *
+ * The frame STRUCTURE is reproduced from the coordinator-rebuild specimens
+ * (JOIN->COORD F11B$aSYSDSK1, member-body layout validated by db20-b -- cat@8
+ * op@9, the 0x00030001 status word @12:16, mode@30, resname@48, per-lock handles
+ * @20:24 + @24:28). INV-6 / honesty guardrail, enforced by construction:
+ *   - resname (body[48:]) is ZEROED   -> claims NO named resource.
+ *   - the per-lock handle words (body[20:28]) are ZEROED -> claims NO held lock.
+ * i.e. the completion carries no resource and no lock handle OVMX cannot honestly
+ * back. Everything else replays the specimen's opaque structural bytes (Rule 8:
+ * reproduce the frame shape, invent nothing). If the coordinator counts OVMX off
+ * this content-free completion, completion alone suffices (OPT A); if not, the
+ * standing system-lock set is genuinely required (OPT B, a completeness call).
+ */
+static const uint8_t dlm_op04_struct[40] = {
+    /* body[ 8:16] */ 0x02, 0x04, 0x00, 0x00, 0x01, 0x00, 0x03, 0x00,
+    /* body[16:24] */ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* [20:24] handle ZEROED */
+    /* body[24:32] */ 0x00, 0x00, 0x00, 0x00, 0x4b, 0x00, 0x00, 0x00, /* [24:28] handle ZEROED */
+    /* body[32:40] */ 0x02, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00,
+    /* body[40:48] */ 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* [47] len ZEROED (no resname) */
+};
+static const uint8_t dlm_commit_struct[40] = {
+    /* body[ 8:16] */ 0x02, 0x03, 0x00, 0x00, 0x01, 0x00, 0x03, 0x00,
+    /* body[16:24] */ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* [20:24] handle ZEROED */
+    /* body[24:32] */ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* [24:28] handle ZEROED */
+    /* body[32:40] */ 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    /* body[40:48] */ 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    /* op-03 commits BY HANDLE with no resname; here the handle is null too. */
+};
+
+static int build_dlm_completion(const struct scs_member_params *p,
+                                const uint8_t struct40[40], uint32_t master_lkid,
+                                uint32_t req_lkid, uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    build_common(p, member_config_tmpl, SCS_MEMBER_ENV_CREDIT_CONFIG, out);
+    uint8_t *body = out + 72;
+    memset(body + 4, 0, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF - 4);
+    put_le16(body + 0, p->sysap_send_msg);
+    put_le16(body + 2, p->sysap_ack_msg);
+    put_le16(body + 4, p->txn);          /* per-VC directory-tree tag (opaque, minted) */
+    put_le16(body + 6, p->checksum);     /* per-VC monotonic counter (opaque, minted) */
+    memcpy(body + 8, struct40, 40);      /* body[8:48] structural template */
+    /*
+     * The rebuild-completion references the MASTER's granted lock, matching the
+     * real requester->master completion (conductor's VAX<->VAX chain, vms-16c):
+     *   body[20:24] = the MASTER's lock handle (what VAX1 returned in its GRANT and
+     *                 looks up in ITS lock DB). This is the field whose placeholder
+     *                 0x00000001 bugchecked VAX1 (INVLOCKID). It now carries the real
+     *                 handle OVMX's executive RECORDED from the grant (grant_recv ->
+     *                 GETLKI), never a placeholder or an un-backed wire copy: the
+     *                 caller passes 0 when the executive holds no real grant, and the
+     *                 caller must then NOT send the frame (honest omission, INV-6).
+     *   body[24:28] = OVMX's OWN requester lkid, echoed as in the real completion so
+     *                 the master can pair the completion with the lock it granted.
+     * body[30] MODE stays NL; body[48:] resname stays 0 (op-03 commits by handle).
+     */
+    put_le32(body + 20, master_lkid);
+    put_le32(body + 24, req_lkid);
+    return 0;
+}
+
+int scs_member_build_dlm_op04(const struct scs_member_params *p, uint32_t master_lkid,
+                              uint32_t req_lkid, uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    return build_dlm_completion(p, dlm_op04_struct, master_lkid, req_lkid, out);
+}
+
+int scs_member_build_dlm_commit(const struct scs_member_params *p, uint32_t master_lkid,
+                                uint32_t req_lkid, uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    return build_dlm_completion(p, dlm_commit_struct, master_lkid, req_lkid, out);
+}
+
+/*
+ * scs_member_build_dlm_reg_enq - originate the cat 0x02 op 0x01 ENQ that
+ * REGISTERS one of OVMX's REAL standing system locks in the cluster directory,
+ * driven to the COORDINATOR during a rebuild (Layer 3 of faithful cluster DLM
+ * registration, vms-74f). Unlike db20-b's NL-only presence ENQ (which zeroed the
+ * id fields because it registered NOTHING), this carries OVMX's REAL local lock
+ * handle -- req_lkid, from the vms-1f4 DLM_ENUM_STANDING accessor: the handle of a
+ * lock the executive GENUINELY HOLDS (the standing F11B$v<label> volume lock a
+ * MOUNT holds, vms-25e). Because op-01 registers a REAL held lock (not the
+ * content-free OPT-A completion), the rebuild transaction has real substance --
+ * fixing the dangling transaction that reformed the cluster in OPT A. The
+ * subsequent op-04/op-03 that COMPLETE the transaction carry their own per-lock
+ * handles; those builders + the await-grant sequencing are Layer 3 scsd, not here.
+ *
+ * Run 9c showed the coordinator DROPS a skeletal op-01 (req_lkid + resname, rest
+ * zero): a granted ref ENQ carries a FULL per-lock record. So the caller passes a
+ * scs_dlm_reg_fields sourced ENTIRELY from OVMX's own genuine lock state (INV-6):
+ *   req_lkid @ body[4:8]  -- OVMX's own lock handle (DLM_ENUM_STANDING)
+ *   dir_csid @ body[20:24]-- the resource's directory-master csid, in OVMX's OWN
+ *                            encoding (GET_RESMASTER); this is the measured
+ *                            operator-scope decider -- if VAX2 grants off OVMX's
+ *                            encoding, honest CN=3 lands with no cluster-DLM scope.
+ *   lock_id  @ body[24:28]-- OVMX's unique per-lock id
+ *   flags    @ body[28:30], mode @ body[30] (NL, genuinely held),
+ *   lockmgmt @ body[32:36]-- count/flags word (n_granted).
+ * body[16:20] req_csid stays 0 (the reference had it 0 in 846/846). Built on
+ * db20-b's VALIDATED op-01 frame (VAX1 granted 48/48). NEVER replay VAX3's handles.
+ */
+int scs_member_build_dlm_reg_enq(const struct scs_member_params *p,
+                                 const char *resname, uint8_t namelen,
+                                 const struct scs_dlm_reg_fields *f,
+                                 uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    if (p == NULL || out == NULL || resname == NULL || f == NULL) {
+        return -1;
+    }
+    if (namelen == 0 || namelen > 31) {   /* a VMS resource name is 1..31 bytes */
+        return -1;
+    }
+    build_common(p, member_config_tmpl, SCS_MEMBER_ENV_CREDIT_CONFIG, out);
+
+    uint8_t *body = out + 72;
+    memset(body + 4, 0, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF - 4);
+    put_le16(body + 0, p->sysap_send_msg);
+    put_le16(body + 2, p->sysap_ack_msg);
+    /*
+     * A FULL per-lock DLM record for the standing lock OVMX genuinely holds --
+     * every field a REAL attribute of its own lock (INV-6), in OVMX's own
+     * executive encoding (grounded from the ref op-01 846-ENQ survey, offsets
+     * moderate-confidence; the lab validates each). A skeletal record (req_lkid +
+     * resname, rest zero) is dropped by the coordinator (run 9c).
+     */
+    put_le32(body + 4,  f->req_lkid);      /* body[4:8]   OVMX's own lock handle */
+    body[8]  = 0x02;                       /* cat 0x02 (DLM) */
+    body[9]  = 0x01;                       /* op 0x01 = ENQ */
+    body[12] = 0x01;                       /* node-independent constant; with member_count forms 0x00030001 at CN=3 */
+    put_le16(body + 14, p->member_count);  /* OVMX's own true post-transition member count */
+    /* body[16:20] req_csid = 0 (from memset -- the reference had it 0 in 846/846). */
+    put_le32(body + 20, f->dir_csid);      /* body[20:24] the resource's DIRECTORY-master csid (OVMX's own dir_csid, from GET_RESMASTER) */
+    put_le32(body + 24, f->lock_id);       /* body[24:28] OVMX's unique per-lock id */
+    put_le16(body + 28, f->flags);         /* body[28:30] lock flags */
+    body[30] = f->mode;                    /* body[30]    granted mode (NL for the volume presence lock) */
+    put_le32(body + 32, f->lockmgmt);      /* body[32:36] lock-mgmt count/flags word */
+    body[47] = namelen;                    /* resource-name length */
+    memcpy(body + 48, resname, namelen);
     return 0;
 }
 

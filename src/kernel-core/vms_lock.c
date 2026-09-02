@@ -137,8 +137,8 @@ exec_list_head_t vms_dlm_origin_list;
 exec_lock_t vms_dlm_origin_lock;
 
 static int vms_lock_dlm_origin_getlki(uint32_t lkid, uint32_t *granted_mode,
-                                      uint32_t *requested_mode, char *resnam,
-                                      size_t resnam_len, uint8_t *valblk);
+                                      uint32_t *requested_mode, uint32_t *master_lkid,
+                                      char *resnam, size_t resnam_len, uint8_t *valblk);
 
 /* ================================================================
  * Cluster membership crosses into the executive (rd vms-551,
@@ -1448,6 +1448,41 @@ uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid)
 }
 
 /*
+ * vms_lock_acp_vol_standing - take the STANDING per-volume lock a faithful MOUNT
+ * holds for the WHOLE mount life (vms-25e). Unlike vms_lock_acp_vol_ex (the
+ * transient EX synchronization lock a single on-disk-structure write takes and
+ * immediately drops), this is a NULL-mode (NL) lock held from $MOUNT to
+ * $DISMOUNT. Its purpose is cluster registration, not serialization: it names the
+ * volume in the DLM so the connection manager can register "this node has this
+ * volume mounted" to the coordinator during a directory rebuild -- the standing
+ * F11B$v<label> lock a real VMS node holds and re-registers on join.
+ *
+ * NL asserts PRESENCE, not exclusion: it takes a different resource (F11B$v) than
+ * the XQP's per-write sync lock (F11B$s), holds nothing exclusive, and so can
+ * never block the XQP, another writer, or another cluster node -- deadlock-free
+ * and cluster-safe by construction. Released by vms_lock_acp_vol_release at
+ * $DISMOUNT (or on the holder's rundown). Returns the executive status; on
+ * SS$_NORMAL *lkid_out is the standing lock's handle for later registration.
+ */
+uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
+                                   uint32_t *lkid_out)
+{
+    struct vms_enq_args a;
+
+    if (lkid_out)
+        *lkid_out = 0;
+    memset(&a, 0, sizeof(a));
+    a.lkmode = LCK_K_NLMODE;    /* NL: a presence marker, holds nothing exclusive */
+    a.flags  = LCK_M_SYNC;      /* $ENQW; an NL request grants immediately */
+    strscpy(a.resnam, resnam, sizeof(a.resnam));
+
+    vms_enq_core_ex(proc, &a, NULL);
+    if (a.status == SS__NORMAL && lkid_out)
+        *lkid_out = a.lkid;
+    return a.status;
+}
+
+/*
  * vms_ioctl_convert - Convert lock mode ($ENQ with LCK$M_CONVERT)
  *
  * Changes the mode of an existing granted lock. If the new mode
@@ -1588,12 +1623,13 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg)
          * its origin record carries the status the master's GRANT completed. This
          * makes the NL->EX flip driven by the remote master observable here.
          */
-        uint32_t org_granted = 0, org_requested = 0;
+        uint32_t org_granted = 0, org_requested = 0, org_master = 0;
         if (vms_lock_dlm_origin_getlki(args.lkid, &org_granted, &org_requested,
-                                       args.resnam, sizeof(args.resnam),
+                                       &org_master, args.resnam, sizeof(args.resnam),
                                        args.valblk)) {
             args.granted_mode = org_granted;
             args.requested_mode = org_requested;
+            args.master_lkid = org_master;   /* vms-16c: the master's granted handle, from real origin state */
             args.parent_id = 0;
             /* args.valblk was filled by origin_getlki: the master's LVB the
              * GRANT delivered (rd vms-eeb), or zeros if none -- the read
@@ -2388,8 +2424,8 @@ static uint32_t vms_lock_dlm_xnode_blkast_recv(struct vms_proc *proc,
  * cross-node request's status flip on the REQUESTER node.
  */
 static int vms_lock_dlm_origin_getlki(uint32_t lkid, uint32_t *granted_mode,
-                                      uint32_t *requested_mode, char *resnam,
-                                      size_t resnam_len, uint8_t *valblk)
+                                      uint32_t *requested_mode, uint32_t *master_lkid,
+                                      char *resnam, size_t resnam_len, uint8_t *valblk)
 {
     struct vms_dlm_origin *cur;
     int found = 0;
@@ -2403,6 +2439,8 @@ static int vms_lock_dlm_origin_getlki(uint32_t lkid, uint32_t *granted_mode,
                 *granted_mode = cur->granted_mode;
             if (requested_mode)
                 *requested_mode = cur->requested_mode;
+            if (master_lkid)
+                *master_lkid = cur->master_lkid;   /* the master's granted handle (0 until a real GRANT recorded it) */
             if (resnam && resnam_len)
                 strscpy(resnam, cur->resnam, resnam_len);
             /*
@@ -2481,6 +2519,57 @@ static uint32_t vms_lock_dlm_xnode_rebuild(struct vms_proc *proc,
 }
 
 /*
+ * vms_lock_dlm_xnode_enq_idempotent - retransmit idempotency for a cross-node
+ * $ENQ (vms-16c). A cluster member (VAX1/VAX2) that never sees a STABLE granted
+ * lock re-sends the same op-01 ENQ. Before this, every re-send ran the full
+ * enqueue core and minted a FRESH master lock record, so the handle OVMX returned
+ * changed on each reply (0x328 -> 0x329 -> 0x32a ...) and the requester could
+ * never correlate a held lock -- it re-requested forever (the measured ~35/sec
+ * storm on LNM$CWLOGICALS + F11B$aSYSDSK1, CN stuck at 2). A real VMS master is
+ * idempotent to a retransmit: the SAME (req_csid, req_lkid) on the same resource,
+ * already granted at a mode that covers the request, returns the SAME master
+ * handle every time.
+ *
+ * Returns 1 and fills req->master_lkid / master_csid / valblk (the caller returns
+ * SS$_NORMAL) when an existing grant satisfies the retransmit; 0 to let the caller
+ * run the full enqueue core -- a genuinely new lock, or an UP-CONVERSION (existing
+ * grant weaker than the request) the core must process for real. Cross-node only
+ * (both ids non-zero); a local $ENQ (both 0) is never deduped here. INV-6: the
+ * handle returned names a REAL existing lock record on the resource's granted
+ * queue -- never a fabricated or defaulted grant.
+ */
+static int vms_lock_dlm_xnode_enq_idempotent(struct vms_dlm_xnode_args *req)
+{
+    struct vms_lock_resource *res;
+    struct vms_lock_entry *lock;
+    int handled = 0;
+
+    if (req->req_csid == 0 || req->req_lkid == 0)
+        return 0;   /* a local ENQ or unidentified requester: never dedup */
+
+    res = resource_find_or_create(req->resnam);
+    if (!res)
+        return 0;   /* let the core report SS$_INSFMEM honestly */
+
+    exec_lock(&res->lock);
+    exec_list_for_each_entry(lock, &res->granted, res_granted) {
+        if (lock->req_csid == req->req_csid &&
+            lock->req_lkid == req->req_lkid &&
+            lock->granted_mode >= req->lkmode) {
+            req->master_lkid = lock->lkid;          /* the SAME stable handle */
+            req->master_csid = vms_local_csid;
+            memcpy(req->valblk, res->valblk, LCK_VALBLK_SIZE);
+            handled = 1;
+            break;
+        }
+    }
+    exec_unlock(&res->lock);
+
+    resource_release(res);
+    return handled;
+}
+
+/*
  * vms_lock_dlm_xnode_dispatch - the cross-node DLM RECEIVE handler
  * (vms-94c transport; DLM epic vms-7fa).
  *
@@ -2552,6 +2641,19 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
         /* A request that names a resource must actually name one. */
         if (req->resnam[0] == '\0')
             return SS__BADPARAM;
+
+        /*
+         * Retransmit idempotency (vms-16c). An already-granted cross-node lock
+         * (same req_csid + req_lkid, mode still covered) returns its EXISTING
+         * master handle -- a STABLE handle the requester correlates -- instead of
+         * minting a fresh record per re-send. Without this the returned handle
+         * changed on every retransmit and the member re-requested forever. A
+         * genuinely new lock or an up-conversion returns 0 here and runs the core.
+         */
+        if (vms_lock_dlm_xnode_enq_idempotent(req)) {
+            req->queued = 0;
+            return SS__NORMAL;
+        }
 
         /*
          * Marshal the decoded cross-node $ENQ into the single-node lock manager

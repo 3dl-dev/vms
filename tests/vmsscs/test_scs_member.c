@@ -953,6 +953,189 @@ static void test_dlm_selfreg_null_guards(void)
     CHECK(scs_member_build_dlm_selfreg(&mp, NULL) == -1, "build_dlm_selfreg NULL out");
 }
 
+/*
+ * vms-cn3: the rebuild-COMPLETION pair (op-04 + op-03 COMMIT) OVMX drives to the
+ * coordinator must be HONEST BY CONSTRUCTION -- no named resource, no held-lock
+ * handle. OVMX holds no persistent cluster lock, so the completion asserts
+ * "done, holding nothing". This pins that guarantee: resname@48 zeroed, per-lock
+ * handles@20:28 zeroed, mode@30 zeroed (NL). If any of those ever carries a value
+ * it would be claiming a lock OVMX cannot honestly back -- a fabrication, caught
+ * here rather than on the wire.
+ */
+static void test_dlm_completion_carries_master_handle(void)
+{
+    struct scs_member_params mp;
+    joiner_params(&mp, 0, 0, 0x0064, 0x0113);
+    mp.txn = 0x0003;
+    mp.checksum = 0x0100;
+
+    /* The faithful completion references the MASTER's granted lock (vms-16c). The
+     * old "holds nothing" model (body[20:24]=OVMX's own handle, body[24:28] ZERO)
+     * bugchecked VAX1 INVLOCKID -- VAX1 looks up body[20:24] in ITS lock DB and needs
+     * the handle IT granted. body[20:24] = the master's granted handle (read from
+     * OVMX's executive origin via grant_recv->GETLKI, never a placeholder or wire
+     * copy); body[24:28] = OVMX's own requester lkid. The honest boundary is at the
+     * SENDER: cm_send_dlm_completion_one omits the frame entirely when the executive
+     * holds no real master handle -- so the builder faithfully places whatever real
+     * pair the caller read from executive state. */
+    uint32_t master = 0x00000443u;   /* VAX1's granted master handle */
+    uint32_t reqlk  = 0x00040007u;   /* OVMX's own requester lkid */
+    uint8_t op04[SCS_MEMBER_FRAME_LEN], op03[SCS_MEMBER_FRAME_LEN];
+    CHECK(scs_member_build_dlm_op04(&mp, master, reqlk, op04) == 0, "build_dlm_op04 ok");
+    CHECK(scs_member_build_dlm_commit(&mp, master, reqlk, op03) == 0, "build_dlm_commit ok");
+
+    const uint8_t *b4 = op04 + 72;
+    const uint8_t *b3 = op03 + 72;
+#define RD32(b, o) ((uint32_t)((b)[o] | ((b)[(o)+1] << 8) | ((b)[(o)+2] << 16) | ((uint32_t)(b)[(o)+3] << 24)))
+    CHECK(b4[8] == 0x02 && b4[9] == 0x04, "op-04: cat 0x02 op 0x04");
+    CHECK(b3[8] == 0x02 && b3[9] == 0x03, "op-03: cat 0x02 op 0x03 (COMMIT)");
+    CHECK(RD32(b4, 20) == master, "op-04: the MASTER's granted handle at body[20:24]");
+    CHECK(RD32(b3, 20) == master, "op-03: the MASTER's granted handle at body[20:24]");
+    CHECK(RD32(b4, 24) == reqlk,  "op-04: OVMX's own requester lkid at body[24:28]");
+    CHECK(RD32(b3, 24) == reqlk,  "op-03: OVMX's own requester lkid at body[24:28]");
+
+    /* op-03 commits BY HANDLE: no named resource, NL mode. */
+    for (int i = 48; i < 64; i++) {
+        CHECK(b4[i] == 0 && b3[i] == 0, "completion: resname@48 is ZEROED (commits by handle)");
+    }
+    CHECK(b4[30] == 0 && b3[30] == 0, "completion: mode@30 is 0x00 (NL)");
+
+    CHECK((uint16_t)(b4[4] | (b4[5] << 8)) == 0x0003, "op-04: dir-tree tag minted");
+    CHECK((uint16_t)(b4[6] | (b4[7] << 8)) == 0x0100, "op-04: per-VC counter minted");
+#undef RD32
+
+    CHECK(scs_member_build_dlm_op04(NULL, master, reqlk, op04) == -1, "build_dlm_op04 NULL p");
+    CHECK(scs_member_build_dlm_commit(&mp, master, reqlk, NULL) == -1, "build_dlm_commit NULL out");
+}
+
+/*
+ * vms-74f (Layer 3): the op-01 ENQ that REGISTERS one of OVMX's REAL standing
+ * locks to the coordinator must carry OVMX's OWN real values -- its real lock
+ * handle (req_lkid@[4:8], from the accessor), the real coordinator csid
+ * (mst_csid@[20:24]), its real resource name, NL mode -- and must NOT invent the
+ * ungrounded per-lock lock-mgmt fields (body[24:30] zero). This pins that.
+ */
+static void test_dlm_reg_enq_carries_real_values(void)
+{
+    struct scs_member_params mp;
+    joiner_params(&mp, 0, 0, 0x0064, 0x0113);
+    mp.member_count = 3;
+
+    const char *res = "F11B$vOVMXSYS";
+    uint8_t nl = (uint8_t)strlen(res);
+    struct scs_dlm_reg_fields f;
+    memset(&f, 0, sizeof(f));
+    f.req_lkid = 0x00000001u;   /* OVMX's own lock handle */
+    f.dir_csid = 0x00010003u;   /* OVMX's own directory-master csid (its encoding) */
+    f.lock_id  = 0x00000001u;   /* OVMX's per-lock id */
+    f.flags    = 0x007du;       /* lock flags */
+    f.mode     = 0x00u;         /* NL */
+    f.lockmgmt = 0x00010001u;   /* count word */
+
+    uint8_t out[SCS_MEMBER_FRAME_LEN];
+    CHECK(scs_member_build_dlm_reg_enq(&mp, res, nl, &f, out) == 0, "build_dlm_reg_enq ok");
+    const uint8_t *b = out + 72;
+
+#define RD32(o) ((uint32_t)(b[o] | (b[(o)+1] << 8) | (b[(o)+2] << 16) | ((uint32_t)b[(o)+3] << 24)))
+    CHECK(RD32(4)  == f.req_lkid,  "op-01: OVMX's real req_lkid at body[4:8]");
+    CHECK(b[8] == 0x02 && b[9] == 0x01, "op-01: cat 0x02 op 0x01 (ENQ)");
+    CHECK(RD32(16) == 0,           "op-01: req_csid body[16:20] is 0 (as every granted ref ENQ)");
+    CHECK(RD32(20) == f.dir_csid,  "op-01: OVMX's own dir_csid at body[20:24] (the measured decider)");
+    CHECK(RD32(24) == f.lock_id,   "op-01: OVMX's real per-lock id at body[24:28] (non-zero, as every granted ENQ)");
+    CHECK((uint16_t)(b[28] | (b[29] << 8)) == f.flags, "op-01: lock flags at body[28:30]");
+    CHECK(b[30] == f.mode,         "op-01: mode@30 (NL, the mode OVMX holds)");
+    CHECK(RD32(32) == f.lockmgmt,  "op-01: lock-mgmt count word at body[32:36]");
+    CHECK(b[47] == nl && memcmp(b + 48, res, nl) == 0, "op-01: OVMX's real resource name at body[48]");
+#undef RD32
+
+    CHECK(scs_member_build_dlm_reg_enq(&mp, NULL, nl, &f, out) == -1, "build_dlm_reg_enq NULL resname");
+    CHECK(scs_member_build_dlm_reg_enq(&mp, res, nl, NULL, out) == -1, "build_dlm_reg_enq NULL fields");
+    CHECK(scs_member_build_dlm_reg_enq(&mp, res, 0, &f, out) == -1, "build_dlm_reg_enq zero namelen guarded");
+    CHECK(scs_member_build_dlm_reg_enq(&mp, res, 32, &f, out) == -1, "build_dlm_reg_enq namelen > 31 guarded");
+}
+
+/*
+ * The coordinator's cat-0x82 op-01 GRANT for our standing-lock registration.
+ * scs_member_parse stores the RAW category byte (body[8]) -- so a response frame
+ * carries the 0x80 bit IN v.category, and v.is_response is derived from it. Any
+ * consumer that classifies category MUST mask with & 0x7f: a bare
+ * `v.category == SCS_MEMBER_CAT_DLM` is UNSATISFIABLE for a response (0x82 != 0x02).
+ * This locks that contract -- the exact trap that silenced scsd.c's grant-detect
+ * (cm_send_dlm_completion trigger, vms-74f): a GRANT that never fires the op-04/
+ * op-03 completion dangles indistinguishably from a DROP.
+ */
+static void test_dlm_grant_response_needs_masking(void)
+{
+    uint8_t frame[SCS_MEMBER_FRAME_LEN];
+    struct scs_member_view v;
+
+    /* Start from a valid config frame, then stamp a cat-0x82 op-01 grant. */
+    make_frame(frame, golden_op01);
+    uint8_t *b = frame + 72;
+    b[8] = (uint8_t)(SCS_MEMBER_CAT_DLM | SCS_MEMBER_RESPONSE_BIT); /* 0x82 */
+    b[9] = 0x01;
+
+    CHECK(scs_member_parse(frame, sizeof(frame), &v) == 0, "parse cat-82 op-01 grant ok");
+    CHECK(v.is_response == 1, "grant: is_response set from the 0x80 bit");
+    CHECK(v.opcode == 0x01, "grant: opcode 0x01");
+    CHECK(v.category == 0x82, "grant: RAW category retains the response bit (0x82)");
+    CHECK(v.category != SCS_MEMBER_CAT_DLM,
+          "grant: a BARE `category == CAT_DLM` FAILS on a response (the silenced-trigger trap)");
+    CHECK((v.category & 0x7f) == SCS_MEMBER_CAT_DLM,
+          "grant: the MASKED category is DLM -- what the grant-detect must test");
+}
+
+/*
+ * The cat-0x82 op-01 GRANT that OVMX-the-master returns for an inbound cross-node
+ * $ENQ (scs_member_build_dlm_enq_response, vms-16c faithful DLM) MUST carry the
+ * GRANTED mode (1-5) at body[30] -- VAX asks for PR/CR and, if it reads NL there,
+ * treats the lock as unsatisfied and re-requests forever (the measured 34/sec
+ * retransmit storm). This locks the exact regression that caused it: the master
+ * handle is a 16-bit field at body[28:30]; a wider le32 write pushed the handle's
+ * high zero byte into body[30] and, for every handle < 0x10000, silently clobbered
+ * the mode to NL. Assert the handle DOES NOT reach the mode byte, and the granted
+ * mode survives -- with a small handle, the two conditions can only both hold if
+ * the handle write stays 16-bit.
+ */
+static void test_dlm_enq_grant_honors_mode(void)
+{
+    struct scs_member_params mp;
+    joiner_params(&mp, 20, 18, 0x0040, 0x0041); /* sysap send/ack counters */
+
+    /* A valid inbound cat-0x02 op-01 request to answer: PR (mode 3) at body[30]. */
+    uint8_t req[SCS_MEMBER_FRAME_LEN];
+    make_frame(req, golden_op01);
+    req[72 + 8] = 0x02;   /* category: DLM */
+    req[72 + 9] = 0x01;   /* opcode: ENQ  */
+    req[72 + 30] = 0x03;  /* requested mode PR -- what VAX asks for */
+
+    uint8_t out[SCS_MEMBER_FRAME_LEN];
+    /* A held-mode grant: master handle 0x0328 (< 0x10000, high bytes zero -- the
+     * exact shape that made the le32 write clobber the mode), granted mode PR. */
+    CHECK(scs_member_build_dlm_enq_response(&mp, req, sizeof(req), 0x0328u, 0x03u,
+                                            out) == 0, "build_dlm_enq_response ok");
+    const uint8_t *b = out + 72;
+    CHECK(b[8] == 0x82, "grant: cat 0x02 | 0x80 response bit");
+    CHECK(b[9] == 0x01, "grant: opcode 0x01 echoed");
+    CHECK((uint16_t)(b[28] | (b[29] << 8)) == 0x0328u,
+          "grant: 16-bit master handle at body[28:30]");
+    CHECK(b[30] == 0x03,
+          "grant: GRANTED mode PR at body[30] -- NOT clobbered to NL by the handle write");
+    CHECK(b[31] == 0x00, "grant: body[31] is the mode field's zero high byte");
+
+    /* A pure-NL grant carries no held handle and NL at the mode byte (as VAX1's). */
+    CHECK(scs_member_build_dlm_enq_response(&mp, req, sizeof(req), 0x0500u, 0x00u,
+                                            out) == 0, "build_dlm_enq_response NL ok");
+    CHECK((uint16_t)(b[28] | (b[29] << 8)) == 0x0000u,
+          "NL grant: no dangling master handle at body[28:30]");
+    CHECK(b[30] == 0x00, "NL grant: mode@30 is NL");
+
+    CHECK(scs_member_build_dlm_enq_response(NULL, req, sizeof(req), 1, 1, out) == -1,
+          "build_dlm_enq_response NULL p guarded");
+    CHECK(scs_member_build_dlm_enq_response(&mp, req, 8, 1, 1, out) == -1,
+          "build_dlm_enq_response short req guarded");
+}
+
 int main(void)
 {
     test_op14_byte_exact();
@@ -974,6 +1157,10 @@ int main(void)
     test_params_member_vs_joiner_form();
     test_dlm_selfreg_byte_exact();
     test_dlm_selfreg_null_guards();
+    test_dlm_completion_carries_master_handle();
+    test_dlm_reg_enq_carries_real_values();
+    test_dlm_grant_response_needs_masking();
+    test_dlm_enq_grant_honors_mode();
 
     if (failures == 0) {
         printf("test_scs_member: ALL PASSED\n");

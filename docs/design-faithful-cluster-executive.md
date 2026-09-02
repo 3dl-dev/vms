@@ -231,7 +231,7 @@ container idioms; no `list_head`, no `TAILQ`.
 | Frame buffers | `sk_buff` | `mbuf` chain | The core never sees either. `rx_cb` receives `(const uint8_t *frame, size_t len)` and copies into an `exec_lanbuf_t` from the core's own pool; `exec_lan_xmit` takes `(const uint8_t *, size_t)` and the binding builds the skb/mbuf and frees it. Copy cost is irrelevant at cluster rates (≤ low thousands/s) and buys a substrate-free core |
 | Receive context | softirq | softint / driver IPL | Contract rule 1 (copy, enqueue under an rx-IPL lock, wake); the fork thread is the only context that runs protocol code, on both substrates |
 | Timers | `timer_list` in softirq | `callout` in softint | Contract rule 2 (post-and-wake only); the core's FSMs never run in a timer callback |
-| IPL / lock classes | spinlock + `_bh` | `mutex(9)` with IPL | `exec_lock_t` (spin, initialized with the rx IPL by the binding) for the two rx-touching queues; `exec_mutex_t` for the fork mutex; the core names no IPL |
+| IPL / lock classes | spinlock + irqsave | spin `mutex(9)` at IPL | `exec_rxlock_t` (§3.2.3) for the ONE rx-touching object, the fork queue; `exec_mutex_t` for the fork mutex; `exec_lock_t` never at receive level; the core names no IPL (`EXEC_LAN_RX_IPL` is a binding constant) |
 | Netif identity | `struct net_device *` | `struct ifnet *` | The binding resolves ETH0: → its own handle inside `exec_lan_open`; the core holds only the device name string from `vms_devtab` |
 | Multicast join | `dev_mc_add` | `if_mcast_op` | `exec_lan_mc_add(mac[6])` |
 | Thread lifecycle | `kthread_should_stop` | stop flag + `kthread_join` | `exec_kthread_should_stop()`; the fork loop checks it once per iteration |
@@ -269,6 +269,92 @@ includes a CI grep gate: no `#include <linux/…>`, `<sys/mbuf.h>`,
 `<net/if.h>` etc. in `src/kernel-core/vms_pe.c`, `vms_scs.c`,
 `vms_cnxman*.c`, `vms_dlm_scs.c`, `vms_mscp_*.c`, `vms_cluster_*.c`.
 
+#### 3.2.3 Receive-level synchronization — RULING (2026-09-02, from FC-P0.5)
+
+**The gap.** The seam's only lock, `exec_lock_t`, is a plain `spin_lock`
+on Linux (`exec_kbackend_linux.h:87`) and an `IPL_NONE` kmutex on NetBSD
+(`exec_kbackend_netbsd.h:102`). The cluster fork queue is written from the
+substrate's receive context (Linux softirq; NetBSD softint or the `qe`/`xq`
+device IPL) and read from the fork thread. A process-context holder of a
+plain spinlock preempted by a same-CPU softirq taking the same lock is a
+hard lockup; an `IPL_NONE` kmutex taken above `IPL_NONE` is a NetBSD panic.
+So the fork queue cannot be guarded by `exec_lock_t`, and §3.3's "rx-IPL
+`exec_lock_t`" was under-specified.
+
+**Ruling: option (2) — the seam gains ONE receive-level lock class, and
+the core uses it for exactly ONE object, the fork queue.** Option (1)
+(the LAN binding owns the queue lock) is rejected: it moves the queue's
+semantics — ordering, drop policy, high-water, the wake — into
+per-substrate code where they cannot be reviewed once and the snapshot
+readers cannot see them; and it still needs an IPL-safe lock, just an
+unnamed one. This is also the VMS shape: a device ISR runs at device IPL,
+does minimal work, and hands a fork block to the fork queue with an
+interlocked queue instruction; the fork routine runs at fork IPL
+(`IPL$_SCS`, 8, for SCS-class port drivers) and does all protocol work
+there. The cross-IPL handoff is a single interlocked queue — one shared
+object, one synchronization class — which is what this ruling reproduces.
+
+**Seam additions (§1b, "receive-level lock"), exact symbols:**
+
+```
+typedef <substrate> exec_rxlock_t;      /* Linux: spinlock_t; NetBSD: kmutex_t SPIN at EXEC_LAN_RX_IPL */
+typedef <substrate> exec_rxflags_t;     /* Linux: unsigned long (irqsave); NetBSD: int (unused; IPL kept in the mutex) */
+#define EXEC_LAN_RX_IPL  <binding>      /* NetBSD: the highest IPL at which exec_lan rx callbacks may run
+                                            (IPL_NET unless the P0.3 spike shows qe/xq input above it);
+                                            Linux: no-op constant */
+void exec_rxlock_init(exec_rxlock_t *);      /* Linux spin_lock_init; NetBSD mutex_init(l, MUTEX_DEFAULT, EXEC_LAN_RX_IPL) */
+void exec_rxlock_destroy(exec_rxlock_t *);
+void exec_rxlock_acquire(exec_rxlock_t *, exec_rxflags_t *);  /* ANY context. Linux spin_lock_irqsave; NetBSD mutex_spin_enter */
+void exec_rxlock_release(exec_rxlock_t *, exec_rxflags_t *);  /* Linux spin_unlock_irqrestore; NetBSD mutex_spin_exit */
+int  exec_cv_wait_rx(exec_cv_t *, exec_rxlock_t *, exec_rxflags_t *);
+      /* thread context only; the §2 cv contract with the rxlock as interlock: enqueue on cv while
+         holding the rxlock, atomically release + sleep, re-acquire before return; returns 0 (no signal
+         semantics needed — the fork thread is a kthread; stop is a predicate).
+         Linux: prepare_to_wait(TASK_UNINTERRUPTIBLE) → spin_unlock_irqrestore → schedule() → finish_wait
+                → spin_lock_irqsave.  NetBSD: cv_wait(cv, l) with the spin mutex as interlock. */
+/* exec_cv_signal / exec_cv_broadcast: unchanged; legal from receive level when the caller holds the
+   rxlock the cv is paired with. */
+```
+
+**Contract rule 14.1 (the doc-comment to paste over §14/§15/§16):**
+
+> RECEIVE-LEVEL SYNCHRONIZATION. Exactly one executive object is shared
+> between the substrate's receive context and thread context: the cluster
+> fork queue (`vms_cluster_fork.c`: input-frame list, posted-work list,
+> stop flag, and the pool freelist that rx pops buffers from). It is
+> guarded by ONE `exec_rxlock_t` and ONE `exec_cv_t` paired with it.
+> (a) Receive level — the §14 rx callback and §16 timer callbacks — may
+> take ONLY the rxlock: pop a pool buffer / copy / enqueue / `exec_cv_signal`
+> / release. O(1), no allocation, no sleep, no `exec_lock_t`, no
+> `exec_mutex_t`, no call into protocol code. Empty pool ⇒ drop + counter.
+> (b) Thread context takes the rxlock only to splice the whole queue into a
+> private list, to post work, or to sleep via `exec_cv_wait_rx`; it never
+> runs protocol code under it. All protocol state (PE/SCS/CNXMAN/DLM) is
+> guarded by the fork mutex (`exec_mutex_t`), held by the fork thread
+> across a dispatch batch. Lock order: fork mutex → rxlock; rxlock → any
+> other lock is forbidden. (c) `exec_lock_t`/`exec_mutex_t` are never
+> taken at receive level. (d) The fork thread's sleep predicate
+> ("input empty ∧ work empty ∧ ¬stop") is tested under the rxlock and
+> every mutation of it happens under the rxlock — the §2 lost-wakeup-free
+> contract with the rxlock as the shared interlock.
+
+**Who takes what:**
+
+| Context | May take | Never |
+|---|---|---|
+| rx callback (Linux softirq / NetBSD softint or `EXEC_LAN_RX_IPL`) | rxlock (acquire/release around O(1) enqueue + signal) | `exec_lock_t`, `exec_mutex_t`, allocation, protocol code |
+| timer callback (§16) | rxlock (post a work item + signal) | same |
+| fork thread | fork mutex across a batch; rxlock briefly to splice/post/wait | protocol code under the rxlock |
+| process-context posters (a `$ENQ` needing the wire, MOUNT, ioctl control) | rxlock briefly (post + signal), then sleep on their own object's cv/`exec_lock_t` | the fork mutex while holding the rxlock |
+| snapshot readers (diagnostic ioctls) | fork mutex for protocol state; queue-depth counters are plain integers read under the rxlock | — |
+
+**Conformance follow-up** (one plan item, FC-P0.16): P0.2 and P0.4 add
+§1b; P0.5's queue/wake path moves from `exec_lock_t` to `exec_rxlock_t` +
+`exec_cv_wait_rx` with the pool freelist under the same lock; the R3
+contract test gains a same-CPU hammer (a process-context poster loop
+pinned to the CPU that receives, under a 0x6007 flood) that must not
+lock up or panic on either substrate.
+
 `vms_l2.c` (the ioctl pipe) is **not** on the cluster path. It stays as a
 generic privileged LAN facility (the eventual `$QIO` LAN-driver surface for
 user-mode protocols, gated on `PHY_IO`) if another lane needs it; otherwise it
@@ -281,9 +367,9 @@ mutates the SB/PB/CDT/CSB/RSB databases. OVMX reproduces that shape instead
 of inventing fine-grained locking across five new databases:
 
 - **Receive path.** The `exec_lan` rx callback runs in the substrate's rx
-  context (Linux softirq; NetBSD softint or the `qe`/`xq` interrupt): copy
-  the frame into a pool `exec_lanbuf_t`, push it onto the port's input
-  queue under the rx-IPL `exec_lock_t`, wake the fork thread. Nothing else
+  context (Linux softirq; NetBSD softint or the `qe`/`xq` interrupt): pop a
+  pool `exec_lanbuf_t`, copy the frame, push it onto the fork queue and
+  signal — all under the one `exec_rxlock_t` (§3.2.3). Nothing else
   happens in rx context, on either substrate.
 - **The cluster fork thread** (`exec_kthread`, one per node, "CNXMAN fork"):
   drains input frames, expired timers, and work requests posted by process
@@ -299,7 +385,8 @@ of inventing fine-grained locking across five new databases:
   `enq_wait_sync` does today. `vms_lock.c` keeps its own `res->lock` /
   `vms_lock_id_lock` discipline; the fork thread takes those like any caller.
   `$GETSYI`/SHOW CLUSTER readback copies a snapshot under the fork mutex.
-- **Lock order:** `vms_cluster_fork_mutex` → `res->lock` → `vms_lock_id_lock`.
+- **Lock order:** `vms_cluster_fork_mutex` → `res->lock` → `vms_lock_id_lock`;
+  the fork-queue `exec_rxlock_t` is a leaf (nothing is taken under it).
   The fork thread never sleeps holding an `exec_lock_t` (existing contract).
 
 Rejected: a per-subsystem kthread (PE, SCS, CM) with message passing — more

@@ -31,6 +31,7 @@ vms-y := vms_module.o \
          vms_lnm.o \
          vms_lock.o \
          vms_mbx.o \
+         vms_pe.o \
          vms_proctab.o \
          vmsfs_acp.o \
          ods2_reader.o \
@@ -46,4 +47,9 @@ vms-y := vms_module.o \
 # path uses). NOT the writer / block-I/O objects: vmsfs_acp.c does its own block
 # reads/writes through the exec_blockdev_*_block shim. Same flatten-safe codec
 # staging as vmsfs/Kbuild (sources.conf stages vmsfs/ods2.h at <moddir>/vmsfs/).
+# FC-P0.1: vms_pe.o is the executive-resident VMScluster stack's LAN port layer.
+# It mirrors src/kernel/Makefile's vms-y (the two-object-lists rule: an executive
+# core .c missing here builds standalone and then fails modpost in the bootable
+# image, which only the boot gate catches). Its includes are all basenames, as
+# the flattening overlay requires.
 ccflags-y := -I $(src) -DOVMX_KBACKEND_LINUX -DOVMX_ODS2_KERNEL

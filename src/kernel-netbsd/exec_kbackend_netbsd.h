@@ -86,6 +86,7 @@
 #include <sys/kauth.h>     /* kauth_cred_get, kauth_authorize_generic (Phase F) */
 #include <sys/errno.h>     /* EWOULDBLOCK, EINTR, ERESTART (Phase G cv timeout) */
 #include <sys/atomic.h>    /* membar_producer / membar_consumer (vms-d61) */
+#include <sys/callout.h>   /* struct callout (exec_timer_t, SS16 -- FC-P0.1) */
 
 /* ---- primitive types ---- */
 typedef kmutex_t   exec_lock_t;
@@ -819,5 +820,75 @@ long exec_l2_send(exec_socket_t s, int ifindex, uint16_t ethertype,
 		  const uint8_t dst_mac[6], const void *frame, size_t len);
 int  exec_l2_recv(exec_socket_t s, void *buf, size_t buf_len,
 		  uint32_t timeout_ms, size_t *out_len);
+
+/* ================================================================
+ * SS14..SS18  The cluster seam (FC-P0.1) -- CONTRACT-ONLY STUBS.
+ *
+ * The NetBSD half of the contract frozen in exec_kbackend.h SS14..SS18 (read
+ * CONTRACT RULES 1 and 2 there first). These declarations are the substrate-
+ * neutrality proof: the whole cluster seam is expressible in NetBSD terms --
+ * not one signature names a Linux type, an sk_buff, a netdev or a jiffy.
+ *
+ * The DEFINITIONS live in vms_lan_netbsd.c and are honest stubs returning
+ * SS$_NOSUCHDEV today (the SS8/SS11/SS13 contract-only-twin posture: they open
+ * nothing and fabricate nothing, INV-6 / Rule 9). FC-P0.3 records which
+ * link-layer receive hook the rail's NetBSD actually has (pfil(9) on
+ * ifp->if_pfil vs an ifp->if_input shim) and at which IPL qe/xq deliver; FC-P0.4
+ * then lands the real binding -- if_transmit for xmit, if_mcast_op for
+ * multicast, kthread(9), callout(9), getnanotime/getnanouptime, printf(9) --
+ * and proves it with the rung-3 substrate contract test on the NetBSD-VAX rail.
+ *
+ * Types, unlike the ops, are REAL now, because the core embeds them by value and
+ * their SIZE is part of the ABI FC-P0.4 must not change:
+ *   exec_kthread_t  the lwp plus the stop flag / condvar kthread_join(9) needs
+ *                   (NetBSD has no kthread_should_stop(9) reading `curlwp`, so
+ *                   the flag is ours -- which is exactly why the portable
+ *                   contract passes the handle to exec_kthread_should_stop).
+ *   exec_timer_t    a callout(9) plus the {cb, ctx} pair callout_setfunc takes.
+ *                   callout_destroy(9) is mandatory on this substrate, which is
+ *                   why SS16 has a _destroy op at all.
+ * ================================================================ */
+
+typedef struct exec_kthread {
+	struct lwp   *lwp;      /* kthread_create(9)'s lwp; NULL when not running */
+	kmutex_t      mtx;      /* guards `stop` and pairs with `cv` */
+	kcondvar_t    cv;       /* the fork loop sleeps here; stop wakes it */
+	volatile int  stop;     /* nonzero once exec_kthread_stop was called */
+} exec_kthread_t;
+
+typedef struct exec_timer {
+	struct callout co;
+	void (*cb)(void *);
+	void *ctx;
+} exec_timer_t;
+
+int  exec_lan_open(const char *ifname, uint16_t ethertype,
+		   exec_lan_rx_cb_t rx_cb, void *ctx);
+void exec_lan_close(void);
+int  exec_lan_xmit(const uint8_t *frame, uint32_t len);
+int  exec_lan_mc_add(const uint8_t mac[6]);
+int  exec_lan_mc_del(const uint8_t mac[6]);
+int  exec_lan_hwaddr(uint8_t out[6]);
+int  exec_lan_mtu(uint32_t *out);
+int  exec_lan_link_up(int *out);
+
+int  exec_kthread_create(exec_kthread_t *t, int (*fn)(void *), void *arg,
+			 const char *name);
+void exec_kthread_stop(exec_kthread_t *t);
+int  exec_kthread_should_stop(exec_kthread_t *t);
+
+void exec_timer_init(exec_timer_t *t, void (*cb)(void *), void *ctx);
+void exec_timer_arm(exec_timer_t *t, uint32_t ms);
+void exec_timer_cancel(exec_timer_t *t);
+void exec_timer_destroy(exec_timer_t *t);
+
+uint64_t exec_time_now_vms(void);
+uint64_t exec_ticks_ms(void);
+
+/* SS18: a macro for the same reason the Linux side is one -- the format string
+ * reaches printf(9) directly, so the compiler checks the call site. This one is
+ * ALREADY the real binding (printf(9) writes the NetBSD console, which is OPA0:
+ * on the VAX rail); FC-P0.4 does not need to revisit it. */
+#define exec_console_printf(fmt, ...) printf(fmt, ##__VA_ARGS__)
 
 #endif /* OVMX_EXEC_KBACKEND_NETBSD_H */

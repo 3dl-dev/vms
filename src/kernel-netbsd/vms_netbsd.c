@@ -1431,6 +1431,13 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * is after INIT returns, and vms_acp_init cannot fail (vmsfs_acp.c), so it
 		 * needs no unwind. Mirrors the Linux vms.ko init. */
 		vms_acp_init();
+		/* FC-P0.4: prove the cluster seam (SS14..SS18) at module load,
+		 * the same "self-test on the console" posture
+		 * vms_lnm_arena_selftest() takes for the arena seam above -- no
+		 * ioctl exists to drive exec_lan_, exec_kthread_ or
+		 * exec_timer_ yet (that is FC-P0.9), so this is how the R3 substrate-
+		 * contract test proves the real bindings on a booted node. */
+		vms_cluster_seam_selftest();
 		return 0;
 
 	case MODULE_CMD_FINI:

@@ -164,6 +164,14 @@ COPY src/kernel-core/vms_dlm_scs.h           /netbsd/guest-src/kernel-core/vms_d
 COPY src/kernel-core/vms_cluster.h           /netbsd/guest-src/kernel-core/vms_cluster.h
 COPY src/kernel-core/vms_cluster_snapshot.h  /netbsd/guest-src/kernel-core/vms_cluster_snapshot.h
 COPY src/kernel-netbsd/vms_lan_netbsd.c      /netbsd/guest-src/kmod/vms_lan_netbsd.c
+# FC-P0.4: cluster_seam.c (the R3 substrate-contract self-test for the cluster
+# seam, called from vms_netbsd.c's MODULE_CMD_INIT) lives under
+# tests/netbsd/guest/ in the repo but is staged INTO kmod/ (not probe/) here,
+# alongside the Makefile it builds with -- check_guest_payload.sh's resolve()
+# only checks kernel-netbsd/ and kernel-core/ (the src/vmsfs/ods2 precedent,
+# docs memory netbsd-module-srcs-four-places), so this staging line is NOT
+# gate-verified and must be kept in sync by hand.
+COPY tests/netbsd/guest/cluster_seam.c       /netbsd/guest-src/kmod/cluster_seam.c
 # --- probe/: the userspace tools + the NetBSD transport seam ---
 COPY tests/netbsd/guest/vmsprobe.c           /netbsd/guest-src/probe/vmsprobe.c
 COPY tests/netbsd/guest/vmseflag.c           /netbsd/guest-src/probe/vmseflag.c

@@ -101,6 +101,7 @@ SRCS="$KMOD/vms_netbsd.c \
       $KMOD/vms_blockdev_netbsd.c \
       $KMOD/vms_socket_netbsd.c \
       $KMOD/vms_lan_netbsd.c \
+      $PROBE/cluster_seam.c \
       $CORE/vms_pe.c"
 
 echo "=== toolchain ==="; "$CC" --version | head -1; "$CC" -dumpmachine; echo

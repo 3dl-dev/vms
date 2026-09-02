@@ -86,6 +86,7 @@ KMOD="$SRC/src/kernel-netbsd"
 CORE="$SRC/src/kernel-core"
 ODS2="$SRC/src/vmsfs/ods2"             # the ACP's pure on-disk EDIT helpers
 ODS2_INC="$SRC/src/vmsfs/include"      # vmsfs/ods2.h (the genuine ODS-2 codec)
+GUEST="$SRC/tests/netbsd/guest"        # FC-P0.4: cluster_seam.c, the R3 selftest
 NBSRC="${NBSRC:-/nbsrc}"
 SYS="$NBSRC/usr/src/sys"
 OUT="${OUT:-/tmp/vms-module-vax}"
@@ -157,6 +158,7 @@ SRCS="$KMOD/vms_netbsd.c \
       $KMOD/vms_blockdev_netbsd.c \
       $KMOD/vms_socket_netbsd.c \
       $KMOD/vms_lan_netbsd.c \
+      $GUEST/cluster_seam.c \
       $CORE/vms_pe.c"
 #   vms_blockdev_netbsd.c - the NetBSD exec_blockdev_* seam (bread/bwrite on a
 #                         vn_bdev_openpath device vnode) + the single-unit ODS-2

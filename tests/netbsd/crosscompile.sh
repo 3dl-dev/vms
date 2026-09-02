@@ -43,6 +43,7 @@ CC="${CC:-clang}"
 SYS="$NBSRC/usr/src/sys"
 KMOD="$REPO/src/kernel-netbsd"
 CORE="$REPO/src/kernel-core"
+GUEST="$REPO/tests/netbsd/guest"
 
 if [ ! -d "$SYS" ]; then
     echo "FAIL: NetBSD kernel sources not found at $SYS" >&2
@@ -118,6 +119,7 @@ SRCS=(
     "$KMOD/exec_hash_netbsd.c"
     "$KMOD/exec_rbtree_netbsd.c"
     "$KMOD/vms_lan_netbsd.c"
+    "$GUEST/cluster_seam.c"
     "$CORE/vms_eflag.c"
     "$CORE/vms_ast.c"
     "$CORE/vms_access.c"

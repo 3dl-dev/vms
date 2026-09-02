@@ -849,6 +849,19 @@ size_t vms_lnm_arena_size(void);
  * console self-check that the arena the executive wrote is the one d_mmap
  * publishes (pmap_extract + magic readback). */
 void   vms_lnm_arena_selftest(void);
+
+/* ----------------------------------------------------------------
+ * CLUSTER SEAM self-test (FC-P0.4, families SS14..SS18 of
+ * exec_kbackend.h) -- DEFINED in tests/netbsd/guest/cluster_seam.c,
+ * the R3 substrate-contract test. Follows vms_lnm_arena_selftest's
+ * exact pattern: called once from vms_netbsd.c's MODULE_CMD_INIT,
+ * exercises the real exec_lan_, exec_kthread_, exec_timer_,
+ * exec_time_now_vms and exec_ticks_ms bindings directly (no ioctl --
+ * vms_pe.c does not call the seam until FC-P0.9) and prints PASS/
+ * FAIL/SKIP lines to the console for the harness to grep.
+ * ---------------------------------------------------------------- */
+void   vms_cluster_seam_selftest(void);
+
 long   vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg);
 long   vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg);
 long   vms_ioctl_lnm_getscope(struct vms_proc *proc, unsigned long arg);

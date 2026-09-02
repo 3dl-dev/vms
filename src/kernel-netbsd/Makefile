@@ -37,6 +37,7 @@ KMOD=		vms
 # would collide), listed with the other _netbsd backend TUs above.)
 SRCS=		vms_netbsd.c \
 		vms_lan_netbsd.c \
+		cluster_seam.c \
 		vms_lnm_arena_netbsd.c \
 		vms_acct_rss_netbsd.c \
 		vms_sysmem_netbsd.c \
@@ -79,6 +80,10 @@ SRCS=		vms_netbsd.c \
 # vms_eflag.c lives in the shared core dir; tell bmake where to find it.
 .PATH:		${.CURDIR}/../kernel-core
 .PATH:		${.CURDIR}/../vmsfs/ods2
+# FC-P0.4: cluster_seam.c (the R3 substrate-contract self-test for the cluster
+# seam, called from MODULE_CMD_INIT below) lives with the other NetBSD guest
+# harness sources, not under kernel-netbsd/ or kernel-core/.
+.PATH:		${.CURDIR}/../../tests/netbsd/guest
 
 # -I${.CURDIR}            : this dir's headers -- the NetBSD backend
 #                          (exec_kbackend_netbsd.h, exec_list_netbsd.h), the

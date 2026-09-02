@@ -1955,6 +1955,64 @@ static int cmd_show_device(struct dcl_command *cmd)
     uint32_t status;
 
     if (want) {
+        /*
+         * SHOW DEVICE D (vms-bf0): an argument that is NOT fully qualified --
+         * no trailing colon -- is a device-NAME PREFIX, the way VMS wildcards a
+         * partial name. `SHOW DEVICE D` lists every device whose name begins
+         * with "D" (DKA0:, DUA0:, ...), grouped by class like a bare
+         * SHOW DEVICES; VMS reports %SYSTEM-W-NOSUCHDEV when the prefix matches
+         * nothing (oracle section 6, the same message the exact-name miss uses).
+         * A fully-qualified NAME: still goes through the exact $GETDVI-by-name
+         * path below, which is where the oracle-pinned NOSUCHDEV/IVDEVNAM
+         * verdicts for a named device are measured. Both source every value
+         * from the executive/ACP -- nothing is fabricated (INV-6).
+         */
+        size_t wlen = strlen(want);
+        if (wlen == 0 || want[wlen - 1] != ':') {
+            uint32_t index = 0;
+            int disk_rows = 0;
+            int matched = 0;
+
+            while ((status = vms_kif_devscan(&index, &info)) == SS$_NORMAL) {
+                info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+                if (info.devclass != DC$_DISK)
+                    continue;
+                if (strncmp(info.devnam, want, wlen) != 0)
+                    continue;
+                struct vms_getvol_args vol;
+                memset(&vol, 0, sizeof(vol));
+                vms_kif_getvol(info.devnam, &vol);
+                if (full)
+                    show_device_disk_full(&info, &vol);
+                else
+                    show_device_disk_row(&info, &vol, &disk_rows);
+                matched++;
+            }
+            if (status != SS$_NOMOREDEV)
+                return status;
+
+            index = 0;
+            while ((status = vms_kif_devscan(&index, &info)) == SS$_NORMAL) {
+                info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+                if (info.devclass == DC$_DISK)
+                    continue;
+                if (strncmp(info.devnam, want, wlen) != 0)
+                    continue;
+                show_device_row(&info, &rows);
+                matched++;
+            }
+            if (status != SS$_NOMOREDEV)
+                return status;
+
+            if (matched == 0) {
+                /* A prefix that matches no device is the same verdict VMS
+                 * gives a named device that does not exist (oracle section 6). */
+                dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available");
+                return SS$_NOSUCHDEV;
+            }
+            return SS$_NORMAL;
+        }
+
         status = vms_kif_getdvi_devnam(want, &info);
 
         switch (status) {

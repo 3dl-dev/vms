@@ -962,52 +962,50 @@ static void test_dlm_selfreg_null_guards(void)
  * it would be claiming a lock OVMX cannot honestly back -- a fabrication, caught
  * here rather than on the wire.
  */
-static void test_dlm_completion_holds_nothing(void)
+static void test_dlm_completion_carries_master_handle(void)
 {
     struct scs_member_params mp;
     joiner_params(&mp, 0, 0, 0x0064, 0x0113);
     mp.txn = 0x0003;
     mp.checksum = 0x0100;
 
-    uint32_t lkid = 0x07f70004u;   /* OVMX's own real per-lock handle */
+    /* The faithful completion references the MASTER's granted lock (vms-16c). The
+     * old "holds nothing" model (body[20:24]=OVMX's own handle, body[24:28] ZERO)
+     * bugchecked VAX1 INVLOCKID -- VAX1 looks up body[20:24] in ITS lock DB and needs
+     * the handle IT granted. body[20:24] = the master's granted handle (read from
+     * OVMX's executive origin via grant_recv->GETLKI, never a placeholder or wire
+     * copy); body[24:28] = OVMX's own requester lkid. The honest boundary is at the
+     * SENDER: cm_send_dlm_completion_one omits the frame entirely when the executive
+     * holds no real master handle -- so the builder faithfully places whatever real
+     * pair the caller read from executive state. */
+    uint32_t master = 0x00000443u;   /* VAX1's granted master handle */
+    uint32_t reqlk  = 0x00040007u;   /* OVMX's own requester lkid */
     uint8_t op04[SCS_MEMBER_FRAME_LEN], op03[SCS_MEMBER_FRAME_LEN];
-    CHECK(scs_member_build_dlm_op04(&mp, lkid, op04) == 0, "build_dlm_op04 ok");
-    CHECK(scs_member_build_dlm_commit(&mp, lkid, op03) == 0, "build_dlm_commit ok");
+    CHECK(scs_member_build_dlm_op04(&mp, master, reqlk, op04) == 0, "build_dlm_op04 ok");
+    CHECK(scs_member_build_dlm_commit(&mp, master, reqlk, op03) == 0, "build_dlm_commit ok");
 
     const uint8_t *b4 = op04 + 72;
     const uint8_t *b3 = op03 + 72;
-
+#define RD32(b, o) ((uint32_t)((b)[o] | ((b)[(o)+1] << 8) | ((b)[(o)+2] << 16) | ((uint32_t)(b)[(o)+3] << 24)))
     CHECK(b4[8] == 0x02 && b4[9] == 0x04, "op-04: cat 0x02 op 0x04");
     CHECK(b3[8] == 0x02 && b3[9] == 0x03, "op-03: cat 0x02 op 0x03 (COMMIT)");
+    CHECK(RD32(b4, 20) == master, "op-04: the MASTER's granted handle at body[20:24]");
+    CHECK(RD32(b3, 20) == master, "op-03: the MASTER's granted handle at body[20:24]");
+    CHECK(RD32(b4, 24) == reqlk,  "op-04: OVMX's own requester lkid at body[24:28]");
+    CHECK(RD32(b3, 24) == reqlk,  "op-03: OVMX's own requester lkid at body[24:28]");
 
-    /* Layer 3: op-04/op-03 carry OVMX's OWN real per-lock handle @[20:24]. */
-    CHECK((uint32_t)(b4[20] | (b4[21] << 8) | (b4[22] << 16) | ((uint32_t)b4[23] << 24)) == lkid,
-          "op-04: OVMX's real lock handle at body[20:24]");
-    CHECK((uint32_t)(b3[20] | (b3[21] << 8) | (b3[22] << 16) | ((uint32_t)b3[23] << 24)) == lkid,
-          "op-03: OVMX's real lock handle at body[20:24]");
-
-    /* THE HONESTY GUARDRAIL -- no named resource, NL mode, and the ungrounded
-     * second handle word @[24:28] stays ZERO (never invent VAX3's value). */
+    /* op-03 commits BY HANDLE: no named resource, NL mode. */
     for (int i = 48; i < 64; i++) {
-        CHECK(b4[i] == 0 && b3[i] == 0, "completion: resname@48 is ZEROED (op-03 commits by handle)");
+        CHECK(b4[i] == 0 && b3[i] == 0, "completion: resname@48 is ZEROED (commits by handle)");
     }
-    for (int i = 24; i < 28; i++) {
-        CHECK(b4[i] == 0 && b3[i] == 0, "completion: 2nd handle word body[24:28] ZERO (ungrounded, INV-6)");
-    }
-    CHECK(b4[30] == 0 && b3[30] == 0, "completion: mode@30 is 0x00 (NL -- the mode OVMX holds)");
+    CHECK(b4[30] == 0 && b3[30] == 0, "completion: mode@30 is 0x00 (NL)");
 
-    /* The SYSAP envelope + minted per-VC fields are laid down (real send). */
     CHECK((uint16_t)(b4[4] | (b4[5] << 8)) == 0x0003, "op-04: dir-tree tag minted");
     CHECK((uint16_t)(b4[6] | (b4[7] << 8)) == 0x0100, "op-04: per-VC counter minted");
+#undef RD32
 
-    /* lkid == 0 gives the content-free frame (the null case). */
-    uint8_t z[SCS_MEMBER_FRAME_LEN];
-    CHECK(scs_member_build_dlm_op04(&mp, 0, z) == 0 &&
-          (z + 72)[20] == 0 && (z + 72)[21] == 0 && (z + 72)[22] == 0 && (z + 72)[23] == 0,
-          "op-04 with lkid=0 leaves body[20:24] zero (content-free null case)");
-
-    CHECK(scs_member_build_dlm_op04(NULL, lkid, op04) == -1, "build_dlm_op04 NULL p");
-    CHECK(scs_member_build_dlm_commit(&mp, lkid, NULL) == -1, "build_dlm_commit NULL out");
+    CHECK(scs_member_build_dlm_op04(NULL, master, reqlk, op04) == -1, "build_dlm_op04 NULL p");
+    CHECK(scs_member_build_dlm_commit(&mp, master, reqlk, NULL) == -1, "build_dlm_commit NULL out");
 }
 
 /*
@@ -1159,7 +1157,7 @@ int main(void)
     test_params_member_vs_joiner_form();
     test_dlm_selfreg_byte_exact();
     test_dlm_selfreg_null_guards();
-    test_dlm_completion_holds_nothing();
+    test_dlm_completion_carries_master_handle();
     test_dlm_reg_enq_carries_real_values();
     test_dlm_grant_response_needs_masking();
     test_dlm_enq_grant_honors_mode();

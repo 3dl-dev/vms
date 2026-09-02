@@ -454,7 +454,13 @@ struct vms_getlki_args {
     char     resnam[32];        /* return: resource name */
     uint8_t  valblk[LCK_VALBLK_SIZE]; /* return: value block */
     uint32_t status;            /* return: SS$_ status */
-    uint32_t pad;
+    uint32_t master_lkid;       /* return: the MASTER's lock handle for a cross-node
+                                 * ORIGIN record (the value grant_recv stored from the
+                                 * master's GRANT); 0 for a local lock or a still-pending
+                                 * origin. Lets a requester read back, from executive
+                                 * state, the handle the master granted it -- so a
+                                 * rebuild-completion references real recorded state,
+                                 * never a wire copy (vms-16c). Was a reserved pad. */
 };
 
 /*

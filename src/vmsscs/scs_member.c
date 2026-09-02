@@ -899,8 +899,8 @@ static const uint8_t dlm_commit_struct[40] = {
 };
 
 static int build_dlm_completion(const struct scs_member_params *p,
-                                const uint8_t struct40[40], uint32_t lkid,
-                                uint8_t out[SCS_MEMBER_FRAME_LEN])
+                                const uint8_t struct40[40], uint32_t master_lkid,
+                                uint32_t req_lkid, uint8_t out[SCS_MEMBER_FRAME_LEN])
 {
     if (p == NULL || out == NULL) {
         return -1;
@@ -914,30 +914,34 @@ static int build_dlm_completion(const struct scs_member_params *p,
     put_le16(body + 6, p->checksum);     /* per-VC monotonic counter (opaque, minted) */
     memcpy(body + 8, struct40, 40);      /* body[8:48] structural template */
     /*
-     * OVMX's OWN real per-lock handle at body[20:24] (Layer 3, vms-74f) -- the
-     * lkid the executive DLM holds for this lock (from the vms-1f4 accessor).
-     * NOT VAX3's un-replayable kernel handle, NOT the coordinator's granted
-     * mst_lkid: both op-04 and op-03 carry the joiner's OWN node-local handle
-     * (conductor handle-chain trace). The second handle word @[24:28] stays ZERO
-     * (from the template) -- the reference has a value there but it is un-grounded
-     * for OVMX, so INV-6 leaves it zero rather than invent one. lkid == 0 gives a
-     * content-free frame (the OPT-A behaviour; retained for the null case).
+     * The rebuild-completion references the MASTER's granted lock, matching the
+     * real requester->master completion (conductor's VAX<->VAX chain, vms-16c):
+     *   body[20:24] = the MASTER's lock handle (what VAX1 returned in its GRANT and
+     *                 looks up in ITS lock DB). This is the field whose placeholder
+     *                 0x00000001 bugchecked VAX1 (INVLOCKID). It now carries the real
+     *                 handle OVMX's executive RECORDED from the grant (grant_recv ->
+     *                 GETLKI), never a placeholder or an un-backed wire copy: the
+     *                 caller passes 0 when the executive holds no real grant, and the
+     *                 caller must then NOT send the frame (honest omission, INV-6).
+     *   body[24:28] = OVMX's OWN requester lkid, echoed as in the real completion so
+     *                 the master can pair the completion with the lock it granted.
      * body[30] MODE stays NL; body[48:] resname stays 0 (op-03 commits by handle).
      */
-    put_le32(body + 20, lkid);
+    put_le32(body + 20, master_lkid);
+    put_le32(body + 24, req_lkid);
     return 0;
 }
 
-int scs_member_build_dlm_op04(const struct scs_member_params *p, uint32_t lkid,
-                              uint8_t out[SCS_MEMBER_FRAME_LEN])
+int scs_member_build_dlm_op04(const struct scs_member_params *p, uint32_t master_lkid,
+                              uint32_t req_lkid, uint8_t out[SCS_MEMBER_FRAME_LEN])
 {
-    return build_dlm_completion(p, dlm_op04_struct, lkid, out);
+    return build_dlm_completion(p, dlm_op04_struct, master_lkid, req_lkid, out);
 }
 
-int scs_member_build_dlm_commit(const struct scs_member_params *p, uint32_t lkid,
-                                uint8_t out[SCS_MEMBER_FRAME_LEN])
+int scs_member_build_dlm_commit(const struct scs_member_params *p, uint32_t master_lkid,
+                                uint32_t req_lkid, uint8_t out[SCS_MEMBER_FRAME_LEN])
 {
-    return build_dlm_completion(p, dlm_commit_struct, lkid, out);
+    return build_dlm_completion(p, dlm_commit_struct, master_lkid, req_lkid, out);
 }
 
 /*

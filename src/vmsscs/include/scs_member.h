@@ -357,15 +357,16 @@ int scs_member_build_dlm_nl_enq(const struct scs_member_params *p,
                                 const char *resname, uint8_t namelen,
                                 uint8_t out[SCS_MEMBER_FRAME_LEN]);
 
-/* The joiner's rebuild-COMPLETION pair driven to the coordinator after the
- * self-registration: cat 0x02 op 0x04 (completion), then op 0x03 COMMIT. OVMX
- * registers NOTHING HELD (resname + per-lock handles zeroed) -- the honest
- * "rebuild contribution complete, I hold nothing" signal (vms-cn3). See
- * scs_member.c for the INV-6 guardrail. */
-int scs_member_build_dlm_op04(const struct scs_member_params *p, uint32_t lkid,
-                              uint8_t out[SCS_MEMBER_FRAME_LEN]);
-int scs_member_build_dlm_commit(const struct scs_member_params *p, uint32_t lkid,
-                                uint8_t out[SCS_MEMBER_FRAME_LEN]);
+/* The requester's rebuild-COMPLETION pair driven to the MASTER after its op-01
+ * registrations were granted: cat 0x02 op 0x04 (completion), then op 0x03 COMMIT.
+ * body[20:24] = the MASTER's granted lock handle (from OVMX's executive origin
+ * record, grant_recv->GETLKI; caller passes 0 and MUST NOT send when there is no
+ * real grant -- honest omission), body[24:28] = OVMX's own requester lkid. See
+ * scs_member.c for the INV-6 guardrail (vms-16c). */
+int scs_member_build_dlm_op04(const struct scs_member_params *p, uint32_t master_lkid,
+                              uint32_t req_lkid, uint8_t out[SCS_MEMBER_FRAME_LEN]);
+int scs_member_build_dlm_commit(const struct scs_member_params *p, uint32_t master_lkid,
+                                uint32_t req_lkid, uint8_t out[SCS_MEMBER_FRAME_LEN]);
 
 /* The FULL per-lock DLM record OVMX carries in its op-01 ENQ registration (Layer
  * 3, vms-74f) -- every field a REAL attribute of the standing lock OVMX genuinely

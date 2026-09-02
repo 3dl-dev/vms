@@ -137,8 +137,8 @@ exec_list_head_t vms_dlm_origin_list;
 exec_lock_t vms_dlm_origin_lock;
 
 static int vms_lock_dlm_origin_getlki(uint32_t lkid, uint32_t *granted_mode,
-                                      uint32_t *requested_mode, char *resnam,
-                                      size_t resnam_len, uint8_t *valblk);
+                                      uint32_t *requested_mode, uint32_t *master_lkid,
+                                      char *resnam, size_t resnam_len, uint8_t *valblk);
 
 /* ================================================================
  * Cluster membership crosses into the executive (rd vms-551,
@@ -1623,12 +1623,13 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg)
          * its origin record carries the status the master's GRANT completed. This
          * makes the NL->EX flip driven by the remote master observable here.
          */
-        uint32_t org_granted = 0, org_requested = 0;
+        uint32_t org_granted = 0, org_requested = 0, org_master = 0;
         if (vms_lock_dlm_origin_getlki(args.lkid, &org_granted, &org_requested,
-                                       args.resnam, sizeof(args.resnam),
+                                       &org_master, args.resnam, sizeof(args.resnam),
                                        args.valblk)) {
             args.granted_mode = org_granted;
             args.requested_mode = org_requested;
+            args.master_lkid = org_master;   /* vms-16c: the master's granted handle, from real origin state */
             args.parent_id = 0;
             /* args.valblk was filled by origin_getlki: the master's LVB the
              * GRANT delivered (rd vms-eeb), or zeros if none -- the read
@@ -2423,8 +2424,8 @@ static uint32_t vms_lock_dlm_xnode_blkast_recv(struct vms_proc *proc,
  * cross-node request's status flip on the REQUESTER node.
  */
 static int vms_lock_dlm_origin_getlki(uint32_t lkid, uint32_t *granted_mode,
-                                      uint32_t *requested_mode, char *resnam,
-                                      size_t resnam_len, uint8_t *valblk)
+                                      uint32_t *requested_mode, uint32_t *master_lkid,
+                                      char *resnam, size_t resnam_len, uint8_t *valblk)
 {
     struct vms_dlm_origin *cur;
     int found = 0;
@@ -2438,6 +2439,8 @@ static int vms_lock_dlm_origin_getlki(uint32_t lkid, uint32_t *granted_mode,
                 *granted_mode = cur->granted_mode;
             if (requested_mode)
                 *requested_mode = cur->requested_mode;
+            if (master_lkid)
+                *master_lkid = cur->master_lkid;   /* the master's granted handle (0 until a real GRANT recorded it) */
             if (resnam && resnam_len)
                 strscpy(resnam, cur->resnam, resnam_len);
             /*

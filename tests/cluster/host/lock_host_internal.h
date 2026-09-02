@@ -1,0 +1,222 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * lock_host_internal.h - the HOST stand-in for src/kernel/vms_internal.h,
+ * scoped to exactly what src/kernel-core/vms_lock.c needs to compile (rd
+ * FC-P4.9). Reached ONLY through the frozen quoted #include "vms_internal.h"
+ * in vms_lock.c itself, redirected here by
+ * tests/cluster/host/lock_shim/vms_internal.h (a 3-line forwarder placed
+ * FIRST on the host build's include path -- see that file and
+ * exec_kbackend_host.h's header comment for the mechanism).
+ *
+ * WHY A NEW FILE, NOT THE REAL vms_internal.h. The real src/kernel/
+ * vms_internal.h is Linux-kernel-module glue for EVERY facility (process
+ * table, event flags, ASTs, image activation, devices, ...), 1400+ lines,
+ * built on raw <linux/list.h>/<linux/rbtree.h>/<linux/wait.h>/<linux/
+ * spinlock.h>/<linux/hashtable.h> types -- struct vms_lock_entry and struct
+ * vms_lock_resource in that file still use those CONCRETE Linux types
+ * directly (e.g. `struct list_head res_granted;`, not `exec_list_node_t`),
+ * which compiles on Linux only because exec_list_node_t etc. are Linux-
+ * backend TYPEDEFS of those same concrete types. None of that compiles or
+ * links on a plain host compiler. This file defines the SAME struct/macro
+ * VOCABULARY vms_lock.c consumes (struct vms_proc/vms_lock_entry/
+ * vms_lock_resource/vms_ast_state/vms_ast_entry, the SS__* status codes,
+ * VMS_RES_HASH_BITS, VMS_AST_MAX_PER_MODE, the vms_local_csid/
+ * dlm_member_csids externs, and vms_ast_notify_arrival's prototype) using the
+ * PORTABLE exec_* container/lock/cv types instead -- exactly the shape
+ * design sec 3.9 describes vms_lock.c's struct layer eventually taking once
+ * it is fully promoted into src/kernel-core/. Every field name, order, and
+ * width matches src/kernel/vms_internal.h's own definitions (verified by
+ * inspection against that file); only the FIELD TYPE differs (portable
+ * exec_* vs raw Linux). This is OVMX's own internal struct layout (not a VMS
+ * wire artifact), so Rule 8's clean-room bar does not apply to copying field
+ * shapes from OVMX's own header -- it applies to the WIRE spec, which this
+ * file never touches.
+ *
+ * The genuinely PORTABLE pieces (the ioctl argument structs -- struct
+ * vms_enq_args, vms_deq_args, vms_dlm_xnode_args, vms_cluster_member, and
+ * so on -- and the LCK_ / VMS_DLM_ / PSL_C_ constants) already live in the
+ * real, substrate-neutral src/kernel/vms_ioctl.h (gated on __KERNEL__, with
+ * a plain stdint.h fallback, already used from plain userspace by every
+ * tests/qemu/test_syssvc_ program), so this file includes THAT header
+ * unmodified rather than duplicating it.
+ */
+
+#ifndef OVMX_LOCK_HOST_INTERNAL_H
+#define OVMX_LOCK_HOST_INTERNAL_H
+
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+#include <errno.h>
+
+/* The container/lock/cv seam. vms_lock.c includes these itself too (all
+ * header-guarded, so re-inclusion there is a no-op), but this file uses their
+ * types in the struct definitions below and so needs them FIRST -- exactly
+ * as the real vms_internal.h independently pulls <linux/list.h> etc. rather
+ * than relying on include order from its caller. */
+#include "exec_kbackend.h"
+#include "exec_list.h"
+#include "exec_hash.h"
+#include "exec_rbtree.h"
+
+/* The portable ioctl arg structs and the LCK_ / VMS_DLM_ / PSL_C_ constants
+ * (real, unmodified src/kernel/vms_ioctl.h -- see file header). */
+#include "vms_ioctl.h"
+
+/* ================================================================
+ * strscpy - Linux kernel string helper vms_lock.c calls (resource_find_or_
+ * create, vms_lock_acp_vol_ex, vms_ioctl_getlki). Not in host libc; a tiny
+ * bounded-copy stand-in. vms_lock.c never uses the return value, so this
+ * need not reproduce Linux's ssize_t truncation-signalling contract exactly
+ * -- it only needs to do what every call site actually relies on: copy at
+ * most `size`-1 bytes and NUL-terminate.
+ * ================================================================ */
+static inline void strscpy(char *dst, const char *src, size_t size)
+{
+	size_t n;
+
+	if (size == 0)
+		return;
+	n = strnlen(src, size - 1);
+	memcpy(dst, src, n);
+	dst[n] = '\0';
+}
+
+/* ================================================================
+ * SS$ status codes vms_lock.c uses (real values, copied from
+ * src/kernel/vms_internal.h -- see that file's own ssdef.h cross-references).
+ * ================================================================ */
+#define SS__NORMAL      0x00000001
+#define SS__BADPARAM    0x00000014
+#define SS__INSFMEM     292          /* SS$_INSFMEM */
+#define SS__NOTQUEUED   2488         /* SS$_NOTQUEUED */
+#define SS__DEADLOCK    3594         /* SS$_DEADLOCK */
+#define SS__IVLOCKID    8484         /* SS$_IVLOCKID */
+#define SS__CANCELGRANT 8508         /* SS$_CVTUNGRANT */
+#define SS__UNSUPPORTED 2296         /* SS$_UNSUPPORTED */
+
+/* ================================================================
+ * Lock-manager sizing constants (real values, copied from
+ * src/kernel/vms_internal.h).
+ * ================================================================ */
+#define VMS_RES_HASH_BITS    10
+#define VMS_AST_MAX_PER_MODE 64
+
+/* ================================================================
+ * AST plumbing (struct shapes mirror src/kernel/vms_internal.h's
+ * vms_ast_entry/vms_ast_state field-for-field, portable types).
+ * ================================================================ */
+struct vms_ast_entry {
+	exec_list_node_t list;
+	uint64_t         astadr;
+	uint64_t         astprm;
+	uint8_t          acmode;
+};
+
+struct vms_ast_state {
+	exec_list_head_t pending;
+	int              count;
+	int              enabled;
+	exec_lock_t      lock;
+};
+
+/* ================================================================
+ * struct vms_proc - scoped to the fields vms_lock.c touches:
+ * ast[4] (indexed PSL_C_KERNEL..PSL_C_USER), current_mode/mode_lock (lock
+ * conversion's acmode stamp), and the per-process lock list (locks/
+ * lock_count/lock_list_lock). Anything vms_proc carries for OTHER
+ * facilities (identity, job, terminal, ...) is out of scope for a lock-
+ * manager-only host build -- consistent with exec_kbackend_host.h's own
+ * "only what the caller needs" discipline.
+ * ================================================================ */
+struct vms_proc {
+	struct vms_ast_state ast[4];
+	uint8_t              current_mode;
+	exec_lock_t          mode_lock;
+
+	exec_list_head_t     locks;
+	int                  lock_count;
+	exec_lock_t          lock_list_lock;
+};
+
+/* ================================================================
+ * struct vms_lock_entry / struct vms_lock_resource - field-for-field
+ * mirrors of src/kernel/vms_internal.h's definitions (see that file's
+ * "Lock entry" / "Lock resource" comments for the per-field rationale this
+ * file does not repeat), with exec_* portable types in place of the raw
+ * Linux ones.
+ * ================================================================ */
+struct vms_lock_entry {
+	exec_list_node_t          proc_list;
+	exec_list_node_t          res_granted;
+	exec_list_node_t          res_waiting;
+	exec_rbtree_node_t        rb_node;
+	uint32_t                  lkid;
+	uint32_t                  granted_mode;
+	uint32_t                  requested_mode;
+	uint32_t                  flags;
+	uint64_t                  astadr;
+	uint64_t                  astprm;
+	uint64_t                  blkastadr;
+	uint8_t                   valblk[LCK_VALBLK_SIZE];
+	struct vms_lock_resource *resource;
+	struct vms_proc          *proc;
+	int                       waiting;
+	int                       refcount;
+	exec_cv_t                 wait_wq;
+	int                       grant_state;
+	uint8_t                   acmode;
+	uint32_t                  req_csid;
+	uint32_t                  req_lkid;
+	uint32_t                  parent_id;
+};
+
+struct vms_lock_resource {
+	exec_hash_node_t          hash_node;
+	char                      name[32];
+	exec_list_head_t          granted;
+	exec_list_head_t          waiting;
+	uint8_t                   valblk[LCK_VALBLK_SIZE];
+	exec_lock_t               lock;
+	int                       refcount;
+	struct vms_lock_resource *parent;
+	uint32_t                  dir_csid;
+	uint32_t                  master_csid;
+};
+
+/* ================================================================
+ * Cluster membership globals vms_lock.c reads (real definitions live in
+ * this item's test harness, test_lock_host.c -- a single-node host test
+ * fixes vms_local_csid to a real, deliberately-chosen node id and
+ * dlm_member_csids to that same one-node set; nothing here fabricates a
+ * cluster that is not there, INV-6).
+ * ================================================================ */
+#define VMS_DLM_MAX_MEMBERS 16
+extern uint32_t vms_local_csid;
+extern uint32_t dlm_member_csids[VMS_DLM_MAX_MEMBERS];
+extern int      dlm_member_count;
+
+/* ================================================================
+ * vms_ast_notify_arrival - defined in src/kernel-core/vms_ast.c (the AST
+ * subsystem), not part of this host build. vms_lock.c calls it only on the
+ * completion-AST / blocking-AST delivery paths (queue_completion_ast /
+ * notify_blocking_asts), both gated on a nonzero astadr/blkastadr this
+ * item's host test never sets (see test_lock_host.c) -- so the symbol is
+ * referenced by the compiled object but never actually invoked at runtime.
+ * A link-time stub lives in test_lock_host.c, clearly labelled there.
+ * ================================================================ */
+struct vms_proc;
+void vms_ast_notify_arrival(struct vms_proc *proc);
+
+/* ================================================================
+ * vms_lock.c's own public entry points (real declarations for callers in a
+ * SEPARATE translation unit -- test_lock_host.c -- mirroring the real
+ * vms_internal.h's role of declaring these for every other module that
+ * calls into the lock manager).
+ * ================================================================ */
+int  vms_lock_init(void);
+void vms_lock_cleanup(void);
+long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg);
+
+#endif /* OVMX_LOCK_HOST_INTERNAL_H */

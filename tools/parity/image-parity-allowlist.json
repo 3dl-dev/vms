@@ -41,6 +41,12 @@
       "reason": "vms-992e: TCC.EXE is the OVMX-native C compiler (vendored tinycc, built by tests/toolchain/mk_tcc_static.sh). tinycc has NO VAX code generator (its backends are i386/x86_64/arm/arm64/riscv64 only -- there is no elf32-vax target in third-party/tcc), so a VAX TCC.EXE is not buildable at all; the VAX self-host/build story goes through the NetBSD-hosted toolchain, not a VMS-native TCC. Host-arch-only compiler by the upstream compiler's own backend support -- not an unbuilt OVMX gap."
     },
     {
+      "group": "self-host-driver-x86_64",
+      "names": ["MMK.EXE"],
+      "missing_on": "vax",
+      "reason": "Decision A (vms-42d), vms-fc2: MMK.EXE is the OVMX-native descrip.mms build driver (BUILD.COM's replacement, vms-e49). It orchestrates the VMS-native compile+link+activate chain -- it drives TCC.EXE then LINK.EXE (the x86_64-only VMS-native linker, already allowlisted above) and the produced image is activated by IMGACT.EXE's .vms$sv symbol-vector scheme. That whole chain is the x86_64 self-host-on-OVMX model; VAX is built through the NetBSD-hosted cross toolchain (tools/cross-vax/*.sh + NetBSD make/ld), which has no VMS-native LINK.EXE or IMGACT for MMK to drive -- so a VAX MMK.EXE has nothing to orchestrate and no VAX role by design, exactly like its LINK.EXE. Not an unbuilt gap: the VAX build story is deliberately NetBSD-hosted, not MMK-driven."
+    },
+    {
       "group": "executive-module-packaging-x86_64",
       "names": ["vms.ko"],
       "missing_on": "vax",

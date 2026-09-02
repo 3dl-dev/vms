@@ -494,6 +494,22 @@ RUN cmake -B build-static \
 # BUILD_TOOLS -- the `vmslink` target -- and only needs staging.)
 RUN CC=musl-gcc sh tests/toolchain/mk_tcc_static.sh build-static/bin/TCC.EXE
 
+# MMK.EXE (vms-fc2 / self-host spine #4): the descrip.mms build driver -- the
+# actual replacement for the retired BUILD.COM (vms-e49). TCC.EXE + LINK.EXE are
+# the compiler + linker; MMK is the driver that orchestrates them from a
+# descrip.mms, so without it the production MMK build path does not run on the
+# shipped disk. Its CMake target `mmk_native` (tests/toolchain/CMakeLists.txt,
+# OUTPUT_NAME MMK.EXE) lives under BUILD_TESTS, which the product configure above
+# sets OFF. Rather than a second full build tree, reconfigure the SAME build-static
+# with BUILD_TESTS=ON (adds the tests/toolchain subdir, so the mmk_native target
+# exists) and build ONLY that target: its library dependencies (vms, vmsrms, ...)
+# were already compiled by the product build above and are reused untouched -- so
+# this compiles just mmk_native.c and links it, no product rebuild. Same
+# target the initramfs uses (tests/qemu/Dockerfile), where test_syssvc_mmk_build
+# proves the MMK->TCC->LINK->IMGACT chain against a real executive.
+RUN cmake -B build-static -DBUILD_TESTS=ON >/dev/null && \
+    cmake --build build-static --target mmk_native --parallel $(nproc) 2>&1
+
 # -- System tree staging (OS kit + distribution image source) -----------------
 # All OVMX binaries assembled into a /vms tree. This is BUILD staging only --
 # it is never packed into an initramfs (vms-1ab: the fat initramfs that used
@@ -610,6 +626,7 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     # separate `test -f` block below, which the scanner ignores.)
     cp build-static/bin/LINK.EXE       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp build-static/bin/TCC.EXE        /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp build-static/bin/MMK.EXE        /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     # NOTE (vms-992e): TCC's header closure (tinycc + musl <stdint.h>) is NOT
     # staged here yet. It belongs in SYS$SYSEXE:[.INCLUDE], but ovmx_kit_pack
     # cannot round-trip that nested lowercase-header subdirectory byte-exact (the
@@ -626,6 +643,7 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     # them as image sources.)
     test -f /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/LINK.EXE || { echo "FATAL: LINK.EXE (self-host linker) did not stage onto the disk"; exit 1; } ; \
     test -f /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/TCC.EXE  || { echo "FATAL: TCC.EXE (self-host compiler) did not stage onto the disk"; exit 1; } ; \
+    test -f /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE  || { echo "FATAL: MMK.EXE (descrip.mms build driver) did not stage onto the disk"; exit 1; } ; \
     # The setuid-root mount(2)/umount(2) helper (vms-651, tools/
     # vms_mount_helper.c) -- NOT a VMS image, lives outside SYS$SYSTEM: at a
     # fixed Linux path (ovmx_layout.h VMS_MOUNT_HELPER_PATH). Owned by root

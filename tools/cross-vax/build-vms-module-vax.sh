@@ -165,7 +165,10 @@ SRCS="$KMOD/vms_netbsd.c \
       $CORE/vms_cnxman_csb.c \
       $CORE/vms_cnxman_recnx_fsm.c \
       $CORE/vms_cnxman_quorum.c \
-      $CORE/vms_cluster_api.c"
+      $CORE/vms_cluster_api.c \
+      $CORE/vms_cluster_codec.c \
+      $CORE/vms_cluster_codec_cm.c \
+      $CORE/vms_cnxman_barrier_fsm.c"
 #   vms_blockdev_netbsd.c - the NetBSD exec_blockdev_* seam (bread/bwrite on a
 #                         vn_bdev_openpath device vnode) + the single-unit ODS-2
 #                         disk resolve (vms_devtab_disk_backing) the ACP $MOUNT

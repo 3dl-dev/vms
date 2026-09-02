@@ -78,14 +78,22 @@ cluster_host_test(test_codec_dlm        test_codec_dlm.c)
 # live VAX at rung 5.
 set(OVMX_CLUSTER_CORE_DIR ${CMAKE_SOURCE_DIR}/src/kernel-core)
 
+# FC-P3.5 joins on the same terms and adds one dependency: the barrier FSM
+# reads and builds its frames ONLY through the FC-P3.1 CM codec (design sec 3.9
+# rule 2 -- no raw wire offset outside a codec TU), so this library links
+# cluster_host_codec. The codec TUs take their fixed-width types from
+# vms_wire_types.h, whose host branch is plain <stdint.h>, so mixing them with
+# the -DOVMX_CLUSTER_HOST layer sources is a link, not a compatibility problem.
 add_library(cluster_host_cnxman STATIC
     ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_csb.c
     ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_recnx_fsm.c
     ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_quorum.c   # FC-P3.7
     ${OVMX_CLUSTER_CORE_DIR}/vms_cluster_api.c      # FC-P3.7
+    ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_barrier_fsm.c
 )
 target_include_directories(cluster_host_cnxman PUBLIC ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_cnxman PUBLIC OVMX_CLUSTER_HOST)
+target_link_libraries(cluster_host_cnxman PUBLIC cluster_host_codec)
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(cluster_host_cnxman PRIVATE -Wall -Wextra -Werror)
 endif()
@@ -104,8 +112,9 @@ function(cluster_host_cnxman_test name)
     )
 endfunction()
 
-cluster_host_cnxman_test(test_cnxman_csb   test_cnxman_csb.c)
-cluster_host_cnxman_test(test_cnxman_recnx test_cnxman_recnx.c)
+cluster_host_cnxman_test(test_cnxman_csb     test_cnxman_csb.c)
+cluster_host_cnxman_test(test_cnxman_recnx   test_cnxman_recnx.c)
+cluster_host_cnxman_test(test_cnxman_barrier test_cnxman_barrier.c)  # FC-P3.5
 cluster_host_test(test_codec_scs        test_codec_scs.c)
 cluster_host_test(test_codec_cm         test_codec_cm.c)
 
@@ -173,6 +182,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_cluster_fork.c
     hdr_alone_vms_cnxman_quorum.c     # FC-P3.7
     hdr_alone_vms_cluster_api.c       # FC-P3.7
+    hdr_alone_vms_cnxman_barrier_fsm.c # FC-P3.5
 )
 target_include_directories(cluster_host_hdr_alone PRIVATE ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_hdr_alone PRIVATE OVMX_CLUSTER_HOST)

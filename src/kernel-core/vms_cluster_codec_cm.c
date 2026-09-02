@@ -163,6 +163,34 @@ vms_codec_status_t vms_cm_open_parse(const uint8_t *frame, uint32_t len,
 	return VMS_CODEC_OK;
 }
 
+vms_codec_status_t vms_cm_open_bitmap_span(const uint8_t *frame, uint32_t len,
+					   const struct vms_frame_info *fi,
+					   uint8_t *out)
+{
+	struct vms_cm_envelope env;
+	vms_wire_view_t v;
+	vms_codec_status_t st;
+
+	if (out == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	st = vms_cm_envelope_parse(frame, len, fi, &env);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	/* Only the op-0x09 ADD open carries a membership bitmap (spec sec
+	 * 4(p)); on any other opcode this span is somebody else's payload. */
+	if (env.category != VMS_CM_CAT_CONFIG ||
+	    env.opcode != VMS_CM_OP_XITION_ADD)
+		return VMS_CODEC_E_CLASS;
+
+	vms_wire_view_init(&v, frame, len);
+	vms_wire_get_bytes(&v, VMS_OFF_CM_BITMAP_SPAN, VMS_CM_BITMAP_SPAN_LEN,
+			   out);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	return VMS_CODEC_OK;
+}
+
 vms_codec_status_t vms_cm_barrier_parse(const uint8_t *frame, uint32_t len,
 					const struct vms_frame_info *fi,
 					struct vms_cm_barrier *out)
@@ -495,6 +523,87 @@ vms_codec_status_t vms_cm_dlm_op0d_response_build(const struct vms_cm_link *l,
 	 * request carried there (spec sec 4(p): every response carries 0xf9
 	 * even where it lands mid-ASCII in the echoed name). */
 	vms_wire_put_u8(&w, VMS_OFF_CM_DLM_RESULT, VMS_CM_DLM_RESULT_OP0D);
+
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = VMS_CM_FRAME_LEN;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_cm_body_build(const struct vms_cm_link *l,
+				     const uint8_t *body, uint32_t body_len,
+				     uint8_t *out_frame, uint32_t cap,
+				     uint32_t *written)
+{
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+	uint32_t link_written = 0;
+
+	if (l == (const struct vms_cm_link *)0 || body == (const uint8_t *)0 ||
+	    out_frame == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (body_len != VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_INVAL;
+
+	st = vms_cm_link_build(l, out_frame, cap, &link_written);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_buf_init(&w, out_frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, body);
+
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = VMS_CM_FRAME_LEN;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_cm_barrier_build(const struct vms_cm_link *l,
+					const struct vms_cm_envelope *own,
+					uint32_t epoch, uint32_t step,
+					uint8_t *out_frame, uint32_t cap,
+					uint32_t *written)
+{
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+	uint32_t link_written = 0;
+
+	if (l == (const struct vms_cm_link *)0 ||
+	    own == (const struct vms_cm_envelope *)0 ||
+	    out_frame == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	/* Spec sec 4(p): the indices run 1...12 with no gaps. Step 0 is not a
+	 * barrier step in any capture. */
+	if (step == 0u)
+		return VMS_CODEC_E_INVAL;
+
+	st = vms_cm_link_build(l, out_frame, cap, &link_written);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_buf_init(&w, out_frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+
+	/* Zero first, then exactly the six GROUNDED fields on top: the tail is
+	 * acceptable residue in the reference and one real joiner sends it all
+	 * zero (see the header's "THE ZERO TAIL IS GROUNDED" note). */
+	vms_wire_put_zero(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN);
+	vms_wire_put_le16(&w, VMS_OFF_CM_SEND_MSG, own->send_msg);
+	vms_wire_put_le16(&w, VMS_OFF_CM_ACK_MSG, own->ack_msg);
+	vms_wire_put_le16(&w, VMS_OFF_CM_TXN, own->txn);
+	vms_wire_put_le16(&w, VMS_OFF_CM_TOKEN, own->token);
+	vms_wire_put_u8(&w, VMS_OFF_CM_CATEGORY, VMS_CM_CAT_CONFIG);
+	vms_wire_put_u8(&w, VMS_OFF_CM_OPCODE, VMS_CM_OP_BARRIER);
+	vms_wire_put_le32(&w, VMS_OFF_CM_EPOCH, epoch);
+	/* body[16:20] is a plain LE u32 step index on op 0x0b/0x0c -- it
+	 * ALIASES the role/class byte pair of the transition-open family, so
+	 * no role tag is written here (spec sec 4(p)/(r)). */
+	vms_wire_put_le32(&w, VMS_OFF_CM_STEP, step);
 
 	if (!vms_wire_buf_ok(&w))
 		return w.err;

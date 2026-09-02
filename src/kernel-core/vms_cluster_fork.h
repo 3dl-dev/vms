@@ -64,13 +64,15 @@
  *      fork mutex  ->  res->lock  ->  vms_lock_id_lock
  *      fork mutex  ->  queue lock (a LEAF: nothing is ever acquired under it)
  *
- * The queue lock is the receive-IPL lock of CONTRACT RULE 1(b). It is held for
- * a bounded handful of pointer moves plus one frame copy, is never held across
- * a protocol handler, a substrate call that may sleep, or a wake of anything
- * but the fork thread's own condition variable, and NOTHING is ever acquired
- * while it is held. The fork thread does not hold the fork mutex while it waits
- * on the queue, so a snapshot reader in process context is never blocked behind
- * an idle fork thread.
+ * The queue lock is exec_kbackend.h §1b's exec_rxlock_t, the ONE receive-level
+ * lock class (design §3.2.3 RULING, FC-P0.16; CONTRACT RULE 14.1). It is held
+ * for a bounded handful of pointer moves plus one frame copy, is never held
+ * across a protocol handler, a substrate call that may sleep, or a wake of
+ * anything but the fork thread's own condition variable, and NOTHING is ever
+ * acquired while it is held. The fork thread does not hold the fork mutex
+ * while it waits on the queue (via exec_cv_wait_rx, thread context only), so
+ * a snapshot reader in process context is never blocked behind an idle fork
+ * thread.
  *
  * ------------------------------------------------------------------------
  * WHAT IS IN THIS FILE AND WHAT IS IN THE BINDING
@@ -81,10 +83,11 @@
  *                            through `struct cf_ops`. Builds with a plain host
  *                            compiler (-DOVMX_CLUSTER_HOST) and is exercised by
  *                            tests/cluster/host/test_cluster_fork*.c -- rung R1.
- *   vms_cluster_fork_bind.c  GLUE. Binds cf_ops to exec_kbackend.h families §1
- *                            (exec_lock), §2 (exec_cv), §4 (exec_zalloc), §7
- *                            (exec_mutex), §15 (exec_kthread) and §16
- *                            (exec_timer); owns every substrate object by value.
+ *   vms_cluster_fork_bind.c  GLUE. Binds cf_ops to exec_kbackend.h families §1b
+ *                            (exec_rxlock, FC-P0.16), §2 (exec_cv), §4
+ *                            (exec_zalloc), §7 (exec_mutex), §15
+ *                            (exec_kthread) and §16 (exec_timer); owns every
+ *                            substrate object by value.
  *
  * That split is design §3.9's own `_fsm.c` (pure) + `.c` (glue) pattern applied
  * to the fork module. It is deliberately NOT a `#ifdef OVMX_CLUSTER_HOST` inside
@@ -211,17 +214,20 @@ struct cf_work {
  * cannot flood a console at rebuild message rates.
  * ========================================================================== */
 struct cf_ops {
-	/* The QUEUE LOCK -- CONTRACT RULE 1(b)'s receive-IPL lock. Acquired in
-	 * receive context, timer context, process context and the fork thread;
-	 * held only for the bounded critical sections in vms_cluster_fork.c. */
+	/* The QUEUE LOCK -- exec_kbackend.h §1b's exec_rxlock_t (CONTRACT RULE
+	 * 14.1). Acquired in receive context, timer context, process context
+	 * and the fork thread; held only for the bounded critical sections in
+	 * vms_cluster_fork.c. */
 	void (*lock)(void *ctx);
 	void (*unlock)(void *ctx);
 
-	/* Wait / wake, paired with THAT lock (exec_kbackend.h §2's cv contract:
-	 * waiter and waker must share the lock or wakeups are lost). `wait` is
-	 * called with the lock held, atomically drops it, sleeps, and returns
-	 * with it held again; nonzero means "interrupted", and the caller
-	 * re-tests its predicate first. `wake` is called with the lock held. */
+	/* Wait / wake, paired with THAT lock (exec_kbackend.h §1b's
+	 * exec_cv_wait_rx / §2's exec_cv_signal-broadcast: waiter and waker
+	 * must share the lock or wakeups are lost). `wait` is called with the
+	 * lock held (thread context only), atomically drops it, sleeps, and
+	 * returns with it held again; nonzero means "interrupted", and the
+	 * caller re-tests its predicate first. `wake` is called with the lock
+	 * held, and is legal from receive level. */
 	int  (*wait)(void *ctx);
 	void (*wake)(void *ctx);
 

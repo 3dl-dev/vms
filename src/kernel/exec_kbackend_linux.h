@@ -99,6 +99,33 @@ static inline void exec_lock_destroy(exec_lock_t *l) { (void)l; /* no-op on Linu
  * trylock to avoid an ABBA inversion). Linux: spin_trylock. */
 static inline int exec_trylock(exec_lock_t *l)       { return spin_trylock(l); }
 
+/* ---- 1b. receive-level lock (FC-P0.16, exec_kbackend.h SS1b / design SS3.2.3
+ * RULING) ----
+ * On Linux, exec_rxlock_t is the SAME spinlock_t as exec_lock_t, but acquired
+ * with _irqsave/_irqrestore rather than the plain form: disabling the local
+ * CPU's interrupts for the critical section is what makes it safe against a
+ * same-CPU softirq (the cluster rx path) taking the identical lock -- the
+ * plain exec_lock_t hazard SS3.2.3 records. EXEC_LAN_RX_IPL is a no-op on
+ * Linux (irqsave already covers every level a softirq can run at); it exists
+ * so the ONE cf_bind.c call site is substrate-symmetric.
+ */
+typedef spinlock_t    exec_rxlock_t;
+typedef unsigned long exec_rxflags_t;
+#define EXEC_LAN_RX_IPL 0   /* no-op: irqsave covers all Linux receive levels */
+
+static inline void exec_rxlock_init(exec_rxlock_t *l)    { spin_lock_init(l); }
+static inline void exec_rxlock_destroy(exec_rxlock_t *l) { (void)l; /* no-op on Linux */ }
+
+static inline void exec_rxlock_acquire(exec_rxlock_t *l, exec_rxflags_t *flags)
+{
+	spin_lock_irqsave(l, *flags);
+}
+
+static inline void exec_rxlock_release(exec_rxlock_t *l, exec_rxflags_t *flags)
+{
+	spin_unlock_irqrestore(l, *flags);
+}
+
 /* ---- 2. wait / wake (cv-shaped; see exec_kbackend.h) ----
  *
  * exec_cv_wait is a faithful open-coding of what wait_event_interruptible
@@ -178,6 +205,45 @@ static inline int exec_cv_wait_timeout(exec_cv_t *cv, exec_lock_t *lk,
 static inline void exec_cv_signal(exec_cv_t *cv)    { wake_up_interruptible_nr(cv, 1); }
 static inline void exec_cv_broadcast(exec_cv_t *cv) { wake_up_interruptible(cv); }
 static inline void exec_cv_destroy(exec_cv_t *cv)   { (void)cv; /* no-op on Linux */ }
+
+/*
+ * exec_cv_wait_rx (FC-P0.16, exec_kbackend.h SS1b) -- the SS2 cv contract with
+ * an exec_rxlock_t as the interlock, THREAD CONTEXT ONLY (the fork thread is
+ * the sole caller: cf_bind.c's cfb_wait).
+ *
+ * TASK_INTERRUPTIBLE, NOT TASK_UNINTERRUPTIBLE -- a DELIBERATE, MEASURED
+ * DEVIATION from design SS3.2.3's literal Linux pseudocode ("prepare_to_wait
+ * (TASK_UNINTERRUPTIBLE)"), found by the FC-P0.16 R3 same-CPU hammer, not by
+ * inspection: exec_cv_signal/exec_cv_broadcast are UNCHANGED per the ruling
+ * (still wake_up_interruptible{,_nr} above), and Linux's wake_up_interruptible
+ * only wakes waiters in TASK_INTERRUPTIBLE state -- try_to_wake_up's `p->state
+ * & state` test is false against a TASK_UNINTERRUPTIBLE sleeper, so a
+ * TASK_UNINTERRUPTIBLE exec_cv_wait_rx paired with the ruling's own "unchanged"
+ * broadcast is a LOST WAKEUP by construction: the fork thread would sleep
+ * forever on the first wait, exactly what the hammer's DRAIN_OK/WORK_DISPATCHED
+ * assertions caught (dispatched stayed 0 while enqueued/posted grew). Contract
+ * symmetry is preserved on the RETURN side: this still always returns 0 (no
+ * signal semantics), because the fork kthread never calls allow_signal(), so
+ * signal_pending(current) is never true for it -- TASK_INTERRUPTIBLE is
+ * observationally identical to TASK_UNINTERRUPTIBLE for THIS specific thread,
+ * while actually pairing with the wake primitive the ruling keeps unchanged.
+ * prepare_to_wait enqueues on `cv` WHILE `l` is still held (irqsave, so no
+ * receive-level interrupt can slip in), so a waker sharing `l` cannot lose
+ * the wakeup -- the same lost-wakeup-free argument as exec_cv_wait, with the
+ * rxlock's saved irq flags restored on the re-acquire.
+ */
+static inline int exec_cv_wait_rx(exec_cv_t *cv, exec_rxlock_t *l,
+				   exec_rxflags_t *flags)
+{
+	DEFINE_WAIT(__w);
+
+	prepare_to_wait(cv, &__w, TASK_INTERRUPTIBLE);
+	spin_unlock_irqrestore(l, *flags);
+	schedule();
+	spin_lock_irqsave(l, *flags);
+	finish_wait(cv, &__w);
+	return 0;
+}
 
 /* ---- 3. user <-> kernel copy (normalized 0 / EXEC_EFAULT) ----
  * The __user annotation is re-applied here so a portable facility can pass a

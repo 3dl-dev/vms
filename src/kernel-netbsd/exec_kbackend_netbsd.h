@@ -16,6 +16,10 @@
  *
  *   exec_lock_t          == kmutex_t            (kmutex(9), IPL_NONE/adaptive)
  *   exec_cv_t            == kcondvar_t          (cv(9))
+ *   exec_rxlock_t        == kmutex_t            (kmutex(9), SPIN, EXEC_LAN_RX_IPL --
+ *                                                FC-P0.16, the ONE receive-level lock
+ *                                                class, used only by the cluster fork
+ *                                                queue; see SS1b below)
  *   exec_lock/unlock     -> mutex_enter / mutex_exit
  *   exec_lock_destroy    -> mutex_destroy       (NOT a no-op here: a kmutex owns
  *                                                resources and MUST be destroyed)
@@ -87,6 +91,7 @@
 #include <sys/errno.h>     /* EWOULDBLOCK, EINTR, ERESTART (Phase G cv timeout) */
 #include <sys/atomic.h>    /* membar_producer / membar_consumer (vms-d61) */
 #include <sys/callout.h>   /* struct callout (exec_timer_t, SS16 -- FC-P0.1) */
+#include <sys/intr.h>      /* IPL_NET (exec_rxlock_t's EXEC_LAN_RX_IPL, FC-P0.16) */
 
 /* ---- primitive types ---- */
 typedef kmutex_t   exec_lock_t;
@@ -129,6 +134,49 @@ static __inline int
 exec_trylock(exec_lock_t *l)
 {
 	return mutex_tryenter(l);
+}
+
+/* ---- 1b. receive-level lock (FC-P0.16, exec_kbackend.h SS1b / design SS3.2.3
+ * RULING) ----
+ * exec_lock_t above is an IPL_NONE kmutex -- entering it above IPL_NONE (the
+ * qe/xq receive path) is a NetBSD panic, not a slow path, which is why the
+ * cluster fork queue (the ONE object the core shares between receive and
+ * thread context) needs its own lock class. mutex_init's ipl argument being
+ * non-IPL_NONE is what selects a SPIN mutex rather than an adaptive one
+ * (kmutex(9)): a spin mutex raises the CPU to its IPL for the critical
+ * section, which is the direct NetBSD analogue of Linux's irqsave.
+ * exec_rxflags_t carries no state here -- the IPL is captured in the mutex
+ * itself -- but the type exists so cf_bind.c's call sites are identical on
+ * both substrates.
+ */
+typedef kmutex_t exec_rxlock_t;
+typedef int      exec_rxflags_t;      /* unused: IPL is in the mutex */
+#define EXEC_LAN_RX_IPL IPL_NET       /* qe/xq deliver at/below this (FC-P0.3/P0.4 finding) */
+
+static __inline void
+exec_rxlock_init(exec_rxlock_t *l)
+{
+	mutex_init(l, MUTEX_DEFAULT, EXEC_LAN_RX_IPL);
+}
+
+static __inline void
+exec_rxlock_destroy(exec_rxlock_t *l)
+{
+	mutex_destroy(l);
+}
+
+static __inline void
+exec_rxlock_acquire(exec_rxlock_t *l, exec_rxflags_t *flags)
+{
+	(void)flags;
+	mutex_spin_enter(l);
+}
+
+static __inline void
+exec_rxlock_release(exec_rxlock_t *l, exec_rxflags_t *flags)
+{
+	(void)flags;
+	mutex_spin_exit(l);
 }
 
 /* ---- 2. wait / wake (cv-shaped; see exec_kbackend.h) ---- */
@@ -195,6 +243,25 @@ static __inline void
 exec_cv_destroy(exec_cv_t *cv)
 {
 	cv_destroy(cv);
+}
+
+/*
+ * exec_cv_wait_rx (FC-P0.16, exec_kbackend.h SS1b) -- the SS2 cv contract with
+ * an exec_rxlock_t (a spin kmutex) as the interlock, THREAD CONTEXT ONLY (the
+ * fork thread is the sole caller: cf_bind.c's cfb_wait). cv_wait(9) atomically
+ * drops `l', sleeps, and re-acquires `l' before returning -- exactly the
+ * contract's "enqueue under l, drop l, sleep, re-acquire l" -- and, unlike
+ * cv_wait_sig, never returns early on a signal, matching the contract's "no
+ * signal semantics needed" (the fork thread's stop is a predicate, not a
+ * signal). cv_wait(9) is documented to work with a spin mutex exactly as with
+ * an adaptive one. Always returns 0.
+ */
+static __inline int
+exec_cv_wait_rx(exec_cv_t *cv, exec_rxlock_t *l, exec_rxflags_t *flags)
+{
+	(void)flags;
+	cv_wait(cv, l);
+	return 0;
 }
 
 /* ---- 3. user <-> kernel copy ----

@@ -1,0 +1,71 @@
+# tests/cluster/sim - the R2 rung of the executive-resident VMScluster test
+# ladder (design docs/design-faithful-cluster-executive.md sec 3.9, plan row
+# FC-P1.4): N instances of the PURE stack wired to a virtual LAN with
+# configurable loss/reorder/duplication/latency and a virtual clock.
+#
+# `ctest -R cluster_sim` selects every test in this directory.
+#
+# WHAT THIS DIRECTORY IS NOT. It is not cluster core. The gate
+# tools/ci/cluster_core_includes_gate.sh scans src/kernel-core; a harness under
+# tests/ is on exactly the same footing as tests/cluster/host and may use the C
+# library. What it may NOT do is reimplement any protocol logic: it links the
+# SHIPPING vms_pe_fsm.c (through cluster_host_pe, defined in
+# tests/cluster/host/CMakeLists.txt) and drives it through the injected ops.
+
+set(OVMX_CLUSTER_CORE_DIR ${CMAKE_SOURCE_DIR}/src/kernel-core)
+
+add_library(cluster_sim_core STATIC
+    sim_rng.c
+    sim_clock.c
+    sim_lan.c
+    sim_node.c
+    sim_engine.c
+    sim_msg.c
+    sim_dump.c
+    sim_metric.c
+    sim_scenario.c
+)
+target_include_directories(cluster_sim_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${OVMX_CLUSTER_CORE_DIR}
+)
+# cluster_host_pe is the SHIPPING src/kernel-core/vms_pe_fsm.c built with
+# -DOVMX_CLUSTER_HOST, and it carries cluster_host_codec with it. The simulator
+# adds no source of its own from src/kernel-core: whatever the executive runs
+# is what the simulator runs.
+target_link_libraries(cluster_sim_core PUBLIC cluster_host_pe)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(cluster_sim_core PRIVATE -Wall -Wextra -Werror)
+endif()
+
+# WHERE LATER PHASES PUT THEIR SCENARIOS. Plan rows FC-P2.5 and FC-P3.10 name
+# tests/cluster/sim/scenarios/scs_*.c and cnxman_*.c. Add the file there, then
+# ONE line here -- `cluster_sim_test(test_sim_scs scenarios/scs_connect.c)` --
+# and it gets the whole harness (virtual LAN, virtual clock, the DSL, the
+# SDA-like dump) with nothing else to wire. FC-P1.5's pcap replay driver
+# (replay.c) joins cluster_sim_core's source list on the same terms.
+function(cluster_sim_test name)
+    add_executable(${name} ${ARGN})
+    target_link_libraries(${name} PRIVATE cluster_sim_core)
+    target_include_directories(${name} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/tests/cluster/host   # cluster_test.h
+    )
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${name} PRIVATE -Wall -Wextra -Werror)
+    endif()
+    add_test(NAME cluster_sim_${name} COMMAND ${name})
+    set_tests_properties(cluster_sim_${name} PROPERTIES
+        LABELS "unit;cluster;cluster_sim;pe"
+        TIMEOUT 120
+    )
+endfunction()
+
+# The harness's own model: the RNG, the clock/timer wheel and the virtual LAN.
+# A harness whose wire model is untested cannot be evidence about anything
+# else, so this rung tests itself before it tests the stack.
+cluster_sim_test(test_sim_lan test_sim_lan.c)
+
+# The FC-P1.4 done-condition: 3 simulated pe stacks form virtual circuits under
+# 10 % loss, and the run is deterministic by seed.
+cluster_sim_test(test_sim_vc test_sim_vc.c)

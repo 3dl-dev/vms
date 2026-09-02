@@ -228,18 +228,26 @@ static void pe_hello_directed(struct pe_fsm *f, const struct pe_channel *ch,
  * Transmitting -- always through the codec, never a hand-laid buffer
  * ========================================================================== */
 
-static int pe_tx(struct pe_fsm *f, uint32_t len)
+static int pe_tx_from(struct pe_fsm *f, const uint8_t *buf, uint32_t len)
 {
 	int st;
 
-	if (f->ops == NULL || f->ops->send == NULL)
+	if (f->ops == NULL || f->ops->send == NULL || buf == NULL)
 		return -1;
-	st = f->ops->send(f->ops->ctx, f->scratch, len);
+	st = f->ops->send(f->ops->ctx, buf, len);
 	if (st != 0) {
 		f->tx_errors++;
 		return -1;
 	}
 	return 0;
+}
+
+/* The common case: the frame the codec just built into the scratch buffer.
+ * The VC's retransmit ladder is the other caller -- it re-sends a frame that
+ * lives in the unacked ring, not in scratch, because scratch has moved on. */
+static int pe_tx(struct pe_fsm *f, uint32_t len)
+{
+	return pe_tx_from(f, f->scratch, len);
 }
 
 /* Nothing goes out without a source identity: an SCA frame whose abs 24 is not
@@ -897,6 +905,7 @@ int pe_fsm_init(struct pe_fsm *f, const struct pe_identity *id,
 	 * INVALID and the port emits nothing -- truncating it would put a
 	 * different node's identity on the LAN.
 	 */
+	f->sysid = sysid;
 	f->id.lavc_valid = 0u;
 	if (sysid != 0u && sysid <= 0xffffu) {
 		vms_cluster_lavc_addr_build((uint16_t)sysid, f->id.lavc);
@@ -932,7 +941,18 @@ void pe_fsm_stop(struct pe_fsm *f)
 
 /* ==========================================================================
  * Receive: classify, learn, dispatch
+ *
+ * The port has two halves and this is where they meet. The CHANNEL half owns
+ * the discovery family (HELLO/SOLICIT); the VIRTUAL-CIRCUIT half owns the SCS
+ * family. Both are below; these three forward declarations exist because the
+ * circuit half is written after the channel half it is built on.
  * ========================================================================== */
+static void pe_vc_rx_frame(struct pe_fsm *f, const uint8_t *frame, uint32_t len,
+			   const struct vms_frame_info *fi);
+static void pe_vc_follow_channel(struct pe_fsm *f, uint32_t ch_index,
+				 enum pe_channel_action act);
+static void pe_vc_tick_all(struct pe_fsm *f);
+static void pe_vc_broadcast(struct pe_fsm *f, enum pe_event ev);
 
 /* Which pe_event a received discovery frame IS. The codec decides, through the
  * class-gated abs-30 accessor -- this file never reads a byte offset. */
@@ -1067,9 +1087,16 @@ enum pe_channel_action pe_fsm_rx(struct pe_fsm *f, const uint8_t *frame,
 		f->rx_not_sca++;
 		return PE_CH_ACT_NONE;
 	}
-	/* Anything that is not a discovery-family frame belongs to a layer this
-	 * FSM does not own (the SCS envelope is FC-P1.2's). Counted, not
-	 * silently dropped, so a rising number is a question for a capture. */
+	/* The SCS envelope is the VIRTUAL CIRCUIT's (FC-P1.2): formation,
+	 * sequenced messages and credit-returns all ride it, and it is routed
+	 * to the circuit on the channel the sending station owns. */
+	if (fi.family == (uint8_t)VMS_FFAM_SCS) {
+		pe_vc_rx_frame(f, frame, len, &fi);
+		return PE_CH_ACT_NONE;
+	}
+	/* Anything that is neither family belongs to no layer this port has.
+	 * Counted, not silently dropped, so a rising number is a question for
+	 * a capture. */
 	if (fi.family != (uint8_t)VMS_FFAM_DISCOVERY) {
 		f->rx_unclassified++;
 		return PE_CH_ACT_NONE;
@@ -1095,10 +1122,13 @@ enum pe_channel_action pe_fsm_rx(struct pe_fsm *f, const uint8_t *frame,
 	pe_channel_learn(f, ch, &rx);
 
 	act = pe_check_incarnation(f, ch, &rx);
-	if (act != PE_CH_ACT_NONE)
-		return act;   /* the reset supersedes whatever the frame asked */
+	if (act == PE_CH_ACT_NONE)
+		act = pe_dispatch(f, ch, pe_event_for(frame, len, &fi), &rx);
+	/* (a reset supersedes whatever the frame asked for) */
 
-	return pe_dispatch(f, ch, pe_event_for(frame, len, &fi), &rx);
+	/* Whatever the channel concluded, the circuit riding it hears it. */
+	pe_vc_follow_channel(f, (uint32_t)(ch - f->ch), act);
+	return act;
 }
 
 /* ==========================================================================
@@ -1130,8 +1160,10 @@ static uint32_t pe_broadcast(struct pe_fsm *f, enum pe_event ev,
 		if (!f->ch[i].in_use)
 			continue;
 		act = pe_dispatch(f, &f->ch[i], ev, &pe_rx_none);
-		if (act != PE_CH_ACT_NONE)
-			pe_rec_emit(out, max, &n, i, act);
+		if (act == PE_CH_ACT_NONE)
+			continue;
+		pe_rec_emit(out, max, &n, i, act);
+		pe_vc_follow_channel(f, i, act);
 	}
 	return n;
 }
@@ -1147,6 +1179,12 @@ uint32_t pe_fsm_tick(struct pe_fsm *f, struct pe_channel_rec *out, uint32_t max)
 	 * discovery-only behaviour, so it runs whatever the channels are doing. */
 	pe_send_multicast(f);
 	n = pe_broadcast(f, PE_EV_TIMER_CHANNEL, out, max);
+	/* One beat drives the circuits too: their deadlines are wrap-safe
+	 * comparisons, so being driven by the HELLO cadence rather than by a
+	 * per-circuit timer changes when they are CHECKED, never what they
+	 * decide. It is also what lets a host test run TIMVCFAIL in
+	 * microseconds with no timer implementation at all. */
+	pe_vc_tick_all(f);
 	if (f->running)
 		pe_arm_beat(f);
 	return n;
@@ -1211,6 +1249,10 @@ uint32_t pe_fsm_link_down(struct pe_fsm *f, struct pe_channel_rec *out,
 	if (f == NULL)
 		return 0u;
 	f->link_up = 0u;
+	/* The circuits go first: with no link there is no circuit, and the
+	 * layers above must see vc_down before the channel records tell the
+	 * connection manager the same thing. */
+	pe_vc_broadcast(f, PE_EV_LINK_DOWN);
 	return pe_broadcast(f, PE_EV_LINK_DOWN, out, max);
 }
 
@@ -1219,6 +1261,7 @@ void pe_fsm_shutdown(struct pe_fsm *f)
 	if (f == NULL)
 		return;
 	pe_fsm_stop(f);
+	pe_vc_broadcast(f, PE_EV_SHUTDOWN);
 	(void)pe_broadcast(f, PE_EV_SHUTDOWN, NULL, 0u);
 }
 
@@ -1241,6 +1284,1510 @@ int pe_fsm_send_last_gasp(struct pe_fsm *f)
 	f->last_gasps_built++;
 	pe_log(f, "%PEA0, leaving the cluster, last gasp sent");
 	return 0;
+}
+
+/* ==========================================================================
+ * ==========================================================================
+ * THE VIRTUAL CIRCUIT (FC-P1.2)
+ *
+ * vms_pe_fsm.h SS3b is the contract: the START/STACK/ACK table from p. 2-14,
+ * the incarnation echo that is the join GATE (SS4(i).B), the sequencing rule
+ * from SS4(h)(4), and the one invariant this item exists to guarantee --
+ * recv_ack NEVER FREEZES. Read it before changing anything below.
+ *
+ * The same discipline as the channel half: one table indexed [vc state][event],
+ * one small handler per edge, every frame built through the FC-P1.1 codec and
+ * not one byte offset in this file.
+ * ==========================================================================
+ * ========================================================================== */
+
+/* --------------------------------------------------------------------------
+ * Sequence arithmetic
+ *
+ * The wire counter is 16 bits and it really does wrap: SS4(i).A caught a real
+ * member's circuit continuing at send_seq 11974. So every comparison is a
+ * SIGNED DIFFERENCE and never a `<`, exactly as pe_reached() is for the clock.
+ * -------------------------------------------------------------------------- */
+
+static int seq_after(uint16_t a, uint16_t b)
+{
+	return (int16_t)(a - b) > 0;
+}
+
+/*
+ * The next sequence after `s`, skipping 0. SS4(h)(3) grounds send_seq == 0 as
+ * "this frame carries no new sequence of its own" (622/622 credit-returns), so
+ * 0 cannot also be a message's position. INFERRED: no capture reaches the
+ * wrap, so which of 0 or 1 a real VMS uses there is unobserved -- this node
+ * emits 1 and ACCEPTS either from a peer (below), which is the tolerant half
+ * of the same choice.
+ */
+static uint16_t seq_next(uint16_t s)
+{
+	uint16_t n = (uint16_t)(s + 1u);
+
+	return n == 0u ? 1u : n;
+}
+
+static int seq_is_next(uint16_t recv_seq, uint16_t got)
+{
+	return got == (uint16_t)(recv_seq + 1u) || got == seq_next(recv_seq);
+}
+
+/*
+ * What a received sequence number IS. The ORDER of these tests is the rule:
+ * anchor first (SS4(h)(4a): the first sequenced message on a circuit anchors
+ * the counter rather than being scored -- without it every fresh circuit
+ * scores its first frame as a gap and tears itself down), then the normal
+ * advance, then a duplicate, and only what is left is a gap.
+ */
+static enum pe_vc_seq_kind vc_score_seq(const struct pe_vc *vc, uint16_t got)
+{
+	if (!vc->recv_anchored)
+		return PE_VC_SEQ_ANCHOR;
+	if (seq_is_next(vc->recv_seq, got))
+		return PE_VC_SEQ_NEXT;
+	if (!seq_after(got, vc->recv_seq))
+		return PE_VC_SEQ_DUP;
+	return PE_VC_SEQ_GAP;
+}
+
+/* -------------------------------------------------------------------------
+ * Tunables, each resolved the same way the channel half resolves its own:
+ * a SYSGEN-derived value from pe_identity if the glue loaded one, else the
+ * documented OVMX default.
+ * ------------------------------------------------------------------------- */
+
+static uint32_t vc_timvcfail_ms(const struct pe_fsm *f)
+{
+	return f->id.timvcfail_ms != 0u ? f->id.timvcfail_ms
+					: PE_TIMVCFAIL_DEFAULT_MS;
+}
+
+static uint32_t vc_retransmit_ms(const struct pe_fsm *f)
+{
+	uint32_t ms;
+
+	if (f->id.vc_retransmit_ms != 0u)
+		return f->id.vc_retransmit_ms;
+	ms = vc_timvcfail_ms(f) / PE_VC_RETRANSMIT_DIVISOR;
+	return ms < PE_VC_RETRANSMIT_MIN_MS ? PE_VC_RETRANSMIT_MIN_MS : ms;
+}
+
+/* The VMS absolute-time clock, and nothing else (design SS3.9 rule 6). */
+static uint64_t pe_now_vms(const struct pe_fsm *f)
+{
+	if (f->ops != NULL && f->ops->now_vms != NULL)
+		return f->ops->now_vms(f->ops->ctx);
+	return 0u;
+}
+
+/* --------------------------------------------------------------------------
+ * The circuit table
+ * -------------------------------------------------------------------------- */
+
+struct pe_vc *pe_fsm_vc_at(struct pe_fsm *f, uint32_t index)
+{
+	if (f == NULL || f->vc == NULL || index >= f->n_vcs)
+		return NULL;
+	return f->vc[index].in_use ? &f->vc[index] : NULL;
+}
+
+struct pe_vc *pe_fsm_vc_by_sysid(struct pe_fsm *f, vms_scs_sysid_t sysid)
+{
+	uint32_t i;
+
+	if (f == NULL || f->vc == NULL || sysid == 0u)
+		return NULL;
+	for (i = 0; i < f->n_vcs; i++) {
+		if (f->vc[i].in_use && f->vc[i].peer_sysid_valid &&
+		    f->vc[i].peer_sysid == sysid)
+			return &f->vc[i];
+	}
+	return NULL;
+}
+
+static struct pe_vc *vc_by_channel(struct pe_fsm *f, uint32_t ch_index)
+{
+	uint32_t i;
+
+	if (f->vc == NULL)
+		return NULL;
+	for (i = 0; i < f->n_vcs; i++) {
+		if (f->vc[i].in_use && f->vc[i].channel == (uint8_t)ch_index)
+			return &f->vc[i];
+	}
+	return NULL;
+}
+
+static uint32_t vc_index_of(const struct pe_fsm *f, const struct pe_vc *vc)
+{
+	return (uint32_t)(vc - f->vc);
+}
+
+/* A circuit for a channel that has none. Like the channel table, a full table
+ * REFUSES rather than recycling: evicting a live circuit to make room would
+ * drop connections the executive still believes in. */
+static struct pe_vc *vc_alloc(struct pe_fsm *f, uint32_t ch_index)
+{
+	uint32_t i;
+
+	if (f->vc == NULL)
+		return NULL;
+	for (i = 0; i < f->n_vc_slots; i++) {
+		struct pe_vc *vc = &f->vc[i];
+
+		if (vc->in_use)
+			continue;
+		pe_bzero(vc, (uint32_t)sizeof(*vc));
+		vc->in_use = 1u;
+		vc->state = (uint8_t)VMS_PE_VC_CLOSED;
+		vc->channel = (uint8_t)ch_index;
+		if (i + 1u > f->n_vcs)
+			f->n_vcs = i + 1u;
+		return vc;
+	}
+	f->vc_no_slot++;
+	return NULL;
+}
+
+static struct pe_vc *vc_find_or_alloc(struct pe_fsm *f, uint32_t ch_index)
+{
+	struct pe_vc *vc = vc_by_channel(f, ch_index);
+
+	return vc != NULL ? vc : vc_alloc(f, ch_index);
+}
+
+/* --------------------------------------------------------------------------
+ * Timers. Every deadline is armed through ops->arm_timer for production AND
+ * kept as a wrap-safe field, so pe_fsm_tick's one beat can drive the same
+ * work on a host test with no timer implementation at all.
+ * -------------------------------------------------------------------------- */
+
+static void vc_arm(struct pe_fsm *f, const struct pe_vc *vc,
+		   enum pe_timer which, uint32_t ms)
+{
+	if (f->ops != NULL && f->ops->arm_timer != NULL)
+		f->ops->arm_timer(f->ops->ctx, which, vc_index_of(f, vc), ms);
+}
+
+static void vc_cancel(struct pe_fsm *f, const struct pe_vc *vc,
+		      enum pe_timer which)
+{
+	if (f->ops != NULL && f->ops->cancel_timer != NULL)
+		f->ops->cancel_timer(f->ops->ctx, which, vc_index_of(f, vc));
+}
+
+/*
+ * TIMVCFAIL -- "the time required for an SCS virtual circuit failure to be
+ * detected". Armed as a NO-PROGRESS deadline, not a total-time one: every
+ * time the peer's cumulative ack releases something, the deadline moves.
+ * That is what makes it the detector for the campaign's actual failure --
+ * a peer whose recv_ack stops advancing while this node keeps sending
+ * (SS4(O.14)/(O.15)/(O.19)) -- instead of a stall with no end.
+ */
+static void vc_arm_vcfail(struct pe_fsm *f, struct pe_vc *vc)
+{
+	vc->vcfail_due_ms = pe_now(f) + vc_timvcfail_ms(f);
+	vc->vcfail_armed = 1u;
+	vc_arm(f, vc, PE_TIMER_VCFAIL, vc_timvcfail_ms(f));
+}
+
+static void vc_disarm_vcfail(struct pe_fsm *f, struct pe_vc *vc)
+{
+	if (!vc->vcfail_armed)
+		return;
+	vc->vcfail_armed = 0u;
+	vc->vcfail_due_ms = 0u;
+	vc_cancel(f, vc, PE_TIMER_VCFAIL);
+}
+
+/* --------------------------------------------------------------------------
+ * Telling the layer above. SCS must see a circuit come and go; a received
+ * message is delivered by (remote system, destination Con.ID), which is the
+ * boundary vms_pe.h SS4 defines.
+ * -------------------------------------------------------------------------- */
+
+static void vc_notify_up(struct pe_fsm *f, const struct pe_vc *vc)
+{
+	if (f->upper != NULL && f->upper->vc_up != NULL)
+		f->upper->vc_up(f->upper->ctx, vc->peer_sysid);
+}
+
+static void vc_notify_down(struct pe_fsm *f, const struct pe_vc *vc,
+			   enum pe_vc_down_reason reason)
+{
+	if (f->upper != NULL && f->upper->vc_down != NULL)
+		f->upper->vc_down(f->upper->ctx, vc->peer_sysid,
+				  (uint32_t)reason);
+}
+
+/* --------------------------------------------------------------------------
+ * The unacked ring, keyed by seq
+ * -------------------------------------------------------------------------- */
+
+static struct pe_vc_unacked *vc_ring_alloc(struct pe_vc *vc)
+{
+	uint32_t i;
+
+	for (i = 0; i < PE_VC_UNACKED_MAX; i++) {
+		if (!vc->ring[i].in_use) {
+			pe_bzero(&vc->ring[i], (uint32_t)sizeof(vc->ring[i]));
+			vc->ring[i].in_use = 1u;
+			vc->unacked++;
+			return &vc->ring[i];
+		}
+	}
+	return NULL;
+}
+
+static void vc_ring_free(struct pe_vc *vc, struct pe_vc_unacked *e)
+{
+	e->in_use = 0u;
+	if (vc->unacked > 0u)
+		vc->unacked--;
+}
+
+static void vc_ring_clear(struct pe_vc *vc)
+{
+	uint32_t i;
+
+	for (i = 0; i < PE_VC_UNACKED_MAX; i++)
+		vc->ring[i].in_use = 0u;
+	vc->unacked = 0u;
+}
+
+/*
+ * The peer's CUMULATIVE acknowledgement releases everything at or below it.
+ * Cumulative is the whole point: one ack for sequence N tells this node that
+ * N and everything before it arrived, so a lost ACK costs nothing as long as
+ * a later one arrives -- and every frame the peer sends carries one.
+ *
+ * ack == 0 releases nothing: SS4(h)(3)/(4) give 0 the meaning "no sequence
+ * acknowledged" (a peer that has taken nothing yet), not "sequence zero".
+ */
+static void vc_release_acked(struct pe_fsm *f, struct pe_vc *vc, uint16_t ack)
+{
+	uint32_t i;
+	int released = 0;
+
+	if (ack == 0u)
+		return;
+	for (i = 0; i < PE_VC_UNACKED_MAX; i++) {
+		struct pe_vc_unacked *e = &vc->ring[i];
+
+		if (!e->in_use || seq_after(e->seq, ack))
+			continue;
+		vc_ring_free(vc, e);
+		released = 1;
+	}
+	if (seq_after(ack, vc->peer_recv_ack) || vc->peer_recv_ack == 0u)
+		vc->peer_recv_ack = ack;
+	if (!released)
+		return;
+	/* Progress. Either there is nothing left to wait for, or the clock on
+	 * what is left starts again from now. */
+	if (vc->unacked == 0u)
+		vc_disarm_vcfail(f, vc);
+	else
+		vc_arm_vcfail(f, vc);
+}
+
+/* --------------------------------------------------------------------------
+ * Building this node's own circuit frames. Every field below comes from real
+ * executive state or from this circuit's real counters; the codec bakes only
+ * what the wire spec grounds as a node-independent protocol constant.
+ * -------------------------------------------------------------------------- */
+
+static int vc_fill_addr(const struct pe_fsm *f, const struct pe_channel *ch,
+			struct vms_scs_addr *a)
+{
+	if (!pe_may_send(f) || !ch->remote_lavc_valid)
+		return -1;
+	pe_copy(a->dst_mac, ch->remote_mac, VMS_ETH_ADDR_LEN);
+	pe_copy(a->src_mac, f->id.hw_mac, VMS_ETH_ADDR_LEN);
+	pe_copy(a->dst_logical, ch->remote_lavc, VMS_ETH_ADDR_LEN);
+	pe_copy(a->src_logical, f->id.lavc, VMS_ETH_ADDR_LEN);
+	return 0;
+}
+
+/* SS4(g) phase 2 abs 104: a FIXED 8-byte blank-padded field, a different
+ * encoding from the HELLO's length-prefixed name (28/28 frames, including a
+ * 2-character name that did not shift the following bytes). */
+static void vc_put_nodename(const struct pe_fsm *f,
+			    uint8_t out[VMS_SCS_START_NODENAME_LEN])
+{
+	uint32_t n = f->id.scsnode_len;
+	uint32_t i;
+
+	if (n > (uint32_t)VMS_HELLO_NODENAME_MAX)
+		n = (uint32_t)VMS_HELLO_NODENAME_MAX;
+	for (i = 0; i < (uint32_t)VMS_SCS_START_NODENAME_LEN; i++)
+		out[i] = (i < n && f->id.scsnode[i] != 0u) ? f->id.scsnode[i]
+							  : (uint8_t)' ';
+}
+
+/*
+ * May this node assert a formation body at all? Two of its fields are claims
+ * about identity that CANNOT be defaulted (INV-6):
+ *
+ *   - the incarnation quadword at abs 80 is the time THIS system booted. A
+ *     node advertising one it did not boot with earns a CLUEXIT bugcheck on
+ *     the surviving side after a reconnect; OVMX shipped a replayed capture
+ *     value for six days and that is the bug (spec SS4(g), vms-2f3).
+ *   - the composition time at abs 112 must be LIVE: the spec's grounding for
+ *     it is the negative "no real node ever sends a stale one", so without an
+ *     absolute-time clock there is nothing honest to write.
+ *
+ * Absent either, this node forms NO circuit and counts it. That is the honest
+ * end of the road (Rule 9), not a zero on the wire.
+ */
+static int vc_identity_ok(struct pe_fsm *f)
+{
+	if (!f->id.incarnation_time_valid || f->ops == NULL ||
+	    f->ops->now_vms == NULL) {
+		f->vc_no_identity++;
+		return 0;
+	}
+	return 1;
+}
+
+static void vc_fill_identity(struct pe_fsm *f, struct vms_scs_start_frame *s)
+{
+	s->scssystemid = (uint16_t)(f->sysid & 0xffffu);
+	pe_copy(s->software_version, f->id.sw_version,
+		VMS_SCS_START_SWVER_LEN);
+	pe_copy(s->hardware_type, f->id.hw_type, VMS_SCS_START_HWTYPE_LEN);
+	s->credits = f->id.cluster_credits;
+	vc_put_nodename(f, s->node_name);
+	s->incarnation_time = f->id.incarnation_time;
+	s->message_time = pe_now_vms(f);
+}
+
+/*
+ * The START/STACK body. `round` is the config-round counter at abs 58, which
+ * SS4(g) grounds as walking 0 -> 1 -> 2 across START, STACK and ACK; the
+ * 106-byte wire shape is identical for START and STACK (p. 2-12: a STACK
+ * re-supplies the same identity body).
+ *
+ * THE INCARNATION ECHO IS READ, NEVER CHOSEN. `vc->echo_incarnation` was
+ * copied from the channel's `peer_incarnation`, which FC-P0.8 filled from a
+ * real directed HELLO. With no echo there is no START -- see SS3b.
+ */
+static int vc_send_start(struct pe_fsm *f, struct pe_vc *vc, uint16_t round)
+{
+	struct vms_scs_start_frame s;
+	struct pe_channel *ch = pe_fsm_channel_at(f, vc->channel);
+	uint32_t written = 0u;
+
+	if (ch == NULL)
+		return -1;
+	if (!vc->echo_valid) {
+		f->vc_no_incarnation++;
+		return -1;
+	}
+	if (!vc_identity_ok(f))
+		return -1;
+
+	pe_bzero(&s, (uint32_t)sizeof(s));
+	if (vc_fill_addr(f, ch, &s.addr) != 0)
+		return -1;
+	/* The circuit's OWN counters, not the peer's: a fresh circuit reads
+	 * send_seq 1 / recv_ack 0, which is byte-exactly what SS4(i).B says a
+	 * joiner sends -- and SS4(i).A's warning ("must not copy the member's
+	 * send_seq into its own") is structurally impossible here because
+	 * nothing but this circuit's state is ever stamped. */
+	s.recv_ack = vc->recv_seq;
+	s.send_seq = vc->send_seq;
+	s.incarnation = vc->echo_incarnation;
+	s.config_round = round;
+	vc_fill_identity(f, &s);
+
+	if (vms_scs_start_build(&s, f->scratch, (uint32_t)sizeof(f->scratch),
+				&written) != VMS_CODEC_OK)
+		return -1;
+	if (pe_tx(f, written) != 0)
+		return -1;
+
+	vc->config_round = (uint8_t)round;
+	if (round == 0u)
+		vc->starts_tx++;
+	else
+		vc->stacks_tx++;
+	return 0;
+}
+
+/* The round-2 ACK: 46 bytes, no identity body (SS4(g) phase 2). */
+static int vc_send_ack_frame(struct pe_fsm *f, struct pe_vc *vc)
+{
+	struct vms_scs_start_frame s;
+	struct pe_channel *ch = pe_fsm_channel_at(f, vc->channel);
+	uint32_t written = 0u;
+
+	if (ch == NULL || !vc->echo_valid)
+		return -1;
+	pe_bzero(&s, (uint32_t)sizeof(s));
+	if (vc_fill_addr(f, ch, &s.addr) != 0)
+		return -1;
+	s.recv_ack = vc->recv_seq;
+	s.send_seq = vc->send_seq;
+	s.incarnation = vc->echo_incarnation;
+
+	if (vms_scs_start_build_ack(&s, f->scratch,
+				    (uint32_t)sizeof(f->scratch),
+				    &written) != VMS_CODEC_OK)
+		return -1;
+	if (pe_tx(f, written) != 0)
+		return -1;
+	vc->acks_tx++;
+	return 0;
+}
+
+/*
+ * ***  THE ACK  ***
+ *
+ * The 0x48 credit-return short (SS4(h)(3)): "[20:22] (send-seq) is 0 -- a
+ * credit-return carries no new sequence number of its own; it purely
+ * acknowledges", with the acknowledged sequence at abs 32 and its two
+ * GROUNDED repeats. It carries BOTH obligations this node owes for a message
+ * it has taken: the acknowledgement, and exactly one message's worth of
+ * returned credit ("strict 1-for-1", SS4(h)(3)).
+ *
+ * It is emitted from the receive path the moment the sequence is scored, with
+ * nothing conditional between -- no upper layer, no Con.ID, no SYSAP. See
+ * vms_pe_fsm.h SS3b(a): acknowledgement is a transport fact.
+ */
+static void vc_send_ack(struct pe_fsm *f, struct pe_vc *vc)
+{
+	struct vms_scs_credit_frame c;
+	struct pe_channel *ch = pe_fsm_channel_at(f, vc->channel);
+	uint32_t written = 0u;
+
+	if (ch == NULL)
+		return;
+	pe_bzero(&c, (uint32_t)sizeof(c));
+	if (vc_fill_addr(f, ch, &c.addr) != 0)
+		return;
+	c.acked_seq = vc->recv_seq;
+	/* abs 44 is the spec's own INFERRED "sender's own outstanding seq":
+	 * filled from THIS node's counter, never echoed from a peer frame. */
+	c.secondary_seq = vc->send_seq;
+
+	if (vms_scs_credit_build(&c, f->scratch, (uint32_t)sizeof(f->scratch),
+				 &written) != VMS_CODEC_OK)
+		return;
+	if (pe_tx(f, written) != 0)
+		return;
+	vc->credit_tx++;
+	if (vc->recv_credit > 0u)
+		vc->recv_credit--;    /* the credit is now back with the peer */
+}
+
+/* --------------------------------------------------------------------------
+ * Circuit lifecycle
+ * -------------------------------------------------------------------------- */
+
+/*
+ * SS4(h)(4a), the measurement's own rule: "per-VC counters are reset to 0 on
+ * any 0x41 START in either direction" -- and SS4(i).A: "the post-START SCS VC
+ * resets to send_seq = 1 on both sides". So formation, in EITHER direction,
+ * is the point at which everything the old circuit knew is discarded.
+ *
+ * The peer's credit GRANT is discarded with it: a grant is a promise about a
+ * circuit, and this is a different circuit. Until its new START/STACK body
+ * arrives this node knows of no credit and will send nothing -- honest
+ * refusal rather than an invented window (INV-6).
+ */
+static void vc_reset_sequence(struct pe_fsm *f, struct pe_vc *vc)
+{
+	vc_ring_clear(vc);
+	vc->send_seq = 1u;
+	vc->recv_seq = 0u;
+	vc->recv_anchored = 0u;
+	vc->peer_recv_ack = 0u;
+	vc->send_credit = 0u;
+	vc->send_credit_max = 0u;
+	vc->recv_credit = 0u;
+	vc->recv_credit_max = f->id.cluster_credits_valid
+				      ? f->id.cluster_credits : 0u;
+	vc->form_tries = 0u;
+}
+
+static void vc_close(struct pe_fsm *f, struct pe_vc *vc)
+{
+	vc_ring_clear(vc);
+	vc_disarm_vcfail(f, vc);
+	vc_cancel(f, vc, PE_TIMER_RETRANSMIT);
+	vc->state = (uint8_t)VMS_PE_VC_CLOSED;
+	vc->form_due_ms = 0u;
+	vc->form_tries = 0u;
+}
+
+/* Start (or restart) formation: reset, send the round-0 START, arm both the
+ * retry cadence and the TIMVCFAIL deadline. */
+static void vc_begin_formation(struct pe_fsm *f, struct pe_vc *vc)
+{
+	vc_reset_sequence(f, vc);
+	vc->state = (uint8_t)VMS_PE_VC_START_SENT;
+	vc->form_due_ms = pe_now(f) + vc_retransmit_ms(f);
+	vc_arm(f, vc, PE_TIMER_RETRANSMIT, vc_retransmit_ms(f));
+	vc_arm_vcfail(f, vc);
+	if (vc_send_start(f, vc, 0u) != 0)
+		vc->state = (uint8_t)VMS_PE_VC_CLOSED;
+}
+
+static void vc_open(struct pe_fsm *f, struct pe_vc *vc)
+{
+	if (vc->state == (uint8_t)VMS_PE_VC_OPEN)
+		return;
+	vc->state = (uint8_t)VMS_PE_VC_OPEN;
+	vc->opens++;
+	vc->form_tries = 0u;
+	vc_disarm_vcfail(f, vc);     /* nothing outstanding on a fresh circuit */
+	pe_log(f, "%PEA0, virtual circuit open");
+	vc_notify_up(f, vc);
+}
+
+/*
+ * Break the circuit. p. 2-31: when the guarantee of delivery or of
+ * sequentiality cannot be satisfied "the virtual circuit between the ports
+ * involved will be explicitly broken … then every connection supported by
+ * this virtual circuit is also broken" -- which is why the upper layer is
+ * told before anything else happens.
+ *
+ * Then it RE-FORMS, if the channel it rides is still verified. A port whose
+ * circuit failed and stayed down would be a node that silently left the
+ * cluster; a real one keeps trying (SS4(k) watched a member retransmit its
+ * formation probe indefinitely).
+ */
+static void vc_break(struct pe_fsm *f, struct pe_vc *vc,
+		     enum pe_vc_down_reason reason, const char *why)
+{
+	struct pe_channel *ch = pe_fsm_channel_at(f, vc->channel);
+	int was_up = (vc->state == (uint8_t)VMS_PE_VC_OPEN);
+
+	vc->last_down_reason = (uint8_t)reason;
+	vc->downs++;
+	vc_close(f, vc);
+	if (was_up)
+		vc_notify_down(f, vc, reason);
+	pe_log(f, why);
+
+	if (ch != NULL && ch->state == (uint8_t)VMS_PE_CH_B4 &&
+	    reason != PE_VC_DOWN_SHUTDOWN && reason != PE_VC_DOWN_PEER_GONE) {
+		f->vc_reformations++;
+		vc_begin_formation(f, vc);
+	}
+}
+
+/* --------------------------------------------------------------------------
+ * What a received SCS frame carried
+ * -------------------------------------------------------------------------- */
+struct pe_vc_rx {
+	const struct vms_frame_info *fi;
+	const uint8_t *frame;
+	uint32_t       len;
+	uint16_t       recv_ack;    /* what the peer acknowledges of OUR stream */
+	uint16_t       send_seq;    /* the peer's own position, 0 = none        */
+	uint8_t        has_seq;     /* this class carries a new sequence        */
+	uint8_t        is_start;    /* the 0x41 class                           */
+	uint8_t        conid_valid;
+	uint8_t        pad;
+	vms_conid_t    dst_conid;
+	struct vms_scs_start_frame start;   /* valid iff is_start               */
+};
+
+static const struct pe_vc_rx pe_vc_rx_none;
+
+/* --------------------------------------------------------------------------
+ * The transition handlers -- one edge each
+ * -------------------------------------------------------------------------- */
+
+/* Learn what a 106-byte START/STACK body says about the peer. All of it is
+ * real wire data, and each piece keeps its own validity: a 46-byte ACK
+ * carries no body and teaches nothing. */
+static void vc_learn_peer(struct pe_fsm *f, struct pe_vc *vc,
+			  const struct pe_vc_rx *rx)
+{
+	const struct vms_scs_start_frame *s = &rx->start;
+
+	if (s->is_ack)
+		return;
+	vc->peer_sysid = (vms_scs_sysid_t)s->scssystemid;
+	vc->peer_sysid_valid = (uint8_t)(s->scssystemid != 0u);
+	pe_copy(vc->peer_name, s->node_name, VMS_SCS_START_NODENAME_LEN);
+	vc->peer_name_valid = 1u;
+	pe_copy(vc->peer_swver, s->software_version, VMS_SCS_START_SWVER_LEN);
+	pe_copy(vc->peer_hwtype, s->hardware_type, VMS_SCS_START_HWTYPE_LEN);
+	vc->peer_incarnation_time = s->incarnation_time;
+	vc->peer_ident_valid = 1u;
+
+	/* p. 2-43: the Send Credit this node may use is the one the PEER
+	 * granted, and abs 95 is byte-exact to its SYSGEN CLUSTER_CREDITS
+	 * (SS4(g)). Read, never assumed -- with no grant, nothing is sent. */
+	vc->send_credit_max = s->credits;
+	vc->send_credit = s->credits;
+	(void)f;
+}
+
+/*
+ * A START arrived. p. 2-14: in START SENT and in START RECEIVED the response
+ * is the same -- send a STACK -- and SS4(h)(4a) adds that a START in EITHER
+ * direction resets the circuit's counters. On an OPEN circuit that means the
+ * peer has torn its side down and is re-forming, so the old circuit is
+ * finished and the layers above are told before the new one starts.
+ */
+static void h_vc_rx_start(struct pe_fsm *f, struct pe_vc *vc,
+			  const struct pe_vc_rx *rx)
+{
+	int was_up = (vc->state == (uint8_t)VMS_PE_VC_OPEN);
+
+	vc->starts_rx++;
+	if (was_up) {
+		vc->last_down_reason = (uint8_t)PE_VC_DOWN_PEER_RESTART;
+		vc->downs++;
+		vc_notify_down(f, vc, PE_VC_DOWN_PEER_RESTART);
+		pe_log(f, "%PEA0, peer re-started the circuit, re-forming");
+	}
+	vc_reset_sequence(f, vc);
+	vc_learn_peer(f, vc, rx);
+	vc->state = (uint8_t)VMS_PE_VC_STACK_SENT;
+	vc->form_due_ms = pe_now(f) + vc_retransmit_ms(f);
+	vc_arm(f, vc, PE_TIMER_RETRANSMIT, vc_retransmit_ms(f));
+	vc_arm_vcfail(f, vc);
+	if (vc_send_start(f, vc, 1u) != 0)
+		vc->state = (uint8_t)VMS_PE_VC_CLOSED;
+}
+
+/* A STACK arrived: p. 2-14, the circuit is OPEN and an ACK goes back. In OPEN
+ * this is the peer re-sending a STACK whose ACK it never saw; the ACK is sent
+ * again and nothing else changes (idempotent). */
+static void h_vc_rx_stack(struct pe_fsm *f, struct pe_vc *vc,
+			  const struct pe_vc_rx *rx)
+{
+	vc->stacks_rx++;
+	vc_learn_peer(f, vc, rx);
+	(void)vc_send_ack_frame(f, vc);
+	vc_open(f, vc);
+}
+
+/*
+ * An ACK arrived. In START RECEIVED it opens the circuit. In OPEN it is
+ * discarded, and that is the BOOK's behaviour, not laziness: p. 2-12, "each
+ * port driver simply discards the ACK it receives … because it already
+ * considers the virtual circuit to be OPEN". Counted either way.
+ */
+static void h_vc_rx_ack(struct pe_fsm *f, struct pe_vc *vc,
+			const struct pe_vc_rx *rx)
+{
+	(void)rx;
+	vc->acks_rx++;
+	vc_open(f, vc);
+}
+
+/* Deliver a received message upward, best effort and strictly AFTER the ack.
+ *
+ * The whole FRAME goes up, not a slice of it: the SCS layer reads the
+ * connection-control type, the credit field, the Con.ID pair and the SYSAP
+ * body through its OWN codec entries, and a port that pre-sliced them would
+ * be asserting offsets it has no business knowing (design SS3.9 rule 2).
+ *
+ * A class whose Con.ID location the codec does not GROUND is counted, not
+ * delivered with an invented one (SS4(d): the other length classes "do not
+ * reliably match this layout and are therefore left undecoded"). FC-P2.1
+ * grounds more of them; until it does, this counter is the honest measure of
+ * what this node receives and cannot yet route. The ACK went out regardless,
+ * so the peer's circuit never notices (SS3b(a)).
+ */
+static void vc_deliver(struct pe_fsm *f, struct pe_vc *vc,
+		       const struct pe_vc_rx *rx)
+{
+	if (!rx->conid_valid || f->upper == NULL || f->upper->message == NULL) {
+		f->vc_rx_undelivered++;
+		return;
+	}
+	f->upper->message(f->upper->ctx, vc->peer_sysid, rx->dst_conid,
+			  rx->frame, rx->len);
+}
+
+/*
+ * ***  THE SEQUENCED MESSAGE -- the heart of this item  ***
+ *
+ * The order of these five steps IS the anti-freeze guarantee, and none of
+ * them may be made conditional on anything above the port:
+ *
+ *   1. release what the peer's cumulative ack covers (even for a duplicate
+ *      or a gap: the ack it carries is still true);
+ *   2. score the sequence (anchor / next / duplicate / gap);
+ *   3. a GAP breaks the circuit -- p. 2-31, and SS4(h)(4a) measured that a
+ *      real VAX never produces one (0 of 321,599);
+ *   4. ACKNOWLEDGE, before any delivery and with no upper layer required;
+ *   5. deliver -- and a duplicate is never delivered twice.
+ */
+static void h_vc_rx_seqmsg(struct pe_fsm *f, struct pe_vc *vc,
+			   const struct pe_vc_rx *rx)
+{
+	enum pe_vc_seq_kind kind;
+
+	vc->msgs_rx++;
+	vc_release_acked(f, vc, rx->recv_ack);          /* 1 */
+
+	kind = vc_score_seq(vc, rx->send_seq);          /* 2 */
+	if (kind == PE_VC_SEQ_GAP) {                    /* 3 */
+		vc->rx_gaps++;
+		vc_break(f, vc, PE_VC_DOWN_SEQ_GAP,
+			 "%PEA0, sequenced message out of order, circuit broken");
+		return;
+	}
+	if (kind != PE_VC_SEQ_DUP) {
+		vc->recv_seq = rx->send_seq;
+		vc->recv_anchored = 1u;
+		if (vc->recv_credit < 0xffu)
+			vc->recv_credit++;
+	}
+
+	vc_send_ack(f, vc);                             /* 4 */
+
+	if (kind == PE_VC_SEQ_DUP) {
+		vc->rx_dups++;
+		return;
+	}
+	vc_deliver(f, vc, rx);                          /* 5 */
+}
+
+/*
+ * A 0x48 credit-return from the peer: an acknowledgement of OUR stream plus
+ * exactly one message's worth of Send Credit back (SS4(h)(3), strict 1-for-1).
+ * It carries no sequence of its own and is never itself acknowledged --
+ * acking an ack is how two ports talk forever about nothing.
+ */
+static void h_vc_rx_credit(struct pe_fsm *f, struct pe_vc *vc,
+			   const struct pe_vc_rx *rx)
+{
+	vc->credit_rx++;
+	vc_release_acked(f, vc, rx->recv_ack);
+	if (vc->send_credit < vc->send_credit_max)
+		vc->send_credit++;
+}
+
+/* A datagram: unsequenced and unacknowledged by definition (p. 2-31 gives the
+ * delivery guarantees to the MESSAGE service only). Delivered straight up. No
+ * frame class the codec grounds today produces this event; it exists because
+ * the port's service set does, and the glue can post it. */
+static void h_vc_rx_datagram(struct pe_fsm *f, struct pe_vc *vc,
+			     const struct pe_vc_rx *rx)
+{
+	if (rx->frame == NULL) {
+		/* Posted without the frame that justified it -- there is
+		 * nothing to deliver, and inventing an empty datagram for the
+		 * layer above would be worse than counting it. */
+		f->vc_rx_undelivered++;
+		return;
+	}
+	if (f->upper != NULL && f->upper->datagram != NULL)
+		f->upper->datagram(f->upper->ctx, vc->peer_sysid,
+				   rx->frame, rx->len);
+	else
+		f->vc_rx_undelivered++;
+}
+
+/*
+ * p. 2-16, the IMPLIED ACK: in START RECEIVED, any packet that requires a
+ * circuit opens it -- the peer would not be sending data on a circuit it did
+ * not consider open, so the ACK that would have opened it is redundant. The
+ * packet is then processed normally, which is the point of the rule.
+ */
+static void h_vc_implied_open(struct pe_fsm *f, struct pe_vc *vc,
+			      const struct pe_vc_rx *rx)
+{
+	vc->implied_acks++;
+	pe_log(f, "%PEA0, implied acknowledgement, virtual circuit open");
+	vc_open(f, vc);
+
+	if (rx->fi == NULL)
+		return;
+	if (rx->fi->cls == (uint8_t)VMS_FCLS_SCS_CREDIT)
+		h_vc_rx_credit(f, vc, rx);
+	else if (rx->has_seq)
+		h_vc_rx_seqmsg(f, vc, rx);
+}
+
+/*
+ * The formation retry. p. 2-14 gives the port "a timer and an OS-dependent
+ * retry limit"; here the limit is TIMVCFAIL (below), so this handler simply
+ * re-sends the frame the current state is waiting on, at the same config
+ * round -- a re-sent START is still round 0, which is what makes the member's
+ * round counter, not ours, drive the handshake (SS4(i).A).
+ */
+static void h_vc_form_retry(struct pe_fsm *f, struct pe_vc *vc,
+			    const struct pe_vc_rx *rx)
+{
+	uint32_t now = pe_now(f);
+
+	(void)rx;
+	if (vc->vcfail_armed && pe_reached(now, vc->vcfail_due_ms)) {
+		vc_break(f, vc, PE_VC_DOWN_TIMVCFAIL,
+			 "%PEA0, no response within TIMVCFAIL, circuit re-formed");
+		return;
+	}
+	if (!pe_reached(now, vc->form_due_ms))
+		return;
+	vc->form_tries++;
+	vc->form_due_ms = now + vc_retransmit_ms(f);
+	vc_arm(f, vc, PE_TIMER_RETRANSMIT, vc_retransmit_ms(f));
+	(void)vc_send_start(f, vc,
+			    vc->state == (uint8_t)VMS_PE_VC_START_SENT ? 0u : 1u);
+}
+
+/*
+ * Re-send one unacknowledged message. SS4(L): a message "consumes the channel
+ * send_seq exactly once, and retransmissions REUSE that same send_seq". Two
+ * things are refreshed and nothing else:
+ *
+ *   - recv_ack, so a retransmission also carries this node's LATEST
+ *     acknowledgement (a retransmit that carried a stale ack would be the
+ *     freeze this whole item exists to prevent, arriving by the back door);
+ *   - the msgtype, 0x4b/0x5b -> 0x7b, which is the wire's own retransmit
+ *     marking (SS4(h), SS4(O.19)).
+ */
+static void vc_resend_one(struct pe_fsm *f, struct pe_vc *vc,
+			  struct pe_vc_unacked *e, uint32_t now)
+{
+	struct vms_frame_info fi;
+
+	if (vms_frame_classify(e->frame, e->len, &fi) != VMS_CODEC_OK)
+		return;
+	if (vms_scs_seq_mark_retransmit(e->frame, e->len, &fi) != VMS_CODEC_OK)
+		return;
+	if (vms_frame_classify(e->frame, e->len, &fi) != VMS_CODEC_OK)
+		return;
+	if (vms_scs_seq_stamp(e->frame, e->len, &fi, vc->recv_seq,
+			      e->seq) != VMS_CODEC_OK)
+		return;
+	if (pe_tx_from(f, e->frame, e->len) != 0)
+		return;
+	e->retransmits++;
+	e->due_ms = now + vc_retransmit_ms(f);
+	vc->retransmits++;
+}
+
+/*
+ * The retransmit ladder on an OPEN circuit, and the TIMVCFAIL check that ends
+ * it. TIMVCFAIL is tested FIRST: once the deadline has passed, re-sending
+ * again would just add to a conversation the peer has stopped having.
+ */
+static void h_vc_retransmit(struct pe_fsm *f, struct pe_vc *vc,
+			    const struct pe_vc_rx *rx)
+{
+	uint32_t now = pe_now(f);
+	uint32_t i;
+
+	(void)rx;
+	if (vc->unacked == 0u)
+		return;
+	if (vc->vcfail_armed && pe_reached(now, vc->vcfail_due_ms)) {
+		vc_break(f, vc, PE_VC_DOWN_TIMVCFAIL,
+			 "%PEA0, peer stopped acknowledging, circuit re-formed");
+		return;
+	}
+	for (i = 0; i < PE_VC_UNACKED_MAX; i++) {
+		struct pe_vc_unacked *e = &vc->ring[i];
+
+		if (e->in_use && pe_reached(now, e->due_ms))
+			vc_resend_one(f, vc, e, now);
+	}
+	vc_arm(f, vc, PE_TIMER_RETRANSMIT, vc_retransmit_ms(f));
+}
+
+/* The TIMVCFAIL timer, if the glue arms one per circuit rather than letting
+ * the retransmit beat carry the check. Same deadline, same wrap-safe test. */
+static void h_vc_vcfail(struct pe_fsm *f, struct pe_vc *vc,
+			const struct pe_vc_rx *rx)
+{
+	(void)rx;
+	if (!vc->vcfail_armed || !pe_reached(pe_now(f), vc->vcfail_due_ms))
+		return;
+	vc_break(f, vc, PE_VC_DOWN_TIMVCFAIL,
+		 "%PEA0, TIMVCFAIL expired, circuit re-formed");
+}
+
+/* The channel reached b4. This is the ONLY thing that starts a formation. */
+static void h_vc_channel_up(struct pe_fsm *f, struct pe_vc *vc,
+			    const struct pe_vc_rx *rx)
+{
+	struct pe_channel *ch = pe_fsm_channel_at(f, vc->channel);
+
+	(void)rx;
+	if (ch == NULL)
+		return;
+	/* SS4(i).B: the echo is the member's number for US, taken from a real
+	 * directed HELLO. Copied at formation so the whole handshake carries
+	 * one consistent value even if the channel learns a new one mid-way
+	 * (which is itself a channel RESET, and tears this circuit down). */
+	vc->echo_incarnation = ch->peer_incarnation;
+	vc->echo_valid = ch->peer_incarnation_valid;
+	if (ch->remote_sysid_valid && !vc->peer_sysid_valid) {
+		vc->peer_sysid = ch->remote_sysid;
+		vc->peer_sysid_valid = 1u;
+	}
+	vc_begin_formation(f, vc);
+}
+
+/* The channel stopped being verified (a peer re-form, spec SS4(i).B, or the
+ * SS4(M) listen timeout). Design SS3.4: the circuit rides the channel, so it
+ * goes with it -- and it does NOT re-form here, because there is no verified
+ * channel to form it over. The next CHANNEL_UP starts it again. */
+static void h_vc_channel_down(struct pe_fsm *f, struct pe_vc *vc,
+			      const struct pe_vc_rx *rx)
+{
+	int was_up = (vc->state == (uint8_t)VMS_PE_VC_OPEN);
+
+	(void)rx;
+	vc->last_down_reason = (uint8_t)PE_VC_DOWN_CHANNEL;
+	vc->downs++;
+	vc_close(f, vc);
+	if (was_up) {
+		pe_log(f, "%PEA0, channel lost, virtual circuit closed");
+		vc_notify_down(f, vc, PE_VC_DOWN_CHANNEL);
+	}
+}
+
+/* SS4(O.30): the peer announced its departure. p. 7-29: on a last gasp the
+ * port driver "immediately closes the virtual circuit … then notifies all
+ * SYSAPs". No re-formation: the node said it was leaving. */
+static void h_vc_peer_gone(struct pe_fsm *f, struct pe_vc *vc,
+			   const struct pe_vc_rx *rx)
+{
+	int was_up = (vc->state == (uint8_t)VMS_PE_VC_OPEN);
+
+	(void)rx;
+	vc->last_down_reason = (uint8_t)PE_VC_DOWN_PEER_GONE;
+	vc->downs++;
+	vc_close(f, vc);
+	if (was_up) {
+		pe_log(f, "%PEA0, peer departed, virtual circuit closed");
+		vc_notify_down(f, vc, PE_VC_DOWN_PEER_GONE);
+	}
+}
+
+/* CLUSTER_STOP. */
+static void h_vc_shutdown(struct pe_fsm *f, struct pe_vc *vc,
+			  const struct pe_vc_rx *rx)
+{
+	int was_up = (vc->state == (uint8_t)VMS_PE_VC_OPEN);
+
+	(void)rx;
+	vc->last_down_reason = (uint8_t)PE_VC_DOWN_SHUTDOWN;
+	vc_close(f, vc);
+	if (was_up) {
+		vc->downs++;
+		vc_notify_down(f, vc, PE_VC_DOWN_SHUTDOWN);
+	}
+}
+
+/* A circuit-requiring frame arrived with no circuit to take it. p. 2-31: SCS
+ * control messages need no connection, but they do need a VC. Counted, never
+ * answered -- answering would assert a circuit this node does not have. */
+static void h_vc_no_circuit(struct pe_fsm *f, struct pe_vc *vc,
+			    const struct pe_vc_rx *rx)
+{
+	(void)vc; (void)rx;
+	f->vc_rx_no_circuit++;
+}
+
+/* Nothing to do, and NORMAL: a closed circuit still gets every timer beat and
+ * every link bounce. Explicit rather than an empty cell, so the ignored-event
+ * counter keeps meaning "an event the spec does not connect to this state". */
+static void h_vc_idle(struct pe_fsm *f, struct pe_vc *vc,
+		      const struct pe_vc_rx *rx)
+{
+	(void)f; (void)vc; (void)rx;
+}
+
+/* ==========================================================================
+ * The VC table. [vc state][pe_event]; an empty cell is an event p. 2-14's
+ * acceptable-response table does not connect to that state -- ignored and
+ * COUNTED (f->vc_ignored_events), never guessed at. An ACK in START SENT is
+ * the clearest example: the book's table does not admit it, so this machine
+ * does not either, and the retry ladder handles the consequence.
+ * ========================================================================== */
+typedef void (*pe_vc_handler_t)(struct pe_fsm *, struct pe_vc *,
+				const struct pe_vc_rx *);
+
+static const pe_vc_handler_t
+pe_vc_table[VMS_PE_VC_STATE__COUNT][PE_EV__COUNT] = {
+	/* [CLOSED] no circuit. Only a verified channel, or the peer's own
+	 * START, brings one into being. */
+	[VMS_PE_VC_CLOSED] = {
+		[PE_EV_CHANNEL_UP]      = h_vc_channel_up,
+		[PE_EV_RX_START]        = h_vc_rx_start,      /* p. 2-12   */
+		[PE_EV_RX_SEQMSG]       = h_vc_no_circuit,
+		[PE_EV_RX_DATAGRAM]     = h_vc_no_circuit,
+		[PE_EV_RX_CREDIT]       = h_vc_no_circuit,
+		[PE_EV_TIMER_RETRANSMIT] = h_vc_idle,
+		[PE_EV_TIMER_VCFAIL]    = h_vc_idle,
+		[PE_EV_CHANNEL_DOWN]    = h_vc_idle,
+		[PE_EV_LINK_DOWN]       = h_vc_idle,
+		[PE_EV_RX_LAST_GASP]    = h_vc_idle,
+		[PE_EV_SHUTDOWN]        = h_vc_idle,
+	},
+
+	/* [START SENT] our START is out. p. 2-14's acceptable responses are
+	 * START (both ends started: send a STACK) and STACK (open, ack). */
+	[VMS_PE_VC_START_SENT] = {
+		[PE_EV_RX_START]        = h_vc_rx_start,
+		[PE_EV_RX_STACK]        = h_vc_rx_stack,
+		[PE_EV_RX_SEQMSG]       = h_vc_no_circuit,
+		[PE_EV_RX_DATAGRAM]     = h_vc_no_circuit,
+		[PE_EV_RX_CREDIT]       = h_vc_no_circuit,
+		[PE_EV_TIMER_RETRANSMIT] = h_vc_form_retry,
+		[PE_EV_TIMER_VCFAIL]    = h_vc_vcfail,
+		[PE_EV_CHANNEL_DOWN]    = h_vc_channel_down,
+		[PE_EV_LINK_DOWN]       = h_vc_channel_down,
+		[PE_EV_RX_LAST_GASP]    = h_vc_peer_gone,
+		[PE_EV_SHUTDOWN]        = h_vc_shutdown,
+	},
+
+	/* [STACK SENT] the book's START RECEIVED: our STACK is out and the
+	 * circuit opens on an ACK, on a STACK, or -- p. 2-16 -- on any packet
+	 * that requires a circuit at all. */
+	[VMS_PE_VC_STACK_SENT] = {
+		[PE_EV_RX_ACK]          = h_vc_rx_ack,
+		[PE_EV_RX_STACK]        = h_vc_rx_stack,
+		[PE_EV_RX_START]        = h_vc_rx_start,      /* re-send STACK */
+		[PE_EV_RX_SEQMSG]       = h_vc_implied_open,  /* p. 2-16   */
+		[PE_EV_RX_DATAGRAM]     = h_vc_implied_open,
+		[PE_EV_RX_CREDIT]       = h_vc_implied_open,
+		[PE_EV_TIMER_RETRANSMIT] = h_vc_form_retry,
+		[PE_EV_TIMER_VCFAIL]    = h_vc_vcfail,
+		[PE_EV_CHANNEL_DOWN]    = h_vc_channel_down,
+		[PE_EV_LINK_DOWN]       = h_vc_channel_down,
+		[PE_EV_RX_LAST_GASP]    = h_vc_peer_gone,
+		[PE_EV_SHUTDOWN]        = h_vc_shutdown,
+	},
+
+	/* [OPEN] the sequenced conversation. */
+	[VMS_PE_VC_OPEN] = {
+		[PE_EV_RX_SEQMSG]       = h_vc_rx_seqmsg,
+		[PE_EV_RX_CREDIT]       = h_vc_rx_credit,
+		[PE_EV_RX_DATAGRAM]     = h_vc_rx_datagram,
+		[PE_EV_RX_START]        = h_vc_rx_start,   /* peer re-formed */
+		[PE_EV_RX_STACK]        = h_vc_rx_stack,   /* re-ack, stay   */
+		[PE_EV_RX_ACK]          = h_vc_rx_ack,     /* p. 2-12 discard */
+		[PE_EV_TIMER_RETRANSMIT] = h_vc_retransmit,
+		[PE_EV_TIMER_VCFAIL]    = h_vc_vcfail,
+		[PE_EV_CHANNEL_DOWN]    = h_vc_channel_down,
+		[PE_EV_LINK_DOWN]       = h_vc_channel_down,
+		[PE_EV_RX_LAST_GASP]    = h_vc_peer_gone,
+		[PE_EV_SHUTDOWN]        = h_vc_shutdown,
+	},
+};
+
+static void pe_vc_dispatch(struct pe_fsm *f, struct pe_vc *vc,
+			   enum pe_event ev, const struct pe_vc_rx *rx)
+{
+	pe_vc_handler_t h;
+
+	if (f == NULL || vc == NULL || !vc->in_use)
+		return;
+	if ((unsigned)ev >= (unsigned)PE_EV__COUNT)
+		return;
+	if ((unsigned)vc->state >= (unsigned)VMS_PE_VC_STATE__COUNT)
+		return;
+
+	h = pe_vc_table[vc->state][ev];
+	if (h == NULL) {
+		f->vc_ignored_events++;
+		return;
+	}
+	h(f, vc, rx);
+}
+
+/* ==========================================================================
+ * Receiving an SCS frame: classify, decode, dispatch
+ * ========================================================================== */
+
+/* Which pe_event a received SCS frame IS. The CODEC decides, through the
+ * class gate and the typed parse -- this file reads no byte offset. The 0x41
+ * class splits three ways on what the frame itself carries: the 46-byte
+ * shape is the ACK, and the config round (SS4(g): 0 -> 1 -> 2) tells START
+ * from STACK. */
+static enum pe_event vc_event_for(const struct pe_vc_rx *rx)
+{
+	if (rx->is_start) {
+		if (rx->start.is_ack)
+			return PE_EV_RX_ACK;
+		return rx->start.config_round == 0u ? PE_EV_RX_START
+						    : PE_EV_RX_STACK;
+	}
+	if (rx->fi->cls == (uint8_t)VMS_FCLS_SCS_CREDIT)
+		return PE_EV_RX_CREDIT;
+	return PE_EV_RX_SEQMSG;
+}
+
+/* Decode an SCS frame into the shared view. Each field comes from the class's
+ * own typed accessor and is left absent when the class does not ground it. */
+static int vc_parse(const uint8_t *frame, uint32_t len,
+		    const struct vms_frame_info *fi, struct pe_vc_rx *rx)
+{
+	struct vms_scs_credit_frame credit;
+	uint32_t remote = 0u, local = 0u;
+	uint16_t recv_ack = 0u, send_seq = 0u;
+
+	rx->fi = fi;
+	rx->frame = frame;
+	rx->len = len;
+
+	if (fi->cls == (uint8_t)VMS_FCLS_SCS_START) {
+		if (vms_scs_start_parse(frame, len, fi, &rx->start) !=
+		    VMS_CODEC_OK)
+			return -1;
+		rx->is_start = 1u;
+		rx->recv_ack = rx->start.recv_ack;
+		rx->send_seq = rx->start.send_seq;
+		return 0;
+	}
+	if (fi->cls == (uint8_t)VMS_FCLS_SCS_CREDIT) {
+		if (vms_scs_credit_parse(frame, len, fi, &credit) !=
+		    VMS_CODEC_OK)
+			return -1;
+		/* SS4(h)(3): a credit-return acknowledges and carries no
+		 * sequence of its own (send_seq == 0, 622/622). */
+		rx->recv_ack = credit.acked_seq;
+		return 0;
+	}
+	if (vms_scs_seq(frame, len, fi, &recv_ack, &send_seq) != VMS_CODEC_OK)
+		return -1;
+	rx->recv_ack = recv_ack;
+	rx->send_seq = send_seq;
+	rx->has_seq = 1u;
+	if (vms_scs_conid(frame, len, fi, &remote, &local) == VMS_CODEC_OK) {
+		/* The Con.ID the SENDER addressed: on a received frame that is
+		 * the "remote" field, which holds THIS node's own connection
+		 * identifier as the peer knows it (SS4(d), GROUNDED against
+		 * SDA SHOW CONNECTIONS). */
+		rx->dst_conid = (vms_conid_t)remote;
+		rx->conid_valid = 1u;
+	}
+	return 0;
+}
+
+/*
+ * An SCS-family frame arrived. It is bound to a CIRCUIT through the CHANNEL
+ * the sending station owns -- a station this port has never heard a HELLO
+ * from has no channel, and a frame from it is counted and dropped rather
+ * than allowed to conjure a circuit out of nothing.
+ */
+static void pe_vc_rx_frame(struct pe_fsm *f, const uint8_t *frame, uint32_t len,
+			   const struct vms_frame_info *fi)
+{
+	struct vms_sca_hdr hdr;
+	struct pe_vc_rx rx;
+	struct pe_channel *ch;
+	struct pe_vc *vc;
+
+	/* No circuit table bound: this port is FC-P0.8's port, channels only.
+	 * Every SCS frame is then a frame there is no circuit to take, and it
+	 * is counted as exactly that -- not silently dropped. */
+	if (f->vc == NULL) {
+		f->vc_rx_no_circuit++;
+		return;
+	}
+	if (vms_sca_hdr_parse(frame, len, &hdr) != VMS_CODEC_OK) {
+		f->vc_rx_parse_failed++;
+		return;
+	}
+	ch = pe_fsm_channel_by_mac(f, hdr.eth_src);
+	if (ch == NULL) {
+		f->vc_rx_no_channel++;
+		return;
+	}
+	/* An SCS frame is evidence the station is alive, exactly as a HELLO is,
+	 * so it refreshes the SS4(M) listen deadline. Without this a channel
+	 * carrying a BUSY circuit would time out on its own traffic. */
+	ch->last_rx_ms = pe_now(f);
+	ch->deadline_ms = ch->last_rx_ms + pe_listen_timeout(f);
+
+	pe_bzero(&rx, (uint32_t)sizeof(rx));
+	if (vc_parse(frame, len, fi, &rx) != 0) {
+		f->vc_rx_parse_failed++;
+		return;
+	}
+
+	vc = vc_by_channel(f, (uint32_t)(ch - f->ch));
+	if (vc == NULL) {
+		/* The peer opened the conversation. Only its START may create
+		 * a circuit -- anything else is data for a circuit that does
+		 * not exist, and is counted. */
+		if (vc_event_for(&rx) != PE_EV_RX_START) {
+			f->vc_rx_no_circuit++;
+			return;
+		}
+		vc = vc_find_or_alloc(f, (uint32_t)(ch - f->ch));
+		if (vc == NULL)
+			return;
+		vc->echo_incarnation = ch->peer_incarnation;
+		vc->echo_valid = ch->peer_incarnation_valid;
+	}
+	pe_vc_dispatch(f, vc, vc_event_for(&rx), &rx);
+}
+
+/*
+ * The channel layer reached a conclusion about connectivity; the circuit on
+ * that channel has to hear it. This is the one place the two halves of the
+ * port meet, and it is a one-way street: the circuit never tells the channel
+ * anything.
+ */
+static void pe_vc_follow_channel(struct pe_fsm *f, uint32_t ch_index,
+				 enum pe_channel_action act)
+{
+	struct pe_vc *vc;
+
+	if (f->vc == NULL || act == PE_CH_ACT_NONE)
+		return;
+	if (act == PE_CH_ACT_VERIFIED) {
+		vc = vc_find_or_alloc(f, ch_index);
+		if (vc == NULL)
+			return;
+		pe_vc_dispatch(f, vc, PE_EV_CHANNEL_UP, &pe_vc_rx_none);
+		return;
+	}
+	vc = vc_by_channel(f, ch_index);
+	if (vc == NULL)
+		return;
+	pe_vc_dispatch(f, vc,
+		       act == PE_CH_ACT_DEPARTED ? PE_EV_RX_LAST_GASP
+						 : PE_EV_CHANNEL_DOWN,
+		       &pe_vc_rx_none);
+}
+
+/* ==========================================================================
+ * The VC public surface
+ * ========================================================================== */
+
+void pe_fsm_bind_vcs(struct pe_fsm *f, struct pe_vc *vcs, uint32_t n)
+{
+	if (f == NULL)
+		return;
+	f->vc = (n != 0u) ? vcs : NULL;
+	f->n_vc_slots = (vcs != NULL) ? n : 0u;
+	f->n_vcs = 0u;
+}
+
+void pe_fsm_set_upper(struct pe_fsm *f, const struct pe_upper_ops *upper)
+{
+	if (f != NULL)
+		f->upper = upper;
+}
+
+int pe_vc_addr(struct pe_fsm *f, vms_scs_sysid_t dst, struct vms_scs_addr *out)
+{
+	struct pe_vc *vc = pe_fsm_vc_by_sysid(f, dst);
+	struct pe_channel *ch;
+
+	if (vc == NULL || out == NULL)
+		return -1;
+	ch = pe_fsm_channel_at(f, vc->channel);
+	if (ch == NULL)
+		return -1;
+	pe_bzero(out, (uint32_t)sizeof(*out));
+	return vc_fill_addr(f, ch, out);
+}
+
+/*
+ * Give a caller-built sequenced frame its position on the circuit and send it.
+ *
+ * The order matters and is the "no hole in send_seq" guarantee (SS3b(1)): the
+ * frame is classified and stamped, the ring entry is taken, and ONLY THEN is
+ * send_seq advanced -- so a frame this port refuses never consumes a sequence
+ * number, and a frame the substrate refuses keeps both its number and its ring
+ * entry so the retransmit ladder fills the position rather than leaving a gap
+ * the peer would break the circuit over.
+ */
+int pe_vc_send_frame(struct pe_fsm *f, vms_scs_sysid_t dst,
+		     const uint8_t *frame, uint32_t len)
+{
+	struct vms_frame_info fi;
+	struct pe_vc_unacked *e;
+	struct pe_vc *vc;
+	uint16_t seq;
+
+	if (f == NULL || frame == NULL)
+		return PE_VC_SEND_BADFRAME;
+	vc = pe_fsm_vc_by_sysid(f, dst);
+	if (vc == NULL || vc->state != (uint8_t)VMS_PE_VC_OPEN)
+		return PE_VC_SEND_NOCIRCUIT;
+	if (len > PE_VC_FRAME_MAX)
+		return PE_VC_SEND_TOOBIG;
+	if (vms_frame_classify(frame, len, &fi) != VMS_CODEC_OK)
+		return PE_VC_SEND_BADFRAME;
+	/* p. 2-43: no credit, no message. The grant is the PEER's, read from
+	 * its formation body; this node never invents a window for itself. */
+	if (vc->send_credit == 0u) {
+		vc->send_refused_credit++;
+		return PE_VC_SEND_NOCREDIT;
+	}
+
+	seq = vc->send_seq;
+	e = vc_ring_alloc(vc);
+	if (e == NULL) {
+		vc->send_refused_ring++;
+		return PE_VC_SEND_RINGFULL;
+	}
+	pe_copy(e->frame, frame, len);
+	e->len = len;
+	e->seq = seq;
+	if (vms_scs_seq_stamp(e->frame, e->len, &fi, vc->recv_seq, seq) !=
+	    VMS_CODEC_OK) {
+		vc_ring_free(vc, e);          /* nothing was sent, nothing */
+		return PE_VC_SEND_BADFRAME;   /* was consumed              */
+	}
+
+	vc->send_seq = seq_next(seq);
+	vc->send_credit--;
+	vc->msgs_tx++;
+	e->due_ms = pe_now(f) + vc_retransmit_ms(f);
+	if (!vc->vcfail_armed)
+		vc_arm_vcfail(f, vc);
+	vc_arm(f, vc, PE_TIMER_RETRANSMIT, vc_retransmit_ms(f));
+
+	if (pe_tx_from(f, e->frame, e->len) != 0)
+		return PE_VC_SEND_TXFAIL;     /* held for the ladder */
+	return PE_VC_SEND_OK;
+}
+
+void pe_fsm_vc_timer(struct pe_fsm *f, uint32_t index)
+{
+	struct pe_vc *vc = pe_fsm_vc_at(f, index);
+
+	if (vc == NULL)
+		return;
+	pe_vc_dispatch(f, vc, PE_EV_TIMER_RETRANSMIT, &pe_vc_rx_none);
+}
+
+/*
+ * The RX_* events carry evidence -- the parsed frame that justified them --
+ * and pe_fsm_rx is the only place that evidence exists, so a bare post of one
+ * is refused rather than dispatched with an empty view. The same rule the
+ * channel half applies, for the same reason.
+ */
+static int pe_vc_event_needs_frame(enum pe_event ev)
+{
+	switch (ev) {
+	case PE_EV_RX_START:
+	case PE_EV_RX_STACK:
+	case PE_EV_RX_ACK:
+	case PE_EV_RX_SEQMSG:
+	case PE_EV_RX_CREDIT:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+void pe_fsm_vc_event(struct pe_fsm *f, uint32_t index, enum pe_event ev)
+{
+	struct pe_vc *vc = pe_fsm_vc_at(f, index);
+
+	if (vc == NULL || pe_vc_event_needs_frame(ev))
+		return;
+	pe_vc_dispatch(f, vc, ev, &pe_vc_rx_none);
+}
+
+/* Every live circuit's timer work, from the one port beat. */
+static void pe_vc_tick_all(struct pe_fsm *f)
+{
+	uint32_t i;
+
+	if (f->vc == NULL)
+		return;
+	for (i = 0; i < f->n_vcs; i++) {
+		if (f->vc[i].in_use)
+			pe_vc_dispatch(f, &f->vc[i], PE_EV_TIMER_RETRANSMIT,
+				       &pe_vc_rx_none);
+	}
+}
+
+static void pe_vc_broadcast(struct pe_fsm *f, enum pe_event ev)
+{
+	uint32_t i;
+
+	if (f->vc == NULL)
+		return;
+	for (i = 0; i < f->n_vcs; i++) {
+		if (f->vc[i].in_use)
+			pe_vc_dispatch(f, &f->vc[i], ev, &pe_vc_rx_none);
+	}
+}
+
+void pe_fsm_vc_project(const struct pe_fsm *f, const struct pe_vc *vc,
+		       struct vms_pe_vc_view *out)
+{
+	uint32_t now;
+
+	if (out == NULL)
+		return;
+	pe_bzero(out, (uint32_t)sizeof(*out));
+	if (vc == NULL || !vc->in_use)
+		return;
+
+	if (vc->peer_sysid_valid) {
+		out->peer_sysid_lo = (uint32_t)(vc->peer_sysid & 0xffffffffu);
+		out->peer_sysid_hi =
+			(uint32_t)((vc->peer_sysid >> 32) & 0xffffffffu);
+	}
+	out->state = vc->state;
+	out->send_seq = vc->send_seq;
+	out->recv_seq = vc->recv_seq;
+	/* What this node PUTS on the wire as its cumulative acknowledgement is
+	 * recv_seq itself (SS4(h)(4): "recv_ack = recv_seq"), so the two view
+	 * columns are the same executive cell read twice -- never a separate
+	 * number that could drift from what was actually sent. */
+	out->recv_ack = vc->recv_seq;
+	out->peer_recv_ack = vc->peer_recv_ack;
+	out->unacked = vc->unacked;
+	out->retransmits = vc->retransmits;
+	/* The peer's incarnation quadword, as ITS formation body carried it;
+	 * zero with no ident learned, never a placeholder. */
+	if (vc->peer_ident_valid) {
+		out->incarnation_lo =
+			(uint32_t)(vc->peer_incarnation_time & 0xffffffffu);
+		out->incarnation_hi =
+			(uint32_t)((vc->peer_incarnation_time >> 32) &
+				   0xffffffffu);
+	}
+	if (vc->vcfail_armed && f != NULL) {
+		now = pe_now(f);
+		out->timvcfail_ms_left =
+			pe_reached(now, vc->vcfail_due_ms)
+				? 0u : (vc->vcfail_due_ms - now);
+	}
+	out->credits_send = vc->send_credit;
+	out->credits_receive = vc->recv_credit;
+}
+
+static const char *const pe_vc_state_names[VMS_PE_VC_STATE__COUNT] = {
+	"CLOSED", "START SENT", "STACK SENT", "OPEN"
+};
+
+const char *pe_vc_state_name(enum vms_pe_vc_state s)
+{
+	if ((unsigned)s >= (unsigned)VMS_PE_VC_STATE__COUNT)
+		return "?";
+	return pe_vc_state_names[s];
+}
+
+const char *pe_vc_down_reason_name(enum pe_vc_down_reason r)
+{
+	switch (r) {
+	case PE_VC_DOWN_SEQ_GAP:      return "sequence gap";
+	case PE_VC_DOWN_TIMVCFAIL:    return "TIMVCFAIL";
+	case PE_VC_DOWN_CHANNEL:      return "channel lost";
+	case PE_VC_DOWN_PEER_RESTART: return "peer restarted";
+	case PE_VC_DOWN_PEER_GONE:    return "peer departed";
+	case PE_VC_DOWN_SHUTDOWN:     return "shutdown";
+	default:                      return "?";
+	}
 }
 
 /* ==========================================================================

@@ -230,6 +230,65 @@ vms_scs_seq_envelope_parse(const uint8_t *frame, uint32_t len,
 			   const struct vms_frame_info *fi,
 			   struct vms_scs_seq_envelope *out);
 
+/*
+ * abs 44 -- the send_seq MIRROR every sequenced message carries.
+ *
+ * GROUNDED (spec sec 4(h)(4)): "for every sequenced message (0x41/0x5b/0x4b)
+ * the sender stamps send_seq at [20:22] mirrored byte-exact at [30:32]" --
+ * 17,758/17,758 such frames in the full run, 0 residuals. The START builders
+ * above already write it (VMS_OFF_START_SEQ_MIRROR is the same offset); the
+ * two entries below are what lets the VC engine (FC-P1.2) stamp the same
+ * three transport fields into a frame ANOTHER layer built.
+ */
+#define VMS_OFF_SCS_SEQ_MIRROR  VMS_OFF_START_SEQ_MIRROR  /* abs 44 */
+
+/* The smallest frame that can carry the mirror at abs 44..45. Every grounded
+ * sequenced class (SCA content 58/62/66/86/94/110/190 -> wire 72..204) clears
+ * it by a wide margin; the check exists so a truncated frame is REFUSED rather
+ * than stamped past its end. */
+#define VMS_SCS_SEQ_STAMP_MIN_LEN (VMS_OFF_SCS_SEQ_MIRROR + 2u)
+
+/*
+ * vms_scs_seq_stamp - write the TRANSPORT's three sequence fields into a
+ * sequenced frame some other layer built: recv_ack at abs 32, send_seq at
+ * abs 34 and its mirror at abs 44 (spec sec 4(h)(4)).
+ *
+ * WHY THIS EXISTS. Sequencing is a property of the VIRTUAL CIRCUIT, not of
+ * the SYSAP message riding it (*VAXcluster Principles* pp. 2-30/2-31: the
+ * ordered unit is the port pair, and one send_seq/recv_seq pair spans every
+ * connection multiplexed on the circuit -- spec sec 4(O.14)). So the layer
+ * that knows the Con.ID pair and the SYSAP body builds the frame, and the
+ * port stamps the sequence position into it at the moment it goes out -- and
+ * stamps it AGAIN, with the same send_seq and a FRESH recv_ack, on every
+ * retransmission. Doing it any other way is how a send_seq hole appears.
+ *
+ * Class-gated on VMS_FCAP_SEQ and on a msgtype in {0x4b, 0x5b, 0x7b}: a 0x41
+ * START has its own builder (its abs 36 is the incarnation, not a counter)
+ * and a 0x48 credit-return carries send_seq == 0 by GROUNDED rule (622/622)
+ * and must never be stamped with one. Returns VMS_CODEC_E_CLASS for either,
+ * VMS_CODEC_E_SHORT for a frame that cannot hold abs 44..45.
+ */
+vms_codec_status_t vms_scs_seq_stamp(uint8_t *frame, uint32_t len,
+				     const struct vms_frame_info *fi,
+				     uint16_t recv_ack, uint16_t send_seq);
+
+/*
+ * vms_scs_seq_mark_retransmit - re-mark an already-built sequenced frame as
+ * the RETRANSMIT form: msgtype 0x4b/0x5b -> 0x7b at abs 30.
+ *
+ * GROUNDED as the wire's own retransmit marking: spec sec 4(h) heads the
+ * directory class "(opcode 0x5b, 0x7b is its retransmit)", sec 4(h)(1b)
+ * observes a real VAX dialogue where "one carries an explicit 0x7b retransmit
+ * marker", and sec 4(O.19) measures a real coordinator retransmitting its
+ * op-8 as "mt16 0x4b->0x7b". The frame is otherwise UNCHANGED -- same
+ * send_seq, same body -- which is the whole point: a retransmit is not a new
+ * message.
+ *
+ * Idempotent (0x7b stays 0x7b). Class-gated exactly as vms_scs_seq_stamp.
+ */
+vms_codec_status_t vms_scs_seq_mark_retransmit(uint8_t *frame, uint32_t len,
+					       const struct vms_frame_info *fi);
+
 /* ------------------------------------------------------------------ *
  * Credit-return short -- spec sec 4(h)(3), opcode 0x48, 41-byte content
  * ------------------------------------------------------------------ */

@@ -154,7 +154,11 @@ static struct fake_pe_decoded fake_pe_decode(const struct fake_pe *f,
 }
 
 /* How many emitted frames carry `word` at abs 30. The b2 count of the reference
- * joiner is ZERO, and that is a headline assertion of the replay test. */
+ * joiner is ZERO, and that is a headline assertion of the replay test.
+ * (`unused`: this header serves several test TUs and each uses a subset --
+ * FC-P1.2's circuit tests drive the SCS family and never count a HELLO word.) */
+static unsigned fake_pe_count_word(const struct fake_pe *f, uint8_t word)
+	__attribute__((unused));
 static unsigned fake_pe_count_word(const struct fake_pe *f, uint8_t word)
 {
 	unsigned i, n = 0;
@@ -247,6 +251,10 @@ static uint32_t fake_peer_hello(const struct fake_peer *p,
 /* A SS4(c) boot-time SOLICIT to the cluster group: a satellite asking to be
  * served a system disk. The only devspec length the spec grounds is 9
  * ("_$2$DUA0:"), so that is the one used. */
+static uint32_t fake_peer_solicit(const struct fake_peer *p,
+				  const uint8_t group[VMS_ETH_ADDR_LEN],
+				  uint8_t *out, uint32_t cap)
+	__attribute__((unused));
 static uint32_t fake_peer_solicit(const struct fake_peer *p,
 				  const uint8_t group[VMS_ETH_ADDR_LEN],
 				  uint8_t *out, uint32_t cap)

@@ -1087,6 +1087,57 @@ static void test_dlm_grant_response_needs_masking(void)
           "grant: the MASKED category is DLM -- what the grant-detect must test");
 }
 
+/*
+ * The cat-0x82 op-01 GRANT that OVMX-the-master returns for an inbound cross-node
+ * $ENQ (scs_member_build_dlm_enq_response, vms-16c faithful DLM) MUST carry the
+ * GRANTED mode (1-5) at body[30] -- VAX asks for PR/CR and, if it reads NL there,
+ * treats the lock as unsatisfied and re-requests forever (the measured 34/sec
+ * retransmit storm). This locks the exact regression that caused it: the master
+ * handle is a 16-bit field at body[28:30]; a wider le32 write pushed the handle's
+ * high zero byte into body[30] and, for every handle < 0x10000, silently clobbered
+ * the mode to NL. Assert the handle DOES NOT reach the mode byte, and the granted
+ * mode survives -- with a small handle, the two conditions can only both hold if
+ * the handle write stays 16-bit.
+ */
+static void test_dlm_enq_grant_honors_mode(void)
+{
+    struct scs_member_params mp;
+    joiner_params(&mp, 20, 18, 0x0040, 0x0041); /* sysap send/ack counters */
+
+    /* A valid inbound cat-0x02 op-01 request to answer: PR (mode 3) at body[30]. */
+    uint8_t req[SCS_MEMBER_FRAME_LEN];
+    make_frame(req, golden_op01);
+    req[72 + 8] = 0x02;   /* category: DLM */
+    req[72 + 9] = 0x01;   /* opcode: ENQ  */
+    req[72 + 30] = 0x03;  /* requested mode PR -- what VAX asks for */
+
+    uint8_t out[SCS_MEMBER_FRAME_LEN];
+    /* A held-mode grant: master handle 0x0328 (< 0x10000, high bytes zero -- the
+     * exact shape that made the le32 write clobber the mode), granted mode PR. */
+    CHECK(scs_member_build_dlm_enq_response(&mp, req, sizeof(req), 0x0328u, 0x03u,
+                                            out) == 0, "build_dlm_enq_response ok");
+    const uint8_t *b = out + 72;
+    CHECK(b[8] == 0x82, "grant: cat 0x02 | 0x80 response bit");
+    CHECK(b[9] == 0x01, "grant: opcode 0x01 echoed");
+    CHECK((uint16_t)(b[28] | (b[29] << 8)) == 0x0328u,
+          "grant: 16-bit master handle at body[28:30]");
+    CHECK(b[30] == 0x03,
+          "grant: GRANTED mode PR at body[30] -- NOT clobbered to NL by the handle write");
+    CHECK(b[31] == 0x00, "grant: body[31] is the mode field's zero high byte");
+
+    /* A pure-NL grant carries no held handle and NL at the mode byte (as VAX1's). */
+    CHECK(scs_member_build_dlm_enq_response(&mp, req, sizeof(req), 0x0500u, 0x00u,
+                                            out) == 0, "build_dlm_enq_response NL ok");
+    CHECK((uint16_t)(b[28] | (b[29] << 8)) == 0x0000u,
+          "NL grant: no dangling master handle at body[28:30]");
+    CHECK(b[30] == 0x00, "NL grant: mode@30 is NL");
+
+    CHECK(scs_member_build_dlm_enq_response(NULL, req, sizeof(req), 1, 1, out) == -1,
+          "build_dlm_enq_response NULL p guarded");
+    CHECK(scs_member_build_dlm_enq_response(&mp, req, 8, 1, 1, out) == -1,
+          "build_dlm_enq_response short req guarded");
+}
+
 int main(void)
 {
     test_op14_byte_exact();
@@ -1111,6 +1162,7 @@ int main(void)
     test_dlm_completion_holds_nothing();
     test_dlm_reg_enq_carries_real_values();
     test_dlm_grant_response_needs_masking();
+    test_dlm_enq_grant_honors_mode();
 
     if (failures == 0) {
         printf("test_scs_member: ALL PASSED\n");

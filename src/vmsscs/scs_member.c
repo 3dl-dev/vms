@@ -710,8 +710,13 @@ int scs_member_build_dlm_response(const struct scs_member_params *p,
  *   body[4:8]  the requester's req_lkid, ECHOED unchanged.
  *   body[8]    category | 0x80 (granted bit); body[9] opcode 0x01 echoed.
  *   body[12:16] 0x00030001 granted status (request carried 0x00020001).
- *   body[28:32] master lock handle: OVMX's real master_lkid for a HELD mode, 0 for
- *              pure-NL (the rebuild grant is NL -> 0, matching VAX1's NL grants).
+ *   body[28:30] master lock handle (16-bit): OVMX's real master_lkid for a HELD
+ *              mode, 0 for pure-NL (the rebuild grant is NL -> 0, as VAX1's NL grants).
+ *   body[30]   GRANTED mode (1-5), honored from the inbound request -- NOT NL. The
+ *              handle field is 16-bit precisely so it does not overrun into this byte:
+ *              writing it as le32 put the handle's high zero byte here and clobbered
+ *              every grant to NL, so VAX (asking PR/CR) was never satisfied and
+ *              re-requested forever (the measured retransmit storm, vms-16c).
  *   body[32:36] 0x00fe0000 master-state marker (low bits = record index).
  *   resname + L1 region ECHOED. INV-6: every rewritten field is OVMX's REAL lock
  *   state (from the executive grant), never fabricated; body[28]=0 for NL carries
@@ -740,11 +745,18 @@ int scs_member_build_dlm_enq_response(const struct scs_member_params *p,
     put_le16(obody + 2, p->sysap_ack_msg);       /* SYSAP ack-msg# */
     obody[8] = (uint8_t)(rbody[8] | SCS_MEMBER_RESPONSE_BIT); /* 0x02 -> 0x82 granted */
     put_le32(obody + 12, 0x00030001u);           /* granted status */
-    /* body[20:56] rewritten from REAL master state (not echoed): */
+    /* body[20:56] rewritten from REAL master state (not echoed). The master handle
+     * is a 16-bit field at body[28:30]: writing it as le32 overran into the MODE
+     * byte at body[30] and, for every handle < 0x10000, the handle's high zero byte
+     * clobbered the mode to NL -- the exact "grant carries NL, VAX never satisfied,
+     * re-requests forever" retransmit storm the re-fire measured (vms-16c). Keep the
+     * handle in [28:30]; carry the GRANTED mode (1-5, honored from the request) at
+     * [30]. Both are OVMX's REAL executive lock state (INV-6). */
     if (granted_mode > 0)                         /* held mode -> the real master handle */
-        put_le32(obody + 28, master_lkid);
+        put_le16(obody + 28, (uint16_t)master_lkid);
     else
-        put_le32(obody + 28, 0u);                 /* pure-NL grant: no held handle (as VAX1) */
+        put_le16(obody + 28, 0u);                 /* pure-NL grant: no held handle (as VAX1) */
+    put_le16(obody + 30, (uint16_t)granted_mode); /* GRANTED mode at [30]; [31]=0 */
     put_le32(obody + 32, 0x00fe0000u);            /* master-state marker */
     return 0;
 }

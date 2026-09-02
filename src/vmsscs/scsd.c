@@ -6797,7 +6797,15 @@ static int cm_send_dlm_completion_one(int sock, int ifindex, struct peer_state *
                                       uint32_t req_lkid, uint32_t master_lkid)
 {
     if (ps->cm_local_conid == 0 || master_lkid == 0 || req_lkid == 0) {
-        return 0;   /* no real recorded grant -> send NOTHING (honest omission) */
+        /* no real recorded grant -> send NOTHING (honest omission, INV-6) */
+        if (req_lkid != 0 && master_lkid == 0) {
+            log_ts(stdout);
+            printf(" SCSD-I-DLMNOCOMMIT, honest omission: executive holds no master"
+                   " handle for req_lkid=0x%08x -- no op-04/op-03 sent (INV-6)\n",
+                   req_lkid);
+            fflush(stdout);
+        }
+        return 0;
     }
     int sent = 0;
     /* op 0x04 completion, then op 0x03 COMMIT, in order on the send_seq stream. */
@@ -7643,18 +7651,21 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                      * a bare `== CAT_DLM` never matches a grant (regression:
                      * test_dlm_grant_response_needs_masking). */
                     (mv.category & 0x7f) == SCS_MEMBER_CAT_DLM &&
-                    mv.opcode == 0x01 && ps->dlm_reg_sent) {
+                    mv.opcode == 0x01) {
                     /*
-                     * The master (VAX1, the directory node for OVMX's file locks) has
-                     * GRANTED one of OVMX's own standing-lock registrations. Per the
-                     * conductor's named VAX<->VAX chain: the grant echoes OVMX's
-                     * requester lkid at body[24:28] and carries VAX1's granted MASTER
-                     * handle at body[28:30] (16-bit, named resources). RECORD the grant
-                     * in OVMX's executive (grant_recv -> a real origin record), read the
-                     * master handle BACK from the executive (GETLKI), and complete ONLY
-                     * from that real state -- send NOTHING if the executive holds no
-                     * grant (honest omission, INV-6; a placeholder is what bugchecked
-                     * VAX1 in fc8540ae). Per grant-back, so 48 grants -> 48 completions.
+                     * A cat-82 op-01 GRANT-BACK: the master (VAX1) granted one of OVMX's
+                     * own standing-lock registrations. Per the conductor's named
+                     * VAX<->VAX chain the grant echoes OVMX's requester lkid at
+                     * body[24:28] and carries the master's granted handle at body[28:30]
+                     * (16-bit, named resources). RECORD it in OVMX's executive
+                     * (grant_recv -> a real origin record), read the master handle BACK
+                     * (GETLKI), and complete ONLY from that real state (honest omission
+                     * otherwise, INV-6 -- a placeholder is what bugchecked VAX1 in
+                     * fc8540ae). The DISCRIMINATOR is the non-zero echoed reqlkid (a real
+                     * registration; the NL drain echoes 0), NOT ps->dlm_reg_sent -- a
+                     * mid-storm transition re-open can clear that flag before the
+                     * grant-back lands, silently dropping the completion (vms-16c). The
+                     * DLMGRANTBACK/DLMGRANTREC logs pin exactly where the chain breaks.
                      */
                     const uint8_t *gb = buf + 72;
                     uint32_t ovmx_reqlkid = (uint32_t)gb[24] | ((uint32_t)gb[25] << 8) |
@@ -7664,11 +7675,21 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                     uint32_t master_csid  = (uint32_t)peer_node_number(ps);
                     char gres[32];
                     uint8_t grl = dlm_op0d_resname(gb, gres);
+                    log_ts(stdout);
+                    printf(" SCSD-I-DLMGRANTBACK, cat-82 op-01 grant-back (res='%.*s'"
+                           " reqlkid=0x%08x master=0x%04x reg_sent=%d)\n",
+                           (int)grl, gres, ovmx_reqlkid, vax_master, ps->dlm_reg_sent);
+                    fflush(stdout);
                     if (ovmx_reqlkid != 0 && vax_master != 0) {
-                        (void)cm_dlm_record_grant_from_master(ovmx_reqlkid, vax_master,
-                                                              master_csid, gmode,
-                                                              grl > 0 ? gres : NULL);
+                        uint32_t st_gr = cm_dlm_record_grant_from_master(ovmx_reqlkid,
+                                             vax_master, master_csid, gmode,
+                                             grl > 0 ? gres : NULL);
                         uint32_t exec_master = cm_dlm_getlki_master_lkid(ovmx_reqlkid);
+                        log_ts(stdout);
+                        printf(" SCSD-I-DLMGRANTREC, recorded grant in executive"
+                               " (grant_recv=0x%08x getlki_master=0x%08x)\n",
+                               st_gr, exec_master);
+                        fflush(stdout);
                         cm_send_dlm_completion_one(rx->sock, (int)rx->ifindex, ps,
                                                    rx->our_hw_mac, rx->our_src_logical,
                                                    ovmx_reqlkid, exec_master);

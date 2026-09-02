@@ -22,6 +22,7 @@ add_library(cluster_host_codec STATIC
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_vc.c
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_dlm.c
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_scs.c
+    ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_cm.c
 )
 target_include_directories(cluster_host_codec PUBLIC
     ${CMAKE_SOURCE_DIR}/src/kernel-core
@@ -104,6 +105,7 @@ endfunction()
 cluster_host_cnxman_test(test_cnxman_csb   test_cnxman_csb.c)
 cluster_host_cnxman_test(test_cnxman_recnx test_cnxman_recnx.c)
 cluster_host_test(test_codec_scs        test_codec_scs.c)
+cluster_host_test(test_codec_cm         test_codec_cm.c)
 
 # ---- FC-P0.1: the pure inter-layer headers must be host-includable ----
 # Everything below builds with -DOVMX_CLUSTER_HOST, which routes vms_cluster.h

@@ -102,6 +102,8 @@ SRCS="$KMOD/vms_netbsd.c \
       $KMOD/vms_socket_netbsd.c \
       $KMOD/vms_lan_netbsd.c \
       $PROBE/cluster_seam.c \
+      $CORE/vms_cluster_fork.c \
+      $CORE/vms_cluster_fork_bind.c \
       $CORE/vms_pe.c \
       $CORE/vms_cnxman_csb.c \
       $CORE/vms_cnxman_recnx_fsm.c"

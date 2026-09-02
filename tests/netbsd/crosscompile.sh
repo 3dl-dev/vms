@@ -127,6 +127,8 @@ SRCS=(
     "$CORE/vms_proctab.c"
     "$CORE/vms_lock.c"
     "$CORE/vms_lnm.c"
+    "$CORE/vms_cluster_fork.c"
+    "$CORE/vms_cluster_fork_bind.c"
     "$CORE/vms_pe.c"
 )
 

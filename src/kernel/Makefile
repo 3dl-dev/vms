@@ -77,6 +77,13 @@ obj-m := vms.o
 # cross-compile gates from this commit, and the same two sources are what the
 # host unit tests and the rung-2 simulator link. Their consumer, the connection
 # manager's glue, arrives with FC-P3.8.
+#
+# vms_cluster_fork.c + vms_cluster_fork_bind.c (FC-P0.5) are the cluster FORK
+# CONTEXT -- the one kthread per node that runs every line of cluster protocol,
+# and its substrate binding. Same rule as vms_pe.c: BOTH are in the NetBSD
+# kmodule's SRCS from their first commit, because the split is pure-vs-glue and
+# not Linux-vs-NetBSD. The _bind TU is the ONLY file in the stack that names
+# exec_kthread_* or exec_timer_* (design SS3.2.2's leak table).
 vms-y := vms_module.o \
          ../kernel-core/vms_access.o \
          ../kernel-core/vms_ast.o \
@@ -87,6 +94,8 @@ vms-y := vms_module.o \
          ../kernel-core/vms_lnm.o \
          ../kernel-core/vms_lock.o \
          ../kernel-core/vms_mbx.o \
+         ../kernel-core/vms_cluster_fork.o \
+         ../kernel-core/vms_cluster_fork_bind.o \
          ../kernel-core/vms_pe.o \
          ../kernel-core/vms_cnxman_csb.o \
          ../kernel-core/vms_cnxman_recnx_fsm.o \

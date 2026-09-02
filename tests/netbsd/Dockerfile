@@ -180,6 +180,13 @@ COPY src/kernel-netbsd/vms_lan_netbsd.c      /netbsd/guest-src/kmod/vms_lan_netb
 # docs memory netbsd-module-srcs-four-places), so this staging line is NOT
 # gate-verified and must be kept in sync by hand.
 COPY tests/netbsd/guest/cluster_seam.c       /netbsd/guest-src/kmod/cluster_seam.c
+# --- FC-P0.5: the cluster FORK CONTEXT. vms_cluster_fork.c is the pure queue/
+# dispatch half (no substrate type at all) and vms_cluster_fork_bind.c binds its
+# ops to exec_kthread_*/exec_timer_*/exec_mutex_*; both are in the NetBSD
+# module's SRCS from their first commit, so the in-guest build needs them. ---
+COPY src/kernel-core/vms_cluster_fork.c      /netbsd/guest-src/kernel-core/vms_cluster_fork.c
+COPY src/kernel-core/vms_cluster_fork.h      /netbsd/guest-src/kernel-core/vms_cluster_fork.h
+COPY src/kernel-core/vms_cluster_fork_bind.c /netbsd/guest-src/kernel-core/vms_cluster_fork_bind.c
 # --- probe/: the userspace tools + the NetBSD transport seam ---
 COPY tests/netbsd/guest/vmsprobe.c           /netbsd/guest-src/probe/vmsprobe.c
 COPY tests/netbsd/guest/vmseflag.c           /netbsd/guest-src/probe/vmseflag.c

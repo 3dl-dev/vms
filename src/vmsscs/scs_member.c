@@ -878,6 +878,60 @@ int scs_member_build_dlm_commit(const struct scs_member_params *p, uint32_t lkid
 }
 
 /*
+ * build_dlm_completion_res - the REACTIVE-registration completion (vms-655): op-04
+ * then op-03 that CLOSE a resource OVMX registered to a non-coordinator member and
+ * had GRANTED (cat-82 op-01). Unlike build_dlm_completion (own-lock, handle-only,
+ * no resname), this carries {handle@body[20:28], resname@body[48], constant status
+ * @body[12]} -- the measured reference layout. HONEST BY CONSTRUCTION: hlo/hhi are
+ * the handle OVMX RECEIVED in the grant (echoed, never synthesized from a lock DB
+ * OVMX lacks); resname is the granted resource's name; everything else is the
+ * structural template constant. If the reference's completion needs a handle NOT in
+ * the grant, this echo will simply not match -- we never fabricate one (INV-6).
+ */
+static int build_dlm_completion_res(const struct scs_member_params *p,
+                                    const uint8_t struct40[40],
+                                    uint32_t hlo, uint32_t hhi,
+                                    const char *resname, uint8_t namelen,
+                                    uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    if (p == NULL || out == NULL || resname == NULL) {
+        return -1;
+    }
+    if (namelen == 0 || namelen > 31) {
+        return -1;
+    }
+    build_common(p, member_config_tmpl, SCS_MEMBER_ENV_CREDIT_CONFIG, out);
+    uint8_t *body = out + 72;
+    memset(body + 4, 0, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF - 4);
+    put_le16(body + 0, p->sysap_send_msg);
+    put_le16(body + 2, p->sysap_ack_msg);
+    put_le16(body + 4, p->txn);
+    put_le16(body + 6, p->checksum);
+    memcpy(body + 8, struct40, 40);        /* body[8:48] structural template (constant status @[12]) */
+    put_le32(body + 20, hlo);              /* body[20:24] the handle OVMX RECEIVED in the grant */
+    put_le32(body + 24, hhi);              /* body[24:28] second word of the received handle */
+    body[47] = namelen;                    /* resource-name length (op-03/op-04 CARRY the resname) */
+    memcpy(body + 48, resname, namelen);
+    return 0;
+}
+
+int scs_member_build_dlm_op04_res(const struct scs_member_params *p,
+                                  uint32_t hlo, uint32_t hhi,
+                                  const char *resname, uint8_t namelen,
+                                  uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    return build_dlm_completion_res(p, dlm_op04_struct, hlo, hhi, resname, namelen, out);
+}
+
+int scs_member_build_dlm_commit_res(const struct scs_member_params *p,
+                                    uint32_t hlo, uint32_t hhi,
+                                    const char *resname, uint8_t namelen,
+                                    uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    return build_dlm_completion_res(p, dlm_commit_struct, hlo, hhi, resname, namelen, out);
+}
+
+/*
  * scs_member_build_dlm_reg_enq - originate the cat 0x02 op 0x01 ENQ that
  * REGISTERS one of OVMX's REAL standing system locks in the cluster directory,
  * driven to the COORDINATOR during a rebuild (Layer 3 of faithful cluster DLM

@@ -166,6 +166,11 @@ int main(int argc, char **argv)
     int ready[2], go[2];
     pid_t pids[N_WORKERS];
     int all_workers_ok = 1;
+    /* FC-P4.7: the standing F11B$v<label> resource name, captured once at
+     * $MOUNT time (below) so the DISMOUNT-releases-it proof at the end of
+     * main() can re-check the SAME resource without re-deriving it. */
+    char vresnam[32];
+    int have_vresnam = 0;
 
     setvbuf(stdout, NULL, _IOLBF, 0);
     signal(SIGPIPE, SIG_IGN);
@@ -210,8 +215,8 @@ int main(int argc, char **argv)
         check($VMS_STATUS_SUCCESS(st) && gv.mounted && gv.volnam[0] != '\0',
               "read the mounted volume label for the standing-lock proof");
         if ($VMS_STATUS_SUCCESS(st) && gv.volnam[0] != '\0') {
-            char vresnam[32];
             snprintf(vresnam, sizeof(vresnam), "F11B$v%s", gv.volnam);
+            have_vresnam = 1;
             uint32_t found = 0, lc = 0, dc = 0, mc = 0, ilm = 0, ng = 0, rh = 0;
             uint32_t rst = vms_kif_get_resmaster(vresnam, &found, &lc, &dc, &mc,
                                                  &ilm, &ng, &rh);
@@ -364,6 +369,29 @@ int main(int argc, char **argv)
             strncpy(d.name, nm, VMS_ACP_NAME_SIZE - 1);
             (void)vms_kif_acp_fileop(&d);
         }
+    }
+
+    /*
+     * FC-P4.7 done-condition (design §3.6, plan): DISMOUNT must RELEASE the
+     * standing F11B$v<label> volume lock, not just MOUNT hold it. Release
+     * this suite's own file channel first (DISMOUNT is refused SS$_DEVALLOC
+     * while any channel is still assigned -- vms_ioctl_acp_dmount), then
+     * DISMOUNT and re-read GET_RESMASTER on the SAME resource name captured
+     * at $MOUNT time above: a real lock-manager READ, never a fabricated
+     * absence (INV-6). Every other acp_* suite already dismounts VDA0: at
+     * its own end and the next suite's own $MOUNT is idempotent, so this
+     * does not disturb suite ordering.
+     */
+    (void)vms_kif_dassgn(chan);
+    st = vms_kif_acp_dmount(ODS2_UNIT);
+    check($VMS_STATUS_SUCCESS(st), "$DISMOUNT of " ODS2_UNIT " succeeds (no channels assigned)");
+    if (have_vresnam) {
+        uint32_t found = 0, lc = 0, dc = 0, mc = 0, ilm = 0, ng = 0, rh = 0;
+        uint32_t rst = vms_kif_get_resmaster(vresnam, &found, &lc, &dc, &mc,
+                                             &ilm, &ng, &rh);
+        check($VMS_STATUS_SUCCESS(rst) && (!found || ng == 0),
+              "the STANDING F11B$v<label> volume lock is RELEASED after $DISMOUNT "
+              "(vms-25e: GET_RESMASTER no longer reports it granted)");
     }
 
     printf("=== test_syssvc_acp_dlm: %d passed, %d failed ===\n", pass, fail);

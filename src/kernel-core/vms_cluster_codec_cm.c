@@ -612,6 +612,274 @@ vms_codec_status_t vms_cm_barrier_build(const struct vms_cm_link *l,
 	return VMS_CODEC_OK;
 }
 
+/* ------------------------------------------------------------------ *
+ * sec 5b: THE COORDINATOR'S ORIGINATIONS (FC-P3.12)
+ *
+ * The contract -- grounded placements only, explicit zeros everywhere else,
+ * and the list of fields honestly omitted -- is in the header's sec 5b block.
+ * ------------------------------------------------------------------ */
+
+/*
+ * Lay down the link and a zeroed body, then the SYSAP envelope. Every
+ * originating builder below starts here, so there is exactly one place where
+ * "the tail is zero, not a template" is true or false.
+ *
+ * `txn` is passed separately from `own` because the two notification opcodes
+ * (0x0a, 0x0c) force it to zero (sec 4(p)) while every other origination
+ * carries the connection manager's real transaction id.
+ */
+static vms_codec_status_t cm_originate_begin(const struct vms_cm_link *l,
+					     const struct vms_cm_envelope *own,
+					     uint8_t opcode, uint16_t txn,
+					     uint8_t *out_frame, uint32_t cap,
+					     vms_wire_buf_t *w)
+{
+	vms_codec_status_t st;
+	uint32_t link_written = 0;
+
+	if (l == (const struct vms_cm_link *)0 ||
+	    own == (const struct vms_cm_envelope *)0 ||
+	    out_frame == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+
+	st = vms_cm_link_build(l, out_frame, cap, &link_written);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_buf_init(w, out_frame, cap);
+	if (!vms_wire_buf_ok(w))
+		return VMS_CODEC_E_INVAL;
+
+	vms_wire_put_zero(w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN);
+	vms_wire_put_le16(w, VMS_OFF_CM_SEND_MSG, own->send_msg);
+	vms_wire_put_le16(w, VMS_OFF_CM_ACK_MSG, own->ack_msg);
+	vms_wire_put_le16(w, VMS_OFF_CM_TXN, txn);
+	vms_wire_put_le16(w, VMS_OFF_CM_TOKEN, own->token);
+	vms_wire_put_u8(w, VMS_OFF_CM_CATEGORY, VMS_CM_CAT_CONFIG);
+	vms_wire_put_u8(w, VMS_OFF_CM_OPCODE, opcode);
+	return VMS_CODEC_OK;
+}
+
+static vms_codec_status_t cm_originate_end(vms_wire_buf_t *w, uint32_t *written)
+{
+	if (!vms_wire_buf_ok(w))
+		return w->err;
+	if (written != (uint32_t *)0)
+		*written = VMS_CM_FRAME_LEN;
+	return VMS_CODEC_OK;
+}
+
+/* body[16:18] = the role slot and the transition class, the pair sec 4(r)
+ * calls the tag. Written together because a transition-open, a GO and a relay
+ * differ ONLY in these two bytes and the opcode. */
+static void cm_put_tag(vms_wire_buf_t *w, uint8_t role, uint8_t cls)
+{
+	vms_wire_put_u8(w, VMS_OFF_CM_ROLE, role);
+	vms_wire_put_u8(w, VMS_OFF_CM_CLASS, cls);
+}
+
+/* sec 4(r)'s class -> transition-open opcode pairing, with zero residuals.
+ * Returns 0 for a class this project has never seen open a transition. */
+static uint8_t cm_open_opcode_of_class(uint8_t cls)
+{
+	switch (cls) {
+	case VMS_CM_CLASS_ADD:    return VMS_CM_OP_XITION_ADD;    /* tag 0x0240 */
+	case VMS_CM_CLASS_REMOVE: return VMS_CM_OP_XITION_REM;    /* tag 0x0340 */
+	case VMS_CM_CLASS_DEPART: return VMS_CM_OP_DEPART_XITION; /* tag 0x0440 */
+	default:                  return 0u;
+	}
+}
+
+vms_codec_status_t vms_cm_xition_open_build(const struct vms_cm_link *l,
+					    const struct vms_cm_envelope *own,
+					    uint8_t tr_class, uint32_t epoch,
+					    uint8_t bitmap, int has_bitmap,
+					    uint8_t *out_frame, uint32_t cap,
+					    uint32_t *written)
+{
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+	uint8_t opcode = cm_open_opcode_of_class(tr_class);
+
+	if (opcode == 0u)
+		return VMS_CODEC_E_CLASS;
+	/* Only the class-0x02 ADD open carries a nodemap (sec 4(p)). Asking for
+	 * one on any other class is refused rather than dropped, so a caller
+	 * cannot believe it published a membership map that never went out. */
+	if (has_bitmap && tr_class != VMS_CM_CLASS_ADD)
+		return VMS_CODEC_E_INVAL;
+
+	st = cm_originate_begin(l, own, opcode, own->txn, out_frame, cap, &w);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_put_le32(&w, VMS_OFF_CM_EPOCH, epoch);
+	cm_put_tag(&w, VMS_CM_ROLE_XITION, tr_class);
+	if (has_bitmap)
+		vms_wire_put_u8(&w, VMS_OFF_CM_BITMAP, bitmap);
+
+	return cm_originate_end(&w, written);
+}
+
+vms_codec_status_t vms_cm_go_build(const struct vms_cm_link *l,
+				   const struct vms_cm_envelope *own,
+				   uint8_t tr_class, uint32_t epoch,
+				   uint8_t *out_frame, uint32_t cap,
+				   uint32_t *written)
+{
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+
+	if (cm_open_opcode_of_class(tr_class) == 0u)
+		return VMS_CODEC_E_CLASS;
+
+	/* txn = 0: sec 4(p) "Notifications carry txn=0 and are NEVER answered". */
+	st = cm_originate_begin(l, own, VMS_CM_OP_XITION_GO, 0u, out_frame, cap,
+				&w);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_put_le32(&w, VMS_OFF_CM_EPOCH, epoch);
+	cm_put_tag(&w, VMS_CM_ROLE_GO, tr_class);
+
+	return cm_originate_end(&w, written);
+}
+
+vms_codec_status_t vms_cm_release_build(const struct vms_cm_link *l,
+					const struct vms_cm_envelope *own,
+					uint32_t epoch, uint32_t step,
+					uint8_t *out_frame, uint32_t cap,
+					uint32_t *written)
+{
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+
+	/* Sec 4(p): the indices run 1...12 with no gaps. Step 0 is not a
+	 * barrier step in any capture. */
+	if (step == 0u)
+		return VMS_CODEC_E_INVAL;
+
+	st = cm_originate_begin(l, own, VMS_CM_OP_BARRIER_REL, 0u, out_frame,
+				cap, &w);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_put_le32(&w, VMS_OFF_CM_EPOCH, epoch);
+	/* body[16:20] is a plain LE u32 step index on op 0x0b/0x0c -- it
+	 * ALIASES the role/class byte pair, so no tag is written here. */
+	vms_wire_put_le32(&w, VMS_OFF_CM_STEP, step);
+
+	return cm_originate_end(&w, written);
+}
+
+vms_codec_status_t vms_cm_relay_build(const struct vms_cm_link *l,
+				      const struct vms_cm_envelope *own,
+				      uint8_t tr_class, uint32_t epoch,
+				      uint8_t *out_frame, uint32_t cap,
+				      uint32_t *written)
+{
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+
+	if (cm_open_opcode_of_class(tr_class) == 0u)
+		return VMS_CODEC_E_CLASS;
+
+	st = cm_originate_begin(l, own, VMS_CM_OP_RELAY, own->txn, out_frame,
+				cap, &w);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_put_le32(&w, VMS_OFF_CM_EPOCH, epoch);
+	cm_put_tag(&w, VMS_CM_ROLE_RELAY, tr_class);
+	/* The subject of the relay is NOT written: no capture isolates a system
+	 * identity in this body (header sec 5b). Its bytes stay zero and
+	 * FC-P3.12 counts the omission. */
+
+	return cm_originate_end(&w, written);
+}
+
+vms_codec_status_t vms_cm_commit_build(const struct vms_cm_link *l,
+				       const struct vms_cm_envelope *own,
+				       uint8_t tr_class, uint32_t epoch,
+				       uint8_t *out_frame, uint32_t cap,
+				       uint32_t *written)
+{
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+
+	if (cm_open_opcode_of_class(tr_class) == 0u)
+		return VMS_CODEC_E_CLASS;
+
+	st = cm_originate_begin(l, own, VMS_CM_OP_COMMIT, own->txn, out_frame,
+				cap, &w);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_put_le32(&w, VMS_OFF_CM_EPOCH, epoch);
+	cm_put_tag(&w, VMS_CM_ROLE_COMMIT, tr_class);
+
+	return cm_originate_end(&w, written);
+}
+
+vms_codec_status_t vms_cm_step_ack_build(const struct vms_cm_link *l,
+					 const uint8_t *req_frame,
+					 uint32_t req_len,
+					 const struct vms_cm_envelope *own,
+					 uint8_t *out_frame, uint32_t cap,
+					 uint32_t *written)
+{
+	struct vms_frame_info fi;
+	struct vms_cm_envelope req_env;
+	vms_wire_view_t rv;
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+	uint8_t body[VMS_CM_BODY_LEN];
+	uint32_t link_written = 0;
+
+	if (l == (const struct vms_cm_link *)0 ||
+	    req_frame == (const uint8_t *)0 ||
+	    own == (const struct vms_cm_envelope *)0 ||
+	    out_frame == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+
+	st = cm_classify_request(req_frame, req_len, &fi);
+	if (st != VMS_CODEC_OK)
+		return st;
+	st = vms_cm_envelope_parse(req_frame, req_len, &fi, &req_env);
+	if (st != VMS_CODEC_OK)
+		return st;
+	st = cm_recipe_allowed(&req_env, VMS_CM_RECIPE_STEP_ACK);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	st = vms_cm_link_build(l, out_frame, cap, &link_written);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	/* Verbatim echo of the member's own step request first -- txn and token
+	 * ride back untouched, which is the whole correlation. */
+	vms_wire_view_init(&rv, req_frame, req_len);
+	vms_wire_get_bytes(&rv, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, body);
+	if (!vms_wire_view_ok(&rv))
+		return rv.err;
+
+	vms_wire_buf_init(&w, out_frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, body);
+
+	vms_wire_put_le16(&w, VMS_OFF_CM_SEND_MSG, own->send_msg);
+	vms_wire_put_le16(&w, VMS_OFF_CM_ACK_MSG, own->ack_msg);
+	vms_wire_put_u8(&w, VMS_OFF_CM_CATEGORY,
+			vms_wire_response_category(req_env.category));
+	/* The role-slot mutation. See the header's sec 5b entry for why this
+	 * follows sec 4(r)'s 26-capture census rather than the step-index
+	 * reading of the same offset, and why it is safe either way. */
+	vms_wire_put_u8(&w, VMS_OFF_CM_ROLE, VMS_CM_ROLE_RELAY);
+
+	return cm_originate_end(&w, written);
+}
+
 vms_codec_status_t vms_cm_ack_build(const struct vms_cm_link *l,
 				    const struct vms_cm_envelope *own,
 				    uint8_t *out_frame, uint32_t cap,
@@ -693,6 +961,18 @@ static const struct vms_wire_allow_entry g_cm_allow_rows[] = {
 	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_CM_CAT_CONFIG, VMS_CM_OP_RELAY,
 	  VMS_WIRE_ACT_RESPOND, VMS_CM_RECIPE_ECHO,
 	  "cluster-protocol-spec.md sec 4(r): op 0x12 coordinator relay" },
+
+	/* The COORDINATOR's side of the barrier (FC-P3.12): op 0x0b arrives
+	 * from a member reporting step N, and sec 4(p)'s barrier table has the
+	 * coordinator answering it with 0x81/0x0b -- "the coordinator's ack,
+	 * NOT the release". A member whose step is never acknowledged keeps
+	 * retransmitting it. Its own recipe, not the ECHO family's: sec 4(r)'s
+	 * role census puts 0x10 at body[16] on this response and does not list
+	 * op 0x0b in its body[18] mutation table. */
+	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_CM_CAT_CONFIG, VMS_CM_OP_BARRIER,
+	  VMS_WIRE_ACT_RESPOND, VMS_CM_RECIPE_STEP_ACK,
+	  "cluster-protocol-spec.md sec 4(p) barrier table + sec 4(r) role "
+	  "census: the coordinator's 0x81/0x0b step acknowledgement" },
 
 	/* cat 0x02: op 0x0d is the ONLY grounded opcode during a join
 	 * (sec 4(p): "the ONLY cat-0x02 opcode that occurs during a join"). */

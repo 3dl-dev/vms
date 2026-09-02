@@ -189,6 +189,20 @@ COPY src/kernel-core/vms_cluster_codec.c     /netbsd/guest-src/kernel-core/vms_c
 COPY src/kernel-core/vms_cluster_codec.h     /netbsd/guest-src/kernel-core/vms_cluster_codec.h
 COPY src/kernel-core/vms_cluster_codec_hello.c /netbsd/guest-src/kernel-core/vms_cluster_codec_hello.c
 COPY src/kernel-core/vms_cluster_codec_hello.h /netbsd/guest-src/kernel-core/vms_cluster_codec_hello.h
+# --- FC-P3.1 / FC-P3.5 / FC-P3.12: the VMS$VAXcluster SYSAP codec, the
+# state-transition barrier's PARTICIPANT side, the p. 7-42 Phase 2 commit both
+# halves share, and the COORDINATOR side. All are already in the NetBSD
+# module's SRCS (src/kernel-netbsd/Makefile) -- the codec and the barrier were
+# listed there without being staged here, which tests/netbsd/check_guest_payload.sh
+# reports; these lines close that and keep the new pair from repeating it. ---
+COPY src/kernel-core/vms_cluster_codec_cm.c  /netbsd/guest-src/kernel-core/vms_cluster_codec_cm.c
+COPY src/kernel-core/vms_cluster_codec_cm.h  /netbsd/guest-src/kernel-core/vms_cluster_codec_cm.h
+COPY src/kernel-core/vms_cnxman_phase2.c     /netbsd/guest-src/kernel-core/vms_cnxman_phase2.c
+COPY src/kernel-core/vms_cnxman_phase2.h     /netbsd/guest-src/kernel-core/vms_cnxman_phase2.h
+COPY src/kernel-core/vms_cnxman_barrier_fsm.c /netbsd/guest-src/kernel-core/vms_cnxman_barrier_fsm.c
+COPY src/kernel-core/vms_cnxman_barrier_fsm.h /netbsd/guest-src/kernel-core/vms_cnxman_barrier_fsm.h
+COPY src/kernel-core/vms_cnxman_coord_fsm.c  /netbsd/guest-src/kernel-core/vms_cnxman_coord_fsm.c
+COPY src/kernel-core/vms_cnxman_coord_fsm.h  /netbsd/guest-src/kernel-core/vms_cnxman_coord_fsm.h
 COPY src/kernel-netbsd/vms_lan_netbsd.c      /netbsd/guest-src/kmod/vms_lan_netbsd.c
 # FC-P0.4: cluster_seam.c (the R3 substrate-contract self-test for the cluster
 # seam, called from vms_netbsd.c's MODULE_CMD_INIT) lives under

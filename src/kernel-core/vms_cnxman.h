@@ -64,6 +64,14 @@ enum cnxman_timer {
 	CNXMAN_TIMER_JOIN      = 1,  /* a join step awaiting its answer */
 	CNXMAN_TIMER_BARRIER   = 2,  /* barrier-step watchdog: INSTRUMENT ONLY --
 				      * the spec says do not time a slow step out */
+	/*
+	 * The coordinator's collision back-off (FC-P3.12). Book p. 7-32: a
+	 * connection manager that cannot get the coordinator lock because
+	 * another already holds it "backs off a random short interval" and
+	 * re-evaluates. It is a decision timer, not a protocol timeout: nothing
+	 * on the wire expires when it fires.
+	 */
+	CNXMAN_TIMER_COORD     = 3,
 	CNXMAN_TIMER__COUNT
 };
 
@@ -121,6 +129,23 @@ enum cnxman_event {
 	CNXMAN_EV_TIMER_JOIN    = 14,
 	CNXMAN_EV_TIMER_BARRIER = 15,
 	CNXMAN_EV_SHUTDOWN      = 16,  /* orderly stop; emits the last gasp */
+
+	/*
+	 * A RESPONSE to a request THIS node originated (FC-P3.12). Added rather
+	 * than folded into one of the request events above, because a request
+	 * and its answer are different facts: an inbound op-0x12 is another
+	 * connection manager relaying ITS transition at us (a collision), while
+	 * a 0x81/0x12 is a member confirming connectivity for OURS (the commit
+	 * gate, wire spec SS4(O.31)). Stretching one cell to carry both would
+	 * misname the collision in every transcript.
+	 *
+	 * The coordinator drives a strict sequence and has exactly ONE class of
+	 * request outstanding per state (relay -> commit -> Phase 1 open ->
+	 * barrier), so the [state] half of its table is what says WHICH answer
+	 * this is; the handler then verifies the opcode really is the one that
+	 * state is waiting on and COUNTS it as out-of-order otherwise.
+	 */
+	CNXMAN_EV_RX_TR_ACK     = 17,
 
 	CNXMAN_EV__COUNT
 };

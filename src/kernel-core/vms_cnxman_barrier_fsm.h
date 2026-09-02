@@ -113,6 +113,7 @@
 #include "vms_cluster.h"
 #include "vms_cnxman.h"
 #include "vms_cnxman_csb.h"
+#include "vms_cnxman_phase2.h"
 #include "vms_dlm_scs.h"
 #include "vms_cluster_codec_cm.h"
 
@@ -141,7 +142,7 @@
  * `m_above_grounded` and logged, so a real >4-member transition arrives as
  * evidence rather than as a mystery.
  */
-#define CNXMAN_BARRIER_M_GROUNDED 4u
+#define CNXMAN_BARRIER_M_GROUNDED CNXMAN_PHASE2_M_GROUNDED
 
 /*
  * The watchdog cadence. NOT a protocol timeout and NOT a published value: it is

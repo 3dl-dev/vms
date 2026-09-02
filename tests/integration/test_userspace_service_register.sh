@@ -1662,23 +1662,34 @@ while IFS="$(printf '\t')" read -r pfile pkind pname pitem pproof; do
             printf '     executive cannot show that an answer came from it.\n' >> "$WORK/errors"
             continue ;;
     esac
-    if ! grep -q 'fork[[:space:]]*(' "$SRC_ROOT/$pproof" 2>/dev/null; then
-        printf 'EXECUTIVE DECLARATION WHOSE PROOF IS SINGLE-PROCESS: %s (%s)\n' "$pname" "$pfile" >> "$WORK/errors"
-        printf '  -> proof=%s never forks, so it cannot be an A-writes/B-reads proof.\n' "$pproof" >> "$WORK/errors"
-        printf '     A per-process fake can pass every single-process test perfectly.\n' >> "$WORK/errors"
-        continue
-    fi
-    # (4) THE PROOF CALLS THE SERVICE. Read with the scanner used on the
-    # product, so comments are gone before anything is matched: the ROUND-1
-    # buy-off was `/* also covers sys$gettim */`, and a mention in a comment is
-    # not a proof about anything. Cached per proof file -- the same proof backs
-    # every service of a facility.
+    # The proof's CALL SET, read with the same scanner used on the product:
+    # strip.awk removes comments and scan.awk skips string/char literals, so
+    # only a genuine `identifier(` in code becomes a call edge. Both the
+    # single-process check (3) and the calls-the-service check (4) read this,
+    # never the raw source. Cached per proof file -- the same proof backs every
+    # service of a facility.
     _pk=$(printf '%s' "$pproof" | tr -c 'A-Za-z0-9' '_')
     if [ ! -f "$WORK/callcache/$_pk" ]; then
         awk -f "$WORK/strip.awk" "$SRC_ROOT/$pproof" \
             | awk -v SRC="$pproof" -f "$WORK/scan.awk" \
             | awk -F'\t' '$1 == "C" { print $4 }' | sort -u > "$WORK/callcache/$_pk"
     fi
+    # (3) THE PROOF FORKS A SECOND PROCESS. A genuine fork()/vfork() CALL, read
+    # from the same comment-and-string-stripped call set as (4) below -- NOT a
+    # raw `grep 'fork('` over the source, which a comment or a string literal
+    # containing the four characters "fork(" spoofs. vms-b5b's setvbuf comment
+    # held the literal `fork()` and silently satisfied this gate; the raw grep
+    # also matched substrings like `vfork(` inside an unrelated token. Reading
+    # the scanner's call edges fixes both (vms-f28).
+    if ! grep -qxE 'v?fork' "$WORK/callcache/$_pk"; then
+        printf 'EXECUTIVE DECLARATION WHOSE PROOF IS SINGLE-PROCESS: %s (%s)\n' "$pname" "$pfile" >> "$WORK/errors"
+        printf '  -> proof=%s never forks, so it cannot be an A-writes/B-reads proof.\n' "$pproof" >> "$WORK/errors"
+        printf '     A per-process fake can pass every single-process test perfectly.\n' >> "$WORK/errors"
+        continue
+    fi
+    # (4) THE PROOF CALLS THE SERVICE. The ROUND-1 buy-off was
+    # `/* also covers sys$gettim */`, and a mention in a comment is not a proof
+    # about anything (vms-ecf).
     if ! grep -qxF "$pname" "$WORK/callcache/$_pk"; then
         printf 'EXECUTIVE DECLARATION WHOSE PROOF NEVER CALLS THE SERVICE: %s (%s)\n' "$pname" "$pfile" >> "$WORK/errors"
         printf '  -> proof=%s never calls %s in code (comments stripped), so it is not a\n' "$pproof" "$pname" >> "$WORK/errors"

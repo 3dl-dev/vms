@@ -61,6 +61,13 @@ obj-m := vms.o
 # vms_bg.c and for the SAME reason stays Linux-only for now (see its own
 # header): a host-socket-coupled per-process handle list not yet ported to
 # the exec_list_*/exec_lock_* seam. It is NOT in the NetBSD kmodule's SRCS.
+#
+# vms_pe.c (FC-P0.1) is the OPPOSITE case, and it is the point of the cluster
+# seam: the LAN port layer of the executive-resident VMScluster stack reaches the
+# wire ONLY through exec_kbackend.h families SS14..SS18, so the SAME source is in
+# the NetBSD kmodule's SRCS from its first commit -- no "Linux first, NetBSD
+# later", which is exactly what produced vms_l2.c's NetBSD hole. Its include
+# discipline is enforced by tools/ci/cluster_core_includes_gate.sh.
 vms-y := vms_module.o \
          ../kernel-core/vms_access.o \
          ../kernel-core/vms_ast.o \
@@ -71,6 +78,7 @@ vms-y := vms_module.o \
          ../kernel-core/vms_lnm.o \
          ../kernel-core/vms_lock.o \
          ../kernel-core/vms_mbx.o \
+         ../kernel-core/vms_pe.o \
          ../kernel-core/vms_proctab.o \
          ../kernel-core/vmsfs_acp.o \
          ../vmsfs/ods2/ods2_reader.o \

@@ -73,6 +73,21 @@ ONLY, and is added to the kernel lists by the first item that consumes it
 in-module (e.g. FC-P3.4/P6.3). **Do not re-add a codec object already present**
 (dedup on merge — the integrator has hit this on every FSM merge).
 
+### E8. op-06 MEMBERSHIP record layout is un-isolated → blocks CSID hand-off (raised by FC-P3.12 → LAB)
+A coordinated ADD completes the barrier but **never tells the joiner the CSID it
+was assigned**, because the op-0x06 MEMBERSHIP burst's `{SCSSYSTEMID, incarnation,
+CSID}` record has no isolated byte offset (spec §4(j) RE gaps). FC-P3.12 does NOT
+originate op-06 (originating an ungrounded record would be fabrication). Consequence:
+- **Blocks FC-P3.3's CSID-learning** (the join learns its CSID by matching its own
+  SCSSYSTEMID in membership records — needs the op-06 layout).
+- **Blocks FC-P3.10's R2** ("forms and adds a 4th").
+- **Needs a LAB capture** of the op-06 MEMBERSHIP record to isolate the layout —
+  this is exactly the oracle/spec-capture the lab lane owns. Until then, FC-P3.3
+  must advertise/log honestly and NOT invent the record. Also un-isolated (P3.12
+  divergences 2–4, all emit explicit zeros, none faked): op-0x05 rebuild burst +
+  originating cat-02 op-0d (FC-P5.5 owns the push), Phase-1 proposal cells
+  (proposed quorum/CEVOTES/qdisk/foundation/founder/rebuild-type).
+
 ### E6. Process rundown must post the proxy release to the master (raised by FC-P4.4 → owned by FC-P4.6)
 `lock_teardown_locked` (process rundown) tears a proxy LKB down LOCALLY without
 posting the release to the master. `$DEQ` posts correctly (outside all locks),

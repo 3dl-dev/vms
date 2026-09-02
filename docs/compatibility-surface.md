@@ -11,10 +11,10 @@
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 25 | | real | 279 |
+| ✅ verified | 25 | | real | 280 |
 | 🟢 implemented | 245 | | n/a | 93 |
 | 🟡 partial | 46 | | advisory | 43 |
-| 🟠 stub | 20 | | facade-risk | 16 |
+| 🟠 stub | 20 | | facade-risk | 15 |
 | 🔵 designed | 0 | |  |  |
 | ⬜ absent | 95 | |  |  |
 
@@ -25,7 +25,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
 - **387 committed** — **270 met** (implemented/verified), 45 in progress (partial), 72 not started (absent/stub/designed).
-- ⚠ **14 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
+- ⚠ **13 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 8 out · 27 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 
 _These are counts against an enumerable commitment list, deliberately not a percentage of VMS. If a surface is later ruled into V1, it joins the denominator at whatever status it actually has — cataloguing more of VMS makes the picture look less complete, never more._
@@ -34,7 +34,7 @@ _These are counts against an enumerable commitment list, deliberately not a perc
 
 _The C source-compatibility surface: descriptors, status codes, system services, RTL, condition handling, RMS programmatic API._
 
-`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠⬜⬜⬜⬜⬜`  —  207 surfaces catalogued (137 met · 16 in progress · 54 not started) · V1: 198 committed, 137 met · ⚠ 11 facade-risk
+`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠⬜⬜⬜⬜⬜`  —  207 surfaces catalogued (137 met · 16 in progress · 54 not started) · V1: 198 committed, 137 met · ⚠ 10 facade-risk
 
 ### chf — Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND)
 <sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS Programming Concepts Manual — Condition Handling; OpenVMS RTL LIB$ Manual · reviewed 2026-08-31</sub>
@@ -403,10 +403,10 @@ VMS ships ~10 memory-management services; OVMX declares 9. SYS$CRETVA/ DELTVA/EX
 ### sys-process — SYS$ Process Control
 <sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS System Services Reference Manual — Process Control Services · reviewed 2026-08-31</sub>
 
-VMS ships ~25 process-control services; OVMX declares 14 (all in sys_process.c now — the routines moved out of sys_misc.c). CREPRC/DELPRC/HIBER/EXIT are real and executive-backed: $CREPRC genuinely fork()+execve()s and registers the child in the executive process table with inherited identity, handing back the executive-assigned VMS PID; $DELPRC resolves its target through the executive (by prcnam within the caller's UIC group, or by VMS PID) before terminating. WAKE routes through the executive (vms_kif_wake) by PID or self. FORCEX/SUSPND/ RESUME now resolve their target through the executive the same way DELPRC does (by prcnam or VMS PID, or self when none), authorize a cross-process signal by GROUP/WORLD, and deliver the signal to the resolved Linux pid — SS$_NONEXPR for a process the executive does not carry, never a raw kill() on a VMS pid cast as a Linux pid (vms-904). WAKE still does not resolve prcnam-by-name (documented gap). SETPRI discards BOTH pidadr and prcnam and always changes the CALLER's priority while returning success (facade-risk). SYS$CANCEL is a literal no-op returning SS$_NORMAL (facade-risk). SYS$SETPRN and SYS$PROCESS_SCAN are absent.
+VMS ships ~25 process-control services; OVMX declares 14 (all in sys_process.c now — the routines moved out of sys_misc.c). CREPRC/DELPRC/HIBER/EXIT are real and executive-backed: $CREPRC genuinely fork()+execve()s and registers the child in the executive process table with inherited identity, handing back the executive-assigned VMS PID; $DELPRC resolves its target through the executive (by prcnam within the caller's UIC group, or by VMS PID) before terminating. WAKE routes through the executive (vms_kif_wake) by PID or self. FORCEX/SUSPND/ RESUME now resolve their target through the executive the same way DELPRC does (by prcnam or VMS PID, or self when none), authorize a cross-process signal by GROUP/WORLD, and deliver the signal to the resolved Linux pid — SS$_NONEXPR for a process the executive does not carry, never a raw kill() on a VMS pid cast as a Linux pid (vms-904). WAKE still does not resolve prcnam-by-name (documented gap). SETPRI now resolves its target through the executive the same way DELPRC does (by prcnam or VMS PID, or self when none), authorizes GROUP/WORLD, and applies the priority to the resolved Linux pid -- SS$_NONEXPR for an absent target, never a silent change of the CALLER's own priority for any target (vms-dff7). SYS$CANCEL is a literal no-op returning SS$_NORMAL (facade-risk). SYS$SETPRN and SYS$PROCESS_SCAN are absent.
 
 
-<sub>13 items · 9 met · 0 in progress · 4 not started · ⚠ 2 facade-risk</sub>
+<sub>13 items · 9 met · 0 in progress · 4 not started · ⚠ 1 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -418,7 +418,7 @@ VMS ships ~25 process-control services; OVMX declares 14 (all in sys_process.c n
 | 🟢 | `sys$suspnd` | routine | Suspend a process | implemented | real | in | `src/libvms/syssvc/sys_process.c` — target resolved through the executive by prcnam or VMS PID (like $DELPRC), or self when none; authorized GROUP/WORLD for another process; SIGSTOP to the resolved Linux pid; SS$_NONEXPR for an absent target (vms-904) |
 | 🟢 | `sys$resume` | routine | Resume a suspended process | implemented | real | in | `src/libvms/syssvc/sys_process.c` — target resolved through the executive by prcnam or VMS PID (like $DELPRC), or self when none; SIGCONT to the resolved Linux pid; SS$_NONEXPR for an absent target (vms-904) |
 | 🟢 | `sys$forcex` | routine | Force a process to exit | implemented | real | in | `src/libvms/syssvc/sys_process.c` — sys$exit on the caller when no target; otherwise target resolved through the executive by prcnam or VMS PID (like $DELPRC), authorized GROUP/WORLD; SIGUSR1 to the resolved Linux pid; SS$_NONEXPR for an absent target (vms-904) |
-| 🟢⚠ | `sys$setpri` | routine | Set process scheduling priority | implemented | facade-risk | in | `src/libvms/syssvc/sys_process.c` — discards BOTH pidadr and prcnam; always sets the CALLER's priority (getpriority/setpriority on self) yet returns success for any target |
+| 🟢 | `sys$setpri` | routine | Set process scheduling priority | implemented | real | in | `src/libvms/syssvc/sys_process.c` — target resolved through the executive by prcnam (caller's UIC group) or VMS PID (like $DELPRC), or self when none; authorized GROUP/WORLD for another process; the VMS-priority<->Linux-nice map is applied to the RESOLVED target's Linux pid, SS$_NONEXPR for an absent target (vms-dff7). Was facade-risk: discarded pidadr/prcnam and set the CALLER's priority for any target. |
 | 🟠⚠ | `sys$cancel` | routine | Cancel all I/O on all channels of the calling process | stub | facade-risk | in | `src/libvms/syssvc/sys_process.c` — literal no-op, returns SS$_NORMAL unconditionally |
 | ⬜ | `sys$setprn` | routine | Set the calling process's name | absent | n/a | in | no $SETPRN service; only an internal vms_kif_setprn used by $CREPRC to stamp the child name |
 | ⬜ | `sys$process_scan` | routine | Scan for processes matching selection criteria | absent | n/a | in |  |
@@ -1256,7 +1256,6 @@ Surfaces that report success without doing the real work, or fake shared state p
 | `sys$purgws` | sys-memory | stub | `src/libvms/syssvc/sys_memory.c` — validates args and returns SS$_NORMAL; nothing done |
 | `sys$lkwset` | sys-memory | stub | `src/libvms/syssvc/sys_memory.c` — kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done |
 | `sys$ulwset` | sys-memory | stub | `src/libvms/syssvc/sys_memory.c` — kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done |
-| `sys$setpri` | sys-process | implemented | `src/libvms/syssvc/sys_process.c` — discards BOTH pidadr and prcnam; always sets the CALLER's priority (getpriority/setpriority on self) yet returns success for any target |
 | `sys$cancel` | sys-process | stub | `src/libvms/syssvc/sys_process.c` — literal no-op, returns SS$_NORMAL unconditionally |
 | `sysuaf$pwd_expired` | sysuaf | absent | `src/libvms/include/uaidef.h:154` — Bit defined (uaidef.h:154), still ZERO readers — no password-expiration or login-limit enforcement. A stale/expired password logs in normally. The only remaining sysuaf login-flag facade after vms-c8fa. |
 | `utilities$sort` | utilities | partial | `src/vmsdcl/dcl_cmd_misc.c` — Whole-line qsort only; no /KEY field-based sort. No companion MERGE utility. |

@@ -128,9 +128,13 @@
  *     authorization as sys$suspnd; SS$_NONEXPR for an absent target (vms-904).
  * OVMX-LOCAL: sys$resume -- SIGCONT to the resolved Linux pid, same shape as
  *     sys$suspnd's SIGSTOP.
- * OVMX-USERSPACE: sys$setpri (vms-pt1) -- getpriority/setpriority on the
- *     CALLING process; pidadr as well as prcnam is discarded, so it cannot
- *     change any other process's priority however it is invoked.
+ * OVMX-PARTIAL: sys$setpri (vms-pt1) -- exec: the target is RESOLVED in the
+ *     executive (prcnam / VMS pid / self) and authorized (GROUP/WORLD for
+ *     another process) the same way sys$delprc and sys$forcex resolve; a
+ *     process the executive does not carry is SS$_NONEXPR, no longer a silent
+ *     success that changed the CALLER's own priority (vms-dff7).
+ * OVMX-LOCAL: sys$setpri -- the VMS-priority<->Linux-nice mapping and the
+ *     getpriority/setpriority applied to the resolved Linux pid are local.
  * OVMX-USERSPACE: sys$cancel (vms-pt1) -- returns SS$_NORMAL without doing
  *     anything; there is no executive I/O queue to cancel against.
  */
@@ -1334,20 +1338,32 @@ uint32_t sys$dclexh(void *desblk) {
  * a different process needs WORLD (any group) or GROUP|WORLD (same group),
  * matching sys$delprc and OpenVMS's $FORCEX/$SUSPND/$RESUME privilege model.
  */
-static uint32_t signal_target_process(const uint32_t *pidadr,
-                                      const struct dsc$descriptor_s *prcnam,
-                                      int sig) {
-    struct vms_procinfo target, self_info;
+/*
+ * resolve_control_target - resolve a process-control target the executive way
+ * (by name within the caller's UIC group, by VMS pid, or self when neither) and
+ * authorize touching it: self is always permitted; a different process needs
+ * WORLD (any group) or GROUP|WORLD (same group), matching sys$delprc and
+ * OpenVMS's $FORCEX/$SUSPND/$RESUME/$SETPRI privilege model. Fills *target with
+ * the resolved procinfo -- including the target's REAL Linux pid. Returns the
+ * executive's SS$_NONEXPR when no such process exists, SS$_NOPRIV when the
+ * caller is not privileged to touch another process, else SS$_NORMAL. Shared by
+ * every by-VMS-pid control service so none can mis-cast a VMS pid onto a Linux
+ * pid or fake success for a target it never resolved (vms-904 / vms-dff7).
+ */
+static uint32_t resolve_control_target(const uint32_t *pidadr,
+                                       const struct dsc$descriptor_s *prcnam,
+                                       struct vms_procinfo *target) {
+    struct vms_procinfo self_info;
     uint32_t status;
 
     if (prcnam && prcnam->dsc$a_pointer && prcnam->dsc$w_length > 0) {
         char key[VMS_PRCNAM_XFER];
         dsc$strncpy(key, prcnam, sizeof(key));
-        status = vms_kif_getjpi_prcnam(key, &target);
+        status = vms_kif_getjpi_prcnam(key, target);
     } else if (pidadr && *pidadr != 0) {
-        status = vms_kif_getjpi_pid(*pidadr, &target);
+        status = vms_kif_getjpi_pid(*pidadr, target);
     } else {
-        status = vms_kif_getjpi_self(&target);
+        status = vms_kif_getjpi_self(target);
     }
     if (!(status & 1))
         return status;
@@ -1356,13 +1372,23 @@ static uint32_t signal_target_process(const uint32_t *pidadr,
     if (!(status & 1))
         return status;
 
-    if (target.vms_pid != self_info.vms_pid) {
-        int same_group = ((target.uic >> 16) == (self_info.uic >> 16));
+    if (target->vms_pid != self_info.vms_pid) {
+        int same_group = ((target->uic >> 16) == (self_info.uic >> 16));
         uint64_t authorized = self_info.cur_privs &
             (same_group ? (PRV$M_GROUP | PRV$M_WORLD) : PRV$M_WORLD);
         if (!authorized)
             return SS$_NOPRIV;
     }
+    return SS$_NORMAL;
+}
+
+static uint32_t signal_target_process(const uint32_t *pidadr,
+                                      const struct dsc$descriptor_s *prcnam,
+                                      int sig) {
+    struct vms_procinfo target;
+    uint32_t status = resolve_control_target(pidadr, prcnam, &target);
+    if (!(status & 1))
+        return status;
 
     /* A race where the target exits between resolution and this kill() is
      * reported the way VMS reports "not there any more": SS$_NONEXPR. */
@@ -1445,33 +1471,39 @@ uint32_t sys$setpri(const uint32_t *pidadr,
                     const struct dsc$descriptor_s *prcnam,
                     uint32_t pri,
                     uint32_t *prvpri) {
-    (void)pidadr;
-    (void)prcnam;
+    struct vms_procinfo target;
+    uint32_t status;
 
-    /* Clamp VMS priority to valid range (0-31) */
+    /* Clamp VMS priority to the valid range (0-31). */
     if (pri > 31) pri = 31;
 
-    /* Get current priority if caller wants it */
+    /* Resolve + authorize the target through the executive the SAME way
+     * $DELPRC/$FORCEX do -- no longer (void)pidadr/(void)prcnam and silently set
+     * the CALLER's own priority while reporting success for any target. A
+     * process the executive does not carry is the honest SS$_NONEXPR; another
+     * process the caller may not touch is SS$_NOPRIV (vms-dff7). */
+    status = resolve_control_target(pidadr, prcnam, &target);
+    if (!(status & 1))
+        return status;
+
+    /* The target's PRIOR base priority, from ITS Linux nice, for prvpri. */
     if (prvpri) {
         errno = 0;
-        int current_nice = getpriority(PRIO_PROCESS, 0);
+        int current_nice = getpriority(PRIO_PROCESS, (id_t)target.linux_pid);
         if (errno != 0) current_nice = 0;
-
-        /* Convert Linux nice (-20 to 19) back to VMS priority (31 to 0) */
+        /* Convert Linux nice (-20 to 19) back to VMS priority (31 to 0). */
         *prvpri = (uint32_t)(19 - current_nice);
         if (*prvpri > 31) *prvpri = 31;
     }
 
-    /* Map VMS priority to Linux nice value:
-     * VMS 31 -> nice -20 (highest priority)
-     * VMS 0  -> nice 19 (lowest priority)
-     */
+    /* Map VMS priority to Linux nice value and apply it to the RESOLVED target:
+     *   VMS 31 -> nice -20 (highest priority); VMS 0 -> nice 19 (lowest).
+     * A raise the OS won't permit (unprivileged -> lower nice) fails honestly as
+     * SS$_NOPRIV; a target that vanished between resolution and here is
+     * SS$_NONEXPR -- never a fake success. */
     int nice_value = 19 - (int)pri;
-
-    /* Set priority using setpriority (operates on current process) */
-    if (setpriority(PRIO_PROCESS, 0, nice_value) < 0) {
-        return SS$_NOPRIV;  /* Usually fails due to lack of privilege */
-    }
+    if (setpriority(PRIO_PROCESS, (id_t)target.linux_pid, nice_value) < 0)
+        return (errno == ESRCH) ? SS$_NONEXPR : SS$_NOPRIV;
 
     return SS$_NORMAL;
 }

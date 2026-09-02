@@ -15,6 +15,5 @@ int ovmx_hdr_alone_vms_cnxman_barrier_fsm(void);
 int ovmx_hdr_alone_vms_cnxman_barrier_fsm(void)
 {
 	return (int)sizeof(struct cnxman_barrier) +
-	       (int)sizeof(struct cnxman_barrier_link_ops) +
 	       (int)CNXMAN_BARRIER_STATE__COUNT;
 }

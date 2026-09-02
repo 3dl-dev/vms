@@ -249,23 +249,20 @@ enum cnxman_coord_refusal {
 };
 
 /* ==========================================================================
- * 5. The links this FSM needs, and does not own
- * ========================================================================== */
-
-/*
- * One outbound CM frame's SCS link state and SYSAP envelope counters, per
- * destination, from the connection manager that actually maintains them --
- * identical in shape and in reason to the participant's
- * cnxman_barrier_link_ops. A nonzero return means there is no VMS$VAXcluster
- * link to that node right now, and then NOTHING IS SENT: no zero-filled frame,
- * no invented token (INV-6). A prior implementation used an ordinal as the
- * correlation token, collided with itself, and stalled a real barrier.
+ * 5. Body[0:8] -- via the CSB, not a link
+ *
+ * Every ORIGINATED CM body needs body[0:8] (send/ack message numbers, the
+ * transaction id, the correlation token whose derivation is UNKNOWN, spec
+ * SS4(j)) stamped from the destination's real dialogue state. This FSM
+ * already resolves every destination to a CLUB-slot CSB (`coord_csb_at()`),
+ * so unlike the participant side it needs no separate lookup structure: the
+ * codec builds body[8:132], then `cnxman_envelope_stamp(csb, body,
+ * is_response)` (vms_cnxman_csb.h) -- the ONE function permitted to write
+ * body[0:8] -- fills the rest (design sec 3.2.4 ruling E1, FC-P3.15). A CSB
+ * this FSM cannot resolve is a refusal to transmit, never a zero-filled
+ * body (INV-6): the prior `cnxman_coord_link_ops`/`next_out` indirection is
+ * gone, since the CSB itself already IS that lookup.
  */
-struct cnxman_coord_link_ops {
-	int (*next_out)(void *ctx, vms_csid_t dst, struct vms_cm_link *link,
-			struct vms_cm_envelope *env);
-	void *ctx;
-};
 
 /*
  * The lock manager's half of the rebuild gate (spec SS4(p): the coordinator
@@ -300,7 +297,6 @@ struct cnxman_coord_rebuild_ops {
 struct cnxman_coord {
 	struct vms_cluster                    *cl;
 	const struct cnxman_ops               *ops;
-	const struct cnxman_coord_link_ops    *link;
 	const struct cnxman_coord_rebuild_ops *rebuild;
 	const struct dlm_scs_role_ops         *dlm;
 
@@ -352,7 +348,7 @@ struct cnxman_coord {
 	uint32_t steps_received;     /* op 0x0b from members: must be 12x(M-1) */
 	uint32_t step_acks_sent;     /* 0x81/0x0b: one per step received       */
 	uint32_t releases_sent;      /* op 0x0c: THE 12 x (M-1) COUNT          */
-	uint32_t send_failures;      /* no link; nothing was sent              */
+	uint32_t send_failures;      /* no CSB for the destination; nothing sent*/
 
 	/* ---- instrumentation: the honest omissions and the anomalies ---- */
 	uint32_t open_cells_omitted;   /* Phase 1 cells with no known offset   */
@@ -375,9 +371,10 @@ struct cnxman_coord {
 	uint32_t unknown_peer;         /* a frame from no CSB we could resolve */
 	uint32_t ignored_events;       /* no table cell: ignored and COUNTED   */
 
-	/* The one scratch buffer every built frame goes through -- in the
-	 * context, not on the stack: this code runs on a VAX kernel stack. */
-	uint8_t scratch[VMS_CM_FRAME_LEN];
+	/* The one scratch buffer every built BODY goes through (design sec
+	 * 3.2.4: this FSM emits bodies, never a frame) -- in the context, not
+	 * on the stack: this code runs on a VAX kernel stack. */
+	uint8_t scratch[VMS_CM_BODY_LEN];
 };
 
 /* ==========================================================================
@@ -386,8 +383,7 @@ struct cnxman_coord {
 
 /* Bind the FSM to a node. Sends nothing, arms nothing, elects nobody. */
 void cnxman_coord_init(struct cnxman_coord *c, struct vms_cluster *cl,
-		       const struct cnxman_ops *ops,
-		       const struct cnxman_coord_link_ops *link);
+		       const struct cnxman_ops *ops);
 
 /* Install (or, with NULL, detach) the lock manager's transition callbacks and
  * its rebuild-gate reporter. */

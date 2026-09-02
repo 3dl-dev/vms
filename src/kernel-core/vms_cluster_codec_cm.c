@@ -80,57 +80,10 @@ vms_codec_status_t vms_cm_envelope_parse(const uint8_t *frame, uint32_t len,
 }
 
 /* ------------------------------------------------------------------ *
- * sec 3: the minimal SCS-envelope stand-in (abs 0-71)
+ * sec 3: the abs [0,72) span -- NOT this file's business since FC-P3.15.
+ * See the header's sec 3 note: the demoted `vms_cm_link`/its builder now
+ * live at tests/cluster/host/vms_frame_compose.h, test-only.
  * ------------------------------------------------------------------ */
-
-vms_codec_status_t vms_cm_link_build(const struct vms_cm_link *l,
-				     uint8_t *frame, uint32_t cap,
-				     uint32_t *written)
-{
-	struct vms_sca_hdr h;
-	vms_wire_buf_t w;
-	vms_codec_status_t st;
-	uint32_t hdr_written = 0;
-
-	if (l == (const struct vms_cm_link *)0)
-		return VMS_CODEC_E_INVAL;
-
-	/* Every frame this file builds is a 190-byte-content CM message on
-	 * the SCS format-0x13 sequenced class (spec sec 4(d)/(g)) -- these
-	 * two facts are baked in exactly as vms_hello_build bakes in its
-	 * discovery-family format markers; the caller's hdr.sca_len_field
-	 * and hdr.word30 are IGNORED (see the header's field doc). */
-	h = l->hdr;
-	h.sca_len_field = (uint16_t)(VMS_CM_SCA_CONTENT - 2u);
-	h.word30 = (uint16_t)((uint16_t)VMS_SCS_MT_MSG |
-			      ((uint16_t)VMS_SCS_FORMAT_V13 << 8));
-
-	st = vms_sca_hdr_build(&h, frame, cap, &hdr_written);
-	if (st != VMS_CODEC_OK)
-		return st;
-
-	vms_wire_buf_init(&w, frame, cap);
-	if (!vms_wire_buf_ok(&w))
-		return VMS_CODEC_E_INVAL;
-
-	/* abs [32,72): zero the whole span first -- the counter-mirror
-	 * region spec sec 4(d) itself calls "inferred, not independently
-	 * confirmed" stays honest residue, never a guessed value -- then lay
-	 * down exactly the GROUNDED fields on top. */
-	vms_wire_put_zero(&w, VMS_OFF_SCS_RECV_ACK,
-			  VMS_OFF_SYSAP_BODY - VMS_OFF_SCS_RECV_ACK);
-	vms_wire_put_le16(&w, VMS_OFF_SCS_RECV_ACK, l->recv_ack);
-	vms_wire_put_le16(&w, VMS_OFF_SCS_SEND_SEQ, l->send_seq);
-	vms_wire_put_le16(&w, VMS_OFF_CM_LINK_OVRHD, VMS_CM_LINK_OVRHD_VAL);
-	vms_wire_put_le32(&w, VMS_OFF_SCS_CONID_REMOTE, l->remote_conid);
-	vms_wire_put_le32(&w, VMS_OFF_SCS_CONID_LOCAL, l->local_conid);
-
-	if (!vms_wire_buf_ok(&w))
-		return w.err;
-	if (written != (uint32_t *)0)
-		*written = VMS_OFF_SYSAP_BODY;
-	return VMS_CODEC_OK;
-}
 
 /* ------------------------------------------------------------------ *
  * sec 4: opcode-specific body parsers
@@ -318,12 +271,26 @@ static vms_codec_status_t cm_recipe_allowed(const struct vms_cm_envelope *req,
 	return VMS_CODEC_OK;
 }
 
-vms_codec_status_t vms_cm_echo_response_build(const struct vms_cm_link *l,
-					      const uint8_t *req_frame,
+/* Verbatim-copy a received request's body into a fresh body-sized wire
+ * buffer, positioned at body-relative offset 0 (abs 72 in the request
+ * frame, offset 0 in `out`). Shared by every echo-based response recipe. */
+static vms_codec_status_t cm_copy_request_body(const uint8_t *req_frame,
+					       uint32_t req_len,
+					       uint8_t out[VMS_CM_BODY_LEN])
+{
+	vms_wire_view_t rv;
+
+	vms_wire_view_init(&rv, req_frame, req_len);
+	vms_wire_get_bytes(&rv, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, out);
+	if (!vms_wire_view_ok(&rv))
+		return rv.err;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_cm_echo_response_build(const uint8_t *req_frame,
 					      uint32_t req_len,
-					      const struct vms_cm_envelope *own,
 					      uint8_t own_class,
-					      uint8_t *out_frame, uint32_t cap,
+					      uint8_t *out_body, uint32_t cap,
 					      uint32_t *written)
 {
 	struct vms_frame_info fi;
@@ -332,11 +299,8 @@ vms_codec_status_t vms_cm_echo_response_build(const struct vms_cm_link *l,
 	vms_wire_buf_t w;
 	vms_codec_status_t st;
 	uint8_t body[VMS_CM_BODY_LEN];
-	uint32_t link_written = 0;
 
-	if (l == (const struct vms_cm_link *)0 || req_frame == (const uint8_t *)0 ||
-	    own == (const struct vms_cm_envelope *)0 ||
-	    out_frame == (uint8_t *)0)
+	if (req_frame == (const uint8_t *)0 || out_body == (uint8_t *)0)
 		return VMS_CODEC_E_INVAL;
 
 	st = cm_classify_request(req_frame, req_len, &fi);
@@ -349,27 +313,24 @@ vms_codec_status_t vms_cm_echo_response_build(const struct vms_cm_link *l,
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	st = vms_cm_link_build(l, out_frame, cap, &link_written);
+	/* Echo the whole 132-byte body VERBATIM first (spec sec 4(p): "The
+	 * 0x81 echo takes THREE mutations" -- start from the request). This
+	 * is also what carries body[4:8] (txn/token) forward untouched: the
+	 * caller's cnxman_envelope_stamp(is_response=1) leaves them alone. */
+	st = cm_copy_request_body(req_frame, req_len, body);
 	if (st != VMS_CODEC_OK)
 		return st;
-
-	/* Echo the whole 132-byte body VERBATIM first (spec sec 4(p): "The
-	 * 0x81 echo takes THREE mutations" -- start from the request). */
 	vms_wire_view_init(&rv, req_frame, req_len);
-	vms_wire_get_bytes(&rv, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, body);
-	if (!vms_wire_view_ok(&rv))
-		return rv.err;
 
-	vms_wire_buf_init(&w, out_frame, cap);
+	vms_wire_buf_init(&w, out_body, cap);
 	if (!vms_wire_buf_ok(&w))
 		return VMS_CODEC_E_INVAL;
-	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, body);
+	vms_wire_put_bytes(&w, 0, VMS_CM_BODY_LEN, body);
 
-	/* SYSAP header: our own send/ack; txn+token stay echoed (already
-	 * copied verbatim above). */
-	vms_wire_put_le16(&w, VMS_OFF_CM_SEND_MSG, own->send_msg);
-	vms_wire_put_le16(&w, VMS_OFF_CM_ACK_MSG, own->ack_msg);
-	vms_wire_put_u8(&w, VMS_OFF_CM_CATEGORY,
+	/* The response bit and the echoed opcode. body[0:8] (send/ack/txn/
+	 * token) is deliberately NOT written here -- the caller's stamp call
+	 * owns it. */
+	vms_wire_put_u8(&w, VMS_OFB_CM_CATEGORY,
 			vms_wire_response_category(req_env.category));
 	/* opcode (body[9]) stays echoed -- already correct from the copy. */
 
@@ -377,13 +338,13 @@ vms_codec_status_t vms_cm_echo_response_build(const struct vms_cm_link *l,
 	 * it (spec sec 4(r): "the 0x0f row... neither is a node setting the
 	 * byte" -- skipping the write here leaves the verbatim copy alone). */
 	if (req_env.opcode != VMS_CM_OP_0F)
-		vms_wire_put_u8(&w, VMS_OFF_CM_RESP_MARK, 0x01);
+		vms_wire_put_u8(&w, VMS_OFB_CM_RESP_MARK, 0x01);
 
 	/* body[55] = 0x00 is op-0x09-SPECIFIC (spec sec 4(p): "it is the
 	 * coordinator's MEMBERSHIP BITMAP, and the responder is refusing to
 	 * assert it"). */
 	if (req_env.opcode == VMS_CM_OP_XITION_ADD)
-		vms_wire_put_u8(&w, VMS_OFF_CM_BITMAP, 0x00);
+		vms_wire_put_u8(&w, VMS_OFB_CM_BITMAP, 0x00);
 
 	/* op 0x12 takes two EXTRA mutations beyond the shared three (spec
 	 * sec 4(r)): our own current transition class, and an LE u32 copy of
@@ -393,34 +354,30 @@ vms_codec_status_t vms_cm_echo_response_build(const struct vms_cm_link *l,
 
 		if (!vms_wire_view_ok(&rv))
 			return rv.err;
-		vms_wire_put_u8(&w, VMS_OFF_CM_CLASS, own_class);
-		vms_wire_put_le32(&w, VMS_OFF_CM_RELAY_EPOCH, epoch);
+		vms_wire_put_u8(&w, VMS_OFB_CM_CLASS, own_class);
+		vms_wire_put_le32(&w, VMS_OFB_CM_RELAY_EPOCH, epoch);
 	}
 
 	if (!vms_wire_buf_ok(&w))
 		return w.err;
 	if (written != (uint32_t *)0)
-		*written = VMS_CM_FRAME_LEN;
+		*written = VMS_CM_BODY_LEN;
 	return VMS_CODEC_OK;
 }
 
-vms_codec_status_t vms_cm_close_build(const struct vms_cm_link *l,
-				      const uint8_t *req_frame, uint32_t req_len,
-				      const struct vms_cm_envelope *own,
+vms_codec_status_t vms_cm_close_build(const uint8_t *req_frame, uint32_t req_len,
 				      const struct vms_cm_node_params *own_params,
-				      uint8_t *out_frame, uint32_t cap,
+				      uint8_t *out_body, uint32_t cap,
 				      uint32_t *written)
 {
 	struct vms_frame_info fi;
 	struct vms_cm_envelope req_env;
 	vms_wire_buf_t w;
 	vms_codec_status_t st;
-	uint32_t link_written = 0;
 
-	if (l == (const struct vms_cm_link *)0 || req_frame == (const uint8_t *)0 ||
-	    own == (const struct vms_cm_envelope *)0 ||
+	if (req_frame == (const uint8_t *)0 ||
 	    own_params == (const struct vms_cm_node_params *)0 ||
-	    out_frame == (uint8_t *)0)
+	    out_body == (uint8_t *)0)
 		return VMS_CODEC_E_INVAL;
 
 	st = cm_classify_request(req_frame, req_len, &fi);
@@ -433,57 +390,46 @@ vms_codec_status_t vms_cm_close_build(const struct vms_cm_link *l,
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	st = vms_cm_link_build(l, out_frame, cap, &link_written);
-	if (st != VMS_CODEC_OK)
-		return st;
-
-	vms_wire_buf_init(&w, out_frame, cap);
+	vms_wire_buf_init(&w, out_body, cap);
 	if (!vms_wire_buf_ok(&w))
 		return VMS_CODEC_E_INVAL;
 
 	/* Fresh body, built FROM ZERO -- NOT the request's payload. Spec sec
 	 * 4(p): echoing this bugchecked a real VAX (INCONSTATE) because it
 	 * carries that peer's own live Con.IDs and cluster id. Only the
-	 * (txn,checksum) token pair, our own send/ack, the response bit, the
-	 * echoed opcode, and OVMX's own node-parameter block are asserted. */
-	vms_wire_put_zero(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN);
-	vms_wire_put_le16(&w, VMS_OFF_CM_SEND_MSG, own->send_msg);
-	vms_wire_put_le16(&w, VMS_OFF_CM_ACK_MSG, own->ack_msg);
-	vms_wire_put_le16(&w, VMS_OFF_CM_TXN, req_env.txn);
-	vms_wire_put_le16(&w, VMS_OFF_CM_TOKEN, req_env.token);
-	vms_wire_put_u8(&w, VMS_OFF_CM_CATEGORY,
+	 * echoed (txn,checksum) token pair, the response bit, the echoed
+	 * opcode, and OVMX's own node-parameter block are asserted here --
+	 * body[0:4] (send/ack) is the caller's stamp call. */
+	vms_wire_put_zero(&w, 0, VMS_CM_BODY_LEN);
+	vms_wire_put_le16(&w, VMS_OFB_CM_TXN, req_env.txn);
+	vms_wire_put_le16(&w, VMS_OFB_CM_TOKEN, req_env.token);
+	vms_wire_put_u8(&w, VMS_OFB_CM_CATEGORY,
 			vms_wire_response_category(req_env.category));
-	vms_wire_put_u8(&w, VMS_OFF_CM_OPCODE, req_env.opcode);
-	vms_wire_put_le32(&w, VMS_OFF_CM_PARAM_F1, own_params->param_f1);
-	vms_wire_put_le32(&w, VMS_OFF_CM_PARAM_F2, own_params->param_f2);
-	vms_wire_put_bytes(&w, VMS_OFF_CM_VERSION, VMS_CM_VERSION_LEN,
+	vms_wire_put_u8(&w, VMS_OFB_CM_OPCODE, req_env.opcode);
+	vms_wire_put_le32(&w, VMS_OFB_CM_PARAM_F1, own_params->param_f1);
+	vms_wire_put_le32(&w, VMS_OFB_CM_PARAM_F2, own_params->param_f2);
+	vms_wire_put_bytes(&w, VMS_OFB_CM_VERSION, VMS_CM_VERSION_LEN,
 			   own_params->version);
 
 	if (!vms_wire_buf_ok(&w))
 		return w.err;
 	if (written != (uint32_t *)0)
-		*written = VMS_CM_FRAME_LEN;
+		*written = VMS_CM_BODY_LEN;
 	return VMS_CODEC_OK;
 }
 
-vms_codec_status_t vms_cm_dlm_op0d_response_build(const struct vms_cm_link *l,
-						  const uint8_t *req_frame,
+vms_codec_status_t vms_cm_dlm_op0d_response_build(const uint8_t *req_frame,
 						  uint32_t req_len,
-						  const struct vms_cm_envelope *own,
-						  uint8_t *out_frame, uint32_t cap,
+						  uint8_t *out_body, uint32_t cap,
 						  uint32_t *written)
 {
 	struct vms_frame_info fi;
 	struct vms_cm_envelope req_env;
-	vms_wire_view_t rv;
 	vms_wire_buf_t w;
 	vms_codec_status_t st;
 	uint8_t body[VMS_CM_BODY_LEN];
-	uint32_t link_written = 0;
 
-	if (l == (const struct vms_cm_link *)0 || req_frame == (const uint8_t *)0 ||
-	    own == (const struct vms_cm_envelope *)0 ||
-	    out_frame == (uint8_t *)0)
+	if (req_frame == (const uint8_t *)0 || out_body == (uint8_t *)0)
 		return VMS_CODEC_E_INVAL;
 
 	st = cm_classify_request(req_frame, req_len, &fi);
@@ -496,119 +442,111 @@ vms_codec_status_t vms_cm_dlm_op0d_response_build(const struct vms_cm_link *l,
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	st = vms_cm_link_build(l, out_frame, cap, &link_written);
-	if (st != VMS_CODEC_OK)
-		return st;
-
 	/* VERBATIM echo, per spec sec 4(p): "reconstructs 1367 of 1367 real
 	 * responses byte-for-byte". Deliberately does NOT take the cat-0x01
 	 * body[18]/body[55] mutations -- those offsets land inside the L1
 	 * region and the lock RESOURCE NAME here (LOCKMGRERR on two real
-	 * VAXes when a prior implementation applied them). */
-	vms_wire_view_init(&rv, req_frame, req_len);
-	vms_wire_get_bytes(&rv, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, body);
-	if (!vms_wire_view_ok(&rv))
-		return rv.err;
+	 * VAXes when a prior implementation applied them). This is also what
+	 * carries body[4:8] forward untouched for the caller's stamp call. */
+	st = cm_copy_request_body(req_frame, req_len, body);
+	if (st != VMS_CODEC_OK)
+		return st;
 
-	vms_wire_buf_init(&w, out_frame, cap);
+	vms_wire_buf_init(&w, out_body, cap);
 	if (!vms_wire_buf_ok(&w))
 		return VMS_CODEC_E_INVAL;
-	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, body);
+	vms_wire_put_bytes(&w, 0, VMS_CM_BODY_LEN, body);
 
-	vms_wire_put_le16(&w, VMS_OFF_CM_SEND_MSG, own->send_msg);
-	vms_wire_put_le16(&w, VMS_OFF_CM_ACK_MSG, own->ack_msg);
-	vms_wire_put_u8(&w, VMS_OFF_CM_CATEGORY,
+	vms_wire_put_u8(&w, VMS_OFB_CM_CATEGORY,
 			vms_wire_response_category(req_env.category));
 	/* body[34]: MANDATORY, written unconditionally regardless of what the
 	 * request carried there (spec sec 4(p): every response carries 0xf9
 	 * even where it lands mid-ASCII in the echoed name). */
-	vms_wire_put_u8(&w, VMS_OFF_CM_DLM_RESULT, VMS_CM_DLM_RESULT_OP0D);
+	vms_wire_put_u8(&w, VMS_OFB_CM_DLM_RESULT, VMS_CM_DLM_RESULT_OP0D);
 
 	if (!vms_wire_buf_ok(&w))
 		return w.err;
 	if (written != (uint32_t *)0)
-		*written = VMS_CM_FRAME_LEN;
+		*written = VMS_CM_BODY_LEN;
 	return VMS_CODEC_OK;
 }
 
-vms_codec_status_t vms_cm_body_build(const struct vms_cm_link *l,
+vms_codec_status_t vms_cm_body_build(const uint8_t *req_frame, uint32_t req_len,
 				     const uint8_t *body, uint32_t body_len,
-				     uint8_t *out_frame, uint32_t cap,
+				     uint8_t *out_body, uint32_t cap,
 				     uint32_t *written)
 {
+	struct vms_frame_info fi;
+	struct vms_cm_envelope req_env;
 	vms_wire_buf_t w;
 	vms_codec_status_t st;
-	uint32_t link_written = 0;
 
-	if (l == (const struct vms_cm_link *)0 || body == (const uint8_t *)0 ||
-	    out_frame == (uint8_t *)0)
+	if (req_frame == (const uint8_t *)0 || body == (const uint8_t *)0 ||
+	    out_body == (uint8_t *)0)
 		return VMS_CODEC_E_INVAL;
 	if (body_len != VMS_CM_BODY_LEN)
 		return VMS_CODEC_E_INVAL;
 
-	st = vms_cm_link_build(l, out_frame, cap, &link_written);
+	st = cm_classify_request(req_frame, req_len, &fi);
+	if (st != VMS_CODEC_OK)
+		return st;
+	st = vms_cm_envelope_parse(req_frame, req_len, &fi, &req_env);
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	vms_wire_buf_init(&w, out_frame, cap);
+	vms_wire_buf_init(&w, out_body, cap);
 	if (!vms_wire_buf_ok(&w))
 		return VMS_CODEC_E_INVAL;
-	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, body);
+	vms_wire_put_bytes(&w, 0, VMS_CM_BODY_LEN, body);
+
+	/* The DLM's reply never writes body[0:8] (design sec 3.2.4 ruling E1).
+	 * This wrapper echoes the ANSWERED REQUEST's txn/token itself, exactly
+	 * as vms_cm_close_build does; the caller's stamp call
+	 * (is_response=1) leaves them alone and fills only send/ack. */
+	vms_wire_put_le16(&w, VMS_OFB_CM_TXN, req_env.txn);
+	vms_wire_put_le16(&w, VMS_OFB_CM_TOKEN, req_env.token);
 
 	if (!vms_wire_buf_ok(&w))
 		return w.err;
 	if (written != (uint32_t *)0)
-		*written = VMS_CM_FRAME_LEN;
+		*written = VMS_CM_BODY_LEN;
 	return VMS_CODEC_OK;
 }
 
-vms_codec_status_t vms_cm_barrier_build(const struct vms_cm_link *l,
-					const struct vms_cm_envelope *own,
-					uint32_t epoch, uint32_t step,
-					uint8_t *out_frame, uint32_t cap,
+vms_codec_status_t vms_cm_barrier_build(uint32_t epoch, uint32_t step,
+					uint8_t *out_body, uint32_t cap,
 					uint32_t *written)
 {
 	vms_wire_buf_t w;
-	vms_codec_status_t st;
-	uint32_t link_written = 0;
 
-	if (l == (const struct vms_cm_link *)0 ||
-	    own == (const struct vms_cm_envelope *)0 ||
-	    out_frame == (uint8_t *)0)
+	if (out_body == (uint8_t *)0)
 		return VMS_CODEC_E_INVAL;
 	/* Spec sec 4(p): the indices run 1...12 with no gaps. Step 0 is not a
 	 * barrier step in any capture. */
 	if (step == 0u)
 		return VMS_CODEC_E_INVAL;
 
-	st = vms_cm_link_build(l, out_frame, cap, &link_written);
-	if (st != VMS_CODEC_OK)
-		return st;
-
-	vms_wire_buf_init(&w, out_frame, cap);
+	vms_wire_buf_init(&w, out_body, cap);
 	if (!vms_wire_buf_ok(&w))
 		return VMS_CODEC_E_INVAL;
 
-	/* Zero first, then exactly the six GROUNDED fields on top: the tail is
-	 * acceptable residue in the reference and one real joiner sends it all
-	 * zero (see the header's "THE ZERO TAIL IS GROUNDED" note). */
-	vms_wire_put_zero(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN);
-	vms_wire_put_le16(&w, VMS_OFF_CM_SEND_MSG, own->send_msg);
-	vms_wire_put_le16(&w, VMS_OFF_CM_ACK_MSG, own->ack_msg);
-	vms_wire_put_le16(&w, VMS_OFF_CM_TXN, own->txn);
-	vms_wire_put_le16(&w, VMS_OFF_CM_TOKEN, own->token);
-	vms_wire_put_u8(&w, VMS_OFF_CM_CATEGORY, VMS_CM_CAT_CONFIG);
-	vms_wire_put_u8(&w, VMS_OFF_CM_OPCODE, VMS_CM_OP_BARRIER);
-	vms_wire_put_le32(&w, VMS_OFF_CM_EPOCH, epoch);
+	/* Zero first (including body[0:8] -- the caller's stamp call fills
+	 * it), then exactly the four GROUNDED payload fields on top: the tail
+	 * is acceptable residue in the reference and one real joiner sends it
+	 * all zero (see the header's "THE ZERO TAIL IS GROUNDED" note). */
+	vms_wire_put_zero(&w, 0, VMS_CM_BODY_LEN);
+	vms_wire_put_u8(&w, VMS_OFB_CM_CATEGORY, VMS_CM_CAT_CONFIG);
+	vms_wire_put_u8(&w, VMS_OFB_CM_OPCODE, VMS_CM_OP_BARRIER);
+	vms_wire_put_le32(&w, VMS_OFB_CM_EPOCH, epoch);
 	/* body[16:20] is a plain LE u32 step index on op 0x0b/0x0c -- it
 	 * ALIASES the role/class byte pair of the transition-open family, so
 	 * no role tag is written here (spec sec 4(p)/(r)). */
-	vms_wire_put_le32(&w, VMS_OFF_CM_STEP, step);
+	vms_wire_put_le32(&w, VMS_OFB_CM_STEP, step);
 
 	if (!vms_wire_buf_ok(&w))
 		return w.err;
 	if (written != (uint32_t *)0)
-		*written = VMS_CM_FRAME_LEN;
+		*written = VMS_CM_BODY_LEN;
 	return VMS_CODEC_OK;
 }
 
@@ -620,43 +558,25 @@ vms_codec_status_t vms_cm_barrier_build(const struct vms_cm_link *l,
  * ------------------------------------------------------------------ */
 
 /*
- * Lay down the link and a zeroed body, then the SYSAP envelope. Every
- * originating builder below starts here, so there is exactly one place where
- * "the tail is zero, not a template" is true or false.
- *
- * `txn` is passed separately from `own` because the two notification opcodes
- * (0x0a, 0x0c) force it to zero (sec 4(p)) while every other origination
- * carries the connection manager's real transaction id.
+ * Lay down a zeroed body, then the SYSAP category/opcode. Every originating
+ * builder below starts here, so there is exactly one place where "the tail
+ * is zero, not a template" is true or false. body[0:8] (send/ack/txn/token)
+ * is deliberately left at zero: the caller's cnxman_envelope_stamp() call
+ * fills it after this builder returns (design sec 3.2.4 ruling E1).
  */
-static vms_codec_status_t cm_originate_begin(const struct vms_cm_link *l,
-					     const struct vms_cm_envelope *own,
-					     uint8_t opcode, uint16_t txn,
-					     uint8_t *out_frame, uint32_t cap,
-					     vms_wire_buf_t *w)
+static vms_codec_status_t cm_originate_begin(uint8_t opcode, uint8_t *out_body,
+					     uint32_t cap, vms_wire_buf_t *w)
 {
-	vms_codec_status_t st;
-	uint32_t link_written = 0;
-
-	if (l == (const struct vms_cm_link *)0 ||
-	    own == (const struct vms_cm_envelope *)0 ||
-	    out_frame == (uint8_t *)0)
+	if (out_body == (uint8_t *)0)
 		return VMS_CODEC_E_INVAL;
 
-	st = vms_cm_link_build(l, out_frame, cap, &link_written);
-	if (st != VMS_CODEC_OK)
-		return st;
-
-	vms_wire_buf_init(w, out_frame, cap);
+	vms_wire_buf_init(w, out_body, cap);
 	if (!vms_wire_buf_ok(w))
 		return VMS_CODEC_E_INVAL;
 
-	vms_wire_put_zero(w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN);
-	vms_wire_put_le16(w, VMS_OFF_CM_SEND_MSG, own->send_msg);
-	vms_wire_put_le16(w, VMS_OFF_CM_ACK_MSG, own->ack_msg);
-	vms_wire_put_le16(w, VMS_OFF_CM_TXN, txn);
-	vms_wire_put_le16(w, VMS_OFF_CM_TOKEN, own->token);
-	vms_wire_put_u8(w, VMS_OFF_CM_CATEGORY, VMS_CM_CAT_CONFIG);
-	vms_wire_put_u8(w, VMS_OFF_CM_OPCODE, opcode);
+	vms_wire_put_zero(w, 0, VMS_CM_BODY_LEN);
+	vms_wire_put_u8(w, VMS_OFB_CM_CATEGORY, VMS_CM_CAT_CONFIG);
+	vms_wire_put_u8(w, VMS_OFB_CM_OPCODE, opcode);
 	return VMS_CODEC_OK;
 }
 
@@ -665,7 +585,7 @@ static vms_codec_status_t cm_originate_end(vms_wire_buf_t *w, uint32_t *written)
 	if (!vms_wire_buf_ok(w))
 		return w->err;
 	if (written != (uint32_t *)0)
-		*written = VMS_CM_FRAME_LEN;
+		*written = VMS_CM_BODY_LEN;
 	return VMS_CODEC_OK;
 }
 
@@ -674,8 +594,8 @@ static vms_codec_status_t cm_originate_end(vms_wire_buf_t *w, uint32_t *written)
  * differ ONLY in these two bytes and the opcode. */
 static void cm_put_tag(vms_wire_buf_t *w, uint8_t role, uint8_t cls)
 {
-	vms_wire_put_u8(w, VMS_OFF_CM_ROLE, role);
-	vms_wire_put_u8(w, VMS_OFF_CM_CLASS, cls);
+	vms_wire_put_u8(w, VMS_OFB_CM_ROLE, role);
+	vms_wire_put_u8(w, VMS_OFB_CM_CLASS, cls);
 }
 
 /* sec 4(r)'s class -> transition-open opcode pairing, with zero residuals.
@@ -690,11 +610,9 @@ static uint8_t cm_open_opcode_of_class(uint8_t cls)
 	}
 }
 
-vms_codec_status_t vms_cm_xition_open_build(const struct vms_cm_link *l,
-					    const struct vms_cm_envelope *own,
-					    uint8_t tr_class, uint32_t epoch,
+vms_codec_status_t vms_cm_xition_open_build(uint8_t tr_class, uint32_t epoch,
 					    uint8_t bitmap, int has_bitmap,
-					    uint8_t *out_frame, uint32_t cap,
+					    uint8_t *out_body, uint32_t cap,
 					    uint32_t *written)
 {
 	vms_wire_buf_t w;
@@ -709,22 +627,20 @@ vms_codec_status_t vms_cm_xition_open_build(const struct vms_cm_link *l,
 	if (has_bitmap && tr_class != VMS_CM_CLASS_ADD)
 		return VMS_CODEC_E_INVAL;
 
-	st = cm_originate_begin(l, own, opcode, own->txn, out_frame, cap, &w);
+	st = cm_originate_begin(opcode, out_body, cap, &w);
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	vms_wire_put_le32(&w, VMS_OFF_CM_EPOCH, epoch);
+	vms_wire_put_le32(&w, VMS_OFB_CM_EPOCH, epoch);
 	cm_put_tag(&w, VMS_CM_ROLE_XITION, tr_class);
 	if (has_bitmap)
-		vms_wire_put_u8(&w, VMS_OFF_CM_BITMAP, bitmap);
+		vms_wire_put_u8(&w, VMS_OFB_CM_BITMAP, bitmap);
 
 	return cm_originate_end(&w, written);
 }
 
-vms_codec_status_t vms_cm_go_build(const struct vms_cm_link *l,
-				   const struct vms_cm_envelope *own,
-				   uint8_t tr_class, uint32_t epoch,
-				   uint8_t *out_frame, uint32_t cap,
+vms_codec_status_t vms_cm_go_build(uint8_t tr_class, uint32_t epoch,
+				   uint8_t *out_body, uint32_t cap,
 				   uint32_t *written)
 {
 	vms_wire_buf_t w;
@@ -733,22 +649,20 @@ vms_codec_status_t vms_cm_go_build(const struct vms_cm_link *l,
 	if (cm_open_opcode_of_class(tr_class) == 0u)
 		return VMS_CODEC_E_CLASS;
 
-	/* txn = 0: sec 4(p) "Notifications carry txn=0 and are NEVER answered". */
-	st = cm_originate_begin(l, own, VMS_CM_OP_XITION_GO, 0u, out_frame, cap,
-				&w);
+	/* txn/token stay zero (never written): sec 4(p) "Notifications carry
+	 * txn=0 and are NEVER answered". */
+	st = cm_originate_begin(VMS_CM_OP_XITION_GO, out_body, cap, &w);
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	vms_wire_put_le32(&w, VMS_OFF_CM_EPOCH, epoch);
+	vms_wire_put_le32(&w, VMS_OFB_CM_EPOCH, epoch);
 	cm_put_tag(&w, VMS_CM_ROLE_GO, tr_class);
 
 	return cm_originate_end(&w, written);
 }
 
-vms_codec_status_t vms_cm_release_build(const struct vms_cm_link *l,
-					const struct vms_cm_envelope *own,
-					uint32_t epoch, uint32_t step,
-					uint8_t *out_frame, uint32_t cap,
+vms_codec_status_t vms_cm_release_build(uint32_t epoch, uint32_t step,
+					uint8_t *out_body, uint32_t cap,
 					uint32_t *written)
 {
 	vms_wire_buf_t w;
@@ -759,23 +673,32 @@ vms_codec_status_t vms_cm_release_build(const struct vms_cm_link *l,
 	if (step == 0u)
 		return VMS_CODEC_E_INVAL;
 
-	st = cm_originate_begin(l, own, VMS_CM_OP_BARRIER_REL, 0u, out_frame,
-				cap, &w);
+	st = cm_originate_begin(VMS_CM_OP_BARRIER_REL, out_body, cap, &w);
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	vms_wire_put_le32(&w, VMS_OFF_CM_EPOCH, epoch);
+	vms_wire_put_le32(&w, VMS_OFB_CM_EPOCH, epoch);
 	/* body[16:20] is a plain LE u32 step index on op 0x0b/0x0c -- it
 	 * ALIASES the role/class byte pair, so no tag is written here. */
-	vms_wire_put_le32(&w, VMS_OFF_CM_STEP, step);
+	vms_wire_put_le32(&w, VMS_OFB_CM_STEP, step);
 
 	return cm_originate_end(&w, written);
 }
 
-vms_codec_status_t vms_cm_relay_build(const struct vms_cm_link *l,
-				      const struct vms_cm_envelope *own,
-				      uint8_t tr_class, uint32_t epoch,
-				      uint8_t *out_frame, uint32_t cap,
+void vms_cm_notification_zero_txn(uint8_t out_body[VMS_CM_BODY_LEN])
+{
+	vms_wire_buf_t w;
+
+	if (out_body == (uint8_t *)0)
+		return;
+	vms_wire_buf_init(&w, out_body, VMS_CM_BODY_LEN);
+	if (!vms_wire_buf_ok(&w))
+		return;
+	vms_wire_put_zero(&w, VMS_OFB_CM_TXN, 2u);
+}
+
+vms_codec_status_t vms_cm_relay_build(uint8_t tr_class, uint32_t epoch,
+				      uint8_t *out_body, uint32_t cap,
 				      uint32_t *written)
 {
 	vms_wire_buf_t w;
@@ -784,12 +707,11 @@ vms_codec_status_t vms_cm_relay_build(const struct vms_cm_link *l,
 	if (cm_open_opcode_of_class(tr_class) == 0u)
 		return VMS_CODEC_E_CLASS;
 
-	st = cm_originate_begin(l, own, VMS_CM_OP_RELAY, own->txn, out_frame,
-				cap, &w);
+	st = cm_originate_begin(VMS_CM_OP_RELAY, out_body, cap, &w);
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	vms_wire_put_le32(&w, VMS_OFF_CM_EPOCH, epoch);
+	vms_wire_put_le32(&w, VMS_OFB_CM_EPOCH, epoch);
 	cm_put_tag(&w, VMS_CM_ROLE_RELAY, tr_class);
 	/* The subject of the relay is NOT written: no capture isolates a system
 	 * identity in this body (header sec 5b). Its bytes stay zero and
@@ -798,10 +720,8 @@ vms_codec_status_t vms_cm_relay_build(const struct vms_cm_link *l,
 	return cm_originate_end(&w, written);
 }
 
-vms_codec_status_t vms_cm_commit_build(const struct vms_cm_link *l,
-				       const struct vms_cm_envelope *own,
-				       uint8_t tr_class, uint32_t epoch,
-				       uint8_t *out_frame, uint32_t cap,
+vms_codec_status_t vms_cm_commit_build(uint8_t tr_class, uint32_t epoch,
+				       uint8_t *out_body, uint32_t cap,
 				       uint32_t *written)
 {
 	vms_wire_buf_t w;
@@ -810,36 +730,28 @@ vms_codec_status_t vms_cm_commit_build(const struct vms_cm_link *l,
 	if (cm_open_opcode_of_class(tr_class) == 0u)
 		return VMS_CODEC_E_CLASS;
 
-	st = cm_originate_begin(l, own, VMS_CM_OP_COMMIT, own->txn, out_frame,
-				cap, &w);
+	st = cm_originate_begin(VMS_CM_OP_COMMIT, out_body, cap, &w);
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	vms_wire_put_le32(&w, VMS_OFF_CM_EPOCH, epoch);
+	vms_wire_put_le32(&w, VMS_OFB_CM_EPOCH, epoch);
 	cm_put_tag(&w, VMS_CM_ROLE_COMMIT, tr_class);
 
 	return cm_originate_end(&w, written);
 }
 
-vms_codec_status_t vms_cm_step_ack_build(const struct vms_cm_link *l,
-					 const uint8_t *req_frame,
+vms_codec_status_t vms_cm_step_ack_build(const uint8_t *req_frame,
 					 uint32_t req_len,
-					 const struct vms_cm_envelope *own,
-					 uint8_t *out_frame, uint32_t cap,
+					 uint8_t *out_body, uint32_t cap,
 					 uint32_t *written)
 {
 	struct vms_frame_info fi;
 	struct vms_cm_envelope req_env;
-	vms_wire_view_t rv;
 	vms_wire_buf_t w;
 	vms_codec_status_t st;
 	uint8_t body[VMS_CM_BODY_LEN];
-	uint32_t link_written = 0;
 
-	if (l == (const struct vms_cm_link *)0 ||
-	    req_frame == (const uint8_t *)0 ||
-	    own == (const struct vms_cm_envelope *)0 ||
-	    out_frame == (uint8_t *)0)
+	if (req_frame == (const uint8_t *)0 || out_body == (uint8_t *)0)
 		return VMS_CODEC_E_INVAL;
 
 	st = cm_classify_request(req_frame, req_len, &fi);
@@ -852,70 +764,54 @@ vms_codec_status_t vms_cm_step_ack_build(const struct vms_cm_link *l,
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	st = vms_cm_link_build(l, out_frame, cap, &link_written);
+	/* Verbatim echo of the member's own step request first -- txn and
+	 * token ride back untouched (the caller's stamp call leaves them),
+	 * which is the whole correlation. */
+	st = cm_copy_request_body(req_frame, req_len, body);
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	/* Verbatim echo of the member's own step request first -- txn and token
-	 * ride back untouched, which is the whole correlation. */
-	vms_wire_view_init(&rv, req_frame, req_len);
-	vms_wire_get_bytes(&rv, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, body);
-	if (!vms_wire_view_ok(&rv))
-		return rv.err;
-
-	vms_wire_buf_init(&w, out_frame, cap);
+	vms_wire_buf_init(&w, out_body, cap);
 	if (!vms_wire_buf_ok(&w))
 		return VMS_CODEC_E_INVAL;
-	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, body);
+	vms_wire_put_bytes(&w, 0, VMS_CM_BODY_LEN, body);
 
-	vms_wire_put_le16(&w, VMS_OFF_CM_SEND_MSG, own->send_msg);
-	vms_wire_put_le16(&w, VMS_OFF_CM_ACK_MSG, own->ack_msg);
-	vms_wire_put_u8(&w, VMS_OFF_CM_CATEGORY,
+	vms_wire_put_u8(&w, VMS_OFB_CM_CATEGORY,
 			vms_wire_response_category(req_env.category));
 	/* The role-slot mutation. See the header's sec 5b entry for why this
 	 * follows sec 4(r)'s 26-capture census rather than the step-index
 	 * reading of the same offset, and why it is safe either way. */
-	vms_wire_put_u8(&w, VMS_OFF_CM_ROLE, VMS_CM_ROLE_RELAY);
+	vms_wire_put_u8(&w, VMS_OFB_CM_ROLE, VMS_CM_ROLE_RELAY);
 
 	return cm_originate_end(&w, written);
 }
 
-vms_codec_status_t vms_cm_ack_build(const struct vms_cm_link *l,
-				    const struct vms_cm_envelope *own,
-				    uint8_t *out_frame, uint32_t cap,
+vms_codec_status_t vms_cm_ack_build(uint8_t *out_body, uint32_t cap,
 				    uint32_t *written)
 {
 	vms_wire_buf_t w;
-	vms_codec_status_t st;
-	uint32_t link_written = 0;
 
-	if (l == (const struct vms_cm_link *)0 ||
-	    own == (const struct vms_cm_envelope *)0 ||
-	    out_frame == (uint8_t *)0)
+	if (out_body == (uint8_t *)0)
 		return VMS_CODEC_E_INVAL;
 
-	st = vms_cm_link_build(l, out_frame, cap, &link_written);
-	if (st != VMS_CODEC_OK)
-		return st;
-
-	vms_wire_buf_init(&w, out_frame, cap);
+	vms_wire_buf_init(&w, out_body, cap);
 	if (!vms_wire_buf_ok(&w))
 		return VMS_CODEC_E_INVAL;
 
 	/* No payload -- spec sec 4(p): "An implementation should send zeros;
 	 * do not reproduce another implementation's uninitialised memory."
 	 * body[9] (opcode) is likewise not meaningful (sec 4(p)/4(u)): real
-	 * VMS acks carry whatever stale buffer content sat there. */
-	vms_wire_put_zero(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN);
-	vms_wire_put_le16(&w, VMS_OFF_CM_SEND_MSG, own->send_msg);
-	vms_wire_put_le16(&w, VMS_OFF_CM_ACK_MSG, own->ack_msg);
-	vms_wire_put_u8(&w, VMS_OFF_CM_CATEGORY, VMS_CM_CAT_ACK);
-	vms_wire_put_u8(&w, VMS_OFF_CM_OPCODE, 0x00);
+	 * VMS acks carry whatever stale buffer content sat there. body[0:4]
+	 * (send/ack) is the caller's stamp call; body[4:8] (txn/token) has no
+	 * meaning here and stays the zero this pass already put there. */
+	vms_wire_put_zero(&w, 0, VMS_CM_BODY_LEN);
+	vms_wire_put_u8(&w, VMS_OFB_CM_CATEGORY, VMS_CM_CAT_ACK);
+	vms_wire_put_u8(&w, VMS_OFB_CM_OPCODE, 0x00);
 
 	if (!vms_wire_buf_ok(&w))
 		return w.err;
 	if (written != (uint32_t *)0)
-		*written = VMS_CM_FRAME_LEN;
+		*written = VMS_CM_BODY_LEN;
 	return VMS_CODEC_OK;
 }
 

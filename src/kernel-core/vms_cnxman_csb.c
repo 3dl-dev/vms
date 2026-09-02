@@ -836,3 +836,43 @@ const char *cnxman_csb_action_name(enum cnxman_csb_action a)
 		return "?";
 	return csb_action_names[a];
 }
+
+/* ==========================================================================
+ * The SYSAP envelope stamper (design sec 3.2.4 ruling E1). See the header's
+ * "8. The SYSAP envelope stamper" for the contract.
+ *
+ * The two-byte little-endian write below mirrors vms_wire_put_le16's own
+ * convention (vms_cluster_codec.c) but is written locally rather than
+ * pulled in from the codec: this stamper's whole span is the fixed,
+ * universal 8-byte envelope every `VMS$VAXcluster` body begins with (spec
+ * sec 4(j)), never a field whose placement could move with a capture, so it
+ * carries its own trivial primitive instead of coupling a CSB-model TU to
+ * the wire codec header for four field offsets.
+ * ========================================================================== */
+
+#define CSB_STAMP_OFF_SEND_MSG 0u  /* body[0:2] */
+#define CSB_STAMP_OFF_ACK_MSG  2u  /* body[2:4] */
+#define CSB_STAMP_OFF_TXN      4u  /* body[4:6] */
+#define CSB_STAMP_OFF_TOKEN    6u  /* body[6:8] */
+
+static void csb_stamp_put_le16(uint8_t *body, uint32_t off, uint16_t val)
+{
+	body[off]     = (uint8_t)(val & 0xffu);
+	body[off + 1] = (uint8_t)((val >> 8) & 0xffu);
+}
+
+void cnxman_envelope_stamp(const struct vms_csb *csb, uint8_t body[132],
+			   int is_response)
+{
+	if (csb == NULL || body == NULL)
+		return;
+
+	csb_stamp_put_le16(body, CSB_STAMP_OFF_SEND_MSG, csb->cm_send_msg);
+	csb_stamp_put_le16(body, CSB_STAMP_OFF_ACK_MSG, csb->cm_ack_msg);
+
+	if (is_response)
+		return;   /* the codec already put the echoed txn/token there */
+
+	csb_stamp_put_le16(body, CSB_STAMP_OFF_TXN, csb->cm_txn);
+	csb_stamp_put_le16(body, CSB_STAMP_OFF_TOKEN, csb->cm_token);
+}

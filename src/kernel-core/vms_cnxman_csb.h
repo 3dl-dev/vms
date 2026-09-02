@@ -253,4 +253,53 @@ const char *cnxman_csb_state_name(enum vms_cnxman_csb_state s);
 const char *cnxman_csb_event_name(enum cnxman_csb_event e);
 const char *cnxman_csb_action_name(enum cnxman_csb_action a);
 
+/* ==========================================================================
+ * 8. The SYSAP envelope stamper (design sec 3.2.4 ruling E1)
+ *
+ * "72-79 -> CNXMAN via ONE pure stamper cnxman_envelope_stamp(csb, body,
+ * is_response) on the CSB's dialogue counters." Every CNXMAN emitter -- the
+ * barrier FSM (FC-P3.5), the coordinator (FC-P3.12), and the DLM's cat-02 arm's
+ * replies (vms_dlm_scs.h RULE A) -- calls this ONE function for body[0:8], and
+ * NOTHING else in a CNXMAN TU writes those eight bytes: the same discipline
+ * FC-P0.1's `dlm_scs_role_ops` already applies to a lock grant (a SYSAP that
+ * fills its own dialogue counters is the same category error as a daemon that
+ * fills a lock id).
+ * ========================================================================== */
+
+/*
+ * Stamp body[0:8] of a 132-byte CNXMAN SYSAP body from `csb`'s real dialogue
+ * state.
+ *
+ *   body[0:2] send_msg, body[2:4] ack_msg -- THIS node's own counters for the
+ *     dialogue with `csb`'s system, written on EVERY call, response or
+ *     origination.
+ *
+ *   body[4:6] txn, body[6:8] token -- written ONLY when `is_response` is 0: an
+ *     ORIGINATION carries this CSB's own transaction id and correlation
+ *     token (the token's derivation is UNKNOWN per spec sec 4(j); it is
+ *     never computed, only carried). When `is_response` is nonzero these two
+ *     bytes are left EXACTLY as they already are in `body` -- the answer a
+ *     real VMS peer correlates by is the txn/token IT sent, and every
+ *     response recipe in vms_cluster_codec_cm.h (the echo family, the
+ *     close/DLM-op0d/body/step-ack builders) already puts that echoed value
+ *     there before this is called.
+ *
+ *     The GO and the RELEASE (op 0x0a/0x0c) are notifications that force
+ *     txn=0 (spec sec 4(p): "Notifications carry txn=0 and are NEVER
+ *     answered") while still carrying a REAL token -- a wire fact about
+ *     those two opcodes, not about CSB dialogue state, so it is NOT this
+ *     function's business: their builders call this stamper with
+ *     is_response=0 (a genuine origination, real txn AND token) and then
+ *     `vms_cm_notification_zero_txn()` forces body[4:6] back to zero
+ *     afterward (vms_cluster_codec_cm.h). This stamper stays exactly the
+ *     two cases above; it does not grow a third.
+ *
+ * `csb` NULL stamps nothing (the caller's own "no CSB for that destination"
+ * refusal has already happened before this is reached; there is no wire
+ * counter to read from a system this node has no block for).
+ */
+void cnxman_envelope_stamp(const struct vms_csb *csb,
+			   uint8_t body[132] /* VMS_CM_BODY_LEN */,
+			   int is_response);
+
 #endif /* OVMX_VMS_CNXMAN_CSB_H */

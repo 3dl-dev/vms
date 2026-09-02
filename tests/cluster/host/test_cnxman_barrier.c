@@ -38,6 +38,8 @@
 #include "vms_cnxman_csb.h"
 #include "vms_cnxman_barrier_fsm.h"
 #include "vms_cluster_codec_cm.h"
+#include "vms_frame_compose.h"   /* test-only: struct vms_cm_link, RX specimen
+				  * assembly (FC-P3.15, design sec 3.2.4) */
 
 /* ==========================================================================
  * The bed: one node, a coordinator CSB, and a recording transport
@@ -61,54 +63,37 @@ struct bed {
 	struct vms_cluster                 cl;
 	struct cnxman_ops                  ops;
 	struct fake_cnx                    fake;
-	struct cnxman_barrier_link_ops     link_ops;
 	struct cnxman_barrier              b;
+	struct vms_csb                    *coord_csb;   /* for the counter sim  */
 
 	struct sent_frame sent[MAX_SENT];
 	uint32_t          n_sent;
-	uint32_t          n_out_refused;   /* next_out told the FSM "no link"  */
-	int               link_down;       /* make next_out fail               */
-	uint16_t          next_token;      /* the CM's own continuous counter  */
-	uint16_t          next_send_msg;
 };
 
 static struct bed g;
 
 /*
- * The connection manager's outbound link. This is the ONLY source of the
- * envelope counters, and in particular of the correlation token at body[6:8]:
- * a prior implementation used the barrier step ordinal there, collided with its
- * own step-1 value, and the coordinator dropped the frame. The counter here is
- * deliberately UNRELATED to the step number so the test can prove the FSM never
- * substitutes one.
+ * Body[0:8] is now the connection manager's job alone: cnxman_envelope_stamp()
+ * (vms_cnxman_csb.h) reads it straight off the destination CSB's real
+ * cm_send_msg/cm_ack_msg/cm_txn/cm_token fields (design sec 3.2.4 ruling E1).
+ * This bed simulates the ONE thing FC-P3.8's glue owns and this item does
+ * not -- ADVANCING those counters after a real send -- so the test can still
+ * prove what it always has: a token that runs as one unbroken sequence
+ * across the acknowledgement and every step, NEVER the step ordinal. A prior
+ * implementation used the barrier step ordinal as a placeholder, collided
+ * with its own step-1 value, and the coordinator dropped the frame; that
+ * regression is exactly what test_step_token_is_the_cms_counter (below)
+ * pins.
  */
-static int bed_next_out(void *ctx, vms_csid_t dst, struct vms_cm_link *l,
-			struct vms_cm_envelope *env)
+static void bed_advance_dialogue(struct vms_csb *csb)
 {
-	struct bed *bp = (struct bed *)ctx;
-	static const uint8_t dmac[6] = { 0x08, 0x00, 0x2b, 0x4a, 0xb7, 0x15 };
-	static const uint8_t smac[6] = { 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9 };
-
-	(void)dst;
-	if (bp->link_down) {
-		bp->n_out_refused++;
-		return -1;
-	}
-	memcpy(l->hdr.eth_dst, dmac, 6);
-	memcpy(l->hdr.eth_src, smac, 6);
-	memcpy(l->hdr.dst_lavc, dmac, 6);
-	memcpy(l->hdr.src_lavc, smac, 6);
-	l->hdr.connect_flag = 0x0001;
-	l->recv_ack = 0x0007;
-	l->send_seq = 0x0009;
-	l->remote_conid = 0x62c50009u;
-	l->local_conid = 0x33580008u;
-
-	env->send_msg = bp->next_send_msg++;
-	env->ack_msg = 0x0100;
-	env->txn = 0x0009;
-	env->token = bp->next_token++;
-	return 0;
+	if (csb == NULL)
+		return;
+	csb->cm_send_msg++;
+	csb->cm_token++;
+	/* cm_ack_msg/cm_txn are NOT advanced here -- ack_msg changes only on
+	 * a real receive, and txn is per-dialogue, not per-message; both are
+	 * out of this bed's simulated scope. */
 }
 
 static void bed_record(struct bed *bp, const uint8_t *body, uint32_t len,
@@ -116,10 +101,15 @@ static void bed_record(struct bed *bp, const uint8_t *body, uint32_t len,
 {
 	if (bp->n_sent >= MAX_SENT)
 		return;
-	if (len > VMS_CM_FRAME_LEN)
-		len = VMS_CM_FRAME_LEN;
-	memcpy(bp->sent[bp->n_sent].bytes, body, len);
-	bp->sent[bp->n_sent].len = len;
+	if (len > VMS_CM_BODY_LEN)
+		len = VMS_CM_BODY_LEN;
+	/* Recorded at the SAME frame-absolute offset every existing assertion
+	 * in this file already reads through VMS_OFF_CM_* -- only the source
+	 * (a body, not a full frame) changed. abs [0,72) stays honest zero:
+	 * this bed never asserts a port/SCS header. */
+	memset(bp->sent[bp->n_sent].bytes, 0, VMS_CM_FRAME_LEN);
+	memcpy(bp->sent[bp->n_sent].bytes + VMS_OFF_SYSAP_BODY, body, len);
+	bp->sent[bp->n_sent].len = VMS_OFF_SYSAP_BODY + len;
 	bp->sent[bp->n_sent].dst = dst;
 	bp->sent[bp->n_sent].was_response = was_response;
 	bp->n_sent++;
@@ -135,6 +125,7 @@ static int bed_send(void *ctx, vms_csid_t dst, const uint8_t *body, uint32_t len
 {
 	(void)ctx;
 	bed_record(&g, body, len, (uint32_t)dst, 0);
+	bed_advance_dialogue(cnxman_club_find_csid(&g.cl.club, dst));
 	return 0;
 }
 
@@ -142,20 +133,22 @@ static int bed_respond(void *ctx, const uint8_t *body, uint32_t len)
 {
 	(void)ctx;
 	bed_record(&g, body, len, 0u, 1);
+	/* Every barrier test drives a single coordinator (feed() always
+	 * dispatches as COORD_CSID), so the request being answered is always
+	 * on that one CSB. */
+	bed_advance_dialogue(g.coord_csb);
 	return 0;
 }
 
 static void bed_init(void)
 {
-	struct vms_csb *local, *coord, *peer;
+	struct vms_csb *local, *peer;
 
 	memset(&g, 0, sizeof(g));
 	fake_ops_init(&g.ops, &g.fake);
 	g.ops.send = bed_send;
 	g.ops.respond = bed_respond;
 	g.fake.now_ms = 100000u;
-	g.next_token = 0x07f5u;    /* nothing like a step ordinal */
-	g.next_send_msg = 0x0140u;
 
 	memcpy(g.cl.params.scsnode, "OVMXJ0", 6);
 	g.cl.params.scsnode_len = 6;
@@ -166,17 +159,23 @@ static void bed_init(void)
 	cnxman_club_learn_local_csid(&g.cl.club, OWN_CSID);
 	(void)local;
 
-	coord = cnxman_club_alloc_csb(&g.cl.club, 0x000004000101ull, 1);
-	cnxman_csb_set_scsnode(coord, (const uint8_t *)"VAX1", 4);
-	cnxman_csb_set_csid(coord, COORD_CSID);
+	g.coord_csb = cnxman_club_alloc_csb(&g.cl.club, 0x000004000101ull, 1);
+	cnxman_csb_set_scsnode(g.coord_csb, (const uint8_t *)"VAX1", 4);
+	cnxman_csb_set_csid(g.coord_csb, COORD_CSID);
+	/* Seed the coordinator's real dialogue counters (design sec 3.2.4):
+	 * these are NOT placeholders -- 0x07f5/0x0140 are simply where this
+	 * bed's simulated connection starts, exactly as g.next_token/
+	 * g.next_send_msg did before the retrofit. */
+	g.coord_csb->cm_send_msg = 0x0140u;
+	g.coord_csb->cm_ack_msg = 0x0100u;
+	g.coord_csb->cm_txn = 0x0009u;
+	g.coord_csb->cm_token = 0x07f5u;   /* nothing like a step ordinal */
 
 	peer = cnxman_club_alloc_csb(&g.cl.club, 0x000004000102ull, 1);
 	cnxman_csb_set_scsnode(peer, (const uint8_t *)"VAX2", 4);
 	cnxman_csb_set_csid(peer, PEER_CSID);
 
-	g.link_ops.next_out = bed_next_out;
-	g.link_ops.ctx = &g;
-	cnxman_barrier_init(&g.b, &g.cl, &g.ops, &g.link_ops);
+	cnxman_barrier_init(&g.b, &g.cl, &g.ops);
 }
 
 /* ==========================================================================
@@ -205,7 +204,7 @@ static uint32_t mk_frame(uint8_t *f, uint8_t cat, uint8_t op)
 	l.send_seq = 0x0012;
 	l.remote_conid = 0x33580008u;
 	l.local_conid = 0x62c50009u;
-	(void)vms_cm_link_build(&l, f, VMS_CM_FRAME_LEN, &written);
+	(void)vms_frame_compose_link(&l, f, VMS_CM_FRAME_LEN, &written);
 
 	vms_wire_buf_init(&w, f, VMS_CM_FRAME_LEN);
 	vms_wire_put_zero(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN);
@@ -1147,7 +1146,11 @@ static void test_no_link_originates_nothing(void)
 	printf("[barrier] with no connection to the coordinator, NOTHING is "
 	       "originated -- not a zero-filled frame (INV-6)\n");
 	bed_init();
-	g.link_down = 1;
+	/* "No link" is now "no CSB for that destination" (design sec 3.2.4):
+	 * cnxman_envelope_stamp has nothing to read a dialogue counter off,
+	 * so the FSM must refuse to originate rather than invent one. */
+	cnxman_club_free_csb(&g.cl.club, g.coord_csb);
+	g.coord_csb = NULL;
 	(void)feed(f, mk_open_add(f, EPOCH, 0x0eu));
 	(void)feed(f, mk_go(f, EPOCH, VMS_CM_CLASS_ADD, VMS_CM_ROLE_GO));
 

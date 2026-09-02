@@ -11,8 +11,14 @@
 #     compiled alone, plus an aggregate smoke.
 
 # ---- FC-P0.6: the wire codec, built with NO kernel headers (plain stdint.h) ----
+# FC-P0.7 (HELLO/SOLICIT) adds its OWN vms_cluster_codec_<family>.c TU rather
+# than growing the shared vms_cluster_codec.c -- every later harvest item
+# (P1.1 VC, P2.1 SCS, P3.1 CM, P4.5 DLM, P6.2 MSCP) does the same, so they can
+# land in parallel with only a one-line addition here, never a shared-file
+# merge conflict.
 add_library(cluster_host_codec STATIC
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec.c
+    ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_hello.c
 )
 target_include_directories(cluster_host_codec PUBLIC
     ${CMAKE_SOURCE_DIR}/src/kernel-core
@@ -56,6 +62,7 @@ cluster_host_test(test_codec_allowlist  test_codec_allowlist.c)
 cluster_host_test(test_fixture_loader   test_fixture_loader.c)
 cluster_host_test(test_codec_roundtrip  test_codec_roundtrip.c)
 cluster_host_test(fuzz_codec_seed       fuzz_codec_seed.c)
+cluster_host_test(test_codec_hello      test_codec_hello.c)
 
 # ---- FC-P0.1: the pure inter-layer headers must be host-includable ----
 # Everything below builds with -DOVMX_CLUSTER_HOST, which routes vms_cluster.h

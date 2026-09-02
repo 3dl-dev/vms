@@ -7673,12 +7673,34 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                         log_ts(stdout);
                         printf(" SCSD-I-DLMGRANT, inbound cat-02 op-01 for res='%.*s'"
                                " (req_csid=0x%08x mode=%u) -> executive %s from REAL"
-                               " lock state (status=0x%08x master_lkid=0x%08x) --"
-                               " cat-82 response deferred to grounded window\n",
+                               " lock state (status=0x%08x master_lkid=0x%08x)\n",
                                (int)rl, res, req_csid, reqmode,
                                st == 1u ? "GRANTED" : (queued ? "QUEUED" : "declined"),
                                st, mlkid);
                         fflush(stdout);
+                        /* On a REAL grant, answer with the cat-82 op-01 GRANT built
+                         * from OVMX's real master state (master_lkid + granted mode);
+                         * VAX1's own accepted format, body[28]=0 for NL (no dangling
+                         * handle). Only when the executive actually granted -- never
+                         * a fabricated grant frame (Rule 9/INV-6). */
+                        if (st == 1u) {
+                            struct scs_member_params gp;
+                            cm_dlm_frame_common(ps, rx->our_hw_mac, rx->our_src_logical, &gp);
+                            uint8_t gframe[SCS_MEMBER_FRAME_LEN];
+                            if (scs_member_build_dlm_enq_response(&gp, buf, (size_t)n,
+                                                                  mlkid, reqmode, gframe) == 0 &&
+                                send_frame_vc(rx->sock, (int)rx->ifindex, ps, ps->pb,
+                                              "CM DLM op-01 GRANT (cat 0x82 op 0x01)",
+                                              gframe, sizeof(gframe)) > 0) {
+                                scs_vc_record_sent(&ps->vc, gp.send_seq, monotonic_ms());
+                                log_ts(stdout);
+                                printf(" SCSD-I-DLMGRANTSENT, answered inbound op-01 with"
+                                       " a REAL grant (cat 0x82 op 0x01, res='%.*s'"
+                                       " master_lkid=0x%08x seq=%u)\n",
+                                       (int)rl, res, mlkid, gp.send_seq);
+                                fflush(stdout);
+                            }
+                        }
                     }
                 }
 

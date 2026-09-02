@@ -338,6 +338,15 @@ int scs_member_build_dlm_response(const struct scs_member_params *p,
 int scs_member_build_dlm_selfreg(const struct scs_member_params *p,
                                  uint8_t out[SCS_MEMBER_FRAME_LEN]);
 
+/* Build the cat-82 op-01 GRANT reply to an inbound cat-02 op-01 lock request, from
+ * OVMX's REAL master lock state (vms-16c, faithful DLM). Rewrites the body[20:56]
+ * lock-DB window from real state (master_lkid for held modes, 0 for NL) -- NOT an
+ * echo; measured against VAX1's own accepted grant format. See scs_member.c. */
+int scs_member_build_dlm_enq_response(const struct scs_member_params *p,
+                                      const uint8_t *req_frame, size_t req_len,
+                                      uint32_t master_lkid, uint8_t granted_mode,
+                                      uint8_t out[SCS_MEMBER_FRAME_LEN]);
+
 /* The honest NULL-mode (NL) DLM registration OVMX originates for a resource a
  * non-coordinator member showed it in an op-0d rebuild record (db20-b, vms-7e2):
  * cat 0x02 op 0x01 ENQ, mode hard-pinned NL (holds nothing), resource name from

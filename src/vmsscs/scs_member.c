@@ -699,6 +699,57 @@ int scs_member_build_dlm_response(const struct scs_member_params *p,
 }
 
 /*
+ * scs_member_build_dlm_enq_response - build the cat-82 op-01 GRANT reply to an
+ * inbound cat-02 op-01 lock request, from OVMX's REAL master lock state (vms-16c,
+ * faithful DLM). Unlike scs_member_build_dlm_response (echo-only), this REWRITES the
+ * body[20:56] lock-DB window from real state -- the field set the "silence" comment
+ * said needs a real lock manager. Measured against VAX1's OWN grant format (the one
+ * VAX1/VAX2 produce and accept, 2f2025a7 ENQ->GRANT diff), NOT the varied reference:
+ *   body[0:4]  OVMX's SYSAP send/ack counters (NOT a lock handle -- scs_member.h
+ *              body[0:2]=send-msg#, [2:4]=ack-msg#; the grant ACKs the ENQ's send).
+ *   body[4:8]  the requester's req_lkid, ECHOED unchanged.
+ *   body[8]    category | 0x80 (granted bit); body[9] opcode 0x01 echoed.
+ *   body[12:16] 0x00030001 granted status (request carried 0x00020001).
+ *   body[28:32] master lock handle: OVMX's real master_lkid for a HELD mode, 0 for
+ *              pure-NL (the rebuild grant is NL -> 0, matching VAX1's NL grants).
+ *   body[32:36] 0x00fe0000 master-state marker (low bits = record index).
+ *   resname + L1 region ECHOED. INV-6: every rewritten field is OVMX's REAL lock
+ *   state (from the executive grant), never fabricated; body[28]=0 for NL carries
+ *   no dangling handle (the a554e7ce failure mode).
+ */
+int scs_member_build_dlm_enq_response(const struct scs_member_params *p,
+                                      const uint8_t *req_frame, size_t req_len,
+                                      uint32_t master_lkid, uint8_t granted_mode,
+                                      uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    if (p == NULL || req_frame == NULL || out == NULL) {
+        return -1;
+    }
+    if (req_len < SCS_MEMBER_FRAME_LEN) {
+        return -1;
+    }
+    uint16_t lenword = get_le16(req_frame + 14);
+    if ((uint16_t)(lenword + 2) != SCS_MEMBER_SCA_LEN) {
+        return -1;
+    }
+    build_common(p, member_config_tmpl, SCS_MEMBER_ENV_CREDIT_CONFIG, out);
+    uint8_t *obody = out + 72;
+    const uint8_t *rbody = req_frame + 72;
+    memcpy(obody, rbody, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF); /* echo body */
+    put_le16(obody + 0, p->sysap_send_msg);      /* SYSAP send-msg# (NOT a handle) */
+    put_le16(obody + 2, p->sysap_ack_msg);       /* SYSAP ack-msg# */
+    obody[8] = (uint8_t)(rbody[8] | SCS_MEMBER_RESPONSE_BIT); /* 0x02 -> 0x82 granted */
+    put_le32(obody + 12, 0x00030001u);           /* granted status */
+    /* body[20:56] rewritten from REAL master state (not echoed): */
+    if (granted_mode > 0)                         /* held mode -> the real master handle */
+        put_le32(obody + 28, master_lkid);
+    else
+        put_le32(obody + 28, 0u);                 /* pure-NL grant: no held handle (as VAX1) */
+    put_le32(obody + 32, 0x00fe0000u);            /* master-state marker */
+    return 0;
+}
+
+/*
  * scs_member_build_dlm_selfreg - originate the joiner's SCS$DIRECTORY self-
  * registration (category 0x02, op 0x0d), the ONE cat-0x02 frame a real joiner
  * emits toward the coordinator during an add-transition (vms-db20).

@@ -111,3 +111,48 @@ set_tests_properties(cluster_host_headers PROPERTIES
     LABELS "unit;cluster;cluster_host"
     TIMEOUT 30
 )
+
+# ---- FC-P4.9: the HOST backend for vms_lock.c (the real DLM/lock engine) ----
+# vms_lock.c compiles UNCHANGED against exec_kbackend.h/exec_list.h/
+# exec_hash.h/exec_rbtree.h -- the frozen seam headers are never touched.
+# lock_shim/ holds tiny (one #include line) files named EXACTLY what those
+# frozen headers' own quoted #includes already ask for
+# (exec_kbackend_linux.h, exec_list_linux.h, exec_hash_linux.h,
+# exec_rbtree_linux.h, vms_internal.h); putting lock_shim/ FIRST on this
+# target's include path redirects those names to the real content
+# (exec_*_host.h / lock_host_internal.h, pthreads + malloc + a hand-rolled
+# intrusive list/hash/rbtree) without adding src/kernel or src/kernel-netbsd
+# to the path at all -- see lock_shim/exec_kbackend_linux.h for the full
+# mechanism explanation. src/kernel is still needed, AFTER lock_shim/, for
+# the genuinely portable src/kernel/vms_ioctl.h (ioctl arg structs +
+# LCK_*/VMS_DLM_*/PSL_C_* constants -- already used from plain userspace by
+# every tests/qemu/test_syssvc_*.c program).
+find_package(Threads REQUIRED)
+
+add_library(cluster_host_lock STATIC
+    ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_lock.c
+)
+target_include_directories(cluster_host_lock PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+)
+target_link_libraries(cluster_host_lock PUBLIC Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(cluster_host_lock PRIVATE -Wall -Wextra)
+endif()
+
+add_executable(test_lock_host test_lock_host.c)
+target_include_directories(test_lock_host PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(test_lock_host PRIVATE cluster_host_lock Threads::Threads)
+
+add_test(NAME cluster_host_test_lock_host COMMAND test_lock_host)
+set_tests_properties(cluster_host_test_lock_host PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock"
+    TIMEOUT 30
+)

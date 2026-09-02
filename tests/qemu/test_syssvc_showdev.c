@@ -325,6 +325,29 @@ int main(void)
         CHECK(0, "SHOW DEVICE ETH0: could not be run");
     }
 
+    /* ---- 1c. SHOW DEVICE <PREFIX> enumerates by name prefix (vms-bf0).
+     * An argument with no trailing colon is a device-name prefix, the way VMS
+     * wildcards a partial name: `SHOW DEVICE O` lists every device whose name
+     * begins with "O" (here the console OPA0:), read from the executive table
+     * -- NOT the exact-match %NOSUCHDEV this used to return for anything that
+     * was not a fully-qualified name. A prefix that matches nothing still gives
+     * the oracle's NOSUCHDEV (section 6), so the fix cannot fabricate a device. */
+    if (run_dcl("SHOW DEVICE O", out, sizeof(out)) == 0) {
+        show_capture("SHOW DEVICE O (prefix)", out);
+        CHECK(console_row(out) != NULL && strstr(out, "NOSUCHDEV") == NULL,
+              "SHOW DEVICE O enumerates by prefix and lists OPA0: from the executive table (not exact-match NOSUCHDEV)");
+    } else {
+        CHECK(0, "SHOW DEVICE O could not be run");
+    }
+
+    if (run_dcl_err("SHOW DEVICE ZZ", out, sizeof(out)) == 0) {
+        show_capture("SHOW DEVICE ZZ (prefix, no match)", out);
+        CHECK(strstr(out, "NOSUCHDEV") != NULL,
+              "SHOW DEVICE ZZ -- a prefix that matches no device -- gives the oracle's %SYSTEM-W-NOSUCHDEV, never a fabricated row");
+    } else {
+        CHECK(0, "SHOW DEVICE ZZ could not be run");
+    }
+
     /* ---- 2. A SECOND PROCESS allocates the console ------------------- */
     /*
      * Two pipes, not one. `report` carries the child's verdict up; `stop`

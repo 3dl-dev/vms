@@ -51,8 +51,8 @@
 #define SS_DEVALLOC     2112    /* oracle-measured; see ssdef.h provenance */
 #define SS_DEVNOTALLOC  2136
 
-#define DC_TERM         6
-#define DC_SCOM         3       /* DC$_SCOM -- LAN/Ethernet device class */
+#define DC_TERM        66
+#define DC_SCOM        32       /* DC$_SCOM -- LAN/Ethernet device class */
 
 #define CONSOLE         "OPA0:"
 #define ABSENT_DEV      "ZZA0:"

@@ -691,6 +691,21 @@ sed -i 's|proof=tests/qemu/test_syssvc_ef_mproc.c|proof=tests/qemu/test_syssvc_e
 expect_red "$EVENT" "an EXECUTIVE claim citing a single-process proof" \
     "EXECUTIVE DECLARATION WHOSE PROOF IS SINGLE-PROCESS: sys\$setef"
 
+# ...and the same single-process proof cannot be rescued by putting the four
+# characters "fork(" in a COMMENT (vms-f28). The gate reads fork() from the
+# scanner's call edges -- comments stripped, string literals skipped -- exactly
+# like the calls-the-service check below, so a mention is not a fork. Before the
+# fix a raw `grep 'fork('` matched the comment and let this per-process fake
+# through: vms-b5b's setvbuf comment held the literal `fork()` and silently
+# satisfied this gate. The ONLY change from the control above is the comment, so
+# a still-red verdict isolates exactly the spoof.
+sed -i 's|proof=tests/qemu/test_syssvc_ef_mproc.c|proof=tests/qemu/test_syssvc_ef_local.c|g' "$EVENT"
+printf '\n/* an A-writes/B-reads design would fork() a second process here. */\n' \
+    >> "$ROOT/tests/qemu/test_syssvc_ef_local.c"
+expect_red "$EVENT $ROOT/tests/qemu/test_syssvc_ef_local.c" \
+    "a single-process proof whose only fork() is in a comment (vms-f28 spoof)" \
+    "EXECUTIVE DECLARATION WHOSE PROOF IS SINGLE-PROCESS: sys\$setef"
+
 # A proof that never calls the service is a proof about something else.
 {
     echo ''

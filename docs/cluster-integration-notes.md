@@ -73,6 +73,26 @@ ONLY, and is added to the kernel lists by the first item that consumes it
 in-module (e.g. FC-P3.4/P6.3). **Do not re-add a codec object already present**
 (dedup on merge — the integrator has hit this on every FSM merge).
 
+### E10. VC gap-break under loss — faithful, or should the receiver hold for retransmit? (raised by FC-P1.4 → Fable, for FC-P2.2)
+FC-P1.2's VC breaks the circuit on ANY receive gap (p. 2-31 / §4(h)(4a)). The
+FC-P1.4 R2 simulator shows that at 10% per-link loss with pipelined sends this
+causes frequent breaks+re-formations (34–39 of 48 msgs undelivered before
+recovery; recovery IS proven). On a healthy cluster LAN gaps ~never occur, so it
+only bites under loss.
+- **ESCALATED to Fable:** is break-on-first-gap faithful NISCA, or should the
+  receiver discard-and-hold for the retransmit (go-back-N vs selective-repeat)?
+  And must FC-P2.2's SCS transparently retry over a re-formed VC (SYSAP never sees
+  the break) or does a VC break propagate as connection loss? Ruling shapes the
+  P2.2 CDT ladder + credit ledger; may yield an FC-P1.2 correction.
+- **Do not dispatch FC-P2.2 until this is ruled.**
+
+### E11. No pure `pe_fsm_project` — sim reads pe_fsm counters directly (raised by FC-P1.4 → FC-P1.6)
+The frozen port view (`struct vms_pe_view`) is filled only by `vms_pe_snapshot()`
+in the glue (`vms_pe.c`, not linked at R2). FC-P1.4's `sim_dump.c` reads the
+public `struct pe_fsm` counters directly (documented in its header). If FC-P1.6
+adds a pure `pe_fsm_project(f, struct vms_pe_view*)`, switch the sim's
+`dump_port()` to it. Minor; no ruling needed.
+
 ### E9. P1.2's port send API is frame-level (below SCS) — the glue bridges it to the body-level seam (raised by FC-P1.2 → owned by FC-P1.3)
 FC-P1.2 implemented the PORT primitive `pe_vc_send_frame(f, dst, frame, len)`:
 the owning layer hands down a complete SCS frame and the port stamps the

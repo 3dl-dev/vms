@@ -41,6 +41,7 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
 #include <stdint.h>
 #include <errno.h>
 
@@ -66,6 +67,7 @@ static int fail = 0;
 #define TARGET2_NAME    "OVMX1A8TGT2"   /* P2: stopped by /IDENTIFICATION */
 #define TARGET3_NAME    "OVMX1A8TGT3"   /* P3: privless refusal target */
 #define TARGET_SIG_NAME "OVMX904SIG"    /* P6: suspnd/resume/forcex by VMS pid */
+#define TARGET_PRI_NAME "OVMXDFF7PRI"   /* P7: setpri by VMS pid */
 #define ABSENT_NAME     "OVMX1A8NONE"   /* never created */
 
 static struct dsc$descriptor_s str_dsc(const char *s)
@@ -467,6 +469,55 @@ int main(void)
 
         kill((pid_t)lpid, SIGKILL);
         reap(lpid);
+    }
+
+    /* ---- P7 (vms-dff7): sys$setpri sets the RESOLVED TARGET's priority, not
+     * the CALLER's. The old facade discarded pidadr/prcnam, always changed the
+     * caller's own nice via setpriority(...,0,...), and returned SS$_NORMAL for
+     * any target. Here we set a child's priority BY ITS VMS pid and prove the
+     * CHILD's Linux nice moved while the CALLER's did not. VMS pri 4 -> nice 15
+     * is a LOWERING, so it needs no privilege even unprivileged. ---- */
+    {
+        uint32_t vms_pid = 0, lpid = 0;
+        uint32_t cst = spawn_named(TARGET_PRI_NAME, &vms_pid);
+        CHECK(cst & 1, "P7: $CREPRC creates the setpri target");
+        lpid = linux_pid_of(vms_pid);
+        CHECK(lpid != 0, "P7: the target resolves to a real Linux pid");
+        CHECK(wait_for_exec(lpid, "sh") == 0, "P7: the target reached its sh image");
+
+        errno = 0;
+        int caller_nice_before = getpriority(PRIO_PROCESS, 0);
+        if (errno != 0) caller_nice_before = 0;
+        errno = 0;
+        int child_nice_before = getpriority(PRIO_PROCESS, (id_t)lpid);
+        if (errno != 0) child_nice_before = 0;
+
+        uint32_t prvpri = 0xFFFFu;
+        uint32_t sst = sys$setpri(&vms_pid, NULL, 4, &prvpri);
+        CHECK(sst == SS$_NORMAL, "P7: sys$setpri(child VMS pid, 4) returns SS$_NORMAL");
+
+        int child_nice_after = getpriority(PRIO_PROCESS, (id_t)lpid);
+        int caller_nice_after = getpriority(PRIO_PROCESS, 0);
+        CHECK(child_nice_after == 15,
+              "P7: the CHILD's Linux nice became 15 (VMS pri 4) -- setpri hit the "
+              "executive-resolved target, not the caller");
+        CHECK(caller_nice_after == caller_nice_before,
+              "P7: the CALLER's own priority is UNCHANGED -- no facade self-set "
+              "(the old code would have moved the caller's nice to 15)");
+        CHECK(prvpri == (uint32_t)(19 - child_nice_before),
+              "P7: prvpri returns the TARGET's prior priority, not the caller's");
+
+        kill((pid_t)lpid, SIGKILL);
+        reap(lpid);
+    }
+
+    /* ---- P8 (vms-dff7): sys$setpri on a NONEXISTENT VMS pid is the honest
+     * SS$_NONEXPR, not a fake SS$_NORMAL for a target it never resolved. ---- */
+    {
+        uint32_t bogus_pid = 0xEFFFFFFFu;
+        uint32_t sst = sys$setpri(&bogus_pid, NULL, 4, NULL);
+        CHECK(sst == SS$_NONEXPR,
+              "P8: sys$setpri(nonexistent VMS pid) returns SS$_NONEXPR (vms-dff7)");
     }
 
     printf("=== test_syssvc_delprc: %d passed, %d failed ===\n", pass, fail);

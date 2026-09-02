@@ -19,10 +19,12 @@ summary: >
   GROUP/WORLD, and deliver the signal to the resolved Linux pid — SS$_NONEXPR for
   a process the executive does not carry, never a raw kill() on a VMS pid cast as
   a Linux pid (vms-904). WAKE still does not resolve prcnam-by-name (documented
-  gap). SETPRI discards BOTH pidadr and prcnam and
-  always changes the CALLER's priority while returning success (facade-risk).
-  SYS$CANCEL is a literal no-op returning SS$_NORMAL (facade-risk). SYS$SETPRN
-  and SYS$PROCESS_SCAN are absent.
+  gap). SETPRI now resolves its target through the executive the same way DELPRC
+  does (by prcnam or VMS PID, or self when none), authorizes GROUP/WORLD, and
+  applies the priority to the resolved Linux pid -- SS$_NONEXPR for an absent
+  target, never a silent change of the CALLER's own priority for any target
+  (vms-dff7). SYS$CANCEL is a literal no-op returning SS$_NORMAL (facade-risk).
+  SYS$SETPRN and SYS$PROCESS_SCAN are absent.
 last_reviewed: 2026-08-31
 items:
   - {id: sys$creprc, kind: routine, status: implemented, authenticity: real, vms: "Create a process", evidence: src/libvms/syssvc/sys_process.c, notes: "fork()+execve() + executive PCB registration; inherits identity; returns the executive-assigned VMS PID in pidadr"}
@@ -33,7 +35,7 @@ items:
   - {id: sys$suspnd, kind: routine, status: implemented, authenticity: real, vms: "Suspend a process", evidence: src/libvms/syssvc/sys_process.c, notes: "target resolved through the executive by prcnam or VMS PID (like $DELPRC), or self when none; authorized GROUP/WORLD for another process; SIGSTOP to the resolved Linux pid; SS$_NONEXPR for an absent target (vms-904)"}
   - {id: sys$resume, kind: routine, status: implemented, authenticity: real, vms: "Resume a suspended process", evidence: src/libvms/syssvc/sys_process.c, notes: "target resolved through the executive by prcnam or VMS PID (like $DELPRC), or self when none; SIGCONT to the resolved Linux pid; SS$_NONEXPR for an absent target (vms-904)"}
   - {id: sys$forcex, kind: routine, status: implemented, authenticity: real, vms: "Force a process to exit", evidence: src/libvms/syssvc/sys_process.c, notes: "sys$exit on the caller when no target; otherwise target resolved through the executive by prcnam or VMS PID (like $DELPRC), authorized GROUP/WORLD; SIGUSR1 to the resolved Linux pid; SS$_NONEXPR for an absent target (vms-904)"}
-  - {id: sys$setpri, kind: routine, status: implemented, authenticity: facade-risk, vms: "Set process scheduling priority", evidence: src/libvms/syssvc/sys_process.c, notes: "discards BOTH pidadr and prcnam; always sets the CALLER's priority (getpriority/setpriority on self) yet returns success for any target"}
+  - {id: sys$setpri, kind: routine, status: implemented, authenticity: real, vms: "Set process scheduling priority", evidence: src/libvms/syssvc/sys_process.c, notes: "target resolved through the executive by prcnam (caller's UIC group) or VMS PID (like $DELPRC), or self when none; authorized GROUP/WORLD for another process; the VMS-priority<->Linux-nice map is applied to the RESOLVED target's Linux pid, SS$_NONEXPR for an absent target (vms-dff7). Was facade-risk: discarded pidadr/prcnam and set the CALLER's priority for any target."}
   - {id: sys$cancel, kind: routine, status: stub, authenticity: facade-risk, vms: "Cancel all I/O on all channels of the calling process", evidence: src/libvms/syssvc/sys_process.c, notes: "literal no-op, returns SS$_NORMAL unconditionally"}
   - {id: sys$setprn, kind: routine, status: absent, authenticity: n/a, vms: "Set the calling process's name", notes: "no $SETPRN service; only an internal vms_kif_setprn used by $CREPRC to stamp the child name"}
   - {id: sys$process_scan, kind: routine, status: absent, authenticity: n/a, vms: "Scan for processes matching selection criteria"}

@@ -358,20 +358,6 @@ int scs_member_build_dlm_op04(const struct scs_member_params *p, uint32_t lkid,
 int scs_member_build_dlm_commit(const struct scs_member_params *p, uint32_t lkid,
                                 uint8_t out[SCS_MEMBER_FRAME_LEN]);
 
-/* The REACTIVE-registration completion pair (vms-655): op-04 then op-03 that CLOSE
- * a resource OVMX registered to a non-coordinator member and had GRANTED. Carry
- * {handle (hlo/hhi) = the handle OVMX RECEIVED in the cat-82 grant, echoed;
- * resname@body[48]; constant status}. Honest by construction -- the handle is never
- * synthesized from a lock DB OVMX lacks. See scs_member.c. */
-int scs_member_build_dlm_op04_res(const struct scs_member_params *p,
-                                  uint32_t hlo, uint32_t hhi,
-                                  const char *resname, uint8_t namelen,
-                                  uint8_t out[SCS_MEMBER_FRAME_LEN]);
-int scs_member_build_dlm_commit_res(const struct scs_member_params *p,
-                                    uint32_t hlo, uint32_t hhi,
-                                    const char *resname, uint8_t namelen,
-                                    uint8_t out[SCS_MEMBER_FRAME_LEN]);
-
 /* The FULL per-lock DLM record OVMX carries in its op-01 ENQ registration (Layer
  * 3, vms-74f) -- every field a REAL attribute of the standing lock OVMX genuinely
  * holds, in OVMX's own executive encoding (INV-6, no fabrication). A skeletal

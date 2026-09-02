@@ -1059,10 +1059,6 @@ struct peer_state {
      * to its op-0d rebuild records (dedup, so each shown resource registers once). */
     char     dlm_nl_reg[OVMX_DLM_NL_MAX][32];
     int      dlm_nl_reg_n;
-    /* vms-655: resources whose registration OVMX has COMPLETED (op-04+op-03) after
-     * this member GRANTED them -- dedup so each granted resource completes once. */
-    char     dlm_nl_done[OVMX_DLM_NL_MAX][32];
-    int      dlm_nl_done_n;
     /* rd vms-ec75 (DLM rung H11): DISTRIBUTED DEADLOCK SEARCH. A contender node
      * holds one resource (mastered by C) and $ENQs a second that QUEUES behind the
      * other contender -- a genuine cross-node wait-for cycle. When the wait queues,
@@ -3709,12 +3705,6 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                             the respond-to-rebuild that drains the member's
  *                             directory rebuild; NL (holds nothing), one sequenced
  *                             VC message per shown resource, CHOKED
- *     cm_send_dlm_completion_res() the cat-0x02 op-0x04 + op-0x03 COMMIT pair that
- *                             CLOSES a reactive registration once the member GRANTS
- *                             it (vms-655) -- carries the handle OVMX RECEIVED in the
- *                             grant + resname; two sequenced VC messages per granted
- *                             resource, CHOKED. OVMX finishes its own handshake,
- *                             masters nothing
  *     scs_reflect_credit()    the op8->op9 / op6->op7 credit handshake reply
  *     scs_send_disconnect_self() self-directed teardown, hand-built frame
  *
@@ -6702,73 +6692,6 @@ static int cm_send_dlm_nl_register(int sock, int ifindex, struct peer_state *ps,
 }
 
 /*
- * dlm_nl_done_add - record that OVMX has COMPLETED (op-04+op-03) resource `res` to
- * this member after it GRANTED the registration; returns 1 if NEW (complete now), 0
- * if already completed or the cap is reached. Dedup so each granted resource
- * completes exactly once (vms-655).
- */
-static int dlm_nl_done_add(struct peer_state *ps, const char res[32])
-{
-    for (int i = 0; i < ps->dlm_nl_done_n; i++) {
-        if (memcmp(ps->dlm_nl_done[i], res, 32) == 0) {
-            return 0;
-        }
-    }
-    if (ps->dlm_nl_done_n >= OVMX_DLM_NL_MAX) {
-        return 0;
-    }
-    memcpy(ps->dlm_nl_done[ps->dlm_nl_done_n++], res, 32);
-    return 1;
-}
-
-/*
- * cm_send_dlm_completion_res - CLOSE one reactive registration (vms-655): send the
- * op-04 completion then the op-03 COMMIT for a resource a non-coordinator member
- * GRANTED (cat-82 op-01). Both carry {hlo/hhi = the handle OVMX RECEIVED in that
- * grant, resname, constant status} -- OVMX finishes its OWN granted handshake,
- * mastering nothing (honest; unlike a reciprocal grant, no lock-manager state is
- * synthesized). The reference joiner drives these heavily and OVMX had been
- * skipping them. CHOKED through send_frame_vc.
- */
-static int cm_send_dlm_completion_res(int sock, int ifindex, struct peer_state *ps,
-                                      const uint8_t our_hw_mac[6],
-                                      const uint8_t our_src_logical[6],
-                                      uint32_t hlo, uint32_t hhi,
-                                      const char *resname, uint8_t namelen)
-{
-    if (ps->cm_local_conid == 0) {
-        return 0;
-    }
-    int sent = 0;
-    struct scs_member_params bp4;
-    cm_dlm_frame_common(ps, our_hw_mac, our_src_logical, &bp4);
-    uint8_t f4[SCS_MEMBER_FRAME_LEN];
-    if (scs_member_build_dlm_op04_res(&bp4, hlo, hhi, resname, namelen, f4) == 0 &&
-        send_frame_vc(sock, ifindex, ps, ps->pb,
-                      "CM DLM reactive completion (cat 0x02 op 0x04)",
-                      f4, sizeof(f4)) > 0) {
-        scs_vc_record_sent(&ps->vc, bp4.send_seq, monotonic_ms());
-        sent++;
-    }
-    struct scs_member_params bp3;
-    cm_dlm_frame_common(ps, our_hw_mac, our_src_logical, &bp3);
-    uint8_t f3[SCS_MEMBER_FRAME_LEN];
-    if (scs_member_build_dlm_commit_res(&bp3, hlo, hhi, resname, namelen, f3) == 0 &&
-        send_frame_vc(sock, ifindex, ps, ps->pb,
-                      "CM DLM reactive COMMIT (cat 0x02 op 0x03)",
-                      f3, sizeof(f3)) > 0) {
-        scs_vc_record_sent(&ps->vc, bp3.send_seq, monotonic_ms());
-        sent++;
-    }
-    log_ts(stdout);
-    printf(" SCSD-I-DLMNLDONE, completed a reactive registration (op 0x04+0x03,"
-           " res='%.*s' handle=0x%08x/0x%08x seq=%u)\n",
-           (int)namelen, resname, hlo, hhi, bp3.send_seq);
-    fflush(stdout);
-    return sent;
-}
-
-/*
  * cm_send_dlm_registration - drive OVMX's REAL standing-lock registrations to the
  * COORDINATOR (Layer 3, vms-74f). Enumerate the node's standing locks (the
  * F11B$v<label> volume lock a MOUNT holds -- vms-25e/1f4) and originate one cat-02
@@ -7709,41 +7632,6 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                                            rx->our_hw_mac, rx->our_src_logical);
                 }
 
-                /*
-                 * vms-655: a NON-coordinator member (VAX1) GRANTED one of OVMX's
-                 * REACTIVE NL registrations (cat-82 op-01). CLOSE it -- op-04
-                 * completion + op-03 COMMIT -- exactly the per-resource handshake
-                 * the reference joiner drives and OVMX had been SKIPPING (register,
-                 * get granted, stop). HONEST: OVMX finishes its OWN granted handshake
-                 * echoing the handle it RECEIVED in this grant (gb[28:36], the
-                 * master's handle) + the resname; it masters nothing and synthesizes
-                 * no lock state. Only for a resource OVMX actually registered (in
-                 * dlm_nl_reg), once each (dlm_nl_done dedup). If the completion needs
-                 * a handle NOT in the grant, VAX simply won't advance -- we never
-                 * fabricate one (INV-6). Tests whether completing the granted
-                 * registrations is the CLUSTER_NODES 2->3 trigger.
-                 */
-                if (mv.is_response && (mv.category & 0x7f) == SCS_MEMBER_CAT_DLM &&
-                    mv.opcode == 0x01 && !cm_peer_is_coordinator(rx->peers, ps) &&
-                    (size_t)n >= 72 + 80) {
-                    const uint8_t *gb = buf + 72;
-                    char res[32];
-                    uint8_t rl = dlm_op0d_resname(gb, res);   /* resname@body[48] */
-                    int registered = 0;
-                    for (int i = 0; i < ps->dlm_nl_reg_n; i++) {
-                        if (memcmp(ps->dlm_nl_reg[i], res, 32) == 0) { registered = 1; break; }
-                    }
-                    if (rl > 0 && registered && dlm_nl_done_add(ps, res)) {
-                        uint32_t hlo = (uint32_t)gb[28] | ((uint32_t)gb[29] << 8) |
-                                       ((uint32_t)gb[30] << 16) | ((uint32_t)gb[31] << 24);
-                        uint32_t hhi = (uint32_t)gb[32] | ((uint32_t)gb[33] << 8) |
-                                       ((uint32_t)gb[34] << 16) | ((uint32_t)gb[35] << 24);
-                        cm_send_dlm_completion_res(rx->sock, (int)rx->ifindex, ps,
-                                                   rx->our_hw_mac, rx->our_src_logical,
-                                                   hlo, hhi, res, rl);
-                    }
-                }
-
                 /* vms-760: TRACE EVERY inbound CM message. This exists because
                  * a run stalled at barrier step 1 and the logs could not say
                  * whether the coordinator's op-0x0c release had arrived and
@@ -8089,7 +7977,6 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                     ps->dlm_reg_sent = 0;        /* vms-74f: re-arm the standing-lock registration one-shot */
                     ps->dlm_completion_sent = 0; /* vms-74f: re-arm the rebuild-completion one-shot */
                     ps->dlm_nl_reg_n = 0;        /* vms-655: re-arm the reactive NL-registration dedup for the new epoch */
-                    ps->dlm_nl_done_n = 0;       /* vms-655: re-arm the reactive-completion dedup for the new epoch */
                     /* vms-584: the open carries the post-transition cluster
                      * facts. Latch them now, apply them when the transition
                      * is real (see ovmx_cluster_relearn). */

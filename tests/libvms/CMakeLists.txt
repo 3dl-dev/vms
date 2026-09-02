@@ -24,6 +24,10 @@ endfunction()
 libvms_add_test(test_libvms_fao
     ${CMAKE_CURRENT_SOURCE_DIR}/test_fao.c)
 
+# Test 1a: sys$putmsg honors the facnam facility-name override (vms-7a2)
+libvms_add_test(test_libvms_putmsg_facnam
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_putmsg_facnam.c)
+
 # Test 1b: sys$filescan — file specification field scan (vms-4f3, self-host
 # MMK spine). Parses full/partial/wildcard/node/rooted specs and asserts each
 # FSCN$_ field's returned position, length, and the fldflags presence mask.

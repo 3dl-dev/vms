@@ -11,10 +11,10 @@
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 25 | | real | 280 |
-| 🟢 implemented | 245 | | n/a | 93 |
-| 🟡 partial | 46 | | advisory | 43 |
-| 🟠 stub | 20 | | facade-risk | 15 |
+| ✅ verified | 25 | | real | 281 |
+| 🟢 implemented | 246 | | n/a | 93 |
+| 🟡 partial | 45 | | advisory | 43 |
+| 🟠 stub | 20 | | facade-risk | 14 |
 | 🔵 designed | 0 | |  |  |
 | ⬜ absent | 95 | |  |  |
 
@@ -24,8 +24,8 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **387 committed** — **270 met** (implemented/verified), 45 in progress (partial), 72 not started (absent/stub/designed).
-- ⚠ **13 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
+- **387 committed** — **271 met** (implemented/verified), 44 in progress (partial), 72 not started (absent/stub/designed).
+- ⚠ **12 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 8 out · 27 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 
 _These are counts against an enumerable commitment list, deliberately not a percentage of VMS. If a surface is later ruled into V1, it joins the denominator at whatever status it actually has — cataloguing more of VMS makes the picture look less complete, never more._
@@ -34,7 +34,7 @@ _These are counts against an enumerable commitment list, deliberately not a perc
 
 _The C source-compatibility surface: descriptors, status codes, system services, RTL, condition handling, RMS programmatic API._
 
-`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠⬜⬜⬜⬜⬜`  —  207 surfaces catalogued (137 met · 16 in progress · 54 not started) · V1: 198 committed, 137 met · ⚠ 10 facade-risk
+`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠⬜⬜⬜⬜⬜`  —  207 surfaces catalogued (138 met · 15 in progress · 54 not started) · V1: 198 committed, 138 met · ⚠ 9 facade-risk
 
 ### chf — Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND)
 <sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS Programming Concepts Manual — Condition Handling; OpenVMS RTL LIB$ Manual · reviewed 2026-08-31</sub>
@@ -303,10 +303,10 @@ VMS ships ~10 event-flag services; OVMX declares 10, all implemented and real, b
 ### sys-fao-msg — SYS$ FAO Formatting + Message Services
 <sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS System Services Reference Manual — FAO and Message Services · reviewed 2026-08-31</sub>
 
-FAO (SYS$FAO/SYS$FAOL + LIB$ wrapper forms): 3/3 implemented, real. Message services: 2/4 partial. SYS$PUTMSG silently discards its facnam argument (facade-risk). SYS$SNDJBC is absent.
+FAO (SYS$FAO/SYS$FAOL + LIB$ wrapper forms): 3/3 implemented, real. Message services: SYS$GETMSG and SYS$PUTMSG implemented+real -- SYS$PUTMSG now honors the facnam facility-name override by rewriting the %FACILITY token of the formatted message (vms-7a2), no longer silently discarding it. SYS$SNDJBC is absent.
 
 
-<sub>6 items · 4 met · 1 in progress · 1 not started · ⚠ 1 facade-risk</sub>
+<sub>6 items · 5 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -314,7 +314,7 @@ FAO (SYS$FAO/SYS$FAOL + LIB$ wrapper forms): 3/3 implemented, real. Message serv
 | 🟢 | `sys$faol` | routine | Formatted ASCII output (arg-list form) | implemented | real | in | `src/libvms/syssvc/sys_fao.c` |
 | 🟢 | `lib$_fao_forms` | routine | LIB$ wrapper forms of FAO (LIB$FAO, LIB$FAOL) | implemented | real | in | `src/libvms/syssvc/sys_fao.c` |
 | 🟢 | `sys$getmsg` | routine | Get formatted message text for a condition code | implemented | real | in | `src/libvms/syssvc/sys_msg.c` — reads the compiled-in known_codes[] table in status.c (51 codes); a code absent decodes honestly to 'unknown status code' |
-| 🟡⚠ | `sys$putmsg` | routine | Output a formatted message via the condition-handling mechanism | partial | facade-risk | in | `src/libvms/syssvc/sys_msg.c` — facnam argument silently discarded, (void)facnam |
+| 🟢 | `sys$putmsg` | routine | Output a formatted message via the condition-handling mechanism | implemented | real | in | `src/libvms/syssvc/sys_msg.c` — honors the facnam facility-name override by rewriting the %FACILITY token of the formatted message (vms-7a2); OVMX messages carry no FAO directives so the FAO argument list has nothing to substitute (honest, not a facade). Was facade-risk: facnam silently discarded. |
 | ⬜ | `sys$sndjbc` | routine | Send a message to the job controller | absent | n/a | in |  |
 
 ### sys-io — SYS$ I/O Channel + QIO
@@ -1251,7 +1251,6 @@ Surfaces that report success without doing the real work, or fake shared state p
 | `rms$org_indexed` | rms-api | partial | `src/vmsrms/rms_idx.c` — primary key only per rms_idx.c's own header comment |
 | `rms$isam_alternate_key` | rms-api | absent | `src/vmsrms/rms_idx.c` — entirely unimplemented (zero hits) — a multi-key ISAM program silently only ever sees the primary key, breaking common COBOL/DIBOL business-app patterns |
 | `scs$datagram-service` | scs | stub | `src/vmsscs/scs_dgram.c` — Self-labeled: scs_dgram.h documents it never routes a datagram and the run log prints zeros — an honest state, but flagged facade-risk because it is real logic with zero production callers, the exact unwired-dead-code shape the Draper register hunts. |
-| `sys$putmsg` | sys-fao-msg | partial | `src/libvms/syssvc/sys_msg.c` — facnam argument silently discarded, (void)facnam |
 | `sys$dgblsc` | sys-memory | stub | `src/libvms/syssvc/sys_memory.c` — validates args and returns SS$_NORMAL; nothing done |
 | `sys$purgws` | sys-memory | stub | `src/libvms/syssvc/sys_memory.c` — validates args and returns SS$_NORMAL; nothing done |
 | `sys$lkwset` | sys-memory | stub | `src/libvms/syssvc/sys_memory.c` — kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done |

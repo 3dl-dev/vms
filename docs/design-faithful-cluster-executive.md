@@ -437,6 +437,91 @@ until FC-P1.1/FC-P2.1's builders replace it, then deleted. The barrier's
 rung-1 fixtures become `specimen[72:204]` slices — the existing byte-exact
 assertions hold unchanged on the body.
 
+#### 3.2.5 Virtual-circuit loss recovery — RULING (2026-09-02, E10 from FC-P1.4)
+
+**The question.** FC-P1.2's VC receiver breaks the circuit on any sequence
+gap (`h_vc_rx_seqmsg` step 3, citing Davis p. 2-31 and spec §4(h)(4a)).
+The simulator shows that under 10 % per-link loss with pipelined sends this
+tears the VC down on every lost frame; recovery works, but SCS above would
+see every connection broken on a single packet loss. Faithful, or a bug?
+
+**Ruling: a fidelity bug. Break-on-first-gap conflates the *guarantee*
+with its *detection*.** What p. 2-31 governs is the contract and its
+consequence: SCS guarantees delivery and per-VC ordering; *if the port
+cannot satisfy the guarantee*, the VC is explicitly broken and every
+connection on it with it. The mechanism by which a port satisfies the
+guarantee under loss is retransmission — and the wire shows the real port
+doing exactly that before it ever breaks anything: sequenced messages
+carry an explicit **retransmit msgtype** (`0x7b` is the retransmit of
+`0x5b`, spec §4(h)), retransmits **reuse the original `send_seq`** (§4(L),
+"advancing it per retransmit is wrong"), 506 duplicate/retransmit
+sequenced frames were counted across the corpus (§4(h)(4a)), and the
+unacked padded-HELLO **retransmit ladder** (§4(k)) shows a real VAX
+retrying an unacknowledged frame ~25 times over tens of seconds before
+giving up. A receiver that breaks on the first out-of-order frame makes
+the sender's ring, the retransmit marker and the ladder pointless. The
+"0 gaps in 321,599 VAX-sourced messages" census was taken on a lossless
+SIMH bridge; it does not discriminate between "VAX never tolerates a gap"
+and "the LAN never lost a frame," and the ladder evidence decides it.
+
+The port's *silence* detectors are separate and stay: `TIMVCFAIL` (the VC
+failure timer) and the listen timeout (§4(M)) detect a peer that has gone
+quiet; ch. 2 publishes the rule, not the timer, and the port driver owns
+it.
+
+**The faithful receiver/sender model (NISCA/PPD sequenced-message service):**
+
+| Event | Receiver (`vms_pe_fsm.c` VC tables) | Sender |
+|---|---|---|
+| in-order frame (`seq == recv_seq+1`) | advance `recv_seq`, credit, ack, deliver | — |
+| duplicate (`seq <= recv_seq`) | ack, never deliver twice (unchanged) | — |
+| **gap** (`seq > recv_seq+1`) | **discard the frame, do not advance, count `rx_gaps`, and immediately re-send the cumulative ack of `recv_seq`** (the duplicate ack tells the sender where the hole is) — **no break** | — |
+| ack timeout on the oldest unacked entry | — | **retransmit from the oldest unacked entry onward, in order, same bytes, same `send_seq`, retransmit msgtype** (go-back-N: the receiver discards everything after the hole, so the sender resends the tail) |
+| ack received | release the ring through the acked seq (unchanged) | ladder resets for the released entries |
+| retransmit ladder **exhausted** for an entry | — | **break the VC**, reason `PE_VC_DOWN_RETRANSMIT_EXHAUSTED` ("delivery guarantee cannot be satisfied", p. 2-31) |
+| `TIMVCFAIL` / listen timeout with no traffic | break the VC, reason `PE_VC_DOWN_TIMVCFAIL` (unchanged) | — |
+
+Receive window = 1 (go-back-N, no reorder buffer): the only scheme that
+is *always* correct without grounding a window size the book does not
+publish; a selective-repeat window would be an optimization with no
+oracle. The ladder cadence and count are OVMX design choices labeled per
+the spec's §5 discipline, seeded from the §4(k) measured ladder (the only
+retransmit timing a real VAX has shown us); `PE_VC_DOWN_SEQ_GAP` is
+deleted (a gap is a counter, never a reason).
+
+**Consequent contract for FC-P2.2 (SCS) — a VC break is a real event and
+SCS does *not* hide it.** Davis p. 2-31: when the VC breaks, every
+connection it supported is broken. So:
+
+- Port-level retransmission is invisible to SCS: SCS sees an ordered,
+  gap-free stream, and a sequenced message spends its credit exactly once
+  at `scs_send_msg` regardless of how many times the port retransmits it.
+- On `PE_VC_DOWN_*` the port raises `vc_down(sysid, reason)` to SCS; SCS
+  moves **every CDT on that SB to CLOSED** with reason path-lost, discards
+  their credit ledgers (a re-formed VC starts new connections with fresh
+  credits), fails pending sends with an `SS$_` status (OVMX: `SS$_PATHLOST`),
+  and calls each SYSAP's `disconnected(local_conid, reason)`. SCS never
+  retries a message across a VC break and never re-opens a connection on
+  its own — that is a SYSAP decision.
+- CNXMAN is the SYSAP that reconnects: its `recnx_fsm` (FC-P3.6) holds
+  membership and retries once a second for `max(RECNXINTERVAL, remote
+  TIMVCFAIL)` (spec §4(aa)), re-forming the VC and re-opening the
+  `VMS$VAXcluster` connection; the CDT ladder in P2.2 therefore needs no
+  "suspended" state — closed, then re-opened by the SYSAP.
+
+This makes the receiver ruling load-bearing: because a VC break has real
+CM consequences (RECNX loop, possibly a transition), the port must absorb
+transient loss itself, which is exactly what the retransmit ladder is for.
+
+**FC-P1.2 correction (one item, FC-P1.9):** receiver discard + re-ack on
+gap; sender ack-timeout retransmit from the oldest unacked entry with the
+retransmit msgtype and a bounded ladder; break only on ladder exhaustion,
+`TIMVCFAIL`, or listen timeout; R2 acceptance at 10 % loss with pipelined
+sends = **all** messages delivered in order, **0** VC breaks, retransmits
+> 0; and at 100 % one-way loss = exactly one break with reason
+`RETRANSMIT_EXHAUSTED` after the ladder, followed by SCS `disconnected`
+on every CDT of that SB.
+
 `vms_l2.c` (the ioctl pipe) is **not** on the cluster path. It stays as a
 generic privileged LAN facility (the eventual `$QIO` LAN-driver surface for
 user-mode protocols, gated on `PHY_IO`) if another lane needs it; otherwise it
@@ -1086,26 +1171,6 @@ second half, and the opcode mapping. It is also the 3-node load bed for P5.
 INFERRED "highest node number" (spec §4(p)). Recipe: on the 3-node clone,
 vary SCSSYSTEMID ordering and join order, kill members, observe who drives
 the barrier. Until grounded OVMX never self-elects (§3.7).
-
-> **CORRECTED, and IMPLEMENTED, by FC-P3.12** (2026-09-02). The
-> "highest node number" reading is superseded by the published description —
-> `docs/design-cluster-book-grounding.md` **D7**, Davis pp. 7-37/7-38, 7-32,
-> 7-2. There is no ordering rule to compute: **for a JOIN the JOINER picks**
-> (protocol level → ECO level → the CSB nearest the CLUB queue tail) and asks
-> exactly one peer, so *receiving the `op 0x02` IS the selection*; **for a
-> departure it is the first detector** (p. 7-2), which arrives as FC-P3.6's
-> `CNXMAN_CSB_ACT_PROPOSE_TRANSITION`. The **coordinator lock** (p. 7-32) then
-> gates both. Its wire form is *not* grounded in any capture, so OVMX cannot
-> ask for it and does not invent a frame: it implements the lock's two
-> observable consequences — refuse to drive while another CM's transition is
-> open (p. 7-30, real CLUB state), and let the Phase 1 proposal be the grant
-> (p. 7-41: a member committed elsewhere does not acknowledge, so no GO is ever
-> sent). `src/kernel-core/vms_cnxman_coord_fsm.h` carries the full reasoning;
-> the predicate contains no SCSSYSTEMID comparison and no node-number
-> arithmetic, so §3.7's "never self-elects" holds structurally.
->
-> The lab recipe above is still worth running — but as FC-P8.3's *confirmation*
-> of protocol/ECO/queue order, not as the source of the predicate.
 
 ### 5.6 NetBSD LAN binding — resolved by design; a P0 spike picks the rx hook
 

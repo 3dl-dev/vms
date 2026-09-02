@@ -73,18 +73,36 @@ ONLY, and is added to the kernel lists by the first item that consumes it
 in-module (e.g. FC-P3.4/P6.3). **Do not re-add a codec object already present**
 (dedup on merge — the integrator has hit this on every FSM merge).
 
-### E10. VC gap-break under loss — faithful, or should the receiver hold for retransmit? (raised by FC-P1.4 → Fable, for FC-P2.2)
-FC-P1.2's VC breaks the circuit on ANY receive gap (p. 2-31 / §4(h)(4a)). The
-FC-P1.4 R2 simulator shows that at 10% per-link loss with pipelined sends this
-causes frequent breaks+re-formations (34–39 of 48 msgs undelivered before
-recovery; recovery IS proven). On a healthy cluster LAN gaps ~never occur, so it
-only bites under loss.
-- **ESCALATED to Fable:** is break-on-first-gap faithful NISCA, or should the
-  receiver discard-and-hold for the retransmit (go-back-N vs selective-repeat)?
-  And must FC-P2.2's SCS transparently retry over a re-formed VC (SYSAP never sees
-  the break) or does a VC break propagate as connection loss? Ruling shapes the
-  P2.2 CDT ladder + credit ledger; may yield an FC-P1.2 correction.
-- **Do not dispatch FC-P2.2 until this is ruled.**
+### E10. VC gap-break under loss → RULED a fidelity bug; fix = FC-P1.9 go-back-N (Fable, design §3.2.5)
+**RULED: break-on-first-gap is a FIDELITY BUG.** p. 2-31 governs the delivery
+guarantee + its consequence (if the port can't satisfy order/delivery, the VC and
+every connection on it break) — NOT the detection mechanism. The port satisfies
+the guarantee under loss by RETRANSMISSION (wire evidence: 0x7b retransmit
+msgtype, retransmit reuses send_seq §4(L), 506 dup/retransmit frames, §4(k) ~25-retry
+ladder). The "0 gaps in 321,599" census was a lossless SIMH bridge — can't
+distinguish "never tolerates a gap" from "LAN never lost one."
+**Faithful model = go-back-N, cumulative acks, receive window = 1:**
+- Receiver on a gap: discard the frame, do NOT advance recv_seq, count `rx_gaps`,
+  immediately re-send the cumulative ack — NO break.
+- Sender: ack-timeout retransmit from the oldest unacked ring entry onward (same
+  bytes, same seq, retransmit msgtype), bounded ladder seeded from §4(k) (labeled
+  OVMX design values).
+- Break ONLY on ladder exhaustion (`PE_VC_DOWN_RETRANSMIT_EXHAUSTED`, NEW),
+  `TIMVCFAIL`, or listen timeout. **`PE_VC_DOWN_SEQ_GAP` deleted.** Silence
+  detectors stay.
+**FC-P2.2 contract (SCS does NOT hide a VC break):** port retransmission is
+invisible to SCS (credit spent once at scs_send_msg). On `vc_down(sysid, reason)`:
+every CDT on that SB → CLOSED (path-lost), ledgers discarded, pending sends fail
+`SS$_PATHLOST`, each SYSAP's `disconnected()` called. SCS never retries across a
+break or re-opens itself — CNXMAN's `recnx_fsm` (P3.6) is the SYSAP that reconnects
+(§4(aa)). So the CDT ladder needs no "suspended" state.
+- **FIX = FC-P1.9** (O5, blocked-by P1.2/P1.4): receiver discard+re-ack; sender
+  ack-timeout ladder + exhaustion break; `vc_down` raised through `pe_ops`. R2:
+  10% loss + 48 pipelined → all delivered in order, 0 breaks, retransmits>0;
+  100% one-way loss → exactly one break (RETRANSMIT_EXHAUSTED) then re-form + SCS
+  `disconnected` on every CDT.
+- **⚠ FC-P1.9 COLLIDES with FC-P1.3** (both edit vms_pe_fsm.c/vms_pe.h) — dispatch
+  FC-P1.9 only AFTER FC-P1.3 integrates. **FC-P2.2 blocked-by FC-P1.9.**
 
 ### E11. No pure `pe_fsm_project` — sim reads pe_fsm counters directly (raised by FC-P1.4 → FC-P1.6)
 The frozen port view (`struct vms_pe_view`) is filled only by `vms_pe_snapshot()`

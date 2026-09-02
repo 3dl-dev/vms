@@ -36,6 +36,7 @@ KMOD=		vms
 # executive's exec_rbtree_netbsd.h (their <sys/rbtree.h> rb_left/rb_right macros
 # would collide), listed with the other _netbsd backend TUs above.)
 SRCS=		vms_netbsd.c \
+		vms_lan_netbsd.c \
 		vms_lnm_arena_netbsd.c \
 		vms_acct_rss_netbsd.c \
 		vms_sysmem_netbsd.c \
@@ -50,12 +51,23 @@ SRCS=		vms_netbsd.c \
 		vms_lock.c \
 		vms_lnm.c \
 		vms_devtab.c \
+		vms_pe.c \
 		vmsfs_acp.c \
 		ods2_reader.c \
 		ods2_edit.c \
 		vms_blockdev_netbsd.c \
 		vms_socket_netbsd.c
 
+# FC-P0.1 (the executive-resident VMScluster stack): ../kernel-core/vms_pe.c is
+# the LAN port layer, and it is in SRCS from its FIRST commit -- not "Linux
+# first, NetBSD later", which is exactly what left vms_l2.c Linux-only and absent
+# here. It reaches the wire only through exec_kbackend.h families SS14..SS18,
+# whose NetBSD half is vms_lan_netbsd.c above (honest SS$_NOSUCHDEV stubs until
+# FC-P0.3 records which link-layer receive hook this rail's NetBSD has and
+# FC-P0.4 lands the real pfil/if_input + if_transmit binding). The include
+# discipline that keeps vms_pe.c substrate-free is gated by
+# tools/ci/cluster_core_includes_gate.sh.
+#
 # vms-d5d: vmsfs_acp.c (the Files-11 ODS-2 ACP: channel + IO$_ACCESS/READVBLK/
 # WRITEVBLK/$MOUNT handlers) + ods2_edit.c (the pure on-disk EDIT helpers its
 # implicit-extend path calls) join the loadable module so the VAX runtime reads

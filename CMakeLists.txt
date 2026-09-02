@@ -274,6 +274,10 @@ if(BUILD_TESTS)
     add_subdirectory(tests/dcl)
     add_subdirectory(tests/vmsscs)
     add_subdirectory(tests/vmsdecnet)  # DECnet Phase IV codec (vms-851)
+
+    # VMScluster wire codec, R1 host rung (FC-P0.6, design sec 3.2/3.9): no
+    # kernel headers, sub-second host loop. `ctest -R cluster_host`.
+    add_subdirectory(tests/cluster/host)
     add_subdirectory(tests/ovmx_init)
     add_subdirectory(tests/tools)
 

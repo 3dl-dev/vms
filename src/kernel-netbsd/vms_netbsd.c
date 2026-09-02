@@ -1249,6 +1249,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_DLM_GET_GRANTED:
 	case VMS_IOCTL_DLM_ENUM_WAITS:
 	case VMS_IOCTL_DLM_ENUM_STANDING:
+	case VMS_IOCTL_DLM_DIRECTORY_SET:
 	case VMS_IOCTL_CLUSTER_MEMBER_SET:
 	case VMS_IOCTL_CLUSTER_MEMBER_CLEAR:
 	case VMS_IOCTL_CLUSTER_MEMBER_GET:
@@ -1276,6 +1277,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_dlm_enum_waits(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_DLM_ENUM_STANDING:
 			r = vms_ioctl_dlm_enum_standing(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_DLM_DIRECTORY_SET:
+			r = vms_ioctl_dlm_directory_set(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_CLUSTER_MEMBER_SET:
 			r = vms_ioctl_cluster_member_set(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_CLUSTER_MEMBER_CLEAR:

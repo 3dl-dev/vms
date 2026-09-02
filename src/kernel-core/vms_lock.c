@@ -1732,6 +1732,76 @@ long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg)
 }
 
 /*
+ * vms_ioctl_dlm_directory_set - adopt the REAL cluster identity + live membership
+ * for the DLM directory (rd vms-655). The directory (dlm_directory_csid) hashes a
+ * resource name over vms_local_csid + dlm_member_csids to choose the master; both
+ * default to a cluster-of-one {1} because they are insmod params set before the
+ * node knows its SCSSYSTEMID or the members (learned only during the SCS join).
+ * scsd resolves both and pushes them here so the directory computes the SAME
+ * master every cluster node computes -- without which GET_RESMASTER returns the
+ * phantom dir_csid=1 and the coordinator drops the node's op-01 registration.
+ *
+ * This is the live connection-manager feed the static-vector comment above (the
+ * dlm_member_csids note) anticipates. Mirrors vms_ioctl_dlm_member_depart's
+ * locking + directory-cache invalidation: under vms_res_hash_lock, replace the
+ * identity/membership and clear every cached res->dir_csid so resolution re-runs
+ * over the new set. A fresh membership view also clears the runtime departed-set.
+ * INV-6: local_csid is the node's REAL resolved SCSSYSTEMID and members[] are the
+ * REAL CSIDs the CM sees -- never fabricated; a malformed vector is rejected
+ * (SS$_BADPARAM) rather than adopting a bogus identity.
+ */
+long vms_ioctl_dlm_directory_set(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_dlm_directory_set_args args;
+    struct vms_lock_resource *res;
+    unsigned int i;
+    int bkt;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    /* Honest reject: CSID 0 is reserved ("unmastered") so it is never a valid
+     * local identity; the vector must name 1..VMS_DLM_MAX_MEMBERS members. Do
+     * not adopt a bogus identity that would mis-master every resource. */
+    if (args.local_csid == 0 || args.member_count == 0 ||
+        args.member_count > VMS_DLM_MAX_MEMBERS) {
+        args.status = SS__BADPARAM;
+        if (exec_copyout((void *)arg, &args, sizeof(args)))
+            return -EFAULT;
+        return 0;
+    }
+
+    exec_lock(&vms_res_hash_lock);
+
+    /* Adopt the CM's real identity + live membership, replacing the insmod
+     * placeholder. Zero-fill the tail so a later shrink cannot read stale CSIDs. */
+    vms_local_csid = args.local_csid;
+    for (i = 0; i < VMS_DLM_MAX_MEMBERS; i++)
+        dlm_member_csids[i] = (i < args.member_count) ? args.members[i] : 0;
+    dlm_member_count = (int)args.member_count;
+    /* A fresh membership view: no member is departed. */
+    for (i = 0; i < VMS_DLM_MAX_MEMBERS; i++)
+        dlm_member_departed[i] = 0;
+
+    /* Every cached res->dir_csid was computed over the OLD (phantom) membership
+     * -- clear it so dlm_directory_csid recomputes over the real set on next use. */
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        exec_lock(&res->lock);
+        res->dir_csid = 0;
+        exec_unlock(&res->lock);
+    }
+
+    exec_unlock(&vms_res_hash_lock);
+
+    args.status = SS__NORMAL;
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * vms_ioctl_dlm_get_granted - $DLM granted-lock readback (rd vms-dca9, H10b).
  * Report the FIRST remote-held granted lock on a resource (req_csid != 0) -- its
  * holder CSID, the holder's OWN lock handle (req_lkid) and the granted mode -- so

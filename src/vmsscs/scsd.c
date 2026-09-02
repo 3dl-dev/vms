@@ -6627,6 +6627,74 @@ static void scsd_res_dir_info(const char *resnam, uint32_t *dir_csid,
 }
 
 /*
+ * scsd_push_dlm_directory - push OVMX's REAL cluster identity + live membership
+ * into the executive's DLM directory (vms-655), so dlm_directory_csid resolves a
+ * resource's master over the REAL member set every cluster node shares -- not the
+ * insmod cluster-of-one {1} the executive defaults to (which makes GET_RESMASTER
+ * return dir_csid=1 and the coordinator DROP OVMX's op-01). local_csid is OVMX's
+ * resolved SCSSYSTEMID; members = {self} + each live peer's csid (peer_node_number
+ * -- the low-16 SCA logical addr = the peer's SCSSYSTEMID = its DLM csid, exactly
+ * as peer_by_csid reads it). Called at the op-06 admission burst (membership now
+ * known) BEFORE the op-01 registration, so GET_RESMASTER computes over real
+ * membership. INV-6: every value is real -- OVMX's resolved identity and the CSIDs
+ * of peers the CM actually sees -- never fabricated. Direct ioctl (scsd is glibc);
+ * fail-honest (no /dev/vms -> no push, GET_RESMASTER keeps reporting the phantom).
+ */
+static void scsd_push_dlm_directory(struct scsd_rx *rx)
+{
+#ifndef SCSD_UNIT_TEST
+    uint32_t members[OVMX_MAX_PEERS + 1];
+    uint32_t n = 0;
+    uint32_t local = resolve_scssystemid();
+
+    members[n++] = local;   /* self is always a member of its own cluster view */
+    for (int i = 0; i < OVMX_MAX_PEERS && n < (uint32_t)(OVMX_MAX_PEERS + 1); i++) {
+        struct peer_state *ps = &rx->peers[i];
+        uint32_t csid;
+        if (ps->pb == NULL)
+            continue;                 /* not a live peer */
+        csid = (uint32_t)peer_node_number(ps);
+        if (csid == 0 || csid == local)
+            continue;                 /* unknown, or a self-duplicate */
+        members[n++] = csid;
+    }
+
+    struct vms_dlm_directory_set_args args;
+    struct vms_register_args reg;
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0)
+        return;                       /* fail-honest: no executive to configure */
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return; }
+    memset(&args, 0, sizeof(args));
+    args.local_csid = local;
+    args.member_count = n;
+    for (uint32_t i = 0; i < n && i < 16u; i++)
+        args.members[i] = members[i];
+    int rc = ioctl(fd, VMS_IOCTL_DLM_DIRECTORY_SET, &args);
+    close(fd);
+
+    log_ts(stdout);
+    if (rc == 0 && args.status == 1u) {
+        printf(" SCSD-I-DLMDIRSET, adopted the REAL DLM directory identity"
+               " local_csid=%u members={", local);
+        for (uint32_t i = 0; i < n; i++)
+            printf("%s%u", i ? "," : "", members[i]);
+        printf("} -- the executive directory now resolves a resource's master"
+               " over the real cluster, not the insmod cluster-of-one\n");
+    } else {
+        printf(" SCSD-W-DLMDIRSET, DLM directory push FAILED (rc=%d"
+               " status=0x%08x) -- GET_RESMASTER may still report the phantom"
+               " local csid; the op-01 registration risks a drop\n",
+               rc, (unsigned)args.status);
+    }
+    fflush(stdout);
+#else
+    (void)rx;
+#endif
+}
+
+/*
  * cm_send_dlm_registration - drive OVMX's REAL standing-lock registrations to the
  * COORDINATOR (Layer 3, vms-74f). Enumerate the node's standing locks (the
  * F11B$v<label> volume lock a MOUNT holds -- vms-25e/1f4) and originate one cat-02
@@ -7612,6 +7680,12 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                      */
                     if (!ps->dlm_reg_sent) {
                         ps->dlm_reg_sent = 1;
+                        /* vms-655: adopt the REAL cluster identity + membership in
+                         * the executive DLM directory FIRST, so the GET_RESMASTER
+                         * each op-01 does (scsd_res_dir_info) resolves the master
+                         * over the real member set -- not the phantom cluster-of-
+                         * one that made VAX2 drop the registration. */
+                        scsd_push_dlm_directory(rx);
                         cm_send_dlm_registration(rx->sock, (int)rx->ifindex, ps,
                                                  rx->our_hw_mac, rx->our_src_logical);
                     }

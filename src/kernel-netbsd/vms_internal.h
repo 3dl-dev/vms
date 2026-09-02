@@ -878,6 +878,10 @@ long vms_ioctl_acp_dmount(struct vms_proc *proc, unsigned long arg);
  * A READ of real lock state for scsd's directory-rebuild registration. Mirror of
  * the src/kernel/vms_internal.h decl (#928: kernel-core ops in BOTH headers). */
 long vms_ioctl_dlm_enum_standing(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_DLM_DIRECTORY_SET (vms-655): scsd pushes the node's REAL cluster
+ * identity + live membership into the DLM directory. Mirror of the
+ * src/kernel/vms_internal.h decl (#928: kernel-core ops in BOTH headers). */
+long vms_ioctl_dlm_directory_set(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_assign(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg);

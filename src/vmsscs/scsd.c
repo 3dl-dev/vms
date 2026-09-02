@@ -7618,35 +7618,21 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                         fflush(stdout);
                     }
                     /*
-                     * vms-74f (Layer 3): having received the coordinator's op-06
-                     * admission burst, drive OVMX's REAL standing-lock registrations
-                     * to the coordinator -- one cat-02 op-01 ENQ per lock the
-                     * executive genuinely holds (cm_send_dlm_registration). The
-                     * op-04 completion + op-03 COMMIT for the batch follow ONLY once
-                     * the coordinator's cat-82 op-01 GRANT arrives (the await-grant
-                     * gate, in the receive path below) -- NOT here: a premature
-                     * commit with no grant behind it reformed the cluster in OPT A.
-                     * One-shot per epoch; ps IS the coordinator (op-06 is its own
-                     * membership publication).
+                     * vms-655 (DETERMINISTIC finding 2026-09-02, reproduced across
+                     * two fresh clusters): OVMX must NOT originate a cat-02 op-01
+                     * here. An unsolicited pre-barrier op-01 from a not-yet-barrier'd
+                     * joiner makes the coordinator WITHHOLD XITGO: the op-0c barrier
+                     * never runs, the SCS$DIRECTORY selfreg (gated at barrier step 5)
+                     * never fires, VAX1 never pushes the directory rebuild, and OVMX
+                     * never counts (0 XITGO / 0 op-0b-0c / 0 op-0d, members=1). The
+                     * honest granted model is the REVERSE: stay quiet after op-06, let
+                     * the barrier run, and register REACTIVELY to VAX1's op-0d rebuild
+                     * requests (the CM_RSP_DLM path) -- the respond-to-rebuild model
+                     * db20-b was granted 48/48 for. So the op-06-gated origination is
+                     * removed. (cm_send_dlm_registration retired; the full reactive
+                     * registration lands in the CM_RSP_DLM echo path next.)
                      */
-                    /* vms-655: fire ONLY once OVMX's cluster-assigned CSID is
-                     * known (learned from the op-05 record above -- op-05 precedes
-                     * op-06 in the choreography: op-03 COMMIT -> op-05 rebuild ->
-                     * op-06 MEMB). Without it we cannot form a req_lkid a VAX will
-                     * accept, and must never fabricate a node-index -- so defer
-                     * (dlm_reg_sent stays 0) and fire on a later op-06 once learned,
-                     * rather than send a droppable/dishonest op-01. */
-                    if (!ps->dlm_reg_sent && ovmx_cluster.assigned_csid != 0) {
-                        ps->dlm_reg_sent = 1;
-                        cm_send_dlm_registration(rx->sock, (int)rx->ifindex, ps,
-                                                 rx->our_hw_mac, rx->our_src_logical);
-                    } else if (!ps->dlm_reg_sent) {
-                        log_ts(stdout);
-                        printf(" SCSD-I-DLMREGDEFER, op-06 seen but OVMX's"
-                               " cluster-assigned CSID not yet learned (no matching"
-                               " op-05 record) -- deferring op-01 registration\n");
-                        fflush(stdout);
-                    }
+                    (void)cm_send_dlm_registration;
                 }
 
                 /* vms-c21 (spec §4(O.33)): the cat 0x01 op 0x04 role 0x50 CM

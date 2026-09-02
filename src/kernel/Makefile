@@ -68,6 +68,13 @@ obj-m := vms.o
 # the NetBSD kmodule's SRCS from its first commit -- no "Linux first, NetBSD
 # later", which is exactly what produced vms_l2.c's NetBSD hole. Its include
 # discipline is enforced by tools/ci/cluster_core_includes_gate.sh.
+#
+# vms_cluster_fork.c + vms_cluster_fork_bind.c (FC-P0.5) are the cluster FORK
+# CONTEXT -- the one kthread per node that runs every line of cluster protocol,
+# and its substrate binding. Same rule as vms_pe.c: BOTH are in the NetBSD
+# kmodule's SRCS from their first commit, because the split is pure-vs-glue and
+# not Linux-vs-NetBSD. The _bind TU is the ONLY file in the stack that names
+# exec_kthread_* or exec_timer_* (design SS3.2.2's leak table).
 vms-y := vms_module.o \
          ../kernel-core/vms_access.o \
          ../kernel-core/vms_ast.o \
@@ -78,6 +85,8 @@ vms-y := vms_module.o \
          ../kernel-core/vms_lnm.o \
          ../kernel-core/vms_lock.o \
          ../kernel-core/vms_mbx.o \
+         ../kernel-core/vms_cluster_fork.o \
+         ../kernel-core/vms_cluster_fork_bind.o \
          ../kernel-core/vms_pe.o \
          ../kernel-core/vms_proctab.o \
          ../kernel-core/vmsfs_acp.o \

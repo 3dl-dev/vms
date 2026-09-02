@@ -51,6 +51,8 @@ SRCS=		vms_netbsd.c \
 		vms_lock.c \
 		vms_lnm.c \
 		vms_devtab.c \
+		vms_cluster_fork.c \
+		vms_cluster_fork_bind.c \
 		vms_pe.c \
 		vmsfs_acp.c \
 		ods2_reader.c \
@@ -67,6 +69,12 @@ SRCS=		vms_netbsd.c \
 # FC-P0.4 lands the real pfil/if_input + if_transmit binding). The include
 # discipline that keeps vms_pe.c substrate-free is gated by
 # tools/ci/cluster_core_includes_gate.sh.
+#
+# FC-P0.5 adds the cluster fork context on the same terms: vms_cluster_fork.c is
+# pure (queues, dispatch, timer bookkeeping -- host-unit-tested with no kernel at
+# all), and vms_cluster_fork_bind.c binds its ops to exec_kthread_*/exec_timer_*/
+# exec_mutex_*, so this module gets a real NetBSD kthread + callout(9) fork
+# context the moment FC-P0.4 fills in vms_lan_netbsd.c's SS15/SS16 bodies.
 #
 # vms-d5d: vmsfs_acp.c (the Files-11 ODS-2 ACP: channel + IO$_ACCESS/READVBLK/
 # WRITEVBLK/$MOUNT handlers) + ods2_edit.c (the pure on-disk EDIT helpers its

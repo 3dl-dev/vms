@@ -108,12 +108,37 @@ fail() {
 # ---------------------------------------------------------------------------
 ANGLE_INCLUDE_ALLOWLIST='stdint\.h|stddef\.h|stdbool\.h|stdarg\.h|limits\.h|float\.h|iso646\.h'
 
+# The TYPE-ONLY host headers, allowed in a cluster HEADER and nowhere else.
+#
+# WHY THEY EXIST AT ALL. A pure cluster header has to compile in THREE
+# environments -- inside vms.ko, inside the NetBSD kmod, and under a plain host
+# compiler with no kernel headers at all (rung 1 and the rung-2 simulator) --
+# and it may not include exec_kbackend.h to get its fixed-width integers,
+# because exec_kbackend.h hard-errors when no kernel backend is selected. So
+# vms_cluster_codec.h and vms_cluster_fork.h each carry a three-way block that
+# selects ONLY the substrate's integer-type header. vms_cluster_codec.h's own
+# "NOTE FOR FC-P0.1" asked for exactly this: "Either whitelist types-only
+# headers ... or hoist this block into a shared vms_wire_types.h -- either is
+# fine, but the gate must not force the codec to include exec_kbackend.h."
+#
+# WHY IT IS STILL A GATE. These three name integer types and nothing else: no
+# device, no buffer, no lock, no IPL. Everything the leak table actually forbids
+# -- netdevice.h, mbuf.h, if.h, callout.h, kthread.h -- is still rejected, in
+# headers as well as in .c files. And the allowance is HEADER-ONLY: a .c that
+# needs types includes its own header, so a substrate type header appearing in a
+# cluster .c remains a violation. The self-test below proves both halves.
+ANGLE_TYPE_HEADERS_H_ONLY='sys/types\.h|sys/stdint\.h|linux/types\.h'
+
 check_angle_includes() {
 	f="$1"
+	case "$f" in
+	*.h) allow="${ANGLE_INCLUDE_ALLOWLIST}|${ANGLE_TYPE_HEADERS_H_ONLY}" ;;
+	*)   allow="${ANGLE_INCLUDE_ALLOWLIST}" ;;
+	esac
 	strip_comments "$f" | grep -n '^[[:space:]]*#[[:space:]]*include[[:space:]]*<' |
 	while IFS=: read -r ln rest; do
 		hdr=$(echo "$rest" | sed -n 's/.*<\([^>]*\)>.*/\1/p')
-		if echo "$hdr" | grep -qE "^(${ANGLE_INCLUDE_ALLOWLIST})\$"; then
+		if echo "$hdr" | grep -qE "^(${allow})\$"; then
 			continue
 		fi
 		echo "ANGLE|$ln|$(echo "$rest" | sed 's/^[[:space:]]*//')"
@@ -148,9 +173,21 @@ check_quoted_includes() {
 # ---------------------------------------------------------------------------
 SUBSTRATE_IDENTS='sk_buff|skb_|struct mbuf|m_gethdr|m_copyback|MGETHDR|net_device|struct ifnet|ifp->|netdev_|dev_queue_xmit|dev_add_pack|dev_remove_pack|dev_mc_add|dev_mc_del|if_transmit|if_mcast_op|ether_input|pfil_|softirq|softint|callout_|timer_list|mod_timer|del_timer|kthread_run|kthread_create|kthread_should_stop|spinlock_t|kmutex_t|kcondvar_t|IPL_[A-Z]|splnet|jiffies|ktime_|getnanotime|getnanouptime|GFP_|KM_SLEEP|KM_NOSLEEP|kmalloc|kzalloc|kfree|kmem_alloc|kmem_zalloc|kmem_free|copy_from_user|copy_to_user|copyin\(|copyout\(|printk|pr_info|pr_err|pr_warn|list_head|TAILQ_|LIST_HEAD|curlwp|current->'
 
+# The SEAM's own op names are deleted before the match. Families §15/§16 are
+# deliberately named after the host primitives they stand in front of
+# (exec_kthread_create, exec_kthread_should_stop, exec_timer_arm), so a plain
+# substring search flags the one file that is SUPPOSED to call them --
+# vms_cluster_fork_bind.c, the binding the leak table names as the only §15/§16
+# caller. Deleting every `exec_*' identifier first keeps the rule aimed where it
+# belongs: a BARE kthread_create in cluster core is still a violation, on the
+# same line, in the same file.
+strip_seam_names() {
+	sed 's/exec_[A-Za-z0-9_]*//g'
+}
+
 check_substrate_idents() {
 	f="$1"
-	strip_comments "$f" | grep -nE "$SUBSTRATE_IDENTS" |
+	strip_comments "$f" | strip_seam_names | grep -nE "$SUBSTRATE_IDENTS" |
 	while IFS=: read -r ln rest; do
 		hit=$(echo "$rest" | grep -oE "$SUBSTRATE_IDENTS" | head -1)
 		echo "IDENT|$ln|$hit"
@@ -224,10 +261,41 @@ EOF
 #include "vms_pe.h"
 static void t(void) { exec_timer_arm(0, 0); }
 EOF
-	: > "$tmp/src/kernel-core/vms_pe.h"
+	# The HEADER half of RULE1: a cluster header may select an integer-type
+	# header (see ANGLE_TYPE_HEADERS_H_ONLY), and may NOT reach for a facility
+	# header. Both lines are in the SAME file, so a run that reports neither,
+	# or reports both, is a gate that has lost the distinction.
+	cat > "$tmp/src/kernel-core/vms_pe.h" <<'EOF'
+#include <linux/types.h>
+#include <net/if.h>
+EOF
+	# The SEAM half of RULE3: exec_kthread_create is the sanctioned §15 call
+	# and must NOT fire; the bare kthread_create beside it MUST.
+	cat > "$tmp/src/kernel-core/vms_cluster_fork_bind.c" <<'EOF'
+#include "vms_pe.h"
+static void ok(void)  { exec_kthread_create(0, 0, 0, "t"); }
+static void bad(void) { kthread_create(0, 0, 0, "t"); }
+EOF
 
 	out=$(OVMX_REPO="$tmp" "$0" 2>&1) && st=0 || st=$?
 	echo "$out" | sed 's/^/    /'
+
+	if echo "$out" | grep -q 'vms_pe.h.*linux/types\.h'; then
+		echo "NEGATIVE CONTROL FAILED: a cluster HEADER may select an integer-type header"
+		return 1
+	fi
+	if ! echo "$out" | grep -q 'vms_pe.h.*net/if\.h'; then
+		echo "NEGATIVE CONTROL FAILED: a facility header slipped through in a .h"
+		return 1
+	fi
+	if ! echo "$out" | grep -q 'vms_cluster_fork_bind.c,line=3'; then
+		echo "NEGATIVE CONTROL FAILED: a BARE kthread_create was not caught"
+		return 1
+	fi
+	if echo "$out" | grep -q 'vms_cluster_fork_bind.c,line=2'; then
+		echo "NEGATIVE CONTROL FAILED: the gate fired on the seam's own exec_kthread_create"
+		return 1
+	fi
 
 	if [ "$st" -eq 0 ]; then
 		echo "NEGATIVE CONTROL FAILED: the gate accepted an injected substrate include"

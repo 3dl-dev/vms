@@ -57,6 +57,43 @@ cluster_host_test(test_fixture_loader   test_fixture_loader.c)
 cluster_host_test(test_codec_roundtrip  test_codec_roundtrip.c)
 cluster_host_test(fuzz_codec_seed       fuzz_codec_seed.c)
 
+# ---- FC-P0.5: the cluster fork context, built with NO kernel headers ----
+# The SHIPPING translation unit (src/kernel-core/vms_cluster_fork.c), not a copy
+# and not a variant: the queue/dispatch logic is pure by construction, so the
+# host rung exercises exactly the code the executive runs. Its substrate half
+# (vms_cluster_fork_bind.c) is deliberately absent here -- that is rung R3's job
+# on each substrate.
+add_library(cluster_host_fork STATIC
+    ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_fork.c
+)
+target_include_directories(cluster_host_fork PUBLIC
+    ${CMAKE_SOURCE_DIR}/src/kernel-core
+)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(cluster_host_fork PRIVATE -Wall -Wextra)
+endif()
+
+function(cluster_fork_test name)
+    add_executable(${name} ${ARGN})
+    target_link_libraries(${name} PRIVATE cluster_host_fork)
+    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME cluster_host_${name} COMMAND ${name})
+    set_tests_properties(cluster_host_${name} PROPERTIES
+        LABELS "unit;cluster;cluster_host"
+        TIMEOUT 120
+    )
+endfunction()
+
+cluster_fork_test(test_cluster_fork test_cluster_fork.c)
+
+# The concurrency half needs real threads: one consumer inside cf_run(),
+# producers, a receive source and a timer source. A lost wakeup shows up as a
+# stall, which the test's own watchdog turns into a loud failure.
+find_package(Threads REQUIRED)
+cluster_fork_test(test_cluster_fork_threads test_cluster_fork_threads.c)
+target_link_libraries(test_cluster_fork_threads PRIVATE Threads::Threads)
+target_compile_definitions(test_cluster_fork_threads PRIVATE _DEFAULT_SOURCE)
+
 # ---- FC-P0.1: the pure inter-layer headers must be host-includable ----
 # Everything below builds with -DOVMX_CLUSTER_HOST, which routes vms_cluster.h
 # to <stdint.h> instead of vms_internal.h.
@@ -73,6 +110,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_scs.c
     hdr_alone_vms_cnxman.c
     hdr_alone_vms_dlm_scs.c
+    hdr_alone_vms_cluster_fork.c
 )
 target_include_directories(cluster_host_hdr_alone PRIVATE ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_hdr_alone PRIVATE OVMX_CLUSTER_HOST)

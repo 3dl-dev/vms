@@ -791,6 +791,50 @@ out:
 }
 
 /*
+ * vms_ioctl_dlm_enum_standing - enumerate this node's STANDING cluster-registrable
+ * system locks (vms-1f4). These are the locks the executive holds for the node's
+ * LIFE that the connection manager (scsd) registers to the coordinator during a
+ * directory rebuild: today the per-volume F11B$v<label> lock a MOUNT holds
+ * (vms-25e), one entry per mounted volume that genuinely holds it (vol_lkid != 0).
+ * Each entry carries the resource name and this node's LOCAL lock handle -- the
+ * op-0x01 requester lkid scsd puts on the wire.
+ *
+ * INV-6: a READ of REAL lock state. count is exactly the number of standing locks
+ * the executive genuinely holds; a volume whose best-effort acquire failed
+ * (vol_lkid == 0) contributes nothing. Never a fabricated lock. The enqueue lock
+ * is dropped before copyout (copyout may fault); the table lock is held only
+ * across the in-memory walk.
+ */
+long vms_ioctl_dlm_enum_standing(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_dlm_enum_standing_args args;
+    struct vms_acp_volume *vol;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+
+    exec_lock(&vms_acp_vol_lock);
+    exec_list_for_each_entry(vol, &vms_acp_vol_list, list) {
+        if (vol->vol_lkid == 0)
+            continue;                   /* no standing lock held (best-effort acquire failed) */
+        args.total++;
+        if (args.count < VMS_DLM_ENUM_STANDING_MAX) {
+            struct vms_dlm_standing_ent *e = &args.ent[args.count];
+            acp_vol_resnam_kind(vol, 'v', e->resnam, sizeof(e->resnam));
+            e->lkid = vol->vol_lkid;
+            e->mode = LCK_K_NLMODE;      /* the volume presence lock is held at NL */
+            args.count++;
+        }
+    }
+    exec_unlock(&vms_acp_vol_lock);
+    args.status = SS__NORMAL;
+
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * $ASSIGN a FILE-CLASS channel to a mounted ODS-2 volume (design §4.2). The
  * channel is the executive's -- bound to the mounted volume, drawn from the
  * caller's proc->next_chan space -- not a Linux fd. SS$_DEVNOTMOUNT when the

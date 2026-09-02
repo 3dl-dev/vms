@@ -323,6 +323,13 @@ uint32_t vms_kif_get_resmaster(const char *resnam, uint32_t *found,
                                uint32_t *n_granted,
                                uint32_t *remote_holder_csid);
 
+/* Enumerate this node's STANDING cluster-registrable system locks (vms-1f4): on
+ * return *out holds the standing locks the executive genuinely holds (the F11B$v
+ * volume lock a MOUNT holds) -- out->count entries, each resname + local lkid +
+ * mode. scsd registers these to the coordinator during a directory rebuild. A
+ * READ of real lock state; fail-honest (SS$_NOSUCHDEV) when /dev/vms is absent. */
+uint32_t vms_kif_dlm_enum_standing(struct vms_dlm_enum_standing_args *out);
+
 /* Dispatch a decoded cross-node DLM request to the kernel lock manager's
  * cross-node handler (vms-94c, DLM epic vms-7fa rung 1).
  * OVMX-UNWIRED: vms_kif_dlm_xnode (vms-94c) -- the DLM message TRANSPORT reaches

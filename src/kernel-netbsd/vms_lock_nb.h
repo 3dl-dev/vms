@@ -274,6 +274,24 @@ struct vms_dlm_enum_waits_args {
 	struct vms_dlm_wait_ent ent[VMS_DLM_ENUM_WAITS_MAX];
 };
 
+/* Standing cluster-registrable system locks (vms-1f4). MUST match
+ * src/kernel/vms_ioctl.h byte-for-byte. One entry per lock the executive holds
+ * for the node's life (the F11B$v volume lock) that scsd registers to the
+ * coordinator on a directory rebuild. See vms_ioctl.h for the full INV-6 note. */
+#define VMS_DLM_ENUM_STANDING_MAX 16u
+struct vms_dlm_standing_ent {
+	char     resnam[32];
+	uint32_t lkid;
+	uint32_t mode;
+};
+struct vms_dlm_enum_standing_args {
+	uint32_t count;
+	uint32_t total;
+	uint32_t status;
+	uint32_t pad;
+	struct vms_dlm_standing_ent ent[VMS_DLM_ENUM_STANDING_MAX];
+};
+
 /* Cluster membership crosses into the executive (rd vms-551). MUST match
  * src/kernel/vms_ioctl.h byte-for-byte. SEPARATE from dlm_member_csids
  * above (that vector is CSID-only, static, for DLM directory hashing; this
@@ -326,6 +344,7 @@ struct vms_cluster_member_get_args {
 #define VMS_IOCTL_CLUSTER_MEMBER_SET   _IOWR(VMS_LOCK_IOC_MAGIC, 0x39, struct vms_cluster_member_set_args)
 #define VMS_IOCTL_CLUSTER_MEMBER_CLEAR _IOWR(VMS_LOCK_IOC_MAGIC, 0x3a, struct vms_cluster_member_clear_args)
 #define VMS_IOCTL_CLUSTER_MEMBER_GET   _IOWR(VMS_LOCK_IOC_MAGIC, 0x3b, struct vms_cluster_member_get_args)
+#define VMS_IOCTL_DLM_ENUM_STANDING    _IOWR(VMS_LOCK_IOC_MAGIC, 0x3c, struct vms_dlm_enum_standing_args)
 
 /*
  * Freeze the shared layouts -- see the other _nb.h contracts' identical asserts:
@@ -349,6 +368,8 @@ _Static_assert(sizeof(struct vms_dlm_granted_args) == 56,
                "vms_dlm_granted_args changed size -- VMS_IOCTL_DLM_GET_GRANTED ABI break");
 _Static_assert(sizeof(struct vms_dlm_enum_waits_args) == 16 + 48 * 8,
                "vms_dlm_enum_waits_args changed size -- VMS_IOCTL_DLM_ENUM_WAITS ABI break");
+_Static_assert(sizeof(struct vms_dlm_enum_standing_args) == 16 + 40 * 16,
+               "vms_dlm_enum_standing_args changed size -- VMS_IOCTL_DLM_ENUM_STANDING ABI break");
 _Static_assert(sizeof(struct vms_cluster_member_set_args) == 44,
                "vms_cluster_member_set_args changed size -- VMS_IOCTL_CLUSTER_MEMBER_SET ABI break");
 _Static_assert(sizeof(struct vms_cluster_member_clear_args) == 8,

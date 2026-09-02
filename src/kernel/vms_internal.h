@@ -1289,6 +1289,10 @@ void vms_mbx_release_all(struct vms_proc *proc);
  */
 long vms_ioctl_acp_mount(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_dmount(struct vms_proc *proc, unsigned long arg);
+/* Enumerate this node's standing cluster-registrable system locks (vms-1f4): one
+ * entry (resname + local lkid + mode) per mounted volume holding its F11B$v lock.
+ * A READ of real lock state for scsd's directory-rebuild registration. */
+long vms_ioctl_dlm_enum_standing(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_assign(struct vms_proc *proc, unsigned long arg);
 /*
  * IO$_ACCESS / IO$_DEACCESS (vms-204): open a file by name or by FID on a

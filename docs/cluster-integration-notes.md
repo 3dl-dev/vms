@@ -73,6 +73,26 @@ ONLY, and is added to the kernel lists by the first item that consumes it
 in-module (e.g. FC-P3.4/P6.3). **Do not re-add a codec object already present**
 (dedup on merge — the integrator has hit this on every FSM merge).
 
+### E9. P1.2's port send API is frame-level (below SCS) — the glue bridges it to the body-level seam (raised by FC-P1.2 → owned by FC-P1.3)
+FC-P1.2 implemented the PORT primitive `pe_vc_send_frame(f, dst, frame, len)`:
+the owning layer hands down a complete SCS frame and the port stamps the
+circuit's sequence into abs 32–55 (+ `vms_scs_seq_stamp`/`_mark_retransmit` in
+`codec_vc`). This is NOT in tension with E1's body-level ruling — it is the
+**SCS→port boundary** (below SCS), whereas E1/§3.2.4 governs the **SYSAP→SCS
+boundary** (the 132-byte body). The full chain: `cnxman_ops.send(body,132)` →
+`scs_send_msg` [copy body@72, fill 56–71] → `pe_send_msg`/`pe_vc_send_frame`
+[stamp 0–55, seq]. FC-P1.2 kept a body-taking `pe_send_msg` as a stub.
+- **FC-P1.3 owns the bridge:** wire `scs_send_msg` to call P1.2's
+  `pe_vc_send_frame`, reconcile the `pe_send_msg`(body) vs `pe_vc_send_frame`(frame)
+  naming into one coherent SCS-glue surface, and confirm with P2.2.
+- **DISPATCH FC-P1.3 AFTER FC-P3.15 lands** (FC-P3.15 settles the body-level
+  emitters + `cnxman_envelope_stamp` + demotes `vms_cm_link`; P1.3 builds on that).
+- P1.2 also flagged (honest, counted, not faked): undecoded frame classes are
+  **acked-but-unrouted** (`vc_rx_undelivered`) — FC-P2.1 grounding more classes
+  drives it to zero; a circuit that reached OPEN without a credit-window body
+  refuses every send (INV-6, no invented window); retransmit cadence
+  TIMVCFAIL/8 is labelled OVMX's choice (no captured figure).
+
 ### E8. op-06 MEMBERSHIP record layout is un-isolated → blocks CSID hand-off (raised by FC-P3.12 → LAB)
 A coordinated ADD completes the barrier but **never tells the joiner the CSID it
 was assigned**, because the op-0x06 MEMBERSHIP burst's `{SCSSYSTEMID, incarnation,

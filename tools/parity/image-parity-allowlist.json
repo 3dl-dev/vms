@@ -29,6 +29,18 @@
       "reason": "Decision A (vms-42d), vms-707/vms-431: RC3.EXE is the minimal RUN target for the x86_64 DCL $STATUS-propagation acceptance gate (tests/qemu/test_run_status_e2e.sh). It is a LINK.EXE-built VMS-native image (zero DT_NEEDED/DT_HASH, PT_INTERP=IMGACT.EXE) staged into SYS$SYSTEM: so `RUN SYS$SYSTEM:RC3.EXE` exercises the reworked IMGACT.EXE-over-ACP RUN fork/waitid-peek/getexit path -- the SAME custom symbol-vector activation model as IMGACT.EXE itself (already allowlisted just above). VAX activates images through NetBSD's own ld.elf_so, so a VAX build of RC3.EXE would be a different artifact testing a different activation path, and no VAX test references it (RC3 appears only under tests/qemu/). RC3.EXE therefore has no VAX role by design, exactly like its activator -- not an unbuilt gap."
     },
     {
+      "group": "self-host-linker-x86_64",
+      "names": ["LINK.EXE"],
+      "missing_on": "vax",
+      "reason": "Decision A (vms-42d), vms-992e: LINK.EXE is the OVMX-native linker (src/vmslink) that emits the x86_64 VMS-native image format -- ET_DYN with a .vms$sv symbol vector and zero DT_NEEDED/DT_HASH, activated by IMGACT.EXE (already allowlisted above). Its CMake target `vmslink` is added only `if(NOT NetBSD)` (CMakeLists.txt), because on VAX images are ordinary elf32-vax executables linked by NetBSD's own toolchain and activated by ld.elf_so -- there is no OVMX-native LINK.EXE role on VAX by design, the same Decision-A split as the shareable-image family and IMGACT.EXE. Not an unbuilt gap."
+    },
+    {
+      "group": "self-host-compiler-x86_64",
+      "names": ["TCC.EXE"],
+      "missing_on": "vax",
+      "reason": "vms-992e: TCC.EXE is the OVMX-native C compiler (vendored tinycc, built by tests/toolchain/mk_tcc_static.sh). tinycc has NO VAX code generator (its backends are i386/x86_64/arm/arm64/riscv64 only -- there is no elf32-vax target in third-party/tcc), so a VAX TCC.EXE is not buildable at all; the VAX self-host/build story goes through the NetBSD-hosted toolchain, not a VMS-native TCC. Host-arch-only compiler by the upstream compiler's own backend support -- not an unbuilt OVMX gap."
+    },
+    {
       "group": "executive-module-packaging-x86_64",
       "names": ["vms.ko"],
       "missing_on": "vax",

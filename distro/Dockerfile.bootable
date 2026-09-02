@@ -483,6 +483,17 @@ RUN cmake -B build-static \
     -DOVMX_SCS_DATALINK_EXECUTIVE=ON \
     && cmake --build build-static --parallel $(nproc) 2>&1
 
+# TCC.EXE (vms-992e / self-host spine): the OVMX-native C compiler. Built by
+# tests/toolchain/mk_tcc_static.sh from the vendored third-party/tcc (tinycc's
+# own ./configure + `make tcc`, static musl) -- the SAME recipe + same bytes as
+# the initramfs build (tests/qemu/Dockerfile), where test_syssvc_mmk_build
+# already proves the TCC->LINK->IMGACT chain works against a real executive. It
+# is NOT a CMake target, so it needs this explicit build step; it is staged into
+# SYS$SYSTEM: by the block below so the shipped disk carries the compiler, not
+# just the initramfs. (LINK.EXE is already built by build-static under
+# BUILD_TOOLS -- the `vmslink` target -- and only needs staging.)
+RUN CC=musl-gcc sh tests/toolchain/mk_tcc_static.sh build-static/bin/TCC.EXE
+
 # -- System tree staging (OS kit + distribution image source) -----------------
 # All OVMX binaries assembled into a /vms tree. This is BUILD staging only --
 # it is never packed into an initramfs (vms-1ab: the fat initramfs that used
@@ -588,6 +599,33 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     # stages build-static/bin/LIBRARIAN.EXE, so the path + presence are proven.
     cp build-static/bin/LIBRARIAN.EXE  /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/OVMXDUMP       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    # TCC.EXE (compiler) + LINK.EXE (linker) -- the self-host toolchain on the
+    # shipped disk (vms-992e). LINK.EXE comes from build-static (BUILD_TOOLS
+    # vmslink target); TCC.EXE from the mk_tcc_static.sh step above. LIBRARIAN.EXE
+    # / DECC$SHR.EXE / IMGACT.EXE (the rest of the chain) already ship above. This
+    # makes the MMK/descrip.mms production build path's compiler+linker present on
+    # the running system; the SAME binaries are functionally proven by the
+    # initramfs test_syssvc_mmk_build. (Plain `cp ... SYSEXE/` form so the
+    # image-parity gate's cp-line scanner sees them -- the FATAL guard is the
+    # separate `test -f` block below, which the scanner ignores.)
+    cp build-static/bin/LINK.EXE       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp build-static/bin/TCC.EXE        /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    # NOTE (vms-992e): TCC's header closure (tinycc + musl <stdint.h>) is NOT
+    # staged here yet. It belongs in SYS$SYSEXE:[.INCLUDE], but ovmx_kit_pack
+    # cannot round-trip that nested lowercase-header subdirectory byte-exact (the
+    # OS-kit master/extract step below re-cases/re-nests it), so staging it fails
+    # the kit round-trip gate. The compiler + linker binaries themselves round-
+    # trip cleanly. Shipping the headers is tracked as a follow-up gated on the
+    # kit-packer fix; until then TCC.EXE compiles with an explicit -I/-nostdinc.
+    # Fail LOUD if the deliverable did not land. This RUN has no `set -e` and the
+    # cp's above sit among best-effort `;` copies, so a failed cp's exit code
+    # would be masked -- an explicit `exit 1` is the only thing that fails the
+    # build. The bootable image build is skipped on pull_request CI, so a missing
+    # binary must fail HERE rather than silently ship a toolchain-less disk.
+    # (These are `test`, not `cp`, so the image-parity scanner does not treat
+    # them as image sources.)
+    test -f /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/LINK.EXE || { echo "FATAL: LINK.EXE (self-host linker) did not stage onto the disk"; exit 1; } ; \
+    test -f /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/TCC.EXE  || { echo "FATAL: TCC.EXE (self-host compiler) did not stage onto the disk"; exit 1; } ; \
     # The setuid-root mount(2)/umount(2) helper (vms-651, tools/
     # vms_mount_helper.c) -- NOT a VMS image, lives outside SYS$SYSTEM: at a
     # fixed Linux path (ovmx_layout.h VMS_MOUNT_HELPER_PATH). Owned by root

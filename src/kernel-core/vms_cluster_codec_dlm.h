@@ -112,8 +112,16 @@ enum vms_lck_mode {
  * to refuse a completion/commit build whose lock-id field looks unset
  * rather than a real LKB/RSB handle (the fc8540ae lesson, see file doc
  * comment).
+ *
+ * The engine states the same constant in src/kernel-core/vms_dlm_proxy.h, where
+ * the proxy-LKB paths refuse to post or accept it (FC-P4.4). The guard below
+ * keeps the two spellings from ever disagreeing when a TU pulls in both; this
+ * header stays self-contained for the pure host codec build, which includes no
+ * vms_internal.h at all.
  */
+#ifndef VMS_DLM_LKID_UNSET
 #define VMS_DLM_LKID_UNSET 0u
+#endif
 
 /* ------------------------------------------------------------------ *
  * op 0x01 ENQ / op 0x07 CONVERT -- GROUNDED, spec §4(f).1

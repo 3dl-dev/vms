@@ -68,21 +68,11 @@
  * types from exec_kbackend.h as §3.9's table allows; the codec, which must
  * build with NO kernel headers, provides its own.
  *
- * NOTE FOR FC-P0.1 (the kernel-core include grep gate): this block is the
- * sanctioned exception. Either whitelist types-only headers in
- * vms_cluster_codec.h, or hoist this block into a shared vms_wire_types.h and
- * point the codec at it -- either is fine, but the gate must not force the
- * codec to include exec_kbackend.h.
+ * Fixed-width types come from the sanctioned single source vms_wire_types.h
+ * (FC-P0.1 gate resolution: a wire TU includes that quoted kernel-core header,
+ * not a bare <linux/types.h>; the substrate selection lives there only).
  */
-#if defined(OVMX_KBACKEND_NETBSD) && defined(_KERNEL)
-#  include <sys/types.h>
-#  include <sys/stdint.h>
-#elif defined(OVMX_KBACKEND_LINUX) || defined(__KERNEL__)
-#  include <linux/types.h>
-#else
-#  include <stddef.h>
-#  include <stdint.h>
-#endif
+#include "vms_wire_types.h"
 
 #ifdef __cplusplus
 extern "C" {

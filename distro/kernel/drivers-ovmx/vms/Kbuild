@@ -38,6 +38,7 @@ vms-y := vms_module.o \
          vms_cluster_codec_cm.o \
          vms_pe_fsm.o \
          vms_cluster_codec_hello.o \
+         vms_cluster_codec_vc.o \
          vms_cnxman_csb.o \
          vms_cnxman_recnx_fsm.o \
          vms_cnxman_quorum.o \
@@ -71,6 +72,9 @@ vms-y := vms_module.o \
 # builds every frame through -- vms_cluster_codec.o (FC-P0.6) and
 # vms_cluster_codec_hello.o (FC-P0.7) -- join on the same terms and for the same
 # two-object-lists reason.
+# FC-P1.2 grows that same TU with the VIRTUAL-CIRCUIT tables and brings
+# vms_cluster_codec_vc.o (FC-P1.1) with them: the START/STACK/ACK builders, the
+# 0x48 credit-return, and the sequence stamp a retransmit re-applies.
 # FC-P0.1: vms_pe.o is the executive-resident VMScluster stack's LAN port layer.
 # It mirrors src/kernel/Makefile's vms-y (the two-object-lists rule: an executive
 # core .c missing here builds standalone and then fails modpost in the bootable

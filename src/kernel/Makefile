@@ -112,6 +112,15 @@ obj-m := vms.o
 # the HELLO/SOLICIT family) come with it. All three are in the NetBSD kmodule's
 # SRCS and in the distro Kbuild from the same commit. Their consumer, the port's
 # executive glue, arrives with FC-P0.9.
+#
+# FC-P1.2 adds the VIRTUAL-CIRCUIT half of that same pure TU (formation with
+# the spec SS4(i).B incarnation echo, one contiguous send_seq, cumulative
+# recv_ack, the unacked ring, retransmit-reusing-the-seq, the credit window,
+# TIMVCFAIL, teardown and re-formation), so vms_pe_fsm.o now also needs the
+# codec family it builds every circuit frame through:
+# vms_cluster_codec_vc.o (FC-P1.1, START/STACK/ACK + the 0x48 credit-return +
+# the sequence stamp). Pure, in the NetBSD SRCS and in the distro Kbuild from
+# the same commit.
 vms-y := vms_module.o \
          ../kernel-core/vms_access.o \
          ../kernel-core/vms_ast.o \
@@ -129,6 +138,7 @@ vms-y := vms_module.o \
          ../kernel-core/vms_cluster_codec_cm.o \
          ../kernel-core/vms_pe_fsm.o \
          ../kernel-core/vms_cluster_codec_hello.o \
+         ../kernel-core/vms_cluster_codec_vc.o \
          ../kernel-core/vms_cnxman_csb.o \
          ../kernel-core/vms_cnxman_recnx_fsm.o \
          ../kernel-core/vms_cnxman_quorum.o \

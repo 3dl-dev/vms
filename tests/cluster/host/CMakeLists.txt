@@ -200,6 +200,13 @@ endfunction()
 cluster_host_pe_test(test_pe_channel   test_pe_channel.c)
 cluster_host_pe_test(test_pe_formation test_pe_formation.c)
 
+# FC-P1.2: the VIRTUAL-CIRCUIT half of the same pure TU -- formation with the
+# spec 4(i).B incarnation echo, one contiguous send_seq, cumulative recv_ack,
+# the unacked ring, retransmit-reusing-the-seq, the credit window, TIMVCFAIL,
+# teardown and re-formation. Same library, same injected clock: a 16-second
+# TIMVCFAIL and a full loss/retransmit/reorder scenario run in microseconds.
+cluster_host_pe_test(test_pe_vc        test_pe_vc.c)
+
 # ---- FC-P0.1: the pure inter-layer headers must be host-includable ----
 # Everything below builds with -DOVMX_CLUSTER_HOST, which routes vms_cluster.h
 # to <stdint.h> instead of vms_internal.h. (OVMX_CLUSTER_CORE_DIR is set above.)

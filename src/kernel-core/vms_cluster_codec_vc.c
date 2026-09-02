@@ -299,6 +299,82 @@ vms_scs_seq_envelope_parse(const uint8_t *frame, uint32_t len,
 }
 
 /* ------------------------------------------------------------------ *
+ * Stamping the transport's sequence fields into somebody else's frame
+ * (spec sec 4(h)(4)) -- read the header's rationale before touching this.
+ * ------------------------------------------------------------------ */
+
+/* The gate both entries below share: a sequenced APPLICATION/SETUP frame,
+ * long enough to hold the abs-44 mirror. 0x41 and 0x48 are refused here --
+ * each has its own builder and its own rule for those bytes. */
+static vms_codec_status_t seq_stamp_gate(const uint8_t *frame, uint32_t len,
+					 const struct vms_frame_info *fi,
+					 uint8_t *msgtype_out)
+{
+	vms_wire_view_t v;
+	uint8_t mt;
+
+	if (frame == (const uint8_t *)0 || fi == (const struct vms_frame_info *)0)
+		return VMS_CODEC_E_INVAL;
+	if ((fi->caps & VMS_FCAP_SEQ) == 0u)
+		return VMS_CODEC_E_CLASS;
+	if (len < VMS_SCS_SEQ_STAMP_MIN_LEN)
+		return VMS_CODEC_E_SHORT;
+
+	vms_wire_view_init(&v, frame, len);
+	if (!vms_wire_view_ok(&v))
+		return VMS_CODEC_E_INVAL;
+	mt = vms_wire_get_u8(&v, VMS_OFF_SCS_MSGTYPE);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (!is_seq_msgtype(mt) && mt != VMS_SCS_MT_ALT)
+		return VMS_CODEC_E_CLASS;
+
+	if (msgtype_out != (uint8_t *)0)
+		*msgtype_out = mt;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_scs_seq_stamp(uint8_t *frame, uint32_t len,
+				     const struct vms_frame_info *fi,
+				     uint16_t recv_ack, uint16_t send_seq)
+{
+	vms_wire_buf_t w;
+	vms_codec_status_t st = seq_stamp_gate(frame, len, fi,
+					       (uint8_t *)0);
+
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_buf_init(&w, frame, len);
+	vms_wire_put_le16(&w, VMS_OFF_SCS_RECV_ACK, recv_ack);
+	vms_wire_put_le16(&w, VMS_OFF_SCS_SEND_SEQ, send_seq);
+	vms_wire_put_le16(&w, VMS_OFF_SCS_SEQ_MIRROR, send_seq);
+
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_scs_seq_mark_retransmit(uint8_t *frame, uint32_t len,
+					       const struct vms_frame_info *fi)
+{
+	vms_wire_buf_t w;
+	uint8_t mt = 0;
+	vms_codec_status_t st = seq_stamp_gate(frame, len, fi, &mt);
+
+	if (st != VMS_CODEC_OK)
+		return st;
+	if (mt == VMS_SCS_MT_ALT)
+		return VMS_CODEC_OK;         /* already marked; idempotent */
+
+	vms_wire_buf_init(&w, frame, len);
+	vms_wire_put_u8(&w, VMS_OFF_SCS_MSGTYPE, VMS_SCS_MT_ALT);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	return VMS_CODEC_OK;
+}
+
+/* ------------------------------------------------------------------ *
  * Credit-return short (spec sec 4(h)(3))
  * ------------------------------------------------------------------ */
 

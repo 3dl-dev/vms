@@ -77,6 +77,28 @@ struct pe_ops {
 	 * virtual clock in the simulator). */
 	uint32_t (*now_ms)(void *ctx);
 
+	/*
+	 * Added by FC-P1.2, additively and at the end of the struct.
+	 *
+	 * The VMS ABSOLUTE-TIME clock (exec_time_now_vms in production;
+	 * design §17): 100 ns units since 17-NOV-1858. It is a SEPARATE
+	 * primitive from now_ms because the wire needs both and they are not
+	 * convertible: now_ms is a monotonic tick with an arbitrary origin,
+	 * while the START/STACK body carries two REAL VMS quadwords -- this
+	 * system's incarnation (its boot time, abs 80) and the time the frame
+	 * was composed (abs 112, spec §4(g) phase 2).
+	 *
+	 * The second one is why this is an OP and not a field: spec §4(g)'s
+	 * own grounding is a NEGATIVE -- "no real node ever sends a stale
+	 * one" -- so it must be sampled per frame. A NULL here means the
+	 * executive has no absolute-time clock bound, and the VC then forms
+	 * NO circuit at all rather than stamping a zero that decodes as
+	 * 17-NOV-1858 (INV-6: honest absence, never a placeholder; the
+	 * campaign's replayed 26-JUL-2026 incarnation is the bug this
+	 * prevents, spec §4(g) CORRECTION vms-2f3).
+	 */
+	uint64_t (*now_vms)(void *ctx);
+
 	/* One OPCOM-class line. Production: exec_console_printf. */
 	void (*log)(void *ctx, const char *msg);
 
@@ -148,6 +170,28 @@ enum pe_event {
 	 */
 	PE_EV_RX_NEW_INCARNATION = 19,
 	PE_EV_RX_LAST_GASP       = 20,
+
+	/*
+	 * Added by FC-P1.2, additively and at the end (19/20 unchanged). Both
+	 * are LOCAL facts -- the channel layer's own conclusions -- and they
+	 * are events rather than a function call because the VIRTUAL CIRCUIT
+	 * rides the channel: a circuit may be formed only over a channel the
+	 * b2/b3/b4 ladder has VERIFIED, and a channel that stops being
+	 * verified takes its circuit with it (design §3.4; the port "forms a
+	 * VIRTUAL CIRCUIT with the remote SYSTEM" over a verified channel).
+	 *
+	 *   CHANNEL_UP    the channel reached b4: PE_CH_ACT_VERIFIED. This is
+	 *                 what starts a VC formation, and the ONLY thing that
+	 *                 does -- there is no timer that opens a circuit over
+	 *                 an unverified channel.
+	 *   CHANNEL_DOWN  PE_CH_ACT_RESET or PE_CH_ACT_LOST: the peer
+	 *                 re-formed the channel (spec §4(i).B) or the listen
+	 *                 timeout expired (spec §4(M)). Either way the circuit
+	 *                 built on the old generation is stale and is torn
+	 *                 down; it re-forms on the next CHANNEL_UP.
+	 */
+	PE_EV_CHANNEL_UP         = 21,
+	PE_EV_CHANNEL_DOWN       = 22,
 
 	PE_EV__COUNT
 };

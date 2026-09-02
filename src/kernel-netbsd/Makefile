@@ -59,6 +59,7 @@ SRCS=		vms_netbsd.c \
 		vms_cluster_codec_cm.c \
 		vms_pe_fsm.c \
 		vms_cluster_codec_hello.c \
+		vms_cluster_codec_vc.c \
 		vms_cnxman_csb.c \
 		vms_cnxman_recnx_fsm.c \
 		vms_cnxman_quorum.c \
@@ -113,6 +114,10 @@ SRCS=		vms_netbsd.c \
 # ../kernel-core/vms_cluster_codec_hello.c (FC-P0.7). All three are PURE and are
 # proven to compile for elf32-vax; they arrive here in the same commit as on
 # Linux. Their consumer, the port's executive glue, arrives with FC-P0.9.
+#
+# FC-P1.2 adds the virtual-circuit tables to that same file and brings
+# ../kernel-core/vms_cluster_codec_vc.c (FC-P1.1) with them -- also PURE, and
+# proven to compile + relocatable-link for elf32-vax in the same run.
 #
 # vms-d5d: vmsfs_acp.c (the Files-11 ODS-2 ACP: channel + IO$_ACCESS/READVBLK/
 # WRITEVBLK/$MOUNT handlers) + ods2_edit.c (the pure on-disk EDIT helpers its

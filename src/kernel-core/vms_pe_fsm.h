@@ -136,6 +136,7 @@
 #include "vms_cluster.h"
 #include "vms_cluster_codec.h"
 #include "vms_cluster_codec_hello.h"
+#include "vms_cluster_codec_vc.h"   /* FC-P1.1: START/STACK/ACK + 0x48 + stamp */
 #include "vms_cluster_snapshot.h"
 #include "vms_pe.h"
 
@@ -235,6 +236,281 @@ enum pe_channel_action {
 };
 
 /* ==========================================================================
+ * 3b. THE VIRTUAL CIRCUIT (FC-P1.2) -- read this before touching a counter
+ *
+ * A CHANNEL is a (local interface, remote station) pair; a VIRTUAL CIRCUIT is
+ * the reliable, SEQUENCED conversation with the remote SYSTEM that rides one.
+ * The channel proves connectivity; the circuit carries meaning.
+ *
+ * ---------------------------------------------------------------------------
+ * FORMATION -- START / STACK / ACK, and the ONE field that is the gate
+ *
+ * *VAXcluster Principles* p. 2-12/2-14 gives the dialogue and its acceptable-
+ * response table, and this file implements exactly that table:
+ *
+ *   START SENT      + START -> send STACK, go START RECEIVED (both ends
+ *                              started at once: the asymmetric-timing case)
+ *                   + STACK -> OPEN, send ACK
+ *   START RECEIVED  + ACK   -> OPEN
+ *                   + STACK -> OPEN, send ACK
+ *                   + START -> re-send STACK (stay)
+ *                   + any circuit-requiring packet -> IMPLIED ACK, OPEN
+ *                              (p. 2-16) and then process that packet
+ *   OPEN            + ACK   -> discarded (p. 2-12: "each port driver simply
+ *                              discards the ACK it receives")
+ *
+ * VMS_PE_VC_STACK_SENT is the book's START RECEIVED under the name the
+ * snapshot ABI already froze (vms_cluster_snapshot.h): the state reached by
+ * SENDING a STACK.
+ *
+ * THE INCARNATION ECHO IS THE JOIN GATE, and it is READ, never chosen. Spec
+ * §4(i).B, GROUNDED byte-exact across six specimens: the member advertises,
+ * in its DIRECTED HELLO at abs 92, the incarnation number IT attributes to
+ * US -- 1 for a first contact, 2 for the second, 3 for the third -- and the
+ * joiner must stamp exactly that number into its 0x41 START at abs 36. A
+ * joiner that hard-codes 1 against a member advertising 2 STALLS at config
+ * round 0 forever; that was vms-691, and it cost the campaign days.
+ *
+ * So this FSM takes the echo from `pe_channel.peer_incarnation`, which
+ * FC-P0.8 filled from a real received frame and flagged valid, and if the
+ * flag is clear it forms NO CIRCUIT AT ALL and counts it. There is no
+ * default, no 1, and no "the usual value" anywhere in this file (INV-6).
+ *
+ * ---------------------------------------------------------------------------
+ * SEQUENCING -- the mechanism, and the one failure mode that must not exist
+ *
+ * Spec §4(h)(4), GROUNDED across the whole formation phase: "a node holds
+ * send_seq (its own next number) and recv_seq (highest peer send_seq seen); a
+ * sequenced message stamps send_seq (+mirror) and recv_ack = recv_seq, then
+ * increments send_seq; a 0x48 credit-return stamps [18:20] = recv_seq with
+ * send_seq = 0 (no advance)."  Four consequences this file implements:
+ *
+ *   1. ONE send_seq PER CIRCUIT, shared by every connection multiplexed on
+ *      it and CONTIGUOUS. p. 2-30/2-31: the ordered unit is the port pair,
+ *      not the connection, and spec §4(O.14) measured a real VAX's circuit
+ *      running 4,5,6,…,22 with no gaps across all its connections. A hole is
+ *      not a local error: the peer breaks the circuit on it.
+ *   2. RETRANSMIT REUSES THE SEQUENCE. Spec §4(L): a message "consumes the
+ *      channel send_seq exactly once, and retransmissions REUSE that same
+ *      send_seq (a retransmit is not a new message -- advancing it per
+ *      retransmit desynchronizes the peer)". The retransmitted frame is
+ *      re-stamped with a FRESH recv_ack, and re-marked 0x4b/0x5b -> 0x7b,
+ *      which is the wire's own retransmit marking (spec §4(h), §4(O.19)).
+ *   3. recv_ack IS CUMULATIVE and IS THE PEER'S RELEASE SIGNAL: every frame
+ *      the peer sends carries the highest contiguous sequence it has taken
+ *      from us, and everything at or below it leaves the unacked ring.
+ *   4. A GAP BREAKS THE CIRCUIT. p. 2-31: "if either the guarantee of message
+ *      delivery or the guarantee of message sequentiality cannot be
+ *      satisfied, the virtual circuit between the ports involved will be
+ *      explicitly broken … then every connection supported by this virtual
+ *      circuit is also broken." Spec §4(h)(4a) measured what that detector
+ *      costs on real wire: over 321,599 sequenced messages in 47 captures,
+ *      ZERO gaps came from a VAX. A duplicate (a sequence at or behind
+ *      recv_seq -- 506 of them) is NOT a gap and must never break anything,
+ *      and the FIRST sequenced message on a circuit ANCHORS the counter
+ *      rather than being scored.
+ *
+ * ***  THE INVARIANT THIS ITEM EXISTS FOR: recv_ack NEVER FREEZES.  ***
+ *
+ * A frozen recv_ack is the campaign's most expensive failure: a circuit that
+ * is UP, whose peer keeps sending, and whose acknowledgement stops advancing.
+ * Everything the peer sends afterwards rides behind the frozen point and is
+ * never delivered -- spec §4(O.14)/§4(O.15)/§4(O.19) traced three separate
+ * stalls to exactly that shape, with a real member's recv_seq stuck at 10, 19
+ * and 20 while the joiner's stream ran on contiguously past it.
+ *
+ * Two structural rules keep this file on the right side of it:
+ *
+ *   (a) ACKNOWLEDGEMENT IS A TRANSPORT FACT, NOT AN APPLICATION ONE. The ack
+ *       is emitted from the receive path the moment the sequence is scored --
+ *       BEFORE any delivery upward, and with no `if (upper)`, no Con.ID
+ *       lookup and no SYSAP consent between the two. A message this node
+ *       cannot route, cannot parse above the envelope, or has no listener
+ *       for is still a message it RECEIVED, and the peer is told so. (That is
+ *       the difference between a port and a SYSAP; conflating them is what
+ *       froze the strawman.)
+ *   (b) AN UNACKNOWLEDGED CIRCUIT DIES INSTEAD OF STALLING. If the PEER's
+ *       recv_ack stops advancing while this node still has unacked messages,
+ *       the retransmit ladder runs and then TIMVCFAIL breaks the circuit and
+ *       re-forms it. A silent forever-stall is not an outcome this FSM has.
+ *
+ * The R1 test file asserts both directly, including the case where NO upper
+ * layer is bound at all.
+ *
+ * ---------------------------------------------------------------------------
+ * CREDIT -- one message, one credit, no invention
+ *
+ * p. 2-43/2-44: SCS flow control is a debit/credit account. The peer grants
+ * this node its Send Credit in the START body (abs 95, byte-exact to SYSGEN
+ * CLUSTER_CREDITS, spec §4(g)); each sequenced message this node sends debits
+ * one, and each 0x48 credit-return the peer sends restores one -- "strict
+ * 1-for-1: every sequenced message is answered by exactly one 0x48 returning
+ * exactly one message's worth of credit" (spec §4(h)(3), GROUNDED).
+ *
+ * This layer therefore returns EXACTLY ONE credit per received sequenced
+ * message, in the 0x48 that carries the ack, and NEVER also piggybacks one:
+ * the abs-62 piggyback field belongs to the SCS connection layer (FC-P2.2's
+ * per-CDT Pending Receive Credit), and returning a credit twice for one
+ * message would inflate the peer's send window past what this node can take.
+ * Credit conservation is an identity here, not an estimate.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT THIS LAYER DOES **NOT** DO
+ *
+ * It does not build a sequenced message. It has no idea what a Con.ID, a
+ * SYSAP or a lock is: the layer that owns the message builds the frame, and
+ * the port stamps the circuit's sequence position into it on the way out and
+ * again on every retransmission (vms_scs_seq_stamp). That is the VMS split --
+ * p. 2-55/2-56 gives the port driver "VC dialogue, routing, credits, buffer
+ * allocation, send/map routines" and leaves CDT/RDT/RSPID to SYS$SCS.
+ * ========================================================================== */
+
+/*
+ * The largest frame the unacked ring stores. 204 = the SCA content class 190
+ * plus the 14-byte Ethernet header -- the largest SCS MESSAGE class the wire
+ * spec grounds (§4(d): the 190-content class is 17557/17557 of the Con.ID
+ * layout; §4(d)'s own admitted classes are 58/62/66/86/94/110/190). The block
+ * transfer classes are deliberately NOT covered: block transfer is FC-P6.1's
+ * named-buffer service and does not ride this ring.
+ */
+#define PE_VC_FRAME_MAX 204u
+
+/*
+ * How many messages may be outstanding on one circuit. The peer's grant is
+ * the real bound (CLUSTER_CREDITS, 10 in the lab); this is the ring that
+ * holds them, sized with headroom so the CREDIT is what limits sending and
+ * the ring never silently does. A send that would exceed either is REFUSED
+ * and reported, never dropped.
+ */
+#define PE_VC_UNACKED_MAX 16u
+
+/*
+ * TIMVCFAIL: "the time required for an SCS virtual circuit failure to be
+ * detected". A SYSGEN parameter; the glue converts it out of its SYSGEN unit
+ * and puts milliseconds in pe_identity, so this FSM never does unit
+ * arithmetic. The default below is OVMX's own choice for a port whose
+ * SYSGEN value has not been loaded -- it is NOT a published VMS constant --
+ * and it is the lab's TIMVCFAIL 1600 read as centiseconds.
+ */
+#define PE_TIMVCFAIL_DEFAULT_MS 16000u
+
+/*
+ * The retransmit cadence. No published document and no capture grounds a
+ * sequenced-message retransmit interval (§4(k)'s measured 6.010 s is the
+ * padded-HELLO SIZE probe, a different timer on a different frame class), so
+ * this is OVMX's choice and is LABELLED as one: an eighth of TIMVCFAIL, i.e.
+ * about eight attempts before the circuit is declared failed. Derived from
+ * the one parameter the operator actually configures rather than adding a
+ * new invented constant.
+ */
+#define PE_VC_RETRANSMIT_DIVISOR 8u
+#define PE_VC_RETRANSMIT_MIN_MS  200u
+
+/* One unacknowledged message: the frame as it went out, and its position. */
+struct pe_vc_unacked {
+	uint8_t  in_use;
+	uint8_t  retransmits;     /* how many times this SAME seq went out */
+	uint16_t seq;             /* the sequence it consumed, ONCE        */
+	uint32_t len;
+	uint32_t due_ms;          /* injected-clock deadline of the next try */
+	uint8_t  frame[PE_VC_FRAME_MAX];
+};
+
+/* What a received sequence number IS, relative to this circuit's recv_seq.
+ * Named so the table's handler reads as the rule it implements. */
+enum pe_vc_seq_kind {
+	PE_VC_SEQ_ANCHOR = 0,  /* the first on this circuit (§4(h)(4a))     */
+	PE_VC_SEQ_NEXT,        /* recv_seq + 1: the normal case             */
+	PE_VC_SEQ_DUP,         /* at or behind recv_seq: a peer retransmit  */
+	PE_VC_SEQ_GAP          /* ahead by more than 1: p. 2-31, VC breaks  */
+};
+
+/* Why a circuit went down -- passed to the upper layer's vc_down and printed
+ * on the console, so a stall is never silent. */
+enum pe_vc_down_reason {
+	PE_VC_DOWN_SEQ_GAP = 1,   /* p. 2-31 sequentiality guarantee lost   */
+	PE_VC_DOWN_TIMVCFAIL,     /* no ack progress within TIMVCFAIL       */
+	PE_VC_DOWN_CHANNEL,       /* the channel it rides stopped being ok  */
+	PE_VC_DOWN_PEER_RESTART,  /* the peer sent a START on an open VC    */
+	PE_VC_DOWN_PEER_GONE,     /* §4(O.30) last gasp                     */
+	PE_VC_DOWN_SHUTDOWN       /* CLUSTER_STOP                           */
+};
+
+/*
+ * One virtual circuit. Every field is either read off a real received frame,
+ * counted from a real dispatch, or taken from this node's own loaded SYSGEN
+ * identity. Nothing here has a default that stands in for a value the
+ * executive has not got.
+ */
+struct pe_vc {
+	uint8_t  in_use;
+	uint8_t  state;            /* enum vms_pe_vc_state                  */
+	uint8_t  channel;          /* the pe_channel index it rides         */
+	uint8_t  config_round;     /* the round OUR last 0x41 carried       */
+
+	/* ---- the peer's identity, ALL learned from its START/STACK body -- */
+	vms_scs_sysid_t peer_sysid;
+	uint8_t  peer_sysid_valid;
+	uint8_t  peer_name[VMS_SCS_START_NODENAME_LEN];
+	uint8_t  peer_name_valid;
+	uint8_t  peer_swver[VMS_SCS_START_SWVER_LEN];
+	uint8_t  peer_hwtype[VMS_SCS_START_HWTYPE_LEN];
+	uint8_t  peer_ident_valid; /* a 106-byte START/STACK really arrived  */
+	uint64_t peer_incarnation_time;   /* its boot time (spec §4(g) a80)  */
+
+	/*
+	 * The incarnation the PEER advertised for US, copied from the channel
+	 * at formation time (spec §4(i).B). `_valid` clear means the channel
+	 * never carried one -- and then no START is ever built.
+	 */
+	uint16_t echo_incarnation;
+	uint8_t  echo_valid;
+	uint8_t  pad0;
+
+	/* ---- sequencing (spec §4(h)(4)) ---- */
+	uint16_t send_seq;         /* OUR NEXT number, not the last one sent */
+	uint16_t recv_seq;         /* highest peer send_seq taken, in order  */
+	uint16_t peer_recv_ack;    /* the cumulative ack the PEER last sent  */
+	uint8_t  recv_anchored;    /* a first sequenced message has arrived  */
+	uint8_t  pad1;
+
+	/* ---- flow control (p. 2-43/2-44) ---- */
+	uint8_t  send_credit;      /* messages we may still send             */
+	uint8_t  send_credit_max;  /* the peer's grant, from its START body  */
+	uint8_t  recv_credit;      /* what we have granted and not returned  */
+	uint8_t  recv_credit_max;  /* our own CLUSTER_CREDITS                */
+
+	/* ---- the unacked ring, keyed by seq ---- */
+	struct pe_vc_unacked ring[PE_VC_UNACKED_MAX];
+	uint8_t  unacked;          /* entries in use                         */
+	uint8_t  form_tries;       /* START/STACK attempts at this round     */
+	uint8_t  pad2[2];
+
+	/* ---- deadlines, injected clock, wrap-safe ---- */
+	uint32_t form_due_ms;      /* next formation retry                   */
+	uint32_t vcfail_due_ms;    /* TIMVCFAIL: no ACK PROGRESS by here     */
+	uint8_t  vcfail_armed;
+	uint8_t  pad3[3];
+
+	/* ---- counters, every one from a real dispatch ---- */
+	uint32_t starts_tx, starts_rx;
+	uint32_t stacks_tx, stacks_rx;
+	uint32_t acks_tx,   acks_rx;      /* the 0x41 round-2 ACK            */
+	uint32_t msgs_tx,   msgs_rx;      /* sequenced messages              */
+	uint32_t credit_tx, credit_rx;    /* the 0x48 short (ack + credit)   */
+	uint32_t retransmits;             /* same seq re-sent                */
+	uint32_t rx_dups;                 /* peer retransmits we absorbed    */
+	uint32_t rx_gaps;                 /* p. 2-31 breaks                  */
+	uint32_t implied_acks;            /* p. 2-16 opens                   */
+	uint32_t opens;                   /* times this VC reached OPEN      */
+	uint32_t downs;                   /* times it was torn down          */
+	uint32_t send_refused_credit;     /* refused: no send credit         */
+	uint32_t send_refused_ring;       /* refused: ring full              */
+	uint8_t  last_down_reason;        /* enum pe_vc_down_reason, 0 = none */
+	uint8_t  pad4[3];
+};
+
+/* ==========================================================================
  * 4. This node's honest identity on the wire
  *
  * Every field is filled by vms_pe.c (FC-P0.9) from REAL executive state -- the
@@ -300,6 +576,54 @@ struct pe_identity {
 	/* 0 selects the documented default above. A SYSGEN value always wins. */
 	uint32_t hello_interval_ms;
 	uint32_t listen_timeout_ms;
+
+	/* ------------------------------------------------------------------
+	 * Added by FC-P1.2: what the VIRTUAL CIRCUIT's formation body asserts
+	 * about this system (spec §4(g) phase 2). Every one of these is a
+	 * per-node or per-boot value the glue reads out of real executive
+	 * state; NONE of them has a fallback here, because every one of them
+	 * is a claim about who this node is.
+	 * ------------------------------------------------------------------ */
+
+	/*
+	 * abs 72, 8 ASCII: the software version this node BROADCASTS. OVMX
+	 * broadcasts its own honest "VMX Vx.y" (the honest-OS-identity
+	 * ruling); it is a field, not a constant, precisely so no capture's
+	 * "VMS V7.3" can be baked in anywhere in this stack.
+	 */
+	uint8_t  sw_version[VMS_SCS_START_SWVER_LEN];
+	uint8_t  sw_version_valid;
+
+	/* abs 88, 4 ASCII: this node's hardware class ("VAX ", "AXP ", ...),
+	 * which differs per substrate and is therefore never a constant. */
+	uint8_t  hw_type[VMS_SCS_START_HWTYPE_LEN];
+	uint8_t  hw_type_valid;
+
+	/* abs 95: SYSGEN CLUSTER_CREDITS -- the Send Credit this node GRANTS
+	 * the peer (p. 2-43). 0 is a legitimate configured value and is
+	 * honoured; the flag distinguishes it from "not loaded". */
+	uint8_t  cluster_credits;
+	uint8_t  cluster_credits_valid;
+
+	/*
+	 * abs 80: THIS SYSTEM'S INCARNATION -- a VMS absolute-time quadword,
+	 * the time this system was BOOTED (spec §4(g), GROUNDED four ways by
+	 * vms-2f3). It arrives from the executive; it is NEVER sampled here
+	 * and NEVER defaulted. A node that advertises an incarnation it did
+	 * not boot with earns a CLUEXIT bugcheck on the surviving side after a
+	 * reconnect (VSI OpenVMS Cluster Systems App. C.7.1) -- which is
+	 * exactly what OVMX did for six days by replaying a captured value.
+	 * With the flag clear this FSM forms no circuit and says so.
+	 */
+	uint64_t incarnation_time;
+	uint8_t  incarnation_time_valid;
+	uint8_t  pad_vc[3];
+
+	/* 0 selects the documented defaults. A SYSGEN value always wins; the
+	 * glue converts TIMVCFAIL out of its SYSGEN unit, so no unit
+	 * arithmetic happens inside the FSM. */
+	uint32_t timvcfail_ms;
+	uint32_t vc_retransmit_ms;
 };
 
 /* ==========================================================================
@@ -372,6 +696,12 @@ struct pe_fsm {
 	struct pe_identity     id;
 	const struct pe_ops   *ops;
 
+	/* SCSSYSTEMID as pe_fsm_init was given it. The channel layer needs
+	 * only the cluster-LOGICAL address built from it; the VC's START body
+	 * carries the number itself at abs 60 (spec §4(g) phase 2), so it is
+	 * kept rather than re-derived from the address. */
+	vms_scs_sysid_t        sysid;
+
 	uint8_t  running;         /* the cadence beat is armed */
 	uint8_t  link_up;
 	uint8_t  pad0[2];
@@ -392,6 +722,38 @@ struct pe_fsm {
 	uint32_t nonce_absent;      /* directed frames sent with no credential   */
 	uint32_t tx_errors;         /* ops->send returned non-zero               */
 	uint32_t last_gasps_built;
+
+	/* ---- FC-P1.2: the virtual-circuit half ----
+	 *
+	 * The VC table is BOUND, not embedded: one circuit carries a ring of
+	 * whole frames, so the table's size is a deployment decision (a
+	 * two-node harness wants two, a 96-system cluster wants 96) and it
+	 * belongs to the glue that knows how much memory it may take. The FSM
+	 * itself still allocates NOTHING -- ops->alloc stays unused and NULL
+	 * in every test, which is a harder guarantee than a counter.
+	 */
+	struct pe_vc         *vc;        /* bound table, or NULL              */
+	uint32_t              n_vc_slots;/* its capacity                      */
+	uint32_t              n_vcs;     /* high-water of used slots          */
+	const struct pe_upper_ops *upper;/* SCS, or NULL (see the ack rule)   */
+
+	uint32_t vc_ignored_events; /* [vc state][event] cell with no edge    */
+	uint32_t vc_no_slot;        /* the VC table was full: refused         */
+	uint32_t vc_no_incarnation; /* §4(i).B echo absent: NO START built    */
+	uint32_t vc_no_identity;    /* incarnation time / clock absent        */
+	uint32_t vc_rx_no_circuit;  /* SCS frame with no circuit to take it   */
+	uint32_t vc_rx_no_channel;  /* SCS frame from an unknown station      */
+	uint32_t vc_rx_parse_failed;/* classified SCS, then failed to decode  */
+	uint32_t vc_reformations;   /* circuits re-formed after a failure     */
+	/*
+	 * Received, ACKNOWLEDGED, and not handed upward: no upper layer bound,
+	 * or a class whose Con.ID location the codec does not ground (§4(d)
+	 * leaves every length class but 190/110/66/62 undecoded). The ack went
+	 * out either way -- that is §3b(a) -- so this counter measures what
+	 * this node cannot yet ROUTE, never a circuit that stalled. FC-P2.1
+	 * grounds more classes and drives it down.
+	 */
+	uint32_t vc_rx_undelivered;
 
 	/* The one frame buffer. Sized for the largest frame SS4(k) grounds. */
 	uint8_t  scratch[VMS_HELLO_PADDED_MAX_FRAME];
@@ -505,6 +867,91 @@ void pe_fsm_shutdown(struct pe_fsm *f);
  * Returns 0 on success, or -1 when there is no identity to send from.
  */
 int pe_fsm_send_last_gasp(struct pe_fsm *f);
+
+/* ==========================================================================
+ * 8b. The VIRTUAL CIRCUIT surface (FC-P1.2)
+ * ========================================================================== */
+
+/*
+ * Bind the circuit table and the layer above, AFTER pe_fsm_init (which zeroes
+ * the whole context, bindings included). Both are the glue's objects:
+ * `vcs` is `n` zeroed pe_vc slots (the port's PB set) and `upper` is SCS.
+ *
+ * NEITHER is required. With no table bound the port runs as FC-P0.8 shipped
+ * it -- channels only, no circuit ever formed, every SCS frame counted in
+ * vc_rx_no_circuit. With a table but no upper layer bound the circuits form,
+ * sequence, acknowledge and retransmit exactly as they otherwise would, and
+ * received messages are counted instead of delivered: acknowledgement is a
+ * TRANSPORT fact and does not depend on anyone being home (see §3b(a)).
+ */
+void pe_fsm_bind_vcs(struct pe_fsm *f, struct pe_vc *vcs, uint32_t n);
+void pe_fsm_set_upper(struct pe_fsm *f, const struct pe_upper_ops *upper);
+
+/* Why a send was refused. Negative so `if (rc)` reads as failure; the glue
+ * maps each to the SS$_ status vms_pe.h's pe_send_msg promises (kernel-core
+ * cluster headers stay free of SS$_ definitions -- design §3.2.2). */
+enum pe_vc_send_status {
+	PE_VC_SEND_OK        =  0,
+	PE_VC_SEND_NOCIRCUIT = -1,  /* no OPEN circuit to that system        */
+	PE_VC_SEND_NOCREDIT  = -2,  /* the peer's Send Credit is exhausted   */
+	PE_VC_SEND_RINGFULL  = -3,  /* unacked ring full (credit says other) */
+	PE_VC_SEND_BADFRAME  = -4,  /* not a stampable sequenced SCS frame   */
+	PE_VC_SEND_TOOBIG    = -5,  /* larger than PE_VC_FRAME_MAX           */
+	PE_VC_SEND_TXFAIL    = -6   /* ops->send failed; the seq is HELD     */
+};
+
+/*
+ * Send one sequenced message on the circuit to `dst`.
+ *
+ * `frame` is a COMPLETE SCS frame the calling layer built through its own
+ * codec entry -- addressing, Con.ID pair, SYSAP body and all. This function
+ * assigns it the circuit's next sequence, stamps recv_ack/send_seq/mirror
+ * into it (vms_scs_seq_stamp), transmits it and keeps a copy for
+ * retransmission. See §3b "WHAT THIS LAYER DOES NOT DO": the port owns the
+ * sequence, the caller owns the message.
+ *
+ * THE SEQUENCE IS CONSUMED ONLY BY A FRAME THAT WENT OUT. A frame that fails
+ * the class gate consumes nothing; a frame ops->send rejects keeps its
+ * sequence AND its ring entry, so the retransmit ladder fills the position
+ * rather than leaving the hole that would break the peer's circuit (§3b(1)).
+ *
+ * `pe_vc_addr` hands back the four addresses that frame must carry, read from
+ * the circuit's OWN channel -- the peer's hardware MAC and cluster-LOGICAL
+ * address as they were learned from its frames, and this node's own two. It
+ * exists so the layer above builds with REAL addressing instead of inventing
+ * any part of it. 0 on success, -1 if there is no such circuit.
+ */
+int pe_vc_send_frame(struct pe_fsm *f, vms_scs_sysid_t dst,
+		     const uint8_t *frame, uint32_t len);
+int pe_vc_addr(struct pe_fsm *f, vms_scs_sysid_t dst, struct vms_scs_addr *out);
+
+/*
+ * One circuit's timer beat (PE_TIMER_RETRANSMIT, key = the circuit index).
+ * Every deadline inside is a wrap-safe comparison against ops->now_ms, so
+ * calling it early, late or twice is harmless -- which is what lets
+ * pe_fsm_tick drive them all from the one port beat as well, and why this
+ * handler also tests the TIMVCFAIL deadline rather than needing its timer to
+ * have fired. A glue that arms PE_TIMER_VCFAIL separately posts
+ * PE_EV_TIMER_VCFAIL through pe_fsm_vc_event; both reach the same test.
+ */
+void pe_fsm_vc_timer(struct pe_fsm *f, uint32_t index);
+
+/* Post a non-frame event to one circuit -- the glue's way in, and the tests'
+ * way to reach the cells no received frame can produce. */
+void pe_fsm_vc_event(struct pe_fsm *f, uint32_t index, enum pe_event ev);
+
+/* The circuit at `index`, or NULL past the end / for a free slot; and the
+ * circuit to a system, by the SCSSYSTEMID its own frames carried. */
+struct pe_vc *pe_fsm_vc_at(struct pe_fsm *f, uint32_t index);
+struct pe_vc *pe_fsm_vc_by_sysid(struct pe_fsm *f, vms_scs_sysid_t sysid);
+
+/* Project one circuit into the frozen cross-substrate view (INV-6: what was
+ * never learned stays zero with its flag clear). */
+void pe_fsm_vc_project(const struct pe_fsm *f, const struct pe_vc *vc,
+		       struct vms_pe_vc_view *out);
+
+const char *pe_vc_state_name(enum vms_pe_vc_state s);
+const char *pe_vc_down_reason_name(enum pe_vc_down_reason r);
 
 /* ==========================================================================
  * 9. Readback -- the same struct the diagnostics ioctl projects (INV-6)

@@ -49,9 +49,9 @@
  * Device class codes. Values mirror src/libvms/include/dcdef.h so the
  * executive and the runtime cannot disagree about what a class means.
  */
-#define DC__TERM        6   /* DC$_TERM */
+#define DC__TERM       66   /* DC$_TERM */
 #define DC__DISK        1   /* DC$_DISK */
-#define DC__SCOM        3   /* DC$_SCOM -- serial-communications / LAN class */
+#define DC__SCOM       32   /* DC$_SCOM -- serial-communications / LAN class */
 
 /*
  * Device type codes: 0 is "Unknown".

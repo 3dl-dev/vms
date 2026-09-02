@@ -1032,118 +1032,249 @@ static inline int exec_l2_recv(exec_socket_t s, void *buf, size_t buf_len,
  * (SS12) drops the reference and, on the last drop, sock_release()s it. */
 
 /* ================================================================
- * SS14..SS18  The cluster seam (FC-P0.1) -- CONTRACT-ONLY STUBS.
+ * SS14..SS18  The cluster seam (FC-P0.1 contract; FC-P0.2 the REAL Linux
+ * binding).
  *
- * FC-P0.1 freezes the contract (exec_kbackend.h SS14..SS18, including CONTRACT
- * RULES 1 and 2); FC-P0.2 lands the REAL Linux binding here (dev_add_pack /
- * dev_queue_xmit / dev_mc_add / kthread / timer_list / ktime / printk) and
- * proves it with the rung-3 substrate contract test
- * (tests/qemu/test_kmod_cluster_seam.c: a veth pair delivers a 0x6007 frame to
- * rx_cb, multicast shows in `ip maddr`, timer post-and-wake, kthread start/stop,
- * exec_time monotone).
+ * FC-P0.1 froze the contract (exec_kbackend.h SS14..SS18, including CONTRACT
+ * RULES 1 and 2). FC-P0.2 lands the real primitives here: dev_add_pack /
+ * dev_queue_xmit / dev_mc_add / dev_mc_del / kthread_run / timer_list /
+ * ktime_get_* / printk, proved by the rung-3 substrate contract test
+ * (tests/qemu/test_kmod_cluster_seam.c, driven through the TEST-ONLY
+ * OVMX_KTEST_CLUSTER_SEAM knob in src/kernel/vms_module.c): a veth pair
+ * delivers a 0x6007 frame to rx_cb in softirq and exec_lan_xmit is seen on
+ * the peer, multicast add is visible in `ip maddr` (== /proc/net/dev_mcast),
+ * timer post-and-wake, kthread start/stop, exec_time monotone.
  *
- * Until then every op here FAILS HONESTLY with SS$_NOSUCHDEV: it opens nothing,
- * registers nothing, and fabricates nothing (INV-6 / Rule 9). This is the same
- * posture the SS8/SS11/SS13 contract-only twins take, and it is why the void
- * ops below are inert: exec_lan_open never succeeds, so vms_pe.c never brings a
- * port up, so no timer is ever armed and no fork thread is ever started -- an
- * inert timer cannot silently swallow a HELLO cadence, because nothing gets far
- * enough to arm one.
- *
- * The TYPES are the real ones (struct timer_list, struct task_struct *), not
- * placeholders: they fix the sizes the core embeds by value now, so FC-P0.2 is
- * a body-only change.
+ * The TYPES were already real as of FC-P0.1 (struct timer_list, struct
+ * task_struct *): they fixed the sizes the core embeds by value, so this is a
+ * body-only change, as designed.
  * ================================================================ */
 
 typedef struct task_struct *exec_kthread_t;
 
 typedef struct exec_timer {
-	struct timer_list tl;      /* the real Linux timer FC-P0.2 arms */
+	struct timer_list tl;      /* the real Linux timer this binding arms */
 	void (*cb)(void *);
 	void *ctx;
 } exec_timer_t;
 
+/*
+ * SS14 LAN port. "One node has exactly one cluster port... these ops
+ * therefore name no handle: the binding owns at most one open port"
+ * (exec_kbackend.h SS14) -- so this backend keeps the open port's state in
+ * one file-scope struct, exactly the "no handle crosses the seam" contract.
+ * Only vms_pe.c calls these in the shipped executive; the TEST-ONLY knob in
+ * vms_module.c (OVMX_KTEST_CLUSTER_SEAM) is the only other caller, and never
+ * both at once.
+ */
+struct vms_lan_port {
+	struct net_device *dev;    /* dev_get_by_name'd ref, held while open */
+	struct packet_type pt;     /* registered via dev_add_pack */
+	exec_lan_rx_cb_t   rx_cb;
+	void              *rx_ctx;
+};
+static struct vms_lan_port vms_lan_port;
+
+/*
+ * dev_add_pack's func trampoline -- CONTRACT RULE 1 territory: this runs in
+ * Linux's receive softirq (the packet_type dispatch out of
+ * __netif_receive_skb_core). It does the MINIMUM needed to hand the core a
+ * flat (frame, len) view of the wire frame before calling rx_cb, which is
+ * where rule 1 (copy/enqueue/wake only, no protocol) actually binds:
+ *
+ *   - skb_linearize: a paged skb cannot be handed to rx_cb as one pointer;
+ *     linearizing uses GFP_ATOMIC internally (__pskb_pull_tail), so it does
+ *     not sleep and is safe here. A failure (OOM) drops the frame -- the
+ *     same "pool empty" drop-and-count posture rule 1 already prescribes for
+ *     the core's own queue, applied one step earlier.
+ *   - the driver's eth_type_trans() already reset skb->mac_header to the
+ *     frame's start and pulled skb->data past the 14-byte Ethernet header
+ *     before this callback ever runs, so skb_mac_header(skb) is byte 0 (the
+ *     destination MAC) and (skb->data - skb_mac_header(skb)) + skb->len is
+ *     the WHOLE frame length -- exactly the "byte 0 = dest MAC" shape SS14
+ *     promises the core, with no substrate offset base leaking through.
+ */
+static int vms_lan_rx_thunk(struct sk_buff *skb, struct net_device *dev,
+			     struct packet_type *pt, struct net_device *orig_dev)
+{
+	struct vms_lan_port *port = container_of(pt, struct vms_lan_port, pt);
+	const uint8_t *frame;
+	uint32_t frame_len;
+
+	(void)dev;
+	(void)orig_dev;
+
+	if (skb_linearize(skb))
+		goto drop;   /* OOM: cannot present one contiguous frame -- drop */
+
+	frame = skb_mac_header(skb);
+	frame_len = skb->len + (uint32_t)(skb->data - frame);
+	if (port->rx_cb)
+		port->rx_cb(port->rx_ctx, frame, frame_len);
+drop:
+	kfree_skb(skb);
+	return 0;
+}
+
 static inline int exec_lan_open(const char *ifname, uint16_t ethertype,
 				exec_lan_rx_cb_t rx_cb, void *ctx)
 {
-	(void)ifname; (void)ethertype; (void)rx_cb; (void)ctx;
-	return (int)EXEC_SS_NOSUCHDEV;   /* FC-P0.2: dev_get_by_name + dev_add_pack */
+	struct net_device *dev;
+
+	if (vms_lan_port.dev)
+		return (int)EXEC_SS_NOSUCHDEV;   /* "at most one open port" */
+
+	dev = dev_get_by_name(&init_net, ifname);
+	if (!dev)
+		return (int)EXEC_SS_NOSUCHDEV;   /* honest: no such interface */
+
+	vms_lan_port.dev = dev;                  /* reference held until close */
+	vms_lan_port.rx_cb = rx_cb;
+	vms_lan_port.rx_ctx = ctx;
+	vms_lan_port.pt.type = htons(ethertype);
+	vms_lan_port.pt.dev = dev;
+	vms_lan_port.pt.func = vms_lan_rx_thunk;
+	dev_add_pack(&vms_lan_port.pt);
+	return 0;
 }
 
 static inline void exec_lan_close(void)
 {
-	/* FC-P0.2: dev_remove_pack + dev_put. Nothing is open, so nothing to close. */
+	if (!vms_lan_port.dev)
+		return;                           /* nothing open; a no-op close */
+	dev_remove_pack(&vms_lan_port.pt);
+	dev_put(vms_lan_port.dev);
+	memset(&vms_lan_port, 0, sizeof(vms_lan_port));
 }
 
+/*
+ * Transmit ONE complete Ethernet frame (source MAC already set by the caller
+ * per SS14). alloc_skb + skb_put_data copies `frame` into a fresh skb headed
+ * by the device's real link-layer reserve; skb_reset_mac_header + reading
+ * h_proto back out of the frame we just wrote mirrors the driver-side setup
+ * eth_type_trans does on receive, so tc/qdisc classification sees a
+ * correctly-tagged skb. dev_queue_xmit's NET_XMIT_* soft codes (queued,
+ * congested) are all >= 0 -- only a negative return is a hard failure. */
 static inline int exec_lan_xmit(const uint8_t *frame, uint32_t len)
 {
-	(void)frame; (void)len;
-	return (int)EXEC_SS_NOSUCHDEV;   /* FC-P0.2: alloc_skb + dev_queue_xmit */
+	struct sk_buff *skb;
+
+	if (!vms_lan_port.dev)
+		return (int)EXEC_SS_NOSUCHDEV;
+
+	skb = alloc_skb(len + LL_RESERVED_SPACE(vms_lan_port.dev), GFP_KERNEL);
+	if (!skb)
+		return (int)EXEC_SS_NOSUCHDEV;
+
+	skb_reserve(skb, LL_RESERVED_SPACE(vms_lan_port.dev));
+	skb_put_data(skb, frame, len);
+	skb->dev = vms_lan_port.dev;
+	skb_reset_mac_header(skb);
+	skb->protocol = eth_hdr(skb)->h_proto;
+
+	if (dev_queue_xmit(skb) < 0)
+		return (int)EXEC_SS_NOSUCHDEV;
+	return 0;
 }
 
 static inline int exec_lan_mc_add(const uint8_t mac[6])
 {
-	(void)mac;
-	return (int)EXEC_SS_NOSUCHDEV;   /* FC-P0.2: dev_mc_add */
+	if (!vms_lan_port.dev)
+		return (int)EXEC_SS_NOSUCHDEV;
+	return dev_mc_add(vms_lan_port.dev, mac) ? (int)EXEC_SS_NOSUCHDEV : 0;
 }
 
 static inline int exec_lan_mc_del(const uint8_t mac[6])
 {
-	(void)mac;
-	return (int)EXEC_SS_NOSUCHDEV;   /* FC-P0.2: dev_mc_del */
+	if (!vms_lan_port.dev)
+		return (int)EXEC_SS_NOSUCHDEV;
+	return dev_mc_del(vms_lan_port.dev, mac) ? (int)EXEC_SS_NOSUCHDEV : 0;
 }
 
 static inline int exec_lan_hwaddr(uint8_t out[6])
 {
-	(void)out;                       /* untouched: never a fabricated MAC */
-	return (int)EXEC_SS_NOSUCHDEV;   /* FC-P0.2: ndev->dev_addr */
+	if (!vms_lan_port.dev)
+		return (int)EXEC_SS_NOSUCHDEV;   /* untouched: never a fabricated MAC */
+	memcpy(out, vms_lan_port.dev->dev_addr, ETH_ALEN);
+	return 0;
 }
 
 static inline int exec_lan_mtu(uint32_t *out)
 {
-	(void)out;
-	return (int)EXEC_SS_NOSUCHDEV;   /* FC-P0.2: ndev->mtu */
+	if (!vms_lan_port.dev)
+		return (int)EXEC_SS_NOSUCHDEV;
+	*out = (uint32_t)vms_lan_port.dev->mtu;
+	return 0;
 }
 
 static inline int exec_lan_link_up(int *out)
 {
-	(void)out;
-	return (int)EXEC_SS_NOSUCHDEV;   /* FC-P0.2: netif_carrier_ok */
+	if (!vms_lan_port.dev)
+		return (int)EXEC_SS_NOSUCHDEV;   /* "port not open" is not "link down" */
+	*out = netif_carrier_ok(vms_lan_port.dev) ? 1 : 0;
+	return 0;
 }
+
+/* ---- SS15 fork context: kthread_run / kthread_stop (joins) /
+ * kthread_should_stop. Linux's kthread_should_stop() reads `current` and
+ * ignores its argument -- the handle parameter exists for the NetBSD twin,
+ * which has no such implicit read (exec_kbackend.h SS15). ---- */
 
 static inline int exec_kthread_create(exec_kthread_t *t, int (*fn)(void *),
 				      void *arg, const char *name)
 {
-	(void)fn; (void)arg; (void)name;
-	*t = NULL;
-	return (int)EXEC_SS_NOSUCHDEV;   /* FC-P0.2: kthread_run */
+	struct task_struct *task = kthread_run(fn, arg, "%s", name);
+
+	if (IS_ERR(task)) {
+		*t = NULL;
+		return (int)EXEC_SS_NOSUCHDEV;
+	}
+	*t = task;
+	return 0;
 }
 
 static inline void exec_kthread_stop(exec_kthread_t *t)
 {
-	(void)t;                         /* FC-P0.2: kthread_stop (joins) */
+	if (t && *t) {
+		kthread_stop(*t);
+		*t = NULL;
+	}
 }
 
 static inline int exec_kthread_should_stop(exec_kthread_t *t)
 {
-	(void)t;                         /* FC-P0.2: kthread_should_stop() */
-	return 1;                        /* no thread exists: "stop" is the truth */
+	(void)t;                         /* Linux reads `current`, not the handle */
+	return kthread_should_stop();
+}
+
+/* ---- SS16 timers: timer_list + CONTRACT RULE 2 (a Linux timer callback runs
+ * in softirq with a single `struct timer_list *` argument -- the trampoline
+ * recovers {cb, ctx} via container_of and forwards to the core's cb, which
+ * must itself honour rule 2: post and wake, nothing else). ---- */
+
+static void vms_exec_timer_thunk(struct timer_list *tl)
+{
+	struct exec_timer *t = container_of(tl, struct exec_timer, tl);
+
+	if (t->cb)
+		t->cb(t->ctx);
 }
 
 static inline void exec_timer_init(exec_timer_t *t, void (*cb)(void *), void *ctx)
 {
-	t->cb = cb;                      /* FC-P0.2: + timer_setup(&t->tl, ...) */
+	t->cb = cb;
 	t->ctx = ctx;
+	timer_setup(&t->tl, vms_exec_timer_thunk, 0);
 }
 
 static inline void exec_timer_arm(exec_timer_t *t, uint32_t ms)
 {
-	(void)t; (void)ms;               /* FC-P0.2: mod_timer */
+	mod_timer(&t->tl, jiffies + msecs_to_jiffies(ms));
 }
 
 static inline void exec_timer_cancel(exec_timer_t *t)
 {
-	(void)t;                         /* FC-P0.2: del_timer_sync */
+	del_timer_sync(&t->tl);
 }
 
 static inline void exec_timer_destroy(exec_timer_t *t)
@@ -1151,23 +1282,26 @@ static inline void exec_timer_destroy(exec_timer_t *t)
 	(void)t;                         /* Linux has no callout_destroy twin */
 }
 
+/* ---- SS17 time: VMS absolute time is 100ns ticks since 00:00 17-NOV-1858,
+ * i.e. Unix epoch (1970) + 3,506,716,800 wall seconds; exec_ticks_ms is a
+ * monotonic (never wall-clock) millisecond counter for deadline math. ---- */
+
+#define VMS_EXEC_EPOCH_OFFSET_100NS (3506716800ULL * 10000000ULL)
+
 static inline uint64_t exec_time_now_vms(void)
 {
-	/* FC-P0.2: ktime_get_real_ns()/100 + the 17-NOV-1858 epoch offset. Zero is
-	 * NOT a plausible VMS time, so a caller that ships it would be visibly
-	 * wrong rather than subtly wrong (INV-6: no plausible-looking placeholder). */
-	return 0;
+	return (uint64_t)(ktime_get_real_ns() / 100) + VMS_EXEC_EPOCH_OFFSET_100NS;
 }
 
 static inline uint64_t exec_ticks_ms(void)
 {
-	return 0;                        /* FC-P0.2: ktime_get_ns() / 1000000 */
+	return (uint64_t)(ktime_get_ns() / 1000000ULL);
 }
 
 /* A macro, not a function: it forwards the caller's format string straight to
  * printk so the compiler's -Wformat checks the call site, and KERN_ERR is the
- * level the QEMU console actually shows. FC-P0.2 keeps this line as-is -- it is
- * already the real binding; it is listed here only for completeness of SS18. */
+ * level the QEMU console actually shows. Already the real binding as of
+ * FC-P0.1; unchanged here, listed for SS18 completeness. */
 #define exec_console_printf(fmt, ...) printk(KERN_ERR fmt, ##__VA_ARGS__)
 
 #endif /* OVMX_EXEC_KBACKEND_LINUX_H */

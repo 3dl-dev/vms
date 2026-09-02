@@ -559,6 +559,14 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     ln -s busybox /initramfs/bin/sh && \
     # Kernel modules
     cp /src/kernel/vms.ko /initramfs/lib/modules/ && \
+    # veth.ko (rd FC-P0.2, test_kmod_cluster_seam.c): the R3 substrate
+    # contract test needs a REAL veth pair (CONFIG_VETH ships as a module on
+    # this stock kernel, not built in), so the guest that loads vms.ko also
+    # loads veth.ko -- staged decompressed (zstd, already installed above)
+    # since insmod cannot read a .ko.zst directly.
+    KVER=$(cat /tmp/kver) && \
+    zstd -d "/lib/modules/${KVER}/kernel/drivers/net/veth.ko.zst" \
+        -o /initramfs/lib/modules/veth.ko && \
     # Genuine ODS-2 fixture + byte-identical golden for the test_syssvc_acp_*
     # suites (rd vms-dcd): the executive ACP ODS-2 read-back proof. Absence is
     # FATAL -- a silently-missing fixture would make the suites honest-skip forever.

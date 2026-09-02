@@ -1049,7 +1049,8 @@ struct peer_state {
      * body[6:8] counter is ps->own_cksum (shared with the barrier steps); the
      * txn tag is the SCSD_DLM_DIR_TAG constant. */
     int      dlm_selfreg_sent;          /* one-shot: self-reg emitted for the current epoch */
-    int      dlm_completion_sent;       /* one-shot: op-04+op-03 rebuild completion driven to the coordinator (vms-cn3) */
+    int      dlm_reg_sent;              /* one-shot: op-01 standing-lock registrations driven to the coordinator (vms-74f) */
+    int      dlm_completion_sent;       /* one-shot: op-04+op-03 rebuild completion driven to the coordinator (vms-74f) */
     /* rd vms-ec75 (DLM rung H11): DISTRIBUTED DEADLOCK SEARCH. A contender node
      * holds one resource (mastered by C) and $ENQs a second that QUEUES behind the
      * other contender -- a genuine cross-node wait-for cycle. When the wait queues,
@@ -3674,11 +3675,15 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                             between barrier steps 4 and 5 on the one CM send_seq
  *                             stream; a null-value-block directory record, CHOKED
  *                             like every other sequenced VC message
- *     cm_send_dlm_completion() the cat-0x02 op-0x04 + op-0x03 COMMIT pair that
- *                             CLOSES the rebuild transaction the self-reg opened,
- *                             driven to the coordinator after its op-06 admission
- *                             burst (vms-cn3); content-free (OVMX holds nothing),
- *                             two sequenced VC messages, CHOKED like the self-reg
+ *     cm_send_dlm_registration() the cat-0x02 op-0x01 ENQ per standing lock the
+ *                             executive genuinely holds, registering OVMX's REAL
+ *                             locks to the coordinator on the op-06 admission burst
+ *                             (vms-74f, Layer 3); one sequenced VC message per lock,
+ *                             CHOKED like the self-reg
+ *     cm_send_dlm_completion() the cat-0x02 op-0x04 + op-0x03 COMMIT pair per lock
+ *                             that CLOSES each registration once the coordinator's
+ *                             cat-82 op-01 grant arrives (vms-74f); carries OVMX's
+ *                             own real handle, two sequenced VC messages, CHOKED
  *     scs_reflect_credit()    the op8->op9 / op6->op7 credit handshake reply
  *     scs_send_disconnect_self() self-directed teardown, hand-built frame
  *
@@ -6497,54 +6502,183 @@ static int cm_send_dlm_selfreg(int sock, int ifindex, struct peer_state *ps,
  * Both frames are SEQUENCED SCS messages on the coordinator's OPEN VC, choked
  * through send_frame_vc() like the self-reg and barrier steps (spec 4h lockstep).
  */
-static int cm_send_dlm_completion(int sock, int ifindex, struct peer_state *ps,
-                                  const uint8_t our_hw_mac[6],
-                                  const uint8_t our_src_logical[6], uint32_t lkid)
+/* Max standing locks scsd registers per rebuild (matches VMS_DLM_ENUM_STANDING_MAX;
+ * defined locally so the SCSD_UNIT_TEST seam, which omits vms_ioctl.h, still sizes
+ * the array). */
+#define SCSD_STANDING_MAX 16
+
+/* One of this node's standing cluster-registrable locks (Layer 3, vms-74f): the
+ * resource name + OVMX's OWN real lock handle, as the executive reports them. */
+struct scsd_standing_lock {
+    char     resnam[32];
+    uint8_t  namelen;
+    uint32_t lkid;
+};
+
+/*
+ * scsd_enum_standing_locks - read this node's standing cluster-registrable locks
+ * from the executive over /dev/vms (VMS_IOCTL_DLM_ENUM_STANDING, Layer 2). Fills
+ * up to `max` entries into `out`; returns the count. FAIL-HONEST: 0 on any
+ * failure (no /dev/vms, ioctl error) -- scsd registers ONLY what the executive
+ * genuinely reports it holds (INV-6). Direct ioctl (scsd is glibc, not the
+ * freestanding vms_kif client), mirroring scsd_dlm_dispatch_to_executive().
+ */
+static int scsd_enum_standing_locks(struct scsd_standing_lock *out, int max)
+{
+#ifdef SCSD_UNIT_TEST
+    (void)out; (void)max;
+    return 0;   /* the wire test seam is executive-resident; no /dev/vms here */
+#else
+    struct vms_dlm_enum_standing_args args;
+    struct vms_register_args reg;
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0) {
+        return 0;
+    }
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return 0; }
+    memset(&args, 0, sizeof(args));
+    if (ioctl(fd, VMS_IOCTL_DLM_ENUM_STANDING, &args) < 0) { close(fd); return 0; }
+    close(fd);
+
+    int n = 0;
+    for (uint32_t i = 0; i < args.count && n < max; i++) {
+        char nm[32];
+        memcpy(nm, args.ent[i].resnam, 32);
+        nm[31] = '\0';
+        uint8_t nl = 31;
+        while (nl > 0 && (nm[nl - 1] == ' ' || nm[nl - 1] == '\0')) {
+            nl--;
+        }
+        /* a real resource name is 1..31 bytes beginning with a letter. */
+        if (nl == 0 || !(nm[0] >= 'A' && nm[0] <= 'Z')) {
+            continue;
+        }
+        memcpy(out[n].resnam, nm, sizeof(out[n].resnam));
+        out[n].namelen = nl;
+        out[n].lkid = args.ent[i].lkid;
+        n++;
+    }
+    return n;
+#endif
+}
+
+/*
+ * cm_dlm_frame_common - fill the per-send SCS/SYSAP envelope every cat-02 DLM
+ * frame OVMX originates on the coordinator VC shares (Layer 3). Advances the VC
+ * sequence + per-VC counters, so the caller only fills the DLM body.
+ */
+static void cm_dlm_frame_common(struct peer_state *ps, const uint8_t our_hw_mac[6],
+                                const uint8_t our_src_logical[6],
+                                struct scs_member_params *bp)
+{
+    memset(bp, 0, sizeof(*bp));
+    memcpy(bp->dst_mac, ps_port_addr(ps), 6);
+    memcpy(bp->src_mac, our_hw_mac, 6);
+    memcpy(bp->src_logical, our_src_logical, 6);
+    memcpy(bp->peer_logical, ps_sys_addr(ps), 6);
+    bp->remote_conid = ps->cm_remote_conid;
+    bp->local_conid = ps->cm_local_conid;
+    bp->incarnation = ps->incarnation;
+    bp->recv_ack = ps->vc.seq.recv_seq;
+    bp->send_seq = scs_seq_advance(&ps->vc.seq);
+    if (ps->sysap_send == 0) {
+        ps->sysap_send = 1;
+    }
+    bp->sysap_send_msg = ps->sysap_send++;
+    bp->sysap_ack_msg = ps->sysap_recv;
+    bp->txn = SCSD_DLM_DIR_TAG;       /* SCS$DIRECTORY tree tag, as the self-reg */
+    bp->checksum = ++ps->own_cksum;   /* continuous per-VC counter */
+    bp->member_count = ovmx_cluster.known ? ovmx_cluster.member_count : 0;
+}
+
+/*
+ * cm_send_dlm_registration - drive OVMX's REAL standing-lock registrations to the
+ * COORDINATOR (Layer 3, vms-74f). Enumerate the node's standing locks (the
+ * F11B$v<label> volume lock a MOUNT holds -- vms-25e/1f4) and originate one cat-02
+ * op-01 ENQ per lock, carrying OVMX's OWN real handle (req_lkid) + its real
+ * resource name. This is what OVMX was missing: a real registration behind the
+ * op-03 COMMIT, so the rebuild transaction has substance (unlike OPT A's dangling
+ * commit that reformed the cluster). mst_csid=0 (resolve via directory) -- OVMX
+ * has the coordinator's node number but not its full csid, and 0 was granted for
+ * db20-b; INV-6 forbids inventing one. CHOKED through send_frame_vc.
+ */
+static int cm_send_dlm_registration(int sock, int ifindex, struct peer_state *ps,
+                                    const uint8_t our_hw_mac[6],
+                                    const uint8_t our_src_logical[6])
 {
     if (ps->cm_local_conid == 0) {
         return 0;
     }
+    struct scsd_standing_lock locks[SCSD_STANDING_MAX];
+    int n = scsd_enum_standing_locks(locks, SCSD_STANDING_MAX);
     int sent = 0;
-    /* op 0x04 completion, then op 0x03 COMMIT -- two frames, in order, on the
-     * one CM send_seq stream (continuous cksum, as the barrier + self-reg). Both
-     * carry OVMX's OWN real per-lock handle `lkid` (Layer 3, vms-74f). */
-    static const struct {
-        int (*build)(const struct scs_member_params *, uint32_t, uint8_t *);
-        const char *what;
-        const char *op;
-    } steps[2] = {
-        { scs_member_build_dlm_op04,   "CM DLM rebuild completion (cat 0x02 op 0x04)", "0x04" },
-        { scs_member_build_dlm_commit, "CM DLM rebuild COMMIT (cat 0x02 op 0x03)",     "0x03" },
-    };
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < n; i++) {
         struct scs_member_params bp;
-        memset(&bp, 0, sizeof(bp));
-        memcpy(bp.dst_mac, ps_port_addr(ps), 6);
-        memcpy(bp.src_mac, our_hw_mac, 6);
-        memcpy(bp.src_logical, our_src_logical, 6);
-        memcpy(bp.peer_logical, ps_sys_addr(ps), 6);
-        bp.remote_conid = ps->cm_remote_conid;
-        bp.local_conid = ps->cm_local_conid;
-        bp.incarnation = ps->incarnation;
-        bp.recv_ack = ps->vc.seq.recv_seq;
-        bp.send_seq = scs_seq_advance(&ps->vc.seq);
-        if (ps->sysap_send == 0) {
-            ps->sysap_send = 1;
-        }
-        bp.sysap_send_msg = ps->sysap_send++;
-        bp.sysap_ack_msg = ps->sysap_recv;
-        bp.txn = SCSD_DLM_DIR_TAG;      /* SCS$DIRECTORY tree tag, as the self-reg */
-        bp.checksum = ++ps->own_cksum;  /* continuous per-VC counter */
+        cm_dlm_frame_common(ps, our_hw_mac, our_src_logical, &bp);
         uint8_t dframe[SCS_MEMBER_FRAME_LEN];
-        if (steps[i].build(&bp, lkid, dframe) == 0 &&
-            send_frame_vc(sock, ifindex, ps, ps->pb, steps[i].what,
+        if (scs_member_build_dlm_reg_enq(&bp, locks[i].resnam, locks[i].namelen,
+                                         locks[i].lkid, 0u, dframe) == 0 &&
+            send_frame_vc(sock, ifindex, ps, ps->pb,
+                          "CM DLM registration ENQ (cat 0x02 op 0x01)",
                           dframe, sizeof(dframe)) > 0) {
             scs_vc_record_sent(&ps->vc, bp.send_seq, monotonic_ms());
             sent++;
             log_ts(stdout);
-            printf(" SCSD-I-DLMCOMPLETE, originated rebuild completion %s to the"
-                   " coordinator (holding nothing; cksum=0x%04x seq=%u)\n",
-                   steps[i].op, bp.checksum, bp.send_seq);
+            printf(" SCSD-I-DLMREGENQ, registered a standing lock to the coordinator"
+                   " (cat 0x02 op 0x01, res='%.*s' lkid=0x%08x cksum=0x%04x seq=%u)\n",
+                   (int)locks[i].namelen, locks[i].resnam, locks[i].lkid,
+                   bp.checksum, bp.send_seq);
+            fflush(stdout);
+        }
+    }
+    return sent;
+}
+
+/*
+ * cm_send_dlm_completion - CLOSE each standing-lock registration to the
+ * coordinator with the op-04 completion + op-03 COMMIT (Layer 3, vms-74f), fired
+ * once the coordinator's cat-82 op-01 grant has ARRIVED (the await-grant gate;
+ * op-03s follow grants, and a premature commit reformed the cluster in OPT A).
+ * Both frames carry OVMX's OWN real per-lock handle (lkid) -- never VAX3's
+ * un-replayable kernel handle nor the coordinator's granted mst_lkid. CHOKED.
+ */
+static int cm_send_dlm_completion(int sock, int ifindex, struct peer_state *ps,
+                                  const uint8_t our_hw_mac[6],
+                                  const uint8_t our_src_logical[6])
+{
+    if (ps->cm_local_conid == 0) {
+        return 0;
+    }
+    struct scsd_standing_lock locks[SCSD_STANDING_MAX];
+    int n = scsd_enum_standing_locks(locks, SCSD_STANDING_MAX);
+    int sent = 0;
+    for (int i = 0; i < n; i++) {
+        /* op 0x04 completion, then op 0x03 COMMIT, in order on the send_seq
+         * stream -- both carry OVMX's own real handle for this lock. */
+        struct scs_member_params bp4;
+        cm_dlm_frame_common(ps, our_hw_mac, our_src_logical, &bp4);
+        uint8_t f4[SCS_MEMBER_FRAME_LEN];
+        if (scs_member_build_dlm_op04(&bp4, locks[i].lkid, f4) == 0 &&
+            send_frame_vc(sock, ifindex, ps, ps->pb,
+                          "CM DLM rebuild completion (cat 0x02 op 0x04)",
+                          f4, sizeof(f4)) > 0) {
+            scs_vc_record_sent(&ps->vc, bp4.send_seq, monotonic_ms());
+            sent++;
+        }
+        struct scs_member_params bp3;
+        cm_dlm_frame_common(ps, our_hw_mac, our_src_logical, &bp3);
+        uint8_t f3[SCS_MEMBER_FRAME_LEN];
+        if (scs_member_build_dlm_commit(&bp3, locks[i].lkid, f3) == 0 &&
+            send_frame_vc(sock, ifindex, ps, ps->pb,
+                          "CM DLM rebuild COMMIT (cat 0x02 op 0x03)",
+                          f3, sizeof(f3)) > 0) {
+            scs_vc_record_sent(&ps->vc, bp3.send_seq, monotonic_ms());
+            sent++;
+            log_ts(stdout);
+            printf(" SCSD-I-DLMCOMPLETE, committed a standing lock to the coordinator"
+                   " (op 0x04+0x03, lkid=0x%08x seq=%u)\n",
+                   locks[i].lkid, bp3.send_seq);
             fflush(stdout);
         }
     }
@@ -7303,6 +7437,27 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                 int cm_token_req = cm_req && mv.txn != 0;
                 int cm_plain_req = cm_req && mv.txn == 0;
 
+                /*
+                 * vms-74f (Layer 3): the coordinator's cat-82 op-01 GRANT for our
+                 * standing-lock registrations has ARRIVED -- the await-grant gate.
+                 * CLOSE the transaction: drive the op-04 completion + op-03 COMMIT
+                 * per lock (cm_send_dlm_completion). This is a PURE trigger -- we
+                 * extract NO handle from the grant (op-04/op-03 carry OVMX's OWN
+                 * handles, never the coordinator's granted mst_lkid). Gated on
+                 * dlm_reg_sent (we actually registered) and one-shot per epoch; only
+                 * from the coordinator (the peer we registered to). Awaiting the
+                 * grant before committing is the OPT-A insurance -- a commit with no
+                 * grant behind it reformed the cluster.
+                 */
+                if (mv.is_response && mv.category == SCS_MEMBER_CAT_DLM &&
+                    mv.opcode == 0x01 && ps->dlm_reg_sent &&
+                    !ps->dlm_completion_sent &&
+                    cm_peer_is_coordinator(rx->peers, ps)) {
+                    ps->dlm_completion_sent = 1;
+                    cm_send_dlm_completion(rx->sock, (int)rx->ifindex, ps,
+                                           rx->our_hw_mac, rx->our_src_logical);
+                }
+
                 /* vms-760: TRACE EVERY inbound CM message. This exists because
                  * a run stalled at barrier step 1 and the logs could not say
                  * whether the coordinator's op-0x0c release had arrived and
@@ -7371,20 +7526,22 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                         fflush(stdout);
                     }
                     /*
-                     * vms-74f (Layer 3): the OPT-A content-free completion fire is
-                     * DISABLED. It destabilized the cluster -- an op-03 COMMIT with
-                     * no real op-01 registration behind it is a dangling transaction
-                     * the coordinator cannot resolve, and ~2.5min later it triggers
-                     * a reconfiguration (2/2 reformations, lab-proven). The faithful
-                     * replacement is the registration FSM: post-op-06, enumerate
-                     * OVMX's REAL standing locks (DLM_ENUM_STANDING, Layer 2), send
-                     * op-01 per lock to the coordinator, then on the coordinator's
-                     * cat-82 op-01 grant arrival send op-04 + op-03 carrying OVMX's
-                     * OWN real handle (cm_send_dlm_completion, now lkid-aware). That
-                     * FSM is built next; firing NOTHING here keeps the branch from
-                     * reforming the cluster in the meantime.
+                     * vms-74f (Layer 3): having received the coordinator's op-06
+                     * admission burst, drive OVMX's REAL standing-lock registrations
+                     * to the coordinator -- one cat-02 op-01 ENQ per lock the
+                     * executive genuinely holds (cm_send_dlm_registration). The
+                     * op-04 completion + op-03 COMMIT for the batch follow ONLY once
+                     * the coordinator's cat-82 op-01 GRANT arrives (the await-grant
+                     * gate, in the receive path below) -- NOT here: a premature
+                     * commit with no grant behind it reformed the cluster in OPT A.
+                     * One-shot per epoch; ps IS the coordinator (op-06 is its own
+                     * membership publication).
                      */
-                    (void)cm_send_dlm_completion; /* wired by the Layer-3 FSM (WIP) */
+                    if (!ps->dlm_reg_sent) {
+                        ps->dlm_reg_sent = 1;
+                        cm_send_dlm_registration(rx->sock, (int)rx->ifindex, ps,
+                                                 rx->our_hw_mac, rx->our_src_logical);
+                    }
                 }
 
                 /* vms-c21 (spec §4(O.33)): the cat 0x01 op 0x04 role 0x50 CM
@@ -7634,7 +7791,8 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                      * the SCS$DIRECTORY self-registration is re-emitted at this
                      * barrier's start (cm_send_dlm_selfreg). */
                     ps->dlm_selfreg_sent = 0;
-                    ps->dlm_completion_sent = 0; /* vms-cn3: re-arm the rebuild-completion one-shot */
+                    ps->dlm_reg_sent = 0;        /* vms-74f: re-arm the standing-lock registration one-shot */
+                    ps->dlm_completion_sent = 0; /* vms-74f: re-arm the rebuild-completion one-shot */
                     /* vms-584: the open carries the post-transition cluster
                      * facts. Latch them now, apply them when the transition
                      * is real (see ovmx_cluster_relearn). */

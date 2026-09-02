@@ -1053,8 +1053,8 @@ struct peer_state {
      * body[6:8] counter is ps->own_cksum (shared with the barrier steps); the
      * txn tag is the SCSD_DLM_DIR_TAG constant. */
     int      dlm_selfreg_sent;          /* one-shot: self-reg emitted for the current epoch */
-    int      dlm_reg_sent;              /* one-shot: op-01 standing-lock registrations driven to the coordinator (vms-74f) */
-    int      dlm_completion_sent;       /* one-shot: op-04+op-03 rebuild completion driven to the coordinator (vms-74f) */
+    int      dlm_reg_sent;              /* one-shot: op-01 standing-lock registrations driven to THIS peer, the resource directory node (vms-74f/vms-16c) */
+    int      dlm_completion_sent;       /* one-shot: op-04+op-03 rebuild completion driven to the peer we registered to (vms-74f/vms-16c) */
     /* vms-655/db20-b: resources OVMX has NL-registered to THIS member in response
      * to its op-0d rebuild records (dedup, so each shown resource registers once). */
     char     dlm_nl_reg[OVMX_DLM_NL_MAX][32];
@@ -7612,16 +7612,28 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                 int cm_plain_req = cm_req && mv.txn == 0;
 
                 /*
-                 * vms-74f (Layer 3): the coordinator's cat-82 op-01 GRANT for our
+                 * vms-74f/vms-16c (Layer 3): the cat-82 op-01 GRANT for OVMX's
                  * standing-lock registrations has ARRIVED -- the await-grant gate.
                  * CLOSE the transaction: drive the op-04 completion + op-03 COMMIT
-                 * per lock (cm_send_dlm_completion). This is a PURE trigger -- we
-                 * extract NO handle from the grant (op-04/op-03 carry OVMX's OWN
-                 * handles, never the coordinator's granted mst_lkid). Gated on
-                 * dlm_reg_sent (we actually registered) and one-shot per epoch; only
-                 * from the coordinator (the peer we registered to). Awaiting the
-                 * grant before committing is the OPT-A insurance -- a commit with no
-                 * grant behind it reformed the cluster.
+                 * per lock (cm_send_dlm_completion). PURE trigger -- we extract NO
+                 * handle from the grant (op-04/op-03 carry OVMX's OWN handles, never
+                 * the granting node's mst_lkid).
+                 *
+                 * FIRES ON THE PEER OVMX REGISTERED TO, not the coordinator (vms-16c
+                 * FIX). In the rebuild OVMX registers each standing lock with that
+                 * resource's DIRECTORY node and completes with the SAME node --
+                 * measured, that is VAX1/1025 (the non-coordinator MEMBER that masters
+                 * OVMX's file locks F11B$aSYSDSK1/CACHE$cmSYSDSK1/VCC$vSYSDSK1/
+                 * SYS$_$2$DUA0:); the coordinator VAX2/1026 grants OVMX NOTHING. The
+                 * per-peer ps->dlm_reg_sent flag (armed at the cm_send_dlm_nl_register
+                 * origination site) IS the "peer we registered to" discriminator: it
+                 * is set ONLY on that peer, so the grant-back on that same ps fires
+                 * the completion and no other. The prior coordinator-keyed gate could
+                 * NEVER fire in this topology -- and the arming was ALSO lost when
+                 * cm_send_dlm_registration was retired, so dlm_reg_sent stayed 0:
+                 * 48 grants received, 0 completions, flow-1 never committed, CN=2.
+                 * One-shot per epoch; awaiting >=1 grant before committing is the
+                 * OPT-A insurance -- a commit with no grant behind it reformed the cluster.
                  */
                 if (mv.is_response &&
                     /* scs_member_parse keeps the RAW category, so a response
@@ -7630,8 +7642,7 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                      * test_dlm_grant_response_needs_masking). */
                     (mv.category & 0x7f) == SCS_MEMBER_CAT_DLM &&
                     mv.opcode == 0x01 && ps->dlm_reg_sent &&
-                    !ps->dlm_completion_sent &&
-                    cm_peer_is_coordinator(rx->peers, ps)) {
+                    !ps->dlm_completion_sent) {
                     ps->dlm_completion_sent = 1;
                     cm_send_dlm_completion(rx->sock, (int)rx->ifindex, ps,
                                            rx->our_hw_mac, rx->our_src_logical);
@@ -8442,6 +8453,18 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                                                         ps, rx->our_hw_mac,
                                                         rx->our_src_logical,
                                                         0u, res, nl);
+                                /* vms-16c: OVMX has now driven a standing-lock
+                                 * registration to THIS peer (the resource's directory
+                                 * node). ARM the completion one-shot on this ps -- when
+                                 * the peer's cat-82 op-01 grant-back arrives, the gate
+                                 * above fires op-04+op-03 to close the transaction and
+                                 * commit flow-1 (CN 2->3). This arming was lost when
+                                 * cm_send_dlm_registration was retired; the completion
+                                 * gate still checked dlm_reg_sent, which nothing set --
+                                 * 48 grants, 0 completions, CN stuck at 2. Re-connected
+                                 * here, on the peer we actually register to (VAX1/1025,
+                                 * NOT the coordinator). */
+                                ps->dlm_reg_sent = 1;
                             }
                         }
                     }

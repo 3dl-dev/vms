@@ -168,6 +168,8 @@ SRCS="$KMOD/vms_netbsd.c \
       $CORE/vms_cluster_api.c \
       $CORE/vms_cluster_codec.c \
       $CORE/vms_cluster_codec_cm.c \
+      $CORE/vms_cluster_codec_hello.c \
+      $CORE/vms_pe_fsm.c \
       $CORE/vms_cnxman_barrier_fsm.c"
 #   vms_blockdev_netbsd.c - the NetBSD exec_blockdev_* seam (bread/bwrite on a
 #                         vn_bdev_openpath device vnode) + the single-unit ODS-2

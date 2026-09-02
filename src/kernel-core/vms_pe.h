@@ -129,6 +129,26 @@ enum pe_event {
 	PE_EV_SEND_REQUEST    = 17,  /* an upper layer asked to send */
 	PE_EV_SHUTDOWN        = 18,  /* CLUSTER_STOP / last gasp */
 
+	/*
+	 * Added by FC-P0.8, additively and at the end (the numbering above is
+	 * unchanged), as the paragraph opening this section sanctions. Both are
+	 * GROUNDED frame facts, not invented vocabulary:
+	 *
+	 *   NEW_INCARNATION  a directed HELLO from a peer carries an abs-92
+	 *                    incarnation different from the one this channel has
+	 *                    recorded. Spec SS4(i).B: that number is the sender's
+	 *                    count of how many times the RECEIVER has re-formed
+	 *                    this channel, so a change means the peer regards the
+	 *                    previous generation as gone.
+	 *   RX_LAST_GASP     a multicast HELLO carrying the SS4(O.30) departure
+	 *                    marker at abs 30 (a0 -> b1). GROUNDED byte-exact on
+	 *                    two real-VAX clean leaves; it is what lets CNXMAN
+	 *                    take p. 7-29's "announced departure" path instead of
+	 *                    waiting out the whole reconnect period.
+	 */
+	PE_EV_RX_NEW_INCARNATION = 19,
+	PE_EV_RX_LAST_GASP       = 20,
+
 	PE_EV__COUNT
 };
 

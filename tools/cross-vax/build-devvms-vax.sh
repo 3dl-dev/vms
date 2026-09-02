@@ -111,6 +111,8 @@ SRCS="$KMOD/vms_netbsd.c \
       $CORE/vms_cluster_api.c \
       $CORE/vms_cluster_codec.c \
       $CORE/vms_cluster_codec_cm.c \
+      $CORE/vms_cluster_codec_hello.c \
+      $CORE/vms_pe_fsm.c \
       $CORE/vms_cnxman_barrier_fsm.c"
 
 echo "=== toolchain ==="; "$CC" --version | head -1; "$CC" -dumpmachine; echo

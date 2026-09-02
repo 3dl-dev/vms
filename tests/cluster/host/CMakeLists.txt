@@ -162,6 +162,42 @@ cluster_fork_test(test_cluster_fork_threads test_cluster_fork_threads.c)
 target_link_libraries(test_cluster_fork_threads PRIVATE Threads::Threads)
 target_compile_definitions(test_cluster_fork_threads PRIVATE _DEFAULT_SOURCE)
 
+# ---- FC-P0.8: the NISCA channel FSM (vms_pe_fsm.c) ----
+# The SAME pure TU both kmods compile, built here with -DOVMX_CLUSTER_HOST and
+# linked against the FC-P0.6/FC-P0.7 codec it emits every frame through. The
+# tests drive an injected clock, so a 20 s listen timeout and a four-rung 6 s
+# packet-size ladder run in microseconds instead of only against a live VAX.
+add_library(cluster_host_pe STATIC
+    ${OVMX_CLUSTER_CORE_DIR}/vms_pe_fsm.c
+)
+target_include_directories(cluster_host_pe PUBLIC ${OVMX_CLUSTER_CORE_DIR})
+target_compile_definitions(cluster_host_pe PUBLIC OVMX_CLUSTER_HOST)
+target_link_libraries(cluster_host_pe PUBLIC cluster_host_codec)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(cluster_host_pe PRIVATE -Wall -Wextra -Werror)
+endif()
+
+function(cluster_host_pe_test name)
+    add_executable(${name} ${ARGN})
+    target_link_libraries(${name} PRIVATE cluster_host_pe cluster_host_fixture)
+    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(${name} PRIVATE
+        OVMX_FIXTURE_DIR="${OVMX_CLUSTER_FIXTURE_DIR}"
+        OVMX_CLEANROOM_MANIFEST="${OVMX_CLUSTER_CLEANROOM_MANIFEST}"
+    )
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${name} PRIVATE -Wall -Wextra -Werror)
+    endif()
+    add_test(NAME cluster_host_${name} COMMAND ${name})
+    set_tests_properties(cluster_host_${name} PROPERTIES
+        LABELS "unit;cluster;cluster_host;pe"
+        TIMEOUT 30
+    )
+endfunction()
+
+cluster_host_pe_test(test_pe_channel   test_pe_channel.c)
+cluster_host_pe_test(test_pe_formation test_pe_formation.c)
+
 # ---- FC-P0.1: the pure inter-layer headers must be host-includable ----
 # Everything below builds with -DOVMX_CLUSTER_HOST, which routes vms_cluster.h
 # to <stdint.h> instead of vms_internal.h. (OVMX_CLUSTER_CORE_DIR is set above.)
@@ -183,6 +219,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_cnxman_quorum.c     # FC-P3.7
     hdr_alone_vms_cluster_api.c       # FC-P3.7
     hdr_alone_vms_cnxman_barrier_fsm.c # FC-P3.5
+    hdr_alone_vms_pe_fsm.c            # FC-P0.8
 )
 target_include_directories(cluster_host_hdr_alone PRIVATE ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_hdr_alone PRIVATE OVMX_CLUSTER_HOST)

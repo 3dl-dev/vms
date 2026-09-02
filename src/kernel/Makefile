@@ -102,6 +102,16 @@ obj-m := vms.o
 # codec is not an optional dependency here. All three are pure, take their
 # fixed-width types from vms_wire_types.h, and are in the NetBSD kmodule's SRCS
 # from the same commit.
+#
+# FC-P0.8 adds the channel state machine, vms_pe_fsm.o, on exactly those terms:
+# it is the pure NISCA channel FSM (HELLO cadence, the b2/b3/b4 verify ladder,
+# the SS4(k) packet-size verification, per-remote incarnation tracking, the
+# listen timeout), it reaches the world only through its injected `pe_ops`, and
+# it builds every frame through the CODEC -- so vms_cluster_codec.o (FC-P0.6, the
+# one TU allowed to know a byte offset) and vms_cluster_codec_hello.o (FC-P0.7,
+# the HELLO/SOLICIT family) come with it. All three are in the NetBSD kmodule's
+# SRCS and in the distro Kbuild from the same commit. Their consumer, the port's
+# executive glue, arrives with FC-P0.9.
 vms-y := vms_module.o \
          ../kernel-core/vms_access.o \
          ../kernel-core/vms_ast.o \
@@ -117,6 +127,8 @@ vms-y := vms_module.o \
          ../kernel-core/vms_pe.o \
          ../kernel-core/vms_cluster_codec.o \
          ../kernel-core/vms_cluster_codec_cm.o \
+         ../kernel-core/vms_pe_fsm.o \
+         ../kernel-core/vms_cluster_codec_hello.o \
          ../kernel-core/vms_cnxman_csb.o \
          ../kernel-core/vms_cnxman_recnx_fsm.o \
          ../kernel-core/vms_cnxman_quorum.o \

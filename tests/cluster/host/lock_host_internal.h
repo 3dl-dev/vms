@@ -150,6 +150,7 @@ struct vms_lock_entry {
 	exec_list_node_t          proc_list;
 	exec_list_node_t          res_granted;
 	exec_list_node_t          res_waiting;
+	exec_list_node_t          res_proxy;      /* FC-P4.4 proxy queue link */
 	exec_rbtree_node_t        rb_node;
 	uint32_t                  lkid;
 	uint32_t                  granted_mode;
@@ -158,6 +159,7 @@ struct vms_lock_entry {
 	uint64_t                  astadr;
 	uint64_t                  astprm;
 	uint64_t                  blkastadr;
+	uint64_t                  blkastprm;      /* FC-P4.4 */
 	uint8_t                   valblk[LCK_VALBLK_SIZE];
 	struct vms_lock_resource *resource;
 	struct vms_proc          *proc;
@@ -169,6 +171,12 @@ struct vms_lock_entry {
 	uint32_t                  req_csid;
 	uint32_t                  req_lkid;
 	uint32_t                  parent_id;
+	/* PROXY LKB (FC-P4.4) -- see src/kernel/vms_internal.h for the per-field
+	 * rationale; this file mirrors field presence/type, not byte layout. */
+	uint8_t                   proxy;
+	uint32_t                  master_csid;
+	uint32_t                  master_lkid;
+	uint32_t                  blkast_count;
 };
 
 struct vms_lock_resource {
@@ -176,6 +184,7 @@ struct vms_lock_resource {
 	char                      name[32];
 	exec_list_head_t          granted;
 	exec_list_head_t          waiting;
+	exec_list_head_t          proxies;        /* FC-P4.4 proxy queue */
 	uint8_t                   valblk[LCK_VALBLK_SIZE];
 	exec_lock_t               lock;
 	int                       refcount;
@@ -218,5 +227,12 @@ int  vms_lock_init(void);
 void vms_lock_cleanup(void);
 long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_dlm_enum_waits(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
+uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
+                                     struct vms_dlm_xnode_args *req);
 
 #endif /* OVMX_LOCK_HOST_INTERNAL_H */

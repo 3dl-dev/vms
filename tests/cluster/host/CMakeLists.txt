@@ -238,3 +238,26 @@ set_tests_properties(cluster_host_test_lock_host PROPERTIES
     LABELS "unit;cluster;cluster_host;lock"
     TIMEOUT 30
 )
+
+# ---- FC-P4.4: the PROXY LKB, on the same real engine + host backend ----
+# Drives vms_lock.c's requester role with a fake MASTER injected through
+# src/kernel-core/vms_dlm_proxy.h -- no kernel, no wire. Same include recipe as
+# test_lock_host above (lock_shim FIRST, then kernel-core, then src/kernel for
+# the portable vms_ioctl.h).
+add_executable(test_lock_proxy test_lock_proxy.c)
+target_include_directories(test_lock_proxy PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(test_lock_proxy PRIVATE cluster_host_lock Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_lock_proxy PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME cluster_host_test_lock_proxy COMMAND test_lock_proxy)
+set_tests_properties(cluster_host_test_lock_proxy PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock"
+    TIMEOUT 60
+)

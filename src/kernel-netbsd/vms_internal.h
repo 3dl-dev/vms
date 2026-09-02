@@ -371,6 +371,13 @@ struct vms_lock_entry {
 	exec_list_node_t    proc_list;      /* link in the process's lock list */
 	exec_list_node_t    res_granted;    /* link in the resource's granted list */
 	exec_list_node_t    res_waiting;    /* link in the resource's waiting list */
+	exec_list_node_t    res_proxy;      /* link in the resource's PROXY list
+	                                     * (FC-P4.4). A proxy LKB is on exactly
+	                                     * this one and never on granted/waiting,
+	                                     * so the LOCAL granting algorithm cannot
+	                                     * see -- let alone grant -- a lock the
+	                                     * cluster masters elsewhere (INV-6).
+	                                     * Mirror of the Linux twin. */
 	exec_rbtree_node_t  rb_node;        /* link in the global lock-ID tree */
 	uint32_t            lkid;
 	uint32_t            granted_mode;   /* current granted mode (0-5) */
@@ -379,6 +386,11 @@ struct vms_lock_entry {
 	uint64_t            astadr;         /* completion AST */
 	uint64_t            astprm;
 	uint64_t            blkastadr;      /* blocking AST */
+	uint64_t            blkastprm;      /* blocking-AST parameter (FC-P4.4): the
+	                                     * parameter the holder registered with
+	                                     * its own request, so a cross-node BLKAST
+	                                     * delivers the holder's AST, not a
+	                                     * default. Mirror of the Linux twin. */
 	uint8_t             valblk[LCK_VALBLK_SIZE];
 	struct vms_lock_resource *resource;
 	struct vms_proc     *proc;
@@ -410,6 +422,19 @@ struct vms_lock_entry {
 	                                     * passes parid=0); the auto-release cascade
 	                                     * is a follow-on (vms-489). Mirror of the
 	                                     * Linux vms_internal.h field. */
+	/*
+	 * PROXY LKB (FC-P4.4) -- the requester-side image of a lock mastered on
+	 * ANOTHER node (Davis p. 6-52's *process copy*). See the Linux twin
+	 * (src/kernel/vms_internal.h) for the full per-field rationale this file
+	 * does not repeat: proxy marks it, master_csid/master_lkid carry the
+	 * master's identity and ITS handle (0 until a message from the master
+	 * named it -- an unset handle is never emitted), blkast_count counts
+	 * genuine cross-node blocking-AST deliveries. Replaces vms_dlm_origin.
+	 */
+	uint8_t             proxy;
+	uint32_t            master_csid;
+	uint32_t            master_lkid;
+	uint32_t            blkast_count;
 };
 
 /* Lock resource -- a named resource in the lock database. */
@@ -418,6 +443,11 @@ struct vms_lock_resource {
 	char                name[32];
 	exec_list_head_t    granted;        /* granted lock list */
 	exec_list_head_t    waiting;        /* waiting lock list (FIFO) */
+	exec_list_head_t    proxies;        /* PROXY LKBs when this resource is
+	                                     * mastered on ANOTHER node (FC-P4.4).
+	                                     * A THIRD queue on purpose: the local
+	                                     * granting algorithm walks granted and
+	                                     * waiting only. Mirror of the Linux twin. */
 	uint8_t             valblk[LCK_VALBLK_SIZE]; /* resource value block */
 	exec_lock_t         lock;
 	int                 refcount;

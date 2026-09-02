@@ -46,7 +46,7 @@ cluster_files() {
 		\( -name 'vms_pe*.c'      -o -name 'vms_pe*.h' \
 		-o -name 'vms_scs*.c'     -o -name 'vms_scs*.h' \
 		-o -name 'vms_cnxman*.c'  -o -name 'vms_cnxman*.h' \
-		-o -name 'vms_dlm_scs*.c' -o -name 'vms_dlm_scs*.h' \
+		-o -name 'vms_dlm_*.c'    -o -name 'vms_dlm_*.h' \
 		-o -name 'vms_mscp_*.c'   -o -name 'vms_mscp_*.h' \
 		-o -name 'vms_cluster*.c' -o -name 'vms_cluster*.h' \) \
 		| sort

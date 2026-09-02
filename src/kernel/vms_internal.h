@@ -428,6 +428,12 @@ struct vms_lock_entry {
     struct list_head    proc_list;      /* link in process's lock list */
     struct list_head    res_granted;    /* link in resource's granted list */
     struct list_head    res_waiting;    /* link in resource's waiting list */
+    struct list_head    res_proxy;      /* link in resource's PROXY list (FC-P4.4).
+                                         * A proxy LKB is on exactly this one and
+                                         * never on granted/waiting, so the LOCAL
+                                         * granting algorithm structurally cannot
+                                         * see -- let alone grant -- a lock the
+                                         * cluster masters elsewhere (INV-6). */
     struct rb_node      rb_node;        /* in global lock ID tree */
     uint32_t            lkid;
     uint32_t            granted_mode;   /* current granted mode (0-5) */
@@ -436,6 +442,13 @@ struct vms_lock_entry {
     uint64_t            astadr;         /* completion AST */
     uint64_t            astprm;
     uint64_t            blkastadr;      /* blocking AST */
+    uint64_t            blkastprm;      /* blocking-AST parameter (FC-P4.4). The
+                                         * cross-node BLKAST the master sends
+                                         * carries the parameter the holder
+                                         * registered with its own request; the
+                                         * LKB remembers it so the delivered AST
+                                         * is the holder's, not a default. 0 =>
+                                         * VMS's own fallback, the lock id. */
     uint8_t             valblk[LCK_VALBLK_SIZE];
     struct vms_lock_resource *resource;
     struct vms_proc     *proc;
@@ -479,6 +492,29 @@ struct vms_lock_entry {
                                          * lock), so this is purely additive. The
                                          * parent-child AUTO-RELEASE cascade is a
                                          * follow-on (vms-489), not wired here. */
+    /*
+     * PROXY LKB (FC-P4.4, design SS3.4 + hard call 7; Davis p. 6-52's *process
+     * copy*). proxy == 1 marks the requester-side image of a lock this node
+     * does NOT master: the executive holds a real lock block for it -- so
+     * $GETLKI, $DEQ, convert, blocking-AST delivery and the value block all
+     * have ONE object to operate on -- but only a message from the MASTER can
+     * ever change its granted mode. It is linked on res_proxy (above), never on
+     * the resource's granted/waiting queues, so try_grant_waiters() and
+     * lock_compatible() cannot reach it: the executive is structurally unable
+     * to auto-grant a lock the cluster owns. This replaces the vms_dlm_origin
+     * side list, which duplicated these fields on a second keyspace.
+     *
+     * master_csid: the node that masters the resource. master_lkid: THAT node's
+     * own handle for this lock, 0 until a message from the master named it --
+     * an unset handle is never emitted (the VMS_DLM_LKID_UNSET refusal; a
+     * placeholder lock id bugchecked a real VAX with INVLOCKID).
+     * blkast_count: genuine cross-node blocking-AST deliveries, 0 until the
+     * first one fires (a real counter, never a plausible default).
+     */
+    uint8_t             proxy;
+    uint32_t            master_csid;
+    uint32_t            master_lkid;
+    uint32_t            blkast_count;
 };
 
 /* Lock resource (named resource in the lock database) */
@@ -487,6 +523,12 @@ struct vms_lock_resource {
     char                name[32];
     struct list_head    granted;        /* granted lock list */
     struct list_head    waiting;        /* waiting lock list (FIFO) */
+    struct list_head    proxies;        /* PROXY LKBs for this resource when it
+                                         * is mastered on ANOTHER node (FC-P4.4).
+                                         * Deliberately a THIRD queue: the local
+                                         * granting algorithm walks granted and
+                                         * waiting only, so it can never grant a
+                                         * lock the cluster masters elsewhere. */
     uint8_t             valblk[LCK_VALBLK_SIZE]; /* resource value block */
     spinlock_t          lock;
     int                 refcount;

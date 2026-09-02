@@ -256,8 +256,9 @@ struct vms_dlm_granted_args {
 
 /* $DLM pending-wait enumeration (rd vms-ec75, DLM rung H11) -- the HOME authority
  * for distributed deadlock search. MUST match src/kernel/vms_ioctl.h byte-for-byte;
- * the shared vms_lock.c enumerates NL origins into this. See vms_ioctl.h for the
- * full contract + INV-6 note. */
+ * the shared vms_lock.c enumerates its PENDING (NL) PROXY LKBs into this (FC-P4.4;
+ * formerly the vms_dlm_origin list). See vms_ioctl.h for the full contract +
+ * INV-6 note. */
 #define VMS_DLM_ENUM_WAITS_MAX 8u
 struct vms_dlm_wait_ent {
 	char     resnam[32];

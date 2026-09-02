@@ -667,18 +667,18 @@ _Static_assert(VMS_IOCTL_DLM_GET_GRANTED == 0xC0385637u,
  * $DLM pending-wait enumeration (rd vms-ec75, DLM rung H11) -- the HOME authority
  * for distributed deadlock search. Enumerates THIS node's outstanding cross-node
  * requests that are still PENDING (granted_mode == NL): each is a requester-side
- * ORIGIN record (vms_dlm_origin) this node's scsd created from a queued-reply.
- * For the edge-chase, "what is CSID H waiting for?" is answered by asking H's home
- * node to run this: every returned entry names a resource H waits on (resnam), the
- * node mastering it (master_csid), and H's own requester-side handle for the wait
- * (req_lkid) -- exactly one outgoing wait-for edge. INV-6: a READ of real
- * vms_dlm_origin_list state; count=0 when nothing is pending, never a fabricated
- * edge. This surfaces EXISTING executive state (the origin list H5's grant_recv
- * already builds), so no wait-for graph is stored or guessed.
+ * PROXY LKB (FC-P4.4; formerly a vms_dlm_origin record) that a master's reply
+ * completed. For the edge-chase, "what is CSID H waiting for?" is answered by
+ * asking H's home node to run this: every returned entry names a resource H waits
+ * on (resnam), the node mastering it (master_csid), and H's own requester-side
+ * handle for the wait (req_lkid) -- exactly one outgoing wait-for edge. INV-6: a
+ * READ of real proxy-LKB state; count=0 when nothing is pending, never a
+ * fabricated edge. This surfaces EXISTING executive state, so no wait-for graph
+ * is stored or guessed.
  */
 #define VMS_DLM_ENUM_WAITS_MAX 8u   /* entries returned per call (a chase visits few) */
 struct vms_dlm_wait_ent {
-    char     resnam[32];        /* resource this node waits on (its origin's resnam) */
+    char     resnam[32];        /* resource this node waits on (its proxy's RSB name) */
     uint32_t master_csid;       /* the node mastering that resource                  */
     uint32_t req_lkid;          /* this node's requester-side handle for the wait    */
     uint32_t req_csid;          /* this node's own CSID (the waiter)                 */

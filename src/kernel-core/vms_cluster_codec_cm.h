@@ -318,7 +318,7 @@ struct vms_cm_params {
 			   * configurations (sec 4(j)); 0 == non-voting     */
 	uint32_t param_f1; /* body[72:76], observed constant 0x10             */
 	uint32_t param_f2; /* body[76:80], observed constant 0x01             */
-	uint8_t  version[VMS_CM_VERSION_LEN]; /* body[88:96], e.g. "V7.3    " */
+	uint8_t  version[VMS_CM_VERSION_LEN]; /* body[88:96], 8-byte space-padded ASCII version field (e.g. V7.3) */
 };
 
 vms_codec_status_t vms_cm_params_parse(const uint8_t *frame, uint32_t len,

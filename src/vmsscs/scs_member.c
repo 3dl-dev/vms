@@ -791,7 +791,7 @@ static const uint8_t dlm_commit_struct[40] = {
 };
 
 static int build_dlm_completion(const struct scs_member_params *p,
-                                const uint8_t struct40[40],
+                                const uint8_t struct40[40], uint32_t lkid,
                                 uint8_t out[SCS_MEMBER_FRAME_LEN])
 {
     if (p == NULL || out == NULL) {
@@ -805,21 +805,31 @@ static int build_dlm_completion(const struct scs_member_params *p,
     put_le16(body + 4, p->txn);          /* per-VC directory-tree tag (opaque, minted) */
     put_le16(body + 6, p->checksum);     /* per-VC monotonic counter (opaque, minted) */
     memcpy(body + 8, struct40, 40);      /* body[8:48] structural template */
-    /* body[30] MODE stays 0x00 (NL) and body[48:] resname stays 0 from the memset:
-     * no held mode, no named resource -- the honest content-free completion. */
+    /*
+     * OVMX's OWN real per-lock handle at body[20:24] (Layer 3, vms-74f) -- the
+     * lkid the executive DLM holds for this lock (from the vms-1f4 accessor).
+     * NOT VAX3's un-replayable kernel handle, NOT the coordinator's granted
+     * mst_lkid: both op-04 and op-03 carry the joiner's OWN node-local handle
+     * (conductor handle-chain trace). The second handle word @[24:28] stays ZERO
+     * (from the template) -- the reference has a value there but it is un-grounded
+     * for OVMX, so INV-6 leaves it zero rather than invent one. lkid == 0 gives a
+     * content-free frame (the OPT-A behaviour; retained for the null case).
+     * body[30] MODE stays NL; body[48:] resname stays 0 (op-03 commits by handle).
+     */
+    put_le32(body + 20, lkid);
     return 0;
 }
 
-int scs_member_build_dlm_op04(const struct scs_member_params *p,
+int scs_member_build_dlm_op04(const struct scs_member_params *p, uint32_t lkid,
                               uint8_t out[SCS_MEMBER_FRAME_LEN])
 {
-    return build_dlm_completion(p, dlm_op04_struct, out);
+    return build_dlm_completion(p, dlm_op04_struct, lkid, out);
 }
 
-int scs_member_build_dlm_commit(const struct scs_member_params *p,
+int scs_member_build_dlm_commit(const struct scs_member_params *p, uint32_t lkid,
                                 uint8_t out[SCS_MEMBER_FRAME_LEN])
 {
-    return build_dlm_completion(p, dlm_commit_struct, out);
+    return build_dlm_completion(p, dlm_commit_struct, lkid, out);
 }
 
 /*

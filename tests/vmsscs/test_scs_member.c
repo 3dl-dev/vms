@@ -969,9 +969,10 @@ static void test_dlm_completion_holds_nothing(void)
     mp.txn = 0x0003;
     mp.checksum = 0x0100;
 
+    uint32_t lkid = 0x07f70004u;   /* OVMX's own real per-lock handle */
     uint8_t op04[SCS_MEMBER_FRAME_LEN], op03[SCS_MEMBER_FRAME_LEN];
-    CHECK(scs_member_build_dlm_op04(&mp, op04) == 0, "build_dlm_op04 ok");
-    CHECK(scs_member_build_dlm_commit(&mp, op03) == 0, "build_dlm_commit ok");
+    CHECK(scs_member_build_dlm_op04(&mp, lkid, op04) == 0, "build_dlm_op04 ok");
+    CHECK(scs_member_build_dlm_commit(&mp, lkid, op03) == 0, "build_dlm_commit ok");
 
     const uint8_t *b4 = op04 + 72;
     const uint8_t *b3 = op03 + 72;
@@ -979,21 +980,34 @@ static void test_dlm_completion_holds_nothing(void)
     CHECK(b4[8] == 0x02 && b4[9] == 0x04, "op-04: cat 0x02 op 0x04");
     CHECK(b3[8] == 0x02 && b3[9] == 0x03, "op-03: cat 0x02 op 0x03 (COMMIT)");
 
-    /* THE HONESTY GUARDRAIL -- no resource, no held handle, no held mode. */
+    /* Layer 3: op-04/op-03 carry OVMX's OWN real per-lock handle @[20:24]. */
+    CHECK((uint32_t)(b4[20] | (b4[21] << 8) | (b4[22] << 16) | ((uint32_t)b4[23] << 24)) == lkid,
+          "op-04: OVMX's real lock handle at body[20:24]");
+    CHECK((uint32_t)(b3[20] | (b3[21] << 8) | (b3[22] << 16) | ((uint32_t)b3[23] << 24)) == lkid,
+          "op-03: OVMX's real lock handle at body[20:24]");
+
+    /* THE HONESTY GUARDRAIL -- no named resource, NL mode, and the ungrounded
+     * second handle word @[24:28] stays ZERO (never invent VAX3's value). */
     for (int i = 48; i < 64; i++) {
-        CHECK(b4[i] == 0 && b3[i] == 0, "completion: resname@48 is ZEROED (no named resource)");
+        CHECK(b4[i] == 0 && b3[i] == 0, "completion: resname@48 is ZEROED (op-03 commits by handle)");
     }
-    for (int i = 20; i < 28; i++) {
-        CHECK(b4[i] == 0 && b3[i] == 0, "completion: lock handles@20:28 are ZEROED (no held lock, INV-6)");
+    for (int i = 24; i < 28; i++) {
+        CHECK(b4[i] == 0 && b3[i] == 0, "completion: 2nd handle word body[24:28] ZERO (ungrounded, INV-6)");
     }
-    CHECK(b4[30] == 0 && b3[30] == 0, "completion: mode@30 is 0x00 (NL -- holds nothing)");
+    CHECK(b4[30] == 0 && b3[30] == 0, "completion: mode@30 is 0x00 (NL -- the mode OVMX holds)");
 
     /* The SYSAP envelope + minted per-VC fields are laid down (real send). */
     CHECK((uint16_t)(b4[4] | (b4[5] << 8)) == 0x0003, "op-04: dir-tree tag minted");
     CHECK((uint16_t)(b4[6] | (b4[7] << 8)) == 0x0100, "op-04: per-VC counter minted");
 
-    CHECK(scs_member_build_dlm_op04(NULL, op04) == -1, "build_dlm_op04 NULL p");
-    CHECK(scs_member_build_dlm_commit(&mp, NULL) == -1, "build_dlm_commit NULL out");
+    /* lkid == 0 gives the content-free frame (the null case). */
+    uint8_t z[SCS_MEMBER_FRAME_LEN];
+    CHECK(scs_member_build_dlm_op04(&mp, 0, z) == 0 &&
+          (z + 72)[20] == 0 && (z + 72)[21] == 0 && (z + 72)[22] == 0 && (z + 72)[23] == 0,
+          "op-04 with lkid=0 leaves body[20:24] zero (content-free null case)");
+
+    CHECK(scs_member_build_dlm_op04(NULL, lkid, op04) == -1, "build_dlm_op04 NULL p");
+    CHECK(scs_member_build_dlm_commit(&mp, lkid, NULL) == -1, "build_dlm_commit NULL out");
 }
 
 /*

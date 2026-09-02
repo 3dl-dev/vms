@@ -6499,16 +6499,17 @@ static int cm_send_dlm_selfreg(int sock, int ifindex, struct peer_state *ps,
  */
 static int cm_send_dlm_completion(int sock, int ifindex, struct peer_state *ps,
                                   const uint8_t our_hw_mac[6],
-                                  const uint8_t our_src_logical[6])
+                                  const uint8_t our_src_logical[6], uint32_t lkid)
 {
     if (ps->cm_local_conid == 0) {
         return 0;
     }
     int sent = 0;
     /* op 0x04 completion, then op 0x03 COMMIT -- two frames, in order, on the
-     * one CM send_seq stream (continuous cksum, as the barrier + self-reg). */
+     * one CM send_seq stream (continuous cksum, as the barrier + self-reg). Both
+     * carry OVMX's OWN real per-lock handle `lkid` (Layer 3, vms-74f). */
     static const struct {
-        int (*build)(const struct scs_member_params *, uint8_t *);
+        int (*build)(const struct scs_member_params *, uint32_t, uint8_t *);
         const char *what;
         const char *op;
     } steps[2] = {
@@ -6535,7 +6536,7 @@ static int cm_send_dlm_completion(int sock, int ifindex, struct peer_state *ps,
         bp.txn = SCSD_DLM_DIR_TAG;      /* SCS$DIRECTORY tree tag, as the self-reg */
         bp.checksum = ++ps->own_cksum;  /* continuous per-VC counter */
         uint8_t dframe[SCS_MEMBER_FRAME_LEN];
-        if (steps[i].build(&bp, dframe) == 0 &&
+        if (steps[i].build(&bp, lkid, dframe) == 0 &&
             send_frame_vc(sock, ifindex, ps, ps->pb, steps[i].what,
                           dframe, sizeof(dframe)) > 0) {
             scs_vc_record_sent(&ps->vc, bp.send_seq, monotonic_ms());
@@ -7369,21 +7370,21 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                                ps_port_addr(ps)[4], ps_port_addr(ps)[5]);
                         fflush(stdout);
                     }
-                    /* vms-cn3: having received the coordinator's op-06 admission
-                     * burst, CLOSE the directory-rebuild transaction OVMX opened
-                     * with its self-registration -- drive the op-04 completion +
-                     * op-03 COMMIT to the coordinator, the frames a real joiner
-                     * sends after its op-01 registrations and that OVMX currently
-                     * never originates (it drives ~0 cat-02 to the coordinator).
-                     * Content-free (OVMX holds no cluster lock -- honest "done,
-                     * holding nothing"); one-shot per epoch. ps IS the coordinator
-                     * here (the op-06 membership burst is its publication). This is
-                     * the minimal A/B test: does completing the handshake count us? */
-                    if (!ps->dlm_completion_sent) {
-                        ps->dlm_completion_sent = 1;
-                        cm_send_dlm_completion(rx->sock, (int)rx->ifindex, ps,
-                                               rx->our_hw_mac, rx->our_src_logical);
-                    }
+                    /*
+                     * vms-74f (Layer 3): the OPT-A content-free completion fire is
+                     * DISABLED. It destabilized the cluster -- an op-03 COMMIT with
+                     * no real op-01 registration behind it is a dangling transaction
+                     * the coordinator cannot resolve, and ~2.5min later it triggers
+                     * a reconfiguration (2/2 reformations, lab-proven). The faithful
+                     * replacement is the registration FSM: post-op-06, enumerate
+                     * OVMX's REAL standing locks (DLM_ENUM_STANDING, Layer 2), send
+                     * op-01 per lock to the coordinator, then on the coordinator's
+                     * cat-82 op-01 grant arrival send op-04 + op-03 carrying OVMX's
+                     * OWN real handle (cm_send_dlm_completion, now lkid-aware). That
+                     * FSM is built next; firing NOTHING here keeps the branch from
+                     * reforming the cluster in the meantime.
+                     */
+                    (void)cm_send_dlm_completion; /* wired by the Layer-3 FSM (WIP) */
                 }
 
                 /* vms-c21 (spec §4(O.33)): the cat 0x01 op 0x04 role 0x50 CM

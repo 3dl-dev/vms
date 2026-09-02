@@ -343,9 +343,9 @@ int scs_member_build_dlm_selfreg(const struct scs_member_params *p,
  * registers NOTHING HELD (resname + per-lock handles zeroed) -- the honest
  * "rebuild contribution complete, I hold nothing" signal (vms-cn3). See
  * scs_member.c for the INV-6 guardrail. */
-int scs_member_build_dlm_op04(const struct scs_member_params *p,
+int scs_member_build_dlm_op04(const struct scs_member_params *p, uint32_t lkid,
                               uint8_t out[SCS_MEMBER_FRAME_LEN]);
-int scs_member_build_dlm_commit(const struct scs_member_params *p,
+int scs_member_build_dlm_commit(const struct scs_member_params *p, uint32_t lkid,
                                 uint8_t out[SCS_MEMBER_FRAME_LEN]);
 
 /* The cat 0x02 op 0x01 ENQ that REGISTERS one of OVMX's REAL standing system

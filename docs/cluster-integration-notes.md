@@ -73,6 +73,27 @@ ONLY, and is added to the kernel lists by the first item that consumes it
 in-module (e.g. FC-P3.4/P6.3). **Do not re-add a codec object already present**
 (dedup on merge — the integrator has hit this on every FSM merge).
 
+### E6. Process rundown must post the proxy release to the master (raised by FC-P4.4 → owned by FC-P4.6)
+`lock_teardown_locked` (process rundown) tears a proxy LKB down LOCALLY without
+posting the release to the master. `$DEQ` posts correctly (outside all locks),
+but rundown's three call sites all hold `proc->lock_list_lock` (a spinlock on
+Linux), and `post` is the cluster requester's implementation — calling it there
+pushes an arbitrary implementation into atomic context. The outbound path's
+context rules belong to the **FC-P4.6** requester FSM. Gap is documented in-line
+at `lock_teardown_locked`. **FC-P4.6 MUST close it** (post the master release from
+a context that may block), and its done-condition should assert a rundown of a
+proxy-held lock reaches the master.
+
+### E7. Repo-wide gates to clear before the origin/main PR (raised by FC-P4.4)
+- `identity_ssot_gate` (tests/integration/test_identity_ssot.sh): FIXED — the
+  FC-P3.1 `codec_cm.h` version-field comment was reworded to drop the
+  double-quoted `"V7.3"` literal (a code line's trailing comment isn't covered by
+  the gate's comment-line exclusion).
+- `kif_caller_census` ("compile_commands.json contains backslash escapes"): the
+  known build-dir backslash trap — environmental, not a source red. Resolve at the
+  final-integration gate pass (ensure the census does not scan a build tree's
+  compile_commands.json), NOT by editing source.
+
 ### E5. FC-P0.9 must not re-add the codec objects (raised by FC-P0.8)
 FC-P0.7's CMake comment deferred codec module-wiring to P0.9, but P0.8 already
 did it (its FSM couldn't link otherwise). P0.9 must NOT re-add

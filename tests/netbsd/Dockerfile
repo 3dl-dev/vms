@@ -171,6 +171,17 @@ COPY src/kernel-core/vms_cnxman_csb.c        /netbsd/guest-src/kernel-core/vms_c
 COPY src/kernel-core/vms_cnxman_csb.h        /netbsd/guest-src/kernel-core/vms_cnxman_csb.h
 COPY src/kernel-core/vms_cnxman_recnx_fsm.c  /netbsd/guest-src/kernel-core/vms_cnxman_recnx_fsm.c
 COPY src/kernel-core/vms_cnxman_recnx_fsm.h  /netbsd/guest-src/kernel-core/vms_cnxman_recnx_fsm.h
+# --- FC-P0.8: the NISCA channel state machine and the codec it builds every
+# frame through (FC-P0.6 shared + FC-P0.7 HELLO/SOLICIT). All three are in SRCS
+# from this commit for the same reason vms_pe.c is, so the in-guest module build
+# needs them staged. ---
+COPY src/kernel-core/vms_pe_fsm.c            /netbsd/guest-src/kernel-core/vms_pe_fsm.c
+COPY src/kernel-core/vms_pe_fsm.h            /netbsd/guest-src/kernel-core/vms_pe_fsm.h
+COPY src/kernel-core/vms_wire_types.h        /netbsd/guest-src/kernel-core/vms_wire_types.h
+COPY src/kernel-core/vms_cluster_codec.c     /netbsd/guest-src/kernel-core/vms_cluster_codec.c
+COPY src/kernel-core/vms_cluster_codec.h     /netbsd/guest-src/kernel-core/vms_cluster_codec.h
+COPY src/kernel-core/vms_cluster_codec_hello.c /netbsd/guest-src/kernel-core/vms_cluster_codec_hello.c
+COPY src/kernel-core/vms_cluster_codec_hello.h /netbsd/guest-src/kernel-core/vms_cluster_codec_hello.h
 COPY src/kernel-netbsd/vms_lan_netbsd.c      /netbsd/guest-src/kmod/vms_lan_netbsd.c
 # FC-P0.4: cluster_seam.c (the R3 substrate-contract self-test for the cluster
 # seam, called from vms_netbsd.c's MODULE_CMD_INIT) lives under

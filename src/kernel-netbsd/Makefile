@@ -53,6 +53,9 @@ SRCS=		vms_netbsd.c \
 		vms_lnm.c \
 		vms_devtab.c \
 		vms_pe.c \
+		vms_pe_fsm.c \
+		vms_cluster_codec.c \
+		vms_cluster_codec_hello.c \
 		vms_cnxman_csb.c \
 		vms_cnxman_recnx_fsm.c \
 		vmsfs_acp.c \
@@ -77,6 +80,15 @@ SRCS=		vms_netbsd.c \
 # RECNXINTERVAL/TIMVCFAIL reconnect loop and the last-gasp decision). Both are
 # PURE -- they reach nothing but their injected ops -- so there is no NetBSD half
 # to write and no reason for them to arrive here later than on Linux.
+#
+# FC-P0.8 joins on those same terms: ../kernel-core/vms_pe_fsm.c (the NISCA
+# channel state machine -- HELLO cadence, the b2/b3/b4 verify ladder, the sec
+# 4(k) packet-size verification, per-remote incarnation tracking, the listen
+# timeout) together with the codec it builds every frame through,
+# ../kernel-core/vms_cluster_codec.c (FC-P0.6) and
+# ../kernel-core/vms_cluster_codec_hello.c (FC-P0.7). All three are PURE and are
+# proven to compile for elf32-vax; they arrive here in the same commit as on
+# Linux. Their consumer, the port's executive glue, arrives with FC-P0.9.
 #
 # vms-d5d: vmsfs_acp.c (the Files-11 ODS-2 ACP: channel + IO$_ACCESS/READVBLK/
 # WRITEVBLK/$MOUNT handlers) + ods2_edit.c (the pure on-disk EDIT helpers its

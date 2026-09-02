@@ -32,6 +32,9 @@ vms-y := vms_module.o \
          vms_lock.o \
          vms_mbx.o \
          vms_pe.o \
+         vms_pe_fsm.o \
+         vms_cluster_codec.o \
+         vms_cluster_codec_hello.o \
          vms_cnxman_csb.o \
          vms_cnxman_recnx_fsm.o \
          vms_proctab.o \
@@ -52,6 +55,10 @@ vms-y := vms_module.o \
 # FC-P3.6: vms_cnxman_csb.o (the CLUB/CSB model + the CSB ten-state ladder) and
 # vms_cnxman_recnx_fsm.o (the RECNXINTERVAL/TIMVCFAIL reconnect loop) join on the
 # same terms, and for the same two-object-lists reason.
+# FC-P0.8: vms_pe_fsm.o (the pure NISCA channel state machine) plus the codec it
+# builds every frame through -- vms_cluster_codec.o (FC-P0.6) and
+# vms_cluster_codec_hello.o (FC-P0.7) -- join on the same terms and for the same
+# two-object-lists reason.
 # FC-P0.1: vms_pe.o is the executive-resident VMScluster stack's LAN port layer.
 # It mirrors src/kernel/Makefile's vms-y (the two-object-lists rule: an executive
 # core .c missing here builds standalone and then fails modpost in the bootable

@@ -273,15 +273,11 @@ if(BUILD_TESTS)
     add_subdirectory(tests/vmsqueue)
     add_subdirectory(tests/dcl)
     add_subdirectory(tests/vmsscs)
-    # Rung-1 host build for the executive-resident VMScluster stack (FC-P0.1):
-    # the pure inter-layer headers compile with a plain host compiler and NO
-    # kernel headers. `ctest -R cluster_host` selects this directory.
+    # Rung-1 host build for the executive-resident VMScluster stack: the pure
+    # inter-layer headers (FC-P0.1) and the wire codec (FC-P0.6) both compile
+    # with a plain host compiler and NO kernel headers. `ctest -R cluster_host`.
     add_subdirectory(tests/cluster/host)
     add_subdirectory(tests/vmsdecnet)  # DECnet Phase IV codec (vms-851)
-
-    # VMScluster wire codec, R1 host rung (FC-P0.6, design sec 3.2/3.9): no
-    # kernel headers, sub-second host loop. `ctest -R cluster_host`.
-    add_subdirectory(tests/cluster/host)
     add_subdirectory(tests/ovmx_init)
     add_subdirectory(tests/tools)
 

@@ -239,6 +239,28 @@ int main(void)
     st = vms_kif_acp_mount(ODS2_UNIT);   /* idempotent */
     check($VMS_STATUS_SUCCESS(st), "VDA0: mounted executive-global for RMS");
 
+    /* --- vms-03b: the RMS executive-presence probe + its classification ------
+     * The INV-6 hole this item names: acp_assign conflating "executive absent"
+     * (/dev/vms unopenable) with "unit present but unmounted" would let RMS's
+     * probe read an unmounted unit as "no executive" and silently defer a file
+     * read to the /vms POSIX passthrough. On a LIVE executive the probe MUST read
+     * PRESENT (0), so every RMS $OPEN/$CREATE below stays ACP-only. */
+    check(rms_executive_absent() == 0,
+          "vms-03b: executive live -> rms_executive_absent()==0 (RMS stays ACP-only, no /vms passthrough)");
+    /* The load-bearing $ASSIGN-status classification, exercised DIRECTLY: the
+     * probe itself only ever $ASSIGNs the always-mounted system disk, so its
+     * SS$_DEVNOTMOUNT arm is unreachable end-to-end and could silently regress.
+     * ONLY SS$_NOSUCHDEV (the userspace KIF's "/dev/vms unreachable") is absent;
+     * SS$_DEVNOTMOUNT (a present-but-unmounted unit under a live executive) and
+     * every success are PRESENT. A regression that classified SS$_DEVNOTMOUNT as
+     * absent would reopen the passthrough masquerade -- and reddens right here. */
+    check(rms_status_is_executive_absent(SS$_NOSUCHDEV) == 1,
+          "vms-03b: SS$_NOSUCHDEV classifies as executive-ABSENT (/dev/vms unreachable)");
+    check(rms_status_is_executive_absent(SS$_DEVNOTMOUNT) == 0,
+          "vms-03b: SS$_DEVNOTMOUNT (unmounted unit, live executive) classifies as PRESENT -- no /vms passthrough (INV-6)");
+    check(rms_status_is_executive_absent(SS$_NORMAL) == 0,
+          "vms-03b: a successful $ASSIGN classifies as PRESENT");
+
     rfm_roundtrip("RMSVAR.DAT",  FAB$C_VAR,   0);
     rfm_roundtrip("RMSSTM.DAT",  FAB$C_STMLF, 0);
     rfm_roundtrip("RMSFIX.DAT",  FAB$C_FIX,   20);

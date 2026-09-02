@@ -615,13 +615,35 @@ static int rms_acp_absent(void)
 {
     uint32_t chan = 0;
     uint32_t st = vms_kif_acp_assign(RMS_ACP_DEFAULT_DEV, &chan);
-    if (st == SS$_NOSUCHDEV)     /* ONLY executive-absent defers to POSIX (vms-03b) */
+    if (rms_status_is_executive_absent(st)) /* ONLY executive-absent defers to POSIX (vms-03b) */
         return 1;
     if ($VMS_STATUS_SUCCESS(st))
         vms_kif_dassgn(chan);
     return 0;                    /* present: success OR SS$_DEVNOTMOUNT -> ACP path */
 }
 #endif /* __linux__ ACP lifecycle helpers */
+
+/*
+ * rms_status_is_executive_absent - the vms-03b classification, FACTORED OUT of
+ * rms_acp_absent so the anchored /dev/vms suite can prove it directly. The probe
+ * itself $ASSIGNs the always-mounted system disk (RMS_ACP_DEFAULT_DEV), so in a
+ * running executive it can only ever exercise the SUCCESS arm -- the load-bearing
+ * SS$_DEVNOTMOUNT-vs-SS$_NOSUCHDEV distinction is unreachable through the probe
+ * and could silently regress. Exposing the pure classifier lets a test inject
+ * each status and assert the split directly.
+ *
+ * ONLY SS$_NOSUCHDEV -- emitted EXCLUSIVELY by the userspace KIF
+ * (vms_kif_acp_assign / acp_bind_ok) when /dev/vms cannot be opened -- means the
+ * executive is absent. SS$_DEVNOTMOUNT (a present unit with no mounted volume, or
+ * a non-default unit) and every success are PRESENT: RMS stays ACP-only, never
+ * the /vms POSIX passthrough. Were an unmounted unit's SS$_DEVNOTMOUNT to classify
+ * as absent, RMS would silently read the passthrough -- the exact INV-6 masquerade
+ * this split kills (Rule 9 / INV-6).
+ */
+int rms_status_is_executive_absent(uint32_t st)
+{
+    return st == SS$_NOSUCHDEV;
+}
 
 /*
  * rms_executive_absent - PUBLIC executive-presence probe (vms-5f0), the single

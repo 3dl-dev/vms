@@ -116,6 +116,15 @@ uint32_t rms_stage_over_acp(const char *vmsspec, const char *destpath);
  * (Rule 9 / INV-6: executive present => no legacy /vms fall-back). */
 int rms_executive_absent(void);
 
+/* rms_status_is_executive_absent (OVMX, vms-03b) - classify a $ASSIGN status.
+ * Returns 1 ONLY for SS$_NOSUCHDEV (the userspace KIF's "/dev/vms unreachable"),
+ * 0 for SS$_DEVNOTMOUNT (a present unit with no mounted volume) and every
+ * success. The load-bearing split rms_acp_absent() rides: it keeps an unmounted
+ * unit under a LIVE executive from masquerading as "no executive" and defers a
+ * file read to the /vms POSIX passthrough (INV-6). Exposed so the anchored
+ * /dev/vms suite can prove the classification directly. */
+int rms_status_is_executive_absent(uint32_t st);
+
 /* Positioning and I/O control */
 uint32_t sys$rewind(void *rab, void (*err)(void *), void (*suc)(void *));     /* Rewind to beginning of file */
 uint32_t sys$flush(void *rab, void (*err)(void *), void (*suc)(void *));      /* Flush buffers to disk */

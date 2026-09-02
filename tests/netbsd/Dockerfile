@@ -163,6 +163,14 @@ COPY src/kernel-core/vms_cnxman.h            /netbsd/guest-src/kernel-core/vms_c
 COPY src/kernel-core/vms_dlm_scs.h           /netbsd/guest-src/kernel-core/vms_dlm_scs.h
 COPY src/kernel-core/vms_cluster.h           /netbsd/guest-src/kernel-core/vms_cluster.h
 COPY src/kernel-core/vms_cluster_snapshot.h  /netbsd/guest-src/kernel-core/vms_cluster_snapshot.h
+# --- FC-P3.6: the CLUB/CSB model + the CSB ten-state ladder, and the
+# RECNXINTERVAL/TIMVCFAIL reconnect loop. Both are in SRCS from their first
+# commit for the same reason vms_pe.c is, so the in-guest module build needs
+# them staged. ---
+COPY src/kernel-core/vms_cnxman_csb.c        /netbsd/guest-src/kernel-core/vms_cnxman_csb.c
+COPY src/kernel-core/vms_cnxman_csb.h        /netbsd/guest-src/kernel-core/vms_cnxman_csb.h
+COPY src/kernel-core/vms_cnxman_recnx_fsm.c  /netbsd/guest-src/kernel-core/vms_cnxman_recnx_fsm.c
+COPY src/kernel-core/vms_cnxman_recnx_fsm.h  /netbsd/guest-src/kernel-core/vms_cnxman_recnx_fsm.h
 COPY src/kernel-netbsd/vms_lan_netbsd.c      /netbsd/guest-src/kmod/vms_lan_netbsd.c
 # FC-P0.4: cluster_seam.c (the R3 substrate-contract self-test for the cluster
 # seam, called from vms_netbsd.c's MODULE_CMD_INIT) lives under

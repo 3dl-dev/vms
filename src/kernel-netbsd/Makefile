@@ -53,6 +53,8 @@ SRCS=		vms_netbsd.c \
 		vms_lnm.c \
 		vms_devtab.c \
 		vms_pe.c \
+		vms_cnxman_csb.c \
+		vms_cnxman_recnx_fsm.c \
 		vmsfs_acp.c \
 		ods2_reader.c \
 		ods2_edit.c \
@@ -68,6 +70,13 @@ SRCS=		vms_netbsd.c \
 # FC-P0.4 lands the real pfil/if_input + if_transmit binding). The include
 # discipline that keeps vms_pe.c substrate-free is gated by
 # tools/ci/cluster_core_includes_gate.sh.
+#
+# FC-P3.6 joins on the same terms: ../kernel-core/vms_cnxman_csb.c (the CLUB/CSB
+# model + the CSB ten-state connectivity ladder, pp. 7-23/7-24 of the published
+# VAXcluster description) and ../kernel-core/vms_cnxman_recnx_fsm.c (the
+# RECNXINTERVAL/TIMVCFAIL reconnect loop and the last-gasp decision). Both are
+# PURE -- they reach nothing but their injected ops -- so there is no NetBSD half
+# to write and no reason for them to arrive here later than on Linux.
 #
 # vms-d5d: vmsfs_acp.c (the Files-11 ODS-2 ACP: channel + IO$_ACCESS/READVBLK/
 # WRITEVBLK/$MOUNT handlers) + ods2_edit.c (the pure on-disk EDIT helpers its

@@ -68,6 +68,15 @@ obj-m := vms.o
 # the NetBSD kmodule's SRCS from its first commit -- no "Linux first, NetBSD
 # later", which is exactly what produced vms_l2.c's NetBSD hole. Its include
 # discipline is enforced by tools/ci/cluster_core_includes_gate.sh.
+#
+# FC-P3.6 adds two more on the same terms: vms_cnxman_csb.o (the CLUB/CSB model
+# and the CSB ten-state connectivity ladder) and vms_cnxman_recnx_fsm.o (the
+# RECNXINTERVAL/TIMVCFAIL reconnect loop and the last-gasp decision). Both are
+# PURE -- no seam call, no allocation, no clock but the injected one -- so the
+# same two objects are in the NetBSD kmodule's SRCS and in both elf32-vax
+# cross-compile gates from this commit, and the same two sources are what the
+# host unit tests and the rung-2 simulator link. Their consumer, the connection
+# manager's glue, arrives with FC-P3.8.
 vms-y := vms_module.o \
          ../kernel-core/vms_access.o \
          ../kernel-core/vms_ast.o \
@@ -79,6 +88,8 @@ vms-y := vms_module.o \
          ../kernel-core/vms_lock.o \
          ../kernel-core/vms_mbx.o \
          ../kernel-core/vms_pe.o \
+         ../kernel-core/vms_cnxman_csb.o \
+         ../kernel-core/vms_cnxman_recnx_fsm.o \
          ../kernel-core/vms_proctab.o \
          ../kernel-core/vmsfs_acp.o \
          ../vmsfs/ods2/ods2_reader.o \

@@ -348,6 +348,17 @@ int scs_member_build_dlm_op04(const struct scs_member_params *p,
 int scs_member_build_dlm_commit(const struct scs_member_params *p,
                                 uint8_t out[SCS_MEMBER_FRAME_LEN]);
 
+/* The cat 0x02 op 0x01 ENQ that REGISTERS one of OVMX's REAL standing system
+ * locks to the coordinator (Layer 3, vms-74f): carries OVMX's real local lock
+ * handle (req_lkid@[4:8], from the vms-1f4 accessor) + the real coordinator csid
+ * (mst_csid@[20:24]) + the real resource name, NL mode. Built on db20-b's
+ * validated frame; INV-6 -- only OVMX's own real values, ungrounded fields zero.
+ * See scs_member.c. */
+int scs_member_build_dlm_reg_enq(const struct scs_member_params *p,
+                                 const char *resname, uint8_t namelen,
+                                 uint32_t req_lkid, uint32_t mst_csid,
+                                 uint8_t out[SCS_MEMBER_FRAME_LEN]);
+
 /* Current time as a VMS 64-bit absolute time (100 ns since 17-NOV-1858). */
 uint64_t scs_member_vms_time_now(void);
 

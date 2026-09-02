@@ -996,6 +996,48 @@ static void test_dlm_completion_holds_nothing(void)
     CHECK(scs_member_build_dlm_commit(&mp, NULL) == -1, "build_dlm_commit NULL out");
 }
 
+/*
+ * vms-74f (Layer 3): the op-01 ENQ that REGISTERS one of OVMX's REAL standing
+ * locks to the coordinator must carry OVMX's OWN real values -- its real lock
+ * handle (req_lkid@[4:8], from the accessor), the real coordinator csid
+ * (mst_csid@[20:24]), its real resource name, NL mode -- and must NOT invent the
+ * ungrounded per-lock lock-mgmt fields (body[24:30] zero). This pins that.
+ */
+static void test_dlm_reg_enq_carries_real_values(void)
+{
+    struct scs_member_params mp;
+    joiner_params(&mp, 0, 0, 0x0064, 0x0113);
+    mp.member_count = 3;
+
+    const char *res = "F11B$vOVMXSYS";
+    uint8_t nl = (uint8_t)strlen(res);
+    uint32_t req_lkid = 0x07f70004u;   /* OVMX's real handle (accessor) */
+    uint32_t mst_csid = 0x20600202u;   /* the real coordinator csid */
+
+    uint8_t out[SCS_MEMBER_FRAME_LEN];
+    CHECK(scs_member_build_dlm_reg_enq(&mp, res, nl, req_lkid, mst_csid, out) == 0,
+          "build_dlm_reg_enq ok");
+    const uint8_t *b = out + 72;
+
+    CHECK((uint32_t)(b[4] | (b[5] << 8) | (b[6] << 16) | ((uint32_t)b[7] << 24)) == req_lkid,
+          "op-01: OVMX's REAL req_lkid at body[4:8]");
+    CHECK(b[8] == 0x02 && b[9] == 0x01, "op-01: cat 0x02 op 0x01 (ENQ)");
+    CHECK((uint32_t)(b[20] | (b[21] << 8) | (b[22] << 16) | ((uint32_t)b[23] << 24)) == mst_csid,
+          "op-01: the real COORDINATOR csid at mst_csid body[20:24]");
+    CHECK(b[30] == 0x00, "op-01: mode@30 is NL (the mode OVMX genuinely holds)");
+    CHECK(b[47] == nl && memcmp(b + 48, res, nl) == 0, "op-01: OVMX's real resource name at body[48]");
+    /* INV-6: ungrounded per-lock lock-mgmt fields stay zero -- never replay VAX3's. */
+    for (int i = 24; i < 30; i++)
+        CHECK(b[i] == 0, "op-01: ungrounded lock-mgmt field body[24:30] is ZERO (INV-6)");
+
+    CHECK(scs_member_build_dlm_reg_enq(&mp, NULL, nl, req_lkid, mst_csid, out) == -1,
+          "build_dlm_reg_enq NULL resname");
+    CHECK(scs_member_build_dlm_reg_enq(&mp, res, 0, req_lkid, mst_csid, out) == -1,
+          "build_dlm_reg_enq zero namelen guarded");
+    CHECK(scs_member_build_dlm_reg_enq(&mp, res, 32, req_lkid, mst_csid, out) == -1,
+          "build_dlm_reg_enq namelen > 31 guarded");
+}
+
 int main(void)
 {
     test_op14_byte_exact();
@@ -1018,6 +1060,7 @@ int main(void)
     test_dlm_selfreg_byte_exact();
     test_dlm_selfreg_null_guards();
     test_dlm_completion_holds_nothing();
+    test_dlm_reg_enq_carries_real_values();
 
     if (failures == 0) {
         printf("test_scs_member: ALL PASSED\n");

@@ -698,6 +698,41 @@ _Static_assert(VMS_IOCTL_DLM_ENUM_WAITS == 0xC1905638u,
                "VMS_IOCTL_DLM_ENUM_WAITS encodes differently than the reference build");
 
 /*
+ * Enumerate this node's STANDING cluster-registrable system locks (vms-1f4, the
+ * enumeration seam of faithful cluster DLM registration vms-3eb). These are the
+ * locks the executive holds for the node's LIFE -- today the per-volume
+ * "F11B$v<label>" lock a faithful MOUNT holds from $MOUNT to $DISMOUNT (vms-25e),
+ * later the mount (MOU$) and clusterwide-logical (LNM$CWLOGICALS) locks -- that
+ * the connection manager (scsd) must register to the coordinator during a
+ * directory rebuild. Each entry gives the resource name and this node's LOCAL
+ * lock handle, which becomes the op-0x01 requester lkid on the wire.
+ *
+ * INV-6: a READ of REAL lock-manager state -- one entry per lock the executive
+ * genuinely holds (a nonzero vol_lkid on a mounted volume). count=0 when the node
+ * holds no standing locks; never a fabricated lock. This is the honest boundary
+ * scsd registers FROM: it can only announce to the cluster what the executive
+ * actually holds.
+ */
+#define VMS_DLM_ENUM_STANDING_MAX 16u   /* standing system locks returned per call */
+struct vms_dlm_standing_ent {
+    char     resnam[32];        /* the standing lock's resource name (e.g. "F11B$vOVMXSYS") */
+    uint32_t lkid;              /* this node's LOCAL handle for it (the op-0x01 req_lkid)   */
+    uint32_t mode;              /* granted mode (LCK_K_NLMODE for the volume presence lock) */
+};
+struct vms_dlm_enum_standing_args {
+    uint32_t count;             /* return: standing locks filled (<= VMS_DLM_ENUM_STANDING_MAX) */
+    uint32_t total;             /* return: total standing locks the node holds (may exceed count) */
+    uint32_t status;            /* return: SS$_ status */
+    uint32_t pad;               /* zero */
+    struct vms_dlm_standing_ent ent[VMS_DLM_ENUM_STANDING_MAX];
+};
+_Static_assert(sizeof(struct vms_dlm_enum_standing_args) == 16 + 40 * 16,
+               "vms_dlm_enum_standing_args changed size -- VMS_IOCTL_DLM_ENUM_STANDING ABI break");
+#define VMS_IOCTL_DLM_ENUM_STANDING _IOWR(VMS_IOC_MAGIC, 0x3c, struct vms_dlm_enum_standing_args)
+_Static_assert(VMS_IOCTL_DLM_ENUM_STANDING == 0xC290563Cu,
+               "VMS_IOCTL_DLM_ENUM_STANDING encodes differently than the reference build");
+
+/*
  * Cluster membership crosses into the executive (rd vms-551,
  * docs/design-cluster-membership-executive.md). vms.ko owns a small
  * module-global membership block -- one entry per node the connection

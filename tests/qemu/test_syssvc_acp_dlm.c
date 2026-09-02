@@ -218,6 +218,25 @@ int main(int argc, char **argv)
             check($VMS_STATUS_SUCCESS(rst) && found && ng >= 1,
                   "the STANDING F11B$v<label> volume lock is HELD after $MOUNT "
                   "(vms-25e: GET_RESMASTER found, n_granted >= 1)");
+
+            /*
+             * vms-1f4: the enumeration accessor scsd registers FROM must surface
+             * that same standing lock. Assert DLM_ENUM_STANDING returns an entry
+             * naming F11B$v<label> with a real (nonzero) local handle -- the
+             * (resname, lkid) pair scsd puts on the wire as the op-0x01 requester
+             * registration. A READ of real lock state, no fabrication.
+             */
+            struct vms_dlm_enum_standing_args se;
+            memset(&se, 0, sizeof(se));
+            uint32_t est = vms_kif_dlm_enum_standing(&se);
+            int found_vol = 0;
+            for (uint32_t i = 0; i < se.count; i++) {
+                if (strcmp(se.ent[i].resnam, vresnam) == 0 && se.ent[i].lkid != 0)
+                    found_vol = 1;
+            }
+            check($VMS_STATUS_SUCCESS(est) && se.count >= 1 && found_vol,
+                  "DLM_ENUM_STANDING surfaces the F11B$v<label> standing lock with a "
+                  "real handle (vms-1f4: scsd's registration source)");
         }
     }
 

@@ -348,15 +348,26 @@ int scs_member_build_dlm_op04(const struct scs_member_params *p, uint32_t lkid,
 int scs_member_build_dlm_commit(const struct scs_member_params *p, uint32_t lkid,
                                 uint8_t out[SCS_MEMBER_FRAME_LEN]);
 
+/* The FULL per-lock DLM record OVMX carries in its op-01 ENQ registration (Layer
+ * 3, vms-74f) -- every field a REAL attribute of the standing lock OVMX genuinely
+ * holds, in OVMX's own executive encoding (INV-6, no fabrication). A skeletal
+ * record is dropped by the coordinator (run 9c); the coordinator needs the full
+ * per-lock context every real ENQ carries. */
+struct scs_dlm_reg_fields {
+    uint32_t req_lkid;    /* body[4:8]   OVMX's own lock handle */
+    uint32_t dir_csid;    /* body[20:24] the resource's directory-master csid (OVMX's dir_csid) */
+    uint32_t lock_id;     /* body[24:28] OVMX's unique per-lock id */
+    uint16_t flags;       /* body[28:30] lock flags */
+    uint8_t  mode;        /* body[30]    granted mode (NL for the volume presence lock) */
+    uint32_t lockmgmt;    /* body[32:36] lock-mgmt count/flags word */
+};
+
 /* The cat 0x02 op 0x01 ENQ that REGISTERS one of OVMX's REAL standing system
- * locks to the coordinator (Layer 3, vms-74f): carries OVMX's real local lock
- * handle (req_lkid@[4:8], from the vms-1f4 accessor) + the real coordinator csid
- * (mst_csid@[20:24]) + the real resource name, NL mode. Built on db20-b's
- * validated frame; INV-6 -- only OVMX's own real values, ungrounded fields zero.
- * See scs_member.c. */
+ * locks to the coordinator (Layer 3, vms-74f): the full per-lock record from
+ * OVMX's genuine lock state. See scs_member.c. */
 int scs_member_build_dlm_reg_enq(const struct scs_member_params *p,
                                  const char *resname, uint8_t namelen,
-                                 uint32_t req_lkid, uint32_t mst_csid,
+                                 const struct scs_dlm_reg_fields *f,
                                  uint8_t out[SCS_MEMBER_FRAME_LEN]);
 
 /* Current time as a VMS 64-bit absolute time (100 ns since 17-NOV-1858). */

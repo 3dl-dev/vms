@@ -6593,6 +6593,40 @@ static void cm_dlm_frame_common(struct peer_state *ps, const uint8_t our_hw_mac[
 }
 
 /*
+ * scsd_res_dir_info - read a resource's DIRECTORY-master csid + granted count from
+ * the executive (GET_RESMASTER over /dev/vms), for the full per-lock op-01 record
+ * (Layer 3, vms-74f). *dir_csid = OVMX's own dir_csid for the resource it masters;
+ * *n_granted = the granted-lock count. Both 0 on any failure -- a read of real DLM
+ * state, never fabricated. Direct ioctl (scsd is glibc); test-stub yields zeroes.
+ */
+static void scsd_res_dir_info(const char *resnam, uint32_t *dir_csid,
+                              uint32_t *n_granted)
+{
+    if (dir_csid)  *dir_csid = 0;
+    if (n_granted) *n_granted = 0;
+#ifndef SCSD_UNIT_TEST
+    struct vms_resmaster_args args;
+    struct vms_register_args reg;
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0) {
+        return;
+    }
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return; }
+    memset(&args, 0, sizeof(args));
+    strncpy(args.resnam, resnam, sizeof(args.resnam) - 1);
+    args.resnam[sizeof(args.resnam) - 1] = '\0';
+    if (ioctl(fd, VMS_IOCTL_GET_RESMASTER, &args) == 0) {
+        if (dir_csid)  *dir_csid = args.dir_csid;
+        if (n_granted) *n_granted = args.n_granted;
+    }
+    close(fd);
+#else
+    (void)resnam;
+#endif
+}
+
+/*
  * cm_send_dlm_registration - drive OVMX's REAL standing-lock registrations to the
  * COORDINATOR (Layer 3, vms-74f). Enumerate the node's standing locks (the
  * F11B$v<label> volume lock a MOUNT holds -- vms-25e/1f4) and originate one cat-02
@@ -6616,9 +6650,32 @@ static int cm_send_dlm_registration(int sock, int ifindex, struct peer_state *ps
     for (int i = 0; i < n; i++) {
         struct scs_member_params bp;
         cm_dlm_frame_common(ps, our_hw_mac, our_src_logical, &bp);
+        /*
+         * Build the FULL per-lock DLM record from OVMX's REAL lock state (run 9c:
+         * a skeletal op-01 is dropped). Every field is a genuine attribute of the
+         * standing lock OVMX holds, in OVMX's own executive encoding (INV-6):
+         *   req_lkid + lock_id = OVMX's real lock handle;
+         *   dir_csid + n_granted = OVMX's own directory-master + granted count
+         *     for the resource (GET_RESMASTER over /dev/vms);
+         *   mode = NL (the mode OVMX genuinely holds).
+         * body[20:24]=dir_csid is the measured operator decider: if VAX2 grants
+         * this in OVMX's encoding, no interop needed; if it needs the cluster's
+         * SCS$DIRECTORY-agreed id, that is the interop scope. The flags/lockmgmt
+         * words are the common structural DLM lock-mgmt values (secondary suspects).
+         */
+        uint32_t dir_csid = 0, n_granted = 0;
+        scsd_res_dir_info(locks[i].resnam, &dir_csid, &n_granted);
+        struct scs_dlm_reg_fields f;
+        memset(&f, 0, sizeof(f));
+        f.req_lkid = locks[i].lkid;
+        f.dir_csid = dir_csid;
+        f.lock_id  = locks[i].lkid;                 /* OVMX's real per-lock id */
+        f.mode     = 0;                             /* NL -- the mode OVMX holds */
+        f.flags    = 0x007d;                        /* common DLM lock-flags word (secondary) */
+        f.lockmgmt = 0x00010000u | (n_granted & 0xffffu); /* count = OVMX's real n_granted */
         uint8_t dframe[SCS_MEMBER_FRAME_LEN];
         if (scs_member_build_dlm_reg_enq(&bp, locks[i].resnam, locks[i].namelen,
-                                         locks[i].lkid, 0u, dframe) == 0 &&
+                                         &f, dframe) == 0 &&
             send_frame_vc(sock, ifindex, ps, ps->pb,
                           "CM DLM registration ENQ (cat 0x02 op 0x01)",
                           dframe, sizeof(dframe)) > 0) {
@@ -6626,9 +6683,10 @@ static int cm_send_dlm_registration(int sock, int ifindex, struct peer_state *ps
             sent++;
             log_ts(stdout);
             printf(" SCSD-I-DLMREGENQ, registered a standing lock to the coordinator"
-                   " (cat 0x02 op 0x01, res='%.*s' lkid=0x%08x cksum=0x%04x seq=%u)\n",
+                   " (cat 0x02 op 0x01, res='%.*s' lkid=0x%08x dir_csid=0x%08x"
+                   " cksum=0x%04x seq=%u)\n",
                    (int)locks[i].namelen, locks[i].resnam, locks[i].lkid,
-                   bp.checksum, bp.send_seq);
+                   dir_csid, bp.checksum, bp.send_seq);
             fflush(stdout);
         }
     }

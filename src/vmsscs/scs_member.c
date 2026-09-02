@@ -840,27 +840,32 @@ int scs_member_build_dlm_commit(const struct scs_member_params *p, uint32_t lkid
  * id fields because it registered NOTHING), this carries OVMX's REAL local lock
  * handle -- req_lkid, from the vms-1f4 DLM_ENUM_STANDING accessor: the handle of a
  * lock the executive GENUINELY HOLDS (the standing F11B$v<label> volume lock a
- * MOUNT holds, vms-25e) -- and names the real COORDINATOR as the resource master
- * (mst_csid). Because op-01 registers a REAL held lock (not the content-free OPT-A
- * completion), the rebuild transaction has real substance -- fixing the dangling
- * transaction that reformed the cluster in OPT A. The subsequent op-04/op-03 that
- * COMPLETE the transaction carry their own per-lock handles (op-03 references
- * NEITHER this req_lkid nor the coordinator's granted mst_lkid -- a third id from
- * the grant/op-04 round); those builders + the await-grant sequencing are Layer 3
- * scsd, not here.
+ * MOUNT holds, vms-25e). Because op-01 registers a REAL held lock (not the
+ * content-free OPT-A completion), the rebuild transaction has real substance --
+ * fixing the dangling transaction that reformed the cluster in OPT A. The
+ * subsequent op-04/op-03 that COMPLETE the transaction carry their own per-lock
+ * handles; those builders + the await-grant sequencing are Layer 3 scsd, not here.
  *
- * Built on db20-b's VALIDATED op-01 frame (VAX1 granted 48/48) + two real overlays
- * at the reference-confirmed offsets: req_lkid @ body[4:8], mst_csid @ body[20:24].
- * INV-6: ONLY OVMX's own real values -- its real lkid, the real coordinator csid,
- * its real resource name, NL mode (which it genuinely holds). The ungrounded
- * per-lock lock-mgmt fields (body[24:30]) stay ZERO -- never replay VAX3's.
+ * Run 9c showed the coordinator DROPS a skeletal op-01 (req_lkid + resname, rest
+ * zero): a granted ref ENQ carries a FULL per-lock record. So the caller passes a
+ * scs_dlm_reg_fields sourced ENTIRELY from OVMX's own genuine lock state (INV-6):
+ *   req_lkid @ body[4:8]  -- OVMX's own lock handle (DLM_ENUM_STANDING)
+ *   dir_csid @ body[20:24]-- the resource's directory-master csid, in OVMX's OWN
+ *                            encoding (GET_RESMASTER); this is the measured
+ *                            operator-scope decider -- if VAX2 grants off OVMX's
+ *                            encoding, honest CN=3 lands with no cluster-DLM scope.
+ *   lock_id  @ body[24:28]-- OVMX's unique per-lock id
+ *   flags    @ body[28:30], mode @ body[30] (NL, genuinely held),
+ *   lockmgmt @ body[32:36]-- count/flags word (n_granted).
+ * body[16:20] req_csid stays 0 (the reference had it 0 in 846/846). Built on
+ * db20-b's VALIDATED op-01 frame (VAX1 granted 48/48). NEVER replay VAX3's handles.
  */
 int scs_member_build_dlm_reg_enq(const struct scs_member_params *p,
                                  const char *resname, uint8_t namelen,
-                                 uint32_t req_lkid, uint32_t mst_csid,
+                                 const struct scs_dlm_reg_fields *f,
                                  uint8_t out[SCS_MEMBER_FRAME_LEN])
 {
-    if (p == NULL || out == NULL || resname == NULL) {
+    if (p == NULL || out == NULL || resname == NULL || f == NULL) {
         return -1;
     }
     if (namelen == 0 || namelen > 31) {   /* a VMS resource name is 1..31 bytes */
@@ -872,16 +877,24 @@ int scs_member_build_dlm_reg_enq(const struct scs_member_params *p,
     memset(body + 4, 0, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF - 4);
     put_le16(body + 0, p->sysap_send_msg);
     put_le16(body + 2, p->sysap_ack_msg);
-    put_le32(body + 4, req_lkid);          /* OVMX's REAL local lock handle (vms-1f4 accessor) -- op-01 req_lkid@[4:8] */
+    /*
+     * A FULL per-lock DLM record for the standing lock OVMX genuinely holds --
+     * every field a REAL attribute of its own lock (INV-6), in OVMX's own
+     * executive encoding (grounded from the ref op-01 846-ENQ survey, offsets
+     * moderate-confidence; the lab validates each). A skeletal record (req_lkid +
+     * resname, rest zero) is dropped by the coordinator (run 9c).
+     */
+    put_le32(body + 4,  f->req_lkid);      /* body[4:8]   OVMX's own lock handle */
     body[8]  = 0x02;                       /* cat 0x02 (DLM) */
     body[9]  = 0x01;                       /* op 0x01 = ENQ */
-    /* body[10:12] dir_hash: honest 0 (computed from the name, not echoed; INV-6). */
-    body[12] = 0x01;                       /* node-independent constant; with member_count forms the 0x00030001 status word at CN=3 */
+    body[12] = 0x01;                       /* node-independent constant; with member_count forms 0x00030001 at CN=3 */
     put_le16(body + 14, p->member_count);  /* OVMX's own true post-transition member count */
-    /* body[16:20] zero (ungrounded req_csid). */
-    put_le32(body + 20, mst_csid);         /* mastering node = the COORDINATOR's real csid -- op-01 mst_csid@[20:24] */
-    /* body[24:30] zero -- ungrounded per-lock lock-mgmt fields (INV-6: never replay VAX3's). */
-    body[30] = 0x00;                       /* == NL. The mode OVMX genuinely holds; HARD-PINNED (INV-6). */
+    /* body[16:20] req_csid = 0 (from memset -- the reference had it 0 in 846/846). */
+    put_le32(body + 20, f->dir_csid);      /* body[20:24] the resource's DIRECTORY-master csid (OVMX's own dir_csid, from GET_RESMASTER) */
+    put_le32(body + 24, f->lock_id);       /* body[24:28] OVMX's unique per-lock id */
+    put_le16(body + 28, f->flags);         /* body[28:30] lock flags */
+    body[30] = f->mode;                    /* body[30]    granted mode (NL for the volume presence lock) */
+    put_le32(body + 32, f->lockmgmt);      /* body[32:36] lock-mgmt count/flags word */
     body[47] = namelen;                    /* resource-name length */
     memcpy(body + 48, resname, namelen);
     return 0;

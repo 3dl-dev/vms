@@ -1025,31 +1025,35 @@ static void test_dlm_reg_enq_carries_real_values(void)
 
     const char *res = "F11B$vOVMXSYS";
     uint8_t nl = (uint8_t)strlen(res);
-    uint32_t req_lkid = 0x07f70004u;   /* OVMX's real handle (accessor) */
-    uint32_t mst_csid = 0x20600202u;   /* the real coordinator csid */
+    struct scs_dlm_reg_fields f;
+    memset(&f, 0, sizeof(f));
+    f.req_lkid = 0x00000001u;   /* OVMX's own lock handle */
+    f.dir_csid = 0x00010003u;   /* OVMX's own directory-master csid (its encoding) */
+    f.lock_id  = 0x00000001u;   /* OVMX's per-lock id */
+    f.flags    = 0x007du;       /* lock flags */
+    f.mode     = 0x00u;         /* NL */
+    f.lockmgmt = 0x00010001u;   /* count word */
 
     uint8_t out[SCS_MEMBER_FRAME_LEN];
-    CHECK(scs_member_build_dlm_reg_enq(&mp, res, nl, req_lkid, mst_csid, out) == 0,
-          "build_dlm_reg_enq ok");
+    CHECK(scs_member_build_dlm_reg_enq(&mp, res, nl, &f, out) == 0, "build_dlm_reg_enq ok");
     const uint8_t *b = out + 72;
 
-    CHECK((uint32_t)(b[4] | (b[5] << 8) | (b[6] << 16) | ((uint32_t)b[7] << 24)) == req_lkid,
-          "op-01: OVMX's REAL req_lkid at body[4:8]");
+#define RD32(o) ((uint32_t)(b[o] | (b[(o)+1] << 8) | (b[(o)+2] << 16) | ((uint32_t)b[(o)+3] << 24)))
+    CHECK(RD32(4)  == f.req_lkid,  "op-01: OVMX's real req_lkid at body[4:8]");
     CHECK(b[8] == 0x02 && b[9] == 0x01, "op-01: cat 0x02 op 0x01 (ENQ)");
-    CHECK((uint32_t)(b[20] | (b[21] << 8) | (b[22] << 16) | ((uint32_t)b[23] << 24)) == mst_csid,
-          "op-01: the real COORDINATOR csid at mst_csid body[20:24]");
-    CHECK(b[30] == 0x00, "op-01: mode@30 is NL (the mode OVMX genuinely holds)");
+    CHECK(RD32(16) == 0,           "op-01: req_csid body[16:20] is 0 (as every granted ref ENQ)");
+    CHECK(RD32(20) == f.dir_csid,  "op-01: OVMX's own dir_csid at body[20:24] (the measured decider)");
+    CHECK(RD32(24) == f.lock_id,   "op-01: OVMX's real per-lock id at body[24:28] (non-zero, as every granted ENQ)");
+    CHECK((uint16_t)(b[28] | (b[29] << 8)) == f.flags, "op-01: lock flags at body[28:30]");
+    CHECK(b[30] == f.mode,         "op-01: mode@30 (NL, the mode OVMX holds)");
+    CHECK(RD32(32) == f.lockmgmt,  "op-01: lock-mgmt count word at body[32:36]");
     CHECK(b[47] == nl && memcmp(b + 48, res, nl) == 0, "op-01: OVMX's real resource name at body[48]");
-    /* INV-6: ungrounded per-lock lock-mgmt fields stay zero -- never replay VAX3's. */
-    for (int i = 24; i < 30; i++)
-        CHECK(b[i] == 0, "op-01: ungrounded lock-mgmt field body[24:30] is ZERO (INV-6)");
+#undef RD32
 
-    CHECK(scs_member_build_dlm_reg_enq(&mp, NULL, nl, req_lkid, mst_csid, out) == -1,
-          "build_dlm_reg_enq NULL resname");
-    CHECK(scs_member_build_dlm_reg_enq(&mp, res, 0, req_lkid, mst_csid, out) == -1,
-          "build_dlm_reg_enq zero namelen guarded");
-    CHECK(scs_member_build_dlm_reg_enq(&mp, res, 32, req_lkid, mst_csid, out) == -1,
-          "build_dlm_reg_enq namelen > 31 guarded");
+    CHECK(scs_member_build_dlm_reg_enq(&mp, NULL, nl, &f, out) == -1, "build_dlm_reg_enq NULL resname");
+    CHECK(scs_member_build_dlm_reg_enq(&mp, res, nl, NULL, out) == -1, "build_dlm_reg_enq NULL fields");
+    CHECK(scs_member_build_dlm_reg_enq(&mp, res, 0, &f, out) == -1, "build_dlm_reg_enq zero namelen guarded");
+    CHECK(scs_member_build_dlm_reg_enq(&mp, res, 32, &f, out) == -1, "build_dlm_reg_enq namelen > 31 guarded");
 }
 
 int main(void)

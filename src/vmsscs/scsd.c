@@ -2639,6 +2639,13 @@ static unsigned long sysap_cm_messages = 0;      /* ... and it was a CM dialogue
  * receive dispatch, far below, because it drives the whole CM dialogue. */
 static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t msglen,
                                  void *ctx);
+/* vms-16c: faithful-DLM primitives, DEFINED beside the other DLM /dev/vms helpers
+ * but CALLED earlier (op-0d rebuild handler / inbound op-01 request handler). */
+static uint32_t scsd_dlm_master_local(const char *resnam, uint32_t *out_lkid);
+static uint32_t cm_dlm_grant_inbound_op01(const char *resnam, uint8_t mode,
+                                          uint32_t req_csid, uint32_t req_lkid,
+                                          uint32_t *out_master_lkid,
+                                          uint32_t *out_queued);
 
 /* vms-34b: installed on the MSCP$DISK SERVER CDT (OVMX_MSCP_SERVER_CONID)
  * the moment OVMX accepts a member-opened MSCP$DISK connect. Defined with the
@@ -7632,6 +7639,49 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                                            rx->our_hw_mac, rx->our_src_logical);
                 }
 
+                /*
+                 * vms-16c (operator-directed FAITHFUL DLM): an inbound cat-02 op-01
+                 * lock REQUEST (non-response) from a member. OVMX has mastered these
+                 * resources for real (scsd_dlm_master_local on the op-0d assignment),
+                 * so route the request to its executive lock manager and GRANT from
+                 * REAL lock state -- the behaviour cm_response_shape had to SILENCE
+                 * "until OVMX has a real lock manager to answer from" (which it now
+                 * does). PHASE 1: dispatch + prove the real grant on the wire (log
+                 * SCSD-I-DLMGRANT). The cat-82 op-01 RESPONSE frame (whose body[20:56]
+                 * lock-DB window must be rewritten from real state, NOT echoed) is
+                 * built once the conductor grounds that window against a reference
+                 * specimen -- until then we do NOT send a guessed response frame
+                 * (Rule 10; a guessed window regressed the run in a554e7ce). Gated on
+                 * OVMX_DLM_REAL; flag-off is byte-identical (silent, as today).
+                 */
+                if (getenv("OVMX_DLM_REAL") != NULL &&
+                    !mv.is_response &&
+                    (mv.category & 0x7f) == SCS_MEMBER_CAT_DLM &&
+                    mv.opcode == 0x01 && (size_t)n >= 72 + 80) {
+                    const uint8_t *qb = buf + 72;
+                    char res[32];
+                    uint8_t rl = dlm_op0d_resname(qb, res);  /* resname@body[48] */
+                    if (rl > 0) {
+                        uint8_t reqmode = qb[30];            /* requested mode (NL=0); length-parse TBD */
+                        if (reqmode > 5) reqmode = LCK$K_NLMODE; /* contaminated offset -> honest NL */
+                        uint32_t req_csid = (uint32_t)peer_node_number(ps);
+                        uint32_t req_lkid = (uint32_t)qb[4] | ((uint32_t)qb[5] << 8) |
+                                            ((uint32_t)qb[6] << 16) | ((uint32_t)qb[7] << 24);
+                        uint32_t mlkid = 0, queued = 0;
+                        uint32_t st = cm_dlm_grant_inbound_op01(res, reqmode, req_csid,
+                                                                req_lkid, &mlkid, &queued);
+                        log_ts(stdout);
+                        printf(" SCSD-I-DLMGRANT, inbound cat-02 op-01 for res='%.*s'"
+                               " (req_csid=0x%08x mode=%u) -> executive %s from REAL"
+                               " lock state (status=0x%08x master_lkid=0x%08x) --"
+                               " cat-82 response deferred to grounded window\n",
+                               (int)rl, res, req_csid, reqmode,
+                               st == 1u ? "GRANTED" : (queued ? "QUEUED" : "declined"),
+                               st, mlkid);
+                        fflush(stdout);
+                    }
+                }
+
                 /* vms-760: TRACE EVERY inbound CM message. This exists because
                  * a run stalled at barrier step 1 and the logs could not say
                  * whether the coordinator's op-0x0c release had arrived and
@@ -8377,6 +8427,25 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                             char res[32];
                             uint8_t nl = dlm_op0d_resname(buf + 72, res);
                             if (nl > 0 && dlm_nl_reg_add(ps, res)) {
+                                /* vms-16c (operator-directed FAITHFUL DLM): the op-0d
+                                 * rebuild ASSIGNS OVMX the directory for this resource.
+                                 * MASTER it FOR REAL in the executive (a real lock
+                                 * record) so a later inbound cat-02 op-01 grants from
+                                 * REAL lock state -- retiring the wire imitation. Gated
+                                 * on OVMX_DLM_REAL while the inbound-grant response frame
+                                 * is lab-validated (Rule 10); flag-off is byte-identical
+                                 * to the wire-only path below. */
+                                if (getenv("OVMX_DLM_REAL") != NULL) {
+                                    uint32_t mlkid = 0;
+                                    uint32_t st = scsd_dlm_master_local(res, &mlkid);
+                                    log_ts(stdout);
+                                    printf(" SCSD-I-DLMMASTER, mastered rebuild-assigned"
+                                           " resource FOR REAL in the executive (res='%.*s'"
+                                           " status=0x%08x lkid=0x%08x) -- inbound op-01"
+                                           " will grant from real lock state\n",
+                                           (int)nl, res, st, mlkid);
+                                    fflush(stdout);
+                                }
                                 cm_send_dlm_nl_register(rx->sock, (int)rx->ifindex,
                                                         ps, rx->our_hw_mac,
                                                         rx->our_src_logical,
@@ -8743,6 +8812,96 @@ static uint32_t scsd_dlm_local_read_valblk(const char *resnam,
     if (args.status == 1u)
         memcpy(out, args.valblk, LCK_VALBLK_SIZE);
     uint32_t status = args.status;
+    close(fd);
+    return status;
+#endif
+}
+
+/*
+ * scsd_dlm_master_local - MASTER a rebuild-assigned resource FOR REAL (vms-16c,
+ * operator-directed faithful DLM). When VAX1's op-0d rebuild assigns OVMX the
+ * directory for resource `resnam`, OVMX's executive must genuinely master it (a
+ * real vms_lock_resource with master_csid==vms_local_csid) so a later inbound
+ * cross-node $ENQ grants from REAL lock state -- NOT the wire-imitation NL frame.
+ * A LOCAL $ENQ (NL mode: OVMX holds nothing, blocks nothing) reaches
+ * dlm_resolve_master (vms_lock.c) and, as directory-of-first-use, sets
+ * master_csid=vms_local_csid + creates the resource block. Returns the executive
+ * status (1 == mastered/granted); *out_lkid = OVMX's own lock handle. Fail-honest
+ * (SS$_NOSUCHDEV 2680) with no /dev/vms -- never fabricates a master.
+ */
+static uint32_t scsd_dlm_master_local(const char *resnam, uint32_t *out_lkid)
+{
+    if (out_lkid) *out_lkid = 0;
+#ifdef SCSD_UNIT_TEST
+    (void)resnam;
+    return 2296u;
+#else
+    struct vms_enq_args args;
+    struct vms_register_args reg;
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0)
+        return 2680u;
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return 2680u; }
+    memset(&args, 0, sizeof(args));
+    args.lkmode = LCK$K_NLMODE;      /* NL: master the resource, hold nothing */
+    args.flags = LCK_M_VALBLK;       /* read the LVB back (input all-zero: read, not clobber) */
+    if (resnam) {
+        strncpy(args.resnam, resnam, sizeof(args.resnam) - 1);
+        args.resnam[sizeof(args.resnam) - 1] = '\0';
+    }
+    if (ioctl(fd, VMS_IOCTL_ENQ, &args) < 0) { close(fd); return 2680u; }
+    uint32_t status = args.status;
+    if (status == 1u && out_lkid)
+        *out_lkid = args.lkid;
+    close(fd);
+    return status;
+#endif
+}
+
+/*
+ * cm_dlm_grant_inbound_op01 - GRANT an inbound CM cat-02 op-01 lock request FROM
+ * REAL LOCK STATE (vms-16c, faithful DLM). A member (VAX1/VAX2) sends a cat-02
+ * op-01 ENQ for resource `resnam`; OVMX, having mastered it (scsd_dlm_master_local
+ * on the op-0d assignment), routes the request to its executive lock manager via
+ * VMS_IOCTL_DLM_XNODE (the SAME real cross-node ENQ path the OVMX$DLM SYSAP server
+ * uses, H4-H11) and returns the executive's REAL status -- SS$_NORMAL(1)=granted,
+ * VMS_DLM_STS_QUEUED(0)=blocked. *out_master_lkid = the master's real lock handle
+ * for the grant; *out_queued = whether it queued. This is NOT wire imitation: the
+ * grant decision comes from OVMX's real vms_lock_resource. Fail-honest (2680) with
+ * no /dev/vms -- never a fabricated grant.
+ */
+static uint32_t cm_dlm_grant_inbound_op01(const char *resnam, uint8_t mode,
+                                          uint32_t req_csid, uint32_t req_lkid,
+                                          uint32_t *out_master_lkid,
+                                          uint32_t *out_queued)
+{
+    if (out_master_lkid) *out_master_lkid = 0;
+    if (out_queued) *out_queued = 0;
+#ifdef SCSD_UNIT_TEST
+    (void)resnam; (void)mode; (void)req_csid; (void)req_lkid;
+    return 2296u;
+#else
+    struct vms_dlm_xnode_args args;
+    struct vms_register_args reg;
+    int fd = open("/dev/vms", O_RDWR);
+    if (fd < 0)
+        return 2680u;
+    memset(&reg, 0, sizeof(reg));
+    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return 2680u; }
+    memset(&args, 0, sizeof(args));
+    args.op = VMS_DLM_OP_ENQ;
+    args.lkmode = mode;
+    args.req_csid = req_csid;
+    args.req_lkid = req_lkid;
+    if (resnam) {
+        strncpy(args.resnam, resnam, sizeof(args.resnam) - 1);
+        args.resnam[sizeof(args.resnam) - 1] = '\0';
+    }
+    if (ioctl(fd, VMS_IOCTL_DLM_XNODE, &args) < 0) { close(fd); return 2680u; }
+    uint32_t status = args.status;
+    if (out_master_lkid) *out_master_lkid = args.master_lkid;
+    if (out_queued) *out_queued = args.queued;
     close(fd);
     return status;
 #endif

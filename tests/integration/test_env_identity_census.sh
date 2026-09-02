@@ -188,30 +188,31 @@ VARS="VMS_USERNAME VMS_UIC_GROUP VMS_UIC_MEMBER VMS_PRIVILEGES VMS_TERMINAL USER
 # BOTH TREES. src/ alone is what let the refuted sentence stand.
 FILES=$(find "$SRC_ROOT/src" "$SRC_ROOT/tools" \( -name '*.c' -o -name '*.h' \) | sort)
 
+# Cheap pre-filter in ONE grep over the whole file set, not one grep spawn per
+# file: a file that mentions none of getenv/setenv/putenv ANYWHERE (the vast
+# majority of the ~450 scanned) cannot contribute a census site, so only the
+# handful that do reach the awk comment-strip and the per-variable greps below.
+# This is a strict SUPERSET of the per-site patterns (every one of them contains
+# one of these three substrings), and comment stripping only removes characters,
+# so a token absent from the raw file is absent after stripping too -- the
+# observed census is identical. `grep -l` over all files is a single process
+# instead of ~450 per-file `grep -q` spawns; that per-file fork storm, times the
+# 11 gate runs the negative control makes, is what tripped env_identity_census's
+# CTest timeout under load (vms-3f9, extending vms-808's fork-storm fix).
+MATCHING=$(grep -lE 'getenv|setenv|putenv' $FILES 2>/dev/null)
+
 OBSERVED=""
-for f in $FILES; do
+for f in $MATCHING; do
     [ -f "$f" ] || continue
-    # Cheap pre-filter: a file that mentions none of getenv/setenv/putenv
-    # ANYWHERE (the vast majority of the ~450 scanned) cannot contribute a
-    # census site, so skip the awk comment-strip and the 14 per-variable greps
-    # for it. This is a strict SUPERSET of the per-site patterns below (every
-    # one of them contains one of these three substrings), and comment
-    # stripping only removes characters, so a token absent from the raw file
-    # is absent after stripping too -- the observed census is identical, this
-    # just stops the scan from doing per-variable work on files that have no
-    # environment call at all.
-    grep -Eq 'getenv|setenv|putenv' "$f" || continue
     rel=${f#"$SRC_ROOT"/}
-    # Strip comments ONCE per file to a temp buffer, then grep that file
-    # directly. This is deliberately NOT `code=$(strip_comments) ; printf %s
-    # "$code" | grep`, which forked a subshell AND a printf for every one of
-    # the 14 greps below, per file -- ~29 processes per file over ~450 files,
-    # and this gate is itself run 11 times by the negative control, so that
-    # fork storm is what pushed env_identity_census_negctl past its CTest
-    # timeout on slower CI runners (vms-808). grep against the file sees the
-    # exact same stripped bytes as the old pipeline did (trailing blank lines
-    # that command substitution trimmed never match these patterns), so the
-    # observed census is unchanged -- only the process count drops by ~2x.
+    # Strip comments ONCE per file to a temp buffer, then grep that buffer.
+    # (vms-808: NOT `printf "$(strip_comments)" | grep` per pattern, which forked
+    # a subshell + printf for each of the 14 greps. Folding these 14 greps into a
+    # single awk was tried and REVERTED under vms-3f9: awk's interpreted
+    # comment-strip + per-line regex is ~5x SLOWER on CPU than compiled grep, so
+    # it made the gate slower overall even with fewer forks. grep against the
+    # stripped file is the fast path; the fork-storm fix that mattered was the
+    # single-grep pre-filter above, not touching this inner match.)
     strip_comments "$f" > "$WORK/stripped"
     for v in $VARS; do
         # VMS_USERNAME_SIZE is a buffer-size macro, not the variable. The

@@ -707,22 +707,31 @@ if(BUILD_TESTS)
     # gate whose passing output is a LIST: that tools/ is genuinely scanned,
     # and that a variable named only in a comment cannot enter the census.
     #
-    # TIMEOUT 180 is now ~8x the measured runtime, not the ~1x it was (vms-808).
-    # This negctl runs the census gate 11 times over the whole src/+tools/ tree.
-    # The gate used to fork ~29 processes PER FILE (a printf+grep subshell for
-    # every one of its 14 per-variable greps, across ~450 files), so one run
-    # took ~16.7s on a GitHub runner and 11 of them was ~184s -- fractionally
-    # over this 180s budget, which is why #754/#755/#757/#766 all flaked here
-    # with (Timeout) while making steady progress (never a hang, no QEMU on this
-    # path). The gate now pre-filters files with no getenv/setenv/putenv token
-    # and greps a once-stripped temp file instead of a shell variable, cutting a
-    # single gate run to ~2s and the whole negctl to ~23s locally -- so 180s is
-    # generous headroom for a slow/contended runner without being an absurd cap.
+    # This negctl runs the census gate 11 times over the whole src/+tools/ tree
+    # and is DETERMINISTIC-but-slow (it always passes and its census is
+    # invariant; it never boots vms.ko/QEMU/dev-vms). vms-808 cut the per-file
+    # fork storm; vms-3f9 further replaced the ~450 per-file pre-filter `grep -q`
+    # spawns with a single `grep -l` over the file set. But under the PR batch's
+    # 10-way parallel contention it still amplifies past a fixed wall (~23s local
+    # -> the 180s cap was hit on run 32581841056, blocking unrelated PRs, vms-c17)
+    # -- a capacity problem, not a flake or a fabrication (same class as vms-898a;
+    # the systemic fix is the k3s rail, do NOT weaken the gate).
+    #
+    # So it is `slow`-labelled: excluded from the contended PR ctest batch
+    # (ci.yml runs `ctest -LE slow` on pull_request) exactly like the vms-819d
+    # slow-tier census negctls, but -- unlike those (torn out, vms-b44) -- it is
+    # NOT de-gated: the non-PR ctest run (push/merge_group/schedule, no -LE)
+    # still runs it, so the census gate's teeth stay proven in CI on merge, off
+    # the hot path that was timing out. The positive gate (env_identity_census,
+    # 60s, not slow-labelled) still runs on every PR -- real authenticity
+    # violations are still caught pre-merge; only this meta-teeth-proof moves to
+    # the merge run. TIMEOUT 180 stays for the non-PR run (option-1's fewer forks
+    # keep it well under, and the non-PR batch is far less contended than 10-way PR).
     add_test(NAME env_identity_census_negctl
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_env_identity_census_negctl.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(env_identity_census_negctl PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 180)
+        LABELS "integration;authenticity;slow" TIMEOUT 180)
 
     # The BEHAVIOURAL half of the same rule (vms-fb9 round 2), and the one
     # that actually carries the invariant. The two source scans above check

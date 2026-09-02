@@ -1448,6 +1448,41 @@ uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid)
 }
 
 /*
+ * vms_lock_acp_vol_standing - take the STANDING per-volume lock a faithful MOUNT
+ * holds for the WHOLE mount life (vms-25e). Unlike vms_lock_acp_vol_ex (the
+ * transient EX synchronization lock a single on-disk-structure write takes and
+ * immediately drops), this is a NULL-mode (NL) lock held from $MOUNT to
+ * $DISMOUNT. Its purpose is cluster registration, not serialization: it names the
+ * volume in the DLM so the connection manager can register "this node has this
+ * volume mounted" to the coordinator during a directory rebuild -- the standing
+ * F11B$v<label> lock a real VMS node holds and re-registers on join.
+ *
+ * NL asserts PRESENCE, not exclusion: it takes a different resource (F11B$v) than
+ * the XQP's per-write sync lock (F11B$s), holds nothing exclusive, and so can
+ * never block the XQP, another writer, or another cluster node -- deadlock-free
+ * and cluster-safe by construction. Released by vms_lock_acp_vol_release at
+ * $DISMOUNT (or on the holder's rundown). Returns the executive status; on
+ * SS$_NORMAL *lkid_out is the standing lock's handle for later registration.
+ */
+uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
+                                   uint32_t *lkid_out)
+{
+    struct vms_enq_args a;
+
+    if (lkid_out)
+        *lkid_out = 0;
+    memset(&a, 0, sizeof(a));
+    a.lkmode = LCK_K_NLMODE;    /* NL: a presence marker, holds nothing exclusive */
+    a.flags  = LCK_M_SYNC;      /* $ENQW; an NL request grants immediately */
+    strscpy(a.resnam, resnam, sizeof(a.resnam));
+
+    vms_enq_core_ex(proc, &a, NULL);
+    if (a.status == SS__NORMAL && lkid_out)
+        *lkid_out = a.lkid;
+    return a.status;
+}
+
+/*
  * vms_ioctl_convert - Convert lock mode ($ENQ with LCK$M_CONVERT)
  *
  * Changes the mode of an existing granted lock. If the new mode

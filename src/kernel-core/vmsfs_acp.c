@@ -104,6 +104,16 @@ struct vms_acp_volume {
      */
     uint32_t         ibmap_lbn;         /* hm2_ibmaplbn: index-bitmap base LBN */
     uint32_t         maxfiles;          /* hm2_maxfiles: index-file capacity */
+    /*
+     * The STANDING volume lock a faithful MOUNT holds for the whole mount life
+     * (vms-25e): a real VMS MOUNT holds the per-volume "F11B$v<label>" lock from
+     * $MOUNT to $DISMOUNT -- the cluster-wide marker that this node has the volume
+     * mounted, which the connection manager registers during a directory rebuild.
+     * Taken at publish, released at $DISMOUNT. 0 = not held (acquire failed or the
+     * node has no DLM); the volume is still mounted -- the standing lock is a
+     * cluster-registration facility, never a gate on the mount itself.
+     */
+    uint32_t         vol_lkid;          /* standing F11B$v<label> lock handle, 0 if unheld */
 };
 
 /*
@@ -267,20 +277,27 @@ static struct vms_acp_volume *acp_vol_find_locked(const char *devnam)
 }
 
 /*
- * acp_vol_resnam - the per-volume synchronization RESOURCE NAME for the ACP's
- * DLM write lock (vms-233, design §4.7). Derived from the ODS-2 volume LABEL so
- * a clustered / MSCP-served volume computes the SAME resource name on every node
- * that serves it -- the DLM resource is the cluster-wide write sync point. The
- * namespace prefix follows VMS's public files-lock naming ("F11B$s..."); the
- * exact resource string is an OVMX design choice, not a claim of VMS byte-wire
- * fidelity (Rule 8). An unlabelled volume falls back to its backing device
- * numbers so it still serializes locally. Host-neutral (fixed-width fields, no
- * long/pointer/sizeof) -- kernel-core portable for the Alpha/VAX cross-check.
+ * acp_vol_resnam_kind - the per-volume Files-11 DLM RESOURCE NAME "F11B$<kind><label>"
+ * for one of the per-volume locks (vms-233, design §4.7). `kind` selects which:
+ *   's' -- the XQP volume-SYNCHRONIZATION lock, taken transiently per on-disk-
+ *          structure write (vms_lock_acp_vol_ex); the original single use.
+ *   'v' -- the standing VOLUME lock a faithful MOUNT holds for the whole mount
+ *          life (vms-25e), the cluster-wide "this volume is mounted here" marker
+ *          the connection manager registers during a directory rebuild.
+ *   'a' -- the volume-ALLOCATION lock.
+ * Derived from the ODS-2 volume LABEL so a clustered / MSCP-served volume computes
+ * the SAME resource name on every node that serves it -- the DLM resource is the
+ * cluster-wide sync point. The namespace follows VMS's public files-lock naming
+ * ("F11B$..."); the exact string is an OVMX design choice, not a claim of VMS
+ * byte-wire fidelity (Rule 8). An unlabelled volume falls back to its backing
+ * device numbers so it still serializes locally. Host-neutral (fixed-width fields,
+ * no long/pointer/sizeof) -- kernel-core portable for the Alpha/VAX cross-check.
  */
-static void acp_vol_resnam(const struct vms_acp_volume *vol, char *out, size_t outsz)
+static void acp_vol_resnam_kind(const struct vms_acp_volume *vol, char kind,
+                                char *out, size_t outsz)
 {
     size_t n = 0;
-    static const char pfx[] = "F11B$s";
+    const char pfx[7] = { 'F', '1', '1', 'B', '$', kind, '\0' };
     size_t i;
 
     for (i = 0; pfx[i] != '\0' && n + 1 < outsz; i++)
@@ -308,6 +325,14 @@ static void acp_vol_resnam(const struct vms_acp_volume *vol, char *out, size_t o
         }
     }
     out[n < outsz ? n : outsz - 1] = '\0';
+}
+
+/* acp_vol_resnam - the XQP volume-SYNC resource name ("F11B$s<label>"), the
+ * original per-write serialization lock. Thin wrapper over acp_vol_resnam_kind
+ * so the transient-lock call sites read unchanged. */
+static void acp_vol_resnam(const struct vms_acp_volume *vol, char *out, size_t outsz)
+{
+    acp_vol_resnam_kind(vol, 's', out, outsz);
 }
 
 /* Caller holds proc->chan_lock. */
@@ -682,6 +707,23 @@ long vms_ioctl_acp_mount(struct vms_proc *proc, unsigned long arg)
     exec_list_add_tail(&vol->list, &vms_acp_vol_list);
     exec_unlock(&vms_acp_vol_lock);
 
+    /*
+     * vms-25e: take the STANDING volume lock a faithful MOUNT holds for the whole
+     * mount life -- the cluster-registration presence marker the connection
+     * manager registers to the coordinator on join. Enqueued AFTER dropping
+     * vms_acp_vol_lock (the enqueue may take DLM locks; never hold the table lock
+     * across it). Best-effort: a failure (no DLM backend) leaves vol_lkid 0 and
+     * the volume is mounted regardless -- the standing lock is a cluster facility,
+     * NEVER a gate on the mount itself (INV-6: honest omission on failure). Owned
+     * by the mounting process; for the PID-1-mounted system disk that is the
+     * node's life.
+     */
+    {
+        char vresnam[32];
+        acp_vol_resnam_kind(vol, 'v', vresnam, sizeof(vresnam));
+        vms_lock_acp_vol_standing(proc, vresnam, &vol->vol_lkid);
+    }
+
     args.status = SS__NORMAL;
 
 out:
@@ -705,7 +747,6 @@ long vms_ioctl_acp_dmount(struct vms_proc *proc, unsigned long arg)
     char devnam[VMS_DEVNAM_SIZE];
     uint32_t status;
 
-    (void)proc;
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
@@ -731,6 +772,14 @@ long vms_ioctl_acp_dmount(struct vms_proc *proc, unsigned long arg)
     }
     exec_list_del(&vol->list);
     exec_unlock(&vms_acp_vol_lock);
+    /*
+     * vms-25e: drop the standing volume lock this mount held (no-op if unheld).
+     * Best-effort, outside the table lock (the DEQ may touch DLM state). The lock
+     * was taken by the MOUNTING process; if a different process dismounts, the DEQ
+     * may not match and the holder's rundown ($DEQ-on-exit) is the backstop -- for
+     * the PID-1-mounted system disk, dismount and rundown are both PID 1.
+     */
+    vms_lock_acp_vol_release(proc, vol->vol_lkid);
     exec_free(vol);
 
     args.status = SS__NORMAL;

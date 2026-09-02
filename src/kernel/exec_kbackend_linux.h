@@ -57,6 +57,13 @@
 #include <linux/kdev_t.h>         /* MAJOR / MINOR / MKDEV */
 #include <linux/bio.h>            /* bio_init / __bio_add_page / submit_bio_wait (vms-127) */
 #include <linux/version.h>        /* LINUX_VERSION_CODE / KERNEL_VERSION (bdev-open guard) */
+/* FC-P0.1 (the cluster seam, SS15/SS16/SS18) backing headers: the TYPES the core
+ * embeds by value plus the console primitive. The rx/xmit headers
+ * (<linux/netdevice.h>, <linux/if_ether.h>) arrive with the real binding in
+ * FC-P0.2 -- they are not needed to fix a size. */
+#include <linux/kthread.h>        /* struct task_struct (exec_kthread_t) */
+#include <linux/timer.h>          /* struct timer_list (exec_timer_t) */
+#include <linux/printk.h>         /* printk / KERN_ERR (exec_console_printf) */
 /* vms-9d2 (primary Ethernet net device -> ETH0:) backing headers. */
 #include <linux/netdevice.h>      /* struct net_device, for_each_netdev, netif_carrier_ok */
 #include <linux/rtnetlink.h>      /* rtnl_lock / rtnl_unlock */
@@ -1023,5 +1030,144 @@ static inline int exec_l2_recv(exec_socket_t s, void *buf, size_t buf_len,
 /* exec_l2_close is deliberately NOT a distinct primitive: an L2 handle's
  * socket is released exactly like a TCP/ICMP one -- exec_socket_release
  * (SS12) drops the reference and, on the last drop, sock_release()s it. */
+
+/* ================================================================
+ * SS14..SS18  The cluster seam (FC-P0.1) -- CONTRACT-ONLY STUBS.
+ *
+ * FC-P0.1 freezes the contract (exec_kbackend.h SS14..SS18, including CONTRACT
+ * RULES 1 and 2); FC-P0.2 lands the REAL Linux binding here (dev_add_pack /
+ * dev_queue_xmit / dev_mc_add / kthread / timer_list / ktime / printk) and
+ * proves it with the rung-3 substrate contract test
+ * (tests/qemu/test_kmod_cluster_seam.c: a veth pair delivers a 0x6007 frame to
+ * rx_cb, multicast shows in `ip maddr`, timer post-and-wake, kthread start/stop,
+ * exec_time monotone).
+ *
+ * Until then every op here FAILS HONESTLY with SS$_NOSUCHDEV: it opens nothing,
+ * registers nothing, and fabricates nothing (INV-6 / Rule 9). This is the same
+ * posture the SS8/SS11/SS13 contract-only twins take, and it is why the void
+ * ops below are inert: exec_lan_open never succeeds, so vms_pe.c never brings a
+ * port up, so no timer is ever armed and no fork thread is ever started -- an
+ * inert timer cannot silently swallow a HELLO cadence, because nothing gets far
+ * enough to arm one.
+ *
+ * The TYPES are the real ones (struct timer_list, struct task_struct *), not
+ * placeholders: they fix the sizes the core embeds by value now, so FC-P0.2 is
+ * a body-only change.
+ * ================================================================ */
+
+typedef struct task_struct *exec_kthread_t;
+
+typedef struct exec_timer {
+	struct timer_list tl;      /* the real Linux timer FC-P0.2 arms */
+	void (*cb)(void *);
+	void *ctx;
+} exec_timer_t;
+
+static inline int exec_lan_open(const char *ifname, uint16_t ethertype,
+				exec_lan_rx_cb_t rx_cb, void *ctx)
+{
+	(void)ifname; (void)ethertype; (void)rx_cb; (void)ctx;
+	return (int)EXEC_SS_NOSUCHDEV;   /* FC-P0.2: dev_get_by_name + dev_add_pack */
+}
+
+static inline void exec_lan_close(void)
+{
+	/* FC-P0.2: dev_remove_pack + dev_put. Nothing is open, so nothing to close. */
+}
+
+static inline int exec_lan_xmit(const uint8_t *frame, uint32_t len)
+{
+	(void)frame; (void)len;
+	return (int)EXEC_SS_NOSUCHDEV;   /* FC-P0.2: alloc_skb + dev_queue_xmit */
+}
+
+static inline int exec_lan_mc_add(const uint8_t mac[6])
+{
+	(void)mac;
+	return (int)EXEC_SS_NOSUCHDEV;   /* FC-P0.2: dev_mc_add */
+}
+
+static inline int exec_lan_mc_del(const uint8_t mac[6])
+{
+	(void)mac;
+	return (int)EXEC_SS_NOSUCHDEV;   /* FC-P0.2: dev_mc_del */
+}
+
+static inline int exec_lan_hwaddr(uint8_t out[6])
+{
+	(void)out;                       /* untouched: never a fabricated MAC */
+	return (int)EXEC_SS_NOSUCHDEV;   /* FC-P0.2: ndev->dev_addr */
+}
+
+static inline int exec_lan_mtu(uint32_t *out)
+{
+	(void)out;
+	return (int)EXEC_SS_NOSUCHDEV;   /* FC-P0.2: ndev->mtu */
+}
+
+static inline int exec_lan_link_up(int *out)
+{
+	(void)out;
+	return (int)EXEC_SS_NOSUCHDEV;   /* FC-P0.2: netif_carrier_ok */
+}
+
+static inline int exec_kthread_create(exec_kthread_t *t, int (*fn)(void *),
+				      void *arg, const char *name)
+{
+	(void)fn; (void)arg; (void)name;
+	*t = NULL;
+	return (int)EXEC_SS_NOSUCHDEV;   /* FC-P0.2: kthread_run */
+}
+
+static inline void exec_kthread_stop(exec_kthread_t *t)
+{
+	(void)t;                         /* FC-P0.2: kthread_stop (joins) */
+}
+
+static inline int exec_kthread_should_stop(exec_kthread_t *t)
+{
+	(void)t;                         /* FC-P0.2: kthread_should_stop() */
+	return 1;                        /* no thread exists: "stop" is the truth */
+}
+
+static inline void exec_timer_init(exec_timer_t *t, void (*cb)(void *), void *ctx)
+{
+	t->cb = cb;                      /* FC-P0.2: + timer_setup(&t->tl, ...) */
+	t->ctx = ctx;
+}
+
+static inline void exec_timer_arm(exec_timer_t *t, uint32_t ms)
+{
+	(void)t; (void)ms;               /* FC-P0.2: mod_timer */
+}
+
+static inline void exec_timer_cancel(exec_timer_t *t)
+{
+	(void)t;                         /* FC-P0.2: del_timer_sync */
+}
+
+static inline void exec_timer_destroy(exec_timer_t *t)
+{
+	(void)t;                         /* Linux has no callout_destroy twin */
+}
+
+static inline uint64_t exec_time_now_vms(void)
+{
+	/* FC-P0.2: ktime_get_real_ns()/100 + the 17-NOV-1858 epoch offset. Zero is
+	 * NOT a plausible VMS time, so a caller that ships it would be visibly
+	 * wrong rather than subtly wrong (INV-6: no plausible-looking placeholder). */
+	return 0;
+}
+
+static inline uint64_t exec_ticks_ms(void)
+{
+	return 0;                        /* FC-P0.2: ktime_get_ns() / 1000000 */
+}
+
+/* A macro, not a function: it forwards the caller's format string straight to
+ * printk so the compiler's -Wformat checks the call site, and KERN_ERR is the
+ * level the QEMU console actually shows. FC-P0.2 keeps this line as-is -- it is
+ * already the real binding; it is listed here only for completeness of SS18. */
+#define exec_console_printf(fmt, ...) printk(KERN_ERR fmt, ##__VA_ARGS__)
 
 #endif /* OVMX_EXEC_KBACKEND_LINUX_H */

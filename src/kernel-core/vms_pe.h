@@ -1,0 +1,202 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * vms_pe.h - the LAN port layer (PEDRIVER role, PEA0:): its injected ops, its
+ * event vocabulary, and the port services SCS calls (FC-P0.1).
+ *
+ * Design: docs/design-faithful-cluster-executive.md SS3.1/SS3.2 (the port owns
+ * HELLO/SOLICIT discovery, channels, virtual circuits with sequencing and
+ * retransmit, and the three port services), SS3.9 (pure FSM + injected ops +
+ * glue + snapshot). Wire spec: docs/cluster-protocol-spec.md SS4(a)-(c), SS4(g),
+ * SS4(i), SS4(k).
+ *
+ * THE LAYER IN ONE PARAGRAPH. The port owns the LAN device for ethertype 0x6007.
+ * It sends a HELLO on a cadence, answers a SOLICIT, verifies a CHANNEL to each
+ * remote station through the b2/b3/b4 handshake, and over a verified channel
+ * forms a VIRTUAL CIRCUIT with the remote SYSTEM (START/STACK/ACK with the
+ * incarnation echo). Above the VC it offers three services -- datagram,
+ * sequenced message, block transfer -- and delivers what arrives UPWARD by
+ * (remote system, destination Con.ID). It knows nothing about SYSAPs,
+ * membership, quorum or locks.
+ *
+ * THE THREE FILES (design SS3.9), of which this header is the interface:
+ *   vms_pe_fsm.c   pure: the channel and VC tables, one small handler per
+ *                  transition, every action emitted through `struct pe_ops`.
+ *                  Host-unit-testable and simulator-runnable with NO kernel.
+ *   vms_pe.c       glue: owns the objects, binds pe_ops to the real seam
+ *                  (exec_lan_xmit, the fork module's cf_timer_*), registers
+ *                  PEA0: in vms_devtab, fills the snapshot.
+ *   vms_cluster_snapshot.h   the read-only view both of them project into.
+ *
+ * INCLUDES: kernel-core headers only (CI gate tools/ci/cluster_core_includes_gate.sh).
+ */
+#ifndef OVMX_VMS_PE_H
+#define OVMX_VMS_PE_H
+
+#include "vms_cluster.h"
+#include "vms_cluster_snapshot.h"
+
+struct vms_pe;      /* opaque: the port's objects are private to vms_pe.c */
+struct vms_pe_fsm;  /* opaque: the pure state machine, private to vms_pe_fsm.c */
+
+/* ==========================================================================
+ * 1. Timers the port arms
+ *
+ * Named, not numbered-at-the-call-site: a table-driven FSM arms a timer by
+ * IDENTITY, and the fork module's cf_timer_* wrappers map the identity to one
+ * exec_timer_t. Re-arming an armed timer moves it; it never stacks.
+ * ========================================================================== */
+enum pe_timer {
+	PE_TIMER_HELLO      = 0,  /* the ~2 s HELLO cadence */
+	PE_TIMER_CHANNEL    = 1,  /* channel listen/verify timeout, per channel */
+	PE_TIMER_RETRANSMIT = 2,  /* unacked sequenced message, per VC */
+	PE_TIMER_VCFAIL     = 3,  /* TIMVCFAIL, per VC */
+	PE_TIMER__COUNT
+};
+
+/* ==========================================================================
+ * 2. The injected ops -- the ONLY way the pure FSM reaches the world
+ *
+ * Design SS3.9: "the actions it emits through an injected struct <layer>_ops
+ * { send, arm_timer, cancel_timer, now, log, alloc, free }". Production binds
+ * these to the seam; a host test binds them to recorders; the rung-2 simulator
+ * binds them to a virtual LAN and a virtual clock. `now_ms` is here for rule 6
+ * -- an FSM NEVER reads the clock itself, so a test drives time.
+ * ========================================================================== */
+struct pe_ops {
+	/* Transmit ONE complete Ethernet frame (byte 0 = destination MAC).
+	 * Returns 0 or an SS$_ status. Production: exec_lan_xmit. */
+	int  (*send)(void *ctx, const uint8_t *frame, uint32_t len);
+
+	/* Arm / cancel a named timer. `key` distinguishes per-object timers
+	 * (which channel, which VC); it is the object's index, never a pointer,
+	 * so a recorded test transcript is comparable. */
+	void (*arm_timer)(void *ctx, enum pe_timer which, uint32_t key, uint32_t ms);
+	void (*cancel_timer)(void *ctx, enum pe_timer which, uint32_t key);
+
+	/* The monotonic millisecond clock (exec_ticks_ms in production, the
+	 * virtual clock in the simulator). */
+	uint32_t (*now_ms)(void *ctx);
+
+	/* One OPCOM-class line. Production: exec_console_printf. */
+	void (*log)(void *ctx, const char *msg);
+
+	/* Object allocation for channels/VCs/frame buffers. Production:
+	 * exec_zalloc/exec_free; host tests use the C library. Never called
+	 * from a receive or timer callback (CONTRACT RULES 1 and 2). */
+	void *(*alloc)(void *ctx, uint32_t n);
+	void  (*free)(void *ctx, void *p);
+
+	void *ctx;
+};
+
+/* ==========================================================================
+ * 3. The event vocabulary
+ *
+ * The FSM is a table `handlers[state][event]` (design SS3.9 rule 1: a table
+ * entry, not a switch ladder). Every event below is a GROUNDED frame class or a
+ * timer/link fact -- no event exists for a frame class OVMX has not observed.
+ * FC-P0.8 (channels) and FC-P1.2 (virtual circuits) own the tables; adding an
+ * event here is an additive change those items make, and the codec -- never the
+ * FSM -- decides which event a received frame is.
+ * ========================================================================== */
+enum pe_event {
+	/* Discovery and channel verification (spec SS4(a)-(c), SS4(k)). */
+	PE_EV_RX_HELLO        = 0,   /* multicast or directed HELLO */
+	PE_EV_RX_SOLICIT      = 1,
+	PE_EV_RX_VERIFY_B2    = 2,   /* the b2/b3/b4 channel-verify ladder */
+	PE_EV_RX_VERIFY_B3    = 3,
+	PE_EV_RX_VERIFY_B4    = 4,
+
+	/* Virtual-circuit formation (spec SS4(g)/(i)). */
+	PE_EV_RX_START        = 5,
+	PE_EV_RX_STACK        = 6,
+	PE_EV_RX_ACK          = 7,
+
+	/* Data on a formed circuit. */
+	PE_EV_RX_SEQMSG       = 8,   /* sequenced message (carries a Con.ID pair) */
+	PE_EV_RX_DATAGRAM     = 9,   /* datagram (no Con.ID pair) */
+	PE_EV_RX_CREDIT       = 10,  /* port-level credit return */
+
+	/* Timers (CONTRACT RULE 2: posted by the callback, run here). */
+	PE_EV_TIMER_HELLO     = 11,
+	PE_EV_TIMER_CHANNEL   = 12,
+	PE_EV_TIMER_RETRANSMIT = 13,
+	PE_EV_TIMER_VCFAIL    = 14,
+
+	/* Local facts. */
+	PE_EV_LINK_UP         = 15,
+	PE_EV_LINK_DOWN       = 16,
+	PE_EV_SEND_REQUEST    = 17,  /* an upper layer asked to send */
+	PE_EV_SHUTDOWN        = 18,  /* CLUSTER_STOP / last gasp */
+
+	PE_EV__COUNT
+};
+
+/* ==========================================================================
+ * 4. Upward delivery -- the (SB, Con.ID) boundary
+ *
+ * The port delivers a received sequenced message to the upper layer by the
+ * REMOTE SYSTEM it came from and the DESTINATION Con.ID the message names. That
+ * Con.ID is read by a codec accessor out of the received envelope
+ * (SCS$L_DST_CONID, a longword in the published $SCSDEF definitions) -- the port
+ * never invents one, and a frame class that carries no Con.ID pair is delivered
+ * through `datagram` instead, not through `message` with a zero. SCS owns the
+ * demux from Con.ID to CDT; the port owns nothing above the circuit.
+ * ========================================================================== */
+struct pe_upper_ops {
+	void (*message)(void *ctx, vms_scs_sysid_t from, vms_conid_t dst_conid,
+			const uint8_t *body, uint32_t len);
+	void (*datagram)(void *ctx, vms_scs_sysid_t from,
+			 const uint8_t *body, uint32_t len);
+	/* Circuit lifecycle: SCS must tear its CDTs down when a VC is lost, and
+	 * CNXMAN must see it as a connectivity change. `reason` is an SS$_ status. */
+	void (*vc_up)(void *ctx, vms_scs_sysid_t peer);
+	void (*vc_down)(void *ctx, vms_scs_sysid_t peer, uint32_t reason);
+	void *ctx;
+};
+
+/* ==========================================================================
+ * 5. The port services (design SS3.2, "the three port services")
+ *
+ * Called from the cluster fork thread only. Block transfer (named buffers) is
+ * deliberately absent until FC-P6.1: the MSCP server is its first real user, and
+ * declaring an interface nobody implements invites a stub that pretends.
+ * ========================================================================== */
+
+/* Send a sequenced message to `dst` addressed to the peer's `dst_conid`.
+ * Returns 0, or an SS$_ status (no circuit, no credit, transmit failed). */
+int pe_send_msg(struct vms_pe *pe, vms_scs_sysid_t dst, vms_conid_t dst_conid,
+		const uint8_t *body, uint32_t len);
+
+/* Send a datagram (unsequenced, unacknowledged) to `dst`. */
+int pe_send_dg(struct vms_pe *pe, vms_scs_sysid_t dst,
+	       const uint8_t *body, uint32_t len);
+
+/* Register the upper layer (SCS). One registration per port; a second call
+ * replaces it. */
+void pe_set_upper(struct vms_pe *pe, const struct pe_upper_ops *upper);
+
+/* ==========================================================================
+ * 6. Lifecycle and readback (glue, vms_pe.c -- FC-P0.9)
+ * ========================================================================== */
+
+/* Bring the port up on the interface named in `cl->ifname`: open the LAN seam,
+ * join the HELLO multicast group, create PEA0: in the device table and start the
+ * HELLO cadence. Returns 0 or an SS$_ status -- SS$_NOSUCHDEV when the substrate
+ * has no such interface, which is the honest end of the road: no PEA0:, no
+ * HELLO, and CLUSTER_START fails with it (Rule 9). */
+int vms_pe_start(struct vms_cluster *cl);
+
+/* Stop the port: cancel timers, close the LAN seam, drop PEA0:. Idempotent. */
+void vms_pe_stop(struct vms_cluster *cl);
+
+/* Project the port's state. Both fill from REAL objects under the fork mutex
+ * (INV-6); `index` walks channels / VCs and each returns 0, or SS$_NOSUCHDEV
+ * past the end. */
+int vms_pe_snapshot(struct vms_cluster *cl, struct vms_pe_view *out);
+int vms_pe_channel_snapshot(struct vms_cluster *cl, uint32_t index,
+			    struct vms_pe_channel_view *out);
+int vms_pe_vc_snapshot(struct vms_cluster *cl, uint32_t index,
+		       struct vms_pe_vc_view *out);
+
+#endif /* OVMX_VMS_PE_H */

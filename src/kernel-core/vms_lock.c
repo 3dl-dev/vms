@@ -2516,6 +2516,57 @@ static uint32_t vms_lock_dlm_xnode_rebuild(struct vms_proc *proc,
 }
 
 /*
+ * vms_lock_dlm_xnode_enq_idempotent - retransmit idempotency for a cross-node
+ * $ENQ (vms-16c). A cluster member (VAX1/VAX2) that never sees a STABLE granted
+ * lock re-sends the same op-01 ENQ. Before this, every re-send ran the full
+ * enqueue core and minted a FRESH master lock record, so the handle OVMX returned
+ * changed on each reply (0x328 -> 0x329 -> 0x32a ...) and the requester could
+ * never correlate a held lock -- it re-requested forever (the measured ~35/sec
+ * storm on LNM$CWLOGICALS + F11B$aSYSDSK1, CN stuck at 2). A real VMS master is
+ * idempotent to a retransmit: the SAME (req_csid, req_lkid) on the same resource,
+ * already granted at a mode that covers the request, returns the SAME master
+ * handle every time.
+ *
+ * Returns 1 and fills req->master_lkid / master_csid / valblk (the caller returns
+ * SS$_NORMAL) when an existing grant satisfies the retransmit; 0 to let the caller
+ * run the full enqueue core -- a genuinely new lock, or an UP-CONVERSION (existing
+ * grant weaker than the request) the core must process for real. Cross-node only
+ * (both ids non-zero); a local $ENQ (both 0) is never deduped here. INV-6: the
+ * handle returned names a REAL existing lock record on the resource's granted
+ * queue -- never a fabricated or defaulted grant.
+ */
+static int vms_lock_dlm_xnode_enq_idempotent(struct vms_dlm_xnode_args *req)
+{
+    struct vms_lock_resource *res;
+    struct vms_lock_entry *lock;
+    int handled = 0;
+
+    if (req->req_csid == 0 || req->req_lkid == 0)
+        return 0;   /* a local ENQ or unidentified requester: never dedup */
+
+    res = resource_find_or_create(req->resnam);
+    if (!res)
+        return 0;   /* let the core report SS$_INSFMEM honestly */
+
+    exec_lock(&res->lock);
+    exec_list_for_each_entry(lock, &res->granted, res_granted) {
+        if (lock->req_csid == req->req_csid &&
+            lock->req_lkid == req->req_lkid &&
+            lock->granted_mode >= req->lkmode) {
+            req->master_lkid = lock->lkid;          /* the SAME stable handle */
+            req->master_csid = vms_local_csid;
+            memcpy(req->valblk, res->valblk, LCK_VALBLK_SIZE);
+            handled = 1;
+            break;
+        }
+    }
+    exec_unlock(&res->lock);
+
+    resource_release(res);
+    return handled;
+}
+
+/*
  * vms_lock_dlm_xnode_dispatch - the cross-node DLM RECEIVE handler
  * (vms-94c transport; DLM epic vms-7fa).
  *
@@ -2587,6 +2638,19 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
         /* A request that names a resource must actually name one. */
         if (req->resnam[0] == '\0')
             return SS__BADPARAM;
+
+        /*
+         * Retransmit idempotency (vms-16c). An already-granted cross-node lock
+         * (same req_csid + req_lkid, mode still covered) returns its EXISTING
+         * master handle -- a STABLE handle the requester correlates -- instead of
+         * minting a fresh record per re-send. Without this the returned handle
+         * changed on every retransmit and the member re-requested forever. A
+         * genuinely new lock or an up-conversion returns 0 here and runs the core.
+         */
+        if (vms_lock_dlm_xnode_enq_idempotent(req)) {
+            req->queued = 0;
+            return SS__NORMAL;
+        }
 
         /*
          * Marshal the decoded cross-node $ENQ into the single-node lock manager

@@ -5,21 +5,44 @@ agent implementing a **glue** item (P0.9, P1.3, P2.x, P3.8) or a coordinator/
 barrier item MUST read this before wiring. Each entry: who raised it, what it
 affects, and the current disposition.
 
-## OPEN — awaiting a Fable ruling
+## RESOLVED rulings
 
-### E1. Seam buffer semantics: frame-level vs 132-byte SYSAP body (raised by FC-P3.5)
-`cnxman_ops.send/respond` in the frozen FC-P0.1 seam names its param `body` and
-its doc says "Production: `scs_send_msg` on the CSB's CDT" — which implies a
-132-byte SYSAP **body**. But the FC-P3.1 codec is **frame-level** throughout,
-with `vms_cm_link` as its stand-in. FC-P3.5 emits complete **204-byte CM frames**
-and added `cnxman_barrier_link_ops.next_out` so the CM still owns the
-envelope/token.
-- **Affects:** FC-P0.9 (port glue), FC-P1.3, FC-P2.2/P2.x (SCS), FC-P3.8 (the
-  membership glue that wires barrier+coordinator+quorum together). They MUST all
-  land on ONE reading.
-- **If it becomes body-only:** the codec needs body-level builders and P3.5's
-  three call sites change.
-- **Disposition:** ESCALATED to Fable. Do not wire the glue until ruled.
+### E1. Seam buffer semantics → BODY-LEVEL (Fable ruling, design §3.2.4)
+**RULED: body-level. Each layer owns exactly its own header.** A SYSAP hands SCS
+a **132-byte body**; a SYSAP that fills `send_seq` is the same error as a daemon
+filling a lock id. Byte ownership of the 204-byte class (frame-absolute):
+- **0–55 → port** (`vms_pe`): Ethernet, SCA header, `recv_ack`/`send_seq` @32–35,
+  VC mirrors @36–55. msgtype @30 set by the PORT from a service kind SCS passes
+  down (the `0x5b/0x4b` phase rule is SCS knowledge, never a SYSAP byte).
+- **56–71 → SCS** (`scs_send_msg` from the CDT): inner length, format, MTYPE,
+  credit, dst/src Con.ID.
+- **72–79 → CNXMAN** via ONE pure stamper `cnxman_envelope_stamp(csb, body,
+  is_response)` on the CSB's dialogue counters (send_msg/ack_msg/txn/token);
+  responses echo txn/token; the DLM cat-02 arm uses the same stamper and never
+  writes body[0:8].
+- **80–203 → the emitting FSM/role** (cat/op/payload).
+- **Seam:** `cnxman_ops.send(dst_csid, body, 132)` → glue resolves the CSB's
+  `VMS$VAXcluster` CDT → `scs_send_msg`; `respond(body,len)` → same on the
+  request's CDT. `scs_send_msg(local_conid, body, len)` copies body to a pool
+  `exec_lanbuf_t` @72, fills 56–71, debits credit, `pe_send_msg(...svc)`.
+  `pe_send_msg` fills 0–55, assigns seq, keeps the unacked ring (retransmit =
+  same bytes/seq). Receive: no copy/strip — deliver whole frame +
+  `vms_frame_info{scs_off=56, body_off=72}`.
+- **Codec** organized by owner: `codec_hello`/`codec_vc` (0–55), `codec_scs`
+  (56–71), `codec_cm`/`codec_dlm`/`codec_mscp` (bodies, `body[]`-relative). A
+  `vms_frame_compose(link,scs,body)` exists for tests/simulator ONLY.
+- **Binds:** FC-P0.9, FC-P1.3, FC-P2.2, FC-P2.4, FC-P3.8 build to this contract.
+- **CONFORMANCE RETROFIT = FC-P3.15** (Sonnet-tier). Fable scoped it to FC-P3.5,
+  but the integrator WIDENS it to cover **every CNXMAN frame-emitter landed
+  frame-level**: FC-P3.5 barrier AND FC-P3.12 coordinator (dispatched against the
+  superseded frame-level P3.5). One body-level pass: introduce
+  `cnxman_envelope_stamp`; the barrier's + coordinator's call sites emit bodies
+  via `ops->send/respond` after the stamper; delete
+  `cnxman_barrier_link_ops.next_out`; demote `vms_cm_link` to a test-only composer;
+  fixtures become `specimen[72:204]` slices (byte-exact assertions hold on the
+  body). R1 must prove NO CNXMAN TU writes below body offset 0.
+  **DISPATCH FC-P3.15 ONLY AFTER FC-P3.12 lands** (else it races the coordinator
+  on the same files).
 
 ## RESOLVED / carried couplings
 

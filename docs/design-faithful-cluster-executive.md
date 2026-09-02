@@ -355,6 +355,88 @@ contract test gains a same-CPU hammer (a process-context poster loop
 pinned to the CPU that receives, under a 0x6007 flood) that must not
 lock up or panic on either substrate.
 
+#### 3.2.4 Seam buffer granularity — RULING (2026-09-02, E1 from FC-P3.5)
+
+**The question.** `cnxman_ops.send/respond` (frozen in FC-P0.1) takes a
+`body`; FC-P3.1's codec and FC-P3.5's barrier FSM emit complete 204-byte
+frames through a stand-in (`vms_cm_link`) and a `next_out` hook that lets
+the FSM fill the envelope. Frame-level or body-level?
+
+**Ruling: body-level. Each layer owns exactly its own header; a SYSAP
+never sees the port or SCS headers.** This is the VMS layering (Davis
+ch. 2/ch. 4, public): the PPD/port driver (PEDRIVER) owns the datalink and
+virtual-circuit header — sequencing, acks, retransmission; SCS owns the
+SCS header — message type, credit, connection ids; a SYSAP (CNXMAN, the
+lock manager's arm, the MSCP server) hands SCS an application message and
+receives one. A SYSAP that fills `send_seq` is the same category error as
+a daemon that fills a lock id. It is also the fast-test shape: the barrier
+FSM's rung-1 truth is "this 132-byte body on this connection", and the VC
+and SCS FSMs are each tested on their own header without a CM body.
+
+**Ownership of every byte of the 204-byte `VMS$VAXcluster` class**
+(frame-absolute offsets; spec §2, §4(d), §4(g), §4(h)(1a), §4(j)):
+
+| Bytes | Field | Owner | Written by |
+|---|---|---|---|
+| 0–13 | Ethernet dst/src MAC | port | `vms_pe` (dst from the PB's channel; src = HW MAC) |
+| 14–31 | SCA header: src logical `aa:00:04:00:<sysid>` @24, msgtype @30 | port | `vms_pe`; msgtype from the **service kind** SCS requests (`0x5b` connect-phase control, `0x4b` data, datagram, block) — the §4(m) phase rule is SCS's knowledge, passed down as a parameter, never a byte the SYSAP sets |
+| 32–35 | `recv_ack`, `send_seq` | port (VC) | `vms_pe` at transmit time; retransmit resends the same buffer with the same seq |
+| 36–55 | incarnation mirror @36, observed mirrors @40/44/48 | port (VC) | `vms_pe` (FC-P1.1's builder; until it lands these are explicit zeros — never a template) |
+| 56–71 | SCS header: inner length, format `0x0004`, MTYPE, credit, dst/src Con.ID | SCS | `vms_scs` from the CDT (MTYPE 10 for application messages; 0–9 for its own control verbs; credit from the ledger) |
+| 72–75 | SYSAP dialogue counters `send_msg`/`ack_msg` (body[0:4]) | CNXMAN (per-CSB dialogue state) | one stamper, `cnxman_envelope_stamp()` |
+| 76–79 | `txn`, `token` (body[4:8]) | CNXMAN (originations: own txn; responses: echoed; token never computed) | the same stamper |
+| 80–203 | category, opcode, payload (body[8:132]) | the SYSAP logic: CNXMAN FSMs for cat-01/04/06, the DLM arm for cat-02 (the echo recipe included) | the FSM/role that emits it |
+
+**Seam contract, layer by layer (the consequent for P0.9 / P1.3 / P2.2 /
+P3.8; the frozen signatures stand — their doc-comments are made exact):**
+
+- **CNXMAN ↔ SCS** (`cnxman_ops.send(dst_csid, body, len)`,
+  `respond(body, len)`): `body` is the 132-byte SYSAP body, body[0:8]
+  already stamped by `cnxman_envelope_stamp(csb, body, is_response)` — a
+  pure function on the CSB's dialogue counters, called by every CNXMAN
+  emitter (join, barrier, coordinator, the DLM arm's cat-02 messages ride
+  the same stamper; the DLM arm never writes body[0:8]). Glue (`vms_cnxman.c`):
+  `send` → the CSB's `VMS$VAXcluster` CDT → `scs_send_msg`; `respond` →
+  `scs_send_msg` on the CDT the request being dispatched arrived on (the
+  glue records the current-request CDT across a dispatch). `respond` stays
+  distinct from `send` because the correlation the peer requires is
+  (connection, txn) — and only the glue knows the connection.
+- **SCS ↔ port** (`scs_ops.send(dst_sysid, dst_conid, body, len)` /
+  `scs_send_msg(local_conid, body, len)`): SCS copies the body into a pool
+  transmit buffer at offset 72, fills 56–71 from the CDT, debits a credit,
+  and calls `pe_send_msg(pe, sysid, buf, svc)` with `svc ∈ {PE_SVC_CONTROL,
+  PE_SVC_MESSAGE, PE_SVC_DATAGRAM, PE_SVC_BLOCK}`. On receive SCS parses
+  56–71, credits the ledger, dispatches by dst Con.ID and MTYPE, and calls
+  `scs_sysap_ops.message(ctx, local_conid, frame + 72, inner_len − 16)`.
+- **port** (`pe_send_msg`, FC-P1.3): fills 0–55, assigns `send_seq`, keeps
+  the buffer in the VC's unacked ring for retransmit (same bytes, same
+  seq), transmits via `exec_lan_xmit`. On receive it does VC accounting on
+  32–35 and delivers the whole frame plus a `vms_frame_info` (`scs_off = 56`,
+  `body_off = 72`) to SCS — no copy, no strip.
+- **Transmit buffer** = the pool `exec_lanbuf_t` (§3.2.2): one allocation
+  per message, headers prepended in place by the two lower layers, the same
+  buffer retransmitted. The 132-byte copy from the FSM's scratch into the
+  pool buffer is deliberate: it keeps the FSMs pure (scratch is theirs) and
+  costs nothing at cluster rates.
+
+**Codec consequence.** The codec is organized by owner: `codec_hello`/
+`codec_vc` build and parse 0–55 (port); `codec_scs` 56–71; `codec_cm`,
+`codec_dlm`, `codec_mscp` build and parse **bodies** (frame + 72 onward,
+`body[]`-relative accessors, which is how the spec and the field maps in
+memory `cluster-promotion-gap` are already written). A full-frame composer
+(`vms_frame_compose(link, scs, body)`) exists for **tests and the
+simulator only** — it is how rung-1 byte-exactness against a 204-byte
+specimen and the pcap replay are done — and is never called from a layer.
+
+**FC-P3.5 conformance (one item, FC-P3.15):** the three frame-emitting
+call sites emit 132-byte bodies via `ops->send/respond` after
+`cnxman_envelope_stamp`; `cnxman_barrier_link_ops.next_out` is deleted
+(its `env` half becomes the stamper; its `link` half was never the FSM's);
+`vms_cm_link` is demoted to a test-only helper under `tests/cluster/host/`
+until FC-P1.1/FC-P2.1's builders replace it, then deleted. The barrier's
+rung-1 fixtures become `specimen[72:204]` slices — the existing byte-exact
+assertions hold unchanged on the body.
+
 `vms_l2.c` (the ioctl pipe) is **not** on the cluster path. It stays as a
 generic privileged LAN facility (the eventual `$QIO` LAN-driver surface for
 user-mode protocols, gated on `PHY_IO`) if another lane needs it; otherwise it

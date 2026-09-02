@@ -7565,24 +7565,34 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                  * genuine LOSE r4), because the coordinator only publishes the new
                  * membership once the transition COMMITS cluster-wide (Rule of
                  * Total Connectivity, Davis p.7-39) -- exactly the condition the
-                 * oracle measures. So XITDONE is emitted from THIS, latched once. */
+                 * oracle measures. So XITDONE is emitted from THIS, latched once.
+                 *
+                 * REFINED (vms-74f/vms-655, measured 2026-09-02): that 1:1 held in
+                 * the pre-DLM-registration sweep, but op-06 now GATES OVMX's DLM
+                 * standing-lock registration -- and a registration the coordinator
+                 * DROPS (e.g. dir_csid gap vms-655) leaves op-06 received yet
+                 * CLUSTER_NODES stuck at 2. op-06 is the admission INVITATION, not
+                 * proof of counting; the log below says so and no longer claims
+                 * "admitted". The latch is kept (oracle-compat) but its meaning is
+                 * "transition opened", not "counted". */
                 if (cm_plain_req && mv.category == SCS_MEMBER_CAT_CONFIG &&
                     mv.opcode == SCS_MEMBER_OP_MEMBERSHIP) {
                     ps->membership_bursts++;
                     if (!ovmx_cluster.membership_committed) {
                         ovmx_cluster.membership_committed = 1;
                         log_ts(stdout);
-                        printf(" SCSD-I-XITDONE, cluster membership COMMITTED --"
-                               " received the coordinator's op 0x06 MEMBERSHIP burst"
-                               " (post-commit membership publication) from"
-                               " %02x:%02x:%02x:%02x:%02x:%02x. This is the"
-                               " AUTHENTIC admission signal (1:1 with the member"
-                               " oracle F$GETSYI(\"CLUSTER_NODES\") 2->3, spec"
-                               " §4(O.38)): the coordinator publishes it only once"
-                               " the transition commits cluster-wide, so its receipt"
-                               " means OVMX is now an admitted cluster member --"
-                               " whether or not OVMX's own op-0x0c barrier"
-                               " (SCSD-I-XITBARRIER) has finished\n",
+                        printf(" SCSD-I-XITDONE, received the coordinator's op 0x06"
+                               " MEMBERSHIP burst (admission INVITATION) from"
+                               " %02x:%02x:%02x:%02x:%02x:%02x -- OVMX now drives its"
+                               " DLM standing-lock registration to the coordinator."
+                               " HONEST SCOPE: this is NECESSARY but NOT SUFFICIENT"
+                               " for counted membership. The op 0x06 burst opens the"
+                               " transition; F$GETSYI(\"CLUSTER_NODES\") increments to"
+                               " 3 ONLY once the DLM registration COMMITS cluster-wide"
+                               " (op-01 ENQ -> coordinator cat-82 op-01 GRANT -> op-04"
+                               " -> op-03 COMMIT, vms-74f). op-06 receipt alone is NOT"
+                               " admission -- a dropped op-01 leaves OVMX uncounted"
+                               " (measured 2026-09-02, dir_csid gap vms-655)\n",
                                ps_port_addr(ps)[0], ps_port_addr(ps)[1],
                                ps_port_addr(ps)[2], ps_port_addr(ps)[3],
                                ps_port_addr(ps)[4], ps_port_addr(ps)[5]);

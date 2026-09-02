@@ -175,7 +175,8 @@ static const struct dcl_qual_def q_submit[] = {
     QUAL_END
 };
 static const struct dcl_qual_def q_sort[] = {
-    { "REVERSE", CDU_VT_NONE, 0, NULL, NULL },
+    { "REVERSE", CDU_VT_NONE,  0, NULL, NULL },
+    { "KEY",     CDU_VT_LIST,  0, NULL, NULL },  /* /KEY=(POSITION:n,SIZE:m) vms-e76 */
     QUAL_END
 };
 static const struct dcl_qual_def q_dump[] = {

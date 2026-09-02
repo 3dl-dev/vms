@@ -8,9 +8,9 @@ tier: 1
 plan_ref: vms-8ad
 summary: >
   Standalone utility images invoked as DCL verbs. Most core system-management
-  utilities are real; the record/data utilities (SORT, BACKUP, CONVERT) are
-  honestly partial or facade-risk on their advanced qualifiers rather than
-  full VMS-parity implementations. Re-censused 2026-08-31: SYSGEN and EDIT
+  utilities are real; SORT now does real /KEY field-based sorting (vms-e76), and
+  the remaining record/data utilities (BACKUP, CONVERT) are honestly partial on
+  their advanced qualifiers rather than full VMS-parity implementations. Re-censused 2026-08-31: SYSGEN and EDIT
   downgraded verified->implemented (their tests are plain functional
   self-tests, not oracles); CONVERT/FDL note refreshed.
 last_reviewed: 2026-08-31
@@ -94,11 +94,11 @@ items:
 
   - id: utilities$sort
     kind: utility
-    status: partial
-    authenticity: facade-risk
+    status: implemented
+    authenticity: real
     vms: "SORT — record sort utility with /KEY=(position,size,datatype)"
     evidence: src/vmsdcl/dcl_cmd_misc.c
-    notes: "Whole-line qsort only; no /KEY field-based sort. No companion MERGE utility."
+    notes: "SORT/KEY=(POSITION:n,SIZE:m[,DESCENDING]) sorts on the [pos,size] field, not the whole line; /KEY is a declared CDU_VT_LIST qualifier and is no longer silently ignored (vms-e76). /REVERSE and whole-line (no /KEY) unchanged. Follow-ups (documented gaps, not facades): secondary keys (multiple /KEY tie-breaking) use the first key only, and MERGE is a separate absent utility."
 
   - id: utilities$differences
     kind: utility

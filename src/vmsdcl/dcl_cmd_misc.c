@@ -189,6 +189,70 @@ static int sort_cmp_desc(const void *a, const void *b)
 }
 
 /*
+ * SORT /KEY=(POSITION:n,SIZE:m) field-based sort (vms-e76). qsort's comparator
+ * takes no context, so the parsed key spec lives in these file-scope statics for
+ * the duration of the single-threaded SORT command. POSITION is the 1-based
+ * VMS column; the sort compares only the [pos,size] field, not the whole line.
+ */
+static int sort_key_pos;      /* 1-based start column                          */
+static int sort_key_size;     /* field width in bytes                          */
+static int sort_key_reverse;  /* 1 => descending                              */
+
+/* Copy the key field [pos-1 .. pos-1+size) of `line` into buf (NUL-terminated,
+ * capped), stopping at end-of-line. A short line yields a short/empty field. */
+static void sort_key_field(const char *line, char *buf, size_t bufsz)
+{
+    size_t start = (size_t)(sort_key_pos > 0 ? sort_key_pos - 1 : 0);
+    /* Length up to end-of-line, computed without strcspn (not in the VMS-native
+     * DECC$SHR symbol vector -- vms-61f/vms-e76). */
+    size_t linelen = 0;
+    while (line[linelen] && line[linelen] != '\n' && line[linelen] != '\r')
+        linelen++;
+    size_t n = 0;
+    for (size_t i = start; i < linelen && (int)n < sort_key_size && n < bufsz - 1; i++)
+        buf[n++] = line[i];
+    buf[n] = '\0';
+}
+
+static int sort_cmp_key(const void *a, const void *b)
+{
+    char ka[256], kb[256];
+    sort_key_field(*(const char **)a, ka, sizeof(ka));
+    sort_key_field(*(const char **)b, kb, sizeof(kb));
+    int c = strcasecmp(ka, kb);
+    return sort_key_reverse ? -c : c;
+}
+
+/* Read the first integer that follows keyword `kw` in the upper-cased string
+ * `up` (so "POSITION:5", "POS=5" and "POSITION 5" all yield 5). 0 if absent. */
+static int sort_num_after(const char *up, const char *kw)
+{
+    const char *q = strstr(up, kw);
+    if (!q) return 0;
+    q += strlen(kw);
+    while (*q && (*q < '0' || *q > '9')) q++;
+    return atoi(q);
+}
+
+/* Parse a /KEY qualifier value ("(POSITION:n,SIZE:m[,DESCENDING])", parens and
+ * spacing optional) into pos/size/desc. Returns 1 if a usable (pos,size) was
+ * found. */
+static int sort_parse_key(const char *val, int *pos, int *size, int *desc)
+{
+    char up[256];
+    size_t i;
+    *pos = 0; *size = 0; *desc = 0;
+    if (!val) return 0;
+    for (i = 0; val[i] && i < sizeof(up) - 1; i++)
+        up[i] = (char)toupper((unsigned char)val[i]);
+    up[i] = '\0';
+    *pos  = sort_num_after(up, "POS");   /* POSITION or POS */
+    *size = sort_num_after(up, "SIZE");
+    *desc = (strstr(up, "DESC") != NULL);
+    return (*pos > 0 && *size > 0);
+}
+
+/*
  * SORT - Sort a file.
  * Format: SORT input-file output-file
  * Reads the input file line by line, sorts, writes to output.
@@ -246,11 +310,20 @@ int cmd_sort(struct dcl_command *cmd)
     }
     fclose(fp);
 
-    /* Sort: /REVERSE reverses, default ascending case-insensitive */
+    /* Sort: /KEY=(POSITION:n,SIZE:m[,DESCENDING]) sorts on the [pos,size] field;
+     * otherwise the whole line. /REVERSE flips the order (XORed with a key's own
+     * DESCENDING). vms-e76: previously /KEY was accepted but ignored -- the sort
+     * was always whole-line, so a keyed SORT silently produced wrong output. */
     int reverse = dcl_has_qualifier(cmd, "REVERSE");
+    const char *key_val = dcl_qualifier_value(cmd, "KEY");
+    int kpos = 0, ksize = 0, kdesc = 0;
 
-    /* Sort using qsort with case-insensitive comparison */
-    if (!reverse) {
+    if (key_val && sort_parse_key(key_val, &kpos, &ksize, &kdesc)) {
+        sort_key_pos = kpos;
+        sort_key_size = ksize;
+        sort_key_reverse = (reverse ^ kdesc);
+        qsort(lines, line_count, sizeof(char *), sort_cmp_key);
+    } else if (!reverse) {
         qsort(lines, line_count, sizeof(char *), sort_cmp_asc);
     } else {
         qsort(lines, line_count, sizeof(char *), sort_cmp_desc);

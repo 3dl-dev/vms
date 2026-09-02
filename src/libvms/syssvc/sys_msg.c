@@ -21,7 +21,10 @@
  *     absent from that array yields "unknown status code" rather than a
  *     lookup failure the caller can act on.
  * OVMX-USERSPACE: sys$putmsg (vms-916) -- formats from the same compiled-in
- *     table and writes to the caller's own output; facnam is discarded.
+ *     table and writes to the caller's own output; the facnam facility-name
+ *     override is honored by rewriting the %FACILITY token of the formatted
+ *     message (vms-7a2). (OVMX messages carry no FAO directives, so the FAO
+ *     argument list has nothing to substitute -- honest, not a facade.)
  *
  * vms-916 is the message facility's item -- "real idents, no invented ones",
  * whose done-condition is an audit of every emittable ident against the oracle.
@@ -34,6 +37,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
 #include "starlet.h"
 #include "msgdef.h"
 
@@ -188,8 +192,6 @@ uint32_t sys$putmsg(const uint32_t *msgvec,
                     uint32_t (*actrtn)(struct dsc$descriptor_s *, uint32_t),
                     const struct dsc$descriptor_s *facnam,
                     uint32_t actprm) {
-    (void)facnam;  /* TODO: facility name override */
-
     if (!msgvec) return SS$_BADPARAM;
 
     uint32_t arg_count = msgvec[0];
@@ -197,9 +199,33 @@ uint32_t sys$putmsg(const uint32_t *msgvec,
 
     uint32_t msgid = msgvec[1];
 
-    /* Format the message */
+    /* Format the message: "%<FACILITY>-<severity>-<IDENT>, <text>". */
     char buf[512];
     vms_status_string(msgid, buf, sizeof(buf));
+
+    /* Facility-name override (VMS $PUTMSG facnam): replace the %FACILITY token
+     * of the formatted message with the caller-supplied name -- e.g.
+     * "%SYSTEM-F-ABORT, ..." with facnam="MYAPP" becomes "%MYAPP-F-ABORT, ...".
+     * Previously facnam was silently discarded, so a caller's override never
+     * took effect while $PUTMSG still reported success (vms-7a2). */
+    if (facnam && facnam->dsc$a_pointer && facnam->dsc$w_length > 0 &&
+        buf[0] == '%') {
+        const char *dash = strchr(buf + 1, '-');
+        if (dash) {
+            char fac[32];
+            uint16_t fl = facnam->dsc$w_length;
+            if (fl > (uint16_t)(sizeof(fac) - 1)) fl = (uint16_t)(sizeof(fac) - 1);
+            memcpy(fac, facnam->dsc$a_pointer, fl);
+            fac[fl] = '\0';
+            /* VMS facility names are upper case. */
+            for (char *p = fac; *p; p++)
+                *p = (char)toupper((unsigned char)*p);
+            char rebuilt[512];
+            snprintf(rebuilt, sizeof(rebuilt), "%%%s%s", fac, dash);
+            strncpy(buf, rebuilt, sizeof(buf) - 1);
+            buf[sizeof(buf) - 1] = '\0';
+        }
+    }
 
     if (actrtn) {
         /* Call action routine with formatted message */

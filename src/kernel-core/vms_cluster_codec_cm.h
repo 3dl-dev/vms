@@ -480,6 +480,172 @@ vms_codec_status_t vms_cm_barrier_build(const struct vms_cm_link *l,
 					uint8_t *out_frame, uint32_t cap,
 					uint32_t *written);
 
+/* ------------------------------------------------------------------ *
+ * sec 5b  THE COORDINATOR'S ORIGINATIONS (FC-P3.12)
+ *
+ * Everything in sec 5 above ANSWERS somebody. A transition coordinator has to
+ * SPEAK FIRST, and these five builders are the only way it may: the connection
+ * manager never touches a body offset (design SS3.9 rule 2 -- two crashes came
+ * from body[N] arithmetic in orchestration code).
+ *
+ * THE RULE EVERY ONE OF THEM OBEYS. Write ONLY fields whose PLACEMENT is
+ * grounded in the spec, from values the caller read out of real executive
+ * state; leave every other byte an EXPLICIT ZERO. Never a captured template,
+ * never a mirror of an inbound frame, never a plausible-looking constant. The
+ * precedent is vms_cm_barrier_build's "THE ZERO TAIL IS GROUNDED, NOT
+ * LAZINESS" note above, and spec sec 4(p) states the rule outright: "An
+ * implementation should send zeros; do not reproduce another implementation's
+ * uninitialised memory."
+ *
+ * WHAT IS THEREFORE HONESTLY MISSING, AND SAID OUT LOUD. Davis p. 7-40 says a
+ * Phase 1 proposal also carries the proposed quorum / computed expected votes /
+ * quorum-disk votes / foundation timestamp / founder's SCSSYSTEMID / rebuild
+ * type. NOT ONE of those has been isolated to an offset in any capture (spec
+ * sec 4(j) "RE gaps left in sec 4j"), so this codec cannot place them and does
+ * not pretend to: their bytes go out zero and FC-P3.12 counts the omission.
+ * Filling them at a guessed offset is the failure that bugchecked two real
+ * VAXes; omitting them is honest and recoverable. The offsets are a LAB item,
+ * and when a capture pins one it is a field added here -- not a redesign.
+ *
+ * WHAT IS NOT HERE AT ALL. The op-0x05 lock/resource-rebuild burst, the op-0x06
+ * MEMBERSHIP burst and the ORIGINATING form of the cat-0x02 op-0x0d rebuild
+ * record have no builder, because their PAYLOAD field maps are not grounded --
+ * the membership record's {SCSSYSTEMID, incarnation, CSID} triple (book p. 7-39)
+ * has no isolated offset, and the op-0x0d L1 region body[16:34] is only ever
+ * observed inbound. A builder that zero-filled those would assert an empty
+ * membership list and an empty lock record, which is a fabrication with a
+ * cluster-breaking failure mode -- not an honest omission.
+ * ------------------------------------------------------------------ */
+
+/*
+ * vms_cm_xition_open_build - PHASE 1: the transition-open proposal.
+ *
+ * The OPCODE IS DERIVED FROM THE CLASS, never passed in, because sec 4(r)'s
+ * census pairs them with zero residuals and a mismatch is not representable:
+ *
+ *   class 0x02 ADD     -> op 0x09, tag 0x0240, and it CARRIES the nodemap
+ *   class 0x03 REMOVE  -> op 0x08, tag 0x0340, NO nodemap (sec 4(p))
+ *   class 0x04 DEPART  -> op 0x0d, tag 0x0440, NO nodemap
+ *
+ * `bitmap` is the caller's membership nodemap byte and is written to body[55]
+ * ONLY for class 0x02. It must be built from REAL CSBs (bit k = the member
+ * holding CSID index k, sec 4(p), 54/54 opens with zero residuals); this
+ * builder has no way to check that and does not try -- FC-P3.12 owns it.
+ * Passing has_bitmap on a non-ADD class is VMS_CODEC_E_INVAL rather than a
+ * silently-dropped field.
+ */
+vms_codec_status_t vms_cm_xition_open_build(const struct vms_cm_link *l,
+					    const struct vms_cm_envelope *own,
+					    uint8_t tr_class, uint32_t epoch,
+					    uint8_t bitmap, int has_bitmap,
+					    uint8_t *out_frame, uint32_t cap,
+					    uint32_t *written);
+
+/*
+ * vms_cm_go_build - PHASE 2: the barrier GO (op 0x0a), the point of no return.
+ *
+ * body[16:18] = (class << 8) | 0x60, i.e. the invariant 0x0260 / 0x0360 /
+ * 0x0460 tags (sec 4(r)); epoch at body[12:16].
+ *
+ * txn IS FORCED TO ZERO. Sec 4(p): "Notifications carry txn=0 and are NEVER
+ * answered" -- op 0x0a and op 0x0c get no response of any kind, so there is
+ * nothing to correlate and a nonzero txn would invite one. The caller's own
+ * `own->txn` is deliberately ignored here; `own->send_msg`/`ack_msg`/`token`
+ * are still taken from the connection manager's real counters.
+ */
+vms_codec_status_t vms_cm_go_build(const struct vms_cm_link *l,
+				   const struct vms_cm_envelope *own,
+				   uint8_t tr_class, uint32_t epoch,
+				   uint8_t *out_frame, uint32_t cap,
+				   uint32_t *written);
+
+/*
+ * vms_cm_release_build - the coordinator's op-0x0c release of barrier step N.
+ *
+ * The exact mirror of vms_cm_barrier_build's op 0x0b: epoch at body[12:16],
+ * step as an LE u32 at body[16:20] (which ALIASES the role/class byte pair, so
+ * no role tag is written), txn forced to 0 as a notification. Sec 4(p):
+ * "0x0c#12 is byte-identical to earlier releases apart from its index."
+ *
+ * `step` must be >= 1. The 12-step LAW belongs to the FSM, not here: this
+ * builder will honestly emit step 13 if asked, so a regression shows up in
+ * FC-P3.12's own instrumented counter instead of being silently clamped.
+ */
+vms_codec_status_t vms_cm_release_build(const struct vms_cm_link *l,
+					const struct vms_cm_envelope *own,
+					uint32_t epoch, uint32_t step,
+					uint8_t *out_frame, uint32_t cap,
+					uint32_t *written);
+
+/*
+ * vms_cm_relay_build - the coordinator's op-0x12 RELAY to the other members.
+ *
+ * Sec 4(O.31), decoded from a real-VAX readmission: the relay sits BETWEEN the
+ * joiner's op 0x02 and the coordinator's op 0x03, and it is the commit gate --
+ * "the member does NOT commit the returner until it has relayed the join to the
+ * other member and heard back" (the Rule of Total Connectivity, book p. 7-39).
+ *
+ * GROUNDED here: category 0x01 / opcode 0x12, the role slot 0x10 at body[16]
+ * (sec 4(r)'s census), the transition class at body[17] and the epoch at
+ * body[12:16] -- the last two because the RESPONSE recipe overwrites body[17]
+ * with the responder's own class and copies body[12:16] to body[20:24], which
+ * it could not do unless the request carried them there.
+ *
+ * NOT GROUNDED, and therefore ZERO: which system is being relayed. No capture
+ * isolates a subject identity in this body. FC-P3.12 counts every relay it
+ * sends with the subject omitted, so the gap is visible in the diagnostics
+ * rather than papered over with a guessed offset.
+ */
+vms_codec_status_t vms_cm_relay_build(const struct vms_cm_link *l,
+				      const struct vms_cm_envelope *own,
+				      uint8_t tr_class, uint32_t epoch,
+				      uint8_t *out_frame, uint32_t cap,
+				      uint32_t *written);
+
+/*
+ * vms_cm_commit_build - the coordinator's op-0x03 membership COMMIT request.
+ *
+ * Sec 4(o) step 6: "M->J cat 0x01 op 0x03 membership COMMIT request
+ * (txn, cksum)" -- the message IS its transaction envelope; role slot 0x20 at
+ * body[16] (sec 4(r)), class at body[17], epoch at body[12:16]. Everything
+ * else zero. The subject is the peer this frame is addressed to, so unlike the
+ * relay there is no missing identity here.
+ */
+vms_codec_status_t vms_cm_commit_build(const struct vms_cm_link *l,
+				       const struct vms_cm_envelope *own,
+				       uint8_t tr_class, uint32_t epoch,
+				       uint8_t *out_frame, uint32_t cap,
+				       uint32_t *written);
+
+/*
+ * vms_cm_step_ack_build - the coordinator's 0x81/0x0b acknowledgement of one
+ * member's barrier step.
+ *
+ * Sec 4(p)'s barrier table: "M->J 0x81 0x0b -- the coordinator's ack, NOT the
+ * release". A participant that never got it would keep retransmitting its step;
+ * a participant that mistook it for the release would run ahead of a barrier
+ * whose entire purpose is that nobody advances until everybody has reported.
+ *
+ * THE RECIPE, and the one place two grounded readings disagree. Verbatim body
+ * echo + body[8] |= 0x80 + body[16] = 0x10. That last byte is sec 4(r)'s role
+ * census speaking directly: role 0x10 covers "op 0x12 AND THE COORDINATOR'S
+ * 0x81/0x0b", measured over 26 captures "with zero residuals". On the REQUEST
+ * body[16:20] is the LE u32 step index 1..12, so the response is overwriting it
+ * with the role slot -- the two readings of that offset cannot both hold, and
+ * this builder follows the MEASUREMENT rather than the inference. It is safe to
+ * do so: the ack is correlated by its transaction and token, and neither a real
+ * member (sec 4(p): it is "not the release") nor OVMX's own participant FSM
+ * reads a step index out of it. Sec 4(r) does NOT list op 0x0b in its response-
+ * recipe table, so body[18] is left ECHOED, not forced -- the same treatment
+ * op 0x0f gets there.
+ */
+vms_codec_status_t vms_cm_step_ack_build(const struct vms_cm_link *l,
+					 const uint8_t *req_frame,
+					 uint32_t req_len,
+					 const struct vms_cm_envelope *own,
+					 uint8_t *out_frame, uint32_t cap,
+					 uint32_t *written);
+
 /*
  * vms_cm_ack_build - a category-0x04 SYSAP acknowledgement (sec 4(u)):
  * "prompt, opportunistic, cumulative, and never keyed to an opcode". No
@@ -501,7 +667,11 @@ vms_codec_status_t vms_cm_ack_build(const struct vms_cm_link *l,
 enum vms_cm_recipe {
 	VMS_CM_RECIPE_ECHO = 1,
 	VMS_CM_RECIPE_CLOSE,
-	VMS_CM_RECIPE_DLM_OP0D
+	VMS_CM_RECIPE_DLM_OP0D,
+	/* The coordinator's 0x81/0x0b barrier-step ack (sec 5b above). A recipe
+	 * of its own rather than an ECHO row, because it takes the role-slot
+	 * mutation at body[16] and NOT the ECHO family's body[18] marker. */
+	VMS_CM_RECIPE_STEP_ACK
 };
 
 /* The grounded rows, exposed as a table the caller (a later FSM item, or

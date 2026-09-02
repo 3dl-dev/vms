@@ -1087,6 +1087,26 @@ INFERRED "highest node number" (spec §4(p)). Recipe: on the 3-node clone,
 vary SCSSYSTEMID ordering and join order, kill members, observe who drives
 the barrier. Until grounded OVMX never self-elects (§3.7).
 
+> **CORRECTED, and IMPLEMENTED, by FC-P3.12** (2026-09-02). The
+> "highest node number" reading is superseded by the published description —
+> `docs/design-cluster-book-grounding.md` **D7**, Davis pp. 7-37/7-38, 7-32,
+> 7-2. There is no ordering rule to compute: **for a JOIN the JOINER picks**
+> (protocol level → ECO level → the CSB nearest the CLUB queue tail) and asks
+> exactly one peer, so *receiving the `op 0x02` IS the selection*; **for a
+> departure it is the first detector** (p. 7-2), which arrives as FC-P3.6's
+> `CNXMAN_CSB_ACT_PROPOSE_TRANSITION`. The **coordinator lock** (p. 7-32) then
+> gates both. Its wire form is *not* grounded in any capture, so OVMX cannot
+> ask for it and does not invent a frame: it implements the lock's two
+> observable consequences — refuse to drive while another CM's transition is
+> open (p. 7-30, real CLUB state), and let the Phase 1 proposal be the grant
+> (p. 7-41: a member committed elsewhere does not acknowledge, so no GO is ever
+> sent). `src/kernel-core/vms_cnxman_coord_fsm.h` carries the full reasoning;
+> the predicate contains no SCSSYSTEMID comparison and no node-number
+> arithmetic, so §3.7's "never self-elects" holds structurally.
+>
+> The lab recipe above is still worth running — but as FC-P8.3's *confirmation*
+> of protocol/ECO/queue order, not as the source of the predicate.
+
 ### 5.6 NetBSD LAN binding — resolved by design; a P0 spike picks the rx hook
 
 The binding is specified (§3.2.1): rx by link-layer `pfil(9)` if the rail's

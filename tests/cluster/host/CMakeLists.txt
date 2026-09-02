@@ -95,7 +95,9 @@ add_library(cluster_host_cnxman STATIC
     ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_recnx_fsm.c
     ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_quorum.c   # FC-P3.7
     ${OVMX_CLUSTER_CORE_DIR}/vms_cluster_api.c      # FC-P3.7
+    ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_phase2.c    # FC-P3.5 + FC-P3.12
     ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_barrier_fsm.c
+    ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_coord_fsm.c # FC-P3.12
 )
 target_include_directories(cluster_host_cnxman PUBLIC ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_cnxman PUBLIC OVMX_CLUSTER_HOST)
@@ -121,6 +123,7 @@ endfunction()
 cluster_host_cnxman_test(test_cnxman_csb     test_cnxman_csb.c)
 cluster_host_cnxman_test(test_cnxman_recnx   test_cnxman_recnx.c)
 cluster_host_cnxman_test(test_cnxman_barrier test_cnxman_barrier.c)  # FC-P3.5
+cluster_host_cnxman_test(test_cnxman_coord   test_cnxman_coord.c)    # FC-P3.12
 cluster_host_test(test_codec_scs        test_codec_scs.c)
 cluster_host_test(test_codec_cm         test_codec_cm.c)
 cluster_host_test(test_codec_mscp       test_codec_mscp.c)
@@ -226,7 +229,9 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_cluster_fork.c
     hdr_alone_vms_cnxman_quorum.c     # FC-P3.7
     hdr_alone_vms_cluster_api.c       # FC-P3.7
+    hdr_alone_vms_cnxman_phase2.c     # FC-P3.5 + FC-P3.12
     hdr_alone_vms_cnxman_barrier_fsm.c # FC-P3.5
+    hdr_alone_vms_cnxman_coord_fsm.c  # FC-P3.12
     hdr_alone_vms_pe_fsm.c            # FC-P0.8
 )
 target_include_directories(cluster_host_hdr_alone PRIVATE ${OVMX_CLUSTER_CORE_DIR})

@@ -35,6 +35,7 @@
 #include "vms_cluster.h"
 #include "vms_cnxman.h"
 #include "vms_cnxman_csb.h"
+#include "vms_cnxman_phase2.h"
 #include "vms_cnxman_barrier_fsm.h"
 #include "vms_cluster_codec_cm.h"
 
@@ -48,12 +49,9 @@ static void barrier_log(const struct cnxman_barrier *b, const char *msg)
 		b->ops->log(b->ops->ctx, msg);
 }
 
-static uint32_t barrier_now(const struct cnxman_barrier *b)
-{
-	if (b->ops != NULL && b->ops->now_ms != NULL)
-		return b->ops->now_ms(b->ops->ctx);
-	return 0u;
-}
+/* The injected clock is read by cnxman_phase2_commit() (which stamps
+ * club->last_transition_ms) and by nothing else in this file: a participant
+ * never times a barrier step out (spec SS4(p)). */
 
 /* This TU calls no library (a pure TU builds on the host too, where the
  * substrate's memset is not in scope). */
@@ -66,16 +64,9 @@ static void barrier_bzero(void *p, uint32_t n)
 		o[i] = 0u;
 }
 
-static uint32_t barrier_popcount8(uint8_t v)
-{
-	uint32_t n = 0u;
-
-	while (v != 0u) {
-		n += (uint32_t)(v & 1u);
-		v = (uint8_t)(v >> 1);
-	}
-	return n;
-}
+/* The bitmap popcount is cnxman_phase2_popcount8(): the participant counting
+ * the bits it received and the coordinator counting the bits it asserts must
+ * get the same answer, so there is one implementation (vms_cnxman_phase2.h). */
 
 /* ==========================================================================
  * One dispatched message
@@ -388,7 +379,7 @@ static void barrier_take_bitmap(struct cnxman_barrier *b,
 
 	b->bitmap_valid = 1u;
 	b->bitmap = open->bitmap;
-	b->bitmap_popcount = (uint8_t)barrier_popcount8(open->bitmap);
+	b->bitmap_popcount = (uint8_t)cnxman_phase2_popcount8(open->bitmap);
 	barrier_record_slots(b, open->bitmap);
 	barrier_check_bitmap_span(b, m);
 
@@ -410,140 +401,35 @@ static void barrier_take_bitmap(struct cnxman_barrier *b,
  * PHASE 2 -- p. 7-42, and the whole point of this file
  *
  * "At this point, the state transition is committed; it passes beyond the
- * 'point of no return'." The tasks below run HERE, before the synchronised
+ * 'point of no return'." The four tasks run HERE, before the synchronised
  * rebuild, which is what makes the member count independent of the DLM.
- * ========================================================================== */
-
-/* Is CSB `csb` in the coordinator's nodemap? Only a CSB whose CSID this node
- * has actually LEARNED can be answered; nodemap bit = CSID low 16 bits
- * (p. 7-34 fn, p. 7-25). An unlearned CSID answers "unknown", never "no". */
-static int barrier_csb_in_nodemap(const struct cnxman_barrier *b,
-				  const struct vms_csb *csb, int *known)
-{
-	uint32_t slot;
-
-	*known = 0;
-	if (!csb->csid_valid)
-		return 0;
-	slot = (uint32_t)(csb->csid & 0xffffu);
-	if (slot >= 8u)
-		return 0;   /* beyond the byte the wire showed us: unknown */
-	*known = 1;
-	return (b->bitmap & (uint8_t)(1u << slot)) != 0u;
-}
-
-/*
- * p. 7-42 task 1: "The nodemap in the CLUB is copied into each CSB
- * corresponding to a system selected to be in the cluster", and p. 7-49's
- * SELECTED flags are what the member count is then taken from.
  *
- * Returns the number of nodemap bits this node could MATCH to a CSB. If that is
- * zero the caller leaves membership alone: rewriting selection from a map we
- * cannot read would commit a zero-member cluster, which is a fabrication with a
- * catastrophic failure mode.
- */
-static uint32_t barrier_apply_nodemap(struct cnxman_barrier *b)
-{
-	struct vms_club *club = &b->cl->club;
-	uint32_t i, matched = 0u;
-
-	for (i = 0; i < club->n_csb; i++) {
-		struct vms_csb *csb = &club->csb[i];
-		int known = 0, in_map;
-
-		if (!csb->in_use)
-			continue;
-		in_map = barrier_csb_in_nodemap(b, csb, &known);
-		if (!known)
-			continue;
-		matched++;
-		if (in_map)
-			cnxman_csb_set_flags(csb, (uint16_t)(VMS_CSB_F_SELECTED |
-							     VMS_CSB_F_MEMBER));
-		else
-			cnxman_csb_clear_flags(csb,
-					       (uint16_t)(VMS_CSB_F_SELECTED |
-							  VMS_CSB_F_MEMBER));
-	}
-	if (matched < b->bitmap_popcount)
-		b->nodemap_unmapped += (uint32_t)b->bitmap_popcount - matched;
-	return matched;
-}
-
-/*
- * p. 7-42 task 2: "Quorum data is updated in the CLUB to reflect that what has
- * been proposed has now been accepted", by copying the PROPOSED cells to the
- * EFFECTIVE ones. FC-P3.7 owns the arithmetic that fills the proposed cells; if
- * it has not run, this copies NOTHING -- a zero quorum asserted here would be a
- * fabricated quorum, which is the one class of value INV-6 names outright.
- */
-static void barrier_commit_quorum(struct vms_club *club)
-{
-	if (!club->proposed_valid)
-		return;
-	club->cevotes = club->proposed_cevotes;
-	club->quorum = club->proposed_quorum;
-	club->qdisk_votes = club->proposed_qdisk_votes;
-	club->proposed_valid = 0u;   /* p. 7-41: ignored outside a transition */
-}
-
-/*
- * p. 7-42 task 3, THE COUNT: "The total number of members (excluding the quorum
- * disk) is stored in the CLUB. This is simply the total number of CSBs whose
- * SELECTED flags are set." Taken from the CSBs, not from the wire's popcount --
- * and the two are compared, because a disagreement means we could not read part
- * of the nodemap and is exactly the symptom a width bug produces.
- */
-static void barrier_commit_count(struct cnxman_barrier *b)
-{
-	struct vms_club *club = &b->cl->club;
-	uint32_t members = cnxman_club_recount_members(club);
-
-	if (b->bitmap_valid && members != (uint32_t)b->bitmap_popcount) {
-		b->count_mismatch++;
-		barrier_log(b, "%CNXMAN, committed member count differs from "
-			       "the coordinator's nodemap");
-	}
-	if (b->bitmap_valid && members > (uint32_t)b->bitmap_popcount)
-		b->bitmap_short++;
-	if (members > CNXMAN_BARRIER_M_GROUNDED)
-		b->m_above_grounded++;
-}
-
-/*
- * p. 7-42 task 4: "VAX_B sets the CLUSTER flag in its own CLUB, indicating that
- * it is a member of a cluster." OVMX's CLUB has no such flag; the executive's
- * equivalent is the node state SHOW CLUSTER and $GETSYI project, and it is set
- * only from the LOCAL CSB actually carrying MEMBER -- never from "a transition
- * happened".
- */
-static void barrier_commit_local_membership(struct cnxman_barrier *b)
-{
-	struct vms_csb *local = cnxman_club_local(&b->cl->club);
-
-	if (local == NULL || !cnxman_csb_is_member(local))
-		return;
-	b->cl->state = VMS_CLUSTER_MEMBER;
-	barrier_log(b, "%CNXMAN, this node is a member of the cluster");
-}
+ * THE TASKS THEMSELVES ARE IN vms_cnxman_phase2.c, not here. p. 7-42 lists them
+ * once and EVERY system in the transition runs the same list -- the coordinator
+ * (FC-P3.12) included. Two implementations would be two chances to drift, and a
+ * coordinator whose own count disagreed with the count it just made every member
+ * compute is precisely the fault the instrumentation is there to catch. This
+ * function is the participant's half: fill the input from what the coordinator's
+ * open actually carried, run the shared tasks, fold the deltas into this FSM's
+ * own counters.
+ * ========================================================================== */
 
 static void barrier_commit_phase2(struct cnxman_barrier *b)
 {
-	struct vms_club *club = &b->cl->club;
+	struct cnxman_phase2_in in;
+	struct cnxman_phase2_stats st;
 
-	/* The nodemap only exists on a class-0x02 ADD open (spec SS4(p): a
-	 * class-0x03 removal "has no op 0x09 at all ... and so carries no
-	 * bitmap"). Without one, membership stands as the CSB ladder already
-	 * left it and only the count is recomputed. */
-	if (b->bitmap_valid && barrier_apply_nodemap(b) == 0u)
-		barrier_log(b, "%CNXMAN, no nodemap slot matched a known "
-			       "system; membership left unchanged");
+	in.bitmap = b->bitmap;
+	in.bitmap_valid = b->bitmap_valid;
+	in.bitmap_popcount = b->bitmap_popcount;
+	in.pad = 0u;
 
-	barrier_commit_quorum(club);
-	barrier_commit_count(b);
-	barrier_commit_local_membership(b);
+	(void)cnxman_phase2_commit(b->cl, &in, &st, b->ops);
 
-	club->last_transition_ms = barrier_now(b);
+	b->nodemap_unmapped += st.nodemap_unmapped;
+	b->count_mismatch += st.count_mismatch;
+	b->bitmap_short += st.bitmap_short;
+	b->m_above_grounded += st.m_above_grounded;
 	b->phase2_committed = 1u;
 }
 

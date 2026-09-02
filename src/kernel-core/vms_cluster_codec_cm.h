@@ -101,6 +101,25 @@ extern "C" {
 							    * beyond one byte is
 							    * UNDETERMINED (spec
 							    * sec 4(p)) */
+
+/*
+ * The bitmap NEIGHBOURHOOD, body[52:60] -- the span whose emptiness is the
+ * ONLY published evidence about how wide the membership bitmap really is.
+ *
+ * Spec sec 4(p): "body[52:55] and body[56:60] are all-zero in every specimen,
+ * so the field is certainly WIDER than a byte, but its extent and endianness
+ * are UNDETERMINED -- a BE u32 at body[52:56] fits the data as well as an LE
+ * map based at body[55]. Do not assume 8 slots." One byte holds 8 slots while
+ * the capture library already reaches CSV slot 5, so an implementation that
+ * treats body[55] as the whole field is one member away from silently losing a
+ * participant -- which is why FC-P3.5's barrier FSM reads this span on every
+ * op-0x09 open and INSTRUMENTS a nonzero byte outside body[55] rather than
+ * decoding it. A residual here is the observation that settles the width; it
+ * is never a licence to guess an encoding.
+ */
+#define VMS_OFF_CM_BITMAP_SPAN  (VMS_OFF_SYSAP_BODY + 52) /* abs 124..131      */
+#define VMS_CM_BITMAP_SPAN_LEN  8u   /* body[52:60]                            */
+#define VMS_CM_BITMAP_SPAN_IDX  3u   /* index of body[55] WITHIN the span      */
 #define VMS_OFF_CM_RESP_MARK  (VMS_OFF_SYSAP_BODY + 18)  /* abs 90, 0x81
 							    * response marker  */
 #define VMS_OFF_CM_RELAY_EPOCH (VMS_OFF_SYSAP_BODY + 20) /* abs 92, LE u32 --
@@ -258,6 +277,25 @@ vms_codec_status_t vms_cm_open_parse(const uint8_t *frame, uint32_t len,
 				     const struct vms_frame_info *fi,
 				     struct vms_cm_open *out);
 
+/*
+ * vms_cm_open_bitmap_span - copy body[52:60] out of an op-0x09 transition
+ * open, for the width instrumentation described at VMS_OFF_CM_BITMAP_SPAN.
+ *
+ * Deliberately returns BYTES, not a decoded value: the field's extent and
+ * endianness are UNDETERMINED (spec sec 4(p)) and a decoder here would be a
+ * guess with a cluster-breaking failure mode. The caller's job is to observe
+ * that every byte but index VMS_CM_BITMAP_SPAN_IDX is zero -- as it is in
+ * 54 of 54 library opens -- and to COUNT it when one is not.
+ *
+ * VMS_CODEC_E_CLASS unless this really is a cat-0x01 op-0x09 open: op 0x08
+ * (class-0x03 REMOVE) and cat-0x01 op 0x0d (class-0x04 departure) carry no
+ * bitmap at all, and reading this span from them would report residue as
+ * membership.
+ */
+vms_codec_status_t vms_cm_open_bitmap_span(const uint8_t *frame, uint32_t len,
+					   const struct vms_frame_info *fi,
+					   uint8_t *out /* [VMS_CM_BITMAP_SPAN_LEN] */);
+
 /* Barrier step (op 0x0b joiner-initiated) / release (op 0x0c, coordinator,
  * never answered) -- body[16:20] is a plain LE u32 step index here, NOT
  * the role+class byte pair (sec 4(p): "step N (LE u32) at body[16:20]"). */
@@ -381,6 +419,66 @@ vms_codec_status_t vms_cm_dlm_op0d_response_build(const struct vms_cm_link *l,
 						  const struct vms_cm_envelope *own,
 						  uint8_t *out_frame, uint32_t cap,
 						  uint32_t *written);
+
+/*
+ * vms_cm_body_build - wrap a body somebody else produced.
+ *
+ * The ONE case this exists for: an inbound cat-0x02 request that the LOCK
+ * MANAGER answered from real lock state (vms_dlm_scs.h RULE A -- the DLM fills
+ * a reply buffer and never sends). The connection manager then has 132 bytes of
+ * genuine reply and needs the link laid down under them. This copies the body
+ * verbatim and writes nothing into it: it is a wrapper, never a recipe, and it
+ * asserts nothing about the body's contents. `body_len` must be exactly
+ * VMS_CM_BODY_LEN -- a short body would leave the tail as whatever the caller's
+ * buffer held.
+ */
+vms_codec_status_t vms_cm_body_build(const struct vms_cm_link *l,
+				     const uint8_t *body, uint32_t body_len,
+				     uint8_t *out_frame, uint32_t cap,
+				     uint32_t *written);
+
+/*
+ * vms_cm_barrier_build - ORIGINATE one barrier step: the participant's
+ * cat-0x01 op-0x0b request for step `step` of the transition at `epoch`
+ * (spec sec 4(p): "epoch at body[12:16], step N (LE u32) at body[16:20]").
+ *
+ * This is the one CM message this codec ORIGINATES rather than answers, so
+ * every asserted byte has to name where it comes from:
+ *
+ *   body[0:2]/[2:4]  the CM's own send/ack message numbers   -- caller (`own`)
+ *   body[4:6]/[6:8]  txn and the correlation token           -- caller (`own`)
+ *   body[8]/[9]      cat 0x01 / op 0x0b                      -- this frame IS one
+ *   body[12:16]      the epoch, as the coordinator's open carried it
+ *   body[16:20]      the step, from the FSM's own real step counter
+ *   everything else  EXPLICIT ZERO
+ *
+ * THE ZERO TAIL IS GROUNDED, NOT LAZINESS. body[20:] varies per joiner in the
+ * capture library (`SCS$DIRECTORY`, `SCS$DIR_LOOKUP`, `VMS$DISK_CL_DRVRV5.0`,
+ * and in af2-established-rejoin an ENTIRELY ZERO body) and the coordinator's
+ * behaviour is identical across all of them -- one real VMS joiner sends a
+ * zero tail and is admitted. It is acceptable residue, not a gate, and spec
+ * sec 4(p) is explicit: "An implementation should send zeros; do not reproduce
+ * another implementation's uninitialised memory."
+ *
+ * THE TOKEN IS NOT THE STEP ORDINAL. It is `own->token`, from the connection
+ * manager's own continuous per-node counter, because a real node's tokens run
+ * as one unbroken sequence across the barrier steps and anything interleaved
+ * with them. A prior implementation used the step ordinal as a placeholder,
+ * collided with its own step-1 value, and the coordinator dropped the frame --
+ * the barrier then stalled and regressed. This builder cannot invent one:
+ * there is no code path here that computes a token.
+ *
+ * `step` must be >= 1 (spec sec 4(p): "indices 1...12, no gaps"); step 0 is
+ * VMS_CODEC_E_INVAL. The 12-step LAW is the FSM's (CNXMAN_BARRIER_STEPS), not
+ * the codec's: this builder will honestly emit step 13 if an FSM asks for it,
+ * so a step-count regression shows up in the FSM's own instrumented mismatch
+ * counter rather than being silently clamped here.
+ */
+vms_codec_status_t vms_cm_barrier_build(const struct vms_cm_link *l,
+					const struct vms_cm_envelope *own,
+					uint32_t epoch, uint32_t step,
+					uint8_t *out_frame, uint32_t cap,
+					uint32_t *written);
 
 /*
  * vms_cm_ack_build - a category-0x04 SYSAP acknowledgement (sec 4(u)):

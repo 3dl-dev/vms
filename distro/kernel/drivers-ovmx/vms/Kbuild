@@ -32,8 +32,11 @@ vms-y := vms_module.o \
          vms_lock.o \
          vms_mbx.o \
          vms_pe.o \
+         vms_cluster_codec.o \
+         vms_cluster_codec_cm.o \
          vms_cnxman_csb.o \
          vms_cnxman_recnx_fsm.o \
+         vms_cnxman_barrier_fsm.o \
          vms_proctab.o \
          vmsfs_acp.o \
          ods2_reader.o \
@@ -52,6 +55,10 @@ vms-y := vms_module.o \
 # FC-P3.6: vms_cnxman_csb.o (the CLUB/CSB model + the CSB ten-state ladder) and
 # vms_cnxman_recnx_fsm.o (the RECNXINTERVAL/TIMVCFAIL reconnect loop) join on the
 # same terms, and for the same two-object-lists reason.
+# FC-P3.5: vms_cnxman_barrier_fsm.o (the state-transition barrier, participant
+# side) plus the two codec objects it reads and builds every frame through --
+# vms_cluster_codec.o (FC-P0.6) and vms_cluster_codec_cm.o (FC-P3.1). Same
+# two-object-lists rule: all three are in src/kernel/Makefile's vms-y.
 # FC-P0.1: vms_pe.o is the executive-resident VMScluster stack's LAN port layer.
 # It mirrors src/kernel/Makefile's vms-y (the two-object-lists rule: an executive
 # core .c missing here builds standalone and then fails modpost in the bootable

@@ -53,8 +53,11 @@ SRCS=		vms_netbsd.c \
 		vms_lnm.c \
 		vms_devtab.c \
 		vms_pe.c \
+		vms_cluster_codec.c \
+		vms_cluster_codec_cm.c \
 		vms_cnxman_csb.c \
 		vms_cnxman_recnx_fsm.c \
+		vms_cnxman_barrier_fsm.c \
 		vmsfs_acp.c \
 		ods2_reader.c \
 		ods2_edit.c \
@@ -77,6 +80,13 @@ SRCS=		vms_netbsd.c \
 # RECNXINTERVAL/TIMVCFAIL reconnect loop and the last-gasp decision). Both are
 # PURE -- they reach nothing but their injected ops -- so there is no NetBSD half
 # to write and no reason for them to arrive here later than on Linux.
+#
+# FC-P3.5 joins on exactly the same terms: ../kernel-core/vms_cnxman_barrier_fsm.c
+# (the cluster state-transition barrier, participant side) and the two codec TUs
+# it reads and builds every frame through -- ../kernel-core/vms_cluster_codec.c
+# (FC-P0.6) and ../kernel-core/vms_cluster_codec_cm.c (FC-P3.1). All three are
+# pure and take their fixed-width types from vms_wire_types.h, whose NetBSD
+# branch is <sys/types.h> + <sys/stdint.h>; there is no NetBSD half to write.
 #
 # vms-d5d: vmsfs_acp.c (the Files-11 ODS-2 ACP: channel + IO$_ACCESS/READVBLK/
 # WRITEVBLK/$MOUNT handlers) + ods2_edit.c (the pure on-disk EDIT helpers its

@@ -77,6 +77,17 @@ obj-m := vms.o
 # cross-compile gates from this commit, and the same two sources are what the
 # host unit tests and the rung-2 simulator link. Their consumer, the connection
 # manager's glue, arrives with FC-P3.8.
+#
+# FC-P3.5 (vms_cnxman_barrier_fsm.o, the state-transition barrier's PARTICIPANT
+# side) joins on the same terms and brings the two codec objects it reads and
+# builds its frames through: vms_cluster_codec.o (FC-P0.6, the wire primitives,
+# frame classifier and grounded (sysap,cat,op) allowlist mechanism) and
+# vms_cluster_codec_cm.o (FC-P3.1, the VMS$VAXcluster SYSAP body + its response
+# recipes). A pure FSM that reached the wire by byte offset instead is exactly
+# what produced the two crashes design SS3.9 rule 2 was written after, so the
+# codec is not an optional dependency here. All three are pure, take their
+# fixed-width types from vms_wire_types.h, and are in the NetBSD kmodule's SRCS
+# from the same commit.
 vms-y := vms_module.o \
          ../kernel-core/vms_access.o \
          ../kernel-core/vms_ast.o \
@@ -88,8 +99,11 @@ vms-y := vms_module.o \
          ../kernel-core/vms_lock.o \
          ../kernel-core/vms_mbx.o \
          ../kernel-core/vms_pe.o \
+         ../kernel-core/vms_cluster_codec.o \
+         ../kernel-core/vms_cluster_codec_cm.o \
          ../kernel-core/vms_cnxman_csb.o \
          ../kernel-core/vms_cnxman_recnx_fsm.o \
+         ../kernel-core/vms_cnxman_barrier_fsm.o \
          ../kernel-core/vms_proctab.o \
          ../kernel-core/vmsfs_acp.o \
          ../vmsfs/ods2/ods2_reader.o \

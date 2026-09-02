@@ -463,6 +463,123 @@ static void test_error_paths(void)
 		 "vms_cm_echo_response_build refuses a non-SCA frame");
 }
 
+/* ---- FC-P3.5's three additions: the op-0x0b ORIGINATION, the DLM-body
+ * wrapper, and the bitmap-width span accessor ---------------------------- */
+
+static void test_barrier_build(void)
+{
+	struct vms_cm_link l;
+	struct vms_cm_envelope own;
+	struct vms_frame_info fi;
+	struct vms_cm_barrier parsed;
+	uint8_t built[VMS_CM_FRAME_LEN];
+	uint32_t written = 0, i, nonzero_tail = 0;
+
+	printf("-- vms_cm_barrier_build (op 0x0b, the one CM message this "
+	       "codec ORIGINATES)\n");
+	fill_link(&l);
+	memset(&own, 0, sizeof(own));
+	own.send_msg = 0x0140;
+	own.ack_msg = 0x0220;
+	own.txn = 0x0009;
+	own.token = 0x07f9;   /* the CM's continuous counter, NOT the step */
+
+	memset(built, 0xAA, sizeof(built));
+	ct_check(vms_cm_barrier_build(&l, &own, 0x0e, 5, built, sizeof(built),
+				      &written) == VMS_CODEC_OK, "builds");
+	ct_check_eq_u32(written, VMS_CM_FRAME_LEN, "  wrote a whole frame");
+
+	ct_check(vms_frame_classify(built, written, &fi) == VMS_CODEC_OK,
+		 "  the result classifies as an SCA message");
+	ct_check(vms_cm_barrier_parse(built, written, &fi, &parsed)
+		 == VMS_CODEC_OK, "  and round-trips through the parser");
+	ct_check_eq_u32(parsed.env.category, VMS_CM_CAT_CONFIG, "  cat 0x01");
+	ct_check_eq_u32(parsed.env.opcode, VMS_CM_OP_BARRIER, "  op 0x0b");
+	ct_check_eq_u32(parsed.epoch, 0x0e, "  epoch echoed from the caller");
+	ct_check_eq_u32(parsed.step, 5, "  step 5 at body[16:20]");
+	ct_check_eq_u32(parsed.env.token, 0x07f9,
+			"  and the token is the CALLER's, never the step index");
+
+	/* Spec sec 4(p) + the af2 zero-body joiner: the tail is an explicit
+	 * zero, not another implementation's uninitialised memory. */
+	for (i = VMS_OFF_SYSAP_BODY + 20; i < VMS_CM_FRAME_LEN; i++) {
+		if (built[i] != 0u)
+			nonzero_tail++;
+	}
+	ct_check_eq_u32(nonzero_tail, 0,
+			"  body[20:] is an EXPLICIT ZERO tail");
+
+	ct_check(vms_cm_barrier_build(&l, &own, 0x0e, 0, built, sizeof(built),
+				      &written) == VMS_CODEC_E_INVAL,
+		 "  step 0 is rejected (spec sec 4(p): indices run 1...12)");
+	ct_check(vms_cm_barrier_build(NULL, &own, 0x0e, 1, built, sizeof(built),
+				      &written) == VMS_CODEC_E_INVAL,
+		 "  a NULL link is rejected -- no zero-filled frame");
+}
+
+static void test_body_build(void)
+{
+	struct vms_cm_link l;
+	uint8_t body[VMS_CM_BODY_LEN];
+	uint8_t built[VMS_CM_FRAME_LEN];
+	uint32_t written = 0, i, diffs = 0;
+
+	printf("-- vms_cm_body_build (wrapping a body the LOCK MANAGER made)\n");
+	fill_link(&l);
+	for (i = 0; i < VMS_CM_BODY_LEN; i++)
+		body[i] = (uint8_t)(i * 7u + 3u);
+
+	ct_check(vms_cm_body_build(&l, body, sizeof(body), built, sizeof(built),
+				   &written) == VMS_CODEC_OK, "builds");
+	for (i = 0; i < VMS_CM_BODY_LEN; i++) {
+		if (built[VMS_OFF_SYSAP_BODY + i] != body[i])
+			diffs++;
+	}
+	ct_check_eq_u32(diffs, 0,
+			"  the body is copied VERBATIM -- a wrapper, never a "
+			"recipe");
+	ct_check(vms_cm_body_build(&l, body, VMS_CM_BODY_LEN - 1, built,
+				   sizeof(built), &written) == VMS_CODEC_E_INVAL,
+		 "  a short body is rejected rather than tail-padded with "
+		 "whatever the caller's buffer held");
+}
+
+static void test_open_bitmap_span(void)
+{
+	const struct vms_fixture *add = fixture("cm-open-add-req");
+	const struct vms_fixture *other = fixture("cm-commit-req");
+	struct vms_frame_info fi;
+	uint8_t span[VMS_CM_BITMAP_SPAN_LEN];
+	uint32_t i, residual = 0;
+
+	printf("-- vms_cm_open_bitmap_span (the UNDETERMINED-width evidence)\n");
+	ct_check(add != NULL, "cm-open-add-req fixture present");
+	if (add == NULL)
+		return;
+
+	ct_check(vms_frame_classify(add->bytes, add->wire_len, &fi)
+		 == VMS_CODEC_OK, "classifies");
+	ct_check(vms_cm_open_bitmap_span(add->bytes, add->wire_len, &fi, span)
+		 == VMS_CODEC_OK, "reads the span from an op-0x09 open");
+	ct_check_eq_u32(span[VMS_CM_BITMAP_SPAN_IDX], 0x0e,
+			"  body[55] sits at VMS_CM_BITMAP_SPAN_IDX");
+	for (i = 0; i < VMS_CM_BITMAP_SPAN_LEN; i++) {
+		if (i != VMS_CM_BITMAP_SPAN_IDX && span[i] != 0u)
+			residual++;
+	}
+	ct_check_eq_u32(residual, 0,
+			"  and every other byte of body[52:60] is zero, as in "
+			"all 54 library opens (spec sec 4(p))");
+
+	if (other != NULL) {
+		ct_check(vms_cm_open_bitmap_span(other->bytes, other->wire_len,
+						 &fi, span)
+			 == VMS_CODEC_E_CLASS,
+			 "  refused on an opcode that carries no bitmap -- its "
+			 "residue is not membership");
+	}
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -496,6 +613,10 @@ int main(void)
 	test_params_parse();
 	test_model_parse();
 	test_dlm_rebuild_parse();
+
+	test_barrier_build();      /* FC-P3.5 */
+	test_body_build();         /* FC-P3.5 */
+	test_open_bitmap_span();   /* FC-P3.5 */
 
 	test_error_paths();
 

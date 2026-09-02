@@ -18,16 +18,12 @@
  * OUT OF SCOPE, on purpose. The generic SCS sequenced-message envelope
  * that WRAPS this body (abs 0-71: Ethernet, SCA header, the recv_ack/
  * send_seq/Con.ID machinery) belongs to FC-P1.1 (VC codec) and FC-P2.1
- * (SCS codec), neither of which has landed yet. This file therefore
- * ships `struct vms_cm_link`: a MINIMAL, honestly-scoped stand-in that
- * builds only the fields spec sec 4(d) itself grounds (the SCA header via
- * the already-frozen vms_sca_hdr_build, recv_ack/send_seq, the Con.ID
- * pair, the CM msgtype/format markers) and leaves every other byte of
- * that span an explicit zero -- never an invented mirror or a captured
- * template. A fuller/richer envelope (the observed recv_ack/send_seq
- * mirrors at abs 40/44/48, credit accounting, MTYPE selection) is P1.1/
- * P2.1's job and supersedes vms_cm_link once it lands; nothing here
- * asserts to be that layer.
+ * (SCS codec), neither of which has landed yet, and to the port
+ * (vms_pe.h)/SCS (vms_scs.h) glue that fills it at send time. This file
+ * used to ship a MINIMAL stand-in for that span (`struct vms_cm_link`) and
+ * every recipe below built a full frame through it; FC-P3.15's body-level
+ * conformance retrofit (design sec 3.2.4 ruling E1) demoted that stand-in
+ * to a test-only composer -- see sec 3 below.
  *
  * THE HONESTY RULE (INV-6 + honest-os-identity-broadcast, same discipline
  * as vms_cluster_codec_hello.h). Every field this file can only OBSERVE
@@ -46,6 +42,20 @@
  * the DLM lock-request/grant traffic -- see src/vmsscs/scsd.c cm_response_
  * shape's own comment) are simply ABSENT, which is behaviourally identical
  * to a CONSUME/NONE row: silence, logged by the caller.
+ *
+ * BODY-LEVEL SINCE FC-P3.15 (design sec 3.2.4 ruling E1). Every builder in
+ * sec 5/5b below reads and writes the 132-byte SYSAP BODY ONLY (body[0] ==
+ * abs 72); none of them sees or touches abs [0,72) -- the Ethernet/SCA/VC
+ * span is the port's (vms_pe.h) and the SCS header is SCS's (vms_scs.h).
+ * `struct vms_cm_link` and its builder, which used to lay a stand-in for
+ * that span under every frame this file built, have been DEMOTED to a
+ * test-only full-frame composer (`vms_frame_compose`, tests/cluster/host/) --
+ * production code never calls it. body[0:8] (send/ack/txn/token) is written
+ * by exactly one function, `cnxman_envelope_stamp()` (vms_cnxman_csb.h),
+ * from the destination CSB's real dialogue counters; no builder here takes
+ * an envelope struct or writes those eight bytes -- see each builder's own
+ * doc comment for which half (the codec's echo, or the stamper) owns
+ * body[4:8] on a given recipe.
  */
 #ifndef OVMX_VMS_CLUSTER_CODEC_CM_H
 #define OVMX_VMS_CLUSTER_CODEC_CM_H
@@ -76,7 +86,9 @@ extern "C" {
 
 /* sec 4(d): "a constant 0x0012 (=18 decimal) sits at offset 38-39...
  * byte-exact match to SYSGEN NISCS_LAN_OVRHD 18". Part of the abs [32,72)
- * sequence-number region vms_cm_link_build() lays down. */
+ * sequence-number region the PORT lays down (design sec 3.2.4) -- the
+ * test-only composer (tests/cluster/host/vms_frame_compose.h) is the only
+ * place left in this tree that still writes it, for a specimen. */
 #define VMS_OFF_CM_LINK_OVRHD     38u
 #define VMS_CM_LINK_OVRHD_VAL     18u
 
@@ -165,6 +177,32 @@ extern "C" {
 #define VMS_CM_DLM_RESNAME_MAX 84u /* body[48..131] = 84 bytes             */
 #define VMS_CM_DLM_RESULT_OP0D 0xf9u /* the sec 4(p) MANDATORY stamp        */
 
+/*
+ * BODY-RELATIVE offsets (body[0] == abs 72), derived arithmetically from the
+ * frame-absolute constants above so the two addressing schemes can never
+ * drift apart. The PARSE accessors (sec 4) read a RECEIVED FRAME and keep
+ * using the VMS_OFF_CM_* constants above; every ORIGINATING/RESPONSE builder
+ * (sec 5/5b) writes only a 132-byte body buffer and uses these VMS_OFB_CM_*
+ * ones (design sec 3.2.4 ruling E1 -- FC-P3.15's body-level conformance
+ * retrofit).
+ */
+#define VMS_OFB_CM_CATEGORY    (VMS_OFF_CM_CATEGORY    - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_OPCODE      (VMS_OFF_CM_OPCODE      - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_EPOCH       (VMS_OFF_CM_EPOCH       - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_ROLE        (VMS_OFF_CM_ROLE        - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_CLASS       (VMS_OFF_CM_CLASS       - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_STEP        (VMS_OFF_CM_STEP        - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_BITMAP      (VMS_OFF_CM_BITMAP      - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_RESP_MARK   (VMS_OFF_CM_RESP_MARK   - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_RELAY_EPOCH (VMS_OFF_CM_RELAY_EPOCH - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_PARAM_F1    (VMS_OFF_CM_PARAM_F1    - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_PARAM_F2    (VMS_OFF_CM_PARAM_F2    - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_VERSION     (VMS_OFF_CM_VERSION     - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_TXN         (VMS_OFF_CM_TXN         - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_TOKEN       (VMS_OFF_CM_TOKEN       - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_DLM_RESULT  (VMS_OFF_CM_DLM_RESULT  - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_DLM_L1_LEN  (VMS_OFF_CM_DLM_L1_LEN  - VMS_OFF_SYSAP_BODY)
+
 /* The category/opcode values this file's recipes and accessors key on
  * (sec 4(j) table + sec 4(p)/(r); NOT the general SCS byte at abs 30,
  * which vms_cluster_codec.h already owns as VMS_OFF_SCS_MSGTYPE). */
@@ -223,34 +261,21 @@ vms_codec_status_t vms_cm_envelope_parse(const uint8_t *frame, uint32_t len,
 					 struct vms_cm_envelope *out);
 
 /* ------------------------------------------------------------------ *
- * sec 3  The minimal SCS-envelope stand-in around the CM body (abs
- * 0-71). See the file header "OUT OF SCOPE" note -- every field here
- * either is GROUNDED per spec sec 4(d) or is an explicit, honest zero.
+ * sec 3  The abs [0,72) span -- NOT this file's business since FC-P3.15
+ *
+ * `struct vms_cm_link` and its builder used to stand in here for the
+ * not-yet-landed port/SCS layers, and every recipe in sec 5/5b built a full
+ * 204-byte frame through it. Design sec 3.2.4 ruled that stand-in out of
+ * production code: "a SYSAP that fills send_seq is the same category error
+ * as a daemon that fills a lock id." Both have been DEMOTED to
+ * tests/cluster/host/vms_frame_compose.h as `vms_frame_compose()`, a
+ * test-only full-frame composer used ONLY to assemble a byte-exact 204-byte
+ * specimen for a fixture comparison or the rung-2 simulator's pcap replay.
+ * No production TU includes that header (tools/ci/cluster_core_includes_
+ * gate.sh enforces kernel-core-only includes here); the abs [0,72) span is
+ * the port's (vms_pe.h) and SCS's (vms_scs.h) alone, per the byte-ownership
+ * table in the design's sec 3.2.4.
  * ------------------------------------------------------------------ */
-struct vms_cm_link {
-	struct vms_sca_hdr hdr;   /* abs 0-31; hdr.word30 is IGNORED by the
-				   * builder and overwritten with the CM
-				   * msgtype/format marker (msgtype 0x4b,
-				   * format 0x13, GROUNDED sec 4(g)/4(d))    */
-	uint16_t recv_ack;        /* abs 32, GROUNDED sec 4(d)/(h)             */
-	uint16_t send_seq;        /* abs 34, GROUNDED sec 4(d)/(h)             */
-	uint32_t remote_conid;    /* abs 64, GROUNDED sec 4(d): the PEER's own
-				   * Con.ID, as the sender addresses it        */
-	uint32_t local_conid;     /* abs 68, GROUNDED sec 4(d): OUR own Con.ID */
-};
-
-/*
- * vms_cm_link_build - write the abs [0,72) span into a >=204-byte buffer.
- * Bakes in ONLY the discovery-independent CM format markers (connect flag
- * 0x0001, msgtype 0x4b / format 0x13, and the sec 4(d)-grounded constant
- * 18 at abs 38-39); every other byte in [36,64) and [70,72) -- the
- * counter-mirror region sec 4(d) itself calls "inferred, not independently
- * confirmed" -- is left ZERO rather than guessed. A fuller mirror belongs
- * to FC-P1.1/P2.1.
- */
-vms_codec_status_t vms_cm_link_build(const struct vms_cm_link *l,
-				     uint8_t *frame, uint32_t cap,
-				     uint32_t *written);
 
 /* ------------------------------------------------------------------ *
  * sec 4  Opcode-specific body structs: parse only (a later FSM item
@@ -350,9 +375,21 @@ vms_codec_status_t vms_cm_dlm_rebuild_parse(const uint8_t *frame, uint32_t len,
 
 /* ------------------------------------------------------------------ *
  * sec 5  Response recipes (spec sec 4(p)/(q)/(r)/(u)) -- the GROUNDED
- * deliverable of this item. Every builder takes the RECEIVED request
- * frame (already classified VMS_FCLS_SCS_MSG) plus the caller's own
- * link/envelope counters, and returns a full VMS_CM_FRAME_LEN response.
+ * deliverable of this item. Every builder takes the RECEIVED request FRAME
+ * (already classified VMS_FCLS_SCS_MSG -- receive stays frame-based, design
+ * sec 3.2.4: "the port delivers the whole frame... no copy, no strip") and
+ * returns a VMS_CM_BODY_LEN (132-byte) BODY, body[0] == abs 72. `out_body`
+ * is NOT a frame: no builder here sees or writes abs [0,72).
+ *
+ * body[0:8] (send/ack/txn/token) is deliberately NOT built here. Every
+ * caller stamps it separately with `cnxman_envelope_stamp()`
+ * (vms_cnxman_csb.h) after this builder returns -- see each builder's own
+ * "STAMP" note for is_response's correct value on that recipe. A RESPONSE
+ * recipe that echoes the whole request body (the echo family, the DLM
+ * op-0x0d echo, the step-ack) or explicitly copies the request's txn/token
+ * (the close recipe) has ALREADY put the correct echoed value at body[4:8]
+ * before the stamper runs -- is_response=1 there means "leave those two
+ * bytes alone", not "do nothing".
  * ------------------------------------------------------------------ */
 
 /*
@@ -373,13 +410,14 @@ vms_codec_status_t vms_cm_dlm_rebuild_parse(const uint8_t *frame, uint32_t len,
  * "body[17] = the responder's own current class"), caller-supplied --
  * never invented. Returns VMS_CODEC_E_CLASS if the request's (category,
  * opcode) is not one of the six GROUNDED rows in vms_cm_allow_table().
+ *
+ * STAMP with is_response=1: the verbatim body copy this builder does FIRST
+ * already carries the request's txn/token at body[4:8].
  */
-vms_codec_status_t vms_cm_echo_response_build(const struct vms_cm_link *l,
-					      const uint8_t *req_frame,
+vms_codec_status_t vms_cm_echo_response_build(const uint8_t *req_frame,
 					      uint32_t req_len,
-					      const struct vms_cm_envelope *own,
 					      uint8_t own_class,
-					      uint8_t *out_frame, uint32_t cap,
+					      uint8_t *out_body, uint32_t cap,
 					      uint32_t *written);
 
 /*
@@ -389,6 +427,10 @@ vms_codec_status_t vms_cm_echo_response_build(const struct vms_cm_link *l,
  * `own_params` supplies OVMX's own honest node-parameter fields (never a
  * captured value): echoing the REQUEST's payload here is what bugchecked
  * a real VAX with INCONSTATE (sec 4(p)).
+ *
+ * STAMP with is_response=1: this builder writes the request's txn/token to
+ * body[4:8] itself (it builds fresh from zero, unlike the echo family, so
+ * there is no verbatim copy to rely on).
  */
 struct vms_cm_node_params {
 	uint32_t param_f1;  /* body[72:76] */
@@ -396,45 +438,48 @@ struct vms_cm_node_params {
 	uint8_t  version[VMS_CM_VERSION_LEN]; /* body[88:96] */
 };
 
-vms_codec_status_t vms_cm_close_build(const struct vms_cm_link *l,
-				      const uint8_t *req_frame, uint32_t req_len,
-				      const struct vms_cm_envelope *own,
+vms_codec_status_t vms_cm_close_build(const uint8_t *req_frame, uint32_t req_len,
 				      const struct vms_cm_node_params *own_params,
-				      uint8_t *out_frame, uint32_t cap,
+				      uint8_t *out_body, uint32_t cap,
 				      uint32_t *written);
 
 /*
  * vms_cm_dlm_op0d_response_build - the cat-0x02 op-0x0d DLM rebuild echo
  * (sec 4(p): "reconstructs 1367 of 1367 real responses byte-for-byte").
- * VERBATIM echo of the 132-byte body plus exactly: own send/ack-msg#,
- * body[8] |= 0x80, body[34] = 0xf9 (MANDATORY, unconditional). Does NOT
- * take the cat-0x01 body[18]/body[55] mutations -- sec 4(p)'s explicit
- * warning: those offsets land inside the L1 region and the 8th byte of
- * the lock RESOURCE NAME here, and applying them corrupted the name and
- * bugchecked two real VAXes with LOCKMGRERR.
+ * VERBATIM echo of the 132-byte body plus exactly: body[8] |= 0x80,
+ * body[34] = 0xf9 (MANDATORY, unconditional). Does NOT take the cat-0x01
+ * body[18]/body[55] mutations -- sec 4(p)'s explicit warning: those offsets
+ * land inside the L1 region and the 8th byte of the lock RESOURCE NAME
+ * here, and applying them corrupted the name and bugchecked two real VAXes
+ * with LOCKMGRERR.
+ *
+ * STAMP with is_response=1: the verbatim copy already carries the
+ * request's txn/token.
  */
-vms_codec_status_t vms_cm_dlm_op0d_response_build(const struct vms_cm_link *l,
-						  const uint8_t *req_frame,
+vms_codec_status_t vms_cm_dlm_op0d_response_build(const uint8_t *req_frame,
 						  uint32_t req_len,
-						  const struct vms_cm_envelope *own,
-						  uint8_t *out_frame, uint32_t cap,
+						  uint8_t *out_body, uint32_t cap,
 						  uint32_t *written);
 
 /*
- * vms_cm_body_build - wrap a body somebody else produced.
+ * vms_cm_body_build - wrap a body the LOCK MANAGER produced from real lock
+ * state (vms_dlm_scs.h RULE A -- the DLM fills a reply buffer and never
+ * sends), echoing the ANSWERED REQUEST's txn/token over it.
  *
- * The ONE case this exists for: an inbound cat-0x02 request that the LOCK
- * MANAGER answered from real lock state (vms_dlm_scs.h RULE A -- the DLM fills
- * a reply buffer and never sends). The connection manager then has 132 bytes of
- * genuine reply and needs the link laid down under them. This copies the body
- * verbatim and writes nothing into it: it is a wrapper, never a recipe, and it
- * asserts nothing about the body's contents. `body_len` must be exactly
- * VMS_CM_BODY_LEN -- a short body would leave the tail as whatever the caller's
- * buffer held.
+ * The DLM's reply never writes body[0:8] (design sec 3.2.4 ruling E1: "the
+ * DLM cat-02 arm... never writes body[0:8]"), so this wrapper takes the
+ * request frame too, purely to read the two fields a correlated response
+ * MUST carry: `req_env.txn`/`req_env.token`, written to `out_body[4:8]`.
+ * `body_len` must be exactly VMS_CM_BODY_LEN -- a short body would leave
+ * the tail as whatever the caller's buffer held. Asserts nothing else about
+ * the DLM's content: a wrapper, never a recipe.
+ *
+ * STAMP with is_response=1: this builder has just written the echoed
+ * txn/token itself, identically to vms_cm_close_build.
  */
-vms_codec_status_t vms_cm_body_build(const struct vms_cm_link *l,
+vms_codec_status_t vms_cm_body_build(const uint8_t *req_frame, uint32_t req_len,
 				     const uint8_t *body, uint32_t body_len,
-				     uint8_t *out_frame, uint32_t cap,
+				     uint8_t *out_body, uint32_t cap,
 				     uint32_t *written);
 
 /*
@@ -445,8 +490,8 @@ vms_codec_status_t vms_cm_body_build(const struct vms_cm_link *l,
  * This is the one CM message this codec ORIGINATES rather than answers, so
  * every asserted byte has to name where it comes from:
  *
- *   body[0:2]/[2:4]  the CM's own send/ack message numbers   -- caller (`own`)
- *   body[4:6]/[6:8]  txn and the correlation token           -- caller (`own`)
+ *   body[0:8]        NOT written here -- the caller's cnxman_envelope_stamp
+ *                    call fills send/ack/txn/token from the real CSB
  *   body[8]/[9]      cat 0x01 / op 0x0b                      -- this frame IS one
  *   body[12:16]      the epoch, as the coordinator's open carried it
  *   body[16:20]      the step, from the FSM's own real step counter
@@ -460,24 +505,23 @@ vms_codec_status_t vms_cm_body_build(const struct vms_cm_link *l,
  * sec 4(p) is explicit: "An implementation should send zeros; do not reproduce
  * another implementation's uninitialised memory."
  *
- * THE TOKEN IS NOT THE STEP ORDINAL. It is `own->token`, from the connection
- * manager's own continuous per-node counter, because a real node's tokens run
- * as one unbroken sequence across the barrier steps and anything interleaved
- * with them. A prior implementation used the step ordinal as a placeholder,
- * collided with its own step-1 value, and the coordinator dropped the frame --
- * the barrier then stalled and regressed. This builder cannot invent one:
- * there is no code path here that computes a token.
+ * THE TOKEN IS NOT THE STEP ORDINAL (design sec 3.2.4 ruling E1: body[6:8]
+ * is CNXMAN's own dialogue state, never a frame-copied or step-derived
+ * value). A prior implementation used the step ordinal as a placeholder,
+ * collided with its own step-1 value, and the coordinator dropped the frame
+ * -- the barrier then stalled and regressed.
  *
  * `step` must be >= 1 (spec sec 4(p): "indices 1...12, no gaps"); step 0 is
  * VMS_CODEC_E_INVAL. The 12-step LAW is the FSM's (CNXMAN_BARRIER_STEPS), not
  * the codec's: this builder will honestly emit step 13 if an FSM asks for it,
  * so a step-count regression shows up in the FSM's own instrumented mismatch
  * counter rather than being silently clamped here.
+ *
+ * STAMP with is_response=0: this is a genuine origination, and the
+ * connection manager's own txn/token belong at body[4:8].
  */
-vms_codec_status_t vms_cm_barrier_build(const struct vms_cm_link *l,
-					const struct vms_cm_envelope *own,
-					uint32_t epoch, uint32_t step,
-					uint8_t *out_frame, uint32_t cap,
+vms_codec_status_t vms_cm_barrier_build(uint32_t epoch, uint32_t step,
+					uint8_t *out_body, uint32_t cap,
 					uint32_t *written);
 
 /* ------------------------------------------------------------------ *
@@ -496,6 +540,10 @@ vms_codec_status_t vms_cm_barrier_build(const struct vms_cm_link *l,
  * LAZINESS" note above, and spec sec 4(p) states the rule outright: "An
  * implementation should send zeros; do not reproduce another implementation's
  * uninitialised memory."
+ *
+ * NONE of these five write body[0:8] either -- every caller stamps it with
+ * cnxman_envelope_stamp() after the builder returns (design sec 3.2.4 ruling
+ * E1). See each builder's own STAMP note for is_response.
  *
  * WHAT IS THEREFORE HONESTLY MISSING, AND SAID OUT LOUD. Davis p. 7-40 says a
  * Phase 1 proposal also carries the proposed quorum / computed expected votes /
@@ -533,12 +581,12 @@ vms_codec_status_t vms_cm_barrier_build(const struct vms_cm_link *l,
  * builder has no way to check that and does not try -- FC-P3.12 owns it.
  * Passing has_bitmap on a non-ADD class is VMS_CODEC_E_INVAL rather than a
  * silently-dropped field.
+ *
+ * STAMP with is_response=0: a genuine origination.
  */
-vms_codec_status_t vms_cm_xition_open_build(const struct vms_cm_link *l,
-					    const struct vms_cm_envelope *own,
-					    uint8_t tr_class, uint32_t epoch,
+vms_codec_status_t vms_cm_xition_open_build(uint8_t tr_class, uint32_t epoch,
 					    uint8_t bitmap, int has_bitmap,
-					    uint8_t *out_frame, uint32_t cap,
+					    uint8_t *out_body, uint32_t cap,
 					    uint32_t *written);
 
 /*
@@ -547,16 +595,17 @@ vms_codec_status_t vms_cm_xition_open_build(const struct vms_cm_link *l,
  * body[16:18] = (class << 8) | 0x60, i.e. the invariant 0x0260 / 0x0360 /
  * 0x0460 tags (sec 4(r)); epoch at body[12:16].
  *
- * txn IS FORCED TO ZERO. Sec 4(p): "Notifications carry txn=0 and are NEVER
- * answered" -- op 0x0a and op 0x0c get no response of any kind, so there is
- * nothing to correlate and a nonzero txn would invite one. The caller's own
- * `own->txn` is deliberately ignored here; `own->send_msg`/`ack_msg`/`token`
- * are still taken from the connection manager's real counters.
+ * STAMP with is_response=0, THEN call vms_cm_notification_zero_txn() (below):
+ * a GO is a genuine origination -- send/ack AND the correlation token
+ * (body[6:8]) are this node's real per-CSB state, "token never computed"
+ * either way (design sec 3.2.4 ruling E1). The ONE exception is txn
+ * (body[4:6]): sec 4(p) "Notifications carry txn=0 and are NEVER answered"
+ * is a WIRE FACT about op 0x0a/0x0c specifically, not CSB dialogue state, so
+ * it is the codec's job to force it back to zero AFTER the stamp -- never
+ * the FSM computing an offset by hand (design SS3.9 rule 2).
  */
-vms_codec_status_t vms_cm_go_build(const struct vms_cm_link *l,
-				   const struct vms_cm_envelope *own,
-				   uint8_t tr_class, uint32_t epoch,
-				   uint8_t *out_frame, uint32_t cap,
+vms_codec_status_t vms_cm_go_build(uint8_t tr_class, uint32_t epoch,
+				   uint8_t *out_body, uint32_t cap,
 				   uint32_t *written);
 
 /*
@@ -564,18 +613,39 @@ vms_codec_status_t vms_cm_go_build(const struct vms_cm_link *l,
  *
  * The exact mirror of vms_cm_barrier_build's op 0x0b: epoch at body[12:16],
  * step as an LE u32 at body[16:20] (which ALIASES the role/class byte pair, so
- * no role tag is written), txn forced to 0 as a notification. Sec 4(p):
- * "0x0c#12 is byte-identical to earlier releases apart from its index."
+ * no role tag is written). Sec 4(p): "0x0c#12 is byte-identical to earlier
+ * releases apart from its index."
  *
  * `step` must be >= 1. The 12-step LAW belongs to the FSM, not here: this
  * builder will honestly emit step 13 if asked, so a regression shows up in
  * FC-P3.12's own instrumented counter instead of being silently clamped.
+ *
+ * STAMP with is_response=0, then call vms_cm_notification_zero_txn() --
+ * exactly the vms_cm_go_build recipe, for the identical reason.
  */
-vms_codec_status_t vms_cm_release_build(const struct vms_cm_link *l,
-					const struct vms_cm_envelope *own,
-					uint32_t epoch, uint32_t step,
-					uint8_t *out_frame, uint32_t cap,
+vms_codec_status_t vms_cm_release_build(uint32_t epoch, uint32_t step,
+					uint8_t *out_body, uint32_t cap,
 					uint32_t *written);
+
+/*
+ * vms_cm_notification_zero_txn - force body[4:6] (txn) to zero on a
+ * notification origination (op 0x0a GO, op 0x0c RELEASE), AFTER
+ * cnxman_envelope_stamp() has run.
+ *
+ * Sec 4(p): "Notifications carry txn=0 and are NEVER answered." This is the
+ * ONE documented exception to an origination's stamp (design sec 3.2.4
+ * ruling E1: an origination otherwise carries this node's real per-CSB
+ * txn) -- and it belongs here, in the codec, because it is knowledge about
+ * these two WIRE OPCODES, not about CSB dialogue state, so a CNXMAN TU
+ * calls a named function for it rather than touching body[4:6] itself
+ * (design SS3.9 rule 2: no raw wire offset outside a codec TU).
+ *
+ * body[6:8] (token) is UNTOUCHED: the spec places no constraint on it for
+ * these two opcodes, and "token never computed" (ruling E1) means this
+ * node's real per-CSB token is exactly as valid here as on any other
+ * origination.
+ */
+void vms_cm_notification_zero_txn(uint8_t out_body[VMS_CM_BODY_LEN]);
 
 /*
  * vms_cm_relay_build - the coordinator's op-0x12 RELAY to the other members.
@@ -595,11 +665,11 @@ vms_codec_status_t vms_cm_release_build(const struct vms_cm_link *l,
  * isolates a subject identity in this body. FC-P3.12 counts every relay it
  * sends with the subject omitted, so the gap is visible in the diagnostics
  * rather than papered over with a guessed offset.
+ *
+ * STAMP with is_response=0: a genuine origination, real txn per-dialogue.
  */
-vms_codec_status_t vms_cm_relay_build(const struct vms_cm_link *l,
-				      const struct vms_cm_envelope *own,
-				      uint8_t tr_class, uint32_t epoch,
-				      uint8_t *out_frame, uint32_t cap,
+vms_codec_status_t vms_cm_relay_build(uint8_t tr_class, uint32_t epoch,
+				      uint8_t *out_body, uint32_t cap,
 				      uint32_t *written);
 
 /*
@@ -610,11 +680,11 @@ vms_codec_status_t vms_cm_relay_build(const struct vms_cm_link *l,
  * body[16] (sec 4(r)), class at body[17], epoch at body[12:16]. Everything
  * else zero. The subject is the peer this frame is addressed to, so unlike the
  * relay there is no missing identity here.
+ *
+ * STAMP with is_response=0: a genuine origination.
  */
-vms_codec_status_t vms_cm_commit_build(const struct vms_cm_link *l,
-				       const struct vms_cm_envelope *own,
-				       uint8_t tr_class, uint32_t epoch,
-				       uint8_t *out_frame, uint32_t cap,
+vms_codec_status_t vms_cm_commit_build(uint8_t tr_class, uint32_t epoch,
+				       uint8_t *out_body, uint32_t cap,
 				       uint32_t *written);
 
 /*
@@ -638,12 +708,13 @@ vms_codec_status_t vms_cm_commit_build(const struct vms_cm_link *l,
  * reads a step index out of it. Sec 4(r) does NOT list op 0x0b in its response-
  * recipe table, so body[18] is left ECHOED, not forced -- the same treatment
  * op 0x0f gets there.
+ *
+ * STAMP with is_response=1: the verbatim body copy already carries the
+ * member's own txn/token to echo.
  */
-vms_codec_status_t vms_cm_step_ack_build(const struct vms_cm_link *l,
-					 const uint8_t *req_frame,
+vms_codec_status_t vms_cm_step_ack_build(const uint8_t *req_frame,
 					 uint32_t req_len,
-					 const struct vms_cm_envelope *own,
-					 uint8_t *out_frame, uint32_t cap,
+					 uint8_t *out_body, uint32_t cap,
 					 uint32_t *written);
 
 /*
@@ -652,10 +723,12 @@ vms_codec_status_t vms_cm_step_ack_build(const struct vms_cm_link *l,
  * payload; body[9] is written 0x00 (sec 4(p): "An implementation should
  * send zeros; do not reproduce another implementation's uninitialised
  * memory").
+ *
+ * STAMP with is_response=1: this recipe carries no txn/token of its own
+ * (sec 4(p)/(u)) -- the zero-first pass leaves body[4:8] at zero, and that
+ * is the correct value to leave untouched.
  */
-vms_codec_status_t vms_cm_ack_build(const struct vms_cm_link *l,
-				    const struct vms_cm_envelope *own,
-				    uint8_t *out_frame, uint32_t cap,
+vms_codec_status_t vms_cm_ack_build(uint8_t *out_body, uint32_t cap,
 				    uint32_t *written);
 
 /* ------------------------------------------------------------------ *

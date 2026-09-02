@@ -25,6 +25,11 @@
 #include "cluster_fixture.h"
 #include "cluster_test.h"
 #include "vms_cluster_codec_cm.h"
+#include "vms_frame_compose.h"   /* test-only: struct vms_cm_link, the
+				  * full-frame composer used to assemble a
+				  * comparable specimen and to round-trip an
+				  * ORIGINATED body back through the parser
+				  * (design sec 3.2.4, FC-P3.15) */
 
 #include <string.h>
 
@@ -42,11 +47,13 @@ static const struct vms_fixture *fixture(const char *name)
 	return NULL;
 }
 
-/* A default link: real Con.IDs/recv_ack/send_seq/eth addrs, all fixed so
- * the test is deterministic. The envelope span (abs 0-71) this produces is
- * NOT compared against the fixtures -- see the file header: this item's
- * grounded scope is the BODY (abs 72+), and vms_cm_link_build() is a
- * frankly-labelled minimal stand-in (vms_cluster_codec_cm.h sec 3). */
+/* A default link: real Con.IDs/recv_ack/send_seq/eth addrs, all fixed so the
+ * test is deterministic. Used ONLY by the test-only frame composer to
+ * assemble a comparable specimen or round-trip a built body through the
+ * parser -- the envelope span (abs 0-71) it produces is NEVER compared
+ * against the fixtures: this item's grounded scope is the BODY (abs 72+,
+ * VMS_CM_BODY_LEN), and since FC-P3.15 no production builder here even
+ * sees abs [0,72) (design sec 3.2.4). */
 static void fill_link(struct vms_cm_link *l)
 {
 	static const uint8_t dst[6] = { 0x08, 0x00, 0x2b, 0x4a, 0xb7, 0x15 };
@@ -66,9 +73,15 @@ static void fill_link(struct vms_cm_link *l)
 
 /* ---- group 1: response-recipe byte-exactness -------------------------- */
 
-/* Compare only the BODY span [VMS_OFF_SYSAP_BODY, VMS_OFF_SYSAP_BODY +
- * VMS_CM_BODY_LEN) of `built` against the response fixture's CITED bytes --
- * this item's grounded scope (see the file header). */
+/*
+ * Compare `built[0..VMS_CM_BODY_LEN)` (a builder's BODY-relative output)
+ * against the response fixture's CITED bytes at the matching FRAME-absolute
+ * offset (body[k] == abs 72+k) -- this item's grounded scope.
+ *
+ * abs [72,76) (body[0:4], send_msg/ack_msg) is EXCLUDED: since FC-P3.15 that
+ * span is cnxman_envelope_stamp()'s job (vms_cnxman_csb.h), never a codec_cm
+ * builder's -- it is proven separately, on real CSB state, not here.
+ */
 static void assert_body_matches(const struct vms_fixture *resp,
 				const uint8_t *built, const char *label)
 {
@@ -76,14 +89,17 @@ static void assert_body_matches(const struct vms_fixture *resp,
 	char what[224];
 
 	for (i = VMS_OFF_SYSAP_BODY; i < VMS_CM_FRAME_LEN; i++) {
+		if (i < VMS_OFF_SYSAP_BODY + 4u)
+			continue;   /* body[0:4]: the stamper's, not this codec's */
 		if (!vms_fixture_is_cited(resp, i, 1))
 			continue;
 		checked++;
-		if (built[i] != resp->bytes[i]) {
+		if (built[i - VMS_OFF_SYSAP_BODY] != resp->bytes[i]) {
 			if (mismatches == 0)
 				printf("       %s: first body mismatch at abs "
 				       "%u: built %02x, specimen %02x\n",
-				       label, i, built[i], resp->bytes[i]);
+				       label, i, built[i - VMS_OFF_SYSAP_BODY],
+				       resp->bytes[i]);
 			mismatches++;
 		}
 	}
@@ -99,9 +115,7 @@ static void test_echo_recipe(const char *req_name, const char *resp_name,
 {
 	const struct vms_fixture *req = fixture(req_name);
 	const struct vms_fixture *resp = fixture(resp_name);
-	struct vms_cm_link l;
-	struct vms_cm_envelope own;
-	uint8_t built[VMS_CM_FRAME_LEN];
+	uint8_t built[VMS_CM_BODY_LEN];
 	uint32_t written = 0;
 	char what[192];
 
@@ -110,24 +124,14 @@ static void test_echo_recipe(const char *req_name, const char *resp_name,
 	if (req == NULL || resp == NULL)
 		return;
 
-	fill_link(&l);
-	memset(&own, 0, sizeof(own));
-	/* own.send_msg/ack_msg are read straight off the response fixture's
-	 * own cited body[0:4] -- proves the builder used THESE, not the
-	 * request's counters. */
-	own.send_msg = (uint16_t)(resp->bytes[VMS_OFF_CM_SEND_MSG] |
-				  (resp->bytes[VMS_OFF_CM_SEND_MSG + 1] << 8));
-	own.ack_msg = (uint16_t)(resp->bytes[VMS_OFF_CM_ACK_MSG] |
-				 (resp->bytes[VMS_OFF_CM_ACK_MSG + 1] << 8));
-
 	memset(built, 0xAA, sizeof(built));
 	snprintf(what, sizeof(what), "%s: vms_cm_echo_response_build succeeds",
 		 label);
-	ct_check(vms_cm_echo_response_build(&l, req->bytes, req->wire_len,
-					    &own, own_class, built,
-					    sizeof(built), &written)
+	ct_check(vms_cm_echo_response_build(req->bytes, req->wire_len,
+					    own_class, built, sizeof(built),
+					    &written)
 		 == VMS_CODEC_OK, what);
-	ct_check_eq_u32(written, VMS_CM_FRAME_LEN, "  wrote VMS_CM_FRAME_LEN");
+	ct_check_eq_u32(written, VMS_CM_BODY_LEN, "  wrote VMS_CM_BODY_LEN");
 	assert_body_matches(resp, built, label);
 }
 
@@ -135,10 +139,8 @@ static void test_close_recipe(void)
 {
 	const struct vms_fixture *req = fixture("cm-close-req");
 	const struct vms_fixture *resp = fixture("cm-close-resp");
-	struct vms_cm_link l;
-	struct vms_cm_envelope own;
 	struct vms_cm_node_params np;
-	uint8_t built[VMS_CM_FRAME_LEN];
+	uint8_t built[VMS_CM_BODY_LEN];
 	uint32_t written = 0;
 
 	printf("-- cat 0x06 close recipe (own node-parameter block)\n");
@@ -147,19 +149,15 @@ static void test_close_recipe(void)
 	if (req == NULL || resp == NULL)
 		return;
 
-	fill_link(&l);
-	own.send_msg = 0x0002;
-	own.ack_msg = 0x0001;
-	own.txn = 0; own.token = 0; own.category = 0; own.opcode = 0;
 	np.param_f1 = 0x00000010u;
 	np.param_f2 = 0x00000001u;
 	memcpy(np.version, "V7.3    ", VMS_CM_VERSION_LEN);
 
 	memset(built, 0xAA, sizeof(built));
-	ct_check(vms_cm_close_build(&l, req->bytes, req->wire_len, &own, &np,
-				    built, sizeof(built), &written)
+	ct_check(vms_cm_close_build(req->bytes, req->wire_len, &np, built,
+				    sizeof(built), &written)
 		 == VMS_CODEC_OK, "vms_cm_close_build succeeds");
-	ct_check_eq_u32(written, VMS_CM_FRAME_LEN, "  wrote VMS_CM_FRAME_LEN");
+	ct_check_eq_u32(written, VMS_CM_BODY_LEN, "  wrote VMS_CM_BODY_LEN");
 	assert_body_matches(resp, built, "cm-close");
 }
 
@@ -167,9 +165,7 @@ static void test_dlm_op0d_recipe(void)
 {
 	const struct vms_fixture *req = fixture("cm-dlm-op0d-req");
 	const struct vms_fixture *resp = fixture("cm-dlm-op0d-resp");
-	struct vms_cm_link l;
-	struct vms_cm_envelope own;
-	uint8_t built[VMS_CM_FRAME_LEN];
+	uint8_t built[VMS_CM_BODY_LEN];
 	uint32_t written = 0;
 
 	printf("-- cat 0x02 op 0x0d DLM rebuild echo recipe\n");
@@ -178,53 +174,39 @@ static void test_dlm_op0d_recipe(void)
 	if (req == NULL || resp == NULL)
 		return;
 
-	fill_link(&l);
-	memset(&own, 0, sizeof(own));
-	own.send_msg = 0x0008;
-	own.ack_msg = 0x0004;
-
 	memset(built, 0xAA, sizeof(built));
-	ct_check(vms_cm_dlm_op0d_response_build(&l, req->bytes, req->wire_len,
-						&own, built, sizeof(built),
-						&written)
+	ct_check(vms_cm_dlm_op0d_response_build(req->bytes, req->wire_len,
+						built, sizeof(built), &written)
 		 == VMS_CODEC_OK, "vms_cm_dlm_op0d_response_build succeeds");
-	ct_check_eq_u32(written, VMS_CM_FRAME_LEN, "  wrote VMS_CM_FRAME_LEN");
+	ct_check_eq_u32(written, VMS_CM_BODY_LEN, "  wrote VMS_CM_BODY_LEN");
 	assert_body_matches(resp, built, "cm-dlm-op0d");
 
 	/* Negative control mirroring spec sec 4(p)'s LOCKMGRERR warning:
 	 * body[16] (the L1 length) must NOT be disturbed the way the cat-0x01
 	 * body[18] mutation would if it were wrongly applied here. */
-	ct_check(built[VMS_OFF_CM_DLM_L1_LEN] == req->bytes[VMS_OFF_CM_DLM_L1_LEN],
+	ct_check(built[VMS_OFB_CM_DLM_L1_LEN] ==
+			 req->bytes[VMS_OFF_CM_DLM_L1_LEN],
 		 "  body[16] (L1 length) echoed untouched -- the cat-0x01 "
 		 "mutation was NOT applied here");
 }
 
 static void test_ack_build(void)
 {
-	struct vms_cm_link l;
-	struct vms_cm_envelope own;
-	uint8_t built[VMS_CM_FRAME_LEN];
+	uint8_t built[VMS_CM_BODY_LEN];
 	uint32_t written = 0;
 
 	printf("-- cat 0x04 credit/commit ack builder (spec sec 4(u))\n");
-	fill_link(&l);
-	memset(&own, 0, sizeof(own));
-	own.send_msg = 0x0014;
-	own.ack_msg = 0x0009;
 
 	memset(built, 0xAA, sizeof(built));
-	ct_check(vms_cm_ack_build(&l, &own, built, sizeof(built), &written)
+	ct_check(vms_cm_ack_build(built, sizeof(built), &written)
 		 == VMS_CODEC_OK, "vms_cm_ack_build succeeds");
-	ct_check_eq_u32(written, VMS_CM_FRAME_LEN, "  wrote VMS_CM_FRAME_LEN");
-	ct_check(built[VMS_OFF_CM_SEND_MSG] == 0x14 &&
-		 built[VMS_OFF_CM_SEND_MSG + 1] == 0x00,
-		 "  body[0:2] == our own send-msg#");
-	ct_check(built[VMS_OFF_CM_ACK_MSG] == 0x09 &&
-		 built[VMS_OFF_CM_ACK_MSG + 1] == 0x00,
-		 "  body[2:4] == our own ack-msg#");
-	ct_check(built[VMS_OFF_CM_CATEGORY] == VMS_CM_CAT_ACK,
+	ct_check_eq_u32(written, VMS_CM_BODY_LEN, "  wrote VMS_CM_BODY_LEN");
+	/* body[0:4] (send/ack) is NOT this builder's business since FC-P3.15
+	 * -- cnxman_envelope_stamp() fills it (vms_cnxman_csb.h), proven on
+	 * real CSB state, not here. */
+	ct_check(built[VMS_OFB_CM_CATEGORY] == VMS_CM_CAT_ACK,
 		 "  body[8] == category 0x04");
-	ct_check(built[VMS_OFF_CM_TXN] == 0 && built[VMS_OFF_CM_TXN + 1] == 0,
+	ct_check(built[VMS_OFB_CM_TXN] == 0 && built[VMS_OFB_CM_TXN + 1] == 0,
 		 "  body[4:6] == 0 (no payload)");
 }
 
@@ -418,21 +400,23 @@ static void test_error_paths(void)
 {
 	const struct vms_fixture *req = fixture("cm-op0f-req");
 	struct vms_cm_link l;
-	struct vms_cm_envelope own;
 	struct vms_cm_node_params np;
-	uint8_t built[VMS_CM_FRAME_LEN];
+	uint8_t built[VMS_CM_BODY_LEN];
 	uint32_t written = 0;
+	uint32_t frame_written = 0;
+	uint8_t frame[VMS_CM_FRAME_LEN];
 	uint8_t junk[VMS_CM_FRAME_LEN];
 
 	printf("-- error paths\n");
 	ct_check(req != NULL, "cm-op0f-req fixture present");
 	fill_link(&l);
-	memset(&own, 0, sizeof(own));
 	memset(&np, 0, sizeof(np));
 
-	ct_check(vms_cm_link_build(NULL, built, sizeof(built), &written)
-		 == VMS_CODEC_E_INVAL, "vms_cm_link_build: NULL link rejected");
-	ct_check(vms_cm_envelope_parse(built, sizeof(built), NULL, NULL)
+	ct_check(vms_frame_compose_link(NULL, frame, sizeof(frame),
+					&frame_written) == VMS_CODEC_E_INVAL,
+		 "vms_frame_compose_link: NULL link rejected (test-only "
+		 "composer)");
+	ct_check(vms_cm_envelope_parse(frame, sizeof(frame), NULL, NULL)
 		 == VMS_CODEC_E_INVAL, "vms_cm_envelope_parse: NULL out rejected");
 
 	if (req != NULL) {
@@ -440,16 +424,14 @@ static void test_error_paths(void)
 		 * CLOSE recipe -- a recipe builder must refuse a
 		 * well-formed, classifiable frame whose (cat,op) it does not
 		 * own, not merely a malformed one. */
-		ct_check(vms_cm_close_build(&l, req->bytes, req->wire_len,
-					    &own, &np, built, sizeof(built),
-					    &written)
+		ct_check(vms_cm_close_build(req->bytes, req->wire_len, &np,
+					    built, sizeof(built), &written)
 			 == VMS_CODEC_E_CLASS,
 			 "vms_cm_close_build refuses a well-formed op 0x0f "
 			 "request (wrong recipe for this (cat,op))");
-		ct_check(vms_cm_dlm_op0d_response_build(&l, req->bytes,
-							req->wire_len, &own,
-							built, sizeof(built),
-							&written)
+		ct_check(vms_cm_dlm_op0d_response_build(req->bytes,
+							req->wire_len, built,
+							sizeof(built), &written)
 			 == VMS_CODEC_E_CLASS,
 			 "vms_cm_dlm_op0d_response_build refuses op 0x0f too");
 	}
@@ -457,8 +439,8 @@ static void test_error_paths(void)
 	memset(junk, 0, sizeof(junk));
 	/* Not SCA at all (bad ethertype) -> a class-gated builder must not
 	 * accept it. */
-	ct_check(vms_cm_echo_response_build(&l, junk, sizeof(junk), &own, 0,
-					    built, sizeof(built), &written)
+	ct_check(vms_cm_echo_response_build(junk, sizeof(junk), 0, built,
+					    sizeof(built), &written)
 		 != VMS_CODEC_OK,
 		 "vms_cm_echo_response_build refuses a non-SCA frame");
 }
@@ -469,77 +451,104 @@ static void test_error_paths(void)
 static void test_barrier_build(void)
 {
 	struct vms_cm_link l;
-	struct vms_cm_envelope own;
 	struct vms_frame_info fi;
 	struct vms_cm_barrier parsed;
-	uint8_t built[VMS_CM_FRAME_LEN];
-	uint32_t written = 0, i, nonzero_tail = 0;
+	uint8_t built[VMS_CM_BODY_LEN];
+	uint8_t frame[VMS_CM_FRAME_LEN];
+	uint32_t written = 0, frame_written = 0, i, nonzero_tail = 0;
 
 	printf("-- vms_cm_barrier_build (op 0x0b, the one CM message this "
 	       "codec ORIGINATES)\n");
 	fill_link(&l);
-	memset(&own, 0, sizeof(own));
-	own.send_msg = 0x0140;
-	own.ack_msg = 0x0220;
-	own.txn = 0x0009;
-	own.token = 0x07f9;   /* the CM's continuous counter, NOT the step */
 
 	memset(built, 0xAA, sizeof(built));
-	ct_check(vms_cm_barrier_build(&l, &own, 0x0e, 5, built, sizeof(built),
-				      &written) == VMS_CODEC_OK, "builds");
-	ct_check_eq_u32(written, VMS_CM_FRAME_LEN, "  wrote a whole frame");
+	ct_check(vms_cm_barrier_build(0x0e, 5, built, sizeof(built), &written)
+		 == VMS_CODEC_OK, "builds");
+	ct_check_eq_u32(written, VMS_CM_BODY_LEN, "  wrote a whole body");
 
-	ct_check(vms_frame_classify(built, written, &fi) == VMS_CODEC_OK,
+	/* Round-trip through the test-only composer (design sec 3.2.4): the
+	 * parser is frame-based (receive stays frame-level), so a body-level
+	 * builder's output has to be assembled into a specimen to exercise
+	 * it, exactly as the port will once FC-P1.1/P2.1 land. */
+	ct_check(vms_frame_compose(&l, built, frame, sizeof(frame),
+				   &frame_written) == VMS_CODEC_OK,
+		 "  composes into a full specimen");
+	ct_check(vms_frame_classify(frame, frame_written, &fi) == VMS_CODEC_OK,
 		 "  the result classifies as an SCA message");
-	ct_check(vms_cm_barrier_parse(built, written, &fi, &parsed)
+	ct_check(vms_cm_barrier_parse(frame, frame_written, &fi, &parsed)
 		 == VMS_CODEC_OK, "  and round-trips through the parser");
 	ct_check_eq_u32(parsed.env.category, VMS_CM_CAT_CONFIG, "  cat 0x01");
 	ct_check_eq_u32(parsed.env.opcode, VMS_CM_OP_BARRIER, "  op 0x0b");
 	ct_check_eq_u32(parsed.epoch, 0x0e, "  epoch echoed from the caller");
 	ct_check_eq_u32(parsed.step, 5, "  step 5 at body[16:20]");
-	ct_check_eq_u32(parsed.env.token, 0x07f9,
-			"  and the token is the CALLER's, never the step index");
+	ct_check_eq_u32(parsed.env.token, 0,
+			"  body[6:8] (token) is NOT written here -- it is "
+			"cnxman_envelope_stamp()'s job (vms_cnxman_csb.h), "
+			"proven separately on real CSB state -- and it is "
+			"honest zero, never the step index either");
 
 	/* Spec sec 4(p) + the af2 zero-body joiner: the tail is an explicit
 	 * zero, not another implementation's uninitialised memory. */
-	for (i = VMS_OFF_SYSAP_BODY + 20; i < VMS_CM_FRAME_LEN; i++) {
+	for (i = 20; i < VMS_CM_BODY_LEN; i++) {
 		if (built[i] != 0u)
 			nonzero_tail++;
 	}
 	ct_check_eq_u32(nonzero_tail, 0,
 			"  body[20:] is an EXPLICIT ZERO tail");
 
-	ct_check(vms_cm_barrier_build(&l, &own, 0x0e, 0, built, sizeof(built),
-				      &written) == VMS_CODEC_E_INVAL,
+	ct_check(vms_cm_barrier_build(0x0e, 0, built, sizeof(built), &written)
+		 == VMS_CODEC_E_INVAL,
 		 "  step 0 is rejected (spec sec 4(p): indices run 1...12)");
-	ct_check(vms_cm_barrier_build(NULL, &own, 0x0e, 1, built, sizeof(built),
-				      &written) == VMS_CODEC_E_INVAL,
-		 "  a NULL link is rejected -- no zero-filled frame");
+	ct_check(vms_cm_barrier_build(0x0e, 1, NULL, sizeof(built), &written)
+		 == VMS_CODEC_E_INVAL,
+		 "  a NULL out_body is rejected -- no zero-filled body");
 }
 
 static void test_body_build(void)
 {
-	struct vms_cm_link l;
+	const struct vms_fixture *req = fixture("cm-dlm-op0d-req");
+	struct vms_frame_info fi;
+	struct vms_cm_envelope req_env;
 	uint8_t body[VMS_CM_BODY_LEN];
-	uint8_t built[VMS_CM_FRAME_LEN];
+	uint8_t built[VMS_CM_BODY_LEN];
 	uint32_t written = 0, i, diffs = 0;
 
 	printf("-- vms_cm_body_build (wrapping a body the LOCK MANAGER made)\n");
-	fill_link(&l);
+	ct_check(req != NULL, "cm-dlm-op0d-req fixture present");
+	if (req == NULL)
+		return;
+	ct_check(vms_frame_classify(req->bytes, req->wire_len, &fi) ==
+			 VMS_CODEC_OK,
+		 "the request specimen classifies");
+	ct_check(vms_cm_envelope_parse(req->bytes, req->wire_len, &fi,
+				       &req_env) == VMS_CODEC_OK,
+		 "and its envelope parses");
+
 	for (i = 0; i < VMS_CM_BODY_LEN; i++)
 		body[i] = (uint8_t)(i * 7u + 3u);
 
-	ct_check(vms_cm_body_build(&l, body, sizeof(body), built, sizeof(built),
+	ct_check(vms_cm_body_build(req->bytes, req->wire_len, body,
+				   sizeof(body), built, sizeof(built),
 				   &written) == VMS_CODEC_OK, "builds");
-	for (i = 0; i < VMS_CM_BODY_LEN; i++) {
-		if (built[VMS_OFF_SYSAP_BODY + i] != body[i])
+	for (i = 8; i < VMS_CM_BODY_LEN; i++) {
+		if (built[i] != body[i])
 			diffs++;
 	}
 	ct_check_eq_u32(diffs, 0,
-			"  the body is copied VERBATIM -- a wrapper, never a "
-			"recipe");
-	ct_check(vms_cm_body_build(&l, body, VMS_CM_BODY_LEN - 1, built,
-				   sizeof(built), &written) == VMS_CODEC_E_INVAL,
+			"  body[8:132] (the DLM's payload) is copied VERBATIM "
+			"-- a wrapper, never a recipe");
+	ct_check(built[0] == body[0] && built[1] == body[1] &&
+		 built[2] == body[2] && built[3] == body[3],
+		 "  body[0:4] (send/ack) is untouched here too -- "
+		 "cnxman_envelope_stamp()'s job, not this wrapper's");
+	ct_check((uint16_t)(built[4] | (built[5] << 8)) == req_env.txn,
+		 "  body[4:6] (txn) is the ANSWERED REQUEST's, echoed by this "
+		 "wrapper (the DLM's reply never writes body[0:8])");
+	ct_check((uint16_t)(built[6] | (built[7] << 8)) == req_env.token,
+		 "  and so is body[6:8] (token)");
+	ct_check(vms_cm_body_build(req->bytes, req->wire_len, body,
+				   VMS_CM_BODY_LEN - 1, built, sizeof(built),
+				   &written) == VMS_CODEC_E_INVAL,
 		 "  a short body is rejected rather than tail-padded with "
 		 "whatever the caller's buffer held");
 }

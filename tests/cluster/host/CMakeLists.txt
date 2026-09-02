@@ -122,10 +122,23 @@ endfunction()
 
 cluster_host_cnxman_test(test_cnxman_csb     test_cnxman_csb.c)
 cluster_host_cnxman_test(test_cnxman_recnx   test_cnxman_recnx.c)
-cluster_host_cnxman_test(test_cnxman_barrier test_cnxman_barrier.c)  # FC-P3.5
-cluster_host_cnxman_test(test_cnxman_coord   test_cnxman_coord.c)    # FC-P3.12
+# vms_frame_compose.c is the FC-P3.15-demoted test-only full-frame composer
+# (design sec 3.2.4): no production TU includes it, so it is a per-test
+# source here, never a kernel-core object.
+cluster_host_cnxman_test(test_cnxman_barrier test_cnxman_barrier.c vms_frame_compose.c)  # FC-P3.5
+cluster_host_cnxman_test(test_cnxman_coord   test_cnxman_coord.c vms_frame_compose.c)    # FC-P3.12
+
+# FC-P3.15's own done-condition: prove NO CNXMAN TU writes below body offset 0
+# (design sec 3.2.4 ruling E1). OVMX_KCORE_DIR lets the test open the real
+# src/kernel-core/*.c sources for the source-level scan (proof 2/3) -- a real
+# gate against the SHIPPING translation units, not a copy.
+cluster_host_cnxman_test(test_cnxman_body_level test_cnxman_body_level.c)
+target_compile_definitions(test_cnxman_body_level PRIVATE
+    OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
+)
+
 cluster_host_test(test_codec_scs        test_codec_scs.c)
-cluster_host_test(test_codec_cm         test_codec_cm.c)
+cluster_host_test(test_codec_cm         test_codec_cm.c vms_frame_compose.c)
 cluster_host_test(test_codec_mscp       test_codec_mscp.c)
 cluster_host_test(test_mscp_cl_fsm      test_mscp_cl_fsm.c)  # FC-P3.4
 

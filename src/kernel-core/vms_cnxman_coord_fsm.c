@@ -29,9 +29,10 @@
  *      not a rule it remembers.
  *
  *   3. NO RAW WIRE OFFSET. Every field written or read goes through
- *      vms_cluster_codec_cm.h, and every envelope counter through the
- *      connection manager's own next_out. Nothing here computes a token, an
- *      epoch field position, or a nodemap bit position by hand.
+ *      vms_cluster_codec_cm.h, and every envelope counter (body[0:8]) through
+ *      cnxman_envelope_stamp() (vms_cnxman_csb.h), called on the destination's
+ *      real CSB. Nothing here computes a token, an epoch field position, or a
+ *      nodemap bit position by hand.
  *
  * INCLUDES: kernel-core headers only (CI gate tools/ci/cluster_core_includes_gate.sh).
  * This TU is PURE: no seam call, no allocation, no clock but ops->now_ms -- so
@@ -117,21 +118,10 @@ struct coord_msg {
 };
 
 /* ==========================================================================
- * Getting a frame out
- *
- * Both directions go through the connection manager's link. A refused link is a
- * refusal to transmit, never a zero-filled frame (INV-6).
+ * Getting a body out -- via the destination's real CSB (design sec 3.2.4
+ * ruling E1). A CSB this FSM cannot resolve is a refusal to transmit, never
+ * a zero-filled body (INV-6).
  * ========================================================================== */
-
-static int coord_link_out(struct cnxman_coord *c, vms_csid_t dst,
-			  struct vms_cm_link *link, struct vms_cm_envelope *env)
-{
-	coord_bzero(link, (uint32_t)sizeof(*link));
-	coord_bzero(env, (uint32_t)sizeof(*env));
-	if (c->link == NULL || c->link->next_out == NULL)
-		return -1;
-	return c->link->next_out(c->link->ctx, dst, link, env);
-}
 
 static void coord_note_send_failure(struct cnxman_coord *c, const char *why)
 {
@@ -152,12 +142,12 @@ static void coord_emit_response(struct cnxman_coord *c, uint32_t len)
 }
 
 /*
- * Prepare to originate one frame to the CSB at `i`: resolve its LEARNED CSID
- * and pull the envelope counters. Nonzero means nothing may be sent -- an
- * unlearned CSID is "not yet known", never "node zero" (INV-6).
+ * Prepare to originate one body to the CSB at `i`: resolve its LEARNED CSID.
+ * NULL means nothing may be sent -- an unlearned CSID is "not yet known",
+ * never "node zero" (INV-6).
  */
-static int coord_out_to(struct cnxman_coord *c, uint32_t i, vms_csid_t *dst,
-			struct vms_cm_link *link, struct vms_cm_envelope *env)
+static struct vms_csb *coord_out_to(struct cnxman_coord *c, uint32_t i,
+				    vms_csid_t *dst)
 {
 	struct vms_csb *csb = &coord_club(c)->csb[i];
 
@@ -165,16 +155,10 @@ static int coord_out_to(struct cnxman_coord *c, uint32_t i, vms_csid_t *dst,
 		coord_note_send_failure(c,
 			"%CNXMAN, a system in the transition has no cluster "
 			"system id; nothing sent to it");
-		return -1;
+		return NULL;
 	}
 	*dst = csb->csid;
-	if (coord_link_out(c, *dst, link, env) != 0) {
-		coord_note_send_failure(c,
-			"%CNXMAN, no connection to a system in the transition; "
-			"nothing sent to it");
-		return -1;
-	}
-	return 0;
+	return csb;
 }
 
 /* ==========================================================================
@@ -567,20 +551,22 @@ static uint32_t coord_rebuild_outstanding(const struct cnxman_coord *c)
 
 static void coord_send_relay(struct cnxman_coord *c, uint32_t i)
 {
-	struct vms_cm_link link;
-	struct vms_cm_envelope env;
+	struct vms_csb *csb;
 	vms_csid_t dst;
 	uint32_t written = 0;
 
-	if (coord_out_to(c, i, &dst, &link, &env) != 0)
+	csb = coord_out_to(c, i, &dst);
+	if (csb == NULL)
 		return;
-	if (vms_cm_relay_build(&link, &env, c->tr_class, c->epoch, c->scratch,
+	if (vms_cm_relay_build(c->tr_class, c->epoch, c->scratch,
 			       (uint32_t)sizeof(c->scratch), &written) !=
 	    VMS_CODEC_OK) {
 		coord_note_send_failure(c,
 			"%CNXMAN, transition relay could not be built");
 		return;
 	}
+	/* A genuine origination: this CSB's own txn/token belong at body[4:8]. */
+	cnxman_envelope_stamp(csb, c->scratch, 0);
 	coord_emit(c, dst, written);
 	c->relays_sent++;
 	/* The subject's identity has no grounded offset in this body (codec
@@ -590,41 +576,43 @@ static void coord_send_relay(struct cnxman_coord *c, uint32_t i)
 
 static void coord_send_commit(struct cnxman_coord *c, uint32_t i)
 {
-	struct vms_cm_link link;
-	struct vms_cm_envelope env;
+	struct vms_csb *csb;
 	vms_csid_t dst;
 	uint32_t written = 0;
 
-	if (coord_out_to(c, i, &dst, &link, &env) != 0)
+	csb = coord_out_to(c, i, &dst);
+	if (csb == NULL)
 		return;
-	if (vms_cm_commit_build(&link, &env, c->tr_class, c->epoch, c->scratch,
+	if (vms_cm_commit_build(c->tr_class, c->epoch, c->scratch,
 				(uint32_t)sizeof(c->scratch), &written) !=
 	    VMS_CODEC_OK) {
 		coord_note_send_failure(c,
 			"%CNXMAN, membership commit could not be built");
 		return;
 	}
+	cnxman_envelope_stamp(csb, c->scratch, 0);
 	coord_emit(c, dst, written);
 	c->commits_sent++;
 }
 
 static void coord_send_open(struct cnxman_coord *c, uint32_t i)
 {
-	struct vms_cm_link link;
-	struct vms_cm_envelope env;
+	struct vms_csb *csb;
 	vms_csid_t dst;
 	uint32_t written = 0;
 
-	if (coord_out_to(c, i, &dst, &link, &env) != 0)
+	csb = coord_out_to(c, i, &dst);
+	if (csb == NULL)
 		return;
-	if (vms_cm_xition_open_build(&link, &env, c->tr_class, c->epoch,
-				     c->bitmap, (int)c->bitmap_valid,
-				     c->scratch, (uint32_t)sizeof(c->scratch),
+	if (vms_cm_xition_open_build(c->tr_class, c->epoch, c->bitmap,
+				     (int)c->bitmap_valid, c->scratch,
+				     (uint32_t)sizeof(c->scratch),
 				     &written) != VMS_CODEC_OK) {
 		coord_note_send_failure(c,
 			"%CNXMAN, transition proposal could not be built");
 		return;
 	}
+	cnxman_envelope_stamp(csb, c->scratch, 0);
 	coord_emit(c, dst, written);
 	c->opens_sent++;
 	/* Book p. 7-40's proposed quorum / votes / foundation time / founder /
@@ -635,40 +623,48 @@ static void coord_send_open(struct cnxman_coord *c, uint32_t i)
 
 static void coord_send_go(struct cnxman_coord *c, uint32_t i)
 {
-	struct vms_cm_link link;
-	struct vms_cm_envelope env;
+	struct vms_csb *csb;
 	vms_csid_t dst;
 	uint32_t written = 0;
 
-	if (coord_out_to(c, i, &dst, &link, &env) != 0)
+	csb = coord_out_to(c, i, &dst);
+	if (csb == NULL)
 		return;
-	if (vms_cm_go_build(&link, &env, c->tr_class, c->epoch, c->scratch,
+	if (vms_cm_go_build(c->tr_class, c->epoch, c->scratch,
 			    (uint32_t)sizeof(c->scratch), &written) !=
 	    VMS_CODEC_OK) {
 		coord_note_send_failure(c,
 			"%CNXMAN, transition commit could not be built");
 		return;
 	}
+	/* A genuine origination (real send/ack/token), with the ONE documented
+	 * exception the codec itself enforces: txn forced back to zero, a
+	 * notification wire fact (spec sec 4(p)), never a raw offset here. */
+	cnxman_envelope_stamp(csb, c->scratch, 0);
+	vms_cm_notification_zero_txn(c->scratch);
 	coord_emit(c, dst, written);
 	c->gos_sent++;
 }
 
 static void coord_send_release(struct cnxman_coord *c, uint32_t i, uint32_t step)
 {
-	struct vms_cm_link link;
-	struct vms_cm_envelope env;
+	struct vms_csb *csb;
 	vms_csid_t dst;
 	uint32_t written = 0;
 
-	if (coord_out_to(c, i, &dst, &link, &env) != 0)
+	csb = coord_out_to(c, i, &dst);
+	if (csb == NULL)
 		return;
-	if (vms_cm_release_build(&link, &env, c->epoch, step, c->scratch,
+	if (vms_cm_release_build(c->epoch, step, c->scratch,
 				 (uint32_t)sizeof(c->scratch), &written) !=
 	    VMS_CODEC_OK) {
 		coord_note_send_failure(c,
 			"%CNXMAN, barrier release could not be built");
 		return;
 	}
+	/* Same origination-then-force-txn-zero recipe as the GO. */
+	cnxman_envelope_stamp(csb, c->scratch, 0);
+	vms_cm_notification_zero_txn(c->scratch);
 	coord_emit(c, dst, written);
 	c->releases_sent++;
 }
@@ -1121,19 +1117,12 @@ static void coord_h_rebuild_ack(struct cnxman_coord *c,
  * ack, NOT the release). A step never acknowledged is retransmitted forever. */
 static void coord_ack_step(struct cnxman_coord *c, const struct coord_msg *m)
 {
-	struct vms_cm_link link;
-	struct vms_cm_envelope env;
 	struct vms_csb *csb = coord_csb_at(c, m->from_csb);
 	uint32_t written = 0;
 
 	if (csb == NULL || !csb->csid_valid)
 		return;
-	if (coord_link_out(c, csb->csid, &link, &env) != 0) {
-		coord_note_send_failure(c,
-			"%CNXMAN, no connection to acknowledge a barrier step");
-		return;
-	}
-	if (vms_cm_step_ack_build(&link, m->frame, m->len, &env, c->scratch,
+	if (vms_cm_step_ack_build(m->frame, m->len, c->scratch,
 				  (uint32_t)sizeof(c->scratch), &written) !=
 	    VMS_CODEC_OK) {
 		coord_note_send_failure(c,
@@ -1141,6 +1130,8 @@ static void coord_ack_step(struct cnxman_coord *c, const struct coord_msg *m)
 			"built");
 		return;
 	}
+	/* The verbatim echo already carries the member's own txn/token. */
+	cnxman_envelope_stamp(csb, c->scratch, 1);
 	coord_emit_response(c, written);
 	c->step_acks_sent++;
 }
@@ -1529,15 +1520,13 @@ void cnxman_coord_abandon(struct cnxman_coord *c, const char *why)
 }
 
 void cnxman_coord_init(struct cnxman_coord *c, struct vms_cluster *cl,
-		       const struct cnxman_ops *ops,
-		       const struct cnxman_coord_link_ops *link)
+		       const struct cnxman_ops *ops)
 {
 	if (c == NULL)
 		return;
 	coord_bzero(c, (uint32_t)sizeof(*c));
 	c->cl = cl;
 	c->ops = ops;
-	c->link = link;
 	c->state = (uint8_t)CNXMAN_COORD_IDLE;
 	c->subject_csb = -1;
 	c->pending_subject_csb = -1;

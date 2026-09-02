@@ -179,32 +179,26 @@ enum cnxman_barrier_rx {
 };
 
 /* ==========================================================================
- * 4. The link the connection manager owns
+ * 4. Body[0:8] -- via the CSB, not a link
  *
  * A frame this FSM ORIGINATES (the op-0x0b step) or ANSWERS (the 0x81 echo, the
- * op-0x0d rebuild echo) needs the SCS-level link state and the SYSAP envelope
- * counters -- the send/ack message numbers, the transaction id, and the
- * correlation token at body[6:8] whose derivation is UNKNOWN (spec SS4(j)).
+ * op-0x0d rebuild echo) needs body[0:8] (send/ack message numbers, the
+ * transaction id, and the correlation token whose derivation is UNKNOWN, spec
+ * SS4(j)) stamped from the destination's real dialogue state.
  *
  * THE FSM DOES NOT OWN THOSE AND MUST NOT INVENT THEM. A prior implementation
  * used the barrier step ordinal as the token; it collided with its own step-1
  * value, the coordinator dropped the frame, its recv_ack froze, and the barrier
- * stalled and then REGRESSED. So the numbers are pulled, per frame, from the
- * connection manager that actually maintains them. A `next_out` that returns
- * nonzero means the CM has no link to that node right now -- and then this FSM
- * ORIGINATES NOTHING, which is the honest outcome (INV-6), not a zero-filled
- * frame.
+ * stalled and then REGRESSED. Design SS3.2.4 ruling E1 (FC-P3.15) closed that:
+ * this FSM finds the destination's CSB with `cnxman_club_find_csid()`
+ * (vms_cnxman_csb.h) and calls `cnxman_envelope_stamp(csb, body, is_response)`
+ * -- the ONE function permitted to write body[0:8] -- after the codec has
+ * built body[8:132]. No CSB for that destination means this FSM ORIGINATES
+ * NOTHING, which is the honest outcome (INV-6), not a zero-filled frame. There
+ * is no more `cnxman_barrier_link_ops`/`next_out`: abs [0,72) is the port's
+ * (vms_pe.h) and SCS's (vms_scs.h) alone, filled by the `cnxman_ops.send`/
+ * `respond` glue this FSM's `body` argument reaches through.
  * ========================================================================== */
-struct cnxman_barrier_link_ops {
-	/*
-	 * Fill `link` and `env` for ONE outbound CM frame to `dst`. Returns 0
-	 * on success; nonzero when the connection manager has no
-	 * VMS$VAXcluster link to that node, in which case nothing is sent.
-	 */
-	int (*next_out)(void *ctx, vms_csid_t dst, struct vms_cm_link *link,
-			struct vms_cm_envelope *env);
-	void *ctx;
-};
 
 /* ==========================================================================
  * 5. The context
@@ -216,7 +210,6 @@ struct cnxman_barrier_link_ops {
 struct cnxman_barrier {
 	struct vms_cluster                   *cl;
 	const struct cnxman_ops              *ops;
-	const struct cnxman_barrier_link_ops *link;
 
 	/* The lock manager's wire arm (vms_cnxman.h SS5). NULL is a REAL VMS
 	 * configuration -- a node with no distributed locking still joins --
@@ -250,7 +243,7 @@ struct cnxman_barrier {
 	uint32_t releases;           /* op-0x0c releases consumed              */
 	uint32_t silences;           /* pairs grounded as never-answered       */
 	uint32_t ungrounded;         /* pairs with no allowlist row: logged    */
-	uint32_t send_failures;      /* the CM had no link; nothing was sent   */
+	uint32_t send_failures;      /* no CSB for the destination; nothing sent*/
 
 	/* ---- the interleaved rebuild records ---- */
 	uint32_t rebuild_records;    /* cat-0x02 op-0x0d received              */
@@ -272,10 +265,11 @@ struct cnxman_barrier {
 	uint32_t ignored_events;     /* no table cell: ignored and COUNTED     */
 
 	/*
-	 * The one scratch buffer every built frame goes through. In the
-	 * context, not on the stack: this code runs on a VAX kernel stack.
+	 * The one scratch buffer every built BODY goes through (design sec
+	 * 3.2.4: this FSM emits bodies, never a frame). In the context, not
+	 * on the stack: this code runs on a VAX kernel stack.
 	 */
-	uint8_t scratch[VMS_CM_FRAME_LEN];
+	uint8_t scratch[VMS_CM_BODY_LEN];
 
 	/*
 	 * The reply buffer handed to the DLM (vms_dlm_scs.h RULE A: the lock
@@ -292,8 +286,7 @@ struct cnxman_barrier {
 
 /* Bind the FSM to a node. Sends nothing, arms nothing. */
 void cnxman_barrier_init(struct cnxman_barrier *b, struct vms_cluster *cl,
-			 const struct cnxman_ops *ops,
-			 const struct cnxman_barrier_link_ops *link);
+			 const struct cnxman_ops *ops);
 
 /* Install (or, with NULL, detach) the lock manager's wire arm. */
 void cnxman_barrier_set_dlm(struct cnxman_barrier *b,

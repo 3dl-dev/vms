@@ -307,6 +307,22 @@ struct vms_csb {
 	uint32_t attempts;           /* reconnect attempts issued for this break */
 	uint32_t reconnects;         /* breaks this CSB recovered from */
 	uint32_t transitions_proposed; /* transitions THIS CSB's loss caused us to propose */
+
+	/*
+	 * ---- the SYSAP dialogue counters (design sec 3.2.4 ruling E1) ----
+	 * This node's own body[0:8] state for the `VMS$VAXcluster` SYSAP
+	 * dialogue with THIS remote connection manager: the send/ack message
+	 * numbers and the per-dialogue transaction id and correlation token.
+	 * cnxman_envelope_stamp() (vms_cnxman_csb.h) is the ONLY code that
+	 * reads these to fill a wire body, and FC-P3.8's glue is the only code
+	 * that will advance them on a real send -- a freshly allocated CSB has
+	 * genuinely sent nothing yet, so zero here is the honest starting
+	 * state (INV-6), not a placeholder.
+	 */
+	uint16_t cm_send_msg;
+	uint16_t cm_ack_msg;
+	uint16_t cm_txn;
+	uint16_t cm_token;
 };
 
 /*

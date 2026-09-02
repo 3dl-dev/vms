@@ -44,6 +44,8 @@
 #include "vms_cnxman_phase2.h"
 #include "vms_cnxman_coord_fsm.h"
 #include "vms_cluster_codec_cm.h"
+#include "vms_frame_compose.h"   /* test-only: struct vms_cm_link, RX specimen
+				  * assembly (FC-P3.15, design sec 3.2.4) */
 
 /* ==========================================================================
  * The bed: OVMX coordinating, two established members, one joiner
@@ -81,17 +83,18 @@ struct bed {
 	struct vms_cluster              cl;
 	struct cnxman_ops               ops;
 	struct fake_cnx                 fake;
-	struct cnxman_coord_link_ops    link_ops;
 	struct cnxman_coord_rebuild_ops rb_ops;
 	struct cnxman_coord             c;
 
 	struct sent_frame sent[MAX_SENT];
 	uint32_t          n_sent;
-	uint32_t          n_out_refused;
-	int               link_down;
-	uint16_t          next_token;
-	uint16_t          next_send_msg;
 	uint32_t          rebuild_outstanding;
+
+	/* The CLUB slot the frame currently being dispatched arrived from --
+	 * set by coord_feed() below, read by bed_respond() so its simulated
+	 * dialogue-counter advance (see bed_advance_dialogue) touches the
+	 * right CSB. -1 outside a dispatch. */
+	int32_t           dispatching_from_csb;
 
 	/* the DLM seam */
 	uint32_t          dlm_begins;
@@ -103,24 +106,54 @@ struct bed {
 static struct bed g;
 
 /*
- * The connection manager's outbound link -- the ONLY source of the envelope
- * counters, and in particular of the correlation token at body[6:8]. The
- * counter is deliberately UNRELATED to any step or member ordinal, so a test
- * can prove the FSM never substitutes one (a prior implementation used a step
- * ordinal, collided with itself, and stalled a real barrier).
+ * Body[0:8] is the connection manager's job alone now: cnxman_envelope_stamp()
+ * (vms_cnxman_csb.h) reads it straight off the destination CSB's real
+ * cm_send_msg/cm_ack_msg/cm_txn/cm_token fields (design sec 3.2.4 ruling E1).
+ * This bed simulates the ONE thing FC-P3.8's glue owns and this item does
+ * not -- ADVANCING those counters after a real send -- so a test can still
+ * prove what it always has: a token that is deliberately UNRELATED to any
+ * step or member ordinal (a prior implementation used one, collided with
+ * itself, and stalled a real barrier).
  */
-static int bed_next_out(void *ctx, vms_csid_t dst, struct vms_cm_link *l,
-			struct vms_cm_envelope *env)
+static void bed_advance_dialogue(struct vms_csb *csb)
 {
-	struct bed *bp = (struct bed *)ctx;
+	if (csb == NULL)
+		return;
+	csb->cm_send_msg++;
+	csb->cm_token++;
+	/* cm_ack_msg/cm_txn are NOT advanced here, same reasoning as the
+	 * barrier bed: ack_msg changes only on a real receive, and txn is
+	 * per-dialogue, not per-message. */
+}
+
+static uint32_t bed_rebuild_outstanding(void *ctx)
+{
+	return ((struct bed *)ctx)->rebuild_outstanding;
+}
+
+/* CLUB-slot lookup by index, mirroring the FSM's own coord_csb_at() --
+ * duplicated here in the test rather than exposed from the FSM, since it is
+ * a one-line array bound check and adding a production accessor JUST for a
+ * test bed would be scope creep this item does not need. */
+static struct vms_csb *coord_csb_at_test(int32_t index)
+{
+	if (index < 0 || (uint32_t)index >= g.cl.club.n_csb)
+		return NULL;
+	if (!g.cl.club.csb[index].in_use)
+		return NULL;
+	return &g.cl.club.csb[index];
+}
+
+/* A fixed, arbitrary abs [0,72) span -- NOT asserted by this file (this
+ * item's grounded scope is the body, design sec 3.2.4), needed only so
+ * bed_record()'s own vms_frame_classify() call below succeeds exactly as it
+ * would on a real port-assembled frame. */
+static void bed_record_link(struct vms_cm_link *l)
+{
 	static const uint8_t dmac[6] = { 0x08, 0x00, 0x2b, 0x4a, 0xb7, 0x15 };
 	static const uint8_t smac[6] = { 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9 };
 
-	(void)dst;
-	if (bp->link_down) {
-		bp->n_out_refused++;
-		return -1;
-	}
+	memset(l, 0, sizeof(*l));
 	memcpy(l->hdr.eth_dst, dmac, 6);
 	memcpy(l->hdr.eth_src, smac, 6);
 	memcpy(l->hdr.dst_lavc, dmac, 6);
@@ -130,40 +163,36 @@ static int bed_next_out(void *ctx, vms_csid_t dst, struct vms_cm_link *l,
 	l->send_seq = 0x0009;
 	l->remote_conid = 0x62c50009u;
 	l->local_conid = 0x33580008u;
-
-	env->send_msg = bp->next_send_msg++;
-	env->ack_msg = 0x0100;
-	env->txn = 0x0031;
-	env->token = bp->next_token++;
-	return 0;
 }
 
-static uint32_t bed_rebuild_outstanding(void *ctx)
-{
-	return ((struct bed *)ctx)->rebuild_outstanding;
-}
-
-static void bed_record(struct bed *bp, const uint8_t *f, uint32_t len,
+static void bed_record(struct bed *bp, const uint8_t *body, uint32_t len,
 		       uint32_t dst, int was_response)
 {
 	struct vms_frame_info fi;
 	struct vms_cm_envelope env;
 	struct sent_frame *s;
+	struct vms_cm_link link;
+	uint32_t written = 0;
 
 	if (bp->n_sent >= MAX_SENT)
 		return;
-	if (len > VMS_CM_FRAME_LEN)
-		len = VMS_CM_FRAME_LEN;
+	(void)len;   /* every real builder emits exactly VMS_CM_BODY_LEN */
 	s = &bp->sent[bp->n_sent++];
-	memcpy(s->bytes, f, len);
-	s->len = len;
+	/* Recorded as a full, CLASSIFIABLE specimen -- this file's own
+	 * bed_record (unlike the barrier bed) needs vms_frame_classify() to
+	 * succeed below, so it composes through the test-only frame
+	 * composer (design sec 3.2.4) rather than leaving abs [0,72) zero. */
+	bed_record_link(&link);
+	(void)vms_frame_compose(&link, body, s->bytes,
+				(uint32_t)sizeof(s->bytes), &written);
+	s->len = written;
 	s->dst = dst;
 	s->was_response = was_response;
 	s->category = 0xffu;
 	s->opcode = 0xffu;
-	if (vms_frame_classify(f, len, &fi) != VMS_CODEC_OK)
+	if (vms_frame_classify(s->bytes, s->len, &fi) != VMS_CODEC_OK)
 		return;
-	if (vms_cm_envelope_parse(f, len, &fi, &env) != VMS_CODEC_OK)
+	if (vms_cm_envelope_parse(s->bytes, s->len, &fi, &env) != VMS_CODEC_OK)
 		return;
 	s->category = env.category;
 	s->opcode = env.opcode;
@@ -173,6 +202,7 @@ static int bed_send(void *ctx, vms_csid_t dst, const uint8_t *body, uint32_t len
 {
 	(void)ctx;
 	bed_record(&g, body, len, (uint32_t)dst, 0);
+	bed_advance_dialogue(cnxman_club_find_csid(&g.cl.club, dst));
 	return 0;
 }
 
@@ -180,6 +210,7 @@ static int bed_respond(void *ctx, const uint8_t *body, uint32_t len)
 {
 	(void)ctx;
 	bed_record(&g, body, len, 0u, 1);
+	bed_advance_dialogue(coord_csb_at_test(g.dispatching_from_csb));
 	return 0;
 }
 
@@ -205,6 +236,21 @@ static const struct dlm_scs_role_ops bed_dlm_ops = {
 	bed_dlm_begin, NULL, bed_dlm_end, NULL, &g
 };
 
+/* Seed a CSB's real SYSAP dialogue counters (design sec 3.2.4 ruling E1):
+ * 0x0140/0x0100/0x0009/0x07f5 are simply where this bed's simulated
+ * connection to that system starts -- NOT placeholders, the honest initial
+ * state of a fresh per-CSB counter (see vms_cluster.h's own comment on the
+ * fields), applied uniformly so EVERY destination this coordinator can
+ * address -- including the joiner, whose CSB exists before it has a CSID --
+ * carries the same real, advancing state cnxman_envelope_stamp() reads. */
+static void bed_seed_dialogue(struct vms_csb *csb)
+{
+	csb->cm_send_msg = 0x0140u;
+	csb->cm_ack_msg = 0x0100u;
+	csb->cm_txn = 0x0009u;
+	csb->cm_token = 0x07f5u;   /* nothing like a step or member ordinal */
+}
+
 static struct vms_csb *bed_member(vms_scs_sysid_t sysid, const char *name,
 				  vms_csid_t csid)
 {
@@ -215,6 +261,7 @@ static struct vms_csb *bed_member(vms_scs_sysid_t sysid, const char *name,
 	cnxman_csb_set_flags(csb, (uint16_t)(VMS_CSB_F_SELECTED |
 					     VMS_CSB_F_MEMBER |
 					     VMS_CSB_F_STATUS_RCVD));
+	bed_seed_dialogue(csb);
 	return csb;
 }
 
@@ -223,15 +270,14 @@ static struct vms_csb *bed_member(vms_scs_sysid_t sysid, const char *name,
  * assigning it one is the thing under test. */
 static void bed_init(uint32_t n_members)
 {
-	struct vms_csb *local;
+	struct vms_csb *local, *joiner;
 
 	memset(&g, 0, sizeof(g));
 	fake_ops_init(&g.ops, &g.fake);
 	g.ops.send = bed_send;
 	g.ops.respond = bed_respond;
 	g.fake.now_ms = 100000u;
-	g.next_token = 0x07f5u;    /* nothing like a step or member ordinal */
-	g.next_send_msg = 0x0140u;
+	g.dispatching_from_csb = -1;
 
 	memcpy(g.cl.params.scsnode, "OVMX01", 6);
 	g.cl.params.scsnode_len = 6;
@@ -250,14 +296,14 @@ static void bed_init(uint32_t n_members)
 	if (n_members >= 2)
 		(void)bed_member(0x000004000102ull, "VAX2", VAX2_CSID);
 
-	/* the joiner: a real CSB, no CSID, not selected */
-	(void)cnxman_club_alloc_csb(&g.cl.club, 0x000004000104ull, 1);
+	/* the joiner: a real CSB, no CSID, not selected -- but a real
+	 * connection (and so real dialogue state) all the same. */
+	joiner = cnxman_club_alloc_csb(&g.cl.club, 0x000004000104ull, 1);
+	bed_seed_dialogue(joiner);
 
-	g.link_ops.next_out = bed_next_out;
-	g.link_ops.ctx = &g;
 	g.rb_ops.outstanding = bed_rebuild_outstanding;
 	g.rb_ops.ctx = &g;
-	cnxman_coord_init(&g.c, &g.cl, &g.ops, &g.link_ops);
+	cnxman_coord_init(&g.c, &g.cl, &g.ops);
 	cnxman_coord_set_rebuild(&g.c, &g.rb_ops);
 }
 
@@ -265,6 +311,20 @@ static void bed_init(uint32_t n_members)
 static int32_t bed_join_csb(uint32_t n_members)
 {
 	return (int32_t)(n_members + 1u);
+}
+
+/*
+ * Dispatch one inbound frame, recording which CLUB slot it came from so
+ * bed_respond() (above) can advance the right CSB's dialogue counters --
+ * exactly the correlation the real connection manager gets from the CDT the
+ * request arrived on (vms_cnxman.h's own doc comment on `respond`).
+ */
+static enum cnxman_coord_rx coord_feed(struct cnxman_coord *c,
+				       const uint8_t *f, uint32_t n,
+				       int32_t from_csb)
+{
+	g.dispatching_from_csb = from_csb;
+	return cnxman_coord_rx_frame(c, f, n, from_csb);
 }
 
 /* ==========================================================================
@@ -293,7 +353,7 @@ static uint32_t mk_frame(uint8_t *f, uint8_t cat, uint8_t op)
 	l.send_seq = 0x0012;
 	l.remote_conid = 0x33580008u;
 	l.local_conid = 0x62c50009u;
-	(void)vms_cm_link_build(&l, f, VMS_CM_FRAME_LEN, &written);
+	(void)vms_frame_compose_link(&l, f, VMS_CM_FRAME_LEN, &written);
 
 	vms_wire_buf_init(&w, f, VMS_CM_FRAME_LEN);
 	vms_wire_put_zero(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN);
@@ -421,7 +481,7 @@ static void drive_relay_acks(uint32_t n_members)
 	uint32_t i;
 
 	for (i = 0; i < n_members; i++)
-		(void)cnxman_coord_rx_frame(&g.c, f, n, (int32_t)(i + 1u));
+		(void)coord_feed(&g.c, f, n, (int32_t)(i + 1u));
 }
 
 static void drive_commit_ack(uint32_t n_members)
@@ -429,7 +489,7 @@ static void drive_commit_ack(uint32_t n_members)
 	uint8_t f[VMS_CM_FRAME_LEN];
 	uint32_t n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT);
 
-	(void)cnxman_coord_rx_frame(&g.c, f, n, bed_join_csb(n_members));
+	(void)coord_feed(&g.c, f, n, bed_join_csb(n_members));
 }
 
 /* Every frozen participant acknowledges Phase 1 (p. 7-41). */
@@ -440,8 +500,8 @@ static void drive_open_acks(uint32_t n_members)
 	uint32_t i;
 
 	for (i = 0; i < n_members; i++)
-		(void)cnxman_coord_rx_frame(&g.c, f, n, (int32_t)(i + 1u));
-	(void)cnxman_coord_rx_frame(&g.c, f, n, bed_join_csb(n_members));
+		(void)coord_feed(&g.c, f, n, (int32_t)(i + 1u));
+	(void)coord_feed(&g.c, f, n, bed_join_csb(n_members));
 }
 
 static void drive_add_to_barrier(uint32_t n_members)
@@ -449,7 +509,7 @@ static void drive_add_to_barrier(uint32_t n_members)
 	uint8_t f[VMS_CM_FRAME_LEN];
 	uint32_t n = mk_join_request(f);
 
-	(void)cnxman_coord_rx_frame(&g.c, f, n, bed_join_csb(n_members));
+	(void)coord_feed(&g.c, f, n, bed_join_csb(n_members));
 	drive_relay_acks(n_members);
 	drive_commit_ack(n_members);
 	drive_open_acks(n_members);
@@ -461,7 +521,7 @@ static void report_step(int32_t csb, uint32_t step)
 	uint8_t f[VMS_CM_FRAME_LEN];
 	uint32_t n = mk_step(f, g.c.epoch, step);
 
-	(void)cnxman_coord_rx_frame(&g.c, f, n, csb);
+	(void)coord_feed(&g.c, f, n, csb);
 }
 
 /* ==========================================================================
@@ -537,7 +597,7 @@ static void test_coordinator_lock_held_elsewhere_defers(void)
 		uint8_t f[VMS_CM_FRAME_LEN];
 		uint32_t n = mk_join_request(f);
 
-		(void)cnxman_coord_rx_frame(&g.c, f, n, bed_join_csb(2));
+		(void)coord_feed(&g.c, f, n, bed_join_csb(2));
 	}
 	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_DEFER, "state is defer");
 	ct_check_eq_u32(g.c.deferrals, 1, "one deferral counted");
@@ -559,7 +619,7 @@ static void test_backoff_expiry_does_not_admit_on_our_own_say_so(void)
 		uint8_t f[VMS_CM_FRAME_LEN];
 		uint32_t n = mk_join_request(f);
 
-		(void)cnxman_coord_rx_frame(&g.c, f, n, bed_join_csb(2));
+		(void)coord_feed(&g.c, f, n, bed_join_csb(2));
 	}
 	/* The other transition finished; the back-off elapses. */
 	g.cl.club.transition_active = 0u;
@@ -598,7 +658,7 @@ static void test_relay_precedes_commit(void)
 		uint8_t f[VMS_CM_FRAME_LEN];
 		uint32_t n = mk_join_request(f);
 
-		(void)cnxman_coord_rx_frame(&g.c, f, n, bed_join_csb(2));
+		(void)coord_feed(&g.c, f, n, bed_join_csb(2));
 	}
 	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_RELAY), 2,
 			"one relay per OTHER member, none to the joiner");
@@ -613,7 +673,7 @@ static void test_relay_precedes_commit(void)
 		uint8_t f[VMS_CM_FRAME_LEN];
 		uint32_t n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_RELAY);
 
-		(void)cnxman_coord_rx_frame(&g.c, f, n, CSB_VAX2);
+		(void)coord_feed(&g.c, f, n, CSB_VAX2);
 	}
 	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT), 1,
 			"both answered: the subject is committed");
@@ -637,7 +697,7 @@ static void test_two_node_cluster_has_an_empty_relay_set(void)
 		uint8_t f[VMS_CM_FRAME_LEN];
 		uint32_t n = mk_join_request(f);
 
-		(void)cnxman_coord_rx_frame(&g.c, f, n, bed_join_csb(0));
+		(void)coord_feed(&g.c, f, n, bed_join_csb(0));
 	}
 	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_RELAY), 0,
 			"no relays");
@@ -691,7 +751,7 @@ static void test_slot_outside_the_grounded_byte_is_refused(void)
 		uint8_t f[VMS_CM_FRAME_LEN];
 		uint32_t n = mk_join_request(f);
 
-		(void)cnxman_coord_rx_frame(&g.c, f, n, bed_join_csb(2));
+		(void)coord_feed(&g.c, f, n, bed_join_csb(2));
 	}
 	ct_check_eq_u32(g.n_sent, 0, "not one frame originated");
 	ct_check_eq_u32(g.c.last_refusal, CNXMAN_COORD_REF_NO_SLOT,
@@ -719,7 +779,7 @@ static void test_member_outside_the_nodemap_refuses(void)
 		uint8_t f[VMS_CM_FRAME_LEN];
 		uint32_t n = mk_join_request(f);
 
-		(void)cnxman_coord_rx_frame(&g.c, f, n, bed_join_csb(2));
+		(void)coord_feed(&g.c, f, n, bed_join_csb(2));
 	}
 	ct_check_eq_u32(g.n_sent, 0, "not one frame originated");
 	ct_check_eq_u32(g.c.last_refusal, CNXMAN_COORD_REF_NO_NODEMAP,
@@ -744,7 +804,7 @@ static void test_go_waits_for_every_phase1_ack(void)
 		uint8_t r[VMS_CM_FRAME_LEN];
 		uint32_t m = mk_join_request(r);
 
-		(void)cnxman_coord_rx_frame(&g.c, r, m, bed_join_csb(2));
+		(void)coord_feed(&g.c, r, m, bed_join_csb(2));
 	}
 	drive_relay_acks(2);
 	drive_commit_ack(2);
@@ -755,13 +815,13 @@ static void test_go_waits_for_every_phase1_ack(void)
 			"no GO yet");
 
 	n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_ADD);
-	(void)cnxman_coord_rx_frame(&g.c, f, n, CSB_VAX1);
-	(void)cnxman_coord_rx_frame(&g.c, f, n, CSB_VAX2);
+	(void)coord_feed(&g.c, f, n, CSB_VAX1);
+	(void)coord_feed(&g.c, f, n, CSB_VAX2);
 	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_GO), 0,
 			"two of three is not enough (p. 7-41)");
 	ct_check_eq_u32(g.c.phase2_committed, 0, "and nothing is committed");
 
-	(void)cnxman_coord_rx_frame(&g.c, f, n, bed_join_csb(2));
+	(void)coord_feed(&g.c, f, n, bed_join_csb(2));
 	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_GO), 3,
 			"the last ack releases the GO to everybody");
 	ct_check_eq_u32(g.c.phase2_committed, 1, "Phase 2 has run");
@@ -971,7 +1031,7 @@ static void test_out_of_order_and_stale_steps(void)
 		uint8_t f[VMS_CM_FRAME_LEN];
 		uint32_t n = mk_step(f, g.c.epoch + 99u, 1);
 
-		(void)cnxman_coord_rx_frame(&g.c, f, n, CSB_VAX1);
+		(void)coord_feed(&g.c, f, n, CSB_VAX1);
 	}
 	ct_check_eq_u32(g.c.epoch_mismatch, 1, "counted as another epoch");
 
@@ -1038,14 +1098,14 @@ static void test_collision_before_the_go_hands_off(void)
 		uint8_t r[VMS_CM_FRAME_LEN];
 		uint32_t m = mk_join_request(r);
 
-		(void)cnxman_coord_rx_frame(&g.c, r, m, bed_join_csb(2));
+		(void)coord_feed(&g.c, r, m, bed_join_csb(2));
 	}
 	drive_relay_acks(2);
 	drive_commit_ack(2);
 	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_OPEN, "in Phase 1");
 
 	n = mk_foreign_open(f, 0x20u);
-	rx = cnxman_coord_rx_frame(&g.c, f, n, CSB_VAX1);
+	rx = coord_feed(&g.c, f, n, CSB_VAX1);
 
 	ct_check(rx == CNXMAN_COORD_RX_NOT_MINE,
 		 "the frame is handed to the participant FSM");
@@ -1067,7 +1127,7 @@ static void test_collision_after_the_go_is_past_the_point_of_no_return(void)
 	drive_add_to_barrier(2);
 
 	n = mk_foreign_open(f, 0x20u);
-	rx = cnxman_coord_rx_frame(&g.c, f, n, CSB_VAX1);
+	rx = coord_feed(&g.c, f, n, CSB_VAX1);
 
 	ct_check(rx == CNXMAN_COORD_RX_NOT_MINE, "still routed on");
 	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_BARRIER, "ours stands");
@@ -1083,7 +1143,7 @@ static void test_lost_participant_before_the_go_abandons(void)
 		uint8_t r[VMS_CM_FRAME_LEN];
 		uint32_t m = mk_join_request(r);
 
-		(void)cnxman_coord_rx_frame(&g.c, r, m, bed_join_csb(2));
+		(void)coord_feed(&g.c, r, m, bed_join_csb(2));
 	}
 	drive_relay_acks(2);
 	drive_commit_ack(2);
@@ -1145,7 +1205,7 @@ static void test_remove_class(void)
 			"and NO nodemap (spec sec 4(p))");
 
 	n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_REM);
-	(void)cnxman_coord_rx_frame(&g.c, f, n, CSB_VAX1);
+	(void)coord_feed(&g.c, f, n, CSB_VAX1);
 	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_GO), 1,
 			"Phase 1 acknowledged: the GO goes out");
 	ct_check_eq_u32(g.cl.club.cluster_nodes, 2,
@@ -1188,19 +1248,34 @@ static void test_removing_the_last_peer_completes_locally(void)
 
 static void test_no_link_originates_nothing(void)
 {
-	printf("\n-- no connection means no frame, never a zero-filled one --\n");
+	uint32_t releases_before;
+
+	printf("\n-- no CSB for a participant means no frame to it, never a "
+	       "zero-filled one --\n");
 	bed_init(2);
-	g.link_down = 1;
+	drive_add_to_barrier(2);   /* real CSBs for VAX1, VAX2, the joiner */
 
-	{
-		uint8_t f[VMS_CM_FRAME_LEN];
-		uint32_t n = mk_join_request(f);
+	/* Two of the three frozen participants lose their CSB mid-barrier --
+	 * a real, honest scenario (design sec 3.2.4 ruling E1: reachability
+	 * IS CSB presence now, there is no separate link probe). The census
+	 * itself (part_flags[]) is untouched: these two are still owed
+	 * releases, and the FSM must refuse to send them rather than invent
+	 * a frame (INV-6). */
+	cnxman_club_free_csb(&g.cl.club, cnxman_club_csb_at(&g.cl.club, CSB_VAX1));
+	cnxman_club_free_csb(&g.cl.club,
+			     cnxman_club_csb_at(&g.cl.club, (uint32_t)bed_join_csb(2)));
 
-		(void)cnxman_coord_rx_frame(&g.c, f, n, bed_join_csb(2));
-	}
-	ct_check_eq_u32(g.n_sent, 0, "nothing was transmitted");
-	ct_check(g.c.send_failures >= 2, "each refusal is counted");
-	ct_check(g.n_out_refused >= 2, "and the link really refused");
+	releases_before = g.c.send_failures;
+	report_step(CSB_VAX1, 1);
+	report_step(CSB_VAX2, 1);
+	report_step(bed_join_csb(2), 1);
+
+	ct_check(g.c.send_failures - releases_before >= 2,
+		 "each refusal to a vanished CSB is counted");
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_BARRIER_REL), 1,
+			"ONLY the still-reachable participant (VAX2) got a "
+			"release -- never a zero-filled substitute for the "
+			"other two");
 }
 
 static void test_omissions_are_counted_not_faked(void)
@@ -1255,7 +1330,7 @@ static void test_dlm_told_when_abandoned(void)
 		uint8_t f[VMS_CM_FRAME_LEN];
 		uint32_t n = mk_join_request(f);
 
-		(void)cnxman_coord_rx_frame(&g.c, f, n, bed_join_csb(2));
+		(void)coord_feed(&g.c, f, n, bed_join_csb(2));
 	}
 	cnxman_coord_abandon(&g.c, NULL);
 	ct_check_eq_u32(g.dlm_ends, 1, "transition_end once");
@@ -1272,23 +1347,23 @@ static void test_foreign_frames_route_on(void)
 	bed_init(2);
 
 	n = mk_foreign_open(f, 0x20u);
-	ct_check(cnxman_coord_rx_frame(&g.c, f, n, CSB_VAX1) ==
+	ct_check(coord_feed(&g.c, f, n, CSB_VAX1) ==
 		 CNXMAN_COORD_RX_NOT_MINE, "an open routes on");
 
 	n = mk_frame(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_GO);
-	ct_check(cnxman_coord_rx_frame(&g.c, f, n, CSB_VAX1) ==
+	ct_check(coord_feed(&g.c, f, n, CSB_VAX1) ==
 		 CNXMAN_COORD_RX_NOT_MINE, "a GO routes on");
 
 	n = mk_frame(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_ABORT);
-	ct_check(cnxman_coord_rx_frame(&g.c, f, n, CSB_VAX1) ==
+	ct_check(coord_feed(&g.c, f, n, CSB_VAX1) ==
 		 CNXMAN_COORD_RX_NOT_MINE, "an abort routes on");
 
 	n = mk_frame(f, VMS_CM_CAT_DLM, VMS_CM_OP_DLM_REBUILD);
-	ct_check(cnxman_coord_rx_frame(&g.c, f, n, CSB_VAX1) ==
+	ct_check(coord_feed(&g.c, f, n, CSB_VAX1) ==
 		 CNXMAN_COORD_RX_NOT_MINE, "an inbound rebuild record routes on");
 
 	n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_BARRIER);
-	ct_check(cnxman_coord_rx_frame(&g.c, f, n, CSB_VAX1) ==
+	ct_check(coord_feed(&g.c, f, n, CSB_VAX1) ==
 		 CNXMAN_COORD_RX_NOT_MINE,
 		 "and a 0x81/0x0b is the participant's, never ours");
 	ct_check_eq_u32(g.n_sent, 0, "none of them made us emit anything");

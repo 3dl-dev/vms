@@ -119,8 +119,29 @@ struct vms_pe_vc_view {
 	uint32_t timvcfail_ms_left;  /* time to the TIMVCFAIL deadline, 0 when closed */
 	uint32_t credits_send;       /* port-level credit window state */
 	uint32_t credits_receive;
+
+	/*
+	 * Added by FC-P1.6, additively and at the end (rule: append, never
+	 * insert -- the struct above is the FC-P1.2/P1.9 layout every existing
+	 * reader already decodes). Both fields are real vms_pe_fsm.c pe_vc
+	 * counters (INV-6), never derived or fabricated here:
+	 *
+	 *   rx_gaps      pe_vc.rx_gaps -- frames discarded for arriving ahead
+	 *                of recv_seq + 1, the go-back-N receiver's own count of
+	 *                loss it absorbed (design SS3.2.5). Non-zero on a lossy
+	 *                LAN, zero on a clean one; never a reason to break.
+	 *   down_reason  pe_vc.last_down_reason -- enum pe_vc_down_reason, the
+	 *                MOST RECENT reason this circuit went down, 0 meaning
+	 *                "never down since this object was allocated". A VC
+	 *                that re-formed after a break still reports its last
+	 *                reason here; the state field (above) is what tells a
+	 *                reader whether the circuit is OPEN right now.
+	 */
+	uint32_t rx_gaps;
+	uint8_t  down_reason;
+	uint8_t  pad1[3];
 };
-_Static_assert(sizeof(struct vms_pe_vc_view) == 56,
+_Static_assert(sizeof(struct vms_pe_vc_view) == 64,
 	       "vms_pe_vc_view is a cross-substrate ABI struct");
 
 struct vms_pe_view {

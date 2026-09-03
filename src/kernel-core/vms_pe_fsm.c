@@ -3491,6 +3491,14 @@ void pe_fsm_vc_project(const struct pe_fsm *f, const struct pe_vc *vc,
 	}
 	out->credits_send = vc->send_credit;
 	out->credits_receive = vc->recv_credit;
+
+	/* FC-P1.6: the go-back-N gap counter and the most recent teardown
+	 * reason, both real pe_vc counters (INV-6) -- rx_gaps is incremented
+	 * only where the receive path actually discards an ahead-of-window
+	 * frame, and last_down_reason is written only where vc_notify_down()
+	 * actually fires (never guessed here). */
+	out->rx_gaps = vc->rx_gaps;
+	out->down_reason = vc->last_down_reason;
 }
 
 static const char *const pe_vc_state_names[VMS_PE_VC_STATE__COUNT] = {

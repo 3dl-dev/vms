@@ -404,6 +404,15 @@ resolution to the operator's ruling. P3.9 also owns making `kif_caller_census`
 green (E34) via the SHOW CLUSTER product caller + kif wrappers for
 DIAG_PORT/CONN/CSB.
 
+### E34 — RESOLVED by FC-P3.9. kif census exits 0 (65/65 opcodes wrapped); SHOW CLUSTER + $GETSYI are the real product callers for DIAG_PORT/CONN/CSB + a new CLUSTER_GETSYI (0x6c). `$SETCLUEVT` wrapper honestly `OVMX-UNWIRED (vms-733)` — no `$SETCLUEVT` service in src/libvms yet (that service = a separate outcome).
+### E36 — RESOLVED by FC-P3.9. Peer discovery WIRED: `cnxman_discover_peers()` sweeps the SCS SB table on the reconnect beat, allocates a CSB (NEW) per system with an open circuit; join gated on `cnxman_join_target_present()`. sysid traces to a real received frame (`vc_notify_up`). No NO_TARGET-with-a-real-peer anymore.
+
+### E38. FC-P3.9 aftermath — deferred module params, compat downgrade, E17 now dangling (raised by FC-P3.9)
+- **DEFERRED (divergence from plan row, flagged):** `vms_local_csid`/`dlm_member_csids` module params NOT removed — they are the legacy `vms_lock.c` directory's only CSID source, which **FC-P4.3 owns replacing** (`exec_jhash`→`dir_resolve`). Removing now amputates the DLM directory with no replacement. The executive stack never reads them; only tests do. Safe to defer; **FC-P4.3 removes them with its replacement.**
+- **COMPAT DOWNGRADE (honest, forced):** `mscp-serve$disk-read-write` → **status=absent** because its implementation WAS the deleted scsd daemon. `connection-manager$real-vax-join` → **absent** (names E30/E31 as the gap). These are INV-6-honest corrections of strawman-backed claims, not regressions of real capability.
+- **E17 now has 2 DANGLING-EVIDENCE warnings** in `cluster-dlm.yaml` (`src/vmsscs/scsd.c`, `scs_dlm.c` — deleted by P3.9). P3.9 left them deliberately (repairing the pointer = editing the row the operator must adjudicate). **E17 is now MORE visible + MORE urgent for the operator:** the cluster-dlm "distributed DLM COMPLETE" claim's own cited evidence (the scsd daemon) is GONE, which underscores that the claim was strawman-backed. Operator ruling still pending.
+- **rd items FC-P3.9 filed** (retirement fallout, tracked): vms-ec8 (24 lab capture scripts → fold into FC-P3.11), vms-1da5 (cross-node DLM CI gone until FC-P4.8), vms-1b6 (~25 spec-conformance/anti-drift gates → restore quarantine gates first), vms-733 ($SETCLUEVT service unbuilt).
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

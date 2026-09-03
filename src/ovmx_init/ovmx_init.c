@@ -1192,6 +1192,18 @@ static void sysgen_str_into(const char *src, uint8_t *dst, size_t dstlen,
 }
 
 /*
+ * The cluster software-version identity is a FIXED-WIDTH wire field, and
+ * sysgen_str_into() above truncates silently. A token that outgrew the field
+ * would go on the wire cut in half -- a different identity, not a shorter one --
+ * so the SSOT is checked against the field here, at compile time.
+ */
+_Static_assert(sizeof(OVMX_CLUSTER_SW_VERSION) - 1u <= OVMX_CLUSTER_SW_VERSION_LEN,
+               "OVMX_CLUSTER_SW_VERSION does not fit the SCS START software-version field");
+_Static_assert(sizeof(((struct vms_sysgen_load_args *)0)->sw_version) ==
+                       OVMX_CLUSTER_SW_VERSION_LEN,
+               "the SYSGEN_LOAD sw_version field is not the identity SSOT's field width");
+
+/*
  * load_cluster_sysgen_params - STARTUP.EXE's own case of SYSBOOT (FC-P0.10,
  * docs/plan-faithful-cluster-executive.md). Reads the cluster SYSGEN
  * parameters off SYS$SYSTEM:OVMXVMSSYS.PAR through the SAME shared reader
@@ -1283,6 +1295,18 @@ static uint32_t load_cluster_sysgen_params(void)
     if (sysgen_read_string("DISK_QUORUM", strval, sizeof(strval)) == 0 && strval[0] != '\0')
         sysgen_str_into(strval, args.disk_quorum, sizeof(args.disk_quorum),
                         &args.disk_quorum_len);
+
+    /*
+     * The ONE field here that is not a SYSGEN parameter: the software-version
+     * identity this node broadcasts as a cluster member (SCS START body abs
+     * 72). It is OVMX's own, so it comes from the identity SSOT
+     * (OVMX_CLUSTER_SW_VERSION, ovmx_identity.h) and is carried DOWN -- the
+     * executive may hold no version literal of its own (INV-1), and it must
+     * never echo a peer's "VMS V7.3" (INV-0 masquerade). Length-carried, not
+     * NUL-terminated: the executive blank-pads it to the wire field's width.
+     */
+    sysgen_str_into(OVMX_CLUSTER_SW_VERSION, args.sw_version,
+                    sizeof(args.sw_version), &args.sw_version_len);
 
     if (cluster_authorize_read(&auth) == 0) {
         args.auth_group = auth.group;

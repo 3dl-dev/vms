@@ -1185,7 +1185,10 @@ _Static_assert(VMS_IOCTL_CLUSTER_GETSYI == 0xC024566Cu,
  * these are in the executive before SYSINIT forms or joins").
  *
  * Field-for-field this is struct vms_cluster_params (vms_cluster.h) plus the
- * `status` return. The dispatcher (vms_ioctl_sysgen_load, vms_devtab.c)
+ * `status` return. (struct vms_cluster_params also carries params_valid's
+ * companion in struct vms_cluster -- a flag the EXECUTIVE sets on commit and
+ * that deliberately has no field here, so no caller can assert it.)
+ * The dispatcher (vms_ioctl_sysgen_load, vms_devtab.c)
  * copies each field explicitly rather than a byte-identical memcpy, because
  * -- unlike CLUSTER_DIAG_PORT's pure snapshot reads -- this ioctl performs
  * the negctl validation the plan row requires: VAXCLUSTER >= 1 with no
@@ -1240,12 +1243,32 @@ struct vms_sysgen_load_args {
     uint8_t  auth_password_len;     /* in: significant bytes                      */
     uint8_t  auth_valid;            /* in: 1 = a real CLUSTER_AUTHORIZE.DAT was read */
 
+    /*
+     * ---- this node's OWN software identity (NOT a SYSGEN parameter) ----
+     * The one field here that does not come from OVMXVMSSYS.PAR. The SCS START
+     * body advertises an 8-byte software version at abs 72 (spec SS4(g)); the
+     * value is OVMX's, and its SSOT (OVMX_CLUSTER_SW_VERSION,
+     * src/libvms/include/ovmx_identity.h) is USERLAND -- kernel-core cannot
+     * include it and may hold no version literal of its own (INV-1). So the
+     * boot CARRIES it down here, exactly as it carries SCSNODE: STARTUP.EXE
+     * reads the SSOT, this ioctl commits it, and vms_pe.c reads it back out of
+     * committed executive state to fill the wire field. Never a constant in the
+     * executive, and never echoed from a peer's START (a real VAX's "VMS V7.3"
+     * is that VAX's identity; repeating it is a masquerade, INV-0).
+     *
+     * sw_version_len 0 = no token supplied: the port then advertises zeros and
+     * counts it (pe_fsm.vc_sw_version_absent), never a fabricated version.
+     */
+    uint8_t  sw_version[8];         /* in: the SSOT's token, blank/NUL padded     */
+    uint8_t  sw_version_len;        /* in: significant chars, 0 = not supplied    */
+    uint8_t  pad3;
+
     uint32_t status;                /* return: SS$_ status                        */
 };
-_Static_assert(sizeof(struct vms_sysgen_load_args) == 104,
+_Static_assert(sizeof(struct vms_sysgen_load_args) == 112,
                "vms_sysgen_load_args changed size -- VMS_IOCTL_SYSGEN_LOAD ABI break");
 #define VMS_IOCTL_SYSGEN_LOAD _IOWR(VMS_IOC_MAGIC, 0x3e, struct vms_sysgen_load_args)
-_Static_assert(VMS_IOCTL_SYSGEN_LOAD == 0xC068563Eu,
+_Static_assert(VMS_IOCTL_SYSGEN_LOAD == 0xC070563Eu,
                "VMS_IOCTL_SYSGEN_LOAD encodes differently than the reference build");
 
 /*

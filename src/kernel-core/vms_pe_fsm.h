@@ -1018,6 +1018,15 @@ struct pe_fsm {
 	uint32_t vc_no_slot;        /* the VC table was full: refused         */
 	uint32_t vc_no_incarnation; /* §4(i).B echo absent: NO START built    */
 	uint32_t vc_no_identity;    /* incarnation time / clock absent        */
+	/*
+	 * Formation bodies sent with abs 72-79 / abs 95 ZERO because the
+	 * executive had nothing loaded to assert there (E57). Unlike the two
+	 * counters above, neither field STOPS a circuit -- a body still goes
+	 * out, honestly empty -- so the omission is only visible if it is
+	 * counted. Same rule as disc_format_absent above.
+	 */
+	uint32_t vc_sw_version_absent;
+	uint32_t vc_credits_absent;
 	uint32_t vc_rx_no_circuit;  /* SCS frame with no circuit to take it   */
 	uint32_t vc_rx_no_channel;  /* SCS frame from an unknown station      */
 	uint32_t vc_rx_parse_failed;/* classified SCS, then failed to decode  */

@@ -1822,13 +1822,33 @@ static int vc_identity_ok(struct pe_fsm *f)
 	return 1;
 }
 
+/*
+ * The two formation-body fields the glue fills out of LOADED executive state
+ * (pe_build_identity, vms_pe.c): the software version this node broadcasts at
+ * abs 72 and the Send Credit it grants at abs 95. Neither has a default here --
+ * with nothing loaded, zero goes out and the omission is COUNTED, exactly as
+ * the discovery-format span is (E56/E57, INV-6). What a peer sent is NEVER a
+ * source for either: a VAX's "VMS V7.3" is that VAX's identity.
+ */
+static void vc_fill_advertised(struct pe_fsm *f, struct vms_scs_start_frame *s)
+{
+	if (f->id.sw_version_valid)
+		pe_copy(s->software_version, f->id.sw_version,
+			VMS_SCS_START_SWVER_LEN);
+	else
+		f->vc_sw_version_absent++;
+
+	if (f->id.cluster_credits_valid)
+		s->credits = f->id.cluster_credits;
+	else
+		f->vc_credits_absent++;
+}
+
 static void vc_fill_identity(struct pe_fsm *f, struct vms_scs_start_frame *s)
 {
 	s->scssystemid = (uint16_t)(f->sysid & 0xffffu);
-	pe_copy(s->software_version, f->id.sw_version,
-		VMS_SCS_START_SWVER_LEN);
+	vc_fill_advertised(f, s);
 	pe_copy(s->hardware_type, f->id.hw_type, VMS_SCS_START_HWTYPE_LEN);
-	s->credits = f->id.cluster_credits;
 	vc_put_nodename(f, s->node_name);
 	s->incarnation_time = f->id.incarnation_time;
 	s->message_time = pe_now_vms(f);

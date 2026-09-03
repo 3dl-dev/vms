@@ -127,6 +127,21 @@ static void env_timings(uint32_t timvcfail_ms, uint32_t retransmit_ms)
 	g_vc_retransmit_ms = retransmit_ms;
 }
 
+/*
+ * E57: the two formation-body fields the GLUE fills out of loaded SYSGEN state
+ * (vms_pe.c pe_build_identity, through cluster_sysgen_sw_version/_credits) --
+ * abs 72-79 software version and abs 95 CLUSTER_CREDITS. A boot that loaded no
+ * parameters leaves both invalid, which is a different case from
+ * `with_identity == 0` (no boot time at all, which forms no circuit): here the
+ * circuit still forms and the body still goes out, honestly empty.
+ */
+static int g_omit_advertised;
+
+static void env_omit_advertised(int omit)
+{
+	g_omit_advertised = omit;
+}
+
 /* The VMS absolute-time clock the formation body needs. A monotonic function
  * of the injected millisecond clock, so it is LIVE (a different value per
  * frame, which is the only thing §4(g) grounds about abs 112) and still
@@ -161,14 +176,18 @@ static void env_init(struct vc_env *e, int with_identity, int with_upper)
 	id.mcast_valid = 1;
 	id.max_sca_len = 1500;
 	if (with_identity) {
-		memcpy(id.sw_version, "VMX V0.6", 8);
-		id.sw_version_valid = 1;
 		memcpy(id.hw_type, "X86 ", 4);
 		id.hw_type_valid = 1;
-		id.cluster_credits = LAB_CREDITS;
-		id.cluster_credits_valid = 1;
 		id.incarnation_time = OVMX_BOOT_TIME;
 		id.incarnation_time_valid = 1;
+		if (!g_omit_advertised) {
+			/* What cluster_sysgen_sw_version()/_credits() hand the
+			 * glue out of a COMMITTED SYSGEN record. */
+			memcpy(id.sw_version, "VMX V0.6", 8);
+			id.sw_version_valid = 1;
+			id.cluster_credits = LAB_CREDITS;
+			id.cluster_credits_valid = 1;
+		}
 	}
 	id.timvcfail_ms = g_timvcfail_ms;
 	id.vc_retransmit_ms = g_vc_retransmit_ms;
@@ -480,6 +499,12 @@ static void test_formation_joiner_path(void)
 			"our OWN SCSSYSTEMID at abs 60");
 	ct_check(memcmp(d.start.software_version, "VMX V0.6", 8) == 0,
 		 "our OWN software version, not a captured VMS string");
+	ct_check_eq_u32(d.start.credits, LAB_CREDITS,
+			"the loaded CLUSTER_CREDITS at abs 95 (E57)");
+	ct_check_eq_u32(g_env.fsm.vc_sw_version_absent, 0,
+			"nothing was omitted from the body");
+	ct_check_eq_u32(g_env.fsm.vc_credits_absent, 0,
+			"and no credit grant was omitted either");
 	ct_check(d.start.incarnation_time == OVMX_BOOT_TIME,
 		 "the executive's boot time at abs 80, verbatim");
 	ct_check(d.start.message_time != 0 &&
@@ -588,6 +613,40 @@ static void test_no_boot_time_no_circuit(void)
 			"no formation frame was built");
 	ct_check_eq_u32(g_env.fsm.vc_no_identity, 1,
 			"and the refusal is COUNTED");
+}
+
+/*
+ * E57, the other half of the same rule. The software version at abs 72-79 and
+ * the credit grant at abs 95 are ADVERTISEMENTS, not identity gates: a boot
+ * that loaded no SYSGEN record still forms a circuit, but it must advertise
+ * ZERO in both -- never a version this file invented and never the peer's own
+ * "VMS V7.3" -- and the omission must be COUNTED, or it is invisible (which is
+ * exactly how E57 shipped: eight zero bytes on the wire, VAX1 rendering the
+ * software column as "?", and nothing in the executive saying so).
+ */
+static void test_unadvertised_identity_is_zero_and_counted(void)
+{
+	struct fake_vc_decoded d;
+	static const uint8_t zeros[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+
+	printf("-- nothing loaded => honest zeros at abs 72/95, COUNTED (E57)\n");
+	env_omit_advertised(1);
+	env_init(&g_env, 1, 1);
+	channel_to_b4(&g_env, 1);
+	env_omit_advertised(0);
+
+	d = fake_vc_last(&g_env.fake, FAKE_VC_START);
+	ct_check(d.ok && !d.is_ack, "the circuit still forms: a START goes out");
+	ct_check(memcmp(d.start.software_version, zeros, 8) == 0,
+		 "abs 72-79 is ZERO -- no invented version, no borrowed one");
+	ct_check_eq_u32(d.start.credits, 0,
+			"abs 95 grants nothing, rather than a default window");
+	ct_check_eq_u32(g_env.fsm.vc_sw_version_absent, 1,
+			"and the missing version is COUNTED");
+	ct_check_eq_u32(g_env.fsm.vc_credits_absent, 1,
+			"and so is the missing credit grant");
+	ct_check(memcmp(d.start.node_name, "OVMX    ", 8) == 0,
+		 "the fields that WERE loaded are unaffected");
 }
 
 /*
@@ -1404,6 +1463,7 @@ int main(void)
 	test_incarnation_echo_is_read_not_chosen();
 	test_no_echo_no_start();
 	test_no_boot_time_no_circuit();
+	test_unadvertised_identity_is_zero_and_counted();
 	test_member_continuation_is_not_copied();
 	test_implied_ack();
 	test_ack_advances_per_message();

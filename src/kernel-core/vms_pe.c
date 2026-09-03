@@ -46,6 +46,7 @@
 #include "vms_internal.h"      /* the SS$_ vocabulary + the host's fixed-width types */
 #include "exec_kbackend.h"     /* SS14..SS18: the ONLY substrate surface this TU has */
 #include "vms_cluster.h"
+#include "vms_cluster_sysgen.h" /* FC-P0.10: what the loaded parameters let us assert */
 #include "vms_cluster_fork.h"  /* FC-P0.5: cf_rx_deliver, cf_timer_*, fork_enter/leave */
 #include "vms_cluster_snapshot.h"
 #include "vms_pe.h"
@@ -59,6 +60,17 @@
  */
 _Static_assert(EXEC_SS_NOSUCHDEV == SS__NOSUCHDEV,
 	       "the seam's SS$_NOSUCHDEV must be the executive's SS$_NOSUCHDEV");
+
+/*
+ * Same discipline for the software-version identity: the SYSGEN store sizes it
+ * (VMS_CLUSTER_SWVER_LEN, vms_cluster.h) and the codec owns the wire offset
+ * (VMS_SCS_START_SWVER_LEN, vms_cluster_codec_vc.h). pe_build_identity() copies
+ * one into the other, so a future edit that widens either alone is a compile
+ * error here rather than a truncated identity on the wire.
+ */
+_Static_assert((unsigned)VMS_CLUSTER_SWVER_LEN ==
+		       (unsigned)VMS_SCS_START_SWVER_LEN,
+	       "the loaded software-version field must be the wire field's width");
 
 /* ==========================================================================
  * 0. This node's honest hardware class (spec SS4(g) phase 2 abs 88)
@@ -255,35 +267,34 @@ static void pe_build_identity(struct vms_cluster *cl, const uint8_t mcast[6],
 	id->hw_type_valid = 1u;
 
 	/*
-	 * DISCLOSED GAPS, not fabrications (INV-6). Two START-body fields this
-	 * node genuinely cannot attest to yet. VMS_IOCTL_SYSGEN_LOAD HAS landed
-	 * (vms_devtab.c) -- what is still missing is a source for each value,
-	 * not the ioctl:
-	 *   - sw_version: the "VMX Vx.y" honest-OS-identity broadcast has no
-	 *     source visible to kernel-core (ovmx_identity.h is userland, and
-	 *     no version field crosses SYSGEN_LOAD into cl->params) -- left
-	 *     invalid, zero bytes go out, exactly the join_nonce_valid
-	 *     precedent this same struct already documents for an unset
-	 *     credential. It must NEVER be filled by echoing a peer's
-	 *     "VMS V7.3": that is a masquerade, not a learned format constant.
-	 *   - cluster_credits_valid: cl->params.cluster_credits cannot yet be
-	 *     told apart from "SYSGEN never loaded" (there is no loaded-params
-	 *     flag today), so this stays unset rather than asserting a
-	 *     borrowed vaxcluster check proves it. vc_fill_identity() still
-	 *     copies the raw (zero) value -- an honest "no credit granted
-	 *     yet", never a placeholder.
-	 * Neither gap blocks a channel from forming (SS4(a)/(b) never touch
-	 * either field) or a circuit from forming (only incarnation_time_valid
-	 * gates that, filled below).
+	 * The two START-body fields E57 measured going out as zeros -- abs
+	 * 72-79 software-version and abs 95 CLUSTER_CREDITS -- both read HERE,
+	 * out of parameters the executive itself committed, through
+	 * vms_cluster_sysgen.c's accessors. Each returns 0 when this node has
+	 * nothing to assert, and then the zero that goes on the wire is a real
+	 * omission that vc_fill_identity() COUNTS (vc_sw_version_absent /
+	 * vc_credits_absent), the disc_format_absent precedent exactly.
 	 *
-	 * OPEN, AND MEASURED (E56): the one OVMX build that ever reached MEMBER
-	 * sent BOTH -- `ovmx-760-MEMBER-achieved-20260730.pcap` carries
-	 * sw_version "VMX V0.1" and credits 10 in its 0x41 START body, against
-	 * "VMS V7.3"/10 from every VAX (spec SS4(g) grounds credits=CLUSTER_
-	 * CREDITS at abs 95, 28/28). So these two zeros are expected to be the
-	 * NEXT wall once the member's round-0 START starts arriving. Closing
-	 * them needs a decision, not a guess, and it is not made here.
+	 * WHY IT IS A LOADED VALUE AND NOT A CONSTANT. The version's SSOT is
+	 * OVMX_CLUSTER_SW_VERSION in src/libvms/include/ovmx_identity.h, which
+	 * is USERLAND: kernel-core cannot include it and may hold no version
+	 * literal of its own (INV-1, tests/integration/test_identity_ssot.sh).
+	 * The boot carries the token down through VMS_IOCTL_SYSGEN_LOAD. It
+	 * must NEVER be filled by echoing a peer's "VMS V7.3" -- that is a
+	 * masquerade (INV-0), not a learned format constant, and it is not the
+	 * same case as the abs 47-67 discovery span, which is node-INDEPENDENT.
+	 *
+	 * MEASURED (E56/E57): the one OVMX build that ever reached MEMBER sent
+	 * both -- `ovmx-760-MEMBER-achieved-20260730.pcap` carries a "VMX V0.x"
+	 * version and credits 10 in its 0x41 START body, against "VMS V7.3"/10
+	 * from every VAX (spec SS4(g) grounds credits = CLUSTER_CREDITS at abs
+	 * 95, 28/28), and against the E56 re-fire's zeros, which VAX1 rendered
+	 * as "?" with no CSB formed.
 	 */
+	id->sw_version_valid =
+		(uint8_t)cluster_sysgen_sw_version(cl, id->sw_version);
+	id->cluster_credits_valid =
+		(uint8_t)cluster_sysgen_credits(cl, &id->cluster_credits);
 
 	id->incarnation_time = exec_time_now_vms();
 	id->incarnation_time_valid = 1u;

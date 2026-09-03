@@ -96,18 +96,37 @@
 
 /*
  * Cluster software-version identity -- the string OVMX presents AS A CLUSTER
- * NODE (SHOW CLUSTER software column, and the SCS START/config wire field).
- * Deliberately "VMX V0.x", NOT "VMS V<n>" and NOT OVMX_PRODUCT_VERSION: it is a
- * fixed 8-byte, blank-padded wire field (SCS_START_NODENAME_LEN) that the real
- * VAX renders verbatim, so it is width-constrained and versioned independently
- * of the product version above. This is the SSOT for that identity; the wire
- * copy the SCS START advertisement puts on the wire
- * (src/kernel-core/vms_cluster_codec_scs.c) MUST stay
- * byte-identical to it (that header is the gate-exempt wire surface, so it holds
- * its own 8-byte literal -- keep the two in sync). Authenticity INV-0 /
- * trademark-ceiling: OVMX is OpenVMS-COMPATIBLE, it never claims to BE OpenVMS.
+ * NODE (SHOW CLUSTER software column, and the SCS START body's abs 72
+ * software-version field). Deliberately "VMX V0.x", NOT "VMS V<n>" and NOT
+ * OVMX_PRODUCT_VERSION verbatim: it is a fixed 8-byte, blank-padded wire field
+ * (VMS_SCS_START_SWVER_LEN) that the real VAX renders verbatim, so it is
+ * width-constrained -- "VMX " + OVMX_PRODUCT_VERSION ("V0.6-10") does not fit,
+ * and the patch level is dropped rather than the identity truncated mid-token.
+ *
+ * WHY NOT ovmx_compat_version(). That token ("V9.2-3"/"V7.3") is what MACHINES
+ * read for VMS-lineage interoperability (F$GETSYI VERSION). Putting "VMS V7.3"
+ * in this field would tell a real VAX we ARE OpenVMS VAX V7.3 -- the masquerade
+ * INV-0 (trademark ceiling) and the honest-OS-identity ruling both forbid, and
+ * it is exactly the value that must never be echoed off a peer's own START.
+ *
+ * ITS MAJOR.MINOR TRACKS OVMX_PRODUCT_VERSION, and tests/integration/
+ * test_identity_ssot.sh enforces that: this used to sit at "VMX V0.1" while the
+ * product shipped V0.6-10, so a V0.6 executive broadcast a V0.1 claim. Bump BOTH
+ * when the product version moves.
+ *
+ * This is the SSOT for that identity, and the ONLY copy. The executive
+ * broadcasts it because the boot CARRIES it down -- src/ovmx_init/ovmx_init.c
+ * reads this macro and passes it through VMS_IOCTL_SYSGEN_LOAD's sw_version
+ * field into struct vms_cluster.params (kernel-core cannot include this
+ * userland header, and must never hold a version literal of its own).
  */
-#define OVMX_CLUSTER_SW_VERSION "VMX V0.1"
+#define OVMX_CLUSTER_SW_VERSION "VMX V0.6"
+
+/* The wire field's fixed width (VMS_SCS_START_SWVER_LEN in the executive's own
+ * vms_cluster_codec_vc.h). Blank-padding a shorter token to it is the
+ * executive's job, not this header's -- a boot hands down the token and its
+ * length, and cluster_sysgen_sw_version() pads. */
+#define OVMX_CLUSTER_SW_VERSION_LEN 8
 
 /*
  * INV-0 badge. Attached to human-facing identity so the answer to "what is

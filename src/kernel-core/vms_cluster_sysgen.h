@@ -43,4 +43,37 @@
 int cluster_sysgen_load(struct vms_cluster *cl,
                         const struct vms_cluster_params *in);
 
+/*
+ * cluster_sysgen_sw_version - the 8-byte software-version identity this node
+ * may BROADCAST (SCS START body abs 72), read out of the loaded parameters.
+ *
+ * Writes `out' and returns 1 only when a boot actually committed a token
+ * (cl->params_valid AND a nonzero sw_version_len): the value is the loaded
+ * token, left-justified and BLANK-padded to VMS_CLUSTER_SWVER_LEN, which is
+ * the field's own convention (the VAX renders it verbatim).
+ *
+ * Returns 0 -- and leaves `out' untouched -- when this node has nothing to
+ * assert. There is no default: kernel-core holds no version literal (INV-1),
+ * and a peer's own "VMS V7.3" is that peer's identity, never ours (INV-6).
+ * The caller then advertises zeros and COUNTS the omission.
+ */
+int cluster_sysgen_sw_version(const struct vms_cluster *cl,
+                              uint8_t out[VMS_CLUSTER_SWVER_LEN]);
+
+/*
+ * cluster_sysgen_credits - the one-byte Send Credit this node GRANTS a peer
+ * (SCS START body abs 95 = SYSGEN CLUSTER_CREDITS), read out of the loaded
+ * parameters.
+ *
+ * Writes `*out' and returns 1 only when a boot actually committed the
+ * parameters: a configured 0 is a real grant of nothing and IS asserted, which
+ * is precisely why cl->params_valid, not the value, decides.
+ *
+ * Returns 0 when the parameters were never loaded, and ALSO when the
+ * configured value cannot be expressed in the field (> 255): truncating 256 to
+ * 0, or to 255, would put a credit window on the wire that this node did not
+ * configure -- a promise it never made. Honest omission instead (INV-6).
+ */
+int cluster_sysgen_credits(const struct vms_cluster *cl, uint8_t *out);
+
 #endif /* OVMX_VMS_CLUSTER_SYSGEN_H */

@@ -57,6 +57,13 @@ static void fill_valid_params(struct vms_cluster_params *p)
 	memcpy(p->auth_password, "seekrit", 7);
 	p->auth_password_len = 7;
 	p->auth_valid = 1;
+
+	/* The identity SSOT's cluster software version, as STARTUP.EXE carries
+	 * it down (OVMX_CLUSTER_SW_VERSION -- userland, so this test spells the
+	 * shape rather than including it; the SSOT-to-boot-path binding itself
+	 * is tests/integration/test_identity_ssot.sh's). */
+	memcpy(p->sw_version, "VMX V0.6", 8);
+	p->sw_version_len = 8;
 }
 
 /*
@@ -94,6 +101,104 @@ static void test_valid_load_commits(void)
 	ct_check_eq_u32(g_cl.params.mscp_serve_all, 0, "MSCP_SERVE_ALL loaded");
 	ct_check_eq_u32(g_cl.params.auth_group, 42, "CLUSTER_AUTHORIZE group loaded");
 	ct_check_eq_u32(g_cl.params.auth_valid, 1, "CLUSTER_AUTHORIZE valid flag loaded");
+	ct_check_eq_u32(g_cl.params.sw_version_len, 8, "software-version token loaded");
+	ct_check(memcmp(g_cl.params.sw_version, "VMX V0.6", 8) == 0,
+	         "software-version token loaded VERBATIM, no re-spelling");
+	ct_check_eq_u32(g_cl.params_valid, 1,
+	                "the COMMIT is what marks the record real (params_valid)");
+}
+
+/*
+ * ==========================================================================
+ * 5. E57: what the port may ADVERTISE out of the loaded record -- the SCS
+ *    START body's abs 72-79 software version and its abs 95 CLUSTER_CREDITS.
+ *    Both zeros on the wire were what made VAX1 render OVMXJ1's software as
+ *    "?" and form no CSB. Neither has a default: with nothing loaded the
+ *    accessor says so and the port advertises an honest zero (INV-6).
+ * ==========================================================================
+ */
+static void test_advertised_identity_from_loaded_params(void)
+{
+	struct vms_cluster_params p;
+	uint8_t swver[VMS_CLUSTER_SWVER_LEN];
+	uint8_t credits;
+
+	printf("[sysgen] E57: the advertised identity is READ from the commit\n");
+
+	/* (a) Never loaded: nothing to assert, and NOT a fabricated default. */
+	memset(&g_cl, 0, sizeof(g_cl));
+	memset(swver, 0xee, sizeof(swver));
+	credits = 0xee;
+	ct_check(cluster_sysgen_sw_version(&g_cl, swver) == 0,
+	         "no SYSGEN load: no software version to advertise");
+	ct_check(swver[0] == 0xee,
+	         "no SYSGEN load: the caller's buffer is left UNTOUCHED");
+	ct_check(cluster_sysgen_credits(&g_cl, &credits) == 0,
+	         "no SYSGEN load: no credit grant to advertise");
+	ct_check(credits == 0xee,
+	         "no SYSGEN load: the caller's credit byte is left UNTOUCHED");
+
+	/* (b) A real boot's record: both come back, byte-exact. */
+	fill_valid_params(&p);
+	ct_check(cluster_sysgen_load(&g_cl, &p) != 0, "the record commits");
+	ct_check(cluster_sysgen_sw_version(&g_cl, swver) == 1,
+	         "loaded: a software version IS advertised");
+	ct_check(memcmp(swver, "VMX V0.6", 8) == 0,
+	         "loaded: OUR OWN version, verbatim -- never a peer's 'VMS V7.3'");
+	ct_check(cluster_sysgen_credits(&g_cl, &credits) == 1,
+	         "loaded: a credit grant IS advertised");
+	ct_check_eq_u32(credits, 10, "loaded: CLUSTER_CREDITS 10 at abs 95");
+
+	/* (c) A shorter token is BLANK-padded to the fixed field, the way the
+	 * node name is -- not NUL-padded, and not truncated. */
+	fill_valid_params(&p);
+	memset(p.sw_version, 0, sizeof(p.sw_version));
+	memcpy(p.sw_version, "VMX V1", 6);
+	p.sw_version_len = 6;
+	memset(&g_cl, 0, sizeof(g_cl));
+	ct_check(cluster_sysgen_load(&g_cl, &p) != 0, "the short-token record commits");
+	ct_check(cluster_sysgen_sw_version(&g_cl, swver) == 1, "and is advertised");
+	ct_check(memcmp(swver, "VMX V1  ", 8) == 0,
+	         "a short token is blank-padded to the fixed 8-byte field");
+
+	/* (d) A loaded record with NO token: still nothing to assert. A boot
+	 * that never carried the identity SSOT down does not get a guess. */
+	fill_valid_params(&p);
+	memset(p.sw_version, 0, sizeof(p.sw_version));
+	p.sw_version_len = 0;
+	memset(&g_cl, 0, sizeof(g_cl));
+	ct_check(cluster_sysgen_load(&g_cl, &p) != 0, "the token-less record commits");
+	ct_check(cluster_sysgen_sw_version(&g_cl, swver) == 0,
+	         "no token carried down: no software version advertised");
+
+	/* (e) CLUSTER_CREDITS 0 is a REAL configuration -- a grant of nothing --
+	 * and is asserted; only "never loaded" is the absence. That distinction
+	 * is exactly what params_valid exists for. */
+	fill_valid_params(&p);
+	p.cluster_credits = 0;
+	memset(&g_cl, 0, sizeof(g_cl));
+	credits = 0xee;
+	ct_check(cluster_sysgen_load(&g_cl, &p) != 0, "the zero-credit record commits");
+	ct_check(cluster_sysgen_credits(&g_cl, &credits) == 1,
+	         "a configured 0 IS a grant and is advertised");
+	ct_check_eq_u32(credits, 0, "and it is 0, not a substituted default");
+
+	/* (f) A credit the one-byte field cannot express is omitted, not
+	 * truncated: 256 would become 0, a window this node never configured. */
+	fill_valid_params(&p);
+	p.cluster_credits = 256;
+	memset(&g_cl, 0, sizeof(g_cl));
+	credits = 0xee;
+	ct_check(cluster_sysgen_load(&g_cl, &p) != 0, "the over-wide record commits");
+	ct_check(cluster_sysgen_credits(&g_cl, &credits) == 0,
+	         "CLUSTER_CREDITS > 255 is not truncated onto the wire");
+	ct_check(credits == 0xee, "and the caller's byte is left untouched");
+
+	/* (g) NULLs. */
+	ct_check(cluster_sysgen_sw_version(NULL, swver) == 0, "NULL cl refused");
+	ct_check(cluster_sysgen_sw_version(&g_cl, NULL) == 0, "NULL out refused");
+	ct_check(cluster_sysgen_credits(NULL, &credits) == 0, "NULL cl refused");
+	ct_check(cluster_sysgen_credits(&g_cl, NULL) == 0, "NULL out refused");
 }
 
 /*
@@ -122,6 +227,8 @@ static void test_missing_scsnode_vaxcluster2_refused(void)
 	ct_check(ok == 0, "missing SCSNODE + VAXCLUSTER=2: cluster_sysgen_load refuses");
 	ct_check(memcmp(&g_cl.params, &before, sizeof(before)) == 0,
 	         "missing SCSNODE + VAXCLUSTER=2: prior params left UNCHANGED, not fabricated");
+	ct_check_eq_u32(g_cl.params_valid, 0,
+	                "a REFUSED load never marks the record committed");
 }
 
 /*
@@ -169,6 +276,7 @@ static void test_null_handling(void)
 int main(void)
 {
 	test_valid_load_commits();
+	test_advertised_identity_from_loaded_params();
 	test_missing_scsnode_vaxcluster2_refused();
 	test_vaxcluster_zero_no_scsnode_ok();
 	test_null_handling();

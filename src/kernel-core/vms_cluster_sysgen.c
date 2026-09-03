@@ -27,5 +27,41 @@ int cluster_sysgen_load(struct vms_cluster *cl,
 		return 0;
 
 	cl->params = *in;
+	/* The commit itself is what makes the record real. Set AFTER the copy,
+	 * never from *in, so no caller can hand the executive a "these are
+	 * loaded" claim it did not make (see struct vms_cluster.params_valid). */
+	cl->params_valid = 1u;
+	return 1;
+}
+
+int cluster_sysgen_sw_version(const struct vms_cluster *cl,
+                              uint8_t out[VMS_CLUSTER_SWVER_LEN])
+{
+	uint32_t n, i;
+
+	if (cl == NULL || out == NULL)
+		return 0;
+	if (!cl->params_valid || cl->params.sw_version_len == 0u)
+		return 0;
+
+	n = (uint32_t)cl->params.sw_version_len;
+	if (n > (uint32_t)VMS_CLUSTER_SWVER_LEN)
+		n = (uint32_t)VMS_CLUSTER_SWVER_LEN;
+
+	for (i = 0; i < (uint32_t)VMS_CLUSTER_SWVER_LEN; i++)
+		out[i] = (i < n) ? cl->params.sw_version[i] : (uint8_t)' ';
+	return 1;
+}
+
+int cluster_sysgen_credits(const struct vms_cluster *cl, uint8_t *out)
+{
+	if (cl == NULL || out == NULL)
+		return 0;
+	if (!cl->params_valid)
+		return 0;
+	if (cl->params.cluster_credits > 0xffu)
+		return 0;
+
+	*out = (uint8_t)cl->params.cluster_credits;
 	return 1;
 }

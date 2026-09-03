@@ -486,6 +486,17 @@ static void test_live_timestamps_are_never_a_template(void)
 	ct_check(le64(out + 112) == t2, "message_time lands byte-exact at abs 112, INDEPENDENT");
 	ct_check(memcmp(out + 72, "OVMX V01", 8) == 0,
 		 "software_version (abs 72) untouched by the quadword writes");
+	/* E57: the two fields VAX1 read as zeros, pinned at their raw offsets.
+	 * `f.credits` was never set in this frame, so 0 is what must land --
+	 * the codec supplies no default for it either. */
+	ct_check_eq_u32(out[95], 0,
+			"credits (abs 95) is exactly what the caller supplied");
+	f.credits = 10;
+	memset(out, 0xAA, sizeof(out));
+	ct_check(vms_scs_start_build(&f, out, sizeof(out), &written)
+		 == VMS_CODEC_OK, "build with a real CLUSTER_CREDITS grant");
+	ct_check_eq_u32(out[95], 10,
+			"CLUSTER_CREDITS 10 lands byte-exact at abs 95");
 	ct_check(memcmp(out + 104, "OVMX    ", 8) == 0,
 		 "node_name (abs 104) untouched by the quadword writes");
 }

@@ -560,6 +560,13 @@ struct vms_sysgen_load_args {
 	uint8_t  auth_password_len;
 	uint8_t  auth_valid;
 
+	/* This node's OWN software identity, carried down from the userland
+	 * SSOT (OVMX_CLUSTER_SW_VERSION) because kernel-core may hold no
+	 * version literal -- see src/kernel/vms_ioctl.h for the full rule. */
+	uint8_t  sw_version[8];
+	uint8_t  sw_version_len;
+	uint8_t  pad3;
+
 	uint32_t status;
 };
 
@@ -669,7 +676,7 @@ _Static_assert(sizeof(struct vms_pe_vc_view_wire) == 64,
                "vms_pe_vc_view_wire changed size -- must match src/kernel/vms_ioctl.h");
 _Static_assert(sizeof(struct vms_cluster_diag_port_args) == 160,
                "vms_cluster_diag_port_args changed size -- VMS_IOCTL_CLUSTER_DIAG_PORT ABI break");
-_Static_assert(sizeof(struct vms_sysgen_load_args) == 104,
+_Static_assert(sizeof(struct vms_sysgen_load_args) == 112,
                "vms_sysgen_load_args changed size -- VMS_IOCTL_SYSGEN_LOAD ABI break");
 _Static_assert(sizeof(struct vms_cluster_start_args) == 12,
                "vms_cluster_start_args changed size -- VMS_IOCTL_CLUSTER_START ABI break");

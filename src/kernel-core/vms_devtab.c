@@ -2206,6 +2206,12 @@ static void sysgen_load_args_to_params(const struct vms_sysgen_load_args *args,
     memcpy(out->auth_password, args->auth_password, sizeof(out->auth_password));
     out->auth_password_len = args->auth_password_len;
     out->auth_valid = args->auth_valid;
+
+    /* The identity SSOT's cluster software version, carried down by the boot
+     * (the executive holds no version literal -- INV-1). `params_valid` is NOT
+     * copied from anywhere: cluster_sysgen_load() sets it on its own commit. */
+    memcpy(out->sw_version, args->sw_version, sizeof(out->sw_version));
+    out->sw_version_len = args->sw_version_len;
 }
 
 /*

@@ -100,6 +100,21 @@ typedef uint32_t vms_conid_t;
  * abs 90, length-prefixed in the HELLO) and belongs to the codec. */
 #define VMS_SCSNODE_MAX 6
 
+/*
+ * The software-version identity this node BROADCASTS: 8 bytes, blank-padded,
+ * mirroring VMS_SCS_START_SWVER_LEN (vms_cluster_codec_vc.h -- the codec owns
+ * the offset, this owns the storage; vms_pe.c static-asserts the two agree).
+ *
+ * It is a LOADED parameter, not a constant, and deliberately so: kernel-core
+ * may not hold a version literal (INV-1, tests/integration/test_identity_ssot.sh
+ * -- the SSOT is src/libvms/include/ovmx_identity.h, which is USERLAND), and it
+ * must never be echoed off a peer's own START body ("VMS V7.3" from a real VAX
+ * is that VAX's identity, and repeating it is a masquerade). The boot carries
+ * OVMX_CLUSTER_SW_VERSION down through VMS_IOCTL_SYSGEN_LOAD; until it does,
+ * sw_version_len is 0 and this node advertises nothing (INV-6).
+ */
+#define VMS_CLUSTER_SWVER_LEN 8
+
 /* CLUSTER_AUTHORIZE password, mirroring src/libvms/include/cluster_authorize.h's
  * CLUSTER_AUTH_PWD_LEN so the record crosses VMS_IOCTL_SYSGEN_LOAD unchanged. */
 #define VMS_CLUSTER_PWD_LEN 32
@@ -158,6 +173,17 @@ struct vms_cluster_params {
 	uint8_t  auth_password[VMS_CLUSTER_PWD_LEN];
 	uint8_t  auth_password_len;
 	uint8_t  auth_valid;
+
+	/*
+	 * ---- this node's OWN software identity (not a SYSGEN parameter) ----
+	 * The token STARTUP.EXE read from the identity SSOT and handed down
+	 * (see VMS_CLUSTER_SWVER_LEN above). `sw_version_len` 0 means no boot
+	 * has supplied one; cluster_sysgen_sw_version() then asserts nothing
+	 * and the port counts the omission, rather than inventing a version.
+	 */
+	uint8_t  sw_version[VMS_CLUSTER_SWVER_LEN];
+	uint8_t  sw_version_len;
+	uint8_t  pad3[3];
 };
 
 /* ==========================================================================
@@ -537,6 +563,20 @@ struct vms_cluster {
 	 */
 
 	struct vms_cluster_params params;  /* SYSGEN + CLUSTER_AUTHORIZE (FC-P0.10) */
+
+	/*
+	 * 0 until cluster_sysgen_load() COMMITTED a real parameter record.
+	 *
+	 * Not a redundant copy of "params is nonzero": every field in `params`
+	 * has a legitimate zero (CLUSTER_CREDITS 0 grants the peer nothing, and
+	 * that is a configuration, not an absence), so without this flag a
+	 * reader cannot tell a configured 0 from a boot that never loaded
+	 * anything -- and a port that guesses is exactly the fabrication INV-6
+	 * forbids. Set ONLY here, by the executive's own commit; deliberately
+	 * NOT a field of VMS_IOCTL_SYSGEN_LOAD, so no caller can assert it.
+	 */
+	uint8_t  params_valid;
+	uint8_t  pad_pv[3];
 
 	enum vms_cluster_state state;
 

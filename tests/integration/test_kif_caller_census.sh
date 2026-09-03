@@ -1025,14 +1025,16 @@ if [ ! -f "$CCJ" ]; then
     exit 1
 fi
 
-# The reader below is a line reader, not a JSON parser. Both assumptions it
-# makes are CHECKED, and a violation is a refusal rather than a guess.
-if grep -q '\\' "$CCJ"; then
-    echo "FAIL: compile_commands.json contains backslash escapes, which this"
-    echo "      reader does not implement"
-    echo "  -> teach the reader to unescape; do NOT let it mis-split a command."
-    exit 1
-fi
+# The reader below is a line reader, not a JSON parser. The "arguments" form
+# check is CHECKED here, over the whole file, because it is a structural
+# format this reader never implements for ANY entry, product or test. The
+# backslash-escape check is deliberately NOT here (see below, after the
+# product-only filter): a test fixture's -D value is free to carry an
+# escaped quote (e.g. tests/cluster/host/CMakeLists.txt's
+# OVMX_FIXTURE_DIR="${dir}"), and that TU is excluded from the census scan
+# by the src/|tools/ rule a few lines down, so it must not sink the whole
+# reading. A violation IN THE PRODUCT SCAN is still a refusal rather than a
+# guess -- see the check below, scoped to $WORK/product_tus.
 if grep -q '"arguments"' "$CCJ"; then
     echo "FAIL: compile_commands.json uses the \"arguments\" array form, which"
     echo "      this reader does not implement"
@@ -1074,6 +1076,23 @@ awk -F'\t' -v root="$SRC_ROOT/" '{
     r = substr($3, length(root) + 1)
     if (r ~ /^(src|tools)\//) print
 }' "$WORK/ccdb" > "$WORK/product_tus"
+
+# BACKSLASH ESCAPES, SCOPED TO THE PRODUCT SCAN. The word-splitter at "for a
+# in $cccmd" below and the unquoted "$ppargs" preprocessor invocation both
+# treat backslash as an ordinary character, not an escape -- a product -D
+# flag like -DFOO=\"bar\" would preprocess with the literal backslashes
+# baked into the macro value instead of failing loudly. That is a silent
+# wrong reading, so a product translation unit with a backslash in its
+# command, directory, or file field still REFUSES here. Test translation
+# units (already excluded above) do not reach this check -- their -D values
+# never feed the reachability scan, so an escaped quote there is inert.
+if grep -q '\\' "$WORK/product_tus"; then
+    echo "FAIL: a PRODUCT translation unit's compile command contains a"
+    echo "      backslash escape, which this reader does not implement:"
+    grep '\\' "$WORK/product_tus" | cut -f3 | sed "s|^$SRC_ROOT/||" | sed 's/^/    /' | head -5
+    echo "  -> teach the reader to unescape; do NOT let it mis-split a command."
+    exit 1
+fi
 
 n_product_tus=$(grep -c . "$WORK/product_tus" || true)
 if [ "$n_product_tus" -eq 0 ]; then

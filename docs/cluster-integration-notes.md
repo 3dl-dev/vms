@@ -555,6 +555,14 @@ Lab captured a genuine VAX2 rejoin (257 cat-01/op-06 frames, real MACs). **The p
 - **COUNT-COMMIT = cat 0x01 op 0x03 COMMIT (count=1), a single decisive VAX1→VAX2 frame** (commit-time quadword b[20:28]); op-06 is strictly POST-commit; the transition finalizes through op-0a/0b/0c barrier. (Corrects "op-06 burst commits the count"; consistent w/ book corr.5.)
 - **pcap:** `tests/lab/captures/op06-join-20260903.pcap`. → ROUTED TO FABLE: ratify the CSID mechanism + correct the join (FC-P3.3 CSID-learning: replace the op-06-scan instrument with generation-read + CSID-compute) + phase2 (op-03 count-commit) → then a small build item → OVMX reaches MEMBER.
 
+### E31 — connect-data FORMAT decoded from op06-join pcap (frames 64/72; awaits operator ruling on content)
+The 16-byte `VMS$VAXcluster` connect-data at frame `[94:110]` (byte-verified, both directions):
+- **`[94:98] = 01 1b 01 03`** — IDENTICAL joiner↔member = the **CM version/protocol quad**. Peer-CHECKED (p.2-25 REJECT right). Matches the pcap library's prior 148-frame census exactly.
+- **`[98:105]` (7 bytes)** — node/role-dependent: **the real JOINER (VAX2) sends ALL-ZERO here**; the member sends `01 00 01 00 NN 00 01`. Meaning still unknown (§4(N) gap) — but OVMX's existing all-zero joiner form MATCHES what a real joiner sends. ✅
+- **`[105:110] = 08 00 00 06 00`** — IDENTICAL both ways = tail constant. Peer-checked.
+**So the ONLY reason a real VAX would REJECT OVMX's current join is that OVMX sends the version quad + tail as ZEROS instead of `01 1b 01 03`…`08 00 00 06 00`.** A real joiner's `[98:105]` IS zero (OVMX already correct there).
+**Analysis:** `[94:98]`/`[105:110]` are a PROTOCOL VERSION (the CM wire-format version), NOT a node identity — OVMX's faithful CM genuinely implements this protocol, so presenting these constants is HONEST (like declaring "I speak HTTP/1.1"), not a node impersonation. OVMX's NODE identity (OVMXJ0, a VMX node) is declared elsewhere (SCSNODE / OS-identity broadcast), untouched. **OPERATOR RULING (E31):** send the grounded CM protocol constants in the connect-data (recommended — honest protocol-version + lets a real VAX ACCEPT) vs treat them as a compat-lie (send zeros, accept REJECT). Fast call now that the format is grounded; the fix is a 2-line set of `cnxman_join_cfg.conndata` once ruled.
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

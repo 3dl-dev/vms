@@ -41,6 +41,7 @@
 #include "exec_list.h"        /* exec_list_* (granted/waiting/proc lists) */
 #include "exec_hash.h"        /* exec_hash_* + exec_jhash (resource database) */
 #include "exec_rbtree.h"      /* exec_rbtree_* / exec_rb_* (lock-ID database) */
+#include "vms_dlm_proxy.h"    /* the PROXY-LKB requester seam (FC-P4.4) */
 
 /*
  * Deadlock re-scan interval for a lock blocked in-kernel (sync $ENQW).
@@ -81,64 +82,52 @@ EXEC_DEFINE_HASHTABLE(vms_res_hash, VMS_RES_HASH_BITS);
 exec_lock_t vms_res_hash_lock;
 
 /* ================================================================
- * Cross-node REQUESTER-SIDE origin records (DLM epic vms-7fa rung H5, vms-6ca)
+ * The PROXY LKB: the requester-side image of a lock mastered elsewhere
+ * (FC-P4.4; design SS3.4 + hard call 7; Davis p. 6-52's *process copy*)
  * ================================================================
  *
- * When THIS node issues a cross-node $ENQ over SCS to a REMOTE master, the
- * request is not a local lock (the local lock manager never grants it -- the
- * remote master does). But the requester still needs a REAL, executive-resident
- * record of the outstanding request so its completion is genuine state, not a
- * per-process userspace fake (INV-6): the origin record's granted mode is set
- * ONLY from GRANT/queued-reply messages the master genuinely sent back over the
- * live SCS wire (VMS_DLM_OP_GRANT receive), never by a local grant decision.
+ * When THIS node issues a $ENQ for a resource whose tree is mastered on ANOTHER
+ * node, the request is not something the local lock manager may grant -- the
+ * master grants it. But the requester still needs a REAL, executive-resident
+ * lock block, so that its completion is genuine executive state and not a
+ * per-process userspace fake (INV-6), and so that $GETLKI, $DEQ, convert,
+ * blocking-AST delivery and the lock value block all have ONE object to operate
+ * on. That object is a proxy LKB: an ordinary struct vms_lock_entry with
+ * proxy == 1, carrying master_csid and (once the master answers) master_lkid.
  *
- * This is the requester-side mirror of the master's lock block. It lives on its
- * OWN list, keyed by the requester's local lock handle (req_lkid), so it never
- * touches the resource granted/waiting queues the local lock manager scans --
- * the executive cannot auto-grant an origin record, only the wire can complete
- * it. GETLKI falls through to it so the NL->EX status flip driven by the remote
- * master's deferred GRANT is observable on the REQUESTER node.
+ * It REPLACES the vms_dlm_origin side list, which duplicated LKB fields on a
+ * second keyspace: a proxy LKB's own lock id IS the handle this node puts on
+ * the wire as req_lkid, so the lock-ID database is the (req_csid, req_lkid)
+ * index -- no second table, and a duplicate reply can only ever find the ONE
+ * lock it names (the idempotency D-DLM-5 asks for).
+ *
+ * WHY IT IS ON A THIRD RESOURCE QUEUE. A proxy hangs off res->proxies, never
+ * off res->granted or res->waiting. try_grant_waiters() and lock_compatible()
+ * walk only the latter two, so the executive is structurally incapable of
+ * granting -- or of counting as a blocker -- a lock the cluster masters
+ * elsewhere. Only a message from the master (vms_lock_dlm_xnode_grant_recv)
+ * moves a proxy's granted mode. This is the same guarantee the origin list gave
+ * by living outside the queues, kept by construction rather than by a flag test
+ * inside every scan.
+ *
+ * WHERE IT DIVERGES FROM VMS. VMS keeps process-copy LKBs on the RSB's own
+ * granted/waiting queues and tells the three kinds apart by a field (p. 6-52).
+ * OVMX splits the queue instead, because in OVMX those queues ARE the local
+ * granting algorithm's input. The behaviour is identical -- a tree is mastered
+ * on exactly one node, so a node never runs local granting on a tree it proxies
+ * -- and the split makes the fabrication unrepresentable rather than merely
+ * absent.
  */
-struct vms_dlm_origin {
-    exec_list_node_t list;
-    uint32_t         req_lkid;       /* our own lock handle for the request     */
-    uint32_t         req_csid;       /* our node's CSID (the requester)          */
-    uint32_t         master_lkid;    /* the master's lock handle (0 until known) */
-    uint32_t         master_csid;    /* the mastering node's CSID                */
-    uint32_t         granted_mode;   /* NL while pending/queued; the granted mode
-                                      * once the master's GRANT arrives          */
-    uint32_t         requested_mode; /* the mode we asked for                    */
-    char             resnam[32];
-    /*
-     * BLKAST WIRE (rung H6, vms-76d). When this origin record proxies a HOLDER on
-     * this node (a GRANT receive established it AT a granted mode WITH a blocking-AST
-     * routine), blkastadr/blkastprm remember that routine so a BLKAST the master
-     * later sends over SCS fires a REAL user-mode AST on the holder's process.
-     * blkast_count counts genuine deliveries (0 until the first BLKAST fires).
-     * 0 blkastadr => no blocking AST was registered, so a BLKAST receive is a
-     * no-op that declines SS$_UNSUPPORTED rather than fabricating a delivery.
-     */
-    uint64_t         blkastadr;
-    uint64_t         blkastprm;
-    uint32_t         blkast_count;
-    /*
-     * LVB read-crossing (rd vms-eeb, rung H9). When the master's GRANT reply
-     * carries its resource value block (the master read res->valblk on the
-     * cross-node grant), grant_recv stores those 16 bytes here so GETLKI on this
-     * origin record surfaces them to the requester's $ENQ -- the mirror of the
-     * write crossing (vms-d81). valblk_valid is set only when a real GRANT
-     * delivered a block, so GETLKI reports an unset LVB honestly (zeros) rather
-     * than fabricating one. */
-    uint8_t          valblk[LCK_VALBLK_SIZE];
-    uint32_t         valblk_valid;
-};
 
-exec_list_head_t vms_dlm_origin_list;
-exec_lock_t vms_dlm_origin_lock;
-
-static int vms_lock_dlm_origin_getlki(uint32_t lkid, uint32_t *granted_mode,
-                                      uint32_t *requested_mode, char *resnam,
-                                      size_t resnam_len, uint8_t *valblk);
+/*
+ * The requester ops (vms_dlm_proxy.h): how the engine reaches the wire. NULL
+ * until the cluster's DLM arm registers them at start, and NULL again at stop,
+ * so an OVMX node with no cluster is purely local and REFUSES a remote-mastered
+ * resource honestly (SS$_UNSUPPORTED) instead of serving it from thin air.
+ * Written only through vms_lock_dlm_set_requester_ops under this lock.
+ */
+static struct vms_dlm_requester_ops vms_dlm_req_ops;
+static exec_lock_t vms_dlm_req_ops_lock;
 
 /* ================================================================
  * Cluster membership crosses into the executive (rd vms-551,
@@ -163,12 +152,86 @@ int vms_lock_init(void)
 {
     exec_lock_init(&vms_lock_id_lock);
     exec_lock_init(&vms_res_hash_lock);
-    exec_lock_init(&vms_dlm_origin_lock);
+    exec_lock_init(&vms_dlm_req_ops_lock);
     exec_lock_init(&vms_cluster_lock);
     exec_rbtree_init(&vms_lock_id_tree);
     exec_hash_init(vms_res_hash);
-    exec_list_head_init(&vms_dlm_origin_list);
     return 0;
+}
+
+/*
+ * vms_lock_dlm_set_requester_ops - install (or remove, with NULL) the ops the
+ * engine posts proxy requests through (vms_dlm_proxy.h). Called by the DLM's
+ * wire arm at cluster start/stop, never by a test that wants to pretend a
+ * cluster is there: with no ops the engine is honestly local-only.
+ */
+void vms_lock_dlm_set_requester_ops(const struct vms_dlm_requester_ops *ops)
+{
+    exec_lock(&vms_dlm_req_ops_lock);
+    if (ops)
+        vms_dlm_req_ops = *ops;
+    else
+        memset(&vms_dlm_req_ops, 0, sizeof(vms_dlm_req_ops));
+    exec_unlock(&vms_dlm_req_ops_lock);
+}
+
+/* A snapshot of the installed ops, taken under the ops lock so a concurrent
+ * cluster stop cannot tear the function pointer out from under a poster. */
+static struct vms_dlm_requester_ops dlm_req_ops_get(void)
+{
+    struct vms_dlm_requester_ops o;
+
+    exec_lock(&vms_dlm_req_ops_lock);
+    o = vms_dlm_req_ops;
+    exec_unlock(&vms_dlm_req_ops_lock);
+    return o;
+}
+
+/*
+ * dlm_proxy_fill_post - build one outbound request FROM THE LOCK BLOCK.
+ *
+ * This is the INV-6 chokepoint for the requester side. Every field is read out
+ * of the LKB and its RSB here, at post time. Nothing is copied from an inbound
+ * frame, nothing comes from a template, and there is no parameter by which a
+ * caller could supply a value the executive does not hold. Caller holds
+ * res->lock.
+ */
+static void dlm_proxy_fill_post(const struct vms_lock_entry *lock,
+                                const struct vms_lock_resource *res,
+                                uint32_t op, uint32_t dst_csid,
+                                struct vms_dlm_proxy_post *p)
+{
+    memset(p, 0, sizeof(*p));
+    p->op          = op;
+    p->dst_csid    = dst_csid;
+    p->req_csid    = vms_local_csid;      /* this node, from the executive */
+    p->req_lkid    = lock->lkid;          /* the proxy's own handle */
+    p->master_csid = lock->master_csid;   /* 0 until the cluster told us */
+    p->master_lkid = lock->master_lkid;   /* 0 until the master named it */
+    p->lkmode      = lock->requested_mode;
+    p->flags       = lock->flags;
+    strscpy(p->resnam, res->name, sizeof(p->resnam));
+    memcpy(p->valblk, lock->valblk, LCK_VALBLK_SIZE);
+}
+
+/*
+ * dlm_proxy_post - hand one request to the cluster's DLM arm.
+ *
+ * Refuses to post without a lock id (VMS_DLM_LKID_UNSET, the codec's rule
+ * enforced at the engine too: a placeholder lock id bugchecked a real VAX with
+ * INVLOCKID). Refuses honestly when no ops are installed -- a node with no
+ * cluster does not get to pretend it asked one. `post` is contractually
+ * non-blocking and must not re-enter the lock manager.
+ */
+static uint32_t dlm_proxy_post(const struct vms_dlm_proxy_post *p)
+{
+    struct vms_dlm_requester_ops ops = dlm_req_ops_get();
+
+    if (p->req_lkid == 0 || p->dst_csid == 0)
+        return SS__BADPARAM;
+    if (ops.post == NULL)
+        return SS__UNSUPPORTED;
+    return ops.post(ops.ctx, p);
 }
 
 /*
@@ -218,21 +281,16 @@ void vms_lock_cleanup(void)
             exec_list_del(&lock->res_waiting);
             lock_entry_free(lock);
         }
+        /* Free the PROXY LKBs for resources this node does not master
+         * (FC-P4.4) -- the third queue, same discipline as the other two. */
+        exec_list_for_each_entry_safe(lock, ltmp, &res->proxies, res_proxy) {
+            exec_list_del(&lock->res_proxy);
+            lock_entry_free(lock);
+        }
         exec_hash_del(&res->hash_node);
         resource_free(res);
     }
     exec_unlock(&vms_res_hash_lock);
-
-    /* Free any cross-node requester-side origin records (vms-6ca, H5). */
-    {
-        struct vms_dlm_origin *org, *otmp;
-        exec_lock(&vms_dlm_origin_lock);
-        exec_list_for_each_entry_safe(org, otmp, &vms_dlm_origin_list, list) {
-            exec_list_del(&org->list);
-            exec_free(org);
-        }
-        exec_unlock(&vms_dlm_origin_lock);
-    }
 
     /* Cluster membership block (rd vms-551): no owned resources beyond the
      * lock itself (a flat array, no per-entry allocation), so just reset the
@@ -244,7 +302,7 @@ void vms_lock_cleanup(void)
     /* Tear down the runtime-initialized locks (a no-op on Linux; a real
      * mutex_destroy on NetBSD -- paired with the exec_lock_init in
      * vms_lock_init). */
-    exec_lock_destroy(&vms_dlm_origin_lock);
+    exec_lock_destroy(&vms_dlm_req_ops_lock);
     exec_lock_destroy(&vms_res_hash_lock);
     exec_lock_destroy(&vms_lock_id_lock);
     exec_lock_destroy(&vms_cluster_lock);
@@ -310,11 +368,71 @@ static void lock_insert_id(struct vms_lock_entry *entry)
     exec_unlock(&vms_lock_id_lock);
 }
 
+/*
+ * lock_insert_id_at - insert a lock at a lock id the CLUSTER named, not one this
+ * node minted (FC-P4.4).
+ *
+ * Used on exactly one path: a message from a master naming a req_lkid for which
+ * this node holds no proxy LKB (vms_lock_dlm_xnode_grant_recv's reconstruct
+ * case). req_lkid is by definition a lock id of THIS node, so it belongs in the
+ * same lock-ID database as every other lock -- there is no second keyspace.
+ *
+ * Returns 0 on success, or -1 if that id is already taken (the caller then
+ * refuses the message rather than minting a second lock under one handle).
+ * On success vms_next_lock_id is advanced past `lkid`, so a later local $ENQ
+ * can never collide with it.
+ */
+static int lock_insert_id_at(struct vms_lock_entry *entry, uint32_t lkid)
+{
+    exec_rbtree_node_t **p, *parent = NULL;
+
+    if (lkid == 0)
+        return -1;
+
+    exec_lock(&vms_lock_id_lock);
+    p = exec_rbtree_root_link(&vms_lock_id_tree);
+    while (*p) {
+        struct vms_lock_entry *e = exec_rb_entry(*p, struct vms_lock_entry, rb_node);
+        parent = *p;
+        if (lkid < e->lkid)
+            p = exec_rb_left_link(*p);
+        else if (lkid > e->lkid)
+            p = exec_rb_right_link(*p);
+        else {
+            exec_unlock(&vms_lock_id_lock);
+            return -1;      /* already taken -- never two locks on one handle */
+        }
+    }
+    entry->lkid = lkid;
+    if (lkid >= vms_next_lock_id)
+        vms_next_lock_id = lkid + 1;
+    exec_rb_link_node(&entry->rb_node, parent, p);
+    exec_rb_insert_color(&entry->rb_node, &vms_lock_id_tree);
+    exec_unlock(&vms_lock_id_lock);
+    return 0;
+}
+
 static void lock_remove_id(struct vms_lock_entry *entry)
 {
     exec_lock(&vms_lock_id_lock);
     exec_rb_erase(&entry->rb_node, &vms_lock_id_tree);
     exec_unlock(&vms_lock_id_lock);
+}
+
+/*
+ * lock_unlink_from_res - take a lock off whichever of the resource's three
+ * queues it is on. Caller holds res->lock. A proxy LKB is on res->proxies and
+ * nowhere else (FC-P4.4), so its `waiting` flag says "pending at the master",
+ * not "on the local waiting queue" -- test proxy FIRST.
+ */
+static void lock_unlink_from_res(struct vms_lock_entry *lock)
+{
+    if (lock->proxy)
+        exec_list_del(&lock->res_proxy);
+    else if (lock->waiting)
+        exec_list_del(&lock->res_waiting);
+    else
+        exec_list_del(&lock->res_granted);
 }
 
 /* ================================================================
@@ -372,6 +490,7 @@ static struct vms_lock_resource *resource_find_or_create(const char *name)
     strscpy(new_res->name, name, sizeof(new_res->name));
     exec_list_head_init(&new_res->granted);
     exec_list_head_init(&new_res->waiting);
+    exec_list_head_init(&new_res->proxies);   /* FC-P4.4 */
     memset(new_res->valblk, 0, LCK_VALBLK_SIZE);
     exec_lock_init(&new_res->lock);
     new_res->refcount = 1;
@@ -390,7 +509,12 @@ static void resource_release(struct vms_lock_resource *res)
 
     exec_lock(&vms_res_hash_lock);
     res->refcount--;
-    if (res->refcount <= 0 && exec_list_empty(&res->granted) && exec_list_empty(&res->waiting)) {
+    /* A resource with a PROXY LKB on it is still in use by this node even
+     * though it holds no local grant (FC-P4.4): the proxy is the requester-side
+     * image of a lock the cluster holds for us, and freeing the RSB under it
+     * would orphan the master's handle. */
+    if (res->refcount <= 0 && exec_list_empty(&res->granted) &&
+        exec_list_empty(&res->waiting) && exec_list_empty(&res->proxies)) {
         /* Preserve resource if it has a non-zero value block */
         for (i = 0; i < LCK_VALBLK_SIZE; i++) {
             if (res->valblk[i]) { has_valblk = 1; break; }
@@ -532,34 +656,57 @@ static uint32_t dlm_directory_csid(const char *name)
     return dlm_member_csid(idx);
 }
 
+/* Where a $ENQ for this resource must be served (FC-P4.4). */
+enum dlm_route {
+    DLM_ROUTE_LOCAL  = 0,   /* this node masters it: the local engine serves */
+    DLM_ROUTE_REMOTE = 1    /* mastered elsewhere: a PROXY LKB + a posted request */
+};
+
 /*
  * dlm_resolve_master - resolve the directory + master for a resource, mastering
  * it locally on first use.
  *
- * Called with res->lock held. Resolves res->dir_csid (once, lazily) via the
- * directory hash; if this node is the directory and the resource is not yet
- * mastered, masters it here (mastered on first use, case (1)). Returns
- * SS$_NORMAL when the resource is directoried AND mastered locally -- the only
- * case the single-node lock manager can serve. Returns SS$_UNSUPPORTED when
- * the directory or the master is a REMOTE node: forwarding that request over
- * the VMS$VAXcluster VC (DC) and remastering (DD) are 0.4. Never fabricates a
- * remote grant.
+ * Called with res->lock held. The published three-outcome model (Davis
+ * pp. 6-31/6-32; IDSM lock management):
+ *
+ *   known master, and it is us      -> LOCAL   (nothing to resolve, p. 6-32:
+ *                                      one lookup per tree while we hold a lock)
+ *   known master, and it is not us  -> REMOTE, addressed to THE MASTER
+ *   unknown master, we are the      -> LOCAL, and we master it on first use
+ *     directory node                  ("simply assumes mastery", p. 6-31)
+ *   unknown master, someone else is -> REMOTE, addressed to THE DIRECTORY NODE,
+ *     the directory node               which answers with the master, or with
+ *                                      "you master it" (p. 6-31 outcomes a/b/c)
+ *
+ * *dst_csid receives the node the request must be addressed to on a REMOTE
+ * route. Never a guess: it is either a master CSID the cluster told us
+ * (grant_recv stores it) or the directory CSID from the directory vector.
  */
-static uint32_t dlm_resolve_master(struct vms_lock_resource *res)
+static uint32_t dlm_resolve_master(struct vms_lock_resource *res,
+                                   enum dlm_route *route, uint32_t *dst_csid)
 {
+    *route = DLM_ROUTE_LOCAL;
+    *dst_csid = 0;
+
+    if (res->master_csid != 0) {
+        if (res->master_csid == vms_local_csid)
+            return SS__NORMAL;
+        *route = DLM_ROUTE_REMOTE;          /* straight to the known master */
+        *dst_csid = res->master_csid;
+        return SS__NORMAL;
+    }
+
     if (res->dir_csid == 0)
         res->dir_csid = dlm_directory_csid(res->name);
 
-    if (res->dir_csid != vms_local_csid)
-        return SS__UNSUPPORTED;      /* case (3): remote directory -- 0.4 */
+    if (res->dir_csid != vms_local_csid) {
+        *route = DLM_ROUTE_REMOTE;          /* the lookup goes to the directory */
+        *dst_csid = res->dir_csid;
+        return SS__NORMAL;
+    }
 
-    /* We are the directory. Master on first use (case (1)). */
-    if (res->master_csid == 0)
-        res->master_csid = vms_local_csid;
-
-    if (res->master_csid != vms_local_csid)
-        return SS__UNSUPPORTED;      /* case (2): remote master -- 0.4 */
-
+    /* We are the directory and nobody masters it yet: master it here. */
+    res->master_csid = vms_local_csid;
     return SS__NORMAL;
 }
 
@@ -682,7 +829,10 @@ static void queue_completion_ast(struct vms_lock_entry *lock)
     struct vms_ast_entry *ast;
     struct vms_ast_state *ast_state;
 
-    if (!lock->astadr || (lock->flags & LCK_M_SYNC))
+    /* No astadr, a sync waiter (woken directly instead), or a lock owned by no
+     * local process -- a reconstructed PROXY LKB, which is the NODE's record of
+     * a cluster-held lock and has no process to deliver to (FC-P4.4). */
+    if (!lock->astadr || (lock->flags & LCK_M_SYNC) || !lock->proc)
         return;
 
     ast = exec_zalloc_atomic(sizeof(*ast));
@@ -809,15 +959,28 @@ static void lock_teardown_locked(struct vms_lock_entry *lock)
 {
     struct vms_lock_resource *res = lock->resource;
 
-    /* Remove from resource lists */
+    /*
+     * Remove from resource lists (granted, waiting, or -- for a PROXY LKB --
+     * the proxy queue).
+     *
+     * DELIBERATELY NOT POSTED HERE (FC-P4.4). A proxy released through $DEQ
+     * tells the master (deq_proxy_release); a proxy torn down by PROCESS
+     * RUNDOWN does not, because every caller of this function holds
+     * proc->lock_list_lock -- a spinlock on the Linux substrate -- and the
+     * requester `post` op is the cluster's, not ours, so calling it from
+     * inside two held spinlocks would push an arbitrary implementation into
+     * atomic context. The outbound path and its context rules belong to the
+     * requester FSM (FC-P4.6); until it lands, a proxy a rundown reclaims
+     * leaves the master holding a lock it will reclaim through the departure /
+     * rebuild path instead. Stated, not hidden.
+     */
     exec_lock(&res->lock);
-    if (lock->waiting)
-        exec_list_del(&lock->res_waiting);
-    else
-        exec_list_del(&lock->res_granted);
+    lock_unlink_from_res(lock);
 
-    /* Write back value block if held */
-    if ((lock->flags & LCK_M_VALBLK) && !lock->waiting)
+    /* Write back value block if held. NOT for a proxy: the master owns that
+     * resource's value block, and writing ours into the local RSB would invent
+     * a value no node ever agreed on (FC-P4.4). */
+    if (!lock->proxy && (lock->flags & LCK_M_VALBLK) && !lock->waiting)
         memcpy(res->valblk, lock->valblk, LCK_VALBLK_SIZE);
 
     try_grant_waiters(res);
@@ -919,6 +1082,18 @@ void vms_proc_rundown_locks(struct vms_proc *proc, uint8_t min_acmode)
  *                  been removed from res->waiting and lock->waiting cleared;
  *                  the caller decides how to unwind (free for a fresh ENQ,
  *                  restore granted mode for a CONVERT).
+ *   anything else- a terminal status another executive path wrote into
+ *                  grant_state. Today that is a PROXY LKB whose master left the
+ *                  cluster (FC-P4.4, vms_ioctl_dlm_member_depart): the request
+ *                  cannot be answered by a node that is gone, so the wait ends
+ *                  honestly instead of hanging. Callers unwind on any non-NORMAL.
+ *
+ * A PROXY LKB waits here too, and the wait is the same wait -- but the wake can
+ * only come from the MASTER (vms_lock_dlm_xnode_grant_recv), never from a local
+ * grant, and the bounded deadlock re-scan is SKIPPED for it: the local
+ * wait-for graph does not contain the cluster's holders, so running it on a
+ * proxy would invent a cycle. Distributed deadlock search is its own mechanism
+ * (rung H11 / FC-P5.6).
  *
  * WAIT MODEL. This is the executive's synchronous wait, expressed in the shim's
  * cv-idiom (design record §3, the wait/wake seam): the waiter holds res->lock --
@@ -944,13 +1119,11 @@ static int enq_wait_sync(struct vms_lock_resource *res,
 
     exec_lock(&res->lock);
     for (;;) {
-        /* Predicate has priority (cv contract). */
-        if (lock->grant_state == SS__NORMAL) {
-            status = SS__NORMAL;
-            break;
-        }
-        if (lock->grant_state == SS__DEADLOCK) {
-            status = SS__DEADLOCK;
+        /* Predicate has priority (cv contract). Any nonzero grant_state is a
+         * terminal answer: SS$_NORMAL granted, SS$_DEADLOCK a cycle, anything
+         * else a status another executive path completed this request with. */
+        if (lock->grant_state != 0) {
+            status = lock->grant_state;
             break;
         }
         /* Granted between a wakeup and re-acquiring res->lock: the entry left
@@ -971,7 +1144,7 @@ static int enq_wait_sync(struct vms_lock_resource *res,
          * detection for this still-waiting request; otherwise (signal wake or a
          * grant that raced in) fall through and re-test the predicate at the top.
          */
-        if (timed_out && lock->waiting &&
+        if (timed_out && !lock->proxy && lock->waiting &&
             lock->grant_state == 0 && check_deadlock(lock, 0)) {
             exec_list_del(&lock->res_waiting);
             lock->waiting = 0;
@@ -983,6 +1156,256 @@ static int enq_wait_sync(struct vms_lock_resource *res,
     }
     exec_unlock(&res->lock);
     return status;
+}
+
+/* ================================================================
+ * PROXY LKB lifecycle (FC-P4.4)
+ *
+ * Six short functions, one job each: find, fill a post from real state, post,
+ * allocate, unwind, and the $ENQ entry that ties them together. Nothing here
+ * decides a lock's fate -- the MASTER does that, and its answer arrives at
+ * vms_lock_dlm_xnode_grant_recv.
+ * ================================================================ */
+
+/*
+ * dlm_proxy_find - the proxy LKB a cluster message names, by (req_csid,
+ * req_lkid). req_lkid is a lock id of THIS node, so the lock-ID database IS the
+ * index: one lookup, and a duplicate message can only find the one lock it
+ * names. Returns NULL (holding no reference) when the id names no lock or names
+ * something that is not a proxy -- a peer must never be able to reach this
+ * node's master-copy or local locks through a requester-side handle.
+ *
+ * Takes a reference via lock_find_by_id; the caller drops it with lock_put.
+ */
+static struct vms_lock_entry *dlm_proxy_find(uint32_t req_lkid)
+{
+    struct vms_lock_entry *lock = lock_find_by_id(req_lkid);
+
+    if (lock == NULL)
+        return NULL;
+    if (!lock->proxy) {
+        lock_put(lock);
+        return NULL;
+    }
+    return lock;
+}
+
+/*
+ * dlm_proxy_alloc - a proxy LKB for `res`, owned by `proc` (NULL when the
+ * cluster, not a local process, is what put it here). Granted mode NL: only the
+ * master can raise it. `lkid_from_wire` is 0 for a request this node
+ * originates (the id is minted here) or the id a master's message named.
+ * Returns NULL if the allocation failed or the named id is already taken.
+ */
+static struct vms_lock_entry *dlm_proxy_alloc(struct vms_proc *proc,
+                                              struct vms_lock_resource *res,
+                                              const struct vms_enq_args *a,
+                                              uint32_t lkid_from_wire)
+{
+    struct vms_lock_entry *lock = exec_zalloc(sizeof(struct vms_lock_entry));
+
+    if (!lock)
+        return NULL;
+
+    lock->refcount       = 1;
+    lock->proxy          = 1;
+    lock->granted_mode   = LCK_K_NLMODE;   /* only the MASTER raises this */
+    lock->requested_mode = a->lkmode;
+    lock->flags          = a->flags;
+    lock->astadr         = a->astadr;
+    lock->astprm         = a->astprm;
+    lock->blkastadr      = a->blkastadr;
+    lock->resource       = res;
+    lock->proc           = proc;
+    lock->waiting        = 1;              /* pending AT THE MASTER */
+    lock->grant_state    = 0;
+    lock->req_csid       = vms_local_csid; /* we are the requester */
+    lock->parent_id      = a->parid;
+    exec_cv_init(&lock->wait_wq);
+    if (a->flags & LCK_M_VALBLK)
+        memcpy(lock->valblk, a->valblk, LCK_VALBLK_SIZE);
+
+    if (lkid_from_wire != 0) {
+        if (lock_insert_id_at(lock, lkid_from_wire) != 0) {
+            lock_entry_free(lock);
+            return NULL;
+        }
+    } else {
+        lock_insert_id(lock);
+    }
+    return lock;
+}
+
+/* Link a fresh proxy onto its resource's proxy queue and, if a local process
+ * owns it, onto that process's lock list. */
+static void dlm_proxy_link(struct vms_proc *proc, struct vms_lock_resource *res,
+                           struct vms_lock_entry *lock)
+{
+    exec_lock(&res->lock);
+    exec_list_add_tail(&lock->res_proxy, &res->proxies);
+    exec_unlock(&res->lock);
+
+    if (proc) {
+        exec_lock(&proc->lock_list_lock);
+        exec_list_add_tail(&lock->proc_list, &proc->locks);
+        proc->lock_count++;
+        exec_unlock(&proc->lock_list_lock);
+    }
+}
+
+/* Undo dlm_proxy_link + dlm_proxy_alloc. Drops the resource reference the
+ * caller took, so the caller must not release it again. */
+static void dlm_proxy_unwind(struct vms_proc *proc, struct vms_lock_resource *res,
+                             struct vms_lock_entry *lock)
+{
+    if (proc) {
+        exec_lock(&proc->lock_list_lock);
+        exec_list_del(&lock->proc_list);
+        if (proc->lock_count > 0)
+            proc->lock_count--;
+        exec_unlock(&proc->lock_list_lock);
+    }
+    exec_lock(&res->lock);
+    exec_list_del(&lock->res_proxy);
+    exec_unlock(&res->lock);
+    lock_remove_id(lock);
+    resource_release(res);
+    lock_entry_free(lock);
+}
+
+/*
+ * enq_proxy_request - the $ENQ path for a resource this node does NOT master
+ * (FC-P4.4; design SS3.6 D-DLM-4, "outbound requests originate from a real proxy
+ * LKB in waiting").
+ *
+ * Create the proxy, post the request to `dst_csid`, then let the caller SLEEP ON
+ * THE LKB's condition variable exactly as a local $ENQW sleeps -- the wake comes
+ * from the master's grant. An async $ENQ returns with the request outstanding
+ * and gets its completion AST when the grant lands.
+ *
+ * `res` carries one reference from resource_find_or_create; it is handed to the
+ * proxy on success and released on every failure path.
+ */
+static void enq_proxy_request(struct vms_proc *proc, struct vms_enq_args *a,
+                              struct vms_lock_resource *res, uint32_t dst_csid)
+{
+    struct vms_dlm_proxy_post post;
+    struct vms_lock_entry *lock;
+    uint32_t st;
+
+    /* No cluster arm installed: this node cannot ask, so it says so. It must
+     * NOT fall back to granting locally -- that is the fabrication INV-6 and
+     * Rule 9 forbid, and it is what makes two masters for one tree. */
+    if (dlm_req_ops_get().post == NULL) {
+        resource_release(res);
+        a->status = SS__UNSUPPORTED;
+        return;
+    }
+
+    lock = dlm_proxy_alloc(proc, res, a, 0);
+    if (!lock) {
+        resource_release(res);
+        a->status = SS__INSFMEM;
+        return;
+    }
+    dlm_proxy_link(proc, res, lock);
+
+    exec_lock(&res->lock);
+    dlm_proxy_fill_post(lock, res, VMS_DLM_OP_ENQ, dst_csid, &post);
+    exec_unlock(&res->lock);
+
+    st = dlm_proxy_post(&post);
+    if (st != SS__NORMAL) {
+        dlm_proxy_unwind(proc, res, lock);
+        a->lkid = 0;
+        a->status = st;                 /* honest: the request never left */
+        return;
+    }
+
+    if (a->flags & LCK_M_SYNC) {
+        st = enq_wait_sync(res, lock);  /* the master's grant wakes us */
+        if (st != SS__NORMAL) {
+            dlm_proxy_unwind(proc, res, lock);
+            a->lkid = 0;
+            a->status = st;
+            return;
+        }
+        a->lkid = lock->lkid;
+        a->lk_status = lock->granted_mode;
+        if (a->flags & LCK_M_VALBLK)
+            memcpy(a->valblk, lock->valblk, LCK_VALBLK_SIZE);
+        a->status = SS__NORMAL;
+        return;
+    }
+
+    /* Async: the request is outstanding at the master. Report the handle and
+     * the mode ASKED for -- granted_mode stays NL until the master answers. */
+    a->lkid = lock->lkid;
+    a->lk_status = lock->requested_mode;
+    a->status = SS__NORMAL;
+}
+
+/*
+ * convert_proxy_request - $ENQ/LCK$M_CONVERT on a PROXY LKB (FC-P4.4).
+ *
+ * The lock is granted at the master, so the conversion is a request TO the
+ * master carrying the new mode, built from this lock block. The caller waits on
+ * the same LKB (sync) or is told the request is outstanding (async). A failed
+ * post restores the lock to the mode it is still genuinely granted at -- VMS
+ * semantics: a failed conversion never loses the held lock.
+ *
+ * Caller holds a lock_find_by_id reference on `lock` and drops it afterwards.
+ */
+static uint32_t convert_proxy_request(struct vms_proc *proc,
+                                      struct vms_enq_args *a,
+                                      struct vms_lock_entry *lock)
+{
+    struct vms_lock_resource *res = lock->resource;
+    struct vms_dlm_proxy_post post;
+    uint32_t held_mode, dst, st;
+
+    (void)proc;
+
+    exec_lock(&res->lock);
+    held_mode = lock->granted_mode;
+    if (a->blkastadr)
+        lock->blkastadr = a->blkastadr;
+    if (a->flags & LCK_M_VALBLK)
+        memcpy(lock->valblk, a->valblk, LCK_VALBLK_SIZE);
+    lock->requested_mode = a->lkmode;
+    lock->flags = a->flags;
+    lock->waiting = 1;            /* pending AT THE MASTER, again */
+    lock->grant_state = 0;
+    dst = lock->master_csid ? lock->master_csid : res->master_csid;
+    dlm_proxy_fill_post(lock, res, VMS_DLM_OP_ENQ, dst, &post);
+    exec_unlock(&res->lock);
+
+    st = dlm_proxy_post(&post);
+    if (st != SS__NORMAL) {
+        exec_lock(&res->lock);
+        lock->requested_mode = held_mode;   /* still held at the old mode */
+        lock->waiting = 0;
+        exec_unlock(&res->lock);
+        return st;
+    }
+
+    if (a->flags & LCK_M_SYNC) {
+        st = enq_wait_sync(res, lock);
+        if (st != SS__NORMAL) {
+            exec_lock(&res->lock);
+            lock->requested_mode = lock->granted_mode;
+            lock->waiting = 0;
+            exec_unlock(&res->lock);
+            return st;
+        }
+        a->lk_status = lock->granted_mode;
+        if (a->flags & LCK_M_VALBLK)
+            memcpy(a->valblk, lock->valblk, LCK_VALBLK_SIZE);
+        return SS__NORMAL;
+    }
+
+    a->lk_status = lock->requested_mode;
+    return SS__NORMAL;
 }
 
 /* ================================================================
@@ -1057,28 +1480,39 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
     }
 
     /*
-     * DLM directory lookup + master resolution (vms-ci.5 DB) BEFORE anything
-     * is granted. For the local scaffolding this masters the resource on this
-     * node -- self is both the directory (name hashes to the local CSID) and
-     * the master -- and falls through to the single-node lock manager below
-     * unchanged. A resource whose directory or master resolves to a REMOTE
-     * node would have to be forwarded over the VMS$VAXcluster VC (DC) or driven
-     * through remastering (DD), which are 0.4: fail honestly with
-     * SS$_UNSUPPORTED rather than fabricate a remote grant, releasing the
-     * resource block we may have just created for it. In a cluster of one this
-     * branch is unreachable (the directory hash always yields the local CSID),
-     * which is exactly why it is an honest deferral and not fake remote state.
+     * DLM directory lookup + master resolution BEFORE anything is granted.
+     * In a cluster of one -- and for every tree this node masters -- the route
+     * is LOCAL and the single-node lock manager below runs unchanged.
+     *
+     * A REMOTE route means the cluster masters this tree (or its directory node
+     * does) and the request must GO THERE: a proxy LKB is created, the request
+     * is posted, and the caller sleeps on that LKB (FC-P4.4). A cross-node
+     * inbound request (xn set) never takes this path -- it arrived AT the
+     * master, which is this node by definition of having been sent here.
      */
     {
-        uint32_t dlm_st;
+        enum dlm_route route;
+        uint32_t dst_csid, dlm_st;
 
         exec_lock(&res->lock);
-        dlm_st = dlm_resolve_master(res);
+        dlm_st = dlm_resolve_master(res, &route, &dst_csid);
         exec_unlock(&res->lock);
 
         if (dlm_st != SS__NORMAL) {
             resource_release(res);
             args.status = dlm_st;
+            goto out;
+        }
+        if (route == DLM_ROUTE_REMOTE && !xn) {
+            enq_proxy_request(proc, &args, res, dst_csid);
+            goto out;      /* enq_proxy_request owns `res` from here */
+        }
+        if (route == DLM_ROUTE_REMOTE) {
+            /* An inbound cross-node request for a tree this node does not
+             * master is DECLINED (D-DLM-4), never served: two masters for one
+             * tree is how a real cluster breaks. */
+            resource_release(res);
+            args.status = SS__UNSUPPORTED;
             goto out;
         }
     }
@@ -1324,11 +1758,39 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
 /*
  * vms_ioctl_deq - Dequeue (release) a lock ($DEQ equivalent)
  */
+/*
+ * deq_proxy_release - the $DEQ half of a PROXY LKB (FC-P4.4).
+ *
+ * The lock lives at the MASTER, so the release is a message to the master built
+ * from this very lock block -- including the value block, when the releaser
+ * wrote one (LCK_M_VALBLK): the LVB write crossing travels with the release, as
+ * it does on the cross-node $DEQ the master already implements.
+ *
+ * The local record is torn down either way. If the post failed, the caller gets
+ * that status (the master may still believe it holds the lock; the cluster's
+ * departure/rebuild machinery is what reconciles that) -- an honest report, not
+ * a silent SS$_NORMAL.
+ */
+static uint32_t deq_proxy_release(struct vms_lock_entry *lock,
+                                  struct vms_lock_resource *res)
+{
+    struct vms_dlm_proxy_post post;
+    uint32_t dst;
+
+    exec_lock(&res->lock);
+    dst = lock->master_csid ? lock->master_csid : res->master_csid;
+    dlm_proxy_fill_post(lock, res, VMS_DLM_OP_DEQ, dst, &post);
+    exec_unlock(&res->lock);
+
+    return dlm_proxy_post(&post);
+}
+
 static long vms_deq_core(struct vms_proc *proc, struct vms_deq_args *io)
 {
     struct vms_deq_args args = *io;
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
+    uint32_t proxy_st = SS__NORMAL;
 
     lock = lock_find_by_id(args.lkid);
     if (!lock || lock->proc != proc) {
@@ -1340,17 +1802,20 @@ static long vms_deq_core(struct vms_proc *proc, struct vms_deq_args *io)
 
     res = lock->resource;
 
+    /* A PROXY LKB releases at the MASTER first; only then is the local record
+     * torn down. Its value block belongs to the master's RSB, never to ours,
+     * so nothing is written back here. */
+    if (lock->proxy)
+        proxy_st = deq_proxy_release(lock, res);
+
     /* Remove from resource */
     exec_lock(&res->lock);
 
     /* Write back value block from lock to resource */
-    if ((lock->flags & LCK_M_VALBLK) && !lock->waiting)
+    if (!lock->proxy && (lock->flags & LCK_M_VALBLK) && !lock->waiting)
         memcpy(res->valblk, lock->valblk, LCK_VALBLK_SIZE);
 
-    if (lock->waiting)
-        exec_list_del(&lock->res_waiting);
-    else
-        exec_list_del(&lock->res_granted);
+    lock_unlink_from_res(lock);
 
     /* Try to grant waiters now that this lock is released */
     try_grant_waiters(res);
@@ -1375,7 +1840,8 @@ static long vms_deq_core(struct vms_proc *proc, struct vms_deq_args *io)
      * a leaf lock (no children) makes the sweep a cheap no-op. */
     release_child_locks(proc, args.lkid);
 
-    args.status = SS__NORMAL;
+    args.status = proxy_st;   /* SS$_NORMAL for a local lock; for a proxy, what
+                               * the post to the master actually returned */
 
 out:
     *io = args;
@@ -1448,6 +1914,41 @@ uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid)
 }
 
 /*
+ * vms_lock_acp_vol_standing - take the STANDING per-volume lock a faithful MOUNT
+ * holds for the WHOLE mount life (vms-25e). Unlike vms_lock_acp_vol_ex (the
+ * transient EX synchronization lock a single on-disk-structure write takes and
+ * immediately drops), this is a NULL-mode (NL) lock held from $MOUNT to
+ * $DISMOUNT. Its purpose is cluster registration, not serialization: it names the
+ * volume in the DLM so the connection manager can register "this node has this
+ * volume mounted" to the coordinator during a directory rebuild -- the standing
+ * F11B$v<label> lock a real VMS node holds and re-registers on join.
+ *
+ * NL asserts PRESENCE, not exclusion: it takes a different resource (F11B$v) than
+ * the XQP's per-write sync lock (F11B$s), holds nothing exclusive, and so can
+ * never block the XQP, another writer, or another cluster node -- deadlock-free
+ * and cluster-safe by construction. Released by vms_lock_acp_vol_release at
+ * $DISMOUNT (or on the holder's rundown). Returns the executive status; on
+ * SS$_NORMAL *lkid_out is the standing lock's handle for later registration.
+ */
+uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
+                                   uint32_t *lkid_out)
+{
+    struct vms_enq_args a;
+
+    if (lkid_out)
+        *lkid_out = 0;
+    memset(&a, 0, sizeof(a));
+    a.lkmode = LCK_K_NLMODE;    /* NL: a presence marker, holds nothing exclusive */
+    a.flags  = LCK_M_SYNC;      /* $ENQW; an NL request grants immediately */
+    strscpy(a.resnam, resnam, sizeof(a.resnam));
+
+    vms_enq_core_ex(proc, &a, NULL);
+    if (a.status == SS__NORMAL && lkid_out)
+        *lkid_out = a.lkid;
+    return a.status;
+}
+
+/*
  * vms_ioctl_convert - Convert lock mode ($ENQ with LCK$M_CONVERT)
  *
  * Changes the mode of an existing granted lock. If the new mode
@@ -1474,6 +1975,15 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
         if (lock)
             lock_put(lock);
         args.status = SS__IVLOCKID;
+        goto out;
+    }
+
+    /* A PROXY LKB converts AT THE MASTER (FC-P4.4): the new mode is a request
+     * over the wire, and the caller waits on the same LKB it already holds --
+     * the local compatibility matrix has no say over a lock the cluster owns. */
+    if (lock->proxy) {
+        args.status = convert_proxy_request(proc, &args, lock);
+        lock_put(lock);
         goto out;
     }
 
@@ -1579,28 +2089,17 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg)
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
+    /*
+     * ONE OBJECT (FC-P4.4). A cross-node request this node issued is a PROXY
+     * LKB in the same lock-ID database as every other lock, so there is no
+     * fall-through table any more: this lookup finds it, and the fields below
+     * report the master's genuine answer -- the NL->EX flip driven by the remote
+     * master is observable here exactly as a local grant is. An unset value
+     * block reads as zeros (the LKB is zero-allocated and only a real grant
+     * writes it), never a stale or fabricated one.
+     */
     lock = lock_find_by_id(args.lkid);
     if (!lock) {
-        /*
-         * Fall through to the requester-side cross-node ORIGIN records (vms-6ca,
-         * H5): a cross-node request THIS node issued is not a local lock (the
-         * remote master holds it), so it has no entry in the lock-ID tree, but
-         * its origin record carries the status the master's GRANT completed. This
-         * makes the NL->EX flip driven by the remote master observable here.
-         */
-        uint32_t org_granted = 0, org_requested = 0;
-        if (vms_lock_dlm_origin_getlki(args.lkid, &org_granted, &org_requested,
-                                       args.resnam, sizeof(args.resnam),
-                                       args.valblk)) {
-            args.granted_mode = org_granted;
-            args.requested_mode = org_requested;
-            args.parent_id = 0;
-            /* args.valblk was filled by origin_getlki: the master's LVB the
-             * GRANT delivered (rd vms-eeb), or zeros if none -- the read
-             * crossing surfacing the master's value block to this requester. */
-            args.status = SS__NORMAL;
-            goto out;
-        }
         args.status = SS__IVLOCKID;
         goto out;
     }
@@ -1649,6 +2148,36 @@ out:
  * found (1 iff departed_csid was a configured member). INV-6: reflects a REAL
  * departure the connection manager reported; nothing fabricated.
  */
+
+/*
+ * dlm_proxies_master_departed - end the waits that the departed node was the
+ * only possible answer to (FC-P4.4). Caller holds res->lock.
+ *
+ * A proxy LKB PENDING at a master that has left the cluster can never be
+ * granted by that master. Rather than leave the requester asleep forever, the
+ * executive completes the request with SS$_UNSUPPORTED -- honest: this node
+ * cannot serve it, and re-driving it at the tree's new master is the rebuild's
+ * job (FC-P5.5), which does not exist yet. A proxy already GRANTED is left
+ * alone: it is a real lock the survivors must describe to the new master
+ * (Davis p. 6-53), not something to throw away here.
+ */
+static void dlm_proxies_master_departed(struct vms_lock_resource *res,
+                                        uint32_t departed_csid)
+{
+    struct vms_lock_entry *p;
+
+    if (departed_csid == 0)
+        return;
+    exec_list_for_each_entry(p, &res->proxies, res_proxy) {
+        if (p->master_csid != departed_csid)
+            continue;
+        if (!p->waiting || p->grant_state != 0)
+            continue;                  /* granted: preserved for the rebuild */
+        p->grant_state = SS__UNSUPPORTED;
+        exec_cv_broadcast(&p->wait_wq);
+    }
+}
+
 long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_dlm_depart_args args;
@@ -1684,6 +2213,7 @@ long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg)
         res->dir_csid = 0;
         if (res->master_csid == args.departed_csid)
             res->master_csid = 0;
+        dlm_proxies_master_departed(res, args.departed_csid);
         exec_unlock(&res->lock);
     }
 
@@ -1754,40 +2284,47 @@ out:
 /*
  * vms_ioctl_dlm_enum_waits - $DLM pending-wait enumeration (rd vms-ec75, H11).
  * The HOME authority for distributed deadlock search: enumerate THIS node's
- * outstanding cross-node requests that are still PENDING (a requester-side origin
- * record with granted_mode == NL). Each names a resource this node waits on
- * (resnam), the node mastering it (master_csid), and this node's own requester-side
- * handle for the wait (req_lkid) -- one outgoing wait-for edge for the edge-chase.
- * INV-6: a READ of the REAL vms_dlm_origin_list state H5's grant_recv built; count
- * 0 when nothing is pending, never a fabricated edge. Surfaces EXISTING executive
- * state -- no wait-for graph is stored or guessed.
+ * outstanding cross-node requests that are still PENDING (a PROXY LKB with
+ * granted_mode == NL). Each names a resource this node waits on (resnam), the
+ * node mastering it (master_csid), and this node's own requester-side handle for
+ * the wait (req_lkid) -- one outgoing wait-for edge for the edge-chase.
+ * INV-6: a READ of the REAL proxy LKBs the master's replies completed (FC-P4.4;
+ * formerly the vms_dlm_origin list); count 0 when nothing is pending, never a
+ * fabricated edge. Surfaces EXISTING executive state -- no wait-for graph is
+ * stored or guessed.
  */
 long vms_ioctl_dlm_enum_waits(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_dlm_enum_waits_args args;
-    struct vms_dlm_origin *org;
+    struct vms_lock_resource *res;
+    int bkt;
 
     (void)proc;
     memset(&args, 0, sizeof(args));
 
-    exec_lock(&vms_dlm_origin_lock);
-    exec_list_for_each_entry(org, &vms_dlm_origin_list, list) {
-        if (org->granted_mode != LCK_K_NLMODE)
-            continue;                 /* pending (NL) waits only -- a granted origin
-                                       * is a HOLD, not a wait-for edge */
-        args.total++;
-        if (args.count < VMS_DLM_ENUM_WAITS_MAX) {
-            struct vms_dlm_wait_ent *e = &args.ent[args.count];
-            memcpy(e->resnam, org->resnam, sizeof(e->resnam));
-            e->resnam[sizeof(e->resnam) - 1] = '\0';
-            e->master_csid = org->master_csid;
-            e->req_lkid = org->req_lkid;
-            e->req_csid = org->req_csid;
-            e->granted_mode = org->granted_mode;
-            args.count++;
+    exec_lock(&vms_res_hash_lock);
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        struct vms_lock_entry *p;
+
+        exec_lock(&res->lock);
+        exec_list_for_each_entry(p, &res->proxies, res_proxy) {
+            if (p->granted_mode != LCK_K_NLMODE)
+                continue;             /* pending (NL) waits only -- a granted
+                                       * proxy is a HOLD, not a wait-for edge */
+            args.total++;
+            if (args.count < VMS_DLM_ENUM_WAITS_MAX) {
+                struct vms_dlm_wait_ent *e = &args.ent[args.count];
+                strscpy(e->resnam, res->name, sizeof(e->resnam));
+                e->master_csid = p->master_csid;
+                e->req_lkid = p->lkid;
+                e->req_csid = p->req_csid;
+                e->granted_mode = p->granted_mode;
+                args.count++;
+            }
         }
+        exec_unlock(&res->lock);
     }
-    exec_unlock(&vms_dlm_origin_lock);
+    exec_unlock(&vms_res_hash_lock);
 
     args.status = SS__NORMAL;
     if (exec_copyout((void *)arg, &args, sizeof(args)))
@@ -2109,8 +2646,10 @@ static uint32_t vms_lock_dlm_xnode_deq(struct vms_dlm_xnode_args *req)
     lock = lock_find_by_id(req->master_lkid);   /* takes a reference */
     if (!lock)
         return SS__IVLOCKID;
-    if (lock->req_csid == 0 || lock->req_csid != req->req_csid) {
-        /* Not a cross-node lock, or not held for the releasing node. */
+    if (lock->proxy || lock->req_csid == 0 || lock->req_csid != req->req_csid) {
+        /* Not a cross-node lock, not held for the releasing node, or a PROXY
+         * LKB -- this node's own requester-side image of a lock some OTHER node
+         * masters, which no peer may release through the master path (FC-P4.4). */
         lock_put(lock);
         return SS__IVLOCKID;
     }
@@ -2134,10 +2673,7 @@ static uint32_t vms_lock_dlm_xnode_deq(struct vms_dlm_xnode_args *req)
      */
     if ((req->flags & LCK_M_VALBLK) && !lock->waiting)
         memcpy(res->valblk, req->valblk, LCK_VALBLK_SIZE);
-    if (lock->waiting)
-        exec_list_del(&lock->res_waiting);
-    else
-        exec_list_del(&lock->res_granted);
+    lock_unlink_from_res(lock);
 
     /*
      * Deferred-GRANT discovery (vms-6ca, DLM epic vms-7fa rung H5). Snapshot the
@@ -2208,153 +2744,221 @@ static uint32_t vms_lock_dlm_xnode_deq(struct vms_dlm_xnode_args *req)
 }
 
 /*
- * vms_lock_dlm_xnode_grant_recv - the REQUESTER-SIDE GRANT RECEIVE (vms-6ca, DLM
- * epic vms-7fa rung H5). Previously SS$_UNSUPPORTED.
+ * dlm_proxy_reconstruct - create the proxy LKB a master's message names when
+ * this node holds none (FC-P4.4).
  *
- * A GRANT / queued-reply message the MASTER sent back over SCS in answer to a
- * cross-node $ENQ THIS node issued lands here. It completes the requester's
- * origin record -- the executive-resident proxy of the outstanding request --
- * so the request's status is genuine executive state, not a per-process
- * userspace flag (INV-6). The record's granted mode is set ONLY from what the
- * master genuinely sent:
- *   - a queued-reply carries lkmode == NL  -> the origin record stays pending
+ * req_lkid is, by the protocol's own definition, a lock id of THIS node, so it
+ * is inserted into the lock-ID database AT that id -- one keyspace, no side
+ * table. The lock is owned by no local process (proc NULL): it is the NODE's
+ * record of a lock the cluster holds for it, so no process rundown may take it
+ * away. Every field comes from the master's message.
+ *
+ * Returns the new proxy (no extra reference; it lives on res->proxies) or NULL
+ * when the id is already in use or the resource/lock cannot be made.
+ */
+static struct vms_lock_entry *dlm_proxy_reconstruct(struct vms_dlm_xnode_args *req)
+{
+    struct vms_lock_resource *res;
+    struct vms_lock_entry *lock;
+    struct vms_enq_args a;
+
+    res = resource_find_or_create(req->resnam);   /* +1 ref, held by the proxy */
+    if (!res)
+        return NULL;
+
+    memset(&a, 0, sizeof(a));
+    a.lkmode = (req->lkmode > LCK_K_NLMODE) ? req->lkmode : LCK_K_NLMODE;
+
+    lock = dlm_proxy_alloc(NULL, res, &a, req->req_lkid);
+    if (!lock) {
+        resource_release(res);
+        return NULL;
+    }
+    /* The identity the MASTER addressed this request to. It is the CSID the
+     * cluster knows us by, supplied by the cluster itself -- which is what a
+     * later wait-for enumeration (DLM_ENUM_WAITS) must report, not a
+     * locally-assumed one. Falls back to the executive's own CSID when the
+     * message did not name it. */
+    if (req->req_csid != 0)
+        lock->req_csid = req->req_csid;
+    dlm_proxy_link(NULL, res, lock);
+    return lock;
+}
+
+/*
+ * vms_lock_dlm_xnode_grant_recv - the REQUESTER-SIDE GRANT RECEIVE (vms-6ca, DLM
+ * epic vms-7fa rung H5; retargeted onto the PROXY LKB by FC-P4.4).
+ *
+ * A GRANT / queued-reply message the MASTER sent back in answer to a cross-node
+ * $ENQ THIS node issued lands here and completes the PROXY LKB that represents
+ * the request -- so the request's status is genuine executive state, not a
+ * per-process userspace flag (INV-6). The proxy's granted mode is set ONLY from
+ * what the master genuinely sent:
+ *   - a queued-reply carries lkmode == NL  -> the proxy stays PENDING
  *     (granted_mode NL): the requester genuinely sees "blocked", from the
  *     master's real waiting-queue decision transported over the wire.
  *   - a deferred GRANT carries lkmode == the granted mode (e.g. EX) and
- *     status SS$_NORMAL -> the origin record flips NL -> EX. THIS is the status
- *     flip observed on the REQUESTER node, driven by the master's real release.
+ *     status SS$_NORMAL -> the proxy flips NL -> EX and any $ENQW asleep on it
+ *     WAKES. THIS is the status flip observed on the REQUESTER node, driven by
+ *     the master's real release.
  *
- * find-or-create keyed by the requester's own lock handle (req_lkid). The record
- * never touches the resource granted/waiting queues (the local lock manager
- * cannot auto-grant it); only this wire path completes it. GETLKI(req_lkid)
- * reads it back, so the flip is independently observable.
+ * IDEMPOTENT BY CONSTRUCTION (D-DLM-5). The (req_csid, req_lkid) key IS the
+ * lock-ID database: a retransmitted GRANT finds the SAME proxy and re-records
+ * the same values -- it can never mint a second lock under one handle. And it
+ * can never turn a lock this node MASTERS into a proxy: an id naming a
+ * non-proxy lock is refused SS$_IVLOCKID.
  *
- * Returns SS$_NORMAL when the receive was accepted (the record now reflects the
- * master's status), or SS$_INSFMEM if the record could not be allocated. It
- * grants nothing itself -- it records the master's genuine decision.
+ * VMS_DLM_LKID_UNSET (the fc8540ae cluster-crasher): a GRANT that claims a
+ * granted mode while carrying NO master handle is REFUSED. Recording a
+ * placeholder handle is how a completion later put a fabricated lock id on the
+ * wire, and a real VAX bugchecked (INVLOCKID) over exactly that.
  */
 static uint32_t vms_lock_dlm_xnode_grant_recv(struct vms_dlm_xnode_args *req)
 {
-    struct vms_dlm_origin *org = NULL, *cur;
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
+    int created = 0;
 
     if (req->req_lkid == 0)
         return SS__BADPARAM;   /* a GRANT must name the requester's own handle */
+    if (req->lkmode > LCK_K_NLMODE && req->master_lkid == VMS_DLM_LKID_UNSET)
+        return SS__BADPARAM;   /* a grant with no master handle is not a grant */
 
-    exec_lock(&vms_dlm_origin_lock);
-    exec_list_for_each_entry(cur, &vms_dlm_origin_list, list) {
-        if (cur->req_lkid == req->req_lkid) {
-            org = cur;
-            break;
-        }
+    lock = lock_find_by_id(req->req_lkid);
+    if (lock != NULL && !lock->proxy) {
+        lock_put(lock);
+        return SS__IVLOCKID;   /* names one of OUR locks, not one of our proxies */
     }
-    if (org == NULL) {
-        org = exec_zalloc(sizeof(*org));
-        if (org == NULL) {
-            exec_unlock(&vms_dlm_origin_lock);
+    if (lock == NULL) {
+        if (req->resnam[0] == '\0')
+            return SS__BADPARAM;
+        lock = dlm_proxy_reconstruct(req);
+        if (lock == NULL)
             return SS__INSFMEM;
-        }
-        org->req_lkid = req->req_lkid;
-        org->req_csid = req->req_csid;
-        org->requested_mode = LCK_K_EXMODE; /* refined below from the reply mode */
-        org->granted_mode = LCK_K_NLMODE;   /* pending until a real grant arrives */
-        memcpy(org->resnam, req->resnam, sizeof(org->resnam));
-        org->resnam[sizeof(org->resnam) - 1] = '\0';
-        exec_list_add_tail(&org->list, &vms_dlm_origin_list);
+        created = 1;
     }
+    res = lock->resource;
 
-    /* Record what the MASTER genuinely reported. The master's lock handle and
-     * CSID come from the reply; the granted mode is whatever the master said the
-     * request is granted at (NL == still pending/queued, non-NL == granted). */
-    if (req->master_lkid != 0)
-        org->master_lkid = req->master_lkid;
-    if (req->master_csid != 0)
-        org->master_csid = req->master_csid;
+    exec_lock(&res->lock);
+
+    /* Record what the MASTER genuinely reported: its handle for the lock, its
+     * CSID, and the mode it says the request is granted at. */
+    if (req->master_lkid != VMS_DLM_LKID_UNSET)
+        lock->master_lkid = req->master_lkid;
+    if (req->master_csid != 0) {
+        lock->master_csid = req->master_csid;
+        /*
+         * The cluster has told us who masters this tree. Storing it on the RSB
+         * is what sends the NEXT $ENQ straight to the master instead of back
+         * through the directory node (Davis p. 6-32: one lookup per tree while
+         * this node holds a lock in it). It is a value the CLUSTER returned --
+         * never one this node computed (Rule 8).
+         */
+        if (res->master_csid != vms_local_csid)
+            res->master_csid = req->master_csid;
+    }
     if (req->lkmode > LCK_K_NLMODE)
-        org->requested_mode = req->lkmode;
-    org->granted_mode = req->lkmode;   /* NL on a queued-reply; EX on a grant */
+        lock->requested_mode = req->lkmode;
+    lock->granted_mode = req->lkmode;   /* NL on a queued-reply; EX on a grant */
 
     /*
      * LVB read crossing (rd vms-eeb, rung H9). A real GRANT (a non-NL granted
-     * mode) carries the master's resource value block in the reply; store it on
-     * the origin record so GETLKI(req_lkid) surfaces it to the requester's $ENQ
-     * caller -- the mirror of the write crossing (vms-d81). A queued-reply (NL)
-     * delivers no LVB, so valblk_valid stays clear and GETLKI reports zeros
-     * honestly rather than a stale block. The bytes are the master's real
-     * res->valblk transported over SCS, never fabricated (INV-6).
+     * mode) carries the master's resource value block; store it ON THE PROXY so
+     * GETLKI(req_lkid) surfaces it to the requester's $ENQ caller -- the mirror
+     * of the write crossing (vms-d81). A queued-reply (NL) delivers no LVB and
+     * writes none, so an ungranted proxy reports zeros honestly rather than a
+     * stale block. The bytes are the master's real res->valblk transported over
+     * SCS, never fabricated (INV-6).
      */
-    if (req->lkmode > LCK_K_NLMODE) {
-        memcpy(org->valblk, req->valblk, LCK_VALBLK_SIZE);
-        org->valblk_valid = 1;
+    if (req->lkmode > LCK_K_NLMODE)
+        memcpy(lock->valblk, req->valblk, LCK_VALBLK_SIZE);
+
+    /*
+     * BLKAST WIRE (rung H6, vms-76d). When this GRANT establishes the proxy as a
+     * HOLDER (a real granted mode) AND the holder registered a blocking-AST
+     * routine, remember it so a BLKAST the master later sends can fire a genuine
+     * user-mode AST. Recorded ONLY from what the holder supplied on its own $ENQ
+     * (req->blkastadr) -- never fabricated. A queued-reply (NL), or a GRANT with
+     * no blkastadr, leaves the proxy with no blocking AST, so a later BLKAST
+     * honestly declines rather than inventing a delivery (INV-6).
+     */
+    if (req->blkastadr != 0 && req->lkmode > LCK_K_NLMODE) {
+        lock->blkastadr = req->blkastadr;
+        lock->blkastprm = req->blkastprm;
     }
 
     /*
-     * BLKAST WIRE (rung H6, vms-76d). When this GRANT establishes the record as a
-     * HOLDER proxy (a real granted mode) AND the holder registered a blocking-AST
-     * routine, remember it so a BLKAST the master later sends over SCS can fire a
-     * genuine user-mode AST. Recorded ONLY from what the holder supplied on its own
-     * $ENQ (req->blkastadr) -- never fabricated. A queued-reply (NL) or a GRANT with
-     * no blkastadr leaves the record with no blocking AST, so a later BLKAST honestly
-     * declines rather than inventing a delivery (INV-6).
+     * WAKE THE REQUESTER. A granted proxy is no longer pending, so a $ENQW
+     * asleep in enq_wait_sync on this very LKB is woken here -- under res->lock,
+     * the same discipline try_grant_waiters uses, which is what makes the wait
+     * lost-wakeup-free. A queued-reply leaves it pending and wakes nobody.
      */
-    if (req->blkastadr != 0 && req->lkmode > LCK_K_NLMODE) {
-        org->blkastadr = req->blkastadr;
-        org->blkastprm = req->blkastprm;
+    if (req->lkmode > LCK_K_NLMODE) {
+        lock->waiting = 0;
+        lock->grant_state = SS__NORMAL;
+        queue_completion_ast(lock);      /* async $ENQ: the completion AST */
+        exec_cv_broadcast(&lock->wait_wq);
     }
+    exec_unlock(&res->lock);
 
-    exec_unlock(&vms_dlm_origin_lock);
+    if (!created)
+        lock_put(lock);   /* drop the lock_find_by_id reference */
     return SS__NORMAL;
 }
 
 /*
  * vms_lock_dlm_xnode_blkast_recv - the HOLDER-SIDE BLOCKING-AST DELIVERY (rung H6,
- * vms-76d). The symmetric mirror of vms_lock_dlm_xnode_grant_recv: a BLKAST the
- * MASTER sent over SCS -- because a conflicting request queued behind this node's
- * granted lock -- lands here and FIRES the holder's blocking AST for real.
+ * vms-76d; retargeted onto the PROXY LKB by FC-P4.4). The symmetric mirror of
+ * vms_lock_dlm_xnode_grant_recv: a BLKAST the MASTER sent -- because a conflicting
+ * request queued behind this node's granted lock -- lands here and FIRES the
+ * holder's blocking AST for real.
  *
- * The record is the holder-side ORIGIN proxy the GRANT receive established (keyed
- * by the holder's own req_lkid, which the BLKAST frame carries). If it exists and
- * the holder registered a blocking-AST routine (org->blkastadr, from its own $ENQ),
- * a REAL user-mode AST is queued to the delivering process's USER-mode AST queue --
- * the SAME mechanism notify_blocking_asts/queue_completion_ast use -- so the holder
- * genuinely receives the blocking AST (drainable via VMS_IOCTL_DELIVERAST), not a
- * log line. `proc` is the holder node's registered delivery context (the daemon that
- * both established the record and dispatches this BLKAST -- one process), so no stale
- * proc pointer is stored on the record.
+ * The object is the PROXY LKB the GRANT receive established (named by the
+ * holder's own lock id, which the BLKAST frame carries as req_lkid). If it
+ * exists and the holder registered a blocking-AST routine on its own $ENQ, a
+ * REAL user-mode AST is queued -- the SAME mechanism notify_blocking_asts and
+ * queue_completion_ast use -- so the holder genuinely receives the blocking AST
+ * (drainable via VMS_IOCTL_DELIVERAST), not a log line. It goes to the process
+ * that OWNS the proxy when one does; a proxy the cluster reconstructed has no
+ * owner, so it goes to the delivering context, as before.
  *
  * Returns SS$_NORMAL and sets req->blkast_delivered=1 when an AST was genuinely
- * queued. Returns SS$_UNSUPPORTED (never faked) when there is no holder record for
- * the named handle or it carries no blocking-AST routine -- honest, per INV-6.
+ * queued. Returns SS$_UNSUPPORTED (never faked) when the handle names no proxy of
+ * ours, or that proxy carries no blocking-AST routine -- honest, per INV-6.
  */
 static uint32_t vms_lock_dlm_xnode_blkast_recv(struct vms_proc *proc,
                                                struct vms_dlm_xnode_args *req)
 {
-    struct vms_dlm_origin *org = NULL, *cur;
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
     struct vms_ast_entry *ast;
     struct vms_ast_state *ast_state;
-    uint64_t blkastadr = 0, blkastprm = 0;
+    struct vms_proc *target;
+    uint64_t blkastadr, blkastprm;
 
     if (proc == NULL)
         return SS__BADPARAM;
     if (req->req_lkid == 0)
         return SS__BADPARAM;   /* a BLKAST must name the holder's own handle */
 
-    exec_lock(&vms_dlm_origin_lock);
-    exec_list_for_each_entry(cur, &vms_dlm_origin_list, list) {
-        if (cur->req_lkid == req->req_lkid && cur->blkastadr != 0) {
-            org = cur;
-            blkastadr = cur->blkastadr;
-            blkastprm = cur->blkastprm;
-            break;
-        }
-    }
-    if (org == NULL) {
-        exec_unlock(&vms_dlm_origin_lock);
-        return SS__UNSUPPORTED;   /* no holder record / no blocking AST -- honest */
-    }
-    org->blkast_count++;
-    exec_unlock(&vms_dlm_origin_lock);
+    lock = dlm_proxy_find(req->req_lkid);
+    if (lock == NULL)
+        return SS__UNSUPPORTED;   /* no proxy of ours by that handle -- honest */
 
-    /* Queue a REAL user-mode blocking AST to the holder's delivery process. Mirrors
+    res = lock->resource;
+    exec_lock(&res->lock);
+    blkastadr = lock->blkastadr;
+    blkastprm = lock->blkastprm;
+    target = lock->proc ? lock->proc : proc;
+    if (blkastadr != 0)
+        lock->blkast_count++;     /* a REAL delivery, counted */
+    exec_unlock(&res->lock);
+    lock_put(lock);
+
+    if (blkastadr == 0)
+        return SS__UNSUPPORTED;   /* the holder registered none -- never faked */
+
+    /* Queue a REAL user-mode blocking AST to the holder. Mirrors
      * notify_blocking_asts: astprm is the holder's own request handle (VMS delivers
      * the lock id as the blocking AST parameter unless the holder supplied one). */
     ast = exec_zalloc_atomic(sizeof(*ast));
@@ -2364,13 +2968,13 @@ static uint32_t vms_lock_dlm_xnode_blkast_recv(struct vms_proc *proc,
     ast->astprm = blkastprm ? blkastprm : (uint64_t)req->req_lkid;
     ast->acmode = PSL_C_USER;
 
-    ast_state = &proc->ast[PSL_C_USER];
+    ast_state = &target->ast[PSL_C_USER];
     exec_lock(&ast_state->lock);
     if (ast_state->count < VMS_AST_MAX_PER_MODE) {
         exec_list_add_tail(&ast->list, &ast_state->pending);
         ast_state->count++;
         exec_unlock(&ast_state->lock);
-        vms_ast_notify_arrival(proc);
+        vms_ast_notify_arrival(target);
     } else {
         exec_free(ast);
         exec_unlock(&ast_state->lock);
@@ -2379,49 +2983,6 @@ static uint32_t vms_lock_dlm_xnode_blkast_recv(struct vms_proc *proc,
 
     req->blkast_delivered = 1;
     return SS__NORMAL;
-}
-
-/*
- * vms_lock_dlm_origin_getlki - GETLKI fall-through for a requester-side origin
- * record (vms-6ca, H5). Returns 1 and fills the getlki fields if an origin
- * record with lkid == req_lkid exists; 0 otherwise. Lets GETLKI observe the
- * cross-node request's status flip on the REQUESTER node.
- */
-static int vms_lock_dlm_origin_getlki(uint32_t lkid, uint32_t *granted_mode,
-                                      uint32_t *requested_mode, char *resnam,
-                                      size_t resnam_len, uint8_t *valblk)
-{
-    struct vms_dlm_origin *cur;
-    int found = 0;
-
-    if (lkid == 0)
-        return 0;
-    exec_lock(&vms_dlm_origin_lock);
-    exec_list_for_each_entry(cur, &vms_dlm_origin_list, list) {
-        if (cur->req_lkid == lkid) {
-            if (granted_mode)
-                *granted_mode = cur->granted_mode;
-            if (requested_mode)
-                *requested_mode = cur->requested_mode;
-            if (resnam && resnam_len)
-                strscpy(resnam, cur->resnam, resnam_len);
-            /*
-             * LVB read crossing (rd vms-eeb): surface the value block the
-             * master's GRANT delivered (valblk_valid), else zeros -- an
-             * unset LVB is reported honestly, never a stale/fabricated block.
-             */
-            if (valblk) {
-                if (cur->valblk_valid)
-                    memcpy(valblk, cur->valblk, LCK_VALBLK_SIZE);
-                else
-                    memset(valblk, 0, LCK_VALBLK_SIZE);
-            }
-            found = 1;
-            break;
-        }
-    }
-    exec_unlock(&vms_dlm_origin_lock);
-    return found;
 }
 
 /*
@@ -2434,7 +2995,7 @@ static int vms_lock_dlm_origin_getlki(uint32_t lkid, uint32_t *granted_mode,
  * re-derive a grant against this node's (empty) queue and lock_compatible rather
  * than preserve the holder's REAL pre-departure lock. The mode (req->lkmode), the
  * holder's identity (req->req_csid) and its own handle (req->req_lkid) are the
- * REAL values from the holder's origin record (it read them via GETLKI before
+ * REAL values from the holder's own proxy LKB (it read them via GETLKI before
  * pushing this REBUILD), transported over SCS -- never a fabricated or defaulted
  * lock (INV-6). This node becomes the resource's master. Returns the new master's
  * handle for the rebuilt lock in req->master_lkid.
@@ -2478,6 +3039,80 @@ static uint32_t vms_lock_dlm_xnode_rebuild(struct vms_proc *proc,
 
     req->master_lkid = lock->lkid;
     return SS__NORMAL;
+}
+
+/*
+ * vms_lock_dlm_xnode_enq_idempotent - RETRANSMIT IDEMPOTENCY at the master
+ * (D-DLM-5; the anti-storm property, salvaged from feat/coord-rebuild-completion
+ * and extended to the waiting queue by FC-P4.4).
+ *
+ * A cluster member that has not seen a STABLE granted lock re-sends the same
+ * request. Without this, every re-send ran the full enqueue core and minted a
+ * FRESH master lock record, so the handle the master returned changed on each
+ * reply (0x328 -> 0x329 -> 0x32a ...) and the requester could never correlate a
+ * held lock: it re-requested forever. That is the measured ~35/sec storm on
+ * LNM$CWLOGICALS and F11B$aSYSDSK1. A real VMS master is idempotent to a
+ * retransmit: the SAME (req_csid, req_lkid) on the SAME resource gets the SAME
+ * master handle every time, and the same answer.
+ *
+ * Both queues are matched, because both states are re-sent:
+ *   GRANTED at a mode that covers the request -> the same handle, SS$_NORMAL.
+ *   still WAITING at the same requested mode  -> the same handle, and the
+ *      caller returns VMS_DLM_STS_QUEUED again. Minting a second waiter would
+ *      double-queue one request, which is how a queue grows without bound.
+ * An UP-CONVERSION (the existing grant is weaker than the request) is NOT a
+ * retransmit -- it falls through to the core, which must process it for real.
+ *
+ * Returns 1 when an existing lock answers the retransmit (with *queued telling
+ * the caller which status to return), 0 to run the core. Cross-node only (both
+ * ids non-zero); a local $ENQ is never deduped here. INV-6: the handle returned
+ * names a REAL lock record on this master's own queue -- never a fabricated or
+ * defaulted grant. A PROXY LKB can never match: proxies are on neither queue.
+ */
+static int vms_lock_dlm_xnode_enq_idempotent(struct vms_dlm_xnode_args *req,
+                                             int *queued)
+{
+    struct vms_lock_resource *res;
+    struct vms_lock_entry *lock;
+    int handled = 0;
+
+    *queued = 0;
+    if (req->req_csid == 0 || req->req_lkid == 0)
+        return 0;   /* a local ENQ or an unidentified requester: never dedup */
+
+    res = resource_find_or_create(req->resnam);
+    if (!res)
+        return 0;   /* let the core report SS$_INSFMEM honestly */
+
+    exec_lock(&res->lock);
+    exec_list_for_each_entry(lock, &res->granted, res_granted) {
+        if (lock->req_csid == req->req_csid &&
+            lock->req_lkid == req->req_lkid &&
+            lock->granted_mode >= req->lkmode) {
+            req->master_lkid = lock->lkid;          /* the SAME stable handle */
+            req->master_csid = vms_local_csid;
+            memcpy(req->valblk, res->valblk, LCK_VALBLK_SIZE);
+            handled = 1;
+            break;
+        }
+    }
+    if (!handled) {
+        exec_list_for_each_entry(lock, &res->waiting, res_waiting) {
+            if (lock->req_csid == req->req_csid &&
+                lock->req_lkid == req->req_lkid &&
+                lock->requested_mode == req->lkmode) {
+                req->master_lkid = lock->lkid;      /* the SAME stable handle */
+                req->master_csid = vms_local_csid;
+                handled = 1;
+                *queued = 1;
+                break;
+            }
+        }
+    }
+    exec_unlock(&res->lock);
+
+    resource_release(res);
+    return handled;
 }
 
 /*
@@ -2548,10 +3183,21 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
     case VMS_DLM_OP_ENQ: {
         struct vms_enq_args a;
         struct dlm_xnode_enq_out xn;
+        int dup_queued = 0;
 
         /* A request that names a resource must actually name one. */
         if (req->resnam[0] == '\0')
             return SS__BADPARAM;
+
+        /*
+         * RETRANSMIT FIRST (D-DLM-5). A re-send of a request this master is
+         * already serving gets the SAME handle and the SAME answer -- it never
+         * mints a second lock. This is what stops the re-request storm.
+         */
+        if (vms_lock_dlm_xnode_enq_idempotent(req, &dup_queued)) {
+            req->queued = dup_queued ? 1u : 0u;
+            return dup_queued ? (uint32_t)VMS_DLM_STS_QUEUED : SS__NORMAL;
+        }
 
         /*
          * Marshal the decoded cross-node $ENQ into the single-node lock manager

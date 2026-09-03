@@ -428,6 +428,12 @@ struct vms_lock_entry {
     struct list_head    proc_list;      /* link in process's lock list */
     struct list_head    res_granted;    /* link in resource's granted list */
     struct list_head    res_waiting;    /* link in resource's waiting list */
+    struct list_head    res_proxy;      /* link in resource's PROXY list (FC-P4.4).
+                                         * A proxy LKB is on exactly this one and
+                                         * never on granted/waiting, so the LOCAL
+                                         * granting algorithm structurally cannot
+                                         * see -- let alone grant -- a lock the
+                                         * cluster masters elsewhere (INV-6). */
     struct rb_node      rb_node;        /* in global lock ID tree */
     uint32_t            lkid;
     uint32_t            granted_mode;   /* current granted mode (0-5) */
@@ -436,6 +442,13 @@ struct vms_lock_entry {
     uint64_t            astadr;         /* completion AST */
     uint64_t            astprm;
     uint64_t            blkastadr;      /* blocking AST */
+    uint64_t            blkastprm;      /* blocking-AST parameter (FC-P4.4). The
+                                         * cross-node BLKAST the master sends
+                                         * carries the parameter the holder
+                                         * registered with its own request; the
+                                         * LKB remembers it so the delivered AST
+                                         * is the holder's, not a default. 0 =>
+                                         * VMS's own fallback, the lock id. */
     uint8_t             valblk[LCK_VALBLK_SIZE];
     struct vms_lock_resource *resource;
     struct vms_proc     *proc;
@@ -479,6 +492,29 @@ struct vms_lock_entry {
                                          * lock), so this is purely additive. The
                                          * parent-child AUTO-RELEASE cascade is a
                                          * follow-on (vms-489), not wired here. */
+    /*
+     * PROXY LKB (FC-P4.4, design SS3.4 + hard call 7; Davis p. 6-52's *process
+     * copy*). proxy == 1 marks the requester-side image of a lock this node
+     * does NOT master: the executive holds a real lock block for it -- so
+     * $GETLKI, $DEQ, convert, blocking-AST delivery and the value block all
+     * have ONE object to operate on -- but only a message from the MASTER can
+     * ever change its granted mode. It is linked on res_proxy (above), never on
+     * the resource's granted/waiting queues, so try_grant_waiters() and
+     * lock_compatible() cannot reach it: the executive is structurally unable
+     * to auto-grant a lock the cluster owns. This replaces the vms_dlm_origin
+     * side list, which duplicated these fields on a second keyspace.
+     *
+     * master_csid: the node that masters the resource. master_lkid: THAT node's
+     * own handle for this lock, 0 until a message from the master named it --
+     * an unset handle is never emitted (the VMS_DLM_LKID_UNSET refusal; a
+     * placeholder lock id bugchecked a real VAX with INVLOCKID).
+     * blkast_count: genuine cross-node blocking-AST deliveries, 0 until the
+     * first one fires (a real counter, never a plausible default).
+     */
+    uint8_t             proxy;
+    uint32_t            master_csid;
+    uint32_t            master_lkid;
+    uint32_t            blkast_count;
 };
 
 /* Lock resource (named resource in the lock database) */
@@ -487,6 +523,12 @@ struct vms_lock_resource {
     char                name[32];
     struct list_head    granted;        /* granted lock list */
     struct list_head    waiting;        /* waiting lock list (FIFO) */
+    struct list_head    proxies;        /* PROXY LKBs for this resource when it
+                                         * is mastered on ANOTHER node (FC-P4.4).
+                                         * Deliberately a THIRD queue: the local
+                                         * granting algorithm walks granted and
+                                         * waiting only, so it can never grant a
+                                         * lock the cluster masters elsewhere. */
     uint8_t             valblk[LCK_VALBLK_SIZE]; /* resource value block */
     spinlock_t          lock;
     int                 refcount;
@@ -1087,6 +1129,12 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
 uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
                              uint32_t *lkid_out);
 uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid);
+/* The STANDING per-volume lock a faithful MOUNT holds for the whole mount life
+ * (vms-25e): an NL-mode $ENQ on the F11B$v<label> resource, held from $MOUNT to
+ * $DISMOUNT as the cluster-registration presence marker (not serialization).
+ * Released with vms_lock_acp_vol_release. See vms_lock.c. */
+uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
+                                   uint32_t *lkid_out);
 /*
  * DLM resource-directory + mastering (vms-ci.5 DB). Read-only diagnostic:
  * report the directory node, the mastering node and the granted-lock count
@@ -1104,6 +1152,28 @@ long vms_ioctl_dlm_enum_waits(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_cluster_member_set(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_cluster_member_clear(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_cluster_member_get(struct vms_proc *proc, unsigned long arg);
+/*
+ * FC-P0.9: the ONE per-node struct vms_cluster instance (design SS3.9 rule 3:
+ * "no globals except one per-node struct vms_cluster passed explicitly").
+ * VMS_IOCTL_CLUSTER_DIAG_PORT is the first ioctl to need it; later cluster
+ * ioctls (CLUSTER_START/STOP, CLUSTER_DIAG_CSB/_CONN/_LOCK, $GETSYI) call
+ * this SAME accessor rather than each keeping its own pointer. Defined in
+ * vms_lock.c, on every substrate. `struct vms_cluster` itself is opaque here
+ * on purpose -- only a caller that includes vms_cluster.h can dereference it.
+ */
+struct vms_cluster;
+struct vms_cluster *vms_cluster_node(void);
+/* VMS_IOCTL_CLUSTER_DIAG_PORT (FC-P0.9): the port's SDA SHOW PORT-equivalent
+ * diagnostics read, against vms_cluster_node()'s real vms_pe.c objects. */
+long vms_ioctl_cluster_diag_port(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_SYSGEN_LOAD (FC-P0.10): STARTUP.EXE's own case of SYSBOOT --
+ * loads the cluster SYSGEN parameters + CLUSTER_AUTHORIZE into
+ * vms_cluster_node()'s real struct vms_cluster.params (vms_cluster_sysgen.c). */
+long vms_ioctl_sysgen_load(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_START (FC-P0.11): the P0 "port up" semantic -- starts
+ * the FC-P0.5 fork thread if not already running, then vms_pe_start()
+ * against vms_cluster_node()'s real struct vms_cluster (vms_devtab.c). */
+long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg);
 /* vms-94c (DLM epic vms-7fa rung 1): the cross-node DLM RECEIVE handler and its
  * ioctl wrapper. Rung 1 delivers a decoded remote DLM request TO the handler,
  * which returns SS$_UNSUPPORTED (no fabricated cross-node grant, INV-6). */
@@ -1176,6 +1246,15 @@ uint32_t vms_devtab_disk_backing(const char *devnam,
  * kernel-core, on every substrate.
  */
 void vms_devtab_note_io_error(uint32_t major, uint32_t minor);
+/*
+ * FC-P0.9: PEA0:'s discovery of the same NIC ETH0: was already bound to at
+ * boot, and PEA0:'s entry into the device table once the port glue has
+ * actually opened it. Both internal (non-ioctl): `netif` is INV-4 and never
+ * crosses /dev/vms. SS$_NORMAL / SS$_BADPARAM / SS$_NOSUCHDEV / SS$_INSFMEM.
+ * Defined in kernel-core (vms_devtab.c), on every substrate.
+ */
+uint32_t vms_devtab_eth0_netif(char *out, uint32_t outsz);
+int vms_devtab_add_pea(const char *netif);
 #if defined(OVMX_KTEST_FAULT_INJECT)
 /*
  * TEST-ONLY: arm block-I/O fault injection for the QEMU-test vms.ko so a real
@@ -1283,6 +1362,10 @@ void vms_mbx_release_all(struct vms_proc *proc);
  */
 long vms_ioctl_acp_mount(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_dmount(struct vms_proc *proc, unsigned long arg);
+/* Enumerate this node's standing cluster-registrable system locks (vms-1f4): one
+ * entry (resname + local lkid + mode) per mounted volume holding its F11B$v lock.
+ * A READ of real lock state for scsd's directory-rebuild registration. */
+long vms_ioctl_dlm_enum_standing(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_assign(struct vms_proc *proc, unsigned long arg);
 /*
  * IO$_ACCESS / IO$_DEACCESS (vms-204): open a file by name or by FID on a

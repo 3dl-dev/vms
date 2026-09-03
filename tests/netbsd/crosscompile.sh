@@ -43,6 +43,7 @@ CC="${CC:-clang}"
 SYS="$NBSRC/usr/src/sys"
 KMOD="$REPO/src/kernel-netbsd"
 CORE="$REPO/src/kernel-core"
+GUEST="$REPO/tests/netbsd/guest"
 
 if [ ! -d "$SYS" ]; then
     echo "FAIL: NetBSD kernel sources not found at $SYS" >&2
@@ -94,6 +95,21 @@ OBJ="$(mktemp -d)"
 #                    GETSCOPE + the read-only-publishable arena. Sole exec_arena
 #                    consumer (exec_kbackend_netbsd.h §10 uvm_km_alloc(WIRED)),
 #                    published read-only via the cdevsw d_mmap in vms_netbsd.c.
+#   vms_pe.c / vms_lan_netbsd.c - FC-P0.1: the LAN port layer of the
+#                    executive-resident VMScluster stack + its NetBSD SS14..SS18
+#                    seam binding (honest SS$_NOSUCHDEV stubs until FC-P0.4).
+#                    vms_pe.c is in SRCS "from its first commit" per
+#                    src/kernel-netbsd/Makefile's own comment -- so it belongs
+#                    in this per-PR gate from its first commit too, not added
+#                    later the way vms_l2.c's NetBSD absence happened.
+#
+# NOTE (pre-existing, not FC-P0.1's to fix): this list is narrower than
+# src/kernel-netbsd/Makefile's full SRCS -- it omits vms_devtab.c,
+# vmsfs_acp.c, ods2_reader.c/ods2_edit.c, vms_blockdev_netbsd.c and
+# vms_socket_netbsd.c, which the Makefile's SRCS carries but this hand-
+# maintained array had not picked up before this item either. Left as found;
+# flagged here so a later item does not read the comment above as still
+# literally true.
 SRCS=(
     "$KMOD/vms_netbsd.c"
     "$KMOD/vms_lnm_arena_netbsd.c"
@@ -102,6 +118,8 @@ SRCS=(
     "$KMOD/exec_list_netbsd.c"
     "$KMOD/exec_hash_netbsd.c"
     "$KMOD/exec_rbtree_netbsd.c"
+    "$KMOD/vms_lan_netbsd.c"
+    "$GUEST/cluster_seam.c"
     "$CORE/vms_eflag.c"
     "$CORE/vms_ast.c"
     "$CORE/vms_access.c"
@@ -109,6 +127,9 @@ SRCS=(
     "$CORE/vms_proctab.c"
     "$CORE/vms_lock.c"
     "$CORE/vms_lnm.c"
+    "$CORE/vms_cluster_fork.c"
+    "$CORE/vms_cluster_fork_bind.c"
+    "$CORE/vms_pe.c"
 )
 
 # ---- teeth check ---------------------------------------------------------
@@ -140,4 +161,4 @@ echo "LD  vms.kmod.o (relocatable)"
 echo "CHK guest-payload staging (tests/netbsd/Dockerfile completeness)"
 OVMX_REPO="$REPO" bash "$REPO/tests/netbsd/check_guest_payload.sh"
 
-echo "PASS: the OVMX/NetBSD vms module + shared src/kernel-core facilities (vms_eflag.c, vms_ast.c, vms_access.c, vms_mbx.c, vms_proctab.c, vms_lock.c, vms_lnm.c) cross-compile and link for NetBSD/amd64 (${#SRCS[@]} TUs)"
+echo "PASS: the OVMX/NetBSD vms module + shared src/kernel-core facilities (vms_eflag.c, vms_ast.c, vms_access.c, vms_mbx.c, vms_proctab.c, vms_lock.c, vms_lnm.c, vms_pe.c) cross-compile and link for NetBSD/amd64 (${#SRCS[@]} TUs)"

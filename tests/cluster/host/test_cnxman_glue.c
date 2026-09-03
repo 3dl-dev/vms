@@ -440,6 +440,15 @@ static void test_glue_bindings(void)
 	check_has("scs_sysap_listen(cl->scs, cnxman_join_name_vaxcluster",
 		  "the VMS$VAXcluster SYSAP is registered with SCS");
 
+	/* E43: the MSCP$DISK CDT-open must advance the join (join_h_mscp_opened
+	 * sets j->mscp_open) AND still forward to the disk client -- this exact
+	 * contiguous shape lives only in cnxman_mscp_opened. Before the fix the
+	 * join's MSCP_CONNECT step never advanced on a real wire (fake-ops R1
+	 * reached the FSM directly, so only the glue was broken). */
+	check_has("cnxman_join_opened(&cn->join, local_conid);\n\n"
+		  "\tif (dc != NULL && dc->opened != NULL)",
+		  "the MSCP CDT-open advances the join too, not just the VC (E43)");
+
 	/* Dispatch order: join, then barrier, then coordinator. */
 	check_has("cnxman_join_rx_frame(&cn->join", "the join sees a frame first");
 	check_has("cnxman_barrier_rx_frame(&cn->barrier",

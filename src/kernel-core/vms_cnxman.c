@@ -874,6 +874,15 @@ static void cnxman_mscp_opened(void *ctx, vms_conid_t local_conid)
 	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
 	const struct cnxman_disk_client_ops *dc = cnxman_dc(cn);
 
+	/* Advance the JOIN's MSCP_CONNECT step: the join opens MSCP$DISK before
+	 * the VMS$VAXcluster VC (sequential states MSCP_CONNECT -> VC_CONNECT),
+	 * so this CDT-open is the one join_h_mscp_opened is waiting for. Mirrors
+	 * cnxman_vc_opened's cnxman_join_opened() call -- WITHOUT the membership
+	 * CSB dispatch, because the MSCP CDT is a disk-client connection, not a
+	 * VMS$VAXcluster membership block. (E43: without this, j->mscp_open is
+	 * never set on a real wire; only the fake-ops R1 path reached the FSM.) */
+	cnxman_join_opened(&cn->join, local_conid);
+
 	if (dc != NULL && dc->opened != NULL)
 		dc->opened(dc->ctx, local_conid);
 }

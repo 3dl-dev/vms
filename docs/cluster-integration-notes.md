@@ -374,6 +374,36 @@ sends a counted zero and logs it (honest but may be rejected by a real VAX).
 - **Proper fix = FC-P3.9's SHOW CLUSTER** becomes the real product caller: P3.9 adds `SHOW CLUSTER`/`$GETSYI` reading the executive → give each cluster DIAG ioctl a `vms_kif.c` wrapper that SHOW CLUSTER (or the cluster-diag CLI) issues → census green with a REAL product path, no OVMX-UNWIRED throwaway. **FC-P3.9 MUST wire kif wrappers for DIAG_PORT/CONN/CSB and their SHOW-CLUSTER caller** (mind the "new kif symbol → N places / shr.vec" trap). Do NOT let feat/cluster-executive PR to main while census is red.
 - Interim OVMX-UNWIRED declarations are the fallback ONLY if P3.9 slips — but they'd be throwaway, so prefer the real caller.
 
+### E35. CLUSTER_MEMBER_GET repoint deferred — would regress a live scsd test (raised by FC-P3.8 → FC-P3.9)
+P3.8's plan row asked to repoint `CLUSTER_MEMBER_GET` at the CSB table; P3.8 did
+NOT, deliberately: `tests/qemu/test_syssvc_cluster_member.c` +
+`tests/integration/test_show_cluster_membership.sh` drive the legacy scsd-populated
+`vms_cluster_member_set/get` table (incl. a `$GETSYI` cutover assertion). Since
+CSBs never learn a CSID today (E30), repointing GET would make it permanently
+report 0 members — a real regression. **FC-P3.9 does the repoint AND retires the
+scsd-based test together** (P3.9 retires the strawman anyway) — or explicitly
+descopes the repoint until E30's op-06 layout is lab-pinned. Left untouched.
+
+### E36. Peer-discovery → CSB-allocation is unwired — join hits NO_TARGET even with a real peer (raised by FC-P3.8 → FC-P3.9 or new item)
+Nothing yet turns "the port saw a peer's HELLO/START (P0.8/P0.9 channel up)" into
+"allocate a CSB for that peer + point the join at it." Until that exists, every
+join attempt returns `NO_TARGET` even with a real peer present — an R4/lab-blocking
+gap between the port (P0.9) and CNXMAN (P3.8). **FC-P3.9's "CLUSTER_START join
+semantics" should wire peer-appears→CSB-alloc→join-target; if that's beyond P3.9's
+file list, it's a new small item on the tier-2-boot path.** This + E30 (CSID) +
+E31 (conndata) are the three things between the built stack and a peer actually
+joining.
+
+### E37. FC-P3.9 scope note: do NOT resolve E17 (compat-dlm overclaim) while updating compat rows
+P3.9's row includes "compat register rows updated." It should ADD honest rows for
+the NEW executive cluster facilities (PEDRIVER/SCS/CNXMAN/join — status per what's
+actually built + verified: R1/R3 real, R4/R5 lab-deferred, NOT "complete"). But it
+must **NOT** unilaterally rewrite the **E17** `cluster-dlm.yaml` distributed-DLM
+overclaim — that's operator-gated (INV-0). Flag E17 as still-open; leave the
+resolution to the operator's ruling. P3.9 also owns making `kif_caller_census`
+green (E34) via the SHOW CLUSTER product caller + kif wrappers for
+DIAG_PORT/CONN/CSB.
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

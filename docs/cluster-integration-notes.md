@@ -318,6 +318,55 @@ Also: FC-P2.4's R4 two-node lookup + FC-P2.6's R5 are structurally gated on
 **FC-P3.3** (nothing calls `scs_dir_lookup` until the join drives it — the harness
 reports PENDING, never a false pass).
 
+### E30. ⭐ THE SINGLE BLOCKING GAP TO CN=3 MEMBER: op-06 SCSSYSTEMID layout (raised by FC-P3.3 → LAB, now cheap)
+The join FSM reaches the barrier and completes the dialogue but **cannot reach
+MEMBER** because it will not fabricate its CSID (E8). FC-P3.3 landed the
+INSTRUMENT that makes this a one-capture fix: `vms_cm_membership_find_sysid()`
+searches a real op-0x06 body for OVMX's OWN SCSSYSTEMID (a value it owns) and
+reports the **byte offset + width** (`join.sysid_seen_at`/`_width`), reading
+nothing off it. **Lab ask: run a booted join OR decode a real op-06 body; the
+reported offset+width + one record's neighbourhood pins the {SCSSYSTEMID,
+incarnation, CSID} layout.** Then `cnxman_join_csid_learned()`'s already-R1-tested
+cell fires and the node reaches MEMBER. This is THE lever between the built stack
+and the milestone. (Supersedes/sharpens E8.)
+
+### E31. ⚠ OPERATOR DECISION: OVMX's `VMS$VAXcluster` connect-data (CM version identity) (raised by FC-P3.3)
+The 16-byte `VMS$VAXcluster` connect data is the CM **version handshake with a
+REJECT right attached** (p. 2-25). §4(N): OVMX "cannot yet generate connect data
+for a role it has not observed, and it must not claim to." The strawman shipped a
+replayed capture constant (`01 1b 01 03 …`). FC-P3.3 made it
+`cnxman_join_cfg.conndata` — glue-supplied or an explicit COUNTED zero — and baked
+nothing. **A real member may REJECT a zero, blocking the join.** This is an
+honest-identity ruling (reserved): **the operator must decide what OVMX declares
+as its cluster-protocol version identity.** Teed up. Absent a ruling, the join
+sends a counted zero and logs it (honest but may be rejected by a real VAX).
+
+### E32. Field-pinning items sharpened by FC-P3.3 (→ FC-P3.2 / lab)
+- **LOCKDIRWT (FC-P3.2):** =0 and "field not written" are the SAME bytes today —
+  coincidence, not placement. `lockdirwt_unpinned` counts every PARAMS; a NONZERO
+  configured LOCKDIRWT sets `lockdirwt_unrepresentable` + logs loudly (understating
+  a directory weight would misroute directory duty). FC-P3.2 must pin the offset.
+- **D7 coordinator selection:** protocol/ECO level + the "connected==advertised"
+  precondition have no isolated offsets; FC-P3.3 implemented the residual rule
+  (CSB nearest CLUB queue tail, p.7-38) and counted the rest
+  (`target_level_unpinned`, `member_count_ungated`) — did NOT gate the join on a
+  count it can't read (deadlock-over-omission avoided). FC-P3.2 pins these.
+- **E24 dir descriptor:** mechanism wired (`dir_descriptor` → `set_dir_data`),
+  `dir_descriptor_omitted` counts it; still needs the lab byte.
+
+### E33. FC-P3.3 minor couplings (→ noted owners)
+- **R2 partial (E12):** the vax3 established-join replay uses in-tree fixtures; two
+  elements (op-0a GO, MSCP ENDs) are codec-built (no specimen) and say so. Swap in
+  a decoded vax3 fixture = one line in `scenarios/cnxman_join.c`.
+- **MSCP body-level:** the join sends MSCP body-level (all-zero link, `frame[72:108]`)
+  — E1-correct + stronger than P3.4's frame-level link; if FC-P6.2 grows body-level
+  MSCP builders this is a 2-line simplification.
+- **Directory teardown:** FC-P3.3 uses `vms_scs_dir`'s p.2-51 close-when-idle; if the
+  lab shows §4(o)'s later teardown is load-bearing, it's an FC-P2.3 change.
+- **`CNXMAN_EV_RX_CLOSE` dual-purpose:** barrier maps it to cat-01 op-04 ABORT, join
+  to cat-06 op-00 close — tables never see each other's frames; flagged not renamed
+  (frozen enum).
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

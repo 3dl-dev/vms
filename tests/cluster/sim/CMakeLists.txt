@@ -24,6 +24,7 @@ add_library(cluster_sim_core STATIC
     sim_dump.c
     sim_metric.c
     sim_scenario.c
+    replay.c
 )
 target_include_directories(cluster_sim_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -69,3 +70,15 @@ cluster_sim_test(test_sim_lan test_sim_lan.c)
 # The FC-P1.4 done-condition: 3 simulated pe stacks form virtual circuits under
 # 10 % loss, and the run is deterministic by seed.
 cluster_sim_test(test_sim_vc test_sim_vc.c)
+
+# FC-P1.5: the pcap replay driver's own done-condition -- replay a reference
+# join capture through one simulated OVMX instance and assert shape +
+# allowlist + seq contiguity on what it emits. Needs the R1 clean-room
+# fixture loader (cluster_host_fixture) and its two path definitions, the
+# same way tests/cluster/host/CMakeLists.txt's cluster_host_pe_test wires them.
+cluster_sim_test(test_replay test_replay.c)
+target_link_libraries(test_replay PRIVATE cluster_host_fixture)
+target_compile_definitions(test_replay PRIVATE
+    OVMX_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/cluster/host/fixtures"
+    OVMX_CLEANROOM_MANIFEST="${CMAKE_SOURCE_DIR}/docs/clean-room/reference-captures.sha256"
+)

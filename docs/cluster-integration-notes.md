@@ -488,6 +488,28 @@ BUILDABLE NOW):** move served I/O to a worker kthread posting completions back t
 the fork queue; **CI grep gate: the cluster fork thread NEVER calls `exec_blockdev_*`.**
 Real latent bug in just-landed P6.3 — the review discipline caught it before the lab would.
 
+### E46. 10th BUG (FC-P6.6-caught + fixed): pre-existing kernel use-after-free in FC-P0.5's Linux exec_kthread binding
+`kthread_stop+0x48` NULL-deref (`RAX=0`, usage refcount already zero): a thread body
+that returns on its own is self-reaped by Linux (frees `task_struct`) BEFORE the
+join. FC-P6.6 PROVED it pre-existing (reproduces on a booted throwaway worktree at
+28cee71b, pre-P6.6) and fixed it — the handle holds a task ref
+(`get_task_struct`/`put_task_struct`), matching NetBSD's `KTHREAD_MUSTJOIN`;
+contract in `exec_kbackend.h §15`. A real kernel crash on boot, latent in P0.5 since
+the fork context landed — surfaced only when the P6.6 worker made it reliable. FIXED,
+integrated. (Was "outside P6.6's row" but it's all one cluster lane.)
+
+### E47. ⚠ PRE-BOOT-SMOKE: `test_kmod_cluster_{conn,membership,vc}_diag` return nonzero in the QEMU kmod (raised by FC-P6.6)
+The CLUSTER_DIAG_CONN/CSB/PORT ioctls pass HOST tests but the QEMU kmod diag tests
+return nonzero. FC-P6.6 proved conn/membership pre-existing at 28cee71b (vc_diag never
+ran — the E46 oops killed the boot first). **Needs investigation BEFORE the tier-1
+wire smoke** (SHOW CLUSTER uses these — if they truly fail in the kmod, SHOW CLUSTER
+won't work on a booted node). LIKELY-BENIGN hypothesis to check FIRST: the kmod test
+may call the diag ioctl BEFORE CLUSTER_START, so a nonzero `SS$_NOSUCHDEV` is the
+HONEST negctl behavior (P0.9's documented pre-init path), not a bug — the test's
+expectation may be wrong. Verify: does the test start the port/cluster before the
+diag call? If not, fix the test; if yes, real kmod-dispatch bug. Not blocking the
+P6.5/P7.2 build chain.
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

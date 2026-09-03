@@ -73,6 +73,10 @@ SRCS=		vms_netbsd.c \
 		vms_cluster_codec_scs.c \
 		vms_scs_dir.c \
 		vms_scs.c \
+		vms_cluster_codec_mscp.c \
+		vms_mscp_cl_fsm.c \
+		vms_cnxman_join_fsm.c \
+		vms_cnxman.c \
 		vmsfs_acp.c \
 		ods2_reader.c \
 		ods2_edit.c \

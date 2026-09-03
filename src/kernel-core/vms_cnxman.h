@@ -251,4 +251,27 @@ int vms_cnxman_start(struct vms_cluster *cl);
  * timers. Idempotent. */
 void vms_cnxman_stop(struct vms_cluster *cl);
 
+/* ==========================================================================
+ * 8. $SETCLUEVT (glue, vms_cnxman.c -- FC-P3.8)
+ *
+ * `proc` is an opaque handle (this header names no substrate/process type,
+ * design SS3.2.2): the caller is vms_devtab.c's ioctl handler, which holds a
+ * real `struct vms_proc *` and passes it through unexamined. A single
+ * registration per node -- the caller wanting more is a design question for
+ * whoever asks, not something this glue invents a table for.
+ * ========================================================================== */
+
+/* Register (or, with event_mask 0 or astadr 0, clear) this node's ONE
+ * $SETCLUEVT registration: `event_mask` is CLUEVT$C_ADD/_REMOVE bits
+ * (cluevtdef.h), delivered as a completion AST to `proc` at `astadr` with
+ * `astprm`. SS$_NOSUCHDEV before CLUSTER_START. */
+int vms_cnxman_cluevt_set(struct vms_cluster *cl, void *proc,
+			  uint32_t event_mask, uint64_t astadr,
+			  uint64_t astprm);
+
+/* Called at process death (see this item's report for the two call sites):
+ * clears the registration if it belongs to `proc`, so a delivery can never
+ * reach freed memory. A no-op if `proc` never registered. */
+void vms_cnxman_proc_gone(struct vms_cluster *cl, void *proc);
+
 #endif /* OVMX_VMS_CNXMAN_H */

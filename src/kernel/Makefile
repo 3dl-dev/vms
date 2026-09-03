@@ -121,6 +121,17 @@ obj-m := vms.o
 # vms_cluster_codec_vc.o (FC-P1.1, START/STACK/ACK + the 0x48 credit-return +
 # the sequence stamp). Pure, in the NetBSD SRCS and in the distro Kbuild from
 # the same commit.
+#
+# FC-P3.8 (vms_cnxman.o) is the connection manager's GLUE: it instantiates
+# the join/barrier/coordinator/reconnect FSMs above on the fork context,
+# registers the VMS$VAXcluster SYSAP with SCS, and is therefore the FIRST
+# in-module consumer of the join (FC-P3.3) -- which brings its own two
+# dependencies along on the same "no in-module consumer yet" rule (E4):
+# vms_mscp_cl_fsm.o (FC-P3.4, the disk-client discovery walk the join drives)
+# and vms_cluster_codec_mscp.o (FC-P6.2, the MSCP command bodies that walk
+# builds). All three are pure or seam-facing on the SAME terms as their
+# siblings above and are in the NetBSD kmodule's SRCS and the elf32-vax
+# cross-compile gates from this commit.
 vms-y := vms_module.o \
          ../kernel-core/vms_access.o \
          ../kernel-core/vms_ast.o \
@@ -152,6 +163,10 @@ vms-y := vms_module.o \
          ../kernel-core/vms_cluster_codec_scs.o \
          ../kernel-core/vms_scs_dir.o \
          ../kernel-core/vms_scs.o \
+         ../kernel-core/vms_cluster_codec_mscp.o \
+         ../kernel-core/vms_mscp_cl_fsm.o \
+         ../kernel-core/vms_cnxman_join_fsm.o \
+         ../kernel-core/vms_cnxman.o \
          ../kernel-core/vms_proctab.o \
          ../kernel-core/vmsfs_acp.o \
          ../vmsfs/ods2/ods2_reader.o \

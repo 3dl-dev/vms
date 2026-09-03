@@ -76,7 +76,15 @@ vms_codec_status_t vms_mscp_classify(const uint8_t *frame, uint32_t len,
 				     enum vms_mscp_class *out)
 {
 	uint16_t content;
-	uint8_t op, base;
+	/*
+	 * `op` is only ever READ below after mscp_read_opcode() returns
+	 * VMS_CODEC_OK, which is the only path that writes it -- but the
+	 * elf32-vax cross-compiler's -O2 -Wmaybe-uninitialized (unlike every
+	 * other arch this tree builds for) cannot see across that call, so it
+	 * is zero-initialized here to keep -Werror clean on every arch. No
+	 * behaviour change: the early return on a non-OK status is unaffected.
+	 */
+	uint8_t op = 0u, base;
 	int is_end;
 	vms_codec_status_t st;
 

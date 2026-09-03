@@ -216,6 +216,15 @@ struct scs_sysap_ops {
 	 * REJECT, and a lost path -- which is exactly the set the callee must
 	 * handle identically. On a VC break `reason` maps from
 	 * SCS_CLOSE_PATHLOST (vms_scs_fsm.h) to SS$_PATHLOST in the glue.
+	 *
+	 * CONFIRMED (integration note E29, FC-P3.8): CNXMAN's `VMS$VAXcluster`
+	 * SYSAP (vms_cnxman.c) is the first SYSAP that acts on `reason`, and it
+	 * receives the RAW `enum scs_close_reason` exactly as this note always
+	 * said -- never an SS$_ number. It routes SCS_CLOSE_REJECTED to
+	 * cnxman_join_rejected() (book p. 2-25's version-gate reject, D12, a
+	 * distinct fact from every other close) and every other reason to the
+	 * CSB ten-state ladder's own connectivity-lost handling before telling
+	 * the join. No wording change to the disposition above was needed.
 	 */
 	void (*closed)(void *ctx, vms_conid_t local_conid, uint32_t reason);
 

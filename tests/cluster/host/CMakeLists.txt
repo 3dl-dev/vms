@@ -149,6 +149,16 @@ target_compile_definitions(test_cnxman_body_level PRIVATE
     OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
 )
 
+# FC-P3.8: the connection manager's GLUE (vms_cnxman.c). Not host-linkable
+# (it names exec_kbackend.h and the FC-P0.5 fork API, test_scs_glue_conn.c's
+# own precedent) -- this drives the pure layers it wires together plus a
+# byte-for-byte reproduction of its own small algorithm (E3's preload, the
+# membership diff), then source-scans the shipped file for the bindings.
+cluster_host_cnxman_test(test_cnxman_glue test_cnxman_glue.c vms_frame_compose.c)
+target_compile_definitions(test_cnxman_glue PRIVATE
+    OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
+)
+
 cluster_host_test(test_codec_scs        test_codec_scs.c)
 cluster_host_test(test_codec_cm         test_codec_cm.c vms_frame_compose.c)
 cluster_host_test(test_codec_mscp       test_codec_mscp.c)

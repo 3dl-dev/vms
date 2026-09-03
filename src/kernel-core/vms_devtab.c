@@ -57,6 +57,7 @@
 #include "vms_cluster_snapshot.h"
 #include "vms_cluster_sysgen.h"
 #include "vms_pe.h"
+#include "vms_cnxman.h"        /* FC-P3.8: cnxman_get_club/_csb + $SETCLUEVT */
 #include "vms_scs.h"           /* FC-P2.4: vms_scs_start + the CONN snapshots */
 
 /*
@@ -1784,6 +1785,92 @@ long vms_ioctl_cluster_diag_conn(struct vms_proc *proc, unsigned long arg)
     if (status != SS__NORMAL)
         pr_info("vms: CLUSTER_DIAG_CONN row %u index %u -> SS$ %u\n",
                 (unsigned)args.row, (unsigned)args.index, (unsigned)status);
+
+    args.status = status;
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * The two CLUSTER_DIAG_CSB row structs (vms_ioctl.h / vms_lock_nb.h) are
+ * BYTE-IDENTICAL duplicates of vms_cluster_snapshot.h's vms_club_view /
+ * vms_csb_view -- the same shape as CLUSTER_DIAG_PORT/_CONN above.
+ */
+_Static_assert(sizeof(struct vms_club_view) == sizeof(struct vms_club_view_wire),
+               "vms_club_view / vms_club_view_wire layout drifted");
+_Static_assert(sizeof(struct vms_csb_view) == sizeof(struct vms_csb_view_wire),
+               "vms_csb_view / vms_csb_view_wire layout drifted");
+
+/*
+ * vms_ioctl_cluster_diag_csb - VMS_IOCTL_CLUSTER_DIAG_CSB (FC-P3.8). The
+ * connection manager's own CLUB/CSB projection: `row` names which of
+ * cnxman_get_club / cnxman_get_csb (vms_cnxman.c) to read, `index` walks the
+ * CSB table for the latter. Both read a real struct vms_club / struct
+ * vms_csb under the fork mutex (INV-6); this function adds no state of its
+ * own, only the copyin/copyout and the row dispatch.
+ */
+long vms_ioctl_cluster_diag_csb(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_cluster_diag_csb_args args;
+    struct vms_cluster *cl = vms_cluster_node();
+    uint32_t status;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    switch (args.row) {
+    case VMS_CLUSTER_DIAG_CSB_CLUB: {
+        struct vms_club_view v;
+
+        status = (uint32_t)cnxman_get_club(cl, &v);
+        if (status == SS__NORMAL)
+            memcpy(&args.club, &v, sizeof(args.club));
+        break;
+    }
+    case VMS_CLUSTER_DIAG_CSB_CSB: {
+        struct vms_csb_view v;
+
+        status = (uint32_t)cnxman_get_csb(cl, args.index, &v);
+        if (status == SS__NORMAL)
+            memcpy(&args.csb, &v, sizeof(args.csb));
+        break;
+    }
+    default:
+        status = SS__BADPARAM;
+        break;
+    }
+
+    if (status != SS__NORMAL)
+        pr_info("vms: CLUSTER_DIAG_CSB row %u index %u -> SS$ %u\n",
+                (unsigned)args.row, (unsigned)args.index, (unsigned)status);
+
+    args.status = status;
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_cluster_setcluevt - VMS_IOCTL_CLUSTER_SETCLUEVT (FC-P3.8).
+ * $SETCLUEVT's executive-side registration against vms_cluster_node()'s
+ * struct vms_cnxman (vms_cnxman_cluevt_set()). `proc` is this call's OWN
+ * caller -- $SETCLUEVT is a self-registration, never a third-party one.
+ */
+long vms_ioctl_cluster_setcluevt(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_cluster_setcluevt_args args;
+    struct vms_cluster *cl = vms_cluster_node();
+    uint32_t status;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    status = (uint32_t)vms_cnxman_cluevt_set(cl, (void *)proc, args.event_mask,
+                                             args.astadr, args.astprm);
 
     args.status = status;
     if (exec_copyout((void *)arg, &args, sizeof(args)))

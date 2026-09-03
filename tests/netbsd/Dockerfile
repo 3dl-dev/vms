@@ -226,6 +226,19 @@ COPY src/kernel-core/vms_scs_fsm.h           /netbsd/guest-src/kernel-core/vms_s
 COPY src/kernel-core/vms_scs_dir.c           /netbsd/guest-src/kernel-core/vms_scs_dir.c
 COPY src/kernel-core/vms_scs_dir.h           /netbsd/guest-src/kernel-core/vms_scs_dir.h
 COPY src/kernel-core/vms_scs.c               /netbsd/guest-src/kernel-core/vms_scs.c
+# --- FC-P3.8: the connection manager's GLUE (vms_cnxman.c), the FIRST
+# in-module consumer of the join FSM (FC-P3.3) -- which brings its own two
+# not-yet-staged dependencies along (FC-P3.4's disk-client discovery walk and
+# FC-P6.2's MSCP command codec, E4). All four joined src/kernel-netbsd/
+# Makefile's SRCS with this item, so the in-guest module build needs them
+# staged. ---
+COPY src/kernel-core/vms_cluster_codec_mscp.c /netbsd/guest-src/kernel-core/vms_cluster_codec_mscp.c
+COPY src/kernel-core/vms_cluster_codec_mscp.h /netbsd/guest-src/kernel-core/vms_cluster_codec_mscp.h
+COPY src/kernel-core/vms_mscp_cl_fsm.c       /netbsd/guest-src/kernel-core/vms_mscp_cl_fsm.c
+COPY src/kernel-core/vms_mscp_cl_fsm.h       /netbsd/guest-src/kernel-core/vms_mscp_cl_fsm.h
+COPY src/kernel-core/vms_cnxman_join_fsm.c   /netbsd/guest-src/kernel-core/vms_cnxman_join_fsm.c
+COPY src/kernel-core/vms_cnxman_join_fsm.h   /netbsd/guest-src/kernel-core/vms_cnxman_join_fsm.h
+COPY src/kernel-core/vms_cnxman.c            /netbsd/guest-src/kernel-core/vms_cnxman.c
 COPY src/kernel-netbsd/vms_lan_netbsd.c      /netbsd/guest-src/kmod/vms_lan_netbsd.c
 # FC-P0.4: cluster_seam.c (the R3 substrate-contract self-test for the cluster
 # seam, called from vms_netbsd.c's MODULE_CMD_INIT) lives under

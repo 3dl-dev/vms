@@ -361,6 +361,84 @@ vms_scs_dir_lookup_build(const struct vms_scs_dir_lookup *dl,
 /* The GROUNDED negative-result literal (sec 4(h)(2), 16 bytes, no padding). */
 extern const uint8_t vms_scs_dir_not_present_here[VMS_SCSCTRL_NAME_LEN];
 
+/* ------------------------------------------------------------------ *
+ * THE BODY-LEVEL DIRECTORY MESSAGE (abs 72-107) -- FC-P2.3
+ * ------------------------------------------------------------------ *
+ *
+ * WHY THIS EXISTS ALONGSIDE vms_scs_dir_lookup_{parse,build}(). Those two
+ * read/stamp a directory lookup on a WHOLE parsed control frame, which is
+ * what a builder needs. The SCS$DIRECTORY SYSAP sits ABOVE SCS and is
+ * handed -- and hands back -- only its OWN bytes: frame-absolute 72 onward,
+ * design SS3.2.4's "72-203 -> the emitting FSM/role" span, exactly as
+ * vms_scs_msg_body() already delivers it. This pair is that body-level view,
+ * so vms_scs_dir.c contains no wire offset at all (design SS3.9 rule 2) --
+ * the same reason FC-P2.2 added vms_scs_hdr_build/_parse for the 16-byte
+ * SCS header rather than letting the FSM store six bytes by index.
+ *
+ * The directory message rides MTYPE 10 on the 94-content SCA class (sec
+ * 4(h)(2)/(2a)), so its SYSAP body is 36 bytes: the 4-byte marker at abs 72,
+ * the queried name at abs 76 and the result at abs 92. The offsets are
+ * DERIVED from the frame-absolute ones by subtracting abs 72, never
+ * re-stated, so the two views of the same three fields cannot drift apart.
+ */
+#define VMS_SCS_DIRBODY_LEN \
+	((VMS_OFF_SCSCTRL_NAME2 + VMS_SCSCTRL_NAME_LEN) - VMS_OFF_SCSCTRL_MARKER)
+
+#define VMS_OFF_SCSDIRBODY_MARKER (VMS_OFF_SCSCTRL_MARKER - VMS_OFF_SCSCTRL_MARKER) /*  0 */
+#define VMS_OFF_SCSDIRBODY_NAME   (VMS_OFF_SCSCTRL_NAME1  - VMS_OFF_SCSCTRL_MARKER) /*  4 */
+#define VMS_OFF_SCSDIRBODY_RESULT (VMS_OFF_SCSCTRL_NAME2  - VMS_OFF_SCSCTRL_MARKER) /* 20 */
+
+/*
+ * The request/response discriminator, GROUNDED at payload [58:62] (abs 72)
+ * by sec 4(h)(2a)'s own census: selecting by CONNECTION IDENTITY rather than
+ * by SCA length, the reference capture's 12 directory messages split into
+ * "6 REQUESTs (`[58:62]=0`)" and "6 RESPONSEs (`[58:62]=1`)" with no
+ * residual, and the same 0/1 split is byte-verified independently in
+ * docs/design-cluster-join-choreography.md. It is NOT a hit/miss flag: the
+ * same 1 rides both an affirmative and a "NOT PRESENT HERE" answer, so the
+ * ONLY hit/miss discriminator is the result field itself.
+ */
+#define VMS_SCS_DIR_MARKER_REQUEST  0u
+#define VMS_SCS_DIR_MARKER_RESPONSE 1u
+
+struct vms_scs_dir_msg {
+	uint32_t                  marker; /* VMS_SCS_DIR_MARKER_*, carried
+					   * through as the real wire value --
+					   * a value outside {0,1} is NOT
+					   * rewritten, it is reported.       */
+	struct vms_scs_dir_lookup lookup;
+};
+
+/*
+ * vms_scs_dir_msg_parse - decode the 36 SYSAP bytes of a received directory
+ * message (byte 0 == abs 72, i.e. exactly what vms_scs_msg_body() returns for
+ * a 94-content frame). VMS_CODEC_E_SHORT if `len` is under
+ * VMS_SCS_DIRBODY_LEN. The result field is classified by the SAME reading
+ * vms_scs_dir_lookup_parse() applies (empty / "NOT PRESENT HERE" /
+ * affirmative), so a caller cannot get two answers from one wire.
+ */
+vms_codec_status_t vms_scs_dir_msg_parse(const uint8_t *body, uint32_t len,
+					 struct vms_scs_dir_msg *out);
+
+/*
+ * vms_scs_dir_msg_build - the inverse, into a caller-owned 36-byte buffer.
+ * Bakes in nothing: the marker, the queried name and the result all come
+ * from *m (the result via vms_scs_dir_lookup_build()'s own three readings).
+ */
+vms_codec_status_t vms_scs_dir_msg_build(const struct vms_scs_dir_msg *m,
+					 uint8_t *out, uint32_t cap);
+
+/*
+ * vms_scs_dir_ctrl_from_body - splice a 36-byte directory body into an
+ * already-prepared control frame, giving it the 94-content shape (marker +
+ * name pair, no connect-data blank). This is how the SCS layer turns a
+ * SYSAP's own bytes into the frame it transmits WITHOUT the FSM knowing a
+ * single offset. Every other field of *f -- op, credit, the Con.ID pair, the
+ * SCA header -- is untouched and stays the caller's.
+ */
+vms_codec_status_t vms_scs_dir_ctrl_from_body(const uint8_t *body, uint32_t len,
+					      struct vms_scs_ctrl_frame *f);
+
 #ifdef __cplusplus
 }
 #endif

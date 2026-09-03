@@ -94,6 +94,26 @@
 /* The largest connection-control frame (op 0/2, the 110-content class). */
 #define SCS_CTRL_FRAME_MAX   (VMS_ETH_HDR_LEN + VMS_SCSCTRL_LEN_CONNECT)     /* 124 */
 
+/*
+ * THE SECOND GROUNDED APPLICATION-MESSAGE CLASS (FC-P2.3).
+ *
+ * MTYPE 10 is not one length. Spec SS4(h)(1b) states the envelope is uniform
+ * across "the short classes here, the 94-content MSCP commands, and the
+ * 190-content class", and SS4(h)(2)/(2a) grounds the directory message as
+ * MTYPE 10 on the 94-content class -- the reference capture's twelve directory
+ * messages are "all of length 94". So a SYSAP body is 132 bytes on the
+ * 190-content class and 36 on the 94-content one, and scs_fsm_send_msg()
+ * selects the class FROM THE LENGTH the SYSAP handed down (the two grounded
+ * values, nothing between them).
+ *
+ * The 94-content class does NOT go through the body-level SCS<->port seam:
+ * pe_vc_send_msg requires exactly PE_SEND_BODY_LEN (148), so -- exactly as
+ * for the connect verbs (E1's FC-P2.2 addendum) -- SCS builds the whole frame
+ * through the codec and hands it to the port's frame-level primitive.
+ */
+#define SCS_DIR_FRAME_LEN    (VMS_ETH_HDR_LEN + VMS_SCSCTRL_LEN_LOOKUP)      /* 108 */
+#define SCS_DIR_BODY_LEN     VMS_SCS_DIRBODY_LEN                             /*  36 */
+
 /* ==========================================================================
  * 2. Return statuses -- negative, so `if (rc)` reads as failure
  *
@@ -380,12 +400,16 @@ struct scs_cdt {
 
 /* One queued send in Credit Wait. The pool is BOUND by the glue, so the FSM
  * still allocates nothing; with no pool bound a creditless send is REFUSED
- * (SCS_ERR_NOCREDIT) instead of queued, which is honest and counted. */
+ * (SCS_ERR_NOCREDIT) instead of queued, which is honest and counted.
+ * `len` is the SYSAP's own length, so a queued directory message resumes as a
+ * 94-content frame and a queued CNXMAN body as a 190-content one -- the class
+ * is decided by what the SYSAP handed down, never by where it was queued. */
 struct scs_sendwait {
 	uint8_t  in_use;
 	uint8_t  pad0[3];
 	uint32_t next;
 	uint32_t cdt_index;
+	uint32_t len;
 	uint8_t  body[SCS_SYSAP_BODY_LEN];
 };
 
@@ -395,7 +419,19 @@ struct scs_sendwait {
 
 struct scs_sdir {
 	uint8_t  in_use;
-	uint8_t  pad0[3];
+	uint8_t  pad0[2];
+	/*
+	 * FC-P2.3: the 16 bytes THIS SYSAP wants a directory HIT on its name to
+	 * carry (spec SS4(h)(2) RE gap (c) -- an affirmative result is an
+	 * opaque per-connection descriptor whose internal semantics are NOT
+	 * grounded). It is supplied by the SYSAP that owns the name, through
+	 * scs_fsm_sysap_set_dir_data(); the directory NEVER invents one, and
+	 * with none supplied it answers with the registered name itself (see
+	 * vms_scs_dir.h "what a HIT carries"). `_valid` is the honest-omission
+	 * flag: 0 means this SYSAP declared nothing, not "sixteen zeros".
+	 */
+	uint8_t  dir_data_valid;
+	uint8_t  dir_data[VMS_SCS_PROCNAME_LEN];
 	uint8_t  name[VMS_SCS_PROCNAME_LEN];
 	uint16_t initial_credits;   /* what this SYSAP extends per connection */
 	uint16_t pad1;
@@ -499,16 +535,63 @@ void scs_fsm_set_cfg(struct scs_fsm *f, const struct scs_fsm_cfg *cfg);
 void scs_fsm_stop(struct scs_fsm *f);
 
 /* ==========================================================================
- * 7. The SYSAP registry seed (FC-P2.3 grows this into the full service set)
+ * 7. THE SYSAP REGISTRY -- ch. 2's "list of listening SYSAPs"
  *
- * FC-P2.2 needs exactly enough of ch. 2's SDIR queue to answer an inbound
- * CONNECT_REQ: a name, the SYSAP's callbacks, the credit it extends, and the
- * listening CDT the request is recorded on. FC-P2.3 adds the vms_scs.h
- * service wrappers and the SCS$DIRECTORY SYSAP on top of these.
+ * FC-P2.2 landed the SDIR queue itself: LISTEN allocates an SDIR carrying the
+ * SYSAP's name plus a listening CDT holding its connect-request routine, and
+ * an inbound CONNECT_REQ is routed by scanning that queue for a matching name
+ * (p. 2-48). FC-P2.3 GROWS THAT ONE TABLE -- it does not add a second:
+ *
+ *   - scs_fsm_sysap_lookup() is the READ the SCS Directory Service answers
+ *     from. p. 2-50: SCA "requires that there be an SCS Directory Service on
+ *     each node that answers 'Yes' or 'No' when asked if a particular SYSAP
+ *     name is present in its list of listening SYSAPs" -- so a HIT is a hit on
+ *     THIS table and nothing else. There is no directory-specific name store
+ *     to drift out of step with what is really listening (INV-6: an answer
+ *     that outlives the registration it describes is a fabricated one).
+ *   - scs_fsm_sysap_set_dir_data() lets the SYSAP that OWNS a name declare
+ *     what an affirmative answer about it carries (struct scs_sdir).
+ *
+ * The vms_scs.h names (scs_sysap_listen/_connect/_accept/_send_msg/
+ * _return_credit ...) are the GLUE-level spelling of the same services on
+ * `struct vms_scs`, which is FC-P2.4's object: each is a one-line dereference
+ * into its scs_fsm_* twin here, exactly as vms_pe.h's pe_send_msg wraps
+ * pe_vc_send_msg (integration note E9). They are NOT defined in this file
+ * because `struct vms_scs` is undefined outside vms_scs.c.
  * ========================================================================== */
 int scs_fsm_listen(struct scs_fsm *f, const uint8_t *name,
 		   const struct scs_sysap_ops *ops, uint16_t initial_credits);
 int scs_fsm_unlisten(struct scs_fsm *f, const uint8_t *name);
+
+/*
+ * What the registry knows about ONE registered name. Every field is a copy of
+ * live SDIR state; nothing is derived and nothing is defaulted.
+ */
+struct scs_sysap_info {
+	uint8_t     name[VMS_SCS_PROCNAME_LEN];
+	uint8_t     dir_data_valid;   /* 0 = this SYSAP declared none        */
+	uint8_t     pad0[3];
+	uint8_t     dir_data[VMS_SCS_PROCNAME_LEN];
+	uint16_t    initial_credits;
+	uint16_t    pad1;
+	vms_conid_t listen_conid;     /* the listening CDT's Con.ID (p. 2-48) */
+};
+
+/*
+ * Is `name` in this node's list of listening SYSAPs? SCS_OK and *out filled
+ * for a registration that EXISTS RIGHT NOW; SCS_ERR_NOSYSAP otherwise, with
+ * *out untouched. `out` may be NULL when only the yes/no is wanted.
+ */
+int scs_fsm_sysap_lookup(const struct scs_fsm *f, const uint8_t *name,
+			 struct scs_sysap_info *out);
+
+/*
+ * Declare the 16 bytes an affirmative directory answer about `name` carries.
+ * `data` NULL CLEARS the declaration (back to honest omission). Only the SYSAP
+ * that registered the name has any business calling this.
+ */
+int scs_fsm_sysap_set_dir_data(struct scs_fsm *f, const uint8_t *name,
+			       const uint8_t *data);
 
 /* ==========================================================================
  * 8. Connection and data services
@@ -562,8 +645,12 @@ int scs_fsm_reject(struct scs_fsm *f, vms_conid_t listen_conid);
  * connection before DISCONNECT_REQ". */
 int scs_fsm_disconnect(struct scs_fsm *f, vms_conid_t local_conid);
 
-/* Send one application message. `body` is exactly SCS_SYSAP_BODY_LEN bytes --
- * the SYSAP's own 132, with not one byte of any lower header in it.
+/* Send one application message. `body` is the SYSAP's OWN bytes, with not one
+ * byte of any lower header in it, and `len` is one of the two GROUNDED
+ * application-message classes -- SCS_SYSAP_BODY_LEN (132, the 190-content
+ * class) or SCS_DIR_BODY_LEN (36, the 94-content directory class, SS4(h)(2)).
+ * Any other length is SCS_ERR_INVAL: SCS pads nothing and truncates nothing,
+ * because a length is a wire class here, not a buffer size.
  * SPENDS A CREDIT. With no Send Credit the message enters Credit Wait if a
  * pool is bound, else SCS_ERR_NOCREDIT. */
 int scs_fsm_send_msg(struct scs_fsm *f, vms_conid_t local_conid,

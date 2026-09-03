@@ -398,6 +398,15 @@ static uint16_t ctrl_content_for_op(uint16_t op)
 	case SCS_MTYPE_REJ_REQ:   /* op 4, REJECT-REQUEST             62 */
 	case SCS_MTYPE_DISC_REQ:  /* op 6, DISCONNECT-REQUEST         62 */
 		return VMS_SCSCTRL_LEN_MARKER;
+	case SCS_MTYPE_APPL_MSG:
+		/*
+		 * op 10 has TWO grounded classes and this is the only one SCS
+		 * builds WHOLE: the 94-content directory message (SS4(h)(2a),
+		 * "the capture holds 12 lookup messages, all of length 94").
+		 * The other -- the 190-content class -- is assembled through
+		 * the body-level seam by the port and never reaches here.
+		 */
+		return VMS_SCSCTRL_LEN_LOOKUP;
 	default:                  /* ops 5/7/8/9: envelope only       58 */
 		return VMS_SCSCTRL_LEN_SHORT;
 	}
@@ -533,11 +542,50 @@ static int ctrl_send_grant(struct scs_fsm *f, struct scs_cdt *cdt, uint16_t op,
 }
 
 /* ==========================================================================
- * F. Application messages -- the body-level seam (design SS3.2.4)
+ * F. Application messages -- TWO grounded classes, ONE account
+ *
+ * MTYPE 10 rides the 190-content class (a 132-byte SYSAP body, split through
+ * design SS3.2.4's body-level seam and finished by the port) and the
+ * 94-content directory class (a 36-byte body, SS4(h)(2), which no lower layer
+ * can pre-build so SCS builds it whole -- the same reason the connect verbs
+ * do). The SHAPE differs; the ACCOUNT does not: either way one Send Credit is
+ * spent, the piggybacked credit is one ledger read, and the msgtype phase flag
+ * turns over. That is why the ledger steps live in one place below.
  * ========================================================================== */
 
-static int msg_transmit(struct scs_fsm *f, struct scs_cdt *cdt,
-			const uint8_t *sysap_body)
+/* Everything that becomes true once the port has TAKEN a message. */
+static void msg_accounted(struct scs_cdt *cdt, uint16_t credit_sent)
+{
+	credit_pending_commit(cdt, credit_sent);
+	cdt->credit_send--;
+	cdt->msgs_sent++;
+	cdt->data_phase = 1u;   /* spec SS4(m): 0x5b -> 0x4b after the first */
+}
+
+/*
+ * The two directory tallies vms_scs_view reports ("lookups this node ANSWERED"
+ * / "lookups this node ISSUED"). They are read off the SYSAP's OWN body, whose
+ * marker word SS4(h)(2a) grounds as the request/response discriminator, so
+ * each counts a frame this node actually put on the wire. A marker outside
+ * {0,1} counts as neither -- it is not forced into one bucket.
+ */
+static void dir_count_tx(struct scs_fsm *f, const uint8_t *sysap_body)
+{
+	struct vms_scs_dir_msg m;
+
+	if (vms_scs_dir_msg_parse(sysap_body, SCS_DIR_BODY_LEN, &m) !=
+	    VMS_CODEC_OK)
+		return;
+	if (m.marker == VMS_SCS_DIR_MARKER_RESPONSE)
+		f->dir_lookups_served++;
+	else if (m.marker == VMS_SCS_DIR_MARKER_REQUEST)
+		f->dir_lookups_sent++;
+}
+
+/* The 190-content class: 16 bytes of SCS header + the SYSAP's 132, handed to
+ * the port at the body-level seam. */
+static int msg_transmit_long(struct scs_fsm *f, struct scs_cdt *cdt,
+			     const uint8_t *sysap_body)
 {
 	struct vms_scs_hdr h;
 	int rc;
@@ -568,11 +616,53 @@ static int msg_transmit(struct scs_fsm *f, struct scs_cdt *cdt,
 		return SCS_ERR_TXFAIL;
 	}
 
-	credit_pending_commit(cdt, h.credit);
-	cdt->credit_send--;
-	cdt->msgs_sent++;
-	cdt->data_phase = 1u;   /* spec SS4(m): 0x5b -> 0x4b after the first */
+	msg_accounted(cdt, h.credit);
 	return SCS_OK;
+}
+
+/*
+ * The 94-content directory class. The SYSAP's 36 bytes go in through the
+ * codec's body-level entry (vms_scs_dir_ctrl_from_body), so this file still
+ * holds no wire offset, and the credit field is the same ledger read the
+ * 190-content path makes -- SS4(h)(2a) measures a REAL piggybacked credit on
+ * this class ("on the 94-byte lookup class the same field is the ordinary
+ * piggybacked credit"), and the strawman's constant 0 there is recorded in the
+ * spec as a KNOWN DEVIATION (SS4h gap (f)) that this path does not repeat.
+ */
+static int msg_transmit_short(struct scs_fsm *f, struct scs_cdt *cdt,
+			      const uint8_t *sysap_body)
+{
+	struct vms_scs_ctrl_frame c;
+	uint16_t credit;
+	int rc = ctrl_prepare(f, cdt, (uint16_t)SCS_MTYPE_APPL_MSG, &c);
+
+	if (rc != SCS_OK)
+		return rc;
+	credit = credit_pending_peek(cdt);
+	c.credit = credit;
+	if (vms_scs_dir_ctrl_from_body(sysap_body, SCS_DIR_BODY_LEN, &c) !=
+	    VMS_CODEC_OK) {
+		f->tx_refused_codec++;
+		return SCS_ERR_CODEC;
+	}
+	rc = ctrl_emit(f, cdt, &c);
+	if (rc != SCS_OK)
+		return rc;
+
+	msg_accounted(cdt, credit);
+	dir_count_tx(f, sysap_body);
+	return SCS_OK;
+}
+
+/* The class is chosen by the SYSAP's own length and by nothing else. */
+static int msg_transmit(struct scs_fsm *f, struct scs_cdt *cdt,
+			const uint8_t *sysap_body, uint32_t len)
+{
+	if (len == SCS_SYSAP_BODY_LEN)
+		return msg_transmit_long(f, cdt, sysap_body);
+	if (len == SCS_DIR_BODY_LEN)
+		return msg_transmit_short(f, cdt, sysap_body);
+	return SCS_ERR_INVAL;
 }
 
 /* ==========================================================================
@@ -580,10 +670,12 @@ static int msg_transmit(struct scs_fsm *f, struct scs_cdt *cdt,
  * ========================================================================== */
 
 static int sendwait_push(struct scs_fsm *f, struct scs_cdt *cdt,
-			 const uint8_t *body)
+			 const uint8_t *body, uint32_t len)
 {
 	uint32_t i;
 
+	if (len != SCS_SYSAP_BODY_LEN && len != SCS_DIR_BODY_LEN)
+		return SCS_ERR_INVAL;
 	if (f->sw == (struct scs_sendwait *)0 || f->n_sw == 0u)
 		return SCS_ERR_NOCREDIT;    /* no pool bound: honest refusal */
 	for (i = 0; i < f->n_sw; i++) {
@@ -593,7 +685,8 @@ static int sendwait_push(struct scs_fsm *f, struct scs_cdt *cdt,
 		f->sw[i].in_use = 1u;
 		f->sw[i].next = SCS_NIL;
 		f->sw[i].cdt_index = cdt_index(f, cdt);
-		scs_copy(f->sw[i].body, body, SCS_SYSAP_BODY_LEN);
+		f->sw[i].len = len;
+		scs_copy(f->sw[i].body, body, len);
 		if (cdt->sw_tail == SCS_NIL)
 			cdt->sw_head = i;
 		else
@@ -633,7 +726,8 @@ static void sendwait_drain(struct scs_fsm *f, struct scs_cdt *cdt)
 
 		if (i == SCS_NIL)
 			return;
-		if (msg_transmit(f, cdt, f->sw[i].body) != SCS_OK) {
+		if (msg_transmit(f, cdt, f->sw[i].body, f->sw[i].len) !=
+		    SCS_OK) {
 			/* The port refused it. Put it back at the head; the
 			 * next credit or the next drain retries -- SCS has not
 			 * lost the message and has not sent it twice. */
@@ -1260,11 +1354,11 @@ static int h_local_send(struct scs_fsm *f, struct scs_cdt *cdt,
 		/* Something is already waiting: FIFO order is the p. 2-46 rule
 		 * ("queue priority is based on time spent in the queue"), so a
 		 * new send goes behind it even if a credit is free. */
-		return sendwait_push(f, cdt, rx->body);
+		return sendwait_push(f, cdt, rx->body, rx->body_len);
 	}
 	if (cdt->credit_send == 0u)
-		return sendwait_push(f, cdt, rx->body);
-	return msg_transmit(f, cdt, rx->body);
+		return sendwait_push(f, cdt, rx->body, rx->body_len);
+	return msg_transmit(f, cdt, rx->body, rx->body_len);
 }
 
 /* ==========================================================================
@@ -1779,6 +1873,76 @@ int scs_fsm_unlisten(struct scs_fsm *f, const uint8_t *name)
 	return SCS_OK;
 }
 
+/*
+ * THE READ THE SCS DIRECTORY SERVICE ANSWERS FROM (p. 2-50: "answers 'Yes' or
+ * 'No' when asked if a particular SYSAP name is present in its list of
+ * listening SYSAPs"). It walks the SAME SDIR queue an inbound CONNECT_REQ is
+ * routed through, so a HIT means a connect to that name would be delivered
+ * right now -- which is the entire point of the service. There is deliberately
+ * no cache and no second table: an answer that could outlive the registration
+ * it describes would be a fabricated one (INV-6).
+ */
+int scs_fsm_sysap_lookup(const struct scs_fsm *f, const uint8_t *name,
+			 struct scs_sysap_info *out)
+{
+	const struct scs_sdir *sd;
+	const struct scs_cdt *listen;
+	uint32_t i;
+
+	if (f == (const struct scs_fsm *)0 || name == (const uint8_t *)0)
+		return SCS_ERR_INVAL;
+
+	sd = (const struct scs_sdir *)0;
+	for (i = 0; i < SCS_MAX_SYSAPS; i++) {
+		if (f->sdir[i].in_use && scs_name_eq(f->sdir[i].name, name)) {
+			sd = &f->sdir[i];
+			break;
+		}
+	}
+	if (sd == (const struct scs_sdir *)0)
+		return SCS_ERR_NOSYSAP;
+	if (out == (struct scs_sysap_info *)0)
+		return SCS_OK;
+
+	scs_bzero(out, (uint32_t)sizeof(*out));
+	scs_copy(out->name, sd->name, VMS_SCS_PROCNAME_LEN);
+	out->initial_credits = sd->initial_credits;
+	out->dir_data_valid = sd->dir_data_valid;
+	if (sd->dir_data_valid)
+		scs_copy(out->dir_data, sd->dir_data, VMS_SCS_PROCNAME_LEN);
+
+	/* The listening CDT's Con.ID -- p. 2-48's own contents of an SDIR. It
+	 * is reported only if that CDT is really there; a registration whose
+	 * listener has gone reports 0, not a plausible handle. */
+	listen = (const struct scs_cdt *)0;
+	if (f->cdl != (struct scs_cdt *)0 && sd->listen_cdt < f->n_cdl)
+		listen = &f->cdl[sd->listen_cdt];
+	if (listen != (const struct scs_cdt *)0 && listen->in_use)
+		out->listen_conid = listen->local_conid;
+	return SCS_OK;
+}
+
+int scs_fsm_sysap_set_dir_data(struct scs_fsm *f, const uint8_t *name,
+			       const uint8_t *data)
+{
+	struct scs_sdir *sd;
+
+	if (f == (struct scs_fsm *)0 || name == (const uint8_t *)0)
+		return SCS_ERR_INVAL;
+	sd = sdir_by_name(f, name);
+	if (sd == (struct scs_sdir *)0)
+		return SCS_ERR_NOSYSAP;
+
+	if (data == (const uint8_t *)0) {
+		sd->dir_data_valid = 0u;
+		scs_bzero(sd->dir_data, VMS_SCS_PROCNAME_LEN);
+		return SCS_OK;
+	}
+	scs_copy(sd->dir_data, data, VMS_SCS_PROCNAME_LEN);
+	sd->dir_data_valid = 1u;
+	return SCS_OK;
+}
+
 /* ==========================================================================
  * Q. Connection and data services
  * ========================================================================== */
@@ -1881,7 +2045,9 @@ int scs_fsm_send_msg(struct scs_fsm *f, vms_conid_t local_conid,
 
 	if (f == (struct scs_fsm *)0 || body == (const uint8_t *)0)
 		return SCS_ERR_INVAL;
-	if (len != SCS_SYSAP_BODY_LEN)
+	/* The length IS the wire class (vms_scs_fsm.h SS1): the 190-content
+	 * SYSAP class or the 94-content directory class, and nothing else. */
+	if (len != SCS_SYSAP_BODY_LEN && len != SCS_DIR_BODY_LEN)
 		return SCS_ERR_INVAL;
 	cdt = scs_fsm_cdt_by_conid(f, local_conid);
 	if (cdt == (struct scs_cdt *)0)

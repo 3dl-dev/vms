@@ -231,6 +231,27 @@ vms_scs_seq_envelope_parse(const uint8_t *frame, uint32_t len,
 			   struct vms_scs_seq_envelope *out);
 
 /*
+ * vms_scs_seq_envelope_fixup_len - rewrite ONLY the SCA length field (abs
+ * 14) once a higher layer has appended its own content past the 36-byte
+ * envelope vms_scs_seq_envelope_build() wrote. That builder's own doc
+ * comment names this exact need: "the caller/higher layer MUST overwrite
+ * [the placeholder] once the body is appended, exactly as
+ * vms_hello_build_padded() rewrites the length field after the fact" --
+ * this is that rewrite, generalised from the padded-HELLO case to any
+ * envelope-plus-tail frame (FC-P1.3's `pe_vc_send_msg`/`pe_vc_send_dg`:
+ * the port's own 0-35 envelope, followed by the SCS/SYSAP content the
+ * caller already built at abs 56 -- spec sec 4(d)/(1b), "the envelope
+ * unifies across every length class"). `total_len` is the frame's real
+ * total length INCLUDING the 14-byte Ethernet header. Returns
+ * VMS_CODEC_E_RANGE if `total_len` cannot fit in the SCA length field's
+ * 16 bits plus the +2 identity, VMS_CODEC_E_SHORT if `cap` cannot hold
+ * abs 14..15.
+ */
+vms_codec_status_t
+vms_scs_seq_envelope_fixup_len(uint8_t *frame, uint32_t cap,
+			       uint32_t total_len);
+
+/*
  * abs 44 -- the send_seq MIRROR every sequenced message carries.
  *
  * GROUNDED (spec sec 4(h)(4)): "for every sequenced message (0x41/0x5b/0x4b)

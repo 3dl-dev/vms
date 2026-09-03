@@ -225,6 +225,18 @@ struct pe_upper_ops {
  * Called from the cluster fork thread only. Block transfer (named buffers) is
  * deliberately absent until FC-P6.1: the MSCP server is its first real user, and
  * declaring an interface nobody implements invites a stub that pretends.
+ *
+ * THE E9 BRIDGE (FC-P1.3, docs/cluster-integration-notes.md E9). The three
+ * declarations below are the frozen glue-facing surface `struct vms_pe`'s
+ * owner (FC-P0.9) implements; `body`/`len` is the SCS "body" contract E1/
+ * SS3.2.4 grounds -- SCS's own abs 56-71 envelope followed by the 132-byte
+ * SYSAP body (`PE_SEND_BODY_LEN`, vms_pe_fsm.h SS8c). The REAL, R1-tested
+ * implementation is `pe_vc_send_msg`/`pe_vc_send_dg`/`pe_fsm_set_upper`
+ * (vms_pe_fsm.h SS8c), pure `struct pe_fsm *` functions -- that is the
+ * object `struct vms_pe` will embed once FC-P0.9 defines it (documented
+ * "private to vms_pe.c" below), so the glue's job is exactly the one-line
+ * dereference `pe_send_msg(pe, ...) { return pe_vc_send_msg(&pe->fsm, ...); }`,
+ * never a second implementation of the sequencing/envelope logic.
  * ========================================================================== */
 
 /* Send a sequenced message to `dst` addressed to the peer's `dst_conid`.

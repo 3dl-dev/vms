@@ -44,6 +44,19 @@
                               * the C-string + ctype + fixed-width vocabulary */
 #include "exec_kbackend.h"    /* exec_lock/copy/alloc/current/blockdev */
 #include "exec_list.h"        /* exec_list_* (device list, channel lists) */
+/*
+ * FC-P0.9: vms_cluster_node()/VMS_IOCTL_CLUSTER_DIAG_PORT read the real
+ * vms_pe.c port objects through the frozen FC-P0.1 contracts. vms_devtab.c is
+ * NOT on the cluster_core_includes_gate.sh file set (it predates the seam)
+ * and, unlike vms_lock.c, is not linked into any host-only test library
+ * either, so these three kernel-core cluster headers compose here cleanly.
+ */
+#include "vms_cluster.h"
+#include "vms_cluster_fork.h"  /* vms_cluster_fork_start (FC-P0.11's own case
+                                * of "SYSINIT starts the fork thread first") */
+#include "vms_cluster_snapshot.h"
+#include "vms_cluster_sysgen.h"
+#include "vms_pe.h"
 
 /*
  * Device class codes. Values mirror src/libvms/include/dcdef.h so the
@@ -480,6 +493,88 @@ static void vms_devtab_probe_nic(void)
 
     pr_info("vms: ethernet unit %s -> %s (carrier %s)\n",
             VMS_NIC_DEVNAM, ifname, link_up ? "up" : "down");
+}
+
+/*
+ * The cluster port (PEDRIVER role), FC-P0.9. PEA0: is VMS's name for the
+ * device the cluster's SCA (ethertype 0x6007) traffic rides; the real
+ * question -- WHICH host interface that is -- was already answered once, at
+ * boot, by vms_devtab_probe_nic() above. PEA0: reuses that SAME answer
+ * (device-native naming, operator 2026-08-14: the executive discovers a NIC
+ * exactly once and every consumer -- TCP/IP, DECnet, the cluster port --
+ * binds to the SAME record) rather than re-querying the host, which could in
+ * principle answer differently on a second call and give ETH0: and PEA0: two
+ * different interfaces for no honest reason.
+ *
+ * INTERNAL (non-ioctl), the same shape as vms_devtab_disk_backing(): the
+ * caller is the executive's own cluster glue (vms_pe.c), not a process
+ * handing a struct across /dev/vms, and `netif` is INV-4 information that
+ * never crosses that boundary.
+ */
+uint32_t vms_devtab_eth0_netif(char *out, uint32_t outsz)
+{
+    struct vms_device *dev;
+
+    if (!out || outsz == 0)
+        return SS__BADPARAM;
+
+    exec_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(VMS_NIC_DEVNAM);
+    if (!dev) {
+        exec_unlock(&vms_device_list_lock);
+        return SS__NOSUCHDEV;   /* honest: no NIC, so no netif to hand back */
+    }
+
+    exec_lock(&dev->lock);
+    strscpy(out, dev->netif, outsz);
+    exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
+
+    return SS__NORMAL;
+}
+
+#define VMS_PEA_DEVNAM  "PEA0:"   /* PEDRIVER role, one port per node */
+
+/*
+ * Enter PEA0: in the device table once the port glue has actually opened the
+ * LAN seam on `netif` (vms_pe_start, FC-P0.9) -- never before, and never for
+ * an interface that did not really resolve (INV-6: no PEA0: for a cluster
+ * that has no interconnect). Idempotent: a second CLUSTER_START while the
+ * port is already up finds the row already there and does nothing.
+ *
+ * shareable = 0: unlike ETH0:, no OVMX test exercises PEA0:'s ownership rule
+ * (nothing ever $ASSIGNs it -- it is PEDRIVER's own device, driven by the
+ * cluster fork thread, not by a process), so this is the same honest
+ * "unmeasured claim" disclosure the console and the disk units carry rather
+ * than a guess dressed as a measurement.
+ */
+int vms_devtab_add_pea(const char *netif)
+{
+    struct vms_device *pea;
+
+    if (!netif)
+        return SS__BADPARAM;
+
+    exec_lock(&vms_device_list_lock);
+    if (devtab_lookup_locked(VMS_PEA_DEVNAM)) {
+        exec_unlock(&vms_device_list_lock);
+        return SS__NORMAL;
+    }
+    exec_unlock(&vms_device_list_lock);
+
+    pea = vms_devtab_create(VMS_PEA_DEVNAM, DC__SCOM, VMS_DT_UNKNOWN,
+                            0 /* shareable */, 0 /* devchar */,
+                            0 /* width */, 0 /* page */);
+    if (!pea)
+        return SS__INSFMEM;
+
+    exec_lock(&pea->lock);
+    strscpy(pea->netif, netif, sizeof(pea->netif));
+    pea->link_up = 1u;   /* the port would not have opened otherwise */
+    exec_unlock(&pea->lock);
+
+    pr_info("vms: cluster port unit %s -> %s\n", VMS_PEA_DEVNAM, netif);
+    return SS__NORMAL;
 }
 
 int vms_devtab_init(void)
@@ -1519,6 +1614,233 @@ long vms_ioctl_ttsetmode(struct vms_proc *proc, unsigned long arg)
     args.status = SS__NORMAL;
 
 out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_cluster_node - the ONE per-node struct vms_cluster instance (FC-P0.9,
+ * design SS3.9 rule 3: "no globals except one per-node struct vms_cluster
+ * passed explicitly"). Zero-initialized: VMS_CLUSTER_OFF, no fork, no pe --
+ * the honest "cluster not started" state until a later item wires
+ * VMS_IOCTL_CLUSTER_START (FC-P0.11) to call vms_cluster_fork_start() then
+ * vms_pe_start() on it. Every reader (this file's CLUSTER_DIAG_PORT today;
+ * CLUSTER_START/STOP, CLUSTER_DIAG_CSB/_CONN/_LOCK and $GETSYI later) calls
+ * this SAME accessor, so there is exactly one node context, ever -- never a
+ * second one a different ioctl handler quietly allocates for itself.
+ */
+static struct vms_cluster vms_cluster_node_singleton;
+
+struct vms_cluster *vms_cluster_node(void)
+{
+    return &vms_cluster_node_singleton;
+}
+
+/*
+ * The three CLUSTER_DIAG_PORT row structs (vms_ioctl.h / vms_lock_nb.h) are
+ * BYTE-IDENTICAL duplicates of vms_cluster_snapshot.h's vms_pe_view /
+ * vms_pe_channel_view / vms_pe_vc_view -- the same "ONE facility source, two
+ * struct declarations" shape VMS_IOCTL_CLUSTER_MEMBER_GET already uses. A
+ * straight memcpy is therefore correct, and these asserts are what keep it
+ * that way: if a future edit to either copy drifts the layout, the build
+ * breaks here instead of silently mis-copying a diagnostic.
+ */
+_Static_assert(sizeof(struct vms_pe_view) == sizeof(struct vms_pe_view_wire),
+               "vms_pe_view / vms_pe_view_wire layout drifted");
+_Static_assert(sizeof(struct vms_pe_channel_view) ==
+               sizeof(struct vms_pe_channel_view_wire),
+               "vms_pe_channel_view / vms_pe_channel_view_wire layout drifted");
+_Static_assert(sizeof(struct vms_pe_vc_view) == sizeof(struct vms_pe_vc_view_wire),
+               "vms_pe_vc_view / vms_pe_vc_view_wire layout drifted");
+
+/*
+ * vms_ioctl_cluster_diag_port - VMS_IOCTL_CLUSTER_DIAG_PORT (FC-P0.9). The
+ * port's SDA SHOW PORT / SCACP SHOW CHANNEL equivalent: `row` names which of
+ * vms_pe_snapshot/_channel_snapshot/_vc_snapshot (vms_pe.c) to read, `index`
+ * walks channels/circuits for the latter two. Every one of those three reads
+ * real vms_pe.c objects under the fork mutex (INV-6) -- this function adds no
+ * state of its own, only the copyin/copyout and the row dispatch.
+ *
+ * The honest negctl this ioctl's plan row requires: before the port has ever
+ * come up (no CLUSTER_START yet, VAXCLUSTER=0, or a channel/VC index past the
+ * table's high-water mark) every row read returns SS$_NOSUCHDEV, logged, and
+ * the row struct stays all-zero -- never a placeholder channel or circuit.
+ */
+long vms_ioctl_cluster_diag_port(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_cluster_diag_port_args args;
+    struct vms_cluster *cl = vms_cluster_node();
+    uint32_t status;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    switch (args.row) {
+    case VMS_CLUSTER_DIAG_PORT_ROW: {
+        struct vms_pe_view v;
+
+        status = (uint32_t)vms_pe_snapshot(cl, &v);
+        if (status == SS__NORMAL)
+            memcpy(&args.port, &v, sizeof(args.port));
+        break;
+    }
+    case VMS_CLUSTER_DIAG_PORT_CHANNEL: {
+        struct vms_pe_channel_view v;
+
+        status = (uint32_t)vms_pe_channel_snapshot(cl, args.index, &v);
+        if (status == SS__NORMAL)
+            memcpy(&args.channel, &v, sizeof(args.channel));
+        break;
+    }
+    case VMS_CLUSTER_DIAG_PORT_VC: {
+        struct vms_pe_vc_view v;
+
+        status = (uint32_t)vms_pe_vc_snapshot(cl, args.index, &v);
+        if (status == SS__NORMAL)
+            memcpy(&args.vc, &v, sizeof(args.vc));
+        break;
+    }
+    default:
+        status = SS__BADPARAM;
+        break;
+    }
+
+    if (status != SS__NORMAL)
+        pr_info("vms: CLUSTER_DIAG_PORT row %u index %u -> SS$ %u\n",
+                (unsigned)args.row, (unsigned)args.index, (unsigned)status);
+
+    args.status = status;
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * sysgen_load_args_to_params - copy VMS_IOCTL_SYSGEN_LOAD's wire struct
+ * (struct vms_sysgen_load_args, vms_ioctl.h / vms_lock_nb.h) into
+ * struct vms_cluster_params (vms_cluster.h). The two are the SAME fields in
+ * the SAME order by construction (the ioctl header's own comment), but this
+ * copies field-by-field rather than trusting a memcpy across two separately
+ * declared structs: a future edit that drops a field here is a compile
+ * error, not a silent layout drift.
+ */
+static void sysgen_load_args_to_params(const struct vms_sysgen_load_args *args,
+                                        struct vms_cluster_params *out)
+{
+    memset(out, 0, sizeof(*out));
+
+    memcpy(out->scsnode, args->scsnode, sizeof(out->scsnode));
+    out->scsnode_len = args->scsnode_len;
+    out->scssystemid = ((uint64_t)args->scssystemid_hi << 32) |
+                        (uint64_t)args->scssystemid_lo;
+
+    out->votes = args->votes;
+    out->expected_votes = args->expected_votes;
+    out->qdskvotes = args->qdskvotes;
+    out->recnxinterval = args->recnxinterval;
+    out->timvcfail = args->timvcfail;
+    out->cluster_credits = args->cluster_credits;
+
+    out->vaxcluster = args->vaxcluster;
+    out->lockdirwt = args->lockdirwt;
+    out->alloclass = args->alloclass;
+    out->mscp_load = args->mscp_load;
+    out->mscp_serve_all = args->mscp_serve_all;
+
+    out->niscs_max_pktsz = args->niscs_max_pktsz;
+
+    memcpy(out->disk_quorum, args->disk_quorum, sizeof(out->disk_quorum));
+    out->disk_quorum_len = args->disk_quorum_len;
+
+    out->auth_group = args->auth_group;
+    memcpy(out->auth_password, args->auth_password, sizeof(out->auth_password));
+    out->auth_password_len = args->auth_password_len;
+    out->auth_valid = args->auth_valid;
+}
+
+/*
+ * vms_ioctl_sysgen_load - VMS_IOCTL_SYSGEN_LOAD (FC-P0.10, design plan row
+ * FC-P0.10). STARTUP.EXE's own case of SYSBOOT: decodes the wire copy of the
+ * cluster SYSGEN parameters + the CLUSTER_AUTHORIZE record and hands them to
+ * cluster_sysgen_load() (vms_cluster_sysgen.c), the pure validate-then-commit
+ * body, against vms_cluster_node()'s real per-node struct vms_cluster.
+ *
+ * The negctl this ioctl's plan row requires -- VAXCLUSTER >= 1 with no
+ * SCSNODE loaded -- is cluster_sysgen_load()'s own refusal: SS$_BADPARAM
+ * here, logged, and struct vms_cluster.params left at its PRIOR honest state
+ * (INV-6: never a half-written or fabricated identity).
+ */
+long vms_ioctl_sysgen_load(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_sysgen_load_args args;
+    struct vms_cluster_params params;
+    struct vms_cluster *cl = vms_cluster_node();
+    int ok;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    sysgen_load_args_to_params(&args, &params);
+    ok = cluster_sysgen_load(cl, &params);
+
+    if (!ok)
+        pr_info("vms: SYSGEN_LOAD refused (VAXCLUSTER %u, SCSNODE length %u) -> SS$ %u\n",
+                (unsigned)args.vaxcluster, (unsigned)args.scsnode_len,
+                (unsigned)SS__BADPARAM);
+
+    args.status = ok ? SS__NORMAL : SS__BADPARAM;
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_cluster_start - VMS_IOCTL_CLUSTER_START (FC-P0.11, docs/plan-
+ * faithful-cluster-executive.md). The P0 "port up" semantic ONLY: reproduces
+ * SYSINIT's own ordering (design SS3.5 step 2) against vms_cluster_node() --
+ * start the FC-P0.5 fork thread if it is not already running, then
+ * vms_pe_start() (FC-P0.9) to bring PEA0: up. It does NOT drive the CNXMAN
+ * join to MEMBER/STANDALONE (FC-P3.9, once CNXMAN exists).
+ *
+ * Neither call fabricates anything of its own: vms_pe_start() reads
+ * cl->params (VMS_IOCTL_SYSGEN_LOAD's own prior commit) and refuses with
+ * SS$_NOSUCHDEV when VAXCLUSTER is 0 -- the SAME gate STARTUP.EXE's boot
+ * path (ovmx_init.c, cluster_boot_gate.h) already applies before even
+ * issuing this ioctl, so a VAXCLUSTER=0 boot never reaches here in the
+ * normal sequence; this function's own check is the executive's second,
+ * independent line of defense (INV-6: no fabricated port under any caller).
+ *
+ * Idempotent both ways: a fork already running, or a port already up, are
+ * both SS$_NORMAL no-ops (vms_cluster_fork_start()/vms_pe_start()'s own
+ * contracts) -- a second CLUSTER_START never double-starts anything.
+ */
+long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_cluster_start_args args;
+    struct vms_cluster *cl = vms_cluster_node();
+    int status;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    status = vms_cluster_fork_start(cl, NULL);
+    if (status == SS__NORMAL)
+        status = vms_pe_start(cl);
+
+    args.port_up = (uint32_t)((status == SS__NORMAL) && (cl->pe != NULL));
+    args.status = (uint32_t)status;
+
+    if (status != SS__NORMAL)
+        pr_info("vms: CLUSTER_START -> SS$ %u (VAXCLUSTER %u)\n",
+                (unsigned)status, (unsigned)cl->params.vaxcluster);
+
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;

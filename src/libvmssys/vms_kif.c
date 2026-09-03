@@ -813,6 +813,33 @@ uint32_t vms_kif_get_resmaster(const char *resnam, uint32_t *found,
 }
 
 /*
+ * vms_kif_dlm_enum_standing - enumerate this node's STANDING cluster-registrable
+ * system locks over /dev/vms (vms-1f4): on return *out holds up to
+ * VMS_DLM_ENUM_STANDING_MAX entries (out->count filled, out->total held), each
+ * the resource name + local lkid + mode of a lock the executive genuinely holds
+ * (the F11B$v volume lock a MOUNT holds). scsd registers these to the coordinator
+ * during a directory rebuild. Fail-honest (SS$_NOSUCHDEV) when /dev/vms is absent
+ * (KIF_CALL); a READ of real lock state, never a fabricated lock (INV-6).
+ */
+uint32_t vms_kif_dlm_enum_standing(struct vms_dlm_enum_standing_args *out)
+{
+    if (!out)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    /*
+     * Write STRAIGHT into the caller's buffer -- no local copy. A local
+     * `struct ... args; ...; *out = args;` would lower the 656-byte struct
+     * assignment to a libc memcpy() call, which the freestanding libvmssys
+     * shareable cannot resolve (DECC$SHR exports no memcpy -- vms-61f). The
+     * KIF_CALL copyout fills *out directly; vms_memset (a local shim, not libc)
+     * zeroes it first so a pre-ioctl failure leaves a clean all-zero block.
+     */
+    vms_memset(out, 0, sizeof(*out));
+    KIF_CALL(VMS_IOCTL_DLM_ENUM_STANDING, out);
+    return out->status;
+}
+
+/*
  * vms_kif_dlm_xnode - dispatch a decoded cross-node DLM request to the kernel
  * lock manager's cross-node handler (vms-94c, DLM epic vms-7fa rung 1). Issues
  * VMS_IOCTL_DLM_XNODE, which reaches vms_lock_dlm_xnode_dispatch(): rung 1 the
@@ -1047,6 +1074,52 @@ uint32_t vms_kif_cluster_get_members(struct vms_cluster_member *out_members,
         vms_memcpy(out_members, args.members, copy_n * sizeof(*out_members));
     if (out_n_members)
         *out_n_members = n;
+    return args.status;
+}
+
+/*
+ * vms_kif_sysgen_load - VMS_IOCTL_SYSGEN_LOAD (FC-P0.10). Loads the cluster
+ * SYSGEN parameters + CLUSTER_AUTHORIZE record the caller filled into every
+ * `in:` field of *args (struct vms_sysgen_load_args, vms_ioctl.h) into the
+ * executive's real struct vms_cluster (vms_cluster_node()). On return,
+ * args->status carries the SS$_ result -- SS$_BADPARAM is the negctl this
+ * ioctl enforces (VAXCLUSTER >= 1 with no SCSNODE loaded, INV-6).
+ *
+ * WIRED (FC-P0.10): STARTUP.EXE's cluster-sysgen loader (ovmx_init.c,
+ * load_cluster_sysgen_params) calls this once, before
+ * VMS_IOCTL_CLUSTER_START (FC-P0.11) -- reproducing SYSBOOT's ordering.
+ */
+uint32_t vms_kif_sysgen_load(struct vms_sysgen_load_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    args->status = 0;
+    KIF_CALL(VMS_IOCTL_SYSGEN_LOAD, args);
+
+    return args->status;
+}
+
+/*
+ * vms_kif_cluster_start - VMS_IOCTL_CLUSTER_START (FC-P0.11). See vms_kif.h
+ * for the contract; this wrapper adds no state of its own, only the
+ * copyin-free (no `in:` fields) call and the port_up readback.
+ */
+uint32_t vms_kif_cluster_start(uint32_t *out_port_up)
+{
+    struct vms_cluster_start_args args;
+
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    KIF_CALL(VMS_IOCTL_CLUSTER_START, &args);
+
+    if (out_port_up)
+        *out_port_up = args.port_up;
+
     return args.status;
 }
 

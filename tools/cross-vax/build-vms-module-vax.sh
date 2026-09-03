@@ -86,6 +86,7 @@ KMOD="$SRC/src/kernel-netbsd"
 CORE="$SRC/src/kernel-core"
 ODS2="$SRC/src/vmsfs/ods2"             # the ACP's pure on-disk EDIT helpers
 ODS2_INC="$SRC/src/vmsfs/include"      # vmsfs/ods2.h (the genuine ODS-2 codec)
+GUEST="$SRC/tests/netbsd/guest"        # FC-P0.4: cluster_seam.c, the R3 selftest
 NBSRC="${NBSRC:-/nbsrc}"
 SYS="$NBSRC/usr/src/sys"
 OUT="${OUT:-/tmp/vms-module-vax}"
@@ -155,7 +156,26 @@ SRCS="$KMOD/vms_netbsd.c \
       $ODS2/ods2_reader.c \
       $ODS2/ods2_edit.c \
       $KMOD/vms_blockdev_netbsd.c \
-      $KMOD/vms_socket_netbsd.c"
+      $KMOD/vms_socket_netbsd.c \
+      $KMOD/vms_lan_netbsd.c \
+      $GUEST/cluster_seam.c \
+      $CORE/vms_cluster_fork.c \
+      $CORE/vms_cluster_fork_bind.c \
+      $CORE/vms_pe.c \
+      $CORE/vms_cnxman_csb.c \
+      $CORE/vms_cnxman_recnx_fsm.c \
+      $CORE/vms_cnxman_quorum.c \
+      $CORE/vms_cluster_api.c \
+      $CORE/vms_cluster_sysgen.c \
+      $CORE/vms_cluster_codec.c \
+      $CORE/vms_cluster_codec_cm.c \
+      $CORE/vms_cluster_codec_hello.c \
+      $CORE/vms_cluster_codec_vc.c \
+      $CORE/vms_cluster_codec_blk.c \
+      $CORE/vms_pe_fsm.c \
+      $CORE/vms_cnxman_phase2.c \
+      $CORE/vms_cnxman_barrier_fsm.c \
+      $CORE/vms_cnxman_coord_fsm.c"
 #   vms_blockdev_netbsd.c - the NetBSD exec_blockdev_* seam (bread/bwrite on a
 #                         vn_bdev_openpath device vnode) + the single-unit ODS-2
 #                         disk resolve (vms_devtab_disk_backing) the ACP $MOUNT

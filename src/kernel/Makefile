@@ -61,6 +61,66 @@ obj-m := vms.o
 # vms_bg.c and for the SAME reason stays Linux-only for now (see its own
 # header): a host-socket-coupled per-process handle list not yet ported to
 # the exec_list_*/exec_lock_* seam. It is NOT in the NetBSD kmodule's SRCS.
+#
+# vms_pe.c (FC-P0.1) is the OPPOSITE case, and it is the point of the cluster
+# seam: the LAN port layer of the executive-resident VMScluster stack reaches the
+# wire ONLY through exec_kbackend.h families SS14..SS18, so the SAME source is in
+# the NetBSD kmodule's SRCS from its first commit -- no "Linux first, NetBSD
+# later", which is exactly what produced vms_l2.c's NetBSD hole. Its include
+# discipline is enforced by tools/ci/cluster_core_includes_gate.sh.
+#
+# FC-P3.6 adds two more on the same terms: vms_cnxman_csb.o (the CLUB/CSB model
+# and the CSB ten-state connectivity ladder) and vms_cnxman_recnx_fsm.o (the
+# RECNXINTERVAL/TIMVCFAIL reconnect loop and the last-gasp decision). Both are
+# PURE -- no seam call, no allocation, no clock but the injected one -- so the
+# same two objects are in the NetBSD kmodule's SRCS and in both elf32-vax
+# cross-compile gates from this commit, and the same two sources are what the
+# host unit tests and the rung-2 simulator link. Their consumer, the connection
+# manager's glue, arrives with FC-P3.8.
+#
+# FC-P3.7 adds two more, same terms again: vms_cnxman_quorum.o (the Quorum
+# Algorithm -- CEVOTES/QUORUM from the CLUB's own SELECTED CSBs, tracking
+# only) and vms_cluster_api.o (the $GETSYI cluster item-code projection this
+# item owns). Both PURE, both in the NetBSD SRCS and both elf32-vax gates from
+# this commit; their seam-facing consumer (the ioctl + sys$getsyi cutover)
+# also arrives with FC-P3.8/FC-P3.9.
+#
+# vms_cluster_fork.c + vms_cluster_fork_bind.c (FC-P0.5) are the cluster FORK
+# CONTEXT -- the one kthread per node that runs every line of cluster protocol,
+# and its substrate binding. Same rule as vms_pe.c: BOTH are in the NetBSD
+# kmodule's SRCS from their first commit, because the split is pure-vs-glue and
+# not Linux-vs-NetBSD. The _bind TU is the ONLY file in the stack that names
+# exec_kthread_* or exec_timer_* (design SS3.2.2's leak table).
+#
+# FC-P3.5 (vms_cnxman_barrier_fsm.o, the state-transition barrier's PARTICIPANT
+# side) joins on the same terms and brings the two codec objects it reads and
+# builds its frames through: vms_cluster_codec.o (FC-P0.6, the wire primitives,
+# frame classifier and grounded (sysap,cat,op) allowlist mechanism) and
+# vms_cluster_codec_cm.o (FC-P3.1, the VMS$VAXcluster SYSAP body + its response
+# recipes). A pure FSM that reached the wire by byte offset instead is exactly
+# what produced the two crashes design SS3.9 rule 2 was written after, so the
+# codec is not an optional dependency here. All three are pure, take their
+# fixed-width types from vms_wire_types.h, and are in the NetBSD kmodule's SRCS
+# from the same commit.
+#
+# FC-P0.8 adds the channel state machine, vms_pe_fsm.o, on exactly those terms:
+# it is the pure NISCA channel FSM (HELLO cadence, the b2/b3/b4 verify ladder,
+# the SS4(k) packet-size verification, per-remote incarnation tracking, the
+# listen timeout), it reaches the world only through its injected `pe_ops`, and
+# it builds every frame through the CODEC -- so vms_cluster_codec.o (FC-P0.6, the
+# one TU allowed to know a byte offset) and vms_cluster_codec_hello.o (FC-P0.7,
+# the HELLO/SOLICIT family) come with it. All three are in the NetBSD kmodule's
+# SRCS and in the distro Kbuild from the same commit. Their consumer, the port's
+# executive glue, arrives with FC-P0.9.
+#
+# FC-P1.2 adds the VIRTUAL-CIRCUIT half of that same pure TU (formation with
+# the spec SS4(i).B incarnation echo, one contiguous send_seq, cumulative
+# recv_ack, the unacked ring, retransmit-reusing-the-seq, the credit window,
+# TIMVCFAIL, teardown and re-formation), so vms_pe_fsm.o now also needs the
+# codec family it builds every circuit frame through:
+# vms_cluster_codec_vc.o (FC-P1.1, START/STACK/ACK + the 0x48 credit-return +
+# the sequence stamp). Pure, in the NetBSD SRCS and in the distro Kbuild from
+# the same commit.
 vms-y := vms_module.o \
          ../kernel-core/vms_access.o \
          ../kernel-core/vms_ast.o \
@@ -71,6 +131,23 @@ vms-y := vms_module.o \
          ../kernel-core/vms_lnm.o \
          ../kernel-core/vms_lock.o \
          ../kernel-core/vms_mbx.o \
+         ../kernel-core/vms_cluster_fork.o \
+         ../kernel-core/vms_cluster_fork_bind.o \
+         ../kernel-core/vms_pe.o \
+         ../kernel-core/vms_cluster_codec.o \
+         ../kernel-core/vms_cluster_codec_cm.o \
+         ../kernel-core/vms_pe_fsm.o \
+         ../kernel-core/vms_cluster_codec_hello.o \
+         ../kernel-core/vms_cluster_codec_vc.o \
+         ../kernel-core/vms_cluster_codec_blk.o \
+         ../kernel-core/vms_cnxman_csb.o \
+         ../kernel-core/vms_cnxman_recnx_fsm.o \
+         ../kernel-core/vms_cnxman_quorum.o \
+         ../kernel-core/vms_cluster_api.o \
+         ../kernel-core/vms_cluster_sysgen.o \
+         ../kernel-core/vms_cnxman_phase2.o \
+         ../kernel-core/vms_cnxman_barrier_fsm.o \
+         ../kernel-core/vms_cnxman_coord_fsm.o \
          ../kernel-core/vms_proctab.o \
          ../kernel-core/vmsfs_acp.o \
          ../vmsfs/ods2/ods2_reader.o \
@@ -115,9 +192,15 @@ vms-y := vms_module.o \
 #   test under a real /dev/vms force a genuine ACP block op to fail and observe the
 #   executive's REAL per-device error accounting (vms_device.errcnt) move -- the
 #   increment stays on the real error path; only the failure SOURCE is injected.
+# -DOVMX_KTEST_CLUSTER_SEAM (FC-P0.2, rung R3): compiles the TEST-ONLY cluster
+#   substrate-contract self-test knob (vms_ktest_cluster_seam_run/_result module
+#   params, vms_module.c) into THIS out-of-tree QEMU-test module ONLY, same
+#   posture as OVMX_KTEST_FAULT_INJECT above -- the bootable overlay does NOT
+#   define it, so the shipped executive carries no test-only cluster-seam code.
 ccflags-y := -I$(src) -I$(src)/../kernel-core \
              -I$(src)/../vmsfs/include -I$(src)/../vmsfs/ods2 \
-             -DOVMX_KBACKEND_LINUX -DOVMX_ODS2_KERNEL -DOVMX_KTEST_FAULT_INJECT
+             -DOVMX_KBACKEND_LINUX -DOVMX_ODS2_KERNEL -DOVMX_KTEST_FAULT_INJECT \
+             -DOVMX_KTEST_CLUSTER_SEAM
 
 # Default target: build against running kernel
 KDIR ?= /lib/modules/$(shell uname -r)/build

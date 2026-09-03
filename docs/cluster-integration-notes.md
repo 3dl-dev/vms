@@ -102,6 +102,35 @@ drive it directly), and **sending** all five classes already works
   make this change: improvising a classification widening inside an FSM item
   would be exactly the kind of unreviewed frozen-table edit E5 warns about.
 
+### E18 — RESOLVED by FC-P2.1b. The 58/94 classify widen landed (dedicated `VMS_FCLS_SCS_APPLMSG94` class + 58 added to CONN_CTRL; `mscp_seq_ok` widened). FC-P2.3's escalation-1 restating the gap was against a pre-P2.1b base and is moot on the integrated branch. FC-P2.4's R4 receive routing is unblocked.
+
+### E22. Directory credit grant [48:50]=3 vs §4(d)'s "SCS$DIR_LOOKUP 1" (raised by FC-P2.3 → LAB)
+§4(h)(2a)'s frame table reads `[48:50]=3` byte-exact on the `SCS$DIRECTORY`
+CONNECT_REQ, but §4(d)'s per-SYSAP list says "SCS$DIRECTORY 3, SCS$DIR_LOOKUP 1"
+— a contradiction under natural labelling. FC-P2.3 took byte-exact **3** for both
+halves, labelled the acceptor's value OVMX's choice. LOAD-BEARING: at 3 the round
+completes with each answer piggybacking the freed buffer + ZERO type-8 frames
+(§4(h)(1g)); at 1, the partial "dangerously low" threshold (E21) fires an op-8 per
+message. **Lab ask: isolate `[48:50]` on the `SCS$DIRECTORY` ACCEPT_REQ.**
+
+### E23. Possible off-by-one in P2.2's 0x5b→0x4b phase rule on the directory connection (raised by FC-P2.3 → LAB/P2.2 follow-up)
+P2.2 flips `data_phase` on the first app message a CDT transmits. The clean 2-node
+dir connection shows the joiner `5b,5b,4b` across three lookups (flip after the
+2nd) while the member is `5b,4b,4b` (after the 1st). FC-P2.3 did NOT touch P2.2's
+grounded rule (its tests assert no msgtype on lookups). Needs the capture to
+settle; may be a small FC-P2.2 correction.
+
+### E24. Affirmative `VMS$VAXcluster` directory descriptor is RE gap §4(h)(2)(c) (raised by FC-P2.3 → FC-P3.x)
+OVMX emits the registered NAME (not a real 16-byte descriptor) for a
+`VMS$VAXcluster` HIT unless CNXMAN declares its own via
+`scs_fsm_sysap_set_dir_data()`. Whether a real established member accepts a
+name-echoed hit is UNKNOWN (lab). **FC-P3.x (CNXMAN glue) must supply the real
+descriptor once grounded** — the mechanism (`set_dir_data`) is in place.
+
+### E25. Target-name collision `test_scs_dir` with retired strawman `tests/vmsscs/` (raised by FC-P2.3 → FC-P3.9 cleanup)
+`tests/vmsscs/` (the strawman) owns CMake target `test_scs_dir`; FC-P2.3's is
+`test_scs_directory`. Reclaim the name when **FC-P3.9** retires the strawman tests.
+
 ### E19. `scs_sysap_ops.closed` IS design §3.2.5's `disconnected()` (raised by FC-P2.2)
 The design and the plan row say a VC break "calls each SYSAP's
 `disconnected()`"; the FROZEN FC-P0.1 interface spells that callback

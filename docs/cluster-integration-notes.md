@@ -533,6 +533,13 @@ carries what the port can + counts `vc_rx_undelivered` on the rest.
   test (add a CONID-capable class for those END lengths). If not grounded → lab capture.
   **Blocks FC-P6.5's R4 + any booted MSCP class driver receiving end messages.**
 
+### E49. FC-P4.3 landed dir_resolve (DLM rebuild chain unblocked) — carried residuals
+- **body[10:12] dir-hash offset is INFERRED** (FC-P4.2's offline confirmation hasn't run). FC-P4.3 built the consumer so a wrong offset SHOWS UP (`dir_hash_conflicts` + `dir_lookup_misaddressed` counters), not corrupts. **FC-P4.2 should land before R4/R5** (offline confirm body[10:12] = the hash, constant per name).
+- **`vms_local_csid` deliberately STAYS** (only `dlm_member_csids` was removed) — re-pointing it at the CLUB's LEARNED local CSID is **FC-P4.8's** glue (so E38's "P4.3 removes both" is half-done: dlm_member_csids gone, vms_local_csid → P4.8).
+- **`vms_lock_dlm_learn_dir_hash()` has no production caller yet** → **FC-P4.6/P4.8** wire it (the requester learns the hash off received cat-02 frames).
+- **Root-vs-sub-resource:** RSB has no parent link so every resource is treated as root — over-counts lookups, never mis-routes → FC-P4.6/P5.5.
+- **Operator note:** a conflicting hash-learn returns `SS$_BADPARAM` (`SS$_DUPLNAM` isn't a real SS__ value; won't invent one, Rule 8). Operator can add a published SSDEF code if a distinct one is wanted.
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

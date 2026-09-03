@@ -221,6 +221,13 @@ if [ "$rc" -eq 0 ]; then
         send 'MANAGER'; sleep 2
         waitfor 'Welcome to OpenVMX' 120 || true
         send 'SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST'; sleep 2
+        # vms-fc-e51: the port-wide tx/rx counters (vms_pe.c pe_ops_send, real
+        # executive state, INV-6) are the discriminator for whether
+        # exec_lan_xmit is actually reaching the wire -- read them before AND
+        # after the join-poll window (below) via SHOW CLUSTER/LOCAL_PORTS so a
+        # tcpdump-frame-count-vs-tx_frames comparison is possible straight
+        # from this transcript, not just from a pcap read on the host.
+        send 'SHOW CLUSTER/LOCAL_PORTS'; sleep 3
         # Poll membership ACROSS the join window instead of sampling once. The
         # NEW->MEMBER join sequencer + the real-VAX cluster handshake take tens
         # of seconds under TCG; the old code slept a fixed 60s then sampled a
@@ -246,6 +253,7 @@ if [ "$rc" -eq 0 ]; then
             sleep 11; pw=$((pw + 20))
         done
         echo "[node] join-poll held the node LIVE ~${pw}s (full window; teardown is gated by the VAX-side STATUS==MEMBER verdict, not an OVMX self-report)" | tee -a "$OUT_LOG"
+        send 'SHOW CLUSTER/LOCAL_PORTS'; sleep 3
         send 'WRITE SYS$OUTPUT "OVMX-SC-DONE"'; sleep 3
         waitfor 'OVMX-SC-DONE' 30 || true
     else

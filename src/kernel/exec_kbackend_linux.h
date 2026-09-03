@@ -909,6 +909,32 @@ static inline struct socket *exec_socket_raw(exec_socket_t s) { return s->sock; 
  * socket would face, exactly the exec_socket_create_icmp precedent (SS12).
  * ================================================================ */
 
+/*
+ * The executive OWNS every datalink it opens, so it brings the interface
+ * administratively up itself rather than trusting something else already
+ * did (vms-7eb) -- exactly as PEDRIVER brings up the LAN adapter when the
+ * cluster starts (SS14 exec_lan_open, below, is the second caller). Without
+ * this, bind()/dev_add_pack() succeeds on an administratively-down NIC but
+ * the first send silently drops at the (still noop) qdisc instead of
+ * reaching the wire -- dev_queue_xmit's NET_XMIT_* soft codes are all >= 0,
+ * so a caller checking only "< 0 is failure" (both SS13 and SS14's xmit
+ * primitives do, correctly, since a queued/congested send is not a hard
+ * failure) never sees that drop. Idempotent (a no-op when already up);
+ * needs the RTNL lock, as any flag change from kernel context does. Returns
+ * 0 on success, a negative errno otherwise.
+ */
+static inline int exec_netdev_ensure_up(struct net_device *dev)
+{
+	int rc = 0;
+
+	if (dev->flags & IFF_UP)
+		return 0;
+	rtnl_lock();
+	rc = dev_change_flags(dev, dev->flags | IFF_UP, NULL);
+	rtnl_unlock();
+	return rc;
+}
+
 /* Open a kernel AF_PACKET/SOCK_RAW socket bound to `ifname`/`ethertype` (host
  * order; converted to network order here for both the socket's own protocol
  * and the sockaddr_ll bind -- struct sock's sk_protocol field mirrors AF_PACKET
@@ -938,21 +964,11 @@ static inline int exec_l2_open(const char *ifname, uint16_t ethertype,
 		return -ENODEV;
 	}
 
-	/* vms-7eb: the executive OWNS this datalink, so it brings the interface
-	 * up when SCS opens it -- exactly as PEDRIVER brings up the LAN adapter
-	 * when the cluster starts. Without this, bind() succeeds on an
-	 * administratively-down NIC but the first send fails ENETDOWN. Idempotent
-	 * (a no-op when already up); needs the RTNL lock, as any flag change from
-	 * kernel context does. */
-	if (!(dev->flags & IFF_UP)) {
-		rtnl_lock();
-		rc = dev_change_flags(dev, dev->flags | IFF_UP, NULL);
-		rtnl_unlock();
-		if (rc) {
-			dev_put(dev);
-			sock_release(sock);
-			return rc;
-		}
+	rc = exec_netdev_ensure_up(dev);
+	if (rc) {
+		dev_put(dev);
+		sock_release(sock);
+		return rc;
 	}
 
 	memset(&sll, 0, sizeof(sll));
@@ -1193,6 +1209,25 @@ static inline int exec_lan_open(const char *ifname, uint16_t ethertype,
 	dev = dev_get_by_name(&init_net, ifname);
 	if (!dev)
 		return (int)EXEC_SS_NOSUCHDEV;   /* honest: no such interface */
+
+	/*
+	 * vms-fc-e51: PEDRIVER OWNS this datalink exactly like SS13's
+	 * exec_l2_open does, and needs the SAME bring-up (see
+	 * exec_netdev_ensure_up's own comment, above SS13). Without it the
+	 * port comes up (dev_add_pack succeeds on an administratively-down
+	 * NIC) and CLUSTER_START reports SS$_NORMAL, but every HELLO
+	 * dev_queue_xmit later posts is silently dropped by the still-noop
+	 * qdisc (NET_XMIT_CN, >= 0 -- "success" by exec_lan_xmit's own "< 0
+	 * is failure" rule) and nothing ever reaches the wire. Measured: a
+	 * booted node's PEA0: reporting up while 3 tcpdump windows (20/40/
+	 * 240s) on the peer's LAN saw zero frames from this node's MAC. A
+	 * bring-up that itself fails is honestly refused -- no PEA0: for an
+	 * interface this node cannot actually use (INV-6).
+	 */
+	if (exec_netdev_ensure_up(dev)) {
+		dev_put(dev);
+		return (int)EXEC_SS_NOSUCHDEV;
+	}
 
 	vms_lan_port.dev = dev;                  /* reference held until close */
 	vms_lan_port.rx_cb = rx_cb;

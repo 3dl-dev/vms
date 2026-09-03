@@ -3325,6 +3325,19 @@ static int show_cluster_local_ports(void)
     printf("         MTU %u, channels %u, circuits %u\n",
            (unsigned)a.port.mtu, (unsigned)a.port.n_channels,
            (unsigned)a.port.n_vcs);
+    /*
+     * vms-fc-e51: the port-wide send/receive counters (vms_pe.c pe_ops_send,
+     * INV-6 -- counted only where a frame actually leaves/arrives this
+     * node), not previously surfaced here. The discriminator a booted-node
+     * investigation needs: a port that reports "open"/"up" with tx_frames
+     * climbing but nothing ever seen on the wire is exactly the silent-drop
+     * shape the E51 fix (exec_lan_open bringing the interface up) closes --
+     * this line is what makes that observable without a raw kernel log.
+     */
+    printf("         frames tx %u (errors %u), rx %u (dropped: nobuf %u, badclass %u)\n",
+           (unsigned)a.port.tx_frames, (unsigned)a.port.tx_errors,
+           (unsigned)a.port.rx_frames, (unsigned)a.port.rx_drops_nobuf,
+           (unsigned)a.port.rx_drops_badclass);
     return SS$_NORMAL;
 }
 

@@ -19,7 +19,12 @@
  *     rx_cb in Linux's receive softirq -- the veth-pair loopback the R3
  *     done-condition names.
  *   - exec_lan_xmit from A is captured on B via the already-real SS13
- *     exec_l2_recv.
+ *     exec_l2_recv. Interface A is left administratively DOWN by this
+ *     harness (vms-fc-e51) -- exec_lan_open itself must bring it up, the
+ *     same obligation SS13's exec_l2_open already carries, or this TX
+ *     proof fails exactly as a booted node's HELLOs silently did (port
+ *     reports up, dev_queue_xmit's soft NET_XMIT_* codes read as success,
+ *     nothing crosses the still-down/noop-qdisc interface).
  *   - exec_lan_mc_add's join is left open so THIS process can independently
  *     confirm it in /proc/net/dev_mcast -- the exact table `ip maddr` reads
  *     -- before the teardown knob removes it.
@@ -299,7 +304,17 @@ int main(void)
     printf("=== test_kmod_cluster_seam ===\n");
 
     CHECK(create_veth_pair(IF_A, IF_B) == 0, "create veth pair " IF_A "/" IF_B);
-    CHECK(link_set_up(IF_A) == 0, IF_A " administratively up");
+    /*
+     * IF_A (the port side, exec_lan_open) is DELIBERATELY left
+     * administratively DOWN here (vms-fc-e51): a harness that pre-brings it
+     * up, as this test used to, hides the exact defect a booted node hit --
+     * exec_lan_open reporting a port "up" on a down interface whose HELLOs
+     * then silently drop at the (still noop) qdisc, dev_queue_xmit's soft
+     * NET_XMIT_* codes reading as success. exec_lan_open itself must bring
+     * IF_A up (mirroring SS13's exec_l2_open, exec_netdev_ensure_up); the
+     * TX check below is where a re-regression would show up (a dropped
+     * frame never reaches IF_B). Only IF_B -- the test's OWN peer socket,
+     * never code under test -- is pre-brought-up here. */
     CHECK(link_set_up(IF_B) == 0, IF_B " administratively up");
 
     CHECK(write_param(RUN_PARAM, IF_A ":" IF_B) == 0,
@@ -312,7 +327,8 @@ int main(void)
     CHECK(result_int(result, "HWADDR") == 1, "exec_lan_hwaddr reported a real MAC");
     CHECK(result_int(result, "MTU") == 1, "exec_lan_mtu reported a nonzero MTU");
     CHECK(result_int(result, "LINK") == 1, "exec_lan_link_up answered");
-    CHECK(result_int(result, "LINK_UP") == 1, "veth carrier is up (both ends admin-up)");
+    CHECK(result_int(result, "LINK_UP") == 1,
+          "veth carrier is up (IF_A brought up by exec_lan_open itself, IF_B by this harness)");
     CHECK(result_int(result, "MC_ADD") == 1, "exec_lan_mc_add joined the HELLO multicast group");
 
     CHECK(mcast_visible(IF_A, MC_MAC_TEXT),

@@ -7,6 +7,9 @@
 #include "sim.h"
 #include "sim_node.h"
 
+#include "vms_cluster_codec.h"
+#include "vms_cluster_codec_vc.h"
+
 /* ------------------------------------------------------------------ *
  * The injected ops -- the ONLY way the FSM reaches this harness
  * ------------------------------------------------------------------ */
@@ -93,17 +96,90 @@ static void sim_ops_bind(struct sim_node *n)
  * The layer above -- a recorder (see sim_node.h §2)
  * ------------------------------------------------------------------ */
 
+/* The recorder's slot for one peer, allocated on first sight. NULL only if the
+ * harness ever saw more distinct peers than the LAN has ports. */
+static struct sim_upper_peer *sim_upper_slot(struct sim_upper *u,
+					     vms_scs_sysid_t from)
+{
+	uint32_t i;
+
+	for (i = 0; i < SIM_MAX_NODES; i++) {
+		if (u->peer[i].sysid == (uint16_t)from)
+			return &u->peer[i];
+	}
+	for (i = 0; i < SIM_MAX_NODES; i++) {
+		if (u->peer[i].sysid == 0u) {
+			u->peer[i].sysid = (uint16_t)from;
+			return &u->peer[i];
+		}
+	}
+	return NULL;
+}
+
+/*
+ * The sequence a delivered frame really carries, read through the SAME codec
+ * accessor the port reads it with. The port hands the WHOLE frame upward
+ * (vms_pe.h §4), so this is a read of real wire bytes and not of anything the
+ * harness stamped.
+ */
+static int sim_frame_send_seq(const uint8_t *frame, uint32_t len, uint16_t *out)
+{
+	struct vms_frame_info fi;
+	uint16_t recv_ack = 0u, send_seq = 0u;
+
+	if (frame == NULL)
+		return -1;
+	if (vms_frame_classify(frame, len, &fi) != VMS_CODEC_OK)
+		return -1;
+	if (vms_scs_seq(frame, len, &fi, &recv_ack, &send_seq) != VMS_CODEC_OK)
+		return -1;
+	*out = send_seq;
+	return 0;
+}
+
+/* The next sequence after `s`, skipping 0 -- the port's own rule (§4(h)(3):
+ * send_seq 0 means "this frame carries no sequence of its own", so it can
+ * never be a message's position). */
+static uint16_t sim_seq_next(uint16_t s)
+{
+	uint16_t n = (uint16_t)(s + 1u);
+
+	return n == 0u ? 1u : n;
+}
+
+static void sim_up_check_order(struct sim_upper *u, vms_scs_sysid_t from,
+			       const uint8_t *frame, uint32_t len)
+{
+	struct sim_upper_peer *p = sim_upper_slot(u, from);
+	uint16_t seq = 0u;
+
+	if (p == NULL)
+		return;
+	if (sim_frame_send_seq(frame, len, &seq) != 0) {
+		u->seq_unreadable++;
+		return;
+	}
+	if (!p->seen) {
+		/* §4(i).A: a freshly formed circuit starts at 1 on both sides. */
+		if (seq != 1u)
+			u->out_of_order++;
+		p->seen = 1u;
+	} else if (seq != sim_seq_next(p->last_seq)) {
+		u->out_of_order++;
+	}
+	p->last_seq = seq;
+}
+
 static void sim_up_message(void *ctx, vms_scs_sysid_t from, vms_conid_t conid,
 			   const uint8_t *body, uint32_t len)
 {
 	struct sim_upper *u = (struct sim_upper *)ctx;
 
-	(void)from;
-	(void)body;
 	u->messages++;
 	u->last_conid = conid;
 	u->last_len = len;
 	u->bytes += len;
+	sim_up_check_order(u, from, body, len);
 }
 
 static void sim_up_datagram(void *ctx, vms_scs_sysid_t from,
@@ -126,10 +202,16 @@ static void sim_up_vc_up(void *ctx, vms_scs_sysid_t peer)
 static void sim_up_vc_down(void *ctx, vms_scs_sysid_t peer, uint32_t reason)
 {
 	struct sim_upper *u = (struct sim_upper *)ctx;
+	struct sim_upper_peer *p = sim_upper_slot(u, peer);
 
-	(void)peer;
 	u->downs++;
 	u->last_down_reason = reason;
+	/* The circuit that comes back is a NEW circuit and its sequence starts
+	 * again (§4(h)(4a)); the old frontier is not evidence about it. */
+	if (p != NULL) {
+		p->seen = 0u;
+		p->last_seq = 0u;
+	}
 }
 
 static void sim_upper_bind(struct sim_node *n)

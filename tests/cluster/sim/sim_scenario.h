@@ -165,6 +165,18 @@ enum sim_metric {
 	SIM_M_UPPER_MESSAGES,
 	SIM_M_UPPER_UPS,
 	SIM_M_UPPER_DOWNS,
+	/*
+	 * Added by FC-P1.9. A delivery whose send_seq -- read out of the
+	 * delivered frame through the codec -- was not exactly one more than
+	 * the previous delivery from that peer (or not 1 on a freshly formed
+	 * circuit, §4(i).A). This is the "all delivered IN ORDER" half of
+	 * design §3.2.5's R2 acceptance; UPPER_MESSAGES alone would pass a
+	 * stack that delivered everything shuffled.
+	 */
+	SIM_M_UPPER_OUT_OF_ORDER,
+	/* The `reason` the port raised vc_down() with, most recent first (an
+	 * `enum pe_vc_down_reason`). 0 means the hook never fired. */
+	SIM_M_UPPER_DOWN_REASON,
 
 	/* --- from the virtual LAN (whole-cluster only) ------------------ */
 	SIM_M_LAN_TX,

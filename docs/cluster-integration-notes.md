@@ -434,6 +434,47 @@ downgrade reversed — see mscp-serve.yaml); did NOT touch cluster-dlm.yaml (E17
   success (now ST.HST, nothing written). Third and fourth silent-data bugs the
   faithful build caught that a bullseye-chase ships.
 
+### E40. ⚠ ALLOCATION CLASS has no grounded transport — blocks `$n$DUAn` spelling (raised by FC-P7.1 → Fable/lab)
+Design P7 wants `SHOW DEVICE` to list `$2$DUA0:`. A class driver can only spell that
+if it knows the SERVING node's ALLOCLASS — but NO executive structure carries it:
+`vms_csb_view` (SCSNODE/VOTES/LOCKDIRWT/version/incarnation), `vms_cm_params`
+(VOTES + node-param block), MSCP (unit number + identifier) — none has an allocation
+class. FC-P7.1 refused to guess `$2$` (two members serving unit 0 under different
+alloc classes would collide → data-loss) and emits node-qualified `<SCSNODE>$DUAn:`,
+counting `alloclass_absent`; `mscp_cl_unit_name()` already takes `(alloclass,
+valid)` so `$n$` is a one-line change. **Fable/lab: where does a real VMS class
+driver learn a serving node's ALLOCLASS from?** (which frame/field carries it).
+
+### E41. WRITE block-transfer INITIATION is field-map-forced to server-driven (raised by FC-P7.1 → Fable/lab)
+Only the SERVER knows both buffer names (it reads the client's off the command +
+mints its own), so the CLIENT cannot initiate a WRITE data frame. Open question:
+is the two-byte-identical-header form a **server-sent REQUEST** the host's port
+answers with data, and does the port need an automatic responder? FC-P7.1 did NOT
+add one (would assert the direction). **WRITE never completes today** — the
+deadline reaps it, `writes_undelivered` counts it. READ (what MOUNT needs) is fully
+grounded + end-to-end proven. Fable/lab ruling needed on the WRITE choreography.
+
+### E42. ACP block seam sync-vs-async — the bridge is FC-P7.2's design question (raised by FC-P7.1)
+`exec_blockdev_read_block/_write_block` is SYNCHRONOUS by contract; an MSCP transfer
+completes ASYNCHRONOUSLY on the same fork context → a blocking wrapper deadlocks by
+construction. FC-P7.1 shipped the async service (`vms_mscp_cl_read/_write` +
+completion) and did NOT bridge to the sync ACP seam. **FC-P7.2 owns the bridge (the
+ACP's waiting discipline).**
+
+### E43. ⚠ POSSIBLE JOIN BUG: `cnxman_mscp_opened()` is a no-op → MSCP-open gate may be dead (raised by FC-P7.1 → verify + P3.x fix)
+FC-P7.1 observed `cnxman_mscp_opened()` is a no-op, so `join_h_mscp_opened` /
+`CNXMAN_EV_CDT_OPEN` on the MSCP CDT appears UNREACHABLE — CNXMAN's join walk may
+never set `j->mscp_open` (only `cnxman_vc_opened`→`cnxman_join_opened` fires). If
+real, the join's MSCP-discovery gate never advances. FC-P7.1 preserved existing
+behavior. **Integrator verifying; a real gap is a small P3.x fix to wire
+cnxman_mscp_opened → the join's MSCP CDT-open event.**
+
+### E44. Durable trap: reading a CSB from a fork-context beat (raised by FC-P7.1, fixed)
+`cnxman_get_csb()` takes the fork mutex; a beat running ON the fork context +
+`exec_mutex_t` non-recursive = deadlock. FC-P7.1's MSCP beat hit this near-miss and
+now uses `cnxman_club_find_sysid()` (the fork-context accessor). **Any future glue
+reading a CSB from a beat MUST use the fork-context accessor, not `cnxman_get_csb`.**
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

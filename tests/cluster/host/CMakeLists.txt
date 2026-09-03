@@ -229,6 +229,11 @@ cluster_host_pe_test(test_pe_formation test_pe_formation.c)
 # TIMVCFAIL and a full loss/retransmit/reorder scenario run in microseconds.
 cluster_host_pe_test(test_pe_vc        test_pe_vc.c)
 
+# FC-P0.9: pe_fsm_view_project(), the pure half of the port-wide diagnostics
+# view the glue (vms_pe.c, not host-testable -- it names exec_kbackend.h)
+# assembles CLUSTER_DIAG_PORT's top-level row from.
+cluster_host_pe_test(test_pe_view      test_pe_view.c)
+
 # ---- FC-P0.1: the pure inter-layer headers must be host-includable ----
 # Everything below builds with -DOVMX_CLUSTER_HOST, which routes vms_cluster.h
 # to <stdint.h> instead of vms_internal.h. (OVMX_CLUSTER_CORE_DIR is set above.)

@@ -875,6 +875,18 @@ long vms_ioctl_dlm_xnode(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_cluster_member_set(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_cluster_member_clear(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_cluster_member_get(struct vms_proc *proc, unsigned long arg);
+/*
+ * FC-P0.9: the ONE per-node struct vms_cluster instance (design SS3.9 rule 3:
+ * "no globals except one per-node struct vms_cluster passed explicitly").
+ * VMS_IOCTL_CLUSTER_DIAG_PORT is the first ioctl to need it; later cluster
+ * ioctls (CLUSTER_START/STOP, CLUSTER_DIAG_CSB/_CONN/_LOCK, $GETSYI) call
+ * this SAME accessor rather than each keeping its own pointer. Defined in
+ * the shared kernel-core vms_lock.c, on every substrate. Mirror of the
+ * src/kernel/vms_internal.h decl.
+ */
+struct vms_cluster;
+struct vms_cluster *vms_cluster_node(void);
+long vms_ioctl_cluster_diag_port(struct vms_proc *proc, unsigned long arg);
 
 /* ----------------------------------------------------------------
  * LOGICAL-NAME facility (LNM$SYSTEM/GROUP/JOB, rd vms-72da) -- DEFINED in
@@ -971,6 +983,18 @@ uint32_t vms_devtab_disk_backing(const char *devnam,
  * the shared kernel-core, on every substrate.
  */
 void vms_devtab_note_io_error(uint32_t major, uint32_t minor);
+
+/*
+ * FC-P0.9: PEA0:'s discovery of the same NIC ETH0: was already bound to at
+ * boot, and PEA0:'s entry into the device table once the port glue has
+ * actually opened it. Both internal (non-ioctl): `netif` is INV-4 and never
+ * crosses /dev/vms. SS$_NORMAL / SS$_BADPARAM / SS$_NOSUCHDEV / SS$_INSFMEM.
+ * A pure table read/write, like vms_devtab_note_io_error above -- defined
+ * ONCE in the shared kernel-core vms_devtab.c, on every substrate (unlike
+ * disk_backing below, this needs no NetBSD-specific override).
+ */
+uint32_t vms_devtab_eth0_netif(char *out, uint32_t outsz);
+int vms_devtab_add_pea(const char *netif);
 
 /*
  * Transient twin of the above for INITIALIZE.EXE (rd vms-f60, vms_blockdev_

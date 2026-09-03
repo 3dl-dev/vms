@@ -970,6 +970,18 @@ struct pe_channel *pe_fsm_channel_by_mac(struct pe_fsm *f,
 void pe_fsm_channel_project(const struct pe_channel *ch,
 			    struct vms_pe_channel_view *out);
 
+/*
+ * The PURE half of the port-wide view (FC-P0.9, E11): n_channels, n_vcs,
+ * rx_frames and rx_drops_badclass are read straight off this FSM's own
+ * fields, with no seam call and no lock this TU could take. The glue
+ * (vms_pe.c) calls this FIRST and then fills in the columns only IT can
+ * attest to -- hwaddr/mtu/link_up (exec_lan_*), rx_drops_nobuf (the fork
+ * context's own pool-empty counter), tx_frames/tx_errors (the glue's send
+ * wrapper) -- rather than this pure TU reaching for the seam, which the
+ * include gate forbids it from ever naming.
+ */
+void pe_fsm_view_project(const struct pe_fsm *f, struct vms_pe_view *out);
+
 /* Names, for the console and for a test's failure message. */
 const char *pe_channel_state_name(enum vms_pe_channel_state s);
 const char *pe_channel_action_name(enum pe_channel_action a);

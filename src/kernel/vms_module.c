@@ -1792,6 +1792,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_cluster_member_clear(proc, arg);
     case VMS_IOCTL_CLUSTER_MEMBER_GET:
         return vms_ioctl_cluster_member_get(proc, arg);
+    /* The port's SDA SHOW PORT-equivalent diagnostics read (FC-P0.9,
+     * vms_pe.c), against the one per-node vms_cluster_node(). */
+    case VMS_IOCTL_CLUSTER_DIAG_PORT:
+        return vms_ioctl_cluster_diag_port(proc, arg);
     /* DLM cross-node lock-request dispatch (vms-94c, DLM epic vms-7fa rung 1):
      * a decoded remote DLM message reaches the cross-node handler, which
      * returns SS$_UNSUPPORTED (rung 1 transport; no fake grant). */

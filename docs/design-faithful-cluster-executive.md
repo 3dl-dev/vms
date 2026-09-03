@@ -908,6 +908,31 @@ Decisions:
   The three rungs plug into one function (`dlm_resolve_master`, case 3)
   behind one interface (`dir_resolve(name) → csid`), so the choice among
   them is a P4 configuration of that function, not a redesign.
+
+  **IDSM-DIR RESOLVED (2026-09-03, `docs/research-dlm-directory-algorithm.md`).**
+  The book (Davis ch. 6/7) publishes the **vector and the index rule
+  fully** — entries per member = LOCKDIRWT, one per member when all are 0,
+  contiguous, own entries read 0, `hash16 mod n` indexes it, resized in
+  Phase 1 and filled in Phase 2 before the synchronized rebuild — so that
+  is **rung A, built now**. The hash **function** is not given bit-level;
+  but p. 6-50 documents that every directory lookup **carries the sender's
+  16-bit hash value on the wire** and that the directory node uses the
+  received value. So the value is taken from the wire, never computed —
+  **rung A′ ("hash-from-the-wire")**: `rsb->hash16` is learned from every
+  cat-02 frame carrying it (lookups received, master requests received,
+  rebuild registrations; field = body[10:12], confirmed offline in FC-P4.2),
+  and a lookup is sent **only** with a wire-learned hash (a placeholder
+  hash makes the directory node create a bogus "you master it" entry —
+  the campaign's grant storm, explained). Self-check: every received
+  lookup must index one of OVMX's own entries, else counted and logged
+  (falsifies the CSV-order hypothesis, the one residual). Rung B (probe)
+  is expected **unsafe** (p. 6-31 outcome 3 creates an entry with no
+  directory check described) — FC-P4.2 decides; rung C(i) goes to the
+  operator with the p. 6-50 framing (VMS broadcasts the input/output pairs
+  by design). Until then only a root name OVMX is the *first* in the
+  cluster to touch (its own private volumes/files) is `SS$_UNSUPPORTED`;
+  every shared name, membership, directory duty and mastering are
+  unaffected, and the rebuild chain (P4.6, P5.3–5.5) proceeds.
 - **D-DLM-3 — directory-node role is built anyway** (for LOCKDIRWT>0 later,
   and because the rebuild pushes records at whichever node the cluster
   chooses): a stored directory table, populated from rebuild records and

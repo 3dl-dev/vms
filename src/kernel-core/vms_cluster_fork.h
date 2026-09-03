@@ -32,7 +32,7 @@
  * cross-database ordering matters.
  *
  * ------------------------------------------------------------------------
- * THE THREE CONTEXTS THAT TOUCH THIS MODULE, AND WHAT EACH MAY DO
+ * THE FOUR CONTEXTS THAT TOUCH THIS MODULE, AND WHAT EACH MAY DO
  * ------------------------------------------------------------------------
  *
  *  (1) RECEIVE context -- the substrate's rx callback (Linux softirq, NetBSD
@@ -54,6 +54,14 @@
  *      (vms_cluster_fork_enter/leave), and must never touch layer state
  *      otherwise.
  *
+ *  (4) The SERVED-I/O WORKER thread (§10 below, FC-P6.6). A SECOND
+ *      exec_kthread whose entire job is to make the BLOCKING substrate calls
+ *      the fork thread must never make -- today the MSCP disk server's
+ *      exec_blockdev_read/write_block on a served unit. It runs one layer
+ *      callback at a time, in process context, holding NO lock, and its result
+ *      comes back to the layer as an ordinary work item on the fork queue. It
+ *      runs no protocol and touches no protocol state.
+ *
  * The FORK THREAD itself is the only context that runs protocol handlers, and
  * it runs them one at a time under the fork mutex.
  *
@@ -63,6 +71,13 @@
  *
  *      fork mutex  ->  res->lock  ->  vms_lock_id_lock
  *      fork mutex  ->  queue lock (a LEAF: nothing is ever acquired under it)
+ *
+ * The SERVED-I/O WORKER (context 4) takes the queue lock and NOTHING ELSE, and
+ * never while it is inside a layer's I/O callback: it pops one request under
+ * the lock, DROPS the lock, runs the callback (which may sleep for tens of
+ * milliseconds on a disk), then re-takes the lock to post the completion. It
+ * never takes the fork mutex, so no worker/fork-thread order exists to invert
+ * -- which is the whole reason a disk read on the worker cannot stall a HELLO.
  *
  * The queue lock is exec_kbackend.h §1b's exec_rxlock_t, the ONE receive-level
  * lock class (design §3.2.3 RULING, FC-P0.16; CONTRACT RULE 14.1). It is held
@@ -136,7 +151,8 @@ typedef enum cf_status {
 	CF_E_STOPPING,   /* the fork context is shutting down: no new work      */
 	CF_E_NOBUF,      /* the pre-allocated pool is empty -- an HONEST drop   */
 	CF_E_TOOBIG,     /* frame longer than the pool's buffer capacity        */
-	CF_E_NOSLOT      /* no free timer slot (never a silently unarmed timer) */
+	CF_E_NOSLOT,     /* no free timer slot (never a silently unarmed timer) */
+	CF_E_NOWORKER    /* the served-I/O worker is not running (FC-P6.6)      */
 } cf_status_t;
 
 const char *cf_status_name(cf_status_t st);
@@ -191,6 +207,17 @@ enum cf_owner {
  * layer needs a second callback for timers.
  */
 #define CF_WORK_TIMER 0xffffu
+
+/*
+ * The reserved work KIND for a SERVED-I/O WORKER COMPLETION (FC-P6.6). The
+ * worker finished one cf_io request and the fork module posted the result back
+ * to the layer that submitted it: arg0 == the layer's own request TAG (echoed
+ * verbatim from struct cf_io), arg1 == the status the layer's own I/O callback
+ * returned, ptr == NULL. Like CF_WORK_TIMER it arrives at the layer's ordinary
+ * work handler, in the fork thread, under the fork mutex -- so a layer needs no
+ * second callback and no completion of its own can run anywhere else.
+ */
+#define CF_WORK_IO_DONE 0xfffeu
 
 /*
  * One unit of work: a continuation, the shape VMS queues to a CDT/PDT/BDT/RDT
@@ -263,6 +290,24 @@ struct cf_ops {
 	 * itself. */
 	int  (*should_stop)(void *ctx);
 
+	/*
+	 * The SERVED-I/O WORKER's own wait / wake / stop test (FC-P6.6). These
+	 * three are OPTIONAL AS A GROUP: a binding that does not provide them
+	 * simply has no worker, and cf_io_post() then answers CF_E_NOWORKER --
+	 * an honest refusal the submitting layer turns into a real error
+	 * status, never a synchronous disk call smuggled onto the fork thread.
+	 *
+	 * `io_wait` is a SECOND exec_cv_t paired with THE SAME queue lock, for
+	 * the same lost-wakeup-free reason `wait`/`wake` are paired: waiter and
+	 * waker must share the interlock. A second cv rather than a share of
+	 * the first is deliberate -- every received frame wakes the first one,
+	 * and waking an idle worker thousands of times a second during a
+	 * rebuild is precisely the jitter this worker exists to remove.
+	 */
+	int  (*io_wait)(void *ctx);
+	void (*io_wake)(void *ctx);
+	int  (*io_should_stop)(void *ctx);
+
 	/* Pool allocation, at create/destroy time only, from process context.
 	 * Production: exec_zalloc / exec_free (§4). NEVER called from receive
 	 * or timer context -- that is the whole reason the pools exist. */
@@ -286,12 +331,22 @@ struct cf_ops {
                                       /* clamped to the interface MTU)         */
 #define CF_WORK_ITEMS_DEFAULT  128u   /* work continuations in the pool        */
 #define CF_TIMER_SLOTS_DEFAULT  64u   /* distinct (owner,which,key) timers     */
+/*
+ * Served-I/O requests that can be QUEUED to the worker at once (FC-P6.6). Small
+ * on purpose: the only submitter today is the MSCP server, which has
+ * MSCP_SRV_MAX_REQS (4) outstanding remote requests by construction, so 16 is
+ * four times the whole ceiling plus room for a second submitter. Exhaustion is
+ * an honest CF_E_NOBUF the submitter answers with a real error -- never a
+ * synchronous fallback.
+ */
+#define CF_IO_ITEMS_DEFAULT     16u
 
 struct cf_config {
 	uint32_t rx_bufs;
 	uint32_t rx_cap;
 	uint32_t work_items;
 	uint32_t timer_slots;
+	uint32_t io_items;
 };
 
 /* Fill `out` with `in`, substituting the default for each zero field. The glue
@@ -338,10 +393,35 @@ struct cf_stats {
 
 	uint64_t waits;              /* times the fork thread slept             */
 	uint64_t wait_interrupts;    /* wait returned "interrupted"             */
+
+	/*
+	 * The SERVED-I/O WORKER (FC-P6.6). Every cf_io_post lands in exactly one
+	 * of the first four, so a caller can prove no submission was lost:
+	 *   posts == io_posted + io_refused_stopping + io_refused_noworker
+	 *            + io_dropped_nobuf
+	 * and every ACCEPTED request lands in exactly one of the last three:
+	 *   io_posted == io_completed + io_abandoned + io_completion_dropped
+	 *                (+ at most one still in flight)
+	 */
+	uint64_t io_posted;              /* accepted cf_io_post                 */
+	uint64_t io_refused_stopping;    /* posted after a stop was requested   */
+	uint64_t io_refused_noworker;    /* no worker ops / no handler bound    */
+	uint64_t io_dropped_nobuf;       /* the io-item pool OR the work pool
+					  * (the reserved completion) was empty */
+	uint64_t io_started;             /* requests handed to a layer callback */
+	uint64_t io_completed;           /* completions posted to the fork queue*/
+	uint64_t io_abandoned;           /* queued requests dropped by a stop   */
+	uint64_t io_completion_dropped;  /* the whole context stopped under an
+					  * in-flight request: the ONLY way an
+					  * accepted request goes unanswered   */
+	uint64_t io_waits;               /* times the worker slept              */
+
 	uint32_t rx_free;            /* buffers currently free (INSTANTANEOUS)  */
 	uint32_t work_free;          /* work items currently free               */
+	uint32_t io_free;            /* io items currently free                 */
 	uint32_t timer_slots_used;   /* slots currently allocated               */
 	uint32_t stopping;           /* nonzero once a stop was requested       */
+	uint32_t io_stopping;        /* nonzero once the worker was asked to go */
 };
 
 /* ==========================================================================
@@ -439,6 +519,107 @@ void cf_request_stop(struct vms_cluster_fork *f);
 /* Copy the counters out. Safe from any context (taken under the queue lock). */
 void cf_stats_get(struct vms_cluster_fork *f, struct cf_stats *out);
 
+/* ==========================================================================
+ * 7a. THE SERVED-I/O WORKER (design §3.2.6 E42 corollary, FC-P6.6)
+ *
+ * WHY IT EXISTS. exec_kbackend.h §8's block ops are contractually synchronous
+ * and "MAY SLEEP; call only from process context with no exec_lock held". The
+ * MSCP disk SERVER has to make them: a served READ is a real read of a real
+ * volume. Making them on the FORK THREAD stalls the one context that also owns
+ * the HELLO cadence, the VC retransmit ladder and every barrier step -- a 20 ms
+ * disk read is a 20 ms cluster stall on this node and, through the barrier, on
+ * every other member. VMS does not do that: its MSCP server issues local I/O
+ * asynchronously (an IRP to the local driver) and completes the MSCP command on
+ * that I/O's completion; the port is never stalled.
+ *
+ * THE SHAPE. A layer registers an I/O callback (cf_set_io_handler) and submits
+ * requests (cf_io_post). The WORKER thread pops one at a time, runs the
+ * callback with NO lock held -- that is the one place in the cluster stack a
+ * blocking substrate call is legal -- and the fork module posts the callback's
+ * status back to the SAME layer as an ordinary CF_WORK_IO_DONE work item, which
+ * the layer's work handler receives in the fork thread under the fork mutex.
+ * So the protocol (the MSCP end message, the SEND DATA) is still built in the
+ * one serialised context, and only the disk wait moved.
+ *
+ * WHAT THE WORKER MAY NOT DO. It runs no protocol, touches no PE/SCS/CNXMAN/
+ * DLM/MSCP state, and never takes the fork mutex. Everything it is given
+ * arrives in the copied struct cf_io, and everything it has to say is the
+ * uint32_t it returns.
+ * ========================================================================== */
+
+/*
+ * One submitted I/O. The fork module COPIES it and interprets exactly two
+ * fields: `owner` (which callback runs it, and which layer gets the completion)
+ * and nothing else -- `op`/`tag`/`arg0..3`/`ptr` are the layer's private
+ * vocabulary, carried verbatim. `ptr`'s lifetime belongs to the SUBMITTING
+ * layer, which must keep it alive until the completion arrives (the MSCP server
+ * does exactly that: an HRB owns its staging slot for its whole life).
+ */
+struct cf_io {
+	uint16_t owner;   /* enum cf_owner */
+	uint16_t op;      /* layer-private operation code */
+	uint32_t tag;     /* layer-private request tag, echoed in the completion */
+	uint32_t arg0;
+	uint32_t arg1;
+	uint32_t arg2;
+	uint32_t arg3;
+	void    *ptr;
+};
+
+/*
+ * The worker-context callback. Runs on the SERVED-I/O WORKER THREAD, in process
+ * context, with NO queue lock and NO fork mutex held, and it MAY SLEEP. Its
+ * return value is the layer's own status word and is delivered VERBATIM as the
+ * completion's arg1 -- the fork module never invents, rewrites or defaults it,
+ * so a served READ's success or failure on the wire is the block layer's real
+ * answer (INV-6).
+ */
+typedef uint32_t (*cf_io_handler_t)(void *ctx, const struct cf_io *io);
+
+/* Register / unregister one owner's I/O callback. Process context, at layer
+ * start-up. Registering a non-NULL callback also CLEARS any previous stop
+ * request for the worker, so a layer that stopped and restarted is served
+ * again. A NULL callback makes that owner's submissions CF_E_NOWORKER. */
+cf_status_t cf_set_io_handler(struct vms_cluster_fork *f, enum cf_owner owner,
+			      cf_io_handler_t cb, void *ctx);
+
+/*
+ * Submit one I/O to the worker. Fork thread or process context; never receive
+ * or timer context (it may find a pool empty, which is a counter, not a sleep).
+ *
+ * Returns CF_OK when the worker ACCEPTED it -- and then exactly one
+ * CF_WORK_IO_DONE WILL be delivered for it unless the whole fork context is
+ * stopped first, because the completion's work item is RESERVED here, with the
+ * request. That is deliberate: a layer that hands over a transfer parks a
+ * request until the answer comes back, so a completion that could be refused
+ * for want of a work item would park it forever. CF_E_NOBUF means either pool
+ * was empty -- an honest refusal the caller answers now, instead of a stuck
+ * request it can never answer.
+ */
+cf_status_t cf_io_post(struct vms_cluster_fork *f, const struct cf_io *io);
+
+/* Clear the worker's stop flag. Called by the binding before it starts the
+ * worker thread, so a stop/start cycle works. */
+void cf_io_start(struct vms_cluster_fork *f);
+
+/* Ask the worker to finish: refuse new submissions, wake it, let it exit.
+ * QUEUED requests are ABANDONED (counted in io_abandoned) rather than run --
+ * the layer that submitted them is being torn down and there is nobody left to
+ * answer. A request already inside a callback runs to completion first, which
+ * is what makes it safe for the layer to free the buffer it lent AFTER the
+ * worker thread has been joined. Safe from any context; idempotent. */
+void cf_io_request_stop(struct vms_cluster_fork *f);
+
+/* The worker thread's body: wait for a request, run it, post the completion,
+ * repeat. Returns once a worker stop has been requested and the queue is
+ * empty. Exposed like cf_run so a host test can drive it with no thread. */
+void cf_io_run(struct vms_cluster_fork *f);
+
+/* Run AT MOST ONE queued I/O request (pop, callback, post completion). Returns
+ * 1 if one ran, 0 if the queue was empty. The deterministic half of cf_io_run,
+ * for the R1 rung and the rung-2 simulator. */
+int cf_io_run_one(struct vms_cluster_fork *f);
+
 /* The `ctx` the creator injected in its ops. This exists so the GLUE can find
  * its own binding from the `struct vms_cluster_fork *` the per-node context
  * publishes, instead of adding a second pointer to the frozen FC-P0.1
@@ -463,6 +644,21 @@ int vms_cluster_fork_start(struct vms_cluster *cl, const struct cf_config *cfg);
  * everything, clear cl->fork. Idempotent. Process context; MAY SLEEP; never
  * called from the fork thread itself. */
 void vms_cluster_fork_stop(struct vms_cluster *cl);
+
+/*
+ * Start / stop the SERVED-I/O WORKER thread for this node (FC-P6.6). Separate
+ * from vms_cluster_fork_start because serving disks is a ROLE: a node with
+ * MSCP_LOAD/MSCP_SERVE_ALL off never needs the thread, and VMS likewise loads
+ * its MSCP server conditionally. The MSCP server's own start/stop call these.
+ *
+ * _stop JOINS the thread, so after it returns no callback is running and the
+ * caller may free every buffer it lent the worker. Both are idempotent, both
+ * are process context, both MAY SLEEP, and neither may be called from the fork
+ * thread or from the worker itself. SS$_NOSUCHDEV from _start is the honest end
+ * of the road on a substrate with no §15 binding (Rule 9).
+ */
+int  vms_cluster_fork_worker_start(struct vms_cluster *cl);
+void vms_cluster_fork_worker_stop(struct vms_cluster *cl);
 
 /* Take / drop the fork mutex around a snapshot read from process context, so
  * $GETSYI and the CLUSTER_DIAG ioctls see the databases between two dispatched

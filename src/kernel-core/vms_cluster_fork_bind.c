@@ -105,13 +105,16 @@ struct cf_bind {
 	exec_rxlock_t  qlock;
 	exec_rxflags_t qflags;  /* scratch for the one live holder (§1b) */
 	exec_cv_t      qcv;
+	exec_cv_t      iocv;    /* the SERVED-I/O WORKER's own (FC-P6.6) */
 	exec_mutex_t   forkmtx;
 	exec_kthread_t thread;
+	exec_kthread_t ioworker;
 
 	struct vms_cluster_fork *fork;
 	struct cf_timer_bind    *timers;
 	uint32_t                 n_timers;
 	int                      thread_started;
+	int                      ioworker_started;
 };
 
 /* The binding hangs off the fork context's own ops.ctx, so `struct vms_cluster'
@@ -199,6 +202,37 @@ static int cfb_should_stop(void *ctx)
 	return exec_kthread_should_stop(&((struct cf_bind *)ctx)->thread);
 }
 
+/*
+ * The SERVED-I/O WORKER's three ops (FC-P6.6). Identical in shape to the fork
+ * thread's, and deliberately bound to a SECOND exec_cv_t on the SAME rxlock:
+ * one interlock (CONTRACT RULE 14.1 says exactly ONE exec_rxlock_t is shared
+ * between receive and thread context, and this keeps that true), two sleep
+ * queues, so a received frame's wake does not touch the worker and the worker's
+ * completion does not touch the fork thread's sleep beyond the cf_post it
+ * already makes.
+ */
+static int cfb_io_wait(void *ctx)
+{
+	struct cf_bind *b = (struct cf_bind *)ctx;
+
+	return exec_cv_wait_rx(&b->iocv, &b->qlock, &b->qflags);
+}
+
+static void cfb_io_wake(void *ctx)
+{
+	exec_cv_broadcast(&((struct cf_bind *)ctx)->iocv);
+}
+
+static int cfb_io_should_stop(void *ctx)
+{
+	struct cf_bind *b = (struct cf_bind *)ctx;
+
+	/* Before the worker thread exists there is nothing to stop, and asking
+	 * an uninitialised handle would be a read of a field no one wrote. */
+	return b->ioworker_started
+		       ? exec_kthread_should_stop(&b->ioworker) : 0;
+}
+
 static void *cfb_alloc(void *ctx, uint32_t n)
 {
 	(void)ctx;
@@ -216,6 +250,7 @@ static const struct cf_ops cf_exec_ops = {
 	cfb_fork_lock, cfb_fork_unlock,
 	cfb_timer_arm, cfb_timer_cancel,
 	cfb_should_stop,
+	cfb_io_wait, cfb_io_wake, cfb_io_should_stop,
 	cfb_alloc, cfb_free,
 	(void *)0
 };
@@ -241,6 +276,20 @@ static int cfb_thread(void *arg)
 	struct cf_bind *b = (struct cf_bind *)arg;
 
 	cf_run(b->fork);
+	return 0;
+}
+
+/*
+ * The SERVED-I/O WORKER thread (FC-P6.6). Its whole body is the pure run loop,
+ * which calls the submitting layer's I/O callback with NO lock held -- the one
+ * context in this stack where a blocking substrate call (exec_blockdev_*) is
+ * legal. It returns when a worker stop has been requested.
+ */
+static int cfb_io_thread(void *arg)
+{
+	struct cf_bind *b = (struct cf_bind *)arg;
+
+	cf_io_run(b->fork);
 	return 0;
 }
 
@@ -287,6 +336,7 @@ static void cfb_free_bind(struct cf_bind *b)
 {
 	cfb_timers_destroy(b);
 	exec_mutex_destroy(&b->forkmtx);
+	exec_cv_destroy(&b->iocv);
 	exec_cv_destroy(&b->qcv);
 	exec_rxlock_destroy(&b->qlock);
 	exec_free(b);
@@ -311,6 +361,7 @@ int vms_cluster_fork_start(struct vms_cluster *cl, const struct cf_config *cfg)
 		return SS__INSFMEM;
 	exec_rxlock_init(&b->qlock);
 	exec_cv_init(&b->qcv);
+	exec_cv_init(&b->iocv);
 	exec_mutex_init(&b->forkmtx);
 
 	if (!cfb_timers_create(b, eff.timer_slots)) {
@@ -343,12 +394,61 @@ int vms_cluster_fork_start(struct vms_cluster *cl, const struct cf_config *cfg)
 	return SS__NORMAL;
 }
 
+/*
+ * The SERVED-I/O WORKER's lifecycle (FC-P6.6). Separate from the fork thread's
+ * because serving disks is a ROLE (vms_cluster_fork.h §8): the MSCP server's own
+ * start/stop own it, and a node that serves nothing never carries the thread.
+ */
+int vms_cluster_fork_worker_start(struct vms_cluster *cl)
+{
+	struct cf_bind *b = bind_of(cl);
+	int status;
+
+	if (!b)
+		return SS__NOSUCHDEV;        /* no fork context: Rule 9 */
+	if (b->ioworker_started)
+		return SS__NORMAL;           /* already running: idempotent */
+
+	/* Clear a stop left by a previous cycle BEFORE the thread exists, so it
+	 * cannot start and immediately exit on a stale flag. */
+	cf_io_start(b->fork);
+
+	status = exec_kthread_create(&b->ioworker, cfb_io_thread, b,
+				     "mscp_srv_io");
+	if (status != 0)
+		return status;   /* honest: no thread, and the caller is told */
+	b->ioworker_started = 1;
+	return SS__NORMAL;
+}
+
+void vms_cluster_fork_worker_stop(struct vms_cluster *cl)
+{
+	struct cf_bind *b = bind_of(cl);
+
+	if (!b || !b->ioworker_started)
+		return;
+
+	/* The predicate mutation the kthread-stop itself cannot make (see this
+	 * file's header): set the flag and broadcast on the worker's OWN cv,
+	 * then join. After the join no callback is running, so the layer that
+	 * lent the worker a buffer may free it. */
+	cf_io_request_stop(b->fork);
+	exec_kthread_stop(&b->ioworker);
+	b->ioworker_started = 0;
+}
+
 void vms_cluster_fork_stop(struct vms_cluster *cl)
 {
 	struct cf_bind *b = bind_of(cl);
 
 	if (!b)
 		return;
+
+	/* 0. The SERVED-I/O WORKER goes FIRST and is JOINED: it is the only
+	 *    context that can still be inside a layer's buffer, and everything
+	 *    below frees state that layer owns. Idempotent, so a layer that
+	 *    already stopped its own worker pays nothing here. */
+	vms_cluster_fork_worker_stop(cl);
 
 	/* 1. Refuse new work and wake the sleeper -- the predicate mutation the
 	 *    kthread-stop itself cannot make. Work already queued still runs. */

@@ -254,6 +254,45 @@ static struct mscp_srv_hrb *srv_hrb_by_name(struct mscp_srv_fsm *f,
 	return (struct mscp_srv_hrb *)0;
 }
 
+/* The HRB waiting on the worker for `tag`, or NULL. Matched on the tag and on
+ * WAIT_IO together: an HRB that has moved on cannot be answered by an old
+ * completion (see the header's note on why the index is not the key). */
+static struct mscp_srv_hrb *srv_hrb_by_io_tag(struct mscp_srv_fsm *f,
+					      uint32_t tag)
+{
+	uint32_t i;
+
+	if (tag == 0u)
+		return (struct mscp_srv_hrb *)0;
+	for (i = 0; i < MSCP_SRV_MAX_REQS; i++) {
+		if (f->hrb[i].in_use &&
+		    f->hrb[i].state == (uint8_t)MSCP_SRV_REQ_WAIT_IO &&
+		    f->hrb[i].io_tag == tag)
+			return &f->hrb[i];
+	}
+	return (struct mscp_srv_hrb *)0;
+}
+
+/* Mint the next outstanding-request tag. Never 0 (the header says why), and
+ * never a value another outstanding request is already using -- with
+ * MSCP_SRV_MAX_REQS outstanding at most, a full 32-bit wrap would have to lap
+ * the whole space before a live tag could repeat, and the scan makes even that
+ * impossible rather than improbable. */
+static uint32_t srv_next_io_tag(struct mscp_srv_fsm *f)
+{
+	uint32_t guard;
+
+	for (guard = 0; guard <= MSCP_SRV_MAX_REQS; guard++) {
+		f->next_io_tag++;
+		if (f->next_io_tag == 0u)
+			f->next_io_tag = 1u;
+		if (srv_hrb_by_io_tag(f, f->next_io_tag) ==
+		    (struct mscp_srv_hrb *)0)
+			return f->next_io_tag;
+	}
+	return 0u;   /* unreachable with MAX_REQS+1 tries; 0 = "no tag" */
+}
+
 static void srv_hrb_free(struct mscp_srv_fsm *f, struct mscp_srv_hrb *r)
 {
 	if (r->local_name != 0u && f->ops != (const struct mscp_srv_ops *)0 &&
@@ -532,6 +571,12 @@ static void h_conn_open(struct mscp_srv_fsm *f, struct srv_ev *e)
  * connection", so every HRB this host owned is discarded HERE -- with its named
  * buffer released, so a stale transfer cannot land in a buffer that has since
  * changed hands.
+ *
+ * EXCEPT one the WORKER still owns (FC-P6.6). Its staging slot is in another
+ * thread's hands: freeing the HRB would return that slot to the pool while a
+ * disk read is writing into it, and would let the next request be handed the
+ * same bytes. So it is marked `abandoned` and left in use; the completion path
+ * frees it, in silence, because by then there is genuinely nobody to answer.
  */
 static void h_conn_close(struct mscp_srv_fsm *f, struct srv_ev *e)
 {
@@ -542,7 +587,11 @@ static void h_conn_close(struct mscp_srv_fsm *f, struct srv_ev *e)
 		return;
 	slot = srv_hqb_index(f, h);
 	for (i = 0; i < MSCP_SRV_MAX_REQS; i++) {
-		if (f->hrb[i].in_use && f->hrb[i].hqb == (uint8_t)slot)
+		if (!f->hrb[i].in_use || f->hrb[i].hqb != (uint8_t)slot)
+			continue;
+		if (f->hrb[i].state == (uint8_t)MSCP_SRV_REQ_WAIT_IO)
+			f->hrb[i].abandoned = 1u;
+		else
 			srv_hrb_free(f, &f->hrb[i]);
 	}
 	srv_bzero(h, (uint32_t)sizeof(*h));
@@ -763,6 +812,74 @@ static void srv_read_bufdesc(const struct vms_mscp_xfer_cmd *c,
 		     ((uint32_t)c->buffer_desc[11] << 24);
 }
 
+/* The status this server answers when it could not even START the local I/O.
+ * Table B-1 ST.CNT: the CONTROLLER failed -- not the drive (nothing was asked
+ * of it) and not the host (its buffer is fine). No sub-code is claimed, because
+ * this project has none grounded for "the server's own I/O queue is full". */
+#define MSCP_SRV_STATUS_NO_IO \
+	VMS_MSCP_STATUS(VMS_MSCP_ST_CTLR_ERR, 0u)
+
+/*
+ * HAND one HRB's block transfer to the served-I/O worker and put the HRB in
+ * WAIT_IO (design §3.2.6: the cluster fork thread never calls exec_blockdev_*).
+ *
+ * Returns 0 when the worker TOOK it -- and from that moment until
+ * mscp_srv_fsm_io_done() this file must not touch the staging slot, free the
+ * HRB or answer the command. Non-zero means nothing was handed over and the
+ * caller may end the request itself.
+ */
+static int srv_io_submit(struct mscp_srv_fsm *f, struct mscp_srv_hrb *r,
+			 enum mscp_srv_io_op op, uint32_t nblocks)
+{
+	struct mscp_srv_io_req req;
+	uint8_t *stage = srv_hrb_buf(f, r);
+	uint32_t tag;
+
+	if (f->ops == (const struct mscp_srv_ops *)0 ||
+	    f->ops->io_submit == (int (*)(void *,
+					  const struct mscp_srv_io_req *))0 ||
+	    stage == (uint8_t *)0) {
+		f->io_refused++;
+		return -1;
+	}
+	tag = srv_next_io_tag(f);
+	if (tag == 0u) {
+		f->io_refused++;
+		return -1;
+	}
+
+	srv_bzero(&req, (uint32_t)sizeof(req));
+	req.tag = tag;
+	req.op = (uint8_t)op;
+	req.unit = f->uqb[r->uqb].info.unit;   /* the EXECUTIVE's own number */
+	req.lbn = r->lbn;
+	req.nblocks = nblocks;
+	req.buf = stage;
+
+	/*
+	 * THE HRB IS PUBLISHED AS WAITING **BEFORE** THE HAND-OVER, not after.
+	 * The moment the request is visible to the worker its completion may be
+	 * on its way back, and a completion that arrives while this HRB still
+	 * says "no I/O outstanding" would be counted stale and the host's
+	 * command would hang forever. (In production the fork thread is inside
+	 * this very call so the race cannot be observed; at the R1 rung a fake
+	 * worker completes INLINE, which is exactly the ordering this makes
+	 * safe.) On a refusal nothing was handed over, so the publication is
+	 * undone exactly.
+	 */
+	f->io_submitted++;
+	r->io_tag = tag;
+	r->state = (uint8_t)MSCP_SRV_REQ_WAIT_IO;
+	if (f->ops->io_submit(f->ops->ctx, &req) == 0)
+		return 0;
+
+	f->io_submitted--;
+	f->io_refused++;
+	r->io_tag = 0u;
+	r->state = (uint8_t)MSCP_SRV_REQ_WAIT_DATA;
+	return -1;
+}
+
 /* ==========================================================================
  * 7c. READ
  * ========================================================================== */
@@ -857,13 +974,18 @@ static int srv_xfer_parse(struct mscp_srv_fsm *f, const struct srv_ev *e,
 	return 0;
 }
 
+/*
+ * READ's command half: gate it, then HAND the disk read to the worker. No byte
+ * is read here and no end message is sent here -- the answer is built when the
+ * worker reports back (srv_read_io_done). A READ therefore spans two fork-thread
+ * dispatches, and the HRB is what carries it across.
+ */
 static void h_cmd_read(struct mscp_srv_fsm *f, struct srv_ev *e)
 {
 	struct vms_mscp_xfer_cmd c;
 	struct mscp_srv_hqb *h = e->hqb;
 	struct mscp_srv_hrb *r;
 	uint8_t *stage = (uint8_t *)0;
-	uint32_t end_len;
 	int slot = -1;
 
 	if (srv_xfer_parse(f, e, VMS_MSCP_OP_READ, &c) != 0)
@@ -872,48 +994,52 @@ static void h_cmd_read(struct mscp_srv_fsm *f, struct srv_ev *e)
 	if (r == (struct mscp_srv_hrb *)0)
 		return;   /* refused, with a real end message already sent */
 
-	if (f->ops->read_blocks == (int (*)(void *, uint16_t, uint32_t,
-					    uint32_t, uint8_t *))0 ||
-	    f->ops->read_blocks(f->ops->ctx, f->uqb[slot].info.unit, c.lbn,
-				c.byte_count / MSCP_SRV_BLOCK_SIZE,
-				stage) != 0) {
-		/* Table B-1 ST.DRV: the drive could not deliver the data. NOT a
-		 * success with a zero byte count, which is the dishonest shape
-		 * INV-6 exists to stop. */
-		f->blockdev_failures++;
+	if (srv_io_submit(f, r, MSCP_SRV_IO_READ,
+			  c.byte_count / MSCP_SRV_BLOCK_SIZE) != 0) {
+		/* Nothing was handed over, so the HRB and its slot are still
+		 * ours to end -- with a REAL controller error, never a success
+		 * this server cannot back up. */
 		srv_hrb_free(f, r);
 		(void)srv_send_xfer_end(f, h, VMS_MSCP_OP_READ, c.hdr.cmd_ref,
-					c.hdr.unit,
-					VMS_MSCP_STATUS(VMS_MSCP_ST_DRIVE_ERR, 0u),
-					0u);
-		return;
+					c.hdr.unit, MSCP_SRV_STATUS_NO_IO, 0u);
 	}
+}
 
-	/* The end message rides the FINAL block-transfer frame (FC-P6.1's
-	 * TRAP 1), so it is BUILT here and handed to the transfer. */
-	end_len = srv_build_xfer_end(f, VMS_MSCP_OP_READ, c.hdr.cmd_ref,
-				     c.hdr.unit,
+/*
+ * READ's answer half, on the worker's completion. The bytes are in the HRB's
+ * staging slot -- which the worker has just handed back -- and the end message
+ * rides the FINAL block-transfer frame (FC-P6.1's TRAP 1), so it is built here
+ * and given to the transfer.
+ */
+static void srv_read_io_done(struct mscp_srv_fsm *f, struct mscp_srv_hqb *h,
+			     struct mscp_srv_hrb *r)
+{
+	uint8_t *stage = srv_hrb_buf(f, r);
+	uint32_t end_len;
+
+	end_len = srv_build_xfer_end(f, VMS_MSCP_OP_READ, r->cmd_ref, r->unit,
 				     VMS_MSCP_STATUS(VMS_MSCP_ST_SUCCESS,
 						     VMS_MSCP_SUB_NORMAL),
-				     c.byte_count);
+				     r->byte_count);
 	if (end_len == 0u) {
 		srv_hrb_free(f, r);
 		return;
 	}
 
-	if (f->ops->send_read_data == (int (*)(void *, vms_conid_t,
+	if (stage == (uint8_t *)0 ||
+	    f->ops->send_read_data == (int (*)(void *, vms_conid_t,
 					       vms_scs_sysid_t,
 					       const struct mscp_srv_bufdesc *,
 					       const uint8_t *, uint32_t,
 					       const uint8_t *, uint32_t))0 ||
 	    f->ops->send_read_data(f->ops->ctx, h->conid, h->peer, &r->desc,
-				   stage, c.byte_count,
+				   stage, r->byte_count,
 				   f->endframe + VMS_OFF_SYSAP_BODY,
 				   end_len) != 0) {
 		f->xfer_refused++;
 		srv_hrb_free(f, r);
-		(void)srv_send_xfer_end(f, h, VMS_MSCP_OP_READ, c.hdr.cmd_ref,
-					c.hdr.unit,
+		(void)srv_send_xfer_end(f, h, VMS_MSCP_OP_READ, r->cmd_ref,
+					r->unit,
 					VMS_MSCP_STATUS(VMS_MSCP_ST_CTLR_ERR,
 							VMS_MSCP_SUB_CNT_INCONSISTENT),
 					0u);
@@ -921,7 +1047,7 @@ static void h_cmd_read(struct mscp_srv_fsm *f, struct srv_ev *e)
 	}
 	f->ends_tx++;        /* the end message went out ON the transfer */
 	f->reads_served++;
-	srv_hrb_free(f, r);  /* a READ completes inside its own dispatch */
+	srv_hrb_free(f, r);
 }
 
 /* ==========================================================================
@@ -1206,27 +1332,42 @@ static struct mscp_srv_hqb *srv_hrb_hqb(struct mscp_srv_fsm *f,
 	return &f->hqb[r->hqb];
 }
 
+/* Withdraw the buffer name this node minted for a WRITE. Done the moment the
+ * peer's transfer is over -- a name that outlives its transfer is a buffer a
+ * stale frame could still land in, and once the request is handed to the worker
+ * that buffer is being READ by another thread. */
+static void srv_release_name(struct mscp_srv_fsm *f, struct mscp_srv_hrb *r)
+{
+	if (r->local_name == 0u)
+		return;
+	if (f->ops != (const struct mscp_srv_ops *)0 &&
+	    f->ops->release_buffer != (void (*)(void *, uint32_t))0)
+		f->ops->release_buffer(f->ops->ctx, r->local_name);
+	r->local_name = 0u;
+}
+
 /*
- * Commit a completed WRITE to the volume and answer it.
+ * The peer's WRITE data has all arrived: HAND the commit to the served-I/O
+ * worker (design §3.2.6 -- the fork thread never calls exec_blockdev_*). The
+ * end message is built when the worker reports back (srv_write_io_done).
  *
  * ONLY WHOLE BLOCKS ARE COMMITTED, and only what really arrived. sec 5.3 makes
  * a transfer a whole number of blocks, so a completion carrying less than one
  * is a transfer that did not deliver its data: it is answered Host Buffer
  * Access Error (Table B-1 ST.HST -- the host's buffer did not yield the bytes),
- * NOT a zero-length success. And the byte count reported is the number of bytes
- * actually written, never the number the command asked for.
+ * NOT a zero-length success, and no I/O is started at all.
  */
-static void srv_write_complete(struct mscp_srv_fsm *f, struct mscp_srv_hrb *r)
+static void srv_write_data_complete(struct mscp_srv_fsm *f,
+				    struct mscp_srv_hrb *r)
 {
 	struct mscp_srv_hqb *h = srv_hrb_hqb(f, r);
 	uint32_t blocks = r->received / MSCP_SRV_BLOCK_SIZE;
-	uint32_t moved = blocks * MSCP_SRV_BLOCK_SIZE;
-	uint16_t status;
 
 	if (h == (struct mscp_srv_hqb *)0) {
 		srv_hrb_free(f, r);
 		return;
 	}
+	srv_release_name(f, r);
 
 	if (blocks == 0u) {
 		(void)srv_send_xfer_end(f, h, VMS_MSCP_OP_WRITE, r->cmd_ref,
@@ -1238,22 +1379,90 @@ static void srv_write_complete(struct mscp_srv_fsm *f, struct mscp_srv_hrb *r)
 		return;
 	}
 
-	if (f->ops->write_blocks == (int (*)(void *, uint16_t, uint32_t,
-					     uint32_t, const uint8_t *))0 ||
-	    srv_hrb_buf(f, r) == (uint8_t *)0 ||
-	    f->ops->write_blocks(f->ops->ctx, f->uqb[r->uqb].info.unit, r->lbn,
-				 blocks, srv_hrb_buf(f, r)) != 0) {
-		f->blockdev_failures++;
-		status = VMS_MSCP_STATUS(VMS_MSCP_ST_DRIVE_ERR, 0u);
-		moved = 0u;
-	} else {
-		status = VMS_MSCP_STATUS(VMS_MSCP_ST_SUCCESS,
-					 VMS_MSCP_SUB_NORMAL);
-		f->writes_served++;
+	if (srv_io_submit(f, r, MSCP_SRV_IO_WRITE, blocks) != 0) {
+		(void)srv_send_xfer_end(f, h, VMS_MSCP_OP_WRITE, r->cmd_ref,
+					r->unit, MSCP_SRV_STATUS_NO_IO, 0u);
+		srv_hrb_free(f, r);
 	}
+}
+
+/* WRITE's answer half, on the worker's completion. The byte count reported is
+ * the number of bytes ACTUALLY written, never the number the command asked
+ * for. */
+static void srv_write_io_done(struct mscp_srv_fsm *f, struct mscp_srv_hqb *h,
+			      struct mscp_srv_hrb *r)
+{
+	uint32_t moved = (r->received / MSCP_SRV_BLOCK_SIZE) *
+			 MSCP_SRV_BLOCK_SIZE;
+
+	f->writes_served++;
 	(void)srv_send_xfer_end(f, h, VMS_MSCP_OP_WRITE, r->cmd_ref, r->unit,
-				status, moved);
+				VMS_MSCP_STATUS(VMS_MSCP_ST_SUCCESS,
+						VMS_MSCP_SUB_NORMAL),
+				moved);
 	srv_hrb_free(f, r);
+}
+
+/*
+ * THE WORKER'S ANSWER (FC-P6.6). Runs on the fork thread; see the header's
+ * contract. Its first job is to take the staging slot back -- clearing io_tag
+ * so no second completion can match this request -- and only then to decide
+ * what the host is told.
+ */
+void mscp_srv_fsm_io_done(struct mscp_srv_fsm *f, uint32_t tag, uint32_t status)
+{
+	struct mscp_srv_hrb *r;
+	struct mscp_srv_hqb *h;
+
+	if (f == (struct mscp_srv_fsm *)0)
+		return;
+	r = srv_hrb_by_io_tag(f, tag);
+	if (r == (struct mscp_srv_hrb *)0) {
+		/* An answer to a question nobody is still asking. Counted and
+		 * dropped -- never applied to whichever request happens to
+		 * occupy that slot now. */
+		f->io_done_stale++;
+		return;
+	}
+	r->io_tag = 0u;
+	r->state = (uint8_t)MSCP_SRV_REQ_WAIT_DATA;   /* the slot is ours again */
+	if (status == 0u)
+		f->io_done_ok++;
+	else
+		f->io_done_failed++;
+
+	if (r->abandoned) {
+		/* The host's connection went while the worker held the slot.
+		 * sec 4.1 leaves no command to complete, so it ends in silence
+		 * -- but only NOW, when the slot is genuinely back. */
+		f->reqs_abandoned++;
+		srv_hrb_free(f, r);
+		return;
+	}
+
+	h = srv_hrb_hqb(f, r);
+	if (h == (struct mscp_srv_hqb *)0) {
+		srv_hrb_free(f, r);
+		return;
+	}
+
+	if (status != 0u) {
+		/* Table B-1 ST.DRV: the drive could not move the data. NOT a
+		 * success with a zero byte count, which is the dishonest shape
+		 * INV-6 exists to stop. */
+		f->blockdev_failures++;
+		(void)srv_send_xfer_end(f, h, r->opcode, r->cmd_ref, r->unit,
+					VMS_MSCP_STATUS(VMS_MSCP_ST_DRIVE_ERR,
+							0u),
+					0u);
+		srv_hrb_free(f, r);
+		return;
+	}
+
+	if (r->opcode == VMS_MSCP_OP_READ)
+		srv_read_io_done(f, h, r);
+	else
+		srv_write_io_done(f, h, r);
 }
 
 void mscp_srv_fsm_block_data(struct mscp_srv_fsm *f, uint32_t name,
@@ -1278,7 +1487,7 @@ void mscp_srv_fsm_block_data(struct mscp_srv_fsm *f, uint32_t name,
 	 * own length. Read from the wire, never inferred from a local count. */
 	if (bytes_remaining > len)
 		return;
-	srv_write_complete(f, r);
+	srv_write_data_complete(f, r);
 }
 
 /* ==========================================================================
@@ -1370,6 +1579,21 @@ static void srv_abort_hrb(struct mscp_srv_fsm *f, struct mscp_srv_hrb *r)
 	srv_hrb_free(f, r);
 }
 
+/*
+ * A request past its deadline that the WORKER still owns cannot be reaped: its
+ * staging slot is in another thread's hands. The lateness is recorded ONCE and
+ * the local transfer is left to complete on its own, which is what a VMS server
+ * does with an IRP outstanding to a local driver (see the header's note on
+ * `abort_pending`). Nothing is answered here, and nothing is freed.
+ */
+static void srv_defer_abort(struct mscp_srv_fsm *f, struct mscp_srv_hrb *r)
+{
+	if (r->abort_pending)
+		return;
+	r->abort_pending = 1u;
+	f->reqs_abort_deferred++;
+}
+
 uint32_t mscp_srv_fsm_tick(struct mscp_srv_fsm *f)
 {
 	uint32_t i, now, reaped = 0u;
@@ -1383,6 +1607,10 @@ uint32_t mscp_srv_fsm_tick(struct mscp_srv_fsm *f)
 		if ((uint32_t)(now - f->hrb[i].started_ms) <
 		    MSCP_SRV_REQ_TIMEOUT_MS)
 			continue;
+		if (f->hrb[i].state == (uint8_t)MSCP_SRV_REQ_WAIT_IO) {
+			srv_defer_abort(f, &f->hrb[i]);
+			continue;
+		}
 		srv_abort_hrb(f, &f->hrb[i]);
 		reaped++;
 	}

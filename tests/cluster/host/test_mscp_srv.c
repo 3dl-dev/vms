@@ -52,9 +52,34 @@ struct fake_unit {
 	uint8_t  data[FAKE_BLOCKS * MSCP_SRV_BLOCK_SIZE];
 };
 
+/*
+ * THE FAKE SERVED-I/O WORKER (FC-P6.6). The shipping server hands a transfer to
+ * a worker KTHREAD and is answered later, on the fork thread, through
+ * mscp_srv_fsm_io_done(). This fake is the same seam with the thread taken out:
+ * `io_submit` only RECORDS the request (so a test can assert that the command
+ * dispatch itself moved no bytes and sent no end message), and the test decides
+ * when -- and with what status -- the completion arrives. That is what makes the
+ * async waits provable at rung R1, with no kernel and no scheduler.
+ */
+struct fake_io {
+	uint8_t  in_flight;
+	uint32_t tag;
+	uint8_t  op;
+	uint16_t unit;
+	uint32_t lbn;
+	uint32_t nblocks;
+	uint8_t *buf;
+};
+
 struct fake_exec {
 	struct fake_unit units[MSCP_SRV_MAX_UNITS];
 	uint32_t         n_units;
+
+	/* the worker seam */
+	struct fake_io   io;
+	uint32_t         submits;         /* accepted io_submit calls          */
+	uint32_t         submit_refusals; /* forced refusals (queue full, ...) */
+	uint8_t          submit_fail_next;
 
 	/* what the server actually did */
 	uint32_t reads;
@@ -116,36 +141,60 @@ static int fake_unit_at(void *ctx, uint32_t index,
 	return 0;
 }
 
-static int fake_read_blocks(void *ctx, uint16_t unit, uint32_t lbn,
-			    uint32_t nblocks, uint8_t *buf)
+/* The submit half: RECORD the request and return. Nothing is read, nothing is
+ * written, and no end message can possibly go out from here -- which is the
+ * property the whole item exists to create. */
+static int fake_io_submit(void *ctx, const struct mscp_srv_io_req *req)
 {
 	struct fake_exec *e = (struct fake_exec *)ctx;
-	struct fake_unit *u = fake_find(e, unit);
 
-	if (e->read_fail_next) {
-		e->read_fail_next = 0u;
+	if (e->submit_fail_next) {
+		e->submit_fail_next = 0u;
+		e->submit_refusals++;
 		return -1;
 	}
-	if (u == NULL || lbn + nblocks > u->size)
-		return -1;
-	memcpy(buf, u->data + (lbn * MSCP_SRV_BLOCK_SIZE),
-	       nblocks * MSCP_SRV_BLOCK_SIZE);
-	e->reads++;
+	if (e->io.in_flight)
+		return -1;   /* this fake worker runs one at a time */
+	e->io.in_flight = 1u;
+	e->io.tag = req->tag;
+	e->io.op = req->op;
+	e->io.unit = req->unit;
+	e->io.lbn = req->lbn;
+	e->io.nblocks = req->nblocks;
+	e->io.buf = req->buf;
+	e->submits++;
 	return 0;
 }
 
-static int fake_write_blocks(void *ctx, uint16_t unit, uint32_t lbn,
-			     uint32_t nblocks, const uint8_t *buf)
+/*
+ * The WORKER half, run when the test says so: exactly what
+ * vms_mscp_srv_io.c's handler does against a real block device, against the
+ * fake volume. Returns the status the completion will carry.
+ */
+static uint32_t fake_io_run(struct fake_exec *e)
 {
-	struct fake_exec *e = (struct fake_exec *)ctx;
-	struct fake_unit *u = fake_find(e, unit);
+	struct fake_unit *u = fake_find(e, e->io.unit);
 
-	if (u == NULL || lbn + nblocks > u->size)
-		return -1;
-	memcpy(u->data + (lbn * MSCP_SRV_BLOCK_SIZE), buf,
-	       nblocks * MSCP_SRV_BLOCK_SIZE);
+	if (!e->io.in_flight)
+		return 1u;
+	if (e->io.op == (uint8_t)MSCP_SRV_IO_READ) {
+		if (e->read_fail_next) {
+			e->read_fail_next = 0u;
+			return 1u;
+		}
+		if (u == NULL || e->io.lbn + e->io.nblocks > u->size)
+			return 1u;
+		memcpy(e->io.buf, u->data + (e->io.lbn * MSCP_SRV_BLOCK_SIZE),
+		       e->io.nblocks * MSCP_SRV_BLOCK_SIZE);
+		e->reads++;
+		return 0u;
+	}
+	if (u == NULL || e->io.lbn + e->io.nblocks > u->size)
+		return 1u;
+	memcpy(u->data + (e->io.lbn * MSCP_SRV_BLOCK_SIZE), e->io.buf,
+	       e->io.nblocks * MSCP_SRV_BLOCK_SIZE);
 	e->writes++;
-	return 0;
+	return 0u;
 }
 
 /* Capture an end message the way SCS delivers one: the SYSAP body, byte 0 ==
@@ -241,8 +290,7 @@ static void env_bind_ops(struct srv_env *e)
 {
 	memset(&e->ops, 0, sizeof(e->ops));
 	e->ops.unit_at = fake_unit_at;
-	e->ops.read_blocks = fake_read_blocks;
-	e->ops.write_blocks = fake_write_blocks;
+	e->ops.io_submit = fake_io_submit;
 	e->ops.send_end = fake_send_end;
 	e->ops.send_read_data = fake_send_read_data;
 	e->ops.recv_write_data = fake_recv_write_data;
@@ -370,6 +418,22 @@ static int env_feed(struct srv_env *e)
 {
 	return mscp_srv_fsm_command(&e->fsm, FAKE_CONID, env_cmd_body(e),
 				    VMS_MSCP_CMD_BODY_LEN);
+}
+
+/*
+ * THE WORKER'S ROUND TRIP, in the two halves the shipping stack has: the WORKER
+ * THREAD performs the transfer, then the FORK THREAD is handed the completion.
+ * Every served READ and WRITE in this file goes through here, so no test can
+ * accidentally assert a result the server produced synchronously.
+ */
+static uint32_t env_io_complete(struct srv_env *e)
+{
+	uint32_t status = fake_io_run(&e->fake);
+	uint32_t tag = e->fake.io.tag;
+
+	e->fake.io.in_flight = 0u;
+	mscp_srv_fsm_io_done(&e->fsm, tag, status);
+	return status;
 }
 
 /* ------------------------------------------------------------------ *
@@ -573,14 +637,42 @@ static void test_read(void)
 	ct_check_eq_u32(end.eh.status_major, VMS_MSCP_ST_AVAILABLE,
 			"sec 4.3: a READ before ONLINE is refused Unit-Available");
 	ct_check_eq_u32(e.fake.reads, 0, "and NOT one block was read");
+	ct_check_eq_u32(e.fake.submits, 0, "and nothing reached the worker");
 
 	/* ONLINE, then READ two blocks from LBN 1 (the home block's own place). */
 	(void)env_build_online(&e, 0x900001u, 0u, 0u, 0u);
 	(void)env_feed(&e);
+	e.fake.ends = 0u;
 	ct_check(env_build_xfer(&e, VMS_MSCP_OP_READ, 0x210002u, 0u, 1024u, 1u,
 				0x40u, 0x0200001bu, 0x00020007u),
 		 "the second READ builds");
 	(void)env_feed(&e);
+
+	/*
+	 * FC-P6.6: the COMMAND DISPATCH ends here, with the transfer handed to
+	 * the worker and NOTHING done on this thread -- no block read, no
+	 * transfer, no end message. That is the whole fix: on the shipping
+	 * stack this dispatch is the cluster fork thread, and it is now free to
+	 * run the next HELLO while the disk works.
+	 */
+	ct_check_eq_u32(e.fake.submits, 1, "the READ was HANDED to the worker");
+	ct_check_eq_u32(e.fake.io.op, (unsigned long)MSCP_SRV_IO_READ,
+			"as a READ");
+	ct_check_eq_u32(e.fake.io.unit, 0, "naming the executive's own unit");
+	ct_check_eq_u32(e.fake.io.lbn, 1u, "the host's own LBN");
+	ct_check_eq_u32(e.fake.io.nblocks, 2u, "and its own block count");
+	ct_check(e.fake.io.tag != 0u, "with a non-zero outstanding-request tag");
+	ct_check_eq_u32(e.fake.reads, 0,
+			"NOT one block was read on the command thread");
+	ct_check_eq_u32(e.fake.xfers, 0,
+			"and no block transfer was started there");
+	ct_check_eq_u32(e.fake.ends, 0,
+			"and no end message was sent there -- nothing to say yet");
+	ct_check_eq_u32(e.fsm.io_submitted, 1, "the server counts the submission");
+
+	/* Now the worker runs and the fork thread is handed the completion. */
+	ct_check_eq_u32(env_io_complete(&e), 0, "the worker's read succeeded");
+	ct_check_eq_u32(e.fsm.io_done_ok, 1, "counted as a good completion");
 
 	ct_check_eq_u32(e.fake.reads, 1, "the block layer was read exactly once");
 	ct_check_eq_u32(e.fake.xfers, 1, "one block transfer was started");
@@ -607,11 +699,13 @@ static void test_read(void)
 	ct_check_eq_u32(end.eh.hdr.cmd_ref, 0x210002u, "P.CRF echoed");
 
 	/* A block-layer failure is a REAL error status, not a zero-length
-	 * success. */
+	 * success -- and it arrives on the COMPLETION, which is the only place
+	 * the server can learn it now. */
 	e.fake.read_fail_next = 1u;
 	(void)env_build_xfer(&e, VMS_MSCP_OP_READ, 0x210003u, 0u, 512u, 0u,
 			     0u, 0x0200001bu, 0x00020007u);
 	(void)env_feed(&e);
+	ct_check(env_io_complete(&e) != 0u, "the worker's read failed");
 	(void)vms_mscp_read_end_parse(e.fake.end_frame,
 				      (uint32_t)sizeof(e.fake.end_frame), &end);
 	ct_check_eq_u32(end.eh.status_major, VMS_MSCP_ST_DRIVE_ERR,
@@ -619,6 +713,31 @@ static void test_read(void)
 	ct_check_eq_u32(end.byte_count, 0,
 			"with a zero byte count -- never a success it cannot back up");
 	ct_check_eq_u32(e.fsm.blockdev_failures, 1, "and it is counted");
+	ct_check_eq_u32(e.fsm.io_done_failed, 1,
+			"as a failed worker completion, not a lost request");
+
+	/*
+	 * A worker that will not TAKE the request is answered too. Nothing was
+	 * handed over, so the server ends the command itself -- a real
+	 * Controller Error, never a silent drop and never a synchronous
+	 * fallback that would put the disk back on this thread.
+	 */
+	e.fake.submit_fail_next = 1u;
+	(void)env_build_xfer(&e, VMS_MSCP_OP_READ, 0x210004u, 0u, 512u, 0u,
+			     0u, 0x0200001bu, 0x00020007u);
+	(void)env_feed(&e);
+	(void)vms_mscp_read_end_parse(e.fake.end_frame,
+				      (uint32_t)sizeof(e.fake.end_frame), &end);
+	ct_check_eq_u32(end.eh.status_major, VMS_MSCP_ST_CTLR_ERR,
+			"a worker that refuses the transfer is a real Controller Error");
+	ct_check_eq_u32(end.eh.hdr.cmd_ref, 0x210004u, "P.CRF still echoed");
+	ct_check_eq_u32(e.fsm.io_refused, 1, "and it is counted");
+
+	/* A completion for a request nobody is waiting on is DROPPED, never
+	 * applied to whichever HRB now owns that slot. */
+	mscp_srv_fsm_io_done(&e.fsm, 0x7fffffffu, 0u);
+	ct_check_eq_u32(e.fsm.io_done_stale, 1,
+			"a completion with an unknown tag is counted and dropped");
 }
 
 /* ------------------------------------------------------------------ *
@@ -703,11 +822,25 @@ static void test_write(void)
 	ct_check_eq_u32(e.fake.ends, 1,
 			"NO end message yet -- the data has not arrived (only the ONLINE end so far)");
 
-	/* The peer's port fills the buffer and the completion arrives. */
+	/* The peer's port fills the buffer and the transfer completes. */
 	for (i = 0; i < 512u; i++)
 		e.fake.write_buf[i] = (uint8_t)(0xA0u + (i & 0x0fu));
 	mscp_srv_fsm_block_data(&e.fsm, e.fake.write_name, 0u, 512u, 512u);
 
+	/*
+	 * FC-P6.6: the data-arrival dispatch HANDS the commit to the worker and
+	 * stops. Nothing is written and no end message goes out on this thread.
+	 */
+	ct_check_eq_u32(e.fake.submits, 1, "the commit was HANDED to the worker");
+	ct_check_eq_u32(e.fake.io.op, (unsigned long)MSCP_SRV_IO_WRITE,
+			"as a WRITE");
+	ct_check_eq_u32(e.fake.io.lbn, 4u, "at the host's own LBN");
+	ct_check_eq_u32(e.fake.writes, 0,
+			"NOT one block was written on the block-data thread");
+	ct_check_eq_u32(e.fake.ends, 1,
+			"and still no end message -- the volume has not been told yet");
+
+	ct_check_eq_u32(env_io_complete(&e), 0, "the worker's write succeeded");
 	ct_check_eq_u32(e.fake.writes, 1, "the block layer was written exactly once");
 	ct_check(memcmp(e.fake.units[0].data + (4u * MSCP_SRV_BLOCK_SIZE),
 			e.fake.write_buf, 512u) == 0,
@@ -827,7 +960,11 @@ static void test_write_slots(void)
 	memset(g_slots.buf[0], 0x11, 512u);
 	memset(g_slots.buf[1], 0x22, 512u);
 	mscp_srv_fsm_block_data(&e.fsm, g_slots.name[0], 0u, 512u, 512u);
+	ct_check_eq_u32(e.fake.io.lbn, 0u, "the FIRST request went to the worker");
+	ct_check_eq_u32(env_io_complete(&e), 0, "and the worker committed it");
 	mscp_srv_fsm_block_data(&e.fsm, g_slots.name[1], 0u, 512u, 512u);
+	ct_check_eq_u32(e.fake.io.lbn, 1u, "then the SECOND, at its OWN LBN");
+	ct_check_eq_u32(env_io_complete(&e), 0, "and the worker committed that");
 	ct_check_eq_u32(e.fake.writes, 2, "both completed");
 	ct_check_eq_u32(e.fake.units[0].data[0], 0x11,
 			"LBN 0 got the FIRST request's bytes");
@@ -923,6 +1060,7 @@ static void test_write_protect(void)
 	(void)env_build_xfer(&e, VMS_MSCP_OP_READ, 0x21000cu, 0u, 512u, 0u,
 			     0u, 0x0200001bu, 0x00020007u);
 	(void)env_feed(&e);
+	ct_check_eq_u32(env_io_complete(&e), 0, "the worker read the volume");
 	(void)vms_mscp_read_end_parse(e.fake.end_frame,
 				      (uint32_t)sizeof(e.fake.end_frame), &xend);
 	ct_check_eq_u32(xend.eh.status_major, VMS_MSCP_ST_SUCCESS,
@@ -1074,6 +1212,106 @@ static void test_request_timeout(void)
 }
 
 /* ------------------------------------------------------------------ *
+ * 11b. WHO OWNS THE STAGING SLOT WHILE THE WORKER HAS IT (FC-P6.6)
+ *
+ * This is the concurrency half of the item, and it is the half that would
+ * corrupt a volume if it were wrong. While the worker holds an HRB's staging
+ * slot, NOTHING on the fork thread may free that HRB -- not the reaper, not a
+ * connection close -- because freeing it returns the slot to the pool while
+ * another thread is still writing into it, and hands the same bytes to the next
+ * request. Both paths must instead RECORD their intent and let the completion
+ * carry it out.
+ * ------------------------------------------------------------------ */
+static void test_io_worker_ownership(void)
+{
+	struct srv_env e;
+	struct vms_mscp_xfer_end end;
+	uint32_t tag;
+
+	printf("-- the worker owns the slot: no reap, no close, no reuse under it\n");
+
+	/* (a) THE REAPER. A request past the controller timeout that the worker
+	 * still holds is NOT reaped: the lateness is recorded once and the
+	 * transfer is left to complete, exactly as a VMS server leaves an IRP
+	 * outstanding to a local driver. */
+	env_init(&e);
+	env_add_unit(&e, 0u, 16u, 0);
+	env_open(&e);
+	(void)env_build_online(&e, 0x900001u, 0u, 0u, 0u);
+	(void)env_feed(&e);
+	(void)env_build_xfer(&e, VMS_MSCP_OP_READ, 0x260001u, 0u, 512u, 0u, 0u,
+			     0x0200001bu, 0x00020007u);
+	(void)env_feed(&e);
+	ct_check_eq_u32(e.fake.submits, 1, "the READ is with the worker");
+	e.fake.ends = 0u;
+
+	e.fake.now_ms += MSCP_SRV_REQ_TIMEOUT_MS;
+	ct_check_eq_u32(mscp_srv_fsm_tick(&e.fsm), 0,
+			"the reaper does NOT reap a request the worker holds");
+	ct_check_eq_u32(e.fsm.reqs_abort_deferred, 1,
+			"it records the lateness instead");
+	ct_check_eq_u32(e.fsm.reqs_aborted, 0, "nothing was aborted");
+	ct_check_eq_u32(e.fake.ends, 0, "and nothing was answered behind the worker");
+	/* And it does not re-count on every beat. */
+	e.fake.now_ms += MSCP_SRV_REQ_TIMEOUT_MS;
+	(void)mscp_srv_fsm_tick(&e.fsm);
+	ct_check_eq_u32(e.fsm.reqs_abort_deferred, 1, "recorded ONCE, not per beat");
+
+	/* The completion still lands, and the host is told what ACTUALLY
+	 * happened to the volume -- not an abort for a transfer that worked. */
+	ct_check_eq_u32(env_io_complete(&e), 0, "the worker finished, late");
+	(void)vms_mscp_read_end_parse(e.fake.end_frame,
+				      (uint32_t)sizeof(e.fake.end_frame), &end);
+	ct_check_eq_u32(end.eh.status_major, VMS_MSCP_ST_SUCCESS,
+			"a late transfer that SUCCEEDED is reported as a success");
+	ct_check_eq_u32(end.eh.hdr.cmd_ref, 0x260001u, "on its own P.CRF");
+
+	/* (b) THE CONNECTION CLOSING under an in-flight transfer. */
+	env_init(&e);
+	env_add_unit(&e, 0u, 16u, 0);
+	env_open(&e);
+	(void)env_build_online(&e, 0x900001u, 0u, 0u, 0u);
+	(void)env_feed(&e);
+	(void)env_build_xfer(&e, VMS_MSCP_OP_READ, 0x260002u, 0u, 512u, 0u, 0u,
+			     0x0200001bu, 0x00020007u);
+	(void)env_feed(&e);
+	tag = e.fake.io.tag;
+	e.fake.ends = 0u;
+	e.fake.xfers = 0u;
+
+	mscp_srv_fsm_conn_closed(&e.fsm, FAKE_CONID);
+	ct_check(mscp_srv_fsm_hqb_at(&e.fsm, 0) == NULL,
+		 "the HQB is gone with its connection");
+
+	/* The completion arrives after the host is gone: freed in SILENCE, and
+	 * only now -- which is the point, because only now is the slot back. */
+	(void)env_io_complete(&e);
+	ct_check_eq_u32(e.fsm.reqs_abandoned, 1,
+			"the request was ended when the WORKER handed the slot back");
+	ct_check_eq_u32(e.fake.ends, 0,
+			"and nothing was sent to a connection that no longer exists");
+	ct_check_eq_u32(e.fake.xfers, 0, "no block transfer either");
+
+	/* (c) THE TAG, not the slot index, is the key. Replaying the very same
+	 * completion must not touch whatever request now owns that HRB. */
+	env_open(&e);   /* a NEW connection reuses HQB slot 0 */
+	(void)env_build_online(&e, 0x900002u, 0u, 0u, 0u);
+	(void)env_feed(&e);
+	(void)env_build_xfer(&e, VMS_MSCP_OP_READ, 0x260003u, 0u, 512u, 0u, 0u,
+			     0x0200001bu, 0x00020007u);
+	(void)env_feed(&e);
+	e.fake.ends = 0u;
+	mscp_srv_fsm_io_done(&e.fsm, tag, 0u);   /* the DEAD request's tag */
+	ct_check_eq_u32(e.fsm.io_done_stale, 1,
+			"a replayed completion is counted stale and DROPPED");
+	ct_check_eq_u32(e.fake.ends, 0,
+			"...never applied to the request that now owns the slot");
+	ct_check_eq_u32(env_io_complete(&e), 0,
+			"and the live request completes on its OWN tag");
+	ct_check_eq_u32(e.fake.xfers, 1, "with its own transfer");
+}
+
+/* ------------------------------------------------------------------ *
  * 12. The SHIPPING glue's bindings, read out of the real source
  *
  * vms_mscp_srv.c names exec_kbackend.h and the FC-P0.5 fork API, so it cannot
@@ -1109,10 +1347,15 @@ static void test_glue_source(void)
 
 	ct_check(strstr(s, "vms_acp_volume_at") != NULL,
 		 "units come from the ODS-2 ACP's own mounted-volume table");
-	ct_check(strstr(s, "exec_blockdev_read_block") != NULL,
-		 "READ goes to the executive's block seam");
-	ct_check(strstr(s, "exec_blockdev_write_block") != NULL,
-		 "WRITE goes to the executive's block seam");
+	ct_check(strstr(s, "cf_io_post") != NULL,
+		 "a served transfer is HANDED to the FC-P0.5 served-I/O worker");
+	ct_check(strstr(s, "CF_WORK_IO_DONE") != NULL &&
+		 strstr(s, "mscp_srv_fsm_io_done") != NULL,
+		 "and its completion comes back to the fork thread as work");
+	ct_check(strstr(s, "vms_cluster_fork_worker_start") != NULL &&
+		 strstr(s, "vms_cluster_fork_worker_stop") != NULL,
+		 "the glue owns the worker's lifecycle -- and JOINS it before "
+		 "freeing the staging buffer it lent");
 	ct_check(strstr(s, "pe_send_block_read_end") != NULL,
 		 "READ data rides the port's THIRD service (FC-P6.1)");
 	ct_check(strstr(s, "pe_buf_register") != NULL,
@@ -1142,6 +1385,41 @@ static void test_glue_source(void)
 		 "the glue composes NO MSCP status -- the pure server does");
 	ct_check(strstr(s, "_end_build") == NULL,
 		 "and it builds NO end message");
+
+	/*
+	 * FC-P6.6's OWN negative half, and the reason this item exists. Every
+	 * function in vms_mscp_srv.c runs on the CLUSTER FORK THREAD, which
+	 * design SS3.2.6 forbids from calling the block seam: a synchronous
+	 * served read here stalls the HELLO cadence and every member's barrier
+	 * behind it. The symbol must not appear in this file AT ALL -- the
+	 * calls live in vms_mscp_srv_io.c, on the worker thread.
+	 * tools/ci/cluster_core_includes_gate.sh RULE 5 enforces the same fact
+	 * across the whole cluster core -- and does it properly, on
+	 * COMMENT-STRIPPED source, which is why the rule's home is there. This
+	 * is its in-test twin: it looks for the CALL FORM, so a regression
+	 * reddens the unit suite too and not only CI. (The file's own
+	 * doc-comment names the symbol while explaining the rule; that is the
+	 * rule being stated, not broken.)
+	 */
+	ct_check(strstr(s, "exec_blockdev_read_block(") == NULL &&
+		 strstr(s, "exec_blockdev_write_block(") == NULL,
+		 "the FORK-THREAD glue CALLS no exec_blockdev_ op (FC-P6.6)");
+
+	/* ...and the worker TU is where they really are, so the check above
+	 * cannot pass merely because the calls were deleted. */
+	s = slurp(OVMX_KCORE_DIR "/vms_mscp_srv_io.c");
+	if (s == NULL) {
+		ct_check(0, "vms_mscp_srv_io.c is readable");
+		return;
+	}
+	ct_check(strstr(s, "exec_blockdev_read_block") != NULL,
+		 "the WORKER TU is where READ reaches the executive's block seam");
+	ct_check(strstr(s, "exec_blockdev_write_block") != NULL,
+		 "...and WRITE");
+	ct_check(strstr(s, "cf_set_work_handler") == NULL &&
+		 strstr(s, "cf_set_rx_handler") == NULL,
+		 "and the worker TU registers NO fork-context handler, so it "
+		 "cannot become fork-context code");
 }
 
 /* ------------------------------------------------------------------ *
@@ -1310,6 +1588,7 @@ int main(void)
 	test_registration_predicate();
 	test_unit_naming();
 	test_request_timeout();
+	test_io_worker_ownership();
 	test_glue_source();
 	test_client_interop();
 	return ct_summary("test_mscp_srv");

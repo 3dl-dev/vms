@@ -22,8 +22,9 @@
  * volume table (the ODS-2 ACP does). Every one of those is reached through
  * `struct mscp_srv_ops` below, and the GLUE (vms_mscp_srv.c) binds them to
  * the real executive. That division is what makes the R1 rung possible: a
- * FAKE volume behind `unit_at`/`read_blocks`/`write_blocks` drives the whole
- * SCC/GUS/ONLINE/READ/WRITE ladder with no kernel at all.
+ * FAKE volume behind `unit_at` and a FAKE WORKER behind `io_submit` (one that
+ * completes when the test says so) drive the whole SCC/GUS/ONLINE/READ/WRITE
+ * ladder, including the async waits, with no kernel and no thread at all.
  *
  * ------------------------------------------------------------------------
  * THE THREE SERVER STRUCTURES (design SS3.4's "DSRV, UQB, HQB, HRB" row)
@@ -101,6 +102,43 @@
  *             geometry-less unit in the reference corpus emits.
  *   P.VSER    the glue's value or an honest, counted zero -- same rule as
  *             P.MEDI.
+ *
+ * ------------------------------------------------------------------------
+ * LOCAL I/O IS ASYNCHRONOUS (FC-P6.6, design §3.2.6's E42 corollary)
+ * ------------------------------------------------------------------------
+ * A real MSCP server does not stall its port on a disk. It issues local I/O
+ * asynchronously -- an IRP to the local driver -- and completes the MSCP
+ * command on THAT I/O's completion. FC-P6.3's first cut called the executive's
+ * synchronous block seam straight out of the command handler, which on OVMX
+ * means the CLUSTER FORK THREAD: the one context that also carries the HELLO
+ * cadence, the VC retransmit ladder and every barrier step. A 20 ms served read
+ * was therefore a 20 ms cluster stall on this node and, through the barrier, on
+ * every other member -- a TIMVCFAIL risk under load, on real hardware.
+ *
+ * So this file no longer has a `read_blocks`/`write_blocks` op it can call and
+ * wait on. It has ONE downward door for storage, `ops->io_submit`, which HANDS
+ * the transfer to a served-I/O worker and returns immediately; the worker's
+ * answer arrives later at mscp_srv_fsm_io_done(). The HRB is what spans the
+ * gap -- which is exactly what a real server's HRB is for, since the published
+ * description has it hold the IRP.
+ *
+ * AN HRB IS THEREFORE IN ONE OF TWO WAITS (enum mscp_srv_req_state):
+ *
+ *   WAIT_DATA  the peer's bytes have not all arrived (a WRITE between its
+ *              command and its last block-transfer frame). The port owns the
+ *              staging slot; the reaper may end this request at any time.
+ *   WAIT_IO    the WORKER holds the staging slot and will answer exactly once.
+ *              NOTHING may free the HRB, release its slot, or answer its
+ *              command until that completion lands -- not the reaper, not a
+ *              connection close. Both instead RECORD their intent
+ *              (`abort_pending`, `abandoned`) and the completion path carries
+ *              it out. That is the whole of the concurrency discipline here,
+ *              and it is why a completion is matched by `io_tag` -- a number
+ *              this server minted and never reuses while it is outstanding --
+ *              rather than by an HRB index another request may already own.
+ *
+ * The fork thread still does ALL the protocol: it builds the end message and
+ * drives the SEND DATA from the completion. Only the waiting moved.
  *
  * ------------------------------------------------------------------------
  * WRITE PROTECTION IS ANSWERED, NOT FAKED (the plan row's own clause)
@@ -269,21 +307,92 @@ struct mscp_srv_hqb {
  * its HRB until it completes. Nothing here is a guess: the descriptor was read
  * off the command and the buffer name is the one OUR port minted.
  * ========================================================================== */
+
+/*
+ * WHICH WAIT AN HRB IS IN. See the file header's "LOCAL I/O IS ASYNCHRONOUS":
+ * the distinction is not cosmetic -- it decides who owns the staging slot, and
+ * therefore who is allowed to free the HRB.
+ */
+enum mscp_srv_req_state {
+	MSCP_SRV_REQ_WAIT_DATA = 0,  /* the PORT owns the slot: peer bytes due */
+	MSCP_SRV_REQ_WAIT_IO   = 1,  /* the WORKER owns the slot: hands off    */
+	MSCP_SRV_REQ__COUNT
+};
+
 struct mscp_srv_hrb {
 	uint8_t                 in_use;
 	uint8_t                 opcode;       /* VMS_MSCP_OP_READ / _WRITE   */
 	uint8_t                 hqb;          /* HQB slot                    */
 	uint8_t                 uqb;          /* UQB slot                    */
+	uint8_t                 state;        /* enum mscp_srv_req_state     */
+	/*
+	 * The reaper found this request past its deadline while the WORKER
+	 * still owned the staging slot, and so could not end it.
+	 *
+	 * IT DOES NOT ABORT THE I/O, and the completion path does not answer
+	 * "Command Aborted" because of it: the local transfer owns its own
+	 * completion, exactly as a VMS IRP outstanding to a local driver does,
+	 * and the honest answer to the host is what ACTUALLY happened to the
+	 * volume -- reporting an abort for a write that landed would be a lie
+	 * about the disk. The flag exists so the beat records the lateness
+	 * ONCE (`reqs_abort_deferred`) instead of every second.
+	 */
+	uint8_t                 abort_pending;
+	/*
+	 * The host's connection went away while the WORKER still owned the
+	 * slot. There is nobody left to answer (sec 4.1: no command survives a
+	 * connection's incarnation), so the completion frees it in silence.
+	 */
+	uint8_t                 abandoned;
+	uint8_t                 pad0;
 	uint32_t                cmd_ref;      /* P.CRF, echoed back          */
 	uint16_t                unit;         /* P.UNIT the host addressed   */
-	uint16_t                pad0;
+	uint16_t                pad1;
 	uint32_t                lbn;          /* P.LBN                       */
 	uint32_t                byte_count;   /* P.BCNT                      */
 	uint32_t                received;     /* bytes the port ACTUALLY took
 					       * into our buffer so far      */
 	uint32_t                local_name;   /* OUR port's buffer name, 0 = none */
+	/*
+	 * The tag this server minted for the OUTSTANDING worker request, or 0
+	 * when none is outstanding. A completion is matched on THIS, never on
+	 * an HRB index: an index is reused the moment a request completes, and
+	 * a late completion landing on its successor would answer the wrong
+	 * host's command with another host's status.
+	 */
+	uint32_t                io_tag;
 	uint32_t                started_ms;
 	struct mscp_srv_bufdesc desc;         /* READ off the command        */
+};
+
+/* ==========================================================================
+ * 6b. The served-unit I/O this server hands to the WORKER (FC-P6.6)
+ *
+ * Every field is READ from something real: the unit number from the executive's
+ * own device name (through the UQB), the LBN and the block count from the
+ * host's own command after this server's gates passed them, and the buffer is
+ * the HRB's exclusive staging slot. `tag` is this server's own outstanding-
+ * request identity, echoed back by the worker so a completion can be matched to
+ * the request that asked for it and to nothing else.
+ * ========================================================================== */
+enum mscp_srv_io_op {
+	MSCP_SRV_IO_READ  = 0,
+	MSCP_SRV_IO_WRITE = 1
+};
+
+struct mscp_srv_io_req {
+	uint32_t tag;        /* the HRB's io_tag; echoed in the completion */
+	uint8_t  op;         /* enum mscp_srv_io_op                       */
+	uint8_t  pad0[1];
+	uint16_t unit;       /* the served unit NUMBER (the UQB's own)     */
+	uint32_t lbn;
+	uint32_t nblocks;
+	/*
+	 * The HRB's staging slot. The WORKER owns these bytes from the moment
+	 * io_submit returns 0 until the completion is delivered; this file
+	 * neither reads nor writes them in that window.
+	 */
+	uint8_t *buf;
 };
 
 /* ==========================================================================
@@ -300,13 +409,22 @@ struct mscp_srv_ops {
 	int (*unit_at)(void *ctx, uint32_t index,
 		       struct mscp_srv_unit_info *out);
 
-	/* Whole-block I/O on a served unit's REAL backing device. Return 0 on
-	 * success, non-zero on any failure -- which this file answers with a
-	 * real MSCP error status, never with a success it cannot back up. */
-	int (*read_blocks)(void *ctx, uint16_t unit, uint32_t lbn,
-			   uint32_t nblocks, uint8_t *buf);
-	int (*write_blocks)(void *ctx, uint16_t unit, uint32_t lbn,
-			    uint32_t nblocks, const uint8_t *buf);
+	/*
+	 * HAND whole-block I/O on a served unit's REAL backing device to the
+	 * served-I/O worker. THIS CALL DOES NOT PERFORM THE I/O and must never
+	 * block: it queues the request and returns.
+	 *
+	 * Returns 0 when the worker ACCEPTED it -- and then exactly one
+	 * mscp_srv_fsm_io_done() with this `tag` will follow, and until it does
+	 * the worker owns req->buf. Non-zero means the request was NOT queued
+	 * (no worker, or its queue is full), which this file answers with a
+	 * real MSCP error status, never with a success it cannot back up.
+	 *
+	 * There is deliberately no synchronous twin. Design §3.2.6: "the
+	 * cluster fork thread never calls exec_blockdev_*", and an op this file
+	 * could wait on is exactly how that rule gets broken back.
+	 */
+	int (*io_submit)(void *ctx, const struct mscp_srv_io_req *req);
 
 	/* Send one MSCP end-message BODY (byte 0 == frame-absolute 72) on a
 	 * connection. Production: scs_send_msg through the glue. */
@@ -413,6 +531,13 @@ struct mscp_srv_fsm {
 	uint32_t  xferbuf_slot;
 
 	/*
+	 * The next outstanding-request tag to mint (FC-P6.6). Monotonic, and
+	 * ZERO IS NEVER HANDED OUT -- 0 is this file's "no I/O outstanding" on
+	 * an HRB, so a tag of 0 would make an idle HRB match a completion.
+	 */
+	uint32_t next_io_tag;
+
+	/*
 	 * The two SPLICE scratches. The FC-P6.2 codec addresses an MSCP
 	 * message at FRAME-ABSOLUTE offsets (VMS_OFF_MSCP_* are all
 	 * VMS_OFF_SYSAP_BODY + n), while a SYSAP is handed -- and hands back --
@@ -447,6 +572,18 @@ struct mscp_srv_fsm {
 	uint32_t unfl_no_host_value;  /* P.UNFL with no host half yet            */
 	uint32_t reqs_aborted;        /* HRBs the timeout reaped (Command Aborted) */
 	uint32_t reqs_refused_busy;   /* no HRB free: refused, never overwritten  */
+
+	/* The served-I/O worker (FC-P6.6). Every submitted request ends in
+	 * exactly one of io_done_ok / io_done_failed / reqs_abandoned, or is
+	 * still outstanding; a completion that matches no outstanding request
+	 * is io_done_stale and is DROPPED, never applied to another request. */
+	uint32_t io_submitted;        /* handed to the worker                    */
+	uint32_t io_refused;          /* the worker would not take it: real error*/
+	uint32_t io_done_ok;          /* completions the block layer called good */
+	uint32_t io_done_failed;      /* completions the block layer called bad  */
+	uint32_t io_done_stale;       /* a completion for no outstanding request */
+	uint32_t reqs_abort_deferred; /* reaper hit an HRB the worker still held */
+	uint32_t reqs_abandoned;      /* host went away mid-I/O: freed in silence*/
 };
 
 /* ==========================================================================
@@ -511,10 +648,33 @@ void mscp_srv_fsm_block_data(struct mscp_srv_fsm *f, uint32_t name,
 			     uint32_t bytes_remaining);
 
 /*
+ * THE SERVED-I/O WORKER'S ANSWER (FC-P6.6), delivered on the FORK THREAD as a
+ * CF_WORK_IO_DONE work item -- so the protocol this drives (the READ's SEND
+ * DATA and its piggybacked end message, the WRITE's end message) is still built
+ * in the one serialised context, exactly like every other event.
+ *
+ * `tag` is the value this server minted in the submitted mscp_srv_io_req, and
+ * `status` is the executive block seam's REAL answer -- 0 for a transfer that
+ * happened, non-zero for one that did not. This file never invents either: a
+ * non-zero status becomes a real Drive Error with a zero byte count, never a
+ * success it cannot back up (INV-6).
+ *
+ * A `tag` matching no outstanding request is COUNTED (`io_done_stale`) and
+ * dropped -- the only honest thing to do with an answer to a question nobody is
+ * still asking.
+ */
+void mscp_srv_fsm_io_done(struct mscp_srv_fsm *f, uint32_t tag, uint32_t status);
+
+/*
  * The server's own beat. Reaps any HRB older than MSCP_SRV_REQ_TIMEOUT_MS and
  * answers it "Command Aborted" (Table B-1 ST.ABO) -- the honest end for a
  * transfer whose bytes never arrived, in place of an HRB that leaks and a host
  * that waits forever. Returns how many were reaped (0 on a normal beat).
+ *
+ * An HRB the WORKER still owns is NOT reaped here: its staging slot is in
+ * another thread's hands, so the abort is RECORDED (`abort_pending`, counted in
+ * `reqs_abort_deferred`) and carried out by mscp_srv_fsm_io_done() when the
+ * slot really comes back. Deferred, never forgotten and never a use-after-free.
  */
 uint32_t mscp_srv_fsm_tick(struct mscp_srv_fsm *f);
 

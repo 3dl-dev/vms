@@ -59,6 +59,7 @@ const char *cf_status_name(cf_status_t st)
 	case CF_E_NOBUF:     return "CF_E_NOBUF";
 	case CF_E_TOOBIG:    return "CF_E_TOOBIG";
 	case CF_E_NOSLOT:    return "CF_E_NOSLOT";
+	case CF_E_NOWORKER:  return "CF_E_NOWORKER";
 	}
 	return "CF_E_?";
 }
@@ -100,8 +101,30 @@ struct cf_tslot {
 	uint8_t  pad[3];
 };
 
+/*
+ * A queued served-I/O request (FC-P6.6): the layer's copied struct cf_io with a
+ * queue link appended, exactly like a work continuation -- plus the work item
+ * its COMPLETION will be posted in.
+ *
+ * WHY THE COMPLETION IS RESERVED AT SUBMIT TIME. A layer that hands over a
+ * transfer parks a request until the answer comes back (the MSCP server's HRB
+ * holds its staging slot for exactly that long). If the completion could be
+ * refused for want of a work item, an ACCEPTED request would never be answered
+ * and that park would be permanent -- the one failure mode this queue must not
+ * have. So the item is taken WITH the request or the request is not accepted at
+ * all: a refusal the submitter can answer, instead of a stuck request it
+ * cannot. (The same reasoning as the HRB owning its staging slot for its whole
+ * life, one layer down.)
+ */
+struct cf_ioitem {
+	struct cf_io      io;
+	struct cf_witem  *done;
+	struct cf_ioitem *next;
+};
+
 struct cf_rxq { struct cf_rxbuf *head, *tail; };
 struct cf_wq  { struct cf_witem *head, *tail; };
+struct cf_ioq { struct cf_ioitem *head, *tail; };
 
 struct vms_cluster_fork {
 	struct cf_ops    ops;
@@ -112,23 +135,32 @@ struct vms_cluster_fork {
 	uint8_t         *rxdata;
 	struct cf_witem *witems;
 	struct cf_tslot *tslots;
+	struct cf_ioitem *ioitems;
 
 	struct cf_rxq rx_free;
 	struct cf_rxq rx_ready;
 	struct cf_wq  w_free;
 	struct cf_wq  w_ready;
+	struct cf_ioq io_free;
+	struct cf_ioq io_ready;
 
 	cf_rx_handler_t   rx_cb;
 	void             *rx_ctx;
 	cf_work_handler_t work_cb[CF_OWNER__COUNT];
 	void             *work_ctx[CF_OWNER__COUNT];
+	cf_io_handler_t   io_cb[CF_OWNER__COUNT];
+	void             *io_ctx[CF_OWNER__COUNT];
 
 	uint32_t n_rx_free;
 	uint32_t n_w_free;
+	uint32_t n_io_free;
 	uint32_t n_slots;
 
 	uint8_t serve_rx_next;   /* round-robin cursor, see cf_take_event */
 	uint8_t stopping;
+	uint8_t io_stopping;     /* the WORKER's own stop, independent of the
+				  * context's: an MSCP server can stop serving
+				  * without the node leaving the cluster    */
 
 	struct cf_stats st;
 };
@@ -183,6 +215,29 @@ static struct cf_witem *wq_pop(struct cf_wq *q)
 	return it;
 }
 
+static void ioq_push(struct cf_ioq *q, struct cf_ioitem *it)
+{
+	it->next = CF_NULL;
+	if (q->tail)
+		q->tail->next = it;
+	else
+		q->head = it;
+	q->tail = it;
+}
+
+static struct cf_ioitem *ioq_pop(struct cf_ioq *q)
+{
+	struct cf_ioitem *it = q->head;
+
+	if (!it)
+		return CF_NULL;
+	q->head = it->next;
+	if (!q->head)
+		q->tail = CF_NULL;
+	it->next = CF_NULL;
+	return it;
+}
+
 /* ==================================================================== *
  * 3. Construction
  * ==================================================================== */
@@ -203,6 +258,7 @@ void cf_config_normalize(struct cf_config *c, const struct cf_config *in)
 	c->rx_cap      = (in && in->rx_cap)      ? in->rx_cap      : CF_RX_CAP_DEFAULT;
 	c->work_items  = (in && in->work_items)  ? in->work_items  : CF_WORK_ITEMS_DEFAULT;
 	c->timer_slots = (in && in->timer_slots) ? in->timer_slots : CF_TIMER_SLOTS_DEFAULT;
+	c->io_items    = (in && in->io_items)    ? in->io_items    : CF_IO_ITEMS_DEFAULT;
 }
 
 static int cf_build_rx_pool(struct vms_cluster_fork *f)
@@ -243,6 +299,23 @@ static int cf_build_work_pool(struct vms_cluster_fork *f)
 	return 1;
 }
 
+static int cf_build_io_pool(struct vms_cluster_fork *f)
+{
+	uint32_t i;
+
+	f->ioitems = (struct cf_ioitem *)f->ops.alloc(f->ops.ctx,
+			f->cfg.io_items * (uint32_t)sizeof(*f->ioitems));
+	if (!f->ioitems)
+		return 0;
+
+	for (i = 0; i < f->cfg.io_items; i++) {
+		cf_zero(&f->ioitems[i], (uint32_t)sizeof(f->ioitems[i]));
+		ioq_push(&f->io_free, &f->ioitems[i]);
+	}
+	f->n_io_free = f->cfg.io_items;
+	return 1;
+}
+
 static int cf_build_timer_slots(struct vms_cluster_fork *f)
 {
 	f->tslots = (struct cf_tslot *)f->ops.alloc(f->ops.ctx,
@@ -271,7 +344,7 @@ struct vms_cluster_fork *cf_create(const struct cf_ops *ops,
 	f->serve_rx_next = 1;   /* frames first on the very first dispatch */
 
 	if (!cf_build_rx_pool(f) || !cf_build_work_pool(f) ||
-	    !cf_build_timer_slots(f)) {
+	    !cf_build_io_pool(f) || !cf_build_timer_slots(f)) {
 		cf_destroy(f);
 		return CF_NULL;
 	}
@@ -291,6 +364,8 @@ void cf_destroy(struct vms_cluster_fork *f)
 		ops.free(ops.ctx, f->rxbufs);
 	if (f->witems)
 		ops.free(ops.ctx, f->witems);
+	if (f->ioitems)
+		ops.free(ops.ctx, f->ioitems);
 	if (f->tslots)
 		ops.free(ops.ctx, f->tslots);
 	ops.free(ops.ctx, f);
@@ -405,6 +480,293 @@ cf_status_t cf_post(struct vms_cluster_fork *f, const struct cf_work *w)
 	st = cf_enqueue_locked(f, w, 0);
 	f->ops.unlock(f->ops.ctx);
 	return st;
+}
+
+/* ==================================================================== *
+ * 5a. The SERVED-I/O WORKER (FC-P6.6, design §3.2.6's E42 corollary)
+ *
+ * The one place in the cluster stack where a BLOCKING substrate call is legal,
+ * and the queue discipline that gets a result from there back to the fork
+ * thread. Read vms_cluster_fork.h §7a first: it carries the contract, the
+ * reason the fork thread may never make the call itself, and the lock order.
+ *
+ * Nothing here interprets a request. `op`, `tag`, `arg0..3` and `ptr` pass
+ * through untouched, and the callback's status word is delivered VERBATIM --
+ * a served READ's answer on the wire is the block layer's real answer, never a
+ * value this module chose (INV-6).
+ * ==================================================================== */
+
+/* Is a worker actually available for `owner`? Caller holds the queue lock.
+ * "Available" means the binding gave us the three §15/§2 worker ops AND the
+ * layer registered a callback -- either half missing is an honest refusal, not
+ * a reason to run the I/O somewhere it does not belong. */
+static int cf_io_available_locked(const struct vms_cluster_fork *f,
+				  enum cf_owner owner)
+{
+	return f->ops.io_wait && f->ops.io_wake && f->ops.io_should_stop &&
+	       f->io_cb[owner] != CF_NULL;
+}
+
+cf_status_t cf_set_io_handler(struct vms_cluster_fork *f, enum cf_owner owner,
+			      cf_io_handler_t cb, void *ctx)
+{
+	if (!f || (unsigned)owner >= (unsigned)CF_OWNER__COUNT)
+		return CF_E_INVAL;
+	f->ops.lock(f->ops.ctx);
+	f->io_cb[owner]  = cb;
+	f->io_ctx[owner] = ctx;
+	if (cb) {
+		/* Registering re-opens the worker after a stop: a layer that
+		 * stopped serving and started again is served again. */
+		f->io_stopping = 0;
+		f->st.io_stopping = 0;
+	}
+	f->ops.unlock(f->ops.ctx);
+	return CF_OK;
+}
+
+/* Caller holds the queue lock. Take an io item AND the work item its completion
+ * will use, or neither (see struct cf_ioitem's note). */
+static struct cf_ioitem *cf_io_alloc_locked(struct vms_cluster_fork *f)
+{
+	struct cf_ioitem *it = ioq_pop(&f->io_free);
+
+	if (!it)
+		return CF_NULL;
+	it->done = wq_pop(&f->w_free);
+	if (!it->done) {
+		ioq_push(&f->io_free, it);
+		return CF_NULL;
+	}
+	f->n_io_free--;
+	f->n_w_free--;
+	return it;
+}
+
+/* Caller holds the queue lock. Give both halves back. `done` is released only
+ * if it is still ours -- once the completion is queued it belongs to the work
+ * queue. */
+static void cf_io_release_locked(struct vms_cluster_fork *f,
+				 struct cf_ioitem *it)
+{
+	if (it->done) {
+		cf_zero(it->done, (uint32_t)sizeof(*it->done));
+		wq_push(&f->w_free, it->done);
+		f->n_w_free++;
+	}
+	cf_zero(it, (uint32_t)sizeof(*it));
+	ioq_push(&f->io_free, it);
+	f->n_io_free++;
+}
+
+cf_status_t cf_io_post(struct vms_cluster_fork *f, const struct cf_io *io)
+{
+	struct cf_ioitem *it;
+
+	if (!f || !io || (unsigned)io->owner >= (unsigned)CF_OWNER__COUNT)
+		return CF_E_INVAL;
+
+	f->ops.lock(f->ops.ctx);
+	if (!cf_io_available_locked(f, (enum cf_owner)io->owner)) {
+		f->st.io_refused_noworker++;
+		f->ops.unlock(f->ops.ctx);
+		return CF_E_NOWORKER;
+	}
+	if (f->stopping || f->io_stopping) {
+		f->st.io_refused_stopping++;
+		f->ops.unlock(f->ops.ctx);
+		return CF_E_STOPPING;
+	}
+	it = cf_io_alloc_locked(f);
+	if (!it) {
+		f->st.io_dropped_nobuf++;
+		f->ops.unlock(f->ops.ctx);
+		return CF_E_NOBUF;
+	}
+	it->io = *io;
+	ioq_push(&f->io_ready, it);
+	f->st.io_posted++;
+	f->ops.io_wake(f->ops.ctx);   /* under the lock: the cv contract */
+	f->ops.unlock(f->ops.ctx);
+	return CF_OK;
+}
+
+void cf_io_start(struct vms_cluster_fork *f)
+{
+	if (!f)
+		return;
+	f->ops.lock(f->ops.ctx);
+	f->io_stopping = 0;
+	f->st.io_stopping = 0;
+	f->ops.unlock(f->ops.ctx);
+}
+
+void cf_io_request_stop(struct vms_cluster_fork *f)
+{
+	if (!f)
+		return;
+	f->ops.lock(f->ops.ctx);
+	f->io_stopping = 1;
+	f->st.io_stopping = 1;
+	if (f->ops.io_wake)
+		f->ops.io_wake(f->ops.ctx);   /* under the lock: cv contract */
+	f->ops.unlock(f->ops.ctx);
+}
+
+/* Caller holds the queue lock. Return every QUEUED request to the pool: the
+ * layer that submitted them is going away, so running them would be work for
+ * nobody. Counted, never silently discarded. */
+static void cf_io_abandon_locked(struct vms_cluster_fork *f)
+{
+	struct cf_ioitem *it;
+
+	while ((it = ioq_pop(&f->io_ready)) != CF_NULL) {
+		cf_io_release_locked(f, it);
+		f->st.io_abandoned++;
+	}
+}
+
+/* Take the next request, or report that there is none. Returns 1 with the
+ * request copied out and the owner's callback and its ctx bound; the pool entry
+ * is already back on the free list, so a callback may submit while it runs. */
+static int cf_io_take(struct vms_cluster_fork *f, struct cf_ioitem **out,
+		      cf_io_handler_t *cb, void **cbctx)
+{
+	struct cf_ioitem *it;
+
+	f->ops.lock(f->ops.ctx);
+	if (f->io_stopping || f->stopping) {
+		cf_io_abandon_locked(f);
+		f->ops.unlock(f->ops.ctx);
+		return 0;
+	}
+	it = ioq_pop(&f->io_ready);
+	if (!it) {
+		f->ops.unlock(f->ops.ctx);
+		return 0;
+	}
+	/*
+	 * The item stays OFF the free list for the whole callback: it carries
+	 * the reserved completion work item, which is what guarantees this
+	 * request can be answered.
+	 */
+	*out   = it;
+	*cb    = f->io_cb[it->io.owner];
+	*cbctx = f->io_ctx[it->io.owner];
+	f->st.io_started++;
+	f->ops.unlock(f->ops.ctx);
+	return 1;
+}
+
+/*
+ * Hand one finished request's status back to its layer as an ordinary work
+ * item, in the item RESERVED for it at submit time -- so an accepted request is
+ * always answered. The only thing that can still stop the answer is a stop
+ * (which is tearing the layer down anyway), and that is counted.
+ */
+static void cf_io_complete(struct vms_cluster_fork *f, struct cf_ioitem *it,
+			   uint32_t status)
+{
+	struct cf_witem *done;
+
+	f->ops.lock(f->ops.ctx);
+	done = it->done;
+	if (f->stopping) {
+		f->st.io_completion_dropped++;
+	} else {
+		it->done = CF_NULL;   /* it belongs to the work queue now */
+		done->w.owner = it->io.owner;
+		done->w.kind  = CF_WORK_IO_DONE;
+		done->w.arg0  = it->io.tag;
+		done->w.arg1  = status;
+		done->w.ptr   = CF_NULL;
+		done->timer_slot = 0;
+		wq_push(&f->w_ready, done);
+		f->st.work_posted++;
+		f->st.io_completed++;
+		f->ops.wake(f->ops.ctx);   /* under the lock: the cv contract */
+	}
+	cf_io_release_locked(f, it);
+	/* The worker just released a request: a stop waiting for it to go idle
+	 * is woken here, under the lock, by the cv contract. */
+	if (f->ops.io_wake)
+		f->ops.io_wake(f->ops.ctx);
+	f->ops.unlock(f->ops.ctx);
+}
+
+int cf_io_run_one(struct vms_cluster_fork *f)
+{
+	struct cf_ioitem *it = CF_NULL;
+	cf_io_handler_t cb = CF_NULL;
+	void *cbctx = CF_NULL;
+	struct cf_io io;
+	uint32_t status;
+
+	if (!f)
+		return 0;
+	if (!cf_io_take(f, &it, &cb, &cbctx))
+		return 0;
+	if (!cb) {
+		/* Unregistered between the post and the pop. There is nobody to
+		 * run it; the completion still goes back so the submitting
+		 * layer's request cannot hang. */
+		cf_io_complete(f, it, (uint32_t)CF_E_NOWORKER);
+		return 1;
+	}
+
+	/*
+	 * THE BLOCKING CALL, and the only one in the stack: no queue lock, no
+	 * fork mutex, no protocol state -- just the layer's callback and the
+	 * disk. The request is COPIED out first, because the callback may run
+	 * for tens of milliseconds and must not be reading a pool entry.
+	 */
+	io = it->io;
+	status = cb(cbctx, &io);
+	cf_io_complete(f, it, status);
+	return 1;
+}
+
+/* Sleep until there is a request or the worker must exit. Same predicate-first
+ * shape as cf_wait_ready, and the same reason: a stop must not lose an event
+ * that is already queued -- except that here a stop DISCARDS the queue (see
+ * cf_io_request_stop), because its owner is being torn down. */
+static int cf_io_wait_ready(struct vms_cluster_fork *f)
+{
+	int ready;
+
+	f->ops.lock(f->ops.ctx);
+	for (;;) {
+		if (f->io_stopping || f->stopping ||
+		    f->ops.io_should_stop(f->ops.ctx)) {
+			ready = 0;
+			break;
+		}
+		if (f->io_ready.head) {
+			ready = 1;
+			break;
+		}
+		f->st.io_waits++;
+		(void)f->ops.io_wait(f->ops.ctx);
+	}
+	f->ops.unlock(f->ops.ctx);
+	return ready;
+}
+
+void cf_io_run(struct vms_cluster_fork *f)
+{
+	if (!f)
+		return;
+	if (!f->ops.io_wait || !f->ops.io_wake || !f->ops.io_should_stop)
+		return;   /* no worker ops: the thread has nothing to run */
+	while (cf_io_wait_ready(f))
+		(void)cf_io_run_one(f);
+
+	/* Leaving: anything still queued belongs to a layer that is going away.
+	 * Return it to the pool and count it, so the pool is whole for a
+	 * restart and nothing is lost silently. */
+	f->ops.lock(f->ops.ctx);
+	cf_io_abandon_locked(f);
+	f->ops.unlock(f->ops.ctx);
 }
 
 /* ==================================================================== *
@@ -780,6 +1142,11 @@ void cf_request_stop(struct vms_cluster_fork *f)
 	f->stopping = 1;
 	f->st.stopping = 1;
 	f->ops.wake(f->ops.ctx);      /* under the lock: the cv contract */
+	/* The SERVED-I/O WORKER sleeps on its OWN cv, so the context's stop has
+	 * to wake that one too or the worker would sleep through the teardown
+	 * its own layer is being torn down by. */
+	if (f->ops.io_wake)
+		f->ops.io_wake(f->ops.ctx);
 	f->ops.unlock(f->ops.ctx);
 }
 
@@ -796,6 +1163,7 @@ void cf_stats_get(struct vms_cluster_fork *f, struct cf_stats *out)
 	*out = f->st;
 	out->rx_free          = f->n_rx_free;
 	out->work_free        = f->n_w_free;
+	out->io_free          = f->n_io_free;
 	out->timer_slots_used = f->n_slots;
 	f->ops.unlock(f->ops.ctx);
 }

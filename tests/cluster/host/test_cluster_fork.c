@@ -35,6 +35,11 @@ struct fake {
 	int wake_calls;
 	int should_stop;
 
+	/* the SERVED-I/O WORKER's own three ops (FC-P6.6) */
+	int io_wait_calls;
+	int io_wake_calls;
+	int io_should_stop;
+
 	/* the last arm/cancel per slot, so timer wiring can be asserted */
 	uint32_t arm_ms[64];
 	int      arm_count[64];
@@ -134,6 +139,32 @@ static int fk_should_stop(void *ctx)
 	return ((struct fake *)ctx)->should_stop;
 }
 
+/* The SERVED-I/O WORKER's ops (FC-P6.6), held to the SAME rules as the fork
+ * thread's: the wake is only legal under the queue lock, and a sleep in a
+ * single-threaded test is a harness abort, not a hang. */
+static int fk_io_wait(void *ctx)
+{
+	struct fake *f = ctx;
+
+	f->io_wait_calls++;
+	die("cf_io_run slept in a single-threaded test: it would never wake");
+	return 0;
+}
+
+static void fk_io_wake(void *ctx)
+{
+	struct fake *f = ctx;
+
+	if (!f->qlock_depth)
+		die("io wake issued without the queue lock (the cv contract)");
+	f->io_wake_calls++;
+}
+
+static int fk_io_should_stop(void *ctx)
+{
+	return ((struct fake *)ctx)->io_should_stop;
+}
+
 static void *fk_alloc(void *ctx, uint32_t n)
 {
 	struct fake *f = ctx;
@@ -166,6 +197,9 @@ static void fake_ops(struct cf_ops *o, struct fake *f)
 	o->timer_arm    = fk_timer_arm;
 	o->timer_cancel = fk_timer_cancel;
 	o->should_stop  = fk_should_stop;
+	o->io_wait        = fk_io_wait;
+	o->io_wake        = fk_io_wake;
+	o->io_should_stop = fk_io_should_stop;
 	o->alloc        = fk_alloc;
 	o->free         = fk_free;
 	o->ctx          = f;
@@ -615,6 +649,207 @@ static void test_create_validation(void)
 		 "cf_status_name is wired");
 }
 
+/* ------------------------------------------------------------------ *
+ * 11. THE SERVED-I/O WORKER (FC-P6.6, design §3.2.6's E42 corollary)
+ *
+ * The queue discipline that lets the MSCP server make a BLOCKING block-device
+ * call without the fork thread waiting on it. What is proved here is exactly
+ * the three properties the rest of the stack depends on:
+ *
+ *   1. the layer's I/O callback runs with NO lock held -- the fake asserts it,
+ *      so a regression that ran it under the queue lock aborts the harness;
+ *   2. its status comes back as an ordinary CF_WORK_IO_DONE work item, on the
+ *      FORK thread, carrying the submitter's own tag and the callback's own
+ *      status VERBATIM (INV-6: the served READ's answer is the disk's answer);
+ *   3. every refusal is counted and none is silent.
+ * ------------------------------------------------------------------ */
+
+struct io_probe {
+	struct rec  *r;
+	struct fake *fake;
+	int          calls;
+	struct cf_io last;
+	uint32_t     status;
+};
+
+static uint32_t h_io(void *ctx, const struct cf_io *io)
+{
+	struct io_probe *p = ctx;
+
+	/*
+	 * THE CONTRACT, ASSERTED FROM INSIDE THE CALLBACK. In production this
+	 * function is where exec_blockdev_read_block runs and it sleeps for
+	 * milliseconds; holding either lock across it would be exactly the
+	 * stall this whole item removes -- so a regression that ran it under a
+	 * lock aborts the harness here, not in a lab three rungs up.
+	 */
+	if (p->fake->qlock_depth)
+		die("the I/O callback ran with the QUEUE LOCK held");
+	if (p->fake->fork_depth)
+		die("the I/O callback ran with the FORK MUTEX held");
+	p->calls++;
+	p->last = *io;
+	return p->status;
+}
+
+static void test_io_worker(void)
+{
+	struct fake f;
+	struct rec r;
+	struct vms_cluster_fork *fk = mk(&f, &r, 4, 8, 4);
+	struct io_probe p;
+	struct cf_io io;
+	struct cf_stats st;
+
+	printf("-- the served-I/O worker: off the fork thread, back as work\n");
+	memset(&p, 0, sizeof(p));
+	p.r = &r;
+	p.fake = &f;
+	p.status = 0u;
+
+	/* No handler yet: an honest refusal, never a queued request nobody
+	 * will run. */
+	memset(&io, 0, sizeof(io));
+	io.owner = CF_OWNER_PE;
+	io.tag = 0x1001u;
+	ct_check(cf_io_post(fk, &io) == CF_E_NOWORKER,
+		 "with no I/O handler registered a submission is REFUSED");
+	cf_stats_get(fk, &st);
+	ct_check_eq_u32((unsigned long)st.io_refused_noworker, 1, "and counted");
+
+	(void)cf_set_io_handler(fk, CF_OWNER_PE, h_io, &p);
+	io.op = 7u;
+	io.arg0 = 11u;
+	io.arg1 = 22u;
+	io.arg2 = 33u;
+	io.arg3 = 44u;
+	ct_check(cf_io_post(fk, &io) == CF_OK, "now it is accepted");
+	ct_check_eq_u32((unsigned)p.calls, 0,
+			"and NOTHING ran on the submitting thread");
+	ct_check_eq_u32((unsigned)f.io_wake_calls, 1,
+			"the worker was woken, under the queue lock");
+
+	/* The fork thread has nothing to do yet: the completion does not exist
+	 * until the worker has actually run. */
+	ct_check_eq_u32((unsigned)cf_dispatch_one(fk), 0,
+			"no work item exists before the worker runs");
+
+	/* THE WORKER STEP. */
+	ct_check_eq_u32((unsigned)cf_io_run_one(fk), 1, "the worker ran one");
+	ct_check_eq_u32((unsigned)p.calls, 1, "the layer's callback was called");
+	ct_check_eq_u32((unsigned)f.qlock_depth, 0,
+			"...with the queue lock released");
+	ct_check_eq_u32((unsigned)f.fork_depth, 0,
+			"...and the fork mutex never taken");
+	ct_check_eq_u32(p.last.tag, 0x1001u, "the tag arrived verbatim");
+	ct_check_eq_u32(p.last.op, 7u, "and the op");
+	ct_check_eq_u32(p.last.arg0, 11u, "and every argument");
+	ct_check_eq_u32(p.last.arg3, 44u, "...including the last one");
+
+	/* THE COMPLETION, on the FORK thread, as ordinary work. */
+	ct_check_eq_u32((unsigned)cf_dispatch_one(fk), 1,
+			"the completion is an ordinary fork-queue event");
+	ct_check_eq_u32((unsigned)r.n, 1, "one work item was delivered");
+	ct_check(strcmp(r.seq[0], "work:65534/4097") == 0,
+		 "CF_WORK_IO_DONE carrying the submitter's tag (0x1001)");
+
+	cf_stats_get(fk, &st);
+	ct_check_eq_u32((unsigned long)st.io_posted, 1, "io_posted");
+	ct_check_eq_u32((unsigned long)st.io_started, 1, "io_started");
+	ct_check_eq_u32((unsigned long)st.io_completed, 1, "io_completed");
+	ct_check_eq_u32(st.io_free, CF_IO_ITEMS_DEFAULT,
+			"every io item came back to the pool");
+
+	cf_destroy(fk);
+	ct_check_eq_u32((unsigned)f.allocs, (unsigned)f.frees,
+			"every pool allocation was freed");
+}
+
+/* The worker's OWN refusals and its stop: an exhausted pool, a stop that
+ * abandons queued requests rather than running work for a layer that is being
+ * torn down, and a restart that works. */
+static void test_io_worker_refusals_and_stop(void)
+{
+	struct fake f;
+	struct rec r;
+	struct vms_cluster_fork *fk;
+	struct io_probe p;
+	struct cf_io io;
+	struct cf_stats st;
+	struct cf_config c;
+	struct cf_ops o;
+	uint32_t i;
+
+	printf("-- the worker's refusals: counted, never silent\n");
+	memset(&f, 0, sizeof(f));
+	memset(&r, 0, sizeof(r));
+	memset(&p, 0, sizeof(p));
+	memset(&c, 0, sizeof(c));
+	c.rx_bufs = 4;
+	c.rx_cap = 64;
+	c.work_items = 8;
+	c.timer_slots = 4;
+	c.io_items = 2;            /* small, so exhaustion is reachable */
+	fake_ops(&o, &f);
+	fk = cf_create(&o, &c);
+	if (!fk)
+		die("cf_create failed");
+	r.f = fk;
+	p.r = &r;
+	p.fake = &f;
+	(void)cf_set_work_handler(fk, CF_OWNER_PE, h_work, &r);
+	(void)cf_set_io_handler(fk, CF_OWNER_PE, h_io, &p);
+
+	memset(&io, 0, sizeof(io));
+	io.owner = CF_OWNER_PE;
+	for (i = 0; i < c.io_items; i++) {
+		io.tag = 0x2000u + i;
+		ct_check(cf_io_post(fk, &io) == CF_OK, "the pool takes one");
+	}
+	io.tag = 0x20ffu;
+	ct_check(cf_io_post(fk, &io) == CF_E_NOBUF,
+		 "an exhausted io pool is an HONEST refusal, not a wait");
+	cf_stats_get(fk, &st);
+	ct_check_eq_u32((unsigned long)st.io_dropped_nobuf, 1, "and counted");
+
+	/* A worker stop ABANDONS what is queued: its owner is going away. */
+	cf_io_request_stop(fk);
+	ct_check(cf_io_post(fk, &io) == CF_E_STOPPING,
+		 "a submission after the stop is refused");
+	cf_io_run(fk);
+	ct_check_eq_u32((unsigned)p.calls, 0,
+			"NOT one queued request ran after the stop");
+	cf_stats_get(fk, &st);
+	ct_check_eq_u32((unsigned long)st.io_abandoned, c.io_items,
+			"every queued request was returned to the pool AND counted");
+	ct_check_eq_u32(st.io_free, c.io_items, "the pool is whole again");
+	ct_check_eq_u32(st.io_stopping, 1, "and the worker reports it stopped");
+
+	/* Registering a handler again re-opens the worker for a restart. */
+	(void)cf_set_io_handler(fk, CF_OWNER_PE, h_io, &p);
+	io.tag = 0x2100u;
+	ct_check(cf_io_post(fk, &io) == CF_OK,
+		 "re-registering the handler re-opens the worker");
+	ct_check_eq_u32((unsigned)cf_io_run_one(fk), 1, "and it runs again");
+
+	/* A FAILING callback's status travels back UNCHANGED -- the whole point
+	 * of INV-6 at this seam: the server answers the disk's real answer. */
+	p.status = 0xdead0001u;
+	io.tag = 0x2101u;
+	ct_check(cf_io_post(fk, &io) == CF_OK, "another request");
+	(void)cf_io_run_one(fk);
+	r.n = 0;
+	while (cf_dispatch_one(fk))
+		;
+	ct_check(r.n >= 1, "its completion was delivered");
+	ct_check(strcmp(r.seq[r.n - 1], "work:65534/8449") == 0,
+		 "carrying the failing request's own tag (0x2101)");
+
+	cf_destroy(fk);
+	ct_check_eq_u32((unsigned)f.allocs, (unsigned)f.frees,
+			"every pool allocation was freed");
+}
+
 int main(void)
 {
 	printf("test_cluster_fork: the cluster fork context (FC-P0.5, rung R1)\n");
@@ -628,5 +863,7 @@ int main(void)
 	test_undeliverable();
 	test_handler_may_post();
 	test_create_validation();
+	test_io_worker();
+	test_io_worker_refusals_and_stop();
 	return ct_summary("test_cluster_fork");
 }

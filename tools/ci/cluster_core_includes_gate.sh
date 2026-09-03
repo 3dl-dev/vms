@@ -219,6 +219,77 @@ check_pure_tus() {
 	done
 }
 
+# ---------------------------------------------------------------------------
+# RULE 5 -- NO BLOCKING BLOCK-DEVICE CALL ON A FORK-CONTEXT PATH (FC-P6.6).
+#
+# Design SS3.2.6 (the E42 corollary) states it in one line:
+#
+#       "the cluster fork thread never calls exec_blockdev_*"
+#
+# WHY IT MATTERS. exec_kbackend.h SS8's block ops are synchronous and MAY SLEEP.
+# The cluster FORK THREAD is the single context that carries the HELLO cadence,
+# the VC retransmit ladder and every barrier step, so a served-disk read made
+# there stalls all of them -- a TIMVCFAIL risk under load on this node and a
+# 12x(M-1) barrier latency on every other member. FC-P6.3 shipped exactly that
+# bug (vms_mscp_srv.c called the seam from its fork work handler); FC-P6.6 moved
+# the calls to a served-I/O WORKER kthread.
+#
+# WHY THE RULE IS FILE-SCOPED RATHER THAN CALL-GRAPH-SCOPED. A call-graph check
+# cannot follow the injected-ops indirection this stack is built on (a layer's
+# `ops.read_blocks` is a function pointer, not a call edge), so it would have
+# teeth only against the naive regression. The partition is stronger AND simpler
+# to review: ONE translation unit is the worker's, it is the only one that may
+# name the block seam, and every other cluster core TU -- all of which are fork,
+# receive or timer context -- may not name it at all. A reviewer does not have
+# to trace anything: the fork-context files cannot even spell the symbol.
+#
+#   5a. `exec_blockdev_' outside the worker TU  -> violation.
+#   5b. the worker TU registering a FORK-CONTEXT handler (which would make it
+#       fork-context code and defeat 5a)        -> violation.
+#   5c. the worker TU missing, or naming no block op -> violation (a rule with
+#       nothing on the other side of it proves nothing).
+# ---------------------------------------------------------------------------
+IO_WORKER_TU='vms_mscp_srv_io.c'
+
+# The fork-context registrations. A TU that calls one of these runs code in the
+# fork thread by construction, so the worker TU must contain none of them.
+FORK_CONTEXT_REGISTRATIONS='cf_set_work_handler|cf_set_rx_handler|cf_dispatch_one|cf_run\('
+
+check_blockdev_context() {
+	f="$1"
+	base=$(basename "$f")
+	if [ "$base" = "$IO_WORKER_TU" ]; then
+		strip_comments "$f" | grep -nE "$FORK_CONTEXT_REGISTRATIONS" |
+		while IFS=: read -r ln rest; do
+			hit=$(echo "$rest" | grep -oE "$FORK_CONTEXT_REGISTRATIONS" | head -1)
+			echo "BLKCTX|$ln|the served-I/O worker TU registers fork-context code: $hit"
+		done
+		return 0
+	fi
+	strip_comments "$f" | grep -n 'exec_blockdev_' |
+	while IFS=: read -r ln rest; do
+		echo "BLKCTX|$ln|exec_blockdev_ on a FORK-CONTEXT path (move it to $IO_WORKER_TU)"
+	done
+}
+
+# 5c: the other side of the partition must exist and be real.
+check_io_worker_present() {
+	w="$CORE/$IO_WORKER_TU"
+	if [ ! -f "$w" ]; then
+		echo "::error::cluster_core_includes_gate: $IO_WORKER_TU is missing"
+		echo "RULE5 needs the served-I/O worker TU: without it the rule has"
+		echo "no other side and proves nothing (design SS3.2.6, FC-P6.6)"
+		return 1
+	fi
+	if ! strip_comments "$w" | grep -q 'exec_blockdev_'; then
+		echo "::error file=$w::[RULE5] the served-I/O worker TU names NO block op"
+		echo "RULE5 partitions the block seam into this ONE file; a worker that"
+		echo "calls nothing means the calls moved somewhere unchecked"
+		return 1
+	fi
+	return 0
+}
+
 scan_file() {
 	f="$1"
 	{
@@ -226,6 +297,7 @@ scan_file() {
 		check_quoted_includes "$f"
 		check_substrate_idents "$f"
 		check_pure_tus "$f"
+		check_blockdev_context "$f"
 	} | while IFS='|' read -r rule ln detail; do
 		case "$rule" in
 		ANGLE)
@@ -236,6 +308,8 @@ scan_file() {
 			echo "$f:$ln: RULE3 substrate idiom in cluster core: $detail" ;;
 		PURE)
 			echo "$f:$ln: RULE4 pure FSM/codec TU calls a seam primitive: $detail" ;;
+		BLKCTX)
+			echo "$f:$ln: RULE5 $detail" ;;
 		esac
 	done
 }
@@ -276,6 +350,21 @@ EOF
 static void ok(void)  { exec_kthread_create(0, 0, 0, "t"); }
 static void bad(void) { kthread_create(0, 0, 0, "t"); }
 EOF
+	# RULE 5 (FC-P6.6). Three cases in one run:
+	#   - the FORK-CONTEXT glue calling the block seam MUST fire (line 3);
+	#   - the same call inside the WORKER TU must NOT (that is its job);
+	#   - the worker TU registering a fork handler MUST fire (line 4).
+	cat > "$tmp/src/kernel-core/vms_mscp_srv.c" <<'EOF'
+#include "vms_mscp_srv.h"
+/* A doc-comment may name exec_blockdev_read_block while explaining the rule. */
+static int fork_path(void) { return exec_blockdev_read_block(1, 2, 3, 0, 512); }
+EOF
+	cat > "$tmp/src/kernel-core/vms_mscp_srv_io.c" <<'EOF'
+#include "vms_mscp_srv_io.h"
+static int worker(void) { return exec_blockdev_read_block(1, 2, 3, 0, 512); }
+static int worker_w(void) { return exec_blockdev_write_block(1, 2, 3, 0, 512); }
+static void oops(void) { cf_set_work_handler(0, 0, 0, 0); }
+EOF
 
 	out=$(OVMX_REPO="$tmp" "$0" 2>&1) && st=0 || st=$?
 	echo "$out" | sed 's/^/    /'
@@ -297,11 +386,29 @@ EOF
 		return 1
 	fi
 
+	# ---- RULE 5's three negative controls (FC-P6.6) ----
+	if ! echo "$out" | grep -q 'vms_mscp_srv.c,line=3'; then
+		echo "NEGATIVE CONTROL FAILED: exec_blockdev_ on a FORK-CONTEXT path was not caught"
+		return 1
+	fi
+	if echo "$out" | grep -q 'vms_mscp_srv.c,line=2'; then
+		echo "NEGATIVE CONTROL FAILED: RULE5 fired on a COMMENT naming the block seam"
+		return 1
+	fi
+	if echo "$out" | grep -qE 'vms_mscp_srv_io.c,line=(2|3)'; then
+		echo "NEGATIVE CONTROL FAILED: RULE5 fired on the WORKER TU's own block calls"
+		return 1
+	fi
+	if ! echo "$out" | grep -q 'vms_mscp_srv_io.c,line=4'; then
+		echo "NEGATIVE CONTROL FAILED: the worker TU registering fork-context code was not caught"
+		return 1
+	fi
+
 	if [ "$st" -eq 0 ]; then
 		echo "NEGATIVE CONTROL FAILED: the gate accepted an injected substrate include"
 		return 1
 	fi
-	for want in RULE1 RULE2 RULE3 RULE4; do
+	for want in RULE1 RULE2 RULE3 RULE4 RULE5; do
 		if ! echo "$out" | grep -q "$want"; then
 			echo "NEGATIVE CONTROL FAILED: $want never fired on the injected file"
 			return 1
@@ -316,7 +423,10 @@ EOF
 	fi
 	echo "OK: the gate rejects an injected #include <linux/netdevice.h> (RULE1),"
 	echo "    an out-of-core quoted include (RULE2), an sk_buff/pr_info in code (RULE3),"
-	echo "    a seam call from a _fsm.c (RULE4), and does NOT fire on comment prose."
+	echo "    a seam call from a _fsm.c (RULE4), a synchronous exec_blockdev_ on a"
+	echo "    fork-context path AND a worker TU that registers fork-context code"
+	echo "    (RULE5), and does NOT fire on comment prose or on the worker's own"
+	echo "    block calls."
 	return 0
 }
 
@@ -331,6 +441,10 @@ if [ -z "$files" ]; then
 	echo "a gate that scans nothing proves nothing"
 	exit 2
 fi
+
+# RULE 5c: the other side of the partition must exist and be real, BEFORE the
+# per-file scan -- a missing worker TU would make every RULE5 check vacuous.
+check_io_worker_present || rc=1
 
 n=0
 for f in $files; do
@@ -357,5 +471,6 @@ if [ "$rc" -ne 0 ]; then
 fi
 
 echo "OK: $n kernel-core cluster files, no substrate include, no substrate idiom,"
-echo "    no seam call from a pure FSM/codec TU"
+echo "    no seam call from a pure FSM/codec TU, no exec_blockdev_ on a"
+echo "    fork-context path (the block seam lives only in $IO_WORKER_TU)"
 exit 0

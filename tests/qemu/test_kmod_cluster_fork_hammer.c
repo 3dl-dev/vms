@@ -343,6 +343,65 @@ int main(void)
            result_ll(result, "ELAPSED_MS"), frames_sent, rx_enqueued, rx_dispatched,
            work_posted, work_dispatched, result_ll(result, "DRAIN_MS"));
 
+    /* ================================================================
+     * THE SERVED-I/O WORKER LEG (FC-P6.6, design SS3.2.6's E42 corollary)
+     *
+     * FC-P6.3's MSCP server called the executive's SYNCHRONOUS block seam from
+     * its fork work handler, i.e. on the cluster fork thread -- the one context
+     * that also carries the HELLO cadence, the VC retransmit ladder and every
+     * barrier step. FC-P6.6 moved those calls to a served-I/O WORKER kthread.
+     *
+     * This leg proves the fix ON A REAL KERNEL, with the real second kthread,
+     * the real second condition variable on the real rxlock, and a callback
+     * that really msleep()s the way a served disk read does. The measurement
+     * that matters is CADENCE_TICKS_DURING_IO: how many expiries of a REAL
+     * 10ms exec_timer cadence the FORK THREAD ran WHILE a worker callback was
+     * blocked. Before FC-P6.6 the equivalent work ran ON the fork thread and
+     * that number could only have been zero.
+     * ================================================================ */
+    if (result_ll(result, "WORKER_START") != 1) {
+        /* Rule 9: an honest report, never a fabricated pass. */
+        printf("  FAIL served-I/O worker did not start: this substrate has no "
+               "SS15 binding, so FC-P6.6's leg cannot run\n");
+        fail++;
+    } else {
+        long long io_sub = result_ll(result, "IO_SUBMITTED");
+        long long io_calls = result_ll(result, "IO_HANDLER_CALLS");
+        long long io_done = result_ll(result, "IO_DONE_SEEN");
+
+        CHECK(io_sub > 0,
+              "cf_io_post accepted real served-I/O submissions");
+        CHECK(io_calls > 0,
+              "the WORKER kthread really ran the blocking I/O callback "
+              "(this is where exec_blockdev_read_block sits on a served unit)");
+        CHECK(result_ll(result, "IO_COMPLETED") == io_sub,
+              "every ACCEPTED submission produced exactly one completion "
+              "(the work item is reserved with the request, so none can be lost)");
+        CHECK(io_done == io_sub,
+              "...and every completion was dispatched to the layer ON THE FORK "
+              "THREAD as a CF_WORK_IO_DONE work item");
+        CHECK(result_ll(result, "IO_TAG_MISMATCHES") == 0,
+              "each completion carried its own tag and its callback's own status, "
+              "unaltered (INV-6: the served READ's answer is the disk's answer)");
+        CHECK(result_ll(result, "CADENCE_TICKS") > 0,
+              "a REAL exec_timer cadence fired into the fork thread during the run");
+        CHECK(result_ll(result, "CADENCE_TICKS_DURING_IO") > 0,
+              "THE FIX, MEASURED: the fork thread kept running its cadence WHILE a "
+              "served I/O was blocking on the worker -- it is no longer behind the disk");
+        printf("  info worker: io_submitted=%lld handler_calls=%lld done_seen=%lld "
+               "cadence_ticks=%lld during_io=%lld max_gap_ms=%lld abandoned=%lld\n",
+               io_sub, io_calls, io_done,
+               result_ll(result, "CADENCE_TICKS"),
+               result_ll(result, "CADENCE_TICKS_DURING_IO"),
+               result_ll(result, "CADENCE_MAX_GAP_MS"),
+               result_ll(result, "IO_ABANDONED"));
+        printf("  info the <10ms HELLO-jitter figure the FC-P6.6 plan row names is a "
+               "LAB measurement off the wire (tests/lab/tools/"
+               "run_mscp_srv_io_jitter_gate.sh); CADENCE_MAX_GAP_MS above is this "
+               "kernel's own scheduling-granularity view of the same property and is "
+               "REPORTED, not gated, because TCG timing is not a wire measurement\n");
+    }
+
     printf("=== test_kmod_cluster_fork_hammer: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;
 }

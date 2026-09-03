@@ -15,15 +15,27 @@
  * follows for the SYSAP registry); and it reaches the substrate only through
  * exec_kbackend.h and the FC-P0.5 fork API.
  *
+ * AND IT NEVER TOUCHES A DISK (FC-P6.6). Every line below runs on the CLUSTER
+ * FORK THREAD, which design §3.2.6 forbids from calling exec_blockdev_*: a
+ * synchronous served read here would stall the HELLO cadence, the VC
+ * retransmit ladder and every barrier step behind it. A served transfer is
+ * SUBMITTED from here (srv_op_io_submit -> cf_io_post) and PERFORMED in
+ * vms_mscp_srv_io.c on the served-I/O worker thread; its completion comes back
+ * to this file's own work handler, in this same fork thread, and the pure
+ * server builds the end message from it. The block seam is not even named in
+ * this file -- tools/ci/cluster_core_includes_gate.sh RULE 5 keeps it that way.
+ *
  * INCLUDES: this TU is on the cluster core list enforced by
  * tools/ci/cluster_core_includes_gate.sh -- exec_kbackend.h and kernel-core
  * headers only, never a substrate header.
  */
 
 #include "vms_internal.h"      /* the SS$_ vocabulary + the host's fixed-width types */
-#include "exec_kbackend.h"     /* SS8: exec_blockdev_read_block / _write_block */
+#include "exec_kbackend.h"     /* SS18 exec_console_printf, SS4 exec_zalloc    */
 #include "vms_cluster.h"
-#include "vms_cluster_fork.h"  /* FC-P0.5: cf_timer_*, cf_set_work_handler */
+#include "vms_cluster_fork.h"  /* FC-P0.5: cf_timer_*, cf_set_work_handler,
+				* FC-P6.6: cf_io_post + the served-I/O worker */
+#include "vms_mscp_srv_io.h"   /* FC-P6.6: the WORKER's half of the server    */
 #include "vms_acp_serve.h"     /* the ODS-2 ACP's served-volume projection  */
 #include "vms_pe.h"            /* the port's THIRD service (block transfer) */
 #include "vms_pe_fsm.h"        /* PE_BLK_ACC_* and the block-frame geometry */
@@ -39,18 +51,13 @@
 /*
  * The staging area transfers pass through. The pure server slices it into one
  * slot per HRB (vms_mscp_srv_fsm.h -- an in-flight WRITE owns its slot until
- * the peer's bytes land, so slots must not overlap), so what is sized here is
+ * the peer's bytes land AND an in-flight I/O owns it until the SERVED-I/O
+ * WORKER hands it back, so slots must not overlap), so what is sized here is
  * PER-REQUEST and the allocation is MSCP_SRV_MAX_REQS of them.
  *
- * AA-L619A-TK bounds a single transfer only by what the host's own buffer
- * descriptor names, so the per-request ceiling is OVMX's own: 8 blocks (4 KiB),
- * which comfortably covers the mount-verification sequence (home block, SCB,
- * the INDEXF/BITMAP extents a class driver reads a few blocks at a time) and
- * keeps the whole server one modest allocation on a VAX. A command asking for
- * more is refused with a REAL "Invalid Byte Count" naming P.BCNT
- * (vms_mscp_srv_fsm.c's own gate), never truncated.
+ * MSCP_SRV_XFER_BLOCKS, the per-request ceiling, is in vms_mscp_srv.h: the
+ * worker TU bounds a request against the SAME number this buffer is sized from.
  */
-#define MSCP_SRV_XFER_BLOCKS 8u
 #define MSCP_SRV_XFER_BYTES  (MSCP_SRV_MAX_REQS * MSCP_SRV_XFER_BLOCKS * \
 			      MSCP_SRV_BLOCK_SIZE)
 
@@ -117,10 +124,16 @@ struct vms_mscp_srv {
 	uint32_t listens;
 	uint32_t unlistens;
 	uint32_t listen_failures;
-	uint32_t blockdev_read_failures;
-	uint32_t blockdev_write_failures;
 	uint32_t units_without_number;   /* a mounted volume whose device name
 					  * carries no unit number: NOT served */
+
+	/* The SERVED-I/O WORKER seam (FC-P6.6), counted where it happens. */
+	uint32_t io_posted;            /* transfers handed to the worker       */
+	uint32_t io_post_failures;     /* the worker queue refused one         */
+	uint32_t io_unit_gone;         /* the volume left between command and
+					* submit: no stale (major, minor)     */
+	uint32_t blockdev_io_failures; /* completions the block layer failed   */
+	uint32_t worker_start_failures;
 
 	uint8_t  xferbuf[MSCP_SRV_XFER_BYTES];
 };
@@ -207,44 +220,54 @@ static int srv_backing_for_unit(struct vms_mscp_srv *s, uint16_t unit,
 	return -1;
 }
 
-static int srv_op_read_blocks(void *ctx, uint16_t unit, uint32_t lbn,
-			      uint32_t nblocks, uint8_t *buf)
+/*
+ * HAND one served-unit transfer to the SERVED-I/O WORKER (FC-P6.6). THIS
+ * FUNCTION DOES NO I/O -- design §3.2.6: "the cluster fork thread never calls
+ * exec_blockdev_*", and this runs on the fork thread. The blocking half lives
+ * in vms_mscp_srv_io.c and runs on the worker; the completion comes back as a
+ * CF_WORK_IO_DONE work item, in this same fork thread, and the server FSM
+ * builds the end message there.
+ *
+ * The unit's BACKING DEVICE is resolved HERE, fresh off the ACP's mounted-volume
+ * table, for the same reason it always was: a volume dismounted since the last
+ * refresh must not be read from a stale (major, minor). Resolving it at submit
+ * (a table read under the ACP's own lock, exactly what this layer's beat already
+ * does) rather than on the worker also means the worker holds NOTHING but the
+ * device numbers, the LBN and the buffer -- no server state at all.
+ */
+static int srv_op_io_submit(void *ctx, const struct mscp_srv_io_req *req)
 {
 	struct vms_mscp_srv *s = (struct vms_mscp_srv *)ctx;
-	uint32_t major = 0u, minor = 0u, i;
+	uint32_t major = 0u, minor = 0u;
+	struct cf_io io;
 
-	if (srv_backing_for_unit(s, unit, &major, &minor) != 0)
+	if (req == NULL || s->cl->fork == NULL)
 		return -1;
-	for (i = 0; i < nblocks; i++) {
-		if (exec_blockdev_read_block(major, minor,
-					     (uint64_t)lbn + (uint64_t)i,
-					     buf + (i * MSCP_SRV_BLOCK_SIZE),
-					     MSCP_SRV_BLOCK_SIZE) != 0) {
-			s->blockdev_read_failures++;
-			return -1;   /* the server answers a REAL drive error */
-		}
+	if (srv_backing_for_unit(s, req->unit, &major, &minor) != 0) {
+		s->io_unit_gone++;
+		return -1;   /* the volume is no longer the executive's: honest */
 	}
+
+	vms_mscp_srv_io_pack(&io, (uint16_t)req->op, req->tag, major, minor,
+			     req->lbn, req->nblocks, req->buf);
+	if (cf_io_post(s->cl->fork, &io) != CF_OK) {
+		s->io_post_failures++;
+		return -1;   /* the server answers a REAL controller error */
+	}
+	s->io_posted++;
 	return 0;
 }
 
-static int srv_op_write_blocks(void *ctx, uint16_t unit, uint32_t lbn,
-			       uint32_t nblocks, const uint8_t *buf)
+/*
+ * The FORK-THREAD half of a completion: one dereference into the pure server,
+ * which finds its own request by the tag THIS node minted. Everything the host
+ * is told is decided there.
+ */
+static void srv_io_done(struct vms_mscp_srv *s, uint32_t tag, uint32_t status)
 {
-	struct vms_mscp_srv *s = (struct vms_mscp_srv *)ctx;
-	uint32_t major = 0u, minor = 0u, i;
-
-	if (srv_backing_for_unit(s, unit, &major, &minor) != 0)
-		return -1;
-	for (i = 0; i < nblocks; i++) {
-		if (exec_blockdev_write_block(major, minor,
-					      (uint64_t)lbn + (uint64_t)i,
-					      buf + (i * MSCP_SRV_BLOCK_SIZE),
-					      MSCP_SRV_BLOCK_SIZE) != 0) {
-			s->blockdev_write_failures++;
-			return -1;
-		}
-	}
-	return 0;
+	if (status != 0u)
+		s->blockdev_io_failures++;
+	mscp_srv_fsm_io_done(&s->fsm, tag, status);
 }
 
 static int srv_op_send_end(void *ctx, vms_conid_t conid, const uint8_t *body,
@@ -349,8 +372,7 @@ static void srv_op_log(void *ctx, const char *msg)
 static void srv_ops_bind(struct vms_mscp_srv *s)
 {
 	s->ops.unit_at = srv_op_unit_at;
-	s->ops.read_blocks = srv_op_read_blocks;
-	s->ops.write_blocks = srv_op_write_blocks;
+	s->ops.io_submit = srv_op_io_submit;
 	s->ops.send_end = srv_op_send_end;
 	s->ops.send_read_data = srv_op_send_read_data;
 	s->ops.recv_write_data = srv_op_recv_write_data;
@@ -524,11 +546,22 @@ static void srv_arm_beat(struct vms_mscp_srv *s)
 			   MSCP_SRV_BEAT_MS);
 }
 
+/*
+ * THE FORK THREAD'S ONE DOOR into this layer. Two kinds arrive: the beat, and
+ * the SERVED-I/O WORKER's completion (FC-P6.6) -- which is why an MSCP command
+ * that needs the disk can be answered without this thread ever waiting on one.
+ */
 static void srv_work_handler(void *ctx, const struct cf_work *w)
 {
 	struct vms_mscp_srv *s = (struct vms_mscp_srv *)ctx;
 
-	if (s == NULL || w == NULL || w->kind != CF_WORK_TIMER)
+	if (s == NULL || w == NULL)
+		return;
+	if (w->kind == CF_WORK_IO_DONE) {
+		srv_io_done(s, w->arg0, w->arg1);
+		return;
+	}
+	if (w->kind != CF_WORK_TIMER)
 		return;
 	if (w->arg0 != MSCP_SRV_TIMER_BEAT)
 		return;   /* an identity this layer never armed: ignored */
@@ -543,6 +576,7 @@ static void srv_work_handler(void *ctx, const struct cf_work *w)
 int vms_mscp_srv_start(struct vms_cluster *cl)
 {
 	struct vms_mscp_srv *s;
+	int status;
 
 	if (cl == NULL)
 		return (int)SS__BADPARAM;
@@ -573,6 +607,26 @@ int vms_mscp_srv_start(struct vms_cluster *cl)
 	mscp_srv_fsm_bind_xferbuf(&s->fsm, s->xferbuf, (uint32_t)sizeof(s->xferbuf));
 
 	(void)cf_set_work_handler(cl->fork, CF_OWNER_MSCP, srv_work_handler, s);
+
+	/*
+	 * THE SERVED-I/O WORKER (FC-P6.6). Registered BEFORE the thread starts
+	 * -- cf_set_io_handler also clears a stop left by a previous cycle -- and
+	 * a failure to start it is FATAL to the server, not a silent fallback:
+	 * without the worker there is no way to serve a READ that does not stall
+	 * the fork thread, and Rule 9 says fail honestly rather than do the
+	 * wrong thing quietly.
+	 */
+	(void)cf_set_io_handler(cl->fork, CF_OWNER_MSCP,
+				vms_mscp_srv_io_handler, s);
+	status = vms_cluster_fork_worker_start(cl);
+	if (status != (int)SS__NORMAL) {
+		s->worker_start_failures++;
+		(void)cf_set_io_handler(cl->fork, CF_OWNER_MSCP, NULL, NULL);
+		(void)cf_set_work_handler(cl->fork, CF_OWNER_MSCP, NULL, NULL);
+		exec_free(s);
+		return status;
+	}
+
 	cl->mscp = s;
 	(void)vms_scs_set_block_consumer(cl, srv_block_data, s);
 
@@ -601,7 +655,18 @@ void vms_mscp_srv_stop(struct vms_cluster *cl)
 	 * driver's registration down with it. */
 	(void)vms_scs_set_block_consumer(cl, NULL, s);
 	srv_unlisten(s);
+
+	/*
+	 * THE SERVED-I/O WORKER GOES FIRST, AND IT IS JOINED (FC-P6.6). It is
+	 * the only context that can still be writing into `s->xferbuf`, so
+	 * everything below -- and the exec_free at the end above all -- is only
+	 * safe once it has exited. vms_cluster_fork_worker_stop() does the
+	 * predicate-then-join dance; after it returns no callback of ours is
+	 * running and none can start.
+	 */
 	if (cl->fork != NULL) {
+		vms_cluster_fork_worker_stop(cl);
+		(void)cf_set_io_handler(cl->fork, CF_OWNER_MSCP, NULL, NULL);
 		cf_timer_cancel(cl->fork, CF_OWNER_MSCP, MSCP_SRV_TIMER_BEAT,
 				0u);
 		(void)cf_set_work_handler(cl->fork, CF_OWNER_MSCP, NULL, NULL);

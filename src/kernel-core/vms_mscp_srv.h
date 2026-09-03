@@ -11,10 +11,12 @@
  *     the FSM, its injected ops and the one staging buffer transfers pass
  *     through. The pure layer still allocates nothing.
  *   - it BINDS the server DOWNWARD to the executive: `unit_at` to the ODS-2
- *     ACP's mounted-volume table (vms_acp_serve.h), `read_blocks`/
- *     `write_blocks` to the block seam (exec_blockdev_read_block /
- *     _write_block), `send_end` to scs_send_msg, and the two transfer entries
- *     to the port's THIRD service (pe_send_block_read_end / pe_buf_register).
+ *     ACP's mounted-volume table (vms_acp_serve.h), `io_submit` to FC-P0.5's
+ *     SERVED-I/O WORKER (cf_io_post -- the block seam itself is reached only
+ *     from vms_mscp_srv_io.c, on the worker thread, NEVER from the fork
+ *     thread; design §3.2.6 / FC-P6.6), `send_end` to scs_send_msg, and the two
+ *     transfer entries to the port's THIRD service (pe_send_block_read_end /
+ *     pe_buf_register).
  *   - it BINDS the server UPWARD from SCS: the `MSCP$DISK` SYSAP callbacks,
  *     plus the ONE block-transfer consumer registration (vms_scs.h SS9).
  *   - it runs the server's beat on FC-P0.5's cf_timer_* under CF_OWNER_MSCP --
@@ -89,6 +91,22 @@
 #include "vms_cluster.h"
 
 struct vms_mscp_srv;
+
+/*
+ * The PER-REQUEST transfer ceiling, in 512-byte blocks. Lives in the header
+ * because two translation units need the SAME number and must not each carry
+ * their own: vms_mscp_srv.c sizes the staging buffer from it (one slot per HRB)
+ * and vms_mscp_srv_io.c bounds a worker request against it, so a request the
+ * worker is asked to run can never be larger than the slot it was promised.
+ *
+ * AA-L619A-TK bounds a single transfer only by what the host's own buffer
+ * descriptor names, so this ceiling is OVMX's own: 8 blocks (4 KiB), which
+ * covers the mount-verification sequence (home block, SCB, the INDEXF/BITMAP
+ * extents a class driver reads a few blocks at a time) and keeps the whole
+ * server one modest allocation on a VAX. A command asking for more is refused
+ * with a REAL "Invalid Byte Count" naming P.BCNT, never truncated.
+ */
+#define MSCP_SRV_XFER_BLOCKS 8u
 
 /* ==========================================================================
  * 1. Lifecycle

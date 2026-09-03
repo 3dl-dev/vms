@@ -248,6 +248,10 @@ COPY src/kernel-core/vms_mscp_srv_fsm.c      /netbsd/guest-src/kernel-core/vms_m
 COPY src/kernel-core/vms_mscp_srv_fsm.h      /netbsd/guest-src/kernel-core/vms_mscp_srv_fsm.h
 COPY src/kernel-core/vms_mscp_srv.c          /netbsd/guest-src/kernel-core/vms_mscp_srv.c
 COPY src/kernel-core/vms_mscp_srv.h          /netbsd/guest-src/kernel-core/vms_mscp_srv.h
+# FC-P6.6: the SERVED-I/O WORKER half -- the ONE cluster TU allowed to call the
+# block seam, so the fork thread never stalls on a served disk.
+COPY src/kernel-core/vms_mscp_srv_io.c       /netbsd/guest-src/kernel-core/vms_mscp_srv_io.c
+COPY src/kernel-core/vms_mscp_srv_io.h       /netbsd/guest-src/kernel-core/vms_mscp_srv_io.h
 COPY src/kernel-core/vms_acp_serve.h         /netbsd/guest-src/kernel-core/vms_acp_serve.h
 # --- FC-P7.1: the MSCP disk CLASS DRIVER. vms_mscp_cl_io_fsm.c is the pure
 # driver (CDDB/UCB/CDRP + the [state][event] table) and vms_mscp_cl.c is its

@@ -203,31 +203,60 @@ static int fake_unit_at(void *ctx, uint32_t index,
 	return 0;
 }
 
-static int fake_read_blocks(void *ctx, uint16_t unit, uint32_t lbn,
-			    uint32_t nblocks, uint8_t *buf)
+static uint32_t fake_do_read(struct fake_exec *e, uint16_t unit, uint32_t lbn,
+			     uint32_t nblocks, uint8_t *buf)
 {
-	struct fake_exec *e = (struct fake_exec *)ctx;
 	struct fake_unit *u = fake_find(e, unit);
 
 	if (u == NULL || lbn + nblocks > u->size)
-		return -1;
+		return 1u;
 	memcpy(buf, u->data + lbn * MSCP_SRV_BLOCK_SIZE,
 	       nblocks * MSCP_SRV_BLOCK_SIZE);
 	e->reads++;
-	return 0;
+	return 0u;
 }
 
-static int fake_write_blocks(void *ctx, uint16_t unit, uint32_t lbn,
-			     uint32_t nblocks, const uint8_t *buf)
+static uint32_t fake_do_write(struct fake_exec *e, uint16_t unit, uint32_t lbn,
+			      uint32_t nblocks, const uint8_t *buf)
 {
-	struct fake_exec *e = (struct fake_exec *)ctx;
 	struct fake_unit *u = fake_find(e, unit);
 
 	if (u == NULL || lbn + nblocks > u->size)
-		return -1;
+		return 1u;
 	memcpy(u->data + lbn * MSCP_SRV_BLOCK_SIZE, buf,
 	       nblocks * MSCP_SRV_BLOCK_SIZE);
 	e->writes++;
+	return 0u;
+}
+
+/*
+ * THE SERVER'S SERVED-I/O WORKER, INLINE (FC-P6.6). On the shipping stack a
+ * served transfer is handed to a worker KTHREAD and answered later, on the fork
+ * thread. THIS file is the CLIENT's proof -- it drives two real FSMs across a
+ * real port -- so its fake worker performs the transfer and delivers the
+ * completion immediately, which keeps the two-node exchange a straight line.
+ *
+ * That is a deliberate simplification OF THE TEST, not of the server: the
+ * asynchrony itself (no block read on the command dispatch, the deferred abort,
+ * the abandoned request, the stale completion) is proved in
+ * tests/cluster/host/test_mscp_srv.c against a fake worker the test steps by
+ * hand. Completing inline here is legal by the FSM's own contract -- see
+ * srv_io_submit's note on publishing the HRB before the hand-over.
+ */
+static int fake_io_submit(void *ctx, const struct mscp_srv_io_req *req)
+{
+	/* srv_ops.ctx is the whole env, whose FIRST member is the fake
+	 * executive -- the same one-object convention every op here uses. */
+	struct env *env = (struct env *)ctx;
+	uint32_t status;
+
+	if (req->op == (uint8_t)MSCP_SRV_IO_READ)
+		status = fake_do_read(&env->fake, req->unit, req->lbn,
+				      req->nblocks, req->buf);
+	else
+		status = fake_do_write(&env->fake, req->unit, req->lbn,
+				       req->nblocks, req->buf);
+	mscp_srv_fsm_io_done(&env->srv, req->tag, status);
 	return 0;
 }
 
@@ -678,8 +707,7 @@ static void env_bind(struct env *e)
 {
 	memset(&e->srv_ops, 0, sizeof(e->srv_ops));
 	e->srv_ops.unit_at = fake_unit_at;
-	e->srv_ops.read_blocks = fake_read_blocks;
-	e->srv_ops.write_blocks = fake_write_blocks;
+	e->srv_ops.io_submit = fake_io_submit;
 	e->srv_ops.send_end = bridge_server_end;
 	e->srv_ops.send_read_data = bridge_server_read_data;
 	e->srv_ops.recv_write_data = bridge_server_recv_write;

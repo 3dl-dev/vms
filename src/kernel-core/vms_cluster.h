@@ -419,6 +419,7 @@ struct vms_pe;
 struct vms_scs;
 struct vms_cnxman;
 struct vms_dlm_scs;
+struct vms_mscp_srv;
 struct vms_cluster_fork;
 
 struct vms_cluster {
@@ -475,6 +476,14 @@ struct vms_cluster {
 	struct vms_scs          *scs;    /* FC-P2.4 */
 	struct vms_cnxman       *cnxman; /* FC-P3.8 */
 	struct vms_dlm_scs      *dlm;    /* FC-P4.x */
+	/*
+	 * The MSCP disk SERVER (FC-P6.3). NULL is a real, common configuration
+	 * and not a missing layer: a node with MSCP_LOAD=0, MSCP_SERVE_ALL=0 or
+	 * simply no mounted volume serves no disks, and the published
+	 * description makes serving a ROLE rather than a membership
+	 * requirement. Nothing above may read "cl->mscp == NULL" as an error.
+	 */
+	struct vms_mscp_srv     *mscp;   /* FC-P6.3 */
 };
 
 #endif /* OVMX_VMS_CLUSTER_H */

@@ -1251,6 +1251,46 @@ int pe_vc_send_msg(struct pe_fsm *f, vms_scs_sysid_t dst,
 		   vms_conid_t dst_conid, const uint8_t *body, uint32_t len);
 
 /*
+ * The LARGEST body-level content this port can carry -- everything from abs 56
+ * to the end of the biggest frame the VC class holds.
+ */
+#define PE_SEND_BODY_MAX (PE_VC_FRAME_MAX - PE_SEND_BODY_OFF)   /* 148 */
+
+/*
+ * ...and the smallest: the 16 bytes of abs 56-71 that design SS3.2.4 assigns to
+ * SCS (inner length, format, MTYPE, credit, the Con.ID pair). Named HERE rather
+ * than included from the SCS codec, so the port keeps its one-way dependency --
+ * the same reason PE_SEND_MIRROR_SPAN_LEN above is a cited local constant and
+ * not an import. A shorter body has no envelope at all and is refused.
+ */
+#define PE_SEND_BODY_MIN 16u
+
+/*
+ * pe_vc_send_msg_var - the SAME sequenced-message service, at a body length
+ * the CALLER chooses (ADDED BY FC-P6.3).
+ *
+ * WHY IT EXISTS, AND WHAT GROUNDS IT. MTYPE 10 is not one length. Spec sec
+ * 4(h)(1b) states the envelope is UNIFORM "across the short classes here, the
+ * 94-content MSCP commands, and the 190-content class", and the MSCP server's
+ * own five end messages are MEASURED at five different SCA contents -- 86
+ * (SCC), 90 (READ), 94 (WRITE), 102 (ONLINE) and 110 (GUS)
+ * (vms_cluster_codec_mscp.h's census). pe_vc_send_msg above is pinned to the
+ * 190-content class because that is the only class FC-P1.3 had a grounded
+ * length for; this entry serves the classes FC-P6.2 measured, using the
+ * IDENTICAL assembly (there is one, shared, private builder -- not a second
+ * implementation), with the SCA length field fixed up to whatever the body
+ * really is.
+ *
+ * `len` is the abs-56-onward content: SCS's own 16-byte header plus the SYSAP
+ * body. Under VMS_SCS_HDR_LEN there is no envelope at all and the call is
+ * refused (PE_VC_SEND_BADFRAME); over PE_SEND_BODY_MAX it will not fit the
+ * frame (PE_VC_SEND_TOOBIG). Nothing is padded and nothing is truncated: the
+ * frame is exactly as long as the caller's content makes it.
+ */
+int pe_vc_send_msg_var(struct pe_fsm *f, vms_scs_sysid_t dst,
+		       vms_conid_t dst_conid, const uint8_t *body, uint32_t len);
+
+/*
  * pe_vc_send_dg - the port's DATAGRAM service: unsequenced, unacknowledged
  * (vms_pe.h SS5). Same `body`/`len` contract and frame shape as
  * pe_vc_send_msg, but this function does NOT go through pe_vc_send_frame:

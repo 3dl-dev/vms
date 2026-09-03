@@ -523,6 +523,20 @@ int pe_send_msg(struct vms_pe *pe, vms_scs_sysid_t dst, vms_conid_t dst_conid,
 						  body, len));
 }
 
+/*
+ * The SAME service at a caller-chosen body length (FC-P6.3). One dereference
+ * into pe_vc_send_msg_var, whose own doc comment carries what grounds a
+ * variable-length MTYPE-10 class; there is no second envelope path.
+ */
+int pe_send_msg_var(struct vms_pe *pe, vms_scs_sysid_t dst,
+		    vms_conid_t dst_conid, const uint8_t *body, uint32_t len)
+{
+	if (pe == (struct vms_pe *)0)
+		return SS__NOSUCHDEV;
+	return (int)pe_send_status(pe_vc_send_msg_var(&pe->fsm, dst, dst_conid,
+						      body, len));
+}
+
 int pe_send_dg(struct vms_pe *pe, vms_scs_sysid_t dst,
 	       const uint8_t *body, uint32_t len)
 {
@@ -571,6 +585,96 @@ int pe_incarnation(struct vms_pe *pe, uint32_t *lo, uint32_t *hi)
 	*lo = (uint32_t)(q & 0xffffffffu);
 	*hi = (uint32_t)((q >> 32) & 0xffffffffu);
 	return SS__NORMAL;
+}
+
+/* ==========================================================================
+ * 4c. THE THIRD PORT SERVICE -- BLOCK TRANSFER (vms_pe.h SS5, FC-P6.1)
+ *
+ * FC-P6.1 froze these glue-facing names and built the REAL implementation as
+ * pure `struct pe_fsm *` functions (vms_pe_fsm.h SS8d). They come into
+ * existence HERE with FC-P6.3, the first item to have a caller (the MSCP disk
+ * server) -- the same E9 rule that brought pe_send_msg into existence with
+ * FC-P2.4, and for the same reason: `struct vms_pe` is private to this file.
+ * Each is the one-line dereference plus the status map; not one of them
+ * re-implements a header, a name assignment or a chunking decision.
+ * ========================================================================== */
+
+/*
+ * enum pe_blk_status -> SS$_. Same discipline as pe_send_status() above: every
+ * target is a status this tree can CITE, and the refusals are grouped by what
+ * a caller can actually do about them.
+ *   NOBUF/NOSPACE/PERM/NONAME/RANGE/INVAL  the caller's own request was not
+ *                        one this port can serve -> SS$_BADPARAM. (NONAME is
+ *                        the INV-6 refusal: the PEER's buffer name was absent
+ *                        and the port would not emit a zero for it.)
+ *   NOCIRCUIT            no path to that system  -> SS$_DEVOFFLINE
+ *   TOOBIG               past the frame/buffer bound -> SS$_BADPARAM
+ *   BADFRAME/TXFAIL      the bytes did not leave the node -> SS$_ABORT
+ */
+static uint32_t pe_blk_status(int rc)
+{
+	switch (rc) {
+	case PE_BLK_OK:        return SS__NORMAL;
+	case PE_BLK_NOCIRCUIT: return SS__DEVOFFLINE;
+	case PE_BLK_NOBUF:     return SS__BADPARAM;
+	case PE_BLK_NOSPACE:   return SS__INSFMEM;
+	case PE_BLK_RANGE:     return SS__BADPARAM;
+	case PE_BLK_PERM:      return SS__BADPARAM;
+	case PE_BLK_NONAME:    return SS__BADPARAM;
+	case PE_BLK_INVAL:     return SS__BADPARAM;
+	case PE_BLK_TOOBIG:    return SS__BADPARAM;
+	case PE_BLK_BADFRAME:  return SS__ABORT;
+	case PE_BLK_TXFAIL:    return SS__ABORT;
+	default:               return SS__ABORT;
+	}
+}
+
+int pe_buf_register(struct vms_pe *pe, uint8_t *base, uint32_t len,
+		    uint8_t access, uint32_t *name_out)
+{
+	if (pe == (struct vms_pe *)0)
+		return SS__NOSUCHDEV;
+	return (int)pe_blk_status(pe_blk_buf_register(&pe->fsm, base, len,
+						      access, name_out));
+}
+
+int pe_buf_release(struct vms_pe *pe, uint32_t name)
+{
+	if (pe == (struct vms_pe *)0)
+		return SS__NOSUCHDEV;
+	return (int)pe_blk_status(pe_blk_buf_release(&pe->fsm, name));
+}
+
+int pe_send_block(struct vms_pe *pe, const struct pe_blk_xfer *x,
+		  uint32_t *frames_out)
+{
+	if (pe == (struct vms_pe *)0)
+		return SS__NOSUCHDEV;
+	return (int)pe_blk_status(pe_blk_send(&pe->fsm, x, 0u, frames_out));
+}
+
+int pe_send_block_read_end(struct vms_pe *pe, const struct pe_blk_xfer *x,
+			   uint32_t tail_len, const uint8_t *body,
+			   uint32_t body_len, uint32_t *frames_out)
+{
+	int rc;
+
+	if (pe == (struct vms_pe *)0)
+		return SS__NOSUCHDEV;
+	/*
+	 * The two halves of FC-P6.1's READ form, in the order the capture has
+	 * them: everything but the final `tail_len` bytes as standalone block
+	 * frames, then the end message with that tail piggybacked on it
+	 * (vms_pe_fsm.h SS8d TRAP 1). If the stream half fails part-way the
+	 * caller learns exactly how far it got and NO end message is sent --
+	 * an end message claiming success behind a transfer that did not
+	 * complete is the fabrication this whole layer exists not to emit.
+	 */
+	rc = pe_blk_send(&pe->fsm, x, tail_len, frames_out);
+	if (rc != PE_BLK_OK)
+		return (int)pe_blk_status(rc);
+	return (int)pe_blk_status(pe_blk_send_read_end(&pe->fsm, x, tail_len,
+						       body, body_len));
 }
 
 /* ==========================================================================

@@ -71,6 +71,16 @@ static vms_codec_status_t mscp_read_opcode(const uint8_t *frame, uint32_t len,
 	return VMS_CODEC_OK;
 }
 
+/* sec 2's P.OPCD, as a public entry -- see the header. One dereference into
+ * the static above, so there is exactly ONE reader of that byte position. */
+vms_codec_status_t vms_mscp_read_opcode(const uint8_t *frame, uint32_t len,
+					uint8_t *opcode_out)
+{
+	if (frame == (const uint8_t *)0 || opcode_out == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	return mscp_read_opcode(frame, len, opcode_out);
+}
+
 vms_codec_status_t vms_mscp_classify(const uint8_t *frame, uint32_t len,
 				     const struct vms_frame_info *fi,
 				     enum vms_mscp_class *out)
@@ -206,6 +216,20 @@ static vms_codec_status_t mscp_hdr_parse(vms_wire_view_t *v,
 	if (!vms_wire_view_ok(v))
 		return v->err;
 	return VMS_CODEC_OK;
+}
+
+/* sec 5.1's 12-byte generic header, as a public entry -- see the header. One
+ * dereference into the static above, so the three positions still have exactly
+ * one reader each. */
+vms_codec_status_t vms_mscp_hdr_read(const uint8_t *frame, uint32_t len,
+				     struct vms_mscp_hdr *out)
+{
+	vms_wire_view_t v;
+
+	if (frame == (const uint8_t *)0 || out == (struct vms_mscp_hdr *)0)
+		return VMS_CODEC_E_INVAL;
+	vms_wire_view_init(&v, frame, len);
+	return mscp_hdr_parse(&v, out);
 }
 
 /* ---- SET CONTROLLER CHARACTERISTICS command ---- */
@@ -768,6 +792,39 @@ vms_codec_status_t vms_mscp_write_end_parse(const uint8_t *frame, uint32_t len,
 					    struct vms_mscp_xfer_end *out)
 {
 	return mscp_xfer_end_parse(frame, len, VMS_MSCP_OP_WRITE, out);
+}
+
+/* ---- the GENERIC end message (sec 5.2 / Table A-7's own arithmetic) ---- */
+
+vms_codec_status_t vms_mscp_generic_end_build(const struct vms_mscp_end_hdr *eh,
+					      uint8_t base_opcode,
+					      uint8_t *frame, uint32_t cap,
+					      uint32_t *written)
+{
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+
+	if (eh == (const struct vms_mscp_end_hdr *)0)
+		return VMS_CODEC_E_INVAL;
+	if ((base_opcode & VMS_MSCP_END_BIT) != 0u)
+		return VMS_CODEC_E_INVAL;   /* an END bit is this builder's job */
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+
+	vms_wire_put_zero(&w, VMS_OFF_SYSAP_BODY, VMS_MSCP_GENERIC_END_LEN);
+	st = mscp_end_hdr_build(&w, eh, base_opcode);
+	if (st != VMS_CODEC_OK)
+		return st;
+	/* Everything past the 12-byte header stays the zero-fill above: a
+	 * refusal has no parameter area to report (INV-6). */
+
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = VMS_MSCP_GENERIC_END_LEN;
+	return VMS_CODEC_OK;
 }
 
 /* ------------------------------------------------------------------ *

@@ -61,6 +61,7 @@
 #include "vms_cnxman.h"        /* FC-P3.8: cnxman_get_club/_csb + $SETCLUEVT */
 #include "vms_cnxman_csb.h"    /* FC-P3.9: the CSB state names MEMBER_GET renders */
 #include "vms_scs.h"           /* FC-P2.4: vms_scs_start + the CONN snapshots */
+#include "vms_mscp_srv.h"      /* FC-P6.3: the MSCP disk server (CLUSTER_START step 5) */
 
 /*
  * Device class codes. Values mirror src/libvms/include/dcdef.h so the
@@ -2151,7 +2152,12 @@ long vms_ioctl_sysgen_load(struct vms_proc *proc, unsigned long arg)
  *   1. the FC-P0.5 fork thread, if it is not already running;
  *   2. vms_pe_start()   (FC-P0.9) -- PEA0: up, HELLOs flowing;
  *   3. vms_scs_start()  (FC-P2.4) -- SCS bound to that running port;
- *   4. vms_cnxman_start()(FC-P3.8/P3.9) -- form or join per VAXCLUSTER.
+ *   4. vms_cnxman_start()(FC-P3.8/P3.9) -- form or join per VAXCLUSTER;
+ *   5. vms_mscp_srv_start()(FC-P6.3) -- the MSCP disk SERVER, which needs SCS
+ *      to register `MSCP$DISK` with and the port to move blocks over. It
+ *      answers SS$_NORMAL when this node serves nothing (MSCP_LOAD=0,
+ *      MSCP_SERVE_ALL=0, or no volume mounted): serving is a ROLE, not a
+ *      membership requirement, so "no disks to serve" must not fail a boot.
  *
  * Each step can only run because the one beneath it really came up, and each
  * refuses (SS$_NOSUCHDEV) rather than seeding itself from nothing if it did
@@ -2193,6 +2199,8 @@ long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg)
         status = vms_scs_start(cl);
     if (status == SS__NORMAL)
         status = vms_cnxman_start(cl);
+    if (status == SS__NORMAL)
+        status = vms_mscp_srv_start(cl);
 
     args.port_up = (uint32_t)(cl->pe != NULL);
     args.cluster_state = (uint32_t)cl->state;

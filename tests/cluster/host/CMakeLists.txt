@@ -177,6 +177,41 @@ cluster_host_test(test_codec_scs        test_codec_scs.c)
 cluster_host_test(test_codec_cm         test_codec_cm.c vms_frame_compose.c)
 cluster_host_test(test_codec_mscp       test_codec_mscp.c)
 cluster_host_test(test_mscp_cl_fsm      test_mscp_cl_fsm.c)  # FC-P3.4
+
+# ---- FC-P6.3: the MSCP disk SERVER's pure core ----
+# vms_mscp_srv_fsm.c is PURE (design sec 3.9 rule 4: no seam call, no
+# allocation, no clock but ops->now_ms), so it builds on exactly the terms
+# cluster_host_pe / cluster_host_scs do -- -DOVMX_CLUSTER_HOST, linked against
+# the FC-P6.2 codec it builds and parses every message through. Its GLUE
+# (vms_mscp_srv.c) is not host-linkable (it names exec_kbackend.h and the
+# FC-P0.5 fork API), so the test source-scans the SHIPPED file for its
+# bindings -- the two-proof shape test_cnxman_glue.c established.
+add_library(cluster_host_mscp_srv STATIC
+    ${OVMX_CLUSTER_CORE_DIR}/vms_mscp_srv_fsm.c
+)
+# ...and the R4-lite leg drives FC-P3.4's REAL class-driver discovery FSM
+# against it, which already lives in cluster_host_codec below.
+target_include_directories(cluster_host_mscp_srv PUBLIC ${OVMX_CLUSTER_CORE_DIR})
+target_compile_definitions(cluster_host_mscp_srv PUBLIC OVMX_CLUSTER_HOST)
+target_link_libraries(cluster_host_mscp_srv PUBLIC cluster_host_codec)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(cluster_host_mscp_srv PRIVATE -Wall -Wextra -Werror)
+endif()
+
+add_executable(test_mscp_srv test_mscp_srv.c)
+target_link_libraries(test_mscp_srv PRIVATE cluster_host_mscp_srv)
+target_include_directories(test_mscp_srv PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(test_mscp_srv PRIVATE
+    OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
+)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_mscp_srv PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_mscp_srv COMMAND test_mscp_srv)
+set_tests_properties(cluster_host_test_mscp_srv PROPERTIES
+    LABELS "unit;cluster;cluster_host;mscp"
+    TIMEOUT 30
+)
 # FC-P2.1b (E18): the classify-table widen that grants VMS_FCAP_CONID to the
 # 58-content SCS shorts and the 94-content op-10 application-message shape.
 cluster_host_test(test_codec_p2_1b_route test_codec_p2_1b_route.c)
@@ -403,6 +438,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_pe_fsm.c            # FC-P0.8
     hdr_alone_vms_scs_fsm.c           # FC-P2.2
     hdr_alone_vms_scs_dir.c           # FC-P2.3
+    hdr_alone_vms_mscp_srv_fsm.c      # FC-P6.3
 )
 target_include_directories(cluster_host_hdr_alone PRIVATE ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_hdr_alone PRIVATE OVMX_CLUSTER_HOST)

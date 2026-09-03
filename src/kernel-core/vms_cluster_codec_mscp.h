@@ -213,6 +213,18 @@ enum vms_mscp_status_major {
 unsigned vms_mscp_status_major(uint16_t status);
 unsigned vms_mscp_status_subcode(uint16_t status);
 
+/*
+ * vms_mscp_read_opcode - read the P.OPCD byte (sec 2, body[8]) of an MSCP
+ * command or end message addressed frame-absolutely. ADDED BY FC-P6.3, which
+ * needs the opcode to route a RECEIVED command to a handler BEFORE it knows
+ * which of the five class-specific parse functions applies -- and design SS3.9
+ * rule 2 puts every wire-position read inside a codec TU, so the SERVER asks
+ * for the byte instead of indexing it. VMS_CODEC_E_SHORT when the frame does
+ * not reach P.OPCD; VMS_CODEC_E_INVAL for a NULL argument.
+ */
+vms_codec_status_t vms_mscp_read_opcode(const uint8_t *frame, uint32_t len,
+					uint8_t *opcode_out);
+
 /* End-message flags (P.FLGS), Table A-3. */
 #define VMS_MSCP_EF_BAD_BLOCK_REPORTED   0x80u  /* EF.BBR */
 #define VMS_MSCP_EF_BAD_BLOCK_UNREPORTED 0x40u  /* EF.BBU */
@@ -349,6 +361,17 @@ struct vms_mscp_hdr {
 	uint16_t unit;      /* P.UNIT                                        */
 	uint8_t  opcode;    /* P.OPCD (command) / endcode (end message)      */
 };
+
+/*
+ * vms_mscp_hdr_read - read the 12-byte generic header (sec 5.1: P.CRF, P.UNIT,
+ * P.OPCD) of any command or end message, WITHOUT asserting which class it is.
+ * ADDED BY FC-P6.3: a server that must refuse an opcode it has no class parser
+ * for still has to echo that command's own P.CRF (sec 5.1 requires the echo),
+ * and design SS3.9 rule 2 keeps every wire position inside a codec TU.
+ * VMS_CODEC_E_SHORT when the frame does not reach P.OPCD.
+ */
+vms_codec_status_t vms_mscp_hdr_read(const uint8_t *frame, uint32_t len,
+				     struct vms_mscp_hdr *out);
 
 /* SET CONTROLLER CHARACTERISTICS command parameter area (Table A-6, sec 6.16). */
 #define VMS_OFF_MSCP_SCC_C_VRSN (VMS_OFF_SYSAP_BODY + 12) /* abs84, u16 -- host MUST supply 0 */
@@ -568,6 +591,31 @@ vms_codec_status_t vms_mscp_write_end_build(const struct vms_mscp_xfer_end *e,
 					    uint32_t *written);
 vms_codec_status_t vms_mscp_write_end_parse(const uint8_t *frame, uint32_t len,
 					    struct vms_mscp_xfer_end *out);
+
+/*
+ * THE GENERIC END MESSAGE (added by FC-P6.3).
+ *
+ * sec 5.2 gives every end message the SAME 12-byte header followed by a
+ * per-opcode parameter area, and Table A-7's own generic arithmetic makes the
+ * bare shape 32 bytes -- the length VMS_MSCP_READ_END_LEN above is MEASURED at
+ * and the file header already notes "matches Table A-7's own generic end
+ * arithmetic". A server has to be able to REFUSE a command whose opcode it has
+ * no class builder for, and sec 5.5's rule is that it refuses with an end
+ * message, not with silence. Building an SCC or READ end for such a command
+ * would put the WRONG endcode on the wire -- an assertion about which command
+ * is being answered -- so this entry exists to carry the header, the real
+ * endcode (`base_opcode | OP.END`) and the real status, with a parameter area
+ * that is an honest zero because a refusal has nothing to report.
+ *
+ * VMS_CODEC_E_INVAL if `base_opcode` already carries OP.END (the caller passes
+ * the COMMAND opcode; this builder sets the END bit).
+ */
+#define VMS_MSCP_GENERIC_END_LEN 32u
+
+vms_codec_status_t vms_mscp_generic_end_build(const struct vms_mscp_end_hdr *eh,
+					      uint8_t base_opcode,
+					      uint8_t *frame, uint32_t cap,
+					      uint32_t *written);
 
 /* ------------------------------------------------------------------ *
  * sec 8  The (SYSAP, category, opcode) allowlist rows this item

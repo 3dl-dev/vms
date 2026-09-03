@@ -346,4 +346,28 @@ int vms_scs_cdt_snapshot(struct vms_cluster *cl, uint32_t index,
 int vms_scs_peer_at(struct vms_cluster *cl, uint32_t index,
 		    vms_scs_sysid_t *out_sysid);
 
+/* ==========================================================================
+ * 9. Block-transfer completions -- the port's THIRD service, routed (FC-P6.3)
+ *
+ * A block transfer is NOT an SCS message. It names a BUFFER the local port
+ * minted, not a Con.ID, so SCS has no CDT to demux it through and nothing to
+ * interpret in it: this is a pass-through, and it exists only because the port
+ * delivers upward through `struct pe_upper_ops`, which SCS owns (vms_pe.h SS4,
+ * whose FC-P2.4 note already said "block_data stays NULL: the port's THIRD
+ * service is a SYSAP fact FC-P6.x binds").
+ *
+ * ONE consumer per node, because a node has one MSCP server. A second call
+ * replaces the registration and a NULL `cb` withdraws it; with none registered
+ * a completion is COUNTED and dropped, never routed at a guess.
+ *
+ * `name` is OUR OWN buffer name -- a value this node's port minted and handed
+ * to the peer -- so the consumer finds its request by something it created,
+ * never by a value the peer chose (INV-6).
+ * ========================================================================== */
+typedef void (*vms_scs_block_cb)(void *ctx, uint32_t name, uint32_t offset,
+				 uint32_t len, uint32_t bytes_remaining);
+
+int vms_scs_set_block_consumer(struct vms_cluster *cl, vms_scs_block_cb cb,
+			       void *cb_ctx);
+
 #endif /* OVMX_VMS_SCS_H */

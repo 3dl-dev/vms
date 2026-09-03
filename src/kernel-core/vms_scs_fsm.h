@@ -114,6 +114,37 @@
 #define SCS_DIR_FRAME_LEN    (VMS_ETH_HDR_LEN + VMS_SCSCTRL_LEN_LOOKUP)      /* 108 */
 #define SCS_DIR_BODY_LEN     VMS_SCS_DIRBODY_LEN                             /*  36 */
 
+/*
+ * THE THIRD APPLICATION-MESSAGE SHAPE (FC-P6.3).
+ *
+ * MTYPE 10 is not two lengths either. Spec sec 4(h)(1b) states the envelope is
+ * UNIFORM "across the short classes here, the 94-content MSCP commands, and the
+ * 190-content class" -- a statement about the ENVELOPE, not about a closed set
+ * of lengths -- and FC-P6.2's own census MEASURES the MSCP server's five end
+ * messages at five SCA contents: 86 (SCC END, 954/954 frames), 90 (READ END),
+ * 94 (WRITE END), 102 (ONLINE END) and 110 (GUS END, 18855/18855). Two of those
+ * are the two classes above; three are not, and a server that cannot emit them
+ * cannot answer a MOUNT.
+ *
+ * So scs_fsm_send_msg() takes a SYSAP body of ANY length up to
+ * SCS_SYSAP_BODY_LEN: 132 and 36 keep their own grounded, byte-exact builders
+ * (the 190-content class and the 94-content one), and every other length is
+ * assembled from this layer's own 16-byte header plus the SYSAP's bytes and
+ * handed to the port's variable-length entry, with the SCA length field made to
+ * match the frame that really went out. Nothing is padded into a class it does
+ * not belong to, and nothing is truncated.
+ *
+ * The two derivations below are the arithmetic that makes an SCS header for
+ * such a body. Both are DERIVED from already-published constants -- the codec's
+ * own SYSAP-body origin (frame-absolute 72) and Ethernet header length, and
+ * SCS_INNERLEN_BIAS above -- so the 190/94 classes fall out of them rather than
+ * being restated: 132 -> content 190, inner 146.
+ */
+#define SCS_SYSAP_SCA_CONTENT(sysap_len) \
+	((uint16_t)((VMS_OFF_SYSAP_BODY - VMS_ETH_HDR_LEN) + (sysap_len)))
+#define SCS_SYSAP_INNER_LEN(sysap_len) \
+	((uint16_t)(SCS_SYSAP_SCA_CONTENT(sysap_len) - SCS_INNERLEN_BIAS))
+
 /* ==========================================================================
  * 2. Return statuses -- negative, so `if (rc)` reads as failure
  *
@@ -185,6 +216,19 @@ struct scs_fsm_ops {
 	 */
 	int (*send_msg)(void *ctx, vms_scs_sysid_t dst, vms_conid_t dst_conid,
 			const uint8_t *body, uint32_t len);
+
+	/*
+	 * The SAME service at a body length the SYSAP chooses (ADDED BY
+	 * FC-P6.3). Production: pe_vc_send_msg_var. See SS1's "THE THIRD
+	 * APPLICATION-MESSAGE SHAPE" note for what grounds it -- five MEASURED
+	 * MSCP end-message classes that are neither 190-content nor 94-content.
+	 * MAY BE NULL: a glue that has not bound it simply cannot carry those
+	 * classes, and scs_fsm_send_msg() then refuses honestly (SCS_ERR_TXFAIL)
+	 * instead of padding a body into a class it does not belong to.
+	 */
+	int (*send_msg_var)(void *ctx, vms_scs_sysid_t dst,
+			    vms_conid_t dst_conid, const uint8_t *body,
+			    uint32_t len);
 
 	/*
 	 * The four REAL addresses of the circuit to `dst`, read from the

@@ -2869,17 +2869,20 @@ static int pe_send_build_envelope(struct pe_fsm *f, vms_scs_sysid_t dst,
 	return 0;
 }
 
-int pe_vc_send_msg(struct pe_fsm *f, vms_scs_sysid_t dst,
-		   vms_conid_t dst_conid, const uint8_t *body, uint32_t len)
+/*
+ * The one body-level assembly both sequenced-message entries share: build this
+ * circuit's abs 0-55, splice the caller's abs-56-onward content on, fix the SCA
+ * length up to the WHOLE frame, and hand it to pe_vc_send_frame (which
+ * re-stamps 32/34/44 with the circuit's real sequence and assigns/queues/
+ * transmits it, SS3b). `len` is validated by the CALLER, because the two
+ * entries have deliberately different length contracts.
+ */
+static int pe_send_msg_assemble(struct pe_fsm *f, vms_scs_sysid_t dst,
+				const uint8_t *body, uint32_t len)
 {
 	uint8_t frame[PE_VC_FRAME_MAX];
-	uint32_t total;
+	uint32_t total = PE_SEND_BODY_OFF + len;
 
-	(void)dst_conid;   /* not written to the wire -- see the .h doc comment */
-	if (f == NULL || body == NULL || len != PE_SEND_BODY_LEN)
-		return PE_VC_SEND_BADFRAME;
-
-	total = PE_SEND_BODY_OFF + len;
 	if (total > (uint32_t)sizeof(frame))
 		return PE_VC_SEND_TOOBIG;
 
@@ -2894,9 +2897,27 @@ int pe_vc_send_msg(struct pe_fsm *f, vms_scs_sysid_t dst,
 					   total) != VMS_CODEC_OK)
 		return PE_VC_SEND_BADFRAME;
 
-	/* pe_vc_send_frame re-stamps 32/34/44 with the circuit's real
-	 * sequence and assigns/queues/transmits it (SS3b). */
 	return pe_vc_send_frame(f, dst, frame, total);
+}
+
+int pe_vc_send_msg(struct pe_fsm *f, vms_scs_sysid_t dst,
+		   vms_conid_t dst_conid, const uint8_t *body, uint32_t len)
+{
+	(void)dst_conid;   /* not written to the wire -- see the .h doc comment */
+	if (f == NULL || body == NULL || len != PE_SEND_BODY_LEN)
+		return PE_VC_SEND_BADFRAME;
+	return pe_send_msg_assemble(f, dst, body, len);
+}
+
+int pe_vc_send_msg_var(struct pe_fsm *f, vms_scs_sysid_t dst,
+		       vms_conid_t dst_conid, const uint8_t *body, uint32_t len)
+{
+	(void)dst_conid;
+	if (f == NULL || body == NULL || len < PE_SEND_BODY_MIN)
+		return PE_VC_SEND_BADFRAME;
+	if (len > PE_SEND_BODY_MAX)
+		return PE_VC_SEND_TOOBIG;
+	return pe_send_msg_assemble(f, dst, body, len);
 }
 
 int pe_vc_send_dg(struct pe_fsm *f, vms_scs_sysid_t dst,

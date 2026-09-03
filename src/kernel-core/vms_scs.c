@@ -128,6 +128,13 @@ struct vms_scs {
 	 * break arriving from below (INV-6 -- counted, never inferred). */
 	uint32_t tx_port_refused;
 	uint32_t vc_downs;
+
+	/* The ONE block-transfer consumer (vms_scs.h SS9, FC-P6.3) and what
+	 * actually happened on that path -- counted here, where it happens. */
+	vms_scs_block_cb block_cb;
+	void            *block_ctx;
+	uint32_t         block_completions;
+	uint32_t         block_unclaimed;
 };
 
 /* ==========================================================================
@@ -265,6 +272,27 @@ static int scs_ops_send_msg(void *ctx, vms_scs_sysid_t dst,
 	return status == SS__NORMAL ? 0 : status;
 }
 
+/*
+ * The variable-length twin (FC-P6.3): the SAME port service at a body length
+ * the SYSAP chose, for the MSCP end-message classes vms_scs_fsm.h SS1's "THIRD
+ * APPLICATION-MESSAGE SHAPE" note grounds. One dereference, same refusal
+ * counting -- there is no second send path.
+ */
+static int scs_ops_send_msg_var(void *ctx, vms_scs_sysid_t dst,
+				vms_conid_t dst_conid, const uint8_t *body,
+				uint32_t len)
+{
+	struct vms_scs *scs = (struct vms_scs *)ctx;
+	int status;
+
+	if (scs->cl->pe == (struct vms_pe *)0)
+		return SS__NOSUCHDEV;
+	status = pe_send_msg_var(scs->cl->pe, dst, dst_conid, body, len);
+	if (status != SS__NORMAL)
+		scs->tx_port_refused++;
+	return status == SS__NORMAL ? 0 : status;
+}
+
 static int scs_ops_addr(void *ctx, vms_scs_sysid_t dst,
 			struct vms_scs_addr *out)
 {
@@ -313,6 +341,7 @@ static void scs_ops_bind(struct vms_scs *scs)
 {
 	scs->ops.send_ctrl = scs_ops_send_ctrl;
 	scs->ops.send_msg = scs_ops_send_msg;
+	scs->ops.send_msg_var = scs_ops_send_msg_var;
 	scs->ops.addr = scs_ops_addr;
 	scs->ops.arm_timer = scs_ops_arm_timer;
 	scs->ops.cancel_timer = scs_ops_cancel_timer;
@@ -375,6 +404,28 @@ static void scs_upper_vc_down(void *ctx, vms_scs_sysid_t peer, uint32_t reason)
 				    (uint32_t)SCS_CLOSE_PATHLOST));
 }
 
+/*
+ * THE PORT'S THIRD SERVICE, ROUTED (FC-P6.3). A block-transfer completion is
+ * not an SCS message: it names a BUFFER, not a Con.ID, and SCS has no CDT to
+ * demux it through. So SCS carries exactly one registered consumer and forwards
+ * to it -- it interprets nothing, and with no consumer registered the
+ * completion is counted and dropped, never guessed at.
+ */
+static void scs_upper_block_data(void *ctx, vms_scs_sysid_t from, uint32_t name,
+				 uint32_t offset, uint32_t len,
+				 uint32_t bytes_remaining)
+{
+	struct vms_scs *scs = (struct vms_scs *)ctx;
+
+	(void)from;
+	scs->block_completions++;
+	if (scs->block_cb == (vms_scs_block_cb)0) {
+		scs->block_unclaimed++;
+		return;
+	}
+	scs->block_cb(scs->block_ctx, name, offset, len, bytes_remaining);
+}
+
 static void scs_upper_bind(struct vms_scs *scs)
 {
 	scs->upper.message = scs_upper_message;
@@ -382,10 +433,12 @@ static void scs_upper_bind(struct vms_scs *scs)
 	scs->upper.vc_up = scs_upper_vc_up;
 	scs->upper.vc_down = scs_upper_vc_down;
 	scs->upper.ctx = scs;
-	/* block_data stays NULL: the port's THIRD service is a SYSAP fact
-	 * FC-P6.x binds, and the port itself documents NULL as legitimate. */
-	scs->upper.block_data = (void (*)(void *, vms_scs_sysid_t, uint32_t,
-					  uint32_t, uint32_t, uint32_t))0;
+	/* FC-P6.3 binds the port's THIRD service, exactly as the FC-P2.4 note
+	 * here said it would: block-transfer completions are routed to the ONE
+	 * registered consumer (vms_scs.h SS9), and with none registered the
+	 * forwarder is a no-op -- which is the legitimate NULL case the port
+	 * itself documents. */
+	scs->upper.block_data = scs_upper_block_data;
 }
 
 /* ==========================================================================
@@ -704,6 +757,23 @@ int vms_scs_cdt_snapshot(struct vms_cluster *cl, uint32_t index,
  * No fork mutex (see the header): this is a fork-context service, not a
  * snapshot. One dereference plus the vc_up test -- it decides nothing.
  */
+/*
+ * vms_scs_set_block_consumer - vms_scs.h SS9. One registration, replaced by a
+ * second call and withdrawn by a NULL one. No allocation, no list: a node has
+ * exactly one MSCP server.
+ */
+int vms_scs_set_block_consumer(struct vms_cluster *cl, vms_scs_block_cb cb,
+			       void *cb_ctx)
+{
+	if (cl == (struct vms_cluster *)0)
+		return SS__BADPARAM;
+	if (cl->scs == (struct vms_scs *)0)
+		return SS__NOSUCHDEV;
+	cl->scs->block_cb = cb;
+	cl->scs->block_ctx = cb != (vms_scs_block_cb)0 ? cb_ctx : (void *)0;
+	return SS__NORMAL;
+}
+
 int vms_scs_peer_at(struct vms_cluster *cl, uint32_t index,
 		    vms_scs_sysid_t *out_sysid)
 {

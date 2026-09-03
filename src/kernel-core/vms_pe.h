@@ -290,6 +290,18 @@ struct pe_upper_ops {
 int pe_send_msg(struct vms_pe *pe, vms_scs_sysid_t dst, vms_conid_t dst_conid,
 		const uint8_t *body, uint32_t len);
 
+/*
+ * The SAME sequenced-message service at a body length the caller chooses
+ * (ADDED BY FC-P6.3). `len` is the abs-56-onward content -- SCS's own 16-byte
+ * header plus the SYSAP body -- and the frame that goes out is exactly that
+ * long, with the SCA length field made to match. What grounds a variable
+ * MTYPE-10 class (five MEASURED MSCP end-message SCA contents that are neither
+ * 190 nor 94) is in vms_pe_fsm.h's pe_vc_send_msg_var doc comment; this is its
+ * one-line glue spelling and there is no second envelope path.
+ */
+int pe_send_msg_var(struct vms_pe *pe, vms_scs_sysid_t dst,
+		    vms_conid_t dst_conid, const uint8_t *body, uint32_t len);
+
 /* Send a datagram (unsequenced, unacknowledged) to `dst`. */
 int pe_send_dg(struct vms_pe *pe, vms_scs_sysid_t dst,
 	       const uint8_t *body, uint32_t len);
@@ -358,6 +370,22 @@ int pe_buf_release(struct vms_pe *pe, uint32_t name);
  * the peer's own message rather than chosen here. */
 int pe_send_block(struct vms_pe *pe, const struct pe_blk_xfer *x,
 		  uint32_t *frames_out);
+
+/*
+ * READ's WHOLE answer in one call (ADDED BY FC-P6.3, the first caller): stream
+ * `x->length - tail_len` bytes as standalone block frames, then send the end
+ * message `body`/`body_len` with the final `tail_len` bytes PIGGYBACKED into
+ * the same Ethernet frame -- FC-P6.1's two halves (pe_blk_send +
+ * pe_blk_send_read_end, vms_pe_fsm.h SS8d) in the order the vms291 capture has
+ * them, so no caller has to know that ordering or get it wrong.
+ *
+ * If the stream half fails part-way, *frames_out says how far it got and NO
+ * end message is sent: an end message claiming a transfer that did not happen
+ * is exactly the fabricated success INV-6 forbids.
+ */
+int pe_send_block_read_end(struct vms_pe *pe, const struct pe_blk_xfer *x,
+			   uint32_t tail_len, const uint8_t *body,
+			   uint32_t body_len, uint32_t *frames_out);
 
 /* ==========================================================================
  * 6. Lifecycle and readback (glue, vms_pe.c -- FC-P0.9)

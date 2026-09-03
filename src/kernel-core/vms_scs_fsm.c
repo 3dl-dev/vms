@@ -663,6 +663,48 @@ static int msg_transmit_short(struct scs_fsm *f, struct scs_cdt *cdt,
 	return SCS_OK;
 }
 
+/*
+ * THE THIRD SHAPE (FC-P6.3, vms_scs_fsm.h SS1). A SYSAP body at a length neither
+ * grounded class holds -- the MSCP server's 28/32/44/52-byte end messages -- is
+ * assembled from this layer's own 16-byte header plus the SYSAP's bytes and
+ * handed to the port's variable-length entry. The credit field is the SAME
+ * ledger read the other two make; nothing here is padded and nothing invented.
+ */
+static int msg_transmit_var(struct scs_fsm *f, struct scs_cdt *cdt,
+			    const uint8_t *sysap_body, uint32_t len)
+{
+	struct vms_scs_hdr h;
+	uint32_t body_len = VMS_SCS_HDR_LEN + len;
+	int rc;
+
+	if (f->ops->send_msg_var == (int (*)(void *, vms_scs_sysid_t,
+					     vms_conid_t, const uint8_t *,
+					     uint32_t))0)
+		return SCS_ERR_TXFAIL;
+
+	scs_bzero(&h, (uint32_t)sizeof(h));
+	h.inner_len = SCS_SYSAP_INNER_LEN(len);
+	h.mtype = (uint16_t)SCS_MTYPE_APPL_MSG;
+	h.conid_remote = cdt->remote_conid;
+	h.conid_local = cdt->local_conid;
+	h.credit = credit_pending_peek(cdt);
+
+	if (vms_scs_msg_body_build(&h, sysap_body, len, f->msgbuf,
+				   body_len) != VMS_CODEC_OK) {
+		f->tx_refused_codec++;
+		return SCS_ERR_CODEC;
+	}
+	rc = f->ops->send_msg_var(f->ops->ctx, cdt->peer_sysid,
+				  cdt->remote_conid, f->msgbuf, body_len);
+	if (rc != 0) {
+		f->tx_errors++;
+		return SCS_ERR_TXFAIL;
+	}
+
+	msg_accounted(cdt, h.credit);
+	return SCS_OK;
+}
+
 /* The class is chosen by the SYSAP's own length and by nothing else. */
 static int msg_transmit(struct scs_fsm *f, struct scs_cdt *cdt,
 			const uint8_t *sysap_body, uint32_t len)
@@ -671,6 +713,8 @@ static int msg_transmit(struct scs_fsm *f, struct scs_cdt *cdt,
 		return msg_transmit_long(f, cdt, sysap_body);
 	if (len == SCS_DIR_BODY_LEN)
 		return msg_transmit_short(f, cdt, sysap_body);
+	if (len > 0u && len < SCS_SYSAP_BODY_LEN)
+		return msg_transmit_var(f, cdt, sysap_body, len);
 	return SCS_ERR_INVAL;
 }
 
@@ -683,7 +727,9 @@ static int sendwait_push(struct scs_fsm *f, struct scs_cdt *cdt,
 {
 	uint32_t i;
 
-	if (len != SCS_SYSAP_BODY_LEN && len != SCS_DIR_BODY_LEN)
+	/* Any body msg_transmit() can carry, Credit Wait can hold: the pool's
+	 * slot is SCS_SYSAP_BODY_LEN wide, which is the largest of them. */
+	if (len == 0u || len > SCS_SYSAP_BODY_LEN)
 		return SCS_ERR_INVAL;
 	if (f->sw == (struct scs_sendwait *)0 || f->n_sw == 0u)
 		return SCS_ERR_NOCREDIT;    /* no pool bound: honest refusal */
@@ -2082,8 +2128,11 @@ int scs_fsm_send_msg(struct scs_fsm *f, vms_conid_t local_conid,
 	if (f == (struct scs_fsm *)0 || body == (const uint8_t *)0)
 		return SCS_ERR_INVAL;
 	/* The length IS the wire class (vms_scs_fsm.h SS1): the 190-content
-	 * SYSAP class or the 94-content directory class, and nothing else. */
-	if (len != SCS_SYSAP_BODY_LEN && len != SCS_DIR_BODY_LEN)
+	 * SYSAP class, the 94-content directory/MSCP-command class, or -- since
+	 * FC-P6.3 -- any shorter body carried in its own SCA length ("THE THIRD
+	 * APPLICATION-MESSAGE SHAPE"). A body LONGER than the 190-content class
+	 * holds is still refused: nothing gets truncated onto the wire. */
+	if (len == 0u || len > SCS_SYSAP_BODY_LEN)
 		return SCS_ERR_INVAL;
 	cdt = scs_fsm_cdt_by_conid(f, local_conid);
 	if (cdt == (struct scs_cdt *)0)

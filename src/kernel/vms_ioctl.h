@@ -905,6 +905,81 @@ _Static_assert(sizeof(struct vms_cluster_diag_port_args) == 152,
 _Static_assert(VMS_IOCTL_CLUSTER_DIAG_PORT == 0xC098563Du,
                "VMS_IOCTL_CLUSTER_DIAG_PORT encodes differently than the reference build");
 
+/*
+ * VMS_IOCTL_SYSGEN_LOAD (FC-P0.10, docs/plan-faithful-cluster-executive.md).
+ * STARTUP.EXE's own case of SYSBOOT: hands the cluster SYSGEN parameters and
+ * the CLUSTER_AUTHORIZE record it read off SYS$SYSTEM:OVMXVMSSYS.PAR
+ * (sysgen_params.h, cluster_authorize.h) into the executive's ONE
+ * struct vms_cluster (vms_cluster_node(), FC-P0.9's singleton) so every
+ * later cluster layer reads real loaded state, never a compiled-in default.
+ * Issued once, before VMS_IOCTL_CLUSTER_START (FC-P0.11) -- reproducing
+ * SYSBOOT's ordering (vms_cluster.h section 2's header comment: "on VMS
+ * these are in the executive before SYSINIT forms or joins").
+ *
+ * Field-for-field this is struct vms_cluster_params (vms_cluster.h) plus the
+ * `status` return. The dispatcher (vms_ioctl_sysgen_load, vms_devtab.c)
+ * copies each field explicitly rather than a byte-identical memcpy, because
+ * -- unlike CLUSTER_DIAG_PORT's pure snapshot reads -- this ioctl performs
+ * the negctl validation the plan row requires: VAXCLUSTER >= 1 with no
+ * SCSNODE loaded is SS$_BADPARAM, logged, and struct vms_cluster.params is
+ * left at its prior (honest, zeroed) state -- never a fabricated identity
+ * (INV-6). This header stays includable with no kernel-core dependency, so
+ * the field layout is duplicated here rather than shared by #include, same
+ * discipline as the CLUSTER_DIAG_PORT row structs above.
+ *
+ * SCSSYSTEMID is split into _lo/_hi uint32_t halves rather than one uint64_t
+ * -- the same "no raw 64-bit field in a wire struct" discipline
+ * vms_pe_vc_view_wire's peer_sysid_lo/hi already uses, because a struct built
+ * entirely from <=4-byte fields lays out IDENTICALLY on ILP32 (elf32-vax) and
+ * LP64 (x86_64/NetBSD-amd64): a bare uint64_t does not (the VAX cross-compile
+ * gate caught exactly this drift; see docs/design-faithful-cluster-executive.md's
+ * "Word width" leak-table entry).
+ */
+struct vms_sysgen_load_args {
+    /* ---- identity (fatal if absent with vaxcluster >= 1) ---- */
+    uint8_t  scsnode[8];            /* in: VMS_SCSNODE_MAX(6)+2, blank/NUL padded */
+    uint8_t  scsnode_len;           /* in: significant chars, 0..6 (0 = unset)    */
+    uint8_t  pad0;
+    uint32_t scssystemid_lo;        /* in: SCSSYSTEMID low word, 0 = unset        */
+    uint32_t scssystemid_hi;        /* in: SCSSYSTEMID high word (48-bit id: 0 today) */
+
+    /* ---- membership / quorum arithmetic ---- */
+    uint16_t votes;                 /* in: VOTES                                  */
+    uint16_t expected_votes;        /* in: EXPECTED_VOTES                         */
+    uint16_t qdskvotes;             /* in: QDSKVOTES                              */
+    uint16_t recnxinterval;         /* in: RECNXINTERVAL, seconds                 */
+    uint16_t timvcfail;             /* in: TIMVCFAIL, its SYSGEN unit             */
+    uint16_t cluster_credits;       /* in: CLUSTER_CREDITS                        */
+
+    /* ---- roles ---- */
+    uint8_t  vaxcluster;            /* in: VAXCLUSTER, 0 = never, 1 = if present, 2 = always */
+    uint8_t  lockdirwt;             /* in: LOCKDIRWT                              */
+    uint8_t  alloclass;             /* in: ALLOCLASS                              */
+    uint8_t  mscp_load;             /* in: MSCP_LOAD                              */
+    uint8_t  mscp_serve_all;        /* in: MSCP_SERVE_ALL                         */
+    uint8_t  pad1[3];
+
+    uint32_t niscs_max_pktsz;       /* in: NISCS_MAX_PKTSZ (clamped by the port)  */
+
+    /* ---- DISK_QUORUM (empty = none) ---- */
+    uint8_t  disk_quorum[16];       /* in: quorum-disk device name                */
+    uint8_t  disk_quorum_len;       /* in: significant chars, 0 = none            */
+    uint8_t  pad2;
+
+    /* ---- CLUSTER_AUTHORIZE (group + password) ---- */
+    uint16_t auth_group;            /* in: CLUSTER_AUTHORIZE group, 0 if !valid   */
+    uint8_t  auth_password[32];     /* in: CLUSTER_AUTHORIZE password (VMS_CLUSTER_PWD_LEN) */
+    uint8_t  auth_password_len;     /* in: significant bytes                      */
+    uint8_t  auth_valid;            /* in: 1 = a real CLUSTER_AUTHORIZE.DAT was read */
+
+    uint32_t status;                /* return: SS$_ status                        */
+};
+_Static_assert(sizeof(struct vms_sysgen_load_args) == 104,
+               "vms_sysgen_load_args changed size -- VMS_IOCTL_SYSGEN_LOAD ABI break");
+#define VMS_IOCTL_SYSGEN_LOAD _IOWR(VMS_IOC_MAGIC, 0x3e, struct vms_sysgen_load_args)
+_Static_assert(VMS_IOCTL_SYSGEN_LOAD == 0xC068563Eu,
+               "VMS_IOCTL_SYSGEN_LOAD encodes differently than the reference build");
+
 /* ================================================================
  * Process registration
  * ================================================================ */

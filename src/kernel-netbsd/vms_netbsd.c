@@ -1258,6 +1258,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_CLUSTER_MEMBER_CLEAR:
 	case VMS_IOCTL_CLUSTER_MEMBER_GET:
 	case VMS_IOCTL_CLUSTER_DIAG_PORT:
+	case VMS_IOCTL_SYSGEN_LOAD:
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -1292,6 +1293,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_cluster_member_get(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_CLUSTER_DIAG_PORT:
 			r = vms_ioctl_cluster_diag_port(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_SYSGEN_LOAD:
+			r = vms_ioctl_sysgen_load(proc, (unsigned long)uarg);   break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}

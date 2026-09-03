@@ -95,6 +95,7 @@ add_library(cluster_host_cnxman STATIC
     ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_recnx_fsm.c
     ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_quorum.c   # FC-P3.7
     ${OVMX_CLUSTER_CORE_DIR}/vms_cluster_api.c      # FC-P3.7
+    ${OVMX_CLUSTER_CORE_DIR}/vms_cluster_sysgen.c   # FC-P0.10
     ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_phase2.c    # FC-P3.5 + FC-P3.12
     ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_barrier_fsm.c
     ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_coord_fsm.c # FC-P3.12
@@ -148,6 +149,13 @@ cluster_host_test(test_mscp_cl_fsm      test_mscp_cl_fsm.c)  # FC-P3.4
 # same cluster_host_cnxman library.
 cluster_host_cnxman_test(test_cnxman_quorum      test_cnxman_quorum.c)
 cluster_host_cnxman_test(test_cluster_api_getsyi test_cluster_api_getsyi.c)
+
+# ---- FC-P0.10: cluster SYSGEN parameters loaded into struct vms_cluster ----
+# Same host-pure discipline: vms_cluster_sysgen.c takes no kernel header and no
+# SS$_ vocabulary, so its negctl (VAXCLUSTER >= 1 with no SCSNODE -> refused,
+# struct vms_cluster.params left unchanged) is proved here in milliseconds; the
+# booted-node R4 readback (SYSGEN SHOW, CLUSTER_DIAG) is deferred to the lab.
+cluster_host_cnxman_test(test_cluster_sysgen_load test_cluster_sysgen_load.c)
 
 # ---- FC-P0.5: the cluster fork context, built with NO kernel headers ----
 # The SHIPPING translation unit (src/kernel-core/vms_cluster_fork.c), not a copy

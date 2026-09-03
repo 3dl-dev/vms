@@ -887,6 +887,10 @@ long vms_ioctl_cluster_member_get(struct vms_proc *proc, unsigned long arg);
 struct vms_cluster;
 struct vms_cluster *vms_cluster_node(void);
 long vms_ioctl_cluster_diag_port(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_SYSGEN_LOAD (FC-P0.10): mirror of the src/kernel/vms_internal.h
+ * decl -- loads the cluster SYSGEN parameters into vms_cluster_node()'s real
+ * struct vms_cluster.params (vms_cluster_sysgen.c). */
+long vms_ioctl_sysgen_load(struct vms_proc *proc, unsigned long arg);
 
 /* ----------------------------------------------------------------
  * LOGICAL-NAME facility (LNM$SYSTEM/GROUP/JOB, rd vms-72da) -- DEFINED in

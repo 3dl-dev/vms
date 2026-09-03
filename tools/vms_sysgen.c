@@ -143,6 +143,67 @@ static const struct sysgen_param default_params[] = {
       .description = "Cluster node name (SCS system name, max 6 chars)",
       .type = SYSGEN_TYPE_STRING,
       .str_current = "OVMX", .str_default = "OVMX" },
+
+    /* --- FC-P0.10: the remaining VMS_IOCTL_SYSGEN_LOAD parameters --- */
+
+    /* LOCKDIRWT: OVMX's OWN default is 0, not a VMS-published number --
+     * design D-DLM-1 (docs/design-faithful-cluster-executive.md): "join with
+     * LOCKDIRWT=0 and advertise it honestly" is the smallest faithful
+     * footprint (never a lock directory node unless the operator opts in). */
+    { .name = "LOCKDIRWT", .current = 0, .default_val = 0,
+      .min_val = 0, .max_val = 255, .flags = SYSGEN_F_DYNAMIC,
+      .description = "Lock directory weight (0 = never a directory node, D-DLM-1)",
+      .type = SYSGEN_TYPE_NUMERIC },
+    /* QDSKVOTES: 0 matches the DISK_QUORUM default below (no quorum disk
+     * configured -- it contributes no votes until one is). OVMX-defined. */
+    { .name = "QDSKVOTES", .current = 0, .default_val = 0,
+      .min_val = 0, .max_val = 32767, .flags = SYSGEN_F_DYNAMIC,
+      .description = "Quorum disk votes (0 = no quorum disk configured)",
+      .type = SYSGEN_TYPE_NUMERIC },
+    /* TIMVCFAIL / CLUSTER_CREDITS: OVMX's OWN defaults for a port whose
+     * SYSGEN value has not been loaded -- see vms_pe_fsm.h's
+     * PE_TIMVCFAIL_DEFAULT_MS (16000 ms == 1600 here, the lab's captured
+     * TIMVCFAIL in its own SYSGEN unit) and the same comment's "CLUSTER_
+     * CREDITS, 10 in the lab". Neither is a published VMS constant; both are
+     * disclosed here as OVMX choices, matching the lab's own values so an
+     * unconfigured store and a captured configuration agree. */
+    { .name = "TIMVCFAIL", .current = 1600, .default_val = 1600,
+      .min_val = 1, .max_val = 65535, .flags = SYSGEN_F_DYNAMIC,
+      .description = "Virtual circuit failure detection time (OVMX default; see vms_pe_fsm.h)",
+      .type = SYSGEN_TYPE_NUMERIC },
+    { .name = "CLUSTER_CREDITS", .current = 10, .default_val = 10,
+      .min_val = 1, .max_val = 65535, .flags = SYSGEN_F_DYNAMIC,
+      .description = "Per-circuit send credit (OVMX default; matches the lab capture)",
+      .type = SYSGEN_TYPE_NUMERIC },
+    /* NISCS_MAX_PKTSZ: 1498, GROUNDED in the cluster protocol spec sec 4(k)
+     * (src/kernel-core/vms_cluster_codec_hello.h's VMS_HELLO_PADDED_MAX_SCA
+     * comment: "NISCS_MAX_PKTSZ 1498+2"). Clamped to the interface MTU by
+     * the port at CLUSTER_START; this is the SYSGEN ceiling only. */
+    { .name = "NISCS_MAX_PKTSZ", .current = 1498, .default_val = 1498,
+      .min_val = 512, .max_val = 65535, .flags = SYSGEN_F_DYNAMIC,
+      .description = "Maximum NISCA packet size, bytes (spec sec 4(k))",
+      .type = SYSGEN_TYPE_NUMERIC },
+    /* MSCP_LOAD / MSCP_SERVE_ALL: published OpenVMS SYSGEN defaults (VSI/HPE
+     * OpenVMS System Management Utilities Reference Manual, SYSGEN
+     * Parameters) -- MSCP_LOAD defaults to load the MSCP server, MSCP_
+     * SERVE_ALL defaults to NOT serving every disk automatically. */
+    { .name = "MSCP_LOAD", .current = 1, .default_val = 1,
+      .min_val = 0, .max_val = 1, .flags = SYSGEN_F_DYNAMIC,
+      .description = "Load the MSCP server (published OpenVMS default: enabled)",
+      .type = SYSGEN_TYPE_NUMERIC },
+    { .name = "MSCP_SERVE_ALL", .current = 0, .default_val = 0,
+      .min_val = 0, .max_val = 1, .flags = SYSGEN_F_DYNAMIC,
+      .description = "Serve every disk via MSCP (published OpenVMS default: disabled)",
+      .type = SYSGEN_TYPE_NUMERIC },
+    /* DISK_QUORUM: the quorum disk's device name, empty = none configured.
+     * String-typed like SCSNODE; NOTE the shared store's SYSGEN_STRVAL_LEN
+     * (8 bytes) is sized for SCSNODE-class strings and can TRUNCATE a longer
+     * real device name (e.g. "$102$DGA1023") -- disclosed here, not silently
+     * widened: FC-P0.10 wires the load path, not a store-format change. */
+    { .name = "DISK_QUORUM", .flags = SYSGEN_F_DYNAMIC,
+      .description = "Quorum disk device name (\"\" = none configured)",
+      .type = SYSGEN_TYPE_STRING,
+      .str_current = "", .str_default = "" },
 };
 
 #define DEFAULT_PARAM_COUNT \

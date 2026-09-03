@@ -71,6 +71,9 @@
  * class): it links vmsfs statically already (CMakeLists.txt's vmsfs_static
  * in OVMX_IMGACT mode), which is all this header-only reader needs. */
 #include "sysgen_params.h"
+/* CLUSTER_AUTHORIZE.DAT reader (vms-ci.8) -- group + password, loaded into
+ * the executive alongside the SYSGEN cluster parameters below (FC-P0.10). */
+#include "cluster_authorize.h"
 /* SYSBOOT> conversational-boot prompt (vms-b81) -- operates on the SAME
  * SYS$SYSTEM:OVMXVMSSYS.PAR every other consumer uses. On the Linux atomic-flip
  * runtime (vms-46c) it reaches that file over the executive Files-11 ACP, the
@@ -1165,6 +1168,136 @@ static void read_boot_parameters(void)
     sethostname(OVMX_DEFAULT_NODENAME, strlen(OVMX_DEFAULT_NODENAME));
 }
 
+/* ------------------------------------------------------------------ */
+/* Cluster SYSGEN parameters into the executive (FC-P0.10)             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * sysgen_str_into - copy a NUL-terminated string read off the parameter file
+ * into a fixed, non-NUL-terminated wire field, clamped to its width. Shared
+ * by SCSNODE and DISK_QUORUM below so the clamp-and-copy logic exists once.
+ */
+static void sysgen_str_into(const char *src, uint8_t *dst, size_t dstlen,
+                            uint8_t *out_len)
+{
+    size_t n = strlen(src);
+    if (n > dstlen)
+        n = dstlen;
+    memcpy(dst, src, n);
+    *out_len = (uint8_t)n;
+}
+
+/*
+ * load_cluster_sysgen_params - STARTUP.EXE's own case of SYSBOOT (FC-P0.10,
+ * docs/plan-faithful-cluster-executive.md). Reads the cluster SYSGEN
+ * parameters off SYS$SYSTEM:OVMXVMSSYS.PAR through the SAME shared reader
+ * read_boot_parameters() above uses (sysgen_read_string/sysgen_read_param --
+ * vms_sysgen.c, scsd.c and the DCL F$GETSYI lexicals already share it), plus
+ * the CLUSTER_AUTHORIZE group/password (cluster_authorize_read()), and hands
+ * the whole set to VMS_IOCTL_SYSGEN_LOAD (vms_kif_sysgen_load) so the
+ * executive's real struct vms_cluster (vms_cluster_node()) carries it before
+ * any later item starts the port (VMS_IOCTL_CLUSTER_START, FC-P0.11).
+ *
+ * Uses the SAME OVMX_SYSGEN_PATH staging scope as read_boot_parameters() (see
+ * its header for why) so both readers see the identical parameter file this
+ * boot. A parameter absent from the file reads as its honest zero (VAXCLUSTER
+ * 0 = never, VOTES 0, ...) -- never a fabricated default (INV-6); the FACTORY
+ * DEFAULTS a fresh install seeds the file with live in tools/vms_sysgen.c and
+ * sysboot.c, not here. Called unconditionally, even when the file is missing:
+ * an all-zero set is the honest "VAXCLUSTER never" state, not a skip.
+ *
+ * Does not consult conversational_boot_params: a SYSBOOT> SET on a cluster
+ * parameter this session is not yet threaded through to this load (only
+ * SCSNODE's hostname effect is, above) -- a disclosed limitation, not a
+ * silent one; the persisted store's value stands until a later item extends
+ * sysboot.h with a numeric working-set reader.
+ *
+ * SS$_BADPARAM (the negctl this ioctl enforces: VAXCLUSTER >= 1 with no
+ * SCSNODE loaded) is logged loudly and honestly -- OVMX invents no VMS
+ * message text for a condition no oracle capture grounds (Rule 10) -- and the
+ * boot continues; the cluster stack simply never received a loaded identity
+ * (a fact the READER of it stays not knowing anything the executive itself
+ * does not honestly hold, not a symptom this function paints over).
+ */
+static void load_cluster_sysgen_params(void)
+{
+    struct vms_sysgen_load_args args;
+    struct cluster_authorize auth;
+    char strval[SYSGEN_STRVAL_LEN];
+    uint32_t u32, status;
+
+#if defined(OVMX_BOOT_ACP_BRIDGE)
+    int staged_params = (access(OVMX_BOOT_STAGE_DIR "/OVMXVMSSYS.PAR", R_OK) == 0);
+    if (staged_params)
+        setenv("OVMX_SYSGEN_PATH", OVMX_BOOT_STAGE_DIR "/OVMXVMSSYS.PAR", 1);
+#endif
+
+    memset(&args, 0, sizeof(args));
+
+    if (sysgen_read_string("SCSNODE", strval, sizeof(strval)) == 0 && strval[0] != '\0')
+        sysgen_str_into(strval, args.scsnode, sizeof(args.scsnode), &args.scsnode_len);
+
+    /* SCSSYSTEMID: the generic numeric SYSGEN reader is a plain uint32_t
+     * (sys_misc.c's SYI$_SCSSYSTEMID already reads it the same way), so the
+     * wire's high word is always 0 today -- honest, not a truncation this
+     * function invents; a wider store is a future item's concern. */
+    if (sysgen_read_param("SCSSYSTEMID", &u32) == 0)
+        args.scssystemid_lo = u32;
+    if (sysgen_read_param("ALLOCLASS", &u32) == 0)
+        args.alloclass = (uint8_t)u32;
+    if (sysgen_read_param("VOTES", &u32) == 0)
+        args.votes = (uint16_t)u32;
+    if (sysgen_read_param("EXPECTED_VOTES", &u32) == 0)
+        args.expected_votes = (uint16_t)u32;
+    if (sysgen_read_param("VAXCLUSTER", &u32) == 0)
+        args.vaxcluster = (uint8_t)u32;
+    if (sysgen_read_param("LOCKDIRWT", &u32) == 0)
+        args.lockdirwt = (uint8_t)u32;
+    if (sysgen_read_param("QDSKVOTES", &u32) == 0)
+        args.qdskvotes = (uint16_t)u32;
+    if (sysgen_read_param("RECNXINTERVAL", &u32) == 0)
+        args.recnxinterval = (uint16_t)u32;
+    if (sysgen_read_param("TIMVCFAIL", &u32) == 0)
+        args.timvcfail = (uint16_t)u32;
+    if (sysgen_read_param("CLUSTER_CREDITS", &u32) == 0)
+        args.cluster_credits = (uint16_t)u32;
+    if (sysgen_read_param("NISCS_MAX_PKTSZ", &u32) == 0)
+        args.niscs_max_pktsz = u32;
+    if (sysgen_read_param("MSCP_LOAD", &u32) == 0)
+        args.mscp_load = (uint8_t)u32;
+    if (sysgen_read_param("MSCP_SERVE_ALL", &u32) == 0)
+        args.mscp_serve_all = (uint8_t)u32;
+
+    if (sysgen_read_string("DISK_QUORUM", strval, sizeof(strval)) == 0 && strval[0] != '\0')
+        sysgen_str_into(strval, args.disk_quorum, sizeof(args.disk_quorum),
+                        &args.disk_quorum_len);
+
+    if (cluster_authorize_read(&auth) == 0) {
+        args.auth_group = auth.group;
+        sysgen_str_into(auth.password, args.auth_password,
+                        sizeof(args.auth_password), &args.auth_password_len);
+        args.auth_valid = 1;
+    }
+
+#if defined(OVMX_BOOT_ACP_BRIDGE)
+    if (staged_params)
+        unsetenv("OVMX_SYSGEN_PATH");
+#endif
+
+    status = vms_kif_sysgen_load(&args);
+    if (status == SS$_BADPARAM) {
+        fprintf(stderr,
+                "%%OVMX-F-BADSYSGEN, VAXCLUSTER is %u but no SCSNODE is configured\n",
+                (unsigned)args.vaxcluster);
+        fprintf(stderr,
+                "-OVMX-I-BADSYSGEN, cluster SYSGEN parameters were not loaded\n");
+    } else if (status != SS$_NORMAL) {
+        fprintf(stderr,
+                "%%OVMX-W-NOCLUSTER, cluster SYSGEN parameters were not loaded"
+                " (status %#x)\n", (unsigned)status);
+    }
+}
+
 /*
  * NOTE ON SERVICES: STARTUP.EXE STARTS NO SERVICES. DO NOT ADD ONE HERE.
  *
@@ -1500,6 +1633,15 @@ int main(void)
      * header for the ordering divergence from real VMS and the honest
      * missing/corrupt-file fallback. */
     read_boot_parameters();
+
+    /* Step 2c: STARTUP.EXE's own case of SYSBOOT (FC-P0.10, docs/plan-
+     * faithful-cluster-executive.md) -- load the cluster SYSGEN parameters
+     * and the CLUSTER_AUTHORIZE record into the executive's real
+     * struct vms_cluster, BEFORE any later item starts the cluster port
+     * (VMS_IOCTL_CLUSTER_START, FC-P0.11), reproducing SYSBOOT's ordering
+     * (vms_cluster.h section 2). Must run after read_boot_parameters()'s own
+     * mount/device-table preconditions. */
+    load_cluster_sysgen_params();
 
     /* Step 3: %STDRV-I-STARTUP begun, then run STARTUP.COM.
      * The STDRV "begun" bracket precedes the startup procedure (F1). There is

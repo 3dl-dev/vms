@@ -1166,6 +1166,10 @@ struct vms_cluster *vms_cluster_node(void);
 /* VMS_IOCTL_CLUSTER_DIAG_PORT (FC-P0.9): the port's SDA SHOW PORT-equivalent
  * diagnostics read, against vms_cluster_node()'s real vms_pe.c objects. */
 long vms_ioctl_cluster_diag_port(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_SYSGEN_LOAD (FC-P0.10): STARTUP.EXE's own case of SYSBOOT --
+ * loads the cluster SYSGEN parameters + CLUSTER_AUTHORIZE into
+ * vms_cluster_node()'s real struct vms_cluster.params (vms_cluster_sysgen.c). */
+long vms_ioctl_sysgen_load(struct vms_proc *proc, unsigned long arg);
 /* vms-94c (DLM epic vms-7fa rung 1): the cross-node DLM RECEIVE handler and its
  * ioctl wrapper. Rung 1 delivers a decoded remote DLM request TO the handler,
  * which returns SS$_UNSUPPORTED (no fabricated cross-node grant, INV-6). */

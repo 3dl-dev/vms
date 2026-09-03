@@ -392,9 +392,50 @@ struct vms_cluster_diag_port_args {
 	struct vms_pe_vc_view_wire      vc;
 };
 
+/*
+ * VMS_IOCTL_SYSGEN_LOAD (FC-P0.10). Byte-for-byte the same struct as
+ * src/kernel/vms_ioctl.h -- see that header for the field-by-field rationale
+ * and the negctl this ioctl's dispatcher enforces (SS$_BADPARAM on a
+ * VAXCLUSTER >= 1 boot with no SCSNODE loaded, INV-6).
+ */
+struct vms_sysgen_load_args {
+	uint8_t  scsnode[8];
+	uint8_t  scsnode_len;
+	uint8_t  pad0;
+	uint32_t scssystemid_lo;
+	uint32_t scssystemid_hi;
+
+	uint16_t votes;
+	uint16_t expected_votes;
+	uint16_t qdskvotes;
+	uint16_t recnxinterval;
+	uint16_t timvcfail;
+	uint16_t cluster_credits;
+
+	uint8_t  vaxcluster;
+	uint8_t  lockdirwt;
+	uint8_t  alloclass;
+	uint8_t  mscp_load;
+	uint8_t  mscp_serve_all;
+	uint8_t  pad1[3];
+
+	uint32_t niscs_max_pktsz;
+
+	uint8_t  disk_quorum[16];
+	uint8_t  disk_quorum_len;
+	uint8_t  pad2;
+
+	uint16_t auth_group;
+	uint8_t  auth_password[32];
+	uint8_t  auth_password_len;
+	uint8_t  auth_valid;
+
+	uint32_t status;
+};
+
 /* ================================================================
- * Request numbers. All nine are _IOWR carrying the SAME structs and NR bytes
- * as src/kernel/vms_ioctl.h (0x30-0x3d, magic 'V'), so their command words are
+ * Request numbers. All ten are _IOWR carrying the SAME structs and NR bytes
+ * as src/kernel/vms_ioctl.h (0x30-0x3e, magic 'V'), so their command words are
  * identical across substrates (framework pre-copy path; none exceeds one page
  * -- the largest, vms_cluster_member_get_args at 3848 bytes, is still under
  * NetBSD's one-page IOCPARM_MAX of 4096).
@@ -414,6 +455,7 @@ struct vms_cluster_diag_port_args {
 #define VMS_IOCTL_CLUSTER_MEMBER_GET   _IOWR(VMS_LOCK_IOC_MAGIC, 0x3b, struct vms_cluster_member_get_args)
 #define VMS_IOCTL_DLM_ENUM_STANDING    _IOWR(VMS_LOCK_IOC_MAGIC, 0x3c, struct vms_dlm_enum_standing_args)
 #define VMS_IOCTL_CLUSTER_DIAG_PORT    _IOWR(VMS_LOCK_IOC_MAGIC, 0x3d, struct vms_cluster_diag_port_args)
+#define VMS_IOCTL_SYSGEN_LOAD          _IOWR(VMS_LOCK_IOC_MAGIC, 0x3e, struct vms_sysgen_load_args)
 
 /*
  * Freeze the shared layouts -- see the other _nb.h contracts' identical asserts:
@@ -453,5 +495,7 @@ _Static_assert(sizeof(struct vms_pe_vc_view_wire) == 56,
                "vms_pe_vc_view_wire changed size -- must match src/kernel/vms_ioctl.h");
 _Static_assert(sizeof(struct vms_cluster_diag_port_args) == 152,
                "vms_cluster_diag_port_args changed size -- VMS_IOCTL_CLUSTER_DIAG_PORT ABI break");
+_Static_assert(sizeof(struct vms_sysgen_load_args) == 104,
+               "vms_sysgen_load_args changed size -- VMS_IOCTL_SYSGEN_LOAD ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

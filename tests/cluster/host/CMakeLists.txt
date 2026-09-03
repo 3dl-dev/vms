@@ -24,6 +24,10 @@ add_library(cluster_host_codec STATIC
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_scs.c
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_cm.c
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_mscp.c
+    # FC-P6.1: the SCA block-data-transfer header -- the PORT's third service,
+    # not an SCS class and not a SYSAP body, so it gets its own family TU on
+    # exactly the terms every sibling harvest file got.
+    ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_blk.c
     # FC-P3.4: the MSCP disk-client discovery FSM is PURE (no seam call, no
     # kernel headers -- see vms_mscp_cl_fsm.h), so it builds on exactly the
     # same terms as the codec TUs above rather than needing its own
@@ -259,6 +263,15 @@ cluster_host_pe_test(test_pe_vc        test_pe_vc.c)
 # vms_pe_fsm.h SS8c) -- the E9 bridge between SCS's "body" and P1.2's
 # pe_vc_send_frame "frame", against a fake upper layer.
 cluster_host_pe_test(test_pe_send      test_pe_send.c)
+
+# FC-P6.1: the port's THIRD service -- named buffers, the 28-byte block header
+# built through the codec, READ streaming with the final chunk piggybacked on
+# the end message, and WRITE's two-frame form. The byte-exact anchor is the
+# vms291 lab-2 serving capture as it is RECORDED IN THE TREE
+# (docs/design-mscp-direction.md); the pcap itself is host-only and absent here
+# -- see the test's own header comment and
+# docs/cluster-integration-notes.md E14.
+cluster_host_pe_test(test_pe_block     test_pe_block.c)
 
 # FC-P0.9: pe_fsm_view_project(), the pure half of the port-wide diagnostics
 # view the glue (vms_pe.c, not host-testable -- it names exec_kbackend.h)

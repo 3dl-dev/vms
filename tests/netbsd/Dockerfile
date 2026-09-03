@@ -211,6 +211,9 @@ COPY src/kernel-core/vms_cnxman_coord_fsm.c  /netbsd/guest-src/kernel-core/vms_c
 COPY src/kernel-core/vms_cnxman_coord_fsm.h  /netbsd/guest-src/kernel-core/vms_cnxman_coord_fsm.h
 COPY src/kernel-core/vms_cluster_codec_vc.c /netbsd/guest-src/kernel-core/vms_cluster_codec_vc.c
 COPY src/kernel-core/vms_cluster_codec_vc.h /netbsd/guest-src/kernel-core/vms_cluster_codec_vc.h
+COPY src/kernel-core/vms_cluster_codec_blk.c /netbsd/guest-src/kernel-core/vms_cluster_codec_blk.c
+COPY src/kernel-core/vms_cluster_codec_blk.h /netbsd/guest-src/kernel-core/vms_cluster_codec_blk.h
+COPY src/kernel-core/vms_cluster_codec_scs.h /netbsd/guest-src/kernel-core/vms_cluster_codec_scs.h
 COPY src/kernel-netbsd/vms_lan_netbsd.c      /netbsd/guest-src/kmod/vms_lan_netbsd.c
 # FC-P0.4: cluster_seam.c (the R3 substrate-contract self-test for the cluster
 # seam, called from vms_netbsd.c's MODULE_CMD_INIT) lives under

@@ -60,6 +60,7 @@ SRCS=		vms_netbsd.c \
 		vms_pe_fsm.c \
 		vms_cluster_codec_hello.c \
 		vms_cluster_codec_vc.c \
+		vms_cluster_codec_blk.c \
 		vms_cnxman_csb.c \
 		vms_cnxman_recnx_fsm.c \
 		vms_cnxman_quorum.c \

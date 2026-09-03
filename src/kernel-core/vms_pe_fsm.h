@@ -137,6 +137,7 @@
 #include "vms_cluster_codec.h"
 #include "vms_cluster_codec_hello.h"
 #include "vms_cluster_codec_vc.h"   /* FC-P1.1: START/STACK/ACK + 0x48 + stamp */
+#include "vms_cluster_codec_blk.h"  /* FC-P6.1: the 28-byte block-transfer hdr */
 #include "vms_cluster_snapshot.h"
 #include "vms_pe.h"
 
@@ -617,6 +618,124 @@ struct pe_vc {
 	uint32_t send_refused_ring;       /* refused: ring full              */
 	uint8_t  last_down_reason;        /* enum pe_vc_down_reason, 0 = none */
 	uint8_t  pad4[3];
+
+	/* ---- FC-P6.1: the BLOCK TRANSFER service's per-circuit state ----
+	 *
+	 * THE TWO OBSERVED-NOT-DECODED HEADER WORDS. `obs_w4`/`obs_w6` are the
+	 * block-transfer header's +4 and +6 words (vms_cluster_codec_blk.h,
+	 * "THE TWO UNGROUNDED WORDS"). They are filled ONLY by pe_blk_rx_try()
+	 * from a block-transfer frame this circuit ACTUALLY RECEIVED, and
+	 * `obs_valid` says whether that ever happened. There is no default, no
+	 * captured 9 or 13, and no rule that produces one: with `obs_valid`
+	 * clear this port writes an explicit ZERO into both words and counts it
+	 * in pe_fsm.blk_obs_absent -- the same honest-absence shape
+	 * pe_fsm_send_last_gasp uses for an absent cluster nonce, and the exact
+	 * opposite of replaying a captured node's private value.
+	 */
+	uint16_t obs_w4;
+	uint16_t obs_w6;
+	uint8_t  obs_valid;
+	uint8_t  pad5[3];
+
+	uint32_t blk_tx;                  /* block frames sent               */
+	uint32_t blk_rx;                  /* block frames taken into a buffer */
+	uint32_t blk_bytes_tx;
+	uint32_t blk_bytes_rx;
+};
+
+/* ==========================================================================
+ * 3c. NAMED BUFFERS -- the block-transfer service's addressing (FC-P6.1)
+ *
+ * *VAXcluster Principles* pp. 2-32..2-41 describes the mechanism without
+ * giving bytes: a SYSAP that wants a block transfer MAPS a buffer, gets a
+ * BUFFER NAME back from the port, and sends that name to the far SYSAP inside
+ * an ordinary message. The far port then names it in the transfer's header and
+ * the two ports move the bytes. For MSCP the carrier is public AA-L619A-TK
+ * Table A-6's 12-byte buffer descriptor at command offset 16 --
+ * { u32 offset, u32 SCS buffer NAME, u32 SCS connection ID } -- and the lab-2
+ * vms291 capture confirmed the correlation end to end: the name in the
+ * READ/WRITE command is exactly the name that appears in the block-transfer
+ * frames.
+ *
+ * WHAT IS OVMX'S OWN CHOICE, AND SAID SO (Rule 8). The wire GROUNDS that a
+ * name is a 32-bit token both ends agree on; it does NOT publish how a port
+ * mints one, and no capture can show it (a name is opaque to the peer, which
+ * only echoes it). So pe_blk_buf_register()'s assignment rule below is an
+ * OVMX design choice, labelled as one, exactly as OVMX's opaque Con.ID values
+ * are. What is NOT a choice: a name this port did not mint is never invented
+ * on the wire. The REMOTE buffer name in every frame this port emits is read
+ * from the peer's own message by the SYSAP that received it and threaded down
+ * in struct pe_blk_xfer -- pe_blk_send() REFUSES (PE_BLK_NONAME) rather than
+ * emit a zero or a guess for it (INV-6).
+ * ========================================================================== */
+
+/*
+ * How many buffers one port may have named at once. An OVMX sizing choice --
+ * no published VMS limit -- picked so the MSCP server's in-flight commands and
+ * the disk class driver's own buffers coexist without the table becoming the
+ * thing that limits I/O. Exceeding it REFUSES and counts (pe_fsm.blk_no_slot);
+ * nothing is ever evicted, because a name that silently changed hands under a
+ * live transfer would put the peer's bytes in another SYSAP's buffer.
+ */
+#define PE_BLK_MAX_BUFFERS 8u
+
+/* What a named buffer may be used for. A transfer is checked against these
+ * before a byte moves: a peer that names our read-only buffer as a transfer
+ * DESTINATION is refused, not accommodated. */
+#define PE_BLK_ACC_SRC 0x01u   /* may be read FROM (we send its bytes)   */
+#define PE_BLK_ACC_DST 0x02u   /* may be written TO (we take bytes in)   */
+
+/*
+ * One named buffer. `base` is memory the CALLER owns for as long as the name
+ * is registered -- the port neither allocates nor frees it (SS6: this FSM has
+ * no allocator), it only bounds-checks every access against `len`.
+ */
+struct pe_blk_buf {
+	uint32_t name;      /* 0 == free slot; a live name is never 0        */
+	uint32_t len;
+	uint8_t *base;
+	uint8_t  access;    /* PE_BLK_ACC_*                                  */
+	uint8_t  pad[3];
+};
+
+/* Why a block-transfer call was refused. Negative so `if (rc)` reads as
+ * failure, matching enum pe_vc_send_status's convention. */
+enum pe_blk_status {
+	PE_BLK_OK        =  0,
+	PE_BLK_NOBUF     = -1,  /* no buffer of ours carries that name       */
+	PE_BLK_NOSPACE   = -2,  /* the name table is full                    */
+	PE_BLK_RANGE     = -3,  /* offset/length outside the named buffer    */
+	PE_BLK_NOCIRCUIT = -4,  /* no OPEN circuit to that system            */
+	PE_BLK_BADFRAME  = -5,  /* a build/stamp the codec refused           */
+	PE_BLK_TOOBIG    = -6,  /* past VMS_BLK_DATA_MAX / the scratch frame */
+	PE_BLK_TXFAIL    = -7,  /* ops->send failed part-way                 */
+	PE_BLK_PERM      = -8,  /* buffer not registered for that direction  */
+	PE_BLK_NONAME    = -9,  /* the PEER's buffer name / Con.ID is absent:
+				 * refused rather than emitted as a zero
+				 * (INV-6) */
+	PE_BLK_INVAL     = -10  /* caller argument                           */
+};
+
+/*
+ * ONE BLOCK TRANSFER, as the SYSAP describes it to the port.
+ *
+ * EVERY REMOTE-SIDE FIELD IS READ, NEVER CHOSEN. `dest_conid`, `remote_name`
+ * and `remote_offset` come from the peer's OWN message (for MSCP: the
+ * connection's Con.ID and Table A-6's buffer descriptor in the READ/WRITE
+ * command the server received). The port refuses the transfer if the caller
+ * cannot supply them rather than filling any of them in -- a fabricated
+ * buffer name is the same class of error as a fabricated lock id.
+ */
+struct pe_blk_xfer {
+	vms_scs_sysid_t peer;
+	uint32_t dest_conid;     /* the header's +0, from the connection      */
+	uint32_t local_name;     /* OUR registered buffer                     */
+	uint32_t local_offset;   /* where in it this transfer starts          */
+	uint32_t remote_name;    /* the PEER's buffer name, from its message  */
+	uint32_t remote_offset;  /* the offset it asked for                   */
+	uint32_t length;         /* total bytes of this transfer              */
+	uint32_t chunk;          /* max data bytes per frame; 0 == the max
+				  * VMS_BLK_DATA_MAX allows                  */
 };
 
 /* ==========================================================================
@@ -863,6 +982,32 @@ struct pe_fsm {
 	 * grounds more classes and drives it down.
 	 */
 	uint32_t vc_rx_undelivered;
+
+	/* ---- FC-P6.1: the BLOCK TRANSFER service (SS8d) ----
+	 *
+	 * The named-buffer table is EMBEDDED and fixed: this FSM allocates
+	 * nothing (SS6 above), and a buffer NAME must stay resolvable for the
+	 * whole life of a transfer, which a table the FSM cannot grow keeps
+	 * honest -- a registration that does not fit is REFUSED and counted,
+	 * never quietly recycled over a live one.
+	 */
+	struct pe_blk_buf blk_buf[PE_BLK_MAX_BUFFERS];
+	/* Monotone generation feeding pe_blk_buf_register's name assignment;
+	 * see that function for why a name is never immediately reused. */
+	uint32_t blk_name_gen;
+
+	uint32_t blk_no_slot;      /* register refused: the table was full   */
+	uint32_t blk_rx_unnamed;   /* a structurally-plausible block frame
+				    * naming no buffer of ours: NOT taken as a
+				    * block transfer, passed on to the normal
+				    * delivery path (SS8d, the discriminator) */
+	uint32_t blk_rx_range;     /* named one of our buffers but addressed
+				    * outside it: DROPPED, never clamped      */
+	uint32_t blk_obs_absent;   /* frames emitted with an explicit zero at
+				    * the +4/+6 words because this circuit has
+				    * observed none (INV-6 honest absence)     */
+	uint32_t blk_tx_unringed;  /* block frames transmitted OUTSIDE the
+				    * unacked ring -- see SS8d "NO RING"      */
 
 	/* The one frame buffer. Sized for the largest frame SS4(k) grounds. */
 	uint8_t  scratch[VMS_HELLO_PADDED_MAX_FRAME];
@@ -1158,6 +1303,167 @@ void pe_fsm_vc_project(const struct pe_fsm *f, const struct pe_vc *vc,
 
 const char *pe_vc_state_name(enum vms_pe_vc_state s);
 const char *pe_vc_down_reason_name(enum pe_vc_down_reason r);
+
+/* ==========================================================================
+ * 8d. THE PORT'S BLOCK-TRANSFER SERVICE (FC-P6.1)
+ *
+ * The third port service, beside the datagram (SS8c) and the sequenced message
+ * (SS8c). Design SS3.2: "Above the VC it offers three services -- datagram,
+ * sequenced message, block transfer". Its addressing is SS3c's named buffers;
+ * its 28-byte header is vms_cluster_codec_blk.h's, built and read ONLY through
+ * that codec (design SS3.9 rule 2 -- this file names no wire offset).
+ *
+ * WHAT A BLOCK-TRANSFER FRAME IS, ON THIS WIRE. Spec sec 4(k)'s own correction
+ * places the class: "The genuine MSCP bulk block-transfer frames are the
+ * separate 0x4b/0x13 sequenced-application class (206-718 bytes here, nonzero
+ * data body)". So a frame this service emits carries the SAME abs 0-55 the
+ * message service builds -- the SCA header, msgtype 0x4b/format 0x13,
+ * recv_ack@32, send_seq@34 and its mirror@44 -- and then, at abs 56 where an
+ * SCS message would put its own envelope, the 28-byte block header and the
+ * data. That collision is why such a frame FAILS the SCS envelope conformance
+ * test (abs 58 != the GROUNDED 0x0004) and must never be handed to an SCS
+ * parser.
+ *
+ * IT CONSUMES A REAL SEQUENCE. Spec sec 4(h)(4) grounds, 17,758/17,758 with 0
+ * residuals, that EVERY sequenced message (0x41/0x5b/0x4b) stamps a send_seq
+ * and its mirror; this class is one of them, so this service stamps the
+ * circuit's real recv_seq/send_seq through vms_scs_seq_stamp and advances
+ * send_seq -- ONLY for a frame that actually went out, exactly as
+ * pe_vc_send_frame does, so a refused or failed transmit leaves no hole
+ * (SS3b(1)). It does NOT invent the "no sequence claimed" send_seq = 0 shape
+ * the datagram service uses: that is the datagram's documented opt-out, and
+ * borrowing it for a class the spec places in the sequenced family would be a
+ * wire claim nothing measured.
+ *
+ * ***  NO RING, AND WHAT THAT COSTS  ***  FC-P1.2 ruled it (see
+ * PE_VC_FRAME_MAX: "The block transfer classes are deliberately NOT covered:
+ * block transfer is FC-P6.1's named-buffer service and does not ride this
+ * ring") and this item honours it: a 1498-byte data frame will not fit a ring
+ * sized for the 204-byte message class, and widening the ring to 16 x 1512
+ * bytes PER CIRCUIT is a memory decision no measurement asks for. The
+ * CONSEQUENCE, stated plainly rather than hidden: the port does not retransmit
+ * a lost block frame. Recovery is the MSCP layer's -- a transfer whose bytes
+ * do not all arrive is a command that does not complete, and MSCP's own host
+ * timeout (public AA-L619A-TK sec 6.16, P.HTMO) is what notices. Every frame
+ * sent this way is counted in pe_fsm.blk_tx_unringed so the gap is measurable
+ * rather than assumed away. Whether a real port retransmits block frames, and
+ * by what mechanism, is a LAB question (docs/cluster-integration-notes.md).
+ *
+ * NO CREDIT DEBIT, AND WHY THAT IS NOT AN INVENTION. "Whether credit/flow
+ * control interacts with block transfers" is on docs/design-mscp-direction.md's
+ * own "Still ungrounded, do not build on" list, so this service asserts
+ * nothing about it: it does not debit the circuit's Send Credit, because
+ * p. 2-43/2-44 gives the debit/credit account to the sequenced MESSAGE service
+ * and *VAXcluster Principles* pp. 2-32..2-41 bounds a block transfer by
+ * something else entirely -- the NAMED BUFFER, whose size the far SYSAP chose
+ * and told us. A transfer cannot exceed a buffer the peer did not name and
+ * size, which is a real bound, not an absent one. (The peer's 0x48 for a block
+ * frame still ARRIVES and still returns a credit; h_vc_rx_credit clamps at the
+ * grant it issued, so nothing inflates.) Also a LAB ask in E14.
+ * ========================================================================== */
+
+/*
+ * pe_blk_buf_register - name a buffer. `base`/`len` stay owned by the caller
+ * and must outlive the name. `access` is PE_BLK_ACC_SRC, PE_BLK_ACC_DST or
+ * both; a transfer is checked against it before a byte moves.
+ *
+ * THE NAME IS OVMX'S OWN (SS3c): a monotone generation in the high 24 bits and
+ * the slot in the low 8, so a name is never immediately reused after a release
+ * and a stale transfer naming a released buffer misses instead of landing in
+ * whatever took the slot. Never 0 -- 0 is this table's "free slot" and is what
+ * the port refuses to put on the wire.
+ *
+ * PE_BLK_OK with *name_out set, or PE_BLK_INVAL / PE_BLK_NOSPACE.
+ */
+int pe_blk_buf_register(struct pe_fsm *f, uint8_t *base, uint32_t len,
+			uint8_t access, uint32_t *name_out);
+
+/* Release a name. The memory is the caller's and is untouched. PE_BLK_OK, or
+ * PE_BLK_NOBUF for a name this port did not mint / already released. */
+int pe_blk_buf_release(struct pe_fsm *f, uint32_t name);
+
+/* The buffer carrying `name`, or NULL. The positive lookup that IS the receive
+ * path's class discriminator (SS3c, vms_blk_frame_structural_ok's doc). */
+const struct pe_blk_buf *pe_blk_buf_lookup(const struct pe_fsm *f,
+					   uint32_t name);
+
+/*
+ * pe_blk_send - stream `x->length - tail_reserve` bytes of the transfer as
+ * standalone block-transfer frames, largest chunk first, leaving the final
+ * `tail_reserve` bytes for pe_blk_send_read_end() to piggyback.
+ *
+ * `tail_reserve == 0` sends the whole transfer as standalone frames, which
+ * with a length that fits one frame is exactly WRITE's data-bearing half (the
+ * capture's two-frame form; the header-only half is pe_blk_send_ack below).
+ *
+ * The header of each frame is filled from REAL state: the destination
+ * connection ID and the remote buffer name/offset from `*x` (which the SYSAP
+ * read out of the peer's own message), the source name from the registered
+ * buffer, the source/destination offsets advanced by what has actually gone
+ * out, and `bytes_remaining` counting DOWN over the whole transfer including
+ * the reserved tail. The +4/+6 words come from the circuit's observed pair or
+ * are an explicit zero (SS3b, pe_vc.obs_*).
+ *
+ * *frames_out (optional) receives the number of frames transmitted. On a
+ * mid-stream transmit failure the frames already sent stay sent and
+ * PE_BLK_TXFAIL is returned -- the caller learns exactly how far it got.
+ */
+int pe_blk_send(struct pe_fsm *f, const struct pe_blk_xfer *x,
+		uint32_t tail_reserve, uint32_t *frames_out);
+
+/*
+ * pe_blk_send_read_end - the capture's TRAP 1, send side: transmit the
+ * transfer's FINAL `tail_len` bytes piggybacked into the SAME Ethernet frame
+ * as an end message, past the length that end message's own inner header
+ * declares.
+ *
+ * `body`/`body_len` is the caller's abs-56-onward content, the same body-level
+ * seam SS8c uses (design SS3.2.4) -- for MSCP, SCS's 56-71 envelope followed by
+ * the READ end message. Unlike pe_vc_send_msg's fixed PE_SEND_BODY_LEN this
+ * length is VARIABLE, and deliberately: the recorded READ-END SCA content
+ * lengths 118/194/448/630/1142 are each (58 + 32) + 28 + tail, i.e. a
+ * 90-content end message, never the 190-content class SS8c is pinned to.
+ *
+ * `tail_len == 0` is legitimate and is the recorded 118-content case: a
+ * block-transfer header with no data behind it still rides the end frame.
+ */
+int pe_blk_send_read_end(struct pe_fsm *f, const struct pe_blk_xfer *x,
+			 uint32_t tail_len, const uint8_t *body,
+			 uint32_t body_len);
+
+/*
+ * pe_blk_send_ack - the capture's TRAP 2, send side: the header-only half of
+ * WRITE's two-frame form, whose 28 bytes are BYTE-IDENTICAL to the request's.
+ * `req` is a header this port PARSED off the received request, so every byte
+ * echoed here was read from the wire -- there is no field this function
+ * composes.
+ */
+int pe_blk_send_ack(struct pe_fsm *f, vms_scs_sysid_t dst,
+		    const struct vms_blk_hdr *req);
+
+/*
+ * pe_blk_rx_try - the receive path's block-transfer arm, called from the VC's
+ * delivery step. Returns 1 when the frame WAS a block transfer for this node
+ * and has been consumed, 0 when it was not (and the normal SCS delivery must
+ * run).
+ *
+ * THE DISCRIMINATOR IS A POSITIVE FACT, NOT A GUESS. Structure alone cannot
+ * name this class (vms_blk_frame_structural_ok's doc comment: spec sec
+ * 4(h)(1d) already names another class that fails the same negative test). So
+ * a frame is taken as a block transfer only when its DESTINATION BUFFER NAME
+ * resolves in this port's own registered-buffer table -- the correlation the
+ * vms291 capture grounds. A plausible-looking frame naming nothing of ours is
+ * counted in blk_rx_unnamed and passed on, untouched.
+ *
+ * A frame that names one of our buffers but addresses outside it is DROPPED
+ * and counted (blk_rx_range) -- never clamped, never partially applied.
+ */
+int pe_blk_rx_try(struct pe_fsm *f, struct pe_vc *vc,
+		  const struct vms_frame_info *fi, const uint8_t *frame,
+		  uint32_t len);
+
+/* Names, for the console and for a test's failure message. */
+const char *pe_blk_status_name(enum pe_blk_status s);
 
 /* ==========================================================================
  * 9. Readback -- the same struct the diagnostics ioctl projects (INV-6)

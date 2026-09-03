@@ -37,6 +37,10 @@
 
 struct vms_pe;      /* opaque: the port's objects are private to vms_pe.c */
 struct vms_pe_fsm;  /* opaque: the pure state machine, private to vms_pe_fsm.c */
+/* FC-P6.1: one block transfer as the SYSAP describes it. DEFINED in
+ * vms_pe_fsm.h SS3c (which includes this header, not the other way round), so
+ * this header stays includable alone and names it only through a pointer. */
+struct pe_blk_xfer;
 
 /* ==========================================================================
  * 1. Timers the port arms
@@ -238,14 +242,29 @@ struct pe_upper_ops {
 	void (*vc_up)(void *ctx, vms_scs_sysid_t peer);
 	void (*vc_down)(void *ctx, vms_scs_sysid_t peer, uint32_t reason);
 	void *ctx;
+
+	/*
+	 * Added by FC-P6.1, additively and at the end of the struct.
+	 *
+	 * BLOCK-TRANSFER COMPLETION -- reported AFTER the bytes are already in
+	 * the named buffer, and describing only what actually landed. `name` is
+	 * the SYSAP's own buffer name (the one it registered and told the peer),
+	 * `offset`/`len` is the span this frame filled, and `bytes_remaining` is
+	 * the transfer's own down-counter as the frame carried it -- so a SYSAP
+	 * knows the transfer is complete when it reaches `len` and never has to
+	 * guess. NULL is legitimate: the port still takes the bytes into the
+	 * buffer and still counts the frame, because a delivery notification is
+	 * an application fact and the transfer is a transport one (SS3b(a)).
+	 */
+	void (*block_data)(void *ctx, vms_scs_sysid_t from, uint32_t name,
+			   uint32_t offset, uint32_t len,
+			   uint32_t bytes_remaining);
 };
 
 /* ==========================================================================
  * 5. The port services (design SS3.2, "the three port services")
  *
- * Called from the cluster fork thread only. Block transfer (named buffers) is
- * deliberately absent until FC-P6.1: the MSCP server is its first real user, and
- * declaring an interface nobody implements invites a stub that pretends.
+ * Called from the cluster fork thread only.
  *
  * THE E9 BRIDGE (FC-P1.3, docs/cluster-integration-notes.md E9). The three
  * declarations below are the frozen glue-facing surface `struct vms_pe`'s
@@ -272,6 +291,32 @@ int pe_send_dg(struct vms_pe *pe, vms_scs_sysid_t dst,
 /* Register the upper layer (SCS). One registration per port; a second call
  * replaces it. */
 void pe_set_upper(struct vms_pe *pe, const struct pe_upper_ops *upper);
+
+/*
+ * THE THIRD SERVICE -- BLOCK TRANSFER (FC-P6.1). Same E9 bridge shape as the
+ * two above: these are the frozen glue-facing names, and the REAL, R1-tested
+ * implementation is the pure `struct pe_fsm *` family in vms_pe_fsm.h SS8d
+ * (pe_blk_buf_register / pe_blk_buf_release / pe_blk_send /
+ * pe_blk_send_read_end / pe_blk_send_ack), so the glue's job is again the
+ * one-line dereference and never a second implementation.
+ *
+ * `name_out` is the port's own token for the buffer; the SYSAP sends it to the
+ * far SYSAP in an ordinary message (for MSCP, inside Table A-6's buffer
+ * descriptor) and that is how the two ends correlate. Returns 0 or an SS$_
+ * status -- the glue maps `enum pe_blk_status`, which is what the pure layer
+ * actually holds (kernel-core cluster headers carry no SS$_ definitions,
+ * design SS3.2.2).
+ */
+int pe_buf_register(struct vms_pe *pe, uint8_t *base, uint32_t len,
+		    uint8_t access, uint32_t *name_out);
+int pe_buf_release(struct vms_pe *pe, uint32_t name);
+
+/* Move `x->length` bytes over the circuit to `x->peer`. See vms_pe_fsm.h SS8d
+ * for the two framing forms (READ's end-message piggyback, WRITE's two-frame
+ * request/response) and for why every remote-side field in `*x` is READ from
+ * the peer's own message rather than chosen here. */
+int pe_send_block(struct vms_pe *pe, const struct pe_blk_xfer *x,
+		  uint32_t *frames_out);
 
 /* ==========================================================================
  * 6. Lifecycle and readback (glue, vms_pe.c -- FC-P0.9)

@@ -39,6 +39,7 @@ vms-y := vms_module.o \
          vms_pe_fsm.o \
          vms_cluster_codec_hello.o \
          vms_cluster_codec_vc.o \
+         vms_cluster_codec_blk.o \
          vms_cnxman_csb.o \
          vms_cnxman_recnx_fsm.o \
          vms_cnxman_quorum.o \

@@ -1,5 +1,16 @@
 # Design: OVMX as a VMScluster Member Node
 
+> **SUPERSEDED (2026-09-02).** This doc's §3.1 architecture decision —
+> "userspace `SCSD` for datalink→SCS→connection-manager→MSCP" — is the
+> non-portable strawman the operator ordered retired on 2026-09-02 pm. The
+> current plan of record rebuilds the cluster stack (port driver, SCS,
+> connection manager, DLM distributed operation, MSCP serving, quorum)
+> **executive-resident** (inside `vms.ko`), on the unmerged branch
+> `feat/cluster-executive`: see `docs/design-faithful-cluster-executive.md`
+> and `docs/plan-faithful-cluster-executive.md` there. This document is kept
+> for its wire-protocol research value only; do not treat its architecture
+> decision as current.
+
 > Status: DRAFT (vms-pivot.2). Architecture for evolving OVMX from a standalone
 > VMS-compatible environment into a node that joins a **real** VMScluster.
 > Clean-room invariant (Q6): everything here is derived from observing the wire

@@ -1,5 +1,16 @@
 # Booted OVMX joins a real VMScluster — the real cluster-1.0 gap (vms-110b)
 
+> **SUPERSEDED (2026-09-02).** This plan's outcome tree (110b.1 etc.) builds
+> the booted-node join by auto-starting `scsd` (the userspace daemon) — the
+> non-portable strawman the operator ordered retired on 2026-09-02 pm. The
+> current plan of record rebuilds the join executive-resident on the unmerged
+> branch `feat/cluster-executive`: see `docs/design-faithful-cluster-executive.md`
+> and `docs/plan-faithful-cluster-executive.md` there. The zero-raw-socket
+> HELLO-over-executive-datalink fact this doc records (booted OVMX genuinely
+> reaches the wire through `/dev/vms`, no `AF_PACKET` in the process) remains
+> true and is harvested into that design's audit; the daemon-orchestration
+> plan below it is not current.
+
 > Build plan / outcome tree. Grounded on `origin/main` (HEAD 0c9d15a7),
 > 2026-08-31. Clean-room (Rule 8): SCS/NISCA/MSCP behaviour is from lab
 > observation + public OpenVMS docs; no VSI bytes.

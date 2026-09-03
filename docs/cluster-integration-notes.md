@@ -115,6 +115,34 @@ family and §4(h)(4) grounds that every frame of that family stamps one
 measured. The census in §4(h)(4a) cannot discriminate the two (it filters on
 `send_seq != 0`), so a decoded vms291 settles it too.
 
+### E16. kif_caller_census WILL red main CI when this branch lands (confirmed by FC-P6.1)
+`kif_caller_census` fails with "compile_commands.json contains backslash escapes"
+— reproduced on a clean baseline tree (NOT introduced by any FC item). Root:
+FC-P0.6/P0.8's `target_compile_definitions(... OVMX_FIXTURE_DIR="${...}")` in
+`tests/cluster/host/CMakeLists.txt`; the census configures its own
+`-DBUILD_TESTS=ON` build and trips on the backslash-escaped path. **This is a
+pre-PR blocker: it will red main CI when `feat/cluster-executive` merges.** Fix =
+unescape in `tests/integration/test_kif_caller_census.sh` OR move the fixture
+paths to a generated header. **Must be fixed before the final PR to main** (own
+item; do not let the branch land red). Supersedes E7's provisional note.
+
+### E17. ⚠ COMPAT-REGISTER OVERCLAIM: cluster-dlm claims distributed DLM COMPLETE (escalated to operator — INV-0/authenticity)
+`docs/compat/facilities/cluster-dlm.yaml` (→ `docs/compatibility-surface.md`, and
+MIRRORED PUBLICLY on the site) states the distributed DLM is **COMPLETE** — "every
+rung H0→H11 proven on real /dev/vms," dynamic REMASTERING, DIRECTORY OWNERSHIP,
+LVB, distributed DEADLOCK — all `status: verified`, `authenticity: real`, via the
+`run_dlm_harness_h*.sh` two-node OVMX↔OVMX QEMU rail. **This contradicts the reset
+premise + the design audit:** the distributed coupling those rungs exercised was
+driven by the harness/retired-scsd path, NOT a real executive-resident PEDRIVER/
+SCS/CNXMAN stack; the executive-resident directory/rebuild FSMs (FC-P5.3/5.4/5.5)
+are NOT YET BUILT; and per [[h2-green-not-real-vax-join-proven]] a two-node OVMX
+harness ≠ a real cluster join. The engine's cross-node GRANT/BLKAST/LVB logic IS
+real (FC-P4.4 R4 dlm_xnode 42/0) — so the fix is SCOPING, not erasure: "engine
+cross-node logic proven on the 2-node OVMX /dev/vms harness; executive-resident
+distributed DLM (real interconnect-coupled + real-VAX interop) IN PROGRESS." **NOT
+corrected unilaterally: it's the capability SSOT + public content (INV-0) + an
+authenticity-posture call = operator-reserved. TEED UP to operator.**
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

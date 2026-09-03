@@ -541,6 +541,115 @@ sends = **all** messages delivered in order, **0** VC breaks, retransmits
 `RETRANSMIT_EXHAUSTED` after the ladder, followed by SCS `disconnected`
 on every CDT of that SB.
 
+#### 3.2.6 Served-disk path — RULINGS (2026-09-03, E40/E41/E42 from FC-P6.3/P7.1)
+
+**E41 — WRITE block transfer is a server-initiated REQUEST DATA that the
+client's PORT answers automatically. Ruled from the book; no capture
+needed (the choreography is already in `vms291-mount-A.pcap`).**
+Davis ch. 2 (pp. 2-32..2-41, host-only, page cites) defines the SCS block
+data service as two operations on *named buffers*: **SEND DATA** (move a
+local buffer to a remote named buffer) and **REQUEST DATA** (fetch a
+remote named buffer into a local one). Both are initiated by the side that
+knows both names — in MSCP that is always the **server**, which read the
+host's buffer name off the command's buffer descriptor (`{offset, buffer
+name, conid}`, AA-L619A-TK Table A-6) and minted its own. READ = server
+SEND DATA (data frames toward the host, last chunk piggybacked on the end
+message); WRITE = server **REQUEST DATA**: a header-only 28-byte block
+frame naming the host's buffer as *source* and the server's as
+*destination*, which the host's **port** answers — with no SYSAP
+involvement — by transmitting the named buffer's contents under the same
+header. That is exactly the measured shape in `docs/design-mscp-direction.md`
+("WRITE is a two-frame request/response whose two 28-byte headers are
+byte-identical — only the presence of data distinguishes them"). The
+FC-P6.1 model ("data-frame-first") described SEND DATA only; the port
+needs the second half:
+
+- `vms_pe` block-transfer service gains an **automatic REQUEST DATA
+  responder**: on a header-only block frame whose *source* name is in
+  this port's named-buffer table, transmit the data from that buffer in
+  the same chunking the READ path uses, echoing the header (`+4`/`+6`
+  copied verbatim — still ungrounded, still copied not composed), with
+  `+8` counting down; a request naming an unregistered buffer is dropped
+  and counted (`blk_req_unknown_buffer`).
+- The class driver registers the WRITE data buffer under the name it
+  places in the command's buffer descriptor *before* sending the command,
+  and withdraws it at end-message; the server's WRITE path issues
+  REQUEST DATA after ONLINE/parameter checks and completes the command
+  when `+8` reaches zero.
+- Codec: `codec_mscp` distinguishes the two block forms by data presence
+  only; the responder's output is asserted byte-exact against the vms291
+  WRITE pair.
+
+**E40 — the serving node's ALLOCATION CLASS is not carried by MSCP; it is
+a controller-identity attribute VMS transports beside the connection.
+Lab capture required; the node-qualified fallback is itself faithful.**
+Allocation class is not an MSCP concept (AA-L619A-TK has no such field),
+and in VMS's model it is a property of the *controller* — an HSC's
+allocation class, a port allocation class — which the MSCP server
+impersonates for its served units. So the class driver learns it from the
+controller identity it receives when it connects to `MSCP$DISK`, not per
+unit. Candidate carriers, in the order to check: (1) the SCC end message's
+controller-dependent parameter area — the word AA-L619A-TK Table A-7 calls
+reserved reads a constant `0x0547` in every specimen and is unexplained;
+(2) the 16-byte SCA connect data of the `MSCP$DISK` connection (spec
+§4(N)); (3) the CM node-parameter block. The decisive capture (lab lane):
+on a clone, change VAX1's `ALLOCLASS` (SYSGEN, reboot) and diff VAX1's
+SCC end, its `MSCP$DISK` connect data and its CM PARAMS against the
+current capture; the field that tracks the change is the carrier; confirm
+with `SHOW DEVICE/FULL $n$DUA…` on VAX2 (the class driver's CDDB reports
+the class it learned). Until then FC-P7.1's rendering stands **and is
+correct VMS behaviour**: a served unit whose server has allocation class
+0 is named `<SCSNODE>$DUAn:` on VMS. OVMX renders exactly that, counts
+`alloclass_absent`, and never asserts a `$n$` it did not receive — INV-6.
+One-line unblock once grounded: populate `cddb->alloclass` from the
+carrier and switch the spelling.
+
+**E42 — the ACP consumes an async served-disk transfer by parking an
+IRP and sleeping in process context; the fork thread never blocks on
+storage. Ruled from the I/O model.** On VMS a `$QIO` to a served disk
+builds an IRP, the class driver's start-I/O sends the MSCP command, the
+IRP waits, the end message arrives at fork level, the class driver
+completes the IRP, and I/O post-processing wakes the requester (`$QIOW`
+= wait on that completion). The XQP/ACP issues its disk I/O the same way
+and waits on it. OVMX reproduces the shape:
+
+- `exec_blockdev_read/write_block` stay synchronous and process-context
+  (their contract, `exec_kbackend.h` §8: "MAY SLEEP; call only from
+  process context with no exec_lock held"). A served unit's block ops in
+  `vms_devtab` are `srvdisk_read_block/_write_block`, which run in the
+  ACP caller's process context and implement the wait:
+  1. allocate a pool `struct vms_srvdisk_irp { exec_lock_t lk; exec_cv_t cv;
+     uint8_t done; uint32_t status; ... }` (pool, never the stack — VAX);
+  2. register the data buffer as a named buffer (for WRITE, E41);
+  3. `vms_mscp_cl_read/_write(..., srvdisk_done, irp)` — which posts work
+     to the fork queue through the rxlock (legal from process context);
+  4. sleep: `exec_lock(&irp->lk); while (!irp->done) exec_cv_wait_timeout(&irp->cv,
+     &irp->lk, ctmo_ms, &to); exec_unlock(...)` — the §2 cv contract on
+     the IRP's own lock; `ctmo_ms` = the controller timeout the server
+     advertised in its SCC end (`P.CTMO`, 20 s in the lab) plus margin;
+  5. on timeout post a cancel work item and return an honest failure
+     (`SS$_TIMEOUT`); on `vc_down` the class driver fails every
+     outstanding IRP of that server (`SS$_PATHLOST`); mount verification
+     (the VMS `%SYSTEM-I-MOUNTVER` retry) is a P7 follow-on, not a silent
+     retry.
+- `srvdisk_done` runs on the fork thread (under the fork mutex):
+  `exec_lock(&irp->lk); irp->status = st; irp->done = 1;
+  exec_cv_broadcast(&irp->cv); exec_unlock(&irp->lk)`. Lock order: fork
+  mutex → `irp->lk` (a leaf). The fork thread never waits on an IRP.
+- **Corollary for the MSCP SERVER (FC-P6.3) — a contract violation to
+  fix:** `vms_mscp_srv.c:219/239` call `exec_blockdev_read/write_block`
+  from the fork work handler, i.e. synchronous disk I/O on the cluster
+  fork thread. VMS's MSCP server issues local I/O asynchronously (an IRP
+  to the local driver) and completes the MSCP command on the local I/O's
+  completion; it never stalls the port. OVMX: served-unit local I/O is
+  dispatched to a **served-I/O worker** (a second `exec_kthread`, §15,
+  "MSCP server worker") that performs the synchronous `exec_blockdev_*`
+  and posts a completion work item back to the fork queue; the fork
+  thread builds the end message / SEND DATA from that completion. Rule:
+  **the cluster fork thread never calls `exec_blockdev_*`.** (A HELLO
+  cadence stalled behind a 20 ms disk read is a TIMVCFAIL risk under load
+  and a `12×(M−1)` barrier latency on every member.)
+
 `vms_l2.c` (the ioctl pipe) is **not** on the cluster path. It stays as a
 generic privileged LAN facility (the eventual `$QIO` LAN-driver surface for
 user-mode protocols, gated on `PHY_IO`) if another lane needs it; otherwise it

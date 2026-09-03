@@ -475,6 +475,19 @@ cnxman_mscp_opened → the join's MSCP CDT-open event.**
 now uses `cnxman_club_find_sysid()` (the fork-context accessor). **Any future glue
 reading a CSB from a beat MUST use the fork-context accessor, not `cnxman_get_csb`.**
 
+### E40/E41/E42 — RULED by Fable (design §3.2.6); spawned FC-P6.5/6.6/6.7/7.2/7.3
+- **E41 (WRITE) RESOLVED, no capture:** WRITE is a **server-initiated REQUEST DATA** the client's PORT auto-answers (Davis pp.2-32..2-41: SEND DATA=READ, REQUEST DATA=WRITE, both initiated by the side knowing both names = the server). Matches vms291's "two byte-identical headers, data presence differs." FC-P6.1 modelled SEND DATA only. **Unblock = FC-P6.5** (port REQUEST DATA responder: lookup source name→transmit with READ's chunking, +4/+6 echoed, +8 counting down, unknown buffer⇒drop+counter; byte-exact vs vms291 WRITE pair). BUILDABLE NOW (dep P6.1/6.3/7.1 all done).
+- **E42 (ACP bridge) RESOLVED:** VMS parks a $QIO IRP, fork-level end-message completes it, post-processing wakes the requester. **FC-P7.2 contract:** served `vms_devtab` block ops run in the ACP caller's PROCESS context — `vms_srvdisk_irp{lk,cv,done,status}`, register named buffer, post to fork queue via rxlock, `exec_cv_wait_timeout` on the IRP's own lock (P.CTMO+margin), honest SS$_TIMEOUT/PATHLOST; `srvdisk_done` on the fork thread sets status + broadcasts under irp->lk (leaf under fork mutex). **THE FORK THREAD NEVER WAITS ON AN IRP.** (P7.2 dep P6.5+P5.9.)
+- **E40 (ALLOCLASS) — lab-gated, fallback faithful:** alloclass is a CONTROLLER attribute the MSCP server impersonates (learned beside the connection, not per unit). Candidates: SCC-end controller-param area (the unexplained `0x0547`), MSCP$DISK 16-byte connect data §4(N), CM PARAMS block. **FC-P6.7 (lab):** clone VAX1, change ALLOCLASS, reboot, diff the 3. `<SCSNODE>$DUAn:` is EXACTLY VMS's class-0-server rendering → keep it (INV-6). **FC-P7.3** = one-line switch once pinned.
+
+### E45. ⚠ 9th BUG (Fable-caught): FC-P6.3 server does SYNCHRONOUS disk I/O on the cluster fork thread → FC-P6.6
+`vms_mscp_srv.c:219/239` call `exec_blockdev_read/write_block` from the fork work
+handler — so HELLO cadence + every member's barrier latency STALL behind each
+served-disk read. VMS's server issues local I/O asynchronously. **FC-P6.6 (dep P6.3,
+BUILDABLE NOW):** move served I/O to a worker kthread posting completions back to
+the fork queue; **CI grep gate: the cluster fork thread NEVER calls `exec_blockdev_*`.**
+Real latent bug in just-landed P6.3 — the review discipline caught it before the lab would.
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

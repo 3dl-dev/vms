@@ -205,8 +205,15 @@ static void test_scc_cmd_roundtrip(void)
 	ct_check_eq_u32(len, VMS_MSCP_CMD_FRAME_LEN, "total length is 108 (14+94)");
 
 	fi = classify(frame, len);
-	ct_check(fi.family == VMS_FFAM_SCS && fi.cls == VMS_FCLS_SCS_SEQ,
-		 "the shared registry classifies it VMS_FCLS_SCS_SEQ");
+	/* FC-P2.1b (spec §4(h)(1b)) grounded a dedicated CONID-capable class
+	 * for the 94-content op-10 shape; a 94-content MSCP command now lands
+	 * there instead of the VMS_FCLS_SCS_SEQ catch-all -- see mscp_seq_ok()
+	 * in vms_cluster_codec_mscp.c, which accepts both. */
+	ct_check(fi.family == VMS_FFAM_SCS && fi.cls == VMS_FCLS_SCS_APPLMSG94,
+		 "the shared registry classifies it VMS_FCLS_SCS_APPLMSG94");
+	ct_check((fi.caps & VMS_FCAP_CONID) != 0,
+		 "and grants CONID -- the frame really does carry the Con.ID "
+		 "pair MSCP already bakes at [50:58] (vms_mscp_link_build)");
 	ct_check(vms_mscp_classify(frame, len, &fi, &cls) == VMS_CODEC_OK &&
 			 cls == VMS_MSCP_CLS_CMD,
 		 "this item's own classifier resolves VMS_MSCP_CLS_CMD");

@@ -79,26 +79,30 @@
  * composes the two back into the wire word the spec's own note requires
  * ("(subcode * ST.SUB) + code").
  *
- * SELF-CONTAINED CLASSIFICATION, ON PURPOSE. The shared frame-class
- * registry (vms_cluster_codec.h sec 3) has no MSCP-specific row: every
- * class this file builds shares the format-0x13 sequenced-application
- * envelope (msgtype 0x4b) with the generic VMS_FCLS_SCS_SEQ catch-all, but
- * at SCA-content lengths (86/90/94/102/110) none of the existing rows
- * name, and the 94-byte length is AMBIGUOUS between an MSCP command and a
- * WRITE end message -- length alone cannot tell them apart (only the
- * opcode byte's END bit can, see vms_mscp_classify()). Widening the shared
- * registry's match-predicate machinery to add a byte-mask discriminator is
- * a change to the seam every other harvest item builds against, and this
- * item's own blocked-by list (P0.6 only) does not ask for it. So this file
- * does what vms_cluster_codec_cm.h did before VC/SCS landed: every parse
- * function still takes the caller's `fi` and still requires
- * fi->family==VMS_FFAM_SCS && fi->cls==VMS_FCLS_SCS_SEQ (the registry's
- * own, already-grounded confirmation that this is a valid format-0x13
- * sequenced-application frame) as a NECESSARY precondition, then resolves
- * the SPECIFIC MSCP class itself from the wire's own content length and
- * opcode byte -- redundant with the classifier on the SCS half (the same
- * "redundant with the classifier" discipline vms_hello_parse documents),
- * self-sufficient on the MSCP half.
+ * SELF-CONTAINED CLASSIFICATION, ON PURPOSE. When this item landed, the
+ * shared frame-class registry (vms_cluster_codec.h sec 3) had no
+ * MSCP-specific row: every class this file builds shared the format-0x13
+ * sequenced-application envelope (msgtype 0x4b) with the generic
+ * VMS_FCLS_SCS_SEQ catch-all, and the 94-byte length is AMBIGUOUS between
+ * an MSCP command and a WRITE end message -- length alone cannot tell them
+ * apart (only the opcode byte's END bit can, see vms_mscp_classify()).
+ * FC-P2.1b (spec §4(h)(1b), vms-54f) later grounded a dedicated
+ * VMS_FCLS_SCS_APPLMSG94 row for content 94 specifically (needed to route
+ * SCS$DIRECTORY's own op-10 lookup, which rides the identical shape and
+ * shares no wire field with MSCP that would tell the two SYSAPs apart --
+ * that is a Con.ID/connection fact, decided above this codec); the other
+ * four MSCP end-message lengths (86/90/102/110) are still ungrounded here
+ * and still land on VMS_FCLS_SCS_SEQ. So this file does what
+ * vms_cluster_codec_cm.h did before VC/SCS landed: every parse function
+ * still takes the caller's `fi` and still requires fi->family==VMS_FFAM_SCS
+ * && (fi->cls==VMS_FCLS_SCS_SEQ || fi->cls==VMS_FCLS_SCS_APPLMSG94) (the
+ * registry's own, already-grounded confirmation that this is a valid
+ * format-0x13 sequenced-application frame, whichever length bucket it
+ * landed in) as a NECESSARY precondition, then resolves the SPECIFIC MSCP
+ * class itself from the wire's own content length and opcode byte --
+ * redundant with the classifier on the SCS half (the same "redundant with
+ * the classifier" discipline vms_hello_parse documents), self-sufficient on
+ * the MSCP half.
  *
  * THE HONESTY RULE (INV-6). Every field that varies per command/response
  * (cmd_ref, unit, all status/flags/geometry/identity values) is

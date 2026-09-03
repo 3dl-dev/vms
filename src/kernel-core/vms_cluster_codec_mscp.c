@@ -37,12 +37,24 @@ uint16_t vms_mscp_online_unfl_compose(uint16_t host_unfl, uint16_t unit_flags)
 
 /* The registry's own confirmation that this is a valid format-0x13
  * sequenced-application frame -- necessary, not sufficient (see file
- * header "SELF-CONTAINED CLASSIFICATION"). */
+ * header "SELF-CONTAINED CLASSIFICATION").
+ *
+ * FC-P2.1b (spec §4(h)(1b), vms-54f) grounded a dedicated CONID-capable
+ * class for the 94-content op-10 shape (VMS_FCLS_SCS_APPLMSG94), which
+ * every MSCP command and WRITE-END frame occupies (94 == P.CRF..P.reserved
+ * body span, see VMS_MSCP_CMD_SCA_LEN/VMS_MSCP_END_SCA_LEN(WRITE)) -- so
+ * those frames now classify there instead of falling through to the
+ * VMS_FCLS_SCS_SEQ catch-all. The other four MSCP end-message lengths
+ * (SCC/GUS/ONLINE/READ END: 86/110/102/90) are NOT 94 and still land on
+ * VMS_FCLS_SCS_SEQ exactly as before, so both classes are accepted here --
+ * this file still resolves the SPECIFIC MSCP class itself from length and
+ * the opcode's END bit, self-sufficient either way. */
 static int mscp_seq_ok(const struct vms_frame_info *fi)
 {
 	return fi != (const struct vms_frame_info *)0 &&
 	       fi->family == VMS_FFAM_SCS &&
-	       fi->cls == VMS_FCLS_SCS_SEQ;
+	       (fi->cls == VMS_FCLS_SCS_SEQ ||
+		fi->cls == VMS_FCLS_SCS_APPLMSG94);
 }
 
 static vms_codec_status_t mscp_read_opcode(const uint8_t *frame, uint32_t len,

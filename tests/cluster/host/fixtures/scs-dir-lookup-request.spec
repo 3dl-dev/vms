@@ -1,6 +1,6 @@
 %OVMX-CLUSTER-SPECIMEN-1
 name:      scs-dir-lookup-request
-class:     scs-seq
+class:     scs-applmsg-94
 origin:    spec-composed
 spec:      docs/cluster-protocol-spec.md 4(h)(2), 4(h)(2a), 4(m) op=10 DATA/DIRECTORY-OP
 capture:   formation-ci1-joinwindow.pcap

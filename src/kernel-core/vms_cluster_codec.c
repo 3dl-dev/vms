@@ -233,7 +233,7 @@ struct frame_class_rule {
 	uint8_t  mt_n;
 	uint8_t  mt[3];
 	uint8_t  len_n;
-	uint16_t len[3];
+	uint16_t len[4];
 	uint16_t len_gt;
 	uint16_t field_off;
 	uint16_t field_val;
@@ -286,15 +286,20 @@ static const struct frame_class_rule g_rules[] = {
 	 * Connection-control: spec §4(h)(1a) grounds the Con.ID pair at abs
 	 * 64/68 over the 110/66/62 content classes, EXCLUDING the application
 	 * value 10 at abs 60 -- so length alone is not the discriminator and
-	 * the rule carries the field test too.
+	 * the rule carries the field test too. §4(h)(1b) (vms-54f) widens this
+	 * to the 58-content short class too: ops 5 REJECT_RSP, 7 DISCONNECT_RSP,
+	 * 8 CREDIT_REQ, 9 CREDIT_RSP are "the envelope, the message type and the
+	 * Con.ID pair, and nothing else" (inner length 14) -- the same [50:58]
+	 * handle pair, never carrying ctrl_type 10, so the existing field guard
+	 * still excludes application messages correctly at this length too.
 	 */
 	{ { VMS_FCLS_SCS_CONN_CTRL, VMS_FFAM_SCS,
 	    VMS_FCAP_MSGTYPE | VMS_FCAP_SEQ | VMS_FCAP_CONID,
 	    VMS_SCA_HDR_LEN, VMS_SCA_HDR_LEN, "scs-conn-ctrl",
-	    "spec §4(g) ph4, §4(h)(1)(1a)" },
+	    "spec §4(g) ph4, §4(h)(1)(1a),(1b)" },
 	  M_MSGTYPE | M_LEN_EQ | M_FIELD_NE, 0,
 	  3, { VMS_SCS_MT_MSG, VMS_SCS_MT_SETUP, VMS_SCS_MT_ALT },
-	  3, { 110, 66, 62 }, 0,
+	  4, { 110, 66, 62, 58 }, 0,
 	  VMS_OFF_SCS_CTRL_TYPE, VMS_SCS_CTRL_APPLICATION },
 
 	{ { VMS_FCLS_SCS_MSG, VMS_FFAM_SCS,
@@ -302,7 +307,39 @@ static const struct frame_class_rule g_rules[] = {
 	    VMS_SCA_HDR_LEN, VMS_SCA_HDR_LEN, "scs-msg", "spec §4(d)" },
 	  M_MSGTYPE | M_LEN_EQ, 0,
 	  3, { VMS_SCS_MT_MSG, VMS_SCS_MT_SETUP, VMS_SCS_MT_ALT },
-	  1, { 190, 0, 0 }, 0, 0, 0 },
+	  1, { 190, 0, 0, 0 }, 0, 0, 0 },
+
+	/*
+	 * The 94-content "application message" (op 10 APPL_MSG) shape -- spec
+	 * §4(h)(1b) (vms-54f): "the envelope unifies across every length
+	 * class... message type [46:48], credit [48:50], handle pair [50:58]"
+	 * and identifies content 94 as the SAME op-10 MTYPE the 190-content
+	 * class carries, just a shorter body. TWO callers ride this exact
+	 * shape -- the MSCP$DISK command/WRITE-END class (FC-P6.2,
+	 * vms_cluster_codec_mscp.c, which self-disambiguates command vs.
+	 * WRITE-END by the opcode's END bit) and the SCS$DIRECTORY op-10
+	 * lookup (FC-P2.1, vms_scs_ctrl_parse()/vms_scs_dir_lookup_parse(),
+	 * which self-disambiguates request vs. NOT-PRESENT vs. affirmative by
+	 * the name/result bytes) -- and the wire gives no field to tell those
+	 * two SYSAPs apart at this layer: which SYSAP owns the frame is a
+	 * property of the Con.ID pair's CONNECTION, decided above the codec,
+	 * exactly as it already is for the 190-content class shared between
+	 * VMS$VAXcluster (FC-P3.1) and cat-0x02 DLM (FC-P4.5). This is a
+	 * SEPARATE class from VMS_FCLS_SCS_MSG (never widen that one to cover
+	 * 94): vms_cluster_codec_dlm.c's dlm_class_ok() and
+	 * vms_cluster_codec_cm.c key on VMS_FCLS_SCS_MSG meaning "190-content
+	 * VC class" alone with no length check of their own -- folding 94 into
+	 * it would hand a 94-content MSCP/directory frame to the DLM/CM
+	 * parsers, which is exactly the kind of silent cross-class misread
+	 * INV-6 exists to refuse.
+	 */
+	{ { VMS_FCLS_SCS_APPLMSG94, VMS_FFAM_SCS,
+	    VMS_FCAP_MSGTYPE | VMS_FCAP_SEQ | VMS_FCAP_CONID,
+	    VMS_SCA_HDR_LEN, VMS_SCA_HDR_LEN, "scs-applmsg-94",
+	    "spec §4(h)(1b)" },
+	  M_MSGTYPE | M_LEN_EQ, 0,
+	  3, { VMS_SCS_MT_MSG, VMS_SCS_MT_SETUP, VMS_SCS_MT_ALT },
+	  1, { 94, 0, 0, 0 }, 0, 0, 0 },
 
 	/*
 	 * Any other format-0x13 sequenced message. Deliberately carries NO
@@ -315,7 +352,7 @@ static const struct frame_class_rule g_rules[] = {
 	    VMS_SCA_HDR_LEN, VMS_SCA_HDR_LEN, "scs-seq", "spec §4(g),§4(h)" },
 	  M_MSGTYPE, 0,
 	  3, { VMS_SCS_MT_MSG, VMS_SCS_MT_SETUP, VMS_SCS_MT_ALT },
-	  0, { 0, 0, 0 }, 0, 0, 0 },
+	  0, { 0, 0, 0, 0 }, 0, 0, 0 },
 };
 
 #define G_RULE_N ((uint8_t)(sizeof(g_rules) / sizeof(g_rules[0])))

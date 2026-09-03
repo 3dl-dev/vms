@@ -2,11 +2,11 @@
 name:      hello-multicast-vax1
 class:     hello
 origin:    spec-composed
-spec:      docs/cluster-protocol-spec.md 2, 3, 4(a), 4(b)
+spec:      docs/cluster-protocol-spec.md 2, 3, 4(a), 4(a).2, 4(b)
 capture:   scs-idle-baseline.pcap
 frame:     1
 wire-len:  134
-sha256:    61e828ff30c8b947409399eaed0a95908674fd7db48f8180b3eff762c5790311
+sha256:    859fb363f565fcd47c92398e0bb52edc6b9aa10dd0c57d41993f2a3a80450f03
 %bytes
 @0    ab 00 04 01 01 01          ; eth dst = cluster multicast group 1 (sec 3)
 @6    08 00 2b 4a b7 15          ; eth src = VAX1 real HW MAC (sec 4b abs 120)
@@ -22,11 +22,13 @@ sha256:    61e828ff30c8b947409399eaed0a95908674fd7db48f8180b3eff762c5790311
 @40   06                         ; node-name length prefix, GROUNDED (sec 4a)
 @41   56 41 58 31 20 20          ; "VAX1  ", ASCII space-padded (sec 4a)
 ;
-; abs 47..63 is the 17-byte capability/version span sec 4(a) records as
-; present but does NOT publish the bytes of, and abs 64..67 likewise. Both
-; are left UNCITED here rather than invented; FC-P0.7 fills them from a
-; capture extract on the lab host.
+; abs 47..67 is the discovery-format span. sec 4(a).2 now PUBLISHES it and
+; grounds it as node-independent (11403 of 11575 HELLOs across 10 captures,
+; five senders, 0 residuals among real nodes), so it is cited here rather
+; than left zero. No meaning is claimed for any of these bytes.
 ;
+@47   00 80 01 ff 83 00 04 00 00 00 00 00 00 00 00 00 18   ; abs 47..63 (sec 4a.2)
+@64   03 00 00 00                ; abs 64..67 (sec 4a.2)
 @68   00 00 00 00                ; join nonce: zero on a multicast HELLO (GROUNDED sec 4a)
 @72   00 00 00 00 00 00 00 00 00 00
 @82   00 00 00 00 00 00 00 00 00 00   ; abs 72..91 zero padding (sec 4b)

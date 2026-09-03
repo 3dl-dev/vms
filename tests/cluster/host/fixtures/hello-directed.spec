@@ -2,11 +2,11 @@
 name:      hello-directed-vax2-to-vax1
 class:     hello
 origin:    spec-composed
-spec:      docs/cluster-protocol-spec.md 2, 3, 4(a), 4(a).0, 4(a).1, 4(b)
+spec:      docs/cluster-protocol-spec.md 2, 3, 4(a), 4(a).0, 4(a).1, 4(a).2, 4(b)
 capture:   scs-idle-baseline.pcap
 frame:     2
 wire-len:  134
-sha256:    6edcabbffab3b28418d95157b227df136b04bedf3dbefc59199fb72360e828d1
+sha256:    69e13a7dd351750b6556843821e679cc36b03f8bb5bc2a1277d5818d0f95d4ae
 %bytes
 @0   08 00 2b 4a b7 15          ; eth dst = VAX1's HARDWARE MAC (sec 4a.0)
 @6    08 00 2b 78 56 b9          ; eth src = VAX2's HW MAC (sec 2, sec 3)
@@ -23,6 +23,14 @@ sha256:    6edcabbffab3b28418d95157b227df136b04bedf3dbefc59199fb72360e828d1
 @37   01 00 00
 @40   06
 @41   56 41 58 32 20 20          ; "VAX2  "
+@47   00 80 01 ff 83 00 04 00 00 00 00 00 00 00 00 00 18
+                                 ; discovery-format span, abs 47-63 (sec 4a.2)
+@64   03 00 00 00                ; ... and its abs 64-67 tail. Byte-identical on
+                                 ; every real sender in every capture (11403 of
+                                 ; 11575 HELLOs; the only residuals are OVMX's
+                                 ; own zeros). Omitting it is what stalled E56:
+                                 ; the member verifies the channel and then
+                                 ; never opens a circuit.
 @68   ee 05 39 5b                ; cluster join nonce on a DIRECTED hello (GROUNDED sec 4a)
 @92   01 00                      ; node-incarnation the sender attributes to the
                                  ; peer: 1 on fresh contact (GROUNDED sec 4b/4i.B)

@@ -205,9 +205,9 @@ multicast and directed) and `satellite-niscs-boot-solicit.pcap` frame 1100
 | 37 | 3 | constant suffix `01 00 00` | unknown/inferred |
 | 40 | 1 | node-name length prefix (observed `6`) | GROUNDED (matches the following ASCII name's byte count in every frame) |
 | 41 | *namelen* | node name, ASCII, space-padded (`"VAX1  "`, `"VAX2  "`, `"VAX3  "`) | GROUNDED |
-| 33+14=47 | 17 | constant capability/version-ish span, differs slightly HELLO vs. SOLICIT | unknown/inferred |
-| 64 | 1 | constant `0x03` | unknown |
-| 65 | 3 | zero | unknown |
+| 33+14=47 | 17 | **discovery-format span** `00 80 01 ff 83 00 04 00×9 18` (differs slightly HELLO vs. SOLICIT) | **GROUNDED as a node-independent constant** in §4(a).2 (11 403/11 575 HELLOs, 5 senders, 0 residuals among real nodes); the *meaning* of the bytes remains unknown and is not claimed |
+| 64 | 1 | constant `0x03` | **GROUNDED** with the same census (§4(a).2) |
+| 65 | 3 | zero | **GROUNDED** with the same census (§4(a).2) |
 | 68 | 4 | **connect/join nonce** | **GROUNDED**: `0x00000000` on every multicast HELLO, and the identical non-zero shared token (e.g. `ee 05 39 5b`) on every directed HELLO between VAX1/VAX2 *and* on the VAX3 boot SOLICIT — the same cluster-wide token the initial RE-specimens doc flagged. Confirmed frame examples: `scs-idle-baseline.pcap` frame 1 (zero, multicast) vs. frame 2/3 (`ee05395b`, directed); `satellite-niscs-boot-solicit.pcap` frame 1100 (`ee05395b`). |
 
 #### 4(a).0 Directed-HELLO addressing: abs 16 is the peer's LOGICAL address, not its HW MAC (GROUNDED, `vms-760`)
@@ -308,6 +308,77 @@ timing and frame-count structure observed on the reference-lab wire (two
 independent captures) plus the saturating-increment pattern; no VSI/HPE source or
 binary was read. The low-byte-carries-state / high-byte-`0x00` split and the
 INIT/REQUEST/CONFIRM labels are OVMX working labels for the observed values.
+
+#### 4(a).2 The abs 47–67 discovery-format span — GROUNDED as a node-independent constant, and it GATES the circuit (`E56`)
+
+The table above records abs 47–63 as a "constant capability/version-ish span"
+and abs 64–67 as "unknown", and every earlier revision left both **unpublished**
+— which is why OVMX's own port put **zero** there and called it honest omission.
+It is not omission: it puts a *different* value on the wire where every real
+node puts one identical value, and that is what stalled the join.
+
+**The bytes (GROUNDED, byte-exact):**
+
+```
+abs  47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 | 64 65 66 67
+     00 80 01 ff 83 00 04 00 00 00 00 00 00 00 00 00 18 | 03 00 00 00
+```
+
+**Census — node-INDEPENDENT.** Over **11 575 HELLO frames in 10 captures**
+(`scs-idle-baseline`, `formation-ci1-joinwindow`, `ci3`-era and every
+`ovmx-*` run through `ovmx-e81-*`, plus the E56 re-fire), **11 403** carry
+exactly those 21 bytes. The **172** residuals are all one sender: the current
+OVMX build's own zeros. Split by source MAC:
+
+| sender | HELLOs | abs 47–67 |
+|---|---|---|
+| VAX1 `aa:00:04:00:01:04` | 3 347 | the span |
+| VAX2 `08:00:2b:78:56:b9` | 3 103 | the span |
+| VAX3 `08:00:2b:11:22:33` | 2 331 | the span |
+| **OVMX `b6:16:8a:dc:3a:53`** (the build that reached MEMBER) | 2 301 | the span |
+| VAX2 (current HW) `08:00:2b:1e:85:61` | 321 | the span |
+| **OVMX `52:54:00:00:00:f4`** (faithful stack, E55/E56 re-fire) | **172** | **zero** |
+
+Five distinct senders, two different clusters, two months apart, **0 residuals
+among real nodes** — the span does not vary with node name, SCSSYSTEMID,
+hardware MAC or incarnation, so it is a **format property of the discovery
+frame**, not a claim about the system that sent it.
+
+**It gates VC formation.** A controlled pair of captures separates it from
+everything else on the wire, because in both the LAN channel reaches `b4` in
+both directions:
+
+| capture | OVMX HELLO abs 47–67 | channel | member-originated `0x41` STARTs to OVMX |
+|---|---|---|---|
+| `ovmx-5fe-channel-formed-20260728.pcap` | the span | VAX1 `b2`→OVMX `b3`→VAX1 `b4` | **18** — the first arrives **10 ms** after `b4`, unprompted |
+| `join-e55refire-1788460304.pcap` (E56) | **zero** | full `b2`/`b3`/`b4` **plus** the §4(k) padded verify, **both directions, both VAXes** | **0**, over 242 s |
+
+Byte-diff of the two OVMX directed HELLOs (`ovmx-5fe` SCA 17 vs. E56 SCA 67)
+leaves only: the two node identities (src-logical/name/HW MAC), the abs 96–101
+live tick, and **abs 47–67**. Everything the §4(a).1 channel handshake reads is
+identical, and the channel does complete — so the field the member consults
+before it opens a circuit is this span. In the E56 run OVMX emitted **242**
+`0x41` STARTs of its own into that silence and received **0** replies: the
+member, not the joiner, opens the circuit (§4(g) phase 2 confirms the
+ordering — the round-0 START is the member's).
+
+**Clean-room note.** These bytes were read off our own lab's wire, from
+captures whose SHA-256s are in `docs/clean-room/reference-captures.sha256`
+(`scs-idle-baseline.pcap` frames 1–3, `ovmx-5fe-channel-formed-20260728.pcap`,
+`ovmx-760-MEMBER-achieved-20260730.pcap`, all three verified byte-exact against
+that manifest when this section was measured). **No meaning is claimed for any
+byte** — not the `0x0180` at abs 48, not the `0x18` at abs 63, not the `0x03`
+at abs 64. Whatever computes or encodes them is unpublished and is **not**
+reconstructed here (Rule 8). What is asserted is only what was counted: the
+21 bytes are the same on every real node, and their absence stops the member
+from opening a circuit.
+
+**What OVMX does with that (INV-6).** The port does **not** bake these bytes
+in: `src/kernel-core/vms_pe_fsm.c` `pe_learn_disc_format()` LEARNS them off the
+first real peer's own discovery frame in the current run — the identical
+mechanism §4(g)/`E55` already sanctions for the cluster join nonce ("the
+cluster's on-wire assignment"). Until a peer has been heard the span goes out
+zero and `pe_fsm.disc_format_absent` counts every frame that left without it.
 
 ### 4(b) HELLO frame — offsets 72–133 (HELLO-specific tail)
 

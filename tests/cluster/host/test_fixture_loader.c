@@ -111,13 +111,18 @@ static void test_cited_spans(void)
 		 "hello-multicast.spec loads");
 	ct_check(vms_fixture_is_cited(&fx, 0, 32),
 		 "abs 0..31 (the harvest span) is cited");
-	ct_check(!vms_fixture_is_cited(&fx, 47, 1),
-		 "abs 47 (the unpublished capability span) is NOT cited");
+	/* E56: abs 47..67 WAS the "unpublished capability span" and was
+	 * deliberately left uncited. Spec SS4(a).2 now grounds it (census over
+	 * 11575 HELLOs, five senders, 0 residuals among real nodes) and the
+	 * specimen cites it, because a zero there is not omission -- it is a
+	 * different value than every real node sends, and it stalled the join. */
+	ct_check(vms_fixture_is_cited(&fx, 47, 21),
+		 "abs 47..67 (the SS4(a).2 discovery-format span) IS cited");
 	ct_check(!vms_fixture_is_cited(&fx, 96, 6),
 		 "abs 96..101 (the live timer) is NOT cited");
-	ct_check(!vms_fixture_is_cited(&fx, 30, 20),
+	ct_check(!vms_fixture_is_cited(&fx, 92, 10),
 		 "a span straddling cited and uncited bytes is NOT cited");
-	ct_check(fx.bytes[47] == 0, "uncited bytes are zero-filled");
+	ct_check(fx.bytes[96] == 0, "uncited bytes are zero-filled");
 	ct_check(fx.origin == VMS_FIXTURE_ORIGIN_SPEC,
 		 "origin is spec-composed, not a claim of capture extraction");
 }

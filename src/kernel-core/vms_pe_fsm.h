@@ -801,12 +801,41 @@ struct pe_identity {
 	/*
 	 * The two spans spec SS4(a) records as PRESENT but does not publish the
 	 * meaning of (abs 47-63 "capability/version-ish", abs 64-67 "unknown").
-	 * The codec deliberately refuses to supply a default for either, so they
-	 * come from here, and today the executive's honest value for both is
-	 * zero: OVMX does not know what it would be asserting.
+	 * Together they are the contiguous abs 47-67 DISCOVERY FORMAT span, and
+	 * the codec deliberately refuses to supply a default for either, so both
+	 * come from here.
+	 *
+	 * E56 -- WHY THIS IS NOT A ZERO ANY MORE. Zeroing them is not the honest
+	 * omission it looks like: it puts a DIFFERENT value on the wire where
+	 * every real node puts one identical value, and it is what stopped the
+	 * join. Measured across the whole lab capture library, the span is
+	 * byte-identical on VAX1, VAX2, VAX3 AND on the OVMX build that once
+	 * reached MEMBER (`ovmx-760-MEMBER-achieved-20260730.pcap`), in every
+	 * HELLO of every capture -- it is node-INDEPENDENT, so it is a format
+	 * property of the discovery frame, not a claim about this system. The
+	 * controlled pair that pins it:
+	 *
+	 *   ovmx-5fe-channel-formed-20260728.pcap -- OVMX's HELLO carries the
+	 *     span; VAX1 finishes b2/b3/b4 and 10 ms later opens the circuit
+	 *     ITSELF with 18 round-0 0x41 STARTs to OVMX.
+	 *   join-e55refire-1788460304.pcap (E55 re-fire) -- OVMX's HELLO carries
+	 *     ZERO there and nothing else differs in content; b2/b3/b4 completes
+	 *     with BOTH VAXes in both directions, and neither VAX EVER sends a
+	 *     START. 242 OVMX STARTs go out unanswered, 0 come back.
+	 *
+	 * So the span is read the way FC-P0.8/E55 reads the join nonce, and for
+	 * the same reason: off a REAL peer's own discovery frame, in THIS
+	 * session, by pe_learn_disc_format(). Never a byte out of a stored
+	 * capture, never a constant this file invented (Rule 8 -- whatever
+	 * generates the value is unpublished and is not reconstructed here; this
+	 * is "the cluster's on-wire assignment"). Until a peer has been heard
+	 * `disc_format_valid` is 0, zero goes out, and pe_fsm.disc_format_absent
+	 * counts every frame that left without it -- INV-6 honest omission, the
+	 * join_nonce_valid precedent exactly.
 	 */
 	uint8_t  cap_span[VMS_DISC_CAPSPAN_LEN];
 	uint8_t  reserved_64[VMS_DISC_RESERVED64_LEN];
+	uint8_t  disc_format_valid;
 
 	/*
 	 * The largest SCA content this port may put on the wire: NISCS_MAX_PKTSZ
@@ -965,6 +994,9 @@ struct pe_fsm {
 	uint32_t nonce_absent;      /* directed frames sent with no credential   */
 	uint32_t nonce_learned;     /* 0 or 1: the join nonce was learned live off
 				     * a real peer's directed frame this run    */
+	uint32_t disc_format_absent;/* discovery frames sent with abs 47-67 zero */
+	uint32_t disc_format_learned;/* 0 or 1: the abs 47-67 span was learned
+				      * live off a real peer this run (E56)     */
 	uint32_t tx_errors;         /* ops->send returned non-zero               */
 	uint32_t last_gasps_built;
 

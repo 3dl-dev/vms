@@ -238,10 +238,10 @@ static void pe_build_identity(struct vms_cluster *cl, const uint8_t mcast[6],
 	/*
 	 * The largest SCA content this port may put on the wire: the real
 	 * interface MTU, further capped by the operator's configured
-	 * NISCS_MAX_PKTSZ when one has actually been loaded (0 means it has
-	 * not -- FC-P0.10 has not landed SYSGEN_LOAD yet). 0 either way means
-	 * "size verification is not attempted", the honest default on a port
-	 * whose MTU is unknown (vms_pe_fsm.h SS4).
+	 * NISCS_MAX_PKTSZ when one has actually been loaded (0 means the
+	 * operator set none). 0 either way means "size verification is not
+	 * attempted", the honest default on a port whose MTU is unknown
+	 * (vms_pe_fsm.h SS4).
 	 */
 	if (exec_lan_mtu(&mtu) == 0 && mtu > 0) {
 		id->max_sca_len = (mtu > 0xffffu) ? 0xffffu : (uint16_t)mtu;
@@ -255,14 +255,17 @@ static void pe_build_identity(struct vms_cluster *cl, const uint8_t mcast[6],
 	id->hw_type_valid = 1u;
 
 	/*
-	 * DISCLOSED GAPS, not fabrications (INV-6). Two fields this node
-	 * genuinely cannot attest to yet, both closed by FC-P0.10
-	 * (VMS_IOCTL_SYSGEN_LOAD, not landed):
+	 * DISCLOSED GAPS, not fabrications (INV-6). Two START-body fields this
+	 * node genuinely cannot attest to yet. VMS_IOCTL_SYSGEN_LOAD HAS landed
+	 * (vms_devtab.c) -- what is still missing is a source for each value,
+	 * not the ioctl:
 	 *   - sw_version: the "VMX Vx.y" honest-OS-identity broadcast has no
-	 *     source in `struct vms_cluster` today (no version field is
-	 *     loaded into cl->params) -- left invalid, zero bytes go out,
-	 *     exactly the join_nonce_valid precedent this same struct already
-	 *     documents for an unset credential.
+	 *     source visible to kernel-core (ovmx_identity.h is userland, and
+	 *     no version field crosses SYSGEN_LOAD into cl->params) -- left
+	 *     invalid, zero bytes go out, exactly the join_nonce_valid
+	 *     precedent this same struct already documents for an unset
+	 *     credential. It must NEVER be filled by echoing a peer's
+	 *     "VMS V7.3": that is a masquerade, not a learned format constant.
 	 *   - cluster_credits_valid: cl->params.cluster_credits cannot yet be
 	 *     told apart from "SYSGEN never loaded" (there is no loaded-params
 	 *     flag today), so this stays unset rather than asserting a
@@ -272,6 +275,14 @@ static void pe_build_identity(struct vms_cluster *cl, const uint8_t mcast[6],
 	 * Neither gap blocks a channel from forming (SS4(a)/(b) never touch
 	 * either field) or a circuit from forming (only incarnation_time_valid
 	 * gates that, filled below).
+	 *
+	 * OPEN, AND MEASURED (E56): the one OVMX build that ever reached MEMBER
+	 * sent BOTH -- `ovmx-760-MEMBER-achieved-20260730.pcap` carries
+	 * sw_version "VMX V0.1" and credits 10 in its 0x41 START body, against
+	 * "VMS V7.3"/10 from every VAX (spec SS4(g) grounds credits=CLUSTER_
+	 * CREDITS at abs 95, 28/28). So these two zeros are expected to be the
+	 * NEXT wall once the member's round-0 START starts arriving. Closing
+	 * them needs a decision, not a guess, and it is not made here.
 	 */
 
 	id->incarnation_time = exec_time_now_vms();

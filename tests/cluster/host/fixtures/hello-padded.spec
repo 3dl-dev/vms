@@ -2,11 +2,11 @@
 name:      hello-padded-vax1-channel-size-verify
 class:     hello-padded
 origin:    spec-composed
-spec:      docs/cluster-protocol-spec.md 2, 3, 4(a), 4(a).0, 4(b), 4(k)
+spec:      docs/cluster-protocol-spec.md 2, 3, 4(a), 4(a).0, 4(a).2, 4(b), 4(k)
 capture:   ci3-addmember-20260728.pcap
 frame:     85
 wire-len:  1514
-sha256:    ade116c5b28b11fcc42db1aabebc5668315040e4b0c5e0dfd60db055615c3dfa
+sha256:    7e906dd921ffa25677c543249b1740cbe1dcafe89b2706a2099628a98859758f
 %bytes
 ;
 ; The NISCA channel packet-size verification frame (sec 4k): a genuine
@@ -37,6 +37,10 @@ sha256:    ade116c5b28b11fcc42db1aabebc5668315040e4b0c5e0dfd60db055615c3dfa
 @37   01 00 00
 @40   06                         ; sec 4k pl26: name length + name
 @41   56 41 58 31 20 20          ; "VAX1  "
+@47   00 80 01 ff 83 00 04 00 00 00 00 00 00 00 00 00 18   ; abs 47..63 (sec 4a.2)
+@64   03 00 00 00                ; abs 64..67 (sec 4a.2) -- the padded probe is
+                                 ; a genuine directed HELLO, so it carries the
+                                 ; same discovery-format span
 @68   ee 05 39 5b                ; join nonce (sec 4k pl54)
 @92   01 00                      ; node incarnation, golden fresh (sec 4k pl78)
 @120  08 00 2b 4a b7 15          ; sender's real HW LAN MAC (sec 4k pl106)

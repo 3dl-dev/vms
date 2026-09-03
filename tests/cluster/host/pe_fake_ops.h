@@ -186,6 +186,11 @@ struct fake_peer {
 	uint8_t  name[VMS_HELLO_NODENAME_MAX];
 	uint8_t  name_len;
 	uint8_t  nonce[VMS_DISC_NONCE_LEN];
+	/* The sec 4(a).2 discovery-format span, abs 47-67. Zero by default so
+	 * every existing scenario keeps the shape it had; a test that wants a
+	 * peer to PRESENT it fills these, exactly as it fills `nonce`. */
+	uint8_t  cap_span[VMS_DISC_CAPSPAN_LEN];
+	uint8_t  reserved_64[VMS_DISC_RESERVED64_LEN];
 };
 
 static void fake_peer_init(struct fake_peer *p, uint16_t sysid,
@@ -229,6 +234,8 @@ static uint32_t fake_peer_hello(const struct fake_peer *p,
 	h.disc.namelen = p->name_len;
 	memcpy(h.disc.name, p->name, VMS_HELLO_NODENAME_MAX);
 	memcpy(h.disc.nonce, p->nonce, VMS_DISC_NONCE_LEN);
+	memcpy(h.disc.cap_span, p->cap_span, VMS_DISC_CAPSPAN_LEN);
+	memcpy(h.disc.reserved_64, p->reserved_64, VMS_DISC_RESERVED64_LEN);
 
 	h.incarnation = incarnation;
 	h.trailer_9205 = 0x0592u;

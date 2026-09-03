@@ -249,6 +249,107 @@ static void test_nonce_learned_from_a_real_peer(void)
 }
 
 /* ------------------------------------------------------------------ *
+ * 1c. E56: the abs 47-67 discovery-format span is LEARNED off a real
+ * peer's own frame -- never zeroed, never invented
+ *
+ * WHY THIS TEST EXISTS. The E55 re-fire proved the SS4(a).1 channel
+ * verify completes with both real VAXes in both directions, and then
+ * NEITHER VAX ever opened a circuit: 242 OVMX 0x41 STARTs out, 0 member
+ * STARTs back, over 242 s. The controlled comparison in SS4(a).2 --
+ * `ovmx-5fe-channel-formed-20260728.pcap`, same handshake, but OVMX's
+ * HELLO carrying the span -- has VAX1 emitting its own round-0 START 10 ms
+ * after b4, unprompted, 18 times. The span is the difference, and the
+ * census says it is node-independent (11403/11575 HELLOs, five senders,
+ * 0 residuals among real nodes). So it is read off the wire like the
+ * nonce, and this test asserts exactly that: what goes out is BYTE-EQUAL
+ * to what a real peer sent us, and zero before anyone has.
+ * ------------------------------------------------------------------ */
+static void test_disc_format_learned_from_a_real_peer(void)
+{
+	const struct vms_fixture *fx = fixture("hello-directed-vax2-to-vax1");
+	struct fake_pe_decoded specimen, before, after, to_other_peer;
+	struct fake_peer vax1;
+	uint8_t zero_span[VMS_DISC_CAPSPAN_LEN];
+
+	printf("-- E56: the abs 47-67 discovery-format span is LEARNED live, "
+	       "not zeroed and not invented\n");
+	if (fx == NULL) {
+		ct_check(0, "fixture hello-directed-vax2-to-vax1 present");
+		return;
+	}
+	memset(zero_span, 0, sizeof(zero_span));
+
+	/* What the real member's frame carries, read through the same codec
+	 * the FSM emits through -- no literal span appears in this test. */
+	{
+		struct fake_pe f;
+
+		memset(&f, 0, sizeof(f));
+		f.n_frames = 1;
+		f.frame[0].len = fx->wire_len;
+		memcpy(f.frame[0].b, fx->bytes, fx->wire_len);
+		specimen = fake_pe_decode(&f, 0);
+	}
+	ct_check(specimen.ok, "the specimen parses as a HELLO");
+	ct_check(memcmp(specimen.h.disc.cap_span, zero_span,
+			VMS_DISC_CAPSPAN_LEN) != 0,
+		 "and it carries a NON-ZERO abs 47-63 span (SS4(a).2)");
+
+	port_up(1025, 1500);
+
+	/* Before any peer has been heard: honest zero, and counted. */
+	fake_pe_clear_frames(&g_fake);
+	fake_peer_init(&vax1, 1026, vax1_hw, "VAX1");
+	(void)feed_peer(&vax1, 1025, 1, PE_PFW_VERIFY_B2, 1, 0);
+	before = fake_pe_decode(&g_fake, 0);
+	ct_check(before.ok &&
+		 memcmp(before.h.disc.cap_span, zero_span,
+			VMS_DISC_CAPSPAN_LEN) == 0,
+		 "nothing learned yet: the span goes out honestly zero");
+	ct_check(g_fsm.disc_format_absent > 0,
+		 "and the absence is COUNTED, not hidden (INV-6)");
+	ct_check_eq_u32(g_fsm.disc_format_learned, 0, "nothing learned yet");
+
+	/* Now a real member's own frame arrives carrying it. */
+	fake_pe_clear_frames(&g_fake);
+	(void)feed_fixture(fx);
+	after = fake_pe_decode(&g_fake, 0);
+	ct_check(after.ok, "the b2 is still answered");
+	ct_check(memcmp(after.h.disc.cap_span, specimen.h.disc.cap_span,
+			VMS_DISC_CAPSPAN_LEN) == 0,
+		 "abs 47-63 goes back out BYTE-EQUAL to what the peer sent");
+	ct_check(memcmp(after.h.disc.reserved_64, specimen.h.disc.reserved_64,
+			VMS_DISC_RESERVED64_LEN) == 0,
+		 "and abs 64-67 with it -- one contiguous learned span");
+	ct_check_eq_u32(g_fsm.disc_format_learned, 1,
+			"the learn event is counted, honestly, exactly once");
+
+	/* A DIFFERENT peer that never presented one still gets it: SS4(a).2
+	 * measured the span node-INDEPENDENT, so it is this port's discovery
+	 * format, not a per-peer echo. */
+	fake_pe_clear_frames(&g_fake);
+	(void)feed_peer(&vax1, 1025, 1, PE_PFW_VERIFY_B2, 1, 0);
+	to_other_peer = fake_pe_decode(&g_fake, 0);
+	ct_check(to_other_peer.ok &&
+		 memcmp(to_other_peer.h.disc.cap_span,
+			specimen.h.disc.cap_span, VMS_DISC_CAPSPAN_LEN) == 0,
+		 "and is reused on a channel that never taught it");
+
+	/* Learning does not re-fire, and a peer that sends zeros cannot
+	 * UNLEARN it -- the honest value already heard stands. */
+	(void)feed_peer(&vax1, 1025, 1, PE_PFW_VERIFY_B3, 1, 0);
+	ct_check_eq_u32(g_fsm.disc_format_learned, 1,
+			"learned exactly once per run");
+	fake_pe_clear_frames(&g_fake);
+	(void)feed_peer(&vax1, 1025, 1, PE_PFW_VERIFY_B2, 1, 0);
+	to_other_peer = fake_pe_decode(&g_fake, 0);
+	ct_check(to_other_peer.ok &&
+		 memcmp(to_other_peer.h.disc.cap_span,
+			specimen.h.disc.cap_span, VMS_DISC_CAPSPAN_LEN) == 0,
+		 "a zero-span peer does not unlearn what a real one taught");
+}
+
+/* ------------------------------------------------------------------ *
  * 2. The GROUNDED SS4(k) padded probe: OVMX reciprocates
  * ------------------------------------------------------------------ */
 static void test_reciprocate_the_captured_padded_hello(void)
@@ -640,6 +741,7 @@ int main(void)
 
 	test_answer_the_captured_b2();
 	test_nonce_learned_from_a_real_peer();
+	test_disc_format_learned_from_a_real_peer();
 	test_reciprocate_the_captured_padded_hello();
 	test_full_formation_replay();
 	test_cadence_and_timeout();

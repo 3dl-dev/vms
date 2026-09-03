@@ -150,6 +150,23 @@ static void pe_put_tick(const struct pe_fsm *f, uint8_t out[6])
 		out[i] = (uint8_t)((tick >> (8u * i)) & 0xffu);
 }
 
+/*
+ * The abs 47-67 DISCOVERY FORMAT span (SS4(a) "capability/version-ish" +
+ * "unknown"). LEARNED off a real peer, exactly like the join nonce below --
+ * see vms_pe_fsm.h SS4's E56 note for the capture pair that pins it. Absent
+ * means the codec's zero goes out and is COUNTED; nothing here invents bytes.
+ */
+static void pe_put_disc_format(struct pe_fsm *f, struct vms_hello_frame *h)
+{
+	if (!f->id.disc_format_valid) {
+		f->disc_format_absent++;
+		return;
+	}
+	pe_copy(h->disc.cap_span, f->id.cap_span, VMS_DISC_CAPSPAN_LEN);
+	pe_copy(h->disc.reserved_64, f->id.reserved_64,
+		VMS_DISC_RESERVED64_LEN);
+}
+
 /* The span every OVMX HELLO shares, from real state. */
 static void pe_hello_common(struct pe_fsm *f, struct vms_hello_frame *h)
 {
@@ -163,8 +180,7 @@ static void pe_hello_common(struct pe_fsm *f, struct vms_hello_frame *h)
 
 	h->disc.namelen = f->id.scsnode_len;
 	pe_copy(h->disc.name, f->id.scsnode, VMS_HELLO_NODENAME_MAX);
-	pe_copy(h->disc.cap_span, f->id.cap_span, VMS_DISC_CAPSPAN_LEN);
-	pe_copy(h->disc.reserved_64, f->id.reserved_64, VMS_DISC_RESERVED64_LEN);
+	pe_put_disc_format(f, h);
 
 	h->trailer_9205 = PE_TRAILER_9205;
 	pe_copy(h->tail_const, pe_tail_const, VMS_HELLO_TAILCONST_LEN);
@@ -193,15 +209,20 @@ static void pe_put_nonce(struct pe_fsm *f, struct vms_hello_frame *h)
 }
 
 /* True iff every byte of a VMS_DISC_NONCE_LEN span is zero. */
-static int pe_nonce_is_zero(const uint8_t n[VMS_DISC_NONCE_LEN])
+static int pe_span_is_zero(const uint8_t *p, uint32_t n)
 {
 	uint32_t i;
 
-	for (i = 0; i < VMS_DISC_NONCE_LEN; i++) {
-		if (n[i] != 0u)
+	for (i = 0; i < n; i++) {
+		if (p[i] != 0u)
 			return 0;
 	}
 	return 1;
+}
+
+static int pe_nonce_is_zero(const uint8_t n[VMS_DISC_NONCE_LEN])
+{
+	return pe_span_is_zero(n, VMS_DISC_NONCE_LEN);
 }
 
 /* A multicast HELLO: SS4(a)/SS4(b) -- incarnation 0, poller sweep 0. */
@@ -1045,6 +1066,33 @@ static void pe_learn_join_nonce(struct pe_fsm *f, const struct pe_rx *rx)
 	f->nonce_learned = 1u;
 }
 
+/*
+ * E56 -- learn the abs 47-67 DISCOVERY FORMAT span the same way, off the first
+ * real peer's discovery frame that carries a non-zero one. This is the join
+ * gate, not cosmetics: with the span zeroed an established member completes
+ * the whole SS4(a).1 b2/b3/b4 channel verify with this node and then never
+ * opens a circuit at all (E55 re-fire, 0 member STARTs in 242 s), whereas with
+ * it present the same member emits its round-0 0x41 START unprompted 10 ms
+ * after b4 (`ovmx-5fe-channel-formed-20260728.pcap`). The value is node-
+ * INDEPENDENT -- byte-identical on VAX1/VAX2/VAX3 and on the OVMX build that
+ * reached MEMBER -- so hearing it once from any peer is enough, exactly as for
+ * the cluster-wide nonce, and echoing it asserts nothing about THIS system
+ * (name, SCSSYSTEMID, hardware MAC, incarnation and software version all live
+ * in other fields and stay this node's own).
+ */
+static void pe_learn_disc_format(struct pe_fsm *f, const struct pe_rx *rx)
+{
+	if (f->id.disc_format_valid || rx->disc == NULL)
+		return;
+	if (pe_span_is_zero(rx->disc->cap_span, VMS_DISC_CAPSPAN_LEN))
+		return;
+	pe_copy(f->id.cap_span, rx->disc->cap_span, VMS_DISC_CAPSPAN_LEN);
+	pe_copy(f->id.reserved_64, rx->disc->reserved_64,
+		VMS_DISC_RESERVED64_LEN);
+	f->id.disc_format_valid = 1u;
+	f->disc_format_learned = 1u;
+}
+
 /* Is this frame ours? A directed frame names THIS node's LOGICAL address at
  * abs 16; a multicast one names the cluster group. Anything else is somebody
  * else's traffic on a shared LAN and is counted, not processed. */
@@ -1161,6 +1209,7 @@ enum pe_channel_action pe_fsm_rx(struct pe_fsm *f, const uint8_t *frame,
 	}
 	pe_channel_learn(f, ch, &rx);
 	pe_learn_join_nonce(f, &rx);
+	pe_learn_disc_format(f, &rx);
 
 	act = pe_check_incarnation(f, ch, &rx);
 	if (act == PE_CH_ACT_NONE)

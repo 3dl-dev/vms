@@ -88,6 +88,8 @@ in-module (e.g. FC-P3.4/P6.3). **Do not re-add a codec object already present**
 (dedup on merge — the integrator has hit this on every FSM merge).
 
 ### E10. VC gap-break under loss → RULED a fidelity bug; FC-P1.9 go-back-N LANDED (Fable, design §3.2.5)
+**recv_anchored deletion RATIFIED by Fable (§3.2.5): §4(i).A grounds recv_seq=0 as the port's formation anchor; no re-formation case exists; corrected failure shape (gap→ladder exhaustion→loud break) is right. No follow-up.**
+
 **Status: FIXED.** FC-P1.9 implemented the ruling on top of FC-P1.3 (no collision
 left — P1.3 integrated first, as this entry required). **FC-P2.2 is unblocked**
 and binds `pe_upper_ops.vc_down` (see the seam note below).

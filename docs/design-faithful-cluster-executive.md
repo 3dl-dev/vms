@@ -513,6 +513,25 @@ This makes the receiver ruling load-bearing: because a VC break has real
 CM consequences (RECNX loop, possibly a transition), the port must absorb
 transient loss itself, which is exactly what the retransmit ladder is for.
 
+**Receive anchor — RATIFIED (2026-09-03, from FC-P1.9).** A port that
+formed the circuit starts at `recv_seq = 0` and the first in-order
+sequenced frame must be `seq = 1`; the FC-P1.2 `recv_anchored` flag
+("adopt the first sequence number seen") is deleted. Grounding: spec
+§4(i).A — the post-START SCS VC resets to `send_seq = 1` on **both** sides
+(0 residuals), and §4(h)(4a)'s "anchor" is a property of a **capture
+scanner** attaching mid-flight, not of a port. Under go-back-N the flag
+was a silent data-loss defect: lose frame 1, anchor on frame 2, ack a
+message never received, the sender releases it from the ring. There is no
+faithful case for a non-1 first sequence: NISCA has no resume-mid-session
+mode — every formation *and every re-formation* (RECNX, §4(aa), reuses the
+formation path) is a new START/STACK/ACK that resets both sides, and the
+FSM resets on `RX_START` in every state. The one place a large sequence
+number appears — the established member's round-0 `0x41` START itself
+(§4(i)) — is the START frame's own field, excluded from sequenced scoring.
+A peer that violates §4(i).A now gaps and is broken by the retransmit
+ladder with a reason, never silently corrupted. No formation-vs-
+reformation distinction is needed.
+
 **FC-P1.2 correction (one item, FC-P1.9):** receiver discard + re-ack on
 gap; sender ack-timeout retransmit from the oldest unacked entry with the
 retransmit msgtype and a bounded ladder; break only on ladder exhaustion,

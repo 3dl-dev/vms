@@ -251,28 +251,78 @@ vms_codec_status_t
 vms_scs_seq_envelope_fixup_len(uint8_t *frame, uint32_t cap,
 			       uint32_t total_len);
 
-/*
- * abs 44 -- the send_seq MIRROR every sequenced message carries.
+/* ------------------------------------------------------------------ *
+ * abs 36..55 -- THE TRANSPORT COUNTER SPAN every sequenced message
+ * carries (spec sec 4(d) "SCS sequence-number region" + sec 4(h)(4)).
  *
- * GROUNDED (spec sec 4(h)(4)): "for every sequenced message (0x41/0x5b/0x4b)
- * the sender stamps send_seq at [20:22] mirrored byte-exact at [30:32]" --
- * 17,758/17,758 such frames in the full run, 0 residuals. The START builders
- * above already write it (VMS_OFF_START_SEQ_MIRROR is the same offset); the
- * two entries below are what lets the VC engine (FC-P1.2) stamp the same
- * three transport fields into a frame ANOTHER layer built.
- */
-#define VMS_OFF_SCS_SEQ_MIRROR  VMS_OFF_START_SEQ_MIRROR  /* abs 44 */
+ * The span is NOT the SYSAP's and NOT the SCS connection's: it belongs to
+ * the port pair, exactly as recv_ack/send_seq at abs 32/34 do (*VAXcluster
+ * Principles* pp. 2-30/2-31). It is stamped by the entry below, in ONE
+ * place, at transmit time -- and re-stamped on every retransmission, so
+ * the acknowledgement a retransmit carries is never stale.
+ *
+ * GROUNDED over 239,981 sequenced frames (msgtype 0x4b/0x5b/0x7b) across
+ * every REFERENCE capture in ~/vax/cluster/captures -- re-derive with
+ *   tools/cluster/scs_counter_span_measure.py <captures> --exclude ovmx
+ * (the exclusion keeps our own emissions out of the population used to
+ * judge our own emissions):
+ *
+ *   abs 36  small message count: 1 (76.1%) / 2 (19.4%) / 3 (4.4%);
+ *           ZERO IN 0 OF 239,981
+ *   abs 38  SYSGEN NISCS_LAN_OVRHD == 18       239932/239981; zero in 0
+ *   abs 40  recv_ack mirror                    239916/239981; zero in 65
+ *   abs 42  zero                               239981/239981
+ *   abs 44  send_seq mirror                    239981/239981
+ *   abs 46  zero                               239981/239981
+ *   abs 48  recv_ack, 3rd repeat               239872/239981; zero in 109
+ *   abs 50  zero                               239981/239981
+ *   abs 52  constant 0x0001                    239862/239981; zero in 0
+ *   abs 54  constant 0x0200                    238521/239981; zero in 0
+ *
+ * WHY IT IS WRITTEN AND NOT OMITTED (E63). Leaving the span zero is not an
+ * honest omission, it is a poisoned frame: the all-zero shape is unobserved
+ * -- abs 36/38/52/54 are zero in NOT ONE of 239,981 real frames -- and a
+ * live 2-node VAX cluster ACKNOWLEDGED NOT ONE of the 8,550 sequenced frames
+ * a port that zeroed the span sent over 1,604 seconds (both peers' recv_ack
+ * toward us: max 0; VAX1 and VAX2 retransmitted their own SCS$DIR_LOOKUP
+ * CONNECT_REQ 498 and 500 times instead). The two live values (abs 40/48)
+ * are the SAME executive read that produces abs 32 -- the circuit's recv_seq
+ * -- never a second, invented counter.
+ *
+ * abs 36 IS AN HONEST FLOOR, NOT A MODEL (rule 8). What makes a real port
+ * write 2 or 3 there is not grounded by anything we hold, and no algorithm
+ * for it is inferred here. What IS grounded is that the value is never 0,
+ * and that its floor -- the most common value of the corpus (76.1%) and the
+ * one 622/622 of the credit-return class carries (sec 4(h)(3), "payload[22]
+ * constant 0x0001", which this file's own credit builder has always
+ * written) -- is 1. This port writes that floor and nothing cleverer.
+ * ------------------------------------------------------------------ */
+#define VMS_OFF_SCS_MSG_COUNT    36u  /* small count, GROUNDED never zero  */
+#define VMS_OFF_SCS_LAN_OVRHD    38u  /* SYSGEN NISCS_LAN_OVRHD            */
+#define VMS_OFF_SCS_ACK_MIRROR1  40u  /* == recv_ack (abs 32)              */
+#define VMS_OFF_SCS_SPAN_ZERO1   42u
+#define VMS_OFF_SCS_SEQ_MIRROR   VMS_OFF_START_SEQ_MIRROR /* abs 44        */
+#define VMS_OFF_SCS_SPAN_ZERO2   46u
+#define VMS_OFF_SCS_ACK_MIRROR2  48u  /* == recv_ack, 3rd repeat           */
+#define VMS_OFF_SCS_SPAN_ZERO3   50u
+#define VMS_OFF_SCS_SPAN_CONST1  52u
+#define VMS_OFF_SCS_SPAN_CONST2  54u
+#define VMS_OFF_SCS_SPAN_END     56u  /* first byte past the span          */
 
-/* The smallest frame that can carry the mirror at abs 44..45. Every grounded
- * sequenced class (SCA content 58/62/66/86/94/110/190 -> wire 72..204) clears
- * it by a wide margin; the check exists so a truncated frame is REFUSED rather
- * than stamped past its end. */
-#define VMS_SCS_SEQ_STAMP_MIN_LEN (VMS_OFF_SCS_SEQ_MIRROR + 2u)
+#define VMS_SCS_SEQ_MSG_COUNT    1u       /* the grounded floor, see above */
+#define VMS_SCS_SEQ_SPAN_CONST1  0x0001u
+#define VMS_SCS_SEQ_SPAN_CONST2  0x0200u
+
+/* The smallest frame that can carry the whole span (abs 36..55). Every
+ * grounded sequenced class (SCA content 58/62/66/86/94/110/190 -> wire
+ * 72..204) clears it by a wide margin; the check exists so a truncated frame
+ * is REFUSED rather than stamped past its end. */
+#define VMS_SCS_SEQ_STAMP_MIN_LEN VMS_OFF_SCS_SPAN_END
 
 /*
- * vms_scs_seq_stamp - write the TRANSPORT's three sequence fields into a
- * sequenced frame some other layer built: recv_ack at abs 32, send_seq at
- * abs 34 and its mirror at abs 44 (spec sec 4(h)(4)).
+ * vms_scs_seq_stamp - write the TRANSPORT's counter span into a sequenced
+ * frame some other layer built: recv_ack at abs 32, send_seq at abs 34, and
+ * the whole abs 36..55 span documented above (spec sec 4(d)/4(h)(4)).
  *
  * WHY THIS EXISTS. Sequencing is a property of the VIRTUAL CIRCUIT, not of
  * the SYSAP message riding it (*VAXcluster Principles* pp. 2-30/2-31: the
@@ -281,13 +331,14 @@ vms_scs_seq_envelope_fixup_len(uint8_t *frame, uint32_t cap,
  * that knows the Con.ID pair and the SYSAP body builds the frame, and the
  * port stamps the sequence position into it at the moment it goes out -- and
  * stamps it AGAIN, with the same send_seq and a FRESH recv_ack, on every
- * retransmission. Doing it any other way is how a send_seq hole appears.
+ * retransmission. Doing it any other way is how a send_seq hole appears --
+ * or, as E63 measured, how every ack mirror on the wire freezes at zero.
  *
  * Class-gated on VMS_FCAP_SEQ and on a msgtype in {0x4b, 0x5b, 0x7b}: a 0x41
  * START has its own builder (its abs 36 is the incarnation, not a counter)
  * and a 0x48 credit-return carries send_seq == 0 by GROUNDED rule (622/622)
  * and must never be stamped with one. Returns VMS_CODEC_E_CLASS for either,
- * VMS_CODEC_E_SHORT for a frame that cannot hold abs 44..45.
+ * VMS_CODEC_E_SHORT for a frame that cannot hold abs 36..55.
  */
 vms_codec_status_t vms_scs_seq_stamp(uint8_t *frame, uint32_t len,
 				     const struct vms_frame_info *fi,

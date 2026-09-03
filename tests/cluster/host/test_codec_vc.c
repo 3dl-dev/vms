@@ -576,6 +576,144 @@ static void test_seq_envelope_refuses_wrong_class(void)
 		 "reading a 0x48 credit-return through the seq envelope accessor is refused");
 }
 
+/* ---- group 5: the abs 36..55 transport counter span (E63) ----------- */
+
+/*
+ * Build the shortest sequenced frame the port can stamp, POISONED, so that
+ * "the stamp wrote it" and "the buffer happened to hold it" are different
+ * claims. 0xAA is not a value any grounded position carries.
+ */
+#define SEQ_SPAN_FRAME_LEN 72u   /* 58 SCA content: the op 5/7/8/9 class */
+
+static uint32_t poisoned_seq_frame(uint8_t *out, uint32_t cap, uint8_t msgtype)
+{
+	struct vms_scs_seq_envelope e;
+	uint32_t written = 0;
+
+	if (cap < SEQ_SPAN_FRAME_LEN)
+		return 0;
+	memset(out, 0xAA, SEQ_SPAN_FRAME_LEN);
+	memset(&e, 0, sizeof(e));
+	memcpy(e.addr.dst_mac, vax1_mac, 6);
+	memcpy(e.addr.src_mac, ovmx_mac, 6);
+	memcpy(e.addr.dst_logical, vax1_mac, 6);
+	memcpy(e.addr.src_logical, ovmx_logical, 6);
+	e.msgtype = msgtype;
+	if (vms_scs_seq_envelope_build(&e, out, cap, &written) != VMS_CODEC_OK)
+		return 0;
+	return SEQ_SPAN_FRAME_LEN;
+}
+
+/* Every 16-bit position of the span, asserted against the grounded rule. */
+static void check_span(const uint8_t *b, uint16_t ack, uint16_t seq,
+		       const char *what)
+{
+	char m[192];
+
+#define SPAN_CHECK(off, want, name)                                          \
+	do {                                                                 \
+		snprintf(m, sizeof(m), "%s: abs %u (%s) == %u", what,        \
+			 (unsigned)(off), (name), (unsigned)(want));         \
+		ct_check(le16(b + (off)) == (uint16_t)(want), m);            \
+	} while (0)
+
+	SPAN_CHECK(VMS_OFF_SCS_RECV_ACK,   ack, "recv_ack");
+	SPAN_CHECK(VMS_OFF_SCS_SEND_SEQ,   seq, "send_seq");
+	SPAN_CHECK(VMS_OFF_SCS_MSG_COUNT,  VMS_SCS_SEQ_MSG_COUNT, "msg count");
+	SPAN_CHECK(VMS_OFF_SCS_LAN_OVRHD,  VMS_NISCS_LAN_OVRHD, "NISCS_LAN_OVRHD");
+	SPAN_CHECK(VMS_OFF_SCS_ACK_MIRROR1, ack, "ack mirror 1");
+	SPAN_CHECK(VMS_OFF_SCS_SPAN_ZERO1, 0, "zero");
+	SPAN_CHECK(VMS_OFF_SCS_SEQ_MIRROR, seq, "send_seq mirror");
+	SPAN_CHECK(VMS_OFF_SCS_SPAN_ZERO2, 0, "zero");
+	SPAN_CHECK(VMS_OFF_SCS_ACK_MIRROR2, ack, "ack mirror 2");
+	SPAN_CHECK(VMS_OFF_SCS_SPAN_ZERO3, 0, "zero");
+	SPAN_CHECK(VMS_OFF_SCS_SPAN_CONST1, VMS_SCS_SEQ_SPAN_CONST1, "const1");
+	SPAN_CHECK(VMS_OFF_SCS_SPAN_CONST2, VMS_SCS_SEQ_SPAN_CONST2, "const2");
+#undef SPAN_CHECK
+}
+
+/*
+ * E63. A port that stamped only abs 32/34/44 left abs 36/38/40/48/52/54 at
+ * whatever the builder had there -- zero -- and a live 2-node VAX cluster
+ * acknowledged NOT ONE of the 8,550 sequenced frames that shape produced
+ * (peer recv_ack toward us: max 0 over 1,604 s). Zero is not a value any of
+ * the 239,547 reference sequenced frames carries at those offsets.
+ */
+static void test_seq_stamp_writes_the_whole_counter_span(void)
+{
+	uint8_t out[SEQ_SPAN_FRAME_LEN];
+	struct vms_frame_info fi;
+	uint32_t len;
+	unsigned off;
+	int poisoned_left = 0;
+
+	printf("-- E63: the stamp writes the WHOLE abs 36..55 counter span, "
+	       "never a zeroed one\n");
+
+	len = poisoned_seq_frame(out, sizeof(out), VMS_SCS_MT_MSG);
+	ct_check(len == SEQ_SPAN_FRAME_LEN, "poisoned 0x4b frame built");
+	ct_check(vms_frame_classify(out, len, &fi) == VMS_CODEC_OK, "classifies");
+	ct_check(vms_scs_seq_stamp(out, len, &fi, 17u, 42u) == VMS_CODEC_OK,
+		 "stamps recv_ack 17 / send_seq 42");
+	check_span(out, 17u, 42u, "0x4b");
+
+	for (off = VMS_OFF_SCS_MSG_COUNT; off < VMS_OFF_SCS_SPAN_END; off++) {
+		if (out[off] == 0xAA)
+			poisoned_left = 1;
+	}
+	ct_check(!poisoned_left,
+		 "not one byte of abs 36..55 was left as the builder found it");
+
+	/* The 0x5b connection-setup class is the one the E63 capture stalled
+	 * on -- same span, same rule, no per-class exception. */
+	len = poisoned_seq_frame(out, sizeof(out), VMS_SCS_MT_SETUP);
+	ct_check(vms_frame_classify(out, len, &fi) == VMS_CODEC_OK,
+		 "0x5b classifies");
+	ct_check(vms_scs_seq_stamp(out, len, &fi, 1u, 2u) == VMS_CODEC_OK,
+		 "0x5b stamps");
+	check_span(out, 1u, 2u, "0x5b");
+
+	/* An honest zero ack is still written EVERYWHERE, not skipped: a
+	 * first frame acknowledges nothing, and says so in all three slots. */
+	len = poisoned_seq_frame(out, sizeof(out), VMS_SCS_MT_MSG);
+	ct_check(vms_frame_classify(out, len, &fi) == VMS_CODEC_OK, "classifies");
+	ct_check(vms_scs_seq_stamp(out, len, &fi, 0u, 1u) == VMS_CODEC_OK,
+		 "stamps a genuine recv_ack 0");
+	check_span(out, 0u, 1u, "first frame, ack 0");
+}
+
+/*
+ * The retransmit case vms_pe_fsm.c::vc_resend_one names: "a retransmit that
+ * carried a stale ack would be the freeze this whole item exists to prevent,
+ * arriving by the back door". The mirrors are part of the ack, so they must
+ * move with it -- and the sequence must NOT (a retransmit is not a new
+ * message, spec §4(L)).
+ */
+static void test_seq_stamp_refreshes_the_ack_mirrors_on_retransmit(void)
+{
+	uint8_t out[SEQ_SPAN_FRAME_LEN];
+	struct vms_frame_info fi;
+	uint32_t len;
+
+	printf("-- E63: a retransmit re-stamps the ack MIRRORS too, never a "
+	       "stale one\n");
+	len = poisoned_seq_frame(out, sizeof(out), VMS_SCS_MT_MSG);
+	ct_check(vms_frame_classify(out, len, &fi) == VMS_CODEC_OK, "classifies");
+	ct_check(vms_scs_seq_stamp(out, len, &fi, 5u, 9u) == VMS_CODEC_OK,
+		 "first transmission: ack 5, seq 9");
+	check_span(out, 5u, 9u, "original");
+
+	ct_check(vms_scs_seq_mark_retransmit(out, len, &fi) == VMS_CODEC_OK,
+		 "marked as the 0x7b retransmit form");
+	ct_check(vms_frame_classify(out, len, &fi) == VMS_CODEC_OK,
+		 "0x7b re-classifies");
+	ct_check(vms_scs_seq_stamp(out, len, &fi, 12u, 9u) == VMS_CODEC_OK,
+		 "re-stamped with a FRESHER ack, the SAME sequence");
+	check_span(out, 12u, 9u, "retransmit");
+	ct_check(out[VMS_OFF_SCS_MSGTYPE] == VMS_SCS_MT_ALT,
+		 "and it is still marked 0x7b");
+}
+
 static void test_error_paths(void)
 {
 	struct vms_scs_start_frame f;
@@ -657,6 +795,8 @@ int main(void)
 	test_live_timestamps_are_never_a_template();
 	test_seq_envelope_build_parse();
 	test_seq_envelope_refuses_wrong_class();
+	test_seq_stamp_writes_the_whole_counter_span();
+	test_seq_stamp_refreshes_the_ack_mirrors_on_retransmit();
 	test_error_paths();
 
 	return ct_summary("test_codec_vc");

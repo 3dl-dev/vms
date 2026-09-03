@@ -448,16 +448,23 @@ static uint8_t cdt_msgtype(const struct scs_cdt *cdt)
 /*
  * Fill the parts of a control frame that are the same for every verb.
  *
- * ABS 32-55 IS LEFT ZERO ON PURPOSE. Design SS3.2.4 gives 32-35 (recv_ack/
- * send_seq) and 36-55 (the incarnation and counter mirrors) to the PORT: the
- * port stamps 32/34/44 at transmit time (vms_scs_seq_stamp) and has no
- * generic builder for the rest yet -- FC-P1.1 built one only for START/STACK/
- * ACK and the credit-return short. So SCS passes zeros there, exactly as
- * pe_vc_send_msg does for the 190-content class, and counts on the honesty of
- * that zero rather than on a template (INV-6). The same reasoning covers the
- * abs-72 marker word: SS4(h)(1a) grounds semantics for op 6's marker[2:4]
- * alone, and no capture isolates its encoding, so it goes out zero rather
- * than carrying an invented flag.
+ * ABS 32-55 IS THE PORT'S, NOT SCS'S. Design SS3.2.4 gives 32-35 (recv_ack/
+ * send_seq) and 36-55 (the transport counter span) to the PORT, and the port
+ * stamps ALL of it at transmit time and again on every retransmission
+ * (vms_scs_seq_stamp; see its header comment for the 239,547-frame grounding).
+ * SCS therefore leaves the span alone -- whatever it wrote would be
+ * overwritten by the circuit's real position, which is the point: the ack a
+ * frame carries is the circuit's, decided when the frame goes out, never a
+ * value SCS captured earlier (INV-6).
+ *
+ * E63: these bytes USED to leave this function zero and stay zero, because the
+ * port stamped only 32/34/44. A live 2-node VAX cluster acknowledged not one
+ * of the 8,550 sequenced frames that shape produced. An uninitialised span is
+ * not an honest omission; it is a poisoned frame.
+ *
+ * The abs-72 marker word is a genuine omission and stays one: SS4(h)(1a)
+ * grounds semantics for op 6's marker[2:4] alone, and no capture isolates its
+ * encoding, so it goes out zero rather than carrying an invented flag.
  */
 static int ctrl_prepare(struct scs_fsm *f, const struct scs_cdt *cdt,
 			uint16_t op, struct vms_scs_ctrl_frame *c)

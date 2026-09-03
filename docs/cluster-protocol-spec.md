@@ -2025,6 +2025,70 @@ only and a directory inquiry is not one (`scs_credit.h` reachability note). A re
 sends. Listed as a KNOWN DEVIATION and as one of the unseparated candidates
 for (e).**
 
+#### 4(h)(4b) The TRANSPORT COUNTER SPAN abs 36..55 — GROUNDED position by position (`E63`)
+
+§4(d) described abs 32..63 as "two 16-bit counters, each repeated up to 3×,
+zero-padded" and left "which repeat is which" **inferred**. `E63` measured it
+directly. Re-derive with
+
+```
+tools/cluster/scs_counter_span_measure.py ~/vax/cluster/captures --exclude ovmx
+```
+
+(the exclusion keeps OVMX's own emissions out of the population used to judge
+them). Population: **239,981 sequenced frames** — msgtype `0x4b`/`0x5b`/`0x7b`
+— across every reference capture we hold.
+
+| abs | Field | Dominant | Grounding |
+|---|---|---|---|
+| 36 | small message count | `1` (76.1%), `2` (19.4%), `3` (4.4%) | **zero in 0 of 239,981.** What selects 2 or 3 is NOT decoded (RE gap) |
+| 38 | SYSGEN `NISCS_LAN_OVRHD` | `18` | 239,932/239,981; zero in 0 |
+| 40 | `recv_ack` mirror | == `recv_ack` | 239,916/239,981; zero in 65 (frames whose `recv_ack` is itself 0) |
+| 42 | zero | `0` | 239,981/239,981 |
+| 44 | `send_seq` mirror | == `send_seq` | 239,981/239,981 (extends §4(h)(4)'s 17,758) |
+| 46 | zero | `0` | 239,981/239,981 |
+| 48 | `recv_ack`, 3rd repeat | == `recv_ack` | 239,872/239,981; zero in 109 |
+| 50 | zero | `0` | 239,981/239,981 |
+| 52 | constant | `0x0001` | 239,862/239,981; zero in 0 |
+| 54 | constant | `0x0200` | 238,521/239,981; zero in 0 |
+
+**The `0x41` START and the `0x48` credit-return occupy the same offsets by
+DIFFERENT rules** and are excluded from the table above: on a START, abs 36 is
+the node incarnation (§4(i).B) and abs 40/48/54 are zero; on a credit-return,
+abs 44 is the §4(h)(3) secondary counter and abs 54 is the frame's last byte.
+Only the sequenced classes follow the rule tabulated here.
+
+**WHY IT MATTERS — the `E63` measurement.** A port that stamped only abs
+32/34/44 and left 36/38/40/48/52/54 zero produced a shape that appears **in
+none** of the 239,981 reference frames. Against the live 2-node VAX cluster
+(`join-e60refire-1788471537.pcap`, 1,604 s) that port:
+
+* sent **8,550 sequenced frames** (419 `0x5b` + 8,131 `0x7b` retransmits) and
+  was acknowledged **zero times** — VAX1's and VAX2's `recv_ack` toward OVMX
+  read `0` on every frame in the capture, maximum 0;
+* never advanced past `send_seq` 3 (VAX1) / 4 (VAX2), i.e. never left the
+  §4(h) `SCS$DIRECTORY` connect handshake — it emitted `CONNECT_REQ`,
+  `CONNECT_RSP` and `ACCEPT_REQ` and **never once received `ACCEPT_RSP`**;
+* watched each VAX retransmit its own `SCS$DIR_LOOKUP` `CONNECT_REQ` 498 and
+  500 times, at a frozen `send_seq` of 1;
+* had the circuit closed on a timeout roughly every 17 s — 510 OVMX `0x41`
+  STARTs falling into **99 re-formation episodes** (grouping consecutive
+  STARTs separated by more than 3 s) — with **no `DISCONNECT_REQ`, no
+  `REJECT_REQ` and no diagnostic code** from either peer: across the whole
+  capture the only connection-control verbs either VAX sent OVMX are 498 and
+  500 `CONNECT_REQ`s. The only close indication is VAX1's
+  console `%PEA0, Port has Closed Virtual Circuit - REMOTE NODE OVMXJ1`, and
+  VAX1 allocating a fresh `SCS$DIRECTORY` Con.ID (`5441000c` → `5442000c`) for
+  the next attempt.
+
+The golden control is `formation-ci1-joinwindow.pcap` SCA 21–27, the same four
+frames in the same order between two real VAXes, where the responder's
+`CONNECT_RSP` is credit-returned by the initiator **within one millisecond**
+and `ACCEPT_RSP` follows. Byte-diffing OVMX's `CONNECT_RSP` against VAX2's
+(both 80-byte wire, same op, same phase) leaves exactly this span as the
+structural difference. An uninitialised span is not an honest omission; it is
+a poisoned frame.
+
 ### 4(i) Joining an ALREADY-ESTABLISHED cluster (member-state-seq > 1)
 
 All the §4g/§4h grounding above comes from **fresh 2-node formations**, where

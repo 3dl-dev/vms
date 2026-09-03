@@ -86,13 +86,20 @@ static void start_write_common(vms_wire_buf_t *w,
 
 	vms_wire_put_le16(w, VMS_OFF_SCS_RECV_ACK, f->recv_ack);   /* abs 32 */
 	vms_wire_put_le16(w, VMS_OFF_SCS_SEND_SEQ, f->send_seq);   /* abs 34 */
+	/* The 0x41 class writes the SAME offsets as the sequenced span but by
+	 * its OWN grounded rule (census, sec 4(g) phase 2): abs 36 is the
+	 * incarnation, and abs 40/48/54 are ZERO on a START where a sequenced
+	 * frame carries the ack mirrors. Not seq_stamp_span()'s shape -- the
+	 * offsets are shared, the rule is not. */
 	vms_wire_put_le16(w, VMS_OFF_START_INCARN, f->incarnation);/* abs 36 */
-	vms_wire_put_le16(w, 38, VMS_NISCS_LAN_OVRHD);              /* abs 38 */
-	vms_wire_put_zero(w, 40, 4);                                /* abs 40 */
+	vms_wire_put_le16(w, VMS_OFF_SCS_LAN_OVRHD,
+			  VMS_NISCS_LAN_OVRHD);                     /* abs 38 */
+	vms_wire_put_zero(w, VMS_OFF_SCS_ACK_MIRROR1, 4);           /* abs 40 */
 	vms_wire_put_le16(w, VMS_OFF_START_SEQ_MIRROR, f->send_seq);/* abs 44 */
-	vms_wire_put_zero(w, 46, 6);                                /* abs 46 */
-	vms_wire_put_le16(w, 52, 0x0001u);                          /* abs 52 */
-	vms_wire_put_zero(w, 54, 2);                                /* abs 54 */
+	vms_wire_put_zero(w, VMS_OFF_SCS_SPAN_ZERO2, 6);            /* abs 46 */
+	vms_wire_put_le16(w, VMS_OFF_SCS_SPAN_CONST1,
+			  VMS_SCS_SEQ_SPAN_CONST1);                 /* abs 52 */
+	vms_wire_put_zero(w, VMS_OFF_SCS_SPAN_CONST2, 2);           /* abs 54 */
 	vms_wire_put_le16(w, 56, inner_len);                        /* abs 56 */
 }
 
@@ -332,8 +339,8 @@ vms_scs_seq_envelope_fixup_len(uint8_t *frame, uint32_t cap,
  * ------------------------------------------------------------------ */
 
 /* The gate both entries below share: a sequenced APPLICATION/SETUP frame,
- * long enough to hold the abs-44 mirror. 0x41 and 0x48 are refused here --
- * each has its own builder and its own rule for those bytes. */
+ * long enough to hold the whole abs 36..55 counter span. 0x41 and 0x48 are
+ * refused here -- each has its own builder and its own rule for those bytes. */
 static vms_codec_status_t seq_stamp_gate(const uint8_t *frame, uint32_t len,
 					 const struct vms_frame_info *fi,
 					 uint8_t *msgtype_out)
@@ -362,6 +369,27 @@ static vms_codec_status_t seq_stamp_gate(const uint8_t *frame, uint32_t len,
 	return VMS_CODEC_OK;
 }
 
+/*
+ * Write abs 36..55, the transport counter span (header sec "abs 36..55").
+ * The two live values are DERIVED from the circuit position the caller
+ * passed -- the same recv_seq/send_seq that produced abs 32/34, never a
+ * second counter and never a byte carried over from another frame.
+ */
+static void seq_stamp_span(vms_wire_buf_t *w, uint16_t recv_ack,
+			   uint16_t send_seq)
+{
+	vms_wire_put_le16(w, VMS_OFF_SCS_MSG_COUNT, VMS_SCS_SEQ_MSG_COUNT);
+	vms_wire_put_le16(w, VMS_OFF_SCS_LAN_OVRHD, VMS_NISCS_LAN_OVRHD);
+	vms_wire_put_le16(w, VMS_OFF_SCS_ACK_MIRROR1, recv_ack);
+	vms_wire_put_zero(w, VMS_OFF_SCS_SPAN_ZERO1, 2);
+	vms_wire_put_le16(w, VMS_OFF_SCS_SEQ_MIRROR, send_seq);
+	vms_wire_put_zero(w, VMS_OFF_SCS_SPAN_ZERO2, 2);
+	vms_wire_put_le16(w, VMS_OFF_SCS_ACK_MIRROR2, recv_ack);
+	vms_wire_put_zero(w, VMS_OFF_SCS_SPAN_ZERO3, 2);
+	vms_wire_put_le16(w, VMS_OFF_SCS_SPAN_CONST1, VMS_SCS_SEQ_SPAN_CONST1);
+	vms_wire_put_le16(w, VMS_OFF_SCS_SPAN_CONST2, VMS_SCS_SEQ_SPAN_CONST2);
+}
+
 vms_codec_status_t vms_scs_seq_stamp(uint8_t *frame, uint32_t len,
 				     const struct vms_frame_info *fi,
 				     uint16_t recv_ack, uint16_t send_seq)
@@ -376,7 +404,7 @@ vms_codec_status_t vms_scs_seq_stamp(uint8_t *frame, uint32_t len,
 	vms_wire_buf_init(&w, frame, len);
 	vms_wire_put_le16(&w, VMS_OFF_SCS_RECV_ACK, recv_ack);
 	vms_wire_put_le16(&w, VMS_OFF_SCS_SEND_SEQ, send_seq);
-	vms_wire_put_le16(&w, VMS_OFF_SCS_SEQ_MIRROR, send_seq);
+	seq_stamp_span(&w, recv_ack, send_seq);
 
 	if (!vms_wire_buf_ok(&w))
 		return w.err;
@@ -425,16 +453,22 @@ vms_codec_status_t vms_scs_credit_build(const struct vms_scs_credit_frame *c,
 
 	vms_wire_put_le16(&w, 32, c->acked_seq);      /* abs 32 */
 	vms_wire_put_zero(&w, 34, 2);                  /* abs 34: send_seq==0 */
-	vms_wire_put_le16(&w, 36, 0x0001u);            /* abs 36 */
-	vms_wire_put_le16(&w, 38, VMS_NISCS_LAN_OVRHD); /* abs 38 */
-	vms_wire_put_le16(&w, 40, c->acked_seq);       /* abs 40: mirror     */
-	vms_wire_put_zero(&w, 42, 2);                  /* abs 42            */
-	vms_wire_put_le16(&w, 44, c->secondary_seq);   /* abs 44: INFERRED  */
-	vms_wire_put_zero(&w, 46, 2);                  /* abs 46            */
-	vms_wire_put_le16(&w, 48, c->acked_seq);       /* abs 48: 3rd repeat*/
-	vms_wire_put_zero(&w, 50, 2);                  /* abs 50            */
-	vms_wire_put_le16(&w, 52, 0x0001u);            /* abs 52            */
-	vms_wire_put_zero(&w, 54, 1);                  /* abs 54: last byte */
+	vms_wire_put_le16(&w, VMS_OFF_SCS_MSG_COUNT,
+			  VMS_SCS_SEQ_MSG_COUNT);      /* abs 36            */
+	vms_wire_put_le16(&w, VMS_OFF_SCS_LAN_OVRHD,
+			  VMS_NISCS_LAN_OVRHD);        /* abs 38            */
+	vms_wire_put_le16(&w, VMS_OFF_SCS_ACK_MIRROR1,
+			  c->acked_seq);               /* abs 40: mirror    */
+	vms_wire_put_zero(&w, VMS_OFF_SCS_SPAN_ZERO1, 2);/* abs 42          */
+	vms_wire_put_le16(&w, VMS_OFF_SCS_SEQ_MIRROR,
+			  c->secondary_seq);           /* abs 44: INFERRED  */
+	vms_wire_put_zero(&w, VMS_OFF_SCS_SPAN_ZERO2, 2);/* abs 46          */
+	vms_wire_put_le16(&w, VMS_OFF_SCS_ACK_MIRROR2,
+			  c->acked_seq);               /* abs 48: 3rd repeat*/
+	vms_wire_put_zero(&w, VMS_OFF_SCS_SPAN_ZERO3, 2);/* abs 50          */
+	vms_wire_put_le16(&w, VMS_OFF_SCS_SPAN_CONST1,
+			  VMS_SCS_SEQ_SPAN_CONST1);    /* abs 52            */
+	vms_wire_put_zero(&w, VMS_OFF_SCS_SPAN_CONST2, 1);/* abs 54: last   */
 	/* Ethernet runt pad, abs 55-59 (spec sec 2: 14+41=55 < 60, GROUNDED
 	 * zero -- 928/928 residuals of the sec-2 length identity are exactly
 	 * this padding, and the 0x48 short is the class that hits it). */

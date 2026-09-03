@@ -200,8 +200,40 @@ struct fake_vc_decoded {
 	uint16_t incarnation;   /* 0x41 only: the §4(i).B echo           */
 	int      is_ack;        /* 0x41 only: the 46-byte class          */
 	struct vms_scs_start_frame start;
+	uint8_t  eth_dst[6];    /* which peer this frame went to         */
+	/*
+	 * The abs 36..55 TRANSPORT COUNTER SPAN (spec §4(d)/§4(h)(4)) --
+	 * E63's regression surface. Read at the codec's OWN named offsets,
+	 * never a literal, because a test that hand-wrote 40 and 48 would
+	 * drift from the port the day either moved.
+	 */
+	uint16_t span_msg_count, span_lan_ovrhd;
+	uint16_t span_ack1, span_seq_mirror, span_ack2;
+	uint16_t span_zero1, span_zero2, span_zero3;
+	uint16_t span_const1, span_const2;
 	uint32_t len;
 };
+
+/* Every 16-bit position of the abs 36..55 span, in one place. */
+static void fake_vc_read_span(const uint8_t *b, uint32_t len,
+			      struct fake_vc_decoded *d)
+{
+	vms_wire_view_t v;
+
+	vms_wire_view_init(&v, b, len);
+	if (!vms_wire_view_ok(&v))
+		return;
+	d->span_msg_count  = vms_wire_get_le16(&v, VMS_OFF_SCS_MSG_COUNT);
+	d->span_lan_ovrhd  = vms_wire_get_le16(&v, VMS_OFF_SCS_LAN_OVRHD);
+	d->span_ack1       = vms_wire_get_le16(&v, VMS_OFF_SCS_ACK_MIRROR1);
+	d->span_zero1      = vms_wire_get_le16(&v, VMS_OFF_SCS_SPAN_ZERO1);
+	d->span_seq_mirror = vms_wire_get_le16(&v, VMS_OFF_SCS_SEQ_MIRROR);
+	d->span_zero2      = vms_wire_get_le16(&v, VMS_OFF_SCS_SPAN_ZERO2);
+	d->span_ack2       = vms_wire_get_le16(&v, VMS_OFF_SCS_ACK_MIRROR2);
+	d->span_zero3      = vms_wire_get_le16(&v, VMS_OFF_SCS_SPAN_ZERO3);
+	d->span_const1     = vms_wire_get_le16(&v, VMS_OFF_SCS_SPAN_CONST1);
+	d->span_const2     = vms_wire_get_le16(&v, VMS_OFF_SCS_SPAN_CONST2);
+}
 
 static struct fake_vc_decoded fake_vc_decode(const struct fake_pe *f,
 					     uint32_t index)
@@ -215,10 +247,14 @@ static struct fake_vc_decoded fake_vc_decode(const struct fake_pe *f,
 		return d;
 	b = f->frame[index].b;
 	d.len = f->frame[index].len;
+	if (d.len >= VMS_OFF_ETH_DST + 6u)
+		memcpy(d.eth_dst, b + VMS_OFF_ETH_DST, 6);
 	if (vms_frame_classify(b, d.len, &d.fi) != VMS_CODEC_OK)
 		return d;
 	if (d.fi.family != VMS_FFAM_SCS)
 		return d;
+	if (d.len >= VMS_OFF_SCS_SPAN_END)
+		fake_vc_read_span(b, d.len, &d);
 	if (vms_scs_msgtype(b, d.len, &d.fi, &d.msgtype, &fmt) != VMS_CODEC_OK)
 		return d;
 

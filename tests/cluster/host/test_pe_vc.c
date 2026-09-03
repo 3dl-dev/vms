@@ -237,46 +237,76 @@ static void ovmx_lavc(uint8_t out[6])
  * Feeding the port
  * ------------------------------------------------------------------ */
 
-static void rx_hello(struct vc_env *e, int directed, uint8_t word,
-		     uint16_t incarnation)
-{
-	uint8_t dst_lavc[6];
-	uint32_t len;
-
-	if (directed)
-		ovmx_lavc(dst_lavc);
-	else
-		memcpy(dst_lavc, group1, 6);
-	len = fake_peer_hello(&e->peer, directed ? ovmx_hw : group1, dst_lavc,
-			      word, incarnation, 0, e->buf, sizeof(e->buf));
-	if (len != 0)
-		(void)pe_fsm_rx(&e->fsm, e->buf, len);
-}
-
 static void rx_frame(struct vc_env *e, uint32_t len)
 {
 	if (len != 0)
 		(void)pe_fsm_rx(&e->fsm, e->buf, len);
 }
 
-static void rx_start(struct vc_env *e, uint16_t round, uint16_t send_seq,
-		     uint16_t recv_ack)
+/* ---- peer-parameterised stimulus: the port serves N peers, so the tests
+ * that care about per-peer state have to be able to drive more than one. -- */
+
+static void rx_hello_from(struct vc_env *e, const struct fake_peer *p,
+			  int directed, uint8_t word, uint16_t incarnation)
+{
+	uint8_t dst_lavc[6];
+
+	if (directed)
+		ovmx_lavc(dst_lavc);
+	else
+		memcpy(dst_lavc, group1, 6);
+	rx_frame(e, fake_peer_hello(p, directed ? ovmx_hw : group1, dst_lavc,
+				    word, incarnation, 0, e->buf,
+				    sizeof(e->buf)));
+}
+
+static void rx_start_from(struct vc_env *e, const struct fake_peer *p,
+			  uint16_t sysid, uint16_t round, uint16_t send_seq,
+			  uint16_t recv_ack)
 {
 	uint8_t dst_lavc[6];
 
 	ovmx_lavc(dst_lavc);
-	rx_frame(e, fake_peer_start(&e->peer, VAX1_SYSID, ovmx_hw, dst_lavc,
-				    round, send_seq, recv_ack, LAB_CREDITS,
-				    e->buf, sizeof(e->buf)));
+	rx_frame(e, fake_peer_start(p, sysid, ovmx_hw, dst_lavc, round,
+				    send_seq, recv_ack, LAB_CREDITS, e->buf,
+				    sizeof(e->buf)));
+}
+
+static void rx_vc_ack_from(struct vc_env *e, const struct fake_peer *p)
+{
+	uint8_t dst_lavc[6];
+
+	ovmx_lavc(dst_lavc);
+	rx_frame(e, fake_peer_vc_ack(p, ovmx_hw, dst_lavc, 1, 0, e->buf,
+				     sizeof(e->buf)));
+}
+
+static void rx_seqmsg_from(struct vc_env *e, const struct fake_peer *p,
+			   uint16_t seq, uint16_t recv_ack)
+{
+	uint8_t dst_lavc[6];
+
+	ovmx_lavc(dst_lavc);
+	rx_frame(e, fake_peer_seqmsg(p, ovmx_hw, dst_lavc, seq, recv_ack,
+				     0x62c50009u, 0x33580008u, e->buf,
+				     sizeof(e->buf)));
+}
+
+static void rx_hello(struct vc_env *e, int directed, uint8_t word,
+		     uint16_t incarnation)
+{
+	rx_hello_from(e, &e->peer, directed, word, incarnation);
+}
+
+static void rx_start(struct vc_env *e, uint16_t round, uint16_t send_seq,
+		     uint16_t recv_ack)
+{
+	rx_start_from(e, &e->peer, VAX1_SYSID, round, send_seq, recv_ack);
 }
 
 static void rx_vc_ack(struct vc_env *e)
 {
-	uint8_t dst_lavc[6];
-
-	ovmx_lavc(dst_lavc);
-	rx_frame(e, fake_peer_vc_ack(&e->peer, ovmx_hw, dst_lavc, 1, 0,
-				     e->buf, sizeof(e->buf)));
+	rx_vc_ack_from(e, &e->peer);
 }
 
 static void rx_credit(struct vc_env *e, uint16_t acked)
@@ -290,12 +320,7 @@ static void rx_credit(struct vc_env *e, uint16_t acked)
 
 static void rx_seqmsg(struct vc_env *e, uint16_t seq, uint16_t recv_ack)
 {
-	uint8_t dst_lavc[6];
-
-	ovmx_lavc(dst_lavc);
-	rx_frame(e, fake_peer_seqmsg(&e->peer, ovmx_hw, dst_lavc, seq,
-				     recv_ack, 0x62c50009u, 0x33580008u,
-				     e->buf, sizeof(e->buf)));
+	rx_seqmsg_from(e, &e->peer, seq, recv_ack);
 }
 
 /* ------------------------------------------------------------------ *
@@ -1077,8 +1102,8 @@ static void test_recv_ack_never_freezes(void)
 
 /* A frame for this node to send: built exactly as the layer above would,
  * addressed from the circuit's OWN learned addressing (pe_vc_addr). */
-static uint32_t our_seqmsg(struct vc_env *e, uint32_t conid, uint8_t *out,
-			   uint32_t cap)
+static uint32_t our_seqmsg_to(struct vc_env *e, vms_scs_sysid_t dst,
+			      uint32_t conid, uint8_t *out, uint32_t cap)
 {
 	struct vms_scs_addr a;
 	struct vms_frame_info fi;
@@ -1086,7 +1111,7 @@ static uint32_t our_seqmsg(struct vc_env *e, uint32_t conid, uint8_t *out,
 	vms_wire_buf_t w;
 	uint32_t written = 0;
 
-	if (pe_vc_addr(&e->fsm, VAX1_SYSID, &a) != 0 || cap < FAKE_VC_MSG_LEN)
+	if (pe_vc_addr(&e->fsm, dst, &a) != 0 || cap < FAKE_VC_MSG_LEN)
 		return 0;
 	memset(out, 0, FAKE_VC_MSG_LEN);
 	memset(&h, 0, sizeof(h));
@@ -1107,6 +1132,12 @@ static uint32_t our_seqmsg(struct vc_env *e, uint32_t conid, uint8_t *out,
 	if (!vms_wire_buf_ok(&w))
 		return 0;
 	return FAKE_VC_MSG_LEN;
+}
+
+static uint32_t our_seqmsg(struct vc_env *e, uint32_t conid, uint8_t *out,
+			   uint32_t cap)
+{
+	return our_seqmsg_to(e, VAX1_SYSID, conid, out, cap);
 }
 
 static void test_send_seq_is_one_contiguous_counter(void)
@@ -1147,6 +1178,172 @@ static void test_send_seq_is_one_contiguous_counter(void)
 	d = fake_vc_last(&g_env.fake, FAKE_VC_SEQ);
 	ct_check_eq_u32(d.recv_ack, 1,
 			"an outbound message carries the REAL recv_seq");
+}
+
+/* ------------------------------------------------------------------ *
+ * E63: no sequenced frame leaves this port with a zeroed transport header,
+ * and the acknowledgement it carries is THIS peer's -- per circuit.
+ *
+ * WHAT THIS GUARDS. The E63 re-fire against the live 2-node VAX cluster
+ * measured a port whose 0x5b/0x7b frames carried abs 36/38/40/48/52/54 as
+ * zeros -- a shape no real node has ever been observed to send. Over 1,604 s
+ * VAX1 and VAX2 acknowledged NOT ONE of the 8,550 sequenced frames it sent
+ * (their recv_ack toward OVMX: max 0, both peers), retransmitted their own
+ * SCS$DIR_LOOKUP CONNECT_REQ 498/500 times, and closed the circuit on a
+ * timeout roughly every 17 s -- 99 START episodes, CLUSTER_NODES stuck at 2.
+ *
+ * The per-peer half is the second thing that run could not have shown,
+ * because the port never got far enough for the two peers' state to diverge:
+ * a circuit is a PORT PAIR (*VAXcluster Principles* pp. 2-30/2-31), so a port
+ * talking to a member and to a coordinator holds two independent recv_seq
+ * values and each frame must carry ITS OWN. A port that maintained only one
+ * peer's sequence would put the same ack on both, and this test reds.
+ * ------------------------------------------------------------------ */
+#define VAX2_SYSID 1026u
+static const uint8_t vax2_hw[6] = { 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9 };
+
+/* The whole abs 36..55 span of ONE emitted frame, against the grounded rule
+ * (spec §4(d)/§4(h)(4)). `ack`/`seq` are what the CIRCUIT holds, computed by
+ * the test, never read back out of the code under test. */
+static void check_emitted_span(const struct fake_vc_decoded *d, uint16_t ack,
+			       uint16_t seq, const char *who)
+{
+	char m[160];
+
+#define EMIT_CHECK(field, want, name)                                        \
+	do {                                                                 \
+		snprintf(m, sizeof(m), "%s: %s == %u", who, (name),          \
+			 (unsigned)(want));                                  \
+		ct_check((d)->field == (uint16_t)(want), m);                 \
+	} while (0)
+
+	EMIT_CHECK(recv_ack,        ack, "recv_ack (abs 32)");
+	EMIT_CHECK(send_seq,        seq, "send_seq (abs 34)");
+	EMIT_CHECK(span_msg_count,  VMS_SCS_SEQ_MSG_COUNT, "abs 36 msg count");
+	EMIT_CHECK(span_lan_ovrhd,  VMS_NISCS_LAN_OVRHD, "abs 38 NISCS_LAN_OVRHD");
+	EMIT_CHECK(span_ack1,       ack, "abs 40 ack mirror");
+	EMIT_CHECK(span_zero1,      0, "abs 42 zero");
+	EMIT_CHECK(span_seq_mirror, seq, "abs 44 seq mirror");
+	EMIT_CHECK(span_zero2,      0, "abs 46 zero");
+	EMIT_CHECK(span_ack2,       ack, "abs 48 ack mirror 2");
+	EMIT_CHECK(span_zero3,      0, "abs 50 zero");
+	EMIT_CHECK(span_const1,     VMS_SCS_SEQ_SPAN_CONST1, "abs 52 const");
+	EMIT_CHECK(span_const2,     VMS_SCS_SEQ_SPAN_CONST2, "abs 54 const");
+#undef EMIT_CHECK
+}
+
+/* The last sequenced frame the port sent to a particular peer. */
+static struct fake_vc_decoded last_seq_to(const struct fake_pe *f,
+					  const uint8_t hw[6])
+{
+	struct fake_vc_decoded best;
+	uint32_t i;
+
+	memset(&best, 0, sizeof(best));
+	for (i = 0; i < f->n_frames; i++) {
+		struct fake_vc_decoded d = fake_vc_decode(f, i);
+
+		if (d.ok && d.is_seqmsg && memcmp(d.eth_dst, hw, 6) == 0)
+			best = d;
+	}
+	return best;
+}
+
+/* Bring a second circuit up alongside the env's VAX1 one. */
+static void open_second_circuit(struct vc_env *e, struct fake_peer *p)
+{
+	fake_peer_init(p, VAX2_SYSID, vax2_hw, "VAX2");
+	memset(p->nonce, 0, VMS_DISC_NONCE_LEN);
+	rx_hello_from(e, p, 1, PE_PFW_VERIFY_B2, 1);
+	rx_hello_from(e, p, 1, PE_PFW_VERIFY_B4, 1);
+	rx_start_from(e, p, VAX2_SYSID, 0, 1, 0);
+	rx_vc_ack_from(e, p);
+}
+
+static void test_sequenced_frames_carry_this_peers_ack(void)
+{
+	struct fake_peer vax2;
+	struct pe_vc *vc1, *vc2;
+	uint8_t msg[FAKE_VC_MSG_LEN];
+	struct fake_vc_decoded to1, to2;
+	uint32_t len;
+	uint16_t i;
+
+	printf("-- ***  E63: no zeroed transport header, and the ack is PER "
+	       "PEER  ***\n");
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);      /* VAX1 */
+	open_second_circuit(&g_env, &vax2);        /* VAX2 */
+
+	vc1 = pe_fsm_vc_by_sysid(&g_env.fsm, VAX1_SYSID);
+	vc2 = pe_fsm_vc_by_sysid(&g_env.fsm, VAX2_SYSID);
+	if (vc1 == NULL || vc2 == NULL) {
+		ct_check(0, "both circuits exist");
+		return;
+	}
+	ct_check_eq_u32(vc1->state, VMS_PE_VC_OPEN, "VAX1's circuit is open");
+	ct_check_eq_u32(vc2->state, VMS_PE_VC_OPEN, "VAX2's circuit is open");
+
+	/* The two peers talk at DIFFERENT rates, which is the normal case: a
+	 * coordinator running a barrier and a member running a rebuild do not
+	 * advance in step. Five from VAX1, two from VAX2. */
+	for (i = 1; i <= 5; i++)
+		rx_seqmsg_from(&g_env, &g_env.peer, i, 0);
+	for (i = 1; i <= 2; i++)
+		rx_seqmsg_from(&g_env, &vax2, i, 0);
+	ct_check_eq_u32(vc1->recv_seq, 5, "VAX1's circuit received 5");
+	ct_check_eq_u32(vc2->recv_seq, 2, "VAX2's circuit received 2");
+
+	fake_pe_clear_frames(&g_env.fake);
+	len = our_seqmsg_to(&g_env, VAX1_SYSID, 0x62c50009u, msg, sizeof(msg));
+	ct_check(len == FAKE_VC_MSG_LEN, "a frame for VAX1 was built");
+	ct_check_eq_u32((unsigned)-pe_vc_send_frame(&g_env.fsm, VAX1_SYSID,
+						    msg, len), 0,
+			"the port sends it");
+	len = our_seqmsg_to(&g_env, VAX2_SYSID, 0x62c50009u, msg, sizeof(msg));
+	ct_check(len == FAKE_VC_MSG_LEN, "a frame for VAX2 was built");
+	ct_check_eq_u32((unsigned)-pe_vc_send_frame(&g_env.fsm, VAX2_SYSID,
+						    msg, len), 0,
+			"the port sends that one too");
+
+	to1 = last_seq_to(&g_env.fake, vax1_hw);
+	to2 = last_seq_to(&g_env.fake, vax2_hw);
+	ct_check(to1.ok && to1.is_seqmsg, "a sequenced frame reached VAX1");
+	ct_check(to2.ok && to2.is_seqmsg, "a sequenced frame reached VAX2");
+	if (!to1.ok || !to2.ok)
+		return;
+
+	check_emitted_span(&to1, 5u, vc1->send_seq - 1u, "to VAX1");
+	check_emitted_span(&to2, 2u, vc2->send_seq - 1u, "to VAX2");
+
+	/* The point of the pair: they are not each other's. */
+	ct_check(to1.recv_ack != to2.recv_ack,
+		 "each peer is told what THIS circuit received, not a shared "
+		 "counter");
+	ct_check(to1.span_ack1 != to2.span_ack1 &&
+		 to1.span_ack2 != to2.span_ack2,
+		 "and the mirrors are per-peer too, not copied from the other "
+		 "circuit's frame");
+
+	/*
+	 * Now the non-coordinator keeps talking while the other peer is
+	 * quiet. Its acknowledgement must follow it, in every slot -- the
+	 * "ack freezes one short on the member" failure mode §4(O.14) traced
+	 * three stalls to.
+	 */
+	for (i = 6; i <= 9; i++) {
+		fake_pe_clear_frames(&g_env.fake);
+		rx_seqmsg_from(&g_env, &g_env.peer, i, 0);
+		len = our_seqmsg_to(&g_env, VAX1_SYSID, 0x62c50009u, msg,
+				    sizeof(msg));
+		(void)pe_vc_send_frame(&g_env.fsm, VAX1_SYSID, msg, len);
+		to1 = last_seq_to(&g_env.fake, vax1_hw);
+		ct_check(to1.ok && to1.recv_ack == i &&
+			 to1.span_ack1 == i && to1.span_ack2 == i,
+			 "the acknowledgement tracks the peer's send_seq in "
+			 "all three slots");
+	}
+	ct_check_eq_u32(vc2->recv_seq, 2,
+			"and the quiet peer's circuit was not disturbed");
 }
 
 static void test_retransmit_reuses_the_sequence(void)
@@ -1572,6 +1769,7 @@ int main(void)
 	test_gap_is_discarded_and_reacked();
 	test_recv_ack_never_freezes();
 	test_send_seq_is_one_contiguous_counter();
+	test_sequenced_frames_carry_this_peers_ack();
 	test_retransmit_reuses_the_sequence();
 	test_go_back_n_resends_the_tail_in_order();
 	test_retransmit_ladder_exhaustion_breaks_the_circuit();

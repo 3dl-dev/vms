@@ -312,6 +312,18 @@ int vms_cluster_lavc_is_logical(const uint8_t addr[VMS_ETH_ADDR_LEN])
 	       addr[2] == VMS_LAVC_PREFIX2 && addr[3] == VMS_LAVC_PREFIX3;
 }
 
+void vms_cluster_hello_mcast_build(uint16_t group, uint8_t out[VMS_ETH_ADDR_LEN])
+{
+	if (out == (uint8_t *)0)
+		return;
+	out[0] = VMS_HELLO_MCAST_PREFIX0;
+	out[1] = VMS_HELLO_MCAST_PREFIX1;
+	out[2] = VMS_HELLO_MCAST_PREFIX2;
+	out[3] = VMS_HELLO_MCAST_PREFIX3;
+	out[4] = (uint8_t)(group & 0xffu);
+	out[5] = (uint8_t)((group >> 8) & 0xffu);
+}
+
 vms_codec_status_t vms_cluster_lavc_sysid(const uint8_t addr[VMS_ETH_ADDR_LEN],
 					  uint16_t *out)
 {

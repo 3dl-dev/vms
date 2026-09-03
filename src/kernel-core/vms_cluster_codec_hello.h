@@ -234,6 +234,23 @@ int vms_cluster_lavc_is_logical(const uint8_t addr[VMS_ETH_ADDR_LEN]);
 vms_codec_status_t vms_cluster_lavc_sysid(const uint8_t addr[VMS_ETH_ADDR_LEN],
 					  uint16_t *out);
 
+/* ------------------------------------------------------------------ *
+ * HELLO multicast group address (spec sec 4a: AB-00-04-01-<LE16(group)>).
+ * The group number is CLUSTER_AUTHORIZE's cluster group (vms_cluster.h
+ * params.auth_group, loaded off CLUSTER_AUTHORIZE.DAT at boot) -- a real,
+ * per-cluster config value, never a hardcoded constant (E53). Same LE16
+ * convention as the LAVC prefix above (out[4]=low byte, out[5]=high byte),
+ * confirmed against the lab VAX cluster's observed group 257 (0x0101) ->
+ * ab:00:04:01:01:01 on the wire.
+ * ------------------------------------------------------------------ */
+#define VMS_HELLO_MCAST_PREFIX0 0xabu
+#define VMS_HELLO_MCAST_PREFIX1 0x00u
+#define VMS_HELLO_MCAST_PREFIX2 0x04u
+#define VMS_HELLO_MCAST_PREFIX3 0x01u
+
+/* Build ab:00:04:01:<LE16(group)> into out[VMS_ETH_ADDR_LEN]. Pure. */
+void vms_cluster_hello_mcast_build(uint16_t group, uint8_t out[VMS_ETH_ADDR_LEN]);
+
 #ifdef __cplusplus
 }
 #endif

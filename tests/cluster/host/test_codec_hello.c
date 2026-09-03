@@ -394,6 +394,32 @@ static void test_lavc_address_helpers(void)
 		 "sysid fabricated from a HW MAC)");
 }
 
+/*
+ * E53: the HELLO multicast group address, ab:00:04:01:<LE16(group)>. Pins
+ * the mapping a real config value must produce -- group 257 (0x0101, the lab
+ * VAX cluster's CLUSTER_AUTHORIZE group, directly observed on the wire as
+ * ab:00:04:01:01:01) and group 0 (the prior hardcoded/no-CLUSTER_AUTHORIZE
+ * value, ab:00:04:01:00:00) -- so a regression here cannot silently point
+ * OVMX's HELLO at the wrong cluster again.
+ */
+static void test_hello_mcast_group_mapping(void)
+{
+	uint8_t mcast[VMS_ETH_ADDR_LEN];
+	static const uint8_t group_257[6] = { 0xab, 0x00, 0x04, 0x01, 0x01, 0x01 };
+	static const uint8_t group_0[6]   = { 0xab, 0x00, 0x04, 0x01, 0x00, 0x00 };
+
+	printf("-- CLUSTER_AUTHORIZE group <-> ab:00:04:01:<LE16(group)> HELLO mcast (E53)\n");
+
+	vms_cluster_hello_mcast_build(257, mcast);
+	ct_check(memcmp(mcast, group_257, 6) == 0,
+		 "group 257 (0x0101) -> ab:00:04:01:01:01 (the lab VAX cluster's "
+		 "observed group, GROUNDED not fabricated)");
+
+	vms_cluster_hello_mcast_build(0, mcast);
+	ct_check(memcmp(mcast, group_0, 6) == 0,
+		 "group 0 -> ab:00:04:01:00:00 (the prior no-CLUSTER_AUTHORIZE value)");
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -412,6 +438,7 @@ int main(void)
 	test_hello_error_paths();
 	test_lastgasp_is_a_plain_hello_diff();
 	test_lavc_address_helpers();
+	test_hello_mcast_group_mapping();
 
 	return ct_summary("test_codec_hello");
 }

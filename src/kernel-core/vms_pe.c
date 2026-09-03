@@ -109,17 +109,16 @@ struct vms_pe {
 };
 
 /* The cluster HELLO multicast group, spec SS4(a): AB-00-04-01-<group>, with the
- * group number coming from CLUSTER_AUTHORIZE. Assembled here (not hard-coded
- * whole) because the last two bytes are the operator's configuration, not a
- * constant. */
+ * group number coming from CLUSTER_AUTHORIZE (params.auth_group, loaded off
+ * CLUSTER_AUTHORIZE.DAT at boot -- src/libvms/include/cluster_authorize.h,
+ * ovmx_init.c load_cluster_sysgen_params()). Never hard-coded: the last two
+ * bytes are the operator's real per-cluster configuration. The byte layout
+ * itself is the codec's own helper (vms_cluster_codec_hello.c, the same TU
+ * that already builds the LAVC address the same way), so the R1 host tests
+ * can pin the mapping without pulling in this glue TU's substrate seam. */
 static void pe_hello_multicast(const struct vms_cluster_params *p, uint8_t mac[6])
 {
-	mac[0] = 0xab;
-	mac[1] = 0x00;
-	mac[2] = 0x04;
-	mac[3] = 0x01;
-	mac[4] = (uint8_t)(p->auth_group & 0xff);
-	mac[5] = (uint8_t)((p->auth_group >> 8) & 0xff);
+	vms_cluster_hello_mcast_build(p->auth_group, mac);
 }
 
 /* ==========================================================================

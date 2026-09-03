@@ -1812,6 +1812,124 @@ uint32_t vms_lock_dlm_assume_mastery(const char *resnam, uint32_t req_lkid)
     return st;
 }
 
+/* The two engine receive paths the kernel-core-typed doors below translate
+ * onto. Defined further down beside the rest of the cross-node receive
+ * handlers; declared here because the doors are part of the FC-P4.6 seam
+ * block and belong beside the other three. */
+static uint32_t vms_lock_dlm_xnode_grant_recv(struct vms_dlm_xnode_args *req);
+static uint32_t vms_lock_dlm_xnode_blkast_recv(struct vms_proc *proc,
+                                               struct vms_dlm_xnode_args *req);
+
+/*
+ * vms_lock_dlm_record_master - Davis p. 6-31 OUTCOME 2, from the wire.
+ *
+ * The directory node named the master. Store it on the proxy LKB and on the
+ * RSB, and settle the routing question -- see vms_dlm_proxy.h for why the wire
+ * arm must put the answer HERE and then re-read it, rather than remembering it.
+ * Grants nothing and wakes nobody: a routing fact is not a completion.
+ */
+uint32_t vms_lock_dlm_record_master(const char *resnam, uint32_t req_lkid,
+                                    uint32_t master_csid)
+{
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
+    uint32_t st = SS__NORMAL;
+
+    if (resnam == NULL || resnam[0] == '\0' ||
+        req_lkid == VMS_DLM_LKID_UNSET || master_csid == 0)
+        return SS__BADPARAM;   /* 0 IS "unmastered" here, so it is no answer */
+
+    lock = dlm_proxy_find(req_lkid);
+    if (lock == NULL)
+        return SS__IVLOCKID;
+
+    res = lock->resource;
+    exec_lock(&res->lock);
+    if (strncmp(res->name, resnam, sizeof(res->name)) != 0) {
+        st = SS__BADPARAM;     /* an answer about some other lock */
+    } else {
+        lock->master_csid = master_csid;
+        res->master_csid  = master_csid;
+        res->dir_valid    = 0; /* the lookup is answered; nothing cached */
+    }
+    exec_unlock(&res->lock);
+    lock_put(lock);
+    return st;
+}
+
+/*
+ * vms_lock_dlm_proxy_grant_recv - the kernel-core-typed door onto the engine's
+ * requester-side grant receive (vms_dlm_proxy.h).
+ *
+ * One translation and one honesty rule, and nothing else: this function holds
+ * no policy that vms_lock_dlm_xnode_grant_recv does not already hold.
+ *
+ * THE HONESTY RULE IS `valblk_present`. The engine's grant receive copies the
+ * grant's value block onto the proxy whenever the granted mode is real. No
+ * cat-0x02 LVB field is grounded, so a wire arm has nothing to put there -- and
+ * a zero-filled block copied onto a proxy that holds a real value would destroy
+ * data and call it a grant. When the wire carried none, the proxy's OWN current
+ * bytes are what goes into the args, so the engine's copy is a no-op and the
+ * value block is left exactly as it was.
+ */
+static void dlm_grant_valblk_from_proxy(uint32_t req_lkid, uint8_t *out)
+{
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
+
+    memset(out, 0, LCK_VALBLK_SIZE);
+    lock = dlm_proxy_find(req_lkid);
+    if (lock == NULL)
+        return;
+    res = lock->resource;
+    exec_lock(&res->lock);
+    memcpy(out, lock->valblk, LCK_VALBLK_SIZE);
+    exec_unlock(&res->lock);
+    lock_put(lock);
+}
+
+uint32_t vms_lock_dlm_proxy_grant_recv(const struct vms_dlm_proxy_grant *g)
+{
+    struct vms_dlm_xnode_args args;
+
+    if (g == NULL)
+        return SS__BADPARAM;
+
+    memset(&args, 0, sizeof(args));
+    args.op          = VMS_DLM_OP_GRANT;
+    args.req_lkid    = g->req_lkid;
+    args.master_lkid = g->master_lkid;
+    args.master_csid = g->master_csid;
+    args.req_csid    = vms_local_csid;
+    args.lkmode      = g->granted_mode;
+    if (g->valblk_present)
+        memcpy(args.valblk, g->valblk, LCK_VALBLK_SIZE);
+    else
+        dlm_grant_valblk_from_proxy(g->req_lkid, args.valblk);
+
+    return vms_lock_dlm_xnode_grant_recv(&args);
+}
+
+/*
+ * vms_lock_dlm_proxy_blkast_recv - the kernel-core-typed door onto the engine's
+ * holder-side blocking-AST delivery (vms_dlm_proxy.h).
+ *
+ * `proc` is NULL because the cluster's receive context is not a process; the
+ * engine then delivers to the process that OWNS the proxy, and honestly
+ * declines (SS$_UNSUPPORTED) when none does.
+ */
+uint32_t vms_lock_dlm_proxy_blkast_recv(uint32_t req_lkid)
+{
+    struct vms_dlm_xnode_args args;
+
+    memset(&args, 0, sizeof(args));
+    args.op       = VMS_DLM_OP_BLKAST;
+    args.req_lkid = req_lkid;
+    args.req_csid = vms_local_csid;
+
+    return vms_lock_dlm_xnode_blkast_recv(NULL, &args);
+}
+
 /* ================================================================
  * ioctl handlers
  * ================================================================ */
@@ -3240,10 +3358,15 @@ static uint32_t vms_lock_dlm_xnode_blkast_recv(struct vms_proc *proc,
     struct vms_proc *target;
     uint64_t blkastadr, blkastprm;
 
-    if (proc == NULL)
-        return SS__BADPARAM;
     if (req->req_lkid == 0)
         return SS__BADPARAM;   /* a BLKAST must name the holder's own handle */
+    /*
+     * `proc` MAY be NULL (FC-P4.6). The ioctl path always has one, but the
+     * cluster's own receive context is not a process -- so the delivery target
+     * is resolved below from the PROXY's owner, and a proxy with no owner is an
+     * honest SS$_UNSUPPORTED rather than a BADPARAM about a caller that did
+     * nothing wrong.
+     */
 
     lock = dlm_proxy_find(req->req_lkid);
     if (lock == NULL)
@@ -3254,13 +3377,15 @@ static uint32_t vms_lock_dlm_xnode_blkast_recv(struct vms_proc *proc,
     blkastadr = lock->blkastadr;
     blkastprm = lock->blkastprm;
     target = lock->proc ? lock->proc : proc;
-    if (blkastadr != 0)
+    if (blkastadr != 0 && target != NULL)
         lock->blkast_count++;     /* a REAL delivery, counted */
     exec_unlock(&res->lock);
     lock_put(lock);
 
     if (blkastadr == 0)
         return SS__UNSUPPORTED;   /* the holder registered none -- never faked */
+    if (target == NULL)
+        return SS__UNSUPPORTED;   /* nobody to deliver to -- never faked */
 
     /* Queue a REAL user-mode blocking AST to the holder. Mirrors
      * notify_blocking_asts: astprm is the holder's own request handle (VMS delivers

@@ -332,4 +332,99 @@ uint32_t vms_lock_dlm_proxy_fail(uint32_t req_lkid, uint32_t status);
  */
 uint32_t vms_lock_dlm_assume_mastery(const char *resnam, uint32_t req_lkid);
 
+/*
+ * OUTCOME 2 (Davis p. 6-31): the directory node answered "the master is X".
+ *
+ * Record X on the proxy LKB `req_lkid` and on its resource block. Nothing is
+ * granted, nothing is woken and no mode changes -- this is a ROUTING fact the
+ * cluster returned, and the only thing it settles is where the request goes
+ * next (p. 6-32: the RSB's master CSID is why the NEXT $ENQ in this tree goes
+ * straight to the master instead of back through the directory).
+ *
+ * WHY THE WIRE ARM MUST NOT JUST REMEMBER IT. The retry is built from a FRESH
+ * vms_lock_dlm_proxy_refill_post(), and that reads `lock->master_csid`. Putting
+ * the answer INTO the lock database first is what makes the retry's destination
+ * -- and its `to_directory` flag, and its master_csid field -- an executive
+ * read rather than a value the FSM carried across two frames. An FSM that kept
+ * the CSID in its own request block and addressed the retry from there would be
+ * plumbing a wire value frame-to-frame, which is the exact anti-pattern INV-6
+ * exists to stop.
+ *
+ * `resnam` must name the resource the proxy is on: acting on a directory reply
+ * about one resource against a proxy on another would route the wrong tree.
+ *
+ * Returns SS$_NORMAL, SS$_IVLOCKID (no proxy of ours by that handle),
+ * SS$_BADPARAM (null/empty name, zero CSID, or a name that does not match the
+ * proxy's resource). A `master_csid` of 0 is refused: "unmastered" is what 0
+ * MEANS in this engine, so it is not an answer.
+ */
+uint32_t vms_lock_dlm_record_master(const char *resnam, uint32_t req_lkid,
+				    uint32_t master_csid);
+
+/*
+ * WHAT A GRANT TOLD US -- the kernel-core-typed door onto the engine's
+ * requester-side grant receive (FC-P4.6).
+ *
+ * The engine already has that path (vms_lock_dlm_xnode_grant_recv): it records
+ * the master's handle, the master's CSID, the granted mode and the master's
+ * value block on the proxy LKB, and wakes a $ENQW asleep on it. But it is
+ * reached through `struct vms_dlm_xnode_args` -- an IOCTL ABI struct that lives
+ * in the per-substrate vms_ioctl.h twin, which a PURE kernel-core FSM may not
+ * include (design §3.9; the include gate's RULE 2). So the wire arm reaches it
+ * through this struct instead, and vms_lock.c -- the one TU that sees both --
+ * does the translation.
+ *
+ * EVERY FIELD HERE IS SOURCED, AND `valblk_present` IS WHY IT NEEDS SAYING.
+ *   req_lkid      OUR own handle, echoed by the master (codec body[20:24]);
+ *                 the (req_csid, req_lkid) key that makes a retransmitted
+ *                 grant find the SAME lock instead of minting a second.
+ *   master_lkid   the master's handle (codec body[24:28]).
+ *   master_csid   the SENDER's cluster-logical address, as the connection
+ *                 manager identified the frame -- spec §4(a), the one
+ *                 GROUNDED source for "who is the master" on a reply.
+ *   granted_mode  codec body[30].
+ *   valblk        the master's resource value block -- and there is NO
+ *                 GROUNDED cat-0x02 field for it (vms_cluster_codec_dlm.h:
+ *                 "the VALBLK round-trip was not exercised"). So
+ *                 `valblk_present` is 0 on every frame this tree can parse
+ *                 today, and the engine then leaves the proxy's own value
+ *                 block ALONE. Writing sixteen zeros because the wire carried
+ *                 nothing would be a fabricated value block -- INV-6's
+ *                 "honest omission over a placeholder", in the one place where
+ *                 the placeholder would be indistinguishable from data.
+ *
+ * Returns what the engine's grant receive returns: SS$_NORMAL, SS$_BADPARAM
+ * (no handle, or a granted mode with no master handle -- the fc8540ae
+ * refusal), SS$_IVLOCKID (the handle names a lock this node MASTERS, not a
+ * proxy).
+ */
+struct vms_dlm_proxy_grant {
+	uint32_t req_lkid;
+	uint32_t master_lkid;
+	uint32_t master_csid;
+	uint8_t  granted_mode;
+	uint8_t  valblk_present;
+	uint8_t  pad[2];
+	uint8_t  valblk[VMS_DLM_VALBLK_LEN];
+};
+
+uint32_t vms_lock_dlm_proxy_grant_recv(const struct vms_dlm_proxy_grant *g);
+
+/*
+ * A BLOCKING AST the master sent, for a lock THIS node holds through a proxy.
+ *
+ * The kernel-core-typed door onto vms_lock_dlm_xnode_blkast_recv, for the same
+ * reason as the grant door above. The frame names OUR OWN handle, so the object
+ * is found by a value this executive minted; the AST that fires is a REAL
+ * user-mode AST queued to the process that owns the proxy, using the
+ * blocking-AST routine THAT PROCESS supplied on its own $ENQ.
+ *
+ * Returns SS$_NORMAL when an AST was genuinely queued, and SS$_UNSUPPORTED --
+ * never a faked delivery -- when the handle names no proxy of ours, when the
+ * proxy carries no blocking-AST routine, or when it has no owning process (a
+ * proxy the cluster reconstructed has none, and the cluster fork thread is not
+ * a process to deliver to).
+ */
+uint32_t vms_lock_dlm_proxy_blkast_recv(uint32_t req_lkid);
+
 #endif /* OVMX_VMS_DLM_PROXY_H */

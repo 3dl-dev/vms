@@ -32,14 +32,49 @@
  * VMS_DLM_LKID_UNSET refusal (vms_cluster_codec_dlm.c), which a real VAX
  * bugchecked (INVLOCKID) over.
  *
- * INCLUDES: kernel-core headers only, plus the per-substrate vms_internal.h
- * twin every executive core TU includes (CI gate
+ * INCLUDES: kernel-core headers only (CI gate
  * tools/ci/cluster_core_includes_gate.sh RULE 1/2).
+ *
+ * AND DELIBERATELY *NOT* vms_internal.h ANY MORE (FC-P4.6). This header used
+ * to pull the per-substrate executive struct twin in for two things: the
+ * fixed-width types and LCK_VALBLK_SIZE. That made it impossible for the
+ * requester FSM to include BOTH this seam and the cat-0x02 codec
+ * (vms_cluster_codec_dlm.h) in one pure translation unit -- vms_internal.h
+ * carries the engine's ioctl op family, whose short names collided with the
+ * codec's wire opcodes. The types now come from vms_wire_types.h (the single
+ * sanctioned selector) and the value-block length is stated here and
+ * _Static_assert-ed against LCK_VALBLK_SIZE in vms_lock.c, where both are
+ * visible. The consequence is the one that matters: this seam, the codec and
+ * the FSM over them all compile with a plain host compiler and no kernel
+ * headers at all -- the R1 rung.
  */
 #ifndef OVMX_VMS_DLM_PROXY_H
 #define OVMX_VMS_DLM_PROXY_H
 
-#include "vms_internal.h"   /* fixed-width types + LCK_VALBLK_SIZE */
+#include "vms_wire_types.h"   /* fixed-width types, substrate-selected once */
+
+/*
+ * THE LOCK VALUE BLOCK's length. The executive's own LCK_VALBLK_SIZE, restated
+ * here so this header needs no substrate struct twin, and CHECKED against it by
+ * a _Static_assert in vms_lock.c (the one TU that sees both). Two spellings of
+ * one number are only safe when a build failure is what happens if they drift.
+ */
+#define VMS_DLM_VALBLK_LEN 16u
+
+/*
+ * THE POST'S OWN OPERATION VOCABULARY (FC-P4.6).
+ *
+ * The engine used to hand its ioctl dispatch selector (VMS_DLM_OP_ENQ, ...)
+ * through this seam, which had two problems. It leaked an ioctl ABI number into
+ * a cluster interface, and -- worse -- it could not tell a fresh ENQ from a
+ * CONVERT: `convert_proxy_request` posted VMS_DLM_OP_ENQ too, so the wire arm
+ * had no way to choose between cat-0x02 op-0x01 and op-0x07. These three names
+ * are this seam's own, they map 1:1 onto the operations the DLM actually has,
+ * and the FSM's translation to a wire opcode is a table lookup.
+ */
+#define VMS_DLM_POST_ENQ     1u   /* a NEW lock request       -> wire op 0x01 */
+#define VMS_DLM_POST_CONVERT 2u   /* an existing lock's mode  -> wire op 0x07 */
+#define VMS_DLM_POST_DEQ     3u   /* release                  -> the DEQ path */
 
 /*
  * THE UNSET LOCK ID. The executive's own convention throughout vms_lock.c: 0 is
@@ -65,7 +100,7 @@
  * invent one.
  */
 struct vms_dlm_proxy_post {
-	uint32_t op;           /* VMS_DLM_OP_ENQ (request/convert) or _DEQ      */
+	uint32_t op;           /* VMS_DLM_POST_ENQ / _CONVERT / _DEQ            */
 	uint32_t dst_csid;     /* where it goes: the MASTER when known, else the
 	                        * DIRECTORY node for the root name (the book's
 	                        * three-outcome lookup, p. 6-31)                */
@@ -78,8 +113,37 @@ struct vms_dlm_proxy_post {
 	uint32_t lkmode;       /* requested mode, read from the LKB             */
 	uint32_t flags;        /* LCK_M_* the requester supplied, read from the LKB */
 	char     resnam[32];   /* the RSB's name                                */
-	uint8_t  valblk[LCK_VALBLK_SIZE];  /* the LKB's value block (a write
+	uint8_t  valblk[VMS_DLM_VALBLK_LEN];  /* the LKB's value block (a write
 	                        * crossing carries it; otherwise zeros)         */
+
+	/*
+	 * THE ROOT NAME'S DIRECTORY HASH, read off the RESOURCE BLOCK (FC-P4.6).
+	 *
+	 * `res->hash16` / `res->hash_known` -- the value some system in this
+	 * cluster put on the wire for this exact name and that
+	 * vms_lock_dlm_learn_dir_hash() recorded here. It rides in this struct
+	 * for the same reason every other field does: the wire arm must be able
+	 * to place it on a directory lookup (cat-0x02 body[10:12]) WITHOUT
+	 * deriving it, and the only non-deriving source is an executive read at
+	 * post time. `dir_hash_known` 0 means this executive holds none, and
+	 * then a directory LOOKUP must not be sent at all -- SS$_UNSUPPORTED,
+	 * the honest floor (design §3.6 rung A').
+	 */
+	uint16_t dir_hash;
+	uint8_t  dir_hash_known;
+
+	/*
+	 * Is `dst_csid` the tree's MASTER (as the cluster told us) or the
+	 * DIRECTORY node the weight vector named? Read from the LKB/RSB at post
+	 * time -- `master_csid != 0 && dst_csid == master_csid` -- and recorded
+	 * because the two are DIFFERENT operations on the wire: a request to
+	 * the master needs no directory index, and a lookup to the directory
+	 * cannot be sent without one. Deriving this in the wire arm from the
+	 * two CSIDs would work today and silently stop working the day a
+	 * directory node is also the master (Davis p. 6-31 outcome 1), which is
+	 * the common case, so the engine states which it meant.
+	 */
+	uint8_t  to_directory;
 };
 
 /*
@@ -193,5 +257,79 @@ uint32_t vms_lock_dlm_dir_hash_conflicts(void);
  * then refused SS$_UNSUPPORTED rather than served from thin air).
  */
 void vms_lock_dlm_set_requester_ops(const struct vms_dlm_requester_ops *ops);
+
+/* ==========================================================================
+ * WHAT THE WIRE ARM MAY ASK THE ENGINE FOR (FC-P4.6)
+ *
+ * Three reads/actions, and between them they are why the requester FSM never
+ * needs to remember a wire value. All three are safe from the cluster fork
+ * thread: each takes the resource lock briefly and none of them sleeps, waits
+ * or allocates (design §3.2.6 E42/E45 -- no blocking work on the fork thread).
+ * ========================================================================== */
+
+/*
+ * RE-READ the proxy LKB named by `req_lkid` and refill `out` from it, exactly
+ * as the original post was filled -- same one function, same fields, same
+ * moment-of-truth discipline (dlm_proxy_fill_post).
+ *
+ * THIS IS THE ANTI-LARP PRIMITIVE, and it is the whole reason the requester FSM
+ * can be honest about retries. Every frame the FSM sends -- the first
+ * transmission, a retransmit after a timeout, a retry at a new target after a
+ * decline, and above all the COMPLETION that names the master's handle -- is
+ * built from a FRESH call to this function, never from a field remembered off
+ * an earlier frame or off the reply that arrived in between. A completion
+ * carrying a lock id that came from a frame instead of from the lock database
+ * is precisely what bugchecked a real VAX with INVLOCKID and took the cluster
+ * down (commit fc8540ae).
+ *
+ * `op` and `dst_csid` are the caller's routing decision for THIS transmission
+ * (the FSM knows whether it is re-sending an ENQ or sending a DEQ, and to whom);
+ * every other field in `*out` comes out of the lock database.
+ *
+ * Returns SS$_NORMAL, or SS$_IVLOCKID when `req_lkid` names no proxy LKB of
+ * this node's -- which is the honest answer when the lock was released or run
+ * down while a request for it was outstanding, and the FSM must then abandon
+ * the transmission rather than send a frame about a lock that no longer exists.
+ */
+uint32_t vms_lock_dlm_proxy_refill_post(uint32_t req_lkid, uint32_t op,
+					uint32_t dst_csid,
+					struct vms_dlm_proxy_post *out);
+
+/*
+ * END the wait on a proxy LKB with a real terminal status, because no answer is
+ * coming: the target left the cluster, or the retransmit budget is spent.
+ *
+ * The same mechanism the departure path already uses (`grant_state` set under
+ * res->lock, then the LKB's condition variable broadcast), so a $ENQW asleep in
+ * enq_wait_sync wakes and returns `status` to its caller. A proxy that is
+ * already GRANTED is left alone -- it is a real lock, and a real lock is not
+ * something a timeout may take away.
+ *
+ * Returns SS$_NORMAL when a pending proxy was really failed, SS$_IVLOCKID when
+ * the handle names no proxy, SS$_NORMAL with nothing done when it was already
+ * granted. Never fabricates a completion.
+ */
+uint32_t vms_lock_dlm_proxy_fail(uint32_t req_lkid, uint32_t status);
+
+/*
+ * OUTCOME 3 (Davis p. 6-31): the DIRECTORY node answered "there is no master --
+ * YOU master it". Record this node as the master of `resnam`'s tree and PROMOTE
+ * the proxy LKB `req_lkid` into a real local lock, then run the local granting
+ * algorithm over the resource.
+ *
+ * WHY PROMOTION IS THE CORRECT ACT AND NOT A SHORTCUT. Once the cluster has
+ * told this node it masters the tree, this node's own granted/waiting queues
+ * ARE the authority for it -- there is no other holder to consult, which is
+ * exactly what "no master" meant. So the request is moved off res->proxies onto
+ * res->waiting and try_grant_waiters() decides it, the same code path that
+ * decides every local $ENQ. Nothing is granted that the local queues do not
+ * allow, and the requester's $ENQW wakes from its own genuine grant.
+ *
+ * Returns SS$_NORMAL when the proxy was promoted (granted or genuinely queued),
+ * SS$_IVLOCKID when the handle names no proxy of ours, SS$_BADPARAM when the
+ * handle names a proxy on a different resource than `resnam` -- a mismatch that
+ * would mean acting on an answer about some other lock.
+ */
+uint32_t vms_lock_dlm_assume_mastery(const char *resnam, uint32_t req_lkid);
 
 #endif /* OVMX_VMS_DLM_PROXY_H */

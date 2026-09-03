@@ -81,14 +81,28 @@ extern "C" {
 
 #define VMS_DLM_CAT_REQUEST     0x02u  /* response = REQUEST | VMS_WIRE_RESPONSE_BIT (0x82) */
 
-/* Opcodes -- GROUNDED (spec §4(f).1, §4(p)). */
-#define VMS_DLM_OP_ENQ          0x01u  /* new-lock ENQ request              */
-#define VMS_DLM_OP_CONVERT      0x07u  /* lock mode CONVERT                 */
-#define VMS_DLM_OP_REBUILD      0x0du  /* join-time lock-resource rebuild rec*/
+/*
+ * Opcodes -- GROUNDED (spec §4(f).1, §4(p)).
+ *
+ * THE `WIREOP` SPELLING IS LOAD-BEARING (renamed by FC-P4.6). These are the
+ * CAT-0x02 WIRE opcodes. The executive's lock engine has an entirely separate
+ * op family with the SAME short names and DIFFERENT values -- the ioctl/xnode
+ * dispatch selectors in src/kernel/vms_ioctl.h and its NetBSD twin
+ * (VMS_DLM_OP_ENQ 1, _GRANT 2, _DEQ 3, _BLKAST 4, _REBUILD **5**, _DLKSRCH 6).
+ * `VMS_DLM_OP_REBUILD` therefore meant 5 in one family and 0x0d in the other,
+ * so any translation unit that included BOTH headers -- which is exactly what
+ * the requester FSM's consumers and the FC-P4.8 glue do -- got a macro
+ * redefinition with a silently different value. Two names, two numbers, one
+ * tree: renamed here so the wire opcode and the dispatch selector can never be
+ * confused, by a reader or by the preprocessor.
+ */
+#define VMS_DLM_WIREOP_ENQ          0x01u  /* new-lock ENQ request              */
+#define VMS_DLM_WIREOP_CONVERT      0x07u  /* lock mode CONVERT                 */
+#define VMS_DLM_WIREOP_REBUILD      0x0du  /* join-time lock-resource rebuild rec*/
 
 /* Opcodes -- PROVISIONAL, NOT spec-grounded; see the file doc comment. */
-#define VMS_DLM_OP_COMPLETE_PROVISIONAL 0x04u
-#define VMS_DLM_OP_COMMIT_PROVISIONAL   0x03u
+#define VMS_DLM_WIREOP_COMPLETE_PROVISIONAL 0x04u
+#define VMS_DLM_WIREOP_COMMIT_PROVISIONAL   0x03u
 
 /*
  * Lock modes -- GROUNDED, spec §4(f).1 body[30] (abs 102): a clean
@@ -154,6 +168,25 @@ struct vms_dlm_enq_request {
 				     /* present once the lock is established   */
 	uint8_t  name_len;
 	uint8_t  name[VMS_DLM_NAME_MAX];
+
+	/*
+	 * THE ROOT NAME'S DIRECTORY HASH, body[10:12] (see the section below).
+	 *
+	 * `dir_hash_valid` is 0 when this executive holds NO wire-learned hash
+	 * for the name, and then the builder writes NOTHING at body[10:12] --
+	 * the honest omission, never a zero passed off as a hash (INV-6). It is
+	 * the FSM's job (FC-P4.6) to refuse to send a directory LOOKUP at all
+	 * in that case; a request addressed to a MASTER the cluster already
+	 * named needs no directory index and is sent without one.
+	 *
+	 * There is deliberately no standalone hash BUILDER in this codec (see
+	 * the section below): the value may only ride an ENQ/CONVERT whose
+	 * OTHER fields the caller has already sourced from a real LKB, and it
+	 * must itself be a value `vms_lock_dlm_learn_dir_hash()` recorded on
+	 * that resource block from a received frame.
+	 */
+	uint16_t dir_hash;
+	uint8_t  dir_hash_valid;
 };
 
 /*
@@ -182,7 +215,7 @@ struct vms_dlm_enq_response {
 
 /*
  * Parse a cat-0x02 request frame as an ENQ/CONVERT. `*opcode_out` receives
- * VMS_DLM_OP_ENQ or VMS_DLM_OP_CONVERT so the caller can tell them apart --
+ * VMS_DLM_WIREOP_ENQ or VMS_DLM_WIREOP_CONVERT so the caller can tell them apart --
  * the wire shape is identical (spec §4(f).1: "The CONVERT 0x07 request
  * carries the new mode here", same body[30]).
  */
@@ -200,7 +233,7 @@ vms_codec_status_t vms_dlm_enq_request_parse(const uint8_t *frame, uint32_t len,
  * envelope codec, not this DLM item); `frame` must already hold a valid
  * frame of at least `cap` >= 132 (VMS_DLM_NAME_MARKER's max reach) bytes
  * that the caller assembles those spans into separately. `opcode` selects
- * VMS_DLM_OP_ENQ or VMS_DLM_OP_CONVERT.
+ * VMS_DLM_WIREOP_ENQ or VMS_DLM_WIREOP_CONVERT.
  */
 vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *req,
 					     uint8_t opcode,
@@ -259,6 +292,16 @@ vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
  * nobody received. FC-P4.6's requester echoes the learned value through
  * the ENQ builder's own fields when it has one, and refuses to send a
  * lookup at all when it does not.
+ *
+ * SO FC-P4.6 DID EXACTLY THAT, AND NOTHING MORE. `struct
+ * vms_dlm_enq_request` grew `dir_hash` + `dir_hash_valid`, and
+ * vms_dlm_enq_request_build() writes body[10:12] ONLY when the flag is
+ * set. There is still no `vms_dlm_dir_hash_build()`: the value cannot be
+ * placed on the wire on its own, only as a field of a request whose lock
+ * id, mode and resource name were already read out of a real LKB by
+ * vms_lock.c's dlm_proxy_fill_post() -- which is also where `dir_hash`
+ * itself comes from (res->hash16/res->hash_known, learned from a received
+ * frame and never computed).
  *
  * OFFSET PROVENANCE -- INFERRED, pending FC-P4.2's offline confirmation.
  * The strawman daemon's op-01 builder placed a 16-bit `dir_hash` here
@@ -395,8 +438,8 @@ struct vms_dlm_completion {
 };
 
 /*
- * Build a completion (op VMS_DLM_OP_COMPLETE_PROVISIONAL) or commit (op
- * VMS_DLM_OP_COMMIT_PROVISIONAL) frame. REFUSES (VMS_CODEC_E_INVAL) if
+ * Build a completion (op VMS_DLM_WIREOP_COMPLETE_PROVISIONAL) or commit (op
+ * VMS_DLM_WIREOP_COMMIT_PROVISIONAL) frame. REFUSES (VMS_CODEC_E_INVAL) if
  * `c->master_lkid` or `c->req_lkid` is VMS_DLM_LKID_UNSET (0) -- the
  * fc8540ae hard lesson: a completion referencing a lock id the master
  * never granted crashes the master with INVLOCKID, and every OVMX build

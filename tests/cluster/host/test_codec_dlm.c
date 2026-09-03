@@ -101,7 +101,7 @@ static void test_enq_request_pw(void)
 	ct_check(vms_dlm_enq_request_parse(f->bytes, f->wire_len, &fi,
 					   &opcode, &req) == VMS_CODEC_OK,
 		 "parses as an ENQ/CONVERT request");
-	ct_check_eq_u32(opcode, VMS_DLM_OP_ENQ, "  opcode == ENQ (0x01)");
+	ct_check_eq_u32(opcode, VMS_DLM_WIREOP_ENQ, "  opcode == ENQ (0x01)");
 	ct_check_eq_u32(req.mode, VMS_LCK_PW, "  mode == PW (4)");
 	ct_check_eq_u32(req.req_pid_or_lkid, 0x2020021cu,
 			"  req_pid == the GROUNDED interactive-process constant");
@@ -202,7 +202,7 @@ static void test_convert_request(void)
 	ct_check(vms_dlm_enq_request_parse(f->bytes, f->wire_len, &fi,
 					   &opcode, &req) == VMS_CODEC_OK,
 		 "parses as an ENQ/CONVERT request");
-	ct_check_eq_u32(opcode, VMS_DLM_OP_CONVERT, "  opcode == CONVERT (0x07)");
+	ct_check_eq_u32(opcode, VMS_DLM_WIREOP_CONVERT, "  opcode == CONVERT (0x07)");
 	ct_check_eq_u32(req.mode, VMS_LCK_EX, "  new mode == EX (5)");
 	ct_check_eq_u32(req.req_pid_or_lkid, 0x5000038Au,
 			"  body[20] == the EXISTING local lock-id (not a PID)");
@@ -276,12 +276,12 @@ static void test_allowlist_rows(void)
 		 "categories, every row cites the spec)");
 
 	e = vms_wire_allow_find(&vms_dlm_allow_table, VMS_SYSAP_VMS_VAXCLUSTER,
-				VMS_DLM_CAT_REQUEST, VMS_DLM_OP_ENQ);
+				VMS_DLM_CAT_REQUEST, VMS_DLM_WIREOP_ENQ);
 	ct_check(e != NULL && e->action == VMS_WIRE_ACT_RESPOND,
 		 "op 0x01 (ENQ) resolves to RESPOND");
 
 	e = vms_wire_allow_find(&vms_dlm_allow_table, VMS_SYSAP_VMS_VAXCLUSTER,
-				VMS_DLM_CAT_REQUEST, VMS_DLM_OP_REBUILD);
+				VMS_DLM_CAT_REQUEST, VMS_DLM_WIREOP_REBUILD);
 	ct_check(e != NULL && e->action == VMS_WIRE_ACT_RESPOND,
 		 "op 0x0d (rebuild) resolves to RESPOND");
 
@@ -290,7 +290,7 @@ static void test_allowlist_rows(void)
 	 * which the completion body is not. */
 	e = vms_wire_allow_find(&vms_dlm_allow_table, VMS_SYSAP_VMS_VAXCLUSTER,
 				VMS_DLM_CAT_REQUEST,
-				VMS_DLM_OP_COMPLETE_PROVISIONAL);
+				VMS_DLM_WIREOP_COMPLETE_PROVISIONAL);
 	ct_check(e == NULL,
 		 "op 0x04 (PROVISIONAL completion) is NOT in the allowlist");
 }
@@ -323,11 +323,11 @@ static void test_no_builder_accepts_a_placeholder_lock_id(void)
 	/* Sanity: a completion with two REAL nonzero ids builds fine, on
 	 * both ops -- proves the refusal below is about the zero, not a
 	 * blanket rejection. */
-	ct_check(vms_dlm_completion_build(&c, VMS_DLM_OP_COMPLETE_PROVISIONAL,
+	ct_check(vms_dlm_completion_build(&c, VMS_DLM_WIREOP_COMPLETE_PROVISIONAL,
 					  built, sizeof(built), &written)
 		 == VMS_CODEC_OK,
 		 "  a completion with two real nonzero lock ids builds");
-	ct_check(vms_dlm_completion_build(&c, VMS_DLM_OP_COMMIT_PROVISIONAL,
+	ct_check(vms_dlm_completion_build(&c, VMS_DLM_WIREOP_COMMIT_PROVISIONAL,
 					  built, sizeof(built), &written)
 		 == VMS_CODEC_OK,
 		 "  a commit with two real nonzero lock ids builds");
@@ -335,11 +335,11 @@ static void test_no_builder_accepts_a_placeholder_lock_id(void)
 	/* The fc8540ae shape: master_lkid == the placeholder 0. */
 	c.master_lkid = VMS_DLM_LKID_UNSET;
 	c.req_lkid = 0x00010042u;
-	ct_check(vms_dlm_completion_build(&c, VMS_DLM_OP_COMPLETE_PROVISIONAL,
+	ct_check(vms_dlm_completion_build(&c, VMS_DLM_WIREOP_COMPLETE_PROVISIONAL,
 					  built, sizeof(built), &written)
 		 == VMS_CODEC_E_INVAL,
 		 "  master_lkid==0 REFUSED on completion (op 0x04)");
-	ct_check(vms_dlm_completion_build(&c, VMS_DLM_OP_COMMIT_PROVISIONAL,
+	ct_check(vms_dlm_completion_build(&c, VMS_DLM_WIREOP_COMMIT_PROVISIONAL,
 					  built, sizeof(built), &written)
 		 == VMS_CODEC_E_INVAL,
 		 "  master_lkid==0 REFUSED on commit (op 0x03)");
@@ -348,7 +348,7 @@ static void test_no_builder_accepts_a_placeholder_lock_id(void)
 	 * "not a real lock" sentinel. */
 	c.master_lkid = 0x00020017u;
 	c.req_lkid = VMS_DLM_LKID_UNSET;
-	ct_check(vms_dlm_completion_build(&c, VMS_DLM_OP_COMPLETE_PROVISIONAL,
+	ct_check(vms_dlm_completion_build(&c, VMS_DLM_WIREOP_COMPLETE_PROVISIONAL,
 					  built, sizeof(built), &written)
 		 == VMS_CODEC_E_INVAL,
 		 "  req_lkid==0 REFUSED on completion (op 0x04)");
@@ -356,7 +356,7 @@ static void test_no_builder_accepts_a_placeholder_lock_id(void)
 	/* Both zero at once -- must not builds "because they cancel out". */
 	c.master_lkid = VMS_DLM_LKID_UNSET;
 	c.req_lkid = VMS_DLM_LKID_UNSET;
-	ct_check(vms_dlm_completion_build(&c, VMS_DLM_OP_COMPLETE_PROVISIONAL,
+	ct_check(vms_dlm_completion_build(&c, VMS_DLM_WIREOP_COMPLETE_PROVISIONAL,
 					  built, sizeof(built), &written)
 		 == VMS_CODEC_E_INVAL,
 		 "  both lock ids 0 REFUSED");

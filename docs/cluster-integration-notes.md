@@ -413,6 +413,27 @@ DIAG_PORT/CONN/CSB.
 - **E17 now has 2 DANGLING-EVIDENCE warnings** in `cluster-dlm.yaml` (`src/vmsscs/scsd.c`, `scs_dlm.c` — deleted by P3.9). P3.9 left them deliberately (repairing the pointer = editing the row the operator must adjudicate). **E17 is now MORE visible + MORE urgent for the operator:** the cluster-dlm "distributed DLM COMPLETE" claim's own cited evidence (the scsd daemon) is GONE, which underscores that the claim was strawman-backed. Operator ruling still pending.
 - **rd items FC-P3.9 filed** (retirement fallout, tracked): vms-ec8 (24 lab capture scripts → fold into FC-P3.11), vms-1da5 (cross-node DLM CI gone until FC-P4.8), vms-1b6 (~25 spec-conformance/anti-drift gates → restore quarantine gates first), vms-733 ($SETCLUEVT service unbuilt).
 
+### E39. FC-P6.3 extended the SCS send path to length-generic MTYPE-10 (grounded §4(h)(1b))
+SCS grounded send paths only for 190- and 94-content; 3 of the 5 measured MSCP end
+classes (86/102/110) had NO send path. FC-P6.3 added `pe_vc_send_msg_var` →
+`msg_transmit_var` (one shared assembly, not a second design), grounded on the
+SAME §4(h)(1b) uniform-envelope rule Fable ruled for E18. Also implemented FC-P6.1's
+declared-but-empty `pe_buf_register/_release/pe_send_block` + `pe_send_block_read_end`.
+Consistent with the ruled body-level contract — noted for the record, not a new
+ruling. Compat: `mscp-serve$disk-read-write` RESTORED to implemented/real (E38
+downgrade reversed — see mscp-serve.yaml); did NOT touch cluster-dlm.yaml (E17).
+- **FC-P6.3 lab-asks (→ FC-P6.4/lab):** (1) unit 0 unreachable by FC-P3.4's MD.NXU
+  walk (client seeds unit 1, §6.12 is `>=`, DKA0: is unit 0) — both sides assert
+  the consequence so it can't drift; needs "what does a real VMS class driver do";
+  (2) WRITE block-transfer INITIATION direction ambiguous (READ fully grounded);
+  (3) SCC-END `0xa004`/`0x0547` are undecoded constants — server reports real flags,
+  doesn't replay; (4) `$MOUNT` has no /NOWRITE surface yet so `read_only`=0 (the
+  host-requested MD.SWP write-protect path IS real).
+- **FC-P6.3 caught + fixed 2 real defects:** shared staging buffer → concurrent-WRITE
+  data corruption (now per-HRB disjoint slots); partial-block commit reporting false
+  success (now ST.HST, nothing written). Third and fourth silent-data bugs the
+  faithful build caught that a bullseye-chase ships.
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

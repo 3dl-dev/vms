@@ -15,22 +15,26 @@ last_reviewed: 2026-09-03
 items:
   - id: mscp-serve$disk-read-write
     kind: feature
-    status: absent
-    authenticity: n/a
+    status: implemented
+    authenticity: real
     vms: "MSCP disk-serving controller: READ/WRITE command responder"
-    evidence: docs/cluster-protocol-spec.md
+    evidence: src/kernel-core/vms_mscp_srv.c
     notes: >
-      RETIRED WITH ITS IMPLEMENTATION (FC-P3.9). The MSCP disk SERVER lived in
-      the userspace SCS daemon (src/vmsscs/scs_mscp_srv.c), which the operator's
-      2026-09-02 clustering reset deleted as a non-portable strawman. There is
-      NO MSCP server in the tree today: the executive-resident replacement is
-      FC-P6.x (`vms_mscp_srv.c`), unbuilt. This row is kept, downgraded, rather
-      than removed, so the register does not silently lose a facility -- and so
-      the earlier "real pread()/pwrite() against the served volume" claim is not
-      left standing over deleted code. The wire knowledge is preserved as spec
-      (docs/cluster-protocol-spec.md) and as the ported client-side MSCP codec +
-      discovery FSM (src/kernel-core/vms_cluster_codec_mscp.c,
-      vms_mscp_cl_fsm.c), which the executive's join really does drive.
+      EXECUTIVE-RESIDENT SERVER LANDED (FC-P6.3), earning back the capability the
+      2026-09-02 reset voided when it deleted the userspace daemon
+      (src/vmsscs/scs_mscp_srv.c). `vms_mscp_srv_fsm.c` (UQB/HQB/HRB, the
+      Controller-Available/Online state machine) + `vms_mscp_srv.c` glue serve the
+      executive's own mounted volumes via `exec_blockdev_*`/the ACP as
+      `$<ALLOCLASS>$DUAn`; SCC/GUS/ONLINE/READ/WRITE built+parsed through the
+      FC-P6.2 codec at measured lengths; MSCP$DISK LISTENs only when a serveable
+      unit exists; write-protect honest (ST.WPR with the real Table B-2 reason
+      sub-code, zero blocks written). status=implemented, authenticity=real, NOT
+      verified: R1 = test_mscp_srv (167 checks) + R4-lite = FC-P3.4's real
+      class-driver discovery FSM walks this real server end-to-end (SCC x2 + MD.NXU
+      walk, 2 units). NOT YET: R5 real-VAX MOUNT (FC-P6.4, lab-deferred); the WRITE
+      block-transfer INITIATION direction is lab-ungrounded (READ, what a MOUNT
+      needs, is fully grounded); MSCP_SERVE_ALL bit semantics undecoded (any
+      non-zero = serve). `mscp-serve$online-end` stays stub (no byte-exact oracle).
 
   - id: mscp-serve$online-end
     kind: feature

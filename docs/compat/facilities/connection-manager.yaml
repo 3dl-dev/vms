@@ -56,16 +56,20 @@ items:
       hand-off into the barrier. Reached from the boot path: FC-P3.9's
       VMS_IOCTL_CLUSTER_START starts the connection manager and drives the join
       when a real system has been discovered to join THROUGH.
-      IMPLEMENTED, NOT VERIFIED, and the gap is named: the join can reach the
-      barrier and complete the dialogue but CANNOT reach MEMBER, because it will
-      not fabricate its own CSID -- the cluster assigns it, in an op-0x06
-      membership record whose byte layout is not pinned (E30). FC-P3.3 landed
-      the instrument that turns that into a one-capture fix
-      (vms_cm_membership_find_sysid reports the offset+width where OVMX's own
-      SCSSYSTEMID appears in a real record, reading nothing off it).
-      PROVEN AT R1/R2: tests/cluster/host/test_cnxman_join.c per transition; the
-      simulator replays the reference joiner's frames. R4/R5 (a real member
-      answering) LAB-DEFERRED.
+      IMPLEMENTED, NOT VERIFIED. The join reaches the barrier, completes the
+      dialogue, AND now reaches MEMBER at R1: a real-VAX capture
+      (op06-join-20260903.pcap) grounded the CSID mechanism (E30, resolved) --
+      op-0x06 carries the EXISTING member's record, not the joiner's, and a node's
+      CSID is deterministic: `CSID = (cluster_generation << 16) | (SCSSYSTEMID &
+      0x3ff)`, the generation READ FROM THE WIRE (the coordinator's CSID high-word,
+      op-06 b[24]), never fabricated. The join computes its own CSID this way and
+      learns it; a node that has not yet seen a coordinator CSID stays NEW (honest).
+      PROVEN AT R1/R2: tests/cluster/host/test_cnxman_join.c (capture-exact CSID
+      vectors both op-06 sub-forms + a synthetic generation to prove it is not
+      hardcoded) per transition; the simulator replays the reference joiner.
+      R4/R5 (a booted node counted CN=3 by a real member on the wire) LAB-DEFERRED,
+      and still needs E31 (the VMS$VAXcluster connect-data identity, operator ruling)
+      so a real VAX does not REJECT the join.
 
   - id: connection-manager$peer-discovery
     kind: feature

@@ -58,6 +58,14 @@ that capture to a `.spec` fixture and swap it into `test_replay.c`'s input list
 that blocks P3.3 CSID-learning may be isolable from this same established-join
 capture).
 
+### E14. SYSGEN_STRVAL_LEN=8 truncates long DISK_QUORUM device names (raised by FC-P0.10)
+`tools/vms_sysgen.c`'s `SYSGEN_STRVAL_LEN` is 8 bytes (sized for SCSNODE). A real
+quorum-disk device name longer than 8 chars (e.g. `$102$DGA1023`) truncates.
+Out of FC-P0.10's scope; documented in-code. **Widen `SYSGEN_STRVAL_LEN` (and the
+wire struct) before the quorum-disk path (FC-P0.13/P8) actually uses DISK_QUORUM
+by device name** — or it will address the wrong disk. Not blocking today (no
+quorum-disk consumer yet).
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

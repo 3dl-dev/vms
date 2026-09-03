@@ -193,6 +193,14 @@ static void test_no_forbidden_primitives(void)
 			 OVMX_KCORE_DIR "/vms_cnxman_phase2.c");
 	check_file_clean("vms_cnxman_csb.c",
 			 OVMX_KCORE_DIR "/vms_cnxman_csb.c");
+	/* FC-P3.3's join FSM is the fifth CNXMAN TU and is held to the same
+	 * rule. It does name `struct vms_mscp_link` -- FC-P3.4's own seam for
+	 * an MSCP command's abs [0,72) -- but passes it ALL ZERO and transmits
+	 * only frame[72:108], so SCS fills abs 56-71 from the real CDT and the
+	 * port fills abs 0-55 from the real circuit. The scan below still
+	 * proves it writes no wire buffer of its own. */
+	check_file_clean("vms_cnxman_join_fsm.c",
+			 OVMX_KCORE_DIR "/vms_cnxman_join_fsm.c");
 }
 
 /* ==========================================================================

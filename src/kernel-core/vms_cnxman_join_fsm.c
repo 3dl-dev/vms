@@ -1,0 +1,1521 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * vms_cnxman_join_fsm.c - the JOIN (FC-P3.3).
+ *
+ * The choreography, its grounding step by step, and the five things this file
+ * refuses to invent are all in vms_cnxman_join_fsm.h. Read it first; this file
+ * is the behaviour.
+ *
+ * READ THE TABLE, NOT THE PROSE. join_table[][] below IS the specification of
+ * this machine: one cell per [state][event], one small handler per edge, and
+ * every empty cell an event the evidence does not connect to that state --
+ * ignored and COUNTED, never guessed.
+ *
+ * THREE STRUCTURAL SAFETIES, because the failure mode here is "never admitted,
+ * or admitted on a lie":
+ *
+ *   1. LOOKUP BEFORE CONNECT IS UNREACHABLE TO VIOLATE. Each of the two
+ *      connects this FSM makes is issued from ONE place, reached only after
+ *      that name's own directory answer really arrived. Firing the MSCP$DISK
+ *      connect before resolving the name froze a real member's recv_ack and
+ *      regressed OVMX below NEW to blank status (spec sec 4(L)).
+ *
+ *   2. NOTHING IS ANSWERED EXCEPT THROUGH THE ALLOWLIST. Every response path
+ *      checks vms_cm_allow_table() for the ACTION and the RECIPE it is about
+ *      to use. Answering an ungrounded pair crashed two real VAXes.
+ *
+ *   3. NO RAW WIRE OFFSET, AND NO ENVELOPE BYTE. Every field read or written
+ *      goes through vms_cluster_codec_cm.h / vms_cluster_codec_mscp.h, and
+ *      body[0:8] is written by exactly one function -- cnxman_envelope_stamp()
+ *      -- from the destination CSB's real dialogue counters, which this file
+ *      advances through named CSB operations and never by hand.
+ *
+ * INCLUDES: kernel-core headers only (CI gate tools/ci/cluster_core_includes_gate.sh).
+ * PURE TU: no seam call, no allocation, no clock but ops->now_ms.
+ */
+
+#include "vms_cluster.h"
+#include "vms_cnxman.h"
+#include "vms_cnxman_csb.h"
+#include "vms_cnxman_barrier_fsm.h"
+#include "vms_cnxman_join_fsm.h"
+#include "vms_cluster_codec_cm.h"
+#include "vms_cluster_codec_mscp.h"
+#include "vms_mscp_cl_fsm.h"
+
+/* ==========================================================================
+ * The published SYSAP names
+ *
+ * Blank-padded to 16 bytes, because NUL padding is a DIFFERENT name to a real
+ * VAX (vms_scs_dir.h says the same thing at its own two names).
+ * ========================================================================== */
+const uint8_t cnxman_join_name_vaxcluster[VMS_SCS_PROCNAME_LEN] = {
+	'V', 'M', 'S', '$', 'V', 'A', 'X', 'c', 'l', 'u', 's', 't', 'e', 'r',
+	' ', ' '
+};
+const uint8_t cnxman_join_name_mscp_disk[VMS_SCS_PROCNAME_LEN] = {
+	'M', 'S', 'C', 'P', '$', 'D', 'I', 'S', 'K', ' ', ' ', ' ', ' ', ' ',
+	' ', ' '
+};
+const uint8_t cnxman_join_name_disk_cl_drvr[VMS_SCS_PROCNAME_LEN] = {
+	'V', 'M', 'S', '$', 'D', 'I', 'S', 'K', '_', 'C', 'L', '_', 'D', 'R',
+	'V', 'R'
+};
+
+/* ==========================================================================
+ * Small shared helpers. This TU calls no library (a pure TU builds on the
+ * host too, where the substrate's memset is not in scope).
+ * ========================================================================== */
+
+static void join_bzero(void *p, uint32_t n)
+{
+	uint8_t *o = (uint8_t *)p;
+	uint32_t i;
+
+	for (i = 0; i < n; i++)
+		o[i] = 0u;
+}
+
+static void join_bcopy(uint8_t *dst, const uint8_t *src, uint32_t n)
+{
+	uint32_t i;
+
+	for (i = 0; i < n; i++)
+		dst[i] = src[i];
+}
+
+static int join_name_eq(const uint8_t *a, const uint8_t *b)
+{
+	uint32_t i;
+
+	for (i = 0; i < VMS_SCS_PROCNAME_LEN; i++) {
+		if (a[i] != b[i])
+			return 0;
+	}
+	return 1;
+}
+
+static void join_log(const struct cnxman_join *j, const char *msg)
+{
+	if (j->ops != NULL && j->ops->log != NULL)
+		j->ops->log(j->ops->ctx, msg);
+}
+
+static const char *const join_state_names[CNXMAN_JOIN_STATE__COUNT] = {
+	"IDLE", "DIR ROUND", "MSCP CONNECT", "VC CONNECT", "ADVERTISE",
+	"ADMIT", "BARRIER", "MEMBER", "FAILED"
+};
+
+const char *cnxman_join_state_name(enum cnxman_join_state s)
+{
+	if ((unsigned)s >= (unsigned)CNXMAN_JOIN_STATE__COUNT)
+		return "?";
+	return join_state_names[s];
+}
+
+const char *cnxman_join_failure_name(enum cnxman_join_failure f)
+{
+	switch (f) {
+	case CNXMAN_JOIN_FAIL_NONE:      return "none";
+	case CNXMAN_JOIN_FAIL_NO_TARGET: return "no member to join through";
+	case CNXMAN_JOIN_FAIL_CONNECT:   return "connect refused locally";
+	case CNXMAN_JOIN_FAIL_REJECTED:  return "connect rejected by the peer";
+	case CNXMAN_JOIN_FAIL_PATHLOST:  return "path lost";
+	case CNXMAN_JOIN_FAIL_ABSENT:    return "SYSAP not present on the member";
+	case CNXMAN_JOIN_FAIL_SEND:      return "message could not be sent";
+	case CNXMAN_JOIN_FAIL_CODEC:     return "codec refused to build";
+	default:                         return "?";
+	}
+}
+
+/* ==========================================================================
+ * State movement
+ * ========================================================================== */
+
+static void join_goto(struct cnxman_join *j, enum cnxman_join_state s)
+{
+	j->state = (uint8_t)s;
+}
+
+static void join_fail(struct cnxman_join *j, enum cnxman_join_failure why,
+		      const char *msg)
+{
+	j->failure = (uint8_t)why;
+	join_goto(j, CNXMAN_JOIN_FAILED);
+	join_log(j, msg);
+}
+
+/*
+ * ONE join, ONE watchdog, so the key is the constant 0 and re-arming MOVES the
+ * same timer identity rather than leaving a stale deadline behind for every
+ * state the drive has passed through.
+ */
+#define JOIN_WATCH_KEY 0u
+
+static void join_arm_watch(struct cnxman_join *j)
+{
+	if (j->ops != NULL && j->ops->arm_timer != NULL)
+		j->ops->arm_timer(j->ops->ctx, CNXMAN_TIMER_JOIN,
+				  JOIN_WATCH_KEY, CNXMAN_JOIN_WATCH_MS);
+}
+
+/* ==========================================================================
+ * The destination CSB -- the only source of an outbound body's envelope
+ *
+ * No CSB for the member means this FSM ORIGINATES NOTHING, which is the honest
+ * outcome (INV-6), not a zero-filled frame.
+ * ========================================================================== */
+
+static struct vms_csb *join_target_csb(struct cnxman_join *j)
+{
+	if (j->cl == NULL || !j->target_valid || j->target_csb < 0)
+		return NULL;
+	return cnxman_club_csb_at(&j->cl->club, (uint32_t)j->target_csb);
+}
+
+/* ==========================================================================
+ * Sending
+ *
+ * ONE path out for every `VMS$VAXcluster` body: advance the dialogue counter,
+ * stamp body[0:8] from the CSB, hand the 132 bytes to SCS. A build that failed
+ * never reaches here, and a send that failed is COUNTED and named.
+ * ========================================================================== */
+
+static int join_emit_cm(struct cnxman_join *j, int is_response)
+{
+	struct vms_csb *csb = join_target_csb(j);
+	int rc;
+
+	if (csb == NULL || !j->cm_open ||
+	    j->jops == NULL || j->jops->send_msg == NULL) {
+		j->send_failures++;
+		return -1;
+	}
+
+	/*
+	 * The send-msg# is assigned when the message is CREATED, before it is
+	 * handed down -- which is what makes it strictly monotonic per sender
+	 * (spec sec 4(j)) even when SCS holds the message in Credit Wait and
+	 * transmits it later with the same bytes. A message SCS refuses
+	 * outright therefore BURNS its number; that leaves a gap, never a
+	 * repeat or a decrement, and the refusal is counted below.
+	 */
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_envelope_stamp(csb, j->scratch, is_response);
+
+	rc = j->jops->send_msg(j->jops->ctx, j->cm_conid, j->scratch,
+			       VMS_CM_BODY_LEN);
+	if (rc != 0) {
+		j->send_failures++;
+		return -1;
+	}
+	return 0;
+}
+
+/* A codec refusal and a send refusal are different facts and are counted as
+ * such; a codec refusal ends the join honestly rather than silently. */
+static int join_build_failed(struct cnxman_join *j, vms_codec_status_t st)
+{
+	if (st == VMS_CODEC_OK)
+		return 0;
+	j->codec_failures++;
+	join_fail(j, CNXMAN_JOIN_FAIL_CODEC,
+		  "%CNXMAN, could not build a VMS$VAXcluster message");
+	return 1;
+}
+
+/* ==========================================================================
+ * This node's own node-parameter block
+ *
+ * Every byte from cnxman_join_cfg, i.e. from what the glue read out of real
+ * executive state. Nothing supplied is an explicit zero and a COUNTED
+ * omission -- never a captured "V7.3" and never the observed 0x10/0x01 pair
+ * whose meaning nobody knows (spec sec 4(j)).
+ * ========================================================================== */
+
+static void join_own_params(struct cnxman_join *j,
+			    struct vms_cm_node_params *out)
+{
+	join_bzero(out, (uint32_t)sizeof(*out));
+
+	if (j->cfg.params_valid) {
+		out->param_f1 = j->cfg.param_f1;
+		out->param_f2 = j->cfg.param_f2;
+	} else {
+		j->node_params_omitted++;
+	}
+	if (j->cfg.version_valid)
+		join_bcopy(out->version, j->cfg.version, VMS_CM_VERSION_LEN);
+	else
+		j->version_omitted++;
+}
+
+/* ==========================================================================
+ * The three originations of the joiner's own burst (spec sec 4(o))
+ * ========================================================================== */
+
+static void join_send_model(struct cnxman_join *j)
+{
+	vms_codec_status_t st;
+	const uint8_t *name = j->cfg.model_valid ? j->cfg.model : NULL;
+	uint8_t len = j->cfg.model_valid ? j->cfg.model_len : 0u;
+
+	if (!j->cfg.model_valid)
+		j->model_omitted++;
+
+	st = vms_cm_model_build(name, len, j->scratch,
+				(uint32_t)sizeof(j->scratch), NULL);
+	if (join_build_failed(j, st))
+		return;
+	if (join_emit_cm(j, 0) == 0)
+		j->model_sent++;
+}
+
+/*
+ * LOCKDIRWT, said out loud on every PARAMS this node sends.
+ *
+ * Book D-DLM-1 has OVMX advertise 0. vms_cm_params_build() writes only
+ * grounded placements, so a 0 and "not written" are the same bytes -- which
+ * is a coincidence and not the field being placed (plan row FC-P3.2 owns the
+ * offset). A node configured with a NONZERO LOCKDIRWT genuinely cannot
+ * advertise it, and this says so loudly: silently understating a directory
+ * weight would make the cluster route directory duty away from a node that
+ * asked for it.
+ */
+static void join_note_lockdirwt(struct cnxman_join *j)
+{
+	j->lockdirwt_unpinned++;
+	if (j->cl != NULL && j->cl->params.lockdirwt != 0u &&
+	    !j->lockdirwt_unrepresentable) {
+		j->lockdirwt_unrepresentable = 1u;
+		join_log(j, "%CNXMAN, LOCKDIRWT is nonzero but its wire offset "
+			    "is not pinned: it is NOT being advertised");
+	}
+}
+
+static void join_send_params(struct cnxman_join *j)
+{
+	struct vms_cm_node_params own;
+	vms_codec_status_t st;
+	uint16_t votes = 0u;
+
+	/* VOTES from the REAL SYSGEN parameters this node booted with, never a
+	 * default (spec sec 4(j) pinned body[22:24] byte-exact across four
+	 * configured values; 0 is a legitimate one). */
+	if (j->cl != NULL)
+		votes = j->cl->params.votes;
+
+	join_own_params(j, &own);
+	join_note_lockdirwt(j);
+
+	st = vms_cm_params_build(votes, &own, j->scratch,
+				 (uint32_t)sizeof(j->scratch), NULL);
+	if (join_build_failed(j, st))
+		return;
+	if (join_emit_cm(j, 0) == 0)
+		j->params_sent++;
+}
+
+static void join_send_config(struct cnxman_join *j)
+{
+	vms_codec_status_t st;
+
+	st = vms_cm_config_build(j->scratch, (uint32_t)sizeof(j->scratch),
+				 NULL);
+	if (join_build_failed(j, st))
+		return;
+	if (join_emit_cm(j, 0) == 0)
+		j->config_sent++;
+}
+
+/* ==========================================================================
+ * The allowlist gate -- safety 2
+ * ========================================================================== */
+
+static int join_recipe_allowed(uint8_t category, uint8_t opcode,
+			       uint16_t recipe)
+{
+	const struct vms_wire_allow_entry *e;
+
+	e = vms_wire_allow_find(vms_cm_allow_table(),
+				(uint8_t)VMS_SYSAP_VMS_VAXCLUSTER,
+				category, opcode);
+	return e != NULL && e->action == (uint8_t)VMS_WIRE_ACT_RESPOND &&
+	       e->recipe == recipe;
+}
+
+/* ==========================================================================
+ * One dispatched event
+ * ========================================================================== */
+
+struct join_ev {
+	/* frame events */
+	const uint8_t         *frame;
+	uint32_t               len;
+	struct vms_frame_info  fi;
+	struct vms_cm_envelope env;
+	vms_csid_t             from_csid;
+	int                    from_valid;
+
+	/* connection events */
+	vms_conid_t conid;
+	uint32_t    reason;
+
+	/* directory result */
+	const uint8_t  *name;
+	vms_scs_sysid_t from_sysid;
+	int             present;
+
+	/* the assignment the cluster made */
+	vms_csid_t csid;
+};
+
+typedef enum cnxman_join_rx (*join_handler_t)(struct cnxman_join *,
+					      const struct join_ev *);
+
+/* ==========================================================================
+ * Starting: pick the member, declare our directory descriptor, run our own
+ * SCS$DIRECTORY client round
+ * ========================================================================== */
+
+/*
+ * Choose the member to join through. Book pp. 7-37/7-38 (correction D7) ranks
+ * by VAXcluster protocol level, then ECO level, then "the CSB nearest the end
+ * of the CLUB's CSB queue". Neither level has an isolated wire offset, so only
+ * the LAST rule is evaluable from real state -- and it is evaluated here, on
+ * the CLUB's own table, with the two unusable rules COUNTED so the gap shows
+ * up in the diagnostics instead of on a real cluster.
+ */
+static int join_select_target(struct cnxman_join *j)
+{
+	struct vms_club *club;
+	struct vms_csb *local;
+	uint32_t i;
+
+	j->target_valid = 0u;
+	j->target_csb = -1;
+	if (j->cl == NULL)
+		return -1;
+
+	club = &j->cl->club;
+	local = cnxman_club_local(club);
+
+	for (i = club->n_csb; i > 0u; i--) {
+		struct vms_csb *c = cnxman_club_csb_at(club, i - 1u);
+
+		if (c == NULL || c == local || !c->sysid_valid)
+			continue;
+		j->target_sysid = c->sysid;
+		j->target_csb = (int32_t)(i - 1u);
+		j->target_valid = 1u;
+		j->target_level_unpinned++;
+		j->member_count_ungated++;
+		return 0;
+	}
+	return -1;
+}
+
+/* Declare what a directory HIT on our own VMS$VAXcluster name carries
+ * (integration note E24). With nothing grounded supplied we declare NOTHING
+ * and the directory service falls back to its honest name-echo. */
+static void join_declare_dir_data(struct cnxman_join *j)
+{
+	if (!j->cfg.dir_descriptor_valid) {
+		j->dir_descriptor_omitted++;
+		join_log(j, "%CNXMAN, VMS$VAXcluster directory descriptor is "
+			    "not grounded: answering with the registered name");
+		return;
+	}
+	if (j->jops != NULL && j->jops->set_dir_data != NULL)
+		(void)j->jops->set_dir_data(j->jops->ctx,
+					    cnxman_join_name_vaxcluster,
+					    j->cfg.dir_descriptor);
+}
+
+/*
+ * Steps 1 and 2 are ONE act here, and that is the module boundary rather than
+ * a shortcut: p. 2-51 makes the directory connection the POLLER's, opened when
+ * it has something to ask and closed when nothing is outstanding, and
+ * vms_scs_dir.h implements exactly that transient round. So this FSM asks, and
+ * the act of asking is what opens our own SCS$DIRECTORY connection -- which is
+ * spec sec 4(L)(a)+(b), "open its own SCS$DIRECTORY CLIENT connection ... look
+ * up each SYSAP on the member as a client before connecting to it".
+ */
+static uint32_t join_send_lookups(struct cnxman_join *j)
+{
+	uint32_t issued = 0u;
+
+	if (j->jops == NULL || j->jops->dir_inquire == NULL)
+		return 0u;
+	/* Only names this member has not already ANSWERED about. A name it
+	 * answered "NOT PRESENT HERE" is answered; re-asking it would be
+	 * refusing to believe a real answer. */
+	if ((j->lookups_answered & CNXMAN_JOIN_L_MSCP_DISK) == 0u &&
+	    j->jops->dir_inquire(j->jops->ctx, j->target_sysid,
+				 cnxman_join_name_mscp_disk) == 0)
+		issued++;
+	if ((j->lookups_answered & CNXMAN_JOIN_L_VAXCLUSTER) == 0u &&
+	    j->jops->dir_inquire(j->jops->ctx, j->target_sysid,
+				 cnxman_join_name_vaxcluster) == 0)
+		issued++;
+	j->lookups_sent += issued;
+	return issued;
+}
+
+static enum cnxman_join_rx join_h_start(struct cnxman_join *j,
+					const struct join_ev *e)
+{
+	(void)e;
+
+	if (join_select_target(j) != 0) {
+		join_fail(j, CNXMAN_JOIN_FAIL_NO_TARGET,
+			  "%CNXMAN, no connection manager to join through");
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	join_declare_dir_data(j);
+
+	if (join_send_lookups(j) == 0u) {
+		join_fail(j, CNXMAN_JOIN_FAIL_CONNECT,
+			  "%CNXMAN, could not open an SCS$DIRECTORY "
+			  "connection to the cluster");
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	j->joins_started++;
+	join_goto(j, CNXMAN_JOIN_DIR_ROUND);
+	join_arm_watch(j);
+	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+/* ==========================================================================
+ * Connecting, once -- and only once -- the name has really been resolved
+ * ========================================================================== */
+
+static int join_open(struct cnxman_join *j, const uint8_t *local_name,
+		     const uint8_t *remote_name, const uint8_t *conndata,
+		     uint16_t credits, vms_conid_t *out)
+{
+	if (j->jops == NULL || j->jops->connect == NULL)
+		return -1;
+	return j->jops->connect(j->jops->ctx, j->target_sysid, local_name,
+				remote_name, conndata, credits, out);
+}
+
+/*
+ * Step 4: the VMS$VAXcluster VC. In a formation there is exactly ONE such
+ * CONNECT-REQUEST and it is JOINER->MEMBER (spec sec 4(L)(1)). The 16-byte
+ * connect data is the Connection Managers' version handshake (p. 2-25) and is
+ * the caller's or nothing -- see the header's "REFUSES TO INVENT", C.
+ */
+static void join_open_cm(struct cnxman_join *j)
+{
+	const uint8_t *cd = j->cfg.conndata_valid ? j->cfg.conndata : NULL;
+
+	if (cd == NULL) {
+		j->conndata_omitted++;
+		join_log(j, "%CNXMAN, no SCA connect data configured: the "
+			    "VMS$VAXcluster version field goes out empty");
+	}
+	if (join_open(j, cnxman_join_name_vaxcluster,
+		      cnxman_join_name_vaxcluster, cd,
+		      CNXMAN_JOIN_CM_CREDITS, &j->cm_conid) != 0) {
+		join_fail(j, CNXMAN_JOIN_FAIL_CONNECT,
+			  "%CNXMAN, could not open the VMS$VAXcluster "
+			  "connection");
+		return;
+	}
+	join_goto(j, CNXMAN_JOIN_VC_CONNECT);
+	join_arm_watch(j);
+}
+
+/* Step 3: the disk-client connection, reachable only from a real HIT. */
+static void join_open_mscp(struct cnxman_join *j)
+{
+	if (join_open(j, cnxman_join_name_disk_cl_drvr,
+		      cnxman_join_name_mscp_disk, NULL,
+		      CNXMAN_JOIN_MSCP_CREDITS, &j->mscp_conid) != 0) {
+		join_fail(j, CNXMAN_JOIN_FAIL_CONNECT,
+			  "%CNXMAN, could not open an MSCP$DISK connection");
+		return;
+	}
+	join_goto(j, CNXMAN_JOIN_MSCP_CONNECT);
+	join_arm_watch(j);
+}
+
+/*
+ * Both inquiries are in. Two different answers mean two different things, and
+ * conflating them would be a bug in either direction:
+ *
+ *   - no VMS$VAXcluster on the member: it runs no connection manager, so
+ *     there is no cluster to join THROUGH it. Honest, named failure.
+ *   - no MSCP$DISK on the member: a real configuration (MSCP_LOAD 0 -- the
+ *     member serves no disks). There is then no disk-client discovery to do,
+ *     and "send op 0x02 when your discovery has finished" (spec sec 4(o)) is
+ *     satisfied immediately. Counted, not fatal.
+ */
+static void join_lookups_complete(struct cnxman_join *j)
+{
+	if ((j->lookups_hit & CNXMAN_JOIN_L_VAXCLUSTER) == 0u) {
+		join_fail(j, CNXMAN_JOIN_FAIL_ABSENT,
+			  "%CNXMAN, the member does not host VMS$VAXcluster: "
+			  "it is not running a connection manager");
+		return;
+	}
+	if ((j->lookups_hit & CNXMAN_JOIN_L_MSCP_DISK) != 0u) {
+		join_open_mscp(j);
+		return;
+	}
+	j->mscp_absent++;
+	j->mscp_walk_done = 1u;
+	join_open_cm(j);
+}
+
+static enum cnxman_join_rx join_h_dir_result(struct cnxman_join *j,
+					     const struct join_ev *e)
+{
+	uint8_t bit;
+
+	if (e->name == NULL) {
+		j->ignored_events++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	if (join_name_eq(e->name, cnxman_join_name_mscp_disk))
+		bit = CNXMAN_JOIN_L_MSCP_DISK;
+	else if (join_name_eq(e->name, cnxman_join_name_vaxcluster))
+		bit = CNXMAN_JOIN_L_VAXCLUSTER;
+	else {
+		/* An answer about a name this join never asked about. Counted,
+		 * never allowed to advance the drive. */
+		j->ignored_events++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+
+	if (e->present) {
+		j->lookups_hits++;
+		j->lookups_hit |= bit;
+	} else {
+		j->lookups_misses++;
+	}
+	j->lookups_answered |= bit;
+
+	if (j->lookups_answered == CNXMAN_JOIN_L_ALL)
+		join_lookups_complete(j);
+	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+static enum cnxman_join_rx join_h_mscp_opened(struct cnxman_join *j,
+					      const struct join_ev *e)
+{
+	if (e->conid != j->mscp_conid) {
+		j->ignored_events++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	j->mscp_open = 1u;
+	join_open_cm(j);
+	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+/* ==========================================================================
+ * The disk-client discovery walk (FC-P3.4 owns the protocol; this drives it)
+ *
+ * The MSCP command builder writes a whole 108-byte frame through a
+ * `struct vms_mscp_link` covering abs [0,72). This FSM sends BODY-LEVEL, so
+ * the link is ALL ZERO and only frame[72:108] is transmitted: SCS fills
+ * abs 56-71 from the real CDT and the port fills abs 0-55 from the real
+ * circuit (design sec 3.2.4 ruling E1). Not one byte of the zero prefix
+ * reaches the wire -- which is exactly why passing zeros there is honest and
+ * filling them in here would not be.
+ * ========================================================================== */
+
+static int join_mscp_emit(struct cnxman_join *j)
+{
+	int rc;
+
+	if (j->jops == NULL || j->jops->send_msg == NULL || !j->mscp_open) {
+		j->send_failures++;
+		return -1;
+	}
+	rc = j->jops->send_msg(j->jops->ctx, j->mscp_conid,
+			       j->mscp_frame + VMS_OFF_SYSAP_BODY,
+			       VMS_MSCP_CMD_BODY_LEN);
+	if (rc != 0) {
+		j->send_failures++;
+		return -1;
+	}
+	j->mscp_cmds_sent++;
+	return 0;
+}
+
+static void join_mscp_send_scc(struct cnxman_join *j)
+{
+	struct vms_mscp_link link;
+	vms_codec_status_t st;
+	uint64_t now = 0u;
+
+	join_bzero(&link, (uint32_t)sizeof(link));
+	if (j->jops != NULL && j->jops->time_now != NULL)
+		now = j->jops->time_now(j->jops->ctx);
+
+	/*
+	 * P.CNTF (controller flags) and P.HTMO (host timeout) are sec 6.16
+	 * parameter fields with no OVMX policy behind them yet, so this
+	 * discovery walk asks for no controller option and declares no host
+	 * timeout: explicit zeros, which is honestly what "we have neither to
+	 * declare" is. P.TIME is the executive's own clock, read through the
+	 * seam by the glue (a pure TU may not read one -- gate RULE4).
+	 */
+	st = vms_mscp_cl_fsm_build_scc(&j->mscp, &link, 0u, 0u, now,
+				       j->mscp_frame,
+				       (uint32_t)sizeof(j->mscp_frame), NULL);
+	if (st != VMS_CODEC_OK) {
+		j->codec_failures++;
+		return;
+	}
+	(void)join_mscp_emit(j);
+}
+
+static void join_mscp_send_gus(struct cnxman_join *j)
+{
+	struct vms_mscp_link link;
+	vms_codec_status_t st;
+
+	join_bzero(&link, (uint32_t)sizeof(link));
+	st = vms_mscp_cl_fsm_build_gus(&j->mscp, &link, j->mscp_frame,
+				       (uint32_t)sizeof(j->mscp_frame), NULL);
+	if (st != VMS_CODEC_OK) {
+		j->codec_failures++;
+		return;
+	}
+	(void)join_mscp_emit(j);
+}
+
+/*
+ * The walk is over. Spec sec 4(o) step 6: "then sends op 0x02". The rule is
+ * NOT a delay -- "the joiner sends op 0x02 when its own disk-client discovery
+ * is finished" -- so op-0x02 is emitted from HERE, on the peer's own
+ * Unit-Offline terminator, and no timer is anywhere in this path.
+ *
+ * The transient directory connection is torn down by its own module when
+ * nothing is outstanding (p. 2-51; vms_scs_dir.h's CLOSING state), which in
+ * the clean 2-node reference happens as the round completes. This FSM does not
+ * reach into it to force a teardown at a different instant than the module's
+ * own rule -- an ordering difference between the two reference specimens that
+ * belongs to FC-P2.3, not here.
+ */
+static void join_walk_complete(struct cnxman_join *j)
+{
+	j->mscp_walk_done = 1u;
+	join_goto(j, CNXMAN_JOIN_ADMIT);
+	join_send_config(j);
+	join_arm_watch(j);
+}
+
+static void join_record_unit(struct cnxman_join *j,
+			     const struct vms_mscp_cl_unit *u)
+{
+	if (j->units_found >= CNXMAN_JOIN_MAX_UNITS) {
+		j->units_dropped++;
+		return;
+	}
+	j->units[j->units_found] = *u;
+	j->units_found++;
+}
+
+/* One END message. FC-P3.4 refuses an out-of-sequence or mis-correlated
+ * answer for us, so a frame that is neither of the two this walk is waiting
+ * for cannot advance the cursor -- it is counted and dropped. */
+static enum cnxman_join_rx join_h_mscp_end(struct cnxman_join *j,
+					   const struct join_ev *e)
+{
+	struct vms_mscp_cl_unit unit;
+	int terminator = 0;
+	vms_codec_status_t st;
+
+	if (e->conid != j->mscp_conid || e->frame == NULL) {
+		j->ignored_events++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	j->mscp_ends++;
+
+	st = vms_mscp_cl_fsm_on_scc_end(&j->mscp, e->frame, e->len);
+	if (st == VMS_CODEC_OK) {
+		if (j->mscp.state == VMS_MSCP_CL_ST_SCC1_DONE)
+			join_mscp_send_scc(j);   /* SET CONTROLLER, twice */
+		else
+			join_mscp_send_gus(j);   /* then the NEXT-UNIT walk */
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+
+	st = vms_mscp_cl_fsm_on_gus_end(&j->mscp, e->frame, e->len, &unit,
+					&terminator);
+	if (st != VMS_CODEC_OK) {
+		j->ignored_events++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	if (terminator) {
+		join_walk_complete(j);
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	join_record_unit(j, &unit);
+	join_mscp_send_gus(j);
+	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+/* ==========================================================================
+ * Step 5: the burst, the moment the VC is up (spec sec 4(L)(e), sec 4(o))
+ * ========================================================================== */
+
+static enum cnxman_join_rx join_h_cm_opened(struct cnxman_join *j,
+					    const struct join_ev *e)
+{
+	if (e->conid != j->cm_conid) {
+		j->ignored_events++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	j->cm_open = 1u;
+	join_goto(j, CNXMAN_JOIN_ADVERTISE);
+
+	/* sec 4(o) rows 1-2: model, then parameters, on OUR VC. A build that
+	 * failed has already put this FSM in FAILED; carrying on from there
+	 * would put a second message on a join that has stopped. */
+	join_send_model(j);
+	if (j->state != (uint8_t)CNXMAN_JOIN_ADVERTISE)
+		return CNXMAN_JOIN_RX_CONSUMED;
+	join_send_params(j);
+	if (j->state != (uint8_t)CNXMAN_JOIN_ADVERTISE)
+		return CNXMAN_JOIN_RX_CONSUMED;
+
+	/* ... and only now the disk walk, which is what the real joiner does
+	 * in the measured gap before its op-0x02 (sec 4(o)'s own UPDATE). With
+	 * no MSCP$DISK on the member there is nothing to walk and admission
+	 * starts at once. */
+	if (j->mscp_walk_done)
+		join_walk_complete(j);
+	else
+		join_mscp_send_scc(j);
+	join_arm_watch(j);
+	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+/* ==========================================================================
+ * Handlers: the member-driven tail (spec sec 4(o) rows 3, 5-10)
+ * ========================================================================== */
+
+/* The peer's own 0x14/0x01/0x02. A real record arriving is the ONLY way a
+ * peer's VOTES enters its CSB. */
+static enum cnxman_join_rx join_h_peer_advert(struct cnxman_join *j,
+					      const struct join_ev *e)
+{
+	struct vms_csb *csb = join_target_csb(j);
+	struct vms_cm_params p;
+
+	j->peer_adverts++;
+	if (e->env.opcode != VMS_CM_OP_PARAMS || csb == NULL)
+		return CNXMAN_JOIN_RX_CONSUMED;
+
+	if (vms_cm_params_parse(e->frame, e->len, &e->fi, &p) != VMS_CODEC_OK)
+		return CNXMAN_JOIN_RX_CONSUMED;
+
+	/*
+	 * VOTES is the one parameter this message GROUNDS (spec sec 4(j),
+	 * pinned by controlled reconfiguration). EXPECTED_VOTES and QDSKVOTES
+	 * have no isolated offset, so they are passed through as the CSB
+	 * already holds them rather than being overwritten with a zero this
+	 * node could not stand behind.
+	 */
+	cnxman_csb_set_params(csb, p.votes, csb->expected_votes,
+			      csb->qdskvotes);
+	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+/* op-0x03 COMMIT and each op-0x05 rebuild transaction: the grounded 0x81 echo,
+ * with body[17] carrying THIS node's own current class (spec sec 4(r)). */
+static enum cnxman_join_rx join_h_echo(struct cnxman_join *j,
+				       const struct join_ev *e)
+{
+	vms_codec_status_t st;
+
+	if (!join_recipe_allowed(e->env.category, e->env.opcode,
+				 (uint16_t)VMS_CM_RECIPE_ECHO)) {
+		j->ignored_events++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	st = vms_cm_echo_response_build(e->frame, e->len, j->tr_class,
+					j->scratch,
+					(uint32_t)sizeof(j->scratch), NULL);
+	if (join_build_failed(j, st))
+		return CNXMAN_JOIN_RX_CONSUMED;
+	if (join_emit_cm(j, 1) == 0)
+		j->echoes_sent++;
+	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+/*
+ * The op-0x06 MEMBERSHIP burst -- the anti-LARP crux of this whole item.
+ *
+ * The allowlist grounds it as CONSUME + "answered only by the opportunistic
+ * cat-0x04 ack, never 0x81" (spec sec 4(p)/(u); sec 4(o) row 10 shows the
+ * joiner's cat-0x04 answers), so that is what goes back.
+ *
+ * What does NOT happen here is the point: this is where a joiner is supposed
+ * to learn the CSID the cluster assigned it, and the record's layout has no
+ * isolated offset in any capture (integration note E8). So this handler
+ * INSTRUMENTS -- it records the body offset at which this node's own
+ * SCSSYSTEMID appears, which is precisely the datum the lab capture needs --
+ * and reads NOTHING from a displacement off it. The CLUB's local CSID stays
+ * unlearned, this node stays NEW, and it issues no DLM traffic. That is the
+ * honest outcome; a plausible-looking CSID is the fabrication that bugchecked
+ * a real VAX.
+ */
+static void join_instrument_membership(struct cnxman_join *j,
+				       const struct join_ev *e)
+{
+	uint32_t off = 0u;
+	uint32_t width = 0u;
+
+	if (j->cl == NULL || j->sysid_seen)
+		return;
+	if (vms_cm_membership_find_sysid(e->frame, e->len, &e->fi,
+					 (uint64_t)j->cl->params.scssystemid,
+					 &off, &width) != VMS_CODEC_OK)
+		return;
+	j->sysid_seen = 1u;
+	j->sysid_seen_at = off;
+	j->sysid_seen_width = (uint8_t)width;
+}
+
+static enum cnxman_join_rx join_h_membership(struct cnxman_join *j,
+					     const struct join_ev *e)
+{
+	vms_codec_status_t st;
+
+	j->membership_records++;
+	join_instrument_membership(j, e);
+
+	j->csid_unpinned++;
+	if (j->csid_unpinned == 1u)
+		join_log(j, "%CNXMAN, membership record layout is not pinned: "
+			    "this node's CSID was NOT learned");
+
+	st = vms_cm_ack_build(j->scratch, (uint32_t)sizeof(j->scratch), NULL);
+	if (join_build_failed(j, st))
+		return CNXMAN_JOIN_RX_CONSUMED;
+	if (join_emit_cm(j, 1) == 0)
+		j->acks_sent++;
+	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+/* The cat-0x06 close: answer with THIS node's own parameter block. Echoing the
+ * request's payload here bugchecked a real VAX with INCONSTATE (spec sec 4(p)),
+ * which is why vms_cm_close_build takes our params and not the request's. */
+static enum cnxman_join_rx join_h_close(struct cnxman_join *j,
+					const struct join_ev *e)
+{
+	struct vms_cm_node_params own;
+	vms_codec_status_t st;
+
+	if (!join_recipe_allowed(e->env.category, e->env.opcode,
+				 (uint16_t)VMS_CM_RECIPE_CLOSE)) {
+		j->ignored_events++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	join_own_params(j, &own);
+	st = vms_cm_close_build(e->frame, e->len, &own, j->scratch,
+				(uint32_t)sizeof(j->scratch), NULL);
+	if (join_build_failed(j, st))
+		return CNXMAN_JOIN_RX_CONSUMED;
+	if (join_emit_cm(j, 1) == 0)
+		j->closes_answered++;
+	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+/* ==========================================================================
+ * Handlers: the hand-off to the barrier (FC-P3.5)
+ * ========================================================================== */
+
+static enum cnxman_join_rx join_forward(struct cnxman_join *j,
+					const struct join_ev *e)
+{
+	if (j->barrier == NULL)
+		return CNXMAN_JOIN_RX_HANDOFF;
+
+	j->handoffs++;
+	(void)cnxman_barrier_rx_frame(j->barrier, e->frame, e->len,
+				      e->from_csid, e->from_valid);
+	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+/*
+ * The op-0x0a GO: Phase 2's point of no return (book p. 7-42) and the moment
+ * the barrier owns the wire. This FSM originates nothing more of the
+ * transition -- the twelve op-0x0b steps, the rebuild echoes and the release
+ * handling are all FC-P3.5's, and a join that kept driving here would be two
+ * emitters on one connection.
+ */
+static enum cnxman_join_rx join_h_go(struct cnxman_join *j,
+				     const struct join_ev *e)
+{
+	enum cnxman_join_rx rx = join_forward(j, e);
+
+	if (j->state != (uint8_t)CNXMAN_JOIN_BARRIER &&
+	    j->state != (uint8_t)CNXMAN_JOIN_MEMBER) {
+		join_goto(j, CNXMAN_JOIN_BARRIER);
+		join_log(j, "%CNXMAN, VAXcluster state transition in progress");
+	}
+	return rx;
+}
+
+/* The transition OPEN also carries our own class, which the 0x81 echo of a
+ * later request has to report (spec sec 4(r)). Recorded from the real frame,
+ * and only when the codec really read it. */
+static enum cnxman_join_rx join_h_tr_open(struct cnxman_join *j,
+					  const struct join_ev *e)
+{
+	struct vms_cm_open o;
+
+	if (vms_cm_open_parse(e->frame, e->len, &e->fi, &o) == VMS_CODEC_OK)
+		j->tr_class = o.cls;
+	return join_forward(j, e);
+}
+
+/* ==========================================================================
+ * Handlers: loss, the assignment, and the watchdog
+ * ========================================================================== */
+
+static enum cnxman_join_rx join_h_closed(struct cnxman_join *j,
+					 const struct join_ev *e)
+{
+	/* Con.ID 0 is never minted (vms_scs_fsm.h SS4: the WIRE uses 0 for
+	 * "not bound yet"), so it is a safe "this connection was never
+	 * opened" sentinel and a close that names one of ours is recognised
+	 * whether or not it ever reached OPEN. */
+	if (j->mscp_conid != 0u && e->conid == j->mscp_conid) {
+		j->mscp_open = 0u;
+		/* Once the walk is done the disk-client connection has served
+		 * its purpose; losing it is not losing the join. */
+		if (j->mscp_walk_done)
+			return CNXMAN_JOIN_RX_CONSUMED;
+	} else if (j->cm_conid != 0u && e->conid == j->cm_conid) {
+		j->cm_open = 0u;
+	} else {
+		j->ignored_events++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	join_fail(j, CNXMAN_JOIN_FAIL_PATHLOST,
+		  "%CNXMAN, lost a connection needed to join the cluster");
+	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+static enum cnxman_join_rx join_h_csid_learned(struct cnxman_join *j,
+					       const struct join_ev *e)
+{
+	if (j->cl == NULL)
+		return CNXMAN_JOIN_RX_CONSUMED;
+	cnxman_club_learn_local_csid(&j->cl->club, e->csid);
+	join_goto(j, CNXMAN_JOIN_MEMBER);
+	join_log(j, "%CNXMAN, this node is now a VAXcluster member");
+	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+/* p. 2-51's own recovery: the poller REPEATS. Nothing expires. */
+static enum cnxman_join_rx join_h_watch_lookup(struct cnxman_join *j,
+					       const struct join_ev *e)
+{
+	(void)e;
+	j->slow_steps++;
+	if (j->slow_steps == 1u)
+		join_log(j, "%CNXMAN, waiting for a directory answer from the "
+			    "cluster");
+	if (join_send_lookups(j) != 0u)
+		j->lookups_reissued++;
+	join_arm_watch(j);
+	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+static enum cnxman_join_rx join_h_watch(struct cnxman_join *j,
+					const struct join_ev *e)
+{
+	(void)e;
+	j->slow_steps++;
+	if (j->slow_steps == 1u)
+		join_log(j, "%CNXMAN, waiting to form or join an OpenVMS "
+			    "Cluster");
+	join_arm_watch(j);
+	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+/* ==========================================================================
+ * The table. [state][event]; NULL = the evidence does not connect that event
+ * to that state, so it is ignored and COUNTED rather than guessed.
+ * ========================================================================== */
+
+static const join_handler_t
+join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
+	/* [IDLE] only CLUSTER_START starts a join. */
+	[CNXMAN_JOIN_IDLE] = {
+		[CNXMAN_EV_START]        = join_h_start,
+	},
+
+	/* [DIR ROUND] spec sec 4(L)(a)+(b): our OWN SCS$DIRECTORY client
+	 * round, resolving every name before connecting to it. */
+	[CNXMAN_JOIN_DIR_ROUND] = {
+		[CNXMAN_EV_DIR_RESULT]   = join_h_dir_result,
+		[CNXMAN_EV_TIMER_JOIN]   = join_h_watch_lookup,
+	},
+
+	/* [MSCP CONNECT] spec sec 4(L)(c). */
+	[CNXMAN_JOIN_MSCP_CONNECT] = {
+		[CNXMAN_EV_CDT_OPEN]     = join_h_mscp_opened,
+		[CNXMAN_EV_CDT_CLOSED]   = join_h_closed,
+		[CNXMAN_EV_TIMER_JOIN]   = join_h_watch,
+	},
+
+	/* [VC CONNECT] spec sec 4(L)(d). */
+	[CNXMAN_JOIN_VC_CONNECT] = {
+		[CNXMAN_EV_CDT_OPEN]     = join_h_cm_opened,
+		[CNXMAN_EV_CDT_CLOSED]   = join_h_closed,
+		[CNXMAN_EV_TIMER_JOIN]   = join_h_watch,
+	},
+
+	/*
+	 * [ADVERTISE] the burst is out and the disk walk is running. The peer
+	 * reciprocates its own 0x14/0x01 here (sec 4(o) row 3, within ~1 ms),
+	 * and a coordinator that opens a transition this early is answered by
+	 * the barrier exactly as it would be later.
+	 */
+	[CNXMAN_JOIN_ADVERTISE] = {
+		[CNXMAN_EV_MSCP_END]     = join_h_mscp_end,
+		[CNXMAN_EV_RX_CONFIG]    = join_h_peer_advert,
+		[CNXMAN_EV_RX_COMMIT]    = join_h_echo,
+		[CNXMAN_EV_RX_MEMBERSHIP] = join_h_membership,
+		[CNXMAN_EV_RX_CLOSE]     = join_h_close,
+		[CNXMAN_EV_RX_TR_OPEN]   = join_h_tr_open,
+		[CNXMAN_EV_RX_TR_GO]     = join_h_go,
+		[CNXMAN_EV_RX_REBUILD]   = join_forward,
+		[CNXMAN_EV_CDT_CLOSED]   = join_h_closed,
+		[CNXMAN_EV_TIMER_JOIN]   = join_h_watch,
+	},
+
+	/* [ADMIT] op-0x02 is out; the member drives (sec 4(o) rows 5-10). */
+	[CNXMAN_JOIN_ADMIT] = {
+		[CNXMAN_EV_RX_CONFIG]    = join_h_peer_advert,
+		[CNXMAN_EV_RX_COMMIT]    = join_h_echo,
+		[CNXMAN_EV_RX_MEMBERSHIP] = join_h_membership,
+		[CNXMAN_EV_RX_CLOSE]     = join_h_close,
+		[CNXMAN_EV_RX_TR_OPEN]   = join_h_tr_open,
+		[CNXMAN_EV_RX_TR_GO]     = join_h_go,
+		[CNXMAN_EV_RX_REBUILD]   = join_forward,
+		[CNXMAN_EV_CSID_LEARNED] = join_h_csid_learned,
+		[CNXMAN_EV_CDT_CLOSED]   = join_h_closed,
+		[CNXMAN_EV_TIMER_JOIN]   = join_h_watch,
+	},
+
+	/*
+	 * [BARRIER] FC-P3.5 owns the transition family from here. This FSM
+	 * still answers what the barrier does not: the cat-0x06 close (a
+	 * recurring member poll, sec 4(p)/(q)) and further membership bursts.
+	 */
+	[CNXMAN_JOIN_BARRIER] = {
+		[CNXMAN_EV_RX_TR_OPEN]   = join_h_tr_open,
+		[CNXMAN_EV_RX_TR_GO]     = join_h_go,
+		[CNXMAN_EV_RX_BARRIER]   = join_forward,
+		[CNXMAN_EV_RX_BARRIER_ACK] = join_forward,
+		[CNXMAN_EV_RX_REBUILD]   = join_forward,
+		[CNXMAN_EV_RX_CONFIG]    = join_h_peer_advert,
+		[CNXMAN_EV_RX_COMMIT]    = join_h_echo,
+		[CNXMAN_EV_RX_MEMBERSHIP] = join_h_membership,
+		[CNXMAN_EV_RX_CLOSE]     = join_h_close,
+		[CNXMAN_EV_CSID_LEARNED] = join_h_csid_learned,
+		[CNXMAN_EV_CDT_CLOSED]   = join_h_closed,
+	},
+
+	/* [MEMBER] steady state: the same server obligations, forever. */
+	[CNXMAN_JOIN_MEMBER] = {
+		[CNXMAN_EV_RX_TR_OPEN]   = join_h_tr_open,
+		[CNXMAN_EV_RX_TR_GO]     = join_h_go,
+		[CNXMAN_EV_RX_BARRIER]   = join_forward,
+		[CNXMAN_EV_RX_BARRIER_ACK] = join_forward,
+		[CNXMAN_EV_RX_REBUILD]   = join_forward,
+		[CNXMAN_EV_RX_CONFIG]    = join_h_peer_advert,
+		[CNXMAN_EV_RX_COMMIT]    = join_h_echo,
+		[CNXMAN_EV_RX_MEMBERSHIP] = join_h_membership,
+		[CNXMAN_EV_RX_CLOSE]     = join_h_close,
+		[CNXMAN_EV_CDT_CLOSED]   = join_h_closed,
+	},
+
+	/* [FAILED] terminal and honest: nothing here revives a join. A new one
+	 * is a new CLUSTER_START, which re-inits this FSM. */
+	[CNXMAN_JOIN_FAILED] = { 0 },
+};
+
+/* ==========================================================================
+ * Dispatch
+ * ========================================================================== */
+
+static enum cnxman_join_rx join_dispatch(struct cnxman_join *j,
+					 enum cnxman_event ev,
+					 const struct join_ev *e)
+{
+	join_handler_t h;
+
+	if ((unsigned)j->state >= (unsigned)CNXMAN_JOIN_STATE__COUNT)
+		return CNXMAN_JOIN_RX_BAD;
+	if ((unsigned)ev >= (unsigned)CNXMAN_EV__COUNT)
+		return CNXMAN_JOIN_RX_BAD;
+
+	h = join_table[j->state][ev];
+	if (h == NULL) {
+		j->ignored_events++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	return h(j, e);
+}
+
+/* ==========================================================================
+ * Classification: which shared event is this frame?
+ *
+ * Indexed by MEANING, so an opcode re-assignment after a capture is an edit
+ * here and nowhere else.
+ * ========================================================================== */
+
+/* The transition family the barrier owns (FC-P3.5) -- including the
+ * coordinator's 0x81/0x0b step acknowledgement, which is a RESPONSE and so
+ * cannot be recognised by opcode alone. */
+static int join_is_barrier_frame(const struct vms_cm_envelope *env)
+{
+	if (vms_wire_is_response(env->category))
+		return env->opcode == VMS_CM_OP_BARRIER;
+	if (env->category == VMS_CM_CAT_DLM)
+		return env->opcode == VMS_CM_OP_DLM_REBUILD;
+	if (env->category != VMS_CM_CAT_CONFIG)
+		return 0;
+	switch (env->opcode) {
+	case VMS_CM_OP_XITION_REM:
+	case VMS_CM_OP_XITION_ADD:
+	case VMS_CM_OP_XITION_GO:
+	case VMS_CM_OP_BARRIER:
+	case VMS_CM_OP_BARRIER_REL:
+	case VMS_CM_OP_DEPART_XITION:
+	case VMS_CM_OP_0F:
+	case VMS_CM_OP_ABORT:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+static enum cnxman_event join_event_of_barrier(const struct vms_cm_envelope *env)
+{
+	if (vms_wire_is_response(env->category))
+		return CNXMAN_EV_RX_BARRIER_ACK;
+	if (env->category == VMS_CM_CAT_DLM)
+		return CNXMAN_EV_RX_REBUILD;
+	switch (env->opcode) {
+	case VMS_CM_OP_XITION_GO:
+		return CNXMAN_EV_RX_TR_GO;
+	case VMS_CM_OP_BARRIER:
+	case VMS_CM_OP_BARRIER_REL:
+		return CNXMAN_EV_RX_BARRIER;
+	default:
+		/* the opens (0x08/0x09/0x0d), op-0x0f and the abort all reach
+		 * the barrier through the same forwarding cell */
+		return CNXMAN_EV_RX_TR_OPEN;
+	}
+}
+
+static enum cnxman_event join_event_of(const struct vms_cm_envelope *env)
+{
+	if (join_is_barrier_frame(env))
+		return join_event_of_barrier(env);
+
+	if (env->category == VMS_CM_CAT_CONFIG) {
+		switch (env->opcode) {
+		case VMS_CM_OP_MODEL:
+		case VMS_CM_OP_PARAMS:
+		case VMS_CM_OP_CONFIG:
+			return CNXMAN_EV_RX_CONFIG;
+		case VMS_CM_OP_COMMIT:
+		case VMS_CM_OP_LOCKRB:
+			return CNXMAN_EV_RX_COMMIT;
+		case VMS_CM_OP_MEMBERSHIP:
+			return CNXMAN_EV_RX_MEMBERSHIP;
+		default:
+			return CNXMAN_EV__COUNT;
+		}
+	}
+	/*
+	 * cat 0x06 op 0x00 is the transaction CLOSE / recurring member poll
+	 * (spec sec 4(p)/(q)) -- the join's own steady-state obligation. The
+	 * barrier maps CNXMAN_EV_RX_CLOSE onto the cat-0x01 op-0x04 ABORT
+	 * instead; the two tables classify their own frames and neither ever
+	 * sees the other's, because join_is_barrier_frame() routes the abort
+	 * away above.
+	 */
+	if (env->category == VMS_CM_CAT_MEMBERSHIP &&
+	    env->opcode == VMS_CM_OP_CLOSE)
+		return CNXMAN_EV_RX_CLOSE;
+
+	return CNXMAN_EV__COUNT;
+}
+
+/* ==========================================================================
+ * Lifecycle
+ * ========================================================================== */
+
+void cnxman_join_init(struct cnxman_join *j, struct vms_cluster *cl,
+		      const struct cnxman_ops *ops,
+		      const struct cnxman_join_ops *jops)
+{
+	if (j == NULL)
+		return;
+	join_bzero(j, (uint32_t)sizeof(*j));
+	j->cl = cl;
+	j->ops = ops;
+	j->jops = jops;
+	j->target_csb = -1;
+	j->state = (uint8_t)CNXMAN_JOIN_IDLE;
+	vms_mscp_cl_fsm_init(&j->mscp);
+}
+
+void cnxman_join_set_cfg(struct cnxman_join *j,
+			 const struct cnxman_join_cfg *cfg)
+{
+	if (j == NULL)
+		return;
+	if (cfg == NULL) {
+		join_bzero(&j->cfg, (uint32_t)sizeof(j->cfg));
+		return;
+	}
+	j->cfg = *cfg;
+	if (j->cfg.model_len > VMS_CM_MODEL_MAX) {
+		/* Refuse the whole declaration rather than truncate a name:
+		 * half a model string is a different model. */
+		j->cfg.model_len = 0u;
+		j->cfg.model_valid = 0u;
+	}
+}
+
+void cnxman_join_set_barrier(struct cnxman_join *j, struct cnxman_barrier *b)
+{
+	if (j != NULL)
+		j->barrier = b;
+}
+
+/* ==========================================================================
+ * Events
+ * ========================================================================== */
+
+int cnxman_join_start(struct cnxman_join *j)
+{
+	struct join_ev e;
+
+	if (j == NULL || j->cl == NULL || j->jops == NULL)
+		return -1;
+	join_bzero(&e, (uint32_t)sizeof(e));
+	(void)join_dispatch(j, CNXMAN_EV_START, &e);
+	return (j->state == (uint8_t)CNXMAN_JOIN_FAILED) ? -1 : 0;
+}
+
+void cnxman_join_opened(struct cnxman_join *j, vms_conid_t conid)
+{
+	struct join_ev e;
+
+	if (j == NULL)
+		return;
+	join_bzero(&e, (uint32_t)sizeof(e));
+	e.conid = conid;
+	(void)join_dispatch(j, CNXMAN_EV_CDT_OPEN, &e);
+}
+
+void cnxman_join_closed(struct cnxman_join *j, vms_conid_t conid,
+			uint32_t reason)
+{
+	struct join_ev e;
+
+	if (j == NULL)
+		return;
+	join_bzero(&e, (uint32_t)sizeof(e));
+	e.conid = conid;
+	e.reason = reason;
+	(void)join_dispatch(j, CNXMAN_EV_CDT_CLOSED, &e);
+}
+
+void cnxman_join_rejected(struct cnxman_join *j, vms_conid_t conid,
+			  uint32_t reason)
+{
+	if (j == NULL)
+		return;
+	(void)reason;
+	/* Only a rejection of a connection THIS join made is this join's
+	 * business; anything else belongs to whoever opened it. */
+	if (conid != j->cm_conid && conid != j->mscp_conid) {
+		j->ignored_events++;
+		return;
+	}
+	/*
+	 * Book p. 2-25 / correction D12: the Connection Managers identify their
+	 * version to each other in the 16-byte connect data and REJECT a
+	 * version they do not approve of. A rejection is therefore a verdict on
+	 * this node's identity, not a transient error, and retrying it is a
+	 * loop rather than a recovery.
+	 */
+	join_fail(j, CNXMAN_JOIN_FAIL_REJECTED,
+		  "%CNXMAN, the cluster rejected this node's connection "
+		  "(version identity refused)");
+}
+
+void cnxman_join_dir_result(struct cnxman_join *j, vms_scs_sysid_t from,
+			    const uint8_t *name, int present)
+{
+	struct join_ev e;
+
+	if (j == NULL || name == NULL)
+		return;
+	join_bzero(&e, (uint32_t)sizeof(e));
+	e.from_sysid = from;
+	e.name = name;
+	e.present = present;
+	(void)join_dispatch(j, CNXMAN_EV_DIR_RESULT, &e);
+}
+
+void cnxman_join_rx_mscp(struct cnxman_join *j, vms_conid_t conid,
+			 const uint8_t *frame, uint32_t len)
+{
+	struct join_ev e;
+
+	if (j == NULL || frame == NULL)
+		return;
+	join_bzero(&e, (uint32_t)sizeof(e));
+	e.conid = conid;
+	e.frame = frame;
+	e.len = len;
+	(void)join_dispatch(j, CNXMAN_EV_MSCP_END, &e);
+}
+
+void cnxman_join_csid_learned(struct cnxman_join *j, vms_csid_t csid)
+{
+	struct join_ev e;
+
+	if (j == NULL)
+		return;
+	join_bzero(&e, (uint32_t)sizeof(e));
+	e.csid = csid;
+	(void)join_dispatch(j, CNXMAN_EV_CSID_LEARNED, &e);
+}
+
+void cnxman_join_timer(struct cnxman_join *j)
+{
+	struct join_ev e;
+
+	if (j == NULL)
+		return;
+	join_bzero(&e, (uint32_t)sizeof(e));
+	(void)join_dispatch(j, CNXMAN_EV_TIMER_JOIN, &e);
+}
+
+enum cnxman_join_rx cnxman_join_rx_frame(struct cnxman_join *j,
+					 const uint8_t *frame, uint32_t len,
+					 vms_csid_t from_csid, int from_valid)
+{
+	struct join_ev e;
+	enum cnxman_event ev;
+	struct vms_csb *csb;
+
+	if (j == NULL || j->cl == NULL || frame == NULL)
+		return CNXMAN_JOIN_RX_BAD;
+
+	join_bzero(&e, (uint32_t)sizeof(e));
+	if (vms_frame_classify(frame, len, &e.fi) != VMS_CODEC_OK)
+		return CNXMAN_JOIN_RX_BAD;
+	if (vms_cm_envelope_parse(frame, len, &e.fi, &e.env) != VMS_CODEC_OK)
+		return CNXMAN_JOIN_RX_BAD;
+
+	e.frame = frame;
+	e.len = len;
+	e.from_csid = from_csid;
+	e.from_valid = from_valid;
+
+	/* Every body that really arrived from this peer advances the ack side
+	 * of the dialogue -- spec sec 4(j): ack-msg# "acknowledges the peer's
+	 * highest send-msg# seen". Recorded here, once, from the parsed
+	 * envelope, so no emitter ever has to guess it. */
+	csb = join_target_csb(j);
+	if (csb != NULL)
+		cnxman_csb_dialogue_heard(csb, e.env.send_msg);
+
+	/* The opportunistic cat-0x04 ack the member sends is a fact, not a
+	 * transition: counted, never answered (spec sec 4(u)). */
+	if (e.env.category == VMS_CM_CAT_ACK) {
+		j->peer_acks++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+
+	ev = join_event_of(&e.env);
+	if (ev == CNXMAN_EV__COUNT)
+		return CNXMAN_JOIN_RX_NOT_MINE;
+	return join_dispatch(j, ev, &e);
+}
+
+int cnxman_join_connect_req(struct cnxman_join *j, vms_scs_sysid_t peer,
+			    vms_conid_t peer_conid,
+			    const uint8_t *conndata, uint32_t conndata_len)
+{
+	struct vms_csb *csb;
+
+	(void)peer_conid;
+	(void)conndata;
+	(void)conndata_len;
+
+	if (j == NULL || j->cl == NULL)
+		return -1;
+	/*
+	 * THE RULE OF TOTAL CONNECTIVITY (spec sec 4(y), book p. 7-11): a
+	 * joiner is admitted only if EVERY member has a connection to it, so a
+	 * member opening its own VMS$VAXcluster connection to us is taken
+	 * whatever this join is doing. Refusing one is refusing the join.
+	 *
+	 * We take it for a system we have a CSB for -- one the port has really
+	 * formed a circuit with. A connect from a system with no block is
+	 * refused rather than admitted into a table this node cannot describe
+	 * (INV-6: there is no "system zero").
+	 *
+	 * The peer's 16-byte connect data is its version identity (p. 2-25).
+	 * It is COUNTED and NOT acted on: every node this project has observed
+	 * runs one VMS version, and a version policy built on one data point
+	 * would be invented, not implemented (spec sec 4(N)).
+	 */
+	csb = cnxman_club_find_sysid(&j->cl->club, peer);
+	if (csb == NULL) {
+		j->inbound_refused++;
+		join_log(j, "%CNXMAN, refused a VMS$VAXcluster connection from "
+			    "a system with no cluster system block");
+		return -1;
+	}
+	j->inbound_accepted++;
+	return 0;
+}
+
+/* ==========================================================================
+ * Readback
+ * ========================================================================== */
+
+int cnxman_join_handed_off(const struct cnxman_join *j)
+{
+	if (j == NULL)
+		return 0;
+	return j->state == (uint8_t)CNXMAN_JOIN_BARRIER ||
+	       j->state == (uint8_t)CNXMAN_JOIN_MEMBER;
+}
+
+uint32_t cnxman_join_units(const struct cnxman_join *j,
+			   struct vms_mscp_cl_unit *out, uint32_t cap)
+{
+	uint32_t i;
+
+	if (j == NULL)
+		return 0u;
+	if (out != NULL) {
+		for (i = 0; i < j->units_found && i < cap; i++)
+			out[i] = j->units[i];
+	}
+	return j->units_found;
+}

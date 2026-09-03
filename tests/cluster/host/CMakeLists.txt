@@ -103,6 +103,10 @@ add_library(cluster_host_cnxman STATIC
     ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_phase2.c    # FC-P3.5 + FC-P3.12
     ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_barrier_fsm.c
     ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_coord_fsm.c # FC-P3.12
+    # FC-P3.3: the join. It drives FC-P3.4's MSCP discovery FSM, which lives
+    # in cluster_host_codec (it is a pure codec-level TU), and hands off to
+    # FC-P3.5's barrier, which is already in this library.
+    ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_join_fsm.c  # FC-P3.3
 )
 target_include_directories(cluster_host_cnxman PUBLIC ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_cnxman PUBLIC OVMX_CLUSTER_HOST)
@@ -132,6 +136,9 @@ cluster_host_cnxman_test(test_cnxman_recnx   test_cnxman_recnx.c)
 # source here, never a kernel-core object.
 cluster_host_cnxman_test(test_cnxman_barrier test_cnxman_barrier.c vms_frame_compose.c)  # FC-P3.5
 cluster_host_cnxman_test(test_cnxman_coord   test_cnxman_coord.c vms_frame_compose.c)    # FC-P3.12
+# FC-P3.3: the join. Same terms; it also needs the MSCP end-message builders
+# (already in cluster_host_codec, which cluster_host_cnxman links).
+cluster_host_cnxman_test(test_cnxman_join    test_cnxman_join.c vms_frame_compose.c)     # FC-P3.3
 
 # FC-P3.15's own done-condition: prove NO CNXMAN TU writes below body offset 0
 # (design sec 3.2.4 ruling E1). OVMX_KCORE_DIR lets the test open the real
@@ -355,6 +362,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_cnxman_phase2.c     # FC-P3.5 + FC-P3.12
     hdr_alone_vms_cnxman_barrier_fsm.c # FC-P3.5
     hdr_alone_vms_cnxman_coord_fsm.c  # FC-P3.12
+    hdr_alone_vms_cnxman_join_fsm.c   # FC-P3.3
     hdr_alone_vms_pe_fsm.c            # FC-P0.8
     hdr_alone_vms_scs_fsm.c           # FC-P2.2
     hdr_alone_vms_scs_dir.c           # FC-P2.3

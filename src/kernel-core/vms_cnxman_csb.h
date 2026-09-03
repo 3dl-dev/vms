@@ -302,4 +302,22 @@ void cnxman_envelope_stamp(const struct vms_csb *csb,
 			   uint8_t body[132] /* VMS_CM_BODY_LEN */,
 			   int is_response);
 
+/*
+ * The two dialogue cells the stamper reads, maintained as NAMED CSB
+ * operations rather than by an emitter incrementing another layer's field
+ * (FC-P3.3). Both rules are spec sec 4(j)'s own:
+ *
+ *   cnxman_csb_dialogue_sent()  -- call ONCE per body actually handed to SCS
+ *      for this peer, BEFORE stamping it, so the first message carries
+ *      send-msg# 1 ("strictly monotonic per sender ... starts at 1 on the
+ *      first VC message", 2902/2902 golden frames).
+ *
+ *   cnxman_csb_dialogue_heard() -- call with the send-msg# of every body that
+ *      really ARRIVED from this peer. It keeps the MAXIMUM, because ack-msg#
+ *      "acknowledges the peer's highest send-msg# seen": a retransmit
+ *      legitimately repeats a lower number and must not walk the ack back.
+ */
+void cnxman_csb_dialogue_sent(struct vms_csb *csb);
+void cnxman_csb_dialogue_heard(struct vms_csb *csb, uint16_t peer_send_msg);
+
 #endif /* OVMX_VMS_CNXMAN_CSB_H */

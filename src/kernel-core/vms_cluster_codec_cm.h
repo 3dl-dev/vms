@@ -202,6 +202,11 @@ extern "C" {
 #define VMS_OFB_CM_TOKEN       (VMS_OFF_CM_TOKEN       - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_DLM_RESULT  (VMS_OFF_CM_DLM_RESULT  - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_DLM_L1_LEN  (VMS_OFF_CM_DLM_L1_LEN  - VMS_OFF_SYSAP_BODY)
+/* FC-P3.3's three joiner originations (sec 5c) need the body-relative form of
+ * the VOTES word and the model-string pair as well. */
+#define VMS_OFB_CM_VOTES       (VMS_OFF_CM_VOTES       - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_MODEL_LEN   (VMS_OFF_CM_MODEL_LEN   - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_MODEL_NAME  (VMS_OFF_CM_MODEL_NAME  - VMS_OFF_SYSAP_BODY)
 
 /* The category/opcode values this file's recipes and accessors key on
  * (sec 4(j) table + sec 4(p)/(r); NOT the general SCS byte at abs 30,
@@ -730,6 +735,106 @@ vms_codec_status_t vms_cm_step_ack_build(const uint8_t *req_frame,
  */
 vms_codec_status_t vms_cm_ack_build(uint8_t *out_body, uint32_t cap,
 				    uint32_t *written);
+
+/* ------------------------------------------------------------------ *
+ * sec 5c  THE JOINER'S ORIGINATIONS (FC-P3.3)
+ *
+ * Spec sec 4(o) grounds the ORDER of the joiner's own three category-0x01
+ * messages -- op 0x14 model, op 0x01 parameters, then (deferred until its
+ * disk-client discovery finishes) op 0x02 config, "this starts admission".
+ * These three builders are the only way the join FSM may speak first; they
+ * obey sec 5b's rule to the letter (grounded placements only, from the
+ * caller's real executive state, every other byte an explicit zero), and
+ * none of them writes body[0:8] -- the caller stamps that afterwards with
+ * cnxman_envelope_stamp(csb, body, 0).
+ * ------------------------------------------------------------------ */
+
+/*
+ * vms_cm_model_build - cat 0x01 op 0x14, the node CPU/model advertisement.
+ *
+ * body[16] = `namelen`, body[17..17+namelen) = the ASCII model string, as
+ * sec 4(j) row 1 grounds it ("a length-prefixed ASCII string at body[16]").
+ * `namelen` 0 is legal and means this node advertises NO model string --
+ * the honest answer when the executive could not read one, and never a
+ * plausible-looking stand-in (INV-6). VMS_CODEC_E_RANGE above
+ * VMS_CM_MODEL_MAX; the string is never truncated to fit.
+ *
+ * STAMP with is_response=0.
+ */
+vms_codec_status_t vms_cm_model_build(const uint8_t *name, uint8_t namelen,
+				      uint8_t *out_body, uint32_t cap,
+				      uint32_t *written);
+
+/*
+ * vms_cm_params_build - cat 0x01 op 0x01, the cluster-parameters message.
+ *
+ * body[22:24] = `votes`, the field sec 4(j) pinned byte-exact by controlled
+ * reconfiguration across four vote values, plus the node-parameter block
+ * (`own_params`, the same struct vms_cm_close_build takes) at
+ * body[72:76]/[76:80]/[88:96]. Both come from the caller's real SYSGEN and
+ * identity state; this builder has no defaults and bakes in no version.
+ *
+ * WHAT IS HONESTLY MISSING. EXPECTED_VOTES (sec 4(j) RE gap: held at 1 in
+ * every capture, so no contrast exists to locate it) and LOCKDIRWT (plan row
+ * FC-P3.2, lab) have no isolated offset and are therefore NOT written. Their
+ * bytes go out zero along with the rest of the body. A node whose real
+ * LOCKDIRWT is 0 is unharmed by that; a node whose LOCKDIRWT is nonzero
+ * CANNOT advertise it and its caller must count and log the fact rather than
+ * write the value at a guessed offset.
+ *
+ * STAMP with is_response=0.
+ */
+vms_codec_status_t vms_cm_params_build(uint16_t votes,
+				       const struct vms_cm_node_params *own_params,
+				       uint8_t *out_body, uint32_t cap,
+				       uint32_t *written);
+
+/*
+ * vms_cm_config_build - cat 0x01 op 0x02, the config/topology message that
+ * STARTS ADMISSION (sec 4(o) step 4).
+ *
+ * Category and opcode; nothing else. Sec 4(o) measured that the real
+ * admission op-0x02 of vax3-2to3 frame 285 "carries an all-zero topology
+ * body and is acked in 0.3 ms", so the zero body is not a shortcut -- it is
+ * the observed sufficient trigger. The two spans that section calls
+ * "REPLAYED, not decoded" (body[10:12] = 0x5041, twelve 0x20 spaces at
+ * body[40:52]) are deliberately absent: they are not constant even for the
+ * node that emitted them, so reproducing them would assert a value no
+ * implementation can derive.
+ *
+ * STAMP with is_response=0.
+ */
+vms_codec_status_t vms_cm_config_build(uint8_t *out_body, uint32_t cap,
+				       uint32_t *written);
+
+/*
+ * vms_cm_membership_find_sysid - INSTRUMENTATION ONLY, and the distinction
+ * is the whole point of this function existing.
+ *
+ * A joiner is supposed to learn the CSID the cluster assigned it by matching
+ * its own SCSSYSTEMID in the coordinator's membership records (design sec 3.4;
+ * book p. 7-39 describes each member being described as {SCSSYSTEMID,
+ * incarnation, CSID}). The op-0x06 MEMBERSHIP burst's record layout has NO
+ * isolated byte offset in any capture (docs/cluster-integration-notes.md E8),
+ * so that learn CANNOT be performed honestly today.
+ *
+ * This function does the HALF that requires no layout knowledge: it searches
+ * the received 132-byte body for the caller's OWN SCSSYSTEMID -- an exact
+ * match on a value the caller already owns -- and reports the body-relative
+ * offset and the width (8 bytes, or the 48-bit form p. 2-16 describes) at
+ * which it was found. It reads nothing else, decodes no record, and returns
+ * no CSID. The offset it reports is a MEASUREMENT for the lab capture that
+ * will pin the layout, not an input to any wire field.
+ *
+ * VMS_CODEC_E_CLASS unless this is really a cat-0x01 op-0x06; E_RANGE when
+ * the sysid does not appear at all (which is itself the observation).
+ */
+vms_codec_status_t vms_cm_membership_find_sysid(const uint8_t *frame,
+						uint32_t len,
+						const struct vms_frame_info *fi,
+						uint64_t sysid,
+						uint32_t *out_body_off,
+						uint32_t *out_width);
 
 /* ------------------------------------------------------------------ *
  * sec 6  The GROUNDED (SYSAP, category, opcode) allowlist -- codec DATA

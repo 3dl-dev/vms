@@ -816,6 +816,170 @@ vms_codec_status_t vms_cm_ack_build(uint8_t *out_body, uint32_t cap,
 }
 
 /* ------------------------------------------------------------------ *
+ * sec 5c  THE JOINER'S ORIGINATIONS (FC-P3.3)
+ *
+ * The three cat-0x01 messages a joiner speaks first (spec sec 4(o)'s
+ * ordered table: op 0x14 model, op 0x01 parameters, op 0x02 config), plus
+ * one READ-ONLY instrumentation helper for the op-0x06 MEMBERSHIP burst.
+ * Same rule as sec 5b: write ONLY fields whose PLACEMENT is grounded, from
+ * values the caller read out of real executive state; every other byte an
+ * EXPLICIT ZERO. None of them writes body[0:8] -- the caller stamps it with
+ * cnxman_envelope_stamp() afterwards, is_response=0.
+ * ------------------------------------------------------------------ */
+
+vms_codec_status_t vms_cm_model_build(const uint8_t *name, uint8_t namelen,
+				      uint8_t *out_body, uint32_t cap,
+				      uint32_t *written)
+{
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+
+	if (namelen > VMS_CM_MODEL_MAX)
+		return VMS_CODEC_E_RANGE;
+	if (namelen != 0u && name == (const uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+
+	st = cm_originate_begin(VMS_CM_OP_MODEL, out_body, cap, &w);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	/* sec 4(j) row 1: "a length-prefixed ASCII string at body[16] (len
+	 * 0x15 = 21) + \"VAXserver 3900 Series\"". namelen 0 is a legal,
+	 * HONEST value -- a node whose model string the executive could not
+	 * read advertises none rather than a plausible-looking one (INV-6). */
+	vms_wire_put_u8(&w, VMS_OFB_CM_MODEL_LEN, namelen);
+	if (namelen != 0u)
+		vms_wire_put_bytes(&w, VMS_OFB_CM_MODEL_NAME, namelen, name);
+
+	return cm_originate_end(&w, written);
+}
+
+vms_codec_status_t vms_cm_params_build(uint16_t votes,
+				       const struct vms_cm_node_params *own_params,
+				       uint8_t *out_body, uint32_t cap,
+				       uint32_t *written)
+{
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+
+	if (own_params == (const struct vms_cm_node_params *)0)
+		return VMS_CODEC_E_INVAL;
+
+	st = cm_originate_begin(VMS_CM_OP_PARAMS, out_body, cap, &w);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	/* body[22:24] VOTES -- GROUNDED byte-exact across four vote values
+	 * {0,1,2} by controlled reconfiguration (sec 4(j) "VOTES -- GROUNDED
+	 * across four configurations"). The value is the caller's, read from
+	 * SYSGEN; this builder has no default.
+	 *
+	 * body[72:76]/[76:80]/[88:96] are the NODE-PARAMETER BLOCK, the same
+	 * one vms_cm_close_build carries, and it is likewise the caller's --
+	 * never a captured "V7.3" (honest-OS-identity ruling: OVMX advertises
+	 * its own version and sec 4(L)(6) measured that a real VAX accepts and
+	 * DISPLAYS a non-"VMS" string here).
+	 *
+	 * EXPECTED_VOTES and LOCKDIRWT are ABSENT, and that is an honest
+	 * omission rather than an oversight: sec 4(j)'s own RE-gap list says
+	 * EXPECTED_VOTES "was held at 1 in every captured configuration, so no
+	 * wire contrast exists to locate it", and LOCKDIRWT's offset is plan
+	 * row FC-P3.2 (lab). Every ungrounded byte of this body therefore goes
+	 * out zero; a caller whose real LOCKDIRWT is nonzero cannot advertise
+	 * it and must say so (FC-P3.3 counts and logs exactly that). */
+	vms_wire_put_le16(&w, VMS_OFB_CM_VOTES, votes);
+	vms_wire_put_le32(&w, VMS_OFB_CM_PARAM_F1, own_params->param_f1);
+	vms_wire_put_le32(&w, VMS_OFB_CM_PARAM_F2, own_params->param_f2);
+	vms_wire_put_bytes(&w, VMS_OFB_CM_VERSION, VMS_CM_VERSION_LEN,
+			   own_params->version);
+
+	return cm_originate_end(&w, written);
+}
+
+vms_codec_status_t vms_cm_config_build(uint8_t *out_body, uint32_t cap,
+				       uint32_t *written)
+{
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+
+	st = cm_originate_begin(VMS_CM_OP_CONFIG, out_body, cap, &w);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	/* Nothing else. sec 4(o): the admission op-0x02 of vax3-2to3 frame 285
+	 * "carries an all-zero topology body and is acked in 0.3 ms", so a
+	 * zero body is a MEASURED-sufficient admission trigger. The two spans
+	 * sec 4(o) calls "REPLAYED, not decoded" -- body[10:12] = 0x5041 and
+	 * twelve 0x20 spaces at body[40:52] -- are deliberately NOT reproduced:
+	 * they are another implementation's bytes, they are not constant even
+	 * for that implementation (the same node's later 0x02 carries 0x0004
+	 * and binary there), and replaying them would assert a value this node
+	 * cannot derive. That is the exact failure mode INV-6 exists to stop. */
+	return cm_originate_end(&w, written);
+}
+
+vms_codec_status_t vms_cm_membership_find_sysid(const uint8_t *frame,
+						uint32_t len,
+						const struct vms_frame_info *fi,
+						uint64_t sysid,
+						uint32_t *out_body_off,
+						uint32_t *out_width)
+{
+	struct vms_cm_envelope env;
+	vms_wire_view_t v;
+	vms_codec_status_t st;
+	uint8_t want[8];
+	uint32_t off;
+	uint32_t width;
+	unsigned i;
+
+	if (out_body_off == (uint32_t *)0 || out_width == (uint32_t *)0)
+		return VMS_CODEC_E_INVAL;
+	*out_body_off = 0u;
+	*out_width = 0u;
+
+	st = vms_cm_envelope_parse(frame, len, fi, &env);
+	if (st != VMS_CODEC_OK)
+		return st;
+	if (env.category != VMS_CM_CAT_CONFIG ||
+	    env.opcode != VMS_CM_OP_MEMBERSHIP)
+		return VMS_CODEC_E_CLASS;
+
+	for (i = 0; i < 8u; i++)
+		want[i] = (uint8_t)((sysid >> (8u * i)) & 0xffu);
+
+	/* Two widths, because the book gives one and the wire gives the other:
+	 * p. 2-16 calls the SCS System ID a 48-bit quantity, while struct
+	 * vms_cluster_params carries it as a quadword. Try the wider match
+	 * first so an 8-byte record is not reported as a 6-byte one. */
+	for (width = 8u; width >= 6u; width -= 2u) {
+		for (off = 0u; off + width <= VMS_CM_BODY_LEN; off++) {
+			uint8_t got[8];
+			unsigned k;
+			int same = 1;
+
+			vms_wire_view_init(&v, frame, len);
+			vms_wire_get_bytes(&v, VMS_OFF_SYSAP_BODY + off, width,
+					   got);
+			if (!vms_wire_view_ok(&v))
+				return v.err;
+			for (k = 0; k < width; k++) {
+				if (got[k] != want[k]) {
+					same = 0;
+					break;
+				}
+			}
+			if (same) {
+				*out_body_off = off;
+				*out_width = width;
+				return VMS_CODEC_OK;
+			}
+		}
+	}
+	return VMS_CODEC_E_RANGE;
+}
+
+/* ------------------------------------------------------------------ *
  * sec 6: the GROUNDED (SYSAP, category, opcode) allowlist
  * ------------------------------------------------------------------ */
 

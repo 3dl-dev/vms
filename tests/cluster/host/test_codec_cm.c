@@ -504,6 +504,154 @@ static void test_barrier_build(void)
 		 "  a NULL out_body is rejected -- no zero-filled body");
 }
 
+/* ==========================================================================
+ * FC-P3.3: the JOINER's three originations (sec 5c) + the op-0x06
+ * instrumentation helper.
+ *
+ * Each builder is round-tripped through the test-only composer into the
+ * matching PARSER, so the assertion is "the grounded field landed where the
+ * grounded field is read from" rather than an offset typed twice.
+ * ========================================================================== */
+
+static void test_joiner_originations(void)
+{
+	struct vms_cm_link l;
+	struct vms_frame_info fi;
+	struct vms_cm_model model;
+	struct vms_cm_params params;
+	struct vms_cm_node_params own;
+	uint8_t built[VMS_CM_BODY_LEN];
+	uint8_t frame[VMS_CM_FRAME_LEN];
+	uint32_t written = 0, frame_written = 0, i, nonzero = 0;
+	static const uint8_t name[] = "OVMX x86_64";
+
+	printf("-- FC-P3.3 sec 5c: the joiner's op 0x14 / 0x01 / 0x02\n");
+	fill_link(&l);
+
+	/* ---- op 0x14, the model advertisement (sec 4(j) row 1) ---- */
+	ct_check(vms_cm_model_build(name, 11u, built, sizeof(built), &written)
+		 == VMS_CODEC_OK, "model builds");
+	ct_check_eq_u32(written, VMS_CM_BODY_LEN, "  wrote a whole body");
+	ct_check(vms_frame_compose(&l, built, frame, sizeof(frame),
+				   &frame_written) == VMS_CODEC_OK,
+		 "  composes into a specimen");
+	ct_check(vms_frame_classify(frame, frame_written, &fi) == VMS_CODEC_OK,
+		 "  classifies");
+	ct_check(vms_cm_model_parse(frame, frame_written, &fi, &model)
+		 == VMS_CODEC_OK, "  round-trips through vms_cm_model_parse");
+	ct_check_eq_u32(model.env.category, VMS_CM_CAT_CONFIG, "  cat 0x01");
+	ct_check_eq_u32(model.env.opcode, VMS_CM_OP_MODEL, "  op 0x14");
+	ct_check_eq_u32(model.namelen, 11u, "  the length prefix at body[16]");
+	ct_check(memcmp(model.name, name, 11) == 0,
+		 "  and the ASCII string at body[17]");
+	ct_check(vms_cm_model_build(name, (uint8_t)(VMS_CM_MODEL_MAX + 1u),
+				    built, sizeof(built), &written)
+		 == VMS_CODEC_E_RANGE,
+		 "  an over-long model name is REFUSED, never truncated");
+	ct_check(vms_cm_model_build(NULL, 0u, built, sizeof(built), &written)
+		 == VMS_CODEC_OK,
+		 "  and namelen 0 is legal: a node that has no model string "
+		 "advertises none");
+
+	/* ---- op 0x01, the cluster parameters (sec 4(j) VOTES) ---- */
+	memset(&own, 0, sizeof(own));
+	own.param_f1 = 0x11223344u;
+	own.param_f2 = 0x55667788u;
+	memcpy(own.version, "VMX V0.6", VMS_CM_VERSION_LEN);
+	ct_check(vms_cm_params_build(2u, &own, built, sizeof(built), &written)
+		 == VMS_CODEC_OK, "params builds");
+	ct_check(vms_frame_compose(&l, built, frame, sizeof(frame),
+				   &frame_written) == VMS_CODEC_OK,
+		 "  composes");
+	ct_check(vms_frame_classify(frame, frame_written, &fi) == VMS_CODEC_OK,
+		 "  classifies");
+	ct_check(vms_cm_params_parse(frame, frame_written, &fi, &params)
+		 == VMS_CODEC_OK, "  round-trips through vms_cm_params_parse");
+	ct_check_eq_u32(params.env.opcode, VMS_CM_OP_PARAMS, "  op 0x01");
+	ct_check_eq_u32(params.votes, 2u, "  VOTES at body[22:24]");
+	ct_check_eq_u32(params.param_f1, 0x11223344u,
+			"  the caller's own param_f1 -- never a captured 0x10");
+	ct_check_eq_u32(params.param_f2, 0x55667788u, "  ... and param_f2");
+	ct_check(memcmp(params.version, "VMX V0.6", VMS_CM_VERSION_LEN) == 0,
+		 "  the caller's OWN version string, never a baked \"V7.3\"");
+	ct_check(vms_cm_params_build(0u, NULL, built, sizeof(built), &written)
+		 == VMS_CODEC_E_INVAL,
+		 "  a NULL parameter block is refused, not zero-filled");
+
+	/* ---- op 0x02, the admission trigger (sec 4(o) row 4) ---- */
+	memset(built, 0xAA, sizeof(built));
+	ct_check(vms_cm_config_build(built, sizeof(built), &written)
+		 == VMS_CODEC_OK, "config builds");
+	ct_check_eq_u32(built[VMS_OFB_CM_CATEGORY], VMS_CM_CAT_CONFIG,
+			"  cat 0x01");
+	ct_check_eq_u32(built[VMS_OFB_CM_OPCODE], VMS_CM_OP_CONFIG, "  op 0x02");
+	for (i = 0; i < VMS_CM_BODY_LEN; i++) {
+		if (i == VMS_OFB_CM_CATEGORY || i == VMS_OFB_CM_OPCODE)
+			continue;
+		if (built[i] != 0u)
+			nonzero++;
+	}
+	ct_check_eq_u32(nonzero, 0u,
+			"  EVERY other byte is an explicit zero -- sec 4(o)'s "
+			"REPLAYED-not-decoded spans are NOT reproduced");
+}
+
+static void test_membership_find_sysid(void)
+{
+	const struct vms_fixture *req = fixture("cm-commit-req");
+	struct vms_cm_link l;
+	struct vms_frame_info fi;
+	uint8_t body[VMS_CM_BODY_LEN];
+	uint8_t frame[VMS_CM_FRAME_LEN];
+	uint32_t frame_written = 0, off = 0, width = 0;
+	const uint64_t sysid = 0x000004000103ull;
+	unsigned i;
+
+	printf("-- FC-P3.3: vms_cm_membership_find_sysid (INSTRUMENTATION)\n");
+	fill_link(&l);
+
+	/* A cat-0x01 op-0x06 body with the caller's own SCSSYSTEMID at a byte
+	 * offset THIS TEST chose -- because no capture grounds one, which is
+	 * exactly why the function reports the offset instead of reading a
+	 * record at it (integration note E8). */
+	memset(body, 0, sizeof(body));
+	body[VMS_OFB_CM_CATEGORY] = VMS_CM_CAT_CONFIG;
+	body[VMS_OFB_CM_OPCODE] = VMS_CM_OP_MEMBERSHIP;
+	for (i = 0; i < 8u; i++)
+		body[40u + i] = (uint8_t)((sysid >> (8u * i)) & 0xffu);
+
+	ct_check(vms_frame_compose(&l, body, frame, sizeof(frame),
+				   &frame_written) == VMS_CODEC_OK,
+		 "composes an op-0x06 specimen");
+	ct_check(vms_frame_classify(frame, frame_written, &fi) == VMS_CODEC_OK,
+		 "  classifies");
+	ct_check(vms_cm_membership_find_sysid(frame, frame_written, &fi, sysid,
+					      &off, &width) == VMS_CODEC_OK,
+		 "  finds the caller's own SCSSYSTEMID");
+	ct_check_eq_u32(off, 40u, "  at the offset it really sits at");
+	ct_check_eq_u32(width, 8u, "  reported as the quadword form");
+
+	/* A different sysid is NOT found -- the function reports absence, it
+	 * does not fall back to a plausible offset. */
+	ct_check(vms_cm_membership_find_sysid(frame, frame_written, &fi,
+					      0x0000040001ffull, &off, &width)
+		 == VMS_CODEC_E_RANGE,
+		 "  a sysid that is not there is reported ABSENT");
+	ct_check_eq_u32(off, 0u, "  with no offset asserted");
+	ct_check_eq_u32(width, 0u, "  and no width asserted");
+
+	/* And it refuses any other (category, opcode): reading this span from
+	 * a commit request would report residue as membership. */
+	if (req != NULL) {
+		ct_check(vms_frame_classify(req->bytes, req->wire_len, &fi)
+			 == VMS_CODEC_OK, "  cm-commit-req classifies");
+		ct_check(vms_cm_membership_find_sysid(req->bytes, req->wire_len,
+						      &fi, sysid, &off, &width)
+			 == VMS_CODEC_E_CLASS,
+			 "  and a NON-op-0x06 frame is refused outright");
+	}
+}
+
 static void test_body_build(void)
 {
 	const struct vms_fixture *req = fixture("cm-dlm-op0d-req");
@@ -626,6 +774,9 @@ int main(void)
 	test_barrier_build();      /* FC-P3.5 */
 	test_body_build();         /* FC-P3.5 */
 	test_open_bitmap_span();   /* FC-P3.5 */
+
+	test_joiner_originations();     /* FC-P3.3 */
+	test_membership_find_sysid();   /* FC-P3.3 */
 
 	test_error_paths();
 

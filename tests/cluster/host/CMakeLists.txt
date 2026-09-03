@@ -216,6 +216,11 @@ set_tests_properties(cluster_host_test_mscp_srv PROPERTIES
 # 58-content SCS shorts and the 94-content op-10 application-message shape.
 cluster_host_test(test_codec_p2_1b_route test_codec_p2_1b_route.c)
 
+# FC-P2.7 (E48, design sec 3.2.7): the RECEIVE twin of P2.1b -- the
+# length-generic VMS_FCLS_SCS_APPLMSG class that grants VMS_FCAP_CONID to
+# the four MSCP END lengths (86/90/102/110) length-keying left unrouted.
+cluster_host_test(test_codec_applmsg test_codec_applmsg.c)
+
 # ---- FC-P3.7: quorum arithmetic (tracking only) + the $GETSYI cluster
 # item-code projection. Same host-pure discipline as FC-P3.6 above: both new
 # TUs build with -DOVMX_CLUSTER_HOST and no kernel headers, so they join the

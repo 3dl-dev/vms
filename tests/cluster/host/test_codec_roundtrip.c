@@ -103,6 +103,18 @@ static void test_roundtrip_all(void)
 /*
  * One specimen per class is the done-condition; assert it directly rather than
  * trusting that the corpus happens to be complete.
+ *
+ * VMS_FCLS_SCS_APPLMSG (FC-P2.7, design sec3.2.7, E48) is the one documented
+ * exception: its only real specimens are the MSCP END lengths (86/90/102/
+ * 110), which trace to the vms291 lab-2 mount capture -- a HOST-ONLY pcap
+ * artifact never committed and not in the clean-room manifest
+ * (docs/design-mscp-direction.md "Host-only artifacts, never in git"), so a
+ * fixture citing it would be false provenance (Rule 8). Its harvest_len is
+ * VMS_SCA_HDR_LEN (32) -- the same generic shared-header span every other
+ * SCS class round-trips here -- so nothing about THIS class's own fields
+ * goes unverified: tests/cluster/host/test_codec_applmsg.c is the item's
+ * real R1 proof, built through the shipping MSCP end-message builders
+ * instead of a fixture file.
  */
 static void test_one_specimen_per_class(void)
 {
@@ -117,6 +129,13 @@ static void test_one_specimen_per_class(void)
 
 		if (!ci)
 			continue;
+		if (cls == VMS_FCLS_SCS_APPLMSG) {
+			printf("  skip  class '%s': no clean-room-manifest "
+			      "capture exists yet -- see this loop's own "
+			      "doc comment; proved in test_codec_applmsg.c\n",
+			      ci->name);
+			continue;
+		}
 		for (i = 0; i < g_n; i++) {
 			struct vms_frame_info fi;
 

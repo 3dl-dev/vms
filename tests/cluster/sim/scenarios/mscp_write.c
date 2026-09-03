@@ -53,29 +53,41 @@
  *   MSCP test uses.
  *
  * ===========================================================================
- * A FINDING THIS SCENARIO MADE -- E48, AND WHY IT IS NOT PAPERED OVER
+ * A FINDING THIS SCENARIO MADE -- E48 -- AND ITS RESOLUTION (FC-P2.7)
  * ===========================================================================
  *
- * This is the first test in the tree that pushes MSCP END MESSAGES through a
- * real port, and it measured that SOME OF THEM CANNOT ARRIVE. `vc_deliver`
+ * This was the first test in the tree to push MSCP END MESSAGES through a
+ * real port, and it measured that SOME OF THEM COULD NOT ARRIVE. `vc_deliver`
  * hands a received sequenced frame to a SYSAP only when the classifier grounds
  * a Con.ID pair for the class it falls in; of the five MSCP end lengths FC-P6.2
  * measured -- SCA contents 86 (SCC), 90 (READ), 94 (WRITE), 102 (ONLINE), 110
- * (GUS) -- only 94 is such a class (110/102 also fail because the
+ * (GUS) -- only 94 was such a class (110/102 also failed because the
  * connection-control rule that owns those lengths EXCLUDES the application
- * marker 10 an MSCP message carries at abs 60). The rest are counted
+ * marker 10 an MSCP message carries at abs 60). The rest were counted
  * `vc_rx_undelivered` and dropped. FC-P6.3 gave the SEND side a length-generic
- * entry (`pe_vc_send_msg_var`) and the RECEIVE side never grew the matching
- * half; this run counts BOTH halves so the size of the gap is visible.
+ * entry (`pe_vc_send_msg_var`) and the RECEIVE side had never grown the
+ * matching half; this run counted BOTH halves so the size of the gap was
+ * visible.
  *
- * This scenario does NOT widen a codec class rule to make itself pass: §4(d)
- * says the other length classes "do not reliably match this layout and are
- * therefore left undecoded", and asserting abs 64/68 for them would be a wire
- * claim nothing measured (Rule 8). It instead ASKS THE CODEC per message
- * (`port_can_route`), carries what the port can carry, hands the rest across
- * itself, and COUNTS both -- so the gap is a number in the run rather than a
- * comment. The WRITE END, the message that completes the transfer this scenario
- * is about, is the 94-content class and really crosses the wire.
+ * This scenario did NOT itself widen a codec class rule to make itself pass:
+ * §4(d) says the other length classes "do not reliably match this layout and
+ * are therefore left undecoded", and asserting abs 64/68 for them would have
+ * been a wire claim nothing measured (Rule 8). It instead ASKED THE CODEC per
+ * message (`port_can_route`), carried what the port could carry, handed the
+ * rest across itself, and COUNTED both -- so the gap was a number in the run
+ * rather than a comment.
+ *
+ * **RESOLVED by FC-P2.7** (design docs/design-faithful-cluster-executive.md
+ * §3.2.7, item's own ruling): SCS dispatches an application message on MTYPE
+ * 10 to the CDT its Con.ID names, at ANY length -- the length-keyed classes
+ * were a capture-census convenience, not the real dispatch rule. The frozen
+ * classify table gained a length-generic `VMS_FCLS_SCS_APPLMSG` class keyed
+ * on the SAME §4(h)(1b) envelope (the format word, MTYPE 10, the
+ * self-consistent inner length) at any content length, so all five MSCP END
+ * lengths now grant `VMS_FCAP_CONID` and `port_can_route` answers yes for
+ * every one of them. `e->ends_bridged` is now asserted `== 0` and both
+ * ports' own `vc_rx_undelivered` counters are asserted `== 0` below -- the
+ * gap this scenario measured is closed, not merely narrower.
  */
 #include <stdio.h>
 #include <string.h>
@@ -205,7 +217,19 @@ static uint32_t build_scs_content(struct env *e, vms_conid_t remote_conid,
 	 */
 	sh.inner_len = (uint16_t)((VMS_OFF_SYSAP_BODY + len) -
 				  (VMS_ETH_HDR_LEN + 44u));
-	sh.mtype = VMS_SCS_MT_MSG;
+	/*
+	 * FC-P2.7 (design sec3.2.7, E48) fix: this is the SCS HEADER's own
+	 * mtype/ctrl_type field (content[46:48], abs 60) -- the application
+	 * marker vms_scs_fsm.c's shipping send path (msg_transmit_var(),
+	 * msg_transmit_long(), ctrl_prepare()) ALWAYS stamps
+	 * VMS_SCS_CTRL_APPLICATION (10) into, never the abs-30 SCS message-
+	 * TYPE BYTE (VMS_SCS_MT_MSG, 0x4b -- a DIFFERENT field, already set by
+	 * vms_scs_seq_envelope_build() below). The two constants share no
+	 * value by coincidence; writing the wrong one here silently defeated
+	 * this scenario's own port_can_route() check for every END length
+	 * this item grounds (86/90/102/110) until corrected.
+	 */
+	sh.mtype = (uint16_t)VMS_SCS_CTRL_APPLICATION;
 	sh.conid_remote = remote_conid;
 	sh.conid_local = local_conid;
 	if (vms_scs_msg_body_build(&sh, body, len, e->body, content) !=
@@ -799,8 +823,10 @@ static void test_two_nodes_complete_a_write(uint64_t seed, uint32_t loss_pct)
 	ct_check_eq_u32(e->srv.writes_served, 1u, "the server served it");
 	ct_check_eq_u32(e->send_failures, 0u, "no message was refused the wire");
 
-	/* What really crossed the wire, and what the harness had to carry (E48
-	 * -- see the file header). Both are numbers, not a comment. */
+	/* What really crossed the wire (E48 RESOLVED by FC-P2.7 -- see the
+	 * file header). Every end message this run sends -- SCC/ONLINE/GUS
+	 * during discovery, WRITE at completion -- is now a class the port
+	 * routes, so NOTHING is bridged and NOTHING is undelivered. */
 	ct_check_eq_u32(e->cmds_unroutable, 0u,
 			"every MSCP COMMAND is a class the port routes, so all "
 			"of them crossed the wire");
@@ -810,10 +836,17 @@ static void test_two_nodes_complete_a_write(uint64_t seed, uint32_t loss_pct)
 	ct_check_eq_u32(e->last_wire_end_len, VMS_MSCP_WRITE_END_LEN,
 			"...and it is the WRITE END -- the message that "
 			"completes this transfer really crossed the wire");
-	ct_check(e->ends_bridged > 0u,
-		 "E48 MEASURED: the discovery-phase end messages could NOT be "
-		 "routed by the port and were carried by the harness -- the "
-		 "receive side has no grounded Con.ID for their length classes");
+	ct_check_eq_u32(e->ends_bridged, 0u,
+			 "E48 RESOLVED (FC-P2.7, design sec3.2.7): the "
+			 "discovery-phase end messages (SCC/ONLINE/GUS) are "
+			 "now ALSO a class the port routes -- the harness's "
+			 "own bridge fallback never fires");
+	ct_check_eq_u32(e->cl_node->fsm.vc_rx_undelivered, 0u,
+			 "the CLIENT port's own vc_rx_undelivered counter is "
+			 "zero -- every frame the server sent it was delivered");
+	ct_check_eq_u32(e->srv_node->fsm.vc_rx_undelivered, 0u,
+			 "the SERVER port's own vc_rx_undelivered counter is "
+			 "zero -- every frame the client sent it was delivered");
 }
 
 /*

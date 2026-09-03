@@ -177,6 +177,19 @@ void     vms_wire_put_zero(vms_wire_buf_t *w, uint32_t off, uint32_t n);
 #define VMS_OFF_SCS_FORMAT       31u   /* payload[17] */
 #define VMS_OFF_SCS_RECV_ACK     32u   /* payload[18] spec §4(h)(4)        */
 #define VMS_OFF_SCS_SEND_SEQ     34u   /* payload[20] mirrored at abs 44   */
+#define VMS_OFF_SCS_INNER_LEN    56u   /* payload[42], content - 44,       */
+					/* spec §4(h)(1b); mirrors            */
+					/* vms_cluster_codec_scs.h's own      */
+					/* VMS_OFF_SCSCTRL_INNERLEN -- SAME    */
+					/* offset, re-declared at this BASE   */
+					/* layer because the frozen classify  */
+					/* table (this TU) cannot include a   */
+					/* sibling family header               */
+#define VMS_OFF_SCS_FMT_WORD     58u   /* payload[44], GROUNDED constant     */
+					/* 0x0004 (spec §4(h)(1b)); mirrors   */
+					/* VMS_OFF_SCSCTRL_FMTWORD, same note */
+#define VMS_SCS_FMT_WORD_CONST 0x0004u
+#define VMS_SCS_INNER_LEN_BIAS   44u   /* inner length == SCA content - 44 */
 #define VMS_OFF_SCS_CTRL_TYPE    60u   /* payload[46] spec §4(h)(1a)       */
 #define VMS_OFF_SCS_CONID_REMOTE 64u   /* payload[50] spec §4(d), §4(g)ph4 */
 #define VMS_OFF_SCS_CONID_LOCAL  68u   /* payload[54]                      */
@@ -238,6 +251,15 @@ enum vms_frame_class {
 				 * lookup (FC-P2.1) -- which SYSAP owns a given
 				 * frame is decided by its Con.ID connection,
 				 * above this codec, never by a wire field    */
+	VMS_FCLS_SCS_APPLMSG,   /* design §3.2.7 (E48, FC-P2.7): the
+				 * length-GENERIC form of the op-10 APPL_MSG
+				 * envelope -- content[44:46]==0x0004,
+				 * content[46:48]==10, content[42:44]==
+				 * content-44, at ANY length. Subsumes
+				 * APPLMSG94's shape (kept above as the
+				 * frozen-table no-regression alias) and picks
+				 * up the four MSCP END lengths (86/90/102/110)
+				 * that length-keying left with no Con.ID      */
 	VMS_FCLS_SCS_SEQ,       /* sequenced SCS msg, sub-class not grounded*/
 	VMS_FCLS__COUNT
 };

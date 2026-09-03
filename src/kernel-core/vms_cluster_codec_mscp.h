@@ -92,11 +92,16 @@
  * SCS$DIRECTORY's own op-10 lookup, which rides the identical shape and
  * shares no wire field with MSCP that would tell the two SYSAPs apart --
  * that is a Con.ID/connection fact, decided above this codec); the other
- * four MSCP end-message lengths (86/90/102/110) are still ungrounded here
- * and still land on VMS_FCLS_SCS_SEQ. So this file does what
- * vms_cluster_codec_cm.h did before VC/SCS landed: every parse function
- * still takes the caller's `fi` and still requires fi->family==VMS_FFAM_SCS
- * && (fi->cls==VMS_FCLS_SCS_SEQ || fi->cls==VMS_FCLS_SCS_APPLMSG94) (the
+ * four MSCP end-message lengths (86/90/102/110) were still ungrounded there
+ * and landed on VMS_FCLS_SCS_SEQ. FC-P2.7 (design §3.2.7, E48) then grounded
+ * the length-GENERIC form of the same envelope, VMS_FCLS_SCS_APPLMSG, which
+ * is what a REAL wire END frame at one of those four lengths classifies as
+ * today (the client-side receive splice's all-zero reconstruction, which
+ * never had the real envelope to begin with, still lands on
+ * VMS_FCLS_SCS_SEQ). So this file does what vms_cluster_codec_cm.h did
+ * before VC/SCS landed: every parse function still takes the caller's `fi`
+ * and still requires fi->family==VMS_FFAM_SCS && (fi->cls==VMS_FCLS_SCS_SEQ
+ * || fi->cls==VMS_FCLS_SCS_APPLMSG94 || fi->cls==VMS_FCLS_SCS_APPLMSG) (the
  * registry's own, already-grounded confirmation that this is a valid
  * format-0x13 sequenced-application frame, whichever length bucket it
  * landed in) as a NECESSARY precondition, then resolves the SPECIFIC MSCP
@@ -281,9 +286,10 @@ enum vms_mscp_class {
 /*
  * vms_mscp_classify - resolve *out from the wire's own content length and
  * opcode/END-bit byte. Requires fi->family==VMS_FFAM_SCS &&
- * fi->cls==VMS_FCLS_SCS_SEQ (the shared registry's own grounded
- * confirmation this is a valid format-0x13 sequenced-application frame --
- * see the file header) and, on top of that, resolves the SPECIFIC MSCP
+ * fi->cls==VMS_FCLS_SCS_SEQ (or its VMS_FCLS_SCS_APPLMSG94/VMS_FCLS_SCS_
+ * APPLMSG siblings -- the shared registry's own grounded confirmation this
+ * is a valid format-0x13 sequenced-application frame, see the file header
+ * and mscp_seq_ok()) and, on top of that, resolves the SPECIFIC MSCP
  * class from content length plus the opcode byte's END bit (the only way
  * to break the 94-byte COMMAND vs WRITE-END-message ambiguity). Returns
  * VMS_CODEC_OK with VMS_MSCP_CLS_UNKNOWN (not an error) for a frame that

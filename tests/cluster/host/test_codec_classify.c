@@ -14,6 +14,7 @@
 #include "cluster_fixture.h"
 #include "cluster_test.h"
 #include "vms_cluster_codec.h"
+#include "vms_cluster_codec_scs.h"
 
 #include <string.h>
 
@@ -56,6 +57,55 @@ static void test_specimen_classes(void)
 	}
 }
 
+/*
+ * VMS_FCLS_SCS_APPLMSG (FC-P2.7, design §3.2.7, E48) has no `.spec` fixture:
+ * every real specimen of it (the MSCP END lengths 86/90/102/110) traces to
+ * the vms291 lab-2 mount capture, which is a HOST-ONLY pcap artifact never
+ * committed and not in the clean-room manifest (docs/design-mscp-direction.md
+ * "Host-only artifacts, never in git") -- citing it in a fixture's `capture:`
+ * field would be false provenance (Rule 8). This builds the SAME shape
+ * through the shipping, GROUNDED vms_sca_hdr_build()/vms_scs_hdr_build()
+ * entries instead (see tests/cluster/host/test_codec_applmsg.c, this item's
+ * own dedicated R1 test, for the full five-length proof against the real
+ * MSCP end-message builders); it exists here only so this coverage loop
+ * still exercises every registered class.
+ */
+static int code_composed_applmsg_specimen(uint8_t *frame, uint32_t cap,
+					  uint32_t *len)
+{
+	static const uint8_t dst[6] = { 0x08, 0x00, 0x2b, 0x77, 0x88, 0x99 };
+	static const uint8_t src[6] = { 0x08, 0x00, 0x2b, 0xaa, 0xbb, 0xcc };
+	struct vms_sca_hdr sca;
+	struct vms_scs_hdr sh;
+	uint16_t content = 86u;   /* the SCC-END length -- any non-94/190 works */
+	uint32_t written = 0;
+
+	memset(frame, 0, cap);
+	memset(&sca, 0, sizeof(sca));
+	memcpy(sca.eth_dst, dst, 6);
+	memcpy(sca.eth_src, src, 6);
+	memcpy(sca.dst_lavc, dst, 6);
+	memcpy(sca.src_lavc, src, 6);
+	sca.connect_flag = 0x0001u;
+	sca.sca_len_field = (uint16_t)(content - 2u);
+	sca.word30 = (uint16_t)((uint16_t)VMS_SCS_MT_MSG |
+				((uint16_t)VMS_SCS_FORMAT_V13 << 8));
+	if (vms_sca_hdr_build(&sca, frame, cap, &written) != VMS_CODEC_OK)
+		return 0;
+
+	memset(&sh, 0, sizeof(sh));
+	sh.inner_len = (uint16_t)(content - VMS_SCS_INNER_LEN_BIAS);
+	sh.mtype = (uint16_t)VMS_SCS_CTRL_APPLICATION;
+	sh.conid_remote = 0x00020007u;
+	sh.conid_local = 0x00010005u;
+	if (vms_scs_hdr_build(&sh, frame + VMS_OFF_SCSCTRL_INNERLEN,
+			      cap - VMS_OFF_SCSCTRL_INNERLEN) != VMS_CODEC_OK)
+		return 0;
+
+	*len = (uint32_t)VMS_ETH_HDR_LEN + content;
+	return 1;
+}
+
 /* ---- 2. every registered class has at least one specimen ---------- */
 
 static void test_class_coverage(void)
@@ -76,6 +126,17 @@ static void test_class_coverage(void)
 
 			(void)classify(&g_fx[i], &fi);
 			found = (fi.cls == cls);
+		}
+		if (!found && cls == VMS_FCLS_SCS_APPLMSG) {
+			uint8_t frame[128];
+			uint32_t len = 0;
+			struct vms_frame_info fi;
+
+			if (code_composed_applmsg_specimen(frame, sizeof(frame),
+							   &len)) {
+				(void)vms_frame_classify(frame, len, &fi);
+				found = (fi.cls == cls);
+			}
 		}
 		snprintf(what, sizeof(what),
 			 "class '%s' (%s) has >= 1 specimen", ci->name, ci->spec);

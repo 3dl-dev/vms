@@ -225,6 +225,18 @@ void vms_wire_put_zero(vms_wire_buf_t *w, uint32_t off, uint32_t n)
 #define M_LEN_EQ    0x04u  /* SCA content equals one of len[0..len_n)       */
 #define M_LEN_GT    0x08u  /* SCA content strictly greater than len_gt      */
 #define M_FIELD_NE  0x10u  /* LE16 at field_off differs from field_val      */
+#define M_FIELD_EQ  0x20u  /* LE16 at field_off equals field_val (the same  */
+			   /* field_off/field_val pair M_FIELD_NE reads --   */
+			   /* EQ and NE are never both set on one rule)      */
+#define M_FMTWORD   0x40u  /* LE16 at VMS_OFF_SCS_FMT_WORD == the GROUNDED  */
+			   /* constant VMS_SCS_FMT_WORD_CONST (spec          */
+			   /* §4(h)(1b)) -- the SCS envelope conformance test */
+			   /* block-transfer frames fail (design §3.2.7)      */
+#define M_INNERLEN_SELF 0x80u /* LE16 at VMS_OFF_SCS_INNER_LEN == SCA        */
+			   /* content - VMS_SCS_INNER_LEN_BIAS (44) -- the   */
+			   /* inner-length self-consistency check (design    */
+			   /* §3.2.7); false (never a fair-test skip) if the */
+			   /* content is too short to hold the bias          */
 
 struct frame_class_rule {
 	struct vms_frame_class_info info;
@@ -340,6 +352,52 @@ static const struct frame_class_rule g_rules[] = {
 	  M_MSGTYPE | M_LEN_EQ, 0,
 	  3, { VMS_SCS_MT_MSG, VMS_SCS_MT_SETUP, VMS_SCS_MT_ALT },
 	  1, { 94, 0, 0, 0 }, 0, 0, 0 },
+
+	/*
+	 * design §3.2.7 RULING (E48, item FC-P2.7, 2026-09-03): SCS dispatches
+	 * an application message (MTYPE 10) to the CDT its Con.ID names, at
+	 * ANY length (docs/design-mscp-direction.md §1.2, Davis p.4-13/4-15)
+	 * -- length-keyed classes were a capture-census convenience. The
+	 * frozen table above grants VMS_FCAP_CONID to exactly one length (94,
+	 * the row just above), so the four MSCP END lengths FC-P6.2 measured
+	 * (86 SCC, 90 READ, 102 ONLINE, 110 GUS) classified with no Con.ID and
+	 * `vc_deliver` counted them `vc_rx_undelivered` -- E48, raised by
+	 * FC-P6.5's mscp_write.c scenario.
+	 *
+	 * This class is the length-generic form of the SAME §4(h)(1b) envelope
+	 * VMS_FCLS_SCS_APPLMSG94 already grounds: the SCS envelope conformance
+	 * word (content[44:46] == 0x0004, M_FMTWORD -- the test block-transfer
+	 * frames FAIL, design-mscp-direction.md "it deliberately FAILS the SCS
+	 * envelope conformance test"), the application marker (content[46:48]
+	 * == 10, M_FIELD_EQ on the SAME field_off/field_val CONN_CTRL's
+	 * M_FIELD_NE excludes on -- so the two rules are mutually exclusive by
+	 * construction, not merely by table order), and the inner-length
+	 * self-consistency check (content[42:44] == content - 44,
+	 * M_INNERLEN_SELF) -- all three already MEASURED on these very frames
+	 * (design §3.2.7's own citation of the vms291 lab-2 mount capture and
+	 * the byte-exact SCC-end reproduction).
+	 *
+	 * ORDER IS LOAD-BEARING. Placed AFTER VMS_FCLS_SCS_MSG (190-content)
+	 * and VMS_FCLS_SCS_APPLMSG94 (94-content) so first-match-wins keeps
+	 * BOTH those classes' own specimens exactly as before: OVMX's own
+	 * 190-content VMS$VAXcluster/DLM traffic (vms_scs_fsm.c
+	 * msg_transmit_long) ALSO stamps this same fmtword/mtype/inner-length
+	 * envelope (SCS_MTYPE_APPL_MSG dispatches everything, per the ruling
+	 * above), so a row ahead of VMS_FCLS_SCS_MSG would silently steal
+	 * every CM/DLM frame from dlm_class_ok()/vms_cluster_codec_cm.c, which
+	 * key on VMS_FCLS_SCS_MSG alone -- exactly the cross-class misread
+	 * INV-6 exists to refuse. The 94-content class stays its own alias
+	 * (frozen-table no-regression net); this row only ever catches a
+	 * length neither of those two already claimed.
+	 */
+	{ { VMS_FCLS_SCS_APPLMSG, VMS_FFAM_SCS,
+	    VMS_FCAP_MSGTYPE | VMS_FCAP_SEQ | VMS_FCAP_CONID,
+	    VMS_SCA_HDR_LEN, VMS_SCA_HDR_LEN, "scs-applmsg",
+	    "design §3.2.7 (E48), spec §4(h)(1b)" },
+	  M_MSGTYPE | M_FIELD_EQ | M_FMTWORD | M_INNERLEN_SELF, 0,
+	  3, { VMS_SCS_MT_MSG, VMS_SCS_MT_SETUP, VMS_SCS_MT_ALT },
+	  0, { 0, 0, 0, 0 }, 0,
+	  VMS_OFF_SCS_CTRL_TYPE, VMS_SCS_CTRL_APPLICATION },
 
 	/*
 	 * Any other format-0x13 sequenced message. Deliberately carries NO
@@ -483,6 +541,39 @@ static int rule_matches(const struct frame_class_rule *r,
 			return 0;
 		}
 		if (got == r->field_val)
+			return 0;
+	}
+	if (r->match & M_FIELD_EQ) {
+		uint16_t got = vms_wire_get_le16(c->v, r->field_off);
+
+		if (!vms_wire_view_ok(c->v)) {
+			c->v->err = VMS_CODEC_OK;
+			return 0;
+		}
+		if (got != r->field_val)
+			return 0;
+	}
+	if (r->match & M_FMTWORD) {
+		uint16_t got = vms_wire_get_le16(c->v, VMS_OFF_SCS_FMT_WORD);
+
+		if (!vms_wire_view_ok(c->v)) {
+			c->v->err = VMS_CODEC_OK;
+			return 0;
+		}
+		if (got != VMS_SCS_FMT_WORD_CONST)
+			return 0;
+	}
+	if (r->match & M_INNERLEN_SELF) {
+		uint16_t got;
+
+		if (c->content < VMS_SCS_INNER_LEN_BIAS)
+			return 0;
+		got = vms_wire_get_le16(c->v, VMS_OFF_SCS_INNER_LEN);
+		if (!vms_wire_view_ok(c->v)) {
+			c->v->err = VMS_CODEC_OK;
+			return 0;
+		}
+		if (got != (uint16_t)(c->content - VMS_SCS_INNER_LEN_BIAS))
 			return 0;
 	}
 	return 1;

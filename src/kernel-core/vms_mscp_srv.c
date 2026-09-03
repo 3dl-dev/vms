@@ -328,10 +328,11 @@ static int srv_op_send_read_data(void *ctx, vms_conid_t conid,
 }
 
 /*
- * WRITE's half: name the staging buffer as a DESTINATION the peer's port may
- * fill. The bytes arrive later and come back through the block-transfer
- * consumer below. The name stays registered until the request completes or the
- * server's own reaper aborts it -- see srv_op_release_buffer.
+ * WRITE's FIRST half: name the staging buffer as a DESTINATION the peer's port
+ * may fill. The server FSM then ISSUES the REQUEST DATA that actually fetches
+ * the bytes (srv_op_request_write_data below); they come back through the
+ * block-transfer consumer. The name stays registered until the request
+ * completes or the server's own reaper aborts it -- see srv_op_release_buffer.
  */
 static int srv_op_recv_write_data(void *ctx, vms_conid_t conid,
 				  vms_scs_sysid_t peer,
@@ -346,6 +347,42 @@ static int srv_op_recv_write_data(void *ctx, vms_conid_t conid,
 		return -1;
 	return pe_buf_register(s->cl->pe, buf, len, PE_BLK_ACC_DST,
 			       name_out) == (int)SS__NORMAL ? 0 : -1;
+}
+
+/*
+ * WRITE's OTHER half (FC-P6.5, design §3.2.6's E41 ruling): ask the host's port
+ * to fill the buffer named above. EVERY REMOTE-SIDE FIELD COMES FROM `desc`,
+ * which this server read off the host's own Table A-6 buffer descriptor -- its
+ * connection id, its buffer name and its offset. This file supplies only what is
+ * OURS: the destination name our port minted and the byte count the host's own
+ * command asked for.
+ *
+ * The answer is the host PORT's, automatic and with no SYSAP of its own
+ * involved; its bytes arrive here through the block-transfer consumer below.
+ */
+static int srv_op_request_write_data(void *ctx, vms_conid_t conid,
+				     vms_scs_sysid_t peer,
+				     const struct mscp_srv_bufdesc *desc,
+				     uint32_t local_name, uint32_t len)
+{
+	struct vms_mscp_srv *s = (struct vms_mscp_srv *)ctx;
+	struct pe_blk_xfer x;
+
+	(void)conid;
+	if (s->cl->pe == NULL)
+		return -1;
+
+	memset(&x, 0, sizeof(x));
+	x.peer = peer;
+	x.dest_conid = desc->conid;      /* the host's own connection id  */
+	x.local_name = local_name;       /* OUR destination, just minted  */
+	x.local_offset = 0u;
+	x.remote_name = desc->name;      /* the host's own buffer name    */
+	x.remote_offset = desc->offset;
+	x.length = len;
+	x.chunk = 0u;                    /* a request carries no data     */
+
+	return pe_request_block(s->cl->pe, &x) == (int)SS__NORMAL ? 0 : -1;
 }
 
 static void srv_op_release_buffer(void *ctx, uint32_t name)
@@ -376,6 +413,7 @@ static void srv_ops_bind(struct vms_mscp_srv *s)
 	s->ops.send_end = srv_op_send_end;
 	s->ops.send_read_data = srv_op_send_read_data;
 	s->ops.recv_write_data = srv_op_recv_write_data;
+	s->ops.request_write_data = srv_op_request_write_data;
 	s->ops.release_buffer = srv_op_release_buffer;
 	s->ops.now_ms = srv_op_now_ms;
 	s->ops.log = srv_op_log;

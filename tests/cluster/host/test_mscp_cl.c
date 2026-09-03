@@ -33,16 +33,23 @@
  * peer in this directory ("every stimulus frame is built through the SAME codec
  * the code under test builds through").
  *
- * ***  WHAT IS DELIBERATELY NOT PROVEN, AND WHY  ***
+ * ***  WRITE MOVES REAL BYTES TOO, AS OF FC-P6.5  ***
  *
- * WRITE's DATA does not move here, because nothing in this project grounds
- * WHICH SIDE initiates a WRITE block transfer (docs/cluster-integration-notes.md
- * E39's own lab-ask; the capture records only that the two 28-byte headers are
- * byte-identical). So the WRITE leg asserts exactly what IS grounded -- that a
- * real WRITE command goes out carrying a REAL named buffer and a REAL Con.ID,
- * that the server reads both off the wire, that NO completion is fabricated for
- * it, and that the class driver's own deadline reaps it honestly -- and it
- * asserts the ungrounded half as an OPEN FACT rather than papering over it.
+ * When FC-P7.1 wrote this file, WRITE's data could not move: nothing grounded
+ * WHICH SIDE initiates the transfer, so the WRITE leg asserted only that a real
+ * command went out with a real buffer name and that the deadline reaped it
+ * honestly. Design §3.2.6's E41 ruling settled the choreography from the book --
+ * WRITE is a server-sent REQUEST DATA the client's PORT answers automatically --
+ * and FC-P6.5 built the responder. So the WRITE leg is now the mirror of the
+ * READ one: the SERVER issues the request (its own `request_write_data` op), the
+ * CLIENT's REAL port answers it inside pe_fsm_rx out of the caller's REAL
+ * buffer, and the assertion is that the fake block device ends up holding the
+ * caller's own bytes at the caller's own LBN. Nothing in this file transmits
+ * that data -- the frames come from the shipping responder.
+ *
+ * The honest-failure leg is kept beside it (`drop_write_request`): a request the
+ * wire eats still ends at the deadline with Command Aborted and
+ * `writes_undelivered`, never a hang and never a fabricated success.
  *
  * The R4 leg -- a booted OVMX node discovering and reading a volume another
  * cluster member really serves -- is tests/lab/tools/run_mscp_client_mount_gate.sh,
@@ -122,6 +129,21 @@ struct fake_exec {
 	uint32_t write_desc_conid;
 	uint32_t write_desc_offset;
 	uint32_t write_reqs;
+
+	/* FC-P6.5: the server's staging buffer and the REQUEST DATA it issued
+	 * for a WRITE, plus what the client's PORT sent back by itself. */
+	uint8_t *write_stage;
+	uint32_t write_stage_len;
+	uint32_t write_local_name;
+	uint32_t requests_issued;
+	uint32_t answer_frames;      /* block frames the client's port emitted */
+	uint32_t answer_bytes;
+	/* What the CLIENT's port held for the name in the command, AT THE
+	 * MOMENT the server received it. Sampled there because the whole
+	 * exchange completes inline in this process: by the time a test looks,
+	 * the request is done and its registration is (correctly) gone. */
+	uint8_t  write_src_registered;
+	uint8_t  write_src_access;
 };
 
 /* ================================================================== *
@@ -164,6 +186,7 @@ struct env {
 	int      drop_ends;     /* swallow every end message the server sends  */
 	int      drop_read_data;/* swallow the READ data AND its end message   */
 	uint32_t deliver_end_without_data; /* deliver the end, drop the bytes  */
+	int      drop_write_request;/* the REQUEST DATA never reaches the host */
 
 	/* the caller's own I/O buffer -- the class driver names THIS memory */
 	uint8_t  iobuf[8u * MSCP_CL_BLOCK_SIZE];
@@ -474,10 +497,10 @@ static int bridge_server_read_data(void *ctx, vms_conid_t conid,
 }
 
 /*
- * WRITE's half. The server names its own staging buffer as a destination and
- * WAITS -- and nothing here moves the client's bytes, because which side
- * initiates a WRITE block transfer is not grounded (see the file header).
- * What IS asserted is that the server got the client's REAL descriptor.
+ * WRITE's FIRST half: the server names its own staging buffer as a destination
+ * the peer's port may fill. What IS asserted here is that the server got the
+ * client's REAL descriptor -- every remote-side field of the request it is
+ * about to issue comes out of it.
  */
 static int bridge_server_recv_write(void *ctx, vms_conid_t conid,
 				    vms_scs_sysid_t peer,
@@ -486,13 +509,104 @@ static int bridge_server_recv_write(void *ctx, vms_conid_t conid,
 				    uint32_t *name_out)
 {
 	struct env *e = (struct env *)ctx;
+	const struct pe_blk_buf *src;
 
-	(void)conid; (void)peer; (void)buf; (void)len;
+	(void)conid; (void)peer;
 	e->fake.write_desc_name = desc->name;
 	e->fake.write_desc_conid = desc->conid;
 	e->fake.write_desc_offset = desc->offset;
 	e->fake.write_reqs++;
-	*name_out = 0x0abc0002u;   /* the server port's own destination name */
+
+	/* Sampled HERE: the client's port really holds that name, right now,
+	 * as a SOURCE the request we are about to issue may be answered from. */
+	src = pe_blk_buf_lookup(&e->port, desc->name);
+	e->fake.write_src_registered = src != NULL ? 1u : 0u;
+	e->fake.write_src_access = src != NULL ? src->access : 0u;
+
+	e->fake.write_stage = buf;
+	e->fake.write_stage_len = len;
+	e->fake.write_local_name = 0x0abc0002u; /* the server port's own name */
+	*name_out = e->fake.write_local_name;
+	return 0;
+}
+
+/*
+ * THE SERVER'S PORT RECEIVING THE CLIENT'S ANSWER. The client's REAL port has
+ * just emitted its reply frames into `port_fake`; this walks them from
+ * `first`, takes the ones addressed to the server's named buffer, copies their
+ * bytes into the staging slot and reports each one to the server the way a real
+ * port's block-data upcall would.
+ *
+ * The ACK the client's port sends for the request frame is skipped by the
+ * codec's own structural precondition, not by an index this file guesses.
+ */
+static void bridge_take_answers(struct env *e, uint32_t first)
+{
+	uint32_t i;
+
+	for (i = first; i < e->port_fake.n_frames; i++) {
+		const uint8_t *b = e->port_fake.frame[i].b;
+		uint32_t len = e->port_fake.frame[i].len;
+		struct vms_frame_info fi;
+		struct vms_blk_view view;
+
+		if (!vms_blk_frame_structural_ok(b, len))
+			continue;
+		if (vms_frame_classify(b, len, &fi) != VMS_CODEC_OK)
+			continue;
+		if (vms_blk_frame_parse(b, len, &fi, &view) != VMS_CODEC_OK)
+			continue;
+		if (view.hdr.dst_name != e->fake.write_local_name ||
+		    view.data_len == 0u)
+			continue;
+		if (view.hdr.dst_offset + view.data_len >
+		    e->fake.write_stage_len)
+			continue;
+
+		memcpy(e->fake.write_stage + view.hdr.dst_offset, view.data,
+		       view.data_len);
+		e->fake.answer_frames++;
+		e->fake.answer_bytes += view.data_len;
+		mscp_srv_fsm_block_data(&e->srv, view.hdr.dst_name,
+					view.hdr.dst_offset, view.data_len,
+					view.hdr.bytes_remaining);
+	}
+}
+
+/*
+ * WRITE's SECOND half (FC-P6.5, design §3.2.6's E41): the server issues a
+ * REQUEST DATA. Its 28 bytes name the CLIENT's buffer as the transfer's SOURCE
+ * -- read off the client's own command -- and the server's as the destination,
+ * and there is no data behind them.
+ *
+ * The client's REAL port answers it, all by itself, inside pe_fsm_rx. Nothing
+ * in this file sends the data: the frames that come back are the shipping
+ * responder's output.
+ */
+static int bridge_server_request_write(void *ctx, vms_conid_t conid,
+				       vms_scs_sysid_t peer,
+				       const struct mscp_srv_bufdesc *desc,
+				       uint32_t local_name, uint32_t len)
+{
+	struct env *e = (struct env *)ctx;
+	struct vms_blk_hdr h;
+	uint32_t before = e->port_fake.n_frames;
+
+	(void)conid; (void)peer;
+	e->fake.requests_issued++;
+	if (e->drop_write_request)
+		return 0;   /* issued, but the wire ate it -- the timeout leg */
+
+	memset(&h, 0, sizeof(h));
+	h.dest_conid = desc->conid;      /* the client's own connection id  */
+	h.bytes_remaining = len;
+	h.src_name = desc->name;         /* the CLIENT's buffer: the SOURCE */
+	h.src_offset = desc->offset;
+	h.dst_name = local_name;         /* the server's staging buffer     */
+	h.dst_offset = 0u;
+
+	rx_frame(e, build_block_frame(e, &h, NULL, 0u));
+	bridge_take_answers(e, before);
 	return 0;
 }
 
@@ -711,6 +825,7 @@ static void env_bind(struct env *e)
 	e->srv_ops.send_end = bridge_server_end;
 	e->srv_ops.send_read_data = bridge_server_read_data;
 	e->srv_ops.recv_write_data = bridge_server_recv_write;
+	e->srv_ops.request_write_data = bridge_server_request_write;
 	e->srv_ops.release_buffer = bridge_release;
 	e->srv_ops.now_ms = bridge_now;
 	e->srv_ops.log = bridge_log;
@@ -973,61 +1088,127 @@ static void test_controller_timeout(void)
 }
 
 /* ------------------------------------------------------------------ *
- * 9.6 WRITE, as far as the direction is GROUNDED (E39)
+ * 9.6 WRITE end to end (FC-P6.5, design §3.2.6's E41)
+ *
+ * The mirror of 9.4's READ proof, and it moves REAL bytes the same way: the
+ * client registers its caller's buffer PE_BLK_ACC_SRC and names it in the
+ * command; the server reads that name off the wire and issues a REQUEST DATA;
+ * the client's REAL port answers it BY ITSELF, out of the REAL buffer; the
+ * server's worker commits those bytes; and the assertion is that the fake block
+ * device holds the caller's own bytes at the LBN the caller asked for.
+ *
+ * Nothing in this test transmits the data. That is the whole point.
  * ------------------------------------------------------------------ */
-static void test_write_as_far_as_grounded(void)
+static void test_write_moves_real_bytes(void)
 {
 	static struct env e;
 	uint32_t buf_name;
+	uint32_t i;
 
-	printf("-- WRITE: a real command with a REAL buffer name; the data "
-	       "direction stays ungrounded and is reaped honestly\n");
+	printf("-- WRITE: the server REQUESTS the data, the client's PORT "
+	       "answers, and the bytes reach the volume\n");
 	env_start(&e, 6u);
 	env_add_unit(&e, 1u, 32u, 0);
 	env_go(&e, 6u);
 
-	memset(e.iobuf, 0xa5, sizeof(e.iobuf));
+	/* A pattern nothing else in this file could have produced. */
+	for (i = 0; i < MSCP_CL_BLOCK_SIZE; i++)
+		e.iobuf[i] = (uint8_t)(0x5au ^ (i * 3u + 11u));
+
 	ct_check_eq_u32((unsigned long)mscp_cl_fsm_write(&e.cl, "VAX1$DUA1:",
 							 2u, 1u, e.iobuf,
-							 (uint32_t)sizeof(e.iobuf),
+							 MSCP_CL_BLOCK_SIZE,
 							 0x99u),
 			0, "the WRITE was taken");
 	ct_check_eq_u32(e.cl.writes_issued, 1u, "a real WRITE command went out");
 	ct_check_eq_u32(e.fake.write_reqs, 1u, "the server received it");
 
-	/* The interop assertion: the name the SERVER read off the wire is the
-	 * one OUR port really minted for the caller's buffer. */
-	buf_name = e.cl.cdrp[0].buf_name;
-	ct_check(buf_name != 0u, "our port really named the caller's buffer");
-	ct_check_eq_u32(e.fake.write_desc_name, buf_name,
-			"and THAT is the name the server read out of the "
-			"command's Table A-6 descriptor");
+	/* The interop assertion: the name the SERVER read off the wire is one
+	 * OUR port really minted, and it was a SOURCE at that moment. */
+	buf_name = e.fake.write_desc_name;
+	ct_check(buf_name != 0u,
+		 "the server read a real buffer name off the command's Table "
+		 "A-6 descriptor");
+	ct_check_eq_u32(e.fake.write_src_registered, 1u,
+			"and OUR port really held that name when it did");
+	ct_check_eq_u32(e.fake.write_src_access, (unsigned)PE_BLK_ACC_SRC,
+			"...as a SOURCE its request could be answered from");
 	ct_check_eq_u32(e.fake.write_desc_conid, CL_CONID,
 			"...beside OUR OWN local Con.ID, from the connection");
-	ct_check(pe_blk_buf_lookup(&e.port, buf_name) != NULL,
-		 "and the buffer is really registered with the port");
-	ct_check_eq_u32(pe_blk_buf_lookup(&e.port, buf_name)->access,
-			(unsigned)PE_BLK_ACC_SRC,
-			"...as a SOURCE the peer's port may read from");
 
-	/* The ungrounded half, asserted as an OPEN FACT so it cannot drift. */
+	/* E41: the SERVER asks, and the CLIENT'S PORT answers by itself. */
+	ct_check_eq_u32(e.fake.requests_issued, 1u,
+			"the server issued a REQUEST DATA for those bytes");
+	ct_check_eq_u32(e.fake.answer_frames, 1u,
+			"and the client's PORT answered it -- one data frame");
+	ct_check_eq_u32(e.fake.answer_bytes, MSCP_CL_BLOCK_SIZE,
+			"...carrying the whole requested span");
+	ct_check_eq_u32(e.port.blk_req_answered, 1u,
+			"counted by the port that did it");
+	ct_check_eq_u32(e.port.blk_req_unknown_buffer, 0u,
+			"and it knew the buffer -- nothing was dropped");
+
+	/* THE PROOF: the caller's real bytes are on the server's real device, at
+	 * the LBN the caller named. */
+	ct_check_eq_u32(e.fake.writes, 1u,
+			"the served volume was written exactly once");
+	ct_check(memcmp(e.fake.units[0].data + 2u * MSCP_SRV_BLOCK_SIZE,
+			e.iobuf, MSCP_CL_BLOCK_SIZE) == 0,
+		 "and it holds the CALLER'S OWN bytes at LBN 2 -- moved by the "
+		 "port's responder, not copied by this test");
+
+	/* And the caller is told, by the SERVER's end message. */
+	ct_check_eq_u32(e.done.calls, 1u, "the caller was completed");
+	ct_check_eq_u32(e.done.handle, 0x99u, "...on its own handle");
+	ct_check_eq_u32(vms_mscp_status_major(e.done.status),
+			(unsigned)VMS_MSCP_ST_SUCCESS, "with Success");
+	ct_check_eq_u32(e.done.bytes, MSCP_CL_BLOCK_SIZE,
+			"and the SERVER's own byte count");
+	ct_check_eq_u32(e.cl.writes_completed, 1u, "counted");
+	ct_check_eq_u32(e.cl.writes_undelivered, 0u,
+			"and NOTHING was left undelivered -- the E41 gap is shut");
+	ct_check(pe_blk_buf_lookup(&e.port, buf_name) == NULL,
+		 "the buffer name was released with the request -- a name that "
+		 "outlived its transfer is a landing zone for a stale frame");
+}
+
+/*
+ * ...and the honest end when the request never arrives: the deadline, not a
+ * hang, and `writes_undelivered` is still the measure of it.
+ */
+static void test_write_request_lost_is_reaped(void)
+{
+	static struct env e;
+	uint32_t buf_name;
+
+	printf("-- WRITE: a REQUEST DATA the wire ate is reaped honestly\n");
+	env_start(&e, 6u);
+	env_add_unit(&e, 1u, 32u, 0);
+	env_go(&e, 6u);
+	e.drop_write_request = 1;
+
+	memset(e.iobuf, 0xa5, sizeof(e.iobuf));
+	ct_check_eq_u32((unsigned long)mscp_cl_fsm_write(&e.cl, "VAX1$DUA1:",
+							 2u, 1u, e.iobuf,
+							 MSCP_CL_BLOCK_SIZE,
+							 0x99u),
+			0, "the WRITE was taken");
+	buf_name = e.cl.cdrp[0].buf_name;
+	ct_check_eq_u32(e.fake.requests_issued, 1u, "the server did ask");
+	ct_check_eq_u32(e.fake.answer_frames, 0u, "but no answer came back");
 	ct_check_eq_u32(e.done.calls, 0u,
-			"RECORDED (integration note E39): nothing completes -- "
-			"which side initiates a WRITE block transfer is not "
-			"grounded, and this driver invents no initiation");
+			"nothing completes on a transfer that did not happen");
 	ct_check_eq_u32(e.fake.writes, 0u, "and not a block was written");
 
-	/* ...and the honest end: the deadline, not a hang. */
 	e.now_ms = MSCP_SRV_CTLR_TIMEOUT_SECS * 1000u;
 	ct_check_eq_u32(mscp_cl_fsm_tick(&e.cl), 1u, "the deadline reaps it");
 	ct_check_eq_u32(e.done.calls, 1u, "and the caller is told");
 	ct_check_eq_u32(vms_mscp_status_major(e.done.status),
 			(unsigned)VMS_MSCP_ST_ABORTED, "Command Aborted");
 	ct_check_eq_u32(e.cl.writes_undelivered, 1u,
-			"and the gap is a MEASURED number, not a comment");
+			"and the loss is a MEASURED number, not a hang");
 	ct_check(pe_blk_buf_lookup(&e.port, buf_name) == NULL,
-		 "the buffer name was released with the request -- a name that "
-		 "outlived its transfer is a landing zone for a stale frame");
+		 "the buffer name went with the request");
 }
 
 /* ------------------------------------------------------------------ *
@@ -1273,7 +1454,8 @@ int main(void)
 	test_read_end_to_end();
 	test_short_read_is_refused();
 	test_controller_timeout();
-	test_write_as_far_as_grounded();
+	test_write_moves_real_bytes();
+	test_write_request_lost_is_reaped();
 	test_close_withdraws_devices();
 	test_unmatched_end_is_not_applied();
 	test_unit_naming();

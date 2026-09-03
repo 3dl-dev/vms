@@ -1016,6 +1016,25 @@ struct pe_fsm {
 				    * delivered upward -- see pe_blk_rx_
 				    * trailer_try                             */
 
+	/* ---- FC-P6.5: the REQUEST DATA responder (design SS3.2.6, E41) ----
+	 *
+	 * A header-only block frame is a REQUEST DATA, and the port answers it
+	 * ITSELF -- no SYSAP is asked and none is told. These four numbers are
+	 * the whole audit trail of that automatic behaviour, so "did this port
+	 * answer, refuse, or ignore a request" is a measurement.
+	 */
+	uint32_t blk_req_rx;       /* header-only frames naming a SOURCE buffer
+				    * of ours: ours to answer                 */
+	uint32_t blk_req_answered; /* ...and every byte of it went out         */
+	uint32_t blk_req_unknown_buffer;
+				   /* a header-only frame naming NO source
+				    * buffer of ours: DROPPED and counted, never
+				    * answered from some other buffer          */
+	uint32_t blk_req_refused;  /* ours, but refused: the buffer is not a
+				    * legal SOURCE, the span falls outside it,
+				    * or the transmit failed part-way -- never
+				    * clamped and never partially claimed      */
+
 	/* The one frame buffer. Sized for the largest frame SS4(k) grounds. */
 	uint8_t  scratch[VMS_HELLO_PADDED_MAX_FRAME];
 };
@@ -1441,7 +1460,9 @@ const struct pe_blk_buf *pe_blk_buf_lookup(const struct pe_fsm *f,
  *
  * `tail_reserve == 0` sends the whole transfer as standalone frames, which
  * with a length that fits one frame is exactly WRITE's data-bearing half (the
- * capture's two-frame form; the header-only half is pe_blk_send_ack below).
+ * capture's two-frame form; the header-only half is pe_blk_send_request below,
+ * and on the answering side the port emits the data half ITSELF -- see
+ * pe_blk_rx_try's REQUEST DATA arm).
  *
  * The header of each frame is filled from REAL state: the destination
  * connection ID and the remote buffer name/offset from `*x` (which the SYSAP
@@ -1479,14 +1500,32 @@ int pe_blk_send_read_end(struct pe_fsm *f, const struct pe_blk_xfer *x,
 			 uint32_t body_len);
 
 /*
- * pe_blk_send_ack - the capture's TRAP 2, send side: the header-only half of
- * WRITE's two-frame form, whose 28 bytes are BYTE-IDENTICAL to the request's.
- * `req` is a header this port PARSED off the received request, so every byte
- * echoed here was read from the wire -- there is no field this function
- * composes.
+ * pe_blk_send_request - REQUEST DATA, send side (FC-P6.5; design SS3.2.6's E41
+ * ruling). The second of the two operations *VAXcluster Principles*
+ * pp. 2-32..2-41 defines on named buffers: SEND DATA moves a local buffer to a
+ * remote named buffer (pe_blk_send above, READ's shape), REQUEST DATA FETCHES a
+ * remote named buffer into a local one -- and in MSCP it is always the SERVER
+ * that issues it, because it is the only side that knows both names (it read
+ * the host's off the command's Table A-6 buffer descriptor and minted its own).
+ *
+ * ***  THE ROLES IN `*x` ARE SWAPPED RELATIVE TO pe_blk_send  ***  and
+ * deliberately so, because the direction of the DATA is reversed:
+ *
+ *      pe_blk_send        local_name = SOURCE (we send its bytes)
+ *      pe_blk_send_request  local_name = DESTINATION (the peer will fill it)
+ *                           remote_name = the SOURCE we are asking for
+ *
+ * So `x->local_name` must be registered PE_BLK_ACC_DST and `x->remote_name` is
+ * the peer's own buffer name, read off its message -- refused (PE_BLK_NONAME)
+ * rather than invented, exactly as pe_blk_send refuses.
+ *
+ * The frame is HEADER-ONLY: 28 bytes with no data behind them, which is
+ * precisely half of the vms291 WRITE pair ("two byte-identical 28-byte headers;
+ * only the presence of data distinguishes them"). `x->length` goes in the
+ * header's +8, and the answering port's FIRST frame therefore reproduces this
+ * header byte for byte.
  */
-int pe_blk_send_ack(struct pe_fsm *f, vms_scs_sysid_t dst,
-		    const struct vms_blk_hdr *req);
+int pe_blk_send_request(struct pe_fsm *f, const struct pe_blk_xfer *x);
 
 /*
  * pe_blk_rx_try - the receive path's block-transfer arm, called from the VC's
@@ -1504,6 +1543,31 @@ int pe_blk_send_ack(struct pe_fsm *f, vms_scs_sysid_t dst,
  *
  * A frame that names one of our buffers but addresses outside it is DROPPED
  * and counted (blk_rx_range) -- never clamped, never partially applied.
+ *
+ * ***  IT ALSO ANSWERS A REQUEST DATA, BY ITSELF (FC-P6.5, design SS3.2.6)  ***
+ *
+ * A block frame with NO DATA behind its header is a REQUEST DATA, and E41 rules
+ * that the host's PORT answers it -- "with no SYSAP involvement -- by
+ * transmitting the named buffer's contents under the same header". So this arm
+ * has two halves and takes the request one FIRST, on the one fact that
+ * separates them: a request's SOURCE name is a buffer of OURS (the peer is
+ * asking for our bytes), while a delivery's DESTINATION name is. Both are the
+ * same positive executive lookup; neither is a guess about bytes.
+ *
+ *   data_len == 0 and src_name resolves here  -> we answer it, from that
+ *                                                buffer, and consume the frame
+ *   data_len == 0 and it does not             -> DROPPED and counted
+ *                                                (blk_req_unknown_buffer); a
+ *                                                request for a buffer we do not
+ *                                                have is never answered from
+ *                                                another one
+ *   data_len  > 0                             -> the delivery half above
+ *
+ * NO UPCALL IS MADE FOR A REQUEST. The SYSAP registered the buffer, told the
+ * peer its name, and is waiting for its own protocol's completion (for MSCP,
+ * the WRITE end message); the port answering the transport-level request is not
+ * an application event and inventing one would be this layer asserting a
+ * completion the server has not stated.
  */
 int pe_blk_rx_try(struct pe_fsm *f, struct pe_vc *vc,
 		  const struct vms_frame_info *fi, const uint8_t *frame,

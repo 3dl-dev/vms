@@ -148,24 +148,36 @@
  * completes with a fabricated success and it never hangs.
  *
  * ------------------------------------------------------------------------
- * WHAT THIS FILE REFUSES TO BUILD (WRITE's data direction) -- read this
+ * WRITE'S DATA DIRECTION -- RULED (design §3.2.6's E41), and why this file
+ * still does not initiate a block transfer
  * ------------------------------------------------------------------------
  * READ is fully grounded end to end (docs/design-mscp-direction.md: "READ
  * streams standalone block frames server->client and piggybacks the final
  * partial chunk into the same Ethernet frame as the MSCP end message"), and
  * this file implements it.
  *
- * WRITE is NOT. The same capture records only that "WRITE is a two-frame
- * request/response whose two 28-byte headers are BYTE-IDENTICAL -- only the
- * presence of data distinguishes them", and it does not establish WHICH SIDE
- * SENDS THE FIRST OF THE TWO. docs/cluster-integration-notes.md E39 carries
- * that as an open lab-ask. So this class driver does the half it can defend:
- * it issues a REAL WRITE command carrying a REAL named buffer (registered
- * PE_BLK_ACC_SRC, so the peer's port may read our bytes out of it) and a REAL
- * descriptor, and then WAITS. It does not invent a block-transfer initiation.
- * If the bytes never move, the deadline above reaps the request with Command
- * Aborted and the caller is told the truth. `writes_undelivered` counts
- * exactly that outcome, so the gap is a measured number rather than a comment.
+ * WRITE's choreography was an open question when FC-P7.1 landed (the capture
+ * records only that "WRITE is a two-frame request/response whose two 28-byte
+ * headers are BYTE-IDENTICAL -- only the presence of data distinguishes them",
+ * and not which side sends the first). Design §3.2.6 rules it from the book:
+ * *VAXcluster Principles* pp. 2-32..2-41 gives the block data service two
+ * operations on named buffers, and BOTH are initiated by the side that knows
+ * both names -- which in MSCP is always the SERVER. WRITE is therefore a
+ * server-sent REQUEST DATA, and the client's PORT answers it automatically,
+ * with no SYSAP involvement.
+ *
+ * SO THIS FILE'S BEHAVIOUR IS UNCHANGED AND IS NOW THE RIGHT ONE. It issues a
+ * REAL WRITE command carrying a REAL named buffer (registered PE_BLK_ACC_SRC
+ * -- which is exactly what lets the peer's request be answered out of it) and
+ * a REAL descriptor, and then waits for the server's END MESSAGE, which is the
+ * only thing that completes a transfer. It initiates no block transfer of its
+ * own, because on this wire the client never does. The data moves one layer
+ * down, in the port (FC-P6.5, vms_pe_fsm.h §8d's REQUEST DATA responder).
+ *
+ * If the bytes never move -- a lost request, a peer that never asks -- the
+ * deadline above reaps the request with Command Aborted and the caller is told
+ * the truth. `writes_undelivered` counts exactly that outcome, so a WRITE that
+ * did not complete is a measured number rather than a hang.
  *
  * INCLUDES: kernel-core headers only (CI gate
  * tools/ci/cluster_core_includes_gate.sh).

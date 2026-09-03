@@ -141,6 +141,33 @@
  * drives the SEND DATA from the completion. Only the waiting moved.
  *
  * ------------------------------------------------------------------------
+ * A WRITE'S DATA IS *REQUESTED*, NOT WAITED FOR (FC-P6.5, design SS3.2.6/E41)
+ * ------------------------------------------------------------------------
+ * *VAXcluster Principles* pp. 2-32..2-41 gives the block data service two
+ * operations on named buffers, and both are initiated by the side that knows
+ * BOTH names -- which in MSCP is always the SERVER, because it read the host's
+ * name off the command's Table A-6 buffer descriptor and minted its own:
+ *
+ *   READ  = server SEND DATA     (data frames toward the host, the last chunk
+ *                                 piggybacked on the end message)
+ *   WRITE = server REQUEST DATA  (a header-only block frame naming the host's
+ *                                 buffer as SOURCE, which the host's PORT
+ *                                 answers by transmitting those bytes under the
+ *                                 same header -- no SYSAP of its own involved)
+ *
+ * FC-P6.3 shipped only the first half of WRITE: it registered a destination
+ * buffer and then WAITED for data nobody had asked for, so every WRITE was
+ * reaped at the deadline. So a WRITE command now, in order: gate it, register
+ * the staging slot as a destination (`recv_write_data`), and ISSUE the request
+ * (`request_write_data`). The bytes arrive at mscp_srv_fsm_block_data() exactly
+ * as they always did, the disk commit still goes to the served-I/O WORKER, and
+ * the end message is still built on that worker's completion.
+ *
+ * A REQUEST THAT COULD NOT BE ISSUED IS AN ANSWERED COMMAND. The buffer name is
+ * withdrawn, the HRB is freed and the host gets a real MSCP error -- never an
+ * HRB left waiting for a transfer the peer was never asked to make.
+ *
+ * ------------------------------------------------------------------------
  * WRITE PROTECTION IS ANSWERED, NOT FAKED (the plan row's own clause)
  * ------------------------------------------------------------------------
  * A WRITE to a write-protected unit is answered `ST.WPR` with the sub-code
@@ -455,6 +482,25 @@ struct mscp_srv_ops {
 			       vms_scs_sysid_t peer,
 			       const struct mscp_srv_bufdesc *desc,
 			       uint8_t *buf, uint32_t len, uint32_t *name_out);
+
+	/*
+	 * WRITE's OTHER half, and the one that makes the bytes move (FC-P6.5,
+	 * design SS3.2.6's E41 ruling): issue a REQUEST DATA to the host,
+	 * naming ITS buffer (`desc`, read off its own command) as the transfer's
+	 * SOURCE and `local_name` -- the one recv_write_data just registered --
+	 * as the destination. The host's PORT answers it automatically, with no
+	 * SYSAP of its own involved, and the bytes arrive through
+	 * mscp_srv_fsm_block_data() exactly as before.
+	 *
+	 * ONLY THE SERVER CAN ISSUE IT, which is why it lives here: it is the
+	 * only side that knows BOTH buffer names. Returns 0 when the request
+	 * really went out; non-zero is answered with a real MSCP error, never
+	 * with a wait for data nobody was asked for.
+	 */
+	int (*request_write_data)(void *ctx, vms_conid_t conid,
+				  vms_scs_sysid_t peer,
+				  const struct mscp_srv_bufdesc *desc,
+				  uint32_t local_name, uint32_t len);
 	void (*release_buffer)(void *ctx, uint32_t name);
 
 	uint32_t (*now_ms)(void *ctx);
@@ -572,6 +618,12 @@ struct mscp_srv_fsm {
 	uint32_t unfl_no_host_value;  /* P.UNFL with no host half yet            */
 	uint32_t reqs_aborted;        /* HRBs the timeout reaped (Command Aborted) */
 	uint32_t reqs_refused_busy;   /* no HRB free: refused, never overwritten  */
+
+	/* WRITE's REQUEST DATA (FC-P6.5). Every accepted WRITE issues exactly
+	 * one; a request that could not be issued is an answered command, never
+	 * a silent wait. */
+	uint32_t write_requests_issued;
+	uint32_t write_requests_refused;
 
 	/* The served-I/O worker (FC-P6.6). Every submitted request ends in
 	 * exactly one of io_done_ok / io_done_failed / reqs_abandoned, or is

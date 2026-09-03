@@ -350,7 +350,7 @@ int pe_incarnation(struct vms_pe *pe, uint32_t *lo, uint32_t *hi);
  * two above: these are the frozen glue-facing names, and the REAL, R1-tested
  * implementation is the pure `struct pe_fsm *` family in vms_pe_fsm.h SS8d
  * (pe_blk_buf_register / pe_blk_buf_release / pe_blk_send /
- * pe_blk_send_read_end / pe_blk_send_ack), so the glue's job is again the
+ * pe_blk_send_read_end / pe_blk_send_request), so the glue's job is again the
  * one-line dereference and never a second implementation.
  *
  * `name_out` is the port's own token for the buffer; the SYSAP sends it to the
@@ -370,6 +370,20 @@ int pe_buf_release(struct vms_pe *pe, uint32_t name);
  * the peer's own message rather than chosen here. */
 int pe_send_block(struct vms_pe *pe, const struct pe_blk_xfer *x,
 		  uint32_t *frames_out);
+
+/*
+ * REQUEST DATA (ADDED BY FC-P6.5; design SS3.2.6's E41 ruling): ask the peer's
+ * port to fill OUR named buffer from ITS named buffer, by transmitting the
+ * header-only half of the pair. `x->local_name` is the buffer we registered
+ * PE_BLK_ACC_DST and `x->remote_name` is the peer's own name, read off its
+ * message -- the roles are the REVERSE of pe_send_block's, see
+ * vms_pe_fsm.h SS8d's pe_blk_send_request.
+ *
+ * The MSCP server is its only production caller: a WRITE command's data is
+ * fetched this way, and the answering port sends it with NO SYSAP of its own
+ * involved. One-line dereference into the pure twin, as every entry here is.
+ */
+int pe_request_block(struct vms_pe *pe, const struct pe_blk_xfer *x);
 
 /*
  * READ's WHOLE answer in one call (ADDED BY FC-P6.3, the first caller): stream

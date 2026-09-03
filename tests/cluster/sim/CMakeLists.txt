@@ -90,6 +90,17 @@ target_compile_definitions(test_sim_cnxman_join PRIVATE
 target_include_directories(test_sim_cnxman_join PRIVATE
     ${CMAKE_SOURCE_DIR}/tests/cluster/host)
 
+# FC-P6.5's rung-R2 leg: TWO simulated nodes complete an MSCP WRITE over the
+# virtual LAN -- the client's class driver, the server's MSCP server, and BOTH
+# ports' block-transfer services (the server's REQUEST DATA and the client
+# port's automatic responder) are the shipping objects. Same "add the file, then
+# ONE line here" path, plus the two MSCP libraries the scenario instantiates.
+cluster_sim_test(test_sim_mscp_write scenarios/mscp_write.c)
+target_link_libraries(test_sim_mscp_write PRIVATE
+    cluster_host_mscp_cl cluster_host_mscp_srv)
+target_include_directories(test_sim_mscp_write PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host)
+
 cluster_sim_test(test_replay test_replay.c)
 target_link_libraries(test_replay PRIVATE cluster_host_fixture)
 target_compile_definitions(test_replay PRIVATE

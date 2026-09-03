@@ -35,13 +35,13 @@
 #       ask 1). Whether a real class driver reaches a unit 0, and with what
 #       seed, is settled here.
 #
-#   (c) WRITE's BLOCK-TRANSFER INITIATION DIRECTION (E39 ask 2). The capture
-#       grounds only that WRITE's two 28-byte headers are BYTE-IDENTICAL; it
-#       does NOT say which side sends the first of the two. FC-P7.1 therefore
-#       issues a real WRITE command with a real named buffer and then WAITS,
-#       and its own deadline reaps the request honestly -- it invents no
-#       initiation (`writes_undelivered` counts exactly that outcome). A capture
-#       of a real VMS class driver WRITING to a served volume is what closes it.
+#   (c) WRITE's BLOCK-TRANSFER INITIATION DIRECTION -- RULED SINCE, and now a
+#       DIFFERENT ask. Design §3.2.6's E41 settled it from the book: WRITE is a
+#       SERVER-sent REQUEST DATA that the client's PORT answers automatically,
+#       and FC-P6.5 built that responder (vms_pe_fsm.h §8d). So this driver
+#       still initiates nothing -- correctly -- and the WRITE data now moves one
+#       layer down. What the lab still owes is the grading of OUR answer against
+#       a REAL port, which is tests/lab/tools/run_mscp_write_gate.sh's R4/R5.
 #
 #   (d) THE BLOCK HEADER'S +4/+6 WORDS, from the RECEIVE side. OVMX now LEARNS
 #       them off a frame that really arrived (vms_pe_fsm.h SS3b) and echoes them

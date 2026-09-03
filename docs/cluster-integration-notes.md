@@ -503,12 +503,16 @@ The CLUSTER_DIAG_CONN/CSB/PORT ioctls pass HOST tests but the QEMU kmod diag tes
 return nonzero. FC-P6.6 proved conn/membership pre-existing at 28cee71b (vc_diag never
 ran — the E46 oops killed the boot first). **Needs investigation BEFORE the tier-1
 wire smoke** (SHOW CLUSTER uses these — if they truly fail in the kmod, SHOW CLUSTER
-won't work on a booted node). LIKELY-BENIGN hypothesis to check FIRST: the kmod test
-may call the diag ioctl BEFORE CLUSTER_START, so a nonzero `SS$_NOSUCHDEV` is the
-HONEST negctl behavior (P0.9's documented pre-init path), not a bug — the test's
-expectation may be wrong. Verify: does the test start the port/cluster before the
-diag call? If not, fix the test; if yes, real kmod-dispatch bug. Not blocking the
-P6.5/P7.2 build chain.
+won't work on a booted node). **CONFIRMED REAL BUG (integrator checked):** the test comment (line 11) says the
+diag ioctl "must DISPATCH on a booted node whether or not" the cluster is started —
+i.e. dispatch-always, empty rows when not started, NOT an error. The `ioctl()<0`
+path fires, so the handler returns an error (likely SS$_NOSUCHDEV when the port/SCS
+isn't initialized) instead of SS$_NORMAL + empty. Fix = the CLUSTER_DIAG_PORT/CONN/CSB
+handlers return success + a zero-row/empty snapshot when the cluster/port isn't
+started (a diagnostic reads state, it doesn't require the subject to exist). Needs
+QEMU-boot verification (host tests can't catch it) — lab-defer the boot proof,
+fix + reason + cross-compile provable here. **Fix before the tier-1 wire smoke
+(SHOW CLUSTER depends on it).** Disjoint from the P6.5/P7.2 chain.
 
 ## RESOLVED / carried couplings
 

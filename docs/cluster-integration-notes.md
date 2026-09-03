@@ -367,6 +367,13 @@ sends a counted zero and logs it (honest but may be rejected by a real VAX).
   to cat-06 op-00 close — tables never see each other's frames; flagged not renamed
   (frozen enum).
 
+### E16 — RESOLVED (FC-E16, tip 5d7dd9c9). The backslash false-failure is fixed: the guard is now scoped to product TUs (`^(src|tools)/`) after filtering, so test-only `-DOVMX_FIXTURE_DIR="…"` escaped quotes no longer trip it; teeth preserved (verified: a product-TU backslash → refused; a kif-only-in-tests caller → FAILed). The census now fails for a DIFFERENT, real reason → E34.
+
+### E34. ⚠ PRE-PR BLOCKER: cluster DIAG ioctls have no product caller → census red (unmasked by E16)
+`kif_caller_census` (repo-wide gate, exit 1) now fails: **`VMS_IOCTL_CLUSTER_DIAG_PORT` — no `vms_kif.c` wrapper ever issues it.** Same will apply to `CLUSTER_DIAG_CONN` (FC-P2.4) and `CLUSTER_DIAG_CSB` (FC-P3.8) — all diagnostic ioctls reachable ONLY through a test tool = the facade shape the census correctly catches. NOT in the cluster integration gate loop (cluster_host/includes/check_guest_payload all pass) — it blocks the FINAL PR to main only.
+- **Proper fix = FC-P3.9's SHOW CLUSTER** becomes the real product caller: P3.9 adds `SHOW CLUSTER`/`$GETSYI` reading the executive → give each cluster DIAG ioctl a `vms_kif.c` wrapper that SHOW CLUSTER (or the cluster-diag CLI) issues → census green with a REAL product path, no OVMX-UNWIRED throwaway. **FC-P3.9 MUST wire kif wrappers for DIAG_PORT/CONN/CSB and their SHOW-CLUSTER caller** (mind the "new kif symbol → N places / shr.vec" trap). Do NOT let feat/cluster-executive PR to main while census is red.
+- Interim OVMX-UNWIRED declarations are the fallback ONLY if P3.9 slips — but they'd be throwaway, so prefer the real caller.
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

@@ -32,6 +32,32 @@ filling a lock id. Byte ownership of the 204-byte class (frame-absolute):
   (56–71), `codec_cm`/`codec_dlm`/`codec_mscp` (bodies, `body[]`-relative). A
   `vms_frame_compose(link,scs,body)` exists for tests/simulator ONLY.
 - **Binds:** FC-P0.9, FC-P1.3, FC-P2.2, FC-P2.4, FC-P3.8 build to this contract.
+- **FC-P2.2's finding — SCS→port is TWO calls, because the wire is two
+  shapes, and that is not a second design.** The body-level seam above is the
+  APPLICATION-MESSAGE path: the fixed 190-content class, split port 0–55 / SCS
+  56–71 / SYSAP 72–203, and `pe_vc_send_msg` requires exactly
+  `PE_SEND_BODY_LEN` (148). SCS's own **connect verbs** (ops 0–9) occupy the
+  SHORT SCA classes 58/62/66/110, which no lower layer can pre-build, so SCS
+  builds the whole frame through `vms_scs_ctrl_build()` (getting its real
+  addressing from `pe_vc_addr`, never inventing a MAC) and hands it to
+  FC-P1.2's frame-level `pe_vc_send_frame`, which stamps the sequence. That is
+  exactly what `pe_vc_send_frame`'s own doc-comment describes it for. So
+  `struct scs_fsm_ops` has `send_ctrl` (→ `pe_vc_send_frame`), `send_msg`
+  (→ `pe_vc_send_msg`) and `addr` (→ `pe_vc_addr`), and FC-P2.4's glue is three
+  one-line bindings. FC-P2.2 also added the 16-byte body-level SCS header
+  builder/parser this needs (`vms_scs_hdr_build`/`_parse`/`_parse_frame`,
+  `vms_scs_msg_body`/`_body_build`) to the FC-P2.1 codec TU, so `vms_scs_fsm.c`
+  contains no wire offset at all.
+- **FC-P2.2's honesty note on abs 36–55 of a CONTROL frame.** `vms_scs_ctrl_build`
+  writes the whole frame, but abs 32–55 is the PORT's span in the table above.
+  SCS therefore passes explicit zeros for the incarnation echo (36),
+  NISCS_LAN_OVRHD (38) and the two observed tail constants (52/54), exactly as
+  `pe_vc_send_msg` already leaves 36–55 zero for the 190-content class, and the
+  port stamps 32/34/44 at transmit. The abs-72 marker word goes out zero for the
+  same reason: §4(h)(1a) grounds semantics for op 6's `marker[2:4]` alone and no
+  capture isolates its encoding. **When FC-P1.1's generic 36–55 builder lands,
+  both paths should use it**; until then these are documented zeros, not a
+  template.
 - **CONFORMANCE RETROFIT = FC-P3.15** (Sonnet-tier). Fable scoped it to FC-P3.5,
   but the integrator WIDENS it to cover **every CNXMAN frame-emitter landed
   frame-level**: FC-P3.5 barrier AND FC-P3.12 coordinator (dispatched against the
@@ -43,6 +69,82 @@ filling a lock id. Byte ownership of the 204-byte class (frame-absolute):
   body). R1 must prove NO CNXMAN TU writes below body offset 0.
   **DISPATCH FC-P3.15 ONLY AFTER FC-P3.12 lands** (else it races the coordinator
   on the same files).
+
+### E18. The port cannot ROUTE the 58- and 94-content SCS classes upward (raised by FC-P2.2)
+**Blocks the R4 half of FC-P2.4, not FC-P2.2's R1.** `vms_pe_fsm.c`'s
+`vc_deliver()` only hands a frame to SCS when the codec grants it
+`VMS_FCAP_CONID` — and FC-P0.6's frozen classify table grants that to
+`VMS_FCLS_SCS_CONN_CTRL` for content lengths **{110, 66, 62} only** (plus
+`VMS_FCLS_SCS_MSG` for 190). So on a real wire:
+- a **58-content** short (ops 5 REJECT_RSP, 7 DISCONNECT_RSP, 8 CREDIT_REQ,
+  9 CREDIT_RSP) classifies as `VMS_FCLS_SCS_SEQ`, which carries **no** CONID
+  capability, and is acked-but-unrouted (`vc_rx_undelivered`);
+- a **94-content** directory lookup (op 10) is likewise unroutable — and
+  widening the CONN_CTRL rule alone does NOT fix it, because that rule's
+  `M_FIELD_NE` guard deliberately excludes op 10.
+
+Consequence: OVMX would send its own `8 → 9 → 6 → 7` teardown and its directory
+lookups correctly and never see the peer's answers. FC-P2.2 is unaffected at R1
+(`scs_fsm_rx_message()` classifies and parses the frame itself, and its tests
+drive it directly), and **sending** all five classes already works
+(`pe_vc_send_frame` classifies for the sequence stamp only, and
+`VMS_FCLS_SCS_SEQ` does carry `VMS_FCAP_SEQ`).
+- **Grounding for the fix:** §4(h)(1b) states the envelope — including the
+  Con.ID pair at payload `[50:58]` — is uniform across "the short classes here,
+  the 94-content MSCP commands, and the 190-content class". FC-P0.6's narrower
+  rule is its own harvest note ("§4(h)(1a) grounds the Con.ID pair … over the
+  110/66/62 content classes"), superseded by (1b).
+- **Disposition:** owned by **FC-P2.4** (or a small FC-P2.1 follow-up), because
+  it edits the FROZEN shared `vms_cluster_codec.c` rule table and wants its own
+  codec test. Two edits: add 58 to `VMS_FCLS_SCS_CONN_CTRL`'s length list, and
+  give op-10 a CONID-capable class at 94 content (either widen
+  `VMS_FCLS_SCS_MSG` to {190, 94} or add a directory class). FC-P2.2 did NOT
+  make this change: improvising a classification widening inside an FSM item
+  would be exactly the kind of unreviewed frozen-table edit E5 warns about.
+
+### E19. `scs_sysap_ops.closed` IS design §3.2.5's `disconnected()` (raised by FC-P2.2)
+The design and the plan row say a VC break "calls each SYSAP's
+`disconnected()`"; the FROZEN FC-P0.1 interface spells that callback
+`closed(ctx, local_conid, reason)`. FC-P2.2 kept the frozen spelling rather
+than adding a second callback for the same event — a SYSAP is told ONCE that a
+connection is gone, with the reason that took it (`SCS_CLOSE_PATHLOST` →
+`SS$_PATHLOST` in the glue). `vms_scs.h` now says so at the callback. **Name
+difference only, no behavioural divergence.** FC-P2.2 did ADD one optional,
+NULL-safe callback the design implies but the frozen struct lacked:
+`send_failed(ctx, conid, reason)`, so a message that was in *Credit Wait* when
+the path died is reported rather than evaporating (§3.2.5: "pending sends fail
+`SS$_PATHLOST`" — Credit Wait is what a pending send IS, *VAXcluster
+Principles* ch. 2).
+
+### E20. FC-P2.3 must GROW FC-P2.2's SDIR seed, not add a second registry (raised by FC-P2.2)
+The plan puts the SYSAP registry in FC-P2.3 but names `vms_scs_fsm.c` as where
+it lives — and FC-P2.2 could not test a single inbound connect without one. So
+FC-P2.2 landed the minimal ch. 2 shape: an **SDIR table** (`struct scs_sdir`,
+`SCS_MAX_SYSAPS`) plus a **listening CDT** per registered name, with
+`scs_fsm_listen()/_unlisten()`. That is what makes the frozen ladder's
+`VMS_SCS_CDT_LISTEN` and `_CONNECT_RCVD` states real: ch. 2 puts the listening
+CDT in CONNECT RECEIVED while the SYSAP decides, returns it to LISTEN when the
+request is answered, and allocates the connection's OWN CDT only on ACCEPT.
+**FC-P2.3 adds on top:** the `vms_scs.h` service wrappers
+(`scs_sysap_listen/_unlisten/_connect/_accept/_reject/_send_msg/
+_return_credit` → their `scs_fsm_*` twins) and the `SCS$DIRECTORY` SYSAP. It
+must NOT introduce a second name table.
+
+### E21. SCSFLOWCUSH is not in `struct vms_cluster_params` (raised by FC-P2.2)
+p. 2-44's "dangerously low" test is `local Receive Credit < SCSFLOWCUSH +
+remote Minimum Send Credits`. FC-P2.2 holds the cushion in `scs_fsm_cfg`
+(default 1, the PUBLISHED VAX/VMS V7.3 SYSGEN default — at which a real VAX
+emitted **zero** type-8 frames in 440 367, §4(h)(1g), which the default
+reproduces). It is NOT in the SYSGEN struct that crosses
+`VMS_IOCTL_SYSGEN_LOAD`, because that is FC-P0.10's ABI and an FSM item should
+not churn it. **FC-P0.10 or FC-P2.4 should add `scsflowcush` to
+`vms_cluster_params`** and have the glue pass it through `scs_fsm_set_cfg()`.
+The second term (the peer's Minimum Send Credits) has **no grounded wire
+offset** anywhere in the spec, so it is never guessed: the CDT carries
+`peer_min_send_credits` with a `_valid` flag that nothing yet sets, and every
+firing of the partial threshold is counted in
+`scs_fsm.credit_msg_partial_threshold`. A lab capture isolating that field
+would close it.
 
 ## LAB-lane inputs needed (capture/oracle — the lab owns these)
 
@@ -175,9 +277,14 @@ in-module (e.g. FC-P3.4/P6.3). **Do not re-add a codec object already present**
 ### E10. VC gap-break under loss → RULED a fidelity bug; FC-P1.9 go-back-N LANDED (Fable, design §3.2.5)
 **recv_anchored deletion RATIFIED by Fable (§3.2.5): §4(i).A grounds recv_seq=0 as the port's formation anchor; no re-formation case exists; corrected failure shape (gap→ladder exhaustion→loud break) is right. No follow-up.**
 
-**Status: FIXED.** FC-P1.9 implemented the ruling on top of FC-P1.3 (no collision
-left — P1.3 integrated first, as this entry required). **FC-P2.2 is unblocked**
-and binds `pe_upper_ops.vc_down` (see the seam note below).
+**Status: FIXED, and the FC-P2.2 half is now LANDED.** FC-P1.9 implemented the
+ruling on top of FC-P1.3. **FC-P2.2 landed the SCS half**: `scs_fsm_vc_down(f, peer,
+reason)` walks that SB's CDT queue and closes every CDT with `SCS_CLOSE_PATHLOST`,
+discards the ledgers, fails every Credit Wait entry with path-lost through the
+SYSAP's `send_failed`, and calls `closed()`. R1 test
+(`tests/cluster/host/test_scs_fsm_vcdown.c`) asserts each clause on an SB carrying
+four connections + that ZERO frames went on the wire during/after the break.
+FC-P2.4's glue only points `pe_upper_ops.vc_down` at it + maps the reason to `SS$_PATHLOST`.
 **RULED: break-on-first-gap is a FIDELITY BUG.** p. 2-31 governs the delivery
 guarantee + its consequence (if the port can't satisfy order/delivery, the VC and
 every connection on it break) — NOT the detection mechanism. The port satisfies

@@ -254,6 +254,131 @@ vms_codec_status_t vms_scs_ctrl_build(const struct vms_scs_ctrl_frame *f,
 }
 
 /* ------------------------------------------------------------------ *
+ * The body-level SCS header (abs 56-71) -- design SS3.2.4's E1 seam
+ * ------------------------------------------------------------------ */
+
+vms_codec_status_t vms_scs_hdr_build(const struct vms_scs_hdr *h,
+				     uint8_t *out, uint32_t cap)
+{
+	vms_wire_buf_t w;
+
+	if (h == (const struct vms_scs_hdr *)0 || out == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (cap < VMS_SCS_HDR_LEN)
+		return VMS_CODEC_E_SHORT;
+
+	vms_wire_buf_init(&w, out, VMS_SCS_HDR_LEN);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+
+	vms_wire_put_le16(&w, VMS_OFF_SCSHDR_INNERLEN, h->inner_len);
+	/* The one baked-in constant of this class (sec 4(h)(1b), GROUNDED
+	 * across every SCS length class) -- same discipline as
+	 * vms_scs_ctrl_build() above. */
+	vms_wire_put_le16(&w, VMS_OFF_SCSHDR_FMTWORD, VMS_SCSCTRL_FMTWORD_CONST);
+	vms_wire_put_le16(&w, VMS_OFF_SCSHDR_MTYPE, h->mtype);
+	vms_wire_put_le16(&w, VMS_OFF_SCSHDR_CREDIT, h->credit);
+	vms_wire_put_le32(&w, VMS_OFF_SCSHDR_CONID_R, h->conid_remote);
+	vms_wire_put_le32(&w, VMS_OFF_SCSHDR_CONID_L, h->conid_local);
+
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_scs_hdr_parse(const uint8_t *in, uint32_t len,
+				     struct vms_scs_hdr *out)
+{
+	vms_wire_view_t v;
+	uint16_t fmt;
+
+	if (in == (const uint8_t *)0 || out == (struct vms_scs_hdr *)0)
+		return VMS_CODEC_E_INVAL;
+	if (len < VMS_SCS_HDR_LEN)
+		return VMS_CODEC_E_SHORT;
+
+	vms_wire_view_init(&v, in, VMS_SCS_HDR_LEN);
+	if (!vms_wire_view_ok(&v))
+		return VMS_CODEC_E_INVAL;
+
+	fmt = vms_wire_get_le16(&v, VMS_OFF_SCSHDR_FMTWORD);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (fmt != VMS_SCSCTRL_FMTWORD_CONST)
+		return VMS_CODEC_E_CLASS;
+
+	out->inner_len    = vms_wire_get_le16(&v, VMS_OFF_SCSHDR_INNERLEN);
+	out->mtype        = vms_wire_get_le16(&v, VMS_OFF_SCSHDR_MTYPE);
+	out->credit       = vms_wire_get_le16(&v, VMS_OFF_SCSHDR_CREDIT);
+	out->conid_remote = vms_wire_get_le32(&v, VMS_OFF_SCSHDR_CONID_R);
+	out->conid_local  = vms_wire_get_le32(&v, VMS_OFF_SCSHDR_CONID_L);
+
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	return VMS_CODEC_OK;
+}
+
+/* The SYSAP body of an application message starts at abs 72 -- one span
+ * past the 16-byte SCS header this file owns (design SS3.2.4). Derived,
+ * never re-stated. */
+#define SCSHDR_ABS_OFF   VMS_OFF_SCSCTRL_INNERLEN            /* abs 56 */
+#define SCSBODY_ABS_OFF  (SCSHDR_ABS_OFF + VMS_SCS_HDR_LEN)  /* abs 72 */
+
+vms_codec_status_t vms_scs_hdr_parse_frame(const uint8_t *frame, uint32_t len,
+					   struct vms_scs_hdr *out)
+{
+	if (frame == (const uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (len < SCSHDR_ABS_OFF + VMS_SCS_HDR_LEN)
+		return VMS_CODEC_E_SHORT;
+	return vms_scs_hdr_parse(frame + SCSHDR_ABS_OFF,
+				 len - SCSHDR_ABS_OFF, out);
+}
+
+vms_codec_status_t vms_scs_msg_body(const uint8_t *frame, uint32_t len,
+				    const uint8_t **body, uint32_t *body_len)
+{
+	if (frame == (const uint8_t *)0 || body == (const uint8_t **)0 ||
+	    body_len == (uint32_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (len <= SCSBODY_ABS_OFF)
+		return VMS_CODEC_E_SHORT;
+	*body = frame + SCSBODY_ABS_OFF;
+	*body_len = len - SCSBODY_ABS_OFF;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_scs_msg_body_build(const struct vms_scs_hdr *h,
+					  const uint8_t *sysap_body,
+					  uint32_t sysap_len,
+					  uint8_t *out, uint32_t cap)
+{
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+
+	if (out == (uint8_t *)0 || sysap_body == (const uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (cap < VMS_SCS_HDR_LEN)
+		return VMS_CODEC_E_SHORT;
+	if (sysap_len > cap - VMS_SCS_HDR_LEN)
+		return VMS_CODEC_E_INVAL;   /* never a silent truncation */
+
+	st = vms_scs_hdr_build(h, out, cap);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_buf_init(&w, out, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	vms_wire_put_bytes(&w, VMS_SCS_HDR_LEN, sysap_len, sysap_body);
+	vms_wire_put_zero(&w, VMS_SCS_HDR_LEN + sysap_len,
+			  cap - VMS_SCS_HDR_LEN - sysap_len);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	return VMS_CODEC_OK;
+}
+
+/* ------------------------------------------------------------------ *
  * Directory lookup (sec 4(h)(2))
  * ------------------------------------------------------------------ */
 

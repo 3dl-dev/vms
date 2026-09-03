@@ -2656,6 +2656,107 @@ int pe_vc_send_frame(struct pe_fsm *f, vms_scs_sysid_t dst,
 	return PE_VC_SEND_OK;
 }
 
+/* --------------------------------------------------------------------------
+ * FC-P1.3: the body-level send services (vms_pe_fsm.h SS8c) -- the bridge
+ * between SCS's "body" and pe_vc_send_frame's "frame".
+ * -------------------------------------------------------------------------- */
+
+/*
+ * Build this circuit's abs 0-35 (addressing + the sequence envelope) into
+ * `frame`. `recv_ack`/`send_seq` are the caller's choice -- pe_vc_send_msg
+ * passes placeholders pe_vc_send_frame overwrites at transmit time;
+ * pe_vc_send_dg, which never reaches pe_vc_send_frame, passes the REAL
+ * values it wants on the wire. Abs 36-55 is left at whatever `frame`
+ * already held -- both callers zero it first (vms_pe_fsm.h SS8c: an
+ * explicit zero, never a template).
+ */
+static int pe_send_build_envelope(struct pe_fsm *f, vms_scs_sysid_t dst,
+				  uint8_t msgtype, uint16_t recv_ack,
+				  uint16_t send_seq, uint8_t *frame,
+				  uint32_t cap)
+{
+	struct vms_scs_seq_envelope env;
+
+	pe_bzero(&env, (uint32_t)sizeof(env));
+	if (pe_vc_addr(f, dst, &env.addr) != 0)
+		return -1;
+	env.msgtype = msgtype;
+	env.recv_ack = recv_ack;
+	env.send_seq = send_seq;
+	if (vms_scs_seq_envelope_build(&env, frame, cap, (uint32_t *)0) !=
+	    VMS_CODEC_OK)
+		return -1;
+	return 0;
+}
+
+int pe_vc_send_msg(struct pe_fsm *f, vms_scs_sysid_t dst,
+		   vms_conid_t dst_conid, const uint8_t *body, uint32_t len)
+{
+	uint8_t frame[PE_VC_FRAME_MAX];
+	uint32_t total;
+
+	(void)dst_conid;   /* not written to the wire -- see the .h doc comment */
+	if (f == NULL || body == NULL || len != PE_SEND_BODY_LEN)
+		return PE_VC_SEND_BADFRAME;
+
+	total = PE_SEND_BODY_OFF + len;
+	if (total > (uint32_t)sizeof(frame))
+		return PE_VC_SEND_TOOBIG;
+
+	pe_bzero(frame, (uint32_t)sizeof(frame));
+	if (pe_send_build_envelope(f, dst, VMS_SCS_MT_MSG, 0u, 0u, frame,
+				   (uint32_t)sizeof(frame)) != 0)
+		return PE_VC_SEND_NOCIRCUIT;
+
+	pe_copy(frame + PE_SEND_BODY_OFF, body, len);
+
+	if (vms_scs_seq_envelope_fixup_len(frame, (uint32_t)sizeof(frame),
+					   total) != VMS_CODEC_OK)
+		return PE_VC_SEND_BADFRAME;
+
+	/* pe_vc_send_frame re-stamps 32/34/44 with the circuit's real
+	 * sequence and assigns/queues/transmits it (SS3b). */
+	return pe_vc_send_frame(f, dst, frame, total);
+}
+
+int pe_vc_send_dg(struct pe_fsm *f, vms_scs_sysid_t dst,
+		  const uint8_t *body, uint32_t len)
+{
+	uint8_t frame[PE_VC_FRAME_MAX];
+	struct pe_vc *vc;
+	uint32_t total;
+
+	if (f == NULL || body == NULL || len != PE_SEND_BODY_LEN)
+		return PE_VC_SEND_BADFRAME;
+
+	vc = pe_fsm_vc_by_sysid(f, dst);
+	if (vc == NULL || vc->state != (uint8_t)VMS_PE_VC_OPEN)
+		return PE_VC_SEND_NOCIRCUIT;
+
+	total = PE_SEND_BODY_OFF + len;
+	if (total > (uint32_t)sizeof(frame))
+		return PE_VC_SEND_TOOBIG;
+
+	pe_bzero(frame, (uint32_t)sizeof(frame));
+	/* send_seq = 0: "no sequence claimed" (see the .h honesty note).
+	 * recv_ack = the circuit's real recv_seq: a true transport fact,
+	 * free to report even outside the ring. */
+	if (pe_send_build_envelope(f, dst, VMS_SCS_MT_MSG, vc->recv_seq, 0u,
+				   frame, (uint32_t)sizeof(frame)) != 0)
+		return PE_VC_SEND_NOCIRCUIT;
+
+	pe_copy(frame + PE_SEND_BODY_OFF, body, len);
+
+	if (vms_scs_seq_envelope_fixup_len(frame, (uint32_t)sizeof(frame),
+					   total) != VMS_CODEC_OK)
+		return PE_VC_SEND_BADFRAME;
+
+	if (pe_tx_from(f, frame, total) != 0)
+		return PE_VC_SEND_TXFAIL;
+	vc->dg_tx++;
+	return PE_VC_SEND_OK;
+}
+
 void pe_fsm_vc_timer(struct pe_fsm *f, uint32_t index)
 {
 	struct pe_vc *vc = pe_fsm_vc_at(f, index);

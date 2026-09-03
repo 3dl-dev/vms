@@ -113,6 +113,11 @@ static uint32_t fake_peer_credit(const struct fake_peer *p,
 				 const uint8_t dst_hw[6],
 				 const uint8_t dst_lavc[6], uint16_t acked_seq,
 				 uint8_t *out, uint32_t cap)
+	__attribute__((unused));
+static uint32_t fake_peer_credit(const struct fake_peer *p,
+				 const uint8_t dst_hw[6],
+				 const uint8_t dst_lavc[6], uint16_t acked_seq,
+				 uint8_t *out, uint32_t cap)
 {
 	struct vms_scs_credit_frame c;
 	uint32_t written = 0;
@@ -281,6 +286,8 @@ static struct fake_vc_decoded fake_vc_last(const struct fake_pe *f,
 	return best;
 }
 
+static unsigned fake_vc_count(const struct fake_pe *f, enum fake_vc_kind k)
+	__attribute__((unused));
 static unsigned fake_vc_count(const struct fake_pe *f, enum fake_vc_kind k)
 {
 	unsigned i, n = 0;

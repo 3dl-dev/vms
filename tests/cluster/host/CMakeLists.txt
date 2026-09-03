@@ -229,6 +229,11 @@ cluster_host_pe_test(test_pe_formation test_pe_formation.c)
 # TIMVCFAIL and a full loss/retransmit/reorder scenario run in microseconds.
 cluster_host_pe_test(test_pe_vc        test_pe_vc.c)
 
+# FC-P1.3: the port's body-level send services (pe_vc_send_msg/pe_vc_send_dg,
+# vms_pe_fsm.h SS8c) -- the E9 bridge between SCS's "body" and P1.2's
+# pe_vc_send_frame "frame", against a fake upper layer.
+cluster_host_pe_test(test_pe_send      test_pe_send.c)
+
 # ---- FC-P0.1: the pure inter-layer headers must be host-includable ----
 # Everything below builds with -DOVMX_CLUSTER_HOST, which routes vms_cluster.h
 # to <stdint.h> instead of vms_internal.h. (OVMX_CLUSTER_CORE_DIR is set above.)

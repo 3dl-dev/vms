@@ -93,6 +93,52 @@ boundary** (the 132-byte body). The full chain: `cnxman_ops.send(body,132)` →
   refuses every send (INV-6, no invented window); retransmit cadence
   TIMVCFAIL/8 is labelled OVMX's choice (no captured figure).
 
+**RESOLVED by FC-P1.3.** The bridge landed as `pe_vc_send_msg`/`pe_vc_send_dg`
+(`vms_pe_fsm.h` §8c, `vms_pe_fsm.c`) — pure, `struct pe_fsm *`-level siblings
+of `pe_vc_send_frame`/`pe_vc_addr`, which is where the R1 host-test ladder
+(`cluster_host_pe`, links only `vms_pe_fsm.c`) can actually reach them.
+`vms_pe.h`'s own `pe_send_msg`/`pe_send_dg`/`pe_set_upper` (the frozen,
+`struct vms_pe *`-level glue surface FC-P0.1 named) are NOT redefined here —
+`struct vms_pe` is undefined and documented "private to vms_pe.c", and
+`struct pe_fsm`-typed functions cannot share those names in the same TU
+without an ODR conflict (`vms_pe_fsm.h` already includes `vms_pe.h`). FC-P0.9
+(whichever item finishes `struct vms_pe`) implements the frozen glue names as
+thin one-line wrappers: `pe_send_msg(pe, ...) { return pe_vc_send_msg(&pe->fsm,
+...); }`. `pe_send_msg`'s own doc comment in `vms_pe.h` now names this.
+- **Contract:** `body`/`len` is exactly `PE_SEND_BODY_LEN` (148) bytes —
+  SCS's already-built abs 56-71 envelope (inner length, format, MTYPE,
+  credit, the Con.ID pair) plus the 132-byte SYSAP body, matching what
+  `scs_send_msg` will hand down once FC-P2.2 lands (confirmed against
+  `vms_scs.h`'s `scs_ops.send` shape, which already threads `dst_conid`
+  alongside a body). `pe_vc_send_msg` builds abs 0-35 (addressing +
+  envelope), leaves abs 36-55 an EXPLICIT ZERO (spec sec 4(d)'s mirror span
+  has no generic-message builder yet — this is the interim design SS3.2.4
+  itself names, not a new gap), splices `body` at abs 56, fixes up the SCA
+  length field (new: `vms_scs_seq_envelope_fixup_len`, `codec_vc.{h,c}`,
+  the same rewrite-after-append pattern `vms_hello_build_padded` already
+  uses), and hands the assembled frame to `pe_vc_send_frame`.
+- **`dst_conid` is not written to the wire** — it already rides inside
+  `body` at the position SCS put it; the parameter exists for the port's own
+  bookkeeping and for symmetry with `pe_upper_ops.message`'s (from,
+  dst_conid) receive shape. A test locks this in (`test_pe_send.c`).
+- **`pe_vc_send_dg`** does not consume a `send_seq`, does not enter the
+  unacked ring, and is never retransmitted; it stamps `send_seq=0` (spec
+  sec 4(h)(3)/(4)'s own "no sequence" value) since sec 4(h)(1c)/(1d)
+  REFUTES 0x4b/0x5b as a message-vs-datagram wire discriminator and no
+  grounded alternative exists — labelled as OVMX's own choice (Rule 8), not
+  a captured VMS behaviour.
+- **The (SB, Con.ID) delivery callback was already wired by FC-P1.2**
+  (`f->upper->message`/`datagram`, dispatched from `pe_fsm_rx`) — FC-P1.3's
+  R1 exercises it end-to-end (send via `pe_vc_send_msg` on one node's
+  circuit-shaped fixture, receive via a codec-built peer frame into
+  `pe_fsm_rx`) rather than re-implementing it.
+- Files touched beyond the plan row's `vms_pe.h`/`vms_pe_fsm.c`:
+  `vms_cluster_codec_vc.{h,c}` (the fixup helper — see above; a
+  frame-vs-body assembly primitive belongs in the codec TU that already
+  owns the sequenced-message envelope, not as a raw offset in the FSM,
+  which would break `vms_pe_fsm.c`'s own "not one byte offset in this file"
+  invariant); `vms_pe.h` doc comments only (no signature change).
+
 ### E8. op-06 MEMBERSHIP record layout is un-isolated → blocks CSID hand-off (raised by FC-P3.12 → LAB)
 A coordinated ADD completes the barrier but **never tells the joiner the CSID it
 was assigned**, because the op-0x06 MEMBERSHIP burst's `{SCSSYSTEMID, incarnation,

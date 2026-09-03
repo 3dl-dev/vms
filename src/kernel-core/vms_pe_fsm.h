@@ -497,6 +497,8 @@ struct pe_vc {
 	uint32_t stacks_tx, stacks_rx;
 	uint32_t acks_tx,   acks_rx;      /* the 0x41 round-2 ACK            */
 	uint32_t msgs_tx,   msgs_rx;      /* sequenced messages              */
+	uint32_t dg_tx;                   /* FC-P1.3: datagrams sent, never  */
+					   /* sequenced/ringed/retransmitted  */
 	uint32_t credit_tx, credit_rx;    /* the 0x48 short (ack + credit)   */
 	uint32_t retransmits;             /* same seq re-sent                */
 	uint32_t rx_dups;                 /* peer retransmits we absorbed    */
@@ -924,6 +926,103 @@ enum pe_vc_send_status {
 int pe_vc_send_frame(struct pe_fsm *f, vms_scs_sysid_t dst,
 		     const uint8_t *frame, uint32_t len);
 int pe_vc_addr(struct pe_fsm *f, vms_scs_sysid_t dst, struct vms_scs_addr *out);
+
+/* ==========================================================================
+ * 8c. THE PORT'S BODY-LEVEL SEND SERVICES (FC-P1.3, E9's bridge)
+ *
+ * `pe_vc_send_frame` (above, FC-P1.2) is the FRAME-level primitive: the
+ * caller hands down a complete 0..len-1 frame it already built, and the
+ * port only stamps the sequence and transmits/retransmits it. E1's
+ * body-level seam ruling (design SS3.2.4) puts the SCS<->port boundary one
+ * layer UP from that: SCS builds its OWN 56-71 header around the SYSAP's
+ * 132-byte body and hands the port everything from abs 56 onward --
+ * `scs_ops.send`'s "body" (vms_scs.h). These two functions are the bridge:
+ * they build the port's OWN abs 0-55 (addressing + the sequence envelope),
+ * splice the caller's abs-56-onward content on, fix up the SCA length
+ * field, and hand the result to `pe_vc_send_frame`/a direct transmit --
+ * ONE call chain, not two overlapping ones.
+ *
+ * THE 190-CONTENT CLASS IS FIXED SIZE. Spec sec 4(d)/(1b), GROUNDED: "the
+ * 190-content class is uniformly type 10 with inner length 146" -- every
+ * grounded application message on this wire is exactly 204 bytes total
+ * (14 Ethernet + 190 SCA content), the SYSAP body zero-padded to fill it
+ * (design SS3.2.4's "72-203, 132 bytes, fixed"). So `len` below is not a
+ * free parameter: it must be exactly PE_SEND_BODY_LEN (56-71's 16 bytes
+ * plus the 132-byte body), or these functions refuse rather than build a
+ * frame no real peer's decoder expects.
+ *
+ * ABS 36-55 IS AN EXPLICIT ZERO, NOT A GUESS. Spec sec 4(d)'s "sequence-
+ * number region" mirror span (design SS3.2.4's byte-ownership table:
+ * "port (VC) | vms_pe (FC-P1.1's builder); until it lands these are
+ * explicit zeros -- never a template") has no generic-message builder yet
+ * -- FC-P1.1 built it only for START/STACK/ACK and the 0x48 credit-return,
+ * both fixed shapes distinct from this one. Writing real values here
+ * without a grounded per-field rule would be exactly the template INV-6
+ * forbids, so these functions leave the span at the zero
+ * `pe_bzero`/`vms_scs_seq_envelope_build` already left it and count on the
+ * honesty of that zero, not on a guess.
+ * ========================================================================== */
+
+/*
+ * Where the caller's already-built content (SCS's 56-71 header plus the
+ * SYSAP body) begins and how long it must be, for the one class this
+ * service targets. Derived from two ALREADY-PUBLIC facts of this file/the
+ * VC codec -- VMS_SCS_SEQ_ENVELOPE_LEN (36, the port's own 0-35 span) and
+ * PE_VC_FRAME_MAX (204, "the SCA content class 190 plus the 14-byte
+ * Ethernet header") -- plus the one new, cited constant: the 20-byte
+ * mirror span's LENGTH (not its content, which stays zero; spec sec 4(d)).
+ */
+#define PE_SEND_MIRROR_SPAN_LEN 20u  /* abs 36-55: 10 caller/derived u16 fields, spec sec 4(d), left zero (see above) */
+#define PE_SEND_BODY_OFF (VMS_SCS_SEQ_ENVELOPE_LEN + PE_SEND_MIRROR_SPAN_LEN)  /* abs 56 */
+#define PE_SEND_BODY_LEN (PE_VC_FRAME_MAX - PE_SEND_BODY_OFF)                 /* 148   */
+
+/*
+ * pe_vc_send_msg - the port's SEQUENCED MESSAGE service. `body`/`len` is
+ * exactly PE_SEND_BODY_LEN bytes: the caller's (SCS's) own abs 56-71
+ * envelope (inner length, format, MTYPE, credit, the Con.ID pair) followed
+ * by the 132-byte SYSAP body, already built and untouched by the port
+ * (design SS3.2.4: SCS owns 56-71, the SYSAP/CNXMAN owns 72-203). Builds
+ * abs 0-35 (msgtype VMS_SCS_MT_MSG, this circuit's real addressing),
+ * splices `body` on at abs 56, fixes up the SCA length field, and hands
+ * the assembled frame to `pe_vc_send_frame` for sequencing, the unacked
+ * ring and transmission. `dst_conid` is not written to the wire (it
+ * already rides inside `body`, at the position SCS put it) -- it exists
+ * for the port's own bookkeeping/telemetry, matching `pe_upper_ops.
+ * message`'s symmetric (from, dst_conid) shape on receive.
+ *
+ * Returns `enum pe_vc_send_status` (0 on success). PE_VC_SEND_BADFRAME for
+ * a `len` other than PE_SEND_BODY_LEN or a build failure; the other
+ * refusals are pe_vc_send_frame's own (no circuit, no credit, ring full,
+ * transmit failed).
+ */
+int pe_vc_send_msg(struct pe_fsm *f, vms_scs_sysid_t dst,
+		   vms_conid_t dst_conid, const uint8_t *body, uint32_t len);
+
+/*
+ * pe_vc_send_dg - the port's DATAGRAM service: unsequenced, unacknowledged
+ * (vms_pe.h SS5). Same `body`/`len` contract and frame shape as
+ * pe_vc_send_msg, but this function does NOT go through pe_vc_send_frame:
+ * it does not consume a send_seq, does not enter the unacked ring, and is
+ * never retransmitted -- p. 2-31's ordering/delivery guarantee is a
+ * sequenced-service property this call deliberately opts out of.
+ *
+ * HONESTY NOTE ON THE WIRE SHAPE (spec sec 4(h)(1c)/(1d)): the msgtype
+ * byte that would mark a frame "datagram" instead of "message" is
+ * UNGROUNDED -- sec (1d) explicitly REFUTES 0x4b/0x5b as that
+ * distinction, and no other candidate is confirmed. Rather than invent an
+ * opcode the spec could not ground, this function sends the SAME
+ * VMS_SCS_MT_MSG envelope shape and signals "no ordering claimed" the one
+ * way that IS grounded: send_seq stamped 0 (sec 4(h)(3)/(4)'s own meaning
+ * for "no sequence"), recv_ack stamped to the circuit's real recv_seq (a
+ * transport fact, free to report). This is OVMX's own choice, labelled as
+ * one (Rule 8) -- not a captured VMS behaviour.
+ *
+ * Requires an OPEN circuit to `dst` (pe_vc_addr's own requirement).
+ * Returns 0, PE_VC_SEND_NOCIRCUIT, PE_VC_SEND_BADFRAME, PE_VC_SEND_TOOBIG
+ * or PE_VC_SEND_TXFAIL.
+ */
+int pe_vc_send_dg(struct pe_fsm *f, vms_scs_sysid_t dst,
+		  const uint8_t *body, uint32_t len);
 
 /*
  * One circuit's timer beat (PE_TIMER_RETRANSMIT, key = the circuit index).

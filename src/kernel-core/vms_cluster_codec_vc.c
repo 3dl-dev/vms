@@ -292,9 +292,37 @@ vms_scs_seq_envelope_parse(const uint8_t *frame, uint32_t len,
 	(void)fmt; /* format is asserted 0x13 by the classifier, not re-stored */
 	out->recv_ack = vms_wire_get_le16(&v, VMS_OFF_SCS_RECV_ACK);
 	out->send_seq = vms_wire_get_le16(&v, VMS_OFF_SCS_SEND_SEQ);
-
 	if (!vms_wire_view_ok(&v))
 		return v.err;
+	return VMS_CODEC_OK;
+}
+
+/*
+ * vms_scs_seq_envelope_fixup_len - see the .h doc comment. The SAME
+ * three-line pattern vms_hello_build_padded() already uses to rewrite its
+ * padded total: a fresh bounded write view over the SAME buffer, one
+ * vms_wire_put_le16() at the one named offset the parent TU exports for
+ * this purpose (VMS_OFF_SCA_LEN), nothing else touched.
+ */
+vms_codec_status_t
+vms_scs_seq_envelope_fixup_len(uint8_t *frame, uint32_t cap,
+			       uint32_t total_len)
+{
+	vms_wire_buf_t w;
+
+	if (frame == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (total_len < VMS_ETH_HDR_LEN + 2u ||
+	    total_len - VMS_ETH_HDR_LEN > 0xffffu)
+		return VMS_CODEC_E_RANGE;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_SHORT;
+	vms_wire_put_le16(&w, VMS_OFF_SCA_LEN,
+			  (uint16_t)((total_len - VMS_ETH_HDR_LEN) - 2u));
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
 	return VMS_CODEC_OK;
 }
 

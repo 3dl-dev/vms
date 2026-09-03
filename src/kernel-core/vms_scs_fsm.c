@@ -547,6 +547,15 @@ static int ctrl_send_grant(struct scs_fsm *f, struct scs_cdt *cdt, uint16_t op,
 	c.credit = grant;
 	scs_copy(c.name1, cdt->remote_name, VMS_SCSCTRL_NAME_LEN);
 	scs_copy(c.name2, cdt->local_name, VMS_SCSCTRL_NAME_LEN);
+	/* spec SS4(N): SCA content [94:110] is the 16-byte connect data on a
+	 * CONNECT_REQ/CONNECT_RESPONSE (op 0/2, content == 110). `cdt->conndata`
+	 * already carries whatever the caller supplied (scs_fsm_connect()'s
+	 * args.conndata, or all-zero if none) -- this was previously recorded
+	 * on the CDT but never read back out onto the wire; that dead path is
+	 * why a real peer's [94:110] never matched, however cnxman_join_cfg
+	 * was populated. */
+	if (c.has_blank)
+		scs_copy(c.blank, cdt->conndata, VMS_SCSCTRL_NAME_LEN);
 	return ctrl_emit(f, cdt, &c);
 }
 

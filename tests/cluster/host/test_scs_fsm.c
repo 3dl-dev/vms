@@ -223,6 +223,83 @@ static void t_acceptor_ladder(void)
 	ct_check_eq_u32(b_sysap.n_opened, 1u, "opened() fired");
 }
 
+/*
+ * E31 -- the VMS$VAXcluster 16-byte SCA connect data (spec SS4(N)) really
+ * reaches the peer's wire, byte for byte, on a CONNECT_REQ (op 0). The
+ * constant here is the operator-ruled CM protocol quad + tail this item
+ * wires into `cnxman_join_cfg.conndata` (integration note E31,
+ * op06-join-20260903.pcap frames 64/72): [0:4] the version quad, [4:11]
+ * zero (the joiner's own grounded value), [11:16] the tail constant. This
+ * closes the dead-code path `ctrl_send_grant()` had before this item: a
+ * CDT's own `conndata` was recorded on LOCAL_CONNECT but never copied into
+ * the outbound frame's `blank` field, so no configured value -- E31's or
+ * otherwise -- ever reached a real peer.
+ */
+static const uint8_t e31_conndata[VMS_SCS_PROCNAME_LEN] = {
+	0x01, 0x1b, 0x01, 0x03,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x08, 0x00, 0x00, 0x06, 0x00
+};
+
+static void args_zero(struct scs_connect_args *args)
+{
+	uint8_t *p = (uint8_t *)args;
+	uint32_t i;
+
+	for (i = 0; i < (uint32_t)sizeof(*args); i++)
+		p[i] = 0u;
+}
+
+static void t_connect_data_on_wire(void)
+{
+	struct scs_connect_args args;
+	vms_conid_t a_conid = 0u;
+	uint32_t i;
+
+	printf("-- E31: the 16-byte SCA connect data reaches the peer's wire "
+	       "byte-exact --\n");
+	rig(SCS_CONNECT_DEFER);
+
+	args_zero(&args);
+	args.local_name = scsh_name_a;
+	args.remote_name = scsh_name_b;
+	args.sysap = &a_sysap.ops;
+	args.dst = b_node.sysid;
+	args.initial_credits = 6u;
+	args.conndata = e31_conndata;
+
+	ct_check(scs_fsm_connect(&a_node.fsm, &args, &a_conid) == SCS_OK,
+		 "scs_fsm_connect accepts a caller-supplied conndata");
+	(void)scsh_pump();
+
+	ct_check_eq_u32(b_sysap.n_connect_req, 1u,
+			 "the CONNECT_REQ reached the peer's SYSAP");
+	ct_check_eq_u32(b_sysap.last_conndata_valid, 1u,
+			 "...carrying a 16-byte connect data, not none");
+	for (i = 0; i < VMS_SCS_PROCNAME_LEN; i++)
+		ct_check_eq_u32(b_sysap.last_conndata[i], e31_conndata[i],
+				 "byte-exact vs the grounded E31 constant");
+
+	/* NULL conndata still goes out as an honest, explicit zero -- never a
+	 * stale value left over from a prior connect on the same node. */
+	rig(SCS_CONNECT_DEFER);
+	args_zero(&args);
+	args.local_name = scsh_name_a;
+	args.remote_name = scsh_name_b;
+	args.sysap = &a_sysap.ops;
+	args.dst = b_node.sysid;
+	args.initial_credits = 6u;
+	ct_check(scs_fsm_connect(&a_node.fsm, &args, &a_conid) == SCS_OK,
+		 "scs_fsm_connect with no conndata");
+	(void)scsh_pump();
+	ct_check_eq_u32(b_sysap.last_conndata_valid, 1u,
+			 "the field is still present (110-content shape)");
+	for (i = 0; i < VMS_SCS_PROCNAME_LEN; i++)
+		ct_check_eq_u32(b_sysap.last_conndata[i], 0u,
+				 "...but every byte is an honest zero, not "
+				 "a leftover value");
+}
+
 /* ------------------------------------------------------------------ *
  * 4. The refusal rungs
  * ------------------------------------------------------------------ */
@@ -551,6 +628,7 @@ int main(void)
 	t_conid_allocator();
 	t_initiator_ladder();
 	t_acceptor_ladder();
+	t_connect_data_on_wire();
 	t_reject_ladder();
 	t_accept_rcvd_is_real();
 	t_accept_rcvd_gives_up();

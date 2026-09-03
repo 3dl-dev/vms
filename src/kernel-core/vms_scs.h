@@ -263,10 +263,14 @@ int scs_sysap_unlisten(struct vms_scs *scs, const uint8_t *name);
  * On success *out_conid is the CDT's local Con.ID -- the value the ALLOCATOR
  * minted (spec SS4(t): monotonic, high word reseeded per boot), never a value
  * reflected from the peer. Reflecting a peer's Con.ID is what produced
- * INCONSTATE on a real VAX; the allocator exists so it cannot happen. */
+ * INCONSTATE on a real VAX; the allocator exists so it cannot happen.
+ * `conndata` is the caller's own 16-byte SS4(N) SCA connect data for this
+ * CONNECT-REQUEST, or NULL for none -- passed straight through to
+ * scs_fsm_connect()'s own `struct scs_connect_args.conndata`, never
+ * inspected or defaulted here (E31: this layer bakes in no constant). */
 int scs_connect(struct vms_scs *scs, const uint8_t *local_name,
 		const uint8_t *remote_name, vms_scs_sysid_t dst,
-		vms_conid_t *out_conid);
+		const uint8_t *conndata, vms_conid_t *out_conid);
 
 /* Accept or reject an inbound connect that connect_req deferred. */
 int scs_accept(struct vms_scs *scs, vms_conid_t local_conid);

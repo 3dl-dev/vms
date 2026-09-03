@@ -70,6 +70,13 @@ struct scsh_sysap {
 	vms_conid_t          last_closed_conid;
 	uint8_t              last_msg[SCS_SYSAP_BODY_LEN];
 	uint16_t             return_credit_immediately; /* 1 = release on rx */
+
+	/* The connect_req callback's own conndata, read back off the ACTUAL
+	 * inbound frame the codec parsed (never the caller's intent) -- SS4(N)
+	 * lets a test prove the 16-byte SCA connect data really reached the
+	 * peer's wire, byte for byte. */
+	uint8_t              last_conndata[VMS_SCS_PROCNAME_LEN];
+	uint8_t              last_conndata_valid;
 };
 
 struct scsh_node {
@@ -269,13 +276,18 @@ SCSH_UNUSED static int scsh_connect_req(void *ctx, vms_conid_t local_conid,
 			    const uint8_t *conndata, uint32_t conndata_len)
 {
 	struct scsh_sysap *s = (struct scsh_sysap *)ctx;
+	uint32_t i;
 
 	(void)peer;
 	(void)peer_conid;
-	(void)conndata;
-	(void)conndata_len;
 	s->n_connect_req++;
 	s->last_listen_conid = local_conid;
+	s->last_conndata_valid = (uint8_t)(conndata != (const uint8_t *)0 &&
+					    conndata_len == VMS_SCS_PROCNAME_LEN);
+	if (s->last_conndata_valid) {
+		for (i = 0; i < VMS_SCS_PROCNAME_LEN; i++)
+			s->last_conndata[i] = conndata[i];
+	}
 	return s->connect_decision;
 }
 

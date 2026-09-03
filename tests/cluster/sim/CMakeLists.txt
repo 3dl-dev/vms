@@ -109,6 +109,47 @@ target_include_directories(test_sim_mscp_write PRIVATE
 cluster_sim_test(test_sim_dlm_directory scenarios/dlm_directory.c)
 target_link_libraries(test_sim_dlm_directory PRIVATE cluster_host_cnxman)
 
+# FC-P4.6's rung-R2 leg: the REAL lock engine (vms_lock.c on FC-P4.9's host
+# backend), the REAL requester FSM and the REAL Lock Directory Weight Vector in
+# one host process, against SIMULATED master/directory systems. It proves the
+# two things one node cannot: that a lookup resolved through OUR copy of the
+# vector LANDS on a system whose OWN copy agrees (the CSV-order falsifier), and
+# that a root name nobody has ever named on the wire puts ZERO FRAMES on the
+# LAN -- not merely that it returns an error.
+#
+# The include order is load-bearing and is the SAME recipe
+# tests/cluster/host/test_lock_dir.c uses: lock_shim/ FIRST (so
+# `vms_internal.h` and `exec_kbackend.h` resolve to FC-P4.9's host backend),
+# then kernel-core, then src/kernel for the portable vms_ioctl.h.
+add_executable(test_sim_dlm_requester
+    scenarios/dlm_requester.c
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host/vms_frame_compose.c
+)
+target_include_directories(test_sim_dlm_requester BEFORE PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host/lock_shim
+)
+target_include_directories(test_sim_dlm_requester PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host
+)
+target_compile_definitions(test_sim_dlm_requester PRIVATE OVMX_CLUSTER_HOST)
+target_link_libraries(test_sim_dlm_requester PRIVATE
+    cluster_host_dlm
+    cluster_host_cnxman
+    cluster_host_lock
+    cluster_sim_core
+)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_sim_dlm_requester PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME cluster_sim_test_sim_dlm_requester COMMAND test_sim_dlm_requester)
+set_tests_properties(cluster_sim_test_sim_dlm_requester PROPERTIES
+    LABELS "unit;cluster;cluster_sim;lock;dlm"
+    TIMEOUT 120
+)
+
 cluster_sim_test(test_replay test_replay.c)
 target_link_libraries(test_replay PRIVATE cluster_host_fixture)
 target_compile_definitions(test_replay PRIVATE

@@ -68,12 +68,18 @@ vms_codec_status_t vms_dlm_enq_request_parse(const uint8_t *frame, uint32_t len,
 		return v.err;
 	if (vms_wire_is_response(cat) || (cat & 0x7fu) != VMS_DLM_CAT_REQUEST)
 		return VMS_CODEC_E_CLASS;
-	if (op != VMS_DLM_OP_ENQ && op != VMS_DLM_OP_CONVERT)
+	if (op != VMS_DLM_WIREOP_ENQ && op != VMS_DLM_WIREOP_CONVERT)
 		return VMS_CODEC_E_CLASS;
 
 	out->mode = vms_wire_get_u8(&v, VMS_OFF_DLM_MODE);
 	out->req_pid_or_lkid = vms_wire_get_le32(&v, VMS_OFF_DLM_REQ_LKID);
 	out->master_lkid = vms_wire_get_le32(&v, VMS_OFF_DLM_MASTER_LKID);
+	/* body[10:12]: the SENDER's own directory hash for the root name. A
+	 * request that carried one is where a receiver LEARNS it (FC-P4.3,
+	 * Davis p. 6-50); the flag is what tells the caller it may be learned
+	 * at all, because "0" and "absent" are different facts. */
+	out->dir_hash = vms_wire_get_le16(&v, VMS_OFF_DLM_DIR_HASH);
+	out->dir_hash_valid = 1u;
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 
@@ -94,7 +100,7 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 
 	if (req == (const struct vms_dlm_enq_request *)0)
 		return VMS_CODEC_E_INVAL;
-	if (opcode != VMS_DLM_OP_ENQ && opcode != VMS_DLM_OP_CONVERT)
+	if (opcode != VMS_DLM_WIREOP_ENQ && opcode != VMS_DLM_WIREOP_CONVERT)
 		return VMS_CODEC_E_INVAL;
 	if (req->name_len > VMS_DLM_NAME_MAX)
 		return VMS_CODEC_E_INVAL;
@@ -108,6 +114,15 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, req->mode);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, req->req_pid_or_lkid);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, req->master_lkid);
+	/*
+	 * body[10:12] ONLY when the caller holds a WIRE-LEARNED hash for this
+	 * root name. No `else` branch, on purpose: a zero written here would be
+	 * a hash nobody derived, the directory node would scan the wrong chain,
+	 * miss the name, and install US as master of a resource somebody else
+	 * already masters -- the campaign's 35/s grant storm (FC-P4.1 §3).
+	 */
+	if (req->dir_hash_valid)
+		vms_wire_put_le16(&w, VMS_OFF_DLM_DIR_HASH, req->dir_hash);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_MARKER, VMS_DLM_NAME_MARKER_CONST);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_LEN, req->name_len);
 	vms_wire_put_bytes(&w, VMS_OFF_DLM_NAME, req->name_len, req->name);
@@ -138,7 +153,7 @@ vms_codec_status_t vms_dlm_enq_response_parse(const uint8_t *frame, uint32_t len
 		return v.err;
 	if (!vms_wire_is_response(cat) || (cat & 0x7fu) != VMS_DLM_CAT_REQUEST)
 		return VMS_CODEC_E_CLASS;
-	if (op != VMS_DLM_OP_ENQ && op != VMS_DLM_OP_CONVERT)
+	if (op != VMS_DLM_WIREOP_ENQ && op != VMS_DLM_WIREOP_CONVERT)
 		return VMS_CODEC_E_CLASS;
 
 	lkid = vms_wire_get_le32(&v, VMS_OFF_DLM_REQ_LKID);
@@ -191,7 +206,7 @@ vms_codec_status_t vms_dlm_enq_response_build_grant(uint32_t req_lkid,
 
 	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT,
 			vms_wire_response_category(VMS_DLM_CAT_REQUEST));
-	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_OP_ENQ);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_ENQ);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, req_lkid);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, master_lkid);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, granted_mode);
@@ -223,7 +238,7 @@ vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
 
 	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT,
 			vms_wire_response_category(VMS_DLM_CAT_REQUEST));
-	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_OP_ENQ);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_ENQ);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, req_pid_echo);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, master_lkid);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, 0); /* cleared, spec grounded */
@@ -301,7 +316,7 @@ vms_codec_status_t vms_dlm_rebuild_parse(const uint8_t *frame, uint32_t len,
 		return v.err;
 	if (vms_wire_is_response(cat) || (cat & 0x7fu) != VMS_DLM_CAT_REQUEST)
 		return VMS_CODEC_E_CLASS;
-	if (op != VMS_DLM_OP_REBUILD)
+	if (op != VMS_DLM_WIREOP_REBUILD)
 		return VMS_CODEC_E_CLASS;
 
 	inv1 = vms_wire_get_le16(&v, VMS_OFF_DLM_REBUILD_INV1);
@@ -378,8 +393,8 @@ vms_codec_status_t vms_dlm_completion_build(const struct vms_dlm_completion *c,
 
 	if (c == (const struct vms_dlm_completion *)0)
 		return VMS_CODEC_E_INVAL;
-	if (op != VMS_DLM_OP_COMPLETE_PROVISIONAL &&
-	    op != VMS_DLM_OP_COMMIT_PROVISIONAL)
+	if (op != VMS_DLM_WIREOP_COMPLETE_PROVISIONAL &&
+	    op != VMS_DLM_WIREOP_COMMIT_PROVISIONAL)
 		return VMS_CODEC_E_INVAL;
 	if (c->name_len > VMS_DLM_NAME_MAX)
 		return VMS_CODEC_E_INVAL;
@@ -423,11 +438,11 @@ vms_codec_status_t vms_dlm_completion_build(const struct vms_dlm_completion *c,
  * ------------------------------------------------------------------ */
 
 const struct vms_wire_allow_entry vms_dlm_allow_rows[] = {
-	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_DLM_CAT_REQUEST, VMS_DLM_OP_ENQ,
+	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_DLM_CAT_REQUEST, VMS_DLM_WIREOP_ENQ,
 	  VMS_WIRE_ACT_RESPOND, 1u, "spec §4(f).1" },
-	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_DLM_CAT_REQUEST, VMS_DLM_OP_CONVERT,
+	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_DLM_CAT_REQUEST, VMS_DLM_WIREOP_CONVERT,
 	  VMS_WIRE_ACT_RESPOND, 2u, "spec §4(f).1" },
-	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_DLM_CAT_REQUEST, VMS_DLM_OP_REBUILD,
+	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_DLM_CAT_REQUEST, VMS_DLM_WIREOP_REBUILD,
 	  VMS_WIRE_ACT_RESPOND, 3u, "spec §4(p) cat 0x02 op 0x0d" },
 };
 

@@ -3086,110 +3086,293 @@ static int cmd_show_license(struct dcl_command *cmd)
 }
 
 /*
- * SHOW CLUSTER - Display VMScluster membership.
+ * SHOW CLUSTER - the VMScluster display, read from the executive.
  *
- * vms-8d4 (INV-DCL facade-kill): this used to hardcode "%SYSTEM-I-NOTMEMBER"
- * unconditionally, so a genuinely-clustered node lied about being standalone.
- * It then read the connection manager's LIVE member set from a FILE scsd
- * published (src/vmsscs/scsd.c -> scs_membership.h) -- a userspace-to-
- * userspace path with nothing in the executive behind it.
+ * WHAT IT USED TO BE, IN TWO STAGES. vms-8d4 killed a body that printed
+ * "%SYSTEM-I-NOTMEMBER" unconditionally, so a genuinely-clustered node lied
+ * about being standalone. Its replacement read the member set from a FILE a
+ * userspace daemon published -- userspace to userspace, with nothing in the
+ * executive behind it -- and vms-551 crossed that into vms.ko as a member
+ * block the SAME daemon populated by ioctl. FC-P3.9 removes the last of it:
+ * the daemon is retired and the block is deleted, and every class below reads
+ * a live executive object through /dev/vms.
  *
- * vms-551 (docs/design-cluster-membership-executive.md) crosses this into
- * the executive: vms.ko now owns a membership block scsd populates via
- * VMS_IOCTL_CLUSTER_MEMBER_SET/CLEAR, and this reads it back through
- * /dev/vms with vms_kif_cluster_get_members() -- the same executive-backed
- * shape the DLM lock manager already has (Rule 9, consistent with vms-7fa).
+ * THE CLASSES. The OpenVMS SHOW CLUSTER utility organises its report into
+ * named CLASSES (SYSTEMS, MEMBERS, CLUSTER, CONNECTIONS, CIRCUITS,
+ * LOCAL_PORTS, COUNTERS, CREDITS, ERRORS -- the vocabulary of its own ADD
+ * command). The default report is SYSTEMS + MEMBERS, which is what a bare
+ * SHOW CLUSTER prints here. Selecting one of the other classes with a
+ * QUALIFIER is an OVMX rendering (the real utility is an interactive
+ * subsystem with an ADD command, and OVMX has no such subsystem); the class
+ * NAMES and what each class is ABOUT are the documented ones (Rule 8: matched
+ * to the published utility's structure, never to any VMS binary). The line
+ * art is an OVMX rendering throughout.
  *
- * TWO DISTINCT non-member-list outcomes, never conflated:
- *   - executive REACHABLE, n_members==0 (SS$_NORMAL) -> NOTMEMBER: the
- *     genuine "no cluster to report" answer a real non-member VMS node
- *     gives.
- *   - executive UNREACHABLE (SS$_NOSUCHDEV, no /dev/vms) -> the SAME
- *     "%SYSTEM-W-NOSUCHDEV" rendering cmd_show_device() already uses for
- *     that condition (vms-8d4 precedent) -- a transport failure, not a
- *     cluster fact.
+ *   (default)      SYSTEMS + MEMBERS  <- CLUSTER_MEMBER_GET (the CLUB's CSB
+ *                                        table, one row per system)
+ *   /CLUSTER       the CLUB itself    <- CLUSTER_DIAG_CSB, CLUB row
+ *   /CONNECTIONS   the SCS CDTs       <- CLUSTER_DIAG_CONN
+ *   /CIRCUITS      the port's VCs     <- CLUSTER_DIAG_PORT, VC rows
+ *   /LOCAL_PORTS   PEA0: itself       <- CLUSTER_DIAG_PORT, PORT row
  *
- * The display fields (the "View of Cluster from system ID N node: X" banner and
- * the NODE / SOFTWARE / STATUS columns) are modeled on the public OpenVMS SHOW
- * CLUSTER utility default report (Rule 8: matched to documented output, not to
- * any VMS binary). The line art is an OVMX rendering.
+ * TWO NON-LIST OUTCOMES, NEVER CONFLATED (the vms-8d4 contract, still):
+ *   - executive REACHABLE, no CSB (SS$_NORMAL, n==0) -> NOTMEMBER: the
+ *     genuine "no cluster to report" answer a real non-member VMS node gives.
+ *   - executive UNREACHABLE or the connection manager not started
+ *     (SS$_NOSUCHDEV) -> "%SYSTEM-W-NOSUCHDEV", the same rendering
+ *     cmd_show_device() uses. A transport/configuration fact, not a cluster
+ *     fact.
+ *
+ * INV-6 THROUGHOUT: a row is printed only for state the executive returned
+ * SS$_NORMAL for, and a field whose `_valid` companion is clear is BLANKED,
+ * never printed as zero -- a CSID of 0 means "the cluster has not assigned
+ * one", and printing it as a handle is what this whole layer exists not to do.
  */
-static int cmd_show_cluster(struct dcl_command *cmd)
-{
-    (void)cmd;
 
+/* The executive is not answering: one honest line, and the SS$_ status, for
+ * every class. Kept in one place so no class can grow its own wording. */
+static int show_cluster_nosuchdev(void)
+{
+    dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available");
+    return SS$_NOSUCHDEV;
+}
+
+/* VMS date form for the report banner: dd-MON-yyyy hh:mm:ss, month uppercased. */
+static void show_cluster_timestamp(char *buf, size_t len)
+{
+    time_t now = time(NULL);
+    struct tm tmv;
+
+    localtime_r(&now, &tmv);
+    strftime(buf, len, "%d-%b-%Y %H:%M:%S", &tmv);
+    for (char *p = buf; *p; p++) *p = (char)toupper((unsigned char)*p);
+}
+
+/*
+ * The SYSTEMS + MEMBERS classes: one row per system the CLUB holds a block
+ * for. `state` is the executive's own word for that CSB (its p. 7-23 MEMBER
+ * flag, else its connectivity state) -- this function does not decide it.
+ *
+ * The SOFTWARE column: OVMX's own row carries OVMX_CLUSTER_SW_VERSION, the
+ * identity SSOT (ovmx_identity.h) that scs_start's advertisement puts on the
+ * wire byte-for-byte, so this display cannot contradict what a peer reads
+ * from us (Baron's honest-OS-identity ruling, vms-a84d). A PEER's row is
+ * blank: the CSB projection this reads carries no per-peer software string,
+ * and stating a version we did not observe is exactly the fabrication class
+ * INV-6 forbids.
+ */
+static void show_cluster_row(const struct vms_cluster_member *m, int is_local)
+{
+    char nodecol[sizeof(m->scsnode)];
+    char csidcol[16];
+
+    if (m->scsnode[0] != '\0' && strcmp(m->scsnode, "?") != 0)
+        snprintf(nodecol, sizeof(nodecol), "%s", m->scsnode);
+    else
+        snprintf(nodecol, sizeof(nodecol), "%u", (unsigned)m->sysid);
+
+    /* csid 0 is "the cluster has not assigned one" -- blanked, not printed. */
+    if (m->csid != 0)
+        snprintf(csidcol, sizeof(csidcol), "%08X", (unsigned)m->csid);
+    else
+        snprintf(csidcol, sizeof(csidcol), "%s", "");
+
+    printf("| %-6s | %-8s | %-15s | %-16s |\n", nodecol, csidcol,
+           is_local ? OVMX_CLUSTER_SW_VERSION : "", m->state);
+}
+
+static int show_cluster_systems(void)
+{
     struct vms_cluster_member members[VMS_CLUSTER_MEMBER_MAX];
     uint32_t n_members = 0;
     uint32_t status = vms_kif_cluster_get_members(members, VMS_CLUSTER_MEMBER_MAX,
                                                   &n_members);
+    char tbuf[64];
+    char node[OVMX_IDENTITY_MAXLEN];
 
-    if (status == SS$_NOSUCHDEV) {
-        /* Executive unreachable: honest transport failure, DISTINCT from
-         * NOTMEMBER (vms-551 / vms-8d4). */
-        dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available");
-        return SS$_NOSUCHDEV;
-    }
-
+    if (status == SS$_NOSUCHDEV)
+        return show_cluster_nosuchdev();
     if (status != SS$_NORMAL || n_members < 1) {
-        /* Executive reachable, genuinely no cluster to report -- the truth
-         * for a standalone node. */
         printf("%%SYSTEM-I-NOTMEMBER, this system is not a member of a "
                "VMScluster\n");
         return SS$_NORMAL;
     }
 
-    /* members[0] is the local node, as SET by scsd's publish path. */
-    const struct vms_cluster_member *local = &members[0];
-    const char *local_node =
-        (local->scsnode[0] != '\0' && strcmp(local->scsnode, "?") != 0)
-            ? local->scsnode : "OVMX";
-
-    char tbuf[64];
-    time_t now = time(NULL);
-    struct tm tmv;
-    localtime_r(&now, &tmv);
-    /* VMS date form: dd-MON-yyyy hh:mm:ss (month letters uppercased). */
-    strftime(tbuf, sizeof(tbuf), "%d-%b-%Y %H:%M:%S", &tmv);
-    for (char *p = tbuf; *p; p++) *p = (char)toupper((unsigned char)*p);
-
-    /* THIS node's cluster software identity MUST match what we broadcast on the
-     * SCS wire: OVMX_CLUSTER_SW_VERSION ("VMX V0.1"), the identity SSOT in
-     * ovmx_identity.h, mirrored byte-for-byte on the wire by scs_start.c's
-     * SCS_START_SW_VERSION. Rendering a VMS version here was a local masquerade
-     * -- the real VAX correctly reads us as "VMX V0.1", so our own SHOW CLUSTER
-     * must not contradict the wire by claiming "VMS <ovmx_compat_version()>"
-     * (Baron's honest-OS-identity ruling, vms-a84d). Reference the SSOT macro,
-     * never a version literal (INV-1 identity SSOT gate). ovmx_compat_version()
-     * stays the VMS-compat version for F$GETSYI/software compatibility -- a
-     * distinct concern from node identity.
-     *
-     * Peer rows still show the bare family ("VMS") without a version we cannot
-     * vouch for: the membership publication carries no per-peer software, and
-     * Rule 8 / INV-DCL forbids stating a fact we did not observe. */
-    char local_software[24];
-    snprintf(local_software, sizeof(local_software), "%s", OVMX_CLUSTER_SW_VERSION);
+    /* Row 0 is the LOCAL system: the CLUB allocates its own CSB first
+     * (cnxman_club_init), so this is the executive's ordering, not an
+     * assumption this function makes about the table. */
+    ovmx_node_name(node, sizeof(node));
+    if (members[0].scsnode[0] != '\0')
+        snprintf(node, sizeof(node), "%s", members[0].scsnode);
+    show_cluster_timestamp(tbuf, sizeof(tbuf));
 
     printf("View of Cluster from system ID %u node: %-6s   %s\n\n",
-           (unsigned)local->sysid, local_node, tbuf);
-    printf("+-------------------------------------------------+\n");
-    printf("|          SYSTEMS         |       MEMBERS         |\n");
-    printf("|--------------------------+----------------------|\n");
-    printf("| NODE   | SOFTWARE        | STATUS               |\n");
-    printf("|--------+-----------------+----------------------|\n");
-    for (uint32_t i = 0; i < n_members; i++) {
-        const struct vms_cluster_member *m = &members[i];
-        char nodecol[sizeof(m->scsnode)];
-        if (m->scsnode[0] != '\0' && strcmp(m->scsnode, "?") != 0) {
-            snprintf(nodecol, sizeof(nodecol), "%s", m->scsnode);
-        } else {
-            /* Peer SCSNODE name not learned: identify it by SCSSYSTEMID. */
-            snprintf(nodecol, sizeof(nodecol), "%u", (unsigned)m->sysid);
-        }
-        const char *software = (i == 0) ? local_software : "VMS";
-        printf("| %-6s | %-15s | %-20s |\n", nodecol, software, m->state);
-    }
-    printf("+-------------------------------------------------+\n");
+           (unsigned)members[0].sysid, node, tbuf);
+    printf("+---------------------------------------------------------------+\n");
+    printf("|                 SYSTEMS                |      MEMBERS         |\n");
+    printf("|----------------------------------------+----------------------|\n");
+    printf("| NODE   | CSID     | SOFTWARE        | STATUS           |\n");
+    printf("|--------+----------+-----------------+------------------|\n");
+    for (uint32_t i = 0; i < n_members; i++)
+        show_cluster_row(&members[i], i == 0);
+    printf("+---------------------------------------------------------------+\n");
     return SS$_NORMAL;
+}
+
+/*
+ * The CLUSTER class (Davis p. 7-26: what pertains to the cluster AS A WHOLE)
+ * -- the CLUB, read through CLUSTER_DIAG_CSB. Every `_valid`-gated field is
+ * blanked when its companion is clear: an unlearned CSID, FSYSID or FTIME is
+ * absent from the display, never a zero standing in for one.
+ */
+static int show_cluster_club(void)
+{
+    struct vms_cluster_diag_csb_args a;
+    uint32_t status;
+
+    memset(&a, 0, sizeof(a));
+    a.row = VMS_CLUSTER_DIAG_CSB_CLUB;
+    status = vms_kif_cluster_diag_csb(&a);
+    if (status != SS$_NORMAL)
+        return show_cluster_nosuchdev();
+
+    printf("Cluster block\n\n");
+    if (a.club.local_csid_valid)
+        printf("  Local CSID          %08X\n", (unsigned)a.club.local_csid);
+    else
+        printf("  Local CSID          (not yet assigned by the cluster)\n");
+    printf("  Nodes               %u\n", (unsigned)a.club.cluster_nodes);
+    printf("  Votes / quorum      %u / %u\n", (unsigned)a.club.cevotes,
+           (unsigned)a.club.quorum);
+    printf("  Expected votes      %u\n", (unsigned)a.club.expected_votes);
+    printf("  Quorum lost         %s\n", a.club.quorum_lost ? "yes" : "no");
+    printf("  Epoch               %u\n", (unsigned)a.club.epoch);
+    printf("  Reformations        %u\n", (unsigned)a.club.reformations);
+    if (a.club.transition_active)
+        printf("  Transition          class %u, barrier step %u of 12\n",
+               (unsigned)a.club.transition_class,
+               (unsigned)a.club.barrier_step);
+    else
+        printf("  Transition          none in progress\n");
+    return SS$_NORMAL;
+}
+
+/*
+ * The CONNECTIONS class -- the SCS connection descriptors, read through
+ * CLUSTER_DIAG_CONN. The columns are SDA SHOW CONNECTIONS's own (vms_ioctl.h
+ * calls that struct "the SDA SHOW CONNECTIONS decoder ring"): a Remote Con.ID
+ * the CDT never bound is BLANK, not 00000000, because a zero there could be
+ * read as a handle.
+ */
+static int show_cluster_connections(void)
+{
+    struct vms_cluster_diag_conn_args a;
+    uint32_t i;
+
+    memset(&a, 0, sizeof(a));
+    a.row = VMS_CLUSTER_DIAG_CONN_ROW;
+    if (vms_kif_cluster_diag_conn(&a) != SS$_NORMAL)
+        return show_cluster_nosuchdev();
+
+    printf("SCS connections\n\n");
+    printf("  Local SYSAP      Remote SYSAP     Local Con.ID Remote Con.ID"
+           " Credit S/R  State\n");
+    for (i = 0; i < a.scs.n_cdts + 32u; i++) {
+        char remote[16];
+
+        memset(&a, 0, sizeof(a));
+        a.row = VMS_CLUSTER_DIAG_CONN_CDT;
+        a.index = i;
+        if (vms_kif_cluster_diag_conn(&a) != SS$_NORMAL)
+            continue;   /* a free CDL slot is not the end of the table */
+
+        if (a.cdt.remote_conid_valid)
+            snprintf(remote, sizeof(remote), "%08X",
+                     (unsigned)a.cdt.remote_conid);
+        else
+            snprintf(remote, sizeof(remote), "%s", "");
+
+        printf("  %-16.16s %-16.16s %08X     %-13s %3u/%-3u    %u\n",
+               (const char *)a.cdt.local_name, (const char *)a.cdt.remote_name,
+               (unsigned)a.cdt.local_conid, remote,
+               (unsigned)a.cdt.credit_send, (unsigned)a.cdt.credit_receive,
+               (unsigned)a.cdt.state);
+    }
+    return SS$_NORMAL;
+}
+
+/*
+ * The LOCAL_PORTS class -- PEA0: itself, read through CLUSTER_DIAG_PORT's
+ * PORT row. `hwaddr` prints only when hwaddr_valid: the port's own MAC is
+ * something the executive either read from the interface or did not.
+ */
+static int show_cluster_local_ports(void)
+{
+    struct vms_cluster_diag_port_args a;
+
+    memset(&a, 0, sizeof(a));
+    a.row = VMS_CLUSTER_DIAG_PORT_ROW;
+    if (vms_kif_cluster_diag_port(&a) != SS$_NORMAL)
+        return show_cluster_nosuchdev();
+
+    printf("Local ports\n\n");
+    printf("  PEA0:  %s, link %s\n", a.port.port_open ? "open" : "closed",
+           a.port.link_up ? "up" : "down");
+    if (a.port.hwaddr_valid)
+        printf("         hardware address %02X-%02X-%02X-%02X-%02X-%02X\n",
+               a.port.hwaddr[0], a.port.hwaddr[1], a.port.hwaddr[2],
+               a.port.hwaddr[3], a.port.hwaddr[4], a.port.hwaddr[5]);
+    printf("         MTU %u, channels %u, circuits %u\n",
+           (unsigned)a.port.mtu, (unsigned)a.port.n_channels,
+           (unsigned)a.port.n_vcs);
+    return SS$_NORMAL;
+}
+
+/*
+ * The CIRCUITS class -- the port's virtual circuits, read through
+ * CLUSTER_DIAG_PORT's VC rows. One row per circuit the port actually holds;
+ * an index the port has no circuit for is skipped, never printed as a
+ * circuit to system 0.
+ */
+static int show_cluster_circuits(void)
+{
+    struct vms_cluster_diag_port_args a;
+    uint32_t n_vcs, i;
+
+    memset(&a, 0, sizeof(a));
+    a.row = VMS_CLUSTER_DIAG_PORT_ROW;
+    if (vms_kif_cluster_diag_port(&a) != SS$_NORMAL)
+        return show_cluster_nosuchdev();
+    n_vcs = a.port.n_vcs;
+
+    printf("Circuits\n\n");
+    printf("  Remote system ID  State  Send   Recv   Unacked  Retransmits\n");
+    for (i = 0; i < n_vcs + 32u; i++) {
+        memset(&a, 0, sizeof(a));
+        a.row = VMS_CLUSTER_DIAG_PORT_VC;
+        a.index = i;
+        if (vms_kif_cluster_diag_port(&a) != SS$_NORMAL)
+            continue;
+        printf("  %08X%08X  %5u  %6u %6u %8u %12u\n",
+               (unsigned)a.vc.peer_sysid_hi, (unsigned)a.vc.peer_sysid_lo,
+               (unsigned)a.vc.state, (unsigned)a.vc.send_seq,
+               (unsigned)a.vc.recv_seq, (unsigned)a.vc.unacked,
+               (unsigned)a.vc.retransmits);
+    }
+    return SS$_NORMAL;
+}
+
+static int cmd_show_cluster(struct dcl_command *cmd)
+{
+    if (dcl_has_qualifier(cmd, "CLUSTER"))
+        return show_cluster_club();
+    if (dcl_has_qualifier(cmd, "CONNECTIONS"))
+        return show_cluster_connections();
+    if (dcl_has_qualifier(cmd, "LOCAL_PORTS"))
+        return show_cluster_local_ports();
+    if (dcl_has_qualifier(cmd, "CIRCUITS"))
+        return show_cluster_circuits();
+    return show_cluster_systems();
 }
 
 /*

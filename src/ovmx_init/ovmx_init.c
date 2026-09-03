@@ -1316,10 +1316,64 @@ static uint32_t load_cluster_sysgen_params(void)
 }
 
 /*
- * start_cluster_port - VMS_IOCTL_CLUSTER_START (FC-P0.11, docs/plan-
- * faithful-cluster-executive.md). The P0 "port up" semantic ONLY: bring
- * PEA0: up so HELLOs flow -- not the CNXMAN join to MEMBER/STANDALONE
- * (FC-P3.9, once CNXMAN exists).
+ * The cluster states VMS_IOCTL_CLUSTER_START reports back (enum
+ * vms_cluster_state, src/kernel-core/vms_cluster.h). Duplicated here rather
+ * than #included because this file must not depend on a kernel-core header;
+ * the ioctl's own comment in src/kernel/vms_ioctl.h names the enum, and the
+ * default arm below prints the raw ordinal rather than inventing a name for a
+ * state this copy does not know -- so a state added on the executive side
+ * shows up as an unfamiliar number, never as a wrong word.
+ */
+#define OVMX_CLUSTER_STATE_OFF        0u
+#define OVMX_CLUSTER_STATE_PORT_UP    1u
+#define OVMX_CLUSTER_STATE_JOINING    2u
+#define OVMX_CLUSTER_STATE_MEMBER     3u
+#define OVMX_CLUSTER_STATE_STANDALONE 4u
+
+/*
+ * report_cluster_state - the operator line for what the EXECUTIVE just said
+ * this node is. `state` is read back from struct vms_cluster, never composed
+ * from the ioctl's status, so this cannot announce a membership the executive
+ * does not hold (INV-6).
+ *
+ * The "waiting to form or join an OpenVMS Cluster" wording is VMS's own line
+ * for a VAXCLUSTER=2 node with nowhere to join yet; the executive logs it too
+ * (vms_cnxman.c), and it is repeated on the console because OPA0: is where
+ * SYSINIT puts it and the executive's log is not OPA0: on either substrate.
+ */
+static void report_cluster_state(uint32_t state)
+{
+    switch (state) {
+    case OVMX_CLUSTER_STATE_MEMBER:
+        printf("%%CNXMAN, this system is a member of an OpenVMS Cluster\n");
+        break;
+    case OVMX_CLUSTER_STATE_JOINING:
+        printf("%%CNXMAN, waiting to form or join an OpenVMS Cluster\n");
+        break;
+    case OVMX_CLUSTER_STATE_STANDALONE:
+        printf("%%CNXMAN, no OpenVMS Cluster is present; running standalone\n");
+        break;
+    case OVMX_CLUSTER_STATE_PORT_UP:
+        /* The port is up but the connection manager reported no state of its
+         * own -- honest, and distinct from STANDALONE. */
+        printf("%%CNXMAN, the cluster port is up; this system has not joined"
+               " a cluster\n");
+        break;
+    default:
+        fprintf(stderr,
+                "%%OVMX-W-CLUSTERSTATE, the executive reported cluster state"
+                " %u, which this image does not name\n", (unsigned)state);
+        break;
+    }
+}
+
+/*
+ * start_cluster_port - VMS_IOCTL_CLUSTER_START (FC-P0.11; join semantics
+ * FC-P3.9, docs/plan-faithful-cluster-executive.md). SYSINIT's own step: the
+ * executive starts the fork thread, PEA0:, SCS and the CONNECTION MANAGER,
+ * and forms or joins per VAXCLUSTER -- all of it BEFORE the system disk is
+ * mounted, which is the ordering this call site exists to reproduce (this is
+ * boot Step 2d; STARTUP.COM, and every MOUNT it drives, is Step 3).
  *
  * `vaxcluster` is load_cluster_sysgen_params()'s return -- the value the
  * executive actually COMMITTED, never a locally re-parsed copy. The gate
@@ -1329,26 +1383,27 @@ static uint32_t load_cluster_sysgen_params(void)
  * with its R1 host test so this boot path and the test can never drift.
  *
  * VAXCLUSTER=0: this function does not even issue the ioctl -- no PEA0:, no
- * HELLO, the honest silence INV-6 requires, not a call the executive then
- * has to refuse.
+ * HELLO, no connection manager, and no console line either. That is the
+ * honest silence INV-6 requires, not a call the executive then has to refuse.
  */
 static void start_cluster_port(uint32_t vaxcluster)
 {
     uint32_t port_up = 0;
+    uint32_t state = OVMX_CLUSTER_STATE_OFF;
     uint32_t status;
 
     if (!cluster_start_wanted(vaxcluster))
         return;
 
-    status = vms_kif_cluster_start(&port_up);
+    status = vms_kif_cluster_start(&port_up, &state);
     if (status != SS$_NORMAL) {
-        /* FC-P2.4: CLUSTER_START is now port-then-SCS, so `port_up` is what
-         * tells the two failures apart -- the port never came up at all, or
-         * it did and SCS would not start on it. Reported, never guessed. */
+        /* `port_up` is what tells the failures apart -- the port never came
+         * up at all, or it did and a layer above it would not start.
+         * Reported, never guessed. */
         fprintf(stderr,
                 "%%OVMX-W-CLUSTERPORT, cluster %s did not start"
                 " (VAXCLUSTER %u, status %#x)\n",
-                port_up ? "SCS layer" : "port",
+                port_up ? "SCS/connection-manager layer" : "port",
                 (unsigned)vaxcluster, (unsigned)status);
         return;
     }
@@ -1359,7 +1414,9 @@ static void start_cluster_port(uint32_t vaxcluster)
         fprintf(stderr,
                 "%%OVMX-W-CLUSTERPORT, CLUSTER_START returned normally but"
                 " PEA0: is not up\n");
+        return;
     }
+    report_cluster_state(state);
 }
 
 /*

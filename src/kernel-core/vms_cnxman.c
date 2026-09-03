@@ -166,6 +166,7 @@ struct vms_cnxman {
 	uint32_t cluevt_dropped;     /* quota exceeded or nobody registered */
 	uint32_t proposed_fills;     /* E3: proposed_valid set from real state */
 	uint32_t reconnects_issued;
+	uint32_t peers_discovered;   /* E36: CSBs allocated from a real vc_up */
 };
 
 /* ==========================================================================
@@ -877,6 +878,103 @@ static void cnxman_mscp_sysap_bind(struct vms_cnxman *cn)
 }
 
 /* ==========================================================================
+ * 7b. PEER DISCOVERY -> CSB (FC-P3.9, integration note E36)
+ *
+ * THE GAP THIS CLOSES. The port learns a peer's SCSSYSTEMID off a real
+ * received frame and raises vc_up; SCS records it on that system's SB and
+ * stops there, because "SCS does not connect on its own; the SYSAP does"
+ * (design SS3.2.5). Nothing turned that into "the CLUB has a block for this
+ * system", so join_select_target() -- which walks the CLUB looking for a CSB
+ * with a real sysid -- found nothing and every join returned NO_TARGET even
+ * with a member sitting on the same LAN.
+ *
+ * WHAT IT DOES. Once per reconnect beat, sweep SCS's SB table
+ * (vms_scs_peer_at(), vms_scs.h SS8) and allocate a CSB for each system with
+ * an OPEN circuit that the CLUB has no block for yet -- p. 7-23's "newly
+ * discovered connection manager", allocated in state NEW. That is ALL it
+ * does: it opens no connection, sends nothing, and asserts nothing about the
+ * system beyond the one fact the port established (a circuit exists, to this
+ * SCSSYSTEMID). The CSB it allocates is NOT a member and does not claim to
+ * be; only phase2 ever sets the MEMBER flag, and only from a real membership
+ * record.
+ *
+ * INV-6: the sysid comes from vms_pe_fsm.c's vc_notify_up, read off the
+ * wire -- never from a config file, a module parameter or a guess.
+ * ========================================================================== */
+
+/* One sweep pass. Returns the number of CSBs newly allocated (0 on a beat
+ * where nothing new appeared, which is the normal case). */
+static uint32_t cnxman_discover_peers(struct vms_cnxman *cn)
+{
+	uint32_t i, discovered = 0u;
+
+	for (i = 0; i < VMS_CLUB_MAX_CSB; i++) {
+		vms_scs_sysid_t sysid = 0;
+		struct vms_csb *csb;
+
+		if (vms_scs_peer_at(cn->cl, i, &sysid) != (int)SS__NORMAL)
+			continue;   /* free slot or a circuit that is down */
+		if (cnxman_club_find_sysid(&cn->cl->club, sysid) != NULL)
+			continue;   /* already have this system's block */
+
+		csb = cnxman_club_alloc_csb(&cn->cl->club, sysid, 1);
+		if (csb == NULL)
+			break;      /* CLUB full: counted by the CLUB, not here */
+		discovered++;
+		cnxman_ops_log(cn, "%CNXMAN, a connection manager was "
+				   "discovered on the interconnect");
+	}
+	cn->peers_discovered += discovered;
+	return discovered;
+}
+
+/*
+ * Is there a system this node could join THROUGH right now? The same question
+ * join_select_target() asks (a non-local CSB carrying a real SCSSYSTEMID) --
+ * asked here so the glue can decide whether to drive a join at all, instead of
+ * driving one that can only fail and leave the join FSM in FAILED where no
+ * later discovery can restart it.
+ */
+static int cnxman_join_target_present(const struct vms_cnxman *cn)
+{
+	const struct vms_club *club = &cn->cl->club;
+	uint32_t i;
+
+	for (i = 0; i < club->n_csb; i++) {
+		const struct vms_csb *c = &club->csb[i];
+
+		if (c->in_use && c->sysid_valid &&
+		    (c->flags & VMS_CSB_F_LOCAL) == 0u)
+			return 1;
+	}
+	return 0;
+}
+
+/*
+ * Drive the join if -- and only if -- there is somewhere to drive it to and
+ * this node has not already started or finished one. Called at CLUSTER_START
+ * and again on every beat that discovers a peer, which is what makes
+ * VAXCLUSTER=2's "waiting to form or join" a real wait rather than a single
+ * failed attempt at boot.
+ *
+ * Returns nonzero iff a join was started on this call.
+ */
+static int cnxman_join_drive(struct vms_cnxman *cn)
+{
+	if (cn->join.state != (uint8_t)CNXMAN_JOIN_IDLE)
+		return 0;   /* already running, already joined, or FAILED */
+	if (!cnxman_join_target_present(cn))
+		return 0;
+
+	(void)cnxman_join_start(&cn->join);
+	if (cn->join.state == (uint8_t)CNXMAN_JOIN_FAILED)
+		return 0;
+
+	cn->cl->state = VMS_CLUSTER_JOINING;
+	return 1;
+}
+
+/* ==========================================================================
  * 8. The fork thread's timer work handler (CONTRACT RULE 2: timers RUN here)
  * ========================================================================== */
 
@@ -932,6 +1030,11 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 
 	switch ((enum cnxman_timer)w->arg0) {
 	case CNXMAN_TIMER_RECNX:
+		/* E36: discovery FIRST, so a system that appeared since the
+		 * last beat has a CSB before the reconnect ladder and the join
+		 * look at the CLUB on this same beat. */
+		if (cnxman_discover_peers(cn) != 0u)
+			(void)cnxman_join_drive(cn);
 		n = cnxman_recnx_tick(&cn->recnx, recs, VMS_CLUB_MAX_CSB);
 		for (i = 0; i < n; i++)
 			cnxman_act_on_recnx_rec(cn, &recs[i]);
@@ -955,12 +1058,54 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
  * 9. Lifecycle
  * ========================================================================== */
 
+/*
+ * THE VAXCLUSTER DECISION, taken once at CLUSTER_START (FC-P3.9).
+ *
+ * VMS's convention, and what each value means HERE:
+ *
+ *   1 "a member only when a cluster is PRESENT". Presence is a fact about
+ *     the interconnect, so it is asked of the interconnect: sweep for peers
+ *     the port has already formed a circuit to and join through one if there
+ *     is one. If there is not, this node is STANDALONE -- the true answer at
+ *     the instant STARTUP.EXE asks, which is what it reports on the console.
+ *     A member that appears LATER is still a cluster becoming present, so the
+ *     reconnect beat's own sweep may still join it; the state then moves
+ *     STANDALONE -> JOINING, and nothing that was already printed becomes a
+ *     lie (it was true when it was printed).
+ *
+ *   2 "always a member". A node with nowhere to join is not standalone, it is
+ *     WAITING -- VMS's own "waiting to form or join an OpenVMS Cluster" on
+ *     OPA0:, which this emits once. The state stays JOINING and the sweep
+ *     keeps looking. Non-blocking: SYSINIT's wait is a wait for an EVENT, not
+ *     a sleep inside an ioctl, and the event is the peer sweep.
+ *
+ * NOTHING HERE FABRICATES A MEMBERSHIP. Only phase2 ever sets
+ * VMS_CLUSTER_MEMBER, and only from a real membership record naming this
+ * node's own SCSSYSTEMID (integration note E30). This function's strongest
+ * output is JOINING.
+ */
+static void cnxman_start_join_or_wait(struct vms_cnxman *cn)
+{
+	struct vms_cluster *cl = cn->cl;
+
+	(void)cnxman_discover_peers(cn);
+	if (cnxman_join_drive(cn))
+		return;
+
+	if (cl->params.vaxcluster == 2u) {
+		cl->state = VMS_CLUSTER_JOINING;
+		cnxman_ops_log(cn, "%CNXMAN, waiting to form or join an "
+				   "OpenVMS Cluster");
+	} else {
+		cl->state = VMS_CLUSTER_STANDALONE;
+	}
+}
+
 int vms_cnxman_start(struct vms_cluster *cl)
 {
 	struct vms_cnxman *cn;
 	struct cnxman_join_cfg cfg;
 	int status;
-	enum cnxman_join_failure jfail;
 
 	if (cl == NULL)
 		return (int)SS__BADPARAM;
@@ -1029,27 +1174,7 @@ int vms_cnxman_start(struct vms_cluster *cl)
 	cl->cnxman = cn;
 	cnxman_recnx_start(&cn->recnx);
 
-	/*
-	 * VAXCLUSTER=1/2: drive the join. cnxman_join_start() picks the target
-	 * from the real CLUB (a CSB some earlier discovery already created);
-	 * CNXMAN_JOIN_FAIL_NO_TARGET is the honest "no cluster present" this
-	 * function's own contract names for VAXCLUSTER=1 (-> STANDALONE).
-	 * VAXCLUSTER=2's "waits, printing ... on OPA0:" is implemented
-	 * NON-BLOCKINGLY here: the message is logged once and the state stays
-	 * JOINING, retried by whatever later re-discovers a target -- a real
-	 * SYSINIT-style blocking wait inside this ioctl path is FC-P3.9 scope
-	 * (see this file's header note and the final report's ESCALATIONS).
-	 */
-	(void)cnxman_join_start(&cn->join);
-	jfail = (enum cnxman_join_failure)cn->join.failure;
-	if (jfail == CNXMAN_JOIN_FAIL_NO_TARGET) {
-		if (cl->params.vaxcluster == 2u)
-			cnxman_ops_log(cn, "%CNXMAN, waiting to form or join "
-					   "an OpenVMS Cluster");
-		else
-			cl->state = VMS_CLUSTER_STANDALONE;
-	}
-
+	cnxman_start_join_or_wait(cn);
 	return (int)SS__NORMAL;
 }
 

@@ -32,14 +32,16 @@
  * synthesised. The response recipes are ECHO-BASED per the spec's own
  * grounded text -- they copy real received bytes, they do not invent new
  * ones. No baked capture template exists anywhere in this file (contrast
- * the strawman src/vmsscs/scs_member.c's `member_config_tmpl`, which this
+ * the retired strawman's `member_config_tmpl` (docs/cluster-protocol-spec.md
+ * SS4 preserves the field map), which this
  * file's own doc comments cite for FIELD PLACEMENT ONLY, never for code).
  *
  * THE ALLOWLIST (sec 6 below) is the GROUNDED (SYSAP, category, opcode)
  * DATA this item owes vms_cluster_codec.h's mechanism (FC-P0.6): every
  * RESPOND row cites the spec paragraph that grounds it, and pairs this
  * project has explicitly measured as ungrounded (cat 0x02 op 0x01/0x12,
- * the DLM lock-request/grant traffic -- see src/vmsscs/scsd.c cm_response_
+ * the DLM lock-request/grant traffic -- see docs/cluster-protocol-spec.md's
+ * cm_response_
  * shape's own comment) are simply ABSENT, which is behaviourally identical
  * to a CONSUME/NONE row: silence, logged by the caller.
  *

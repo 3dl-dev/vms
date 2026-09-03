@@ -719,6 +719,14 @@ struct scs_cdt *scs_fsm_cdt_by_conid(struct scs_fsm *f, vms_conid_t conid);
 struct scs_cdt *scs_fsm_cdt_at(struct scs_fsm *f, uint32_t index);
 struct scs_sb  *scs_fsm_sb_by_sysid(struct scs_fsm *f, vms_scs_sysid_t sysid);
 
+/* The `index`-th SB, or NULL past the table's end / on a free slot. The twin
+ * of scs_fsm_cdt_at() above, and the enumerator CNXMAN's peer sweep needs
+ * (FC-P3.9): a SYSAP cannot discover WHICH systems the port has circuits to
+ * from scs_fsm_sb_by_sysid() alone, because asking that question requires
+ * already knowing the answer. NULL for a free slot rather than a zeroed SB:
+ * "no system here" is not "a system whose SCSSYSTEMID is 0". */
+struct scs_sb  *scs_fsm_sb_at(struct scs_fsm *f, uint32_t index);
+
 /* Pure projections into the frozen cross-substrate views (INV-6: what was
  * never learned stays zero with its flag clear). */
 void scs_fsm_cdt_project(const struct scs_fsm *f, const struct scs_cdt *cdt,

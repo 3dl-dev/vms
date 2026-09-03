@@ -887,11 +887,10 @@ long vms_ioctl_dlm_enum_waits(struct vms_proc *proc, unsigned long arg);
 uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
                                      struct vms_dlm_xnode_args *req);
 long vms_ioctl_dlm_xnode(struct vms_proc *proc, unsigned long arg);
-/* Cluster membership crosses into the executive (rd vms-551): the SET/CLEAR/
- * GET handlers for the module-global membership block (vms_lock.c). SET/
- * CLEAR are scsd's local-ioctl populate path; GET is SHOW CLUSTER's read. */
-long vms_ioctl_cluster_member_set(struct vms_proc *proc, unsigned long arg);
-long vms_ioctl_cluster_member_clear(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_MEMBER_GET (rd vms-551, re-pointed by FC-P3.9): mirror of
+ * the src/kernel/vms_internal.h decl -- SHOW CLUSTER's read, projecting the
+ * connection manager's own CLUB/CSB table (vms_devtab.c). The SET/CLEAR
+ * mutators of the retired userspace daemon are DELETED on both substrates. */
 long vms_ioctl_cluster_member_get(struct vms_proc *proc, unsigned long arg);
 /*
  * FC-P0.9: the ONE per-node struct vms_cluster instance (design SS3.9 rule 3:
@@ -918,12 +917,17 @@ long vms_ioctl_cluster_diag_conn(struct vms_proc *proc, unsigned long arg);
  * real vms_cnxman.c objects. */
 long vms_ioctl_cluster_diag_csb(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_cluster_setcluevt(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_GETSYI (FC-P3.9): mirror of the src/kernel/vms_internal.h
+ * decl -- $GETSYI's cluster item codes projected from the CLUB. */
+long vms_ioctl_cluster_getsyi(struct vms_proc *proc, unsigned long arg);
 /* VMS_IOCTL_SYSGEN_LOAD (FC-P0.10): mirror of the src/kernel/vms_internal.h
  * decl -- loads the cluster SYSGEN parameters into vms_cluster_node()'s real
  * struct vms_cluster.params (vms_cluster_sysgen.c). */
 long vms_ioctl_sysgen_load(struct vms_proc *proc, unsigned long arg);
-/* VMS_IOCTL_CLUSTER_START (FC-P0.11): mirror of the src/kernel/vms_internal.h
- * decl -- the P0 "port up" semantic (vms_devtab.c). */
+/* VMS_IOCTL_CLUSTER_START (FC-P0.11; join semantics FC-P3.9): mirror of the
+ * src/kernel/vms_internal.h decl -- SYSINIT's ordering in one call, port
+ * through connection manager, returning the executive's cluster state
+ * (vms_devtab.c). */
 long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg);
 
 /* ----------------------------------------------------------------

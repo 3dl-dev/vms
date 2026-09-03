@@ -293,11 +293,13 @@ struct vms_dlm_enum_standing_args {
 	struct vms_dlm_standing_ent ent[VMS_DLM_ENUM_STANDING_MAX];
 };
 
-/* Cluster membership crosses into the executive (rd vms-551). MUST match
- * src/kernel/vms_ioctl.h byte-for-byte. SEPARATE from dlm_member_csids
- * above (that vector is CSID-only, static, for DLM directory hashing; this
- * is SCSNODE-name membership state, mutable at runtime by scsd). See
- * vms_ioctl.h for the full semantics + the NOTMEMBER != NOSUCHDEV contract. */
+/* Cluster membership is the CONNECTION MANAGER's (FC-P3.8/FC-P3.9): one row
+ * per system the CLUB holds a CSB for. MUST match src/kernel/vms_ioctl.h
+ * byte-for-byte. The SET/CLEAR mutators the userspace daemon used to populate
+ * this with are GONE (FC-P3.9's retirement, operator reset ruling); the only
+ * member ioctl left is the READ below, and it projects the executive's own
+ * CLUB/CSB table. See vms_ioctl.h for the full semantics, the honest NEW row,
+ * and the NOTMEMBER != NOSUCHDEV contract. */
 struct vms_cluster_member {
 	uint32_t csid;
 	uint32_t sysid;
@@ -305,19 +307,6 @@ struct vms_cluster_member {
 	char     state[16];
 };
 #define VMS_CLUSTER_MEMBER_MAX 96u
-
-struct vms_cluster_member_set_args {
-	uint32_t csid;
-	uint32_t sysid;
-	char     scsnode[16];
-	char     state[16];
-	uint32_t status;
-};
-
-struct vms_cluster_member_clear_args {
-	uint32_t csid;
-	uint32_t status;
-};
 
 struct vms_cluster_member_get_args {
 	uint32_t n_members;
@@ -568,14 +557,38 @@ struct vms_sysgen_load_args {
 };
 
 /*
- * VMS_IOCTL_CLUSTER_START (FC-P0.11). Byte-for-byte the same struct as
- * src/kernel/vms_ioctl.h -- the P0 "port up" semantic only (see that header
- * for the full rationale): no `in:` fields, the port starts from
- * vms_cluster_node()'s already-loaded struct vms_cluster.params.
+ * VMS_IOCTL_CLUSTER_START (FC-P0.11; join semantics FC-P3.9). Byte-for-byte
+ * the same struct as src/kernel/vms_ioctl.h -- see that header for the full
+ * rationale: no `in:` fields, the port starts from vms_cluster_node()'s
+ * already-loaded struct vms_cluster.params, and `cluster_state` is READ BACK
+ * from the executive (enum vms_cluster_state), never composed from `status`.
  */
 struct vms_cluster_start_args {
 	uint32_t port_up;
 	uint32_t status;
+	uint32_t cluster_state;
+};
+
+/*
+ * VMS_IOCTL_CLUSTER_GETSYI (FC-P3.9). Byte-for-byte struct
+ * vms_cluster_getsyi_args in src/kernel/vms_ioctl.h -- $GETSYI's cluster item
+ * codes projected from the CLUB by cluster_api_getsyi_project(). See that
+ * header for the INV-6 `_valid`-companion contract.
+ */
+struct vms_cluster_getsyi_args {
+	uint32_t status;
+	uint32_t cluster_nodes;
+	uint32_t cluster_fsysid_lo;
+	uint32_t cluster_fsysid_hi;
+	uint32_t cluster_ftime_lo;
+	uint32_t cluster_ftime_hi;
+	uint32_t node_csid;
+	uint16_t cluster_votes;
+	uint16_t cluster_quorum;
+	uint8_t  cluster_member;
+	uint8_t  cluster_fsysid_valid;
+	uint8_t  cluster_ftime_valid;
+	uint8_t  node_csid_valid;
 };
 
 /* ================================================================
@@ -596,8 +609,10 @@ struct vms_cluster_start_args {
 #define VMS_IOCTL_DLM_MEMBER_DEPART _IOWR(VMS_LOCK_IOC_MAGIC, 0x36, struct vms_dlm_depart_args)
 #define VMS_IOCTL_DLM_GET_GRANTED   _IOWR(VMS_LOCK_IOC_MAGIC, 0x37, struct vms_dlm_granted_args)
 #define VMS_IOCTL_DLM_ENUM_WAITS    _IOWR(VMS_LOCK_IOC_MAGIC, 0x38, struct vms_dlm_enum_waits_args)
-#define VMS_IOCTL_CLUSTER_MEMBER_SET   _IOWR(VMS_LOCK_IOC_MAGIC, 0x39, struct vms_cluster_member_set_args)
-#define VMS_IOCTL_CLUSTER_MEMBER_CLEAR _IOWR(VMS_LOCK_IOC_MAGIC, 0x3a, struct vms_cluster_member_clear_args)
+/* 0x39/0x3a were CLUSTER_MEMBER_SET/_CLEAR, the userspace daemon's populate
+ * path. FC-P3.9 DELETED both with the daemon; the numbers stay retired rather
+ * than reused, so a stale binary issuing one gets ENOTTY, never a different
+ * facility's handler. */
 #define VMS_IOCTL_CLUSTER_MEMBER_GET   _IOWR(VMS_LOCK_IOC_MAGIC, 0x3b, struct vms_cluster_member_get_args)
 #define VMS_IOCTL_DLM_ENUM_STANDING    _IOWR(VMS_LOCK_IOC_MAGIC, 0x3c, struct vms_dlm_enum_standing_args)
 #define VMS_IOCTL_CLUSTER_DIAG_PORT    _IOWR(VMS_LOCK_IOC_MAGIC, 0x3d, struct vms_cluster_diag_port_args)
@@ -610,6 +625,8 @@ struct vms_cluster_start_args {
 /* FC-P3.8: NR 0x6a/0x6b, same magic and NR bytes as src/kernel/vms_ioctl.h. */
 #define VMS_IOCTL_CLUSTER_DIAG_CSB     _IOWR(VMS_LOCK_IOC_MAGIC, 0x6a, struct vms_cluster_diag_csb_args)
 #define VMS_IOCTL_CLUSTER_SETCLUEVT    _IOWR(VMS_LOCK_IOC_MAGIC, 0x6b, struct vms_cluster_setcluevt_args)
+/* FC-P3.9: NR 0x6c, same magic and NR byte as src/kernel/vms_ioctl.h. */
+#define VMS_IOCTL_CLUSTER_GETSYI       _IOWR(VMS_LOCK_IOC_MAGIC, 0x6c, struct vms_cluster_getsyi_args)
 
 /*
  * Freeze the shared layouts -- see the other _nb.h contracts' identical asserts:
@@ -635,10 +652,6 @@ _Static_assert(sizeof(struct vms_dlm_enum_waits_args) == 16 + 48 * 8,
                "vms_dlm_enum_waits_args changed size -- VMS_IOCTL_DLM_ENUM_WAITS ABI break");
 _Static_assert(sizeof(struct vms_dlm_enum_standing_args) == 16 + 40 * 16,
                "vms_dlm_enum_standing_args changed size -- VMS_IOCTL_DLM_ENUM_STANDING ABI break");
-_Static_assert(sizeof(struct vms_cluster_member_set_args) == 44,
-               "vms_cluster_member_set_args changed size -- VMS_IOCTL_CLUSTER_MEMBER_SET ABI break");
-_Static_assert(sizeof(struct vms_cluster_member_clear_args) == 8,
-               "vms_cluster_member_clear_args changed size -- VMS_IOCTL_CLUSTER_MEMBER_CLEAR ABI break");
 _Static_assert(sizeof(struct vms_cluster_member_get_args) == 3848,
                "vms_cluster_member_get_args changed size -- VMS_IOCTL_CLUSTER_MEMBER_GET ABI break");
 _Static_assert(sizeof(struct vms_pe_view_wire) == 48,
@@ -651,8 +664,10 @@ _Static_assert(sizeof(struct vms_cluster_diag_port_args) == 160,
                "vms_cluster_diag_port_args changed size -- VMS_IOCTL_CLUSTER_DIAG_PORT ABI break");
 _Static_assert(sizeof(struct vms_sysgen_load_args) == 104,
                "vms_sysgen_load_args changed size -- VMS_IOCTL_SYSGEN_LOAD ABI break");
-_Static_assert(sizeof(struct vms_cluster_start_args) == 8,
+_Static_assert(sizeof(struct vms_cluster_start_args) == 12,
                "vms_cluster_start_args changed size -- VMS_IOCTL_CLUSTER_START ABI break");
+_Static_assert(sizeof(struct vms_cluster_getsyi_args) == 36,
+               "vms_cluster_getsyi_args changed size -- VMS_IOCTL_CLUSTER_GETSYI ABI break");
 _Static_assert(sizeof(struct vms_scs_view_wire) == 32,
                "vms_scs_view_wire changed size -- must match src/kernel/vms_ioctl.h");
 _Static_assert(sizeof(struct vms_scs_cdt_view_wire) == 72,

@@ -699,6 +699,30 @@ int vms_scs_cdt_snapshot(struct vms_cluster *cl, uint32_t index,
 	return live ? SS__NORMAL : SS__NOSUCHDEV;
 }
 
+/*
+ * vms_scs_peer_at - vms_scs.h SS8. The `index`-th SB with an OPEN circuit.
+ * No fork mutex (see the header): this is a fork-context service, not a
+ * snapshot. One dereference plus the vc_up test -- it decides nothing.
+ */
+int vms_scs_peer_at(struct vms_cluster *cl, uint32_t index,
+		    vms_scs_sysid_t *out_sysid)
+{
+	struct scs_sb *sb;
+
+	if (cl == (struct vms_cluster *)0 ||
+	    out_sysid == (vms_scs_sysid_t *)0)
+		return SS__BADPARAM;
+	if (cl->scs == (struct vms_scs *)0)
+		return SS__NOSUCHDEV;
+
+	sb = scs_fsm_sb_at(&cl->scs->fsm, index);
+	if (sb == (struct scs_sb *)0 || !sb->vc_up)
+		return SS__NOSUCHDEV;
+
+	*out_sysid = sb->peer_sysid;
+	return SS__NORMAL;
+}
+
 /* ==========================================================================
  * 8. The services -- vms_scs.h's names, one dereference each
  *

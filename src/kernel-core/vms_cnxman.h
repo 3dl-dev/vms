@@ -243,7 +243,19 @@ int cnxman_get_transition(struct vms_cluster *cl, struct cnxman_transition *out)
  *   VAXCLUSTER=1  -> joins if a cluster is present, else STANDALONE
  *   VAXCLUSTER=2  -> waits, printing VMS's own
  *                    "waiting to form or join an OpenVMS Cluster" on OPA0:
- * Returns 0 with cl->state set, or an SS$_ status if the port could not start.
+ * Returns SS$_NORMAL with cl->state set, or an SS$_ status if a layer beneath
+ * (fork/port/SCS) is not running.
+ *
+ * "PRESENT" AND "WAITS", CONCRETELY (FC-P3.9). Presence is asked of the
+ * interconnect: the systems SCS has an OPEN circuit to (vms_scs_peer_at(),
+ * vms_scs.h SS8) get a CSB, and the join is driven through one of them. The
+ * VAXCLUSTER=2 wait is NON-BLOCKING -- this call returns, the state stays
+ * JOINING, and the reconnect beat re-sweeps for peers, so a member that boots
+ * later is still joined. Neither path can return MEMBER: only a real
+ * membership record naming this node's SCSSYSTEMID sets that.
+ *
+ * IDEMPOTENT. A second call while the connection manager is up is
+ * SS$_NORMAL and starts nothing -- it does not re-drive a join in flight.
  */
 int vms_cnxman_start(struct vms_cluster *cl);
 

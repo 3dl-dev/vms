@@ -130,30 +130,26 @@ static struct vms_dlm_requester_ops vms_dlm_req_ops;
 static exec_lock_t vms_dlm_req_ops_lock;
 
 /* ================================================================
- * Cluster membership crosses into the executive (rd vms-551,
- * docs/design-cluster-membership-executive.md)
+ * Cluster membership does NOT live here (FC-P3.9)
  * ================================================================
  *
- * A NEW, SEPARATE module-global block: SCSNODE-name membership state that
- * scsd (the connection manager) populates at runtime via
- * VMS_IOCTL_CLUSTER_MEMBER_SET/CLEAR, and SHOW CLUSTER reads back via
- * VMS_IOCTL_CLUSTER_MEMBER_GET. This is deliberately NOT dlm_member_csids
- * above: that vector is a STATIC 0444 insmod module parameter, CSID-only,
- * feeding the DLM directory hash (vms-50e is actively enqueuing against
- * it) -- read-only and not populatable. Held in kernel memory so every
- * reader on /dev/vms sees the SAME set (the INV-6-decisive property a
- * per-process userspace fake cannot have).
+ * rd vms-551 put a module-global `vms_cluster_members[]` block in this file
+ * that a USERSPACE daemon populated through VMS_IOCTL_CLUSTER_MEMBER_SET/
+ * _CLEAR while SHOW CLUSTER read it back -- an executive-shaped mirror of a
+ * userspace fact. The operator's 2026-09-02 reset retired that daemon, and
+ * FC-P3.9 deleted the block with it: membership is the CONNECTION MANAGER's
+ * CLUB and CSB table (src/kernel-core/vms_cnxman.c), and
+ * VMS_IOCTL_CLUSTER_MEMBER_GET now projects THAT
+ * (vms_ioctl_cluster_member_get, src/kernel-core/vms_devtab.c). There is no
+ * setter any more, on any path, because there is nothing outside the
+ * executive entitled to assert who the cluster is.
  */
-static struct vms_cluster_member vms_cluster_members[VMS_CLUSTER_MEMBER_MAX];
-static uint32_t vms_cluster_member_count;
-static exec_lock_t vms_cluster_lock;
 
 int vms_lock_init(void)
 {
     exec_lock_init(&vms_lock_id_lock);
     exec_lock_init(&vms_res_hash_lock);
     exec_lock_init(&vms_dlm_req_ops_lock);
-    exec_lock_init(&vms_cluster_lock);
     exec_rbtree_init(&vms_lock_id_tree);
     exec_hash_init(vms_res_hash);
     return 0;
@@ -292,20 +288,12 @@ void vms_lock_cleanup(void)
     }
     exec_unlock(&vms_res_hash_lock);
 
-    /* Cluster membership block (rd vms-551): no owned resources beyond the
-     * lock itself (a flat array, no per-entry allocation), so just reset the
-     * count under the lock before tearing it down. */
-    exec_lock(&vms_cluster_lock);
-    vms_cluster_member_count = 0;
-    exec_unlock(&vms_cluster_lock);
-
     /* Tear down the runtime-initialized locks (a no-op on Linux; a real
      * mutex_destroy on NetBSD -- paired with the exec_lock_init in
      * vms_lock_init). */
     exec_lock_destroy(&vms_dlm_req_ops_lock);
     exec_lock_destroy(&vms_res_hash_lock);
     exec_lock_destroy(&vms_lock_id_lock);
-    exec_lock_destroy(&vms_cluster_lock);
 }
 
 /* ================================================================
@@ -576,7 +564,8 @@ static void resource_release(struct vms_lock_resource *res)
  * exactly as the prior stub-of-one did -- single-node grants unchanged.
  *
  * This is NOT the live membership feed from the connection manager / quorum
- * (src/vmsscs/scs_quorum.c): that dynamic feed is the 0.4 "DC" successor (and
+ * (the connection manager's own CLUB, src/kernel-core/vms_cnxman_quorum.c):
+ * that dynamic feed is FC-P4.3's successor (and
  * overlaps vms-2f3's rejoin). A static, harness/operator-supplied vector is an
  * honest controlled input for the directory proof, never fabricated live state.
  */
@@ -2333,129 +2322,6 @@ long vms_ioctl_dlm_enum_waits(struct vms_proc *proc, unsigned long arg)
 }
 
 /*
- * vms_ioctl_cluster_member_set - VMS_IOCTL_CLUSTER_MEMBER_SET (rd vms-551).
- * scsd's local populate path: insert-or-update one member by csid. csid==0
- * is refused (SS$_BADPARAM) -- 0 is the reserved "unmastered" sentinel the
- * DLM directory already treats as never a member (see dlm_member_departed
- * above), so a membership entry keyed on it would be ambiguous. Found by
- * csid -> overwrite sysid/scsnode/state in place; not found -> append if
- * room, else SS$_INSFMEM (the block genuinely has no more room -- honest
- * refusal, never a silently dropped member).
- */
-long vms_ioctl_cluster_member_set(struct vms_proc *proc, unsigned long arg)
-{
-    struct vms_cluster_member_set_args args;
-    uint32_t i;
-
-    (void)proc;
-    memset(&args, 0, sizeof(args));
-    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
-        return -EFAULT;
-
-    if (args.csid == 0) {
-        args.status = SS__BADPARAM;
-        goto out;
-    }
-
-    exec_lock(&vms_cluster_lock);
-    for (i = 0; i < vms_cluster_member_count; i++) {
-        if (vms_cluster_members[i].csid == args.csid)
-            break;
-    }
-    if (i == vms_cluster_member_count) {
-        if (vms_cluster_member_count >= VMS_CLUSTER_MEMBER_MAX) {
-            exec_unlock(&vms_cluster_lock);
-            args.status = SS__INSFMEM;
-            goto out;
-        }
-        vms_cluster_member_count++;
-    }
-    vms_cluster_members[i].csid = args.csid;
-    vms_cluster_members[i].sysid = args.sysid;
-    memcpy(vms_cluster_members[i].scsnode, args.scsnode,
-           sizeof(vms_cluster_members[i].scsnode));
-    memcpy(vms_cluster_members[i].state, args.state,
-           sizeof(vms_cluster_members[i].state));
-    exec_unlock(&vms_cluster_lock);
-
-    args.status = SS__NORMAL;
-out:
-    if (exec_copyout((void *)arg, &args, sizeof(args)))
-        return -EFAULT;
-    return 0;
-}
-
-/*
- * vms_ioctl_cluster_member_clear - VMS_IOCTL_CLUSTER_MEMBER_CLEAR (rd
- * vms-551). scsd's local departure path: remove one member by csid,
- * compacting the array. IDEMPOTENT: a csid the block never SET (already
- * cleared, or never a member) is a no-op, SS$_NORMAL -- never an error, so a
- * retransmitted or racing departure signal cannot fail this call.
- */
-long vms_ioctl_cluster_member_clear(struct vms_proc *proc, unsigned long arg)
-{
-    struct vms_cluster_member_clear_args args;
-    uint32_t i;
-
-    (void)proc;
-    memset(&args, 0, sizeof(args));
-    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
-        return -EFAULT;
-
-    exec_lock(&vms_cluster_lock);
-    for (i = 0; i < vms_cluster_member_count; i++) {
-        if (vms_cluster_members[i].csid == args.csid) {
-            uint32_t last = vms_cluster_member_count - 1;
-            if (i != last)
-                vms_cluster_members[i] = vms_cluster_members[last];
-            memset(&vms_cluster_members[last], 0, sizeof(vms_cluster_members[last]));
-            vms_cluster_member_count--;
-            break;
-        }
-    }
-    exec_unlock(&vms_cluster_lock);
-
-    args.status = SS__NORMAL;
-    if (exec_copyout((void *)arg, &args, sizeof(args)))
-        return -EFAULT;
-    return 0;
-}
-
-/*
- * vms_ioctl_cluster_member_get - VMS_IOCTL_CLUSTER_MEMBER_GET (rd vms-551).
- * SHOW CLUSTER's read: copy out the live view. n_members==0 is a genuine
- * SS$_NORMAL (NOTMEMBER) -- the executive answered, there is simply no
- * cluster to report, which is distinct from the transport failure a caller
- * sees when /dev/vms itself is unreachable (SS$_NOSUCHDEV, never returned
- * from here). INV-6: a READ of the real block, nothing fabricated.
- */
-long vms_ioctl_cluster_member_get(struct vms_proc *proc, unsigned long arg)
-{
-    struct vms_cluster_member_get_args *args;
-    uint32_t i;
-
-    (void)proc;
-    args = exec_alloc(sizeof(*args));
-    if (!args)
-        return -ENOMEM;
-    memset(args, 0, sizeof(*args));
-
-    exec_lock(&vms_cluster_lock);
-    for (i = 0; i < vms_cluster_member_count; i++)
-        args->members[i] = vms_cluster_members[i];
-    args->n_members = vms_cluster_member_count;
-    exec_unlock(&vms_cluster_lock);
-
-    args->status = SS__NORMAL;
-    if (exec_copyout((void *)arg, args, sizeof(*args))) {
-        exec_free(args);
-        return -EFAULT;
-    }
-    exec_free(args);
-    return 0;
-}
-
-/*
  * vms_lock_dlm_xnode_dlksrch - the distributed deadlock search VICTIM leg (rd
  * vms-ec75, DLM rung H11). The SEARCH legs of the edge-chase are pure reads
  * orchestrated in scsd over the two readback ioctls (DLM_ENUM_WAITS home authority
@@ -3120,7 +2986,7 @@ static int vms_lock_dlm_xnode_enq_idempotent(struct vms_dlm_xnode_args *req,
  * (vms-94c transport; DLM epic vms-7fa).
  *
  * A DLM request that arrived over SCS from a REMOTE node (decoded by
- * src/vmsscs/scs_dlm.c, marshalled through VMS_IOCTL_DLM_XNODE) is dispatched
+ * a peer, marshalled through VMS_IOCTL_DLM_XNODE) is dispatched
  * HERE -- the point at which the kernel lock manager acts on a peer's behalf, as
  * the resource's master (membership is a stub-of-one, so this node is directory +
  * master for the name and grants/queues locally; that is the mastering node's

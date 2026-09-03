@@ -159,6 +159,20 @@ target_compile_definitions(test_cnxman_glue PRIVATE
     OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
 )
 
+# FC-P3.9's own R1 (boot integration + the E35/E36 wiring). Same two-proof
+# shape as test_cnxman_glue above -- the algorithm against the real CLUB/CSB
+# objects, then the WIRING read out of the four shipping files that carry it.
+# It reads more than kernel-core, because the boot integration is a chain that
+# crosses three layers: the connection-manager glue and the ioctl handler
+# (kernel-core), STARTUP.EXE's own step ordering (ovmx_init), and SHOW
+# CLUSTER (DCL). Reading only one end would let the other end drift.
+cluster_host_cnxman_test(test_cnxman_boot test_cnxman_boot.c)
+target_compile_definitions(test_cnxman_boot PRIVATE
+    OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
+    OVMX_INIT_DIR="${CMAKE_SOURCE_DIR}/src/ovmx_init"
+    OVMX_DCL_DIR="${CMAKE_SOURCE_DIR}/src/vmsdcl"
+)
+
 cluster_host_test(test_codec_scs        test_codec_scs.c)
 cluster_host_test(test_codec_cm         test_codec_cm.c vms_frame_compose.c)
 cluster_host_test(test_codec_mscp       test_codec_mscp.c)

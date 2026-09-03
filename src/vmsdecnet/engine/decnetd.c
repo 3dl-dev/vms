@@ -2,12 +2,12 @@
  * decnetd.c - the OVMX DECnet Phase IV routing ENGINE daemon (rd vms-449d,
  *             engine rung 1 of epic vms-30e).
  *
- * This is the DECnet analogue of src/vmsscs/scsd.c: a userspace daemon that
+ * A userspace daemon that
  * owns a raw-L2 datalink and speaks a DEC wire protocol over it, while
  * presenting a VMS-faithful surface upward. It is the ONLY place the AF_PACKET
  * socket is touched (scs_datalink_{open,send,recv} -- the SAME generic raw-L2
  * abstraction scsd.c uses, deliberately written engine-agnostic for exactly
- * this second consumer, see src/vmsscs/scs_datalink.h). Everything the wire
+ * this consumer, see src/libdatalink/include/scs_datalink.h). Everything the wire
  * logic does lives in the pure, socketless engine core (dnet_engine.{c,h}),
  * which drives the three landed codecs.
  *
@@ -44,7 +44,7 @@
 #include "dnet_engine.h"
 #include "dnet_cterm.h"     /* CTERM terminal-service protocol (--set-host-selftest) */
 #include "ovmx_identity.h"  /* INV-1 identity SSOT: human banner = OVMX product id */
-#include "scs_datalink.h"   /* the shared raw-L2 datalink (src/vmsscs) */
+#include "scs_datalink.h"   /* the shared raw-L2 datalink (src/libdatalink) */
 
 /* Default datalink interface, matching scsd's br0 default (the lab-2 pod
  * bridge model that carries raw Phase IV multicast; SLIRP cannot, see

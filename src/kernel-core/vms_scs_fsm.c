@@ -218,6 +218,15 @@ struct scs_sb *scs_fsm_sb_by_sysid(struct scs_fsm *f, vms_scs_sysid_t sysid)
 	return (struct scs_sb *)0;
 }
 
+struct scs_sb *scs_fsm_sb_at(struct scs_fsm *f, uint32_t index)
+{
+	if (f == (struct scs_fsm *)0 || f->sbs == (struct scs_sb *)0)
+		return (struct scs_sb *)0;
+	if (index >= f->n_sbs)
+		return (struct scs_sb *)0;
+	return f->sbs[index].in_use ? &f->sbs[index] : (struct scs_sb *)0;
+}
+
 static struct scs_sb *sb_find_or_alloc(struct scs_fsm *f,
 				       vms_scs_sysid_t sysid)
 {

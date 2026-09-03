@@ -315,4 +315,35 @@ int vms_scs_snapshot(struct vms_cluster *cl, struct vms_scs_view *out);
 int vms_scs_cdt_snapshot(struct vms_cluster *cl, uint32_t index,
 			 struct vms_scs_cdt_view *out);
 
+/* ==========================================================================
+ * 8. Peer enumeration -- WHICH systems the port has a circuit to (FC-P3.9)
+ *
+ * SCS never opens a connection on its own; the SYSAP does (design SS3.2.5).
+ * But a SYSAP cannot connect to a system it has no way of NAMING, and the only
+ * place a peer's SCSSYSTEMID is ever learned is the port's own vc_up -- which
+ * SCS records on that system's SB and nothing above SCS could see. This is
+ * that seam, and it is the whole of integration note E36's fix: CNXMAN sweeps
+ * it on its own beat and allocates a CSB for each system found (p. 7-23's
+ * "newly discovered connection manager").
+ *
+ * Returns SS$_NORMAL and fills *out_sysid for the `index`-th SB with an OPEN
+ * circuit; SS$_NOSUCHDEV for a free slot, an SB whose circuit is DOWN, an
+ * index past the table, or SCS not started. The caller therefore sweeps the
+ * whole 0..VMS_CLUB_MAX_CSB-1 range and SKIPS the refusals -- a down circuit
+ * in the middle of the table is not the end of it. Sysids are reported in
+ * SB-table order, which is discovery order.
+ *
+ * INV-6: this reports ONLY systems the PORT genuinely formed a circuit to
+ * (scs_fsm_vc_up() sets `sb->vc_up` from vms_pe_fsm.c's vc_notify_up, whose
+ * peer_sysid was read off a real received frame). A system that was merely
+ * heard from, or whose circuit has since gone down, is not reported.
+ *
+ * CALLED FROM THE CLUSTER FORK THREAD, like every other service in SS4/SS5/SS6
+ * above -- it does NOT take the fork mutex, so a caller that is not on the
+ * fork context must take it (the two snapshots in SS7 are the exception, and
+ * they say so).
+ * ========================================================================== */
+int vms_scs_peer_at(struct vms_cluster *cl, uint32_t index,
+		    vms_scs_sysid_t *out_sysid);
+
 #endif /* OVMX_VMS_SCS_H */

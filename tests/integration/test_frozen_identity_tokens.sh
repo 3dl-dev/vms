@@ -6,7 +6,7 @@
 # The OpenVMX product rebrand (ovmx_identity.h: OVMX_PRODUCT_NAME "OVMX" ->
 # "OpenVMX") only touches the HUMAN-facing brand. A wide set of "OVMX"
 # tokens are load-bearing as NON-BRAND identifiers -- VMS facility/status
-# codes, the IMGACT ELF-note owner, the SCS/cluster wire OS-name field,
+# codes, the IMGACT ELF-note owner, the cluster software identity,
 # nodename fallbacks, the kit/product-db vendor token -- and a naive
 # find/replace across the tree would silently corrupt every one of them
 # (wire incompatibility, status codes callers pattern-match, binary
@@ -67,11 +67,26 @@ check_grep "IMGACT_NOTE_OWNER" \
     "$SRC_ROOT/src/libvms/include/imgact_activate.h" \
     '#define[[:space:]]+IMGACT_NOTE_OWNER[[:space:]]+"OVMX"'
 
-# 4. SCS/cluster wire OS-name field -- the self-description scsd.c inserts
-#    into its own SB (System Block) for cluster peers to read.
-check_grep "SCS wire self os_name" \
-    "$SRC_ROOT/src/vmsscs/scsd.c" \
-    'self_info\.os_name = "OVMX";'
+# 4. Cluster software identity -- the string OVMX presents AS A CLUSTER NODE,
+#    in SHOW CLUSTER's SOFTWARE column and (once the executive advertises it)
+#    on the SCS START wire. Frozen as "VMX V<n>": never "VMS", never "OpenVMS",
+#    never the product version -- OVMX is OpenVMS-COMPATIBLE and does not claim
+#    to BE OpenVMS on a wire another vendor's node reads (INV-0, the
+#    trademark ceiling, and Baron's honest-OS-identity ruling, vms-a84d).
+#
+#    RETARGETED BY FC-P3.9. This used to pin `self_info.os_name = "OVMX";` in
+#    the userspace SCS daemon's own System Block. That daemon is deleted with
+#    the rest of the userspace SCS strawman, so the token it froze no longer
+#    exists anywhere. The identity it PROTECTED does: OVMX_CLUSTER_SW_VERSION
+#    is the SSOT, and the check now pins the SSOT plus the requirement that
+#    SHOW CLUSTER render THROUGH it rather than through a literal of its own
+#    (a second copy is how the two drift apart).
+check_grep "OVMX_CLUSTER_SW_VERSION stays a VMX-family cluster identity" \
+    "$SRC_ROOT/src/libvms/include/ovmx_identity.h" \
+    '#define[[:space:]]+OVMX_CLUSTER_SW_VERSION[[:space:]]+"VMX V[0-9]'
+check_grep "SHOW CLUSTER renders the software column through the SSOT macro" \
+    "$SRC_ROOT/src/vmsdcl/dcl_cmd_show.c" \
+    'OVMX_CLUSTER_SW_VERSION'
 
 # 5. Kit/product-db vendor/producer token -- OVMX_VENDOR_TOKEN, deliberately
 #    NOT OVMX_PRODUCT_NAME (which now carries the "OpenVMX" human brand).

@@ -354,3 +354,28 @@ ctest -R 'labjoin_booted_(plumbing|negctl)'
 OVMX_LAB2_JOIN=1 LAB2_POD=vaxlab-0 ART_DIR=/tmp/ovmx-boot-art \
     tests/lab/tools/run_labjoin_booted_gate.sh
 ```
+
+## FC-P3.9: the SCSD probe these tools drive is GONE
+
+FC-P3.9 executed the operator's 2026-09-02 clustering reset and deleted
+`src/vmsscs/`, so `SCSD.EXE` no longer builds. Twenty-four of the scripts in
+`tools/` here drive that binary as an oracle/capture probe against the real
+lab-2 VAX cluster (`abrun.sh`, `coord358.sh`, `o35run.sh`, `portwatch.sh`,
+`scacptrace.sh`, and the rest -- `git grep -l SCSD.EXE tests/lab/tools`).
+
+**They were deliberately NOT deleted, and they will not run as-is.** The same
+operator message that ordered the reset also said the lab lane can continue
+extracting facts, and these scripts are where the capture procedure lives: the
+tcpdump filters, the SDA and console poll sequences, the identity-collision
+guards, the grading tables. Deleting them would throw away that procedure with
+nothing to replace it. They are kept as RECIPES, currently without an
+instrument.
+
+The replacement instrument is a booted OVMX node plus the executive's own
+readbacks (`CLUSTER_DIAG_PORT` / `_CONN` / `_CSB`, and `SHOW CLUSTER`'s
+classes over them) -- which is exactly what plan row **FC-P3.11** exists to
+build. rd **vms-ec8** tracks the decision and the re-point.
+
+Two gates here are unaffected and still pass, because they test the harness's
+DECISIONS as text rather than running it: `labjoin_booted_plumbing` and
+`labjoin_booted_negctl`.

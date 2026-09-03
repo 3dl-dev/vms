@@ -1259,11 +1259,16 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_DLM_ENUM_WAITS:
 	case VMS_IOCTL_DLM_ENUM_STANDING:
 	case VMS_IOCTL_DLM_XNODE:
-	case VMS_IOCTL_CLUSTER_MEMBER_SET:
-	case VMS_IOCTL_CLUSTER_MEMBER_CLEAR:
 	case VMS_IOCTL_CLUSTER_MEMBER_GET:
 	case VMS_IOCTL_CLUSTER_DIAG_PORT:
 	case VMS_IOCTL_CLUSTER_DIAG_CONN:
+	/* FC-P3.8 declared these two in the inner switch but NOT here, so the
+	 * outer dispatch fell through to ENOTTY and neither reached its
+	 * handler on this substrate. FC-P3.9 adds them; the inner switch was
+	 * already correct. */
+	case VMS_IOCTL_CLUSTER_DIAG_CSB:
+	case VMS_IOCTL_CLUSTER_SETCLUEVT:
+	case VMS_IOCTL_CLUSTER_GETSYI:
 	case VMS_IOCTL_SYSGEN_LOAD:
 	case VMS_IOCTL_CLUSTER_START:
 		uarg = data;
@@ -1292,10 +1297,6 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_dlm_enum_standing(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_DLM_XNODE:
 			r = vms_ioctl_dlm_xnode(proc, (unsigned long)uarg);      break;
-		case VMS_IOCTL_CLUSTER_MEMBER_SET:
-			r = vms_ioctl_cluster_member_set(proc, (unsigned long)uarg); break;
-		case VMS_IOCTL_CLUSTER_MEMBER_CLEAR:
-			r = vms_ioctl_cluster_member_clear(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_CLUSTER_MEMBER_GET:
 			r = vms_ioctl_cluster_member_get(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_CLUSTER_DIAG_PORT:
@@ -1306,6 +1307,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_cluster_diag_csb(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_CLUSTER_SETCLUEVT:
 			r = vms_ioctl_cluster_setcluevt(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_CLUSTER_GETSYI:
+			r = vms_ioctl_cluster_getsyi(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_SYSGEN_LOAD:
 			r = vms_ioctl_sysgen_load(proc, (unsigned long)uarg);   break;
 		case VMS_IOCTL_CLUSTER_START:

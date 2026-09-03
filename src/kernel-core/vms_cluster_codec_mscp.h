@@ -34,7 +34,8 @@
  *
  * THE CONFORMANCE ORACLE, where this item goes beyond the book, is this
  * project's own prior clean-room capture work already in the tree
- * (src/vmsscs/include/scs_mscp.h, src/vmsscs/include/scs_mscp_srv.h --
+ * (docs/cluster-protocol-spec.md's MSCP field maps, harvested from the
+ * retired strawman's scs_mscp/scs_mscp_srv headers --
  * reference ONLY, their wire-behaviour documentation and byte-exact golden
  * vectors, never their C code, per Rule 9's STRAWMAN posture): a real VAX's
  * MSCP server answers, censused over 489 lab pcaps and a dedicated vms-291
@@ -288,7 +289,7 @@ vms_codec_status_t vms_mscp_classify(const uint8_t *frame, uint32_t len,
 /*
  * struct vms_mscp_link - the abs[0,72) span a builder needs: the shared
  * SCA header, the sequenced-message counters and their GROUNDED mirrors
- * (spec-grounded by src/vmsscs/include/scs_mscp.h's own envelope
+ * (spec-grounded by docs/cluster-protocol-spec.md's own MSCP envelope
  * description, cited there to the golden af2 captures: recv_ack@32
  * mirrored @40/@48, send_seq@34 mirrored @44), the SCS message-TYPE word
  * @60 (baked in as the GROUNDED constant 10, "the p. 4-13 APPLICATION

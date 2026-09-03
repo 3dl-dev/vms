@@ -222,10 +222,23 @@ vms_kif_getexit_pid=PROCEDURE
 # vms-7eb (auth slice of vms-1e4): the L2 (raw datalink) socket surface --
 # kernel-owned AF_PACKET I/O for the SCS cluster wire, gated on PHY_IO. Any
 # VMS-native-linked consumer driving raw L2 (the cluster wire's future
-# scsd/vmsscs transport) reaches vms.ko through these WIRED kif wrappers, so
+# transport) reaches vms.ko through these WIRED kif wrappers, so
 # they must be LIBVMSSYS$SHR universals. APPENDED per the append-only
 # contract -- never shifts an existing index.
 vms_kif_l2_open=PROCEDURE
 vms_kif_l2_send=PROCEDURE
 vms_kif_l2_recv=PROCEDURE
 vms_kif_l2_close=PROCEDURE
+# FC-P3.9 (docs/plan-faithful-cluster-executive.md): the executive-resident
+# cluster stack's READBACK surface. DCL's SHOW CLUSTER issues the three
+# SDA-shaped diagnostics reads for its LOCAL_PORTS/CIRCUITS, CONNECTIONS and
+# CLUSTER classes; sys$getsyi answers every cluster item code from
+# CLUSTER_GETSYI; sys$setcluevt/sys$clrcluevt register through SETCLUEVT.
+# All five are VMS-native-linked LIBVMSSYS$SHR consumers, so all five must be
+# universals. APPENDED per the append-only contract -- never shifts an
+# existing index.
+vms_kif_cluster_diag_port=PROCEDURE
+vms_kif_cluster_diag_conn=PROCEDURE
+vms_kif_cluster_diag_csb=PROCEDURE
+vms_kif_cluster_getsyi=PROCEDURE
+vms_kif_cluster_setcluevt=PROCEDURE

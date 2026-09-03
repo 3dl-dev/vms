@@ -1790,12 +1790,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_dlm_enum_waits(proc, arg);
     case VMS_IOCTL_DLM_ENUM_STANDING:
         return vms_ioctl_dlm_enum_standing(proc, arg);
-    /* Cluster membership crosses into the executive (vms-551): scsd's local
-     * populate path (SET/CLEAR) and SHOW CLUSTER's read (GET). */
-    case VMS_IOCTL_CLUSTER_MEMBER_SET:
-        return vms_ioctl_cluster_member_set(proc, arg);
-    case VMS_IOCTL_CLUSTER_MEMBER_CLEAR:
-        return vms_ioctl_cluster_member_clear(proc, arg);
+    /* SHOW CLUSTER's read (vms-551), projecting the connection manager's own
+     * CLUB/CSB table since FC-P3.9. There is no SET/CLEAR: the userspace
+     * daemon that populated a mirror through them is retired, and so are
+     * they. */
     case VMS_IOCTL_CLUSTER_MEMBER_GET:
         return vms_ioctl_cluster_member_get(proc, arg);
     /* The port's SDA SHOW PORT-equivalent diagnostics read (FC-P0.9,
@@ -1812,15 +1810,18 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_cluster_diag_csb(proc, arg);
     case VMS_IOCTL_CLUSTER_SETCLUEVT:
         return vms_ioctl_cluster_setcluevt(proc, arg);
+    /* $GETSYI's cluster item codes, from the CLUB (FC-P3.9). */
+    case VMS_IOCTL_CLUSTER_GETSYI:
+        return vms_ioctl_cluster_getsyi(proc, arg);
     /* STARTUP.EXE's own case of SYSBOOT (FC-P0.10): load the cluster SYSGEN
      * parameters + CLUSTER_AUTHORIZE into vms_cluster_node()->params, once,
      * before VMS_IOCTL_CLUSTER_START (FC-P0.11). */
     case VMS_IOCTL_SYSGEN_LOAD:
         return vms_ioctl_sysgen_load(proc, arg);
-    /* STARTUP.EXE's boot path (FC-P0.11): the P0 "port up" semantic -- start
-     * the fork thread, then vms_pe_start() -- against the same
-     * vms_cluster_node(), gated on VAXCLUSTER at both the ovmx_init.c caller
-     * and here (vms_pe_start's own check). */
+    /* STARTUP.EXE's boot path (FC-P0.11; join semantics FC-P3.9): the fork
+     * thread, then vms_pe_start(), vms_scs_start() and vms_cnxman_start() --
+     * against the same vms_cluster_node(), gated on VAXCLUSTER at both the
+     * ovmx_init.c caller and here (each layer's own check). */
     case VMS_IOCTL_CLUSTER_START:
         return vms_ioctl_cluster_start(proc, arg);
     /* DLM cross-node lock-request dispatch (vms-94c, DLM epic vms-7fa rung 1):

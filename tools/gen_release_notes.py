@@ -72,10 +72,10 @@ ATTEST_RE = re.compile(r'^Attest [0-9a-f]{40}$')
 
 # Reverse-engineering / cluster-wire-protocol work: this project's commit
 # convention marks these with a subject prefix naming the RE-facing module
-# (scs:, vmsscs:, cluster:, cluster-spec:, dlm:), a conventional-commit
-# scope (feat(vmsscs): ...), or spells out "RE" explicitly in the subject.
+# (scs:, cluster:, cluster-spec:, dlm:), a conventional-commit scope
+# (feat(cluster): ...), or spells out "RE" explicitly in the subject.
 PREFIX_RE = re.compile(r'^([a-zA-Z][a-zA-Z0-9_.-]*)(?:\(([a-zA-Z0-9_.-]+)\))?:')
-RE_STEMS = {'scs', 'vmsscs', 'cluster', 'cluster-spec', 'dlm', 'nisca', 'mscp'}
+RE_STEMS = {'scs', 'cluster', 'cluster-spec', 'dlm', 'nisca', 'mscp'}
 RE_KEYWORDS = (' re —', ' re:', 'clean-room', 'wire protocol', 'nisca', 'mscp')
 
 FIX_STEMS = {'fix', 'hotfix'}

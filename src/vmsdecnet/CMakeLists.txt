@@ -22,7 +22,7 @@ add_subdirectory(cterm)
 
 # Engine rung 1 (rd vms-449d): the userspace routing ENGINE that MOVES FRAMES
 # using the engine-agnostic codecs above -- AF_PACKET SOCK_RAW over the shared
-# src/vmsscs raw-L2 datalink (operator ruling vms-a1c, Option B), with the
+# src/libdatalink raw-L2 datalink (operator ruling vms-a1c, Option B), with the
 # socket hidden behind a VMS-faithful DECnet surface (Rule 1). The daemon
 # (DECNETD.EXE) is the DECnet analogue of scsd.
 add_subdirectory(engine)

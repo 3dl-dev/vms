@@ -396,34 +396,21 @@ uint32_t vms_kif_dlm_get_granted(const char *resnam, uint32_t *out_found,
  * product client ever issues it. */
 uint32_t vms_kif_dlm_enum_waits(uint32_t *out_count, uint32_t *out_total);
 
-/* Cluster membership crosses into the executive (rd vms-551,
- * docs/design-cluster-membership-executive.md). SET/CLEAR insert-or-update /
- * remove one member by csid; GET copies out the live view.
- * OVMX-UNWIRED: vms_kif_cluster_member_set (vms-551) -- like
- * vms_kif_dlm_member_depart above, scsd (a glibc process) issues
- * VMS_IOCTL_CLUSTER_MEMBER_SET with a DIRECT POSIX ioctl from
- * scsd_publish_membership, not this freestanding client; no sys$ service
- * issues it. This wrapper exists so SET is observable against a real
- * /dev/vms from the freestanding syssvc test. Wire it and delete this line
- * if a product client ever issues it. */
-uint32_t vms_kif_cluster_member_set(uint32_t csid, uint32_t sysid,
-                                    const char *scsnode, const char *state);
-
-/* OVMX-UNWIRED: vms_kif_cluster_member_clear (vms-551) -- same footing as
- * vms_kif_cluster_member_set above: scsd issues VMS_IOCTL_CLUSTER_MEMBER_CLEAR
- * with a direct POSIX ioctl on departure, not this freestanding client. This
- * wrapper exists so CLEAR is observable against a real /dev/vms from the
- * freestanding syssvc test. Wire it and delete this line if a product
- * client ever issues it. */
-uint32_t vms_kif_cluster_member_clear(uint32_t csid);
-
 /*
- * vms_kif_cluster_get_members - SHOW CLUSTER's read of the executive
- * membership block (vms-551). WIRED: DCL's cmd_show_cluster
+ * vms_kif_cluster_get_members - SHOW CLUSTER's read of the CONNECTION
+ * MANAGER's CLUB/CSB table (vms-551; re-pointed at the CSBs by FC-P3.9,
+ * integration note E35). WIRED: DCL's cmd_show_cluster
  * (src/vmsdcl/dcl_cmd_show.c) calls this directly, so it satisfies the kif
- * caller census as a real product path. Fails honestly with SS$_NOSUCHDEV
- * when /dev/vms is unreachable (never conflated with a genuine NOTMEMBER
- * view, which is SS$_NORMAL with *out_n_members==0).
+ * caller census as a real product path.
+ *
+ * The SET/CLEAR mutators that used to sit here are GONE with the userspace
+ * daemon that issued them (operator reset ruling, 2026-09-02): membership is
+ * the executive's, and there is no longer any way -- wrapper, ioctl or
+ * otherwise -- for a userspace process to assert it.
+ *
+ * Fails honestly with SS$_NOSUCHDEV when /dev/vms is unreachable OR the
+ * connection manager is not started; never conflated with a genuine NOTMEMBER
+ * view, which is SS$_NORMAL with *out_n_members==0.
  */
 uint32_t vms_kif_cluster_get_members(struct vms_cluster_member *out_members,
                                      uint32_t max_members,
@@ -440,16 +427,74 @@ uint32_t vms_kif_cluster_get_members(struct vms_cluster_member *out_members,
 uint32_t vms_kif_sysgen_load(struct vms_sysgen_load_args *args);
 
 /*
- * vms_kif_cluster_start - VMS_IOCTL_CLUSTER_START (FC-P0.11). The P0
- * "port up" semantic only: starts the fork thread if needed, then
- * vms_pe_start() (FC-P0.9) against the executive's vms_cluster_node().
+ * vms_kif_cluster_start - VMS_IOCTL_CLUSTER_START (FC-P0.11; join semantics
+ * FC-P3.9). SYSINIT's ordering in one call against the executive's
+ * vms_cluster_node(): fork thread, vms_pe_start() (FC-P0.9), vms_scs_start()
+ * (FC-P2.4), vms_cnxman_start() (FC-P3.8) -- form or join per VAXCLUSTER.
  * WIRED: STARTUP.EXE's boot path (ovmx_init.c) calls this once, after
- * load_cluster_sysgen_params(), gated on VAXCLUSTER != 0
- * (cluster_boot_gate.h). `out_port_up`, if non-NULL, receives whether
- * PEA0: is up when this call returns (1) or not (0) -- honest either way,
- * never asserted true on a refused start.
+ * load_cluster_sysgen_params() and BEFORE the system disk is mounted, gated
+ * on VAXCLUSTER != 0 (cluster_boot_gate.h).
+ *
+ * `out_port_up`, if non-NULL, receives whether PEA0: is up when this call
+ * returns (1) or not (0). `out_state`, if non-NULL, receives the executive's
+ * OWN enum vms_cluster_state (OFF / PORT_UP / JOINING / MEMBER / STANDALONE)
+ * READ BACK from struct vms_cluster after the call -- honest either way,
+ * never asserted from the status. STARTUP.EXE renders its operator line from
+ * `out_state`, so the console cannot announce a membership the executive does
+ * not hold (INV-6).
  */
-uint32_t vms_kif_cluster_start(uint32_t *out_port_up);
+uint32_t vms_kif_cluster_start(uint32_t *out_port_up, uint32_t *out_state);
+
+/*
+ * The three SDA-shaped cluster diagnostics reads (FC-P0.9 / FC-P2.4 /
+ * FC-P3.8), taken by args-struct pointer because each carries a wide row that
+ * an out-parameter list would re-declare (and drift from). WIRED: DCL's
+ * SHOW CLUSTER (src/vmsdcl/dcl_cmd_show.c) issues all three -- the
+ * LOCAL_PORTS/CIRCUITS classes from DIAG_PORT, CONNECTIONS from DIAG_CONN,
+ * and the CLUSTER class from DIAG_CSB. The caller sets `row` (and `index`
+ * where the row walks a table); the wrapper interprets nothing.
+ *
+ * `args->status` is the executive's own answer, INCLUDING the honest
+ * SS$_NOSUCHDEV for a layer that is not up or an index past the end. The row
+ * stays all-zero then and must not be rendered: a zeroed row is not a
+ * channel, a connection or a system (INV-6).
+ */
+uint32_t vms_kif_cluster_diag_port(struct vms_cluster_diag_port_args *args);
+uint32_t vms_kif_cluster_diag_conn(struct vms_cluster_diag_conn_args *args);
+uint32_t vms_kif_cluster_diag_csb(struct vms_cluster_diag_csb_args *args);
+
+/*
+ * vms_kif_cluster_getsyi - VMS_IOCTL_CLUSTER_GETSYI (FC-P3.9): $GETSYI's
+ * cluster item codes, projected from the connection manager's CLUB. WIRED:
+ * sys$getsyi/sys$getsyiw (src/libvms/syssvc/sys_misc.c) answer every cluster
+ * item from this and nothing else.
+ *
+ * Every value carries a `_valid` companion the caller MUST honour: an item
+ * whose companion is clear is left UNRETRIEVED, never printed as 0 (a
+ * node_csid of 0 means "the cluster has not assigned one", not "node zero").
+ */
+uint32_t vms_kif_cluster_getsyi(struct vms_cluster_getsyi_args *args);
+
+/*
+ * vms_kif_cluster_setcluevt - VMS_IOCTL_CLUSTER_SETCLUEVT (FC-P3.8): this
+ * process's ONE cluster-event AST registration.
+ *
+ * `event_mask == 0` or `astadr == 0` DEREGISTERS -- the same call, mirroring
+ * $SETCLUEVT's own re-arm-by-recall shape. SS$_NOSUCHDEV when the connection
+ * manager is not started, so a registration the executive cannot honour is
+ * refused rather than silently accepted.
+ *
+ * OVMX-UNWIRED: vms_kif_cluster_setcluevt (vms-733) -- the EXECUTIVE side is
+ * built and real (FC-P3.8: one registration per node, a genuine completion
+ * AST queued on a genuine CNXMAN membership ADD/REMOVE, cleared at process
+ * death), but no sys$ service issues it: src/libvms has no sys_cluevt.c and
+ * starlet.h prototypes none of $SETCLUEVT/$CLRCLUEVT/$TSTCLUEVT --
+ * cluevtdef.h carries only the CLUEVT$C_ constants. This wrapper is the
+ * marshalling half those services will call; it exists now so the executive
+ * registration is reachable and observable from userspace at all. vms-733
+ * builds the services; DELETE this line then. */
+uint32_t vms_kif_cluster_setcluevt(uint32_t event_mask, uint64_t astadr,
+                                   uint64_t astprm);
 
 /*
  * vms_kif_dlm_xnode_blkast - the BLKAST-WIRE half of the cross-node DLM receive
@@ -1044,12 +1089,15 @@ uint32_t vms_kif_bg_accept(uint32_t listen_exec_chan, uint32_t accept_exec_chan,
  * Requires PHY_IO -- without it, SS$_NOPRIV. On success, *out_handle gets this
  * process's L2 handle, *out_ifindex the resolved interface index, and hwaddr
  * (if non-NULL) the interface's MAC. Any out param may be NULL if not wanted.
- * OVMX-UNWIRED: vms_kif_l2_open (vms-7eb) -- PIECE 1 of the executive L2
- * datalink: the raw kernel primitive + the PHY_IO auth gate only. No sys$
- * service or product daemon issues it yet -- the SCS cluster-wire consumer
- * (scsd/vmsscs) that will drive this is later work under the vms-1e4
- * umbrella. Exercised directly by tests/qemu/test_syssvc_l2_datalink.c
- * against a real /dev/vms, the same footing as vms_kif_get_resmaster above. */
+ * OVMX-UNWIRED: vms_kif_l2_open (vms-7eb) -- the raw kernel primitive + the
+ * PHY_IO auth gate. No sys$ service or product image issues it, and the
+ * consumer this was written for is GONE: FC-P3.9 retired the userspace SCS
+ * daemon, and the cluster wire it would have carried is now opened INSIDE the
+ * executive (src/kernel-core/vms_pe.c through exec_l2_open()), which never
+ * crosses this userspace boundary at all. It remains as the only way a VMS
+ * process can be given kernel-owned raw L2 without CAP_NET_RAW, exercised
+ * directly by tests/qemu/test_syssvc_l2_datalink.c against a real /dev/vms,
+ * the same footing as vms_kif_get_resmaster above. */
 uint32_t vms_kif_l2_open(const char *ifname, uint16_t ethertype,
                          uint32_t *out_handle, uint32_t *out_ifindex,
                          uint8_t hwaddr[6]);

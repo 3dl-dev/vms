@@ -13,11 +13,11 @@
  *
  * OPERATOR RULING (2026-08-31, rd vms-a1c): the DECnet engine is Option B --
  * a USERSPACE NSP/routing engine over AF_PACKET SOCK_RAW, forking the proven
- * src/vmsscs/ LAVC datalink (scs_datalink.h), NOT an in-kernel AF_DECnet
+ * src/libdatalink raw-L2 datalink (scs_datalink.h), NOT an in-kernel AF_DECnet
  * forward-port. See docs/decnet-provenance-register.md sec 6.
  *
  * RULE 1 -- "do it like VMS, or HIDE it." The AF_PACKET raw socket is a hidden
- * mechanism, exactly as src/vmsscs/scsd.c hides its raw SCA socket behind the
+ * mechanism, the way a transport daemon hides its raw socket behind the
  * SCS/NISCA surface. This engine module owns NO socket: it is pure logic over
  * frame buffers + an injected clock (the same discipline as the codecs it
  * consumes), so it is deterministically unit-testable and substrate-neutral.

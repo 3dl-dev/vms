@@ -988,7 +988,8 @@ vms_codec_status_t vms_cm_membership_find_sysid(const uint8_t *frame,
  * §3.9 rule 4 / vms_cluster_codec.h §6). Pairs this project has explicitly
  * measured as ungrounded -- cat 0x02 op 0x01/0x12 (the steady-state DLM
  * lookup/enqueue traffic, whose reply is NOT derivable from the request
- * without a real lock database: src/vmsscs/scsd.c cm_response_shape's own
+ * without a real lock database: the retired strawman's cm_response_shape
+ * allowlist (harvested into this codec as data; its own
  * measurement, "no recipe short of 'have a lock database' reconstructs
  * more than 37%") -- are simply ABSENT: vms_wire_allow_find() returns NULL
  * for them, identical in effect to a CONSUME row, which is exactly the

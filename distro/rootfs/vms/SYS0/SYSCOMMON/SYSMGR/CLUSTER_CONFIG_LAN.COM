@@ -32,19 +32,32 @@ $!            VAXCLUSTER 0 then reboot.
 $!   CREATE a duplicate system disk / satellite roots - not available; no
 $!            satellite/duplicate-disk facility at this edition.
 $!
-$! HONESTY (CLAUDE.md INV-6). SCSNODE and SCSSYSTEMID are read by the cluster
-$! daemon and change the real wire identity; VAXCLUSTER is read too, as of
-$! vms-5ad -- it is the boot-time self-gate SCSD.EXE's BOOT-CLUSTER MODE
-$! reads off this SAME .PAR (sysgen_read_param("VAXCLUSTER",...), scsd.c):
-$! VAXCLUSTER=0 (the shipped default) means SCSD declines to run at all on
-$! the next boot; any nonzero value means it self-starts persistently. All
-$! three are therefore effectual. VOTES / EXPECTED_VOTES / ALLOCLASS are
-$! authored into the .PAR the VMS way and persist (SYSGEN SHOW reads them
-$! back), but the V0.6 daemon does not yet enforce votes/quorum (it joins
-$! non-voting; quorum is computed-and-logged only) and ALLOCLASS is reported
-$! only. This procedure records all five and says so at the prompt -- it
-$! never claims VOTES/EXPECTED_VOTES/ALLOCLASS gate anything. See the
-$! Cluster Systems manual, "Not yet available at V0.6".
+$! HONESTY (CLAUDE.md INV-6). Every parameter this procedure authors goes into
+$! SYS$SYSTEM:OVMXVMSSYS.PAR, and STARTUP.EXE loads the whole set into the
+$! EXECUTIVE at the next boot (VMS_IOCTL_SYSGEN_LOAD) before it starts the
+$! cluster (VMS_IOCTL_CLUSTER_START) -- there is no cluster daemon reading
+$! this file for itself any more. What each one actually does:
+$!
+$!   SCSNODE / SCSSYSTEMID -- this node's real wire identity. Effectual: the
+$!            executive's port and connection manager put them on the wire,
+$!            and CLUSTER_START is REFUSED (SS$_BADPARAM) if VAXCLUSTER is
+$!            nonzero with no SCSNODE authored.
+$!   VAXCLUSTER -- the boot-time decision, applied by the executive:
+$!            0 (the shipped default) brings up NO cluster port at all, so no
+$!            HELLO leaves this node; 1 joins if a cluster is present, else
+$!            reports STANDALONE; 2 forms or joins and prints "waiting to
+$!            form or join an OpenVMS Cluster" on OPA0: until it can.
+$!   RECNXINTERVAL / TIMVCFAIL -- effectual: the executive's reconnect loop
+$!            and its circuit-failure detector use them.
+$!   VOTES / EXPECTED_VOTES -- authored, persisted, and really read: the
+$!            connection manager computes CEVOTES and QUORUM from them and
+$!            SHOW CLUSTER/CLUSTER displays the result. But nothing yet
+$!            BLOCKS on lost quorum -- the arithmetic is tracking only.
+$!   ALLOCLASS -- authored and persisted; reported, not yet acted on.
+$!
+$! This procedure records all of them and says so at the prompt -- it never
+$! claims VOTES/EXPECTED_VOTES/ALLOCLASS gate anything. See the Cluster
+$! Systems manual, "Not yet available at V0.6".
 $!
 $! MECHANISM. SYSGEN is driven NON-INTERACTIVELY via inline SYS$INPUT, the same
 $! idiom OVMX$INSTALL.COM proved (vms-597): the non-$ data lines after RUN

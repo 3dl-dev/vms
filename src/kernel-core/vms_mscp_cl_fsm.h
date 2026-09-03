@@ -55,7 +55,7 @@
  * own convention -- a per-command-class constant in the low word and an
  * incrementing message id in the high word -- is OBSERVED VMS behaviour
  * (docs/cluster-protocol-spec.md sec 4(n): "message id -- increments per
- * command, echoed verbatim"; src/vmsscs/include/scs_mscp.h's own citation
+ * command, echoed verbatim"; docs/cluster-protocol-spec.md's own citation
  * of the same af2 capture), not a protocol requirement; this FSM reproduces
  * the observation, byte-exact for the first command of each class against
  * the af2 golden vectors (VMS_MSCP_CL_SCC_MSGID0 / VMS_MSCP_CL_GUS_MSGID0),
@@ -70,7 +70,7 @@
  * quietly source-of-truth-hopping past what the codec it is layered on
  * top of actually grounds. R1's byte-exact assertions are scoped to the
  * MSCP MESSAGE itself (content[58:94), "100% field-built" per
- * src/vmsscs/scs_mscp.c's own division-of-labour comment) for exactly this
+ * the retired strawman's own division-of-labour note) for exactly this
  * reason.
  *
  * PURE TU (design SS3.9, gate RULE4): no seam call, no allocation, no
@@ -102,7 +102,7 @@ extern "C" {
 #define VMS_MSCP_CL_GUS_MSGID0 0x7ee2u
 
 /* Compose one P.CRF from the observed (class token, message id) pair --
- * the same arithmetic src/vmsscs/include/scs_mscp.h names
+ * the same arithmetic docs/cluster-protocol-spec.md names
  * SCS_MSCP_CMD_REF(), reproduced here as this item's own, independent
  * expression of the same observed convention. */
 #define VMS_MSCP_CL_CMD_REF(class_token, msg_id) \

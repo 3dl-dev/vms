@@ -52,12 +52,14 @@
  * either, so these three kernel-core cluster headers compose here cleanly.
  */
 #include "vms_cluster.h"
+#include "vms_cluster_api.h"   /* FC-P3.9: cluster_api_getsyi_project ($GETSYI) */
 #include "vms_cluster_fork.h"  /* vms_cluster_fork_start (FC-P0.11's own case
                                 * of "SYSINIT starts the fork thread first") */
 #include "vms_cluster_snapshot.h"
 #include "vms_cluster_sysgen.h"
 #include "vms_pe.h"
 #include "vms_cnxman.h"        /* FC-P3.8: cnxman_get_club/_csb + $SETCLUEVT */
+#include "vms_cnxman_csb.h"    /* FC-P3.9: the CSB state names MEMBER_GET renders */
 #include "vms_scs.h"           /* FC-P2.4: vms_scs_start + the CONN snapshots */
 
 /*
@@ -1854,6 +1856,188 @@ long vms_ioctl_cluster_diag_csb(struct vms_proc *proc, unsigned long arg)
 }
 
 /*
+ * csb_member_state_name - the ONE string VMS_IOCTL_CLUSTER_MEMBER_GET's
+ * `state` column carries for a CSB, and the strongest TRUE thing that column
+ * can say about it.
+ *
+ * A CSB carries two different facts: the p. 7-23 MEMBER flag (the cluster has
+ * admitted this system) and the p. 7-23/7-24 ten-state SCS connectivity state
+ * (NEW, CONNECT, OPEN, WAIT, ...). "MEMBER" is the stronger claim and is only
+ * ever made when cnxman_csb_is_member() reads the real flag; otherwise the
+ * column reports the connectivity state verbatim, so a CSB this node merely
+ * DISCOVERED renders "NEW" -- never "MEMBER" (INV-6: a discovered connection
+ * manager is not an admitted one, and integration note E30 is why NEW is the
+ * honest answer today).
+ */
+static const char *csb_member_state_name(const struct vms_csb *csb)
+{
+    if (cnxman_csb_is_member(csb))
+        return "MEMBER";
+    return cnxman_csb_state_name((enum vms_cnxman_csb_state)csb->state);
+}
+
+/*
+ * csb_to_member_row - project ONE real struct vms_csb into the
+ * VMS_IOCTL_CLUSTER_MEMBER_GET wire row. Every field is a copy of a CSB
+ * field; nothing is composed. `csid` stays 0 while csid_valid is clear, which
+ * is the honest "the cluster has not assigned this system a CSID yet"
+ * (vms_ioctl.h's own note), never "node zero".
+ */
+static void csb_to_member_row(const struct vms_csb *csb,
+                              struct vms_cluster_member *out)
+{
+    const char *state = csb_member_state_name(csb);
+    uint32_t n;
+
+    memset(out, 0, sizeof(*out));
+    if (csb->csid_valid)
+        out->csid = (uint32_t)csb->csid;
+    if (csb->sysid_valid || (csb->flags & VMS_CSB_F_LOCAL))
+        out->sysid = (uint32_t)csb->sysid;
+
+    n = csb->scsnode_len;
+    if (n > sizeof(out->scsnode) - 1u)
+        n = (uint32_t)sizeof(out->scsnode) - 1u;
+    memcpy(out->scsnode, csb->scsnode, n);
+
+    strscpy(out->state, state, sizeof(out->state));
+}
+
+/*
+ * vms_ioctl_cluster_member_get - VMS_IOCTL_CLUSTER_MEMBER_GET (rd vms-551,
+ * RE-POINTED at the CLUB/CSB table by FC-P3.9, integration note E35).
+ *
+ * SHOW CLUSTER's SYSTEMS/MEMBERS read. It used to copy out a module-global
+ * array that a USERSPACE daemon wrote through CLUSTER_MEMBER_SET; that block,
+ * its two mutators and the daemon are all deleted. This walks the connection
+ * manager's OWN CSB table under the fork mutex (cnxman_get_csb(), which takes
+ * it) -- one row per system the CLUB holds a block for, the local system's
+ * CSB included because the CLUB holds one for it too (p. 7-26).
+ *
+ * THE STATUS IS ALWAYS SS$_NORMAL FROM HERE, AND THAT IS THE NEGCTL THE PLAN
+ * ROW REQUIRES. n_members == 0 is a genuine answer: the executive was asked
+ * and holds no CSB -- because VAXCLUSTER is 0, because CLUSTER_START has not
+ * run, or because the connection manager is up and has discovered nobody.
+ * That is a real node's NOTMEMBER state, and SHOW CLUSTER renders it as
+ * "%SYSTEM-I-NOTMEMBER". SS$_NOSUCHDEV is reserved for the case where there
+ * is NO EXECUTIVE TO ASK, which this handler cannot be in -- the caller sees
+ * it from KIF_CALL itself when /dev/vms is unreachable. Never conflate the
+ * two (vms-8d4).
+ */
+long vms_ioctl_cluster_member_get(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_cluster_member_get_args *args;
+    struct vms_cluster *cl = vms_cluster_node();
+    uint32_t i;
+    long rc = 0;
+
+    (void)proc;
+    args = exec_alloc(sizeof(*args));
+    if (!args)
+        return -ENOMEM;
+    memset(args, 0, sizeof(*args));
+    args->status = SS__NORMAL;
+
+    if (cl->cnxman == NULL)
+        goto out;   /* no connection manager: no CSBs, honestly zero rows */
+
+    vms_cluster_fork_enter(cl);
+    for (i = 0; i < VMS_CLUSTER_MEMBER_MAX; i++) {
+        struct vms_csb *csb = cnxman_club_csb_at(&cl->club, i);
+
+        if (csb == NULL)
+            break;
+        csb_to_member_row(csb, &args->members[i]);
+        args->n_members = i + 1u;
+    }
+    vms_cluster_fork_leave(cl);
+
+out:
+    if (exec_copyout((void *)arg, args, sizeof(*args)))
+        rc = -EFAULT;
+    exec_free(args);
+    return rc;
+}
+
+/*
+ * WHY THERE IS NO SIZE ASSERT HERE, unlike every CLUSTER_DIAG_* row above.
+ *
+ * Those rows are BYTE-IDENTICAL duplicates of a vms_cluster_snapshot.h view,
+ * so a memcpy is correct and a _Static_assert on the two sizes is what keeps
+ * it correct. CLUSTER_GETSYI is deliberately NOT that shape.
+ * struct vms_getsyi_cluster_view (vms_cluster_api.h) is a KERNEL-INTERNAL
+ * projection and says so -- "not a wire ABI (this struct never crosses an
+ * ioctl)" -- and its fields are declared in READING order (member, nodes,
+ * votes, quorum, fsysid, ftime, csid), each beside the `_valid` companion it
+ * travels with, because that is what makes it readable. That order pads
+ * differently on ILP32 elf32-vax than on LP64: the view is 44 bytes on the
+ * VAX and 40 on x86_64, so no fixed relation to the wire struct's 36 holds on
+ * both substrates. An assert tying them together was WRONG, and the VAX
+ * cross-compile gate is what said so (tools/cross-vax/build-vms-module-vax.sh
+ * -- the asymmetric-arch tell).
+ *
+ * The FIELD-BY-FIELD copy below is therefore the whole protection, and it is
+ * the stronger one: it cannot mis-copy a reordered field, and dropping a
+ * field from either struct is a compile error rather than a silent gap. The
+ * WIRE struct keeps its own `== 36` assert (vms_ioctl.h / vms_lock_nb.h),
+ * which is the one that actually matters -- it is built from <= 4-byte fields
+ * precisely so it lays out identically on both substrates.
+ */
+
+/*
+ * vms_ioctl_cluster_getsyi - VMS_IOCTL_CLUSTER_GETSYI (FC-P3.9, design SS3.5).
+ * $GETSYI's cluster item codes, projected from the CONNECTION MANAGER's own
+ * CLUB by cluster_api_getsyi_project() (FC-P3.7) under the fork mutex. This
+ * function adds no state of its own: copyin, one projection, copyout.
+ *
+ * SS$_NORMAL EVEN WITH NO CONNECTION MANAGER, and every field then reads its
+ * honest zero: cluster_member 0, cluster_nodes 0, and every `_valid`
+ * companion clear. That is the executive ANSWERING "this node is not a
+ * cluster member" -- a fact it genuinely holds for VAXCLUSTER=0 -- and it is
+ * the negctl this ioctl's plan row requires. SS$_NOSUCHDEV is reserved for
+ * "there is no executive to ask", which a caller sees from the ioctl
+ * transport itself, never from here.
+ *
+ * The `_valid` companions travel with their values; a caller that finds one
+ * clear must leave the corresponding F$GETSYI item UNRETRIEVED.
+ */
+long vms_ioctl_cluster_getsyi(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_cluster_getsyi_args args;
+    struct vms_getsyi_cluster_view v;
+    struct vms_cluster *cl = vms_cluster_node();
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    memset(&args, 0, sizeof(args));
+
+    vms_cluster_fork_enter(cl);
+    cluster_api_getsyi_project(cl, &v);
+    vms_cluster_fork_leave(cl);
+
+    args.cluster_member       = v.cluster_member;
+    args.cluster_nodes        = v.cluster_nodes;
+    args.cluster_votes        = v.cluster_votes;
+    args.cluster_quorum       = v.cluster_quorum;
+    args.cluster_fsysid_lo    = v.cluster_fsysid_lo;
+    args.cluster_fsysid_hi    = v.cluster_fsysid_hi;
+    args.cluster_fsysid_valid = v.cluster_fsysid_valid;
+    args.cluster_ftime_lo     = v.cluster_ftime_lo;
+    args.cluster_ftime_hi     = v.cluster_ftime_hi;
+    args.cluster_ftime_valid  = v.cluster_ftime_valid;
+    args.node_csid            = v.node_csid;
+    args.node_csid_valid      = v.node_csid_valid;
+    args.status = SS__NORMAL;
+
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * vms_ioctl_cluster_setcluevt - VMS_IOCTL_CLUSTER_SETCLUEVT (FC-P3.8).
  * $SETCLUEVT's executive-side registration against vms_cluster_node()'s
  * struct vms_cnxman (vms_cnxman_cluevt_set()). `proc` is this call's OWN
@@ -1960,24 +2144,36 @@ long vms_ioctl_sysgen_load(struct vms_proc *proc, unsigned long arg)
 }
 
 /*
- * vms_ioctl_cluster_start - VMS_IOCTL_CLUSTER_START (FC-P0.11, docs/plan-
- * faithful-cluster-executive.md). The P0 "port up" semantic ONLY: reproduces
- * SYSINIT's own ordering (design SS3.5 step 2) against vms_cluster_node() --
- * start the FC-P0.5 fork thread if it is not already running, then
- * vms_pe_start() (FC-P0.9) to bring PEA0: up. It does NOT drive the CNXMAN
- * join to MEMBER/STANDALONE (FC-P3.9, once CNXMAN exists).
+ * vms_ioctl_cluster_start - VMS_IOCTL_CLUSTER_START (FC-P0.11; the join
+ * semantics FC-P3.9 completes). SYSINIT's own ordering, against
+ * vms_cluster_node(), in the order VMS itself has:
  *
- * Neither call fabricates anything of its own: vms_pe_start() reads
- * cl->params (VMS_IOCTL_SYSGEN_LOAD's own prior commit) and refuses with
- * SS$_NOSUCHDEV when VAXCLUSTER is 0 -- the SAME gate STARTUP.EXE's boot
- * path (ovmx_init.c, cluster_boot_gate.h) already applies before even
- * issuing this ioctl, so a VAXCLUSTER=0 boot never reaches here in the
- * normal sequence; this function's own check is the executive's second,
- * independent line of defense (INV-6: no fabricated port under any caller).
+ *   1. the FC-P0.5 fork thread, if it is not already running;
+ *   2. vms_pe_start()   (FC-P0.9) -- PEA0: up, HELLOs flowing;
+ *   3. vms_scs_start()  (FC-P2.4) -- SCS bound to that running port;
+ *   4. vms_cnxman_start()(FC-P3.8/P3.9) -- form or join per VAXCLUSTER.
  *
- * Idempotent both ways: a fork already running, or a port already up, are
- * both SS$_NORMAL no-ops (vms_cluster_fork_start()/vms_pe_start()'s own
- * contracts) -- a second CLUSTER_START never double-starts anything.
+ * Each step can only run because the one beneath it really came up, and each
+ * refuses (SS$_NOSUCHDEV) rather than seeding itself from nothing if it did
+ * not. Nothing here fabricates: vms_pe_start() reads cl->params
+ * (VMS_IOCTL_SYSGEN_LOAD's own prior commit) and refuses when VAXCLUSTER is
+ * 0 -- the SAME gate STARTUP.EXE's boot path (ovmx_init.c,
+ * cluster_boot_gate.h) already applies before even issuing this ioctl, so a
+ * VAXCLUSTER=0 boot never reaches here in the normal sequence; this
+ * function's own chain is the executive's second, independent line of
+ * defense (INV-6: no fabricated port, and no fabricated membership, under
+ * any caller).
+ *
+ * Idempotent at every step: a fork already running, a port already up, an SCS
+ * or a connection manager already started are all SS$_NORMAL no-ops (each
+ * layer's own contract) -- a second CLUSTER_START never double-starts
+ * anything and never re-drives a join that is already in flight.
+ *
+ * BOTH RETURNS ARE READ FROM THE OBJECTS, NOT COMPOSED FROM `status`:
+ * `port_up` is "cl->pe exists", and `cluster_state` is cl->state -- whatever
+ * the layers above the port did. That is what lets STARTUP.EXE render an
+ * operator line it can stand behind (a JOINING node is not announced as a
+ * MEMBER because the ioctl returned SS$_NORMAL).
  */
 long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg)
 {
@@ -1993,22 +2189,13 @@ long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg)
     status = vms_cluster_fork_start(cl, NULL);
     if (status == SS__NORMAL)
         status = vms_pe_start(cl);
-    /*
-     * FC-P2.4 extends SYSINIT's ordering by exactly one step, in the order
-     * VMS itself has: the port first, then SCS ON that port. vms_scs_start()
-     * binds the SCS FSM to the running port (scs_fsm_ops down, pe_upper_ops
-     * up), registers SCS$DIRECTORY so a member's inbound directory connect
-     * has somewhere to go, and seeds the Con.ID allocator from the PORT'S OWN
-     * incarnation -- so it can only run after the port really came up, and it
-     * refuses (SS$_NOSUCHDEV) rather than seeding from nothing if it did not.
-     * Still NOT the join to MEMBER/STANDALONE: that is FC-P3.9.
-     */
     if (status == SS__NORMAL)
         status = vms_scs_start(cl);
+    if (status == SS__NORMAL)
+        status = vms_cnxman_start(cl);
 
-    /* Read from the objects, not from `status`: the port really is up if
-     * cl->pe is there, whatever happened one layer above it. */
     args.port_up = (uint32_t)(cl->pe != NULL);
+    args.cluster_state = (uint32_t)cl->state;
     args.status = (uint32_t)status;
 
     if (status != SS__NORMAL)

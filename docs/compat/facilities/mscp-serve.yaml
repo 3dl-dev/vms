@@ -6,26 +6,60 @@ vms_ref: "MSCP/TMSCP protocol (Systems Application A); OpenVMS Cluster Systems m
 scope_1_0: in
 plan_ref: vms-6e1
 summary: >
-  MSCP disk serving does real pread()/pwrite() against the actual served
-  volume, default read-only with write opt-in. ONLINE END is book-only and
-  unproven against any capture. TMSCP tape serving is not evidenced.
-last_reviewed: 2026-08-31
+  MSCP disk SERVING IS NOT BUILT. It lived in the userspace SCS daemon, which
+  FC-P3.9 deleted (the operator's 2026-09-02 clustering reset); the
+  executive-resident replacement is FC-P6.x and unbuilt. What DOES exist is the
+  CLIENT half the executive's own cluster join drives: the MSCP codec and the
+  served-unit discovery FSM. TMSCP tape serving is not evidenced.
+last_reviewed: 2026-09-03
 items:
   - id: mscp-serve$disk-read-write
     kind: feature
-    status: implemented
-    authenticity: real
+    status: absent
+    authenticity: n/a
     vms: "MSCP disk-serving controller: READ/WRITE command responder"
-    evidence: src/vmsscs/scs_mscp_srv.c
-    notes: "Real pread()/pwrite() against the node's actual served volume, not a placeholder. Default read-only; write opt-in (vms-6e1). MSCP accept emits op-2 ACCEPT_REQ so a real VAX MOUNT reaches SCS OPEN (vms-257)."
+    evidence: docs/cluster-protocol-spec.md
+    notes: >
+      RETIRED WITH ITS IMPLEMENTATION (FC-P3.9). The MSCP disk SERVER lived in
+      the userspace SCS daemon (src/vmsscs/scs_mscp_srv.c), which the operator's
+      2026-09-02 clustering reset deleted as a non-portable strawman. There is
+      NO MSCP server in the tree today: the executive-resident replacement is
+      FC-P6.x (`vms_mscp_srv.c`), unbuilt. This row is kept, downgraded, rather
+      than removed, so the register does not silently lose a facility -- and so
+      the earlier "real pread()/pwrite() against the served volume" claim is not
+      left standing over deleted code. The wire knowledge is preserved as spec
+      (docs/cluster-protocol-spec.md) and as the ported client-side MSCP codec +
+      discovery FSM (src/kernel-core/vms_cluster_codec_mscp.c,
+      vms_mscp_cl_fsm.c), which the executive's join really does drive.
 
   - id: mscp-serve$online-end
     kind: feature
-    status: stub
-    authenticity: advisory
+    status: absent
+    authenticity: n/a
     vms: "ONLINE END (0x89) response"
-    evidence: src/vmsscs/scs_mscp_srv.c
-    notes: "Book-only, unproven: laid out from Table A-7 with no capture in the corpus containing one — the captured joiner never mounts."
+    evidence: docs/cluster-protocol-spec.md
+    notes: >
+      Retired with the server above (FC-P3.9). It was book-only and unproven even
+      then (laid out from Table A-7 with no capture in the corpus containing one --
+      the captured joiner never mounts); the layout survives as spec.
+
+  - id: mscp-serve$client-discovery
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "MSCP$DISK client: connect, and walk the member's served units"
+    evidence: src/kernel-core/vms_mscp_cl_fsm.c
+    notes: >
+      FC-P3.4/FC-P3.3, executive-resident. The joining node opens its own
+      MSCP$DISK client connection to the member it is joining through and walks
+      the served units, which is a real obligation of the documented join
+      sequence (wire spec §4(L)(c)), not a diagnostic. Every field it emits is
+      built by the MSCP codec (vms_cluster_codec_mscp.c) from state the FSM
+      holds; no offset is written outside the codec TU.
+      PROVEN AT R1/R2: tests/cluster/host/test_mscp_cl_fsm.c and
+      test_codec_mscp.c (byte-exact against the in-tree fixtures), plus the
+      simulator's join scenarios. NOT claimed: mounting a real VAX-served disk,
+      which needs both a real member and the server half -- R5, lab-deferred.
 
   - id: mscp-serve$tmscp-tape
     kind: feature

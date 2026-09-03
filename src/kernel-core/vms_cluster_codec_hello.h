@@ -22,7 +22,7 @@
  * per design sec 3.9 rule 2, NO raw byte offset outside a codec TU.
  *
  * THE HONESTY RULE THIS FILE EXISTS TO ENFORCE (INV-6 + the
- * honest-os-identity-broadcast ruling). The strawman `src/vmsscs/scs_hello.c`
+ * honest-os-identity-broadcast ruling). The retired strawman's HELLO builder
  * baked two spans -- the abs 47-63 "capability/version-ish" span (spec sec
  * 4(a) marks it present but does NOT publish its meaning) and the abs 64-67
  * span (spec marks "unknown") -- as `static const` byte arrays copied

@@ -1163,11 +1163,11 @@ long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_get_granted(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_enum_waits(struct vms_proc *proc, unsigned long arg);
-/* Cluster membership crosses into the executive (rd vms-551): the SET/CLEAR/
- * GET handlers for the module-global membership block (vms_lock.c). SET/
- * CLEAR are scsd's local-ioctl populate path; GET is SHOW CLUSTER's read. */
-long vms_ioctl_cluster_member_set(struct vms_proc *proc, unsigned long arg);
-long vms_ioctl_cluster_member_clear(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_MEMBER_GET (rd vms-551, re-pointed by FC-P3.9): SHOW
+ * CLUSTER's read, projecting the CONNECTION MANAGER's own CLUB/CSB table
+ * (vms_devtab.c). The SET/CLEAR mutators the retired userspace daemon used to
+ * populate a module-global mirror with are DELETED, block and all -- nothing
+ * outside the executive can assert membership, because there is no setter. */
 long vms_ioctl_cluster_member_get(struct vms_proc *proc, unsigned long arg);
 /*
  * FC-P0.9: the ONE per-node struct vms_cluster instance (design SS3.9 rule 3:
@@ -1198,13 +1198,17 @@ long vms_ioctl_cluster_diag_csb(struct vms_proc *proc, unsigned long arg);
 /* VMS_IOCTL_CLUSTER_SETCLUEVT (FC-P3.8): $SETCLUEVT's executive-side
  * registration against vms_cluster_node()'s struct vms_cnxman. */
 long vms_ioctl_cluster_setcluevt(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_GETSYI (FC-P3.9): $GETSYI's cluster item codes, projected
+ * from the CLUB by cluster_api_getsyi_project() (vms_cluster_api.c). */
+long vms_ioctl_cluster_getsyi(struct vms_proc *proc, unsigned long arg);
 /* VMS_IOCTL_SYSGEN_LOAD (FC-P0.10): STARTUP.EXE's own case of SYSBOOT --
  * loads the cluster SYSGEN parameters + CLUSTER_AUTHORIZE into
  * vms_cluster_node()'s real struct vms_cluster.params (vms_cluster_sysgen.c). */
 long vms_ioctl_sysgen_load(struct vms_proc *proc, unsigned long arg);
-/* VMS_IOCTL_CLUSTER_START (FC-P0.11): the P0 "port up" semantic -- starts
- * the FC-P0.5 fork thread if not already running, then vms_pe_start()
- * against vms_cluster_node()'s real struct vms_cluster (vms_devtab.c). */
+/* VMS_IOCTL_CLUSTER_START (FC-P0.11; join semantics FC-P3.9): SYSINIT's
+ * ordering in one call -- fork thread, vms_pe_start(), vms_scs_start(),
+ * vms_cnxman_start() -- against vms_cluster_node()'s real struct vms_cluster
+ * (vms_devtab.c), returning the executive's own cluster state. */
 long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg);
 /* vms-94c (DLM epic vms-7fa rung 1): the cross-node DLM RECEIVE handler and its
  * ioctl wrapper. Rung 1 delivers a decoded remote DLM request TO the handler,

@@ -173,13 +173,21 @@ class RealRepoFile(unittest.TestCase):
     it stays that way, and that the detector does not choke on this repo's
     actual style."""
 
-    def test_scs_join_capability_measure_is_clean(self):
-        path = os.path.join(REPO, "tools", "cluster",
-                             "scs_join_capability_measure.py")
+    # The instance this item was raised on lived in
+    # tools/cluster/scs_join_capability_measure.py, a measurement tool that
+    # read the userspace SCS strawman's source. FC-P3.9 deleted that whole
+    # tree, so the original fixture is gone. The property still needs a REAL
+    # repo file behind it -- a self-test that only exercises synthetic strings
+    # proves the detector, not that it survives this tree's actual comment
+    # style -- so it is re-pointed at a long, heavily-boxed, still-live file.
+    FIXTURE = os.path.join("src", "kernel-core", "vms_cnxman.c")
+
+    def test_real_repo_file_is_clean(self):
+        path = os.path.join(REPO, self.FIXTURE)
         self.assertTrue(os.path.isfile(path), "fixture file moved/renamed: %s" % path)
         findings = C.check_file(path)
         self.assertEqual(findings, [],
-                          "the already-fixed file is flagged again: %r" % findings)
+                          "a clean real file is flagged: %r" % findings)
 
     def test_repo_source_tree_has_no_flagged_dividers(self):
         # A light repo-wide sweep -- this IS the actual gate this item wires

@@ -73,7 +73,8 @@
  * machine identifier in many places this rebrand must NOT touch: VMS
  * facility/status codes (OVMX$_* in src/libvms/status.c), the IMGACT
  * ELF-note owner (imgact_activate.h), the SCS/cluster wire OS-name field
- * (src/vmsscs/scsd.c), nodename fallbacks (OVMX_DEFAULT_NODENAME, below),
+ * (now the executive's own connection manager), nodename fallbacks
+ * (OVMX_DEFAULT_NODENAME, below),
  * and the kit/product-database producer field (OVMX_VENDOR_TOKEN, below --
  * deliberately NOT OVMX_PRODUCT_NAME, so this rebrand does not silently
  * reflow into on-disk kit/product records). See
@@ -100,7 +101,8 @@
  * fixed 8-byte, blank-padded wire field (SCS_START_NODENAME_LEN) that the real
  * VAX renders verbatim, so it is width-constrained and versioned independently
  * of the product version above. This is the SSOT for that identity; the wire
- * copy in src/vmsscs/include/scs_start.h (SCS_START_SW_VERSION) MUST stay
+ * copy the SCS START advertisement puts on the wire
+ * (src/kernel-core/vms_cluster_codec_scs.c) MUST stay
  * byte-identical to it (that header is the gate-exempt wire surface, so it holds
  * its own 8-byte literal -- keep the two in sync). Authenticity INV-0 /
  * trademark-ceiling: OVMX is OpenVMS-COMPATIBLE, it never claims to BE OpenVMS.
@@ -191,7 +193,8 @@ static inline const char *ovmx_syskrnl_banner(void)
 #define OVMX_VMS_COMPAT_VERSION_ALPHA   "V8.4"
 
 /* Node-name fallback when SYSGEN SCSNODE is unconfigured. Matches the
- * cluster daemon's fallback (src/vmsscs/scsd.c resolve_node_identity) so
+ * cluster stack's own SCSNODE fallback (the SYSGEN identity
+ * VMS_IOCTL_SYSGEN_LOAD commits) so
  * the wire and the display agree on who we are. */
 #define OVMX_DEFAULT_NODENAME   "OVMX"
 

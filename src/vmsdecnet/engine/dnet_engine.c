@@ -3,7 +3,7 @@
  *
  * See dnet_engine.h for the full clean-room provenance and the Rule-1 rationale
  * (the AF_PACKET socket is HIDDEN behind this VMS-faithful routing surface, the
- * same way src/vmsscs/scsd.c hides its SCA raw socket behind SCS). This file is
+ * same way a transport daemon hides its raw socket behind its engine). This file is
  * pure logic over frame buffers + an injected clock: it opens no socket, starts
  * no thread, reads no wall clock. The daemon (decnetd.c) owns the datalink.
  *

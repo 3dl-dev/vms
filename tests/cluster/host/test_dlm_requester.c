@@ -1128,6 +1128,79 @@ static void test_correlation(void)
 			"*** with OUR handle, not the frame's 0xDEAD ***");
 }
 
+/* ==========================================================================
+ * 19. A re-post adopts the ENGINE's fresh routing decision
+ *
+ * The engine re-resolved when it filled the new post. If the master has been
+ * learned since the first transmission, re-sending to the old DIRECTORY node
+ * would be a lookup for a tree whose master the executive already knows.
+ * ========================================================================== */
+static void test_repost_adopts_new_routing(void)
+{
+	struct vms_dlm_proxy_post p;
+
+	printf("-- a re-post follows the engine's NEW routing, not the old\n");
+	fe_reset("F11B$aSYSDSK1", VMS_LCK_EX, 0x0166u, 1, 0u);
+
+	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_DIR);
+	(void)dlm_req_fsm_post(&g_fsm, &p);
+	ct_check_eq_u32(g.sent[0].dst, CSID_DIR, "the first frame went to the "
+					       "directory");
+
+	/* The cluster named the master in between (a grant on a sibling lock,
+	 * a rebuild record -- the engine records it on the RSB either way). */
+	g.lkb.master_csid = CSID_MASTER;
+	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_MASTER);
+	ct_check(dlm_req_fsm_post(&g_fsm, &p) == DLM_REQ_OK, "the re-post goes");
+
+	ct_check_eq_u32(dlm_req_fsm_outstanding(&g_fsm), 1u,
+			"still ONE request block");
+	ct_check_eq_u32(g.sent[1].dst, CSID_MASTER,
+			"*** and it went to the MASTER the engine now names ***");
+	ct_check(dlm_req_fsm_find(&g_fsm, g.lkb.lkid)->to_directory == 0u,
+		 "the block is no longer addressed at a directory");
+	ct_check_eq_u32(g_fsm.requests_sent, 1u, "counted as a request");
+}
+
+/* ==========================================================================
+ * 20. A request that can NEVER be transmitted still walks off the ladder
+ *
+ * The beat must not retry forever on a request that is refused before a frame
+ * is even built. A bounded wrong answer beats an unbounded silent one: the
+ * $ENQW's caller has to be told something.
+ * ========================================================================== */
+static void test_untransmittable_request_terminates(void)
+{
+	struct vms_dlm_proxy_post p;
+	uint32_t n, beats = 0;
+
+	printf("-- a request that can never be sent FAILS instead of "
+	       "spinning\n");
+	fe_reset("F11B$aSYSDSK1", VMS_LCK_EX, 0x0177u, 1, 0u);
+
+	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_DIR);
+	(void)dlm_req_fsm_post(&g_fsm, &p);
+	n = g.n_sent;
+
+	/* The resource block lost its wire-learned hash (a transition discarded
+	 * the directory information), so every retransmit is refused. */
+	g.lkb.hash_known = 0u;
+
+	while (dlm_req_fsm_outstanding(&g_fsm) > 0u && beats < 64u) {
+		g.now_ms += DLM_REQ_RETRY_MS + 1u;
+		(void)dlm_req_fsm_tick(&g_fsm);
+		beats++;
+	}
+	ct_check(beats < 64u, "the ladder terminated");
+	ct_check(beats <= (uint32_t)DLM_REQ_MAX_TRIES + 1u,
+		 "  within the declared retry budget");
+	ct_check_eq_u32(g.n_sent, n, "and not one further frame went out");
+	ct_check_eq_u32(g.fail_calls, 1u, "the waiter was told");
+	ct_check(g.fail_why == DLM_REQ_FAIL_TIMEOUT, "  with a real status");
+	ct_check(g_fsm.hash_unknown_refused > 0u,
+		 "every refused attempt was counted");
+}
+
 int main(void)
 {
 	printf("== FC-P4.6 R1: the DLM requester FSM ==\n");
@@ -1149,5 +1222,7 @@ int main(void)
 	test_refusals();
 	test_lock_gone();
 	test_correlation();
+	test_repost_adopts_new_routing();
+	test_untransmittable_request_terminates();
 	return ct_summary("test_dlm_requester");
 }

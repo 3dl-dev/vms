@@ -475,7 +475,18 @@ static void h_post_again(struct dlm_req_fsm *f, struct dq_ev *e)
 {
 	struct dlm_req *r = e->r;
 
-	r->post_op = e->post->op;
+	/*
+	 * The engine RE-RESOLVED when it filled this post, so its routing
+	 * decision supersedes the one this block was carrying -- the master may
+	 * have been learned since the first transmission, which is precisely
+	 * the case where re-sending to the old directory node would be sending
+	 * a lookup for a tree whose master the executive already knows.
+	 */
+	r->post_op      = e->post->op;
+	r->dst_csid     = e->post->dst_csid;
+	r->to_directory = e->post->to_directory;
+	r->state        = e->post->to_directory ? (uint8_t)DLM_REQ_ST_LOOKUP
+						: (uint8_t)DLM_REQ_ST_ENQ;
 	e->st = dq_transmit(f, r, e->post);
 	if (e->st == DLM_REQ_OK)
 		f->retransmits++;
@@ -739,10 +750,23 @@ static void h_timeout_request(struct dlm_req_fsm *f, struct dq_ev *e)
 		return;
 	}
 	e->st = dq_refill_transmit(f, r);
-	if (e->st == DLM_REQ_OK)
+	if (e->st == DLM_REQ_OK) {
 		f->retransmits++;
-	else if (e->st == DLM_REQ_E_NOLOCK)
+		return;
+	}
+	if (e->st == DLM_REQ_E_NOLOCK) {
 		dq_free(r);   /* the lock went away under us: abandon quietly */
+		return;
+	}
+	/*
+	 * The attempt was refused before a frame was built (no wire opcode, no
+	 * hash, no destination), so dq_transmit did not count a try. Count one
+	 * here anyway: a request that can never be transmitted must still walk
+	 * off the end of the ladder and be FAILED, not retried forever on every
+	 * beat. A bounded wrong answer beats an unbounded silent one.
+	 */
+	if (r->tries < 0xffu)
+		r->tries++;
 }
 
 /*

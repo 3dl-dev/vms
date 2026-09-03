@@ -582,6 +582,11 @@ OVMX transmits to `ab:00:04:01:00:00` (group **00:00** = cluster group 0, auth_g
 
 ### E54. NetBSD `exec_lan_open` (vms_lan_netbsd.c) has the SAME missing-bring-up shape as pre-fix Linux (raised by E51 fix, not touched — no NetBSD-VAX lab evidence yet). Flag for a NetBSD boot check. Also: `tests/qemu/test_cluster_start_negctl.sh` (FC-P0.11's R4 negctl for exactly the HELLO-tx bug class) EXISTS but is NOT wired into CI (needs privileged host net) → add to a privileged/lab leg so this bug class can't recur silently.
 
+### E53 — ✅ FIXED (fc-e53 @ 048b4e66, integrated). Group→MAC mapping hoisted to codec_hello (`vms_cluster_hello_mcast_build`, `ab:00:04:01:<LE16(group)>`), host-tested (257→01:01:01, 0→00:00). CLUSTER_AUTHORIZE.DAT group# staged into the boot image (Dockerfile.bootable ARG). ON-WIRE PROVEN: group=257 → OVMX HELLO to `ab:00:04:01:01:01`, byte-identical to VAX2; **VAX1 ENGAGES (930 directed HELLOs, 300s); OVMX SHOW CLUSTER/LOCAL_PORTS = channels 2, circuits 0.** CN still 2. NOT a password reject (no credential ever sent — cluster_authorize password not yet on the wire).
+
+### E55. ⚠ NEXT GAP (E53 re-fire pinned it): channel forms but VIRTUAL-CIRCUIT never forms — `channels 2, circuits 0`
+OVMX + VAX1 exchange directed HELLOs (channel discovery works, VAX1 polls OVMX 930×) but **no VC forms** — no SCS START/STACK/ACK, no SCS-ENVELOPE/SHORT frame names OVMX, no CSB for OVMXJ1 in VAX1's SDA. The channel-up→VC-formation escalation never fires. **Likely ties to FC-P0.8's own open escalation: "OVMX never emits b2 (grounded refusal); whether the joiner must INIT with b2 is unanswered — needs an R5 observation."** The e53 pcap (`tests/lab/captures/e53-group257-refire-20260903.pcap`, in-tree) HAS the 930-directed-HELLO ladder → decode it to see: does OVMX emit b2/b3/b4? does the ladder reach VERIFIED? does either side send SCS START? Then fix (emit b2 if the joiner must / wire channel-up→VC-START) + re-fire → circuits≥1 → the join proceeds. Diagnosis needs NO new lab run (pcap in-tree); re-fire only to verify. **This is upstream of the password (vms-732) — VC must form before any credential is exchanged.**
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

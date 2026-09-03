@@ -287,6 +287,37 @@ distributed DLM (real interconnect-coupled + real-VAX interop) IN PROGRESS." **N
 corrected unilaterally: it's the capability SSOT + public content (INV-0) + an
 authenticity-posture call = operator-reserved. TEED UP to operator.**
 
+### E26. SS$_PATHLOST/INCONSTATE/NOSUCHNODE have no value in the tree (raised by FC-P2.4 → LAB, one-line fix)
+Those status codes aren't defined anywhere. FC-P2.4 used `SS$_DEVOFFLINE` (2692,
+real in ssdef.h) as a documented placeholder in `pe_send_status()` +
+`scs_glue_status()`, added `SS__DEVOFFLINE` (both substrates) + `SS__ABORT`
+(NetBSD twin). **Lab ask: extract `$SSDEF` on the VAX** (same published-macro
+route as the `$SCSDEF` oracle) → then a one-line correction. Never invented a
+number (Rule 8).
+
+### E27. SDA connection state-name mismatch (raised by FC-P2.4 → FC-P2.6 lab)
+Spec §4(O.25): real SDA prints `0002 open`, `0007 con_sent`, `0001 con_pend`;
+OVMX's frozen `scs_cdt_state_names` are `open`/`connect sent`/`connect rcvd` and
+OPEN=6 not 2. Only `open` matches by string. Frozen ABI (re-deriving VMS's
+numbering from captures is Rule-8 territory) — so an FC-P2.6 lab SDA comparison is
+a string match for `open` ONLY. Not changed; flagged for the P2.6 oracle.
+
+### E28. SCSCONNCNT/SCSFLOWCUSH not wired to their consumers (raised by FC-P2.4; extends E21)
+FC-P0.10 LOADS the SYSGEN params but `SCSCONNCNT` (CDL sizing) and `SCSFLOWCUSH`
+(credit cushion, E21) aren't read by the SCS layer yet: `SCS_CDL_ENTRIES=128` is a
+labelled OVMX bound with an honest `SCS_ERR_NOCDT` refusal, not p. 2-29's
+`SCSCONNCNT + 200`. **Small FC-P0.10 follow-up: wire these two loaded params to
+the SCS consumer.** Not blocking.
+
+### E29. FC-P3.8 owns the first SYSAP that acts on a `closed`/`vc_down` reason (raised by FC-P2.4)
+`scs_sysap_ops.closed`'s `reason` stays `enum scs_close_reason` in kernel-core
+(design §3.2.2 keeps SS$_ out of kernel-core cluster headers); the glue maps to
+SS$_ only where a status is RENDERED. **FC-P3.8** (CNXMAN glue) is the first SYSAP
+that acts on a reason — it should confirm or re-word the `vms_scs.h` header note.
+Also: FC-P2.4's R4 two-node lookup + FC-P2.6's R5 are structurally gated on
+**FC-P3.3** (nothing calls `scs_dir_lookup` until the join drives it — the harness
+reports PENDING, never a false pass).
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

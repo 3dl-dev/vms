@@ -450,6 +450,11 @@ vms_proc_free_claimed(struct vms_proc *proc)
 	 * mailbox release above, mirroring the Linux vms.ko's vms_acp_release_all in
 	 * vms_module.c's proc free. */
 	vms_acp_release_all(proc);
+	/* Clear this process's $SETCLUEVT registration, if any (FC-P3.8) --
+	 * mirrors the Linux vms.ko's vms_cnxman_proc_gone call in vms_module.c's
+	 * proc free. A no-op when the cluster stack never started or this
+	 * process never registered. */
+	vms_cnxman_proc_gone(vms_cluster_node(), (void *)proc);
 	/* Release every lock this process still held ($DEQ-all at process death, P4-A
 	 * rd vms-ff7). Runs while lock_list_lock is still alive, before it is
 	 * destroyed below -- mirrors the Linux vms.ko's vms_proc_release_locks call
@@ -1297,6 +1302,10 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_cluster_diag_port(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_CLUSTER_DIAG_CONN:
 			r = vms_ioctl_cluster_diag_conn(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_CLUSTER_DIAG_CSB:
+			r = vms_ioctl_cluster_diag_csb(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_CLUSTER_SETCLUEVT:
+			r = vms_ioctl_cluster_setcluevt(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_SYSGEN_LOAD:
 			r = vms_ioctl_sysgen_load(proc, (unsigned long)uarg);   break;
 		case VMS_IOCTL_CLUSTER_START:

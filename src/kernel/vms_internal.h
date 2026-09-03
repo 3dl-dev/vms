@@ -1180,6 +1180,11 @@ long vms_ioctl_cluster_member_get(struct vms_proc *proc, unsigned long arg);
  */
 struct vms_cluster;
 struct vms_cluster *vms_cluster_node(void);
+/* FC-P3.8: $SETCLUEVT's process-death safety hook. `cl` stays opaque here (no
+ * vms_cluster.h include needed by this substrate .c) -- vms_cnxman.c clears
+ * its one $SETCLUEVT registration if it belongs to `proc`, so a delivery can
+ * never reach a freed struct vms_proc. Called from vms_proc_free_claimed(). */
+void vms_cnxman_proc_gone(struct vms_cluster *cl, void *proc);
 /* VMS_IOCTL_CLUSTER_DIAG_PORT (FC-P0.9): the port's SDA SHOW PORT-equivalent
  * diagnostics read, against vms_cluster_node()'s real vms_pe.c objects. */
 long vms_ioctl_cluster_diag_port(struct vms_proc *proc, unsigned long arg);
@@ -1187,6 +1192,12 @@ long vms_ioctl_cluster_diag_port(struct vms_proc *proc, unsigned long arg);
  * diagnostics read -- the SCS-wide view and one CDT row per call, projected
  * from vms_cluster_node()'s real vms_scs.c objects under the fork mutex. */
 long vms_ioctl_cluster_diag_conn(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_DIAG_CSB (FC-P3.8): the connection manager's own CLUB/CSB
+ * projection, against vms_cluster_node()'s real vms_cnxman.c objects. */
+long vms_ioctl_cluster_diag_csb(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_SETCLUEVT (FC-P3.8): $SETCLUEVT's executive-side
+ * registration against vms_cluster_node()'s struct vms_cnxman. */
+long vms_ioctl_cluster_setcluevt(struct vms_proc *proc, unsigned long arg);
 /* VMS_IOCTL_SYSGEN_LOAD (FC-P0.10): STARTUP.EXE's own case of SYSBOOT --
  * loads the cluster SYSGEN parameters + CLUSTER_AUTHORIZE into
  * vms_cluster_node()'s real struct vms_cluster.params (vms_cluster_sysgen.c). */

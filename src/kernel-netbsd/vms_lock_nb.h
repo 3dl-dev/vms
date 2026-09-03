@@ -448,6 +448,85 @@ struct vms_cluster_diag_conn_args {
 };
 
 /*
+ * VMS_IOCTL_CLUSTER_DIAG_CSB (FC-P3.8). Byte-for-byte the same two row
+ * structs and args struct as src/kernel/vms_ioctl.h -- see that header for
+ * the connection manager's own CLUB/CSB projection this exposes.
+ */
+#define VMS_CLUSTER_DIAG_CSB_CLUB 0u
+#define VMS_CLUSTER_DIAG_CSB_CSB  1u
+
+struct vms_club_view_wire {
+	uint32_t local_csid;
+	uint8_t  local_csid_valid;
+	uint8_t  state;
+	uint8_t  quorum_lost;
+	uint8_t  pad0;
+	uint32_t epoch;
+	uint32_t cluster_nodes;
+	uint16_t cevotes;
+	uint16_t quorum;
+	uint16_t expected_votes;
+	uint16_t pad1;
+	uint32_t bitmap[4];
+	uint32_t bitmap_slots_seen;
+	uint8_t  transition_active;
+	uint8_t  transition_class;
+	uint8_t  barrier_step;
+	uint8_t  coordinator_valid;
+	uint32_t coordinator_csid;
+	uint32_t outstanding_rebuild;
+	uint32_t ftime_lo;
+	uint32_t ftime_hi;
+	uint32_t fsysid_lo;
+	uint32_t fsysid_hi;
+	uint32_t reformations;
+};
+
+struct vms_csb_view_wire {
+	uint32_t csid;
+	uint8_t  csid_valid;
+	uint8_t  state;
+	uint8_t  is_member;
+	uint8_t  is_selected;
+	uint8_t  status_rcvd;
+	uint8_t  scsnode_len;
+	uint8_t  scsnode[8];
+	uint16_t votes;
+	uint8_t  votes_valid;
+	uint8_t  lockdirwt;
+	uint8_t  lockdirwt_valid;
+	uint8_t  pad0;
+	uint32_t peer_sysid_lo;
+	uint32_t peer_sysid_hi;
+	uint32_t sw_version;
+	uint32_t cdt_conid;
+	uint32_t incarnation_lo;
+	uint32_t incarnation_hi;
+	uint32_t last_status_ms;
+};
+
+struct vms_cluster_diag_csb_args {
+	uint32_t row;
+	uint32_t index;
+	uint32_t status;
+	uint32_t pad0;
+	struct vms_club_view_wire club;
+	struct vms_csb_view_wire  csb;
+};
+
+/*
+ * VMS_IOCTL_CLUSTER_SETCLUEVT (FC-P3.8). Byte-for-byte the same struct as
+ * src/kernel/vms_ioctl.h -- see that header for $SETCLUEVT's registration
+ * semantics and the process-death safety hook.
+ */
+struct vms_cluster_setcluevt_args {
+	uint32_t event_mask;
+	uint32_t status;
+	uint64_t astadr;
+	uint64_t astprm;
+};
+
+/*
  * VMS_IOCTL_SYSGEN_LOAD (FC-P0.10). Byte-for-byte the same struct as
  * src/kernel/vms_ioctl.h -- see that header for the field-by-field rationale
  * and the negctl this ioctl's dispatcher enforces (SS$_BADPARAM on a
@@ -528,6 +607,9 @@ struct vms_cluster_start_args {
  * src/kernel/vms_ioctl.h for why that number, and for the recompute-the-
  * encoded-value trap an appended row field springs. */
 #define VMS_IOCTL_CLUSTER_DIAG_CONN    _IOWR(VMS_LOCK_IOC_MAGIC, 0x69, struct vms_cluster_diag_conn_args)
+/* FC-P3.8: NR 0x6a/0x6b, same magic and NR bytes as src/kernel/vms_ioctl.h. */
+#define VMS_IOCTL_CLUSTER_DIAG_CSB     _IOWR(VMS_LOCK_IOC_MAGIC, 0x6a, struct vms_cluster_diag_csb_args)
+#define VMS_IOCTL_CLUSTER_SETCLUEVT    _IOWR(VMS_LOCK_IOC_MAGIC, 0x6b, struct vms_cluster_setcluevt_args)
 
 /*
  * Freeze the shared layouts -- see the other _nb.h contracts' identical asserts:
@@ -577,5 +659,13 @@ _Static_assert(sizeof(struct vms_scs_cdt_view_wire) == 72,
                "vms_scs_cdt_view_wire changed size -- must match src/kernel/vms_ioctl.h");
 _Static_assert(sizeof(struct vms_cluster_diag_conn_args) == 120,
                "vms_cluster_diag_conn_args changed size -- VMS_IOCTL_CLUSTER_DIAG_CONN ABI break");
+_Static_assert(sizeof(struct vms_club_view_wire) == 76,
+               "vms_club_view_wire changed size -- must match src/kernel/vms_ioctl.h");
+_Static_assert(sizeof(struct vms_csb_view_wire) == 52,
+               "vms_csb_view_wire changed size -- must match src/kernel/vms_ioctl.h");
+_Static_assert(sizeof(struct vms_cluster_diag_csb_args) == 144,
+               "vms_cluster_diag_csb_args changed size -- VMS_IOCTL_CLUSTER_DIAG_CSB ABI break");
+_Static_assert(sizeof(struct vms_cluster_setcluevt_args) == 24,
+               "vms_cluster_setcluevt_args changed size -- VMS_IOCTL_CLUSTER_SETCLUEVT ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

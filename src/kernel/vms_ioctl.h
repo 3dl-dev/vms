@@ -1013,6 +1013,124 @@ _Static_assert(VMS_IOCTL_CLUSTER_DIAG_CONN == 0xC0785669u,
                "VMS_IOCTL_CLUSTER_DIAG_CONN encodes differently than the reference build");
 
 /*
+ * VMS_IOCTL_CLUSTER_DIAG_CSB (FC-P3.8, docs/plan-faithful-cluster-
+ * executive.md). The connection manager's own SDA equivalent (SHOW CLUSTER's
+ * underlying CLUB/CSB table): `row` names WHICH of the two real projections
+ * (cnxman_get_club / cnxman_get_csb, src/kernel-core/vms_cnxman.c) the call
+ * fills; `index` walks the CSB table for the CSB row and is ignored for the
+ * CLUB row. Same "row selects one of two real snapshots" shape as
+ * VMS_IOCTL_CLUSTER_DIAG_PORT/_CONN above, for the same reasons.
+ *
+ * Both rows are PURE PROJECTIONS of a live struct vms_club / struct vms_csb,
+ * taken under the fork mutex (cnxman_club_project / cnxman_csb_project,
+ * src/kernel-core/vms_cnxman_csb.c); a CSB the executive does not hold is
+ * SS$_NOSUCHDEV with an all-zero row, never a placeholder member (INV-6).
+ * `csb.csid_valid` clear is the honest "not yet learned" the connection
+ * manager reads as NEW, not a fabricated CSID 0 (integration note E30: this
+ * is the routine case until the op-06 layout is lab-pinned).
+ *
+ * The two row structs mirror src/kernel-core/vms_cluster_snapshot.h's
+ * vms_club_view / vms_csb_view byte-for-byte -- same "ONE facility source,
+ * duplicated struct declaration" shape as the sibling DIAG ioctls, because
+ * this header must stay includable with no kernel-core dependency.
+ */
+#define VMS_CLUSTER_DIAG_CSB_CLUB 0u  /* the CLUB-wide view */
+#define VMS_CLUSTER_DIAG_CSB_CSB  1u  /* one CSB row, by `index` */
+
+struct vms_club_view_wire {
+    uint32_t local_csid;
+    uint8_t  local_csid_valid;
+    uint8_t  state;
+    uint8_t  quorum_lost;
+    uint8_t  pad0;
+    uint32_t epoch;
+    uint32_t cluster_nodes;
+    uint16_t cevotes;
+    uint16_t quorum;
+    uint16_t expected_votes;
+    uint16_t pad1;
+    uint32_t bitmap[4];         /* VMS_CLUB_BITMAP_WORDS */
+    uint32_t bitmap_slots_seen;
+    uint8_t  transition_active;
+    uint8_t  transition_class;
+    uint8_t  barrier_step;
+    uint8_t  coordinator_valid;
+    uint32_t coordinator_csid;
+    uint32_t outstanding_rebuild;
+    uint32_t ftime_lo;
+    uint32_t ftime_hi;
+    uint32_t fsysid_lo;
+    uint32_t fsysid_hi;
+    uint32_t reformations;
+};
+_Static_assert(sizeof(struct vms_club_view_wire) == 76,
+               "vms_club_view_wire changed size -- must match vms_club_view");
+
+struct vms_csb_view_wire {
+    uint32_t csid;
+    uint8_t  csid_valid;
+    uint8_t  state;
+    uint8_t  is_member;
+    uint8_t  is_selected;
+    uint8_t  status_rcvd;
+    uint8_t  scsnode_len;
+    uint8_t  scsnode[8];        /* VMS_SCSNODE_MAX + 2 */
+    uint16_t votes;
+    uint8_t  votes_valid;
+    uint8_t  lockdirwt;
+    uint8_t  lockdirwt_valid;
+    uint8_t  pad0;
+    uint32_t peer_sysid_lo;
+    uint32_t peer_sysid_hi;
+    uint32_t sw_version;
+    uint32_t cdt_conid;
+    uint32_t incarnation_lo;
+    uint32_t incarnation_hi;
+    uint32_t last_status_ms;
+};
+_Static_assert(sizeof(struct vms_csb_view_wire) == 52,
+               "vms_csb_view_wire changed size -- must match vms_csb_view");
+
+struct vms_cluster_diag_csb_args {
+    uint32_t row;                       /* in: VMS_CLUSTER_DIAG_CSB_*         */
+    uint32_t index;                     /* in: CSB index; ignored for _CLUB   */
+    uint32_t status;                    /* return: SS$_ status                */
+    uint32_t pad0;
+    struct vms_club_view_wire club;     /* valid iff row == _CLUB             */
+    struct vms_csb_view_wire  csb;      /* valid iff row == _CSB              */
+};
+_Static_assert(sizeof(struct vms_cluster_diag_csb_args) == 144,
+               "vms_cluster_diag_csb_args changed size -- VMS_IOCTL_CLUSTER_DIAG_CSB ABI break");
+#define VMS_IOCTL_CLUSTER_DIAG_CSB _IOWR(VMS_IOC_MAGIC, 0x6a, struct vms_cluster_diag_csb_args)
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_CSB == 0xC090566Au,
+               "VMS_IOCTL_CLUSTER_DIAG_CSB encodes differently than the reference build");
+
+/*
+ * VMS_IOCTL_CLUSTER_SETCLUEVT (FC-P3.8, docs/plan-faithful-cluster-
+ * executive.md). $SETCLUEVT's executive-side registration: this process asks
+ * to be told, by completion AST, when CNXMAN detects a real membership ADD or
+ * REMOVE (cluevtdef.h CLUEVT$C_ADD/_REMOVE, OR'd into `event_mask`).
+ * `event_mask == 0` (or `astadr == 0`) deregisters -- the SAME call, never a
+ * second ioctl, mirroring $SETCLUEVT's own re-arm-by-recall shape. One
+ * registration per node (src/kernel-core/vms_cnxman.c: `struct vms_cnxman`
+ * keeps a single slot, last caller wins); delivery is a real completion AST
+ * queued on the caller's own PSL_C_USER queue (vms_ioctl_deliverast drains
+ * it), and process death clears the slot (vms_cnxman_proc_gone(), called from
+ * proc teardown) so a delivery can never reach freed memory.
+ */
+struct vms_cluster_setcluevt_args {
+    uint32_t event_mask;    /* in: CLUEVT$C_ADD | CLUEVT$C_REMOVE, 0 = clear */
+    uint32_t status;        /* return: SS$_ status                          */
+    uint64_t astadr;        /* in: AST routine address, 0 = clear           */
+    uint64_t astprm;        /* in: AST parameter                            */
+};
+_Static_assert(sizeof(struct vms_cluster_setcluevt_args) == 24,
+               "vms_cluster_setcluevt_args changed size -- VMS_IOCTL_CLUSTER_SETCLUEVT ABI break");
+#define VMS_IOCTL_CLUSTER_SETCLUEVT _IOWR(VMS_IOC_MAGIC, 0x6b, struct vms_cluster_setcluevt_args)
+_Static_assert(VMS_IOCTL_CLUSTER_SETCLUEVT == 0xC018566Bu,
+               "VMS_IOCTL_CLUSTER_SETCLUEVT encodes differently than the reference build");
+
+/*
  * VMS_IOCTL_SYSGEN_LOAD (FC-P0.10, docs/plan-faithful-cluster-executive.md).
  * STARTUP.EXE's own case of SYSBOOT: hands the cluster SYSGEN parameters and
  * the CLUSTER_AUTHORIZE record it read off SYS$SYSTEM:OVMXVMSSYS.PAR

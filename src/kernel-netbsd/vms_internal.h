@@ -904,11 +904,20 @@ long vms_ioctl_cluster_member_get(struct vms_proc *proc, unsigned long arg);
  */
 struct vms_cluster;
 struct vms_cluster *vms_cluster_node(void);
+/* FC-P3.8: mirror of the src/kernel/vms_internal.h decl -- $SETCLUEVT's
+ * process-death safety hook, called from vms_proc_free_claimed() below. */
+void vms_cnxman_proc_gone(struct vms_cluster *cl, void *proc);
 long vms_ioctl_cluster_diag_port(struct vms_proc *proc, unsigned long arg);
 /* VMS_IOCTL_CLUSTER_DIAG_CONN (FC-P2.4): mirror of the src/kernel/
  * vms_internal.h decl -- SCS's SDA SHOW CONNECTIONS-equivalent read against
  * vms_cluster_node()'s real vms_scs.c objects. */
 long vms_ioctl_cluster_diag_conn(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_DIAG_CSB / _SETCLUEVT (FC-P3.8): mirror of the
+ * src/kernel/vms_internal.h decls -- the connection manager's CLUB/CSB
+ * projection and $SETCLUEVT's registration, against vms_cluster_node()'s
+ * real vms_cnxman.c objects. */
+long vms_ioctl_cluster_diag_csb(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_cluster_setcluevt(struct vms_proc *proc, unsigned long arg);
 /* VMS_IOCTL_SYSGEN_LOAD (FC-P0.10): mirror of the src/kernel/vms_internal.h
  * decl -- loads the cluster SYSGEN parameters into vms_cluster_node()'s real
  * struct vms_cluster.params (vms_cluster_sysgen.c). */

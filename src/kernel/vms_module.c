@@ -1570,6 +1570,12 @@ void vms_proc_free_claimed(struct vms_proc *proc)
      * the mailbox and BG channels above. */
     vms_acp_release_all(proc);
 
+    /* Clear this process's $SETCLUEVT registration, if any (FC-P3.8) -- a
+     * no-op when the cluster stack never started or this process never
+     * registered; `proc` is passed as `void *` so vms_internal.h's own
+     * declaration needs no vms_cluster.h include. */
+    vms_cnxman_proc_gone(vms_cluster_node(), (void *)proc);
+
     /* Drop the pinned pid reference taken at registration */
     if (proc->pid_ref) {
         put_pid(proc->pid_ref);
@@ -1800,6 +1806,12 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
      * vms_scs.c): the SCS-wide view, and one CDT row per call. */
     case VMS_IOCTL_CLUSTER_DIAG_CONN:
         return vms_ioctl_cluster_diag_conn(proc, arg);
+    /* The connection manager's own SDA-equivalent CLUB/CSB read (FC-P3.8,
+     * vms_cnxman.c), and $SETCLUEVT's executive-side registration. */
+    case VMS_IOCTL_CLUSTER_DIAG_CSB:
+        return vms_ioctl_cluster_diag_csb(proc, arg);
+    case VMS_IOCTL_CLUSTER_SETCLUEVT:
+        return vms_ioctl_cluster_setcluevt(proc, arg);
     /* STARTUP.EXE's own case of SYSBOOT (FC-P0.10): load the cluster SYSGEN
      * parameters + CLUSTER_AUTHORIZE into vms_cluster_node()->params, once,
      * before VMS_IOCTL_CLUSTER_START (FC-P0.11). */

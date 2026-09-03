@@ -73,7 +73,10 @@ ONLY, and is added to the kernel lists by the first item that consumes it
 in-module (e.g. FC-P3.4/P6.3). **Do not re-add a codec object already present**
 (dedup on merge — the integrator has hit this on every FSM merge).
 
-### E10. VC gap-break under loss → RULED a fidelity bug; fix = FC-P1.9 go-back-N (Fable, design §3.2.5)
+### E10. VC gap-break under loss → RULED a fidelity bug; FC-P1.9 go-back-N LANDED (Fable, design §3.2.5)
+**Status: FIXED.** FC-P1.9 implemented the ruling on top of FC-P1.3 (no collision
+left — P1.3 integrated first, as this entry required). **FC-P2.2 is unblocked**
+and binds `pe_upper_ops.vc_down` (see the seam note below).
 **RULED: break-on-first-gap is a FIDELITY BUG.** p. 2-31 governs the delivery
 guarantee + its consequence (if the port can't satisfy order/delivery, the VC and
 every connection on it break) — NOT the detection mechanism. The port satisfies
@@ -96,13 +99,46 @@ every CDT on that SB → CLOSED (path-lost), ledgers discarded, pending sends fa
 `SS$_PATHLOST`, each SYSAP's `disconnected()` called. SCS never retries across a
 break or re-opens itself — CNXMAN's `recnx_fsm` (P3.6) is the SYSAP that reconnects
 (§4(aa)). So the CDT ladder needs no "suspended" state.
-- **FIX = FC-P1.9** (O5, blocked-by P1.2/P1.4): receiver discard+re-ack; sender
-  ack-timeout ladder + exhaustion break; `vc_down` raised through `pe_ops`. R2:
-  10% loss + 48 pipelined → all delivered in order, 0 breaks, retransmits>0;
-  100% one-way loss → exactly one break (RETRANSMIT_EXHAUSTED) then re-form + SCS
-  `disconnected` on every CDT.
-- **⚠ FC-P1.9 COLLIDES with FC-P1.3** (both edit vms_pe_fsm.c/vms_pe.h) — dispatch
-  FC-P1.9 only AFTER FC-P1.3 integrates. **FC-P2.2 blocked-by FC-P1.9.**
+- **FIX = FC-P1.9 — LANDED.** `vms_pe_fsm.c`: `h_vc_rx_gap()` discards + re-acks
+  (no break); `vc_ring_oldest`/`vc_ring_next_after`/`vc_resend_from` go back N in
+  SEQUENCE order from the oldest unacked entry (a failed transmit STOPS the run —
+  pushing the tail past a frame that never left would recreate the gap);
+  `h_vc_retransmit` breaks on `PE_VC_DOWN_RETRANSMIT_EXHAUSTED` when the OLDEST
+  entry has spent `PE_VC_RETRANSMIT_TRIES` (25, OVMX design value seeded from
+  §4(k)); `PE_VC_DOWN_SEQ_GAP` deleted (value **1 retired, never re-used**; the
+  other reasons are now PINNED at their FC-P1.2 numbers and EXHAUSTED = 7).
+- **The cadence default changed and the relation is load-bearing:** with no
+  SYSGEN value the retransmit interval is `TIMVCFAIL / (TRIES + 1)` so the whole
+  ladder completes INSIDE TIMVCFAIL and exhaustion — not the silence timer — is
+  the detector that names the reason. An explicitly configured
+  `vc_retransmit_ms` still wins; if its ladder outlasts TIMVCFAIL, TIMVCFAIL
+  fires first and says so.
+- **The `vc_down` seam is `pe_upper_ops.vc_down` (vms_pe.h §4), NOT a new
+  `pe_ops` entry.** `pe_ops` is the SUBSTRATE seam (send/timers/clock/log);
+  `pe_upper_ops` is the SCS-facing one and already declared `vc_down(peer,
+  reason)`, which the FSM raises from `vc_notify_down()`. FC-P1.9 made it
+  load-bearing and documented the FC-P2.2 contract on it rather than adding a
+  second path for one event. **FC-P2.2 binds this.** `reason` is an
+  `enum pe_vc_down_reason`, not an SS$_ status — the pure FSM has no SS$_
+  definitions (§3.2.2); the GLUE maps it.
+- **⚠ SECOND DEFECT FOUND BY THE ACCEPTANCE, FIXED HERE — the ANCHOR.** FC-P1.2's
+  `recv_anchored` ("the first sequenced message on a circuit anchors the counter")
+  is a **capture-scanner** property: §4(h)(4a) describes it for "a node attaching
+  to a circuit already carrying traffic", which a port that FORMED the circuit is
+  not. Under break-on-gap it looked harmless; under go-back-N it SILENTLY LOSES
+  DATA — a lost first message makes the second one the anchor, this node
+  acknowledges a message it never received and the sender's ring releases it
+  (measured: 46 of 48 delivered, seed 3). Deleted, on §4(i).A's grounding: "the
+  post-START SCS VC resets to `send_seq = 1` on both sides ... 0 residuals", so
+  `recv_seq = 0` at formation IS the anchor. `PE_VC_SEQ_ANCHOR` and
+  `pe_vc.recv_anchored` are gone. **A peer that opened at some other number now
+  gaps and is broken by its own exhausted ladder — loud, with a reason.**
+- **R2 acceptance (tests/cluster/sim/test_sim_vc.c), both green:** 48 pipelined at
+  10 % loss × 8 seeds → 48/48 delivered, **0 out of order**, **0 VC breaks**,
+  retransmits 9–31, gaps 5–21; 100 % one-way loss → exactly 25 retransmissions,
+  exactly ONE break, `vc_down` raised once with RETRANSMIT_EXHAUSTED, then
+  re-formation. In-order is proved by reading each delivered frame's `send_seq`
+  back through the codec (`SIM_M_UPPER_OUT_OF_ORDER`), not by counting arrivals.
 
 ### E11. No pure `pe_fsm_project` — sim reads pe_fsm counters directly (raised by FC-P1.4 → FC-P1.6)
 The frozen port view (`struct vms_pe_view`) is filled only by `vms_pe_snapshot()`

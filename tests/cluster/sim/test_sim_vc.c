@@ -34,23 +34,39 @@
  *   test_duplicate_is_absorbed               100 % duplication on one link:
  *       the port absorbs the second copy (§4(h)(4a)) and delivers upward once.
  *   test_three_nodes_10pct_loss              the plan's condition, 8 seeds.
+ *   test_pipelined_under_loss                THE FC-P1.9 ACCEPTANCE (below).
+ *   test_one_way_loss_exhausts_the_ladder    the other half of it.
  *   test_determinism_by_seed                 same seed, identical run.
  *
  * ===========================================================================
- * A FINDING THIS FILE RECORDS RATHER THAN HIDES
+ * THE FINDING THIS FILE MADE, AND THE ACCEPTANCE THAT REPLACED IT
  * ===========================================================================
  *
- * When a sender PIPELINES messages and one is lost, the receiver sees the
- * next sequence as a p. 2-31 GAP and breaks the circuit -- which is exactly
- * what vms_pe_fsm.h §3b(4) says it will do, citing "if ... the guarantee of
- * message sequentiality cannot be satisfied, the virtual circuit ... will be
- * explicitly broken". test_pipelined_under_loss therefore asserts RECOVERY
- * (every circuit re-forms and every ring drains) and PRINTS the gaps and
- * re-formations it observed, instead of asserting an absence that the FSM
- * does not promise. Spec §4(h)(4a)'s measurement -- 321 599 sequenced messages
- * across 47 captures, ZERO gaps from a real VAX -- is what makes that
- * behaviour tolerable on real wire, and it is a rung-5 question, not a rung-2
- * one.
+ * FC-P1.4 shipped this file with an honest confession where an assertion
+ * should have been: when a sender PIPELINED messages and one was lost, the
+ * receiver scored the next sequence as a p. 2-31 GAP and BROKE THE CIRCUIT,
+ * so `test_pipelined_under_loss` asserted only RECOVERY and printed the gaps
+ * and re-formations it observed rather than an absence the FSM did not
+ * promise.
+ *
+ * That was raised as E10 and RULED a fidelity bug (design §3.2.5): p. 2-31
+ * governs the delivery/order GUARANTEE and its consequence, not the detection
+ * mechanism, and the wire shows a real port satisfying the guarantee by
+ * RETRANSMITTING long before it breaks anything. FC-P1.9 implemented the
+ * ruling -- receiver discards and re-acks on a gap, sender goes back N from
+ * its oldest unacked entry, and only an EXHAUSTED ladder (or a silence timer)
+ * breaks a circuit -- and this file's confession became the acceptance it was
+ * hiding: 48 pipelined messages across a 10 % wire, ALL delivered IN ORDER,
+ * ZERO circuit breaks, retransmits > 0.
+ *
+ * Running that acceptance immediately found a SECOND defect the old
+ * break-on-gap behaviour had masked: FC-P1.2's "anchor on the first sequenced
+ * message" rule (a capture-scanner property §4(h)(4a) describes for a node
+ * attaching mid-stream, not a port that formed the circuit) silently swallowed
+ * a first message that was lost -- 46 of 48 delivered on seed 3, with this
+ * file's own in-order check flagging the two. It is deleted; §4(i).A's
+ * "the post-START SCS VC resets to send_seq = 1 on both sides" is the anchor a
+ * port is entitled to.
  */
 
 #include <stdio.h>
@@ -430,14 +446,26 @@ static void test_three_nodes_10pct_loss(void)
 }
 
 /* ==================================================================== *
- * 7. Pipelined traffic under loss: the p. 2-31 behaviour, and RECOVERY
+ * 7. ***  THE FC-P1.9 ACCEPTANCE  ***  design §3.2.5's R2 condition
  *
- * Eight messages per ordered pair, sent back to back into a 10 %-loss wire.
- * When one is lost the receiver sees the next sequence as a GAP and breaks the
- * circuit, exactly as vms_pe_fsm.h §3b(4) says it will. What this scenario
- * asserts is what the FSM actually promises: every broken circuit RE-FORMS,
- * every unacked ring drains, and nothing arrives that cannot be routed. The
- * gaps and re-formations are printed as observations.
+ * "10 % loss with pipelined sends = ALL messages delivered in order, ZERO VC
+ * breaks, retransmits > 0."
+ *
+ * Eight messages per ordered pair -- 48 in all -- sent back to back into a
+ * 10 %-loss wire, which is the exact case FC-P1.4 measured the old
+ * break-on-first-gap receiver failing. Every clause is asserted, not printed:
+ *
+ *   all delivered      UPPER_MESSAGES == 48 at the far ends
+ *   IN ORDER           UPPER_OUT_OF_ORDER == 0 -- the recorder read each
+ *                      delivered frame's send_seq back through the codec and
+ *                      required it to be exactly one more than the last
+ *   0 VC breaks        VC_DOWNS == 0 across the whole cluster, asserted
+ *                      BEFORE the data phase as well, so the final zero
+ *                      cannot be a break that happened during formation
+ *   retransmits > 0    the ladder demonstrably ran; without it the run would
+ *                      be a lossless happy path wearing a hat
+ *   gaps > 0           and the receiver demonstrably absorbed real gaps --
+ *                      the counter that used to be a tombstone
  * ==================================================================== */
 
 #define DATA_MSGS 8u
@@ -445,6 +473,9 @@ static void test_three_nodes_10pct_loss(void)
 static const struct sim_step steps_pipelined[] = {
 	SIM_LINKS_ALL(.loss_pct = 10),
 	SIM_UNTIL_ALL_VCS_OPEN(180000),
+	SIM_EXPECT_EQ(SIM_M_VC_DOWNS, 0,
+		      "formation cost no circuit break, so a break after this "
+		      "point can only be the data phase's"),
 	SIM_SEND("OVMXA", "OVMXB", DATA_MSGS),
 	SIM_SEND("OVMXA", "OVMXC", DATA_MSGS),
 	SIM_SEND("OVMXB", "OVMXA", DATA_MSGS),
@@ -456,18 +487,35 @@ static const struct sim_step steps_pipelined[] = {
 	SIM_EXPECT_EQ(SIM_M_SEND_REFUSED, 0,
 		      "the credit window took all eight (the grant is 10)"),
 	SIM_RUN(180000),
-	SIM_EXPECT_EQ(SIM_M_VCS_OPEN, N_PAIRS,
-		      "every circuit is OPEN again at the end"),
+
+	/* --- the ruling's three clauses --- */
+	SIM_EXPECT_EQ(SIM_M_UPPER_MESSAGES, N_PAIRS * DATA_MSGS,
+		      "ALL 48 pipelined messages were delivered upward"),
+	SIM_EXPECT_EQ(SIM_M_UPPER_OUT_OF_ORDER, 0,
+		      "IN ORDER -- every delivery's send_seq was the previous "
+		      "one plus one, read back out of the frame"),
+	SIM_EXPECT_EQ(SIM_M_VC_DOWNS, 0,
+		      "with ZERO virtual-circuit breaks (3.2.5): loss is "
+		      "absorbed by the port, not escalated to SCS"),
+	SIM_EXPECT_EQ(SIM_M_UPPER_DOWNS, 0,
+		      "so SCS was never told to close every CDT on a circuit"),
+	SIM_EXPECT_GE(SIM_M_RETRANSMITS, 1,
+		      "and RETRANSMITS > 0: the go-back-N ladder really ran"),
+	SIM_EXPECT_GE(SIM_M_RX_GAPS, 1,
+		      "having really absorbed gaps, not just got lucky"),
+
+	SIM_EXPECT_EQ(SIM_M_VCS_OPEN, N_PAIRS, "every circuit still OPEN"),
 	SIM_EXPECT_EQ(SIM_M_UNACKED, 0, "and every unacked ring drained"),
 	SIM_EXPECT_EQ(SIM_M_VC_RX_UNDELIVERED, 0,
 		      "nothing arrived that could not be routed"),
 	SIM_EXPECT_EQ(SIM_M_TX_ERRORS, 0, "and no transmit failed"),
+	SIM_EXPECT_GE(SIM_M_LAN_LOST, 1, "the wire really lost frames"),
 	SIM_DUMP("after the pipelined data phase"),
 	SIM_END
 };
 
 static const struct sim_scenario scn_pipelined =
-	SIM_SCENARIO("pipelined messages across a 10 % loss wire",
+	SIM_SCENARIO("48 pipelined messages across a 10 % loss wire",
 		     three_nodes, steps_pipelined);
 
 static void test_pipelined_under_loss(void)
@@ -475,9 +523,9 @@ static void test_pipelined_under_loss(void)
 	uint64_t seed;
 	int all_green = 1;
 
-	printf("-- pipelined traffic under loss: gaps happen, and it "
-	       "RECOVERS\n");
-	for (seed = 1u; seed <= 4u; seed++) {
+	printf("-- ***  THE FC-P1.9 ACCEPTANCE: 48 pipelined at 10 %% loss, "
+	       "all delivered in order, 0 breaks  ***\n");
+	for (seed = 1u; seed <= 8u; seed++) {
 		if (run_scenario(&scn_pipelined, seed, &g_out) != 0) {
 			printf("       seed %llu FAILED\n",
 			       (unsigned long long)seed);
@@ -485,17 +533,104 @@ static void test_pipelined_under_loss(void)
 			continue;
 		}
 		printf("       seed %llu: %llu sent, %llu delivered upward, "
-		       "%llu retransmits, %llu gaps, %llu re-formations\n",
+		       "%llu out of order, %llu retransmits, %llu gaps, "
+		       "%llu breaks\n",
 		       (unsigned long long)seed,
 		       (unsigned long long)metric(&g_out, SIM_M_MSGS_TX),
 		       (unsigned long long)metric(&g_out,
 						  SIM_M_UPPER_MESSAGES),
+		       (unsigned long long)metric(&g_out,
+						  SIM_M_UPPER_OUT_OF_ORDER),
 		       (unsigned long long)metric(&g_out, SIM_M_RETRANSMITS),
 		       (unsigned long long)metric(&g_out, SIM_M_RX_GAPS),
-		       (unsigned long long)metric(&g_out,
-						  SIM_M_VC_REFORMATIONS));
+		       (unsigned long long)metric(&g_out, SIM_M_VC_DOWNS));
 	}
-	ct_check(all_green, "every seed recovered every circuit");
+	ct_check(all_green,
+		 "every seed delivered all 48 in order with zero VC breaks -- "
+		 "the case the break-on-gap receiver failed (E10)");
+}
+
+/* ==================================================================== *
+ * 7b. The other half of the acceptance: 100 % ONE-WAY loss exhausts the
+ *     ladder, and EXACTLY ONE break comes out of it
+ *
+ * "100 % one-way loss = exactly one break with reason RETRANSMIT_EXHAUSTED
+ * after the ladder, followed by ... disconnected on every CDT" (design
+ * §3.2.5). SCS is FC-P2.2 and does not exist yet, so what is asserted here is
+ * the seam it will bind: the port raised vc_down(sysid, reason) exactly once,
+ * carrying PE_VC_DOWN_RETRANSMIT_EXHAUSTED -- and then the circuit re-formed
+ * when the wire came back.
+ *
+ * NOTHING HERE IS PROBABILISTIC. One direction is taken to 100 % loss, which
+ * is a construction, and the two nodes are configured so that the ladder is
+ * unambiguously the detector that fires: TIMVCFAIL 40 s against a 25-rung
+ * ladder at 1 s, and a 60 s listen timeout so the CHANNEL under the circuit
+ * (which stops hearing this node's HELLOs too) outlives the ladder.
+ * ==================================================================== */
+
+static const struct sim_node_decl ladder_pair[] = {
+	SIM_NODE_CFG("OVMXA", 1030, .timvcfail_ms = 40000,
+		     .vc_retransmit_ms = 1000, .listen_timeout_ms = 60000),
+	SIM_NODE_CFG("OVMXB", 1031, .timvcfail_ms = 40000,
+		     .vc_retransmit_ms = 1000, .listen_timeout_ms = 60000)
+};
+
+static const struct sim_step steps_ladder[] = {
+	SIM_UNTIL_ALL_VCS_OPEN(60000),
+	SIM_EXPECT_EQ(SIM_M_VC_DOWNS, 0, "both circuits came up cleanly"),
+
+	/* The wire swallows everything A sends to B, and only that. */
+	SIM_LINK("OVMXA", "OVMXB", .loss_pct = 100),
+	SIM_SEND("OVMXA", "OVMXB", 1),
+	SIM_RUN(20000),
+	SIM_EXPECT_PAIR(SIM_CMP_EQ, "OVMXA", "OVMXB", SIM_M_VC_STATE,
+			VMS_PE_VC_OPEN,
+			"20 s in, the ladder is still climbing and the circuit "
+			"is still up"),
+	SIM_EXPECT_PAIR(SIM_CMP_EQ, "OVMXA", "OVMXB", SIM_M_VC_DOWNS, 0,
+			"nothing broken yet"),
+
+	SIM_RUN(15000),
+	SIM_EXPECT_PAIR(SIM_CMP_EQ, "OVMXA", "OVMXB", SIM_M_RETRANSMITS,
+			PE_VC_RETRANSMIT_TRIES,
+			"the ladder ran to its bound and stopped there"),
+	SIM_EXPECT_PAIR(SIM_CMP_EQ, "OVMXA", "OVMXB", SIM_M_VC_DOWNS, 1,
+			"EXACTLY ONE break came out of it"),
+	SIM_EXPECT_NODE(SIM_CMP_EQ, "OVMXA", SIM_M_UPPER_DOWNS, 1,
+			"and the port raised vc_down() exactly once"),
+	SIM_EXPECT_NODE(SIM_CMP_EQ, "OVMXA", SIM_M_UPPER_DOWN_REASON,
+			PE_VC_DOWN_RETRANSMIT_EXHAUSTED,
+			"with RETRANSMIT_EXHAUSTED -- the reason FC-P2.2 will "
+			"turn into SS$_PATHLOST on every CDT of that SB"),
+	SIM_DUMP("after the ladder exhausted"),
+
+	/* Heal, and the port re-forms the circuit without anybody asking. */
+	SIM_LINK("OVMXA", "OVMXB", .loss_pct = 0),
+	SIM_UNTIL_ALL_VCS_OPEN(120000),
+	SIM_EXPECT_EQ(SIM_M_VCS_OPEN, 2, "the circuit re-formed after the break"),
+	SIM_EXPECT_PAIR(SIM_CMP_GE, "OVMXA", "OVMXB", SIM_M_VC_OPENS, 2,
+			"and it OPENED a second time, not just stayed up"),
+	SIM_END
+};
+
+static const struct sim_scenario scn_ladder =
+	SIM_SCENARIO("100 % one-way loss exhausts the ladder", ladder_pair,
+		     steps_ladder);
+
+static void test_one_way_loss_exhausts_the_ladder(void)
+{
+	printf("-- 100 %% one-way loss: %u tries, ONE break "
+	       "(RETRANSMIT_EXHAUSTED), then re-formation\n",
+	       (unsigned)PE_VC_RETRANSMIT_TRIES);
+	ct_check_eq_u32((unsigned long)run_scenario(&scn_ladder, 1u, &g_out),
+			0, "every expectation held");
+	printf("       (%llu retransmissions, broke at T+%llu ms, "
+	       "reason %llu)\n",
+	       (unsigned long long)metric(&g_out, SIM_M_RETRANSMITS),
+	       (unsigned long long)g_out.sim.clock.now_ms,
+	       (unsigned long long)sim_metric_read(&g_out.sim,
+						   SIM_M_UPPER_DOWN_REASON,
+						   "OVMXA", NULL));
 }
 
 /* ==================================================================== *
@@ -630,6 +765,7 @@ int main(int argc, char **argv)
 	test_duplicate_is_absorbed();
 	test_three_nodes_10pct_loss();
 	test_pipelined_under_loss();
+	test_one_way_loss_exhausts_the_ladder();
 	test_determinism_by_seed();
 	test_partition_and_reformation();
 	test_announced_departure();

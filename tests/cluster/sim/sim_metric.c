@@ -79,6 +79,8 @@ static const struct sim_metric_desc sim_metrics[SIM_M__COUNT] = {
 	[SIM_M_UPPER_MESSAGES]    = { "UPPER_MESSAGES",    SIM_SRC_PORT },
 	[SIM_M_UPPER_UPS]         = { "UPPER_UPS",         SIM_SRC_PORT },
 	[SIM_M_UPPER_DOWNS]       = { "UPPER_DOWNS",       SIM_SRC_PORT },
+	[SIM_M_UPPER_OUT_OF_ORDER] = { "UPPER_OUT_OF_ORDER", SIM_SRC_PORT },
+	[SIM_M_UPPER_DOWN_REASON] = { "UPPER_DOWN_REASON", SIM_SRC_PORT },
 	[SIM_M_LAN_TX]            = { "LAN_TX",            SIM_SRC_SIM },
 	[SIM_M_LAN_DELIVERED]     = { "LAN_DELIVERED",     SIM_SRC_SIM },
 	[SIM_M_LAN_LOST]          = { "LAN_LOST",          SIM_SRC_SIM },
@@ -184,6 +186,12 @@ static uint64_t metric_of_port(const struct sim_node *n, enum sim_metric m)
 	case SIM_M_UPPER_MESSAGES:    return n->upper.messages;
 	case SIM_M_UPPER_UPS:         return n->upper.ups;
 	case SIM_M_UPPER_DOWNS:       return n->upper.downs;
+	case SIM_M_UPPER_OUT_OF_ORDER:
+		/* An unreadable sequence is not evidence of order either, so it
+		 * counts here rather than being quietly dropped (INV-6). */
+		return (uint64_t)n->upper.out_of_order +
+		       (uint64_t)n->upper.seq_unreadable;
+	case SIM_M_UPPER_DOWN_REASON: return n->upper.last_down_reason;
 	default:                      return 0u;
 	}
 }

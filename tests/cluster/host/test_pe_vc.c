@@ -109,6 +109,24 @@ struct vc_env {
 
 static struct vc_env g_env;   /* ~20 KB: static, not a stack frame */
 
+/*
+ * The two SYSGEN-derived timings env_init() puts in pe_identity. They are
+ * knobs rather than literals because the RELATION between them is what decides
+ * which detector ends a stalled circuit (vms_pe_fsm.h: the ladder must fit
+ * inside TIMVCFAIL for exhaustion to be the reason). The defaults are the
+ * lab's: TIMVCFAIL 1600 read as centiseconds, and the 2 s cadence FC-P1.2's
+ * tests were written against -- with which the 25-rung ladder outlasts
+ * TIMVCFAIL, so those tests still end in TIMVCFAIL exactly as they did.
+ */
+static uint32_t g_timvcfail_ms = 16000;
+static uint32_t g_vc_retransmit_ms = 2000;
+
+static void env_timings(uint32_t timvcfail_ms, uint32_t retransmit_ms)
+{
+	g_timvcfail_ms = timvcfail_ms;
+	g_vc_retransmit_ms = retransmit_ms;
+}
+
 /* The VMS absolute-time clock the formation body needs. A monotonic function
  * of the injected millisecond clock, so it is LIVE (a different value per
  * frame, which is the only thing §4(g) grounds about abs 112) and still
@@ -152,8 +170,8 @@ static void env_init(struct vc_env *e, int with_identity, int with_upper)
 		id.incarnation_time = OVMX_BOOT_TIME;
 		id.incarnation_time_valid = 1;
 	}
-	id.timvcfail_ms = 16000;
-	id.vc_retransmit_ms = 2000;
+	id.timvcfail_ms = g_timvcfail_ms;
+	id.vc_retransmit_ms = g_vc_retransmit_ms;
 
 	(void)pe_fsm_init(&e->fsm, &id, OVMX_SYSID, &e->ops);
 	pe_fsm_bind_vcs(&e->fsm, e->vcs, 2);
@@ -709,29 +727,57 @@ static void test_duplicate_is_absorbed_and_reacked(void)
 		 "but re-acknowledged, so the peer stops retransmitting");
 }
 
-/* p. 2-31: sequentiality lost => the circuit is explicitly broken, and every
- * connection on it with it. §4(h)(4a) measured that a real VAX never produces
- * one, so this detector never fires on healthy wire. */
-static void test_gap_breaks_the_circuit(void)
+/*
+ * THE FC-P1.9 CORRECTION, at rung 1.
+ *
+ * This test used to be `test_gap_breaks_the_circuit` and asserted that a
+ * sequence gap tore the circuit down with PE_VC_DOWN_SEQ_GAP. THAT ASSERTION
+ * ENCODED THE BUG design §3.2.5 ruled on: p. 2-31 governs the delivery/order
+ * GUARANTEE and its consequence, not the detection mechanism, and a port
+ * satisfies the guarantee under loss by RETRANSMITTING (the 0x7b retransmit
+ * msgtype, §4(L)'s sequence reuse and §4(k)'s ~25-retry ladder are all wire
+ * evidence of a real VAX doing exactly that before it breaks anything).
+ *
+ * The contract asserted now is the ruling's receiver row: DISCARD, do not
+ * advance recv_seq, COUNT the gap, and IMMEDIATELY re-send the cumulative ack
+ * -- with the circuit untouched. The duplicate ack is the signal that drives
+ * the sender's go-back-N, so it is asserted on the WIRE, not just in the cell.
+ */
+static void test_gap_is_discarded_and_reacked(void)
 {
 	struct pe_vc *vc;
+	uint16_t wire = 0;
 
-	printf("-- a sequence gap breaks the circuit (p. 2-31)\n");
+	printf("-- a sequence gap is DISCARDED and re-acked, never broken "
+	       "(3.2.5)\n");
 	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
 	rx_seqmsg(&g_env, 1, 0);
+	fake_pe_clear_frames(&g_env.fake);
+	memset(&g_env.upper_rec, 0, sizeof(g_env.upper_rec));
+
 	rx_seqmsg(&g_env, 3, 0);        /* 2 never arrived */
 
 	vc = the_vc(&g_env);
-	ct_check_eq_u32(vc->rx_gaps, 1, "the gap was detected");
-	ct_check(vc->state != VMS_PE_VC_OPEN,
-		 "the circuit is no longer open");
-	ct_check_eq_u32(g_env.upper_rec.downs, 1, "SCS was told it went down");
-	ct_check_eq_u32(g_env.upper_rec.last_down_reason, PE_VC_DOWN_SEQ_GAP,
-			"with the sequence-gap reason");
-	ct_check_eq_u32(g_env.fsm.vc_reformations, 1,
-			"and it re-forms over the still-verified channel");
-	ct_check_eq_u32(vc->state, VMS_PE_VC_START_SENT,
-			"which means a fresh START is already out");
+	ct_check_eq_u32(vc->rx_gaps, 1, "the gap was counted");
+	ct_check_eq_u32(vc->state, VMS_PE_VC_OPEN,
+			"and the circuit is STILL OPEN -- a gap is not a break");
+	ct_check_eq_u32(vc->recv_seq, 1, "recv_seq did NOT advance past the hole");
+	ct_check_eq_u32(g_env.upper_rec.messages, 0,
+			"the out-of-order frame was discarded, not delivered");
+	ct_check_eq_u32(g_env.upper_rec.downs, 0, "SCS was told nothing");
+	ct_check_eq_u32(g_env.fsm.vc_reformations, 0, "and nothing re-formed");
+	ct_check(last_wire_ack(&g_env, &wire) && wire == 1,
+		 "but the cumulative ack of 1 went out again IMMEDIATELY -- "
+		 "the duplicate ack that tells the sender where the hole is");
+
+	/* And the hole fills: the sender's go-back-N re-sends 2, then 3. */
+	rx_seqmsg(&g_env, 2, 0);
+	rx_seqmsg(&g_env, 3, 0);
+	ct_check_eq_u32(vc->recv_seq, 3, "the re-sent tail was taken, in order");
+	ct_check_eq_u32(g_env.upper_rec.messages, 2,
+			"and delivered upward exactly once each");
+	ct_check_eq_u32(vc->rx_gaps, 1, "with no further gap");
+	ct_check_eq_u32(vc->downs, 0, "and the circuit never went down");
 }
 
 /* ------------------------------------------------------------------ *
@@ -826,33 +872,45 @@ static void test_recv_ack_never_freezes(void)
 	ct_check_eq_u32(the_vc(&g_env)->rx_gaps, 0, "and never seen a gap");
 
 	/*
-	 * Phase 2 -- REORDER. The link delivers 7 before 6. That is
-	 * sequentiality lost (p. 2-31) and the circuit MUST break: the third
-	 * outcome -- an open circuit whose acknowledgement silently stops --
-	 * is the one this FSM does not have.
+	 * Phase 2 -- REORDER, and the FC-P1.9 correction.
+	 *
+	 * The link delivers 7 before 6. This phase used to assert that the
+	 * circuit BROKE on it; that assertion encoded the bug design §3.2.5
+	 * ruled on. With a receive window of 1 the reordered frame is
+	 * DISCARDED, the acknowledgement stays at 5, and it is RE-SENT -- which
+	 * is still the invariant this test exists for, because the third
+	 * outcome (an open circuit whose acknowledgement silently stops) is what
+	 * check_never_frozen() forbids. The ack does not advance past a hole,
+	 * and it does not stop being told to the peer either.
 	 */
-	printf("--   ... and a genuine reorder breaks it instead of stalling\n");
+	printf("--   ... and a reorder is discarded and re-acked, not a break\n");
 	fake_pe_clear_frames(&g_env.fake);
 	rx_seqmsg(&g_env, 7, 0);
 	check_never_frozen(&g_env, 5, "reordered msg 7 before 6");
 	ct_check_eq_u32(the_vc(&g_env)->rx_gaps, 1, "scored as a gap");
-	ct_check(the_vc(&g_env)->state != VMS_PE_VC_OPEN,
-		 "the circuit is down, loudly, rather than frozen open");
+	ct_check_eq_u32(the_vc(&g_env)->state, VMS_PE_VC_OPEN,
+			"the circuit is untouched: a gap is a counter, not a "
+			"reason (3.2.5)");
+	ct_check_eq_u32(the_vc(&g_env)->downs, 0, "nothing was torn down");
 
 	/*
-	 * Phase 3 -- and it comes back. Both ends reset to send_seq 1 on the
-	 * new circuit (§4(i).A/§4(h)(4a)) and the acknowledgement advances
-	 * again from the new anchor.
+	 * Phase 3 -- the sender goes back N and the frontier moves again. 6 is
+	 * re-sent, then 7 behind it, and the acknowledgement follows the
+	 * contiguous frontier the whole way. No re-formation was needed: the
+	 * port absorbed the loss, which is precisely what makes a VC break a
+	 * REAL event for the layers above (design §3.2.5's FC-P2.2 contract).
 	 */
-	printf("--   ... and after re-formation the ack advances again\n");
-	rx_start(&g_env, 1, 1, 0);           /* the peer's STACK completes it */
-	ct_check_eq_u32(the_vc(&g_env)->state, VMS_PE_VC_OPEN,
-			"the circuit re-formed");
-	ct_check_eq_u32(the_vc(&g_env)->recv_seq, 0,
-			"with its sequence state reset");
+	printf("--   ... and go-back-N fills the hole without a re-formation\n");
 	fake_pe_clear_frames(&g_env.fake);
-	rx_seqmsg(&g_env, 1, 0);
-	check_never_frozen(&g_env, 1, "first message on the new circuit");
+	rx_seqmsg(&g_env, 6, 0);
+	check_never_frozen(&g_env, 6, "the sender re-sent 6");
+	rx_seqmsg(&g_env, 7, 0);
+	check_never_frozen(&g_env, 7, "and 7 behind it, in order");
+	ct_check_eq_u32(g_env.fsm.vc_reformations, 0,
+			"the whole loss/reorder scenario cost ZERO circuit "
+			"re-formations");
+	ct_check_eq_u32(g_env.upper_rec.downs, 0, "and SCS was never told of a "
+			"break it would have had to close every CDT for");
 }
 
 /* ------------------------------------------------------------------ *
@@ -964,6 +1022,135 @@ static void test_retransmit_reuses_the_sequence(void)
 	ct_check_eq_u32(the_vc(&g_env)->retransmits, 1, "and it is counted");
 	ct_check_eq_u32(the_vc(&g_env)->send_seq, 2,
 			"the circuit's next number did NOT advance");
+}
+
+/* Walk everything the port emitted since the last clear and read the sequenced
+ * messages out of it, in emission order, through the codec. Returns how many
+ * there were and fills `seq`/`retransmit_marked`. */
+struct resend_run {
+	unsigned n;
+	uint16_t seq[8];
+	int      all_marked_retransmit;
+};
+
+static struct resend_run collect_resends(struct vc_env *e)
+{
+	struct resend_run r;
+	uint32_t i;
+
+	memset(&r, 0, sizeof(r));
+	r.all_marked_retransmit = 1;
+	for (i = 0; i < e->fake.n_frames; i++) {
+		struct fake_vc_decoded d = fake_vc_decode(&e->fake, i);
+
+		if (!d.ok || !d.is_seqmsg)
+			continue;
+		if (d.msgtype != VMS_SCS_MT_ALT)
+			r.all_marked_retransmit = 0;
+		if (r.n < sizeof(r.seq) / sizeof(r.seq[0]))
+			r.seq[r.n] = d.send_seq;
+		r.n++;
+	}
+	return r;
+}
+
+/*
+ * GO-BACK-N (design §3.2.5). The receiver's window is 1, so everything after
+ * a hole was discarded and the SENDER must re-send the whole outstanding tail,
+ * in sequence order, starting at the oldest unacked entry. Proved with no
+ * randomness: three messages go out, nothing is acknowledged, the ladder beat
+ * fires once, and what came out is read back off the wire.
+ */
+static void test_go_back_n_resends_the_tail_in_order(void)
+{
+	uint8_t msg[FAKE_VC_MSG_LEN];
+	struct resend_run r;
+	uint32_t len;
+	unsigned i;
+
+	printf("-- go-back-N: the whole unacked tail goes again, IN ORDER\n");
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	for (i = 0; i < 3; i++) {
+		len = our_seqmsg(&g_env, 0x62c50009u, msg, sizeof(msg));
+		(void)pe_vc_send_frame(&g_env.fsm, VAX1_SYSID, msg, len);
+	}
+	ct_check_eq_u32(the_vc(&g_env)->unacked, 3, "three outstanding");
+
+	/* The peer acknowledges NOTHING, so the hole is at sequence 1. */
+	fake_pe_clear_frames(&g_env.fake);
+	g_env.fake.now_ms += 2500;             /* past the ladder cadence */
+	pe_fsm_vc_timer(&g_env.fsm, 0);
+
+	r = collect_resends(&g_env);
+	ct_check_eq_u32(r.n, 3, "the whole tail went again, not just the head");
+	ct_check(r.n == 3 && r.seq[0] == 1 && r.seq[1] == 2 && r.seq[2] == 3,
+		 "1, 2, 3 in that order -- a window-1 receiver takes them in "
+		 "no other");
+	ct_check(r.all_marked_retransmit,
+		 "each marked 0x7b, the wire's own retransmit form (4(h))");
+	ct_check_eq_u32(the_vc(&g_env)->send_seq, 4,
+			"and NOT ONE retransmit consumed a new sequence (4(L))");
+	ct_check_eq_u32(the_vc(&g_env)->retransmits, 3, "three counted");
+
+	/* A cumulative ack MOVES the hole: 1 is released, so the next round
+	 * starts at 2 and 1 is never sent again. */
+	rx_credit(&g_env, 1);
+	fake_pe_clear_frames(&g_env.fake);
+	g_env.fake.now_ms += 2500;
+	pe_fsm_vc_timer(&g_env.fsm, 0);
+
+	r = collect_resends(&g_env);
+	ct_check_eq_u32(r.n, 2, "only what is still outstanding goes again");
+	ct_check(r.n == 2 && r.seq[0] == 2 && r.seq[1] == 3,
+		 "starting at the NEW oldest entry, 2, and in order");
+}
+
+/*
+ * THE LADDER'S BOUND (design §3.2.5). A peer that never acknowledges gets
+ * PE_VC_RETRANSMIT_TRIES transmissions of the same bytes at the same sequence
+ * and then the circuit is broken with PE_VC_DOWN_RETRANSMIT_EXHAUSTED --
+ * p. 2-31's "the guarantee of message delivery cannot be satisfied", as a
+ * MEASUREMENT rather than a guess. TIMVCFAIL is set well beyond the ladder
+ * here so that the ladder is unambiguously the detector that fired.
+ */
+static void test_retransmit_ladder_exhaustion_breaks_the_circuit(void)
+{
+	uint8_t msg[FAKE_VC_MSG_LEN];
+	struct pe_vc *vc;
+	uint32_t len;
+	unsigned i;
+
+	printf("-- the ladder is BOUNDED: %u tries, then the circuit breaks\n",
+	       (unsigned)PE_VC_RETRANSMIT_TRIES);
+	env_timings(600000, 1000);             /* ladder 25 s, TIMVCFAIL 600 s */
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	len = our_seqmsg(&g_env, 0x62c50009u, msg, sizeof(msg));
+	(void)pe_vc_send_frame(&g_env.fsm, VAX1_SYSID, msg, len);
+
+	/* One beat per cadence interval; the peer answers nothing at all. */
+	for (i = 0; i < PE_VC_RETRANSMIT_TRIES + 1u; i++) {
+		fake_pe_clear_frames(&g_env.fake);
+		g_env.fake.now_ms += 1000;
+		pe_fsm_vc_timer(&g_env.fsm, 0);
+	}
+
+	vc = the_vc(&g_env);
+	ct_check_eq_u32(vc->retransmits, PE_VC_RETRANSMIT_TRIES,
+			"exactly the ladder's worth of retransmissions, then "
+			"it stopped");
+	ct_check_eq_u32(vc->last_down_reason, PE_VC_DOWN_RETRANSMIT_EXHAUSTED,
+			"the circuit broke for the LADDER, not for TIMVCFAIL");
+	ct_check_eq_u32(g_env.upper_rec.last_down_reason,
+			PE_VC_DOWN_RETRANSMIT_EXHAUSTED,
+			"and SCS was raised vc_down() with that reason -- the "
+			"seam FC-P2.2 binds (design 3.2.5)");
+	ct_check_eq_u32(g_env.upper_rec.downs, 1, "exactly once");
+	ct_check_eq_u32(vc->downs, 1, "one break, not a storm of them");
+	ct_check_eq_u32(vc->state, VMS_PE_VC_START_SENT,
+			"and it is already re-forming over the live channel");
+	ct_check_eq_u32(vc->unacked, 0,
+			"the old ring went with the old circuit");
+	env_timings(16000, 2000);              /* back to the lab's values */
 }
 
 static void test_peer_ack_releases_the_ring(void)
@@ -1183,10 +1370,12 @@ int main(void)
 	test_ack_advances_per_message();
 	test_ack_without_an_upper_layer();
 	test_duplicate_is_absorbed_and_reacked();
-	test_gap_breaks_the_circuit();
+	test_gap_is_discarded_and_reacked();
 	test_recv_ack_never_freezes();
 	test_send_seq_is_one_contiguous_counter();
 	test_retransmit_reuses_the_sequence();
+	test_go_back_n_resends_the_tail_in_order();
+	test_retransmit_ladder_exhaustion_breaks_the_circuit();
 	test_peer_ack_releases_the_ring();
 	test_credit_window();
 	test_timvcfail_breaks_and_reforms();

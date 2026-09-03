@@ -299,16 +299,49 @@ enum pe_channel_action {
  *   3. recv_ack IS CUMULATIVE and IS THE PEER'S RELEASE SIGNAL: every frame
  *      the peer sends carries the highest contiguous sequence it has taken
  *      from us, and everything at or below it leaves the unacked ring.
- *   4. A GAP BREAKS THE CIRCUIT. p. 2-31: "if either the guarantee of message
+ *   4. A GAP IS GO-BACK-N's SIGNAL, NOT A BREAK. Design §3.2.5 (the E10
+ *      ruling, 2026-09-02) corrected FC-P1.2 here: p. 2-31 governs the
+ *      GUARANTEE and its consequence -- "if either the guarantee of message
  *      delivery or the guarantee of message sequentiality cannot be
  *      satisfied, the virtual circuit between the ports involved will be
  *      explicitly broken … then every connection supported by this virtual
- *      circuit is also broken." Spec §4(h)(4a) measured what that detector
- *      costs on real wire: over 321,599 sequenced messages in 47 captures,
- *      ZERO gaps came from a VAX. A duplicate (a sequence at or behind
- *      recv_seq -- 506 of them) is NOT a gap and must never break anything,
- *      and the FIRST sequenced message on a circuit ANCHORS the counter
- *      rather than being scored.
+ *      circuit is also broken" -- and NOT the detection mechanism. The
+ *      mechanism by which a port SATISFIES the guarantee under loss is
+ *      retransmission, and the wire shows the real port doing exactly that
+ *      before it breaks anything: the explicit retransmit msgtype (0x7b is
+ *      the retransmit of 0x5b, §4(h)), retransmits reusing the original
+ *      send_seq (§4(L)), 506 duplicate/retransmit sequenced frames across
+ *      the corpus (§4(h)(4a)), and §4(k)'s unacked ladder of ~25 retries
+ *      over tens of seconds before a real VAX gives up. Breaking on the
+ *      first out-of-order frame would make the ring, the marker and the
+ *      ladder pointless.
+ *
+ *      So, RECEIVE WINDOW = 1, cumulative acks, go-back-N (design §3.2.5's
+ *      table, implemented cell for cell):
+ *
+ *        in-order   advance recv_seq, credit, ack, deliver
+ *        duplicate  ack, never deliver twice (at or behind recv_seq -- 506
+ *                   of them were measured, and not one is a gap)
+ *        GAP        DISCARD the frame, do NOT advance recv_seq, count
+ *                   rx_gaps, and IMMEDIATELY re-send the cumulative ack of
+ *                   recv_seq -- the duplicate ack is what tells the sender
+ *                   where the hole is. NO BREAK.
+ *        sender     on the oldest unacked entry's ack timeout, retransmit
+ *                   FROM THAT ENTRY ONWARD, in sequence order, same bytes,
+ *                   same send_seq, retransmit msgtype (the receiver
+ *                   discarded everything after the hole, so the sender
+ *                   resends the tail)
+ *
+ *      The FIRST sequenced message on a circuit still ANCHORS the counter
+ *      rather than being scored. §4(h)(4a)'s "0 gaps in 321,599 VAX-sourced
+ *      messages" census was taken on a lossless SIMH bridge and cannot
+ *      discriminate "a VAX never tolerates a gap" from "the LAN never lost a
+ *      frame"; the ladder evidence decides it (design §3.2.5).
+ *
+ *      Receive window 1 with no reorder buffer is the only scheme that is
+ *      ALWAYS correct without grounding a window size the book does not
+ *      publish; a selective-repeat window would be an optimisation with no
+ *      oracle behind it (Rule 8).
  *
  * ***  THE INVARIANT THIS ITEM EXISTS FOR: recv_ack NEVER FREEZES.  ***
  *
@@ -331,8 +364,12 @@ enum pe_channel_action {
  *       froze the strawman.)
  *   (b) AN UNACKNOWLEDGED CIRCUIT DIES INSTEAD OF STALLING. If the PEER's
  *       recv_ack stops advancing while this node still has unacked messages,
- *       the retransmit ladder runs and then TIMVCFAIL breaks the circuit and
- *       re-forms it. A silent forever-stall is not an outcome this FSM has.
+ *       the retransmit ladder runs to its bound and then the circuit is
+ *       broken with PE_VC_DOWN_RETRANSMIT_EXHAUSTED ("the delivery guarantee
+ *       cannot be satisfied", p. 2-31) and re-formed; TIMVCFAIL and the §4(M)
+ *       listen timeout remain as the SILENCE detectors underneath it (design
+ *       §3.2.5: "the port's silence detectors are separate and stay"). A
+ *       silent forever-stall is not an outcome this FSM has.
  *
  * The R1 test file asserts both directly, including the case where NO upper
  * layer is bound at all.
@@ -395,21 +432,54 @@ enum pe_channel_action {
 #define PE_TIMVCFAIL_DEFAULT_MS 16000u
 
 /*
- * The retransmit cadence. No published document and no capture grounds a
- * sequenced-message retransmit interval (§4(k)'s measured 6.010 s is the
- * padded-HELLO SIZE probe, a different timer on a different frame class), so
- * this is OVMX's choice and is LABELLED as one: an eighth of TIMVCFAIL, i.e.
- * about eight attempts before the circuit is declared failed. Derived from
- * the one parameter the operator actually configures rather than adding a
- * new invented constant.
+ * THE RETRANSMIT LADDER (design §3.2.5). Two OVMX DESIGN VALUES, labelled as
+ * such -- neither is a published VMS constant and neither is presented as one
+ * (Rule 8, and the wire spec's own §5 discipline).
+ *
+ * PE_VC_RETRANSMIT_TRIES is SEEDED from the only retransmit-count evidence a
+ * real VAX has ever shown this campaign: §4(k)'s unacked padded-HELLO ladder,
+ * where a member retried ~25 times over tens of seconds before giving up. The
+ * COUNT is borrowed from that measurement; the CADENCE is not, because §4(k)'s
+ * 6.010 s is the padded-HELLO SIZE probe -- a different timer on a different
+ * frame class -- and no capture grounds a sequenced-message retransmit
+ * interval at all.
+ *
+ * The cadence is therefore derived from the one parameter the operator really
+ * configures, and derived so that THE WHOLE LADDER FITS INSIDE IT: TIMVCFAIL
+ * divided by (TRIES + 1) means all 25 retries plus the original transmission's
+ * own interval complete strictly before TIMVCFAIL expires. That ordering is
+ * deliberate. TIMVCFAIL and the §4(M) listen timeout are the SILENCE detectors
+ * (design §3.2.5); the LADDER is the detector for "this peer is not
+ * acknowledging", and it must be the one that fires for that condition, so the
+ * reason the layers above are given is PE_VC_DOWN_RETRANSMIT_EXHAUSTED and not
+ * a timer that happens to be shorter.
+ *
+ * A SYSGEN-derived pe_identity.vc_retransmit_ms always wins over the
+ * derivation; if an operator configures a cadence whose ladder outlasts their
+ * TIMVCFAIL, TIMVCFAIL fires first and says so honestly. PE_VC_RETRANSMIT_MIN_MS
+ * is the floor for a very small configured TIMVCFAIL.
+ *
+ * This cadence also drives the FORMATION retry (p. 2-14 gives the port "a timer
+ * and an OS-dependent retry limit" for START/STACK, and TIMVCFAIL is that
+ * limit): one port-level retry cadence, not two invented ones.
  */
-#define PE_VC_RETRANSMIT_DIVISOR 8u
+#define PE_VC_RETRANSMIT_TRIES   25u
+#define PE_VC_RETRANSMIT_DIVISOR (PE_VC_RETRANSMIT_TRIES + 1u)
 #define PE_VC_RETRANSMIT_MIN_MS  200u
+
+/* The per-entry attempt count is a byte (struct pe_vc_unacked below): a ladder
+ * bound that did not fit it would wrap and never exhaust. */
+_Static_assert(PE_VC_RETRANSMIT_TRIES < 255u,
+	       "the retransmit ladder bound must fit pe_vc_unacked.retransmits");
 
 /* One unacknowledged message: the frame as it went out, and its position. */
 struct pe_vc_unacked {
 	uint8_t  in_use;
-	uint8_t  retransmits;     /* how many times this SAME seq went out */
+	/* How many times this SAME seq went out again. The ladder's bound is
+	 * PE_VC_RETRANSMIT_TRIES, which fits this byte by construction (the
+	 * _Static_assert next to the constant keeps it that way); reaching it
+	 * on the OLDEST entry is what breaks the circuit. */
+	uint8_t  retransmits;
 	uint16_t seq;             /* the sequence it consumed, ONCE        */
 	uint32_t len;
 	uint32_t due_ms;          /* injected-clock deadline of the next try */
@@ -419,21 +489,45 @@ struct pe_vc_unacked {
 /* What a received sequence number IS, relative to this circuit's recv_seq.
  * Named so the table's handler reads as the rule it implements. */
 enum pe_vc_seq_kind {
-	PE_VC_SEQ_ANCHOR = 0,  /* the first on this circuit (§4(h)(4a))     */
-	PE_VC_SEQ_NEXT,        /* recv_seq + 1: the normal case             */
+	/*
+	 * FC-P1.2's PE_VC_SEQ_ANCHOR was value 0 and is DELETED by FC-P1.9: a
+	 * port that FORMED the circuit knows where it starts (§4(i).A, "the
+	 * post-START SCS VC resets to send_seq = 1 on both sides"), and
+	 * anchoring on whatever arrives first silently swallowed a lost first
+	 * message. vc_score_seq()'s comment carries the whole argument.
+	 */
+	PE_VC_SEQ_NEXT = 0,    /* recv_seq + 1: the normal case             */
 	PE_VC_SEQ_DUP,         /* at or behind recv_seq: a peer retransmit  */
-	PE_VC_SEQ_GAP          /* ahead by more than 1: p. 2-31, VC breaks  */
+	PE_VC_SEQ_GAP          /* ahead by more than 1: discard + re-ack    */
 };
 
-/* Why a circuit went down -- passed to the upper layer's vc_down and printed
- * on the console, so a stall is never silent. */
+/*
+ * Why a circuit went down -- passed to the upper layer's vc_down and printed
+ * on the console, so a stall is never silent.
+ *
+ * THE VALUES ARE PINNED, and one of them is RETIRED. FC-P1.9 deleted
+ * PE_VC_DOWN_SEQ_GAP (design §3.2.5: "a gap is a counter, never a reason") and
+ * pinned every survivor at the number FC-P1.2 shipped, so a diagnostics reader
+ * or a saved snapshot from before this item still decodes correctly. Value 1 is
+ * retired and is never re-used; new reasons are appended, exactly as pe_event's
+ * numbering is appended to.
+ */
 enum pe_vc_down_reason {
-	PE_VC_DOWN_SEQ_GAP = 1,   /* p. 2-31 sequentiality guarantee lost   */
-	PE_VC_DOWN_TIMVCFAIL,     /* no ack progress within TIMVCFAIL       */
-	PE_VC_DOWN_CHANNEL,       /* the channel it rides stopped being ok  */
-	PE_VC_DOWN_PEER_RESTART,  /* the peer sent a START on an open VC    */
-	PE_VC_DOWN_PEER_GONE,     /* §4(O.30) last gasp                     */
-	PE_VC_DOWN_SHUTDOWN       /* CLUSTER_STOP                           */
+	/* 1 was PE_VC_DOWN_SEQ_GAP -- DELETED by FC-P1.9, value retired. */
+	PE_VC_DOWN_TIMVCFAIL     = 2, /* no traffic within TIMVCFAIL        */
+	PE_VC_DOWN_CHANNEL       = 3, /* the channel it rides stopped being ok */
+	PE_VC_DOWN_PEER_RESTART  = 4, /* the peer sent a START on an open VC */
+	PE_VC_DOWN_PEER_GONE     = 5, /* §4(O.30) last gasp                 */
+	PE_VC_DOWN_SHUTDOWN      = 6, /* CLUSTER_STOP                       */
+	/*
+	 * Added by FC-P1.9 (design §3.2.5). The retransmit ladder ran out on
+	 * the oldest unacked entry: this port has re-sent the same bytes at the
+	 * same sequence PE_VC_RETRANSMIT_TRIES times and the peer has never
+	 * acknowledged it, so "the guarantee of message delivery cannot be
+	 * satisfied" (p. 2-31) is now a MEASURED fact rather than a guess, and
+	 * the circuit -- and every connection on it -- is explicitly broken.
+	 */
+	PE_VC_DOWN_RETRANSMIT_EXHAUSTED = 7
 };
 
 /*
@@ -467,12 +561,18 @@ struct pe_vc {
 	uint8_t  echo_valid;
 	uint8_t  pad0;
 
-	/* ---- sequencing (spec §4(h)(4)) ---- */
+	/* ---- sequencing (spec §4(h)(4)) ----
+	 *
+	 * `recv_seq` 0 on a freshly formed circuit is not "nothing known yet",
+	 * it is the POSITION: §4(i).A grounds that the post-START VC restarts
+	 * at send_seq 1 on both sides, so 0 is the anchor and the next frame
+	 * this circuit may take is 1. (FC-P1.2's separate `recv_anchored` flag
+	 * is deleted -- see vc_score_seq() in vms_pe_fsm.c.)
+	 */
 	uint16_t send_seq;         /* OUR NEXT number, not the last one sent */
 	uint16_t recv_seq;         /* highest peer send_seq taken, in order  */
 	uint16_t peer_recv_ack;    /* the cumulative ack the PEER last sent  */
-	uint8_t  recv_anchored;    /* a first sequenced message has arrived  */
-	uint8_t  pad1;
+	uint8_t  pad1[2];
 
 	/* ---- flow control (p. 2-43/2-44) ---- */
 	uint8_t  send_credit;      /* messages we may still send             */
@@ -502,7 +602,14 @@ struct pe_vc {
 	uint32_t credit_tx, credit_rx;    /* the 0x48 short (ack + credit)   */
 	uint32_t retransmits;             /* same seq re-sent                */
 	uint32_t rx_dups;                 /* peer retransmits we absorbed    */
-	uint32_t rx_gaps;                 /* p. 2-31 breaks                  */
+	/*
+	 * Frames DISCARDED for arriving ahead of recv_seq + 1, each answered
+	 * with an immediate duplicate cumulative ack (design §3.2.5). A gap is
+	 * a COUNTER, never a reason to break: this number is how much loss the
+	 * go-back-N receiver absorbed, and it is expected to be non-zero on a
+	 * lossy LAN and zero on a clean one.
+	 */
+	uint32_t rx_gaps;
 	uint32_t implied_acks;            /* p. 2-16 opens                   */
 	uint32_t opens;                   /* times this VC reached OPEN      */
 	uint32_t downs;                   /* times it was torn down          */

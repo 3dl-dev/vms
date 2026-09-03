@@ -75,12 +75,40 @@ struct sim_node_cfg {
  * acknowledgement a transport fact that must not depend on anybody being home,
  * and a scenario can prove that by not binding this at all.
  * ========================================================================== */
+/*
+ * What the recorder remembers about ONE peer's stream, so that "delivered in
+ * order" is an assertion rather than a hope (the FC-P1.9 acceptance).
+ *
+ * The expectation is GROUNDED, not modelled: spec §4(i).A measured that "the
+ * post-START SCS VC resets to send_seq = 1 on both sides and runs the §4h
+ * lockstep byte-identical to fresh (0 residuals)", so the first sequenced
+ * message delivered on a freshly formed circuit must carry send_seq 1 and each
+ * one after it exactly one more. The number compared against is read out of
+ * the delivered FRAME through the codec's own accessor -- the recorder holds no
+ * copy of what the sender did.
+ *
+ * A vc_down clears the slot: the circuit that re-forms is a different circuit
+ * and its sequence starts again (§4(h)(4a)), and pretending otherwise would
+ * manufacture a false out-of-order.
+ */
+struct sim_upper_peer {
+	uint16_t sysid;      /* 0 = free slot                              */
+	uint16_t last_seq;   /* the last send_seq this peer delivered      */
+	uint8_t  seen;
+	uint8_t  pad[3];
+};
+
 struct sim_upper {
 	uint32_t    messages, datagrams, ups, downs;
 	vms_conid_t last_conid;
 	uint32_t    last_len;
 	uint32_t    last_down_reason;
 	uint64_t    bytes;
+
+	/* Added by FC-P1.9: the in-order proof. */
+	struct sim_upper_peer peer[SIM_MAX_NODES];
+	uint32_t    out_of_order;   /* a delivery that was not last + 1     */
+	uint32_t    seq_unreadable; /* the codec could not read its seq     */
 };
 
 /* ==========================================================================

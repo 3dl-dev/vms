@@ -212,8 +212,29 @@ struct pe_upper_ops {
 			const uint8_t *body, uint32_t len);
 	void (*datagram)(void *ctx, vms_scs_sysid_t from,
 			 const uint8_t *body, uint32_t len);
-	/* Circuit lifecycle: SCS must tear its CDTs down when a VC is lost, and
-	 * CNXMAN must see it as a connectivity change. `reason` is an SS$_ status. */
+	/*
+	 * Circuit lifecycle: SCS must tear its CDTs down when a VC is lost, and
+	 * CNXMAN must see it as a connectivity change.
+	 *
+	 * `vc_down` IS THE SEAM DESIGN SS3.2.5 NAMES (FC-P1.9 made it
+	 * load-bearing): "on PE_VC_DOWN_* the port raises vc_down(sysid, reason)
+	 * to SCS; SCS moves every CDT on that SB to CLOSED with reason
+	 * path-lost, discards their credit ledgers, fails pending sends with
+	 * SS$_PATHLOST, and calls each SYSAP's disconnected(local_conid,
+	 * reason)". SCS never retries a message across a break and never
+	 * re-opens a connection itself -- CNXMAN's recnx_fsm is the SYSAP that
+	 * reconnects (spec SS4(aa)). Port-level retransmission is INVISIBLE to
+	 * SCS: it sees an ordered, gap-free stream, and a sequenced message
+	 * spends its credit exactly once at scs_send_msg however many times the
+	 * port re-sent it.
+	 *
+	 * `reason` is an `enum pe_vc_down_reason` (vms_pe_fsm.h) -- what the
+	 * pure FSM actually holds and can defend. The GLUE maps it to the SS$_
+	 * status a user-mode reader sees; the FSM has no SS$_ definitions
+	 * (design SS3.2.2 keeps kernel-core cluster headers free of them) and
+	 * inventing one inside it would be a value nothing in the executive
+	 * produced.
+	 */
 	void (*vc_up)(void *ctx, vms_scs_sysid_t peer);
 	void (*vc_down)(void *ctx, vms_scs_sysid_t peer, uint32_t reason);
 	void *ctx;

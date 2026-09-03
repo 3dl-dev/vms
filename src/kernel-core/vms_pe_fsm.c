@@ -1295,6 +1295,12 @@ int pe_fsm_send_last_gasp(struct pe_fsm *f)
  * from SS4(h)(4), and the one invariant this item exists to guarantee --
  * recv_ack NEVER FREEZES. Read it before changing anything below.
  *
+ * FC-P1.9 corrected the LOSS half of it to design SS3.2.5's go-back-N ruling:
+ * a receive window of 1 that DISCARDS and RE-ACKS on a gap instead of breaking,
+ * a sender that goes back N from its oldest unacked entry, and a bounded ladder
+ * whose exhaustion -- not a first out-of-order frame -- is what breaks the
+ * circuit. SS3b(4) of the header carries the reasoning.
+ *
  * The same discipline as the channel half: one table indexed [vc state][event],
  * one small handler per edge, every frame built through the FC-P1.1 codec and
  * not one byte offset in this file.
@@ -1335,16 +1341,39 @@ static int seq_is_next(uint16_t recv_seq, uint16_t got)
 }
 
 /*
- * What a received sequence number IS. The ORDER of these tests is the rule:
- * anchor first (SS4(h)(4a): the first sequenced message on a circuit anchors
- * the counter rather than being scored -- without it every fresh circuit
- * scores its first frame as a gap and tears itself down), then the normal
- * advance, then a duplicate, and only what is left is a gap.
+ * What a received sequence number IS: the normal advance, then a duplicate,
+ * and what is left is a gap.
+ *
+ * ***  THERE IS NO "ANCHOR ON THE FIRST FRAME" HERE, AND THAT IS DELIBERATE.
+ *
+ * FC-P1.2 imported one, citing SS4(h)(4a). Read that passage again: the
+ * anchor is a property of the CAPTURE SCANNER -- "a capture, like a node
+ * attaching to a circuit already carrying traffic, cannot know what preceded
+ * the first frame it sees ... Without that anchor the same scan reports 147
+ * gaps; the extra 106 are all anchor cases (the first sequenced message seen
+ * on a VC, typically at a capture that starts mid-stream)". A PORT IS NOT IN
+ * THAT POSITION: it FORMED this circuit, and SS4(i).A grounds where the
+ * circuit starts -- "the post-START SCS VC resets to send_seq = 1 on both
+ * sides and runs the SS4h lockstep byte-identical to fresh (0 residuals)".
+ * vc_reset_sequence puts recv_seq at 0 on exactly that authority, so the
+ * peer's first sequenced message IS scored, as the 1 it must be.
+ *
+ * Anchoring on whatever arrives first is not merely redundant here, it LOSES
+ * DATA: if the first message of a circuit is lost, the second one becomes the
+ * anchor, recv_seq jumps to it, this node acknowledges a message it never
+ * received, and the sender's ring releases it. FC-P1.9's R2 acceptance caught
+ * exactly that (2 of 48 pipelined messages silently never delivered at 10 %
+ * loss, seed 3), and under go-back-N it is unnecessary as well as wrong: a
+ * first frame that really is lost is now a GAP, which costs a discard and a
+ * re-ack and is repaired by the sender's ladder.
+ *
+ * A peer that violated SS4(i).A and opened at some other number would gap
+ * forever and be broken by its own exhausted ladder -- loudly, and with a
+ * reason, which is the honest end of the road (Rule 9) rather than silently
+ * adopting a position this node cannot justify (INV-6).
  */
 static enum pe_vc_seq_kind vc_score_seq(const struct pe_vc *vc, uint16_t got)
 {
-	if (!vc->recv_anchored)
-		return PE_VC_SEQ_ANCHOR;
 	if (seq_is_next(vc->recv_seq, got))
 		return PE_VC_SEQ_NEXT;
 	if (!seq_after(got, vc->recv_seq))
@@ -1364,6 +1393,13 @@ static uint32_t vc_timvcfail_ms(const struct pe_fsm *f)
 					: PE_TIMVCFAIL_DEFAULT_MS;
 }
 
+/*
+ * The retransmit cadence. With no SYSGEN-derived value the default spreads the
+ * whole PE_VC_RETRANSMIT_TRIES ladder across TIMVCFAIL, so ladder exhaustion --
+ * the detector design SS3.2.5 puts in charge of "the peer is not
+ * acknowledging" -- lands before the silence timer that would otherwise steal
+ * the reason. See the constants' comment in vms_pe_fsm.h.
+ */
 static uint32_t vc_retransmit_ms(const struct pe_fsm *f)
 {
 	uint32_t ms;
@@ -1555,6 +1591,50 @@ static void vc_ring_clear(struct pe_vc *vc)
 	for (i = 0; i < PE_VC_UNACKED_MAX; i++)
 		vc->ring[i].in_use = 0u;
 	vc->unacked = 0u;
+}
+
+/*
+ * The OLDEST unacknowledged entry: the lowest sequence still outstanding.
+ *
+ * The ring is a slot pool, not an ordered queue -- vc_ring_alloc takes the
+ * first free slot -- so "oldest" is a question about the SEQUENCE, answered
+ * with the same signed-difference comparison every other sequence test in this
+ * file uses. Go-back-N starts here and the ladder is bounded here: this entry
+ * is the hole the receiver is stuck behind.
+ */
+static struct pe_vc_unacked *vc_ring_oldest(struct pe_vc *vc)
+{
+	struct pe_vc_unacked *best = NULL;
+	uint32_t i;
+
+	for (i = 0; i < PE_VC_UNACKED_MAX; i++) {
+		struct pe_vc_unacked *e = &vc->ring[i];
+
+		if (!e->in_use)
+			continue;
+		if (best == NULL || seq_after(best->seq, e->seq))
+			best = e;
+	}
+	return best;
+}
+
+/* The next outstanding entry after `seq`, in sequence order: go-back-N resends
+ * the tail IN ORDER, because a receiver with a window of 1 takes them in no
+ * other. NULL at the end of the ring. */
+static struct pe_vc_unacked *vc_ring_next_after(struct pe_vc *vc, uint16_t seq)
+{
+	struct pe_vc_unacked *best = NULL;
+	uint32_t i;
+
+	for (i = 0; i < PE_VC_UNACKED_MAX; i++) {
+		struct pe_vc_unacked *e = &vc->ring[i];
+
+		if (!e->in_use || !seq_after(e->seq, seq))
+			continue;
+		if (best == NULL || seq_after(best->seq, e->seq))
+			best = e;
+	}
+	return best;
 }
 
 /*
@@ -1797,13 +1877,17 @@ static void vc_send_ack(struct pe_fsm *f, struct pe_vc *vc)
  * circuit, and this is a different circuit. Until its new START/STACK body
  * arrives this node knows of no credit and will send nothing -- honest
  * refusal rather than an invented window (INV-6).
+ *
+ * `recv_seq = 0` IS THE RECEIVE ANCHOR, and it is SS4(i).A's, not a guess:
+ * "the post-START SCS VC resets to send_seq = 1 on both sides", so the next
+ * sequenced message this circuit may take is 1. See vc_score_seq() for why
+ * this file does not instead anchor on whatever frame arrives first.
  */
 static void vc_reset_sequence(struct pe_fsm *f, struct pe_vc *vc)
 {
 	vc_ring_clear(vc);
 	vc->send_seq = 1u;
 	vc->recv_seq = 0u;
-	vc->recv_anchored = 0u;
 	vc->peer_recv_ack = 0u;
 	vc->send_credit = 0u;
 	vc->send_credit_max = 0u;
@@ -2011,6 +2095,38 @@ static void vc_deliver(struct pe_fsm *f, struct pe_vc *vc,
 }
 
 /*
+ * ***  THE GAP  ***  (design SS3.2.5, the E10 ruling)
+ *
+ * The receive window is 1. A frame ahead of recv_seq + 1 is DISCARDED --
+ * there is no reorder buffer to put it in, and inventing one would be a
+ * selective-repeat window no oracle grounds (Rule 8) -- recv_seq does NOT
+ * advance, the gap is COUNTED, and the cumulative ack of recv_seq goes out
+ * again IMMEDIATELY. That duplicate ack is the whole signal: it tells the
+ * sender exactly where the hole is, and the sender's ladder resends from
+ * there.
+ *
+ * NOTHING IS BROKEN HERE. What p. 2-31 breaks a circuit for is a guarantee
+ * that CANNOT BE SATISFIED, and a gap the sender will fill on its next
+ * retransmit is a guarantee being satisfied the way the wire's own retransmit
+ * msgtype (SS4(h)) and SS4(k)'s ~25-retry ladder show a real port satisfying
+ * it. The break belongs to the SENDER's exhausted ladder
+ * (PE_VC_DOWN_RETRANSMIT_EXHAUSTED), which is a measurement, not a guess.
+ *
+ * The ack rides the same 0x48 credit-return every other acknowledgement does,
+ * because SS4(h)(3) grounds no other acknowledgement form. It therefore also
+ * returns a credit for a message this node did NOT take -- and the peer's own
+ * receive path clamps that at the grant it issued (h_vc_rx_credit), so the
+ * window can never inflate past what the sender was actually given. Absorbing
+ * that is strictly better than emitting a bare-ack frame class no capture has
+ * ever shown.
+ */
+static void h_vc_rx_gap(struct pe_fsm *f, struct pe_vc *vc)
+{
+	vc->rx_gaps++;
+	vc_send_ack(f, vc);
+}
+
+/*
  * ***  THE SEQUENCED MESSAGE -- the heart of this item  ***
  *
  * The order of these five steps IS the anti-freeze guarantee, and none of
@@ -2019,8 +2135,7 @@ static void vc_deliver(struct pe_fsm *f, struct pe_vc *vc,
  *   1. release what the peer's cumulative ack covers (even for a duplicate
  *      or a gap: the ack it carries is still true);
  *   2. score the sequence (anchor / next / duplicate / gap);
- *   3. a GAP breaks the circuit -- p. 2-31, and SS4(h)(4a) measured that a
- *      real VAX never produces one (0 of 321,599);
+ *   3. a GAP is discarded and re-acked -- go-back-N, design SS3.2.5;
  *   4. ACKNOWLEDGE, before any delivery and with no upper layer required;
  *   5. deliver -- and a duplicate is never delivered twice.
  */
@@ -2034,14 +2149,11 @@ static void h_vc_rx_seqmsg(struct pe_fsm *f, struct pe_vc *vc,
 
 	kind = vc_score_seq(vc, rx->send_seq);          /* 2 */
 	if (kind == PE_VC_SEQ_GAP) {                    /* 3 */
-		vc->rx_gaps++;
-		vc_break(f, vc, PE_VC_DOWN_SEQ_GAP,
-			 "%PEA0, sequenced message out of order, circuit broken");
+		h_vc_rx_gap(f, vc);
 		return;
 	}
 	if (kind != PE_VC_SEQ_DUP) {
 		vc->recv_seq = rx->send_seq;
-		vc->recv_anchored = 1u;
 		if (vc->recv_credit < 0xffu)
 			vc->recv_credit++;
 	}
@@ -2149,53 +2261,108 @@ static void h_vc_form_retry(struct pe_fsm *f, struct pe_vc *vc,
  *     freeze this whole item exists to prevent, arriving by the back door);
  *   - the msgtype, 0x4b/0x5b -> 0x7b, which is the wire's own retransmit
  *     marking (SS4(h), SS4(O.19)).
+ *
+ * The BYTES ARE THE RING'S OWN (INV-6): what goes out is the frame this port
+ * really sent, re-stamped, never a frame rebuilt from a template.
+ *
+ * Returns 0 when the frame really left, -1 when it did not -- and then the
+ * attempt is NOT counted, because `retransmits` counts transmissions that
+ * happened.
  */
-static void vc_resend_one(struct pe_fsm *f, struct pe_vc *vc,
-			  struct pe_vc_unacked *e, uint32_t now)
+static int vc_resend_one(struct pe_fsm *f, struct pe_vc *vc,
+			 struct pe_vc_unacked *e, uint32_t now)
 {
 	struct vms_frame_info fi;
 
 	if (vms_frame_classify(e->frame, e->len, &fi) != VMS_CODEC_OK)
-		return;
+		return -1;
 	if (vms_scs_seq_mark_retransmit(e->frame, e->len, &fi) != VMS_CODEC_OK)
-		return;
+		return -1;
 	if (vms_frame_classify(e->frame, e->len, &fi) != VMS_CODEC_OK)
-		return;
+		return -1;
 	if (vms_scs_seq_stamp(e->frame, e->len, &fi, vc->recv_seq,
 			      e->seq) != VMS_CODEC_OK)
-		return;
+		return -1;
 	if (pe_tx_from(f, e->frame, e->len) != 0)
-		return;
+		return -1;
 	e->retransmits++;
 	e->due_ms = now + vc_retransmit_ms(f);
 	vc->retransmits++;
+	return 0;
 }
 
 /*
- * The retransmit ladder on an OPEN circuit, and the TIMVCFAIL check that ends
- * it. TIMVCFAIL is tested FIRST: once the deadline has passed, re-sending
- * again would just add to a conversation the peer has stopped having.
+ * GO-BACK-N (design SS3.2.5): re-send `first` and every outstanding entry
+ * behind it, IN SEQUENCE ORDER.
+ *
+ * The receiver's window is 1, so everything after the hole was discarded; the
+ * tail has to go again, and it has to go in order or the receiver discards it
+ * a second time. A transmit that fails STOPS the run: pushing the rest past a
+ * frame that never left would arrive as exactly the gap this loop exists to
+ * repair, and the next ladder beat starts again from the same oldest entry.
+ *
+ * Returns how many frames really went out.
+ */
+static uint32_t vc_resend_from(struct pe_fsm *f, struct pe_vc *vc,
+			       struct pe_vc_unacked *first, uint32_t now)
+{
+	struct pe_vc_unacked *e = first;
+	uint32_t sent = 0u;
+
+	while (e != NULL) {
+		uint16_t seq = e->seq;
+
+		if (vc_resend_one(f, vc, e, now) != 0)
+			break;
+		sent++;
+		e = vc_ring_next_after(vc, seq);
+	}
+	return sent;
+}
+
+/*
+ * THE RETRANSMIT LADDER on an OPEN circuit, and the two ways it ends.
+ *
+ * Everything hangs off the OLDEST unacked entry, because with a receive window
+ * of 1 that entry is the hole the peer is stuck behind: its deadline is when
+ * the tail goes again, and its attempt count is the ladder.
+ *
+ *   not due yet          nothing to do; re-arm and wait.
+ *   due, ladder spent    PE_VC_RETRANSMIT_TRIES transmissions of the same
+ *                        bytes at the same sequence have gone unacknowledged.
+ *                        p. 2-31's "the guarantee of message delivery cannot
+ *                        be satisfied" is now measured, so the circuit breaks
+ *                        with PE_VC_DOWN_RETRANSMIT_EXHAUSTED.
+ *   due, TIMVCFAIL past  the silence detector underneath (design SS3.2.5).
+ *                        Tested AFTER exhaustion so the more specific reason
+ *                        wins when a configuration makes the two coincide.
+ *   due                  go back N: re-send from the oldest, in order.
  */
 static void h_vc_retransmit(struct pe_fsm *f, struct pe_vc *vc,
 			    const struct pe_vc_rx *rx)
 {
 	uint32_t now = pe_now(f);
-	uint32_t i;
+	struct pe_vc_unacked *oldest;
 
 	(void)rx;
-	if (vc->unacked == 0u)
+	oldest = vc_ring_oldest(vc);
+	if (oldest == NULL)
 		return;
+	if (!pe_reached(now, oldest->due_ms)) {
+		vc_arm(f, vc, PE_TIMER_RETRANSMIT, vc_retransmit_ms(f));
+		return;
+	}
+	if (oldest->retransmits >= PE_VC_RETRANSMIT_TRIES) {
+		vc_break(f, vc, PE_VC_DOWN_RETRANSMIT_EXHAUSTED,
+			 "%PEA0, retransmit limit reached, circuit re-formed");
+		return;
+	}
 	if (vc->vcfail_armed && pe_reached(now, vc->vcfail_due_ms)) {
 		vc_break(f, vc, PE_VC_DOWN_TIMVCFAIL,
 			 "%PEA0, peer stopped acknowledging, circuit re-formed");
 		return;
 	}
-	for (i = 0; i < PE_VC_UNACKED_MAX; i++) {
-		struct pe_vc_unacked *e = &vc->ring[i];
-
-		if (e->in_use && pe_reached(now, e->due_ms))
-			vc_resend_one(f, vc, e, now);
-	}
+	(void)vc_resend_from(f, vc, oldest, now);
 	vc_arm(f, vc, PE_TIMER_RETRANSMIT, vc_retransmit_ms(f));
 }
 
@@ -2881,7 +3048,7 @@ const char *pe_vc_state_name(enum vms_pe_vc_state s)
 const char *pe_vc_down_reason_name(enum pe_vc_down_reason r)
 {
 	switch (r) {
-	case PE_VC_DOWN_SEQ_GAP:      return "sequence gap";
+	case PE_VC_DOWN_RETRANSMIT_EXHAUSTED: return "retransmit limit";
 	case PE_VC_DOWN_TIMVCFAIL:    return "TIMVCFAIL";
 	case PE_VC_DOWN_CHANNEL:      return "channel lost";
 	case PE_VC_DOWN_PEER_RESTART: return "peer restarted";

@@ -519,6 +519,21 @@ void cf_request_stop(struct vms_cluster_fork *f);
 /* Copy the counters out. Safe from any context (taken under the queue lock). */
 void cf_stats_get(struct vms_cluster_fork *f, struct cf_stats *out);
 
+/*
+ * How many RECEIVE BUFFERS this context actually owns: the buffers cf_create
+ * really allocated, not a configured intention (a context that could not
+ * allocate its pools does not exist at all -- cf_create returns NULL). This is
+ * the port's MFREEQ/DFREEQ depth in the SCA sense (VAXcluster Principles
+ * p. 2-45), and it is what the SCS credit a circuit may advertise is drawn
+ * against: a node may promise a peer only as many messages as it has buffers
+ * to receive them into. Constant for the life of the context (no pool is ever
+ * grown after cf_create), so it needs no lock.
+ *
+ * Returns 0 for a NULL context -- a port with no fork context owns no buffers
+ * and may promise none.
+ */
+uint32_t cf_rx_pool_bufs(const struct vms_cluster_fork *f);
+
 /* ==========================================================================
  * 7a. THE SERVED-I/O WORKER (design §3.2.6 E42 corollary, FC-P6.6)
  *

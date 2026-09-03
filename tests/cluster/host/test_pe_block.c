@@ -182,8 +182,8 @@ static void env_init(struct blk_env *e)
 	id.sw_version_valid = 1;
 	memcpy(id.hw_type, "X86 ", 4);
 	id.hw_type_valid = 1;
-	id.cluster_credits = LAB_CREDITS;
-	id.cluster_credits_valid = 1;
+	id.credits_requested = LAB_CREDITS;
+	id.credits_requested_valid = 1;
 	id.incarnation_time = OVMX_BOOT_TIME;
 	id.incarnation_time_valid = 1;
 	id.timvcfail_ms = 16000;

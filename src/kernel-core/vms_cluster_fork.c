@@ -1155,6 +1155,13 @@ void *cf_ops_ctx(struct vms_cluster_fork *f)
 	return f ? f->ops.ctx : (void *)0;
 }
 
+uint32_t cf_rx_pool_bufs(const struct vms_cluster_fork *f)
+{
+	/* `!f`, not `f != NULL`: this TU is compiled into both kmods and the
+	 * NetBSD kernel environment is -nostdinc with no <stddef.h> in scope. */
+	return f ? f->cfg.rx_bufs : 0u;
+}
+
 void cf_stats_get(struct vms_cluster_fork *f, struct cf_stats *out)
 {
 	if (!f || !out)

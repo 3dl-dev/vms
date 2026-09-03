@@ -53,9 +53,14 @@ struct sim_node_cfg {
 				      * BUILT from it by the FSM           */
 	uint8_t     hw_mac[6];       /* the port's REAL hardware address   */
 	uint8_t     mcast[6];        /* the cluster HELLO group it joins   */
-	uint8_t     credits;         /* SYSGEN CLUSTER_CREDITS this node
-				      * GRANTS the peer (0 is legitimate)  */
-	uint8_t     credits_valid;   /* 0 = not loaded, and then no grant  */
+	uint8_t     credits;         /* SYSGEN CLUSTER_CREDITS: receive
+				      * buffers this node REQUESTS per
+				      * circuit (0 is legitimate)          */
+	uint8_t     credits_valid;   /* 0 = not loaded, so nothing is asked
+				      * for, and then nothing is granted   */
+	uint32_t    rx_pool_bufs;    /* receive buffers the port OWNS -- the
+				      * bank the grant is drawn from; the
+				      * grant is never larger than this    */
 	uint16_t    max_sca_len;     /* NISCS_MAX_PKTSZ+2 after the MTU
 				      * clamp; 0 = no size verification    */
 	uint32_t    hello_interval_ms;

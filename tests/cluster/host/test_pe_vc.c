@@ -142,6 +142,21 @@ static void env_omit_advertised(int omit)
 	g_omit_advertised = omit;
 }
 
+/*
+ * E60: how many RECEIVE BUFFERS the port owns. On a booted node the glue reads
+ * this off the fork context's real pool (cf_rx_pool_bufs()); here it is a knob,
+ * because the whole point of the ledger is that abs 95 MOVES WITH IT. The
+ * default is CF_RX_BUFS_DEFAULT, the pool a real port allocates.
+ */
+#define FAKE_RX_POOL_BUFS 64u
+
+static uint32_t g_rx_pool_bufs = FAKE_RX_POOL_BUFS;
+
+static void env_rx_pool(uint32_t bufs)
+{
+	g_rx_pool_bufs = bufs;
+}
+
 /* The VMS absolute-time clock the formation body needs. A monotonic function
  * of the injected millisecond clock, so it is LIVE (a different value per
  * frame, which is the only thing §4(g) grounds about abs 112) and still
@@ -182,13 +197,17 @@ static void env_init(struct vc_env *e, int with_identity, int with_upper)
 		id.incarnation_time_valid = 1;
 		if (!g_omit_advertised) {
 			/* What cluster_sysgen_sw_version()/_credits() hand the
-			 * glue out of a COMMITTED SYSGEN record. */
+			 * glue out of a COMMITTED SYSGEN record. The credits
+			 * one is a REQUEST for buffers, not the wire value. */
 			memcpy(id.sw_version, "VMX V0.6", 8);
 			id.sw_version_valid = 1;
-			id.cluster_credits = LAB_CREDITS;
-			id.cluster_credits_valid = 1;
+			id.credits_requested = LAB_CREDITS;
+			id.credits_requested_valid = 1;
 		}
 	}
+	/* The buffers the port really owns -- set even when the SYSGEN record
+	 * is omitted, so "no request" and "no buffers" stay separable. */
+	id.rx_pool_bufs = g_rx_pool_bufs;
 	id.timvcfail_ms = g_timvcfail_ms;
 	id.vc_retransmit_ms = g_vc_retransmit_ms;
 
@@ -500,7 +519,11 @@ static void test_formation_joiner_path(void)
 	ct_check(memcmp(d.start.software_version, "VMX V0.6", 8) == 0,
 		 "our OWN software version, not a captured VMS string");
 	ct_check_eq_u32(d.start.credits, LAB_CREDITS,
-			"the loaded CLUSTER_CREDITS at abs 95 (E57)");
+			"abs 95 grants the full request: 64 buffers back 10");
+	ct_check_eq_u32(d.start.credits, the_vc(&g_env)->recv_credit_max,
+			"and it IS the circuit's reservation, byte for byte");
+	ct_check_eq_u32(g_env.fsm.credit.reserved, d.start.credits,
+			"withdrawn from the port's pool, which now shows it");
 	ct_check_eq_u32(g_env.fsm.vc_sw_version_absent, 0,
 			"nothing was omitted from the body");
 	ct_check_eq_u32(g_env.fsm.vc_credits_absent, 0,
@@ -647,6 +670,82 @@ static void test_unadvertised_identity_is_zero_and_counted(void)
 			"and so is the missing credit grant");
 	ct_check(memcmp(d.start.node_name, "OVMX    ", 8) == 0,
 		 "the fields that WERE loaded are unaffected");
+}
+
+/*
+ * E60, THE FAITHFULNESS GATE. abs 95 is a promise of RECEIVE BUFFERS
+ * (p. 2-43: "the local SYSAP requests SCS to allocate a certain number of
+ * buffers ... then the local SYSAP is said to have extended 10 Send Credits").
+ * The peer will send exactly that many messages without waiting, so the byte
+ * has to be the count of buffers this port actually committed -- never the
+ * number the operator asked for, and never a plausible-looking constant.
+ *
+ * These four cases hold the wire byte against the executive state it is
+ * supposed to equal, and MOVE THE STATE: the same configured request over
+ * three different pools puts three different bytes on the wire. A future
+ * change that decouples them -- an id.credits_requested written straight into
+ * the frame, say -- fails here rather than on a live cluster.
+ */
+static void test_credit_is_the_reservation_not_the_request(void)
+{
+	struct fake_vc_decoded d;
+	struct pe_vc *vc;
+
+	printf("-- abs 95 is the RESERVATION, and it tracks the pool (E60)\n");
+
+	/* (a) A pool too small for the request. The node asks for 10 and owns
+	 * 4, so it promises 4 -- the promise it can keep. */
+	env_rx_pool(4u);
+	env_init(&g_env, 1, 1);
+	channel_to_b4(&g_env, 1);
+	d = fake_vc_last(&g_env.fake, FAKE_VC_START);
+	vc = the_vc(&g_env);
+	ct_check_eq_u32(d.start.credits, 4,
+			"4 buffers owned, 10 requested => 4 promised");
+	ct_check_eq_u32(vc->recv_credit_max, d.start.credits,
+			"the circuit holds exactly what it advertised");
+	ct_check_eq_u32(pe_credit_available(&g_env.fsm.credit), 0,
+			"and the pool is spent, not overdrawn");
+	ct_check_eq_u32(g_env.fsm.vc_credits_absent, 0,
+			"a smaller REAL grant is not an omission");
+
+	/* (b) Same request, a bigger pool: the byte moves with the buffers. */
+	env_rx_pool(7u);
+	env_init(&g_env, 1, 1);
+	channel_to_b4(&g_env, 1);
+	d = fake_vc_last(&g_env.fake, FAKE_VC_START);
+	ct_check_eq_u32(d.start.credits, 7,
+			"7 buffers owned => 7 promised: the wire tracks state");
+	ct_check_eq_u32(the_vc(&g_env)->recv_credit_max, d.start.credits,
+			"still byte-for-byte the reservation");
+
+	/* (c) A port that owns nothing promises nothing -- and says so. This
+	 * is the E57 re-fire's zero, now with a REASON attached. */
+	env_rx_pool(0u);
+	env_init(&g_env, 1, 1);
+	channel_to_b4(&g_env, 1);
+	d = fake_vc_last(&g_env.fake, FAKE_VC_START);
+	ct_check(d.ok && !d.is_ack, "the circuit still forms");
+	ct_check_eq_u32(d.start.credits, 0, "no buffers => no promise");
+	ct_check_eq_u32(g_env.fsm.vc_credits_absent, 1,
+			"and the omission is COUNTED, never silent");
+
+	/* (d) A closed circuit gives its buffers back: a promise nobody is
+	 * holding must not keep the pool locked up (p. 2-43's deallocate). */
+	env_rx_pool(FAKE_RX_POOL_BUFS);
+	env_init(&g_env, 1, 1);
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	ct_check_eq_u32(g_env.fsm.credit.reserved, LAB_CREDITS,
+			"an open circuit holds its share");
+	g_env.fake.now_ms += 25000;             /* §4(M) listen timeout */
+	(void)pe_fsm_tick(&g_env.fsm, NULL, 0);
+	ct_check_eq_u32(the_vc(&g_env)->state, VMS_PE_VC_CLOSED,
+			"the channel went and took the circuit with it");
+	ct_check_eq_u32(the_vc(&g_env)->recv_credit_max, 0,
+			"a closed circuit advertises nothing");
+	ct_check_eq_u32(pe_credit_available(&g_env.fsm.credit),
+			FAKE_RX_POOL_BUFS,
+			"and every buffer is back in the pool");
 }
 
 /*
@@ -1464,6 +1563,7 @@ int main(void)
 	test_no_echo_no_start();
 	test_no_boot_time_no_circuit();
 	test_unadvertised_identity_is_zero_and_counted();
+	test_credit_is_the_reservation_not_the_request();
 	test_member_continuation_is_not_copied();
 	test_implied_ack();
 	test_ack_advances_per_message();

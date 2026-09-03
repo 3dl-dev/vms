@@ -946,6 +946,11 @@ int pe_fsm_init(struct pe_fsm *f, const struct pe_identity *id,
 		vms_cluster_lavc_addr_build((uint16_t)sysid, f->id.lavc);
 		f->id.lavc_valid = 1u;
 	}
+
+	/* The bank every credit this port advertises is drawn against (§4b).
+	 * Its size is the buffer count the glue read off the pool the fork
+	 * context really allocated -- not a number this file chose. */
+	pe_credit_init(&f->credit, f->id.rx_pool_bufs);
 	return 0;
 }
 
@@ -1823,14 +1828,24 @@ static int vc_identity_ok(struct pe_fsm *f)
 }
 
 /*
- * The two formation-body fields the glue fills out of LOADED executive state
- * (pe_build_identity, vms_pe.c): the software version this node broadcasts at
- * abs 72 and the Send Credit it grants at abs 95. Neither has a default here --
- * with nothing loaded, zero goes out and the omission is COUNTED, exactly as
- * the discovery-format span is (E56/E57, INV-6). What a peer sent is NEVER a
- * source for either: a VAX's "VMS V7.3" is that VAX's identity.
+ * The two formation-body fields that assert what this node HAS, rather than
+ * who it is: the software version it broadcasts at abs 72 and the Send Credit
+ * it grants at abs 95. Neither has a default here -- with nothing to assert,
+ * zero goes out and the omission is COUNTED, exactly as the discovery-format
+ * span is (E56/E57, INV-6). What a peer sent is NEVER a source for either: a
+ * VAX's "VMS V7.3" is that VAX's identity, and its credits are that VAX's
+ * buffers.
+ *
+ * THE CREDIT IS READ OFF THE CIRCUIT, NOT OFF THE CONFIGURATION (E60).
+ * vc->recv_credit_max is what pe_credit_reserve() committed to THIS circuit
+ * out of the port's real receive-buffer pool (§4b). SYSGEN CLUSTER_CREDITS is
+ * upstream of that -- it is how many buffers the operator asked for, and the
+ * frame carries how many were actually got. When they differ, the wire tells
+ * the truth, because the peer is going to send exactly this many messages
+ * without waiting and every one of them needs somewhere to land.
  */
-static void vc_fill_advertised(struct pe_fsm *f, struct vms_scs_start_frame *s)
+static void vc_fill_advertised(struct pe_fsm *f, const struct pe_vc *vc,
+			       struct vms_scs_start_frame *s)
 {
 	if (f->id.sw_version_valid)
 		pe_copy(s->software_version, f->id.sw_version,
@@ -1838,16 +1853,21 @@ static void vc_fill_advertised(struct pe_fsm *f, struct vms_scs_start_frame *s)
 	else
 		f->vc_sw_version_absent++;
 
-	if (f->id.cluster_credits_valid)
-		s->credits = f->id.cluster_credits;
-	else
+	/* Whatever the reservation is, that is what goes out -- and a grant of
+	 * zero is COUNTED however it arose (nothing configured, nothing
+	 * requested, or a pool already fully promised): on the wire all three
+	 * say the same thing to the peer, and a circuit that can take no
+	 * message must not be an invisible one. */
+	s->credits = vc->recv_credit_max;
+	if (s->credits == 0u)
 		f->vc_credits_absent++;
 }
 
-static void vc_fill_identity(struct pe_fsm *f, struct vms_scs_start_frame *s)
+static void vc_fill_identity(struct pe_fsm *f, const struct pe_vc *vc,
+			     struct vms_scs_start_frame *s)
 {
 	s->scssystemid = (uint16_t)(f->sysid & 0xffffu);
-	vc_fill_advertised(f, s);
+	vc_fill_advertised(f, vc, s);
 	pe_copy(s->hardware_type, f->id.hw_type, VMS_SCS_START_HWTYPE_LEN);
 	vc_put_nodename(f, s->node_name);
 	s->incarnation_time = f->id.incarnation_time;
@@ -1891,7 +1911,7 @@ static int vc_send_start(struct pe_fsm *f, struct pe_vc *vc, uint16_t round)
 	s.send_seq = vc->send_seq;
 	s.incarnation = vc->echo_incarnation;
 	s.config_round = round;
-	vc_fill_identity(f, &s);
+	vc_fill_identity(f, vc, &s);
 
 	if (vms_scs_start_build(&s, f->scratch, (uint32_t)sizeof(f->scratch),
 				&written) != VMS_CODEC_OK)
@@ -1974,6 +1994,89 @@ static void vc_send_ack(struct pe_fsm *f, struct pe_vc *vc)
 }
 
 /* --------------------------------------------------------------------------
+ * The receive-buffer credit ledger (vms_pe_fsm.h §4b, p. 2-42/2-43/2-45)
+ *
+ * Four small operations over two counters. The whole reason it is a ledger
+ * and not an expression is the invariant in pe_credit_reserve(): the sum of
+ * everything this port has promised can never exceed the buffers it owns.
+ * -------------------------------------------------------------------------- */
+
+void pe_credit_init(struct pe_credit_ledger *l, uint32_t pool_bufs)
+{
+	if (l == NULL)
+		return;
+	l->pool = pool_bufs;
+	l->reserved = 0u;
+}
+
+uint32_t pe_credit_available(const struct pe_credit_ledger *l)
+{
+	if (l == NULL || l->reserved >= l->pool)
+		return 0u;
+	return l->pool - l->reserved;
+}
+
+uint8_t pe_credit_reserve(struct pe_credit_ledger *l, uint32_t want)
+{
+	uint32_t grant;
+
+	if (l == NULL)
+		return 0u;
+
+	grant = pe_credit_available(l);
+	if (want < grant)
+		grant = want;
+	if (grant > 0xffu)
+		grant = 0xffu;   /* the width of the field it is advertised in */
+
+	l->reserved += grant;
+	return (uint8_t)grant;
+}
+
+void pe_credit_release(struct pe_credit_ledger *l, uint8_t granted)
+{
+	if (l == NULL)
+		return;
+	if ((uint32_t)granted > l->reserved)
+		l->reserved = 0u;
+	else
+		l->reserved -= (uint32_t)granted;
+}
+
+/*
+ * Hand this circuit's share of the port's receive buffers back to the pool
+ * (p. 2-43: "A SYSAP can also request SCS to deallocate buffers for a
+ * connection"). Idempotent -- a circuit that holds nothing releases nothing --
+ * because the close path and the re-formation path both run through it.
+ */
+static void vc_credit_release_from(struct pe_fsm *f, struct pe_vc *vc)
+{
+	pe_credit_release(&f->credit, vc->recv_credit_max);
+	vc->recv_credit_max = 0u;
+}
+
+/*
+ * Commit receive buffers to this circuit, the way p. 2-43 has a SYSAP do it
+ * at connection formation: ask for what the operator configured (SYSGEN
+ * CLUSTER_CREDITS), take what the port's pool can actually back, and remember
+ * exactly that -- because that number, and not the request, is what goes on
+ * the wire at abs 95.
+ *
+ * With no CLUSTER_CREDITS committed by any boot, this node asks for nothing
+ * and gets nothing: 0 on the wire, counted by vc_fill_advertised(). There is
+ * no default here to paper over an unconfigured store (INV-6).
+ */
+static void vc_credit_reserve_for(struct pe_fsm *f, struct pe_vc *vc)
+{
+	uint32_t want;
+
+	vc_credit_release_from(f, vc);
+	want = f->id.credits_requested_valid
+		       ? (uint32_t)f->id.credits_requested : 0u;
+	vc->recv_credit_max = pe_credit_reserve(&f->credit, want);
+}
+
+/* --------------------------------------------------------------------------
  * Circuit lifecycle
  * -------------------------------------------------------------------------- */
 
@@ -2002,8 +2105,7 @@ static void vc_reset_sequence(struct pe_fsm *f, struct pe_vc *vc)
 	vc->send_credit = 0u;
 	vc->send_credit_max = 0u;
 	vc->recv_credit = 0u;
-	vc->recv_credit_max = f->id.cluster_credits_valid
-				      ? f->id.cluster_credits : 0u;
+	vc_credit_reserve_for(f, vc);
 	vc->form_tries = 0u;
 }
 
@@ -2012,6 +2114,9 @@ static void vc_close(struct pe_fsm *f, struct pe_vc *vc)
 	vc_ring_clear(vc);
 	vc_disarm_vcfail(f, vc);
 	vc_cancel(f, vc, PE_TIMER_RETRANSMIT);
+	/* A closed circuit promises nothing, so it holds no buffers: the share
+	 * goes straight back to the pool for the circuits that are still up. */
+	vc_credit_release_from(f, vc);
 	vc->state = (uint8_t)VMS_PE_VC_CLOSED;
 	vc->form_due_ms = 0u;
 	vc->form_tries = 0u;

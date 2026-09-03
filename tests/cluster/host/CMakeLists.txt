@@ -335,6 +335,12 @@ function(cluster_host_pe_test name)
 endfunction()
 
 cluster_host_pe_test(test_pe_channel   test_pe_channel.c)
+
+# E60: the receive-buffer credit ledger (vms_pe_fsm.h SS4b) as arithmetic --
+# the invariant "the sum of everything this port promised never exceeds the
+# buffers it owns", which is what makes the abs-95 byte test_pe_vc.c asserts on
+# a promise this node can actually keep.
+cluster_host_pe_test(test_pe_credit    test_pe_credit.c)
 cluster_host_pe_test(test_pe_formation test_pe_formation.c)
 
 # FC-P1.2: the VIRTUAL-CIRCUIT half of the same pure TU -- formation with the

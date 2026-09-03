@@ -580,7 +580,14 @@ struct pe_vc {
 	uint8_t  send_credit;      /* messages we may still send             */
 	uint8_t  send_credit_max;  /* the peer's grant, from its START body  */
 	uint8_t  recv_credit;      /* what we have granted and not returned  */
-	uint8_t  recv_credit_max;  /* our own CLUSTER_CREDITS                */
+	/*
+	 * THIS CIRCUIT'S SHARE of the port's receive-buffer pool (§4b): the
+	 * number of buffers pe_credit_reserve() actually committed to it, and
+	 * therefore the exact byte this node advertises at abs 95. Zero until
+	 * a reservation is made, zero again once it is released -- there is no
+	 * point at which this holds a number no buffer stands behind.
+	 */
+	uint8_t  recv_credit_max;
 
 	/* ---- the unacked ring, keyed by seq ---- */
 	struct pe_vc_unacked ring[PE_VC_UNACKED_MAX];
@@ -871,11 +878,16 @@ struct pe_identity {
 	uint8_t  hw_type[VMS_SCS_START_HWTYPE_LEN];
 	uint8_t  hw_type_valid;
 
-	/* abs 95: SYSGEN CLUSTER_CREDITS -- the Send Credit this node GRANTS
-	 * the peer (p. 2-43). 0 is a legitimate configured value and is
-	 * honoured; the flag distinguishes it from "not loaded". */
-	uint8_t  cluster_credits;
-	uint8_t  cluster_credits_valid;
+	/*
+	 * SYSGEN CLUSTER_CREDITS -- how many receive buffers this node's
+	 * operator asks the port to COMMIT to each circuit. It is a REQUEST,
+	 * not the wire value: what abs 95 carries is the reservation the port
+	 * actually made out of buffers it actually owns (§4b below, and
+	 * pe_vc.recv_credit_max). The flag distinguishes an unconfigured
+	 * store from a configured 0.
+	 */
+	uint8_t  credits_requested;
+	uint8_t  credits_requested_valid;
 
 	/*
 	 * abs 80: THIS SYSTEM'S INCARNATION -- a VMS absolute-time quadword,
@@ -891,12 +903,82 @@ struct pe_identity {
 	uint8_t  incarnation_time_valid;
 	uint8_t  pad_vc[3];
 
+	/*
+	 * How many RECEIVE BUFFERS the port has actually allocated (the glue
+	 * reads it off the fork context's own pool -- cf_rx_pool_bufs(), the
+	 * buffers exec_zalloc really returned at CLUSTER_START). This is the
+	 * bank every circuit's credit grant is drawn against (§4b); 0 means the
+	 * port owns no receive buffers, and then it grants nothing and says so.
+	 */
+	uint32_t rx_pool_bufs;
+
 	/* 0 selects the documented defaults. A SYSGEN value always wins; the
 	 * glue converts TIMVCFAIL out of its SYSGEN unit, so no unit
 	 * arithmetic happens inside the FSM. */
 	uint32_t timvcfail_ms;
 	uint32_t vc_retransmit_ms;
 };
+
+/* ==========================================================================
+ * 4b. THE RECEIVE-BUFFER CREDIT LEDGER (p. 2-42/2-43/2-45)
+ *
+ * A Send Credit is not a number a node likes the look of. p. 2-43: "the local
+ * SYSAP requests SCS to allocate a certain number of buffers to receive
+ * incoming messages from the remote SYSAP ... Suppose that number is 10; then
+ * the local SYSAP is said to have extended 10 Send Credits to the remote
+ * SYSAP." The credit IS the buffer count, and the peer will send exactly that
+ * many messages without waiting. Advertising credits this node has no buffers
+ * for is a promise it cannot keep -- the peer fills the window and this node
+ * drops whatever ran past its real capacity.
+ *
+ * p. 2-45 gives the shape this ledger implements: "All free message buffers
+ * for connections supported by a particular port are kept in the MFREEQ
+ * associated with that port. However, a given connection's share of buffers
+ * in a MFREEQ is limited by the data in the CDT for that connection." One
+ * POOL per port, and a per-connection SHARE recorded beside the connection.
+ * p. 2-43's bank analogy states the invariant this ledger keeps: "each person
+ * is entitled only to the amount of money that he or she has on deposit."
+ *
+ * OVMX's MFREEQ is the fork context's receive-buffer pool (FC-P0.5), the one
+ * place a frame this port receives is ever stored: `pool` is how many buffers
+ * it really allocated, and `reserved` is the sum of the live per-circuit
+ * shares. The ledger NEVER lets `reserved` exceed `pool` -- so even with
+ * every circuit's window simultaneously full, every frame this port promised
+ * to take has a buffer to land in.
+ *
+ * There is no headroom held back for the port's own unsequenced traffic, and
+ * that is deliberate rather than an oversight: p. 2-42 says an empty free
+ * queue simply means the port "merely discards the datagram", and a dropped
+ * HELLO is what the listen timeout and the retransmit ladder already exist
+ * to survive. A credit promise is the only thing here that cannot be taken
+ * back, so it is the only thing that gets a reservation.
+ * ========================================================================== */
+struct pe_credit_ledger {
+	uint32_t pool;      /* receive buffers the port really allocated */
+	uint32_t reserved;  /* sum of the live per-circuit shares        */
+};
+
+/* Bind the ledger to a pool of `pool_bufs` REAL buffers. Nothing reserved. */
+void pe_credit_init(struct pe_credit_ledger *l, uint32_t pool_bufs);
+
+/* Buffers still unpromised: pool - reserved, never negative. */
+uint32_t pe_credit_available(const struct pe_credit_ledger *l);
+
+/*
+ * Reserve up to `want` buffers for one circuit and return what was actually
+ * granted -- min(want, available), further capped at 255 because that is the
+ * width of the field the grant is advertised in (a promise that does not fit
+ * the wire is made SMALLER, never rounded up: under-promising is safe, and
+ * over-promising is the lie this ledger exists to prevent).
+ *
+ * A grant of 0 is a real answer: this port has no buffer to commit, so it
+ * promises nothing. The caller counts that omission.
+ */
+uint8_t pe_credit_reserve(struct pe_credit_ledger *l, uint32_t want);
+
+/* Return a grant to the pool. `granted` is what pe_credit_reserve() returned
+ * for that circuit; releasing more than is reserved is clamped, never wrapped. */
+void pe_credit_release(struct pe_credit_ledger *l, uint8_t granted);
 
 /* ==========================================================================
  * 5. One channel
@@ -1010,6 +1092,12 @@ struct pe_fsm {
 	 * in every test, which is a harder guarantee than a counter.
 	 */
 	struct pe_vc         *vc;        /* bound table, or NULL              */
+
+	/* The port's receive-buffer bank (§4b), initialised from
+	 * pe_identity.rx_pool_bufs. Every credit this node advertises is a
+	 * withdrawal from here and nowhere else. */
+	struct pe_credit_ledger credit;
+
 	uint32_t              n_vc_slots;/* its capacity                      */
 	uint32_t              n_vcs;     /* high-water of used slots          */
 	const struct pe_upper_ops *upper;/* SCS, or NULL (see the ack rule)   */
@@ -1020,10 +1108,15 @@ struct pe_fsm {
 	uint32_t vc_no_identity;    /* incarnation time / clock absent        */
 	/*
 	 * Formation bodies sent with abs 72-79 / abs 95 ZERO because the
-	 * executive had nothing loaded to assert there (E57). Unlike the two
-	 * counters above, neither field STOPS a circuit -- a body still goes
-	 * out, honestly empty -- so the omission is only visible if it is
-	 * counted. Same rule as disc_format_absent above.
+	 * executive had nothing real to assert there: no committed software
+	 * version (E57), or no receive buffer this port could commit to the
+	 * circuit (E60 -- an unconfigured CLUSTER_CREDITS, a configured request
+	 * of zero, or a pool already fully promised to other circuits; the
+	 * counter does not care WHICH, because on the wire all three are the
+	 * same statement: send me nothing). Unlike the two counters above,
+	 * neither field STOPS a circuit -- a body still goes out, honestly
+	 * empty -- so the omission is only visible if it is counted. Same rule
+	 * as disc_format_absent above.
 	 */
 	uint32_t vc_sw_version_absent;
 	uint32_t vc_credits_absent;

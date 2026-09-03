@@ -268,12 +268,12 @@ static void pe_build_identity(struct vms_cluster *cl, const uint8_t mcast[6],
 
 	/*
 	 * The two START-body fields E57 measured going out as zeros -- abs
-	 * 72-79 software-version and abs 95 CLUSTER_CREDITS -- both read HERE,
-	 * out of parameters the executive itself committed, through
-	 * vms_cluster_sysgen.c's accessors. Each returns 0 when this node has
-	 * nothing to assert, and then the zero that goes on the wire is a real
-	 * omission that vc_fill_identity() COUNTS (vc_sw_version_absent /
-	 * vc_credits_absent), the disc_format_absent precedent exactly.
+	 * 72-79 software-version and abs 95 CLUSTER_CREDITS -- both sourced
+	 * HERE, out of state the executive itself holds. Each source returns 0
+	 * when this node has nothing to assert, and then the zero that goes on
+	 * the wire is a real omission that vc_fill_advertised() COUNTS
+	 * (vc_sw_version_absent / vc_credits_absent), the disc_format_absent
+	 * precedent exactly.
 	 *
 	 * WHY IT IS A LOADED VALUE AND NOT A CONSTANT. The version's SSOT is
 	 * OVMX_CLUSTER_SW_VERSION in src/libvms/include/ovmx_identity.h, which
@@ -293,8 +293,29 @@ static void pe_build_identity(struct vms_cluster *cl, const uint8_t mcast[6],
 	 */
 	id->sw_version_valid =
 		(uint8_t)cluster_sysgen_sw_version(cl, id->sw_version);
-	id->cluster_credits_valid =
-		(uint8_t)cluster_sysgen_credits(cl, &id->cluster_credits);
+
+	/*
+	 * CREDITS ARE BUFFERS, NOT A NUMBER (E60, p. 2-43). The two reads
+	 * below are the two halves of one honest answer:
+	 *
+	 *   credits_requested -- SYSGEN CLUSTER_CREDITS, how many receive
+	 *     buffers the operator asks this port to commit per circuit. A
+	 *     REQUEST, and the only thing configuration decides.
+	 *   rx_pool_bufs -- how many receive buffers this port ACTUALLY has:
+	 *     the pool the fork context allocated at CLUSTER_START, read back
+	 *     off that context. Not a config value, not this file's choice --
+	 *     if the allocation were smaller, this number would be smaller.
+	 *
+	 * The FSM's credit ledger (vms_pe_fsm.h SS4b) grants each circuit the
+	 * smaller of the two and advertises exactly what it granted, so abs 95
+	 * can never carry a promise of buffers that were never allocated. The
+	 * fork context is started BEFORE the port (vms_ioctl_cluster_start),
+	 * so this read sees the real pool; a NULL context reads 0 buffers and
+	 * this node then promises nothing at all.
+	 */
+	id->credits_requested_valid =
+		(uint8_t)cluster_sysgen_credits(cl, &id->credits_requested);
+	id->rx_pool_bufs = cf_rx_pool_bufs(cl->fork);
 
 	id->incarnation_time = exec_time_now_vms();
 	id->incarnation_time_valid = 1u;

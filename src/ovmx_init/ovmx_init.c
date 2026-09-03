@@ -1204,6 +1204,43 @@ _Static_assert(sizeof(((struct vms_sysgen_load_args *)0)->sw_version) ==
                "the SYSGEN_LOAD sw_version field is not the identity SSOT's field width");
 
 /*
+ * cluster_credits_requested - SYSGEN CLUSTER_CREDITS: how many receive buffers
+ * this node asks the cluster port to commit to each virtual circuit.
+ *
+ * WHY THIS ONE PARAMETER HAS A FALLBACK AND ITS NEIGHBOURS DO NOT (E60).
+ * sysgen_read_param() reads the PERSISTED store and nothing else, so a
+ * parameter the running system knows but the file has never carried reads as
+ * "absent" and lands in the wire struct as a zero indistinguishable from a
+ * configured one. For CLUSTER_CREDITS that zero is not a harmless default: it
+ * is this node telling every peer it has no buffers, which is how OVMX's START
+ * body went out with abs 95 = 0 against a live VAX cluster. A parameter the
+ * system defines takes the system's default when the file predates it --
+ * exactly what SYSBOOT's built-in parameter table does on VMS -- and the
+ * default is the SSOT the SYSGEN table itself uses (sysgen_params.h).
+ *
+ * It is a REQUEST, not a wire value. The executive grants each circuit the
+ * smaller of this and the receive buffers the port really allocated, and
+ * advertises what it granted (src/kernel-core/vms_pe_fsm.h SS4b) -- so a
+ * default here can never become a promise the node cannot keep.
+ *
+ * The substitution is ANNOUNCED, never silent: an operator who sees this line
+ * can make it permanent with one SYSGEN WRITE.
+ */
+static uint16_t cluster_credits_requested(void)
+{
+    uint32_t u32;
+
+    if (sysgen_read_param("CLUSTER_CREDITS", &u32) == 0)
+        return (uint16_t)u32;
+
+    fprintf(stderr,
+            "%%OVMX-I-NOPARAM, CLUSTER_CREDITS is absent from this system's"
+            " parameter file; using the SYSGEN default (%u)\n",
+            (unsigned)SYSGEN_DEFAULT_CLUSTER_CREDITS);
+    return (uint16_t)SYSGEN_DEFAULT_CLUSTER_CREDITS;
+}
+
+/*
  * load_cluster_sysgen_params - STARTUP.EXE's own case of SYSBOOT (FC-P0.10,
  * docs/plan-faithful-cluster-executive.md). Reads the cluster SYSGEN
  * parameters off SYS$SYSTEM:OVMXVMSSYS.PAR through the SAME shared reader
@@ -1283,8 +1320,7 @@ static uint32_t load_cluster_sysgen_params(void)
         args.recnxinterval = (uint16_t)u32;
     if (sysgen_read_param("TIMVCFAIL", &u32) == 0)
         args.timvcfail = (uint16_t)u32;
-    if (sysgen_read_param("CLUSTER_CREDITS", &u32) == 0)
-        args.cluster_credits = (uint16_t)u32;
+    args.cluster_credits = cluster_credits_requested();
     if (sysgen_read_param("NISCS_MAX_PKTSZ", &u32) == 0)
         args.niscs_max_pktsz = u32;
     if (sysgen_read_param("MSCP_LOAD", &u32) == 0)

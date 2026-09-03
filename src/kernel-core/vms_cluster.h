@@ -141,7 +141,11 @@ struct vms_cluster_params {
 	uint16_t qdskvotes;         /* QDSKVOTES */
 	uint16_t recnxinterval;     /* RECNXINTERVAL, seconds */
 	uint16_t timvcfail;         /* TIMVCFAIL, in its SYSGEN unit */
-	uint16_t cluster_credits;   /* CLUSTER_CREDITS */
+	uint16_t cluster_credits;   /* CLUSTER_CREDITS: receive buffers REQUESTED
+				     * per circuit (p. 2-43). What a START body
+				     * advertises is what the port's ledger could
+				     * actually grant, never this -- vms_pe_fsm.h
+				     * SS4b. */
 
 	/* ---- roles ---- */
 	uint8_t  vaxcluster;        /* 0 = never, 1 = when a cluster is present, 2 = always */

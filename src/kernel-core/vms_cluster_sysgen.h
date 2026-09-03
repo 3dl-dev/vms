@@ -61,13 +61,21 @@ int cluster_sysgen_sw_version(const struct vms_cluster *cl,
                               uint8_t out[VMS_CLUSTER_SWVER_LEN]);
 
 /*
- * cluster_sysgen_credits - the one-byte Send Credit this node GRANTS a peer
- * (SCS START body abs 95 = SYSGEN CLUSTER_CREDITS), read out of the loaded
- * parameters.
+ * cluster_sysgen_credits - SYSGEN CLUSTER_CREDITS: the number of receive
+ * buffers this node ASKS its cluster port to commit to each virtual circuit
+ * (p. 2-43 -- the credit a node extends is the count of buffers it allocated
+ * to receive that peer's messages), read out of the loaded parameters.
+ *
+ * IT IS A REQUEST, NOT THE WIRE VALUE (E60). What a START body advertises at
+ * abs 95 is what the port's credit ledger actually GRANTED out of the receive
+ * buffers it really allocated (vms_pe_fsm.h SS4b): equal to this when the pool
+ * can back it, smaller when it cannot. Nothing may put this number on the wire
+ * directly -- a configured request is not an allocation, and advertising one
+ * as though it were is the promise-without-buffers this split exists to stop.
  *
  * Writes `*out' and returns 1 only when a boot actually committed the
- * parameters: a configured 0 is a real grant of nothing and IS asserted, which
- * is precisely why cl->params_valid, not the value, decides.
+ * parameters: a configured 0 is a real request for nothing and IS reported,
+ * which is precisely why cl->params_valid, not the value, decides.
  *
  * Returns 0 when the parameters were never loaded, and ALSO when the
  * configured value cannot be expressed in the field (> 255): truncating 256 to

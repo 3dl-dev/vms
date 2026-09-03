@@ -8,6 +8,7 @@
 #include "sim_node.h"
 
 #include "vms_cluster_codec.h"
+#include "vms_cluster_fork.h"   /* CF_RX_BUFS_DEFAULT: the pool a real port owns */
 #include "vms_cluster_codec_vc.h"
 
 /* ------------------------------------------------------------------ *
@@ -235,6 +236,12 @@ static void sim_upper_bind(struct sim_node *n)
 static const uint8_t sim_default_group[6] = { 0xab, 0x00, 0x04, 0x01, 0x01, 0x01 };
 #define SIM_DEFAULT_CREDITS 10u
 
+/* Receive buffers a simulated port owns: FC-P0.5's OWN default, taken from the
+ * header rather than copied, so a simulated node's credit ledger has exactly
+ * the bank a booted one does -- and a scenario that opens enough circuits runs
+ * the pool down here the same way. */
+#define SIM_DEFAULT_RX_POOL_BUFS CF_RX_BUFS_DEFAULT
+
 void sim_node_cfg_default(struct sim_node_cfg *cfg, const char *name,
 			  uint16_t sysid, uint8_t index)
 {
@@ -258,6 +265,7 @@ void sim_node_cfg_default(struct sim_node_cfg *cfg, const char *name,
 	memcpy(cfg->mcast, sim_default_group, 6);
 	cfg->credits = SIM_DEFAULT_CREDITS;
 	cfg->credits_valid = 1u;
+	cfg->rx_pool_bufs = SIM_DEFAULT_RX_POOL_BUFS;
 	cfg->max_sca_len = 1500u;
 
 	/* This node's OWN honest identity. Eight and four ASCII, the widths the
@@ -290,6 +298,8 @@ void sim_node_cfg_overlay(struct sim_node_cfg *base,
 		base->credits = ov->credits;
 		base->credits_valid = 1u;
 	}
+	if (ov->rx_pool_bufs != 0u)
+		base->rx_pool_bufs = ov->rx_pool_bufs;
 	if (ov->max_sca_len != 0u)
 		base->max_sca_len = ov->max_sca_len;
 	if (ov->hello_interval_ms != 0u)
@@ -348,8 +358,12 @@ static void sim_node_identity(const struct sim_node *n, struct pe_identity *id)
 	id->sw_version_valid = 1u;
 	fill_ascii(id->hw_type, VMS_SCS_START_HWTYPE_LEN, n->cfg.hw_type, ' ');
 	id->hw_type_valid = 1u;
-	id->cluster_credits = n->cfg.credits;
-	id->cluster_credits_valid = n->cfg.credits_valid;
+	id->credits_requested = n->cfg.credits;
+	id->credits_requested_valid = n->cfg.credits_valid;
+	/* The buffers the port owns. The FSM's ledger grants each circuit the
+	 * smaller of the request and what is left of this, and advertises the
+	 * grant -- so abs 95 tracks the pool, not the configuration. */
+	id->rx_pool_bufs = n->cfg.rx_pool_bufs;
 
 	/* Spec §4(g) abs 80: the instant this system BOOTED, sampled once from
 	 * the clock at boot and never again. Not a captured quadword and not a

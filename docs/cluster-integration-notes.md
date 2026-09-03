@@ -540,6 +540,13 @@ carries what the port can + counts `vc_rx_undelivered` on the rest.
 - **Root-vs-sub-resource:** RSB has no parent link so every resource is treated as root — over-counts lookups, never mis-routes → FC-P4.6/P5.5.
 - **Operator note:** a conflicting hash-learn returns `SS$_BADPARAM` (`SS$_DUPLNAM` isn't a real SS__ value; won't invent one, Rule 8). Operator can add a published SSDEF code if a distinct one is wanted.
 
+### E30 — ⭐⭐ FALSIFIED + REPLACED by a real-VAX capture (op06-join-20260903.pcap; the CN=3 lever, now GROUNDED)
+Lab captured a genuine VAX2 rejoin (257 cat-01/op-06 frames, real MACs). **The premise was WRONG:**
+- **op-06 (cat 0x01 op 0x06) does NOT carry the JOINER's SCSSYSTEMID or CSID.** It is the EXISTING member (VAX1) re-asserting ITS OWN record: sender CSID at b[24:28] (form A) / b[36:40] (form B), incarnation quadword b[28:36] (=VAX1 boot time), last-transition quadword b[36:44]. So `vms_cm_membership_find_sysid` scanning op-06 for OVMX's own sysid finds NOTHING on real traffic → the specified E30/E8 lever CANNOT fire. (The landed instrument's honest "stays NEW" comment was right.)
+- **REAL CSID mechanism (byte-exact, both nodes):** `CSID = (cluster_generation << 16) | (SCSSYSTEMID & 0x3FF)`. VAX1 1025&0x3ff=1→0x00010001; VAX2 1026&0x3ff=2→0x00010002. The generation high-word (0x0001) is carried in the COORDINATOR's CSID at op-06 **b[24]**. **Actionable (buildable now, honest):** OVMX READS the coordinator's CSID high-word (generation) from the wire, then COMPUTES its own CSID = (gen<<16)|(own_SCSSYSTEMID & 0x3ff) — NOT by finding its sysid in the record. Residual: high-word=generation-vs-constant needs a 3rd-node/re-gen capture — but OVMX reads it from the wire either way, so NOT blocking.
+- **COUNT-COMMIT = cat 0x01 op 0x03 COMMIT (count=1), a single decisive VAX1→VAX2 frame** (commit-time quadword b[20:28]); op-06 is strictly POST-commit; the transition finalizes through op-0a/0b/0c barrier. (Corrects "op-06 burst commits the count"; consistent w/ book corr.5.)
+- **pcap:** `tests/lab/captures/op06-join-20260903.pcap`. → ROUTED TO FABLE: ratify the CSID mechanism + correct the join (FC-P3.3 CSID-learning: replace the op-06-scan instrument with generation-read + CSID-compute) + phase2 (op-03 count-commit) → then a small build item → OVMX reaches MEMBER.
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

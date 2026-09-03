@@ -1964,6 +1964,29 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
     if (cmd == VMS_IOCTL_REGISTER_SUBPROCESS)
         return vms_ioctl_register(arg, true, false);
 
+    /*
+     * E47 (docs/cluster-integration-notes.md): the three cluster
+     * diagnostic reads -- the port's SDA SHOW PORT-equivalent
+     * (CLUSTER_DIAG_PORT), SCS's SHOW CONNECTIONS-equivalent
+     * (CLUSTER_DIAG_CONN) and the connection manager's own CLUB/CSB read
+     * (CLUSTER_DIAG_CSB) -- are DISPATCH-ALWAYS. A diagnostic reads real
+     * executive cluster state (vms_pe.c/vms_scs.c/vms_cnxman.c, under the
+     * fork mutex); it does not require the CALLER to be a registered VMS
+     * process first. Each handler already takes `proc` only to match every
+     * other ioctl's signature and never touches it (`(void)proc;`), so a
+     * NULL caller context is safe. Gating these behind
+     * vms_proc_find_or_err() made an honest "cluster/port not started"
+     * read fail the ioctl() itself with -ESRCH before it ever reached the
+     * SS$_NOSUCHDEV + all-zero-row answer the handler computes -- exactly
+     * the bug that broke SHOW CLUSTER on a booted, not-yet-clustered node.
+     */
+    if (cmd == VMS_IOCTL_CLUSTER_DIAG_PORT)
+        return vms_ioctl_cluster_diag_port(NULL, arg);
+    if (cmd == VMS_IOCTL_CLUSTER_DIAG_CONN)
+        return vms_ioctl_cluster_diag_conn(NULL, arg);
+    if (cmd == VMS_IOCTL_CLUSTER_DIAG_CSB)
+        return vms_ioctl_cluster_diag_csb(NULL, arg);
+
     /* All other ioctls require a registered process */
     proc = vms_proc_find_or_err();
     if (!proc)
@@ -2044,18 +2067,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
      * they. */
     case VMS_IOCTL_CLUSTER_MEMBER_GET:
         return vms_ioctl_cluster_member_get(proc, arg);
-    /* The port's SDA SHOW PORT-equivalent diagnostics read (FC-P0.9,
-     * vms_pe.c), against the one per-node vms_cluster_node(). */
-    case VMS_IOCTL_CLUSTER_DIAG_PORT:
-        return vms_ioctl_cluster_diag_port(proc, arg);
-    /* SCS's SDA SHOW CONNECTIONS-equivalent diagnostics read (FC-P2.4,
-     * vms_scs.c): the SCS-wide view, and one CDT row per call. */
-    case VMS_IOCTL_CLUSTER_DIAG_CONN:
-        return vms_ioctl_cluster_diag_conn(proc, arg);
-    /* The connection manager's own SDA-equivalent CLUB/CSB read (FC-P3.8,
-     * vms_cnxman.c), and $SETCLUEVT's executive-side registration. */
-    case VMS_IOCTL_CLUSTER_DIAG_CSB:
-        return vms_ioctl_cluster_diag_csb(proc, arg);
+    /* CLUSTER_DIAG_PORT/_CONN/_CSB dispatch earlier now, before the
+     * registered-process gate above (E47) -- their case labels are gone
+     * from here so there is exactly one dispatch point per ioctl, never
+     * two that could drift. */
     case VMS_IOCTL_CLUSTER_SETCLUEVT:
         return vms_ioctl_cluster_setcluevt(proc, arg);
     /* $GETSYI's cluster item codes, from the CLUB (FC-P3.9). */

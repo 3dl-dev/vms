@@ -1227,6 +1227,29 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		return vms_facility_errno(r);
 
 	/*
+	 * Cluster diagnostic reads -- CLUSTER_DIAG_PORT/_CONN/_CSB (E47,
+	 * docs/cluster-integration-notes.md). The port's SDA SHOW PORT-
+	 * equivalent (vms_pe.c), SCS's SHOW CONNECTIONS-equivalent (vms_scs.c)
+	 * and the connection manager's own CLUB/CSB read (vms_cnxman.c) are
+	 * DISPATCH-ALWAYS: each is a pure projection of real executive cluster
+	 * state under the fork mutex, honestly SS$_NOSUCHDEV + an all-zero row
+	 * before CLUSTER_START (INV-6), never an ioctl-level failure. Like
+	 * VMS_IOCTL_GETSYIMEM above and unlike the lock-manager group below,
+	 * they need no proc lookup at all: every handler ignores its `proc`
+	 * argument (`(void)proc;` in vms_devtab.c), so a caller that has never
+	 * registered a VMS process still gets the executive's real answer.
+	 */
+	case VMS_IOCTL_CLUSTER_DIAG_PORT:
+		return vms_facility_errno(
+		    vms_ioctl_cluster_diag_port(NULL, (unsigned long)data));
+	case VMS_IOCTL_CLUSTER_DIAG_CONN:
+		return vms_facility_errno(
+		    vms_ioctl_cluster_diag_conn(NULL, (unsigned long)data));
+	case VMS_IOCTL_CLUSTER_DIAG_CSB:
+		return vms_facility_errno(
+		    vms_ioctl_cluster_diag_csb(NULL, (unsigned long)data));
+
+	/*
 	 * Lock-manager facility (DLM, src/kernel-core/vms_lock.c) -- P4-A, rd
 	 * vms-ff7, the LAST executive facility. Same dispatch shape as the others:
 	 * find-or-create the caller's proc, hand the framework's kernel buffer `data'
@@ -1260,13 +1283,6 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_DLM_ENUM_STANDING:
 	case VMS_IOCTL_DLM_XNODE:
 	case VMS_IOCTL_CLUSTER_MEMBER_GET:
-	case VMS_IOCTL_CLUSTER_DIAG_PORT:
-	case VMS_IOCTL_CLUSTER_DIAG_CONN:
-	/* FC-P3.8 declared these two in the inner switch but NOT here, so the
-	 * outer dispatch fell through to ENOTTY and neither reached its
-	 * handler on this substrate. FC-P3.9 adds them; the inner switch was
-	 * already correct. */
-	case VMS_IOCTL_CLUSTER_DIAG_CSB:
 	case VMS_IOCTL_CLUSTER_SETCLUEVT:
 	case VMS_IOCTL_CLUSTER_GETSYI:
 	case VMS_IOCTL_SYSGEN_LOAD:
@@ -1299,12 +1315,6 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_dlm_xnode(proc, (unsigned long)uarg);      break;
 		case VMS_IOCTL_CLUSTER_MEMBER_GET:
 			r = vms_ioctl_cluster_member_get(proc, (unsigned long)uarg); break;
-		case VMS_IOCTL_CLUSTER_DIAG_PORT:
-			r = vms_ioctl_cluster_diag_port(proc, (unsigned long)uarg); break;
-		case VMS_IOCTL_CLUSTER_DIAG_CONN:
-			r = vms_ioctl_cluster_diag_conn(proc, (unsigned long)uarg); break;
-		case VMS_IOCTL_CLUSTER_DIAG_CSB:
-			r = vms_ioctl_cluster_diag_csb(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_CLUSTER_SETCLUEVT:
 			r = vms_ioctl_cluster_setcluevt(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_CLUSTER_GETSYI:

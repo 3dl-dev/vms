@@ -514,6 +514,25 @@ QEMU-boot verification (host tests can't catch it) — lab-defer the boot proof,
 fix + reason + cross-compile provable here. **Fix before the tier-1 wire smoke
 (SHOW CLUSTER depends on it).** Disjoint from the P6.5/P7.2 chain.
 
+### E47 — RESOLVED (FC-e47, tip e2f278c6). Root cause was NOT the handlers (they correctly return SS$_NOSUCHDEV + zero row + ioctl-success): Linux `vms_dev_ioctl` required a registered VMS process (`vms_proc_find_or_err`→-ESRCH) before ANY ioctl, so raw diag tests failed before reaching the handler. Fix: moved the 3 read-only DIAG ioctls ahead of the registration gate (they `(void)proc`), mirrored NetBSD like GETSYIMEM. SHOW CLUSTER works on a booted node. QEMU-boot verify lab-deferred.
+
+### E48. ⚠ Port RECEIVE can't deliver 4 of 5 MSCP END classes (raised by FC-P6.5 → Fable, receive-side twin of E18)
+FC-P6.5's R2 (first to push END messages through a real port) measured: `vc_deliver`
+gives a SYSAP a frame only when the classifier grounds a Con.ID for its class. Of the
+5 measured END lengths — SCA **86 (SCC), 90 (READ), 102 (ONLINE), 110 (GUS)** carry
+no Con.ID class (110/102 fall in the conn-control lengths but are excluded by the
+`ctrl_type != 10` guard; 86/90 match nothing) — **only 94 (WRITE) is deliverable.**
+So a booted MSCP class driver receives almost no end messages. FC-P6.3 gave the SEND
+side a length-generic entry (`pe_vc_send_msg_var`); the RECEIVE side never grew the
+matching half. FC-P6.5 did NOT widen a codec class rule (§4(d) leaves 64/68 undecoded
+for these; asserting it would be a self-made wire claim, Rule 8) — the R2 scenario
+carries what the port can + counts `vc_rx_undelivered` on the rest.
+- **ESCALATED to Fable:** does §4(h)(1b)'s uniform Con.ID envelope ([50:58]) extend to
+  the MSCP END classes 86/90/102/110 (as E18 established it does for the 58/94 SCS
+  classes + 94 MSCP command)? If yes → a P2.1b-style receive-classify widen + codec
+  test (add a CONID-capable class for those END lengths). If not grounded → lab capture.
+  **Blocks FC-P6.5's R4 + any booted MSCP class driver receiving end messages.**
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

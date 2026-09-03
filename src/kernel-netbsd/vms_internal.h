@@ -891,6 +891,9 @@ long vms_ioctl_cluster_diag_port(struct vms_proc *proc, unsigned long arg);
  * decl -- loads the cluster SYSGEN parameters into vms_cluster_node()'s real
  * struct vms_cluster.params (vms_cluster_sysgen.c). */
 long vms_ioctl_sysgen_load(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_START (FC-P0.11): mirror of the src/kernel/vms_internal.h
+ * decl -- the P0 "port up" semantic (vms_devtab.c). */
+long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg);
 
 /* ----------------------------------------------------------------
  * LOGICAL-NAME facility (LNM$SYSTEM/GROUP/JOB, rd vms-72da) -- DEFINED in

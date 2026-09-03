@@ -440,6 +440,18 @@ uint32_t vms_kif_cluster_get_members(struct vms_cluster_member *out_members,
 uint32_t vms_kif_sysgen_load(struct vms_sysgen_load_args *args);
 
 /*
+ * vms_kif_cluster_start - VMS_IOCTL_CLUSTER_START (FC-P0.11). The P0
+ * "port up" semantic only: starts the fork thread if needed, then
+ * vms_pe_start() (FC-P0.9) against the executive's vms_cluster_node().
+ * WIRED: STARTUP.EXE's boot path (ovmx_init.c) calls this once, after
+ * load_cluster_sysgen_params(), gated on VAXCLUSTER != 0
+ * (cluster_boot_gate.h). `out_port_up`, if non-NULL, receives whether
+ * PEA0: is up when this call returns (1) or not (0) -- honest either way,
+ * never asserted true on a refused start.
+ */
+uint32_t vms_kif_cluster_start(uint32_t *out_port_up);
+
+/*
  * vms_kif_dlm_xnode_blkast - the BLKAST-WIRE half of the cross-node DLM receive
  * (DLM epic vms-7fa rung H6, vms-76d). A focused wrapper that carries the two
  * fields the generic vms_kif_dlm_xnode above does not: `blkastadr`/`blkastprm`

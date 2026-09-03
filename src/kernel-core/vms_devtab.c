@@ -52,6 +52,8 @@
  * either, so these three kernel-core cluster headers compose here cleanly.
  */
 #include "vms_cluster.h"
+#include "vms_cluster_fork.h"  /* vms_cluster_fork_start (FC-P0.11's own case
+                                * of "SYSINIT starts the fork thread first") */
 #include "vms_cluster_snapshot.h"
 #include "vms_cluster_sysgen.h"
 #include "vms_pe.h"
@@ -1792,6 +1794,53 @@ long vms_ioctl_sysgen_load(struct vms_proc *proc, unsigned long arg)
                 (unsigned)SS__BADPARAM);
 
     args.status = ok ? SS__NORMAL : SS__BADPARAM;
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_cluster_start - VMS_IOCTL_CLUSTER_START (FC-P0.11, docs/plan-
+ * faithful-cluster-executive.md). The P0 "port up" semantic ONLY: reproduces
+ * SYSINIT's own ordering (design SS3.5 step 2) against vms_cluster_node() --
+ * start the FC-P0.5 fork thread if it is not already running, then
+ * vms_pe_start() (FC-P0.9) to bring PEA0: up. It does NOT drive the CNXMAN
+ * join to MEMBER/STANDALONE (FC-P3.9, once CNXMAN exists).
+ *
+ * Neither call fabricates anything of its own: vms_pe_start() reads
+ * cl->params (VMS_IOCTL_SYSGEN_LOAD's own prior commit) and refuses with
+ * SS$_NOSUCHDEV when VAXCLUSTER is 0 -- the SAME gate STARTUP.EXE's boot
+ * path (ovmx_init.c, cluster_boot_gate.h) already applies before even
+ * issuing this ioctl, so a VAXCLUSTER=0 boot never reaches here in the
+ * normal sequence; this function's own check is the executive's second,
+ * independent line of defense (INV-6: no fabricated port under any caller).
+ *
+ * Idempotent both ways: a fork already running, or a port already up, are
+ * both SS$_NORMAL no-ops (vms_cluster_fork_start()/vms_pe_start()'s own
+ * contracts) -- a second CLUSTER_START never double-starts anything.
+ */
+long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_cluster_start_args args;
+    struct vms_cluster *cl = vms_cluster_node();
+    int status;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    status = vms_cluster_fork_start(cl, NULL);
+    if (status == SS__NORMAL)
+        status = vms_pe_start(cl);
+
+    args.port_up = (uint32_t)((status == SS__NORMAL) && (cl->pe != NULL));
+    args.status = (uint32_t)status;
+
+    if (status != SS__NORMAL)
+        pr_info("vms: CLUSTER_START -> SS$ %u (VAXCLUSTER %u)\n",
+                (unsigned)status, (unsigned)cl->params.vaxcluster);
+
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;

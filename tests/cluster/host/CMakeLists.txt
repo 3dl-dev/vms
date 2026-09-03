@@ -157,6 +157,24 @@ cluster_host_cnxman_test(test_cluster_api_getsyi test_cluster_api_getsyi.c)
 # booted-node R4 readback (SYSGEN SHOW, CLUSTER_DIAG) is deferred to the lab.
 cluster_host_cnxman_test(test_cluster_sysgen_load test_cluster_sysgen_load.c)
 
+# ---- FC-P0.11: the VAXCLUSTER boot-path gate (port up) ----
+# The ONE function (src/libvms/include/cluster_boot_gate.h) ovmx_init.c's
+# start_cluster_port() calls before issuing VMS_IOCTL_CLUSTER_START, compiled
+# here standalone (freestanding <stdint.h> only -- no cluster_host_cnxman/
+# codec dependency, unlike the tests above) so this rung proves the exact
+# arithmetic the boot path runs. The R4 booted-node leg
+# (tests/qemu/test_cluster_start_negctl.sh) is the honest end-to-end proof
+# that VAXCLUSTER=0 really yields no PEA0:/HELLO on a live kmod.
+add_executable(test_cluster_boot_gate test_cluster_boot_gate.c)
+target_include_directories(test_cluster_boot_gate PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/libvms/include
+)
+add_test(NAME cluster_host_test_cluster_boot_gate COMMAND test_cluster_boot_gate)
+set_tests_properties(cluster_host_test_cluster_boot_gate PROPERTIES
+    LABELS "unit;cluster;cluster_host"
+    TIMEOUT 30
+)
+
 # ---- FC-P0.5: the cluster fork context, built with NO kernel headers ----
 # The SHIPPING translation unit (src/kernel-core/vms_cluster_fork.c), not a copy
 # and not a variant: the queue/dispatch logic is pure by construction, so the

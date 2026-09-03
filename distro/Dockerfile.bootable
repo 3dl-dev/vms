@@ -1003,13 +1003,30 @@ RUN cp -r /system-stage/vms /system-stage-install-media-vms && \
 # on ovmx-os.kit and ovmx-distrib.img). All other binaries (DCL, LOGIN, HELP,
 # IMGACT, the SYSLIB shareables) must be on the system disk, which arrives
 # pre-installed (docs/design-vms-faithful-install.md §3.1).
+# CLUSTER_AUTHORIZE.DAT staging (E53, docs/cluster-integration-notes.md).
+# Real VMS writes this once, at CLUSTER_CONFIG.COM time, onto the persistent
+# system disk; OVMX has no interactive equivalent yet (a disclosed gap, not a
+# silent one), so a specific boot's group/password is staged at IMAGE-BUILD
+# time here, gated on a build-arg that defaults OFF -- an ordinary build
+# (no --build-arg) stages nothing and boots with auth_group=0, byte-identical
+# to today. Only a caller who explicitly names a real cluster's group (e.g.
+# the lab VAX cluster's group 257) gets a CLUSTER_AUTHORIZE.DAT written.
+ARG CLUSTER_AUTH_GROUP=0
+ARG CLUSTER_AUTH_PASSWORD=""
+
 RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
              /initramfs-slim/tmp /initramfs-slim/var /initramfs-slim/mnt \
              /initramfs-slim/sbin \
-             /initramfs-slim/etc \
+             /initramfs-slim/etc/ovmx \
              /initramfs-slim/lib/modules \
              /initramfs-slim/vms/SYS0/SYSCOMMON/SYSEXE \
              /initramfs-slim/vms/SYS0/SYSCOMMON/SYSMGR && \
+    if [ "$CLUSTER_AUTH_GROUP" != "0" ]; then \
+        gcc -Isrc/libvms/include tools/cluster/mk_cluster_authorize.c \
+            -o /tmp/mk_cluster_authorize && \
+        /tmp/mk_cluster_authorize /initramfs-slim/etc/ovmx/cluster_authorize.dat \
+            "$CLUSTER_AUTH_GROUP" "$CLUSTER_AUTH_PASSWORD" ; \
+    fi && \
     # Bootstrap binary only -- STARTUP.EXE (/init). INITIALIZE.EXE stays off
     # the bootstrap (see header above); it is already staged onto the
     # distribution disk by the system-tree stage.

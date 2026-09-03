@@ -1801,6 +1801,12 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
      * before VMS_IOCTL_CLUSTER_START (FC-P0.11). */
     case VMS_IOCTL_SYSGEN_LOAD:
         return vms_ioctl_sysgen_load(proc, arg);
+    /* STARTUP.EXE's boot path (FC-P0.11): the P0 "port up" semantic -- start
+     * the fork thread, then vms_pe_start() -- against the same
+     * vms_cluster_node(), gated on VAXCLUSTER at both the ovmx_init.c caller
+     * and here (vms_pe_start's own check). */
+    case VMS_IOCTL_CLUSTER_START:
+        return vms_ioctl_cluster_start(proc, arg);
     /* DLM cross-node lock-request dispatch (vms-94c, DLM epic vms-7fa rung 1):
      * a decoded remote DLM message reaches the cross-node handler, which
      * returns SS$_UNSUPPORTED (rung 1 transport; no fake grant). */

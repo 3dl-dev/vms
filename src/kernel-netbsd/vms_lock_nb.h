@@ -433,12 +433,23 @@ struct vms_sysgen_load_args {
 	uint32_t status;
 };
 
+/*
+ * VMS_IOCTL_CLUSTER_START (FC-P0.11). Byte-for-byte the same struct as
+ * src/kernel/vms_ioctl.h -- the P0 "port up" semantic only (see that header
+ * for the full rationale): no `in:` fields, the port starts from
+ * vms_cluster_node()'s already-loaded struct vms_cluster.params.
+ */
+struct vms_cluster_start_args {
+	uint32_t port_up;
+	uint32_t status;
+};
+
 /* ================================================================
- * Request numbers. All ten are _IOWR carrying the SAME structs and NR bytes
- * as src/kernel/vms_ioctl.h (0x30-0x3e, magic 'V'), so their command words are
- * identical across substrates (framework pre-copy path; none exceeds one page
- * -- the largest, vms_cluster_member_get_args at 3848 bytes, is still under
- * NetBSD's one-page IOCPARM_MAX of 4096).
+ * Request numbers. All eleven are _IOWR carrying the SAME structs and NR
+ * bytes as src/kernel/vms_ioctl.h (0x30-0x3f, magic 'V'), so their command
+ * words are identical across substrates (framework pre-copy path; none
+ * exceeds one page -- the largest, vms_cluster_member_get_args at 3848
+ * bytes, is still under NetBSD's one-page IOCPARM_MAX of 4096).
  * VMS_IOCTL_CONVERT reuses struct vms_enq_args, exactly as on Linux.
  * ================================================================ */
 #define VMS_IOCTL_ENQ           _IOWR(VMS_LOCK_IOC_MAGIC, 0x30, struct vms_enq_args)
@@ -456,6 +467,7 @@ struct vms_sysgen_load_args {
 #define VMS_IOCTL_DLM_ENUM_STANDING    _IOWR(VMS_LOCK_IOC_MAGIC, 0x3c, struct vms_dlm_enum_standing_args)
 #define VMS_IOCTL_CLUSTER_DIAG_PORT    _IOWR(VMS_LOCK_IOC_MAGIC, 0x3d, struct vms_cluster_diag_port_args)
 #define VMS_IOCTL_SYSGEN_LOAD          _IOWR(VMS_LOCK_IOC_MAGIC, 0x3e, struct vms_sysgen_load_args)
+#define VMS_IOCTL_CLUSTER_START        _IOWR(VMS_LOCK_IOC_MAGIC, 0x3f, struct vms_cluster_start_args)
 
 /*
  * Freeze the shared layouts -- see the other _nb.h contracts' identical asserts:
@@ -497,5 +509,7 @@ _Static_assert(sizeof(struct vms_cluster_diag_port_args) == 152,
                "vms_cluster_diag_port_args changed size -- VMS_IOCTL_CLUSTER_DIAG_PORT ABI break");
 _Static_assert(sizeof(struct vms_sysgen_load_args) == 104,
                "vms_sysgen_load_args changed size -- VMS_IOCTL_SYSGEN_LOAD ABI break");
+_Static_assert(sizeof(struct vms_cluster_start_args) == 8,
+               "vms_cluster_start_args changed size -- VMS_IOCTL_CLUSTER_START ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

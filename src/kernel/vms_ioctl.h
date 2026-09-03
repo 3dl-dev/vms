@@ -980,6 +980,35 @@ _Static_assert(sizeof(struct vms_sysgen_load_args) == 104,
 _Static_assert(VMS_IOCTL_SYSGEN_LOAD == 0xC068563Eu,
                "VMS_IOCTL_SYSGEN_LOAD encodes differently than the reference build");
 
+/*
+ * VMS_IOCTL_CLUSTER_START (FC-P0.11, docs/plan-faithful-cluster-executive.md).
+ * The P0 semantic ONLY: bring PEA0: up (multicast join, HELLO cadence, rx
+ * path) -- design SS3.5 step 2's "the executive brings up PEA0: on ETH0:,
+ * starts the fork thread". It does NOT drive the CNXMAN join to MEMBER or
+ * STANDALONE (that return-after-join semantic is FC-P3.9, once CNXMAN
+ * exists); this call returns as soon as the port itself is up, or the
+ * SS$_ status of why it is not.
+ *
+ * Issued once, after VMS_IOCTL_SYSGEN_LOAD, from STARTUP.EXE's boot path
+ * (ovmx_init.c) -- gated there on VAXCLUSTER != 0 (cluster_boot_gate.h): the
+ * executive's own vms_pe_start() (FC-P0.9) applies the SAME gate internally
+ * (SS$_NOSUCHDEV for VAXCLUSTER=0), so a stray call with the port not wanted
+ * is refused twice over, never silently upgraded to a running port.
+ *
+ * Takes no `in:` fields: the port starts from vms_cluster_node()'s already-
+ * loaded struct vms_cluster.params (VMS_IOCTL_SYSGEN_LOAD's own commit) --
+ * never a second, possibly different, copy of SYSGEN state riding this call.
+ */
+struct vms_cluster_start_args {
+    uint32_t port_up;               /* return: 1 = PEA0: is up after this call */
+    uint32_t status;                /* return: SS$_ status                     */
+};
+_Static_assert(sizeof(struct vms_cluster_start_args) == 8,
+               "vms_cluster_start_args changed size -- VMS_IOCTL_CLUSTER_START ABI break");
+#define VMS_IOCTL_CLUSTER_START _IOWR(VMS_IOC_MAGIC, 0x3f, struct vms_cluster_start_args)
+_Static_assert(VMS_IOCTL_CLUSTER_START == 0xC008563Fu,
+               "VMS_IOCTL_CLUSTER_START encodes differently than the reference build");
+
 /* ================================================================
  * Process registration
  * ================================================================ */

@@ -1102,6 +1102,27 @@ uint32_t vms_kif_sysgen_load(struct vms_sysgen_load_args *args)
     return args->status;
 }
 
+/*
+ * vms_kif_cluster_start - VMS_IOCTL_CLUSTER_START (FC-P0.11). See vms_kif.h
+ * for the contract; this wrapper adds no state of its own, only the
+ * copyin-free (no `in:` fields) call and the port_up readback.
+ */
+uint32_t vms_kif_cluster_start(uint32_t *out_port_up)
+{
+    struct vms_cluster_start_args args;
+
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    KIF_CALL(VMS_IOCTL_CLUSTER_START, &args);
+
+    if (out_port_up)
+        *out_port_up = args.port_up;
+
+    return args.status;
+}
+
 uint32_t vms_kif_dlm_xnode_blkast(uint32_t op, uint32_t lkmode,
                                   uint32_t req_lkid, uint32_t master_lkid,
                                   uint32_t req_csid, uint32_t master_csid,

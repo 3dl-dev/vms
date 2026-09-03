@@ -427,6 +427,23 @@ target_compile_definitions(test_scs_glue_conn PRIVATE
     OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
 )
 
+# ---- FC-P4.6: the DLM REQUESTER arm (vms_dlm_scs_fsm.c) ----
+# Pure on exactly the terms cluster_host_pe / cluster_host_scs are: built with
+# -DOVMX_CLUSTER_HOST from the SHIPPING kernel-core TU, no seam call, no
+# allocation, no clock but ops->now_ms, and every cat-0x02 byte through the
+# FC-P4.5 codec it links. It reaches the lock ENGINE only through the injected
+# ops of vms_dlm_scs_fsm.h, so it needs no vms_lock.o and no kernel headers --
+# which is what makes the R1 rung a sub-second host loop.
+add_library(cluster_host_dlm STATIC
+    ${OVMX_CLUSTER_CORE_DIR}/vms_dlm_scs_fsm.c
+)
+target_include_directories(cluster_host_dlm PUBLIC ${OVMX_CLUSTER_CORE_DIR})
+target_compile_definitions(cluster_host_dlm PUBLIC OVMX_CLUSTER_HOST)
+target_link_libraries(cluster_host_dlm PUBLIC cluster_host_codec)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(cluster_host_dlm PRIVATE -Wall -Wextra -Werror)
+endif()
+
 # ---- FC-P0.1: the pure inter-layer headers must be host-includable ----
 # Everything below builds with -DOVMX_CLUSTER_HOST, which routes vms_cluster.h
 # to <stdint.h> instead of vms_internal.h. (OVMX_CLUSTER_CORE_DIR is set above.)
@@ -457,6 +474,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_scs_dir.c           # FC-P2.3
     hdr_alone_vms_mscp_srv_fsm.c      # FC-P6.3
     hdr_alone_vms_mscp_cl_io_fsm.c    # FC-P7.1
+    hdr_alone_vms_dlm_scs_fsm.c       # FC-P4.6
 )
 target_include_directories(cluster_host_hdr_alone PRIVATE ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_hdr_alone PRIVATE OVMX_CLUSTER_HOST)

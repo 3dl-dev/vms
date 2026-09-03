@@ -444,6 +444,26 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(cluster_host_dlm PRIVATE -Wall -Wextra -Werror)
 endif()
 
+# FC-P4.6's R1: every transition of the requester table against a FAKE engine
+# and a FAKE connection manager, plus the assertion the plan row is actually
+# about -- that EVERY field on every outbound frame traces to a proxy-LKB read.
+# It is proved the only way it can be: the fake engine's LKB is MUTATED between
+# frames and the wire has to follow, so a requester that cached any field goes
+# red here. vms_frame_compose.c is the test-only full-frame composer (FC-P3.15,
+# design sec 3.2.4) -- it supplies the abs[0,72) link a captured body has to be
+# spliced under before the codec will classify it.
+add_executable(test_dlm_requester test_dlm_requester.c vms_frame_compose.c)
+target_link_libraries(test_dlm_requester PRIVATE cluster_host_dlm)
+target_include_directories(test_dlm_requester PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_dlm_requester PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_dlm_requester COMMAND test_dlm_requester)
+set_tests_properties(cluster_host_test_dlm_requester PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;dlm"
+    TIMEOUT 30
+)
+
 # ---- FC-P0.1: the pure inter-layer headers must be host-includable ----
 # Everything below builds with -DOVMX_CLUSTER_HOST, which routes vms_cluster.h
 # to <stdint.h> instead of vms_internal.h. (OVMX_CLUSTER_CORE_DIR is set above.)

@@ -344,8 +344,9 @@ static enum dlm_req_status dq_send_completion(struct dlm_req_fsm *f,
 	if (st != DLM_REQ_OK)
 		return st;
 
-	r->sent_ms = dq_now(f);
-	r->tries = 0u;
+	r->sent_ms  = dq_now(f);
+	r->tries    = 0u;
+	r->settled  = 1u;   /* nothing outstanding: the beat leaves it alone */
 	r->frames_tx += 2u;
 	f->completions_sent++;
 	return DLM_REQ_OK;
@@ -490,6 +491,7 @@ static void h_post_convert_granted(struct dlm_req_fsm *f, struct dq_ev *e)
 	r->dst_csid     = e->post->dst_csid;
 	r->to_directory = e->post->to_directory;
 	r->tries        = 0u;
+	r->settled      = 0u;
 	r->state        = (uint8_t)DLM_REQ_ST_ENQ;
 
 	e->st = dq_transmit(f, r, e->post);
@@ -550,6 +552,8 @@ static void h_grant(struct dlm_req_fsm *f, struct dq_ev *e)
 	f->grants_rx++;
 	r->dst_csid     = e->from_csid;   /* the master, as the frame said     */
 	r->to_directory = 0u;
+	r->tries        = 0u;
+	r->settled      = 0u;
 	r->state        = (uint8_t)DLM_REQ_ST_GRANTED;
 	e->st = dq_send_completion(f, r);
 }
@@ -572,6 +576,7 @@ static void h_grant_dup(struct dlm_req_fsm *f, struct dq_ev *e)
 		e->st = DLM_REQ_E_NOLOCK;
 		return;
 	}
+	e->r->settled = 0u;
 	e->st = dq_send_completion(f, e->r);
 	if (e->st == DLM_REQ_OK)
 		f->completions_resent++;
@@ -1170,8 +1175,8 @@ uint32_t dlm_req_fsm_tick(struct dlm_req_fsm *f)
 		struct dlm_req *r = &f->req[i];
 		uint32_t before;
 
-		if (r->state == (uint8_t)DLM_REQ_ST_IDLE)
-			continue;
+		if (r->state == (uint8_t)DLM_REQ_ST_IDLE || r->settled)
+			continue;   /* settled: the answer arrived and was sent */
 		if ((uint32_t)(now - r->sent_ms) < DLM_REQ_RETRY_MS)
 			continue;
 		before = f->retransmits + f->completions_resent;

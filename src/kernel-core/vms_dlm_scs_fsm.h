@@ -309,6 +309,16 @@ struct dlm_req {
 	uint8_t    redirects;      /* declines/redirects followed so far       */
 
 	/*
+	 * Nothing is outstanding: the grant arrived AND its completion/commit
+	 * pair really went out. The block lives on as this arm's wire record of
+	 * a cross-node lock we hold (so a BLKAST, a CONVERT or a duplicate
+	 * grant has something to land on), but the beat must not keep
+	 * retransmitting a completion that was already answered.
+	 */
+	uint8_t    settled;
+	uint8_t    pad[3];
+
+	/*
 	 * The key. THIS node's own lock id for the proxy -- a value the
 	 * executive minted, and the (req_csid, req_lkid) half that makes every
 	 * retransmit idempotent at the master (D-DLM-5) and makes a duplicate

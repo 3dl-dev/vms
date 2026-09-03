@@ -325,9 +325,76 @@ struct vms_cluster_member_get_args {
 	struct vms_cluster_member members[VMS_CLUSTER_MEMBER_MAX];
 };
 
+/*
+ * VMS_IOCTL_CLUSTER_DIAG_PORT (FC-P0.9). Byte-for-byte the same three row
+ * structs as src/kernel/vms_ioctl.h -- see that header for the field-by-field
+ * rationale; this is the same "ONE facility source, duplicated struct
+ * declaration" shape the vms_cluster_member* structs above already use.
+ */
+#define VMS_CLUSTER_DIAG_PORT_ROW      0u
+#define VMS_CLUSTER_DIAG_PORT_CHANNEL  1u
+#define VMS_CLUSTER_DIAG_PORT_VC       2u
+
+struct vms_pe_view_wire {
+	uint8_t  port_open;
+	uint8_t  hwaddr_valid;
+	uint8_t  hwaddr[6];
+	uint8_t  link_up;
+	uint8_t  pad0[3];
+	uint32_t mtu;
+	uint32_t max_pktsz;
+	uint32_t n_channels;
+	uint32_t n_vcs;
+	uint32_t rx_frames;
+	uint32_t rx_drops_nobuf;
+	uint32_t rx_drops_badclass;
+	uint32_t tx_frames;
+	uint32_t tx_errors;
+};
+
+struct vms_pe_channel_view_wire {
+	uint8_t  remote_mac[6];
+	uint8_t  state;
+	uint8_t  remote_sysid_valid;
+	uint32_t remote_sysid_lo;
+	uint32_t remote_sysid_hi;
+	uint32_t last_rx_ms;
+	uint32_t hello_tx;
+	uint32_t hello_rx;
+	uint32_t verified_pktsz;
+};
+
+struct vms_pe_vc_view_wire {
+	uint32_t peer_sysid_lo;
+	uint32_t peer_sysid_hi;
+	uint8_t  state;
+	uint8_t  pad0[3];
+	uint32_t send_seq;
+	uint32_t recv_seq;
+	uint32_t recv_ack;
+	uint32_t peer_recv_ack;
+	uint32_t unacked;
+	uint32_t retransmits;
+	uint32_t incarnation_lo;
+	uint32_t incarnation_hi;
+	uint32_t timvcfail_ms_left;
+	uint32_t credits_send;
+	uint32_t credits_receive;
+};
+
+struct vms_cluster_diag_port_args {
+	uint32_t row;
+	uint32_t index;
+	uint32_t status;
+	uint32_t pad0;
+	struct vms_pe_view_wire         port;
+	struct vms_pe_channel_view_wire channel;
+	struct vms_pe_vc_view_wire      vc;
+};
+
 /* ================================================================
- * Request numbers. All eight are _IOWR carrying the SAME structs and NR bytes
- * as src/kernel/vms_ioctl.h (0x30-0x3b, magic 'V'), so their command words are
+ * Request numbers. All nine are _IOWR carrying the SAME structs and NR bytes
+ * as src/kernel/vms_ioctl.h (0x30-0x3d, magic 'V'), so their command words are
  * identical across substrates (framework pre-copy path; none exceeds one page
  * -- the largest, vms_cluster_member_get_args at 3848 bytes, is still under
  * NetBSD's one-page IOCPARM_MAX of 4096).
@@ -346,6 +413,7 @@ struct vms_cluster_member_get_args {
 #define VMS_IOCTL_CLUSTER_MEMBER_CLEAR _IOWR(VMS_LOCK_IOC_MAGIC, 0x3a, struct vms_cluster_member_clear_args)
 #define VMS_IOCTL_CLUSTER_MEMBER_GET   _IOWR(VMS_LOCK_IOC_MAGIC, 0x3b, struct vms_cluster_member_get_args)
 #define VMS_IOCTL_DLM_ENUM_STANDING    _IOWR(VMS_LOCK_IOC_MAGIC, 0x3c, struct vms_dlm_enum_standing_args)
+#define VMS_IOCTL_CLUSTER_DIAG_PORT    _IOWR(VMS_LOCK_IOC_MAGIC, 0x3d, struct vms_cluster_diag_port_args)
 
 /*
  * Freeze the shared layouts -- see the other _nb.h contracts' identical asserts:
@@ -377,5 +445,13 @@ _Static_assert(sizeof(struct vms_cluster_member_clear_args) == 8,
                "vms_cluster_member_clear_args changed size -- VMS_IOCTL_CLUSTER_MEMBER_CLEAR ABI break");
 _Static_assert(sizeof(struct vms_cluster_member_get_args) == 3848,
                "vms_cluster_member_get_args changed size -- VMS_IOCTL_CLUSTER_MEMBER_GET ABI break");
+_Static_assert(sizeof(struct vms_pe_view_wire) == 48,
+               "vms_pe_view_wire changed size -- must match src/kernel/vms_ioctl.h");
+_Static_assert(sizeof(struct vms_pe_channel_view_wire) == 32,
+               "vms_pe_channel_view_wire changed size -- must match src/kernel/vms_ioctl.h");
+_Static_assert(sizeof(struct vms_pe_vc_view_wire) == 56,
+               "vms_pe_vc_view_wire changed size -- must match src/kernel/vms_ioctl.h");
+_Static_assert(sizeof(struct vms_cluster_diag_port_args) == 152,
+               "vms_cluster_diag_port_args changed size -- VMS_IOCTL_CLUSTER_DIAG_PORT ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

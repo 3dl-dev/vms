@@ -811,6 +811,100 @@ _Static_assert(sizeof(struct vms_cluster_member_get_args) == 3848,
 _Static_assert(VMS_IOCTL_CLUSTER_MEMBER_GET == 0xCF08563Bu,
                "VMS_IOCTL_CLUSTER_MEMBER_GET encodes differently than the reference build");
 
+/*
+ * VMS_IOCTL_CLUSTER_DIAG_PORT (FC-P0.9, rd docs/plan-faithful-cluster-
+ * executive.md). The port's (PEA0:, PEDRIVER role) diagnostics view --
+ * SDA's SHOW PORT / SCACP SHOW CHANNEL equivalent. `row` names WHICH of the
+ * port's three real projections (vms_pe_snapshot / _channel_snapshot /
+ * _vc_snapshot, src/kernel-core/vms_pe.c) the call fills; `index` walks
+ * channels/circuits for the CHANNEL/VC rows and is ignored for the PORT row.
+ * Only the ONE struct `row` names is meaningful on a given call -- named,
+ * never guessed by a caller scanning every field for a nonzero one.
+ *
+ * status carries the honest SS$_NOSUCHDEV before the port has ever come up
+ * (no CLUSTER_START yet, VAXCLUSTER=0, or a channel/VC index past the
+ * table's high-water mark) -- the negctl this ioctl's plan row requires.
+ *
+ * The three row structs mirror src/kernel-core/vms_cluster_snapshot.h's
+ * vms_pe_view / vms_pe_channel_view / vms_pe_vc_view byte-for-byte (same
+ * "ONE facility source, duplicated struct declaration" shape
+ * VMS_IOCTL_CLUSTER_MEMBER_GET above already uses for vms_cluster_member):
+ * this header must stay includable with no kernel-core dependency, so the
+ * layout is copied here rather than shared by #include, and the
+ * _Static_asserts below pin the two copies to the same size.
+ */
+#define VMS_CLUSTER_DIAG_PORT_ROW      0u  /* the port-wide view */
+#define VMS_CLUSTER_DIAG_PORT_CHANNEL  1u  /* one channel row, by `index` */
+#define VMS_CLUSTER_DIAG_PORT_VC       2u  /* one virtual-circuit row, by `index` */
+
+struct vms_pe_view_wire {
+    uint8_t  port_open;
+    uint8_t  hwaddr_valid;
+    uint8_t  hwaddr[6];
+    uint8_t  link_up;
+    uint8_t  pad0[3];
+    uint32_t mtu;
+    uint32_t max_pktsz;
+    uint32_t n_channels;
+    uint32_t n_vcs;
+    uint32_t rx_frames;
+    uint32_t rx_drops_nobuf;
+    uint32_t rx_drops_badclass;
+    uint32_t tx_frames;
+    uint32_t tx_errors;
+};
+_Static_assert(sizeof(struct vms_pe_view_wire) == 48,
+               "vms_pe_view_wire changed size -- must match vms_pe_view");
+
+struct vms_pe_channel_view_wire {
+    uint8_t  remote_mac[6];
+    uint8_t  state;
+    uint8_t  remote_sysid_valid;
+    uint32_t remote_sysid_lo;
+    uint32_t remote_sysid_hi;
+    uint32_t last_rx_ms;
+    uint32_t hello_tx;
+    uint32_t hello_rx;
+    uint32_t verified_pktsz;
+};
+_Static_assert(sizeof(struct vms_pe_channel_view_wire) == 32,
+               "vms_pe_channel_view_wire changed size -- must match vms_pe_channel_view");
+
+struct vms_pe_vc_view_wire {
+    uint32_t peer_sysid_lo;
+    uint32_t peer_sysid_hi;
+    uint8_t  state;
+    uint8_t  pad0[3];
+    uint32_t send_seq;
+    uint32_t recv_seq;
+    uint32_t recv_ack;
+    uint32_t peer_recv_ack;
+    uint32_t unacked;
+    uint32_t retransmits;
+    uint32_t incarnation_lo;
+    uint32_t incarnation_hi;
+    uint32_t timvcfail_ms_left;
+    uint32_t credits_send;
+    uint32_t credits_receive;
+};
+_Static_assert(sizeof(struct vms_pe_vc_view_wire) == 56,
+               "vms_pe_vc_view_wire changed size -- must match vms_pe_vc_view");
+
+struct vms_cluster_diag_port_args {
+    uint32_t row;                       /* in: VMS_CLUSTER_DIAG_PORT_*        */
+    uint32_t index;                     /* in: channel/vc index; else ignored */
+    uint32_t status;                    /* return: SS$_ status                */
+    uint32_t pad0;
+    struct vms_pe_view_wire         port;      /* valid iff row == _ROW     */
+    struct vms_pe_channel_view_wire channel;   /* valid iff row == _CHANNEL */
+    struct vms_pe_vc_view_wire      vc;        /* valid iff row == _VC      */
+};
+_Static_assert(sizeof(struct vms_cluster_diag_port_args) == 152,
+               "vms_cluster_diag_port_args changed size -- VMS_IOCTL_CLUSTER_DIAG_PORT ABI break");
+#define VMS_IOCTL_CLUSTER_DIAG_PORT _IOWR(VMS_IOC_MAGIC, 0x3d, struct vms_cluster_diag_port_args)
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_PORT == 0xC098563Du,
+               "VMS_IOCTL_CLUSTER_DIAG_PORT encodes differently than the reference build");
+
 /* ================================================================
  * Process registration
  * ================================================================ */

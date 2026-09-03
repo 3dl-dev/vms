@@ -2922,6 +2922,29 @@ void pe_fsm_channel_project(const struct pe_channel *ch,
 	}
 }
 
+/*
+ * The pure half of the port-wide view (FC-P0.9, integration note E11): every
+ * field here is a straight read of a counter this FSM itself increments --
+ * n_channels/n_vcs the high-water marks pe_channel_alloc/pe_vc_alloc leave
+ * behind, rx_frames every call to pe_fsm_rx, rx_drops_badclass the two ways a
+ * received SCA frame fails to become a discovery or SCS envelope (classified
+ * into neither family, or classified and then failed to decode). Nothing here
+ * is a placeholder: an FSM that has seen nothing projects all-zero.
+ */
+void pe_fsm_view_project(const struct pe_fsm *f, struct vms_pe_view *out)
+{
+	if (out == NULL)
+		return;
+	pe_bzero(out, (uint32_t)sizeof(*out));
+	if (f == NULL)
+		return;
+
+	out->n_channels = f->n_channels;
+	out->n_vcs = f->n_vcs;
+	out->rx_frames = f->rx_frames;
+	out->rx_drops_badclass = f->rx_unclassified + f->rx_parse_failed;
+}
+
 /* ==========================================================================
  * Names -- the spelling the console and a failing test both use
  * ========================================================================== */

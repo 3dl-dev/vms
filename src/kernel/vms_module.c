@@ -74,27 +74,16 @@ MODULE_PARM_DESC(vms_local_csid,
     "OVMX DLM: this node's cluster system ID (local scaffolding; the connection manager assigns the real CSID at cluster join in 0.4)");
 
 /*
- * dlm_member_csids[] / dlm_member_count - the DLM directory membership vector
- * (rd vms-1bba, the "DB" rung). A CONTROLLED, STATIC configuration input: the
- * operator or the 2-node test harness supplies the ordered cluster-member CSID
- * vector at insmod (`dlm_member_csids=1030,1031`), exactly as vms_local_csid is
- * supplied. module_param_array sets dlm_member_count to the number of elements
- * actually given. The shared DLM directory logic (src/kernel-core/vms_lock.c)
- * hashes a resource name across this vector to select the directory node, so
- * every node given the SAME vector independently resolves the SAME directory
- * (and, this rung, master) -- which is what vms-1bba proves.
- *
- * This is DELIBERATELY NOT the live membership feed from the connection manager
- * / SCS rejoin: that is the 0.4 "DC" successor (overlapping vms-2f3). Supplying
- * membership as a load-time input is honest configuration, distinct from
- * fabricating live cluster state (INV-6). Left empty (count 0) it defaults to a
- * cluster-of-one on vms_local_csid, so single-node behaviour is unchanged.
+ * The static DLM directory membership vector (dlm_member_csids /
+ * dlm_member_count, rd vms-1bba) is GONE with FC-P4.3. The membership a
+ * directory resolves over is the connection manager's CLUB, indexed by the
+ * cluster's own wire-carried resource hash through the Lock Directory Weight
+ * Vector (src/kernel-core/vms_dlm_ldwv.h); the lock engine reaches it through
+ * the injected dir_resolve/dir_generation ops (src/kernel-core/vms_dlm_proxy.h).
+ * An insmod-supplied member list was a second, drifting copy of a fact the
+ * executive already holds -- and it was only ever consumed by the exec_jhash
+ * directory this item deleted.
  */
-uint32_t dlm_member_csids[VMS_DLM_MAX_MEMBERS];
-int      dlm_member_count;
-module_param_array(dlm_member_csids, uint, &dlm_member_count, 0444);
-MODULE_PARM_DESC(dlm_member_csids,
-    "OVMX DLM: static ordered cluster-member CSID vector for the directory proof (controlled DB-rung input, NOT the live 0.4/DC membership feed); same order on every node");
 
 #if defined(OVMX_KTEST_FAULT_INJECT)
 /*

@@ -246,6 +246,39 @@ vms_codec_status_t vms_dlm_req_csid(const struct vms_sca_hdr *hdr, uint16_t *out
 }
 
 /* ------------------------------------------------------------------ *
+ * The directory hash at body[10:12] -- read only, never built.
+ * See the header for the p. 6-50 grounding and the INFERRED offset.
+ * ------------------------------------------------------------------ */
+
+vms_codec_status_t vms_dlm_dir_hash_parse(const uint8_t *frame, uint32_t len,
+					  const struct vms_frame_info *fi,
+					  uint16_t *out)
+{
+	vms_wire_view_t v;
+	uint8_t cat;
+	uint16_t hash;
+
+	if (out == (uint16_t *)0 || !dlm_class_ok(fi))
+		return VMS_CODEC_E_CLASS;
+
+	vms_wire_view_init(&v, frame, len);
+	cat = vms_wire_get_u8(&v, VMS_OFF_DLM_CAT);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	/* Requests (0x02) and responses (0x82) alike: the value is a property
+	 * of the resource name, and every cat-0x02 frame that names one is a
+	 * chance to learn it. */
+	if ((cat & 0x7fu) != VMS_DLM_CAT_REQUEST)
+		return VMS_CODEC_E_CLASS;
+
+	hash = vms_wire_get_le16(&v, VMS_OFF_DLM_DIR_HASH);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	*out = hash;
+	return VMS_CODEC_OK;
+}
+
+/* ------------------------------------------------------------------ *
  * op 0x0d lock-resource rebuild record -- GROUNDED, spec §4(p)
  * ------------------------------------------------------------------ */
 

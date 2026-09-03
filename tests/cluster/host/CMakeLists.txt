@@ -107,6 +107,11 @@ add_library(cluster_host_cnxman STATIC
     # in cluster_host_codec (it is a pure codec-level TU), and hands off to
     # FC-P3.5's barrier, which is already in this library.
     ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_join_fsm.c  # FC-P3.3
+    # FC-P4.3: the Lock Directory Weight Vector. A pure TU on exactly the
+    # same terms (no seam call, no allocation, no clock), and it joins THIS
+    # library rather than getting its own because Phase 2's commit and both
+    # transition FSMs call it -- the vector is connection-manager state.
+    ${OVMX_CLUSTER_CORE_DIR}/vms_dlm_ldwv.c        # FC-P4.3
 )
 target_include_directories(cluster_host_cnxman PUBLIC ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_cnxman PUBLIC OVMX_CLUSTER_HOST)
@@ -139,6 +144,12 @@ cluster_host_cnxman_test(test_cnxman_coord   test_cnxman_coord.c vms_frame_compo
 # FC-P3.3: the join. Same terms; it also needs the MSCP end-message builders
 # (already in cluster_host_codec, which cluster_host_cnxman links).
 cluster_host_cnxman_test(test_cnxman_join    test_cnxman_join.c vms_frame_compose.c)     # FC-P3.3
+
+# FC-P4.3's R1: the Lock Directory Weight Vector against the published worked
+# example (Davis p. 6-33), the all-zero-weight rule, own-entries-0, CSV-index
+# order over real CSBs, the `hash16 mod n` index rule, and the two refusals
+# (mixed/unknown weights, capacity). Pure, so it runs in milliseconds.
+cluster_host_cnxman_test(test_dlm_ldwv test_dlm_ldwv.c)
 
 # FC-P3.15's own done-condition: prove NO CNXMAN TU writes below body offset 0
 # (design sec 3.2.4 ruling E1). OVMX_KCORE_DIR lets the test open the real
@@ -431,6 +442,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_scs.c
     hdr_alone_vms_cnxman.c
     hdr_alone_vms_dlm_scs.c
+    hdr_alone_vms_dlm_ldwv.c          # FC-P4.3
     hdr_alone_vms_cnxman_csb.c        # FC-P3.6
     hdr_alone_vms_cnxman_recnx_fsm.c  # FC-P3.6
     hdr_alone_vms_cluster_fork.c
@@ -541,6 +553,29 @@ endif()
 
 add_test(NAME cluster_host_test_lock_proxy COMMAND test_lock_proxy)
 set_tests_properties(cluster_host_test_lock_proxy PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock"
+    TIMEOUT 60
+)
+
+# ---- FC-P4.3: the DIRECTORY, on the same real engine + host backend ----
+# The engine half of dir_resolve: the hash is LEARNED from the wire and never
+# computed, a resource with no learned hash is refused SS$_UNSUPPORTED and
+# nothing is posted, a cached resolution dies with the vector's generation, and
+# a node with no cluster still locks. Same include recipe as the two above.
+add_executable(test_lock_dir test_lock_dir.c)
+target_include_directories(test_lock_dir PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(test_lock_dir PRIVATE cluster_host_lock Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_lock_dir PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME cluster_host_test_lock_dir COMMAND test_lock_dir)
+set_tests_properties(cluster_host_test_lock_dir PROPERTIES
     LABELS "unit;cluster;cluster_host;lock"
     TIMEOUT 60
 )

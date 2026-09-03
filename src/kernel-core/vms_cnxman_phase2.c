@@ -16,6 +16,7 @@
 #include "vms_cnxman.h"
 #include "vms_cnxman_csb.h"
 #include "vms_cnxman_phase2.h"
+#include "vms_dlm_ldwv.h"   /* task 5: the lock directory weight vector */
 
 /* ==========================================================================
  * Small shared helpers (this TU calls no library: a pure TU builds on the host
@@ -194,7 +195,35 @@ static void phase2_commit_local_membership(struct vms_cluster *cl,
 }
 
 /* ==========================================================================
- * The four tasks, in the published order
+ * Task 5 -- the lock directory weight vector (FC-P4.3)
+ * ========================================================================== */
+
+/*
+ * p. 7-41/7-42: after the MEMBER flags, the CSV entry and the CLUSTER flag,
+ * "the lock directory weight vector is filled in to reflect the current
+ * membership" -- and only THEN do the systems wait for each other and perform
+ * the lock database rebuild in unison. So this runs LAST of the commit tasks
+ * and BEFORE any rebuild, which is exactly where it sits below.
+ *
+ * It is not conditional on the transition class. Phase 1 invalidated the
+ * vector (vms_cnxman_barrier_fsm.c / vms_cnxman_coord_fsm.c), so a transition
+ * that commits without refilling it would leave this node unable to resolve
+ * any directory at all -- and a partial rebuild that happens not to change the
+ * vector still produces the identical vector here, at the cost of one walk of
+ * at most 96 CSBs.
+ *
+ * A refusal is NOT a Phase 2 failure: membership is committed either way (the
+ * book's tasks 1-4 are done), and the node simply has no directory vector,
+ * which its own counters and one %CNXMAN line say out loud. Pretending to a
+ * vector is the failure mode this item exists to prevent.
+ */
+static void phase2_commit_ldwv(struct vms_club *club, const struct cnxman_ops *ops)
+{
+	(void)cnxman_ldwv_rebuild(club, ops);
+}
+
+/* ==========================================================================
+ * The five tasks, in the published order
  * ========================================================================== */
 
 uint32_t cnxman_phase2_commit(struct vms_cluster *cl,
@@ -226,6 +255,7 @@ uint32_t cnxman_phase2_commit(struct vms_cluster *cl,
 	phase2_commit_quorum(club);
 	members = phase2_commit_count(club, in, st, ops);
 	phase2_commit_local_membership(cl, ops);
+	phase2_commit_ldwv(club, ops);
 
 	club->last_transition_ms = phase2_now(ops);
 	return members;

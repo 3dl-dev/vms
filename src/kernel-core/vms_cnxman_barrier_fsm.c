@@ -37,6 +37,7 @@
 #include "vms_cnxman_csb.h"
 #include "vms_cnxman_phase2.h"
 #include "vms_cnxman_barrier_fsm.h"
+#include "vms_dlm_ldwv.h"   /* FC-P4.3: Phase 1 discards the directory */
 #include "vms_cluster_codec_cm.h"
 
 /* ==========================================================================
@@ -294,6 +295,21 @@ static void barrier_fill_transition(const struct cnxman_barrier *b,
 static void barrier_dlm_begin(struct cnxman_barrier *b)
 {
 	struct cnxman_transition tr;
+
+	/*
+	 * PHASE 1 DISCARDS THE DIRECTORY (FC-P4.3; Davis p. 6-33, pp. 7-40/7-41).
+	 * A transition can move a resource name to a different directory node, so
+	 * "all directory information cluster-wide is discarded" and the vector is
+	 * refilled at Phase 2 (vms_cnxman_phase2.c task 5). Unconditional, and
+	 * BEFORE the DLM is told the transition began: between here and the commit
+	 * this node resolves no directory at all, which is the honest state -- the
+	 * alternative is routing a lookup through a vector the cluster is in the
+	 * middle of changing. The identical two lines are in the coordinator's
+	 * coord_dlm_begin(): the book gives the SAME obligation to both sides, and
+	 * each side owns its own Phase 1.
+	 */
+	if (b->cl != NULL)
+		vms_ldwv_invalidate(&b->cl->club.ldwv);
 
 	if (b->dlm == NULL || b->dlm->transition_begin == NULL)
 		return;

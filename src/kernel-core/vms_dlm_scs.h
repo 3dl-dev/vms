@@ -67,40 +67,42 @@ enum dlm_role {
 };
 
 /* ==========================================================================
- * 2. THE DIRECTORY RESOLVER -- the Rule-8 boundary, in one function
+ * 2. THE DIRECTORY RESOLVER -- the Rule-8 boundary, RESOLVED (FC-P4.3)
  *
- * `dir_resolve(name) -> csid` answers "which member is the directory node for
- * this ROOT resource?" (sub-resources never hash: a whole lock tree is mastered
- * where its root is, so only root names reach here).
+ * "Which member is the directory node for this ROOT resource?" -- and it is
+ * answered in src/kernel-core/vms_dlm_ldwv.h, which is where the whole
+ * contract, the page cites and the ladder's outcome now live. Read that file;
+ * this note records only WHY there is no `dir_resolve` function pointer here.
  *
- * WHAT THIS FUNCTION MAY NOT DO. It may not compute a hash of its own. OVMX
- * once did exactly that -- exec_jhash(name) % n over a static vector -- and
- * pointing it at a real cluster caused a reformation: a wrong directory is not a
- * local error, it is a cluster-breaker. The DLM directory algorithm is
- * unpublished-as-code and CLAUDE.md Rule 8 forbids recomputing it.
+ * WHAT THE LADDER RESOLVED TO (design SS3.6 D-DLM-2, research note
+ * docs/research-dlm-directory-algorithm.md):
  *
- * WHAT IT MAY DO, in the order the design's ladder tries them (SS3.6, D-DLM-2):
- *   Rung A  implement the algorithm as PUBLISHED -- the lock-management chapter
- *           of VAX/VMS Internals and Data Structures documents the directory
- *           vector (each node with LOCKDIRWT>0 occupying LOCKDIRWT entries,
- *           rebuilt at every transition) and FC-P4.1 answers whether the book
- *           gives the hash and the ordering at the bit level. Implementing a
- *           published description IS clean-room; the lab capture then becomes a
- *           CONFORMANCE CHECK (predicted vs observed over ~100 root names, zero
- *           residuals), not a derivation. This is the expected outcome.
- *   Rung B  never compute -- ASK. Probe W[0], W[1], ... and cache the answer in
- *           the RSB's dir_csid, invalidating every cache at every transition.
- *           Every routing decision is then a value the cluster returned.
- *   Rung C  operator ruling only (FC-P4.3), if the protocol does not guard a
- *           mis-addressed lookup.
+ *   RUNG A, taken.  The Lock Directory Weight Vector and the `hash mod n`
+ *     index rule are FULLY PUBLISHED (Davis pp. 6-31/6-32, Fig. 6-18 p. 6-33,
+ *     pp. 7-40..7-42), so OVMX implements them from the book. The vector lives
+ *     in the CLUB, is resized at Phase 1 and filled at Phase 2, and every
+ *     change discards all cached directory information.
  *
- * The three rungs are one function behind one signature, so choosing among them
- * is a configuration of this call, not a redesign. `out_csid` is written ONLY
- * when the answer is real; a nonzero return means "not resolved" and the caller
- * must not proceed with a guess.
+ *   RUNG A', taken.  The hash FUNCTION is not published at the bit level, so
+ *     OVMX never computes one. It does not need to: p. 6-50 documents that
+ *     every directory lookup carries the SENDER'S 16-bit hash on the wire and
+ *     that the directory node uses the received value. OVMX learns it
+ *     (vms_lock.c `hash16`/`hash_known`, fed from the codec's
+ *     vms_dlm_dir_hash_parse) and sends a lookup ONLY with a value it received.
+ *     A root name OVMX is the first in the cluster to touch has no hash and is
+ *     refused SS$_UNSUPPORTED -- the honest floor, and a narrow one.
+ *
+ *   RUNG B (probe) is expected UNSAFE and is NOT built; rung C(i) is an
+ *     operator matter. Neither is a code path here.
+ *
+ * WHY NO FUNCTION POINTER IN THIS HEADER. The resolver used to be typed
+ * `(resnam, namelen) -> csid`, and an interface that takes a NAME is an
+ * interface somebody can implement by hashing the name -- which is exactly the
+ * thing that broke a real cluster (commit 90b3bbbd) and later produced the
+ * grant storm. The seam the lock engine actually uses takes the HASH
+ * (src/kernel-core/vms_dlm_proxy.h `dir_resolve(ctx, hash16, &csid)`), so the
+ * fabrication is not merely forbidden, it is unrepresentable.
  * ========================================================================== */
-typedef int (*dlm_dir_resolve_fn)(void *ctx, const uint8_t *resnam,
-				  uint8_t namelen, vms_csid_t *out_csid);
 
 /* ==========================================================================
  * 3. An inbound request and the reply it may produce
@@ -179,12 +181,6 @@ struct dlm_scs_role_ops {
  * node with no cluster still locks). */
 int  vms_dlm_scs_start(struct vms_cluster *cl);
 void vms_dlm_scs_stop(struct vms_cluster *cl);
-
-/* Install the directory resolver (SS2). Until one is installed this node
- * resolves only resources it masters itself; a lookup that would need a
- * directory is DECLINED rather than guessed. */
-void vms_dlm_scs_set_dir_resolve(struct vms_cluster *cl,
-				 dlm_dir_resolve_fn fn, void *ctx);
 
 /*
  * The requester side, called BY vms_lock.c from process context: post the

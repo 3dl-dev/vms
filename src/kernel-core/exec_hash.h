@@ -52,16 +52,15 @@
  *   exec_hash_for_each_possible(name, obj, member, key)
  *                                                    walk the `key` bucket, typed.
  *   void  exec_hash_del(exec_hash_node_t *n)         plain (non-RCU) unlink.
- *   uint32_t exec_jhash(const void *key, uint32_t len, uint32_t initval)
- *                                                    hash a byte range to a bucket
- *                                                    key (the resource-name hash;
- *                                                    Linux: jhash). Its VALUE is
- *                                                    used only for bucketing and a
- *                                                    membership modulo, never for a
- *                                                    correctness decision (name
- *                                                    matches are by strncmp), so a
- *                                                    substrate whose exec_jhash
- *                                                    differs is still correct.
+ *   (exec_jhash is GONE -- FC-P4.3. The seam once exported a general byte-range
+ *     hash "for the resource-name hash and the directory-node hash". The second
+ *     of those two uses was a cluster-breaker: VMS's directory hash is not
+ *     OVMX's, it is a value the cluster puts on the wire and this executive
+ *     reads off it (src/kernel-core/vms_dlm_ldwv.h, Davis p. 6-50). Rather than
+ *     leave a general-purpose "the hash function" in the seam for a future
+ *     directory path to reach for, it was deleted; the one legitimate consumer
+ *     -- vms_lock.c's private bucket key -- keeps six lines of its own, inside
+ *     the function that names the bucket array.)
  *
  * RCU PAIRING: exec_hash_del_rcu removes a node so that a read section started
  * AFTER the unlink cannot reach it while a reader ALREADY traversing walks off

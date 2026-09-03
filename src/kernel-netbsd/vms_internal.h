@@ -470,10 +470,35 @@ struct vms_lock_resource {
 	exec_lock_t         lock;
 	int                 refcount;
 	struct vms_lock_resource *parent;
-	/* DLM directory + mastering (vms-ci.5 DB, LOCAL scaffolding): both resolve
-	 * to vms_local_csid on a stub-of-one membership; a non-local directory or
-	 * master returns SS__UNSUPPORTED (0.4), never a fabricated remote grant. */
-	uint32_t            dir_csid;       /* directory node CSID for `name` */
+	/* DLM directory + mastering. Mirror of the Linux twin
+	 * (src/kernel/vms_internal.h) -- ONE facility source (vms_lock.c) reads
+	 * these on both substrates, so the field set must not diverge. The
+	 * contract is src/kernel-core/vms_dlm_ldwv.h. */
+
+	/*
+	 * THE DIRECTORY (FC-P4.3, src/kernel-core/vms_dlm_ldwv.h).
+	 *
+	 * hash16 is the resource name's 16-bit directory hash AS THE CLUSTER
+	 * PUTS IT ON THE WIRE (Davis p. 6-50). It is LEARNED -- by
+	 * vms_lock_dlm_learn_dir_hash() from a parsed cat-0x02 frame -- and
+	 * never computed: the hash function is not published at the bit level,
+	 * and a wrong value makes the directory node install the sender as
+	 * master of somebody else's resource. hash_known 0 means "no lookup may
+	 * be sent for this name", not "hash 0".
+	 *
+	 * dir_csid is the directory node the weight vector named for that hash;
+	 * 0 there means THIS node (p. 6-32). It is meaningful only while
+	 * dir_valid is set AND dir_gen still equals the vector's generation --
+	 * which is how a cached resolution is discarded the moment the vector
+	 * changes at a state transition (p. 6-33).
+	 *
+	 * master_csid is the node that masters the resource; 0 = unmastered.
+	 */
+	uint16_t            hash16;
+	uint8_t             hash_known;
+	uint8_t             dir_valid;
+	uint32_t            dir_gen;
+	uint32_t            dir_csid;       /* directory node CSID; 0 = this node */
 	uint32_t            master_csid;    /* mastering node CSID; 0 = unmastered */
 };
 
@@ -498,19 +523,13 @@ struct vms_lock_resource {
 extern uint32_t vms_local_csid;
 
 /*
- * DLM directory membership vector (rd vms-1bba, the "DB" rung). A CONTROLLED,
- * STATIC configuration input supplied at load time (the Linux rind exposes it
- * as a module_param_array; this NetBSD substrate defines the symbols with a
- * cluster-of-one default). dlm_directory_csid() hashes a resource name across
- * this vector to pick the directory node, so every node given the SAME vector
- * resolves the SAME directory/master for a name. NOT the live membership feed
- * (that is the 0.4 "DC" successor); an honest controlled input, never
- * fabricated live state. dlm_member_count == 0 -> cluster-of-one on the local
- * CSID (single-node behaviour preserved). Same order required on every node.
+ * The static DLM directory membership vector (dlm_member_csids /
+ * dlm_member_count, rd vms-1bba) is GONE with FC-P4.3. The membership a
+ * directory resolves over is the connection manager's CLUB, reached from the
+ * lock engine through the injected dir_resolve/dir_generation ops
+ * (src/kernel-core/vms_dlm_proxy.h); an insmod-supplied member list was a
+ * second, drifting copy of a fact the executive already holds.
  */
-#define VMS_DLM_MAX_MEMBERS 16
-extern uint32_t dlm_member_csids[VMS_DLM_MAX_MEMBERS];
-extern int      dlm_member_count;
 
 /*
  * Per-process control block. On Linux this is a large struct with the whole

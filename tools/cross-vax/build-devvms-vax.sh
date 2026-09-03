@@ -117,6 +117,7 @@ SRCS="$KMOD/vms_netbsd.c \
       $CORE/vms_cluster_codec_blk.c \
       $CORE/vms_pe_fsm.c \
       $CORE/vms_cnxman_phase2.c \
+      $CORE/vms_dlm_ldwv.c \
       $CORE/vms_cnxman_barrier_fsm.c \
       $CORE/vms_cnxman_coord_fsm.c \
       $CORE/vms_scs_fsm.c \

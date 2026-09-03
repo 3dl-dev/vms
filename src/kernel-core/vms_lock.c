@@ -39,7 +39,7 @@
                                * vocabulary, and vms_local_csid (extern) */
 #include "exec_kbackend.h"    /* exec_lock/trylock/cv/copy/alloc */
 #include "exec_list.h"        /* exec_list_* (granted/waiting/proc lists) */
-#include "exec_hash.h"        /* exec_hash_* + exec_jhash (resource database) */
+#include "exec_hash.h"        /* exec_hash_* (the resource database)          */
 #include "exec_rbtree.h"      /* exec_rbtree_* / exec_rb_* (lock-ID database) */
 #include "vms_dlm_proxy.h"    /* the PROXY-LKB requester seam (FC-P4.4) */
 
@@ -427,9 +427,33 @@ static void lock_unlink_from_res(struct vms_lock_entry *lock)
  * Resource management (hash table by name)
  * ================================================================ */
 
+/*
+ * resource_hash_key - the LOCAL BUCKET KEY for the resource database.
+ *
+ * This is a private index into this node's own hash table and NOTHING ELSE. It
+ * is never sent, never compared against another node's value, and never used
+ * to choose a directory node -- VMS's directory hash is a different quantity
+ * that OVMX takes off the wire and never computes (vms_dlm_ldwv.h, Davis
+ * p. 6-50). The seam's shared exec_jhash() was deleted with FC-P4.3 precisely
+ * so there is no general-purpose "the hash function" left in the executive for
+ * a future directory path to reach for by accident; what remains is these six
+ * lines, inside the one function that names the bucket array.
+ *
+ * FNV-1a over the name's significant bytes: public-domain, unrelated to
+ * anything VMS does, and its VALUE is unobservable outside this file (a lookup
+ * confirms the name with strncmp), which is what makes it safe to be OVMX's
+ * own choice.
+ */
 static uint32_t resource_hash_key(const char *name)
 {
-    return exec_jhash(name, strnlen(name, 32), 0);
+    uint32_t h = 2166136261u;   /* FNV-1a offset basis */
+    size_t i, n = strnlen(name, 32);
+
+    for (i = 0; i < n; i++) {
+        h ^= (uint32_t)(unsigned char)name[i];
+        h *= 16777619u;         /* FNV-1a prime */
+    }
+    return h;
 }
 
 static struct vms_lock_resource *resource_find(const char *name)
@@ -507,7 +531,16 @@ static void resource_release(struct vms_lock_resource *res)
         for (i = 0; i < LCK_VALBLK_SIZE; i++) {
             if (res->valblk[i]) { has_valblk = 1; break; }
         }
-        if (!has_valblk) {
+        /*
+         * ...and preserve it if the CLUSTER has told us this name's directory
+         * hash (FC-P4.3). The value cannot be recomputed -- it is only ever
+         * read off the wire (Davis p. 6-50) -- so discarding the block that
+         * holds it would guarantee an SS$_UNSUPPORTED the next time this node
+         * touches the name, on exactly the shared resources the cluster talks
+         * about most. This is the resource database keeping what the cluster
+         * told it, which is what VMS's own Resource Hash Table does (p. 6-49).
+         */
+        if (!has_valblk && !res->hash_known) {
             exec_hash_del(&res->hash_node);
             resource_free(res);
         }
@@ -516,133 +549,197 @@ static void resource_release(struct vms_lock_resource *res)
 }
 
 /* ================================================================
- * DLM resource directory + mastering (vms-ci.5 DB) -- LOCAL scaffolding
+ * DLM resource directory + mastering -- the DIRECTORY RESOLVER (FC-P4.3)
  *
- * On OpenVMS the lock database is distributed: every resource is MASTERED on
- * one node, and to find the master a node hashes the resource name to a
- * DIRECTORY node, which holds the name->master mapping. An enqueue routes to
- * the master; a directory/master on another node is reached over SCS. VMS's
- * directory lookup is the documented 3-case algorithm (IDSM lock-management
- * chapter, "directory lookups" -- mined transcript ch6-part02, pp. 6-18..6-35;
- * summarized in docs/design-cluster-node.md §5):
+ * On OpenVMS the lock database is distributed: every resource tree is MASTERED
+ * on one node, and to find the master a node routes a lookup to the tree's
+ * DIRECTORY NODE, which holds the name->master mapping. The three outcomes are
+ * the published ones (Davis p. 6-31; docs/research-dlm-directory-algorithm.md):
  *
- *   (1) this node is the directory AND masters the resource -> grant locally;
- *   (2) this node is the directory, another node masters it -> route to master;
- *   (3) this node is not the directory -> inquire of the directory node, which
- *       returns the master (or assigns the requester as master on first use).
+ *   (1) the directory node is also the master -> it resolves the request;
+ *   (2) it knows the master -> it answers with the master's CSID;
+ *   (3) it knows no master -> it tells the requester to become the master.
+ *       And if THIS node is the directory, absence of the root in its own
+ *       database means nobody masters it and it assumes mastery (p. 6-31).
  *
- * This is the LOCAL scaffolding for that model. Membership is a stub-of-one
- * (a "cluster of one"), so the directory vector has a single entry -- this
- * node -- and every name resolves to the local CSID: case (1) always, self is
- * both directory and master, and the grant runs through the existing single-
- * node lock manager below unchanged. The multi-node membership view and the
- * remote paths (case (2)/(3) forwarding over the VMS$VAXcluster VC, and
- * dynamic remastering on state transitions) are 0.4 (vms-ci.5 DC/DD): the
- * enqueue path returns SS$_UNSUPPORTED for a non-local directory or master
- * rather than fabricating a remote answer (INV-6 spirit).
+ * WHICH NODE IS THE DIRECTORY is `ldwv[hash16 mod n]` -- the Lock Directory
+ * Weight Vector the connection manager rebuilds at every state transition
+ * (vms_dlm_ldwv.h), indexed by the resource name's 16-bit hash. The engine
+ * reaches the vector through the injected `dir_resolve` op (vms_dlm_proxy.h),
+ * so the lock manager holds no copy of the cluster's membership and there is
+ * no second place for it to drift.
+ *
+ * THE HASH IS NEVER COMPUTED HERE OR ANYWHERE ELSE.
+ *
+ * The predecessor of this code was `exec_jhash(name) % n` over a static insmod
+ * vector -- an OVMX hash standing in for VMS's, which is a different function.
+ * Pointing it at a real cluster caused a reformation (commit 90b3bbbd), and the
+ * same class of error with a placeholder hash of 0 produced the campaign's
+ * 35-per-second grant storm: a lookup carrying the wrong hash makes the
+ * directory node scan the wrong chain, miss the name, and take outcome (3) --
+ * silently installing the SENDER as master of a resource somebody else already
+ * masters (memory cluster-promotion-gap; research note SS3).
+ *
+ * So the hash is taken off the wire and only off the wire (p. 6-50: every
+ * directory lookup carries the sender's own 16-bit hash, and the directory node
+ * uses the received value). `res->hash16`/`res->hash_known` are written by
+ * vms_lock_dlm_learn_dir_hash() from a parsed cat-0x02 frame, and a resource
+ * with no learned hash is NOT looked up: the enqueue returns SS$_UNSUPPORTED,
+ * an honest refusal that costs this node locking on root names it is the first
+ * in the cluster to touch (its own private volumes and files) and costs it
+ * nothing else -- membership, directory duty, mastering and every shared name
+ * are unaffected (design SS3.6, rung A'; the residual's resolution is rung B/C).
  * ================================================================ */
 
 /*
  * This node's CSID (vms_local_csid). 0 is reserved for "unmastered"
  * (struct vms_lock_resource.master_csid), so the default is a non-zero OVMX
  * local placeholder. The VARIABLE and its insmod module parameter live in the
- * Linux module glue (src/kernel/vms_module.c) -- module parameters are a
- * host-module-lifecycle concern, not portable executive logic, so they stay in
- * the per-substrate rind (design record §4). This core facility reads it through
- * the extern declaration in vms_internal.h; the connection manager (0.4) or a
- * test sets the real CSID at insmod time. It is NOT a claim of a VMS-authentic
- * CSID value or layout (CLAUDE.md Rule 8) -- real CSIDs are assigned by the CM
- * at join.
+ * per-substrate rind (src/kernel/vms_module.c, src/kernel-netbsd/vms_netbsd.c)
+ * -- module parameters are a host-module-lifecycle concern, not portable
+ * executive logic (design record SS4). This core facility reads it through the
+ * extern declaration in vms_internal.h. It is NOT a claim of a VMS-authentic
+ * CSID value or layout (CLAUDE.md Rule 8) -- real CSIDs are assigned by the
+ * connection manager at join, and re-pointing this at the CLUB's LEARNED local
+ * CSID is FC-P4.8's glue.
  */
 
 /*
- * Number of directory-participating nodes in the membership view. Read from the
- * CONTROLLED, STATIC membership vector supplied at load time (dlm_member_csids /
- * dlm_member_count, vms-1bba "DB" rung -- an insmod module_param_array on Linux,
- * a load-time symbol on NetBSD; see vms_internal.h). Empty (count 0, the
- * default) falls back to a cluster-of-one, so an unconfigured node behaves
- * exactly as the prior stub-of-one did -- single-node grants unchanged.
- *
- * This is NOT the live membership feed from the connection manager / quorum
- * (the connection manager's own CLUB, src/kernel-core/vms_cnxman_quorum.c):
- * that dynamic feed is FC-P4.3's successor (and
- * overlaps vms-2f3's rejoin). A static, harness/operator-supplied vector is an
- * honest controlled input for the directory proof, never fabricated live state.
+ * How many learned directory hashes disagreed with a value already held for
+ * the same resource name. See vms_lock_dlm_learn_dir_hash(): the first value
+ * stands and the disagreement is counted, because a rising count falsifies
+ * either the body[10:12] offset (INFERRED until FC-P4.2) or the "one hash per
+ * name, cluster-wide" property the whole scheme rests on. Written under
+ * vms_res_hash_lock.
  */
-/*
- * Runtime departure set (rd vms-2bf, DLM rung H10a). The configured membership
- * vector (dlm_member_csids) is a STATIC insmod param a graceful departure cannot
- * mutate; instead the executive marks a member departed HERE, via
- * VMS_IOCTL_DLM_MEMBER_DEPART, and the LIVE membership the directory hashes over
- * is the configured set MINUS the departed. dlm_member_departed[i] == 1 means
- * the i-th configured member left the cluster. Departure is MONOTONIC in this
- * rung (a member departs and does not rejoin -- rejoin is 0.4/vms-2f3), so the
- * flag only ever goes 0 -> 1; readers need no lock (a concurrent enqueue sees
- * either the pre- or post-departure membership, both consistent, self-healing on
- * the next call). The ioctl mutates it under vms_res_hash_lock together with the
- * directory-cache invalidation it drives. INV-6: set only from a REAL departure
- * the connection manager (scsd) reported, never fabricated.
- */
-static uint8_t dlm_member_departed[VMS_DLM_MAX_MEMBERS];
+static uint32_t vms_dlm_dir_hash_conflicts;
 
-static unsigned int dlm_membership_count(void)
+uint32_t vms_lock_dlm_dir_hash_conflicts(void)
 {
-    unsigned int i, n = 0;
+    uint32_t n;
 
-    if (dlm_member_count <= 0)
-        return 1u;   /* cluster-of-one fallback (unconfigured) */
-    for (i = 0; i < (unsigned int)dlm_member_count && i < VMS_DLM_MAX_MEMBERS; i++)
-        if (!dlm_member_departed[i])
-            n++;
-    return n > 0 ? n : 1u;
+    exec_lock(&vms_res_hash_lock);
+    n = vms_dlm_dir_hash_conflicts;
+    exec_unlock(&vms_res_hash_lock);
+    return n;
 }
 
 /*
- * The CSID of the idx-th LIVE member of the directory vector (departed members
- * skipped). Reads the configured static vector minus the runtime departure set;
- * falls back to the local CSID when unconfigured or out of range (cluster-of-
- * one). Every node given the SAME ordered vector AND the same departures maps
- * idx -> CSID identically, which is what keeps directory/master resolution in
- * agreement across nodes as membership shrinks.
+ * dir_hash_store - record one wire-learned hash on a resource. Caller holds
+ * res->lock. Returns SS$_NORMAL when the value is now held, SS$_BADPARAM when a
+ * DIFFERENT value was already learned for this name (the caller counts it).
  */
-static uint32_t dlm_member_csid(unsigned int idx)
+static uint32_t dir_hash_store(struct vms_lock_resource *res, uint16_t hash16)
 {
-    unsigned int i, live = 0;
-
-    if (dlm_member_count > 0) {
-        for (i = 0; i < (unsigned int)dlm_member_count && i < VMS_DLM_MAX_MEMBERS; i++) {
-            if (dlm_member_departed[i])
-                continue;
-            if (live == idx)
-                return dlm_member_csids[i];
-            live++;
-        }
+    if (res->hash_known) {
+        if (res->hash16 == hash16)
+            return SS__NORMAL;
+        /* The HELD value stands -- routing must not churn on a disagreement.
+         * SS$_BADPARAM says "that is not the value this executive holds for
+         * that name"; the caller's own counter is what makes it evidence. */
+        return SS__BADPARAM;
     }
-    return vms_local_csid;
+    res->hash16 = hash16;
+    res->hash_known = 1;
+    /* A hash learned against the OLD vector says nothing about the new one;
+     * the generation check in dir_resolve() re-runs the lookup anyway, but
+     * clearing here keeps "cached" and "learned" from ever being confused. */
+    res->dir_valid = 0;
+    return SS__NORMAL;
+}
+
+uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint16_t hash16)
+{
+    struct vms_lock_resource *res;
+    uint32_t st;
+
+    if (resnam == NULL || resnam[0] == '\0')
+        return SS__BADPARAM;
+
+    res = resource_find_or_create(resnam);
+    if (res == NULL)
+        return SS__INSFMEM;
+
+    exec_lock(&res->lock);
+    st = dir_hash_store(res, hash16);
+    exec_unlock(&res->lock);
+
+    if (st != SS__NORMAL) {
+        exec_lock(&vms_res_hash_lock);
+        vms_dlm_dir_hash_conflicts++;
+        exec_unlock(&vms_res_hash_lock);
+    }
+
+    /* Drop the reference resource_find_or_create took. A resource carrying a
+     * learned hash survives the release (resource_release's preservation rule):
+     * throwing the value away here would guarantee a refusal the next time this
+     * node touches the name. */
+    resource_release(res);
+    return st;
 }
 
 /*
- * dlm_directory_csid - which node is the DIRECTORY for a resource name.
+ * dir_resolve - which node is the DIRECTORY for this resource's root name.
  *
- * The documented algorithm hashes the resource name and selects, modulo the
- * number of directory-participating nodes, an entry of the cluster directory
- * vector that names the directory node (IDSM lock-management, "directory
- * lookups", ch6-part02 pp. 6-18..6-35). The STRUCTURE -- hash(name) -> index
- * -> directory node -- is that algorithm; the SPECIFIC hash (exec_jhash, the
- * same one resource_hash_key uses) is an OVMX design choice, because public docs
- * do not publish VMS's directory hash function (CLAUDE.md Rule 8).
+ * THE Rule-8 BOUNDARY, in one function. It computes nothing: it hands the
+ * cluster's own hash for this name to the cluster's own directory vector.
+ * Caller holds res->lock.
  *
- * Stub-of-one membership makes this resolve to the local CSID for every name;
- * the hash + modulo + vector indexing are nonetheless real so that growing the
- * membership in 0.4 is a change to dlm_membership_count()/dlm_member_csid(),
- * not to the lookup path.
+ *   no resolver installed  -> *out_csid = 0 (this node), SS$_NORMAL. A node
+ *                             with no cluster stack is alone: it is trivially
+ *                             the directory and the master for everything, and
+ *                             single-node locking is untouched.
+ *   no wire-learned hash   -> SS$_UNSUPPORTED. Never a computed hash, never a
+ *                             probe, never a placeholder (the whole point).
+ *   vector unusable        -> SS$_UNSUPPORTED (mid-transition, or the vector
+ *                             was refused; vms_dlm_ldwv.h SS3).
+ *   otherwise              -> the vector's answer; 0 means THIS node.
+ *
+ * The answer is cached in the RSB together with the vector GENERATION it came
+ * from, so it is re-resolved the instant the vector changes -- which is what
+ * "every rsb->dir_csid is invalidated on a vector change" means here, enforced
+ * by construction rather than by remembering to walk the database (Davis
+ * p. 6-33; vms_dlm_proxy.h `dir_generation`).
  */
-static uint32_t dlm_directory_csid(const char *name)
+/*
+ * Is this node in a cluster at all, as far as the DIRECTORY is concerned? With
+ * no resolver installed there is no vector and no other member: this node is
+ * the directory and the master for every name, which is a real answer and not
+ * a computed one.
+ */
+static int dlm_directory_installed(void)
 {
-    unsigned int n = dlm_membership_count();
-    unsigned int idx = n ? (exec_jhash(name, strnlen(name, 32), 0) % n) : 0;
+    struct vms_dlm_requester_ops ops = dlm_req_ops_get();
 
-    return dlm_member_csid(idx);
+    return ops.dir_resolve != NULL;
+}
+
+static uint32_t dir_resolve(struct vms_lock_resource *res, uint32_t *out_csid)
+{
+    struct vms_dlm_requester_ops ops = dlm_req_ops_get();
+    uint32_t gen, csid = 0;
+
+    *out_csid = 0;
+    if (ops.dir_resolve == NULL)
+        return SS__NORMAL;                 /* cluster of one: nothing to resolve */
+
+    if (!res->hash_known)
+        return SS__UNSUPPORTED;            /* INV-6: wire-learned or nothing */
+
+    gen = (ops.dir_generation != NULL) ? ops.dir_generation(ops.ctx) : 0u;
+    if (res->dir_valid && res->dir_gen == gen) {
+        *out_csid = res->dir_csid;
+        return SS__NORMAL;
+    }
+
+    if (ops.dir_resolve(ops.ctx, res->hash16, &csid) != SS__NORMAL)
+        return SS__UNSUPPORTED;
+
+    res->dir_csid = csid;                  /* 0 == this node (p. 6-32) */
+    res->dir_gen = gen;
+    res->dir_valid = 1;
+    *out_csid = csid;
+    return SS__NORMAL;
 }
 
 /* Where a $ENQ for this resource must be served (FC-P4.4). */
@@ -666,35 +763,85 @@ enum dlm_route {
  *   unknown master, someone else is -> REMOTE, addressed to THE DIRECTORY NODE,
  *     the directory node               which answers with the master, or with
  *                                      "you master it" (p. 6-31 outcomes a/b/c)
+ *   unknown master, and the directory  -> REFUSED, SS$_UNSUPPORTED. In a
+ *     cannot be resolved                 cluster that means this node has no
+ *                                        wire-learned hash for this root name
+ *                                        (FC-P4.3: never computed, never
+ *                                        guessed) or the vector is not
+ *                                        authoritative right now (a transition
+ *                                        is in flight). An honest refusal; the
+ *                                        caller returns it to $ENQ unchanged.
+ *
+ * `inbound` is nonzero when this is a request that ARRIVED from another node
+ * rather than a local $ENQ; see the comment at the refusal below for the one
+ * row it changes.
  *
  * *dst_csid receives the node the request must be addressed to on a REMOTE
  * route. Never a guess: it is either a master CSID the cluster told us
- * (grant_recv stores it) or the directory CSID from the directory vector.
+ * (grant_recv stores it) or the directory CSID the cluster's own weight vector
+ * named for the cluster's own hash of this name.
+ *
+ * ROOT NAMES ONLY, and the engine does not yet know the difference. Only a
+ * tree's ROOT is looked up: the whole tree is mastered where its root is, and
+ * the master's CSID propagates down every branch (p. 6-31/6-32). The RSB model
+ * here carries no parent link (the tree lives on the LKBs' parent_id), so every
+ * resource is treated as a root. That over-counts lookups for a sub-resource;
+ * it never mis-routes one, because a sub-resource's own hash resolves through
+ * the same vector. Binding a child RSB to its root's master belongs with the
+ * tree/rebuild work (FC-P4.6/FC-P5.5) and is recorded here so it is not lost.
  */
-static uint32_t dlm_resolve_master(struct vms_lock_resource *res,
+/* Route to a master this node already knows, or say there is none yet.
+ * Returns 1 when the answer is settled (the two "known master" rows above). */
+static int dlm_route_known_master(struct vms_lock_resource *res,
+                                  enum dlm_route *route, uint32_t *dst_csid)
+{
+    if (res->master_csid == 0)
+        return 0;
+    if (res->master_csid == vms_local_csid)
+        return 1;                            /* LOCAL: we master it */
+    *route = DLM_ROUTE_REMOTE;               /* straight to the known master */
+    *dst_csid = res->master_csid;
+    return 1;
+}
+
+static uint32_t dlm_resolve_master(struct vms_lock_resource *res, int inbound,
                                    enum dlm_route *route, uint32_t *dst_csid)
 {
+    uint32_t dir = 0, st;
+
     *route = DLM_ROUTE_LOCAL;
     *dst_csid = 0;
 
-    if (res->master_csid != 0) {
-        if (res->master_csid == vms_local_csid)
-            return SS__NORMAL;
-        *route = DLM_ROUTE_REMOTE;          /* straight to the known master */
-        *dst_csid = res->master_csid;
+    if (dlm_route_known_master(res, route, dst_csid))
+        return SS__NORMAL;
+
+    st = dir_resolve(res, &dir);
+    if (st != SS__NORMAL) {
+        /*
+         * WHY AN INBOUND REQUEST DOES NOT INHERIT THIS REFUSAL. A cross-node
+         * request arrived HERE because the SENDER resolved the directory and
+         * the cluster addressed it at this node -- that routing decision is a
+         * fact this node RECEIVED, and re-deriving it is not required to honour
+         * it. Refusing because we cannot independently reproduce a decision the
+         * cluster already made would break locking on exactly the shared names
+         * the cluster is talking to us about, and it would refuse a resource we
+         * are in fact about to master (p. 6-31 outcome 3, "the requester
+         * becomes the master"). The REQUESTER side is where the refusal has to
+         * bite -- it is the side that would otherwise put a guessed hash on the
+         * wire -- and it does, below.
+         */
+        if (!inbound)
+            return st;
+    } else if (dir != 0 && dir != vms_local_csid) {
+        *route = DLM_ROUTE_REMOTE;           /* the lookup goes to the directory */
+        *dst_csid = dir;
         return SS__NORMAL;
     }
 
-    if (res->dir_csid == 0)
-        res->dir_csid = dlm_directory_csid(res->name);
-
-    if (res->dir_csid != vms_local_csid) {
-        *route = DLM_ROUTE_REMOTE;          /* the lookup goes to the directory */
-        *dst_csid = res->dir_csid;
-        return SS__NORMAL;
-    }
-
-    /* We are the directory and nobody masters it yet: master it here. */
+    /* We are the directory and nobody masters it yet: master it here
+     * ("simply assumes mastery", p. 6-31). `dir == 0` is the vector's own way
+     * of saying "your entry" (p. 6-32); `dir == vms_local_csid` is the same
+     * fact reached through a resolver that names us explicitly. */
     res->master_csid = vms_local_csid;
     return SS__NORMAL;
 }
@@ -1484,7 +1631,7 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
         uint32_t dst_csid, dlm_st;
 
         exec_lock(&res->lock);
-        dlm_st = dlm_resolve_master(res, &route, &dst_csid);
+        dlm_st = dlm_resolve_master(res, xn ? 1 : 0, &route, &dst_csid);
         exec_unlock(&res->lock);
 
         if (dlm_st != SS__NORMAL) {
@@ -2124,18 +2271,31 @@ out:
  * actually mastered the resource, instead of asserting a hand-set structure.
  */
 /*
- * vms_ioctl_dlm_member_depart - $DLM graceful member departure (rd vms-2bf,
- * DLM rung H10a). scsd calls this when it observes a graceful cluster departure
- * (SCS_MEMBER_OP_DEPART). Mark departed_csid gone from the LIVE directory
- * membership, then invalidate every resource's cached directory (res->dir_csid)
- * -- and a master that resolved to the departed node (res->master_csid ==
- * departed_csid) -- so the next resolution re-runs over the shrunk set:
- * dlm_directory_csid re-hashes % the smaller live count, and a departed master's
- * resources remaster to a survivor. A lock's STATE is NOT reconstructed here --
- * that (collecting survivors' origin records + rebuilding res->granted) is the
- * H10b rung (vms-dca9). Returns members_live (post-shrink directory count) and
- * found (1 iff departed_csid was a configured member). INV-6: reflects a REAL
- * departure the connection manager reported; nothing fabricated.
+ * vms_ioctl_dlm_member_depart - a member of this cluster has left.
+ *
+ * WHAT IT DOES NOW (FC-P4.3). The membership this node's directory resolves
+ * over is the connection manager's CLUB, reached through the injected
+ * `dir_resolve`/`dir_generation` ops -- so a departure does not need to be
+ * mirrored into the lock engine at all: the transition that removes the member
+ * invalidates the Lock Directory Weight Vector at Phase 1 and refills it at
+ * Phase 2 (Davis p. 6-33), the generation changes, and every cached
+ * res->dir_csid is re-resolved by construction. The static insmod membership
+ * vector this ioctl used to mutate (dlm_member_csids / dlm_member_departed) is
+ * GONE with it.
+ *
+ * What is still this facility's own business is the LOCK STATE the departure
+ * orphans, and that is what remains here: a resource MASTERED on the departed
+ * node loses its master (it re-masters on first use), cached directory answers
+ * are dropped eagerly rather than waiting for the next generation check, and a
+ * proxy LKB still pending at the departed master is ended honestly rather than
+ * left asleep forever. Reconstructing the locks themselves is the rebuild
+ * (FC-P5.5), not this.
+ *
+ * `members_live` is reported as 0: the number of live members is the connection
+ * manager's fact, not this engine's, and answering with a count the lock
+ * manager no longer holds would be exactly the mirrored-membership fabrication
+ * FC-P3.9 deleted. `found` reports whether the departed CSID actually mastered
+ * anything here -- a real observation, not a lookup in a configured list.
  */
 
 /*
@@ -2171,7 +2331,6 @@ long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_dlm_depart_args args;
     struct vms_lock_resource *res;
-    unsigned int i;
     int bkt;
 
     (void)proc;
@@ -2181,32 +2340,26 @@ long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg)
 
     exec_lock(&vms_res_hash_lock);
 
-    /* Mark the departed CSID gone from the LIVE membership (the configured set
-     * minus the runtime departure flags). CSID 0 is reserved ("unmastered") and
-     * is never a member, so it never matches. */
-    if (dlm_member_count > 0 && args.departed_csid != 0) {
-        for (i = 0; i < (unsigned int)dlm_member_count && i < VMS_DLM_MAX_MEMBERS; i++) {
-            if (dlm_member_csids[i] == args.departed_csid) {
-                dlm_member_departed[i] = 1;
-                args.found = 1;
-            }
-        }
-    }
-
-    /* Re-resolve the directory: the membership modulus changed, so every cached
-     * res->dir_csid is stale -- clear it so dlm_directory_csid recomputes over
-     * the shrunk set on next use. A resource mastered ON the departed node loses
-     * its master (re-master on first use); one mastered on a survivor keeps it. */
+    /* Drop every cached directory answer: the vector the answers came from is
+     * being rebuilt around this departure (p. 6-33). The generation check in
+     * dir_resolve() would catch them anyway; clearing here makes the discard
+     * immediate and keeps this path meaningful for a node whose connection
+     * manager has not yet run the transition. A resource mastered ON the
+     * departed node loses its master (re-master on first use); one mastered on
+     * a survivor keeps it. */
     exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
         exec_lock(&res->lock);
+        res->dir_valid = 0;
         res->dir_csid = 0;
-        if (res->master_csid == args.departed_csid)
+        if (args.departed_csid != 0 && res->master_csid == args.departed_csid) {
             res->master_csid = 0;
+            args.found = 1;
+        }
         dlm_proxies_master_departed(res, args.departed_csid);
         exec_unlock(&res->lock);
     }
 
-    args.members_live = dlm_membership_count();
+    args.members_live = 0;   /* the CLUB's fact, not this engine's */
     exec_unlock(&vms_res_hash_lock);
 
     args.status = SS__NORMAL;
@@ -2426,12 +2579,25 @@ long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg)
 
     args.local_csid = vms_local_csid;
     /*
-     * The directory node for this name is a property of the name and the
-     * membership, independent of whether the resource currently exists -- so
-     * report it even when found=0. This is the same hash the enqueue path
-     * masters through.
+     * dir_csid is the DIRECTORY NODE for this name, and it is now reported only
+     * when the executive genuinely holds the two things it takes (FC-P4.3): the
+     * cluster's own 16-bit hash for the name, learned from the wire, and an
+     * authoritative Lock Directory Weight Vector. It is filled in the found
+     * branch below from the resource's real resolution.
+     *
+     * 0 therefore means "not resolved" -- no cluster, no wire-learned hash, or
+     * a vector under rebuild -- exactly as master_csid 0 means "unmastered".
+     * The predecessor reported a value for EVERY name, because it computed one
+     * (exec_jhash % a static vector); a value computed from an OVMX hash is not
+     * the cluster's directory node, and reporting it as one is what a readback
+     * must never do (INV-6).
+     *
+     * The one name-independent case is a node with NO cluster: there is no
+     * other member, so this node is the directory for everything, and that is
+     * reportable whether or not a resource block exists.
      */
-    args.dir_csid = dlm_directory_csid(args.resnam);
+    if (!dlm_directory_installed())
+        args.dir_csid = vms_local_csid;
 
     /*
      * Master reporting is AUTHENTIC, not directory-deterministic (vms-1bba). The
@@ -2461,8 +2627,12 @@ long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg)
         struct vms_lock_entry *granted;
         uint32_t n = 0;
 
+        uint32_t dir = 0;
+
         exec_lock(&res->lock);
         args.found = 1;
+        if (dir_resolve(res, &dir) == SS__NORMAL)
+            args.dir_csid = (dir != 0) ? dir : vms_local_csid;
         args.master_csid = res->master_csid;
         args.is_local_master =
             (res->master_csid != 0 && res->master_csid == vms_local_csid) ? 1 : 0;

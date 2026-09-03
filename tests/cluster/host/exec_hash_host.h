@@ -8,7 +8,7 @@
  * Implements the FULL exec_hash.h contract (same "vms_lock.c and the FSMs"
  * scope reasoning as exec_list_host.h): the Phase-G non-RCU table vocabulary
  * (EXEC_DECLARE/DEFINE_HASHTABLE, exec_hash_init/add/del,
- * exec_hash_for_each[_possible][_safe], exec_jhash) that vms_lock.c's
+ * exec_hash_for_each[_possible][_safe]) that vms_lock.c's
  * resource hash (vms_res_hash) uses, plus the RCU-labelled exec_hash_del_rcu
  * for contract completeness (unused on the host: nothing here has lockless
  * readers, so it behaves exactly like exec_hash_del -- honestly documented,
@@ -20,10 +20,9 @@
  * O(1) unlink without a separate head scan. Standard, public data-structure
  * technique, implemented fresh (Rule 8: no Linux/NetBSD source read/copied).
  *
- * exec_jhash is OVMX's OWN hash function (FNV-1a, public-domain, unrelated to
- * Linux's jhash) -- exec_hash.h's contract is explicit that its VALUE is used
- * only for bucketing/membership modulo, never a correctness decision (name
- * matches are by strncmp), so any well-distributed hash is contract-correct.
+ * (exec_jhash was deleted by FC-P4.3 -- see the note in
+ * src/kernel-core/exec_hash.h. vms_lock.c now carries its own private bucket
+ * key, so nothing on this host path needs a hash primitive at all.)
  */
 
 #ifndef OVMX_EXEC_HASH_HOST_H
@@ -109,18 +108,5 @@ static inline void exec_hash_del_rcu(exec_hash_node_t *n) { exec_hash_del(n); }
 		     obj = EXEC_HASH_ENTRY_SAFE(tmp, __typeof__(*obj), member),    \
 		     tmp = (obj) ? (obj)->member.next : (exec_hash_node_t *)0)
 
-/* ---- key hashing (OVMX's own FNV-1a; see file header) ---- */
-static inline uint32_t exec_jhash(const void *key, uint32_t length, uint32_t initval)
-{
-	const unsigned char *p = (const unsigned char *)key;
-	uint32_t hash = 2166136261u ^ initval;   /* FNV-1a offset basis, salted */
-	uint32_t i;
-
-	for (i = 0; i < length; i++) {
-		hash ^= p[i];
-		hash *= 16777619u;   /* FNV-1a prime */
-	}
-	return hash;
-}
 
 #endif /* OVMX_EXEC_HASH_HOST_H */

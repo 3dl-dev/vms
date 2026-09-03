@@ -115,10 +115,9 @@ void exec_hash_del_rcu(exec_hash_node_t *n);
  * vms-ff7) these map to OVMX bucket helpers in exec_hash_netbsd.c. A bucket is a
  * one-word head; EXEC_DEFINE_HASHTABLE lays down the array, exec_hash_init empties
  * it, exec_hash_add/exec_hash_del splice under the resource lock, and
- * exec_hash_for_each_possible walks the keyed bucket. exec_jhash is OVMX's own
- * Jenkins hash (its VALUE is used only for bucketing + a membership modulo, never
- * for a correctness decision -- so it need not match the Linux jhash byte for
- * byte).
+ * exec_hash_for_each_possible walks the keyed bucket. (exec_jhash is GONE with
+ * FC-P4.3 -- see the note in src/kernel-core/exec_hash.h; the bucket key is
+ * vms_lock.c's own private one.)
  */
 struct exec_hash_head { exec_hash_node_t *first; };
 
@@ -137,7 +136,6 @@ void exec_hash_add_helper(struct exec_hash_head *tbl, unsigned int nbuckets,
 
 void exec_hash_del(exec_hash_node_t *n);
 
-uint32_t exec_jhash(const void *key, uint32_t length, uint32_t initval);
 
 /*
  * The keyed-bucket walk, typed. Placeholder shape (exec_hash_bucket_of maps a key

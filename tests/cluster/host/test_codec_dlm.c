@@ -371,6 +371,90 @@ static void test_no_builder_accepts_a_placeholder_lock_id(void)
 		 "  vms_dlm_enq_response_build_grant refuses req_lkid==0");
 }
 
+/*
+ * FC-P4.3: the directory hash at body[10:12]. There is a PARSER and there is
+ * deliberately NO BUILDER, and this test asserts both halves -- the second one
+ * by the only means available for an absent function: the parse of a value the
+ * caller could not have produced, and a link-time absence a reviewer can see.
+ *
+ * The offset is INFERRED (see the header) until FC-P4.2 confirms it offline,
+ * so what is asserted here is the ACCESSOR's behaviour, not the field's
+ * meaning: it reads the two bytes at abs 82 little-endian out of a cat-0x02
+ * frame, refuses a frame of the wrong class, and writes nothing when it
+ * refuses.
+ */
+static void test_dir_hash_accessor(void)
+{
+	const struct vms_fixture *f = fixture("dlm-enq-request-pw");
+	struct vms_frame_info fi;
+	uint16_t hash = 0xFFFFu;
+	uint8_t frame[256];
+
+	printf("-- the directory hash at body[10:12] (FC-P4.3, p. 6-50)\n");
+	ct_check(f != NULL, "fixture loads");
+	if (f == NULL)
+		return;
+	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
+		 "classifies");
+
+	ct_check(vms_dlm_dir_hash_parse(f->bytes, f->wire_len, &fi, &hash) ==
+		 VMS_CODEC_OK, "the hash field is readable on a real cat-02 frame");
+	ct_check_eq_u32(hash,
+			(uint32_t)f->bytes[VMS_OFF_DLM_DIR_HASH] |
+			((uint32_t)f->bytes[VMS_OFF_DLM_DIR_HASH + 1u] << 8),
+			"  and it is abs 82/83 read little-endian, nothing else");
+
+	/* A value no name-derived function would produce, read back verbatim:
+	 * the accessor transports, it does not derive. */
+	memcpy(frame, f->bytes, f->wire_len);
+	frame[VMS_OFF_DLM_DIR_HASH] = 0x34u;
+	frame[VMS_OFF_DLM_DIR_HASH + 1u] = 0x12u;
+	hash = 0;
+	ct_check(vms_dlm_dir_hash_parse(frame, f->wire_len, &fi, &hash) ==
+		 VMS_CODEC_OK, "reads an arbitrary wire value");
+	ct_check_eq_u32(hash, 0x1234u, "  byte for byte, whatever the wire said");
+
+	/* Refusals write nothing: "the frame carried no hash" and "the hash is
+	 * 0" are different facts, and only one of them may reach the wire. */
+	hash = 0xA5A5u;
+	ct_check(vms_dlm_dir_hash_parse(frame, f->wire_len, NULL, &hash) ==
+		 VMS_CODEC_E_CLASS, "a frame with no class info is refused");
+	ct_check_eq_u32(hash, 0xA5A5u, "  and the caller's variable is untouched");
+	ct_check(vms_dlm_dir_hash_parse(frame, f->wire_len, &fi, NULL) ==
+		 VMS_CODEC_E_CLASS, "a null output is refused");
+
+	{
+		struct vms_frame_info wrong = fi;
+
+		wrong.cls = VMS_FCLS_HELLO;
+		hash = 0xA5A5u;
+		ct_check(vms_dlm_dir_hash_parse(frame, f->wire_len, &wrong,
+						&hash) == VMS_CODEC_E_CLASS,
+			 "a non-SCS_MSG frame is refused");
+		ct_check_eq_u32(hash, 0xA5A5u, "  writing nothing");
+	}
+
+	{
+		/* A frame that is not cat-0x02 at all. */
+		uint8_t other[256];
+
+		memcpy(other, frame, f->wire_len);
+		other[VMS_OFF_DLM_CAT] = 0x01u;
+		hash = 0xA5A5u;
+		ct_check(vms_dlm_dir_hash_parse(other, f->wire_len, &fi,
+						&hash) == VMS_CODEC_E_CLASS,
+			 "a cat-0x01 body is refused");
+		ct_check_eq_u32(hash, 0xA5A5u, "  writing nothing");
+	}
+
+	/* A truncated frame reports the view's error, not a zero. */
+	hash = 0xA5A5u;
+	ct_check(vms_dlm_dir_hash_parse(frame, VMS_OFF_DLM_DIR_HASH + 1u, &fi,
+					&hash) != VMS_CODEC_OK,
+		 "a frame too short to hold the field is refused");
+	ct_check_eq_u32(hash, 0xA5A5u, "  writing nothing");
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -388,6 +472,7 @@ int main(void)
 	test_rebuild_echo_recipe();
 	test_allowlist_rows();
 	test_no_builder_accepts_a_placeholder_lock_id();
+	test_dir_hash_accessor();
 
 	return ct_summary("test_codec_dlm");
 }

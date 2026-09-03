@@ -157,7 +157,11 @@ struct vms_resmaster_args {
 	char     resnam[32];        /* in: resource name (null-terminated) */
 	uint32_t found;             /* return: 1 if a resource block exists */
 	uint32_t local_csid;        /* return: this node's CSID */
-	uint32_t dir_csid;          /* return: directory node CSID for resnam */
+	uint32_t dir_csid;          /* return: the directory node for resnam, or 0
+	                             * when the executive cannot resolve one -- no
+	                             * cluster, no wire-learned hash for the name,
+	                             * or a vector under rebuild (FC-P4.3). Never a
+	                             * computed value (INV-6). */
 	uint32_t master_csid;       /* return: mastering node CSID; 0 = unmastered */
 	uint32_t is_local_master;   /* return: 1 if mastered by this node */
 	uint32_t n_granted;         /* return: granted locks on the resource */
@@ -230,14 +234,17 @@ struct vms_dlm_xnode_args {
  */
 #define VMS_DLM_STS_QUEUED  0u
 
-/* $DLM member departure (rd vms-2bf, DLM rung H10a). MUST match src/kernel/
- * vms_ioctl.h byte-for-byte. See there for the semantics + INV-6 contract:
- * scsd reports a graceful departure, the executive shrinks live membership and
- * re-resolves the directory over the survivors. */
+/* $DLM member departure. MUST match src/kernel/vms_ioctl.h byte-for-byte. See
+ * there for the semantics + INV-6 contract; revised by FC-P4.3, which moved
+ * the membership a directory resolves over into the connection manager's CLUB
+ * (src/kernel-core/vms_dlm_ldwv.h) and left this ioctl only the LOCK STATE a
+ * departure orphans. */
 struct vms_dlm_depart_args {
 	uint32_t departed_csid;   /* in: the CSID that left the cluster */
-	uint32_t members_live;    /* return: live directory-member count after shrink */
-	uint32_t found;           /* return: 1 iff departed_csid was a configured member */
+	uint32_t members_live;    /* return: ALWAYS 0 -- the live member count is the
+	                           * connection manager's fact, not this engine's */
+	uint32_t found;           /* return: 1 iff the departed CSID actually mastered
+	                           * a resource on this node */
 	uint32_t status;          /* return: SS$_ status */
 };
 

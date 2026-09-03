@@ -461,22 +461,33 @@ struct vms_getlki_args {
  * DLM resource-directory + mastering readback (vms-ci.5 DB).
  *
  * A READ-ONLY diagnostic view of a resource's DLM state: which node is its
- * DIRECTORY (dir_csid, the node reached by hashing resnam), which node
- * MASTERS it (master_csid, 0 until mastered on first $ENQ), and how many
- * locks are granted on it. It does NOT create or master a resource -- an
- * unknown name comes back found=0 with master_csid=0 -- so it can be called
- * before and after an $ENQ to prove the local-master path actually mastered
- * the resource, rather than a test asserting a hand-set structure.
+ * DIRECTORY (dir_csid), which node MASTERS it (master_csid, 0 until mastered
+ * on first $ENQ), and how many locks are granted on it. It does NOT create or
+ * master a resource -- an unknown name comes back found=0 with master_csid=0 --
+ * so it can be called before and after an $ENQ to prove the local-master path
+ * actually mastered the resource, rather than a test asserting a hand-set
+ * structure.
+ *
+ * dir_csid IS 0 WHEN THERE IS NO ANSWER (FC-P4.3). It used to be reported for
+ * every name, because the executive COMPUTED it (an OVMX hash over a static
+ * member vector). It is now the entry the cluster's own Lock Directory Weight
+ * Vector holds at the index of the cluster's own wire-carried hash for that
+ * name (Davis pp. 6-31/6-50, src/kernel-core/vms_dlm_ldwv.h), which the
+ * executive can only report when it genuinely holds both. 0 means "not
+ * resolved" -- no cluster, no wire-learned hash, or a vector under rebuild --
+ * exactly as master_csid 0 means "unmastered". Reporting a computed value here
+ * would be a readback asserting state the executive does not hold (INV-6).
  *
  * is_local_master is (master_csid == local_csid), surfaced so a test need not
- * know the CSID value. Grounding: IDSM lock-management directory lookups
- * (mined transcript ch6-part02 pp. 6-18..6-35); docs/design-cluster-node.md §5.
+ * know the CSID value.
  */
 struct vms_resmaster_args {
     char     resnam[32];        /* in: resource name (null-terminated) */
     uint32_t found;             /* return: 1 if a resource block exists */
     uint32_t local_csid;        /* return: this node's CSID */
-    uint32_t dir_csid;          /* return: directory node CSID for resnam */
+    uint32_t dir_csid;          /* return: the directory node for resnam, or 0
+                                 * when the executive cannot resolve one (see
+                                 * the note above) -- never a computed value */
     uint32_t master_csid;       /* return: mastering node CSID; 0 = unmastered */
     uint32_t is_local_master;   /* return: 1 if mastered by this node */
     uint32_t n_granted;         /* return: granted locks on the resource */
@@ -611,24 +622,37 @@ _Static_assert(sizeof(struct vms_dlm_xnode_args) == 120,
 #define VMS_IOCTL_DLM_XNODE _IOWR(VMS_IOC_MAGIC, 0x35, struct vms_dlm_xnode_args)
 
 /*
- * $DLM member departure (rd vms-2bf, DLM rung H10a). scsd calls this when it
- * observes a GRACEFUL cluster departure (SCS_MEMBER_OP_DEPART): the executive
- * marks departed_csid gone from the LIVE directory membership -- the static
- * dlm_member_csids insmod vector (0444) is NOT mutated; a runtime departed-set
- * filters it -- and invalidates the cached directory so resolution re-runs over
- * the shrunk set. A departed master's resources then remaster to a survivor
- * (dlm_directory_csid re-hashes over fewer members). members_live returns the
- * post-shrink directory-member count; found is 1 iff departed_csid was a
- * configured member. INV-6: this reflects a REAL departure the connection
- * manager (scsd) observed and reported, never a fabricated membership change;
- * with no /dev/vms there is no executive to shrink (honest SS$_NOSUCHDEV).
- * (Supersedes the note above that remaster adds no ioctl -- the departure
- * INGRESS is this ioctl; the cross-node lock-rebuild send is the H10b rung.)
+ * $DLM member departure. The connection manager calls this when it observes a
+ * GRACEFUL cluster departure.
+ *
+ * WHAT IT DOES (revised by FC-P4.3). The membership this node's directory
+ * resolves over is the connection manager's CLUB, and a departure is handled by
+ * the transition that removes the member: Phase 1 discards the Lock Directory
+ * Weight Vector, Phase 2 refills it, and every cached directory answer in the
+ * lock engine is re-resolved because the vector's generation changed (Davis
+ * p. 6-33; src/kernel-core/vms_dlm_ldwv.h). The static dlm_member_csids insmod
+ * vector this ioctl used to filter is GONE with the exec_jhash directory it fed.
+ *
+ * What remains here is the LOCK STATE the departure orphans: a resource
+ * MASTERED on the departed node loses its master (it re-masters on first use),
+ * cached directory answers are dropped eagerly, and a proxy LKB still pending
+ * at the departed master is ended honestly rather than left asleep forever.
+ * Reconstructing the locks themselves is the DLM rebuild, not this.
+ *
+ * INV-6: this reflects a REAL departure the connection manager observed, never
+ * a fabricated membership change; with no /dev/vms there is no executive to
+ * tell (honest SS$_NOSUCHDEV).
  */
 struct vms_dlm_depart_args {
     uint32_t departed_csid;   /* in: the CSID that left the cluster */
-    uint32_t members_live;    /* return: live directory-member count after shrink */
-    uint32_t found;           /* return: 1 iff departed_csid was a configured member */
+    uint32_t members_live;    /* return: ALWAYS 0 -- the live member count is the
+                               * connection manager's fact (CLUSTER_DIAG_CSB),
+                               * not the lock engine's; answering with a count
+                               * this facility no longer holds would be the
+                               * mirrored-membership fabrication FC-P3.9 deleted */
+    uint32_t found;           /* return: 1 iff the departed CSID actually mastered
+                               * a resource on this node -- a real observation,
+                               * not a lookup in a configured list */
     uint32_t status;          /* return: SS$_ status */
 };
 _Static_assert(sizeof(struct vms_dlm_depart_args) == 16,

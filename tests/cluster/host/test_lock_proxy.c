@@ -37,14 +37,21 @@
  *      resource (SS$_UNSUPPORTED) instead of granting it locally -- Rule 9,
  *      fail-honest, no fallback that fakes the service.
  *
- * HOW "REMOTE" IS ARRANGED WITHOUT FABRICATING A CLUSTER. The membership vector
- * is a real, controlled executive input (dlm_member_csids/dlm_member_count, the
- * same one the module takes at load). This test configures a genuine and
- * entirely legitimate VMS configuration: ONE directory-participating member,
- * CSID 2, which is NOT this node (CSID 1) -- a satellite with LOCKDIRWT 0, the
- * configuration design D-DLM-1 names. Every root name then resolves to a
- * directory node that is not us, deterministically, WITHOUT depending on the
- * value of any hash (which FC-P4.3 is still to settle, Rule 8).
+ * HOW "REMOTE" IS ARRANGED WITHOUT FABRICATING A CLUSTER (revised by FC-P4.3).
+ * The engine reaches the cluster's Lock Directory Weight Vector through the
+ * injected `dir_resolve`/`dir_generation` ops (vms_dlm_proxy.h), so this test
+ * plays the connection manager: its resolver answers with ONE directory member,
+ * CSID 2, which is NOT this node (CSID 1) -- a genuine and entirely legitimate
+ * VMS configuration (a satellite with LOCKDIRWT 0, design D-DLM-1). The static
+ * insmod membership vector this test used to poke is gone with the exec_jhash
+ * directory it fed.
+ *
+ * AND THE HASH COMES FROM "THE WIRE". FC-P4.3 makes a directory lookup
+ * impossible without a 16-bit hash the CLUSTER supplied for that exact name
+ * (Davis p. 6-50). This test is the cluster: wire_learn() below hands the
+ * executive a value per resource name, exactly as vms_dlm_scs.c will hand it
+ * one parsed out of a cat-0x02 frame. Nothing in the executive computes it, and
+ * the honest refusal when it is absent is proved in test_lock_dir.c.
  */
 
 #include "cluster_test.h"
@@ -64,8 +71,6 @@
  * cluster: nothing here claims a member that is not configured (INV-6).
  * ================================================================ */
 uint32_t vms_local_csid = 1;
-uint32_t dlm_member_csids[VMS_DLM_MAX_MEMBERS] = { 1 };
-int      dlm_member_count = 1;
 
 #define CSID_LOCAL     1u    /* this node                                    */
 #define CSID_DIRECTORY 2u    /* the only directory-participating member       */
@@ -116,13 +121,59 @@ static uint32_t fm_post(void *ctx, const struct vms_dlm_proxy_post *p)
 	return st;
 }
 
+/*
+ * This test's stand-in for the connection manager's directory vector
+ * (FC-P4.3). `test_dir_csid` is what the vector's entry at `hash mod n` reads:
+ * 0 means "this node's own entry" (Davis p. 6-32), anything else names another
+ * member. The generation is what the engine keys its cached resolution on.
+ */
+static uint32_t test_dir_csid;
+static uint32_t test_dir_gen = 1;
+
+static uint32_t fm_dir_resolve(void *ctx, uint16_t hash16, uint32_t *out_csid)
+{
+	(void)ctx;
+	(void)hash16;   /* one directory member: every hash lands on it */
+	*out_csid = test_dir_csid;
+	return (uint32_t)SS__NORMAL;
+}
+
+static uint32_t fm_dir_generation(void *ctx)
+{
+	(void)ctx;
+	return test_dir_gen;
+}
+
+static void fm_ops_fill(struct vms_dlm_requester_ops *ops)
+{
+	memset(ops, 0, sizeof(*ops));
+	ops->post = fm_post;
+	ops->dir_resolve = fm_dir_resolve;
+	ops->dir_generation = fm_dir_generation;
+	ops->ctx = &fm;
+}
+
 static void fm_install(void)
 {
 	struct vms_dlm_requester_ops ops;
 
-	ops.post = fm_post;
-	ops.ctx = &fm;
+	fm_ops_fill(&ops);
 	vms_lock_dlm_set_requester_ops(&ops);
+}
+
+/*
+ * Play the wire: give the executive the cluster's hash for `resnam`. A distinct
+ * deterministic value per name, produced HERE in the test (which is standing in
+ * for the sending VMS system), never by the executive.
+ */
+static void wire_learn(const char *resnam)
+{
+	uint16_t h = 0x4000u;
+	const char *c;
+
+	for (c = resnam; *c != '\0'; c++)
+		h = (uint16_t)((h << 1) ^ (uint8_t)*c);
+	(void)vms_lock_dlm_learn_dir_hash(resnam, h);
 }
 
 /* Wait (bounded) until at least `n` requests have been posted, then copy the
@@ -174,6 +225,7 @@ static uint32_t do_enq_full(struct vms_proc *proc, const char *resnam,
 	a.flags = flags;
 	a.blkastadr = blkastadr;
 	strscpy(a.resnam, resnam, sizeof(a.resnam));
+	wire_learn(resnam);   /* the cluster has named this resource (FC-P4.3) */
 	vms_ioctl_enq(proc, (unsigned long)(void *)&a);
 	if (lkid_out)
 		*lkid_out = a.lkid;
@@ -251,15 +303,15 @@ static uint32_t deliver_grant(struct vms_proc *proc, uint32_t req_lkid,
 static void configure_remote_directory(void)
 {
 	vms_local_csid = CSID_LOCAL;
-	dlm_member_csids[0] = CSID_DIRECTORY;
-	dlm_member_count = 1;
+	test_dir_csid = CSID_DIRECTORY;
+	test_dir_gen++;
 }
 
 static void configure_local_only(void)
 {
 	vms_local_csid = CSID_LOCAL;
-	dlm_member_csids[0] = CSID_LOCAL;
-	dlm_member_count = 1;
+	test_dir_csid = 0;   /* our own entry: this node is the directory */
+	test_dir_gen++;
 }
 
 /* ================================================================
@@ -405,6 +457,7 @@ static void *sync_enq_thread(void *arg)
 	a.lkmode = LCK_K_EXMODE;
 	a.flags = LCK_M_SYNC;
 	strscpy(a.resnam, "PROXYSYNC", sizeof(a.resnam));
+	wire_learn("PROXYSYNC");   /* the cluster has named it (FC-P4.3) */
 	vms_ioctl_enq(r->proc, (unsigned long)(void *)&a);
 	r->status = a.status;
 	r->lkid = a.lkid;
@@ -706,7 +759,20 @@ static void no_cluster_arm_refuses(void)
 		ct_check(0, "vms_lock_init");
 		return;
 	}
-	vms_lock_dlm_set_requester_ops(NULL);
+	/*
+	 * A node that IS in a cluster (the directory resolves, to somebody else)
+	 * whose DLM wire arm cannot send. FC-P4.3 keeps the two halves separate
+	 * on purpose: `post` absent is "cannot reach the cluster", while ops
+	 * absent altogether is "there is no cluster", and only the first is a
+	 * refusal -- a standalone node must still lock.
+	 */
+	{
+		struct vms_dlm_requester_ops ops;
+
+		fm_ops_fill(&ops);
+		ops.post = NULL;
+		vms_lock_dlm_set_requester_ops(&ops);
+	}
 	proc_init(&proc);
 
 	st = do_enq(&proc, "PROXYNOARM", LCK_K_EXMODE, 0, &lkid);

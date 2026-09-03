@@ -67,6 +67,7 @@ SRCS=		vms_netbsd.c \
 		vms_cluster_api.c \
 		vms_cluster_sysgen.c \
 		vms_cnxman_phase2.c \
+		vms_dlm_ldwv.c \
 		vms_cnxman_barrier_fsm.c \
 		vms_cnxman_coord_fsm.c \
 		vms_scs_fsm.c \

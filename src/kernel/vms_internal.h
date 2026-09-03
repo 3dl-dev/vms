@@ -552,24 +552,38 @@ struct vms_lock_resource {
     struct vms_lock_resource *parent;
 
     /*
-     * DLM directory + mastering (vms-ci.5 DB, LOCAL scaffolding).
-     *
-     * On OpenVMS every resource is MASTERED on one node, found via a
-     * DIRECTORY node reached by hashing the resource name (IDSM lock-
-     * management chapter, "directory lookups" -- mined transcript
-     * ch6-part02, pp. 6-18..6-35; and docs/design-cluster-node.md §5).
-     * dir_csid is the CSID of the directory node for this name; master_csid
-     * is the CSID of the node that masters the resource, 0 until it is
-     * mastered on first use. Both are resolved and read under `lock` above.
-     *
-     * LOCAL SCAFFOLDING: the cluster is a stub-of-one, so both resolve to
-     * vms_local_csid and the enqueue grants through the existing single-node
-     * lock manager. Forwarding an enqueue to a REMOTE directory/master over
-     * the VMS$VAXcluster VC (DC) and dynamic remastering on state transitions
-     * (DD) are 0.4 -- the enqueue path returns SS$_UNSUPPORTED for a non-local
-     * directory/master rather than fabricating a remote answer (INV-6 spirit).
+     * DLM directory + mastering. On OpenVMS every resource TREE is MASTERED on
+     * one node, found by routing a lookup to the tree's DIRECTORY node -- the
+     * entry of the Lock Directory Weight Vector at `hash16 mod n` (Davis
+     * pp. 6-31/6-32). All five fields below are read and written under `lock`
+     * above; the full contract is in src/kernel-core/vms_dlm_ldwv.h and the
+     * mirror of these fields is in src/kernel-netbsd/vms_internal.h.
      */
-    uint32_t            dir_csid;       /* directory node CSID for `name` */
+
+    /*
+     * THE DIRECTORY (FC-P4.3, src/kernel-core/vms_dlm_ldwv.h).
+     *
+     * hash16 is the resource name's 16-bit directory hash AS THE CLUSTER
+     * PUTS IT ON THE WIRE (Davis p. 6-50). It is LEARNED -- by
+     * vms_lock_dlm_learn_dir_hash() from a parsed cat-0x02 frame -- and
+     * never computed: the hash function is not published at the bit level,
+     * and a wrong value makes the directory node install the sender as
+     * master of somebody else's resource. hash_known 0 means "no lookup may
+     * be sent for this name", not "hash 0".
+     *
+     * dir_csid is the directory node the weight vector named for that hash;
+     * 0 there means THIS node (p. 6-32). It is meaningful only while
+     * dir_valid is set AND dir_gen still equals the vector's generation --
+     * which is how a cached resolution is discarded the moment the vector
+     * changes at a state transition (p. 6-33).
+     *
+     * master_csid is the node that masters the resource; 0 = unmastered.
+     */
+    uint16_t            hash16;
+    uint8_t             hash_known;
+    uint8_t             dir_valid;
+    uint32_t            dir_gen;
+    uint32_t            dir_csid;       /* directory node CSID; 0 = this node */
     uint32_t            master_csid;    /* mastering node CSID; 0 = unmastered */
 };
 
@@ -1238,26 +1252,16 @@ long vms_ioctl_dlm_xnode(struct vms_proc *proc, unsigned long arg);
 extern uint32_t vms_local_csid;
 
 /*
- * DLM directory membership vector (rd vms-1bba, the "DB" rung). A CONTROLLED,
- * STATIC configuration input -- the operator/harness supplies the ordered
- * cluster-member CSID vector at insmod time (module_param_array in the Linux
- * rind, src/kernel/vms_module.c), the same footing as vms_local_csid above.
- * dlm_directory_csid() hashes a resource name across THIS vector to pick the
- * directory node, so every node given the SAME vector resolves the SAME
- * directory (and, this rung, master) for a name.
- *
- * This is NOT the live membership feed from the connection manager / SCS
- * rejoin -- that is the 0.4 "DC" successor (and overlaps vms-2f3's rejoin
- * territory). This static vector is an honest controlled input for the DB
- * directory proof, never fabricated live cluster state. dlm_member_count == 0
- * (the default) means "not configured" -> the helpers fall back to a
- * cluster-of-one on the local CSID, preserving single-node behaviour. The
- * vector must be supplied in the SAME order on every node (the directory index
- * is position-based); the harness passes one canonical vector to all nodes.
+ * The static DLM directory membership vector (dlm_member_csids /
+ * dlm_member_count, rd vms-1bba) is GONE with FC-P4.3. The membership a
+ * directory resolves over is the connection manager's CLUB, indexed by the
+ * cluster's own wire-carried resource hash through the Lock Directory Weight
+ * Vector (src/kernel-core/vms_dlm_ldwv.h); the lock engine reaches it through
+ * the injected dir_resolve/dir_generation ops (src/kernel-core/vms_dlm_proxy.h).
+ * An insmod-supplied member list was a second, drifting copy of a fact the
+ * executive already holds -- and it was only ever consumed by the exec_jhash
+ * directory this item deleted.
  */
-#define VMS_DLM_MAX_MEMBERS 16
-extern uint32_t dlm_member_csids[VMS_DLM_MAX_MEMBERS];
-extern int      dlm_member_count;
 
 /* Device table (executive-resident I/O database) */
 long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg);

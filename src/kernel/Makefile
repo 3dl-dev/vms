@@ -157,6 +157,7 @@ vms-y := vms_module.o \
          ../kernel-core/vms_cluster_api.o \
          ../kernel-core/vms_cluster_sysgen.o \
          ../kernel-core/vms_cnxman_phase2.o \
+         ../kernel-core/vms_dlm_ldwv.o \
          ../kernel-core/vms_cnxman_barrier_fsm.o \
          ../kernel-core/vms_cnxman_coord_fsm.o \
          ../kernel-core/vms_scs_fsm.o \

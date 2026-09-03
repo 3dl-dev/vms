@@ -326,6 +326,63 @@ struct vms_csb {
 };
 
 /*
+ * How many entries the Lock Directory Weight Vector can hold (FC-P4.3).
+ *
+ * The book fixes the vector's CONTENTS (one entry per LOCKDIRWT unit, one per
+ * system when every LOCKDIRWT is 0) but names no ceiling, so this is an OVMX
+ * storage bound and is labelled as one. It is >= VMS_CLUB_MAX_CSB, so the
+ * all-zero-weight case -- one entry per system, the lab's likely configuration
+ * -- always fits at the full 96-system cluster scale the book contemplates.
+ * A weighted set whose entries exceed it is REFUSED and counted, never
+ * truncated: a truncated vector is a vector with a different modulus, i.e. a
+ * different directory node for most names, which is the cluster-breaking
+ * failure this whole item exists to make impossible.
+ */
+#define VMS_LDWV_MAX_ENTRIES 512u
+
+/*
+ * THE LOCK DIRECTORY WEIGHT VECTOR (FC-P4.3; Davis pp. 6-31..6-33, 7-40..7-42;
+ * docs/research-dlm-directory-algorithm.md SS1).
+ *
+ * A root resource's DIRECTORY NODE is found by dividing the resource name's
+ * 16-bit hash by the number of entries in this vector; the remainder indexes
+ * it, and the entry names the directory node's CSID (p. 6-31). Each system
+ * occupies as many CONTIGUOUS entries as its LOCKDIRWT; if LOCKDIRWT is 0 on
+ * every member the vector holds exactly ONE entry per system (p. 6-32). Every
+ * member's copy has the same width and the same system at each offset --
+ * "logically equivalent" -- and differs only in that a system's OWN entries
+ * read 0 in its own copy (p. 6-32, Fig. 6-18 p. 6-33). So a 0 entry means
+ * "this node is the directory for that index", never "system zero".
+ *
+ * The vector is rebuilt at every state transition that can change it (p. 6-33):
+ * its size is adjusted in Phase 1 and it is FILLED at Phase 2 from the
+ * committed membership, before the synchronised rebuild (pp. 7-41/7-42). While
+ * it is invalid -- between those two points, and before the first commit --
+ * NOTHING may be resolved through it: `generation` changes on every such
+ * event, which is how every cached `rsb->dir_csid` in the lock engine is
+ * invalidated at once (vms_dlm_ldwv.h SS4).
+ *
+ * INV-6. Every entry is a CSID this node LEARNED from a real membership record,
+ * placed at an offset computed from a LOCKDIRWT this node LEARNED from a real
+ * parameters record. There is no default weight and no placeholder CSID: a
+ * member set this node cannot weigh does not produce a partial vector, it
+ * produces a refusal (vms_dlm_ldwv.h SS3).
+ */
+struct vms_ldwv {
+	uint32_t n;            /* entries in use; 0 = no vector at all        */
+	uint32_t generation;   /* bumped on EVERY change, incl. invalidation  */
+	uint8_t  valid;        /* 0 = not authoritative; resolve nothing      */
+	uint8_t  weights_learned; /* 0 = built on the all-zero reading, because
+				   * no member has advertised a LOCKDIRWT yet
+				   * (FC-P3.2 pins the wire field). Recorded so a
+				   * diagnostic can say which reading it rests on,
+				   * rather than the fact being invisible. */
+	uint8_t  n_members;    /* systems represented, for the diagnostics    */
+	uint8_t  pad;
+	uint32_t entry[VMS_LDWV_MAX_ENTRIES];  /* CSIDs; own entries read 0   */
+};
+
+/*
  * The CLUB. One per node (p. 7-26), embedded in struct vms_cluster below.
  */
 struct vms_club {
@@ -401,6 +458,38 @@ struct vms_club {
 	 * capture.
 	 */
 	uint32_t csb_ignored_events;
+
+	/* ---- the DLM directory (FC-P4.3) ---- */
+
+	/*
+	 * The Lock Directory Weight Vector, rebuilt at every transition that can
+	 * change it. See struct vms_ldwv above; the behaviour is
+	 * vms_dlm_ldwv.h.
+	 */
+	struct vms_ldwv ldwv;
+
+	/*
+	 * THE ORDER SELF-CHECK (docs/research-dlm-directory-algorithm.md SS1/SS4).
+	 * The book fixes that each system's entries are contiguous and that the
+	 * offsets agree cluster-wide, but NOT the order in which systems are laid
+	 * out; OVMX assumes Cluster System Vector index order (the low 16 bits of
+	 * the CSID, p. 7-25). That hypothesis is self-checking from real traffic:
+	 * every directory lookup this node RECEIVES must index one of this node's
+	 * OWN entries. `dir_lookup_misaddressed` counts the ones that do not --
+	 * a sustained count falsifies the order (or says the vector is stale) and
+	 * is an alarm, never something to serve silently.
+	 */
+	uint32_t dir_lookups_received;
+	uint32_t dir_lookup_misaddressed;
+
+	/*
+	 * Transitions at which the vector could NOT be built from the committed
+	 * membership, and why (vms_dlm_ldwv.h SS3): the weighted set overflowed
+	 * VMS_LDWV_MAX_ENTRIES, or some members had advertised a LOCKDIRWT and
+	 * others had not, which would put every entry after the unknown member at
+	 * the wrong offset. Both leave the vector INVALID rather than wrong.
+	 */
+	uint32_t ldwv_build_refused;
 
 	/* ---- the CSB table (Figure 7-4: all CSBs hang off the CLUB) ---- */
 	uint32_t       n_csb;        /* high-water: slots 0..n_csb-1 may be in use */

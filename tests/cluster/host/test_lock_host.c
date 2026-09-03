@@ -52,8 +52,6 @@
  * here claims a member that is not configured.
  * ================================================================ */
 uint32_t vms_local_csid = 1;
-uint32_t dlm_member_csids[VMS_DLM_MAX_MEMBERS] = { 1 };
-int      dlm_member_count = 1;
 
 /*
  * vms_ast_notify_arrival - link-time stub (see lock_host_internal.h's

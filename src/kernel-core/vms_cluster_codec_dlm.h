@@ -238,6 +238,56 @@ vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
 						   uint8_t *frame, uint32_t cap,
 						   uint32_t *written);
 
+/* ------------------------------------------------------------------ *
+ * THE DIRECTORY HASH -- body[10:12] (abs 82), FC-P4.3
+ *
+ * The 16-bit hash of the ROOT resource name, computed by the SENDING
+ * system and carried on the wire. Davis p. 6-50: a directory lookup
+ * request carries the resource name AND the hash value the sender
+ * derived from it, "as an optimization" because every system would
+ * derive the same value, and the receiving directory node right-shifts
+ * the RECEIVED value to index its own Resource Hash Table.
+ *
+ * WHY OVMX ONLY EVER READS IT. The hash FUNCTION is not published at the
+ * bit level (docs/research-dlm-directory-algorithm.md SS3, checked over
+ * Davis pp. 6-18..6-53), so computing one is both Rule-8-forbidden and
+ * wrong: a mismatched value makes the directory node scan the wrong
+ * chain, miss the name, and create a directory entry naming the SENDER
+ * as master (p. 6-31 outcome 3). That is the campaign's 35/s grant storm
+ * (memory cluster-promotion-gap). So there is a PARSER here and there is
+ * deliberately NO BUILDER: a builder would be a place to put a value
+ * nobody received. FC-P4.6's requester echoes the learned value through
+ * the ENQ builder's own fields when it has one, and refuses to send a
+ * lookup at all when it does not.
+ *
+ * OFFSET PROVENANCE -- INFERRED, pending FC-P4.2's offline confirmation.
+ * The strawman daemon's op-01 builder placed a 16-bit `dir_hash` here
+ * (`feat/coord-rebuild-completion:src/vmsscs/scs_member.c:852`) and a
+ * real VAX accepted those registrations, which names the field but does
+ * not prove it. FC-P4.2 confirms it offline from existing captures by
+ * the two properties any hash field must have: constant per resource
+ * name across senders and occurrences, and varying across names. Until
+ * then this offset is INFERRED, and the consumer is built so that a
+ * wrong offset SHOWS UP rather than corrupting anything: a learned value
+ * that disagrees with a previously learned one for the same name is
+ * counted (vms_lock.c `dir_hash_conflicts`), and every directory lookup
+ * OVMX receives is checked against its own vector
+ * (`dir_lookup_misaddressed`, vms_dlm_ldwv.h SS5).
+ * ------------------------------------------------------------------ */
+#define VMS_OFF_DLM_DIR_HASH      82u  /* body[10:12] LE u16, INFERRED     */
+
+/*
+ * Read the directory hash out of any cat-0x02 frame that carries it.
+ * Returns VMS_CODEC_E_CLASS for a frame that is not a cat-0x02 SCS_MSG,
+ * and the view's own error for a frame too short to hold the field.
+ * `*out` is written only on VMS_CODEC_OK -- there is no "hash 0" fallback,
+ * because "the frame did not carry one" and "the hash is 0" are different
+ * facts and only one of them may be put on the wire (INV-6).
+ */
+vms_codec_status_t vms_dlm_dir_hash_parse(const uint8_t *frame, uint32_t len,
+					  const struct vms_frame_info *fi,
+					  uint16_t *out);
+
 /*
  * req_csid: "who is asking" for a DLM request. The DLM body itself carries
  * no separate CSID field (spec §4(f).1 does not ground one) -- the

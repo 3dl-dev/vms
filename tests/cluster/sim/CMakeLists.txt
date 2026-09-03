@@ -101,6 +101,14 @@ target_link_libraries(test_sim_mscp_write PRIVATE
 target_include_directories(test_sim_mscp_write PRIVATE
     ${CMAKE_SOURCE_DIR}/tests/cluster/host)
 
+# FC-P4.3's rung-R2 leg: FOUR simulated systems each build their OWN copy of
+# the Lock Directory Weight Vector through the SHIPPING Phase 2 commit, and the
+# directory duty is exercised BETWEEN them -- which is the only place the
+# "logically equivalent copies" property and the CSV-index-order self-check can
+# be tested at all. Needs cluster_host_cnxman (the shipping phase2 + LDWV).
+cluster_sim_test(test_sim_dlm_directory scenarios/dlm_directory.c)
+target_link_libraries(test_sim_dlm_directory PRIVATE cluster_host_cnxman)
+
 cluster_sim_test(test_replay test_replay.c)
 target_link_libraries(test_replay PRIVATE cluster_host_fixture)
 target_compile_definitions(test_replay PRIVATE

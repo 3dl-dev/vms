@@ -21,7 +21,7 @@
  * VOCABULARY vms_lock.c consumes (struct vms_proc/vms_lock_entry/
  * vms_lock_resource/vms_ast_state/vms_ast_entry, the SS__* status codes,
  * VMS_RES_HASH_BITS, VMS_AST_MAX_PER_MODE, the vms_local_csid/
- * dlm_member_csids externs, and vms_ast_notify_arrival's prototype) using the
+ * vms_local_csid extern, and vms_ast_notify_arrival's prototype) using the
  * PORTABLE exec_* container/lock/cv types instead -- exactly the shape
  * design sec 3.9 describes vms_lock.c's struct layer eventually taking once
  * it is fully promoted into src/kernel-core/. Every field name, order, and
@@ -189,21 +189,44 @@ struct vms_lock_resource {
 	exec_lock_t               lock;
 	int                       refcount;
 	struct vms_lock_resource *parent;
+
+	/*
+	 * THE DIRECTORY (FC-P4.3, src/kernel-core/vms_dlm_ldwv.h).
+	 *
+	 * hash16 is the resource name's 16-bit directory hash AS THE CLUSTER
+	 * PUTS IT ON THE WIRE (Davis p. 6-50). It is LEARNED -- by
+	 * vms_lock_dlm_learn_dir_hash() from a parsed cat-0x02 frame -- and
+	 * never computed: the hash function is not published at the bit level,
+	 * and a wrong value makes the directory node install the sender as
+	 * master of somebody else's resource. hash_known 0 means "no lookup may
+	 * be sent for this name", not "hash 0".
+	 *
+	 * dir_csid is the directory node the weight vector named for that hash;
+	 * 0 there means THIS node (p. 6-32). It is meaningful only while
+	 * dir_valid is set AND dir_gen still equals the vector's generation --
+	 * which is how a cached resolution is discarded the moment the vector
+	 * changes at a state transition (p. 6-33).
+	 *
+	 * master_csid is the node that masters the resource; 0 = unmastered.
+	 */
+	uint16_t            hash16;
+	uint8_t             hash_known;
+	uint8_t             dir_valid;
+	uint32_t            dir_gen;
 	uint32_t                  dir_csid;
 	uint32_t                  master_csid;
 };
 
 /* ================================================================
- * Cluster membership globals vms_lock.c reads (real definitions live in
- * this item's test harness, test_lock_host.c -- a single-node host test
- * fixes vms_local_csid to a real, deliberately-chosen node id and
- * dlm_member_csids to that same one-node set; nothing here fabricates a
- * cluster that is not there, INV-6).
+ * This node's CSID, the one cluster global vms_lock.c reads (its real
+ * definition lives in the test harness -- a host test fixes it to a real,
+ * deliberately-chosen node id). The static membership vector
+ * (dlm_member_csids / dlm_member_count) is GONE with FC-P4.3: the
+ * membership a directory resolves over reaches the engine through the
+ * injected dir_resolve/dir_generation ops (vms_dlm_proxy.h), so a test
+ * that wants a cluster installs those ops rather than declaring one.
  * ================================================================ */
-#define VMS_DLM_MAX_MEMBERS 16
 extern uint32_t vms_local_csid;
-extern uint32_t dlm_member_csids[VMS_DLM_MAX_MEMBERS];
-extern int      dlm_member_count;
 
 /* ================================================================
  * vms_ast_notify_arrival - defined in src/kernel-core/vms_ast.c (the AST

@@ -205,6 +205,8 @@ COPY src/kernel-core/vms_cluster_codec_cm.c  /netbsd/guest-src/kernel-core/vms_c
 COPY src/kernel-core/vms_cluster_codec_cm.h  /netbsd/guest-src/kernel-core/vms_cluster_codec_cm.h
 COPY src/kernel-core/vms_cnxman_phase2.c     /netbsd/guest-src/kernel-core/vms_cnxman_phase2.c
 COPY src/kernel-core/vms_cnxman_phase2.h     /netbsd/guest-src/kernel-core/vms_cnxman_phase2.h
+COPY src/kernel-core/vms_dlm_ldwv.c          /netbsd/guest-src/kernel-core/vms_dlm_ldwv.c
+COPY src/kernel-core/vms_dlm_ldwv.h          /netbsd/guest-src/kernel-core/vms_dlm_ldwv.h
 COPY src/kernel-core/vms_cnxman_barrier_fsm.c /netbsd/guest-src/kernel-core/vms_cnxman_barrier_fsm.c
 COPY src/kernel-core/vms_cnxman_barrier_fsm.h /netbsd/guest-src/kernel-core/vms_cnxman_barrier_fsm.h
 COPY src/kernel-core/vms_cnxman_coord_fsm.c  /netbsd/guest-src/kernel-core/vms_cnxman_coord_fsm.c

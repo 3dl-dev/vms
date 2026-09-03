@@ -886,8 +886,14 @@ struct vms_pe_vc_view_wire {
     uint32_t timvcfail_ms_left;
     uint32_t credits_send;
     uint32_t credits_receive;
+    /* FC-P1.6: appended, never inserted -- see vms_cluster_snapshot.h's
+     * vms_pe_vc_view for the field-by-field rationale (both real pe_vc
+     * counters, INV-6). */
+    uint32_t rx_gaps;
+    uint8_t  down_reason;
+    uint8_t  pad1[3];
 };
-_Static_assert(sizeof(struct vms_pe_vc_view_wire) == 56,
+_Static_assert(sizeof(struct vms_pe_vc_view_wire) == 64,
                "vms_pe_vc_view_wire changed size -- must match vms_pe_vc_view");
 
 struct vms_cluster_diag_port_args {
@@ -899,10 +905,10 @@ struct vms_cluster_diag_port_args {
     struct vms_pe_channel_view_wire channel;   /* valid iff row == _CHANNEL */
     struct vms_pe_vc_view_wire      vc;        /* valid iff row == _VC      */
 };
-_Static_assert(sizeof(struct vms_cluster_diag_port_args) == 152,
+_Static_assert(sizeof(struct vms_cluster_diag_port_args) == 160,
                "vms_cluster_diag_port_args changed size -- VMS_IOCTL_CLUSTER_DIAG_PORT ABI break");
 #define VMS_IOCTL_CLUSTER_DIAG_PORT _IOWR(VMS_IOC_MAGIC, 0x3d, struct vms_cluster_diag_port_args)
-_Static_assert(VMS_IOCTL_CLUSTER_DIAG_PORT == 0xC098563Du,
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_PORT == 0xC0A0563Du,
                "VMS_IOCTL_CLUSTER_DIAG_PORT encodes differently than the reference build");
 
 /*

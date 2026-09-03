@@ -1325,6 +1325,8 @@ static void test_projection(void)
 	ct_check_eq_u32(v.incarnation_lo, 0,
 			"no formation body yet => no peer incarnation claimed");
 	ct_check_eq_u32(v.credits_send, 0, "and no credit claimed");
+	ct_check_eq_u32(v.rx_gaps, 0, "no traffic yet => no gap");
+	ct_check_eq_u32(v.down_reason, 0, "never down since allocation");
 
 	rx_start(&g_env, 0, 1, 0);
 	rx_vc_ack(&g_env);
@@ -1338,6 +1340,43 @@ static void test_projection(void)
 	ct_check(vms_cluster_snapshot_q(v.incarnation_lo, v.incarnation_hi) ==
 		 0x00bc05526906b4a1ull,
 		 "the peer's incarnation, as ITS body carried it");
+
+	/* FC-P1.6: rx_gaps is vc->rx_gaps read straight through -- feed a real
+	 * ahead-of-window frame and confirm the SAME cell test_gap_is_
+	 * discarded_and_reacked() asserts directly is what the wire row
+	 * reports. */
+	rx_seqmsg(&g_env, 3, 0);        /* 2 never arrived: a gap */
+	pe_fsm_vc_project(&g_env.fsm, the_vc(&g_env), &v);
+	ct_check_eq_u32(v.rx_gaps, the_vc(&g_env)->rx_gaps,
+			"the projected gap counter IS pe_vc.rx_gaps");
+	ct_check_eq_u32(v.rx_gaps, 1, "and the gap really happened");
+	ct_check_eq_u32(v.down_reason, 0,
+			"a gap alone never breaks the circuit (3.2.5)");
+}
+
+/* down_reason is pe_vc.last_down_reason, unwidened -- proved against a REAL
+ * teardown (channel loss), not asserted from the enum alone. */
+static void test_projection_down_reason(void)
+{
+	struct vms_pe_vc_view v;
+	struct pe_vc *vc;
+
+	printf("-- the snapshot's down_reason is the FSM's own last_down_reason\n");
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	vc = the_vc(&g_env);
+	pe_fsm_vc_project(&g_env.fsm, vc, &v);
+	ct_check_eq_u32(v.down_reason, 0, "open, never down");
+
+	/* §4(M): silence past the listen timeout tears the channel, and the
+	 * port beat carries the news to the circuit -- the same trigger
+	 * test_channel_loss_tears_the_circuit_down() uses. */
+	g_env.fake.now_ms += 25000;
+	(void)pe_fsm_tick(&g_env.fsm, NULL, 0);
+	ct_check_eq_u32(vc->last_down_reason, PE_VC_DOWN_CHANNEL,
+			"the FSM recorded why");
+	pe_fsm_vc_project(&g_env.fsm, vc, &v);
+	ct_check_eq_u32(v.down_reason, PE_VC_DOWN_CHANNEL,
+			"and the snapshot reports the SAME reason, not a copy");
 }
 
 /* Without a bound circuit table the port is FC-P0.8's port: channels, no
@@ -1383,6 +1422,7 @@ int main(void)
 	test_last_gasp_closes_without_reforming();
 	test_peer_restart_resets_the_circuit();
 	test_projection();
+	test_projection_down_reason();
 	test_no_table_no_circuits();
 	return ct_summary("test_pe_vc");
 }

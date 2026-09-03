@@ -380,6 +380,12 @@ struct vms_pe_vc_view_wire {
 	uint32_t timvcfail_ms_left;
 	uint32_t credits_send;
 	uint32_t credits_receive;
+	/* FC-P1.6: appended, never inserted -- see src/kernel/vms_ioctl.h and
+	 * vms_cluster_snapshot.h's vms_pe_vc_view for the field-by-field
+	 * rationale (both real pe_vc counters, INV-6). */
+	uint32_t rx_gaps;
+	uint8_t  down_reason;
+	uint8_t  pad1[3];
 };
 
 struct vms_cluster_diag_port_args {
@@ -503,9 +509,9 @@ _Static_assert(sizeof(struct vms_pe_view_wire) == 48,
                "vms_pe_view_wire changed size -- must match src/kernel/vms_ioctl.h");
 _Static_assert(sizeof(struct vms_pe_channel_view_wire) == 32,
                "vms_pe_channel_view_wire changed size -- must match src/kernel/vms_ioctl.h");
-_Static_assert(sizeof(struct vms_pe_vc_view_wire) == 56,
+_Static_assert(sizeof(struct vms_pe_vc_view_wire) == 64,
                "vms_pe_vc_view_wire changed size -- must match src/kernel/vms_ioctl.h");
-_Static_assert(sizeof(struct vms_cluster_diag_port_args) == 152,
+_Static_assert(sizeof(struct vms_cluster_diag_port_args) == 160,
                "vms_cluster_diag_port_args changed size -- VMS_IOCTL_CLUSTER_DIAG_PORT ABI break");
 _Static_assert(sizeof(struct vms_sysgen_load_args) == 104,
                "vms_sysgen_load_args changed size -- VMS_IOCTL_SYSGEN_LOAD ABI break");

@@ -4,6 +4,18 @@
 > config-**authoring** gap in the clustering program. Source-of-truth for the
 > `vms-cfgcluster` epic (see rd). Written 2026-08-13.
 
+> **Consumer pivot (2026-09-02).** The operator-facing authoring surface below
+> (SYSGEN/SYSMAN, MODPARAMS.DAT, AUTOGEN, CLUSTER_AUTHORIZE.DAT, CLUSTER_CONFIG_LAN.COM)
+> remains the right plan — it is mechanism-agnostic DCL/tooling work, not the
+> userspace-`scsd` cluster orchestration the operator retired that day (see
+> `docs/design-faithful-cluster-executive.md`, branch `feat/cluster-executive`).
+> What changes is the *consumer* of the authored parameters: R1's acceptance
+> below is phrased as "`scsd`/`SHOW CLUSTER` reflect them" (true for today's
+> shipped main), but going forward the executive itself must own the SYSGEN
+> state — `VMS_IOCTL_SYSGEN_LOAD` has landed on `feat/cluster-executive`
+> (unmerged) feeding `struct vms_cluster` directly. Re-target R1–R4's
+> acceptance criteria to that path once the branch merges.
+
 > **Milestone reconciliation (2026-08-30, vms-d1e — Rule 10).** The original
 > release ladder below marked R1 and R2 as shipping at **0.5** ("operator
 > authors cluster identity/votes the VMS way; node adopts on reboot"). As of

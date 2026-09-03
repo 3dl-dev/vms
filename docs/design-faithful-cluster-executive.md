@@ -143,8 +143,7 @@ trap, memory `vms-ko-two-object-lists`, `netbsd-module-srcs-four-places`):
 | `vms_mscp_srv.c` | MSCP server SYSAP: serves executive-owned volumes (through the ACP's block layer, `exec_blockdev_*`) as `$ALLOCLASS$DUAn`; SCC/GUS/ONLINE/READ/WRITE + block transfer; UQB/HQB/HRB analogues; `MSCP_SERVE_ALL`/`MSCP_LOAD`. | DSRV, UQB, HQB, HRB |
 | `vms_mscp_cl.c` | Disk class driver: discovers served units (SCC ×2, GUS NEXT-UNIT walk), creates `$n$DUAn` devices in `vms_devtab` backed by an MSCP connection; block read/write via named buffers; the ACP mounts them like any block device. | DUDRIVER role, CDDB |
 | `vms_cluster_api.c` | The personality surface (§3.5): SYSGEN param load, cluster start, CSB/CLUB readback, diagnostics. | — |
-| `vms_cluster_fork.c` | The single fork context (§3.3): input queue, work queue, the kthread loop, timer wrappers (`cf_timer_*`), and the **served-I/O worker** queue (§3.2.6 E42 corollary, FC-P6.6: `cf_io_post` / `cf_io_run` / `CF_WORK_IO_DONE`) — the only TU besides the bindings that touches §15/§16. | the fork-IPL serialization |
-| `vms_mscp_srv_io.c` | The MSCP server's **worker-context half** (FC-P6.6): the ONE cluster TU that may call `exec_blockdev_*`, so no fork-context path can. Registered as the `CF_OWNER_MSCP` I/O handler; runs on the served-I/O worker thread. Enforced file-scoped by `tools/ci/cluster_core_includes_gate.sh` RULE 5. | the MSCP server's local IRP |
+| `vms_cluster_fork.c` | The single fork context (§3.3): input queue, work queue, the kthread loop, timer wrappers (`cf_timer_*`) — the only TU besides the bindings that touches §15/§16. | the fork-IPL serialization |
 
 Each protocol layer above is split `vms_<layer>_fsm.c` (pure state
 machine, injected ops) + `vms_<layer>.c` (executive glue) +
@@ -217,7 +216,7 @@ adds five families — the complete list, nothing else:
 | Family | Primitives | Used by |
 |---|---|---|
 | §14 LAN port | `exec_lan_open/close`, `exec_lan_xmit`, `exec_lan_mc_add/del`, `exec_lan_hwaddr/mtu/link_up`; opaque `exec_lanbuf_t` {`data`, `len`} owned by the core after `rx_cb` copies into it | `vms_pe.c` only |
-| §15 fork context | `exec_kthread_create/stop/should_stop` | `vms_cluster_fork.c` only (TWO threads since FC-P6.6: the CNXMAN fork thread and the served-I/O worker, both created by `vms_cluster_fork_bind.c`) |
+| §15 fork context | `exec_kthread_create/stop/should_stop` | `vms_cluster_fork.c` only |
 | §16 timers | `exec_timer_t`, `exec_timer_init/arm/cancel` (callback = no-sleep, posts work) | `vms_cluster_fork.c` only (all layers arm timers through the fork module's `cf_timer_*` wrappers, so timer idioms never spread) |
 | §17 time | `exec_time_now_vms()`, `exec_ticks_ms()` (monotonic) | codec (incarnation/boot time), FSMs (deadlines, injected in tests) |
 | §18 console | `exec_console_printf` | `vms_cnxman.c` (OPCOM-class lines) |
@@ -651,6 +650,55 @@ and waits on it. OVMX reproduces the shape:
   cadence stalled behind a 20 ms disk read is a TIMVCFAIL risk under load
   and a `12×(M−1)` barrier latency on every member.)
 
+#### 3.2.7 Receive classification of SCS application messages — RULING (2026-09-03, E48 from FC-P6.5)
+
+**The gap.** The frozen classify table grants a Con.ID only to
+length-keyed classes; MSCP END messages at SCA content 86 (SCC), 90
+(READ), 102 (ONLINE), 110 (GUS) get none (110/102 are excluded by the
+connection-control rule's `ctrl_type != 10` guard; 86/90 match nothing),
+so a booted class driver receives only the 94-content WRITE end.
+
+**Ruling: yes — the §4(h)(1b) envelope extends to the END classes, and
+that is already measured, not inferred. The faithful fix is a
+length-generic, MTYPE-keyed application-message class; no capture is
+needed.** Grounding:
+
+- Layering (Davis p. 4-13/4-15, public; `docs/design-mscp-direction.md`
+  §1.2): SCS sets MTYPE = "application message" (10) for SYSAP-to-SYSAP
+  traffic on an open connection and **dispatches on MTYPE to the CDT named
+  by the destination Con.ID** — never on length. Length-keyed classes were
+  a capture-census convenience; an SCS receiver keyed on length is the
+  wrong shape.
+- Envelope on the END classes is measured, not extrapolated: the SCC END
+  is "the 86-content MTYPE-10 class … 954 frames pair exactly with 954 SCC
+  commands" and the server builder "reproduces a real captured VAX server
+  answer byte for byte" (`design-mscp-direction.md` Phase D part 1) —
+  that identification *read MTYPE at [46:48] on 86-content frames*, and a
+  byte-exact reproduction *wrote the handle pair at [50:58]*. The block-
+  transfer decode states the command/**end** class **passes** the SCS
+  envelope conformance test (`content[44:46] == 0x0004`) that block frames
+  fail. The vms291 mount capture holds every END length (28/44/32/36/52
+  measured ⇒ content 86/102/90/94/110 = 58-byte envelope + body) on the
+  MSCP connection, and the (1b) envelope claim already names 110 and 94.
+- Rule 8: nothing new is asserted about abs 64/68 — the Con.ID pair at
+  content [50:58] (abs 64/68) is the (1b) field the corpus measured on
+  these very frames; the only thing changing is that the classify table
+  stops requiring a per-length rule to *find* it.
+
+**The class (P2.1b-style widen, item FC-P2.7):** `VMS_FCLS_SCS_APPLMSG`
+— matches any sequenced-message frame with `content[44:46] == 0x0004`,
+`content[46:48] == 10`, and `content[42:44] == content_len − 44`; grants
+`VMS_FCAP_CONID` at [50:58]; body at content 58 (abs 72), body length =
+inner length − 14. It subsumes the 94-content `SCS_APPLMSG94` class
+(kept as an alias for the frozen-table no-regression net) and is checked
+**after** the connection-control classes so the `ctrl_type` rule keeps
+precedence for MTYPE 0–9. Block-transfer frames fail the format-word test
+and stay in their own class. Codec test: the vms291 END specimens at
+86/90/102/110 all classify `SCS_APPLMSG` with the Con.ID pair equal to
+the provoking command's pair reversed (the "swapped by direction on
+established connections" fact, `design-mscp-direction.md` §1.1), plus the
+existing frozen-table vectors unchanged.
+
 `vms_l2.c` (the ioctl pipe) is **not** on the cluster path. It stays as a
 generic privileged LAN facility (the eventual `$QIO` LAN-driver surface for
 user-mode protocols, gated on `PHY_IO`) if another lane needs it; otherwise it
@@ -676,25 +724,13 @@ of inventing fine-grained locking across five new databases:
   RECNXINTERVAL, barrier-step watchdog (instrument only — spec §4(p) says do
   not time out a slow step), MSCP polls. A timer callback only posts a work
   item to the fork queue.
-- **The served-I/O worker** (`exec_kthread`, FC-P6.6, "MSCP server worker"):
-  the ONE context in which a blocking substrate service may be called. It pops
-  a `cf_io` request, drops the queue lock, runs the submitting layer's I/O
-  callback (today `vms_mscp_srv_io.c`'s `exec_blockdev_read/write_block` on a
-  served unit), and posts the status back to the fork queue as a
-  `CF_WORK_IO_DONE` work item. It never takes the fork mutex and touches no
-  protocol state, so no lock order exists between it and the fork thread. Its
-  completion work item is RESERVED with the request, so an accepted request is
-  always answered. **Rule: the cluster fork thread never calls
-  `exec_blockdev_*`** (§3.2.6).
 - **Process context** (`$ENQ` from RMS/ACP, MOUNT, `$GETSYI`): posts a
   request and sleeps on the LKB/IRP cv (`exec_cv_wait`), exactly as
   `enq_wait_sync` does today. `vms_lock.c` keeps its own `res->lock` /
   `vms_lock_id_lock` discipline; the fork thread takes those like any caller.
   `$GETSYI`/SHOW CLUSTER readback copies a snapshot under the fork mutex.
 - **Lock order:** `vms_cluster_fork_mutex` → `res->lock` → `vms_lock_id_lock`;
-  the fork-queue `exec_rxlock_t` is a leaf (nothing is taken under it). The
-  served-I/O worker takes the rxlock and nothing else, and never while inside a
-  layer's I/O callback.
+  the fork-queue `exec_rxlock_t` is a leaf (nothing is taken under it).
   The fork thread never sleeps holding an `exec_lock_t` (existing contract).
 
 Rejected: a per-subsystem kthread (PE, SCS, CM) with message passing — more

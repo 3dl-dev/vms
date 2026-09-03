@@ -516,7 +516,7 @@ fix + reason + cross-compile provable here. **Fix before the tier-1 wire smoke
 
 ### E47 — RESOLVED (FC-e47, tip e2f278c6). Root cause was NOT the handlers (they correctly return SS$_NOSUCHDEV + zero row + ioctl-success): Linux `vms_dev_ioctl` required a registered VMS process (`vms_proc_find_or_err`→-ESRCH) before ANY ioctl, so raw diag tests failed before reaching the handler. Fix: moved the 3 read-only DIAG ioctls ahead of the registration gate (they `(void)proc`), mirrored NetBSD like GETSYIMEM. SHOW CLUSTER works on a booted node. QEMU-boot verify lab-deferred.
 
-### E48. ⚠ Port RECEIVE can't deliver 4 of 5 MSCP END classes (raised by FC-P6.5 → Fable, receive-side twin of E18)
+### E48 — RULED by Fable (§3.2.7) → FC-P2.7 (buildable, no capture). YES the Con.ID envelope extends to the MSCP END classes: SCS dispatches on MTYPE=10→Con.ID's CDT, NEVER length (length-classes were a census convenience). Already MEASURED on the 86/90/102/110 END frames (MTYPE@[46:48], handle pair@[50:58]). Fix = new class VMS_FCLS_SCS_APPLMSG keyed on content[44:46]==0x0004 ∧ [46:48]==10 ∧ [42:44]==len−44 at ANY length, grants CONID@[50:58], ordered AFTER conn-control (ctrl_type keeps MTYPE 0-9), SCS_APPLMSG94 kept as no-regression alias. ORIGINAL GAP (for record):
 FC-P6.5's R2 (first to push END messages through a real port) measured: `vc_deliver`
 gives a SYSAP a frame only when the classifier grounds a Con.ID for its class. Of the
 5 measured END lengths — SCA **86 (SCC), 90 (READ), 102 (ONLINE), 110 (GUS)** carry

@@ -239,6 +239,42 @@ cluster_host_pe_test(test_pe_send      test_pe_send.c)
 # assembles CLUSTER_DIAG_PORT's top-level row from.
 cluster_host_pe_test(test_pe_view      test_pe_view.c)
 
+# ---- FC-P2.2: the SCS FSM (vms_scs_fsm.c) ----
+# The SB set, the CDL/CDT ladder, the Con.ID allocator, the credit ledger and
+# the MTYPE dispatch, built from the SAME pure TU both kmods will compile once
+# FC-P2.4's glue gives it an in-module consumer. Linked against the FC-P2.1 SCS
+# codec it builds and parses every frame through -- there is no second path.
+add_library(cluster_host_scs STATIC
+    ${OVMX_CLUSTER_CORE_DIR}/vms_scs_fsm.c
+)
+target_include_directories(cluster_host_scs PUBLIC ${OVMX_CLUSTER_CORE_DIR})
+target_compile_definitions(cluster_host_scs PUBLIC OVMX_CLUSTER_HOST)
+target_link_libraries(cluster_host_scs PUBLIC cluster_host_codec)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(cluster_host_scs PRIVATE -Wall -Wextra -Werror)
+endif()
+
+function(cluster_host_scs_test name)
+    add_executable(${name} ${ARGN})
+    target_link_libraries(${name} PRIVATE cluster_host_scs)
+    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${name} PRIVATE -Wall -Wextra -Werror)
+    endif()
+    add_test(NAME cluster_host_${name} COMMAND ${name})
+    set_tests_properties(cluster_host_${name} PROPERTIES
+        LABELS "unit;cluster;cluster_host;scs"
+        TIMEOUT 30
+    )
+endfunction()
+
+# The plan row's four test groups: every ladder transition; the credit
+# conservation property; the 8-before-DISCONNECT invariant; the vc_down
+# contract of design sec 3.2.5.
+cluster_host_scs_test(test_scs_fsm     test_scs_fsm.c)
+cluster_host_scs_test(test_scs_fsm_credit  test_scs_fsm_credit.c)
+cluster_host_scs_test(test_scs_fsm_vcdown  test_scs_fsm_vcdown.c)
+
 # ---- FC-P0.1: the pure inter-layer headers must be host-includable ----
 # Everything below builds with -DOVMX_CLUSTER_HOST, which routes vms_cluster.h
 # to <stdint.h> instead of vms_internal.h. (OVMX_CLUSTER_CORE_DIR is set above.)
@@ -263,6 +299,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_cnxman_barrier_fsm.c # FC-P3.5
     hdr_alone_vms_cnxman_coord_fsm.c  # FC-P3.12
     hdr_alone_vms_pe_fsm.c            # FC-P0.8
+    hdr_alone_vms_scs_fsm.c           # FC-P2.2
 )
 target_include_directories(cluster_host_hdr_alone PRIVATE ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_hdr_alone PRIVATE OVMX_CLUSTER_HOST)

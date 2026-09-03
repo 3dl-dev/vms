@@ -172,8 +172,18 @@ struct vms_scs_ctrl_frame {
 						* name (110) or lookup result (94) */
 
 	uint8_t  has_blank;              /* 1 iff content == 110              */
-	uint8_t  blank[VMS_SCSCTRL_NAME_LEN]; /* abs 108-123: observed blank
-						* trailer on a 110-byte connect    */
+	/*
+	 * abs 108-123 (SCA content [94:110]). FC-P2.1 named this an "observed
+	 * blank trailer"; sec 4(N) IDENTIFIES it -- "GROUNDED location +
+	 * census" -- as the 16-byte SCA CONNECT DATA of p. 2-25, which the
+	 * initiating SYSAP supplies on a CONNECT_REQ and the target SYSAP on an
+	 * ACCEPT_REQ, and which two Connection Managers use to tell each other
+	 * which VMS version they are. The field name is kept (it is an ABI
+	 * other FC items already compile against) but the reading is corrected
+	 * here: it is SYSAP data passed through uninterpreted, not padding, and
+	 * FC-P2.2 delivers it to scs_sysap_ops.connect_req as `conndata`.
+	 */
+	uint8_t  blank[VMS_SCSCTRL_NAME_LEN];
 };
 
 /*
@@ -199,6 +209,111 @@ vms_codec_status_t vms_scs_ctrl_parse(const uint8_t *frame, uint32_t len,
 vms_codec_status_t vms_scs_ctrl_build(const struct vms_scs_ctrl_frame *f,
 				      uint8_t *frame, uint32_t cap,
 				      uint32_t *written);
+
+/* ------------------------------------------------------------------ *
+ * THE BODY-LEVEL SCS HEADER (abs 56-71) -- design SS3.2.4's E1 seam
+ * ------------------------------------------------------------------ *
+ *
+ * WHY THIS EXISTS ALONGSIDE vms_scs_ctrl_build(). The two SCS transmit
+ * paths have different SHAPES, because the wire does:
+ *
+ *  - the connection-control verbs (ops 0-9) occupy the SHORT SCA classes
+ *    58/62/66/110, which no other layer can pre-build, so SCS builds the
+ *    WHOLE frame through vms_scs_ctrl_build() and hands it to the port's
+ *    FRAME-level primitive (pe_vc_send_frame), which stamps the sequence;
+ *  - an APPLICATION MESSAGE (MTYPE 10) rides the fixed 190-content class
+ *    the design's byte-ownership table splits three ways -- port 0-55,
+ *    SCS 56-71, SYSAP 72-203. There SCS owns exactly 16 bytes, and E1's
+ *    ruling is that it writes exactly those and no others.
+ *
+ * So this pair is the 16-byte half of that table, expressed as a typed
+ * build/parse like every other entry in this file, rather than as six
+ * `body[n] = ...` stores in vms_scs_fsm.c -- design SS3.9 rule 2, "no raw
+ * byte offset outside a codec TU", which is exactly the rule that keeps
+ * FC-P2.2's FSM readable and its offsets in one place.
+ *
+ * The offsets are DERIVED from the frame-absolute ones above by
+ * subtracting VMS_OFF_SCSCTRL_INNERLEN (= 56), not re-stated: the two
+ * views of the same six fields cannot drift apart.
+ */
+#define VMS_SCS_HDR_LEN 16u   /* abs 56..71 inclusive */
+
+#define VMS_OFF_SCSHDR_INNERLEN (VMS_OFF_SCSCTRL_INNERLEN - VMS_OFF_SCSCTRL_INNERLEN) /*  0 */
+#define VMS_OFF_SCSHDR_FMTWORD  (VMS_OFF_SCSCTRL_FMTWORD  - VMS_OFF_SCSCTRL_INNERLEN) /*  2 */
+#define VMS_OFF_SCSHDR_MTYPE    (VMS_OFF_SCS_CTRL_TYPE    - VMS_OFF_SCSCTRL_INNERLEN) /*  4 */
+#define VMS_OFF_SCSHDR_CREDIT   (VMS_OFF_SCSCTRL_CREDIT   - VMS_OFF_SCSCTRL_INNERLEN) /*  6 */
+#define VMS_OFF_SCSHDR_CONID_R  (VMS_OFF_SCS_CONID_REMOTE - VMS_OFF_SCSCTRL_INNERLEN) /*  8 */
+#define VMS_OFF_SCSHDR_CONID_L  (VMS_OFF_SCS_CONID_LOCAL  - VMS_OFF_SCSCTRL_INNERLEN) /* 12 */
+
+struct vms_scs_hdr {
+	uint16_t    inner_len;     /* SCA content - 44 (146 for the 190 class) */
+	uint16_t    mtype;         /* enum scs_mtype / VMS_SCS_CTRL_* verb     */
+	uint16_t    credit;        /* the CDT's Pending Receive Credit count,
+				    * READ FROM THE LEDGER (p. 2-43/2-44,
+				    * spec sec 4(h)(1c)/(1g)) -- never a
+				    * constant, never copied frame to frame  */
+	uint32_t    conid_remote;  /* abs 64: the DESTINATION endpoint's Con.ID
+				    * (the peer's, from our CDT)             */
+	uint32_t    conid_local;   /* abs 68: OUR OWN Con.ID for this CDT      */
+};
+
+/*
+ * vms_scs_hdr_build - write the 16 bytes of abs 56-71 at out[0..15].
+ * `cap` must be at least VMS_SCS_HDR_LEN. Bakes in ONLY the GROUNDED
+ * format word 0x0004 (abs 58), exactly as vms_scs_ctrl_build() does;
+ * every other byte comes from *h.
+ */
+vms_codec_status_t vms_scs_hdr_build(const struct vms_scs_hdr *h,
+				     uint8_t *out, uint32_t cap);
+
+/*
+ * vms_scs_hdr_parse - the inverse, over a body/frame slice whose byte 0 is
+ * abs 56. VMS_CODEC_E_SHORT if `len` is under VMS_SCS_HDR_LEN;
+ * VMS_CODEC_E_CLASS if the format word is not the GROUNDED 0x0004 (which is
+ * how a caller learns it is not looking at an SCS header at all, rather than
+ * being handed sixteen plausible bytes).
+ */
+vms_codec_status_t vms_scs_hdr_parse(const uint8_t *in, uint32_t len,
+				     struct vms_scs_hdr *out);
+
+/*
+ * vms_scs_hdr_parse_frame - the same, addressed by a WHOLE received frame.
+ * The abs-56 slice is taken INSIDE this TU so no caller has to know the
+ * number (design SS3.9 rule 2). This is the ONE envelope every SCS length
+ * class shares (sec 4(h)(1b)), so it decodes an op-0 CONNECT_REQ, an op-7
+ * short and a 190-content application message identically.
+ */
+vms_codec_status_t vms_scs_hdr_parse_frame(const uint8_t *frame, uint32_t len,
+					   struct vms_scs_hdr *out);
+
+/*
+ * vms_scs_msg_body - point `*body` at the SYSAP's own bytes of a received
+ * application message (frame-absolute 72 onward, design SS3.2.4's
+ * "72-203 -> the emitting FSM/role") and set `*body_len` to how many are
+ * present. VMS_CODEC_E_SHORT if the frame does not reach abs 72. No copy.
+ */
+vms_codec_status_t vms_scs_msg_body(const uint8_t *frame, uint32_t len,
+				    const uint8_t **body, uint32_t *body_len);
+
+/*
+ * vms_scs_msg_body_build - assemble the BODY-LEVEL buffer an application
+ * message is handed down as (design SS3.2.4's SCS<->port seam): this layer's
+ * 16-byte header at [0:16] followed by the SYSAP's bytes at [16:...], zero
+ * padded to `cap`. `cap` is the caller's whole body buffer (148 for the
+ * grounded 190-content class). VMS_CODEC_E_INVAL if the SYSAP's bytes would
+ * not fit -- never a silent truncation.
+ */
+vms_codec_status_t vms_scs_msg_body_build(const struct vms_scs_hdr *h,
+					  const uint8_t *sysap_body,
+					  uint32_t sysap_len,
+					  uint8_t *out, uint32_t cap);
+
+/*
+ * The abs-22 connect-class word every connection-control frame carries
+ * (spec sec 4(m), "Connect-class at abs 22": GROUNDED 0x0001; the 0x03e8 seen
+ * in some fresh-formation captures is NOT accepted by an established member).
+ */
+#define VMS_SCSCTRL_CONNECT_FLAG 0x0001u
 
 /* ------------------------------------------------------------------ *
  * Directory lookup (sec 4(h)(2)) -- the semantic reading of the op-10,

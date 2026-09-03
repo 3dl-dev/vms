@@ -44,6 +44,20 @@ filling a lock id. Byte ownership of the 204-byte class (frame-absolute):
   **DISPATCH FC-P3.15 ONLY AFTER FC-P3.12 lands** (else it races the coordinator
   on the same files).
 
+## LAB-lane inputs needed (capture/oracle — the lab owns these)
+
+### E12. Decoded `vax3-2to3-established-join` capture for the replay oracle (raised by FC-P1.5)
+FC-P1.5's replay driver is generic but currently runs on the VAX2→VAX1
+formation-window fixtures in-tree (`hello-directed-vax2-to-vax1.spec` +
+`scs-start-vax2-config-round0.spec`). The plan's named
+`vax3-2to3-established-join-20260730.pcap` (a node joining an ESTABLISHED
+2-node cluster — the richest join specimen) is lab-host-only (`~/vax/` not
+present here) with no decoded fixture in-tree. **Lab lane:** clean-room decode
+that capture to a `.spec` fixture and swap it into `test_replay.c`'s input list
+(no driver change needed). This also feeds E8 (the op-06 MEMBERSHIP record layout
+that blocks P3.3 CSID-learning may be isolable from this same established-join
+capture).
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

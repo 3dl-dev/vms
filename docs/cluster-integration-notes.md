@@ -563,6 +563,14 @@ The 16-byte `VMS$VAXcluster` connect-data at frame `[94:110]` (byte-verified, bo
 **So the ONLY reason a real VAX would REJECT OVMX's current join is that OVMX sends the version quad + tail as ZEROS instead of `01 1b 01 03`…`08 00 00 06 00`.** A real joiner's `[98:105]` IS zero (OVMX already correct there).
 **Analysis:** `[94:98]`/`[105:110]` are a PROTOCOL VERSION (the CM wire-format version), NOT a node identity — OVMX's faithful CM genuinely implements this protocol, so presenting these constants is HONEST (like declaring "I speak HTTP/1.1"), not a node impersonation. OVMX's NODE identity (OVMXJ0, a VMX node) is declared elsewhere (SCSNODE / OS-identity broadcast), untouched. **OPERATOR RULING (E31):** send the grounded CM protocol constants in the connect-data (recommended — honest protocol-version + lets a real VAX ACCEPT) vs treat them as a compat-lie (send zeros, accept REJECT). Fast call now that the format is grounded; the fix is a 2-line set of `cnxman_join_cfg.conndata` once ruled.
 
+### E50. FC-P4.6 landed the DLM requester (INV-6 structural) — the DLM rebuild's remaining WIRE opcodes need a lab capture (FC-P5.2)
+FC-P4.6's requester FSM is faithful (struct dlm_req carries NO name/mode/handle/valblk/hash → cannot plumb frame→frame; every field re-read from the executive; REDIRECT re-reads; decline stops at the declining node = grant-storm cure; E49 closed — dlm_req_fsm_observe learns body[10:12]+root name). BUT these cat-0x02 wire pieces are NOT grounded and are honestly stubbed (each counted, nothing guessed):
+- **Cross-node $DEQ opcode:** §4(f).1 grounds only ENQ 0x01 / CONVERT 0x07; ioctl DEQ==3 COLLIDES with the PROVISIONAL commit 0x03. `POST_DEQ` sends nothing, counts `releases_no_wire_op` → **a released cross-node lock stays held at the master until departure reaps it.** Needs a lab-grounded opcode.
+- **LVB field** (cat-0x02): no grounded offset → write crossing unsent (`lvb_write_no_wire_field`); grants carry `valblk_present=0`.
+- **Reply shapes** for outcomes 2/3 (REDIRECT/ASSUME) + BLKAST: no grounded parser → explicit entry points, FC-P4.8's classifier raises them only from a grounded source.
+- **SS$_TIMEOUT/PATHLOST** absent in-tree → used SS$_NOTQUEUED + SS$_UNSUPPORTED; distinct SSDEF = operator call.
+**→ FC-P5.2 = a DLM-traffic lab capture grounds the DEQ opcode / LVB field / reply shapes. ⭐ CAPTURABLE DURING THE R5 CN=3 FIRE: tcpdump the DLM traffic (cat-0x02) on the wire while OVMX joins → one lab session yields BOTH the CN=3 proof AND the DLM-rebuild grounding.** Then P4.8 (classifier) → P5.3/5.4/5.5 (master/directory/rebuild). NOT on the CN=3 critical path (count-commit precedes the rebuild).
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

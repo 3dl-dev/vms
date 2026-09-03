@@ -399,6 +399,55 @@ struct vms_cluster_diag_port_args {
 };
 
 /*
+ * VMS_IOCTL_CLUSTER_DIAG_CONN (FC-P2.4). Byte-for-byte the same two row
+ * structs and args struct as src/kernel/vms_ioctl.h -- see that header for the
+ * SDA `SHOW CONNECTIONS` decoder-ring column map each field projects, and for
+ * why `remote_conid_valid` (not a zero Con.ID) is what marks an unbound half.
+ */
+#define VMS_CLUSTER_DIAG_CONN_ROW 0u
+#define VMS_CLUSTER_DIAG_CONN_CDT 1u
+
+struct vms_scs_view_wire {
+	uint32_t n_sbs;
+	uint32_t n_cdts;
+	uint32_t n_sysaps;
+	uint32_t conid_seq;
+	uint32_t conid_epoch;
+	uint32_t dir_lookups_served;
+	uint32_t dir_lookups_sent;
+	uint32_t credit_stalls;
+};
+
+struct vms_scs_cdt_view_wire {
+	uint32_t local_conid;
+	uint32_t remote_conid;
+	uint8_t  remote_conid_valid;
+	uint8_t  state;
+	uint8_t  pad0[2];
+	uint32_t peer_sysid_lo;
+	uint32_t peer_sysid_hi;
+	uint8_t  local_name[16];    /* VMS_SCS_PROCNAME_LEN */
+	uint8_t  remote_name[16];
+	uint16_t credit_send;
+	uint16_t credit_receive;
+	uint16_t credit_pending;
+	uint16_t pad1;
+	uint32_t msgs_sent;
+	uint32_t msgs_received;
+	uint8_t  msgtype;
+	uint8_t  pad2[3];
+};
+
+struct vms_cluster_diag_conn_args {
+	uint32_t row;
+	uint32_t index;
+	uint32_t status;
+	uint32_t pad0;
+	struct vms_scs_view_wire     scs;
+	struct vms_scs_cdt_view_wire cdt;
+};
+
+/*
  * VMS_IOCTL_SYSGEN_LOAD (FC-P0.10). Byte-for-byte the same struct as
  * src/kernel/vms_ioctl.h -- see that header for the field-by-field rationale
  * and the negctl this ioctl's dispatcher enforces (SS$_BADPARAM on a
@@ -451,8 +500,9 @@ struct vms_cluster_start_args {
 };
 
 /* ================================================================
- * Request numbers. All eleven are _IOWR carrying the SAME structs and NR
- * bytes as src/kernel/vms_ioctl.h (0x30-0x3f, magic 'V'), so their command
+ * Request numbers. Every one is _IOWR carrying the SAME struct and the SAME NR
+ * byte as src/kernel/vms_ioctl.h (0x30-0x3f, plus FC-P2.4's 0x69 once that
+ * block filled; magic 'V'), so their command
  * words are identical across substrates (framework pre-copy path; none
  * exceeds one page -- the largest, vms_cluster_member_get_args at 3848
  * bytes, is still under NetBSD's one-page IOCPARM_MAX of 4096).
@@ -474,6 +524,10 @@ struct vms_cluster_start_args {
 #define VMS_IOCTL_CLUSTER_DIAG_PORT    _IOWR(VMS_LOCK_IOC_MAGIC, 0x3d, struct vms_cluster_diag_port_args)
 #define VMS_IOCTL_SYSGEN_LOAD          _IOWR(VMS_LOCK_IOC_MAGIC, 0x3e, struct vms_sysgen_load_args)
 #define VMS_IOCTL_CLUSTER_START        _IOWR(VMS_LOCK_IOC_MAGIC, 0x3f, struct vms_cluster_start_args)
+/* FC-P2.4: NR 0x69 -- the 0x30-0x3f block above is full; see
+ * src/kernel/vms_ioctl.h for why that number, and for the recompute-the-
+ * encoded-value trap an appended row field springs. */
+#define VMS_IOCTL_CLUSTER_DIAG_CONN    _IOWR(VMS_LOCK_IOC_MAGIC, 0x69, struct vms_cluster_diag_conn_args)
 
 /*
  * Freeze the shared layouts -- see the other _nb.h contracts' identical asserts:
@@ -517,5 +571,11 @@ _Static_assert(sizeof(struct vms_sysgen_load_args) == 104,
                "vms_sysgen_load_args changed size -- VMS_IOCTL_SYSGEN_LOAD ABI break");
 _Static_assert(sizeof(struct vms_cluster_start_args) == 8,
                "vms_cluster_start_args changed size -- VMS_IOCTL_CLUSTER_START ABI break");
+_Static_assert(sizeof(struct vms_scs_view_wire) == 32,
+               "vms_scs_view_wire changed size -- must match src/kernel/vms_ioctl.h");
+_Static_assert(sizeof(struct vms_scs_cdt_view_wire) == 72,
+               "vms_scs_cdt_view_wire changed size -- must match src/kernel/vms_ioctl.h");
+_Static_assert(sizeof(struct vms_cluster_diag_conn_args) == 120,
+               "vms_cluster_diag_conn_args changed size -- VMS_IOCTL_CLUSTER_DIAG_CONN ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

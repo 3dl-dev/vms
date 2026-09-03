@@ -69,6 +69,10 @@ SRCS=		vms_netbsd.c \
 		vms_cnxman_phase2.c \
 		vms_cnxman_barrier_fsm.c \
 		vms_cnxman_coord_fsm.c \
+		vms_scs_fsm.c \
+		vms_cluster_codec_scs.c \
+		vms_scs_dir.c \
+		vms_scs.c \
 		vmsfs_acp.c \
 		ods2_reader.c \
 		ods2_edit.c \

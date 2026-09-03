@@ -586,6 +586,17 @@ int scs_fsm_sysap_lookup(const struct scs_fsm *f, const uint8_t *name,
 			 struct scs_sysap_info *out);
 
 /*
+ * The ops table `name` was registered with, or NULL (FC-P2.4). The SAME SDIR
+ * queue scs_fsm_sysap_lookup reads: vms_scs.h's frozen CONNECT service names
+ * the local SYSAP by NAME and carries no callback table, so the glue reads the
+ * SYSAP's own from the ONE registry instead of keeping a second name table
+ * beside it (integration note E20). Deliberately NOT a field of
+ * struct scs_sysap_info, which is a readback VIEW.
+ */
+const struct scs_sysap_ops *scs_fsm_sysap_ops(const struct scs_fsm *f,
+					      const uint8_t *name);
+
+/*
  * Declare the 16 bytes an affirmative directory answer about `name` carries.
  * `data` NULL CLEARS the declaration (back to honest omission). Only the SYSAP
  * that registered the name has any business calling this.

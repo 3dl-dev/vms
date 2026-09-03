@@ -469,6 +469,111 @@ void vms_pe_stop(struct vms_cluster *cl)
 }
 
 /* ==========================================================================
+ * 4b. THE E9 BRIDGE -- the frozen glue-facing send surface (FC-P2.4)
+ *
+ * vms_pe.h SS5 froze these names at FC-P0.1 and said in its own doc comment
+ * what their bodies must be: "the glue's job is exactly the one-line
+ * dereference pe_send_msg(pe, ...) { return pe_vc_send_msg(&pe->fsm, ...); },
+ * never a second implementation of the sequencing/envelope logic". They come
+ * into existence HERE, with FC-P2.4 -- the first item to have a caller
+ * (vms_scs.c) -- because `struct vms_pe` is private to this file and the pure
+ * `struct pe_fsm *` twins cannot share these names in one TU (integration
+ * note E9).
+ *
+ * TWO STATUS VOCABULARIES MEET HERE, AND THAT IS THE POINT. The pure FSM
+ * returns `enum pe_vc_send_status` (design SS3.2.2 keeps kernel-core cluster
+ * headers free of SS$_ definitions); a user-mode reader gets an SS$_ status.
+ * pe_send_status() below is the whole mapping, in one place.
+ * ========================================================================== */
+
+/*
+ * enum pe_vc_send_status -> SS$_. Every target is a status this tree can
+ * CITE (src/libvms/include/ssdef.h / vms_internal.h), never a number invented
+ * for the occasion -- the same discipline SS__ABORT's own comment in
+ * vms_internal.h records for the BGn: driver ("reusing an already-grounded
+ * status rather than inventing one this tree cannot cite", CLAUDE.md Rule 8).
+ * Named per case rather than folded, so a reader sees which refusal is which:
+ *   NOCIRCUIT/RINGFULL  the path to that system cannot carry this right now
+ *                       -> SS$_DEVOFFLINE (2692)
+ *   NOCREDIT            the peer's window is spent          -> SS$_EXQUOTA
+ *   BADFRAME/TOOBIG     the caller handed down something unsendable
+ *                       -> SS$_BADPARAM
+ *   TXFAIL              the interface refused the frame     -> SS$_ABORT
+ */
+static uint32_t pe_send_status(int rc)
+{
+	switch (rc) {
+	case PE_VC_SEND_OK:        return SS__NORMAL;
+	case PE_VC_SEND_NOCIRCUIT: return SS__DEVOFFLINE;
+	case PE_VC_SEND_RINGFULL:  return SS__DEVOFFLINE;
+	case PE_VC_SEND_NOCREDIT:  return SS__EXQUOTA;
+	case PE_VC_SEND_BADFRAME:  return SS__BADPARAM;
+	case PE_VC_SEND_TOOBIG:    return SS__BADPARAM;
+	case PE_VC_SEND_TXFAIL:    return SS__ABORT;
+	default:                   return SS__ABORT;
+	}
+}
+
+int pe_send_msg(struct vms_pe *pe, vms_scs_sysid_t dst, vms_conid_t dst_conid,
+		const uint8_t *body, uint32_t len)
+{
+	if (pe == (struct vms_pe *)0)
+		return SS__NOSUCHDEV;   /* no port: honest, never a fake send */
+	return (int)pe_send_status(pe_vc_send_msg(&pe->fsm, dst, dst_conid,
+						  body, len));
+}
+
+int pe_send_dg(struct vms_pe *pe, vms_scs_sysid_t dst,
+	       const uint8_t *body, uint32_t len)
+{
+	if (pe == (struct vms_pe *)0)
+		return SS__NOSUCHDEV;
+	return (int)pe_send_status(pe_vc_send_dg(&pe->fsm, dst, body, len));
+}
+
+int pe_send_frame(struct vms_pe *pe, vms_scs_sysid_t dst,
+		  const uint8_t *frame, uint32_t len)
+{
+	if (pe == (struct vms_pe *)0)
+		return SS__NOSUCHDEV;
+	return (int)pe_send_status(pe_vc_send_frame(&pe->fsm, dst, frame, len));
+}
+
+int pe_addr(struct vms_pe *pe, vms_scs_sysid_t dst, struct vms_scs_addr *out)
+{
+	if (pe == (struct vms_pe *)0 || out == (struct vms_scs_addr *)0)
+		return SS__NOSUCHDEV;
+	/* pe_vc_addr answers 0 / -1, and its -1 means "no such circuit" --
+	 * NOT a partially filled `out`. Passed straight through: the caller's
+	 * contract (scs_fsm_ops.addr) is "non-zero means build nothing". */
+	return pe_vc_addr(&pe->fsm, dst, out) == 0 ? 0 : SS__DEVOFFLINE;
+}
+
+void pe_set_upper(struct vms_pe *pe, const struct pe_upper_ops *upper)
+{
+	if (pe == (struct vms_pe *)0)
+		return;
+	pe_fsm_set_upper(&pe->fsm, upper);
+}
+
+int pe_incarnation(struct vms_pe *pe, uint32_t *lo, uint32_t *hi)
+{
+	uint64_t q;
+
+	if (pe == (struct vms_pe *)0 || lo == (uint32_t *)0 ||
+	    hi == (uint32_t *)0)
+		return SS__BADPARAM;
+	/* INV-6: only a value pe_build_identity() really sampled. An invalid
+	 * incarnation is reported as absent; the caller may not fall back. */
+	if (!pe->fsm.id.incarnation_time_valid)
+		return SS__NOSUCHDEV;
+	q = pe->fsm.id.incarnation_time;
+	*lo = (uint32_t)(q & 0xffffffffu);
+	*hi = (uint32_t)((q >> 32) & 0xffffffffu);
+	return SS__NORMAL;
+}
+
+/* ==========================================================================
  * 5. Snapshot -- the same views CLUSTER_DIAG_PORT hands userland (INV-6)
  * ========================================================================== */
 

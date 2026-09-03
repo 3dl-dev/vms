@@ -912,6 +912,107 @@ _Static_assert(VMS_IOCTL_CLUSTER_DIAG_PORT == 0xC0A0563Du,
                "VMS_IOCTL_CLUSTER_DIAG_PORT encodes differently than the reference build");
 
 /*
+ * VMS_IOCTL_CLUSTER_DIAG_CONN (FC-P2.4, docs/plan-faithful-cluster-
+ * executive.md). SCS's diagnostics view -- SDA's SHOW CONNECTIONS equivalent.
+ * `row` names WHICH of the two real projections (vms_scs_snapshot /
+ * vms_scs_cdt_snapshot, src/kernel-core/vms_scs.c) the call fills; `index`
+ * walks the CDL for the CDT row and is ignored for the SCS row. Exactly the
+ * shape VMS_IOCTL_CLUSTER_DIAG_PORT above already uses, for the same reasons.
+ *
+ * THE CDT ROW IS THE SDA `SHOW CONNECTIONS` DECODER RING (wire spec
+ * docs/cluster-protocol-spec.md SS3, `sda-scs-extract-vax1.txt`), column for
+ * column, so a lab comparison against a real VAX is a field-by-field match and
+ * not an interpretation:
+ *
+ *     Local SYSAP        <- local_name  (16 bytes, blank-padded as the wire
+ *                                        carries it)
+ *     Remote             <- peer_sysid_lo/_hi + remote_name
+ *     Local Con. ID      <- local_conid
+ *     Remote Con. ID     <- remote_conid, and ONLY when remote_conid_valid;
+ *                           the reference extract's own `Remote Con. ID
+ *                           00000000` for a connection that never bound one is
+ *                           reproduced by the flag being CLEAR, not by
+ *                           printing a zero that could be mistaken for a
+ *                           handle (INV-6, rule 2 of vms_cluster_snapshot.h)
+ *     Credit (Send/Recv) <- credit_send / credit_receive (+ credit_pending,
+ *                           the ledger's third counter, which SDA does not
+ *                           print but the executive really holds)
+ *     State              <- `state`, an enum vms_scs_cdt_state ordinal whose
+ *                           NAME comes from scs_cdt_state_name()
+ *     MTYPE              <- msgtype, spec SS4(m)'s abs-30 phase byte
+ *
+ * Every one of those is a projection of a live struct scs_cdt taken under the
+ * fork mutex; nothing here is a frame count standing in for state, and a CDT
+ * the executive does not hold is SS$_NOSUCHDEV with an all-zero row.
+ *
+ * The two row structs mirror src/kernel-core/vms_cluster_snapshot.h's
+ * vms_scs_view / vms_scs_cdt_view byte-for-byte -- same "ONE facility source,
+ * duplicated struct declaration" shape as the CLUSTER_DIAG_PORT rows, because
+ * this header must stay includable with no kernel-core dependency.
+ */
+#define VMS_CLUSTER_DIAG_CONN_ROW 0u  /* the SCS-wide view */
+#define VMS_CLUSTER_DIAG_CONN_CDT 1u  /* one CDT row, by `index` */
+
+struct vms_scs_view_wire {
+    uint32_t n_sbs;
+    uint32_t n_cdts;
+    uint32_t n_sysaps;
+    uint32_t conid_seq;
+    uint32_t conid_epoch;
+    uint32_t dir_lookups_served;
+    uint32_t dir_lookups_sent;
+    uint32_t credit_stalls;
+};
+_Static_assert(sizeof(struct vms_scs_view_wire) == 32,
+               "vms_scs_view_wire changed size -- must match vms_scs_view");
+
+struct vms_scs_cdt_view_wire {
+    uint32_t local_conid;
+    uint32_t remote_conid;
+    uint8_t  remote_conid_valid;
+    uint8_t  state;
+    uint8_t  pad0[2];
+    uint32_t peer_sysid_lo;
+    uint32_t peer_sysid_hi;
+    uint8_t  local_name[16];    /* VMS_SCS_PROCNAME_LEN */
+    uint8_t  remote_name[16];
+    uint16_t credit_send;
+    uint16_t credit_receive;
+    uint16_t credit_pending;
+    uint16_t pad1;
+    uint32_t msgs_sent;
+    uint32_t msgs_received;
+    uint8_t  msgtype;
+    uint8_t  pad2[3];
+};
+_Static_assert(sizeof(struct vms_scs_cdt_view_wire) == 72,
+               "vms_scs_cdt_view_wire changed size -- must match vms_scs_cdt_view");
+
+struct vms_cluster_diag_conn_args {
+    uint32_t row;                       /* in: VMS_CLUSTER_DIAG_CONN_*        */
+    uint32_t index;                     /* in: CDL index; ignored for _ROW    */
+    uint32_t status;                    /* return: SS$_ status                */
+    uint32_t pad0;
+    struct vms_scs_view_wire     scs;   /* valid iff row == _ROW              */
+    struct vms_scs_cdt_view_wire cdt;   /* valid iff row == _CDT              */
+};
+_Static_assert(sizeof(struct vms_cluster_diag_conn_args) == 120,
+               "vms_cluster_diag_conn_args changed size -- VMS_IOCTL_CLUSTER_DIAG_CONN ABI break");
+/*
+ * NR 0x69, not 0x40: the cluster block 0x39-0x3f is FULL (MEMBER_SET through
+ * CLUSTER_START), and 0x40-0x4d belong to the register/process groups. 0x69 is
+ * the next unused number in this magic. The encoded value below was RECOMPUTED
+ * for this struct's size, the way FC-P1.6 had to recompute
+ * VMS_IOCTL_CLUSTER_DIAG_PORT's when its VC row grew: _IOWR folds sizeof(type)
+ * into the command word, so an appended field silently changes the ioctl
+ * NUMBER, and this assert is what turns that into a build failure instead of an
+ * ENOTTY on a booted node.
+ */
+#define VMS_IOCTL_CLUSTER_DIAG_CONN _IOWR(VMS_IOC_MAGIC, 0x69, struct vms_cluster_diag_conn_args)
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_CONN == 0xC0785669u,
+               "VMS_IOCTL_CLUSTER_DIAG_CONN encodes differently than the reference build");
+
+/*
  * VMS_IOCTL_SYSGEN_LOAD (FC-P0.10, docs/plan-faithful-cluster-executive.md).
  * STARTUP.EXE's own case of SYSBOOT: hands the cluster SYSGEN parameters and
  * the CLUSTER_AUTHORIZE record it read off SYS$SYSTEM:OVMXVMSSYS.PAR

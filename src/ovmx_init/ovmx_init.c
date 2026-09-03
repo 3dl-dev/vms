@@ -1342,9 +1342,13 @@ static void start_cluster_port(uint32_t vaxcluster)
 
     status = vms_kif_cluster_start(&port_up);
     if (status != SS$_NORMAL) {
+        /* FC-P2.4: CLUSTER_START is now port-then-SCS, so `port_up` is what
+         * tells the two failures apart -- the port never came up at all, or
+         * it did and SCS would not start on it. Reported, never guessed. */
         fprintf(stderr,
-                "%%OVMX-W-CLUSTERPORT, cluster port did not start"
+                "%%OVMX-W-CLUSTERPORT, cluster %s did not start"
                 " (VAXCLUSTER %u, status %#x)\n",
+                port_up ? "SCS layer" : "port",
                 (unsigned)vaxcluster, (unsigned)status);
         return;
     }

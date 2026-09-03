@@ -118,6 +118,24 @@
 #define SS__IVCHAN    602          /* SS$_IVCHAN -- invalid I/O channel */
 #define SS__IVDEVNAM  608          /* SS$_IVDEVNAM -- invalid device name */
 #define SS__NOSUCHDEV 2680         /* SS$_NOSUCHDEV -- no such device available */
+/*
+ * Cluster port/SCS subset (FC-P2.4). Values match src/kernel/vms_internal.h
+ * exactly and are the ones src/libvms/include/ssdef.h already ships for those
+ * names -- the SAME shared source (src/kernel-core/vms_pe.c, vms_scs.c) is
+ * compiled by both substrates, so a refusal may not carry two numbers.
+ *   SS__DEVOFFLINE  a circuit/connection that exists but cannot carry traffic
+ *                   right now (no VC to that system, the send window is spent,
+ *                   the path was lost). OVMX's choice of an ALREADY-GROUNDED
+ *                   status: OpenVMS's own SS$_PATHLOST/SS$_INCONSTATE are not
+ *                   pinned anywhere in this tree, and inventing a number for
+ *                   them would be exactly what CLAUDE.md Rule 8 forbids --
+ *                   the same call SS__ABORT's comment in the Linux twin
+ *                   records for the BGn: driver.
+ *   SS__ABORT       the frame did not leave the node (the interface refused
+ *                   it, or the codec would not build it).
+ */
+#define SS__DEVOFFLINE 2692        /* SS$_DEVOFFLINE (device offline) */
+#define SS__ABORT      44          /* SS$_ABORT (I/O aborted) */
 /* Lock-manager subset (P4-A, rd vms-ff7). Values match src/kernel/vms_internal.h
  * exactly -- each is the value src/libvms/include/ssdef.h already ships for that
  * name, produced IN the executive (the lock manager yields VMS condition values,
@@ -887,6 +905,10 @@ long vms_ioctl_cluster_member_get(struct vms_proc *proc, unsigned long arg);
 struct vms_cluster;
 struct vms_cluster *vms_cluster_node(void);
 long vms_ioctl_cluster_diag_port(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_DIAG_CONN (FC-P2.4): mirror of the src/kernel/
+ * vms_internal.h decl -- SCS's SDA SHOW CONNECTIONS-equivalent read against
+ * vms_cluster_node()'s real vms_scs.c objects. */
+long vms_ioctl_cluster_diag_conn(struct vms_proc *proc, unsigned long arg);
 /* VMS_IOCTL_SYSGEN_LOAD (FC-P0.10): mirror of the src/kernel/vms_internal.h
  * decl -- loads the cluster SYSGEN parameters into vms_cluster_node()'s real
  * struct vms_cluster.params (vms_cluster_sysgen.c). */

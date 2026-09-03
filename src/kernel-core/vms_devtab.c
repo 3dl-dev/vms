@@ -57,6 +57,7 @@
 #include "vms_cluster_snapshot.h"
 #include "vms_cluster_sysgen.h"
 #include "vms_pe.h"
+#include "vms_scs.h"           /* FC-P2.4: vms_scs_start + the CONN snapshots */
 
 /*
  * Device class codes. Values mirror src/libvms/include/dcdef.h so the
@@ -1719,6 +1720,78 @@ long vms_ioctl_cluster_diag_port(struct vms_proc *proc, unsigned long arg)
 }
 
 /*
+ * The two CLUSTER_DIAG_CONN row structs (vms_ioctl.h / vms_lock_nb.h) are
+ * BYTE-IDENTICAL duplicates of vms_cluster_snapshot.h's vms_scs_view /
+ * vms_scs_cdt_view, the same shape the three CLUSTER_DIAG_PORT rows above use.
+ * The asserts are what keep the memcpy honest across a future edit to either
+ * copy -- and they are the tripwire for FC-P2.4's own appended `msgtype`
+ * column, which changed BOTH the struct size and (through _IOWR) the ioctl
+ * number.
+ */
+_Static_assert(sizeof(struct vms_scs_view) == sizeof(struct vms_scs_view_wire),
+               "vms_scs_view / vms_scs_view_wire layout drifted");
+_Static_assert(sizeof(struct vms_scs_cdt_view) ==
+               sizeof(struct vms_scs_cdt_view_wire),
+               "vms_scs_cdt_view / vms_scs_cdt_view_wire layout drifted");
+
+/*
+ * vms_ioctl_cluster_diag_conn - VMS_IOCTL_CLUSTER_DIAG_CONN (FC-P2.4). SCS's
+ * SDA SHOW CONNECTIONS equivalent: `row` names which of vms_scs_snapshot /
+ * vms_scs_cdt_snapshot (vms_scs.c) to read, `index` walks the CDL for the
+ * latter. Both read real struct scs_fsm / struct scs_cdt objects under the fork
+ * mutex (INV-6); this function adds no state of its own, only the copyin/
+ * copyout and the row dispatch -- the exact shape of its CLUSTER_DIAG_PORT
+ * sibling above.
+ *
+ * The honest negctl: before SCS has come up (no CLUSTER_START, VAXCLUSTER=0,
+ * no port, or a CDL index naming no live CDT) every row read returns
+ * SS$_NOSUCHDEV, logged, and the row struct stays all-zero -- never a
+ * placeholder connection.
+ */
+long vms_ioctl_cluster_diag_conn(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_cluster_diag_conn_args args;
+    struct vms_cluster *cl = vms_cluster_node();
+    uint32_t status;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    switch (args.row) {
+    case VMS_CLUSTER_DIAG_CONN_ROW: {
+        struct vms_scs_view v;
+
+        status = (uint32_t)vms_scs_snapshot(cl, &v);
+        if (status == SS__NORMAL)
+            memcpy(&args.scs, &v, sizeof(args.scs));
+        break;
+    }
+    case VMS_CLUSTER_DIAG_CONN_CDT: {
+        struct vms_scs_cdt_view v;
+
+        status = (uint32_t)vms_scs_cdt_snapshot(cl, args.index, &v);
+        if (status == SS__NORMAL)
+            memcpy(&args.cdt, &v, sizeof(args.cdt));
+        break;
+    }
+    default:
+        status = SS__BADPARAM;
+        break;
+    }
+
+    if (status != SS__NORMAL)
+        pr_info("vms: CLUSTER_DIAG_CONN row %u index %u -> SS$ %u\n",
+                (unsigned)args.row, (unsigned)args.index, (unsigned)status);
+
+    args.status = status;
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * sysgen_load_args_to_params - copy VMS_IOCTL_SYSGEN_LOAD's wire struct
  * (struct vms_sysgen_load_args, vms_ioctl.h / vms_lock_nb.h) into
  * struct vms_cluster_params (vms_cluster.h). The two are the SAME fields in
@@ -1833,8 +1906,22 @@ long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg)
     status = vms_cluster_fork_start(cl, NULL);
     if (status == SS__NORMAL)
         status = vms_pe_start(cl);
+    /*
+     * FC-P2.4 extends SYSINIT's ordering by exactly one step, in the order
+     * VMS itself has: the port first, then SCS ON that port. vms_scs_start()
+     * binds the SCS FSM to the running port (scs_fsm_ops down, pe_upper_ops
+     * up), registers SCS$DIRECTORY so a member's inbound directory connect
+     * has somewhere to go, and seeds the Con.ID allocator from the PORT'S OWN
+     * incarnation -- so it can only run after the port really came up, and it
+     * refuses (SS$_NOSUCHDEV) rather than seeding from nothing if it did not.
+     * Still NOT the join to MEMBER/STANDALONE: that is FC-P3.9.
+     */
+    if (status == SS__NORMAL)
+        status = vms_scs_start(cl);
 
-    args.port_up = (uint32_t)((status == SS__NORMAL) && (cl->pe != NULL));
+    /* Read from the objects, not from `status`: the port really is up if
+     * cl->pe is there, whatever happened one layer above it. */
+    args.port_up = (uint32_t)(cl->pe != NULL);
     args.status = (uint32_t)status;
 
     if (status != SS__NORMAL)

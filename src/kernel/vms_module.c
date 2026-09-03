@@ -1796,6 +1796,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
      * vms_pe.c), against the one per-node vms_cluster_node(). */
     case VMS_IOCTL_CLUSTER_DIAG_PORT:
         return vms_ioctl_cluster_diag_port(proc, arg);
+    /* SCS's SDA SHOW CONNECTIONS-equivalent diagnostics read (FC-P2.4,
+     * vms_scs.c): the SCS-wide view, and one CDT row per call. */
+    case VMS_IOCTL_CLUSTER_DIAG_CONN:
+        return vms_ioctl_cluster_diag_conn(proc, arg);
     /* STARTUP.EXE's own case of SYSBOOT (FC-P0.10): load the cluster SYSGEN
      * parameters + CLUSTER_AUTHORIZE into vms_cluster_node()->params, once,
      * before VMS_IOCTL_CLUSTER_START (FC-P0.11). */

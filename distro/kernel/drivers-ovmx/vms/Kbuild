@@ -48,6 +48,10 @@ vms-y := vms_module.o \
          vms_cnxman_phase2.o \
          vms_cnxman_barrier_fsm.o \
          vms_cnxman_coord_fsm.o \
+         vms_scs_fsm.o \
+         vms_cluster_codec_scs.o \
+         vms_scs_dir.o \
+         vms_scs.o \
          vms_proctab.o \
          vmsfs_acp.o \
          ods2_reader.o \

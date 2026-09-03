@@ -332,6 +332,19 @@ cluster_host_scs_test(test_scs_fsm_vcdown  test_scs_fsm_vcdown.c)
 cluster_host_scs_test(test_scs_directory test_scs_directory.c)
 cluster_host_scs_test(test_scs_dir_join  test_scs_dir_join.c)
 
+# ---- FC-P2.4: the CLUSTER_DIAG_CONN projection + the glue's bindings ----
+# The R1 rung under an R4 done-condition: the CDT rows vms_scs.c projects
+# (column for column against the SDA SHOW CONNECTIONS decoder ring), the
+# VC-break teardown seen through them, and a source-level read of the SHIPPING
+# src/kernel-core/vms_scs.c proving its four bindings are the one-line
+# dereferences integration notes E1/E10 specify. OVMX_KCORE_DIR is what lets
+# the test open that real source, the same mechanism test_cnxman_body_level.c
+# uses.
+cluster_host_scs_test(test_scs_glue_conn test_scs_glue_conn.c)
+target_compile_definitions(test_scs_glue_conn PRIVATE
+    OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
+)
+
 # ---- FC-P0.1: the pure inter-layer headers must be host-includable ----
 # Everything below builds with -DOVMX_CLUSTER_HOST, which routes vms_cluster.h
 # to <stdint.h> instead of vms_internal.h. (OVMX_CLUSTER_CORE_DIR is set above.)

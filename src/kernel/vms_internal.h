@@ -206,6 +206,23 @@
  */
 #define SS__DEVNOTMOUNT 2688        /* device not mounted / not a mountable volume */
 /*
+ * SS__DEVOFFLINE (SS$_DEVOFFLINE == 2692, this tree's src/libvms/include/
+ * ssdef.h value, single-lineage the same way SS__NOSUCHDEV above is; the
+ * NetBSD twin carries the identical number for the identical reason).
+ *
+ * FC-P2.4: the cluster port and SCS answer with it when a CIRCUIT or a
+ * CONNECTION exists but cannot carry the caller's traffic right now -- no VC
+ * to that system, the peer's send window is spent, or the path was lost under
+ * an open connection. It is an OVMX design choice of an ALREADY-GROUNDED
+ * status (CLAUDE.md Rule 8), taken because OpenVMS's own SS$_PATHLOST /
+ * SS$_INCONSTATE are not pinned to a value ANYWHERE in this tree and making
+ * one up is precisely what that rule forbids -- the same call SS__ABORT's
+ * comment below records for the BGn: driver's connection failures. When the
+ * lab extracts $SSDEF the way the $SCSDEF oracle table was extracted, this
+ * becomes a one-line correction in vms_pe.c / vms_scs.c's two mapping tables.
+ */
+#define SS__DEVOFFLINE  2692        /* device offline (ssdef.h SS$_DEVOFFLINE) */
+/*
  * SS__ABORT (SS$_ABORT == 44, this tree's src/libvms/include/ssdef.h value,
  * single-lineage the same way SS__EXQUOTA / SS__ENDOFFILE below are). The BGn:
  * driver (vms-527) returns it when a host-kernel socket operation
@@ -1166,6 +1183,10 @@ struct vms_cluster *vms_cluster_node(void);
 /* VMS_IOCTL_CLUSTER_DIAG_PORT (FC-P0.9): the port's SDA SHOW PORT-equivalent
  * diagnostics read, against vms_cluster_node()'s real vms_pe.c objects. */
 long vms_ioctl_cluster_diag_port(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_DIAG_CONN (FC-P2.4): SCS's SDA SHOW CONNECTIONS-equivalent
+ * diagnostics read -- the SCS-wide view and one CDT row per call, projected
+ * from vms_cluster_node()'s real vms_scs.c objects under the fork mutex. */
+long vms_ioctl_cluster_diag_conn(struct vms_proc *proc, unsigned long arg);
 /* VMS_IOCTL_SYSGEN_LOAD (FC-P0.10): STARTUP.EXE's own case of SYSBOOT --
  * loads the cluster SYSGEN parameters + CLUSTER_AUTHORIZE into
  * vms_cluster_node()'s real struct vms_cluster.params (vms_cluster_sysgen.c). */

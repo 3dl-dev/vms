@@ -41,6 +41,12 @@ struct vms_pe_fsm;  /* opaque: the pure state machine, private to vms_pe_fsm.c *
  * vms_pe_fsm.h SS3c (which includes this header, not the other way round), so
  * this header stays includable alone and names it only through a pointer. */
 struct pe_blk_xfer;
+/* FC-P2.4: the four REAL addresses of a circuit (peer/own hardware MAC and
+ * cluster-LOGICAL address). DEFINED in vms_cluster_codec_vc.h SS2, which this
+ * header deliberately does not include -- vms_pe.h must stay includable ALONE
+ * (tests/cluster/host/hdr_alone_vms_pe.c), so it is named here only through a
+ * pointer, exactly as `struct pe_blk_xfer` above is. */
+struct vms_scs_addr;
 
 /* ==========================================================================
  * 1. Timers the port arms
@@ -291,6 +297,41 @@ int pe_send_dg(struct vms_pe *pe, vms_scs_sysid_t dst,
 /* Register the upper layer (SCS). One registration per port; a second call
  * replaces it. */
 void pe_set_upper(struct vms_pe *pe, const struct pe_upper_ops *upper);
+
+/*
+ * ADDED BY FC-P2.4, additively, on exactly the E9 bridge terms above: SCS's
+ * connect verbs (ops 0-9) and its 94-content directory messages occupy SHORT
+ * SCA classes that no lower layer can pre-build, so SCS builds those frames
+ * WHOLE through its own codec entry and needs the port's FRAME-level
+ * primitive plus the circuit's REAL addressing. Both are one-line
+ * dereferences into the pure `struct pe_fsm *` twins (`pe_vc_send_frame` /
+ * `pe_vc_addr`, vms_pe_fsm.h SS8b) -- there is no second implementation, and
+ * the two exist here rather than being reached directly because
+ * `struct vms_pe` is private to vms_pe.c.
+ *
+ * `pe_addr` is what keeps SCS from inventing one byte of addressing
+ * (integration note E1's FC-P2.2 addendum): a non-zero return means the port
+ * has no circuit to read the four real addresses off, and SCS then builds
+ * NOTHING rather than guessing a MAC.
+ */
+int pe_send_frame(struct vms_pe *pe, vms_scs_sysid_t dst,
+		  const uint8_t *frame, uint32_t len);
+int pe_addr(struct vms_pe *pe, vms_scs_sysid_t dst, struct vms_scs_addr *out);
+
+/*
+ * This port's OWN incarnation quadword -- the VMS absolute time it came up,
+ * which pe_build_identity() sampled once from the seam and every START/STACK
+ * this node sends already carries (spec SS4(g) phase 2, abs 80). Returns 0 and
+ * fills *out only when the port really holds one; non-zero means it does not,
+ * and the caller must NOT substitute a value of its own.
+ *
+ * FC-P2.4 reads it to seed the SCS Con.ID allocator (vms_scs_fsm.h SS4 wants
+ * "a LIVE per-boot value ... the incarnation-time quadword the port already
+ * holds"), so this node has exactly ONE per-boot number behind both its
+ * circuits and its connection identifiers instead of two independently
+ * sampled clocks that could disagree.
+ */
+int pe_incarnation(struct vms_pe *pe, uint32_t *lo, uint32_t *hi);
 
 /*
  * THE THIRD SERVICE -- BLOCK TRANSFER (FC-P6.1). Same E9 bridge shape as the

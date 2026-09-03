@@ -203,8 +203,22 @@ struct vms_scs_cdt_view {
 	uint16_t pad1;
 	uint32_t msgs_sent;
 	uint32_t msgs_received;
+
+	/*
+	 * Added by FC-P2.4, additively and at the end (rule: append, never
+	 * insert). The MTYPE column of the CDT row CLUSTER_DIAG_CONN projects:
+	 * the abs-30 msgtype this connection's NEXT application message will
+	 * carry, which is spec SS4(m)'s 0x5b -> 0x4b phase rule read straight
+	 * off the CDT's own `data_phase` flag (VMS_SCS_MT_SETUP 0x5b while the
+	 * connection is being established, VMS_SCS_MT_MSG 0x4b once it has
+	 * transmitted its first application message). It is SCS KNOWLEDGE, not
+	 * a SYSAP byte and not a frame count -- a real field of a real CDT,
+	 * which is why it can be projected at all (INV-6).
+	 */
+	uint8_t  msgtype;
+	uint8_t  pad2[3];
 };
-_Static_assert(sizeof(struct vms_scs_cdt_view) == 68,
+_Static_assert(sizeof(struct vms_scs_cdt_view) == 72,
 	       "vms_scs_cdt_view is a cross-substrate ABI struct");
 
 struct vms_scs_view {

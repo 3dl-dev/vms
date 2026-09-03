@@ -214,6 +214,18 @@ COPY src/kernel-core/vms_cluster_codec_vc.h /netbsd/guest-src/kernel-core/vms_cl
 COPY src/kernel-core/vms_cluster_codec_blk.c /netbsd/guest-src/kernel-core/vms_cluster_codec_blk.c
 COPY src/kernel-core/vms_cluster_codec_blk.h /netbsd/guest-src/kernel-core/vms_cluster_codec_blk.h
 COPY src/kernel-core/vms_cluster_codec_scs.h /netbsd/guest-src/kernel-core/vms_cluster_codec_scs.h
+# --- FC-P2.4: SCS becomes an in-module layer. vms_scs_fsm.c (the SB/CDT
+# ladder, the Con.ID allocator, the credit ledger), vms_scs_dir.c (the
+# SCS$DIRECTORY / SCS$DIR_LOOKUP SYSAPs), the FC-P2.1 SCS codec they build and
+# parse every frame through, and vms_scs.c (the executive glue that binds them
+# to the port) all joined src/kernel-netbsd/Makefile's SRCS with this item, so
+# the in-guest module build needs them staged. ---
+COPY src/kernel-core/vms_cluster_codec_scs.c /netbsd/guest-src/kernel-core/vms_cluster_codec_scs.c
+COPY src/kernel-core/vms_scs_fsm.c           /netbsd/guest-src/kernel-core/vms_scs_fsm.c
+COPY src/kernel-core/vms_scs_fsm.h           /netbsd/guest-src/kernel-core/vms_scs_fsm.h
+COPY src/kernel-core/vms_scs_dir.c           /netbsd/guest-src/kernel-core/vms_scs_dir.c
+COPY src/kernel-core/vms_scs_dir.h           /netbsd/guest-src/kernel-core/vms_scs_dir.h
+COPY src/kernel-core/vms_scs.c               /netbsd/guest-src/kernel-core/vms_scs.c
 COPY src/kernel-netbsd/vms_lan_netbsd.c      /netbsd/guest-src/kmod/vms_lan_netbsd.c
 # FC-P0.4: cluster_seam.c (the R3 substrate-contract self-test for the cluster
 # seam, called from vms_netbsd.c's MODULE_CMD_INIT) lives under

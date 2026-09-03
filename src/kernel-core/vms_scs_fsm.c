@@ -1922,6 +1922,33 @@ int scs_fsm_sysap_lookup(const struct scs_fsm *f, const uint8_t *name,
 	return SCS_OK;
 }
 
+/*
+ * The ops table `name` was registered with (FC-P2.4). Same ONE SDIR queue as
+ * scs_fsm_sysap_lookup above, and for the same reason: vms_scs.h's frozen
+ * CONNECT service names the local SYSAP by NAME, so the glue must be able to
+ * reach that SYSAP's OWN callbacks without keeping a second name table beside
+ * the registry (integration note E20). NULL for a name nobody registered --
+ * never a plausible-looking neighbour's table.
+ *
+ * It is a separate accessor rather than a field of struct scs_sysap_info
+ * because that struct is a READBACK VIEW (a copy of registry state a
+ * diagnostic may print), and a live function-pointer table is not something a
+ * view should carry.
+ */
+const struct scs_sysap_ops *scs_fsm_sysap_ops(const struct scs_fsm *f,
+					      const uint8_t *name)
+{
+	uint32_t i;
+
+	if (f == (const struct scs_fsm *)0 || name == (const uint8_t *)0)
+		return (const struct scs_sysap_ops *)0;
+	for (i = 0; i < SCS_MAX_SYSAPS; i++) {
+		if (f->sdir[i].in_use && scs_name_eq(f->sdir[i].name, name))
+			return f->sdir[i].ops;
+	}
+	return (const struct scs_sysap_ops *)0;
+}
+
 int scs_fsm_sysap_set_dir_data(struct scs_fsm *f, const uint8_t *name,
 			       const uint8_t *data)
 {
@@ -2323,6 +2350,11 @@ void scs_fsm_cdt_project(const struct scs_fsm *f, const struct scs_cdt *cdt,
 	out->credit_pending = cdt->credit_pending;
 	out->msgs_sent = cdt->msgs_sent;
 	out->msgs_received = cdt->msgs_received;
+	/* FC-P2.4's MTYPE column: the SAME function the transmit path uses to
+	 * choose abs 30 (spec SS4(m)'s phase rule off this CDT's data_phase),
+	 * so the diagnostic reports the byte the next frame will really carry
+	 * and cannot drift from it. */
+	out->msgtype = cdt_msgtype(cdt);
 }
 
 void scs_fsm_view_project(const struct scs_fsm *f, struct vms_scs_view *out)

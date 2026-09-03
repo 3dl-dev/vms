@@ -130,6 +130,14 @@ SRCS=(
     "$CORE/vms_cluster_fork.c"
     "$CORE/vms_cluster_fork_bind.c"
     "$CORE/vms_pe.c"
+    # FC-P2.4: SCS joins the NetBSD module. The pure FSM, the two
+    # directory SYSAPs, the FC-P2.1 SCS codec they build every frame
+    # through, and the executive glue that binds them to the port --
+    # all four are in src/kernel-netbsd/Makefile SRCS from this item.
+    "$CORE/vms_cluster_codec_scs.c"
+    "$CORE/vms_scs_fsm.c"
+    "$CORE/vms_scs_dir.c"
+    "$CORE/vms_scs.c"
 )
 
 # ---- teeth check ---------------------------------------------------------
@@ -161,4 +169,4 @@ echo "LD  vms.kmod.o (relocatable)"
 echo "CHK guest-payload staging (tests/netbsd/Dockerfile completeness)"
 OVMX_REPO="$REPO" bash "$REPO/tests/netbsd/check_guest_payload.sh"
 
-echo "PASS: the OVMX/NetBSD vms module + shared src/kernel-core facilities (vms_eflag.c, vms_ast.c, vms_access.c, vms_mbx.c, vms_proctab.c, vms_lock.c, vms_lnm.c, vms_pe.c) cross-compile and link for NetBSD/amd64 (${#SRCS[@]} TUs)"
+echo "PASS: the OVMX/NetBSD vms module + shared src/kernel-core facilities (vms_eflag.c, vms_ast.c, vms_access.c, vms_mbx.c, vms_proctab.c, vms_lock.c, vms_lnm.c, vms_pe.c, vms_scs.c + the SCS FSM/directory/codec) cross-compile and link for NetBSD/amd64 (${#SRCS[@]} TUs)"

@@ -148,6 +148,10 @@ vms-y := vms_module.o \
          ../kernel-core/vms_cnxman_phase2.o \
          ../kernel-core/vms_cnxman_barrier_fsm.o \
          ../kernel-core/vms_cnxman_coord_fsm.o \
+         ../kernel-core/vms_scs_fsm.o \
+         ../kernel-core/vms_cluster_codec_scs.o \
+         ../kernel-core/vms_scs_dir.o \
+         ../kernel-core/vms_scs.o \
          ../kernel-core/vms_proctab.o \
          ../kernel-core/vmsfs_acp.o \
          ../vmsfs/ods2/ods2_reader.o \

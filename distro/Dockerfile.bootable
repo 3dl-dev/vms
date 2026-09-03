@@ -1022,7 +1022,7 @@ RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
              /initramfs-slim/vms/SYS0/SYSCOMMON/SYSEXE \
              /initramfs-slim/vms/SYS0/SYSCOMMON/SYSMGR && \
     if [ "$CLUSTER_AUTH_GROUP" != "0" ]; then \
-        gcc -Isrc/libvms/include tools/cluster/mk_cluster_authorize.c \
+        musl-gcc -Isrc/libvms/include tools/cluster/mk_cluster_authorize.c \
             -o /tmp/mk_cluster_authorize && \
         /tmp/mk_cluster_authorize /initramfs-slim/etc/ovmx/cluster_authorize.dat \
             "$CLUSTER_AUTH_GROUP" "$CLUSTER_AUTH_PASSWORD" ; \

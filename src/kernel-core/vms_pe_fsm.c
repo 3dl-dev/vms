@@ -3320,22 +3320,84 @@ int pe_blk_send_read_end(struct pe_fsm *f, const struct pe_blk_xfer *x,
 	return rc;
 }
 
-int pe_blk_send_ack(struct pe_fsm *f, vms_scs_sysid_t dst,
-		    const struct vms_blk_hdr *req)
-{
-	struct pe_vc *vc;
+/* --------------------------------------------------------------------------
+ * FC-P6.5: REQUEST DATA -- the SEND side (vms_pe_fsm.h SS8d, design SS3.2.6/E41)
+ * -------------------------------------------------------------------------- */
 
-	if (f == NULL || req == NULL)
+/*
+ * Everything a REQUEST DATA must have before its 28 bytes are composed. The
+ * mirror of blk_setup_send, and it differs in exactly one place that matters:
+ * our buffer is the transfer's DESTINATION, so it is checked for
+ * PE_BLK_ACC_DST. Asking a peer to fill a buffer we would refuse to write into
+ * is a request we must not make.
+ */
+static int blk_setup_request(struct pe_fsm *f, const struct pe_blk_xfer *x,
+			     struct blk_setup *s)
+{
+	if (f == NULL || x == NULL || x->length == 0u)
 		return PE_BLK_INVAL;
-	vc = pe_fsm_vc_by_sysid(f, dst);
-	if (vc == NULL || vc->state != (uint8_t)VMS_PE_VC_OPEN)
+	/* INV-6, the same refusal pe_blk_send makes: the connection ID and the
+	 * peer's buffer name are the PEER's values, read off its own message. */
+	if (x->dest_conid == 0u || x->remote_name == 0u)
+		return PE_BLK_NONAME;
+
+	s->vc = pe_fsm_vc_by_sysid(f, x->peer);
+	if (s->vc == NULL || s->vc->state != (uint8_t)VMS_PE_VC_OPEN)
 		return PE_BLK_NOCIRCUIT;
 
-	/* TRAP 2: the response's 28 bytes are BYTE-IDENTICAL to the request's
-	 * and carry no data. `*req` was parsed off the received frame, so every
-	 * byte here was read from the wire -- this function composes none of
-	 * them, including the +4/+6 words. */
-	return blk_send_one(f, vc, dst, req, NULL, 0u);
+	s->buf = pe_blk_buf_lookup(f, x->local_name);
+	if (s->buf == NULL)
+		return PE_BLK_NOBUF;
+	if ((s->buf->access & PE_BLK_ACC_DST) == 0u)
+		return PE_BLK_PERM;
+	if (!blk_span_ok(s->buf->len, x->local_offset, x->length))
+		return PE_BLK_RANGE;
+
+	s->chunk = 0u;   /* a request carries no data: nothing to chunk */
+	return PE_BLK_OK;
+}
+
+/*
+ * The REQUEST's 28 bytes. blk_fill_hdr cannot be reused because the ROLES ARE
+ * SWAPPED -- our buffer is the destination and the peer's is the source -- and
+ * a shared filler taking a "which way round" flag would put the one field that
+ * decides where the bytes land behind a boolean. Everything here is still read
+ * from real state: `x` carries what the SYSAP read off the peer's message, the
+ * destination name is the buffer WE registered, and +4/+6 are this circuit's
+ * observed pair or an explicit zero (SS3b).
+ */
+static void blk_fill_request_hdr(const struct pe_vc *vc,
+				 const struct pe_blk_xfer *x,
+				 const struct pe_blk_buf *buf,
+				 struct vms_blk_hdr *h)
+{
+	pe_bzero(h, (uint32_t)sizeof(*h));
+	h->dest_conid = x->dest_conid;
+	if (vc->obs_valid) {
+		h->obs_w4 = vc->obs_w4;
+		h->obs_w6 = vc->obs_w6;
+	}
+	h->bytes_remaining = x->length;
+	h->src_name = x->remote_name;        /* the PEER's buffer, from its msg */
+	h->src_offset = x->remote_offset;
+	h->dst_name = buf->name;             /* OURS, and the port minted it    */
+	h->dst_offset = x->local_offset;
+}
+
+int pe_blk_send_request(struct pe_fsm *f, const struct pe_blk_xfer *x)
+{
+	struct blk_setup s;
+	struct vms_blk_hdr h;
+	int rc = blk_setup_request(f, x, &s);
+
+	if (rc != PE_BLK_OK)
+		return rc;
+
+	blk_fill_request_hdr(s.vc, x, s.buf, &h);
+	rc = blk_send_one(f, s.vc, x->peer, &h, NULL, 0u);
+	if (rc == PE_BLK_OK)
+		blk_note_obs(f, s.vc);   /* counted only for a frame that WENT */
+	return rc;
 }
 
 /* ---- receive ---- */
@@ -3392,6 +3454,111 @@ static int blk_rx_take(struct pe_fsm *f, struct pe_vc *vc,
 	return 1;
 }
 
+/* --------------------------------------------------------------------------
+ * FC-P6.5: REQUEST DATA -- the RESPONDER (vms_pe_fsm.h SS8d, design SS3.2.6/E41)
+ *
+ * "a header-only 28-byte block frame naming the host's buffer as *source* and
+ * the server's as *destination*, which the host's port answers -- with no SYSAP
+ * involvement -- by transmitting the named buffer's contents under the same
+ * header."
+ * -------------------------------------------------------------------------- */
+
+/*
+ * One answer frame's header: the REQUEST's OWN 28 bytes with the two offsets
+ * and the down-counter advanced by what has already gone out. So the FIRST
+ * answer frame is BYTE-IDENTICAL to the request -- the vms291 WRITE pair,
+ * "only the presence of data distinguishes them" -- and every later one differs
+ * in exactly the three fields the transfer really moved.
+ *
+ * +0, +4, +6 and BOTH BUFFER NAMES are echoed verbatim from bytes this port
+ * received. Nothing here is composed, including the two ungrounded words: they
+ * are not this circuit's remembered pair but the requester's own, off the frame
+ * being answered.
+ */
+static void blk_answer_hdr(const struct vms_blk_hdr *req, uint32_t done,
+			   struct vms_blk_hdr *h)
+{
+	*h = *req;
+	h->bytes_remaining = req->bytes_remaining - done;
+	h->src_offset = req->src_offset + done;
+	h->dst_offset = req->dst_offset + done;
+}
+
+/*
+ * Transmit the requested span out of `buf`, in READ's chunking (largest chunk
+ * first, VMS_BLK_DATA_MAX). The bytes are the named buffer's REAL contents --
+ * this is the whole point of the service, and there is no other source for
+ * them. Returns 0, or -1 with the frames already sent left sent.
+ */
+static int blk_answer_send(struct pe_fsm *f, struct pe_vc *vc,
+			   const struct vms_blk_hdr *req,
+			   const struct pe_blk_buf *buf)
+{
+	struct vms_blk_hdr h;
+	uint32_t total = req->bytes_remaining;
+	uint32_t done = 0u;
+
+	while (done < total) {
+		uint32_t n = total - done;
+
+		if (n > VMS_BLK_DATA_MAX)
+			n = VMS_BLK_DATA_MAX;
+		blk_answer_hdr(req, done, &h);
+		if (blk_send_one(f, vc, vc->peer_sysid, &h,
+				 buf->base + req->src_offset + done,
+				 n) != PE_BLK_OK)
+			return -1;
+		/* blk_note_obs is NOT called: +4/+6 were ECHOED off the
+		 * request, so there is no honest absence to count here. */
+		vc->blk_bytes_tx += n;
+		done += n;
+	}
+	return 0;
+}
+
+/*
+ * A header-only block frame arrived. Answer it if its SOURCE names a buffer of
+ * ours; otherwise count it and leave the frame alone.
+ *
+ * Returns 1 when the frame was ours (answered or refused -- a refusal is still
+ * our frame and must not be re-read as an SCS message), 0 when it named nothing
+ * of ours.
+ */
+static int blk_req_answer(struct pe_fsm *f, struct pe_vc *vc,
+			  const struct vms_blk_view *view)
+{
+	const struct vms_blk_hdr *req = &view->hdr;
+	struct pe_blk_buf *buf = blk_buf_slot(f, req->src_name);
+
+	/* THE DISCRIMINATOR -- the same positive executive fact the delivery
+	 * half uses, in the other role. A request for a buffer this port never
+	 * minted is DROPPED: it is never answered out of some other buffer,
+	 * which would put one SYSAP's memory on the wire under another's name. */
+	if (buf == NULL) {
+		f->blk_req_unknown_buffer++;
+		return 0;
+	}
+	f->blk_req_rx++;
+	blk_learn_obs(vc, req);   /* it really arrived on this circuit */
+
+	if ((buf->access & PE_BLK_ACC_SRC) == 0u ||
+	    req->bytes_remaining == 0u ||
+	    !blk_span_ok(buf->len, req->src_offset, req->bytes_remaining)) {
+		/* Not a legal source, or a span outside it. REFUSED whole --
+		 * never clamped to what would fit, because a short answer under
+		 * a full byte count is a transfer the requester would complete
+		 * as if it had all the bytes. */
+		f->blk_req_refused++;
+		return 1;
+	}
+	if (blk_answer_send(f, vc, req, buf) != 0) {
+		f->blk_req_refused++;
+		return 1;
+	}
+	f->blk_req_answered++;
+	return 1;
+}
+
 int pe_blk_rx_try(struct pe_fsm *f, struct pe_vc *vc,
 		  const struct vms_frame_info *fi, const uint8_t *frame,
 		  uint32_t len)
@@ -3405,6 +3572,16 @@ int pe_blk_rx_try(struct pe_fsm *f, struct pe_vc *vc,
 		return 0;
 	if (vms_blk_frame_parse(frame, len, fi, &view) != VMS_CODEC_OK)
 		return 0;
+
+	/*
+	 * THE TWO HALVES OF THE SERVICE, split on the one thing the wire
+	 * distinguishes them by (design SS3.2.6/E41): a frame with data behind
+	 * its header is a DELIVERY into the buffer it names as destination; a
+	 * frame with none is a REQUEST DATA for the buffer it names as source,
+	 * and this port answers it itself.
+	 */
+	if (view.data_len == 0u)
+		return blk_req_answer(f, vc, &view);
 
 	/* From here a frame that names one of our buffers IS a block transfer
 	 * for this node and is consumed either way -- never passed on to be

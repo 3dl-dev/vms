@@ -653,6 +653,13 @@ int pe_send_block(struct vms_pe *pe, const struct pe_blk_xfer *x,
 	return (int)pe_blk_status(pe_blk_send(&pe->fsm, x, 0u, frames_out));
 }
 
+int pe_request_block(struct vms_pe *pe, const struct pe_blk_xfer *x)
+{
+	if (pe == (struct vms_pe *)0)
+		return SS__NOSUCHDEV;
+	return (int)pe_blk_status(pe_blk_send_request(&pe->fsm, x));
+}
+
 int pe_send_block_read_end(struct vms_pe *pe, const struct pe_blk_xfer *x,
 			   uint32_t tail_len, const uint8_t *body,
 			   uint32_t body_len, uint32_t *frames_out)

@@ -144,6 +144,9 @@ struct blk_env {
 	uint8_t             sink[VOL_BYTES];
 	uint32_t            vol_name;
 	uint32_t            sink_name;
+	/* The 28 bytes of the last REQUEST DATA injected, kept aside because
+	 * `buf` is reused by whatever the port emits in reply. */
+	uint8_t             reqhdr[VMS_BLK_HDR_LEN];
 };
 
 static uint64_t fake_now_vms(void *ctx)
@@ -262,6 +265,44 @@ static void xfer_init(struct pe_blk_xfer *x, uint32_t local_name,
 	x->remote_offset = PEER_BUF_OFFSET;
 	x->length = length;
 	x->chunk = chunk;
+}
+
+/* A block-transfer frame FROM the peer, built the way the port itself builds
+ * one -- through the codec, never a hand-laid array. `data_len == 0` is the
+ * header-only form, which under design SS3.2.6's E41 ruling is a REQUEST DATA. */
+static uint32_t fake_peer_block(const struct fake_peer *p,
+				const uint8_t dst_hw[6],
+				const uint8_t dst_lavc[6], uint16_t send_seq,
+				const struct vms_blk_hdr *h,
+				const uint8_t *data, uint32_t data_len,
+				uint8_t *out, uint32_t cap)
+{
+	struct vms_scs_seq_envelope env;
+	struct vms_frame_info fi;
+	uint32_t total = VMS_BLK_DATA_OFF + data_len;
+
+	if (cap < total)
+		return 0;
+	memset(out, 0, total);
+
+	memset(&env, 0, sizeof(env));
+	fake_vc_addr(&env.addr, p, dst_hw, dst_lavc);
+	env.msgtype = VMS_SCS_MT_MSG;
+	env.recv_ack = 0;
+	env.send_seq = send_seq;
+	if (vms_scs_seq_envelope_build(&env, out, cap, NULL) != VMS_CODEC_OK)
+		return 0;
+	if (vms_blk_hdr_build(h, out, cap) != VMS_CODEC_OK)
+		return 0;
+	if (data_len != 0)
+		memcpy(out + VMS_BLK_DATA_OFF, data, data_len);
+	if (vms_scs_seq_envelope_fixup_len(out, cap, total) != VMS_CODEC_OK)
+		return 0;
+	if (vms_frame_classify(out, total, &fi) != VMS_CODEC_OK)
+		return 0;
+	if (vms_scs_seq_stamp(out, total, &fi, 0u, send_seq) != VMS_CODEC_OK)
+		return 0;
+	return total;
 }
 
 /* ------------------------------------------------------------------ *
@@ -604,83 +645,364 @@ static void test_read_end_piggyback_matches_recorded_sca_lengths(void)
 }
 
 /* ------------------------------------------------------------------ *
- * 5. WRITE's two-frame form: byte-identical headers
+ * 5. WRITE = REQUEST DATA (design SS3.2.6, E41), both ends of it
+ *
+ * The recorded vms291 WRITE pair is "two byte-identical 28-byte headers; only
+ * the presence of data distinguishes them". E41 names the two halves: the
+ * header-only one is the SERVER's REQUEST DATA (pe_blk_send_request), and the
+ * data-bearing one is the answer the host's PORT sends by itself
+ * (pe_blk_rx_try's responder arm). These tests drive both.
  * ------------------------------------------------------------------ */
-static void test_write_two_frame_headers_are_byte_identical(void)
+
+/* The peer's REQUEST DATA: header-only, naming OUR buffer as the SOURCE and its
+ * own as the destination. `obs4`/`obs6` are whatever the requester put in the
+ * two ungrounded words -- opaque to us and echoed, never interpreted. */
+static uint32_t rx_request_data(struct blk_env *e, uint32_t src_name,
+				uint32_t src_offset, uint32_t count,
+				uint16_t obs4, uint16_t obs6)
+{
+	struct vms_blk_hdr h;
+	uint8_t dst_lavc[6];
+	uint32_t len;
+
+	memset(&h, 0, sizeof(h));
+	h.dest_conid = MSCP_DEST_CONID;
+	h.obs_w4 = obs4;
+	h.obs_w6 = obs6;
+	h.bytes_remaining = count;
+	h.src_name = src_name;          /* OURS: the buffer being asked for  */
+	h.src_offset = src_offset;
+	h.dst_name = PEER_BUF_NAME;     /* the requester's own landing zone  */
+	h.dst_offset = 0u;
+
+	ovmx_lavc(dst_lavc);
+	len = fake_peer_block(&e->peer, ovmx_hw, dst_lavc,
+			      (uint16_t)(the_vc(e)->recv_seq + 1u), &h, NULL,
+			      0u, e->buf, sizeof(e->buf));
+	if (len != 0)
+		memcpy(e->reqhdr, e->buf + VMS_BLK_HDR_OFF, VMS_BLK_HDR_LEN);
+	return len;
+}
+
+/*
+ * THE PORT ACKS EVERY SEQUENCED FRAME IT TAKES, before anything else happens to
+ * it (SS3b(a), vc_deliver runs after vc_send_ack_frame). So the frames a
+ * REQUEST DATA provokes are frame[1..]: frame[0] is that ack, and a request the
+ * port refuses leaves exactly it and nothing else. These two helpers name that
+ * rather than hiding it behind an index.
+ */
+#define REQ_ACK_FRAMES 1u
+
+static uint32_t answers(const struct blk_env *e)
+{
+	return e->fake.n_frames > REQ_ACK_FRAMES
+	       ? e->fake.n_frames - REQ_ACK_FRAMES : 0u;
+}
+
+static const struct fake_pe_frame *answer(const struct blk_env *e, uint32_t i)
+{
+	return &e->fake.frame[REQ_ACK_FRAMES + i];
+}
+
+static void test_request_data_is_answered_byte_exact(void)
+{
+	struct blk_env e;
+	uint8_t want[VMS_BLK_HDR_LEN];
+	const uint8_t *ans;
+	uint32_t len;
+	uint32_t i;
+	int diff = 0;
+
+	printf("-- REQUEST DATA: the port answers it ITSELF, byte-exact on the "
+	       "recorded WRITE pair\n");
+	open_circuit(&e);
+
+	/* The peer asks for 512 bytes of the buffer we registered as a SOURCE. */
+	len = rx_request_data(&e, e.vol_name, 0u, 512u, 0x0009u, 0x0002u);
+	ct_check(len == VMS_BLK_DATA_OFF,
+		 "the request is header-only -- 28 bytes and no data");
+	rx_frame(&e, len);
+
+	/* ONE answer frame, and it is the data half. */
+	ct_check_eq_u32(answers(&e), 1u,
+			"the port answered with exactly one frame");
+	ct_check_eq_u32(answer(&e, 0)->len, VMS_BLK_DATA_OFF + 512u,
+			"...header + the requested 512 bytes");
+	ans = answer(&e, 0)->b + VMS_BLK_HDR_OFF;
+
+	/*
+	 * (a) THE RECORDED SHAPE: the two 28-byte headers are byte-identical,
+	 * and only the presence of data tells them apart.
+	 */
+	ct_check(memcmp(ans, e.reqhdr, VMS_BLK_HDR_LEN) == 0,
+		 "the answer's 28 bytes are BYTE-IDENTICAL to the request's "
+		 "(docs/design-mscp-direction.md's recorded WRITE pair)");
+
+	/*
+	 * (b) AND FIELD BY FIELD, laid out little-endian from values that are
+	 * REAL on this node -- the connection id and the peer's buffer name it
+	 * sent us, the two opaque words it sent us, and the name OUR OWN port
+	 * minted. Same discipline as the golden in test 1: a field reorder, a
+	 * width slip or an endianness slip reds this, and no captured node's
+	 * private value is baked in.
+	 */
+	memset(want, 0, sizeof(want));
+	want[0]  = (uint8_t)(MSCP_DEST_CONID      );
+	want[1]  = (uint8_t)(MSCP_DEST_CONID >>  8);
+	want[2]  = (uint8_t)(MSCP_DEST_CONID >> 16);
+	want[3]  = (uint8_t)(MSCP_DEST_CONID >> 24);
+	want[4]  = 0x09; want[5] = 0x00;            /* +4  echoed verbatim */
+	want[6]  = 0x02; want[7] = 0x00;            /* +6  echoed verbatim */
+	want[8]  = 0x00; want[9] = 0x02;            /* +8  512, counting down */
+	want[12] = (uint8_t)(e.vol_name      );     /* +12 OUR source name */
+	want[13] = (uint8_t)(e.vol_name >>  8);
+	want[14] = (uint8_t)(e.vol_name >> 16);
+	want[15] = (uint8_t)(e.vol_name >> 24);
+	                                            /* +16 dst offset 0    */
+	want[20] = (uint8_t)(PEER_BUF_NAME      );  /* +20 the peer's name */
+	want[21] = (uint8_t)(PEER_BUF_NAME >>  8);
+	want[22] = (uint8_t)(PEER_BUF_NAME >> 16);
+	want[23] = (uint8_t)(PEER_BUF_NAME >> 24);
+	                                            /* +24 src offset 0    */
+	for (i = 0; i < VMS_BLK_HDR_LEN; i++) {
+		if (ans[i] != want[i]) {
+			printf("     byte +%u: got 0x%02x want 0x%02x\n",
+			       i, ans[i], want[i]);
+			diff = 1;
+		}
+	}
+	ct_check(!diff, "every one of the 28 bytes is the field table's");
+
+	/* (c) The DATA is the named buffer's real bytes. This is the whole
+	 * point of the service and the only thing that makes a WRITE real. */
+	ct_check(memcmp(answer(&e, 0)->b + VMS_BLK_DATA_OFF, e.vol, 512u) == 0,
+		 "the payload is the registered buffer's REAL bytes");
+
+	/* (d) NO SYSAP WAS INVOLVED -- E41's own words. */
+	ct_check_eq_u32(e.upper_rec.blocks, 0u,
+			"no block_data upcall: the PORT answered, not a SYSAP");
+	ct_check_eq_u32(e.upper_rec.messages, 0u,
+			"and it was not delivered as an SCS message either");
+
+	/* (e) The counters are the audit trail of an automatic behaviour. */
+	ct_check_eq_u32(e.fsm.blk_req_rx, 1u, "one request was ours to answer");
+	ct_check_eq_u32(e.fsm.blk_req_answered, 1u, "and it was answered whole");
+	ct_check_eq_u32(e.fsm.blk_req_unknown_buffer, 0u, "none was unknown");
+	ct_check_eq_u32(e.fsm.blk_req_refused, 0u, "none was refused");
+	ct_check_eq_u32(e.fsm.blk_rx_unnamed, 0u,
+			"and it was NOT mistaken for a delivery naming nothing");
+
+	/* (f) It is a sequenced frame like every other of this class. */
+	ct_check_eq_u32(the_vc(&e)->blk_tx, 1u, "counted as a block frame sent");
+	ct_check_eq_u32(the_vc(&e)->blk_bytes_tx, 512u, "with its real bytes");
+}
+
+static void test_request_data_chunks_and_counts_down(void)
+{
+	struct blk_env e;
+	uint32_t total = 3000u;
+	uint32_t done = 0u;
+	uint32_t i;
+
+	printf("-- REQUEST DATA: a span past one frame uses READ's chunking, "
+	       "+8 counting down\n");
+	open_circuit(&e);
+	rx_frame(&e, rx_request_data(&e, e.vol_name, 256u, total, 0x000du,
+				     0x0007u));
+
+	ct_check(answers(&e) > 1u,
+		 "3000 bytes did not fit one frame, so it was chunked");
+	for (i = 0; i < answers(&e); i++) {
+		struct vms_blk_view view;
+		struct vms_frame_info fi;
+		const uint8_t *b = answer(&e, i)->b;
+		uint32_t flen = answer(&e, i)->len;
+		uint32_t n;
+
+		ct_check_eq_u32((unsigned long)vms_frame_classify(b, flen, &fi),
+				VMS_CODEC_OK, "the answer frame classifies");
+		ct_check_eq_u32((unsigned long)vms_blk_frame_parse(b, flen, &fi,
+								   &view),
+				VMS_CODEC_OK, "and parses as a block transfer");
+		n = view.data_len;
+		ct_check_eq_u32(view.hdr.bytes_remaining, total - done,
+				"+8 counts DOWN over the whole answer");
+		ct_check_eq_u32(view.hdr.src_offset, 256u + done,
+				"the SOURCE offset advances from the one asked for");
+		ct_check_eq_u32(view.hdr.dst_offset, done,
+				"the DESTINATION offset advances in step");
+		ct_check_eq_u32(view.hdr.obs_w4, 0x000du,
+				"+4 stays the requester's own value on every frame");
+		ct_check_eq_u32(view.hdr.obs_w6, 0x0007u, "+6 likewise");
+		ct_check(memcmp(view.data, e.vol + 256u + done, n) == 0,
+			 "and each chunk is the buffer's real bytes");
+		done += n;
+	}
+	ct_check_eq_u32(done, total, "every requested byte went out");
+	ct_check_eq_u32(e.fsm.blk_req_answered, 1u,
+			"one request, answered once");
+}
+
+static void test_request_data_unknown_buffer_is_dropped(void)
+{
+	struct blk_env e;
+
+	printf("-- REQUEST DATA: a source buffer this port never minted is "
+	       "DROPPED and counted\n");
+	open_circuit(&e);
+	rx_frame(&e, rx_request_data(&e, 0xdeadbeefu, 0u, 512u, 0u, 0u));
+
+	ct_check_eq_u32(e.fsm.blk_req_unknown_buffer, 1u,
+			"the unknown source name is COUNTED");
+	ct_check_eq_u32(answers(&e), 0u,
+			"and NOTHING was transmitted -- never answered out of "
+			"some other buffer");
+	ct_check_eq_u32(e.fsm.blk_req_rx, 0u, "it was never ours to answer");
+	ct_check_eq_u32(e.fsm.blk_req_answered, 0u, "nothing was answered");
+	ct_check_eq_u32(e.upper_rec.blocks, 0u, "no upcall was made");
+}
+
+static void test_request_data_refusals_are_whole(void)
+{
+	struct blk_env e;
+
+	printf("-- REQUEST DATA: a non-source buffer, and a span outside one, "
+	       "are refused WHOLE\n");
+
+	/* (a) The buffer is ours, but it is a DESTINATION. A peer that asks us
+	 * to read out of a buffer we registered to receive into gets nothing. */
+	open_circuit(&e);
+	rx_frame(&e, rx_request_data(&e, e.sink_name, 0u, 512u, 0u, 0u));
+	ct_check_eq_u32(e.fsm.blk_req_rx, 1u, "the request WAS ours");
+	ct_check_eq_u32(e.fsm.blk_req_refused, 1u, "...and was refused");
+	ct_check_eq_u32(answers(&e), 0u, "nothing was transmitted");
+
+	/* (b) A span that runs past the end of the buffer. Refused WHOLE --
+	 * never clamped to what fits, because a short answer under a full byte
+	 * count is a transfer the requester would complete as if it were all
+	 * there. */
+	open_circuit(&e);
+	rx_frame(&e, rx_request_data(&e, e.vol_name, VOL_BYTES - 16u, 512u, 0u,
+				     0u));
+	ct_check_eq_u32(e.fsm.blk_req_refused, 1u,
+			"an out-of-range span is refused");
+	ct_check_eq_u32(answers(&e), 0u,
+			"and not one partial frame went out");
+
+	/* (c) A request for zero bytes asks for nothing and is answered with
+	 * nothing -- refused, not answered with an empty frame that would look
+	 * like a second request to the peer. */
+	open_circuit(&e);
+	rx_frame(&e, rx_request_data(&e, e.vol_name, 0u, 0u, 0u, 0u));
+	ct_check_eq_u32(e.fsm.blk_req_refused, 1u, "a zero-byte request is refused");
+	ct_check_eq_u32(answers(&e), 0u, "and silent");
+}
+
+/* The SEND side: what an MSCP SERVER emits to start a WRITE. */
+static void test_send_request_names_our_destination(void)
 {
 	struct blk_env e;
 	struct pe_blk_xfer x;
-	struct vms_blk_hdr req;
-	uint32_t reqlen;
-	uint8_t reqhdr[VMS_BLK_HDR_LEN];
+	struct vms_blk_hdr h;
 	int rc;
 
-	printf("-- WRITE two-frame: the request and response headers are byte-identical\n");
+	printf("-- pe_blk_send_request: the SERVER's half, roles swapped\n");
 	open_circuit(&e);
-	xfer_init(&x, e.vol_name, 0u, 512u, 512u);
 
-	/* The data-bearing half. */
-	rc = pe_blk_send(&e.fsm, &x, 0u, NULL);
-	ct_check_eq_u32((unsigned long)rc, PE_BLK_OK, "the request went out");
-	reqlen = e.fake.frame[0].len;
-	ct_check_eq_u32(reqlen, VMS_BLK_DATA_OFF + 512u,
-			"the request is header + data");
-	memcpy(reqhdr, e.fake.frame[0].b + VMS_BLK_HDR_OFF, VMS_BLK_HDR_LEN);
+	/* Our sink is the DESTINATION; the peer's named buffer is the SOURCE. */
+	xfer_init(&x, e.sink_name, 128u, 512u, 0u);
+	rc = pe_blk_send_request(&e.fsm, &x);
+	ct_check_eq_u32((unsigned long)rc, PE_BLK_OK,
+			"the request went out");
+	ct_check_eq_u32(e.fake.n_frames, 1u, "one frame");
+	ct_check_eq_u32(e.fake.frame[0].len, VMS_BLK_DATA_OFF,
+			"header-only -- 28 bytes and no data");
+
 	ct_check_eq_u32((unsigned long)vms_blk_hdr_parse(e.fake.frame[0].b,
-							 reqlen, &req),
-			VMS_CODEC_OK, "and it parses");
+							 e.fake.frame[0].len,
+							 &h),
+			VMS_CODEC_OK, "it parses");
+	ct_check_eq_u32(h.src_name, PEER_BUF_NAME,
+			"the SOURCE is the PEER's buffer, from its own message");
+	ct_check_eq_u32(h.dst_name, e.sink_name,
+			"the DESTINATION is OURS, and our port minted the name");
+	ct_check_eq_u32(h.dst_offset, 128u, "at the offset we asked for");
+	ct_check_eq_u32(h.bytes_remaining, 512u,
+			"+8 is the count being requested");
+	ct_check_eq_u32(h.dest_conid, MSCP_DEST_CONID,
+			"and the connection id is the caller's, not invented");
 
-	/* The header-only half, echoed from what was parsed off the wire. */
-	rc = pe_blk_send_ack(&e.fsm, VAX1_SYSID, &req);
-	ct_check_eq_u32((unsigned long)rc, PE_BLK_OK, "the response went out");
-	ct_check_eq_u32(e.fake.n_frames, 2, "two frames total");
-	ct_check_eq_u32(e.fake.frame[1].len, VMS_BLK_DATA_OFF,
-			"the response carries NO data -- only that distinguishes it");
-	ct_check(memcmp(e.fake.frame[1].b + VMS_BLK_HDR_OFF, reqhdr,
+	/* The INV-6 refusals are the same ones pe_blk_send makes, and the
+	 * access check is the mirrored one: our buffer must be writable. */
+	xfer_init(&x, e.vol_name, 0u, 512u, 0u);   /* SRC-only buffer */
+	ct_check(pe_blk_send_request(&e.fsm, &x) == PE_BLK_PERM,
+		 "requesting INTO a send-only buffer is PERM");
+	xfer_init(&x, e.sink_name, 0u, 512u, 0u);
+	x.remote_name = 0u;
+	ct_check(pe_blk_send_request(&e.fsm, &x) == PE_BLK_NONAME,
+		 "no peer buffer name => refused, never a zero on the wire");
+	xfer_init(&x, e.sink_name, 0u, VOL_BYTES + 1u, 0u);
+	ct_check(pe_blk_send_request(&e.fsm, &x) == PE_BLK_RANGE,
+		 "asking for more than our own buffer holds is RANGE");
+}
+
+/*
+ * THE WHOLE PAIR, in one place: this port issues the request and this port
+ * answers it, so the assertion is that the 28 bytes that go out and the 28
+ * bytes that come back are the same 28 bytes -- the recorded shape, produced by
+ * the shipping code at both ends.
+ */
+static void test_write_pair_round_trips_through_the_port(void)
+{
+	struct blk_env e;
+	struct pe_blk_xfer x;
+	uint8_t reqhdr[VMS_BLK_HDR_LEN];
+	struct vms_blk_hdr h;
+	uint32_t len;
+	uint8_t dst_lavc[6];
+
+	printf("-- the WRITE pair round-trips: our request, answered by a port "
+	       "that used the same code\n");
+	open_circuit(&e);
+
+	/* 1. The SERVER half: ask for 512 bytes into our sink. */
+	xfer_init(&x, e.sink_name, 0u, 512u, 0u);
+	ct_check_eq_u32((unsigned long)pe_blk_send_request(&e.fsm, &x),
+			PE_BLK_OK, "the request was emitted");
+	memcpy(reqhdr, e.fake.frame[0].b + VMS_BLK_HDR_OFF, VMS_BLK_HDR_LEN);
+
+	/* 2. Turn it round: the peer is now asking US for the same span out of
+	 * our SOURCE buffer, with the two names in the roles the far side would
+	 * see them in. Every field comes from the header we just emitted. */
+	ct_check_eq_u32((unsigned long)vms_blk_hdr_parse(e.fake.frame[0].b,
+							 e.fake.frame[0].len,
+							 &h),
+			VMS_CODEC_OK, "the emitted request parses");
+	h.src_name = e.vol_name;      /* what OUR port would be asked for   */
+	h.dst_name = PEER_BUF_NAME;
+	fake_pe_clear_frames(&e.fake);
+
+	ovmx_lavc(dst_lavc);
+	len = fake_peer_block(&e.peer, ovmx_hw, dst_lavc,
+			      (uint16_t)(the_vc(&e)->recv_seq + 1u), &h, NULL,
+			      0u, e.buf, sizeof(e.buf));
+	memcpy(reqhdr, e.buf + VMS_BLK_HDR_OFF, VMS_BLK_HDR_LEN);
+	rx_frame(&e, len);
+
+	/* 3. The answer. */
+	ct_check_eq_u32(answers(&e), 1u, "the port answered");
+	ct_check_eq_u32(answer(&e, 0)->len, VMS_BLK_DATA_OFF + 512u,
+			"with the data half of the pair");
+	ct_check(memcmp(answer(&e, 0)->b + VMS_BLK_HDR_OFF, reqhdr,
 			VMS_BLK_HDR_LEN) == 0,
-		 "the two 28-byte headers are BYTE-IDENTICAL (the recorded TRAP 2)");
+		 "and its 28 bytes are byte-identical to the request's");
+	ct_check(memcmp(answer(&e, 0)->b + VMS_BLK_DATA_OFF, e.vol, 512u) == 0,
+		 "carrying the source buffer's real bytes");
 }
 
 /* ------------------------------------------------------------------ *
  * 6. The two ungrounded words: honest zero, or a value we observed
  * ------------------------------------------------------------------ */
-
-/* A block-transfer frame FROM the peer, built the way the port itself builds
- * one -- through the codec, never a hand-laid array. */
-static uint32_t fake_peer_block(const struct fake_peer *p,
-				const uint8_t dst_hw[6],
-				const uint8_t dst_lavc[6], uint16_t send_seq,
-				const struct vms_blk_hdr *h,
-				const uint8_t *data, uint32_t data_len,
-				uint8_t *out, uint32_t cap)
-{
-	struct vms_scs_seq_envelope env;
-	struct vms_frame_info fi;
-	uint32_t total = VMS_BLK_DATA_OFF + data_len;
-
-	if (cap < total)
-		return 0;
-	memset(out, 0, total);
-
-	memset(&env, 0, sizeof(env));
-	fake_vc_addr(&env.addr, p, dst_hw, dst_lavc);
-	env.msgtype = VMS_SCS_MT_MSG;
-	env.recv_ack = 0;
-	env.send_seq = send_seq;
-	if (vms_scs_seq_envelope_build(&env, out, cap, NULL) != VMS_CODEC_OK)
-		return 0;
-	if (vms_blk_hdr_build(h, out, cap) != VMS_CODEC_OK)
-		return 0;
-	if (data_len != 0)
-		memcpy(out + VMS_BLK_DATA_OFF, data, data_len);
-	if (vms_scs_seq_envelope_fixup_len(out, cap, total) != VMS_CODEC_OK)
-		return 0;
-	if (vms_frame_classify(out, total, &fi) != VMS_CODEC_OK)
-		return 0;
-	if (vms_scs_seq_stamp(out, total, &fi, 0u, send_seq) != VMS_CODEC_OK)
-		return 0;
-	return total;
-}
 
 static void test_ungrounded_words_are_zero_or_observed(void)
 {
@@ -1034,7 +1356,12 @@ int main(void)
 	test_read_stream_counts_down_and_carries_real_bytes();
 	test_block_frame_fails_scs_envelope_conformance();
 	test_read_end_piggyback_matches_recorded_sca_lengths();
-	test_write_two_frame_headers_are_byte_identical();
+	test_request_data_is_answered_byte_exact();
+	test_request_data_chunks_and_counts_down();
+	test_request_data_unknown_buffer_is_dropped();
+	test_request_data_refusals_are_whole();
+	test_send_request_names_our_destination();
+	test_write_pair_round_trips_through_the_port();
 	test_ungrounded_words_are_zero_or_observed();
 	test_receive_lands_in_the_named_buffer();
 	test_receive_out_of_range_is_dropped_not_clamped();

@@ -105,6 +105,16 @@ struct fake_exec {
 	uint32_t write_name;
 	uint32_t buffers_released;
 
+	/* the REQUEST DATA the server issued for a WRITE (FC-P6.5, E41): the
+	 * fields it put on the wire, as the "port" received them */
+	uint32_t req_writes;         /* requests issued                       */
+	uint32_t req_src_name;       /* the HOST's buffer -- the source       */
+	uint32_t req_src_offset;
+	uint32_t req_conid;
+	uint32_t req_dst_name;       /* OUR staging buffer -- the destination */
+	uint32_t req_len;
+	uint8_t  request_fail_next;  /* force the next request to be refused  */
+
 	uint32_t now_ms;
 };
 
@@ -256,6 +266,34 @@ static int fake_recv_write_data(void *ctx, vms_conid_t conid,
 	return 0;
 }
 
+/*
+ * The REQUEST DATA a WRITE issues (FC-P6.5, design SS3.2.6's E41). This stands
+ * in for the port's pe_blk_send_request: it records the four wire-visible
+ * values the server supplied so a test can assert they came off the HOST's own
+ * command, and it does NOT move any bytes -- on a real wire the host's port
+ * answers later, which is exactly what mscp_srv_fsm_block_data() models here.
+ */
+static int fake_request_write_data(void *ctx, vms_conid_t conid,
+				   vms_scs_sysid_t peer,
+				   const struct mscp_srv_bufdesc *desc,
+				   uint32_t local_name, uint32_t len)
+{
+	struct fake_exec *e = (struct fake_exec *)ctx;
+
+	(void)conid; (void)peer;
+	if (e->request_fail_next) {
+		e->request_fail_next = 0u;
+		return -1;
+	}
+	e->req_writes++;
+	e->req_src_name = desc->name;
+	e->req_src_offset = desc->offset;
+	e->req_conid = desc->conid;
+	e->req_dst_name = local_name;
+	e->req_len = len;
+	return 0;
+}
+
 static void fake_release_buffer(void *ctx, uint32_t name)
 {
 	struct fake_exec *e = (struct fake_exec *)ctx;
@@ -294,6 +332,7 @@ static void env_bind_ops(struct srv_env *e)
 	e->ops.send_end = fake_send_end;
 	e->ops.send_read_data = fake_send_read_data;
 	e->ops.recv_write_data = fake_recv_write_data;
+	e->ops.request_write_data = fake_request_write_data;
 	e->ops.release_buffer = fake_release_buffer;
 	e->ops.now_ms = fake_now_ms;
 	e->ops.log = fake_log;
@@ -822,6 +861,28 @@ static void test_write(void)
 	ct_check_eq_u32(e.fake.ends, 1,
 			"NO end message yet -- the data has not arrived (only the ONLINE end so far)");
 
+	/*
+	 * FC-P6.5 (design SS3.2.6's E41): the server ASKS for the bytes. Every
+	 * remote-side field of that REQUEST DATA came off the host's own Table
+	 * A-6 buffer descriptor -- this server minted none of them -- and the
+	 * destination is the name it just registered.
+	 */
+	ct_check_eq_u32(e.fake.req_writes, 1u,
+			"a REQUEST DATA was issued -- the server ASKS, it does "
+			"not wait for data nobody requested");
+	ct_check_eq_u32(e.fake.req_src_name, 0x0200002cu,
+			"its SOURCE is the HOST's buffer name, off the command");
+	ct_check_eq_u32(e.fake.req_src_offset, 0x80u,
+			"...at the host's own offset");
+	ct_check_eq_u32(e.fake.req_conid, 0x00020007u,
+			"...on the host's own connection id");
+	ct_check_eq_u32(e.fake.req_dst_name, e.fake.write_name,
+			"and its DESTINATION is the buffer we just named");
+	ct_check_eq_u32(e.fake.req_len, 512u,
+			"for exactly the byte count the command asked for");
+	ct_check_eq_u32(e.fsm.write_requests_issued, 1u, "counted");
+	ct_check_eq_u32(e.fsm.write_requests_refused, 0u, "none refused");
+
 	/* The peer's port fills the buffer and the transfer completes. */
 	for (i = 0; i < 512u; i++)
 		e.fake.write_buf[i] = (uint8_t)(0xA0u + (i & 0x0fu));
@@ -871,6 +932,49 @@ static void test_write(void)
 	ct_check_eq_u32(end.byte_count, 0, "with a zero byte count");
 	ct_check_eq_u32(e.fake.writes, 1,
 			"and NOT one partial block reached the volume");
+}
+
+/* ------------------------------------------------------------------ *
+ * 6a. A REQUEST DATA that could not be issued is an ANSWERED command
+ *
+ * FC-P6.5: if the port will not carry the request there is nobody to send the
+ * bytes, so waiting for them is waiting forever. The command is answered with a
+ * real controller error, the buffer name is withdrawn, and the HRB goes back.
+ * ------------------------------------------------------------------ */
+static void test_write_request_refused(void)
+{
+	struct srv_env e;
+	struct vms_mscp_xfer_end end;
+
+	printf("-- WRITE: a REQUEST DATA the port refused is ANSWERED, not "
+	       "waited on\n");
+	env_init(&e);
+	env_add_unit(&e, 0u, 16u, 0);
+	env_open(&e);
+	(void)env_build_online(&e, 0x900001u, 0u, 0u, 0u);
+	(void)env_feed(&e);
+
+	e.fake.request_fail_next = 1u;
+	(void)env_build_xfer(&e, VMS_MSCP_OP_WRITE, 0x22000au, 0u, 512u, 4u,
+			     0u, 0x0200002cu, 0x00020007u);
+	(void)env_feed(&e);
+
+	ct_check_eq_u32(e.fsm.write_requests_refused, 1u, "the refusal is counted");
+	ct_check_eq_u32(e.fsm.write_requests_issued, 0u, "nothing was issued");
+	ct_check_eq_u32(e.fake.ends, 2,
+			"the command WAS answered (the ONLINE end plus this one)");
+	ct_check_eq_u32((unsigned long)vms_mscp_write_end_parse(e.fake.end_frame,
+								(uint32_t)sizeof(e.fake.end_frame),
+								&end),
+			VMS_CODEC_OK, "with a real WRITE END");
+	ct_check_eq_u32(end.eh.status_major, VMS_MSCP_ST_CTLR_ERR,
+			"carrying a REAL controller error");
+	ct_check_eq_u32(end.byte_count, 0u, "and no bytes claimed");
+	ct_check_eq_u32(end.eh.hdr.cmd_ref, 0x22000au, "P.CRF echoed");
+	ct_check_eq_u32(e.fake.write_name, 0u,
+			"the buffer name was WITHDRAWN -- nothing is left for a "
+			"stale frame to land in");
+	ct_check_eq_u32(e.fake.submits, 0u, "and no disk I/O was ever submitted");
 }
 
 /* ------------------------------------------------------------------ *
@@ -1582,6 +1686,7 @@ int main(void)
 	test_read();
 	test_xfer_gates();
 	test_write();
+	test_write_request_refused();
 	test_write_slots();
 	test_write_protect();
 	test_controller_gate();

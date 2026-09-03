@@ -1054,13 +1054,99 @@ static void srv_read_io_done(struct mscp_srv_fsm *f, struct mscp_srv_hqb *h,
  * 7d. WRITE
  * ========================================================================== */
 
+/* Withdraw the buffer name this node minted for a WRITE. Done the moment the
+ * peer's transfer is over -- a name that outlives its transfer is a buffer a
+ * stale frame could still land in, and once the request is handed to the worker
+ * that buffer is being READ by another thread. */
+static void srv_release_name(struct mscp_srv_fsm *f, struct mscp_srv_hrb *r)
+{
+	if (r->local_name == 0u)
+		return;
+	if (f->ops != (const struct mscp_srv_ops *)0 &&
+	    f->ops->release_buffer != (void (*)(void *, uint32_t))0)
+		f->ops->release_buffer(f->ops->ctx, r->local_name);
+	r->local_name = 0u;
+}
+
+/*
+ * Name the HRB's staging slot as a DESTINATION the host's port may fill, and
+ * record the name OUR port minted. Returns 0, or non-zero when no buffer could
+ * be named -- and then nothing has been asked of the host.
+ */
+static int srv_write_name_buffer(struct mscp_srv_fsm *f,
+				 struct mscp_srv_hqb *h, struct mscp_srv_hrb *r,
+				 uint8_t *stage, uint32_t len)
+{
+	uint32_t name = 0u;
+
+	if (f->ops->recv_write_data == (int (*)(void *, vms_conid_t,
+						vms_scs_sysid_t,
+						const struct mscp_srv_bufdesc *,
+						uint8_t *, uint32_t,
+						uint32_t *))0)
+		return -1;
+	if (f->ops->recv_write_data(f->ops->ctx, h->conid, h->peer, &r->desc,
+				    stage, len, &name) != 0 || name == 0u)
+		return -1;
+	r->local_name = name;
+	return 0;
+}
+
+/*
+ * ISSUE THE REQUEST DATA (design §3.2.6's E41 ruling). The host's buffer is the
+ * SOURCE and it comes straight out of `r->desc`, which was read off the host's
+ * own command; the destination is the name our port just minted. Only this side
+ * can make this call, because only this side knows both names.
+ */
+static int srv_write_request_data(struct mscp_srv_fsm *f,
+				  struct mscp_srv_hqb *h,
+				  struct mscp_srv_hrb *r)
+{
+	if (f->ops->request_write_data == (int (*)(void *, vms_conid_t,
+						   vms_scs_sysid_t,
+						   const struct mscp_srv_bufdesc *,
+						   uint32_t, uint32_t))0 ||
+	    f->ops->request_write_data(f->ops->ctx, h->conid, h->peer, &r->desc,
+				       r->local_name, r->byte_count) != 0) {
+		f->write_requests_refused++;
+		return -1;
+	}
+	f->write_requests_issued++;
+	return 0;
+}
+
+/*
+ * A WRITE that could not be set up. The name is withdrawn, the HRB and its
+ * staging slot go back, and the host gets a REAL controller error -- never an
+ * HRB left waiting for a transfer nobody was asked to make.
+ */
+static void srv_write_refuse(struct mscp_srv_fsm *f, struct mscp_srv_hqb *h,
+			     struct mscp_srv_hrb *r)
+{
+	uint32_t cmd_ref = r->cmd_ref;
+	uint16_t unit = r->unit;
+
+	srv_release_name(f, r);
+	srv_hrb_free(f, r);
+	f->xfer_refused++;
+	(void)srv_send_xfer_end(f, h, VMS_MSCP_OP_WRITE, cmd_ref, unit,
+				VMS_MSCP_STATUS(VMS_MSCP_ST_CTLR_ERR,
+						VMS_MSCP_SUB_CNT_INCONSISTENT),
+				0u);
+}
+
+/*
+ * WRITE's command half: gate it, name the landing buffer, and ASK the host for
+ * its bytes. No end message is sent here -- the data has not arrived, and
+ * answering now would be the fabricated success this whole layer exists not to
+ * emit.
+ */
 static void h_cmd_write(struct mscp_srv_fsm *f, struct srv_ev *e)
 {
 	struct vms_mscp_xfer_cmd c;
 	struct mscp_srv_hqb *h = e->hqb;
 	struct mscp_srv_hrb *r;
 	uint8_t *stage = (uint8_t *)0;
-	uint32_t name = 0u;
 	int slot = -1;
 
 	if (srv_xfer_parse(f, e, VMS_MSCP_OP_WRITE, &c) != 0)
@@ -1071,26 +1157,9 @@ static void h_cmd_write(struct mscp_srv_fsm *f, struct srv_ev *e)
 	if (r == (struct mscp_srv_hrb *)0)
 		return;
 
-	if (f->ops->recv_write_data == (int (*)(void *, vms_conid_t,
-						vms_scs_sysid_t,
-						const struct mscp_srv_bufdesc *,
-						uint8_t *, uint32_t,
-						uint32_t *))0 ||
-	    f->ops->recv_write_data(f->ops->ctx, h->conid, h->peer, &r->desc,
-				    stage, c.byte_count, &name) != 0 ||
-	    name == 0u) {
-		srv_hrb_free(f, r);
-		f->xfer_refused++;
-		(void)srv_send_xfer_end(f, h, VMS_MSCP_OP_WRITE, c.hdr.cmd_ref,
-					c.hdr.unit,
-					VMS_MSCP_STATUS(VMS_MSCP_ST_CTLR_ERR,
-							VMS_MSCP_SUB_CNT_INCONSISTENT),
-					0u);
-		return;
-	}
-	r->local_name = name;
-	/* NO END MESSAGE YET. The data has not arrived; answering now would be
-	 * the fabricated success this whole layer exists not to emit. */
+	if (srv_write_name_buffer(f, h, r, stage, c.byte_count) != 0 ||
+	    srv_write_request_data(f, h, r) != 0)
+		srv_write_refuse(f, h, r);
 }
 
 /*
@@ -1330,20 +1399,6 @@ static struct mscp_srv_hqb *srv_hrb_hqb(struct mscp_srv_fsm *f,
 	if (r->hqb >= MSCP_SRV_MAX_HOSTS || !f->hqb[r->hqb].in_use)
 		return (struct mscp_srv_hqb *)0;
 	return &f->hqb[r->hqb];
-}
-
-/* Withdraw the buffer name this node minted for a WRITE. Done the moment the
- * peer's transfer is over -- a name that outlives its transfer is a buffer a
- * stale frame could still land in, and once the request is handed to the worker
- * that buffer is being READ by another thread. */
-static void srv_release_name(struct mscp_srv_fsm *f, struct mscp_srv_hrb *r)
-{
-	if (r->local_name == 0u)
-		return;
-	if (f->ops != (const struct mscp_srv_ops *)0 &&
-	    f->ops->release_buffer != (void (*)(void *, uint32_t))0)
-		f->ops->release_buffer(f->ops->ctx, r->local_name);
-	r->local_name = 0u;
 }
 
 /*

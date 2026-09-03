@@ -118,12 +118,19 @@ break or re-opens itself — CNXMAN's `recnx_fsm` (P3.6) is the SYSAP that recon
 - **⚠ FC-P1.9 COLLIDES with FC-P1.3** (both edit vms_pe_fsm.c/vms_pe.h) — dispatch
   FC-P1.9 only AFTER FC-P1.3 integrates. **FC-P2.2 blocked-by FC-P1.9.**
 
-### E11. No pure `pe_fsm_project` — sim reads pe_fsm counters directly (raised by FC-P1.4 → FC-P1.6)
-The frozen port view (`struct vms_pe_view`) is filled only by `vms_pe_snapshot()`
-in the glue (`vms_pe.c`, not linked at R2). FC-P1.4's `sim_dump.c` reads the
-public `struct pe_fsm` counters directly (documented in its header). If FC-P1.6
-adds a pure `pe_fsm_project(f, struct vms_pe_view*)`, switch the sim's
-`dump_port()` to it. Minor; no ruling needed.
+### E11. RESOLVED by FC-P0.9 — pure `pe_fsm_view_project()` now exists
+FC-P0.9 added `pe_fsm_view_project()` (the pure port-view assembler) to
+`vms_pe_fsm.c` with its own R1 test (`test_pe_view.c`). The sim's `sim_dump.c`
+can now switch `dump_port()` from reading raw `struct pe_fsm` counters to this
+pure projection (a follow-up cleanup, not blocking).
+
+### E13. FC-P1.9 merge-care: P0.9 also edited vms_pe_fsm.c (raised by integrator)
+FC-P1.9 (go-back-N) branched from feat/cluster-executive BEFORE FC-P0.9
+integrated, and both edit `vms_pe_fsm.{c,h}` (P0.9 added `pe_fsm_view_project`;
+P1.9 rewrites gap-handling + adds a `vc_down`/`pe_ops` hook). The regions are
+likely disjoint but the merge needs a careful read. Also **FC-P1.6** (vms_pe.c VC
+glue) must consume P1.9's `vc_down` pe_ops hook — dispatch P1.6 only AFTER P1.9
+lands so its ops table is built against the final `pe_ops` shape.
 
 ### E9. P1.2's port send API is frame-level (below SCS) — the glue bridges it to the body-level seam (raised by FC-P1.2 → owned by FC-P1.3)
 FC-P1.2 implemented the PORT primitive `pe_vc_send_frame(f, dst, frame, len)`:

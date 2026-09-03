@@ -146,6 +146,9 @@ cluster_host_test(test_codec_scs        test_codec_scs.c)
 cluster_host_test(test_codec_cm         test_codec_cm.c vms_frame_compose.c)
 cluster_host_test(test_codec_mscp       test_codec_mscp.c)
 cluster_host_test(test_mscp_cl_fsm      test_mscp_cl_fsm.c)  # FC-P3.4
+# FC-P2.1b (E18): the classify-table widen that grants VMS_FCAP_CONID to the
+# 58-content SCS shorts and the 94-content op-10 application-message shape.
+cluster_host_test(test_codec_p2_1b_route test_codec_p2_1b_route.c)
 
 # ---- FC-P3.7: quorum arithmetic (tracking only) + the $GETSYI cluster
 # item-code projection. Same host-pure discipline as FC-P3.6 above: both new

@@ -229,8 +229,15 @@ enum vms_frame_class {
 	VMS_FCLS_SOLICIT,       /* §4(c), SCA content 78                    */
 	VMS_FCLS_SCS_START,     /* §4(g) ph2, mt 0x41 (START/STACK/ACK)     */
 	VMS_FCLS_SCS_CREDIT,    /* §4(h)(3), mt 0x48, SCA content 41        */
-	VMS_FCLS_SCS_CONN_CTRL, /* §4(g) ph4 + §4(h)(1)(1a)                 */
+	VMS_FCLS_SCS_CONN_CTRL, /* §4(g) ph4 + §4(h)(1)(1a),(1b), SCA content
+				 * 110/66/62/58                             */
 	VMS_FCLS_SCS_MSG,       /* §4(d), SCA content 190 (the VC class)    */
+	VMS_FCLS_SCS_APPLMSG94, /* §4(h)(1b), SCA content 94: op-10 APPL_MSG
+				 * shape shared by MSCP$DISK commands/WRITE-
+				 * END (FC-P6.2) and the SCS$DIRECTORY op-10
+				 * lookup (FC-P2.1) -- which SYSAP owns a given
+				 * frame is decided by its Con.ID connection,
+				 * above this codec, never by a wire field    */
 	VMS_FCLS_SCS_SEQ,       /* sequenced SCS msg, sub-class not grounded*/
 	VMS_FCLS__COUNT
 };

@@ -1,6 +1,6 @@
 %OVMX-CLUSTER-SPECIMEN-1
 name:      scs-reject-response
-class:     scs-seq
+class:     scs-conn-ctrl
 origin:    spec-composed
 spec:      docs/cluster-protocol-spec.md 4(h)(1a), 4(h)(1b), 4(h)(1c), 4(m) op=5 REJECT_RSP
 capture:   formation-ci1.pcap

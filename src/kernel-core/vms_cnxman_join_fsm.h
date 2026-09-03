@@ -87,25 +87,34 @@
  * ===========================================================================
  * WHAT THIS FILE REFUSES TO INVENT (INV-6), EACH WITH ITS CONSEQUENCE
  *
- * A. THE LOCAL CSID. The plan row says "CSID learned by matching own
- *    SCSSYSTEMID in membership records". The op-0x06 MEMBERSHIP burst's
- *    {SCSSYSTEMID, incarnation, CSID} record (book p. 7-39) has NO isolated
- *    byte offset in any capture -- docs/cluster-integration-notes.md E8, spec
- *    SS4(j) "CSID assignment field ... not isolated (coordinator CSID =
- *    cluster ID confound)". This FSM therefore:
- *      - parses the burst's GROUNDED envelope and answers it correctly;
- *      - runs vms_cm_membership_find_sysid() as INSTRUMENTATION, recording
- *        WHERE in the body this node's own SCSSYSTEMID appears (a datum the
- *        lab needs and can only get from the field), and reads NOTHING from
- *        a fixed displacement off it;
- *      - counts `csid_unpinned` and logs ONCE per join;
- *      - NEVER calls cnxman_club_learn_local_csid().
- *    CONSEQUENCE, stated plainly: this node completes the join dialogue and
- *    the barrier, and still reads NEW rather than MEMBER, because it does not
- *    know its own CSID and will not invent one. A placeholder identifier is
- *    what bugchecked a real VAX. cnxman_join_csid_learned() exists and its
- *    table cell is real; the only thing that can fire it is a membership
- *    parse the lab has not yet made possible.
+ * A. THE LOCAL CSID -- E30, FALSIFIED + REPLACED by a real-VAX capture
+ *    (tests/lab/captures/op06-join-20260903.pcap, 257 op-0x06 frames,
+ *    docs/cluster-integration-notes.md E30). The original premise --
+ *    "match our own SCSSYSTEMID in the op-0x06 MEMBERSHIP burst" -- was
+ *    WRONG: op-0x06 carries the EXISTING member re-asserting ITS OWN
+ *    record (or another already-admitted member's), never the joiner's, so
+ *    that match could never fire on real traffic (the old instrument's
+ *    honest "not found" is what falsified it). The REAL, byte-exact
+ *    mechanism: CSID = (cluster_generation << 16) | (SCSSYSTEMID & 0x3FF)
+ *    -- verified against both real nodes in the capture (VAX1 sysid 1025 ->
+ *    CSID 0x00010001, VAX3 sysid 1027 -> CSID 0x00010003, generation 1 in
+ *    both). The generation is common to every member's CSID, so THIS FSM:
+ *      - reads whatever genuine CSID a received op-0x06 carries
+ *        (vms_cm_membership_coordinator_csid(), which tries the two
+ *        measured byte offsets and returns "not found" rather than a
+ *        guess -- see vms_cluster_codec_cm.h);
+ *      - takes that CSID's own high 16 bits as the WIRE-LEARNED generation
+ *        (never assumed, never hardcoded);
+ *      - computes THIS node's own CSID = (generation << 16) |
+ *        (own_SCSSYSTEMID & 0x3FF), own_SCSSYSTEMID being this node's real,
+ *        already-loaded SYSGEN parameter (FC-P0.10) -- never a template;
+ *      - calls cnxman_join_csid_learned() with the computed value, which
+ *        fires cnxman_club_learn_local_csid() and moves this node NEW ->
+ *        MEMBER.
+ *    Until an op-0x06 carrying a shape-valid CSID has been seen, this node
+ *    stays NEW: no generation, no computed CSID, no invented placeholder --
+ *    the exact discipline that was already correct about the *value*, now
+ *    applied to a mechanism that actually fires on real traffic.
  *
  * B. LOCKDIRWT ON THE WIRE. Book D-DLM-1 and design SS5.1 have this node
  *    advertise LOCKDIRWT = 0 honestly, but WHICH PARAMS byte carries it is
@@ -458,12 +467,11 @@ struct cnxman_join {
 
 	/* ---- the honest omissions, each visible in the diagnostics ---- */
 	uint32_t membership_records; /* op-0x06 bursts received               */
-	uint32_t csid_unpinned;      /* ... from which no CSID could be read  */
-	uint32_t sysid_seen_at;      /* body offset our SCSSYSTEMID sat at    */
-	uint8_t  sysid_seen;         /* 0 = it did not appear at all          */
-	uint8_t  sysid_seen_width;   /* 6 or 8, whichever matched             */
+	uint32_t csid_unpinned;      /* ... from which no coordinator CSID
+				      * could be read (E30): no shape-valid
+				      * CSID at either measured offset yet    */
 	uint8_t  lockdirwt_unrepresentable; /* configured nonzero, no offset  */
-	uint8_t  pad3;
+	uint8_t  pad3[3];
 	uint32_t lockdirwt_unpinned;
 	uint32_t conndata_omitted;
 	uint32_t dir_descriptor_omitted;

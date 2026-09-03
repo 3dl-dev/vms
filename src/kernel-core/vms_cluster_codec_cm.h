@@ -159,6 +159,52 @@ extern "C" {
 #define VMS_CM_MODEL_MAX 114u /* body[17..131) inclusive of the len prefix at
 			       * body[16]: 132 - 17 - 1 = 114 bytes max     */
 
+/*
+ * cat-0x01 op-0x06 MEMBERSHIP burst: the coordinator's OWN record, not the
+ * joiner's (E30, docs/cluster-integration-notes.md, real-VAX capture
+ * tests/lab/captures/op06-join-20260903.pcap, 257 op-06 frames, VAX1 ->
+ * VAX2). The burst cycles a fixed set of sub-records per member (name
+ * fragments, transport strings, a params-echo, ...); exactly two of them
+ * carry the sender's own CSID, in TWO byte layouts that share one fixed
+ * point -- the 8-byte incarnation quadword always sits at body[28:36]:
+ *
+ *   form A: CSID body[24:28], THEN incarnation body[28:36]
+ *           (VAX1's own record: CSID 0x00010001, sysid 1025 = 0x401,
+ *            1025 & 0x3ff = 1, generation 1 -- byte-exact, 24/24 frames)
+ *   form B: incarnation body[28:36], THEN CSID body[36:40]
+ *           (VAX1 re-asserting VAX1 0x00010001 (23/23) or VAX3 0x00010003,
+ *            sysid 1027, 1027 & 0x3ff = 3 (46/46) -- also byte-exact)
+ *
+ * Independently re-decoded from the pcap (not merely trusted from the
+ * integration note): both offsets, across all 255 real cat-0x01 op-0x06
+ * frames in the capture, disjointly carry ONLY genuine CSIDs at the
+ * VMS_CM_CSID_SHAPE_* bound below -- zero false positives against the other
+ * ~11 sub-record shapes (ASCII name/transport fragments, all-zero padding)
+ * that share the same two candidate offsets in other cycle positions.
+ */
+#define VMS_OFB_CM_MEMBERSHIP_CSID_A  24u /* body[24:28], form A          */
+#define VMS_OFB_CM_MEMBERSHIP_CSID_B  36u /* body[36:40], form B          */
+#define VMS_OFF_CM_MEMBERSHIP_CSID_A  (VMS_OFF_SYSAP_BODY + \
+					VMS_OFB_CM_MEMBERSHIP_CSID_A) /* abs 96 */
+#define VMS_OFF_CM_MEMBERSHIP_CSID_B  (VMS_OFF_SYSAP_BODY + \
+					VMS_OFB_CM_MEMBERSHIP_CSID_B) /* abs 108*/
+
+/*
+ * The CSID-shape test that tells a real coordinator CSID apart from the
+ * burst's other sub-records at the SAME two candidate offsets. Grounded
+ * directly in the CSID's own published construction (generation << 16 |
+ * SCSSYSTEMID & 0x3FF, E30): the low word's top six bits (mask 0xFC00) can
+ * never be set because only a 10-bit SCSSYSTEMID is ever placed there. The
+ * high-word ceiling (0xFF) is NOT a protocol constant -- it is the measured
+ * boundary that cleanly separates every real CSID from every false
+ * candidate in the 255-frame capture (the two false positives the mask-only
+ * test admits, 0x6358nnnn and 0x0301nnnn, both have a high word > 0xFF). A
+ * cluster generation that legitimately exceeds 255 would need this bound
+ * re-derived from a fresh capture, not raised by guesswork.
+ */
+#define VMS_CM_CSID_SHAPE_HI_MAX  0xFFu
+#define VMS_CM_CSID_SHAPE_LO_MASK 0xFC00u
+
 /* cat-0x02 op-0x0d DLM lock-resource rebuild record (sec 4(p) "Request
  * layout (GROUNDED)"). NOTE these offsets are NOT the cat-0x01 offsets
  * body[16]/body[18]/body[55] -- applying the cat-0x01 mutations here
@@ -810,33 +856,31 @@ vms_codec_status_t vms_cm_config_build(uint8_t *out_body, uint32_t cap,
 				       uint32_t *written);
 
 /*
- * vms_cm_membership_find_sysid - INSTRUMENTATION ONLY, and the distinction
- * is the whole point of this function existing.
+ * vms_cm_membership_coordinator_csid - E30 (falsified + replaced, real-VAX
+ * capture): read the SENDER's (the existing coordinator's) own CSID out of
+ * a received cat-0x01 op-0x06 MEMBERSHIP burst frame.
  *
- * A joiner is supposed to learn the CSID the cluster assigned it by matching
- * its own SCSSYSTEMID in the coordinator's membership records (design sec 3.4;
- * book p. 7-39 describes each member being described as {SCSSYSTEMID,
- * incarnation, CSID}). The op-0x06 MEMBERSHIP burst's record layout has NO
- * isolated byte offset in any capture (docs/cluster-integration-notes.md E8),
- * so that learn CANNOT be performed honestly today.
+ * SUPERSEDES vms_cm_membership_find_sysid(). The premise that op-0x06 carries
+ * the JOINER's own {SCSSYSTEMID, incarnation, CSID} record was WRONG (the
+ * old instrument correctly found nothing on real traffic, honestly, and
+ * that honest "not found" is what falsified the premise): op-0x06 is the
+ * EXISTING member re-asserting a record from ITS OWN membership table --
+ * sometimes its own CSID, sometimes another already-admitted member's. This
+ * function does not search for the caller's sysid at all; it reads whatever
+ * genuine CSID the burst carries (VMS_OFB_CM_MEMBERSHIP_CSID_A/_B, the
+ * VMS_CM_CSID_SHAPE_* test), which is enough on its own: every real CSID
+ * observed shares one cluster-wide generation (the high 16 bits), so ANY
+ * member's CSID teaches the caller the generation it needs (E30).
  *
- * This function does the HALF that requires no layout knowledge: it searches
- * the received 132-byte body for the caller's OWN SCSSYSTEMID -- an exact
- * match on a value the caller already owns -- and reports the body-relative
- * offset and the width (8 bytes, or the 48-bit form p. 2-16 describes) at
- * which it was found. It reads nothing else, decodes no record, and returns
- * no CSID. The offset it reports is a MEASUREMENT for the lab capture that
- * will pin the layout, not an input to any wire field.
- *
- * VMS_CODEC_E_CLASS unless this is really a cat-0x01 op-0x06; E_RANGE when
- * the sysid does not appear at all (which is itself the observation).
+ * Tries form A (body[24:28]) first, then form B (body[36:40]); returns
+ * VMS_CODEC_E_RANGE if neither candidate passes the shape test (an honest
+ * "no coordinator CSID in this frame", never a fabricated one).
+ * VMS_CODEC_E_CLASS unless this is really a cat-0x01 op-0x06.
  */
-vms_codec_status_t vms_cm_membership_find_sysid(const uint8_t *frame,
+vms_codec_status_t vms_cm_membership_coordinator_csid(const uint8_t *frame,
 						uint32_t len,
 						const struct vms_frame_info *fi,
-						uint64_t sysid,
-						uint32_t *out_body_off,
-						uint32_t *out_width);
+						uint32_t *out_csid);
 
 /* ------------------------------------------------------------------ *
  * sec 6  The GROUNDED (SYSAP, category, opcode) allowlist -- codec DATA

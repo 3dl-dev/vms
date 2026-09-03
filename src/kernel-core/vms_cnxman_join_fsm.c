@@ -854,33 +854,49 @@ static enum cnxman_join_rx join_h_echo(struct cnxman_join *j,
  *
  * The allowlist grounds it as CONSUME + "answered only by the opportunistic
  * cat-0x04 ack, never 0x81" (spec sec 4(p)/(u); sec 4(o) row 10 shows the
- * joiner's cat-0x04 answers), so that is what goes back.
+ * joiner's cat-0x04 answers), so that is what goes back regardless of
+ * whether this frame taught us anything.
  *
- * What does NOT happen here is the point: this is where a joiner is supposed
- * to learn the CSID the cluster assigned it, and the record's layout has no
- * isolated offset in any capture (integration note E8). So this handler
- * INSTRUMENTS -- it records the body offset at which this node's own
- * SCSSYSTEMID appears, which is precisely the datum the lab capture needs --
- * and reads NOTHING from a displacement off it. The CLUB's local CSID stays
- * unlearned, this node stays NEW, and it issues no DLM traffic. That is the
- * honest outcome; a plausible-looking CSID is the fabrication that bugchecked
- * a real VAX.
+ * E30 (falsified + replaced by a real-VAX capture,
+ * tests/lab/captures/op06-join-20260903.pcap): this frame is the EXISTING
+ * coordinator re-asserting a real member's own CSID (its own, or another
+ * already-admitted member's -- both share the cluster's one generation).
+ * This node reads that CSID (vms_cm_membership_coordinator_csid(), which
+ * returns "not found" rather than guessing), takes the WIRE-LEARNED
+ * generation off its high 16 bits, and computes ITS OWN CSID from ITS OWN
+ * real SCSSYSTEMID (FC-P0.10 SYSGEN state) -- never copied, never
+ * templated. cnxman_join_csid_learned() does the rest: fires
+ * cnxman_club_learn_local_csid() and moves this node NEW -> MEMBER through
+ * the existing [ADMIT|BARRIER][CSID_LEARNED] table cell.
+ *
+ * Until a shape-valid CSID has been seen in an op-0x06, nothing is learned:
+ * the CLUB's local CSID stays unlearned, this node stays NEW, and it issues
+ * no DLM traffic. That is the honest outcome; a plausible-looking CSID is
+ * the fabrication that bugchecked a real VAX.
  */
-static void join_instrument_membership(struct cnxman_join *j,
-				       const struct join_ev *e)
+static void join_learn_csid_from_membership(struct cnxman_join *j,
+					     const struct join_ev *e)
 {
-	uint32_t off = 0u;
-	uint32_t width = 0u;
+	uint32_t coord_csid = 0u;
+	uint32_t generation;
+	uint32_t own_csid;
 
-	if (j->cl == NULL || j->sysid_seen)
+	if (j->cl == NULL)
 		return;
-	if (vms_cm_membership_find_sysid(e->frame, e->len, &e->fi,
-					 (uint64_t)j->cl->params.scssystemid,
-					 &off, &width) != VMS_CODEC_OK)
+	if (vms_cm_membership_coordinator_csid(e->frame, e->len, &e->fi,
+					       &coord_csid) != VMS_CODEC_OK) {
+		j->csid_unpinned++;
+		if (j->csid_unpinned == 1u)
+			join_log(j, "%CNXMAN, no coordinator CSID seen yet: "
+				    "this node's CSID was NOT learned");
 		return;
-	j->sysid_seen = 1u;
-	j->sysid_seen_at = off;
-	j->sysid_seen_width = (uint8_t)width;
+	}
+	/* generation = the coordinator CSID's high 16 bits, READ FROM THE
+	 * WIRE -- never assumed, never hardcoded (INV-6). */
+	generation = (coord_csid >> 16) & 0xffffu;
+	own_csid = (generation << 16) |
+		   ((uint32_t)j->cl->params.scssystemid & 0x3ffu);
+	cnxman_join_csid_learned(j, own_csid);
 }
 
 static enum cnxman_join_rx join_h_membership(struct cnxman_join *j,
@@ -889,12 +905,7 @@ static enum cnxman_join_rx join_h_membership(struct cnxman_join *j,
 	vms_codec_status_t st;
 
 	j->membership_records++;
-	join_instrument_membership(j, e);
-
-	j->csid_unpinned++;
-	if (j->csid_unpinned == 1u)
-		join_log(j, "%CNXMAN, membership record layout is not pinned: "
-			    "this node's CSID was NOT learned");
+	join_learn_csid_from_membership(j, e);
 
 	st = vms_cm_ack_build(j->scratch, (uint32_t)sizeof(j->scratch), NULL);
 	if (join_build_failed(j, st))

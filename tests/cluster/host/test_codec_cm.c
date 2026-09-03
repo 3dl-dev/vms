@@ -596,57 +596,91 @@ static void test_joiner_originations(void)
 			"REPLAYED-not-decoded spans are NOT reproduced");
 }
 
-static void test_membership_find_sysid(void)
+/*
+ * E30 (falsified + replaced by a real-VAX capture,
+ * tests/lab/captures/op06-join-20260903.pcap, 257 op-0x06 frames): op-0x06
+ * carries the EXISTING coordinator's own CSID, not the joiner's. This test
+ * reproduces the capture's own byte-exact values at both measured offsets.
+ */
+static void test_membership_coordinator_csid(void)
 {
 	const struct vms_fixture *req = fixture("cm-commit-req");
 	struct vms_cm_link l;
 	struct vms_frame_info fi;
 	uint8_t body[VMS_CM_BODY_LEN];
 	uint8_t frame[VMS_CM_FRAME_LEN];
-	uint32_t frame_written = 0, off = 0, width = 0;
-	const uint64_t sysid = 0x000004000103ull;
-	unsigned i;
+	uint32_t frame_written = 0, csid = 0;
 
-	printf("-- FC-P3.3: vms_cm_membership_find_sysid (INSTRUMENTATION)\n");
+	printf("-- E30: vms_cm_membership_coordinator_csid --\n");
 	fill_link(&l);
 
-	/* A cat-0x01 op-0x06 body with the caller's own SCSSYSTEMID at a byte
-	 * offset THIS TEST chose -- because no capture grounds one, which is
-	 * exactly why the function reports the offset instead of reading a
-	 * record at it (integration note E8). */
+	/* Form A, capture-exact: VAX1's own CSID (SCSSYSTEMID 1025, generation
+	 * 1) at body[24:28]. */
 	memset(body, 0, sizeof(body));
 	body[VMS_OFB_CM_CATEGORY] = VMS_CM_CAT_CONFIG;
 	body[VMS_OFB_CM_OPCODE] = VMS_CM_OP_MEMBERSHIP;
-	for (i = 0; i < 8u; i++)
-		body[40u + i] = (uint8_t)((sysid >> (8u * i)) & 0xffu);
+	body[VMS_OFB_CM_MEMBERSHIP_CSID_A + 0] = 0x01u;
+	body[VMS_OFB_CM_MEMBERSHIP_CSID_A + 1] = 0x00u;
+	body[VMS_OFB_CM_MEMBERSHIP_CSID_A + 2] = 0x01u;
+	body[VMS_OFB_CM_MEMBERSHIP_CSID_A + 3] = 0x00u;
 
 	ct_check(vms_frame_compose(&l, body, frame, sizeof(frame),
 				   &frame_written) == VMS_CODEC_OK,
-		 "composes an op-0x06 specimen");
+		 "composes an op-0x06 form-A specimen");
 	ct_check(vms_frame_classify(frame, frame_written, &fi) == VMS_CODEC_OK,
 		 "  classifies");
-	ct_check(vms_cm_membership_find_sysid(frame, frame_written, &fi, sysid,
-					      &off, &width) == VMS_CODEC_OK,
-		 "  finds the caller's own SCSSYSTEMID");
-	ct_check_eq_u32(off, 40u, "  at the offset it really sits at");
-	ct_check_eq_u32(width, 8u, "  reported as the quadword form");
+	ct_check(vms_cm_membership_coordinator_csid(frame, frame_written, &fi,
+						    &csid) == VMS_CODEC_OK,
+		 "  reads the coordinator's CSID from form A");
+	ct_check_eq_u32(csid, 0x00010001u,
+			"  byte-exact: VAX1's own CSID from the capture");
 
-	/* A different sysid is NOT found -- the function reports absence, it
-	 * does not fall back to a plausible offset. */
-	ct_check(vms_cm_membership_find_sysid(frame, frame_written, &fi,
-					      0x0000040001ffull, &off, &width)
-		 == VMS_CODEC_E_RANGE,
-		 "  a sysid that is not there is reported ABSENT");
-	ct_check_eq_u32(off, 0u, "  with no offset asserted");
-	ct_check_eq_u32(width, 0u, "  and no width asserted");
+	/* Form B, capture-exact: VAX3's own CSID (SCSSYSTEMID 1027, generation
+	 * 1) at body[36:40], with body[24:28] left non-CSID-shaped. */
+	memset(body, 0, sizeof(body));
+	body[VMS_OFB_CM_CATEGORY] = VMS_CM_CAT_CONFIG;
+	body[VMS_OFB_CM_OPCODE] = VMS_CM_OP_MEMBERSHIP;
+	body[VMS_OFB_CM_MEMBERSHIP_CSID_B + 0] = 0x03u;
+	body[VMS_OFB_CM_MEMBERSHIP_CSID_B + 1] = 0x00u;
+	body[VMS_OFB_CM_MEMBERSHIP_CSID_B + 2] = 0x01u;
+	body[VMS_OFB_CM_MEMBERSHIP_CSID_B + 3] = 0x00u;
+
+	ct_check(vms_frame_compose(&l, body, frame, sizeof(frame),
+				   &frame_written) == VMS_CODEC_OK,
+		 "composes an op-0x06 form-B specimen");
+	ct_check(vms_frame_classify(frame, frame_written, &fi) == VMS_CODEC_OK,
+		 "  classifies");
+	csid = 0;
+	ct_check(vms_cm_membership_coordinator_csid(frame, frame_written, &fi,
+						    &csid) == VMS_CODEC_OK,
+		 "  reads the coordinator's CSID from form B");
+	ct_check_eq_u32(csid, 0x00010003u,
+			"  byte-exact: VAX3's own CSID from the capture");
+
+	/* A burst with no shape-valid CSID at either offset is reported
+	 * absent -- never a fallback to a plausible-looking value. */
+	memset(body, 0, sizeof(body));
+	body[VMS_OFB_CM_CATEGORY] = VMS_CM_CAT_CONFIG;
+	body[VMS_OFB_CM_OPCODE] = VMS_CM_OP_MEMBERSHIP;
+	ct_check(vms_frame_compose(&l, body, frame, sizeof(frame),
+				   &frame_written) == VMS_CODEC_OK,
+		 "composes an all-zero op-0x06 specimen");
+	ct_check(vms_frame_classify(frame, frame_written, &fi) == VMS_CODEC_OK,
+		 "  classifies");
+	csid = 0xffffffffu;
+	ct_check(vms_cm_membership_coordinator_csid(frame, frame_written, &fi,
+						    &csid) == VMS_CODEC_E_RANGE,
+		 "  no CSID in either slot is reported ABSENT");
+	ct_check_eq_u32(csid, 0u, "  with no value asserted");
 
 	/* And it refuses any other (category, opcode): reading this span from
 	 * a commit request would report residue as membership. */
 	if (req != NULL) {
 		ct_check(vms_frame_classify(req->bytes, req->wire_len, &fi)
 			 == VMS_CODEC_OK, "  cm-commit-req classifies");
-		ct_check(vms_cm_membership_find_sysid(req->bytes, req->wire_len,
-						      &fi, sysid, &off, &width)
+		ct_check(vms_cm_membership_coordinator_csid(req->bytes,
+							    req->wire_len, &fi,
+							    &csid)
 			 == VMS_CODEC_E_CLASS,
 			 "  and a NON-op-0x06 frame is refused outright");
 	}
@@ -776,7 +810,7 @@ int main(void)
 	test_open_bitmap_span();   /* FC-P3.5 */
 
 	test_joiner_originations();     /* FC-P3.3 */
-	test_membership_find_sysid();   /* FC-P3.3 */
+	test_membership_coordinator_csid();   /* E30 */
 
 	test_error_paths();
 

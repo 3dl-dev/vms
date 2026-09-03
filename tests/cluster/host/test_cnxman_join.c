@@ -297,25 +297,27 @@ static uint32_t mk_go(uint32_t epoch)
 	return n;
 }
 
-/* An op-0x06 MEMBERSHIP burst carrying `sysid` somewhere in its body -- the
- * ONLY thing about that record any capture grounds is that the triples are in
- * there somewhere (book p. 7-39), so this fixture places one at a byte offset
- * of the TEST's choosing and the FSM's job is to REPORT where it found it and
- * decode nothing. */
-static uint32_t mk_membership(uint64_t sysid, uint32_t at_body_off, int width)
+/*
+ * An op-0x06 MEMBERSHIP burst carrying a real coordinator CSID, in either of
+ * the two byte-exact forms the real-VAX capture measured (E30,
+ * tests/lab/captures/op06-join-20260903.pcap):
+ *   form 'A' -- CSID at body[24:28] (VMS_OFB_CM_MEMBERSHIP_CSID_A)
+ *   form 'B' -- CSID at body[36:40] (VMS_OFB_CM_MEMBERSHIP_CSID_B)
+ * `csid` == 0 builds a burst with NEITHER offset carrying a shape-valid
+ * value -- the "no coordinator CSID in this frame" case.
+ */
+static uint32_t mk_membership_csid(uint32_t csid, char form)
 {
 	vms_wire_buf_t w;
-	uint8_t enc[8];
-	int i;
+	uint32_t off;
 	uint32_t n = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBERSHIP, 0x0040);
 
-	if (width == 0)
+	if (csid == 0u)
 		return n;
-	for (i = 0; i < 8; i++)
-		enc[i] = (uint8_t)((sysid >> (8 * i)) & 0xffu);
+	off = (form == 'A') ? VMS_OFF_CM_MEMBERSHIP_CSID_A
+			     : VMS_OFF_CM_MEMBERSHIP_CSID_B;
 	vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
-	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY + at_body_off,
-			   (uint32_t)width, enc);
+	vms_wire_put_le32(&w, off, csid);
 	return n;
 }
 
@@ -574,23 +576,29 @@ static void test_reference_sequence(void)
  * 2. THE HONEST OMISSIONS -- negative assertions, the anti-LARP core
  * ========================================================================== */
 
-static void test_csid_is_never_fabricated(void)
+/*
+ * E30 (falsified + replaced by a real-VAX capture,
+ * tests/lab/captures/op06-join-20260903.pcap): a MEMBERSHIP burst with NO
+ * shape-valid coordinator CSID at either measured offset teaches this node
+ * nothing. Still answered (the allowlist's CONSUME row), still honest.
+ */
+static void test_csid_no_coordinator_seen_stays_new(void)
 {
 	uint32_t len;
 
-	printf("\n-- E8: a MEMBERSHIP burst does NOT yield a CSID --\n");
+	printf("\n-- E30: no coordinator CSID in the burst -> stays NEW --\n");
 	bed_init();
 	bed_set_identity();
 	drive_to_admit();
 
-	/* The burst carries this node's own SCSSYSTEMID at body offset 40 --
-	 * a placement this test chose, because NO capture grounds one. */
-	len = mk_membership(OWN_SYSID, 40u, 8);
+	len = mk_membership_csid(0u, 'A');
 	(void)cnxman_join_rx_frame(&g.j, g_frame, len, MEMBER_CSID, 1);
 
 	ct_check_eq_u32(g.j.membership_records, 1u, "the burst was received");
 	ct_check_eq_u32(g.j.csid_unpinned, 1u,
 			"... and counted as a CSID that could NOT be learned");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"no coordinator CSID seen yet: the node stays NEW");
 	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
 			"THE CLUB'S LOCAL CSID IS STILL UNLEARNED (INV-6)");
 	ct_check_eq_u32(g.cl.club.local_csid, 0u,
@@ -600,34 +608,89 @@ static void test_csid_is_never_fabricated(void)
 			"ack, never a 0x81 (allowlist CONSUME row)");
 	ct_check(sent_is(n_cm_sent() - 1u, VMS_CM_CAT_ACK, 0x00u),
 		 "... and that answer really is a cat-0x04 body");
+}
 
-	/* The INSTRUMENTATION half: where the sysid sat, reported, nothing
-	 * read from a displacement off it. */
-	ct_check_eq_u32(g.j.sysid_seen, 1u,
-			"our own SCSSYSTEMID was FOUND in the record");
-	ct_check_eq_u32(g.j.sysid_seen_at, 40u,
-			"... at the offset the fixture really placed it");
-	ct_check_eq_u32(g.j.sysid_seen_width, 8u, "... as a quadword");
+/*
+ * E30, byte-exact vectors from the real-VAX capture. VAX1's own record
+ * (CSID 0x00010001, SCSSYSTEMID 1025, generation 1) taught the *coordinator's*
+ * identity on the wire; this node's own SCSSYSTEMID (1027, the capture's
+ * VAX3) combines with the WIRE-LEARNED generation to compute OVMX's own
+ * CSID -- never the coordinator's value, never a copy.
+ */
+static void test_csid_wire_learned_form_a(void)
+{
+	uint32_t len;
 
-	/* A burst that does NOT carry our sysid reports exactly that. */
+	printf("\n-- E30: form A (body[24:28]), capture-exact 0x00010001 -> "
+	       "generation 1 --\n");
 	bed_init();
 	bed_set_identity();
 	drive_to_admit();
-	len = mk_membership(OWN_SYSID, 0u, 0);
+	g.cl.params.scssystemid = 1027ull; /* the capture's VAX3 sysid */
+
+	len = mk_membership_csid(0x00010001u, 'A'); /* VAX1's own CSID */
 	(void)cnxman_join_rx_frame(&g.j, g_frame, len, MEMBER_CSID, 1);
-	ct_check_eq_u32(g.j.sysid_seen, 0u,
-			"a burst without our sysid reports NOT FOUND, never a "
-			"plausible offset");
-	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
-			"and still no CSID");
+
+	ct_check_eq_u32(g.j.csid_unpinned, 0u,
+			"a shape-valid coordinator CSID WAS found");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER,
+			"[ADMIT][CSID_LEARNED] -> MEMBER");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u, "the CLUB learned it");
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010003u,
+			"(1 << 16) | (1027 & 0x3ff) = 0x00010003 -- computed, "
+			"not copied from the coordinator's 0x00010001");
 }
 
-/* The mechanism exists and the table cell is real -- the only thing missing is
- * a wire input the op-0x06 layout does not yet permit. Fired directly here, so
- * the edge is proven rather than assumed. */
+/* The same mechanism through the OTHER measured offset (body[36:40]), with
+ * the capture's other real value (VAX3's own re-asserted CSID). */
+static void test_csid_wire_learned_form_b(void)
+{
+	uint32_t len;
+
+	printf("\n-- E30: form B (body[36:40]), capture-exact 0x00010003 --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	g.cl.params.scssystemid = 1027ull;
+
+	len = mk_membership_csid(0x00010003u, 'B');
+	(void)cnxman_join_rx_frame(&g.j, g_frame, len, MEMBER_CSID, 1);
+
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER,
+			"form B also fires the CSID cell");
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010003u,
+			"same computed CSID via the other offset");
+}
+
+/*
+ * The generation is READ FROM THE WIRE, never hardcoded to the capture's
+ * observed 1: a coordinator CSID whose generation is 7 makes this node
+ * compute a CSID carrying 7, not 1.
+ */
+static void test_csid_generation_never_fabricated(void)
+{
+	uint32_t len;
+
+	printf("\n-- E30: the generation is wire-learned, not baked in --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	g.cl.params.scssystemid = 1027ull;
+
+	len = mk_membership_csid(0x00070005u, 'A'); /* generation 7, shape-valid */
+	(void)cnxman_join_rx_frame(&g.j, g_frame, len, MEMBER_CSID, 1);
+
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER, "still fires");
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00070003u,
+			"(7 << 16) | (1027 & 0x3ff): the generation tracked the "
+			"wire value, not a constant 1");
+}
+
+/* The mechanism exists and the table cell is real -- exercised directly so
+ * the edge itself is proven independent of the membership-burst path above. */
 static void test_csid_learned_edge_exists(void)
 {
-	printf("\n-- the CSID edge is real; only its wire input is missing --\n");
+	printf("\n-- the CSID edge is real, exercised directly --\n");
 	bed_init();
 	bed_set_identity();
 	drive_to_admit();
@@ -1076,7 +1139,11 @@ static void fire(enum cnxman_event ev)
 		(void)cnxman_join_rx_frame(&g.j, g_frame, len, MEMBER_CSID, 1);
 		break;
 	case CNXMAN_EV_RX_MEMBERSHIP:
-		len = mk_membership(OWN_SYSID, 40u, 8);
+		/* No coordinator CSID in this fixture: exercising the cell
+		 * itself, not the CSID-learn edge (covered separately above),
+		 * so it must not perturb the state this generic driver put
+		 * the FSM in. */
+		len = mk_membership_csid(0u, 'A');
 		(void)cnxman_join_rx_frame(&g.j, g_frame, len, MEMBER_CSID, 1);
 		break;
 	case CNXMAN_EV_RX_CLOSE:
@@ -1260,7 +1327,10 @@ int main(void)
 	printf("test_cnxman_join: the join FSM (FC-P3.3, rung R1)\n");
 
 	test_reference_sequence();
-	test_csid_is_never_fabricated();
+	test_csid_no_coordinator_seen_stays_new();
+	test_csid_wire_learned_form_a();
+	test_csid_wire_learned_form_b();
+	test_csid_generation_never_fabricated();
 	test_csid_learned_edge_exists();
 	test_lockdirwt_is_not_advertised();
 	test_no_invented_connect_data_or_descriptor();

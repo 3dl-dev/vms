@@ -29,10 +29,14 @@
  *      CLUSTER read.
  *
  * INV-6 / E30: the honest outcome this file's first case pins is that a node
- * whose local CSID is never learned (today's routine case: nothing in the
- * shipped tree calls cnxman_club_learn_local_csid(), integration note E30)
- * completes a whole open/GO/Phase-2-commit cycle and STILL reads NEW, never
- * MEMBER -- a placeholder CSID is what bugchecked a real VAX.
+ * whose local CSID is never learned completes a whole open/GO/Phase-2-commit
+ * cycle and STILL reads NEW, never MEMBER -- a placeholder CSID is what
+ * bugchecked a real VAX. E30 was falsified + replaced by a real-VAX capture
+ * (docs/cluster-integration-notes.md): the JOIN FSM now calls
+ * cnxman_club_learn_local_csid() from a real op-0x06 coordinator CSID
+ * (vms_cnxman_join_fsm.c). THIS file drives the BARRIER FSM directly, in
+ * isolation, and never delivers an op-0x06 through the join's path -- so its
+ * own scenario still, correctly, never learns a CSID and still reads NEW.
  */
 #include <stdint.h>
 #include <stddef.h>
@@ -287,10 +291,12 @@ static void test_open_preload_go_stays_new(void)
 			"effective copy unchanged (nothing was fabricated "
 			"in between)");
 
-	/* E30: the honest outcome. */
+	/* E30: the honest outcome for THIS scenario -- the barrier alone,
+	 * with no op-0x06 delivered through the join FSM's path. */
 	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
-			"E30: the local CSID was never learned (nothing calls "
-			"cnxman_club_learn_local_csid in the shipped tree)");
+			"E30: the local CSID was never learned (this scenario "
+			"never delivers an op-0x06 coordinator CSID through "
+			"the join FSM)");
 	ct_check(g.cl.state != VMS_CLUSTER_MEMBER,
 		 "E30: this node reads NEW, never MEMBER -- a placeholder "
 		 "CSID is what bugchecked a real VAX");

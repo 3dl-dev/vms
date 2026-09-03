@@ -918,25 +918,32 @@ vms_codec_status_t vms_cm_config_build(uint8_t *out_body, uint32_t cap,
 	return cm_originate_end(&w, written);
 }
 
-vms_codec_status_t vms_cm_membership_find_sysid(const uint8_t *frame,
+/* The CSID-shape test (VMS_CM_CSID_SHAPE_* in the header): does `v` look
+ * like a real (generation << 16 | SCSSYSTEMID & 0x3FF) CSID rather than one
+ * of the burst's other sub-records (ASCII fragments, zero padding) that
+ * happen to share the same two candidate offsets? */
+static int cm_csid_shape_ok(uint32_t v)
+{
+	uint32_t hi = (v >> 16) & 0xffffu;
+	uint32_t lo = v & 0xffffu;
+
+	return hi != 0u && hi <= VMS_CM_CSID_SHAPE_HI_MAX &&
+	       (lo & VMS_CM_CSID_SHAPE_LO_MASK) == 0u;
+}
+
+vms_codec_status_t vms_cm_membership_coordinator_csid(const uint8_t *frame,
 						uint32_t len,
 						const struct vms_frame_info *fi,
-						uint64_t sysid,
-						uint32_t *out_body_off,
-						uint32_t *out_width)
+						uint32_t *out_csid)
 {
 	struct vms_cm_envelope env;
 	vms_wire_view_t v;
 	vms_codec_status_t st;
-	uint8_t want[8];
-	uint32_t off;
-	uint32_t width;
-	unsigned i;
+	uint32_t a, b;
 
-	if (out_body_off == (uint32_t *)0 || out_width == (uint32_t *)0)
+	if (out_csid == (uint32_t *)0)
 		return VMS_CODEC_E_INVAL;
-	*out_body_off = 0u;
-	*out_width = 0u;
+	*out_csid = 0u;
 
 	st = vms_cm_envelope_parse(frame, len, fi, &env);
 	if (st != VMS_CODEC_OK)
@@ -945,37 +952,24 @@ vms_codec_status_t vms_cm_membership_find_sysid(const uint8_t *frame,
 	    env.opcode != VMS_CM_OP_MEMBERSHIP)
 		return VMS_CODEC_E_CLASS;
 
-	for (i = 0; i < 8u; i++)
-		want[i] = (uint8_t)((sysid >> (8u * i)) & 0xffu);
-
-	/* Two widths, because the book gives one and the wire gives the other:
-	 * p. 2-16 calls the SCS System ID a 48-bit quantity, while struct
-	 * vms_cluster_params carries it as a quadword. Try the wider match
-	 * first so an 8-byte record is not reported as a 6-byte one. */
-	for (width = 8u; width >= 6u; width -= 2u) {
-		for (off = 0u; off + width <= VMS_CM_BODY_LEN; off++) {
-			uint8_t got[8];
-			unsigned k;
-			int same = 1;
-
-			vms_wire_view_init(&v, frame, len);
-			vms_wire_get_bytes(&v, VMS_OFF_SYSAP_BODY + off, width,
-					   got);
-			if (!vms_wire_view_ok(&v))
-				return v.err;
-			for (k = 0; k < width; k++) {
-				if (got[k] != want[k]) {
-					same = 0;
-					break;
-				}
-			}
-			if (same) {
-				*out_body_off = off;
-				*out_width = width;
-				return VMS_CODEC_OK;
-			}
-		}
+	vms_wire_view_init(&v, frame, len);
+	a = vms_wire_get_le32(&v, VMS_OFF_CM_MEMBERSHIP_CSID_A);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cm_csid_shape_ok(a)) {
+		*out_csid = a;
+		return VMS_CODEC_OK;
 	}
+
+	vms_wire_view_init(&v, frame, len);
+	b = vms_wire_get_le32(&v, VMS_OFF_CM_MEMBERSHIP_CSID_B);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cm_csid_shape_ok(b)) {
+		*out_csid = b;
+		return VMS_CODEC_OK;
+	}
+
 	return VMS_CODEC_E_RANGE;
 }
 

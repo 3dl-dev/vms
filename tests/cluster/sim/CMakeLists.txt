@@ -76,6 +76,20 @@ cluster_sim_test(test_sim_vc test_sim_vc.c)
 # allowlist + seq contiguity on what it emits. Needs the R1 clean-room
 # fixture loader (cluster_host_fixture) and its two path definitions, the
 # same way tests/cluster/host/CMakeLists.txt's cluster_host_pe_test wires them.
+# FC-P3.3's rung-R2 leg: replay the reference JOIN choreography at one
+# simulated OVMX node -- the SHIPPING join FSM and the SHIPPING barrier FSM
+# (cluster_host_cnxman), inbound frames from the manifest-hashed specimens
+# (cluster_host_fixture), time from the simulator's own virtual clock. This is
+# the "add the file, then ONE line here" path the comment above describes.
+cluster_sim_test(test_sim_cnxman_join scenarios/cnxman_join.c)
+target_link_libraries(test_sim_cnxman_join PRIVATE
+    cluster_host_cnxman cluster_host_fixture)
+target_compile_definitions(test_sim_cnxman_join PRIVATE
+    OVMX_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/cluster/host/fixtures"
+    OVMX_CLEANROOM_MANIFEST="${CMAKE_SOURCE_DIR}/docs/clean-room/reference-captures.sha256")
+target_include_directories(test_sim_cnxman_join PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host)
+
 cluster_sim_test(test_replay test_replay.c)
 target_link_libraries(test_replay PRIVATE cluster_host_fixture)
 target_compile_definitions(test_replay PRIVATE

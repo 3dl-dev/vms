@@ -147,6 +147,38 @@ enum cnxman_event {
 	 */
 	CNXMAN_EV_RX_TR_ACK     = 17,
 
+	/*
+	 * THE JOIN'S OWN FACTS (FC-P3.3). Added rather than folded into the
+	 * cells above for the same reason CNXMAN_EV_RX_TR_ACK was: a join is a
+	 * CLIENT run against the cluster's other SYSAPs (spec SS4(L): the
+	 * joiner opens its own SCS$DIRECTORY connection, looks a name up,
+	 * opens MSCP$DISK, walks the served units, and only then opens the
+	 * VMS$VAXcluster VC), and none of those facts is a membership message.
+	 * Folding them into CNXMAN_EV_RX_MEMBERSHIP would make every recorded
+	 * transcript say "membership burst" where the wire said "the member
+	 * answered a directory lookup".
+	 *
+	 * WHICH connection a CDT_OPEN/CDT_CLOSED refers to is answered by the
+	 * [state] half of the join table plus the Con.ID the FSM recorded when
+	 * it issued that connect -- exactly the discipline the coordinator's
+	 * one-outstanding-request-per-state note above describes.
+	 */
+	CNXMAN_EV_DIR_RESULT    = 18,  /* an SCS$DIRECTORY inquiry was ANSWERED
+					* (a real yes/no from the peer; an
+					* unanswered one never arrives here --
+					* vms_scs_dir.h reports silence as
+					* silence, never as absence) */
+	CNXMAN_EV_MSCP_END      = 19,  /* an MSCP END arrived on MSCP$DISK */
+	CNXMAN_EV_RX_CONFIG     = 20,  /* the peer's own cat-0x01 op-0x14 /
+					* op-0x01 / op-0x02 advertisement --
+					* spec SS4(o) row 3, "the peer
+					* reciprocates in kind" */
+	CNXMAN_EV_RX_COMMIT     = 21,  /* cat-0x01 op-0x03 membership COMMIT or
+					* op-0x05 lock/resource rebuild: the
+					* member-driven, (txn,token)-correlated
+					* requests the joiner echoes (SS4(o)
+					* rows 5-9) */
+
 	CNXMAN_EV__COUNT
 };
 

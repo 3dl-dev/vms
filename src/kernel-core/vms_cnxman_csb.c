@@ -876,3 +876,41 @@ void cnxman_envelope_stamp(const struct vms_csb *csb, uint8_t body[132],
 	csb_stamp_put_le16(body, CSB_STAMP_OFF_TXN, csb->cm_txn);
 	csb_stamp_put_le16(body, CSB_STAMP_OFF_TOKEN, csb->cm_token);
 }
+
+/* ==========================================================================
+ * The dialogue counters themselves (FC-P3.3)
+ *
+ * cnxman_envelope_stamp() above READS body[0:4] out of the CSB; these two
+ * functions are how those two cells come to hold something true. They exist
+ * as named CSB operations for the same reason the stamper does: an emitter
+ * that reaches in and does `csb->cm_send_msg++` is doing arithmetic on
+ * another layer's dialogue state, which is the same category error as an
+ * emitter computing a body offset (design sec 3.9 rule 2).
+ *
+ * Spec sec 4(j) grounds both cells and both rules:
+ *   send-msg#  "strictly monotonic per sender, 2902/2902 golden VC frames
+ *              (VAX1: 1,2,3 ... independent of VAX2: 1,2,3 ...). Starts at 1
+ *              on the first VC message."  -- so the FIRST message this node
+ *              sends to this peer must carry 1, which is what a pre-increment
+ *              off a freshly zeroed CSB produces.
+ *   ack-msg#   "acknowledges the peer's highest send-msg# seen ... advances
+ *              in lockstep with the peer's sends" -- so it is a MAXIMUM over
+ *              what really arrived, never a copy of the last frame's field
+ *              (a retransmit legitimately repeats a lower number, and 2 of
+ *              17 541 golden frames do exactly that).
+ * ========================================================================== */
+
+void cnxman_csb_dialogue_sent(struct vms_csb *csb)
+{
+	if (csb == NULL)
+		return;
+	csb->cm_send_msg = (uint16_t)(csb->cm_send_msg + 1u);
+}
+
+void cnxman_csb_dialogue_heard(struct vms_csb *csb, uint16_t peer_send_msg)
+{
+	if (csb == NULL)
+		return;
+	if (peer_send_msg > csb->cm_ack_msg)
+		csb->cm_ack_msg = peer_send_msg;
+}

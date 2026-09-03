@@ -667,18 +667,18 @@ _Static_assert(VMS_IOCTL_DLM_GET_GRANTED == 0xC0385637u,
  * $DLM pending-wait enumeration (rd vms-ec75, DLM rung H11) -- the HOME authority
  * for distributed deadlock search. Enumerates THIS node's outstanding cross-node
  * requests that are still PENDING (granted_mode == NL): each is a requester-side
- * ORIGIN record (vms_dlm_origin) this node's scsd created from a queued-reply.
- * For the edge-chase, "what is CSID H waiting for?" is answered by asking H's home
- * node to run this: every returned entry names a resource H waits on (resnam), the
- * node mastering it (master_csid), and H's own requester-side handle for the wait
- * (req_lkid) -- exactly one outgoing wait-for edge. INV-6: a READ of real
- * vms_dlm_origin_list state; count=0 when nothing is pending, never a fabricated
- * edge. This surfaces EXISTING executive state (the origin list H5's grant_recv
- * already builds), so no wait-for graph is stored or guessed.
+ * PROXY LKB (FC-P4.4; formerly a vms_dlm_origin record) that a master's reply
+ * completed. For the edge-chase, "what is CSID H waiting for?" is answered by
+ * asking H's home node to run this: every returned entry names a resource H waits
+ * on (resnam), the node mastering it (master_csid), and H's own requester-side
+ * handle for the wait (req_lkid) -- exactly one outgoing wait-for edge. INV-6: a
+ * READ of real proxy-LKB state; count=0 when nothing is pending, never a
+ * fabricated edge. This surfaces EXISTING executive state, so no wait-for graph
+ * is stored or guessed.
  */
 #define VMS_DLM_ENUM_WAITS_MAX 8u   /* entries returned per call (a chase visits few) */
 struct vms_dlm_wait_ent {
-    char     resnam[32];        /* resource this node waits on (its origin's resnam) */
+    char     resnam[32];        /* resource this node waits on (its proxy's RSB name) */
     uint32_t master_csid;       /* the node mastering that resource                  */
     uint32_t req_lkid;          /* this node's requester-side handle for the wait    */
     uint32_t req_csid;          /* this node's own CSID (the waiter)                 */
@@ -696,6 +696,41 @@ _Static_assert(sizeof(struct vms_dlm_enum_waits_args) == 16 + 48 * 8,
 #define VMS_IOCTL_DLM_ENUM_WAITS _IOWR(VMS_IOC_MAGIC, 0x38, struct vms_dlm_enum_waits_args)
 _Static_assert(VMS_IOCTL_DLM_ENUM_WAITS == 0xC1905638u,
                "VMS_IOCTL_DLM_ENUM_WAITS encodes differently than the reference build");
+
+/*
+ * Enumerate this node's STANDING cluster-registrable system locks (vms-1f4, the
+ * enumeration seam of faithful cluster DLM registration vms-3eb). These are the
+ * locks the executive holds for the node's LIFE -- today the per-volume
+ * "F11B$v<label>" lock a faithful MOUNT holds from $MOUNT to $DISMOUNT (vms-25e),
+ * later the mount (MOU$) and clusterwide-logical (LNM$CWLOGICALS) locks -- that
+ * the connection manager (scsd) must register to the coordinator during a
+ * directory rebuild. Each entry gives the resource name and this node's LOCAL
+ * lock handle, which becomes the op-0x01 requester lkid on the wire.
+ *
+ * INV-6: a READ of REAL lock-manager state -- one entry per lock the executive
+ * genuinely holds (a nonzero vol_lkid on a mounted volume). count=0 when the node
+ * holds no standing locks; never a fabricated lock. This is the honest boundary
+ * scsd registers FROM: it can only announce to the cluster what the executive
+ * actually holds.
+ */
+#define VMS_DLM_ENUM_STANDING_MAX 16u   /* standing system locks returned per call */
+struct vms_dlm_standing_ent {
+    char     resnam[32];        /* the standing lock's resource name (e.g. "F11B$vOVMXSYS") */
+    uint32_t lkid;              /* this node's LOCAL handle for it (the op-0x01 req_lkid)   */
+    uint32_t mode;              /* granted mode (LCK_K_NLMODE for the volume presence lock) */
+};
+struct vms_dlm_enum_standing_args {
+    uint32_t count;             /* return: standing locks filled (<= VMS_DLM_ENUM_STANDING_MAX) */
+    uint32_t total;             /* return: total standing locks the node holds (may exceed count) */
+    uint32_t status;            /* return: SS$_ status */
+    uint32_t pad;               /* zero */
+    struct vms_dlm_standing_ent ent[VMS_DLM_ENUM_STANDING_MAX];
+};
+_Static_assert(sizeof(struct vms_dlm_enum_standing_args) == 16 + 40 * 16,
+               "vms_dlm_enum_standing_args changed size -- VMS_IOCTL_DLM_ENUM_STANDING ABI break");
+#define VMS_IOCTL_DLM_ENUM_STANDING _IOWR(VMS_IOC_MAGIC, 0x3c, struct vms_dlm_enum_standing_args)
+_Static_assert(VMS_IOCTL_DLM_ENUM_STANDING == 0xC290563Cu,
+               "VMS_IOCTL_DLM_ENUM_STANDING encodes differently than the reference build");
 
 /*
  * Cluster membership crosses into the executive (rd vms-551,
@@ -775,6 +810,204 @@ _Static_assert(sizeof(struct vms_cluster_member_get_args) == 3848,
 #define VMS_IOCTL_CLUSTER_MEMBER_GET _IOWR(VMS_IOC_MAGIC, 0x3b, struct vms_cluster_member_get_args)
 _Static_assert(VMS_IOCTL_CLUSTER_MEMBER_GET == 0xCF08563Bu,
                "VMS_IOCTL_CLUSTER_MEMBER_GET encodes differently than the reference build");
+
+/*
+ * VMS_IOCTL_CLUSTER_DIAG_PORT (FC-P0.9, rd docs/plan-faithful-cluster-
+ * executive.md). The port's (PEA0:, PEDRIVER role) diagnostics view --
+ * SDA's SHOW PORT / SCACP SHOW CHANNEL equivalent. `row` names WHICH of the
+ * port's three real projections (vms_pe_snapshot / _channel_snapshot /
+ * _vc_snapshot, src/kernel-core/vms_pe.c) the call fills; `index` walks
+ * channels/circuits for the CHANNEL/VC rows and is ignored for the PORT row.
+ * Only the ONE struct `row` names is meaningful on a given call -- named,
+ * never guessed by a caller scanning every field for a nonzero one.
+ *
+ * status carries the honest SS$_NOSUCHDEV before the port has ever come up
+ * (no CLUSTER_START yet, VAXCLUSTER=0, or a channel/VC index past the
+ * table's high-water mark) -- the negctl this ioctl's plan row requires.
+ *
+ * The three row structs mirror src/kernel-core/vms_cluster_snapshot.h's
+ * vms_pe_view / vms_pe_channel_view / vms_pe_vc_view byte-for-byte (same
+ * "ONE facility source, duplicated struct declaration" shape
+ * VMS_IOCTL_CLUSTER_MEMBER_GET above already uses for vms_cluster_member):
+ * this header must stay includable with no kernel-core dependency, so the
+ * layout is copied here rather than shared by #include, and the
+ * _Static_asserts below pin the two copies to the same size.
+ */
+#define VMS_CLUSTER_DIAG_PORT_ROW      0u  /* the port-wide view */
+#define VMS_CLUSTER_DIAG_PORT_CHANNEL  1u  /* one channel row, by `index` */
+#define VMS_CLUSTER_DIAG_PORT_VC       2u  /* one virtual-circuit row, by `index` */
+
+struct vms_pe_view_wire {
+    uint8_t  port_open;
+    uint8_t  hwaddr_valid;
+    uint8_t  hwaddr[6];
+    uint8_t  link_up;
+    uint8_t  pad0[3];
+    uint32_t mtu;
+    uint32_t max_pktsz;
+    uint32_t n_channels;
+    uint32_t n_vcs;
+    uint32_t rx_frames;
+    uint32_t rx_drops_nobuf;
+    uint32_t rx_drops_badclass;
+    uint32_t tx_frames;
+    uint32_t tx_errors;
+};
+_Static_assert(sizeof(struct vms_pe_view_wire) == 48,
+               "vms_pe_view_wire changed size -- must match vms_pe_view");
+
+struct vms_pe_channel_view_wire {
+    uint8_t  remote_mac[6];
+    uint8_t  state;
+    uint8_t  remote_sysid_valid;
+    uint32_t remote_sysid_lo;
+    uint32_t remote_sysid_hi;
+    uint32_t last_rx_ms;
+    uint32_t hello_tx;
+    uint32_t hello_rx;
+    uint32_t verified_pktsz;
+};
+_Static_assert(sizeof(struct vms_pe_channel_view_wire) == 32,
+               "vms_pe_channel_view_wire changed size -- must match vms_pe_channel_view");
+
+struct vms_pe_vc_view_wire {
+    uint32_t peer_sysid_lo;
+    uint32_t peer_sysid_hi;
+    uint8_t  state;
+    uint8_t  pad0[3];
+    uint32_t send_seq;
+    uint32_t recv_seq;
+    uint32_t recv_ack;
+    uint32_t peer_recv_ack;
+    uint32_t unacked;
+    uint32_t retransmits;
+    uint32_t incarnation_lo;
+    uint32_t incarnation_hi;
+    uint32_t timvcfail_ms_left;
+    uint32_t credits_send;
+    uint32_t credits_receive;
+};
+_Static_assert(sizeof(struct vms_pe_vc_view_wire) == 56,
+               "vms_pe_vc_view_wire changed size -- must match vms_pe_vc_view");
+
+struct vms_cluster_diag_port_args {
+    uint32_t row;                       /* in: VMS_CLUSTER_DIAG_PORT_*        */
+    uint32_t index;                     /* in: channel/vc index; else ignored */
+    uint32_t status;                    /* return: SS$_ status                */
+    uint32_t pad0;
+    struct vms_pe_view_wire         port;      /* valid iff row == _ROW     */
+    struct vms_pe_channel_view_wire channel;   /* valid iff row == _CHANNEL */
+    struct vms_pe_vc_view_wire      vc;        /* valid iff row == _VC      */
+};
+_Static_assert(sizeof(struct vms_cluster_diag_port_args) == 152,
+               "vms_cluster_diag_port_args changed size -- VMS_IOCTL_CLUSTER_DIAG_PORT ABI break");
+#define VMS_IOCTL_CLUSTER_DIAG_PORT _IOWR(VMS_IOC_MAGIC, 0x3d, struct vms_cluster_diag_port_args)
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_PORT == 0xC098563Du,
+               "VMS_IOCTL_CLUSTER_DIAG_PORT encodes differently than the reference build");
+
+/*
+ * VMS_IOCTL_SYSGEN_LOAD (FC-P0.10, docs/plan-faithful-cluster-executive.md).
+ * STARTUP.EXE's own case of SYSBOOT: hands the cluster SYSGEN parameters and
+ * the CLUSTER_AUTHORIZE record it read off SYS$SYSTEM:OVMXVMSSYS.PAR
+ * (sysgen_params.h, cluster_authorize.h) into the executive's ONE
+ * struct vms_cluster (vms_cluster_node(), FC-P0.9's singleton) so every
+ * later cluster layer reads real loaded state, never a compiled-in default.
+ * Issued once, before VMS_IOCTL_CLUSTER_START (FC-P0.11) -- reproducing
+ * SYSBOOT's ordering (vms_cluster.h section 2's header comment: "on VMS
+ * these are in the executive before SYSINIT forms or joins").
+ *
+ * Field-for-field this is struct vms_cluster_params (vms_cluster.h) plus the
+ * `status` return. The dispatcher (vms_ioctl_sysgen_load, vms_devtab.c)
+ * copies each field explicitly rather than a byte-identical memcpy, because
+ * -- unlike CLUSTER_DIAG_PORT's pure snapshot reads -- this ioctl performs
+ * the negctl validation the plan row requires: VAXCLUSTER >= 1 with no
+ * SCSNODE loaded is SS$_BADPARAM, logged, and struct vms_cluster.params is
+ * left at its prior (honest, zeroed) state -- never a fabricated identity
+ * (INV-6). This header stays includable with no kernel-core dependency, so
+ * the field layout is duplicated here rather than shared by #include, same
+ * discipline as the CLUSTER_DIAG_PORT row structs above.
+ *
+ * SCSSYSTEMID is split into _lo/_hi uint32_t halves rather than one uint64_t
+ * -- the same "no raw 64-bit field in a wire struct" discipline
+ * vms_pe_vc_view_wire's peer_sysid_lo/hi already uses, because a struct built
+ * entirely from <=4-byte fields lays out IDENTICALLY on ILP32 (elf32-vax) and
+ * LP64 (x86_64/NetBSD-amd64): a bare uint64_t does not (the VAX cross-compile
+ * gate caught exactly this drift; see docs/design-faithful-cluster-executive.md's
+ * "Word width" leak-table entry).
+ */
+struct vms_sysgen_load_args {
+    /* ---- identity (fatal if absent with vaxcluster >= 1) ---- */
+    uint8_t  scsnode[8];            /* in: VMS_SCSNODE_MAX(6)+2, blank/NUL padded */
+    uint8_t  scsnode_len;           /* in: significant chars, 0..6 (0 = unset)    */
+    uint8_t  pad0;
+    uint32_t scssystemid_lo;        /* in: SCSSYSTEMID low word, 0 = unset        */
+    uint32_t scssystemid_hi;        /* in: SCSSYSTEMID high word (48-bit id: 0 today) */
+
+    /* ---- membership / quorum arithmetic ---- */
+    uint16_t votes;                 /* in: VOTES                                  */
+    uint16_t expected_votes;        /* in: EXPECTED_VOTES                         */
+    uint16_t qdskvotes;             /* in: QDSKVOTES                              */
+    uint16_t recnxinterval;         /* in: RECNXINTERVAL, seconds                 */
+    uint16_t timvcfail;             /* in: TIMVCFAIL, its SYSGEN unit             */
+    uint16_t cluster_credits;       /* in: CLUSTER_CREDITS                        */
+
+    /* ---- roles ---- */
+    uint8_t  vaxcluster;            /* in: VAXCLUSTER, 0 = never, 1 = if present, 2 = always */
+    uint8_t  lockdirwt;             /* in: LOCKDIRWT                              */
+    uint8_t  alloclass;             /* in: ALLOCLASS                              */
+    uint8_t  mscp_load;             /* in: MSCP_LOAD                              */
+    uint8_t  mscp_serve_all;        /* in: MSCP_SERVE_ALL                         */
+    uint8_t  pad1[3];
+
+    uint32_t niscs_max_pktsz;       /* in: NISCS_MAX_PKTSZ (clamped by the port)  */
+
+    /* ---- DISK_QUORUM (empty = none) ---- */
+    uint8_t  disk_quorum[16];       /* in: quorum-disk device name                */
+    uint8_t  disk_quorum_len;       /* in: significant chars, 0 = none            */
+    uint8_t  pad2;
+
+    /* ---- CLUSTER_AUTHORIZE (group + password) ---- */
+    uint16_t auth_group;            /* in: CLUSTER_AUTHORIZE group, 0 if !valid   */
+    uint8_t  auth_password[32];     /* in: CLUSTER_AUTHORIZE password (VMS_CLUSTER_PWD_LEN) */
+    uint8_t  auth_password_len;     /* in: significant bytes                      */
+    uint8_t  auth_valid;            /* in: 1 = a real CLUSTER_AUTHORIZE.DAT was read */
+
+    uint32_t status;                /* return: SS$_ status                        */
+};
+_Static_assert(sizeof(struct vms_sysgen_load_args) == 104,
+               "vms_sysgen_load_args changed size -- VMS_IOCTL_SYSGEN_LOAD ABI break");
+#define VMS_IOCTL_SYSGEN_LOAD _IOWR(VMS_IOC_MAGIC, 0x3e, struct vms_sysgen_load_args)
+_Static_assert(VMS_IOCTL_SYSGEN_LOAD == 0xC068563Eu,
+               "VMS_IOCTL_SYSGEN_LOAD encodes differently than the reference build");
+
+/*
+ * VMS_IOCTL_CLUSTER_START (FC-P0.11, docs/plan-faithful-cluster-executive.md).
+ * The P0 semantic ONLY: bring PEA0: up (multicast join, HELLO cadence, rx
+ * path) -- design SS3.5 step 2's "the executive brings up PEA0: on ETH0:,
+ * starts the fork thread". It does NOT drive the CNXMAN join to MEMBER or
+ * STANDALONE (that return-after-join semantic is FC-P3.9, once CNXMAN
+ * exists); this call returns as soon as the port itself is up, or the
+ * SS$_ status of why it is not.
+ *
+ * Issued once, after VMS_IOCTL_SYSGEN_LOAD, from STARTUP.EXE's boot path
+ * (ovmx_init.c) -- gated there on VAXCLUSTER != 0 (cluster_boot_gate.h): the
+ * executive's own vms_pe_start() (FC-P0.9) applies the SAME gate internally
+ * (SS$_NOSUCHDEV for VAXCLUSTER=0), so a stray call with the port not wanted
+ * is refused twice over, never silently upgraded to a running port.
+ *
+ * Takes no `in:` fields: the port starts from vms_cluster_node()'s already-
+ * loaded struct vms_cluster.params (VMS_IOCTL_SYSGEN_LOAD's own commit) --
+ * never a second, possibly different, copy of SYSGEN state riding this call.
+ */
+struct vms_cluster_start_args {
+    uint32_t port_up;               /* return: 1 = PEA0: is up after this call */
+    uint32_t status;                /* return: SS$_ status                     */
+};
+_Static_assert(sizeof(struct vms_cluster_start_args) == 8,
+               "vms_cluster_start_args changed size -- VMS_IOCTL_CLUSTER_START ABI break");
+#define VMS_IOCTL_CLUSTER_START _IOWR(VMS_IOC_MAGIC, 0x3f, struct vms_cluster_start_args)
+_Static_assert(VMS_IOCTL_CLUSTER_START == 0xC008563Fu,
+               "VMS_IOCTL_CLUSTER_START encodes differently than the reference build");
 
 /* ================================================================
  * Process registration

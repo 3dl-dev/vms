@@ -614,6 +614,34 @@ jobs:
           fi
           echo "OK: docs/compatibility-surface.md matches a fresh render of docs/compat/ (date stamp ignored)."
   # -----------------------------------------------------------------------
+  # Job: cluster core includes gate (FC-P0.1)
+  #
+  # The executive-resident VMScluster stack is written ONCE and compiled into
+  # BOTH kmods (Linux vms.ko and the NetBSD-VAX vms.kmod). That property is
+  # worth ~13 500 shared lines and it is lost to a single #include that only one
+  # substrate has -- the tree already carries the cautionary case, vms_l2.c,
+  # which is Linux-only and absent from the NetBSD module's SRCS. So kernel-core
+  # cluster TUs may include only exec_kbackend.h and kernel-core headers
+  # (docs/design-faithful-cluster-executive.md SS3.2.2), and this gate enforces
+  # it in seconds at PR time. Unconditional: the leak can be introduced by any
+  # change. The self-test is the negative control -- it injects
+  # `#include <linux/netdevice.h>` into a throwaway vms_pe.c and requires the
+  # gate to reject it, so the gate can never pass by having no teeth.
+  # -----------------------------------------------------------------------
+  cluster-core-includes-gate:
+    name: Cluster core stays substrate-free (FC-P0.1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: No substrate include or idiom in kernel-core cluster TUs
+        run: sh tools/ci/cluster_core_includes_gate.sh
+
+      - name: NEGATIVE CONTROL -- the gate must reject an injected substrate include
+        run: sh tools/ci/cluster_core_includes_gate.sh --self-test
+  # -----------------------------------------------------------------------
   # Job: vmslink shell-portability lint (vms-200)
   #
   # Fail-fast gate for the #773 class: a #!/bin/sh script (e.g.

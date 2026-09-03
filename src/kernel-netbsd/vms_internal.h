@@ -371,6 +371,13 @@ struct vms_lock_entry {
 	exec_list_node_t    proc_list;      /* link in the process's lock list */
 	exec_list_node_t    res_granted;    /* link in the resource's granted list */
 	exec_list_node_t    res_waiting;    /* link in the resource's waiting list */
+	exec_list_node_t    res_proxy;      /* link in the resource's PROXY list
+	                                     * (FC-P4.4). A proxy LKB is on exactly
+	                                     * this one and never on granted/waiting,
+	                                     * so the LOCAL granting algorithm cannot
+	                                     * see -- let alone grant -- a lock the
+	                                     * cluster masters elsewhere (INV-6).
+	                                     * Mirror of the Linux twin. */
 	exec_rbtree_node_t  rb_node;        /* link in the global lock-ID tree */
 	uint32_t            lkid;
 	uint32_t            granted_mode;   /* current granted mode (0-5) */
@@ -379,6 +386,11 @@ struct vms_lock_entry {
 	uint64_t            astadr;         /* completion AST */
 	uint64_t            astprm;
 	uint64_t            blkastadr;      /* blocking AST */
+	uint64_t            blkastprm;      /* blocking-AST parameter (FC-P4.4): the
+	                                     * parameter the holder registered with
+	                                     * its own request, so a cross-node BLKAST
+	                                     * delivers the holder's AST, not a
+	                                     * default. Mirror of the Linux twin. */
 	uint8_t             valblk[LCK_VALBLK_SIZE];
 	struct vms_lock_resource *resource;
 	struct vms_proc     *proc;
@@ -410,6 +422,19 @@ struct vms_lock_entry {
 	                                     * passes parid=0); the auto-release cascade
 	                                     * is a follow-on (vms-489). Mirror of the
 	                                     * Linux vms_internal.h field. */
+	/*
+	 * PROXY LKB (FC-P4.4) -- the requester-side image of a lock mastered on
+	 * ANOTHER node (Davis p. 6-52's *process copy*). See the Linux twin
+	 * (src/kernel/vms_internal.h) for the full per-field rationale this file
+	 * does not repeat: proxy marks it, master_csid/master_lkid carry the
+	 * master's identity and ITS handle (0 until a message from the master
+	 * named it -- an unset handle is never emitted), blkast_count counts
+	 * genuine cross-node blocking-AST deliveries. Replaces vms_dlm_origin.
+	 */
+	uint8_t             proxy;
+	uint32_t            master_csid;
+	uint32_t            master_lkid;
+	uint32_t            blkast_count;
 };
 
 /* Lock resource -- a named resource in the lock database. */
@@ -418,6 +443,11 @@ struct vms_lock_resource {
 	char                name[32];
 	exec_list_head_t    granted;        /* granted lock list */
 	exec_list_head_t    waiting;        /* waiting lock list (FIFO) */
+	exec_list_head_t    proxies;        /* PROXY LKBs when this resource is
+	                                     * mastered on ANOTHER node (FC-P4.4).
+	                                     * A THIRD queue on purpose: the local
+	                                     * granting algorithm walks granted and
+	                                     * waiting only. Mirror of the Linux twin. */
 	uint8_t             valblk[LCK_VALBLK_SIZE]; /* resource value block */
 	exec_lock_t         lock;
 	int                 refcount;
@@ -820,16 +850,50 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
 uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
                              uint32_t *lkid_out);
 uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid);
+/* The STANDING per-volume lock a faithful MOUNT holds for the whole mount life
+ * (vms-25e): an NL-mode $ENQ on the F11B$v<label> resource, held from $MOUNT to
+ * $DISMOUNT as the cluster-registration presence marker. Released with
+ * vms_lock_acp_vol_release. Mirror of the src/kernel/vms_internal.h decl (#928:
+ * kernel-core lock ops must be declared in BOTH the Linux and NetBSD headers). */
+uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
+                                   uint32_t *lkid_out);
 long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_get_granted(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_enum_waits(struct vms_proc *proc, unsigned long arg);
+/* vms-94c (DLM epic vms-7fa rung 1): the cross-node DLM RECEIVE handler and its
+ * ioctl wrapper. Rung 1 delivers a decoded remote DLM request TO the handler,
+ * which returns SS$_UNSUPPORTED (no fabricated cross-node grant, INV-6). Mirror
+ * of the src/kernel/vms_internal.h decl (FC-P0.12, #928: kernel-core ops in
+ * BOTH headers). */
+uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
+                                     struct vms_dlm_xnode_args *req);
+long vms_ioctl_dlm_xnode(struct vms_proc *proc, unsigned long arg);
 /* Cluster membership crosses into the executive (rd vms-551): the SET/CLEAR/
  * GET handlers for the module-global membership block (vms_lock.c). SET/
  * CLEAR are scsd's local-ioctl populate path; GET is SHOW CLUSTER's read. */
 long vms_ioctl_cluster_member_set(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_cluster_member_clear(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_cluster_member_get(struct vms_proc *proc, unsigned long arg);
+/*
+ * FC-P0.9: the ONE per-node struct vms_cluster instance (design SS3.9 rule 3:
+ * "no globals except one per-node struct vms_cluster passed explicitly").
+ * VMS_IOCTL_CLUSTER_DIAG_PORT is the first ioctl to need it; later cluster
+ * ioctls (CLUSTER_START/STOP, CLUSTER_DIAG_CSB/_CONN/_LOCK, $GETSYI) call
+ * this SAME accessor rather than each keeping its own pointer. Defined in
+ * the shared kernel-core vms_lock.c, on every substrate. Mirror of the
+ * src/kernel/vms_internal.h decl.
+ */
+struct vms_cluster;
+struct vms_cluster *vms_cluster_node(void);
+long vms_ioctl_cluster_diag_port(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_SYSGEN_LOAD (FC-P0.10): mirror of the src/kernel/vms_internal.h
+ * decl -- loads the cluster SYSGEN parameters into vms_cluster_node()'s real
+ * struct vms_cluster.params (vms_cluster_sysgen.c). */
+long vms_ioctl_sysgen_load(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_START (FC-P0.11): mirror of the src/kernel/vms_internal.h
+ * decl -- the P0 "port up" semantic (vms_devtab.c). */
+long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg);
 
 /* ----------------------------------------------------------------
  * LOGICAL-NAME facility (LNM$SYSTEM/GROUP/JOB, rd vms-72da) -- DEFINED in
@@ -849,6 +913,19 @@ size_t vms_lnm_arena_size(void);
  * console self-check that the arena the executive wrote is the one d_mmap
  * publishes (pmap_extract + magic readback). */
 void   vms_lnm_arena_selftest(void);
+
+/* ----------------------------------------------------------------
+ * CLUSTER SEAM self-test (FC-P0.4, families SS14..SS18 of
+ * exec_kbackend.h) -- DEFINED in tests/netbsd/guest/cluster_seam.c,
+ * the R3 substrate-contract test. Follows vms_lnm_arena_selftest's
+ * exact pattern: called once from vms_netbsd.c's MODULE_CMD_INIT,
+ * exercises the real exec_lan_, exec_kthread_, exec_timer_,
+ * exec_time_now_vms and exec_ticks_ms bindings directly (no ioctl --
+ * vms_pe.c does not call the seam until FC-P0.9) and prints PASS/
+ * FAIL/SKIP lines to the console for the harness to grep.
+ * ---------------------------------------------------------------- */
+void   vms_cluster_seam_selftest(void);
+
 long   vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg);
 long   vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg);
 long   vms_ioctl_lnm_getscope(struct vms_proc *proc, unsigned long arg);
@@ -866,6 +943,11 @@ void vms_acp_init(void);
 void vms_acp_cleanup(void);
 long vms_ioctl_acp_mount(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_dmount(struct vms_proc *proc, unsigned long arg);
+/* Enumerate this node's standing cluster-registrable system locks (vms-1f4): one
+ * entry (resname + local lkid + mode) per mounted volume holding its F11B$v lock.
+ * A READ of real lock state for scsd's directory-rebuild registration. Mirror of
+ * the src/kernel/vms_internal.h decl (#928: kernel-core ops in BOTH headers). */
+long vms_ioctl_dlm_enum_standing(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_assign(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg);
@@ -908,6 +990,18 @@ uint32_t vms_devtab_disk_backing(const char *devnam,
  * the shared kernel-core, on every substrate.
  */
 void vms_devtab_note_io_error(uint32_t major, uint32_t minor);
+
+/*
+ * FC-P0.9: PEA0:'s discovery of the same NIC ETH0: was already bound to at
+ * boot, and PEA0:'s entry into the device table once the port glue has
+ * actually opened it. Both internal (non-ioctl): `netif` is INV-4 and never
+ * crosses /dev/vms. SS$_NORMAL / SS$_BADPARAM / SS$_NOSUCHDEV / SS$_INSFMEM.
+ * A pure table read/write, like vms_devtab_note_io_error above -- defined
+ * ONCE in the shared kernel-core vms_devtab.c, on every substrate (unlike
+ * disk_backing below, this needs no NetBSD-specific override).
+ */
+uint32_t vms_devtab_eth0_netif(char *out, uint32_t outsz);
+int vms_devtab_add_pea(const char *netif);
 
 /*
  * Transient twin of the above for INITIALIZE.EXE (rd vms-f60, vms_blockdev_

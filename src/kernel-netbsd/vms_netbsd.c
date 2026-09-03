@@ -1239,6 +1239,10 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	 * that in-kernel wait can return -ERESTARTSYS, which vms_facility_errno maps
 	 * to ERESTART so the ioctl restarts, exactly as the event-flag WAITFR path
 	 * does. GET_RESMASTER is a read-only DLM directory/mastering view.
+	 * DLM_XNODE (FC-P0.12, dispatch parity with the Linux vms_module.c switch,
+	 * vms-94c/DLM epic vms-7fa rung 1) delivers a decoded remote DLM request to
+	 * vms_lock_dlm_xnode_dispatch; rung 1 returns SS$_UNSUPPORTED (no fabricated
+	 * cross-node grant, INV-6).
 	 */
 	case VMS_IOCTL_ENQ:
 	case VMS_IOCTL_DEQ:
@@ -1248,9 +1252,14 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_DLM_MEMBER_DEPART:
 	case VMS_IOCTL_DLM_GET_GRANTED:
 	case VMS_IOCTL_DLM_ENUM_WAITS:
+	case VMS_IOCTL_DLM_ENUM_STANDING:
+	case VMS_IOCTL_DLM_XNODE:
 	case VMS_IOCTL_CLUSTER_MEMBER_SET:
 	case VMS_IOCTL_CLUSTER_MEMBER_CLEAR:
 	case VMS_IOCTL_CLUSTER_MEMBER_GET:
+	case VMS_IOCTL_CLUSTER_DIAG_PORT:
+	case VMS_IOCTL_SYSGEN_LOAD:
+	case VMS_IOCTL_CLUSTER_START:
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -1273,12 +1282,22 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_dlm_get_granted(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_DLM_ENUM_WAITS:
 			r = vms_ioctl_dlm_enum_waits(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_DLM_ENUM_STANDING:
+			r = vms_ioctl_dlm_enum_standing(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_DLM_XNODE:
+			r = vms_ioctl_dlm_xnode(proc, (unsigned long)uarg);      break;
 		case VMS_IOCTL_CLUSTER_MEMBER_SET:
 			r = vms_ioctl_cluster_member_set(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_CLUSTER_MEMBER_CLEAR:
 			r = vms_ioctl_cluster_member_clear(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_CLUSTER_MEMBER_GET:
 			r = vms_ioctl_cluster_member_get(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_CLUSTER_DIAG_PORT:
+			r = vms_ioctl_cluster_diag_port(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_SYSGEN_LOAD:
+			r = vms_ioctl_sysgen_load(proc, (unsigned long)uarg);   break;
+		case VMS_IOCTL_CLUSTER_START:
+			r = vms_ioctl_cluster_start(proc, (unsigned long)uarg); break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}
@@ -1428,6 +1447,13 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * is after INIT returns, and vms_acp_init cannot fail (vmsfs_acp.c), so it
 		 * needs no unwind. Mirrors the Linux vms.ko init. */
 		vms_acp_init();
+		/* FC-P0.4: prove the cluster seam (SS14..SS18) at module load,
+		 * the same "self-test on the console" posture
+		 * vms_lnm_arena_selftest() takes for the arena seam above -- no
+		 * ioctl exists to drive exec_lan_, exec_kthread_ or
+		 * exec_timer_ yet (that is FC-P0.9), so this is how the R3 substrate-
+		 * contract test proves the real bindings on a booted node. */
+		vms_cluster_seam_selftest();
 		return 0;
 
 	case MODULE_CMD_FINI:

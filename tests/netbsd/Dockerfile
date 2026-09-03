@@ -152,6 +152,84 @@ COPY src/vmsfs/ods2/ods2_edit.c              /netbsd/guest-src/vmsfs/ods2/ods2_e
 COPY src/vmsfs/ods2/ods2_kcompat.h           /netbsd/guest-src/vmsfs/ods2/ods2_kcompat.h
 COPY src/vmsfs/ods2/ods2_block.h             /netbsd/guest-src/vmsfs/ods2/ods2_block.h
 COPY src/vmsfs/include/vmsfs/ods2.h          /netbsd/guest-src/vmsfs/include/vmsfs/ods2.h
+# --- FC-P0.1: the executive-resident VMScluster stack's LAN port layer + the
+# NetBSD half of the cluster seam (exec_kbackend.h families SS14..SS18). vms_pe.c
+# is in src/kernel-netbsd/Makefile's SRCS from its first commit, so the in-guest
+# module build needs it and its kernel-core headers staged. ---
+COPY src/kernel-core/vms_pe.c                /netbsd/guest-src/kernel-core/vms_pe.c
+COPY src/kernel-core/vms_pe.h                /netbsd/guest-src/kernel-core/vms_pe.h
+COPY src/kernel-core/vms_scs.h               /netbsd/guest-src/kernel-core/vms_scs.h
+COPY src/kernel-core/vms_cnxman.h            /netbsd/guest-src/kernel-core/vms_cnxman.h
+COPY src/kernel-core/vms_dlm_scs.h           /netbsd/guest-src/kernel-core/vms_dlm_scs.h
+COPY src/kernel-core/vms_dlm_proxy.h         /netbsd/guest-src/kernel-core/vms_dlm_proxy.h
+COPY src/kernel-core/vms_cluster.h           /netbsd/guest-src/kernel-core/vms_cluster.h
+COPY src/kernel-core/vms_cluster_snapshot.h  /netbsd/guest-src/kernel-core/vms_cluster_snapshot.h
+# --- FC-P3.6: the CLUB/CSB model + the CSB ten-state ladder, and the
+# RECNXINTERVAL/TIMVCFAIL reconnect loop. Both are in SRCS from their first
+# commit for the same reason vms_pe.c is, so the in-guest module build needs
+# them staged. ---
+COPY src/kernel-core/vms_cnxman_csb.c        /netbsd/guest-src/kernel-core/vms_cnxman_csb.c
+COPY src/kernel-core/vms_cnxman_csb.h        /netbsd/guest-src/kernel-core/vms_cnxman_csb.h
+COPY src/kernel-core/vms_cnxman_recnx_fsm.c  /netbsd/guest-src/kernel-core/vms_cnxman_recnx_fsm.c
+COPY src/kernel-core/vms_cnxman_recnx_fsm.h  /netbsd/guest-src/kernel-core/vms_cnxman_recnx_fsm.h
+# --- FC-P3.7: quorum arithmetic (tracking only) + the $GETSYI cluster
+# item-code projection. Same reason as FC-P3.6 above: both are in SRCS from
+# their first commit, so the in-guest module build needs them staged. ---
+COPY src/kernel-core/vms_cnxman_quorum.c     /netbsd/guest-src/kernel-core/vms_cnxman_quorum.c
+COPY src/kernel-core/vms_cnxman_quorum.h     /netbsd/guest-src/kernel-core/vms_cnxman_quorum.h
+COPY src/kernel-core/vms_cluster_api.c       /netbsd/guest-src/kernel-core/vms_cluster_api.c
+COPY src/kernel-core/vms_cluster_api.h       /netbsd/guest-src/kernel-core/vms_cluster_api.h
+# --- FC-P0.10: cluster SYSGEN parameters loaded into struct vms_cluster.
+# In SRCS from this commit (vms_cluster_sysgen.c), so the in-guest module
+# build needs it staged. ---
+COPY src/kernel-core/vms_cluster_sysgen.c    /netbsd/guest-src/kernel-core/vms_cluster_sysgen.c
+COPY src/kernel-core/vms_cluster_sysgen.h    /netbsd/guest-src/kernel-core/vms_cluster_sysgen.h
+# --- FC-P0.8: the NISCA channel state machine and the codec it builds every
+# frame through (FC-P0.6 shared + FC-P0.7 HELLO/SOLICIT). All three are in SRCS
+# from this commit for the same reason vms_pe.c is, so the in-guest module build
+# needs them staged. ---
+COPY src/kernel-core/vms_pe_fsm.c            /netbsd/guest-src/kernel-core/vms_pe_fsm.c
+COPY src/kernel-core/vms_pe_fsm.h            /netbsd/guest-src/kernel-core/vms_pe_fsm.h
+COPY src/kernel-core/vms_wire_types.h        /netbsd/guest-src/kernel-core/vms_wire_types.h
+COPY src/kernel-core/vms_cluster_codec.c     /netbsd/guest-src/kernel-core/vms_cluster_codec.c
+COPY src/kernel-core/vms_cluster_codec.h     /netbsd/guest-src/kernel-core/vms_cluster_codec.h
+COPY src/kernel-core/vms_cluster_codec_hello.c /netbsd/guest-src/kernel-core/vms_cluster_codec_hello.c
+COPY src/kernel-core/vms_cluster_codec_hello.h /netbsd/guest-src/kernel-core/vms_cluster_codec_hello.h
+# --- FC-P3.1 / FC-P3.5 / FC-P3.12: the VMS$VAXcluster SYSAP codec, the
+# state-transition barrier's PARTICIPANT side, the p. 7-42 Phase 2 commit both
+# halves share, and the COORDINATOR side. All are already in the NetBSD
+# module's SRCS (src/kernel-netbsd/Makefile) -- the codec and the barrier were
+# listed there without being staged here, which tests/netbsd/check_guest_payload.sh
+# reports; these lines close that and keep the new pair from repeating it. ---
+COPY src/kernel-core/vms_cluster_codec_cm.c  /netbsd/guest-src/kernel-core/vms_cluster_codec_cm.c
+COPY src/kernel-core/vms_cluster_codec_cm.h  /netbsd/guest-src/kernel-core/vms_cluster_codec_cm.h
+COPY src/kernel-core/vms_cnxman_phase2.c     /netbsd/guest-src/kernel-core/vms_cnxman_phase2.c
+COPY src/kernel-core/vms_cnxman_phase2.h     /netbsd/guest-src/kernel-core/vms_cnxman_phase2.h
+COPY src/kernel-core/vms_cnxman_barrier_fsm.c /netbsd/guest-src/kernel-core/vms_cnxman_barrier_fsm.c
+COPY src/kernel-core/vms_cnxman_barrier_fsm.h /netbsd/guest-src/kernel-core/vms_cnxman_barrier_fsm.h
+COPY src/kernel-core/vms_cnxman_coord_fsm.c  /netbsd/guest-src/kernel-core/vms_cnxman_coord_fsm.c
+COPY src/kernel-core/vms_cnxman_coord_fsm.h  /netbsd/guest-src/kernel-core/vms_cnxman_coord_fsm.h
+COPY src/kernel-core/vms_cluster_codec_vc.c /netbsd/guest-src/kernel-core/vms_cluster_codec_vc.c
+COPY src/kernel-core/vms_cluster_codec_vc.h /netbsd/guest-src/kernel-core/vms_cluster_codec_vc.h
+COPY src/kernel-core/vms_cluster_codec_blk.c /netbsd/guest-src/kernel-core/vms_cluster_codec_blk.c
+COPY src/kernel-core/vms_cluster_codec_blk.h /netbsd/guest-src/kernel-core/vms_cluster_codec_blk.h
+COPY src/kernel-core/vms_cluster_codec_scs.h /netbsd/guest-src/kernel-core/vms_cluster_codec_scs.h
+COPY src/kernel-netbsd/vms_lan_netbsd.c      /netbsd/guest-src/kmod/vms_lan_netbsd.c
+# FC-P0.4: cluster_seam.c (the R3 substrate-contract self-test for the cluster
+# seam, called from vms_netbsd.c's MODULE_CMD_INIT) lives under
+# tests/netbsd/guest/ in the repo but is staged INTO kmod/ (not probe/) here,
+# alongside the Makefile it builds with -- check_guest_payload.sh's resolve()
+# only checks kernel-netbsd/ and kernel-core/ (the src/vmsfs/ods2 precedent,
+# docs memory netbsd-module-srcs-four-places), so this staging line is NOT
+# gate-verified and must be kept in sync by hand.
+COPY tests/netbsd/guest/cluster_seam.c       /netbsd/guest-src/kmod/cluster_seam.c
+# --- FC-P0.5: the cluster FORK CONTEXT. vms_cluster_fork.c is the pure queue/
+# dispatch half (no substrate type at all) and vms_cluster_fork_bind.c binds its
+# ops to exec_kthread_*/exec_timer_*/exec_mutex_*; both are in the NetBSD
+# module's SRCS from their first commit, so the in-guest build needs them. ---
+COPY src/kernel-core/vms_cluster_fork.c      /netbsd/guest-src/kernel-core/vms_cluster_fork.c
+COPY src/kernel-core/vms_cluster_fork.h      /netbsd/guest-src/kernel-core/vms_cluster_fork.h
+COPY src/kernel-core/vms_cluster_fork_bind.c /netbsd/guest-src/kernel-core/vms_cluster_fork_bind.c
 # --- probe/: the userspace tools + the NetBSD transport seam ---
 COPY tests/netbsd/guest/vmsprobe.c           /netbsd/guest-src/probe/vmsprobe.c
 COPY tests/netbsd/guest/vmseflag.c           /netbsd/guest-src/probe/vmseflag.c

@@ -323,6 +323,19 @@ uint32_t vms_kif_get_resmaster(const char *resnam, uint32_t *found,
                                uint32_t *n_granted,
                                uint32_t *remote_holder_csid);
 
+/* Enumerate this node's STANDING cluster-registrable system locks (vms-1f4): on
+ * return *out holds the standing locks the executive genuinely holds (the F11B$v
+ * volume lock a MOUNT holds) -- out->count entries, each resname + local lkid +
+ * mode. scsd registers these to the coordinator during a directory rebuild. A
+ * READ of real lock state; fail-honest (SS$_NOSUCHDEV) when /dev/vms is absent.
+ *
+ * OVMX-UNWIRED: vms_kif_dlm_enum_standing (vms-1f4) -- the enumeration accessor
+ * (Layer 2). Its product caller is Layer 3 (vms-74f): scsd calls this to fetch
+ * the node's standing locks and register them to the coordinator. Not on a
+ * product path yet -- only the QEMU test exercises it. REMOVE this marker when
+ * Layer 3 wires scsd (else the census flags a stale marker). */
+uint32_t vms_kif_dlm_enum_standing(struct vms_dlm_enum_standing_args *out);
+
 /* Dispatch a decoded cross-node DLM request to the kernel lock manager's
  * cross-node handler (vms-94c, DLM epic vms-7fa rung 1).
  * OVMX-UNWIRED: vms_kif_dlm_xnode (vms-94c) -- the DLM message TRANSPORT reaches
@@ -415,6 +428,28 @@ uint32_t vms_kif_cluster_member_clear(uint32_t csid);
 uint32_t vms_kif_cluster_get_members(struct vms_cluster_member *out_members,
                                      uint32_t max_members,
                                      uint32_t *out_n_members);
+
+/*
+ * vms_kif_sysgen_load - VMS_IOCTL_SYSGEN_LOAD (FC-P0.10). Loads the cluster
+ * SYSGEN parameters + CLUSTER_AUTHORIZE record the caller filled into *args
+ * into the executive's real struct vms_cluster. WIRED: STARTUP.EXE's
+ * cluster-sysgen loader (ovmx_init.c) calls this once, before
+ * VMS_IOCTL_CLUSTER_START (FC-P0.11). See src/kernel/vms_ioctl.h for the
+ * field-by-field contract and the negctl (VAXCLUSTER >= 1 with no SCSNODE).
+ */
+uint32_t vms_kif_sysgen_load(struct vms_sysgen_load_args *args);
+
+/*
+ * vms_kif_cluster_start - VMS_IOCTL_CLUSTER_START (FC-P0.11). The P0
+ * "port up" semantic only: starts the fork thread if needed, then
+ * vms_pe_start() (FC-P0.9) against the executive's vms_cluster_node().
+ * WIRED: STARTUP.EXE's boot path (ovmx_init.c) calls this once, after
+ * load_cluster_sysgen_params(), gated on VAXCLUSTER != 0
+ * (cluster_boot_gate.h). `out_port_up`, if non-NULL, receives whether
+ * PEA0: is up when this call returns (1) or not (0) -- honest either way,
+ * never asserted true on a refused start.
+ */
+uint32_t vms_kif_cluster_start(uint32_t *out_port_up);
 
 /*
  * vms_kif_dlm_xnode_blkast - the BLKAST-WIRE half of the cross-node DLM receive

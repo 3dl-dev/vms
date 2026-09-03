@@ -16,6 +16,10 @@
  *
  *   exec_lock_t          == kmutex_t            (kmutex(9), IPL_NONE/adaptive)
  *   exec_cv_t            == kcondvar_t          (cv(9))
+ *   exec_rxlock_t        == kmutex_t            (kmutex(9), SPIN, EXEC_LAN_RX_IPL --
+ *                                                FC-P0.16, the ONE receive-level lock
+ *                                                class, used only by the cluster fork
+ *                                                queue; see SS1b below)
  *   exec_lock/unlock     -> mutex_enter / mutex_exit
  *   exec_lock_destroy    -> mutex_destroy       (NOT a no-op here: a kmutex owns
  *                                                resources and MUST be destroyed)
@@ -86,6 +90,8 @@
 #include <sys/kauth.h>     /* kauth_cred_get, kauth_authorize_generic (Phase F) */
 #include <sys/errno.h>     /* EWOULDBLOCK, EINTR, ERESTART (Phase G cv timeout) */
 #include <sys/atomic.h>    /* membar_producer / membar_consumer (vms-d61) */
+#include <sys/callout.h>   /* struct callout (exec_timer_t, SS16 -- FC-P0.1) */
+#include <sys/intr.h>      /* IPL_NET (exec_rxlock_t's EXEC_LAN_RX_IPL, FC-P0.16) */
 
 /* ---- primitive types ---- */
 typedef kmutex_t   exec_lock_t;
@@ -128,6 +134,49 @@ static __inline int
 exec_trylock(exec_lock_t *l)
 {
 	return mutex_tryenter(l);
+}
+
+/* ---- 1b. receive-level lock (FC-P0.16, exec_kbackend.h SS1b / design SS3.2.3
+ * RULING) ----
+ * exec_lock_t above is an IPL_NONE kmutex -- entering it above IPL_NONE (the
+ * qe/xq receive path) is a NetBSD panic, not a slow path, which is why the
+ * cluster fork queue (the ONE object the core shares between receive and
+ * thread context) needs its own lock class. mutex_init's ipl argument being
+ * non-IPL_NONE is what selects a SPIN mutex rather than an adaptive one
+ * (kmutex(9)): a spin mutex raises the CPU to its IPL for the critical
+ * section, which is the direct NetBSD analogue of Linux's irqsave.
+ * exec_rxflags_t carries no state here -- the IPL is captured in the mutex
+ * itself -- but the type exists so cf_bind.c's call sites are identical on
+ * both substrates.
+ */
+typedef kmutex_t exec_rxlock_t;
+typedef int      exec_rxflags_t;      /* unused: IPL is in the mutex */
+#define EXEC_LAN_RX_IPL IPL_NET       /* qe/xq deliver at/below this (FC-P0.3/P0.4 finding) */
+
+static __inline void
+exec_rxlock_init(exec_rxlock_t *l)
+{
+	mutex_init(l, MUTEX_DEFAULT, EXEC_LAN_RX_IPL);
+}
+
+static __inline void
+exec_rxlock_destroy(exec_rxlock_t *l)
+{
+	mutex_destroy(l);
+}
+
+static __inline void
+exec_rxlock_acquire(exec_rxlock_t *l, exec_rxflags_t *flags)
+{
+	(void)flags;
+	mutex_spin_enter(l);
+}
+
+static __inline void
+exec_rxlock_release(exec_rxlock_t *l, exec_rxflags_t *flags)
+{
+	(void)flags;
+	mutex_spin_exit(l);
 }
 
 /* ---- 2. wait / wake (cv-shaped; see exec_kbackend.h) ---- */
@@ -194,6 +243,25 @@ static __inline void
 exec_cv_destroy(exec_cv_t *cv)
 {
 	cv_destroy(cv);
+}
+
+/*
+ * exec_cv_wait_rx (FC-P0.16, exec_kbackend.h SS1b) -- the SS2 cv contract with
+ * an exec_rxlock_t (a spin kmutex) as the interlock, THREAD CONTEXT ONLY (the
+ * fork thread is the sole caller: cf_bind.c's cfb_wait). cv_wait(9) atomically
+ * drops `l', sleeps, and re-acquires `l' before returning -- exactly the
+ * contract's "enqueue under l, drop l, sleep, re-acquire l" -- and, unlike
+ * cv_wait_sig, never returns early on a signal, matching the contract's "no
+ * signal semantics needed" (the fork thread's stop is a predicate, not a
+ * signal). cv_wait(9) is documented to work with a spin mutex exactly as with
+ * an adaptive one. Always returns 0.
+ */
+static __inline int
+exec_cv_wait_rx(exec_cv_t *cv, exec_rxlock_t *l, exec_rxflags_t *flags)
+{
+	(void)flags;
+	cv_wait(cv, l);
+	return 0;
 }
 
 /* ---- 3. user <-> kernel copy ----
@@ -819,5 +887,75 @@ long exec_l2_send(exec_socket_t s, int ifindex, uint16_t ethertype,
 		  const uint8_t dst_mac[6], const void *frame, size_t len);
 int  exec_l2_recv(exec_socket_t s, void *buf, size_t buf_len,
 		  uint32_t timeout_ms, size_t *out_len);
+
+/* ================================================================
+ * SS14..SS18  The cluster seam (FC-P0.1) -- CONTRACT-ONLY STUBS.
+ *
+ * The NetBSD half of the contract frozen in exec_kbackend.h SS14..SS18 (read
+ * CONTRACT RULES 1 and 2 there first). These declarations are the substrate-
+ * neutrality proof: the whole cluster seam is expressible in NetBSD terms --
+ * not one signature names a Linux type, an sk_buff, a netdev or a jiffy.
+ *
+ * The DEFINITIONS live in vms_lan_netbsd.c and are honest stubs returning
+ * SS$_NOSUCHDEV today (the SS8/SS11/SS13 contract-only-twin posture: they open
+ * nothing and fabricate nothing, INV-6 / Rule 9). FC-P0.3 records which
+ * link-layer receive hook the rail's NetBSD actually has (pfil(9) on
+ * ifp->if_pfil vs an ifp->if_input shim) and at which IPL qe/xq deliver; FC-P0.4
+ * then lands the real binding -- if_transmit for xmit, if_mcast_op for
+ * multicast, kthread(9), callout(9), getnanotime/getnanouptime, printf(9) --
+ * and proves it with the rung-3 substrate contract test on the NetBSD-VAX rail.
+ *
+ * Types, unlike the ops, are REAL now, because the core embeds them by value and
+ * their SIZE is part of the ABI FC-P0.4 must not change:
+ *   exec_kthread_t  the lwp plus the stop flag / condvar kthread_join(9) needs
+ *                   (NetBSD has no kthread_should_stop(9) reading `curlwp`, so
+ *                   the flag is ours -- which is exactly why the portable
+ *                   contract passes the handle to exec_kthread_should_stop).
+ *   exec_timer_t    a callout(9) plus the {cb, ctx} pair callout_setfunc takes.
+ *                   callout_destroy(9) is mandatory on this substrate, which is
+ *                   why SS16 has a _destroy op at all.
+ * ================================================================ */
+
+typedef struct exec_kthread {
+	struct lwp   *lwp;      /* kthread_create(9)'s lwp; NULL when not running */
+	kmutex_t      mtx;      /* guards `stop` and pairs with `cv` */
+	kcondvar_t    cv;       /* the fork loop sleeps here; stop wakes it */
+	volatile int  stop;     /* nonzero once exec_kthread_stop was called */
+} exec_kthread_t;
+
+typedef struct exec_timer {
+	struct callout co;
+	void (*cb)(void *);
+	void *ctx;
+} exec_timer_t;
+
+int  exec_lan_open(const char *ifname, uint16_t ethertype,
+		   exec_lan_rx_cb_t rx_cb, void *ctx);
+void exec_lan_close(void);
+int  exec_lan_xmit(const uint8_t *frame, uint32_t len);
+int  exec_lan_mc_add(const uint8_t mac[6]);
+int  exec_lan_mc_del(const uint8_t mac[6]);
+int  exec_lan_hwaddr(uint8_t out[6]);
+int  exec_lan_mtu(uint32_t *out);
+int  exec_lan_link_up(int *out);
+
+int  exec_kthread_create(exec_kthread_t *t, int (*fn)(void *), void *arg,
+			 const char *name);
+void exec_kthread_stop(exec_kthread_t *t);
+int  exec_kthread_should_stop(exec_kthread_t *t);
+
+void exec_timer_init(exec_timer_t *t, void (*cb)(void *), void *ctx);
+void exec_timer_arm(exec_timer_t *t, uint32_t ms);
+void exec_timer_cancel(exec_timer_t *t);
+void exec_timer_destroy(exec_timer_t *t);
+
+uint64_t exec_time_now_vms(void);
+uint64_t exec_ticks_ms(void);
+
+/* SS18: a macro for the same reason the Linux side is one -- the format string
+ * reaches printf(9) directly, so the compiler checks the call site. This one is
+ * ALREADY the real binding (printf(9) writes the NetBSD console, which is OPA0:
+ * on the VAX rail); FC-P0.4 does not need to revisit it. */
+#define exec_console_printf(fmt, ...) printf(fmt, ##__VA_ARGS__)
 
 #endif /* OVMX_EXEC_KBACKEND_NETBSD_H */

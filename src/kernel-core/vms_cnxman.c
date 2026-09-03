@@ -47,13 +47,17 @@
  * through exec_kbackend.h and the FC-P0.5 fork API -- no <linux/...>, no
  * <sys/...>, ever (tools/ci/cluster_core_includes_gate.sh).
  *
- * SS3.5 E31 -- THE CONNECT DATA. `cnxman_join_cfg.conndata_valid` is left 0
- * here: this file bakes in no captured constant and supplies no substitute of
- * its own (the strawman's replayed `01 1b 01 03 ...` is exactly what INV-6
- * forbids). The join then sends an explicit counted zero and counts the
- * omission itself (vms_cnxman_join_fsm.h "WHAT THIS FILE REFUSES TO INVENT",
- * C). This is an OPERATOR-RESERVED identity decision (integration note E31),
- * not a default this glue may choose.
+ * SS3.5 E31 -- THE CONNECT DATA. `cnxman_join_cfg.conndata` is now
+ * `cnxman_e31_conndata` (defined above), the operator-ruled CM protocol
+ * version/tail this glue read off a real VAX's own JOINER->MEMBER
+ * CONNECT_REQ (op06-join-20260903.pcap, integration note E31). This is NOT
+ * the strawman's baked node-identity replay INV-6 forbids -- it is a
+ * protocol-version quad OVMX's own CM genuinely implements, peer-checked
+ * (p. 2-25's REJECT right) the same way a version handshake always is; the
+ * node/role span [4:11] the capture shows a real joiner also zeroing stays
+ * zero here, still an honest omission, not invented. Before this ruling the
+ * join sent an explicit counted zero there and a real VAX rejected it; see
+ * vms_cnxman_join_fsm.h "WHAT THIS FILE REFUSES TO INVENT", C.
  *
  * SS3.7 E29 -- ACTING ON A CLOSE REASON. `scs_sysap_ops.closed()`'s `reason`
  * arrives here as the RAW `enum scs_close_reason` (design SS3.2.2 keeps SS$_
@@ -96,6 +100,33 @@
  * ========================================================================== */
 #define CNXMAN_VC_CREDITS   4u   /* one command/response at a time per peer */
 #define CNXMAN_MSCP_CREDITS 4u   /* matches CNXMAN_JOIN_MSCP_CREDITS */
+
+/*
+ * E31 -- the VMS$VAXcluster connect data's version/protocol quad + tail
+ * (spec SS4(N), integration note E31). Decoded byte-verified from a real
+ * VAX's own JOINER->MEMBER CONNECT_REQ (tests/lab/captures/
+ * op06-join-20260903.pcap, frames 64/72, abs [94:98] and [105:110],
+ * IDENTICAL both directions): this is the Connection Managers' PROTOCOL
+ * VERSION handshake (p. 2-25), peer-CHECKED with a REJECT right attached --
+ * not a node identity (SCSNODE/SCSSYSTEMID/the OS-identity broadcast stay
+ * exactly what they already are, untouched). Sending it is honest: OVMX's
+ * CM genuinely implements this wire protocol, the same way declaring
+ * "HTTP/1.1" is not a claim to be a particular server. OPERATOR RULING
+ * (E31, 2026-09-03): send the grounded constant so a real VAX ACCEPTs the
+ * join, in place of the honest-but-rejected all-zero this glue sent while
+ * the identity question was open.
+ *
+ * bytes [4:11] (7 bytes) stay ZERO -- spec SS4(N) grounds ONLY the version
+ * quad and the tail; that middle span is node/role-dependent and its
+ * meaning is still the SS4(N) gap. A real JOINER's own [98:105] (the same
+ * capture) IS all-zero, so this is not an omission needing a value, it is
+ * the grounded joiner behaviour.
+ */
+static const uint8_t cnxman_e31_conndata[VMS_SCS_PROCNAME_LEN] = {
+	0x01, 0x1b, 0x01, 0x03,             /* [0:4]  CM version/protocol quad */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* [4:11] node/role, joiner=0 */
+	0x08, 0x00, 0x00, 0x06, 0x00        /* [11:16] tail constant            */
+};
 
 /*
  * The glue's own timer identity space, on CF_OWNER_CNXMAN. `enum cnxman_timer`
@@ -358,11 +389,6 @@ static int cnxman_jop_connect(void *ctx, vms_scs_sysid_t dst,
 	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
 	int status;
 
-	(void)conndata; /* scs_connect() carries no connect-data parameter of
-			 * its own (vms_scs.h SS5); the 16-byte SCA field is
-			 * SCS's own connect-verb payload (SS4(N)), built by
-			 * the CONNECT-REQ frame itself, not passed through
-			 * this glue-level seam. */
 	(void)credits;  /* the registered SYSAP's OWN initial_credits governs
 			 * (scs_connect() reads it from the registry, vms_scs.c
 			 * SS8) -- there is no per-call override in vms_scs.h. */
@@ -370,7 +396,7 @@ static int cnxman_jop_connect(void *ctx, vms_scs_sysid_t dst,
 	if (cn->cl->scs == NULL)
 		return (int)SS__NOSUCHDEV;
 	status = scs_connect(cn->cl->scs, local_name, remote_name, dst,
-			     out_conid);
+			     conndata, out_conid);
 	if (status != (int)SS__NORMAL)
 		return status;
 
@@ -790,10 +816,15 @@ static void cnxman_vc_closed(void *ctx, vms_conid_t local_conid,
 
 			if (cn->cl->scs == NULL)
 				break;
+			/* Same VMS$VAXcluster CONNECT_REQ verb the join sends,
+			 * so it carries the same E31 protocol-version conndata
+			 * -- a reconnect that went out all-zero would hit the
+			 * identical real-VAX REJECT the join did. */
 			rc = scs_connect(cn->cl->scs,
 					 cnxman_join_name_vaxcluster,
 					 cnxman_join_name_vaxcluster,
-					 csb->sysid, &new_conid);
+					 csb->sysid, cnxman_e31_conndata,
+					 &new_conid);
 			if (rc == (int)SS__NORMAL) {
 				csb->cdt_conid = new_conid;
 				cn->reconnects_issued++;
@@ -1040,9 +1071,12 @@ static void cnxman_act_on_recnx_rec(struct vms_cnxman *cn,
 
 		if (cn->cl->scs == NULL)
 			break;
+		/* Same VMS$VAXcluster CONNECT_REQ verb the join sends -- E31's
+		 * protocol-version conndata, not the all-zero a real VAX
+		 * rejects. */
 		rc = scs_connect(cn->cl->scs, cnxman_join_name_vaxcluster,
 				 cnxman_join_name_vaxcluster, csb->sysid,
-				 &new_conid);
+				 cnxman_e31_conndata, &new_conid);
 		if (rc == (int)SS__NORMAL) {
 			csb->cdt_conid = new_conid;
 			cn->reconnects_issued++;
@@ -1189,12 +1223,16 @@ int vms_cnxman_start(struct vms_cluster *cl)
 	/*
 	 * E31: this node's own identity, as read from real executive state.
 	 * Nothing here is asserted that the executive does not hold: model/
-	 * version/params/conndata/dir_descriptor all stay `_valid = 0` --
-	 * every one of those fields is an operator-reserved or lab-pinned
-	 * decision (E31, the LOCKDIRWT/params offsets, E24's directory
-	 * descriptor), never this glue's default to invent.
+	 * version/params/dir_descriptor stay `_valid = 0` -- every one of
+	 * those fields is still an operator-reserved or lab-pinned decision
+	 * (the LOCKDIRWT/params offsets FC-P3.2, E24's directory descriptor),
+	 * never this glue's default to invent. `conndata` is the one field
+	 * with an operator ruling behind it (E31, above): the grounded CM
+	 * protocol quad, not a default.
 	 */
 	memset(&cfg, 0, sizeof(cfg));
+	cfg.conndata_valid = 1u;
+	memcpy(cfg.conndata, cnxman_e31_conndata, VMS_SCS_PROCNAME_LEN);
 	cnxman_join_set_cfg(&cn->join, &cfg);
 
 	status = (int)scs_sysap_listen(cl->scs, cnxman_join_name_vaxcluster,
@@ -1387,9 +1425,12 @@ int cnxman_disk_client_connect(struct vms_cluster *cl, vms_scs_sysid_t dst,
 	if (cl->cnxman == NULL || cl->scs == NULL)
 		return (int)SS__NOSUCHDEV;
 	/* The two names are vms_cnxman_join_fsm.c's, which is where the ONE
-	 * spelling of each lives; no caller re-types them. */
+	 * spelling of each lives; no caller re-types them. NULL conndata: E31
+	 * grounds the VMS$VAXcluster CM version quad only -- MSCP$DISK's own
+	 * connect data is a different, ungrounded field this glue must not
+	 * invent. */
 	return scs_connect(cl->scs, cnxman_join_name_disk_cl_drvr,
-			   cnxman_join_name_mscp_disk, dst, out_conid);
+			   cnxman_join_name_mscp_disk, dst, NULL, out_conid);
 }
 
 /* ==========================================================================

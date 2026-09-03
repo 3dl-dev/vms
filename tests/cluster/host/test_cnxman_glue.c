@@ -23,8 +23,9 @@
  *
  *   2. THE BINDINGS THEMSELVES, read out of the SHIPPING vms_cnxman.c: the
  *      SYSAP registration, the join/barrier/coordinator dispatch order, the
- *      E3 preload call sites, the E31 conndata honesty (no replayed
- *      constant), the E29 close-reason routing, the $SETCLUEVT AST-queue
+ *      E3 preload call sites, the E31 conndata (the operator-ruled, pcap-
+ *      grounded CM protocol constant, named and comment-grounded, not an
+ *      invented default), the E29 close-reason routing, the $SETCLUEVT AST-queue
  *      pattern, and the CLUB/CSB query functions CLUSTER_DIAG_CSB and SHOW
  *      CLUSTER read.
  *
@@ -417,11 +418,6 @@ static void check_has(const char *needle, const char *what)
 	ct_check(strstr(glue_src, needle) != NULL, what);
 }
 
-static void check_absent(const char *needle, const char *what)
-{
-	ct_check(strstr(glue_src, needle) == NULL, what);
-}
-
 static void test_glue_bindings(void)
 {
 	printf("-- the bindings, read out of src/kernel-core/vms_cnxman.c --\n");
@@ -485,13 +481,28 @@ static void test_glue_bindings(void)
 		  "... copied from the CLUB's own real running value, not "
 		  "invented");
 
-	/* E31: no replayed connect-data constant, ever. */
-	check_absent("0x01, 0x1b, 0x01, 0x03",
-		     "E31: the strawman's replayed connect-data constant is "
-		     "NOT present anywhere in this file");
+	/*
+	 * E31 (operator ruling, 2026-09-03): the grounded CM protocol
+	 * version/tail constant, decoded byte-verified off a real VAX's own
+	 * JOINER->MEMBER CONNECT_REQ (op06-join-20260903.pcap frames 64/72),
+	 * IS now present and IS what cfg.conndata carries -- this replaces
+	 * the pre-ruling assertion that no such constant existed anywhere in
+	 * this file (that assertion encoded the honest-but-REJECTED all-zero
+	 * state, now superseded).
+	 */
+	check_has("0x01, 0x1b, 0x01, 0x03",
+		  "E31: the operator-ruled CM protocol version quad is present, "
+		  "named and comment-grounded in the pcap + the ruling");
+	check_has("cfg.conndata_valid = 1u",
+		  "E31: conndata is explicitly marked valid, not left the "
+		  "default omission");
+	check_has("memcpy(cfg.conndata, cnxman_e31_conndata",
+		  "E31: conndata is the named grounded constant, not an "
+		  "inline replay");
 	check_has("memset(&cfg, 0, sizeof(cfg))",
-		  "E31: this node's own identity struct starts fully zeroed "
-		  "(conndata_valid included) -- no default is baked in");
+		  "E31: every OTHER identity field (model/version/params/"
+		  "dir_descriptor) still starts fully zeroed -- only conndata "
+		  "has an operator ruling behind it");
 
 	/* E29. */
 	check_has("SCS_CLOSE_REJECTED",

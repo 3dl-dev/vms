@@ -873,7 +873,7 @@ int scs_sysap_unlisten(struct vms_scs *scs, const uint8_t *name)
  */
 int scs_connect(struct vms_scs *scs, const uint8_t *local_name,
 		const uint8_t *remote_name, vms_scs_sysid_t dst,
-		vms_conid_t *out_conid)
+		const uint8_t *conndata, vms_conid_t *out_conid)
 {
 	struct scs_connect_args args;
 	struct scs_sysap_info info;
@@ -886,6 +886,7 @@ int scs_connect(struct vms_scs *scs, const uint8_t *local_name,
 	memset(&args, 0, sizeof(args));
 	args.local_name = local_name;
 	args.remote_name = remote_name;
+	args.conndata = conndata;
 	args.sysap = scs_fsm_sysap_ops(&scs->fsm, local_name);
 	args.dst = dst;
 	args.initial_credits = info.initial_credits;

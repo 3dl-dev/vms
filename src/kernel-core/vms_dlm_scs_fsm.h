@@ -75,7 +75,7 @@
  *     exactly the class of guess that produced LOCKMGRERR on two real VAXes.
  *     So a POST_DEQ is REFUSED (DLM_REQ_E_NOWIREOP) and COUNTED in
  *     `releases_no_wire_op` -- a measured, reportable gap, not a silent one.
- *     ***THIS IS THE OPEN HALF OF INTEGRATION NOTE E6.*** Rundown now COLLECTS
+ *     THIS IS THE OPEN HALF OF INTEGRATION NOTE E6. Rundown now COLLECTS
  *     the release and posts it from a blockable context (the foundation
  *     commit's lock_sweep_run); what it cannot yet do is put it on the wire,
  *     and that needs an opcode from the lab, not from this file.

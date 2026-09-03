@@ -53,6 +53,7 @@
  */
 #include "vms_cluster.h"
 #include "vms_cluster_snapshot.h"
+#include "vms_cluster_sysgen.h"
 #include "vms_pe.h"
 
 /*
@@ -1710,6 +1711,87 @@ long vms_ioctl_cluster_diag_port(struct vms_proc *proc, unsigned long arg)
                 (unsigned)args.row, (unsigned)args.index, (unsigned)status);
 
     args.status = status;
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * sysgen_load_args_to_params - copy VMS_IOCTL_SYSGEN_LOAD's wire struct
+ * (struct vms_sysgen_load_args, vms_ioctl.h / vms_lock_nb.h) into
+ * struct vms_cluster_params (vms_cluster.h). The two are the SAME fields in
+ * the SAME order by construction (the ioctl header's own comment), but this
+ * copies field-by-field rather than trusting a memcpy across two separately
+ * declared structs: a future edit that drops a field here is a compile
+ * error, not a silent layout drift.
+ */
+static void sysgen_load_args_to_params(const struct vms_sysgen_load_args *args,
+                                        struct vms_cluster_params *out)
+{
+    memset(out, 0, sizeof(*out));
+
+    memcpy(out->scsnode, args->scsnode, sizeof(out->scsnode));
+    out->scsnode_len = args->scsnode_len;
+    out->scssystemid = ((uint64_t)args->scssystemid_hi << 32) |
+                        (uint64_t)args->scssystemid_lo;
+
+    out->votes = args->votes;
+    out->expected_votes = args->expected_votes;
+    out->qdskvotes = args->qdskvotes;
+    out->recnxinterval = args->recnxinterval;
+    out->timvcfail = args->timvcfail;
+    out->cluster_credits = args->cluster_credits;
+
+    out->vaxcluster = args->vaxcluster;
+    out->lockdirwt = args->lockdirwt;
+    out->alloclass = args->alloclass;
+    out->mscp_load = args->mscp_load;
+    out->mscp_serve_all = args->mscp_serve_all;
+
+    out->niscs_max_pktsz = args->niscs_max_pktsz;
+
+    memcpy(out->disk_quorum, args->disk_quorum, sizeof(out->disk_quorum));
+    out->disk_quorum_len = args->disk_quorum_len;
+
+    out->auth_group = args->auth_group;
+    memcpy(out->auth_password, args->auth_password, sizeof(out->auth_password));
+    out->auth_password_len = args->auth_password_len;
+    out->auth_valid = args->auth_valid;
+}
+
+/*
+ * vms_ioctl_sysgen_load - VMS_IOCTL_SYSGEN_LOAD (FC-P0.10, design plan row
+ * FC-P0.10). STARTUP.EXE's own case of SYSBOOT: decodes the wire copy of the
+ * cluster SYSGEN parameters + the CLUSTER_AUTHORIZE record and hands them to
+ * cluster_sysgen_load() (vms_cluster_sysgen.c), the pure validate-then-commit
+ * body, against vms_cluster_node()'s real per-node struct vms_cluster.
+ *
+ * The negctl this ioctl's plan row requires -- VAXCLUSTER >= 1 with no
+ * SCSNODE loaded -- is cluster_sysgen_load()'s own refusal: SS$_BADPARAM
+ * here, logged, and struct vms_cluster.params left at its PRIOR honest state
+ * (INV-6: never a half-written or fabricated identity).
+ */
+long vms_ioctl_sysgen_load(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_sysgen_load_args args;
+    struct vms_cluster_params params;
+    struct vms_cluster *cl = vms_cluster_node();
+    int ok;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    sysgen_load_args_to_params(&args, &params);
+    ok = cluster_sysgen_load(cl, &params);
+
+    if (!ok)
+        pr_info("vms: SYSGEN_LOAD refused (VAXCLUSTER %u, SCSNODE length %u) -> SS$ %u\n",
+                (unsigned)args.vaxcluster, (unsigned)args.scsnode_len,
+                (unsigned)SS__BADPARAM);
+
+    args.status = ok ? SS__NORMAL : SS__BADPARAM;
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;

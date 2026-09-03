@@ -430,6 +430,16 @@ uint32_t vms_kif_cluster_get_members(struct vms_cluster_member *out_members,
                                      uint32_t *out_n_members);
 
 /*
+ * vms_kif_sysgen_load - VMS_IOCTL_SYSGEN_LOAD (FC-P0.10). Loads the cluster
+ * SYSGEN parameters + CLUSTER_AUTHORIZE record the caller filled into *args
+ * into the executive's real struct vms_cluster. WIRED: STARTUP.EXE's
+ * cluster-sysgen loader (ovmx_init.c) calls this once, before
+ * VMS_IOCTL_CLUSTER_START (FC-P0.11). See src/kernel/vms_ioctl.h for the
+ * field-by-field contract and the negctl (VAXCLUSTER >= 1 with no SCSNODE).
+ */
+uint32_t vms_kif_sysgen_load(struct vms_sysgen_load_args *args);
+
+/*
  * vms_kif_dlm_xnode_blkast - the BLKAST-WIRE half of the cross-node DLM receive
  * (DLM epic vms-7fa rung H6, vms-76d). A focused wrapper that carries the two
  * fields the generic vms_kif_dlm_xnode above does not: `blkastadr`/`blkastprm`

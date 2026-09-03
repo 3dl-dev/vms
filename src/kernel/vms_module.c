@@ -1796,6 +1796,11 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
      * vms_pe.c), against the one per-node vms_cluster_node(). */
     case VMS_IOCTL_CLUSTER_DIAG_PORT:
         return vms_ioctl_cluster_diag_port(proc, arg);
+    /* STARTUP.EXE's own case of SYSBOOT (FC-P0.10): load the cluster SYSGEN
+     * parameters + CLUSTER_AUTHORIZE into vms_cluster_node()->params, once,
+     * before VMS_IOCTL_CLUSTER_START (FC-P0.11). */
+    case VMS_IOCTL_SYSGEN_LOAD:
+        return vms_ioctl_sysgen_load(proc, arg);
     /* DLM cross-node lock-request dispatch (vms-94c, DLM epic vms-7fa rung 1):
      * a decoded remote DLM message reaches the cross-node handler, which
      * returns SS$_UNSUPPORTED (rung 1 transport; no fake grant). */

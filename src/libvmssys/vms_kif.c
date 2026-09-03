@@ -1077,6 +1077,31 @@ uint32_t vms_kif_cluster_get_members(struct vms_cluster_member *out_members,
     return args.status;
 }
 
+/*
+ * vms_kif_sysgen_load - VMS_IOCTL_SYSGEN_LOAD (FC-P0.10). Loads the cluster
+ * SYSGEN parameters + CLUSTER_AUTHORIZE record the caller filled into every
+ * `in:` field of *args (struct vms_sysgen_load_args, vms_ioctl.h) into the
+ * executive's real struct vms_cluster (vms_cluster_node()). On return,
+ * args->status carries the SS$_ result -- SS$_BADPARAM is the negctl this
+ * ioctl enforces (VAXCLUSTER >= 1 with no SCSNODE loaded, INV-6).
+ *
+ * WIRED (FC-P0.10): STARTUP.EXE's cluster-sysgen loader (ovmx_init.c,
+ * load_cluster_sysgen_params) calls this once, before
+ * VMS_IOCTL_CLUSTER_START (FC-P0.11) -- reproducing SYSBOOT's ordering.
+ */
+uint32_t vms_kif_sysgen_load(struct vms_sysgen_load_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    args->status = 0;
+    KIF_CALL(VMS_IOCTL_SYSGEN_LOAD, args);
+
+    return args->status;
+}
+
 uint32_t vms_kif_dlm_xnode_blkast(uint32_t op, uint32_t lkmode,
                                   uint32_t req_lkid, uint32_t master_lkid,
                                   uint32_t req_csid, uint32_t master_csid,

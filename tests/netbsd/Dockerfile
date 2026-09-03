@@ -179,6 +179,11 @@ COPY src/kernel-core/vms_cnxman_quorum.c     /netbsd/guest-src/kernel-core/vms_c
 COPY src/kernel-core/vms_cnxman_quorum.h     /netbsd/guest-src/kernel-core/vms_cnxman_quorum.h
 COPY src/kernel-core/vms_cluster_api.c       /netbsd/guest-src/kernel-core/vms_cluster_api.c
 COPY src/kernel-core/vms_cluster_api.h       /netbsd/guest-src/kernel-core/vms_cluster_api.h
+# --- FC-P0.10: cluster SYSGEN parameters loaded into struct vms_cluster.
+# In SRCS from this commit (vms_cluster_sysgen.c), so the in-guest module
+# build needs it staged. ---
+COPY src/kernel-core/vms_cluster_sysgen.c    /netbsd/guest-src/kernel-core/vms_cluster_sysgen.c
+COPY src/kernel-core/vms_cluster_sysgen.h    /netbsd/guest-src/kernel-core/vms_cluster_sysgen.h
 # --- FC-P0.8: the NISCA channel state machine and the codec it builds every
 # frame through (FC-P0.6 shared + FC-P0.7 HELLO/SOLICIT). All three are in SRCS
 # from this commit for the same reason vms_pe.c is, so the in-guest module build

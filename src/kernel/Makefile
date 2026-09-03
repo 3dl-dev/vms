@@ -169,6 +169,8 @@ vms-y := vms_module.o \
          ../kernel-core/vms_cnxman.o \
          ../kernel-core/vms_mscp_srv_fsm.o \
          ../kernel-core/vms_mscp_srv.o \
+         ../kernel-core/vms_mscp_cl_io_fsm.o \
+         ../kernel-core/vms_mscp_cl.o \
          ../kernel-core/vms_proctab.o \
          ../kernel-core/vmsfs_acp.o \
          ../vmsfs/ods2/ods2_reader.o \

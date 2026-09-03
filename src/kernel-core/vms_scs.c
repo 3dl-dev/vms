@@ -129,10 +129,11 @@ struct vms_scs {
 	uint32_t tx_port_refused;
 	uint32_t vc_downs;
 
-	/* The ONE block-transfer consumer (vms_scs.h SS9, FC-P6.3) and what
-	 * actually happened on that path -- counted here, where it happens. */
-	vms_scs_block_cb block_cb;
-	void            *block_ctx;
+	/* The block-transfer consumers (vms_scs.h SS9; FC-P6.3 introduced the
+	 * path, FC-P7.1 widened it to the small table that header explains) and
+	 * what actually happened on it -- counted here, where it happens. */
+	vms_scs_block_cb block_cb[VMS_SCS_MAX_BLOCK_CONSUMERS];
+	void            *block_ctx[VMS_SCS_MAX_BLOCK_CONSUMERS];
 	uint32_t         block_completions;
 	uint32_t         block_unclaimed;
 };
@@ -405,25 +406,31 @@ static void scs_upper_vc_down(void *ctx, vms_scs_sysid_t peer, uint32_t reason)
 }
 
 /*
- * THE PORT'S THIRD SERVICE, ROUTED (FC-P6.3). A block-transfer completion is
- * not an SCS message: it names a BUFFER, not a Con.ID, and SCS has no CDT to
- * demux it through. So SCS carries exactly one registered consumer and forwards
- * to it -- it interprets nothing, and with no consumer registered the
- * completion is counted and dropped, never guessed at.
+ * THE PORT'S THIRD SERVICE, ROUTED (FC-P6.3; the table is FC-P7.1's). A
+ * block-transfer completion is not an SCS message: it names a BUFFER, not a
+ * Con.ID, and SCS has no CDT to demux it through. So SCS forwards it to every
+ * registered consumer and interprets nothing -- each one recognises its own
+ * buffer NAME (vms_scs.h SS9, "the fan-out is exact") -- and with none
+ * registered the completion is counted and dropped, never guessed at.
  */
 static void scs_upper_block_data(void *ctx, vms_scs_sysid_t from, uint32_t name,
 				 uint32_t offset, uint32_t len,
 				 uint32_t bytes_remaining)
 {
 	struct vms_scs *scs = (struct vms_scs *)ctx;
+	uint32_t i, delivered = 0u;
 
 	(void)from;
 	scs->block_completions++;
-	if (scs->block_cb == (vms_scs_block_cb)0) {
-		scs->block_unclaimed++;
-		return;
+	for (i = 0; i < VMS_SCS_MAX_BLOCK_CONSUMERS; i++) {
+		if (scs->block_cb[i] == (vms_scs_block_cb)0)
+			continue;
+		scs->block_cb[i](scs->block_ctx[i], name, offset, len,
+				 bytes_remaining);
+		delivered++;
 	}
-	scs->block_cb(scs->block_ctx, name, offset, len, bytes_remaining);
+	if (delivered == 0u)
+		scs->block_unclaimed++;
 }
 
 static void scs_upper_bind(struct vms_scs *scs)
@@ -757,20 +764,56 @@ int vms_scs_cdt_snapshot(struct vms_cluster *cl, uint32_t index,
  * No fork mutex (see the header): this is a fork-context service, not a
  * snapshot. One dereference plus the vc_up test -- it decides nothing.
  */
+/* Withdraw one consumer by its ctx, or every one of them when ctx is NULL. */
+static void scs_block_withdraw(struct vms_scs *scs, void *cb_ctx)
+{
+	uint32_t i;
+
+	for (i = 0; i < VMS_SCS_MAX_BLOCK_CONSUMERS; i++) {
+		if (cb_ctx != (void *)0 && scs->block_ctx[i] != cb_ctx)
+			continue;
+		scs->block_cb[i] = (vms_scs_block_cb)0;
+		scs->block_ctx[i] = (void *)0;
+	}
+}
+
 /*
- * vms_scs_set_block_consumer - vms_scs.h SS9. One registration, replaced by a
- * second call and withdrawn by a NULL one. No allocation, no list: a node has
- * exactly one MSCP server.
+ * vms_scs_set_block_consumer - vms_scs.h SS9. A small fixed table, keyed on
+ * `cb_ctx`: no allocation and no list, because the number of SYSAPs in this
+ * executive that own named buffers is a known, small number.
  */
 int vms_scs_set_block_consumer(struct vms_cluster *cl, vms_scs_block_cb cb,
 			       void *cb_ctx)
 {
+	struct vms_scs *scs;
+	uint32_t i, free_slot = VMS_SCS_MAX_BLOCK_CONSUMERS;
+
 	if (cl == (struct vms_cluster *)0)
 		return SS__BADPARAM;
-	if (cl->scs == (struct vms_scs *)0)
+	scs = cl->scs;
+	if (scs == (struct vms_scs *)0)
 		return SS__NOSUCHDEV;
-	cl->scs->block_cb = cb;
-	cl->scs->block_ctx = cb != (vms_scs_block_cb)0 ? cb_ctx : (void *)0;
+
+	if (cb == (vms_scs_block_cb)0) {
+		scs_block_withdraw(scs, cb_ctx);
+		return SS__NORMAL;
+	}
+
+	for (i = 0; i < VMS_SCS_MAX_BLOCK_CONSUMERS; i++) {
+		if (scs->block_ctx[i] == cb_ctx &&
+		    scs->block_cb[i] != (vms_scs_block_cb)0) {
+			scs->block_cb[i] = cb;   /* re-register the same SYSAP */
+			return SS__NORMAL;
+		}
+		if (scs->block_cb[i] == (vms_scs_block_cb)0 &&
+		    free_slot == VMS_SCS_MAX_BLOCK_CONSUMERS)
+			free_slot = i;
+	}
+	if (free_slot == VMS_SCS_MAX_BLOCK_CONSUMERS)
+		return SS__EXQUOTA;   /* honest refusal, never an eviction */
+
+	scs->block_cb[free_slot] = cb;
+	scs->block_ctx[free_slot] = cb_ctx;
 	return SS__NORMAL;
 }
 

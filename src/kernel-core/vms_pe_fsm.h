@@ -138,6 +138,7 @@
 #include "vms_cluster_codec_hello.h"
 #include "vms_cluster_codec_vc.h"   /* FC-P1.1: START/STACK/ACK + 0x48 + stamp */
 #include "vms_cluster_codec_blk.h"  /* FC-P6.1: the 28-byte block-transfer hdr */
+#include "vms_cluster_codec_scs.h"  /* FC-P7.1: vms_scs_inner_frame_len, TRAP 1 */
 #include "vms_cluster_snapshot.h"
 #include "vms_pe.h"
 
@@ -1008,6 +1009,12 @@ struct pe_fsm {
 				    * observed none (INV-6 honest absence)     */
 	uint32_t blk_tx_unringed;  /* block frames transmitted OUTSIDE the
 				    * unacked ring -- see SS8d "NO RING"      */
+	uint32_t blk_rx_trailer;   /* TRAP 1's RECEIVE side (FC-P7.1): frames
+				    * whose PIGGYBACKED trailer named one of
+				    * our buffers and whose tail bytes were
+				    * taken into it before the end message was
+				    * delivered upward -- see pe_blk_rx_
+				    * trailer_try                             */
 
 	/* The one frame buffer. Sized for the largest frame SS4(k) grounds. */
 	uint8_t  scratch[VMS_HELLO_PADDED_MAX_FRAME];
@@ -1501,6 +1508,37 @@ int pe_blk_send_ack(struct pe_fsm *f, vms_scs_sysid_t dst,
 int pe_blk_rx_try(struct pe_fsm *f, struct pe_vc *vc,
 		  const struct vms_frame_info *fi, const uint8_t *frame,
 		  uint32_t len);
+
+/*
+ * pe_blk_rx_trailer_try - TRAP 1's RECEIVE side (ADDED BY FC-P7.1, its first
+ * consumer).
+ *
+ * pe_blk_send_read_end() has been putting the transfer's final chunk in the
+ * SAME Ethernet frame as the MSCP end message since FC-P6.1, and
+ * vms_blk_trailer_parse() has been in the codec since FC-P6.1 -- with NO
+ * production caller. Nothing on the receive side looked past the inner
+ * message's own declared length, so a READ's last chunk arrived and was
+ * silently dropped while the end message was delivered on top of it. That is
+ * exactly the trap the codec's own doc comment names, and it is a SHORT READ
+ * with a successful end message on it: the dishonest completion shape INV-6
+ * exists to stop. This is the arm that closes it.
+ *
+ * Returns 1 when a trailer was present AND named a buffer this port
+ * registered, and its bytes are now in that buffer (`block_data` already
+ * reported them); 0 otherwise. IT NEVER CONSUMES THE FRAME: the inner message
+ * is still a real SCS message and must still be delivered upward, which is why
+ * this returns a fact rather than "handled" and the caller delivers either
+ * way. Order matters and the caller must honour it -- the tail lands BEFORE
+ * the end message goes up, or the SYSAP would complete a transfer whose last
+ * chunk had not arrived yet.
+ *
+ * The discriminator is the SAME positive executive fact pe_blk_rx_try uses:
+ * the trailer's destination buffer NAME must resolve in this port's own
+ * table. A trailer naming nothing of ours is counted (blk_rx_unnamed) and left
+ * alone.
+ */
+int pe_blk_rx_trailer_try(struct pe_fsm *f, struct pe_vc *vc,
+			  const uint8_t *frame, uint32_t len);
 
 /* Names, for the console and for a test's failure message. */
 const char *pe_blk_status_name(enum pe_blk_status s);

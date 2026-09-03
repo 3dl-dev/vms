@@ -335,6 +335,35 @@ vms_codec_status_t vms_scs_hdr_parse_frame(const uint8_t *frame, uint32_t len,
 				 len - SCSHDR_ABS_OFF, out);
 }
 
+/*
+ * The prefix `inner_len` is measured PAST: the SCA content's first 44 bytes
+ * (the codec's own "content - 44" rule, VMS_OFF_SCSCTRL_INNERLEN's comment).
+ * Named here so the one place that knows it is this TU.
+ */
+#define SCSHDR_INNERLEN_BIAS 44u
+
+vms_codec_status_t vms_scs_inner_frame_len(const uint8_t *frame, uint32_t len,
+					   uint32_t *out)
+{
+	struct vms_scs_hdr h;
+	vms_codec_status_t st;
+	uint32_t inner;
+
+	if (frame == (const uint8_t *)0 || out == (uint32_t *)0)
+		return VMS_CODEC_E_INVAL;
+	st = vms_scs_hdr_parse_frame(frame, len, &h);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	inner = (uint32_t)VMS_ETH_HDR_LEN + SCSHDR_INNERLEN_BIAS +
+		(uint32_t)h.inner_len;
+	/* A declared length past the bytes that really arrived is not a bound
+	 * this codec will hand out: it reports the real length, which reads as
+	 * "no trailer" to the caller. */
+	*out = inner > len ? len : inner;
+	return VMS_CODEC_OK;
+}
+
 vms_codec_status_t vms_scs_msg_body(const uint8_t *frame, uint32_t len,
 				    const uint8_t **body, uint32_t *body_len)
 {

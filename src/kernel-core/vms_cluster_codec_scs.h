@@ -287,6 +287,32 @@ vms_codec_status_t vms_scs_hdr_parse_frame(const uint8_t *frame, uint32_t len,
 					   struct vms_scs_hdr *out);
 
 /*
+ * vms_scs_inner_frame_len - the FRAME LENGTH this frame's own inner SCS
+ * message declares for ITSELF: `inner_len` names the SCA content past its own
+ * 44-byte prefix, so the inner message stops at 14 + 44 + inner_len bytes into
+ * the frame.
+ *
+ * ADDED BY FC-P7.1, and it exists for exactly ONE reason: TRAP 1's RECEIVE
+ * side. vms_cluster_codec_blk.h's `vms_blk_trailer_parse` needs an
+ * `inner_frame_len` argument, and its own doc comment says "the point of this
+ * function is its `frame_len` argument. A caller that derived its bound from
+ * the inner message's declared length instead would see no trailer, ever."
+ * That is the trap; this is the OTHER half of it, computed HERE so the
+ * `14 + 44` arithmetic stays inside the codec TU that owns those numbers
+ * (design SS3.9 rule 2 -- no raw wire offset outside a codec TU) rather than
+ * being re-derived by the port.
+ *
+ * VMS_CODEC_E_SHORT when the frame does not even reach its own SCS header,
+ * VMS_CODEC_E_CLASS when that header is not an SCS one (the format-word check
+ * vms_scs_hdr_parse already makes), VMS_CODEC_E_INVAL for a NULL argument.
+ * A declared inner length longer than the frame really is comes back as the
+ * REAL frame length -- an honest "there is no trailer", never a bound past the
+ * bytes that arrived.
+ */
+vms_codec_status_t vms_scs_inner_frame_len(const uint8_t *frame, uint32_t len,
+					   uint32_t *out);
+
+/*
  * vms_scs_msg_body - point `*body` at the SYSAP's own bytes of a received
  * application message (frame-absolute 72 onward, design SS3.2.4's
  * "72-203 -> the emitting FSM/role") and set `*body_len` to how many are

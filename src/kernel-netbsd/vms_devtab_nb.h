@@ -129,7 +129,13 @@ struct vms_devinfo {
 	uint32_t width;                     /* terminal width */
 	uint32_t page;                      /* terminal page length */
 	uint32_t allocated;                 /* 1 = allocated to owner_pid */
-	uint32_t pad;
+	/*
+	 * DVI$_MSCP_SERVED (dvidef.h 0x0073, "Device is MSCP served"): 1 for a
+	 * disk this node reaches through the MSCP disk class driver on another
+	 * cluster member (FC-P7.1). Took the struct's trailing pad word, so the
+	 * layout and the 72-byte ABI guard below are unchanged.
+	 */
+	uint32_t mscp_served;
 };
 
 /* $ALLOC / $DALLOC: allocate a device to this process, and give it back. */

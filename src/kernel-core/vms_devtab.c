@@ -62,6 +62,7 @@
 #include "vms_cnxman_csb.h"    /* FC-P3.9: the CSB state names MEMBER_GET renders */
 #include "vms_scs.h"           /* FC-P2.4: vms_scs_start + the CONN snapshots */
 #include "vms_mscp_srv.h"      /* FC-P6.3: the MSCP disk server (CLUSTER_START step 5) */
+#include "vms_mscp_cl.h"       /* FC-P7.1: the MSCP disk class driver (step 6) */
 
 /*
  * Device class codes. Values mirror src/libvms/include/dcdef.h so the
@@ -395,6 +396,103 @@ int vms_devtab_add_disk(const char *devnam, const char *backing,
 
     pr_info("vms: disk unit %s -> %s (%u:%u)\n",
             devnam, backing, (unsigned)backing_major, (unsigned)backing_minor);
+    return 0;
+}
+
+/*
+ * vms_devtab_add_served_disk / _remove_served_disk - an MSCP-SERVED disk unit
+ * (plan item FC-P7.1, design P7 "served units are real devices").
+ *
+ * WHAT IS DIFFERENT ABOUT A SERVED UNIT, and it is the whole point: it has NO
+ * BACKING BLOCK DEVICE ON THIS NODE. The bytes live on another cluster member
+ * and reach this one through the MSCP disk class driver's named-buffer
+ * transfers (vms_mscp_cl.c). So `backing` stays empty and backing_major/minor
+ * stay zero -- deliberately, because a served unit resolving to a local
+ * (major, minor) would be a device that reads the WRONG disk. Whoever asks
+ * this row for I/O gets it from the class driver or not at all.
+ *
+ * `mscp_served` is the row's own record of that fact, and it is what
+ * DVI$_MSCP_SERVED (dvidef.h 0x0073, "Device is MSCP served") reads: real
+ * executive state, set only by this entry point and only for a unit a REAL
+ * discovery walk found on a REAL served node.
+ *
+ * The NAME is the class driver's (`<SCSNODE>$DUA<unit>:` today; see
+ * vms_mscp_cl_io_fsm.h's own "THE SERVED DEVICE'S NAME" section for what that
+ * spelling does and does not assert). This facility does not compose it: the
+ * device is BORN here under whatever name the class driver could honestly
+ * derive from real executive state, exactly as VMS_NIC_DEVNAM's comment
+ * establishes for the NIC.
+ *
+ * Called from the cluster fork context, NOT from module init -- a served disk
+ * appears when a member is found and disappears when the path to it goes away
+ * -- so both take the device-list lock like every other runtime reader.
+ *
+ * add: 0, -EINVAL, -EEXIST (this name is already in the table), -ENOMEM.
+ * remove: 0, or -ENODEV when no such served row exists. A row that is NOT
+ * mscp_served is never removed by this path: it belongs to another driver.
+ */
+int vms_devtab_add_served_disk(const char *devnam)
+{
+    struct vms_device *disk;
+
+    if (!devnam || devnam[0] == '\0')
+        return -EINVAL;
+
+    exec_lock(&vms_device_list_lock);
+    if (devtab_lookup_locked(devnam)) {
+        exec_unlock(&vms_device_list_lock);
+        return -EEXIST;
+    }
+    exec_unlock(&vms_device_list_lock);
+
+    /*
+     * shareable = 0, for the same honest reason every other disk row in this
+     * file carries it: no OVMX test exercises a shareable disk's ownership
+     * yet. A cluster-wide MOUNT makes this the interesting case, and it is
+     * FC-P7.2's (the F11B$/RMS$ lock item) to measure and set.
+     */
+    disk = vms_devtab_create(devnam, DC__DISK, VMS_DT_UNKNOWN,
+                             0 /* shareable */, 0 /* devchar */,
+                             0 /* width */, 0 /* page */);
+    if (!disk) {
+        pr_warn("vms: out of memory creating served disk unit %s\n", devnam);
+        return -ENOMEM;
+    }
+
+    exec_lock(&disk->lock);
+    disk->mscp_served = 1;
+    exec_unlock(&disk->lock);
+
+    pr_info("vms: served disk unit %s (MSCP served, no local backing)\n",
+            devnam);
+    return 0;
+}
+
+int vms_devtab_remove_served_disk(const char *devnam)
+{
+    struct vms_device *dev;
+    int served;
+
+    if (!devnam || devnam[0] == '\0')
+        return -EINVAL;
+
+    exec_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(devnam);
+    if (!dev) {
+        exec_unlock(&vms_device_list_lock);
+        return -ENODEV;
+    }
+    served = (dev->mscp_served != 0);
+    if (served)
+        exec_list_del(&dev->list);
+    exec_unlock(&vms_device_list_lock);
+
+    if (!served)
+        return -ENODEV;   /* not ours: another driver entered this unit */
+
+    exec_free(dev);
+    pr_info("vms: served disk unit %s withdrawn (path to the server lost)\n",
+            devnam);
     return 0;
 }
 
@@ -1352,6 +1450,10 @@ static void devinfo_fill(struct vms_device *dev, struct vms_devinfo *info)
     info->devchar   = dev->devchar;
     info->width     = dev->width;
     info->page      = dev->page;
+    /* DVI$_MSCP_SERVED (dvidef.h 0x0073). A projection of the row, never a
+     * composed answer: 1 only for a unit vms_devtab_add_served_disk() entered
+     * from a REAL discovery walk on a REAL served node (FC-P7.1). */
+    info->mscp_served = dev->mscp_served;
     exec_unlock(&dev->lock);
 }
 
@@ -2158,6 +2260,10 @@ long vms_ioctl_sysgen_load(struct vms_proc *proc, unsigned long arg)
  *      answers SS$_NORMAL when this node serves nothing (MSCP_LOAD=0,
  *      MSCP_SERVE_ALL=0, or no volume mounted): serving is a ROLE, not a
  *      membership requirement, so "no disks to serve" must not fail a boot.
+ *   6. vms_mscp_cl_start()(FC-P7.1) -- the MSCP disk CLASS DRIVER, which needs
+ *      CNXMAN's `VMS$DISK_CL_DRVR` registration to connect under. It answers
+ *      SS$_NORMAL when no member serves anything: mounting a served disk is
+ *      likewise a choice, not a membership requirement.
  *
  * Each step can only run because the one beneath it really came up, and each
  * refuses (SS$_NOSUCHDEV) rather than seeding itself from nothing if it did
@@ -2201,6 +2307,8 @@ long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg)
         status = vms_cnxman_start(cl);
     if (status == SS__NORMAL)
         status = vms_mscp_srv_start(cl);
+    if (status == SS__NORMAL)
+        status = vms_mscp_cl_start(cl);
 
     args.port_up = (uint32_t)(cl->pe != NULL);
     args.cluster_state = (uint32_t)cl->state;

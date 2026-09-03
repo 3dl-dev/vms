@@ -209,6 +209,54 @@ enum cnxman_cluster_event {
 void cnxman_set_dlm(struct vms_cluster *cl, const struct dlm_scs_role_ops *ops);
 
 /* ==========================================================================
+ * 5b. The interface to the DISK CLASS DRIVER (FC-P7.1)
+ *
+ * WHY IT HANGS OFF CNXMAN AT ALL. `VMS$DISK_CL_DRVR` is ONE SYSAP name and SCS
+ * allows ONE registration per name (vms_scs.h SS4). CNXMAN already registers it
+ * -- its own comment says "ONLY so scs_connect() ... can open the outbound
+ * MSCP$DISK client connection the join drives" -- so the disk class driver
+ * cannot register it a second time, and giving the class driver a DIFFERENT
+ * local name would put an invented SYSAP name on the wire where every real VMS
+ * class driver puts `VMS$DISK_CL_DRVR`.
+ *
+ * So there is exactly one registration and TWO consumers of it, and CNXMAN
+ * fans each callback out to both. Neither guesses: the join FSM already
+ * ignores a Con.ID that is not the one it opened, and the class driver ignores
+ * a Con.ID for which it holds no CDDB. A connection belongs to whichever of
+ * them opened it, which is a fact each of them holds, not an inference.
+ *
+ * The class driver opens its OWN connections with scs_connect() under this same
+ * registered name -- SCS requires the name to be registered, not that the
+ * registrant be the caller -- and learns their fate through these three.
+ * Passing NULL detaches it: the cluster still forms and the join's own walk
+ * still runs, which is what a node with no served disks to mount looks like.
+ * ========================================================================== */
+struct cnxman_disk_client_ops {
+	/* One of the class driver's own MSCP$DISK connections reached OPEN. */
+	void (*opened)(void *ctx, vms_conid_t local_conid);
+	/* An MSCP end message arrived on some MSCP$DISK connection. Returns 0
+	 * when this consumer took it. */
+	int  (*message)(void *ctx, vms_conid_t local_conid, const uint8_t *body,
+			uint32_t len);
+	void (*closed)(void *ctx, vms_conid_t local_conid, uint32_t reason);
+	void *ctx;
+};
+
+void cnxman_set_disk_client(struct vms_cluster *cl,
+			    const struct cnxman_disk_client_ops *ops);
+
+/*
+ * Open an outbound `VMS$DISK_CL_DRVR` -> `MSCP$DISK` connection to `dst` under
+ * CNXMAN's registration (see above). *out_conid is the Con.ID the ALLOCATOR
+ * minted. Returns 0 or an SS$_ status -- SS$_NOSUCHDEV before CLUSTER_START.
+ * This is the ONE door: the class driver never names the two SYSAP name
+ * literals itself, because they live in vms_cnxman_join_fsm.c and there is one
+ * spelling of each in the tree.
+ */
+int cnxman_disk_client_connect(struct vms_cluster *cl, vms_scs_sysid_t dst,
+			       vms_conid_t *out_conid);
+
+/* ==========================================================================
  * 6. CLUB / CSB query -- what SHOW CLUSTER, $GETSYI and the diagnostics read
  *
  * All four are read-only projections taken under the fork mutex. They return 0

@@ -356,16 +356,44 @@ int vms_scs_peer_at(struct vms_cluster *cl, uint32_t index,
  * whose FC-P2.4 note already said "block_data stays NULL: the port's THIRD
  * service is a SYSAP fact FC-P6.x binds").
  *
- * ONE consumer per node, because a node has one MSCP server. A second call
- * replaces the registration and a NULL `cb` withdraws it; with none registered
- * a completion is COUNTED and dropped, never routed at a guess.
- *
  * `name` is OUR OWN buffer name -- a value this node's port minted and handed
  * to the peer -- so the consumer finds its request by something it created,
  * never by a value the peer chose (INV-6).
+ *
+ * ------------------------------------------------------------------------
+ * WHY IT IS A SMALL TABLE AND NOT ONE SLOT (widened by FC-P7.1)
+ * ------------------------------------------------------------------------
+ * FC-P6.3 wrote "ONE consumer per node, because a node has one MSCP server",
+ * and that was true while the server was the only SYSAP moving blocks. It is
+ * not: a node that BOTH serves its own volumes and MOUNTs a member's served
+ * volume runs the MSCP server AND the disk class driver, and both have named
+ * buffers of their own that the port fills. One slot meant whichever started
+ * second silently replaced the first, and the loser's transfers would have
+ * completed nowhere.
+ *
+ * THE FAN-OUT IS EXACT, NOT A GUESS. Every buffer name on this node comes from
+ * ONE allocator (pe_blk_buf_register, vms_pe_fsm.h SS3c: a monotone generation
+ * plus the slot), so a name identifies at most ONE registrant. Each consumer
+ * therefore does the SAME positive lookup the port itself does -- "is this
+ * name one of mine?" -- and a consumer that does not hold it ignores it and
+ * counts it. That is a demux by a value this node minted, not a routing
+ * decision made on a plausible byte.
+ *
+ * REGISTRATION IS KEYED ON `cb_ctx`, so a withdrawal names WHICH consumer is
+ * leaving: `cb == NULL` with a non-NULL ctx withdraws that one, `cb == NULL`
+ * with a NULL ctx withdraws them all (the whole-teardown spelling), and a
+ * second call with an already-registered ctx replaces its callback. A
+ * completion with NO consumer registered is COUNTED and dropped, never routed
+ * at a guess. SS$_EXQUOTA when the table is full -- an honest refusal, never an
+ * eviction.
  * ========================================================================== */
 typedef void (*vms_scs_block_cb)(void *ctx, uint32_t name, uint32_t offset,
 				 uint32_t len, uint32_t bytes_remaining);
+
+/* The MSCP server and the MSCP disk class driver. Two, because that is how
+ * many SYSAPs in this executive own named buffers; a third is a design
+ * question for whoever adds one, not a number to grow speculatively. */
+#define VMS_SCS_MAX_BLOCK_CONSUMERS 2u
 
 int vms_scs_set_block_consumer(struct vms_cluster *cl, vms_scs_block_cb cb,
 			       void *cb_ctx);

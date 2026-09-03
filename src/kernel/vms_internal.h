@@ -975,6 +975,15 @@ struct vms_device {
     uint32_t            backing_minor;
 
     /*
+     * MSCP-SERVED (FC-P7.1). 1 for a unit the disk class driver entered from a
+     * REAL discovery walk on another cluster member: the bytes are NOT on this
+     * node and `backing` is deliberately empty. This is the executive state
+     * DVI$_MSCP_SERVED (dvidef.h 0x0073) projects; it is never set for a
+     * locally enumerated disk.
+     */
+    uint32_t            mscp_served;
+
+    /*
      * Ethernet backing (devclass == DC$_SCOM, vms-9d2). The host network
      * interface this LAN unit (ETH0:) was enumerated from at module init --
      * "eth0", "enp0s1", whatever the host names its primary non-loopback
@@ -1514,6 +1523,16 @@ void vms_devtab_cleanup(void);
  */
 int vms_devtab_add_disk(const char *devnam, const char *backing,
                         uint32_t backing_major, uint32_t backing_minor);
+
+/*
+ * Enter / withdraw ONE MSCP-SERVED disk unit (FC-P7.1). The bytes live on
+ * another cluster member: the row has NO local backing and carries
+ * mscp_served, which is what DVI$_MSCP_SERVED reads. Called from the cluster
+ * fork context by the disk class driver (src/kernel-core/vms_mscp_cl.c), never
+ * from module init. See vms_devtab.c for the full contract.
+ */
+int vms_devtab_add_served_disk(const char *devnam);
+int vms_devtab_remove_served_disk(const char *devnam);
 int vms_lnm_init(void);
 void vms_lnm_cleanup(void);
 void vms_mbx_init(void);

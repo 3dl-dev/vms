@@ -420,6 +420,7 @@ struct vms_scs;
 struct vms_cnxman;
 struct vms_dlm_scs;
 struct vms_mscp_srv;
+struct vms_mscp_cl;
 struct vms_cluster_fork;
 
 struct vms_cluster {
@@ -484,6 +485,15 @@ struct vms_cluster {
 	 * requirement. Nothing above may read "cl->mscp == NULL" as an error.
 	 */
 	struct vms_mscp_srv     *mscp;   /* FC-P6.3 */
+	/*
+	 * The MSCP disk CLASS DRIVER (FC-P7.1). NULL is a real, common
+	 * configuration and not a missing layer: a node with no cluster member
+	 * serving disks mounts none, and the published description makes
+	 * MOUNTING a served disk a choice rather than a membership
+	 * requirement. Nothing above may read "cl->mscp_cl == NULL" as an
+	 * error.
+	 */
+	struct vms_mscp_cl      *mscp_cl; /* FC-P7.1 */
 };
 
 #endif /* OVMX_VMS_CLUSTER_H */

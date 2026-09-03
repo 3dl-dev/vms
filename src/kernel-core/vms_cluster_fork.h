@@ -171,7 +171,16 @@ enum cf_owner {
 	CF_OWNER_SCS    = 1,   /* SCS: SBs, CDTs, credits      (vms_scs.c)     */
 	CF_OWNER_CNXMAN = 2,   /* the connection manager       (vms_cnxman.c)  */
 	CF_OWNER_DLM    = 3,   /* the lock manager's SCS arm   (vms_dlm_scs.c) */
-	CF_OWNER_MSCP   = 4,   /* MSCP server / class driver                   */
+	CF_OWNER_MSCP   = 4,   /* the MSCP disk SERVER         (vms_mscp_srv.c)*/
+	/*
+	 * The MSCP disk CLASS DRIVER (vms_mscp_cl.c, FC-P7.1). Its OWN owner
+	 * and not a share of CF_OWNER_MSCP: a layer registers ONE work handler
+	 * per owner (cf_set_work_handler), so a node that both serves and
+	 * mounts -- the ordinary two-way cluster case -- would otherwise have
+	 * the second starter silently replace the first's handler and stop its
+	 * beat.
+	 */
+	CF_OWNER_MSCP_CL = 5,
 	CF_OWNER__COUNT
 };
 

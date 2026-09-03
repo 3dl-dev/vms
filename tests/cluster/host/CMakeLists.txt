@@ -439,6 +439,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_scs_fsm.c           # FC-P2.2
     hdr_alone_vms_scs_dir.c           # FC-P2.3
     hdr_alone_vms_mscp_srv_fsm.c      # FC-P6.3
+    hdr_alone_vms_mscp_cl_io_fsm.c    # FC-P7.1
 )
 target_include_directories(cluster_host_hdr_alone PRIVATE ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_hdr_alone PRIVATE OVMX_CLUSTER_HOST)
@@ -537,4 +538,43 @@ add_test(NAME cluster_host_test_lock_proxy COMMAND test_lock_proxy)
 set_tests_properties(cluster_host_test_lock_proxy PROPERTIES
     LABELS "unit;cluster;cluster_host;lock"
     TIMEOUT 60
+)
+
+# ---- FC-P7.1: the MSCP disk CLASS DRIVER, against the REAL FC-P6.3 server ----
+# Three real, shipping objects in one host process: FC-P7.1's class driver
+# (vms_mscp_cl_io_fsm.c, driving FC-P3.4's real discovery FSM), FC-P6.3's real
+# server, and the client's own REAL port (cluster_host_pe -- so the named
+# buffers, the block-transfer receive path and TRAP 1's piggyback arm are the
+# shipping ones, not a stand-in). Its GLUE (vms_mscp_cl.c) names exec_kbackend.h
+# and so is source-scanned, the two-proof shape test_cnxman_glue.c established.
+add_library(cluster_host_mscp_cl STATIC
+    ${OVMX_CLUSTER_CORE_DIR}/vms_mscp_cl_io_fsm.c
+)
+target_include_directories(cluster_host_mscp_cl PUBLIC ${OVMX_CLUSTER_CORE_DIR})
+target_compile_definitions(cluster_host_mscp_cl PUBLIC OVMX_CLUSTER_HOST)
+target_link_libraries(cluster_host_mscp_cl PUBLIC cluster_host_codec)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(cluster_host_mscp_cl PRIVATE -Wall -Wextra -Werror)
+endif()
+
+add_executable(test_mscp_cl test_mscp_cl.c)
+target_link_libraries(test_mscp_cl PRIVATE
+    cluster_host_mscp_cl
+    cluster_host_mscp_srv
+    cluster_host_pe
+    cluster_host_fixture
+)
+target_include_directories(test_mscp_cl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(test_mscp_cl PRIVATE
+    OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
+    OVMX_FIXTURE_DIR="${OVMX_CLUSTER_FIXTURE_DIR}"
+    OVMX_CLEANROOM_MANIFEST="${OVMX_CLUSTER_CLEANROOM_MANIFEST}"
+)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_mscp_cl PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_mscp_cl COMMAND test_mscp_cl)
+set_tests_properties(cluster_host_test_mscp_cl PROPERTIES
+    LABELS "unit;cluster;cluster_host;mscp"
+    TIMEOUT 30
 )

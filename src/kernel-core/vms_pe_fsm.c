@@ -2099,6 +2099,17 @@ static void vc_deliver(struct pe_fsm *f, struct pe_vc *vc,
 	    pe_blk_rx_try(f, vc, rx->fi, rx->frame, rx->len))
 		return;
 
+	/*
+	 * FC-P7.1: TRAP 1's receive side. A READ end message arrives with the
+	 * transfer's FINAL chunk piggybacked PAST its own declared length, and
+	 * this frame is BOTH -- so the tail is taken first and the message is
+	 * still delivered below. Taking it first is not a preference: an SCS
+	 * consumer that saw the end message before the last chunk landed would
+	 * complete a short transfer as a success.
+	 */
+	if (rx->frame != NULL)
+		(void)pe_blk_rx_trailer_try(f, vc, rx->frame, rx->len);
+
 	if (!rx->conid_valid || f->upper == NULL || f->upper->message == NULL) {
 		f->vc_rx_undelivered++;
 		return;
@@ -3338,12 +3349,54 @@ static void blk_learn_obs(struct pe_vc *vc, const struct vms_blk_hdr *h)
 	vc->obs_valid = 1u;
 }
 
+/*
+ * ONE parsed block-transfer view, taken into the buffer it names. Shared by
+ * BOTH receive arms -- the standalone frame and TRAP 1's trailer -- so the
+ * discriminator, the bounds check, the observed-word learning and the upward
+ * report are written once and cannot diverge between the two shapes.
+ *
+ * Returns 1 when the view named a buffer of ours (whether or not its bytes
+ * were acceptable: a range failure is still OUR frame and is counted, never
+ * passed on), 0 when it named nothing of ours.
+ */
+static int blk_rx_take(struct pe_fsm *f, struct pe_vc *vc,
+		       const struct vms_blk_view *view)
+{
+	struct pe_blk_buf *buf = blk_buf_slot(f, view->hdr.dst_name);
+
+	/* THE DISCRIMINATOR: does this frame name a buffer WE registered? */
+	if (buf == NULL) {
+		f->blk_rx_unnamed++;
+		return 0;
+	}
+	if ((buf->access & PE_BLK_ACC_DST) == 0u ||
+	    !blk_span_ok(buf->len, view->hdr.dst_offset, view->data_len)) {
+		f->blk_rx_range++;
+		return 1;
+	}
+
+	blk_learn_obs(vc, &view->hdr);
+	if (view->data_len != 0u) {
+		pe_copy(buf->base + view->hdr.dst_offset, view->data,
+			view->data_len);
+		vc->blk_bytes_rx += view->data_len;
+	}
+	vc->blk_rx++;
+
+	/* Reported AFTER the bytes are in the buffer, describing what actually
+	 * landed (vms_pe.h SS4, block_data). No listener is legitimate. */
+	if (f->upper != NULL && f->upper->block_data != NULL)
+		f->upper->block_data(f->upper->ctx, vc->peer_sysid, buf->name,
+				     view->hdr.dst_offset, view->data_len,
+				     view->hdr.bytes_remaining);
+	return 1;
+}
+
 int pe_blk_rx_try(struct pe_fsm *f, struct pe_vc *vc,
 		  const struct vms_frame_info *fi, const uint8_t *frame,
 		  uint32_t len)
 {
 	struct vms_blk_view view;
-	struct pe_blk_buf *buf;
 
 	if (f == NULL || vc == NULL || frame == NULL)
 		return 0;
@@ -3353,36 +3406,46 @@ int pe_blk_rx_try(struct pe_fsm *f, struct pe_vc *vc,
 	if (vms_blk_frame_parse(frame, len, fi, &view) != VMS_CODEC_OK)
 		return 0;
 
-	/* THE DISCRIMINATOR: does this frame name a buffer WE registered? */
-	buf = blk_buf_slot(f, view.hdr.dst_name);
-	if (buf == NULL) {
-		f->blk_rx_unnamed++;
-		return 0;             /* not ours -- normal delivery runs */
-	}
+	/* From here a frame that names one of our buffers IS a block transfer
+	 * for this node and is consumed either way -- never passed on to be
+	 * misread as an SCS message. */
+	return blk_rx_take(f, vc, &view);
+}
 
-	/* From here the frame IS a block transfer for this node, so it is
-	 * consumed either way: a malformed one is dropped and counted, never
-	 * passed on to be misread as an SCS message. */
-	if ((buf->access & PE_BLK_ACC_DST) == 0u ||
-	    !blk_span_ok(buf->len, view.hdr.dst_offset, view.data_len)) {
-		f->blk_rx_range++;
-		return 1;
-	}
+int pe_blk_rx_trailer_try(struct pe_fsm *f, struct pe_vc *vc,
+			  const uint8_t *frame, uint32_t len)
+{
+	struct vms_blk_view view;
+	uint32_t inner = 0u;
 
-	blk_learn_obs(vc, &view.hdr);
-	if (view.data_len != 0u) {
-		pe_copy(buf->base + view.hdr.dst_offset, view.data,
-			view.data_len);
-		vc->blk_bytes_rx += view.data_len;
-	}
-	vc->blk_rx++;
+	if (f == NULL || vc == NULL || frame == NULL)
+		return 0;
 
-	/* Reported AFTER the bytes are in the buffer, describing what actually
-	 * landed (vms_pe.h SS4, block_data). No listener is legitimate. */
-	if (f->upper != NULL && f->upper->block_data != NULL)
-		f->upper->block_data(f->upper->ctx, vc->peer_sysid, buf->name,
-				     view.hdr.dst_offset, view.data_len,
-				     view.hdr.bytes_remaining);
+	/* The inner message's OWN declared bound, from the codec that owns the
+	 * arithmetic. Equal to `len` means the frame is exactly its inner
+	 * message: no trailer, nothing to do. */
+	if (vms_scs_inner_frame_len(frame, len, &inner) != VMS_CODEC_OK)
+		return 0;
+	if (inner >= len)
+		return 0;
+	/*
+	 * AND THE BOUND HAS TO BE ONE A MESSAGE COULD REALLY HAVE. Every SCS
+	 * message reaches at least its SYSAP body (abs 72, VMS_OFF_SYSAP_BODY);
+	 * a frame declaring an inner length shorter than that is one whose
+	 * inner-length word was never filled in, and probing the rest of it as
+	 * a trailer would read an ordinary message's own bytes as a block
+	 * header. Skipped -- and NOT counted as an unnamed block frame, because
+	 * it is not a block frame at all.
+	 */
+	if (inner < VMS_OFF_SYSAP_BODY)
+		return 0;
+
+	if (vms_blk_trailer_parse(frame, len, inner, &view) != VMS_CODEC_OK)
+		return 0;
+
+	if (!blk_rx_take(f, vc, &view))
+		return 0;
+	f->blk_rx_trailer++;
 	return 1;
 }
 

@@ -596,8 +596,10 @@ void vms_mscp_srv_stop(struct vms_cluster *cl)
 	s = cl->mscp;
 
 	/* Stop being told about transfers before anything is torn down, so no
-	 * completion can arrive mid-teardown. */
-	(void)vms_scs_set_block_consumer(cl, NULL, NULL);
+	 * completion can arrive mid-teardown. The withdrawal NAMES this server
+	 * (vms_scs.h SS9 keys the table on ctx), so it cannot take the disk class
+	 * driver's registration down with it. */
+	(void)vms_scs_set_block_consumer(cl, NULL, s);
 	srv_unlisten(s);
 	if (cl->fork != NULL) {
 		cf_timer_cancel(cl->fork, CF_OWNER_MSCP, MSCP_SRV_TIMER_BEAT,

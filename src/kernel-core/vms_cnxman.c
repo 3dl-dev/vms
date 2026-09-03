@@ -116,6 +116,16 @@ struct vms_cnxman {
 	struct scs_sysap_ops        vc_sysap;
 	struct scs_sysap_ops        mscp_sysap;
 
+	/*
+	 * The DISK CLASS DRIVER's hook on the ONE `VMS$DISK_CL_DRVR`
+	 * registration (vms_cnxman.h SS5b, FC-P7.1). NULL is a real
+	 * configuration -- a node that mounts no served disk -- and then the
+	 * join's own walk is the only consumer, exactly as before.
+	 */
+	struct cnxman_disk_client_ops disk_client;
+	uint8_t                       disk_client_set;
+	uint8_t                       pad_dc[3];
+
 	struct cnxman_join    join;
 	struct cnxman_barrier  barrier;
 	struct cnxman_coord    coord;
@@ -845,17 +855,38 @@ static int cnxman_mscp_connect_req(void *ctx, vms_conid_t local_conid,
 	return (int)SS__NOSUCHDEV;
 }
 
+/*
+ * THE FAN-OUT (vms_cnxman.h SS5b). One SYSAP registration, two consumers: the
+ * join's discovery walk and the disk class driver. Neither guesses which
+ * connection is whose -- the join already ignores a Con.ID that is not the one
+ * it opened, and the class driver ignores a Con.ID it holds no CDDB for -- so
+ * handing each event to both is a demux on facts each of them holds, not a
+ * routing decision made here.
+ */
+static const struct cnxman_disk_client_ops *cnxman_dc(struct vms_cnxman *cn)
+{
+	return cn->disk_client_set ? &cn->disk_client
+				   : (const struct cnxman_disk_client_ops *)0;
+}
+
 static void cnxman_mscp_opened(void *ctx, vms_conid_t local_conid)
 {
-	(void)ctx; (void)local_conid;
+	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
+	const struct cnxman_disk_client_ops *dc = cnxman_dc(cn);
+
+	if (dc != NULL && dc->opened != NULL)
+		dc->opened(dc->ctx, local_conid);
 }
 
 static int cnxman_mscp_message(void *ctx, vms_conid_t local_conid,
 			       const uint8_t *body, uint32_t len)
 {
 	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
+	const struct cnxman_disk_client_ops *dc = cnxman_dc(cn);
 
 	cnxman_join_rx_mscp(&cn->join, local_conid, body, len);
+	if (dc != NULL && dc->message != NULL)
+		(void)dc->message(dc->ctx, local_conid, body, len);
 	return 0;
 }
 
@@ -863,8 +894,11 @@ static void cnxman_mscp_closed(void *ctx, vms_conid_t local_conid,
 			       uint32_t reason)
 {
 	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
+	const struct cnxman_disk_client_ops *dc = cnxman_dc(cn);
 
 	cnxman_join_closed(&cn->join, local_conid, reason);
+	if (dc != NULL && dc->closed != NULL)
+		dc->closed(dc->ctx, local_conid, reason);
 }
 
 static void cnxman_mscp_sysap_bind(struct vms_cnxman *cn)
@@ -1310,6 +1344,43 @@ void cnxman_set_dlm(struct vms_cluster *cl, const struct dlm_scs_role_ops *ops)
 	cnxman_barrier_set_dlm(&cn->barrier, ops);
 	cnxman_coord_set_dlm(&cn->coord, ops);
 	vms_cluster_fork_leave(cl);
+}
+
+/* ==========================================================================
+ * 11b. The disk class driver's hook (vms_cnxman.h SS5b, FC-P7.1)
+ * ========================================================================== */
+
+void cnxman_set_disk_client(struct vms_cluster *cl,
+			    const struct cnxman_disk_client_ops *ops)
+{
+	struct vms_cnxman *cn;
+
+	if (cl == NULL || cl->cnxman == NULL)
+		return;
+	cn = cl->cnxman;
+
+	vms_cluster_fork_enter(cl);
+	if (ops == NULL) {
+		memset(&cn->disk_client, 0, sizeof(cn->disk_client));
+		cn->disk_client_set = 0u;
+	} else {
+		cn->disk_client = *ops;
+		cn->disk_client_set = 1u;
+	}
+	vms_cluster_fork_leave(cl);
+}
+
+int cnxman_disk_client_connect(struct vms_cluster *cl, vms_scs_sysid_t dst,
+			       vms_conid_t *out_conid)
+{
+	if (cl == NULL || out_conid == NULL)
+		return (int)SS__BADPARAM;
+	if (cl->cnxman == NULL || cl->scs == NULL)
+		return (int)SS__NOSUCHDEV;
+	/* The two names are vms_cnxman_join_fsm.c's, which is where the ONE
+	 * spelling of each lives; no caller re-types them. */
+	return scs_connect(cl->scs, cnxman_join_name_disk_cl_drvr,
+			   cnxman_join_name_mscp_disk, dst, out_conid);
 }
 
 /* ==========================================================================

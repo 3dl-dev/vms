@@ -756,6 +756,15 @@ struct vms_device {
 	uint32_t            backing_minor;
 
 	/*
+	 * MSCP-SERVED (FC-P7.1). 1 for a unit the disk class driver entered
+	 * from a REAL discovery walk on another cluster member: the bytes are
+	 * NOT on this node and `backing` is deliberately empty. This is the
+	 * executive state DVI$_MSCP_SERVED (dvidef.h 0x0073) projects; it is
+	 * never set for a locally enumerated disk.
+	 */
+	uint32_t            mscp_served;
+
+	/*
 	 * Ethernet backing (devclass == DC$_SCOM). The executive's PRIVATE record
 	 * of which real interface ETH0: fronts; NEVER surfaced to a VMS program
 	 * (INV-4). Empty/zero on this substrate today -- exec_netdev_primary is
@@ -1080,6 +1089,16 @@ void vms_devtab_cleanup(void);
  * enumerate (see vms_devtab.c). Returns 0 on success, -ENOMEM on failure. */
 int  vms_devtab_add_disk(const char *devnam, const char *backing,
                          uint32_t backing_major, uint32_t backing_minor);
+
+/*
+ * Enter / withdraw ONE MSCP-SERVED disk unit (FC-P7.1). The bytes live on
+ * another cluster member: the row has NO local backing and carries
+ * mscp_served, which is what DVI$_MSCP_SERVED reads. Called from the cluster
+ * fork context by the disk class driver (src/kernel-core/vms_mscp_cl.c), never
+ * from module init. See vms_devtab.c for the full contract.
+ */
+int vms_devtab_add_served_disk(const char *devnam);
+int vms_devtab_remove_served_disk(const char *devnam);
 void vms_proc_release_channels(struct vms_proc *proc);
 long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dassgn(struct vms_proc *proc, unsigned long arg);

@@ -58,6 +58,55 @@ that capture to a `.spec` fixture and swap it into `test_replay.c`'s input list
 that blocks P3.3 CSID-learning may be isolable from this same established-join
 capture).
 
+### E14. Decoded `vms291` serving capture for the block-transfer oracle (raised by FC-P6.1)
+FC-P6.1's plan row asks for "R1 byte-exact on the vms291 mount capture frames".
+The three pcaps (`vms291-mount-A`, `vms291-control-B`, `vms291-boot-C`, lab-2
+`vaxlab-9`, 2026-08-06) are **host-only, never in git**: absent from
+`docs/clean-room/reference-captures.sha256` and absent from this machine. What
+IS in tree is the DECODE, in `docs/design-mscp-direction.md` ("Phase D part 1's
+lab capture — SCA block data transfer, DECODED"), and `tests/cluster/host/
+test_pe_block.c` asserts against exactly that: the 28-byte field table
+byte-for-byte, and all **five** recorded READ-END SCA content lengths
+(118/194/448/630/1142), each of which the builder reproduces exactly as
+`(58+32) + 28 + tail` for tail ∈ {0, 76, 330, 512, 1024}. That arithmetic
+closing on all five with no residual is the strongest available check without
+the packets.
+
+**Lab lane, three asks, in priority order:**
+1. **Decode `vms291-mount-A` to a `.spec` fixture** so a frame-for-frame byte
+   comparison replaces the length/field-table comparison.
+2. **The `+4` / `+6` words.** Still ungrounded ("Still ungrounded, do not build
+   on"). OVMX emits an explicit **zero** for both unless it has OBSERVED a pair
+   on that circuit, and counts the zeros (`pe_fsm.blk_obs_absent`); it bakes in
+   neither the captured 9 nor the 13. Two questions the lab can settle from the
+   existing pcaps without new hardware: does the value at +4 differ between the
+   two DIRECTIONS of one connection (which would make it a per-endpoint id
+   rather than a per-connection one), and does +6 restart or continue across a
+   connection teardown?
+3. **Does a real port RETRANSMIT a block frame, and by what mechanism?**
+   FC-P1.2 excluded block frames from the unacked ring (a 1498-byte frame will
+   not fit a ring sized for the 204-byte message class) and FC-P6.1 honours
+   that, so OVMX does **not** retransmit one; recovery is MSCP's own host
+   timeout (`P.HTMO`). Every such frame is counted in `pe_fsm.blk_tx_unringed`.
+   If the capture shows a real server re-sending block frames — or a distinct
+   ack for them — that is a fidelity gap to reopen with a sized design, not a
+   silent one.
+4. **Does credit/flow control interact with block transfers?** Also on the
+   "do not build on" list. FC-P6.1 does **not** debit Send Credit for a block
+   frame: p. 2-43/2-44 gives the account to the sequenced *message* service and
+   the book bounds a block transfer by the NAMED BUFFER the far SYSAP sized
+   instead. If vms291 shows a real port's credit ledger moving with block
+   frames, that is a one-line change with an oracle behind it.
+
+**One judgement FC-P6.1 made and labelled, for the record.** Block frames
+consume the circuit's REAL `send_seq` (and its abs-44 mirror), because spec
+§4(k)'s correction places the class in the `0x4b`/`0x13` sequenced-application
+family and §4(h)(4) grounds that every frame of that family stamps one
+(17,758/17,758). The alternative — borrowing the datagram service's
+"`send_seq = 0`, no ordering claimed" shape — would be a wire claim nothing
+measured. The census in §4(h)(4a) cannot discriminate the two (it filters on
+`send_seq != 0`), so a decoded vms291 settles it too.
+
 ## RESOLVED / carried couplings
 
 ### E2. `enum cnxman_event` has no op-0x0f cell (raised by FC-P3.5)

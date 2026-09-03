@@ -139,6 +139,7 @@ vms-y := vms_module.o \
          ../kernel-core/vms_pe_fsm.o \
          ../kernel-core/vms_cluster_codec_hello.o \
          ../kernel-core/vms_cluster_codec_vc.o \
+         ../kernel-core/vms_cluster_codec_blk.o \
          ../kernel-core/vms_cnxman_csb.o \
          ../kernel-core/vms_cnxman_recnx_fsm.o \
          ../kernel-core/vms_cnxman_quorum.o \

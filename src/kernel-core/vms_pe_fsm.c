@@ -2086,6 +2086,19 @@ static void h_vc_rx_ack(struct pe_fsm *f, struct pe_vc *vc,
 static void vc_deliver(struct pe_fsm *f, struct pe_vc *vc,
 		       const struct pe_vc_rx *rx)
 {
+	/*
+	 * FC-P6.1: the port's OWN third service gets first refusal. A
+	 * block-transfer frame is not an SCS message -- its abs 56 is the
+	 * 28-byte block header, not an envelope -- so handing one upward would
+	 * be handing SCS a frame whose Con.ID field does not exist. pe_blk_rx_try
+	 * takes it ONLY when it names a buffer this port registered (a positive
+	 * executive fact, never a guess about bytes) and returns 0 otherwise, so
+	 * an ordinary message reaches the code below untouched.
+	 */
+	if (rx->frame != NULL &&
+	    pe_blk_rx_try(f, vc, rx->fi, rx->frame, rx->len))
+		return;
+
 	if (!rx->conid_valid || f->upper == NULL || f->upper->message == NULL) {
 		f->vc_rx_undelivered++;
 		return;
@@ -2922,6 +2935,452 @@ int pe_vc_send_dg(struct pe_fsm *f, vms_scs_sysid_t dst,
 		return PE_VC_SEND_TXFAIL;
 	vc->dg_tx++;
 	return PE_VC_SEND_OK;
+}
+
+/* --------------------------------------------------------------------------
+ * FC-P6.1: THE BLOCK-TRANSFER SERVICE (vms_pe_fsm.h SS8d)
+ *
+ * The third port service. Read SS8d first -- in particular why a block frame
+ * consumes a real sequence, why it does NOT ride the unacked ring, and why the
+ * +4/+6 header words are either a value this circuit OBSERVED or an explicit
+ * counted zero.
+ * -------------------------------------------------------------------------- */
+
+/* ---- named buffers (SS3c) ---- */
+
+static struct pe_blk_buf *blk_buf_slot(struct pe_fsm *f, uint32_t name)
+{
+	uint32_t i;
+
+	if (name == 0u)
+		return NULL;
+	for (i = 0; i < PE_BLK_MAX_BUFFERS; i++) {
+		if (f->blk_buf[i].name == name)
+			return &f->blk_buf[i];
+	}
+	return NULL;
+}
+
+const struct pe_blk_buf *pe_blk_buf_lookup(const struct pe_fsm *f,
+					   uint32_t name)
+{
+	uint32_t i;
+
+	if (f == NULL || name == 0u)
+		return NULL;
+	for (i = 0; i < PE_BLK_MAX_BUFFERS; i++) {
+		if (f->blk_buf[i].name == name)
+			return &f->blk_buf[i];
+	}
+	return NULL;
+}
+
+/*
+ * Mint the next name for slot `slot`: a monotone generation in the high bits
+ * and the slot in the low 8, never 0. OVMX's own rule (SS3c) -- the wire
+ * grounds only that the token is 32 bits both ends agree on. The generation is
+ * what stops a released name from being handed straight back out, so a stale
+ * transfer naming a dead buffer MISSES instead of landing in whatever took the
+ * slot.
+ */
+static uint32_t blk_name_mint(struct pe_fsm *f, uint32_t slot)
+{
+	uint32_t name;
+
+	do {
+		f->blk_name_gen++;
+		name = (f->blk_name_gen << 8) | ((slot + 1u) & 0xffu);
+	} while (name == 0u || pe_blk_buf_lookup(f, name) != NULL);
+	return name;
+}
+
+int pe_blk_buf_register(struct pe_fsm *f, uint8_t *base, uint32_t len,
+			uint8_t access, uint32_t *name_out)
+{
+	uint32_t i;
+
+	if (f == NULL || base == NULL || len == 0u || name_out == NULL)
+		return PE_BLK_INVAL;
+	if ((access & (PE_BLK_ACC_SRC | PE_BLK_ACC_DST)) == 0u)
+		return PE_BLK_INVAL;
+
+	for (i = 0; i < PE_BLK_MAX_BUFFERS; i++) {
+		if (f->blk_buf[i].name != 0u)
+			continue;
+		f->blk_buf[i].name = blk_name_mint(f, i);
+		f->blk_buf[i].base = base;
+		f->blk_buf[i].len = len;
+		f->blk_buf[i].access = access;
+		*name_out = f->blk_buf[i].name;
+		return PE_BLK_OK;
+	}
+	f->blk_no_slot++;
+	return PE_BLK_NOSPACE;
+}
+
+int pe_blk_buf_release(struct pe_fsm *f, uint32_t name)
+{
+	struct pe_blk_buf *b;
+
+	if (f == NULL)
+		return PE_BLK_INVAL;
+	b = blk_buf_slot(f, name);
+	if (b == NULL)
+		return PE_BLK_NOBUF;
+	/* The memory is the caller's; only the NAME is dropped. */
+	b->name = 0u;
+	b->base = NULL;
+	b->len = 0u;
+	b->access = 0u;
+	return PE_BLK_OK;
+}
+
+/* [off, off+n) inside a buffer of `len` bytes, with no arithmetic that can
+ * wrap past it. The one function every transfer's bounds run through. */
+static int blk_span_ok(uint32_t buf_len, uint32_t off, uint32_t n)
+{
+	if (off > buf_len)
+		return 0;
+	return (buf_len - off) >= n;
+}
+
+/* ---- the header, filled from real state only ---- */
+
+/*
+ * Fill one frame's 28-byte header. Every field traces to something the
+ * executive holds: `x` carries what the SYSAP read out of the peer's own
+ * message, `buf` is our registered buffer, `done` is how much of THIS transfer
+ * has already gone out, and the +4/+6 words come from `vc`'s observed pair or
+ * are an explicit zero the caller counts.
+ */
+static void blk_fill_hdr(const struct pe_fsm *f, const struct pe_vc *vc,
+			 const struct pe_blk_xfer *x,
+			 const struct pe_blk_buf *buf, uint32_t done,
+			 struct vms_blk_hdr *h)
+{
+	(void)f;
+	pe_bzero(h, (uint32_t)sizeof(*h));
+	h->dest_conid = x->dest_conid;
+	/* +4/+6: the value this circuit OBSERVED, or an explicit zero. Never a
+	 * captured constant and never a rule this code invented -- see
+	 * vms_cluster_codec_blk.h "THE TWO UNGROUNDED WORDS". */
+	if (vc->obs_valid) {
+		h->obs_w4 = vc->obs_w4;
+		h->obs_w6 = vc->obs_w6;
+	}
+	h->bytes_remaining = x->length - done;
+	h->src_name = buf->name;
+	h->src_offset = x->local_offset + done;
+	h->dst_name = x->remote_name;
+	h->dst_offset = x->remote_offset + done;
+}
+
+/* The +4/+6 accounting, in one place: a frame built with no observed pair is
+ * counted, so "how often did this port emit an honest zero there" is a number
+ * and not a belief. */
+static void blk_note_obs(struct pe_fsm *f, const struct pe_vc *vc)
+{
+	if (!vc->obs_valid)
+		f->blk_obs_absent++;
+}
+
+/* ---- one frame out ---- */
+
+/*
+ * Give a block-transfer frame the circuit's real sequence position and
+ * transmit it. Mirrors pe_vc_send_frame's ORDER, and for the same reason: the
+ * sequence is consumed only by a frame that actually went out, so a refused or
+ * failed transmit leaves no hole for the peer to break the circuit over. It
+ * does NOT take a ring entry -- SS8d "NO RING".
+ */
+static int blk_stamp_and_send(struct pe_fsm *f, struct pe_vc *vc,
+			      uint8_t *frame, uint32_t total)
+{
+	struct vms_frame_info fi;
+	uint16_t seq = vc->send_seq;
+
+	if (vms_frame_classify(frame, total, &fi) != VMS_CODEC_OK)
+		return PE_BLK_BADFRAME;
+	if (vms_scs_seq_stamp(frame, total, &fi, vc->recv_seq, seq) !=
+	    VMS_CODEC_OK)
+		return PE_BLK_BADFRAME;
+	if (pe_tx_from(f, frame, total) != 0)
+		return PE_BLK_TXFAIL;
+
+	vc->send_seq = seq_next(seq);
+	vc->blk_tx++;
+	f->blk_tx_unringed++;
+	return PE_BLK_OK;
+}
+
+/*
+ * Build one standalone block-transfer frame into the scratch buffer: the
+ * port's own abs 0-55 (SS8c's envelope builder), then the codec's 28-byte
+ * header, then `n` data bytes, then the SCA length fixed up to the real total.
+ * Transmits it. Nothing is kept in scratch across the return.
+ */
+static int blk_send_one(struct pe_fsm *f, struct pe_vc *vc,
+			vms_scs_sysid_t dst, const struct vms_blk_hdr *h,
+			const uint8_t *data, uint32_t n)
+{
+	uint8_t *frame = f->scratch;
+	const uint32_t cap = (uint32_t)sizeof(f->scratch);
+	uint32_t total;
+
+	if (n > VMS_BLK_DATA_MAX)
+		return PE_BLK_TOOBIG;
+	total = VMS_BLK_DATA_OFF + n;
+	if (total > cap)
+		return PE_BLK_TOOBIG;
+
+	pe_bzero(frame, cap);
+	if (pe_send_build_envelope(f, dst, VMS_SCS_MT_MSG, 0u, 0u, frame,
+				   cap) != 0)
+		return PE_BLK_NOCIRCUIT;
+	if (vms_blk_hdr_build(h, frame, cap) != VMS_CODEC_OK)
+		return PE_BLK_BADFRAME;
+	if (n != 0u)
+		pe_copy(frame + VMS_BLK_DATA_OFF, data, n);
+	if (vms_scs_seq_envelope_fixup_len(frame, cap, total) != VMS_CODEC_OK)
+		return PE_BLK_BADFRAME;
+
+	return blk_stamp_and_send(f, vc, frame, total);
+}
+
+/* ---- the callers' shared preflight ---- */
+
+/*
+ * Everything a transfer must have before a byte moves, resolved ONCE: the open
+ * circuit, our own named buffer, and the peer-supplied identifiers we refuse to
+ * invent. The chunk size is clamped here too, so no caller downstream has to.
+ */
+struct blk_setup {
+	struct pe_vc           *vc;
+	const struct pe_blk_buf *buf;
+	uint32_t                chunk;
+};
+
+static int blk_setup_send(struct pe_fsm *f, const struct pe_blk_xfer *x,
+			  uint32_t tail_reserve, struct blk_setup *s)
+{
+	if (f == NULL || x == NULL || x->length == 0u)
+		return PE_BLK_INVAL;
+	if (tail_reserve > x->length)
+		return PE_BLK_INVAL;
+
+	/* INV-6: the destination connection ID and the peer's buffer name are
+	 * the PEER's values. If the SYSAP could not read them out of the
+	 * message that asked for this transfer, there is nothing honest to put
+	 * in those fields and the transfer is refused. */
+	if (x->dest_conid == 0u || x->remote_name == 0u)
+		return PE_BLK_NONAME;
+
+	s->vc = pe_fsm_vc_by_sysid(f, x->peer);
+	if (s->vc == NULL || s->vc->state != (uint8_t)VMS_PE_VC_OPEN)
+		return PE_BLK_NOCIRCUIT;
+
+	s->buf = pe_blk_buf_lookup(f, x->local_name);
+	if (s->buf == NULL)
+		return PE_BLK_NOBUF;
+	if ((s->buf->access & PE_BLK_ACC_SRC) == 0u)
+		return PE_BLK_PERM;
+	if (!blk_span_ok(s->buf->len, x->local_offset, x->length))
+		return PE_BLK_RANGE;
+
+	s->chunk = (x->chunk != 0u && x->chunk < VMS_BLK_DATA_MAX)
+		   ? x->chunk : VMS_BLK_DATA_MAX;
+	return PE_BLK_OK;
+}
+
+int pe_blk_send(struct pe_fsm *f, const struct pe_blk_xfer *x,
+		uint32_t tail_reserve, uint32_t *frames_out)
+{
+	struct blk_setup s;
+	struct vms_blk_hdr h;
+	uint32_t done = 0u;
+	uint32_t stream;
+	uint32_t frames = 0u;
+	int rc = blk_setup_send(f, x, tail_reserve, &s);
+
+	if (frames_out != NULL)
+		*frames_out = 0u;
+	if (rc != PE_BLK_OK)
+		return rc;
+
+	stream = x->length - tail_reserve;
+	while (done < stream) {
+		uint32_t n = stream - done;
+
+		if (n > s.chunk)
+			n = s.chunk;
+		blk_fill_hdr(f, s.vc, x, s.buf, done, &h);
+		rc = blk_send_one(f, s.vc, x->peer, &h,
+				  s.buf->base + x->local_offset + done, n);
+		if (rc != PE_BLK_OK)
+			break;
+		blk_note_obs(f, s.vc);   /* counted only for a frame that WENT */
+		s.vc->blk_bytes_tx += n;
+		done += n;
+		frames++;
+	}
+	if (frames_out != NULL)
+		*frames_out = frames;
+	return rc;
+}
+
+int pe_blk_send_read_end(struct pe_fsm *f, const struct pe_blk_xfer *x,
+			 uint32_t tail_len, const uint8_t *body,
+			 uint32_t body_len)
+{
+	struct blk_setup s;
+	struct vms_blk_hdr h;
+	uint8_t *frame;
+	uint32_t cap;
+	uint32_t end_len;
+	uint32_t total = 0u;
+	int rc;
+
+	if (body == NULL || body_len == 0u)
+		return PE_BLK_INVAL;
+	rc = blk_setup_send(f, x, tail_len, &s);
+	if (rc != PE_BLK_OK)
+		return rc;
+	if (tail_len > VMS_BLK_DATA_MAX)
+		return PE_BLK_TOOBIG;
+
+	frame = f->scratch;
+	cap = (uint32_t)sizeof(f->scratch);
+	/* The end message's own frame: the port's abs 0-55 plus the caller's
+	 * abs-56-onward body. Its length is what the trailer is appended PAST,
+	 * and what a receiver must NOT use to bound the frame (TRAP 1). */
+	end_len = PE_SEND_BODY_OFF + body_len;
+	if (end_len > cap ||
+	    (cap - end_len) < (VMS_BLK_HDR_LEN + tail_len))
+		return PE_BLK_TOOBIG;
+
+	pe_bzero(frame, cap);
+	if (pe_send_build_envelope(f, x->peer, VMS_SCS_MT_MSG, 0u, 0u, frame,
+				   cap) != 0)
+		return PE_BLK_NOCIRCUIT;
+	pe_copy(frame + PE_SEND_BODY_OFF, body, body_len);
+
+	/* The trailer describes the transfer's FINAL chunk: everything before
+	 * it has already been streamed by pe_blk_send(). */
+	blk_fill_hdr(f, s.vc, x, s.buf, x->length - tail_len, &h);
+	if (vms_blk_trailer_build(&h, s.buf->base + x->local_offset +
+					(x->length - tail_len),
+				  tail_len, frame, cap, end_len,
+				  &total) != VMS_CODEC_OK)
+		return PE_BLK_BADFRAME;
+
+	/* The SCA length covers the WHOLE frame including the trailer -- the
+	 * recorded READ-END SCA contents 118/194/448/630/1142 are each the
+	 * 90-content end message plus 28 plus the tail. The inner message's own
+	 * declared length is untouched and still names only itself. */
+	if (vms_scs_seq_envelope_fixup_len(frame, cap, total) != VMS_CODEC_OK)
+		return PE_BLK_BADFRAME;
+
+	rc = blk_stamp_and_send(f, s.vc, frame, total);
+	if (rc == PE_BLK_OK) {
+		blk_note_obs(f, s.vc);   /* counted only for a frame that WENT */
+		s.vc->blk_bytes_tx += tail_len;
+	}
+	return rc;
+}
+
+int pe_blk_send_ack(struct pe_fsm *f, vms_scs_sysid_t dst,
+		    const struct vms_blk_hdr *req)
+{
+	struct pe_vc *vc;
+
+	if (f == NULL || req == NULL)
+		return PE_BLK_INVAL;
+	vc = pe_fsm_vc_by_sysid(f, dst);
+	if (vc == NULL || vc->state != (uint8_t)VMS_PE_VC_OPEN)
+		return PE_BLK_NOCIRCUIT;
+
+	/* TRAP 2: the response's 28 bytes are BYTE-IDENTICAL to the request's
+	 * and carry no data. `*req` was parsed off the received frame, so every
+	 * byte here was read from the wire -- this function composes none of
+	 * them, including the +4/+6 words. */
+	return blk_send_one(f, vc, dst, req, NULL, 0u);
+}
+
+/* ---- receive ---- */
+
+/* The observed +4/+6 pair, learned from a frame that really arrived on this
+ * circuit. This is the ONLY writer of pe_vc.obs_*. */
+static void blk_learn_obs(struct pe_vc *vc, const struct vms_blk_hdr *h)
+{
+	vc->obs_w4 = h->obs_w4;
+	vc->obs_w6 = h->obs_w6;
+	vc->obs_valid = 1u;
+}
+
+int pe_blk_rx_try(struct pe_fsm *f, struct pe_vc *vc,
+		  const struct vms_frame_info *fi, const uint8_t *frame,
+		  uint32_t len)
+{
+	struct vms_blk_view view;
+	struct pe_blk_buf *buf;
+
+	if (f == NULL || vc == NULL || frame == NULL)
+		return 0;
+	/* Cheap structural precondition -- NOT a class test (see the codec). */
+	if (!vms_blk_frame_structural_ok(frame, len))
+		return 0;
+	if (vms_blk_frame_parse(frame, len, fi, &view) != VMS_CODEC_OK)
+		return 0;
+
+	/* THE DISCRIMINATOR: does this frame name a buffer WE registered? */
+	buf = blk_buf_slot(f, view.hdr.dst_name);
+	if (buf == NULL) {
+		f->blk_rx_unnamed++;
+		return 0;             /* not ours -- normal delivery runs */
+	}
+
+	/* From here the frame IS a block transfer for this node, so it is
+	 * consumed either way: a malformed one is dropped and counted, never
+	 * passed on to be misread as an SCS message. */
+	if ((buf->access & PE_BLK_ACC_DST) == 0u ||
+	    !blk_span_ok(buf->len, view.hdr.dst_offset, view.data_len)) {
+		f->blk_rx_range++;
+		return 1;
+	}
+
+	blk_learn_obs(vc, &view.hdr);
+	if (view.data_len != 0u) {
+		pe_copy(buf->base + view.hdr.dst_offset, view.data,
+			view.data_len);
+		vc->blk_bytes_rx += view.data_len;
+	}
+	vc->blk_rx++;
+
+	/* Reported AFTER the bytes are in the buffer, describing what actually
+	 * landed (vms_pe.h SS4, block_data). No listener is legitimate. */
+	if (f->upper != NULL && f->upper->block_data != NULL)
+		f->upper->block_data(f->upper->ctx, vc->peer_sysid, buf->name,
+				     view.hdr.dst_offset, view.data_len,
+				     view.hdr.bytes_remaining);
+	return 1;
+}
+
+const char *pe_blk_status_name(enum pe_blk_status s)
+{
+	switch (s) {
+	case PE_BLK_OK:        return "ok";
+	case PE_BLK_NOBUF:     return "no-such-buffer";
+	case PE_BLK_NOSPACE:   return "buffer-table-full";
+	case PE_BLK_RANGE:     return "outside-buffer";
+	case PE_BLK_NOCIRCUIT: return "no-circuit";
+	case PE_BLK_BADFRAME:  return "bad-frame";
+	case PE_BLK_TOOBIG:    return "too-big";
+	case PE_BLK_TXFAIL:    return "transmit-failed";
+	case PE_BLK_PERM:      return "buffer-access";
+	case PE_BLK_NONAME:    return "peer-name-absent";
+	case PE_BLK_INVAL:     return "invalid-argument";
+	default:               return "?";
+	}
 }
 
 void pe_fsm_vc_timer(struct pe_fsm *f, uint32_t index)

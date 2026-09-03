@@ -404,6 +404,32 @@ static int bytes_eq(const uint8_t *a, const uint8_t *b, uint32_t n)
 	return 1;
 }
 
+/*
+ * The ONE reading of the 16-byte result field, so the frame-level and the
+ * body-level entry points below cannot classify the same bytes differently.
+ */
+static void dir_result_read(const uint8_t *result,
+			    struct vms_scs_dir_lookup *out)
+{
+	uint32_t i;
+
+	if (bytes_all_zero(result, VMS_SCSCTRL_NAME_LEN)) {
+		out->result_kind = VMS_SCS_DIR_RESULT_EMPTY;
+		for (i = 0; i < VMS_SCSCTRL_NAME_LEN; i++)
+			out->result[i] = 0;
+		return;
+	}
+	if (bytes_eq(result, vms_scs_dir_not_present_here,
+		     VMS_SCSCTRL_NAME_LEN))
+		out->result_kind = VMS_SCS_DIR_RESULT_NOT_PRESENT;
+	else
+		/* sec 4(h)(2) RE gap (c): an affirmative result is real wire
+		 * data, honestly carried, with no asserted internal meaning. */
+		out->result_kind = VMS_SCS_DIR_RESULT_AFFIRMATIVE;
+	for (i = 0; i < VMS_SCSCTRL_NAME_LEN; i++)
+		out->result[i] = result[i];
+}
+
 vms_codec_status_t
 vms_scs_dir_lookup_parse(const struct vms_scs_ctrl_frame *f,
 			 struct vms_scs_dir_lookup *out)
@@ -421,23 +447,7 @@ vms_scs_dir_lookup_parse(const struct vms_scs_ctrl_frame *f,
 
 	for (i = 0; i < VMS_SCSCTRL_NAME_LEN; i++)
 		out->queried_name[i] = f->name1[i];
-
-	if (bytes_all_zero(f->name2, VMS_SCSCTRL_NAME_LEN)) {
-		out->result_kind = VMS_SCS_DIR_RESULT_EMPTY;
-		for (i = 0; i < VMS_SCSCTRL_NAME_LEN; i++)
-			out->result[i] = 0;
-	} else if (bytes_eq(f->name2, vms_scs_dir_not_present_here,
-			    VMS_SCSCTRL_NAME_LEN)) {
-		out->result_kind = VMS_SCS_DIR_RESULT_NOT_PRESENT;
-		for (i = 0; i < VMS_SCSCTRL_NAME_LEN; i++)
-			out->result[i] = f->name2[i];
-	} else {
-		/* sec 4(h)(2) RE gap (c): an affirmative result is real wire
-		 * data, honestly carried, with no asserted internal meaning. */
-		out->result_kind = VMS_SCS_DIR_RESULT_AFFIRMATIVE;
-		for (i = 0; i < VMS_SCSCTRL_NAME_LEN; i++)
-			out->result[i] = f->name2[i];
-	}
+	dir_result_read(f->name2, out);
 	return VMS_CODEC_OK;
 }
 
@@ -474,5 +484,95 @@ vms_scs_dir_lookup_build(const struct vms_scs_dir_lookup *dl,
 	f->has_names = 1;
 	f->has_blank = 0;
 	f->has_tail4 = 0;
+	return VMS_CODEC_OK;
+}
+
+/* ------------------------------------------------------------------ *
+ * The body-level directory message (abs 72-107) -- FC-P2.3
+ * ------------------------------------------------------------------ */
+
+vms_codec_status_t vms_scs_dir_msg_parse(const uint8_t *body, uint32_t len,
+					 struct vms_scs_dir_msg *out)
+{
+	vms_wire_view_t v;
+
+	if (body == (const uint8_t *)0 || out == (struct vms_scs_dir_msg *)0)
+		return VMS_CODEC_E_INVAL;
+	if (len < VMS_SCS_DIRBODY_LEN)
+		return VMS_CODEC_E_SHORT;
+
+	vms_wire_view_init(&v, body, VMS_SCS_DIRBODY_LEN);
+	if (!vms_wire_view_ok(&v))
+		return VMS_CODEC_E_INVAL;
+
+	out->marker = vms_wire_get_le32(&v, VMS_OFF_SCSDIRBODY_MARKER);
+	vms_wire_get_bytes(&v, VMS_OFF_SCSDIRBODY_NAME, VMS_SCSCTRL_NAME_LEN,
+			   out->lookup.queried_name);
+	vms_wire_get_bytes(&v, VMS_OFF_SCSDIRBODY_RESULT, VMS_SCSCTRL_NAME_LEN,
+			   out->lookup.result);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+
+	dir_result_read(out->lookup.result, &out->lookup);
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_scs_dir_msg_build(const struct vms_scs_dir_msg *m,
+					 uint8_t *out, uint32_t cap)
+{
+	struct vms_scs_ctrl_frame scratch;
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+	uint32_t i;
+	uint8_t *p = (uint8_t *)&scratch;
+
+	if (m == (const struct vms_scs_dir_msg *)0 || out == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (cap < VMS_SCS_DIRBODY_LEN)
+		return VMS_CODEC_E_SHORT;
+
+	/* Go through vms_scs_dir_lookup_build() rather than re-deciding what a
+	 * result field holds: one encoder for the three readings. */
+	for (i = 0; i < (uint32_t)sizeof(scratch); i++)
+		p[i] = 0u;
+	st = vms_scs_dir_lookup_build(&m->lookup, &scratch);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_buf_init(&w, out, VMS_SCS_DIRBODY_LEN);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	vms_wire_put_le32(&w, VMS_OFF_SCSDIRBODY_MARKER, m->marker);
+	vms_wire_put_bytes(&w, VMS_OFF_SCSDIRBODY_NAME, VMS_SCSCTRL_NAME_LEN,
+			   scratch.name1);
+	vms_wire_put_bytes(&w, VMS_OFF_SCSDIRBODY_RESULT, VMS_SCSCTRL_NAME_LEN,
+			   scratch.name2);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_scs_dir_ctrl_from_body(const uint8_t *body, uint32_t len,
+					      struct vms_scs_ctrl_frame *f)
+{
+	struct vms_scs_dir_msg m;
+	vms_codec_status_t st;
+	uint32_t i;
+
+	if (f == (struct vms_scs_ctrl_frame *)0)
+		return VMS_CODEC_E_INVAL;
+
+	st = vms_scs_dir_msg_parse(body, len, &m);
+	if (st != VMS_CODEC_OK)
+		return st;
+	st = vms_scs_dir_lookup_build(&m.lookup, f);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	/* The marker is the SYSAP's own byte here, not a flag this codec
+	 * chooses: it is copied out of the body it was given. */
+	f->has_marker = 1;
+	for (i = 0; i < 4u; i++)
+		f->marker[i] = body[VMS_OFF_SCSDIRBODY_MARKER + i];
 	return VMS_CODEC_OK;
 }

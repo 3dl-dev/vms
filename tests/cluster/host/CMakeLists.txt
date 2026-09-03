@@ -286,8 +286,14 @@ cluster_host_pe_test(test_pe_view      test_pe_view.c)
 # the MTYPE dispatch, built from the SAME pure TU both kmods will compile once
 # FC-P2.4's glue gives it an in-module consumer. Linked against the FC-P2.1 SCS
 # codec it builds and parses every frame through -- there is no second path.
+# FC-P2.3 adds vms_scs_dir.c to the SAME library, because the SCS Directory
+# Service is not a layer above SCS -- *VAXcluster Principles* p. 2-51 puts both
+# SYSAPs inside SYS$SCS ("Technically these are SYSAPs. But they are considered
+# to be responsibilities of the SCS layer"), and it is the SYSAP registry the
+# same TU owns that a directory answer reads.
 add_library(cluster_host_scs STATIC
     ${OVMX_CLUSTER_CORE_DIR}/vms_scs_fsm.c
+    ${OVMX_CLUSTER_CORE_DIR}/vms_scs_dir.c
 )
 target_include_directories(cluster_host_scs PUBLIC ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_scs PUBLIC OVMX_CLUSTER_HOST)
@@ -317,6 +323,15 @@ cluster_host_scs_test(test_scs_fsm     test_scs_fsm.c)
 cluster_host_scs_test(test_scs_fsm_credit  test_scs_fsm_credit.c)
 cluster_host_scs_test(test_scs_fsm_vcdown  test_scs_fsm_vcdown.c)
 
+# ---- FC-P2.3: the SYSAP registry read + the SCS$DIRECTORY/SCS$DIR_LOOKUP
+# SYSAPs. test_scs_directory is the plan row's "R1 against the dir specimens"
+# (HIT / NOT PRESENT HERE / client round-trip / transient teardown);
+# test_scs_dir_join REPLAYS the established-join server-half sequence of wire
+# spec sec 4(L) frame for frame. (Named test_scs_directory, not test_scs_dir:
+# the retired userspace strawman's tests/vmsscs/ already owns that target.)
+cluster_host_scs_test(test_scs_directory test_scs_directory.c)
+cluster_host_scs_test(test_scs_dir_join  test_scs_dir_join.c)
+
 # ---- FC-P0.1: the pure inter-layer headers must be host-includable ----
 # Everything below builds with -DOVMX_CLUSTER_HOST, which routes vms_cluster.h
 # to <stdint.h> instead of vms_internal.h. (OVMX_CLUSTER_CORE_DIR is set above.)
@@ -342,6 +357,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_cnxman_coord_fsm.c  # FC-P3.12
     hdr_alone_vms_pe_fsm.c            # FC-P0.8
     hdr_alone_vms_scs_fsm.c           # FC-P2.2
+    hdr_alone_vms_scs_dir.c           # FC-P2.3
 )
 target_include_directories(cluster_host_hdr_alone PRIVATE ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_hdr_alone PRIVATE OVMX_CLUSTER_HOST)

@@ -32,6 +32,19 @@
  * names below are NOT redefined there, because `struct vms_scs` is undefined
  * outside vms_scs.c and the two cannot share a name in one TU.
  *
+ * THE TWIN OF EACH SERVICE, so the glue is a table and not a search:
+ *   scs_sysap_listen   -> scs_fsm_listen        scs_accept  -> scs_fsm_accept
+ *   scs_sysap_unlisten -> scs_fsm_unlisten      scs_reject  -> scs_fsm_reject
+ *   scs_connect        -> scs_fsm_connect       scs_send_msg-> scs_fsm_send_msg
+ *   scs_disconnect     -> scs_fsm_disconnect
+ *   scs_return_credit  -> scs_fsm_return_credit
+ *   scs_dir_lookup     -> scs_dir_inquire (vms_scs_dir.h -- a DIFFERENT name
+ *                         on purpose: `struct scs_dir` and `struct vms_scs`
+ *                         cannot share one in a TU that sees both, the same
+ *                         reason pe_send_msg/pe_vc_send_msg differ, note E9).
+ * FC-P2.3 completed every twin; FC-P2.4 owns vms_scs.c, which is where these
+ * names come into existence.
+ *
  * INCLUDES: kernel-core headers only (CI gate tools/ci/cluster_core_includes_gate.sh).
  */
 #ifndef OVMX_VMS_SCS_H
@@ -270,7 +283,13 @@ int scs_return_credit(struct vms_scs *scs, vms_conid_t local_conid, uint16_t n);
 /* Ask `dst` whether it hosts `name`. The answer arrives asynchronously via
  * `cb`: `present` is nonzero for a HIT and zero for the wire's literal
  * "NOT PRESENT HERE" -- there is no third value, and a lookup that never
- * answers times out rather than defaulting to either. */
+ * answers times out rather than defaulting to either.
+ *
+ * IMPLEMENTED (FC-P2.3) as scs_dir_inquire() over `struct scs_dir`
+ * (vms_scs_dir.h); this is its glue spelling. "Times out rather than
+ * defaulting to either" is executed literally there: an unanswered inquiry is
+ * counted and dropped WITHOUT calling `cb`, because reporting silence as
+ * absence would fabricate an answer the peer never gave (INV-6). */
 typedef void (*scs_dir_result_cb)(void *ctx, vms_scs_sysid_t from,
 				  const uint8_t *name, int present);
 

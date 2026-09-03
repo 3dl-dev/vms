@@ -217,16 +217,29 @@ family and §4(h)(4) grounds that every frame of that family stamps one
 measured. The census in §4(h)(4a) cannot discriminate the two (it filters on
 `send_seq != 0`), so a decoded vms291 settles it too.
 
-### E16. kif_caller_census WILL red main CI when this branch lands (confirmed by FC-P6.1)
-`kif_caller_census` fails with "compile_commands.json contains backslash escapes"
-— reproduced on a clean baseline tree (NOT introduced by any FC item). Root:
-FC-P0.6/P0.8's `target_compile_definitions(... OVMX_FIXTURE_DIR="${...}")` in
-`tests/cluster/host/CMakeLists.txt`; the census configures its own
-`-DBUILD_TESTS=ON` build and trips on the backslash-escaped path. **This is a
-pre-PR blocker: it will red main CI when `feat/cluster-executive` merges.** Fix =
-unescape in `tests/integration/test_kif_caller_census.sh` OR move the fixture
-paths to a generated header. **Must be fixed before the final PR to main** (own
-item; do not let the branch land red). Supersedes E7's provisional note.
+### E16. kif_caller_census WILL red main CI when this branch lands (confirmed FC-P6.1; diagnosed by integrator)
+`test_kif_caller_census.sh` fails "compile_commands.json contains backslash
+escapes" — the blanket `grep -q '\\' "$CCJ"` pre-check at ~line 1030. Root: the
+cluster host tests' `target_compile_definitions(... OVMX_FIXTURE_DIR="${dir}")`
+(tests/cluster/host/CMakeLists.txt) emit `-DOVMX_FIXTURE_DIR=\"/path\"` whose
+JSON-escaped quotes are legitimate backslashes.
+**PRECISE FIX GUIDANCE (do it RIGHT — this is an INV-6 gate, do NOT weaken it):**
+- The census ALREADY scope-excludes test TUs (its final awk keeps only
+  `^(src|tools)/`), and product TUs (src/tools) carry NO such defines → no
+  backslashes. The only problem is the GLOBAL pre-check running before that
+  filter. The census's own comment sanctions: "teach the reader to unescape; do
+  NOT relax the census."
+- **Preferred fix:** either (a) teach the awk line-reader to unescape `\"`/`\\`
+  in the `command` field (then the pre-check can go) — verify with the census's
+  own negctl/self-test that it STILL catches a real mis-split; OR (b) apply the
+  backslash guard only AFTER filtering to `src/tools` lines (product-only), so a
+  real product escape still refuses but a test-TU escape is ignored — same
+  protection, correctly scoped. Do NOT just delete the check.
+- **Alternative (broader, avoid unless a/b fail):** move the fixture paths to a
+  `configure_file` generated header so no `-D"..."` define exists — but that
+  touches CMakeLists + ~15 test .c files.
+- **DISPATCH after P2.3 lands (CMakeLists quiet). Pre-PR blocker: must be green
+  before `feat/cluster-executive` merges to main.** Supersedes E7.
 
 ### E17. ⚠ COMPAT-REGISTER OVERCLAIM: cluster-dlm claims distributed DLM COMPLETE (escalated to operator — INV-0/authenticity)
 `docs/compat/facilities/cluster-dlm.yaml` (→ `docs/compatibility-surface.md`, and

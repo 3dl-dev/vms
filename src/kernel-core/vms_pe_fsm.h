@@ -775,11 +775,25 @@ struct pe_identity {
 	/*
 	 * The connect/join nonce (spec SS4(a) abs 68). ZERO on a multicast HELLO
 	 * is GROUNDED; on a directed HELLO the real cluster carries a shared
-	 * token whose provenance is design SS5.3's OPEN QUESTION, measured by
-	 * FC-P0.13. Until that lands the executive has no such token, so
-	 * `join_nonce_valid` is 0, a zero goes out, and pe_fsm.nonce_absent
-	 * counts every frame that went out without one. The strawman daemon baked
-	 * a captured VAX's token in as a constant; this file will not.
+	 * token that is the SAME value on every node's directed HELLO because it
+	 * is derived from the cluster-wide credential, not a per-node secret
+	 * (spec SS4(g) "the join nonce and the credential question"). Design
+	 * SS5.3's OPEN QUESTION -- "where does OVMX legitimately get one" -- is
+	 * ANSWERED by that fact and by the FC-P0.8 E55 wire observation
+	 * (`tests/lab/captures/e53-group257-refire-20260903.pcap`): a member's
+	 * own directed HELLO to this node ALREADY carries the live token in the
+	 * clear (rx->disc->nonce), so this identity's nonce is LEARNED off that
+	 * wire, in THIS session, the moment a directed discovery frame first
+	 * carries a non-zero one (`pe_learn_join_nonce()`), and echoed back --
+	 * never invented, never a byte copied out of a stored capture file. Rule
+	 * 8 forbids computing VSI's unpublished (group#, password) -> nonce hash;
+	 * this is the sanctioned alternative, "the cluster's on-wire assignment".
+	 * Before anything has been learned `join_nonce_valid` is 0, a zero goes
+	 * out, and pe_fsm.nonce_absent counts every frame that went out without
+	 * one -- honest omission, per INV-6, for the first few frames of a fresh
+	 * join. The strawman daemon baked a captured VAX's token in as a
+	 * constant; this file never does -- it only ever repeats a value THIS
+	 * node watched a real peer send it in the current run.
 	 */
 	uint8_t  join_nonce[VMS_DISC_NONCE_LEN];
 	uint8_t  join_nonce_valid;
@@ -949,6 +963,8 @@ struct pe_fsm {
 	uint32_t rx_no_slot;        /* channel table full: refused, not recycled */
 	uint32_t ignored_events;    /* no grounded edge for [state][event]       */
 	uint32_t nonce_absent;      /* directed frames sent with no credential   */
+	uint32_t nonce_learned;     /* 0 or 1: the join nonce was learned live off
+				     * a real peer's directed frame this run    */
 	uint32_t tx_errors;         /* ops->send returned non-zero               */
 	uint32_t last_gasps_built;
 

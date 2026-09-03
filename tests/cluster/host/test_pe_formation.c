@@ -169,14 +169,83 @@ static void test_answer_the_captured_b2(void)
 	ct_check(d.h.disc.namelen == 6 && memcmp(d.h.disc.name, "OVMX  ", 6) == 0,
 		 "our own SCSNODE, not the specimen's");
 
-	/* SS5.3 is OPEN: this executive holds no cluster token, so a zero goes
-	 * out and is COUNTED. The specimen's ee053 95b is NOT harvested off the
-	 * wire and replayed -- that is the fabrication this design forbids. */
-	ct_check(d.h.disc.nonce[0] == 0 && d.h.disc.nonce[1] == 0 &&
-		 d.h.disc.nonce[2] == 0 && d.h.disc.nonce[3] == 0,
-		 "no credential is invented: the nonce goes out zero");
+	/* SS5.3 is ANSWERED (E55, `vms-d94` follow-on): the b2 INIT this node
+	 * just fed to itself is a REAL peer's OWN frame, live in this session,
+	 * and it ALREADY carries the cluster join nonce in the clear (spec
+	 * SS4(a)/SS4(g): the same value on every node's directed HELLO). This is
+	 * the identical "learn once, off the wire, right now" discipline SS4(a).0
+	 * already grounds for `remote_lavc` -- so the nonce this node LEARNED
+	 * from the specimen is exactly what goes out on the b3 answering it, not
+	 * a fabricated or stored-capture-replayed value (INV-6; Rule 8 forbids
+	 * only computing the unpublished (group#, password) -> nonce hash, which
+	 * this is not). */
+	ct_check(d.h.disc.nonce[0] == 0xee && d.h.disc.nonce[1] == 0x05 &&
+		 d.h.disc.nonce[2] == 0x39 && d.h.disc.nonce[3] == 0x5b,
+		 "the credential is LEARNED live off the peer's own b2, not invented");
+	ct_check_eq_u32(g_fsm.nonce_absent, 0,
+			"so this frame did not need to go out absent (E55)");
+	ct_check_eq_u32(g_fsm.nonce_learned, 1,
+			"and the learn event is counted, honestly, exactly once");
+}
+
+/* ------------------------------------------------------------------ *
+ * 1b. E55: the join nonce is LEARNED off a live peer, once, and reused
+ * cluster-wide -- never a stored-capture replay, never a per-peer echo.
+ * ------------------------------------------------------------------ */
+static void test_nonce_learned_from_a_real_peer(void)
+{
+	struct fake_peer vax1, vax2;
+	struct fake_pe_decoded before, after, to_other_peer;
+	static const uint8_t token[VMS_DISC_NONCE_LEN] = { 0xee, 0x05, 0x39, 0x5b };
+
+	printf("-- E55: the join nonce is LEARNED live, not fabricated nor "
+	       "per-peer echoed\n");
+	port_up(1030, 1500);
+	fake_peer_init(&vax1, 1025, vax1_hw, "VAX1");
+	fake_peer_init(&vax2, 1026, vax2_hw, "VAX2");
+
+	/* Before any peer has shown a credential: honest zero, counted. */
+	fake_pe_clear_frames(&g_fake);
+	(void)feed_peer(&vax1, 1030, 1, PE_PFW_VERIFY_B2, 1, 0);
+	ct_check_eq_u32(g_fake.n_frames, 1, "the first b2 is answered");
+	before = fake_pe_decode(&g_fake, 0);
+	ct_check(before.ok && before.h.disc.nonce[0] == 0 &&
+		 before.h.disc.nonce[1] == 0 && before.h.disc.nonce[2] == 0 &&
+		 before.h.disc.nonce[3] == 0,
+		 "no credential yet: the nonce goes out honestly zero");
 	ct_check(g_fsm.nonce_absent > 0,
 		 "and the absence is counted, not hidden (design SS5.3)");
+	ct_check_eq_u32(g_fsm.nonce_learned, 0, "nothing learned yet");
+
+	/* VAX1 re-INITs (a real channel bounce), THIS time presenting the
+	 * cluster-wide token in the clear, exactly as spec SS4(a)/SS4(g)
+	 * grounds and the E55 lab capture shows on every one of 310 real
+	 * directed b2 frames. */
+	memcpy(vax1.nonce, token, VMS_DISC_NONCE_LEN);
+	fake_pe_clear_frames(&g_fake);
+	(void)feed_peer(&vax1, 1030, 1, PE_PFW_VERIFY_B2, 1, 0);
+	after = fake_pe_decode(&g_fake, 0);
+	ct_check(after.ok && memcmp(after.h.disc.nonce, token, VMS_DISC_NONCE_LEN) == 0,
+		 "learned this run, echoed straight back to VAX1");
+	ct_check_eq_u32(g_fsm.nonce_learned, 1, "the learn event is counted once");
+
+	/* A SECOND, DIFFERENT peer that has never itself presented a
+	 * credential (VAX2's synthetic frame carries no nonce) still gets the
+	 * LEARNED token on OVMX's reply: it is this node's cluster-wide
+	 * identity, not a value echoed only back to whoever taught it --
+	 * SS4(g)'s "the same value on every node's directed HELLO". */
+	fake_pe_clear_frames(&g_fake);
+	(void)feed_peer(&vax2, 1030, 1, PE_PFW_VERIFY_B2, 1, 0);
+	to_other_peer = fake_pe_decode(&g_fake, 0);
+	ct_check(to_other_peer.ok &&
+		 memcmp(to_other_peer.h.disc.nonce, token, VMS_DISC_NONCE_LEN) == 0,
+		 "and reused, cluster-wide, on a channel that never taught it");
+
+	/* Learning does not re-fire: a second, different-looking directed
+	 * frame from VAX1 does not bump nonce_learned again. */
+	(void)feed_peer(&vax1, 1030, 1, PE_PFW_VERIFY_B3, 2, 0);
+	ct_check_eq_u32(g_fsm.nonce_learned, 1,
+			"learned exactly once per run, SS4(g) grounds it constant");
 }
 
 /* ------------------------------------------------------------------ *
@@ -570,6 +639,7 @@ int main(void)
 	}
 
 	test_answer_the_captured_b2();
+	test_nonce_learned_from_a_real_peer();
 	test_reciprocate_the_captured_padded_hello();
 	test_full_formation_replay();
 	test_cadence_and_timeout();

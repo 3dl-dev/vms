@@ -177,9 +177,11 @@ static void pe_hello_common(struct pe_fsm *f, struct vms_hello_frame *h)
 /*
  * The connect/join nonce. GROUNDED zero on a periodic multicast HELLO; on a
  * directed HELLO and on the SS4(O.30) last gasp the real cluster carries a
- * shared token this executive does not have until design SS5.3 / FC-P0.13
- * resolves where one legitimately comes from. Absent means a zero goes out and
- * is COUNTED -- never a token replayed out of a capture.
+ * shared token, LEARNED live off a real peer's own directed frame by
+ * pe_learn_join_nonce() below (spec SS4(g): the token is the same cluster-wide
+ * value on every node, so hearing it once from any peer is enough). Absent
+ * means a zero goes out and is COUNTED -- never a token replayed out of a
+ * stored capture file.
  */
 static void pe_put_nonce(struct pe_fsm *f, struct vms_hello_frame *h)
 {
@@ -188,6 +190,18 @@ static void pe_put_nonce(struct pe_fsm *f, struct vms_hello_frame *h)
 		return;
 	}
 	f->nonce_absent++;
+}
+
+/* True iff every byte of a VMS_DISC_NONCE_LEN span is zero. */
+static int pe_nonce_is_zero(const uint8_t n[VMS_DISC_NONCE_LEN])
+{
+	uint32_t i;
+
+	for (i = 0; i < VMS_DISC_NONCE_LEN; i++) {
+		if (n[i] != 0u)
+			return 0;
+	}
+	return 1;
 }
 
 /* A multicast HELLO: SS4(a)/SS4(b) -- incarnation 0, poller sweep 0. */
@@ -1005,6 +1019,32 @@ static void pe_channel_learn(struct pe_fsm *f, struct pe_channel *ch,
 	}
 }
 
+/*
+ * Learn the cluster join nonce off a real peer's own frame, the moment one
+ * arrives carrying a non-zero value (spec SS4(a)/SS4(g)): a directed HELLO
+ * from an established member ALREADY carries the live cluster-wide token in
+ * the clear (E55 wire observation,
+ * `tests/lab/captures/e53-group257-refire-20260903.pcap`: VAX1's directed b2
+ * to this node carries a constant non-zero nonce on every one of 310 frames).
+ * This is the SAME learn-from-the-wire discipline `pe_channel_learn()` above
+ * already uses for `remote_lavc` -- read once from a live peer, in THIS
+ * session, never a value this file invented or copied out of a stored
+ * capture file (INV-6; Rule 8: the (group#, password) -> nonce hash itself is
+ * unpublished and is never computed here -- this is "the cluster's on-wire
+ * assignment" instead). Learned once per run: SS4(g) grounds the token as
+ * constant cluster-wide, so re-learning would only re-assert the same bytes.
+ */
+static void pe_learn_join_nonce(struct pe_fsm *f, const struct pe_rx *rx)
+{
+	if (f->id.join_nonce_valid || rx->disc == NULL)
+		return;
+	if (pe_nonce_is_zero(rx->disc->nonce))
+		return;
+	pe_copy(f->id.join_nonce, rx->disc->nonce, VMS_DISC_NONCE_LEN);
+	f->id.join_nonce_valid = 1u;
+	f->nonce_learned = 1u;
+}
+
 /* Is this frame ours? A directed frame names THIS node's LOGICAL address at
  * abs 16; a multicast one names the cluster group. Anything else is somebody
  * else's traffic on a shared LAN and is counted, not processed. */
@@ -1120,6 +1160,7 @@ enum pe_channel_action pe_fsm_rx(struct pe_fsm *f, const uint8_t *frame,
 			return PE_CH_ACT_NONE;
 	}
 	pe_channel_learn(f, ch, &rx);
+	pe_learn_join_nonce(f, &rx);
 
 	act = pe_check_incarnation(f, ch, &rx);
 	if (act == PE_CH_ACT_NONE)

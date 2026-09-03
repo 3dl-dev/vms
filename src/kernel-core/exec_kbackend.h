@@ -802,12 +802,32 @@
  *                            const char *name)
  *        Start one kernel thread running fn(arg) and name it. Returns 0 (+ *t
  *        initialized) or an SS$_ status; on failure no thread exists. MAY SLEEP.
- *        Linux: kthread_run. NetBSD: kthread_create(PRI_NONE, KTHREAD_MPSAFE,
- *        NULL, fn, arg, &l, name).
+ *        Linux: kthread_run + get_task_struct (see THE HANDLE OWNS THE THREAD
+ *        below). NetBSD: kthread_create(PRI_NONE, KTHREAD_MPSAFE |
+ *        KTHREAD_MUSTJOIN, NULL, fn, arg, &l, name).
  *   void exec_kthread_stop(exec_kthread_t *t)
  *        Ask the thread to stop AND WAIT for it to exit (join). Idempotent on an
  *        already-stopped handle. MAY SLEEP; never called from the thread itself.
- *        Linux: kthread_stop. NetBSD: set the stop flag, cv_signal, kthread_join.
+ *        Linux: kthread_stop + put_task_struct. NetBSD: set the stop flag,
+ *        cv_signal, kthread_join.
+ *
+ *    THE HANDLE OWNS THE THREAD until _stop, AND THE BODY MAY RETURN FIRST.
+ *    Every thread body in this stack returns on its own when its work is done
+ *    -- cf_run() returns once a stop is requested AND the queues are drained,
+ *    cf_io_run() likewise -- and the stopper calls _stop afterwards purely to
+ *    JOIN it. Both bindings must therefore keep the thread object alive from
+ *    _create to _stop even though the thread has already exited:
+ *      NetBSD gets this from KTHREAD_MUSTJOIN, which kthread_join(9) requires
+ *      anyway. Linux does NOT get it for free -- an exited kthread is
+ *      self-reaped (kthreadd ignores SIGCHLD, so exit_notify() autoreaps),
+ *      which frees the task_struct AND the `struct kthread` behind it, and
+ *      kthread_stop() then reads freed memory. kthread_stop(9) says as much:
+ *      "If threadfn() may call kthread_exit() itself, the caller must ensure
+ *      task_struct can't go away." So the Linux binding holds an explicit
+ *      reference across the handle's life. FOUND, NOT REASONED: the FC-P6.6
+ *      QEMU run reproduced it as `BUG: kernel NULL pointer dereference ...
+ *      kthread_stop+0x48`, and the same oops reproduces on the pre-FC-P6.6
+ *      commit -- it was latent in FC-P0.5's binding from the start.
  *   int  exec_kthread_should_stop(exec_kthread_t *t)
  *        Nonzero iff a stop was requested; the fork loop tests it once per
  *        iteration. Takes the handle (Linux's kthread_should_stop() reads

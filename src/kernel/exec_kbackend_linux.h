@@ -1284,7 +1284,28 @@ static inline int exec_lan_link_up(int *out)
 /* ---- SS15 fork context: kthread_run / kthread_stop (joins) /
  * kthread_should_stop. Linux's kthread_should_stop() reads `current` and
  * ignores its argument -- the handle parameter exists for the NetBSD twin,
- * which has no such implicit read (exec_kbackend.h SS15). ---- */
+ * which has no such implicit read (exec_kbackend.h SS15). ----
+ *
+ * THE HANDLE OWNS A TASK REFERENCE, AND IT MUST (found by the FC-P6.6 QEMU
+ * hammer run: `BUG: kernel NULL pointer dereference ... kthread_stop+0x48`,
+ * a task_struct whose usage refcount was already 0).
+ *
+ * Every thread body in this stack RETURNS ON ITS OWN when its work is done --
+ * cf_run() returns once a stop has been requested AND the queues are drained,
+ * cf_io_run() likewise -- and only THEN does the stopper call
+ * exec_kthread_stop() to join it. On Linux a kthread that returns is
+ * self-reaped (its parent kthreadd ignores SIGCHLD, so exit_notify() autoreaps
+ * it), which drops the last reference and frees the task_struct AND the
+ * `struct kthread` behind it. kthread_stop() then reads a freed task's
+ * worker_private and dies -- and kthread_stop(9)'s own contract says so:
+ * "If threadfn() may call kthread_exit() itself, the caller must ensure
+ * task_struct can't go away."
+ *
+ * So the HANDLE holds a reference for its whole life. The NetBSD twin already
+ * has this guarantee by construction (KTHREAD_MUSTJOIN keeps the lwp until
+ * kthread_join), so this makes the two substrates' handles mean the same
+ * thing, which is the entire point of the seam.
+ */
 
 static inline int exec_kthread_create(exec_kthread_t *t, int (*fn)(void *),
 				      void *arg, const char *name)
@@ -1295,6 +1316,7 @@ static inline int exec_kthread_create(exec_kthread_t *t, int (*fn)(void *),
 		*t = NULL;
 		return (int)EXEC_SS_NOSUCHDEV;
 	}
+	get_task_struct(task);   /* released by exec_kthread_stop */
 	*t = task;
 	return 0;
 }
@@ -1302,8 +1324,13 @@ static inline int exec_kthread_create(exec_kthread_t *t, int (*fn)(void *),
 static inline void exec_kthread_stop(exec_kthread_t *t)
 {
 	if (t && *t) {
-		kthread_stop(*t);
+		struct task_struct *task = *t;
+
+		/* Cleared FIRST so a second _stop on the same handle is the
+		 * documented no-op rather than a second put of one reference. */
 		*t = NULL;
+		kthread_stop(task);
+		put_task_struct(task);
 	}
 }
 

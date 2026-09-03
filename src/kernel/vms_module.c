@@ -541,6 +541,7 @@ struct vms_ktest_hammer_result {
 	unsigned int       cadence_ticks;         /* expiries the fork thread ran */
 	unsigned int       cadence_ticks_during_io;
 	unsigned int       cadence_max_gap_ms;    /* the JITTER measurement      */
+	unsigned int       work_during_io;        /* THE PROPERTY, robustly      */
 	unsigned long long st_io_posted;
 	unsigned long long st_io_completed;
 	unsigned long long st_io_abandoned;
@@ -672,6 +673,15 @@ struct vms_ktest_hammer_work_ctx {
 	struct vms_ktest_hammer_cadence cadence;
 	unsigned int                    io_done_seen;
 	unsigned int                    io_tag_mismatches;
+	/*
+	 * THE ROBUST FORM OF THE MEASUREMENT: fork-thread dispatches that
+	 * happened while a worker callback was BLOCKED. The cadence below is
+	 * the same property expressed as a timer, but a timer expiry needs a
+	 * free work item and this test deliberately floods the work pool, so a
+	 * starved cadence is expected here and is NOT what the assertion rests
+	 * on (vms_cluster_fork.c: "The tick is LOST -- counted, never faked").
+	 */
+	unsigned int                    work_during_io;
 };
 
 static void vms_ktest_hammer_work_handler(void *ctx, const struct cf_work *w)
@@ -679,6 +689,8 @@ static void vms_ktest_hammer_work_handler(void *ctx, const struct cf_work *w)
 	struct vms_ktest_hammer_work_ctx *wc = ctx;
 
 	atomic_inc(&wc->delivered);
+	if (atomic_read(&wc->cadence.io->busy))
+		wc->work_during_io++;
 	if (w->kind == CF_WORK_IO_DONE) {
 		/* The handler returned the tag as its status, so a completion
 		 * whose halves disagree means one of them was rewritten. */
@@ -764,6 +776,35 @@ static int vms_ktest_hammer_post_fn(void *arg)
 			cond_resched();
 	}
 	return 0;
+}
+
+/*
+ * Spawn one CPU-0-bound producer, holding a task reference for the caller.
+ * Returns NULL on failure, which every caller treats as "that producer did not
+ * run" rather than as a reason to abandon the test.
+ */
+static struct task_struct *vms_ktest_hammer_spawn(int (*fn)(void *), void *arg,
+						  const char *name)
+{
+	struct task_struct *t = kthread_create(fn, arg, "%s", name);
+
+	if (IS_ERR(t))
+		return NULL;
+	get_task_struct(t);      /* released by vms_ktest_hammer_reap */
+	kthread_bind(t, 0);
+	wake_up_process(t);
+	return t;
+}
+
+/* Join one producer and release the reference its handle held. Safe on NULL
+ * and on a thread that has already returned -- which is the ordinary case
+ * here, since every producer exits on its own deadline. */
+static void vms_ktest_hammer_reap(struct task_struct *t)
+{
+	if (!t)
+		return;
+	kthread_stop(t);
+	put_task_struct(t);
 }
 
 static int vms_ktest_cluster_fork_hammer_run(const char *ifname_a,
@@ -856,34 +897,25 @@ static int vms_ktest_cluster_fork_hammer_run(const char *ifname_a,
 			   VMS_KTEST_HAMMER_CADENCE_WHICH, 0u,
 			   VMS_KTEST_HAMMER_CADENCE_MS);
 
-	/* Both bound to CPU 0: the harness's only vCPU. See the file-header
-	 * comment above for why that makes "same-CPU" true by construction. */
-	flood_t = kthread_create(vms_ktest_hammer_flood_fn, &fc, "vms_hammer_flood");
-	if (!IS_ERR(flood_t)) {
-		kthread_bind(flood_t, 0);
-		wake_up_process(flood_t);
-	} else {
-		flood_t = NULL;
-	}
-
-	post_t = kthread_create(vms_ktest_hammer_post_fn, &pc, "vms_hammer_post");
-	if (!IS_ERR(post_t)) {
-		kthread_bind(post_t, 0);
-		wake_up_process(post_t);
-	} else {
-		post_t = NULL;
-	}
-
-	if (res.worker_start_ok) {
-		io_t = kthread_create(vms_ktest_hammer_io_fn, &ic,
-				      "vms_hammer_io");
-		if (!IS_ERR(io_t)) {
-			kthread_bind(io_t, 0);
-			wake_up_process(io_t);
-		} else {
-			io_t = NULL;
-		}
-	}
+	/*
+	 * Both bound to CPU 0: the harness's only vCPU. See the file-header
+	 * comment above for why that makes "same-CPU" true by construction.
+	 *
+	 * EACH HANDLE HOLDS A TASK REFERENCE (vms_ktest_hammer_spawn). These
+	 * producer bodies RETURN when their own deadline passes and are then
+	 * kthread_stop()'d to be joined -- and on Linux a kthread that has
+	 * returned is self-reaped, so without a held reference that join reads
+	 * a freed task_struct. The FC-P6.6 QEMU run found exactly that
+	 * (kthread_stop+0x48, refcount already 0); exec_kbackend_linux.h's
+	 * SS15 binding carries the same fix for the executive's own threads.
+	 */
+	flood_t = vms_ktest_hammer_spawn(vms_ktest_hammer_flood_fn, &fc,
+					 "vms_hammer_flood");
+	post_t = vms_ktest_hammer_spawn(vms_ktest_hammer_post_fn, &pc,
+					"vms_hammer_post");
+	if (res.worker_start_ok)
+		io_t = vms_ktest_hammer_spawn(vms_ktest_hammer_io_fn, &ic,
+					      "vms_hammer_io");
 
 	/* Let both threads run out their OWN deadline check before signaling a
 	 * stop: kthread_stop() does not just join, it ACTIVELY requests an
@@ -896,12 +928,9 @@ static int vms_ktest_cluster_fork_hammer_run(const char *ifname_a,
 	/* Now the join: each thread has already (or is about to) notice its
 	 * own deadline and return on its own; kthread_stop() here is the
 	 * synchronization primitive that waits for that exit and reaps it. */
-	if (flood_t)
-		kthread_stop(flood_t);
-	if (post_t)
-		kthread_stop(post_t);
-	if (io_t)
-		kthread_stop(io_t);
+	vms_ktest_hammer_reap(flood_t);
+	vms_ktest_hammer_reap(post_t);
+	vms_ktest_hammer_reap(io_t);
 
 	/* Stop the cadence before the drain poll: it re-arms itself, so a live
 	 * cadence would keep the work queue non-empty forever and the bounded
@@ -915,7 +944,6 @@ static int vms_ktest_cluster_fork_hammer_run(const char *ifname_a,
 	res.posts_dropped_nobuf = pc.dropped_nobuf;
 	res.io_submitted = ic.submitted;
 	res.io_refused = ic.refused;
-	res.io_handler_calls = (unsigned int)atomic_read(&ic.calls);
 
 	/*
 	 * The SERVED-I/O WORKER goes down FIRST and is JOINED: it is the only
@@ -925,6 +953,8 @@ static int vms_ktest_cluster_fork_hammer_run(const char *ifname_a,
 	 * made to.
 	 */
 	vms_cluster_fork_worker_stop(cl);
+	/* Read AFTER the join, or the last callback to finish is missed. */
+	res.io_handler_calls = (unsigned int)atomic_read(&ic.calls);
 
 	/* The bounded drain proof -- see the file-header comment's "TWO-TIER
 	 * LOCKUP DETECTION". */
@@ -963,6 +993,7 @@ static int vms_ktest_cluster_fork_hammer_run(const char *ifname_a,
 	res.cadence_ticks = wc.cadence.ticks;
 	res.cadence_ticks_during_io = wc.cadence.ticks_during_io;
 	res.cadence_max_gap_ms = wc.cadence.max_gap_ms;
+	res.work_during_io = wc.work_during_io;
 
 	exec_socket_release(fc.peer_sock);
 teardown_lan:
@@ -1056,7 +1087,7 @@ static int vms_ktest_cluster_fork_hammer_result_get(char *buf, const struct kern
 	    "WORK_POSTED=%llu WORK_DROPPED_NOBUF=%llu WORK_DISPATCHED=%llu WAITS=%llu "
 	    "WORKER_START=%d IO_SUBMITTED=%u IO_REFUSED=%u IO_HANDLER_CALLS=%u "
 	    "IO_DONE_SEEN=%u IO_TAG_MISMATCHES=%u CADENCE_TICKS=%u "
-	    "CADENCE_TICKS_DURING_IO=%u CADENCE_MAX_GAP_MS=%u "
+	    "CADENCE_TICKS_DURING_IO=%u CADENCE_MAX_GAP_MS=%u WORK_DURING_IO=%u "
 	    "IO_POSTED=%llu IO_COMPLETED=%llu IO_ABANDONED=%llu\n",
 	    res.done, res.fork_start_ok, res.open_ok, res.l2_open_ok,
 	    res.duration_ms, res.elapsed_ms,
@@ -1068,7 +1099,7 @@ static int vms_ktest_cluster_fork_hammer_result_get(char *buf, const struct kern
 	    res.worker_start_ok, res.io_submitted, res.io_refused,
 	    res.io_handler_calls, res.io_done_seen, res.io_tag_mismatches,
 	    res.cadence_ticks, res.cadence_ticks_during_io,
-	    res.cadence_max_gap_ms,
+	    res.cadence_max_gap_ms, res.work_during_io,
 	    res.st_io_posted, res.st_io_completed, res.st_io_abandoned);
 }
 static const struct kernel_param_ops vms_ktest_cluster_fork_hammer_result_ops = {

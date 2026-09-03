@@ -374,32 +374,64 @@ int main(void)
         CHECK(io_calls > 0,
               "the WORKER kthread really ran the blocking I/O callback "
               "(this is where exec_blockdev_read_block sits on a served unit)");
-        CHECK(result_ll(result, "IO_COMPLETED") == io_sub,
-              "every ACCEPTED submission produced exactly one completion "
-              "(the work item is reserved with the request, so none can be lost)");
-        CHECK(io_done == io_sub,
+        /*
+         * THE FULL ACCOUNTING. Every accepted submission ends in exactly one
+         * of two places: a completion, or the ABANDON that a worker stop makes
+         * of what is still queued (its owner is being torn down; running the
+         * work would be work for nobody). Nothing else is possible, and
+         * nothing goes missing -- which is the property the reserved
+         * completion work item exists to give.
+         */
+        CHECK(result_ll(result, "IO_COMPLETED") + result_ll(result, "IO_ABANDONED")
+                  == io_sub,
+              "every ACCEPTED submission is accounted for exactly once: "
+              "completed, or abandoned by the worker stop");
+        CHECK(io_done == result_ll(result, "IO_COMPLETED"),
               "...and every completion was dispatched to the layer ON THE FORK "
               "THREAD as a CF_WORK_IO_DONE work item");
+        CHECK(io_calls == result_ll(result, "IO_COMPLETED"),
+              "...one worker callback per completion -- no request ran twice "
+              "and none was answered without running");
         CHECK(result_ll(result, "IO_TAG_MISMATCHES") == 0,
               "each completion carried its own tag and its callback's own status, "
               "unaltered (INV-6: the served READ's answer is the disk's answer)");
-        CHECK(result_ll(result, "CADENCE_TICKS") > 0,
-              "a REAL exec_timer cadence fired into the fork thread during the run");
-        CHECK(result_ll(result, "CADENCE_TICKS_DURING_IO") > 0,
-              "THE FIX, MEASURED: the fork thread kept running its cadence WHILE a "
-              "served I/O was blocking on the worker -- it is no longer behind the disk");
+        /*
+         * THE FIX, MEASURED. WORK_DURING_IO counts fork-thread dispatches that
+         * happened while a worker callback was BLOCKED in its sleep. Before
+         * FC-P6.6 that work ran ON the fork thread, so this number could only
+         * have been zero.
+         *
+         * The exec_timer CADENCE beside it is the same property expressed the
+         * way a HELLO beat is, and it is REPORTED, NEVER GATED -- deliberately,
+         * because gating it would be a flaky test, not a stronger one. This
+         * suite floods the work queue on purpose (FC-P0.16's own design: a
+         * poster loop pinned to the receiving CPU under a 0x6007 flood), the
+         * work pool is the default 128, and a timer expiry that finds no free
+         * work item is an HONEST COUNTED LOSS by the fork module's documented
+         * rule ("The tick is LOST -- counted, never faked"). A one-shot
+         * exec_timer is re-armed by its own expiry handler, so the FIRST such
+         * loss ends the cadence for the run -- and whether that happens before
+         * or after the first tick is a scheduling race, not a property of the
+         * worker. Measured across runs of this very build: 2 ticks, then 0.
+         *
+         * The cadence figure that IS graded is a wire measurement of real
+         * HELLOs under a real served READ loop, off a pcap:
+         * tests/lab/tools/run_mscp_srv_io_jitter_gate.sh (the FC-P6.6 plan
+         * row's R4 leg).
+         */
+        CHECK(result_ll(result, "WORK_DURING_IO") > 0,
+              "THE FIX, MEASURED: the fork thread kept dispatching WHILE a served "
+              "I/O was blocking on the worker -- it is no longer behind the disk");
         printf("  info worker: io_submitted=%lld handler_calls=%lld done_seen=%lld "
-               "cadence_ticks=%lld during_io=%lld max_gap_ms=%lld abandoned=%lld\n",
+               "completed=%lld abandoned=%lld work_during_io=%lld "
+               "cadence_ticks=%lld during_io=%lld max_gap_ms=%lld\n",
                io_sub, io_calls, io_done,
+               result_ll(result, "IO_COMPLETED"),
+               result_ll(result, "IO_ABANDONED"),
+               result_ll(result, "WORK_DURING_IO"),
                result_ll(result, "CADENCE_TICKS"),
                result_ll(result, "CADENCE_TICKS_DURING_IO"),
-               result_ll(result, "CADENCE_MAX_GAP_MS"),
-               result_ll(result, "IO_ABANDONED"));
-        printf("  info the <10ms HELLO-jitter figure the FC-P6.6 plan row names is a "
-               "LAB measurement off the wire (tests/lab/tools/"
-               "run_mscp_srv_io_jitter_gate.sh); CADENCE_MAX_GAP_MS above is this "
-               "kernel's own scheduling-granularity view of the same property and is "
-               "REPORTED, not gated, because TCG timing is not a wire measurement\n");
+               result_ll(result, "CADENCE_MAX_GAP_MS"));
     }
 
     printf("=== test_kmod_cluster_fork_hammer: %d passed, %d failed ===\n", pass, fail);

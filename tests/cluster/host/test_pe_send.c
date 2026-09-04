@@ -590,6 +590,167 @@ static void test_send_refusal_names_the_port_reason(void)
 			"port refused\" can never be confused");
 }
 
+/* ------------------------------------------------------------------ *
+ * E75: the ACK returns the credit, whatever frame class carries it
+ * ------------------------------------------------------------------ */
+
+/* The peer's own sequenced message, carrying a piggybacked cumulative ack --
+ * the §4(h)(4) lockstep frame, and the shape VAX2's op-03 COMMIT arrived in. */
+static void rx_peer_seqmsg(struct send_env *e, uint16_t send_seq,
+			   uint16_t recv_ack)
+{
+	uint8_t dst_lavc[6];
+	uint32_t len;
+
+	ovmx_lavc(dst_lavc);
+	len = fake_peer_seqmsg(&e->peer, ovmx_hw, dst_lavc, send_seq, recv_ack,
+			       0x62c50009u, 0x33580008u, e->buf,
+			       sizeof(e->buf));
+	ct_check(len != 0, "the peer's sequenced message was built");
+	rx_frame(e, len);
+}
+
+/* The 41-byte 0x48 credit-return short (§4(h)(3)). */
+static void rx_peer_credit(struct send_env *e, uint16_t acked_seq)
+{
+	uint8_t dst_lavc[6];
+	uint32_t len;
+
+	ovmx_lavc(dst_lavc);
+	len = fake_peer_credit(&e->peer, ovmx_hw, dst_lavc, acked_seq, e->buf,
+			       sizeof(e->buf));
+	ct_check(len != 0, "the peer's credit-return was built");
+	rx_frame(e, len);
+}
+
+static void send_n(struct send_env *e, uint32_t n, const char *why)
+{
+	uint8_t body[PE_SEND_BODY_LEN];
+	uint32_t i;
+
+	for (i = 0; i < n; i++) {
+		build_body(body, 1, 2, (uint8_t)i);
+		ct_check_eq_u32((unsigned long)pe_vc_send_msg(&e->fsm,
+							      VAX1_SYSID, 0,
+							      body,
+							      PE_SEND_BODY_LEN),
+				(unsigned long)PE_VC_SEND_OK, why);
+	}
+}
+
+static int try_send(struct send_env *e)
+{
+	uint8_t body[PE_SEND_BODY_LEN];
+
+	build_body(body, 1, 2, 0x03u);
+	return pe_vc_send_msg(&e->fsm, VAX1_SYSID, 0, body, PE_SEND_BODY_LEN);
+}
+
+static void check_credit_invariant(struct pe_vc *vc, const char *where)
+{
+	ct_check_eq_u32((uint32_t)vc->send_credit + (uint32_t)vc->unacked,
+			(uint32_t)vc->send_credit_max, where);
+}
+
+/*
+ * E75, THE WALL AND THE FIX, as arithmetic.
+ *
+ * Live against the 2-node VAX cluster OVMX drove its whole join burst, spent
+ * the peer's grant of 10, and then could not send the `cat=0x81 op=0x03`
+ * COMMIT-echo the coordinator was waiting for -- `port-nocredit`, forever,
+ * because credit was returned ONLY on the standalone 0x48 class and VAX2 acks
+ * with its own data (94.7% of acks in the golden capture are piggybacked, see
+ * vc_release_acked()).
+ *
+ * Step 3 is the wall reproduced; step 4 is the coordinator's COMMIT arriving
+ * with the ack riding in it; step 5 is the echo that could not go, going. A
+ * regression to never-replenish reds at step 5.
+ */
+static void test_the_ack_returns_the_credit(void)
+{
+	struct send_env e;
+	struct pe_vc *vc;
+
+	printf("-- E75: the peer's ACK returns the credit, on ANY frame class\n");
+	open_circuit(&e);
+	vc = the_vc(&e);
+	ct_check(vc != NULL, "the circuit is open");
+	ct_check_eq_u32(vc->send_credit_max, LAB_CREDITS,
+			"the window is the PEER's grant, read off abs 95");
+	check_credit_invariant(vc, "a fresh circuit owes nothing and holds all");
+
+	/* 2. the burst spends the whole grant */
+	send_n(&e, LAB_CREDITS, "each send inside the grant goes");
+	ct_check_eq_u32(vc->send_credit, 0u, "the window is spent");
+	ct_check_eq_u32(vc->unacked, LAB_CREDITS,
+			"and every one of them is outstanding");
+	check_credit_invariant(vc, "spent + outstanding is still the grant");
+
+	/* 3. THE WALL: the COMMIT-echo has nothing to send with */
+	ct_check_eq_u32((unsigned long)try_send(&e),
+			(unsigned long)PE_VC_SEND_NOCREDIT,
+			"the next send is refused NOCREDIT -- E75's wall");
+
+	/* 4. the coordinator's own message arrives, acking the burst inside it */
+	rx_peer_seqmsg(&e, 1u, LAB_CREDITS);
+	ct_check_eq_u32(vc->unacked, 0u,
+			"the piggybacked cumulative ack released the burst");
+	ct_check_eq_u32(vc->send_credit, LAB_CREDITS,
+			"and returned EVERY credit it released -- not zero, "
+			"which is what a 0x48-only port would have");
+	check_credit_invariant(vc, "the grant is whole again");
+
+	/* 5. so the echo goes */
+	ct_check_eq_u32((unsigned long)try_send(&e),
+			(unsigned long)PE_VC_SEND_OK,
+			"the COMMIT-echo that E75 could not send now goes");
+	ct_check_eq_u32(vc->send_credit, LAB_CREDITS - 1u,
+			"having spent exactly one");
+
+	/* 6. the 0x48 still returns exactly one, and a repeat returns none:
+	 * one message, one credit, counted once however many frames say so. */
+	rx_peer_credit(&e, (uint16_t)(LAB_CREDITS + 1u));
+	ct_check_eq_u32(vc->send_credit, LAB_CREDITS,
+			"the 0x48 returned the one message it acknowledged");
+	ct_check_eq_u32(vc->unacked, 0u, "which is now the whole ring");
+	rx_peer_credit(&e, (uint16_t)(LAB_CREDITS + 1u));
+	ct_check_eq_u32(vc->send_credit, LAB_CREDITS,
+			"a REPEAT of that ack returns nothing: no credit is "
+			"ever counted twice");
+	check_credit_invariant(vc, "and the identity survives the duplicate");
+}
+
+/*
+ * The peer re-sends a STACK whose ACK it never saw, on a circuit that is
+ * already carrying unacknowledged traffic. Re-learning its grant must NOT
+ * hand this node back the credits those messages are still holding -- that
+ * would open a window wider than the peer ever granted (INV-6: a promise this
+ * node was not given), and it is the one place vc_credit_grant() has to do
+ * arithmetic rather than assign.
+ */
+static void test_a_relearned_grant_does_not_refund_outstanding_sends(void)
+{
+	struct send_env e;
+	struct pe_vc *vc;
+
+	printf("-- a re-STACK re-learns the grant WITHOUT refunding what is out\n");
+	open_circuit(&e);
+	vc = the_vc(&e);
+	send_n(&e, 4u, "four messages go out");
+	ct_check_eq_u32(vc->unacked, 4u, "four are outstanding");
+	ct_check_eq_u32(vc->send_credit, LAB_CREDITS - 4u, "six are left");
+
+	/* config_round 1 == the STACK; the circuit is OPEN, so h_vc_rx_stack
+	 * re-learns the peer and re-acks, and nothing else changes. */
+	rx_start(&e, 1u, 1u, 0u);
+	ct_check_eq_u32(vc->send_credit_max, LAB_CREDITS,
+			"the grant re-read off abs 95 is the same 10");
+	ct_check_eq_u32(vc->send_credit, LAB_CREDITS - 4u,
+			"and the window is STILL six: the four outstanding "
+			"messages were not refunded");
+	check_credit_invariant(vc, "the identity held across the re-STACK");
+}
+
 int main(void)
 {
 	test_send_msg_goes_out_with_right_sequence();
@@ -600,5 +761,7 @@ int main(void)
 	test_send_dg_is_unsequenced_and_unringed();
 	test_send_dg_requires_open_circuit();
 	test_send_refusal_names_the_port_reason();
+	test_the_ack_returns_the_credit();
+	test_a_relearned_grant_does_not_refund_outstanding_sends();
 	return ct_summary("test_pe_send");
 }

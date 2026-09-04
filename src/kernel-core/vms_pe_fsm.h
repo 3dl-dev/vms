@@ -381,17 +381,50 @@ enum pe_channel_action {
  *
  * p. 2-43/2-44: SCS flow control is a debit/credit account. The peer grants
  * this node its Send Credit in the START body (abs 95, byte-exact to SYSGEN
- * CLUSTER_CREDITS, spec §4(g)); each sequenced message this node sends debits
- * one, and each 0x48 credit-return the peer sends restores one -- "strict
- * 1-for-1: every sequenced message is answered by exactly one 0x48 returning
- * exactly one message's worth of credit" (spec §4(h)(3), GROUNDED).
+ * CLUSTER_CREDITS, spec §4(g), and 10 on every real node in the golden
+ * captures); each sequenced message this node sends debits one, and the
+ * ACKNOWLEDGEMENT of that message returns it.
  *
- * This layer therefore returns EXACTLY ONE credit per received sequenced
- * message, in the 0x48 that carries the ack, and NEVER also piggybacks one:
- * the abs-62 piggyback field belongs to the SCS connection layer (FC-P2.2's
- * per-CDT Pending Receive Credit), and returning a credit twice for one
- * message would inflate the peer's send window past what this node can take.
- * Credit conservation is an identity here, not an estimate.
+ * THE ACK IS THE CREDIT, WHATEVER FRAME CARRIES IT (E75). §4(h)(3)'s "strict
+ * 1-for-1 ... exactly one message's worth of credit" is a true statement about
+ * the 0x48 CLASS, and this header previously read it as the ONLY channel a
+ * credit comes back on. The golden wire refutes that. Re-derive with
+ * `tools/cluster/scs_credit_window_measure.py <pcap>...` (host-only captures);
+ * over the five attributable streams of
+ * `vax3-2to3-established-join-20260730.pcap` and
+ * `formation-ci1-joinwindow.pcap`, of every message a node got acknowledged:
+ *
+ *     94.7% / 94.4% / 97.4% / 97.8% / 99.8% / 98.9% by a `recv_ack`
+ *     PIGGYBACKED on the peer's own sequenced message,
+ *     5.3% / 5.6% / 2.6% / 2.2% / 0.2% / 1.1% by a standalone 0x48
+ *
+ * -- exactly the §4(h)(4) lockstep, where a peer with data of its own acks in
+ * it rather than sending a short. A port replenishing on the 0x48 alone stalls
+ * after grant + (number of 0x48s) messages forever; that is E75, where OVMX
+ * spent its 10 on the join burst and then could not send the op-03 COMMIT-echo
+ * the coordinator was waiting for.
+ *
+ * So the account is kept against the UNACKED RING, whose entries are exactly
+ * the messages outstanding, and the invariant is
+ *
+ *     send_credit + unacked == send_credit_max
+ *
+ * -- credit conservation as an identity, not an estimate. See
+ * vc_credit_return()/vc_credit_grant()/vc_release_acked() in the .c.
+ *
+ * AND THE GRANT REALLY IS A HARD CEILING, which is why this window gates a
+ * send at all rather than merely counting. The same script reports, for each
+ * new sequenced message, how many of that node's messages were outstanding
+ * when it went: over 20 146 messages the ceilings are 10 / 10 / 4 / 6 / 6 / 10
+ * and the count above 10 is ZERO -- against an abs-95 grant of 10 advertised
+ * by every node in both captures. Two streams reach exactly 10 and stop.
+ *
+ * The RETURN direction is unchanged and stays separate: this layer returns
+ * EXACTLY ONE credit per received sequenced message, in the 0x48 that carries
+ * the ack, and NEVER also piggybacks one -- the abs-62 piggyback field belongs
+ * to the SCS connection layer (FC-P2.2's per-CDT Pending Receive Credit), and
+ * returning a credit twice for one message would inflate the peer's send window
+ * past what this node can take.
  *
  * ---------------------------------------------------------------------------
  * WHAT THIS LAYER DOES **NOT** DO
@@ -576,7 +609,13 @@ struct pe_vc {
 	uint16_t peer_recv_ack;    /* the cumulative ack the PEER last sent  */
 	uint8_t  pad1[2];
 
-	/* ---- flow control (p. 2-43/2-44) ---- */
+	/* ---- flow control (p. 2-43/2-44) ----
+	 *
+	 * `send_credit + unacked == send_credit_max` (see the CREDIT section
+	 * above): the window left plus the messages still outstanding is the
+	 * peer's whole grant, because it is their ACKNOWLEDGEMENT that returns
+	 * them -- on a 0x48 or piggybacked on the peer's own message alike.
+	 */
 	uint8_t  send_credit;      /* messages we may still send             */
 	uint8_t  send_credit_max;  /* the peer's grant, from its START body  */
 	uint8_t  recv_credit;      /* what we have granted and not returned  */

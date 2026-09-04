@@ -1753,11 +1753,68 @@ static struct pe_vc_unacked *vc_ring_next_after(struct pe_vc *vc, uint16_t seq)
 	return best;
 }
 
+/* --------------------------------------------------------------------------
+ * SEND CREDIT -- the peer's grant, spent by a message and returned by that
+ * message's ACKNOWLEDGEMENT, whichever frame class carries it
+ *
+ * THE INVARIANT this pair keeps, and the one pe_vc_send_frame() spends against:
+ *
+ *     send_credit + unacked == send_credit_max
+ *
+ * i.e. the window LEFT plus the messages still outstanding is exactly the grant
+ * the peer made. It holds by construction: a send debits one and rings one; an
+ * ack releases k and returns k; a retransmit re-sends bytes already rung and
+ * already debited, so it moves neither.
+ * -------------------------------------------------------------------------- */
+
+/*
+ * Return `n` messages' worth of the peer's grant, never past the grant itself.
+ * Clamping DOWN is the direction that matters: a window wider than the peer
+ * granted is a promise this node was never given (p. 2-43's bank rule read from
+ * the other side), and a uint8 that wrapped would be exactly that.
+ */
+static void vc_credit_return(struct pe_vc *vc, uint32_t n)
+{
+	uint32_t c = (uint32_t)vc->send_credit + n;
+
+	if (c > (uint32_t)vc->send_credit_max)
+		c = (uint32_t)vc->send_credit_max;
+	vc->send_credit = (uint8_t)c;
+}
+
+/*
+ * The peer's grant, taken from its START/STACK body (abs 95). The window it
+ * opens is the grant MINUS whatever is still outstanding, so the invariant
+ * above survives the one case where this runs on a circuit that is already
+ * carrying traffic: h_vc_rx_stack() re-learns the peer on an OPEN circuit when
+ * the peer re-sends a STACK whose ACK it never saw, and a flat
+ * `send_credit = grant` there would hand this node back credit it had spent on
+ * messages the peer has not yet acknowledged.
+ */
+static void vc_credit_grant(struct pe_vc *vc, uint8_t grant)
+{
+	vc->send_credit_max = grant;
+	vc->send_credit = (grant > vc->unacked)
+				  ? (uint8_t)(grant - vc->unacked)
+				  : (uint8_t)0u;
+}
+
 /*
  * The peer's CUMULATIVE acknowledgement releases everything at or below it.
  * Cumulative is the whole point: one ack for sequence N tells this node that
  * N and everything before it arrived, so a lost ACK costs nothing as long as
  * a later one arrives -- and every frame the peer sends carries one.
+ *
+ * ...WHICH IS ALSO WHY THE CREDIT COMES BACK HERE (E75). One message costs one
+ * credit, and it is the ACKNOWLEDGEMENT of that message that returns it: the
+ * peer has taken it out of the buffer it granted. This node had been returning
+ * credit ONLY on the standalone 0x48 credit-return class, and the golden wire
+ * refutes that reading decisively: 94-99% of every acknowledgement a real node
+ * receives rides PIGGYBACKED on the peer's own sequenced message, not on a
+ * 0x48. §4(h)(3)'s "strict 1-for-1" is a true statement about the 0x48 CLASS
+ * -- it returns exactly one message's worth -- and was wrongly read here as the
+ * only channel credit comes back on. The figures, both captures and the
+ * re-derivation command are in vms_pe_fsm.h's CREDIT section.
  *
  * ack == 0 releases nothing: SS4(h)(3)/(4) give 0 the meaning "no sequence
  * acknowledged" (a peer that has taken nothing yet), not "sequence zero".
@@ -1765,7 +1822,7 @@ static struct pe_vc_unacked *vc_ring_next_after(struct pe_vc *vc, uint16_t seq)
 static void vc_release_acked(struct pe_fsm *f, struct pe_vc *vc, uint16_t ack)
 {
 	uint32_t i;
-	int released = 0;
+	uint32_t released = 0u;
 
 	if (ack == 0u)
 		return;
@@ -1775,12 +1832,16 @@ static void vc_release_acked(struct pe_fsm *f, struct pe_vc *vc, uint16_t ack)
 		if (!e->in_use || seq_after(e->seq, ack))
 			continue;
 		vc_ring_free(vc, e);
-		released = 1;
+		released++;
 	}
 	if (seq_after(ack, vc->peer_recv_ack) || vc->peer_recv_ack == 0u)
 		vc->peer_recv_ack = ack;
-	if (!released)
+	if (released == 0u)
 		return;
+	/* Exactly as many credits as there were messages: a duplicate ack
+	 * releases nothing and therefore returns nothing, so no acknowledgement
+	 * can be counted twice however many frames repeat it. */
+	vc_credit_return(vc, released);
 	/* Progress. Either there is nothing left to wait for, or the clock on
 	 * what is left starts again from now. */
 	if (vc->unacked == 0u)
@@ -2252,9 +2313,9 @@ static void vc_learn_peer(struct pe_fsm *f, struct pe_vc *vc,
 
 	/* p. 2-43: the Send Credit this node may use is the one the PEER
 	 * granted, and abs 95 is byte-exact to its SYSGEN CLUSTER_CREDITS
-	 * (SS4(g)). Read, never assumed -- with no grant, nothing is sent. */
-	vc->send_credit_max = s->credits;
-	vc->send_credit = s->credits;
+	 * (SS4(g); every real node in the golden captures advertises 10).
+	 * Read, never assumed -- with no grant, nothing is sent. */
+	vc_credit_grant(vc, s->credits);
 	(void)f;
 }
 
@@ -2440,14 +2501,20 @@ static void h_vc_rx_seqmsg(struct pe_fsm *f, struct pe_vc *vc,
  * exactly one message's worth of Send Credit back (SS4(h)(3), strict 1-for-1).
  * It carries no sequence of its own and is never itself acknowledged --
  * acking an ack is how two ports talk forever about nothing.
+ *
+ * BOTH halves are vc_release_acked()'s (E75), and there is deliberately no
+ * second increment here. §4(h)(3)'s one-message's-worth IS the message this
+ * frame's `acked_seq` releases, so returning it again on top would credit the
+ * same message twice and open a window wider than the peer granted -- the
+ * mirror of the double-RETURN the receive side is warned against in
+ * vms_pe_fsm.h. A 0x48 repeating an ack this circuit has already taken
+ * releases nothing and correctly returns nothing.
  */
 static void h_vc_rx_credit(struct pe_fsm *f, struct pe_vc *vc,
 			   const struct pe_vc_rx *rx)
 {
 	vc->credit_rx++;
 	vc_release_acked(f, vc, rx->recv_ack);
-	if (vc->send_credit < vc->send_credit_max)
-		vc->send_credit++;
 }
 
 /* A datagram: unsequenced and unacknowledged by definition (p. 2-31 gives the

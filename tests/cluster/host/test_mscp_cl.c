@@ -1404,6 +1404,21 @@ static void test_glue_source(void)
 	ct_check(strstr(s, "cnxman_disk_client_connect(") != NULL,
 		 "connections are opened through CNXMAN's ONE "
 		 "`VMS$DISK_CL_DRVR` registration");
+
+	/* E64: the beat may not connect on its own judgement. It hands the
+	 * real circuit list to the admission FSM, which asks the member's
+	 * directory first and originates nothing while the join is driving.
+	 * The FSM's own proof is test_mscp_cl_conn.c; these four lines are
+	 * that the SHIPPING glue is wired to it. */
+	ct_check(strstr(s, "mscp_cl_conn_sweep(") != NULL,
+		 "E64: the beat sweeps through the connect-admission FSM");
+	ct_check(strstr(s, "scs_dir_lookup(") != NULL,
+		 "... whose dir_inquire is a REAL SCS$DIRECTORY round");
+	ct_check(strstr(s, "VMS_CLUSTER_MEMBER") != NULL,
+		 "... whose `joined` read is the executive's own cluster state");
+	ct_check(strstr(s, "cnxman_join_owns_disk_client(") != NULL,
+		 "... and it declines the leg the JOIN already holds, so this "
+		 "node presents one MSCP$DISK connection per member");
 	ct_check(strstr(s, "cnxman_get_csb(") != NULL,
 		 "and the peer's SCSNODE is READ off its CSB, never composed");
 	ct_check(strstr(s, "cf_timer_arm(") != NULL,

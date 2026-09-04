@@ -189,6 +189,7 @@ SRCS="$KMOD/vms_netbsd.c \
       $CORE/vms_mscp_srv.c \
       $CORE/vms_mscp_srv_io.c \
       $CORE/vms_mscp_cl_io_fsm.c \
+      $CORE/vms_mscp_cl_conn_fsm.c \
       $CORE/vms_mscp_cl.c"
 #   vms_blockdev_netbsd.c - the NetBSD exec_blockdev_* seam (bread/bwrite on a
 #                         vn_bdev_openpath device vnode) + the single-unit ODS-2

@@ -500,6 +500,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_scs_dir.c           # FC-P2.3
     hdr_alone_vms_mscp_srv_fsm.c      # FC-P6.3
     hdr_alone_vms_mscp_cl_io_fsm.c    # FC-P7.1
+    hdr_alone_vms_mscp_cl_conn_fsm.c  # FC-P7.1 (E64 connect admission)
     hdr_alone_vms_dlm_scs_fsm.c       # FC-P4.6
 )
 target_include_directories(cluster_host_hdr_alone PRIVATE ${OVMX_CLUSTER_CORE_DIR})
@@ -633,6 +634,7 @@ set_tests_properties(cluster_host_test_lock_dir PROPERTIES
 # and so is source-scanned, the two-proof shape test_cnxman_glue.c established.
 add_library(cluster_host_mscp_cl STATIC
     ${OVMX_CLUSTER_CORE_DIR}/vms_mscp_cl_io_fsm.c
+    ${OVMX_CLUSTER_CORE_DIR}/vms_mscp_cl_conn_fsm.c
 )
 target_include_directories(cluster_host_mscp_cl PUBLIC ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_mscp_cl PUBLIC OVMX_CLUSTER_HOST)
@@ -659,6 +661,23 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME cluster_host_test_mscp_cl COMMAND test_mscp_cl)
 set_tests_properties(cluster_host_test_mscp_cl PROPERTIES
+    LABELS "unit;cluster;cluster_host;mscp"
+    TIMEOUT 30
+)
+
+# ---- E64: the class driver's CONNECT-ADMISSION FSM ----
+# WHEN this driver may connect and to whom -- lookup-before-connect, and the
+# join drives alone. A pure TU, driven off an injected clock, so a thirty-second
+# retry window runs in microseconds. A regression to the premature/unresolved
+# `MSCP$DISK` connect E64 measured on the live VAX cluster reds HERE.
+add_executable(test_mscp_cl_conn test_mscp_cl_conn.c)
+target_link_libraries(test_mscp_cl_conn PRIVATE cluster_host_mscp_cl)
+target_include_directories(test_mscp_cl_conn PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_mscp_cl_conn PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_mscp_cl_conn COMMAND test_mscp_cl_conn)
+set_tests_properties(cluster_host_test_mscp_cl_conn PROPERTIES
     LABELS "unit;cluster;cluster_host;mscp"
     TIMEOUT 30
 )

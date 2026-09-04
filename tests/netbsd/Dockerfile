@@ -261,6 +261,10 @@ COPY src/kernel-core/vms_acp_serve.h         /netbsd/guest-src/kernel-core/vms_a
 # so the in-guest module build needs them and their headers staged. ---
 COPY src/kernel-core/vms_mscp_cl_io_fsm.c    /netbsd/guest-src/kernel-core/vms_mscp_cl_io_fsm.c
 COPY src/kernel-core/vms_mscp_cl_io_fsm.h    /netbsd/guest-src/kernel-core/vms_mscp_cl_io_fsm.h
+# E64: WHEN the class driver may connect (lookup-before-connect; the join
+# drives alone). A pure TU, so it builds identically in both kmods.
+COPY src/kernel-core/vms_mscp_cl_conn_fsm.c  /netbsd/guest-src/kernel-core/vms_mscp_cl_conn_fsm.c
+COPY src/kernel-core/vms_mscp_cl_conn_fsm.h  /netbsd/guest-src/kernel-core/vms_mscp_cl_conn_fsm.h
 COPY src/kernel-core/vms_mscp_cl.c           /netbsd/guest-src/kernel-core/vms_mscp_cl.c
 COPY src/kernel-core/vms_mscp_cl.h           /netbsd/guest-src/kernel-core/vms_mscp_cl.h
 COPY src/kernel-netbsd/vms_lan_netbsd.c      /netbsd/guest-src/kmod/vms_lan_netbsd.c

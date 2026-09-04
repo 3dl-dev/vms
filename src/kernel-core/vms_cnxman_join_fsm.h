@@ -559,6 +559,18 @@ void cnxman_join_rejected(struct cnxman_join *j, vms_conid_t conid,
 void cnxman_join_dir_result(struct cnxman_join *j, vms_scs_sysid_t from,
 			    const uint8_t *name, int present);
 
+/*
+ * Does THIS join already hold the `MSCP$DISK` (disk-client) connection to
+ * `dst`? Nonzero only when the join really opened one -- a live `mscp_conid`
+ * against the member it joined THROUGH -- never from the target selection
+ * alone. The MSCP class driver's own sweep asks this so that OVMX presents
+ * exactly ONE `VMS$DISK_CL_DRVR` -> `MSCP$DISK` connection per member, which
+ * is what every reference joiner does (vms_mscp_cl_conn_fsm.h, Rule 2's
+ * corollary). A read of real FSM state; it asserts nothing.
+ */
+int cnxman_join_holds_disk_client(const struct cnxman_join *j,
+				  vms_scs_sysid_t dst);
+
 /* One MSCP END message arrived on the MSCP$DISK connection: the whole frame as
  * the port delivered it (receive stays frame-based, design SS3.2.4). */
 void cnxman_join_rx_mscp(struct cnxman_join *j, vms_conid_t conid,

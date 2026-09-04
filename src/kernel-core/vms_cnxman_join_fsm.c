@@ -1388,6 +1388,16 @@ void cnxman_join_dir_result(struct cnxman_join *j, vms_scs_sysid_t from,
 	(void)join_dispatch(j, CNXMAN_EV_DIR_RESULT, &e);
 }
 
+int cnxman_join_holds_disk_client(const struct cnxman_join *j,
+				  vms_scs_sysid_t dst)
+{
+	if (j == NULL || dst == 0u)
+		return 0;
+	if (!j->target_valid || j->target_sysid != dst)
+		return 0;
+	return j->mscp_conid != 0u;
+}
+
 void cnxman_join_rx_mscp(struct cnxman_join *j, vms_conid_t conid,
 			 const uint8_t *frame, uint32_t len)
 {

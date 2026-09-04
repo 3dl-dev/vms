@@ -61,6 +61,7 @@ vms-y := vms_module.o \
          vms_mscp_srv.o \
          vms_mscp_srv_io.o \
          vms_mscp_cl_io_fsm.o \
+         vms_mscp_cl_conn_fsm.o \
          vms_mscp_cl.o \
          vms_proctab.o \
          vmsfs_acp.o \

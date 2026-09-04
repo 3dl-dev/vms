@@ -1433,6 +1433,13 @@ int cnxman_disk_client_connect(struct vms_cluster *cl, vms_scs_sysid_t dst,
 			   cnxman_join_name_mscp_disk, dst, NULL, out_conid);
 }
 
+int cnxman_join_owns_disk_client(struct vms_cluster *cl, vms_scs_sysid_t dst)
+{
+	if (cl == NULL || cl->cnxman == NULL)
+		return 0;
+	return cnxman_join_holds_disk_client(&cl->cnxman->join, dst);
+}
+
 /* ==========================================================================
  * 12. $SETCLUEVT (SS7) -- registration and process-death safety
  * ========================================================================== */

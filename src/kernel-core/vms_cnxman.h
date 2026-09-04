@@ -256,6 +256,16 @@ void cnxman_set_disk_client(struct vms_cluster *cl,
 int cnxman_disk_client_connect(struct vms_cluster *cl, vms_scs_sysid_t dst,
 			       vms_conid_t *out_conid);
 
+/*
+ * Does the connection manager's OWN join already hold the disk-client
+ * connection to `dst`? A read of the join FSM's live `mscp_conid`
+ * (cnxman_join_holds_disk_client). The class driver's sweep asks this before
+ * opening its own, so this node never presents two `VMS$DISK_CL_DRVR` ->
+ * `MSCP$DISK` connections to one member. 0 before CLUSTER_START -- the honest
+ * answer when there is no join to hold anything.
+ */
+int cnxman_join_owns_disk_client(struct vms_cluster *cl, vms_scs_sysid_t dst);
+
 /* ==========================================================================
  * 6. CLUB / CSB query -- what SHOW CLUSTER, $GETSYI and the diagnostics read
  *

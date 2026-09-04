@@ -1319,6 +1319,49 @@ static void test_every_table_cell(void)
 }
 
 /* ==========================================================================
+ * The disk-client readback (E64): a READ of the leg this join really holds
+ *
+ * The MSCP class driver's own sweep asks this before opening its own
+ * `MSCP$DISK` connection, so that OVMX presents exactly ONE
+ * `VMS$DISK_CL_DRVR` -> `MSCP$DISK` connection per member -- what every
+ * reference joiner does. It must therefore answer from the live `mscp_conid`
+ * and NEVER from the target selection alone, or the class driver would decline
+ * a leg nobody ever opened and this node would MSCP-serve nothing.
+ * ========================================================================== */
+static void test_disk_client_readback(void)
+{
+	printf("\n-- the join reports the disk-client leg it really holds --\n");
+	bed_init();
+	bed_set_identity();
+
+	ct_check_eq_u32((unsigned long)cnxman_join_holds_disk_client(
+				&g.j, MEMBER_SYSID),
+			0u, "before CLUSTER_START it holds nothing");
+
+	(void)cnxman_join_start(&g.j);
+	ct_check_eq_u32((unsigned long)cnxman_join_holds_disk_client(
+				&g.j, MEMBER_SYSID),
+			0u, "a SELECTED target is not a HELD connection");
+
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk,
+			       1);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster,
+			       1);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MSCP_CONNECT,
+			"the MSCP$DISK connect went out");
+	ct_check(cnxman_join_holds_disk_client(&g.j, MEMBER_SYSID) != 0,
+		 "... and NOW the join holds that member's disk-client leg");
+	ct_check_eq_u32((unsigned long)cnxman_join_holds_disk_client(
+				&g.j, MEMBER_SYSID + 7u),
+			0u, "it holds nothing for any OTHER system");
+	ct_check_eq_u32((unsigned long)cnxman_join_holds_disk_client(&g.j, 0u),
+			0u, "and system 0 is not a member");
+	ct_check_eq_u32((unsigned long)cnxman_join_holds_disk_client(NULL,
+								     MEMBER_SYSID),
+			0u, "a NULL join holds nothing");
+}
+
+/* ==========================================================================
  * main
  * ========================================================================== */
 
@@ -1327,6 +1370,7 @@ int main(void)
 	printf("test_cnxman_join: the join FSM (FC-P3.3, rung R1)\n");
 
 	test_reference_sequence();
+	test_disk_client_readback();
 	test_csid_no_coordinator_seen_stays_new();
 	test_csid_wire_learned_form_a();
 	test_csid_wire_learned_form_b();

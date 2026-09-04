@@ -29,7 +29,9 @@
 #include "vms_scs.h"
 #include "vms_cnxman.h"        /* SS5b: the ONE `VMS$DISK_CL_DRVR` registration */
 #include "vms_cnxman_csb.h"    /* the CSB's FORK-CONTEXT accessor (see below) */
+#include "vms_cnxman_join_fsm.h" /* the ONE spelling of `MSCP$DISK`         */
 #include "vms_mscp_cl_io_fsm.h"
+#include "vms_mscp_cl_conn_fsm.h" /* E64: WHEN this driver may connect      */
 #include "vms_mscp_cl.h"
 
 /* ==========================================================================
@@ -45,29 +47,13 @@
 #define MSCP_CL_TIMER_BEAT 0u
 #define MSCP_CL_BEAT_MS    1000u
 
-/*
- * How long after a refused or closed `MSCP$DISK` connect this layer waits
- * before asking that member again. A member with MSCP_LOAD=0 will refuse
- * forever and must not be asked once a second; a member that mounts its first
- * volume later must still be found. Thirty seconds, an OVMX design value.
- */
-#define MSCP_CL_RETRY_MS 30000u
+/* The retry and inquiry-timeout periods moved to vms_mscp_cl_conn_fsm.h with
+ * the policy that uses them (MSCP_CL_CONN_RETRY_MS /
+ * MSCP_CL_CONN_ASK_TIMEOUT_MS): this file holds no cadence it does not act on. */
 
 /* ==========================================================================
  * 1. The object
  * ========================================================================== */
-
-/* One member this driver has, or wants, an `MSCP$DISK` connection to. Every
- * field is a fact this layer established: the sysid SCS reported, the Con.ID
- * the allocator minted for OUR connect, and when we last tried. */
-struct mscp_cl_conn {
-	uint8_t         in_use;
-	uint8_t         opened;
-	uint8_t         pad[2];
-	vms_scs_sysid_t peer;
-	vms_conid_t     conid;
-	uint32_t        last_try_ms;
-};
 
 struct vms_mscp_cl {
 	struct vms_cluster   *cl;
@@ -75,17 +61,28 @@ struct vms_mscp_cl {
 	struct mscp_cl_ops    ops;
 	struct cnxman_disk_client_ops hook;
 
-	struct mscp_cl_conn   conn[MSCP_CL_MAX_CTLRS];
+	/*
+	 * WHEN this driver may connect, and to whom -- the pure FSM of
+	 * vms_mscp_cl_conn_fsm.h. It owns the per-member row (the sysid SCS
+	 * reported, the Con.ID the allocator minted for OUR connect, and what
+	 * that member really answered about `MSCP$DISK`); this file owns only
+	 * its storage and its bindings. E64: before it existed, this beat
+	 * connected `MSCP$DISK` to every system with a circuit, unresolved and
+	 * from CLUSTER_START, which poisoned the shared send sequence of a
+	 * live VAX cluster and stalled the join.
+	 */
+	struct mscp_cl_conn      cadm;
+	struct mscp_cl_conn_ops  cadm_ops;
+	struct mscp_cl_conn_peer cadm_peers[MSCP_CL_MAX_CTLRS];
 
 	/* The ONE completion registration the asynchronous service (SS3) calls
 	 * back through. A second call replaces it; NULL withdraws it. */
 	vms_mscp_cl_done_cb   done_cb;
 	void                 *done_ctx;
 
-	/* Real events counted HERE because here is where they happen. */
-	uint32_t connects;
-	uint32_t connect_refusals;
-	uint32_t closes;
+	/* Real events counted HERE because here is where they happen. The
+	 * connect/refuse/close tallies live in `cadm` now, where those events
+	 * are actually dispatched. */
 	uint32_t devices_added;
 	uint32_t devices_removed;
 	uint32_t devtab_failures;
@@ -221,45 +218,83 @@ static void cl_ops_bind(struct vms_mscp_cl *c)
 }
 
 /* ==========================================================================
- * 3. The connection table
+ * 3. struct mscp_cl_conn_ops -- the connect-admission FSM's four bindings
+ *
+ * Each is one dereference into real executive state. Not one of them decides
+ * anything: the policy is the FSM's, and the facts are the executive's.
  * ========================================================================== */
 
-static struct mscp_cl_conn *cl_conn_by_peer(struct vms_mscp_cl *c,
-					    vms_scs_sysid_t peer)
+/* Rule 2 (vms_mscp_cl_conn_fsm.h): the join FSM drives alone until this node
+ * is really a member. A read of the state the connection manager reached --
+ * never a flag this driver sets. */
+static int cl_cadm_joined(void *ctx)
 {
-	uint32_t i;
+	struct vms_mscp_cl *c = (struct vms_mscp_cl *)ctx;
 
-	for (i = 0; i < MSCP_CL_MAX_CTLRS; i++) {
-		if (c->conn[i].in_use && c->conn[i].peer == peer)
-			return &c->conn[i];
-	}
-	return NULL;
+	return c->cl->state == VMS_CLUSTER_MEMBER;
 }
 
-static struct mscp_cl_conn *cl_conn_by_conid(struct vms_mscp_cl *c,
-					     vms_conid_t conid)
+static int cl_cadm_join_holds(void *ctx, vms_scs_sysid_t dst)
 {
-	uint32_t i;
+	struct vms_mscp_cl *c = (struct vms_mscp_cl *)ctx;
 
-	for (i = 0; i < MSCP_CL_MAX_CTLRS; i++) {
-		if (c->conn[i].in_use && c->conn[i].conid == conid)
-			return &c->conn[i];
-	}
-	return NULL;
+	return cnxman_join_owns_disk_client(c->cl, dst);
 }
 
-static struct mscp_cl_conn *cl_conn_alloc(struct vms_mscp_cl *c)
+/* scs_dir_lookup()'s callback thunk: the member's own yes/no, handed straight
+ * to the FSM that asked. */
+static void cl_cadm_dir_cb(void *ctx, vms_scs_sysid_t from,
+			   const uint8_t *name, int present)
 {
-	uint32_t i;
+	struct vms_mscp_cl *c = (struct vms_mscp_cl *)ctx;
 
-	for (i = 0; i < MSCP_CL_MAX_CTLRS; i++) {
-		if (!c->conn[i].in_use) {
-			memset(&c->conn[i], 0, sizeof(c->conn[i]));
-			c->conn[i].in_use = 1u;
-			return &c->conn[i];
-		}
-	}
-	return NULL;
+	mscp_cl_conn_dir_result(&c->cadm, from, name, present);
+}
+
+static int cl_cadm_dir_inquire(void *ctx, vms_scs_sysid_t dst,
+			       const uint8_t *name)
+{
+	struct vms_mscp_cl *c = (struct vms_mscp_cl *)ctx;
+
+	if (c->cl->scs == NULL)
+		return -1;
+	return scs_dir_lookup(c->cl->scs, dst, name, cl_cadm_dir_cb, c) ==
+			       (int)SS__NORMAL
+		       ? 0 : -1;
+}
+
+static int cl_cadm_connect(void *ctx, vms_scs_sysid_t dst,
+			   vms_conid_t *out_conid)
+{
+	struct vms_mscp_cl *c = (struct vms_mscp_cl *)ctx;
+
+	return cnxman_disk_client_connect(c->cl, dst, out_conid) ==
+			       (int)SS__NORMAL
+		       ? 0 : -1;
+}
+
+static uint32_t cl_cadm_now_ms(void *ctx)
+{
+	(void)ctx;
+	return (uint32_t)exec_ticks_ms();
+}
+
+static void cl_cadm_log(void *ctx, const char *msg)
+{
+	(void)ctx;
+	if (msg != NULL)
+		exec_console_printf("%s", msg);
+}
+
+static void cl_cadm_bind(struct vms_mscp_cl *c)
+{
+	c->cadm_ops.joined = cl_cadm_joined;
+	c->cadm_ops.join_holds = cl_cadm_join_holds;
+	c->cadm_ops.dir_inquire = cl_cadm_dir_inquire;
+	c->cadm_ops.connect = cl_cadm_connect;
+	c->cadm_ops.now_ms = cl_cadm_now_ms;
+	c->cadm_ops.log = cl_cadm_log;
+	c->cadm_ops.ctx = c;
 }
 
 /*
@@ -300,17 +335,18 @@ static uint32_t cl_peer_scsnode(struct vms_mscp_cl *c, vms_scs_sysid_t peer,
 static void cl_hook_opened(void *ctx, vms_conid_t local_conid)
 {
 	struct vms_mscp_cl *c = (struct vms_mscp_cl *)ctx;
-	struct mscp_cl_conn *cn = cl_conn_by_conid(c, local_conid);
+	struct mscp_cl_conn_peer *cn = mscp_cl_conn_by_conid(&c->cadm,
+							     local_conid);
 	uint8_t scsnode[VMS_SCSNODE_MAX + 2];
 	uint32_t len;
 
-	if (cn == NULL || cn->opened)
+	if (cn == NULL || cn->state == (uint8_t)MSCP_CL_CONN_OPEN)
 		return;      /* not ours, or already open */
-	cn->opened = 1u;
+	mscp_cl_conn_opened(&c->cadm, local_conid);
 
 	memset(scsnode, 0, sizeof(scsnode));
-	len = cl_peer_scsnode(c, cn->peer, scsnode, (uint32_t)sizeof(scsnode));
-	(void)mscp_cl_fsm_conn_open(&c->fsm, local_conid, cn->peer, scsnode,
+	len = cl_peer_scsnode(c, cn->sysid, scsnode, (uint32_t)sizeof(scsnode));
+	(void)mscp_cl_fsm_conn_open(&c->fsm, local_conid, cn->sysid, scsnode,
 				    len);
 }
 
@@ -319,7 +355,7 @@ static int cl_hook_message(void *ctx, vms_conid_t local_conid,
 {
 	struct vms_mscp_cl *c = (struct vms_mscp_cl *)ctx;
 
-	if (cl_conn_by_conid(c, local_conid) == NULL)
+	if (mscp_cl_conn_by_conid(&c->cadm, local_conid) == NULL)
 		return -1;   /* somebody else's connection */
 	return mscp_cl_fsm_end_msg(&c->fsm, local_conid, body, len);
 }
@@ -327,24 +363,17 @@ static int cl_hook_message(void *ctx, vms_conid_t local_conid,
 static void cl_hook_closed(void *ctx, vms_conid_t local_conid, uint32_t reason)
 {
 	struct vms_mscp_cl *c = (struct vms_mscp_cl *)ctx;
-	struct mscp_cl_conn *cn = cl_conn_by_conid(c, local_conid);
 
 	(void)reason;
-	if (cn == NULL)
+	if (mscp_cl_conn_by_conid(&c->cadm, local_conid) == NULL)
 		return;
-	if (!cn->opened)
-		c->connect_refusals++;   /* the member serves no disks */
-	else
-		c->closes++;
 	/*
-	 * The FSM withdraws the devices and aborts the requests; this layer
-	 * only frees the slot and starts the retry clock, so the member is
-	 * asked again later rather than hammered.
+	 * The driver FSM withdraws the devices and aborts the requests; the
+	 * admission FSM frees the slot and starts the retry clock, so the
+	 * member is asked again later rather than hammered.
 	 */
 	mscp_cl_fsm_conn_closed(&c->fsm, local_conid);
-	cn->opened = 0u;
-	cn->conid = 0u;
-	cn->last_try_ms = (uint32_t)exec_ticks_ms();
+	mscp_cl_conn_closed(&c->cadm, local_conid);
 }
 
 static void cl_hook_bind(struct vms_mscp_cl *c)
@@ -369,68 +398,40 @@ static void cl_block_data(void *ctx, uint32_t name, uint32_t offset,
  * 5. The beat
  * ========================================================================== */
 
-/* Is this member due for a connect attempt? */
-static int cl_conn_due(const struct mscp_cl_conn *cn, uint32_t now)
-{
-	if (cn->conid != 0u)
-		return 0;   /* one is already open or opening */
-	if (cn->last_try_ms == 0u)
-		return 1;   /* never tried */
-	return (uint32_t)(now - cn->last_try_ms) >= MSCP_CL_RETRY_MS;
-}
-
-/* Open one `MSCP$DISK` connection to `peer`, through CNXMAN's registration. */
-static void cl_try_connect(struct vms_mscp_cl *c, struct mscp_cl_conn *cn,
-			   uint32_t now)
-{
-	vms_conid_t conid = 0u;
-
-	cn->last_try_ms = now;
-	if (cnxman_disk_client_connect(c->cl, cn->peer, &conid) !=
-		    (int)SS__NORMAL || conid == 0u) {
-		c->connect_refusals++;
-		return;
-	}
-	cn->conid = conid;
-	c->connects++;
-}
-
 /*
- * ONE BEAT: sweep the systems SCS really has a circuit to, open an `MSCP$DISK`
- * connection to each one this driver does not already hold, and run the
- * driver's own deadline reaper. Nothing here asserts anything about a member
- * beyond the one fact SCS established -- a circuit exists to this SCSSYSTEMID.
+ * The systems the PORT genuinely has a circuit to, in SCS's own discovery
+ * order. Nothing is asserted about a member beyond the one fact SCS
+ * established -- a circuit exists to this SCSSYSTEMID.
  */
-static void cl_sweep_peers(struct vms_mscp_cl *c, uint32_t now)
+static uint32_t cl_gather_peers(struct vms_mscp_cl *c, vms_scs_sysid_t *out,
+				uint32_t cap)
 {
-	uint32_t i;
+	uint32_t i, n = 0u;
 
-	for (i = 0; i < MSCP_CL_MAX_CTLRS; i++) {
+	for (i = 0; i < cap; i++) {
 		vms_scs_sysid_t peer = 0u;
-		struct mscp_cl_conn *cn;
 
 		if (vms_scs_peer_at(c->cl, i, &peer) != (int)SS__NORMAL)
 			break;   /* the honest end of SCS's own list */
 		if (peer == 0u)
 			continue;
-
-		cn = cl_conn_by_peer(c, peer);
-		if (cn == NULL) {
-			cn = cl_conn_alloc(c);
-			if (cn == NULL)
-				break;   /* table full: counted by no slot */
-			cn->peer = peer;
-		}
-		if (cl_conn_due(cn, now))
-			cl_try_connect(c, cn, now);
+		out[n++] = peer;
 	}
+	return n;
 }
 
+/*
+ * ONE BEAT: hand the real circuit list to the connect-admission FSM (which
+ * decides whether this node may originate anything at all yet, and asks the
+ * member's directory before it connects), then run the driver's own deadline
+ * reaper.
+ */
 static void cl_beat(struct vms_mscp_cl *c)
 {
-	uint32_t now = (uint32_t)exec_ticks_ms();
+	vms_scs_sysid_t peers[MSCP_CL_MAX_CTLRS];
+	uint32_t n = cl_gather_peers(c, peers, (uint32_t)MSCP_CL_MAX_CTLRS);
 
-	cl_sweep_peers(c, now);
+	(void)mscp_cl_conn_sweep(&c->cadm, peers, n);
 	(void)mscp_cl_fsm_tick(&c->fsm);
 }
 
@@ -474,7 +475,15 @@ int vms_mscp_cl_start(struct vms_cluster *cl)
 	c->cl = cl;
 	cl_ops_bind(c);
 	cl_hook_bind(c);
+	cl_cadm_bind(c);
 	mscp_cl_fsm_init(&c->fsm, &c->ops);
+	if (mscp_cl_conn_init(&c->cadm, &c->cadm_ops,
+			      cnxman_join_name_mscp_disk) != 0 ||
+	    mscp_cl_conn_bind_peers(&c->cadm, c->cadm_peers,
+				    (uint32_t)MSCP_CL_MAX_CTLRS) != 0) {
+		exec_free(c);
+		return (int)SS__BADPARAM;
+	}
 
 	(void)cf_set_work_handler(cl->fork, CF_OWNER_MSCP_CL, cl_work_handler,
 				  c);
@@ -513,8 +522,9 @@ void vms_mscp_cl_stop(struct vms_cluster *cl)
 	 * whose driver is gone is not reachable, and leaving the row would
 	 * advertise a disk nothing can read. */
 	for (i = 0; i < MSCP_CL_MAX_CTLRS; i++) {
-		if (c->conn[i].in_use && c->conn[i].conid != 0u)
-			mscp_cl_fsm_conn_closed(&c->fsm, c->conn[i].conid);
+		if (c->cadm_peers[i].in_use && c->cadm_peers[i].conid != 0u)
+			mscp_cl_fsm_conn_closed(&c->fsm,
+						c->cadm_peers[i].conid);
 	}
 
 	if (cl->fork != NULL) {

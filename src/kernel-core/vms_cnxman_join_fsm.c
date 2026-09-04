@@ -555,6 +555,72 @@ static void join_open_mscp(struct cnxman_join *j)
 }
 
 /*
+ * THE DISK-CLIENT CONNECTION IS NOT A MEMBERSHIP PREREQUISITE (E68).
+ *
+ * THE WALL. On the live 2-node VAX cluster (join-e67refire, 2026-09-04) this
+ * node resolved both names, issued its MSCP$DISK connect at t+14.9372, and the
+ * member answered REJECT_REQUEST 0.2 ms later. SCS closed that CDT with
+ * SCS_CLOSE_REJECTED, the glue reported it as a close, and this file failed the
+ * WHOLE JOIN with PATHLOST -- "lost a connection needed to join the cluster".
+ * [FAILED] is an empty table row and cnxman_join_drive() will not restart a
+ * non-IDLE join, so when BOTH members opened their own VMS$VAXcluster
+ * connection to this node 1.2 s later and each sent its cat-0x01 op-0x01
+ * parameters on it, the CNXMAN_EV_CM_ACCEPTED for each was counted and dropped,
+ * not one CONFIG-category frame ever went back, and both CSBs for this node sat
+ * at votes 0 until %CNXMAN timed them out. The pcap shows ZERO 204-byte CM
+ * frames from this node in the whole 1600 s run.
+ *
+ * WHY THE FAILURE WAS WRONG, on three independent grounds:
+ *
+ *   1. THIS FILE ALREADY SAYS SO for the neighbouring fact. A member that hosts
+ *      no MSCP$DISK at all is "a real configuration, not a failure"
+ *      (join_lookups_complete below): the join counts `mscp_absent`, marks the
+ *      walk done and goes straight on to the VMS$VAXcluster step. A member that
+ *      HOSTS MSCP$DISK but refuses this node's disk-client connection leaves
+ *      the join in exactly the same position -- there is no discovery to do --
+ *      so it cannot be fatal when the other is not.
+ *
+ *   2. THE REFERENCE JOIN MEASURES THE TWO AS INDEPENDENT
+ *      (vax3-2to3-established-join-20260730, decoded this session). On its VAX2
+ *      leg the joiner's VMS$VAXcluster connection reached OPEN at t+30.3690 and
+ *      its MSCP$DISK connect to that same member only went out at t+30.8266 --
+ *      0.46 s LATER. The membership connection is not downstream of the disk
+ *      client on the real wire. The same capture also shows the reference
+ *      JOINER itself answering REJECT_REQUEST to both members' inbound
+ *      MSCP$DISK connects (t+29.8469 and t+30.3750) while its own join
+ *      proceeds: a refused disk-client connect is ordinary traffic in this
+ *      dialogue, not a verdict.
+ *
+ *   3. THE REJECT CARRIES NO VERDICT TO READ. Book p. 2-25 / correction D12
+ *      makes a REJECT the Connection Managers' judgement on the 16-byte connect
+ *      data -- and join_open_mscp() passes `conndata = NULL` on this connect, as
+ *      the wire confirms. A connection that asserted no version identity cannot
+ *      have had one refused.
+ *
+ * WHAT IS HONESTLY LOST, and counted: this node enumerates none of that
+ * member's served units. It says so (`mscp_rejected` / `mscp_lost`) instead of
+ * pretending to a walk it did not run -- and it does NOT retry, because the
+ * member gave a real answer and re-asking would be refusing to believe it.
+ */
+static void join_disk_client_gone(struct cnxman_join *j)
+{
+	j->mscp_open = 0u;
+	j->mscp_conid = 0u;      /* honest: this node holds no such connection */
+	j->mscp_walk_done = 1u;  /* ... so there is no walk left to wait for   */
+
+	/*
+	 * MSCP_CONNECT is the one state whose entire purpose was to wait for
+	 * this connection, so it is the one state the drive must be carried on
+	 * from. From ADVERTISE onward the VMS$VAXcluster connection is already
+	 * up and losing the disk client costs the join nothing (which is what
+	 * the pre-E68 `mscp_walk_done` test already did); from DIR_ROUND the
+	 * connect has not been issued and no Con.ID of ours can match.
+	 */
+	if (j->state == (uint8_t)CNXMAN_JOIN_MSCP_CONNECT)
+		join_open_cm(j);
+}
+
+/*
  * Both inquiries are in. Two different answers mean two different things, and
  * conflating them would be a bug in either direction:
  *
@@ -1060,19 +1126,25 @@ static enum cnxman_join_rx join_h_closed(struct cnxman_join *j,
 	 * opened" sentinel and a close that names one of ours is recognised
 	 * whether or not it ever reached OPEN. */
 	if (j->mscp_conid != 0u && e->conid == j->mscp_conid) {
-		j->mscp_open = 0u;
-		/* Once the walk is done the disk-client connection has served
-		 * its purpose; losing it is not losing the join. */
-		if (j->mscp_walk_done)
-			return CNXMAN_JOIN_RX_CONSUMED;
-	} else if (j->cm_conid != 0u && e->conid == j->cm_conid) {
-		j->cm_open = 0u;
-	} else {
-		j->ignored_events++;
+		/* Losing the disk client is never losing the join (E68) --
+		 * before the walk or after it. */
+		if (!j->mscp_walk_done) {
+			j->mscp_lost++;
+			join_log(j, "%CNXMAN, lost the MSCP$DISK disk-client "
+				    "connection: this node enumerates none of "
+				    "that member's units, and the join goes on");
+		}
+		join_disk_client_gone(j);
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
-	join_fail(j, CNXMAN_JOIN_FAIL_PATHLOST,
-		  "%CNXMAN, lost a connection needed to join the cluster");
+	if (j->cm_conid != 0u && e->conid == j->cm_conid) {
+		j->cm_open = 0u;
+		join_fail(j, CNXMAN_JOIN_FAIL_PATHLOST,
+			  "%CNXMAN, lost a connection needed to join the "
+			  "cluster");
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	j->ignored_events++;
 	return CNXMAN_JOIN_RX_CONSUMED;
 }
 
@@ -1429,9 +1501,22 @@ void cnxman_join_rejected(struct cnxman_join *j, vms_conid_t conid,
 	if (j == NULL)
 		return;
 	(void)reason;
+	/*
+	 * The disk-client connect asserted no version identity, so its refusal
+	 * is not the p. 2-25 verdict and not a join failure (E68). Counted,
+	 * logged, and the drive carries on to the VMS$VAXcluster step.
+	 */
+	if (j->mscp_conid != 0u && conid == j->mscp_conid) {
+		j->mscp_rejected++;
+		join_log(j, "%CNXMAN, the member refused this node's MSCP$DISK "
+			    "disk-client connection: no disk discovery from it, "
+			    "and the join goes on");
+		join_disk_client_gone(j);
+		return;
+	}
 	/* Only a rejection of a connection THIS join made is this join's
 	 * business; anything else belongs to whoever opened it. */
-	if (conid != j->cm_conid && conid != j->mscp_conid) {
+	if (j->cm_conid == 0u || conid != j->cm_conid) {
 		j->ignored_events++;
 		return;
 	}

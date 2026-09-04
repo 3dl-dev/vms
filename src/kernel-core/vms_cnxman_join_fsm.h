@@ -49,6 +49,15 @@
  *     terminator -- is FC-P3.4's FSM (vms_mscp_cl_fsm.h); this file drives it
  *     and records the units it really enumerated.
  *
+ *     IT IS NOT A MEMBERSHIP PREREQUISITE (E68). If the member refuses this
+ *     connect or drops it, this node simply enumerates none of that member's
+ *     units -- counted, logged -- and the drive goes straight on to step 4.
+ *     The reference join measures the two as independent (its VMS$VAXcluster
+ *     connection to VAX2 reached OPEN 0.46 s BEFORE it connected MSCP$DISK to
+ *     that same member), and treating the refusal as fatal is what left OVMX
+ *     silent through a whole live-cluster run. Grounding, in full:
+ *     vms_cnxman_join_fsm.c, join_disk_client_gone().
+ *
  *  4. VMS$VAXcluster VC (SS4(L)(d)). There is exactly ONE VMS$VAXcluster
  *     connection per PAIR of systems; the 16-byte SCA connect data it carries
  *     is the Connection Managers' version handshake (book p. 2-25, SS4(N)) --
@@ -467,6 +476,15 @@ struct cnxman_join {
 	uint32_t lookups_reissued;   /* the p. 2-51 poll repeat               */
 	uint32_t mscp_absent;        /* the member serves no disks: a real
 					configuration, not a failure          */
+	/*
+	 * The member REFUSED (E68) or DROPPED this node's disk-client
+	 * connection. Neither is a join failure -- see "THE DISK-CLIENT
+	 * CONNECTION IS NOT A MEMBERSHIP PREREQUISITE" in the .c -- and both
+	 * are counted so an operator can tell "we never asked" from "we asked
+	 * and were turned away".
+	 */
+	uint32_t mscp_rejected;
+	uint32_t mscp_lost;
 	uint32_t model_sent;
 	uint32_t params_sent;
 	uint32_t config_sent;
@@ -577,11 +595,19 @@ void cnxman_join_closed(struct cnxman_join *j, vms_conid_t conid,
 			uint32_t reason);
 
 /*
- * The peer REJECTED a connect we made (book p. 2-25: the Connection Managers
- * reject a version they do not approve of -- book correction D12). Terminal
- * and LOUD: the join fails with CNXMAN_JOIN_FAIL_REJECTED and one %CNXMAN
- * line naming the identity gate, because a silent retry against a peer that
- * has judged our version is a loop, not a recovery.
+ * The peer REJECTED a connect we made.
+ *
+ * On the `VMS$VAXcluster` connection that is book p. 2-25's version gate
+ * (correction D12): the Connection Managers identify themselves to each other
+ * in the 16-byte connect data and reject a version they do not approve of, so
+ * the join fails with CNXMAN_JOIN_FAIL_REJECTED and one %CNXMAN line naming
+ * the identity gate -- a silent retry against a peer that has judged our
+ * version is a loop, not a recovery.
+ *
+ * On the `MSCP$DISK` disk-client connection it is NOT that verdict and NOT a
+ * join failure (E68): that connect carries no connect data at all, so there is
+ * no version for the peer to have judged. See "THE DISK-CLIENT CONNECTION IS
+ * NOT A MEMBERSHIP PREREQUISITE" in the .c for the full grounding.
  */
 void cnxman_join_rejected(struct cnxman_join *j, vms_conid_t conid,
 			  uint32_t reason);

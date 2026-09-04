@@ -1573,6 +1573,156 @@ static void test_member_dialled_reaches_the_barrier(void)
 			"the XITGO hands off to the barrier as usual");
 }
 
+/* ==========================================================================
+ * E68: the LIVE-RUN sequence the beds used to mask
+ *
+ * On the live 2-node VAX cluster (join-e67refire, 2026-09-04) the member
+ * REJECTED this node's MSCP$DISK connect 0.2 ms after it went out. The join
+ * failed the whole drive on that (PATHLOST), [FAILED] is an empty row, and the
+ * two members' own VMS$VAXcluster connections 1.2 s later were counted and
+ * dropped -- zero CM frames from this node in 1600 s. Every case below is a
+ * fact from that pcap, replayed in its measured order.
+ * ========================================================================== */
+
+/* Drive to the instant the member's answer to our disk-client connect is due:
+ * both names resolved, our MSCP$DISK connect out, nothing else yet. */
+static void drive_to_mscp_connect(void)
+{
+	(void)cnxman_join_start(&g.j);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk,
+			       1);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster,
+			       1);
+}
+
+static void test_disk_client_refusal_does_not_stop_the_join(void)
+{
+	printf("\n-- E68: a refused MSCP$DISK connect is not a failed join --\n");
+
+	bed_init();
+	bed_set_identity();
+	drive_to_mscp_connect();
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MSCP_CONNECT,
+			"our disk-client connect is out (live t+14.9372)");
+
+	/* The member's REJECT_REQUEST, 0.2 ms later on the real wire. */
+	cnxman_join_rejected(&g.j, MSCP_CONID, 0u);
+	ct_check(g.j.state != CNXMAN_JOIN_FAILED,
+		 "the member refusing our disk-client connect does NOT fail "
+		 "the join");
+	ct_check_eq_u32(g.j.failure, CNXMAN_JOIN_FAIL_NONE,
+			"... and names no failure at all");
+	ct_check_eq_u32(g.j.mscp_rejected, 1u, "... it is counted");
+	ct_check_eq_u32(g.j.mscp_conid, 0u,
+			"... this node no longer claims a disk-client "
+			"connection it does not have");
+	ct_check_eq_u32(cnxman_join_holds_disk_client(&g.j, MEMBER_SYSID), 0,
+			"... and says so to the disk class driver");
+
+	/* And the drive carries on to step 4 rather than stopping. */
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_VC_CONNECT,
+			"the drive goes on to the VMS$VAXcluster step");
+	ct_check(memcmp(g.last_remote, cnxman_join_name_vaxcluster,
+			VMS_SCS_PROCNAME_LEN) == 0,
+		 "... by really issuing that connect");
+
+	cnxman_join_opened(&g.j, CM_CONID);
+	ct_check_eq_u32(g.j.model_sent, 1u, "the MODEL goes out (sec 4(o) row 1)");
+	ct_check_eq_u32(g.j.params_sent, 1u, "then PARAMS (row 2)");
+	ct_check(sent_on_is(CM_CONID, 0, VMS_CM_CAT_CONFIG, VMS_CM_OP_MODEL),
+		 "... cat 0x01 op 0x14 first");
+	ct_check(sent_on_is(CM_CONID, 1, VMS_CM_CAT_CONFIG, VMS_CM_OP_PARAMS),
+		 "... then cat 0x01 op 0x01");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"with no walk to run, admission starts at once");
+	ct_check_eq_u32(g.j.mscp_cmds_sent, 0u,
+			"and not one MSCP command was sent on a connection we "
+			"do not hold");
+}
+
+static void test_disk_client_loss_does_not_stop_the_join(void)
+{
+	/* The same fact arriving as a plain close rather than a REJECT: on the
+	 * real wire the disk-client CDT belongs to the VMS$DISK_CL_DRVR SYSAP,
+	 * whose glue reports every close (rejection included) through
+	 * cnxman_join_closed(). Both entry points must behave alike. */
+	bed_init();
+	bed_set_identity();
+	drive_to_mscp_connect();
+	cnxman_join_closed(&g.j, MSCP_CONID, 0u);
+	ct_check(g.j.state != CNXMAN_JOIN_FAILED,
+		 "losing the disk-client connection BEFORE the walk does not "
+		 "fail the join either");
+	ct_check_eq_u32(g.j.mscp_lost, 1u, "... counted as a loss, not a reject");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_VC_CONNECT,
+			"... and the drive still reaches step 4");
+}
+
+static void test_refusal_then_member_dialled_still_promotes(void)
+{
+	/* The exact live ordering, with the member winning the connect race:
+	 * its VMS$VAXcluster connection is adopted while our disk-client
+	 * connect is still out, and THEN the disk-client refusal arrives. The
+	 * burst must go out on the adopted Con.ID. This is the case that
+	 * produced ZERO frames before E68. */
+	bed_init();
+	bed_set_identity();
+	drive_to_mscp_connect();
+	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	ct_check_eq_u32(g.j.cm_adopted, 1u,
+			"the member's own VMS$VAXcluster connection is adopted");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 0u,
+			"... and nothing has gone out on it yet");
+
+	cnxman_join_rejected(&g.j, MSCP_CONID, 0u);
+	ct_check_eq_u32(g.j.mscp_rejected, 1u, "the disk-client refusal arrives");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"... and the join advertises on the adopted connection "
+			"instead of stopping");
+	ct_check(sent_on_is(ACC_CM_CONID, 0, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_MODEL),
+		 "MODEL on the member's own Con.ID");
+	ct_check(sent_on_is(ACC_CM_CONID, 1, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_PARAMS),
+		 "... then PARAMS");
+	ct_check(sent_on_is(ACC_CM_CONID, 2, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_CONFIG),
+		 "... then the op-0x02 that starts admission");
+	ct_check_eq_u32(n_sent_on(CM_CONID), 0u,
+			"and no second VMS$VAXcluster connection was opened");
+	/* ... and the PARAMS body carries this node's REAL SYSGEN votes (the bed
+	 * boots VOTES=0, D-10's non-voting joiner), never a default. */
+	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, 1, VMS_OFB_CM_VOTES),
+			g.cl.params.votes,
+			"VOTES is this node's real SYSGEN value, not a default");
+}
+
+static void test_vaxcluster_refusal_is_still_terminal(void)
+{
+	/* The over-correction control: E68 must not have made the p. 2-25
+	 * version gate survivable. A REJECT of the VMS$VAXcluster connection
+	 * is still a verdict on this node's identity. */
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	cnxman_join_rejected(&g.j, CM_CONID, 0u);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_FAILED,
+			"a VMS$VAXcluster REJECT is STILL terminal");
+	ct_check_eq_u32(g.j.failure, CNXMAN_JOIN_FAIL_REJECTED, "... as REJECTED");
+	ct_check_eq_u32(g.j.mscp_rejected, 0u,
+			"... and is not miscounted as a disk-client refusal");
+
+	/* A Con.ID this join never opened is still nobody's business here. */
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	cnxman_join_rejected(&g.j, ACC_CM_CONID, 0u);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"a reject naming a Con.ID this join never opened is "
+			"ignored");
+	ct_check_eq_u32(g.j.ignored_events, 1u, "... and counted");
+}
+
 static void test_adoption_refuses_what_it_does_not_own(void)
 {
 	printf("\n-- E67 negative controls: what is NOT adopted --\n");
@@ -1644,6 +1794,10 @@ int main(void)
 	test_member_dialled_connection_still_promotes();
 	test_member_dialled_reaches_the_barrier();
 	test_adoption_refuses_what_it_does_not_own();
+	test_disk_client_refusal_does_not_stop_the_join();
+	test_disk_client_loss_does_not_stop_the_join();
+	test_refusal_then_member_dialled_still_promotes();
+	test_vaxcluster_refusal_is_still_terminal();
 	test_every_table_cell();
 
 	return ct_summary("test_cnxman_join");

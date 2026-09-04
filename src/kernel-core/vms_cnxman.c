@@ -264,6 +264,18 @@ struct vms_cnxman {
 	uint32_t peer_nocredit_events;    /* the peer's Send Credit hit zero  */
 	uint8_t  peer_nocredit_noted;     /* latch: record the edge once      */
 	uint8_t  pad_e78[3];
+
+	/* E79: the credit CARRIER -- see cnxman_credit_carrier(). */
+	uint32_t credit_carriers_sent;    /* cat-0x04 carriers really sent    */
+	uint32_t credit_carriers_refused; /* built, but SCS would not take it */
+	uint32_t credit_carriers_unbuilt; /* the codec refused to build one   */
+
+	/*
+	 * The carrier's body buffer. In the context, never on the stack: this
+	 * runs on a VAX kernel stack (design SS3.9). One buffer is enough
+	 * because a carrier is built and handed to SCS in one unbroken step.
+	 */
+	uint8_t carrier[VMS_CM_BODY_LEN];
 };
 
 /* ==========================================================================
@@ -1060,8 +1072,109 @@ static void cnxman_note_peer_credit(struct vms_cnxman *cn,
 			   "this node extended on a VMS$VAXcluster connection");
 }
 
-static int cnxman_vc_message(void *ctx, vms_conid_t local_conid,
-			     const uint8_t *body, uint32_t len)
+/*
+ * ==========================================================================
+ * THE CREDIT CARRIER -- how the op-0x06 burst really gets answered (E79)
+ * ==========================================================================
+ *
+ * WHAT THIS REPLACES. The join FSM used to build a cat-0x04 and send it for
+ * EVERY op-0x06 it received, reading sec 4(o) row 10 as "the burst is acked".
+ * Against the live cluster that put 254 cat-0x04 frames on the wire in 31.6 ms
+ * and VAX2 took a fatal INVEXCEPTN on the interrupt stack. It is the fourth
+ * time this project has halted a real VAX by emitting a frame per inbound
+ * frame, and the pattern is always the same: a message that is really flow
+ * control got implemented as a reflex.
+ *
+ * WHAT THE REFERENCE ACTUALLY DOES, MEASURED -- AND IT IS A LAW, NOT A RANGE.
+ * On the joiner's own link to the coordinator in
+ * vax3-2to3-established-join-20260730.pcap:
+ *
+ *     254 op-0x06 in  ->  84 cat-0x04 out.   Ratio 3.02.
+ *
+ * and the two independent readings of WHY agree exactly: the ack-msg word
+ * those carriers stamp advances by 3 across 83 of 83 in-burst gaps (never 1,
+ * never 2), and the credit field at abs 62 reads 3 on 85 of the 86 carriers on
+ * that link. Corroborated over the whole reference corpus at 6549 acks from
+ * six responder nodes, ack-word advance >= 3 in every one.
+ *
+ * So the answer is a COALESCING QUANTUM of three released buffers
+ * (SCS_CREDIT_COALESCE, whose census is in vms_scs_fsm.h) -- neither of the
+ * two wrong answers this code has now held:
+ *
+ *   - one carrier per record: 254 frames, and a halted VAX;
+ *   - one carrier per exhausted credit WINDOW: ~26 frames for the same burst,
+ *     an under-ack by a factor of the grant that no reference node emits.
+ *
+ * The three opcodes sec 4(o) row 10 lists -- 0x04/0x49, 0x04/0x00, 0x04/0x02
+ * -- are not three messages and not a phase-transition set. They are one
+ * message drawn from a rotating pool of three recycled buffers, and the
+ * uninitialised byte at body[9] is whatever that buffer last held: the 0x49
+ * frame reads "\x04\x49IR_LOOKUP  SCS$DIRECTORY" (a buffer that held
+ * "DIR_LOOKUP  SCS$DIRECTORY" with body[8] overwritten by the category) and
+ * the 0x02 frame is that node's own earlier op-0x02, same one byte overwritten.
+ * They recur 28/34/28 times across the burst, which is the rotation, not a set.
+ * vms_cm_ack_build() sends zeros, per sec 4(p).
+ *
+ * WHY IT IS A cat-0x04 AND NOT THE op-8 SPECIAL CREDIT MESSAGE. SCS has p.
+ * 2-44's own carrier and it works; but on the `VMS$VAXcluster` connection the
+ * reference does not use it. All 138 of the joiner's cat-0x04 are SCS message
+ * type 10, and there are ZERO type-8 frames on the 204-byte VC class in that
+ * capture (the 6 in it are 72-byte, on other connections). The op-8's
+ * accounting is also the one corner of the ledger the spec still calls
+ * book-unnamed. So the connection manager carries its own credit here, in the
+ * grounded shape, and SCS's op-8 stays as the backstop for when this cannot
+ * go out -- which is exactly when p. 2-44 wants it.
+ *
+ * WHY IT CANNOT FLOOD, STRUCTURALLY. The decision is not this file's: SCS is
+ * asked (scs_credit_return_due) and answers from the CDT -- has this
+ * connection's ledger accumulated the quantum. Sending stamps the pending
+ * count and ZEROES it. So N arriving messages produce at most N/3 carriers by
+ * construction, and the ack word they stamp advances by 3 because three
+ * released buffers ARE three consumed peer messages. The bound is the
+ * ledger's, not a rate cap, and no number in it is chosen here.
+ *
+ * WHY IT RUNS AFTER THE FSMs. The same paragraph prefers a piggyback: if any
+ * FSM answered this message, its answer already carried the credit and
+ * scs_credit_return_due() says no. Only a message nobody answered -- which is
+ * precisely the op-0x06 burst -- reaches the wire as a carrier.
+ */
+static void cnxman_credit_carrier(struct vms_cnxman *cn,
+				  vms_conid_t local_conid,
+				  struct vms_csb *csb)
+{
+	vms_codec_status_t st;
+
+	if (cn->cl == NULL || cn->cl->scs == NULL || csb == NULL)
+		return;
+	if (!scs_credit_return_due(cn->cl->scs, local_conid))
+		return;
+	/* E77: the envelope belongs to the CONNECTION, so a CSB whose dialogue
+	 * is bound elsewhere must not stamp one -- the skew byte a real VAX
+	 * bugchecks on. Refused rather than stamped, and the credit then waits
+	 * for SCS's op-8 backstop. */
+	if (!cnxman_csb_dialogue_is_on(csb, (uint32_t)local_conid))
+		return;
+
+	st = vms_cm_ack_build(cn->carrier, (uint32_t)sizeof(cn->carrier), NULL);
+	if (st != VMS_CODEC_OK) {
+		cn->credit_carriers_unbuilt++;
+		return;
+	}
+	cnxman_envelope_originate(csb, cn->carrier, 1);
+	if (scs_send_msg(cn->cl->scs, local_conid, cn->carrier,
+			 VMS_CM_BODY_LEN) != (int)SS__NORMAL) {
+		cn->credit_carriers_refused++;
+		return;
+	}
+	cn->credit_carriers_sent++;
+}
+
+/* Release the buffer, then offer the body to each FSM in turn. Split from
+ * cnxman_vc_message() so that the credit carrier runs on EVERY outcome --
+ * including the frame no FSM claimed, which still consumed a real buffer and
+ * still owes the peer its credit back. */
+static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
+			   const uint8_t *body, uint32_t len)
 {
 	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
 	struct vms_club *club = &cn->cl->club;
@@ -1150,6 +1263,20 @@ static int cnxman_vc_message(void *ctx, vms_conid_t local_conid,
 	cnxman_ops_log(cn, "%CNXMAN, an unroutable VMS$VAXcluster frame was "
 			   "received");
 	return 1;
+}
+
+static int cnxman_vc_message(void *ctx, vms_conid_t local_conid,
+			     const uint8_t *body, uint32_t len)
+{
+	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
+	int rc = cnxman_vc_route(ctx, local_conid, body, len);
+
+	/* Last, so that an answer any FSM produced has already piggybacked the
+	 * ledger and this asks SCS about what is genuinely left (E79). */
+	if (cn->cl != NULL)
+		cnxman_credit_carrier(cn, local_conid,
+				      csb_by_conid(&cn->cl->club, local_conid));
+	return rc;
 }
 
 /*

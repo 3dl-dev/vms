@@ -446,16 +446,28 @@ static void cdt_learn_peer_min_cr(struct scs_cdt *cdt,
  * makes the trigger FIRE EARLIER, never later, and every byte of the message
  * it sends is still a real ledger read; the partial threshold is counted so
  * the difference is visible rather than assumed away. */
-static int credit_dangerously_low(struct scs_fsm *f, struct scs_cdt *cdt)
+static int credit_below_cushion(const struct scs_fsm *f,
+				const struct scs_cdt *cdt)
 {
 	uint32_t threshold = f->cfg.flowcush;
 
 	if (cdt->peer_min_send_credits_valid)
 		threshold += cdt->peer_min_send_credits;
-	else
-		f->credit_msg_partial_threshold++;
 
 	return (uint32_t)cdt->credit_receive < threshold;
+}
+
+/* The counting wrapper. The arithmetic above is pure so that the SYSAP-facing
+ * readback (scs_fsm_credit_return_due) can ask the SAME question without
+ * mutating the instrumentation -- one implementation of p. 2-44's rule, asked
+ * from two places, which is what keeps a SYSAP's own credit carrier and this
+ * file's special credit message from disagreeing about when a return is owed. */
+static int credit_dangerously_low(struct scs_fsm *f, struct scs_cdt *cdt)
+{
+	if (!cdt->peer_min_send_credits_valid)
+		f->credit_msg_partial_threshold++;
+
+	return credit_below_cushion(f, cdt);
 }
 
 /* ==========================================================================
@@ -1534,6 +1546,38 @@ static int credit_msg_send(struct scs_fsm *f, struct scs_cdt *cdt)
 	return SCS_OK;
 }
 
+/*
+ * THE p. 2-44 LOW-CREDIT FLUSH -- the OPPORTUNISTIC half of credit_msg_send(),
+ * and the only half that defers (E79).
+ *
+ * p. 2-44 sends the special credit message "instead of waiting for a message to
+ * ride on". While a SYSAP's input routine is running there may still BE one:
+ * the SYSAP is at that moment deciding whether to answer, and its answer
+ * piggybacks the ledger for free. A SYSAP that releases its receive buffer
+ * first -- which pp. 2-43/2-44 require, so the credit rides out on the answer
+ * -- would otherwise trip this trigger inside scs_fsm_return_credit() and put a
+ * standalone op 8 on the wire one line before the message that was about to
+ * carry it. One extra frame per inbound message is a flood, not flow control.
+ *
+ * So the flush waits for the end of the delivery, where h_rx_appl_msg() re-runs
+ * the same test on a settled ledger. NOTHING IS LOST: a release outside a
+ * delivery still flushes at once, which is the case p. 2-44 is about.
+ *
+ * The DELIBERATE originations do not come through here. h_local_disconnect()'s
+ * op 8 is grounded as "the type-8 sender is the rank-0 DISCONNECT_REQ sender in
+ * all 131" and its op 9 is what releases the teardown; deferring that wedges
+ * the disconnect open behind a timer, which is exactly what happened when this
+ * guard was first written into credit_msg_send() itself.
+ */
+static void credit_msg_flush(struct scs_fsm *f, struct scs_cdt *cdt)
+{
+	if (f->delivery_depth != 0u) {
+		f->credit_msgs_deferred++;
+		return;
+	}
+	(void)credit_msg_send(f, cdt);
+}
+
 /* [OPEN] RX op 8 -- the peer's special credit message. Answered with op 9
  * "with the handle pair swapped", 131 of 131, worst case 3.1 ms (SS4(h)(1f)):
  * machine-speed, no timer, and -- see the note above -- not gated on credit,
@@ -1591,12 +1635,18 @@ static int h_rx_appl_msg(struct scs_fsm *f, struct scs_cdt *cdt,
 	credit_consume_receive(f, cdt);   /* p. 2-43: type 10 takes a buffer */
 	cdt->msgs_received++;
 
+	/* The SYSAP releases its buffer from inside this call and may answer
+	 * from inside it too, so the special credit message waits until both
+	 * are settled (scs_fsm.h, `delivery_depth`). */
 	if (cdt->sysap != (const struct scs_sysap_ops *)0 &&
 	    cdt->sysap->message != (int (*)(void *, vms_conid_t,
 					    const uint8_t *, uint32_t))0 &&
-	    rx->body != (const uint8_t *)0)
+	    rx->body != (const uint8_t *)0) {
+		f->delivery_depth++;
 		taken = cdt->sysap->message(cdt->sysap->ctx, cdt->local_conid,
 					    rx->body, rx->body_len);
+		f->delivery_depth--;
+	}
 	if (taken != 0)
 		f->rx_undelivered++;
 
@@ -1604,7 +1654,7 @@ static int h_rx_appl_msg(struct scs_fsm *f, struct scs_cdt *cdt,
 	/* p. 2-44: a message arriving is exactly when the receiving end tests
 	 * whether its own Receive Credit has fallen dangerously low. */
 	if (cdt->credit_pending > 0u && credit_dangerously_low(f, cdt))
-		(void)credit_msg_send(f, cdt);
+		credit_msg_flush(f, cdt);
 	return SCS_OK;
 }
 
@@ -2420,11 +2470,54 @@ int scs_fsm_return_credit(struct scs_fsm *f, vms_conid_t local_conid,
 	cdt->credit_pending = (uint16_t)(cdt->credit_pending + n);
 
 	/* p. 2-44: with the Receive Credit dangerously low the pending count
-	 * goes out at once instead of waiting for a message to ride on. */
+	 * goes out at once instead of waiting for a message to ride on --
+	 * unless a delivery is in flight, in which case there may still be one
+	 * (credit_msg_send defers and the delivery's own tail re-tests). */
 	if (cdt->state == (uint8_t)VMS_SCS_CDT_OPEN &&
 	    cdt->credit_pending > 0u && credit_dangerously_low(f, cdt))
-		(void)credit_msg_send(f, cdt);
+		credit_msg_flush(f, cdt);
 	return SCS_OK;
+}
+
+/*
+ * IS A CREDIT RETURN OWED ON THIS CONNECTION? (E79)
+ *
+ * The question a SYSAP has to be able to ask before it originates a carrier of
+ * its own. The `VMS$VAXcluster` connection manager needs it because the
+ * reference joiner returns credit on that connection with an ORDINARY
+ * application message (a category-0x04 body, 138 of 138 in
+ * vax3-2to3-established-join-20260730 are message type 10) and not with the
+ * op-8 special credit message -- there are 0 op-8 frames on the 204-byte VC
+ * class in that capture. So the SYSAP builds the carrier and this file keeps
+ * the rule about WHEN one is owed.
+ *
+ * THE RULE IS THE COALESCING QUANTUM, and it is the whole answer to the
+ * question the crash asked. Not "is anything pending" -- that is one carrier
+ * per message, which is the flood. Not "is the peer nearly starved" -- that is
+ * one carrier per credit WINDOW, which under-acks by a factor of the grant and
+ * is not what any reference node does. It is SCS_CREDIT_COALESCE: three
+ * released buffers, measured 84 carriers against 254 op-0x06 with the ack word
+ * advancing by exactly 3 in 83 of 83 gaps (see the constant's census).
+ *
+ * Every term is a ledger read on a real CDT. `credit_pending` counts buffers
+ * this node's SYSAP has genuinely released -- scs_fsm_return_credit() refuses
+ * to move more than the CDT's own `credit_held` -- so a SYSAP cannot talk this
+ * function into a carrier it has no credit to put on, and a remainder below
+ * the quantum is simply never returned, which is the residue SS4(h)(1c)
+ * measured at 131 of 131 and could not explain.
+ */
+int scs_fsm_credit_return_due(const struct scs_fsm *f, vms_conid_t local_conid)
+{
+	const struct scs_cdt *cdt;
+
+	if (f == (const struct scs_fsm *)0)
+		return 0;
+	cdt = scs_fsm_cdt_by_conid((struct scs_fsm *)f, local_conid);
+	if (cdt == (const struct scs_cdt *)0)
+		return 0;
+	if (cdt->state != (uint8_t)VMS_SCS_CDT_OPEN)
+		return 0;
+	return cdt->credit_pending >= (uint16_t)SCS_CREDIT_COALESCE;
 }
 
 /* ==========================================================================

@@ -241,6 +241,23 @@ enum cnxman_event {
 	 */
 	CNXMAN_EV_CM_ACCEPTED   = 22,
 
+	/*
+	 * THE TRANSITION COMMITTED (E79) -- the coordinator released the last
+	 * barrier step, op-0x0c #12. It is a LOCAL fact derived from the
+	 * barrier FSM's own commit counter, not a frame: sec 4(q) is explicit
+	 * that "there is no 'you are now a member' message, and no
+	 * joiner-emitted field flips ... membership FOLLOWS FROM THE
+	 * TRANSITION COMPLETING", so the event has to be named after the
+	 * completion rather than after any byte on the wire.
+	 *
+	 * It is separate from CNXMAN_EV_RX_BARRIER, which is the release
+	 * ARRIVING: eleven of those advance a step and the twelfth commits,
+	 * and only the barrier is entitled to tell them apart (it is the one
+	 * holding the step count). Folding them would put that count in two
+	 * places, which is how a participant ends up sending a thirteenth step.
+	 */
+	CNXMAN_EV_TRANSITION_DONE = 23,
+
 	CNXMAN_EV__COUNT
 };
 

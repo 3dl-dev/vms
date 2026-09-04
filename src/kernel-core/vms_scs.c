@@ -966,6 +966,13 @@ int scs_return_credit(struct vms_scs *scs, vms_conid_t local_conid, uint16_t n)
 							  local_conid, n));
 }
 
+int scs_credit_return_due(const struct vms_scs *scs, vms_conid_t local_conid)
+{
+	if (scs == (const struct vms_scs *)0)
+		return 0;
+	return scs_fsm_credit_return_due(&scs->fsm, local_conid);
+}
+
 int scs_cdt_view(struct vms_scs *scs, vms_conid_t local_conid,
 		 struct vms_scs_cdt_view *out)
 {

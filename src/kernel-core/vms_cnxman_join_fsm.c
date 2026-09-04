@@ -824,10 +824,24 @@ struct join_ev {
 
 	/* the assignment the cluster made */
 	vms_csid_t csid;
+
+	/* CNXMAN_EV_TRANSITION_DONE: the barrier's commit record, read back --
+	 * the class off the wire, and what the coordinator's nodemap said
+	 * about this node (three-valued; see cnxman_phase2_stats). */
+	uint8_t aux_class;
+	uint8_t aux_named;
+	uint8_t aux_in_map;
 };
 
 typedef enum cnxman_join_rx (*join_handler_t)(struct cnxman_join *,
 					      const struct join_ev *);
+
+/* Defined with the table below; used by join_post_commit(), which posts the
+ * commit as a second top-level dispatch once the barrier hand-off has
+ * returned. */
+static enum cnxman_join_rx join_dispatch(struct cnxman_join *j,
+					 enum cnxman_event ev,
+					 const struct join_ev *e);
 
 /* ==========================================================================
  * Starting: pick the member, declare our directory descriptor, run our own
@@ -1626,10 +1640,45 @@ static enum cnxman_join_rx join_h_echo(struct cnxman_join *j,
 /*
  * The op-0x06 MEMBERSHIP burst -- the anti-LARP crux of this whole item.
  *
- * The allowlist grounds it as CONSUME + "answered only by the opportunistic
- * cat-0x04 ack, never 0x81" (spec sec 4(p)/(u); sec 4(o) row 10 shows the
- * joiner's cat-0x04 answers), so that is what goes back regardless of
- * whether this frame taught us anything.
+ * ==========================================================================
+ * E79: THIS HANDLER ANSWERS NOTHING, AND THAT IS THE FIX.
+ *
+ * It used to build a cat-0x04 and emit it, ONE PER op-0x06, on the reading
+ * that sec 4(o) row 10 makes the cat-0x04 this burst's answer. Against the
+ * live cluster that put 254 cat-0x04 frames on the wire in 31.6 ms (~8000/s)
+ * and VAX2 took a fatal INVEXCEPTN, "Exception while above ASTDEL or on
+ * interrupt stack". OVMX halted a real VAX.
+ *
+ * The reference refutes the 1:1 reading outright, and names the real law.
+ * Measured over vax3-2to3-established-join-20260730.pcap, the joiner's own
+ * link to the coordinator:
+ *
+ *     254 op-0x06 in  ->  84 cat-0x04 out.   Ratio 3.02.
+ *
+ * with the ack-msg word those carriers stamp advancing by exactly 3 across 83
+ * of 83 in-burst gaps -- never 1, never 2 -- and the credit field at abs 62
+ * reading 3 on 85 of the 86 carriers on that link. Corroborated corpus-wide at
+ * 6549 acks from six responder nodes, ack-word advance >= 3 in every one.
+ *
+ * So the cat-0x04 is a CREDIT CARRIER on a COALESCING QUANTUM of three
+ * released buffers (SCS_CREDIT_COALESCE), which is what sec 4(u) was
+ * describing when it said the ack is "prompt, opportunistic, cumulative, and
+ * NEVER KEYED TO AN OPCODE". It is emitted by cnxman_credit_carrier()
+ * (vms_cnxman.c) out of the CDT's real ledger; the burst is CONSUMED here.
+ * Three released buffers ARE three consumed peer messages, so a carrier
+ * emitted at the quantum stamps credit 3 and advances the ack word by 3
+ * without either number being chosen anywhere.
+ *
+ * The three opcodes sec 4(o) row 10 lists -- 0x04/0x49, 0x04/0x00, 0x04/0x02
+ * -- are not three messages. They are ONE message drawn from a rotating pool
+ * of three recycled buffers (they recur 28/34/28 times across this burst), and
+ * sec 4(p) grounds body[9] as uninitialised buffer content: the 0x49 frame
+ * reads "\x04\x49IR_LOOKUP  SCS$DIRECTORY" -- a buffer that last held
+ * "DIR_LOOKUP  SCS$DIRECTORY" with body[8] overwritten by the category -- and
+ * the 0x02 frame is that node's own earlier op-0x02, same one byte
+ * overwritten. vms_cm_ack_build() sends zeros, per sec 4(p)'s "do not
+ * reproduce another implementation's uninitialised memory".
+ * ==========================================================================
  *
  * E30 (falsified + replaced by a real-VAX capture,
  * tests/lab/captures/op06-join-20260903.pcap): this frame is the EXISTING
@@ -1639,9 +1688,16 @@ static enum cnxman_join_rx join_h_echo(struct cnxman_join *j,
  * returns "not found" rather than guessing), takes the WIRE-LEARNED
  * generation off its high 16 bits, and computes ITS OWN CSID from ITS OWN
  * real SCSSYSTEMID (FC-P0.10 SYSGEN state) -- never copied, never
- * templated. cnxman_join_csid_learned() does the rest: fires
- * cnxman_club_learn_local_csid() and moves this node NEW -> MEMBER through
- * the existing [ADMIT|BARRIER][CSID_LEARNED] table cell.
+ * templated. cnxman_join_csid_learned() records it in the CLUB.
+ *
+ * >> AND THAT IS ALL IT DOES (E79). << Learning a CSID is not being admitted.
+ * The same live run that flooded VAX2 also reached the join FSM's MEMBER state
+ * off this event, before a single barrier frame had been exchanged, because
+ * the [ADMIT|BARRIER][CSID_LEARNED] cell used to promote. sec 4(q) is explicit
+ * that membership "FOLLOWS FROM THE TRANSITION COMPLETING", and measures the
+ * joiner's CSID on the wire ~160 ms BEFORE the barrier even opens -- so a CSID
+ * seen in an op-0x06 is evidence of a generation, never of admission.
+ * join_h_transition_done() owns the promotion now, on the real op-0x0c #12.
  *
  * Until a shape-valid CSID has been seen in an op-0x06, nothing is learned:
  * the CLUB's local CSID stays unlearned, this node stays NEW, and it issues
@@ -1676,16 +1732,8 @@ static void join_learn_csid_from_membership(struct cnxman_join *j,
 static enum cnxman_join_rx join_h_membership(struct cnxman_join *j,
 					     const struct join_ev *e)
 {
-	vms_codec_status_t st;
-
 	j->membership_records++;
 	join_learn_csid_from_membership(j, e);
-
-	st = vms_cm_ack_build(j->scratch, (uint32_t)sizeof(j->scratch), NULL);
-	if (join_build_failed(j, st))
-		return CNXMAN_JOIN_RX_CONSUMED;
-	if (join_emit_cm(j, 1) == 0)
-		j->acks_sent++;
 	return CNXMAN_JOIN_RX_CONSUMED;
 }
 
@@ -1727,6 +1775,44 @@ static enum cnxman_join_rx join_forward(struct cnxman_join *j,
 	(void)cnxman_barrier_rx_body(j->barrier, e->body, e->len,
 				     e->from_csid, e->from_valid, e->from_csb);
 	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+/*
+ * HOW THIS FSM HEARS THAT THE TRANSITION COMMITTED (E79).
+ *
+ * By READING the barrier's commit counter around a dispatch, not by being
+ * called back. A callback would give the barrier a pointer to whoever wants
+ * promoting and a second reason to fire, and the design keeps the barrier
+ * ignorant of its audience (vms_cnxman_barrier_fsm.h: "it does not join").
+ *
+ * The post is a SECOND TOP-LEVEL DISPATCH, not a nested one: the handler that
+ * forwarded to the barrier has already returned, so the transcript reads as two
+ * ordered records (RX_BARRIER, then TRANSITION_DONE) and the table is never
+ * re-entered from inside itself.
+ */
+static uint32_t join_barrier_commits(const struct cnxman_join *j)
+{
+	return cnxman_barrier_commits(j->barrier, NULL);
+}
+
+static void join_post_commit(struct cnxman_join *j, uint32_t before,
+			     const struct join_ev *src)
+{
+	struct cnxman_barrier_commit c;
+	struct join_ev e;
+
+	join_bzero(&c, (uint32_t)sizeof(c));
+	if (cnxman_barrier_commits(j->barrier, &c) == before)
+		return;   /* nothing committed in that dispatch */
+
+	join_bzero(&e, (uint32_t)sizeof(e));
+	e.from_csid   = src->from_csid;
+	e.from_valid  = src->from_valid;
+	e.from_csb    = src->from_csb;
+	e.aux_class   = c.tr_class;
+	e.aux_named   = c.local_named;
+	e.aux_in_map  = c.local_in_map;
+	(void)join_dispatch(j, CNXMAN_EV_TRANSITION_DONE, &e);
 }
 
 /*
@@ -1838,12 +1924,83 @@ static enum cnxman_join_rx join_h_closed(struct cnxman_join *j,
 	return CNXMAN_JOIN_RX_CONSUMED;
 }
 
+/*
+ * The CSID this node computed from a real op-0x06 is RECORDED, and that is the
+ * whole of it (E79). It used to promote to MEMBER here, which put this node in
+ * its member state on the strength of a membership record -- sec 4(q): "There
+ * is no 'you are now a member' message ... membership FOLLOWS FROM THE
+ * TRANSITION COMPLETING", and the reference joiner's CSID is on the wire
+ * ~160 ms BEFORE its barrier even opens. Promoting here asserted a membership
+ * the cluster had not granted, which is exactly the fabrication INV-6 forbids.
+ */
 static enum cnxman_join_rx join_h_csid_learned(struct cnxman_join *j,
 					       const struct join_ev *e)
 {
 	if (j->cl == NULL)
 		return CNXMAN_JOIN_RX_CONSUMED;
 	cnxman_club_learn_local_csid(&j->cl->club, e->csid);
+	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+/*
+ * THE PROMOTION, AND THE TWO REAL FACTS IT NEEDS (E79).
+ *
+ * Reached only from CNXMAN_EV_TRANSITION_DONE, which join_forward() posts when
+ * the barrier's commit counter has moved -- one genuine op-0x0c #12 from the
+ * coordinator, counted in barrier_finish() and nowhere else.
+ *
+ * That alone is not enough, because a member also barriers through OTHER
+ * nodes' transitions. The second fact is this node's own CSB carrying the
+ * member flag, which cnxman_phase2_commit() sets from the nodemap bit the
+ * coordinator really asserted for us (p. 7-42 task 1/3). Both are executive
+ * reads. If the coordinator ran a transition that did not name this node, the
+ * flag is not set and this node does not promote -- which is the honest
+ * outcome and the one a `SHOW CLUSTER` reading `NEW` correctly describes.
+ */
+static enum cnxman_join_rx join_h_transition_done(struct cnxman_join *j,
+						  const struct join_ev *e)
+{
+	if (j->cl == NULL)
+		return CNXMAN_JOIN_RX_CONSUMED;
+
+	/*
+	 * NO CSID, NO MEMBERSHIP -- however far the transition got (E73, and
+	 * the assertion that item left behind). A member IS its CSID: it is
+	 * what the CLUB indexes it by, what the DLM would name it by, and what
+	 * every later transition's nodemap addresses. A node that answered all
+	 * twelve barrier steps and learned no CSID has met the cluster's
+	 * obligations and still holds no identity in it, and reading MEMBER
+	 * there would be a membership with nothing behind it. So the barrier
+	 * still runs -- refusing it breaks the cluster (sec 4(p)) -- and this
+	 * node still does not promote.
+	 */
+	if (!j->cl->club.local_csid_valid) {
+		j->commits_not_ours++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+
+	/*
+	 * THE ONE THING THAT BLOCKS A PROMOTION: the coordinator's nodemap
+	 * SAID something about this node, and what it said was no. Kept
+	 * separate from "it said nothing" -- sec 4(p) records that the bitmap
+	 * byte "holds only 8 slots while the library already reaches slot 5"
+	 * and that its true width is UNDETERMINED, so a slot this executive
+	 * cannot express is silence, and treating silence as a refusal would
+	 * make a real admission unreachable for exactly the clusters we have
+	 * the least evidence about. Silence promotes on the completion alone,
+	 * which is sec 4(q)'s rule, and is COUNTED so the transcript says the
+	 * corroboration was missing rather than implying it was present.
+	 */
+	if (e->aux_named && !e->aux_in_map) {
+		j->commits_not_ours++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	if (!e->aux_named)
+		j->commits_unmapped++;
+
+	if (j->state == (uint8_t)CNXMAN_JOIN_MEMBER)
+		return CNXMAN_JOIN_RX_CONSUMED;
+
 	join_goto(j, CNXMAN_JOIN_MEMBER);
 	join_log(j, "%CNXMAN, this node is now a VAXcluster member");
 	return CNXMAN_JOIN_RX_CONSUMED;
@@ -2192,6 +2349,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 		[CNXMAN_EV_RX_TR_GO]     = join_h_go,
 		[CNXMAN_EV_RX_REBUILD]   = join_forward,
 		[CNXMAN_EV_CSID_LEARNED] = join_h_csid_learned,
+		[CNXMAN_EV_TRANSITION_DONE] = join_h_transition_done,
 		[CNXMAN_EV_CDT_CLOSED]   = join_h_closed,
 		[CNXMAN_EV_TIMER_JOIN]   = join_h_watch_burst,
 	},
@@ -2213,6 +2371,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 		[CNXMAN_EV_RX_MEMBERSHIP] = join_h_membership,
 		[CNXMAN_EV_RX_CLOSE]     = join_h_close,
 		[CNXMAN_EV_CSID_LEARNED] = join_h_csid_learned,
+		[CNXMAN_EV_TRANSITION_DONE] = join_h_transition_done,
 		[CNXMAN_EV_CDT_CLOSED]   = join_h_closed,
 	},
 
@@ -2228,6 +2387,10 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 		[CNXMAN_EV_RX_COMMIT]    = join_h_echo,
 		[CNXMAN_EV_RX_MEMBERSHIP] = join_h_membership,
 		[CNXMAN_EV_RX_CLOSE]     = join_h_close,
+		/* A member barriers through OTHER nodes' transitions too, and
+		 * each of those commits. The handler is idempotent and reports
+		 * the ones whose nodemap did not name us. */
+		[CNXMAN_EV_TRANSITION_DONE] = join_h_transition_done,
 		[CNXMAN_EV_CDT_CLOSED]   = join_h_closed,
 	},
 
@@ -2272,6 +2435,8 @@ static uint32_t join_ev_aux(enum cnxman_event ev, const struct join_ev *e)
 		return e->present ? 1u : 0u;      /* HIT vs "NOT PRESENT HERE" */
 	case CNXMAN_EV_CSID_LEARNED:
 		return (uint32_t)e->csid;
+	case CNXMAN_EV_TRANSITION_DONE:
+		return (uint32_t)e->aux_class;   /* WHICH class committed */
 	default:
 		return 0u;
 	}
@@ -2678,7 +2843,14 @@ enum cnxman_join_rx cnxman_join_rx_body(struct cnxman_join *j,
 				  join_diag_catop(&e.env));
 		return CNXMAN_JOIN_RX_NOT_MINE;
 	}
-	return join_dispatch(j, ev, &e);
+
+	{
+		uint32_t before = join_barrier_commits(j);
+		enum cnxman_join_rx rx = join_dispatch(j, ev, &e);
+
+		join_post_commit(j, before, &e);
+		return rx;
+	}
 }
 
 int cnxman_join_connect_req(struct cnxman_join *j, vms_scs_sysid_t peer,

@@ -552,6 +552,51 @@ struct scs_sdir {
 #define SCS_DISCONNECT_TIMEOUT_MS_DEFAULT  5000u
 #define SCS_FLOWCUSH_DEFAULT                  1u
 
+/*
+ * ==========================================================================
+ * THE CREDIT-RETURN COALESCING QUANTUM (E79) -- MEASURED, 0 RESIDUALS
+ * ==========================================================================
+ *
+ * A receiver does NOT return a credit per message. It accumulates and returns
+ * them THREE AT A TIME, and this is the constant that says so.
+ *
+ * Why it exists: OVMX returned one per message on the `VMS$VAXcluster`
+ * connection during the coordinator's op-0x06 MEMBERSHIP burst -- 254 frames
+ * in 31.6 ms -- and the coordinator (a real VAX) took a fatal INVEXCEPTN on
+ * the interrupt stack and halted.
+ *
+ * The measurement, on `vax3-2to3-established-join-20260730.pcap`, the joiner's
+ * own link to the coordinator, counted two independent ways that agree:
+ *
+ *   - 254 op-0x06 arrive and draw 84 cat-0x04 carriers. Ratio 3.02.
+ *   - The ack-msg word those carriers stamp advances by EXACTLY 3 across every
+ *     one of the 83 in-burst gaps -- never 1, never 2, never 0.
+ *   - The credit field at abs 62 reads 3 on 85 of the 86 carriers on that link
+ *     (the 86th is a tail of 1).
+ *
+ * Corroborated independently over the whole reference corpus: 6549 acks from
+ * six responder nodes, ack-word advance >= 3 in every one, an advance of 1 or
+ * 2 in none.
+ *
+ * The two quantities are the same fact seen twice: one credit is one released
+ * receive buffer, and one released buffer is one peer message consumed, so the
+ * credit stamped and the ack-word advance move together. A receiver that
+ * flushes the moment its pending count REACHES three therefore stamps exactly
+ * three and advances the ack word by exactly three, which is the reference
+ * behaviour with no cap and no timer anywhere in it.
+ *
+ * It also explains the ledger residue spec SS4(h)(1c) already recorded and
+ * could not account for -- "carries credit 0 while the ledger says 1 is owed,
+ * in 131 of 131 ... the last credit on a connection is never returned". A
+ * remainder below the quantum is never flushed, because the quantum is a
+ * floor, not a target.
+ *
+ * NOT a tunable and not this file's choice: it is a wire law, and it is
+ * therefore a constant with its census attached rather than a cfg field
+ * somebody could set to 1 and re-crash a VAX.
+ */
+#define SCS_CREDIT_COALESCE                   3u
+
 struct scs_fsm_cfg {
 	uint32_t connect_timeout_ms;
 	uint32_t disconnect_timeout_ms;
@@ -595,6 +640,29 @@ struct scs_fsm {
 	uint32_t dir_lookups_served;
 	uint32_t dir_lookups_sent;
 	uint32_t credit_stalls;         /* sends that entered Credit Wait     */
+	uint32_t credit_msgs_deferred;  /* op 8 held back for a piggyback     */
+
+	/*
+	 * ---- DELIVERY DEPTH: why the special credit message waits (E79) ----
+	 *
+	 * p. 2-44 sends the special credit message "instead of waiting for a
+	 * message to ride on" -- so it must only fire once it is SETTLED that
+	 * no message is coming. While a SYSAP's input routine is running, that
+	 * is not settled: the SYSAP is at that very moment deciding whether to
+	 * answer, and its answer piggybacks the ledger for free. A SYSAP that
+	 * releases its receive buffer FIRST (which pp. 2-43/2-44 require, so
+	 * the credit rides out on the answer) would otherwise trip the trigger
+	 * inside scs_fsm_return_credit() and put a standalone op 8 on the wire
+	 * one line before the message that was about to carry it -- one extra
+	 * frame per inbound message, which is a flood, not flow control.
+	 *
+	 * So the trigger is DEFERRED for the duration of a delivery and
+	 * re-tested at the end of h_rx_appl_msg(), where the answer (or its
+	 * absence) is a fact rather than a guess. Nothing is lost: a release
+	 * that happens OUTSIDE a delivery -- a SYSAP finishing with a buffer
+	 * later -- still flushes at once, which is the case p. 2-44 is about.
+	 */
+	uint32_t delivery_depth;
 
 	/* Scratch for ONE frame. Sized for the largest control class; an
 	 * application message is built into `msgbuf`. Neither is ever on the
@@ -816,6 +884,16 @@ int scs_fsm_send_refusal(struct scs_fsm *f, vms_conid_t local_conid,
  * `held` to `pending` and go out on the next message, or immediately in a
  * special credit message if Receive Credit is dangerously low. */
 int scs_fsm_return_credit(struct scs_fsm *f, vms_conid_t local_conid, uint16_t n);
+
+/*
+ * Nonzero when this connection's ledger owes the peer a credit return AND
+ * p. 2-44's cushion test says withholding it would starve the peer -- i.e.
+ * exactly when a SYSAP that has nothing else to send should originate its own
+ * carrier. Reads the CDT; changes nothing. See the definition for why the
+ * `VMS$VAXcluster` connection manager needs to ask rather than leaving it to
+ * the op-8 special credit message.
+ */
+int scs_fsm_credit_return_due(const struct scs_fsm *f, vms_conid_t local_conid);
 
 /* ==========================================================================
  * 9. Input -- the port's pe_upper_ops, bound to this FSM by the glue

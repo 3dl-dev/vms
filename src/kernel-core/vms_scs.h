@@ -326,6 +326,15 @@ int scs_send_refusal(struct vms_scs *scs, vms_conid_t local_conid,
 int scs_return_credit(struct vms_scs *scs, vms_conid_t local_conid, uint16_t n);
 
 /*
+ * Nonzero when the ledger owes this connection's peer a credit return and
+ * p. 2-44's cushion test says withholding it would starve it: the question a
+ * SYSAP asks before originating a carrier of its own, so that the DECISION to
+ * emit one is a ledger read and never a per-message reflex (E79).
+ * -> scs_fsm_credit_return_due.
+ */
+int scs_credit_return_due(const struct vms_scs *scs, vms_conid_t local_conid);
+
+/*
  * The live CDT behind a Con.ID, projected (E78). The SYSAP-facing sibling of
  * vms_scs_cdt_snapshot(), which enumerates by CDL INDEX and is what a
  * SHOW-CLUSTER reader wants; a SYSAP holds a Con.ID and nothing else, and

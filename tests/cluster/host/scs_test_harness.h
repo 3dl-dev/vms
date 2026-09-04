@@ -71,6 +71,22 @@ struct scsh_sysap {
 	vms_conid_t          last_closed_conid;
 	uint8_t              last_msg[SCS_SYSAP_BODY_LEN];
 	uint16_t             return_credit_immediately; /* 1 = release on rx */
+	/*
+	 * E79: emit a CREDIT CARRIER from inside the input routine when the
+	 * ledger says one is due, which is exactly what the shipping
+	 * `VMS$VAXcluster` SYSAP does (cnxman_credit_carrier(), gated on
+	 * scs_credit_return_due()). The DECISION under test is the real
+	 * scs_fsm_credit_return_due() against the real CDT; only the SYSAP that
+	 * asks it is a stand-in, and that the shipping one asks it here is
+	 * proved by source scan in test_cnxman_op06_flood.c.
+	 *
+	 * It must run INSIDE the callback, because that is where CNXMAN's runs:
+	 * a carrier emitted after the delivery would lose the race to the
+	 * end-of-delivery p. 2-44 flush and the ordering would not be the
+	 * shipping one.
+	 */
+	uint16_t             carrier_on_credit_due;
+	uint32_t             n_carriers;
 
 	/* The connect_req callback's own conndata, read back off the ACTUAL
 	 * inbound frame the codec parsed (never the caller's intent) -- SS4(N)
@@ -348,6 +364,16 @@ SCSH_UNUSED static int scsh_message(void *ctx, vms_conid_t local_conid,
 		s->last_msg[i] = body[i];
 	if (s->return_credit_immediately)
 		(void)scs_fsm_return_credit(&s->node->fsm, local_conid, 1u);
+	if (s->carrier_on_credit_due &&
+	    scs_fsm_credit_return_due(&s->node->fsm, local_conid)) {
+		uint8_t carrier[SCS_SYSAP_BODY_LEN];
+
+		for (i = 0; i < SCS_SYSAP_BODY_LEN; i++)
+			carrier[i] = 0u;
+		if (scs_fsm_send_msg(&s->node->fsm, local_conid, carrier,
+				     SCS_SYSAP_BODY_LEN) == SCS_OK)
+			s->n_carriers++;
+	}
 	return 0;
 }
 

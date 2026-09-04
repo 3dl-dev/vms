@@ -242,6 +242,32 @@ struct cnxman_barrier {
 	/* ---- what this node has done, all counted from real dispatches ---- */
 	uint32_t transitions_seen;
 	uint32_t transitions_completed;
+
+	/*
+	 * THE COMMITS -- incremented ONLY by barrier_finish(), i.e. only on a
+	 * genuine op-0x0c whose step index really is the twelfth (E79). It is
+	 * deliberately NOT `transitions_completed`, which also counts the
+	 * class-0x04 self-departure that runs no barrier at all; the join FSM
+	 * promotes this node to MEMBER on this counter moving and on nothing
+	 * else, so it has to mean exactly "the coordinator released the last
+	 * barrier step" and never "a transition-shaped thing finished".
+	 */
+	uint32_t commits;
+	uint32_t commit_epoch;       /* the epoch that op-0x0c #12 released    */
+	uint8_t  commit_class;       /* its enum vms_cnxman_transition_class   */
+	/*
+	 * What the nodemap said about THIS node, three-valued -- see
+	 * cnxman_phase2_stats. `local_*` is the transition IN PROGRESS, written
+	 * where the map was really read (Phase 2); `commit_local_*` is the
+	 * snapshot the last op-0x0c #12 froze. Two pairs, because a later
+	 * transition overwrites the live one and the commit record must keep
+	 * describing the commit it belongs to.
+	 */
+	uint8_t  local_named;
+	uint8_t  local_in_map;
+	uint8_t  commit_local_named;
+	uint8_t  commit_local_in_map;
+	uint8_t  commit_pad[3];
 	uint32_t transitions_abandoned;
 	uint32_t transitions_superseded; /* a new epoch replaced a pending open */
 	uint32_t opens_answered;
@@ -353,6 +379,26 @@ void cnxman_barrier_coordinator_lost(struct cnxman_barrier *b);
 /* The p. 7-42 answer: has Phase 2 run for the transition in progress? True
  * from the GO onward -- BEFORE step 1 and BEFORE any rebuild record. */
 int cnxman_barrier_phase2_committed(const struct cnxman_barrier *b);
+
+/* What the last genuine op-0x0c #12 committed (E79). */
+struct cnxman_barrier_commit {
+	uint32_t epoch;
+	uint8_t  tr_class;    /* enum vms_cnxman_transition_class, off the wire */
+	uint8_t  local_named; /* the nodemap answered about this node ...       */
+	uint8_t  local_in_map;/* ... and this was the answer                    */
+	uint8_t  pad;
+};
+
+/*
+ * How many state transitions this node has seen COMMITTED -- one per genuine
+ * op-0x0c #12 and nothing else (see `commits`). Monotone, so a caller detects a
+ * commit by snapshotting it around cnxman_barrier_rx_body() rather than by
+ * being told, which keeps the barrier free of a back-pointer to whoever cares.
+ * `out` (optional) is filled only when something HAS committed, so a zeroed
+ * struct never reads like a commit at epoch 0.
+ */
+uint32_t cnxman_barrier_commits(const struct cnxman_barrier *b,
+				struct cnxman_barrier_commit *out);
 
 /* Fill `out` with the transition in progress; nonzero when there is none (NOT
  * a zeroed struct that reads like a transition at epoch 0). */

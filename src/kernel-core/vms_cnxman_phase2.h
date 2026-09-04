@@ -92,6 +92,23 @@ struct cnxman_phase2_stats {
 	uint32_t bitmap_short;      /* more members than the nodemap named     */
 	uint32_t m_above_grounded;  /* committed member count > 4 (SS4(p))     */
 	uint32_t nodemap_unreadable;/* not one bit matched: membership untouched*/
+
+	/*
+	 * WHAT THE NODEMAP SAID ABOUT THIS NODE (E79), three-valued because the
+	 * field's width is undetermined (sec 4(p): "do not assume 8 slots"):
+	 *
+	 *   local_named == 0            the map did not answer about us at all
+	 *   local_named, !local_in_map  it answered, and we are NOT in it
+	 *   local_named,  local_in_map  it answered YES
+	 *
+	 * A caller must not collapse the first into the second. Membership
+	 * follows the transition COMPLETING (sec 4(q)); this says whether the
+	 * coordinator's own map corroborated that, contradicted it, or was
+	 * silent -- and silence is why the executive still promotes.
+	 */
+	uint8_t local_named;
+	uint8_t local_in_map;
+	uint8_t pad[2];
 };
 
 /* ==========================================================================

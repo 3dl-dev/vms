@@ -435,6 +435,15 @@ target_compile_definitions(test_cnxman_credit_return PRIVATE
     OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
 )
 
+# E79: the other side of the same ledger. E78 returned too little and the
+# coordinator went mute; E79 emitted too much -- a cat-0x04 per op-0x06, 254
+# frames in 31.6 ms -- and the coordinator BUGCHECKED. Same harness, same
+# source-scan shape: a burst must return its credit in O(N/grant) frames.
+cluster_host_scs_test(test_cnxman_op06_flood test_cnxman_op06_flood.c)
+target_compile_definitions(test_cnxman_op06_flood PRIVATE
+    OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
+)
+
 # ---- FC-P2.3: the SYSAP registry read + the SCS$DIRECTORY/SCS$DIR_LOOKUP
 # SYSAPs. test_scs_directory is the plan row's "R1 against the dir specimens"
 # (HIT / NOT PRESENT HERE / client round-trip / transient teardown);
@@ -705,4 +714,21 @@ add_test(NAME cluster_host_test_mscp_cl_conn COMMAND test_mscp_cl_conn)
 set_tests_properties(cluster_host_test_mscp_cl_conn PROPERTIES
     LABELS "unit;cluster;cluster_host;mscp"
     TIMEOUT 30
+)
+
+# ---- Crash-safety: the OVMX cluster wire-output safety gate ----
+# Rung 1 for tools/cluster/cm_wire_safety_audit.py. The checker's --self-test
+# synthesizes a clean CM dialogue that must produce ZERO findings, plus one
+# single-factor violation fixture per crash-vector that must each be detected.
+# That negative control is the point: this gate exists because we found two
+# peer-crashing vectors by crashing real VAXes, and a gate that can no longer
+# fail would let the third through silently. Pure Python + stdlib, no capture
+# corpus and no lab needed, so it runs everywhere ctest does.
+add_test(NAME cluster_host_wire_safety_audit
+    COMMAND ${CMAKE_COMMAND} -E env
+        "${CMAKE_SOURCE_DIR}/tools/ci/cluster_wire_safety_gate.sh"
+)
+set_tests_properties(cluster_host_wire_safety_audit PROPERTIES
+    LABELS "unit;cluster;cluster_host;crash-safety"
+    TIMEOUT 60
 )

@@ -94,6 +94,7 @@ static uint32_t phase2_apply_nodemap(struct vms_club *club,
 				     const struct cnxman_phase2_in *in,
 				     struct cnxman_phase2_stats *st)
 {
+	const struct vms_csb *local = cnxman_club_local(club);
 	uint32_t i, matched = 0u;
 
 	for (i = 0; i < club->n_csb; i++) {
@@ -103,6 +104,22 @@ static uint32_t phase2_apply_nodemap(struct vms_club *club,
 		if (!csb->in_use)
 			continue;
 		in_map = phase2_csb_in_nodemap(in, csb, &known);
+		/*
+		 * WHAT THE NODEMAP SAID ABOUT *US*, kept three-valued (E79).
+		 * "It did not say" is not "it said no": sec 4(p) records that
+		 * the bitmap byte "holds only 8 slots while the library already
+		 * reaches slot 5", that its true width is UNDETERMINED, and
+		 * "do not assume 8 slots" -- so a slot this executive cannot
+		 * express is silence, and a caller that treated silence as a
+		 * refusal would make a real admission unreachable. The join
+		 * FSM reads exactly this to decide whether the committed
+		 * transition corroborates, contradicts, or simply does not
+		 * mention its promotion.
+		 */
+		if (csb == local) {
+			st->local_named = (uint8_t)(known ? 1 : 0);
+			st->local_in_map = (uint8_t)((known && in_map) ? 1 : 0);
+		}
 		if (!known)
 			continue;
 		matched++;

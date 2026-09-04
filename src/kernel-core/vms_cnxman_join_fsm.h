@@ -618,7 +618,15 @@ struct cnxman_join {
 	 */
 	uint32_t burst_reoffers;
 	uint32_t echoes_sent;        /* 0x81 answers to op-0x03 / op-0x05     */
-	uint32_t acks_sent;          /* cat-0x04 answers to op-0x06           */
+	/*
+	 * RETIRED BY E79 and kept at zero rather than deleted: this counted the
+	 * cat-0x04 this FSM emitted per op-0x06, which is the flood that halted
+	 * VAX2. The op-0x06 burst is answered by NOTHING here; the credit it
+	 * releases goes back through cnxman_credit_carrier() (vms_cnxman.c),
+	 * whose own counter is `credit_carriers_sent`. A transcript that still
+	 * shows this moving is reporting a regression.
+	 */
+	uint32_t acks_sent;
 	uint32_t closes_answered;    /* cat-0x06 close, own parameter block   */
 	uint32_t mscp_cmds_sent;
 	uint32_t mscp_ends;
@@ -666,6 +674,23 @@ struct cnxman_join {
 	 */
 	uint32_t cm_other_member;
 	uint32_t handoffs;           /* transition frames given to the barrier*/
+	/*
+	 * Transitions this node saw COMMIT (a real op-0x0c #12) whose nodemap
+	 * did not name this node, so it did not promote (E79). Not an error: a
+	 * member barriers through every other node's transitions too. It is the
+	 * counter that separates "the barrier never completed" from "it
+	 * completed and we were not in it", which read identically from the
+	 * outside and have completely different causes.
+	 */
+	uint32_t commits_not_ours;
+	/*
+	 * Transitions that committed while the coordinator's nodemap said
+	 * NOTHING about this node -- a CSV slot the grounded bitmap byte cannot
+	 * express (sec 4(p): "do not assume 8 slots"). This node promotes on
+	 * the completion alone, which is sec 4(q)'s rule, and counts it here so
+	 * a transcript never implies a corroboration that was not there.
+	 */
+	uint32_t commits_unmapped;
 	uint32_t slow_steps;         /* the watchdog fired; NEVER an abort    */
 	uint32_t send_failures;
 	uint32_t codec_failures;

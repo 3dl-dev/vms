@@ -496,6 +496,11 @@ static void barrier_commit_phase2(struct cnxman_barrier *b)
 	b->count_mismatch += st.count_mismatch;
 	b->bitmap_short += st.bitmap_short;
 	b->m_above_grounded += st.m_above_grounded;
+	/* What the coordinator's own nodemap said about THIS node, kept for the
+	 * commit record (E79). Recorded here because this is where the map was
+	 * really read; it is not re-derived anywhere else. */
+	b->local_named = st.local_named;
+	b->local_in_map = st.local_in_map;
 	b->phase2_committed = 1u;
 }
 
@@ -693,6 +698,16 @@ static void barrier_h_step_ack(struct cnxman_barrier *b,
  * other release". */
 static void barrier_finish(struct cnxman_barrier *b)
 {
+	/* THE COMMIT (E79). The only place this counter moves, and the only
+	 * fact in this executive that means "the coordinator released the last
+	 * barrier step". Recorded BEFORE the CLUB bookkeeping below so that a
+	 * reader which sees the count move also sees the epoch that moved it. */
+	b->commits++;
+	b->commit_epoch = b->epoch;
+	b->commit_class = b->tr_class;
+	b->commit_local_named = b->local_named;
+	b->commit_local_in_map = b->local_in_map;
+
 	b->state = (uint8_t)CNXMAN_BARRIER_COMPLETE;
 	b->open_seen = 0u;
 	b->cl->club.transition_active = 0u;
@@ -1060,6 +1075,21 @@ void cnxman_barrier_set_dlm(struct cnxman_barrier *b,
 int cnxman_barrier_phase2_committed(const struct cnxman_barrier *b)
 {
 	return (b != NULL && b->phase2_committed != 0u) ? 1 : 0;
+}
+
+uint32_t cnxman_barrier_commits(const struct cnxman_barrier *b,
+				struct cnxman_barrier_commit *out)
+{
+	if (b == NULL)
+		return 0u;
+	if (out != NULL && b->commits != 0u) {
+		out->epoch = b->commit_epoch;
+		out->tr_class = b->commit_class;
+		out->local_named = b->commit_local_named;
+		out->local_in_map = b->commit_local_in_map;
+		out->pad = 0u;
+	}
+	return b->commits;
 }
 
 int cnxman_barrier_transition(const struct cnxman_barrier *b,

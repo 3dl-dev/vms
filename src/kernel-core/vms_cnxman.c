@@ -77,6 +77,7 @@
 #include "vms_cluster.h"
 #include "vms_cluster_fork.h"  /* FC-P0.5: cf_timer_*, fork_enter/leave */
 #include "vms_cluster_snapshot.h"
+#include "vms_cluster_sysgen.h" /* E78: SYSGEN CLUSTER_CREDITS, the VC grant */
 #include "vms_scs.h"            /* the SYSAP surface this glue registers on */
 #include "vms_scs_fsm.h"        /* enum scs_close_reason (E29) */
 #include "vms_cnxman.h"
@@ -101,7 +102,40 @@
  * registered SYSAP (vms_scs.h SS5) -- can open the outbound MSCP$DISK client
  * connection the join drives; nobody may connect TO it (connect_req refuses).
  * ========================================================================== */
-#define CNXMAN_VC_CREDITS   4u   /* one command/response at a time per peer */
+/*
+ * THE RECEIVE-BUFFER GRANT (E78). This is how many buffers this node extends
+ * to a peer at connect time -- a statement about THIS executive's own
+ * resources, not a claim about anyone else's state, and it is the number the
+ * peer's Send Credit starts at (p. 2-43).
+ *
+ * GROUNDED, and separately INFERRED -- the two are kept apart on purpose.
+ *
+ *   GROUNDED: the reference `VMS$VAXcluster` connection is opened with a grant
+ *   of TEN in both directions -- VAX2's op-0 CONNECT_REQ and the joiner's own
+ *   op-2 ACCEPT each carry credit 10 at abs 62
+ *   (vax3-2to3-established-join-20260730.pcap frames 208 and 210), and spec
+ *   sec 3's SDA decoder ring reads the same connection's live Send/Recv credit
+ *   as 10/8.
+ *
+ *   INFERRED, and labelled: that the ten IS SYSGEN CLUSTER_CREDITS. The only
+ *   grounded numeric match for that parameter is on the PORT's START body
+ *   (spec sec 4(g), abs 80-81), a different layer's ledger -- so "VMS derives
+ *   the SYSAP's SCS grant from CLUSTER_CREDITS" is a reading, not a fact. What
+ *   is NOT inferred is the value this executive uses: cluster_sysgen_credits()
+ *   returns the real FC-P0.10 parameter record and refuses rather than
+ *   guessing when none was loaded, so the number extended here is always one
+ *   this node genuinely holds and can stand behind.
+ *
+ * CNXMAN_VC_CREDITS is what this node extends when SYSGEN holds no figure. It
+ * used to be the unconditional value, with the rationale "one command/response
+ * at a time per peer" -- a rationale the live wire refutes: the reference
+ * coordinator pipelines its op-0x06 MEMBERSHIP burst ten deep and holds no
+ * conversation lockstep at all. A grant this small is not WRONG -- the p. 2-45
+ * Credit Wait queue simply serialises the peer -- but it is not the
+ * reference's, and it is exactly the depth at which a peer that is never paid
+ * back goes mute.
+ */
+#define CNXMAN_VC_CREDITS   4u   /* only when SYSGEN CLUSTER_CREDITS is absent */
 #define CNXMAN_MSCP_CREDITS 4u   /* matches CNXMAN_JOIN_MSCP_CREDITS */
 
 /*
@@ -223,6 +257,13 @@ struct vms_cnxman {
 	uint32_t proposed_fills;     /* E3: proposed_valid set from real state */
 	uint32_t reconnects_issued;
 	uint32_t peers_discovered;   /* E36: CSBs allocated from a real vc_up */
+
+	/* E78: the p. 2-43 receive-buffer ledger, counted where it is paid. */
+	uint32_t credits_returned;        /* buffers really released to SCS   */
+	uint32_t credit_returns_refused;  /* no CDT, or nothing was held      */
+	uint32_t peer_nocredit_events;    /* the peer's Send Credit hit zero  */
+	uint8_t  peer_nocredit_noted;     /* latch: record the edge once      */
+	uint8_t  pad_e78[3];
 };
 
 /* ==========================================================================
@@ -927,6 +968,98 @@ static void cnxman_vc_opened(void *ctx, vms_conid_t local_conid)
 	cnxman_join_opened(&cn->join, local_conid);
 }
 
+/*
+ * ==========================================================================
+ * RELEASING THE RECEIVE BUFFER -- the p. 2-43 credit ledger, executed (E78)
+ * ==========================================================================
+ *
+ * WHY THIS EXISTS, AND WHAT ITS ABSENCE COST. *VAXcluster Principles*
+ * pp. 2-43..2-44 makes the flow-control account symmetric: a SYSAP that
+ * receives a sequenced message consumes one of the receive buffers its end
+ * extended, and the peer may not transmit again until that buffer is given
+ * back. SCS does the giving-back -- it copies the local Pending Receive
+ * Credit count into the credit field of the next outbound message and resets
+ * it -- but it cannot know WHEN the buffer is free, because only the SYSAP
+ * knows when it is done with the bytes. So the SYSAP must say so. That is
+ * what `scs_return_credit()` is (vms_scs.h), and `vms_scs_dir.c` has always
+ * called it; this SYSAP did not.
+ *
+ * The consequence, measured on the live 2-node VAX cluster
+ * (join-e77refire-1788538657.pcap, and the identical class of failure the
+ * wire spec already records at sec 4(O.17)): OVMX's ACCEPT extended N
+ * buffers on the `VMS$VAXcluster` connection, the coordinator spent every
+ * one of them -- op-0x01 PARAMS, op-0x03 COMMIT, then two op-0x05 rebuild
+ * records -- and OVMX answered each with credit 0 in the field at abs 62.
+ * The coordinator's Send Credit to this node reached zero, so it could
+ * transmit no op-0x06 MEMBERSHIP burst, no op-0x09 transition open and no
+ * barrier; the transition stalled with this node SELECTED but never MEMBER,
+ * and the other member's CSB timed out in `wait long_break`. Nothing was
+ * malformed: the join died of an unpaid ledger.
+ *
+ * WHERE THE CALL GOES, AND WHY IT IS THE FIRST STATEMENT. The reference
+ * joiner's response carries the credit for the very message it is answering:
+ * in vax3-2to3-established-join-20260730.pcap the joiner's 0x81/0x03 echo
+ * (frame 292) carries credit 2 -- the two messages it had just received --
+ * and each 0x81/0x05 echo (295/296) carries 1. So the buffer is released
+ * BEFORE the answer is formatted, exactly as `dir_srv_message()` already
+ * documents ("Release the buffer FIRST so the answer piggybacks it"). This
+ * SYSAP's answer is emitted from inside the dispatch below, so the release
+ * has to happen above it.
+ *
+ * INV-6: the value returned is not a number this function chooses. It is one
+ * buffer for one message that really arrived -- `scs_fsm_return_credit()`
+ * refuses to move more than the CDT's own `credit_held`, which SCS
+ * incremented when the port delivered this frame. A return on a Con.ID with
+ * no CDT, or beyond what is held, fails and is COUNTED here rather than
+ * retried or ignored.
+ */
+static void cnxman_release_receive_buffer(struct vms_cnxman *cn,
+					  vms_conid_t local_conid)
+{
+	if (cn == NULL || cn->cl == NULL || cn->cl->scs == NULL)
+		return;
+	if (scs_return_credit(cn->cl->scs, local_conid, 1u) ==
+	    (int)SS__NORMAL) {
+		cn->credits_returned++;
+		return;
+	}
+	cn->credit_returns_refused++;
+}
+
+/*
+ * THE STARVATION EDGE, RECORDED ONCE (E78, observability only).
+ *
+ * `credit_receive` on a CDT is the mirror of the peer's Send Credit: the
+ * buffers this node extended that the peer has not yet spent. When it reaches
+ * zero the peer is mute until we return one -- which is precisely the wedge
+ * above, and precisely the state no log line named while it was happening.
+ *
+ * Read straight out of the live CDT projection (never computed here), and read
+ * AFTER the release above, so the record means "still starved having just been
+ * paid" rather than "momentarily at zero". Noted ONCE per connection manager,
+ * not once per connection: the ring holds thirty records beside a whole
+ * transition transcript, and the first time this executive starves a peer is
+ * the fact worth keeping -- the counter below carries the rest.
+ */
+static void cnxman_note_peer_credit(struct vms_cnxman *cn,
+				    vms_conid_t local_conid)
+{
+	struct vms_scs_cdt_view v;
+
+	if (cn == NULL || cn->cl == NULL || cn->cl->scs == NULL)
+		return;
+	if (scs_cdt_view(cn->cl->scs, local_conid, &v) != (int)SS__NORMAL)
+		return;
+	if (v.credit_receive != 0u || cn->peer_nocredit_noted)
+		return;
+	cn->peer_nocredit_noted = 1u;
+	cn->peer_nocredit_events++;
+	cnxman_diag_note(cn, CNXMAN_DIAG_R_PEER_NOCREDIT,
+			 (int32_t)v.credit_pending, (uint32_t)local_conid);
+	cnxman_ops_log(cn, "%CNXMAN, the peer has spent every receive buffer "
+			   "this node extended on a VMS$VAXcluster connection");
+}
+
 static int cnxman_vc_message(void *ctx, vms_conid_t local_conid,
 			     const uint8_t *body, uint32_t len)
 {
@@ -946,6 +1079,12 @@ static int cnxman_vc_message(void *ctx, vms_conid_t local_conid,
 			from_valid = 1;
 		}
 	}
+
+	/* p. 2-43, BEFORE anything this SYSAP might answer with: the buffer
+	 * this message arrived in is free the moment the connection manager
+	 * has it, so the credit rides out on the answer built below. */
+	cnxman_release_receive_buffer(cn, local_conid);
+	cnxman_note_peer_credit(cn, local_conid);
 
 	cn->cur_conid = local_conid;
 	cn->cur_conid_valid = 1u;
@@ -1171,6 +1310,13 @@ static int cnxman_mscp_message(void *ctx, vms_conid_t local_conid,
 {
 	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
 	const struct cnxman_disk_client_ops *dc = cnxman_dc(cn);
+
+	/* The SAME p. 2-43 obligation as the VC half above. The join's own
+	 * disk-client walk (2x SET CTLR CHAR + the GET-UNIT-STATUS NEXT-UNIT
+	 * enumeration, spec sec 4(n)) is a command/END dialogue in exactly this
+	 * account: an unpaid ledger here silences the disk server after the
+	 * grant is spent, mid-enumeration. */
+	cnxman_release_receive_buffer(cn, local_conid);
 
 	cnxman_join_rx_mscp(&cn->join, local_conid, body, len);
 	if (dc != NULL && dc->message != NULL)
@@ -1410,6 +1556,23 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
  * ========================================================================== */
 
 /*
+ * The `VMS$VAXcluster` receive-buffer grant, from real SYSGEN state (E78).
+ * cluster_sysgen_credits() answers only from a parameter record that was
+ * really loaded and really fits a byte; a zero CLUSTER_CREDITS is refused the
+ * same way, because a SYSAP that extends no buffers can never be spoken to.
+ * Anything it will not answer falls back to this layer's own documented
+ * figure -- an honest local default, not a number attributed to SYSGEN.
+ */
+static uint16_t cnxman_vc_grant(const struct vms_cluster *cl)
+{
+	uint8_t credits = 0u;
+
+	if (cluster_sysgen_credits(cl, &credits) && credits != 0u)
+		return (uint16_t)credits;
+	return (uint16_t)CNXMAN_VC_CREDITS;
+}
+
+/*
  * THE VAXCLUSTER DECISION, taken once at CLUSTER_START (FC-P3.9).
  *
  * VMS's convention, and what each value means HERE:
@@ -1543,7 +1706,7 @@ int vms_cnxman_start(struct vms_cluster *cl)
 	cnxman_join_set_cfg(&cn->join, &cfg);
 
 	status = (int)scs_sysap_listen(cl->scs, cnxman_join_name_vaxcluster,
-				       &cn->vc_sysap, CNXMAN_VC_CREDITS);
+				       &cn->vc_sysap, cnxman_vc_grant(cl));
 	if (status != (int)SS__NORMAL) {
 		cnxman_free(cn);
 		return status;

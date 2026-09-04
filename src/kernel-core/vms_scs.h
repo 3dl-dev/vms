@@ -325,6 +325,24 @@ int scs_send_refusal(struct vms_scs *scs, vms_conid_t local_conid,
 /* Return `n` credits the local SYSAP has finished with. */
 int scs_return_credit(struct vms_scs *scs, vms_conid_t local_conid, uint16_t n);
 
+/*
+ * The live CDT behind a Con.ID, projected (E78). The SYSAP-facing sibling of
+ * vms_scs_cdt_snapshot(), which enumerates by CDL INDEX and is what a
+ * SHOW-CLUSTER reader wants; a SYSAP holds a Con.ID and nothing else, and
+ * needed the same projection to see the credit ledger of the connection it is
+ * being called about -- `credit_receive` in particular, which is the mirror of
+ * the PEER's Send Credit and therefore the only place "the coordinator can no
+ * longer speak to us" is visible before it goes silent (the E78 stall).
+ *
+ * FOR DIAGNOSTICS ONLY, exactly like scs_send_refusal() above: `*out` is a
+ * copy of what the executive holds right now, nothing branches on it and no
+ * byte of it reaches the wire. SS$_NOSUCHDEV when SCS is not up, SS$_BADPARAM
+ * when the Con.ID names no live CDT -- never a zero-filled answer presented as
+ * a real one (INV-6).
+ */
+int scs_cdt_view(struct vms_scs *scs, vms_conid_t local_conid,
+		 struct vms_scs_cdt_view *out);
+
 /* ==========================================================================
  * 6. Directory service (the SCS$DIRECTORY SYSAP, FC-P2.3)
  * ========================================================================== */

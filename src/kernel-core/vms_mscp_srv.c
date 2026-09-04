@@ -459,11 +459,23 @@ static void srv_sysap_opened(void *ctx, vms_conid_t local_conid)
 	mscp_srv_fsm_conn_open(&s->fsm, local_conid, peer);
 }
 
+/*
+ * E78: the p. 2-43 receive-buffer ledger. SCS charged one of the buffers this
+ * SYSAP extended for the command that just arrived, and only this SYSAP can
+ * say the buffer is free again -- SCS then piggybacks the count on the next
+ * outbound message (`scs_return_credit`, vms_scs.h; `vms_scs_dir.c` has always
+ * done this and `vms_cnxman.c` now does too). Released BEFORE the command runs
+ * so the END message this call emits carries the credit, which is what the
+ * reference wire does; a server that never returns it goes mute to its client
+ * after exactly `grant` commands, mid-enumeration, with nothing malformed.
+ */
 static int srv_sysap_message(void *ctx, vms_conid_t local_conid,
 			     const uint8_t *body, uint32_t len)
 {
 	struct vms_mscp_srv *s = (struct vms_mscp_srv *)ctx;
 
+	if (s->cl != NULL && s->cl->scs != NULL)
+		(void)scs_return_credit(s->cl->scs, local_conid, 1u);
 	return mscp_srv_fsm_command(&s->fsm, local_conid, body, len);
 }
 

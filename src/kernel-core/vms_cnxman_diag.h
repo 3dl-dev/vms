@@ -199,6 +199,28 @@ enum cnxman_diag_reason {
 	 * live join-e70refire run was the one fact nothing recorded anywhere.
 	 */
 	CNXMAN_DIAG_R_CONNECT_REFUSED = 20,
+
+	/*
+	 * glue: the PEER has spent every receive buffer this node extended on
+	 * a VMS$VAXcluster connection (E78). `aux` is the Con.ID and `rc` is
+	 * this end's Pending Receive Credit at that instant -- both read out of
+	 * the live CDT projection (scs_cdt_view), never computed here.
+	 *
+	 * WHY IT EARNS A RECORD OF ITS OWN. p. 2-43's account is symmetric: a
+	 * peer whose Send Credit reaches zero transmits NOTHING further and
+	 * says nothing about why. On the live 2-node cluster that is exactly
+	 * how the E77 re-fire ended -- the coordinator spent its four granted
+	 * buffers on PARAMS/COMMIT/two rebuild records, went mute, and the only
+	 * visible symptom was an absence: no op-0x06, no transition open, no
+	 * barrier, and the other member's CSB timing out in `wait long_break`.
+	 * Nothing in the transcript named the cause, because a ledger that is
+	 * never paid produces no event. This record IS that event.
+	 *
+	 * Written ONCE per connection manager (vms_cnxman.c latches it) so a
+	 * legitimately deep coordinator burst cannot evict the transition
+	 * transcript it sits beside; the glue's own counter carries the rest.
+	 */
+	CNXMAN_DIAG_R_PEER_NOCREDIT = 21,
 	CNXMAN_DIAG_R__COUNT
 };
 

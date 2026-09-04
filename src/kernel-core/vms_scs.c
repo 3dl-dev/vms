@@ -966,6 +966,23 @@ int scs_return_credit(struct vms_scs *scs, vms_conid_t local_conid, uint16_t n)
 							  local_conid, n));
 }
 
+int scs_cdt_view(struct vms_scs *scs, vms_conid_t local_conid,
+		 struct vms_scs_cdt_view *out)
+{
+	struct scs_cdt *cdt;
+
+	if (out == (struct vms_scs_cdt_view *)0)
+		return SS__BADPARAM;
+	memset(out, 0, sizeof(*out));
+	if (scs == (struct vms_scs *)0)
+		return SS__NOSUCHDEV;
+	cdt = scs_fsm_cdt_by_conid(&scs->fsm, local_conid);
+	if (cdt == (struct scs_cdt *)0)
+		return SS__BADPARAM;
+	scs_fsm_cdt_project(&scs->fsm, cdt, out);
+	return SS__NORMAL;
+}
+
 int scs_dir_lookup(struct vms_scs *scs, vms_scs_sysid_t dst,
 		   const uint8_t *name, scs_dir_result_cb cb, void *cb_ctx)
 {

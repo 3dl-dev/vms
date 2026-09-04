@@ -107,7 +107,16 @@ static const char *const cnxtrace_reason_names[] = {
      * connect leaves no CDT to ask, and the port's last refusal may belong to
      * another frame entirely.
      */
-    "connect-refused" /* 20 */
+    "connect-refused", /* 20 */
+    /*
+     * 21 (E78): the PEER has spent every receive buffer this node extended on
+     * a VMS$VAXcluster connection, so p. 2-43's account leaves it unable to
+     * transmit until we return one. rc = this end's Pending Receive Credit at
+     * that instant, aux = the Con.ID. Recorded once per connection manager. It
+     * is the one line that names the E77 stall's cause: the coordinator did
+     * not refuse anything, it simply ran out of permission to speak.
+     */
+    "peer-nocredit"   /* 21 */
 };
 
 /* enum cnxman_diag_gate (an EMIT record's `detail`) */

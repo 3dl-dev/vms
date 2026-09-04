@@ -424,6 +424,17 @@ cluster_host_scs_test(test_scs_fsm     test_scs_fsm.c)
 cluster_host_scs_test(test_scs_fsm_credit  test_scs_fsm_credit.c)
 cluster_host_scs_test(test_scs_fsm_vcdown  test_scs_fsm_vcdown.c)
 
+# E78: the connection manager's own half of the p. 2-43 ledger. The MECHANISM
+# runs against the real scs_fsm through the FC-P2.2 harness (an unpaid ledger
+# silences the peer after exactly the grant -- the live E77 stall); the
+# BINDINGS are source-scanned out of the shipping vms_cnxman.c /
+# vms_mscp_srv.c, which are not host-linkable, in the two-proof shape
+# test_cnxman_glue.c established. OVMX_KCORE_DIR is what lets it read them.
+cluster_host_scs_test(test_cnxman_credit_return test_cnxman_credit_return.c)
+target_compile_definitions(test_cnxman_credit_return PRIVATE
+    OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
+)
+
 # ---- FC-P2.3: the SYSAP registry read + the SCS$DIRECTORY/SCS$DIR_LOOKUP
 # SYSAPs. test_scs_directory is the plan row's "R1 against the dir specimens"
 # (HIT / NOT PRESENT HERE / client round-trip / transient teardown);

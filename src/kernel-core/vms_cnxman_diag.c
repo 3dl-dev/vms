@@ -259,6 +259,7 @@ const char *cnxman_diag_reason_name(uint8_t reason)
 	case CNXMAN_DIAG_R_PORT_TXFAIL:    return "port-txfail";
 	case CNXMAN_DIAG_R_CDT_NOT_SENDABLE: return "cdt-not-sendable";
 	case CNXMAN_DIAG_R_CONNECT_REFUSED:  return "connect-refused";
+	case CNXMAN_DIAG_R_PEER_NOCREDIT:    return "peer-nocredit";
 	default:                       return "?";
 	}
 }

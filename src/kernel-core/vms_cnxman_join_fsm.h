@@ -89,6 +89,21 @@
  *     it from the state the OFFLINE terminator puts it in, and a timer is
  *     nowhere in that path.
  *
+ *  6a. ... AND IF THAT MEMBER SAYS NOTHING, ASK THE NEXT ONE (E80). The
+ *     recipient of op-0x02 BECOMES the coordinator for this admission (book
+ *     p. 7-2 "effectively random", pp. 7-37/7-38; E74's ruling), so a member
+ *     that does not take the request leaves the admission unstarted -- there
+ *     is nobody else running it. Six once-a-second beats after the request
+ *     really went out, with no op-0x03 and no transition traffic from that
+ *     member, this node names it on the console, marks it declined FOR THIS
+ *     ATTEMPT and re-issues to the next member it holds an OPEN connection
+ *     to. ONE member at a time, never a fan-out -- the reference joiner sends
+ *     exactly one op-0x02 per attempt. When every member has declined, the
+ *     attempt is released, this node backs off one RECNXINTERVAL and the beat
+ *     starts a fresh one that asks everybody again. Nothing about membership
+ *     is asserted anywhere in that path: a re-issue re-asks a question, it
+ *     does not answer one.
+ *
  *  7. THE MEMBER-DRIVEN TAIL (SS4(o) rows 5-10): op-0x03 COMMIT and each
  *     op-0x05 rebuild transaction answered with the grounded 0x81 echo, the
  *     op-0x06 MEMBERSHIP burst answered with the opportunistic cat-0x04 ack
@@ -189,6 +204,17 @@
  *    It does NOT gate the join on a count it cannot read: that would be a
  *    deadlock chosen over an honest omission.
  *
+ *    E80 LOOKED AT THIS AGAIN AND LEFT IT ALONE, for two independent reasons.
+ *    The connect data a peer sent is not recorded in any CSB -- it reaches
+ *    cnxman_join_connect_req() and is counted, never stored -- so there is no
+ *    executive state to rank on; and WHICH of its bytes carry the protocol and
+ *    ECO levels, in which order, is unpinned (E74 flags exactly that), while
+ *    every VAX-sourced `VMS$VAXcluster` connect frame in the library carries
+ *    the SAME quad, so no capture could falsify a guess. Ranking on an
+ *    unpinned interpretation of a constant is not a rank. What E80 DID add is
+ *    orthogonal and fully grounded: the tail-first walk now also SKIPS a
+ *    member that has already been asked and said nothing during this attempt.
+ *
  * INCLUDES: kernel-core headers only (CI gate tools/ci/cluster_core_includes_gate.sh).
  * This TU is PURE: no seam call, no allocation, no clock but ops->now_ms, so
  * it runs identically in both kmods, in the R1 host tests and in the rung-2
@@ -232,6 +258,32 @@ extern const uint8_t cnxman_join_name_disk_cl_drvr[VMS_SCS_PROCNAME_LEN];
  * unanswered is silence, and vms_scs_dir.h reports silence as silence.
  */
 #define CNXMAN_JOIN_WATCH_MS 1000u
+
+/*
+ * HOW MANY OF THOSE BEATS A SELECTED MEMBER MAY SAY NOTHING TO THE MEMBERSHIP
+ * REQUEST BEFORE THIS NODE ASKS SOMEBODY ELSE (E80).
+ *
+ * WHY THERE IS SUCH A RULE AT ALL. There is no coordinator to identify: the
+ * member that RECEIVES op-0x02 BECOMES the coordinator for this admission --
+ * it runs the quorum arithmetic and requests the coordinator lock (book
+ * p. 7-2, "effectively random"; pp. 7-37/7-38 JOIN CLUSTER, E74's ruling). So
+ * the joiner asks ONE member, and if that member does not take the request the
+ * admission simply never starts. That is not a hypothesis: on the live 2-node
+ * cluster the same unchanged build reached the op-0x03 COMMIT whenever the
+ * connect race made it drive VAX2, and stalled at ADMIT for the whole run when
+ * it drove VAX1 -- which received the request (its console logged "received
+ * VAXcluster membership request from node OVMXJ1") and never proposed.
+ *
+ * WHY SIX. Six beats of p. 7-30's own once-a-second cadence, because the wire
+ * says a real VAX will take a second membership request 6.2 s after the first
+ * (E74's control) and because a WILLING coordinator answers in MILLISECONDS --
+ * it acks within ~0.3 ms and proposes its op-0x03 within a few ms (E74/E78
+ * measured; the E74-reset run measured 0.6 ms between OVMX's op-0x02 and
+ * VAX2's op-0x03). Six seconds is three orders of magnitude past that, so the
+ * silence this counts is unambiguous rather than impatient. It is an OVMX
+ * DESIGN VALUE, labelled as one -- no capture measures a joiner-side timeout.
+ */
+#define CNXMAN_JOIN_ADMIT_SILENCE_BEATS 6u
 
 /* The Send Credits this node extends on each connection it opens. The
  * SCS$DIR_LOOKUP value is spec SS4(h)(2a)'s byte-exact [48:50] = 3 (the same
@@ -324,6 +376,18 @@ enum cnxman_join_failure {
 	 * is not a member and does not claim to be.
 	 */
 	CNXMAN_JOIN_FAIL_TIMEOUT    = 8,
+	/*
+	 * EVERY member this node has connectivity with was asked for admission
+	 * and none of them took the request (E80). NOT terminal, and not a
+	 * verdict: no peer refused anything, they were silent, and a member
+	 * that could not coordinate an admission a moment ago may be able to
+	 * coordinate one after its own transition finishes. So the attempt is
+	 * released with this name on it, the node backs off one RECNXINTERVAL
+	 * -- the executive's own reconnect interval, not a number invented here
+	 * -- and the beat starts a genuinely new attempt that asks everybody
+	 * again.
+	 */
+	CNXMAN_JOIN_FAIL_UNANSWERED = 9,
 	CNXMAN_JOIN_FAIL__COUNT
 };
 
@@ -478,6 +542,31 @@ struct cnxman_join_ops {
 #define CNXMAN_JOIN_B_PARAMS  0x02u
 #define CNXMAN_JOIN_B_CONFIG  0x04u
 
+/*
+ * THE DECLINED SET (E80): one bit per CLUB slot, so "which members has THIS
+ * attempt already asked and got silence from" is answerable without a second
+ * table. Cleared at the start of every fresh attempt -- a member that could not
+ * coordinate an admission six seconds ago is not refused forever.
+ *
+ * KEYED BY SLOT, and the consequence is stated rather than hidden: a CSB is
+ * deallocated and rebuilt when a system returns (p. 7-25), so a slot that is
+ * reused within one attempt could carry a decline the new incarnation did not
+ * earn. That costs the returning system ONE attempt (the mask is cleared at the
+ * next one) and can never assert anything about it, which is the conservative
+ * direction; keying by SCSSYSTEMID would cost 768 bytes of executive memory to
+ * buy back a case bounded at a few seconds.
+ */
+#define CNXMAN_JOIN_DECLINE_WORDS ((VMS_CLUB_MAX_CSB + 31u) / 32u)
+
+/*
+ * The one %CNXMAN line this FSM COMPOSES rather than states as a literal: the
+ * unanswered-request message names the member, and a node name is real CSB
+ * state (`scsnode`), not a constant. Sized for the longest composition -- the
+ * fixed text plus VMS_SCSNODE_MAX characters plus the terminator -- and the
+ * composer never writes past it (it stops at the buffer, not at the name).
+ */
+#define CNXMAN_JOIN_MSGBUF 64u
+
 /* How many served units this FSM will record from one walk. The walk itself is
  * unbounded (it ends at the peer's own OFFLINE terminator); this bounds only
  * how many of the peer's answers are KEPT, and an overflow is counted, never
@@ -545,7 +634,53 @@ struct cnxman_join {
 	 * a reconnect (E71).
 	 */
 	uint8_t  burst_on_conn;
-	uint8_t  pad1[1];
+
+	/*
+	 * ---- IS THE MEMBER THIS NODE ASKED TAKING THE REQUEST? (E80) ----
+	 *
+	 * `admit_answered` is set ONLY by a real frame from the target's own
+	 * CSB that belongs to the admission dialogue -- the op-0x03 COMMIT the
+	 * coordinator proposes, or any of the transition/membership traffic
+	 * that follows it. It is the fact that stops the silence clock, and
+	 * nothing else sets it: a peer's identity records, its cat-0x04 credit
+	 * carriers and its recurring member poll are all traffic a member sends
+	 * whether or not it is coordinating anything.
+	 *
+	 * `admit_target_acked` is the SEPARATE, weaker fact -- that member
+	 * acknowledged our messages at the SCS level -- kept apart on purpose:
+	 * "it never heard us" and "it heard us and did not propose" have
+	 * completely different causes and read identically from a stalled join.
+	 * It does NOT stop the clock, because E73's VAX1 did exactly this: it
+	 * logged the request it received and never proposed.
+	 *
+	 * `admit_silent_beats` counts beats of the once-a-second watchdog for
+	 * which a request was really outstanding on the connection this node
+	 * holds. It is reset whenever there is nothing outstanding to time --
+	 * including when the connection changes, since `burst_on_conn` then
+	 * says the request has not been made on the new one.
+	 */
+	uint8_t  admit_answered;
+	uint8_t  admit_target_acked;
+	uint8_t  admit_silent_beats;
+
+	/*
+	 * Members THIS attempt has already asked and got silence from
+	 * (CNXMAN_JOIN_DECLINE_WORDS above). The re-selection excludes them, so
+	 * one attempt asks each member at most once -- a joiner NEVER fans an
+	 * op-0x02 out to several members at a time (the reference sends exactly
+	 * one per attempt, and the recipient becomes the coordinator).
+	 */
+	uint32_t declined[CNXMAN_JOIN_DECLINE_WORDS];
+
+	/*
+	 * The RECNXINTERVAL back-off after every member declined: the instant
+	 * (this FSM's injected clock) before which a fresh attempt is not
+	 * started. `retry_at_valid` 0 is "no back-off is owed", never "at time
+	 * zero"; the comparison is wrap-safe.
+	 */
+	uint32_t retry_at_ms;
+	uint8_t  retry_at_valid;
+	uint8_t  pad1[3];
 
 	/* ---- the disk-client discovery walk (FC-P3.4) ---- */
 	struct vms_mscp_cl_fsm  mscp;
@@ -615,8 +750,49 @@ struct cnxman_join {
 	 * (E70). ATTEMPTS, not successes: whether a re-offer got through is
 	 * what the three counters above say. A message that was really
 	 * transmitted is never re-offered, so this can never double-send.
+	 *
+	 * E80 makes the SAME act do the re-issue to another member (a
+	 * connection that has carried nothing is exactly what the mask says
+	 * after the target moves), so this counter also rises once per
+	 * re-issue; `reissues` is the one that says how many of them were
+	 * changes of member rather than repeats to the same one.
 	 */
 	uint32_t burst_reoffers;
+	/*
+	 * ---- THE COORDINATOR RE-ISSUE (E80) ----
+	 *
+	 * `requests_unanswered` -- membership requests that were really put on
+	 *   a member's connection and drew no proposal within
+	 *   CNXMAN_JOIN_ADMIT_SILENCE_BEATS. Each one names the member on the
+	 *   console and marks it declined for this attempt.
+	 * `declines_after_ack` -- ... of those, the ones where that member HAD
+	 *   acknowledged this node's traffic. "It never heard us" and "it heard
+	 *   us and did not propose" are different faults with the same symptom.
+	 * `reissues` -- requests re-issued to the NEXT member, one member at a
+	 *   time. Never a fan-out: this counts sequential attempts, and
+	 *   `config_sent` shows the same total on the wire.
+	 * `attempts_exhausted` -- every member declined, so the attempt was
+	 *   released and a RECNXINTERVAL back-off started (FAIL_UNANSWERED).
+	 * `starts_backed_off` -- beats on which a fresh attempt was NOT started
+	 *   because that back-off had not elapsed.
+	 * `reissue_targets_absent` -- declines with no other member holding an
+	 *   OPEN connection to re-issue to. Counted separately from
+	 *   `attempts_exhausted` only in the sense that it is its cause: the
+	 *   pool this node can ask right now is the pool the executive holds
+	 *   connections to, and it is never assumed to be larger.
+	 * `admit_beats_held` -- beats on which the clock was HELD because a real
+	 *   cluster state transition was in progress (p. 7-30: a connection
+	 *   manager does not institute one while another is running). A join
+	 *   that never declines because the cluster is permanently transitioning
+	 *   reads differently from one that is simply not being timed.
+	 */
+	uint32_t requests_unanswered;
+	uint32_t declines_after_ack;
+	uint32_t admit_beats_held;
+	uint32_t reissues;
+	uint32_t attempts_exhausted;
+	uint32_t starts_backed_off;
+	uint32_t reissue_targets_absent;
 	uint32_t echoes_sent;        /* 0x81 answers to op-0x03 / op-0x05     */
 	/*
 	 * RETIRED BY E79 and kept at zero rather than deleted: this counted the
@@ -719,6 +895,16 @@ struct cnxman_join {
 	 * into `mscp_frame` below and sent from its abs-72 slice.
 	 */
 	uint8_t scratch[VMS_CM_BODY_LEN];
+
+	/*
+	 * The composed %CNXMAN line (CNXMAN_JOIN_MSGBUF above). In the context
+	 * for the same reason `scratch` is: this code runs on a VAX kernel
+	 * stack. Written by exactly one composer, which copies a fixed text and
+	 * the destination CSB's OWN learned node name -- and says "the selected
+	 * member" instead when no name was ever learned (INV-6: a blank name is
+	 * not a node called "").
+	 */
+	char msgbuf[CNXMAN_JOIN_MSGBUF];
 
 	/*
 	 * The MSCP command builder writes a whole 108-byte FRAME (FC-P3.4's

@@ -769,6 +769,69 @@ static void t_e65_acceptor_words(void)
 	}
 }
 
+/*
+ * E80: THE ACCEPTED HALF SAYS WHO WE ARE TOO.
+ *
+ * A SYSAP's 16-byte SS4(N) connect data is a property of the SYSAP, not of a
+ * request: the reference joiner emits the SAME value on its CONNECT_REQUEST to
+ * one member and on its ACCEPT_REQUEST answering the other (spec SS4(N), raw
+ * frames 132 and 210 of vax3-2to3-established-join-20260730). OVMX declared one
+ * for the connections it opened and NONE for the ones it accepted, so the real
+ * VAX at the other end recorded its Connection Manager as "Eco/Version 32/32"
+ * -- the ASCII spaces it was sent. `scs_sysap_ops.accept_conndata` is that
+ * declaration, and this pins that it reaches the wire and that a SYSAP which
+ * declares nothing still sends nothing invented.
+ */
+static void t_e80_accept_conndata(void)
+{
+	struct vms_scs_ctrl_frame c;
+	struct scs_connect_args args;
+	vms_conid_t a_conid = 0u;
+	uint32_t i;
+
+	printf("-- E80: the ACCEPTING SYSAP's own connect data reaches the "
+	       "op 2 ACCEPT_REQ\n");
+	rig(0);                                  /* B accepts immediately */
+	b_sysap.ops.accept_conndata = e31_conndata;
+
+	args_zero(&args);
+	args.local_name = scsh_name_a;
+	args.remote_name = scsh_name_b;
+	args.sysap = &a_sysap.ops;
+	args.dst = b_node.sysid;
+	args.initial_credits = 6u;
+	ct_check(scs_fsm_connect(&a_node.fsm, &args, &a_conid) == SCS_OK,
+		 "A connects; B's SYSAP takes it through connect_req()");
+	(void)scsh_pump();
+
+	if (e65_wire(&b_node, SCS_MTYPE_ACCP_REQ, &c, "op 2 is on the wire")) {
+		ct_check(c.has_blank, "... in the 110-content shape");
+		for (i = 0; i < VMS_SCS_PROCNAME_LEN; i++)
+			ct_check_eq_u32(c.blank[i], e31_conndata[i],
+					"byte-exact: what the SYSAP declared "
+					"at registration, not 16 spaces");
+	}
+
+	/* THE CONTROL. A SYSAP that declared none still declares none: this
+	 * layer bakes in no constant, and the field goes out blank-filled the
+	 * way a real node writes "nothing supplied" (E65). */
+	rig(0);
+	args_zero(&args);
+	args.local_name = scsh_name_a;
+	args.remote_name = scsh_name_b;
+	args.sysap = &a_sysap.ops;
+	args.dst = b_node.sysid;
+	args.initial_credits = 6u;
+	ct_check(scs_fsm_connect(&a_node.fsm, &args, &a_conid) == SCS_OK,
+		 "the same exchange with no declaration");
+	(void)scsh_pump();
+	if (e65_wire(&b_node, SCS_MTYPE_ACCP_REQ, &c, "op 2 is on the wire")) {
+		e65_check_blank_trailer(&c,
+			"a SYSAP that declared no connect data still sends "
+			"none");
+	}
+}
+
 /* op 4, and op 6 both ways round. */
 static void t_e65_refusal_and_teardown_words(void)
 {
@@ -839,6 +902,7 @@ int main(void)
 	t_no_edge_and_foreign();
 	t_e65_initiator_words();
 	t_e65_acceptor_words();
+	t_e80_accept_conndata();
 	t_e65_refusal_and_teardown_words();
 	return ct_summary("test_scs_fsm");
 }

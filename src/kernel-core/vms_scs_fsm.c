@@ -1300,9 +1300,16 @@ static int listen_ask_sysap(struct scs_fsm *f, struct scs_cdt *listen,
 	if (decision == SCS_CONNECT_DEFER)
 		return SCS_OK;
 	if (decision == 0)
-		/* The SYSAP answered through connect_req(), which carries
-		 * neither connect data nor a credit floor: it declared
-		 * neither, and neither is invented for it. */
+		/*
+		 * The SYSAP answered through connect_req(), which carries no
+		 * credit floor: it declared none, and none is invented for it.
+		 * Its 16-byte SS4(N) connect data is the one thing it CAN have
+		 * declared, on its registration (scs_sysap_ops.accept_conndata
+		 * -- a SYSAP's version identity is a property of the SYSAP, and
+		 * the reference emits the same value on the connections it
+		 * accepts as on the ones it opens). NULL there stays NULL here:
+		 * this layer bakes in no constant.
+		 */
 		return scs_fsm_accept(f, listen->local_conid,
 				      (const uint8_t *)0, 0u, &rx->out_conid);
 	return scs_fsm_reject(f, listen->local_conid);
@@ -2357,7 +2364,19 @@ int scs_fsm_accept(struct scs_fsm *f, vms_conid_t listen_conid,
 		return SCS_ERR_NOCONN;
 
 	scs_bzero(&rx, (uint32_t)sizeof(rx));
+	/*
+	 * A caller that names no connect data falls back to what the ACCEPTING
+	 * SYSAP declared when it registered (scs_sysap_ops.accept_conndata) --
+	 * the same 16 bytes it puts on the connections it OPENS, which is what
+	 * the reference joiner does on both message types (spec SS4(N)). The
+	 * fallback lives HERE so it covers the deferred accept (scs_accept())
+	 * as well as the immediate one, and it invents nothing: a SYSAP that
+	 * declared none still sends none.
+	 */
 	rx.conndata = conndata;
+	if (rx.conndata == (const uint8_t *)0 &&
+	    listen->sysap != (const struct scs_sysap_ops *)0)
+		rx.conndata = listen->sysap->accept_conndata;
 	rx.min_credits = min_credits;
 	rc = scs_dispatch(f, listen, SCS_EV_LOCAL_ACCEPT, &rx);
 	if (rc == SCS_OK && out_conid != (vms_conid_t *)0)

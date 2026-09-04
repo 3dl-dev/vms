@@ -64,6 +64,7 @@
 
 #define MAX_SENT 64
 #define MAX_INQ  16
+#define MAX_LOGS 64
 
 struct sent_body {
 	uint8_t     body[VMS_CM_BODY_LEN];
@@ -91,6 +92,16 @@ struct bed {
 	int              last_had_conndata;
 	uint32_t         n_disconnect;
 	uint32_t         n_set_dir_data;
+
+	/*
+	 * EVERY %CNXMAN line, not just the last one (E80). A decline is
+	 * followed by the re-issue's own line and by the watchdog's, so
+	 * `fake_cnx.last_log` cannot answer "did this node name the member it
+	 * declined". The console is what an operator reads; a test that can
+	 * only see the last line cannot check what was said.
+	 */
+	char     logs[MAX_LOGS][160];
+	uint32_t n_logs;
 
 	int      fail_connect;
 	int      fail_send;
@@ -229,12 +240,36 @@ static uint64_t bed_time_now(void *ctx)
 	return g.vms_time;
 }
 
+/* The console, recorded line by line (see `logs` above). */
+static void bed_log(void *ctx, const char *msg)
+{
+	fake_log(ctx, msg);   /* keep fake_cnx.logs / .last_log live too */
+	if (msg == NULL || g.n_logs >= MAX_LOGS)
+		return;
+	strncpy(g.logs[g.n_logs], msg, sizeof(g.logs[0]) - 1u);
+	g.logs[g.n_logs][sizeof(g.logs[0]) - 1u] = '\0';
+	g.n_logs++;
+}
+
+/* Did any %CNXMAN line contain `needle`? */
+static int bed_logged(const char *needle)
+{
+	uint32_t i;
+
+	for (i = 0; i < g.n_logs; i++) {
+		if (strstr(g.logs[i], needle) != NULL)
+			return 1;
+	}
+	return 0;
+}
+
 static void bed_init(void)
 {
 	struct vms_csb *other;
 
 	memset(&g, 0, sizeof(g));
 	fake_ops_init(&g.ops, &g.fake);
+	g.ops.log = bed_log;
 	g.fake.now_ms = 100000u;
 	g.vms_time = 0x00bc021975280bc0ULL;
 
@@ -3314,6 +3349,362 @@ static void test_peer_params_land_in_the_senders_own_csb(void)
 	ct_check_eq_u32(other->votes, 2u, "and does not disturb the other");
 }
 
+/* ==========================================================================
+ * E80: THE MEMBER THAT DOES NOT ANSWER THE MEMBERSHIP REQUEST
+ *
+ * WHAT THESE LOCK. On the live 2-node cluster the same build reached the
+ * coordinator's op-0x03 COMMIT when the connect race made it drive VAX2, and
+ * stalled at ADMIT for a whole run when it drove VAX1 -- which received the
+ * request and never proposed. The recipient of op-0x02 BECOMES the coordinator
+ * (E74's ruling), so there is nobody else running that admission and silence is
+ * the whole signal. These cases pin all four halves of the answer:
+ *
+ *   1. silence for six beats -> the member is named, marked declined and the
+ *      request goes to the NEXT member -- ONE of them, on its own connection;
+ *   2. a member that DOES propose is never re-issued away from;
+ *   3. everybody declined -> back off one RECNXINTERVAL, then ask again;
+ *   4. and none of it ever puts a second request on the wire at once, opens a
+ *      dialogue it cannot stamp, or asserts one byte of membership.
+ * ========================================================================== */
+
+/* The second member, as the executive holds it once its own VMS$VAXcluster
+ * connection is up: p. 7-24 OPEN and a real Con.ID. This is the state the E79
+ * live run really had -- BOTH members had connections to this node -- and it is
+ * what makes a re-issue possible at all. */
+#define OTHER_CONID 0x4e62001bu
+
+static struct vms_csb *bed_other_member_connected(void)
+{
+	struct vms_csb *other = cnxman_club_find_sysid(&g.cl.club, OTHER_SYSID);
+
+	if (other != NULL)
+		bed_peer_connected(other, OTHER_CONID);
+	return other;
+}
+
+/* Beat the join watchdog `n` times, advancing the injected clock a second each
+ * time -- p. 7-30's own cadence, which CNXMAN_JOIN_WATCH_MS arms. */
+static void bed_beats(uint32_t n)
+{
+	uint32_t i;
+
+	for (i = 0; i < n; i++) {
+		g.fake.now_ms += CNXMAN_JOIN_WATCH_MS;
+		cnxman_join_timer(&g.j);
+	}
+}
+
+/* Drive to ADMIT with the request really on the member's connection, and the
+ * OTHER member connected and silent -- the live E79 shape exactly. */
+static struct vms_csb *bed_admit_with_a_second_member(void)
+{
+	struct vms_csb *other;
+
+	bed_init();
+	bed_set_identity();
+	cnxman_csb_set_scsnode(g.member_csb, (const uint8_t *)"VAX1", 4u);
+	other = bed_other_member_connected();
+	drive_to_admit_member_dialled();
+	return other;
+}
+
+static void test_e80_a_silent_member_is_re_issued_to_the_next(void)
+{
+	struct vms_csb *other;
+	uint32_t sent_to_first;
+
+	printf("\n-- E80: the member that never proposes is declined and the "
+	       "next one is asked --\n");
+	other = bed_admit_with_a_second_member();
+	if (other == NULL)
+		return;
+
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"the request is out: this node is in ADMIT");
+	ct_check_eq_u32(g.j.config_sent, 1u, "exactly one op-0x02 so far");
+	sent_to_first = n_sent_on(ACC_CM_CONID);
+
+	/* FIVE beats of silence change nothing: a coordinator answers in
+	 * milliseconds, but the rule is six beats and it is not five. */
+	bed_beats(CNXMAN_JOIN_ADMIT_SILENCE_BEATS - 1u);
+	ct_check_eq_u32(g.j.requests_unanswered, 0u,
+			"five beats of silence is not yet a decline");
+	ct_check_eq_u32(g.j.reissues, 0u, "... and nothing was re-issued");
+	ct_check_eq_u32(n_sent_on(OTHER_CONID), 0u,
+			"... the other member has heard nothing from this join");
+
+	/* The sixth. */
+	bed_beats(1u);
+	ct_check_eq_u32(g.j.requests_unanswered, 1u,
+			"the sixth beat declines the member that said nothing");
+	ct_check(bed_logged("membership request to VAX1 not answered"),
+		 "and %CNXMAN names it -- from that CSB's OWN learned SCSNODE");
+	ct_check_eq_u32(g.j.declines_after_ack, 0u,
+			"this one never even acknowledged us");
+
+	ct_check_eq_u32(g.j.reissues, 1u,
+			"the request is re-issued to ANOTHER member, once");
+	ct_check_eq_u32(g.j.target_sysid == OTHER_SYSID, 1,
+			"and the join now drives the OTHER member");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), sent_to_first,
+			"NOT A FAN-OUT: the declined member gets nothing more");
+	ct_check_eq_u32(g.j.config_sent, 2u,
+			"exactly ONE further op-0x02 exists in the world");
+
+	/* What went to the new member, and on whose dialogue. */
+	ct_check_eq_u32(n_sent_on(OTHER_CONID), 3u,
+			"the new member hears the sec 4(o) burst on ITS OWN "
+			"connection: MODEL, PARAMS, then the request");
+	ct_check(sent_on_is(OTHER_CONID, 0, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_MODEL), "  #1 op-0x14");
+	ct_check(sent_on_is(OTHER_CONID, 1, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_PARAMS), "  #2 op-0x01");
+	ct_check(sent_on_is(OTHER_CONID, 2, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_CONFIG), "  #3 op-0x02, the request");
+	ct_check_eq_u32(sent_on_le16(OTHER_CONID, 0, VMS_OFB_CM_SEND_MSG), 1u,
+			"E77: the new connection's dialogue starts at "
+			"send-msg# 1 -- the counters are the CSB's, bound to "
+			"THAT Con.ID, never carried over from the declined "
+			"member's");
+	ct_check_eq_u32(sent_on_le16(OTHER_CONID, 2, VMS_OFB_CM_SEND_MSG), 3u,
+			"... and advance by one per body, with no gap");
+	ct_check_eq_u32(sent_on_le16(OTHER_CONID, 2, VMS_OFB_CM_ACK_MSG), 0u,
+			"S2 (crash-safety): it acks NOTHING, because that "
+			"member has sent this node nothing on it -- acking a "
+			"message a peer never sent is the E76 CNXMGRERR");
+
+	/* INV-6: a re-issue re-asks a question. */
+	ct_check_eq_u32(cnxman_club_local(&g.cl.club)->csid_valid, 0u,
+			"INV-6: no CSID was learned by re-asking");
+	ct_check_eq_u32(cnxman_join_handed_off(&g.j), 0,
+			"... and this node is still not a member");
+
+	/* The clock restarts on the new member, and a second decline does not
+	 * come back to the first. */
+	bed_beats(CNXMAN_JOIN_ADMIT_SILENCE_BEATS);
+	ct_check_eq_u32(g.j.requests_unanswered, 2u,
+			"the new member is timed the same way");
+	ct_check_eq_u32(g.j.reissues, 1u,
+			"but there is nobody left to ask: no second re-issue");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), sent_to_first,
+			"and the declined member is NOT asked again in this "
+			"attempt");
+	/*
+	 * S12/S3 (crash-safety, the INVEXCEPTN class): a re-issue is BOUNDED.
+	 * Six more beats on the new member produced no further frame at all --
+	 * the whole re-issue costs one burst per member per attempt, which is
+	 * three bodies per six seconds, not a rate.
+	 */
+	ct_check_eq_u32(n_sent_on(OTHER_CONID), 3u,
+			"nothing more went to the new member either: the "
+			"re-issue is one burst, never a repeating offer");
+	ct_check_eq_u32(g.j.config_sent, 2u,
+			"and the whole attempt put exactly ONE op-0x02 on each "
+			"member's connection -- one at a time, never at once");
+}
+
+static void test_e80_a_member_that_proposes_is_never_re_issued_away_from(void)
+{
+	struct vms_csb *other;
+
+	printf("\n-- E80: a coordinator that PROPOSES stops the clock --\n");
+	other = bed_admit_with_a_second_member();
+	if (other == NULL)
+		return;
+
+	/* The answer the E74-reset run measured 0.6 ms after op-0x02: the
+	 * coordinator's own cat-0x01 op-0x03 membership COMMIT. */
+	(void)join_feed(mk_commit(0x0002));
+	ct_check_eq_u32(g.j.admit_answered, 1u,
+			"the target took the request");
+
+	bed_beats(CNXMAN_JOIN_ADMIT_SILENCE_BEATS * 3u);
+	ct_check_eq_u32(g.j.requests_unanswered, 0u,
+			"however long the transition takes, this member is "
+			"never declined");
+	ct_check_eq_u32(g.j.reissues, 0u, "... and nothing is re-issued");
+	ct_check_eq_u32(n_sent_on(OTHER_CONID), 0u,
+			"the other member is never asked: ONE op-0x02 per "
+			"attempt, and it was answered");
+	ct_check_eq_u32(g.j.target_sysid == MEMBER_SYSID, 1,
+			"the join still drives the member that answered");
+}
+
+static void test_e80_an_ack_alone_is_not_an_answer(void)
+{
+	struct vms_csb *other;
+
+	printf("\n-- E80: acknowledging is not proposing (the live VAX1 "
+	       "case) --\n");
+	other = bed_admit_with_a_second_member();
+	if (other == NULL)
+		return;
+
+	/* The cat-0x04 credit carrier a member sends within ~0.3 ms. VAX1 sent
+	 * these all run and never proposed anything. */
+	(void)join_feed(mk_cm(VMS_CM_CAT_ACK, 0x00u, 0x0002));
+	ct_check_eq_u32(g.j.admit_target_acked, 1u,
+			"it is recorded that the member is hearing us");
+	ct_check_eq_u32(g.j.admit_answered, 0u,
+			"... but an ack is NOT the proposal");
+
+	bed_beats(CNXMAN_JOIN_ADMIT_SILENCE_BEATS);
+	ct_check_eq_u32(g.j.requests_unanswered, 1u,
+			"so the member is still declined");
+	ct_check_eq_u32(g.j.declines_after_ack, 1u,
+			"and the transcript says WHICH kind of silence it was: "
+			"it heard us and did not propose");
+	ct_check_eq_u32(g.j.reissues, 1u, "the next member is asked");
+}
+
+/*
+ * The one case where re-issuing could make things WORSE rather than slower: a
+ * real cluster state transition is already running. p. 7-30 has a connection
+ * manager institute one only when no other has, and a membership request asks
+ * for one -- so the clock is HELD, not advanced, for as long as the barrier
+ * says a transition is in progress.
+ */
+static void test_e80_a_running_transition_holds_the_clock(void)
+{
+	struct vms_csb *other;
+
+	printf("\n-- E80: no second request inside somebody's transition --\n");
+	other = bed_admit_with_a_second_member();
+	if (other == NULL)
+		return;
+
+	/* A transition really opened -- the coordinator's own op-0x08/0x09,
+	 * parsed by the barrier, which is where this fact lives. */
+	(void)join_feed(mk_open_add(EPOCH, 0x0eu));
+
+	bed_beats(CNXMAN_JOIN_ADMIT_SILENCE_BEATS * 2u);
+	ct_check(g.j.admit_beats_held > 0u,
+		 "the beats are HELD while the transition runs, and counted");
+	ct_check_eq_u32(g.j.requests_unanswered, 0u,
+			"nobody is declined during it");
+	ct_check_eq_u32(g.j.reissues, 0u,
+			"and no second membership request goes anywhere");
+	ct_check_eq_u32(n_sent_on(OTHER_CONID), 0u,
+			"the other member hears nothing from this join");
+}
+
+static void test_e80_a_refused_request_is_never_a_decline(void)
+{
+	printf("\n-- E80: a request SCS refused was never asked --\n");
+	bed_init();
+	bed_set_identity();
+	(void)bed_other_member_connected();
+	g.fail_send = 1;
+	drive_to_admit_member_dialled();
+
+	ct_check_eq_u32(g.j.config_sent, 0u,
+			"nothing left this node: SCS refused every send");
+	bed_beats(CNXMAN_JOIN_ADMIT_SILENCE_BEATS * 2u);
+	ct_check_eq_u32(g.j.requests_unanswered, 0u,
+			"a member that was never asked is never declined -- the "
+			"clock runs on `burst_on_conn`, which SCS taking the "
+			"body is the only thing that sets");
+	ct_check_eq_u32(g.j.reissues, 0u,
+			"... so the re-issue never fires either");
+	ct_check(g.j.burst_reoffers > 0u,
+		 "what DOES happen is E70's re-offer, on the same beat");
+}
+
+static void test_e80_all_declined_backs_off_then_asks_again(void)
+{
+	struct vms_csb *other;
+
+	printf("\n-- E80: everybody declined -> one RECNXINTERVAL, then a "
+	       "fresh attempt --\n");
+	other = bed_admit_with_a_second_member();
+	if (other == NULL)
+		return;
+	g.cl.club.recnxinterval = 20u;   /* the executive's own SYSGEN value */
+
+	bed_beats(CNXMAN_JOIN_ADMIT_SILENCE_BEATS);       /* VAX1 declines  */
+	bed_beats(CNXMAN_JOIN_ADMIT_SILENCE_BEATS);       /* the other too  */
+
+	ct_check_eq_u32(g.j.attempts_exhausted, 1u,
+			"with nobody left to ask, the attempt is released");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_IDLE,
+			"and this node goes back to waiting for a cluster -- "
+			"IDLE, not FAILED (E71: silence is not a verdict)");
+	ct_check_eq_u32(g.j.failure, CNXMAN_JOIN_FAIL_UNANSWERED,
+			"with the reason NAMED");
+	ct_check(bed_logged("no cluster member answered"),
+		 "... and said on the console");
+	ct_check_eq_u32(cnxman_join_handed_off(&g.j), 0,
+			"INV-6: nothing about membership was asserted");
+
+	/* The back-off: a fresh attempt does not start until RECNXINTERVAL. */
+	ct_check_eq_u32(cnxman_join_start(&g.j), -1,
+			"a start inside the back-off does not happen");
+	ct_check_eq_u32(g.j.starts_backed_off, 1u, "... and says so");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_IDLE, "still IDLE");
+
+	g.fake.now_ms += 19u * 1000u;
+	ct_check_eq_u32(cnxman_join_start(&g.j), -1,
+			"nor one second before it elapses");
+	ct_check_eq_u32(g.j.starts_backed_off, 2u,
+			"every beat inside the window is counted, and none of "
+			"them asks the cluster anything");
+	g.fake.now_ms += 2u * 1000u;
+
+	ct_check_eq_u32(cnxman_join_start(&g.j), 0,
+			"once the interval has passed a FRESH attempt starts");
+	ct_check_eq_u32(g.j.declined[0] & 0xffu, 0u,
+			"and it asks EVERY member again: the declined set is "
+			"per-attempt, never a refusal that sticks");
+	ct_check_eq_u32(g.j.starts_backed_off, 2u,
+			"the back-off is not re-armed by a start that ran");
+}
+
+static void test_e80_a_decline_with_no_name_says_so(void)
+{
+	printf("\n-- E80: a member whose SCSNODE was never learned is not "
+	       "given one --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit_member_dialled();   /* no second member, no node name */
+
+	bed_beats(CNXMAN_JOIN_ADMIT_SILENCE_BEATS);
+	ct_check_eq_u32(g.j.requests_unanswered, 1u, "it is declined");
+	ct_check(bed_logged("membership request to the selected member not "
+			    "answered"),
+		 "INV-6: with no learned SCSNODE the line says so rather than "
+		 "printing an empty name");
+	ct_check_eq_u32(g.j.reissue_targets_absent, 1u,
+			"there was no other member holding an open connection");
+	ct_check_eq_u32(g.j.attempts_exhausted, 1u,
+			"so the attempt ended instead of re-issuing");
+}
+
+static void test_e80_only_a_connected_member_is_re_issued_to(void)
+{
+	struct vms_csb *other;
+
+	printf("\n-- E80: the pool is what the executive HOLDS connections "
+	       "to --\n");
+	bed_init();
+	bed_set_identity();
+	other = cnxman_club_find_sysid(&g.cl.club, OTHER_SYSID);
+	if (other == NULL)
+		return;
+	/* A CSB the executive has NOT got an open VMS$VAXcluster connection
+	 * for: it is a member, and it cannot be sent an op-0x02 right now. */
+	other->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	drive_to_admit_member_dialled();
+
+	bed_beats(CNXMAN_JOIN_ADMIT_SILENCE_BEATS);
+	ct_check_eq_u32(g.j.reissues, 0u,
+			"no request is put on a connection this node does not "
+			"hold");
+	ct_check_eq_u32(g.j.attempts_exhausted, 1u,
+			"the attempt ends and the drive will open one from the "
+			"start, in the order the wire measured");
+	ct_check_eq_u32(n_sent_on(OTHER_CONID), 0u, "nothing was emitted");
+}
+
 int main(void)
 {
 	printf("test_cnxman_join: the join FSM (FC-P3.3, rung R1)\n");
@@ -3368,6 +3759,14 @@ int main(void)
 	test_per_peer_covers_every_member();
 	test_per_peer_beat_asserts_no_membership();
 	test_peer_params_land_in_the_senders_own_csb();
+	test_e80_a_silent_member_is_re_issued_to_the_next();
+	test_e80_a_member_that_proposes_is_never_re_issued_away_from();
+	test_e80_an_ack_alone_is_not_an_answer();
+	test_e80_a_running_transition_holds_the_clock();
+	test_e80_a_refused_request_is_never_a_decline();
+	test_e80_all_declined_backs_off_then_asks_again();
+	test_e80_a_decline_with_no_name_says_so();
+	test_e80_only_a_connected_member_is_re_issued_to();
 
 	return ct_summary("test_cnxman_join");
 }

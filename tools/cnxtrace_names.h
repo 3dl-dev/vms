@@ -52,7 +52,8 @@ static const char *const cnxtrace_failure_names[] = {
     "SYSAP not present on the member", /* 5 */
     "message could not be sent",     /* 6 */
     "codec refused to build",        /* 7 */
-    "reconnect interval expired"     /* 8 */
+    "reconnect interval expired",    /* 8 */
+    "no member answered the membership request"  /* 9 (E80) */
 };
 
 /* enum cnxman_diag_kind */

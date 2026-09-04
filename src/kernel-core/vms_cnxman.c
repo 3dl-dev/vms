@@ -92,6 +92,18 @@
 #include "vms_pe.h"             /* E70: pe_send_refusal, the port's own reason */
 #include "vms_pe_fsm.h"         /* ... and struct pe_vc_send_refusal          */
 
+/*
+ * E80: the SYSGEN store sizes this node's software-version identity
+ * (VMS_CLUSTER_SWVER_LEN) and the CM codec owns the op-0x01 body[88:96] field
+ * (VMS_CM_VERSION_LEN). cnxman_start() copies one into the other, so a future
+ * edit that widens either alone is a compile error here rather than a truncated
+ * identity on the wire -- the same discipline vms_pe.c already applies to the
+ * START frame's copy of the same value.
+ */
+_Static_assert((unsigned)VMS_CLUSTER_SWVER_LEN == (unsigned)VMS_CM_VERSION_LEN,
+	       "the loaded software-version field must be the CM wire field's "
+	       "width");
+
 /* ==========================================================================
  * 0. Sizes and the two SYSAP names this layer registers
  *
@@ -1379,6 +1391,20 @@ static void cnxman_vc_sysap_bind(struct vms_cnxman *cn)
 	cn->vc_sysap.message = cnxman_vc_message;
 	cn->vc_sysap.closed = cnxman_vc_closed;
 	cn->vc_sysap.send_failed = cnxman_vc_send_failed;
+	/*
+	 * E80: WHAT THIS CONNECTION MANAGER SAYS IT IS WHEN A MEMBER DIALS US.
+	 *
+	 * The same E31 protocol-version quad this node already puts on every
+	 * VMS$VAXcluster connect it OPENS (cnxman_e31_conndata above, and the
+	 * `cnxman_join_cfg.conndata` below) -- because it is the same node with
+	 * the same Connection Manager, and the reference joiner emits ONE value
+	 * for both message types (spec SS4(N): its CONNECT_REQUEST to VAX1 and
+	 * its ACCEPT_REQUEST answering VAX2 carry the identical 16 bytes).
+	 * Without this the accepted half went out blank-filled and the real VAX
+	 * recorded this node as "Eco/Version 32/32" -- the ASCII space it was
+	 * sent -- while the connections we opened carried the real quad.
+	 */
+	cn->vc_sysap.accept_conndata = cnxman_e31_conndata;
 	cn->vc_sysap.ctx = cn;
 }
 
@@ -1830,6 +1856,21 @@ int vms_cnxman_start(struct vms_cluster *cl)
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.conndata_valid = 1u;
 	memcpy(cfg.conndata, cnxman_e31_conndata, VMS_SCS_PROCNAME_LEN);
+	/*
+	 * E80: and the software version it advertises in its op-0x01
+	 * cluster-parameters record, body[88:96] -- READ FROM THE EXECUTIVE,
+	 * not stated here. cluster_sysgen_sw_version() answers only from a
+	 * SYSGEN record the boot really loaded (OVMX_CLUSTER_SW_VERSION through
+	 * VMS_IOCTL_SYSGEN_LOAD), which is the SAME value the port already puts
+	 * in this node's START frame -- so the two identities a peer sees
+	 * cannot disagree, and kernel-core still holds no version literal
+	 * (INV-1). A boot that supplied none leaves `version_valid` 0 and the
+	 * join counts `version_omitted`: this node then advertises no version
+	 * rather than a plausible one (INV-6), and it NEVER echoes the peer's
+	 * ("VMS V7.3" from a real VAX is that VAX's identity).
+	 */
+	cfg.version_valid =
+		(uint8_t)cluster_sysgen_sw_version(cl, cfg.version);
 	cnxman_join_set_cfg(&cn->join, &cfg);
 
 	status = (int)scs_sysap_listen(cl->scs, cnxman_join_name_vaxcluster,

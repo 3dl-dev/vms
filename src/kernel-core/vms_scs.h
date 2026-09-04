@@ -246,6 +246,31 @@ struct scs_sysap_ops {
 	 */
 	void (*send_failed)(void *ctx, vms_conid_t local_conid, uint32_t reason);
 
+	/*
+	 * OPTIONAL (may be NULL). This SYSAP's OWN 16-byte SCA connect data
+	 * (spec SS4(N)) for a connection it ACCEPTS -- the value SCS puts in the
+	 * ACCEPT_REQUEST/CONNECT_RESPONSE it emits on this SYSAP's behalf, the
+	 * mirror of `scs_connect_args.conndata` on the connections it opens.
+	 *
+	 * WHY IT IS DECLARED HERE AND NOT PASSED BACK FROM connect_req(). The
+	 * connect data is a property of the SYSAP, not of the request: book
+	 * p. 2-25 makes it the two Connection Managers' version handshake, and
+	 * the reference joiner emits ONE value for BOTH message types -- the
+	 * same 16 bytes on its CONNECT_REQUEST to VAX1 and on its ACCEPT_REQUEST
+	 * answering VAX2 (spec SS4(N), raw frames 132 and 210 of
+	 * vax3-2to3-established-join-20260730). A SYSAP that declares none
+	 * leaves this NULL and the field goes out blank-filled exactly as
+	 * before, which is what a real node puts there when it has none.
+	 *
+	 * WHAT IT COST TO NOT HAVE IT (E74/E80): OVMX answered every inbound
+	 * VMS$VAXcluster connect with 16 spaces, and the real VAX at the other
+	 * end recorded this node's Connection Manager as "Eco/Version 32/32" --
+	 * 0x20, the space it was sent. This node HAS a grounded version identity
+	 * (it puts it on every connect it opens); it simply was not saying it on
+	 * the connections the members opened.
+	 */
+	const uint8_t *accept_conndata;   /* VMS_SCS_PROCNAME_LEN, or NULL */
+
 	void *ctx;
 };
 

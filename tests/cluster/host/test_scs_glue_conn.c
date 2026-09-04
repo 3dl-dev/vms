@@ -200,6 +200,7 @@ static struct scs_sysap_ops mute_dir_ops = {
 	(int (*)(void *, vms_conid_t, const uint8_t *, uint32_t))0,
 	(void (*)(void *, vms_conid_t, uint32_t))0,
 	(void (*)(void *, vms_conid_t, uint32_t))0,
+	(const uint8_t *)0,   /* accept_conndata: this stub declares none */
 	(void *)0
 };
 

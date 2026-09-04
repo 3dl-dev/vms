@@ -706,3 +706,19 @@ set_tests_properties(cluster_host_test_mscp_cl_conn PROPERTIES
     LABELS "unit;cluster;cluster_host;mscp"
     TIMEOUT 30
 )
+# ---- Crash-safety: the OVMX cluster wire-output safety gate ----
+# Rung 1 for tools/cluster/cm_wire_safety_audit.py. The checker's --self-test
+# synthesizes a clean CM dialogue that must produce ZERO findings, plus one
+# single-factor violation fixture per crash-vector that must each be detected.
+# That negative control is the point: this gate exists because we found two
+# peer-crashing vectors by crashing real VAXes, and a gate that can no longer
+# fail would let the third through silently. Pure Python + stdlib, no capture
+# corpus and no lab needed, so it runs everywhere ctest does.
+add_test(NAME cluster_host_wire_safety_audit
+    COMMAND ${CMAKE_COMMAND} -E env
+        "${CMAKE_SOURCE_DIR}/tools/ci/cluster_wire_safety_gate.sh"
+)
+set_tests_properties(cluster_host_wire_safety_audit PROPERTIES
+    LABELS "unit;cluster;cluster_host;crash-safety"
+    TIMEOUT 60
+)

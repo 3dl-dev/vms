@@ -56,6 +56,12 @@
 #define MSCP_CONID  0x4e620008u
 #define CM_CONID    0x4e620009u
 
+/* The Con.ID SCS mints for a connection the MEMBER opened and this node
+ * ACCEPTED. Deliberately different from CM_CONID: an accepted connection is
+ * not one this join ever recorded, which is exactly why CNXMAN_EV_CDT_OPEN
+ * cannot carry the fact (E67). */
+#define ACC_CM_CONID 0x4e62000au
+
 #define MAX_SENT 64
 #define MAX_INQ  16
 
@@ -393,6 +399,52 @@ static uint32_t n_cm_sent(void)
 			k++;
 	}
 	return k;
+}
+
+/* The same two readers, on ANY connection -- because when the member wins the
+ * connect race the CM dialogue runs on the Con.ID SCS minted for the ACCEPTED
+ * connection, not on the one this join would have opened (E67). */
+static const struct sent_body *nth_sent_on(vms_conid_t conid, uint32_t n)
+{
+	uint32_t i, k = 0;
+
+	for (i = 0; i < g.n_sent; i++) {
+		if (g.sent[i].conid != conid)
+			continue;
+		if (k == n)
+			return &g.sent[i];
+		k++;
+	}
+	return NULL;
+}
+
+static uint32_t n_sent_on(vms_conid_t conid)
+{
+	uint32_t i, k = 0;
+
+	for (i = 0; i < g.n_sent; i++) {
+		if (g.sent[i].conid == conid)
+			k++;
+	}
+	return k;
+}
+
+static int sent_on_is(vms_conid_t conid, uint32_t n, uint8_t cat, uint8_t op)
+{
+	const struct sent_body *b = nth_sent_on(conid, n);
+
+	return b != NULL && b->len == VMS_CM_BODY_LEN &&
+	       b->body[VMS_OFB_CM_CATEGORY] == cat &&
+	       b->body[VMS_OFB_CM_OPCODE] == op;
+}
+
+static uint16_t sent_on_le16(vms_conid_t conid, uint32_t n, uint32_t off)
+{
+	const struct sent_body *b = nth_sent_on(conid, n);
+
+	if (b == NULL)
+		return 0xffffu;
+	return (uint16_t)(b->body[off] | ((uint16_t)b->body[off + 1] << 8));
 }
 
 static int sent_is(uint32_t n, uint8_t cat, uint8_t op)
@@ -1130,6 +1182,9 @@ static void fire(enum cnxman_event ev)
 	case CNXMAN_EV_CSID_LEARNED:
 		cnxman_join_csid_learned(&g.j, 0x00010003u);
 		break;
+	case CNXMAN_EV_CM_ACCEPTED:
+		cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+		break;
 	case CNXMAN_EV_RX_CONFIG:
 		len = mk_peer_params(1u, 0x0080);
 		(void)cnxman_join_rx_frame(&g.j, g_frame, len, MEMBER_CSID, 1);
@@ -1185,7 +1240,7 @@ static const enum cnxman_event walked[] = {
 	CNXMAN_EV_CSID_LEARNED, CNXMAN_EV_RX_CONFIG, CNXMAN_EV_RX_COMMIT,
 	CNXMAN_EV_RX_MEMBERSHIP, CNXMAN_EV_RX_CLOSE, CNXMAN_EV_RX_TR_OPEN,
 	CNXMAN_EV_RX_TR_GO, CNXMAN_EV_RX_BARRIER, CNXMAN_EV_RX_BARRIER_ACK,
-	CNXMAN_EV_RX_REBUILD
+	CNXMAN_EV_RX_REBUILD, CNXMAN_EV_CM_ACCEPTED
 };
 
 /* 1 = this cell is POPULATED in vms_cnxman_join_fsm.c's table. Kept here as
@@ -1194,23 +1249,28 @@ static const enum cnxman_event walked[] = {
 static const uint8_t expect[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 	[CNXMAN_JOIN_IDLE] = {
 		[CNXMAN_EV_START] = 1,
+		[CNXMAN_EV_CM_ACCEPTED] = 1,
 	},
 	[CNXMAN_JOIN_DIR_ROUND] = {
 		[CNXMAN_EV_DIR_RESULT] = 1,
+		[CNXMAN_EV_CM_ACCEPTED] = 1,
 		[CNXMAN_EV_TIMER_JOIN] = 1,
 	},
 	[CNXMAN_JOIN_MSCP_CONNECT] = {
 		[CNXMAN_EV_CDT_OPEN] = 1,
+		[CNXMAN_EV_CM_ACCEPTED] = 1,
 		[CNXMAN_EV_CDT_CLOSED] = 1,
 		[CNXMAN_EV_TIMER_JOIN] = 1,
 	},
 	[CNXMAN_JOIN_VC_CONNECT] = {
 		[CNXMAN_EV_CDT_OPEN] = 1,
+		[CNXMAN_EV_CM_ACCEPTED] = 1,
 		[CNXMAN_EV_CDT_CLOSED] = 1,
 		[CNXMAN_EV_TIMER_JOIN] = 1,
 	},
 	[CNXMAN_JOIN_ADVERTISE] = {
 		[CNXMAN_EV_MSCP_END] = 1,
+		[CNXMAN_EV_CM_ACCEPTED] = 1,
 		[CNXMAN_EV_RX_CONFIG] = 1,
 		[CNXMAN_EV_RX_COMMIT] = 1,
 		[CNXMAN_EV_RX_MEMBERSHIP] = 1,
@@ -1223,6 +1283,7 @@ static const uint8_t expect[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 	},
 	[CNXMAN_JOIN_ADMIT] = {
 		[CNXMAN_EV_RX_CONFIG] = 1,
+		[CNXMAN_EV_CM_ACCEPTED] = 1,
 		[CNXMAN_EV_RX_COMMIT] = 1,
 		[CNXMAN_EV_RX_MEMBERSHIP] = 1,
 		[CNXMAN_EV_RX_CLOSE] = 1,
@@ -1235,6 +1296,7 @@ static const uint8_t expect[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 	},
 	[CNXMAN_JOIN_BARRIER] = {
 		[CNXMAN_EV_RX_TR_OPEN] = 1,
+		[CNXMAN_EV_CM_ACCEPTED] = 1,
 		[CNXMAN_EV_RX_TR_GO] = 1,
 		[CNXMAN_EV_RX_BARRIER] = 1,
 		[CNXMAN_EV_RX_BARRIER_ACK] = 1,
@@ -1248,6 +1310,7 @@ static const uint8_t expect[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 	},
 	[CNXMAN_JOIN_MEMBER] = {
 		[CNXMAN_EV_RX_TR_OPEN] = 1,
+		[CNXMAN_EV_CM_ACCEPTED] = 1,
 		[CNXMAN_EV_RX_TR_GO] = 1,
 		[CNXMAN_EV_RX_BARRIER] = 1,
 		[CNXMAN_EV_RX_BARRIER_ACK] = 1,
@@ -1361,6 +1424,195 @@ static void test_disk_client_readback(void)
 			0u, "a NULL join holds nothing");
 }
 
+
+/* ==========================================================================
+ * E67: THE MEMBER MAY OPEN THE CONNECTION, AND THIS NODE STILL ADVERTISES
+ *
+ * The wall this locks: on join-e66refire (2026-09-04, the live 2-node VAX
+ * cluster) both VAXes opened their own VMS$VAXcluster connection to this
+ * node, each sent its cat-0x01 op-0x01 on it, and this node answered NOTHING
+ * for the remaining 1600 s of the run -- because the join only ever
+ * advertised on a connection IT had opened.
+ *
+ * The reference join (vax3-2to3-established-join-20260730) settles what a
+ * real joiner does: VAX3 OPENED the connection to VAX1 (t+29.825) and
+ * ACCEPTED the one VAX2 opened to it (t+30.367), and on BOTH it emitted its
+ * own op-0x14 MODEL (send-msg# 1) and op-0x01 PARAMS (send-msg# 2) as
+ * originations. One connection per pair; whichever side dialled.
+ * ========================================================================== */
+
+/* Drive to ADMIT with the MEMBER having opened the CM connection. */
+static void drive_to_admit_member_dialled(void)
+{
+	uint32_t len;
+
+	(void)cnxman_join_start(&g.j);
+	/* The member's connect arrives while our own directory round is still
+	 * outstanding -- the ordering the live run showed. */
+	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk,
+			       1);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster,
+			       1);
+	cnxman_join_opened(&g.j, MSCP_CONID);
+
+	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_AVAILABLE);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 1u), 3u,
+			 VMS_MSCP_ST_OFFLINE);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+}
+
+static void test_member_dialled_connection_still_promotes(void)
+{
+	uint32_t len;
+
+	printf("\n-- E67: the MEMBER opened the VC and this node still "
+	       "advertises --\n");
+	bed_init();
+	bed_set_identity();
+
+	(void)cnxman_join_start(&g.j);
+	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	ct_check_eq_u32(g.j.cm_adopted, 1u,
+			"the member's own connection is adopted as OURS");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_DIR_ROUND,
+			"... without skipping the directory round: adopting a "
+			"connection is not resolving a name");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 0u,
+			"... and nothing is emitted on it yet (sec 4(L)'s "
+			"lookup-before-connect is untouched)");
+
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk,
+			       1);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster,
+			       1);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MSCP_CONNECT,
+			"the drive still runs step 3 in its measured order");
+
+	cnxman_join_opened(&g.j, MSCP_CONID);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADVERTISE,
+			"step 4 is already satisfied by the adopted "
+			"connection, so step 5 runs at once");
+	ct_check_eq_u32(g.n_connect, 1u,
+			"exactly ONE connect was issued -- MSCP$DISK; no "
+			"SECOND VMS$VAXcluster connection to the same pair");
+
+	/* THE WALL: the burst really goes out, and on the member's Con.ID. */
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 2u,
+			"the MODEL+PARAMS burst went out on the member's own "
+			"connection");
+	ct_check(sent_on_is(ACC_CM_CONID, 0, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_MODEL),
+		 "burst #1 is cat 0x01 op 0x14 (sec 4(o) row 1)");
+	ct_check(sent_on_is(ACC_CM_CONID, 1, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_PARAMS),
+		 "burst #2 is cat 0x01 op 0x01 (sec 4(o) row 2)");
+	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, 0, 0u), 1u,
+			"an ORIGINATION: send-msg# 1, as the reference joiner "
+			"sends on the connection VAX2 opened to it");
+	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, 1, 0u), 2u,
+			"... then 2");
+	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, 0, VMS_OFB_CM_TXN), 0u,
+			"an origination carries no transaction");
+	ct_check_eq_u32(g.j.send_failures, 0u,
+			"and not one send was refused (the E67 root cause was "
+			"a glue thunk reporting SS$_NORMAL as a refusal)");
+
+	/* ... and the member-driven tail runs on that same connection. The
+	 * disk walk is untouched: SET CONTROLLER twice, then the NEXT-UNIT
+	 * walk to the peer's own Unit-Offline terminator. */
+	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_OFFLINE);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"the disk walk's own terminator starts admission");
+	ct_check(sent_on_is(ACC_CM_CONID, 2, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_CONFIG),
+		 "op-0x02 CONFIG goes out on the member's connection too");
+
+	len = mk_peer_params(2u, 0x0007);
+	(void)cnxman_join_rx_frame(&g.j, g_frame, len, MEMBER_CSID, 1);
+	ct_check_eq_u32(g.member_csb->votes, 2u,
+			"the member's reciprocated PARAMS reached the CSB: the "
+			"dialogue is alive on the accepted connection");
+}
+
+static void test_member_dialled_reaches_the_barrier(void)
+{
+	uint32_t len;
+
+	printf("\n-- E67: ... and the whole promotion runs from there --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit_member_dialled();
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT, "admission started");
+	ct_check_eq_u32(g.j.model_sent, 1u, "one MODEL");
+	ct_check_eq_u32(g.j.params_sent, 1u, "one PARAMS");
+	ct_check_eq_u32(g.j.config_sent, 1u, "one CONFIG");
+
+	/* The member's op-0x03 COMMIT is answered with the grounded echo -- on
+	 * the adopted connection, which is what proves the join really owns
+	 * it and not merely recorded it. */
+	len = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, 0x0081);
+	(void)cnxman_join_rx_frame(&g.j, g_frame, len, MEMBER_CSID, 1);
+	ct_check_eq_u32(g.j.echoes_sent, 1u, "the COMMIT was echoed");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 4u,
+			"... on the member's own connection");
+
+	len = mk_go(EPOCH);
+	(void)cnxman_join_rx_frame(&g.j, g_frame, len, MEMBER_CSID, 1);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_BARRIER,
+			"the XITGO hands off to the barrier as usual");
+}
+
+static void test_adoption_refuses_what_it_does_not_own(void)
+{
+	printf("\n-- E67 negative controls: what is NOT adopted --\n");
+
+	/* (a) another member's connection. Total connectivity requires taking
+	 * it; it is not this join's dialogue. */
+	bed_init();
+	bed_set_identity();
+	(void)cnxman_join_start(&g.j);
+	cnxman_join_cm_accepted(&g.j, OTHER_SYSID, ACC_CM_CONID);
+	ct_check_eq_u32(g.j.cm_adopted, 0u,
+			"a connection from a member this join is not driving "
+			"through is NOT adopted");
+	ct_check_eq_u32(g.j.cm_other_member, 1u, "... it is counted");
+	ct_check_eq_u32(g.j.cm_open, 0u, "... and we still have no VC");
+	ct_check_eq_u32(g.n_sent, 0u, "... and nothing was sent on it");
+
+	/* (b) a true simultaneous open: our own connect is already out. No
+	 * capture grounds which side yields, so this node invents nothing --
+	 * it keeps its own Con.ID and counts the collision. */
+	bed_init();
+	bed_set_identity();
+	(void)cnxman_join_start(&g.j);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk,
+			       1);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster,
+			       1);
+	cnxman_join_opened(&g.j, MSCP_CONID);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_VC_CONNECT,
+			"our own VMS$VAXcluster connect is out");
+	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	ct_check_eq_u32(g.j.cm_already_held, 1u,
+			"a simultaneous open is counted, not adopted");
+	ct_check(g.j.cm_conid == CM_CONID,
+		 "... and our own Con.ID is not replaced");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 0u,
+			"... nothing goes out on the connection we did not "
+			"adopt");
+}
+
 /* ==========================================================================
  * main
  * ========================================================================== */
@@ -1389,6 +1641,9 @@ int main(void)
 	test_watchdog();
 	test_handoff_without_a_barrier();
 	test_unowned_frame_is_not_mine();
+	test_member_dialled_connection_still_promotes();
+	test_member_dialled_reaches_the_barrier();
+	test_adoption_refuses_what_it_does_not_own();
 	test_every_table_cell();
 
 	return ct_summary("test_cnxman_join");

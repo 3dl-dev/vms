@@ -49,16 +49,29 @@
  *     terminator -- is FC-P3.4's FSM (vms_mscp_cl_fsm.h); this file drives it
  *     and records the units it really enumerated.
  *
- *  4. VMS$VAXcluster VC (SS4(L)(d)). In a formation there is exactly ONE
- *     VMS$VAXcluster CONNECT-REQUEST and it is JOINER->MEMBER (SS4(L)(1));
- *     the 16-byte SCA connect data it carries is the Connection Managers'
- *     version handshake (book p. 2-25, SS4(N)) -- see "WHAT THIS FILE
- *     REFUSES TO INVENT" below.
+ *  4. VMS$VAXcluster VC (SS4(L)(d)). There is exactly ONE VMS$VAXcluster
+ *     connection per PAIR of systems; the 16-byte SCA connect data it carries
+ *     is the Connection Managers' version handshake (book p. 2-25, SS4(N)) --
+ *     see "WHAT THIS FILE REFUSES TO INVENT" below.
+ *
+ *     WHICH SIDE OPENS IT IS A RACE, AND EITHER OUTCOME IS NORMAL (E67,
+ *     measured on the reference join vax3-2to3-established-join-20260730):
+ *     the joiner VAX3 OPENED the connection to VAX1 (t+29.825) and ACCEPTED
+ *     the one VAX2 opened to it (t+30.367). So this FSM issues its own
+ *     connect, and if the member's inbound one arrives first it ADOPTS that
+ *     one instead of opening a second -- cnxman_join_cm_accepted(), below.
+ *     SS4(L)(1)'s "the CONNECT-REQUEST is JOINER->MEMBER" describes the leg
+ *     the joiner won, not a rule that the joiner must win.
  *
  *  5. MODEL + PARAMS BURST on that VC (SS4(L)(e), SS4(o) rows 1-2): cat-0x01
- *     op-0x14 then op-0x01. The peer reciprocates in kind within ~1 ms
- *     (SS4(o) row 3) and this node learns the peer's VOTES and version into
- *     that peer's CSB -- a real record arriving, never a default.
+ *     op-0x14 then op-0x01, as ORIGINATIONS (send-msg# 1 and 2), the moment
+ *     the connection is OPEN -- on the reference wire this is emitted on the
+ *     accepted connection exactly as on the opened one. The peer reciprocates
+ *     in kind within ~1 ms (SS4(o) row 3) and this node learns the peer's
+ *     VOTES and version into that peer's CSB -- a real record arriving, never
+ *     a default. A joiner that does not emit this burst is never promoted:
+ *     the member's CSB for it holds no parameters, and it sits in the
+ *     connectivity-wait state until the reconnect timer breaks it (E67).
  *
  *  6. CONFIG, DEFERRED (SS4(o) row 4, "this starts admission"). The rule is
  *     NOT "wait N seconds" -- the measured gap is 1.44 s in one specimen and
@@ -314,6 +327,13 @@ struct cnxman_join_cfg {
  * %CNXMAN log. What a JOIN needs beyond that is the SCS client surface, and
  * these five are it. Production bindings are named beside each; the glue is
  * five one-line thunks and holds every layer pointer, so this file holds none.
+ *
+ * RETURN CONVENTION: 0 accepted, nonzero REFUSED -- the one convention
+ * vms_cnxman.h states for every op injected into a pure cluster FSM, and the
+ * one this TU can express (it includes no vms_internal.h and cannot name an
+ * SS$_ status). The production thunks return the executive's SS$_ status
+ * through cnxman_fsm_rc(); a thunk that forgets reports SS$_NORMAL (= 1) as a
+ * refusal and this join dies at its first step (E67).
  * ========================================================================== */
 struct cnxman_join_ops {
 	/*
@@ -459,6 +479,22 @@ struct cnxman_join {
 	uint32_t peer_acks;          /* cat-0x04 acks the member sent us      */
 	uint32_t inbound_accepted;   /* members' connects (total connectivity)*/
 	uint32_t inbound_refused;    /* ... refused, with a reason            */
+	uint32_t cm_adopted;         /* the member won the connect race and
+				      * THIS is the one connection to it (E67)*/
+	uint32_t cm_already_held;    /* an accepted VMS$VAXcluster connection
+				      * arrived while we already had one to the
+				      * same member: NOT adopted, counted      */
+	/*
+	 * Accepted VMS$VAXcluster connections from a member that is NOT the one
+	 * this join runs its dialogue with. The Rule of Total Connectivity
+	 * requires this node to TAKE them (cnxman_join_connect_req does), and
+	 * the reference joiner also runs the op-0x14/op-0x01 identity exchange
+	 * on every one of them -- which this single-target FSM does not yet do.
+	 * Counted rather than guessed at, so the gap is visible in the
+	 * diagnostics instead of on a real cluster (plan follow-up, not this
+	 * FSM's to invent).
+	 */
+	uint32_t cm_other_member;
 	uint32_t handoffs;           /* transition frames given to the barrier*/
 	uint32_t slow_steps;         /* the watchdog fired; NEVER an abort    */
 	uint32_t send_failures;
@@ -604,6 +640,26 @@ enum cnxman_join_rx cnxman_join_rx_frame(struct cnxman_join *j,
 int cnxman_join_connect_req(struct cnxman_join *j, vms_scs_sysid_t peer,
 			    vms_conid_t peer_conid,
 			    const uint8_t *conndata, uint32_t conndata_len);
+
+/*
+ * A member OPENED the `VMS$VAXcluster` connection to this node and SCS has it
+ * OPEN (E67). `peer` is the member's SCSSYSTEMID and `conid` the LOCAL Con.ID
+ * SCS minted for the accepted connection -- both real, from the glue's own
+ * accept path, never inferred here.
+ *
+ * There is one such connection per pair (design SS3.4; measured on the
+ * reference join), so this join ADOPTS it as its own when it is with the
+ * member this join runs its dialogue with and this join does not already hold
+ * one; then the MODEL+PARAMS burst goes out on it exactly as it would on a
+ * connection this node had opened -- immediately if the drive is already past
+ * the point where it would have opened one, otherwise when the drive gets
+ * there (which keeps step 2's lookup-before-connect and step 3's disk walk in
+ * their measured order). Every other case is COUNTED and changes nothing: an
+ * accepted connection from another member is `cm_other_member`, one arriving
+ * when we already have ours is `cm_already_held`.
+ */
+void cnxman_join_cm_accepted(struct cnxman_join *j, vms_scs_sysid_t peer,
+			     vms_conid_t conid);
 
 /*
  * The cluster told this node its CSID. See "WHAT THIS FILE REFUSES TO INVENT"

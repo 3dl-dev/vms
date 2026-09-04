@@ -500,16 +500,29 @@ static int join_open(struct cnxman_join *j, const uint8_t *local_name,
 				remote_name, conndata, credits, out);
 }
 
+/* Forward: the burst the moment the CM connection is OPEN, whichever side
+ * opened it (defined with the other step-5 handlers, below). */
+static void join_cm_advertise(struct cnxman_join *j);
+
 /*
- * Step 4: the VMS$VAXcluster VC. In a formation there is exactly ONE such
- * CONNECT-REQUEST and it is JOINER->MEMBER (spec sec 4(L)(1)). The 16-byte
- * connect data is the Connection Managers' version handshake (p. 2-25) and is
- * the caller's or nothing -- see the header's "REFUSES TO INVENT", C.
+ * Step 4: the VMS$VAXcluster VC. There is exactly ONE such connection per pair
+ * of systems and either side may open it (E67; spec sec 4(L)(1) describes the
+ * leg the reference joiner won, and the same capture shows it accepting the
+ * other). If the member's inbound connect already arrived and this join
+ * adopted it, opening a second one here would give the pair two -- so the
+ * adopted one IS this step's outcome and the burst goes out on it now.
+ *
+ * The 16-byte connect data is the Connection Managers' version handshake
+ * (p. 2-25) and is the caller's or nothing -- see "REFUSES TO INVENT", C.
  */
 static void join_open_cm(struct cnxman_join *j)
 {
 	const uint8_t *cd = j->cfg.conndata_valid ? j->cfg.conndata : NULL;
 
+	if (j->cm_open) {
+		join_cm_advertise(j);
+		return;
+	}
 	if (cd == NULL) {
 		j->conndata_omitted++;
 		join_log(j, "%CNXMAN, no SCA connect data configured: the "
@@ -764,13 +777,14 @@ static enum cnxman_join_rx join_h_mscp_end(struct cnxman_join *j,
  * Step 5: the burst, the moment the VC is up (spec sec 4(L)(e), sec 4(o))
  * ========================================================================== */
 
-static enum cnxman_join_rx join_h_cm_opened(struct cnxman_join *j,
-					    const struct join_ev *e)
+/*
+ * The VMS$VAXcluster connection to the member this join runs its dialogue with
+ * is OPEN. This is where the joiner stops being a name in a directory and
+ * starts being a candidate member, and on the reference wire it happens
+ * identically on a connection the joiner opened and on one it accepted (E67).
+ */
+static void join_cm_advertise(struct cnxman_join *j)
 {
-	if (e->conid != j->cm_conid) {
-		j->ignored_events++;
-		return CNXMAN_JOIN_RX_CONSUMED;
-	}
 	j->cm_open = 1u;
 	join_goto(j, CNXMAN_JOIN_ADVERTISE);
 
@@ -779,10 +793,10 @@ static enum cnxman_join_rx join_h_cm_opened(struct cnxman_join *j,
 	 * would put a second message on a join that has stopped. */
 	join_send_model(j);
 	if (j->state != (uint8_t)CNXMAN_JOIN_ADVERTISE)
-		return CNXMAN_JOIN_RX_CONSUMED;
+		return;
 	join_send_params(j);
 	if (j->state != (uint8_t)CNXMAN_JOIN_ADVERTISE)
-		return CNXMAN_JOIN_RX_CONSUMED;
+		return;
 
 	/* ... and only now the disk walk, which is what the real joiner does
 	 * in the measured gap before its op-0x02 (sec 4(o)'s own UPDATE). With
@@ -793,6 +807,52 @@ static enum cnxman_join_rx join_h_cm_opened(struct cnxman_join *j,
 	else
 		join_mscp_send_scc(j);
 	join_arm_watch(j);
+}
+
+static enum cnxman_join_rx join_h_cm_opened(struct cnxman_join *j,
+					    const struct join_ev *e)
+{
+	if (e->conid != j->cm_conid) {
+		j->ignored_events++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	join_cm_advertise(j);
+	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+/*
+ * The member won the connect race (E67). Adopt ITS connection as this join's
+ * one VMS$VAXcluster connection -- there is exactly one per pair -- and let
+ * the drive reach step 4 in its own time; join_open_cm() then finds it already
+ * open and advertises on it instead of opening a second. Adopting here rather
+ * than advertising here is what keeps step 2's lookup-before-connect and step
+ * 3's disk walk in the order the wire measured them.
+ *
+ * Nothing here is inferred: `peer` and `conid` are the accept path's own
+ * facts, and the two cases this join does not own are COUNTED, not acted on:
+ *   - another member's connection (the Rule of Total Connectivity requires
+ *     accepting it, and it is not this dialogue) -- `cm_other_member`;
+ *   - a true simultaneous open, i.e. our own connect is already out --
+ *     `cm_already_held`. Adopting then would give the pair TWO connections,
+ *     and no capture grounds which side must yield, so this node yields
+ *     nothing and invents nothing.
+ */
+static enum cnxman_join_rx join_h_cm_accepted(struct cnxman_join *j,
+					      const struct join_ev *e)
+{
+	if (!j->target_valid || e->from_sysid != j->target_sysid) {
+		j->cm_other_member++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	if (j->cm_conid != 0u) {
+		j->cm_already_held++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	j->cm_conid = e->conid;
+	j->cm_open = 1u;
+	j->cm_adopted++;
+	join_log(j, "%CNXMAN, the cluster opened the VMS$VAXcluster connection "
+		    "to this node");
 	return CNXMAN_JOIN_RX_CONSUMED;
 }
 
@@ -1061,21 +1121,29 @@ static enum cnxman_join_rx join_h_watch(struct cnxman_join *j,
 
 static const join_handler_t
 join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
-	/* [IDLE] only CLUSTER_START starts a join. */
+	/*
+	 * [IDLE] only CLUSTER_START starts a join -- but a member may open its
+	 * VMS$VAXcluster connection to this node before this node has anything
+	 * to join through, and that fact is recorded (as `cm_other_member`:
+	 * there is no target to compare it with yet) rather than dropped.
+	 */
 	[CNXMAN_JOIN_IDLE] = {
 		[CNXMAN_EV_START]        = join_h_start,
+		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
 	},
 
 	/* [DIR ROUND] spec sec 4(L)(a)+(b): our OWN SCS$DIRECTORY client
 	 * round, resolving every name before connecting to it. */
 	[CNXMAN_JOIN_DIR_ROUND] = {
 		[CNXMAN_EV_DIR_RESULT]   = join_h_dir_result,
+		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
 		[CNXMAN_EV_TIMER_JOIN]   = join_h_watch_lookup,
 	},
 
 	/* [MSCP CONNECT] spec sec 4(L)(c). */
 	[CNXMAN_JOIN_MSCP_CONNECT] = {
 		[CNXMAN_EV_CDT_OPEN]     = join_h_mscp_opened,
+		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
 		[CNXMAN_EV_CDT_CLOSED]   = join_h_closed,
 		[CNXMAN_EV_TIMER_JOIN]   = join_h_watch,
 	},
@@ -1083,6 +1151,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 	/* [VC CONNECT] spec sec 4(L)(d). */
 	[CNXMAN_JOIN_VC_CONNECT] = {
 		[CNXMAN_EV_CDT_OPEN]     = join_h_cm_opened,
+		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
 		[CNXMAN_EV_CDT_CLOSED]   = join_h_closed,
 		[CNXMAN_EV_TIMER_JOIN]   = join_h_watch,
 	},
@@ -1094,6 +1163,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 	 * the barrier exactly as it would be later.
 	 */
 	[CNXMAN_JOIN_ADVERTISE] = {
+		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
 		[CNXMAN_EV_MSCP_END]     = join_h_mscp_end,
 		[CNXMAN_EV_RX_CONFIG]    = join_h_peer_advert,
 		[CNXMAN_EV_RX_COMMIT]    = join_h_echo,
@@ -1108,6 +1178,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 
 	/* [ADMIT] op-0x02 is out; the member drives (sec 4(o) rows 5-10). */
 	[CNXMAN_JOIN_ADMIT] = {
+		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
 		[CNXMAN_EV_RX_CONFIG]    = join_h_peer_advert,
 		[CNXMAN_EV_RX_COMMIT]    = join_h_echo,
 		[CNXMAN_EV_RX_MEMBERSHIP] = join_h_membership,
@@ -1126,6 +1197,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 	 * recurring member poll, sec 4(p)/(q)) and further membership bursts.
 	 */
 	[CNXMAN_JOIN_BARRIER] = {
+		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
 		[CNXMAN_EV_RX_TR_OPEN]   = join_h_tr_open,
 		[CNXMAN_EV_RX_TR_GO]     = join_h_go,
 		[CNXMAN_EV_RX_BARRIER]   = join_forward,
@@ -1141,6 +1213,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 
 	/* [MEMBER] steady state: the same server obligations, forever. */
 	[CNXMAN_JOIN_MEMBER] = {
+		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
 		[CNXMAN_EV_RX_TR_OPEN]   = join_h_tr_open,
 		[CNXMAN_EV_RX_TR_GO]     = join_h_go,
 		[CNXMAN_EV_RX_BARRIER]   = join_forward,
@@ -1410,6 +1483,19 @@ void cnxman_join_rx_mscp(struct cnxman_join *j, vms_conid_t conid,
 	e.frame = frame;
 	e.len = len;
 	(void)join_dispatch(j, CNXMAN_EV_MSCP_END, &e);
+}
+
+void cnxman_join_cm_accepted(struct cnxman_join *j, vms_scs_sysid_t peer,
+			     vms_conid_t conid)
+{
+	struct join_ev e;
+
+	if (j == NULL)
+		return;
+	join_bzero(&e, (uint32_t)sizeof(e));
+	e.from_sysid = peer;
+	e.conid = conid;
+	(void)join_dispatch(j, CNXMAN_EV_CM_ACCEPTED, &e);
 }
 
 void cnxman_join_csid_learned(struct cnxman_join *j, vms_csid_t csid)

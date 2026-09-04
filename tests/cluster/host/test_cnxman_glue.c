@@ -504,6 +504,52 @@ static void test_glue_bindings(void)
 		  "dir_descriptor) still starts fully zeroed -- only conndata "
 		  "has an operator ruling behind it");
 
+	/*
+	 * E67 -- the wall this file's source scan exists for. `vms_cnxman.c`
+	 * is not host-linkable, so the ONLY way to hold its thunks to the
+	 * ops contract is to read them; and this is the same class of defect
+	 * E43 already cost a lab run.
+	 *
+	 * The contract (vms_cnxman.h, vms_cnxman_join_fsm.h SS4): an op
+	 * injected into a pure FSM answers 0 = accepted, nonzero = REFUSED.
+	 * Every service behind these thunks answers in SS$_, where success is
+	 * 1. A thunk that returns the status verbatim reports every success
+	 * as a refusal -- which failed this node's join at its first step on
+	 * the live 2-node cluster (join-e66refire) while all 59 host and
+	 * simulator tests stayed green, because their beds return 0.
+	 */
+	check_has("static int cnxman_fsm_rc(int status)",
+		  "E67: the SS$_ -> 0/nonzero translation is a NAMED function, "
+		  "so a new thunk has something to call");
+	check_has("return status == (int)SS__NORMAL ? 0 : -1;",
+		  "... and it translates SS$_NORMAL (which is 1) to 0");
+	check_has("return cnxman_fsm_rc(scs_dir_lookup(",
+		  "E67: dir_inquire translates (the thunk whose untranslated "
+		  "SS$_NORMAL failed the join at step 2)");
+	check_has("return cnxman_fsm_rc(scs_send_msg(cn->cl->scs, conid, body, len));",
+		  "E67: the join's send_msg translates");
+	check_has("return cnxman_fsm_rc(scs_disconnect(",
+		  "E67: disconnect translates");
+	check_has("return cnxman_fsm_rc(status);   /* E67: the ops contract is 0/nonzero */",
+		  "E67: ops.send/ops.respond translate too, so an FSM that "
+		  "ever tests their result gets the right answer");
+
+	/*
+	 * E67, the other half: an accepted VMS$VAXcluster connection is a
+	 * DIFFERENT fact from one this node opened, and only this glue can
+	 * tell them apart (an accepted connection's Con.ID is one the join
+	 * never recorded). There is exactly one such connection per pair of
+	 * systems and either side may open it -- measured on the reference
+	 * join -- so the accept half must tell the join, or a node whose
+	 * member dialled first never advertises and is never promoted.
+	 */
+	check_has("cnxman_join_cm_accepted(&cn->join, accepted_from, local_conid)",
+		  "E67: the ACCEPT half tells the join, with the peer and the "
+		  "Con.ID the accept path really learned");
+	check_has("if (accepted)",
+		  "... only for a connection this node accepted, never for "
+		  "one it opened");
+
 	/* E29. */
 	check_has("SCS_CLOSE_REJECTED",
 		  "E29: the close reason is inspected, RAW (never an SS$_), "

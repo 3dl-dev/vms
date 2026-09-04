@@ -75,9 +75,25 @@ enum cnxman_timer {
 	CNXMAN_TIMER__COUNT
 };
 
+/*
+ * THE RETURN CONVENTION OF EVERY `int`-RETURNING OP INJECTED INTO A PURE
+ * CLUSTER FSM -- stated once, here, because getting it wrong is silent.
+ *
+ *   0 == the request was accepted.  Nonzero == it was REFUSED.
+ *
+ * A pure FSM TU includes no `vms_internal.h` and therefore cannot name an
+ * `SS$_` status at all; the executive services behind these ops all return
+ * one, and `SS$_NORMAL` is 1, so a glue thunk that returns the executive's
+ * status verbatim reports SUCCESS AS FAILURE on every single call. THE GLUE
+ * TRANSLATES (`vms_cnxman.c`'s cnxman_fsm_rc(); `vms_mscp_cl.c` does the same
+ * for vms_mscp_cl_conn_fsm's identical ops). This is not a style preference:
+ * an untranslated `SS$_NORMAL` failed this node's join at its first step on a
+ * real cluster while every R1/R2 test stayed green, because the test beds
+ * return 0 (integration note E67, the same family as E43).
+ */
 struct cnxman_ops {
 	/* Send one CM message on the VMS$VAXcluster connection to `dst`.
-	 * Production: scs_send_msg on the CSB's CDT. */
+	 * Production: scs_send_msg on the CSB's CDT. 0 = sent (above). */
 	int  (*send)(void *ctx, vms_csid_t dst, const uint8_t *body, uint32_t len);
 
 	/* Answer the request currently being dispatched, on its own connection,
@@ -178,6 +194,26 @@ enum cnxman_event {
 					* member-driven, (txn,token)-correlated
 					* requests the joiner echoes (SS4(o)
 					* rows 5-9) */
+
+	/*
+	 * A MEMBER opened THE `VMS$VAXcluster` connection to this node and SCS
+	 * has it OPEN. Distinct from CNXMAN_EV_CDT_OPEN, which is "a connection
+	 * THIS node issued came up" and is matched against the Con.ID this node
+	 * recorded when it issued the connect: an accepted connection has no
+	 * such record, so folding the two would make every accepted connection
+	 * an unrecognised Con.ID and drop it.
+	 *
+	 * WHY THE JOIN CARES (measured, vax3-2to3-established-join-20260730):
+	 * there is exactly ONE `VMS$VAXcluster` connection per pair of systems
+	 * and either side may be the one that opens it -- the reference joiner
+	 * VAX3 OPENED the one to VAX1 (t+29.825) and ACCEPTED the one VAX2
+	 * opened to it (t+30.367) -- and on BOTH of them it emitted its own
+	 * cat-0x01 op-0x14 MODEL and op-0x01 PARAMS as originations
+	 * (send-msg# 1 and 2) the moment the connection reached OPEN. So the
+	 * identity exchange is a property of the CONNECTION being open, never
+	 * of which side dialled.
+	 */
+	CNXMAN_EV_CM_ACCEPTED   = 22,
 
 	CNXMAN_EV__COUNT
 };

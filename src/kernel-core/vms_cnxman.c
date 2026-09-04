@@ -250,6 +250,37 @@ static struct vms_csb *csb_ensure(struct vms_club *club, vms_scs_sysid_t sysid)
  * ========================================================================== */
 
 /*
+ * E67 -- THE ONE TRANSLATION, and why it is a named function and not an
+ * inline `== SS__NORMAL` at five call sites.
+ *
+ * Every service below is an executive service and answers in the `SS$_`
+ * vocabulary, where SUCCESS IS 1 (SS__NORMAL, src/kernel/vms_internal.h:42).
+ * The FSMs these thunks feed are PURE kernel-core TUs: they include no
+ * vms_internal.h, cannot name an SS$_ status, and read 0 as accepted and
+ * anything else as refused (vms_cnxman.h's ops contract;
+ * vms_cnxman_join_fsm.h SS4). Returning the status verbatim therefore reports
+ * every SUCCESS as a REFUSAL.
+ *
+ * That is not hypothetical. On a live 2-node VAX cluster (join-e66refire,
+ * 2026-09-04) this node's two SCS$DIRECTORY inquiries really went out and were
+ * really answered HIT -- but join_send_lookups() read both SS$_NORMALs as
+ * refusals, counted zero issued, and failed the join at its first step. The
+ * [FAILED] row of the join table is empty, so every later fact -- both
+ * directory answers, both members' inbound VMS$VAXcluster connections, the
+ * cat-0x01 op-0x01 each of them then sent -- was counted and dropped. The node
+ * went silent for the remaining 1600 s of the run and the VAXes' CSBs for it
+ * timed out into long_break. Every R1 and R2 test stayed green throughout,
+ * because their beds return 0. Same family as E43.
+ *
+ * vms_mscp_cl.c already translates for vms_mscp_cl_conn_fsm's identical ops;
+ * this is that, for CNXMAN's.
+ */
+static int cnxman_fsm_rc(int status)
+{
+	return status == (int)SS__NORMAL ? 0 : -1;
+}
+
+/*
  * E1's transport half, PLUS the one bookkeeping job that belongs here and
  * nowhere else in the barrier/coordinator's own TUs: advancing the CSB's
  * outbound dialogue counters (cnxman_csb_dialogue_sent(), vms_cnxman_csb.h).
@@ -268,7 +299,7 @@ static int cnxman_ops_send(void *ctx, vms_csid_t dst, const uint8_t *body,
 	int status;
 
 	if (cn == NULL || cn->cl->scs == NULL)
-		return SS__NOSUCHDEV;
+		return -1;
 	/*
 	 * A destination this node cannot resolve to a real CSB is a refusal to
 	 * transmit, never a zero-filled body (INV-6) -- the same rule the
@@ -279,11 +310,11 @@ static int cnxman_ops_send(void *ctx, vms_csid_t dst, const uint8_t *body,
 	 */
 	csb = cnxman_club_find_csid(&cn->cl->club, dst);
 	if (csb == NULL || !csb->in_use || csb->cdt_conid == 0u)
-		return SS__NOSUCHDEV;
+		return -1;
 	status = scs_send_msg(cn->cl->scs, csb->cdt_conid, body, len);
 	if (status == SS__NORMAL)
 		cnxman_csb_dialogue_sent(csb);
-	return status;
+	return cnxman_fsm_rc(status);   /* E67: the ops contract is 0/nonzero */
 }
 
 static int cnxman_ops_respond(void *ctx, const uint8_t *body, uint32_t len)
@@ -292,11 +323,11 @@ static int cnxman_ops_respond(void *ctx, const uint8_t *body, uint32_t len)
 	int status;
 
 	if (cn == NULL || !cn->cur_conid_valid || cn->cl->scs == NULL)
-		return SS__NOSUCHDEV;
+		return -1;
 	status = scs_send_msg(cn->cl->scs, cn->cur_conid, body, len);
 	if (status == SS__NORMAL && cn->cur_csb != NULL)
 		cnxman_csb_dialogue_sent(cn->cur_csb);
-	return status;
+	return cnxman_fsm_rc(status);   /* E67: the ops contract is 0/nonzero */
 }
 
 static void cnxman_ops_arm_timer(void *ctx, enum cnxman_timer which,
@@ -366,8 +397,9 @@ static int cnxman_jop_dir_inquire(void *ctx, vms_scs_sysid_t dst,
 	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
 
 	if (cn->cl->scs == NULL)
-		return (int)SS__NOSUCHDEV;
-	return scs_dir_lookup(cn->cl->scs, dst, name, cnxman_jop_dir_cb, cn);
+		return -1;
+	return cnxman_fsm_rc(scs_dir_lookup(cn->cl->scs, dst, name,
+					    cnxman_jop_dir_cb, cn));
 }
 
 /*
@@ -394,11 +426,11 @@ static int cnxman_jop_connect(void *ctx, vms_scs_sysid_t dst,
 			 * SS8) -- there is no per-call override in vms_scs.h. */
 
 	if (cn->cl->scs == NULL)
-		return (int)SS__NOSUCHDEV;
+		return -1;
 	status = scs_connect(cn->cl->scs, local_name, remote_name, dst,
 			     conndata, out_conid);
 	if (status != (int)SS__NORMAL)
-		return status;
+		return cnxman_fsm_rc(status);
 
 	if (local_name == cnxman_join_name_vaxcluster) {
 		struct vms_csb *csb = csb_ensure(&cn->cl->club, dst);
@@ -410,7 +442,7 @@ static int cnxman_jop_connect(void *ctx, vms_scs_sysid_t dst,
 						  &cn->ops);
 		}
 	}
-	return (int)SS__NORMAL;
+	return 0;
 }
 
 static int cnxman_jop_send_msg(void *ctx, vms_conid_t conid,
@@ -419,8 +451,8 @@ static int cnxman_jop_send_msg(void *ctx, vms_conid_t conid,
 	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
 
 	if (cn->cl->scs == NULL)
-		return (int)SS__NOSUCHDEV;
-	return scs_send_msg(cn->cl->scs, conid, body, len);
+		return -1;
+	return cnxman_fsm_rc(scs_send_msg(cn->cl->scs, conid, body, len));
 }
 
 static int cnxman_jop_disconnect(void *ctx, vms_conid_t conid)
@@ -428,8 +460,8 @@ static int cnxman_jop_disconnect(void *ctx, vms_conid_t conid)
 	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
 
 	if (cn->cl->scs == NULL)
-		return (int)SS__NOSUCHDEV;
-	return scs_disconnect(cn->cl->scs, conid, 0u);
+		return -1;
+	return cnxman_fsm_rc(scs_disconnect(cn->cl->scs, conid, 0u));
 }
 
 /*
@@ -445,7 +477,7 @@ static int cnxman_jop_set_dir_data(void *ctx, const uint8_t *name,
 				   const uint8_t *data)
 {
 	(void)ctx; (void)name; (void)data;
-	return (int)SS__NOSUCHDEV;
+	return -1;
 }
 
 /*
@@ -666,6 +698,8 @@ static int cnxman_vc_connect_req(void *ctx, vms_conid_t local_conid,
 static void cnxman_vc_opened(void *ctx, vms_conid_t local_conid)
 {
 	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
+	vms_scs_sysid_t accepted_from = 0u;
+	uint8_t accepted = 0u;
 	struct vms_csb *csb;
 
 	/* The INBOUND half: bind the Con.ID this SYSAP just learned to the
@@ -675,7 +709,9 @@ static void cnxman_vc_opened(void *ctx, vms_conid_t local_conid)
 	 * so both halves reach the SAME CNXMAN_CSB_EV_CONN_OPEN dispatch below
 	 * without this function needing to know which one it is. */
 	if (cn->pending_accept_valid) {
-		csb = csb_ensure(&cn->cl->club, cn->pending_accept_sysid);
+		accepted_from = cn->pending_accept_sysid;
+		accepted = 1u;
+		csb = csb_ensure(&cn->cl->club, accepted_from);
 		if (csb != NULL)
 			csb->cdt_conid = local_conid;
 		cn->pending_accept_valid = 0u;
@@ -685,6 +721,21 @@ static void cnxman_vc_opened(void *ctx, vms_conid_t local_conid)
 	if (csb != NULL)
 		(void)cnxman_csb_dispatch(&cn->cl->club, csb,
 					  CNXMAN_CSB_EV_CONN_OPEN, &cn->ops);
+
+	/*
+	 * E67: the two halves are DIFFERENT FACTS to the join and only this
+	 * function can tell them apart -- an outbound connection is the one
+	 * whose Con.ID the join itself recorded when it issued the connect, an
+	 * accepted one has no such record. There is exactly one
+	 * VMS$VAXcluster connection per pair of systems and either side may
+	 * open it (measured on the reference join), so an accepted one from
+	 * the member this join is driving through IS that join's connection
+	 * and its MODEL/PARAMS burst belongs on it. Told first, so that a
+	 * cnxman_join_opened() for the same Con.ID (which cannot match a
+	 * connection the join never opened) has nothing left to do.
+	 */
+	if (accepted)
+		cnxman_join_cm_accepted(&cn->join, accepted_from, local_conid);
 
 	cnxman_join_opened(&cn->join, local_conid);
 }

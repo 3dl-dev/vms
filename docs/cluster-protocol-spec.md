@@ -2041,7 +2041,7 @@ them). Population: **239,981 sequenced frames** — msgtype `0x4b`/`0x5b`/`0x7b`
 
 | abs | Field | Dominant | Grounding |
 |---|---|---|---|
-| 36 | small message count | `1` (76.1%), `2` (19.4%), `3` (4.4%) | **zero in 0 of 239,981.** What selects 2 or 3 is NOT decoded (RE gap) |
+| 36 | **§4(i).B node-incarnation echo** (was "small message count" — CORRECTED by `E66`, see 4(h)(4c)) | `1` (76.1%), `2` (19.4%), `3` (4.4%) | **zero in 0 of 239,981**; the 2/3 residue is DECODED — it is the incarnation, not a count |
 | 38 | SYSGEN `NISCS_LAN_OVRHD` | `18` | 239,932/239,981; zero in 0 |
 | 40 | `recv_ack` mirror | == `recv_ack` | 239,916/239,981; zero in 65 (frames whose `recv_ack` is itself 0) |
 | 42 | zero | `0` | 239,981/239,981 |
@@ -2053,10 +2053,59 @@ them). Population: **239,981 sequenced frames** — msgtype `0x4b`/`0x5b`/`0x7b`
 | 54 | constant | `0x0200` | 238,521/239,981; zero in 0 |
 
 **The `0x41` START and the `0x48` credit-return occupy the same offsets by
-DIFFERENT rules** and are excluded from the table above: on a START, abs 36 is
-the node incarnation (§4(i).B) and abs 40/48/54 are zero; on a credit-return,
-abs 44 is the §4(h)(3) secondary counter and abs 54 is the frame's last byte.
-Only the sequenced classes follow the rule tabulated here.
+DIFFERENT rules** and are excluded from the table above — *except abs 36, which
+is the SAME field on all three classes* (§4(h)(4c)): on a START, abs 40/48/54
+are zero; on a credit-return, abs 44 is the §4(h)(3) secondary counter and abs
+54 is the frame's last byte. Only the sequenced classes follow the abs 40..54
+rule tabulated here.
+
+#### 4(h)(4c) abs 36 IS the §4(i).B incarnation, on EVERY class — GROUNDED (`E66`)
+
+§4(h)(4b) above labelled abs 36 a "small message count" and declared "what
+selects 2 or 3 is NOT decoded" an RE gap. That gap is **closed**, and the label
+was wrong: abs 36 is the §4(i).B **node-incarnation echo** — the number the
+PEER advertises for this node in its directed HELLO at payload `[78:80]` — and
+a real node stamps it on **every** frame of that circuit: `0x41`
+START/STACK/ACK, `0x4b`/`0x5b`/`0x7b` sequenced, and the `0x48` credit-return.
+
+Re-derive with `tools/cluster/incarnation_census.py <capture>...`:
+
+| specimen | what it shows |
+|---|---|
+| `af2-firsttimer-established-20260728.pcap` | VAX1 advertises `1 → 2 → 3` to the joiner across its three incarnations; the joiner's abs 36 walks in LOCKSTEP on all three classes — `0x41` {1:3, 2:3, 3:3}, sequenced {1:11769, 2:8042, 3:10658}, `0x48` {1:208, 2:29, 3:23}. VAX1 itself stamps `1` on 18,869 sequenced frames + 876 credit-returns: what the joiner advertised to IT. |
+| `cd0-bootB-zk1099-join-20260728.pcap` | the same `1 → 2` walk across `0x41` / sequenced / `0x48`. |
+| `join-e65refire-1788483810.pcap` (live 2-node) | 6 directions, 6/6 match "abs 36 == what the peer advertised to me": VAX1↔VAX2 is ASYMMETRIC (VAX1 advertises 2 to VAX2 and stamps 1; VAX2 advertises 1 to VAX1 and stamps 2), which a message count cannot produce. |
+| `ci3-addmember` / `c6d-vaxcluster-connect` | VAX1 stamps `1` toward VAX2 and `9/10` (resp. `6`) toward the OVMX MAC **in the same seconds** — per-circuit, not per-node, not per-frame. |
+| `ovmx-760-MEMBER-achieved-20260730.pcap` | every advertisement in the capture is `1`, so every node's abs 36 is `1`. The "floor 1" model was right by luck on a virgin lab and nowhere else. |
+
+**WHY IT MATTERS — the `E66` wall.** `E63` implemented the floor: the port
+echoed the real incarnation on its `0x41` frames (§4(i).B) but baked `1` into
+`vms_scs_seq_stamp()` and into the credit-return builder. Against the live
+2-node cluster, which advertised `8` to OVMX in every directed HELLO
+(`b2`/`b3`/`b4`, 1,743 frames, both members), the split produced:
+
+* `0x41` START/STACK/ACK at abs 36 = 8 — **accepted**, the handshake completed
+  in both directions with both members (round 0 → 1 → the 46-byte round-2 ACK);
+* 8,146 sequenced frames and 1,028 credit-returns at abs 36 = 1 —
+  **acknowledged ZERO times in 1,500 s**. Both members' `recv_ack` toward OVMX
+  stayed `0`, neither ever sent OVMX a `0x48`, and both retransmitted their own
+  `SCS$DIR_LOOKUP` `CONNECT_REQ` ~430 times at a frozen `send_seq`;
+* OVMX's `CONNECT_REQ` was otherwise **byte-identical** to VAX1's own
+  `CONNECT_REQ` on the same wire — the only differences in all 124 bytes are
+  the two MACs, the two LAVC addresses and the local Con.ID. So the discard is
+  not a content defect anywhere else in the frame.
+
+One root cause explains both halves of the symptom: the members discard the
+sequenced frames (never ack, `recv_ack` frozen at 0) **and** discard the
+credit-returns (so their own `CONNECT_REQ` never retires and they retransmit
+forever).
+
+**Consequence for a port (the rule).** The incarnation is a property of the
+CIRCUIT, not of a message class. Read it once, at formation, from the peer's
+directed HELLO, and stamp that one value on every frame of that circuit. A
+class-local constant is a fabrication (INV-6) even when it happens to match.
+Zero is unobserved in 239,981 frames, so a circuit with no echo has nothing
+honest to stamp and must send nothing at all.
 
 **WHY IT MATTERS — the `E63` measurement.** A port that stamped only abs
 32/34/44 and left 36/38/40/48/52/54 zero produced a shape that appears **in

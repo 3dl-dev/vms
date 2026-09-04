@@ -71,7 +71,7 @@ static uint32_t fake_peer_start(const struct fake_peer *p, uint16_t sysid,
 	fake_vc_addr(&s.addr, p, dst_hw, dst_lavc);
 	s.recv_ack = recv_ack;
 	s.send_seq = send_seq;
-	s.incarnation = 1;              /* what IT attributes to US */
+	s.incarnation = p->incarnation; /* what IT attributes to US */
 	s.config_round = config_round;
 	s.scssystemid = sysid;
 	memcpy(s.software_version, "VMS V7.3", 8);
@@ -101,7 +101,7 @@ static uint32_t fake_peer_vc_ack(const struct fake_peer *p,
 	fake_vc_addr(&s.addr, p, dst_hw, dst_lavc);
 	s.recv_ack = recv_ack;
 	s.send_seq = send_seq;
-	s.incarnation = 1;
+	s.incarnation = p->incarnation;
 	if (vms_scs_start_build_ack(&s, out, cap, &written) != VMS_CODEC_OK)
 		return 0;
 	return written;
@@ -126,6 +126,7 @@ static uint32_t fake_peer_credit(const struct fake_peer *p,
 	fake_vc_addr(&c.addr, p, dst_hw, dst_lavc);
 	c.acked_seq = acked_seq;
 	c.secondary_seq = 0;
+	c.incarnation = p->incarnation;   /* abs 36 on this class too (E66) */
 	if (vms_scs_credit_build(&c, out, cap, &written) != VMS_CODEC_OK)
 		return 0;
 	return written;
@@ -171,8 +172,8 @@ static uint32_t fake_peer_seqmsg(const struct fake_peer *p,
 
 	if (vms_frame_classify(out, FAKE_VC_MSG_LEN, &fi) != VMS_CODEC_OK)
 		return 0;
-	if (vms_scs_seq_stamp(out, FAKE_VC_MSG_LEN, &fi, recv_ack,
-			      send_seq) != VMS_CODEC_OK)
+	if (vms_scs_seq_stamp(out, FAKE_VC_MSG_LEN, &fi, recv_ack, send_seq,
+			      p->incarnation) != VMS_CODEC_OK)
 		return 0;
 
 	vms_wire_buf_init(&w, out, FAKE_VC_MSG_LEN);
@@ -197,7 +198,10 @@ struct fake_vc_decoded {
 	uint16_t recv_ack;
 	uint16_t send_seq;
 	uint16_t config_round;  /* 0x41 only                             */
-	uint16_t incarnation;   /* 0x41 only: the §4(i).B echo           */
+	uint16_t incarnation;   /* abs 36 on EVERY class: the §4(i).B    */
+				 /* echo (E66) -- read from the span, so   */
+				 /* a test can assert ONE value across a   */
+				 /* circuit's START, messages and credits  */
 	int      is_ack;        /* 0x41 only: the 46-byte class          */
 	struct vms_scs_start_frame start;
 	uint8_t  eth_dst[6];    /* which peer this frame went to         */
@@ -207,7 +211,7 @@ struct fake_vc_decoded {
 	 * never a literal, because a test that hand-wrote 40 and 48 would
 	 * drift from the port the day either moved.
 	 */
-	uint16_t span_msg_count, span_lan_ovrhd;
+	uint16_t span_incarnation, span_lan_ovrhd;
 	uint16_t span_ack1, span_seq_mirror, span_ack2;
 	uint16_t span_zero1, span_zero2, span_zero3;
 	uint16_t span_const1, span_const2;
@@ -223,7 +227,7 @@ static void fake_vc_read_span(const uint8_t *b, uint32_t len,
 	vms_wire_view_init(&v, b, len);
 	if (!vms_wire_view_ok(&v))
 		return;
-	d->span_msg_count  = vms_wire_get_le16(&v, VMS_OFF_SCS_MSG_COUNT);
+	d->span_incarnation = vms_wire_get_le16(&v, VMS_OFF_SCS_INCARNATION);
 	d->span_lan_ovrhd  = vms_wire_get_le16(&v, VMS_OFF_SCS_LAN_OVRHD);
 	d->span_ack1       = vms_wire_get_le16(&v, VMS_OFF_SCS_ACK_MIRROR1);
 	d->span_zero1      = vms_wire_get_le16(&v, VMS_OFF_SCS_SPAN_ZERO1);
@@ -253,8 +257,12 @@ static struct fake_vc_decoded fake_vc_decode(const struct fake_pe *f,
 		return d;
 	if (d.fi.family != VMS_FFAM_SCS)
 		return d;
-	if (d.len >= VMS_OFF_SCS_SPAN_END)
+	if (d.len >= VMS_OFF_SCS_SPAN_END) {
 		fake_vc_read_span(b, d.len, &d);
+		/* abs 36 is the same field on every class (E66), so it is read
+		 * once, here, and not per-class. */
+		d.incarnation = d.span_incarnation;
+	}
 	if (vms_scs_msgtype(b, d.len, &d.fi, &d.msgtype, &fmt) != VMS_CODEC_OK)
 		return d;
 
@@ -267,7 +275,6 @@ static struct fake_vc_decoded fake_vc_decode(const struct fake_pe *f,
 		d.recv_ack = d.start.recv_ack;
 		d.send_seq = d.start.send_seq;
 		d.config_round = d.start.config_round;
-		d.incarnation = d.start.incarnation;
 		d.ok = 1;
 		return d;
 	}

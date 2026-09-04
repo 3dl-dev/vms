@@ -314,6 +314,9 @@ static void test_whole_frame_credit_byte_exact(void)
 	memcpy(c.addr.src_logical, vax1_mac, 6);
 	c.acked_seq = 2;
 	c.secondary_seq = 1;
+	/* abs 36 of the captured frame is 0x0001: VAX1's §4(i).B echo for the
+	 * VAX2 circuit in that capture, not a class constant. */
+	c.incarnation = 1;
 
 	memset(out, 0xAA, sizeof(out));
 	ct_check(vms_scs_credit_build(&c, out, sizeof(out), &written)
@@ -337,6 +340,7 @@ static void test_credit_field_map(void)
 	memcpy(c.addr.src_logical, ovmx_logical, 6);
 	c.acked_seq = 7;
 	c.secondary_seq = 3;
+	c.incarnation = 6;
 
 	memset(out, 0xAA, sizeof(out));
 	ct_check(vms_scs_credit_build(&c, out, sizeof(out), &written)
@@ -359,7 +363,9 @@ static void test_credit_field_map(void)
 		 "opcode 0x48, format 0x13 (abs 30/31, GROUNDED)");
 	ct_check(le16(out + 32) == 7, "acked seq (abs 32, GROUNDED)");
 	ct_check(le16(out + 34) == 0, "send-seq == 0 (abs 34, GROUNDED 622/622)");
-	ct_check(le16(out + 36) == 1, "const 0x0001 (abs 36, GROUNDED 622/622)");
+	ct_check(le16(out + 36) == 6,
+		 "§4(i).B incarnation echo (abs 36) -- the CALLER's circuit "
+		 "value, not the 1 the corpus mostly happens to show (E66)");
 	ct_check(le16(out + 38) == 18, "NISCS_LAN_OVRHD (abs 38, GROUNDED)");
 	ct_check(le16(out + 40) == 7, "acked-seq mirror (abs 40, GROUNDED 622/622)");
 	ct_check(le16(out + 42) == 0, "zero (abs 42)");
@@ -606,7 +612,7 @@ static uint32_t poisoned_seq_frame(uint8_t *out, uint32_t cap, uint8_t msgtype)
 
 /* Every 16-bit position of the span, asserted against the grounded rule. */
 static void check_span(const uint8_t *b, uint16_t ack, uint16_t seq,
-		       const char *what)
+		       uint16_t incarn, const char *what)
 {
 	char m[192];
 
@@ -619,7 +625,7 @@ static void check_span(const uint8_t *b, uint16_t ack, uint16_t seq,
 
 	SPAN_CHECK(VMS_OFF_SCS_RECV_ACK,   ack, "recv_ack");
 	SPAN_CHECK(VMS_OFF_SCS_SEND_SEQ,   seq, "send_seq");
-	SPAN_CHECK(VMS_OFF_SCS_MSG_COUNT,  VMS_SCS_SEQ_MSG_COUNT, "msg count");
+	SPAN_CHECK(VMS_OFF_SCS_INCARNATION, incarn, "§4(i).B incarnation echo");
 	SPAN_CHECK(VMS_OFF_SCS_LAN_OVRHD,  VMS_NISCS_LAN_OVRHD, "NISCS_LAN_OVRHD");
 	SPAN_CHECK(VMS_OFF_SCS_ACK_MIRROR1, ack, "ack mirror 1");
 	SPAN_CHECK(VMS_OFF_SCS_SPAN_ZERO1, 0, "zero");
@@ -653,11 +659,11 @@ static void test_seq_stamp_writes_the_whole_counter_span(void)
 	len = poisoned_seq_frame(out, sizeof(out), VMS_SCS_MT_MSG);
 	ct_check(len == SEQ_SPAN_FRAME_LEN, "poisoned 0x4b frame built");
 	ct_check(vms_frame_classify(out, len, &fi) == VMS_CODEC_OK, "classifies");
-	ct_check(vms_scs_seq_stamp(out, len, &fi, 17u, 42u) == VMS_CODEC_OK,
-		 "stamps recv_ack 17 / send_seq 42");
-	check_span(out, 17u, 42u, "0x4b");
+	ct_check(vms_scs_seq_stamp(out, len, &fi, 17u, 42u, 3u) == VMS_CODEC_OK,
+		 "stamps recv_ack 17 / send_seq 42 / incarnation 3");
+	check_span(out, 17u, 42u, 3u, "0x4b");
 
-	for (off = VMS_OFF_SCS_MSG_COUNT; off < VMS_OFF_SCS_SPAN_END; off++) {
+	for (off = VMS_OFF_SCS_INCARNATION; off < VMS_OFF_SCS_SPAN_END; off++) {
 		if (out[off] == 0xAA)
 			poisoned_left = 1;
 	}
@@ -669,17 +675,115 @@ static void test_seq_stamp_writes_the_whole_counter_span(void)
 	len = poisoned_seq_frame(out, sizeof(out), VMS_SCS_MT_SETUP);
 	ct_check(vms_frame_classify(out, len, &fi) == VMS_CODEC_OK,
 		 "0x5b classifies");
-	ct_check(vms_scs_seq_stamp(out, len, &fi, 1u, 2u) == VMS_CODEC_OK,
+	ct_check(vms_scs_seq_stamp(out, len, &fi, 1u, 2u, 1u) == VMS_CODEC_OK,
 		 "0x5b stamps");
-	check_span(out, 1u, 2u, "0x5b");
+	check_span(out, 1u, 2u, 1u, "0x5b");
 
 	/* An honest zero ack is still written EVERYWHERE, not skipped: a
 	 * first frame acknowledges nothing, and says so in all three slots. */
 	len = poisoned_seq_frame(out, sizeof(out), VMS_SCS_MT_MSG);
 	ct_check(vms_frame_classify(out, len, &fi) == VMS_CODEC_OK, "classifies");
-	ct_check(vms_scs_seq_stamp(out, len, &fi, 0u, 1u) == VMS_CODEC_OK,
+	ct_check(vms_scs_seq_stamp(out, len, &fi, 0u, 1u, 1u) == VMS_CODEC_OK,
 		 "stamps a genuine recv_ack 0");
-	check_span(out, 0u, 1u, "first frame, ack 0");
+	check_span(out, 0u, 1u, 1u, "first frame, ack 0");
+}
+
+/*
+ * E66 -- THE REGRESSION LOCK ON abs 36.
+ *
+ * abs 36 is the §4(i).B node-incarnation echo on EVERY class of a circuit,
+ * not a "small message count" with a floor of 1. Measured across the whole
+ * reference corpus: in af2-firsttimer-established the joiner walks 1->2->3
+ * on its 0x41 frames ({1:3,2:3,3:3}), its sequenced frames
+ * ({1:11769,2:8042,3:10658}) and its credit-returns ({1:208,2:29,3:23}) in
+ * lockstep with the member's directed-HELLO advertisement; and against a live
+ * 2-node VAX cluster that advertised 8, a port that baked 1 here was
+ * acknowledged ZERO times in 1,500 s while its 0x41 frames -- the only ones
+ * carrying the real echo -- were accepted.
+ *
+ * So: whatever the circuit's echo is, that is what goes out, and a zero is
+ * refused rather than replaced with a floor.
+ */
+static void test_incarnation_is_the_callers_not_a_constant(void)
+{
+	uint8_t out[SEQ_SPAN_FRAME_LEN];
+	struct vms_frame_info fi;
+	uint32_t len;
+	uint16_t n;
+
+	printf("-- E66: abs 36 is the caller's §4(i).B echo, never a baked 1\n");
+
+	for (n = 1u; n <= 12u; n++) {
+		len = poisoned_seq_frame(out, sizeof(out), VMS_SCS_MT_MSG);
+		ct_check(vms_frame_classify(out, len, &fi) == VMS_CODEC_OK,
+			 "classifies");
+		ct_check(vms_scs_seq_stamp(out, len, &fi, 4u, 7u, n)
+			 == VMS_CODEC_OK, "stamps the circuit's echo");
+		check_span(out, 4u, 7u, n, "echo sweep");
+	}
+
+	/* The E66 wire case exactly: the member advertised 8. */
+	len = poisoned_seq_frame(out, sizeof(out), VMS_SCS_MT_SETUP);
+	ct_check(vms_frame_classify(out, len, &fi) == VMS_CODEC_OK,
+		 "0x5b classifies");
+	ct_check(vms_scs_seq_stamp(out, len, &fi, 0u, 1u, 8u) == VMS_CODEC_OK,
+		 "the CONNECT_REQ carries incarnation 8");
+	ct_check(le16(out + VMS_OFF_SCS_INCARNATION) == 8u,
+		 "abs 36 == 8, not the floor 1 that was never acknowledged");
+
+	/* INV-6: with no echo there is nothing honest to stamp. */
+	len = poisoned_seq_frame(out, sizeof(out), VMS_SCS_MT_MSG);
+	ct_check(vms_frame_classify(out, len, &fi) == VMS_CODEC_OK,
+		 "classifies");
+	ct_check(vms_scs_seq_stamp(out, len, &fi, 4u, 7u, 0u)
+		 == VMS_CODEC_E_INVAL,
+		 "a zero incarnation is REFUSED, never written");
+	ct_check(out[VMS_OFF_SCS_INCARNATION] == 0xAA &&
+		 out[VMS_OFF_SCS_ACK_MIRROR1] == 0xAA,
+		 "and the refused frame's span was not touched at all");
+}
+
+/*
+ * The credit-return is not exempt: af2-firsttimer's joiner stamps the same
+ * 1/2/3 on its 0x48 shorts as on everything else, and the E66 port's 1,028
+ * credit-returns at a baked 1 were discarded with the rest -- which is why
+ * the peer's own CONNECT_REQ never retired and it retransmitted ~430 times.
+ */
+static void test_credit_return_carries_the_same_echo(void)
+{
+	struct vms_scs_credit_frame c;
+	uint8_t out[VMS_SCS_CREDIT_FRAME_LEN];
+	uint32_t written = 0u;
+	struct vms_frame_info fi;
+	struct vms_scs_credit_frame back;
+
+	printf("-- E66: the 0x48 credit-return carries the circuit's echo too\n");
+
+	memset(&c, 0, sizeof(c));
+	memcpy(c.addr.dst_mac, vax1_mac, 6);
+	memcpy(c.addr.src_mac, ovmx_mac, 6);
+	memcpy(c.addr.dst_logical, vax1_mac, 6);
+	memcpy(c.addr.src_logical, ovmx_logical, 6);
+	c.acked_seq = 5u;
+	c.secondary_seq = 9u;
+	c.incarnation = 8u;
+
+	ct_check(vms_scs_credit_build(&c, out, sizeof(out), &written)
+		 == VMS_CODEC_OK, "credit-return builds");
+	ct_check(le16(out + VMS_OFF_SCS_INCARNATION) == 8u,
+		 "abs 36 carries the circuit's echo, not a constant");
+
+	memset(&back, 0, sizeof(back));
+	ct_check(vms_frame_classify(out, written, &fi) == VMS_CODEC_OK,
+		 "classifies");
+	ct_check(vms_scs_credit_parse(out, written, &fi, &back) == VMS_CODEC_OK,
+		 "parses back");
+	ct_check(back.incarnation == 8u, "and the parse reports it");
+
+	c.incarnation = 0u;
+	ct_check(vms_scs_credit_build(&c, out, sizeof(out), &written)
+		 == VMS_CODEC_E_INVAL,
+		 "a zero incarnation is REFUSED on this class too");
 }
 
 /*
@@ -699,17 +803,17 @@ static void test_seq_stamp_refreshes_the_ack_mirrors_on_retransmit(void)
 	       "stale one\n");
 	len = poisoned_seq_frame(out, sizeof(out), VMS_SCS_MT_MSG);
 	ct_check(vms_frame_classify(out, len, &fi) == VMS_CODEC_OK, "classifies");
-	ct_check(vms_scs_seq_stamp(out, len, &fi, 5u, 9u) == VMS_CODEC_OK,
+	ct_check(vms_scs_seq_stamp(out, len, &fi, 5u, 9u, 2u) == VMS_CODEC_OK,
 		 "first transmission: ack 5, seq 9");
-	check_span(out, 5u, 9u, "original");
+	check_span(out, 5u, 9u, 2u, "original");
 
 	ct_check(vms_scs_seq_mark_retransmit(out, len, &fi) == VMS_CODEC_OK,
 		 "marked as the 0x7b retransmit form");
 	ct_check(vms_frame_classify(out, len, &fi) == VMS_CODEC_OK,
 		 "0x7b re-classifies");
-	ct_check(vms_scs_seq_stamp(out, len, &fi, 12u, 9u) == VMS_CODEC_OK,
+	ct_check(vms_scs_seq_stamp(out, len, &fi, 12u, 9u, 2u) == VMS_CODEC_OK,
 		 "re-stamped with a FRESHER ack, the SAME sequence");
-	check_span(out, 12u, 9u, "retransmit");
+	check_span(out, 12u, 9u, 2u, "retransmit");
 	ct_check(out[VMS_OFF_SCS_MSGTYPE] == VMS_SCS_MT_ALT,
 		 "and it is still marked 0x7b");
 }
@@ -744,6 +848,9 @@ static void test_error_paths(void)
 
 	ct_check(vms_scs_credit_build(NULL, out, sizeof(out), &written)
 		 == VMS_CODEC_E_INVAL, "NULL credit params rejected");
+	/* The §4(i).B echo gate fires before any buffer check, so give the
+	 * frame a real one before probing the buffer paths. */
+	c.incarnation = 1u;
 	ct_check(vms_scs_credit_build(&c, NULL, sizeof(out), &written)
 		 == VMS_CODEC_E_INVAL, "NULL credit output rejected");
 	ct_check(vms_scs_credit_build(&c, small, sizeof(small), &written)
@@ -797,6 +904,8 @@ int main(void)
 	test_seq_envelope_refuses_wrong_class();
 	test_seq_stamp_writes_the_whole_counter_span();
 	test_seq_stamp_refreshes_the_ack_mirrors_on_retransmit();
+	test_incarnation_is_the_callers_not_a_constant();
+	test_credit_return_carries_the_same_echo();
 	test_error_paths();
 
 	return ct_summary("test_codec_vc");

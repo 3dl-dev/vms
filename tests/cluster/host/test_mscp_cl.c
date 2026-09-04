@@ -364,7 +364,10 @@ static uint32_t build_block_frame(struct env *e, const struct vms_blk_hdr *h,
 		return 0;
 	if (vms_frame_classify(e->wire, total, &fi) != VMS_CODEC_OK)
 		return 0;
-	if (vms_scs_seq_stamp(e->wire, total, &fi, 0u, seq) != VMS_CODEC_OK)
+	/* The fake server's §4(i).B echo for this circuit: 1, the fresh-contact
+	 * value (E66 -- abs 36 is the echo on every class, never a constant
+	 * the codec picks). */
+	if (vms_scs_seq_stamp(e->wire, total, &fi, 0u, seq, 1u) != VMS_CODEC_OK)
 		return 0;
 	return total;
 }
@@ -430,7 +433,10 @@ static uint32_t build_read_end_frame(struct env *e, const struct vms_blk_hdr *h,
 		return 0;
 	if (vms_frame_classify(e->wire, total, &fi) != VMS_CODEC_OK)
 		return 0;
-	if (vms_scs_seq_stamp(e->wire, total, &fi, 0u, seq) != VMS_CODEC_OK)
+	/* The fake server's §4(i).B echo for this circuit: 1, the fresh-contact
+	 * value (E66 -- abs 36 is the echo on every class, never a constant
+	 * the codec picks). */
+	if (vms_scs_seq_stamp(e->wire, total, &fi, 0u, seq, 1u) != VMS_CODEC_OK)
 		return 0;
 	return total;
 }

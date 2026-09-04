@@ -300,7 +300,8 @@ static uint32_t fake_peer_block(const struct fake_peer *p,
 		return 0;
 	if (vms_frame_classify(out, total, &fi) != VMS_CODEC_OK)
 		return 0;
-	if (vms_scs_seq_stamp(out, total, &fi, 0u, send_seq) != VMS_CODEC_OK)
+	if (vms_scs_seq_stamp(out, total, &fi, 0u, send_seq,
+			      p->incarnation) != VMS_CODEC_OK)
 		return 0;
 	return total;
 }

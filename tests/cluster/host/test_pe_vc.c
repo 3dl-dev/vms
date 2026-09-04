@@ -1206,7 +1206,7 @@ static const uint8_t vax2_hw[6] = { 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9 };
  * (spec §4(d)/§4(h)(4)). `ack`/`seq` are what the CIRCUIT holds, computed by
  * the test, never read back out of the code under test. */
 static void check_emitted_span(const struct fake_vc_decoded *d, uint16_t ack,
-			       uint16_t seq, const char *who)
+			       uint16_t seq, uint16_t incarn, const char *who)
 {
 	char m[160];
 
@@ -1219,7 +1219,7 @@ static void check_emitted_span(const struct fake_vc_decoded *d, uint16_t ack,
 
 	EMIT_CHECK(recv_ack,        ack, "recv_ack (abs 32)");
 	EMIT_CHECK(send_seq,        seq, "send_seq (abs 34)");
-	EMIT_CHECK(span_msg_count,  VMS_SCS_SEQ_MSG_COUNT, "abs 36 msg count");
+	EMIT_CHECK(span_incarnation, incarn, "abs 36 §4(i).B incarnation echo");
 	EMIT_CHECK(span_lan_ovrhd,  VMS_NISCS_LAN_OVRHD, "abs 38 NISCS_LAN_OVRHD");
 	EMIT_CHECK(span_ack1,       ack, "abs 40 ack mirror");
 	EMIT_CHECK(span_zero1,      0, "abs 42 zero");
@@ -1312,8 +1312,10 @@ static void test_sequenced_frames_carry_this_peers_ack(void)
 	if (!to1.ok || !to2.ok)
 		return;
 
-	check_emitted_span(&to1, 5u, vc1->send_seq - 1u, "to VAX1");
-	check_emitted_span(&to2, 2u, vc2->send_seq - 1u, "to VAX2");
+	check_emitted_span(&to1, 5u, vc1->send_seq - 1u,
+			   g_env.peer.incarnation, "to VAX1");
+	check_emitted_span(&to2, 2u, vc2->send_seq - 1u,
+			   vax2.incarnation, "to VAX2");
 
 	/* The point of the pair: they are not each other's. */
 	ct_check(to1.recv_ack != to2.recv_ack,
@@ -1344,6 +1346,110 @@ static void test_sequenced_frames_carry_this_peers_ack(void)
 	}
 	ct_check_eq_u32(vc2->recv_seq, 2,
 			"and the quiet peer's circuit was not disturbed");
+}
+
+/* ------------------------------------------------------------------ *
+ * ***  E66: ONE INCARNATION PER CIRCUIT, ON EVERY CLASS  ***
+ *
+ * abs 36 is the §4(i).B node-incarnation echo -- the number the MEMBER
+ * advertises for us in its directed HELLO -- and a real node stamps it on
+ * EVERY frame of that circuit: its 0x41 START/STACK/ACK, its 0x4b/0x5b
+ * sequenced messages, its 0x7b retransmits and its 0x48 credit-returns.
+ * Measured in af2-firsttimer-established, where the joiner walks 1->2->3 in
+ * lockstep across all three classes ({1:3,2:3,3:3} on 0x41,
+ * {1:11769,2:8042,3:10658} sequenced, {1:208,2:29,3:23} credit-returns).
+ *
+ * WHAT THIS GUARDS -- the E66 wall. A port that echoed the member's number on
+ * its 0x41 frames but baked 1 into vms_scs_seq_stamp and into the credit
+ * builder met a live 2-node VAX cluster that advertised 8. Its 0x41 frames
+ * were accepted (the handshake completed, both directions, both peers), and
+ * then NOT ONE of its 8,146 sequenced frames or 1,028 credit-returns was ever
+ * acknowledged in 1,500 s: both peers' recv_ack toward it stayed 0 and both
+ * retransmitted their own CONNECT_REQ ~430 times at a frozen send_seq,
+ * although those frames were byte-identical to the peer's own CONNECT_REQ
+ * apart from the MACs and the local Con.ID. The one build a real VAX ever
+ * admitted was admitted on a virgin pod where the advertised number happened
+ * to BE 1.
+ *
+ * So this test drives a circuit whose member advertises 8 and asserts a
+ * SINGLE value across all four classes. A regression to any per-class
+ * constant reds here.
+ * ------------------------------------------------------------------ */
+
+/* Open a circuit whose member attributes incarnation `n` to this node. */
+static void drive_vc_open_incarnation(struct vc_env *e, uint16_t n)
+{
+	env_init(e, 1, 1);
+	e->peer.incarnation = n;
+	channel_to_b4(e, n);
+	rx_start(e, 0, 1, 0);
+	rx_vc_ack(e);
+}
+
+static void test_one_incarnation_across_every_class(void)
+{
+	const uint16_t n = 8u;          /* what the live members advertised */
+	uint8_t msg[FAKE_VC_MSG_LEN];
+	struct fake_vc_decoded start, seq, credit, retx;
+	struct pe_vc *vc;
+	uint32_t len;
+
+	printf("-- ***  E66: ONE §4(i).B incarnation on 0x41 + sequenced + "
+	       "0x7b + 0x48  ***\n");
+	drive_vc_open_incarnation(&g_env, n);
+	vc = the_vc(&g_env);
+	if (vc == NULL || vc->state != (uint8_t)VMS_PE_VC_OPEN) {
+		ct_check(0, "the circuit opened against a member advertising 8");
+		return;
+	}
+	ct_check_eq_u32(vc->echo_incarnation, n,
+			"the circuit READ the member's advertisement (INV-6: "
+			"from a real directed HELLO, not a default)");
+
+	/* (a) the handshake class -- the one that already worked */
+	start = fake_vc_last(&g_env.fake, FAKE_VC_START);
+	ct_check(start.ok, "a 0x41 frame went out");
+	ct_check_eq_u32(start.incarnation, n, "0x41 abs 36 == 8");
+
+	/* (b) a sequenced message -- the class the member discarded */
+	fake_pe_clear_frames(&g_env.fake);
+	len = our_seqmsg(&g_env, 0x62c50009u, msg, sizeof(msg));
+	ct_check_eq_u32((unsigned)-pe_vc_send_frame(&g_env.fsm, VAX1_SYSID,
+						    msg, len), 0,
+			"the port sends a sequenced message");
+	seq = fake_vc_last(&g_env.fake, FAKE_VC_SEQ);
+	ct_check(seq.ok, "a sequenced frame went out");
+	ct_check_eq_u32(seq.incarnation, n,
+			"sequenced abs 36 == 8, NOT the baked 1 that was "
+			"never acknowledged");
+
+	/* (c) its retransmit -- re-stamped, same echo */
+	fake_pe_clear_frames(&g_env.fake);
+	g_env.fake.now_ms += 2500;             /* past the retransmit cadence */
+	pe_fsm_vc_timer(&g_env.fsm, 0);
+	retx = fake_vc_last(&g_env.fake, FAKE_VC_SEQ);
+	ct_check(retx.ok, "the ladder retransmitted it");
+	ct_check_eq_u32(retx.incarnation, n, "0x7b abs 36 == 8");
+
+	/* (d) the credit-return the receive path emits -- same echo, and it
+	 * acknowledges the peer's highest in-order send_seq. */
+	fake_pe_clear_frames(&g_env.fake);
+	rx_seqmsg(&g_env, 1, 0);
+	rx_seqmsg(&g_env, 2, 0);
+	credit = fake_vc_last(&g_env.fake, FAKE_VC_CREDIT);
+	ct_check(credit.ok, "a 0x48 credit-return went out");
+	ct_check_eq_u32(credit.incarnation, n, "0x48 abs 36 == 8");
+	ct_check_eq_u32(credit.recv_ack, 2,
+			"and it acknowledges the peer's HIGHEST in-order "
+			"send_seq, never one behind");
+	ct_check_eq_u32(vc->recv_seq, 2, "the circuit took both messages");
+
+	/* The whole point: one number, four classes. */
+	ct_check(start.incarnation == seq.incarnation &&
+		 seq.incarnation == retx.incarnation &&
+		 retx.incarnation == credit.incarnation,
+		 "ONE incarnation across the circuit's 0x41, sequenced, 0x7b "
+		 "and 0x48 -- a real node never splits it by class");
 }
 
 static void test_retransmit_reuses_the_sequence(void)
@@ -1770,6 +1876,7 @@ int main(void)
 	test_recv_ack_never_freezes();
 	test_send_seq_is_one_contiguous_counter();
 	test_sequenced_frames_carry_this_peers_ack();
+	test_one_incarnation_across_every_class();
 	test_retransmit_reuses_the_sequence();
 	test_go_back_n_resends_the_tail_in_order();
 	test_retransmit_ladder_exhaustion_breaks_the_circuit();

@@ -1104,7 +1104,11 @@ struct pe_fsm {
 
 	uint32_t vc_ignored_events; /* [vc state][event] cell with no edge    */
 	uint32_t vc_no_slot;        /* the VC table was full: refused         */
-	uint32_t vc_no_incarnation; /* §4(i).B echo absent: NO START built    */
+	uint32_t vc_no_incarnation; /* §4(i).B echo absent: NOTHING built --  */
+				     /* not a START, not a sequenced message,  */
+				     /* not a credit-return (E66: abs 36 is    */
+				     /* the echo on EVERY class, so with no    */
+				     /* echo there is nothing honest to stamp) */
 	uint32_t vc_no_identity;    /* incarnation time / clock absent        */
 	/*
 	 * Formation bodies sent with abs 72-79 / abs 95 ZERO because the

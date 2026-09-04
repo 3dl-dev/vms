@@ -1505,6 +1505,27 @@ static uint32_t vc_retransmit_ms(const struct pe_fsm *f)
 	return ms < PE_VC_RETRANSMIT_MIN_MS ? PE_VC_RETRANSMIT_MIN_MS : ms;
 }
 
+/*
+ * THE CIRCUIT'S abs-36 VALUE, IN ONE PLACE (E66).
+ *
+ * SS4(i).B's node-incarnation echo is not a property of a message class, it is
+ * a property of the CIRCUIT: a real node stamps the same number on its 0x41
+ * START/STACK/ACK, on every 0x4b/0x5b/0x7b sequenced message and on every 0x48
+ * credit-return it sends over that circuit, and it changes only when the peer
+ * advertises a new one (af2-firsttimer: a joiner walks 1->2->3 across all three
+ * classes in lockstep with the member's directed-HELLO advertisement). So every
+ * builder reads it HERE, from `vc->echo_incarnation` -- the value the channel
+ * copied out of a real directed HELLO at formation (h_vc_channel_up) -- and no
+ * builder holds a constant of its own.
+ *
+ * 0 means "this circuit has no echo". The codec REFUSES a zero rather than
+ * writing one (INV-6), so the caller's only job is to count the refusal.
+ */
+static uint16_t vc_incarnation(const struct pe_vc *vc)
+{
+	return vc->echo_valid ? vc->echo_incarnation : 0u;
+}
+
 /* The VMS absolute-time clock, and nothing else (design SS3.9 rule 6). */
 static uint64_t pe_now_vms(const struct pe_fsm *f)
 {
@@ -1975,6 +1996,13 @@ static void vc_send_ack(struct pe_fsm *f, struct pe_vc *vc)
 
 	if (ch == NULL)
 		return;
+	if (!vc->echo_valid) {
+		/* No SS4(i).B echo: abs 36 would have to be invented. Count it
+		 * and send nothing -- a credit-return carrying a made-up
+		 * incarnation is exactly the frame a member discards (E66). */
+		f->vc_no_incarnation++;
+		return;
+	}
 	pe_bzero(&c, (uint32_t)sizeof(c));
 	if (vc_fill_addr(f, ch, &c.addr) != 0)
 		return;
@@ -1982,6 +2010,7 @@ static void vc_send_ack(struct pe_fsm *f, struct pe_vc *vc)
 	/* abs 44 is the spec's own INFERRED "sender's own outstanding seq":
 	 * filled from THIS node's counter, never echoed from a peer frame. */
 	c.secondary_seq = vc->send_seq;
+	c.incarnation = vc_incarnation(vc);
 
 	if (vms_scs_credit_build(&c, f->scratch, (uint32_t)sizeof(f->scratch),
 				 &written) != VMS_CODEC_OK)
@@ -2519,8 +2548,8 @@ static int vc_resend_one(struct pe_fsm *f, struct pe_vc *vc,
 		return -1;
 	if (vms_frame_classify(e->frame, e->len, &fi) != VMS_CODEC_OK)
 		return -1;
-	if (vms_scs_seq_stamp(e->frame, e->len, &fi, vc->recv_seq,
-			      e->seq) != VMS_CODEC_OK)
+	if (vms_scs_seq_stamp(e->frame, e->len, &fi, vc->recv_seq, e->seq,
+			      vc_incarnation(vc)) != VMS_CODEC_OK)
 		return -1;
 	if (pe_tx_from(f, e->frame, e->len) != 0)
 		return -1;
@@ -3043,9 +3072,11 @@ int pe_vc_send_frame(struct pe_fsm *f, vms_scs_sysid_t dst,
 	pe_copy(e->frame, frame, len);
 	e->len = len;
 	e->seq = seq;
-	if (vms_scs_seq_stamp(e->frame, e->len, &fi, vc->recv_seq, seq) !=
-	    VMS_CODEC_OK) {
+	if (vms_scs_seq_stamp(e->frame, e->len, &fi, vc->recv_seq, seq,
+			      vc_incarnation(vc)) != VMS_CODEC_OK) {
 		vc_ring_free(vc, e);          /* nothing was sent, nothing */
+		if (!vc->echo_valid)
+			f->vc_no_incarnation++;
 		return PE_VC_SEND_BADFRAME;   /* was consumed              */
 	}
 
@@ -3348,9 +3379,12 @@ static int blk_stamp_and_send(struct pe_fsm *f, struct pe_vc *vc,
 
 	if (vms_frame_classify(frame, total, &fi) != VMS_CODEC_OK)
 		return PE_BLK_BADFRAME;
-	if (vms_scs_seq_stamp(frame, total, &fi, vc->recv_seq, seq) !=
-	    VMS_CODEC_OK)
+	if (vms_scs_seq_stamp(frame, total, &fi, vc->recv_seq, seq,
+			      vc_incarnation(vc)) != VMS_CODEC_OK) {
+		if (!vc->echo_valid)
+			f->vc_no_incarnation++;
 		return PE_BLK_BADFRAME;
+	}
 	if (pe_tx_from(f, frame, total) != 0)
 		return PE_BLK_TXFAIL;
 

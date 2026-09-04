@@ -267,8 +267,8 @@ vms_scs_seq_envelope_fixup_len(uint8_t *frame, uint32_t cap,
  * (the exclusion keeps our own emissions out of the population used to
  * judge our own emissions):
  *
- *   abs 36  small message count: 1 (76.1%) / 2 (19.4%) / 3 (4.4%);
- *           ZERO IN 0 OF 239,981
+ *   abs 36  node-incarnation echo: 1 (76.1%) / 2 (19.4%) / 3 (4.4%);
+ *           ZERO IN 0 OF 239,981 -- see "abs 36 IS THE INCARNATION" below
  *   abs 38  SYSGEN NISCS_LAN_OVRHD == 18       239932/239981; zero in 0
  *   abs 40  recv_ack mirror                    239916/239981; zero in 65
  *   abs 42  zero                               239981/239981
@@ -289,15 +289,49 @@ vms_scs_seq_envelope_fixup_len(uint8_t *frame, uint32_t cap,
  * are the SAME executive read that produces abs 32 -- the circuit's recv_seq
  * -- never a second, invented counter.
  *
- * abs 36 IS AN HONEST FLOOR, NOT A MODEL (rule 8). What makes a real port
- * write 2 or 3 there is not grounded by anything we hold, and no algorithm
- * for it is inferred here. What IS grounded is that the value is never 0,
- * and that its floor -- the most common value of the corpus (76.1%) and the
- * one 622/622 of the credit-return class carries (sec 4(h)(3), "payload[22]
- * constant 0x0001", which this file's own credit builder has always
- * written) -- is 1. This port writes that floor and nothing cleverer.
+ * abs 36 IS THE INCARNATION, NOT A MESSAGE COUNT (E66 -- this REPLACES the
+ * earlier "small message count, honest floor 1" reading, which was a MODEL
+ * and is now REFUTED by measurement; spec sec 4(h)(4b)'s "what selects 2 or
+ * 3 is NOT decoded" RE gap is closed by it).
+ *
+ * abs 36 carries the SAME field on EVERY class of a circuit -- 0x41
+ * START/STACK/ACK, 0x4b/0x5b/0x7b sequenced, and the 0x48 credit-return:
+ * the sec 4(i).B NODE-INCARNATION ECHO, i.e. the number the PEER advertised
+ * for THIS node in its directed HELLO at payload [78:80]. Re-derive:
+ *
+ *   - af2-firsttimer-established-20260728.pcap. VAX1 (the established
+ *     member) advertises 1 -> 2 -> 3 to the joiner across its three
+ *     incarnations, and the joiner stamps abs 36 = 1/2/3 IN LOCKSTEP on all
+ *     three classes: 0x41 {1:3, 2:3, 3:3}, sequenced {1:11769, 2:8042,
+ *     3:10658}, credit-return {1:208, 2:29, 3:23}. VAX1 itself stamps 1 on
+ *     18,869 sequenced frames -- the value the joiner advertised to IT.
+ *   - cd0-bootB-zk1099-join-20260728.pcap: the same 1 -> 2 walk across
+ *     0x41 / sequenced / credit-return.
+ *   - A "message count" cannot explain this: the value is PER-CIRCUIT and
+ *     constant. In one 2-node capture the SAME node stamps 2 toward one
+ *     peer and 1 toward another, in the same seconds, matching exactly what
+ *     each of those peers advertised to it (6 directions, 6/6).
+ *
+ * WHY A CONSTANT HERE IS FATAL (E66, the wall three fixes could not move).
+ * A port that echoed the incarnation on its 0x41 frames but baked 1 into
+ * every sequenced frame and credit-return was, against a live 2-node VAX
+ * cluster that advertised incarnation 8 to it, acknowledged ZERO times in
+ * 1,500 s: 8,146 sequenced frames and 1,028 credit-returns went out at
+ * abs 36 = 1, both peers' recv_ack toward it stayed 0, and both peers
+ * retransmitted their own CONNECT_REQ ~430 times at a frozen send_seq. The
+ * frames were otherwise BYTE-IDENTICAL to the peer's own CONNECT_REQ (only
+ * MACs and the local Con.ID differed). The one earlier build a real VAX
+ * ever admitted (ovmx-760-MEMBER-achieved) was admitted on a VIRGIN pod
+ * where the advertised incarnation happened to BE 1 -- the constant was
+ * right by luck, not by rule.
+ *
+ * So abs 36 is CALLER-SUPPLIED on every entry below, read from the
+ * circuit's own echo (pe_vc.echo_incarnation, learned from a real directed
+ * HELLO), and a 0 is REFUSED rather than written: zero appears in 0 of
+ * 239,981 real frames, so a port with no incarnation to echo has nothing
+ * honest to put there and must not send at all (INV-6).
  * ------------------------------------------------------------------ */
-#define VMS_OFF_SCS_MSG_COUNT    36u  /* small count, GROUNDED never zero  */
+#define VMS_OFF_SCS_INCARNATION  36u  /* sec 4(i).B echo, never zero       */
 #define VMS_OFF_SCS_LAN_OVRHD    38u  /* SYSGEN NISCS_LAN_OVRHD            */
 #define VMS_OFF_SCS_ACK_MIRROR1  40u  /* == recv_ack (abs 32)              */
 #define VMS_OFF_SCS_SPAN_ZERO1   42u
@@ -309,7 +343,6 @@ vms_scs_seq_envelope_fixup_len(uint8_t *frame, uint32_t cap,
 #define VMS_OFF_SCS_SPAN_CONST2  54u
 #define VMS_OFF_SCS_SPAN_END     56u  /* first byte past the span          */
 
-#define VMS_SCS_SEQ_MSG_COUNT    1u       /* the grounded floor, see above */
 #define VMS_SCS_SEQ_SPAN_CONST1  0x0001u
 #define VMS_SCS_SEQ_SPAN_CONST2  0x0200u
 
@@ -334,15 +367,23 @@ vms_scs_seq_envelope_fixup_len(uint8_t *frame, uint32_t cap,
  * retransmission. Doing it any other way is how a send_seq hole appears --
  * or, as E63 measured, how every ack mirror on the wire freezes at zero.
  *
+ * `incarnation` is the circuit's sec 4(i).B echo for abs 36 -- the SAME value
+ * this circuit's 0x41 START/STACK/ACK carry, read from the circuit's own state
+ * (pe_vc.echo_incarnation), never a constant. A zero is REFUSED
+ * (VMS_CODEC_E_INVAL): it is unobserved in 239,981 reference frames, so a
+ * caller with no echo has nothing honest to stamp and must not send (INV-6).
+ *
  * Class-gated on VMS_FCAP_SEQ and on a msgtype in {0x4b, 0x5b, 0x7b}: a 0x41
- * START has its own builder (its abs 36 is the incarnation, not a counter)
- * and a 0x48 credit-return carries send_seq == 0 by GROUNDED rule (622/622)
- * and must never be stamped with one. Returns VMS_CODEC_E_CLASS for either,
- * VMS_CODEC_E_SHORT for a frame that cannot hold abs 36..55.
+ * START has its own builder (which writes the same abs 36 through its own
+ * `incarnation` field) and a 0x48 credit-return carries send_seq == 0 by
+ * GROUNDED rule (622/622) and must never be stamped with one. Returns
+ * VMS_CODEC_E_CLASS for either, VMS_CODEC_E_SHORT for a frame that cannot
+ * hold abs 36..55.
  */
 vms_codec_status_t vms_scs_seq_stamp(uint8_t *frame, uint32_t len,
 				     const struct vms_frame_info *fi,
-				     uint16_t recv_ack, uint16_t send_seq);
+				     uint16_t recv_ack, uint16_t send_seq,
+				     uint16_t incarnation);
 
 /*
  * vms_scs_seq_mark_retransmit - re-mark an already-built sequenced frame as
@@ -379,12 +420,19 @@ vms_codec_status_t vms_scs_seq_mark_retransmit(uint8_t *frame, uint32_t len,
  * cleanly a single function of [18:20]") -- callers fill it from their own
  * outstanding send_seq, reproducing the real wire's shape rather than
  * asserting a derivation the spec does not give.
+ *
+ * `incarnation` at abs 36 is the SAME sec 4(i).B echo the circuit's sequenced
+ * frames and its 0x41 handshake carry -- a credit-return is not exempt
+ * (af2-firsttimer: the joiner's credit-returns walk 1/2/3 with everything
+ * else it sends). vms_scs_credit_build REFUSES a zero, for the reason
+ * vms_scs_seq_stamp does.
  */
 struct vms_scs_credit_frame {
 	struct vms_scs_addr addr;
 	uint16_t acked_seq;      /* abs 32/40/48: the peer's send_seq being  */
 				  /* acknowledged                              */
 	uint16_t secondary_seq;  /* abs 44: INFERRED, OWN outstanding seq    */
+	uint16_t incarnation;    /* abs 36: sec 4(i).B echo, never zero      */
 };
 
 vms_codec_status_t vms_scs_credit_build(const struct vms_scs_credit_frame *c,

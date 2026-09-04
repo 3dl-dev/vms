@@ -371,14 +371,15 @@ static vms_codec_status_t seq_stamp_gate(const uint8_t *frame, uint32_t len,
 
 /*
  * Write abs 36..55, the transport counter span (header sec "abs 36..55").
- * The two live values are DERIVED from the circuit position the caller
- * passed -- the same recv_seq/send_seq that produced abs 32/34, never a
- * second counter and never a byte carried over from another frame.
+ * Every live value is DERIVED from circuit state the caller passed -- the
+ * same recv_seq/send_seq that produced abs 32/34, and the same sec 4(i).B
+ * incarnation echo the circuit's own 0x41 frames carry -- never a second
+ * counter, never a constant, never a byte carried over from another frame.
  */
 static void seq_stamp_span(vms_wire_buf_t *w, uint16_t recv_ack,
-			   uint16_t send_seq)
+			   uint16_t send_seq, uint16_t incarnation)
 {
-	vms_wire_put_le16(w, VMS_OFF_SCS_MSG_COUNT, VMS_SCS_SEQ_MSG_COUNT);
+	vms_wire_put_le16(w, VMS_OFF_SCS_INCARNATION, incarnation);
 	vms_wire_put_le16(w, VMS_OFF_SCS_LAN_OVRHD, VMS_NISCS_LAN_OVRHD);
 	vms_wire_put_le16(w, VMS_OFF_SCS_ACK_MIRROR1, recv_ack);
 	vms_wire_put_zero(w, VMS_OFF_SCS_SPAN_ZERO1, 2);
@@ -392,19 +393,25 @@ static void seq_stamp_span(vms_wire_buf_t *w, uint16_t recv_ack,
 
 vms_codec_status_t vms_scs_seq_stamp(uint8_t *frame, uint32_t len,
 				     const struct vms_frame_info *fi,
-				     uint16_t recv_ack, uint16_t send_seq)
+				     uint16_t recv_ack, uint16_t send_seq,
+				     uint16_t incarnation)
 {
 	vms_wire_buf_t w;
-	vms_codec_status_t st = seq_stamp_gate(frame, len, fi,
-					       (uint8_t *)0);
+	vms_codec_status_t st;
 
+	/* INV-6: no echo, no frame. Zero at abs 36 appears in 0 of 239,981
+	 * reference frames, so there is no honest value to substitute. */
+	if (incarnation == 0u)
+		return VMS_CODEC_E_INVAL;
+
+	st = seq_stamp_gate(frame, len, fi, (uint8_t *)0);
 	if (st != VMS_CODEC_OK)
 		return st;
 
 	vms_wire_buf_init(&w, frame, len);
 	vms_wire_put_le16(&w, VMS_OFF_SCS_RECV_ACK, recv_ack);
 	vms_wire_put_le16(&w, VMS_OFF_SCS_SEND_SEQ, send_seq);
-	seq_stamp_span(&w, recv_ack, send_seq);
+	seq_stamp_span(&w, recv_ack, send_seq, incarnation);
 
 	if (!vms_wire_buf_ok(&w))
 		return w.err;
@@ -443,6 +450,10 @@ vms_codec_status_t vms_scs_credit_build(const struct vms_scs_credit_frame *c,
 
 	if (c == (const struct vms_scs_credit_frame *)0)
 		return VMS_CODEC_E_INVAL;
+	/* Same INV-6 refusal as vms_scs_seq_stamp: abs 36 is the sec 4(i).B
+	 * echo on this class too, and it is never zero on the wire. */
+	if (c->incarnation == 0u)
+		return VMS_CODEC_E_INVAL;
 	vms_wire_buf_init(&w, frame, cap);
 	if (!vms_wire_buf_ok(&w))
 		return VMS_CODEC_E_INVAL;
@@ -453,8 +464,8 @@ vms_codec_status_t vms_scs_credit_build(const struct vms_scs_credit_frame *c,
 
 	vms_wire_put_le16(&w, 32, c->acked_seq);      /* abs 32 */
 	vms_wire_put_zero(&w, 34, 2);                  /* abs 34: send_seq==0 */
-	vms_wire_put_le16(&w, VMS_OFF_SCS_MSG_COUNT,
-			  VMS_SCS_SEQ_MSG_COUNT);      /* abs 36            */
+	vms_wire_put_le16(&w, VMS_OFF_SCS_INCARNATION,
+			  c->incarnation);             /* abs 36            */
 	vms_wire_put_le16(&w, VMS_OFF_SCS_LAN_OVRHD,
 			  VMS_NISCS_LAN_OVRHD);        /* abs 38            */
 	vms_wire_put_le16(&w, VMS_OFF_SCS_ACK_MIRROR1,
@@ -500,6 +511,7 @@ vms_codec_status_t vms_scs_credit_parse(const uint8_t *frame, uint32_t len,
 	addr_get_hdr(&v, &out->addr);
 	out->acked_seq = vms_wire_get_le16(&v, 32);
 	out->secondary_seq = vms_wire_get_le16(&v, 44);
+	out->incarnation = vms_wire_get_le16(&v, VMS_OFF_SCS_INCARNATION);
 
 	if (!vms_wire_view_ok(&v))
 		return v.err;

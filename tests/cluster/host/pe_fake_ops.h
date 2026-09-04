@@ -191,6 +191,14 @@ struct fake_peer {
 	 * peer to PRESENT it fills these, exactly as it fills `nonce`. */
 	uint8_t  cap_span[VMS_DISC_CAPSPAN_LEN];
 	uint8_t  reserved_64[VMS_DISC_RESERVED64_LEN];
+	/*
+	 * The sec 4(i).B incarnation THIS PEER ATTRIBUTES TO THE NODE UNDER
+	 * TEST -- the number it advertises in its directed HELLO at payload
+	 * [78:80] and then stamps at abs 36 on every frame of the circuit
+	 * (E66). fake_peer_init sets 1, the fresh-contact value; a test that
+	 * wants a member holding a residual for us raises it.
+	 */
+	uint16_t incarnation;
 };
 
 static void fake_peer_init(struct fake_peer *p, uint16_t sysid,
@@ -206,6 +214,7 @@ static void fake_peer_init(struct fake_peer *p, uint16_t sysid,
 	for (i = 0; i < VMS_HELLO_NODENAME_MAX && name[i] != '\0'; i++)
 		p->name[i] = (uint8_t)name[i];
 	p->name_len = VMS_HELLO_NODENAME_MAX;
+	p->incarnation = 1u;    /* fresh contact, sec 4(i).B */
 }
 
 /*

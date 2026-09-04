@@ -124,6 +124,21 @@ enum cnxman_diag_reason {
 	CNXMAN_DIAG_R_CDT_OPEN   = 10, /* glue: a connection WE opened is up  */
 	CNXMAN_DIAG_R_CM_ACCEPT  = 11, /* glue: a member opened one TO us     */
 	CNXMAN_DIAG_R_CDT_CLOSED = 12, /* glue: a connection went away        */
+	/*
+	 * glue: SCS REFUSED a send, with the two codes the executive really
+	 * produced for it (E70). Written by cnxman_jop_send_msg() the instant
+	 * the refusal is returned and BEFORE the join records its own EMIT
+	 * record, so the transcript reads "why it was refused, then which
+	 * message was refused".
+	 *
+	 * The EMIT record already carries the SS$_ status and the Con.ID; this
+	 * record carries what that status cannot say, because scs_glue_status()
+	 * is many-to-one (vms_scs.h SS5, scs_send_refusal): `rc` is the SCS
+	 * layer's own `enum scs_err` and `aux` is the PORT's own return for
+	 * that same send, verbatim, or 0 when the port was not the refuser.
+	 * Both are reads of live CDT state, not a diagnosis composed here.
+	 */
+	CNXMAN_DIAG_R_SEND_REFUSED = 13,
 	CNXMAN_DIAG_R__COUNT
 };
 
@@ -206,6 +221,8 @@ struct cnxman_diag_rec {
 			     *   (category << 8) | opcode  ARRIVAL not-mine /
 			     *                            peer-ack
 			     *   the body length           ARRIVAL unparsed
+			     *   the PORT's own refusal code, verbatim
+			     *                            ARRIVAL send-refused
 			     * 0 everywhere else, and never a composed value  */
 };
 _Static_assert(sizeof(struct cnxman_diag_rec) == 32,

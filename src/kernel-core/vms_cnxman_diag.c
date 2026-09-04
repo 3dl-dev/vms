@@ -248,6 +248,7 @@ const char *cnxman_diag_reason_name(uint8_t reason)
 	case CNXMAN_DIAG_R_CDT_OPEN:   return "cdt-open";
 	case CNXMAN_DIAG_R_CM_ACCEPT:  return "cm-accept";
 	case CNXMAN_DIAG_R_CDT_CLOSED: return "cdt-closed";
+	case CNXMAN_DIAG_R_SEND_REFUSED: return "send-refused";
 	default:                       return "?";
 	}
 }

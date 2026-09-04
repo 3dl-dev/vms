@@ -92,6 +92,10 @@ struct scsh_node {
 	/* injected failures, each a countdown */
 	int                 fail_ctrl;
 	int                 fail_msg;
+	/* What the injected PORT answers when `fail_msg` fires. 0 keeps the
+	 * historic -1; a test that cares which refusal the port made sets its
+	 * own value and asserts the CDT recorded THAT one verbatim (E70). */
+	int                 fail_msg_rc;
 	int                 fail_addr;
 	int                 drop_tx;      /* build+record, deliver nothing */
 
@@ -235,7 +239,7 @@ SCSH_UNUSED static int scsh_send_msg(void *ctx, vms_scs_sysid_t dst, vms_conid_t
 
 	if (n->fail_msg > 0) {
 		n->fail_msg--;
-		return -1;
+		return n->fail_msg_rc != 0 ? n->fail_msg_rc : -1;
 	}
 	if (len != SCS_MSG_BODY_LEN)
 		return -1;

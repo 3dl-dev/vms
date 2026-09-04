@@ -75,7 +75,14 @@ static const char *const cnxtrace_reason_names[] = {
     "not-our-conid",  /* 9 */
     "cdt-open",       /* 10 */
     "cm-accept",      /* 11 */
-    "cdt-closed"      /* 12 */
+    "cdt-closed",     /* 12 */
+    /*
+     * 13 CNXMAN_DIAG_R_SEND_REFUSED (E70). On this record `rc` is the SCS
+     * layer's own `enum scs_err` and `aux` is the PORT's own refusal code,
+     * verbatim -- the two facts the EMIT record's many-to-one SS$_ status
+     * cannot carry. Both columns already print on every line.
+     */
+    "send-refused"    /* 13 */
 };
 
 /* enum cnxman_diag_gate (an EMIT record's `detail`) */

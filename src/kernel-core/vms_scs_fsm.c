@@ -232,6 +232,24 @@ static uint32_t cdt_index(const struct scs_fsm *f, const struct scs_cdt *cdt)
 	return (uint32_t)(cdt - f->cdl);
 }
 
+/*
+ * THE ONE PLACE A REFUSED SEND IS RECORDED (E70, vms_scs_fsm.h's `tx_last_err`
+ * note). Called from each refusal path with the code that path really
+ * produced, so the CDT carries WHY the last send did not go -- which the
+ * many-to-one SS$_ map the glue answers with cannot say.
+ *
+ * `port_rc` is the injected send op's OWN return, verbatim and uninterpreted,
+ * and is passed only by the paths where the port was the refuser; every other
+ * path passes 0, which is the honest "the port was not asked / did not refuse"
+ * and never a success claim about a message that was not sent.
+ */
+static void cdt_note_refusal(struct scs_cdt *cdt, int err, int port_rc)
+{
+	cdt->tx_last_err = (int32_t)err;
+	cdt->tx_last_port_rc = (int32_t)port_rc;
+	cdt->tx_refusals++;
+}
+
 /* ==========================================================================
  * C. The SB set and its CDT queue (ch. 2's Path Block queue)
  * ========================================================================== */
@@ -604,7 +622,10 @@ static int ctrl_prepare(struct scs_fsm *f, const struct scs_cdt *cdt,
 				     struct vms_scs_addr *))0)
 		return SCS_ERR_ADDR;
 	if (f->ops->addr(f->ops->ctx, cdt->peer_sysid, &addr) != 0) {
-		/* No circuit, no real addressing, no frame. */
+		/* No circuit, no real addressing, no frame. This builder holds
+		 * the CDT `const`, so the per-connection E70 refusal note is
+		 * made by the APPLICATION-message caller (msg_transmit_short);
+		 * a connect verb refused here is counted in tx_refused_addr. */
 		f->tx_refused_addr++;
 		return SCS_ERR_ADDR;
 	}
@@ -632,18 +653,24 @@ static int ctrl_emit(struct scs_fsm *f, struct scs_cdt *cdt,
 		     struct vms_scs_ctrl_frame *c)
 {
 	uint32_t written = 0u;
+	int rc;
 
 	if (vms_scs_ctrl_build(c, f->ctrlbuf, (uint32_t)sizeof(f->ctrlbuf),
 			       &written) != VMS_CODEC_OK) {
 		f->tx_refused_codec++;
+		cdt_note_refusal(cdt, SCS_ERR_CODEC, 0);
 		return SCS_ERR_CODEC;
 	}
 	if (f->ops->send_ctrl == (int (*)(void *, vms_scs_sysid_t,
-					  const uint8_t *, uint32_t))0)
+					  const uint8_t *, uint32_t))0) {
+		cdt_note_refusal(cdt, SCS_ERR_TXFAIL, 0);
 		return SCS_ERR_TXFAIL;
-	if (f->ops->send_ctrl(f->ops->ctx, cdt->peer_sysid, f->ctrlbuf,
-			      written) != 0) {
+	}
+	rc = f->ops->send_ctrl(f->ops->ctx, cdt->peer_sysid, f->ctrlbuf,
+			       written);
+	if (rc != 0) {
 		f->tx_errors++;
+		cdt_note_refusal(cdt, SCS_ERR_TXFAIL, rc);
 		return SCS_ERR_TXFAIL;
 	}
 	return SCS_OK;
@@ -758,15 +785,19 @@ static int msg_transmit_long(struct scs_fsm *f, struct scs_cdt *cdt,
 				   f->msgbuf,
 				   (uint32_t)sizeof(f->msgbuf)) != VMS_CODEC_OK) {
 		f->tx_refused_codec++;
+		cdt_note_refusal(cdt, SCS_ERR_CODEC, 0);
 		return SCS_ERR_CODEC;
 	}
 	if (f->ops->send_msg == (int (*)(void *, vms_scs_sysid_t, vms_conid_t,
-					 const uint8_t *, uint32_t))0)
+					 const uint8_t *, uint32_t))0) {
+		cdt_note_refusal(cdt, SCS_ERR_TXFAIL, 0);
 		return SCS_ERR_TXFAIL;
+	}
 	rc = f->ops->send_msg(f->ops->ctx, cdt->peer_sysid, cdt->remote_conid,
 			      f->msgbuf, (uint32_t)sizeof(f->msgbuf));
 	if (rc != 0) {
 		f->tx_errors++;
+		cdt_note_refusal(cdt, SCS_ERR_TXFAIL, rc);
 		return SCS_ERR_TXFAIL;
 	}
 
@@ -790,18 +821,21 @@ static int msg_transmit_short(struct scs_fsm *f, struct scs_cdt *cdt,
 	uint16_t credit;
 	int rc = ctrl_prepare(f, cdt, (uint16_t)SCS_MTYPE_APPL_MSG, &c);
 
-	if (rc != SCS_OK)
+	if (rc != SCS_OK) {
+		cdt_note_refusal(cdt, rc, 0);   /* E70: no real addressing */
 		return rc;
+	}
 	credit = credit_pending_peek(cdt);
 	c.credit = credit;
 	if (vms_scs_dir_ctrl_from_body(sysap_body, SCS_DIR_BODY_LEN, &c) !=
 	    VMS_CODEC_OK) {
 		f->tx_refused_codec++;
+		cdt_note_refusal(cdt, SCS_ERR_CODEC, 0);
 		return SCS_ERR_CODEC;
 	}
 	rc = ctrl_emit(f, cdt, &c);
 	if (rc != SCS_OK)
-		return rc;
+		return rc;   /* ctrl_emit already recorded WHY (E70) */
 
 	msg_accounted(cdt, credit);
 	dir_count_tx(f, sysap_body);
@@ -824,8 +858,10 @@ static int msg_transmit_var(struct scs_fsm *f, struct scs_cdt *cdt,
 
 	if (f->ops->send_msg_var == (int (*)(void *, vms_scs_sysid_t,
 					     vms_conid_t, const uint8_t *,
-					     uint32_t))0)
+					     uint32_t))0) {
+		cdt_note_refusal(cdt, SCS_ERR_TXFAIL, 0);
 		return SCS_ERR_TXFAIL;
+	}
 
 	scs_bzero(&h, (uint32_t)sizeof(h));
 	h.inner_len = SCS_SYSAP_INNER_LEN(len);
@@ -837,12 +873,14 @@ static int msg_transmit_var(struct scs_fsm *f, struct scs_cdt *cdt,
 	if (vms_scs_msg_body_build(&h, sysap_body, len, f->msgbuf,
 				   body_len) != VMS_CODEC_OK) {
 		f->tx_refused_codec++;
+		cdt_note_refusal(cdt, SCS_ERR_CODEC, 0);
 		return SCS_ERR_CODEC;
 	}
 	rc = f->ops->send_msg_var(f->ops->ctx, cdt->peer_sysid,
 				  cdt->remote_conid, f->msgbuf, body_len);
 	if (rc != 0) {
 		f->tx_errors++;
+		cdt_note_refusal(cdt, SCS_ERR_TXFAIL, rc);
 		return SCS_ERR_TXFAIL;
 	}
 
@@ -860,6 +898,7 @@ static int msg_transmit(struct scs_fsm *f, struct scs_cdt *cdt,
 		return msg_transmit_short(f, cdt, sysap_body);
 	if (len > 0u && len < SCS_SYSAP_BODY_LEN)
 		return msg_transmit_var(f, cdt, sysap_body, len);
+	cdt_note_refusal(cdt, SCS_ERR_INVAL, 0);
 	return SCS_ERR_INVAL;
 }
 
@@ -1573,16 +1612,24 @@ static int h_rx_appl_msg(struct scs_fsm *f, struct scs_cdt *cdt,
 static int h_local_send(struct scs_fsm *f, struct scs_cdt *cdt,
 			struct scs_rx *rx)
 {
-	if (rx->body == (const uint8_t *)0)
+	int rc;
+
+	if (rx->body == (const uint8_t *)0) {
+		cdt_note_refusal(cdt, SCS_ERR_INVAL, 0);
 		return SCS_ERR_INVAL;
-	if (cdt->sw_head != SCS_NIL) {
-		/* Something is already waiting: FIFO order is the p. 2-46 rule
-		 * ("queue priority is based on time spent in the queue"), so a
-		 * new send goes behind it even if a credit is free. */
-		return sendwait_push(f, cdt, rx->body, rx->body_len);
 	}
-	if (cdt->credit_send == 0u)
-		return sendwait_push(f, cdt, rx->body, rx->body_len);
+	if (cdt->sw_head != SCS_NIL || cdt->credit_send == 0u) {
+		/* Something is already waiting (FIFO order is the p. 2-46 rule:
+		 * "queue priority is based on time spent in the queue", so a
+		 * new send goes behind it even if a credit is free), or there
+		 * is no Send Credit at all. Either way this is Credit Wait --
+		 * which SUCCEEDS: the message is held, not refused, and only a
+		 * pool that cannot hold it is a refusal. */
+		rc = sendwait_push(f, cdt, rx->body, rx->body_len);
+		if (rc != SCS_OK)
+			cdt_note_refusal(cdt, rc, 0);
+		return rc;
+	}
 	return msg_transmit(f, cdt, rx->body, rx->body_len);
 }
 
@@ -2319,15 +2366,36 @@ int scs_fsm_send_msg(struct scs_fsm *f, vms_conid_t local_conid,
 	 */
 	sb = (cdt->sb_index == SCS_NIL) ? (struct scs_sb *)0
 					: &f->sbs[cdt->sb_index];
-	if (sb != (struct scs_sb *)0 && !sb->vc_up)
+	if (sb != (struct scs_sb *)0 && !sb->vc_up) {
+		cdt_note_refusal(cdt, SCS_ERR_PATHLOST, 0);
 		return SCS_ERR_PATHLOST;
-	if (cdt->state != (uint8_t)VMS_SCS_CDT_OPEN)
+	}
+	if (cdt->state != (uint8_t)VMS_SCS_CDT_OPEN) {
+		cdt_note_refusal(cdt, SCS_ERR_NOTOPEN, 0);
 		return SCS_ERR_NOTOPEN;
+	}
 
 	scs_bzero(&rx, (uint32_t)sizeof(rx));
 	rx.body = body;
 	rx.body_len = len;
 	return scs_dispatch(f, cdt, SCS_EV_LOCAL_SEND, &rx);
+}
+
+int scs_fsm_send_refusal(struct scs_fsm *f, vms_conid_t local_conid,
+			 int32_t *out_err, int32_t *out_port_rc)
+{
+	struct scs_cdt *cdt;
+
+	if (f == (struct scs_fsm *)0)
+		return SCS_ERR_INVAL;
+	cdt = scs_fsm_cdt_by_conid(f, local_conid);
+	if (cdt == (struct scs_cdt *)0)
+		return SCS_ERR_NOCONN;
+	if (out_err != (int32_t *)0)
+		*out_err = cdt->tx_last_err;
+	if (out_port_rc != (int32_t *)0)
+		*out_port_rc = cdt->tx_last_port_rc;
+	return SCS_OK;
 }
 
 int scs_fsm_return_credit(struct scs_fsm *f, vms_conid_t local_conid,

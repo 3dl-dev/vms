@@ -454,6 +454,43 @@ struct scs_cdt {
 	uint32_t  credit_overruns;       /* peer sent past its Send Credit   */
 	uint32_t  sends_failed_pathlost; /* Credit Wait killed by a break    */
 	uint32_t  timer_key;             /* == this CDT's CDL index          */
+
+	/*
+	 * ---- THE LAST REFUSAL, VERBATIM (integration note E70) ----
+	 *
+	 * WHY THE EXECUTIVE HAS TO KEEP THESE. A caller of scs_send_msg() is
+	 * told an SS$_ status, and that mapping is deliberately MANY-TO-ONE:
+	 * vms_scs.c cannot cite OpenVMS's SS$_INCONSTATE / SS$_PATHLOST /
+	 * SS$_NOSUCHNODE values and Rule 8 forbids inventing them, so
+	 * NOTOPEN, NOPATH and PATHLOST all answer SS$_DEVOFFLINE and every
+	 * transport refusal answers SS$_ABORT. On a live cluster that is the
+	 * difference between "the connection was not sendable", "the port's
+	 * send window is spent" and "the interface refused the frame" -- three
+	 * different defects with three different fixes -- collapsed into one
+	 * number (E70: three promotion messages were refused on a live VAX
+	 * cluster and nothing recorded which of the five possible refusals
+	 * fired).
+	 *
+	 * So the CDT keeps what the executive really produced:
+	 *
+	 *   tx_last_err      this FSM's own `enum scs_err` for the most recent
+	 *                    REFUSED send on this connection. 0 (SCS_OK) means
+	 *                    no send on this CDT has ever been refused.
+	 *   tx_last_port_rc  the INJECTED send op's own refusal code, verbatim
+	 *                    and uninterpreted, when tx_last_err is
+	 *                    SCS_ERR_TXFAIL -- i.e. when the refusal came from
+	 *                    below this layer. 0 whenever the port was not the
+	 *                    refuser, which is an honest "not applicable" and
+	 *                    not a success code.
+	 *   tx_refusals      how many sends this connection has refused.
+	 *
+	 * These are DIAGNOSTIC state, read back through
+	 * scs_fsm_send_refusal(). Nothing in this file branches on them and no
+	 * byte of them reaches the wire.
+	 */
+	int32_t   tx_last_err;
+	int32_t   tx_last_port_rc;
+	uint32_t  tx_refusals;
 };
 
 /* One queued send in Credit Wait. The pool is BOUND by the glue, so the FSM
@@ -737,6 +774,22 @@ int scs_fsm_disconnect(struct scs_fsm *f, vms_conid_t local_conid);
  * pool is bound, else SCS_ERR_NOCREDIT. */
 int scs_fsm_send_msg(struct scs_fsm *f, vms_conid_t local_conid,
 		     const uint8_t *body, uint32_t len);
+
+/*
+ * WHY THE LAST SEND ON `local_conid` WAS REFUSED (E70). Fills `*out_err` with
+ * the CDT's `tx_last_err` -- this FSM's own `enum scs_err`, not the
+ * many-to-one SS$_ status the glue answers with -- and `*out_port_rc` with the
+ * injected send op's verbatim refusal when the refusal came from below this
+ * layer (0 otherwise). Either pointer may be NULL.
+ *
+ * Returns SCS_OK when the CDT exists (even if it has refused nothing: both
+ * values are then 0, which reads as "nothing refused" and not as a refusal),
+ * and SCS_ERR_NOCONN when the Con.ID names no live CDT -- which is itself the
+ * answer to "why was the send refused" in that case, and the reason this
+ * refuses rather than zero-filling (INV-6).
+ */
+int scs_fsm_send_refusal(struct scs_fsm *f, vms_conid_t local_conid,
+			 int32_t *out_err, int32_t *out_port_rc);
 
 /* The local SYSAP has finished with `n` received buffers: they move from
  * `held` to `pending` and go out on the next message, or immediately in a

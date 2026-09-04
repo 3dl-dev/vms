@@ -286,6 +286,43 @@ int scs_disconnect(struct vms_scs *scs, vms_conid_t local_conid, uint32_t reason
 int scs_send_msg(struct vms_scs *scs, vms_conid_t local_conid,
 		 const uint8_t *body, uint32_t len);
 
+/*
+ * WHY THE LAST SEND ON THIS CONNECTION WAS REFUSED (integration note E70).
+ *
+ * scs_send_msg() answers an SS$_ status, and that map is MANY-TO-ONE by
+ * necessity: this tree cannot cite OpenVMS's SS$_INCONSTATE / SS$_PATHLOST /
+ * SS$_NOSUCHNODE and Rule 8 forbids inventing them, so "the CDT is not OPEN",
+ * "the path was lost" and "no route to that system" all answer SS$_DEVOFFLINE,
+ * and EVERY transport refusal answers SS$_ABORT. A SYSAP that is told
+ * SS$_ABORT therefore cannot tell an exhausted port send-window from a
+ * refusing interface -- which is exactly the wall E70 hit, with three
+ * VMS$VAXcluster promotion messages refused on a live cluster and no record of
+ * which of five possible refusals fired.
+ *
+ * This reports the two codes the EXECUTIVE really produced for the most recent
+ * refused send on `local_conid`, both read off the CDT it holds right now:
+ *
+ *   *out_err      this SCS layer's own `enum scs_err` (vms_scs_fsm.h SS2), 0
+ *                 when no send on this connection has ever been refused.
+ *   *out_port_rc  the PORT's own return for that send, verbatim, when the
+ *                 refusal was SCS_ERR_TXFAIL -- i.e. when the frame was
+ *                 refused BELOW this layer. 0 whenever the port was not the
+ *                 refuser; that is an honest "not applicable", never a claim
+ *                 that the port accepted anything.
+ *
+ * Either pointer may be NULL. Returns SS$_NORMAL when the executive holds that
+ * CDT, SS$_NOSUCHDEV when SCS is not up, and SS$_BADPARAM when the Con.ID
+ * names no live CDT (scs_glue_status()'s reading of SCS_ERR_NOCONN) -- which
+ * is itself the reason the send was refused in that case, and the reason this
+ * refuses rather than zero-filling (INV-6).
+ *
+ * FOR DIAGNOSTICS ONLY. Nothing in the executive branches on these values and
+ * no byte of them reaches the wire. Called from the cluster fork context, like
+ * every other service in SS5 -- it takes no fork mutex.
+ */
+int scs_send_refusal(struct vms_scs *scs, vms_conid_t local_conid,
+		     int32_t *out_err, int32_t *out_port_rc);
+
 /* Return `n` credits the local SYSAP has finished with. */
 int scs_return_credit(struct vms_scs *scs, vms_conid_t local_conid, uint16_t n);
 

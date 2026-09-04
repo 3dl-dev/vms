@@ -94,6 +94,10 @@ struct bed {
 
 	int      fail_connect;
 	int      fail_send;
+	/* WHAT the injected SCS answers when `fail_send` fires. 0 keeps the
+	 * historic -1; E70 needs a real refusal code, because the executive
+	 * returns one and the ring has to carry it. */
+	int      fail_send_rc;
 	uint64_t vms_time;
 };
 
@@ -137,7 +141,7 @@ static int bed_send_msg(void *ctx, vms_conid_t conid, const uint8_t *body,
 {
 	(void)ctx;
 	if (g.fail_send)
-		return -1;
+		return g.fail_send_rc != 0 ? g.fail_send_rc : -1;
 	if (g.n_sent < MAX_SENT) {
 		memset(g.sent[g.n_sent].body, 0, VMS_CM_BODY_LEN);
 		memcpy(g.sent[g.n_sent].body, body,
@@ -1723,6 +1727,121 @@ static void test_vaxcluster_refusal_is_still_terminal(void)
 	ct_check_eq_u32(g.j.ignored_events, 1u, "... and counted");
 }
 
+/*
+ * E70 -- A REFUSED BURST IS RE-OFFERED ON THE JOIN'S OWN BEAT.
+ *
+ * THE LIVE WALL (join-e69, 2026-09-04). The member dialled first, this node
+ * adopted its connection, the drive reached step 5 and built all three
+ * originations -- and SCS refused every one of them. The join then sat waiting
+ * for an answer to messages that had never left the node until the circuit
+ * died under it. Nothing on the wire could show it: the frames did not exist.
+ *
+ * p. 2-51's rule is the one this FSM already applies to the directory round --
+ * the poller REPEATS -- and it is what makes a transient refusal (a spent port
+ * send window, a full unacked ring) survivable. The two halves asserted here:
+ * a message that was REFUSED is offered again, and a message that really WENT
+ * is never offered twice.
+ */
+static void test_a_refused_burst_is_reoffered(void)
+{
+	printf("\n-- E70: SCS refused the burst; the watchdog re-offers it "
+	       "--\n");
+	bed_init();
+	bed_set_identity();
+	g.fail_send = 1;
+	g.fail_send_rc = 2692;   /* the executive's own "cannot carry this" */
+
+	drive_to_admit_member_dialled();
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"the drive reached admission (the live shape)");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 0u,
+			"but NOTHING left the node: SCS refused every send");
+	/* Three CM originations plus the four MSCP disk-walk commands this bed
+	 * drives -- every send this join made was refused. */
+	ct_check_eq_u32(g.j.send_failures, 7u,
+			"MODEL, PARAMS and CONFIG were each refused (with the "
+			"walk's four commands)");
+	ct_check_eq_u32(g.j.model_sent + g.j.params_sent + g.j.config_sent, 0u,
+			"... so not one of them counts as sent");
+	ct_check(g.j.state != CNXMAN_JOIN_FAILED,
+		 "a refused send does not fail the join");
+
+	/* The refusal clears -- a port window that filled and drained again,
+	 * which is what several of SCS's refusals really are. */
+	g.fail_send = 0;
+	cnxman_join_timer(&g.j);
+
+	ct_check_eq_u32(g.j.burst_reoffers, 1u,
+			"the watchdog re-offered the burst exactly once");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 3u,
+			"and all three originations reached SCS this time");
+	ct_check(sent_on_is(ACC_CM_CONID, 0, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_MODEL),
+		 "in the measured order: cat 0x01 op 0x14 first (sec 4(o) "
+		 "row 1)");
+	ct_check(sent_on_is(ACC_CM_CONID, 1, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_PARAMS),
+		 "... then op 0x01 (row 2)");
+	ct_check(sent_on_is(ACC_CM_CONID, 2, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_CONFIG),
+		 "... then op 0x02, which is due because the disk walk "
+		 "finished (row 6)");
+	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, 0, 0u), 4u,
+			"a re-offer is a NEW origination with its own "
+			"send-msg#: the refused ones burned 1..3, so this is "
+			"4 -- a gap, never a repeat (spec sec 4(j))");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"and the join is still in ADMIT, driving");
+
+	/* NOTHING IS SENT TWICE. A second tick has nothing left to re-offer. */
+	cnxman_join_timer(&g.j);
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 3u,
+			"a message that really went is never offered again");
+	ct_check_eq_u32(g.j.burst_reoffers, 1u,
+			"... and the re-offer counter does not move");
+}
+
+/*
+ * The other half of the same rule: while the refusal PERSISTS the join keeps
+ * offering (it never gives up on its own -- p. 2-51: nothing expires), and
+ * with no VMS$VAXcluster connection it offers nothing at all, because there is
+ * no connection to originate on.
+ */
+static void test_reoffer_is_bounded_by_the_connection(void)
+{
+	printf("\n-- E70: re-offering needs an open connection, and repeats "
+	       "--\n");
+	bed_init();
+	bed_set_identity();
+	g.fail_send = 1;
+	drive_to_admit_member_dialled();
+
+	cnxman_join_timer(&g.j);
+	cnxman_join_timer(&g.j);
+	ct_check_eq_u32(g.j.burst_reoffers, 2u,
+			"a persistent refusal is re-offered on every beat");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 0u,
+			"... and still nothing goes, honestly");
+	ct_check(g.j.send_failures > 3u, "every attempt is counted");
+
+	/* The connection goes: the join fails on the close, and a watchdog
+	 * that fired instead would have nothing to offer. */
+	bed_init();
+	bed_set_identity();
+	g.fail_send = 1;
+	drive_to_admit_member_dialled();
+	g.j.cm_open = 0u;   /* what cnxman_join_closed() sets on a lost CM */
+	{
+		uint32_t before = g.j.send_failures;
+
+		cnxman_join_timer(&g.j);
+		ct_check_eq_u32(g.j.burst_reoffers, 0u,
+				"with no open connection nothing is re-offered");
+		ct_check_eq_u32(g.j.send_failures, before,
+				"... and no send is even attempted");
+	}
+}
+
 static void test_adoption_refuses_what_it_does_not_own(void)
 {
 	printf("\n-- E67 negative controls: what is NOT adopted --\n");
@@ -1793,6 +1912,8 @@ int main(void)
 	test_unowned_frame_is_not_mine();
 	test_member_dialled_connection_still_promotes();
 	test_member_dialled_reaches_the_barrier();
+	test_a_refused_burst_is_reoffered();
+	test_reoffer_is_bounded_by_the_connection();
 	test_adoption_refuses_what_it_does_not_own();
 	test_disk_client_refusal_does_not_stop_the_join();
 	test_disk_client_loss_does_not_stop_the_join();

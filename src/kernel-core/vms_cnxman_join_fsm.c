@@ -1312,6 +1312,81 @@ static enum cnxman_join_rx join_h_watch(struct cnxman_join *j,
 	return CNXMAN_JOIN_RX_CONSUMED;
 }
 
+/*
+ * THE WATCHDOG IN [ADVERTISE] AND [ADMIT] -- p. 2-51's "the poller REPEATS",
+ * applied to the promotion burst exactly as join_h_watch_lookup() already
+ * applies it to the directory round (E70).
+ *
+ * WHY IT IS NEEDED. The three originations of sec 4(o) are made ONCE, on the
+ * instant the drive reaches step 5, and a message SCS REFUSES there is gone:
+ * this FSM counted the refusal and then waited for a reply to a message that
+ * never left the node, until the connection died under it. That is what
+ * happened on the live cluster join-e69 (2026-09-04) -- MODEL, PARAMS and
+ * CONFIG were all built, all three were refused by SCS, and the join sat in
+ * ADMIT until the circuit was lost. Several of the refusals SCS can make there
+ * are TRANSIENT by nature (a spent port send window, a full unacked ring), and
+ * the joiner that re-offers on its own beat rides them out; the joiner that
+ * originates once cannot.
+ *
+ * WHAT IT MAY AND MAY NOT RE-OFFER. ONLY a message this node never
+ * transmitted. `model_sent`/`params_sent`/`config_sent` are incremented in
+ * join_send_*() ONLY when join_emit_cm() returned 0, i.e. only when SCS took
+ * the body -- so a zero here is the executive's own record that the message
+ * did not go, and a message that DID go is never sent twice. Each re-offer is
+ * a fresh origination with its own send-msg# (join_emit_cm advances the CSB's
+ * dialogue counter), which is what spec sec 4(j)'s strictly-monotonic-per-
+ * sender rule requires; nothing is retransmitted.
+ *
+ * It re-offers nothing at all while the VMS$VAXcluster connection is not open:
+ * with no connection there is no origination to make, and join_emit_cm()'s own
+ * gate would refuse it anyway.
+ */
+static void join_reoffer_burst(struct cnxman_join *j)
+{
+	uint8_t state = j->state;
+	int offered = 0;
+
+	if (!j->cm_open)
+		return;
+	if (state != (uint8_t)CNXMAN_JOIN_ADVERTISE &&
+	    state != (uint8_t)CNXMAN_JOIN_ADMIT)
+		return;
+
+	/* IN THE ORDER sec 4(o) MEASURED, and only what is DUE in this state:
+	 * rows 1-2 are due from ADVERTISE on, row 6's op-0x02 only once the
+	 * disk walk finished -- which is what reaching ADMIT means. So a join
+	 * that had its MODEL refused and has since walked the member's disks
+	 * still re-offers the MODEL first: an op-0x02 from a node that never
+	 * managed to say what it IS advertises nothing. */
+	if (j->model_sent == 0u) {
+		join_send_model(j);
+		offered = 1;
+	}
+	if (j->state == state && j->params_sent == 0u) {
+		join_send_params(j);
+		offered = 1;
+	}
+	if (j->state == state && state == (uint8_t)CNXMAN_JOIN_ADMIT &&
+	    j->config_sent == 0u) {
+		join_send_config(j);
+		offered = 1;
+	}
+
+	/* ATTEMPTS, not successes: whether a re-offer got through is what
+	 * model_sent/params_sent/config_sent say, and a counter that rose only
+	 * on success would report a join stuck against a permanent refusal as
+	 * a join that was never re-offered. */
+	if (offered)
+		j->burst_reoffers++;
+}
+
+static enum cnxman_join_rx join_h_watch_burst(struct cnxman_join *j,
+					      const struct join_ev *e)
+{
+	join_reoffer_burst(j);
+	return join_h_watch(j, e);
+}
+
 /* ==========================================================================
  * The table. [state][event]; NULL = the evidence does not connect that event
  * to that state, so it is ignored and COUNTED rather than guessed.
@@ -1371,7 +1446,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 		[CNXMAN_EV_RX_TR_GO]     = join_h_go,
 		[CNXMAN_EV_RX_REBUILD]   = join_forward,
 		[CNXMAN_EV_CDT_CLOSED]   = join_h_closed,
-		[CNXMAN_EV_TIMER_JOIN]   = join_h_watch,
+		[CNXMAN_EV_TIMER_JOIN]   = join_h_watch_burst,
 	},
 
 	/* [ADMIT] op-0x02 is out; the member drives (sec 4(o) rows 5-10). */
@@ -1386,7 +1461,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 		[CNXMAN_EV_RX_REBUILD]   = join_forward,
 		[CNXMAN_EV_CSID_LEARNED] = join_h_csid_learned,
 		[CNXMAN_EV_CDT_CLOSED]   = join_h_closed,
-		[CNXMAN_EV_TIMER_JOIN]   = join_h_watch,
+		[CNXMAN_EV_TIMER_JOIN]   = join_h_watch_burst,
 	},
 
 	/*

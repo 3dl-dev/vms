@@ -949,6 +949,15 @@ int scs_send_msg(struct vms_scs *scs, vms_conid_t local_conid,
 						     body, len));
 }
 
+int scs_send_refusal(struct vms_scs *scs, vms_conid_t local_conid,
+		     int32_t *out_err, int32_t *out_port_rc)
+{
+	if (scs == (struct vms_scs *)0)
+		return SS__NOSUCHDEV;
+	return (int)scs_glue_status(scs_fsm_send_refusal(&scs->fsm, local_conid,
+							 out_err, out_port_rc));
+}
+
 int scs_return_credit(struct vms_scs *scs, vms_conid_t local_conid, uint16_t n)
 {
 	if (scs == (struct vms_scs *)0)

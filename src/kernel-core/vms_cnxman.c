@@ -315,7 +315,21 @@ static struct vms_csb *csb_ensure(struct vms_club *club, vms_scs_sysid_t sysid)
  */
 static int cnxman_fsm_rc(int status)
 {
-	return status == (int)SS__NORMAL ? 0 : -1;
+	/*
+	 * E70: the REFUSAL IS RETURNED, not flattened to -1. The contract every
+	 * pure cluster FSM states (vms_cnxman.h, vms_cnxman_join_fsm.h SS4:
+	 * "the production thunks return the executive's SS$_ status through
+	 * cnxman_fsm_rc()") is "0 accepted, NONZERO refused" -- it never said
+	 * "-1", and returning -1 threw away the only fact a diagnostic has to
+	 * work with. On a live VAX cluster (join-e69, 2026-09-04) three
+	 * VMS$VAXcluster promotion messages were refused on an adopted
+	 * connection and the E69 ring could only report "rc=-1" for all three,
+	 * which is consistent with five different defects. Every consumer
+	 * tests `== 0` / `!= 0` (grepped across the join, barrier, coordinator
+	 * and CSB ladder at review time), so the status passes through
+	 * unchanged and the ring records what the executive actually said.
+	 */
+	return status == (int)SS__NORMAL ? 0 : status;
 }
 
 /*
@@ -483,14 +497,40 @@ static int cnxman_jop_connect(void *ctx, vms_scs_sysid_t dst,
 	return 0;
 }
 
+/*
+ * WHY SCS REFUSED (E70), recorded from the executive's own two codes.
+ *
+ * The status the caller is handed is many-to-one by necessity (vms_scs.h SS5),
+ * so on a refusal this glue asks SCS what it actually decided and records that
+ * -- the SCS layer's `enum scs_err` and, when the frame was refused BELOW SCS,
+ * the port's verbatim return. Both are reads of the live CDT (INV-6): nothing
+ * is inferred from the status, and a connection SCS no longer holds records
+ * nothing rather than a plausible reason.
+ */
+static void cnxman_note_send_refusal(struct vms_cnxman *cn, vms_conid_t conid)
+{
+	int32_t scs_err = 0;
+	int32_t port_rc = 0;
+
+	if (scs_send_refusal(cn->cl->scs, conid, &scs_err, &port_rc) !=
+	    (int)SS__NORMAL)
+		return;
+	cnxman_diag_note(cn, CNXMAN_DIAG_R_SEND_REFUSED, scs_err,
+			 (uint32_t)port_rc);
+}
+
 static int cnxman_jop_send_msg(void *ctx, vms_conid_t conid,
 			       const uint8_t *body, uint32_t len)
 {
 	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
+	int rc;
 
 	if (cn->cl->scs == NULL)
 		return -1;
-	return cnxman_fsm_rc(scs_send_msg(cn->cl->scs, conid, body, len));
+	rc = cnxman_fsm_rc(scs_send_msg(cn->cl->scs, conid, body, len));
+	if (rc != 0)
+		cnxman_note_send_refusal(cn, conid);
+	return rc;
 }
 
 static int cnxman_jop_disconnect(void *ctx, vms_conid_t conid)

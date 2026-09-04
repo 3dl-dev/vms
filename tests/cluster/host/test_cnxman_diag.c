@@ -421,6 +421,7 @@ struct jbed {
 	struct cnxman_join     j;
 	struct cnxman_diag_ring ring;
 	int                    fail_send;
+	int                    fail_send_rc;   /* the refusal, verbatim (E70) */
 };
 
 static struct jbed g_b;
@@ -446,7 +447,12 @@ static int jb_send_msg(void *ctx, vms_conid_t conid, const uint8_t *body,
 		       uint32_t len)
 {
 	(void)ctx; (void)conid; (void)body; (void)len;
-	return g_b.fail_send ? -1 : 0;
+	/* A REAL refusal code, not a bare -1: E70's whole point is that the
+	 * ring must carry what the executive actually answered. 0 selects the
+	 * historic -1 so every other test in this file is unchanged. */
+	if (!g_b.fail_send)
+		return 0;
+	return g_b.fail_send_rc != 0 ? g_b.fail_send_rc : -1;
 }
 
 static uint64_t jb_time_now(void *ctx)
@@ -614,13 +620,18 @@ static void test_a_refused_send_names_its_gate(void)
 	printf("\n-- a message that did NOT go out says why (the E69 case) --\n");
 	jbed_init(1);
 	g_b.fail_send = 1;
+	g_b.fail_send_rc = 2692;   /* what the executive answers for a
+				    * connection that cannot carry traffic */
 	jbed_drive();
 
 	ct_check(find_emit(VMS_CM_OP_MODEL, &rec),
 		 "the MODEL attempt is recorded even though it never went");
 	ct_check_eq_u32(rec.detail, (uint32_t)CNXMAN_DIAG_G_REFUSED,
 			"... with the gate scs-refused");
-	ct_check(rec.rc == -1, "... and SCS's OWN return code");
+	ct_check(rec.rc == 2692,
+		 "... and SCS's OWN return code, VERBATIM -- E70: a flattened "
+		 "-1 here fits five different defects and diagnosed none of "
+		 "them on the live cluster");
 	/* MODEL, PARAMS and -- because this member serves no disks, so the
 	 * discovery walk is complete on arrival -- the op-0x02 CONFIG too. */
 	ct_check_eq_u32(g_b.j.send_failures, 3u,

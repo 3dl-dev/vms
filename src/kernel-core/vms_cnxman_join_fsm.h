@@ -504,6 +504,16 @@ struct cnxman_join {
 	uint32_t model_sent;
 	uint32_t params_sent;
 	uint32_t config_sent;
+	/*
+	 * Watchdog passes in ADVERTISE/ADMIT that RE-OFFERED at least one
+	 * origination of the sec 4(o) burst because SCS had refused it and it
+	 * therefore never left this node -- p. 2-51's "the poller REPEATS",
+	 * the same recovery `lookups_reissued` counts for the directory round
+	 * (E70). ATTEMPTS, not successes: whether a re-offer got through is
+	 * what the three counters above say. A message that was really
+	 * transmitted is never re-offered, so this can never double-send.
+	 */
+	uint32_t burst_reoffers;
 	uint32_t echoes_sent;        /* 0x81 answers to op-0x03 / op-0x05     */
 	uint32_t acks_sent;          /* cat-0x04 answers to op-0x06           */
 	uint32_t closes_answered;    /* cat-0x06 close, own parameter block   */

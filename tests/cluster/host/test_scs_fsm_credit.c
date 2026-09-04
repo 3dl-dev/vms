@@ -225,6 +225,113 @@ static void t_credit_wait(void)
 }
 
 /* ------------------------------------------------------------------ *
+ * 3b. WHY A SEND WAS REFUSED, kept by the executive (E70)
+ *
+ * THE WALL THIS LOCKS. On a live 2-node VAX cluster the three
+ * VMS$VAXcluster promotion messages were refused and every layer above SCS
+ * could see was a single flattened code -- consistent with five different
+ * defects, so the run diagnosed nothing. scs_fsm_send_refusal() reports what
+ * the executive really decided, and this asserts the three facts that make
+ * that report usable:
+ *
+ *   1. CREDIT WAIT IS NOT A REFUSAL. A creditless send with a pool bound is
+ *      ACCEPTED, and records no refusal at all. This is the elimination that
+ *      ruled the SCS credit ledger OUT as the cause of that wall: had it been
+ *      the cause, the ring would have said SENT, not refused.
+ *   2. A PORT REFUSAL is recorded as SCS_ERR_TXFAIL WITH the port's own
+ *      return, verbatim -- the fact scs_glue_status() cannot carry, since
+ *      every transport refusal maps to one SS$_ status.
+ *   3. A NOT-OPEN CDT is recorded as SCS_ERR_NOTOPEN with NO port code: the
+ *      port was never asked, and saying otherwise would invent a refusal.
+ * ------------------------------------------------------------------ */
+static void t_a_refused_send_names_its_own_reason(void)
+{
+	vms_conid_t a_conid, b_conid;
+	struct scs_cdt *ca;
+	int32_t err = 0x5a5a5a5a, port = 0x5a5a5a5a;
+
+	printf("-- a refused send: the executive keeps WHY, verbatim (E70)\n");
+
+	/* 1. Credit Wait is an acceptance, and leaves no refusal behind. */
+	rig(&a_conid, &b_conid, 6u, 1u);
+	b_sysap.return_credit_immediately = 0u;
+	ct_check(step_send(&a_node, a_conid, 1u) == SCS_OK, "the first goes");
+	(void)scsh_pump();
+	ct_check(step_send(&a_node, a_conid, 2u) == SCS_OK,
+		 "a creditless send is ACCEPTED into Credit Wait");
+	ct_check(scs_fsm_send_refusal(&a_node.fsm, a_conid, &err, &port) ==
+		 SCS_OK, "the refusal readback answers for a live CDT");
+	ct_check_eq_u32((uint32_t)err, (uint32_t)SCS_OK,
+			"... and reports NO refusal: a held message is not a "
+			"refused one (the E70 elimination)");
+	ct_check_eq_u32((uint32_t)port, 0u, "... and no port refusal either");
+	ct_check_eq_u32(scsh_cdt(&a_node, a_conid)->tx_refusals, 0u,
+			"the CDT counted no refusal");
+
+	/* 2. The PORT refuses: SCS_ERR_TXFAIL plus the port's OWN code. */
+	rig(&a_conid, &b_conid, 6u, 10u);
+	a_node.fail_msg = 1;
+	a_node.fail_msg_rc = 2692;   /* a distinctive port answer */
+	ct_check(step_send(&a_node, a_conid, 3u) == SCS_ERR_TXFAIL,
+		 "the port refused the frame, so the send is refused");
+	ct_check(scs_fsm_send_refusal(&a_node.fsm, a_conid, &err, &port) ==
+		 SCS_OK, "the readback answers");
+	ct_check_eq_u32((uint32_t)err, (uint32_t)SCS_ERR_TXFAIL,
+			"SCS's own reason is TXFAIL -- refused BELOW this "
+			"layer");
+	ct_check_eq_u32((uint32_t)port, 2692u,
+			"and the PORT's own return is kept VERBATIM, which no "
+			"SS$_ mapping above could have carried");
+	ca = scsh_cdt(&a_node, a_conid);
+	ct_check_eq_u32(ca->tx_refusals, 1u, "the CDT counted exactly one");
+
+	/* 3. NOT OPEN: the connect verbs are still walking, so the port is
+	 * never asked and no port code is invented. This is the shape E70's
+	 * first hypothesis named -- a SYSAP originating on a connection that
+	 * has not reached OPEN. */
+	{
+		struct scs_connect_args args;
+		uint8_t *p = (uint8_t *)&args;
+		uint32_t k;
+
+		rig(&a_conid, &b_conid, 6u, 10u);
+		for (k = 0; k < (uint32_t)sizeof(args); k++)
+			p[k] = 0u;
+		args.local_name = scsh_name_a;
+		args.remote_name = scsh_name_b;
+		args.sysap = &a_sysap.ops;
+		args.dst = b_node.sysid;
+		args.initial_credits = 6u;
+		ct_check(scs_fsm_connect(&a_node.fsm, &args, &a_conid) == SCS_OK,
+			 "A issues a SECOND connect and holds its Con.ID at once");
+		ca = scsh_cdt(&a_node, a_conid);
+		ct_check(ca != (struct scs_cdt *)0 &&
+			 ca->state != (uint8_t)VMS_SCS_CDT_OPEN,
+			 "... on a CDT that has NOT reached OPEN");
+		ct_check(step_send(&a_node, a_conid, 4u) == SCS_ERR_NOTOPEN,
+			 "a send on it is refused NOTOPEN");
+		ct_check(scs_fsm_send_refusal(&a_node.fsm, a_conid, &err,
+					      &port) == SCS_OK,
+			 "the readback answers");
+		ct_check_eq_u32((uint32_t)err, (uint32_t)SCS_ERR_NOTOPEN,
+				"... naming the CDT state, not a transport "
+				"failure");
+		ct_check_eq_u32((uint32_t)port, 0u,
+				"... with no port code: the port was never "
+				"asked");
+	}
+
+	/* A Con.ID the executive does not hold is REFUSED, not zero-filled --
+	 * INV-6: "no such connection" is itself the answer. */
+	err = 0x5a5a5a5a;
+	ct_check(scs_fsm_send_refusal(&a_node.fsm, 0xdeadbeefu, &err, &port) ==
+		 SCS_ERR_NOCONN,
+		 "an unheld Con.ID is refused, never answered with zeros");
+	ct_check_eq_u32((uint32_t)err, 0x5a5a5a5au,
+			"... and the caller's buffer is left untouched");
+}
+
+/* ------------------------------------------------------------------ *
  * 4. THE 8-BEFORE-DISCONNECT INVARIANT (spec SS4(h)(1f))
  * ------------------------------------------------------------------ */
 static void t_eight_before_disconnect(void)
@@ -409,6 +516,7 @@ int main(void)
 	t_grant_is_a_ledger_read();
 	t_conservation_property();
 	t_credit_wait();
+	t_a_refused_send_names_its_own_reason();
 	t_eight_before_disconnect();
 	t_no_eight_when_answering();
 	t_flowcush_trigger();

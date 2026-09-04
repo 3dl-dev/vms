@@ -521,13 +521,30 @@ static void test_glue_bindings(void)
 	check_has("static int cnxman_fsm_rc(int status)",
 		  "E67: the SS$_ -> 0/nonzero translation is a NAMED function, "
 		  "so a new thunk has something to call");
-	check_has("return status == (int)SS__NORMAL ? 0 : -1;",
-		  "... and it translates SS$_NORMAL (which is 1) to 0");
+	check_has("return status == (int)SS__NORMAL ? 0 : status;",
+		  "... it translates SS$_NORMAL (which is 1) to 0, and (E70) "
+		  "RETURNS the refusal instead of flattening it to -1");
 	check_has("return cnxman_fsm_rc(scs_dir_lookup(",
 		  "E67: dir_inquire translates (the thunk whose untranslated "
 		  "SS$_NORMAL failed the join at step 2)");
-	check_has("return cnxman_fsm_rc(scs_send_msg(cn->cl->scs, conid, body, len));",
+	check_has("rc = cnxman_fsm_rc(scs_send_msg(cn->cl->scs, conid, body, len));",
 		  "E67: the join's send_msg translates");
+	/*
+	 * E70 -- the OTHER half of the same wall. Three promotion messages
+	 * were refused on a live cluster and the ring could only say "rc=-1",
+	 * which fits five different defects. The thunk must ask SCS what it
+	 * actually decided and record it, or the next re-fire is as blind as
+	 * this one was.
+	 */
+	check_has("cnxman_note_send_refusal(cn, conid);",
+		  "E70: a refused send asks SCS for its OWN reason and records "
+		  "it, so the ring is not left with a flattened rc");
+	check_has("scs_send_refusal(cn->cl->scs, conid, &scs_err, &port_rc)",
+		  "E70: ... and that reason is READ from the executive's live "
+		  "CDT, never inferred from the status");
+	check_has("cnxman_diag_note(cn, CNXMAN_DIAG_R_SEND_REFUSED, scs_err,",
+		  "E70: the SCS refusal code and the PORT's own refusal reach "
+		  "the E69 ring as the two facts they are");
 	check_has("return cnxman_fsm_rc(scs_disconnect(",
 		  "E67: disconnect translates");
 	check_has("return cnxman_fsm_rc(status);   /* E67: the ops contract is 0/nonzero */",

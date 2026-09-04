@@ -18,6 +18,9 @@
 
 #include "vms_cnxman_diag.h"
 #include "vms_cnxman_join_fsm.h"   /* enum cnxman_join_rx, for rx_name only */
+#include "vms_pe_fsm.h"            /* E70: enum pe_vc_send_status + the port's
+				    * refusal readback, for the two mappers in
+				    * SS8b -- vocabulary only, no port call */
 
 /* This TU calls no library: a pure TU builds on the host too, where the
  * substrate's memset is not in scope. */
@@ -249,6 +252,12 @@ const char *cnxman_diag_reason_name(uint8_t reason)
 	case CNXMAN_DIAG_R_CM_ACCEPT:  return "cm-accept";
 	case CNXMAN_DIAG_R_CDT_CLOSED: return "cdt-closed";
 	case CNXMAN_DIAG_R_SEND_REFUSED: return "send-refused";
+	case CNXMAN_DIAG_R_PORT_NOCIRCUIT: return "port-nocircuit";
+	case CNXMAN_DIAG_R_PORT_NOCREDIT:  return "port-nocredit";
+	case CNXMAN_DIAG_R_PORT_RINGFULL:  return "port-ringfull";
+	case CNXMAN_DIAG_R_PORT_BADFRAME:  return "port-badframe";
+	case CNXMAN_DIAG_R_PORT_TXFAIL:    return "port-txfail";
+	case CNXMAN_DIAG_R_CDT_NOT_SENDABLE: return "cdt-not-sendable";
 	default:                       return "?";
 	}
 }
@@ -305,5 +314,59 @@ const char *cnxman_diag_event_name(uint8_t event)
 	case CNXMAN_EV_CM_ACCEPTED:    return "CM_ACCEPTED";
 	case CNXMAN_DIAG_EV_NONE:      return "-";
 	default:                       return "?";
+	}
+}
+
+/* ==========================================================================
+ * 8b. The PORT's refusal, in this ring's vocabulary (E70)
+ *
+ * WHY IT LIVES HERE and not in the connection manager's glue: it is a mapping
+ * between two VOCABULARIES -- the port's `enum pe_vc_send_status` and this
+ * ring's `enum cnxman_diag_reason` -- and this TU is the one that owns the
+ * second of them. Keeping it here also makes it a PURE function the R1 tests
+ * drive directly, instead of a branch that only a booted node could exercise;
+ * the glue that calls it is not host-linkable, and "the trace named the wrong
+ * cause" is precisely the defect that must not wait for a lab run to surface.
+ *
+ * Nothing here reads the port. It is handed a readback the caller already
+ * took, and it decides only which NAME and which single live number the
+ * record carries.
+ * ========================================================================== */
+
+enum cnxman_diag_reason cnxman_diag_port_reason(int32_t code)
+{
+	switch (code) {
+	case PE_VC_SEND_NOCIRCUIT: return CNXMAN_DIAG_R_PORT_NOCIRCUIT;
+	case PE_VC_SEND_NOCREDIT:  return CNXMAN_DIAG_R_PORT_NOCREDIT;
+	case PE_VC_SEND_RINGFULL:  return CNXMAN_DIAG_R_PORT_RINGFULL;
+	/* Two port codes, one cause as a reader meets it: the port was handed
+	 * something it cannot put on this circuit. `rc` still carries WHICH of
+	 * the two it was, verbatim, so nothing is lost by naming them alike. */
+	case PE_VC_SEND_BADFRAME:  return CNXMAN_DIAG_R_PORT_BADFRAME;
+	case PE_VC_SEND_TOOBIG:    return CNXMAN_DIAG_R_PORT_BADFRAME;
+	/* Including PE_VC_SEND_TXFAIL, and including a code this vocabulary
+	 * has not grown yet: an unknown refusal is recorded as the honest
+	 * catch-all WITH its real number in `rc`, never dropped and never
+	 * assigned a neighbour's name. */
+	default:                   return CNXMAN_DIAG_R_PORT_TXFAIL;
+	}
+}
+
+uint32_t cnxman_diag_port_aux(const struct pe_vc_send_refusal *p)
+{
+	if (p == (const struct pe_vc_send_refusal *)0)
+		return 0u;
+	switch (p->code) {
+	case PE_VC_SEND_NOCIRCUIT:
+		/* The circuit's LIVE state -- or the fact that the port holds
+		 * no circuit object for that system at all, which is a
+		 * stronger answer than any state and is reported as itself. */
+		return p->vc_present ? (uint32_t)p->vc_state
+				     : CNXMAN_DIAG_NO_VC;
+	case PE_VC_SEND_NOCREDIT: return p->send_refused_credit;
+	case PE_VC_SEND_RINGFULL: return p->send_refused_ring;
+	/* The port keeps no count of unsendable frames or interface failures,
+	 * and inventing one would be worse than an explicit zero. */
+	default:                  return 0u;
 	}
 }

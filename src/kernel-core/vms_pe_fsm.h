@@ -625,7 +625,27 @@ struct pe_vc {
 	uint32_t send_refused_credit;     /* refused: no send credit         */
 	uint32_t send_refused_ring;       /* refused: ring full              */
 	uint8_t  last_down_reason;        /* enum pe_vc_down_reason, 0 = none */
-	uint8_t  pad4[3];
+	/*
+	 * THE MOST RECENT REFUSED SEND ON THIS CIRCUIT (integration note E70),
+	 * as `enum pe_vc_send_status`, VERBATIM. PE_VC_SEND_OK (0) means this
+	 * circuit has refused nothing.
+	 *
+	 * WHY THE PORT HAS TO KEEP IT. Everything above the port sees the
+	 * SS$_ status pe_send_status() maps this to, and that map is
+	 * many-to-one on purpose: NOCIRCUIT and RINGFULL both answer
+	 * SS$_DEVOFFLINE, BADFRAME and TOOBIG both answer SS$_BADPARAM. On a
+	 * live cluster those are completely different defects -- "there is no
+	 * circuit to that system right now" versus "the unacked ring is full",
+	 * versus "the frame this port was handed is unsendable" -- and the
+	 * caller cannot tell them apart from the status. Rule 8 forbids
+	 * inventing the SS$_ values OpenVMS uses for them, so the port keeps
+	 * its own answer instead of fabricating a status to carry it.
+	 *
+	 * DIAGNOSTIC ONLY: nothing in this port branches on it and no byte of
+	 * it reaches the wire.
+	 */
+	int8_t   last_send_refusal;
+	uint8_t  pad4[2];
 
 	/* ---- FC-P6.1: the BLOCK TRANSFER service's per-circuit state ----
 	 *
@@ -1495,6 +1515,38 @@ int pe_vc_send_msg_var(struct pe_fsm *f, vms_scs_sysid_t dst,
  */
 int pe_vc_send_dg(struct pe_fsm *f, vms_scs_sysid_t dst,
 		  const uint8_t *body, uint32_t len);
+
+/* ==========================================================================
+ * WHY THE PORT REFUSED THE LAST SEND TO A SYSTEM (integration note E70)
+ *
+ * Everything above the port is told an SS$_ status, and pe_send_status()'s map
+ * is many-to-one because Rule 8 forbids inventing the statuses OpenVMS uses:
+ * NOCIRCUIT and RINGFULL both become SS$_DEVOFFLINE, BADFRAME and TOOBIG both
+ * become SS$_BADPARAM. This reports what the PORT actually decided, plus the
+ * live circuit state that explains it -- every field a read of a real `pe_vc`
+ * this port holds right now, none of it derived (INV-6).
+ *
+ * `vc_present` 0 means there is NO circuit object for that system at all,
+ * which is itself the answer (and then every other field stays 0 rather than
+ * describing a circuit that does not exist).
+ * ========================================================================== */
+struct pe_vc_send_refusal {
+	int32_t  code;                /* enum pe_vc_send_status, verbatim   */
+	uint8_t  vc_present;          /* 0 = no circuit object at all       */
+	uint8_t  vc_state;            /* enum vms_pe_vc_state, LIVE         */
+	uint8_t  send_credit;         /* the window LEFT, right now         */
+	uint8_t  send_credit_max;     /* what the PEER granted at formation */
+	uint32_t send_refused_credit; /* sends this circuit refused: credit */
+	uint32_t send_refused_ring;   /* ... and for a full unacked ring    */
+	uint8_t  unacked;             /* entries in the ring right now      */
+	uint8_t  pad0[3];
+};
+
+/* Fill *out for the circuit to `dst`. Returns 0 when the answer is real
+ * (including the "no circuit object" answer, which sets vc_present = 0), and
+ * -1 only when `f`/`out` is NULL. */
+int pe_vc_send_refusal_get(struct pe_fsm *f, vms_scs_sysid_t dst,
+			   struct pe_vc_send_refusal *out);
 
 /*
  * One circuit's timer beat (PE_TIMER_RETRANSMIT, key = the circuit index).

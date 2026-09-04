@@ -539,12 +539,37 @@ static void test_glue_bindings(void)
 	check_has("cnxman_note_send_refusal(cn, conid);",
 		  "E70: a refused send asks SCS for its OWN reason and records "
 		  "it, so the ring is not left with a flattened rc");
-	check_has("scs_send_refusal(cn->cl->scs, conid, &scs_err, &port_rc)",
+	check_has("scs_send_refusal(cn->cl->scs, conid, &r) != (int)SS__NORMAL",
 		  "E70: ... and that reason is READ from the executive's live "
 		  "CDT, never inferred from the status");
-	check_has("cnxman_diag_note(cn, CNXMAN_DIAG_R_SEND_REFUSED, scs_err,",
+	check_has("cnxman_diag_note(cn, CNXMAN_DIAG_R_SEND_REFUSED, r.err,",
 		  "E70: the SCS refusal code and the PORT's own refusal reach "
 		  "the E69 ring as the two facts they are");
+	/*
+	 * E70, the LAST ambiguity. The port's return is many-to-one too
+	 * (NOCIRCUIT and RINGFULL are both SS$_DEVOFFLINE), so a transport
+	 * refusal must be followed by the PORT's OWN reason, asked of the port
+	 * on the circuit to the peer the refused connection rides -- and a
+	 * refusal that was NOT the port's must record the CDT's own live
+	 * state, which is how a peer's DISCONNECT under an originating SYSAP
+	 * becomes visible.
+	 */
+	check_has("if (r.port_was_refuser)",
+		  "E70: the glue branches on WHICH layer refused, not on a "
+		  "status it would have to interpret");
+	check_has("pe_send_refusal(cn->cl->pe, peer, &p)",
+		  "E70: ... and asks the PORT ITSELF, on the circuit to the "
+		  "peer the CDT rides");
+	check_has("cnxman_diag_port_reason(p.code), p.code,",
+		  "E70: the port's cause reaches the ring as a NAMED reason "
+		  "with its verbatim code, never a packed sub-code");
+	check_has("cnxman_diag_port_aux(&p));",
+		  "E70: ... beside the ONE live number that explains it, "
+		  "mapped by the ring's own (host-tested) vocabulary");
+	check_has("cnxman_diag_note(cn, CNXMAN_DIAG_R_CDT_NOT_SENDABLE,",
+		  "E70: a refusal that was not the port's records the CDT's "
+		  "own live state instead");
+
 	check_has("return cnxman_fsm_rc(scs_disconnect(",
 		  "E67: disconnect translates");
 	check_has("return cnxman_fsm_rc(status);   /* E67: the ops contract is 0/nonzero */",

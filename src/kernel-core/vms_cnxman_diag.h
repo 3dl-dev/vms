@@ -139,8 +139,60 @@ enum cnxman_diag_reason {
 	 * Both are reads of live CDT state, not a diagnosis composed here.
 	 */
 	CNXMAN_DIAG_R_SEND_REFUSED = 13,
+	/*
+	 * ------------------------------------------------------------------
+	 * WHICH refusal it was -- one NAMED reason per cause, never a packed
+	 * sub-code (E70's second half)
+	 * ------------------------------------------------------------------
+	 * The record above carries SCS's own reason and the port's return, and
+	 * for a transport refusal that return is still many-to-one: the port's
+	 * NOCIRCUIT and RINGFULL both map to SS$_DEVOFFLINE, its BADFRAME and
+	 * TOOBIG both to SS$_BADPARAM. "No circuit to that system" and "the
+	 * unacked ring is full" are completely different defects, so the
+	 * transcript must not leave them merged.
+	 *
+	 * They are separate REASONS rather than bits packed into `aux` for two
+	 * reasons. First, this record's own rule (SS3) is that `aux` carries ONE
+	 * fact and is never a composed value -- a bitfield would be exactly the
+	 * composed value that rule forbids, and would need a decoder ring on a
+	 * lab console at 2 a.m. Second, a reason is what the dumper RENDERS, so
+	 * `grep CNXTRACE` shows the word `port-nocredit` with no decoding at
+	 * all.
+	 *
+	 * On each of these `rc` is the PORT's own `enum pe_vc_send_status`,
+	 * verbatim (so the record is self-contained and machine-checkable), and
+	 * `aux` is the ONE live counter or state that explains that cause:
+	 *
+	 *   PORT_NOCIRCUIT  aux = the circuit's LIVE `enum vms_pe_vc_state`, or
+	 *                   CNXMAN_DIAG_NO_VC when the port holds no circuit
+	 *                   object for that system at all
+	 *   PORT_NOCREDIT   aux = pe_vc.send_refused_credit -- how many sends
+	 *                   this circuit has now refused for want of the
+	 *                   PEER'S grant (the grant itself is the port view's)
+	 *   PORT_RINGFULL   aux = pe_vc.send_refused_ring
+	 *   PORT_BADFRAME   aux = 0: the port kept no count of unsendable
+	 *                   frames, and an invented one would be worse
+	 *   PORT_TXFAIL     aux = 0, likewise -- the interface refused it
+	 *
+	 * A refusal that was NOT the port's gets CDT_NOT_SENDABLE instead, with
+	 * `rc` = the connection's LIVE `enum vms_scs_cdt_state` (which is how a
+	 * peer's DISCONNECT that moved the CDT to DISC RCVD under an
+	 * originating SYSAP shows up) and `aux` = its LIVE Send Credit.
+	 */
+	CNXMAN_DIAG_R_PORT_NOCIRCUIT = 14,
+	CNXMAN_DIAG_R_PORT_NOCREDIT  = 15,
+	CNXMAN_DIAG_R_PORT_RINGFULL  = 16,
+	CNXMAN_DIAG_R_PORT_BADFRAME  = 17,
+	CNXMAN_DIAG_R_PORT_TXFAIL    = 18,
+	CNXMAN_DIAG_R_CDT_NOT_SENDABLE = 19,
 	CNXMAN_DIAG_R__COUNT
 };
+
+/* `aux` on a PORT_NOCIRCUIT record when the port holds NO circuit object for
+ * that system: chosen outside `enum vms_pe_vc_state` so it can never be
+ * mistaken for a state, and reported rather than omitted because "there is no
+ * circuit at all" is a stronger fact than any state. */
+#define CNXMAN_DIAG_NO_VC 0xffffffffu
 
 /*
  * EMIT gates -- WHY a built body did or did not reach SCS. This enum is the
@@ -223,6 +275,10 @@ struct cnxman_diag_rec {
 			     *   the body length           ARRIVAL unparsed
 			     *   the PORT's own refusal code, verbatim
 			     *                            ARRIVAL send-refused
+			     *   the ONE live counter or state behind the named
+			     *   refusal (see SS2's PORT_* block)
+			     *                            ARRIVAL port-* /
+			     *                            cdt-not-sendable
 			     * 0 everywhere else, and never a composed value  */
 };
 _Static_assert(sizeof(struct cnxman_diag_rec) == 32,
@@ -377,5 +433,24 @@ const char *cnxman_diag_gate_name(uint8_t gate);
 const char *cnxman_diag_rx_name(uint8_t rx);
 /* Renders enum cnxman_event (vms_cnxman.h), plus CNXMAN_DIAG_EV_NONE. */
 const char *cnxman_diag_event_name(uint8_t event);
+
+/* ==========================================================================
+ * 9. The PORT's refusal, in this ring's vocabulary (E70)
+ *
+ * A caller that has just been told the PORT refused a send takes the port's
+ * own readback (`struct pe_vc_send_refusal`, vms_pe_fsm.h) and asks these two
+ * which record to write: the NAMED reason for that cause, and the ONE live
+ * number that explains it (SS2's PORT_* block lists them per reason).
+ *
+ * PURE and TOTAL. Neither reads the port, neither can fail, and a code this
+ * vocabulary has not grown yet still gets a real record -- the honest
+ * catch-all, with the port's verbatim number carried in the record's `rc`.
+ * They live in this TU because it owns `enum cnxman_diag_reason`, and because
+ * the glue that calls them is not host-linkable while these are.
+ * ========================================================================== */
+struct pe_vc_send_refusal;
+
+enum cnxman_diag_reason cnxman_diag_port_reason(int32_t code);
+uint32_t cnxman_diag_port_aux(const struct pe_vc_send_refusal *p);
 
 #endif /* OVMX_VMS_CNXMAN_DIAG_H */

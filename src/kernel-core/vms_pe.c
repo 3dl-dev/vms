@@ -595,6 +595,16 @@ int pe_send_frame(struct vms_pe *pe, vms_scs_sysid_t dst,
 	return (int)pe_send_status(pe_vc_send_frame(&pe->fsm, dst, frame, len));
 }
 
+int pe_send_refusal(struct vms_pe *pe, vms_scs_sysid_t dst,
+		    struct pe_vc_send_refusal *out)
+{
+	if (pe == (struct vms_pe *)0)
+		return SS__NOSUCHDEV;   /* no port: nothing refused anything */
+	return pe_vc_send_refusal_get(&pe->fsm, dst, out) == 0
+		       ? 0
+		       : (int)SS__NOSUCHDEV;
+}
+
 int pe_addr(struct vms_pe *pe, vms_scs_sysid_t dst, struct vms_scs_addr *out)
 {
 	if (pe == (struct vms_pe *)0 || out == (struct vms_scs_addr *)0)

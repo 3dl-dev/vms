@@ -61,6 +61,15 @@
 #define CNXTRACE_K_EMIT     2u
 #define CNXTRACE_EV_NONE    0xffu
 #define CNXTRACE_CAT_MSCP   0xffu
+/* E70's named port refusals (enum cnxman_diag_reason 14..19). Named here for
+ * the same reason the three kinds are: their `aux` column MEANS something
+ * different per reason, and a reader on a lab console should not have to hold
+ * the mapping in their head. */
+#define CNXTRACE_R_PORT_NOCIRCUIT   14u
+#define CNXTRACE_R_PORT_NOCREDIT    15u
+#define CNXTRACE_R_PORT_RINGFULL    16u
+#define CNXTRACE_R_CDT_NOT_SENDABLE 19u
+#define CNXTRACE_NO_VC      0xffffffffu
 
 /*
  * The join states are the executive's own strings and two of them contain a
@@ -133,6 +142,39 @@ static const char *cnxtrace_detail(const struct cnxman_diag_rec_wire *r)
     }
 }
 
+/*
+ * WHAT `aux` MEANS ON THIS RECORD, in words (E70). The column is already
+ * printed; this adds the ONE token that says which quantity it is, and only for
+ * the reasons where `aux` is not simply a Con.ID. Everything it prints comes
+ * out of the record -- nothing is recomputed, and a reason without a special
+ * meaning gets no token at all rather than a guessed one.
+ */
+static void cnxtrace_print_aux_note(const struct cnxman_diag_rec_wire *r)
+{
+    if (r->kind != CNXTRACE_K_ARRIVAL)
+        return;
+    switch (r->detail) {
+    case CNXTRACE_R_PORT_NOCIRCUIT:
+        if (r->aux == CNXTRACE_NO_VC)
+            printf(" vc=NONE");          /* no circuit object at all */
+        else
+            printf(" vcstate=%u", (unsigned)r->aux);
+        break;
+    case CNXTRACE_R_PORT_NOCREDIT:
+        printf(" refused_credit=%u", (unsigned)r->aux);
+        break;
+    case CNXTRACE_R_PORT_RINGFULL:
+        printf(" refused_ring=%u", (unsigned)r->aux);
+        break;
+    case CNXTRACE_R_CDT_NOT_SENDABLE:
+        /* rc is the CDT's live state; aux is its live Send Credit. */
+        printf(" cdtstate=%d credit_send=%u", (int)r->rc, (unsigned)r->aux);
+        break;
+    default:
+        break;
+    }
+}
+
 /* One record, one line, all key=value. */
 static void cnxtrace_print_rec(const struct cnxman_diag_rec_wire *r)
 {
@@ -159,6 +201,8 @@ static void cnxtrace_print_rec(const struct cnxman_diag_rec_wire *r)
             printf(" cat=0x%02x op=0x%02x", (unsigned)r->cat,
                    (unsigned)r->op);
     }
+
+    cnxtrace_print_aux_note(r);
 
     /* The coalescing columns, printed ONLY when the fact really did repeat
      * (kernel-core vms_cnxman_diag.h SS4b). A `rep=0 tlast=` on every line

@@ -2382,19 +2382,24 @@ int scs_fsm_send_msg(struct scs_fsm *f, vms_conid_t local_conid,
 }
 
 int scs_fsm_send_refusal(struct scs_fsm *f, vms_conid_t local_conid,
-			 int32_t *out_err, int32_t *out_port_rc)
+			 struct scs_send_refusal *out)
 {
 	struct scs_cdt *cdt;
 
-	if (f == (struct scs_fsm *)0)
+	if (f == (struct scs_fsm *)0 || out == (struct scs_send_refusal *)0)
 		return SCS_ERR_INVAL;
 	cdt = scs_fsm_cdt_by_conid(f, local_conid);
 	if (cdt == (struct scs_cdt *)0)
 		return SCS_ERR_NOCONN;
-	if (out_err != (int32_t *)0)
-		*out_err = cdt->tx_last_err;
-	if (out_port_rc != (int32_t *)0)
-		*out_port_rc = cdt->tx_last_port_rc;
+
+	scs_bzero(out, (uint32_t)sizeof(*out));
+	out->err = cdt->tx_last_err;
+	out->port_rc = cdt->tx_last_port_rc;
+	out->refusals = cdt->tx_refusals;
+	out->peer_sysid = cdt->peer_sysid;
+	out->credit_send = cdt->credit_send;
+	out->cdt_state = cdt->state;
+	out->port_was_refuser = (cdt->tx_last_err == (int32_t)SCS_ERR_TXFAIL);
 	return SCS_OK;
 }
 

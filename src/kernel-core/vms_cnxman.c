@@ -88,6 +88,8 @@
 #include "vms_cnxman_recnx_fsm.h"
 #include "vms_cnxman_phase2.h"
 #include "vms_cnxman_quorum.h"
+#include "vms_pe.h"             /* E70: pe_send_refusal, the port's own reason */
+#include "vms_pe_fsm.h"         /* ... and struct pe_vc_send_refusal          */
 
 /* ==========================================================================
  * 0. Sizes and the two SYSAP names this layer registers
@@ -498,25 +500,55 @@ static int cnxman_jop_connect(void *ctx, vms_scs_sysid_t dst,
 }
 
 /*
- * WHY SCS REFUSED (E70), recorded from the executive's own two codes.
+ * The port refused it: ask the PORT ITSELF why, on the circuit to the system
+ * the refused connection rides. `peer` came out of the CDT, so this asks about
+ * the circuit that really carried the attempt -- never about "the" circuit.
+ */
+static void cnxman_note_port_refusal(struct vms_cnxman *cn,
+				     vms_scs_sysid_t peer)
+{
+	struct pe_vc_send_refusal p;
+
+	if (cn->cl->pe == NULL)
+		return;
+	if (pe_send_refusal(cn->cl->pe, peer, &p) != 0)
+		return;
+	/* WHICH refusal it was is a VOCABULARY mapping, and it lives in the
+	 * ring's own TU (vms_cnxman_diag.h SS9) so it is a pure function the R1
+	 * tests drive -- this glue is not host-linkable, and "the transcript
+	 * named the wrong cause" must not wait for a lab run to surface. */
+	cnxman_diag_note(cn, cnxman_diag_port_reason(p.code), p.code,
+			 cnxman_diag_port_aux(&p));
+}
+
+/*
+ * WHY SCS REFUSED (E70), recorded from the executive's own codes.
  *
  * The status the caller is handed is many-to-one by necessity (vms_scs.h SS5),
- * so on a refusal this glue asks SCS what it actually decided and records that
- * -- the SCS layer's `enum scs_err` and, when the frame was refused BELOW SCS,
- * the port's verbatim return. Both are reads of the live CDT (INV-6): nothing
- * is inferred from the status, and a connection SCS no longer holds records
+ * so on a refusal this glue asks SCS what it actually decided, records that,
+ * and then asks whichever layer was really the refuser for ITS own reason:
+ * the PORT when the frame was refused below SCS, the CDT's own live state
+ * otherwise. Every value is a read of live executive state (INV-6): nothing is
+ * inferred from the status, and a connection SCS no longer holds records
  * nothing rather than a plausible reason.
+ *
+ * Two records, not one composed record, because they are two facts -- and
+ * because the second one's REASON is what names the cause, so the transcript
+ * reads it out in words.
  */
 static void cnxman_note_send_refusal(struct vms_cnxman *cn, vms_conid_t conid)
 {
-	int32_t scs_err = 0;
-	int32_t port_rc = 0;
+	struct scs_send_refusal r;
 
-	if (scs_send_refusal(cn->cl->scs, conid, &scs_err, &port_rc) !=
-	    (int)SS__NORMAL)
+	if (scs_send_refusal(cn->cl->scs, conid, &r) != (int)SS__NORMAL)
 		return;
-	cnxman_diag_note(cn, CNXMAN_DIAG_R_SEND_REFUSED, scs_err,
-			 (uint32_t)port_rc);
+	cnxman_diag_note(cn, CNXMAN_DIAG_R_SEND_REFUSED, r.err,
+			 (uint32_t)r.port_rc);
+	if (r.port_was_refuser)
+		cnxman_note_port_refusal(cn, r.peer_sysid);
+	else
+		cnxman_diag_note(cn, CNXMAN_DIAG_R_CDT_NOT_SENDABLE,
+				 (int32_t)r.cdt_state, (uint32_t)r.credit_send);
 }
 
 static int cnxman_jop_send_msg(void *ctx, vms_conid_t conid,

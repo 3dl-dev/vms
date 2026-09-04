@@ -247,8 +247,8 @@ static void t_credit_wait(void)
 static void t_a_refused_send_names_its_own_reason(void)
 {
 	vms_conid_t a_conid, b_conid;
+	struct scs_send_refusal r;
 	struct scs_cdt *ca;
-	int32_t err = 0x5a5a5a5a, port = 0x5a5a5a5a;
 
 	printf("-- a refused send: the executive keeps WHY, verbatim (E70)\n");
 
@@ -259,12 +259,14 @@ static void t_a_refused_send_names_its_own_reason(void)
 	(void)scsh_pump();
 	ct_check(step_send(&a_node, a_conid, 2u) == SCS_OK,
 		 "a creditless send is ACCEPTED into Credit Wait");
-	ct_check(scs_fsm_send_refusal(&a_node.fsm, a_conid, &err, &port) ==
-		 SCS_OK, "the refusal readback answers for a live CDT");
-	ct_check_eq_u32((uint32_t)err, (uint32_t)SCS_OK,
+	ct_check(scs_fsm_send_refusal(&a_node.fsm, a_conid, &r) == SCS_OK,
+		 "the refusal readback answers for a live CDT");
+	ct_check_eq_u32((uint32_t)r.err, (uint32_t)SCS_OK,
 			"... and reports NO refusal: a held message is not a "
 			"refused one (the E70 elimination)");
-	ct_check_eq_u32((uint32_t)port, 0u, "... and no port refusal either");
+	ct_check_eq_u32((uint32_t)r.port_rc, 0u, "... and no port refusal either");
+	ct_check_eq_u32(r.port_was_refuser, 0u,
+			"... so the glue asks the port nothing");
 	ct_check_eq_u32(scsh_cdt(&a_node, a_conid)->tx_refusals, 0u,
 			"the CDT counted no refusal");
 
@@ -274,14 +276,20 @@ static void t_a_refused_send_names_its_own_reason(void)
 	a_node.fail_msg_rc = 2692;   /* a distinctive port answer */
 	ct_check(step_send(&a_node, a_conid, 3u) == SCS_ERR_TXFAIL,
 		 "the port refused the frame, so the send is refused");
-	ct_check(scs_fsm_send_refusal(&a_node.fsm, a_conid, &err, &port) ==
-		 SCS_OK, "the readback answers");
-	ct_check_eq_u32((uint32_t)err, (uint32_t)SCS_ERR_TXFAIL,
+	ct_check(scs_fsm_send_refusal(&a_node.fsm, a_conid, &r) == SCS_OK,
+		 "the readback answers");
+	ct_check_eq_u32((uint32_t)r.err, (uint32_t)SCS_ERR_TXFAIL,
 			"SCS's own reason is TXFAIL -- refused BELOW this "
 			"layer");
-	ct_check_eq_u32((uint32_t)port, 2692u,
+	ct_check_eq_u32((uint32_t)r.port_rc, 2692u,
 			"and the PORT's own return is kept VERBATIM, which no "
 			"SS$_ mapping above could have carried");
+	ct_check_eq_u32(r.port_was_refuser, 1u,
+			"... and the readback SAYS the port was the refuser, "
+			"so the glue knows to ask it for its own reason");
+	ct_check(r.peer_sysid == b_node.sysid,
+		 "... on the peer the connection really rides -- the key the "
+		 "port is then asked with");
 	ca = scsh_cdt(&a_node, a_conid);
 	ct_check_eq_u32(ca->tx_refusals, 1u, "the CDT counted exactly one");
 
@@ -310,24 +318,31 @@ static void t_a_refused_send_names_its_own_reason(void)
 			 "... on a CDT that has NOT reached OPEN");
 		ct_check(step_send(&a_node, a_conid, 4u) == SCS_ERR_NOTOPEN,
 			 "a send on it is refused NOTOPEN");
-		ct_check(scs_fsm_send_refusal(&a_node.fsm, a_conid, &err,
-					      &port) == SCS_OK,
-			 "the readback answers");
-		ct_check_eq_u32((uint32_t)err, (uint32_t)SCS_ERR_NOTOPEN,
+		ct_check(scs_fsm_send_refusal(&a_node.fsm, a_conid, &r) ==
+			 SCS_OK, "the readback answers");
+		ct_check_eq_u32((uint32_t)r.err, (uint32_t)SCS_ERR_NOTOPEN,
 				"... naming the CDT state, not a transport "
 				"failure");
-		ct_check_eq_u32((uint32_t)port, 0u,
+		ct_check_eq_u32((uint32_t)r.port_rc, 0u,
 				"... with no port code: the port was never "
 				"asked");
+		ct_check_eq_u32(r.port_was_refuser, 0u,
+				"... and the readback says so, so the "
+				"transcript records the CDT's own state "
+				"instead");
+		ct_check_eq_u32(r.cdt_state, ca->state,
+				"... which it carries LIVE, so a peer's "
+				"DISCONNECT under an originating SYSAP is "
+				"visible as the state it left");
 	}
 
 	/* A Con.ID the executive does not hold is REFUSED, not zero-filled --
 	 * INV-6: "no such connection" is itself the answer. */
-	err = 0x5a5a5a5a;
-	ct_check(scs_fsm_send_refusal(&a_node.fsm, 0xdeadbeefu, &err, &port) ==
+	r.err = 0x5a5a5a5a;
+	ct_check(scs_fsm_send_refusal(&a_node.fsm, 0xdeadbeefu, &r) ==
 		 SCS_ERR_NOCONN,
 		 "an unheld Con.ID is refused, never answered with zeros");
-	ct_check_eq_u32((uint32_t)err, 0x5a5a5a5au,
+	ct_check_eq_u32((uint32_t)r.err, 0x5a5a5a5au,
 			"... and the caller's buffer is left untouched");
 }
 

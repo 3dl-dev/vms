@@ -47,6 +47,11 @@ struct pe_blk_xfer;
  * (tests/cluster/host/hdr_alone_vms_pe.c), so it is named here only through a
  * pointer, exactly as `struct pe_blk_xfer` above is. */
 struct vms_scs_addr;
+/* E70: why the port refused its last send to a system. DEFINED in
+ * vms_pe_fsm.h SS8b beside the refusals it reports, and named here only
+ * through a pointer for the same reason the two above are -- this header must
+ * stay includable ALONE. */
+struct pe_vc_send_refusal;
 
 /* ==========================================================================
  * 1. Timers the port arms
@@ -329,6 +334,20 @@ void pe_set_upper(struct vms_pe *pe, const struct pe_upper_ops *upper);
 int pe_send_frame(struct vms_pe *pe, vms_scs_sysid_t dst,
 		  const uint8_t *frame, uint32_t len);
 int pe_addr(struct vms_pe *pe, vms_scs_sysid_t dst, struct vms_scs_addr *out);
+
+/*
+ * WHY THIS PORT REFUSED ITS LAST SEND TO `dst` (integration note E70). One
+ * dereference into pe_vc_send_refusal_get(), whose header carries what this
+ * answers and why the SS$_ status above it cannot: the port's own
+ * `enum pe_vc_send_status` plus the live circuit state behind it, every field
+ * read off a real `pe_vc` (INV-6). Returns 0 when the answer is real --
+ * INCLUDING "there is no circuit object for that system", which sets
+ * `vc_present` to 0 -- and SS$_NOSUCHDEV when there is no port at all.
+ *
+ * DIAGNOSTIC ONLY. Nothing decides anything on this.
+ */
+int pe_send_refusal(struct vms_pe *pe, vms_scs_sysid_t dst,
+		    struct pe_vc_send_refusal *out);
 
 /*
  * This port's OWN incarnation quadword -- the VMS absolute time it came up,

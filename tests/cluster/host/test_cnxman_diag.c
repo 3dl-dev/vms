@@ -46,6 +46,8 @@
 #include "vms_cnxman_join_fsm.h"
 #include "vms_cnxman_diag.h"
 #include "vms_cluster_codec_cm.h"
+#include "vms_pe_fsm.h"   /* E70: enum pe_vc_send_status + the port's readback,
+			   * the vocabulary group B2 maps into this ring's  */
 
 /* The userland dumper's OWN copy of the name tables -- the thing group B is
  * here to keep honest. A header of static tables, so including it costs no
@@ -339,6 +341,97 @@ static void check_table(const char *what, const char *const *tab, unsigned n,
 		}
 	}
 	ct_check(same, "... and every ordinal renders the SAME name");
+}
+
+/* ==========================================================================
+ * B2. THE PORT'S REFUSAL, NAMED (E70)
+ *
+ * THE LAST AMBIGUITY THIS CLOSES. Everything above the port is told an SS$_
+ * status, and that map is many-to-one on purpose (Rule 8 forbids inventing the
+ * statuses OpenVMS uses): the port's NOCIRCUIT and RINGFULL are BOTH
+ * SS$_DEVOFFLINE. On a live cluster those are different defects, so the ring
+ * records the port's own cause as a NAMED reason with the ONE live number
+ * behind it. This drives that mapping directly -- it is a pure function in the
+ * ring's own TU precisely so it does not need a booted node to test.
+ * ========================================================================== */
+static void check_port_reason(int32_t code, enum cnxman_diag_reason want,
+			      const char *why)
+{
+	ct_check_eq_u32((uint32_t)cnxman_diag_port_reason(code), (uint32_t)want,
+			why);
+}
+
+static void test_port_refusal_is_named_not_collapsed(void)
+{
+	struct pe_vc_send_refusal p;
+
+	printf("\n-- E70: the PORT's own refusal, named rather than collapsed "
+	       "--\n");
+
+	check_port_reason(PE_VC_SEND_NOCIRCUIT, CNXMAN_DIAG_R_PORT_NOCIRCUIT,
+			  "no circuit is its own reason");
+	check_port_reason(PE_VC_SEND_RINGFULL, CNXMAN_DIAG_R_PORT_RINGFULL,
+			  "... and a full unacked ring is a DIFFERENT one, "
+			  "though both are SS$_DEVOFFLINE above the port");
+	check_port_reason(PE_VC_SEND_NOCREDIT, CNXMAN_DIAG_R_PORT_NOCREDIT,
+			  "a spent port send-window is a third");
+	check_port_reason(PE_VC_SEND_BADFRAME, CNXMAN_DIAG_R_PORT_BADFRAME,
+			  "an unsendable frame is a fourth");
+	check_port_reason(PE_VC_SEND_TOOBIG, CNXMAN_DIAG_R_PORT_BADFRAME,
+			  "... which an oversized one shares, with `rc` still "
+			  "carrying WHICH of the two it was");
+	check_port_reason(PE_VC_SEND_TXFAIL, CNXMAN_DIAG_R_PORT_TXFAIL,
+			  "and the interface refusing is a fifth");
+	check_port_reason(-99, CNXMAN_DIAG_R_PORT_TXFAIL,
+			  "a code this vocabulary has not grown still gets a "
+			  "REAL record, never a neighbour's name");
+
+	ct_check(cnxman_diag_port_reason(PE_VC_SEND_NOCIRCUIT) !=
+		 cnxman_diag_port_reason(PE_VC_SEND_RINGFULL),
+		 "THE POINT: the two causes that share one SS$_ status do NOT "
+		 "share a reason");
+
+	/* The ONE live number beside each name, read out of the port's own
+	 * readback and never derived. */
+	memset(&p, 0, sizeof(p));
+	p.code = PE_VC_SEND_NOCREDIT;
+	p.vc_present = 1u;
+	p.send_refused_credit = 7u;
+	p.send_refused_ring = 3u;
+	ct_check_eq_u32(cnxman_diag_port_aux(&p), 7u,
+			"a credit refusal carries the CREDIT counter");
+	p.code = PE_VC_SEND_RINGFULL;
+	ct_check_eq_u32(cnxman_diag_port_aux(&p), 3u,
+			"a ring refusal carries the RING counter -- the two "
+			"never stand in for each other");
+	p.code = PE_VC_SEND_NOCIRCUIT;
+	p.vc_state = (uint8_t)VMS_PE_VC_START_SENT;
+	ct_check_eq_u32(cnxman_diag_port_aux(&p),
+			(uint32_t)VMS_PE_VC_START_SENT,
+			"a no-circuit refusal carries the circuit's LIVE state");
+	p.vc_present = 0u;
+	ct_check_eq_u32(cnxman_diag_port_aux(&p), CNXMAN_DIAG_NO_VC,
+			"... or the sentinel that says there is no circuit "
+			"object at all, which no state can be mistaken for");
+	p.code = PE_VC_SEND_TXFAIL;
+	p.vc_present = 1u;
+	ct_check_eq_u32(cnxman_diag_port_aux(&p), 0u,
+			"a cause the port keeps no count for reports an "
+			"explicit 0, never an invented number");
+	ct_check_eq_u32(cnxman_diag_port_aux(NULL), 0u,
+			"and a NULL readback answers 0 rather than reading it");
+
+	/* Every new reason RENDERS -- in the executive and in the dumper. */
+	ct_check(strcmp(cnxman_diag_reason_name(CNXMAN_DIAG_R_PORT_NOCREDIT),
+			"port-nocredit") == 0,
+		 "the executive renders the named cause as a WORD, so "
+		 "`grep CNXTRACE` needs no decoder ring");
+	ct_check(strcmp(cnxtrace_name(cnxtrace_reason_names,
+				      CNXTRACE_N(cnxtrace_reason_names),
+				      (unsigned char)
+				      CNXMAN_DIAG_R_CDT_NOT_SENDABLE),
+			"cdt-not-sendable") == 0,
+		 "... and the dumper renders the same ordinal identically");
 }
 
 /* The two join vocabularies are rendered by the FSM's own accessors, whose
@@ -691,6 +784,7 @@ int main(void)
 	test_every_field_round_trips();
 
 	test_name_tables_agree();
+	test_port_refusal_is_named_not_collapsed();
 
 	test_live_join_is_recorded();
 	test_a_refused_send_names_its_gate();

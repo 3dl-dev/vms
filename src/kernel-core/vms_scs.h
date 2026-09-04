@@ -55,6 +55,9 @@
 
 struct vms_scs;
 struct vms_scs_fsm;
+/* E70's readback, DEFINED in vms_scs_fsm.h beside the refusals it reports;
+ * named here only through a pointer so this header stays includable alone. */
+struct scs_send_refusal;
 
 /* ==========================================================================
  * 1. The SCS message types
@@ -299,29 +302,25 @@ int scs_send_msg(struct vms_scs *scs, vms_conid_t local_conid,
  * VMS$VAXcluster promotion messages refused on a live cluster and no record of
  * which of five possible refusals fired.
  *
- * This reports the two codes the EXECUTIVE really produced for the most recent
- * refused send on `local_conid`, both read off the CDT it holds right now:
+ * `*out` is filled from the CDT the executive holds RIGHT NOW
+ * (vms_scs_fsm.h's `struct scs_send_refusal`): this layer's own
+ * `enum scs_err`, the port's verbatim return when the refusal came from below
+ * SCS, the connection's live state and Send Credit, and the peer the
+ * connection rides -- which is the key a caller then asks the PORT with
+ * (pe_send_refusal) for the refusal SS$_ABORT cannot carry.
  *
- *   *out_err      this SCS layer's own `enum scs_err` (vms_scs_fsm.h SS2), 0
- *                 when no send on this connection has ever been refused.
- *   *out_port_rc  the PORT's own return for that send, verbatim, when the
- *                 refusal was SCS_ERR_TXFAIL -- i.e. when the frame was
- *                 refused BELOW this layer. 0 whenever the port was not the
- *                 refuser; that is an honest "not applicable", never a claim
- *                 that the port accepted anything.
- *
- * Either pointer may be NULL. Returns SS$_NORMAL when the executive holds that
- * CDT, SS$_NOSUCHDEV when SCS is not up, and SS$_BADPARAM when the Con.ID
- * names no live CDT (scs_glue_status()'s reading of SCS_ERR_NOCONN) -- which
- * is itself the reason the send was refused in that case, and the reason this
- * refuses rather than zero-filling (INV-6).
+ * Returns SS$_NORMAL when the executive holds that CDT, SS$_NOSUCHDEV when SCS
+ * is not up, and SS$_BADPARAM when the Con.ID names no live CDT
+ * (scs_glue_status()'s reading of SCS_ERR_NOCONN) -- which is itself the reason
+ * the send was refused in that case, and the reason this refuses rather than
+ * zero-filling (INV-6).
  *
  * FOR DIAGNOSTICS ONLY. Nothing in the executive branches on these values and
  * no byte of them reaches the wire. Called from the cluster fork context, like
  * every other service in SS5 -- it takes no fork mutex.
  */
 int scs_send_refusal(struct vms_scs *scs, vms_conid_t local_conid,
-		     int32_t *out_err, int32_t *out_port_rc);
+		     struct scs_send_refusal *out);
 
 /* Return `n` credits the local SYSAP has finished with. */
 int scs_return_credit(struct vms_scs *scs, vms_conid_t local_conid, uint16_t n);

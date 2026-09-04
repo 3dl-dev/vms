@@ -461,6 +461,135 @@ static void test_send_dg_requires_open_circuit(void)
 	ct_check_eq_u32(e.fake.n_frames, 0, "nothing transmitted");
 }
 
+/* ------------------------------------------------------------------ *
+ * E70: the port keeps WHICH refusal it made, and the live state behind it
+ *
+ * THE WALL THIS CLOSES. pe_send_status() maps this port's five refusals onto
+ * three SS$_ statuses -- NOCIRCUIT and RINGFULL both become SS$_DEVOFFLINE --
+ * because Rule 8 forbids inventing the statuses OpenVMS uses for them. On a
+ * live cluster "there is no circuit to that system" and "the unacked ring is
+ * full" are different defects with different fixes, and the SYSAP above could
+ * not tell them apart. pe_vc_send_refusal_get() reports what the PORT decided
+ * plus the counters that explain it, every field read off a real pe_vc.
+ * ------------------------------------------------------------------ */
+static void test_send_refusal_names_the_port_reason(void)
+{
+	struct send_env e;
+	struct pe_vc_send_refusal r;
+	uint8_t body[PE_SEND_BODY_LEN];
+	struct pe_vc *vc;
+	uint32_t i;
+
+	printf("-- E70: the port records WHICH refusal it made\n");
+
+	/* 1. NO CIRCUIT OBJECT AT ALL: the absence is the answer, and there is
+	 * nowhere to have recorded a code -- so none is invented. */
+	env_init(&e);
+	build_body(body, 1, 2, 0);
+	ct_check_eq_u32((unsigned long)pe_vc_send_msg(&e.fsm, VAX1_SYSID, 0,
+						      body, PE_SEND_BODY_LEN),
+			(unsigned long)PE_VC_SEND_NOCIRCUIT,
+			"a send with nothing formed is refused NOCIRCUIT");
+	ct_check_eq_u32((unsigned long)pe_vc_send_refusal_get(&e.fsm,
+							      VAX1_SYSID, &r),
+			0u, "the readback answers");
+	ct_check_eq_u32(r.vc_present, 0u,
+			"... with vc_present 0: there IS no circuit object, "
+			"which is the fact itself");
+	ct_check_eq_u32((uint32_t)r.code, 0u,
+			"... and no refusal code invented for a circuit that "
+			"does not exist");
+
+	/* 2. NO SEND CREDIT: the peer's window, spent. */
+	open_circuit(&e);
+	for (i = 0; i < LAB_CREDITS; i++) {
+		build_body(body, 1, 2, (uint8_t)i);
+		ct_check_eq_u32((unsigned long)pe_vc_send_msg(&e.fsm,
+							      VAX1_SYSID, 0,
+							      body,
+							      PE_SEND_BODY_LEN),
+				(unsigned long)PE_VC_SEND_OK,
+				"a send inside the peer's grant goes");
+	}
+	ct_check_eq_u32((unsigned long)pe_vc_send_msg(&e.fsm, VAX1_SYSID, 0,
+						      body, PE_SEND_BODY_LEN),
+			(unsigned long)PE_VC_SEND_NOCREDIT,
+			"the send past the grant is refused NOCREDIT");
+	(void)pe_vc_send_refusal_get(&e.fsm, VAX1_SYSID, &r);
+	ct_check_eq_u32(r.vc_present, 1u, "the circuit is there");
+	ct_check_eq_u32((uint32_t)r.code, (uint32_t)PE_VC_SEND_NOCREDIT,
+			"... and the PORT's own code says which refusal it "
+			"was -- not the SS$_DEVOFFLINE it shares with "
+			"NOCIRCUIT and RINGFULL");
+	ct_check_eq_u32(r.send_refused_credit, 1u,
+			"the credit-refusal counter is a REAL count");
+	ct_check_eq_u32(r.send_refused_ring, 0u,
+			"and the ring-refusal counter did NOT move: the two "
+			"causes stay apart");
+	ct_check_eq_u32(r.send_credit, 0u, "the live window is spent");
+	ct_check_eq_u32(r.send_credit_max, LAB_CREDITS,
+			"beside the PEER's own grant, so a reader sees how big "
+			"the window was");
+
+	/* 3. RING FULL: a different refusal that maps to the SAME SS$_ status
+	 * as NOCIRCUIT. The window is widened by hand -- the lab peer grants
+	 * fewer credits than the ring holds, so this refusal is unreachable
+	 * otherwise, and it is exactly the one a bigger grant would hit. */
+	vc = the_vc(&e);
+	ct_check(vc != NULL, "the circuit is still there");
+	vc->send_credit = (uint8_t)(PE_VC_UNACKED_MAX + 4u);
+	for (i = (uint32_t)vc->unacked; i < PE_VC_UNACKED_MAX; i++) {
+		build_body(body, 1, 2, (uint8_t)i);
+		(void)pe_vc_send_msg(&e.fsm, VAX1_SYSID, 0, body,
+				     PE_SEND_BODY_LEN);
+	}
+	ct_check_eq_u32(vc->unacked, PE_VC_UNACKED_MAX,
+			"the unacked ring is full");
+	ct_check_eq_u32((unsigned long)pe_vc_send_msg(&e.fsm, VAX1_SYSID, 0,
+						      body, PE_SEND_BODY_LEN),
+			(unsigned long)PE_VC_SEND_RINGFULL,
+			"the next send is refused RINGFULL");
+	(void)pe_vc_send_refusal_get(&e.fsm, VAX1_SYSID, &r);
+	ct_check_eq_u32((uint32_t)r.code, (uint32_t)PE_VC_SEND_RINGFULL,
+			"the port names RINGFULL, not the DEVOFFLINE it shares "
+			"with NOCIRCUIT");
+	ct_check_eq_u32(r.send_refused_ring, 1u, "counted, once");
+	ct_check_eq_u32(r.send_refused_credit, 1u,
+			"and the credit count from step 2 is untouched");
+	ct_check_eq_u32(r.unacked, PE_VC_UNACKED_MAX,
+			"the ring depth is reported LIVE beside it");
+
+	/* 4. THE INTERFACE refused the frame: a third cause, a third code. */
+	open_circuit(&e);
+	e.fake.send_fails = 1;
+	build_body(body, 1, 2, 0x5au);
+	ct_check_eq_u32((unsigned long)pe_vc_send_msg(&e.fsm, VAX1_SYSID, 0,
+						      body, PE_SEND_BODY_LEN),
+			(unsigned long)PE_VC_SEND_TXFAIL,
+			"exec_lan_xmit refusing is TXFAIL");
+	(void)pe_vc_send_refusal_get(&e.fsm, VAX1_SYSID, &r);
+	ct_check_eq_u32((uint32_t)r.code, (uint32_t)PE_VC_SEND_TXFAIL,
+			"... and the port says so, distinctly");
+
+	/* 5. AN UNSENDABLE BODY: the fifth cause. */
+	open_circuit(&e);
+	(void)pe_vc_send_msg(&e.fsm, VAX1_SYSID, 0, body,
+			     PE_SEND_BODY_LEN - 1u);
+	(void)pe_vc_send_refusal_get(&e.fsm, VAX1_SYSID, &r);
+	ct_check_eq_u32((uint32_t)r.code, (uint32_t)PE_VC_SEND_BADFRAME,
+			"a body of the wrong length is recorded as BADFRAME");
+
+	/* AND A CIRCUIT THAT REFUSED NOTHING SAYS SO. */
+	open_circuit(&e);
+	(void)pe_vc_send_refusal_get(&e.fsm, VAX1_SYSID, &r);
+	ct_check_eq_u32((uint32_t)r.code, 0u,
+			"a fresh circuit reports NO refusal, which is not the "
+			"same as a refusal of 0");
+	ct_check_eq_u32(r.vc_state, (uint32_t)VMS_PE_VC_OPEN,
+			"... and its LIVE state, so \"not sendable\" and \"the "
+			"port refused\" can never be confused");
+}
+
 int main(void)
 {
 	test_send_msg_goes_out_with_right_sequence();
@@ -470,5 +599,6 @@ int main(void)
 	test_recv_message_reaches_upper_by_sb_and_conid();
 	test_send_dg_is_unsequenced_and_unringed();
 	test_send_dg_requires_open_circuit();
+	test_send_refusal_names_the_port_reason();
 	return ct_summary("test_pe_send");
 }

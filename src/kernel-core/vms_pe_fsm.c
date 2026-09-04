@@ -3039,6 +3039,28 @@ int pe_vc_addr(struct pe_fsm *f, vms_scs_sysid_t dst, struct vms_scs_addr *out)
  * entry so the retransmit ladder fills the position rather than leaving a gap
  * the peer would break the circuit over.
  */
+/*
+ * E70: keep the port's OWN answer on the circuit it happened to, so a refusal
+ * that reaches a SYSAP as one many-to-one SS$_ status can still be told apart
+ * from the four others that map to the same number. `vc` may legitimately be
+ * NULL -- a send to a system this port holds no circuit object for has nowhere
+ * to record anything, and that absence is what pe_vc_send_refusal_get()
+ * reports instead.
+ */
+static int vc_note_send_refusal(struct pe_vc *vc, int code)
+{
+	if (vc != NULL)
+		vc->last_send_refusal = (int8_t)code;
+	return code;
+}
+
+/* The same, addressed by system: for the assembly paths above
+ * pe_vc_send_frame, which hold only the destination. */
+static int pe_note_send_refusal(struct pe_fsm *f, vms_scs_sysid_t dst, int code)
+{
+	return vc_note_send_refusal(pe_fsm_vc_by_sysid(f, dst), code);
+}
+
 int pe_vc_send_frame(struct pe_fsm *f, vms_scs_sysid_t dst,
 		     const uint8_t *frame, uint32_t len)
 {
@@ -3051,23 +3073,23 @@ int pe_vc_send_frame(struct pe_fsm *f, vms_scs_sysid_t dst,
 		return PE_VC_SEND_BADFRAME;
 	vc = pe_fsm_vc_by_sysid(f, dst);
 	if (vc == NULL || vc->state != (uint8_t)VMS_PE_VC_OPEN)
-		return PE_VC_SEND_NOCIRCUIT;
+		return vc_note_send_refusal(vc, PE_VC_SEND_NOCIRCUIT);
 	if (len > PE_VC_FRAME_MAX)
-		return PE_VC_SEND_TOOBIG;
+		return vc_note_send_refusal(vc, PE_VC_SEND_TOOBIG);
 	if (vms_frame_classify(frame, len, &fi) != VMS_CODEC_OK)
-		return PE_VC_SEND_BADFRAME;
+		return vc_note_send_refusal(vc, PE_VC_SEND_BADFRAME);
 	/* p. 2-43: no credit, no message. The grant is the PEER's, read from
 	 * its formation body; this node never invents a window for itself. */
 	if (vc->send_credit == 0u) {
 		vc->send_refused_credit++;
-		return PE_VC_SEND_NOCREDIT;
+		return vc_note_send_refusal(vc, PE_VC_SEND_NOCREDIT);
 	}
 
 	seq = vc->send_seq;
 	e = vc_ring_alloc(vc);
 	if (e == NULL) {
 		vc->send_refused_ring++;
-		return PE_VC_SEND_RINGFULL;
+		return vc_note_send_refusal(vc, PE_VC_SEND_RINGFULL);
 	}
 	pe_copy(e->frame, frame, len);
 	e->len = len;
@@ -3077,7 +3099,8 @@ int pe_vc_send_frame(struct pe_fsm *f, vms_scs_sysid_t dst,
 		vc_ring_free(vc, e);          /* nothing was sent, nothing */
 		if (!vc->echo_valid)
 			f->vc_no_incarnation++;
-		return PE_VC_SEND_BADFRAME;   /* was consumed              */
+		/* was consumed */
+		return vc_note_send_refusal(vc, PE_VC_SEND_BADFRAME);
 	}
 
 	vc->send_seq = seq_next(seq);
@@ -3088,9 +3111,31 @@ int pe_vc_send_frame(struct pe_fsm *f, vms_scs_sysid_t dst,
 		vc_arm_vcfail(f, vc);
 	vc_arm(f, vc, PE_TIMER_RETRANSMIT, vc_retransmit_ms(f));
 
-	if (pe_tx_from(f, e->frame, e->len) != 0)
-		return PE_VC_SEND_TXFAIL;     /* held for the ladder */
+	if (pe_tx_from(f, e->frame, e->len) != 0)   /* held for the ladder */
+		return vc_note_send_refusal(vc, PE_VC_SEND_TXFAIL);
 	return PE_VC_SEND_OK;
+}
+
+int pe_vc_send_refusal_get(struct pe_fsm *f, vms_scs_sysid_t dst,
+			   struct pe_vc_send_refusal *out)
+{
+	struct pe_vc *vc;
+
+	if (f == NULL || out == NULL)
+		return -1;
+	pe_bzero(out, (uint32_t)sizeof(*out));
+	vc = pe_fsm_vc_by_sysid(f, dst);
+	if (vc == NULL)
+		return 0;   /* vc_present stays 0: THAT is the answer */
+	out->vc_present = 1u;
+	out->code = (int32_t)vc->last_send_refusal;
+	out->vc_state = vc->state;
+	out->send_credit = vc->send_credit;
+	out->send_credit_max = vc->send_credit_max;
+	out->send_refused_credit = vc->send_refused_credit;
+	out->send_refused_ring = vc->send_refused_ring;
+	out->unacked = vc->unacked;
+	return 0;
 }
 
 /* --------------------------------------------------------------------------
@@ -3141,18 +3186,18 @@ static int pe_send_msg_assemble(struct pe_fsm *f, vms_scs_sysid_t dst,
 	uint32_t total = PE_SEND_BODY_OFF + len;
 
 	if (total > (uint32_t)sizeof(frame))
-		return PE_VC_SEND_TOOBIG;
+		return pe_note_send_refusal(f, dst, PE_VC_SEND_TOOBIG);
 
 	pe_bzero(frame, (uint32_t)sizeof(frame));
 	if (pe_send_build_envelope(f, dst, VMS_SCS_MT_MSG, 0u, 0u, frame,
 				   (uint32_t)sizeof(frame)) != 0)
-		return PE_VC_SEND_NOCIRCUIT;
+		return pe_note_send_refusal(f, dst, PE_VC_SEND_NOCIRCUIT);
 
 	pe_copy(frame + PE_SEND_BODY_OFF, body, len);
 
 	if (vms_scs_seq_envelope_fixup_len(frame, (uint32_t)sizeof(frame),
 					   total) != VMS_CODEC_OK)
-		return PE_VC_SEND_BADFRAME;
+		return pe_note_send_refusal(f, dst, PE_VC_SEND_BADFRAME);
 
 	return pe_vc_send_frame(f, dst, frame, total);
 }
@@ -3161,8 +3206,10 @@ int pe_vc_send_msg(struct pe_fsm *f, vms_scs_sysid_t dst,
 		   vms_conid_t dst_conid, const uint8_t *body, uint32_t len)
 {
 	(void)dst_conid;   /* not written to the wire -- see the .h doc comment */
-	if (f == NULL || body == NULL || len != PE_SEND_BODY_LEN)
+	if (f == NULL || body == NULL)
 		return PE_VC_SEND_BADFRAME;
+	if (len != PE_SEND_BODY_LEN)
+		return pe_note_send_refusal(f, dst, PE_VC_SEND_BADFRAME);
 	return pe_send_msg_assemble(f, dst, body, len);
 }
 
@@ -3170,10 +3217,12 @@ int pe_vc_send_msg_var(struct pe_fsm *f, vms_scs_sysid_t dst,
 		       vms_conid_t dst_conid, const uint8_t *body, uint32_t len)
 {
 	(void)dst_conid;
-	if (f == NULL || body == NULL || len < PE_SEND_BODY_MIN)
+	if (f == NULL || body == NULL)
 		return PE_VC_SEND_BADFRAME;
+	if (len < PE_SEND_BODY_MIN)
+		return pe_note_send_refusal(f, dst, PE_VC_SEND_BADFRAME);
 	if (len > PE_SEND_BODY_MAX)
-		return PE_VC_SEND_TOOBIG;
+		return pe_note_send_refusal(f, dst, PE_VC_SEND_TOOBIG);
 	return pe_send_msg_assemble(f, dst, body, len);
 }
 

@@ -82,7 +82,23 @@ static const char *const cnxtrace_reason_names[] = {
      * verbatim -- the two facts the EMIT record's many-to-one SS$_ status
      * cannot carry. Both columns already print on every line.
      */
-    "send-refused"    /* 13 */
+    "send-refused",   /* 13 */
+    /*
+     * 14-19 (E70): WHICH refusal it was, in words. The executive records one
+     * of these immediately after every `send-refused`, so a refused EMIT reads
+     * as three consecutive lines -- the named cause, the SCS-level refusal,
+     * then the message that did not go. On these `rc` is the PORT's own
+     * `enum pe_vc_send_status` (or, on cdt-not-sendable, the connection's live
+     * `enum vms_scs_cdt_state`) and `aux` is the one live counter or state
+     * behind it; both columns already print on every line.
+     */
+    "port-nocircuit", /* 14  aux = the circuit's live state, or 0xffffffff
+                       *     when the port holds no circuit at all         */
+    "port-nocredit",  /* 15  aux = sends this circuit refused for credit   */
+    "port-ringfull",  /* 16  aux = sends refused for a full unacked ring   */
+    "port-badframe",  /* 17  aux = 0: the port keeps no such count         */
+    "port-txfail",    /* 18  aux = 0: the interface refused the frame      */
+    "cdt-not-sendable"/* 19  rc = the CDT's live state, aux = its Send Credit */
 };
 
 /* enum cnxman_diag_gate (an EMIT record's `detail`) */

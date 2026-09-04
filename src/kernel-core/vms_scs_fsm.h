@@ -775,21 +775,42 @@ int scs_fsm_disconnect(struct scs_fsm *f, vms_conid_t local_conid);
 int scs_fsm_send_msg(struct scs_fsm *f, vms_conid_t local_conid,
 		     const uint8_t *body, uint32_t len);
 
-/*
- * WHY THE LAST SEND ON `local_conid` WAS REFUSED (E70). Fills `*out_err` with
- * the CDT's `tx_last_err` -- this FSM's own `enum scs_err`, not the
- * many-to-one SS$_ status the glue answers with -- and `*out_port_rc` with the
- * injected send op's verbatim refusal when the refusal came from below this
- * layer (0 otherwise). Either pointer may be NULL.
+/* ==========================================================================
+ * WHY THE LAST SEND ON A CONNECTION WAS REFUSED (integration note E70)
  *
- * Returns SCS_OK when the CDT exists (even if it has refused nothing: both
- * values are then 0, which reads as "nothing refused" and not as a refusal),
- * and SCS_ERR_NOCONN when the Con.ID names no live CDT -- which is itself the
- * answer to "why was the send refused" in that case, and the reason this
- * refuses rather than zero-filling (INV-6).
+ * `err` is this FSM's own `enum scs_err` -- not the many-to-one SS$_ status
+ * the glue answers with -- and `port_rc` is the injected send op's verbatim
+ * refusal when the frame was refused BELOW this layer (0 otherwise, an honest
+ * "not applicable" and never a success claim). The rest is the LIVE state of
+ * the CDT at readback, so a reader can tell "the connection was not sendable"
+ * apart from "it was sendable and something under it refused", and can see the
+ * Send Credit and the peer that the answer belongs to. Every field is a read
+ * of a real CDT (INV-6); nothing here is derived from the status.
+ *
+ * `port_was_refuser` exists so a CALLER OUTSIDE THIS LAYER can act on the
+ * distinction without importing `enum scs_err`'s vocabulary -- the connection
+ * manager's glue asks the PORT for its own reason when this is set, and asks
+ * nothing when it is clear.
+ * ========================================================================== */
+struct scs_send_refusal {
+	int32_t         err;              /* enum scs_err, 0 = none refused */
+	int32_t         port_rc;          /* the send op's verbatim return  */
+	uint32_t        refusals;         /* sends this CDT has refused     */
+	vms_scs_sysid_t peer_sysid;       /* the system this CDT rides      */
+	uint16_t        credit_send;      /* LIVE Send Credit               */
+	uint8_t         cdt_state;        /* enum vms_scs_cdt_state, LIVE   */
+	uint8_t         port_was_refuser; /* err == SCS_ERR_TXFAIL          */
+};
+
+/*
+ * Fill `*out` for `local_conid`. Returns SCS_OK when the CDT exists (even if
+ * it has refused nothing: `err` is then 0, which reads as "nothing refused"
+ * and not as a refusal), and SCS_ERR_NOCONN when the Con.ID names no live CDT
+ * -- which is itself the answer to "why was the send refused" in that case,
+ * and the reason this refuses rather than zero-filling (INV-6).
  */
 int scs_fsm_send_refusal(struct scs_fsm *f, vms_conid_t local_conid,
-			 int32_t *out_err, int32_t *out_port_rc);
+			 struct scs_send_refusal *out);
 
 /* The local SYSAP has finished with `n` received buffers: they move from
  * `held` to `pending` and go out on the next message, or immediately in a

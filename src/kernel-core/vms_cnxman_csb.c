@@ -900,6 +900,62 @@ void cnxman_envelope_stamp(const struct vms_csb *csb, uint8_t body[132],
  *              17 541 golden frames do exactly that).
  * ========================================================================== */
 
+/*
+ * ADOPT A CONNECTION FOR THIS SYSTEM, AND START ITS DIALOGUE (E77).
+ *
+ * The one writer of `cdt_conid`, because "the executive now holds Con.ID X for
+ * this system" and "this block's send/ack numbers describe Con.ID X" are the
+ * same fact and must never be able to drift apart. Re-binding the SAME Con.ID
+ * changes nothing -- the glue writes it on every accept and on every reconnect
+ * that returned the connection already held.
+ */
+void cnxman_csb_bind_connection(struct vms_csb *csb, uint32_t conid)
+{
+	if (csb == NULL)
+		return;
+
+	csb->cdt_conid = conid;
+	if (csb->cm_dialogue_conid == conid)
+		return;
+
+	/*
+	 * A DIFFERENT connection is a DIFFERENT dialogue. Zero is what "nothing
+	 * has been said and nothing has been heard here" really is on a
+	 * connection this node has not used yet, so the first origination on it
+	 * carries send-msg# 1 (pre-increment, spec sec 4(j)) and acks 0 until
+	 * this peer really sends something on THIS connection -- never a number
+	 * inherited from the dialogue that just died (INV-6).
+	 */
+	if (csb->cm_dialogue_conid != 0u)
+		csb->cm_dialogue_resets++;   /* a LIVE dialogue was discarded */
+	csb->cm_dialogue_conid = conid;
+	csb->cm_send_msg = 0u;
+	csb->cm_ack_msg  = 0u;
+	/*
+	 * `cm_txn`/`cm_token` are deliberately NOT touched. Nothing in this
+	 * executive advances them (they are read by the stamper and written by
+	 * no one), because spec sec 4(j) records the token's derivation as
+	 * UNKNOWN -- so they are honestly 0, and clearing a cell nobody
+	 * maintains would state a per-connection rule this node has no evidence
+	 * for. When a real derivation is grounded, THIS is where its
+	 * per-dialogue reset belongs.
+	 */
+}
+
+/*
+ * Is this block's dialogue state the dialogue of `conid`? An emitter that is
+ * about to put a body on a connection asks this before stamping: a body stamped
+ * from one connection's counters and transmitted on another asserts a
+ * conversation that did not happen, which is the envelope a real VAX bugchecks
+ * on (E77). Con.ID 0 is "no connection" and is never a dialogue.
+ */
+int cnxman_csb_dialogue_is_on(const struct vms_csb *csb, uint32_t conid)
+{
+	if (csb == NULL || conid == 0u)
+		return 0;
+	return csb->cm_dialogue_conid == conid;
+}
+
 void cnxman_csb_dialogue_sent(struct vms_csb *csb)
 {
 	if (csb == NULL)

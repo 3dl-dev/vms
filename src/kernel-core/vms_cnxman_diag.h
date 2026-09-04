@@ -223,6 +223,11 @@ enum cnxman_diag_gate {
 	CNXMAN_DIAG_G_REFUSED = 4, /* SCS refused the send; its rc is in `rc` */
 	CNXMAN_DIAG_G_CODEC   = 5, /* the codec refused to BUILD the body --
 				    * there is no body, so cat/op stay 0      */
+	CNXMAN_DIAG_G_SKEW    = 6, /* E77: the CSB's dialogue state belongs to a
+				    * DIFFERENT Con.ID than the one this join
+				    * would send on, so stamping it would assert
+				    * a conversation that did not happen. `aux`
+				    * carries the Con.ID the join holds.      */
 	CNXMAN_DIAG_G__COUNT
 };
 

@@ -361,6 +361,19 @@ static enum cnxman_diag_gate join_emit_gate(const struct cnxman_join *j,
 		return CNXMAN_DIAG_G_NO_CONN;
 	if (j->jops == NULL || j->jops->send_msg == NULL)
 		return CNXMAN_DIAG_G_NO_OPS;
+	/*
+	 * E77: the envelope is stamped from `csb`'s dialogue state but the body
+	 * goes out on the Con.ID THIS JOIN holds, and the two are only the same
+	 * conversation while the CSB's dialogue is bound to that connection. In
+	 * production they are (the glue binds the accepted/connected Con.ID into
+	 * the CSB at the instant SCS mints it, before this join adopts it), so
+	 * this gate is the assertion that they still are -- and a REFUSAL, not a
+	 * stamp, when they are not: a send-msg#/ack-msg# pair carried onto a
+	 * connection it does not describe is the byte a real VAX's Connection
+	 * Manager bugchecks on (CNXMGRERR, E76/E77).
+	 */
+	if (!cnxman_csb_dialogue_is_on(csb, (uint32_t)j->cm_conid))
+		return CNXMAN_DIAG_G_SKEW;
 	return CNXMAN_DIAG_G_SENT;
 }
 

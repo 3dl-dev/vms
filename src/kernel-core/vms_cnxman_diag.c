@@ -272,6 +272,7 @@ const char *cnxman_diag_gate_name(uint8_t gate)
 	case CNXMAN_DIAG_G_NO_OPS:  return "no-send-op";
 	case CNXMAN_DIAG_G_REFUSED: return "scs-refused";
 	case CNXMAN_DIAG_G_CODEC:   return "codec-refused";
+	case CNXMAN_DIAG_G_SKEW:    return "dialogue-skew";
 	default:                    return "?";
 	}
 }

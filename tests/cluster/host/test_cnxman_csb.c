@@ -552,6 +552,90 @@ static void test_projection(void)
 }
 
 /* ==========================================================================
+ * 4b. THE DIALOGUE BELONGS TO THE CONNECTION (E77)
+ *
+ * GOLDEN GROUNDING, measured with tools/cluster/cm_dialogue_audit.py:
+ *   vax3-2to3-established-join-20260730 -- 08:00:2b:78:56:b9 is at send_msg
+ *     21078 on Con.ID pair 3551000a/a4980009 and opens 18e3000a/a498000d at
+ *     send_msg=1 ack=0; aa:00:04:00:01:04 is at 15880 on the first pair and
+ *     opens its next at 1/0 as well.
+ *   formation-ci1 -- the SAME station pair's SECOND dialogue
+ *     (3359000a/63080008) opens at send_msg=1 ack=0 after 17541 messages on
+ *     the first, and the answer on it carries ack=1 once the peer's 1 arrived.
+ *
+ * So a fresh connection restarts BOTH cells, and the ack rises only to what
+ * the peer really sent HERE. Carrying them across a teardown is what put a
+ * send-msg# 8 on a brand-new Con.ID and bugchecked two real VAXes (E76/E77).
+ * ========================================================================== */
+static void test_dialogue_is_per_connection(void)
+{
+	struct vms_csb *csb;
+
+	printf("[csb] E77: the send/ack dialogue restarts on a new Con.ID\n");
+	cluster_reset(20);
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	ct_check(csb != NULL, "a CSB for the peer");
+	if (csb == NULL)
+		return;
+
+	/* Connection A: the executive minted it, so this block's dialogue is
+	 * its dialogue -- and it has said and heard nothing on it yet. */
+	cnxman_csb_bind_connection(csb, 0x4e620009u);
+	ct_check_eq_u32(csb->cdt_conid, 0x4e620009u,
+			"the binder is the writer of cdt_conid");
+	ct_check_eq_u32(csb->cm_send_msg, 0u, "nothing sent on it yet");
+	ct_check(cnxman_csb_dialogue_is_on(csb, 0x4e620009u),
+		 "and the dialogue state IS this connection's");
+
+	cnxman_csb_dialogue_sent(csb);
+	ct_check_eq_u32(csb->cm_send_msg, 1u,
+			"the first origination carries send-msg# 1 (sec 4(j))");
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_dialogue_heard(csb, 5u);
+	ct_check_eq_u32(csb->cm_send_msg, 3u, "three sent on A");
+	ct_check_eq_u32(csb->cm_ack_msg, 5u, "and the peer's 5 heard on A");
+
+	/* Re-binding the SAME Con.ID is what the glue does on every accept and
+	 * on a reconnect that handed back the connection already held: it is
+	 * not a new dialogue and must not disturb one in flight. */
+	cnxman_csb_bind_connection(csb, 0x4e620009u);
+	ct_check_eq_u32(csb->cm_send_msg, 3u,
+			"re-binding the same connection changes nothing");
+	ct_check_eq_u32(csb->cm_ack_msg, 5u, "... on either cell");
+	ct_check_eq_u32(csb->cm_dialogue_resets, 0u, "... and is not a restart");
+
+	/* Connection B: a different Con.ID is a different conversation. */
+	cnxman_csb_bind_connection(csb, 0x4e62000fu);
+	ct_check_eq_u32(csb->cm_send_msg, 0u,
+			"a NEW Con.ID restarts the send side, so the next "
+			"origination carries 1 -- what every fresh CDT in the "
+			"golden captures opens at");
+	ct_check_eq_u32(csb->cm_ack_msg, 0u,
+			"... and acks NOTHING until this peer sends here: an "
+			"ack for a message the peer never sent on this "
+			"connection is the byte CNXMGRERR bugchecks on");
+	ct_check_eq_u32(csb->cm_dialogue_resets, 1u, "... counted as a restart");
+	ct_check(!cnxman_csb_dialogue_is_on(csb, 0x4e620009u),
+		 "and the dead connection is no longer this block's dialogue");
+
+	cnxman_csb_dialogue_sent(csb);
+	ct_check_eq_u32(csb->cm_send_msg, 1u,
+			"the first message on B is 1, not 4: the numbers burned "
+			"on A belonged to a dialogue that no longer exists");
+	cnxman_csb_dialogue_heard(csb, 1u);
+	ct_check_eq_u32(csb->cm_ack_msg, 1u,
+			"and the ack is the peer's REAL send-msg# on B");
+
+	ct_check(!cnxman_csb_dialogue_is_on(csb, 0u),
+		 "Con.ID 0 is 'no connection', never a dialogue");
+	ct_check(!cnxman_csb_dialogue_is_on(NULL, 0x4e62000fu),
+		 "and no CSB is no dialogue");
+	cnxman_csb_bind_connection(NULL, 1u);   /* safe */
+}
+
+/* ==========================================================================
  * 5. NULL / edge safety
  * ========================================================================== */
 static void test_null_safety(void)
@@ -618,6 +702,7 @@ int main(void)
 	test_club_member_count();
 	test_learn_local_csid();
 	test_projection();
+	test_dialogue_is_per_connection();
 	test_null_safety();
 	return ct_summary("test_cnxman_csb");
 }

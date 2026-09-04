@@ -316,7 +316,11 @@ struct vms_csb {
 
 	/* ---- the SCS connection this CSB's state describes (p. 7-23) ---- */
 	uint32_t sw_version;        /* software version as advertised, 0 if unknown */
-	uint32_t cdt_conid;         /* our VMS$VAXcluster CDT to this CM */
+	/* Our VMS$VAXcluster CDT to this CM. Written ONLY by
+	 * cnxman_csb_bind_connection() (vms_cnxman_csb.h), because adopting a
+	 * connection and restarting this block's dialogue counters on it are the
+	 * same event (E77, see cm_dialogue_conid below). */
+	uint32_t cdt_conid;
 	uint64_t incarnation;       /* the peer's incarnation (spec SS4(i).B) */
 	uint32_t last_status_ms;    /* ops.now_ms of the last CM message from it */
 
@@ -353,6 +357,40 @@ struct vms_csb {
 	uint16_t cm_ack_msg;
 	uint16_t cm_txn;
 	uint16_t cm_token;
+
+	/*
+	 * ---- WHICH CONNECTION those two counters describe (E77) ----
+	 *
+	 * A send-msg#/ack-msg# pair is a fact about ONE SCS connection, not about
+	 * a system: spec sec 4(j) grounds send-msg# as "starts at 1 on the first VC
+	 * message", and the golden wire shows a node that is at send-msg# 15880
+	 * on one connection open its NEXT one at 1 with ack 0
+	 * (vax3-2to3-established-join-20260730: 08:00:2b:78:56:b9 holds
+	 * 3551000a/a4980009 at 21078 and opens 18e3000a/a498000d at 1;
+	 * formation-ci1: the SAME station pair's second dialogue
+	 * 3359000a/63080008 opens at 1 after 17541 messages on the first).
+	 *
+	 * So the counters above belong to `cm_dialogue_conid` and to nothing
+	 * else, exactly as `cm_advert_conid` above scopes the advertisement mask.
+	 * cnxman_csb_bind_connection() (vms_cnxman_csb.h) is the ONLY writer of
+	 * this field and of `cdt_conid`, and it restarts the dialogue whenever
+	 * the connection changes. Carrying a counter across a teardown made this
+	 * node OPEN a fresh Con.ID at send-msg# 8 (and 13, after refusals burned
+	 * numbers on the connection that died), acking a peer message the peer
+	 * had never sent on it -- and both real VAXes answered that envelope with
+	 * a fatal CNXMGRERR bugcheck, 1.2 ms and 0.2 ms after the burst
+	 * (integration note E76/E77).
+	 *
+	 * `cm_dialogue_resets` counts how many times a LIVE dialogue was
+	 * discarded because the connection changed under it (the first bind, off
+	 * Con.ID 0, starts a dialogue rather than replacing one and is not
+	 * counted). Instrumentation only, in the
+	 * block rather than a global (design sec 3.9 rule 3): connection churn is
+	 * the condition this defect lived in, so it must be visible without a
+	 * capture.
+	 */
+	uint32_t cm_dialogue_conid;
+	uint32_t cm_dialogue_resets;
 
 	/*
 	 * ---- what this node has ADVERTISED about ITSELF on the connection it

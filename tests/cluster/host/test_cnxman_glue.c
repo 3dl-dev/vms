@@ -498,6 +498,26 @@ static void test_glue_bindings(void)
 		  "inbound frames update the peer's ack-msg# for the barrier/"
 		  "coordinator path (the join does its own, internally)");
 
+	/*
+	 * E77. Every Con.ID this glue learns -- its own connect, an accepted
+	 * one, and both reconnect paths -- is ADOPTED through the CSB model's
+	 * binder, which restarts that block's dialogue when the connection
+	 * changes. A bare `csb->cdt_conid = ...` here is the defect itself:
+	 * the block would go on holding the DEAD connection's send/ack numbers
+	 * (refusal burns included) and the first body on the new Con.ID would
+	 * carry them -- which bugchecked both real VAXes with CNXMGRERR.
+	 */
+	check_absent("cdt_conid = ",
+		  "E77: this glue never assigns cdt_conid directly -- adopting "
+		  "a connection and restarting its dialogue are one act");
+	check_has("cnxman_csb_bind_connection(csb, (uint32_t)*out_conid)",
+		  "E77: an outbound connect binds the Con.ID SCS minted");
+	check_has("cnxman_csb_bind_connection(csb, (uint32_t)local_conid)",
+		  "E77: an ACCEPTED connection is bound the same way");
+	check_has("cnxman_csb_bind_connection(csb, (uint32_t)new_conid)",
+		  "E77: and so is a reconnect's -- the case where a burned "
+		  "number used to cross a teardown");
+
 	/* E3. */
 	check_has("club->proposed_valid = 1u",
 		  "E3: the glue sets proposed_valid when it fills the "

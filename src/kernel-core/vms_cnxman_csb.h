@@ -321,6 +321,40 @@ void cnxman_csb_dialogue_sent(struct vms_csb *csb);
 void cnxman_csb_dialogue_heard(struct vms_csb *csb, uint16_t peer_send_msg);
 
 /*
+ * THE COUNTERS BELONG TO A CONNECTION, NOT TO A SYSTEM (E77).
+ *
+ * cnxman_csb_bind_connection() records the VMS$VAXcluster Con.ID the executive
+ * holds for this system -- it is the ONLY writer of `csb->cdt_conid` -- and,
+ * when that Con.ID is a DIFFERENT one, restarts the dialogue: send-msg# back to
+ * 0 so the next origination carries 1, ack-msg# back to 0 so this node acks
+ * nothing until the peer really sends on the new connection.
+ *
+ * WHY. Spec sec 4(j) grounds send-msg# as "starts at 1 on the first VC
+ * message", and the golden wire measures the restart directly: in
+ * vax3-2to3-established-join-20260730 the station at send-msg# 21078 on Con.ID
+ * pair 3551000a/a4980009 opens 18e3000a/a498000d at send_msg=1 ack=0, and in
+ * formation-ci1 the SAME station pair's SECOND dialogue (3359000a/63080008)
+ * opens at send_msg=1 ack=0 after 17541 messages on the first. Per-system
+ * continuation is not what a real node does.
+ *
+ * WHAT IT COST. Keeping the counters per-CSB across teardowns, while
+ * join_emit_cm() legitimately BURNS a number on a refused send, made this node
+ * open brand-new Con.IDs at send-msg# 8 and 13 -- acking peer messages the peer
+ * had never sent on them. Both real VAXes bugchecked (CNXMGRERR, "Error
+ * detected by VAXcluster Connection Manager") within 1.2 ms and 0.2 ms of those
+ * two bursts and left the cluster (integration notes E76/E77). The burn is
+ * still correct WITHIN a connection: a gap, never a repeat. It simply cannot
+ * cross a teardown, because the number it burned belonged to a dialogue that no
+ * longer exists.
+ *
+ * cnxman_csb_dialogue_is_on() is the same rule read the other way, for an
+ * emitter that sends on a Con.ID it holds itself rather than on `cdt_conid`:
+ * nonzero only when this block's dialogue state IS that connection's.
+ */
+void cnxman_csb_bind_connection(struct vms_csb *csb, uint32_t conid);
+int  cnxman_csb_dialogue_is_on(const struct vms_csb *csb, uint32_t conid);
+
+/*
  * ASSIGN this dialogue's next send-msg# and STAMP the body with it, in that
  * order -- the two calls above, fused, because doing them in the other order
  * or in two different places is how a duplicate got onto the wire (E73).

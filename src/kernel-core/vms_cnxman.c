@@ -534,7 +534,10 @@ static int cnxman_jop_connect(void *ctx, vms_scs_sysid_t dst,
 		struct vms_csb *csb = csb_ensure(&cn->cl->club, dst);
 
 		if (csb != NULL) {
-			csb->cdt_conid = *out_conid;
+			/* E77: adopting the connection RESTARTS this block's
+			 * send/ack dialogue, because the numbers it was holding
+			 * belonged to the connection this one replaces. */
+			cnxman_csb_bind_connection(csb, (uint32_t)*out_conid);
 			(void)cnxman_csb_dispatch(&cn->cl->club, csb,
 						  CNXMAN_CSB_EV_CONNECT_SENT,
 						  &cn->ops);
@@ -886,7 +889,10 @@ static void cnxman_vc_opened(void *ctx, vms_conid_t local_conid)
 		accepted = 1u;
 		csb = csb_ensure(&cn->cl->club, accepted_from);
 		if (csb != NULL)
-			csb->cdt_conid = local_conid;
+			/* E77: an ACCEPTED connection is a fresh dialogue too --
+			 * the peer opens it at ITS send-msg# 1 and has heard
+			 * nothing from us on it. */
+			cnxman_csb_bind_connection(csb, (uint32_t)local_conid);
 		cn->pending_accept_valid = 0u;
 	}
 
@@ -1063,7 +1069,11 @@ static void cnxman_vc_closed(void *ctx, vms_conid_t local_conid,
 					 csb->sysid, cnxman_e31_conndata,
 					 &new_conid);
 			if (rc == (int)SS__NORMAL) {
-				csb->cdt_conid = new_conid;
+				/* E77: THE reconnect case -- the dialogue the
+				 * old CDT carried died with it, numbers burned
+				 * on it included. */
+				cnxman_csb_bind_connection(csb,
+							   (uint32_t)new_conid);
 				cn->reconnects_issued++;
 				(void)cnxman_csb_dispatch(&cn->cl->club, csb,
 							  CNXMAN_CSB_EV_CONNECT_SENT,
@@ -1320,7 +1330,9 @@ static void cnxman_act_on_recnx_rec(struct vms_cnxman *cn,
 				 cnxman_join_name_vaxcluster, csb->sysid,
 				 cnxman_e31_conndata, &new_conid);
 		if (rc == (int)SS__NORMAL) {
-			csb->cdt_conid = new_conid;
+			/* E77: same rule on the once-a-second beat's reconnect
+			 * as on the close-path one above. */
+			cnxman_csb_bind_connection(csb, (uint32_t)new_conid);
 			cn->reconnects_issued++;
 			(void)cnxman_csb_dispatch(&cn->cl->club, csb,
 						  CNXMAN_CSB_EV_CONNECT_SENT,

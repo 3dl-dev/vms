@@ -543,9 +543,16 @@ static int jb_connect(void *ctx, vms_scs_sysid_t dst,
 		      const uint8_t *conndata, uint16_t credits,
 		      vms_conid_t *out_conid)
 {
-	(void)ctx; (void)dst; (void)local_name; (void)remote_name;
+	(void)ctx; (void)local_name; (void)remote_name;
 	(void)conndata; (void)credits;
 	*out_conid = CM_CONID;
+	/* Mirror the production glue (cnxman_jop_connect): the Con.ID SCS just
+	 * minted goes into the destination's CSB at that instant, which is what
+	 * binds that block's dialogue counters to THIS connection (E77). A bed
+	 * that skips it leaves the join stamping one connection's numbers onto
+	 * another's frames -- the very thing join_emit_gate() now refuses. */
+	cnxman_csb_bind_connection(cnxman_club_find_sysid(&g_b.cl.club, dst),
+				   CM_CONID);
 	return 0;
 }
 

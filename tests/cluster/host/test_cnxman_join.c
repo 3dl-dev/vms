@@ -138,7 +138,7 @@ static int bed_connect(void *ctx, vms_scs_sysid_t dst,
 	 * makes the block the record of the connection (book p. 7-23) and what
 	 * every CSB-addressed origination resolves through. */
 	if (*out_conid == CM_CONID && g.member_csb != NULL)
-		g.member_csb->cdt_conid = CM_CONID;
+		cnxman_csb_bind_connection(g.member_csb, CM_CONID);
 	return 0;
 }
 
@@ -622,6 +622,21 @@ static uint16_t sent_le16(uint32_t n, uint32_t off)
 /* ==========================================================================
  * 1. The choreography, in the order spec sec 4(L)/sec 4(o) grounds
  * ========================================================================== */
+
+/*
+ * THE INBOUND HALF, EXACTLY AS THE GLUE DOES IT (cnxman_vc_opened): the Con.ID
+ * the executive learned goes into that system's CSB FIRST -- which restarts
+ * that block's dialogue on the new connection (E77) -- and only then is the
+ * join told. A bed that told the join without binding the block would leave the
+ * join stamping the DEAD connection's send/ack numbers onto frames it sends on
+ * the new one, which is the envelope that bugchecked both real VAXes.
+ */
+static void bed_cm_accepted(vms_scs_sysid_t sysid, vms_conid_t conid)
+{
+	cnxman_csb_bind_connection(cnxman_club_find_sysid(&g.cl.club, sysid),
+				   (uint32_t)conid);
+	cnxman_join_cm_accepted(&g.j, sysid, conid);
+}
 
 /* Drive from IDLE to ADMIT with two served units enumerated. Returns the
  * number of MSCP commands the walk emitted. */
@@ -1117,7 +1132,7 @@ static void test_pathlost_keeps_the_join_alive(void)
 
 	/* p. 7-24 REACCEPT: the member dials us. The live E69/E70 runs both
 	 * ended with exactly this frame being dropped into [FAILED]. */
-	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	bed_cm_accepted(MEMBER_SYSID, ACC_CM_CONID);
 	ct_check_eq_u32(g.j.cm_adopted, 1u,
 			"the member's re-offer is ADOPTED, not counted as "
 			"already-held");
@@ -1403,7 +1418,7 @@ static void fire(enum cnxman_event ev)
 		cnxman_join_csid_learned(&g.j, 0x00010003u);
 		break;
 	case CNXMAN_EV_CM_ACCEPTED:
-		cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+		bed_cm_accepted(MEMBER_SYSID, ACC_CM_CONID);
 		break;
 	case CNXMAN_EV_RX_CONFIG:
 		len = mk_peer_params(1u, 0x0080);
@@ -1677,7 +1692,7 @@ static void drive_to_admit_member_dialled(void)
 	(void)cnxman_join_start(&g.j);
 	/* The member's connect arrives while our own directory round is still
 	 * outstanding -- the ordering the live run showed. */
-	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	bed_cm_accepted(MEMBER_SYSID, ACC_CM_CONID);
 	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk,
 			       1);
 	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster,
@@ -1705,7 +1720,7 @@ static void test_member_dialled_connection_still_promotes(void)
 	bed_set_identity();
 
 	(void)cnxman_join_start(&g.j);
-	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	bed_cm_accepted(MEMBER_SYSID, ACC_CM_CONID);
 	ct_check_eq_u32(g.j.cm_adopted, 1u,
 			"the member's own connection is adopted as OURS");
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_DIR_ROUND,
@@ -1896,7 +1911,7 @@ static void test_refusal_then_member_dialled_still_promotes(void)
 	bed_init();
 	bed_set_identity();
 	drive_to_mscp_connect();
-	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	bed_cm_accepted(MEMBER_SYSID, ACC_CM_CONID);
 	ct_check_eq_u32(g.j.cm_adopted, 1u,
 			"the member's own VMS$VAXcluster connection is adopted");
 	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 0u,
@@ -2005,7 +2020,7 @@ static void test_e70_sequence_reaches_the_membership_offer(void)
 
 	/* t+16.398: the genuine membership connection, 1.9 s later. */
 	g.fake.now_ms += 1925u;
-	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	bed_cm_accepted(MEMBER_SYSID, ACC_CM_CONID);
 	cnxman_join_opened(&g.j, ACC_CM_CONID);
 	ct_check_eq_u32(g.j.cm_adopted, 1u,
 			"the member's own connection is ADOPTED, not dropped "
@@ -2115,7 +2130,7 @@ static void test_beat_adopts_the_connection_the_executive_holds(void)
 
 	/* What the glue does on a reconnect it issued: the Con.ID on the CSB,
 	 * and the ladder's own OPEN when the CDT comes up. */
-	g.member_csb->cdt_conid = ACC_CM_CONID;
+	cnxman_csb_bind_connection(g.member_csb, ACC_CM_CONID);
 	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
 				  CNXMAN_CSB_EV_CONNECT_SENT, &g.ops);
 	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
@@ -2151,7 +2166,7 @@ static void test_reoffer_is_per_connection_not_per_lifetime(void)
 	 * every send on the new one. */
 	cnxman_join_closed(&g.j, CM_CONID, 0u);
 	g.fail_send = 1;
-	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	bed_cm_accepted(MEMBER_SYSID, ACC_CM_CONID);
 	cnxman_join_opened(&g.j, ACC_CM_CONID);
 	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 0u,
 			"nothing got through on the new connection");
@@ -2168,6 +2183,153 @@ static void test_reoffer_is_per_connection_not_per_lifetime(void)
 	ct_check(sent_on_is(ACC_CM_CONID, 0, VMS_CM_CAT_CONFIG,
 			    VMS_CM_OP_MODEL), "MODEL really went out on it");
 	ct_check_eq_u32(g.j.model_sent, 2u, "... and the lifetime count moved");
+}
+
+/* ==========================================================================
+ * E77 -- THE ENVELOPE BELONGS TO THE CONNECTION, AND A REFUSAL'S BURN DIES
+ * WITH IT
+ *
+ * THE LIVE WALL (E76's diagnosis, 2026-09-04). Against the real 2-node VAX
+ * cluster this node's join burst made BOTH VAXes bugcheck: 1.2 ms after the
+ * op-14/01/02 burst to VAX1 that node emitted the sec 4(O.30) departure marker
+ * and its console carried "%%%% Fatal BUG CHECK ... CNXMGRERR, Error detected
+ * by VAXcluster Connection Manager"; VAX2 did the same 0.2 ms after its own
+ * burst. The only thing that told those two bursts apart from the harmless ones
+ * earlier in the SAME run was the sec-4(j) envelope: with the counters kept per
+ * CSB across teardowns, and join_emit_cm() legitimately BURNING a number on
+ * each refused send, this node opened brand-new Con.IDs at send-msg# 8 and 13
+ * -- acking a peer send-msg# the peer had never sent on them.
+ *
+ * WHAT THE GOLDEN WIRE DOES INSTEAD (tools/cluster/cm_dialogue_audit.py):
+ * every fresh CDT opens at send_msg=1 ack=0, however much the previous one
+ * carried -- formation-ci1's second dialogue between the SAME station pair
+ * (3359000a/63080008) opens at 1/0 after 17541 messages on the first, and in
+ * vax3-2to3-established-join-20260730 a station sitting at send-msg# 21078 on
+ * one pair opens its next at 1/0.
+ * ========================================================================== */
+static void test_e77_a_new_connection_opens_at_send_msg_1(void)
+{
+	uint32_t burned;
+
+	printf("\n-- E77: a fresh Con.ID opens at send-msg# 1, acking only what "
+	       "the peer sent THERE --\n");
+	bed_init();
+	bed_set_identity();
+
+	/* CONNECTION A, with every send refused: exactly the live condition.
+	 * Each refused origination burns its number -- correct WITHIN a
+	 * connection (a gap, never a repeat) -- and the beat re-offers. */
+	g.fail_send = 1;
+	drive_to_admit();
+	g.fake.now_ms += 1000u;
+	cnxman_join_timer(&g.j);
+	g.fake.now_ms += 1000u;
+	cnxman_join_timer(&g.j);
+
+	burned = g.member_csb->cm_send_msg;
+	ct_check(burned >= 8u,
+		 "the refusals burned numbers on connection A, as they did on "
+		 "the live cluster (it reached 8 and 13 there)");
+	ct_check_eq_u32(n_sent_on(CM_CONID), 0u,
+			"... and not one of them reached the wire");
+
+	/* The peer really said something on A, so our ack for A is real. */
+	(void)join_feed(mk_peer_params(2u, 0x0011));
+	ct_check_eq_u32(g.member_csb->cm_ack_msg, 0x0011u,
+			"and A's ack-msg# is the peer's real send-msg# on A");
+
+	/* A dies; the member dials a NEW connection (p. 7-24 REACCEPT). The
+	 * glue binds it into the CSB before the join hears about it. */
+	cnxman_join_closed(&g.j, CM_CONID, 0u);
+	g.fail_send = 0;
+	bed_cm_accepted(MEMBER_SYSID, ACC_CM_CONID);
+	cnxman_join_opened(&g.j, ACC_CM_CONID);
+
+	ct_check_eq_u32(g.member_csb->cm_dialogue_resets, 1u,
+			"the CSB restarted its dialogue when the connection "
+			"changed under it");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 3u,
+			"the sec 4(o) burst goes out on the new connection");
+	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, 0, VMS_OFB_CM_SEND_MSG), 1u,
+			"THE BYTE THAT BUGCHECKED TWO REAL VAXES: the first "
+			"message on a fresh Con.ID carries send-msg# 1, which "
+			"is what every fresh CDT in the golden captures opens "
+			"at -- not burned+1");
+	ct_check(sent_on_le16(ACC_CM_CONID, 0, VMS_OFB_CM_SEND_MSG) !=
+		 (uint16_t)(burned + 1u),
+		 "NEGATIVE CONTROL: per-CSB continuation across the teardown "
+		 "would put that burned number on the new connection -- the "
+		 "E76 wire fact (dialogues OPENED at 8 and at 13)");
+	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, 0, VMS_OFB_CM_ACK_MSG), 0u,
+			"and it acks NOTHING: this peer has sent nothing on "
+			"THIS connection yet, so 0x0011 -- true of the dead "
+			"one -- would be an assertion about a conversation "
+			"that did not happen");
+	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, 1, VMS_OFB_CM_SEND_MSG), 2u,
+			"the second message on it is 2");
+	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, 2, VMS_OFB_CM_SEND_MSG), 3u,
+			"... and the third is 3");
+
+	/* The ack side comes back the same way: only from what really arrives
+	 * on B, and only as high as the peer really went there. */
+	(void)join_feed(mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, 0x0001));
+	ct_check_eq_u32(g.member_csb->cm_ack_msg, 1u,
+			"B's ack-msg# is the peer's REAL send-msg# on B");
+	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, n_sent_on(ACC_CM_CONID) - 1u,
+				     VMS_OFB_CM_ACK_MSG), 1u,
+			"... and that -- not the old connection's 0x0011 -- is "
+			"what the echo carries back");
+}
+
+/*
+ * THE GUARD, not the reset: an origination whose CSB dialogue is NOT this
+ * join's connection is REFUSED rather than stamped. In production the glue
+ * binds the Con.ID into the CSB before the join can adopt it, so this state is
+ * unreachable -- which is exactly why it is asserted here: the FSM must not
+ * become the thing that puts one connection's numbers on another's frames if
+ * that ordering ever changes.
+ */
+static void test_e77_a_skewed_dialogue_is_not_stamped(void)
+{
+	uint32_t before;
+
+	printf("\n-- E77: the join refuses to stamp another connection's "
+	       "dialogue --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+
+	/* The executive reconnected this system. The CSB's dialogue is the new
+	 * connection's from that instant; this join has not had its beat yet
+	 * and is still holding the old Con.ID. */
+	cnxman_csb_bind_connection(g.member_csb, ACC_CM_CONID);
+	before = n_cm_sent();
+
+	(void)join_feed(mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, 0x0050));
+	ct_check_eq_u32(n_cm_sent(), before,
+			"nothing is originated onto the connection this join "
+			"still holds ...");
+	ct_check_eq_u32(g.member_csb->cm_send_msg, 0u,
+			"... and no number is assigned out of the NEW "
+			"connection's dialogue for a frame that would not have "
+			"ridden it (INV-6)");
+	ct_check(g.j.send_failures >= 1u, "... the refusal is counted");
+
+	/* And the glue closes the window the same beat it opened it: the old
+	 * CDT's close arrives (vms_cnxman.c binds the reconnect's Con.ID and
+	 * THEN reports the close), the join stops claiming a connection it does
+	 * not hold, and the next beat adopts the one the executive does. */
+	cnxman_join_closed(&g.j, CM_CONID, 0u);
+	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
+				  CNXMAN_CSB_EV_CONNECT_SENT, &g.ops);
+	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
+				  CNXMAN_CSB_EV_CONN_OPEN, &g.ops);
+	g.fake.now_ms += 1000u;
+	cnxman_join_timer(&g.j);
+	ct_check_eq_u32(g.j.cm_conid, ACC_CM_CONID,
+			"the beat adopts the connection the executive holds");
+	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, 0, VMS_OFB_CM_SEND_MSG), 1u,
+			"... and the first message on it carries send-msg# 1");
 }
 
 /*
@@ -2326,7 +2488,7 @@ static void test_adoption_refuses_what_it_does_not_own(void)
 	bed_init();
 	bed_set_identity();
 	(void)cnxman_join_start(&g.j);
-	cnxman_join_cm_accepted(&g.j, OTHER_SYSID, ACC_CM_CONID);
+	bed_cm_accepted(OTHER_SYSID, ACC_CM_CONID);
 	ct_check_eq_u32(g.j.cm_adopted, 0u,
 			"a connection from a member this join is not driving "
 			"through is NOT adopted");
@@ -2342,7 +2504,7 @@ static void test_adoption_refuses_what_it_does_not_own(void)
 	bed_set_identity();
 	drive_to_admit();
 	ct_check_eq_u32(g.j.cm_open, 1u, "our own VMS$VAXcluster VC is OPEN");
-	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	bed_cm_accepted(MEMBER_SYSID, ACC_CM_CONID);
 	ct_check_eq_u32(g.j.cm_already_held, 1u,
 			"a simultaneous open is counted, not adopted");
 	ct_check(g.j.cm_conid == CM_CONID,
@@ -2392,7 +2554,7 @@ static void test_e72_members_open_connection_supersedes_our_connect(void)
 
 	/* t+16.4: the member opens its own and SCS brings it up -- the glue's
 	 * two calls, in the order cnxman_vc_opened() makes them. */
-	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	bed_cm_accepted(MEMBER_SYSID, ACC_CM_CONID);
 	ct_check_eq_u32(g.j.cm_adopted, 1u,
 			"the member's OPEN connection is ADOPTED, not counted "
 			"as a simultaneous open");
@@ -2460,7 +2622,7 @@ static void test_e72_beat_advertises_on_the_open_it_missed(void)
 
 	/* What the glue records for a connect THIS JOIN issued: the Con.ID goes
 	 * on the CSB at the instant SCS mints it (cnxman_jop_connect). */
-	g.member_csb->cdt_conid = CM_CONID;
+	cnxman_csb_bind_connection(g.member_csb, CM_CONID);
 	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
 				  CNXMAN_CSB_EV_CONNECT_SENT, &g.ops);
 
@@ -2772,7 +2934,7 @@ static void test_member_only_on_a_real_op06_csid(void)
  * OPEN. Nothing here asserts membership -- only connectivity. */
 static void bed_peer_connected(struct vms_csb *csb, vms_conid_t conid)
 {
-	csb->cdt_conid = (uint32_t)conid;
+	cnxman_csb_bind_connection(csb, (uint32_t)conid);
 	csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
 }
 
@@ -2846,7 +3008,7 @@ static void test_per_peer_skips_what_is_not_connected(void)
 		return;
 
 	/* A Con.ID but no OPEN: the executive has not said it is connected. */
-	other->cdt_conid = 0x4e620020u;
+	cnxman_csb_bind_connection(other, 0x4e620020u);
 	other->state = (uint8_t)VMS_CNXMAN_CSB_CONNECT;
 	cnxman_join_advertise_peers(&g.j);
 	ct_check_eq_u32(g.n_sent, 0u,
@@ -2856,7 +3018,7 @@ static void test_per_peer_skips_what_is_not_connected(void)
 	ct_check_eq_u32(g.j.peers_advertised, 0u, "and nothing is counted");
 
 	/* OPEN but no Con.ID: nothing to send on, and no invented one. */
-	other->cdt_conid = 0u;
+	cnxman_csb_bind_connection(other, 0u);
 	other->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
 	cnxman_join_advertise_peers(&g.j);
 	ct_check_eq_u32(g.n_sent, 0u,
@@ -3030,6 +3192,8 @@ int main(void)
 	test_expired_reconnect_window_ends_the_attempt_honestly();
 	test_beat_adopts_the_connection_the_executive_holds();
 	test_reoffer_is_per_connection_not_per_lifetime();
+	test_e77_a_new_connection_opens_at_send_msg_1();
+	test_e77_a_skewed_dialogue_is_not_stamped();
 	test_a_start_with_no_target_is_deferred_not_terminal();
 	test_every_table_cell();
 	test_e73_the_executive_delivers_a_body();

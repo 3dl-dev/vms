@@ -225,6 +225,10 @@ static int bed_connect(void *ctx, vms_scs_sysid_t dst,
 			return -1;   /* nothing went out: no step to observe */
 		obs(R_CONNECT_VAXCLUSTER);
 		*out_conid = CM_CONID;
+		/* Mirror cnxman_jop_connect(): the Con.ID SCS minted goes into
+		 * the destination's CSB at that instant, which is what binds
+		 * that block's dialogue counters to THIS connection (E77). */
+		cnxman_csb_bind_connection(g.member_csb, CM_CONID);
 	}
 	return 0;
 }

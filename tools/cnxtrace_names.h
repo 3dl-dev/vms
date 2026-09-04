@@ -117,7 +117,8 @@ static const char *const cnxtrace_gate_names[] = {
     "no-open-vc",    /* 2 */
     "no-send-op",    /* 3 */
     "scs-refused",   /* 4 */
-    "codec-refused"  /* 5 */
+    "codec-refused", /* 5 */
+    "dialogue-skew"  /* 6 */
 };
 
 /* enum cnxman_join_rx */

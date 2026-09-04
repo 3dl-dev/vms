@@ -432,6 +432,21 @@ static void test_port_refusal_is_named_not_collapsed(void)
 				      CNXMAN_DIAG_R_CDT_NOT_SENDABLE),
 			"cdt-not-sendable") == 0,
 		 "... and the dumper renders the same ordinal identically");
+
+	/* E71: the refused CONNECT, which had no record at all before. */
+	ct_check(strcmp(cnxman_diag_reason_name(CNXMAN_DIAG_R_CONNECT_REFUSED),
+			"connect-refused") == 0,
+		 "E71: a refused connect renders as its own word");
+	ct_check(strcmp(cnxtrace_name(cnxtrace_reason_names,
+				      CNXTRACE_N(cnxtrace_reason_names),
+				      (unsigned char)
+				      CNXMAN_DIAG_R_CONNECT_REFUSED),
+			"connect-refused") == 0,
+		 "... in the dumper too, at the same ordinal");
+	ct_check(strcmp(cnxman_join_failure_name(CNXMAN_JOIN_FAIL_TIMEOUT),
+			"reconnect interval expired") == 0,
+		 "E71: and the honest end of a wait has a name of its own, "
+		 "distinct from every refusal");
 }
 
 /* The two join vocabularies are rendered by the FSM's own accessors, whose
@@ -454,12 +469,10 @@ static void test_name_tables_agree(void)
 	check_table("state table has one entry per join state",
 		    cnxtrace_state_names, CNXTRACE_N(cnxtrace_state_names),
 		    exec_state_name, (unsigned)CNXMAN_JOIN_STATE__COUNT);
-	/* enum cnxman_join_failure has no __COUNT member; CODEC (7) is its
-	 * last value, so eight names is the whole vocabulary. */
 	check_table("failure table has one entry per failure",
 		    cnxtrace_failure_names, CNXTRACE_N(cnxtrace_failure_names),
 		    exec_failure_name,
-		    (unsigned)CNXMAN_JOIN_FAIL_CODEC + 1u);
+		    (unsigned)CNXMAN_JOIN_FAIL__COUNT);
 	check_table("kind table has one entry per record kind",
 		    cnxtrace_kind_names, CNXTRACE_N(cnxtrace_kind_names),
 		    cnxman_diag_kind_name, (unsigned)CNXMAN_DIAG_K__COUNT);

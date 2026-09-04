@@ -943,15 +943,58 @@ static void test_reject_is_terminal(void)
 			"... named as the identity gate, not a retry");
 }
 
-static void test_pathlost_fails_the_join(void)
+/*
+ * E71. Losing the VMS$VAXcluster connection is NOT a verdict (p. 7-30: "do not
+ * presume that the remote system has left ... simply because the local
+ * Connection Manager has lost contact"). The join names it, drops the Con.ID it
+ * no longer holds, and goes back to needing a connection -- where the member's
+ * own re-offer (p. 7-24 REACCEPT) is still adoptable.
+ */
+static void test_pathlost_keeps_the_join_alive(void)
 {
 	bed_init();
 	bed_set_identity();
 	drive_to_admit();
 	cnxman_join_closed(&g.j, CM_CONID, 0u);
-	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_FAILED,
-			"losing the VMS$VAXcluster connection fails the join");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_VC_CONNECT,
+			"losing the VMS$VAXcluster connection does NOT fail the "
+			"join: it needs the connection back");
 	ct_check_eq_u32(g.j.failure, CNXMAN_JOIN_FAIL_PATHLOST, "... as PATHLOST");
+	ct_check_eq_u32(g.j.cm_lost, 1u, "... counted");
+	ct_check_eq_u32(g.j.cm_conid, 0u,
+			"... and this node stops claiming a connection it does "
+			"not hold, which is what makes a re-offer adoptable");
+	ct_check_eq_u32(g.j.cm_open, 0u, "... and does not call it open");
+
+	/* p. 7-24 REACCEPT: the member dials us. The live E69/E70 runs both
+	 * ended with exactly this frame being dropped into [FAILED]. */
+	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	ct_check_eq_u32(g.j.cm_adopted, 1u,
+			"the member's re-offer is ADOPTED, not counted as "
+			"already-held");
+	ct_check_eq_u32(g.j.cm_already_held, 0u, "... never as already-held");
+	cnxman_join_opened(&g.j, ACC_CM_CONID);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"... and the drive resumes to admission on it");
+	ct_check_eq_u32(g.j.failure, CNXMAN_JOIN_FAIL_NONE,
+			"... with the stop reason cleared, because connectivity "
+			"really came back");
+	ct_check(sent_on_is(ACC_CM_CONID, 0, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_MODEL),
+		 "the sec 4(o) burst is made AGAIN on the new connection: "
+		 "MODEL");
+	ct_check(sent_on_is(ACC_CM_CONID, 1, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_PARAMS), "... PARAMS");
+	ct_check(sent_on_is(ACC_CM_CONID, 2, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_CONFIG), "... and op-0x02");
+
+	/* Nothing about this recovery asserts membership. */
+	ct_check_eq_u32(cnxman_join_handed_off(&g.j), 0,
+			"INV-6: a reconnect is a CONNECTION, never a "
+			"membership -- this node is still not a member");
+	ct_check_eq_u32(cnxman_club_local(&g.cl.club)->csid_valid, 0u,
+			"... and this node's own CSID was NOT learned by "
+			"reconnecting: only a real op-0x06 teaches it");
 
 	/* But losing the disk-client connection after the walk is not a loss
 	 * of anything the join still needs. */
@@ -963,7 +1006,13 @@ static void test_pathlost_fails_the_join(void)
 			"losing MSCP$DISK AFTER the walk does not fail it");
 }
 
-static void test_connect_refusal_is_named(void)
+/*
+ * E71. A connect this node could not put on the wire refused nothing to
+ * nobody: no connect data reached a peer, so it is not p. 2-25's version gate
+ * and it is not terminal. It is named, counted, and retried on the beat
+ * (p. 7-30's "attempt once a second").
+ */
+static void test_connect_refusal_is_named_and_retried(void)
 {
 	bed_init();
 	bed_set_identity();
@@ -973,9 +1022,30 @@ static void test_connect_refusal_is_named(void)
 			       1);
 	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster,
 			       1);
-	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_FAILED,
-			"a local connect refusal fails the join");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_VC_CONNECT,
+			"a local connect refusal does NOT fail the join");
 	ct_check_eq_u32(g.j.failure, CNXMAN_JOIN_FAIL_CONNECT, "... as CONNECT");
+	ct_check_eq_u32(g.j.mscp_connect_refused, 1u,
+			"the refused MSCP$DISK connect is counted, and stepped "
+			"over: it is not a membership prerequisite");
+	ct_check_eq_u32(g.j.cm_connect_refused, 1u,
+			"... and so is the refused VMS$VAXcluster connect");
+	ct_check_eq_u32(g.j.cm_conid, 0u,
+			"this node claims no Con.ID it was never given");
+
+	/* The beat retries it, and this time the port takes it. */
+	g.fail_connect = 0;
+	cnxman_join_timer(&g.j);
+	ct_check_eq_u32(g.j.cm_reattempts, 1u,
+			"the once-a-second beat re-issues the connect (p. 7-30)");
+	ct_check(memcmp(g.last_remote, cnxman_join_name_vaxcluster,
+			VMS_SCS_PROCNAME_LEN) == 0,
+		 "... really issuing the VMS$VAXcluster connect");
+	cnxman_join_opened(&g.j, CM_CONID);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"... and the drive goes on from there");
+	ct_check_eq_u32(g.j.failure, CNXMAN_JOIN_FAIL_NONE,
+			"... with the stop reason cleared");
 }
 
 /* ==========================================================================
@@ -1727,6 +1797,257 @@ static void test_vaxcluster_refusal_is_still_terminal(void)
 	ct_check_eq_u32(g.j.ignored_events, 1u, "... and counted");
 }
 
+/* ==========================================================================
+ * E71 -- JOIN RESILIENCE: the live join-e70refire transcript, replayed
+ *
+ * That run's whole failure is five records long, and every case below is one
+ * fact from it:
+ *
+ *   t+14.472  DIR_RESULT -> MSCP_CONNECT
+ *   t+14.473  cdt-closed rc=3 (the member REJECTED our disk client)
+ *   t+14.473  MSCP_CONNECT -> FAILED, "connect refused locally"
+ *   t+16.398  the member opens ITS OWN VMS$VAXcluster connection to us
+ *   t+16.399  ... dropped into the empty [FAILED] row (ignored_events)
+ *
+ * The middle record is the defect: with no adopted connection to fall back on,
+ * the MSCP reject led straight into a VMS$VAXcluster connect this node's own
+ * SCS refused, and that refusal ended the join two seconds before the cluster
+ * offered it membership.
+ * ========================================================================== */
+
+/* Park the target's CSB where the ladder parks a connection whose p. 7-30
+ * reconnect window has run out -- by driving the ladder itself, not by writing
+ * the field, so this test fails if that verdict ever stops being DISCONNECT. */
+static void member_csb_reconnect_window_expires(void)
+{
+	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
+				  CNXMAN_CSB_EV_CONNECT_SENT, &g.ops);
+	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
+				  CNXMAN_CSB_EV_CONN_OPEN, &g.ops);
+	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
+				  CNXMAN_CSB_EV_CONN_LOST, &g.ops);
+	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
+				  CNXMAN_CSB_EV_RECNX_EXPIRED, &g.ops);
+}
+
+static void test_e70_sequence_reaches_the_membership_offer(void)
+{
+	printf("\n-- E71: the live E70 sequence, and the offer it dropped --\n");
+
+	bed_init();
+	bed_set_identity();
+	drive_to_mscp_connect();
+	g.fail_connect = 1;                       /* the local SCS says no    */
+	cnxman_join_rejected(&g.j, MSCP_CONID, 0u); /* rc=3, t+14.473         */
+
+	ct_check(g.j.state != CNXMAN_JOIN_FAILED,
+		 "the E70 pair -- a rejected disk client AND a locally refused "
+		 "VMS$VAXcluster connect -- does not end the join");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_VC_CONNECT,
+			"... it leaves the join needing its connection");
+	ct_check_eq_u32(g.j.mscp_rejected, 1u, "the reject is counted");
+	ct_check_eq_u32(g.j.cm_connect_refused, 1u,
+			"... and so is the local refusal");
+
+	/* t+16.398: the genuine membership connection, 1.9 s later. */
+	g.fake.now_ms += 1925u;
+	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	cnxman_join_opened(&g.j, ACC_CM_CONID);
+	ct_check_eq_u32(g.j.cm_adopted, 1u,
+			"the member's own connection is ADOPTED, not dropped "
+			"into an empty [FAILED] row");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"... and this node advertises itself at last");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 3u,
+			"three CM frames leave this node -- the run that "
+			"produced ZERO in 1600 s");
+	ct_check(sent_on_is(ACC_CM_CONID, 0, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_MODEL), "MODEL first");
+	ct_check(sent_on_is(ACC_CM_CONID, 2, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_CONFIG), "... op-0x02 last");
+	ct_check_eq_u32(cnxman_join_handed_off(&g.j), 0,
+			"INV-6: reaching ADMIT is not being a member, and this "
+			"node still claims nothing");
+}
+
+/*
+ * INV-6, the anti-LARP half of resilience: a join that keeps trying must never
+ * drift toward looking joined. Thirty beats with every connect refused.
+ */
+static void test_retrying_never_fabricates_a_join(void)
+{
+	uint32_t i;
+
+	bed_init();
+	bed_set_identity();
+	drive_to_mscp_connect();
+	g.fail_connect = 1;
+	cnxman_join_rejected(&g.j, MSCP_CONID, 0u);
+
+	for (i = 0; i < 30u; i++) {
+		g.fake.now_ms += 1000u;
+		cnxman_join_timer(&g.j);
+	}
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_VC_CONNECT,
+			"thirty refused beats leave the join exactly where it "
+			"was: still trying");
+	ct_check_eq_u32(g.j.cm_reattempts, 30u, "... one attempt per beat");
+	ct_check_eq_u32(g.j.cm_connect_refused, 31u,
+			"... every one of them counted as refused");
+	ct_check_eq_u32(g.n_sent, 0u, "not one frame was invented");
+	ct_check_eq_u32(cnxman_join_handed_off(&g.j), 0,
+			"this node is NOT a member");
+	ct_check_eq_u32(cnxman_club_local(&g.cl.club)->csid_valid, 0u,
+			"... this node's own CSID was never learned");
+	ct_check_eq_u32(cnxman_club_recount_members(&g.cl.club), 0u,
+			"... and the CLUB counts no members");
+	ct_check_eq_u32(g.j.cm_open, 0u,
+			"... and it never claims an open connection");
+}
+
+/*
+ * The HONEST END. The bound is not this FSM's: it is the CSB's p. 7-30
+ * reconnect timeout period, and when the ladder gives that connection up
+ * (vms_cnxman_csb.c's csb_give_up -> DISCONNECT) the join reads that verdict
+ * rather than keeping a hope of its own.
+ */
+static void test_expired_reconnect_window_ends_the_attempt_honestly(void)
+{
+	bed_init();
+	bed_set_identity();
+	drive_to_mscp_connect();
+	g.fail_connect = 1;
+	cnxman_join_rejected(&g.j, MSCP_CONID, 0u);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_VC_CONNECT, "waiting");
+
+	member_csb_reconnect_window_expires();
+	g.fake.now_ms += 1000u;
+	cnxman_join_timer(&g.j);
+
+	ct_check_eq_u32(g.j.failure, CNXMAN_JOIN_FAIL_TIMEOUT,
+			"the expired reconnect window is named as the reason");
+	ct_check_eq_u32(g.j.connect_windows_expired, 1u, "... and counted");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_IDLE,
+			"the attempt is RELEASED -- not wedged in a terminal "
+			"row where no later discovery could restart it");
+	ct_check_eq_u32(cnxman_join_handed_off(&g.j), 0,
+			"INV-6: an honest timeout is not a membership");
+	ct_check_eq_u32(g.j.cm_conid, 0u, "... and holds no connection");
+
+	/* And a genuinely new attempt is possible -- through a member the
+	 * executive has NOT given up on. */
+	g.fail_connect = 0;
+	ct_check(cnxman_join_start(&g.j) == 0,
+		 "a new join can be started once there is somewhere to start "
+		 "one");
+	ct_check_eq_u32(g.j.target_sysid == OTHER_SYSID, 1u,
+			"... and it does NOT re-select the CSB the executive "
+			"gave up on");
+}
+
+/*
+ * The executive's own reconnect apparatus opened a connection this FSM had no
+ * way of hearing about (its CDT_OPEN named a Con.ID the join was not holding).
+ * p. 7-23 puts that Con.ID on the CSB, so the beat READS it there.
+ */
+static void test_beat_adopts_the_connection_the_executive_holds(void)
+{
+	bed_init();
+	bed_set_identity();
+	drive_to_mscp_connect();
+	g.fail_connect = 1;
+	cnxman_join_rejected(&g.j, MSCP_CONID, 0u);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_VC_CONNECT, "waiting");
+
+	/* What the glue does on a reconnect it issued: the Con.ID on the CSB,
+	 * and the ladder's own OPEN when the CDT comes up. */
+	g.member_csb->cdt_conid = ACC_CM_CONID;
+	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
+				  CNXMAN_CSB_EV_CONNECT_SENT, &g.ops);
+	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
+				  CNXMAN_CSB_EV_CONN_OPEN, &g.ops);
+
+	g.fake.now_ms += 1000u;
+	cnxman_join_timer(&g.j);
+	ct_check_eq_u32(g.j.cm_resynced, 1u,
+			"the beat takes the Con.ID off the CSB");
+	ct_check_eq_u32(g.j.cm_conid, ACC_CM_CONID, "... that exact one");
+	ct_check_eq_u32(g.j.cm_reattempts, 0u,
+			"... instead of opening a SECOND connection to a pair "
+			"that may hold only one");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"... and, the CSB being OPEN, the drive resumes on it");
+	ct_check(sent_on_is(ACC_CM_CONID, 0, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_MODEL),
+		 "... with the burst going out on the adopted connection");
+}
+
+/*
+ * The burst mask, not the lifetime counters. After a reconnect the new
+ * connection has carried nothing, however much the old one carried.
+ */
+static void test_reoffer_is_per_connection_not_per_lifetime(void)
+{
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	ct_check_eq_u32(g.j.model_sent, 1u, "the burst went out once");
+
+	/* The connection goes, and the member re-offers -- but SCS refuses
+	 * every send on the new one. */
+	cnxman_join_closed(&g.j, CM_CONID, 0u);
+	g.fail_send = 1;
+	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	cnxman_join_opened(&g.j, ACC_CM_CONID);
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 0u,
+			"nothing got through on the new connection");
+	ct_check_eq_u32(g.j.model_sent, 1u,
+			"... so the LIFETIME count is still the old one's");
+
+	g.fail_send = 0;
+	g.fake.now_ms += 1000u;
+	cnxman_join_timer(&g.j);
+	ct_check_eq_u32(g.j.burst_reoffers, 1u,
+			"the beat re-offers the burst on the connection this "
+			"node holds NOW -- a lifetime counter would have said "
+			"'already advertised' and gone silent for good");
+	ct_check(sent_on_is(ACC_CM_CONID, 0, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_MODEL), "MODEL really went out on it");
+	ct_check_eq_u32(g.j.model_sent, 2u, "... and the lifetime count moved");
+}
+
+/*
+ * A start with nowhere to start is VMS's "waiting to form or join an OpenVMS
+ * Cluster", which is a REPEATED question -- not one attempt with a terminal
+ * answer.
+ */
+static void test_a_start_with_no_target_is_deferred_not_terminal(void)
+{
+	bed_init();
+	bed_set_identity();
+	member_csb_reconnect_window_expires();
+	/* Both remote CSBs given up on: nothing joinable at this instant. */
+	(void)cnxman_csb_dispatch(&g.cl.club, cnxman_club_csb_at(&g.cl.club, 1u),
+				  CNXMAN_CSB_EV_CONNECT_SENT, &g.ops);
+	(void)cnxman_csb_dispatch(&g.cl.club, cnxman_club_csb_at(&g.cl.club, 1u),
+				  CNXMAN_CSB_EV_DISCONNECT, &g.ops);
+
+	ct_check(cnxman_join_start(&g.j) != 0, "no join starts");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_IDLE,
+			"... and the FSM stays in IDLE, where the next beat can "
+			"ask again -- never in a terminal row");
+	ct_check_eq_u32(g.j.failure, CNXMAN_JOIN_FAIL_NO_TARGET,
+			"... with the reason named");
+	ct_check_eq_u32(g.j.starts_deferred, 1u, "... and counted");
+	ct_check_eq_u32(g.n_inq, 0u, "nothing went on the wire");
+
+	/* A member the executive has not given up on appears. */
+	(void)cnxman_club_alloc_csb(&g.cl.club, 0x000004000104ull, 1);
+	ct_check(cnxman_join_start(&g.j) == 0,
+		 "and the very next start goes, because nothing was wedged");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_DIR_ROUND, "... into DIR ROUND");
+}
+
 /*
  * E70 -- A REFUSED BURST IS RE-OFFERED ON THE JOIN'S OWN BEAT.
  *
@@ -1904,8 +2225,8 @@ int main(void)
 	test_no_target_refuses();
 	test_vaxcluster_absent_is_fatal_mscp_absent_is_not();
 	test_reject_is_terminal();
-	test_pathlost_fails_the_join();
-	test_connect_refusal_is_named();
+	test_pathlost_keeps_the_join_alive();
+	test_connect_refusal_is_named_and_retried();
 	test_server_half();
 	test_watchdog();
 	test_handoff_without_a_barrier();
@@ -1919,6 +2240,12 @@ int main(void)
 	test_disk_client_loss_does_not_stop_the_join();
 	test_refusal_then_member_dialled_still_promotes();
 	test_vaxcluster_refusal_is_still_terminal();
+	test_e70_sequence_reaches_the_membership_offer();
+	test_retrying_never_fabricates_a_join();
+	test_expired_reconnect_window_ends_the_attempt_honestly();
+	test_beat_adopts_the_connection_the_executive_holds();
+	test_reoffer_is_per_connection_not_per_lifetime();
+	test_a_start_with_no_target_is_deferred_not_terminal();
 	test_every_table_cell();
 
 	return ct_summary("test_cnxman_join");

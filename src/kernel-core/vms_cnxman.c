@@ -483,8 +483,31 @@ static int cnxman_jop_connect(void *ctx, vms_scs_sysid_t dst,
 		return -1;
 	status = scs_connect(cn->cl->scs, local_name, remote_name, dst,
 			     conndata, out_conid);
-	if (status != (int)SS__NORMAL)
+	if (status != (int)SS__NORMAL) {
+		/*
+		 * E71: a connect this node could not put on the wire left NO
+		 * record at all. On the live join-e70refire run the join's own
+		 * transcript therefore showed MSCP_CONNECT -> FAILED with no
+		 * cause anywhere: the refusal that caused it was invisible in
+		 * the ring, in the pcap (nothing was transmitted) and on the
+		 * console. `rc` is the executive's own SS$_ status for the
+		 * connect and `aux` the destination SCSSYSTEMID, truncated to
+		 * its low 32 bits like every other identity in this ring.
+		 *
+		 * NO PORT RECORD IS WRITTEN HERE, deliberately. A refused SEND
+		 * can ask the CDT which layer refused it (scs_send_refusal's
+		 * port_was_refuser); a refused CONNECT cannot -- scs_connect()
+		 * releases the CDT rather than leave a row for a connection
+		 * that was never attempted -- so the port's `last_send_refusal`
+		 * might belong to an entirely different frame. Reporting it as
+		 * this connect's cause would be exactly the plausible-looking
+		 * value INV-6 forbids. Naming the connect's own refusing layer
+		 * needs an scs_connect_refusal() readback of its own.
+		 */
+		cnxman_diag_note(cn, CNXMAN_DIAG_R_CONNECT_REFUSED, status,
+				 (uint32_t)dst);
 		return cnxman_fsm_rc(status);
+	}
 
 	if (local_name == cnxman_join_name_vaxcluster) {
 		struct vms_csb *csb = csb_ensure(&cn->cl->club, dst);
@@ -1217,8 +1240,10 @@ static int cnxman_join_drive(struct vms_cnxman *cn)
 	if (!cnxman_join_target_present(cn))
 		return 0;
 
-	(void)cnxman_join_start(&cn->join);
-	if (cn->join.state == (uint8_t)CNXMAN_JOIN_FAILED)
+	/* The FSM's own answer, not an inspection of its state: a start that
+	 * could not happen leaves it in IDLE with the reason named, and this
+	 * node has not begun joining anything (E71). */
+	if (cnxman_join_start(&cn->join) != 0)
 		return 0;
 
 	cn->cl->state = VMS_CLUSTER_JOINING;
@@ -1287,8 +1312,18 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 		/* E36: discovery FIRST, so a system that appeared since the
 		 * last beat has a CSB before the reconnect ladder and the join
 		 * look at the CLUB on this same beat. */
-		if (cnxman_discover_peers(cn) != 0u)
-			(void)cnxman_join_drive(cn);
+		(void)cnxman_discover_peers(cn);
+		/*
+		 * E71: EVERY beat, not only a beat that discovered something
+		 * new. "Waiting to form or join an OpenVMS Cluster" is a
+		 * REPEATED question (p. 2-51's poller repeats; p. 7-30's
+		 * once-a-second cadence), and a join that stopped for a
+		 * connectivity reason went back to IDLE precisely so this
+		 * sweep could ask it again. cnxman_join_drive() is already
+		 * gated on IDLE and on a real target, so a running, joined or
+		 * refused join is untouched.
+		 */
+		(void)cnxman_join_drive(cn);
 		n = cnxman_recnx_tick(&cn->recnx, recs, VMS_CLUB_MAX_CSB);
 		for (i = 0; i < n; i++)
 			cnxman_act_on_recnx_rec(cn, &recs[i]);

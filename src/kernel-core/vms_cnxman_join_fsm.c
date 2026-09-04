@@ -172,6 +172,7 @@ const char *cnxman_join_failure_name(enum cnxman_join_failure f)
 	case CNXMAN_JOIN_FAIL_ABSENT:    return "SYSAP not present on the member";
 	case CNXMAN_JOIN_FAIL_SEND:      return "message could not be sent";
 	case CNXMAN_JOIN_FAIL_CODEC:     return "codec refused to build";
+	case CNXMAN_JOIN_FAIL_TIMEOUT:   return "reconnect interval expired";
 	default:                         return "?";
 	}
 }
@@ -185,12 +186,110 @@ static void join_goto(struct cnxman_join *j, enum cnxman_join_state s)
 	j->state = (uint8_t)s;
 }
 
+/*
+ * A VERDICT: this attempt is over and repeating it would be a loop, not a
+ * recovery. [FAILED] is an empty table row on purpose -- see join_stopped()
+ * below for the OTHER outcome, the one three live runs needed.
+ */
 static void join_fail(struct cnxman_join *j, enum cnxman_join_failure why,
 		      const char *msg)
 {
 	j->failure = (uint8_t)why;
 	join_goto(j, CNXMAN_JOIN_FAILED);
 	join_log(j, msg);
+}
+
+/* ==========================================================================
+ * STAYING ALIVE THROUGH A TRANSIENT (E71)
+ *
+ * THE WALL, three live runs in a row. On each of join-e67refire, join-e69refire
+ * and join-e70refire (2026-09-04) this join reached [FAILED] on an EARLY
+ * connectivity event, and then -- one to two seconds later -- the member opened
+ * its own VMS$VAXcluster connection to this node and OFFERED it the membership
+ * dialogue. [FAILED] is an empty row, so each of those offers was counted as an
+ * ignored event and dropped, and the node stayed silent for the rest of the
+ * run. The E70 transcript is the whole story in five records: MSCP_CONNECT,
+ * cdt-closed rc=3, MSCP_CONNECT->FAILED at t+14.473, and at t+16.399 a genuine
+ * cm-accept landing in the empty [FAILED] row.
+ *
+ * WHY THAT WAS WRONG, from the book rather than from the symptom:
+ *
+ *   1. CONNECTIVITY IS NOT A VERDICT. p. 7-30: when a connection to a remote
+ *      connection manager goes for any reason not involving a last gasp, "for a
+ *      limited period of time, the local Connection Manager will attempt once a
+ *      second to establish another connection", and "do not presume that the
+ *      remote system has left ... simply because the local Connection Manager
+ *      has lost contact". A machine that ends the whole join on the first lost
+ *      or refused connection presumes exactly that.
+ *
+ *   2. THE RECONNECT APPARATUS ALREADY EXISTS, AND IT IS NOT HERE. p. 7-23:
+ *      "Module CNXMAN in the local Connection Manager is responsible for
+ *      managing SCS connections between the local SYS$CLUSTER and remote
+ *      SYS$CLUSTERs. It is also responsible for performing reconnect attempts
+ *      if any of those SCS connections are lost", and the state of each such
+ *      connection is a field of the CSB -- the ten connectivity states of
+ *      pp. 7-23/7-24, which vms_cnxman_csb.c implements: WAIT ("a timeout is in
+ *      progress; at the end of the timeout, an attempt will be made to
+ *      reconnect ... repeated until either connectivity is once again
+ *      established ... or a time limit is exceeded"), RECONNECT, and REACCEPT
+ *      ("the local Connection Manager is accepting a reconnect request from the
+ *      remote Connection Manager"). So the retry policy and its bound are the
+ *      CSB's, this FSM's job is to still be there when connectivity returns,
+ *      and there is exactly ONE reconnect policy in this executive.
+ *
+ *   3. REACCEPT IS THE ANSWER THE LIVE RUNS WERE GIVEN. In both transcripts the
+ *      member re-offered the connection itself. A joiner that is alive takes it
+ *      (join_h_cm_accepted); a joiner in [FAILED] cannot.
+ *
+ * WHAT THIS DOES NOT DO (INV-6). It never retries into a membership: a retry
+ * re-establishes a CONNECTION and nothing else. No CSID is learned, no CSB flag
+ * is set and no cluster state is written anywhere in this file's retry path --
+ * the only route to MEMBER remains a real op-0x06 naming a real generation
+ * (join_learn_csid_from_membership). "Keep trying until it looks joined" would
+ * be the fabrication; "keep trying until the member really answers, or the
+ * executive says the window is over" is the machine.
+ * ========================================================================== */
+
+/*
+ * This attempt stopped for a CONNECTIVITY reason. The named reason is kept --
+ * an operator has to be able to read why the last attempt did not get anywhere
+ * -- and the FSM goes back to IDLE, where the caller's own once-a-second sweep
+ * may start a genuinely NEW join (a fresh target selection, a fresh directory
+ * round, a fresh connect). Nothing about this node's membership is asserted on
+ * the way through: it was not a member before and it is not one now.
+ */
+static void join_stopped(struct cnxman_join *j, enum cnxman_join_failure why,
+			 const char *msg)
+{
+	j->failure = (uint8_t)why;
+	j->target_valid = 0u;
+	j->target_csb = -1;
+	j->lookups_hit = 0u;
+	j->lookups_answered = 0u;
+	j->mscp_conid = 0u;
+	j->mscp_open = 0u;
+	j->mscp_walk_done = 0u;
+	j->cm_conid = 0u;
+	j->cm_open = 0u;
+	j->burst_on_conn = 0u;
+	j->units_found = 0u;
+	vms_mscp_cl_fsm_init(&j->mscp);
+	join_goto(j, CNXMAN_JOIN_IDLE);
+	join_log(j, msg);
+}
+
+/*
+ * Take `conid` as THE VMS$VAXcluster connection of this join.
+ *
+ * The burst mask is cleared here and nowhere else: a different connection is a
+ * different dialogue, so whatever this node managed to say down the last one
+ * has not been said down this one.
+ */
+static void join_cm_take(struct cnxman_join *j, vms_conid_t conid)
+{
+	if (j->cm_conid != conid)
+		j->burst_on_conn = 0u;
+	j->cm_conid = conid;
 }
 
 /*
@@ -216,9 +315,25 @@ static void join_arm_watch(struct cnxman_join *j)
 
 static struct vms_csb *join_target_csb(struct cnxman_join *j)
 {
+	struct vms_csb *c;
+
 	if (j->cl == NULL || !j->target_valid || j->target_csb < 0)
 		return NULL;
-	return cnxman_club_csb_at(&j->cl->club, (uint32_t)j->target_csb);
+	c = cnxman_club_csb_at(&j->cl->club, (uint32_t)j->target_csb);
+	if (c == NULL)
+		return NULL;
+	/*
+	 * The slot must still hold the SYSTEM this join selected. A CSB is
+	 * deallocated and rebuilt when a system returns (p. 7-25), so a slot
+	 * index alone can come back pointing at somebody else -- and every
+	 * caller of this uses the answer to stamp an envelope or to read a
+	 * connection identity. Answering NONE is the honest outcome (INV-6);
+	 * answering "the block that is in that slot now" is how a message gets
+	 * addressed with another system's dialogue counters.
+	 */
+	if (!c->sysid_valid || c->sysid != j->target_sysid)
+		return NULL;
+	return c;
 }
 
 /* ==========================================================================
@@ -363,8 +478,10 @@ static void join_send_model(struct cnxman_join *j)
 				(uint32_t)sizeof(j->scratch), NULL);
 	if (join_build_failed(j, st))
 		return;
-	if (join_emit_cm(j, 0) == 0)
+	if (join_emit_cm(j, 0) == 0) {
 		j->model_sent++;
+		j->burst_on_conn |= CNXMAN_JOIN_B_MODEL;
+	}
 }
 
 /*
@@ -408,8 +525,10 @@ static void join_send_params(struct cnxman_join *j)
 				 (uint32_t)sizeof(j->scratch), NULL);
 	if (join_build_failed(j, st))
 		return;
-	if (join_emit_cm(j, 0) == 0)
+	if (join_emit_cm(j, 0) == 0) {
 		j->params_sent++;
+		j->burst_on_conn |= CNXMAN_JOIN_B_PARAMS;
+	}
 }
 
 static void join_send_config(struct cnxman_join *j)
@@ -420,8 +539,10 @@ static void join_send_config(struct cnxman_join *j)
 				 NULL);
 	if (join_build_failed(j, st))
 		return;
-	if (join_emit_cm(j, 0) == 0)
+	if (join_emit_cm(j, 0) == 0) {
 		j->config_sent++;
+		j->burst_on_conn |= CNXMAN_JOIN_B_CONFIG;
+	}
 }
 
 /* ==========================================================================
@@ -475,6 +596,22 @@ typedef enum cnxman_join_rx (*join_handler_t)(struct cnxman_join *,
  * ========================================================================== */
 
 /*
+ * Has the executive GIVEN UP on the connection to this system?
+ *
+ * Both answers are the CSB's own connectivity state, written by the ladder in
+ * vms_cnxman_csb.c and by nothing else: DISCONNECT is where csb_give_up() parks
+ * a connection whose p. 7-30 reconnect window ran out (or that was closed in an
+ * orderly way), and DEAD is p. 7-24's "the CSB whose connection state is DEAD
+ * represents the old incarnation". Neither is a connection manager this node
+ * can join THROUGH, and neither is a guess made here.
+ */
+static int join_csb_abandoned(const struct vms_csb *c)
+{
+	return c->state == (uint8_t)VMS_CNXMAN_CSB_DISCONNECT ||
+	       c->state == (uint8_t)VMS_CNXMAN_CSB_DEAD;
+}
+
+/*
  * Choose the member to join through. Book pp. 7-37/7-38 (correction D7) ranks
  * by VAXcluster protocol level, then ECO level, then "the CSB nearest the end
  * of the CLUB's CSB queue". Neither level has an isolated wire offset, so only
@@ -500,6 +637,8 @@ static int join_select_target(struct cnxman_join *j)
 		struct vms_csb *c = cnxman_club_csb_at(club, i - 1u);
 
 		if (c == NULL || c == local || !c->sysid_valid)
+			continue;
+		if (join_csb_abandoned(c))
 			continue;
 		j->target_sysid = c->sysid;
 		j->target_csb = (int32_t)(i - 1u);
@@ -558,24 +697,44 @@ static uint32_t join_send_lookups(struct cnxman_join *j)
 	return issued;
 }
 
+/*
+ * A start that could not happen. NOT a failed join: nothing was asserted to
+ * anybody and no connection was made, so there is nothing to fail -- this node
+ * simply has no cluster to join AT THIS INSTANT, which is precisely the state
+ * VMS reports as "waiting to form or join an OpenVMS Cluster" and keeps
+ * REPEATING (E71; the same p. 2-51 "the poller REPEATS" that already governs
+ * the directory round). The reason is named, the deferral is counted, and the
+ * FSM stays in IDLE so the caller's next beat asks again.
+ */
+static enum cnxman_join_rx join_start_deferred(struct cnxman_join *j,
+					       enum cnxman_join_failure why,
+					       const char *msg)
+{
+	j->failure = (uint8_t)why;
+	j->starts_deferred++;
+	if (j->starts_deferred == 1u)
+		join_log(j, msg);
+	join_goto(j, CNXMAN_JOIN_IDLE);
+	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
 static enum cnxman_join_rx join_h_start(struct cnxman_join *j,
 					const struct join_ev *e)
 {
 	(void)e;
 
-	if (join_select_target(j) != 0) {
-		join_fail(j, CNXMAN_JOIN_FAIL_NO_TARGET,
-			  "%CNXMAN, no connection manager to join through");
-		return CNXMAN_JOIN_RX_CONSUMED;
-	}
+	if (join_select_target(j) != 0)
+		return join_start_deferred(j, CNXMAN_JOIN_FAIL_NO_TARGET,
+					   "%CNXMAN, waiting to form or join an "
+					   "OpenVMS Cluster");
 	join_declare_dir_data(j);
 
-	if (join_send_lookups(j) == 0u) {
-		join_fail(j, CNXMAN_JOIN_FAIL_CONNECT,
-			  "%CNXMAN, could not open an SCS$DIRECTORY "
-			  "connection to the cluster");
-		return CNXMAN_JOIN_RX_CONSUMED;
-	}
+	if (join_send_lookups(j) == 0u)
+		return join_start_deferred(j, CNXMAN_JOIN_FAIL_CONNECT,
+					   "%CNXMAN, could not open an "
+					   "SCS$DIRECTORY connection to the "
+					   "cluster: retrying");
+	j->failure = (uint8_t)CNXMAN_JOIN_FAIL_NONE;
 	j->joins_started++;
 	join_goto(j, CNXMAN_JOIN_DIR_ROUND);
 	join_arm_watch(j);
@@ -601,6 +760,30 @@ static int join_open(struct cnxman_join *j, const uint8_t *local_name,
 static void join_cm_advertise(struct cnxman_join *j);
 
 /*
+ * Our VMS$VAXcluster connect could not be put on the wire (E71). This is NOT
+ * the p. 2-25 version gate -- no connect data reached a peer, no peer judged
+ * anything, and a node the member is about to dial cannot be said to have been
+ * refused by the cluster. What it is, is "no connectivity yet", which is
+ * VC_CONNECT: the beat retries it and the member's own connect is still taken.
+ */
+static void join_cm_connect_refused(struct cnxman_join *j)
+{
+	join_cm_take(j, 0u);      /* honest: this node holds no such connection */
+	j->cm_open = 0u;
+	j->cm_connect_refused++;
+	/* NAMED, though not terminal: this is why the attempt is where it is,
+	 * and CNXTRACE's summary line is how an operator reads that. It is
+	 * cleared the moment connectivity is really achieved. */
+	j->failure = (uint8_t)CNXMAN_JOIN_FAIL_CONNECT;
+	if (j->cm_connect_refused == 1u)
+		join_log(j, "%CNXMAN, this node could not put its VMS$VAXcluster "
+			    "connect on the wire: retrying, and still accepting "
+			    "the member's own");
+	join_goto(j, CNXMAN_JOIN_VC_CONNECT);
+	join_arm_watch(j);
+}
+
+/*
  * Step 4: the VMS$VAXcluster VC. There is exactly ONE such connection per pair
  * of systems and either side may open it (E67; spec sec 4(L)(1) describes the
  * leg the reference joiner won, and the same capture shows it accepting the
@@ -614,6 +797,7 @@ static void join_cm_advertise(struct cnxman_join *j);
 static void join_open_cm(struct cnxman_join *j)
 {
 	const uint8_t *cd = j->cfg.conndata_valid ? j->cfg.conndata : NULL;
+	vms_conid_t conid = 0u;
 
 	if (j->cm_open) {
 		join_cm_advertise(j);
@@ -626,24 +810,44 @@ static void join_open_cm(struct cnxman_join *j)
 	}
 	if (join_open(j, cnxman_join_name_vaxcluster,
 		      cnxman_join_name_vaxcluster, cd,
-		      CNXMAN_JOIN_CM_CREDITS, &j->cm_conid) != 0) {
-		join_fail(j, CNXMAN_JOIN_FAIL_CONNECT,
-			  "%CNXMAN, could not open the VMS$VAXcluster "
-			  "connection");
+		      CNXMAN_JOIN_CM_CREDITS, &conid) != 0) {
+		join_cm_connect_refused(j);
 		return;
 	}
+	join_cm_take(j, conid);
 	join_goto(j, CNXMAN_JOIN_VC_CONNECT);
 	join_arm_watch(j);
 }
 
-/* Step 3: the disk-client connection, reachable only from a real HIT. */
+/* Everything that becomes true when this node holds no disk-client connection:
+ * it claims none, and there is no walk left for anything to wait for. */
+static void join_disk_client_clear(struct cnxman_join *j)
+{
+	j->mscp_open = 0u;
+	j->mscp_conid = 0u;
+	j->mscp_walk_done = 1u;
+}
+
+/*
+ * Step 3: the disk-client connection, reachable only from a real HIT.
+ *
+ * A refusal HERE is this node's own SCS declining to open it, and it is
+ * governed by the same rule as the member's REJECT and as a lost disk-client
+ * connection: MSCP$DISK IS NOT A MEMBERSHIP PREREQUISITE (E68, below). All
+ * three leave the join in the same position -- no served units to enumerate --
+ * so all three are counted, said out loud, and stepped over.
+ */
 static void join_open_mscp(struct cnxman_join *j)
 {
 	if (join_open(j, cnxman_join_name_disk_cl_drvr,
 		      cnxman_join_name_mscp_disk, NULL,
 		      CNXMAN_JOIN_MSCP_CREDITS, &j->mscp_conid) != 0) {
-		join_fail(j, CNXMAN_JOIN_FAIL_CONNECT,
-			  "%CNXMAN, could not open an MSCP$DISK connection");
+		j->mscp_connect_refused++;
+		join_disk_client_clear(j);
+		join_log(j, "%CNXMAN, this node could not open an MSCP$DISK "
+			    "disk-client connection: it enumerates none of that "
+			    "member's units, and the join goes on");
+		join_open_cm(j);
 		return;
 	}
 	join_goto(j, CNXMAN_JOIN_MSCP_CONNECT);
@@ -700,9 +904,7 @@ static void join_open_mscp(struct cnxman_join *j)
  */
 static void join_disk_client_gone(struct cnxman_join *j)
 {
-	j->mscp_open = 0u;
-	j->mscp_conid = 0u;      /* honest: this node holds no such connection */
-	j->mscp_walk_done = 1u;  /* ... so there is no walk left to wait for   */
+	join_disk_client_clear(j);
 
 	/*
 	 * MSCP_CONNECT is the one state whose entire purpose was to wait for
@@ -978,6 +1180,9 @@ static enum cnxman_join_rx join_h_mscp_end(struct cnxman_join *j,
 static void join_cm_advertise(struct cnxman_join *j)
 {
 	j->cm_open = 1u;
+	/* Connectivity was achieved: whatever the last attempt stopped for is
+	 * no longer this join's position (E71). */
+	j->failure = (uint8_t)CNXMAN_JOIN_FAIL_NONE;
 	join_goto(j, CNXMAN_JOIN_ADVERTISE);
 
 	/* sec 4(o) rows 1-2: model, then parameters, on OUR VC. A build that
@@ -1040,7 +1245,7 @@ static enum cnxman_join_rx join_h_cm_accepted(struct cnxman_join *j,
 		j->cm_already_held++;
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
-	j->cm_conid = e->conid;
+	join_cm_take(j, e->conid);
 	j->cm_open = 1u;
 	j->cm_adopted++;
 	join_log(j, "%CNXMAN, the cluster opened the VMS$VAXcluster connection "
@@ -1244,6 +1449,51 @@ static enum cnxman_join_rx join_h_tr_open(struct cnxman_join *j,
  * Handlers: loss, the assignment, and the watchdog
  * ========================================================================== */
 
+/*
+ * The VMS$VAXcluster connection this join was using is gone (E71).
+ *
+ * TWO different positions, and the book separates them:
+ *
+ *   - ALREADY A MEMBER (BARRIER, MEMBER). p. 7-30: "do not presume that the
+ *     remote system has left, or will be leaving the cluster simply because
+ *     the local Connection Manager has lost contact", and membership is HELD
+ *     across the break while the CSB's reconnect window runs. So this FSM does
+ *     NOT move: unmaking this node's membership because one connection blinked
+ *     is exactly the presumption the book forbids, and what happens next --
+ *     reconnect, or a state transition when the window expires -- belongs to
+ *     the CSB ladder and the coordinator, which the glue already drives on the
+ *     same close.
+ *
+ *   - NOT YET ADMITTED. There is no membership to hold and what the join needs
+ *     is its connection back, which is VC_CONNECT.
+ *
+ * Either way the Con.ID is dropped. It has to be: the member's REACCEPT
+ * (p. 7-24) arrives as an ACCEPTED connection with a NEW Con.ID, and
+ * join_h_cm_accepted() refuses to adopt one while this join still claims to
+ * hold another. Keeping a dead Con.ID here made the live runs drop the member's
+ * own re-offer as `cm_already_held`.
+ */
+static void join_cm_connection_gone(struct cnxman_join *j)
+{
+	uint8_t state = j->state;
+
+	j->cm_open = 0u;
+	join_cm_take(j, 0u);
+	j->cm_lost++;
+	j->failure = (uint8_t)CNXMAN_JOIN_FAIL_PATHLOST;   /* named, not fatal */
+
+	if (state == (uint8_t)CNXMAN_JOIN_BARRIER ||
+	    state == (uint8_t)CNXMAN_JOIN_MEMBER) {
+		join_log(j, "%CNXMAN, lost the VMS$VAXcluster connection to a "
+			    "cluster member");
+		return;
+	}
+	join_log(j, "%CNXMAN, lost the VMS$VAXcluster connection before this "
+		    "node was admitted: waiting for it to come back");
+	join_goto(j, CNXMAN_JOIN_VC_CONNECT);
+	join_arm_watch(j);
+}
+
 static enum cnxman_join_rx join_h_closed(struct cnxman_join *j,
 					 const struct join_ev *e)
 {
@@ -1264,10 +1514,7 @@ static enum cnxman_join_rx join_h_closed(struct cnxman_join *j,
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
 	if (j->cm_conid != 0u && e->conid == j->cm_conid) {
-		j->cm_open = 0u;
-		join_fail(j, CNXMAN_JOIN_FAIL_PATHLOST,
-			  "%CNXMAN, lost a connection needed to join the "
-			  "cluster");
+		join_cm_connection_gone(j);
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
 	j->ignored_events++;
@@ -1312,6 +1559,106 @@ static enum cnxman_join_rx join_h_watch(struct cnxman_join *j,
 	return CNXMAN_JOIN_RX_CONSUMED;
 }
 
+/* ==========================================================================
+ * THE WATCHDOG IN [VC CONNECT] -- p. 7-30's "attempt once a second", with the
+ * BOUND read off the CSB rather than kept here (E71)
+ *
+ * This beat asks the executive three questions in the order that makes each
+ * answer meaningful, and acts on the first that answers:
+ *
+ *   1. Has the CSB ladder (or the member) put a connection there that this FSM
+ *      does not know about? p. 7-23 makes the CSB the record of "the state of
+ *      the SCS connection between the local SYS$CLUSTER and the SYS$CLUSTER
+ *      residing in the system associated with the CSB", and the glue writes
+ *      that connection's Con.ID into `cdt_conid` at the instant SCS mints it --
+ *      for the join's own connect, for the reconnect the ladder issues, and for
+ *      one this node accepted. So a `cdt_conid` this join is not holding IS the
+ *      executive telling it about a connection. Taking it is a read; minting
+ *      one would not be.
+ *
+ *   2. Has the executive GIVEN UP on that member? p. 7-24 WAIT: the reconnect
+ *      is "repeated until either connectivity is once again established with
+ *      the remote Connection Manager, or a time limit is exceeded, as described
+ *      in Section 7.10". The ladder owns that limit (max(RECNXINTERVAL, the
+ *      remote-supplied number), p. 7-30) and parks the CSB in DISCONNECT when
+ *      it expires. That is the HONEST end of the wait, and it is the executive
+ *      that decides it -- this FSM keeps no deadline of its own, so there is
+ *      exactly one reconnect policy in the connection manager.
+ *
+ *   3. Otherwise: if this node holds no connect at all, make one. If it has one
+ *      outstanding, wait -- p. 7-30's cadence is one attempt a second, not one
+ *      per beat per state.
+ * ========================================================================== */
+
+/*
+ * The reconnect window ran out. Nothing is asserted, nothing is retried behind
+ * the operator's back: the attempt is released with its reason named, and this
+ * node goes back to waiting for a cluster -- exactly as truthfully as it waited
+ * before it ever saw one.
+ */
+static void join_no_connectivity(struct cnxman_join *j)
+{
+	j->connect_windows_expired++;
+	join_stopped(j, CNXMAN_JOIN_FAIL_TIMEOUT,
+		     "%CNXMAN, the reconnect interval expired with no "
+		     "VMS$VAXcluster connection to the member: this node is NOT "
+		     "a cluster member");
+}
+
+/* Take the connection the executive holds for this member, if it is not the one
+ * this join is already holding. Returns 1 when the beat is over because of it. */
+static int join_cm_adopt_csb_conid(struct cnxman_join *j, struct vms_csb *csb)
+{
+	if (csb->cdt_conid == 0u || csb->cdt_conid == j->cm_conid)
+		return 0;
+
+	join_cm_take(j, csb->cdt_conid);
+	j->cm_resynced++;
+	join_log(j, "%CNXMAN, adopting the VMS$VAXcluster connection the "
+		    "executive holds for this member");
+	/*
+	 * OPEN is p. 7-24's "an SCS connection exists (i.e., the local
+	 * Connection Manager has connectivity)", written by the CSB ladder from
+	 * a real CDT open. Its CDT_OPEN event has already been and gone --
+	 * addressed to a Con.ID this join did not then hold -- so the drive
+	 * resumes here. Any other state means the connection is still being
+	 * made, and the beat waits for its open like any other.
+	 */
+	if (csb->state == (uint8_t)VMS_CNXMAN_CSB_OPEN)
+		join_cm_advertise(j);
+	return 1;
+}
+
+static void join_vc_beat(struct cnxman_join *j)
+{
+	struct vms_csb *csb = join_target_csb(j);
+
+	if (csb == NULL) {
+		join_no_connectivity(j);
+		return;
+	}
+	if (join_cm_adopt_csb_conid(j, csb))
+		return;
+	if (join_csb_abandoned(csb)) {
+		join_no_connectivity(j);
+		return;
+	}
+	if (j->cm_conid != 0u)
+		return;   /* our own attempt is still outstanding */
+
+	j->cm_reattempts++;
+	join_open_cm(j);
+}
+
+static enum cnxman_join_rx join_h_watch_vc(struct cnxman_join *j,
+					   const struct join_ev *e)
+{
+	join_vc_beat(j);
+	if (j->state != (uint8_t)CNXMAN_JOIN_VC_CONNECT)
+		return CNXMAN_JOIN_RX_CONSUMED;   /* the beat moved the drive */
+	return join_h_watch(j, e);
+}
+
 /*
  * THE WATCHDOG IN [ADVERTISE] AND [ADMIT] -- p. 2-51's "the poller REPEATS",
  * applied to the promotion burst exactly as join_h_watch_lookup() already
@@ -1328,14 +1675,18 @@ static enum cnxman_join_rx join_h_watch(struct cnxman_join *j,
  * the joiner that re-offers on its own beat rides them out; the joiner that
  * originates once cannot.
  *
- * WHAT IT MAY AND MAY NOT RE-OFFER. ONLY a message this node never
- * transmitted. `model_sent`/`params_sent`/`config_sent` are incremented in
- * join_send_*() ONLY when join_emit_cm() returned 0, i.e. only when SCS took
- * the body -- so a zero here is the executive's own record that the message
- * did not go, and a message that DID go is never sent twice. Each re-offer is
- * a fresh origination with its own send-msg# (join_emit_cm advances the CSB's
- * dialogue counter), which is what spec sec 4(j)'s strictly-monotonic-per-
- * sender rule requires; nothing is retransmitted.
+ * WHAT IT MAY AND MAY NOT RE-OFFER. ONLY a message this node never transmitted
+ * ON THE CONNECTION IT HOLDS NOW. `burst_on_conn` is set in join_send_*() ONLY
+ * when join_emit_cm() returned 0, i.e. only when SCS took the body, and it is
+ * cleared the instant the Con.ID changes (join_cm_take) -- so a clear bit is
+ * the executive's own record that THIS connection has not carried that message,
+ * and a message that DID go down it is never sent twice. (E71: the lifetime
+ * `*_sent` counters cannot answer that question. After a reconnect they are
+ * nonzero for a dialogue the new connection never had, and reading them here
+ * silently stopped the re-offer for good.) Each re-offer is a fresh origination
+ * with its own send-msg# (join_emit_cm advances the CSB's dialogue counter),
+ * which is what spec sec 4(j)'s strictly-monotonic-per-sender rule requires;
+ * nothing is retransmitted.
  *
  * It re-offers nothing at all while the VMS$VAXcluster connection is not open:
  * with no connection there is no origination to make, and join_emit_cm()'s own
@@ -1358,16 +1709,17 @@ static void join_reoffer_burst(struct cnxman_join *j)
 	 * that had its MODEL refused and has since walked the member's disks
 	 * still re-offers the MODEL first: an op-0x02 from a node that never
 	 * managed to say what it IS advertises nothing. */
-	if (j->model_sent == 0u) {
+	if ((j->burst_on_conn & CNXMAN_JOIN_B_MODEL) == 0u) {
 		join_send_model(j);
 		offered = 1;
 	}
-	if (j->state == state && j->params_sent == 0u) {
+	if (j->state == state &&
+	    (j->burst_on_conn & CNXMAN_JOIN_B_PARAMS) == 0u) {
 		join_send_params(j);
 		offered = 1;
 	}
 	if (j->state == state && state == (uint8_t)CNXMAN_JOIN_ADMIT &&
-	    j->config_sent == 0u) {
+	    (j->burst_on_conn & CNXMAN_JOIN_B_CONFIG) == 0u) {
 		join_send_config(j);
 		offered = 1;
 	}
@@ -1421,12 +1773,18 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 		[CNXMAN_EV_TIMER_JOIN]   = join_h_watch,
 	},
 
-	/* [VC CONNECT] spec sec 4(L)(d). */
+	/*
+	 * [VC CONNECT] spec sec 4(L)(d), and -- since E71 -- the one place this
+	 * join waits for connectivity to its member, whether that connection
+	 * has never been made, could not be put on the wire, or was made and
+	 * lost. The beat is p. 7-30's "attempt once a second"; the member's own
+	 * connect is adopted here (p. 7-24 REACCEPT); the bound is the CSB's.
+	 */
 	[CNXMAN_JOIN_VC_CONNECT] = {
 		[CNXMAN_EV_CDT_OPEN]     = join_h_cm_opened,
 		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
 		[CNXMAN_EV_CDT_CLOSED]   = join_h_closed,
-		[CNXMAN_EV_TIMER_JOIN]   = join_h_watch,
+		[CNXMAN_EV_TIMER_JOIN]   = join_h_watch_vc,
 	},
 
 	/*
@@ -1499,8 +1857,16 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 		[CNXMAN_EV_CDT_CLOSED]   = join_h_closed,
 	},
 
-	/* [FAILED] terminal and honest: nothing here revives a join. A new one
-	 * is a new CLUSTER_START, which re-inits this FSM. */
+	/*
+	 * [FAILED] terminal and honest: nothing here revives a join. A new one
+	 * is a new CLUSTER_START, which re-inits this FSM.
+	 *
+	 * E71 narrowed WHO GETS HERE to a VERDICT -- the peer's REJECT of our
+	 * VMS$VAXcluster connect (p. 2-25's version gate), a member that hosts
+	 * no connection manager at all, and this node's own codec refusing to
+	 * build. A connectivity fact never lands in this row again: it lands in
+	 * [VC CONNECT], which is alive, or back in [IDLE], which is waiting.
+	 */
 	[CNXMAN_JOIN_FAILED] = { 0 },
 };
 
@@ -1726,7 +2092,13 @@ int cnxman_join_start(struct cnxman_join *j)
 		return -1;
 	join_bzero(&e, (uint32_t)sizeof(e));
 	(void)join_dispatch(j, CNXMAN_EV_START, &e);
-	return (j->state == (uint8_t)CNXMAN_JOIN_FAILED) ? -1 : 0;
+	/* A drive really started iff this FSM LEFT idle for something that is
+	 * not a refusal. Staying in IDLE is the deferral (join_start_deferred):
+	 * nothing was asserted and the caller should ask again. */
+	if (j->state == (uint8_t)CNXMAN_JOIN_IDLE ||
+	    j->state == (uint8_t)CNXMAN_JOIN_FAILED)
+		return -1;
+	return 0;
 }
 
 void cnxman_join_opened(struct cnxman_join *j, vms_conid_t conid)

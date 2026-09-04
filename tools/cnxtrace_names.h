@@ -51,7 +51,8 @@ static const char *const cnxtrace_failure_names[] = {
     "path lost",                     /* 4 */
     "SYSAP not present on the member", /* 5 */
     "message could not be sent",     /* 6 */
-    "codec refused to build"         /* 7 */
+    "codec refused to build",        /* 7 */
+    "reconnect interval expired"     /* 8 */
 };
 
 /* enum cnxman_diag_kind */
@@ -98,7 +99,15 @@ static const char *const cnxtrace_reason_names[] = {
     "port-ringfull",  /* 16  aux = sends refused for a full unacked ring   */
     "port-badframe",  /* 17  aux = 0: the port keeps no such count         */
     "port-txfail",    /* 18  aux = 0: the interface refused the frame      */
-    "cdt-not-sendable"/* 19  rc = the CDT's live state, aux = its Send Credit */
+    "cdt-not-sendable",/* 19 rc = the CDT's live state, aux = its Send Credit */
+    /*
+     * 20 (E71): SCS refused to OPEN a connection. rc = the executive's SS$_
+     * status for that connect, aux = the destination SCSSYSTEMID (low 32
+     * bits). No companion record names the refusing layer -- a refused
+     * connect leaves no CDT to ask, and the port's last refusal may belong to
+     * another frame entirely.
+     */
+    "connect-refused" /* 20 */
 };
 
 /* enum cnxman_diag_gate (an EMIT record's `detail`) */

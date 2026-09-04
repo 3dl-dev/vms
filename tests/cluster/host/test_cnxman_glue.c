@@ -418,6 +418,14 @@ static void check_has(const char *needle, const char *what)
 	ct_check(strstr(glue_src, needle) != NULL, what);
 }
 
+/* The other half: a line this glue must NOT contain. Some of the strongest
+ * statements about it are negative -- "it does not attach a fact it cannot
+ * stand behind" is not expressible as a `check_has`. */
+static void check_absent(const char *needle, const char *what)
+{
+	ct_check(strstr(glue_src, needle) == NULL, what);
+}
+
 static void test_glue_bindings(void)
 {
 	printf("-- the bindings, read out of src/kernel-core/vms_cnxman.c --\n");
@@ -569,6 +577,33 @@ static void test_glue_bindings(void)
 	check_has("cnxman_diag_note(cn, CNXMAN_DIAG_R_CDT_NOT_SENDABLE,",
 		  "E70: a refusal that was not the port's records the CDT's "
 		  "own live state instead");
+
+	/*
+	 * E71 -- the refusal that was invisible. On join-e70refire the join
+	 * went MSCP_CONNECT -> FAILED with no cause anywhere: the connect that
+	 * failed transmitted nothing, so the pcap could not show it and no ring
+	 * record existed. A refused connect must reach the transcript.
+	 */
+	check_has("cnxman_diag_note(cn, CNXMAN_DIAG_R_CONNECT_REFUSED, status,",
+		  "E71: a connect SCS refused reaches the E69 ring with the "
+		  "executive's own SS$_ status, not silence");
+	check_absent("cnxman_note_port_refusal(cn, dst);",
+		     "E71 / INV-6: it does NOT attach the port's last send "
+		     "refusal, which may belong to another frame entirely -- a "
+		     "refused connect leaves no CDT to ask");
+
+	/*
+	 * E71 -- and the beat that lets a released join start again. A join
+	 * that stopped for a connectivity reason goes back to IDLE precisely so
+	 * this sweep can ask again; gating the drive on "a peer was discovered
+	 * THIS beat" would mean it never does.
+	 */
+	check_has("(void)cnxman_discover_peers(cn);\n\t\t/*",
+		  "E71: the peer sweep runs on its own, and no longer gates "
+		  "the join drive on having found something new");
+	check_has("if (cnxman_join_start(&cn->join) != 0)",
+		  "E71: the drive believes the FSM's own answer about whether "
+		  "a join really started");
 
 	check_has("return cnxman_fsm_rc(scs_disconnect(",
 		  "E67: disconnect translates");

@@ -185,6 +185,20 @@ enum cnxman_diag_reason {
 	CNXMAN_DIAG_R_PORT_BADFRAME  = 17,
 	CNXMAN_DIAG_R_PORT_TXFAIL    = 18,
 	CNXMAN_DIAG_R_CDT_NOT_SENDABLE = 19,
+	/*
+	 * glue: SCS refused to OPEN a connection (E71). `rc` is the executive's
+	 * own SS$_ status for that connect and `aux` is the destination
+	 * SCSSYSTEMID, truncated to its low 32 bits like every other identity
+	 * here. There is deliberately no companion record naming the refusing
+	 * LAYER: a refused connect leaves no CDT to ask (vms_cnxman.c's
+	 * cnxman_jop_connect explains why the port's own last refusal may not
+	 * belong to it).
+	 *
+	 * It is written before the join is told, so a transcript reads "the
+	 * connect was refused, then what the join did about it" -- which on the
+	 * live join-e70refire run was the one fact nothing recorded anywhere.
+	 */
+	CNXMAN_DIAG_R_CONNECT_REFUSED = 20,
 	CNXMAN_DIAG_R__COUNT
 };
 

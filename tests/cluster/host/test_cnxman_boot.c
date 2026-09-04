@@ -65,9 +65,11 @@
  * vms_cnxman.c's cnxman_join_target_present() is this predicate: a CSB that
  * is in use, carries a REAL SCSSYSTEMID, and is not this node's own. It is
  * the same question join_select_target() (FC-P3.3) asks of the CLUB, asked by
- * the glue BEFORE it drives a join -- because a join started with no target
- * lands in CNXMAN_JOIN_FAILED, where no later discovery can restart it.
- * Reproduced here against a real CLUB.
+ * the glue BEFORE it drives a join -- so a beat with nowhere to join through
+ * asks nothing of the FSM at all. (E71 made the FSM's own answer safe either
+ * way: a start with no target is DEFERRED in IDLE, not turned into a terminal
+ * failure that no later discovery could restart.) Reproduced against a real
+ * CLUB.
  * ========================================================================== */
 static int target_present(const struct vms_club *club)
 {
@@ -308,8 +310,10 @@ static void test_cnxman_wiring(void)
 	    "boots later is still found");
 
 	has("if (!cnxman_join_target_present(cn))",
-	    "the join is driven ONLY when a real target exists -- never into "
-	    "CNXMAN_JOIN_FAILED, from which no discovery could restart it");
+	    "the join is driven ONLY when a real target exists");
+	has("(void)cnxman_join_drive(cn);",
+	    "E71: ... and it is driven on EVERY reconnect beat, so a join "
+	    "released after a connectivity failure is asked again");
 	has("cl->state = VMS_CLUSTER_JOINING",
 	    "a driven join moves this node to JOINING");
 	has("cl->params.vaxcluster == 2u",

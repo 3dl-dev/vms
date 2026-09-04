@@ -134,6 +134,10 @@ struct bed {
 
 	enum ref_step obs[MAX_OBS];
 	uint32_t      n_obs;
+	/* E71: the simulated transient -- this node's own SCS refusing to put
+	 * the VMS$VAXcluster connect on the wire, which is what happened on the
+	 * live join-e70refire run. */
+	int           refuse_cm_connect;
 	uint32_t      gus_cmds;      /* collapsed into one R_MSCP_GUS element */
 	uint32_t      logs;
 	char          last_log[160];
@@ -217,6 +221,8 @@ static int bed_connect(void *ctx, vms_scs_sysid_t dst,
 		obs(R_CONNECT_MSCP);
 		*out_conid = MSCP_CONID;
 	} else {
+		if (g.refuse_cm_connect)
+			return -1;   /* nothing went out: no step to observe */
 		obs(R_CONNECT_VAXCLUSTER);
 		*out_conid = CM_CONID;
 	}
@@ -566,6 +572,110 @@ static void test_honest_omissions_survive_the_replay(void)
 	ct_check_eq_u32(g.j.send_failures, 0u, "no send refusal");
 }
 
+/* ==========================================================================
+ * E71 -- THE SAME REFERENCE DRIVE, THROUGH A TRANSIENT
+ *
+ * This is the R2 leg the live runs asked for, and it is R2 rather than a
+ * second R1 for the same reason the rest of this file is: the RECOVERY IS
+ * DRIVEN BY THE VIRTUAL TIMER WHEEL. p. 7-30's reconnect cadence is "once a
+ * second", so the only way to prove the retry really happens is to advance a
+ * clock and deliver the timer -- which is exactly what sim_clock does here,
+ * in microseconds and with no wire.
+ *
+ * The transient injected is the one join-e70refire really hit: this node's own
+ * SCS refusing to put the VMS$VAXcluster connect on the wire, at the instant
+ * the disk-client step handed the drive on. Before E71 that ended the join two
+ * seconds before the cluster offered it membership.
+ * ========================================================================== */
+static void replay_through_a_transient(uint32_t *timers_fired)
+{
+	uint32_t len;
+	uint32_t fired = 0;
+
+	bed_init();
+	g.refuse_cm_connect = 1;
+
+	(void)cnxman_join_start(&g.j);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk,
+			       1);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster,
+			       1);
+	cnxman_join_opened(&g.j, MSCP_CONID);
+	/* ... and the VMS$VAXcluster connect that follows it is refused. */
+
+	/* The wheel: beats pass with the refusal standing, then it lifts. */
+	while (fired < 3u && run_one_timer())
+		fired++;
+	g.refuse_cm_connect = 0;
+	while (fired < 4u && run_one_timer())
+		fired++;
+	*timers_fired = fired;
+
+	cnxman_join_opened(&g.j, CM_CONID);
+
+	(void)feed_fixture("cm-params");
+
+	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_AVAILABLE);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 1u), 2u,
+			 VMS_MSCP_ST_OFFLINE);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+
+	(void)feed_fixture("cm-commit-req");
+	(void)feed_fixture("cm-dlm-op0d-req");
+	(void)feed_fixture("cm-close-req");
+	(void)feed_fixture("cm-open-add-req");
+	len = mk_go_frame(0x0000000eu);
+	if (len != 0u)
+		(void)cnxman_join_rx_frame(&g.j, g_synth, len, MEMBER_CSID, 1);
+	if (cnxman_join_handed_off(&g.j))
+		obs(R_HANDOFF);
+}
+
+static void test_a_transient_does_not_end_the_join(void)
+{
+	uint32_t n_ref = (uint32_t)(sizeof(reference) / sizeof(reference[0]));
+	uint32_t fired = 0;
+	uint32_t i;
+	int ok = 1;
+
+	printf("\n-- E71: a transient connect refusal, and the drive that "
+	       "survives it --\n");
+	replay_through_a_transient(&fired);
+
+	ct_check(fired >= 4u,
+		 "the reconnect really ran on the virtual clock: four "
+		 "once-a-second beats were delivered");
+	ct_check_eq_u32(g.j.cm_connect_refused, 4u,
+			"the first attempt and three beats were all refused");
+	ct_check_eq_u32(g.j.cm_reattempts, 4u,
+			"... and each beat made a real, counted attempt "
+			"(p. 7-30's cadence)");
+
+	for (i = 0; i < n_ref; i++) {
+		if (i >= g.n_obs || g.obs[i] != reference[i])
+			ok = 0;
+	}
+	ct_check(ok,
+		 "the whole reference sequence is still emitted, in order, "
+		 "AFTER the transient");
+	ct_check_eq_u32(g.n_obs, n_ref, "... and nothing extra");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_BARRIER,
+			"... and the join still reaches the barrier hand-off");
+
+	/* INV-6: surviving a transient is not becoming a member. */
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
+			"no CSID was learned or invented across the retry");
+	ct_check_eq_u32(g.j.csid_unpinned, 0u,
+			"... and none was even looked for outside a real "
+			"op-0x06");
+	ct_check_eq_u32(g.clock.overflows, 0u, "no timer was silently dropped");
+}
+
 int main(void)
 {
 	char err[512];
@@ -595,6 +705,7 @@ int main(void)
 	test_reaches_the_barrier_handoff();
 	test_no_step_waited_on_a_timer();
 	test_honest_omissions_survive_the_replay();
+	test_a_transient_does_not_end_the_join();
 
 	printf("\n  NOTE (integration note E12): the plan row's named "
 	       "vax3-2to3-established-join\n"

@@ -235,9 +235,12 @@ extern const uint8_t cnxman_join_name_disk_cl_drvr[VMS_SCS_PROCNAME_LEN];
  * 2. The states
  *
  * Nine, and each is a position a real joiner was OBSERVED to occupy (spec
- * SS4(L)(a)-(e), SS4(o)'s ordered table). There is no state for "waiting a
- * while": the deferral of op-0x02 is a dependency on the disk walk finishing,
- * not on a clock (SS4(o)'s own correction).
+ * SS4(L)(a)-(e), SS4(o)'s ordered table). No step of the drive is deferred on a
+ * clock: the deferral of op-0x02 is a dependency on the disk walk finishing,
+ * not on a timer (SS4(o)'s own correction). The one place this machine WAITS is
+ * VC_CONNECT, and it waits for CONNECTIVITY rather than for time -- the clock
+ * there is p. 7-30's once-a-second retry cadence, and the bound is the target
+ * CSB's own reconnect window, never a number this FSM chose (E71).
  * ========================================================================== */
 enum cnxman_join_state {
 	CNXMAN_JOIN_IDLE        = 0, /* CLUSTER_START not called yet          */
@@ -250,7 +253,18 @@ enum cnxman_join_state {
 	 */
 	CNXMAN_JOIN_DIR_ROUND   = 1,
 	CNXMAN_JOIN_MSCP_CONNECT = 2,/* our MSCP$DISK connect is out          */
-	CNXMAN_JOIN_VC_CONNECT  = 3, /* our VMS$VAXcluster connect is out     */
+	/*
+	 * This join has NO VMS$VAXcluster connection to its member and needs
+	 * one. Three different facts put it here and all three are the same
+	 * position: our connect is outstanding, our connect could not be put on
+	 * the wire at all, or a connection that was up went away before this
+	 * node was admitted (E71). It is NOT a failure and it is NOT a "wait a
+	 * while" state invented for a clock: the once-a-second beat retries
+	 * from here (p. 7-30's cadence), the member's own connect is still
+	 * adopted from here (p. 7-24 REACCEPT), and what BOUNDS the wait is the
+	 * target CSB's own reconnect window -- read, never kept here.
+	 */
+	CNXMAN_JOIN_VC_CONNECT  = 3,
 	CNXMAN_JOIN_ADVERTISE   = 4, /* VC open, MODEL+PARAMS sent; the disk
 				      * discovery walk is running             */
 	CNXMAN_JOIN_ADMIT       = 5, /* op-0x02 sent: admission started       */
@@ -260,7 +274,19 @@ enum cnxman_join_state {
 	CNXMAN_JOIN_STATE__COUNT
 };
 
-/* Why a join FAILED. Recorded, logged and counted -- never swallowed. */
+/*
+ * Why an attempt STOPPED. Recorded, logged and counted -- never swallowed.
+ *
+ * TERMINAL vs NOT (E71). Only a VERDICT is terminal: a peer REJECT is the
+ * Connection Managers' judgement on this node's version identity (p. 2-25 /
+ * D12) and a codec refusal is a defect in this node, and retrying either is a
+ * loop rather than a recovery. Everything else here is a fact about
+ * CONNECTIVITY, and p. 7-30 is explicit that connectivity comes and goes
+ * without meaning that anybody left: those values name why the CURRENT attempt
+ * stopped and the join stays alive, so `failure` can be set while `state` is
+ * IDLE or VC_CONNECT. That is not a contradiction -- it is "the last attempt
+ * stopped for this reason, and this node is still trying".
+ */
 enum cnxman_join_failure {
 	CNXMAN_JOIN_FAIL_NONE       = 0,
 	CNXMAN_JOIN_FAIL_NO_TARGET  = 1, /* no CSB to join through            */
@@ -271,7 +297,16 @@ enum cnxman_join_failure {
 	CNXMAN_JOIN_FAIL_ABSENT     = 5, /* "NOT PRESENT HERE": the member
 					  * does not run the SYSAP we need    */
 	CNXMAN_JOIN_FAIL_SEND       = 6, /* a body we built could not be sent */
-	CNXMAN_JOIN_FAIL_CODEC      = 7  /* the codec refused to build one    */
+	CNXMAN_JOIN_FAIL_CODEC      = 7, /* the codec refused to build one    */
+	/*
+	 * The p. 7-30 reconnect timeout period ran out with no VMS$VAXcluster
+	 * connection to the member: the CSB ladder gave that connection up
+	 * (vms_cnxman_csb.c's csb_give_up()) and this join read that, rather
+	 * than keeping a hope of its own. The HONEST end of a wait -- this node
+	 * is not a member and does not claim to be.
+	 */
+	CNXMAN_JOIN_FAIL_TIMEOUT    = 8,
+	CNXMAN_JOIN_FAIL__COUNT
 };
 
 /* What an offered inbound frame did. Same vocabulary as the barrier's and the
@@ -420,6 +455,11 @@ struct cnxman_join_ops {
 #define CNXMAN_JOIN_L_ALL        (CNXMAN_JOIN_L_MSCP_DISK | \
 				  CNXMAN_JOIN_L_VAXCLUSTER)
 
+/* One bit per sec 4(o) origination, for `burst_on_conn` above. */
+#define CNXMAN_JOIN_B_MODEL   0x01u
+#define CNXMAN_JOIN_B_PARAMS  0x02u
+#define CNXMAN_JOIN_B_CONFIG  0x04u
+
 /* How many served units this FSM will record from one walk. The walk itself is
  * unbounded (it ends at the peer's own OFFLINE terminator); this bounds only
  * how many of the peer's answers are KEPT, and an overflow is counted, never
@@ -474,7 +514,20 @@ struct cnxman_join {
 	 */
 	vms_conid_t mscp_conid;
 	vms_conid_t cm_conid;
-	uint8_t  mscp_open, cm_open, pad1[2];
+	uint8_t  mscp_open, cm_open;
+
+	/*
+	 * WHICH of the sec 4(o) originations this node has really transmitted
+	 * ON THE CONNECTION IT HOLDS NOW (CNXMAN_JOIN_B_*, below). Cleared the
+	 * instant `cm_conid` changes, because a message that went out down a
+	 * connection that has since gone is a message the member's NEW
+	 * connection never carried. The three `*_sent` counters below are
+	 * LIFETIME tallies and cannot answer that question -- reading them as
+	 * "already advertised" is how a re-offer silently stops happening after
+	 * a reconnect (E71).
+	 */
+	uint8_t  burst_on_conn;
+	uint8_t  pad1[1];
 
 	/* ---- the disk-client discovery walk (FC-P3.4) ---- */
 	struct vms_mscp_cl_fsm  mscp;
@@ -501,6 +554,38 @@ struct cnxman_join {
 	 */
 	uint32_t mscp_rejected;
 	uint32_t mscp_lost;
+	/*
+	 * ... and the third way that connection can fail to exist: this node's
+	 * own SCS refused to put the disk-client connect on the wire at all
+	 * (E71 -- it happens: the CDT, the circuit or the port can all say no).
+	 * Same verdict as the other two, for the same reason: MSCP$DISK is not
+	 * a membership prerequisite, so the join goes straight on to step 4.
+	 */
+	uint32_t mscp_connect_refused;
+
+	/* ---- staying alive through a transient (E71) ---- */
+	/*
+	 * Our VMS$VAXcluster connect could not be put on the wire. NOT a join
+	 * failure: nothing was asserted to anyone, and the member's own connect
+	 * is still coming. Counted, and retried on the beat.
+	 */
+	uint32_t cm_connect_refused;
+	/* A VMS$VAXcluster connection this join HELD went away (p. 7-30: do not
+	 * presume the member left). */
+	uint32_t cm_lost;
+	/* Beats on which VC_CONNECT re-issued the connect (p. 7-30's cadence). */
+	uint32_t cm_reattempts;
+	/* Beats on which the Con.ID was taken from the TARGET CSB instead --
+	 * the executive's reconnect apparatus had opened one this FSM had no
+	 * other way of learning about. */
+	uint32_t cm_resynced;
+	/* The reconnect timeout period ran out (FAIL_TIMEOUT): the attempt was
+	 * released and this node went back to waiting for a cluster. */
+	uint32_t connect_windows_expired;
+	/* Attempts that never started because no CSB was joinable at that
+	 * instant -- VMS's "waiting to form or join", counted rather than
+	 * turned into a terminal failure. */
+	uint32_t starts_deferred;
 	uint32_t model_sent;
 	uint32_t params_sent;
 	uint32_t config_sent;
@@ -619,9 +704,14 @@ void cnxman_join_set_diag(struct cnxman_join *j, struct cnxman_diag_ring *r);
 /*
  * CLUSTER_START: begin the join. Selects the member to join through from the
  * real CLUB (see E above), declares this node's directory descriptor if one
- * was supplied, and opens the SCS$DIRECTORY connection. Returns 0 when the
- * drive started, non-zero (and state FAILED, with a named failure) when it
- * could not -- there is no third outcome and no silent no-op.
+ * was supplied, and opens the SCS$DIRECTORY connection.
+ *
+ * Returns 0 when a drive really started, non-zero when it did not -- and the
+ * named reason is in `failure` either way. A start that did not happen leaves
+ * this FSM in IDLE (nothing was asserted to anybody, so there is nothing to
+ * fail), which is what lets the caller's once-a-second beat ask again: VMS's
+ * own "waiting to form or join an OpenVMS Cluster" is a REPEATED question, not
+ * one attempt with a terminal answer (E71).
  */
 int cnxman_join_start(struct cnxman_join *j);
 

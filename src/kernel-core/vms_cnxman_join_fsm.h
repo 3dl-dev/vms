@@ -263,6 +263,13 @@ enum cnxman_join_state {
 	 * from here (p. 7-30's cadence), the member's own connect is still
 	 * adopted from here (p. 7-24 REACCEPT), and what BOUNDS the wait is the
 	 * target CSB's own reconnect window -- read, never kept here.
+	 *
+	 * What ENDS the wait is the connection really being OPEN, announced by
+	 * the executive on either of two routes: the CDT_OPEN for the Con.ID
+	 * this join holds, or the target CSB standing in p. 7-24's OPEN state
+	 * on a beat (E72). Both go straight to ADVERTISE, and step 2's lookups
+	 * and step 3's disk-client connect are already behind this state by
+	 * construction -- there is no route into it that skips them.
 	 */
 	CNXMAN_JOIN_VC_CONNECT  = 3,
 	CNXMAN_JOIN_ADVERTISE   = 4, /* VC open, MODEL+PARAMS sent; the disk
@@ -611,8 +618,19 @@ struct cnxman_join {
 	uint32_t cm_adopted;         /* the member won the connect race and
 				      * THIS is the one connection to it (E67)*/
 	uint32_t cm_already_held;    /* an accepted VMS$VAXcluster connection
-				      * arrived while we already had one to the
-				      * same member: NOT adopted, counted      */
+				      * arrived while we already had an OPEN one
+				      * to the same member -- a true
+				      * simultaneous open: NOT adopted, counted */
+	/*
+	 * ... and the OTHER half of that case (E72): the connection this join
+	 * was holding had NOT reached OPEN when the member's own, which HAS,
+	 * arrived. The connection this node HAS beats the connect it merely
+	 * ISSUED -- the same way the CSB ladder takes a peer's CONNECT_RCVD in
+	 * WAIT/RECONNECT straight to REACCEPT (p. 7-24). The superseded connect
+	 * is counted here and left for SCS to finish or fail; a CDT_OPEN for it
+	 * afterwards names a Con.ID this join no longer holds and is ignored.
+	 */
+	uint32_t cm_superseded;
 	/*
 	 * Accepted VMS$VAXcluster connections from a member that is NOT the one
 	 * this join runs its dialogue with. The Rule of Total Connectivity
@@ -805,13 +823,22 @@ int cnxman_join_connect_req(struct cnxman_join *j, vms_scs_sysid_t peer,
  * There is one such connection per pair (design SS3.4; measured on the
  * reference join), so this join ADOPTS it as its own when it is with the
  * member this join runs its dialogue with and this join does not already hold
- * one; then the MODEL+PARAMS burst goes out on it exactly as it would on a
- * connection this node had opened -- immediately if the drive is already past
- * the point where it would have opened one, otherwise when the drive gets
+ * an OPEN one; then the MODEL+PARAMS burst goes out on it exactly as it would
+ * on a connection this node had opened -- immediately if the drive is already
+ * past the point where it would have opened one, otherwise when the drive gets
  * there (which keeps step 2's lookup-before-connect and step 3's disk walk in
  * their measured order). Every other case is COUNTED and changes nothing: an
- * accepted connection from another member is `cm_other_member`, one arriving
- * when we already have ours is `cm_already_held`.
+ * accepted connection from another member is `cm_other_member`, and one
+ * arriving while this join holds an OPEN connection to the same member is
+ * `cm_already_held` -- a true simultaneous open, which this node does not
+ * resolve because no capture grounds which side yields.
+ *
+ * A connect this join ISSUED and that has NOT reached OPEN does not block the
+ * adoption (E72): the member's connection exists and ours does not yet, so
+ * theirs is the pair's one connection and the superseded attempt is counted as
+ * `cm_superseded`. That is the same call the CSB ladder already makes when a
+ * peer's CONNECT_RCVD lands in WAIT or RECONNECT and it goes to REACCEPT
+ * (p. 7-24) -- "the peer beat our own once-a-second attempt to it".
  */
 void cnxman_join_cm_accepted(struct cnxman_join *j, vms_scs_sysid_t peer,
 			     vms_conid_t conid);

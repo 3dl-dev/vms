@@ -1223,28 +1223,85 @@ static enum cnxman_join_rx join_h_cm_opened(struct cnxman_join *j,
  * the drive reach step 4 in its own time; join_open_cm() then finds it already
  * open and advertises on it instead of opening a second. Adopting here rather
  * than advertising here is what keeps step 2's lookup-before-connect and step
- * 3's disk walk in the order the wire measured them.
+ * 3's disk walk in the order the wire measured them: the connection's own
+ * CDT_OPEN (join_h_cm_opened, which the glue raises immediately after this
+ * one) is what advances the drive, and it does so only from the state that is
+ * waiting for connectivity.
  *
  * Nothing here is inferred: `peer` and `conid` are the accept path's own
- * facts, and the two cases this join does not own are COUNTED, not acted on:
- *   - another member's connection (the Rule of Total Connectivity requires
- *     accepting it, and it is not this dialogue) -- `cm_other_member`;
- *   - a true simultaneous open, i.e. our own connect is already out --
- *     `cm_already_held`. Adopting then would give the pair TWO connections,
- *     and no capture grounds which side must yield, so this node yields
- *     nothing and invents nothing.
+ * facts, and the two cases this join does not own are COUNTED, not acted on --
+ * see the two guards below.
  */
 static enum cnxman_join_rx join_h_cm_accepted(struct cnxman_join *j,
 					      const struct join_ev *e)
 {
+	/*
+	 * Another member's connection. The Rule of Total Connectivity requires
+	 * this node to ACCEPT it (cnxman_join_connect_req does), but it is not
+	 * the dialogue this single-target join runs, so this join says nothing
+	 * on it (the gap is `cm_other_member`'s own note in the header).
+	 *
+	 * SAID OUT LOUD, ONCE. On a live cluster this counter and `cm_adopted`
+	 * are the difference between "the offer this join was waiting for" and
+	 * "an offer from a member it is not driving through", and the two look
+	 * identical in a transition ring that can only carry one longword of
+	 * `aux`. An operator reading a join that is not progressing has to be
+	 * able to tell them apart.
+	 */
 	if (!j->target_valid || e->from_sysid != j->target_sysid) {
 		j->cm_other_member++;
+		if (j->cm_other_member == 1u)
+			join_log(j, "%CNXMAN, a cluster member opened a "
+				    "VMS$VAXcluster connection to this node that "
+				    "is not the member this join is driving "
+				    "through");
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
-	if (j->cm_conid != 0u) {
+
+	/*
+	 * A TRUE SIMULTANEOUS OPEN: this join already holds a connection to
+	 * this member that is really OPEN. Taking a second would give the pair
+	 * two, and no capture grounds which side must yield -- so this node
+	 * yields nothing and invents nothing.
+	 */
+	if (j->cm_conid != 0u && j->cm_open) {
 		j->cm_already_held++;
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
+
+	/*
+	 * A Con.ID THIS JOIN HOLDS IS NOT A CONNECTION THIS NODE HAS (E72).
+	 *
+	 * THE WALL, live (join-e71refire, 2026-09-04). This join was holding
+	 * the Con.ID of a VMS$VAXcluster connect that never reached OPEN when
+	 * the member opened ITS OWN connection to this node and SCS brought it
+	 * up. The old test here was `cm_conid != 0`, so the genuine, OPEN
+	 * membership connection was counted as a simultaneous open and dropped;
+	 * the CDT_OPEN that followed it named a Con.ID this join was not
+	 * holding and was ignored; and the join sat in [VC CONNECT] for the
+	 * remaining 1471 beats of the run with ZERO cat-0x01 frames on the wire.
+	 *
+	 * THE EXECUTIVE'S OWN LADDER ALREADY DECIDES THIS CASE THE OTHER WAY.
+	 * p. 7-24 REACCEPT is "the local Connection Manager is accepting a
+	 * reconnect request from the remote Connection Manager", and
+	 * vms_cnxman_csb.c's table takes CNXMAN_CSB_EV_CONNECT_RCVD in WAIT and
+	 * in RECONNECT -- i.e. WHILE THIS NODE'S OWN ATTEMPT IS IN FLIGHT --
+	 * straight to h_reaccept, whose own comment is "the peer beat our
+	 * once-a-second attempt to it". A join that refuses what its own CSB
+	 * ladder is accepting contradicts the connection manager it is part of.
+	 *
+	 * So: the connection this node HAS beats the connect it merely ISSUED.
+	 * That is a read of two facts the executive supplies -- `cm_open`, set
+	 * only from a real CDT open or a real accept, and this event, which the
+	 * glue raises only when SCS has the accepted connection OPEN -- and not
+	 * a rule about who yields. The superseded connect is COUNTED and left
+	 * alone: this file does not tear down a connection SCS may still be
+	 * completing, and if it does complete, its CDT_OPEN names a Con.ID this
+	 * join no longer holds and is ignored and counted like any other.
+	 */
+	if (j->cm_conid != 0u)
+		j->cm_superseded++;
+
 	join_cm_take(j, e->conid);
 	j->cm_open = 1u;
 	j->cm_adopted++;
@@ -1566,15 +1623,14 @@ static enum cnxman_join_rx join_h_watch(struct cnxman_join *j,
  * This beat asks the executive three questions in the order that makes each
  * answer meaningful, and acts on the first that answers:
  *
- *   1. Has the CSB ladder (or the member) put a connection there that this FSM
- *      does not know about? p. 7-23 makes the CSB the record of "the state of
- *      the SCS connection between the local SYS$CLUSTER and the SYS$CLUSTER
- *      residing in the system associated with the CSB", and the glue writes
- *      that connection's Con.ID into `cdt_conid` at the instant SCS mints it --
- *      for the join's own connect, for the reconnect the ladder issues, and for
- *      one this node accepted. So a `cdt_conid` this join is not holding IS the
- *      executive telling it about a connection. Taking it is a read; minting
- *      one would not be.
+ *   1. Does the executive hold a VMS$VAXcluster connection to this member, and
+ *      is it OPEN? Both answers are the CSB's (p. 7-23/7-24) and neither is
+ *      kept here -- join_cm_sync_with_csb() below reads them, takes a Con.ID
+ *      this join was not holding, and advertises on a connection the ladder
+ *      says is OPEN. E72: the OPEN half is asked EVERY beat, not only on a
+ *      beat that changed the Con.ID, because a join already holding the right
+ *      Con.ID when the connection came up would otherwise never advertise at
+ *      all -- 1471 silent beats on the live cluster.
  *
  *   2. Has the executive GIVEN UP on that member? p. 7-24 WAIT: the reconnect
  *      is "repeated until either connectivity is once again established with
@@ -1605,28 +1661,66 @@ static void join_no_connectivity(struct cnxman_join *j)
 		     "a cluster member");
 }
 
-/* Take the connection the executive holds for this member, if it is not the one
- * this join is already holding. Returns 1 when the beat is over because of it. */
-static int join_cm_adopt_csb_conid(struct cnxman_join *j, struct vms_csb *csb)
+/*
+ * Does the executive have CONNECTIVITY to this member? p. 7-24 OPEN: "An SCS
+ * connection exists (i.e., the local Connection Manager has connectivity to the
+ * remote Connection Manager) ... This is the normal state of a CSB." The CSB
+ * ladder writes that state from a real CDT open (vms_cnxman_csb.c h_open) and
+ * from nothing else, so this is a READ of the executive's own answer, never
+ * this FSM's opinion of it.
+ */
+static int join_csb_connected(const struct vms_csb *c)
 {
-	if (csb->cdt_conid == 0u || csb->cdt_conid == j->cm_conid)
-		return 0;
+	return c->state == (uint8_t)VMS_CNXMAN_CSB_OPEN;
+}
 
-	join_cm_take(j, csb->cdt_conid);
-	j->cm_resynced++;
-	join_log(j, "%CNXMAN, adopting the VMS$VAXcluster connection the "
-		    "executive holds for this member");
-	/*
-	 * OPEN is p. 7-24's "an SCS connection exists (i.e., the local
-	 * Connection Manager has connectivity)", written by the CSB ladder from
-	 * a real CDT open. Its CDT_OPEN event has already been and gone --
-	 * addressed to a Con.ID this join did not then hold -- so the drive
-	 * resumes here. Any other state means the connection is still being
-	 * made, and the beat waits for its open like any other.
-	 */
-	if (csb->state == (uint8_t)VMS_CNXMAN_CSB_OPEN)
+/*
+ * RECONCILE THIS JOIN WITH THE CSB, ONCE A BEAT (E71, extended by E72).
+ *
+ * Two facts live on the CSB and neither of them lives here: WHICH Con.ID the
+ * executive holds for this member, and WHETHER that connection is OPEN. This
+ * reads both and acts on them, in that order.
+ *
+ * THE CON.ID. p. 7-23 makes the CSB the record of "the state of the SCS
+ * connection between the local SYS$CLUSTER and the SYS$CLUSTER residing in the
+ * system associated with the CSB", and the glue writes that connection's Con.ID
+ * into `cdt_conid` at the instant SCS mints it -- for this join's own connect,
+ * for a reconnect the ladder issued, and for one this node accepted. A
+ * `cdt_conid` this join is not holding IS the executive telling it about a
+ * connection. Taking it is a read; minting one would not be.
+ *
+ * THE OPEN (E72 -- the wall this closes). Advertising used to happen ONLY on
+ * the beat that CHANGED the Con.ID, so a join that was already holding the
+ * right Con.ID when the connection came up -- because the CDT_OPEN for it
+ * arrived while this join was holding a different one, or was consumed by
+ * another state -- never made its step-5 originations at all. That is the
+ * live join-e71refire transcript exactly: [VC CONNECT], 1471 watchdog beats,
+ * not one cat-0x01 frame. So the OPEN is now acted on whether or not the
+ * Con.ID moved, and it is the CSB's OPEN -- the executive's own record of
+ * connectivity -- that fires it.
+ *
+ * WHY ADVERTISING HERE IS ORDERED CORRECTLY. This runs only in [VC CONNECT],
+ * which is reachable only through join_open_cm(), which is reachable only from
+ * join_lookups_complete() (both names ANSWERED by the member's own directory)
+ * and from the two MSCP$DISK outcomes downstream of it. Step 2's
+ * lookup-before-connect and step 3's disk-client connect have therefore both
+ * already happened, and join_cm_advertise() itself either resumes the walk or,
+ * when there is nothing to walk, releases op-0x02 -- so nothing is skipped and
+ * nothing is sent early.
+ */
+static void join_cm_sync_with_csb(struct cnxman_join *j, struct vms_csb *csb)
+{
+	if (csb->cdt_conid == 0u)
+		return;   /* the executive holds no connection to this member */
+
+	if (csb->cdt_conid != j->cm_conid) {
+		join_cm_take(j, csb->cdt_conid);
+		j->cm_resynced++;
+		join_log(j, "%CNXMAN, adopting the VMS$VAXcluster connection the "
+			    "executive holds for this member");
+	}
+	if (join_csb_connected(csb))
 		join_cm_advertise(j);
-	return 1;
 }
 
 static void join_vc_beat(struct cnxman_join *j)
@@ -1637,14 +1731,17 @@ static void join_vc_beat(struct cnxman_join *j)
 		join_no_connectivity(j);
 		return;
 	}
-	if (join_cm_adopt_csb_conid(j, csb))
-		return;
+
+	join_cm_sync_with_csb(j, csb);
+	if (j->state != (uint8_t)CNXMAN_JOIN_VC_CONNECT)
+		return;   /* connectivity was there: the drive has moved on */
+
 	if (join_csb_abandoned(csb)) {
 		join_no_connectivity(j);
 		return;
 	}
 	if (j->cm_conid != 0u)
-		return;   /* our own attempt is still outstanding */
+		return;   /* an attempt -- ours, or the ladder's -- is outstanding */
 
 	j->cm_reattempts++;
 	join_open_cm(j);

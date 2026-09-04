@@ -2180,27 +2180,172 @@ static void test_adoption_refuses_what_it_does_not_own(void)
 	ct_check_eq_u32(g.j.cm_open, 0u, "... and we still have no VC");
 	ct_check_eq_u32(g.n_sent, 0u, "... and nothing was sent on it");
 
-	/* (b) a true simultaneous open: our own connect is already out. No
-	 * capture grounds which side yields, so this node invents nothing --
-	 * it keeps its own Con.ID and counts the collision. */
+	/* (b) A TRUE SIMULTANEOUS OPEN: this join already holds a connection to
+	 * this member that is really OPEN. There is one per pair and no capture
+	 * grounds which side yields, so this node invents nothing -- it keeps
+	 * the connection it HAS and counts the collision. */
 	bed_init();
 	bed_set_identity();
-	(void)cnxman_join_start(&g.j);
-	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk,
-			       1);
-	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster,
-			       1);
-	cnxman_join_opened(&g.j, MSCP_CONID);
-	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_VC_CONNECT,
-			"our own VMS$VAXcluster connect is out");
+	drive_to_admit();
+	ct_check_eq_u32(g.j.cm_open, 1u, "our own VMS$VAXcluster VC is OPEN");
 	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
 	ct_check_eq_u32(g.j.cm_already_held, 1u,
 			"a simultaneous open is counted, not adopted");
 	ct_check(g.j.cm_conid == CM_CONID,
-		 "... and our own Con.ID is not replaced");
+		 "... and the OPEN connection we hold is not replaced");
+	ct_check_eq_u32(g.j.cm_superseded, 0u,
+			"... nothing was superseded: both connections exist");
 	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 0u,
 			"... nothing goes out on the connection we did not "
 			"adopt");
+}
+
+/* ==========================================================================
+ * E72 -- A CON.ID THIS JOIN HOLDS IS NOT A CONNECTION THIS NODE HAS
+ *
+ * THE WALL, live (join-e71refire, 2026-09-04). The E71 resilience work kept the
+ * join alive through the transient, and the cluster then did exactly what
+ * p. 7-24 REACCEPT describes: the member opened its OWN VMS$VAXcluster
+ * connection to this node and SCS brought it up. The join was holding the
+ * Con.ID of its own connect -- which had never reached OPEN -- so it counted
+ * the member's genuine, open membership connection as a simultaneous open and
+ * dropped it; the CDT_OPEN that followed named a Con.ID it was not holding and
+ * was ignored; and the transcript then reads one thing for the whole rest of
+ * the run: [VC CONNECT], TIMER_JOIN, 1471 times, with ZERO cat-0x01 frames on
+ * the wire and the member's CSB for this node still at votes 0.
+ *
+ * Both halves of the fix are asserted here, and both are reads of executive
+ * state: the connection this node HAS beats the connect it merely ISSUED, and
+ * the CSB's own p. 7-24 OPEN is acted on every beat, not only on the beat that
+ * changes a Con.ID.
+ * ========================================================================== */
+
+static void test_e72_members_open_connection_supersedes_our_connect(void)
+{
+	uint32_t len;
+
+	printf("\n-- E72: the member's OPEN connection beats our un-opened "
+	       "connect --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_mscp_connect();
+	cnxman_join_rejected(&g.j, MSCP_CONID, 0u);   /* the live t+14.473 */
+
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_VC_CONNECT,
+			"our own VMS$VAXcluster connect is out");
+	ct_check(g.j.cm_conid == CM_CONID, "... and this join holds its Con.ID");
+	ct_check_eq_u32(g.j.cm_open, 0u, "... but it has NOT reached OPEN");
+
+	/* t+16.4: the member opens its own and SCS brings it up -- the glue's
+	 * two calls, in the order cnxman_vc_opened() makes them. */
+	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	ct_check_eq_u32(g.j.cm_adopted, 1u,
+			"the member's OPEN connection is ADOPTED, not counted "
+			"as a simultaneous open");
+	ct_check_eq_u32(g.j.cm_superseded, 1u,
+			"... and the connect it supersedes is counted");
+	ct_check(g.j.cm_conid == ACC_CM_CONID, "... it is now THE connection");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 0u,
+			"nothing is emitted on the accept alone: the OPEN is "
+			"what confirms the connection is sendable");
+
+	cnxman_join_opened(&g.j, ACC_CM_CONID);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"the CDT_OPEN drives [VC CONNECT] -> ADVERTISE, and with "
+			"no disk walk to run, on to admission");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 3u,
+			"three cat-0x01 originations reach SCS -- the run that "
+			"produced ZERO in 1471 beats");
+	ct_check(sent_on_is(ACC_CM_CONID, 0, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_MODEL), "MODEL first (sec 4(o) row 1)");
+	ct_check(sent_on_is(ACC_CM_CONID, 1, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_PARAMS), "... then PARAMS (row 2)");
+	ct_check(sent_on_is(ACC_CM_CONID, 2, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_CONFIG), "... then op-0x02 (row 6)");
+	ct_check_eq_u32(g.j.send_failures, 0u,
+			"and every one of them was TAKEN by SCS (E69's three "
+			"scs-refused emits were on a connection whose open had "
+			"been dropped)");
+	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, 1, VMS_OFB_CM_VOTES),
+			g.cl.params.votes,
+			"PARAMS carries this node's REAL SYSGEN VOTES (INV-6)");
+	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, 0, 0u), 1u,
+			"the envelope is the target CSB's own dialogue: "
+			"send-msg# 1 ...");
+	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, 2, 0u), 3u, "... then 3");
+	ct_check_eq_u32(n_sent_on(CM_CONID), 0u,
+			"and NOTHING went out on the connect that never opened");
+
+	/* INV-6: reaching ADMIT is not being a member. Only the cluster's own
+	 * op-0x06, carrying a real coordinator CSID, promotes this node. */
+	ct_check_eq_u32(cnxman_join_handed_off(&g.j), 0,
+			"this node claims no membership yet");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
+			"... and no CSID has been learned");
+
+	g.cl.params.scssystemid = 1027ull;   /* the capture's VAX3 */
+	len = mk_membership_csid(0x00010001u, 'A');
+	(void)cnxman_join_rx_frame(&g.j, g_frame, len, MEMBER_CSID, 1);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER,
+			"the cluster's own membership record promotes it: "
+			"[ADMIT][CSID_LEARNED] -> MEMBER");
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010003u,
+			"... with the CSID computed from the WIRE-learned "
+			"generation and this node's real SCSSYSTEMID");
+}
+
+static void test_e72_beat_advertises_on_the_open_it_missed(void)
+{
+	printf("\n-- E72: the beat advertises on the CSB's OPEN, not on a "
+	       "Con.ID change --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_mscp_connect();
+	cnxman_join_rejected(&g.j, MSCP_CONID, 0u);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_VC_CONNECT, "waiting for the VC");
+
+	/* What the glue records for a connect THIS JOIN issued: the Con.ID goes
+	 * on the CSB at the instant SCS mints it (cnxman_jop_connect). */
+	g.member_csb->cdt_conid = CM_CONID;
+	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
+				  CNXMAN_CSB_EV_CONNECT_SENT, &g.ops);
+
+	/* A beat with the connection still being made changes nothing. */
+	g.fake.now_ms += 1000u;
+	cnxman_join_timer(&g.j);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_VC_CONNECT,
+			"a CSB that is not OPEN advertises nothing");
+	ct_check_eq_u32(g.n_sent, 0u, "... and not one frame is invented");
+
+	/* The connection really comes up -- and its CDT_OPEN never reaches this
+	 * FSM (on the live run it named a Con.ID the join was not holding at
+	 * the instant it was raised). The Con.ID does NOT move, which is the
+	 * case the old beat could not see. */
+	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
+				  CNXMAN_CSB_EV_CONN_OPEN, &g.ops);
+	g.fake.now_ms += 1000u;
+	cnxman_join_timer(&g.j);
+
+	ct_check_eq_u32(g.j.cm_resynced, 0u,
+			"the Con.ID did not change: this is the OPEN the join "
+			"missed, not a connection it did not know about");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"the beat reads p. 7-24 OPEN off the CSB and the drive "
+			"resumes -- instead of 1471 silent beats");
+	ct_check_eq_u32(n_sent_on(CM_CONID), 3u,
+			"MODEL, PARAMS and op-0x02 went out on it");
+	ct_check(sent_on_is(CM_CONID, 0, VMS_CM_CAT_CONFIG, VMS_CM_OP_MODEL),
+		 "... in the measured order");
+	ct_check_eq_u32(g.j.cm_reattempts, 0u,
+			"... and no SECOND connection was opened to a pair that "
+			"holds one");
+
+	/* A further beat re-offers nothing: everything really went. */
+	g.fake.now_ms += 1000u;
+	cnxman_join_timer(&g.j);
+	ct_check_eq_u32(n_sent_on(CM_CONID), 3u,
+			"a message that really went is never sent twice");
+	ct_check_eq_u32(g.j.burst_reoffers, 0u, "... and nothing was re-offered");
 }
 
 /* ==========================================================================
@@ -2236,6 +2381,8 @@ int main(void)
 	test_a_refused_burst_is_reoffered();
 	test_reoffer_is_bounded_by_the_connection();
 	test_adoption_refuses_what_it_does_not_own();
+	test_e72_members_open_connection_supersedes_our_connect();
+	test_e72_beat_advertises_on_the_open_it_missed();
 	test_disk_client_refusal_does_not_stop_the_join();
 	test_disk_client_loss_does_not_stop_the_join();
 	test_refusal_then_member_dialled_still_promotes();

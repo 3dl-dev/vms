@@ -807,16 +807,35 @@ static int cnxman_vc_connect_req(void *ctx, vms_conid_t local_conid,
 
 	(void)local_conid; (void)peer_conid;
 
+	/*
+	 * AN INBOUND CONNECT IS ITSELF A DISCOVERY (E72). p. 7-23 describes the
+	 * CSB's first state as "The CSB has just been allocated. It can
+	 * represent a newly discovered remote Connection Manager", and a remote
+	 * connection manager opening its VMS$VAXcluster connection to this node
+	 * is exactly that discovery -- the port has a circuit with it and SCS
+	 * resolved its SCSSYSTEMID, or this call would not exist. So the block
+	 * is allocated HERE, BEFORE the join's acceptance policy is asked.
+	 *
+	 * The order used to be the other way round, and it cost the cluster's
+	 * FIRST membership offer on every live run: the join refused the
+	 * connect for want of a CSB (`refused-no-csb`) about two seconds before
+	 * the peer sweep allocated the very same block. Nothing is invented by
+	 * moving it -- the sweep would have recorded this identical fact from
+	 * this identical circuit on its next beat; it is recorded when it
+	 * really happened instead.
+	 */
+	csb = csb_ensure(&cn->cl->club, peer);
+
 	/* THE SERVER HALF (spec SS4(y)): total connectivity requires this node
 	 * accept every member's own connect. cnxman_join_connect_req() is that
 	 * policy end to end, including recording the peer's connect-data
-	 * (never acted on -- see its own header). */
+	 * (never acted on -- see its own header). A CLUB with no room left is
+	 * still an honest refusal: the join finds no block and says so. */
 	rc = cnxman_join_connect_req(&cn->join, peer, peer_conid, conndata,
 				     conndata_len);
 	if (rc != 0)
 		return rc;
 
-	csb = csb_ensure(&cn->cl->club, peer);
 	if (csb != NULL)
 		(void)cnxman_csb_dispatch(&cn->cl->club, csb,
 					  CNXMAN_CSB_EV_CONNECT_RCVD, &cn->ops);

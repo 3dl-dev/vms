@@ -627,6 +627,25 @@ static void test_glue_bindings(void)
 		  "... only for a connection this node accepted, never for "
 		  "one it opened");
 
+	/*
+	 * E72, the FIRST offer. p. 7-23's NEW state is "The CSB has just been
+	 * allocated. It can represent a newly discovered remote Connection
+	 * Manager", and a remote CM opening its VMS$VAXcluster connection to
+	 * this node IS that discovery. So the block is allocated BEFORE the
+	 * join's acceptance policy is asked; with the calls the other way round
+	 * the join refused the cluster's first membership offer for want of a
+	 * CSB (`refused-no-csb` on every live run) about two seconds before the
+	 * peer sweep allocated the very same block. This contiguous shape lives
+	 * only in cnxman_vc_connect_req.
+	 */
+	check_has("csb = csb_ensure(&cn->cl->club, peer);\n\n"
+		  "\t/* THE SERVER HALF",
+		  "E72: an inbound CONNECT allocates the CSB BEFORE the join's "
+		  "acceptance policy is asked");
+	check_absent("conndata_len);\n\tif (rc != 0)\n\t\treturn rc;\n\n"
+		     "\tcsb = csb_ensure(",
+		     "... and the order that lost the first offer is gone");
+
 	/* E29. */
 	check_has("SCS_CLOSE_REJECTED",
 		  "E29: the close reason is inspected, RAW (never an SS$_), "

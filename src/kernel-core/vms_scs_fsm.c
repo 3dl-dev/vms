@@ -39,6 +39,37 @@ static void scs_copy(uint8_t *dst, const uint8_t *src, uint32_t n)
 		dst[i] = src[i];
 }
 
+/*
+ * THE 16-BYTE SCA CONNECT DATA A CDT WILL PUT ON THE WIRE (spec SS4(N), abs
+ * 108-123 of a 110-content connect verb).
+ *
+ * `src` NULL means the SYSAP supplied none -- and a real node does not send
+ * sixteen NULs then, it sends sixteen BLANKS: integration note E65's census
+ * finds 0x20 fill in 100% of no-connect-data connects (both 110-content
+ * fixtures in tests/cluster/host/fixtures carry it at abs 108). So "nothing
+ * supplied" is written the way the wire writes it, in ONE place, for every
+ * path that reaches a connect verb: the initiator's CONNECT service, the
+ * acceptor's ACCEPT service, and a listening CDT returning to LISTEN.
+ *
+ * Supplied data is passed VERBATIM, all 16 bytes (SS4(N): CNXMAN's version
+ * quad lives in it and SCS interprets none of it).
+ *
+ * RE GAP: no specimen shows a SYSAP supplying FEWER than 16 bytes, so how a
+ * real node pads a short value is not grounded. This seam takes 16 or none;
+ * there is no third case to get wrong.
+ */
+static void conndata_set(uint8_t *dst, const uint8_t *src)
+{
+	uint32_t i;
+
+	if (src != (const uint8_t *)0) {
+		scs_copy(dst, src, VMS_SCS_PROCNAME_LEN);
+		return;
+	}
+	for (i = 0; i < VMS_SCS_PROCNAME_LEN; i++)
+		dst[i] = (uint8_t)' ';
+}
+
 static int scs_name_eq(const uint8_t *a, const uint8_t *b)
 {
 	uint32_t i;
@@ -370,14 +401,33 @@ static void credit_receive_grant(struct scs_cdt *cdt, uint16_t n)
 	cdt->credit_send = (uint16_t)(cdt->credit_send + n);
 }
 
+/*
+ * THE PEER'S MINIMUM SEND CREDITS, learned from the connect verb that carried
+ * it (p. 2-44's argument, at SCS$W_MIN_CR -- integration note E65 grounds the
+ * offset). One reader for both directions: the initiator learns it off the
+ * op-2 ACCEPT_REQ, the acceptor off the op-0 CONNECT_REQ. A frame that did not
+ * parse teaches nothing and leaves `_valid` clear -- p. 2-44's threshold then
+ * runs on the cushion alone and says so (credit_msg_partial_threshold), which
+ * is the honest omission, not a zero standing in for a number.
+ */
+static void cdt_learn_peer_min_cr(struct scs_cdt *cdt,
+				  const struct vms_scs_ctrl_frame *ctrl)
+{
+	if (ctrl == (const struct vms_scs_ctrl_frame *)0 || !ctrl->has_scsargs)
+		return;
+	cdt->peer_min_send_credits = ctrl->min_cr;
+	cdt->peer_min_send_credits_valid = 1u;
+}
+
 /* p. 2-44's "dangerously low" test. The SCA rule is
  *     local Receive Credit < SCSFLOWCUSH + remote Minimum Send Credits
- * and the remote term's WIRE offset is not grounded anywhere in the spec, so
- * it is added only when the peer actually told us (it never has yet -- see
- * scs_cdt.peer_min_send_credits). Running on the cushion alone makes the
- * trigger FIRE EARLIER, never later, and every byte of the message it sends
- * is still a real ledger read; the partial threshold is counted so the
- * difference is visible rather than assumed away. */
+ * and the remote term is the peer's SCS$W_MIN_CR, learned off the connect verb
+ * that stated it (cdt_learn_peer_min_cr; integration note E65 grounds the
+ * offset -- until E65 it was unknown and this term was always omitted). It is
+ * added only when the peer actually told us. Running on the cushion alone
+ * makes the trigger FIRE EARLIER, never later, and every byte of the message
+ * it sends is still a real ledger read; the partial threshold is counted so
+ * the difference is visible rather than assumed away. */
 static int credit_dangerously_low(struct scs_fsm *f, struct scs_cdt *cdt)
 {
 	uint32_t threshold = f->cfg.flowcush;
@@ -425,7 +475,7 @@ static uint16_t ctrl_content_for_op(uint16_t op)
  * content length, so the three cannot disagree. */
 static void ctrl_set_shape(struct vms_scs_ctrl_frame *c, uint16_t content)
 {
-	c->has_marker = (uint8_t)(content >= VMS_SCSCTRL_LEN_MARKER);
+	c->has_scsargs = (uint8_t)(content >= VMS_SCSCTRL_LEN_MARKER);
 	c->has_tail4  = (uint8_t)(content == VMS_SCSCTRL_LEN_ECHO);
 	c->has_names  = (uint8_t)(content == VMS_SCSCTRL_LEN_LOOKUP ||
 				  content == VMS_SCSCTRL_LEN_CONNECT);
@@ -446,6 +496,84 @@ static uint8_t cdt_msgtype(const struct scs_cdt *cdt)
 }
 
 /*
+ * SCS$W_STATUS (abs 74-75) -- THE SCS LAYER'S OWN OUTCOME CODE, per verb.
+ *
+ * Integration note E65. This is the field the VAX1 leg turned on: a
+ * CONNECT_RSP carrying 0 -- which is not a defined $SCSDEF status -- reads to
+ * an established member as a FAILED connect (p. 2-48), so it releases its CDT
+ * and re-polls forever. The value is NOT a byte copied out of a capture and
+ * NOT a byte copied off the frame being answered: it is what THIS FSM has
+ * concluded at the instant it emits the verb, which for every verb it emits
+ * from a reached state is SCS$K_STNORMAL.
+ *
+ *  op 0 CON_REQ   the CONNECT service accepted the request and built it
+ *  op 1 CON_RSP   the request REACHED the target SYSAP (ch. 2's meaning of
+ *                 the echo) -- the outcome the echo exists to report
+ *  op 3 ACCP_RSP  the acceptor's answer was taken and the connection is bound
+ *  op 4 REJ_REQ   the REJECT message itself was produced normally (the reason
+ *                 the connection was refused is a SEPARATE word this codec
+ *                 does not decode -- E65 records it as an RE gap, and an
+ *                 invented reason code is exactly what INV-6 forbids)
+ *  op 2 ACCP_REQ  0: the accept is the SYSAP's answer travelling outward, not
+ *                 an SCS outcome, and SCS has none to report yet
+ *  op 6 DISC_REQ  the sec 4(h)(1b) matching flag, read from the CDT: 0 when
+ *                 THIS end opened the teardown, STNORMAL when this op 6 is
+ *                 the matching half of one the peer opened
+ *
+ * Every other verb (5/7/8/9 carry no such word at all; 10's four bytes belong
+ * to the SYSAP) is 0 here.
+ */
+static uint16_t ctrl_status_for_op(uint16_t op, const struct scs_cdt *cdt)
+{
+	switch (op) {
+	case SCS_MTYPE_CON_REQ:
+	case SCS_MTYPE_CON_RSP:
+	case SCS_MTYPE_ACCP_RSP:
+	case SCS_MTYPE_REJ_REQ:
+		return (uint16_t)VMS_SCS_ST_NORMAL;
+	case SCS_MTYPE_DISC_REQ:
+		return cdt->disc_peer_matched ? (uint16_t)VMS_SCS_ST_NORMAL
+					      : 0u;
+	default:
+		return 0u;
+	}
+}
+
+/*
+ * SCS$W_MIN_CR (abs 72-73) -- THE SYSAP'S MINIMUM SEND CREDITS (p. 2-44),
+ * read from the CDT, per verb.
+ *
+ *  op 0 CON_REQ   this end's own SYSAP declared it to the CONNECT service
+ *  op 2 ACCP_REQ  this end's own SYSAP declared it to the ACCEPT service
+ *  op 3 ACCP_RSP  the answered ACCEPT_REQ's value, as recorded off that frame
+ *                 when it arrived -- the confirm reports back the floor it is
+ *                 confirming, and `_valid` keeps an unlearned one at 0 rather
+ *                 than repeating our own
+ *  op 1 CON_RSP   a LISTENING CDT has no SYSAP minimum: the accepting SYSAP
+ *                 supplies one only when it accepts (scs_fsm_accept), and the
+ *                 echo is emitted before that. The read is therefore honestly
+ *                 0 -- which is also what every real echo carries.
+ *
+ * Everything else (4/6, and the classes with no such word) is 0: no connection
+ * is being opened, so no SYSAP has a floor to state.
+ */
+static uint16_t ctrl_min_cr_for_op(uint16_t op, const struct scs_cdt *cdt)
+{
+	switch (op) {
+	case SCS_MTYPE_CON_REQ:
+	case SCS_MTYPE_ACCP_REQ:
+	case SCS_MTYPE_CON_RSP:
+		return cdt->local_min_send_credits;
+	case SCS_MTYPE_ACCP_RSP:
+		return cdt->peer_min_send_credits_valid
+			       ? cdt->peer_min_send_credits
+			       : 0u;
+	default:
+		return 0u;
+	}
+}
+
+/*
  * Fill the parts of a control frame that are the same for every verb.
  *
  * ABS 32-55 IS THE PORT'S, NOT SCS'S. Design SS3.2.4 gives 32-35 (recv_ack/
@@ -462,9 +590,8 @@ static uint8_t cdt_msgtype(const struct scs_cdt *cdt)
  * of the 8,550 sequenced frames that shape produced. An uninitialised span is
  * not an honest omission; it is a poisoned frame.
  *
- * The abs-72 marker word is a genuine omission and stays one: SS4(h)(1a)
- * grounds semantics for op 6's marker[2:4] alone, and no capture isolates its
- * encoding, so it goes out zero rather than carrying an invented flag.
+ * ABS 72-75 IS SCS'S OWN, and both words are filled here, from THIS node's
+ * state -- see ctrl_min_cr_for_op()/ctrl_status_for_op() above.
  */
 static int ctrl_prepare(struct scs_fsm *f, const struct scs_cdt *cdt,
 			uint16_t op, struct vms_scs_ctrl_frame *c)
@@ -493,6 +620,8 @@ static int ctrl_prepare(struct scs_fsm *f, const struct scs_cdt *cdt,
 	c->op = op;
 	c->conid_remote = cdt->remote_conid_valid ? cdt->remote_conid : 0u;
 	c->conid_local = cdt->local_conid;
+	c->min_cr = ctrl_min_cr_for_op(op, cdt);
+	c->status = ctrl_status_for_op(op, cdt);
 	ctrl_set_shape(c, ctrl_content_for_op(op));
 	return SCS_OK;
 }
@@ -879,6 +1008,7 @@ struct scs_rx {
 	uint32_t                         body_len;
 	const struct scs_connect_args   *args;  /* LOCAL_CONNECT only         */
 	const uint8_t                   *conndata; /* LOCAL_ACCEPT only       */
+	uint16_t                         min_credits; /* LOCAL_ACCEPT only    */
 	uint32_t                         out_conid; /* handler's answer       */
 };
 
@@ -1008,6 +1138,10 @@ static int h_rx_accept(struct scs_fsm *f, struct scs_cdt *cdt,
 	cdt->remote_conid = rx->hdr->conid_local;
 	cdt->remote_conid_valid = 1u;
 	credit_receive_grant(cdt, rx->hdr->credit);
+	/* The op-3 confirm this raises reports the floor it is confirming, so
+	 * the value is recorded HERE, off the frame that stated it, and read
+	 * back out of the CDT when the confirm is built. */
+	cdt_learn_peer_min_cr(cdt, rx->ctrl);
 	cdt_set_state(cdt, VMS_SCS_CDT_ACCEPT_RCVD);
 	return h_send_confirm(f, cdt);
 }
@@ -1029,18 +1163,32 @@ static int h_confirm_retry(struct scs_fsm *f, struct scs_cdt *cdt,
  * K. Handlers -- the ACCEPTOR half (ch. 2's listening CDT)
  * ========================================================================== */
 
-/* The op-1 echo: GROUNDED to carry local_conid = 0 (SS4(m)), which is also the
+/*
+ * The op-1 echo: GROUNDED to carry local_conid = 0 (SS4(m)), which is also the
  * truth -- on this end no connection CDT exists yet. ch. 2: the connection's
- * own CDT is allocated only when the SYSAP accepts. */
+ * own CDT is allocated only when the SYSAP accepts.
+ *
+ * ITS 4-BYTE TAIL (abs 76-79) IS SCS$T_DST_PROC[0:4] -- the destination SYSAP
+ * name of the request being echoed, truncated to what the 66-content class has
+ * room for (CON_RSPL = 22 = the SCS header + MIN_CR + STATUS + these four).
+ * Integration note E65 finds it filled in 148 of 148 real echoes; OVMX left it
+ * zero. It is read from the LISTENING CDT's own registered SYSAP name -- this
+ * node's state, the name the SDIR queue routed the request to -- and NOT
+ * copied off the inbound frame, which would be plumbing a peer's bytes back at
+ * it rather than asserting what this node is.
+ */
 static int ctrl_send_echo(struct scs_fsm *f, struct scs_cdt *listen)
 {
 	struct vms_scs_ctrl_frame c;
+	uint32_t i;
 	int rc = ctrl_prepare(f, listen, (uint16_t)SCS_MTYPE_CON_RSP, &c);
 
 	if (rc != SCS_OK)
 		return rc;
 	c.credit = 0u;
 	c.conid_local = 0u;
+	for (i = 0; i < (uint32_t)sizeof(c.tail4); i++)
+		c.tail4[i] = listen->local_name[i];
 	return ctrl_emit(f, listen, &c);
 }
 
@@ -1071,6 +1219,7 @@ static void listen_record_request(struct scs_fsm *f, struct scs_cdt *listen,
 	listen->remote_conid = rx->hdr->conid_local;
 	listen->remote_conid_valid = 1u;
 	listen->credit_send = rx->hdr->credit;
+	cdt_learn_peer_min_cr(listen, rx->ctrl);
 	scs_copy(listen->remote_name, rx->ctrl->name2, VMS_SCS_PROCNAME_LEN);
 	/* spec SS4(N): SCA content [94:110] IS the 16-byte connect data. */
 	scs_copy(listen->conndata, rx->ctrl->blank, VMS_SCS_PROCNAME_LEN);
@@ -1100,8 +1249,11 @@ static int listen_ask_sysap(struct scs_fsm *f, struct scs_cdt *listen,
 	if (decision == SCS_CONNECT_DEFER)
 		return SCS_OK;
 	if (decision == 0)
+		/* The SYSAP answered through connect_req(), which carries
+		 * neither connect data nor a credit floor: it declared
+		 * neither, and neither is invented for it. */
 		return scs_fsm_accept(f, listen->local_conid,
-				      (const uint8_t *)0, &rx->out_conid);
+				      (const uint8_t *)0, 0u, &rx->out_conid);
 	return scs_fsm_reject(f, listen->local_conid);
 }
 
@@ -1187,12 +1339,14 @@ static int h_local_accept(struct scs_fsm *f, struct scs_cdt *listen,
 	cdt->peer_sysid = listen->peer_sysid;
 	cdt->remote_conid = listen->remote_conid;
 	cdt->remote_conid_valid = listen->remote_conid_valid;
+	cdt->peer_min_send_credits = listen->peer_min_send_credits;
+	cdt->peer_min_send_credits_valid = listen->peer_min_send_credits_valid;
+	cdt->local_min_send_credits = rx->min_credits;
 	cdt->listen_index = listen->listen_index;
 	cdt->sysap = sd->ops;
 	scs_copy(cdt->local_name, sd->name, VMS_SCS_PROCNAME_LEN);
 	scs_copy(cdt->remote_name, listen->remote_name, VMS_SCS_PROCNAME_LEN);
-	if (rx->conndata != (const uint8_t *)0)
-		scs_copy(cdt->conndata, rx->conndata, VMS_SCS_PROCNAME_LEN);
+	conndata_set(cdt->conndata, rx->conndata);
 	sb_queue_cdt(f, sb, cdt);
 
 	credit_extend(cdt, sd->initial_credits);
@@ -1874,7 +2028,9 @@ static void listen_reset(struct scs_fsm *f, struct scs_cdt *listen)
 	listen->remote_conid_valid = 0u;
 	listen->credit_send = 0u;   /* the parked grant belongs to that request */
 	scs_bzero(listen->remote_name, VMS_SCS_PROCNAME_LEN);
-	scs_bzero(listen->conndata, VMS_SCS_PROCNAME_LEN);
+	listen->peer_min_send_credits = 0u;
+	listen->peer_min_send_credits_valid = 0u;
+	conndata_set(listen->conndata, (const uint8_t *)0);
 	cdt_set_state(listen, VMS_SCS_CDT_LISTEN);
 }
 
@@ -1903,6 +2059,7 @@ int scs_fsm_listen(struct scs_fsm *f, const uint8_t *name,
 
 	listen->is_listening = 1u;
 	listen->sysap = ops;
+	conndata_set(listen->conndata, (const uint8_t *)0);
 	listen->listen_index = free_slot;
 	scs_copy(listen->local_name, name, VMS_SCS_PROCNAME_LEN);
 	cdt_set_state(listen, VMS_SCS_CDT_LISTEN);
@@ -2071,8 +2228,8 @@ int scs_fsm_connect(struct scs_fsm *f, const struct scs_connect_args *a,
 	cdt->credit_grant = a->initial_credits;
 	scs_copy(cdt->local_name, a->local_name, VMS_SCS_PROCNAME_LEN);
 	scs_copy(cdt->remote_name, a->remote_name, VMS_SCS_PROCNAME_LEN);
-	if (a->conndata != (const uint8_t *)0)
-		scs_copy(cdt->conndata, a->conndata, VMS_SCS_PROCNAME_LEN);
+	cdt->local_min_send_credits = a->min_credits;
+	conndata_set(cdt->conndata, a->conndata);
 	sb_queue_cdt(f, sb, cdt);
 
 	rc = scs_dispatch(f, cdt, SCS_EV_LOCAL_CONNECT, (struct scs_rx *)0);
@@ -2089,7 +2246,8 @@ int scs_fsm_connect(struct scs_fsm *f, const struct scs_connect_args *a,
 }
 
 int scs_fsm_accept(struct scs_fsm *f, vms_conid_t listen_conid,
-		   const uint8_t *conndata, vms_conid_t *out_conid)
+		   const uint8_t *conndata, uint16_t min_credits,
+		   vms_conid_t *out_conid)
 {
 	struct scs_cdt *listen;
 	struct scs_rx rx;
@@ -2103,6 +2261,7 @@ int scs_fsm_accept(struct scs_fsm *f, vms_conid_t listen_conid,
 
 	scs_bzero(&rx, (uint32_t)sizeof(rx));
 	rx.conndata = conndata;
+	rx.min_credits = min_credits;
 	rc = scs_dispatch(f, listen, SCS_EV_LOCAL_ACCEPT, &rx);
 	if (rc == SCS_OK && out_conid != (vms_conid_t *)0)
 		*out_conid = rx.out_conid;

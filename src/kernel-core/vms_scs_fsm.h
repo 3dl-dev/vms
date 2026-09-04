@@ -417,16 +417,30 @@ struct scs_cdt {
 	uint16_t  credit_pending;
 
 	/*
-	 * The remote SYSAP's Minimum Send Credits (p. 2-44: the local Receive
-	 * Credit is "dangerously low" below SCSFLOWCUSH + this). It is an
-	 * argument the peer passes to its CONNECT/ACCEPT service; its WIRE
-	 * offset is NOT grounded anywhere in the spec, so it is never guessed:
-	 * `_valid` stays 0 and the low-credit trigger runs on the cushion
-	 * alone, counted in scs_fsm.credit_msg_partial_threshold.
+	 * ---- MINIMUM SEND CREDITS, both ends (p. 2-44) ----
+	 *
+	 * `local_min_send_credits` is what THIS end's SYSAP passed to its own
+	 * CONNECT/ACCEPT service (scs_connect_args.min_credits /
+	 * scs_fsm_accept()'s argument). It is the value SCS$W_MIN_CR carries on
+	 * the verbs this CDT emits. 0 is a real answer -- "this SYSAP declares
+	 * no floor" -- not a placeholder, and it is what every SYSAP OVMX
+	 * registers today genuinely requires.
+	 *
+	 * `peer_min_send_credits` is the SAME argument as the REMOTE SYSAP
+	 * passed it, read off the CONNECT_REQ/ACCEPT_REQ this CDT answered or
+	 * received (integration note E65 grounds SCS$W_MIN_CR at abs 72-73;
+	 * before that the offset was unknown and this stayed unset). p. 2-44's
+	 * rule -- the local Receive Credit is "dangerously low" below
+	 * SCSFLOWCUSH + this -- therefore runs on the peer's real number.
+	 * `_valid` is still the honest-omission flag: a connection whose
+	 * connect frame did not parse never learns it, the trigger falls back
+	 * to the cushion alone, and that fallback is counted in
+	 * scs_fsm.credit_msg_partial_threshold.
 	 */
+	uint16_t  local_min_send_credits;
 	uint16_t  peer_min_send_credits;
 	uint8_t   peer_min_send_credits_valid;
-	uint8_t   pad1;
+	uint8_t   pad1[3];
 
 	/* ---- Credit Wait (p. 2-45): the FIFO of sends held for credit ---- */
 	uint32_t  sw_head;
@@ -662,11 +676,20 @@ int scs_fsm_sysap_set_dir_data(struct scs_fsm *f, const uint8_t *name,
  * and seeds this CDT's whole ledger. A SYSAP that extends 0 can never be sent
  * to; that is a real configuration, not an error.
  *
+ * `min_credits` is the OTHER credit argument p. 2-44 gives the CONNECT service:
+ * this SYSAP's MINIMUM SEND CREDITS, the floor below which the peer must treat
+ * its Receive Credit as dangerously low. It is what SCS$W_MIN_CR carries on
+ * this connection's op 0 (integration note E65). 0 means "this SYSAP declares
+ * no floor" -- a real answer, and the one every SYSAP OVMX registers today
+ * genuinely gives, since none of them reserve a credit for anything.
+ *
  * `conndata` is spec SS4(N)'s 16-byte SCA connect data (p. 2-25), carried
  * through UNINTERPRETED -- the Connection Managers' version handshake lives in
  * it, and deciding what it says is FC-P3.x's business, never SCS's. NULL means
- * this SYSAP supplied none, and the field goes out zero: an honest omission,
- * not a value invented on the SYSAP's behalf.
+ * this SYSAP supplied none, and the field goes out BLANK-FILLED (0x20), which
+ * is what a real node puts there on a no-connect-data connect (E65 census:
+ * 100% of no-data connects); it is an honest "nothing supplied", not a value
+ * invented on the SYSAP's behalf.
  */
 struct scs_connect_args {
 	const uint8_t              *local_name;   /* VMS_SCS_PROCNAME_LEN     */
@@ -675,7 +698,7 @@ struct scs_connect_args {
 	const struct scs_sysap_ops *sysap;
 	vms_scs_sysid_t             dst;
 	uint16_t                    initial_credits;
-	uint16_t                    pad0;
+	uint16_t                    min_credits;  /* p. 2-44, SCS$W_MIN_CR    */
 };
 
 /* Open a connection. Allocates a CDT (ch. 2: "VMS optimistically assumes that
@@ -689,9 +712,13 @@ int scs_fsm_connect(struct scs_fsm *f, const struct scs_connect_args *a,
 /* Answer an inbound connect. `listen_conid` is the value connect_req was
  * handed. Accept allocates the connection's OWN CDT and returns its Con.ID
  * (ch. 2), and may carry its own 16-byte SS4(N) connect data; reject allocates
- * no CDT at all (ch. 2: "The SCS REJECT service does not involve a CDT"). */
+ * no CDT at all (ch. 2: "The SCS REJECT service does not involve a CDT").
+ * `min_credits` is the accepting SYSAP's own Minimum Send Credits (p. 2-44),
+ * exactly as scs_connect_args.min_credits is the connecting SYSAP's: it is
+ * what SCS$W_MIN_CR carries on the op-2 ACCEPT_REQ this call emits. */
 int scs_fsm_accept(struct scs_fsm *f, vms_conid_t listen_conid,
-		   const uint8_t *conndata, vms_conid_t *out_conid);
+		   const uint8_t *conndata, uint16_t min_credits,
+		   vms_conid_t *out_conid);
 int scs_fsm_reject(struct scs_fsm *f, vms_conid_t listen_conid);
 
 /* Disconnect an OPEN connection. Walks the GROUNDED teardown: the special

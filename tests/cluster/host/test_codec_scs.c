@@ -223,8 +223,12 @@ static void test_dir_lookup_affirmative_roundtrip(void)
 	cf.credit = 1;
 	cf.conid_remote = 0x62c50009u;
 	cf.conid_local = 0x33580008u;
-	cf.has_marker = 1;
-	memcpy(cf.marker, "\x01\x00\x00\x00", 4);
+	/* The op-10 directory class overlays abs 72-75 with the SYSAP's own
+	 * request/response discriminator (sec 4(h)(2a)); on this class the
+	 * ctrl frame's two words are the halves of that longword, low first. */
+	cf.has_scsargs = 1;
+	cf.min_cr = VMS_SCS_DIR_MARKER_RESPONSE;
+	cf.status = 0;
 
 	ct_check(vms_scs_dir_lookup_build(&dl, &cf) == VMS_CODEC_OK,
 		 "vms_scs_dir_lookup_build succeeds");
@@ -312,9 +316,11 @@ static void test_reject_req_structural(void)
 	cf.credit = 0;
 	cf.conid_remote = 0x33580008u;
 	cf.conid_local = 0x62c50009u;
-	cf.has_marker = 1;
-	/* GROUNDED (CENSUS-A): [58:60]==0x0000, [60:62]==0x0001, 453/453. */
-	memcpy(cf.marker, "\x00\x00\x01\x00", 4);
+	cf.has_scsargs = 1;
+	/* GROUNDED (CENSUS-A): SCS$W_MIN_CR [58:60]==0x0000, SCS$W_STATUS
+	 * [60:62]==0x0001 (SCS$K_STNORMAL), 453/453. */
+	cf.min_cr = 0;
+	cf.status = VMS_SCS_ST_NORMAL;
 
 	memset(built, 0xAA, sizeof(built));
 	ct_check(vms_scs_ctrl_build(&cf, built, sizeof(built), &written)
@@ -324,16 +330,17 @@ static void test_reject_req_structural(void)
 	ct_check(built[14 + 46] == VMS_SCS_CTRL_REJECT_REQ && built[14 + 47] == 0,
 		 "  op verb == 4 at abs 60 (LE16)");
 	ct_check(built[14 + 58] == 0 && built[14 + 59] == 0,
-		 "  marker[58:60] == 0x0000 (CENSUS-A)");
+		 "  SCS$W_MIN_CR [58:60] == 0x0000 (CENSUS-A)");
 	ct_check(built[14 + 60] == 1 && built[14 + 61] == 0,
-		 "  marker[60:62] == 0x0001 (CENSUS-A)");
+		 "  SCS$W_STATUS [60:62] == 0x0001 STNORMAL (CENSUS-A)");
 
 	ct_check(vms_frame_classify(built, written, &fi) == VMS_CODEC_OK,
 		 "re-classifies");
 	ct_check(vms_scs_ctrl_parse(built, written, &fi, &cf2) == VMS_CODEC_OK,
 		 "re-parses");
 	ct_check_eq_u32(cf2.op, VMS_SCS_CTRL_REJECT_REQ, "  op round-trips");
-	ct_check(memcmp(cf2.marker, cf.marker, 4) == 0, "  marker round-trips");
+	ct_check(cf2.min_cr == cf.min_cr && cf2.status == cf.status,
+		 "  MIN_CR/STATUS round-trip");
 }
 
 /*
@@ -385,8 +392,8 @@ static void credit_op_structural(uint16_t op, const char *label)
 	ct_check(vms_scs_ctrl_parse(built, written, &fi, &cf2) == VMS_CODEC_OK,
 		 "re-parses");
 	ct_check_eq_u32(cf2.op, op, "  op round-trips");
-	ct_check(cf2.has_marker == 0 && cf2.has_names == 0,
-		 "  no marker/name span on the 58-content class");
+	ct_check(cf2.has_scsargs == 0 && cf2.has_names == 0,
+		 "  no MIN_CR/STATUS or name span on the 58-content class");
 }
 
 static void test_credit_ops_structural(void)
@@ -395,6 +402,103 @@ static void test_credit_ops_structural(void)
 	       "invariants (sec 4h(1c)/(1f), 855/855 credit==1)\n");
 	credit_op_structural(VMS_SCS_CTRL_CREDIT_REQ, "op8 CREDIT_REQ");
 	credit_op_structural(VMS_SCS_CTRL_CREDIT_RSP, "op9 CREDIT_RSP");
+}
+
+
+/* ---- group 5: E65 -- the SCS$W_MIN_CR/SCS$W_STATUS census ------------- */
+
+/*
+ * Integration note E65 (the Fable ruling): abs 72-73 is SCS$W_MIN_CR and abs
+ * 74-75 is SCS$W_STATUS, both published $SCSDEF fields. These rows assert the
+ * per-op census ON THE REAL SPECIMENS this corpus already carries -- so the
+ * per-op table the SCS FSM emits from is checked against captured VAX frames,
+ * not against itself. A regression that put 0 back in SCS$W_STATUS on the
+ * connect family (the VAX1-leg blocker: an established member reads STATUS 0
+ * as a FAILED connect, p. 2-48) reds here.
+ */
+static void e65_fixture_words(const char *fname, uint16_t want_op,
+			      uint16_t want_min_cr, uint16_t want_status)
+{
+	const struct vms_fixture *f = fixture(fname);
+	struct vms_frame_info fi;
+	struct vms_scs_ctrl_frame cf;
+	char what[224];
+
+	if (f == NULL) {
+		ct_check(0, fname);
+		return;
+	}
+	(void)vms_frame_classify(f->bytes, f->wire_len, &fi);
+	if (vms_scs_ctrl_parse(f->bytes, f->wire_len, &fi, &cf) !=
+	    VMS_CODEC_OK) {
+		ct_check(0, fname);
+		return;
+	}
+	ct_check_eq_u32(cf.op, want_op, fname);
+	snprintf(what, sizeof(what), "  %s: SCS$W_MIN_CR == %u", fname,
+		 want_min_cr);
+	ct_check_eq_u32(cf.min_cr, want_min_cr, what);
+	snprintf(what, sizeof(what), "  %s: SCS$W_STATUS == %u", fname,
+		 want_status);
+	ct_check_eq_u32(cf.status, want_status, what);
+}
+
+static void test_e65_status_census(void)
+{
+	const struct vms_fixture *echo = fixture("scs-dir-connect-echo");
+	const struct vms_fixture *req = fixture("scs-dir-connect-request");
+	struct vms_frame_info fi;
+	struct vms_scs_ctrl_frame cf, rq;
+	uint32_t i, blanks = 0;
+
+	printf("-- E65: SCS$W_MIN_CR / SCS$W_STATUS, per-op, on the real "
+	       "specimens\n");
+	e65_fixture_words("scs-dir-connect-request", VMS_SCS_CTRL_CONNECT_REQ,
+			  0, VMS_SCS_ST_NORMAL);
+	e65_fixture_words("scs-dir-connect-echo", VMS_SCS_CTRL_CONNECT_RSP,
+			  0, VMS_SCS_ST_NORMAL);
+	e65_fixture_words("scs-dir-connect-response", VMS_SCS_CTRL_ACCEPT_REQ,
+			  0, 0);
+	e65_fixture_words("scs-dir-connect-confirm", VMS_SCS_CTRL_ACCEPT_RSP,
+			  0, VMS_SCS_ST_NORMAL);
+	/* op 6's status word IS sec 4(h)(1b)'s matching flag; this specimen is
+	 * the MATCHING half of a Figure 2-16 teardown (CENSUS-E rank 1). */
+	e65_fixture_words("scs-disc-request", VMS_SCS_CTRL_DISCONNECT_REQ,
+			  0, VMS_SCS_ST_NORMAL);
+
+	/* The echo's 4-byte tail is SCS$T_DST_PROC[0:4]: the first four bytes
+	 * of the destination SYSAP name the CONNECT_REQ it answers carried. */
+	if (echo != NULL && req != NULL) {
+		(void)vms_frame_classify(echo->bytes, echo->wire_len, &fi);
+		if (vms_scs_ctrl_parse(echo->bytes, echo->wire_len, &fi, &cf)
+		    == VMS_CODEC_OK) {
+			(void)vms_frame_classify(req->bytes, req->wire_len,
+						 &fi);
+			if (vms_scs_ctrl_parse(req->bytes, req->wire_len, &fi,
+					       &rq) == VMS_CODEC_OK)
+				ct_check(cf.has_tail4 &&
+					 memcmp(cf.tail4, rq.name1, 4) == 0,
+					 "  the op-1 echo's tail4 == the "
+					 "answered CONNECT_REQ's DST_PROC[0:4]");
+		}
+	}
+
+	/* And the 16-byte connect-data trailer of a no-connect-data connect is
+	 * BLANK-filled, not NUL-filled (100% of no-data connects). */
+	if (req != NULL) {
+		(void)vms_frame_classify(req->bytes, req->wire_len, &fi);
+		if (vms_scs_ctrl_parse(req->bytes, req->wire_len, &fi, &rq) ==
+		    VMS_CODEC_OK) {
+			for (i = 0; i < VMS_SCSCTRL_NAME_LEN; i++) {
+				if (rq.blank[i] == 0x20)
+					blanks++;
+			}
+			ct_check(rq.has_blank &&
+				 blanks == VMS_SCSCTRL_NAME_LEN,
+				 "  abs 108-123 is BLANK-filled when the "
+				 "SYSAP supplied no connect data");
+		}
+	}
 }
 
 /* ---- group 4: op-verb constants + error paths -------------------------- */
@@ -437,19 +541,20 @@ static void test_error_paths(void)
 
 	/* An invalid has_* combination (tail4 AND names together) is rejected. */
 	memset(&cf, 0, sizeof(cf));
-	cf.has_marker = 1;
+	cf.has_scsargs = 1;
 	cf.has_tail4 = 1;
 	cf.has_names = 1;
 	ct_check(vms_scs_ctrl_build(&cf, out, sizeof(out), &written)
 		 == VMS_CODEC_E_INVAL,
 		 "tail4 + names together is not a real shape -> E_INVAL");
 
-	/* has_names without has_marker is not a real shape either. */
+	/* has_names without has_scsargs is not a real shape either. */
 	memset(&cf, 0, sizeof(cf));
 	cf.has_names = 1;
 	ct_check(vms_scs_ctrl_build(&cf, out, sizeof(out), &written)
 		 == VMS_CODEC_E_INVAL,
-		 "names without marker is not a real shape -> E_INVAL");
+		 "names without the MIN_CR/STATUS pair is not a real shape "
+		 "-> E_INVAL");
 
 	/* dir_lookup_parse refuses a NULL. */
 	ct_check(vms_scs_dir_lookup_parse(NULL, NULL) == VMS_CODEC_E_INVAL,
@@ -479,6 +584,7 @@ int main(void)
 	test_dir_lookup_refuses_connect_shape();
 	test_reject_req_structural();
 	test_credit_ops_structural();
+	test_e65_status_census();
 	test_op_verb_constants();
 	test_error_paths();
 

@@ -348,10 +348,18 @@ static void t_flowcush_trigger(void)
 	(void)scs_fsm_return_credit(&a_node.fsm, a_conid, 1u);
 	ct_check(a_node.fsm.credit_msgs_sent >= 1u,
 		 "cushion 16: the same traffic now produces a type 8");
-	ct_check(a_node.fsm.credit_msg_partial_threshold > 0u,
-		 "and the PARTIAL threshold is counted -- the peer's Minimum "
-		 "Send Credits is not grounded on the wire, so it is omitted "
-		 "rather than guessed");
+	/* p. 2-44's threshold is SCSFLOWCUSH + the REMOTE SYSAP's Minimum Send
+	 * Credits. Integration note E65 grounds that second term on the wire
+	 * (SCS$W_MIN_CR, abs 72-73), so this end reads it off the connect verb
+	 * that stated it instead of omitting it: the full rule runs, and the
+	 * partial-threshold fallback -- which is still there for a connection
+	 * that never learned one -- does not fire. */
+	ct_check_eq_u32(a_node.fsm.credit_msg_partial_threshold, 0u,
+			"and the FULL p. 2-44 threshold ran: no partial "
+			"fallback was needed");
+	ct_check(scsh_cdt(&a_node, a_conid)->peer_min_send_credits_valid == 1u,
+		 "...because the peer's Minimum Send Credits was LEARNED off "
+		 "its op-2 ACCEPT_REQ, not guessed");
 	ct_check(scsh_ledger_balanced(scsh_cdt(&a_node, a_conid)),
 		 "the ledger still balances after the special credit message");
 }

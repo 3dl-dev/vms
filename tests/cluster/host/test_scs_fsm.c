@@ -202,7 +202,7 @@ static void t_acceptor_ladder(void)
 	ct_check_eq_u32(b_sysap.n_connect_req, 1u,
 			"...and the SYSAP is not asked twice (ch. 2)");
 
-	ct_check(scs_fsm_accept(&b_node.fsm, listen_conid, NULL,
+	ct_check(scs_fsm_accept(&b_node.fsm, listen_conid, NULL, 0u,
 				&conn_conid) == SCS_OK, "LOCAL_ACCEPT");
 	ct_check(conn_conid != listen_conid,
 		 "the connection gets its OWN CDT, not the listening one");
@@ -280,8 +280,10 @@ static void t_connect_data_on_wire(void)
 		ct_check_eq_u32(b_sysap.last_conndata[i], e31_conndata[i],
 				 "byte-exact vs the grounded E31 constant");
 
-	/* NULL conndata still goes out as an honest, explicit zero -- never a
-	 * stale value left over from a prior connect on the same node. */
+	/* NULL conndata still goes out explicitly -- never a stale value left
+	 * over from a prior connect on the same node -- and it goes out the way
+	 * the wire writes "nothing supplied": BLANK-filled (E65, 0x20 in 100%
+	 * of no-connect-data connects; both 110-content fixtures carry it). */
 	rig(SCS_CONNECT_DEFER);
 	args_zero(&args);
 	args.local_name = scsh_name_a;
@@ -295,9 +297,9 @@ static void t_connect_data_on_wire(void)
 	ct_check_eq_u32(b_sysap.last_conndata_valid, 1u,
 			 "the field is still present (110-content shape)");
 	for (i = 0; i < VMS_SCS_PROCNAME_LEN; i++)
-		ct_check_eq_u32(b_sysap.last_conndata[i], 0u,
-				 "...but every byte is an honest zero, not "
-				 "a leftover value");
+		ct_check_eq_u32(b_sysap.last_conndata[i], 0x20u,
+				 "...and every byte is a BLANK, as a real node "
+				 "sends when its SYSAP supplied nothing (E65)");
 }
 
 /* ------------------------------------------------------------------ *
@@ -623,6 +625,202 @@ static void t_no_edge_and_foreign(void)
 			"a valid Con.ID from the WRONG system is refused");
 }
 
+/* ------------------------------------------------------------------ *
+ * 11. E65 -- SCS$W_MIN_CR (abs 72-73) and SCS$W_STATUS (abs 74-75)
+ *
+ * The VAX1 leg: a CONNECT_RSP carrying STATUS 0 -- not a defined $SCSDEF
+ * value -- reads to an established member as a FAILED connect (p. 2-48), so
+ * it releases its CDT and re-polls forever. These rows pin the per-op status
+ * this executive asserts, the Minimum Send Credits it reads out of the CDT,
+ * and the echo's SCS$T_DST_PROC tail, ON THE FRAME IT PUT ON THE WIRE --
+ * parsed back through the codec, never read off the FSM's intent. A
+ * regression to STATUS 0 on the connect family, or to a NUL trailer, reds
+ * here.
+ * ------------------------------------------------------------------ */
+
+/* The last frame `n` sent for `op`, parsed back off the wire. */
+static int e65_wire(const struct scsh_node *n, uint16_t op,
+		    struct vms_scs_ctrl_frame *out, const char *what)
+{
+	int ok = scsh_tx_ctrl(n, op, out);
+
+	ct_check(ok, what);
+	return ok;
+}
+
+static void e65_check_blank_trailer(const struct vms_scs_ctrl_frame *c,
+				    const char *what)
+{
+	uint32_t i, blanks = 0u;
+
+	for (i = 0; i < VMS_SCSCTRL_NAME_LEN; i++) {
+		if (c->blank[i] == 0x20u)
+			blanks++;
+	}
+	ct_check(c->has_blank && blanks == VMS_SCSCTRL_NAME_LEN, what);
+}
+
+/* ops 0 and 3: the initiator's two words, both read out of its own CDT. */
+static void t_e65_initiator_words(void)
+{
+	struct vms_scs_ctrl_frame c;
+	struct scs_connect_args args;
+	struct scs_cdt *cdt;
+	vms_conid_t a_conid = 0u;
+
+	printf("-- E65: op 0 CONNECT_REQ / op 3 CONFIRM carry STNORMAL and a "
+	       "CDT-sourced MIN_CR\n");
+	rig(SCS_CONNECT_DEFER);
+	a_node.drop_tx = 1;
+
+	args_zero(&args);
+	args.local_name = scsh_name_a;
+	args.remote_name = scsh_name_b;
+	args.sysap = &a_sysap.ops;
+	args.dst = b_node.sysid;
+	args.initial_credits = 6u;
+	args.min_credits = 3u;      /* this SYSAP's own p. 2-44 floor */
+	ct_check(scs_fsm_connect(&a_node.fsm, &args, &a_conid) == SCS_OK,
+		 "connect with a SYSAP-declared Minimum Send Credits");
+
+	if (e65_wire(&a_node, SCS_MTYPE_CON_REQ, &c, "op 0 is on the wire")) {
+		ct_check_eq_u32(c.status, VMS_SCS_ST_NORMAL,
+				"op 0 SCS$W_STATUS == STNORMAL (1), not 0");
+		ct_check_eq_u32(c.min_cr, 3u,
+				"op 0 SCS$W_MIN_CR is the CONNECT service's "
+				"argument, off the CDT");
+		e65_check_blank_trailer(&c,
+			"op 0 with no connect data blank-fills abs 108-123");
+	}
+
+	/* The peer's ACCEPT_REQ states ITS floor; the confirm reports back the
+	 * floor it is confirming, read out of the CDT that learned it. */
+	scsh_inject_ctrl_mincr(&a_node, b_node.sysid, SCS_MTYPE_ACCP_REQ,
+			       a_conid, 0x8fd20001u, 8u, scsh_name_b,
+			       scsh_name_a, 5u);
+	cdt = scsh_cdt(&a_node, a_conid);
+	ct_check(cdt != (struct scs_cdt *)0 &&
+		 cdt->peer_min_send_credits_valid == 1u &&
+		 cdt->peer_min_send_credits == 5u,
+		 "the peer's MIN_CR was LEARNED off its op 2 and flagged");
+	if (e65_wire(&a_node, SCS_MTYPE_ACCP_RSP, &c, "op 3 is on the wire")) {
+		ct_check_eq_u32(c.status, VMS_SCS_ST_NORMAL,
+				"op 3 SCS$W_STATUS == STNORMAL");
+		ct_check_eq_u32(c.min_cr, 5u,
+				"op 3 echoes the answered ACCEPT_REQ's MIN_CR "
+				"from the CDT, not our own");
+	}
+}
+
+/* ops 1 and 2: the acceptor's, including the echo's DST_PROC tail. */
+static void t_e65_acceptor_words(void)
+{
+	struct vms_scs_ctrl_frame c;
+	struct scs_cdt *listen, *conn;
+	vms_conid_t listen_conid, conn_conid = 0u;
+
+	printf("-- E65: op 1 ECHO carries STNORMAL + SCS$T_DST_PROC[0:4]; "
+	       "op 2 ACCEPT_REQ carries 0\n");
+	rig(SCS_CONNECT_DEFER);
+	b_node.drop_tx = 1;
+
+	scsh_inject_ctrl_mincr(&b_node, a_node.sysid, SCS_MTYPE_CON_REQ, 0u,
+			       0x33a00001u, 6u, scsh_name_b, scsh_name_a, 7u);
+	listen_conid = b_sysap.last_listen_conid;
+	listen = scsh_cdt(&b_node, listen_conid);
+	ct_check(listen != (struct scs_cdt *)0 &&
+		 listen->peer_min_send_credits == 7u &&
+		 listen->peer_min_send_credits_valid == 1u,
+		 "the requester's MIN_CR was learned off its op 0");
+
+	if (e65_wire(&b_node, SCS_MTYPE_CON_RSP, &c, "op 1 is on the wire")) {
+		ct_check_eq_u32(c.status, VMS_SCS_ST_NORMAL,
+				"op 1 SCS$W_STATUS == STNORMAL -- THE VAX1 "
+				"BLOCKER: 0 reads as a failed connect");
+		ct_check_eq_u32(c.min_cr, 0u,
+				"op 1 MIN_CR is 0: a listening CDT holds no "
+				"SYSAP floor yet");
+		ct_check(c.has_tail4 &&
+			 c.tail4[0] == scsh_name_b[0] &&
+			 c.tail4[1] == scsh_name_b[1] &&
+			 c.tail4[2] == scsh_name_b[2] &&
+			 c.tail4[3] == scsh_name_b[3],
+			 "op 1 tail4 == SCS$T_DST_PROC[0:4], the LISTENING "
+			 "CDT's own SYSAP name (not the inbound bytes)");
+	}
+
+	ct_check(scs_fsm_accept(&b_node.fsm, listen_conid, NULL, 4u,
+				&conn_conid) == SCS_OK,
+		 "accept with this SYSAP's own Minimum Send Credits");
+	conn = scsh_cdt(&b_node, conn_conid);
+	ct_check(conn != (struct scs_cdt *)0 &&
+		 conn->peer_min_send_credits == 7u &&
+		 conn->peer_min_send_credits_valid == 1u,
+		 "the connection's CDT inherits what the listener learned");
+	if (e65_wire(&b_node, SCS_MTYPE_ACCP_REQ, &c, "op 2 is on the wire")) {
+		ct_check_eq_u32(c.status, 0u,
+				"op 2 SCS$W_STATUS == 0 (census: the accept "
+				"is the SYSAP's answer, not an SCS outcome)");
+		ct_check_eq_u32(c.min_cr, 4u,
+				"op 2 SCS$W_MIN_CR is the ACCEPT service's "
+				"argument, off the CDT");
+		e65_check_blank_trailer(&c,
+			"op 2 with no connect data blank-fills abs 108-123");
+	}
+}
+
+/* op 4, and op 6 both ways round. */
+static void t_e65_refusal_and_teardown_words(void)
+{
+	struct vms_scs_ctrl_frame c;
+	struct scs_cdt *ca;
+	vms_conid_t a_conid, b_conid, listen_conid;
+
+	printf("-- E65: op 4 REJECT_REQ carries STNORMAL; op 6's word is the "
+	       "matching flag, read from the CDT\n");
+	rig(SCS_CONNECT_DEFER);
+	b_node.drop_tx = 1;
+	scsh_inject_ctrl(&b_node, a_node.sysid, SCS_MTYPE_CON_REQ, 0u,
+			 0x33a00007u, 6u, scsh_name_b, scsh_name_a);
+	listen_conid = b_sysap.last_listen_conid;
+	ct_check(scs_fsm_reject(&b_node.fsm, listen_conid) == SCS_OK,
+		 "LOCAL_REJECT emits op 4");
+	if (e65_wire(&b_node, SCS_MTYPE_REJ_REQ, &c, "op 4 is on the wire")) {
+		ct_check_eq_u32(c.status, VMS_SCS_ST_NORMAL,
+				"op 4 SCS$W_STATUS == STNORMAL (the message "
+				"was produced normally; the refusal REASON is "
+				"a separate, ungrounded word -- INV-6)");
+		ct_check_eq_u32(c.min_cr, 0u,
+				"op 4 MIN_CR == 0: no connection, no floor");
+	}
+
+	/* Teardown WE opened: our op 6 is the initiating half. */
+	t_two_node_open(&a_conid, &b_conid);
+	a_node.drop_tx = 1;
+	(void)scs_fsm_disconnect(&a_node.fsm, a_conid);
+	ca = scsh_cdt(&a_node, a_conid);
+	scsh_inject_ctrl(&a_node, b_node.sysid, SCS_MTYPE_CR_RSP, a_conid,
+			 ca->remote_conid, 1u, NULL, NULL);
+	if (e65_wire(&a_node, SCS_MTYPE_DISC_REQ, &c,
+		     "our own op 6 is on the wire")) {
+		ct_check_eq_u32(c.status, 0u,
+				"an INITIATING op 6 carries matching-flag 0");
+	}
+
+	/* Teardown the PEER opened: our op 6 is the matching half. */
+	t_two_node_open(&a_conid, &b_conid);
+	a_node.drop_tx = 1;
+	ca = scsh_cdt(&a_node, a_conid);
+	scsh_inject_ctrl(&a_node, b_node.sysid, SCS_MTYPE_DISC_REQ, a_conid,
+			 ca->remote_conid, 0u, NULL, NULL);
+	if (e65_wire(&a_node, SCS_MTYPE_DISC_REQ, &c,
+		     "the matching op 6 is on the wire")) {
+		ct_check_eq_u32(c.status, VMS_SCS_ST_NORMAL,
+				"a MATCHING op 6 carries matching-flag 1 "
+				"(sec 4(h)(1b) CENSUS-E rank 1)");
+	}
+}
+
 int main(void)
 {
 	t_conid_allocator();
@@ -639,5 +837,8 @@ int main(void)
 	t_teardown_timeout();
 	t_data_rungs();
 	t_no_edge_and_foreign();
+	t_e65_initiator_words();
+	t_e65_acceptor_words();
+	t_e65_refusal_and_teardown_words();
 	return ct_summary("test_scs_fsm");
 }

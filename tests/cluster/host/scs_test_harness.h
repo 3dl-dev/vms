@@ -32,6 +32,7 @@
 #define SCSH_QUEUE   64u
 #define SCSH_TRACE   64u
 #define SCSH_FRAME  256u
+#define SCSH_OPS     12u   /* $SCSDEF verbs 0..11 */
 
 /* Not every test uses every helper; a header of shared statics would
  * otherwise red -Werror=unused-function in whichever TU skips one. */
@@ -99,6 +100,12 @@ struct scsh_node {
 	uint16_t            tx_credit[SCSH_TRACE];
 	uint32_t            n_tx;
 
+	/* and the LAST WHOLE FRAME it put on the wire for each verb, so a test
+	 * can assert on the bytes themselves -- through the codec, never by
+	 * indexing an offset -- rather than on a counter. */
+	uint8_t             tx_last[SCSH_OPS][SCSH_FRAME];
+	uint32_t            tx_last_len[SCSH_OPS];
+
 	/* timers */
 	uint32_t            armed[SCS_TIMER__COUNT];
 	uint32_t            cancelled[SCS_TIMER__COUNT];
@@ -161,11 +168,38 @@ SCSH_UNUSED static void scsh_record_ctrl(struct scsh_node *n, const uint8_t *fra
 			     uint32_t len)
 {
 	struct vms_scs_hdr h;
+	uint32_t k;
 
-	if (vms_scs_hdr_parse_frame(frame, len, &h) == VMS_CODEC_OK)
-		scsh_trace(n, h.mtype, h.credit);
-	else
+	if (vms_scs_hdr_parse_frame(frame, len, &h) != VMS_CODEC_OK) {
 		scsh_trace(n, 0xffffu, 0xffffu);
+		return;
+	}
+	scsh_trace(n, h.mtype, h.credit);
+	if (h.mtype < SCSH_OPS && len <= SCSH_FRAME) {
+		for (k = 0; k < len; k++)
+			n->tx_last[h.mtype][k] = frame[k];
+		n->tx_last_len[h.mtype] = len;
+	}
+}
+
+/*
+ * The LAST frame this node sent for `op`, decoded back through the codec.
+ * 0 if it never sent one, or if what it sent will not parse -- either way the
+ * test learns from the WIRE, not from the FSM's intent.
+ */
+SCSH_UNUSED static int scsh_tx_ctrl(const struct scsh_node *n, uint16_t op,
+				    struct vms_scs_ctrl_frame *out)
+{
+	struct vms_frame_info fi;
+	uint32_t len;
+
+	if (op >= SCSH_OPS || n->tx_last_len[op] == 0u)
+		return 0;
+	len = n->tx_last_len[op];
+	if (vms_frame_classify(n->tx_last[op], len, &fi) != VMS_CODEC_OK)
+		return 0;
+	return vms_scs_ctrl_parse(n->tx_last[op], len, &fi, out) ==
+	       VMS_CODEC_OK;
 }
 
 SCSH_UNUSED static int scsh_send_ctrl(void *ctx, vms_scs_sysid_t dst,
@@ -436,10 +470,33 @@ SCSH_UNUSED static uint16_t scsh_ctrl_content_for_op(uint16_t op)
 	}
 }
 
-SCSH_UNUSED static void scsh_inject_ctrl(struct scsh_node *dst, vms_scs_sysid_t from,
+/*
+ * SCS$W_STATUS as a REAL node sets it (integration note E65's per-op census,
+ * 5 real-VAX captures + the accepted-OVMX run). This is the PEER's half of the
+ * harness -- what an injected frame must carry to look like one a VAX sent --
+ * and it is deliberately written out here rather than reused from the FSM, so
+ * a test that asserts OVMX's own status is comparing against the census, not
+ * against the code under test.
+ */
+SCSH_UNUSED static uint16_t scsh_peer_status_for_op(uint16_t op)
+{
+	switch (op) {
+	case SCS_MTYPE_CON_REQ:
+	case SCS_MTYPE_CON_RSP:
+	case SCS_MTYPE_ACCP_RSP:
+	case SCS_MTYPE_REJ_REQ:
+		return VMS_SCS_ST_NORMAL;
+	default:
+		return 0u;
+	}
+}
+
+SCSH_UNUSED static void scsh_inject_ctrl_mincr(struct scsh_node *dst,
+			     vms_scs_sysid_t from,
 			     uint16_t op, vms_conid_t to_conid,
 			     vms_conid_t from_conid, uint16_t credit,
-			     const uint8_t *name1, const uint8_t *name2)
+			     const uint8_t *name1, const uint8_t *name2,
+			     uint16_t min_cr)
 {
 	struct vms_scs_ctrl_frame c;
 	uint8_t frame[SCSH_FRAME];
@@ -465,20 +522,42 @@ SCSH_UNUSED static void scsh_inject_ctrl(struct scsh_node *dst, vms_scs_sysid_t 
 	c.credit = credit;
 	c.conid_remote = to_conid;
 	c.conid_local = from_conid;
-	c.has_marker = (uint8_t)(content >= VMS_SCSCTRL_LEN_MARKER);
+	c.has_scsargs = (uint8_t)(content >= VMS_SCSCTRL_LEN_MARKER);
+	c.min_cr = min_cr;
+	c.status = scsh_peer_status_for_op(op);
 	c.has_tail4 = (uint8_t)(content == VMS_SCSCTRL_LEN_ECHO);
+	if (c.has_tail4) {
+		/* SCS$T_DST_PROC[0:4] -- a real echo carries the answered
+		 * request's destination SYSAP name (E65, 148/148). */
+		for (i = 0; i < 4u; i++)
+			c.tail4[i] = name1 != (const uint8_t *)0 ? name1[i]
+								: (uint8_t)' ';
+	}
 	c.has_names = (uint8_t)(content == VMS_SCSCTRL_LEN_CONNECT);
 	c.has_blank = c.has_names;
 	if (c.has_names) {
 		for (i = 0; i < VMS_SCSCTRL_NAME_LEN; i++) {
 			c.name1[i] = name1 != (const uint8_t *)0 ? name1[i] : 0u;
 			c.name2[i] = name2 != (const uint8_t *)0 ? name2[i] : 0u;
+			/* A real node blank-pads the connect data it does not
+			 * supply (E65, 100% of no-data connects). */
+			c.blank[i] = (uint8_t)' ';
 		}
 	}
 	if (vms_scs_ctrl_build(&c, frame, (uint32_t)sizeof(frame), &written) !=
 	    VMS_CODEC_OK)
 		return;
 	scs_fsm_rx_message(&dst->fsm, from, to_conid, frame, written);
+}
+
+/* The common case: a peer that declares no Minimum Send Credits floor. */
+SCSH_UNUSED static void scsh_inject_ctrl(struct scsh_node *dst, vms_scs_sysid_t from,
+			     uint16_t op, vms_conid_t to_conid,
+			     vms_conid_t from_conid, uint16_t credit,
+			     const uint8_t *name1, const uint8_t *name2)
+{
+	scsh_inject_ctrl_mincr(dst, from, op, to_conid, from_conid, credit,
+			       name1, name2, 0u);
 }
 
 /* An application message from a peer, carrying a real credit value. */

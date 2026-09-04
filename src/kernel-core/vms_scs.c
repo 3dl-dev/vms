@@ -890,6 +890,13 @@ int scs_connect(struct vms_scs *scs, const uint8_t *local_name,
 	args.sysap = scs_fsm_sysap_ops(&scs->fsm, local_name);
 	args.dst = dst;
 	args.initial_credits = info.initial_credits;
+	/* p. 2-44's OTHER credit argument. vms_scs.h's frozen CONNECT service
+	 * does not carry it, so the SYSAPs that connect through this entry
+	 * point -- SCS$DIRECTORY's poller, VMS$VAXcluster, the disk class
+	 * driver -- declare no minimum, which is their real requirement: none
+	 * of them reserves a Send Credit for anything. 0 is that answer, not a
+	 * placeholder (INV-6). */
+	args.min_credits = 0u;
 	return (int)scs_glue_status(scs_fsm_connect(&scs->fsm, &args,
 						    out_conid));
 }
@@ -902,9 +909,13 @@ int scs_accept(struct vms_scs *scs, vms_conid_t local_conid)
 		return SS__NOSUCHDEV;
 	/* The connection's OWN Con.ID is minted here (ch. 2), and the SYSAP
 	 * learns it from opened() -- this frozen entry point has no out
-	 * parameter to carry it, and inventing one would change the ABI. */
+	 * parameter to carry it, and inventing one would change the ABI.
+	 * It carries no Minimum Send Credits argument either (p. 2-44), so the
+	 * accepting SYSAP declares none: 0 is the honest "no floor", not a
+	 * stand-in for a number this glue would have had to invent. A SYSAP
+	 * with a real minimum states it through scs_fsm_accept() directly. */
 	return (int)scs_glue_status(scs_fsm_accept(&scs->fsm, local_conid,
-						   (const uint8_t *)0,
+						   (const uint8_t *)0, 0u,
 						   &conn_conid));
 }
 

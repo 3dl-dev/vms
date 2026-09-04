@@ -22,7 +22,7 @@ const uint8_t vms_scs_dir_not_present_here[VMS_SCSCTRL_NAME_LEN] = {
  * ------------------------------------------------------------------ */
 
 struct ctrl_shape {
-	uint8_t marker;
+	uint8_t scsargs;   /* the MIN_CR/STATUS pair at abs 72-75 */
 	uint8_t tail4;
 	uint8_t names;
 	uint8_t blank;
@@ -30,7 +30,7 @@ struct ctrl_shape {
 
 static int shape_for_len(uint16_t content, struct ctrl_shape *s)
 {
-	s->marker = 0;
+	s->scsargs = 0;
 	s->tail4 = 0;
 	s->names = 0;
 	s->blank = 0;
@@ -38,18 +38,18 @@ static int shape_for_len(uint16_t content, struct ctrl_shape *s)
 	case VMS_SCSCTRL_LEN_SHORT:
 		return 1;
 	case VMS_SCSCTRL_LEN_MARKER:
-		s->marker = 1;
+		s->scsargs = 1;
 		return 1;
 	case VMS_SCSCTRL_LEN_ECHO:
-		s->marker = 1;
+		s->scsargs = 1;
 		s->tail4 = 1;
 		return 1;
 	case VMS_SCSCTRL_LEN_LOOKUP:
-		s->marker = 1;
+		s->scsargs = 1;
 		s->names = 1;
 		return 1;
 	case VMS_SCSCTRL_LEN_CONNECT:
-		s->marker = 1;
+		s->scsargs = 1;
 		s->names = 1;
 		s->blank = 1;
 		return 1;
@@ -62,7 +62,7 @@ static uint16_t content_for_shape(const struct ctrl_shape *s)
 {
 	uint16_t n = VMS_SCSCTRL_LEN_SHORT;
 
-	if (s->marker)
+	if (s->scsargs)
 		n = VMS_SCSCTRL_LEN_MARKER;
 	if (s->tail4)
 		n = VMS_SCSCTRL_LEN_ECHO;
@@ -71,16 +71,16 @@ static uint16_t content_for_shape(const struct ctrl_shape *s)
 	return n;
 }
 
-/* Exactly one of {none, marker, marker+tail4, marker+names, marker+names+
- * blank} -- tail4 and names/blank are mutually exclusive, and blank requires
- * names. Anything else is not a shape this codec recognises. */
+/* Exactly one of {none, scsargs, scsargs+tail4, scsargs+names,
+ * scsargs+names+blank} -- tail4 and names/blank are mutually exclusive, and
+ * blank requires names. Anything else is not a shape this codec recognises. */
 static int shape_is_valid(const struct ctrl_shape *s)
 {
 	if (s->tail4 && s->names)
 		return 0;
 	if (s->blank && !s->names)
 		return 0;
-	if ((s->tail4 || s->names) && !s->marker)
+	if ((s->tail4 || s->names) && !s->scsargs)
 		return 0;
 	return 1;
 }
@@ -143,9 +143,11 @@ vms_codec_status_t vms_scs_ctrl_parse(const uint8_t *frame, uint32_t len,
 	out->conid_remote = vms_wire_get_le32(&v, VMS_OFF_SCS_CONID_REMOTE);
 	out->conid_local = vms_wire_get_le32(&v, VMS_OFF_SCS_CONID_LOCAL);
 
-	out->has_marker = shape.marker;
-	if (shape.marker)
-		vms_wire_get_bytes(&v, VMS_OFF_SCSCTRL_MARKER, 4, out->marker);
+	out->has_scsargs = shape.scsargs;
+	if (shape.scsargs) {
+		out->min_cr = vms_wire_get_le16(&v, VMS_OFF_SCSCTRL_MIN_CR);
+		out->status = vms_wire_get_le16(&v, VMS_OFF_SCSCTRL_STATUS);
+	}
 
 	out->has_tail4 = shape.tail4;
 	if (shape.tail4)
@@ -187,7 +189,7 @@ vms_codec_status_t vms_scs_ctrl_build(const struct vms_scs_ctrl_frame *f,
 	if (f == (const struct vms_scs_ctrl_frame *)0)
 		return VMS_CODEC_E_INVAL;
 
-	shape.marker = f->has_marker;
+	shape.scsargs = f->has_scsargs;
 	shape.tail4 = f->has_tail4;
 	shape.names = f->has_names;
 	shape.blank = f->has_blank;
@@ -230,8 +232,10 @@ vms_codec_status_t vms_scs_ctrl_build(const struct vms_scs_ctrl_frame *f,
 	vms_wire_put_le32(&w, VMS_OFF_SCS_CONID_REMOTE, f->conid_remote);
 	vms_wire_put_le32(&w, VMS_OFF_SCS_CONID_LOCAL, f->conid_local);
 
-	if (shape.marker)
-		vms_wire_put_bytes(&w, VMS_OFF_SCSCTRL_MARKER, 4, f->marker);
+	if (shape.scsargs) {
+		vms_wire_put_le16(&w, VMS_OFF_SCSCTRL_MIN_CR, f->min_cr);
+		vms_wire_put_le16(&w, VMS_OFF_SCSCTRL_STATUS, f->status);
+	}
 	if (shape.tail4)
 		vms_wire_put_bytes(&w, VMS_OFF_SCSCTRL_TAIL4, 4, f->tail4);
 	if (shape.names) {
@@ -586,7 +590,6 @@ vms_codec_status_t vms_scs_dir_ctrl_from_body(const uint8_t *body, uint32_t len,
 {
 	struct vms_scs_dir_msg m;
 	vms_codec_status_t st;
-	uint32_t i;
 
 	if (f == (struct vms_scs_ctrl_frame *)0)
 		return VMS_CODEC_E_INVAL;
@@ -598,10 +601,20 @@ vms_codec_status_t vms_scs_dir_ctrl_from_body(const uint8_t *body, uint32_t len,
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	/* The marker is the SYSAP's own byte here, not a flag this codec
-	 * chooses: it is copied out of the body it was given. */
-	f->has_marker = 1;
-	for (i = 0; i < 4u; i++)
-		f->marker[i] = body[VMS_OFF_SCSDIRBODY_MARKER + i];
+	/*
+	 * THE op-10 OVERLAY OF ABS 72-75. On the connection-control verbs those
+	 * four bytes are SCS$W_MIN_CR/SCS$W_STATUS; on the directory message
+	 * (sec 4(h)(2a)) the SAME four bytes are the SYSAP's OWN request/
+	 * response discriminator -- a different field, of a different layer, at
+	 * one offset. struct vms_scs_ctrl_frame is a BYTE-LEVEL view of the
+	 * frame, so the SYSAP's 32-bit value is carried through its two halves
+	 * rather than reinterpreted: low word to min_cr, high word to status,
+	 * which reproduces the identical little-endian longword on the wire.
+	 * Nothing here asserts a credit or a status; the discriminator is the
+	 * SYSAP's own byte, copied out of the body it was given.
+	 */
+	f->has_scsargs = 1;
+	f->min_cr = (uint16_t)(m.marker & 0xffffu);
+	f->status = (uint16_t)((m.marker >> 16) & 0xffffu);
 	return VMS_CODEC_OK;
 }

@@ -52,12 +52,19 @@
  * top, never baked into the generic parse.
  *
  * CALLER-SUPPLIED IDENTITY, no baked capture constants (INV-6, mirroring the
- * vms_hello_build() precedent): Con.ID pair, credit, the marker/reason bytes,
- * every name/result field and the sequence counters are ALWAYS the caller's
- * values. The only bytes this file bakes in are the discovery-independent
- * format markers already GROUNDED as protocol constants -- the format word
- * 0x0004 at [44:46] -- exactly as vms_hello_build() bakes in the discovery
- * prefix/suffix and nothing else.
+ * vms_hello_build() precedent): Con.ID pair, credit, the SCS$W_MIN_CR/
+ * SCS$W_STATUS pair, every name/result field and the sequence counters are
+ * ALWAYS the caller's values. The only bytes this file bakes in are the
+ * discovery-independent format markers already GROUNDED as protocol
+ * constants -- the format word 0x0004 at [44:46] -- exactly as
+ * vms_hello_build() bakes in the discovery prefix/suffix and nothing else.
+ *
+ * THE HONESTY RULE FOR ABS 72-75 (E65, the Fable ruling): abs 72-75 are
+ * SCS$W_MIN_CR/SCS$W_STATUS (published $SCSDEF, oracle sec 5 admits): MIN_CR
+ * is the SYSAP's Minimum Send Credits (p. 2-44) read from the CDT; STATUS is
+ * SCS's own outcome code (STNORMAL=1 on ops 0/1/3/4, 0 on op 2, init/match on
+ * op 6) -- census 100%/zero residue over 5 real-VAX captures + the accepted-
+ * OVMX run; neither ever copied from a frame.
  */
 #ifndef OVMX_VMS_CLUSTER_CODEC_SCS_H
 #define OVMX_VMS_CLUSTER_CODEC_SCS_H
@@ -77,6 +84,23 @@ extern "C" {
 #define VMS_SCS_CTRL_DISCONNECT_RSP 7u  /* $SCSDEF DISC_RSP          */
 #define VMS_SCS_CTRL_CREDIT_REQ     8u  /* $SCSDEF CR_REQ            */
 #define VMS_SCS_CTRL_CREDIT_RSP     9u  /* $SCSDEF CR_RSP            */
+
+/* ------------------------------------------------------------------ *
+ * The $SCSDEF STATUS codes (abs 74-75, SCS$W_STATUS). Published
+ * `$xxxDEF` definitions, admissible clean-room source under CLAUDE.md
+ * rule 8, the same source that names the op verbs above. Only
+ * STNORMAL is EMITTED by this executive today (it is the one outcome
+ * its FSM reaches); the rest exist so a RECEIVED status is named
+ * rather than printed as a number, which is what a diagnostic needs
+ * when a real VAX refuses us.
+ * ------------------------------------------------------------------ */
+#define VMS_SCS_ST_NORMAL            1u  /* SCS$K_STNORMAL              */
+#define VMS_SCS_ST_NOMAT            10u  /* SCS$K_STNOMAT               */
+#define VMS_SCS_ST_NORS             18u  /* SCS$K_STNORS                */
+#define VMS_SCS_ST_DISC             25u  /* SCS$K_STDISC                */
+#define VMS_SCS_ST_INSFCR           33u  /* SCS$K_STINSFCR              */
+#define VMS_SCS_ST_BALANCE          41u  /* SCS$K_STBALANCE             */
+#define VMS_SCS_ST_USE_ALTERNATE_PORT 42u /* SCS$K_USE_ALTERNATE_PORT   */
 
 /* ------------------------------------------------------------------ *
  * The MTYPE envelope offsets this item teaches the codec (sec 4(h)(1b),
@@ -107,8 +131,25 @@ extern "C" {
 #define VMS_OFF_SCSCTRL_INNERLEN   56u  /* payload[42], content - 44       */
 #define VMS_OFF_SCSCTRL_FMTWORD    58u  /* payload[44], GROUNDED 0x0004    */
 #define VMS_OFF_SCSCTRL_CREDIT     62u  /* payload[48], CALLER-supplied    */
-#define VMS_OFF_SCSCTRL_MARKER     72u  /* payload[58], 4 bytes            */
-#define VMS_OFF_SCSCTRL_TAIL4      76u  /* payload[62], 66-content only    */
+/*
+ * abs 72 is where the SYSAP's own bytes begin (design SS3.2.4's byte-ownership
+ * table). WHAT lives there depends on the class, and the two readings must not
+ * be confused:
+ *
+ *  - on the CONNECTION-CONTROL verbs it is SCS's own two-word argument pair,
+ *    SCS$W_MIN_CR (72-73) + SCS$W_STATUS (74-75) -- E65's ruling above;
+ *  - on the op-10 DIRECTORY message (sec 4(h)(2a)) the SAME four bytes are the
+ *    SYSAP's request/response discriminator, a different field of a different
+ *    layer at one offset (VMS_OFF_SCSDIRBODY_MARKER below).
+ *
+ * So the base offset is named for the SPAN, and each reading names its own
+ * field off it.
+ */
+#define VMS_OFF_SCSCTRL_SYSAP      72u  /* payload[58], SYSAP-body base    */
+#define VMS_OFF_SCSCTRL_MIN_CR     72u  /* payload[58], SCS$W_MIN_CR  LE16 */
+#define VMS_OFF_SCSCTRL_STATUS     74u  /* payload[60], SCS$W_STATUS  LE16 */
+#define VMS_OFF_SCSCTRL_TAIL4      76u  /* payload[62], 66-content only:
+					 * SCS$T_DST_PROC[0:4]             */
 #define VMS_OFF_SCSCTRL_NAME1      76u  /* payload[62], 16 bytes           */
 #define VMS_OFF_SCSCTRL_NAME2      92u  /* payload[78], 16 bytes           */
 #define VMS_OFF_SCSCTRL_BLANK     108u  /* payload[94], 110-content only   */
@@ -118,8 +159,8 @@ extern "C" {
 
 /* The five GROUNDED SCA content lengths this class family occupies. */
 #define VMS_SCSCTRL_LEN_SHORT      58u  /* ops 5/7/8/9: envelope only      */
-#define VMS_SCSCTRL_LEN_MARKER     62u  /* ops 3/4/6: + reason/match word  */
-#define VMS_SCSCTRL_LEN_ECHO       66u  /* op 1: + a 4-byte name fragment  */
+#define VMS_SCSCTRL_LEN_MARKER     62u  /* ops 3/4/6: + MIN_CR/STATUS pair */
+#define VMS_SCSCTRL_LEN_ECHO       66u  /* op 1: + SCS$T_DST_PROC[0:4]     */
 #define VMS_SCSCTRL_LEN_LOOKUP     94u  /* op 10 directory: + name pair    */
 #define VMS_SCSCTRL_LEN_CONNECT   110u  /* ops 0/2: + name pair + blanks   */
 
@@ -149,21 +190,29 @@ struct vms_scs_ctrl_frame {
 	uint32_t conid_remote;          /* abs 64                            */
 	uint32_t conid_local;           /* abs 68                            */
 
-	uint8_t  has_marker;            /* 1 iff content >= 62               */
-	uint8_t  marker[4];             /* abs 72-75: reason/matching word.
-					  * Only op 6's marker[2:4] (the
-					  * DISC_REQ matching flag, sec
-					  * 4(h)(1b)) has grounded semantics;
-					  * every other op's marker is real
-					  * wire data with no asserted
-					  * meaning -- caller-supplied both
-					  * ways, never baked.               */
+	uint8_t  has_scsargs;           /* 1 iff content >= 62: the frame
+					  * reaches abs 76, so it carries the
+					  * MIN_CR/STATUS pair below          */
+	uint8_t  pad_scsargs;
+	uint16_t min_cr;                /* abs 72-73, SCS$W_MIN_CR: the
+					  * SYSAP's Minimum Send Credits
+					  * argument (p. 2-44) -- CALLER's
+					  * value, read by the FSM from the
+					  * CDT, never baked, never copied
+					  * frame to frame.                  */
+	uint16_t status;                /* abs 74-75, SCS$W_STATUS: the SCS
+					  * layer's OWN outcome code
+					  * (VMS_SCS_ST_*) -- CALLER's value,
+					  * decided by the emitting FSM from
+					  * its own state.                   */
 
 	uint8_t  has_tail4;             /* 1 iff content == 66 (op 1)        */
-	uint8_t  tail4[4];               /* abs 76-79: op 1's truncated
-					  * 4-byte name fragment (sec 4(h)(1),
-					  * "SCS$" observed) -- no semantics
-					  * asserted beyond "real bytes".     */
+	uint8_t  tail4[4];               /* abs 76-79: SCS$T_DST_PROC[0:4] --
+					  * the first 4 bytes of the answered
+					  * CONNECT_REQ's destination SYSAP
+					  * name ("SCS$"/"MSCP"/"VMS$"/"SCA$",
+					  * 148/148). CON_RSPL = 22 = header +
+					  * MIN_CR + STATUS + these 4.       */
 
 	uint8_t  has_names;              /* 1 iff content == 94 or 110        */
 	uint8_t  name1[VMS_SCSCTRL_NAME_LEN]; /* abs 76-91: target/queried
@@ -204,7 +253,7 @@ vms_codec_status_t vms_scs_ctrl_parse(const uint8_t *frame, uint32_t len,
  * caller-supplied length -- exactly one combination is legal (58/62/66/94/
  * 110); any other combination of has_* flags is VMS_CODEC_E_INVAL. Bakes in
  * ONLY the format word (abs 58, GROUNDED constant 0x0004); every other byte,
- * including the marker/reason word, comes from *f.
+ * including the SCS$W_MIN_CR/SCS$W_STATUS pair, comes from *f.
  */
 vms_codec_status_t vms_scs_ctrl_build(const struct vms_scs_ctrl_frame *f,
 				      uint8_t *frame, uint32_t cap,
@@ -408,11 +457,11 @@ extern const uint8_t vms_scs_dir_not_present_here[VMS_SCSCTRL_NAME_LEN];
  * re-stated, so the two views of the same three fields cannot drift apart.
  */
 #define VMS_SCS_DIRBODY_LEN \
-	((VMS_OFF_SCSCTRL_NAME2 + VMS_SCSCTRL_NAME_LEN) - VMS_OFF_SCSCTRL_MARKER)
+	((VMS_OFF_SCSCTRL_NAME2 + VMS_SCSCTRL_NAME_LEN) - VMS_OFF_SCSCTRL_SYSAP)
 
-#define VMS_OFF_SCSDIRBODY_MARKER (VMS_OFF_SCSCTRL_MARKER - VMS_OFF_SCSCTRL_MARKER) /*  0 */
-#define VMS_OFF_SCSDIRBODY_NAME   (VMS_OFF_SCSCTRL_NAME1  - VMS_OFF_SCSCTRL_MARKER) /*  4 */
-#define VMS_OFF_SCSDIRBODY_RESULT (VMS_OFF_SCSCTRL_NAME2  - VMS_OFF_SCSCTRL_MARKER) /* 20 */
+#define VMS_OFF_SCSDIRBODY_MARKER (VMS_OFF_SCSCTRL_SYSAP - VMS_OFF_SCSCTRL_SYSAP) /*  0 */
+#define VMS_OFF_SCSDIRBODY_NAME   (VMS_OFF_SCSCTRL_NAME1 - VMS_OFF_SCSCTRL_SYSAP) /*  4 */
+#define VMS_OFF_SCSDIRBODY_RESULT (VMS_OFF_SCSCTRL_NAME2 - VMS_OFF_SCSCTRL_SYSAP) /* 20 */
 
 /*
  * The request/response discriminator, GROUNDED at payload [58:62] (abs 72)
